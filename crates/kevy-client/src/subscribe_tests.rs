@@ -22,92 +22,10 @@ fn open_with_empty_channels_rejected() {
     assert!(matches!(err, KevyError::InvalidInput(_)));
 }
 
-// ----- classify (RESP wire path) -----
-
-#[test]
-fn classify_subscribe_ack() {
-    let r = Reply::Array(vec![
-        Reply::Bulk(b"subscribe".to_vec()),
-        Reply::Bulk(b"chan".to_vec()),
-        Reply::Int(1),
-    ]);
-    assert_eq!(
-        classify(r).unwrap(),
-        PubsubEvent::Subscribe {
-            channel: b"chan".to_vec(),
-            count: 1,
-        }
-    );
-}
-
-#[test]
-fn classify_message_event() {
-    let r = Reply::Array(vec![
-        Reply::Bulk(b"message".to_vec()),
-        Reply::Bulk(b"news".to_vec()),
-        Reply::Bulk(b"hello".to_vec()),
-    ]);
-    assert_eq!(
-        classify(r).unwrap(),
-        PubsubEvent::Message {
-            channel: b"news".to_vec(),
-            payload: b"hello".to_vec(),
-        }
-    );
-}
-
-#[test]
-fn classify_pmessage_event() {
-    let r = Reply::Array(vec![
-        Reply::Bulk(b"pmessage".to_vec()),
-        Reply::Bulk(b"news.*".to_vec()),
-        Reply::Bulk(b"news.tech".to_vec()),
-        Reply::Bulk(b"hi".to_vec()),
-    ]);
-    assert_eq!(
-        classify(r).unwrap(),
-        PubsubEvent::Pmessage {
-            pattern: b"news.*".to_vec(),
-            channel: b"news.tech".to_vec(),
-            payload: b"hi".to_vec(),
-        }
-    );
-}
-
-#[test]
-fn classify_unsubscribe_with_nil_channel() {
-    let r = Reply::Array(vec![
-        Reply::Bulk(b"unsubscribe".to_vec()),
-        Reply::Nil,
-        Reply::Int(0),
-    ]);
-    assert_eq!(
-        classify(r).unwrap(),
-        PubsubEvent::Unsubscribe {
-            channel: None,
-            count: 0,
-        }
-    );
-}
-
-#[test]
-fn classify_rejects_unknown_kind() {
-    let r = Reply::Array(vec![
-        Reply::Bulk(b"bogus".to_vec()),
-        Reply::Bulk(b"x".to_vec()),
-        Reply::Int(0),
-    ]);
-    assert!(matches!(classify(r).unwrap_err(), KevyError::Protocol(_)));
-}
-
-#[test]
-fn classify_rejects_wrong_arity() {
-    let r = Reply::Array(vec![
-        Reply::Bulk(b"subscribe".to_vec()),
-        Reply::Bulk(b"x".to_vec()),
-    ]);
-    assert!(matches!(classify(r).unwrap_err(), KevyError::Protocol(_)));
-}
+// The RESP wire-frame classifier is canonical in `kevy_resp_client`
+// (`classify_pubsub`) and unit-tested there; the sync `recv` path just
+// routes through it. Only the embedded-only + URL-routing surface is
+// tested locally.
 
 // ----- remote_host_port -----
 

@@ -37,7 +37,7 @@
 #![warn(missing_docs)]
 
 pub use kevy_resp::Reply;
-use kevy_resp::{encode_command, encode_command_borrowed, parse_reply};
+use kevy_resp::{encode_command, encode_command_borrowed};
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 
@@ -47,7 +47,10 @@ use std::net::TcpStream;
 /// reassemble across `read` calls. Not `Sync`; one client per thread.
 pub struct RespClient {
     stream: TcpStream,
-    buf: Vec<u8>,
+    /// Incremental read buffer with a consume cursor — replies are parsed
+    /// off the front by advancing a `pos` cursor rather than
+    /// front-draining per reply (O(N²) on deep `pipeline_raw` batches).
+    buf: ReplyReadBuf,
     /// Reused per-request encode buffer. Zero-allocation for steady-state
     /// command traffic — the buffer grows once during the first SET, then
     /// the same allocation backs every subsequent encode (truncated to 0
@@ -55,6 +58,9 @@ pub struct RespClient {
     /// Rust-client `Vec<Vec<u8>>` argv + per-call `Vec<u8>::new()` was a
     /// measurable per-op tax even on a single connection.
     write_buf: Vec<u8>,
+    /// Reused read scratch chunk — hoisted out of `read_one_reply` so the
+    /// hot path doesn't zero-init an 8 KiB stack array on every call.
+    chunk: Box<[u8]>,
 }
 
 impl RespClient {
@@ -64,8 +70,9 @@ impl RespClient {
         stream.set_nodelay(true).ok();
         Ok(Self {
             stream,
-            buf: Vec::with_capacity(8192),
+            buf: ReplyReadBuf::with_capacity(8192),
             write_buf: Vec::with_capacity(1024),
+            chunk: vec![0u8; 8192].into_boxed_slice(),
         })
     }
 
@@ -109,13 +116,9 @@ impl RespClient {
     }
 
     fn read_one_reply(&mut self) -> io::Result<Reply> {
-        let mut chunk = [0u8; 8192];
         loop {
-            match parse_reply(&self.buf) {
-                Ok(Some((reply, used))) => {
-                    self.buf.drain(..used);
-                    return Ok(reply);
-                }
+            match self.buf.parse_next() {
+                Ok(Some(reply)) => return Ok(reply),
                 Ok(None) => {}
                 Err(_) => {
                     return Err(io::Error::new(
@@ -124,14 +127,14 @@ impl RespClient {
                     ));
                 }
             }
-            let n = self.stream.read(&mut chunk)?;
+            let n = self.stream.read(&mut self.chunk)?;
             if n == 0 {
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "server closed connection",
                 ));
             }
-            self.buf.extend_from_slice(&chunk[..n]);
+            self.buf.extend(&self.chunk[..n]);
         }
     }
 
@@ -170,3 +173,6 @@ pub use url::{ParsedUrl, parse_url};
 
 mod pubsub_event;
 pub use pubsub_event::{PubsubEvent, classify_pubsub};
+
+mod read_buf;
+pub use read_buf::ReplyReadBuf;

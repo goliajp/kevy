@@ -165,10 +165,10 @@ impl Connection {
         match self {
             Self::Embedded(s) => s.del(keys),
             Self::Remote(c) => {
-                let mut args = Vec::with_capacity(keys.len() + 1);
-                args.push(b"DEL".to_vec());
-                args.extend(keys.iter().map(|k| k.to_vec()));
-                match c.request(&args)? {
+                let mut args: Vec<&[u8]> = Vec::with_capacity(keys.len() + 1);
+                args.push(b"DEL");
+                args.extend_from_slice(keys);
+                match c.request_borrowed(&args)? {
                     Reply::Int(n) if n >= 0 => Ok(n as usize),
                     Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),
@@ -183,10 +183,10 @@ impl Connection {
         match self {
             Self::Embedded(s) => s.exists(keys),
             Self::Remote(c) => {
-                let mut args = Vec::with_capacity(keys.len() + 1);
-                args.push(b"EXISTS".to_vec());
-                args.extend(keys.iter().map(|k| k.to_vec()));
-                match c.request(&args)? {
+                let mut args: Vec<&[u8]> = Vec::with_capacity(keys.len() + 1);
+                args.push(b"EXISTS");
+                args.extend_from_slice(keys);
+                match c.request_borrowed(&args)? {
                     Reply::Int(n) if n >= 0 => Ok(n as usize),
                     Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),
@@ -213,12 +213,8 @@ impl Connection {
         match self {
             Self::Embedded(s) => s.incr_by(key, delta),
             Self::Remote(c) => {
-                let args = vec![
-                    b"INCRBY".to_vec(),
-                    key.to_vec(),
-                    delta.to_string().into_bytes(),
-                ];
-                match c.request(&args)? {
+                let delta_s = delta.to_string();
+                match c.request_borrowed(&[b"INCRBY", key, delta_s.as_bytes()])? {
                     Reply::Int(n) => Ok(n),
                     Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),
@@ -233,8 +229,8 @@ impl Connection {
             Self::Embedded(s) => s.expire(key, ttl),
             Self::Remote(c) => {
                 let ms = ttl.as_millis().min(i64::MAX as u128) as i64;
-                let args = vec![b"PEXPIRE".to_vec(), key.to_vec(), ms.to_string().into_bytes()];
-                match c.request(&args)? {
+                let ms_s = ms.to_string();
+                match c.request_borrowed(&[b"PEXPIRE", key, ms_s.as_bytes()])? {
                     Reply::Int(1) => Ok(true),
                     Reply::Int(0) => Ok(false),
                     Reply::Error(e) => Err(KevyError::Protocol(string(e))),
@@ -320,14 +316,8 @@ impl Connection {
             Self::Embedded(s) => s.set_with_ttl(key, value, ttl).map(|_| ()),
             Self::Remote(c) => {
                 let ms = ttl.as_millis().min(i64::MAX as u128) as i64;
-                let args = vec![
-                    b"SET".to_vec(),
-                    key.to_vec(),
-                    value.to_vec(),
-                    b"PX".to_vec(),
-                    ms.to_string().into_bytes(),
-                ];
-                match c.request(&args)? {
+                let ms_s = ms.to_string();
+                match c.request_borrowed(&[b"SET", key, value, b"PX", ms_s.as_bytes()])? {
                     Reply::Simple(s) if s == b"OK" => Ok(()),
                     Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),
@@ -342,10 +332,10 @@ impl Connection {
         match self {
             Self::Embedded(s) => keys.iter().map(|k| s.get(k)).collect(),
             Self::Remote(c) => {
-                let mut args = Vec::with_capacity(keys.len() + 1);
-                args.push(b"MGET".to_vec());
-                args.extend(keys.iter().map(|k| k.to_vec()));
-                match c.request(&args)? {
+                let mut args: Vec<&[u8]> = Vec::with_capacity(keys.len() + 1);
+                args.push(b"MGET");
+                args.extend_from_slice(keys);
+                match c.request_borrowed(&args)? {
                     Reply::Array(items) => items
                         .into_iter()
                         .map(|r| match r {
@@ -371,13 +361,13 @@ impl Connection {
                 Ok(())
             }
             Self::Remote(c) => {
-                let mut args = Vec::with_capacity(pairs.len() * 2 + 1);
-                args.push(b"MSET".to_vec());
-                for (k, v) in pairs {
-                    args.push(k.to_vec());
-                    args.push(v.to_vec());
+                let mut args: Vec<&[u8]> = Vec::with_capacity(pairs.len() * 2 + 1);
+                args.push(b"MSET");
+                for &(k, v) in pairs {
+                    args.push(k);
+                    args.push(v);
                 }
-                match c.request(&args)? {
+                match c.request_borrowed(&args)? {
                     Reply::Simple(s) if s == b"OK" => Ok(()),
                     Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),

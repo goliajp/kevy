@@ -13,7 +13,8 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 
 use kevy_embedded::PubsubFrame;
-use kevy_resp::{Reply, encode_command, parse_reply};
+use kevy_resp::{Reply, encode_command};
+use kevy_resp_client::{ReplyReadBuf, classify_pubsub};
 
 use crate::subscribe::PubsubEvent;
 
@@ -41,14 +42,19 @@ pub(crate) fn send_to(
 /// frames stay in `buf` for the next call.
 pub(crate) fn recv_remote(
     stream: &mut TcpStream,
-    buf: &mut Vec<u8>,
+    buf: &mut ReplyReadBuf,
 ) -> KevyResult<PubsubEvent> {
     let mut chunk = [0u8; 8192];
     loop {
-        match parse_reply(buf) {
-            Ok(Some((reply, used))) => {
-                buf.drain(..used);
-                return classify(reply);
+        match buf.parse_next() {
+            // The frame classifier is canonical in `kevy_resp_client`,
+            // shared with the async client — no per-crate copy. A
+            // classify failure is a protocol-shape error (bad frame /
+            // unknown kind), so its `io::Error` message surfaces as
+            // `KevyError::Protocol`, matching the malformed-parse arm
+            // below and the pre-refactor local classifier's contract.
+            Ok(Some(reply)) => {
+                return classify_pubsub(reply).map_err(|e| KevyError::Protocol(e.to_string()));
             }
             Ok(None) => {}
             Err(_) => {
@@ -59,7 +65,7 @@ pub(crate) fn recv_remote(
         if n == 0 {
             return Err(KevyError::Closed);
         }
-        buf.extend_from_slice(&chunk[..n]);
+        buf.extend(&chunk[..n]);
     }
 }
 
@@ -95,114 +101,6 @@ pub(crate) fn frame_to_event(frame: PubsubFrame) -> PubsubEvent {
             channel,
             payload,
         },
-    }
-}
-
-/// Shape a raw RESP reply into the matching [`PubsubEvent`] variant.
-/// RESP2 pub/sub frames arrive as `*N` arrays; RESP3 servers wrap the
-/// same shape in a `>N` push frame so the client can demux out-of-band
-/// deliveries from regular command replies. Both forms are accepted.
-// LOC-WAIVER: data-driven pubsub-kind match table — one flat frame-destructure arm per kind.
-pub(crate) fn classify(reply: Reply) -> KevyResult<PubsubEvent> {
-    let items = match reply {
-        Reply::Array(v) | Reply::Push(v) => v,
-        other => return Err(invalid(format!("expected array frame, got {}", shape(&other)))),
-    };
-    let kind = match items.first() {
-        Some(Reply::Bulk(b)) => b.clone(),
-        _ => return Err(invalid("pubsub frame missing kind field")),
-    };
-    match kind.as_slice() {
-        b"subscribe" => {
-            let [_, ch, n] = into_array3(items)?;
-            Ok(PubsubEvent::Subscribe {
-                channel: take_bulk(ch, "channel")?,
-                count: take_int(n, "count")?,
-            })
-        }
-        b"psubscribe" => {
-            let [_, p, n] = into_array3(items)?;
-            Ok(PubsubEvent::Psubscribe {
-                pattern: take_bulk(p, "pattern")?,
-                count: take_int(n, "count")?,
-            })
-        }
-        b"unsubscribe" => {
-            let [_, ch, n] = into_array3(items)?;
-            Ok(PubsubEvent::Unsubscribe {
-                channel: take_bulk_or_nil(ch, "channel")?,
-                count: take_int(n, "count")?,
-            })
-        }
-        b"punsubscribe" => {
-            let [_, p, n] = into_array3(items)?;
-            Ok(PubsubEvent::Punsubscribe {
-                pattern: take_bulk_or_nil(p, "pattern")?,
-                count: take_int(n, "count")?,
-            })
-        }
-        b"message" => {
-            let [_, ch, payload] = into_array3(items)?;
-            Ok(PubsubEvent::Message {
-                channel: take_bulk(ch, "channel")?,
-                payload: take_bulk(payload, "payload")?,
-            })
-        }
-        b"pmessage" => {
-            let [_, pat, ch, payload] = into_array4(items)?;
-            Ok(PubsubEvent::Pmessage {
-                pattern: take_bulk(pat, "pattern")?,
-                channel: take_bulk(ch, "channel")?,
-                payload: take_bulk(payload, "payload")?,
-            })
-        }
-        other => Err(invalid(format!(
-            "unknown pubsub kind '{}'",
-            String::from_utf8_lossy(other)
-        ))),
-    }
-}
-
-fn into_array3(items: Vec<Reply>) -> KevyResult<[Reply; 3]> {
-    items
-        .try_into()
-        .map_err(|v: Vec<Reply>| invalid(format!("expected 3-element pubsub frame, got {}", v.len())))
-}
-
-fn into_array4(items: Vec<Reply>) -> KevyResult<[Reply; 4]> {
-    items
-        .try_into()
-        .map_err(|v: Vec<Reply>| invalid(format!("expected 4-element pubsub frame, got {}", v.len())))
-}
-
-fn take_bulk(r: Reply, field: &str) -> KevyResult<Vec<u8>> {
-    match r {
-        Reply::Bulk(b) => Ok(b),
-        other => Err(invalid(format!(
-            "expected bulk for {field}, got {}",
-            shape(&other)
-        ))),
-    }
-}
-
-fn take_bulk_or_nil(r: Reply, field: &str) -> KevyResult<Option<Vec<u8>>> {
-    match r {
-        Reply::Bulk(b) => Ok(Some(b)),
-        Reply::Nil => Ok(None),
-        other => Err(invalid(format!(
-            "expected bulk/nil for {field}, got {}",
-            shape(&other)
-        ))),
-    }
-}
-
-fn take_int(r: Reply, field: &str) -> KevyResult<i64> {
-    match r {
-        Reply::Int(n) => Ok(n),
-        other => Err(invalid(format!(
-            "expected integer for {field}, got {}",
-            shape(&other)
-        ))),
     }
 }
 

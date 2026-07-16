@@ -6,10 +6,15 @@ use std::io;
 
 use kevy_resp::Reply;
 
+/// Build an owned 2-element argv. Used by the cluster + pipeline argv
+/// builders, which need `Vec<Vec<u8>>` for `request` / `pipeline`; the
+/// single-command `cmd_*` modules use the zero-alloc `request_borrowed`
+/// path and don't go through here.
 pub(crate) fn vec2(verb: &[u8], a: &[u8]) -> Vec<Vec<u8>> {
     vec![verb.to_vec(), a.to_vec()]
 }
 
+/// Build an owned 3-element argv. See [`vec2`].
 pub(crate) fn vec3(verb: &[u8], a: &[u8], b: &[u8]) -> Vec<Vec<u8>> {
     vec![verb.to_vec(), a.to_vec(), b.to_vec()]
 }
@@ -38,7 +43,6 @@ pub(crate) fn unexpected(r: Reply) -> io::Error {
     io::Error::other(format!("unexpected RESP reply variant: {kind}"))
 }
 
-#[allow(dead_code)] // used by upcoming cmd_hash/cmd_list batches
 pub(crate) fn array_to_bulks(items: Vec<Reply>) -> io::Result<Vec<Vec<u8>>> {
     items
         .into_iter()

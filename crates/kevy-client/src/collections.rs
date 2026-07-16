@@ -22,14 +22,14 @@ impl Connection {
         match self {
             Self::Embedded(s) => s.hset(key, pairs),
             Self::Remote(c) => {
-                let mut args = Vec::with_capacity(2 + pairs.len() * 2);
-                args.push(b"HSET".to_vec());
-                args.push(key.to_vec());
-                for (f, v) in pairs {
-                    args.push(f.to_vec());
-                    args.push(v.to_vec());
+                let mut args: Vec<&[u8]> = Vec::with_capacity(2 + pairs.len() * 2);
+                args.push(b"HSET");
+                args.push(key);
+                for &(f, v) in pairs {
+                    args.push(f);
+                    args.push(v);
                 }
-                match c.request(&args)? {
+                match c.request_borrowed(&args)? {
                     Reply::Int(n) if n >= 0 => Ok(n as usize),
                     Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),
@@ -57,11 +57,11 @@ impl Connection {
         match self {
             Self::Embedded(s) => s.hdel(key, fields),
             Self::Remote(c) => {
-                let mut args = Vec::with_capacity(fields.len() + 2);
-                args.push(b"HDEL".to_vec());
-                args.push(key.to_vec());
-                args.extend(fields.iter().map(|f| f.to_vec()));
-                match c.request(&args)? {
+                let mut args: Vec<&[u8]> = Vec::with_capacity(fields.len() + 2);
+                args.push(b"HDEL");
+                args.push(key);
+                args.extend_from_slice(fields);
+                match c.request_borrowed(&args)? {
                     Reply::Int(n) if n >= 0 => Ok(n as usize),
                     Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),
@@ -174,13 +174,9 @@ impl Connection {
                 .with(|inner| inner.lrange(key, start, stop))
                 .map_err(store_err),
             Self::Remote(c) => {
-                let args = vec![
-                    b"LRANGE".to_vec(),
-                    key.to_vec(),
-                    start.to_string().into_bytes(),
-                    stop.to_string().into_bytes(),
-                ];
-                match c.request(&args)? {
+                let start_s = start.to_string();
+                let stop_s = stop.to_string();
+                match c.request_borrowed(&[b"LRANGE", key, start_s.as_bytes(), stop_s.as_bytes()])? {
                     Reply::Array(items) => array_to_bulks(items),
                     Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),
@@ -278,14 +274,16 @@ impl Connection {
         match self {
             Self::Embedded(s) => s.zadd(key, pairs),
             Self::Remote(c) => {
-                let mut args = Vec::with_capacity(2 + pairs.len() * 2);
-                args.push(b"ZADD".to_vec());
-                args.push(key.to_vec());
-                for (score, m) in pairs {
-                    args.push(score.to_string().into_bytes());
-                    args.push(m.to_vec());
+                // Scores are formatted floats — owned in `scores`; members borrow.
+                let scores: Vec<String> = pairs.iter().map(|(s, _)| s.to_string()).collect();
+                let mut args: Vec<&[u8]> = Vec::with_capacity(2 + pairs.len() * 2);
+                args.push(b"ZADD");
+                args.push(key);
+                for (i, &(_, m)) in pairs.iter().enumerate() {
+                    args.push(scores[i].as_bytes());
+                    args.push(m);
                 }
-                match c.request(&args)? {
+                match c.request_borrowed(&args)? {
                     Reply::Int(n) if n >= 0 => Ok(n as usize),
                     Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),
@@ -343,13 +341,9 @@ impl Connection {
                 .map(|pairs| pairs.into_iter().map(|(m, _score)| m).collect())
                 .map_err(store_err),
             Self::Remote(c) => {
-                let args = vec![
-                    b"ZRANGE".to_vec(),
-                    key.to_vec(),
-                    start.to_string().into_bytes(),
-                    stop.to_string().into_bytes(),
-                ];
-                match c.request(&args)? {
+                let start_s = start.to_string();
+                let stop_s = stop.to_string();
+                match c.request_borrowed(&[b"ZRANGE", key, start_s.as_bytes(), stop_s.as_bytes()])? {
                     Reply::Array(items) => array_to_bulks(items),
                     Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),
@@ -370,11 +364,11 @@ pub(crate) fn list_push(
     key: &[u8],
     values: &[&[u8]],
 ) -> KevyResult<usize> {
-    let mut args = Vec::with_capacity(values.len() + 2);
-    args.push(verb.to_vec());
-    args.push(key.to_vec());
-    args.extend(values.iter().map(|v| v.to_vec()));
-    match c.request(&args)? {
+    let mut args: Vec<&[u8]> = Vec::with_capacity(values.len() + 2);
+    args.push(verb);
+    args.push(key);
+    args.extend_from_slice(values);
+    match c.request_borrowed(&args)? {
         Reply::Int(n) if n >= 0 => Ok(n as usize),
         Reply::Error(e) => Err(KevyError::Protocol(string(e))),
         other => Err(unexpected(other)),
@@ -387,8 +381,8 @@ pub(crate) fn list_pop(
     key: &[u8],
     count: usize,
 ) -> KevyResult<Vec<Vec<u8>>> {
-    let args = vec![verb.to_vec(), key.to_vec(), count.to_string().into_bytes()];
-    match c.request(&args)? {
+    let count_s = count.to_string();
+    match c.request_borrowed(&[verb, key, count_s.as_bytes()])? {
         Reply::Array(items) => array_to_bulks(items),
         Reply::Bulk(v) => Ok(vec![v]),
         Reply::Nil => Ok(Vec::new()),
@@ -403,11 +397,11 @@ pub(crate) fn set_multi(
     key: &[u8],
     members: &[&[u8]],
 ) -> KevyResult<usize> {
-    let mut args = Vec::with_capacity(members.len() + 2);
-    args.push(verb.to_vec());
-    args.push(key.to_vec());
-    args.extend(members.iter().map(|m| m.to_vec()));
-    match c.request(&args)? {
+    let mut args: Vec<&[u8]> = Vec::with_capacity(members.len() + 2);
+    args.push(verb);
+    args.push(key);
+    args.extend_from_slice(members);
+    match c.request_borrowed(&args)? {
         Reply::Int(n) if n >= 0 => Ok(n as usize),
         Reply::Error(e) => Err(KevyError::Protocol(string(e))),
         other => Err(unexpected(other)),
@@ -455,10 +449,10 @@ pub(crate) fn remote_set_combine(
     verb: &[u8],
     keys: &[&[u8]],
 ) -> KevyResult<Vec<Vec<u8>>> {
-    let mut args = Vec::with_capacity(keys.len() + 1);
-    args.push(verb.to_vec());
-    args.extend(keys.iter().map(|k| k.to_vec()));
-    match c.request(&args)? {
+    let mut args: Vec<&[u8]> = Vec::with_capacity(keys.len() + 1);
+    args.push(verb);
+    args.extend_from_slice(keys);
+    match c.request_borrowed(&args)? {
         Reply::Array(items) => array_to_bulks(items),
         Reply::Error(e) => Err(KevyError::Protocol(string(e))),
         other => Err(unexpected(other)),

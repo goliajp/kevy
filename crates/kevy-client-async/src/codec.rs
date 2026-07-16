@@ -20,15 +20,21 @@
 
 use std::io;
 
-use kevy_resp::{Reply, encode_command, parse_reply};
+use kevy_resp::{Reply, encode_command, encode_command_borrowed};
+use kevy_resp_client::ReplyReadBuf;
 
 use crate::transport::{AsyncTransport, read, write_all};
 
 /// Buffered RESP3 codec over an [`AsyncTransport`].
 pub struct AsyncRespCodec<T> {
     transport: T,
-    buf: Vec<u8>,
+    buf: ReplyReadBuf,
     chunk: Box<[u8]>,
+    /// Reused per-request encode buffer — `clear()`ed at the top of each
+    /// send instead of a fresh `Vec::new()`, mirroring the blocking
+    /// `RespClient::write_buf`. Steady-state command traffic allocates
+    /// once, then reuses the same allocation.
+    write_buf: Vec<u8>,
 }
 
 impl<T: AsyncTransport> AsyncRespCodec<T> {
@@ -38,8 +44,9 @@ impl<T: AsyncTransport> AsyncRespCodec<T> {
     pub fn new(transport: T) -> Self {
         Self {
             transport,
-            buf: Vec::with_capacity(8192),
+            buf: ReplyReadBuf::with_capacity(8192),
             chunk: vec![0u8; 8192].into_boxed_slice(),
+            write_buf: Vec::with_capacity(1024),
         }
     }
 
@@ -51,8 +58,22 @@ impl<T: AsyncTransport> AsyncRespCodec<T> {
 
     /// Send one command (`args` = multibulk argv) and await exactly one
     /// reply. Direct async mirror of `RespClient::request`.
+    ///
+    /// **Prefer [`Self::request_borrowed`]** for new code: it takes
+    /// `&[&[u8]]` (a stack-allocated slice array) and skips the per-call
+    /// `Vec<Vec<u8>>` argv heap allocations. This form remains for
+    /// callers that already own `Vec<u8>` argvs.
     pub async fn request(&mut self, args: &[Vec<u8>]) -> io::Result<Reply> {
         self.send(args).await?;
+        self.read_reply().await
+    }
+
+    /// Zero-allocation request: argv is `&[&[u8]]`, so a caller can pass
+    /// `&[b"SET", key, value]` (a stack array of borrowed slices) and the
+    /// only allocation is the one-time growth of `self.write_buf`. Async
+    /// mirror of `RespClient::request_borrowed`.
+    pub async fn request_borrowed(&mut self, args: &[&[u8]]) -> io::Result<Reply> {
+        self.send_borrowed(args).await?;
         self.read_reply().await
     }
 
@@ -61,9 +82,18 @@ impl<T: AsyncTransport> AsyncRespCodec<T> {
     /// don't return replies in the conventional sense — the server
     /// pushes ack frames that are drained later by `read_reply`.
     pub async fn send(&mut self, args: &[Vec<u8>]) -> io::Result<()> {
-        let mut out = Vec::new();
-        encode_command(&mut out, args);
-        write_all(&mut self.transport, &out).await?;
+        self.write_buf.clear();
+        encode_command(&mut self.write_buf, args);
+        write_all(&mut self.transport, &self.write_buf).await?;
+        Ok(())
+    }
+
+    /// Zero-allocation [`Self::send`] — argv is `&[&[u8]]`. Encodes into
+    /// the reused `write_buf`, no per-call argv or output allocation.
+    pub async fn send_borrowed(&mut self, args: &[&[u8]]) -> io::Result<()> {
+        self.write_buf.clear();
+        encode_command_borrowed(&mut self.write_buf, args);
+        write_all(&mut self.transport, &self.write_buf).await?;
         Ok(())
     }
 
@@ -73,13 +103,10 @@ impl<T: AsyncTransport> AsyncRespCodec<T> {
     pub async fn read_reply(&mut self) -> io::Result<Reply> {
         // Destructure so the loop can borrow `transport` and `chunk`
         // disjointly from `buf`.
-        let Self { transport, buf, chunk } = self;
+        let Self { transport, buf, chunk, .. } = self;
         loop {
-            match parse_reply(buf) {
-                Ok(Some((reply, used))) => {
-                    buf.drain(..used);
-                    return Ok(reply);
-                }
+            match buf.parse_next() {
+                Ok(Some(reply)) => return Ok(reply),
                 Ok(None) => {}
                 Err(_) => {
                     return Err(io::Error::new(
@@ -95,7 +122,7 @@ impl<T: AsyncTransport> AsyncRespCodec<T> {
                     "server closed connection",
                 ));
             }
-            buf.extend_from_slice(&chunk[..n]);
+            buf.extend(&chunk[..n]);
         }
     }
 
@@ -103,11 +130,11 @@ impl<T: AsyncTransport> AsyncRespCodec<T> {
     /// replies in declaration order. Single network round-trip if the
     /// transport supports it.
     pub async fn pipeline(&mut self, batch: &[Vec<Vec<u8>>]) -> io::Result<Vec<Reply>> {
-        let mut out = Vec::new();
+        self.write_buf.clear();
         for args in batch {
-            encode_command(&mut out, args);
+            encode_command(&mut self.write_buf, args);
         }
-        write_all(&mut self.transport, &out).await?;
+        write_all(&mut self.transport, &self.write_buf).await?;
 
         let mut replies = Vec::with_capacity(batch.len());
         for _ in batch {
