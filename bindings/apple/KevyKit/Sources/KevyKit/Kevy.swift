@@ -41,11 +41,22 @@ public enum KevyValue: Equatable {
     }
 }
 
+/// A structured store-semantic error (contract §2.3): the engine rejected
+/// the command because the key's stored type or value doesn't fit the verb.
+/// Carried inside `KevyError.store`. Kept structured, never stringly.
+public enum StoreError: Equatable {
+    /// Key holds a different type than the command expects (Redis WRONGTYPE).
+    case wrongType
+    /// Any other recognized store error, wire text preserved verbatim.
+    case other(String)
+}
+
 /// Errors thrown by the typed surface (never by `cmd`, which returns
 /// protocol errors as values).
 public enum KevyError: Error {
     case openFailed
     case misuse
+    case store(StoreError)
     case protocolError(String)
     case truncatedReply
 }
@@ -116,35 +127,81 @@ public final class KevyDB {
     // ── the typed surface (mirrors the other kevy packages) ───────────
 
     /// Store `value` under `key`; `ttlMs` 0 means no expiry. Runs on the
-    /// scalar fast path — no argv assembly, no RESP framing.
+    /// scalar `kevy_set` lane — no argv assembly, no RESP framing. The value
+    /// bytes are passed straight from `Data`'s storage (no intermediate copy);
+    /// the engine copies once on its side.
     public func set(_ key: String, _ value: Data, ttlMs: UInt64 = 0) throws {
         guard let d = db else { throw KevyError.misuse }
         let k = Array(key.utf8)
-        let v = [UInt8](value)
         let rc = k.withUnsafeBufferPointer { kb in
-            v.withUnsafeBufferPointer { vb in
-                kevy_set(d, kb.baseAddress, kb.count, vb.baseAddress, vb.count, ttlMs)
+            value.withUnsafeBytes { raw -> Int32 in
+                kevy_set(d, kb.baseAddress, kb.count,
+                         raw.baseAddress?.assumingMemoryBound(to: UInt8.self),
+                         raw.count, ttlMs)
             }
         }
         guard rc == 0 else { throw KevyError.misuse }
     }
 
-    /// Fetch `key`; nil on a miss. Scalar fast path.
+    /// Fetch `key`; nil on a miss.
+    ///
+    /// Rides the zero-copy shared lane (`kevy_get_shared`, contract §5.2): a
+    /// bulk value comes back as an engine `Arc` clone — a refcount bump, no
+    /// byte copy — and the returned `Data` VIEWS those bytes with
+    /// `bytesNoCopy`, pinning the Arc alive until the `Data` is freed (the
+    /// MMKV-view analog). Relative to plain `kevy_get` + `Data(bytes:count:)`
+    /// this drops the engine-side `Vec` copy and the client-side `Data` copy on
+    /// large values — a memcpy elimination, so UNMEASURED on Swift and possibly
+    /// throughput-neutral (methodology §8); adopted for the correct lane +
+    /// parity with the siblings, not on a benched speedup claim. Needs a
+    /// device/host bench before any speedup is stated.
+    ///
+    /// Shared-lane free discipline: a `kevy_get_shared` buffer MUST be released
+    /// with `kevy_buf_free_shared` — never `kevy_buf_free` (that pairs with the
+    /// RESP/`cmd` path, see `take`). `cap` is an OPAQUE owner handle (an Arc or
+    /// a Vec), captured by the deallocator because Swift only hands it `ptr` +
+    /// `len`. On the scalar lane's error (a negative rc — WRONGTYPE, GET on a
+    /// non-string) fall back to the framed `cmd(["GET", key])` so the
+    /// `-WRONGTYPE` reply surfaces as the typed `.store(.wrongType)`.
     public func get(_ key: String) throws -> Data? {
         guard let d = db else { throw KevyError.misuse }
         let k = Array(key.utf8)
         var out = KevyBuf()
         let rc = k.withUnsafeBufferPointer { kb in
-            kevy_get(d, kb.baseAddress, kb.count, &out)
+            kevy_get_shared(d, kb.baseAddress, kb.count, &out)
         }
         switch rc {
         case 1:
-            defer { kevy_buf_free(out.ptr, out.len, out.cap) }
-            return Data(bytes: out.ptr, count: out.len)
+            // Contract: ptr is null when len == 0 — free the owner handle and
+            // return an owned-empty Data (never a Data over a null pointer).
+            guard out.len > 0, let ptr = out.ptr else {
+                kevy_buf_free_shared(out.ptr, out.len, out.cap)
+                return Data()
+            }
+            let cap = out.cap
+            let len = out.len
+            return Data(bytesNoCopy: ptr, count: len, deallocator: .custom { p, _ in
+                kevy_buf_free_shared(p, len, cap)
+            })
         case 0:
             return nil
         default:
-            throw KevyError.misuse
+            // Scalar lane collapsed a store error into a code; re-issue framed
+            // so a -WRONGTYPE surfaces as the typed error the siblings raise.
+            return try getFramedFallback(key)
+        }
+    }
+
+    /// Cold path behind `get`: run a framed `GET` so a store-semantic reply
+    /// (WRONGTYPE) becomes the typed `.store` error instead of an opaque
+    /// misuse (mirrors Go `Client.Get`, C++ `get_framed_fallback`).
+    private func getFramedFallback(_ key: String) throws -> Data? {
+        switch try cmd(["GET", key]) {
+        case .bulk(let d): return d
+        case .simple(let s): return Data(s.utf8)
+        case .nilValue: return nil
+        case .error(let msg): throw Self.replyError(msg)
+        default: throw KevyError.protocolError("GET: unexpected reply")
         }
     }
 
@@ -215,8 +272,17 @@ public final class KevyDB {
     // ── plumbing ───────────────────────────────────────────────────────
 
     private func want(_ v: KevyValue) throws -> KevyValue {
-        if case .error(let msg) = v { throw KevyError.protocolError(msg) }
+        if case .error(let msg) = v { throw Self.replyError(msg) }
         return v
+    }
+
+    /// Map a RESP `-ERR`/`-WRONGTYPE` reply body to the typed error: a
+    /// recognized store-semantic reply becomes `.store` (WRONGTYPE the one the
+    /// scalar lane can raise), everything else keeps its verbatim text as a
+    /// `.protocolError` (contract §2.2). The leading "-" is already stripped.
+    static func replyError(_ msg: String) -> KevyError {
+        if msg.hasPrefix("WRONGTYPE") { return .store(.wrongType) }
+        return .protocolError(msg)
     }
 
     static func take(_ out: inout KevyBuf) throws -> KevyValue {
@@ -274,6 +340,19 @@ public final class KevySubscription {
         guard let s = sub else { throw KevyError.misuse }
         var out = KevyBuf()
         let rc = kevy_sub_next(s, &out)
+        if rc < 0 { throw KevyError.misuse }
+        if rc == 0 { return nil }
+        return try KevyDB.take(&out)
+    }
+
+    /// Block until one frame arrives or `timeoutMs` elapses (0 = wait forever).
+    /// Parks the thread in the kernel — no busy-poll (contract §5.2) — so a
+    /// push-style consumer can wait instead of spinning `next()`. Returns the
+    /// frame, or nil on timeout.
+    public func wait(timeoutMs: UInt64 = 0) throws -> KevyValue? {
+        guard let s = sub else { throw KevyError.misuse }
+        var out = KevyBuf()
+        let rc = kevy_sub_wait(s, timeoutMs, &out)
         if rc < 0 { throw KevyError.misuse }
         if rc == 0 { return nil }
         return try KevyDB.take(&out)
