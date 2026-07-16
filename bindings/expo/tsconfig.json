@@ -7,5 +7,6 @@
     "noEmit": true,
     "types": []
   },
-  "include": ["src", "types"]
+  "include": ["src", "types"],
+  "exclude": ["**/*.test.ts"]
 }

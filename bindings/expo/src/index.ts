@@ -4,8 +4,8 @@
 // is a deliberately bare shell over the same kevy-ffi stone every other
 // door wraps: synchronous JSI functions, handles as small ints, argv
 // packed into one flat Uint8Array, RESP bytes back. Everything typed —
-// including this file's API, which mirrors @goliajp/kevy (wasm) and
-// @goliajp/kevy-node — happens here in TypeScript.
+// including this file's API, which mirrors @goliapkg/kevy (wasm) and
+// @goliapkg/kevy-node — happens here in TypeScript.
 //
 //   import { open } from "expo-kevy";
 //   const db = open({ dir: `${FileSystem.documentDirectory}kevy` });
@@ -48,9 +48,35 @@ export interface OpenOptions {
 }
 
 const enc = new TextEncoder();
+const dec = new TextDecoder();
+
+// Constant verbs are re-encoded on every typed call; cache their bytes once
+// (mirrors the ts client's VERB_CACHE). Only this fixed set is memoized —
+// user data (keys/values) is encoded fresh and never inserted, so the map
+// can't grow unbounded. The cached buffers are read-only downstream (pack
+// only copies out of them), so sharing one instance across calls is safe.
+const VERB_CACHE: ReadonlyMap<string, Uint8Array> = new Map(
+  ["GET", "SET", "DEL", "INCRBY", "PEXPIRE", "PTTL", "KEYS", "MGET",
+    "DBSIZE", "FLUSHALL", "PUBLISH", "PX"].map((w) => [w, enc.encode(w)]),
+);
 
 function toBytes(a: Bytes): Uint8Array {
-  return a instanceof Uint8Array ? a : enc.encode(a);
+  if (a instanceof Uint8Array) return a;
+  return VERB_CACHE.get(a) ?? enc.encode(a);
+}
+
+// The scalar GET lane can't carry a typed store error (GET on a non-string
+// key, whose only error is WRONGTYPE). Both native shells throw with this
+// sentinel in the error message so get() can re-run the framed GET and
+// surface the engine's -ERR WRONGTYPE — matching cmd() and every other door.
+const WRONGTYPE_SIGNAL = "KEVY_WRONGTYPE";
+
+function isWrongType(e: unknown): boolean {
+  const err = e as { message?: unknown; code?: unknown } | null;
+  return (
+    (typeof err?.message === "string" && err.message.includes(WRONGTYPE_SIGNAL)) ||
+    err?.code === "ERR_KEVY_WRONGTYPE"
+  );
 }
 
 // One flat Uint8Array: u32-LE length prefix, then the bytes, per argument —
@@ -76,15 +102,18 @@ function reject(v: KevyReply): KevyReply {
 }
 
 class Sub {
-  constructor(private id: number | null) {}
+  #id: number | null;
+  constructor(id: number | null) {
+    this.#id = id;
+  }
   next(): KevyReply | undefined {
-    if (this.id === null) return undefined;
-    const f = native.subNext(this.id);
+    if (this.#id === null) return undefined;
+    const f = native.subNext(this.#id);
     return f === null ? undefined : parse(f);
   }
   close(): void {
-    if (this.id !== null) native.subClose(this.id);
-    this.id = null;
+    if (this.#id !== null) native.subClose(this.#id);
+    this.#id = null;
   }
 }
 
@@ -115,12 +144,21 @@ export class KevyDb {
   }
 
   get(key: Bytes): Uint8Array | null {
-    return native.get(this.#live(), toBytes(key));
+    const id = this.#live();
+    try {
+      return native.get(id, toBytes(key));
+    } catch (e) {
+      if (!isWrongType(e)) throw e;
+      // The scalar lane signalled a store error (GET on a non-string key).
+      // Re-run the framed GET so the engine's -ERR WRONGTYPE surfaces as a
+      // thrown KevyError (via reject), exactly as cmd() and the siblings do.
+      return reject(this.cmd("GET", key)) as Uint8Array | null;
+    }
   }
 
   getText(key: Bytes): string | undefined {
     const v = this.get(key);
-    return v === null ? undefined : new TextDecoder().decode(v);
+    return v === null ? undefined : dec.decode(v);
   }
 
   // ── the typed surface (mirrors the wasm and node packages) ──────────
