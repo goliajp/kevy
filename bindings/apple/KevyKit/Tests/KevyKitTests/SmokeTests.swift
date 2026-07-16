@@ -54,4 +54,39 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(try db.dbsize(), 0)
         db.close()
     }
+
+    // GET on a non-string key: the scalar lane collapses this into an opaque
+    // code, so get() falls back to the framed GET and the -WRONGTYPE reply must
+    // surface as the typed .store(.wrongType) (siblings each lock this).
+    func testGetWrongTypeIsTyped() throws {
+        let db = try KevyDB()
+        defer { db.close() }
+
+        _ = try db.cmd(["RPUSH", "list", "a", "b"]) // a list, not a string
+
+        XCTAssertThrowsError(try db.get("list")) { err in
+            guard case KevyError.store(.wrongType) = err else {
+                return XCTFail("expected .store(.wrongType), got \(err)")
+            }
+        }
+        // string keys still ride the shared lane cleanly
+        try db.set("s", Data("v".utf8))
+        XCTAssertEqual(try db.getText("s"), "v")
+    }
+
+    // wait(timeout:) parks until a frame arrives, then returns it.
+    func testSubscriptionWait() throws {
+        let db = try KevyDB()
+        defer { db.close() }
+
+        let sub = try db.subscribe("c")
+        XCTAssertNotNil(try sub.wait(timeoutMs: 1000)) // subscribe ack
+        XCTAssertEqual(try db.publish("c", Data("hi".utf8)), 1)
+        guard case .array(let frame)? = try sub.wait(timeoutMs: 1000) else {
+            return XCTFail("missing message frame")
+        }
+        XCTAssertEqual(frame[2].text, "hi")
+        XCTAssertNil(try sub.wait(timeoutMs: 50)) // nothing more → timeout
+        sub.close()
+    }
 }
