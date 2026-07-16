@@ -27,8 +27,10 @@ extern "C" {
 typedef struct KevyDb KevyDb;   /* opaque database handle */
 typedef struct KevySub KevySub; /* opaque subscription handle */
 
-/* A buffer owned by kevy. Free with kevy_buf_free(); never free() it.
- * All three fields must reach kevy_buf_free() untouched. */
+/* A buffer owned by kevy. Never free() it — free it with the function paired
+ * to the call that produced it (kevy_buf_free for most, kevy_buf_free_shared
+ * for kevy_get_shared; passing a shared-lane buffer to kevy_buf_free corrupts
+ * the heap). All three fields must reach that free untouched. */
 typedef struct {
   uint8_t *ptr;
   size_t len;

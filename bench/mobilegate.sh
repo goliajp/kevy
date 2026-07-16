@@ -38,8 +38,12 @@ case "$framework" in
     expo)
         appdir="$HERE/bindings/expo/example"
         [ -d "$appdir/node_modules" ] || ( cd "$appdir" && npm install --no-audit --no-fund )
-        ios_cmd="npx expo run:ios"
-        android_cmd="npx expo run:android"
+        # Dedicated Metro port: the default 8081 collides with any other RN
+        # project's Metro on a shared box, and the app then loads a FOREIGN
+        # bundle (observed: a stray 8081 Metro fed another app's bundle and
+        # crashed on its missing native modules).
+        ios_cmd="npx expo run:ios --port 8087"
+        android_cmd="npx expo run:android --port 8087"
         ;;
     flutter)
         appdir="$HERE/bindings/flutter/example"
@@ -81,7 +85,7 @@ esac
 
 # Capture the verdict from the device log, run the build, gate the line.
 run() {
-    local build="$1" streamcmd="$2" logf runf rc=1
+    local build="$1" streamcmd="$2" logf runf rc=1 verdict=""
     logf=$(mktemp); runf=$(mktemp)
     echo "mobilegate: streaming device log…"
     eval "$streamcmd" > "$logf" 2>/dev/null &
@@ -90,25 +94,38 @@ run() {
     ( cd "$appdir" && eval "$build" > "$runf" 2>&1 ) &
     local runpid=$!
     for _ in $(seq 480); do
-        if grep -q "MOBILEGATE:PASS" "$logf"; then echo "mobilegate: $framework/$platform PASS"; rc=0; break; fi
+        if grep -q "MOBILEGATE:PASS" "$logf"; then echo "mobilegate: $framework/$platform PASS"; rc=0; verdict=y; break; fi
         if grep -qE "MOBILEGATE:(FAIL|ERROR)" "$logf"; then
-            echo "mobilegate: $framework/$platform FAIL"; grep "MOBILEGATE" "$logf" | head -1; rc=1; break; fi
+            echo "mobilegate: $framework/$platform FAIL"; grep "MOBILEGATE" "$logf" | head -1; rc=1; verdict=y; break; fi
+        # The app crashing before it can log a verdict would otherwise burn
+        # the whole timeout in silence — fail fast on the crash line instead.
+        if grep -qE "FATAL EXCEPTION|Fatal signal|Terminating app due to uncaught" "$logf"; then
+            echo "mobilegate: $framework/$platform APP CRASHED before a verdict"
+            grep -E "FATAL EXCEPTION|Fatal signal|Terminating app|Abort message" "$logf" | head -3
+            rc=1; verdict=y; break; fi
         if ! kill -0 $runpid 2>/dev/null && grep -qiE "FAILURE|error:|✖|❌|Exception" "$runf" \
            && ! grep -qiE "Build Succeeded|BUILD SUCCESSFUL|Syncing files|Installing" "$runf"; then
-            echo "mobilegate: $framework/$platform build failed"; tail -20 "$runf"; rc=1; break; fi
+            echo "mobilegate: $framework/$platform build failed"; tail -20 "$runf"; rc=1; verdict=y; break; fi
         sleep 2
     done
+    # A silent expiry used to end the script with no output at all — say so,
+    # and dump enough of both logs to diagnose without a rerun.
+    if [ -z "$verdict" ]; then
+        echo "mobilegate: $framework/$platform TIMEOUT — no verdict within 16min"
+        echo "--- build tail ---"; tail -15 "$runf"
+        echo "--- device-log tail ---"; tail -15 "$logf"
+    fi
     kill $streampid $runpid 2>/dev/null || true
     return $rc
 }
 
 case "$platform" in
     ios)
-        run "$ios_cmd" "xcrun simctl spawn booted log stream --level debug --predicate 'eventMessage CONTAINS \"MOBILEGATE\"'"
+        run "$ios_cmd" "xcrun simctl spawn booted log stream --level debug --predicate 'eventMessage CONTAINS \"MOBILEGATE\" OR eventMessage CONTAINS \"Terminating app\"'"
         ;;
     android)
         adb logcat -c 2>/dev/null || true
-        run "$android_cmd" "adb logcat | grep --line-buffered MOBILEGATE"
+        run "$android_cmd" "adb logcat | grep --line-buffered -E 'MOBILEGATE|FATAL EXCEPTION|Fatal signal|Abort message'"
         ;;
     *) echo "unknown platform: $platform" >&2; exit 2 ;;
 esac

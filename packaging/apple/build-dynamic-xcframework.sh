@@ -11,9 +11,12 @@
 #
 #   packaging/apple/build-dynamic-xcframework.sh <out-dir>
 set -euo pipefail
-cd "$(dirname "$0")/../.."
+# Resolve <out-dir> against the CALLER's cwd BEFORE cd'ing to the repo
+# root, or a relative out-dir silently lands under the repo root (bit the
+# flutter prepare-native.sh, which passes ios/.dyn-fw relative to its door).
 OUT=${1:?usage: build-dynamic-xcframework.sh <out-dir>}
 OUT=$(mkdir -p "$OUT" && cd "$OUT" && pwd)
+cd "$(dirname "$0")/../.."
 HDR="$PWD/crates/kevy-ffi/include"
 FW=kevy_ffi
 
