@@ -27,12 +27,16 @@ namespace kevy {
 // view is valid for the SharedValue's lifetime; the handle is dropped exactly
 // once in the destructor. Move-only. On a large GET this skips the value copy
 // that get() makes into a std::string.
+//
+// A second, cold flavour backs the framed WRONGTYPE fallback (get_view): it
+// owns a plain C++ buffer rather than an engine handle. std::vector's move
+// keeps its data pointer stable, so the view stays valid across a move.
 class SharedValue {
  public:
   SharedValue() = default;
   ~SharedValue() { release(); }
   SharedValue(SharedValue&& o) noexcept
-      : ptr_(o.ptr_), len_(o.len_), cap_(o.cap_), owns_(o.owns_) {
+      : owned_(std::move(o.owned_)), ptr_(o.ptr_), len_(o.len_), cap_(o.cap_), owns_(o.owns_) {
     o.owns_ = false;
     o.ptr_ = nullptr;
   }
@@ -56,9 +60,17 @@ class SharedValue {
 
  private:
   friend class EmbeddedStore;
+  // Shared-lane handle: engine Arc/Vec, freed via kevy_buf_free_shared.
   SharedValue(uint8_t* ptr, size_t len, size_t cap) : ptr_(ptr), len_(len), cap_(cap), owns_(true) {}
+  // Owned C++ buffer: the framed-fallback bulk. No engine handle to free; the
+  // view points into owned_, whose move preserves the data pointer.
+  explicit SharedValue(std::vector<uint8_t>&& bytes) : owned_(std::move(bytes)) {
+    ptr_ = owned_.empty() ? nullptr : owned_.data();
+    len_ = owned_.size();
+  }
   void release();
 
+  std::vector<uint8_t> owned_;  // set only for the framed-fallback flavour
   uint8_t* ptr_ = nullptr;
   size_t len_ = 0;
   size_t cap_ = 0;   // opaque owner handle from the shared lane
@@ -129,6 +141,11 @@ class EmbeddedStore {
 
  private:
   explicit EmbeddedStore(KevyDb* db) : db_(db) {}
+  // Re-issue GET through the framed path when the scalar shared lane rejects
+  // the key (a non-string type). The -WRONGTYPE frame maps through the shared
+  // classify_store_error path → a proper typed StoreError, not an opaque
+  // "misuse". A bulk (a concurrent type change) comes back as an owned value.
+  std::optional<SharedValue> get_framed_fallback(std::string_view key);
   KevyDb* db_;
 };
 
