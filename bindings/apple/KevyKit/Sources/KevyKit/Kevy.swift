@@ -251,9 +251,21 @@ public final class KevyDB {
     }
 
     /// Deliver `payload` to every in-process subscriber on `channel`.
+    /// Returns the receiver count. Scalar lane (kevy_publish): no argv
+    /// packing, no RESP reply to allocate and parse — the publish analog of
+    /// the subscribe side, which has always been a direct symbol.
     @discardableResult
     public func publish(_ channel: String, _ payload: Data) throws -> Int64 {
-        try want(cmdData([Data(channel.utf8), Data(payload)].inserting(Data("PUBLISH".utf8), at: 0))).int ?? 0
+        guard let d = db else { throw KevyError.misuse }
+        let c = Array(channel.utf8)
+        let n = c.withUnsafeBufferPointer { cb in
+            payload.withUnsafeBytes { pb in
+                kevy_publish(d, cb.baseAddress, cb.count,
+                             pb.bindMemory(to: UInt8.self).baseAddress, pb.count)
+            }
+        }
+        guard n >= 0 else { throw KevyError.misuse }
+        return n
     }
 
     /// Open a polled subscription on one channel.
