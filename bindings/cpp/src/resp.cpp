@@ -45,14 +45,11 @@ bool parse_i64(const uint8_t* p, size_t n, int64_t& out) {
 }
 
 bool parse_double(const uint8_t* p, size_t n, double& out) {
-  std::string s(reinterpret_cast<const char*>(p), n);
-  try {
-    size_t used = 0;
-    out = std::stod(s, &used);
-    return used == s.size();
-  } catch (...) {
-    return false;
-  }
+  // std::from_chars: no allocation, no throw, and the inverse of the encode
+  // side's std::to_chars<double> (shortest round-trippable form).
+  const char* s = reinterpret_cast<const char*>(p);
+  auto res = std::from_chars(s, s + n, out);
+  return res.ec == std::errc() && res.ptr == s + n;
 }
 
 size_t line_reply(const uint8_t* buf, size_t len, ReplyKind kind, Reply& out) {
