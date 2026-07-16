@@ -70,20 +70,34 @@ void RespConn::write_all(const char* data, size_t len) {
   }
 }
 
+void RespConn::compact_rbuf() {
+  if (rpos_ == 0) return;
+  if (rpos_ == rbuf_.size()) {
+    rbuf_.clear();  // fully drained (the common one-reply-at-a-time case)
+    rpos_ = 0;
+  } else if (rpos_ >= 65536) {
+    rbuf_.erase(0, rpos_);  // bound the dead prefix on a long stream
+    rpos_ = 0;
+  }
+}
+
 Reply RespConn::read_one() {
   char chunk[8192];
   for (;;) {
     Reply r;
     size_t used = 0;
+    const uint8_t* base = reinterpret_cast<const uint8_t*>(rbuf_.data()) + rpos_;
     try {
-      used = resp::parse_reply(reinterpret_cast<const uint8_t*>(rbuf_.data()), rbuf_.size(), r);
+      used = resp::parse_reply(base, rbuf_.size() - rpos_, r);
     } catch (const KevyError&) {
       throw ProtocolError("malformed reply");
     }
     if (used > 0) {
-      rbuf_.erase(0, used);
+      rpos_ += used;
+      compact_rbuf();
       return r;
     }
+    compact_rbuf();
     ssize_t n = ::recv(fd_, chunk, sizeof(chunk), 0);
     if (n > 0) {
       rbuf_.append(chunk, static_cast<size_t>(n));
@@ -102,9 +116,9 @@ Reply RespConn::read_one() {
 
 Reply RespConn::request(const std::vector<std::string>& argv) {
   if (fd_ < 0) throw ClosedError();
-  std::string wire;
-  resp::encode_command(wire, argv);
-  write_all(wire.data(), wire.size());
+  wbuf_.clear();
+  resp::encode_command(wbuf_, argv);
+  write_all(wbuf_.data(), wbuf_.size());
   return read_one();
 }
 
@@ -119,9 +133,9 @@ std::vector<Reply> RespConn::pipeline_raw(const std::string& wire, size_t n) {
 
 void RespConn::write(const std::vector<std::string>& argv) {
   if (fd_ < 0) throw ClosedError();
-  std::string wire;
-  resp::encode_command(wire, argv);
-  write_all(wire.data(), wire.size());
+  wbuf_.clear();
+  resp::encode_command(wbuf_, argv);
+  write_all(wbuf_.data(), wbuf_.size());
 }
 
 Reply RespConn::read_reply() {

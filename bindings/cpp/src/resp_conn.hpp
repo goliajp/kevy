@@ -44,9 +44,15 @@ class RespConn {
   explicit RespConn(int fd) : fd_(fd) {}
   Reply read_one();
   void write_all(const char* data, size_t len);
+  // Drop the already-consumed prefix of rbuf_ when it is fully drained or the
+  // dead prefix grows large — keeps reply consumption amortized O(1) instead
+  // of an O(n) front-erase per reply (quadratic on a deep pipeline).
+  void compact_rbuf();
 
   int fd_ = -1;
-  std::string rbuf_;
+  std::string rbuf_;   // read reassembly buffer; live bytes at [rpos_, size())
+  size_t rpos_ = 0;    // read cursor into rbuf_ (consumed prefix length)
+  std::string wbuf_;   // reusable request encode buffer (cleared per send)
 };
 
 }  // namespace detail

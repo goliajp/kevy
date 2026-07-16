@@ -53,16 +53,13 @@ std::vector<std::string> array_to_bulks(const Reply& r) {
 }
 
 double parse_float_bytes(const std::string& b) {
-  try {
-    size_t used = 0;
-    double v = std::stod(b, &used);
-    if (used != b.size()) throw ProtocolError("bad float reply: " + b);
-    return v;
-  } catch (const ProtocolError&) {
-    throw;
-  } catch (...) {
+  // from_chars: no allocation, no throw — the inverse of format_double's
+  // std::to_chars<double> below.
+  double v = 0;
+  auto res = std::from_chars(b.data(), b.data() + b.size(), v);
+  if (res.ec != std::errc() || res.ptr != b.data() + b.size())
     throw ProtocolError("bad float reply: " + b);
-  }
+  return v;
 }
 
 uint64_t parse_uint_bytes(const std::string& b) {
