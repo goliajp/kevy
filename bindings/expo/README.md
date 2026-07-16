@@ -20,8 +20,8 @@ const db = open({ dir: `${FileSystem.documentDirectory}kevy` });
 db.set("session:7f3a", "payload", { ttlMs: 3_600_000 }); // scalar fast path
 db.getText("session:7f3a");
 
-db.subscribe("room", (payload, channel) => { /* pump-driven */ });
-db.publish("room", "hi");
+db.subscribe("room", (payload, channel) => { /* a microtask after publish */ });
+db.publish("room", "hi"); // → engine + local receiver count
 
 // The escape hatch: every verb, RESP semantics, errors as VALUES.
 const reply = db.cmd("ZADD", "board", "42", "alice");

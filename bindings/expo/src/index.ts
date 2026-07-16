@@ -43,7 +43,11 @@ export type MessageCallback = (payload: Uint8Array, channel: string) => void;
 export interface OpenOptions {
   /** Directory for persistence; omit for a pure in-memory store. */
   dir?: string;
-  /** subscribe() callback pump cadence in ms. Default 50. */
+  /**
+   * No-op since the local fan-out lane: subscribe() callbacks are dispatched
+   * a microtask after publish (there is no timer pump to pace anymore).
+   * Retained so existing callers keep compiling.
+   */
   tickMs?: number;
 }
 
@@ -119,13 +123,24 @@ class Sub {
 
 export class KevyDb {
   #id: number | null;
-  #subs: { sub: Sub; cb: MessageCallback }[] = [];
-  #timer: ReturnType<typeof setInterval> | null = null;
-  #tickMs: number;
+  // Same-runtime callback lane (see subscribe/publish): channel → handlers.
+  // Handlers are an ARRAY, not a Set — registering the same callback twice
+  // has always delivered twice, and that stays true. The snapshot array is
+  // rebuilt on membership change, so a delivery already queued never sees
+  // edits (snapshot-at-publish).
+  #local = new Map<
+    string,
+    { handlers: MessageCallback[]; snapshot: MessageCallback[] | null }
+  >();
+  #pending: {
+    receivers: MessageCallback[];
+    bytes: Uint8Array;
+    channel: string;
+  }[] = [];
+  #scheduled = false;
 
-  constructor(id: number, tickMs: number) {
+  constructor(id: number, _tickMs: number) {
     this.#id = id;
-    this.#tickMs = tickMs;
   }
 
   #live(): number {
@@ -195,20 +210,42 @@ export class KevyDb {
     reject(this.cmd("FLUSHALL"));
   }
 
+  // Publishes to the engine bus (raw-lane subscribers, receiver count) AND
+  // fans out to the local callback lane in one microtask — the combined
+  // count is exactly what an all-native fanout would have reported.
   publish(channel: Bytes, payload: Bytes): number {
-    return reject(this.cmd("PUBLISH", channel, payload)) as number;
+    const engineReceivers = reject(this.cmd("PUBLISH", channel, payload)) as number;
+    const name = typeof channel === "string" ? channel : dec.decode(channel);
+    const ch = this.#local.get(name);
+    if (ch === undefined || ch.handlers.length === 0) {
+      return engineReceivers;
+    }
+    const receivers = ch.snapshot ?? (ch.snapshot = ch.handlers.slice());
+    // Value semantics (Redis): handlers get a copy, shared per publish.
+    const bytes = typeof payload === "string" ? enc.encode(payload) : payload.slice();
+    this.#pending.push({ receivers, bytes, channel: name });
+    if (!this.#scheduled) {
+      this.#scheduled = true;
+      queueMicrotask(() => this.#drain());
+    }
+    return engineReceivers + receivers.length;
   }
 
-  // Callback pub/sub, wasm-package style: the engine's queue is drained on
-  // a timer (tickMs at open). The low-level polled handle stays available
-  // as subscribeRaw() for callers who want to pump themselves.
+  // Callback pub/sub — the local fan-out lane, wasm-door style. An embedded
+  // bus has no publisher but this handle, so a same-runtime handler needn't
+  // round-trip JS→native→JS: it is dispatched IN JS, one microtask after
+  // publish returns (used to be a ≤tickMs timer pump over a native sub —
+  // delivery is now immediate and the idle timer is gone). Still async,
+  // FIFO, at-most-once, snapshot-at-publish. The engine bus remains the
+  // source of truth for the raw lanes below.
   subscribe(channel: string, cb: MessageCallback): void {
-    const sub = new Sub(native.subscribe(this.#live(), toBytes(channel), false));
-    this.#subs.push({ sub, cb });
-    if (!this.#timer) {
-      this.#timer = setInterval(() => this.#pump(), this.#tickMs);
+    let ch = this.#local.get(channel);
+    if (ch === undefined) {
+      ch = { handlers: [], snapshot: null };
+      this.#local.set(channel, ch);
     }
-    this.#pump();
+    ch.handlers.push(cb);
+    ch.snapshot = null;
   }
 
   subscribeRaw(channel: string): Sub {
@@ -219,21 +256,35 @@ export class KevyDb {
     return new Sub(native.subscribe(this.#live(), toBytes(pattern), true));
   }
 
-  #pump(): void {
-    for (const { sub, cb } of this.#subs) {
-      for (let f = sub.next(); f !== undefined; f = sub.next()) {
-        if (Array.isArray(f) && text(f[0]) === "message") {
-          cb(f[2] as Uint8Array, text(f[1]) as string);
+  #drain(): void {
+    this.#scheduled = false; // a publish inside a handler schedules anew
+    const batch = this.#pending;
+    this.#pending = [];
+    let i = 0;
+    try {
+      for (; i < batch.length; i++) {
+        const d = batch[i];
+        for (const cb of d.receivers) {
+          cb(d.bytes, d.channel);
+        }
+      }
+    } finally {
+      // A throwing handler forfeits the rest of ITS message, not the burst.
+      if (i + 1 < batch.length) {
+        this.#pending = batch.slice(i + 1).concat(this.#pending);
+        if (!this.#scheduled) {
+          this.#scheduled = true;
+          queueMicrotask(() => this.#drain());
         }
       }
     }
   }
 
   close(): void {
-    if (this.#timer) clearInterval(this.#timer);
-    this.#timer = null;
-    for (const { sub } of this.#subs) sub.close();
-    this.#subs = [];
+    // Undelivered local deliveries drop with the handle — the same
+    // at-most-once contract the old timer pump had for undrained frames.
+    this.#pending = [];
+    this.#local.clear();
     if (this.#id !== null) native.close(this.#id);
     this.#id = null;
   }

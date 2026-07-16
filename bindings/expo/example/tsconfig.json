@@ -1,6 +1,14 @@
 {
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
-    "strict": true
+    "strict": true,
+    // The nitro door is symlinked in (metro.config.js watchFolders); tsc
+    // resolves imports from the symlink's REAL path, where this app's
+    // node_modules is invisible — map its peer dep back here. (The door must
+    // not keep its own node_modules: a second react-native there duplicates
+    // classes into the app dex and the release build fails.)
+    "paths": {
+      "react-native-nitro-modules": ["./node_modules/react-native-nitro-modules"]
+    }
   }
 }
