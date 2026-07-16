@@ -1,6 +1,7 @@
 #include "kevy/client.hpp"
 
 #include "argv.hpp"
+#include "kevy/async.hpp"  // detail::AsyncExecutor (complete type for the member)
 #include "kevy/errors.hpp"
 #include "reply_util.hpp"
 #include "resp_conn.hpp"
@@ -35,6 +36,7 @@ Client::Client(Client&&) noexcept = default;
 Client& Client::operator=(Client&&) noexcept = default;
 
 void Client::close() {
+  async_exec_.reset();  // drain + join the worker before the backends go away
   if (remote_) {
     remote_->close();
     remote_.reset();
