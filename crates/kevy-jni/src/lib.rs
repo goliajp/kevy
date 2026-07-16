@@ -21,7 +21,7 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::null_mut;
 
-use kevy_ffi::{KevyBuf, KevyDb, KevySub, unpack_argv};
+use kevy_ffi::{KevyBuf, KevyDb, KevySub, dispatch_packed};
 
 mod env;
 use env::{JBoolean, JInt, JLong, JObject, JniEnv, get_byte_array, new_byte_array, throw};
@@ -123,8 +123,13 @@ pub unsafe extern "system" fn jni_close(_env: JniEnv, _class: JObject, db: JLong
 }
 
 /// `KevyNative.cmd(long db, byte[] packedArgv)` — run one command; argv is
-/// packed per [`unpack_argv`]. Returns the RESP-encoded reply (a protocol
-/// error is still a reply), or null on misuse.
+/// packed per [`kevy_ffi::unpack_argv`]. Returns the RESP-encoded reply (a
+/// protocol error is still a reply), or null on misuse.
+///
+/// Goes through [`kevy_ffi::dispatch_packed`], the Rust-only lane: because
+/// this crate links kevy-ffi as an rlib (not across the C ABI) the packed
+/// bytes hand straight in — no `argv`/`argv_len` pointer arrays to build and
+/// no second per-argument copy that crossing [`kevy_ffi::kevy_cmd`] would cost.
 ///
 /// # Safety
 /// Called by the JVM only: `env` / `packedArgv` live for this call, `db` a
@@ -141,15 +146,8 @@ pub unsafe extern "system" fn jni_cmd(
             return null_mut();
         }
         let bytes = unsafe { get_byte_array(env, packed) };
-        let Some(args) = unpack_argv(&bytes) else {
-            return null_mut();
-        };
-        let ptrs: Vec<*const u8> = args.iter().map(|a| a.as_ptr()).collect();
-        let lens: Vec<usize> = args.iter().map(Vec::len).collect();
         let mut out = empty_buf();
-        let rc = unsafe {
-            kevy_ffi::kevy_cmd(db_ptr(db), args.len(), ptrs.as_ptr(), lens.as_ptr(), &mut out)
-        };
+        let rc = unsafe { dispatch_packed(db_ptr(db), &bytes, &mut out) };
         if rc != 0 {
             return null_mut();
         }
