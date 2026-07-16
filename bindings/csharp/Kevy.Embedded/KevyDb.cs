@@ -147,39 +147,48 @@ public sealed unsafe class KevyDb : IDisposable
 
     private static readonly byte[] NonEmpty = new byte[1]; // fixed on [] yields null
 
-    /// <summary>Store <paramref name="value"/> under <paramref name="key"/>;
+    /// <summary>Store <paramref name="value"/> under <paramref name="key"/>,
+    /// binary-safe: the key and value bytes are pinned as-is — no UTF-8
+    /// round-trip — so arbitrary binary keys/values survive.
     /// <paramref name="ttlMs"/> 0 means no expiry.</summary>
-    public void Set(string key, byte[] value, long ttlMs = 0)
+    public void Set(ReadOnlySpan<byte> key, ReadOnlySpan<byte> value, long ttlMs = 0)
     {
-        var k = Encoding.UTF8.GetBytes(key);
         int rc;
-        fixed (byte* kp = k)
-        fixed (byte* vp = value.Length > 0 ? value : NonEmpty)
+        fixed (byte* kp = key)
+        fixed (byte* vp = value.Length > 0 ? value : (ReadOnlySpan<byte>)NonEmpty)
         {
             rc = KevyNative.kevy_set(
-                Live(), kp, (nuint)k.Length, vp, (nuint)value.Length,
+                Live(), kp, (nuint)key.Length, vp, (nuint)value.Length,
                 ttlMs > 0 ? (ulong)ttlMs : 0);
         }
         if (rc != 0) throw new KevyException("kevy: kevy_set misuse");
     }
 
+    /// <summary>Set for a UTF-8 string key — a convenience wrapper over the
+    /// binary-safe <see cref="Set(ReadOnlySpan{byte},ReadOnlySpan{byte},long)"/>.</summary>
+    public void Set(string key, byte[] value, long ttlMs = 0) =>
+        Set(Encoding.UTF8.GetBytes(key), value, ttlMs);
+
     /// <summary>Set for UTF-8 text values.</summary>
     public void Set(string key, string value, long ttlMs = 0) =>
         Set(key, Encoding.UTF8.GetBytes(value), ttlMs);
 
-    /// <summary>Fetch <paramref name="key"/>'s raw bytes; null on a miss. Uses
-    /// the zero-copy shared lane (kevy_get_shared): a bulk value comes back as
-    /// an Arc clone — a refcount bump, no engine-side byte copy — and the one
-    /// managed copy is made by <see cref="KevyNative.TakeBufShared"/>, which
-    /// then drops the Arc via kevy_buf_free_shared.</summary>
-    public byte[]? Get(string key)
+    /// <summary>Fetch <paramref name="key"/>'s raw bytes; null on a miss.
+    /// Binary-safe: the key bytes are pinned as-is (no UTF-8 round-trip), so
+    /// arbitrary binary keys work. Uses the zero-copy shared lane
+    /// (kevy_get_shared): a bulk value comes back as an Arc clone — a refcount
+    /// bump, no engine-side byte copy — and the one managed copy is made by
+    /// <see cref="KevyNative.TakeBufShared"/>, which then drops the Arc via
+    /// kevy_buf_free_shared. Throws on a non-string key (WRONGTYPE): the shared
+    /// lane can't convey the typed error, so the unified client falls back to
+    /// the framed GET for it.</summary>
+    public byte[]? Get(ReadOnlySpan<byte> key)
     {
-        var k = Encoding.UTF8.GetBytes(key);
         int rc;
         KevyBuf @out;
-        fixed (byte* kp = k)
+        fixed (byte* kp = key)
         {
-            rc = KevyNative.kevy_get_shared(Live(), kp, (nuint)k.Length, &@out);
+            rc = KevyNative.kevy_get_shared(Live(), kp, (nuint)key.Length, &@out);
         }
         return rc switch
         {
@@ -188,6 +197,10 @@ public sealed unsafe class KevyDb : IDisposable
             _ => throw new KevyException("kevy: kevy_get_shared misuse"),
         };
     }
+
+    /// <summary>Get for a UTF-8 string key — a convenience wrapper over the
+    /// binary-safe <see cref="Get(ReadOnlySpan{byte})"/>.</summary>
+    public byte[]? Get(string key) => Get(Encoding.UTF8.GetBytes(key));
 
     /// <summary>Fetch <paramref name="key"/> as UTF-8 text; null on a miss.</summary>
     public string? GetText(string key)

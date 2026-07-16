@@ -26,6 +26,29 @@ public class ErrorsTests(ServerFixture fx)
     });
 
     [Fact]
+    public void GetOnWrongTypeIsStoreError() => H.Both(fx, c =>
+    {
+        // GET on a list must surface WRONGTYPE, not collapse to a miss. On the
+        // embedded backend the zero-copy scalar shared lane can't convey
+        // WRONGTYPE, so the unified Get falls back to the framed GET to
+        // preserve the typed error — matching the remote backend.
+        c.LPush("lst", "a");
+        var e = Assert.Throws<KevyStoreException>(() => c.Get("lst"));
+        Assert.Equal(StoreError.WrongType, e.Error);
+    });
+
+    [Fact]
+    public Task GetAsyncOnWrongTypeIsStoreError() => H.BothAsync(fx, async c =>
+    {
+        // Same fallback on the async face: the embedded scalar-lane Get
+        // completes synchronously, then routes a wrong-type error through the
+        // framed GET so the typed WRONGTYPE surfaces on both backends.
+        await c.LPushAsync("lst", ["a"]);
+        var e = await Assert.ThrowsAsync<KevyStoreException>(async () => await c.GetAsync("lst"));
+        Assert.Equal(StoreError.WrongType, e.Error);
+    });
+
+    [Fact]
     public void RawErrorIsInlineValueNotThrown() => H.Both(fx, c =>
     {
         // A -ERR from the raw escape hatch is DATA (Reply.Error), not an

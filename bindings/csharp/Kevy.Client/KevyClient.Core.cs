@@ -26,17 +26,45 @@ public sealed partial class KevyClient
         throw r.Kind == ReplyKind.Error ? Err.ReplyError(r) : Err.Unexpected(r);
     }
 
-    /// <summary>SET key value (unconditional; contract §3.1).</summary>
-    public void Set(KevyBytes key, KevyBytes value) => ExecOk([Argv.S("SET"), key.Raw, value.Raw]);
-    /// <summary>Async SET.</summary>
-    public ValueTask SetAsync(KevyBytes key, KevyBytes value, CancellationToken ct = default) =>
-        ExecOkAsync([Argv.S("SET"), key.Raw, value.Raw], ct);
+    /// <summary>SET key value (unconditional; contract §3.1). The embedded
+    /// backend takes the binary-safe scalar lane (2-2.6× the framed path);
+    /// remote stays on the wire SET.</summary>
+    public void Set(KevyBytes key, KevyBytes value)
+    {
+        if (_emb is not null) { _emb.Set(key.Raw, value.Raw); return; }
+        ExecOk([Argv.S("SET"), key.Raw, value.Raw]);
+    }
+    /// <summary>Async SET. The embedded scalar lane completes synchronously.</summary>
+    public ValueTask SetAsync(KevyBytes key, KevyBytes value, CancellationToken ct = default)
+    {
+        if (_emb is not null) { _emb.Set(key.Raw, value.Raw); return ValueTask.CompletedTask; }
+        return ExecOkAsync([Argv.S("SET"), key.Raw, value.Raw], ct);
+    }
 
-    /// <summary>GET key; null when absent or expired.</summary>
-    public byte[]? Get(KevyBytes key) => ExecOptBulk([Argv.S("GET"), key.Raw]);
-    /// <summary>Async GET.</summary>
-    public ValueTask<byte[]?> GetAsync(KevyBytes key, CancellationToken ct = default) =>
-        ExecOptBulkAsync([Argv.S("GET"), key.Raw], ct);
+    /// <summary>GET key; null when absent or expired. The embedded backend
+    /// takes the zero-copy scalar shared lane, falling back to the framed GET
+    /// when that lane reports an error so a WRONGTYPE (GET on a non-string
+    /// key) surfaces as the same typed store error the remote path returns.</summary>
+    public byte[]? Get(KevyBytes key)
+    {
+        if (_emb is not null)
+        {
+            try { return _emb.Get(key.Raw); }
+            catch (Kevy.Embedded.KevyException) { /* scalar lane can't convey the
+                typed error (e.g. WRONGTYPE) — fall through to the framed GET */ }
+        }
+        return ExecOptBulk([Argv.S("GET"), key.Raw]);
+    }
+    /// <summary>Async GET. The embedded scalar lane completes synchronously.</summary>
+    public ValueTask<byte[]?> GetAsync(KevyBytes key, CancellationToken ct = default)
+    {
+        if (_emb is not null)
+        {
+            try { return new ValueTask<byte[]?>(_emb.Get(key.Raw)); }
+            catch (Kevy.Embedded.KevyException) { /* fall through to the framed GET */ }
+        }
+        return ExecOptBulkAsync([Argv.S("GET"), key.Raw], ct);
+    }
 
     /// <summary>DEL keys, returning how many were removed.</summary>
     public long Del(params KevyBytes[] keys) => ExecCount(Argv.Cmd("DEL", keys.Raw()));
@@ -104,12 +132,20 @@ public sealed partial class KevyClient
     /// <summary>Async FLUSHALL.</summary>
     public ValueTask FlushAllAsync(CancellationToken ct = default) => ExecOkAsync([Argv.S("FLUSHALL")], ct);
 
-    /// <summary>Atomic SET … PX ttl_ms.</summary>
-    public void SetWithTtl(KevyBytes key, KevyBytes value, TimeSpan ttl) =>
+    /// <summary>Atomic SET … PX ttl_ms. The embedded backend takes the
+    /// binary-safe scalar lane (ttl carried directly); remote stays on the
+    /// wire SET … PX.</summary>
+    public void SetWithTtl(KevyBytes key, KevyBytes value, TimeSpan ttl)
+    {
+        if (_emb is not null) { _emb.Set(key.Raw, value.Raw, Argv.DurationMs(ttl)); return; }
         ExecOk([Argv.S("SET"), key.Raw, value.Raw, Argv.S("PX"), Argv.I(Argv.DurationMs(ttl))]);
-    /// <summary>Async atomic SET … PX.</summary>
-    public ValueTask SetWithTtlAsync(KevyBytes key, KevyBytes value, TimeSpan ttl, CancellationToken ct = default) =>
-        ExecOkAsync([Argv.S("SET"), key.Raw, value.Raw, Argv.S("PX"), Argv.I(Argv.DurationMs(ttl))], ct);
+    }
+    /// <summary>Async atomic SET … PX. The embedded scalar lane completes synchronously.</summary>
+    public ValueTask SetWithTtlAsync(KevyBytes key, KevyBytes value, TimeSpan ttl, CancellationToken ct = default)
+    {
+        if (_emb is not null) { _emb.Set(key.Raw, value.Raw, Argv.DurationMs(ttl)); return ValueTask.CompletedTask; }
+        return ExecOkAsync([Argv.S("SET"), key.Raw, value.Raw, Argv.S("PX"), Argv.I(Argv.DurationMs(ttl))], ct);
+    }
 
     /// <summary>MGET keys; a missing/wrong-type key yields null, in order.</summary>
     public IReadOnlyList<byte[]?> MGet(params KevyBytes[] keys) => ShapeBulks(Exec(Argv.Cmd("MGET", keys.Raw())));
