@@ -50,6 +50,35 @@
 //! - You need cross-process concurrency → kevy-embedded is single-process
 //!   (one mutex). Multi-process needs the network layer.
 //!
+//! # Locking & concurrency
+//!
+//! The keyspace is split into `Config::shards` independent shards, each a
+//! `kevy_store::Store` behind its own `RwLock` (default: **1 shard** = one
+//! lock over the whole keyspace). A key maps to its shard by hash; writes take
+//! that shard's exclusive lock.
+//!
+//! **Reads take a *shared* per-shard lock where it's sound to.** `GET` (and the
+//! FFI zero-copy `get_shared` lane) use the shared lock whenever the active
+//! eviction policy won't consume a per-read LRU/LFU tick — `maxmemory == 0`
+//! (the default), or the `NoEviction` / `*Random` / `VolatileTtl` policies. The
+//! true LRU/LFU policies (`*Lru` / `*Lfu`) instead take the exclusive lock so
+//! each access stamps the clock the eviction scorer ranks by. Read-only
+//! aggregations (`DBSIZE`, `used_memory`, the `INFO` counters) likewise take
+//! shared locks so a full-keyspace scan doesn't stall concurrent writers.
+//!
+//! This is a **lock-correctness** property, not a throughput one: a read-only
+//! operation doesn't hold the exclusive lock against a concurrent writer on its
+//! shard. It is **not** a lock-free read path — concurrent readers still
+//! contend on the shard's `RwLock` word (a shared cache line), so read scaling
+//! is bounded by **shard count**, not core count. To spread read/write
+//! contention across cores, raise `Config::shards`.
+//!
+//! **Known limitation:** the sibling reads (`hget`, `exists`, `smembers`,
+//! `zscore`, `llen`, `scard`, `zcard`, `type_of`, `ttl_ms`, …) currently still
+//! take the shard's *write* lock even though the underlying keyspace methods
+//! are read-only. Moving them onto the shared lane is a tracked follow-up
+//! (bench-gated separately from the `GET` lane above).
+//!
 //! # Cargo features
 //!
 //! `default` is the full surface. For constrained targets (IoT / edge)
@@ -118,6 +147,7 @@ mod replica_runner;
 mod replica_source;
 mod store;
 mod store_inner;
+mod store_wire;
 #[cfg(feature = "persist")]
 mod store_persist;
 
