@@ -115,16 +115,15 @@ export async function runNitroBench(): Promise<string[]> {
   {
     const kv = createKevyNitro();
     const val16 = "v".repeat(16);
-    const keyAB = enc.encode("k").buffer;
     const valAB = enc.encode(val16).buffer;
-    kv.setData(keyAB, valAB, 0); // seed so getData hits
+    kv.setData("k", valAB, 0); // seed so getData hits (string key, like MMKV)
     const getcmd = packAB(["GET", "k"]);
     const setcmd = packAB(["SET", "k", val16]);
     let cmdGet = 0, cmdSet = 0, sGet = 0, sSet = 0;
     { const t = Date.now(); for (let i = 0; i < N; i++) kv.cmd(getcmd); cmdGet = ops(N, Date.now() - t); }
     { const t = Date.now(); for (let i = 0; i < N; i++) kv.cmd(setcmd); cmdSet = ops(N, Date.now() - t); }
-    { const t = Date.now(); for (let i = 0; i < N; i++) kv.getData(keyAB); sGet = ops(N, Date.now() - t); }
-    { const t = Date.now(); for (let i = 0; i < N; i++) kv.setData(keyAB, valAB, 0); sSet = ops(N, Date.now() - t); }
+    { const t = Date.now(); for (let i = 0; i < N; i++) kv.getData("k"); sGet = ops(N, Date.now() - t); }
+    { const t = Date.now(); for (let i = 0; i < N; i++) kv.setData("k", valAB, 0); sSet = ops(N, Date.now() - t); }
     lines.push(
       `NITROGATE: kv scalar getData=${sGet} setData=${sSet} ops/s | vs cmd=${x(sGet, cmdGet)}x get / ${x(sSet, cmdSet)}x set`
     );
