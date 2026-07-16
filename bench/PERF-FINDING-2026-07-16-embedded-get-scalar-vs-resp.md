@@ -47,3 +47,45 @@ embedded SET → scalar lane. Per-client status after the arc:
 All seven clients now uniformly: fast scalar lane for embedded GET/SET, WRONGTYPE
 preserved via framed fallback (or, for Rust, direct `StoreError`). Each fix is
 locked by a GET-on-non-string test on both the embedded and remote backends.
+
+---
+
+## Addendum — contended-read-lock bench REFUTES the read-lock-split hypothesis (#27)
+
+The kevy-embedded audit hypothesized that sibling reads (hget/exists/smembers/…)
+and GET-under-eviction serialize on the shard WRITE lock, and that a read-lock
+lane would let readers scale across cores (P0-1 / P0-3b). Pre-Phase-B gate bench
+(N threads, back-to-back GET, 10k keys, M-series host), comparing the two lanes
+that already exist — mm=0 (rshard/read lock) vs mm=8G+NoEviction (wshard/write
+lock):
+
+| threads | rshard Mops | wshard Mops | ratio |
+|--------:|------------:|------------:|------:|
+| 1 | 25.4 | 32.8 | 0.77× |
+| 2 | 17.8 | 20.6 | 0.86× |
+| 4 |  9.2 | 14.2 | 0.65× |
+| 8 |  4.6 |  5.6 | 0.82× |
+
+**Refutation (two facts):** (1) NEITHER lane scales across cores — both degrade
+~5-6× from 1→8 threads. High-frequency point reads contend on the per-shard
+`RwLock` word's cache line; a read lock's atomic reader-count RMW ping-pongs the
+same line as a write lock, so the read lock does NOT deliver read scaling under
+this contention profile. (2) rshard is not faster than wshard — slightly slower,
+because the mm=0 GET path (`get_shared` Cow + `into_owned`) does at least as much
+work as the mm>0 `live_entry` path; the lock is not the bottleneck.
+
+**Consequences:**
+- **P0-1 (sibling read-lock split) + P0-3b (atomic-clock LRU): NOT pursued** —
+  the throughput-scaling premise is refuted at max contention (and it's a large
+  keyspace-layer / Entry-layout change). Real read scaling would need finer lock
+  sharding or a lock-free read path (seqlock/RCU) — a separate, much larger
+  effort, only if a realistic-workload bench later shows a material gap.
+- **Kept, on non-throughput grounds:** P0-2 (counters → read lock) is a LATENCY
+  fix (a big DBSIZE/INFO aggregation must not hold write locks blocking all
+  writes); P1-1 (verb `to_ascii_uppercase` alloc) is an independent per-op alloc
+  removal; P0-3a (NoEviction GET → read lock) is lock-CORRECTNESS (a non-mutating
+  GET shouldn't exclusively lock out a concurrent writer on its shard) — NOT a
+  throughput win, framed honestly.
+- **Honesty correction:** GET's rustdoc claim that "concurrent readers scale
+  across cores" OVER-claims — reads contend on the per-shard lock word; scaling
+  is bounded by shard count, not lock-free. The doc note must say so.
