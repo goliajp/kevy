@@ -45,3 +45,27 @@ checkout/快照(合计 >10G)、现役 checkout 内 1993 个未跟踪数据文件
 - **多步 python 文本 replace 后必须验证命中**(`assert count` 或
   grep 回查)——3.17.3 的 CHANGELOG 段就是 replace anchor 被并行
   改动移位、静默未命中而丢失的。
+
+## 3. Vendored native 产物纪律(vendored-artifact freshness)
+
+**事故账**:2026-07-16 设备验证发现 expo 门 vendor 的 `libkevy_jni.so`
+比 WRONGTYPE 修复早一天 —— 所有 host 套件全绿(它们测的是 fresh build),
+但设备上 GET-on-list 返回 phantom miss:**源码级修复根本没进 ship 的
+二进制**。同日 vendorgate 首跑又抓到 flutter 门双平台缺整套 shared/raw
+符号(真机会 symbol-lookup 崩)+ nitro 四份 header 漂移。
+
+### 规则
+
+- **改了 kevy-ffi / kevy-jni 的 ABI 面(加符号、改 header)后,必须
+  重建 + re-vendor 所有门的 native 产物**:
+  `packaging/android/build-jnilibs.sh` + `build-ffi-jnilibs.sh` +
+  `packaging/apple/build-xcframework.sh` → 各门 `scripts/prepare-native.sh`。
+- **门禁 = `bash bench/vendorgate.sh`**(符号清单从源码派生,零维护):
+  mobilegate 已把它做硬前置;CI hygiene job 校验 tracked 产物
+  (nitro jniLibs、nitro cpp/kevy.h)。release 前必须 PASS。
+- host 测试绿 ≠ 设备行为对 —— host 测的是 fresh build,设备跑的是
+  vendored binary。on-device smoke 里要有**行为级断言**(如
+  GET-on-list → WRONGTYPE),基本-ops smoke 抓不到 stale vendor。
+- 共享盒上跑 RN dev app:**Metro 用专用端口**(mobilegate 用 8087),
+  默认 8081 会撞别的项目的 Metro,app 会加载**外来 bundle** 并按它
+  缺的模块崩(2026-07-16 ExpoLinking 幻影崩溃即此)。
