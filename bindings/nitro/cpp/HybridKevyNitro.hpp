@@ -11,6 +11,26 @@
 
 namespace margelo::nitro::kevy {
 
+// RAII deleters for the two opaque kevy handles, so the db and subscriptions
+// close exactly once at member-destruction time instead of by hand. Mirrors
+// the buffer side, which is already RAII (ArrayBuffer::wrap's GC-time free).
+struct KevyDbDeleter {
+  void operator()(KevyDb* db) const noexcept {
+    if (db != nullptr) {
+      kevy_close(db);
+    }
+  }
+};
+struct KevySubDeleter {
+  void operator()(KevySub* sub) const noexcept {
+    if (sub != nullptr) {
+      kevy_sub_close(sub);
+    }
+  }
+};
+using KevyDbPtr = std::unique_ptr<KevyDb, KevyDbDeleter>;
+using KevySubPtr = std::unique_ptr<KevySub, KevySubDeleter>;
+
 // The C++ side of the Nitro door. Inherits the Nitrogen-generated spec
 // (which carries the JSI binding glue) and calls kevy-ffi directly. One
 // in-memory db per instance, opened in the constructor; one optional raw
@@ -19,17 +39,11 @@ namespace margelo::nitro::kevy {
 // Expo module dispatch the current door pays.
 class HybridKevyNitro : public HybridKevyNitroSpec {
 public:
-  HybridKevyNitro() : HybridObject(TAG) {
-    _db = kevy_open_mem();
-  }
+  HybridKevyNitro() : HybridObject(TAG), _db(kevy_open_mem()) {}
   ~HybridKevyNitro() override {
+    // Join the poller thread before the handles unwind (it holds _pushSub);
+    // _pushSub / _sub / _db then close via their unique_ptr deleters.
     stopPushInternal();
-    if (_sub != nullptr) {
-      kevy_sub_close(_sub);
-    }
-    if (_db != nullptr) {
-      kevy_close(_db);
-    }
   }
 
   double abi() override;
@@ -60,10 +74,21 @@ private:
   // callback hop is fire-and-forget), so join() returns promptly.
   void stopPushInternal();
 
-  KevyDb* _db = nullptr;
-  KevySub* _sub = nullptr;
+  // WRONGTYPE fallback for getData: the zero-copy shared lane collapses a
+  // non-string key (its only error) into rc<0, so re-issue as a framed GET and
+  // surface the -WRONGTYPE reply as a typed JS exception instead of a phantom
+  // miss. Isomorphic to the C++ door's get_framed_fallback.
+  std::optional<std::shared_ptr<ArrayBuffer>> getDataFramed(const std::string& key);
 
-  KevySub* _pushSub = nullptr;
+  // Spawn the single push-poller thread: subscribe, mark the run flag, and
+  // loop `drain(sub)` (one kernel-park wait cycle per call) until stopPush.
+  // Both push lanes share this; only the per-cycle drain body differs.
+  void spawnPoller(const std::string& channel, std::function<void(KevySub*)> drain);
+
+  KevyDbPtr _db;
+  KevySubPtr _sub;
+
+  KevySubPtr _pushSub;
   std::thread _poller;
   std::atomic<bool> _pollRunning{false};
 };

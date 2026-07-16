@@ -12,7 +12,7 @@ import type { KevyNitro } from './specs/KevyNitro.nitro'
 //   3. subscribe/publish/subNext — the default pub/sub. Poll-drain on the
 //      JS thread, no background thread, no CPU when you're not calling it.
 //   4. subscribePushBatched — the high-fanout path. A native poller parks
-//      on the engine (kevy_sub_wait, zero idle CPU) and delivers each burst
+//      on the engine (kevy_sub_wait_raw, zero idle CPU) and delivers each burst
 //      of frames in ONE native->JS hop, packed into ONE ArrayBuffer. Prefer
 //      this over subscribePush (per-message): the per-frame CallInvoker hop
 //      costs more than it saves.

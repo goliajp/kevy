@@ -17,7 +17,7 @@ Pod::Spec.new do |s|
   # The C++ HybridObject implementation plus the local kevy.h it includes.
   s.source_files = "cpp/**/*.{h,hpp,cpp}"
 
-  # The prebuilt kevy engine C ABI — the same Kevy.xcframework KevyKit and
+  # The prebuilt kevy engine C ABI — the same KevyEngine.xcframework KevyKit and
   # ExpoKevy vendor (built by packaging/apple/build-xcframework.sh). It
   # carries the kevy_* symbols the C++ door links against, mirroring the way
   # the Android side links libkevy_ffi.so.
