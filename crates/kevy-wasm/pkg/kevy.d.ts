@@ -3,6 +3,33 @@
 /** Bytes in: strings are UTF-8 encoded; byte views pass through. */
 export type Bytes = string | Uint8Array | ArrayBuffer;
 
+/**
+ * A decoded RESP2 reply from {@link Kevy.cmd}: simple string, integer
+ * (BigInt outside the safe-integer range), bulk bytes, array, null (null
+ * bulk/array), or a {@link KevyError} for a `-ERR …` reply.
+ */
+export type Reply =
+  | string
+  | number
+  | bigint
+  | Uint8Array
+  | null
+  | KevyError
+  | Reply[];
+
+/**
+ * A RESP error reply (`-ERR …` / `WRONGTYPE …`) decoded by
+ * {@link Kevy.cmd}. Returned, not thrown — the engine rejecting a verb is
+ * data, matching the client contract's inline `Reply::Error`.
+ */
+export class KevyError extends Error {
+  constructor(message: string);
+  name: "KevyError";
+}
+
+/** Decode a bulk `Uint8Array` (or pass a string through) to text. */
+export function text(v: Uint8Array | string): string;
+
 export interface PersistOptions {
   /** Storage name; one log file / database per name. Default "kevy". */
   name?: string;
@@ -82,6 +109,17 @@ export class Kevy {
   flushall(): void;
   /** KEYS matching a Redis glob (default all), up to limit (0 = all). */
   keys(pattern?: string, limit?: number): string[];
+  /**
+   * Raw command channel — run any verb the wasm build compiled in (`core`
+   * + `persist`: strings/hash/list/set/zset/bitmap/keyspace/misc) and get
+   * the decoded RESP2 reply. The universal escape hatch the client
+   * contract mandates for verbs the typed methods do not wrap. Index
+   * (`IDX.*`/`VIEW.*`) and replication verbs are not in this build and
+   * return an unknown-command {@link KevyError}. Writes via `cmd` are not
+   * mirrored into the persistence pump — use the typed setters for durable
+   * writes.
+   */
+  cmd(...args: Bytes[]): Reply;
   /** One manual TTL sweep + event poll. Returns expired-key count. */
   tick(): number;
 

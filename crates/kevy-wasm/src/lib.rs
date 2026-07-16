@@ -42,6 +42,7 @@
 //! by a browser tab replays in a native kevy just as well.
 
 pub mod abi_aof;
+pub mod abi_cmd;
 pub mod abi_core;
 pub mod abi_kv;
 pub mod abi_pubsub;
@@ -56,6 +57,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use kevy_embedded::{Store, Subscription};
+use kevy_store::{KevyError, StoreError};
 
 /// ABI contract version reported by [`abi_core::kevy_abi_version`].
 /// Bumped on any incompatible change to the export surface or the
@@ -115,6 +117,23 @@ impl Instance {
         ERR
     }
 
+    /// Record a [`KevyError`] using the Redis-canonical wording for
+    /// store-semantic errors, then return [`ERR`].
+    ///
+    /// The engine keeps errors structured (`KevyError::Store(WrongType)`),
+    /// and its `Display` prints the internal Debug spelling
+    /// (`store error: WrongType`) — an implementation detail that must not
+    /// leak to a JS caller. At the door boundary we translate store
+    /// variants to the exact messages a real Redis emits (`WRONGTYPE …`),
+    /// so the JS-visible error reads like a genuine server error. Non-store
+    /// variants keep their `Display` text.
+    pub(crate) fn fail_kevy(&mut self, e: &KevyError) -> i32 {
+        match e {
+            KevyError::Store(se) => self.fail(store_err_canonical(se)),
+            other => self.fail(other),
+        }
+    }
+
     /// Append one command as an AOF frame to the pending pump buffer
     /// (no-op unless frame capture was requested at open).
     pub(crate) fn log_frame(&mut self, parts: &[&[u8]]) {
@@ -125,6 +144,25 @@ impl Instance {
             kevy_persist::Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>());
         // Vec is an infallible Write.
         let _ = kevy_persist::write_multibulk(&mut self.aof_out, &argv);
+    }
+}
+
+/// Redis-canonical message for a store-semantic error.
+///
+/// Mirrors the strings kevy-embedded's full RESP dispatcher emits
+/// (`dispatch::util`), duplicated here because that table is `pub(super)`
+/// and unreachable from this crate. The `dispatch_oracle` parity test in
+/// kevy-embedded holds those strings against the server byte for byte, so
+/// this door surfaces exactly the wording a native kevy would.
+fn store_err_canonical(e: &StoreError) -> &'static str {
+    match e {
+        StoreError::WrongType => "WRONGTYPE Operation against a key holding the wrong kind of value",
+        StoreError::NotInteger => "ERR value is not an integer or out of range",
+        StoreError::Overflow => "ERR increment or decrement would overflow",
+        StoreError::OutOfRange => "ERR index out of range",
+        StoreError::NoSuchKey => "ERR no such key",
+        StoreError::NotFloat => "ERR value is not a valid float",
+        StoreError::OutOfMemory => "OOM command not allowed when used memory > 'maxmemory'.",
     }
 }
 
