@@ -39,7 +39,11 @@ embedded SET → scalar lane. Per-client status after the arc:
 - **Rust** — direct `Store` API (no FFI framing); WRONGTYPE is a `StoreError`. Optimal + correct. ✅
 - **Go** — scalar + framed fallback. Fixed (was a fresh regression: reroute without fallback). ✅ + test.
 - **TS** — scalar + framed fallback (Bun). ✅
-- **Java** — scalar (fastGet) but collapsed WRONGTYPE → `Optional.empty()`. Correctness fix pending.
-- **Python** — high-level was RESP-only; reroute to scalar + fallback pending.
-- **C#** — high-level was RESP-only (KevyDb scalar is string-keyed); reroute + binary-safe scalar pending.
-- **C++** — embedded `EmbeddedStore::get` already scalar; WRONGTYPE surfaces as "misuse" — fix pending.
+- **Java** — scalar (fastGet); WRONGTYPE now signals across the JNI boundary (`-2` throws) → framed fallback surfaces `Store(WrongType)`. Fixed. ✅ + test.
+- **Python** — high-level embedded GET/SET routed to the scalar lane + framed fallback on GET. Fixed. ✅ + test.
+- **C#** — added a binary-safe `byte[]`/`ReadOnlySpan<byte>` scalar path to `KevyDb`; unified GET/SET route to it + framed fallback on GET. Fixed. ✅ + test.
+- **C++** — embedded `EmbeddedStore::get`/`get_view` fall back to the framed GET on the scalar error → typed `Store(WrongType)`. Fixed. ✅ + test.
+
+All seven clients now uniformly: fast scalar lane for embedded GET/SET, WRONGTYPE
+preserved via framed fallback (or, for Rust, direct `StoreError`). Each fix is
+locked by a GET-on-non-string test on both the embedded and remote backends.
