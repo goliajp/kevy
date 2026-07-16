@@ -223,6 +223,63 @@ pub unsafe extern "C" fn kevy_get(
     }
 }
 
+/// Scalar GET, **zero-copy shared lane**. For a bulk value the engine's
+/// `Arc<Box<[u8]>>` is cloned (a refcount bump, no byte copy) and handed out as
+/// a buffer that VIEWS the Arc's bytes — the analog of MMKV returning a view of
+/// its mmap page; small values get a fresh Arc (one copy, as the plain lane).
+/// In the returned `KevyBuf`, `ptr`+`len` are the value view and `cap` is an
+/// OPAQUE owner handle. Free ONLY with [`kevy_buf_free_shared`] — never
+/// [`kevy_buf_free`]. 1 = hit, 0 = miss, negative = misuse.
+///
+/// # Safety
+/// `key` must point to `key_len` readable bytes; `out` must be writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kevy_get_shared(
+    db: *mut KevyDb,
+    key: *const u8,
+    key_len: usize,
+    out: *mut KevyBuf,
+) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    unsafe { out.write(KevyBuf::empty()) };
+    if db.is_null() || key.is_null() {
+        return -1;
+    }
+    let store = unsafe { &(*db).store };
+    let k = unsafe { std::slice::from_raw_parts(key, key_len) };
+    match catch_unwind(AssertUnwindSafe(|| store.get_arc(k))) {
+        Ok(Ok(Some(arc))) => {
+            // Read the view ptr/len from the Arc BEFORE into_raw (deref
+            // coercion Arc<Box<[u8]>> -> [u8]; no raw-pointer autoref). The
+            // into_raw'd pointer becomes the opaque owner handle in `cap`.
+            let slice: &[u8] = &arc;
+            let data = slice.as_ptr() as *mut u8;
+            let len = slice.len();
+            let raw = std::sync::Arc::into_raw(arc); // *const Box<[u8]> (thin)
+            unsafe { out.write(KevyBuf { ptr: data, len, cap: raw as usize }) };
+            1
+        }
+        Ok(Ok(None)) => 0,
+        _ => -2,
+    }
+}
+
+/// Free a buffer returned by [`kevy_get_shared`] — drops the engine `Arc`.
+/// `ptr`/`len` are ignored; `cap` is the opaque owner handle from the shared
+/// GET. Pairs 1:1 with [`kevy_get_shared`]; do NOT mix with [`kevy_buf_free`].
+///
+/// # Safety
+/// `cap` must be a value produced by [`kevy_get_shared`], freed exactly once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kevy_buf_free_shared(_ptr: *mut u8, _len: usize, cap: usize) {
+    if cap == 0 {
+        return;
+    }
+    drop(unsafe { std::sync::Arc::from_raw(cap as *const Box<[u8]>) });
+}
+
 /// Scalar fast path: `SET`, optionally with a TTL (`ttl_ms` 0 = none).
 /// Returns 0 on success, negative on misuse or a storage error.
 ///

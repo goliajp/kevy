@@ -73,6 +73,16 @@ impl Store {
         Ok(g.store.get(key).map_err(store_err)?.map(|c| c.into_owned()))
     }
 
+    /// `GET` for the FFI zero-copy *shared* lane (`kevy_get_shared`). Bulk
+    /// values come back as an `Arc::clone` — **no byte copy** — so the FFI can
+    /// hand JS a buffer viewing the engine's own storage (the win vs the plain
+    /// [`Self::get`], which `into_owned`-copies). Takes the write shard guard
+    /// (the keyspace `get_arc` is `&mut`, same as the maxmemory `get` path).
+    pub fn get_arc(&self, key: &[u8]) -> KevyResult<Option<std::sync::Arc<Box<[u8]>>>> {
+        let mut g = self.wshard(key);
+        g.store.get_arc(key).map_err(store_err)
+    }
+
     /// `DEL key1 [key2 ...]`. Returns the count of keys actually removed.
     /// Keys fan out to their owning shards.
     pub fn del(&self, keys: &[&[u8]]) -> KevyResult<usize> {

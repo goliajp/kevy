@@ -47,6 +47,29 @@ impl Store {
         }
     }
 
+    /// Owned GET for the FFI scalar *shared* lane (`kevy_get_shared`). Bulk
+    /// values (`Value::ArcBulk`) return an `Arc::clone` — **no byte copy**; the
+    /// FFI holds the Arc alive and hands JS a buffer that views it directly
+    /// (mirrors MMKV's zero-copy mmap-page view, the thing that made kevy lose
+    /// large GET). Small values (`Str`/`Int`) allocate a fresh `Arc<Box<[u8]>>`
+    /// — the same one copy the Vec lane already pays — so the caller's free path
+    /// is uniform (always an Arc). Wrong type errors like [`Self::get_for_reply`].
+    pub fn get_arc(&mut self, key: &[u8]) -> Result<Option<Arc<Box<[u8]>>>, StoreError> {
+        match self.live_entry(key) {
+            None => Ok(None),
+            Some(e) => match &e.value {
+                Value::ArcBulk(a) => Ok(Some(Arc::clone(a))),
+                Value::Str(v) => Ok(Some(Arc::new(v.as_slice().to_vec().into_boxed_slice()))),
+                Value::Int(n) => {
+                    let mut tmp = itoa_i64_stack();
+                    let s = format_i64_into(*n, &mut tmp);
+                    Ok(Some(Arc::new(s.to_vec().into_boxed_slice())))
+                }
+                _ => Err(StoreError::WrongType),
+            },
+        }
+    }
+
     /// Fused GET-into-output. Skips the [`GetReply`] enum tag
     /// round-trip + caller match arm by writing the RESP frame directly into
     /// `output` (header + bytes + CRLF for Str/Int) or pushing the Arc into

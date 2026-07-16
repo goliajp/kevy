@@ -216,3 +216,44 @@ for large values** (MMKV's mmap-view edge). pub/sub trails mitt ~6× (physical
 crossing floor). A completely different, honest picture from the pre-attack
 "kevy loses everything 1.7–2.3×" — earned by device-grounded decomposition +
 two measured binding attacks + a real-device confirmation.
+
+---
+
+## T1 — Arc-clone zero-copy GET closes the large-GET loss (engine, measured both devices)
+
+The "GET more so for large values" clause above was the last loss. Audited to
+its root: `kevy_get` copied the whole value out of the store (`Vec`
+`to_vec()`), even though values > 64 B are already stored as
+`Value::ArcBulk(Arc<Box<[u8]>>)`. Added an **additive** zero-copy FFI lane
+(`kevy_get_shared` / `kevy_buf_free_shared`, `Store::get_arc`) that hands the
+Nitro door an `Arc::clone` (refcount bump, **no byte copy**) whose bytes the JS
+ArrayBuffer views; `kevy_get` and every other door untouched (`cargo test
+--workspace` green, incl. the byte-exact plain/framed lane assertions + a new
+shared-lane test). getData now wires to it.
+
+**On-device measured (both real phones, 3 stable runs each, kevy/mmkv):**
+
+| GET | iPhone 15 before → **T1** | Samsung S22 before → **T1** |
+|-----|--------------------------:|----------------------------:|
+| 16 B  | 0.8 → 0.8 | 0.6 → 0.6 |
+| 256 B | 0.9 → **1.0** | 0.7 → 0.7–0.8 |
+| 4 KB  | **0.5 → ~2.7×** | 1.0 → **~1.2×** |
+
+**kevy's getData is now size-independent** — flat ~3.33M ops/s (iPhone) /
+~0.4M (Samsung) at *every* size, because the Arc clone is O(1). MMKV's
+`getBuffer` **copies** out of its mmap page, so it slows with size — the two
+curves cross and kevy pulls ahead for larger values (iPhone from 256 B,
+Samsung at 4 KB). The dramatic iPhone 4 KB swing (0.5× → ~2.7×, a ~5× turn)
+is kevy's flat clone vs MMKV's 4 KB copy. Small values (16 B) MMKV still wins
+— that's kevy's fixed FFI/JSI overhead, not a copy (Tier-2, marginal, left
+alone). SET unchanged (still wins 256 B+). MOBILEGATE smoke PASS both devices.
+
+**Final real-device standing (kevy's Nitro KV door vs MMKV):**
+- **SET**: kevy wins at realistic payloads (256 B+, up to 1.6–2.1× @4 KB).
+- **GET**: kevy now wins/ties at 256 B+ and pulls ahead with size
+  (iPhone ~2.7× @4 KB); MMKV keeps the small-value (≤64 B) edge.
+- pub/sub: mitt ~6× (physical floor, not closable).
+
+The audit's Tier-3 (SET copy, batched-push amortization, mitt floor) stays
+not-worth / not-closable as reasoned. T1 was the one high-value item and it
+landed, measured, on both phones.
