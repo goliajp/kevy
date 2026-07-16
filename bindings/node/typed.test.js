@@ -4,6 +4,24 @@ import { expect, test } from "bun:test";
 
 import { KevyError, open, text } from "./index.js";
 
+// GET on a non-string key: the Bun scalar lane collapses WRONGTYPE to a misuse
+// code, so index.js falls back to the framed GET; the typed surface must surface
+// the -WRONGTYPE as a thrown KevyError whose taxonomy survived the throw.
+test("typed GET on a non-string key throws WRONGTYPE", async () => {
+  const db = await open();
+  expect(db.cmd("RPUSH", "list", "a")).toBe(1); // key now holds a list
+  let caught;
+  try {
+    db.get("list");
+  } catch (e) {
+    caught = e;
+  }
+  expect(caught).toBeInstanceOf(KevyError);
+  expect(caught).toBeInstanceOf(Error); // taxonomy + stack both survive the throw
+  expect(caught.message).toMatch(/^WRONGTYPE/);
+  db.close();
+});
+
 test("typed surface", async () => {
   const db = await open(); // in-memory
 

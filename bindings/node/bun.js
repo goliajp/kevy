@@ -38,6 +38,15 @@ const c = dlopen(LIB, {
     returns: FFIType.i32,
   },
   kevy_buf_free: { args: [FFIType.ptr, FFIType.u64, FFIType.u64], returns: FFIType.void },
+  // Scalar fast lanes (Bun only — the cdylib exports these; the N-API addon
+  // does not until #27). GET rides the zero-copy shared lane; free its reply
+  // with kevy_buf_free_shared, NOT kevy_buf_free.
+  kevy_get_shared: { args: [FFIType.ptr, FFIType.ptr, FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
+  kevy_buf_free_shared: { args: [FFIType.ptr, FFIType.u64, FFIType.u64], returns: FFIType.void },
+  kevy_set: {
+    args: [FFIType.ptr, FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.u64, FFIType.u64],
+    returns: FFIType.i32,
+  },
   kevy_subscribe: { args: [FFIType.ptr, FFIType.ptr, FFIType.u64], returns: FFIType.ptr },
   kevy_psubscribe: { args: [FFIType.ptr, FFIType.ptr, FFIType.u64], returns: FFIType.ptr },
   kevy_sub_next: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
@@ -60,6 +69,30 @@ function takeReply() {
   const bytes = view.slice();
   c.kevy_buf_free(Number(p), Number(len), Number(cap));
   return parse(bytes);
+}
+
+// Consume the shared-lane OUT (kevy_get_shared): the bytes are a VIEW of the
+// engine's Arc'd value (no engine-side copy for a bulk); copy once, then release
+// the owner. Free with kevy_buf_free_shared — `cap` is an OPAQUE owner handle
+// (an Arc raw pointer or a tagged Vec), NOT a capacity; kevy_buf_free would
+// misread it. A present-but-empty value returns an empty array, not null.
+function takeShared() {
+  const [p, len, cap] = OUT;
+  const n = Number(len);
+  const bytes = n === 0 ? new Uint8Array(0) : new Uint8Array(toArrayBuffer(Number(p), 0, n)).slice();
+  c.kevy_buf_free_shared(Number(p), n, Number(cap));
+  return bytes;
+}
+
+// A key/value arg as raw bytes: Uint8Array through, strings UTF-8 encoded.
+function argBytes(a) {
+  return a instanceof Uint8Array ? a : enc.encode(String(a));
+}
+
+// A stable non-null pointer for a possibly-empty buffer (len 0 → engine reads
+// nothing, but the pointer must be non-null; reuse OUT's address).
+function nzp(b) {
+  return b.length ? ptr(b) : ptr(OUT);
 }
 
 class Sub {
@@ -90,7 +123,7 @@ class Db {
   // KevyError VALUE — check `instanceof`, it is data.
   cmd(...argv) {
     if (!this.#p) throw new Error("kevy: closed handle");
-    const bufs = argv.map((a) => (a instanceof Uint8Array ? a : enc.encode(String(a))));
+    const bufs = argv.map(argBytes);
     const ptrs = new BigUint64Array(bufs.length);
     const lens = new BigUint64Array(bufs.length);
     for (let i = 0; i < bufs.length; i++) {
@@ -101,6 +134,28 @@ class Db {
     const rc = c.kevy_cmd(this.#p, bufs.length, ptr(ptrs), ptr(lens), ptr(OUT));
     if (rc !== 0) throw new Error("kevy: kevy_cmd misuse");
     return takeReply();
+  }
+
+  // Scalar fast GET: skips argv-pack + RESP framing, riding the engine's
+  // zero-copy shared lane. Returns Uint8Array | null (the raw value, no RESP).
+  // A GET on a non-string key collapses to rc -2 (WRONGTYPE is unrepresentable
+  // on this lane) and throws here; index.js catches it and re-runs a framed
+  // GET so the typed -WRONGTYPE error surfaces.
+  getScalar(key) {
+    if (!this.#p) throw new Error("kevy: closed handle");
+    const kb = argBytes(key);
+    const rc = c.kevy_get_shared(this.#p, nzp(kb), kb.length, ptr(OUT));
+    if (rc < 0) throw new Error("kevy: kevy_get_shared misuse");
+    return rc === 0 ? null : takeShared();
+  }
+
+  // Scalar fast SET (ttlMs 0 = no TTL). No WRONGTYPE hazard: SET overwrites.
+  setScalar(key, value, ttlMs = 0) {
+    if (!this.#p) throw new Error("kevy: closed handle");
+    const kb = argBytes(key);
+    const vb = argBytes(value);
+    const rc = c.kevy_set(this.#p, nzp(kb), kb.length, nzp(vb), vb.length, ttlMs);
+    if (rc < 0) throw new Error("kevy: kevy_set misuse or storage error");
   }
 
   subscribe(channel) {

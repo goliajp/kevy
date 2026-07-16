@@ -19,6 +19,16 @@ export { KevyError, text };
 
 const isBun = typeof globalThis.Bun !== "undefined";
 
+// Constant verbs, pre-encoded once. Passing bytes (not strings) to cmd() spares
+// both backends a TextEncoder.encode() per call (bun.js / node.js pass Uint8Array
+// through). Mirrors the ts client's VERB_CACHE.
+const enc = new TextEncoder();
+const V = Object.fromEntries(
+  ["SET", "GET", "PX", "DEL", "INCRBY", "PEXPIRE", "PTTL", "KEYS", "MGET", "DBSIZE", "FLUSHALL", "PUBLISH"].map(
+    (w) => [w, enc.encode(w)],
+  ),
+);
+
 let backend;
 async function loadBackend() {
   if (!backend) {
@@ -27,8 +37,12 @@ async function loadBackend() {
   return backend;
 }
 
+// A protocol error from cmd() comes back as a KevyError VALUE; the typed surface
+// treats it as failure. Throw the KevyError itself — not a re-wrapped Error — so
+// the taxonomy survives: `instanceof KevyError` (and each future variant) still
+// holds at the catch site (contract §2.1/§2.2).
 function reject(v) {
-  if (v instanceof KevyError) throw new Error(`kevy: ${v.message}`);
+  if (v instanceof KevyError) throw v;
   return v;
 }
 
@@ -50,15 +64,35 @@ class Db {
 
   // ── the typed surface (mirrors the wasm package) ────────────────────
   set(key, value, opts = {}) {
+    // Scalar lane when the backend exposes it (Bun). Node stays on cmd until
+    // kevy-napi ships the scalar symbols (#27).
+    if (this.#raw.setScalar) {
+      this.#raw.setScalar(key, value, opts.ttlMs != null ? Number(opts.ttlMs) : 0);
+      return;
+    }
     if (opts.ttlMs != null) {
-      reject(this.#raw.cmd("SET", key, value, "PX", String(opts.ttlMs)));
+      reject(this.#raw.cmd(V.SET, key, value, V.PX, String(opts.ttlMs)));
     } else {
-      reject(this.#raw.cmd("SET", key, value));
+      reject(this.#raw.cmd(V.SET, key, value));
     }
   }
 
   get(key) {
-    return reject(this.#raw.cmd("GET", key)); // Uint8Array | null
+    // Scalar lane when available (Bun): skips the structural RESP-framing floor
+    // (~575 ns even at 16B; see bench/PERF-FINDING-2026-07-16-embedded-get-
+    // scalar-vs-resp.md — that doc's 2.0-2.6× is a Go-host microbench, the Bun
+    // FFI overhead profile differs, so re-measure on a Bun bench). Node stays on
+    // cmd until kevy-napi ships the scalar symbols (#27).
+    if (this.#raw.getScalar) {
+      try {
+        return this.#raw.getScalar(key); // Uint8Array | null
+      } catch {
+        // The shared lane collapses WRONGTYPE (GET on a non-string key) to a
+        // misuse code; re-run the framed GET so the typed -WRONGTYPE surfaces.
+        return reject(this.#raw.cmd(V.GET, key));
+      }
+    }
+    return reject(this.#raw.cmd(V.GET, key)); // Uint8Array | null
   }
 
   getText(key) {
@@ -67,40 +101,40 @@ class Db {
   }
 
   del(...keys) {
-    return reject(this.#raw.cmd("DEL", ...keys));
+    return reject(this.#raw.cmd(V.DEL, ...keys));
   }
 
   incrby(key, delta) {
-    return reject(this.#raw.cmd("INCRBY", key, String(delta)));
+    return reject(this.#raw.cmd(V.INCRBY, key, String(delta)));
   }
 
   expire(key, ttlMs) {
-    return reject(this.#raw.cmd("PEXPIRE", key, String(ttlMs))) === 1;
+    return reject(this.#raw.cmd(V.PEXPIRE, key, String(ttlMs))) === 1;
   }
 
   pttl(key) {
-    return reject(this.#raw.cmd("PTTL", key));
+    return reject(this.#raw.cmd(V.PTTL, key));
   }
 
   keys(pattern = "*", limit) {
-    const all = reject(this.#raw.cmd("KEYS", pattern)).map(text);
+    const all = reject(this.#raw.cmd(V.KEYS, pattern)).map(text);
     return limit == null ? all : all.slice(0, limit);
   }
 
   mget(...keys) {
-    return reject(this.#raw.cmd("MGET", ...keys));
+    return reject(this.#raw.cmd(V.MGET, ...keys));
   }
 
   dbsize() {
-    return reject(this.#raw.cmd("DBSIZE"));
+    return reject(this.#raw.cmd(V.DBSIZE));
   }
 
   flushall() {
-    reject(this.#raw.cmd("FLUSHALL"));
+    reject(this.#raw.cmd(V.FLUSHALL));
   }
 
   publish(channel, payload) {
-    return reject(this.#raw.cmd("PUBLISH", channel, payload));
+    return reject(this.#raw.cmd(V.PUBLISH, channel, payload));
   }
 
   // Callback pub/sub, wasm-package style: the engine's queue is drained on

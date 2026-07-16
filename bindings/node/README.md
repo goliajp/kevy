@@ -37,6 +37,31 @@ Typed methods (`set` / `get` / `getText` / `del` / `incrby` / `expire`
 meaning. `cmd()` returns `KevyError` as a value instead: driving the
 raw verb surface, the engine saying no is data.
 
+## Entry points
+
+The top-level `open()` (from `index.js`) is **async** — it picks the
+runtime backend with a dynamic `import`. The sub-doors load a backend
+directly and expose a **sync** `open()`:
+
+```js
+import { open } from "@goliapkg/kevy-node/bun.js";  // Bun, sync
+import { open } from "@goliapkg/kevy-node/node.js";  // Node, sync
+```
+
+## Prebuilt platforms
+
+Native binaries ship as `optionalDependencies` for:
+
+| Platform | Bun (`bun:ffi`) | Node (N-API) |
+| --- | --- | --- |
+| darwin-arm64 | ✓ | ✓ |
+| linux-x64 | ✓ | ✓ |
+| linux-arm64 | ✓ | ✓ |
+
+darwin-x64, win32, and musl (Alpine) are **not** prebuilt: those fall to
+the in-repo dev build (`target/debug/…`, resolvable only in a checkout)
+or fail to load. Build kevy from source to run there.
+
 Same API shape as [`@goliapkg/kevy`](https://www.npmjs.com/package/@goliapkg/kevy)
 (the browser/wasm build) and every other kevy embedding. Docs:
 <https://kevy.golia.jp>.
