@@ -59,13 +59,21 @@ impl Store {
 
     /// `GET key` — `Some(bytes)` on hit, `None` on miss or expired.
     ///
-    /// With eviction off (`maxmemory == 0`, the default) this takes the **read**
-    /// lock and a non-mutating store lookup, so concurrent readers scale across
-    /// cores — the path a read-heavy embed cache lives on. With eviction on it
-    /// falls back to the exclusive lock + mutating get so each access still
-    /// stamps the LRU clock.
+    /// The lock is **policy-gated** (see [`Self::reads_use_shared_lock`]):
+    /// whenever the active eviction policy won't consume a per-read LRU/LFU
+    /// tick — `maxmemory == 0` (the default), or the `NoEviction` /
+    /// `*Random` / `VolatileTtl` policies — this takes the **shared** lock and a
+    /// non-mutating [`get_shared`](kevy_store::Store::get_shared) lookup. That
+    /// is a lock-*correctness* choice: a read-only GET has no business holding
+    /// the exclusive lock and blocking a concurrent writer on its shard. It is
+    /// **not** a throughput win — concurrent GETs still contend on the shard's
+    /// `RwLock` word (there is no lock-free read path), so read scaling is
+    /// bounded by shard count, not core count. Expired keys still read as
+    /// `None` here (lazy expire-skip; the reaper / next write reclaims them).
+    /// Only the true LRU/LFU policies fall back to the exclusive lock + mutating
+    /// get so each access stamps the clock the eviction scorer ranks by.
     pub fn get(&self, key: &[u8]) -> KevyResult<Option<Vec<u8>>> {
-        if self.config().maxmemory == 0 {
+        if self.reads_use_shared_lock() {
             let g = self.rshard(key);
             return Ok(g.store.get_shared(key).map_err(store_err)?.map(|c| c.into_owned()));
         }
@@ -73,15 +81,27 @@ impl Store {
         Ok(g.store.get(key).map_err(store_err)?.map(|c| c.into_owned()))
     }
 
+    /// Whether the GET read-lane can take the SHARED shard lock rather than the
+    /// exclusive one — true when no per-read LRU/LFU tick would be consumed:
+    /// `maxmemory == 0` (eviction never runs), or the `NoEviction` / `*Random`
+    /// / `VolatileTtl` policies (whose scorer ignores the per-read clock —
+    /// writes still tick the clock the `*Random` policies sample). Only the
+    /// `*Lru` / `*Lfu` policies need the exclusive lock to stamp the access clock.
+    fn reads_use_shared_lock(&self) -> bool {
+        let p = self.config().eviction_policy;
+        self.config().maxmemory == 0 || !(p.uses_lru() || p.uses_lfu())
+    }
+
     /// `GET` for the FFI zero-copy *shared* lane (`kevy_get_shared`). Bulk
     /// values come back as an `Arc::clone` — **no byte copy** — so the FFI can
     /// hand JS a buffer viewing the engine's own storage (the win vs the plain
-    /// [`Self::get`], which `into_owned`-copies). Takes the write shard guard
-    /// Read-only, so under `maxmemory == 0` (the mobile door) it takes the
-    /// SHARED shard lock — same fast path as [`Self::get`]; with eviction it
-    /// takes the exclusive lock for consistency (no LRU stamp on this lane).
+    /// [`Self::get`], which `into_owned`-copies). The underlying lookup is
+    /// non-mutating, so the lock is policy-gated exactly like [`Self::get`]
+    /// (see [`Self::reads_use_shared_lock`]): the SHARED shard lock whenever no
+    /// per-read LRU/LFU tick would be consumed, else the exclusive lock (this
+    /// lane never stamps the LRU clock regardless).
     pub fn get_shared_owned(&self, key: &[u8]) -> KevyResult<Option<kevy_store::GetShared>> {
-        if self.config().maxmemory == 0 {
+        if self.reads_use_shared_lock() {
             let g = self.rshard(key);
             return g.store.get_shared_owned(key).map_err(store_err);
         }
@@ -166,8 +186,13 @@ impl Store {
     }
 
     /// `DBSIZE` — total live keys across all shards.
+    ///
+    /// Aggregates under each shard's SHARED lock (the underlying `dbsize` is
+    /// `&self`). This is a latency fix, not a scaling one: a full-keyspace
+    /// count shouldn't hold every shard's *write* lock and stall concurrent
+    /// writers while it sums.
     pub fn dbsize(&self) -> usize {
-        self.sum_shards(|i| i.store.dbsize())
+        self.sum_shards_read(|i| i.store.dbsize())
     }
 
     /// `FLUSHALL` — empty every shard (each logs `FLUSHALL` so a replay reaches
@@ -193,23 +218,33 @@ impl Store {
     }
 
     /// `MEMORY USAGE` for one key — `Some(bytes)` or `None` if absent.
+    ///
+    /// Read-only (`estimate_key_bytes` is `&self`), so it takes the shard's
+    /// SHARED lock rather than blocking a concurrent writer on that shard.
     pub fn key_bytes(&self, key: &[u8]) -> Option<u64> {
-        self.wshard(key).store.estimate_key_bytes(key)
+        self.rshard(key).store.estimate_key_bytes(key)
     }
 
     /// Live `used_memory` estimate (summed across shards).
+    ///
+    /// Aggregates under each shard's SHARED lock (latency fix — an INFO-time
+    /// memory sum shouldn't hold every shard's write lock; see [`Self::dbsize`]).
     pub fn used_memory(&self) -> u64 {
-        self.sum_shards_u64(|i| i.store.used_memory())
+        self.sum_shards_u64_read(|i| i.store.used_memory())
     }
 
     /// `INFO`-style counter: total keys evicted by `maxmemory` (all shards).
+    ///
+    /// Read-only aggregation under each shard's SHARED lock (see [`Self::dbsize`]).
     pub fn evictions_total(&self) -> u64 {
-        self.sum_shards_u64(|i| i.store.evictions_total())
+        self.sum_shards_u64_read(|i| i.store.evictions_total())
     }
 
     /// `INFO`-style counter: total keys expired (lazy + active reaper, all shards).
+    ///
+    /// Read-only aggregation under each shard's SHARED lock (see [`Self::dbsize`]).
     pub fn expired_keys_total(&self) -> u64 {
-        self.sum_shards_u64(|i| i.store.expired_keys_total())
+        self.sum_shards_u64_read(|i| i.store.expired_keys_total())
     }
 
     // ---- hash ops -------------------------------------------------------

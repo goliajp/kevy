@@ -99,10 +99,11 @@ impl Store {
         let shards: Shards = Arc::new(build_shards(&config)?);
         let (reaper_stop, reaper_join) = crate::reaper::spawn_reaper(&config, &shards)?;
         #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
-        let (replica_runner, replica_source, feed) = wire_replication(&config, &shards)?;
-        let blocker = wire_blocker(&shards);
+        let (replica_runner, replica_source, feed) =
+            crate::store_wire::wire_replication(&config, &shards)?;
+        let blocker = crate::store_wire::wire_blocker(&shards);
         #[cfg(feature = "index")]
-        let (indexes, views) = wire_registries(&shards);
+        let (indexes, views) = crate::store_wire::wire_registries(&shards);
         let guard = Arc::new(DropGuard {
             reaper_stop,
             reaper_join: Mutex::new(reaper_join),
@@ -354,6 +355,18 @@ impl Store {
         self.shards.iter().map(|s| f(&mut lock_write(s))).sum()
     }
 
+    /// Read-lock variant of [`Self::sum_shards`]: takes each shard's SHARED
+    /// lock for read-only aggregations (DBSIZE etc.) that never mutate the
+    /// keyspace — the underlying counter methods are all `&self`.
+    pub(crate) fn sum_shards_read<F: Fn(&Inner) -> usize>(&self, f: F) -> usize {
+        self.shards.iter().map(|s| f(&lock_read(s))).sum()
+    }
+
+    /// `u64` read-lock variant of [`Self::sum_shards_read`].
+    pub(crate) fn sum_shards_u64_read<F: Fn(&Inner) -> u64>(&self, f: F) -> u64 {
+        self.shards.iter().map(|s| f(&lock_read(s))).sum()
+    }
+
     /// Run a fallible `f` over every shard (mutating, e.g. FLUSHALL).
     pub(crate) fn try_for_each_shard<F: FnMut(&mut Inner) -> KevyResult<()>>(
         &self,
@@ -368,92 +381,6 @@ impl Store {
 
 
 pub(crate) use crate::store_glue::{commit_write, lock_read, lock_write, store_err};
-
-/// Spawn the embed-as-writer replication source when
-/// `Config::embed_writer_listen_addr` is set, wiring the shared source
-/// into every shard's `Inner` so `commit_write` pushes mutations into
-/// the backlog inline (done once at open under the shard's write lock;
-/// reads of `Inner::writer_source` afterwards are uncontended).
-///
-/// The snapshot provider freezes every shard's COW view under the
-/// source lock (so ack_offset and the frozen keyspace are one point in
-/// time — writes between the two would replay twice otherwise), then
-/// serializes outside the locks via the persist writer.
-/// Replication bring-up half of `open_inner`: the replica runner
-/// (embed-as-replica), the writer source (embed-as-writer) and the CDC
-/// feed, with the feed handle cloned into every shard for the write path.
-#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
-#[allow(clippy::type_complexity)] // inline tuple keeps the bring-up outputs colocated
-fn wire_replication(
-    config: &Config,
-    shards: &Shards,
-) -> KevyResult<(
-    Option<crate::replica_runner::ReplicaRunner>,
-    Option<crate::replica_source::ReplicaSource>,
-    Option<std::sync::Arc<Mutex<kevy_replicate::feed::FeedSource>>>,
-)> {
-    let replica_runner = crate::replica_glue::spawn_replica_runner(config, shards);
-    let replica_source = spawn_writer_source(config, shards)?;
-    let feed = Store::feed_open(config)?;
-    if let Some(f) = &feed {
-        for shard in shards.iter() {
-            let mut g = lock_write(shard);
-            g.feed = Some(f.clone());
-        }
-    }
-    Ok((replica_runner, replica_source, feed))
-}
-
-#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
-fn spawn_writer_source(
-    config: &Config,
-    shards: &Shards,
-) -> KevyResult<Option<crate::replica_source::ReplicaSource>> {
-    let Some(addr) = config.embed_writer_listen_addr.as_ref() else {
-        return Ok(None);
-    };
-    let shards_for_snap: Shards = Arc::clone(shards);
-    let snapshot: crate::replica_source::SnapshotProvider =
-        Arc::new(move || crate::replica_source::freeze_and_serialize(&shards_for_snap));
-    let rs = crate::replica_source::ReplicaSource::spawn(
-        addr,
-        config.embed_writer_backlog_bytes,
-        snapshot,
-    )?;
-    let shared = rs.shared_source();
-    for shard in shards.iter() {
-        let mut g = lock_write(shard);
-        g.writer_source = Some(shared.clone());
-    }
-    Ok(Some(rs))
-}
-
-/// Create the store-level blocking-pop waker and hand every shard's
-/// `Inner` a clone.
-fn wire_blocker(shards: &Shards) -> Arc<crate::ops_blocking::Blocker> {
-    let blocker = Arc::new(crate::ops_blocking::Blocker::new());
-    for shard in shards.iter() {
-        lock_write(shard).blocker = Some(blocker.clone());
-    }
-    blocker
-}
-
-/// Create the store-level index + view catalogs and hand every shard's
-/// `Inner` a clone.
-#[cfg(feature = "index")]
-fn wire_registries(
-    shards: &Shards,
-) -> (Arc<crate::ops_index::IndexReg>, Arc<crate::ops_view::ViewReg>) {
-    let indexes = Arc::new(crate::ops_index::IndexReg::default());
-    let views = Arc::new(crate::ops_view::ViewReg::default());
-    for shard in shards.iter() {
-        let mut g = lock_write(shard);
-        g.idx_reg = Some(indexes.clone());
-        g.view_reg = Some(views.clone());
-    }
-    (indexes, views)
-}
-
 
 #[cfg(test)]
 #[path = "store_tests.rs"]

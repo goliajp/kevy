@@ -35,22 +35,42 @@ mod zset_algebra;
 
 use crate::store::Store;
 
+/// Stack-buffer width for the uppercased verb. 16 bytes covers every real
+/// verb (the longest in [`DISPATCH_VERBS`] is `ZREMRANGEBYSCORE` at 16), so
+/// the common path never touches the heap.
+const UPPER_STACK: usize = 16;
+
 /// Dispatch one command, appending the RESP-encoded reply to `out`.
 pub(crate) fn dispatch(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let Some(verb) = argv.first() else {
         return util::err(out, "ERR empty command");
     };
-    let up = verb.to_ascii_uppercase();
-    let handled = strings::dispatch(s, &up, argv, out)
-        || hash::dispatch(s, &up, argv, out)
-        || list::dispatch(s, &up, argv, out)
-        || set::dispatch(s, &up, argv, out)
-        || zset::dispatch(s, &up, argv, out)
-        || zset_algebra::dispatch(s, &up, argv, out)
-        || bitmap::dispatch(s, &up, argv, out)
-        || keyspace::dispatch(s, &up, argv, out)
-        || misc::dispatch(s, &up, argv, out)
-        || dispatch_index(s, &up, argv, out);
+    // Uppercase the verb into a stack buffer — no per-command heap alloc on
+    // this universal FFI entry (every language binding funnels through here).
+    // A pathologically long first token (> UPPER_STACK) falls back to the heap
+    // path so behaviour is identical: it just misses every arm and answers
+    // "unknown command", exactly as the old `to_ascii_uppercase` Vec did.
+    let mut vbuf = [0u8; UPPER_STACK];
+    let vheap;
+    let up: &[u8] = if verb.len() <= UPPER_STACK {
+        for (slot, &b) in vbuf.iter_mut().zip(verb.iter()) {
+            *slot = b.to_ascii_uppercase();
+        }
+        &vbuf[..verb.len()]
+    } else {
+        vheap = verb.to_ascii_uppercase();
+        &vheap
+    };
+    let handled = strings::dispatch(s, up, argv, out)
+        || hash::dispatch(s, up, argv, out)
+        || list::dispatch(s, up, argv, out)
+        || set::dispatch(s, up, argv, out)
+        || zset::dispatch(s, up, argv, out)
+        || zset_algebra::dispatch(s, up, argv, out)
+        || bitmap::dispatch(s, up, argv, out)
+        || keyspace::dispatch(s, up, argv, out)
+        || misc::dispatch(s, up, argv, out)
+        || dispatch_index(s, up, argv, out);
     if !handled {
         let shown = String::from_utf8_lossy(verb);
         util::err(out, &format!("ERR unknown command '{shown}'"));

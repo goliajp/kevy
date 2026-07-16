@@ -1,0 +1,96 @@
+//! Open-time wiring helpers split from `store.rs` to honour the 500-LOC
+//! cap: replication bring-up (embed-as-replica runner + embed-as-writer
+//! source + CDC feed), the blocking-pop waker, and the index/view
+//! registries. Each threads a shared handle into every shard's `Inner`
+//! once, at open, under that shard's write lock (reads of the handle
+//! afterwards are uncontended).
+
+use std::sync::Arc;
+
+use crate::store::Shards;
+use crate::store_glue::lock_write;
+
+/// Replication bring-up half of `open_inner`: the replica runner
+/// (embed-as-replica), the writer source (embed-as-writer) and the CDC
+/// feed, with the feed handle cloned into every shard for the write path.
+#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+#[allow(clippy::type_complexity)] // inline tuple keeps the bring-up outputs colocated
+pub(crate) fn wire_replication(
+    config: &crate::config::Config,
+    shards: &Shards,
+) -> crate::KevyResult<(
+    Option<crate::replica_runner::ReplicaRunner>,
+    Option<crate::replica_source::ReplicaSource>,
+    Option<Arc<std::sync::Mutex<kevy_replicate::feed::FeedSource>>>,
+)> {
+    let replica_runner = crate::replica_glue::spawn_replica_runner(config, shards);
+    let replica_source = spawn_writer_source(config, shards)?;
+    let feed = crate::store::Store::feed_open(config)?;
+    if let Some(f) = &feed {
+        for shard in shards.iter() {
+            let mut g = lock_write(shard);
+            g.feed = Some(f.clone());
+        }
+    }
+    Ok((replica_runner, replica_source, feed))
+}
+
+/// Spawn the embed-as-writer replication source when
+/// `Config::embed_writer_listen_addr` is set, wiring the shared source
+/// into every shard's `Inner` so `commit_write` pushes mutations into
+/// the backlog inline (done once at open under the shard's write lock;
+/// reads of `Inner::writer_source` afterwards are uncontended).
+///
+/// The snapshot provider freezes every shard's COW view under the
+/// source lock (so ack_offset and the frozen keyspace are one point in
+/// time — writes between the two would replay twice otherwise), then
+/// serializes outside the locks via the persist writer.
+#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+fn spawn_writer_source(
+    config: &crate::config::Config,
+    shards: &Shards,
+) -> crate::KevyResult<Option<crate::replica_source::ReplicaSource>> {
+    let Some(addr) = config.embed_writer_listen_addr.as_ref() else {
+        return Ok(None);
+    };
+    let shards_for_snap: Shards = Arc::clone(shards);
+    let snapshot: crate::replica_source::SnapshotProvider =
+        Arc::new(move || crate::replica_source::freeze_and_serialize(&shards_for_snap));
+    let rs = crate::replica_source::ReplicaSource::spawn(
+        addr,
+        config.embed_writer_backlog_bytes,
+        snapshot,
+    )?;
+    let shared = rs.shared_source();
+    for shard in shards.iter() {
+        let mut g = lock_write(shard);
+        g.writer_source = Some(shared.clone());
+    }
+    Ok(Some(rs))
+}
+
+/// Create the store-level blocking-pop waker and hand every shard's
+/// `Inner` a clone.
+pub(crate) fn wire_blocker(shards: &Shards) -> Arc<crate::ops_blocking::Blocker> {
+    let blocker = Arc::new(crate::ops_blocking::Blocker::new());
+    for shard in shards.iter() {
+        lock_write(shard).blocker = Some(blocker.clone());
+    }
+    blocker
+}
+
+/// Create the store-level index + view catalogs and hand every shard's
+/// `Inner` a clone.
+#[cfg(feature = "index")]
+pub(crate) fn wire_registries(
+    shards: &Shards,
+) -> (Arc<crate::ops_index::IndexReg>, Arc<crate::ops_view::ViewReg>) {
+    let indexes = Arc::new(crate::ops_index::IndexReg::default());
+    let views = Arc::new(crate::ops_view::ViewReg::default());
+    for shard in shards.iter() {
+        let mut g = lock_write(shard);
+        g.idx_reg = Some(indexes.clone());
+        g.view_reg = Some(views.clone());
+    }
+    (indexes, views)
+}
