@@ -20,6 +20,27 @@ public final class KevyNative {
     /** Open a pure in-memory store — nothing survives the process; 0 = failure. */
     public static native long openMem();
 
+    /**
+     * open() with explicit durability/rewrite policy; dir null = in-memory.
+     * opts is a long[6]: [0] fsync (0 everysec, 1 always, 2 no), [1] shards
+     * (0 = engine default), [2] rewritePct (growth trigger, 0 = rule off),
+     * [3] rewriteMinSize (growth rule's minimum size gate, bytes),
+     * [4] rewriteBytes (absolute-size trigger, 0 = off),
+     * [5] rewriteIntervalSecs (staleness trigger, 0 = off). Negatives clamp
+     * to 0; a null opts means exactly open()'s defaults. 0 = failure,
+     * including a wrong-length array.
+     */
+    public static native long openWith(byte[] dir, long[] opts);
+
+    /**
+     * Deterministic teardown: flush every shard's AOF (a REAL fsync), write
+     * the feed continuity marker, then refuse every later write; reads stay
+     * available, so the handle stays live — close it separately. Idempotent:
+     * a signal handler exits with shutdown(db) then System.exit(0).
+     * 0 = ok, -1 = misuse, -2 = I/O failure (store still usable; retry).
+     */
+    public static native int shutdown(long db);
+
     /** Close a store handle. Must not be used afterwards; 0 is a no-op. */
     public static native void close(long db);
 

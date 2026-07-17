@@ -7,11 +7,12 @@
 //! function pointers opening with four reserved slots (jni.h:214-219), so
 //! indexing the table by slot number is the entire binding. The gate keeps
 //! its JNI surface down to `byte[]` in / `byte[]` out plus one pair to raise
-//! a signal exception (the scalar GET's wrong-type fallback) and one pair to
-//! build the open report's `long[]`, for eight slots. Each index below was
-//! counted out of the real headers — `reserved0` = slot 0, `GetVersion` =
-//! slot 4 — and the count is identical in Zulu JDK 17 `include/jni.h` and
-//! Android NDK r27 `sysroot/usr/include/jni.h`:
+//! a signal exception (the scalar GET's wrong-type fallback), one pair to
+//! build the open report's `long[]`, and one read for the open options'
+//! `long[]`, for nine slots. Each index below was counted out of the real
+//! headers — `reserved0` = slot 0, `GetVersion` = slot 4 — and the count is
+//! identical in Zulu JDK 17 `include/jni.h` and Android NDK r27
+//! `sysroot/usr/include/jni.h`:
 //!
 //! | slot | function             | declared at (Zulu 17 jni.h) |
 //! |-----:|----------------------|-----------------------------|
@@ -21,6 +22,7 @@
 //! |  176 | `NewByteArray`       | line 637                    |
 //! |  180 | `NewLongArray`       | line 645                    |
 //! |  200 | `GetByteArrayRegion` | line 688                    |
+//! |  204 | `GetLongArrayRegion` | line 696                    |
 //! |  208 | `SetByteArrayRegion` | line 705                    |
 //! |  212 | `SetLongArrayRegion` | line 713                    |
 
@@ -53,6 +55,8 @@ const SLOT_NEW_BYTE_ARRAY: usize = 176;
 const SLOT_NEW_LONG_ARRAY: usize = 180;
 /// `GetByteArrayRegion` — slot 200 (Zulu 17 jni.h:688).
 const SLOT_GET_BYTE_ARRAY_REGION: usize = 200;
+/// `GetLongArrayRegion` — slot 204 (Zulu 17 jni.h:696).
+const SLOT_GET_LONG_ARRAY_REGION: usize = 204;
 /// `SetByteArrayRegion` — slot 208 (Zulu 17 jni.h:705).
 const SLOT_SET_BYTE_ARRAY_REGION: usize = 208;
 /// `SetLongArrayRegion` — slot 212 (Zulu 17 jni.h:713).
@@ -64,6 +68,7 @@ type GetArrayLengthFn = unsafe extern "system" fn(JniEnv, JObject) -> JInt;
 type NewByteArrayFn = unsafe extern "system" fn(JniEnv, JInt) -> JObject;
 type NewLongArrayFn = unsafe extern "system" fn(JniEnv, JInt) -> JObject;
 type GetByteArrayRegionFn = unsafe extern "system" fn(JniEnv, JObject, JInt, JInt, *mut JByte);
+type GetLongArrayRegionFn = unsafe extern "system" fn(JniEnv, JObject, JInt, JInt, *mut JLong);
 type SetByteArrayRegionFn = unsafe extern "system" fn(JniEnv, JObject, JInt, JInt, *const JByte);
 type SetLongArrayRegionFn = unsafe extern "system" fn(JniEnv, JObject, JInt, JInt, *const JLong);
 
@@ -92,6 +97,26 @@ pub(crate) unsafe fn get_byte_array(env: JniEnv, arr: JObject) -> Vec<u8> {
     let get_fn: GetByteArrayRegionFn =
         unsafe { std::mem::transmute(slot(env, SLOT_GET_BYTE_ARRAY_REGION)) };
     unsafe { get_fn(env, arr, 0, n, v.as_mut_ptr().cast::<JByte>()) };
+    v
+}
+
+/// Copy a whole Java `long[]` into a Rust `Vec` — the open options' inbound
+/// twin of [`get_byte_array`].
+///
+/// # Safety
+/// `env` as in [`slot`]; `arr` must be a live, non-null `long[]` reference
+/// from the same call.
+pub(crate) unsafe fn get_long_array(env: JniEnv, arr: JObject) -> Vec<JLong> {
+    let len_fn: GetArrayLengthFn =
+        unsafe { std::mem::transmute(slot(env, SLOT_GET_ARRAY_LENGTH)) };
+    let n = unsafe { len_fn(env, arr) };
+    if n <= 0 {
+        return Vec::new();
+    }
+    let mut v = vec![0 as JLong; n as usize];
+    let get_fn: GetLongArrayRegionFn =
+        unsafe { std::mem::transmute(slot(env, SLOT_GET_LONG_ARRAY_REGION)) };
+    unsafe { get_fn(env, arr, 0, n, v.as_mut_ptr()) };
     v
 }
 

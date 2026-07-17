@@ -92,6 +92,26 @@ internal object Resp {
     }
 }
 
+/** Explicit durability/rewrite policy for [KevyDB.open]. The defaults are
+ *  exactly what the options-less open uses. [rewritePct] 0 turns the
+ *  auto-rewrite growth rule off (as in Redis); [rewriteBytes] /
+ *  [rewriteIntervalSecs] are the absolute-size and staleness triggers
+ *  (0 = off). */
+data class KevyOpenOptions(
+    /** AOF fsync policy: 0 everysec, 1 always, 2 no. */
+    val fsync: Int = 0,
+    /** Keyspace shards (0 = engine default). */
+    val shards: Int = 0,
+    /** Auto-rewrite growth trigger, percent (0 = rule off). */
+    val rewritePct: Int = 100,
+    /** Growth rule's minimum size gate, bytes. */
+    val rewriteMinSize: Long = 64L * 1024 * 1024,
+    /** Absolute-size rewrite trigger, bytes (0 = off). */
+    val rewriteBytes: Long = 0,
+    /** Staleness rewrite trigger, seconds (0 = off). */
+    val rewriteIntervalSecs: Long = 0,
+)
+
 /** The embedded engine. One instance owns its data directory. */
 class KevyDB private constructor(private var handle: Long) : AutoCloseable {
 
@@ -100,6 +120,21 @@ class KevyDB private constructor(private var handle: Long) : AutoCloseable {
         fun open(dir: String): KevyDB {
             val h = KevyNative.open(dir.toByteArray(Charsets.UTF_8))
             if (h == 0L) throw KevyException("kevy: open failed: $dir")
+            return KevyDB(h)
+        }
+
+        /** [open] with explicit [options]; [dir] null = in-memory. */
+        fun open(dir: String?, options: KevyOpenOptions): KevyDB {
+            val opts = longArrayOf(
+                options.fsync.toLong(),
+                options.shards.toLong(),
+                options.rewritePct.toLong(),
+                options.rewriteMinSize,
+                options.rewriteBytes,
+                options.rewriteIntervalSecs,
+            )
+            val h = KevyNative.openWith(dir?.toByteArray(Charsets.UTF_8), opts)
+            if (h == 0L) throw KevyException("kevy: open failed: ${dir ?: "(in-memory)"}")
             return KevyDB(h)
         }
 
@@ -254,6 +289,17 @@ class KevyDB private constructor(private var handle: Long) : AutoCloseable {
         for (s in subs) n += s.poll()
         subs.removeAll { it.isClosed }
         return n
+    }
+
+    /** Deterministic teardown: flush every shard's AOF (a REAL fsync),
+     *  write the feed continuity marker, then refuse every later write.
+     *  Reads stay available, so the handle stays live — [close] when done.
+     *  Idempotent; a lifecycle hook's exit is `db.shutdown()` then
+     *  terminate. Throws on an I/O failure (the store is still usable;
+     *  retry or exit). */
+    fun shutdown() {
+        val rc = KevyNative.shutdown(live())
+        if (rc != 0) throw KevyException("kevy: shutdown failed ($rc)")
     }
 
     /** Close the store. Safe to call more than once. */
