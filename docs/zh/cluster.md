@@ -191,7 +191,7 @@ let replica = Store::open(cfg)?;
 # Ok::<(), kevy_embedded::KevyError>(())
 ```
 
-握手时发送 `REPLICATE FROM <last-applied-offset> ID <replica_id>`；主节点确认该 offset 后开始流式发送帧。最后一个 `Store` 克隆 drop 时会 join runner 线程，主节点因此能观察到干净的 FIN 并释放连接槽位。embed 本地允许 `PUBLISH`（pub/sub 是进程内局部的），但键空间本身保持只读。
+握手时发送 `REPLICATE FROM <generation> <last-applied-offset> ID <replica_id>`；主节点 ack 自己的世代与该 offset 后开始流式发送帧。最后一个 `Store` 克隆 drop 时会 join runner 线程，主节点因此能观察到干净的 FIN 并释放连接槽位。embed 本地允许 `PUBLISH`（pub/sub 是进程内局部的），但键空间本身保持只读。
 
 ## 作用域多写者
 

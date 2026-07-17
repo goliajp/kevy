@@ -139,4 +139,43 @@ for _ in $(seq 60); do
 done
 [ $OK = 1 ] || { echo "repligate: FAIL — replica-local index never answered"; exit 1; }
 echo "repligate: replica-local IDX.QUERY answers over replicated data"
+
+# clamp 5 (T8 generation fence): SIGKILL the writer, restart it on the
+# same port. The new boot mints a NEW feed generation and restarts
+# offsets at 0; the replica runner reconnects presenting its OLD
+# data-generation, so the fence must answer with a snapshot ship and
+# the replica must converge on the NEW boot's keyspace — never stall
+# on a stale cursor or accept aliased frames.
+kill -CONT $WPID 2>/dev/null
+kill -9 $WPID 2>/dev/null
+wait $WPID 2>/dev/null
+$WRITER $SRCPORT 50000 > "$DIR/writer2.log" 2>&1 &
+WPID=$!
+for _ in $(seq 100); do
+    grep -q READY "$DIR/writer2.log" 2>/dev/null && break
+    sleep 0.2
+done
+grep -q READY "$DIR/writer2.log" || { echo "repligate: FAIL — restarted writer never READY"; exit 1; }
+CONVERGED=0
+for _ in $(seq 120); do
+    N=$($CLI -p $REPPORT DBSIZE 2>/dev/null | grep -oE "[0-9]+" || echo 0)
+    if [ "${N:-0}" -ge 50003 ]; then CONVERGED=1; break; fi
+    sleep 0.5
+done
+[ $CONVERGED = 1 ] || { echo "repligate: FAIL — replica never re-synced after writer SIGKILL restart (dbsize=$N)"; tail -3 "$DIR/replica.log"; exit 1; }
+kill -STOP $WPID
+D5=""; D6=""
+for _ in $(seq 30); do
+    D6=$($CLI digest -p $REPPORT p:)
+    [ -n "$D5" ] && [ "$D5" = "$D6" ] && break
+    D5="$D6"
+    sleep 1
+done
+sleep 1
+D6B=$($CLI digest -p $REPPORT p:)
+if [ "$D5" != "$D6" ] || [ "$D6" != "$D6B" ] || [ -z "$D5" ]; then
+    echo "repligate: FAIL — post-SIGKILL-restart digest unstable ($D5 vs $D6 vs $D6B)"
+    exit 1
+fi
+echo "repligate: writer SIGKILL restart re-synced across generations + stable: $D5"
 echo "repligate: PASS"

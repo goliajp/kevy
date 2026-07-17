@@ -92,11 +92,13 @@ sync 点:  每 ≥4MiB 插入 marker 记录(payload = "#SYNC\r\n<abs_offset>",�
 - v1 文件的 resync:RESP 帧头启发式扫描(尽力而为,文档如实标注可靠性差异)
 - fuzz:随机损伤注入 × resync 恢复率断言;231MB 场景复现件(mailrs 提供的脱敏样本形状)进 crashgate 回归
 
-### T8 — 复制世代栅栏(审计洞 #2;wire 改动押 4.0 窗口)
-- 握手升 `REPLICATE FROM <gen> <offset> ID <id>`;primary 在 advance_handshake / fill_streaming_output 比较 `handshake.gen != feed.generation()` → 走既有 snapshot-ship 管线(与 FEED.READ 游标 `(gen, offset)` 语义对齐)
-- replica runner 记录心跳 gen,变化即断链重连(双保险)
-- repligate 新用例:primary SIGKILL → 高速写追过旧 offset → replica 重连 → keyspace diff 必须为空
-- 附带核查:server-as-replica 自身 AOF 在 snapshot resync 的重置语义
+### T8 — 复制世代栅栏(审计洞 #2;wire 改动押 4.0 窗口)【已实施】
+- 握手升 `REPLICATE FROM <gen> <offset> ID <id>`(6 args),ACK 升 `+ACK <gen> <offset>`;5-arg / 单数字 ACK 为 4.0 clean break(WrongArity / AckMalformed)
+- **fence 落点在 pump 而非握手**(实施精化):`ReplicaState` AckSent/Streaming/SnapshotShipping 全带 `generation`;`fill_streaming_output` 每轮先查 gen 再查 caught-up —— 修掉审计外第二张脸:mid-stream FLUSHALL/promotion bump 后 `sent_offset >= next` 读作"caught up" = 永久 stall,直到新历史追过旧游标开始吐 aliased 帧。规则:`gen==feed_gen → 照常;gen==0 && sent==0 → 采纳(fresh 语义,测试兼容);其余 → snapshot ship`
+- replica runner(kevy + kevy-embedded)维护 `data_gen`:SnapshotEnd / 从 offset 0 连上时采纳 ACK gen;心跳 gen ≠ 握手 gen → 断链重连(双保险)
+- embed-as-writer(replica_source.rs)原本完全无 gen(裸内存 backlog,每次重启 offset 归 0 = 同一个洞)→ per-boot gen = spawn 时刻 nanos,握手 fence 同规则
+- 附带核查落地:`apply_snapshot_end` 后同步 `Aof::rewrite_from(&store)` re-base 本地 AOF(先 drain 在途 persist job,防 stale tmp 事后 rename 覆盖 rebase);此前 flushall+load 绕过 commit 路径,resync 后本地日志与键空间脱节,primary 不在线时重启会 serve 错误合成态
+- 测试:embed_writer_e2e `writer_restart_generation_fence_ships_instead_of_aliasing`(重启 writer 追过旧游标 → 必须 ship 全量);kevy replication `unclean_restart_generation_fence_ships_instead_of_aliasing`(同 dir unclean 重启 gen 1→2,旧 `(gen,offset)` claim → SnapshotBegin 而非帧续传);repligate clamp 5(writer SIGKILL 重启 → runner data_gen 走 fence → 收敛 + digest 稳定)
 
 ### T7 — 文档与 runbook 收口
 - persistence.md 三节:状态机契约(T1)/ operator runbook(优雅关闭 SOP、启动日志检查项、rewrite 周期建议 —— mailrs §4 官方化)/ 格式 v2 说明

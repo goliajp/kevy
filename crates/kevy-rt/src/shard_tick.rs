@@ -231,10 +231,10 @@ impl<C: Commands> Shard<C> {
         let mut replicas = Vec::with_capacity(self.replicas.len());
         for c in &self.replicas {
             let (sent, id) = match &c.state {
-                ReplicaState::AckSent { from_offset, replica_id } => {
+                ReplicaState::AckSent { from_offset, replica_id, .. } => {
                     (*from_offset, replica_id.as_str())
                 }
-                ReplicaState::Streaming { sent_offset, replica_id } => {
+                ReplicaState::Streaming { sent_offset, replica_id, .. } => {
                     (*sent_offset, replica_id.as_str())
                 }
                 ReplicaState::SnapshotShipping { ack_offset, replica_id, .. } => {

@@ -196,3 +196,64 @@ fn argv_to_vecvec(argv: &kevy_persist::Argv) -> Vec<Vec<u8>> {
     }
     v
 }
+
+/// The T8 offset-aliasing fence: a subscriber resuming with a cursor
+/// from a PREVIOUS writer boot must get a snapshot ship, never
+/// frame continuity — the restarted writer's in-memory backlog
+/// restarted offsets at 0, so "offset 3" now names different data.
+/// Pre-fence, a new history that had grown past the old cursor
+/// served frames from it silently (missing everything the new boot
+/// wrote before that offset).
+#[test]
+fn writer_restart_generation_fence_ships_instead_of_aliasing() {
+    // Boot A: three writes → next_offset 3.
+    let port_a = free_port();
+    let writer_a =
+        Store::open(Config::default().with_embed_writer(format!("127.0.0.1:{port_a}"))).unwrap();
+    for i in 0..3u8 {
+        writer_a.set(format!("a:{i}").as_bytes(), b"old").unwrap();
+    }
+    let mut sub =
+        ReplicaClient::connect(format!("127.0.0.1:{port_a}").as_str(), "sub-restart", 0).unwrap();
+    let gen_a = sub.primary_gen_at_handshake();
+    assert_ne!(gen_a, 0, "writer must advertise a real generation");
+    let (_payload, ack_a) = drain_snapshot(&mut sub);
+    assert_eq!(ack_a, 3, "boot A as-of offset");
+    drop(sub);
+    drop(writer_a);
+
+    // Boot B ("restarted writer"): a fresh source, offsets restart at
+    // 0, and its history RACES PAST the old cursor (6 > 3) — the
+    // exact shape where pre-fence code would serve aliased frames
+    // 3..6 and silently skip b:0..b:2.
+    let port_b = free_port();
+    let writer_b =
+        Store::open(Config::default().with_embed_writer(format!("127.0.0.1:{port_b}"))).unwrap();
+    for i in 0..6u8 {
+        writer_b.set(format!("b:{i}").as_bytes(), b"new").unwrap();
+    }
+
+    // Resume claim from boot A's history: (gen_a, offset 3).
+    let mut sub = ReplicaClient::connect_at(
+        format!("127.0.0.1:{port_b}").as_str(),
+        "sub-restart",
+        gen_a,
+        3,
+        Duration::from_secs(5),
+    )
+    .unwrap();
+    let gen_b = sub.primary_gen_at_handshake();
+    assert_ne!(gen_b, gen_a, "each boot mints its own generation");
+    // The fence must answer with a FULL snapshot of boot B's
+    // keyspace — drain_snapshot panics if a live frame arrives
+    // instead (the aliasing failure mode).
+    let (payload, ack_b) = drain_snapshot(&mut sub);
+    assert_eq!(ack_b, 6, "snapshot covers all of boot B's history");
+    let text = String::from_utf8_lossy(&payload).into_owned();
+    for i in 0..6u8 {
+        assert!(
+            text.contains(&format!("b:{i}")),
+            "snapshot must carry b:{i} (got no aliased frame gap)"
+        );
+    }
+}

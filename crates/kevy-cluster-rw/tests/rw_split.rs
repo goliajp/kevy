@@ -525,6 +525,12 @@ struct TrackedReplica {
     upstream: (String, u16),
     sender: kevy_rt::ReplicaInboxSender,
     last_offset: Arc<std::sync::atomic::AtomicU64>,
+    /// Feed generation the applied data reflects — carried across
+    /// stop_runner/start_runner like the production runner's
+    /// `data_gen`, so an in-backlog reconnect presents a verifiable
+    /// resume claim (the T8 fence ships on a gen-0 nonzero-offset
+    /// claim by design).
+    data_gen: Arc<std::sync::atomic::AtomicU64>,
     snapshot_count: Arc<std::sync::atomic::AtomicUsize>,
     rt_port: u16,
     rt_stop: Arc<AtomicBool>,
@@ -554,6 +560,7 @@ impl TrackedReplica {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         let last_offset = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let data_gen = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let snapshot_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut me = Self {
             port: rt_port,
@@ -563,6 +570,7 @@ impl TrackedReplica {
             upstream: ("127.0.0.1".to_string(), upstream_replication_port),
             sender,
             last_offset,
+            data_gen,
             snapshot_count,
             rt_port,
             rt_stop,
@@ -580,19 +588,29 @@ impl TrackedReplica {
         let upstream = self.upstream.clone();
         let sender = self.sender.clone();
         let last_offset = self.last_offset.clone();
+        let data_gen = self.data_gen.clone();
         let snapshot_count = self.snapshot_count.clone();
         let handle = std::thread::spawn(move || {
             while !stop.load(Ordering::Relaxed) {
                 let mut from = last_offset.load(std::sync::atomic::Ordering::Relaxed);
-                let conn = kevy_replicate::replica::ReplicaClient::connect(
+                let conn = kevy_replicate::replica::ReplicaClient::connect_at(
                     (upstream.0.as_str(), upstream.1),
                     "tracked",
+                    data_gen.load(std::sync::atomic::Ordering::Relaxed),
                     from,
+                    std::time::Duration::from_secs(5),
                 );
                 let Ok(mut client) = conn else {
                     std::thread::sleep(std::time::Duration::from_millis(20));
                     continue;
                 };
+                // Same adoption contract as the production runner:
+                // a from-0 session (or a completed ship) delivers a
+                // whole history of the ACK'd generation.
+                let ack_gen = client.primary_gen_at_handshake();
+                if from == 0 {
+                    data_gen.store(ack_gen, std::sync::atomic::Ordering::Relaxed);
+                }
                 if let Ok(h) = client.socket_handle()
                     && let Ok(mut guard) = socket_slot.lock()
                 {
@@ -613,6 +631,7 @@ impl TrackedReplica {
                                 kevy_replicate::replica::ReplicaEvent::SnapshotEnd { ack_offset } => {
                                     from = ack_offset;
                                     last_offset.store(from, std::sync::atomic::Ordering::Relaxed);
+                                    data_gen.store(ack_gen, std::sync::atomic::Ordering::Relaxed);
                                     kevy_rt::ReplicaApply::SnapshotEnd { ack_offset, routed: false, gate: None }
                                 }
                                 kevy_replicate::replica::ReplicaEvent::Frame(frame) => {

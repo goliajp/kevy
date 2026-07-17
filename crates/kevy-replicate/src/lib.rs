@@ -53,6 +53,7 @@
 pub mod feed;
 pub mod handshake;
 pub mod replica;
+mod replica_error;
 mod replica_decode;
 pub mod slot;
 pub mod source;

@@ -93,7 +93,10 @@ impl<C: Commands> Shard<C> {
                             return Ok(());
                         }
                         conn.input.extend_from_slice(&scratch[..n]);
-                        if let Err(e) = advance_handshake(conn) {
+                        let feed_gen =
+                            self.replicate.as_ref().map_or(0, |f| f.generation());
+                        let conn = &mut self.replicas[idx];
+                        if let Err(e) = advance_handshake(conn, feed_gen) {
                             eprintln!(
                                 "kevy: replica handshake rejected on fd {}: {e}",
                                 conn.fd,
@@ -149,12 +152,15 @@ impl<C: Commands> Shard<C> {
             if conn.write_off >= conn.output.len() {
                 conn.output.clear();
                 conn.write_off = 0;
-                if let ReplicaState::AckSent { replica_id, from_offset } = &conn.state {
+                if let ReplicaState::AckSent { replica_id, from_offset, generation } =
+                    &conn.state
+                {
                     let rid = replica_id.clone();
-                    let off = *from_offset;
+                    let (off, generation) = (*from_offset, *generation);
                     conn.state = ReplicaState::Streaming {
                         replica_id: rid,
                         sent_offset: off,
+                        generation,
                     };
                 }
                 return Ok(());

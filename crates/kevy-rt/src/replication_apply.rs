@@ -128,6 +128,33 @@ impl<C: Commands> Shard<C> {
         self.replica_applied_next = ack_offset;
         // A bulk load is not keyspace traffic — drop captured events.
         let _ = self.store.take_notify_events();
+        self.rewrite_aof_after_resync();
+    }
+
+    /// Re-base the local AOF on the post-resync keyspace. The
+    /// flushall + snapshot load above bypass the commit path, so
+    /// without this the AOF still holds the PRE-resync history —
+    /// frames appended after the resync would replay on top of the
+    /// wrong base at the next boot (a keyspace the primary discarded,
+    /// served as truth until the link comes back). A synchronous
+    /// `rewrite_from` closes the window in one atomic rename; resync
+    /// is a rare bulk event, so blocking the reactor for one dump is
+    /// the honest trade. Any in-flight background persist job holds a
+    /// stale pre-resync view whose commit renames over the live AOF —
+    /// drain it FIRST so this rebase is the last writer.
+    fn rewrite_aof_after_resync(&mut self) {
+        if self.aof.is_none() {
+            return;
+        }
+        self.drain_persist_on_shutdown();
+        let Some(aof) = self.aof.as_mut() else { return };
+        if let Err(e) = aof.rewrite_from(&self.store) {
+            eprintln!(
+                "kevy: shard {} post-resync aof rewrite failed: {e} — local log \
+                 still holds pre-resync history until the next rewrite",
+                self.id,
+            );
+        }
     }
 
     /// Dispatch one replicated mutation frame against the local

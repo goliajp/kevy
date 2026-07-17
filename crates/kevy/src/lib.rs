@@ -73,6 +73,7 @@ mod dispatch_stream;
 mod elect_persist;
 mod ops;
 mod replica_runner;
+mod replica_runner_routed;
 mod state;
 pub mod verb_meta;
 mod cmd_command;

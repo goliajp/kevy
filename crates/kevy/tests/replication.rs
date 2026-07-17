@@ -1,5 +1,5 @@
 //! Replication integration tests over real sockets: the listener
-//! accepts a replica handshake and replies `+ACK <offset>`, streams
+//! accepts a replica handshake and replies `+ACK <gen> <offset>`, streams
 //! live frames with acked-offset tracking, ships snapshots, and
 //! honors dynamic `REPLICAOF` — plus the WAIT / REPL.* barrier verbs.
 
@@ -79,7 +79,10 @@ struct Server {
     nshards: usize,
     stop: Arc<AtomicBool>,
     handle: Option<std::thread::JoinHandle<()>>,
-    _dir: tempdir::TempDir,
+    /// `Some` for the normal one-shot lifecycle; taken out by
+    /// [`Server::stop_take_dir`] when a test restarts a server on
+    /// the same data dir (feed-generation continuity tests).
+    _dir: Option<tempdir::TempDir>,
 }
 
 /// Tiny stand-in for the `tempfile` crate (zero-dep workspace rule).
@@ -111,12 +114,18 @@ mod tempdir {
 
 impl Server {
     fn start(nshards: usize) -> Server {
+        Self::start_in(nshards, tempdir::TempDir::new("kevy-replication-test"))
+    }
+
+    /// [`Self::start`] on a caller-supplied data dir — the restart
+    /// half of the feed-generation tests (same dir, new process
+    /// lifecycle).
+    fn start_in(nshards: usize, dir: tempdir::TempDir) -> Server {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         // compat port + n replication ports (no cluster mode here).
         let base = free_port_block(nshards);
         let port = base;
         let replication_base = base + 1;
-        let dir = tempdir::TempDir::new("kevy-replication-test");
         let dir_path = dir.path().to_path_buf();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
@@ -163,7 +172,7 @@ impl Server {
             nshards,
             stop,
             handle: Some(handle),
-            _dir: dir,
+            _dir: Some(dir),
         }
     }
 
@@ -173,12 +182,34 @@ impl Server {
             let _ = h.join();
         }
     }
+
+    /// Stop the runtime but KEEP the data dir alive (hand it back to
+    /// the caller) so a second server can boot on it — the restart
+    /// half of the feed-generation tests.
+    fn stop_take_dir(mut self) -> tempdir::TempDir {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+        self._dir.take().expect("dir still owned")
+    }
 }
 
 fn replicate_from(offset: &str, id: &str) -> Vec<u8> {
+    // Raw 6-arg 4.0 handshake with a gen-0 (fresh / no-claim)
+    // generation — the shape every one of these streaming tests
+    // wants: a fresh server's feed gen is 1, and the pump's fence
+    // adopts it for a gen-0 offset-0 claim.
     let mut v = Vec::new();
-    v.extend_from_slice(b"*5\r\n");
-    for arg in [b"REPLICATE".as_slice(), b"FROM", offset.as_bytes(), b"ID", id.as_bytes()] {
+    v.extend_from_slice(b"*6\r\n");
+    for arg in [
+        b"REPLICATE".as_slice(),
+        b"FROM",
+        b"0",
+        offset.as_bytes(),
+        b"ID",
+        id.as_bytes(),
+    ] {
         v.extend_from_slice(format!("${}\r\n", arg.len()).as_bytes());
         v.extend_from_slice(arg);
         v.extend_from_slice(b"\r\n");
@@ -234,17 +265,31 @@ fn replica_handshake_receives_ack_and_stays_connected() {
     let mut s = std::net::TcpStream::connect(("127.0.0.1", server.replication_base)).unwrap();
     s.write_all(&replicate_from("0", "replica-a")).unwrap();
     let reply = read_to_eof(&mut s);
-    assert_ack_then_pings(&reply, b"+ACK 0\r\n");
+    assert_ack_then_pings(&reply, b"+ACK 1 0\r\n");
     server.shutdown();
 }
 
 #[test]
-fn handshake_with_nonzero_offset_echoed_in_ack() {
+fn handshake_with_nonzero_offset_echoed_in_ack_then_fence_ships() {
+    // The ACK still ECHOES the requested offset (handshake layer is
+    // fence-agnostic), but a gen-0 claim with a NONZERO offset is an
+    // unsafe resume — the pump's generation fence must answer with a
+    // snapshot ship, never a quiet streaming socket (T8).
     let server = Server::start(1);
     let mut s = std::net::TcpStream::connect(("127.0.0.1", server.replication_base)).unwrap();
     s.write_all(&replicate_from("12345", "node-7")).unwrap();
     let reply = read_to_eof(&mut s);
-    assert_ack_then_pings(&reply, b"+ACK 12345\r\n");
+    assert!(
+        reply.starts_with(b"+ACK 1 12345\r\n"),
+        "ACK echoes the requested offset, got {:?}",
+        String::from_utf8_lossy(&reply),
+    );
+    let rest = &reply[b"+ACK 1 12345\r\n".len()..];
+    assert!(
+        rest.windows(b"+SNAPSHOT\r\n".len()).any(|w| w == b"+SNAPSHOT\r\n"),
+        "generation fence must ship a snapshot for an unverifiable resume claim, got {:?}",
+        String::from_utf8_lossy(rest),
+    );
     server.shutdown();
 }
 
@@ -360,8 +405,8 @@ fn streaming_replica_receives_set_command_as_wire_frame() {
     .unwrap();
     replica.write_all(&replicate_from("0", "replica-stream")).unwrap();
     // First bytes back must be the +ACK.
-    let ack = read_at_least(&mut replica, b"+ACK 0\r\n".len());
-    assert!(ack.starts_with(b"+ACK 0\r\n"), "got {:?}", String::from_utf8_lossy(&ack));
+    let ack = read_at_least(&mut replica, b"+ACK 1 0\r\n".len());
+    assert!(ack.starts_with(b"+ACK 1 0\r\n"), "got {:?}", String::from_utf8_lossy(&ack));
 
     // Now a regular client on the main port issues a SET.
     let mut client = std::net::TcpStream::connect(("127.0.0.1", server.port)).unwrap();
@@ -372,7 +417,7 @@ fn streaming_replica_receives_set_command_as_wire_frame() {
     // Replica should receive the frame. The +ACK may or may not have
     // been fully consumed by `read_at_least`; pull the leftover bytes
     // (everything after the ACK we already saw).
-    let mut buf = ack[b"+ACK 0\r\n".len()..].to_vec();
+    let mut buf = ack[b"+ACK 1 0\r\n".len()..].to_vec();
     while buf.is_empty() || !buf.windows(2).any(|w| w == b"ar") {
         let mut chunk = [0u8; 256];
         match replica.read(&mut chunk) {
@@ -414,8 +459,8 @@ fn streaming_replica_receives_multiple_frames_in_order() {
     ))
     .unwrap();
     replica.write_all(&replicate_from("0", "replica-multi")).unwrap();
-    let ack = read_at_least(&mut replica, b"+ACK 0\r\n".len());
-    assert!(ack.starts_with(b"+ACK 0\r\n"));
+    let ack = read_at_least(&mut replica, b"+ACK 1 0\r\n".len());
+    assert!(ack.starts_with(b"+ACK 1 0\r\n"));
 
     let mut client = std::net::TcpStream::connect(("127.0.0.1", server.port)).unwrap();
     for i in 0..5 {
@@ -425,7 +470,7 @@ fn streaming_replica_receives_multiple_frames_in_order() {
     }
 
     // Collect bytes after the ACK until we have 5 decoded frames.
-    let mut buf = ack[b"+ACK 0\r\n".len()..].to_vec();
+    let mut buf = ack[b"+ACK 1 0\r\n".len()..].to_vec();
     let mut frames: Vec<(u64, kevy_resp::Argv)> = Vec::new();
     let mut cursor = 0usize;
     while frames.len() < 5 {
@@ -485,8 +530,8 @@ fn streaming_replica_receives_only_its_shards_writes() {
             ))
             .unwrap();
             r.write_all(&replicate_from("0", &format!("replica-{i}"))).unwrap();
-            let ack = read_at_least(&mut r, b"+ACK 0\r\n".len());
-            assert!(ack.starts_with(b"+ACK 0\r\n"));
+            let ack = read_at_least(&mut r, b"+ACK 1 0\r\n".len());
+            assert!(ack.starts_with(b"+ACK 1 0\r\n"));
             (r, ack)
         })
         .collect();
@@ -504,7 +549,7 @@ fn streaming_replica_receives_only_its_shards_writes() {
     let mut total_received = 0usize;
     let mut all_keys: Vec<Vec<u8>> = Vec::new();
     for (r, ack) in &mut replicas {
-        let mut buf = ack[b"+ACK 0\r\n".len()..].to_vec();
+        let mut buf = ack[b"+ACK 1 0\r\n".len()..].to_vec();
         let mut cursor = 0usize;
         let _ = r.set_read_timeout(Some(std::time::Duration::from_millis(500)));
         loop {
@@ -650,7 +695,7 @@ fn start_small_buffer_primary(buffer_size: u64) -> Server {
         nshards: 1,
         stop,
         handle: Some(handle),
-        _dir: dir,
+        _dir: Some(dir),
     }
 }
 
@@ -1042,7 +1087,7 @@ fn multi_shard_listener_binds_per_shard_port() {
         let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
         s.write_all(&replicate_from("0", &format!("replica-{i}"))).unwrap();
         let reply = read_to_eof(&mut s);
-        assert_ack_then_pings(&reply, b"+ACK 0\r\n");
+        assert_ack_then_pings(&reply, b"+ACK 1 0\r\n");
     }
     server.shutdown();
 }
@@ -1805,4 +1850,83 @@ fn repl_wait_read_your_writes_and_future_token_misdirects() {
     replica.shutdown();
     drop(primary);
     let _ = std::fs::remove_dir_all(pdir);
+}
+
+/// T8 offset-aliasing fence on the SERVER primary: after an unclean
+/// restart the feed generation bumps and offsets restart at 0, so a
+/// replica resuming with its old `(gen, offset)` cursor must get a
+/// snapshot ship — never frame continuity, even when the new history
+/// has grown past the old cursor (the shape where pre-fence code
+/// silently served aliased frames).
+#[test]
+fn unclean_restart_generation_fence_ships_instead_of_aliasing() {
+    // Boot 1 (fresh dir → feed gen 1): five writes → next_offset 5.
+    let server = Server::start(1);
+    let mut client = std::net::TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    for i in 0..5 {
+        send_resp(&mut client, &[b"SET", format!("old{i}").as_bytes(), b"v"]);
+        assert_eq!(read_line(&mut client), b"+OK\r\n");
+    }
+    let probe = kevy_replicate::replica::ReplicaClient::connect(
+        ("127.0.0.1", server.replication_base),
+        "fence-probe",
+        0,
+    )
+    .expect("probe handshake");
+    let gen1 = probe.primary_gen_at_handshake();
+    assert_eq!(gen1, 1, "fresh dir boots at feed generation 1");
+    drop(probe);
+    drop(client);
+
+    // Unclean stop: keep the dir, delete the clean-shutdown
+    // continuity marker so the next boot reads as unclean and bumps
+    // the generation (feed_meta decision table).
+    let dir = server.stop_take_dir();
+    let meta = dir.path().join("feed-0.meta");
+    let _ = std::fs::remove_file(&meta);
+
+    // Boot 2 on the same dir: gen 2, offsets restart at 0. Race the
+    // new history PAST the old cursor (10 > 5).
+    let server = Server::start_in(1, dir);
+    let mut client = std::net::TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    for i in 0..10 {
+        send_resp(&mut client, &[b"SET", format!("new{i}").as_bytes(), b"v"]);
+        assert_eq!(read_line(&mut client), b"+OK\r\n");
+    }
+
+    // Old-history resume claim: (gen 1, offset 5). Pre-fence, the
+    // pump would serve frames 5..10 of the NEW history — silently
+    // missing new0..new4. The fence must ship a full snapshot.
+    let mut replica = kevy_replicate::replica::ReplicaClient::connect_at(
+        ("127.0.0.1", server.replication_base),
+        "fence-probe",
+        gen1,
+        5,
+        std::time::Duration::from_secs(5),
+    )
+    .expect("resume handshake");
+    assert_eq!(
+        replica.primary_gen_at_handshake(),
+        gen1 + 1,
+        "unclean restart must bump the feed generation"
+    );
+    // First non-ping event must be SnapshotBegin, not a live frame.
+    loop {
+        match replica.next_event().expect("event").expect("ok") {
+            kevy_replicate::replica::ReplicaEvent::SnapshotBegin => break,
+            kevy_replicate::replica::ReplicaEvent::Ping { .. } => continue,
+            other => panic!("fence must ship, got {other:?}"),
+        }
+    }
+    // And the ship must cover the WHOLE new history (ack = 10).
+    let ack_offset = loop {
+        match replica.next_event().expect("event").expect("ok") {
+            kevy_replicate::replica::ReplicaEvent::SnapshotChunk(_) => continue,
+            kevy_replicate::replica::ReplicaEvent::SnapshotEnd { ack_offset } => break ack_offset,
+            kevy_replicate::replica::ReplicaEvent::Ping { .. } => continue,
+            other => panic!("unexpected mid-ship event: {other:?}"),
+        }
+    };
+    assert_eq!(ack_offset, 10, "snapshot covers all of the new history");
+    server.shutdown();
 }
