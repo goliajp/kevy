@@ -17,7 +17,7 @@ fn main() {
     // 4th arg: aof 1/0. AOF-off isolates the store path (value.to_vec +
     // hashmap insert) from the AOF append (write_multibulk + syscall), so
     // the A/B pins which side owns the SET cost.
-    let aof = a.next().map_or(true, |s| s != "0");
+    let aof = a.next().is_none_or(|s| s != "0");
     let cfg = if aof { Config::default().with_persist(dir) } else { Config::default() };
     let store = Store::open(cfg).expect("open");
     let val = vec![0x61u8; vsize];
