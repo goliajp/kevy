@@ -64,10 +64,10 @@ fn main() {
     // frame CRC (T5) exists to catch.
     let mut tainted = 0u32;
     for i in 0..1000u32 {
-        if let Ok(Some(v)) = store.get(format!("k{i}").as_bytes()) {
-            if !(v.len() == 256 && v.iter().all(|&b| b == 0x62)) {
-                tainted += 1;
-            }
+        if let Ok(Some(v)) = store.get(format!("k{i}").as_bytes())
+            && !(v.len() == 256 && v.iter().all(|&b| b == 0x62))
+        {
+            tainted += 1;
         }
     }
     println!("TAINTED {tainted}");

@@ -10,10 +10,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use crate::KevyDb;
 
-/// What the open's replay restored — and what it could not. `dropped_bytes
-/// > 0` or `corrupt != 0` means the store recovered LESS than its files
-/// held (the dropped region was quarantined): surface it as a startup
-/// health check.
+/// What the open's replay restored — and what it could not. A nonzero
+/// `dropped_bytes` or `corrupt` means the store recovered LESS than its
+/// files held (the dropped region was quarantined): surface it as a
+/// startup health check.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct KevyOpenReport {
