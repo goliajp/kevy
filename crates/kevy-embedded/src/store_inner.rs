@@ -193,7 +193,13 @@ impl Drop for DropGuard {
         for shard in self.shards_for_flush.iter() {
             let mut g = lock_write(shard);
             if let Some(aof) = &mut g.aof {
-                let _ = aof.maybe_sync();
+                // Unconditional: `maybe_sync` is a no-op inside the EverySec
+                // window, which let the fsynced close marker below claim
+                // durability the AOF tail didn't have yet — a power loss in
+                // that gap resumed the cursor over a rolled-back store, the
+                // one phantom the generation fence cannot detect. Same
+                // discipline as the server's shutdown_drain.
+                let _ = aof.sync_now();
             }
         }
         // With the AOF durable, record the feed continuity

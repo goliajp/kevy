@@ -312,6 +312,7 @@ client 生态 —— 该策略 t2 里 gate 化。
 - [ ] T4 生命周期:Store::shutdown()(幂等 clone 安全)+ rewrite 绝对/时间阈值 + RewriteStats 公开 + fsync/rewrite 策略过 C ABI 与各门
 - [ ] T5 AOF envelope v2(len+CRC32C+sync marker;v1 只读、rewrite 升格式)+ 流式 replay(峰值 O(最大记录),消 open 双读;memgate/diskgate 上线)
 - [ ] T6 resync:v2 确定性重扫(strict 默认 / best-effort 可选 + resynced_ranges 上报)+ v1 启发式 + 损伤注入 fuzz
+- [ ] T8 复制世代栅栏(T1 审计洞 #2:握手无 gen → unclean 重启 offset aliasing = replica 永久静默分歧;gen 入握手 + runner 心跳 gen 变化断链 + repligate 用例;wire 改动押 4.0 窗口)
 - [ ] T7 docs/runbook/UPGRADING/CHANGELOG(修订 disk-format 表述)+ mailrs 回信账目
 - 关闭项(有据非 defer):3.x backport 不做(指令:全在 v4 解决);大值写放大存储模型改造不做(mmap-AOF 已实测否决)
 

@@ -30,8 +30,8 @@
 3. **AOF rewrite 崩溃原子性** — 已 tmp+rename,crashgate 验证
 4. **Snapshot 崩溃原子性 + snapshot×AOF 组合恢复** — 已 tmp+rename,crashgate 验证组合序
 5. **多 shard 一致性偏斜**:shards=N 各自 aof-N.aof,崩溃后各自独立截断 → shard 间恢复到不同时刻。契约必须成文(kevy 无跨 shard 原子性承诺 → 偏斜合法,但要写清 + crashgate 断言各 shard 自身前缀完整)
-6. **Feed/CDC × 截断一致性**:AOF 截断丢掉的写,feed 是否已发出?(下游 replica 可能领先 primary 恢复态)— 审计 + 契约成文(mailrs 正在用 with_feed!)
-7. **复制交互**:replica 从截断后的 primary resync 的行为 — 审计 + repligate 已有面复用
+6. **Feed/CDC × 截断一致性 —— 已审计(2026-07-17,file:line 证据链在 T1 审计报告)**:feed ring 纯内存(`VecDeque`,open 时永远空建,只恢复 `(gen, next_offset)` 游标 sidecar);写路径 = AOF 入 buffer → feed push,**EverySec 下帧可先到消费者、后被截断抹掉 = phantom window ≤ fsync 窗口**(Always=0,No=无界);崩溃 → gen bump → 旧游标 FEEDRESYNC 强制 SCAN 重建 → 协议自洽,phantom 可检测但外部副作用泼出去收不回。**真洞 #1:embedded DropGuard 先 `maybe_sync`(1s 窗口内 no-op)后写 fsync 的 close 标记 → 掉电窗口内 gen 不 bump、游标续接、库回滚 = 唯一协议检测不到的 phantom。修复 = `sync_now()` 对齐 server shutdown_drain(已落,T1)**
+7. **复制 × 截断 —— 已审计**:replica 走内存 backlog 流式 + TooOld/Future→全量 snapshot ship,不走 AOF;慢重连路径安全(Future 臂按 forked-history 丢弃)。**真洞 #2(broken):握手 `REPLICATE FROM <offset>` 不带 generation → primary unclean 重启(gen bump、offset 归 0)后新写数追过旧游标时,`frames_from` 用新历史的同号 offset 喂 replica = 永久静默分歧;心跳虽带 gen 但无代码比较触发 resync。修复 = T8(gen 入握手,wire 改动押 4.0 窗口)。**附带核查项:server-as-replica 的自身 AOF 在 snapshot resync 时不重置(flushall 直调不走 commit 路径),依赖重启后全量重同步兜底 — T8 一并审
 8. **可观测性**:OpenReport / metrics 字段 / server INFO persistence 节
 9. **生命周期 API**:shutdown() 语义、与 drop/close 的关系、各语言门透传
 10. **配置面**:fsync 策略与 rewrite 阈值经 C ABI/各门可达(现状:FFI dir-open 锁死默认值,mobilegate durable 轴已撞到)
@@ -91,6 +91,12 @@ sync 点:  每 ≥4MiB 插入 marker 记录(payload = "#SYNC\r\n<abs_offset>",�
 - v2 格式上的确定性重扫(§2);默认 **strict**(停在坏帧,quarantine 尾部 = T2 行为),`with_replay_resync(true)` 启用 best-effort:跳过坏记录续放,`OpenReport` 增 `resynced_ranges: Vec<(u64,u64)>`
 - v1 文件的 resync:RESP 帧头启发式扫描(尽力而为,文档如实标注可靠性差异)
 - fuzz:随机损伤注入 × resync 恢复率断言;231MB 场景复现件(mailrs 提供的脱敏样本形状)进 crashgate 回归
+
+### T8 — 复制世代栅栏(审计洞 #2;wire 改动押 4.0 窗口)
+- 握手升 `REPLICATE FROM <gen> <offset> ID <id>`;primary 在 advance_handshake / fill_streaming_output 比较 `handshake.gen != feed.generation()` → 走既有 snapshot-ship 管线(与 FEED.READ 游标 `(gen, offset)` 语义对齐)
+- replica runner 记录心跳 gen,变化即断链重连(双保险)
+- repligate 新用例:primary SIGKILL → 高速写追过旧 offset → replica 重连 → keyspace diff 必须为空
+- 附带核查:server-as-replica 自身 AOF 在 snapshot resync 的重置语义
 
 ### T7 — 文档与 runbook 收口
 - persistence.md 三节:状态机契约(T1)/ operator runbook(优雅关闭 SOP、启动日志检查项、rewrite 周期建议 —— mailrs §4 官方化)/ 格式 v2 说明

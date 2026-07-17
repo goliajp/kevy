@@ -191,7 +191,7 @@ For each shard, in order:
 
 1. **Load the snapshot.** If `dump-<id>.rdb` exists, stream it into the keyspace. Expired TTLs are dropped during load.
 2. **Replay the AOF.** Read `aof-<id>.aof` from the front and apply each frame.
-3. **Handle the tail.** A clean file applies in full. A truncated tail (crash mid-append) drops the partial trailing frame and applies the prefix. A corrupt frame moves the bad bytes aside to `aof-<id>.aof.panic-quarantine.<unix_ts>` so they don't block future starts, then applies the prefix. The quarantined tail is never re-applied; inspect it by hand if you need to recover anything from it.
+3. **Handle the tail.** A clean file applies in full. A torn or corrupt frame stops the replay at the last complete frame before it, and the open **truncates the file to that point** before the first new append — new writes stay contiguous with the replayable prefix instead of landing behind the bad bytes (where the next replay would stop again and silently orphan them). The dropped region is currently **discarded, not preserved**; a corrupt-quarantine copy (`aof-<id>.aof.corrupt-quarantine.<unix_ts>`) is planned so the bytes stay inspectable. (`panic-quarantine` files come from a different path — a panic while *writing* — not from replay-time corruption.)
 4. **Log a one-line summary** including wall-clock time:
 
    ```text
@@ -259,13 +259,66 @@ acknowledged. Cost: one `fdatasync` per dirty shard.
 
 Process crash (SIGKILL) never loses acknowledged writes under `always`
 and loses at most the fsync window otherwise; the AOF tail is
-replayed on the next open, and a torn final frame is quarantined
-(`panic-quarantine`), never silently applied.
+replayed on the next open, and a torn final frame is truncated away
+on open, never silently applied (see the crash-consistency contract
+below for the full state machine).
 
 An **orderly stop** (`SHUTDOWN` or SIGTERM) loses nothing under any
 policy: the drain force-fsyncs the AOF tail before exit, so the
 `everysec` window that a crash can lose does not apply to a clean
 shutdown.
+
+## Crash-consistency contract (v4)
+
+The open path is a fixed state machine per shard —
+**open → verify → replay → verdict → repair → append** — and each
+verdict carries a hard loss bound. `crashgate`
+(`bench/crashgate.sh`) executes this table: a SIGKILL matrix
+(mid-append, mid-rewrite, mid-snapshot, mid-feed-emit × fsync
+policies × shard counts) plus injected torn-tail / mid-file /
+payload damage.
+
+| What the crash left | Verdict | What replay restores | Hard loss bound |
+|---|---|---|---|
+| Clean file | `clean` | everything | zero |
+| Torn final frame (killed mid-append) | truncated tail | every complete frame | the torn frame + un-fsynced window (`always`: the torn frame only) |
+| Zero-filled tail (power loss with un-fsynced pages) | truncated tail | every complete frame | as above |
+| Corrupt frame mid-file | stop at the frame | prefix before the frame | prefix-only today — recovering the good tail behind the bad frame is the resync train's job; the dropped region should be quarantined, not destroyed |
+| Bit-rot inside a frame's payload | **undetected today** | the tainted value replays | unbounded until the checksummed format lands — the current format has no integrity check |
+
+**The no-black-hole invariant** (the 3.18 incident's fix, held by
+crashgate): the truncate-on-open happens **before the first append**,
+so the replay stop point never regresses across restarts — a
+post-crash restart's writes always survive the next restart.
+
+**Multi-shard skew.** Each shard owns an independent `aof-<id>.aof`
+and repairs independently, so after a crash different shards may
+recover to slightly different moments (each within its own loss
+bound). kevy makes no cross-shard atomicity promise for independent
+writes — `atomic`/`atomic_all_shards` blocks fsync per touched shard
+on commit and are the tool when a group of writes must land together.
+
+**The feed (CDC) is memory-only and runs ahead of the disk.** The
+feed backlog is not rebuilt from the AOF at open; only its
+`(generation, offset)` cursor survives a restart. Frames are emitted
+at apply time, **before** the AOF bytes recording the same write are
+fsynced — under `everysec` a consumer can observe up to ~1 s of
+writes that a crash will roll back (`always`: zero; `no`: unbounded).
+A crash bumps the feed generation, so every pre-crash cursor gets
+`-FEEDRESYNC` / `FeedError::Resync` and the consumer must rebuild
+from a scan of the recovered store. Treat a delivered frame as a
+durable fact only once the fsync window covering it has closed —
+side effects taken on not-yet-durable frames cannot be recalled by
+the resync.
+
+**Replicas hold no durable claim over un-fsynced frames.** After an
+unclean primary restart the primary rolls back by its un-fsynced
+suffix and bumps the feed generation; a replica that applied the
+rolled-back writes is ahead, and on reconnect its forked history is
+discarded via a full snapshot resync. (The generation fence for the
+reconnect handshake is being finished in this arc; until it lands, a
+replica that reconnects after the restarted primary has re-passed
+its old offset can miss the fork — reconnect replicas promptly.)
 
 ## Atomicity charter (embedded serving-store, v2.1)
 
