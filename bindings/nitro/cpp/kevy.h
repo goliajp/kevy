@@ -113,6 +113,37 @@ typedef struct KevyOpenReport {
 /* Fill *out with db's open verdict. 0 = ok, -1 = misuse. */
 int32_t kevy_open_report(KevyDb *db, KevyOpenReport *out);
 
+/* ── lifecycle ─────────────────────────────────────────────────────── */
+
+/* Options for kevy_open_with. Start from KEVY_OPEN_OPTIONS_INIT (the
+ * exact defaults kevy_open uses) and override what you need. rewrite_pct
+ * 0 turns the growth rule off (as in Redis); rewrite_bytes /
+ * rewrite_interval_secs are the absolute-size and staleness triggers
+ * (0 = off). fsync: 0 everysec, 1 always, 2 no. */
+typedef struct KevyOpenOptions {
+    uint8_t fsync;
+    uint32_t shards;
+    uint32_t rewrite_pct;
+    uint64_t rewrite_min_size;
+    uint64_t rewrite_bytes;
+    uint64_t rewrite_interval_secs;
+} KevyOpenOptions;
+
+#define KEVY_OPEN_OPTIONS_INIT \
+    { 0, 0, 100, (uint64_t)64 * 1024 * 1024, 0, 0 }
+
+/* kevy_open with explicit options: durable at dir when dir != NULL,
+ * in-memory when dir == NULL && dir_len == 0. NULL opts = kevy_open's
+ * defaults. NULL on failure. */
+KevyDb *kevy_open_with(const uint8_t *dir, size_t dir_len,
+                       const KevyOpenOptions *opts);
+
+/* Flush every shard's AOF (a REAL fsync), write the feed continuity
+ * marker, then refuse every later write (reads stay available) — the
+ * deterministic teardown: kevy_shutdown(db); exit(0). Idempotent.
+ * 0 = ok, -1 = misuse, -2 = I/O failure (store still usable; retry). */
+int32_t kevy_shutdown(KevyDb *db);
+
 /* Drain one pending frame without blocking.
  * 1 = frame written to *out (RESP array: message / pmessage / acks);
  * 0 = nothing queued; negative = misuse. */

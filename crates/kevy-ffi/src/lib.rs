@@ -20,22 +20,21 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use kevy_embedded::{Config, KevyError, Store, Subscription};
+mod dispatch;
 mod frame;
 use frame::encode_frame;
-
-mod dispatch;
+mod lifecycle;
 mod publish;
 mod report;
 mod sub_raw;
 pub use dispatch::dispatch_packed;
+pub use lifecycle::{KevyOpenOptions, kevy_open_with, kevy_shutdown};
 pub use publish::kevy_publish;
 pub use report::{KevyOpenReport, kevy_open_report};
 pub use sub_raw::{kevy_sub_next_raw, kevy_sub_wait_raw};
 
 /// Opaque database handle. A `Box<Store>` on the Rust side.
-pub struct KevyDb {
-    store: Store,
-}
+pub struct KevyDb { pub(crate) store: Store }
 
 /// Opaque subscription handle. A `Box<Subscription>` on the Rust side.
 pub struct KevySub {
@@ -107,7 +106,7 @@ pub extern "C" fn kevy_open_mem() -> *mut KevyDb {
     open_with(Config::default)
 }
 
-fn open_with(cfg: impl FnOnce() -> Config) -> *mut KevyDb {
+pub(crate) fn open_with(cfg: impl FnOnce() -> Config) -> *mut KevyDb {
     let opened = catch_unwind(AssertUnwindSafe(|| Store::open(cfg())));
     match opened {
         Ok(Ok(store)) => Box::into_raw(Box::new(KevyDb { store })),

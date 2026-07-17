@@ -116,6 +116,48 @@ class KevyDb implements ffi.Finalizable {
     }
   }
 
+  /// [open] with explicit durability/rewrite policy. `fsync`: 0 everysec
+  /// (default) / 1 always / 2 no. `rewritePct`/`rewriteMinSize` are the
+  /// classic growth pair; `rewriteBytes` (absolute cap) and
+  /// `rewriteIntervalSecs` (staleness) each 0 = off — they exist because
+  /// the growth rule alone lets a large log double before compacting.
+  static KevyDb openWith(
+    String dir, {
+    int fsync = 0,
+    int shards = 0,
+    int rewritePct = 100,
+    int rewriteMinSize = 64 * 1024 * 1024,
+    int rewriteBytes = 0,
+    int rewriteIntervalSecs = 0,
+  }) {
+    final bytes = utf8.encode(dir);
+    final p = malloc<ffi.Uint8>(bytes.length);
+    final opts = malloc<KevyOpenOptions>();
+    try {
+      p.asTypedList(bytes.length).setAll(0, bytes);
+      opts.ref.fsync = fsync;
+      opts.ref.shards = shards;
+      opts.ref.rewrite_pct = rewritePct;
+      opts.ref.rewrite_min_size = rewriteMinSize;
+      opts.ref.rewrite_bytes = rewriteBytes;
+      opts.ref.rewrite_interval_secs = rewriteIntervalSecs;
+      final db = _b.kevy_open_with(p, bytes.length, opts);
+      if (db == ffi.nullptr) throw KevyError('kevy: open failed');
+      return KevyDb._(db);
+    } finally {
+      malloc.free(p);
+      malloc.free(opts);
+    }
+  }
+
+  /// Flush every shard's AOF with a REAL fsync, then refuse every later
+  /// write (reads stay available). Idempotent — the deterministic teardown
+  /// for a lifecycle hook: `db.shutdown(); exit(0)`.
+  void shutdown() {
+    final rc = _b.kevy_shutdown(_live);
+    if (rc != 0) throw KevyError('kevy: shutdown failed (rc=$rc)');
+  }
+
   /// Open a pure in-memory store — nothing survives the process.
   static KevyDb openInMemory() {
     final db = _b.kevy_open_mem();

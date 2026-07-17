@@ -349,6 +349,51 @@ class FlutterKevyBindings {
         int Function(ffi.Pointer<KevyDbHandle>, ffi.Pointer<KevyOpenReport>)
       >();
 
+  /// kevy_open with explicit options: durable at dir when dir != NULL,
+  /// in-memory when dir == NULL && dir_len == 0. NULL opts = kevy_open's
+  /// defaults. NULL on failure.
+  ffi.Pointer<KevyDbHandle> kevy_open_with(
+    ffi.Pointer<ffi.Uint8> dir,
+    int dir_len,
+    ffi.Pointer<KevyOpenOptions> opts,
+  ) {
+    return _kevy_open_with(dir, dir_len, opts);
+  }
+
+  late final _kevy_open_withPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Pointer<KevyDbHandle> Function(
+            ffi.Pointer<ffi.Uint8>,
+            ffi.Size,
+            ffi.Pointer<KevyOpenOptions>,
+          )
+        >
+      >('kevy_open_with');
+  late final _kevy_open_with = _kevy_open_withPtr
+      .asFunction<
+        ffi.Pointer<KevyDbHandle> Function(
+          ffi.Pointer<ffi.Uint8>,
+          int,
+          ffi.Pointer<KevyOpenOptions>,
+        )
+      >();
+
+  /// Flush every shard's AOF (a REAL fsync), write the feed continuity
+  /// marker, then refuse every later write (reads stay available) — the
+  /// deterministic teardown: kevy_shutdown(db); exit(0). Idempotent.
+  /// 0 = ok, -1 = misuse, -2 = I/O failure (store still usable; retry).
+  int kevy_shutdown(ffi.Pointer<KevyDbHandle> db) {
+    return _kevy_shutdown(db);
+  }
+
+  late final _kevy_shutdownPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<KevyDbHandle>)>
+      >('kevy_shutdown');
+  late final _kevy_shutdown = _kevy_shutdownPtr
+      .asFunction<int Function(ffi.Pointer<KevyDbHandle>)>();
+
   /// Drain one pending frame without blocking.
   /// 1 = frame written to *out (RESP array: message / pmessage / acks);
   /// 0 = nothing queued; negative = misuse.
@@ -520,6 +565,31 @@ final class KevyOpenReport extends ffi.Struct {
 
   @ffi.Uint32()
   external int quarantine_count;
+}
+
+/// Options for kevy_open_with. Start from KEVY_OPEN_OPTIONS_INIT (the
+/// exact defaults kevy_open uses) and override what you need. rewrite_pct
+/// 0 turns the growth rule off (as in Redis); rewrite_bytes /
+/// rewrite_interval_secs are the absolute-size and staleness triggers
+/// (0 = off). fsync: 0 everysec, 1 always, 2 no.
+final class KevyOpenOptions extends ffi.Struct {
+  @ffi.Uint8()
+  external int fsync;
+
+  @ffi.Uint32()
+  external int shards;
+
+  @ffi.Uint32()
+  external int rewrite_pct;
+
+  @ffi.Uint64()
+  external int rewrite_min_size;
+
+  @ffi.Uint64()
+  external int rewrite_bytes;
+
+  @ffi.Uint64()
+  external int rewrite_interval_secs;
 }
 
 const int KEVY_ABI = 1;

@@ -50,6 +50,11 @@ export interface KevyNitro
   // in-memory constructor db; meaningful after openAt).
   openReport(): KevyOpenStats
 
+  // Flush the AOF with a REAL fsync, then refuse every later write (reads
+  // stay). Idempotent — the deterministic teardown for an app-lifecycle
+  // hook: shutdown() as the app backgrounds/exits.
+  shutdown(): void
+
   // Re-open this instance's db file-backed (durable) at `dir`, replacing the
   // in-memory db the constructor opened. MMKV is a persistent store, so a
   // fair KV comparison needs kevy durable too: in-memory is fastest but

@@ -37,6 +37,7 @@ void HybridKevyNitro::loadHybridMethods() {
     prototype.registerRawHybridMethod("setData", 3, &HybridKevyNitro::setDataRaw);
     prototype.registerHybridMethod("openAt", &HybridKevyNitro::openAt);
     prototype.registerHybridMethod("openReport", &HybridKevyNitro::openReport);
+    prototype.registerHybridMethod("shutdown", &HybridKevyNitro::shutdown);
     prototype.registerHybridMethod("subscribe", &HybridKevyNitro::subscribe);
     prototype.registerRawHybridMethod("publish", 2, &HybridKevyNitro::publishRaw);
     prototype.registerHybridMethod("subNext", &HybridKevyNitro::subNext);
@@ -309,6 +310,12 @@ KevyOpenStats HybridKevyNitro::openReport() {
                        static_cast<double>(rep.dropped_bytes),
                        rep.corrupt != 0,
                        static_cast<double>(rep.quarantine_count));
+}
+
+void HybridKevyNitro::shutdown() {
+  if (kevy_shutdown(_db.get()) != 0) {
+    throw std::runtime_error("kevy: shutdown failed");
+  }
 }
 
 bool HybridKevyNitro::openAt(const std::string& dir) {

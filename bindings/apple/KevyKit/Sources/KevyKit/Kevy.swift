@@ -80,6 +80,56 @@ public final class KevyDB {
         guard db != nil else { throw KevyError.openFailed }
     }
 
+    /// Explicit durability/rewrite policy for [`init(dir:options:)`].
+    /// Defaults mirror `init(dir:)` exactly; `rewriteBytes` (absolute cap)
+    /// and `rewriteIntervalSecs` (staleness) each 0 = off — they exist
+    /// because the growth rule alone lets a large log double before
+    /// compacting.
+    public struct OpenOptions {
+        /// 0 = everysec (default), 1 = always, 2 = no.
+        public var fsync: UInt8 = 0
+        /// Keyspace shards (0 = default, 1).
+        public var shards: UInt32 = 0
+        /// Growth-rule percent (0 = rule off; default 100).
+        public var rewritePct: UInt32 = 100
+        /// Growth rule's minimum size gate (default 64 MiB).
+        public var rewriteMinSize: UInt64 = 64 * 1024 * 1024
+        /// Absolute-size trigger (0 = rule off).
+        public var rewriteBytes: UInt64 = 0
+        /// Staleness trigger, seconds (0 = rule off).
+        public var rewriteIntervalSecs: UInt64 = 0
+        public init() {}
+    }
+
+    /// `init(dir:)` with explicit options.
+    public convenience init(dir: String, options: OpenOptions) throws {
+        try self.init(dir: dir, rawOptions: KevyOpenOptions(
+            fsync: options.fsync,
+            shards: options.shards,
+            rewrite_pct: options.rewritePct,
+            rewrite_min_size: options.rewriteMinSize,
+            rewrite_bytes: options.rewriteBytes,
+            rewrite_interval_secs: options.rewriteIntervalSecs
+        ))
+    }
+
+    private init(dir: String, rawOptions: KevyOpenOptions) throws {
+        let bytes = Array(dir.utf8)
+        var raw = rawOptions
+        db = bytes.withUnsafeBufferPointer { buf in
+            kevy_open_with(buf.baseAddress, buf.count, &raw)
+        }
+        guard db != nil else { throw KevyError.openFailed }
+    }
+
+    /// Flush every shard's AOF with a REAL fsync, then refuse every later
+    /// write (reads stay available). Idempotent — the deterministic
+    /// teardown for a signal handler: `try db.shutdown(); exit(0)`.
+    public func shutdown() throws {
+        guard let d = db else { throw KevyError.misuse }
+        guard kevy_shutdown(d) == 0 else { throw KevyError.misuse }
+    }
+
     deinit { close() }
 
     /// Close the store. Safe to call more than once.
