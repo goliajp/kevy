@@ -222,19 +222,23 @@ fn apply_frame_and_dump_buf_roundtrip_sharded() {
         src.set(k.as_bytes(), b"v").unwrap();
     }
     let image = src.dump_aof_buf();
-    assert!(image.starts_with(kevy_persist::AOF_MAGIC));
+    assert!(image.starts_with(kevy_persist::AOF2_MAGIC));
     // Exactly one magic header: it must not recur past the start.
     assert!(
         !image[1..]
-            .windows(kevy_persist::AOF_MAGIC.len())
-            .any(|w| w == kevy_persist::AOF_MAGIC),
+            .windows(kevy_persist::AOF2_MAGIC.len())
+            .any(|w| w == kevy_persist::AOF2_MAGIC),
         "per-shard magic leaked into the concatenated image"
     );
 
-    // Feed the image's frames into a differently-sharded store.
+    // Feed the image's records into a differently-sharded store.
     let dst = Store::open(Config::default().with_ttl_reaper_manual().with_shards(2)).unwrap();
-    let mut pos = kevy_persist::AOF_MAGIC.len();
-    while let Ok(Some((args, consumed))) = kevy_resp::parse_command(&image[pos..]) {
+    let mut pos = kevy_persist::AOF2_MAGIC.len();
+    while let kevy_persist::RecordStep::Ok { payload, consumed } =
+        kevy_persist::next_record(&image, pos)
+    {
+        let (args, used) = kevy_resp::parse_command(payload).unwrap().unwrap();
+        assert_eq!(used, payload.len(), "record payload must be one command");
         dst.apply_frame(&args);
         pos += consumed;
     }

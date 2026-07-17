@@ -48,7 +48,12 @@ pub(crate) fn write_record<W: Write>(w: &mut W, payload: &[u8]) -> io::Result<()
 
 /// Encode `args` as a RESP multibulk and append it as one enveloped record,
 /// reusing `scratch` for the payload bytes (cleared, not shrunk).
-pub(crate) fn write_record_multibulk<W: Write, A: ArgvView + ?Sized>(
+///
+/// Public for external v2-stream producers (the wasm door's
+/// host-mediated pump encodes its outbound frames with this) — the
+/// on-disk writer inside this crate uses it too, so there is exactly
+/// one encoding of a record.
+pub fn write_record_multibulk<W: Write, A: ArgvView + ?Sized>(
     w: &mut W,
     args: &A,
     scratch: &mut Vec<u8>,
@@ -59,10 +64,18 @@ pub(crate) fn write_record_multibulk<W: Write, A: ArgvView + ?Sized>(
 }
 
 /// One step of a v2 record walk over an in-memory image.
-pub(crate) enum RecordStep<'a> {
-    /// A complete, checksum-valid record: its payload, and the total bytes
-    /// consumed (header + payload).
-    Ok { payload: &'a [u8], consumed: usize },
+///
+/// Public for external incremental consumers ([`next_record`]): a
+/// stream arriving in arbitrary chunks treats `Truncated` as "wait
+/// for more bytes" and `Corrupt` as its format error.
+pub enum RecordStep<'a> {
+    /// A complete, checksum-valid record.
+    Ok {
+        /// The record's payload (one RESP multibulk command).
+        payload: &'a [u8],
+        /// Total bytes consumed from the buffer (header + payload).
+        consumed: usize,
+    },
     /// The buffer ends mid-record (torn tail): not an error, the prefix
     /// before this record is the replayable part.
     Truncated,
@@ -72,7 +85,11 @@ pub(crate) enum RecordStep<'a> {
 }
 
 /// Inspect the record starting at `buf[pos..]`.
-pub(crate) fn next_record(buf: &[u8], pos: usize) -> RecordStep<'_> {
+///
+/// # Panics
+///
+/// Panics if `pos > buf.len()`.
+pub fn next_record(buf: &[u8], pos: usize) -> RecordStep<'_> {
     let rest = &buf[pos..];
     if rest.is_empty() {
         return RecordStep::Truncated; // clean end is the caller's pos == len check

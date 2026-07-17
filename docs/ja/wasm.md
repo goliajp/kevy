@@ -30,7 +30,7 @@ db.publish("events", "hi from this or any other tab");
 await db.flush();                  // durability barrier
 ```
 
-書き込みはkevyの追記専用ログとしてストレージへストリームされ、同じ`persist.name`での次回`open()`時にリプレイされます。パッケージは6ファイル（パック後約165 KB）です。wasmモジュール、ローダー、OPFSワーカー、手書きのTypeScript型定義、そしていつものREADMEとマニフェスト。境界のどちら側も依存ゼロです。
+書き込みはkevyの追記専用ログとしてストレージへストリームされ、同じ`persist.name`での次回`open()`時にリプレイされます。4.0以降、ログはチェックサム付きv2レコードフォーマット（`KEVYAOF2`——[persistence.md](persistence.md)参照）を話します：保存バイトのビット反転はリプレイ時に拒否され、黙って適用されることはありません。4.0以前のタブが保存したログはそのままリプレイされ（v1、永久に読める）、最初のcompactionでv2へ昇格します。ブラウザのタブから汲み出したログはネイティブのkevyで変わらずリプレイでき、逆も同様です。パッケージは6ファイル（パック後約165 KB）です。wasmモジュール、ローダー、OPFSワーカー、手書きのTypeScript型定義、そしていつものREADMEとマニフェスト。境界のどちら側も依存ゼロです。
 
 ## ローダーAPI
 

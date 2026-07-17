@@ -56,7 +56,7 @@ mod snapshot_write;
 pub use aof::{AOF_MAGIC, Aof, Fsync, RewritePlan, RewriteStats};
 pub use aof_util::write_aof_base;
 pub use aof_policy::RewritePolicy;
-pub use record::{AOF2_MAGIC, AofFormat};
+pub use record::{AOF2_MAGIC, AofFormat, RecordStep, next_record, write_record_multibulk};
 pub use replay::{ReplayReport, replay_aof, replay_aof_resync};
 pub use shards_meta::{Routing, ShardsMeta, read_shards_meta, write_shards_meta};
 pub use kevy_resp::{Argv, ArgvView};

@@ -142,16 +142,17 @@ impl Store {
         let mut out = Vec::new();
         for (i, shard) in self.shards.iter().enumerate() {
             let view = lock_write(shard).store.collect_snapshot();
-            // V1 on purpose: this image feeds the wasm door's host-mediated
-            // log, whose incremental browser-side parser speaks bare RESP.
-            // Upgrading that pump to v2 envelopes is the arc's T5b item.
+            // V2, like every other rewrite output: the wasm door's
+            // host-mediated pump replays both formats, and its dump is
+            // the log's upgrade point (mirroring the native
+            // first-rewrite upgrade).
             let (buf, _keys) =
-                kevy_persist::dump_store_to_buf(&view, kevy_persist::AofFormat::V1);
+                kevy_persist::dump_store_to_buf(&view, kevy_persist::AofFormat::V2);
             if i == 0 {
                 out = buf;
             } else {
                 // One magic header per image, not per shard.
-                out.extend_from_slice(&buf[kevy_persist::AOF_MAGIC.len()..]);
+                out.extend_from_slice(&buf[kevy_persist::AOF2_MAGIC.len()..]);
             }
         }
         out

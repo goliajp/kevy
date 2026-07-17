@@ -39,7 +39,13 @@ await db.flush();                  // durability barrier
 ```
 
 Writes stream to storage as a kevy append-only log and replay on the
-next `open()` with the same `persist.name`. The package is six files
+next `open()` with the same `persist.name`. Since 4.0 the log speaks
+the checksummed v2 record format (`KEVYAOF2` — see
+[persistence.md](persistence.md)): bit-rot in stored bytes is refused
+at replay instead of silently applied. A log stored by a pre-4.0 tab
+replays unchanged (v1, read forever) and upgrades to v2 at its first
+compaction; a log pumped out of a browser tab still replays in a
+native kevy unchanged, and vice versa. The package is six files
 (~165 KB packed): the wasm module, the loader, the OPFS worker,
 hand-written TypeScript typings, and the usual README + manifest.
 Zero dependencies on both sides of the boundary.

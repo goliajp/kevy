@@ -199,9 +199,11 @@ fn aof_pump_roundtrip_chunked() {
     assert_eq!(kevy_aof_frames_out(w), 0);
     kevy_close(w);
 
-    // Host log = magic + frames, replayed in awkward chunk sizes.
-    let mut log = kevy_persist::AOF_MAGIC.to_vec();
-    log.extend_from_slice(&frames);
+    // A fresh log is self-describing: the first pump carries the v2
+    // magic ahead of the first record, so the host's verbatim append
+    // IS the log. Replay it in awkward chunk sizes.
+    assert!(frames.starts_with(kevy_persist::AOF2_MAGIC));
+    let log = frames;
     let r = kevy_open(0);
     let mut applied = 0;
     for chunk in log.chunks(7) {
@@ -237,11 +239,12 @@ fn aof_dump_compacts_and_replays() {
     let dump_len = kevy_aof_dump(w);
     assert!(dump_len > 0);
     let image = out(w);
-    assert!(image.starts_with(kevy_persist::AOF_MAGIC));
+    assert!(image.starts_with(kevy_persist::AOF2_MAGIC));
     // The dump subsumes (and discards) the pending append frames.
     assert_eq!(kevy_aof_frames_out(w), 0);
-    // A compacted image is smaller than the 100-frame history it replaces.
-    assert!(image.len() < 100 * 20);
+    // A compacted image (50 records) is smaller than the 100-record
+    // history it replaces (~38 B per tiny SET record in v2).
+    assert!(image.len() < 100 * 28, "image {} B", image.len());
     kevy_close(w);
 
     let r = kevy_open(0);
@@ -249,6 +252,50 @@ fn aof_dump_compacts_and_replays() {
     assert_eq!(n, 50);
     assert_eq!(kevy_dbsize(r) as u64, 50);
     assert_eq!(get(r, b"k7"), (1, b"final".to_vec()));
+    kevy_close(r);
+}
+
+#[test]
+fn aof_v1_log_feeds_and_outbound_stays_v1() {
+    // A pre-4.0 host log: v1 magic + bare RESP frames. The read-forever
+    // contract, plus: outbound frames follow the stored log's format so
+    // the host's verbatim appends never mix formats in one log.
+    let mut log = kevy_persist::AOF_MAGIC.to_vec();
+    log.extend_from_slice(b"*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n");
+    let h = kevy_open(OPEN_CAPTURE_AOF);
+    let n = unsafe { kevy_aof_frame_in(h, log.as_ptr(), log.len() as u32) };
+    assert_eq!(n, 1);
+    assert_eq!(get(h, b"a"), (1, b"1".to_vec()));
+    set(h, b"b", b"2");
+    let len = kevy_aof_frames_out(h);
+    assert!(len > 0);
+    let frames = out(h);
+    // Bare v1 RESP — no magic, no record header.
+    assert!(frames.starts_with(b"*3\r\n"), "outbound must stay v1 for a v1 log");
+    kevy_close(h);
+}
+
+#[test]
+fn aof_v2_bit_flip_is_refused_not_replayed() {
+    // The v1 pump replayed payload bit-rot silently (RESP's lenient
+    // inline form absorbs junk); the v2 CRC refuses it.
+    let w = kevy_open(OPEN_CAPTURE_AOF);
+    set(w, b"good", b"1");
+    set(w, b"tainted", b"bbbb");
+    let _ = kevy_aof_frames_out(w);
+    let mut log = out(w).to_vec();
+    kevy_close(w);
+    // Flip one bit inside the LAST payload byte (the 'bbbb' value).
+    let idx = log.len() - 3; // inside the final record's payload
+    log[idx] ^= 0x01;
+    let r = kevy_open(0);
+    let n = unsafe { kevy_aof_frame_in(r, log.as_ptr(), log.len() as u32) };
+    assert_eq!(n, ERR, "flipped payload must fail the CRC");
+    let msg = String::from_utf8_lossy(&out(r)).into_owned();
+    assert!(msg.contains("corrupt AOF record"), "got: {msg}");
+    // The intact prefix was applied; the tainted record was not.
+    assert_eq!(get(r, b"good"), (1, b"1".to_vec()));
+    assert_eq!(get(r, b"tainted").0, 0, "tainted value must not replay");
     kevy_close(r);
 }
 

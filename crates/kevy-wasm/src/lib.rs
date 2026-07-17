@@ -85,6 +85,19 @@ pub(crate) struct Instance {
     pub(crate) aof_in_carry: Vec<u8>,
     /// Whether the inbound AOF stream is past its optional magic header.
     pub(crate) aof_in_started: bool,
+    /// Format of the host's stored log — set from the magic when the
+    /// host feeds its log back (v1 read-forever contract), flipped to
+    /// V2 by `kevy_aof_dump` (the image replaces the log). Outbound
+    /// frames encode in THIS format so the host's verbatim appends
+    /// never mix formats within one log. Fresh logs are V2.
+    pub(crate) aof_format: kevy_persist::AofFormat,
+    /// Whether the host's log already carries its format marker — true
+    /// once the host fed any log bytes or a dump image replaced the
+    /// log. While false, the first captured V2 frame is preceded by
+    /// the `KEVYAOF2` magic so a fresh log is self-describing.
+    pub(crate) aof_out_started: bool,
+    /// Reusable payload buffer for v2 record encoding.
+    pub(crate) aof_scratch: Vec<u8>,
     /// Result buffer exposed through `kevy_out_ptr` / `kevy_out_len`.
     pub(crate) out: Vec<u8>,
 }
@@ -99,6 +112,9 @@ impl Instance {
             aof_out: Vec::new(),
             aof_in_carry: Vec::new(),
             aof_in_started: false,
+            aof_format: kevy_persist::AofFormat::V2,
+            aof_out_started: false,
+            aof_scratch: Vec::new(),
             out: Vec::new(),
         }
     }
@@ -135,7 +151,11 @@ impl Instance {
     }
 
     /// Append one command as an AOF frame to the pending pump buffer
-    /// (no-op unless frame capture was requested at open).
+    /// (no-op unless frame capture was requested at open). Encodes in
+    /// the host log's format — a bare RESP frame for a v1-era log, a
+    /// checksummed v2 record otherwise; a fresh v2 log gets its
+    /// `KEVYAOF2` magic ahead of the first frame so the stored bytes
+    /// are self-describing on the next open.
     pub(crate) fn log_frame(&mut self, parts: &[&[u8]]) {
         if !self.capture_aof {
             return;
@@ -143,7 +163,22 @@ impl Instance {
         let argv =
             kevy_persist::Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>());
         // Vec is an infallible Write.
-        let _ = kevy_persist::write_multibulk(&mut self.aof_out, &argv);
+        match self.aof_format {
+            kevy_persist::AofFormat::V1 => {
+                let _ = kevy_persist::write_multibulk(&mut self.aof_out, &argv);
+            }
+            kevy_persist::AofFormat::V2 => {
+                if !self.aof_out_started {
+                    self.aof_out.extend_from_slice(kevy_persist::AOF2_MAGIC);
+                    self.aof_out_started = true;
+                }
+                let _ = kevy_persist::write_record_multibulk(
+                    &mut self.aof_out,
+                    &argv,
+                    &mut self.aof_scratch,
+                );
+            }
+        }
     }
 }
 
