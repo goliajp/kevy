@@ -33,6 +33,21 @@ internal struct KevyOpenReport
     public uint QuarantineCount;
 }
 
+/// <summary>The open policy kevy_open_with reads — field-for-field the C
+/// ABI's KevyOpenOptions (a u8, two u32s, three u64s; sequential natural
+/// alignment puts them at offsets 0, 4, 8, 16, 24, 32 — size 40, exactly
+/// the C layout).</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct KevyOpenOptionsNative
+{
+    public byte Fsync;
+    public uint Shards;
+    public uint RewritePct;
+    public ulong RewriteMinSize;
+    public ulong RewriteBytes;
+    public ulong RewriteIntervalSecs;
+}
+
 internal static unsafe partial class KevyNative
 {
     private const string Lib = "kevy_ffi";
@@ -64,8 +79,20 @@ internal static unsafe partial class KevyNative
     [LibraryImport(Lib)]
     internal static partial IntPtr kevy_open_mem();
 
+    // kevy_open with explicit options: durable when dir is non-null,
+    // in-memory when dir is null + dirLen 0; null opts = kevy_open's
+    // defaults. Null on failure.
+    [LibraryImport(Lib)]
+    internal static partial IntPtr kevy_open_with(
+        byte* dir, nuint dirLen, KevyOpenOptionsNative* opts);
+
     [LibraryImport(Lib)]
     internal static partial void kevy_close(IntPtr db);
+
+    // Flush every shard's AOF (a REAL fsync) + feed marker, then refuse
+    // later writes (reads stay). Idempotent. 0 ok, -1 misuse, -2 I/O.
+    [LibraryImport(Lib)]
+    internal static partial int kevy_shutdown(IntPtr db);
 
     [LibraryImport(Lib)]
     internal static partial int kevy_cmd(

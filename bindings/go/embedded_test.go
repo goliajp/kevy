@@ -117,6 +117,78 @@ func TestEmbeddedOpenReport(t *testing.T) {
 	}
 }
 
+func TestEmbeddedOpenWith(t *testing.T) {
+	// Empty dir + nil opts = a plain in-memory open.
+	mem, err := OpenWith("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mem.Close()
+	if err := mem.SetScalar([]byte("k"), []byte("v"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok, _ := mem.GetScalar([]byte("k")); !ok || string(v) != "v" {
+		t.Fatalf("mem OpenWith GetScalar=%q %v", v, ok)
+	}
+
+	// Explicit options round-trip on a durable dir.
+	dir := filepath.Join(t.TempDir(), "data")
+	opts := DefaultOpenOptions()
+	opts.Fsync = FsyncAlways
+	opts.Shards = 2
+	opts.RewriteBytes = 1 << 30
+	opts.RewriteIntervalSecs = 3600
+	db, err := OpenWith(dir, &opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.SetScalar([]byte("opt"), []byte("set"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok, _ := db.GetScalar([]byte("opt")); !ok || string(v) != "set" {
+		t.Fatalf("OpenWith GetScalar=%q %v", v, ok)
+	}
+}
+
+func TestEmbeddedShutdown(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "data")
+	db, err := OpenWith(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetScalar([]byte("k"), []byte("pre-shutdown"), 0); err != nil {
+		t.Fatal(err)
+	}
+
+	// The deterministic teardown: flushed + fsynced, idempotent.
+	if err := db.Shutdown(); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	if err := db.Shutdown(); err != nil {
+		t.Fatalf("second Shutdown: %v", err)
+	}
+
+	// Later writes are refused; reads stay available.
+	if err := db.SetScalar([]byte("k2"), []byte("x"), 0); err == nil {
+		t.Fatal("write after Shutdown succeeded")
+	}
+	if v, ok, err := db.GetScalar([]byte("k")); err != nil || !ok || string(v) != "pre-shutdown" {
+		t.Fatalf("read after Shutdown=%q %v %v", v, ok, err)
+	}
+	db.Close()
+
+	// A reopen sees the pre-shutdown writes.
+	db2, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db2.Close()
+	if v, ok, err := db2.GetScalar([]byte("k")); err != nil || !ok || string(v) != "pre-shutdown" {
+		t.Fatalf("value did not survive shutdown+reopen: %q %v %v", v, ok, err)
+	}
+}
+
 func mustConnectNoCleanup(t *testing.T, url string) *Client {
 	t.Helper()
 	c, err := Connect(url)
