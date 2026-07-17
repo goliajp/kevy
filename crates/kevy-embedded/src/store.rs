@@ -165,15 +165,23 @@ impl Store {
             views,
             open_report,
         };
-        #[cfg(feature = "index")]
-        store.idx_boot();
-        #[cfg(feature = "index")]
-        store.view_boot();
-        #[cfg(all(feature = "listener", not(target_arch = "wasm32")))]
-        if let Some(addr) = store.config.resp_listener {
-            crate::listener::spawn(addr, store.downgrade())?;
-        }
+        store.boot_ancillary()?;
         Ok(store)
+    }
+
+    /// Post-construction bring-up: index/view boot scans and the
+    /// optional read-only RESP listener. Split from [`Self::open_inner`]
+    /// for the fn-length rule.
+    fn boot_ancillary(&self) -> KevyResult<()> {
+        #[cfg(feature = "index")]
+        self.idx_boot();
+        #[cfg(feature = "index")]
+        self.view_boot();
+        #[cfg(all(feature = "listener", not(target_arch = "wasm32")))]
+        if let Some(addr) = self.config.resp_listener {
+            crate::listener::spawn(addr, self.downgrade())?;
+        }
+        Ok(())
     }
 
     /// Convenience constructor for an embed-as-read-replica store

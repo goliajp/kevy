@@ -164,24 +164,7 @@ impl ReplicaClient {
         from_offset: u64,
         connect_timeout: Duration,
     ) -> Result<Self, ReplicaError> {
-        // Resolve + connect with timeout. ToSocketAddrs returns an
-        // iterator; we try each address until one succeeds.
-        let mut last_err: Option<io::Error> = None;
-        let mut sock: Option<TcpStream> = None;
-        for sa in addr.to_socket_addrs().map_err(ReplicaError::Io)? {
-            match TcpStream::connect_timeout(&sa, connect_timeout) {
-                Ok(s) => {
-                    sock = Some(s);
-                    break;
-                }
-                Err(e) => last_err = Some(e),
-            }
-        }
-        let mut sock = sock.ok_or_else(|| {
-            ReplicaError::Io(last_err.unwrap_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidInput, "no socket address resolved")
-            }))
-        })?;
+        let mut sock = connect_stream(addr, connect_timeout)?;
 
         // Send the handshake. `encode_replicate_from` is a private
         // helper so the on-the-wire shape is one place to change.
@@ -291,6 +274,24 @@ impl Iterator for ReplicaClient {
     fn next(&mut self) -> Option<Self::Item> {
         self.next_frame()
     }
+}
+
+/// Resolve + connect with timeout. `ToSocketAddrs` returns an
+/// iterator; try each address until one succeeds.
+fn connect_stream<A: ToSocketAddrs>(
+    addr: A,
+    connect_timeout: Duration,
+) -> Result<TcpStream, ReplicaError> {
+    let mut last_err: Option<io::Error> = None;
+    for sa in addr.to_socket_addrs().map_err(ReplicaError::Io)? {
+        match TcpStream::connect_timeout(&sa, connect_timeout) {
+            Ok(s) => return Ok(s),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(ReplicaError::Io(last_err.unwrap_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "no socket address resolved")
+    })))
 }
 
 /// Compose a `REPLICATE FROM <gen> <offset> ID <id>` RESP2

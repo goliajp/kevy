@@ -30,7 +30,8 @@ use kevy_store::Store as Keyspace;
 
 use crate::config::{Config, TtlReaperMode};
 #[cfg(feature = "persist")]
-use crate::metric::{KevyMetric, OpenReport};
+use crate::metric::KevyMetric;
+use crate::metric::OpenReport;
 use crate::store::Inner;
 
 /// Route a key to its shard. `n == 1` short-circuits to 0; power-of-two `n`

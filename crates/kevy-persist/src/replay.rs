@@ -3,7 +3,7 @@
 //! the public re-export in lib.rs keeps the API surface unchanged.
 
 use std::fs::File;
-use std::io::{self, Read, Seek};
+use std::io::{self, Read};
 use std::path::Path;
 
 use kevy_resp::Argv;
@@ -57,6 +57,15 @@ pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<Repla
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(ReplayReport::default()),
         Err(e) => return Err(e),
     }
+    replay_v1_slice(path, &data, &mut apply)
+}
+
+/// The v1 (bare-RESP) replay walk over a whole-file slice.
+fn replay_v1_slice<F: FnMut(Argv)>(
+    path: &Path,
+    data: &[u8],
+    apply: &mut F,
+) -> io::Result<ReplayReport> {
     let total = data.len();
     if total == 0 {
         return Ok(ReplayReport::default());
@@ -187,14 +196,70 @@ fn stream_v2(
     let mut magic = [0u8; 9];
     r.read_exact(&mut magic)?; // caller sniffed v2, the magic is present
     let start = std::time::Instant::now();
-    let mut pos = magic.len() as u64;
-    let mut replayed = 0u64;
+    let mut w = walk_v2(&mut r, magic.len() as u64, &mut apply)?;
+    let corrupt = matches!(w.stop, ReplayStop::CorruptFrame(_));
+    let mut ranges: Vec<(u64, u64)> = Vec::new();
+    if resync && corrupt {
+        crate::replay_resync::resync_fallback(path, &mut w, &mut apply, &mut ranges)?;
+    }
+    let elapsed_ms = start.elapsed().as_millis();
+    if apply.is_some() {
+        log_replay_summary(
+            path,
+            total as usize,
+            w.pos as usize,
+            w.replayed,
+            &w.preview[..w.preview_len],
+            w.stop,
+            elapsed_ms,
+        );
+    }
+    Ok(ReplayReport {
+        commands: w.replayed,
+        bytes: total,
+        replayed_bytes: w.pos,
+        dropped_bytes: total.saturating_sub(w.pos),
+        corrupt,
+        resynced_ranges: ranges,
+    })
+}
+
+/// Outcome of the streaming v2 record walk.
+pub(crate) struct V2Walk {
+    pub(crate) stop: ReplayStop,
+    /// Absolute offset after the last applied record.
+    pub(crate) pos: u64,
+    pub(crate) replayed: u64,
+    pub(crate) preview: [u8; 16],
+    pub(crate) preview_len: usize,
+}
+
+/// Capture up to 16 bytes of the offending bytes for the WARN preview.
+fn preview_of(bytes: &[u8], out: &mut [u8; 16]) -> usize {
+    let n = bytes.len().min(out.len());
+    out[..n].copy_from_slice(&bytes[..n]);
+    n
+}
+
+/// The sequential record walk: read `[len][crc][payload]` envelopes from
+/// `r`, verify, apply. Peak memory is O(largest record) — the streaming
+/// property the whole v2 replay exists for.
+fn walk_v2(
+    r: &mut impl Read,
+    start_pos: u64,
+    apply: &mut Option<&mut dyn FnMut(Argv)>,
+) -> io::Result<V2Walk> {
+    let mut w = V2Walk {
+        stop: ReplayStop::Clean,
+        pos: start_pos,
+        replayed: 0,
+        preview: [0u8; 16],
+        preview_len: 0,
+    };
     let mut payload: Vec<u8> = Vec::new();
-    let mut preview = [0u8; 16];
-    let mut preview_len = 0usize;
-    let stop = loop {
+    w.stop = loop {
         let mut header = [0u8; 8];
-        match read_fully(&mut r, &mut header) {
+        match read_fully(r, &mut header) {
             Ok(0) => break ReplayStop::Clean,
             Ok(n) if n < header.len() => break ReplayStop::TruncatedTail,
             Ok(_) => {}
@@ -203,138 +268,49 @@ fn stream_v2(
         let len = u32::from_le_bytes(header[..4].try_into().unwrap());
         let crc = u32::from_le_bytes(header[4..].try_into().unwrap());
         if len == 0 || len > crate::record::MAX_RECORD {
-            preview_len = 8.min(preview.len());
-            preview[..preview_len].copy_from_slice(&header[..preview_len]);
+            w.preview_len = preview_of(&header, &mut w.preview);
             break ReplayStop::CorruptFrame(String::from("record length out of range"));
         }
         payload.clear();
         payload.resize(len as usize, 0);
-        match read_fully(&mut r, &mut payload) {
+        match read_fully(r, &mut payload) {
             Ok(n) if n < payload.len() => break ReplayStop::TruncatedTail,
             Ok(_) => {}
             Err(e) => return Err(e),
         }
         if crate::crc32c::crc32c(&payload) != crc {
-            preview_len = payload.len().min(16);
-            preview[..preview_len].copy_from_slice(&payload[..preview_len]);
+            w.preview_len = preview_of(&payload, &mut w.preview);
             break ReplayStop::CorruptFrame(String::from("record checksum mismatch"));
         }
-        match kevy_resp::parse_command(&payload) {
-            Ok(Some((args, used))) if used == payload.len() => {
-                if let Some(f) = apply.as_deref_mut() {
-                    f(args);
-                }
-                pos += 8 + u64::from(len);
-                replayed += 1;
-            }
-            _ => {
-                preview_len = payload.len().min(16);
-                preview[..preview_len].copy_from_slice(&payload[..preview_len]);
-                break ReplayStop::CorruptFrame(String::from(
-                    "checksummed record does not hold exactly one command",
-                ));
-            }
+        if !apply_record(&payload, len, apply, &mut w) {
+            break ReplayStop::CorruptFrame(String::from(
+                "checksummed record does not hold exactly one command",
+            ));
         }
     };
-    let corrupt = matches!(stop, ReplayStop::CorruptFrame(_));
-    let mut ranges: Vec<(u64, u64)> = Vec::new();
-    let mut stop = stop;
-    if resync && corrupt {
-        // Corruption is the rare path and the rescan needs random access:
-        // slice-load the remainder (O(damaged remainder) memory, only on
-        // damaged files) and hop from valid record to valid record.
-        let mut rest = Vec::new();
-        let mut f = File::open(path)?;
-        f.seek(io::SeekFrom::Start(pos))?;
-        f.read_to_end(&mut rest)?;
-        let (local_end, extra, ended_torn) =
-            resync_slice(&rest, pos, &mut apply, &mut ranges);
-        replayed += extra;
-        pos += local_end;
-        stop = if ended_torn { ReplayStop::TruncatedTail } else { ReplayStop::Clean };
-        // Re-tag for the summary: the file WAS corrupt, but the tail came
-        // back — the WARN below carries the skipped ranges.
-        if !ranges.is_empty() {
-            eprintln!(
-                "kevy WARN: AOF {} resync skipped {} corrupt range(s) totalling {} bytes \
-                 and recovered the records after them; the bad bytes stay in place \
-                 until the next rewrite compacts them away.",
-                path.display(),
-                ranges.len(),
-                ranges.iter().map(|(a, b)| b - a).sum::<u64>(),
-            );
-        }
-    }
-    let elapsed_ms = start.elapsed().as_millis();
-    if apply.is_some() {
-        log_replay_summary(
-            path,
-            total as usize,
-            pos as usize,
-            replayed,
-            &preview[..preview_len],
-            stop,
-            elapsed_ms,
-        );
-    }
-    Ok(ReplayReport {
-        commands: replayed,
-        bytes: total,
-        replayed_bytes: pos,
-        dropped_bytes: total.saturating_sub(pos),
-        corrupt,
-        resynced_ranges: ranges,
-    })
+    Ok(w)
 }
 
-/// The resync walk over the damaged remainder (`rest` starts at absolute
-/// offset `base`, positioned AT the first corrupt record). Hops to each
-/// next valid record via [`crate::record::resync_scan`], applies the good
-/// runs, and records every skipped `(abs_start, abs_end)` range. Returns
-/// (local end of the last good record, records applied, ended-torn?).
-fn resync_slice(
-    rest: &[u8],
-    base: u64,
+/// Parse-and-apply one checksum-valid record payload; `false` = the
+/// payload is not exactly one command (a lying record).
+fn apply_record(
+    payload: &[u8],
+    len: u32,
     apply: &mut Option<&mut dyn FnMut(Argv)>,
-    ranges: &mut Vec<(u64, u64)>,
-) -> (u64, u64, bool) {
-    let mut good_end = 0usize; // local offset after the last applied record
-    let mut scan_from = 1usize; // the corrupt record starts at 0
-    let mut applied = 0u64;
-    loop {
-        let Some(g) = crate::record::resync_scan(rest, scan_from) else {
-            // Nothing valid ahead — the remainder past good_end is either
-            // the corrupt region + torn tail or empty.
-            return (good_end as u64, applied, true);
-        };
-        ranges.push((base + good_end as u64, base + g as u64));
-        let mut w = g;
-        loop {
-            match crate::record::next_record(rest, w) {
-                crate::record::RecordStep::Ok { payload, consumed } => {
-                    match kevy_resp::parse_command(payload) {
-                        Ok(Some((args, used))) if used == payload.len() => {
-                            if let Some(f) = apply.as_deref_mut() {
-                                f(args);
-                            }
-                            w += consumed;
-                            applied += 1;
-                            good_end = w;
-                        }
-                        _ => {
-                            scan_from = w + 1;
-                            break;
-                        }
-                    }
-                }
-                crate::record::RecordStep::Truncated => {
-                    return (good_end as u64, applied, w < rest.len());
-                }
-                crate::record::RecordStep::Corrupt => {
-                    scan_from = w + 1;
-                    break;
-                }
+    w: &mut V2Walk,
+) -> bool {
+    match kevy_resp::parse_command(payload) {
+        Ok(Some((args, used))) if used == payload.len() => {
+            if let Some(f) = apply.as_deref_mut() {
+                f(args);
             }
+            w.pos += 8 + u64::from(len);
+            w.replayed += 1;
+            true
+        }
+        _ => {
+            w.preview_len = preview_of(payload, &mut w.preview);
+            false
         }
     }
 }
@@ -411,7 +387,7 @@ fn valid_prefix_len(data: &[u8]) -> usize {
 }
 
 /// Outcome of an AOF replay run — drives the summary log shape.
-enum ReplayStop {
+pub(crate) enum ReplayStop {
     Clean,
     TruncatedTail,
     CorruptFrame(String),
