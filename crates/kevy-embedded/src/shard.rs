@@ -30,7 +30,7 @@ use kevy_store::Store as Keyspace;
 
 use crate::config::{Config, TtlReaperMode};
 #[cfg(feature = "persist")]
-use crate::metric::KevyMetric;
+use crate::metric::{KevyMetric, OpenReport};
 use crate::store::Inner;
 
 /// Route a key to its shard. `n == 1` short-circuits to 0; power-of-two `n`
@@ -75,14 +75,14 @@ fn fresh_keyspace(config: &Config) -> Keyspace {
 /// Build the `n` shard `Inner`s for `config`, loading / migrating persistence.
 /// The `bus` lives on shard 0 (pub/sub is process-wide, not sharded); other
 /// shards get an idle bus that is never touched.
-pub(crate) fn build_shards(config: &Config) -> io::Result<Vec<Arc<RwLock<Inner>>>> {
+pub(crate) fn build_shards(config: &Config) -> io::Result<(Vec<Arc<RwLock<Inner>>>, OpenReport)> {
     let n = config.shards.max(1);
     #[allow(unused_mut)] // mut is the persist path's (load/reshard) need
     let mut stores: Vec<Keyspace> = (0..n).map(|_| fresh_keyspace(config)).collect();
 
     // Without the `persist` feature the build is always pure in-memory.
     #[cfg(not(feature = "persist"))]
-    return Ok(into_inners_mem(stores));
+    return Ok((into_inners_mem(stores), OpenReport::default()));
 
     #[cfg(feature = "persist")]
     build_shards_persist(config, n, stores)
@@ -95,18 +95,20 @@ fn build_shards_persist(
     config: &Config,
     n: usize,
     mut stores: Vec<Keyspace>,
-) -> io::Result<Vec<Arc<RwLock<Inner>>>> {
+) -> io::Result<(Vec<Arc<RwLock<Inner>>>, OpenReport)> {
     let Some(dir) = config.data_dir.clone() else {
         // Pure in-memory: no persistence, no AOF.
-        return Ok(into_inners(stores, (0..n).map(|_| None).collect()));
+        return Ok((into_inners(stores, (0..n).map(|_| None).collect()), OpenReport::default()));
     };
     std::fs::create_dir_all(&dir)?;
     // Complete (or safely discard) a reshard a crash interrupted, before
     // reading the layout — same roll-forward the server runtime does.
     recover_journal(&dir, &EmbLayout)?;
-    load_or_reshard(&dir, config, n, &mut stores)?;
+    let mut report = load_or_reshard(&dir, config, n, &mut stores)?;
 
-    // Open each shard's live AOF for append (if persistence is on).
+    // Open each shard's live AOF for append (if persistence is on). The
+    // open repairs (quarantines + truncates) any dropped tail replay just
+    // tolerated — collect the quarantine paths into the report.
     let aofs: Vec<Option<Aof>> = if config.aof {
         (0..n)
             .map(|i| Aof::open(&layout::aof_path(&dir, i), config.appendfsync).map(Some))
@@ -114,7 +116,12 @@ fn build_shards_persist(
     } else {
         (0..n).map(|_| None).collect()
     };
-    Ok(into_inners(stores, aofs))
+    for aof in aofs.iter().flatten() {
+        if let Some(q) = aof.open_quarantine() {
+            report.quarantine_paths.push(q.to_path_buf());
+        }
+    }
+    Ok((into_inners(stores, aofs), report))
 }
 
 /// Read the shard layout meta and either load in place (same layout)
@@ -125,7 +132,7 @@ fn load_or_reshard(
     config: &Config,
     n: usize,
     stores: &mut [Keyspace],
-) -> io::Result<()> {
+) -> io::Result<OpenReport> {
     let meta_path = layout::shards_meta_path(dir);
     let prev = read_shards_meta(&meta_path);
     // The embedded store always routes by KevyHash; a dir written by a
@@ -139,9 +146,11 @@ fn load_or_reshard(
     };
 
     if same_layout {
-        load_in_place(dir, config, n, stores)?;
+        let report = load_in_place(dir, config, n, stores)?;
         write_shards_meta(&meta_path, ShardsMeta { n, routing: Routing::KevyHash })?;
-    } else {
+        return Ok(report);
+    }
+    {
         let src_n = prev.map(|m| m.n).or_else(|| {
             let k = infer_files_n(dir);
             (k > 1).then_some(k)
@@ -150,16 +159,19 @@ fn load_or_reshard(
         // stale meta from a larger prior n would otherwise trigger a second
         // re-shard next open, whose sources were already renamed to
         // `.premigration` (the shrink-to-one open would come up empty).
-        reshard(dir, config, n, src_n, stores)?;
+        reshard(dir, config, n, src_n, stores)
     }
-    Ok(())
 }
 
 /// Same-layout load: each shard reads its own snapshot + AOF directly.
 #[cfg(feature = "persist")]
-fn load_in_place(dir: &Path, config: &Config, _n: usize, stores: &mut [Keyspace]) -> io::Result<()> {
-    let mut total_cmds = 0u64;
-    let mut total_bytes = 0u64;
+fn load_in_place(
+    dir: &Path,
+    config: &Config,
+    _n: usize,
+    stores: &mut [Keyspace],
+) -> io::Result<OpenReport> {
+    let mut report = OpenReport::default();
     let start = Instant::now();
     for (i, store) in stores.iter_mut().enumerate() {
         let snap = layout::snapshot_path(dir, i);
@@ -168,15 +180,18 @@ fn load_in_place(dir: &Path, config: &Config, _n: usize, stores: &mut [Keyspace]
         }
         let aof = layout::aof_path(dir, i);
         if aof.exists() {
-            total_bytes += std::fs::metadata(&aof).map_or(0, |m| m.len());
-            replay_aof(&aof, |args| {
-                total_cmds += 1;
+            let r = replay_aof(&aof, |args| {
                 crate::replay::apply(store, &args);
             })?;
+            report.replayed_commands += r.commands;
+            report.replayed_bytes += r.replayed_bytes;
+            report.dropped_bytes += r.dropped_bytes;
+            report.corrupt |= r.corrupt;
         }
     }
-    emit_replay(config, total_cmds, total_bytes, start);
-    Ok(())
+    report.elapsed_ms = start.elapsed().as_millis() as u64;
+    emit_replay(config, &report);
+    Ok(report)
 }
 
 /// Re-shard: load every source file into one temp keyspace, redistribute
@@ -194,7 +209,7 @@ fn reshard(
     n: usize,
     prev_n: Option<usize>,
     stores: &mut [Keyspace],
-) -> io::Result<()> {
+) -> io::Result<OpenReport> {
     let lay = EmbLayout;
     let mut temp = fresh_keyspace(config);
     let mut total_cmds = 0u64;
@@ -206,13 +221,18 @@ fn reshard(
         crate::replay::apply(store, &args);
     })?;
     // Replay-metric byte count: the source AOFs (sizes read before the
-    // commit renames them away).
+    // commit renames them away). Per-file drop/corrupt detail is not
+    // plumbed through the merge path — a migrating open reports totals.
     let total_bytes = (0..src_n)
         .map(|i| lay.aof_path(dir, i, src_n))
         .filter_map(|p| std::fs::metadata(p).ok())
         .map(|m| m.len())
         .sum();
-    emit_replay(config, total_cmds, total_bytes, start);
+    let mut report = OpenReport::default();
+    report.replayed_commands = total_cmds;
+    report.replayed_bytes = total_bytes;
+    report.elapsed_ms = start.elapsed().as_millis() as u64;
+    emit_replay(config, &report);
 
     // Redistribute the merged keyspace into the target shards.
     temp.snapshot_each(|key, value, ttl_ms| {
@@ -220,16 +240,18 @@ fn reshard(
     });
 
     commit_reshard(dir, src_n, ShardsMeta { n, routing: Routing::KevyHash }, stores, &lay)?;
-    Ok(())
+    Ok(report)
 }
 
 #[cfg(feature = "persist")]
-fn emit_replay(config: &Config, commands: u64, bytes: u64, start: Instant) {
+fn emit_replay(config: &Config, report: &OpenReport) {
     if let Some(sink) = &config.metric_sink {
         sink.emit(KevyMetric::Replay {
-            commands,
-            bytes,
-            elapsed_ms: start.elapsed().as_millis() as u64,
+            commands: report.replayed_commands,
+            bytes: report.replayed_bytes + report.dropped_bytes,
+            elapsed_ms: report.elapsed_ms,
+            dropped_bytes: report.dropped_bytes,
+            corrupt: report.corrupt,
         });
     }
 }

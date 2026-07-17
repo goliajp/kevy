@@ -328,3 +328,51 @@ fn save_snapshot_resets_aof_no_double_replay() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// open_report(): the machine-readable twin of the boot WARN line. A clean
+// open reports zero drops; an open over a damaged AOF reports the dropped
+// bytes, the corrupt flag, and the quarantine file the repair wrote — the
+// signal a host turns into a startup health check (the 3-day silent-loss
+// incident was this exact signal living only in stderr).
+#[test]
+fn open_report_surfaces_drops_corruption_and_quarantine() {
+    let dir = tmp_dir("open-report");
+    {
+        let s = Store::open(
+            Config::default()
+                .with_persist(&dir)
+                .with_ttl_reaper_manual()
+                .with_appendfsync(AppendFsync::Always),
+        )
+        .unwrap();
+        for i in 0..20 {
+            s.set(format!("k{i}").as_bytes(), b"v").unwrap();
+        }
+        let clean = s.open_report();
+        assert_eq!(clean.dropped_bytes, 0);
+        assert!(!clean.corrupt);
+        assert!(clean.quarantine_paths.is_empty());
+    }
+    // Damage the AOF at a frame boundary: a frame whose bulk header lies
+    // about its payload length (the mailrs incident's exact parser error),
+    // followed by a WELL-FORMED frame that the stop drops — random interior
+    // byte-flips get absorbed by RESP's lenient inline-command form and
+    // don't reliably produce a corrupt verdict.
+    let aof = dir.join("aof-0.aof");
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().append(true).open(&aof).unwrap();
+        f.write_all(b"*3\r\n$3\r\nSET\r\n$1\r\nq\r\n$9\r\nab\r\n").unwrap();
+        f.write_all(b"*3\r\n$3\r\nSET\r\n$4\r\ngood\r\n$4\r\ntail\r\n").unwrap();
+    }
+    let s = Store::open(
+        Config::default().with_persist(&dir).with_ttl_reaper_manual(),
+    )
+    .unwrap();
+    let r = s.open_report();
+    assert!(r.dropped_bytes > 0, "damage must be reported: {r:?}");
+    assert!(r.corrupt, "parser-failing damage must set corrupt: {r:?}");
+    assert_eq!(r.quarantine_paths.len(), 1, "repair must quarantine: {r:?}");
+    assert!(r.quarantine_paths[0].exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
