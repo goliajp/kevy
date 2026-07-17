@@ -142,7 +142,11 @@ impl Store {
         let mut out = Vec::new();
         for (i, shard) in self.shards.iter().enumerate() {
             let view = lock_write(shard).store.collect_snapshot();
-            let (buf, _keys) = kevy_persist::dump_store_to_buf(&view);
+            // V1 on purpose: this image feeds the wasm door's host-mediated
+            // log, whose incremental browser-side parser speaks bare RESP.
+            // Upgrading that pump to v2 envelopes is the arc's T5b item.
+            let (buf, _keys) =
+                kevy_persist::dump_store_to_buf(&view, kevy_persist::AofFormat::V1);
             if i == 0 {
                 out = buf;
             } else {

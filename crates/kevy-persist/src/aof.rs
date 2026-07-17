@@ -94,6 +94,14 @@ pub struct Aof {
     /// When the last rewrite (or the open, if none yet) finished — the
     /// anchor for [`RewritePolicy::interval_secs`].
     last_rewrite_at: Instant,
+    /// The on-disk encoding this file speaks. New files and every rewrite
+    /// output are V2 (checksummed record envelopes); a pre-existing V1
+    /// file keeps appending V1 until its first rewrite upgrades it —
+    /// mixing formats within one file would corrupt it.
+    format: crate::AofFormat,
+    /// Reusable payload buffer for V2 envelope encoding (and the tee,
+    /// which is always V2 because the rewrite output it lands in is).
+    scratch: Vec<u8>,
 }
 
 
@@ -119,25 +127,6 @@ pub struct RewriteStats {
     pub bytes: u64,
 }
 
-/// Copy `[from, EOF)` of `path` to `<path>.corrupt-quarantine.<unix_ts>`
-/// (fsynced) and return the quarantine path. Called before the torn/corrupt
-/// tail is truncated away, so the dropped bytes stay inspectable — replay
-/// never re-applies them. Errors propagate: failing to preserve the bytes
-/// (e.g. disk full) fails the open with the file intact, which beats
-/// destroying the only copy; free space and reopen.
-fn quarantine_dropped_tail(path: &Path, from: u64) -> io::Result<PathBuf> {
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let qpath = PathBuf::from(format!("{}.corrupt-quarantine.{ts}", path.display()));
-    let mut src = File::open(path)?;
-    src.seek(SeekFrom::Start(from))?;
-    let mut dst = File::create(&qpath)?;
-    io::copy(&mut src, &mut dst)?;
-    dst.sync_data()?;
-    Ok(qpath)
-}
 
 impl Aof {
     /// Open (creating if needed) `path` for appending. New files get the
@@ -148,13 +137,17 @@ impl Aof {
         let mut file = OpenOptions::new().create(true).append(true).open(path)?;
         let mut size = file.metadata().map_or(0, |m| m.len());
         let mut quarantined = None;
+        let mut format = crate::AofFormat::V2;
         if size == 0 {
-            // Fresh file: stamp the magic header so the replayer can
+            // Fresh file: stamp the (v2) magic header so the replayer can
             // distinguish kevy-written AOFs from accidental writes.
-            file.write_all(AOF_MAGIC)?;
+            file.write_all(crate::record::AOF2_MAGIC)?;
             file.sync_data()?;
-            size = AOF_MAGIC.len() as u64;
+            size = crate::record::AOF2_MAGIC.len() as u64;
         } else {
+            // Existing file: keep appending in ITS format. V1 (magic'd or
+            // legacy bare-RESP) upgrades to V2 at the next rewrite.
+            format = crate::replay::sniff_format(path)?;
             // Repair a torn tail before the first append. A crash — power
             // loss, or a VM/process kill with un-fsynced `EverySec` pages —
             // can leave a partial frame, or a zero-filled region, after the
@@ -169,7 +162,7 @@ impl Aof {
             // forensic copy is the only way to ever get them back.
             let valid = crate::replay::valid_prefix_len_of_file(path)?;
             if valid < size {
-                let q = quarantine_dropped_tail(path, valid)?;
+                let q = crate::aof_util::quarantine_dropped_tail(path, valid)?;
                 file.set_len(valid)?;
                 file.sync_data()?;
                 eprintln!(
@@ -196,6 +189,8 @@ impl Aof {
             rewrite_tee: None,
             open_quarantine: quarantined,
             last_rewrite_at: Instant::now(),
+            format,
+            scratch: Vec::new(),
         })
     }
 
@@ -238,18 +233,34 @@ impl Aof {
         Ok(())
     }
 
-    /// Append one command, applying the fsync policy.
+    /// Append one command, applying the fsync policy. V2 files get the
+    /// checksummed record envelope; a V1 file keeps its bare-RESP form
+    /// until a rewrite upgrades it.
     pub fn append<A: ArgvView + ?Sized>(&mut self, args: &A) -> io::Result<()> {
-        write_multibulk(&mut self.file, args)?;
-        // Tee into the in-flight rewrite's diff buffer (off-lock rewrite in
-        // progress): re-encode the same frame so it survives the swap. Only
-        // active during the rare rewrite window — zero cost otherwise.
-        if let Some(tee) = &mut self.rewrite_tee {
-            write_multibulk(tee, args)?;
+        // One multibulk encode either way: V2 wraps the scratch bytes in an
+        // envelope, V1 writes them bare. The tee is ALWAYS V2 — its bytes
+        // land in the rewrite output, which is V2 by contract.
+        self.scratch.clear();
+        write_multibulk(&mut self.scratch, args)?;
+        match self.format {
+            crate::AofFormat::V2 => {
+                self.file.write_all(&(self.scratch.len() as u32).to_le_bytes())?;
+                self.file.write_all(&crate::crc32c::crc32c(&self.scratch).to_le_bytes())?;
+                self.file.write_all(&self.scratch)?;
+            }
+            crate::AofFormat::V1 => self.file.write_all(&self.scratch)?,
         }
+        if let Some(tee) = &mut self.rewrite_tee {
+            crate::record::write_record(tee, &self.scratch)?;
+        }
+        let overhead = match self.format {
+            crate::AofFormat::V2 => crate::record::RECORD_HEADER as u64,
+            crate::AofFormat::V1 => 0,
+        };
         self.size_bytes = self
             .size_bytes
-            .saturating_add(estimate_multibulk_bytes(args));
+            .saturating_add(estimate_multibulk_bytes(args))
+            .saturating_add(overhead);
         match self.fsync {
             // Inside a group-commit window, defer the fsync to `end_group`
             // (one per batch, still before the batch's replies). Outside
@@ -329,11 +340,12 @@ impl Aof {
         let f = self.file.get_mut();
         f.set_len(0)?;
         f.seek(SeekFrom::Start(0))?; // harmless under O_APPEND; keeps len/pos coherent
-        f.write_all(AOF_MAGIC)?;
+        f.write_all(crate::record::AOF2_MAGIC)?;
         f.sync_all()?;
         self.dirty = false;
-        self.size_bytes = AOF_MAGIC.len() as u64;
-        self.size_at_last_rewrite = AOF_MAGIC.len() as u64;
+        self.format = crate::AofFormat::V2; // an empty log restarts in v2
+        self.size_bytes = crate::record::AOF2_MAGIC.len() as u64;
+        self.size_at_last_rewrite = crate::record::AOF2_MAGIC.len() as u64;
         self.last_rewrite_at = Instant::now();
         Ok(())
     }
@@ -377,7 +389,7 @@ impl Aof {
         // accounts for everything the caller intended to durabilise.
         self.file.flush()?;
 
-        let tmp = rewrite_tmp_path(&self.path);
+        let tmp = crate::aof_util::rewrite_tmp_path(&self.path);
         let (keys, bytes) = crate::dump_aof(&tmp, store)?;
 
         // Atomic replacement. After this, the OLD file descriptor in
@@ -386,6 +398,7 @@ impl Aof {
         std::fs::rename(&tmp, &self.path)?;
         let f = OpenOptions::new().append(true).open(&self.path)?;
         self.file = BufWriter::with_capacity(AOF_BUF_CAP, f);
+        self.format = crate::AofFormat::V2; // the rewrite output always is
         self.size_bytes = bytes;
         self.size_at_last_rewrite = bytes;
         self.last_rewrite_at = Instant::now();
@@ -411,11 +424,11 @@ impl Aof {
     /// lock again. Writes that land during the off-lock spill are captured by
     /// the tee and appended after the snapshot, so nothing is lost.
     pub fn begin_concurrent_rewrite(&mut self, store: &Store) -> io::Result<RewritePlan> {
-        let (body, keys) = dump_store_to_buf(store);
+        let (body, keys) = dump_store_to_buf(store, crate::AofFormat::V2);
         self.rewrite_tee = Some(Vec::new());
         Ok(RewritePlan {
             body,
-            tmp: rewrite_tmp_path(&self.path),
+            tmp: crate::aof_util::rewrite_tmp_path(&self.path),
             keys,
         })
     }
@@ -435,6 +448,7 @@ impl Aof {
         let f = OpenOptions::new().append(true).open(&self.path)?;
         let bytes = f.metadata().map_or(0, |m| m.len());
         self.file = BufWriter::with_capacity(AOF_BUF_CAP, f);
+        self.format = crate::AofFormat::V2; // the rewrite output always is
         self.size_bytes = bytes;
         self.size_at_last_rewrite = bytes;
         self.last_rewrite_at = Instant::now();
@@ -465,31 +479,8 @@ impl Aof {
     pub fn begin_view_rewrite(&mut self) -> io::Result<std::path::PathBuf> {
         self.file.flush()?;
         self.rewrite_tee = Some(Vec::new());
-        Ok(rewrite_tmp_path(&self.path))
+        Ok(crate::aof_util::rewrite_tmp_path(&self.path))
     }
 }
 
-/// Write a fresh AOF base at `path`: just the magic header, fsynced. The
-/// COW background-save's log reset starts from this — the post-collect
-/// tee'd writes are appended by `finish_concurrent_rewrite` and the result
-/// swaps over the live AOF (the snapshot now carries the pre-collect state).
-pub fn write_aof_base(path: &Path) -> io::Result<()> {
-    let mut f = File::create(path)?;
-    f.write_all(AOF_MAGIC)?;
-    f.sync_all()
-}
 
-/// `<aof>.rewrite` — same-directory temp path so `rename(2)` stays atomic.
-fn rewrite_tmp_path(path: &Path) -> PathBuf {
-    let mut p = path.to_path_buf();
-    let new_name = match path.file_name() {
-        Some(n) => {
-            let mut s = n.to_os_string();
-            s.push(".rewrite");
-            s
-        }
-        None => std::ffi::OsString::from("aof.rewrite"),
-    };
-    p.set_file_name(new_name);
-    p
-}

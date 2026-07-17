@@ -141,11 +141,11 @@ fn fresh_aof_has_magic_header_and_replays_cleanly() {
         aof.append(&Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]))
             .unwrap();
     }
-    // Inspect bytes on disk: first 9 must be the magic.
+    // Inspect bytes on disk: first 9 must be the (v2) magic.
     let mut f = std::fs::File::open(&path).unwrap();
     let mut buf = [0u8; 9];
     f.read_exact(&mut buf).unwrap();
-    assert_eq!(&buf, b"KEVYAOF1\n");
+    assert_eq!(&buf, b"KEVYAOF2\n");
     // Replay: should see exactly one command, not the magic.
     let mut seen: Vec<Argv> = Vec::new();
     replay_aof(&path, |args| seen.push(args)).unwrap();
@@ -188,7 +188,7 @@ fn truncate_preserves_magic_header() {
     let mut f = std::fs::File::open(&path).unwrap();
     let mut buf = Vec::new();
     f.read_to_end(&mut buf).unwrap();
-    assert_eq!(buf, b"KEVYAOF1\n");
+    assert_eq!(buf, b"KEVYAOF2\n");
     let _ = std::fs::remove_file(&path);
 }
 
@@ -364,5 +364,69 @@ fn rewrite_due_three_triggers() {
     assert!(!aof.rewrite_due(stale), "interval not yet elapsed");
     std::thread::sleep(std::time::Duration::from_millis(1100));
     assert!(aof.rewrite_due(stale), "elapsed + grown fires");
+    let _ = std::fs::remove_file(&path);
+}
+
+
+// The v2 upgrade contract: a v1 (3.x) file keeps appending v1 so the file
+// stays single-format, replays fine, and its FIRST rewrite flips it to the
+// checksummed v2 envelope — after which a payload bit-flip is DETECTED
+// instead of silently replayed (the exact hole crashgate's payload-flip
+// cell caught in the v1 format).
+#[test]
+fn v1_file_upgrades_on_rewrite_and_v2_detects_bit_rot() {
+    use std::io::{Read, Seek, SeekFrom, Write};
+    let path = temp_aof("v1-upgrade");
+    // Hand-build a v1 file (what a 3.x kevy wrote).
+    {
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(b"KEVYAOF1\n").unwrap();
+        write_multibulk(&mut f, &cmd(&[b"SET", b"k", b"v1-era"])).unwrap();
+    }
+    // Open appends IN v1 (no format mixing), and the file still replays.
+    {
+        let mut aof = Aof::open(&path, Fsync::No).unwrap();
+        aof.append(&cmd(&[b"SET", b"k2", b"still-v1"])).unwrap();
+    }
+    let mut got: Vec<Argv> = Vec::new();
+    replay_aof(&path, |a| got.push(a)).unwrap();
+    assert_eq!(got.len(), 2);
+    let head = std::fs::read(&path).unwrap();
+    assert!(head.starts_with(b"KEVYAOF1\n"), "append must not change the format");
+
+    // Rewrite: the output is v2 and replays identically.
+    {
+        let mut aof = Aof::open(&path, Fsync::No).unwrap();
+        let mut store = Store::new();
+        store.set(b"k", b"v1-era".to_vec(), None, false, false);
+        store.set(b"k2", b"still-v1".to_vec(), None, false, false);
+        aof.rewrite_from(&store).unwrap();
+        // Post-rewrite appends are v2 records.
+        aof.append(&cmd(&[b"SET", b"k3", b"v2-era"])).unwrap();
+    }
+    let head = std::fs::read(&path).unwrap();
+    assert!(head.starts_with(b"KEVYAOF2\n"), "rewrite upgrades the format");
+    let mut got2: Vec<Argv> = Vec::new();
+    replay_aof(&path, |a| got2.push(a)).unwrap();
+    assert!(got2.iter().any(|a| a.get(1) == Some(b"k3")), "v2 append replays");
+
+    // Bit-rot detection: flip one byte inside the LAST record's payload —
+    // v2 stops at the checksum mismatch instead of replaying the taint.
+    let size = std::fs::metadata(&path).unwrap().len();
+    {
+        let mut f = std::fs::OpenOptions::new().write(true).read(true).open(&path).unwrap();
+        f.seek(SeekFrom::Start(size - 3)).unwrap();
+        let mut b = [0u8; 1];
+        f.read_exact(&mut b).unwrap();
+        f.seek(SeekFrom::Start(size - 3)).unwrap();
+        f.write_all(&[b[0] ^ 0xFF]).unwrap();
+    }
+    let mut got3: Vec<Argv> = Vec::new();
+    let report = replay_aof(&path, |a| got3.push(a)).unwrap();
+    assert!(report.corrupt, "a flipped payload byte must be DETECTED");
+    assert!(
+        !got3.iter().any(|a| a.get(1) == Some(b"k3")),
+        "the tainted record must not replay"
+    );
     let _ = std::fs::remove_file(&path);
 }
