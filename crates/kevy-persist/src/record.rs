@@ -68,7 +68,7 @@ pub(crate) enum RecordStep<'a> {
     Truncated,
     /// The record is structurally present but lies: oversized length or a
     /// checksum mismatch. Everything from here on is non-replayable.
-    Corrupt(&'static str),
+    Corrupt,
 }
 
 /// Inspect the record starting at `buf[pos..]`.
@@ -82,14 +82,14 @@ pub(crate) fn next_record(buf: &[u8], pos: usize) -> RecordStep<'_> {
     }
     let len = u32::from_le_bytes(rest[..4].try_into().unwrap());
     if len == 0 || len > MAX_RECORD {
-        return RecordStep::Corrupt("record length out of range");
+        return RecordStep::Corrupt;
     }
     let crc = u32::from_le_bytes(rest[4..8].try_into().unwrap());
     let Some(payload) = rest.get(RECORD_HEADER..RECORD_HEADER + len as usize) else {
         return RecordStep::Truncated;
     };
     if crc32c(payload) != crc {
-        return RecordStep::Corrupt("record checksum mismatch");
+        return RecordStep::Corrupt;
     }
     RecordStep::Ok { payload, consumed: RECORD_HEADER + len as usize }
 }

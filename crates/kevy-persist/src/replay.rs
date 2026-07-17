@@ -42,6 +42,13 @@ use kevy_resp::Argv;
 /// signal — an unexpected count of replayed commands at boot is the
 /// operator's cue to inspect the AOF byte-by-byte.
 pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<ReplayReport> {
+    // v2 files stream record-by-record: peak memory is O(largest record),
+    // not O(file) — a 2 GB log replays in a container the old read_to_end
+    // would have OOM'd. v1 (legacy) keeps the whole-file read; its first
+    // rewrite upgrades it out of that world.
+    if matches!(sniff_format(path)?, crate::AofFormat::V2) {
+        return stream_v2(path, Some(&mut apply));
+    }
     let mut data = Vec::new();
     match File::open(path) {
         Ok(mut f) => {
@@ -57,11 +64,9 @@ pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<Repla
     // Replay wall-clock — AOF is an unbounded resource, so its replay time is
     // too; surfacing it gives operators a baseline to watch it grow.
     let start = std::time::Instant::now();
-    // Format sniff: v2 (checksummed record envelopes), v1 (`KEVYAOF1\n`),
-    // or legacy bare-RESP (pre-1.2.0, parses from position 0).
-    let is_v2 = data.starts_with(crate::record::AOF2_MAGIC);
-    let mut pos = if is_v2 || data.starts_with(crate::aof::AOF_MAGIC) {
-        crate::record::AOF2_MAGIC.len()
+    // v1 (`KEVYAOF1\n`) or legacy bare-RESP (pre-1.2.0, parses from 0).
+    let mut pos = if data.starts_with(crate::aof::AOF_MAGIC) {
+        crate::aof::AOF_MAGIC.len()
     } else {
         0
     };
@@ -70,37 +75,14 @@ pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<Repla
         if pos >= total {
             break ReplayStop::Clean;
         }
-        if is_v2 {
-            match crate::record::next_record(&data, pos) {
-                crate::record::RecordStep::Ok { payload, consumed } => {
-                    match kevy_resp::parse_command(payload) {
-                        // A record must hold exactly one complete command —
-                        // anything else means the envelope lies.
-                        Ok(Some((args, used))) if used == payload.len() => {
-                            apply(args);
-                            pos += consumed;
-                            replayed += 1;
-                        }
-                        _ => break ReplayStop::CorruptFrame(String::from(
-                            "checksummed record does not hold exactly one command",
-                        )),
-                    }
-                }
-                crate::record::RecordStep::Truncated => break ReplayStop::TruncatedTail,
-                crate::record::RecordStep::Corrupt(why) => {
-                    break ReplayStop::CorruptFrame(String::from(why));
-                }
+        match kevy_resp::parse_command(&data[pos..]) {
+            Ok(Some((args, consumed))) => {
+                apply(args);
+                pos += consumed;
+                replayed += 1;
             }
-        } else {
-            match kevy_resp::parse_command(&data[pos..]) {
-                Ok(Some((args, consumed))) => {
-                    apply(args);
-                    pos += consumed;
-                    replayed += 1;
-                }
-                Ok(None) => break ReplayStop::TruncatedTail,
-                Err(e) => break ReplayStop::CorruptFrame(format!("{e:?}")),
-            }
+            Ok(None) => break ReplayStop::TruncatedTail,
+            Err(e) => break ReplayStop::CorruptFrame(format!("{e:?}")),
         }
     };
     let elapsed_ms = start.elapsed().as_millis();
@@ -147,22 +129,135 @@ pub struct ReplayReport {
 /// stop and silently orphan them). Uses the same parser as
 /// [`replay_aof`], so the truncation point and the replay stop point can
 /// never disagree. A missing file is length 0.
-/// Which encoding the file at `path` speaks, by magic sniff. Missing or
-/// short files count as V2 (they're about to be created fresh).
+/// Which encoding the file at `path` speaks, by magic sniff. Only an
+/// exact `KEVYAOF2\n` head is V2; short, missing, or other files are V1
+/// (the lenient legacy path — an empty or stub file replays as nothing
+/// there, and a fresh `Aof::open` stamps its own v2 magic before this
+/// ever matters).
 pub(crate) fn sniff_format(path: &Path) -> io::Result<crate::AofFormat> {
     let mut head = [0u8; 9];
     match File::open(path) {
         Ok(mut f) => match f.read_exact(&mut head) {
             Ok(()) if head == *crate::record::AOF2_MAGIC => Ok(crate::AofFormat::V2),
-            Ok(()) => Ok(crate::AofFormat::V1),
-            Err(_) => Ok(crate::AofFormat::V2),
+            _ => Ok(crate::AofFormat::V1),
         },
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(crate::AofFormat::V2),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(crate::AofFormat::V1),
         Err(e) => Err(e),
     }
 }
 
+/// Stream a v2 AOF record-by-record: 8-byte header, payload into a
+/// reusable buffer, CRC check, exactly-one-command parse, apply. Peak
+/// memory is O(largest record). `apply = None` is the valid-prefix walk —
+/// same stops, no side effects, and no summary line.
+fn stream_v2(
+    path: &Path,
+    mut apply: Option<&mut dyn FnMut(Argv)>,
+) -> io::Result<ReplayReport> {
+    use std::io::BufReader;
+    let file = match File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(ReplayReport::default()),
+        Err(e) => return Err(e),
+    };
+    let total = file.metadata().map_or(0, |m| m.len());
+    let mut r = BufReader::with_capacity(256 * 1024, file);
+    let mut magic = [0u8; 9];
+    r.read_exact(&mut magic)?; // caller sniffed v2, the magic is present
+    let start = std::time::Instant::now();
+    let mut pos = magic.len() as u64;
+    let mut replayed = 0u64;
+    let mut payload: Vec<u8> = Vec::new();
+    let mut preview = [0u8; 16];
+    let mut preview_len = 0usize;
+    let stop = loop {
+        let mut header = [0u8; 8];
+        match read_fully(&mut r, &mut header) {
+            Ok(0) => break ReplayStop::Clean,
+            Ok(n) if n < header.len() => break ReplayStop::TruncatedTail,
+            Ok(_) => {}
+            Err(e) => return Err(e),
+        }
+        let len = u32::from_le_bytes(header[..4].try_into().unwrap());
+        let crc = u32::from_le_bytes(header[4..].try_into().unwrap());
+        if len == 0 || len > crate::record::MAX_RECORD {
+            preview_len = 8.min(preview.len());
+            preview[..preview_len].copy_from_slice(&header[..preview_len]);
+            break ReplayStop::CorruptFrame(String::from("record length out of range"));
+        }
+        payload.clear();
+        payload.resize(len as usize, 0);
+        match read_fully(&mut r, &mut payload) {
+            Ok(n) if n < payload.len() => break ReplayStop::TruncatedTail,
+            Ok(_) => {}
+            Err(e) => return Err(e),
+        }
+        if crate::crc32c::crc32c(&payload) != crc {
+            preview_len = payload.len().min(16);
+            preview[..preview_len].copy_from_slice(&payload[..preview_len]);
+            break ReplayStop::CorruptFrame(String::from("record checksum mismatch"));
+        }
+        match kevy_resp::parse_command(&payload) {
+            Ok(Some((args, used))) if used == payload.len() => {
+                if let Some(f) = apply.as_deref_mut() {
+                    f(args);
+                }
+                pos += 8 + u64::from(len);
+                replayed += 1;
+            }
+            _ => {
+                preview_len = payload.len().min(16);
+                preview[..preview_len].copy_from_slice(&payload[..preview_len]);
+                break ReplayStop::CorruptFrame(String::from(
+                    "checksummed record does not hold exactly one command",
+                ));
+            }
+        }
+    };
+    let elapsed_ms = start.elapsed().as_millis();
+    let corrupt = matches!(stop, ReplayStop::CorruptFrame(_));
+    if apply.is_some() {
+        log_replay_summary(
+            path,
+            total as usize,
+            pos as usize,
+            replayed,
+            &preview[..preview_len],
+            stop,
+            elapsed_ms,
+        );
+    }
+    Ok(ReplayReport {
+        commands: replayed,
+        bytes: total,
+        replayed_bytes: pos,
+        dropped_bytes: total.saturating_sub(pos),
+        corrupt,
+    })
+}
+
+/// `read_exact` that reports a clean-vs-partial short read instead of
+/// erroring: returns the bytes actually read (0 = clean EOF at a record
+/// boundary, partial = torn tail).
+fn read_fully<R: Read>(r: &mut R, buf: &mut [u8]) -> io::Result<usize> {
+    let mut n = 0;
+    while n < buf.len() {
+        match r.read(&mut buf[n..]) {
+            Ok(0) => break,
+            Ok(k) => n += k,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(n)
+}
+
 pub(crate) fn valid_prefix_len_of_file(path: &Path) -> io::Result<u64> {
+    // v2 streams (O(largest record) memory — the same walk replay does, so
+    // the truncation point and the replay stop can never disagree).
+    if matches!(sniff_format(path)?, crate::AofFormat::V2) {
+        return Ok(stream_v2(path, None)?.replayed_bytes);
+    }
     let mut data = Vec::new();
     match File::open(path) {
         Ok(mut f) => {
@@ -190,7 +285,14 @@ fn valid_prefix_len(data: &[u8]) -> usize {
         }
         if is_v2 {
             match crate::record::next_record(data, pos) {
-                crate::record::RecordStep::Ok { consumed, .. } => pos += consumed,
+                crate::record::RecordStep::Ok { payload, consumed } => {
+                    // Mirror replay's exactly-one-command rule so the
+                    // truncation point can never disagree with its stop.
+                    match kevy_resp::parse_command(payload) {
+                        Ok(Some((_, used))) if used == payload.len() => pos += consumed,
+                        _ => break,
+                    }
+                }
                 _ => break,
             }
             continue;
