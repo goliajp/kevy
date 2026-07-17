@@ -30,7 +30,7 @@ db.publish("events", "hi from this or any other tab");
 await db.flush();                  // 耐久性屏障
 ```
 
-写入以 kevy append-only 日志的形式流进存储，下次以同一个 `persist.name` 调用 `open()` 时重放。整个包共六个文件（打包约 165 KB）：wasm 模块、loader、OPFS worker、手写的 TypeScript 类型，加上常规的 README 和 manifest。边界两侧都是零依赖。
+写入以 kevy append-only 日志的形式流进存储，下次以同一个 `persist.name` 调用 `open()` 时重放。4.0 起日志说带校验和的 v2 记录格式（`KEVYAOF2`——见 [persistence.md](persistence.md)）：存储字节里的位翻转在重放时被拒绝，而不是静默应用。4.0 之前的 tab 存下的日志照常重放（v1，永久可读），并在首次 compaction 时升格 v2；从浏览器 tab 泵出的日志依旧能在原生 kevy 里原样重放，反之亦然。整个包共六个文件（打包约 165 KB）：wasm 模块、loader、OPFS worker、手写的 TypeScript 类型，加上常规的 README 和 manifest。边界两侧都是零依赖。
 
 ## Loader API
 

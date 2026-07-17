@@ -144,7 +144,12 @@ failure is now closed, each behind an executable gate.
   are recoverable. v1 files are read forever and upgrade on their
   first rewrite. Replay is streaming — peak RSS is O(largest
   record), not O(file) (measured 4 MB against a 37 MB log;
-  `replaymemgate` holds the line).
+  `replaymemgate` holds the line). The browser's host-mediated log
+  speaks v2 too: a fresh tab's log is self-describing (`KEVYAOF2` +
+  records), a pre-4.0 log replays as v1 and upgrades at its first
+  compaction, and a flipped bit in stored bytes is refused at replay
+  — the outbound frames follow the stored log's format so a host's
+  verbatim appends never mix formats.
 - **Resync replay** (`replay_resync`, opt-in): recover the good tail
   behind a mid-file corrupt region instead of surrendering it — a
   record boundary is trusted only when length, CRC, and a
