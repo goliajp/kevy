@@ -191,7 +191,7 @@ For each shard, in order:
 
 1. **Load the snapshot.** If `dump-<id>.rdb` exists, stream it into the keyspace. Expired TTLs are dropped during load.
 2. **Replay the AOF.** Read `aof-<id>.aof` from the front and apply each frame.
-3. **Handle the tail.** A clean file applies in full. A torn or corrupt frame stops the replay at the last complete frame before it, and the open **truncates the file to that point** before the first new append — new writes stay contiguous with the replayable prefix instead of landing behind the bad bytes (where the next replay would stop again and silently orphan them). The dropped region is currently **discarded, not preserved**; a corrupt-quarantine copy (`aof-<id>.aof.corrupt-quarantine.<unix_ts>`) is planned so the bytes stay inspectable. (`panic-quarantine` files come from a different path — a panic while *writing* — not from replay-time corruption.)
+3. **Handle the tail.** A clean file applies in full. A torn or corrupt frame stops the replay at the last complete frame before it; the open then copies the dropped region to `aof-<id>.aof.corrupt-quarantine.<unix_ts>` (fsynced — after a mid-file corrupt frame that region is mostly well-formed frames, and the copy is the only way back to them) and **truncates the file to the last complete frame** before the first new append, so new writes stay contiguous with the replayable prefix instead of landing behind the bad bytes (where the next replay would stop again and silently orphan them). Quarantined bytes are never re-applied; inspect or salvage them by hand. If the quarantine copy itself fails (e.g. disk full), the open fails with the file intact — kevy never destroys the only copy of your bytes.
 4. **Log a one-line summary** including wall-clock time:
 
    ```text
@@ -233,7 +233,7 @@ store.evictions_total();        // total evicted by maxmemory
 | `aof-<id>.aof.rewrite` | In-progress AOF rewrite/reset. Safe to delete if stale. |
 | `dump-<id>.rdb.reshard` + `reshard.journal` | In-progress shard-layout migration. Rolled forward on next start; never delete the journal by hand. |
 | `*.premigration.<unix_ts>` | Pre-migration source backups, kept for rollback. |
-| `aof-<id>.aof.panic-quarantine.<unix_ts>` | Corrupt AOF tail set aside during recovery. Inspect by hand if you need to salvage anything; kevy will not re-apply it. |
+| `aof-<id>.aof.corrupt-quarantine.<unix_ts>` | The non-replayable region set aside during recovery (torn tail, or everything behind a corrupt mid-file frame). Inspect or salvage by hand; kevy will not re-apply it. |
 | `elect.meta` (+ transient `elect.meta.tmp`) | Election durability (v3.15): the elector's `(epoch, votedFor)` pair, persisted *before* any vote answer leaves the node so a crash-restart can never double-vote. Written tmp + fsync + rename — a crash mid-save leaves the old pair or the new pair, never a torn file. Only present with a `[cluster]` quorum configured. |
 
 ## Durability contract (v2.1)
@@ -283,7 +283,7 @@ payload damage.
 | Clean file | `clean` | everything | zero |
 | Torn final frame (killed mid-append) | truncated tail | every complete frame | the torn frame + un-fsynced window (`always`: the torn frame only) |
 | Zero-filled tail (power loss with un-fsynced pages) | truncated tail | every complete frame | as above |
-| Corrupt frame mid-file | stop at the frame | prefix before the frame | prefix-only today — recovering the good tail behind the bad frame is the resync train's job; the dropped region should be quarantined, not destroyed |
+| Corrupt frame mid-file | stop at the frame | prefix before the frame | prefix-only today — the dropped region (mostly good frames) is quarantined for hand salvage; automatic recovery of the good tail is the resync train's job |
 | Bit-rot inside a frame's payload | **undetected today** | the tainted value replays | unbounded until the checksummed format lands — the current format has no integrity check |
 
 **The no-black-hole invariant** (the 3.18 incident's fix, held by

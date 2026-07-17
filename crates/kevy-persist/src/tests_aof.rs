@@ -286,3 +286,47 @@ fn snapshot_cursor_roundtrip_and_legacy_none() {
     assert_eq!(loaded4.get(b"k").unwrap().unwrap().as_ref(), b"v");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// The dropped tail must be PRESERVED, not destroyed: after a corrupt frame
+// mid-file the region behind it is mostly well-formed frames (a production
+// incident dropped 231 MB over one bad frame), and the quarantine copy is
+// the only path back to those bytes. Exact-content check.
+#[test]
+fn aof_open_quarantines_the_dropped_tail_bytes_exactly() {
+    let path = temp_file("aof-quarantine");
+    let torn = b"*3\r\n$3\r\nSET\r\n$1\r\nq\r\n$5\r\nhal"; // frame cut mid-bulk
+    {
+        let mut f = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
+        f.write_all(AOF_MAGIC).unwrap();
+        write_multibulk(&mut f, &cmd(&[b"SET", b"k", b"v"])).unwrap();
+        f.write_all(torn).unwrap();
+    }
+    {
+        let mut aof = Aof::open(&path, Fsync::No).unwrap();
+        aof.append(&cmd(&[b"SET", b"k2", b"v2"])).unwrap();
+    }
+    // Main file: torn bytes gone, both good frames replayable.
+    let mut got: Vec<Argv> = Vec::new();
+    replay_aof(&path, |args| got.push(args)).unwrap();
+    assert_eq!(got, vec![cmd(&[b"SET", b"k", b"v"]), cmd(&[b"SET", b"k2", b"v2"])]);
+    // Quarantine: exists next to the AOF, holds EXACTLY the dropped bytes.
+    let dir = path.parent().unwrap();
+    let stem = path.file_name().unwrap().to_string_lossy().into_owned();
+    let qfile = std::fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .find(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            n.starts_with(&stem) && n.contains(".corrupt-quarantine.")
+        })
+        .expect("quarantine file must exist");
+    let qbytes = std::fs::read(qfile.path()).unwrap();
+    assert_eq!(qbytes, torn, "quarantine holds exactly the dropped region");
+    let _ = std::fs::remove_file(qfile.path());
+    let _ = std::fs::remove_file(&path);
+}
