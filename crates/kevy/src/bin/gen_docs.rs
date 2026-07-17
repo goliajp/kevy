@@ -89,7 +89,7 @@ fn llms_txt() -> String {
          - [Indexes](docs/indexes.md) · [Views](docs/views.md) · [Text search](docs/text-search.md) · [Vector search](docs/vector-search.md)\n\
          - [CDC feeds](docs/cdc.md) · [Replication](docs/replication.md) · [Availability & failover](docs/availability.md) · [Persistence](docs/persistence.md)\n\
          - [Migration](docs/migration.md) · [Upgrading between majors](docs/UPGRADING.md)\n\
-         - [WASM / browser](docs/wasm.md) · [IoT / embedded tiers](docs/iot.md)\n\
+         - [WASM / browser](docs/wasm.md) · [Electron apps](docs/electron.md) · [Tauri apps](docs/tauri.md) · [IoT / embedded tiers](docs/iot.md)\n\
          - [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)\n\n\
          ## Verbs ({} total)\n\n",
         VERB_META.len()

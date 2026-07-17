@@ -496,7 +496,12 @@ fn auto_aof_rewrite_respects_pct_zero_disable() {
                 read_reply(&mut c, b"+OK\r\n");
             }
 
-            let pre = wait_for_size_at_least_heartbeat(&aof_path, &mut c, 16 * 1024, 1_000);
+            // Generous deadline: the appends sit in the AOF BufWriter until a
+            // background flush tick lands them on disk, and a loaded CI
+            // runner has missed a 1 s window (observed: still 9 bytes on the
+            // macOS runner). The waiter returns the moment the floor is
+            // reached, so the slack costs nothing on a healthy run.
+            let pre = wait_for_size_at_least_heartbeat(&aof_path, &mut c, 16 * 1024, 5_000);
             assert!(pre >= 16 * 1024, "AOF did not grow: {pre} bytes");
 
             // Heartbeat across several tick cycles so the shard actually
