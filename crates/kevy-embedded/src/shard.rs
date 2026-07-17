@@ -111,7 +111,14 @@ fn build_shards_persist(
     // tolerated — collect the quarantine paths into the report.
     let aofs: Vec<Option<Aof>> = if config.aof {
         (0..n)
-            .map(|i| Aof::open(&layout::aof_path(&dir, i), config.appendfsync).map(Some))
+            .map(|i| {
+                Aof::open_with_repair(
+                    &layout::aof_path(&dir, i),
+                    config.appendfsync,
+                    config.replay_resync,
+                )
+                .map(Some)
+            })
             .collect::<io::Result<_>>()?
     } else {
         (0..n).map(|_| None).collect()
@@ -180,13 +187,17 @@ fn load_in_place(
         }
         let aof = layout::aof_path(dir, i);
         if aof.exists() {
-            let r = replay_aof(&aof, |args| {
-                crate::replay::apply(store, &args);
-            })?;
+            let apply = |args: kevy_persist::Argv| crate::replay::apply(store, &args);
+            let r = if config.replay_resync {
+                kevy_persist::replay_aof_resync(&aof, apply)?
+            } else {
+                replay_aof(&aof, apply)?
+            };
             report.replayed_commands += r.commands;
             report.replayed_bytes += r.replayed_bytes;
             report.dropped_bytes += r.dropped_bytes;
             report.corrupt |= r.corrupt;
+            report.resynced_bytes += r.resynced_ranges.iter().map(|(a, b)| b - a).sum::<u64>();
         }
     }
     report.elapsed_ms = start.elapsed().as_millis() as u64;

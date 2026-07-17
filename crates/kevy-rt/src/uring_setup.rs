@@ -34,9 +34,13 @@ impl<C: Commands> Shard<C> {
             let aof_path = self.aof_path();
             let commands = &self.commands;
             let store = &mut self.store;
-            let report = replay_aof(&aof_path, |args| {
-                crate::shard_run::replay_dispatch(commands, store, &args);
-            })?;
+            let apply =
+                |args: kevy_persist::Argv| crate::shard_run::replay_dispatch(commands, store, &args);
+            let report = if self.replay_resync {
+                kevy_persist::replay_aof_resync(&aof_path, apply)?
+            } else {
+                replay_aof(&aof_path, apply)?
+            };
             self.commands.on_replay_report(report.dropped_bytes, report.corrupt);
         }
         Ok(())

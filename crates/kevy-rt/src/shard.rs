@@ -241,6 +241,8 @@ pub(crate) struct Shard<C: Commands> {
     pub(crate) auto_aof_rewrite_bytes: u64,
     /// `auto_aof_rewrite_interval_secs`: staleness trigger (0 = rule off).
     pub(crate) auto_aof_rewrite_interval_secs: u64,
+    /// Best-effort boot replay (see `Runtime::with_replay_resync`).
+    pub(crate) replay_resync: bool,
     /// Connections a PUBLISH appended output to this iteration; the reactor
     /// flushes them (epoll via `flush_conn`, io_uring via its arm/write loop).
     pub(crate) dirty: Vec<u64>,

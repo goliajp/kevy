@@ -81,6 +81,11 @@ impl Config {
             "auto_aof_rewrite_interval_secs = {}",
             self.persistence.auto_aof_rewrite_interval_secs,
         );
+        let _ = writeln!(
+            out,
+            "replay_resync                = {}",
+            self.persistence.replay_resync,
+        );
         let _ = writeln!(out);
         let _ = writeln!(out, "[memory]");
         let _ = writeln!(out, "maxmemory         = {}", self.memory.maxmemory);
@@ -231,6 +236,7 @@ fn push_persistence(v: &mut Vec<CanonicalPair>, cfg: &Config) {
         "auto_aof_rewrite_bytes",
         p.auto_aof_rewrite_bytes.to_string(),
     );
+    push(v, "persistence", "replay_resync", p.replay_resync.to_string());
     push(
         v,
         "persistence",

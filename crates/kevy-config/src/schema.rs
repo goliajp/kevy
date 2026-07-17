@@ -66,6 +66,9 @@ pub struct PersistenceSection {
     /// Time-based auto-rewrite trigger: compact at least this often (in
     /// seconds) while the log grows. `0` = rule off (the default).
     pub auto_aof_rewrite_interval_secs: u64,
+    /// Best-effort boot replay: recover the good records behind a corrupt
+    /// v2 AOF record instead of dropping them. Default `false` (strict).
+    pub replay_resync: bool,
 }
 
 impl Default for PersistenceSection {
@@ -77,6 +80,7 @@ impl Default for PersistenceSection {
             auto_aof_rewrite_min_size: 64 * 1024 * 1024,
             auto_aof_rewrite_bytes: 0,
             auto_aof_rewrite_interval_secs: 0,
+            replay_resync: false,
         }
     }
 }

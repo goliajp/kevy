@@ -134,6 +134,9 @@ mid=$((size / 2))
 head -c "$mid" "$aof" > "$aof.spliced"
 tail -c "+$((mid + 8))" "$aof" >> "$aof.spliced"
 mv "$aof.spliced" "$aof"
+# Resync probe FIRST: the strict open below repairs (quarantines +
+# truncates) the tail, destroying exactly what resync exists to recover.
+recr=$("$CHECK" "$dir" --resync 2>/dev/null | awk '/^RECOVERED/{print $2}')
 out1=$("$CHECK" "$dir" --mark 2>/dev/null); rc=$?
 rec1=$(echo "$out1" | awk '/^RECOVERED/{print $2}'); marked=$(echo "$out1" | awk '/^MARKED/{print $2}')
 q1=$(echo "$out1" | awk '/^QUARANTINE/{print $2}')
@@ -143,8 +146,8 @@ rec2=$("$CHECK" "$dir" 2>/dev/null | awk '/^RECOVERED/{print $2}')
     || verdict 1 "midfile-corrupt/no-blackhole" "restart#2 sees ${rec2:-0} < marked ${marked:-?}"
 [ "${q1:-0}" -ge 1 ] && pending 0 T2 "midfile-corrupt/quarantine" "$q1 quarantine file(s)" \
     || pending 1 T2 "midfile-corrupt/quarantine" "231MB-class good tail destroyed, not set aside"
-[ "${rec1:-0}" -ge "${synced:-1}" ] && pending 0 T6 "midfile-corrupt/recovery-rate" "good tail behind the bad frame recovered ($rec1 >= $synced)" \
-    || pending 1 T6 "midfile-corrupt/recovery-rate" "recovered ${rec1:-0} < synced $synced — good tail dropped with the bad frame"
+[ "${recr:-0}" -ge "${synced:-1}" ] && pending 0 T6 "midfile-corrupt/recovery-rate" "resync recovered the good tail ($recr >= $synced)" \
+    || pending 1 T6 "midfile-corrupt/recovery-rate" "resync recovered ${recr:-0} < synced $synced"
 
 # I — payload byte-flip: framing stays intact, a VALUE is silently corrupted.
 # Discovered by this gate's first run: a flip inside a bulk payload replays
