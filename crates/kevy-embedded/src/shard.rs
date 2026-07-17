@@ -239,10 +239,12 @@ fn reshard(
         .filter_map(|p| std::fs::metadata(p).ok())
         .map(|m| m.len())
         .sum();
-    let mut report = OpenReport::default();
-    report.replayed_commands = total_cmds;
-    report.replayed_bytes = total_bytes;
-    report.elapsed_ms = start.elapsed().as_millis() as u64;
+    let report = OpenReport {
+        replayed_commands: total_cmds,
+        replayed_bytes: total_bytes,
+        elapsed_ms: start.elapsed().as_millis() as u64,
+        ..OpenReport::default()
+    };
     emit_replay(config, &report);
 
     // Redistribute the merged keyspace into the target shards.

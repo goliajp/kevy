@@ -10,8 +10,6 @@ use std::time::Duration;
 #[cfg(feature = "persist")]
 use std::time::Instant;
 
-#[cfg(feature = "persist")]
-
 use crate::config::{Config, TtlReaperMode};
 #[cfg(feature = "persist")]
 use crate::metric::{KevyMetric, MetricSink};
