@@ -41,6 +41,7 @@ mod aof;
 pub mod feed_meta;
 pub mod layout;
 mod replay;
+mod aof_policy;
 pub mod reshard;
 mod rewrite_fmt;
 mod shards_meta;
@@ -50,6 +51,7 @@ mod snapshot_read;
 mod snapshot_write;
 
 pub use aof::{AOF_MAGIC, Aof, Fsync, RewritePlan, RewriteStats, write_aof_base};
+pub use aof_policy::RewritePolicy;
 pub use replay::{ReplayReport, replay_aof};
 pub use shards_meta::{Routing, ShardsMeta, read_shards_meta, write_shards_meta};
 pub use kevy_resp::{Argv, ArgvView};

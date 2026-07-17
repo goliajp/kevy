@@ -13,12 +13,8 @@
 use crate::{KevyError, KevyResult};
 use std::sync::RwLockWriteGuard;
 
-#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
-use crate::replica_glue::ensure_writable;
+use crate::store::ensure_writable;
 use crate::store::{Inner, Store, commit_write, store_err};
-
-#[cfg(not(all(feature = "replicate", not(target_arch = "wasm32"))))]
-fn ensure_writable(_s: &Store) -> KevyResult<()> { Ok(()) }
 
 /// Handle passed to the `atomic` closure body. Methods mirror the
 /// equivalent `Store` ops but operate on the already-held write

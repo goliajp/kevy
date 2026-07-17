@@ -376,3 +376,39 @@ fn open_report_surfaces_drops_corruption_and_quarantine() {
     assert!(r.quarantine_paths[0].exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// shutdown(): the two-line signal-handler contract. After it returns, every
+// pre-shutdown write is on disk (a real fsync, not the EverySec window) and
+// every later write is refused with Closed — while reads stay available and
+// any clone's shutdown gates all clones.
+#[test]
+fn shutdown_fsyncs_refuses_writes_and_survives_reopen() {
+    let dir = tmp_dir("shutdown");
+    {
+        let s = Store::open(
+            Config::default().with_persist(&dir).with_ttl_reaper_manual(),
+        )
+        .unwrap();
+        let clone = s.clone();
+        for i in 0..50 {
+            s.set(format!("k{i}").as_bytes(), b"v").unwrap();
+        }
+        s.shutdown().unwrap();
+        // Writes refused — on the clone too (the flag is shared).
+        assert!(matches!(s.set(b"late", b"x"), Err(crate::KevyError::Closed)));
+        assert!(matches!(clone.set(b"late", b"x"), Err(crate::KevyError::Closed)));
+        assert!(matches!(s.incr_by(b"n", 1), Err(crate::KevyError::Closed)));
+        // Reads stay available.
+        assert_eq!(s.get(b"k0").unwrap(), Some(b"v".to_vec()));
+        // Idempotent.
+        s.shutdown().unwrap();
+    }
+    // Everything written before shutdown survived the (clean) teardown.
+    let s = Store::open(
+        Config::default().with_persist(&dir).with_ttl_reaper_manual(),
+    )
+    .unwrap();
+    assert_eq!(s.get(b"k49").unwrap(), Some(b"v".to_vec()));
+    assert_eq!(s.get(b"late").unwrap(), None, "refused write must not exist");
+    let _ = std::fs::remove_dir_all(&dir);
+}

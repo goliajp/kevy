@@ -2,9 +2,8 @@
 //! per-shard locks (for cross-thread access), optional AOF auto-logging, an
 //! optional background TTL reaper, and an in-process pub/sub bus.
 
-use crate::KevyResult;
-#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
 use crate::KevyError;
+use crate::KevyResult;
 use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[cfg(feature = "persist")]
@@ -16,6 +15,20 @@ use crate::shard::{build_shards, shard_idx};
 
 pub use crate::store_inner::WeakStore;
 pub(crate) use crate::store_inner::{DropGuard, Inner};
+
+/// The write gate every mutating facade entry crosses: rejects writes after
+/// [`Store::shutdown`] with [`KevyError::Closed`], and every local write on
+/// a replica with `READONLY`. One atomic load — free on the hot path.
+pub(crate) fn ensure_writable(store: &Store) -> Result<(), KevyError> {
+    if store.guard.shutdown.load(std::sync::atomic::Ordering::Acquire) {
+        return Err(KevyError::Closed);
+    }
+    #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+    if store.is_replica() {
+        return Err(KevyError::ReadOnly);
+    }
+    Ok(())
+}
 
 /// The keyspace shards (`hash(key) % n`), each a fully independent
 /// `kevy_store::Store` + AOF behind its own lock. `n == 1` (the default) is a
@@ -117,6 +130,7 @@ impl Store {
         #[cfg(feature = "index")]
         let (indexes, views) = crate::store_wire::wire_registries(&shards);
         let guard = Arc::new(DropGuard {
+            shutdown: std::sync::atomic::AtomicBool::new(false),
             reaper_stop,
             reaper_join: Mutex::new(reaper_join),
             shards_for_flush: shards.clone(),
@@ -191,6 +205,31 @@ impl Store {
     #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
     pub fn is_replica(&self) -> bool {
         self.config.replica_upstream.is_some()
+    }
+
+    /// Flush every shard's AOF to disk (a real fsync), write the feed
+    /// continuity marker, then refuse every later write (they fail with
+    /// [`KevyError::Closed`]; reads stay available). Idempotent and
+    /// clone-safe: any clone's `shutdown` gates them all, so a signal
+    /// handler's teardown is two deterministic lines —
+    /// `store.shutdown()?; std::process::exit(0)` — instead of praying
+    /// every task's `Arc<Store>` drops in time. Writes racing the call
+    /// may land after the fsync; writes issued after it returns cannot.
+    pub fn shutdown(&self) -> std::io::Result<()> {
+        use std::sync::atomic::Ordering;
+        self.guard.shutdown.store(true, Ordering::Release);
+        #[cfg(feature = "persist")]
+        for shard in self.shards.iter() {
+            let mut g = lock_write(shard);
+            if let Some(aof) = &mut g.aof {
+                aof.sync_now()?;
+            }
+        }
+        #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+        if let (Some(feed), Some(dir)) = (&self.feed, &self.config.data_dir) {
+            Store::feed_write_close_marker(feed, dir);
+        }
+        Ok(())
     }
 
     /// Retarget this replica at a new primary URL (`host:port`). The
@@ -315,8 +354,12 @@ impl Store {
             #[cfg(feature = "persist")]
             crate::reaper::concurrent_auto_rewrite(
                 shard,
-                self.config.auto_aof_rewrite_pct,
-                self.config.auto_aof_rewrite_min_size,
+                kevy_persist::RewritePolicy {
+                    pct: self.config.auto_aof_rewrite_pct,
+                    min_size: self.config.auto_aof_rewrite_min_size,
+                    bytes: self.config.auto_aof_rewrite_bytes,
+                    interval_secs: self.config.auto_aof_rewrite_interval_secs,
+                },
                 self.config.metric_sink.as_ref(),
             );
         }

@@ -136,6 +136,10 @@ impl Inner {
 /// in an `Arc<DropGuard>` shared across every `Store` clone; the drop logic
 /// fires only when the last clone goes away.
 pub(crate) struct DropGuard {
+    /// Set by [`Store::shutdown`]: every later write fails with
+    /// `KevyError::Closed`. Shared across clones (it lives here so ANY
+    /// clone's shutdown gates ALL clones' writes).
+    pub(crate) shutdown: AtomicBool,
     pub(crate) reaper_stop: Option<Arc<AtomicBool>>,
     pub(crate) reaper_join: Mutex<Option<JoinHandle<()>>>,
     // Read by the persist flush; without it the strong ref still

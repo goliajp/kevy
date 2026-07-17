@@ -17,11 +17,7 @@ use std::sync::RwLockWriteGuard;
 use crate::shard::shard_idx;
 use crate::store::{Inner, Store, commit_write, store_err};
 
-#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
-use crate::replica_glue::ensure_writable;
-
-#[cfg(not(all(feature = "replicate", not(target_arch = "wasm32"))))]
-fn ensure_writable(_s: &Store) -> KevyResult<()> { Ok(()) }
+use crate::store::ensure_writable;
 
 /// Context handed to the `atomic_all_shards` closure body. Methods
 /// route to the right shard by hashing the key.

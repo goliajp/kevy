@@ -330,3 +330,39 @@ fn aof_open_quarantines_the_dropped_tail_bytes_exactly() {
     let _ = std::fs::remove_file(qfile.path());
     let _ = std::fs::remove_file(&path);
 }
+
+// The three auto-rewrite triggers, independently: growth (the classic
+// pct/min pair), the absolute byte cap (fires below the growth threshold —
+// the rule that stops a 2.2 GB log waiting for 4.4 GB), and staleness
+// (interval elapsed AND the log actually grew).
+#[test]
+fn rewrite_due_three_triggers() {
+    let path = temp_file("aof-policy");
+    let mut aof = Aof::open(&path, Fsync::No).unwrap();
+    for _ in 0..64 {
+        aof.append(&cmd(&[b"SET", b"k", b"value-payload-0123456789"])).unwrap();
+    }
+    let off = RewritePolicy { pct: 0, min_size: 0, bytes: 0, interval_secs: 0 };
+    assert!(!aof.rewrite_due(off), "all-zero policy = auto-rewrite off");
+
+    // Growth: baseline is the open size (magic only), so any pct fires once
+    // past min_size; a sky-high min_size gates it back off.
+    let growth = RewritePolicy { pct: 100, min_size: 1, bytes: 0, interval_secs: 0 };
+    assert!(aof.rewrite_due(growth));
+    let gated = RewritePolicy { pct: 100, min_size: u64::MAX, bytes: 0, interval_secs: 0 };
+    assert!(!aof.rewrite_due(gated));
+
+    // Absolute cap: fires regardless of growth ratio or min_size gate.
+    let cap = RewritePolicy { pct: 0, min_size: 0, bytes: 64, interval_secs: 0 };
+    assert!(aof.rewrite_due(cap));
+    let cap_high = RewritePolicy { pct: 0, min_size: 0, bytes: u64::MAX, interval_secs: 0 };
+    assert!(!aof.rewrite_due(cap_high));
+
+    // Staleness: elapsed >= interval AND grown. Freshly opened + appended:
+    // a 1 s interval hasn't elapsed yet; after sleeping past it, it fires.
+    let stale = RewritePolicy { pct: 0, min_size: 0, bytes: 0, interval_secs: 1 };
+    assert!(!aof.rewrite_due(stale), "interval not yet elapsed");
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    assert!(aof.rewrite_due(stale), "elapsed + grown fires");
+    let _ = std::fs::remove_file(&path);
+}

@@ -4,11 +4,10 @@
 //! API in `ops.rs` calls. Extracted from `store.rs` to keep that file
 //! under the 500-LOC ceiling.
 
-use kevy_store::KevyError;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::config::Config;
-use crate::store::{Shards, Store};
+use crate::store::Shards;
 
 /// Construct + spawn the replica runner when configured. Returns
 /// `None` when the upstream is unset (normal primary store). The
@@ -43,14 +42,3 @@ pub(crate) fn fresh_replica_id() -> String {
     format!("kevy-embedded-{}-{}", std::process::id(), n)
 }
 
-/// Read-only enforcement for replica stores. Returns
-/// [`KevyError::ReadOnly`] on a replica; `Ok(())` on a primary. Called
-/// at the top of every mutating public API in `ops.rs`. The error's
-/// `Display` mirrors the server-side wire string (`-READONLY ...`) so
-/// applications can pattern-match the same way on both backends.
-pub(crate) fn ensure_writable(store: &Store) -> Result<(), KevyError> {
-    if store.is_replica() {
-        return Err(KevyError::ReadOnly);
-    }
-    Ok(())
-}
