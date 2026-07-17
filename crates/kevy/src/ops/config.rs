@@ -229,7 +229,8 @@ fn apply_hot_set(cfg: &mut Config, key: &[u8], value: &[u8]) -> Result<(), SetEr
         })?;
     match key_str {
         "maxmemory" | "maxmemory-policy" => set_memory(cfg, key_str, value_str),
-        "appendfsync" | "auto-aof-rewrite-percentage" | "auto-aof-rewrite-min-size" => {
+        "appendfsync" | "auto-aof-rewrite-percentage" | "auto-aof-rewrite-min-size"
+        | "auto-aof-rewrite-bytes" | "auto-aof-rewrite-interval-secs" => {
             set_persistence(cfg, key_str, value_str)
         }
         "hz" | "maxmemory-samples" => set_expiry(cfg, key_str, value_str),
@@ -286,6 +287,20 @@ fn set_persistence(cfg: &mut Config, key: &str, value: &str) -> Result<(), SetEr
                 parse_size(value).map_err(|reason| SetError::BadValue {
                     key: key.to_string(),
                     reason,
+                })?;
+        }
+        "auto-aof-rewrite-bytes" => {
+            cfg.persistence.auto_aof_rewrite_bytes =
+                parse_size(value).map_err(|reason| SetError::BadValue {
+                    key: key.to_string(),
+                    reason,
+                })?;
+        }
+        "auto-aof-rewrite-interval-secs" => {
+            cfg.persistence.auto_aof_rewrite_interval_secs =
+                value.parse::<u64>().map_err(|_| SetError::BadValue {
+                    key: key.to_string(),
+                    reason: "expected a non-negative integer".to_string(),
                 })?;
         }
         _ => return Err(SetError::Unknown(key.to_string())),

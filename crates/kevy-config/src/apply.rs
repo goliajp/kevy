@@ -86,6 +86,13 @@ impl Config {
             "auto_aof_rewrite_min_size" => {
                 self.persistence.auto_aof_rewrite_min_size = value_as_size(item)?;
             }
+            "auto_aof_rewrite_bytes" => {
+                self.persistence.auto_aof_rewrite_bytes = value_as_size(item)?;
+            }
+            "auto_aof_rewrite_interval_secs" => {
+                self.persistence.auto_aof_rewrite_interval_secs =
+                    u64::from(value_as_u32(item)?);
+            }
             k => return Err(schema_err(item, format!("unknown [persistence] key: {k}"))),
         }
         Ok(())

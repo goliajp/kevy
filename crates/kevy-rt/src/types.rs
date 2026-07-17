@@ -120,6 +120,10 @@ pub struct LiveRuntimeConfig {
     pub appendfsync: Option<Fsync>,
     /// `auto_aof_rewrite_percentage`. `0` disables the auto-trigger.
     pub auto_aof_rewrite_pct: Option<u32>,
+    /// Absolute-size auto-rewrite trigger in bytes (0 = rule off).
+    pub auto_aof_rewrite_bytes: Option<u64>,
+    /// Time-based auto-rewrite trigger in seconds (0 = rule off).
+    pub auto_aof_rewrite_interval_secs: Option<u64>,
     /// `auto_aof_rewrite_min_size` in bytes.
     pub auto_aof_rewrite_min_size: Option<u64>,
     /// New tick interval in ms (`1000/hz`). `0` disables ticking

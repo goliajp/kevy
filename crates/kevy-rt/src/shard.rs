@@ -237,6 +237,10 @@ pub(crate) struct Shard<C: Commands> {
     /// `auto_aof_rewrite_min_size`: never auto-rewrite an AOF smaller than
     /// this many bytes (prevents thrash during startup / on tiny data).
     pub(crate) auto_aof_rewrite_min_size: u64,
+    /// `auto_aof_rewrite_bytes`: absolute-size trigger (0 = rule off).
+    pub(crate) auto_aof_rewrite_bytes: u64,
+    /// `auto_aof_rewrite_interval_secs`: staleness trigger (0 = rule off).
+    pub(crate) auto_aof_rewrite_interval_secs: u64,
     /// Connections a PUBLISH appended output to this iteration; the reactor
     /// flushes them (epoll via `flush_conn`, io_uring via its arm/write loop).
     pub(crate) dirty: Vec<u64>,

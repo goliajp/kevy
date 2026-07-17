@@ -299,6 +299,8 @@ impl Commands for KevyCommands {
             appendfsync: Some(map_appendfsync(cfg.persistence.appendfsync)),
             auto_aof_rewrite_pct: Some(cfg.persistence.auto_aof_rewrite_percentage),
             auto_aof_rewrite_min_size: Some(cfg.persistence.auto_aof_rewrite_min_size),
+            auto_aof_rewrite_bytes: Some(cfg.persistence.auto_aof_rewrite_bytes),
+            auto_aof_rewrite_interval_secs: Some(cfg.persistence.auto_aof_rewrite_interval_secs),
             tick_interval_ms: tick_ms,
             // A flag string with an unknown char can't be installed —
             // config admission validates it — so the fallback default

@@ -71,6 +71,16 @@ impl Config {
             "auto_aof_rewrite_min_size    = {}",
             self.persistence.auto_aof_rewrite_min_size,
         );
+        let _ = writeln!(
+            out,
+            "auto_aof_rewrite_bytes       = {}",
+            self.persistence.auto_aof_rewrite_bytes,
+        );
+        let _ = writeln!(
+            out,
+            "auto_aof_rewrite_interval_secs = {}",
+            self.persistence.auto_aof_rewrite_interval_secs,
+        );
         let _ = writeln!(out);
         let _ = writeln!(out, "[memory]");
         let _ = writeln!(out, "maxmemory         = {}", self.memory.maxmemory);
@@ -214,6 +224,18 @@ fn push_persistence(v: &mut Vec<CanonicalPair>, cfg: &Config) {
         "persistence",
         "auto_aof_rewrite_percentage",
         p.auto_aof_rewrite_percentage.to_string(),
+    );
+    push(
+        v,
+        "persistence",
+        "auto_aof_rewrite_bytes",
+        p.auto_aof_rewrite_bytes.to_string(),
+    );
+    push(
+        v,
+        "persistence",
+        "auto_aof_rewrite_interval_secs",
+        p.auto_aof_rewrite_interval_secs.to_string(),
     );
     push(
         v,
