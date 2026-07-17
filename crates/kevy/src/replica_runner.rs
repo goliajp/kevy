@@ -179,20 +179,10 @@ fn run_loop(
             Duration::from_secs(5),
         ) {
             Ok(mut client) => {
-                // Publish the socket clone so the shutdown path can
-                // interrupt the blocking read.
-                set_socket_slot(&socket_slot, client.socket_handle().ok());
-                from_offset = match &target {
-                    Target::PerShard(sender) => drain_client(
-                        &mut client, sender, &stop, runner_slot, &progress, &mut data_gen,
-                    ),
-                    Target::Routed(senders) => crate::replica_runner_routed::drain_client_routed(
-                        &mut client, senders, &stop, runner_slot, &progress, &mut data_gen,
-                    ),
-                };
-                // Clear the slot — the socket the slot held now owns
-                // a half-closed fd (or is going to be shut down).
-                set_socket_slot(&socket_slot, None);
+                from_offset = drain_session(
+                    &mut client, &target, &stop, &socket_slot, runner_slot,
+                    &progress, &mut data_gen,
+                );
             }
             Err(e) => {
                 eprintln!(
@@ -209,6 +199,33 @@ fn run_loop(
             std::thread::sleep(RECONNECT_BACKOFF);
         }
     }
+}
+
+/// One connected session: publish the socket clone (so the shutdown
+/// path can interrupt the blocking read), drain to disconnect, clear
+/// the slot. Returns the offset to resume from.
+fn drain_session(
+    client: &mut ReplicaClient,
+    target: &Target,
+    stop: &Arc<AtomicBool>,
+    socket_slot: &Mutex<Option<TcpStream>>,
+    runner_slot: usize,
+    progress: &Arc<ReplicaProgress>,
+    data_gen: &mut u64,
+) -> u64 {
+    set_socket_slot(socket_slot, client.socket_handle().ok());
+    let from_offset = match target {
+        Target::PerShard(sender) => {
+            drain_client(client, sender, stop, runner_slot, progress, data_gen)
+        }
+        Target::Routed(senders) => crate::replica_runner_routed::drain_client_routed(
+            client, senders, stop, runner_slot, progress, data_gen,
+        ),
+    };
+    // Clear the slot — the socket the slot held now owns a
+    // half-closed fd (or is going to be shut down).
+    set_socket_slot(socket_slot, None);
+    from_offset
 }
 
 /// Store into the shared socket slot (ignoring a poisoned lock — the
@@ -298,19 +315,10 @@ fn drain_client(
     while !stop.load(Ordering::Relaxed) {
         match client.next_event() {
             Some(Ok(ReplicaEvent::Ping { generation, primary_offset })) => {
-                // Heartbeat: record the primary's position for
-                // lag/liveness (INFO replication) and answer with an
-                // ACK immediately — a heartbeat round trip even when
-                // no frames flow. The generation feeds the
-                // REPL.WAIT gen-match registry.
                 progress.record_ping(runner_slot, generation, primary_offset, from_offset);
                 let _ = client.send_ack(from_offset);
                 last_ack = std::time::Instant::now();
-                if generation != 0 && generation != ack_gen {
-                    eprintln!(
-                        "kevy: replica runner: primary feed generation moved \
-                         {ack_gen} -> {generation} mid-stream; re-handshaking"
-                    );
+                if !gen_still_matches(generation, ack_gen) {
                     return from_offset;
                 }
             }
@@ -328,11 +336,7 @@ fn drain_client(
                     // the runner should also exit.
                     return from_offset;
                 }
-                if last_ack.elapsed() >= std::time::Duration::from_millis(100) {
-                    let _ = client.send_ack(from_offset);
-                    progress.record_applied(runner_slot, from_offset);
-                    last_ack = std::time::Instant::now();
-                }
+                maybe_ack(client, progress, runner_slot, from_offset, &mut last_ack);
             }
             Some(Err(e)) => {
                 eprintln!("kevy: replica runner upstream error: {e}");
@@ -342,6 +346,37 @@ fn drain_client(
         }
     }
     from_offset
+}
+
+/// The 100 ms ack cadence: report the applied position upstream (and
+/// into the election-offset registry) without acking every frame.
+pub(crate) fn maybe_ack(
+    client: &mut ReplicaClient,
+    progress: &Arc<ReplicaProgress>,
+    runner_slot: usize,
+    from_offset: u64,
+    last_ack: &mut std::time::Instant,
+) {
+    if last_ack.elapsed() >= std::time::Duration::from_millis(100) {
+        let _ = client.send_ack(from_offset);
+        progress.record_applied(runner_slot, from_offset);
+        *last_ack = std::time::Instant::now();
+    }
+}
+
+/// Heartbeat generation gate: record the primary's position, then
+/// judge continuity. `false` = the primary broke continuity mid-stream
+/// (FLUSHALL / promotion) — drop the link so the reconnect handshake
+/// lets the fence re-decide.
+pub(crate) fn gen_still_matches(heartbeat_gen: u64, ack_gen: u64) -> bool {
+    if heartbeat_gen == 0 || heartbeat_gen == ack_gen {
+        return true;
+    }
+    eprintln!(
+        "kevy: replica runner: primary feed generation moved \
+         {ack_gen} -> {heartbeat_gen} mid-stream; re-handshaking"
+    );
+    false
 }
 
 fn event_to_apply(event: ReplicaEvent, from_offset: &mut u64) -> ReplicaApply {

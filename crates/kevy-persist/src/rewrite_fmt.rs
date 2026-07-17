@@ -65,11 +65,27 @@ pub fn dump_aof<S: crate::SnapshotSource>(path: &Path, src: &S) -> io::Result<(u
     if let Some(e) = err {
         return Err(e);
     }
-    // Hash field TTLs re-emitted as absolute HPEXPIREAT frames
-    // (after the HSETs that recreate their fields).
-    let mut ferr: Option<io::Error> = None;
+    write_hash_ttl_frames(&mut w, src, crate::AofFormat::V2, &mut scratch)?;
+    w.flush()?;
+    let inner = w
+        .into_inner()
+        .map_err(|e| io::Error::other(e.to_string()))?;
+    let bytes = inner.metadata().map_or(0, |m| m.len());
+    inner.sync_all()?;
+    Ok((keys, bytes))
+}
+
+/// Hash field TTLs re-emitted as absolute HPEXPIREAT frames (after the
+/// HSETs that recreate their fields).
+fn write_hash_ttl_frames<W: Write, S: crate::SnapshotSource>(
+    w: &mut W,
+    src: &S,
+    fmt: crate::AofFormat,
+    scratch: &mut Vec<u8>,
+) -> io::Result<()> {
+    let mut err: Option<io::Error> = None;
     src.for_each_hash_ttl(|key, field, deadline_ms| {
-        if ferr.is_some() {
+        if err.is_some() {
             return;
         }
         let ms = deadline_ms.to_string();
@@ -80,20 +96,14 @@ pub fn dump_aof<S: crate::SnapshotSource>(path: &Path, src: &S) -> io::Result<(u
         argv.push(b"FIELDS");
         argv.push(b"1");
         argv.push(field);
-        if let Err(e) = emit(&mut w, &argv, crate::AofFormat::V2, &mut scratch) {
-            ferr = Some(e);
+        if let Err(e) = emit(w, &argv, fmt, scratch) {
+            err = Some(e);
         }
     });
-    if let Some(e) = ferr {
-        return Err(e);
+    match err {
+        Some(e) => Err(e),
+        None => Ok(()),
     }
-    w.flush()?;
-    let inner = w
-        .into_inner()
-        .map_err(|e| io::Error::other(e.to_string()))?;
-    let bytes = inner.metadata().map_or(0, |m| m.len());
-    inner.sync_all()?;
-    Ok((keys, bytes))
 }
 
 /// Serialize `src`'s state into an in-memory AOF image (magic + the same
@@ -129,6 +139,8 @@ pub fn dump_store_to_buf<S: crate::SnapshotSource>(
 /// The full type-switch over `Value` variants is ~9 KB; pushing it
 /// off the hot iTLB pages around `start_command` is the point.
 #[cold]
+// LOC-WAIVER: pure per-Value-variant dispatch table — one arm per
+// stored type mapping it to its canonical rewrite verb; no control flow.
 fn write_value_as_commands<W: Write>(
     w: &mut W,
     key: &[u8],
@@ -247,6 +259,22 @@ fn stream_as_commands<W: Write>(
         emit(w, &Argv::from(argv), fmt, scratch)?;
         frames += 1;
     }
+    frames += write_stream_id_fixup(w, key, s, fmt, scratch)?;
+    frames += write_stream_group_commands(w, key, s, fmt, scratch)?;
+    Ok(frames)
+}
+
+/// The stream-ID bookkeeping tail of a stream rewrite: recreate an
+/// emptied stream's advanced ID clock, then XSETID when the natural
+/// replay outcome differs from the stored scalars.
+fn write_stream_id_fixup<W: Write>(
+    w: &mut W,
+    key: &[u8],
+    s: &StreamData,
+    fmt: crate::AofFormat,
+    scratch: &mut Vec<u8>,
+) -> io::Result<usize> {
+    let mut frames = 0usize;
     let (len, last, mxd, added) =
         (s.length(), s.last_id(), s.max_deleted_id(), s.entries_added());
     if len == 0 && last != StreamId::MIN {
@@ -277,7 +305,6 @@ fn stream_as_commands<W: Write>(
         emit(w, &Argv::from(argv), fmt, scratch)?;
         frames += 1;
     }
-    frames += write_stream_group_commands(w, key, s, fmt, scratch)?;
     Ok(frames)
 }
 

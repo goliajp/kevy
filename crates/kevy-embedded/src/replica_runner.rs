@@ -206,33 +206,13 @@ fn run_loop(
         // an immediate try with the new URL; clear the flag here so a
         // failed connect re-arms the backoff normally.
         force_reconnect.store(false, Ordering::Relaxed);
-        let from_offset = applied_offset.load(Ordering::Relaxed);
-        let target = upstream
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        match ReplicaClient::connect_at(
-            &target,
-            &replica_id,
-            data_gen,
-            from_offset,
-            Duration::from_secs(5),
-        ) {
+        match dial(&upstream, &replica_id, data_gen, &applied_offset) {
             Ok(mut client) => {
-                if let Ok(s) = client.socket_handle() {
-                    *sock_clone
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(s);
-                }
-                link_up.store(true, Ordering::Relaxed);
                 backoff = backoff_min;
-
-                drain_session(&shards, &mut client, &stop, &applied_offset, &mut data_gen);
-
-                link_up.store(false, Ordering::Relaxed);
-                *sock_clone
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+                run_session(
+                    &shards, &mut client, &stop, &sock_clone, &link_up,
+                    &applied_offset, &mut data_gen,
+                );
             }
             Err(_) => {
                 // Sleep in small slices so a shutdown signal is acted
@@ -243,6 +223,47 @@ fn run_loop(
             }
         }
     }
+}
+
+/// One reconnect attempt: read the live upstream + resume cursor and
+/// handshake with the data's generation.
+fn dial(
+    upstream: &Arc<Mutex<String>>,
+    replica_id: &str,
+    data_gen: u64,
+    applied_offset: &Arc<AtomicU64>,
+) -> Result<ReplicaClient, kevy_replicate::replica::ReplicaError> {
+    let from_offset = applied_offset.load(Ordering::Relaxed);
+    let target = upstream
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    ReplicaClient::connect_at(&target, replica_id, data_gen, from_offset, Duration::from_secs(5))
+}
+
+/// One connected session: publish the socket clone + link-up flag,
+/// drain to disconnect, clear both.
+#[allow(clippy::too_many_arguments)]
+fn run_session(
+    shards: &Shards,
+    client: &mut ReplicaClient,
+    stop: &Arc<AtomicBool>,
+    sock_clone: &Arc<Mutex<Option<TcpStream>>>,
+    link_up: &Arc<AtomicBool>,
+    applied_offset: &Arc<AtomicU64>,
+    data_gen: &mut u64,
+) {
+    if let Ok(s) = client.socket_handle() {
+        *sock_clone
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(s);
+    }
+    link_up.store(true, Ordering::Relaxed);
+    drain_session(shards, client, stop, applied_offset, data_gen);
+    link_up.store(false, Ordering::Relaxed);
+    *sock_clone
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
 }
 
 /// Pump one connected session's events until stop / disconnect.
@@ -294,23 +315,46 @@ fn drain_session(
                 apply_frame(shards, &frame.argv);
                 applied_offset.store(client.expected_offset(), Ordering::Relaxed);
             }
-            Some(Ok(ReplicaEvent::SnapshotBegin)) => snap = Some(begin_snapshot(shards)),
-            Some(Ok(ReplicaEvent::SnapshotChunk(bytes))) => {
-                if let Some(buf) = snap.as_mut() {
-                    buf.extend_from_slice(&bytes);
-                }
-            }
-            Some(Ok(ReplicaEvent::SnapshotEnd { ack_offset })) => {
-                if let Some(buf) = snap.take() {
-                    if !finish_snapshot(shards, &buf, ack_offset, applied_offset) {
-                        break;
-                    }
-                    *data_gen = ack_gen;
+            Some(Ok(ev)) => {
+                if !snapshot_event(shards, ev, &mut snap, applied_offset, data_gen, ack_gen) {
+                    break;
                 }
             }
             Some(Err(_)) | None => break,
         }
     }
+}
+
+/// The snapshot arms of [`drain_session`]. `false` = a decode error —
+/// drop the link (reconnect either resumes from the backlog or
+/// triggers another ship).
+fn snapshot_event(
+    shards: &Shards,
+    ev: ReplicaEvent,
+    snap: &mut Option<Vec<u8>>,
+    applied_offset: &Arc<AtomicU64>,
+    data_gen: &mut u64,
+    ack_gen: u64,
+) -> bool {
+    match ev {
+        ReplicaEvent::SnapshotBegin => *snap = Some(begin_snapshot(shards)),
+        ReplicaEvent::SnapshotChunk(bytes) => {
+            if let Some(buf) = snap.as_mut() {
+                buf.extend_from_slice(&bytes);
+            }
+        }
+        ReplicaEvent::SnapshotEnd { ack_offset } => {
+            if let Some(buf) = snap.take() {
+                if !finish_snapshot(shards, &buf, ack_offset, applied_offset) {
+                    return false;
+                }
+                *data_gen = ack_gen;
+            }
+        }
+        // Ping / Frame are handled by the caller's arms.
+        ReplicaEvent::Ping { .. } | ReplicaEvent::Frame(_) => {}
+    }
+    true
 }
 
 /// SnapshotBegin: the snapshot is the new ground truth — flush stale

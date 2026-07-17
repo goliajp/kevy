@@ -4,6 +4,7 @@
 //! a log line, a counter, whatever. Wire it via [`crate::Config::with_metric_sink`].
 
 use std::path::PathBuf;
+#[cfg(feature = "persist")]
 use std::sync::Arc;
 
 /// What `Store::open` restored — and what it could not. The pull-style
@@ -34,6 +35,7 @@ pub struct OpenReport {
 
 /// A persistence event worth observing. More variants may be added; match
 /// non-exhaustively (`_ => {}`) to stay forward-compatible.
+#[cfg(feature = "persist")]
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum KevyMetric {
@@ -74,9 +76,11 @@ pub enum KevyMetric {
 /// callback runs synchronously on whichever thread emits the event (the reaper
 /// thread for background rewrites, the opening thread for replay), so keep it
 /// fast / non-blocking.
+#[cfg(feature = "persist")]
 #[derive(Clone)]
 pub(crate) struct MetricSink(Arc<dyn Fn(KevyMetric) + Send + Sync>);
 
+#[cfg(feature = "persist")]
 impl MetricSink {
     pub(crate) fn new(f: impl Fn(KevyMetric) + Send + Sync + 'static) -> Self {
         MetricSink(Arc::new(f))
@@ -87,6 +91,7 @@ impl MetricSink {
     }
 }
 
+#[cfg(feature = "persist")]
 impl std::fmt::Debug for MetricSink {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("MetricSink(<fn>)")

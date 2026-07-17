@@ -53,6 +53,21 @@ impl Config {
             "data_dir = \"{}\"",
             escape_toml_basic_string(&self.server.data_dir.display().to_string()),
         );
+        self.write_toml_persistence_section(out);
+        let _ = writeln!(out, "[memory]");
+        let _ = writeln!(out, "maxmemory         = {}", self.memory.maxmemory);
+        let _ = writeln!(
+            out,
+            "maxmemory_policy  = \"{}\"",
+            self.memory.maxmemory_policy.as_str(),
+        );
+    }
+
+    /// The `[persistence]` section — split from
+    /// [`Self::write_toml_storage_sections`] when the durability arc's
+    /// new rewrite/resync knobs pushed it past the fn-length rule.
+    fn write_toml_persistence_section(&self, out: &mut String) {
+        use std::fmt::Write;
         let _ = writeln!(out);
         let _ = writeln!(out, "[persistence]");
         let _ = writeln!(out, "aof                          = {}", self.persistence.aof);
@@ -87,13 +102,6 @@ impl Config {
             self.persistence.replay_resync,
         );
         let _ = writeln!(out);
-        let _ = writeln!(out, "[memory]");
-        let _ = writeln!(out, "maxmemory         = {}", self.memory.maxmemory);
-        let _ = writeln!(
-            out,
-            "maxmemory_policy  = \"{}\"",
-            self.memory.maxmemory_policy.as_str(),
-        );
     }
 
     /// `[expiry]` / `[log]` / `[notification]` / `[advanced]` / `[slowlog]`

@@ -21,28 +21,7 @@ impl<C: Commands> Shard<C> {
     /// beyond one struct build).
     pub(crate) fn apply_live_runtime_config(&mut self, tick_interval: &mut Option<Duration>) {
         let live = self.commands.live_runtime_config();
-        if let Some(f) = live.appendfsync
-            && let Some(aof) = &mut self.aof
-        {
-            // A failure to flush on policy tighten is logged but doesn't
-            // bring the shard down — the policy itself still takes effect
-            // and subsequent appends will retry the sync.
-            if let Err(e) = aof.set_fsync(f) {
-                eprintln!("kevy: shard {} set_fsync failed: {e}", self.id);
-            }
-        }
-        if let Some(p) = live.auto_aof_rewrite_pct {
-            self.auto_aof_rewrite_pct = p;
-        }
-        if let Some(m) = live.auto_aof_rewrite_min_size {
-            self.auto_aof_rewrite_min_size = m;
-        }
-        if let Some(b) = live.auto_aof_rewrite_bytes {
-            self.auto_aof_rewrite_bytes = b;
-        }
-        if let Some(i) = live.auto_aof_rewrite_interval_secs {
-            self.auto_aof_rewrite_interval_secs = i;
-        }
+        self.apply_live_persist_knobs(&live);
         if let Some(ms) = live.tick_interval_ms {
             *tick_interval = if ms == 0 {
                 None
@@ -73,6 +52,33 @@ impl<C: Commands> Shard<C> {
             }
         }
         self.apply_promotion_epoch(live.promotion_epoch);
+    }
+
+    /// The persistence half of [`Self::apply_live_runtime_config`]:
+    /// fsync policy + the three rewrite triggers.
+    fn apply_live_persist_knobs(&mut self, live: &crate::LiveRuntimeConfig) {
+        if let Some(f) = live.appendfsync
+            && let Some(aof) = &mut self.aof
+        {
+            // A failure to flush on policy tighten is logged but doesn't
+            // bring the shard down — the policy itself still takes effect
+            // and subsequent appends will retry the sync.
+            if let Err(e) = aof.set_fsync(f) {
+                eprintln!("kevy: shard {} set_fsync failed: {e}", self.id);
+            }
+        }
+        if let Some(p) = live.auto_aof_rewrite_pct {
+            self.auto_aof_rewrite_pct = p;
+        }
+        if let Some(m) = live.auto_aof_rewrite_min_size {
+            self.auto_aof_rewrite_min_size = m;
+        }
+        if let Some(b) = live.auto_aof_rewrite_bytes {
+            self.auto_aof_rewrite_bytes = b;
+        }
+        if let Some(i) = live.auto_aof_rewrite_interval_secs {
+            self.auto_aof_rewrite_interval_secs = i;
+        }
     }
 
     /// Promotion fences the old offset space: when the

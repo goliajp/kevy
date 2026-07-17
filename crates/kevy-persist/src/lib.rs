@@ -45,6 +45,7 @@ mod aof_policy;
 mod aof_util;
 mod crc32c;
 mod record;
+mod replay_resync;
 pub mod reshard;
 mod rewrite_fmt;
 mod shards_meta;

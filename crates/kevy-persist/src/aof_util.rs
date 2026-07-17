@@ -50,3 +50,40 @@ pub(crate) fn rewrite_tmp_path(path: &Path) -> PathBuf {
     p.set_file_name(new_name);
     p
 }
+
+/// The tail-repair half of [`crate::Aof::open_with_repair`]. A crash —
+/// power loss, or a VM/process kill with un-fsynced `EverySec`
+/// pages — can leave a partial frame, or a zero-filled region,
+/// after the last complete one. `replay_aof` stops there
+/// (prefix-only), but an O_APPEND write would land *after* the
+/// garbage, orphaning it behind the torn frame on the next replay:
+/// silent data loss. Truncate to the last complete frame so
+/// appends stay contiguous with the replayable prefix (Redis
+/// `aof-load-truncated`) — but FIRST copy the dropped region
+/// aside: after a corrupt frame MID-file the region is mostly
+/// well-formed frames (a real incident dropped 231 MB over a
+/// few-KB bad frame), and the forensic copy is the only way to
+/// ever get them back.
+pub(crate) fn repair_tail(
+    path: &Path,
+    file: &mut File,
+    size: &mut u64,
+    resync: bool,
+) -> io::Result<Option<PathBuf>> {
+    let valid = crate::replay::valid_prefix_len_of_file(path, resync)?;
+    if valid >= *size {
+        return Ok(None);
+    }
+    let q = crate::aof_util::quarantine_dropped_tail(path, valid)?;
+    file.set_len(valid)?;
+    file.sync_data()?;
+    eprintln!(
+        "kevy WARN: AOF {} dropped a non-replayable tail: {} bytes \
+         quarantined to {} then truncated at byte {valid}.",
+        path.display(),
+        *size - valid,
+        q.display(),
+    );
+    *size = valid;
+    Ok(Some(q))
+}

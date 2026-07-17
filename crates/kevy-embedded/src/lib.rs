@@ -99,7 +99,9 @@
 mod config;
 mod dispatch;
 mod info;
-#[cfg(feature = "persist")]
+// Unconditional: `OpenReport` rides the DropGuard and the Store
+// handle in every archetype (a no-persist open reports zeros); only
+// the sink WIRING stays persist-gated in config.rs.
 mod metric;
 mod ops;
 mod ops_atomic;
@@ -156,7 +158,8 @@ pub use config::{Config, EvictionPolicy, TtlReaperMode};
 pub use config::AppendFsync;
 pub use info::KevyInfo;
 #[cfg(feature = "persist")]
-pub use metric::{KevyMetric, OpenReport};
+pub use metric::KevyMetric;
+pub use metric::OpenReport;
 #[cfg(feature = "persist")]
 pub use kevy_persist::RewriteStats;
 pub use kevy_store::{

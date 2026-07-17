@@ -90,11 +90,7 @@ pub(crate) fn drain_client_routed(
                 progress.record_ping(runner_slot, generation, primary_offset, from_offset);
                 let _ = client.send_ack(from_offset);
                 last_ack = std::time::Instant::now();
-                if generation != 0 && generation != ack_gen {
-                    eprintln!(
-                        "kevy: replica runner: primary feed generation moved \
-                         {ack_gen} -> {generation} mid-stream; re-handshaking"
-                    );
+                if !crate::replica_runner::gen_still_matches(generation, ack_gen) {
                     return from_offset;
                 }
             }
@@ -106,11 +102,9 @@ pub(crate) fn drain_client_routed(
                 if route_event(event, &mut from_offset, senders, gate).is_err() {
                     return from_offset;
                 }
-                if last_ack.elapsed() >= std::time::Duration::from_millis(100) {
-                    let _ = client.send_ack(from_offset);
-                    progress.record_applied(runner_slot, from_offset);
-                    last_ack = std::time::Instant::now();
-                }
+                crate::replica_runner::maybe_ack(
+                    client, progress, runner_slot, from_offset, &mut last_ack,
+                );
             }
             Some(Err(e)) => {
                 eprintln!("kevy: replica runner upstream error: {e}");
