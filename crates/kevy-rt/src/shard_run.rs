@@ -69,9 +69,10 @@ impl<C: Commands> Shard<C> {
             let aof_path = self.aof_path();
             let commands = &self.commands;
             let store = &mut self.store;
-            replay_aof(&aof_path, |args| {
+            let report = replay_aof(&aof_path, |args| {
                 replay_dispatch(commands, store, &args);
             })?;
+            self.commands.on_replay_report(report.dropped_bytes, report.corrupt);
         }
 
         // Off-accept-set shards have no listener (None); skip register.

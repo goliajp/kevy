@@ -256,6 +256,15 @@ pub trait Commands: Clone + Send + 'static {
     /// Default: no-op.
     fn on_persist_stats(&self, _in_flight: bool, _aof_rewrites_total: u64) {}
 
+    /// One-shot boot-replay verdict for this shard: bytes dropped past
+    /// the last replayable AOF frame (quarantined + truncated by the
+    /// repair) and whether the stop was a corrupt frame. Fires once,
+    /// after the shard's startup replay, before the listener accepts.
+    /// Non-zero drops mean the shard recovered less than its file held —
+    /// command layers surface it via `INFO persistence` so operators can
+    /// alert on it. Default: no-op.
+    fn on_replay_report(&self, _dropped_bytes: u64, _corrupt: bool) {}
+
     /// Per-tick live-connection gauge: how many client conns this
     /// shard currently holds (cluster-bus links excluded). Command
     /// layers publish it to their cross-shard stats slots so `INFO`

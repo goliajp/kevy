@@ -94,6 +94,25 @@ KevySub *kevy_psubscribe(KevyDb *db, const uint8_t *pat, size_t pat_len);
 int64_t kevy_publish(KevyDb *db, const uint8_t *chan, size_t chan_len,
                      const uint8_t *payload, size_t payload_len);
 
+/* ── open report ───────────────────────────────────────────────────── */
+
+/* The boot-replay verdict: what the open restored, and what it could not.
+ * dropped_bytes > 0 or corrupt != 0 means the store recovered LESS than
+ * its files held (the dropped region was quarantined next to the AOF as
+ * aof-<id>.aof.corrupt-quarantine.<ts>) — surface it as a startup health
+ * check. */
+typedef struct KevyOpenReport {
+    uint64_t replayed_commands;
+    uint64_t replayed_bytes;
+    uint64_t elapsed_ms;
+    uint64_t dropped_bytes;
+    uint8_t corrupt;
+    uint32_t quarantine_count;
+} KevyOpenReport;
+
+/* Fill *out with db's open verdict. 0 = ok, -1 = misuse. */
+int32_t kevy_open_report(KevyDb *db, KevyOpenReport *out);
+
 /* Drain one pending frame without blocking.
  * 1 = frame written to *out (RESP array: message / pmessage / acks);
  * 0 = nothing queued; negative = misuse. */
