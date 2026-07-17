@@ -112,6 +112,26 @@ pub struct RewriteStats {
     pub bytes: u64,
 }
 
+/// Copy `[from, EOF)` of `path` to `<path>.corrupt-quarantine.<unix_ts>`
+/// (fsynced) and return the quarantine path. Called before the torn/corrupt
+/// tail is truncated away, so the dropped bytes stay inspectable — replay
+/// never re-applies them. Errors propagate: failing to preserve the bytes
+/// (e.g. disk full) fails the open with the file intact, which beats
+/// destroying the only copy; free space and reopen.
+fn quarantine_dropped_tail(path: &Path, from: u64) -> io::Result<PathBuf> {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let qpath = PathBuf::from(format!("{}.corrupt-quarantine.{ts}", path.display()));
+    let mut src = File::open(path)?;
+    src.seek(SeekFrom::Start(from))?;
+    let mut dst = File::create(&qpath)?;
+    io::copy(&mut src, &mut dst)?;
+    dst.sync_data()?;
+    Ok(qpath)
+}
+
 impl Aof {
     /// Open (creating if needed) `path` for appending. New files get the
     /// 9-byte `AOF_MAGIC` header so replays can identify the file as
@@ -134,11 +154,23 @@ impl Aof {
             // an O_APPEND write would land *after* the garbage, orphaning it
             // behind the torn frame on the next replay: silent data loss.
             // Truncate to the last complete frame so appends stay contiguous
-            // with the replayable prefix (Redis `aof-load-truncated`).
+            // with the replayable prefix (Redis `aof-load-truncated`) — but
+            // FIRST copy the dropped region aside: after a corrupt frame
+            // MID-file the region is mostly well-formed frames (a real
+            // incident dropped 231 MB over a few-KB bad frame), and the
+            // forensic copy is the only way to ever get them back.
             let valid = crate::replay::valid_prefix_len_of_file(path)?;
             if valid < size {
+                let quarantined = quarantine_dropped_tail(path, valid)?;
                 file.set_len(valid)?;
                 file.sync_data()?;
+                eprintln!(
+                    "kevy WARN: AOF {} dropped a non-replayable tail: {} bytes \
+                     quarantined to {} then truncated at byte {valid}.",
+                    path.display(),
+                    size - valid,
+                    quarantined.display(),
+                );
                 size = valid;
             }
         }
