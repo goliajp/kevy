@@ -25,6 +25,8 @@ export type { KevyReply };
 
 interface NativeKevy {
   open(dir: string | null): number;
+  openWith(dir: string | null, opts: number[]): number;
+  shutdown(id: number): void;
   close(id: number): void;
   cmd(id: number, packed: Uint8Array): Uint8Array;
   get(id: number, key: Uint8Array): Uint8Array | null;
@@ -32,6 +34,7 @@ interface NativeKevy {
   subscribe(id: number, chan: Uint8Array, pattern: boolean): number;
   subNext(subId: number): Uint8Array | null;
   subClose(subId: number): void;
+  openReport(id: number): number[];
   version(): string;
 }
 
@@ -59,6 +62,18 @@ export interface OpenOptions {
    * Retained so existing callers keep compiling.
    */
   tickMs?: number;
+  /** AOF fsync policy: 0 everysec (default), 1 always, 2 no. */
+  fsync?: number;
+  /** Keyspace shards (0 = default). */
+  shards?: number;
+  /** Auto-rewrite growth trigger, percent (0 = rule off; default 100). */
+  rewritePct?: number;
+  /** Growth rule's minimum-size gate (default 64 MiB). */
+  rewriteMinSize?: number;
+  /** Absolute-size auto-rewrite trigger (0 = rule off). */
+  rewriteBytes?: number;
+  /** Staleness auto-rewrite trigger, seconds (0 = rule off). */
+  rewriteIntervalSecs?: number;
 }
 
 const enc = new TextEncoder();
@@ -227,6 +242,15 @@ export class KevyDb {
    * AOF): surface it as a startup health check instead of scraping the
    * boot WARN line from the native log.
    */
+  /**
+   * Flush every shard's AOF with a REAL fsync, then refuse every later
+   * write (reads stay available). Idempotent — the deterministic teardown
+   * for an app-lifecycle hook: `db.shutdown()` as the app backgrounds.
+   */
+  shutdown(): void {
+    native.shutdown(this.#live());
+  }
+
   openReport(): KevyOpenStats {
     const a = native.openReport(this.#live()) as number[];
     return {
@@ -328,7 +352,24 @@ export class KevyDb {
 // contract. A path without a scheme passes through unchanged.
 export function open(opts: OpenOptions = {}): KevyDb {
   const dir = opts.dir == null ? null : decodeURI(opts.dir).replace(/^file:\/\//, "");
-  return new KevyDb(native.open(dir), opts.tickMs ?? 50);
+  const wantsPolicy =
+    opts.fsync != null || opts.shards != null || opts.rewritePct != null ||
+    opts.rewriteMinSize != null || opts.rewriteBytes != null ||
+    opts.rewriteIntervalSecs != null;
+  if (!wantsPolicy) {
+    return new KevyDb(native.open(dir), opts.tickMs ?? 50);
+  }
+  // The native side takes the policy as a packed number array (see the
+  // module's openWith); defaults mirror plain open exactly.
+  const packed = [
+    opts.fsync ?? 0,
+    opts.shards ?? 0,
+    opts.rewritePct ?? 100,
+    opts.rewriteMinSize ?? 64 * 1024 * 1024,
+    opts.rewriteBytes ?? 0,
+    opts.rewriteIntervalSecs ?? 0,
+  ];
+  return new KevyDb(native.openWith(dir, packed), opts.tickMs ?? 50);
 }
 
 export function version(): string {
