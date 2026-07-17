@@ -124,6 +124,16 @@ class Db {
     return c.openReport(this.#p);
   }
 
+  // Deterministic teardown: flush every shard's AOF (a REAL fsync), then
+  // refuse every later write. Reads stay available, so the handle stays
+  // live — close() when done. Idempotent; the signal-handler exit is
+  // `db.shutdown(); process.exit(0)`. Throws on an I/O failure (the store
+  // is still usable; retry or exit).
+  shutdown() {
+    if (!this.#p) throw new Error("kevy: closed handle");
+    c.shutdown(this.#p);
+  }
+
   subscribe(channel) {
     return new Sub(c.subscribe(this.#p, Buffer.from(toBytes(channel))));
   }
@@ -141,6 +151,16 @@ class Db {
 export function open(opts = {}) {
   const p = opts.dir ? c.open(Buffer.from(enc.encode(opts.dir))) : c.openMem();
   return new Db(p);
+}
+
+// open() with explicit durability/rewrite policy. dir null = in-memory.
+// opts: { fsync (0 everysec, 1 always, 2 no), shards, rewritePct,
+// rewriteMinSize, rewriteBytes, rewriteIntervalSecs } — every field
+// optional, missing = the exact defaults open() uses; opts null = all
+// defaults.
+export function openWith(dir = null, opts = null) {
+  const d = dir ? Buffer.from(enc.encode(dir)) : null;
+  return new Db(c.openWith(d, opts));
 }
 
 export function version() {

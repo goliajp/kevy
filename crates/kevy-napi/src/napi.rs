@@ -9,8 +9,9 @@
 //! below any Node this package supports.
 //!
 //! The gate keeps its surface to Buffers in / Buffer out plus opaque
-//! externals for handles — plus one plain object for the open report,
-//! which needs exactly the sixteen symbols below.
+//! externals for handles — plus one plain object each way (the open
+//! report out, the open options in), which needs exactly the eighteen
+//! symbols below.
 
 use std::ffi::c_void;
 
@@ -101,6 +102,17 @@ unsafe extern "C" {
         env: NapiEnv,
         value: NapiValue,
         result: *mut i64,
+    ) -> NapiStatus;
+    pub(crate) fn napi_typeof(
+        env: NapiEnv,
+        value: NapiValue,
+        result: *mut i32,
+    ) -> NapiStatus;
+    pub(crate) fn napi_get_named_property(
+        env: NapiEnv,
+        object: NapiValue,
+        utf8name: *const std::ffi::c_char,
+        result: *mut NapiValue,
     ) -> NapiStatus;
     pub(crate) fn napi_get_undefined(env: NapiEnv, result: *mut NapiValue) -> NapiStatus;
     pub(crate) fn napi_get_null(env: NapiEnv, result: *mut NapiValue) -> NapiStatus;
@@ -269,6 +281,48 @@ pub(crate) unsafe fn get_i64(env: NapiEnv, value: NapiValue) -> i64 {
         return 0;
     }
     out
+}
+
+/// `napi_object` in `napi_valuetype` (Node's js_native_api_types.h:109-121:
+/// undefined 0, null 1, boolean 2, number 3, string 4, symbol 5, object 6).
+const TYPE_OBJECT: i32 = 6;
+
+/// True when `value` is a JS object — the shape an options bag arrives in.
+/// `null`, `undefined`, primitives, and a null handle from [`args`] are all
+/// false, which callers read as "no options".
+///
+/// # Safety
+/// `env` as in [`args`].
+pub(crate) unsafe fn is_object(env: NapiEnv, value: NapiValue) -> bool {
+    if value.is_null() {
+        return false;
+    }
+    let mut t: i32 = -1;
+    (unsafe { napi_typeof(env, value, &mut t) }) == 0 && t == TYPE_OBJECT
+}
+
+/// `obj[name]` as a `u64` field of an options bag: `default` when the
+/// property is absent or not a number, and negatives clamp to 0 (every
+/// consumer treats 0 as "off"/"engine default"). `name` NUL-terminated.
+///
+/// # Safety
+/// `env` as in [`args`]; `obj` must be an object per [`is_object`];
+/// `name` must be NUL-terminated.
+pub(crate) unsafe fn get_field_u64(
+    env: NapiEnv,
+    obj: NapiValue,
+    name: &'static str,
+    default: u64,
+) -> u64 {
+    let mut prop: NapiValue = std::ptr::null_mut();
+    if unsafe { napi_get_named_property(env, obj, name.as_ptr().cast(), &mut prop) } != 0 {
+        return default;
+    }
+    let mut v: i64 = 0;
+    if unsafe { napi_get_value_int64(env, prop, &mut v) } != 0 {
+        return default;
+    }
+    if v < 0 { 0 } else { v as u64 }
 }
 
 /// Throw a JS `Error` with `msg` (a NUL-terminated literal) and return the

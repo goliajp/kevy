@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { KevyError, open, text } from "./index.js";
-import { abi, open as openRaw, version } from "./node.js";
+import { abi, open as openRaw, openWith, version } from "./node.js";
 
 test("addon smoke", () => {
   assert.equal(abi(), 1);
@@ -33,6 +33,26 @@ test("addon smoke", () => {
   assert.equal(rep.droppedBytes, 0);
   assert.equal(rep.corrupt, false);
   assert.equal(rep.quarantineCount, 0);
+  db.close();
+});
+
+// The lifecycle passthrough: openWith carries explicit options into the
+// engine (shards: 4 round-trips through SET/GET and a reopen), and
+// shutdown() is the deterministic teardown — a REAL fsync, then writes are
+// refused while reads stay available; reopen sees every pre-shutdown write.
+test("shutdown + openWith", () => {
+  const dir = join(mkdtempSync(join(tmpdir(), "kevy-node-")), "data");
+  let db = openWith(dir, { shards: 4 });
+  assert.equal(db.cmd("SET", "k", "v"), "OK");
+  db.shutdown();
+  db.shutdown(); // idempotent
+  assert.throws(() => db.setScalar("late", "x")); // writes refused
+  assert.equal(text(db.cmd("GET", "k")), "v"); // reads stay available
+  db.close();
+
+  db = openWith(dir, { shards: 4 });
+  assert.equal(text(db.cmd("GET", "k")), "v"); // pre-shutdown data survived
+  assert.equal(db.cmd("GET", "late"), null); // the refused write does not exist
   db.close();
 });
 

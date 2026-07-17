@@ -2,15 +2,15 @@
 //!
 //! A thin shell over `kevy-ffi` (linked as a plain Rust rlib, not over the
 //! C ABI): the addon exports `napi_register_module_v1`, which Node calls on
-//! `process.dlopen`, and registers the fourteen functions bindings/node/node.js
+//! `process.dlopen`, and registers the sixteen functions bindings/node/node.js
 //! wraps into the same API bun:ffi serves under Bun. Two decisions keep it
 //! thin, both inherited from the JNI gate:
 //!
 //! - **Buffers in, Buffer out.** The JS side packs argv into one flat
 //!   Buffer (u32-LE length prefix per argument — [`unpack_argv`]'s format),
-//!   so no array or string APIs are ever touched (the open report's plain
-//!   object is the one exception); see [`napi`] for the sixteen-symbol
-//!   surface.
+//!   so no array or string APIs are ever touched (the open report's and the
+//!   open options' plain objects are the exceptions); see [`napi`] for the
+//!   eighteen-symbol surface.
 //! - **Handles are externals.** `*mut KevyDb` / `*mut KevySub` travel as
 //!   opaque externals with no finalizer — close is explicit, exactly like
 //!   the bun:ffi door, and the JS wrapper nulls its reference after.
@@ -22,13 +22,14 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::null_mut;
 
-use kevy_ffi::{KevyBuf, KevyDb, KevyOpenReport, KevySub, unpack_argv};
+use kevy_ffi::{KevyBuf, KevyDb, KevyOpenOptions, KevyOpenReport, KevySub, unpack_argv};
 
 mod napi;
 use napi::{
-    NapiCallback, NapiCallbackInfo, NapiEnv, NapiValue, args, buffer_bytes, external_ptr, get_i64,
-    make_buffer, make_external, make_object, napi_create_function, napi_create_string_utf8,
-    napi_create_uint32, napi_set_named_property, null, set_bool, set_num, throw, undefined,
+    NapiCallback, NapiCallbackInfo, NapiEnv, NapiValue, args, buffer_bytes, external_ptr,
+    get_field_u64, get_i64, is_object, make_buffer, make_external, make_object,
+    napi_create_function, napi_create_string_utf8, napi_create_uint32, napi_set_named_property,
+    null, set_bool, set_num, throw, undefined,
 };
 
 const fn empty_buf() -> KevyBuf {
@@ -106,6 +107,67 @@ unsafe extern "C" fn js_open_mem(env: NapiEnv, _info: NapiCallbackInfo) -> NapiV
             return unsafe { throw(env, "kevy: open failed\0") };
         }
         unsafe { make_external(env, db) }
+    }))
+    .unwrap_or(null_mut())
+}
+
+/// Read `{fsync, shards, rewritePct, rewriteMinSize, rewriteBytes,
+/// rewriteIntervalSecs}` off a plain options object into the C-ABI options
+/// struct. Every field is optional: absent / non-number keeps the exact
+/// default `kevy_open` uses. A non-object (`null` / `undefined` / a missing
+/// argument) is `None` — "no options", a NULL `opts` on the ABI.
+///
+/// # Safety
+/// `env` must be the current callback's env.
+unsafe fn read_open_options(env: NapiEnv, v: NapiValue) -> Option<KevyOpenOptions> {
+    if !unsafe { is_object(env, v) } {
+        return None;
+    }
+    Some(KevyOpenOptions {
+        fsync: unsafe { get_field_u64(env, v, "fsync\0", 0) } as u8,
+        shards: unsafe { get_field_u64(env, v, "shards\0", 0) } as u32,
+        rewrite_pct: unsafe { get_field_u64(env, v, "rewritePct\0", 100) } as u32,
+        rewrite_min_size: unsafe { get_field_u64(env, v, "rewriteMinSize\0", 64 * 1024 * 1024) },
+        rewrite_bytes: unsafe { get_field_u64(env, v, "rewriteBytes\0", 0) },
+        rewrite_interval_secs: unsafe { get_field_u64(env, v, "rewriteIntervalSecs\0", 0) },
+    })
+}
+
+/// `openWith(dirOrNull, optsOrNull)` — [`js_open`] with explicit
+/// durability/rewrite policy: durable at the Buffer path when `dir` is one,
+/// in-memory when it is `null`/`undefined`. `opts` is a plain object read by
+/// [`read_open_options`]; `null` means `kevy_open`'s exact defaults.
+unsafe extern "C" fn js_open_with(env: NapiEnv, info: NapiCallbackInfo) -> NapiValue {
+    catch_unwind(AssertUnwindSafe(|| {
+        let [dir, opts] = unsafe { args::<2>(env, info) };
+        let d = unsafe { buffer_bytes(env, dir) };
+        let o = unsafe { read_open_options(env, opts) };
+        let opts_ptr = o.as_ref().map_or(std::ptr::null(), |o| o as *const KevyOpenOptions);
+        let (ptr, len) = d.map_or((std::ptr::null(), 0), |b| (b.as_ptr(), b.len()));
+        let db = unsafe { kevy_ffi::kevy_open_with(ptr, len, opts_ptr) };
+        if db.is_null() {
+            return unsafe { throw(env, "kevy: openWith failed\0") };
+        }
+        unsafe { make_external(env, db) }
+    }))
+    .unwrap_or(null_mut())
+}
+
+/// `shutdown(db)` — flush every shard's AOF (a REAL fsync), write the feed
+/// continuity marker, then refuse every later write; reads stay available,
+/// so the handle stays live (close it separately). Idempotent — the
+/// deterministic teardown for a signal handler. `undefined` on success;
+/// misuse (-1) and an I/O failure (-2 — the store is still usable; retry
+/// or exit) both throw.
+unsafe extern "C" fn js_shutdown(env: NapiEnv, info: NapiCallbackInfo) -> NapiValue {
+    catch_unwind(AssertUnwindSafe(|| {
+        let [ext] = unsafe { args::<1>(env, info) };
+        let db: *mut KevyDb = unsafe { external_ptr(env, ext) };
+        match unsafe { kevy_ffi::kevy_shutdown(db) } {
+            0 => unsafe { undefined(env) },
+            -1 => unsafe { throw(env, "kevy: kevy_shutdown misuse\0") },
+            _ => unsafe { throw(env, "kevy: shutdown I/O failure (store still usable; retry)\0") },
+        }
     }))
     .unwrap_or(null_mut())
 }
@@ -370,9 +432,11 @@ unsafe extern "C" fn js_abi(env: NapiEnv, _info: NapiCallbackInfo) -> NapiValue 
 /// Called by Node only; `env` / `exports` are live for this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn napi_register_module_v1(env: NapiEnv, exports: NapiValue) -> NapiValue {
-    const FNS: [(&str, NapiCallback); 14] = [
+    const FNS: [(&str, NapiCallback); 16] = [
         ("open\0", js_open),
         ("openMem\0", js_open_mem),
+        ("openWith\0", js_open_with),
+        ("shutdown\0", js_shutdown),
         ("close\0", js_close),
         ("cmd\0", js_cmd),
         ("get\0", js_get),
