@@ -353,17 +353,18 @@ fn open_report_surfaces_drops_corruption_and_quarantine() {
         assert!(!clean.corrupt);
         assert!(clean.quarantine_paths.is_empty());
     }
-    // Damage the AOF at a frame boundary: a frame whose bulk header lies
-    // about its payload length (the mailrs incident's exact parser error),
-    // followed by a WELL-FORMED frame that the stop drops — random interior
-    // byte-flips get absorbed by RESP's lenient inline-command form and
-    // don't reliably produce a corrupt verdict.
+    // Damage the AOF at a record boundary: a v2 record whose length is
+    // plausible but whose checksum lies (the bit-rot shape), followed by
+    // more bytes that the stop drops — the v2 walk classifies it corrupt
+    // and the open must quarantine everything from there.
     let aof = dir.join("aof-0.aof");
     {
         use std::io::Write;
         let mut f = std::fs::OpenOptions::new().append(true).open(&aof).unwrap();
-        f.write_all(b"*3\r\n$3\r\nSET\r\n$1\r\nq\r\n$9\r\nab\r\n").unwrap();
-        f.write_all(b"*3\r\n$3\r\nSET\r\n$4\r\ngood\r\n$4\r\ntail\r\n").unwrap();
+        f.write_all(&4u32.to_le_bytes()).unwrap(); // len 4
+        f.write_all(&0u32.to_le_bytes()).unwrap(); // wrong crc
+        f.write_all(b"abcd").unwrap();
+        f.write_all(b"trailing-good-bytes-lost-with-the-bad-record").unwrap();
     }
     let s = Store::open(
         Config::default().with_persist(&dir).with_ttl_reaper_manual(),

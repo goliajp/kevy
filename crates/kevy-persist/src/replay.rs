@@ -57,13 +57,11 @@ pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<Repla
     // Replay wall-clock — AOF is an unbounded resource, so its replay time is
     // too; surfacing it gives operators a baseline to watch it grow.
     let start = std::time::Instant::now();
-    // Skip the 9-byte AOF_MAGIC header if present. Legacy bare-RESP
-    // AOFs (pre-1.2.0) parse identically from position 0. Future
-    // format bumps should add a version check here.
-    let mut pos = if data.len() >= crate::aof::AOF_MAGIC.len()
-        && &data[..crate::aof::AOF_MAGIC.len()] == crate::aof::AOF_MAGIC
-    {
-        crate::aof::AOF_MAGIC.len()
+    // Format sniff: v2 (checksummed record envelopes), v1 (`KEVYAOF1\n`),
+    // or legacy bare-RESP (pre-1.2.0, parses from position 0).
+    let is_v2 = data.starts_with(crate::record::AOF2_MAGIC);
+    let mut pos = if is_v2 || data.starts_with(crate::aof::AOF_MAGIC) {
+        crate::record::AOF2_MAGIC.len()
     } else {
         0
     };
@@ -72,14 +70,37 @@ pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<Repla
         if pos >= total {
             break ReplayStop::Clean;
         }
-        match kevy_resp::parse_command(&data[pos..]) {
-            Ok(Some((args, consumed))) => {
-                apply(args);
-                pos += consumed;
-                replayed += 1;
+        if is_v2 {
+            match crate::record::next_record(&data, pos) {
+                crate::record::RecordStep::Ok { payload, consumed } => {
+                    match kevy_resp::parse_command(payload) {
+                        // A record must hold exactly one complete command —
+                        // anything else means the envelope lies.
+                        Ok(Some((args, used))) if used == payload.len() => {
+                            apply(args);
+                            pos += consumed;
+                            replayed += 1;
+                        }
+                        _ => break ReplayStop::CorruptFrame(String::from(
+                            "checksummed record does not hold exactly one command",
+                        )),
+                    }
+                }
+                crate::record::RecordStep::Truncated => break ReplayStop::TruncatedTail,
+                crate::record::RecordStep::Corrupt(why) => {
+                    break ReplayStop::CorruptFrame(String::from(why));
+                }
             }
-            Ok(None) => break ReplayStop::TruncatedTail,
-            Err(e) => break ReplayStop::CorruptFrame(format!("{e:?}")),
+        } else {
+            match kevy_resp::parse_command(&data[pos..]) {
+                Ok(Some((args, consumed))) => {
+                    apply(args);
+                    pos += consumed;
+                    replayed += 1;
+                }
+                Ok(None) => break ReplayStop::TruncatedTail,
+                Err(e) => break ReplayStop::CorruptFrame(format!("{e:?}")),
+            }
         }
     };
     let elapsed_ms = start.elapsed().as_millis();
@@ -126,6 +147,21 @@ pub struct ReplayReport {
 /// stop and silently orphan them). Uses the same parser as
 /// [`replay_aof`], so the truncation point and the replay stop point can
 /// never disagree. A missing file is length 0.
+/// Which encoding the file at `path` speaks, by magic sniff. Missing or
+/// short files count as V2 (they're about to be created fresh).
+pub(crate) fn sniff_format(path: &Path) -> io::Result<crate::AofFormat> {
+    let mut head = [0u8; 9];
+    match File::open(path) {
+        Ok(mut f) => match f.read_exact(&mut head) {
+            Ok(()) if head == *crate::record::AOF2_MAGIC => Ok(crate::AofFormat::V2),
+            Ok(()) => Ok(crate::AofFormat::V1),
+            Err(_) => Ok(crate::AofFormat::V2),
+        },
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(crate::AofFormat::V2),
+        Err(e) => Err(e),
+    }
+}
+
 pub(crate) fn valid_prefix_len_of_file(path: &Path) -> io::Result<u64> {
     let mut data = Vec::new();
     match File::open(path) {
@@ -142,16 +178,22 @@ pub(crate) fn valid_prefix_len_of_file(path: &Path) -> io::Result<u64> {
 /// the `replay_aof` parse loop, minus the `apply`.
 fn valid_prefix_len(data: &[u8]) -> usize {
     let total = data.len();
-    let mut pos = if data.len() >= crate::aof::AOF_MAGIC.len()
-        && &data[..crate::aof::AOF_MAGIC.len()] == crate::aof::AOF_MAGIC
-    {
-        crate::aof::AOF_MAGIC.len()
+    let is_v2 = data.starts_with(crate::record::AOF2_MAGIC);
+    let mut pos = if is_v2 || data.starts_with(crate::aof::AOF_MAGIC) {
+        crate::record::AOF2_MAGIC.len()
     } else {
         0
     };
     loop {
         if pos >= total {
             break;
+        }
+        if is_v2 {
+            match crate::record::next_record(data, pos) {
+                crate::record::RecordStep::Ok { consumed, .. } => pos += consumed,
+                _ => break,
+            }
+            continue;
         }
         match kevy_resp::parse_command(&data[pos..]) {
             Ok(Some((_, consumed))) => pos += consumed,

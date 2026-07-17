@@ -60,6 +60,7 @@
 
 pub(crate) mod addr;
 pub(crate) mod ffi;
+pub mod checksum;
 mod signal;
 mod socket;
 mod waker;
