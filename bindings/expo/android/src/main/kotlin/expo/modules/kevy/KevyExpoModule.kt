@@ -39,6 +39,26 @@ class KevyExpoModule : Module() {
             dbs.remove(id)?.let { KevyNative.close(it) }
         }
 
+        // Deterministic teardown: fsync all shards, then refuse later
+        // writes (reads stay). Idempotent.
+        Function("shutdown") { id: Int ->
+            if (KevyNative.shutdown(db(id)) != 0) {
+                throw IllegalStateException("kevy: shutdown failed")
+            }
+        }
+
+        // open with explicit durability/rewrite policy; opts = [fsync,
+        // shards, rewritePct, rewriteMinSize, rewriteBytes,
+        // rewriteIntervalSecs] (the TS layer packs it).
+        Function("openWith") { dir: String?, opts: List<Double> ->
+            val packed = LongArray(6) { opts[it].toLong() }
+            val h = KevyNative.openWith(dir?.toByteArray(), packed)
+            if (h == 0L) throw IllegalStateException("kevy: open failed")
+            val id = claim()
+            dbs[id] = h
+            id
+        }
+
         Function("cmd") { id: Int, packed: ByteArray ->
             KevyNative.cmd(db(id), packed)
                 ?: throw IllegalStateException("kevy: kevy_cmd misuse")

@@ -58,6 +58,36 @@ public class KevyExpoModule: Module {
             }
         }
 
+        // Deterministic teardown: fsync all shards, then refuse later
+        // writes (reads stay). Idempotent.
+        Function("shutdown") { (id: Int32) in
+            guard let db = self.dbs[id] else { throw Self.fail("kevy: closed handle") }
+            guard kevy_shutdown(db) == 0 else {
+                throw Self.fail("kevy: shutdown failed")
+            }
+        }
+
+        // open with explicit durability/rewrite policy; opts is the
+        // [fsync, shards, rewritePct, rewriteMinSize, rewriteBytes,
+        // rewriteIntervalSecs] array the TS layer packs.
+        Function("openWith") { (dir: String?, opts: [Double]) -> Int32 in
+            var raw = KevyOpenOptions(
+                fsync: UInt8(opts[0]), shards: UInt32(opts[1]),
+                rewrite_pct: UInt32(opts[2]), rewrite_min_size: UInt64(opts[3]),
+                rewrite_bytes: UInt64(opts[4]), rewrite_interval_secs: UInt64(opts[5]))
+            let db: OpaquePointer?
+            if let dir {
+                let bytes = Array(dir.utf8)
+                db = bytes.withUnsafeBufferPointer { kevy_open_with($0.baseAddress, $0.count, &raw) }
+            } else {
+                db = kevy_open_with(nil, 0, &raw)
+            }
+            guard let db else { throw Self.fail("kevy: open failed") }
+            let id = self.claim()
+            self.dbs[id] = db
+            return id
+        }
+
         Function("cmd") { (id: Int32, packed: Data) -> Data in
             guard let db = self.dbs[id] else { throw Self.fail("kevy: closed handle") }
             return try Self.runCmd(db, packed)
