@@ -162,6 +162,37 @@ fn pubsub_ack_message_and_pattern_frames() {
 }
 
 #[test]
+fn open_with_options_and_shutdown_lifecycle() {
+    // In-memory open with explicit options (4 shards, always-fsync — the
+    // fsync knob is inert without a dir, but must not break the open).
+    let opts = KevyOpenOptions {
+        fsync: 1,
+        shards: 4,
+        rewrite_pct: 0,
+        rewrite_min_size: 0,
+        rewrite_bytes: 0,
+        rewrite_interval_secs: 0,
+    };
+    let db = unsafe { kevy_open_with(std::ptr::null(), 0, &raw const opts) };
+    assert!(!db.is_null());
+    assert_eq!(cmd(db, &[b"SET", b"k", b"v"]), b"+OK\r\n");
+
+    // Shutdown: writes refuse (an -ERR reply through the cmd lane), reads
+    // keep answering, and the call is idempotent.
+    assert_eq!(unsafe { kevy_shutdown(db) }, 0);
+    assert_eq!(unsafe { kevy_shutdown(db) }, 0);
+    let reply = cmd(db, &[b"SET", b"k", b"w"]);
+    assert!(reply.starts_with(b"-"), "post-shutdown write must error, got {:?}",
+        String::from_utf8_lossy(&reply));
+    assert_eq!(cmd(db, &[b"GET", b"k"]), b"$1\r\nv\r\n");
+    assert_eq!(unsafe { kevy_shutdown(std::ptr::null_mut()) }, -1);
+    unsafe { kevy_close(db) };
+
+    // dir=null with a non-zero length is misuse, not an in-memory open.
+    assert!(unsafe { kevy_open_with(std::ptr::null(), 3, &raw const opts) }.is_null());
+}
+
+#[test]
 fn open_report_is_zeroed_for_a_clean_memory_open() {
     let db = kevy_open_mem();
     let mut rep = KevyOpenReport {

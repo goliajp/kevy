@@ -46,4 +46,28 @@ void main() {
       db.close();
     }
   }, skip: skip);
+
+  lifecycleTests(skip);
+}
+
+// The lifecycle pair over the real Dart API: openWith round-trips its
+// options (a durable 2-shard store works), shutdown refuses writes while
+// reads stay, and a reopen sees every pre-shutdown write.
+void lifecycleTests(Object? skip) {
+  test('openWith + shutdown lifecycle', () {
+    final dir =
+        '${Directory.systemTemp.path}/kevy-flutter-lifecycle-${DateTime.now().microsecondsSinceEpoch}';
+    var db = KevyDb.openWith(dir, shards: 2, rewritePct: 0);
+    db.setText('k', 'v');
+    db.shutdown();
+    expect(() => db.setText('late', 'x'), throwsA(isA<KevyError>()));
+    expect(db.getText('k'), 'v', reason: 'reads stay available');
+    db.shutdown(); // idempotent
+    db.close();
+    db = KevyDb.open(dir);
+    expect(db.getText('k'), 'v');
+    expect(db.getText('late'), null);
+    db.close();
+    Directory(dir).deleteSync(recursive: true);
+  }, skip: skip);
 }

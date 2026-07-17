@@ -64,6 +64,8 @@ public:
   // The boot-replay verdict of this instance's open (zeros for the ctor's
   // in-memory db; meaningful after openAt).
   KevyOpenStats openReport() override;
+  // Deterministic teardown: fsync all shards, refuse later writes.
+  void shutdown() override;
 
   void subscribe(const std::string& channel) override;
   double publish(const std::string& channel, const std::shared_ptr<ArrayBuffer>& payload) override;
