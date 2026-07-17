@@ -253,6 +253,34 @@ jobs:
           cargo check --target ${{ matrix.target }} -p kevy-embedded
           cargo check --target ${{ matrix.target }} -p kevy-wasm
 
+  # ───────────── crashgate: the crash-consistency contract, executed ─────────────
+  # SIGKILL matrix + injected torn-tail / mid-file / payload damage against
+  # the loss-bound and no-black-hole invariants (durability-trust arc T1).
+  # REDpending cells (quarantine / integrity / resync) don't fail the build
+  # until their trains land — PENDING_STRICT=1 arms them at arc finish.
+  crashgate:
+    name: crashgate (crash-consistency contract)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        run: rustup toolchain install stable --no-self-update
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-crashgate-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-crashgate-
+
+      - name: Run crashgate
+        run: bash bench/crashgate.sh
+
   # ───────────── iot: musl cross targets + no_std core + feature archetypes ─────────────
   # The embedded IoT cut. Three-target check matrix (Tier A
   # musl pair + the thumbv7em no_std proof) and the six kevy-embedded
