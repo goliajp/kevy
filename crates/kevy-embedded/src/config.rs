@@ -68,6 +68,10 @@ pub struct Config {
     /// Time-based auto-rewrite trigger in seconds (0 = off): compact at
     /// least this often while the log grows.
     pub auto_aof_rewrite_interval_secs: u64,
+    /// Best-effort replay: on a corrupt v2 record, hop to the next valid
+    /// record (length + CRC + parse all agree) instead of dropping the
+    /// good tail behind it. Default false (strict).
+    pub replay_resync: bool,
     /// Optional push-style metric callback (replay / rewrite events). Default
     /// `None`. Set via [`Self::with_metric_sink`]; not part of `Debug` output.
     #[cfg(feature = "persist")]
@@ -157,6 +161,7 @@ impl Default for Config {
             auto_aof_rewrite_min_size: 64 * 1024 * 1024,
             auto_aof_rewrite_bytes: 0,
             auto_aof_rewrite_interval_secs: 0,
+            replay_resync: false,
             #[cfg(feature = "persist")]
             metric_sink: None,
             shards: 1,
@@ -248,6 +253,20 @@ impl Config {
     #[must_use]
     pub fn with_auto_rewrite_interval(mut self, interval: std::time::Duration) -> Self {
         self.auto_aof_rewrite_interval_secs = interval.as_secs();
+        self
+    }
+
+    /// Best-effort replay: recover the good records BEHIND a corrupt v2
+    /// record instead of dropping them (a production incident lost a
+    /// 231 MB well-formed tail over one bad frame). The skip is
+    /// deterministic — length + CRC32C + an exactly-one-command parse must
+    /// all agree before a record is trusted — and the open still reports
+    /// `corrupt` so hosts still alert. Strict (default false) remains the
+    /// conservative choice: nothing after the first bad byte is trusted.
+    #[cfg(feature = "persist")]
+    #[must_use]
+    pub fn with_replay_resync(mut self, resync: bool) -> Self {
+        self.replay_resync = resync;
         self
     }
 

@@ -93,3 +93,33 @@ pub(crate) fn next_record(buf: &[u8], pos: usize) -> RecordStep<'_> {
     }
     RecordStep::Ok { payload, consumed: RECORD_HEADER + len as usize }
 }
+
+/// Scan forward from `from` for the next offset that starts a valid,
+/// checksummed, exactly-one-command record — the deterministic resync a
+/// corrupt record cannot defeat: a false accept needs a byte position
+/// whose length field fits, whose CRC32C matches (~2⁻³²), AND whose
+/// payload parses as one complete command. Returns `None` when only a
+/// torn tail (or nothing) remains.
+pub(crate) fn resync_scan(buf: &[u8], from: usize) -> Option<usize> {
+    let mut q = from;
+    while q < buf.len() {
+        match next_record(buf, q) {
+            RecordStep::Ok { payload, .. } => {
+                if matches!(
+                    kevy_resp::parse_command(payload),
+                    Ok(Some((_, used))) if used == payload.len()
+                ) {
+                    return Some(q);
+                }
+                q += 1;
+            }
+            // Truncated here does NOT mean the tail is torn: a garbage
+            // window can fake a plausible length that runs past the end
+            // (seen in the first test run — an ASCII byte as the length's
+            // high byte reads as ~600 MB). Keep scanning; the loop bound
+            // is the real end.
+            RecordStep::Truncated | RecordStep::Corrupt => q += 1,
+        }
+    }
+    None
+}

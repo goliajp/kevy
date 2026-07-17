@@ -134,6 +134,16 @@ impl Aof {
     /// kevy-managed. Pre-existing files (legacy bare-RESP or already-
     /// magic'd) are left untouched.
     pub fn open(path: &Path, fsync: Fsync) -> io::Result<Self> {
+        Self::open_with_repair(path, fsync, false)
+    }
+
+    /// [`Self::open`] with the repair policy explicit: under `resync`,
+    /// interior corrupt regions are left in place (the resync replay hops
+    /// them deterministically each boot until a rewrite compacts them
+    /// away) and only the bytes after the LAST recoverable record are
+    /// quarantined + truncated — so a mid-file corruption no longer costs
+    /// the good tail behind it.
+    pub fn open_with_repair(path: &Path, fsync: Fsync, resync: bool) -> io::Result<Self> {
         let mut file = OpenOptions::new().create(true).append(true).open(path)?;
         let mut size = file.metadata().map_or(0, |m| m.len());
         let mut quarantined = None;
@@ -160,7 +170,7 @@ impl Aof {
             // MID-file the region is mostly well-formed frames (a real
             // incident dropped 231 MB over a few-KB bad frame), and the
             // forensic copy is the only way to ever get them back.
-            let valid = crate::replay::valid_prefix_len_of_file(path)?;
+            let valid = crate::replay::valid_prefix_len_of_file(path, resync)?;
             if valid < size {
                 let q = crate::aof_util::quarantine_dropped_tail(path, valid)?;
                 file.set_len(valid)?;

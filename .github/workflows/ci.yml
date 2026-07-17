@@ -279,7 +279,9 @@ jobs:
             cargo-crashgate-
 
       - name: Run crashgate
-        run: bash bench/crashgate.sh
+        # Every cell green as of T6 (resync) — pending mode is over; any
+        # red is now a build failure.
+        run: PENDING_STRICT=1 bash bench/crashgate.sh
 
   # ───────────── iot: musl cross targets + no_std core + feature archetypes ─────────────
   # The embedded IoT cut. Three-target check matrix (Tier A

@@ -3,7 +3,7 @@
 //! the public re-export in lib.rs keeps the API surface unchanged.
 
 use std::fs::File;
-use std::io::{self, Read};
+use std::io::{self, Read, Seek};
 use std::path::Path;
 
 use kevy_resp::Argv;
@@ -47,7 +47,7 @@ pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<Repla
     // would have OOM'd. v1 (legacy) keeps the whole-file read; its first
     // rewrite upgrades it out of that world.
     if matches!(sniff_format(path)?, crate::AofFormat::V2) {
-        return stream_v2(path, Some(&mut apply));
+        return stream_v2(path, Some(&mut apply), false);
     }
     let mut data = Vec::new();
     match File::open(path) {
@@ -94,7 +94,24 @@ pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<Repla
         replayed_bytes: pos as u64,
         dropped_bytes: (total - pos) as u64,
         corrupt,
+        resynced_ranges: Vec::new(),
     })
+}
+
+/// [`replay_aof`], best-effort: on a corrupt v2 record, scan forward for
+/// the next valid record (length + CRC + exactly-one-command all agree —
+/// a false accept needs a ~2⁻³² checksum collision AND a clean parse) and
+/// keep replaying. The skipped ranges come back in
+/// [`ReplayReport::resynced_ranges`]; `corrupt` stays true so the caller
+/// still alerts. A real incident dropped a 231 MB tail of well-formed
+/// frames over one bad record — this is the lane that gets them back.
+/// v1 files have no checksums to anchor on: they replay strictly here
+/// too (their first rewrite upgrades them into resync's world).
+pub fn replay_aof_resync<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<ReplayReport> {
+    if matches!(sniff_format(path)?, crate::AofFormat::V2) {
+        return stream_v2(path, Some(&mut apply), true);
+    }
+    replay_aof(path, apply)
 }
 
 /// What one [`replay_aof`] pass restored — and, crucially, what it could
@@ -117,6 +134,10 @@ pub struct ReplayReport {
     /// True when the stop was a corrupt frame (vs a clean end or a
     /// partial trailing frame).
     pub corrupt: bool,
+    /// Byte ranges resync skipped over ([`replay_aof_resync`] only):
+    /// each is a corrupt region between two valid records. Empty under
+    /// the strict replay.
+    pub resynced_ranges: Vec<(u64, u64)>,
 }
 
 /// Byte length of the AOF at `path` up to and including the last
@@ -153,6 +174,7 @@ pub(crate) fn sniff_format(path: &Path) -> io::Result<crate::AofFormat> {
 fn stream_v2(
     path: &Path,
     mut apply: Option<&mut dyn FnMut(Argv)>,
+    resync: bool,
 ) -> io::Result<ReplayReport> {
     use std::io::BufReader;
     let file = match File::open(path) {
@@ -214,8 +236,36 @@ fn stream_v2(
             }
         }
     };
-    let elapsed_ms = start.elapsed().as_millis();
     let corrupt = matches!(stop, ReplayStop::CorruptFrame(_));
+    let mut ranges: Vec<(u64, u64)> = Vec::new();
+    let mut stop = stop;
+    if resync && corrupt {
+        // Corruption is the rare path and the rescan needs random access:
+        // slice-load the remainder (O(damaged remainder) memory, only on
+        // damaged files) and hop from valid record to valid record.
+        let mut rest = Vec::new();
+        let mut f = File::open(path)?;
+        f.seek(io::SeekFrom::Start(pos))?;
+        f.read_to_end(&mut rest)?;
+        let (local_end, extra, ended_torn) =
+            resync_slice(&rest, pos, &mut apply, &mut ranges);
+        replayed += extra;
+        pos += local_end;
+        stop = if ended_torn { ReplayStop::TruncatedTail } else { ReplayStop::Clean };
+        // Re-tag for the summary: the file WAS corrupt, but the tail came
+        // back — the WARN below carries the skipped ranges.
+        if !ranges.is_empty() {
+            eprintln!(
+                "kevy WARN: AOF {} resync skipped {} corrupt range(s) totalling {} bytes \
+                 and recovered the records after them; the bad bytes stay in place \
+                 until the next rewrite compacts them away.",
+                path.display(),
+                ranges.len(),
+                ranges.iter().map(|(a, b)| b - a).sum::<u64>(),
+            );
+        }
+    }
+    let elapsed_ms = start.elapsed().as_millis();
     if apply.is_some() {
         log_replay_summary(
             path,
@@ -233,7 +283,60 @@ fn stream_v2(
         replayed_bytes: pos,
         dropped_bytes: total.saturating_sub(pos),
         corrupt,
+        resynced_ranges: ranges,
     })
+}
+
+/// The resync walk over the damaged remainder (`rest` starts at absolute
+/// offset `base`, positioned AT the first corrupt record). Hops to each
+/// next valid record via [`crate::record::resync_scan`], applies the good
+/// runs, and records every skipped `(abs_start, abs_end)` range. Returns
+/// (local end of the last good record, records applied, ended-torn?).
+fn resync_slice(
+    rest: &[u8],
+    base: u64,
+    apply: &mut Option<&mut dyn FnMut(Argv)>,
+    ranges: &mut Vec<(u64, u64)>,
+) -> (u64, u64, bool) {
+    let mut good_end = 0usize; // local offset after the last applied record
+    let mut scan_from = 1usize; // the corrupt record starts at 0
+    let mut applied = 0u64;
+    loop {
+        let Some(g) = crate::record::resync_scan(rest, scan_from) else {
+            // Nothing valid ahead — the remainder past good_end is either
+            // the corrupt region + torn tail or empty.
+            return (good_end as u64, applied, true);
+        };
+        ranges.push((base + good_end as u64, base + g as u64));
+        let mut w = g;
+        loop {
+            match crate::record::next_record(rest, w) {
+                crate::record::RecordStep::Ok { payload, consumed } => {
+                    match kevy_resp::parse_command(payload) {
+                        Ok(Some((args, used))) if used == payload.len() => {
+                            if let Some(f) = apply.as_deref_mut() {
+                                f(args);
+                            }
+                            w += consumed;
+                            applied += 1;
+                            good_end = w;
+                        }
+                        _ => {
+                            scan_from = w + 1;
+                            break;
+                        }
+                    }
+                }
+                crate::record::RecordStep::Truncated => {
+                    return (good_end as u64, applied, w < rest.len());
+                }
+                crate::record::RecordStep::Corrupt => {
+                    scan_from = w + 1;
+                    break;
+                }
+            }
+        }
+    }
 }
 
 /// `read_exact` that reports a clean-vs-partial short read instead of
@@ -252,11 +355,13 @@ fn read_fully<R: Read>(r: &mut R, buf: &mut [u8]) -> io::Result<usize> {
     Ok(n)
 }
 
-pub(crate) fn valid_prefix_len_of_file(path: &Path) -> io::Result<u64> {
+pub(crate) fn valid_prefix_len_of_file(path: &Path, resync: bool) -> io::Result<u64> {
     // v2 streams (O(largest record) memory — the same walk replay does, so
-    // the truncation point and the replay stop can never disagree).
+    // the truncation point and the replay stop can never disagree). Under
+    // resync the point is "after the LAST recoverable record", so interior
+    // corruption stays put and only trailing garbage is repaired away.
     if matches!(sniff_format(path)?, crate::AofFormat::V2) {
-        return Ok(stream_v2(path, None)?.replayed_bytes);
+        return Ok(stream_v2(path, None, resync)?.replayed_bytes);
     }
     let mut data = Vec::new();
     match File::open(path) {

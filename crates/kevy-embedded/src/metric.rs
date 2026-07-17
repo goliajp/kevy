@@ -27,6 +27,9 @@ pub struct OpenReport {
     /// Quarantine files written while repairing dropped tails (one per
     /// affected shard).
     pub quarantine_paths: Vec<PathBuf>,
+    /// Bytes the resync replay hopped over (corrupt regions between valid
+    /// records, summed across shards). Zero under strict replay.
+    pub resynced_bytes: u64,
 }
 
 /// A persistence event worth observing. More variants may be added; match

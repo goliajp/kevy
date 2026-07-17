@@ -253,6 +253,11 @@ fn build_runtime(cfg: &kevy_config::Config, commands: KevyCommands) -> Runtime<K
             cfg.persistence.auto_aof_rewrite_percentage,
             cfg.persistence.auto_aof_rewrite_min_size,
         )
+        .with_auto_rewrite_bytes(cfg.persistence.auto_aof_rewrite_bytes)
+        .with_auto_rewrite_interval_secs(cfg.persistence.auto_aof_rewrite_interval_secs)
+        // Boot-time only: replay happens before the first tick, so the
+        // live-config push (which lands at that tick) is too late for it.
+        .with_replay_resync(cfg.persistence.replay_resync)
         .with_advanced(
             cfg.advanced.spin_limit,
             cfg.advanced.park_timeout_ms,

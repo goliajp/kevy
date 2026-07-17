@@ -17,16 +17,20 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let dir = args.next().expect("usage: crash_check <dir> [flags]");
     let mut shards = 1usize;
-    let (mut feed, mut mark) = (false, false);
+    let (mut feed, mut mark, mut resync) = (false, false, false);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--shards" => shards = args.next().unwrap().parse().unwrap(),
             "--feed" => feed = true,
             "--mark" => mark = true,
+            "--resync" => resync = true,
             other => panic!("unknown flag {other}"),
         }
     }
-    let mut cfg = Config::default().with_persist(&dir).with_shards(shards);
+    let mut cfg = Config::default()
+        .with_persist(&dir)
+        .with_shards(shards)
+        .with_replay_resync(resync);
     if feed {
         cfg = cfg.with_feed(16 << 20);
     }

@@ -199,4 +199,12 @@ impl<C: Commands> Runtime<C> {
         self.auto_aof_rewrite_interval_secs = interval_secs;
         self
     }
+
+    /// Best-effort boot replay: recover the good records behind a corrupt
+    /// v2 AOF record instead of dropping them. Default false (strict).
+    #[must_use]
+    pub fn with_replay_resync(mut self, resync: bool) -> Self {
+        self.replay_resync = resync;
+        self
+    }
 }

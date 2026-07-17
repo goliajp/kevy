@@ -430,3 +430,60 @@ fn v1_file_upgrades_on_rewrite_and_v2_detects_bit_rot() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+// The 231MB-incident shape in miniature: one bad record mid-file, a pile
+// of well-formed records behind it. Strict replay drops the good tail
+// (prefix-only); replay_aof_resync hops the bad record and gets every
+// good record back, reporting the skipped range — recovery goes from
+// prefix-only to all-but-the-bad-frame.
+#[test]
+fn resync_recovers_the_good_tail_behind_a_corrupt_record() {
+    let path = temp_aof("resync");
+    {
+        let mut aof = Aof::open(&path, Fsync::No).unwrap();
+        for i in 0..10 {
+            aof.append(&cmd(&[b"SET", format!("pre{i}").as_bytes(), b"v"])).unwrap();
+        }
+    }
+    let before_bad = std::fs::metadata(&path).unwrap().len();
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        // A structurally-plausible record whose checksum lies.
+        f.write_all(&12u32.to_le_bytes()).unwrap();
+        f.write_all(&0xDEAD_BEEFu32.to_le_bytes()).unwrap();
+        f.write_all(b"garbagegarba").unwrap();
+    }
+    {
+        // Hand-append the post-damage records (a normal open would repair
+        // the file first and destroy the setup).
+        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        let mut scratch = Vec::new();
+        for i in 0..10 {
+            crate::record::write_record_multibulk(
+                &mut f,
+                &cmd(&[b"SET", format!("post{i}").as_bytes(), b"v"]),
+                &mut scratch,
+            )
+            .unwrap();
+        }
+    }
+
+    // Strict: the good tail is gone with the bad record.
+    let mut strict: Vec<Argv> = Vec::new();
+    let r = replay_aof(&path, |a| strict.push(a)).unwrap();
+    assert!(r.corrupt);
+    assert_eq!(strict.len(), 10, "strict replay stops at the bad record");
+
+    // Resync: everything but the bad record comes back.
+    let mut resynced: Vec<Argv> = Vec::new();
+    let r = crate::replay_aof_resync(&path, |a| resynced.push(a)).unwrap();
+    assert!(r.corrupt, "resync still reports the corruption");
+    assert_eq!(resynced.len(), 20, "the good tail is recovered");
+    assert!(resynced.iter().any(|a| a.get(1) == Some(b"post9")));
+    assert_eq!(r.resynced_ranges.len(), 1);
+    let (a, b) = r.resynced_ranges[0];
+    assert_eq!(a, before_bad, "skip starts at the bad record");
+    assert_eq!(b - a, 20, "skip covers exactly the bad record's bytes");
+    let _ = std::fs::remove_file(&path);
+}
