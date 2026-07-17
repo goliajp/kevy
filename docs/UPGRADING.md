@@ -1,8 +1,9 @@
 # Upgrading kevy
 
 Two chapters, newest first: **3.x → 4.0** (an API-definition major:
-the wire and the disk carry over, the Rust faces changed once and are
-now frozen) and **2.x → 3.x** (a capability major: everything carried
+the client wire carries over, the disk opens unchanged and upgrades
+its format on first rewrite, the Rust faces changed once and are now
+frozen) and **2.x → 3.x** (a capability major: everything carried
 over). Each chapter is explicit about what upgrades automatically,
 what needs a code change, and how to go back.
 
@@ -30,16 +31,42 @@ mechanical migration — every change below has a one-line rule.
 
 ## What is compatible automatically
 
-**Wire protocol.** RESP is unchanged, and every verb alias (`SLAVEOF`,
-`HMSET`, …) is kept. Redis clients, scripts, and `redis-cli` sessions
-work as before; the reply-parity suite against valkey 9.1 still gates
-CI.
+**Wire protocol (clients).** RESP is unchanged, and every verb alias
+(`SLAVEOF`, `HMSET`, …) is kept. Redis clients, scripts, and
+`redis-cli` sessions work as before; the reply-parity suite against
+valkey 9.1 still gates CI.
+
+**Replication wire (kevy ↔ kevy) — one clean break.** The internal
+replication handshake now carries the feed generation
+(`REPLICATE FROM <gen> <offset> ID <id>` / `+ACK <gen> <offset>`) —
+the fence that makes an offset-resume claim safe across unclean
+primary restarts. A 4.0 replica cannot handshake a 3.x primary or
+vice versa; upgrade both ends of a replication pair in one window
+(replica first, then primary, is the least-downtime order — the
+replica reconnects and full-syncs when the new primary comes up).
+This is kevy's internal protocol only; nothing Redis-client-facing
+changed.
 
 **Snapshots and AOF.** A 4.0 binary reads every 3.x (and 2.x)
-snapshot format and replays 3.x AOFs unchanged. Formats did not
-change in 4.0 — downgrade to 3.18 is equally a binary swap (unlike
-the 3.x → 2.x direction, which has a format edge; see the 2.x → 3.x
-chapter).
+snapshot format and replays 3.x AOFs unchanged — a 3.x data dir
+opens with zero migration work. The AOF *record format* is new in
+4.0 (`KEVYAOF2`: length-prefixed, CRC32C-checksummed records — see
+[persistence.md](persistence.md)), and the upgrade is lazy and
+one-way per file:
+
+- Appends to an existing 3.x (`KEVYAOF1`) file stay v1 — day one
+  after a binary swap, your files are byte-compatible with 3.18 and
+  downgrade is still a binary swap back.
+- New files, and the output of the **first rewrite** (auto-rewrite
+  or `BGREWRITEAOF`), are v2 — which 3.x cannot read. After that
+  first rewrite there is no downgrade to 3.18 on the same data dir
+  (short of replaying the keyspace out through a client).
+
+If you want to keep a 3.18 escape hatch during a canary window,
+disable auto-rewrite for the window (`auto_aof_rewrite_percentage =
+0`) and take a snapshot backup first; flip it back when the canary
+sticks — the CRC protection only starts once files are v2, so do not
+run that way longer than the canary needs.
 
 **One AOF caveat: legacy `SPOP` frames.** 4.0 makes SPOP genuinely
 random, and therefore logs (and replicates) its *effect* — `SREM key
