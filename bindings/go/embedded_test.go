@@ -82,6 +82,41 @@ func TestEmbeddedPersistenceReopen(t *testing.T) {
 	}
 }
 
+func TestEmbeddedOpenReport(t *testing.T) {
+	// A clean in-memory open has nothing to replay: all zeros.
+	mem, err := OpenMem()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mem.Close()
+	if r, err := mem.OpenReport(); err != nil || r != (OpenReport{}) {
+		t.Fatalf("mem open report=%+v %v, want zeros", r, err)
+	}
+
+	// A reopen over real files replays them — the report says how much.
+	dir := filepath.Join(t.TempDir(), "data")
+	db, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetScalar([]byte("k"), []byte("v"), 0); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	db2, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db2.Close()
+	r, err := db2.OpenReport()
+	if err != nil || r.ReplayedCommands == 0 || r.ReplayedBytes == 0 {
+		t.Fatalf("reopen report=%+v %v, want replayed > 0", r, err)
+	}
+	if r.DroppedBytes != 0 || r.Corrupt || r.QuarantineCount != 0 {
+		t.Fatalf("clean reopen flagged loss: %+v", r)
+	}
+}
+
 func mustConnectNoCleanup(t *testing.T, url string) *Client {
 	t.Helper()
 	c, err := Connect(url)

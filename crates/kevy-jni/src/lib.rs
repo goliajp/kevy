@@ -5,11 +5,11 @@
 //! matching the `static native` methods of `jp.golia.kevy.KevyNative`
 //! (bindings/android/java). Two decisions keep it thin:
 //!
-//! - **Four JNIEnv slots total.** The Java side packs argv into one flat
+//! - **A handful of JNIEnv slots.** The Java side packs argv into one flat
 //!   `byte[]` (u32-LE length prefix per argument), so the JNI surface is
-//!   `byte[]` in / `byte[]` out and only `GetArrayLength` / `NewByteArray`
-//!   / `GetByteArrayRegion` / `SetByteArrayRegion` are ever called — see
-//!   [`env`] for the hand-counted slot table.
+//!   `byte[]` in / `byte[]` out (plus a `long[]` out for the open report
+//!   and the scalar GET's signal exception) — see [`env`] for the
+//!   hand-counted slot table.
 //! - **Handles are `jlong`.** `*mut KevyDb` / `*mut KevySub` travel as
 //!   opaque longs; 0 means failure, exactly like null on the C ABI.
 //!
@@ -21,10 +21,12 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::null_mut;
 
-use kevy_ffi::{KevyBuf, KevyDb, KevySub, dispatch_packed};
+use kevy_ffi::{KevyBuf, KevyDb, KevyOpenReport, KevySub, dispatch_packed};
 
 mod env;
-use env::{JBoolean, JInt, JLong, JObject, JniEnv, get_byte_array, new_byte_array, throw};
+use env::{
+    JBoolean, JInt, JLong, JObject, JniEnv, get_byte_array, new_byte_array, new_long_array, throw,
+};
 
 /// Rebuild a store pointer from the opaque handle Java carries.
 fn db_ptr(handle: JLong) -> *mut KevyDb {
@@ -234,6 +236,55 @@ pub unsafe extern "system" fn jni_set(
         unsafe { kevy_ffi::kevy_set(db_ptr(db), k.as_ptr(), k.len(), v.as_ptr(), v.len(), ttl) }
     }))
     .unwrap_or(-2)
+}
+
+/// `KevyNative.openReport(long db)` — the boot-replay verdict of this
+/// handle's open. A `long[6]` (the simplest hand-JNI-safe shape — no object
+/// construction, one `NewLongArray` + one `SetLongArrayRegion`), laid out as:
+///
+/// | index | field                                                        |
+/// |------:|--------------------------------------------------------------|
+/// |     0 | replayed_commands — commands replayed from the AOF(s)         |
+/// |     1 | replayed_bytes — bytes actually replayed (the valid prefixes) |
+/// |     2 | elapsed_ms — wall-clock startup replay time                   |
+/// |     3 | dropped_bytes — bytes dropped past the last replayable frame  |
+/// |     4 | corrupt — 1 when any shard stopped at a corrupt frame, else 0 |
+/// |     5 | quarantine_count — quarantine files the open's repair wrote   |
+///
+/// `[3] > 0` or `[4] != 0` means the store recovered LESS than its files
+/// held (the dropped region was quarantined): a startup health check. Null
+/// on misuse. Typed ergonomics (a data class) live one floor up.
+///
+/// # Safety
+/// Called by the JVM only; `db` must be a live handle (or 0).
+#[unsafe(export_name = "Java_jp_golia_kevy_KevyNative_openReport")]
+pub unsafe extern "system" fn jni_open_report(env: JniEnv, _class: JObject, db: JLong) -> JObject {
+    catch_unwind(AssertUnwindSafe(|| {
+        if db == 0 {
+            return null_mut();
+        }
+        let mut rep = KevyOpenReport {
+            replayed_commands: 0,
+            replayed_bytes: 0,
+            elapsed_ms: 0,
+            dropped_bytes: 0,
+            corrupt: 0,
+            quarantine_count: 0,
+        };
+        if unsafe { kevy_ffi::kevy_open_report(db_ptr(db), &mut rep) } != 0 {
+            return null_mut();
+        }
+        let fields: [JLong; 6] = [
+            rep.replayed_commands as JLong,
+            rep.replayed_bytes as JLong,
+            rep.elapsed_ms as JLong,
+            rep.dropped_bytes as JLong,
+            JLong::from(rep.corrupt),
+            JLong::from(rep.quarantine_count),
+        ];
+        unsafe { new_long_array(env, &fields) }
+    }))
+    .unwrap_or(null_mut())
 }
 
 /// `KevyNative.version()` — the engine version as UTF-8 bytes.

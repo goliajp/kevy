@@ -36,6 +36,7 @@ void HybridKevyNitro::loadHybridMethods() {
     prototype.registerRawHybridMethod("getData", 1, &HybridKevyNitro::getDataRaw);
     prototype.registerRawHybridMethod("setData", 3, &HybridKevyNitro::setDataRaw);
     prototype.registerHybridMethod("openAt", &HybridKevyNitro::openAt);
+    prototype.registerHybridMethod("openReport", &HybridKevyNitro::openReport);
     prototype.registerHybridMethod("subscribe", &HybridKevyNitro::subscribe);
     prototype.registerRawHybridMethod("publish", 2, &HybridKevyNitro::publishRaw);
     prototype.registerHybridMethod("subNext", &HybridKevyNitro::subNext);
@@ -295,6 +296,19 @@ jsi::Value HybridKevyNitro::setDataRaw(jsi::Runtime& rt, const jsi::Value&,
   } catch (const std::exception& e) {
     throw jsi::JSError(rt, std::string("KevyNitro.setData: ") + e.what());
   }
+}
+
+KevyOpenStats HybridKevyNitro::openReport() {
+  KevyOpenReport rep{};
+  if (kevy_open_report(_db.get(), &rep) != 0) {
+    throw std::runtime_error("kevy: open_report failed");
+  }
+  return KevyOpenStats(static_cast<double>(rep.replayed_commands),
+                       static_cast<double>(rep.replayed_bytes),
+                       static_cast<double>(rep.elapsed_ms),
+                       static_cast<double>(rep.dropped_bytes),
+                       rep.corrupt != 0,
+                       static_cast<double>(rep.quarantine_count));
 }
 
 bool HybridKevyNitro::openAt(const std::string& dir) {

@@ -57,6 +57,31 @@ public class EmbeddedTests
         Assert.Equal("x", H.Str(db2.Get("durable")));
     }
 
+    [Fact]
+    public void OpenReportVerdict()
+    {
+        // A clean in-memory open has nothing to replay: all zeros.
+        using (var mem = KEmb.KevyDb.OpenInMemory())
+        {
+            var zero = mem.OpenReport();
+            Assert.Equal(0UL, zero.ReplayedCommands);
+            Assert.Equal(0UL, zero.DroppedBytes);
+            Assert.False(zero.Corrupt);
+            Assert.Equal(0U, zero.QuarantineCount);
+        }
+
+        // A reopen over real files replays them — the report says how much.
+        var dir = Directory.CreateTempSubdirectory("kevy-emb-report-").FullName;
+        using (var db = KEmb.KevyDb.Open(dir))
+            db.Set("k", H.B("v"));
+        using var db2 = KEmb.KevyDb.Open(dir);
+        var r = db2.OpenReport();
+        Assert.True(r.ReplayedCommands > 0);
+        Assert.True(r.ReplayedBytes > 0);
+        Assert.Equal(0UL, r.DroppedBytes);
+        Assert.False(r.Corrupt);
+    }
+
     private static (byte[] channel, byte[] payload) NextMessage(KEmb.KevyRawSub sub)
     {
         var deadline = DateTime.UtcNow.AddSeconds(2);

@@ -48,6 +48,14 @@ function runSmoke(): Line[] {
   // Durability: reopen the same dir, the key survived the close.
   db = open({ dir });
   check("REOPEN", db.getText("k") === "v", db.getText("k") ?? "∅");
+  // The boot-replay verdict for that reopen: a clean dir must report no
+  // drops, no corruption — the startup health check every host should run.
+  const rep = db.openReport();
+  check(
+    "OPENREPORT",
+    rep.replayedCommands > 0 && rep.droppedBytes === 0 && !rep.corrupt,
+    `replayed=${rep.replayedCommands} dropped=${rep.droppedBytes} corrupt=${rep.corrupt}`,
+  );
   db.flushall();
   db.close();
 

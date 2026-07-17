@@ -25,6 +25,14 @@ test("addon smoke", () => {
   db = openRaw({ dir });
   assert.equal(text(db.cmd("GET", "k")), "v");
   assert.ok(db.cmd("NOSUCHVERB") instanceof KevyError);
+
+  // The boot-replay verdict: this reopen replayed the SET above, and a
+  // clean open reports nothing dropped, nothing corrupt.
+  const rep = db.openReport();
+  assert.ok(rep.replayedCommands >= 1);
+  assert.equal(rep.droppedBytes, 0);
+  assert.equal(rep.corrupt, false);
+  assert.equal(rep.quarantineCount, 0);
   db.close();
 });
 

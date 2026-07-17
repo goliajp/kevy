@@ -113,6 +113,17 @@ class Db {
     c.set(this.#p, Buffer.from(toBytes(key)), Buffer.from(toBytes(value)), ttlMs);
   }
 
+  // The boot-replay verdict: what this open restored — and what it could not,
+  // as { replayedCommands, replayedBytes, elapsedMs, droppedBytes, corrupt,
+  // quarantineCount } (numbers; corrupt is a boolean). droppedBytes > 0 or
+  // corrupt means the store recovered LESS than its files held (the dropped
+  // region was quarantined next to the AOF): surface it as a startup health
+  // check instead of scraping the boot WARN line from stderr.
+  openReport() {
+    if (!this.#p) throw new Error("kevy: closed handle");
+    return c.openReport(this.#p);
+  }
+
   subscribe(channel) {
     return new Sub(c.subscribe(this.#p, Buffer.from(toBytes(channel))));
   }

@@ -176,3 +176,4 @@ export function unpackFrames(packed: ArrayBuffer, count: number): Uint8Array[] {
 }
 
 export type { KevyNitro }
+export type { KevyOpenStats } from './specs/KevyNitro.nitro'

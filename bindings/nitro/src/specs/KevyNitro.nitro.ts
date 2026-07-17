@@ -8,6 +8,18 @@ import type { HybridObject } from 'react-native-nitro-modules'
 // The object owns one in-memory kevy db (opened in its C++ constructor),
 // one raw poll subscription, and one push subscription (a native poller
 // thread that hops frames onto the JS thread).
+// The boot-replay verdict openReport() returns: droppedBytes > 0 or corrupt
+// means the store recovered LESS than its files held (the dropped region was
+// quarantined next to the AOF) — surface it as a startup health check.
+export interface KevyOpenStats {
+  replayedCommands: number
+  replayedBytes: number
+  elapsedMs: number
+  droppedBytes: number
+  corrupt: boolean
+  quarantineCount: number
+}
+
 export interface KevyNitro
   extends HybridObject<{ ios: 'c++'; android: 'c++' }> {
   // kevy_abi() — the trivial crossing, isolates pure JSI dispatch cost.
@@ -33,6 +45,10 @@ export interface KevyNitro
   // ArrayBuffer (binary-safe, arbitrary bytes).
   getData(key: string): ArrayBuffer | undefined
   setData(key: string, value: ArrayBuffer, ttlMs: number): void
+
+  // The boot-replay verdict of this instance's open (all zeros for the
+  // in-memory constructor db; meaningful after openAt).
+  openReport(): KevyOpenStats
 
   // Re-open this instance's db file-backed (durable) at `dir`, replacing the
   // in-memory db the constructor opened. MMKV is a persistent store, so a

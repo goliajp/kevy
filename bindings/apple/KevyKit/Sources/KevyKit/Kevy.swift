@@ -268,6 +268,34 @@ public final class KevyDB {
         return n
     }
 
+    /// The boot-replay verdict: what this open restored — and what it
+    /// could not. Non-zero `droppedBytes` / `corrupt` means the store
+    /// recovered LESS than its files held (the dropped region was
+    /// quarantined next to the AOF): surface it as a startup health check
+    /// instead of scraping the boot WARN line from stderr.
+    public struct OpenReport {
+        public let replayedCommands: UInt64
+        public let replayedBytes: UInt64
+        public let elapsedMs: UInt64
+        public let droppedBytes: UInt64
+        public let corrupt: Bool
+        public let quarantineCount: UInt32
+    }
+
+    public func openReport() throws -> OpenReport {
+        guard let d = db else { throw KevyError.misuse }
+        var rep = KevyOpenReport()
+        guard kevy_open_report(d, &rep) == 0 else { throw KevyError.misuse }
+        return OpenReport(
+            replayedCommands: rep.replayed_commands,
+            replayedBytes: rep.replayed_bytes,
+            elapsedMs: rep.elapsed_ms,
+            droppedBytes: rep.dropped_bytes,
+            corrupt: rep.corrupt != 0,
+            quarantineCount: rep.quarantine_count
+        )
+    }
+
     /// Open a polled subscription on one channel.
     public func subscribe(_ channel: String) throws -> KevySubscription {
         guard let d = db else { throw KevyError.misuse }

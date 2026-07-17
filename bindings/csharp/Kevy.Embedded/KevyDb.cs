@@ -248,6 +248,28 @@ public sealed unsafe class KevyDb : IDisposable
     /// <summary>Empty the store.</summary>
     public void FlushAll() => Want(Cmd("FLUSHALL"));
 
+    /// <summary>The boot-replay verdict: what this open restored — and what
+    /// it could not. <see cref="KevyOpenStats.DroppedBytes"/> &gt; 0 or
+    /// <see cref="KevyOpenStats.Corrupt"/> means the store recovered LESS
+    /// than its files held (the dropped region was quarantined next to the
+    /// AOF): surface it as a startup health check instead of scraping the
+    /// boot WARN line from stderr.</summary>
+    public KevyOpenStats OpenReport()
+    {
+        KevyOpenReport r;
+        if (KevyNative.kevy_open_report(Live(), &r) != 0)
+            throw new KevyException("kevy: kevy_open_report misuse");
+        return new KevyOpenStats
+        {
+            ReplayedCommands = r.ReplayedCommands,
+            ReplayedBytes = r.ReplayedBytes,
+            ElapsedMs = r.ElapsedMs,
+            DroppedBytes = r.DroppedBytes,
+            Corrupt = r.Corrupt != 0,
+            QuarantineCount = r.QuarantineCount,
+        };
+    }
+
     /// <summary>Deliver <paramref name="payload"/> to every in-process
     /// subscriber on <paramref name="channel"/>; returns the receiver count.</summary>
     public long Publish(string channel, byte[] payload) =>

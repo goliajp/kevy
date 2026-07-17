@@ -2,14 +2,15 @@
 //!
 //! A thin shell over `kevy-ffi` (linked as a plain Rust rlib, not over the
 //! C ABI): the addon exports `napi_register_module_v1`, which Node calls on
-//! `process.dlopen`, and registers the thirteen functions bindings/node/node.js
+//! `process.dlopen`, and registers the fourteen functions bindings/node/node.js
 //! wraps into the same API bun:ffi serves under Bun. Two decisions keep it
 //! thin, both inherited from the JNI gate:
 //!
 //! - **Buffers in, Buffer out.** The JS side packs argv into one flat
 //!   Buffer (u32-LE length prefix per argument — [`unpack_argv`]'s format),
-//!   so no array or string APIs are ever touched; see [`napi`] for the
-//!   thirteen-symbol surface.
+//!   so no array or string APIs are ever touched (the open report's plain
+//!   object is the one exception); see [`napi`] for the sixteen-symbol
+//!   surface.
 //! - **Handles are externals.** `*mut KevyDb` / `*mut KevySub` travel as
 //!   opaque externals with no finalizer — close is explicit, exactly like
 //!   the bun:ffi door, and the JS wrapper nulls its reference after.
@@ -21,13 +22,13 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::null_mut;
 
-use kevy_ffi::{KevyBuf, KevyDb, KevySub, unpack_argv};
+use kevy_ffi::{KevyBuf, KevyDb, KevyOpenReport, KevySub, unpack_argv};
 
 mod napi;
 use napi::{
     NapiCallback, NapiCallbackInfo, NapiEnv, NapiValue, args, buffer_bytes, external_ptr, get_i64,
-    make_buffer, make_external, napi_create_function, napi_create_string_utf8, napi_create_uint32,
-    napi_set_named_property, null, throw, undefined,
+    make_buffer, make_external, make_object, napi_create_function, napi_create_string_utf8,
+    napi_create_uint32, napi_set_named_property, null, set_bool, set_num, throw, undefined,
 };
 
 const fn empty_buf() -> KevyBuf {
@@ -210,6 +211,47 @@ unsafe extern "C" fn js_set(env: NapiEnv, info: NapiCallbackInfo) -> NapiValue {
     .unwrap_or(null_mut())
 }
 
+/// `openReport(db)` — the boot-replay verdict of this handle's open, as a
+/// plain object `{ replayedCommands, replayedBytes, elapsedMs, droppedBytes,
+/// corrupt, quarantineCount }`. `droppedBytes > 0` or `corrupt` means the
+/// store recovered LESS than its files held (the dropped region was
+/// quarantined next to the AOF): surface it as a startup health check.
+///
+/// Counts ride u64 → f64 (`corrupt` is a boolean): exact up to 2^53, far
+/// past any real replay, and the shape JS arithmetic wants. Misuse throws.
+///
+/// # Safety
+/// Called by Node only; `env` / `info` live for this call.
+unsafe extern "C" fn js_open_report(env: NapiEnv, info: NapiCallbackInfo) -> NapiValue {
+    catch_unwind(AssertUnwindSafe(|| {
+        let [ext] = unsafe { args::<1>(env, info) };
+        let db: *mut KevyDb = unsafe { external_ptr(env, ext) };
+        let mut rep = KevyOpenReport {
+            replayed_commands: 0,
+            replayed_bytes: 0,
+            elapsed_ms: 0,
+            dropped_bytes: 0,
+            corrupt: 0,
+            quarantine_count: 0,
+        };
+        let rc = unsafe { kevy_ffi::kevy_open_report(db, &mut rep) };
+        if rc != 0 {
+            return unsafe { throw(env, "kevy: kevy_open_report misuse\0") };
+        }
+        let obj = unsafe { make_object(env) };
+        unsafe {
+            set_num(env, obj, "replayedCommands\0", rep.replayed_commands as f64);
+            set_num(env, obj, "replayedBytes\0", rep.replayed_bytes as f64);
+            set_num(env, obj, "elapsedMs\0", rep.elapsed_ms as f64);
+            set_num(env, obj, "droppedBytes\0", rep.dropped_bytes as f64);
+            set_bool(env, obj, "corrupt\0", rep.corrupt != 0);
+            set_num(env, obj, "quarantineCount\0", f64::from(rep.quarantine_count));
+        }
+        obj
+    }))
+    .unwrap_or(null_mut())
+}
+
 /// `subscribe(db, chanBuffer)` — polled subscription on one channel.
 unsafe extern "C" fn js_subscribe(env: NapiEnv, info: NapiCallbackInfo) -> NapiValue {
     unsafe { sub_open(env, info, false) }
@@ -328,13 +370,14 @@ unsafe extern "C" fn js_abi(env: NapiEnv, _info: NapiCallbackInfo) -> NapiValue 
 /// Called by Node only; `env` / `exports` are live for this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn napi_register_module_v1(env: NapiEnv, exports: NapiValue) -> NapiValue {
-    const FNS: [(&str, NapiCallback); 13] = [
+    const FNS: [(&str, NapiCallback); 14] = [
         ("open\0", js_open),
         ("openMem\0", js_open_mem),
         ("close\0", js_close),
         ("cmd\0", js_cmd),
         ("get\0", js_get),
         ("set\0", js_set),
+        ("openReport\0", js_open_report),
         ("subscribe\0", js_subscribe),
         ("psubscribe\0", js_psubscribe),
         ("subNext\0", js_sub_next),
