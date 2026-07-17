@@ -33,16 +33,15 @@ pub struct WeakStore {
     indexes_weak: Weak<crate::ops_index::IndexReg>,
     #[cfg(feature = "index")]
     views_weak: Weak<crate::ops_view::ViewReg>,
-    open_report_weak: Weak<crate::metric::OpenReport>,
 }
 
 impl WeakStore {
     /// Try to upgrade back to a `Store`. Returns `None` if the last strong
     /// reference has already been dropped.
     pub fn upgrade(&self) -> Option<Store> {
+        let guard = self.guard.upgrade()?;
         Some(Store {
             shards: self.shards.upgrade()?,
-            guard: self.guard.upgrade()?,
             config: self.config.clone(),
             #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
             feed: self.feed_weak.as_ref().and_then(std::sync::Weak::upgrade),
@@ -51,7 +50,11 @@ impl WeakStore {
             indexes: self.indexes_weak.upgrade()?,
             #[cfg(feature = "index")]
             views: self.views_weak.upgrade()?,
-            open_report: self.open_report_weak.upgrade()?,
+            // The report rides the DropGuard (engine lifetime), so a
+            // resurrection that outlives every full Store handle
+            // still reports the ORIGINAL boot's replay verdict.
+            open_report: guard.open_report.clone(),
+            guard,
         })
     }
 }
@@ -70,7 +73,6 @@ impl Store {
             indexes_weak: Arc::downgrade(&self.indexes),
             #[cfg(feature = "index")]
             views_weak: Arc::downgrade(&self.views),
-            open_report_weak: Arc::downgrade(&self.open_report),
         }
     }
 }
@@ -140,6 +142,11 @@ pub(crate) struct DropGuard {
     /// `KevyError::Closed`. Shared across clones (it lives here so ANY
     /// clone's shutdown gates ALL clones' writes).
     pub(crate) shutdown: AtomicBool,
+    /// The boot replay verdict. Owned by the guard (engine lifetime),
+    /// so `WeakStore::upgrade` can rebuild a full `Store` — with the
+    /// original boot's report — even after every full handle dropped
+    /// while a subscription kept the engine alive.
+    pub(crate) open_report: Arc<crate::metric::OpenReport>,
     pub(crate) reaper_stop: Option<Arc<AtomicBool>>,
     pub(crate) reaper_join: Mutex<Option<JoinHandle<()>>>,
     // Read by the persist flush; without it the strong ref still

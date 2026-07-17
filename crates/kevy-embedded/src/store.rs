@@ -129,8 +129,16 @@ impl Store {
         let blocker = crate::store_wire::wire_blocker(&shards);
         #[cfg(feature = "index")]
         let (indexes, views) = crate::store_wire::wire_registries(&shards);
+        let open_report = Arc::new(open_report);
         let guard = Arc::new(DropGuard {
             shutdown: std::sync::atomic::AtomicBool::new(false),
+            // Owned here (engine lifetime), not only by Store handles:
+            // WeakStore::upgrade rebuilds a Store from the guard, and
+            // a registry resurrection (kevy-client `mem://`) can
+            // outlive every full Store handle. Requiring a live
+            // Store-held Arc broke exactly that (publish saw a
+            // second, empty bus).
+            open_report: open_report.clone(),
             reaper_stop,
             reaper_join: Mutex::new(reaper_join),
             shards_for_flush: shards.clone(),
@@ -155,7 +163,7 @@ impl Store {
             indexes,
             #[cfg(feature = "index")]
             views,
-            open_report: Arc::new(open_report),
+            open_report,
         };
         #[cfg(feature = "index")]
         store.idx_boot();
