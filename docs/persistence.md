@@ -80,8 +80,11 @@ fn main() -> kevy_embedded::KevyResult<()> {
         .with_appendfsync(AppendFsync::EverySec)
         .with_auto_aof_rewrite(100, 64 * 1024 * 1024)
         .with_metric_sink(|m| match m {
-            KevyMetric::Replay { commands, bytes, elapsed_ms } => {
+            KevyMetric::Replay { commands, bytes, elapsed_ms, dropped_bytes, corrupt } => {
                 eprintln!("kevy replay: {commands} cmds / {bytes} B in {elapsed_ms} ms");
+                if dropped_bytes > 0 || corrupt {
+                    eprintln!("kevy replay dropped {dropped_bytes} B (corrupt: {corrupt}) — ALERT");
+                }
             }
             KevyMetric::Rewrite { keys, before_bytes, after_bytes, elapsed_ms } => {
                 eprintln!(
@@ -121,8 +124,11 @@ A fresh embedded store with the default config writes only the AOF — no snapsh
 |---|---|---|---|---|
 | AOF fsync policy | `appendfsync` (`always` / `everysec` / `no`) | `with_appendfsync(AppendFsync::…)` | `EverySec` | Live-tunable on the server. |
 | AOF enabled | `aof` (`true` / `false`) | implied by `with_persist(...)` | `true` (server), off until `with_persist` | Disabling skips all on-disk persistence. |
-| Auto-rewrite percentage | `auto_aof_rewrite_percentage` | first arg of `with_auto_aof_rewrite(pct, min)` | `100` | `0` disables auto-rewrite. |
-| Auto-rewrite minimum size | `auto_aof_rewrite_min_size` | second arg of `with_auto_aof_rewrite(pct, min)` | `67108864` (64 MiB) | Auto-rewrite fires only when both thresholds are met. |
+| Auto-rewrite percentage | `auto_aof_rewrite_percentage` | first arg of `with_auto_aof_rewrite(pct, min)` | `100` | `0` disables the growth rule. |
+| Auto-rewrite minimum size | `auto_aof_rewrite_min_size` | second arg of `with_auto_aof_rewrite(pct, min)` | `67108864` (64 MiB) | The growth rule fires only when both thresholds are met. |
+| Auto-rewrite absolute cap | `auto_aof_rewrite_bytes` | `with_auto_rewrite_bytes(n)` | `0` (off) | Independent trigger: rewrite whenever the AOF exceeds `n` bytes, regardless of growth ratio. Live-tunable (`CONFIG SET auto-aof-rewrite-bytes`). |
+| Auto-rewrite staleness | `auto_aof_rewrite_interval_secs` | `with_auto_rewrite_interval(d)` | `0` (off) | Independent trigger: rewrite when this long has passed since the last rewrite AND the log has grown since. Live-tunable. |
+| Resync replay | `replay_resync` (`[persistence]`) | `with_replay_resync(true)` | `false` (strict) | Boot-time only. Recovers the good tail behind a mid-file corrupt region instead of stopping at it — see the resync section. |
 | Persistence directory | `data_dir` / env `KEVY_DIR` | `with_persist(path)` | `./data` (server); none (embedded) | One directory per kevy instance. |
 | Reactor / reaper cadence | reactor tick, ~100 ms | background reaper, or your `Store::tick` calls | ~100 ms | Drives `EverySec` flush, auto-rewrite checks, TTL eviction. |
 
@@ -283,8 +289,8 @@ payload damage.
 | Clean file | `clean` | everything | zero |
 | Torn final frame (killed mid-append) | truncated tail | every complete frame | the torn frame + un-fsynced window (`always`: the torn frame only) |
 | Zero-filled tail (power loss with un-fsynced pages) | truncated tail | every complete frame | as above |
-| Corrupt frame mid-file | stop at the frame | prefix before the frame | prefix-only today — the dropped region (mostly good frames) is quarantined for hand salvage; automatic recovery of the good tail is the resync train's job |
-| Bit-rot inside a frame's payload | **undetected today** | the tainted value replays | unbounded until the checksummed format lands — the current format has no integrity check |
+| Corrupt record mid-file | stop at the record (strict, default) | prefix before the record; the dropped region is quarantined | the region past the record — **or**, with `replay_resync` on, only the corrupt region itself: the good tail behind it is recovered (see the resync section) |
+| Bit-rot inside a record's payload | CRC mismatch → corrupt record (v2 files) | nothing tainted — the record is refused, never applied | as the row above; v1-era files carry no checksum and replay bit-rot silently until their first rewrite upgrades them |
 
 **The no-black-hole invariant** (the 3.18 incident's fix, held by
 crashgate): the truncate-on-open happens **before the first append**,
@@ -315,10 +321,101 @@ the resync.
 unclean primary restart the primary rolls back by its un-fsynced
 suffix and bumps the feed generation; a replica that applied the
 rolled-back writes is ahead, and on reconnect its forked history is
-discarded via a full snapshot resync. (The generation fence for the
-reconnect handshake is being finished in this arc; until it lands, a
-replica that reconnects after the restarted primary has re-passed
-its old offset can miss the fork — reconnect replicas promptly.)
+discarded via a full snapshot resync. The reconnect handshake
+carries the replica's generation (v4), and the primary refuses to
+serve offset continuity across a generation mismatch — a replica
+can no longer be silently fed the new history's same-numbered
+offsets, no matter how long it waits to reconnect (see
+[replication.md](replication.md)).
+
+## The AOF record format (v2, `KEVYAOF2`)
+
+Since 4.0, new AOF files open with a `KEVYAOF2\n` magic and carry
+every command as a checksummed record:
+
+```text
+[payload_len: u32 LE][crc32c: u32 LE][payload: RESP multibulk command]
+```
+
+What the envelope buys, each one a class of incident the v1 format
+could not handle:
+
+- **Integrity.** `crc32c` (Castagnoli, hardware-accelerated on
+  aarch64 and SSE4.2 x86-64) covers the payload. A flipped bit — disk
+  rot, a bad cable, a truncated-then-overwritten page — fails the
+  check and the record is refused instead of replaying a tainted
+  value. v1 had no integrity check at all: bit-rot replayed silently.
+- **Deterministic record boundaries.** The length prefix frames the
+  log without parsing RESP, so a torn tail is detected by arithmetic
+  (fewer bytes than the header promises) rather than by a parser
+  happening to choke.
+- **Deterministic resync.** After a corrupt region, the next record
+  boundary can be re-found and *verified* (length + CRC + exactly one
+  well-formed command must all agree) — the basis of the resync
+  replay below.
+
+**Compatibility contract:**
+
+- A 4.0 binary reads v1 (`KEVYAOF1`) files forever. A 3.x data dir
+  opens with zero migration work.
+- Formats never mix within one file: appends to an existing v1 file
+  stay v1.
+- New files, truncations, and every rewrite output are v2. The first
+  rewrite (auto or `BGREWRITEAOF`) therefore upgrades a v1 file to
+  v2 — after which 3.x binaries can no longer read it. Downgrade
+  windows and the operator sequence live in
+  [UPGRADING.md](UPGRADING.md).
+
+The per-record overhead is 8 bytes; for the mailrs-shaped workload
+(mixed small commands) the disk cost measures in the low single-digit
+percent, and the CRC rides the hardware instruction on both server
+architectures.
+
+### Resync replay — recovering the good tail
+
+The default (strict) replay stops at the first corrupt record: the
+prefix is applied, everything after — mostly well-formed records —
+is quarantined and dropped from the live file. That is the honest
+default (a corrupt region means *something* went wrong; refusing to
+guess is safest), but for a large log with one small damaged region
+it surrenders data that is provably intact.
+
+`replay_resync` opts into recovering it:
+
+```toml
+[persistence]
+replay_resync = true
+```
+
+(or `Config::with_replay_resync(true)` embedded, or
+`Runtime::with_replay_resync(true)` on a hand-built runtime; the
+setting is boot-time only — replay happens before the first live
+config tick).
+
+Under resync, replay hops the corrupt region: it scans forward for
+the next position where the length prefix, the CRC, **and** a
+well-formed single-command parse all agree (a false accept requires
+defeating all three — about 2⁻³² per candidate offset), then resumes
+applying from there. Every skipped range is reported —
+`ReplayReport::resynced_ranges` at the persist layer,
+`OpenReport::resynced_bytes` on `Store::open_report()` — and the
+`corrupt` flag stays raised: resync recovers data, it does not
+declare the file healthy.
+
+Repair semantics differ from strict mode: the on-disk file is
+truncated (and the tail quarantined) only past the **last**
+recoverable record; interior corrupt regions stay in place — hopped
+again on every boot — until the next rewrite compacts the file. The
+recovered-good-tail guarantee is executable: `crashgate`'s mid-file
+splice cell (the mailrs damage shape, 8 bytes spliced out of a
+231 MB-class log) must report every post-damage record recovered.
+
+When to leave it off: if your host treats *any* corruption as a
+reason to fail over to a replica or restore from backup, strict mode
+gives you the loudest, earliest stop. When to turn it on: single-node
+deployments where the AOF is the only copy — the mailrs posture —
+and losing three days of writes to an 8-byte splice is the worse
+outcome.
 
 ## Atomicity charter (embedded serving-store, v2.1)
 
@@ -378,3 +475,66 @@ deliberate: when a rejoining ex-primary carries a forked suffix
 (writes that were never replicated), the resync must genuinely
 discard the fork rather than leave it as residue under an upsert-only
 load.
+
+One consequence of that replace-not-merge semantic for a replica
+running with its own AOF: the flush + snapshot load bypass the
+commit path, so after the load the replica synchronously rewrites
+its local AOF from the post-resync keyspace (4.0). Without that, the
+local log would still describe the pre-resync history, and a restart
+with the primary unreachable would serve a state assembled from the
+wrong base.
+
+## Operator runbook
+
+The incident-shaped checklist. Every line here is backed by a gate
+(`crashgate`, `repligate`, `diskgate`) or a test named in this doc.
+
+**Stopping kevy.** Prefer an orderly stop — `SHUTDOWN` / SIGTERM
+(server) or dropping the last `Store` clone / `Store::shutdown()`
+(embedded). The drain force-fsyncs every AOF tail, so an orderly
+stop loses nothing under any fsync policy, and the feed writes its
+clean-shutdown marker so consumers and replicas resume without a
+generation bump. `kill -9` is *survivable* (that is crashgate's
+whole matrix) but spends the fsync window and breaks feed/replica
+continuity (generation bump → consumers rebuild, replicas
+snapshot-resync).
+
+**After every (re)start, read the verdict.** Three equivalent
+surfaces; wire at least one into your health checks:
+
+- The boot log line per shard —
+  `kevy: AOF … replayed N commands from M bytes in T ms (clean)`.
+  Anything other than `(clean)` comes with a WARN naming dropped
+  bytes and the quarantine path.
+- `INFO persistence` on the server: `aof_last_open_dropped_bytes`
+  and `aof_last_open_corrupt` — nonzero means this boot recovered
+  less than the files held. Alert on it; the 3-day silent-loss
+  incident was exactly this signal living only in stderr.
+- `Store::open_report()` embedded (or `kevy_open_report` over the C
+  ABI): `dropped_bytes`, `corrupt`, `quarantine_paths`,
+  `resynced_bytes` as data — turn a bad boot into a refused
+  deployment instead of a log line nobody reads.
+
+**If a boot reports drops.** The dropped region is in
+`aof-<id>.aof.corrupt-quarantine.<unix_ts>`, byte-exact. Decide in
+this order: (1) if a replica or backup has the writes, restore from
+there; (2) if not, consider a one-time boot with
+`replay_resync = true` — on a mid-file corruption it recovers the
+good tail and reports the skipped ranges; (3) hand-salvage the
+quarantine file (it is mostly well-formed records / RESP). Keep the
+quarantine file until the incident is closed; kevy never deletes it.
+
+**Rewrite cadence.** Auto-rewrite is the boot-time and incident
+bound: replay time, quarantine blast radius, and resync hop cost all
+scale with unrewritten log size. The growth pair
+(`auto_aof_rewrite_percentage` / `min_size`) is the default; add the
+absolute cap (`auto_aof_rewrite_bytes`) when disk or replay budgets
+are hard, and the staleness trigger
+(`auto_aof_rewrite_interval_secs`) for write-light deployments whose
+logs never double but carry weeks of history. All three are
+independent; first to fire wins.
+
+**Disk-full and quarantine failures fail loudly.** If the open
+cannot write the quarantine copy (e.g. disk full), it fails with the
+AOF intact rather than truncating the only copy of your bytes. Free
+space, then reopen.

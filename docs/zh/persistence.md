@@ -80,8 +80,11 @@ fn main() -> kevy_embedded::KevyResult<()> {
         .with_appendfsync(AppendFsync::EverySec)
         .with_auto_aof_rewrite(100, 64 * 1024 * 1024)
         .with_metric_sink(|m| match m {
-            KevyMetric::Replay { commands, bytes, elapsed_ms } => {
+            KevyMetric::Replay { commands, bytes, elapsed_ms, dropped_bytes, corrupt } => {
                 eprintln!("kevy replay: {commands} cmds / {bytes} B in {elapsed_ms} ms");
+                if dropped_bytes > 0 || corrupt {
+                    eprintln!("kevy replay dropped {dropped_bytes} B (corrupt: {corrupt}) — ALERT");
+                }
             }
             KevyMetric::Rewrite { keys, before_bytes, after_bytes, elapsed_ms } => {
                 eprintln!(
@@ -122,7 +125,10 @@ fn main() -> kevy_embedded::KevyResult<()> {
 | AOF fsync 策略 | `appendfsync`（`always` / `everysec` / `no`）| `with_appendfsync(AppendFsync::…)` | `EverySec` | 服务器侧可在线调整。 |
 | AOF 开关 | `aof`（`true` / `false`）| 由 `with_persist(...)` 隐式开启 | `true`（服务器）；嵌入式在调用 `with_persist` 前关闭 | 关闭后跳过一切磁盘持久化。 |
 | 自动重写百分比 | `auto_aof_rewrite_percentage` | `with_auto_aof_rewrite(pct, min)` 的第一个参数 | `100` | 设为 `0` 关闭自动重写。 |
-| 自动重写最小体积 | `auto_aof_rewrite_min_size` | `with_auto_aof_rewrite(pct, min)` 的第二个参数 | `67108864`（64 MiB）| 两个阈值同时满足才触发自动重写。 |
+| 自动重写最小体积 | `auto_aof_rewrite_min_size` | `with_auto_aof_rewrite(pct, min)` 的第二个参数 | `67108864`（64 MiB）| 两个阈值同时满足才触发增长规则。 |
+| 自动重写绝对上限 | `auto_aof_rewrite_bytes` | `with_auto_rewrite_bytes(n)` | `0`（关）| 独立触发器：AOF 超过 `n` 字节即重写，与增长比例无关。可在线调整（`CONFIG SET auto-aof-rewrite-bytes`）。 |
+| 自动重写陈旧度 | `auto_aof_rewrite_interval_secs` | `with_auto_rewrite_interval(d)` | `0`（关）| 独立触发器：距上次重写超过该时长且日志有增长即重写。可在线调整。 |
+| resync 回放 | `replay_resync`（`[persistence]`）| `with_replay_resync(true)` | `false`（strict）| 仅启动时生效。文件中部损坏时恢复其后的完好尾巴，而不是停在损坏处——见 resync 一节。 |
 | 持久化目录 | `data_dir` / 环境变量 `KEVY_DIR` | `with_persist(path)` | 服务器 `./data`；嵌入式无 | 每个 kevy 实例一个目录。 |
 | reactor / reaper 节拍 | reactor tick，约 100 ms | 后台 reaper，或自行调用 `Store::tick` | 约 100 ms | 驱动 `EverySec` 刷盘、自动重写检查、TTL 清理。 |
 
@@ -191,7 +197,7 @@ fn main() -> kevy_embedded::KevyResult<()> {
 
 1. **加载快照。**若 `dump-<id>.rdb` 存在，流式载入键空间。已过期的 TTL 在加载时直接丢弃。
 2. **回放 AOF。**从 `aof-<id>.aof` 开头逐帧应用。
-3. **处理尾部。**文件完好就全量应用。尾部截断（追加到一半崩溃）则丢掉残缺的末帧，应用前面的部分。遇到损坏帧，坏字节会挪到 `aof-<id>.aof.panic-quarantine.<unix_ts>`，不再阻碍后续启动，然后应用前缀。隔离出去的尾巴永远不会重新应用；想从里面抢救内容就手工检查。
+3. **处理尾部。**文件完好就全量应用。撕裂或损坏的记录让回放停在它之前最后一条完整记录；随后 open 把丢弃区复制到 `aof-<id>.aof.corrupt-quarantine.<unix_ts>`（fsync 过——文件中部损坏之后的区域大多是良构记录，这份副本是找回它们的唯一途径），并在首次追加之前**把文件截断到最后一条完整记录**，让新写入紧接在可回放前缀之后，而不是落在坏字节后面（否则下次回放又会停在那里，把它们静默变成孤儿）。隔离出去的字节永远不会重新应用；想抢救就手工检查。若隔离副本本身写不出来（如磁盘满），open 直接失败、文件原样保留——kevy 绝不销毁你字节的唯一副本。开启 `replay_resync` 时行为见 resync 一节。
 4. **打出一行摘要日志**，含挂钟耗时：
 
    ```text
@@ -233,7 +239,7 @@ store.evictions_total();        // total evicted by maxmemory
 | `aof-<id>.aof.rewrite` | 进行中的 AOF 重写/重置。确认陈旧后可安全删除。 |
 | `dump-<id>.rdb.reshard` + `reshard.journal` | 进行中的 shard 布局迁移。下次启动向前滚完；journal 绝不能手工删除。 |
 | `*.premigration.<unix_ts>` | 迁移前的源文件备份，留作回滚。 |
-| `aof-<id>.aof.panic-quarantine.<unix_ts>` | 恢复时隔离出来的损坏 AOF 尾部。想抢救内容就手工检查；kevy 不会重新应用它。 |
+| `aof-<id>.aof.corrupt-quarantine.<unix_ts>` | 恢复时隔离出来的不可回放区域（撕裂尾巴，或文件中部损坏记录之后的一切）。想抢救内容就手工检查；kevy 不会重新应用它。 |
 | `elect.meta`（+ 瞬态的 `elect.meta.tmp`）| 选举耐久性（v3.15）：选举器的 `(epoch, votedFor)` 二元组，在任何投票应答离开节点*之前*先持久化，崩溃重启因此绝不会重复投票。写法是 tmp + fsync + rename——保存中途崩溃只会留下旧值或新值，绝无撕裂的文件。仅在配置了 `[cluster]` 多数派时出现。 |
 
 ## 耐久性契约（v2.1）
@@ -250,9 +256,70 @@ store.evictions_total();        // total evicted by maxmemory
 
 `Store::fsync_aof()` 是逐写入粒度的耐久性逃生口（Postgres 按事务 `synchronous_commit` 那一路）：部署跑 `everysec` 换吞吐，再把屏障放在少数几笔“一经确认就必须扛住机器崩溃”的写入之后。代价：每个脏 shard 一次 `fdatasync`。
 
-进程崩溃（SIGKILL）在 `always` 下绝不丢已确认的写入，其他策略最多丢一个 fsync 窗口；AOF 尾巴在下次打开时回放，撕裂的末帧会隔离（`panic-quarantine`），绝不静默应用。
+进程崩溃（SIGKILL）在 `always` 下绝不丢已确认的写入，其他策略最多丢一个 fsync 窗口；AOF 尾巴在下次打开时回放，撕裂的末记录在打开时截掉（丢弃区先复制到隔离文件），绝不静默应用（完整状态机见下面的崩溃一致性契约）。
 
 **有序停机**（`SHUTDOWN` 或 SIGTERM）在任何策略下都零丢失：排空过程会在退出前强制 fsync AOF 尾巴，所以崩溃可能丢掉的 `everysec` 窗口对干净停机不适用。
+
+## 崩溃一致性契约（v4）
+
+打开路径是每个 shard 一台固定状态机——**open → verify → replay → verdict → repair → append**——每种 verdict 都带一条硬丢失上界。`crashgate`（`bench/crashgate.sh`）逐格执行这张表：SIGKILL 矩阵（追加中 / 重写中 / 快照中 / feed 发射中 × fsync 策略 × shard 数）加上注入的撕尾 / 文件中部 / payload 损伤。
+
+| 崩溃留下什么 | verdict | 回放恢复什么 | 硬丢失上界 |
+|---|---|---|---|
+| 干净文件 | `clean` | 全部 | 零 |
+| 撕裂末记录（追加中被杀）| 截尾 | 每条完整记录 | 撕裂记录 + 未 fsync 窗口（`always`：仅撕裂记录）|
+| 零填充尾巴（掉电 + 未 fsync 页）| 截尾 | 每条完整记录 | 同上 |
+| 文件中部损坏记录 | 停在该记录（strict，默认）| 该记录之前的前缀；丢弃区隔离保存 | 该记录之后的区域——**或**开启 `replay_resync` 后仅损坏区本身：其后的完好尾巴被恢复（见 resync 一节）|
+| 记录 payload 内位翻转 | CRC 不匹配 → 损坏记录（v2 文件）| 不应用任何被污染的值——记录被拒绝 | 同上行；v1 时代的文件不带校验和，位翻转会静默重放，直到首次重写升格为 v2 |
+
+**无黑洞不变量**（3.18 事故的修复，由 crashgate 把守）：打开时的截断发生在**首次追加之前**，回放停止点绝不跨重启回退——崩溃后重启写下的数据，一定能活过下一次重启。
+
+**多 shard 偏斜。** 每个 shard 独立拥有 `aof-<id>.aof`、独立修复，崩溃后不同 shard 可能各自恢复到略有差异的时刻（各在各的丢失上界内）。kevy 不为独立写入承诺跨 shard 原子性——`atomic`/`atomic_all_shards` 块在提交时按触及的 shard fsync，是一组写入必须一起落地时该用的工具。
+
+**feed（CDC）只在内存中，且跑在磁盘前面。** feed backlog 不会在打开时从 AOF 重建；重启后只有 `(generation, offset)` 游标存活。帧在 apply 时刻发射，**早于**记录同一笔写入的 AOF 字节被 fsync——`everysec` 下消费者可能观测到最多约 1 秒后被崩溃回滚的写入（`always`：零；`no`：无上界）。崩溃会 bump feed generation，所以所有崩溃前游标都会收到 `-FEEDRESYNC` / `FeedError::Resync`，消费者必须从恢复后的 store 重新扫描重建。只有覆盖某帧的 fsync 窗口关闭后，才能把它当成 durable 事实——对未 durable 帧采取的副作用，resync 无法召回。
+
+**副本对未 fsync 的帧不持有耐久性主张。** 主节点 unclean 重启后会按未 fsync 后缀回滚并 bump feed generation；应用过被回滚写入的副本处于领先位，重连时其分叉历史经全量快照重同步丢弃。重连握手携带副本的 generation（v4），generation 不匹配时主节点拒绝按 offset 续传——无论副本隔多久重连，都不可能被静默喂入新历史的同号 offset（见 [replication.md](replication.md)）。
+
+## AOF 记录格式（v2，`KEVYAOF2`）
+
+自 4.0 起，新 AOF 文件以 `KEVYAOF2\n` magic 开头，每条命令都是一条带校验和的记录：
+
+```text
+[payload_len: u32 LE][crc32c: u32 LE][payload: RESP multibulk 命令]
+```
+
+这层信封买到的东西，每一样都对应一类 v1 格式处理不了的事故：
+
+- **完整性。** `crc32c`（Castagnoli，aarch64 与 SSE4.2 x86-64 上走硬件指令）覆盖 payload。翻转一个位——盘介质衰减、坏线缆、被截断又覆写的页——校验即失败，记录被拒绝，而不是把污染值重放进键空间。v1 完全没有完整性校验：位翻转会静默重放。
+- **确定性记录边界。** 长度前缀不解析 RESP 就能给日志分帧，撕裂尾巴靠算术检测（字节数少于头部承诺），而不是指望解析器恰好噎住。
+- **确定性 resync。** 损坏区之后，下一条记录边界可以被重新找到并*验证*（长度 + CRC + 恰好一条良构命令三者必须同时吻合）——这就是下面 resync 回放的基础。
+
+**兼容契约：**
+
+- 4.0 二进制永久可读 v1（`KEVYAOF1`）文件。3.x 数据目录零迁移打开。
+- 单个文件内绝不混格式：向既有 v1 文件的追加保持 v1。
+- 新文件、截断、所有重写输出都是 v2。首次重写（自动或 `BGREWRITEAOF`）因此把 v1 文件升格为 v2——此后 3.x 二进制无法再读它。降级窗口与运维顺序见 [UPGRADING.md](UPGRADING.md)。
+
+每条记录的开销是 8 字节；对 mailrs 形状的负载（混合小命令），磁盘成本实测在低个位数百分比，CRC 在两种服务器架构上都走硬件指令。
+
+### resync 回放——恢复完好的尾巴
+
+默认（strict）回放停在第一条损坏记录：前缀被应用，之后的一切——大多是良构记录——被隔离并从活文件中丢弃。这是诚实的默认值（出现损坏区意味着*有什么*出了问题；拒绝猜测最安全），但对只有一小块损伤的大日志来说，它放弃了可证明完好的数据。
+
+`replay_resync` 选择把它们找回来：
+
+```toml
+[persistence]
+replay_resync = true
+```
+
+（嵌入式用 `Config::with_replay_resync(true)`，手工搭 runtime 用 `Runtime::with_replay_resync(true)`；该设置仅启动时生效——回放先于第一次在线配置 tick。）
+
+resync 模式下，回放跳过损坏区：向前扫描，直到长度前缀、CRC **和**恰好一条良构命令的解析三者同时吻合的位置（伪接受需要同时骗过三者——每个候选偏移约 2⁻³²），然后从那里继续应用。每段被跳过的区间都会上报——persist 层的 `ReplayReport::resynced_ranges`、`Store::open_report()` 上的 `OpenReport::resynced_bytes`——且 `corrupt` 标志保持竖起：resync 恢复数据，但不宣布文件健康。
+
+修复语义与 strict 不同：磁盘文件只在**最后一条**可恢复记录之后截断（尾巴隔离保存）；内部损坏区留在原位——每次启动都再跳一遍——直到下一次重写把文件压实。“恢复完好尾巴”的保证是可执行的：`crashgate` 的文件中部 splice 格（mailrs 损伤形状，231 MB 级日志中间剪掉 8 字节）必须报告损伤之后的每条记录都被恢复。
+
+什么时候保持关闭：如果宿主把*任何*损坏都当成切换副本或从备份恢复的理由，strict 给你最响、最早的停止。什么时候打开：单节点部署、AOF 是唯一副本——mailrs 的姿态——而“8 字节 splice 吞掉三天写入”是更糟的结局时。
 
 ## 原子性章程（嵌入式 serving-store，v2.1）
 
@@ -274,3 +341,23 @@ store.evictions_total();        // total evicted by maxmemory
 ## 复制链路上的快照（v3.15）
 
 副本掉出 backlog 窗口时，主节点内联推送给它的就是同一种快照格式（见 [replication.md](replication.md)）。有一个语义值得记住：推送过来的快照会**替换**副本的本地状态，而不是合并——副本加载前先清空自己的键空间。这是刻意设计：重新加入的前主节点若带着分叉后缀（从未复制出去的写入），重同步就必须真正丢掉这条分叉，而不是在只做 upsert 的加载下把它留成残渣。
+
+对带本地 AOF 的副本，这个“替换而非合并”语义有一个后果：清空 + 快照加载绕过了提交路径，所以加载完成后副本会同步地用重同步后的键空间重写本地 AOF（4.0）。否则本地日志仍描述重同步前的历史，主节点不可达时的重启会端出一个从错误底座拼出来的状态。
+
+## 运维手册
+
+按事故形状整理的清单。这里每一行背后都有一道门（`crashgate`、`repligate`、`diskgate`）或本文点名的测试。
+
+**停 kevy。** 优先有序停机——服务器用 `SHUTDOWN` / SIGTERM，嵌入式 drop 最后一个 `Store` 克隆或调 `Store::shutdown()`。排空会强制 fsync 每个 AOF 尾巴，所以有序停机在任何 fsync 策略下都零丢失；feed 也会写下干净停机标记，消费者与副本续接时不 bump generation。`kill -9` 是*可存活的*（crashgate 的整个矩阵就是它），但会付出 fsync 窗口，并打断 feed/副本连续性（generation bump → 消费者重建、副本快照重同步）。
+
+**每次（重）启动后，读 verdict。** 三个等价面，至少接一个进健康检查：
+
+- 每 shard 的启动日志行——`kevy: AOF … replayed N commands from M bytes in T ms (clean)`。凡不是 `(clean)`，都伴随一条 WARN，点名丢弃字节数与隔离文件路径。
+- 服务器 `INFO persistence`：`aof_last_open_dropped_bytes` 与 `aof_last_open_corrupt`——非零表示本次启动恢复的比文件里有的少。对它设告警；那场三天静默丢失的事故，正是这个信号只活在 stderr 里。
+- 嵌入式 `Store::open_report()`（C ABI 走 `kevy_open_report`）：`dropped_bytes`、`corrupt`、`quarantine_paths`、`resynced_bytes` 全是数据——把一次坏启动变成一次被拒绝的部署，而不是一行没人读的日志。
+
+**若启动报告了丢弃。** 丢弃区在 `aof-<id>.aof.corrupt-quarantine.<unix_ts>` 里，逐字节原样。按此顺序决策：（1）副本或备份里有这些写入，从那边恢复；（2）没有，考虑带 `replay_resync = true` 启动一次——文件中部损坏时它恢复完好尾巴并上报跳过区间；（3）手工打捞隔离文件（内容大多是良构记录 / RESP）。事故关闭前保留隔离文件；kevy 绝不会删它。
+
+**重写节奏。** 自动重写就是启动时间与事故半径的上界：回放耗时、隔离爆炸半径、resync 跳跃成本都随未重写日志的体积伸缩。增长对（`auto_aof_rewrite_percentage` / `min_size`）是默认项；磁盘或回放预算是硬约束时加绝对上限（`auto_aof_rewrite_bytes`），写入稀疏、日志翻不了倍却攒了几周历史的部署加陈旧度触发器（`auto_aof_rewrite_interval_secs`）。三者独立，先到先触发。
+
+**磁盘满与隔离失败会大声失败。** 打开时若写不出隔离副本（如磁盘满），open 直接失败、AOF 原样保留，而不是把你数据的唯一副本截掉。腾出空间，再重新打开。

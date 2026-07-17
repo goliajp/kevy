@@ -4,8 +4,11 @@
 
 The API break 3.x kept postponing, taken once and set in stone — plus
 the deviations from Redis that turned out to be nothing but debt, paid
-off. Wire protocol and disk format carry over from 3.x unchanged;
-`docs/UPGRADING.md` has the full 3.x → 4.0 table.
+off. The client wire carries over from 3.x unchanged; a 3.x data dir
+opens with zero migration work, and the AOF upgrades itself to the
+new checksummed format on its first rewrite (one-way — see
+`docs/UPGRADING.md`, which also covers the one internal wire break:
+the replication handshake now carries the feed generation).
 
 ### The break (why this is 4.0)
 
@@ -95,6 +98,72 @@ off. Wire protocol and disk format carry over from 3.x unchanged;
   dominate mobile KV (16 B 1.3×, 256 B 1.1×), MMKV's page model wins
   multi-KB durable blobs (4 KB ~5-10× — the AOF appends every value
   byte, mmap re-dirties a page). In-memory kevy wins every size.
+
+### The durability-trust arc
+
+Provoked by a production incident report (mailrs): an AOF corrupt
+frame black-holed three days of writes — the replay stopped early on
+every boot, new writes landed behind the stop point and were dropped
+again, and the only signal lived in stderr. Every axis of that
+failure is now closed, each behind an executable gate.
+
+- **`crashgate`**, the crash-consistency gate: a SIGKILL matrix
+  (mid-append / mid-rewrite / mid-snapshot / mid-feed-emit × fsync
+  policies × shard counts) plus injected torn-tail, mid-file-splice
+  (the mailrs damage shape) and payload-bit-flip damage, asserting
+  loss bounds, the no-black-hole invariant (a restart's writes
+  always survive the next restart), quarantine, integrity, and
+  recovery rate. In CI on every push.
+- **Quarantine before truncation**: the dropped region is copied to
+  `aof-<id>.aof.corrupt-quarantine.<unix_ts>` (fsynced) before the
+  live file is repaired; if the quarantine copy cannot be written,
+  the open fails with the file intact — kevy never destroys the only
+  copy of your bytes.
+- **The boot verdict is data, not stderr**: `Store::open_report()`
+  (replayed/dropped bytes, corrupt flag, quarantine paths, resynced
+  bytes), `KevyMetric::Replay` with `dropped_bytes`/`corrupt`,
+  `INFO persistence` gains `aof_last_open_dropped_bytes` /
+  `aof_last_open_corrupt`, and the C ABI gains `kevy_open_report` —
+  every door can turn a bad boot into a refused deployment.
+- **Lifecycle**: `Store::shutdown()` (fsync everything, then refuse
+  writes with `KevyError::Closed`; clone-safe) and `kevy_open_with`
+  / `kevy_shutdown` over the C ABI; the last-clone drop now
+  force-fsyncs the AOF tail before the feed's clean-shutdown marker
+  is written (the marker could previously claim durability the tail
+  did not have).
+- **The three-trigger rewrite policy** (`kevy_persist::
+  RewritePolicy`, one decision point for server and embedded):
+  growth pair, absolute byte cap (`auto_aof_rewrite_bytes`), and
+  staleness (`auto_aof_rewrite_interval_secs`) — the latter two new,
+  live-tunable via CONFIG SET.
+- **AOF format v2** (`KEVYAOF2`): every record length-prefixed and
+  CRC32C-checksummed (hardware-accelerated on both server
+  architectures; the intrinsics live in kevy-sys, the workspace's
+  one sanctioned unsafe home). Bit-rot is refused instead of
+  replayed; torn tails are detected by arithmetic; record boundaries
+  are recoverable. v1 files are read forever and upgrade on their
+  first rewrite. Replay is streaming — peak RSS is O(largest
+  record), not O(file) (measured 4 MB against a 37 MB log;
+  `replaymemgate` holds the line).
+- **Resync replay** (`replay_resync`, opt-in): recover the good tail
+  behind a mid-file corrupt region instead of surrendering it — a
+  record boundary is trusted only when length, CRC, and a
+  well-formed single-command parse all agree. The mailrs shape (an
+  8-byte splice in a 100k-write log) recovers 100500/100500 records
+  in crashgate; skipped ranges are reported, the corrupt flag stays
+  raised.
+- **The replication generation fence**: the handshake carries the
+  feed generation (`REPLICATE FROM <gen> <offset> ID <id>` /
+  `+ACK <gen> <offset>`), and the primary refuses offset continuity
+  across a generation mismatch — closing the offset-aliasing hole
+  where a replica reconnecting after an unclean primary restart
+  could be silently fed the new history's same-numbered offsets
+  (and its mid-stream twin, where a FLUSHALL/promotion bump left a
+  live replica stalled, then aliased). Runners track their data's
+  generation; the embed-as-writer mints a per-boot one; a replica's
+  own AOF is rebased after a snapshot resync. Proven by repligate's
+  writer-SIGKILL clamp and dedicated aliasing tests at both
+  primaries.
 
 ### Proven where it claims to run
 
