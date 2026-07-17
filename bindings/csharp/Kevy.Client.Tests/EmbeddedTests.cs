@@ -82,6 +82,52 @@ public class EmbeddedTests
         Assert.False(r.Corrupt);
     }
 
+    [Fact]
+    public void OpenWithExplicitOptions()
+    {
+        // Null dir + null options = a plain in-memory open.
+        using (var mem = KEmb.KevyDb.OpenWith(null))
+        {
+            mem.Set("k", H.B("v"));
+            Assert.Equal("v", H.Str(mem.Get("k")));
+        }
+
+        // Explicit options round-trip on a durable dir.
+        var dir = Directory.CreateTempSubdirectory("kevy-emb-openwith-").FullName;
+        var opts = new KEmb.KevyOpenOptions
+        {
+            Fsync = KEmb.KevyFsync.Always,
+            Shards = 2,
+            RewriteBytes = 1UL << 30,
+            RewriteIntervalSecs = 3600,
+        };
+        using var db = KEmb.KevyDb.OpenWith(dir, opts);
+        db.Set("opt", H.B("set"));
+        Assert.Equal("set", H.Str(db.Get("opt")));
+    }
+
+    [Fact]
+    public void ShutdownRefusesWritesKeepsReads()
+    {
+        var dir = Directory.CreateTempSubdirectory("kevy-emb-shutdown-").FullName;
+        using (var db = KEmb.KevyDb.Open(dir))
+        {
+            db.Set("k", H.B("pre-shutdown"));
+
+            // The deterministic teardown: flushed + fsynced, idempotent.
+            db.Shutdown();
+            db.Shutdown();
+
+            // Later writes are refused; reads stay available.
+            Assert.Throws<KEmb.KevyException>(() => db.Set("k2", H.B("x")));
+            Assert.Equal("pre-shutdown", H.Str(db.Get("k")));
+        }
+
+        // A reopen sees the pre-shutdown writes.
+        using var db2 = KEmb.KevyDb.Open(dir);
+        Assert.Equal("pre-shutdown", H.Str(db2.Get("k")));
+    }
+
     private static (byte[] channel, byte[] payload) NextMessage(KEmb.KevyRawSub sub)
     {
         var deadline = DateTime.UtcNow.AddSeconds(2);

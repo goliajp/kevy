@@ -62,11 +62,93 @@ func OpenMem() (*DB, error) {
 	return &DB{p: p}, nil
 }
 
+// Fsync is the AOF fsync policy for OpenWith.
+type Fsync uint8
+
+const (
+	// FsyncEverySec fsyncs once a second (the default — Redis appendfsync
+	// everysec).
+	FsyncEverySec Fsync = 0
+	// FsyncAlways fsyncs on every write.
+	FsyncAlways Fsync = 1
+	// FsyncNo never fsyncs; the OS decides.
+	FsyncNo Fsync = 2
+)
+
+// OpenOptions is the explicit open policy for OpenWith — the knobs Open
+// locks to defaults. The zero value disables auto-rewrite entirely
+// (RewritePct 0 is the off switch, as in Redis); start from
+// DefaultOpenOptions for Open's exact defaults and override what you
+// need. RewriteBytes and RewriteIntervalSecs are the absolute-size and
+// staleness rewrite triggers (0 = off).
+type OpenOptions struct {
+	Fsync               Fsync  // AOF fsync policy
+	Shards              uint32 // keyspace shards (0 = default, 1)
+	RewritePct          uint32 // growth trigger, percent (0 = rule off)
+	RewriteMinSize      uint64 // growth rule's minimum size gate
+	RewriteBytes        uint64 // absolute-size trigger (0 = off)
+	RewriteIntervalSecs uint64 // staleness trigger, seconds (0 = off)
+}
+
+// DefaultOpenOptions returns the exact defaults Open uses (the C header's
+// KEVY_OPEN_OPTIONS_INIT): fsync everysec, growth rule at 100% over a
+// 64 MiB floor, absolute-size and staleness triggers off.
+func DefaultOpenOptions() OpenOptions {
+	return OpenOptions{RewritePct: 100, RewriteMinSize: 64 << 20}
+}
+
+// OpenWith is Open with explicit options: durable at dir when dir is
+// non-empty, in-memory when dir is "". A nil opts behaves exactly like
+// Open / OpenMem.
+func OpenWith(dir string, opts *OpenOptions) (*DB, error) {
+	b := []byte(dir)
+	var ptr *C.uint8_t
+	if len(b) > 0 {
+		ptr = (*C.uint8_t)(unsafe.Pointer(&b[0]))
+	}
+	var copts *C.KevyOpenOptions
+	if opts != nil {
+		copts = &C.KevyOpenOptions{
+			fsync:                 C.uint8_t(opts.Fsync),
+			shards:                C.uint32_t(opts.Shards),
+			rewrite_pct:           C.uint32_t(opts.RewritePct),
+			rewrite_min_size:      C.uint64_t(opts.RewriteMinSize),
+			rewrite_bytes:         C.uint64_t(opts.RewriteBytes),
+			rewrite_interval_secs: C.uint64_t(opts.RewriteIntervalSecs),
+		}
+	}
+	p := C.kevy_open_with(ptr, C.size_t(len(b)), copts)
+	runtime.KeepAlive(b)
+	if p == nil {
+		return nil, errors.New("kevy: open failed")
+	}
+	return &DB{p: p}, nil
+}
+
 // Close releases the store. The handle must not be used afterwards.
 func (d *DB) Close() {
 	if d.p != nil {
 		C.kevy_close(d.p)
 		d.p = nil
+	}
+}
+
+// Shutdown flushes every shard's AOF with a REAL fsync, writes the feed
+// continuity marker, then refuses every later write (reads stay
+// available) — the deterministic teardown for a host's signal handler:
+// Shutdown, then exit. Idempotent. On an I/O failure the store is still
+// usable; retry or exit.
+func (d *DB) Shutdown() error {
+	if d.p == nil {
+		return errors.New("kevy: closed handle")
+	}
+	switch rc := C.kevy_shutdown(d.p); rc {
+	case 0:
+		return nil
+	case -2:
+		return errors.New("kevy: shutdown flush failed (fsync/marker I/O error; store still usable — retry or exit)")
+	default:
+		return errors.New("kevy: kevy_shutdown misuse")
 	}
 }
 

@@ -61,6 +61,34 @@ public sealed unsafe class KevyDb : IDisposable
         return db == IntPtr.Zero ? throw new KevyException("kevy: open failed") : new KevyDb(db);
     }
 
+    /// <summary>Open with an explicit policy — the knobs <see cref="Open"/>
+    /// locks to defaults: durable at <paramref name="dir"/> when non-null and
+    /// non-empty, in-memory when null or "". A null <paramref name="options"/>
+    /// behaves exactly like <see cref="Open"/> / <see cref="OpenInMemory"/>.</summary>
+    public static KevyDb OpenWith(string? dir, KevyOpenOptions? options = null)
+    {
+        CheckAbi();
+        var bytes = string.IsNullOrEmpty(dir) ? null : Encoding.UTF8.GetBytes(dir);
+        var native = options is null
+            ? default
+            : new KevyOpenOptionsNative
+            {
+                Fsync = (byte)options.Fsync,
+                Shards = options.Shards,
+                RewritePct = options.RewritePct,
+                RewriteMinSize = options.RewriteMinSize,
+                RewriteBytes = options.RewriteBytes,
+                RewriteIntervalSecs = options.RewriteIntervalSecs,
+            };
+        IntPtr db;
+        fixed (byte* p = bytes) // fixed on null yields a null pointer
+        {
+            db = KevyNative.kevy_open_with(
+                p, (nuint)(bytes?.Length ?? 0), options is null ? null : &native);
+        }
+        return db == IntPtr.Zero ? throw new KevyException("kevy: open failed") : new KevyDb(db);
+    }
+
     /// <summary>The engine version.</summary>
     public static string Version()
     {
@@ -311,6 +339,20 @@ public sealed unsafe class KevyDb : IDisposable
         foreach (var s in _subs) n += s.Poll();
         _subs.RemoveAll(s => s.IsClosed);
         return n;
+    }
+
+    /// <summary>Flush every shard's AOF with a REAL fsync, write the feed
+    /// continuity marker, then refuse every later write (reads stay
+    /// available) — the deterministic teardown for a host's signal handler:
+    /// Shutdown(), then exit. Idempotent. Throws <see cref="KevyException"/>
+    /// on an I/O failure (the store is still usable — retry or exit).</summary>
+    public void Shutdown()
+    {
+        var rc = KevyNative.kevy_shutdown(Live());
+        if (rc == 0) return;
+        throw new KevyException(rc == -2
+            ? "kevy: shutdown flush failed (fsync/marker I/O error; store still usable — retry or exit)"
+            : "kevy: kevy_shutdown misuse");
     }
 
     /// <summary>Close the store. Safe to call more than once.</summary>
