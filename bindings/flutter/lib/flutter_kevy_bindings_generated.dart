@@ -327,6 +327,28 @@ class FlutterKevyBindings {
         )
       >();
 
+  /// Fill *out with db's open verdict. 0 = ok, -1 = misuse.
+  int kevy_open_report(
+    ffi.Pointer<KevyDbHandle> db,
+    ffi.Pointer<KevyOpenReport> out,
+  ) {
+    return _kevy_open_report(db, out);
+  }
+
+  late final _kevy_open_reportPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<KevyDbHandle>,
+            ffi.Pointer<KevyOpenReport>,
+          )
+        >
+      >('kevy_open_report');
+  late final _kevy_open_report = _kevy_open_reportPtr
+      .asFunction<
+        int Function(ffi.Pointer<KevyDbHandle>, ffi.Pointer<KevyOpenReport>)
+      >();
+
   /// Drain one pending frame without blocking.
   /// 1 = frame written to *out (RESP array: message / pmessage / acks);
   /// 0 = nothing queued; negative = misuse.
@@ -473,6 +495,31 @@ final class KevyBuf extends ffi.Struct {
 
   @ffi.Size()
   external int cap;
+}
+
+/// The boot-replay verdict: what the open restored, and what it could not.
+/// dropped_bytes > 0 or corrupt != 0 means the store recovered LESS than
+/// its files held (the dropped region was quarantined next to the AOF as
+/// aof-<id>.aof.corrupt-quarantine.<ts>) — surface it as a startup health
+/// check.
+final class KevyOpenReport extends ffi.Struct {
+  @ffi.Uint64()
+  external int replayed_commands;
+
+  @ffi.Uint64()
+  external int replayed_bytes;
+
+  @ffi.Uint64()
+  external int elapsed_ms;
+
+  @ffi.Uint64()
+  external int dropped_bytes;
+
+  @ffi.Uint8()
+  external int corrupt;
+
+  @ffi.Uint32()
+  external int quarantine_count;
 }
 
 const int KEVY_ABI = 1;

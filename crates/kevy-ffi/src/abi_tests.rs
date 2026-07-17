@@ -162,6 +162,28 @@ fn pubsub_ack_message_and_pattern_frames() {
 }
 
 #[test]
+fn open_report_is_zeroed_for_a_clean_memory_open() {
+    let db = kevy_open_mem();
+    let mut rep = KevyOpenReport {
+        replayed_commands: 1,
+        replayed_bytes: 1,
+        elapsed_ms: 1,
+        dropped_bytes: 1,
+        corrupt: 1,
+        quarantine_count: 1,
+    };
+    assert_eq!(unsafe { kevy_open_report(db, &raw mut rep) }, 0);
+    assert_eq!(rep.dropped_bytes, 0);
+    assert_eq!(rep.corrupt, 0);
+    assert_eq!(rep.quarantine_count, 0);
+    assert_eq!(
+        unsafe { kevy_open_report(std::ptr::null_mut(), &raw mut rep) },
+        -1
+    );
+    unsafe { kevy_close(db) };
+}
+
+#[test]
 fn publish_scalar_counts_and_delivers_same_frames_as_framed() {
     let db = kevy_open_mem();
 

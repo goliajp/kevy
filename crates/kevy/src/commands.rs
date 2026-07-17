@@ -72,6 +72,13 @@ impl Commands for KevyCommands {
         self.shard_ctx().set_persist_stats(in_flight, aof_rewrites_total);
     }
 
+    fn on_replay_report(&self, dropped_bytes: u64, corrupt: bool) {
+        // Boot-replay verdict for `INFO persistence` — non-zero drops are
+        // the operator's alert signal (the store holds less than the AOF
+        // did; the dropped region was quarantined on disk).
+        self.shard_ctx().set_replay_report(dropped_bytes, corrupt);
+    }
+
     fn on_replication_view(&self, master_repl_offset: u64, replicas: Vec<kevy_rt::ReplicaViewRow>) {
         // Publish to the shared per-shard slot FIRST — `ROLE` / `INFO
         // replication` answer on one shard but fold every shard's slot

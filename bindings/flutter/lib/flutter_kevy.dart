@@ -271,6 +271,31 @@ class KevyDb implements ffi.Finalizable {
   /// Remove every key.
   void flushAll() => _want(cmd(['FLUSHALL']));
 
+  /// The boot-replay verdict: what this open restored — and what it could
+  /// not. `droppedBytes > 0` or `corrupt` means the store recovered LESS
+  /// than its files held (the dropped region was quarantined next to the
+  /// AOF): surface it as a startup health check instead of scraping the
+  /// boot WARN line from stderr.
+  KevyOpenStats openReport() {
+    final out = malloc<KevyOpenReport>();
+    try {
+      if (_b.kevy_open_report(_live, out) != 0) {
+        throw KevyError('kevy: open_report failed');
+      }
+      final r = out.ref;
+      return KevyOpenStats(
+        replayedCommands: r.replayed_commands,
+        replayedBytes: r.replayed_bytes,
+        elapsedMs: r.elapsed_ms,
+        droppedBytes: r.dropped_bytes,
+        corrupt: r.corrupt != 0,
+        quarantineCount: r.quarantine_count,
+      );
+    } finally {
+      malloc.free(out);
+    }
+  }
+
   /// Publish [payload] to [channel]; returns the number of receivers.
   /// Scalar lane (kevy_publish): no argv packing, no RESP reply to allocate
   /// and parse — the publish analog of the direct subscribe symbol below.
@@ -327,4 +352,35 @@ Object? _takeBuf(KevyBuf buf) {
   final bytes = Uint8List.fromList(buf.ptr.asTypedList(buf.len));
   _b.kevy_buf_free(buf.ptr, buf.len, buf.cap);
   return parseResp(bytes);
+}
+
+/// The boot-replay verdict [KevyDb.openReport] returns — the typed face of
+/// the C ABI's KevyOpenReport.
+class KevyOpenStats {
+  const KevyOpenStats({
+    required this.replayedCommands,
+    required this.replayedBytes,
+    required this.elapsedMs,
+    required this.droppedBytes,
+    required this.corrupt,
+    required this.quarantineCount,
+  });
+
+  /// Commands replayed from the AOF(s), summed across shards.
+  final int replayedCommands;
+
+  /// Bytes actually replayed (the valid prefixes).
+  final int replayedBytes;
+
+  /// Wall-clock time of the startup replay, in milliseconds.
+  final int elapsedMs;
+
+  /// Bytes dropped past the last replayable frame (quarantined on disk).
+  final int droppedBytes;
+
+  /// True when any shard's replay stopped at a corrupt frame.
+  final bool corrupt;
+
+  /// Quarantine files written by the open's repair.
+  final int quarantineCount;
 }

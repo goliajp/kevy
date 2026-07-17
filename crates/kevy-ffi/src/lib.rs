@@ -20,15 +20,16 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use kevy_embedded::{Config, KevyError, Store, Subscription};
-
 mod frame;
 use frame::encode_frame;
 
 mod dispatch;
 mod publish;
+mod report;
 mod sub_raw;
 pub use dispatch::dispatch_packed;
 pub use publish::kevy_publish;
+pub use report::{KevyOpenReport, kevy_open_report};
 pub use sub_raw::{kevy_sub_next_raw, kevy_sub_wait_raw};
 
 /// Opaque database handle. A `Box<Store>` on the Rust side.

@@ -106,6 +106,9 @@ pub(crate) struct ShardCtx {
     /// the reactor tick via `Commands::on_persist_stats`. Stale by at
     /// most one tick interval. `(in_flight, aof_rewrites_total)`.
     persist_stats: Cell<(bool, u64)>,
+    /// One-shot boot-replay verdict (dropped bytes, corrupt) published via
+    /// `Commands::on_replay_report`; static after boot.
+    replay_report: Cell<(u64, bool)>,
     /// Per-tick replication view (`Commands::on_replication_view`).
     /// Stale by at most one tick interval (default 100 ms); all-default
     /// when this shard has no `ReplicationSource` installed.
@@ -184,6 +187,14 @@ impl ShardCtx {
     /// `(commands, connections)` counted so far on this shard.
     pub(crate) fn counters(&self) -> (u64, u64) {
         (self.cmds.get(), self.conns.get())
+    }
+
+    pub(crate) fn set_replay_report(&self, dropped_bytes: u64, corrupt: bool) {
+        self.replay_report.set((dropped_bytes, corrupt));
+    }
+
+    pub(crate) fn replay_report(&self) -> (u64, bool) {
+        self.replay_report.get()
     }
 
     pub(crate) fn set_persist_stats(&self, in_flight: bool, aof_rewrites_total: u64) {

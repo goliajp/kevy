@@ -229,6 +229,13 @@ fn info_persistence(ctx: &Ctx<'_>, cfg: &Config, b: &mut String) {
     ));
     b.push_str(&format!("aof_rewrites_total:{rewrites}\r\n"));
     b.push_str("aof_last_rewrite_time_sec:-1\r\n");
+    // Boot-replay verdict (answering shard): bytes the startup replay had
+    // to drop (quarantined + truncated), and whether the stop was a
+    // corrupt frame. Non-zero dropped bytes = the shard recovered less
+    // than its AOF held — alert on it.
+    let (dropped, corrupt) = ctx.shard.replay_report();
+    b.push_str(&format!("aof_last_open_dropped_bytes:{dropped}\r\n"));
+    b.push_str(&format!("aof_last_open_corrupt:{}\r\n", i32::from(corrupt)));
     b.push_str("\r\n");
 }
 
