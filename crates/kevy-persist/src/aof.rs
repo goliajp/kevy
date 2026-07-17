@@ -88,6 +88,9 @@ pub struct Aof {
     /// rewrite are captured and replayed after the compacted snapshot. See
     /// [`Self::begin_concurrent_rewrite`].
     rewrite_tee: Option<Vec<u8>>,
+    /// Where `open` quarantined a dropped tail, if it had to repair one —
+    /// surfaced so the store's open report can name the file.
+    open_quarantine: Option<PathBuf>,
 }
 
 /// Handoff between the two halves of a non-blocking rewrite: the serialized
@@ -140,6 +143,7 @@ impl Aof {
     pub fn open(path: &Path, fsync: Fsync) -> io::Result<Self> {
         let mut file = OpenOptions::new().create(true).append(true).open(path)?;
         let mut size = file.metadata().map_or(0, |m| m.len());
+        let mut quarantined = None;
         if size == 0 {
             // Fresh file: stamp the magic header so the replayer can
             // distinguish kevy-written AOFs from accidental writes.
@@ -161,7 +165,7 @@ impl Aof {
             // forensic copy is the only way to ever get them back.
             let valid = crate::replay::valid_prefix_len_of_file(path)?;
             if valid < size {
-                let quarantined = quarantine_dropped_tail(path, valid)?;
+                let q = quarantine_dropped_tail(path, valid)?;
                 file.set_len(valid)?;
                 file.sync_data()?;
                 eprintln!(
@@ -169,9 +173,10 @@ impl Aof {
                      quarantined to {} then truncated at byte {valid}.",
                     path.display(),
                     size - valid,
-                    quarantined.display(),
+                    q.display(),
                 );
                 size = valid;
+                quarantined = Some(q);
             }
         }
         Ok(Aof {
@@ -185,7 +190,15 @@ impl Aof {
             rewrites_total: 0,
             deferred: false,
             rewrite_tee: None,
+            open_quarantine: quarantined,
         })
+    }
+
+    /// The quarantine file `open` wrote while repairing a dropped tail, if
+    /// any. `None` after a clean open.
+    #[inline]
+    pub fn open_quarantine(&self) -> Option<&Path> {
+        self.open_quarantine.as_deref()
     }
 
     /// The fsync policy this AOF was opened with (or last switched to).

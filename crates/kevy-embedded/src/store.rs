@@ -66,6 +66,8 @@ pub struct Store {
     /// View registry.
     #[cfg(feature = "index")]
     pub(crate) views: Arc<crate::ops_view::ViewReg>,
+    /// What this open's replay restored — and what it could not.
+    pub(crate) open_report: Arc<crate::metric::OpenReport>,
 }
 
 impl Store {
@@ -84,6 +86,15 @@ impl Store {
         Self::open_inner(config)
     }
 
+    /// What this open's replay restored — and, crucially, what it could
+    /// NOT: `dropped_bytes > 0` or `corrupt` means the store recovered
+    /// less than the files held (the dropped region was quarantined). Turn
+    /// this into a startup health check / alert — the machine-readable
+    /// twin of the boot WARN line.
+    pub fn open_report(&self) -> &crate::metric::OpenReport {
+        &self.open_report
+    }
+
     /// Answer one RESP request against this store using the SAME
     /// read-only verb whitelist the embedded RESP listener serves
     /// (`Config::with_resp_listener`). The reply is appended to `out`
@@ -96,7 +107,8 @@ impl Store {
     }
 
     fn open_inner(config: Config) -> KevyResult<Self> {
-        let shards: Shards = Arc::new(build_shards(&config)?);
+        let (shards, open_report) = build_shards(&config)?;
+        let shards: Shards = Arc::new(shards);
         let (reaper_stop, reaper_join) = crate::reaper::spawn_reaper(&config, &shards)?;
         #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
         let (replica_runner, replica_source, feed) =
@@ -129,6 +141,7 @@ impl Store {
             indexes,
             #[cfg(feature = "index")]
             views,
+            open_report: Arc::new(open_report),
         };
         #[cfg(feature = "index")]
         store.idx_boot();

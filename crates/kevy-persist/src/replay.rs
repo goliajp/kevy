@@ -41,18 +41,18 @@ use kevy_resp::Argv;
 /// will parse as a valid (if nonsense) command. The summary line is the
 /// signal — an unexpected count of replayed commands at boot is the
 /// operator's cue to inspect the AOF byte-by-byte.
-pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<()> {
+pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<ReplayReport> {
     let mut data = Vec::new();
     match File::open(path) {
         Ok(mut f) => {
             f.read_to_end(&mut data)?;
         }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(ReplayReport::default()),
         Err(e) => return Err(e),
     }
     let total = data.len();
     if total == 0 {
-        return Ok(());
+        return Ok(ReplayReport::default());
     }
     // Replay wall-clock — AOF is an unbounded resource, so its replay time is
     // too; surfacing it gives operators a baseline to watch it grow.
@@ -83,8 +83,37 @@ pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<()> {
         }
     };
     let elapsed_ms = start.elapsed().as_millis();
+    let corrupt = matches!(stop, ReplayStop::CorruptFrame(_));
     log_replay_summary(path, total, pos, replayed, &data[pos.min(total)..], stop, elapsed_ms);
-    Ok(())
+    Ok(ReplayReport {
+        commands: replayed,
+        bytes: total as u64,
+        replayed_bytes: pos as u64,
+        dropped_bytes: (total - pos) as u64,
+        corrupt,
+    })
+}
+
+/// What one [`replay_aof`] pass restored — and, crucially, what it could
+/// NOT: `dropped_bytes` and `corrupt` are the machine-readable form of the
+/// WARN line, so a host can turn "the AOF lost bytes at boot" into an
+/// alert instead of a needle in stderr (the 3-day silent-loss incident was
+/// exactly this signal going unwatched).
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct ReplayReport {
+    /// Commands re-applied.
+    pub commands: u64,
+    /// Total file size in bytes (before any repair).
+    pub bytes: u64,
+    /// Bytes actually replayed (the valid prefix).
+    pub replayed_bytes: u64,
+    /// Bytes past the last complete frame — dropped, then quarantined and
+    /// truncated by [`crate::Aof::open`].
+    pub dropped_bytes: u64,
+    /// True when the stop was a corrupt frame (vs a clean end or a
+    /// partial trailing frame).
+    pub corrupt: bool,
 }
 
 /// Byte length of the AOF at `path` up to and including the last
@@ -172,10 +201,12 @@ fn log_replay_summary(
             eprintln!(
                 "kevy WARN: AOF {display} replayed {replayed} commands in {elapsed_ms} ms \
                  then hit a corrupt \
-                 frame at byte {pos}; dropping the trailing {dropped} bytes. \
+                 frame at byte {pos}; dropping the trailing {dropped} bytes \
+                 (quarantined before truncation). \
                  Preview: {preview}. Parser error: {err}. \
-                 Common cause: non-kevy bytes got written into this file path \
-                 (e.g. deploy pipeline redirecting stderr to the AOF)."
+                 Most common cause: the process was killed mid-append (a torn \
+                 frame); less commonly, non-kevy bytes got written into this \
+                 file path (e.g. a deploy pipeline redirecting stderr here)."
             );
         }
     }

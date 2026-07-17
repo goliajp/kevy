@@ -33,6 +33,7 @@ pub struct WeakStore {
     indexes_weak: Weak<crate::ops_index::IndexReg>,
     #[cfg(feature = "index")]
     views_weak: Weak<crate::ops_view::ViewReg>,
+    open_report_weak: Weak<crate::metric::OpenReport>,
 }
 
 impl WeakStore {
@@ -50,6 +51,7 @@ impl WeakStore {
             indexes: self.indexes_weak.upgrade()?,
             #[cfg(feature = "index")]
             views: self.views_weak.upgrade()?,
+            open_report: self.open_report_weak.upgrade()?,
         })
     }
 }
@@ -68,6 +70,7 @@ impl Store {
             indexes_weak: Arc::downgrade(&self.indexes),
             #[cfg(feature = "index")]
             views_weak: Arc::downgrade(&self.views),
+            open_report_weak: Arc::downgrade(&self.open_report),
         }
     }
 }

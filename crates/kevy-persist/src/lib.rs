@@ -50,7 +50,7 @@ mod snapshot_read;
 mod snapshot_write;
 
 pub use aof::{AOF_MAGIC, Aof, Fsync, RewritePlan, RewriteStats, write_aof_base};
-pub use replay::replay_aof;
+pub use replay::{ReplayReport, replay_aof};
 pub use shards_meta::{Routing, ShardsMeta, read_shards_meta, write_shards_meta};
 pub use kevy_resp::{Argv, ArgvView};
 pub use rewrite_fmt::{dump_aof, dump_store_to_buf, write_multibulk, write_stream_as_commands};
