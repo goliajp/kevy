@@ -198,6 +198,24 @@ class KevyDB private constructor(private var handle: Long) : AutoCloseable {
         want(cmd("FLUSHALL"))
     }
 
+    /** The boot-replay verdict: what this open restored — and what it could
+     *  not. [KevyOpenStats.droppedBytes] > 0 or [KevyOpenStats.corrupt] means
+     *  the store recovered LESS than its files held (the dropped region was
+     *  quarantined next to the AOF): surface it as a startup health check
+     *  instead of scraping the boot WARN line from logcat. */
+    fun openReport(): KevyOpenStats {
+        val r = KevyNative.openReport(live())
+            ?: throw KevyException("kevy: openReport misuse")
+        return KevyOpenStats(
+            replayedCommands = r[0],
+            replayedBytes = r[1],
+            elapsedMs = r[2],
+            droppedBytes = r[3],
+            corrupt = r[4] != 0L,
+            quarantineCount = r[5],
+        )
+    }
+
     /** Deliver [payload] to every in-process subscriber on [channel];
      *  returns the receiver count. */
     fun publish(channel: String, payload: ByteArray): Long {
@@ -302,3 +320,20 @@ class KevySubscription internal constructor(
         }
     }
 }
+
+/** The boot-replay verdict [KevyDB.openReport] returns — the typed face of
+ *  the JNI gate's long[6]. */
+data class KevyOpenStats(
+    /** Commands replayed from the AOF(s), summed across shards. */
+    val replayedCommands: Long,
+    /** Bytes actually replayed (the valid prefixes). */
+    val replayedBytes: Long,
+    /** Wall-clock time of the startup replay, in milliseconds. */
+    val elapsedMs: Long,
+    /** Bytes dropped past the last replayable frame (quarantined on disk). */
+    val droppedBytes: Long,
+    /** True when any shard's replay stopped at a corrupt frame. */
+    val corrupt: Boolean,
+    /** Quarantine files written by the open's repair. */
+    val quarantineCount: Long,
+)

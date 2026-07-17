@@ -156,7 +156,7 @@ pub use config::{Config, EvictionPolicy, TtlReaperMode};
 pub use config::AppendFsync;
 pub use info::KevyInfo;
 #[cfg(feature = "persist")]
-pub use metric::KevyMetric;
+pub use metric::{KevyMetric, OpenReport};
 #[cfg(feature = "persist")]
 pub use kevy_persist::RewriteStats;
 pub use kevy_store::{

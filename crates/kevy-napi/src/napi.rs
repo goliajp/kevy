@@ -9,7 +9,8 @@
 //! below any Node this package supports.
 //!
 //! The gate keeps its surface to Buffers in / Buffer out plus opaque
-//! externals for handles, which needs exactly the thirteen symbols below.
+//! externals for handles — plus one plain object for the open report,
+//! which needs exactly the sixteen symbols below.
 
 use std::ffi::c_void;
 
@@ -83,6 +84,17 @@ unsafe extern "C" {
     pub(crate) fn napi_create_uint32(
         env: NapiEnv,
         value: u32,
+        result: *mut NapiValue,
+    ) -> NapiStatus;
+    pub(crate) fn napi_create_object(env: NapiEnv, result: *mut NapiValue) -> NapiStatus;
+    pub(crate) fn napi_create_double(
+        env: NapiEnv,
+        value: f64,
+        result: *mut NapiValue,
+    ) -> NapiStatus;
+    pub(crate) fn napi_get_boolean(
+        env: NapiEnv,
+        value: bool,
         result: *mut NapiValue,
     ) -> NapiStatus;
     pub(crate) fn napi_get_value_int64(
@@ -159,6 +171,41 @@ pub(crate) unsafe fn make_buffer(env: NapiEnv, bytes: &[u8]) -> NapiValue {
     };
     let rc = unsafe { napi_create_buffer_copy(env, bytes.len(), src.cast(), &mut copy, &mut out) };
     if rc != 0 { std::ptr::null_mut() } else { out }
+}
+
+/// Fresh plain object (`{}`). Null on allocation failure — the runtime
+/// then has a pending exception, passed up as-is.
+///
+/// # Safety
+/// `env` as in [`args`].
+pub(crate) unsafe fn make_object(env: NapiEnv) -> NapiValue {
+    let mut out: NapiValue = std::ptr::null_mut();
+    let rc = unsafe { napi_create_object(env, &mut out) };
+    if rc != 0 { std::ptr::null_mut() } else { out }
+}
+
+/// `obj[name] = v` as a JS number (`name` a NUL-terminated literal). A
+/// failed step leaves the property unset; the caller returns the object
+/// as-is and any pending exception passes up.
+///
+/// # Safety
+/// `env` as in [`args`]; `name` must be NUL-terminated.
+pub(crate) unsafe fn set_num(env: NapiEnv, obj: NapiValue, name: &'static str, v: f64) {
+    let mut val: NapiValue = std::ptr::null_mut();
+    if unsafe { napi_create_double(env, v, &mut val) } == 0 {
+        unsafe { napi_set_named_property(env, obj, name.as_ptr().cast(), val) };
+    }
+}
+
+/// `obj[name] = v` as a JS boolean; same contract as [`set_num`].
+///
+/// # Safety
+/// `env` as in [`args`]; `name` must be NUL-terminated.
+pub(crate) unsafe fn set_bool(env: NapiEnv, obj: NapiValue, name: &'static str, v: bool) {
+    let mut val: NapiValue = std::ptr::null_mut();
+    if unsafe { napi_get_boolean(env, v, &mut val) } == 0 {
+        unsafe { napi_set_named_property(env, obj, name.as_ptr().cast(), val) };
+    }
 }
 
 /// Wrap a raw pointer as an opaque external (no finalizer: handles are

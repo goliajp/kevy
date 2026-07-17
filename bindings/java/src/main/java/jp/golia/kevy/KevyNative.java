@@ -46,6 +46,16 @@ public final class KevyNative {
     /** Scalar fast-path SET, ttlMs 0 = no expiry; 0 = ok, negative = misuse. */
     public static native int set(long db, byte[] key, byte[] val, long ttlMs);
 
+    /**
+     * The boot-replay verdict of this handle's open, as a long[6]:
+     * [0] replayedCommands, [1] replayedBytes, [2] elapsedMs,
+     * [3] droppedBytes, [4] corrupt (0/1), [5] quarantineCount.
+     * [3] &gt; 0 or [4] != 0 means the store recovered LESS than its files
+     * held (the dropped region was quarantined next to the AOF). Null on
+     * misuse. Typed ergonomics live one floor up.
+     */
+    public static native long[] openReport(long db);
+
     /** The engine version as UTF-8 bytes. */
     public static native byte[] version();
 

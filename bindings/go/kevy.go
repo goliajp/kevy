@@ -164,6 +164,48 @@ func (d *DB) SetScalar(key, val []byte, ttlMs uint64) error {
 	return nil
 }
 
+// OpenReport is the boot-replay verdict: what an open restored — and what
+// it could not. DroppedBytes > 0 or Corrupt means the store recovered LESS
+// than its files held (the dropped region was quarantined next to the
+// AOF): surface it as a startup health check instead of scraping the boot
+// WARN line from stderr.
+type OpenReport struct {
+	// ReplayedCommands is the commands replayed from the AOF(s), summed
+	// across shards.
+	ReplayedCommands uint64
+	// ReplayedBytes is the bytes actually replayed (the valid prefixes).
+	ReplayedBytes uint64
+	// ElapsedMs is the wall-clock time of the startup replay.
+	ElapsedMs uint64
+	// DroppedBytes is the bytes dropped past the last replayable frame
+	// (quarantined on disk).
+	DroppedBytes uint64
+	// Corrupt is true when any shard's replay stopped at a corrupt frame.
+	Corrupt bool
+	// QuarantineCount is the quarantine files written by the open's repair.
+	QuarantineCount uint32
+}
+
+// OpenReport returns this store's boot-replay verdict (see OpenReport, the
+// type). An in-memory or fresh-dir open reports all zeros.
+func (d *DB) OpenReport() (OpenReport, error) {
+	if d.p == nil {
+		return OpenReport{}, errors.New("kevy: closed handle")
+	}
+	var out C.KevyOpenReport
+	if C.kevy_open_report(d.p, &out) != 0 {
+		return OpenReport{}, errors.New("kevy: kevy_open_report misuse")
+	}
+	return OpenReport{
+		ReplayedCommands: uint64(out.replayed_commands),
+		ReplayedBytes:    uint64(out.replayed_bytes),
+		ElapsedMs:        uint64(out.elapsed_ms),
+		DroppedBytes:     uint64(out.dropped_bytes),
+		Corrupt:          out.corrupt != 0,
+		QuarantineCount:  uint32(out.quarantine_count),
+	}, nil
+}
+
 // Version reports the engine version, e.g. "4.0.0".
 func Version() string {
 	return C.GoString(C.kevy_version())

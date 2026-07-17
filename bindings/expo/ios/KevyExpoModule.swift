@@ -63,6 +63,23 @@ public class KevyExpoModule: Module {
             return try Self.runCmd(db, packed)
         }
 
+        // The boot-replay verdict, as [replayedCommands, replayedBytes,
+        // elapsedMs, droppedBytes, corrupt(0/1), quarantineCount] — the TS
+        // layer maps it to a typed object. Mirrors the Android door's
+        // KevyNative.openReport long[6] layout.
+        Function("openReport") { (id: Int32) -> [Double] in
+            guard let db = self.dbs[id] else { throw Self.fail("kevy: closed handle") }
+            var rep = KevyOpenReport()
+            guard kevy_open_report(db, &rep) == 0 else {
+                throw Self.fail("kevy: open_report failed")
+            }
+            return [
+                Double(rep.replayed_commands), Double(rep.replayed_bytes),
+                Double(rep.elapsed_ms), Double(rep.dropped_bytes),
+                rep.corrupt != 0 ? 1 : 0, Double(rep.quarantine_count),
+            ]
+        }
+
         // Rides the shared lane (kevy_get_shared) for cross-platform parity
         // with the Android door — NOT a measured speedup here: this shell is
         // already on the scalar (not RESP) path, so the shared lane's only

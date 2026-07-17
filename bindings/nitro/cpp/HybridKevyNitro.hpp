@@ -61,6 +61,9 @@ public:
                const std::shared_ptr<ArrayBuffer>& value, double ttlMs) override;
   // Re-open file-backed (durable) at dir, replacing the in-memory ctor db.
   bool openAt(const std::string& dir) override;
+  // The boot-replay verdict of this instance's open (zeros for the ctor's
+  // in-memory db; meaningful after openAt).
+  KevyOpenStats openReport() override;
 
   void subscribe(const std::string& channel) override;
   double publish(const std::string& channel, const std::shared_ptr<ArrayBuffer>& payload) override;

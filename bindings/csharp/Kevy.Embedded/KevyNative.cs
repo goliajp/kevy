@@ -20,6 +20,19 @@ internal unsafe struct KevyBuf
     public nuint Cap;
 }
 
+/// <summary>The boot-replay verdict kevy_open_report fills — field-for-field
+/// the C ABI's KevyOpenReport (four u64s, a u8 flag, a padded u32 count).</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct KevyOpenReport
+{
+    public ulong ReplayedCommands;
+    public ulong ReplayedBytes;
+    public ulong ElapsedMs;
+    public ulong DroppedBytes;
+    public byte Corrupt;
+    public uint QuarantineCount;
+}
+
 internal static unsafe partial class KevyNative
 {
     private const string Lib = "kevy_ffi";
@@ -81,6 +94,9 @@ internal static unsafe partial class KevyNative
     [LibraryImport(Lib)]
     internal static partial int kevy_set(
         IntPtr db, byte* key, nuint keyLen, byte* val, nuint valLen, ulong ttlMs);
+
+    [LibraryImport(Lib)]
+    internal static partial int kevy_open_report(IntPtr db, KevyOpenReport* @out);
 
     [LibraryImport(Lib)]
     internal static partial IntPtr kevy_subscribe(IntPtr db, byte* chan, nuint chanLen);

@@ -13,11 +13,13 @@
 #error NitroModules cannot be found! Are you sure you installed NitroModules properly?
 #endif
 
-
+// Forward declaration of `KevyOpenStats` to properly resolve imports.
+namespace margelo::nitro::kevy { struct KevyOpenStats; }
 
 #include <NitroModules/ArrayBuffer.hpp>
 #include <optional>
 #include <string>
+#include "KevyOpenStats.hpp"
 #include <functional>
 
 namespace margelo::nitro::kevy {
@@ -55,6 +57,7 @@ namespace margelo::nitro::kevy {
       virtual std::shared_ptr<ArrayBuffer> cmd(const std::shared_ptr<ArrayBuffer>& argv) = 0;
       virtual std::optional<std::shared_ptr<ArrayBuffer>> getData(const std::string& key) = 0;
       virtual void setData(const std::string& key, const std::shared_ptr<ArrayBuffer>& value, double ttlMs) = 0;
+      virtual KevyOpenStats openReport() = 0;
       virtual bool openAt(const std::string& dir) = 0;
       virtual void subscribe(const std::string& channel) = 0;
       virtual double publish(const std::string& channel, const std::shared_ptr<ArrayBuffer>& payload) = 0;

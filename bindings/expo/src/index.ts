@@ -40,6 +40,16 @@ const native = requireNativeModule<NativeKevy>("Kevy");
 export type Bytes = string | Uint8Array;
 export type MessageCallback = (payload: Uint8Array, channel: string) => void;
 
+/** The boot-replay verdict `KevyDb.openReport()` returns. */
+export interface KevyOpenStats {
+  replayedCommands: number;
+  replayedBytes: number;
+  elapsedMs: number;
+  droppedBytes: number;
+  corrupt: boolean;
+  quarantineCount: number;
+}
+
 export interface OpenOptions {
   /** Directory for persistence; omit for a pure in-memory store. */
   dir?: string;
@@ -208,6 +218,25 @@ export class KevyDb {
 
   flushall(): void {
     reject(this.cmd("FLUSHALL"));
+  }
+
+  /**
+   * The boot-replay verdict: what this open restored — and what it could
+   * not. `droppedBytes > 0` or `corrupt` means the store recovered LESS
+   * than its files held (the dropped region was quarantined next to the
+   * AOF): surface it as a startup health check instead of scraping the
+   * boot WARN line from the native log.
+   */
+  openReport(): KevyOpenStats {
+    const a = native.openReport(this.#live()) as number[];
+    return {
+      replayedCommands: a[0],
+      replayedBytes: a[1],
+      elapsedMs: a[2],
+      droppedBytes: a[3],
+      corrupt: a[4] !== 0,
+      quarantineCount: a[5],
+    };
   }
 
   // Publishes to the engine bus (raw-lane subscribers, receiver count) AND

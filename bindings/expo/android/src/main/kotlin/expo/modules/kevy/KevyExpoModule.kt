@@ -44,6 +44,15 @@ class KevyExpoModule : Module() {
                 ?: throw IllegalStateException("kevy: kevy_cmd misuse")
         }
 
+        // The boot-replay verdict, as [replayedCommands, replayedBytes,
+        // elapsedMs, droppedBytes, corrupt(0/1), quarantineCount] — the TS
+        // layer maps it to a typed object. Doubles: JS numbers either way.
+        Function("openReport") { id: Int ->
+            val r = KevyNative.openReport(db(id))
+                ?: throw IllegalStateException("kevy: open_report misuse")
+            r.map { it.toDouble() }
+        }
+
         Function("get") { id: Int, key: ByteArray ->
             try {
                 KevyNative.get(db(id), key)
