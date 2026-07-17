@@ -13,12 +13,8 @@
 
 use crate::KevyResult;
 
-#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
-use crate::replica_glue::ensure_writable;
+use crate::store::ensure_writable;
 use crate::store::{Store, commit_write};
-
-#[cfg(not(all(feature = "replicate", not(target_arch = "wasm32"))))]
-fn ensure_writable(_s: &Store) -> KevyResult<()> { Ok(()) }
 
 impl Store {
     /// `COPY src dst [REPLACE]` — copy `src`'s value (and TTL if any)

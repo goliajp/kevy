@@ -91,7 +91,11 @@ pub struct Aof {
     /// Where `open` quarantined a dropped tail, if it had to repair one —
     /// surfaced so the store's open report can name the file.
     open_quarantine: Option<PathBuf>,
+    /// When the last rewrite (or the open, if none yet) finished — the
+    /// anchor for [`RewritePolicy::interval_secs`].
+    last_rewrite_at: Instant,
 }
+
 
 /// Handoff between the two halves of a non-blocking rewrite: the serialized
 /// keyspace image (produced under the store lock) and the temp path to spill
@@ -191,14 +195,23 @@ impl Aof {
             deferred: false,
             rewrite_tee: None,
             open_quarantine: quarantined,
+            last_rewrite_at: Instant::now(),
         })
     }
+
 
     /// The quarantine file `open` wrote while repairing a dropped tail, if
     /// any. `None` after a clean open.
     #[inline]
     pub fn open_quarantine(&self) -> Option<&Path> {
         self.open_quarantine.as_deref()
+    }
+
+    /// When the last rewrite (or the open) finished — the staleness anchor
+    /// [`crate::RewritePolicy`] measures from.
+    #[inline]
+    pub(crate) fn last_rewrite_at(&self) -> Instant {
+        self.last_rewrite_at
     }
 
     /// The fsync policy this AOF was opened with (or last switched to).
@@ -321,6 +334,7 @@ impl Aof {
         self.dirty = false;
         self.size_bytes = AOF_MAGIC.len() as u64;
         self.size_at_last_rewrite = AOF_MAGIC.len() as u64;
+        self.last_rewrite_at = Instant::now();
         Ok(())
     }
 
@@ -374,6 +388,7 @@ impl Aof {
         self.file = BufWriter::with_capacity(AOF_BUF_CAP, f);
         self.size_bytes = bytes;
         self.size_at_last_rewrite = bytes;
+        self.last_rewrite_at = Instant::now();
         self.dirty = false;
         self.rewrites_total = self.rewrites_total.saturating_add(1);
         Ok(RewriteStats { keys, bytes })
@@ -422,6 +437,7 @@ impl Aof {
         self.file = BufWriter::with_capacity(AOF_BUF_CAP, f);
         self.size_bytes = bytes;
         self.size_at_last_rewrite = bytes;
+        self.last_rewrite_at = Instant::now();
         self.dirty = false;
         self.rewrites_total = self.rewrites_total.saturating_add(1);
         Ok(RewriteStats { keys, bytes })

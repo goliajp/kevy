@@ -11,7 +11,6 @@ use std::time::Duration;
 use std::time::Instant;
 
 #[cfg(feature = "persist")]
-use kevy_persist::Aof;
 
 use crate::config::{Config, TtlReaperMode};
 #[cfg(feature = "persist")]
@@ -36,16 +35,19 @@ pub(crate) fn spawn_reaper(
             let samples = config.reaper_samples;
             let rounds = config.reaper_max_rounds;
             #[cfg(feature = "persist")]
-            let rw_pct = config.auto_aof_rewrite_pct;
-            #[cfg(feature = "persist")]
-            let rw_min = config.auto_aof_rewrite_min_size;
+            let policy = kevy_persist::RewritePolicy {
+                pct: config.auto_aof_rewrite_pct,
+                min_size: config.auto_aof_rewrite_min_size,
+                bytes: config.auto_aof_rewrite_bytes,
+                interval_secs: config.auto_aof_rewrite_interval_secs,
+            };
             #[cfg(feature = "persist")]
             let sink = config.metric_sink.clone();
             let handle = std::thread::Builder::new()
                 .name(String::from("kevy-embedded-reaper"))
                 .spawn(move || {
                     #[cfg(feature = "persist")]
-                    reaper_loop(shards_t, stop_t, interval, samples, rounds, rw_pct, rw_min, sink);
+                    reaper_loop(shards_t, stop_t, interval, samples, rounds, policy, sink);
                     #[cfg(not(feature = "persist"))]
                     reaper_loop(shards_t, stop_t, interval, samples, rounds);
                 })?;
@@ -61,8 +63,7 @@ fn reaper_loop(
     interval: Duration,
     samples: usize,
     rounds: u32,
-    #[cfg(feature = "persist")] rewrite_pct: u32,
-    #[cfg(feature = "persist")] rewrite_min_size: u64,
+    #[cfg(feature = "persist")] policy: kevy_persist::RewritePolicy,
     #[cfg(feature = "persist")] sink: Option<MetricSink>,
 ) {
     while !stop.load(Ordering::Relaxed) {
@@ -83,26 +84,9 @@ fn reaper_loop(
             }
             // Non-blocking: holds the lock only for begin/finish, not the spill.
             #[cfg(feature = "persist")]
-            concurrent_auto_rewrite(shard, rewrite_pct, rewrite_min_size, sink.as_ref());
+            concurrent_auto_rewrite(shard, policy, sink.as_ref());
         }
     }
-}
-
-/// Has the AOF grown `pct` percent past its size at the last rewrite and is it
-/// at least `min_size` bytes? (Redis's `auto-aof-rewrite-percentage` /
-/// `-min-size`.) `pct == 0` always returns false (auto-rewrite disabled).
-#[cfg(feature = "persist")]
-fn rewrite_threshold_met(aof: &Aof, pct: u32, min_size: u64) -> bool {
-    if pct == 0 || aof.is_rewriting() {
-        return false;
-    }
-    let cur = aof.size_bytes();
-    if cur < min_size {
-        return false;
-    }
-    let baseline = aof.size_at_last_rewrite().max(1);
-    // (cur - baseline) * 100 / baseline ≥ pct  ⇔  cur * 100 ≥ baseline * (100 + pct)
-    cur.saturating_mul(100) >= baseline.saturating_mul(100u64.saturating_add(u64::from(pct)))
 }
 
 /// **Non-blocking** auto-`BGREWRITEAOF`. Three phases bracket the lock so the
@@ -121,11 +105,10 @@ fn rewrite_threshold_met(aof: &Aof, pct: u32, min_size: u64) -> bool {
 #[cfg(feature = "persist")]
 pub(crate) fn concurrent_auto_rewrite(
     inner: &Arc<RwLock<Inner>>,
-    pct: u32,
-    min_size: u64,
+    policy: kevy_persist::RewritePolicy,
     sink: Option<&MetricSink>,
 ) {
-    let Some((start, view, tmp, before_bytes)) = begin_rewrite(inner, pct, min_size) else {
+    let Some((start, view, tmp, before_bytes)) = begin_rewrite(inner, policy) else {
         return;
     };
     // Phase 2 — serialize the frozen view + fsync, lock released.
@@ -172,11 +155,10 @@ pub(crate) fn concurrent_auto_rewrite(
 #[allow(clippy::type_complexity)] // inline tuple keeps the phase-1 outputs colocated
 fn begin_rewrite(
     inner: &Arc<RwLock<Inner>>,
-    pct: u32,
-    min_size: u64,
+    policy: kevy_persist::RewritePolicy,
 ) -> Option<(Instant, kevy_store::SnapshotView, std::path::PathBuf, u64)> {
     let mut g = lock_inner(inner);
-    let ready = g.aof.as_ref().is_some_and(|a| rewrite_threshold_met(a, pct, min_size));
+    let ready = g.aof.as_ref().is_some_and(|a| a.rewrite_due(policy));
     if !ready {
         return None;
     }

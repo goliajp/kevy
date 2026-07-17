@@ -61,6 +61,13 @@ pub struct Config {
     /// Floor below which auto-rewrite is skipped. Default `64 MiB` (Redis).
     #[cfg(feature = "persist")]
     pub auto_aof_rewrite_min_size: u64,
+    /// Absolute-size auto-rewrite trigger in bytes (0 = off). The growth
+    /// rule alone lets a large log double before compacting — a 2.2 GB AOF
+    /// waits for 4.4 GB; this caps it outright.
+    pub auto_aof_rewrite_bytes: u64,
+    /// Time-based auto-rewrite trigger in seconds (0 = off): compact at
+    /// least this often while the log grows.
+    pub auto_aof_rewrite_interval_secs: u64,
     /// Optional push-style metric callback (replay / rewrite events). Default
     /// `None`. Set via [`Self::with_metric_sink`]; not part of `Debug` output.
     #[cfg(feature = "persist")]
@@ -148,6 +155,8 @@ impl Default for Config {
             auto_aof_rewrite_pct: 100,
             #[cfg(feature = "persist")]
             auto_aof_rewrite_min_size: 64 * 1024 * 1024,
+            auto_aof_rewrite_bytes: 0,
+            auto_aof_rewrite_interval_secs: 0,
             #[cfg(feature = "persist")]
             metric_sink: None,
             shards: 1,
@@ -219,6 +228,26 @@ impl Config {
     #[must_use]
     pub fn with_appendfsync(mut self, fsync: AppendFsync) -> Self {
         self.appendfsync = fsync;
+        self
+    }
+
+    /// Absolute-size auto-rewrite trigger: compact whenever the AOF reaches
+    /// `bytes`, regardless of growth ratio (0 = off). Complements
+    /// [`Self::with_auto_aof_rewrite`], whose growth rule is too sluggish
+    /// for long-lived instances with a large baseline.
+    #[cfg(feature = "persist")]
+    #[must_use]
+    pub fn with_auto_rewrite_bytes(mut self, bytes: u64) -> Self {
+        self.auto_aof_rewrite_bytes = bytes;
+        self
+    }
+
+    /// Time-based auto-rewrite trigger: compact at least every `interval`
+    /// while the log grows (zero duration = off).
+    #[cfg(feature = "persist")]
+    #[must_use]
+    pub fn with_auto_rewrite_interval(mut self, interval: std::time::Duration) -> Self {
+        self.auto_aof_rewrite_interval_secs = interval.as_secs();
         self
     }
 
