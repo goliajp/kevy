@@ -299,13 +299,20 @@ fn cmd_universal_path_reaches_the_compiled_surface() {
         b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
     );
 
-    // Index/replication verbs are not compiled into the wasm closure: an
-    // unknown-command RESP error is the correct, expected answer.
+    // Index/replication verbs are not compiled into the wasm32 closure — but
+    // THIS test builds natively, and under `cargo test --workspace` cargo
+    // feature-unifies kevy-embedded with the ffi/server crates' defaults, so
+    // IDX.CREATE may resolve to the real verb here. Both worlds are correct
+    // answers for the universal cmd path; the minimal-closure claim itself is
+    // enforced structurally by CI's wasm job (`cargo check --target wasm32-*
+    // -p kevy-wasm` — single-package selection, nothing to unify with).
     let (s, reply) = cmd(h, &[b"IDX.CREATE", b"i"]);
     assert!(s >= 0);
     assert!(
-        reply.starts_with(b"-ERR unknown command"),
-        "uncompiled verb should be an unknown-command error, got {:?}",
+        reply.starts_with(b"-ERR unknown command")
+            || reply.starts_with(b"-ERR usage: IDX.CREATE"),
+        "IDX.CREATE must be uncompiled (minimal build) or the real verb's \
+         arity error (feature-unified build), got {:?}",
         String::from_utf8_lossy(&reply)
     );
 
