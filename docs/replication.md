@@ -74,7 +74,7 @@ Start it on a second host:
 kevy --config /etc/kevy/replica.toml --port 6004
 ```
 
-Each local shard opens a runner thread, connects to `(upstream_host, upstream_port_base + shard_index)`, handshakes with `REPLICATE FROM <offset> ID <replica_id>`, reads `+ACK <offset>`, then streams frames into the shard's apply path inside a guard that suppresses local re-emission.
+Each local shard opens a runner thread, connects to `(upstream_host, upstream_port_base + shard_index)`, handshakes with `REPLICATE FROM <generation> <offset> ID <replica_id>`, reads `+ACK <generation> <offset>`, then streams frames into the shard's apply path inside a guard that suppresses local re-emission.
 
 ### 3. Retarget the replica at runtime
 

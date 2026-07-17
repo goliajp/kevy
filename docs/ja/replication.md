@@ -74,7 +74,7 @@ upstream = "primary.internal:16004"   # プライマリの listen_port_base
 kevy --config /etc/kevy/replica.toml --port 6004
 ```
 
-各ローカルシャードはランナースレッドを開き、`(upstream_host, upstream_port_base + shard_index)`に接続し、`REPLICATE FROM <offset> ID <replica_id>`でハンドシェイクし、`+ACK <offset>`を読み、ローカル再発行を抑止するガードの中でフレームをシャードの適用パスへストリーミングします。
+各ローカルシャードはランナースレッドを開き、`(upstream_host, upstream_port_base + shard_index)`に接続し、`REPLICATE FROM <generation> <offset> ID <replica_id>`でハンドシェイクし、`+ACK <generation> <offset>`を読み、ローカル再発行を抑止するガードの中でフレームをシャードの適用パスへストリーミングします。
 
 ### 3. レプリカを実行中に再ターゲットする
 

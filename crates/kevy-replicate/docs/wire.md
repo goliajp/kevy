@@ -13,8 +13,10 @@ Status: Phase 1 (v3-cluster). Locked for v1.18.0.
   is the protocol. No outer length prefix the sender has to back-patch.
 - **Forward by offset.** Every frame carries a monotonic, primary-
   assigned `u64` offset. Replicas ACK by offset; reconnecting replicas
-  ask `REPLICATE FROM <offset>` and the primary replays from its ring
-  buffer (or triggers a full snapshot if `<offset>` has been evicted).
+  ask `REPLICATE FROM <generation> <offset>` and the primary replays
+  from its ring buffer — only when the generation matches its own
+  (offsets alias across generations) — or triggers a full snapshot
+  (generation mismatch, or `<offset>` evicted).
 - **No checksum, for now.** TCP already carries a 16-bit checksum;
   payload corruption inside a single TCP stream is exceedingly rare on
   the LAN this protocol targets. A checksum lane can be added as an

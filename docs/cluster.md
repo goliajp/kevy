@@ -191,7 +191,7 @@ let replica = Store::open(cfg)?;
 # Ok::<(), kevy_embedded::KevyError>(())
 ```
 
-The handshake sends `REPLICATE FROM <last-applied-offset> ID <replica_id>`; the primary acks the offset and streams frames. The runner thread is joined when the last `Store` clone drops, so the primary observes a clean FIN and frees the slot. `PUBLISH` is allowed locally on the embed (pub/sub is process-local), but the keyspace itself remains read-only.
+The handshake sends `REPLICATE FROM <generation> <last-applied-offset> ID <replica_id>`; the primary acks its generation and the offset and streams frames. The runner thread is joined when the last `Store` clone drops, so the primary observes a clean FIN and frees the slot. `PUBLISH` is allowed locally on the embed (pub/sub is process-local), but the keyspace itself remains read-only.
 
 ## Scoped multi-writer
 

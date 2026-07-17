@@ -74,7 +74,7 @@ upstream = "primary.internal:16004"   # the primary's listen_port_base
 kevy --config /etc/kevy/replica.toml --port 6004
 ```
 
-每个本地 shard 开一个 runner 线程，连接 `(upstream_host, upstream_port_base + shard_index)`，以 `REPLICATE FROM <offset> ID <replica_id>` 握手，读到 `+ACK <offset>` 后，把帧流式写入 shard 的 apply 路径——整个过程处在一个抑制本地重新发出的 guard 之内。
+每个本地 shard 开一个 runner 线程，连接 `(upstream_host, upstream_port_base + shard_index)`，以 `REPLICATE FROM <generation> <offset> ID <replica_id>` 握手，读到 `+ACK <generation> <offset>` 后，把帧流式写入 shard 的 apply 路径——整个过程处在一个抑制本地重新发出的 guard 之内。
 
 ### 3. 在运行时切换副本上游
 

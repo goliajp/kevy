@@ -3,7 +3,8 @@
 //! This module owns the [`ReplicaConn`] state machine and the [`Shard`]
 //! methods that drive it: accepting a replica TCP connection on the
 //! per-shard listener (`replication_port_base + id`), running the
-//! handshake (`REPLICATE FROM <offset> ID <replica-id>` → `+ACK <offset>`),
+//! handshake (`REPLICATE FROM <gen> <offset> ID <replica-id>` →
+//! `+ACK <gen> <offset>`),
 //! and reacting to read/write readiness for live replicas.
 //!
 //! The frame format, source backlog, handshake parse, and slot table
@@ -72,6 +73,11 @@ pub enum ReplicaState {
         /// Offset the replica asked to resume from (passed to
         /// Streaming as the initial `sent_offset`).
         from_offset: u64,
+        /// Feed generation the replica CLAIMED in the handshake
+        /// (`0` = fresh / no claim). Passed to Streaming; the pump's
+        /// generation fence compares it against the feed's current
+        /// generation before serving a single frame.
+        generation: u64,
     },
     /// Live: the streaming pump fills `output` from the source backlog
     /// every reactor iteration; the writability handler drains.
@@ -83,6 +89,15 @@ pub enum ReplicaState {
         /// replica's real acked offset lives in [`crate::shard::Shard::slots`],
         /// fed by `parse_replica_acks` (`REPLCONF ACK` lines).
         sent_offset: u64,
+        /// Feed generation this stream serves. The pump checks it
+        /// against the feed's current generation EVERY fill: offsets
+        /// are only meaningful within one generation, so a mismatch
+        /// (unclean-restart replica claim, or a mid-stream FLUSHALL /
+        /// promotion bump) forces a snapshot ship instead of serving
+        /// aliased frames — the offset-aliasing hole this field
+        /// closes. `0` + nothing sent = a fresh replica's no-claim;
+        /// the pump adopts the current generation.
+        generation: u64,
     },
     /// Snapshot ship in progress. At trigger time the
     /// reactor freezes a COW [`kevy_store::SnapshotView`] (O(n)
@@ -102,6 +117,11 @@ pub enum ReplicaState {
         /// `source.next_offset()` at snapshot-trigger time. After
         /// snapshot ship completes, becomes the new `sent_offset`.
         ack_offset: u64,
+        /// Feed generation at snapshot-trigger time — carried into
+        /// Streaming on completion (the shipped data IS this
+        /// generation). If the feed bumps again mid-ship, the next
+        /// pump's generation fence catches it and re-ships.
+        generation: u64,
         /// `Some(rx)` while the worker thread is serializing the
         /// SnapshotView; `pump_snapshot_chunks` polls via
         /// `try_recv` each tick. Cleared (set to `None`) once the
@@ -182,12 +202,19 @@ impl ReplicaConn {
 
 /// Try to advance the conn's handshake state. Pulls a single complete
 /// RESP command out of `conn.input` (if one is there), runs the
-/// handshake parser, and either pushes `+ACK` to `conn.output` or
-/// returns the rejection reason for the caller to log + drop the conn.
+/// handshake parser, and either pushes `+ACK <feed_gen> <offset>` to
+/// `conn.output` or returns the rejection reason for the caller to
+/// log + drop the conn. `feed_gen` is the shard feed's CURRENT
+/// generation — the replica's claimed generation is recorded in the
+/// state for the pump's fence, not judged here (the fence owns the
+/// serve-vs-ship decision).
 ///
 /// Splits the handshake state machine from the I/O loop so this can be
 /// unit-tested without standing up a Shard (see the module tests).
-pub(crate) fn advance_handshake(conn: &mut ReplicaConn) -> Result<(), HandshakeError> {
+pub(crate) fn advance_handshake(
+    conn: &mut ReplicaConn,
+    feed_gen: u64,
+) -> Result<(), HandshakeError> {
     if !matches!(conn.state, ReplicaState::HandshakePending) {
         return Ok(());
     }
@@ -200,11 +227,12 @@ pub(crate) fn advance_handshake(conn: &mut ReplicaConn) -> Result<(), HandshakeE
     };
     let req = parse_replicate_from(&argv)?;
     conn.input.drain(..consumed);
-    conn.output.extend_from_slice(&encode_ack(req.from_offset));
+    conn.output.extend_from_slice(&encode_ack(feed_gen, req.from_offset));
     conn.write_off = 0;
     conn.state = ReplicaState::AckSent {
         replica_id: req.replica_id,
         from_offset: req.from_offset,
+        generation: req.generation,
     };
     Ok(())
 }
@@ -235,10 +263,17 @@ mod tests {
         }
     }
 
-    fn resp_replicate_from(offset: &str, id: &str) -> Vec<u8> {
+    fn resp_replicate_from(generation: &str, offset: &str, id: &str) -> Vec<u8> {
         let mut v = Vec::new();
-        v.extend_from_slice(b"*5\r\n");
-        for arg in [b"REPLICATE".as_slice(), b"FROM", offset.as_bytes(), b"ID", id.as_bytes()] {
+        v.extend_from_slice(b"*6\r\n");
+        for arg in [
+            b"REPLICATE".as_slice(),
+            b"FROM",
+            generation.as_bytes(),
+            offset.as_bytes(),
+            b"ID",
+            id.as_bytes(),
+        ] {
             v.extend_from_slice(format!("${}\r\n", arg.len()).as_bytes());
             v.extend_from_slice(arg);
             v.extend_from_slice(b"\r\n");
@@ -261,8 +296,8 @@ mod tests {
     #[test]
     fn close_from_ack_sent_preserves_id_and_offset() {
         let mut conn = fake_conn();
-        conn.input = resp_replicate_from("17", "replica-x");
-        advance_handshake(&mut conn).expect("handshake ok");
+        conn.input = resp_replicate_from("1", "17", "replica-x");
+        advance_handshake(&mut conn, 5).expect("handshake ok");
         conn.close();
         match conn.state {
             ReplicaState::Closed { replica_id } => {
@@ -278,6 +313,7 @@ mod tests {
         conn.state = ReplicaState::Streaming {
             replica_id: "replica-z".into(),
             sent_offset: 99,
+            generation: 1,
         };
         conn.close();
         match conn.state {
@@ -294,6 +330,7 @@ mod tests {
         conn.state = ReplicaState::Streaming {
             replica_id: "r".into(),
             sent_offset: 5,
+            generation: 1,
         };
         conn.close();
         let snapshot = format!("{:?}", conn.state);
@@ -304,16 +341,17 @@ mod tests {
     #[test]
     fn handshake_pending_to_ack_sent_on_complete_command() {
         let mut conn = fake_conn();
-        conn.input = resp_replicate_from("42", "replica-a");
-        advance_handshake(&mut conn).expect("ok");
+        conn.input = resp_replicate_from("3", "42", "replica-a");
+        advance_handshake(&mut conn, 5).expect("ok");
         match &conn.state {
-            ReplicaState::AckSent { replica_id, from_offset } => {
+            ReplicaState::AckSent { replica_id, from_offset, generation } => {
                 assert_eq!(replica_id, "replica-a");
                 assert_eq!(*from_offset, 42);
+                assert_eq!(*generation, 3, "AckSent records the replica's CLAIMED gen");
             }
             other => panic!("expected AckSent, got {other:?}"),
         }
-        assert_eq!(conn.output, b"+ACK 42\r\n");
+        assert_eq!(conn.output, b"+ACK 5 42\r\n");
         // Input fully consumed.
         assert!(conn.input.is_empty());
     }
@@ -321,15 +359,15 @@ mod tests {
     #[test]
     fn partial_handshake_stays_pending_and_waits_for_more_bytes() {
         let mut conn = fake_conn();
-        let full = resp_replicate_from("0", "replica-a");
+        let full = resp_replicate_from("1", "0", "replica-a");
         // Hand over only the first half of the command.
         conn.input = full[..full.len() / 2].to_vec();
-        advance_handshake(&mut conn).expect("ok");
+        advance_handshake(&mut conn, 5).expect("ok");
         assert!(matches!(conn.state, ReplicaState::HandshakePending));
         assert!(conn.output.is_empty());
         // Append the rest — handshake completes.
         conn.input.extend_from_slice(&full[full.len() / 2..]);
-        advance_handshake(&mut conn).expect("ok");
+        advance_handshake(&mut conn, 5).expect("ok");
         assert!(matches!(conn.state, ReplicaState::AckSent { .. }));
     }
 
@@ -338,7 +376,7 @@ mod tests {
         let mut conn = fake_conn();
         // Valid RESP, wrong verb.
         conn.input = b"*1\r\n$4\r\nPING\r\n".to_vec();
-        let err = advance_handshake(&mut conn).unwrap_err();
+        let err = advance_handshake(&mut conn, 5).unwrap_err();
         assert!(matches!(err, HandshakeError::WrongArity(_) | HandshakeError::BadCommand));
         // State stays HandshakePending; the caller marks Closed on err.
         assert!(matches!(conn.state, ReplicaState::HandshakePending));
@@ -352,7 +390,7 @@ mod tests {
         // via WrongArity. Pins down which layer is responsible.
         let mut conn = fake_conn();
         conn.input = b"!garbage\r\n".to_vec();
-        let err = advance_handshake(&mut conn).unwrap_err();
+        let err = advance_handshake(&mut conn, 5).unwrap_err();
         assert_eq!(err, HandshakeError::WrongArity(1));
     }
 
@@ -364,18 +402,18 @@ mod tests {
         // advance_handshake maps it to BadCommand.
         let mut conn = fake_conn();
         conn.input = b"*1\r\n!nope\r\n".to_vec();
-        let err = advance_handshake(&mut conn).unwrap_err();
+        let err = advance_handshake(&mut conn, 5).unwrap_err();
         assert_eq!(err, HandshakeError::BadCommand);
     }
 
     #[test]
     fn second_call_after_ack_is_noop() {
         let mut conn = fake_conn();
-        conn.input = resp_replicate_from("7", "r");
-        advance_handshake(&mut conn).unwrap();
+        conn.input = resp_replicate_from("1", "7", "r");
+        advance_handshake(&mut conn, 5).unwrap();
         let out_before = conn.output.clone();
         // Calling again with empty input must not re-emit the ACK.
-        advance_handshake(&mut conn).unwrap();
+        advance_handshake(&mut conn, 5).unwrap();
         assert_eq!(conn.output, out_before);
     }
 }

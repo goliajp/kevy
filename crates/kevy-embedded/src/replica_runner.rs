@@ -194,6 +194,13 @@ fn run_loop(
     backoff_max: Duration,
 ) {
     let mut backoff = backoff_min;
+    // Feed generation the locally-applied data reflects (0 = nothing
+    // applied yet). Presented in the handshake so the primary's
+    // generation fence can tell a safe offset resume from an aliasing
+    // one. Deliberately NOT reset by `set_upstream`: the local
+    // keyspace still holds the old history, and saying so makes the
+    // new primary ship a snapshot instead of trusting the offset.
+    let mut data_gen: u64 = 0;
     while !stop.load(Ordering::Relaxed) {
         // A `set_upstream` arriving between connect attempts triggers
         // an immediate try with the new URL; clear the flag here so a
@@ -204,7 +211,13 @@ fn run_loop(
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        match ReplicaClient::connect(&target, &replica_id, from_offset) {
+        match ReplicaClient::connect_at(
+            &target,
+            &replica_id,
+            data_gen,
+            from_offset,
+            Duration::from_secs(5),
+        ) {
             Ok(mut client) => {
                 if let Ok(s) = client.socket_handle() {
                     *sock_clone
@@ -214,7 +227,7 @@ fn run_loop(
                 link_up.store(true, Ordering::Relaxed);
                 backoff = backoff_min;
 
-                drain_session(&shards, &mut client, &stop, &applied_offset);
+                drain_session(&shards, &mut client, &stop, &applied_offset, &mut data_gen);
 
                 link_up.store(false, Ordering::Relaxed);
                 *sock_clone
@@ -246,14 +259,28 @@ fn drain_session(
     client: &mut ReplicaClient,
     stop: &Arc<AtomicBool>,
     applied_offset: &Arc<AtomicU64>,
+    data_gen: &mut u64,
 ) {
     let mut snap: Option<Vec<u8>> = None;
+    // Everything this session delivers belongs to the generation the
+    // primary advertised at handshake. Adopt it when a whole history
+    // lands: at SnapshotEnd, or immediately when the session started
+    // from offset 0 (nothing local to contradict).
+    let ack_gen = client.primary_gen_at_handshake();
+    if client.expected_offset() == 0 {
+        *data_gen = ack_gen;
+    }
     while !stop.load(Ordering::Relaxed) {
         match client.next_event() {
             // Heartbeat: ack immediately (keeps the primary's
             // slot fresh); embedded lag view rides a later train.
-            Some(Ok(ReplicaEvent::Ping { .. })) => {
+            Some(Ok(ReplicaEvent::Ping { generation, .. })) => {
                 let _ = client.send_ack(client.expected_offset());
+                if generation != 0 && generation != ack_gen {
+                    // The primary broke continuity under us (FLUSHALL /
+                    // promotion). Re-handshake so its fence re-decides.
+                    break;
+                }
             }
             Some(Ok(ReplicaEvent::Frame(frame))) => {
                 if snap.is_some() {
@@ -274,10 +301,11 @@ fn drain_session(
                 }
             }
             Some(Ok(ReplicaEvent::SnapshotEnd { ack_offset })) => {
-                if let Some(buf) = snap.take()
-                    && !finish_snapshot(shards, &buf, ack_offset, applied_offset)
-                {
-                    break;
+                if let Some(buf) = snap.take() {
+                    if !finish_snapshot(shards, &buf, ack_offset, applied_offset) {
+                        break;
+                    }
+                    *data_gen = ack_gen;
                 }
             }
             Some(Err(_)) | None => break,

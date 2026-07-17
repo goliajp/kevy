@@ -164,19 +164,31 @@ fn run_loop(
     progress: Arc<ReplicaProgress>,
 ) {
     let mut from_offset: u64 = 0;
+    // Feed generation the locally-applied data reflects (0 = nothing
+    // applied yet). Presented in the handshake so the primary's
+    // generation fence can tell a safe offset resume from an aliasing
+    // one; updated whenever this runner adopts a new history (see
+    // `drain_client`).
+    let mut data_gen: u64 = 0;
     while !stop.load(Ordering::Relaxed) {
-        match ReplicaClient::connect(upstream_addr, &replica_id, from_offset) {
+        match ReplicaClient::connect_at(
+            upstream_addr,
+            &replica_id,
+            data_gen,
+            from_offset,
+            Duration::from_secs(5),
+        ) {
             Ok(mut client) => {
                 // Publish the socket clone so the shutdown path can
                 // interrupt the blocking read.
                 set_socket_slot(&socket_slot, client.socket_handle().ok());
                 from_offset = match &target {
-                    Target::PerShard(sender) => {
-                        drain_client(&mut client, sender, &stop, runner_slot, &progress)
-                    }
-                    Target::Routed(senders) => {
-                        drain_client_routed(&mut client, senders, &stop, runner_slot, &progress)
-                    }
+                    Target::PerShard(sender) => drain_client(
+                        &mut client, sender, &stop, runner_slot, &progress, &mut data_gen,
+                    ),
+                    Target::Routed(senders) => crate::replica_runner_routed::drain_client_routed(
+                        &mut client, senders, &stop, runner_slot, &progress, &mut data_gen,
+                    ),
                 };
                 // Clear the slot — the socket the slot held now owns
                 // a half-closed fd (or is going to be shut down).
@@ -217,7 +229,7 @@ fn set_socket_slot(slot: &Mutex<Option<TcpStream>>, value: Option<TcpStream>) {
 /// still queued in the inbox. Early exits from the drain loop (link
 /// drop, shard gone, stop) drop the held token instead, so a
 /// mid-ship disconnect never strands the replica refusing reads.
-struct LoadingToken {
+pub(crate) struct LoadingToken {
     progress: Arc<ReplicaProgress>,
 }
 
@@ -227,13 +239,13 @@ impl Drop for LoadingToken {
     }
 }
 
-struct LoadingGuard {
+pub(crate) struct LoadingGuard {
     progress: Arc<ReplicaProgress>,
     token: Option<Arc<LoadingToken>>,
 }
 
 impl LoadingGuard {
-    fn new(progress: Arc<ReplicaProgress>) -> Self {
+    pub(crate) fn new(progress: Arc<ReplicaProgress>) -> Self {
         Self { progress, token: None }
     }
 
@@ -241,7 +253,7 @@ impl LoadingGuard {
     /// gate to attach to the apply event(s) — in broadcast mode every
     /// shard gets a clone and the lowering fires when the LAST shard
     /// finishes its load.
-    fn observe(&mut self, event: &ReplicaEvent) -> Option<SnapshotGate> {
+    pub(crate) fn observe(&mut self, event: &ReplicaEvent) -> Option<SnapshotGate> {
         match event {
             ReplicaEvent::SnapshotBegin if self.token.is_none() => {
                 self.progress.begin_loading();
@@ -260,14 +272,27 @@ impl LoadingGuard {
 
 /// Drain `next_event` until the peer EOFs / errors. Returns the
 /// `from_offset` to resume from on the next reconnect.
+///
+/// `data_gen` tracking: everything this session delivers belongs to
+/// the generation the primary advertised in `+ACK`. The local data
+/// ADOPTS it when a whole history lands — at `SnapshotEnd`, or
+/// immediately when the session started from offset 0 (nothing local
+/// to contradict). A heartbeat carrying a different generation means
+/// the primary broke continuity mid-stream (FLUSHALL / promotion) —
+/// drop the link; the reconnect handshake lets the fence re-decide.
 fn drain_client(
     client: &mut ReplicaClient,
     sender: &ReplicaInboxSender,
     stop: &Arc<AtomicBool>,
     runner_slot: usize,
     progress: &Arc<ReplicaProgress>,
+    data_gen: &mut u64,
 ) -> u64 {
     let mut from_offset = client.expected_offset();
+    let ack_gen = client.primary_gen_at_handshake();
+    if from_offset == 0 {
+        *data_gen = ack_gen;
+    }
     let mut last_ack = std::time::Instant::now();
     let mut loading = LoadingGuard::new(Arc::clone(progress));
     while !stop.load(Ordering::Relaxed) {
@@ -281,8 +306,18 @@ fn drain_client(
                 progress.record_ping(runner_slot, generation, primary_offset, from_offset);
                 let _ = client.send_ack(from_offset);
                 last_ack = std::time::Instant::now();
+                if generation != 0 && generation != ack_gen {
+                    eprintln!(
+                        "kevy: replica runner: primary feed generation moved \
+                         {ack_gen} -> {generation} mid-stream; re-handshaking"
+                    );
+                    return from_offset;
+                }
             }
             Some(Ok(event)) => {
+                if matches!(event, ReplicaEvent::SnapshotEnd { .. }) {
+                    *data_gen = ack_gen;
+                }
                 let gate = loading.observe(&event);
                 let mut apply = event_to_apply(event, &mut from_offset);
                 if let ReplicaApply::SnapshotEnd { gate: g, .. } = &mut apply {
@@ -331,103 +366,6 @@ fn event_to_apply(event: ReplicaEvent, from_offset: &mut u64) -> ReplicaApply {
             }
         }
     }
-}
-
-// ---------- single-source (embedded-as-primary) mode ----------
-
-/// Route one event fan into N shard inboxes: snapshot control/chunks
-/// BROADCAST (each shard loads its own hash slice — SnapshotEnd
-/// carries `routed: true`); keyed frames route by hash slot; the
-/// keyless flushes broadcast; other keyless frames go to shard 0
-/// (pub/sub convention).
-fn route_event(
-    event: ReplicaEvent,
-    from_offset: &mut u64,
-    senders: &[ReplicaInboxSender],
-    gate: Option<SnapshotGate>,
-) -> Result<(), ()> {
-    let n = senders.len();
-    let send_all = |apply: &dyn Fn() -> ReplicaApply| -> Result<(), ()> {
-        for s in senders {
-            s.send(apply()).map_err(|_| ())?;
-        }
-        Ok(())
-    };
-    match event {
-        // Consumed by drain_client_routed; by-argument unreachable.
-        ReplicaEvent::Ping { .. } => Ok(()),
-        ReplicaEvent::SnapshotBegin => send_all(&|| ReplicaApply::SnapshotBegin),
-        ReplicaEvent::SnapshotChunk(bytes) => {
-            send_all(&|| ReplicaApply::SnapshotChunk(bytes.clone()))
-        }
-        ReplicaEvent::SnapshotEnd { ack_offset } => {
-            *from_offset = ack_offset;
-            // Every shard gets a CLONE of the gate: the loading
-            // lowering fires when the last shard's load lands.
-            send_all(&|| ReplicaApply::SnapshotEnd {
-                ack_offset,
-                routed: true,
-                gate: gate.clone(),
-            })
-        }
-        ReplicaEvent::Frame(frame) => {
-            *from_offset = frame.offset.saturating_add(1);
-            let verb = frame.argv.get(0).unwrap_or_default();
-            if verb.eq_ignore_ascii_case(b"FLUSHALL") || verb.eq_ignore_ascii_case(b"FLUSHDB") {
-                return send_all(&|| ReplicaApply::Frame {
-                    offset: frame.offset,
-                    argv: frame.argv.clone(),
-                });
-            }
-            let slot = match frame.argv.get(1) {
-                Some(key) => (kevy_hash::key_hash_slot(key) as usize) % n,
-                None => 0,
-            };
-            senders[slot]
-                .send(ReplicaApply::Frame { offset: frame.offset, argv: frame.argv })
-                .map_err(|_| ())
-        }
-    }
-}
-
-/// Drain loop for single-source mode (one upstream conn, all
-/// shard inboxes).
-fn drain_client_routed(
-    client: &mut ReplicaClient,
-    senders: &[ReplicaInboxSender],
-    stop: &Arc<AtomicBool>,
-    runner_slot: usize,
-    progress: &Arc<ReplicaProgress>,
-) -> u64 {
-    let mut from_offset = client.expected_offset();
-    let mut last_ack = std::time::Instant::now();
-    let mut loading = LoadingGuard::new(Arc::clone(progress));
-    while !stop.load(Ordering::Relaxed) {
-        match client.next_event() {
-            Some(Ok(ReplicaEvent::Ping { generation, primary_offset })) => {
-                progress.record_ping(runner_slot, generation, primary_offset, from_offset);
-                let _ = client.send_ack(from_offset);
-                last_ack = std::time::Instant::now();
-            }
-            Some(Ok(event)) => {
-                let gate = loading.observe(&event);
-                if route_event(event, &mut from_offset, senders, gate).is_err() {
-                    return from_offset;
-                }
-                if last_ack.elapsed() >= std::time::Duration::from_millis(100) {
-                    let _ = client.send_ack(from_offset);
-                    progress.record_applied(runner_slot, from_offset);
-                    last_ack = std::time::Instant::now();
-                }
-            }
-            Some(Err(e)) => {
-                eprintln!("kevy: replica runner upstream error: {e}");
-                return from_offset;
-            }
-            None => return from_offset,
-        }
-    }
-    from_offset
 }
 
 #[cfg(test)]

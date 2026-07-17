@@ -191,7 +191,7 @@ let replica = Store::open(cfg)?;
 # Ok::<(), kevy_embedded::KevyError>(())
 ```
 
-ハンドシェイクは`REPLICATE FROM <last-applied-offset> ID <replica_id>`を送ります。プライマリはオフセットをackし、フレームをストリーミングします。最後の`Store`クローンがdropされるとランナースレッドはjoinされ、プライマリはクリーンなFINを観測してスロットを解放します。組み込み側での`PUBLISH`はローカルに許可されます（pub/subはプロセスローカルです）が、キー空間自体は読み取り専用のままです。
+ハンドシェイクは`REPLICATE FROM <generation> <last-applied-offset> ID <replica_id>`を送ります。プライマリは世代とオフセットをackし、フレームをストリーミングします。最後の`Store`クローンがdropされるとランナースレッドはjoinされ、プライマリはクリーンなFINを観測してスロットを解放します。組み込み側での`PUBLISH`はローカルに許可されます（pub/subはプロセスローカルです）が、キー空間自体は読み取り専用のままです。
 
 ## スコープ付きマルチライター
 
