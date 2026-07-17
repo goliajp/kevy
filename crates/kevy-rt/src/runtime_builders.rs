@@ -181,4 +181,22 @@ impl<C: Commands> Runtime<C> {
         self.auto_aof_rewrite_min_size = min_size;
         self
     }
+
+    /// Absolute-size auto-rewrite trigger: compact whenever the AOF
+    /// reaches `bytes`, regardless of growth ratio (0 = rule off).
+    /// Complements [`Self::with_auto_aof_rewrite`], whose growth rule
+    /// lets a large log double before compacting.
+    #[must_use]
+    pub fn with_auto_rewrite_bytes(mut self, bytes: u64) -> Self {
+        self.auto_aof_rewrite_bytes = bytes;
+        self
+    }
+
+    /// Time-based auto-rewrite trigger: compact at least every
+    /// `interval_secs` seconds while the log grows (0 = rule off).
+    #[must_use]
+    pub fn with_auto_rewrite_interval_secs(mut self, interval_secs: u64) -> Self {
+        self.auto_aof_rewrite_interval_secs = interval_secs;
+        self
+    }
 }

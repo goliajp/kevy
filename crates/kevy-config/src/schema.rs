@@ -58,6 +58,14 @@ pub struct PersistenceSection {
     /// Never auto-rewrite an AOF smaller than this. Default `64mb` =
     /// `64 * 1024 * 1024`.
     pub auto_aof_rewrite_min_size: u64,
+    /// Absolute-size auto-rewrite trigger: compact whenever the AOF
+    /// reaches this many bytes, regardless of growth ratio. `0` = rule
+    /// off (the default). The growth rule alone lets a large log double
+    /// before compacting — this caps it outright.
+    pub auto_aof_rewrite_bytes: u64,
+    /// Time-based auto-rewrite trigger: compact at least this often (in
+    /// seconds) while the log grows. `0` = rule off (the default).
+    pub auto_aof_rewrite_interval_secs: u64,
 }
 
 impl Default for PersistenceSection {
@@ -67,6 +75,8 @@ impl Default for PersistenceSection {
             appendfsync: AppendFsync::EverySec,
             auto_aof_rewrite_percentage: 100,
             auto_aof_rewrite_min_size: 64 * 1024 * 1024,
+            auto_aof_rewrite_bytes: 0,
+            auto_aof_rewrite_interval_secs: 0,
         }
     }
 }

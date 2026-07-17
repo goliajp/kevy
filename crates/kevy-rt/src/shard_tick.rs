@@ -37,6 +37,12 @@ impl<C: Commands> Shard<C> {
         if let Some(m) = live.auto_aof_rewrite_min_size {
             self.auto_aof_rewrite_min_size = m;
         }
+        if let Some(b) = live.auto_aof_rewrite_bytes {
+            self.auto_aof_rewrite_bytes = b;
+        }
+        if let Some(i) = live.auto_aof_rewrite_interval_secs {
+            self.auto_aof_rewrite_interval_secs = i;
+        }
         if let Some(ms) = live.tick_interval_ms {
             *tick_interval = if ms == 0 {
                 None
@@ -100,26 +106,21 @@ impl<C: Commands> Shard<C> {
         }
     }
 
-    /// Check whether the live AOF has grown enough to warrant an automatic
-    /// `BGREWRITEAOF`, and run it inline if so. Called from the tick path
-    /// — at most every `tick_interval_ms`, so the cost is amortised across
-    /// thousands of writes per check. No-op when AOF is disabled, when the
-    /// `auto_aof_rewrite_pct` knob is `0`, or when the current AOF is
-    /// smaller than `auto_aof_rewrite_min_size`.
+    /// Check whether the live AOF is due for an automatic `BGREWRITEAOF`
+    /// under the three-trigger [`kevy_persist::RewritePolicy`] (growth,
+    /// absolute cap, staleness — the same decision the embedded reaper
+    /// uses), and run it inline if so. Called from the tick path — at most
+    /// every `tick_interval_ms`, so the cost is amortised across thousands
+    /// of writes per check. No-op when AOF is disabled or all rules are 0.
     pub(crate) fn maybe_auto_rewrite_aof(&mut self) {
-        if self.auto_aof_rewrite_pct == 0 {
-            return;
-        }
+        let policy = kevy_persist::RewritePolicy {
+            pct: self.auto_aof_rewrite_pct,
+            min_size: self.auto_aof_rewrite_min_size,
+            bytes: self.auto_aof_rewrite_bytes,
+            interval_secs: self.auto_aof_rewrite_interval_secs,
+        };
         let Some(aof) = &self.aof else { return };
-        let cur = aof.size_bytes();
-        if cur < self.auto_aof_rewrite_min_size {
-            return;
-        }
-        let baseline = aof.size_at_last_rewrite().max(1);
-        // (cur - baseline) * 100 / baseline ≥ pct  ⇔  cur * 100 ≥ baseline * (100 + pct)
-        let lhs = cur.saturating_mul(100);
-        let rhs = baseline.saturating_mul(100u64.saturating_add(u64::from(self.auto_aof_rewrite_pct)));
-        if lhs < rhs {
+        if !aof.rewrite_due(policy) {
             return;
         }
         self.start_bg_rewrite();

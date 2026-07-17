@@ -316,6 +316,8 @@ impl<C: Commands> Runtime<C> {
                 seen_promotion_epoch: None,
                 persist: crate::persist_worker::PersistWorker::new(),
                 auto_aof_rewrite_pct: self.auto_aof_rewrite_pct,
+                auto_aof_rewrite_bytes: self.auto_aof_rewrite_bytes,
+                auto_aof_rewrite_interval_secs: self.auto_aof_rewrite_interval_secs,
                 auto_aof_rewrite_min_size: self.auto_aof_rewrite_min_size,
                 dirty: Vec::new(),
                 pubsub: shared.pubsub.clone(),
