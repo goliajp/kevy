@@ -42,3 +42,15 @@ pub(crate) fn fresh_replica_id() -> String {
     format!("kevy-embedded-{}-{}", std::process::id(), n)
 }
 
+impl crate::Store {
+    /// The embed-writer replication listener's actually-bound address,
+    /// when this store was opened with
+    /// [`Config::with_embed_writer`](crate::Config::with_embed_writer).
+    /// Open with port `0` to let the OS pick a free port and read the
+    /// real one back here — the race-free way to run an ephemeral
+    /// writer (tests, sidecars, one process per scope).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn writer_addr(&self) -> Option<std::net::SocketAddr> {
+        self.guard.replica_source.as_ref().map(|s| s.local_addr())
+    }
+}
