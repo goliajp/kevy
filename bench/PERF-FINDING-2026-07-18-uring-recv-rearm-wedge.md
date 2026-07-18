@@ -52,3 +52,39 @@
 ## 时间线证据锚
 
 - 00:42 UTC clientgate 同代码 2 分钟绿(run 29623659811)→ 01:38 起同 job 三连挂(run 29625584540 的三次 attempt)→ 06:59 步进仪表捕获 SET 悬挂(run 29634868553)→ 07:4x epoll 判别绿(run 29635671813)。
+
+---
+
+## 续:第二个 uring recv bug —— multishot res=0 + F_SOCK_NONEMPTY 被误判 EOF(2026-07-18 深夜,已修 `667005f9`)
+
+首个 wedge(`76c79c38`,SQ 满 recv 重臂丢失)修好后,CI 的 **client-conformance blpop/bzpopmin 腿仍 flaky 挂**(ts-node/ts-bun,20s 超时,多夜"累犯")。这是**第二个独立的 uring recv bug**。
+
+### 本地 uring 复现平台(可复用)
+
+lx64 掉线期间发现:**Docker + OrbStack VM(内核 7.0)+ `--security-opt seccomp=unconfined`** 就能在本机容器拿到 io_uring(默认 seccomp 挡 `io_uring_setup`)。忠实复现 CI conformance:
+- 容器内构建 linux `kevy` + `libkevy_napi.so`(`rust:1` 容器,cargo cache 挂载)
+- `node:24` 容器跑 `bindings/ts` 的 `npm run test:node`,`KEVY_NAPI_LIB` 指 linux napi、harness spawn linux uring kevy
+- 命中率 ~1/10。**注意 OrbStack 7.0 是自定义内核,与真目标(GH runner Ubuntu 6.x / lx64 6.12)行为可能不同**。
+
+### 根因(全 trace 定位)
+
+逐步 probe(每 backend/每命令打印)锁定:挂的**不是 blpop,是 remote uring server 的 `BZPOPMIN` 立即命中**,且在 `BLPOP empty 100ms 超时`之后。server 侧 `CLIENT LIST` = `cmd=NULL events=r`(BZPOPMIN 请求没被 dispatch);`ss` = 双端 **ESTABLISHED、Recv-Q=0、172 字节全收全 ack**(不是 EOF,字节被 io_uring 收进 provided buffer)。
+
+服务端全 io_uring trace(每完成打 res/flags/has_more/buffer_id)给出铁证:卡死 conn 在 ZADD(res=52)后**直接收到 `res=0 flags=0x4 has_more=false bid=None`** —— `0x4 = IORING_CQE_F_SOCK_NONEMPTY`:F_MORE 已清(multishot 终止)但 **socket 仍有数据**(那 33 字节 BZPOPMIN)。内核在说"重臂我排空剩余",**不是** EOF。成功的 conn 则先收 `res=33` dispatch BZPOPMIN 再收 res=0(客户端真关闭的 EOF)。
+
+kevy 把 `res <= 0` 一律当 EOF/错误 → `mark_closing` → BZPOPMIN 字节烂在 provided buffer 里,活连接 wedge(客户端永等一条服务器消费了却没 dispatch 的请求的回复)。
+
+### 修复
+
+`res == 0` 仅在 **F_SOCK_NONEMPTY 清零**时才是 EOF;置位(或 `-ENOBUFS`)则重臂排空。`Completion::sock_nonempty()` 新增。`res > 0` 时重置 `recv_zero_streak`。**有界守卫**:`recv_zero_streak` 上限 256 —— 若某内核在有数据时反复回 0 长度完成而不排空(OrbStack 7.0 观察到的 re-arm 怪癖),超限即关连接(客户端重连)而非活锁烧 CPU。
+
+### 验证与残留
+
+- rt/uring 单测全绿,严格构建净,locgate 过(helper 移 uring_arm.rs 保双文件 ≤500)。
+- OrbStack 容器:修前 idle-wedge(cmd=NULL 永久卡);修后大多过,**残留 ~1/20** 是 OrbStack 7.0 的第二形态(res=0 但 F_SOCK_NONEMPTY 清零的伪 EOF,完成层与真 EOF 不可分,或 re-arm 活锁被守卫截断)。**这是 OrbStack 自定义内核怪癖,真 6.x 内核未必有**。
+- **真内核验证 oracle = CI 的 clientgate(已默认 uring 绿)+ client-conformance(真 Ubuntu)**;lx64(6.12 真内核)回线后再本地复验。若 CI conformance 仍 flaky → 说明真内核也有第二形态,需再攻(可能要 F_SOCK_NONEMPTY 清零时也 bounded-retry,或阻塞命令后强制单发 recv 排空)。
+
+### 教训(补 §1 系统性盲点)
+
+- **CI 单元/集成测试全程 `KEVY_IO_URING=0`,产品的 uring 数据面从来没进测试矩阵** —— 这两个 recv bug 都只有 clientgate/conformance 这类"真 server+真客户端"门能抓。**应补一条 uring-on 的多 shard + pub/sub + 阻塞命令压测门**防回归。
+- **本地 uring 复现配方(OrbStack + unconfined seccomp)是这次的关键杠杆** —— 远程盒不稳时,本机容器就能开 uring;但要记住其内核非目标内核,判据以真内核 CI 为准。
