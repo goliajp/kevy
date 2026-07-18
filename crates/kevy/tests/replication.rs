@@ -157,7 +157,9 @@ impl Server {
         ports.extend((0..nshards as u16).map(|i| replication_base + i));
         for p in ports {
             let mut ready = false;
-            for _ in 0..400 {
+            // 10s: a loaded hosted macOS runner blew the old 2s
+            // budget once (parallel test threads all booting runtimes).
+            for _ in 0..2000 {
                 if std::net::TcpStream::connect(("127.0.0.1", p)).is_ok() {
                     ready = true;
                     break;
