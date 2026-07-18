@@ -1,4 +1,22 @@
-# FINDING(未闭):x86 io_uring 服务端在 GH hosted runner 上的确定性悬挂(2026-07-18)
+# FINDING(已闭):io_uring 多 shard + pub/sub 扇出下的 recv 重臂丢失 = 连接永久 wedge(2026-07-18)
+
+## 根因(已定位并修复)
+
+`uring_arm.rs` 的 recv 重臂:`prep_recv_multishot` 因 **SQ 环瞬时满**(pub/sub 扇出的一批写 SQE + 多 conn 同轮 arm)返回 false 时,`recv_armed` 留 false,但当轮的 `needs_more` 只判 write/output 有无残留、**不含"想重臂却没臂上"** → 该 conn 被踢出 `arm_pending` 队列,再无任何事件把它拉回(客户端正阻塞等一条它自己那条请求的回复,不会再发字节触发,也没有待写 output)。结果:连接永久卡死,征状正是 `CLIENT LIST` 里 `cmd=NULL events=r`,reactor 因其余 conn 空转在 `io_uring_enter`。
+
+**修复**:记录 `recv_arm_deferred = 想重臂 && 这轮没臂上`,并入 `needs_more`,让该 conn 留在队列下轮重试(submit 排空 SQ 后即成功)。
+
+**验证**(lx64,内核 6.12.95,16 核):补丁前完整 node-redis 模式 12 次跑 **9 挂**;补丁后同循环 15 次 **0 挂**。rt/uring 单测全绿,本地 clientgate 六客户端 PASS。CI 的 `KEVY_IO_URING=0` 诊断盾已撤,clientgate 恢复默认 uring 以守住此修复。
+
+## 关键更正:不是 "x86" 特异,是**核数相关**
+
+初判写成 x86-io_uring 特异是错的。真触发面 = **io_uring reactor + 多 shard(核多→默认 shard 多)+ 客户端全模式(多连接含 pub/sub 副连接,足以造出扇出写把 SQ 压满的那一瞬)**。arm64 容器"过"只是因为核少→默认单 shard→不进多 shard 扇出路径;GH x86 runner 与 lx64 核多→多 shard→命中。epoll 恒过是因为 epoll 后端不经这条 uring SQ-满 重臂门。是竞态(负载相关),非确定性——冷跑偶过、热机后稳挂。
+
+---
+
+## (原始记录)时间线与判别过程
+
+以下为定位过程留痕。
 
 ## 症状
 

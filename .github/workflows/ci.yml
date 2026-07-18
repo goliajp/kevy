@@ -548,19 +548,11 @@ jobs:
           dotnet-version: '8.0.x'
       - name: Install hiredis
         run: sudo apt-get update -q && sudo apt-get install -y -q libhiredis-dev
-      # DIAGNOSTIC STATE (2026-07-18, verdict in): with the io_uring
-      # reactor this runner deterministically hangs the node-redis leg
-      # (FLUSHALL replies, the next SET never does, conn vanishes from
-      # CLIENT LIST); forcing epoll turned the gate fully green, while
-      # the same server build passes with uring everywhere else we can
-      # run it (macOS, linux/arm64 containers). Suspected runner-fleet
-      # kernel rollover × the multishot-recv re-arm path. Epoll here is
-      # a TEMPORARY shield, not the posture — see
-      # bench/PERF-FINDING-2026-07-18-x86-uring-runner-hang.md; the
-      # x86 repro + fix is the open item.
+      # Runs with the default io_uring reactor: this gate is what
+      # would have caught the multishot-recv re-arm wedge fixed in the
+      # same change (a dropped recv-arm under SQ pressure stranded a
+      # connection). See bench/PERF-FINDING-2026-07-18-*.md.
       - run: bash bench/clientgate.sh
-        env:
-          KEVY_IO_URING: "0"
 
   # ── ffigate — every language door opens on every push ────────────────────
   # One stone (kevy-ffi), many doors: the C, C++, Go, Bun, Node and C#
