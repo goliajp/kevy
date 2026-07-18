@@ -197,6 +197,15 @@ pub(crate) struct UringConn {
     /// `uring_recv_dispatch` checks this counter and slices the slab
     /// head before parsing.
     pub(crate) pending_crlf_skip: u8,
+    /// Consecutive `res == 0` multishot-recv completions that carried
+    /// `IORING_CQE_F_SOCK_NONEMPTY` (the kernel says "more data, re-arm
+    /// me", not EOF — see [`crate::uring_io`]). Normally the very next
+    /// re-armed recv drains the data and this resets to 0 on the first
+    /// `res > 0`. A guard against a kernel that livelocks the re-arm
+    /// (posting the same zero-length completion forever): after too
+    /// many in a row with no progress, the conn is closed rather than
+    /// spun on.
+    pub(crate) recv_zero_streak: u16,
     /// EOF/error seen on the socket — close once writes drain.
     pub(crate) closing: bool,
     /// When `Some`, the multishot recv handler
@@ -224,6 +233,7 @@ impl UringConn {
             big_arg_read_pending: false,
             big_arg_rearm_recv: false,
             pending_crlf_skip: 0,
+            recv_zero_streak: 0,
             closing: false,
             pending_big_arg: None,
         }

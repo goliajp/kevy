@@ -139,9 +139,11 @@ impl<C: Commands> Shard<C> {
             }
         }
         if c.res <= 0 {
-            // Close on EOF (0) or a real error, but NOT on -ENOBUFS (the ring was
-            // momentarily empty; the data is still queued, so just re-arm).
-            if c.res != -ENOBUFS {
+            // res == 0 is EOF ONLY with F_SOCK_NONEMPTY clear; with it
+            // set the recv terminated but the socket still holds bytes
+            // (see [`Self::recv_terminal_recoverable`]). The !has_more
+            // block above already queued the re-arm; here, don't close.
+            if !self.recv_terminal_recoverable(cid, c, io) {
                 self.uring_mark_closing(cid, io);
             }
             return;
@@ -150,12 +152,14 @@ impl<C: Commands> Shard<C> {
             return; // no buffer (shouldn't happen for a successful recv)
         };
         let n = c.res as usize;
-        // If this conn is waiting for the trailing
-        // CRLF of a kernel-direct prep_read'd big-arg body, slice it
-        // off the slab head before the regular dispatch sees it.
-        let n = if let Some(uc) = io.get_mut(&cid)
-            && uc.pending_crlf_skip > 0
-        {
+        // Data flowed: reset the zero-completion streak guard (folded
+        // into the crlf-skip probe's get_mut — res > 0 here). The probe
+        // slices any pending kernel-direct big-arg trailing CRLF off the
+        // slab head before dispatch sees it.
+        let n = if let Some(uc) = io.get_mut(&cid) && {
+            uc.recv_zero_streak = 0;
+            uc.pending_crlf_skip > 0
+        } {
             let skip = (uc.pending_crlf_skip as usize).min(n);
             uc.pending_crlf_skip -= skip as u8;
             let slab_bytes = pbuf.bytes(bid, n);
@@ -260,7 +264,6 @@ impl<C: Commands> Shard<C> {
         input_buf: &mut Vec<u8>,
         io: &mut KevyMap<u64, UringConn>,
     ) -> crate::inbox::BatchOutcome {
-        
         if input_buf.is_empty() {
             // Fast path: parse straight from the slab. The kernel's
             // provided-buffer slice lives until `pbuf.recycle(bid)`, which

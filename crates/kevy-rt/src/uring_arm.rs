@@ -8,11 +8,33 @@
 use crate::Commands;
 use crate::shard::Shard;
 use crate::uring_conn::UringConn;
+use crate::uring_reactor::ENOBUFS;
+use kevy_uring::Completion;
 use crate::uring_reactor::{MAX_IOVECS_PER_WRITEV, OP_RECV, OP_WRITE};
 use kevy_map::KevyMap;
 use kevy_uring::IoUring;
 
 impl<C: Commands> Shard<C> {
+    /// A terminating recv completion (`res <= 0`): `true` = recoverable
+    /// re-arm, not a close. `-ENOBUFS` and `res == 0` with
+    /// `F_SOCK_NONEMPTY` (socket still holds bytes — NOT EOF) re-arm; a
+    /// per-conn streak counter caps a kernel that re-posts the zero
+    /// completion without draining so the reactor can't livelock.
+    pub(crate) fn recv_terminal_recoverable(
+        &mut self,
+        cid: u64,
+        c: &Completion,
+        io: &mut KevyMap<u64, UringConn>,
+    ) -> bool {
+        const RECV_ZERO_STREAK_CAP: u16 = 256;
+        if c.res != -ENOBUFS && !(c.res == 0 && c.sock_nonempty()) {
+            return false;
+        }
+        let Some(uc) = io.get_mut(&cid) else { return false };
+        uc.recv_zero_streak = uc.recv_zero_streak.saturating_add(1);
+        uc.recv_zero_streak <= RECV_ZERO_STREAK_CAP
+    }
+
     /// Schedule `cid` for the next `arm_conns` visit.
     /// Idempotent — `UringConn::arm_queued` dedupes pushes so a conn
     /// touched by recv + write + drain in the same iter only lands on
