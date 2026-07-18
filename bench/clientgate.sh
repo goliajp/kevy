@@ -75,8 +75,7 @@ run node-redis env KEVY_PORT=$PORT node "$NODEAPP/node_redis.mjs"
 run ioredis    env KEVY_PORT=$PORT node "$NODEAPP/ioredis.mjs"
 
 # ── Go: go-redis (go run resolves modules from its cwd) ──
-gorun() { (cd bench/clientgate/goredis && KEVY_PORT=$PORT go run .); }
-run go-redis gorun
+run go-redis bash -c "cd bench/clientgate/goredis && KEVY_PORT=$PORT go run ."
 
 # ── .NET: StackExchange.Redis ──
 run se-redis env KEVY_PORT=$PORT dotnet run --project bench/clientgate/seredis -c Release

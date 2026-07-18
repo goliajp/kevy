@@ -2,8 +2,20 @@
 import { createClient } from "redis";
 
 const url = `redis://127.0.0.1:${process.env.KEVY_PORT}`;
-const c = createClient({ url });
+// Bounded + loud: node-redis's default reconnectStrategy retries
+// forever with nothing on stdout — on a flaky runner that reads as a
+// silent multi-hour hang. One 10s connect attempt, no retries, and
+// every lifecycle event logged so a failure names itself.
+const c = createClient({
+  url,
+  socket: { connectTimeout: 10_000, reconnectStrategy: false },
+});
+c.on("error", (e) => {
+  console.error(`node-redis client error: ${e}`);
+});
+console.log(`connecting to ${url} ...`);
 await c.connect();
+console.log("connected");
 
 function check(ok, what) {
   if (!ok) {
