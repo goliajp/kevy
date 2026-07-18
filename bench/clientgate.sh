@@ -62,6 +62,10 @@ run() { # run <name> <cmd...>
     else
         echo "clientgate: $name FAIL (or timed out at 180s)"
         tail -10 "$DIR/$name.log"; fail=1
+        # Server-side view of the failure: who is connected, and what
+        # the server said — the client log alone was blank once.
+        target/release/kevy-cli -p $PORT CLIENT LIST 2>&1 | head -5
+        tail -5 "$DIR/server.log"
     fi
 }
 

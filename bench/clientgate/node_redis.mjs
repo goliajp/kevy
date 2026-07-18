@@ -17,6 +17,12 @@ console.log(`connecting to ${url} ...`);
 await c.connect();
 console.log("connected");
 
+// Step markers: the CI hang sits between "connected" and the first
+// reply — name the exact command that never resolves.
+const step = (what) => console.log(`step: ${what}`);
+step("PING");
+console.log(`ping -> ${await c.ping()}`);
+
 function check(ok, what) {
   if (!ok) {
     console.error(`FAIL ${what}`);
@@ -24,7 +30,9 @@ function check(ok, what) {
   }
 }
 
+step("FLUSHALL");
 await c.flushAll();
+step("SET");
 check((await c.set("k", "v")) === "OK", "SET");
 check((await c.get("k")) === "v", "GET");
 check((await c.incrBy("n", 5)) === 5, "INCRBY");
