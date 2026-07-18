@@ -548,12 +548,16 @@ jobs:
           dotnet-version: '8.0.x'
       - name: Install hiredis
         run: sudo apt-get update -q && sudo apt-get install -y -q libhiredis-dev
-      # DIAGNOSTIC (2026-07-18): node-redis deterministically hangs on
-      # this runner after FLUSHALL's reply, with the conn gone from
-      # CLIENT LIST — reproduces nowhere else (macOS, linux/arm64
-      # containers with the same server build all pass). Forcing the
-      # epoll reactor splits the axis: green here = the x86 io_uring
-      # path owns the hang; red = it's something else on this runner.
+      # DIAGNOSTIC STATE (2026-07-18, verdict in): with the io_uring
+      # reactor this runner deterministically hangs the node-redis leg
+      # (FLUSHALL replies, the next SET never does, conn vanishes from
+      # CLIENT LIST); forcing epoll turned the gate fully green, while
+      # the same server build passes with uring everywhere else we can
+      # run it (macOS, linux/arm64 containers). Suspected runner-fleet
+      # kernel rollover × the multishot-recv re-arm path. Epoll here is
+      # a TEMPORARY shield, not the posture — see
+      # bench/PERF-FINDING-2026-07-18-x86-uring-runner-hang.md; the
+      # x86 repro + fix is the open item.
       - run: bash bench/clientgate.sh
         env:
           KEVY_IO_URING: "0"
