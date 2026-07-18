@@ -129,9 +129,8 @@ impl ReplicaSource {
         Arc::clone(&self.source)
     }
 
-    /// Bound listener address; mostly useful for tests
-    /// (`port = 0` ⇒ OS picks a port; the test reads it back).
-    #[allow(dead_code)]
+    /// Bound listener address (`port = 0` ⇒ OS picks a port; the
+    /// caller reads it back via [`crate::Store::writer_addr`]).
     pub(crate) fn local_addr(&self) -> std::net::SocketAddr {
         self.bound_addr
     }
