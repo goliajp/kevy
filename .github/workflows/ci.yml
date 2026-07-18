@@ -548,7 +548,15 @@ jobs:
           dotnet-version: '8.0.x'
       - name: Install hiredis
         run: sudo apt-get update -q && sudo apt-get install -y -q libhiredis-dev
+      # DIAGNOSTIC (2026-07-18): node-redis deterministically hangs on
+      # this runner after FLUSHALL's reply, with the conn gone from
+      # CLIENT LIST — reproduces nowhere else (macOS, linux/arm64
+      # containers with the same server build all pass). Forcing the
+      # epoll reactor splits the axis: green here = the x86 io_uring
+      # path owns the hang; red = it's something else on this runner.
       - run: bash bench/clientgate.sh
+        env:
+          KEVY_IO_URING: "0"
 
   # ── ffigate — every language door opens on every push ────────────────────
   # One stone (kevy-ffi), many doors: the C, C++, Go, Bun, Node and C#
