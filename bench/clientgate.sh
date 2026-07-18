@@ -50,10 +50,18 @@ fail=0
 run() { # run <name> <cmd...>
     local name=$1; shift
     echo "clientgate: ${name}..."
-    if "$@" > "$DIR/$name.log" 2>&1; then
+    # Bounded: a wedged runner (or a client that never times out its
+    # connect) must fail loudly in minutes, not hang the job for hours
+    # — a hosted-runner incident turned this gate into a 3× multi-hour
+    # zombie with zero output. macOS dev boxes without coreutils
+    # `timeout` run unbounded, same posture as repligate.
+    local clamp=""
+    command -v timeout >/dev/null 2>&1 && clamp="timeout 180"
+    if $clamp "$@" > "$DIR/$name.log" 2>&1; then
         echo "clientgate: $name OK"
     else
-        echo "clientgate: $name FAIL"; tail -10 "$DIR/$name.log"; fail=1
+        echo "clientgate: $name FAIL (or timed out at 180s)"
+        tail -10 "$DIR/$name.log"; fail=1
     fi
 }
 
