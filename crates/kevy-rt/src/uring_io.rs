@@ -8,7 +8,6 @@
 use crate::Commands;
 use crate::shard::Shard;
 use crate::uring_conn::UringConn;
-use crate::uring_reactor::ENOBUFS;
 /// Linux `errno`s referenced by [`Shard::uring_on_recv`]'s big-arg
 /// cancel handling. `ECANCELED = 125` (kernel emits `-ECANCELED` on
 /// the target's terminal CQE after a successful `IORING_OP_ASYNC_CANCEL`).
