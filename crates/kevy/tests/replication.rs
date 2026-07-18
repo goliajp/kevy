@@ -1242,9 +1242,10 @@ fn server_as_replica_applies_upstream_writes() {
     // Retry connect — on a heavily-loaded CI runner the runtime may
     // bind the port (which start's poll saw) but the accept loop
     // needs an extra moment before serving on it. llvm-cov
-    // instrumentation (covgate) slows boot severely — 20ms × 1500
-    // = 30s hard cap.
-    let mut reader = (0..1500)
+    // instrumentation (covgate) slows boot severely — 20ms × 3000
+    // = 60s hard cap (30s was observed insufficient once the suite
+    // grew: parallel test threads + instrumented boot).
+    let mut reader = (0..3000)
         .find_map(|_| {
             std::net::TcpStream::connect(("127.0.0.1", replica.port))
                 .ok()
@@ -1253,7 +1254,7 @@ fn server_as_replica_applies_upstream_writes() {
                     None
                 })
         })
-        .expect("replica accept loop never became ready within 30s");
+        .expect("replica accept loop never became ready within 60s");
     let mut all_seen = false;
     for _ in 0..200 {
         let mut got_all = true;
@@ -1403,7 +1404,7 @@ fn spop_storm_keeps_replica_sets_identical() {
 
     // Connect to the replica (retry — see server_as_replica test) and
     // poll the fence key.
-    let mut reader = (0..1500)
+    let mut reader = (0..3000)
         .find_map(|_| {
             std::net::TcpStream::connect(("127.0.0.1", replica.port))
                 .ok()
@@ -1412,7 +1413,7 @@ fn spop_storm_keeps_replica_sets_identical() {
                     None
                 })
         })
-        .expect("replica accept loop never became ready within 30s");
+        .expect("replica accept loop never became ready within 60s");
     let mut fenced = false;
     for _ in 0..500 {
         send_resp(&mut reader, &[b"GET", b"spop-fence"]);
