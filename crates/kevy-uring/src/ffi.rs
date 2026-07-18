@@ -212,6 +212,12 @@ pub const IOSQE_FIXED_FILE: u8 = 1 << 0;
 
 pub const IORING_CQE_F_BUFFER: u32 = 1 << 0;
 pub const IORING_CQE_F_MORE: u32 = 1 << 1;
+/// The socket still has data to read after this completion — a
+/// multishot recv that terminates (F_MORE clear) while this bit is
+/// set means "re-arm me to drain the rest", NOT EOF. Treating the
+/// accompanying `res == 0` as EOF strands the pending bytes and
+/// wedges the connection.
+pub const IORING_CQE_F_SOCK_NONEMPTY: u32 = 1 << 2;
 pub const IORING_CQE_BUFFER_SHIFT: u32 = 16;
 
 // ---- Provided-buffer ring layout constants --------------------------------
