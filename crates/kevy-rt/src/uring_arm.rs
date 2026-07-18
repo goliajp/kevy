@@ -338,14 +338,25 @@ impl<C: Commands> Shard<C> {
             let want_multishot = !uc.recv_armed
                 && !uc.closing
                 && uc.pending_big_arg.is_none();
-            if (want_multishot || uc.big_arg_rearm_recv)
+            let recv_arm_wanted = (want_multishot || uc.big_arg_rearm_recv)
                 && !uc.recv_armed
-                && !uc.closing
-                && ring.prep_recv_multishot(conn.sock.raw(), bgid, OP_RECV | cid)
-            {
+                && !uc.closing;
+            let recv_armed_now = recv_arm_wanted
+                && ring.prep_recv_multishot(conn.sock.raw(), bgid, OP_RECV | cid);
+            if recv_armed_now {
                 uc.recv_armed = true;
                 uc.big_arg_rearm_recv = false;
             }
+            // A wanted recv-arm the SQ couldn't take THIS iter (ring
+            // momentarily full — a burst of pub/sub fan-out writes or
+            // many conns arming at once) must NOT let the conn drop out
+            // of the queue: with no armed recv SQE and no pending
+            // output to re-trigger it, the connection wedges forever
+            // (client blocked on a reply for a request the server
+            // never reads — observed as a conn stuck at `cmd=NULL
+            // events=r` while the reactor busy-loops). Keep it queued
+            // to retry next iter, once submit drains the SQ.
+            let recv_arm_deferred = recv_arm_wanted && !recv_armed_now;
             // Re-queue if more work remains. A chunked writev
             // capped the SQE before all arcs/tail bytes were covered;
             // the on_write completion handler will not have anything
@@ -356,6 +367,7 @@ impl<C: Commands> Shard<C> {
             // output) drop out — the completion handlers and the
             // wake-up sites will re-queue them when there's work.
             let needs_more = uc.closing
+                || recv_arm_deferred
                 || (!uc.write_inflight
                     && (uc.write_off < uc.write_buf.len() || !uc.write_arcs.is_empty()))
                 || (!conn.output.is_empty() || !conn.output_arcs.is_empty());
