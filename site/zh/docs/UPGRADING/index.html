@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>升级 kevy — kevy</title>
-<meta name="description" content="两章，新的在前：3.x → 4.0（一次 API 定义型的 major：线协议和磁盘格式照旧，Rust 接口面改了这一次，此后冻结）和 2.x → 3.x（一次能力型的 major：一切照旧带过去）。每一章都明确写清：什么自动升级、什么需要改代码、以及怎么退回去。">
+<meta name="description" content="两章，新的在前：3.x → 4.0（一次 API 定义型的 major：客户端线协议照旧，磁盘目录原样打开、格式在首次重写时升级，Rust 接口面改了这一次，此后冻结）和 2.x → 3.x（一次能力型的 major：一切照旧带过去）。每一章都明确写清：什么自动升级、什么需要改代码、以及怎么退回去。">
 <link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
 <link rel="stylesheet" href="../../../assets/docs.css?v=d4b38be8">
 <script>
@@ -44,7 +44,7 @@
 <div class="doc-shell has-toc">
   <aside class="side"><p class="side-h">上手</p><ul><li><a href="../../../zh/docs/designing-on-kevy/">在 kevy 上设计应用</a></li><li><a href="../../../zh/docs/cookbook/">RDS→kevy 建模 cookbook</a></li><li><a href="../../../zh/docs/persistence/">持久化</a></li><li><a href="../../../zh/docs/tuning/">调优 kevy</a></li></ul><p class="side-h">运行</p><ul><li><a href="../../../zh/docs/replication/">复制</a></li><li><a href="../../../zh/docs/availability/">可用性</a></li><li><a href="../../../zh/docs/cluster/">集群</a></li><li><a href="../../../zh/docs/accept-shards/">--accept-shards N——把稀疏连接收拢到部分 shard 上</a></li><li><a href="../../../zh/docs/uds/">Unix-domain socket（UDS）传输</a></li><li><a href="../../../zh/docs/async/">异步客户端</a></li></ul><p class="side-h">数据</p><ul><li><a href="../../../zh/docs/indexes/">二级索引（IDX. / idx_）</a></li><li><a href="../../../zh/docs/vector-search/">向量检索（KIND ann）</a></li><li><a href="../../../zh/docs/text-search/">全文检索（KIND text）</a></li><li><a href="../../../zh/docs/views/">视图（VIEW. / view_）</a></li><li><a href="../../../zh/docs/cdc/">CDC——变更流（FEED. / changes_since）</a></li><li><a href="../../../zh/docs/pubsub/">Pub/sub</a></li><li><a href="../../../zh/docs/lua/">Lua 脚本</a></li></ul><p class="side-h">嵌入</p><ul><li><a href="../../../zh/docs/wasm/">kevy 上 WebAssembly</a></li><li><a href="../../../zh/docs/embedded-listener/">Embedded 只读 RESP listener</a></li><li><a href="../../../zh/docs/iot/">kevy 跑在 IoT 设备上</a></li></ul><p class="side-h">参考</p><ul><li><a href="../../../zh/docs/error-replies/">错误回复目录</a></li><li><a href="../../../zh/docs/rds-workloads/">在 kevy 上跑 RDS 负载</a></li><li><a href="../../../zh/docs/migration/">迁移——playbook 与工具链</a></li><li><a href="../../../zh/docs/UPGRADING/" aria-current="page">升级 kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../zh/docs/commands/">全部 184 个命令</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>升级 kevy</h1></div>
-<p>两章，新的在前：<b>3.x → 4.0</b>（一次 API 定义型的 major：线协议和磁盘格式照旧，Rust 接口面改了这一次，此后冻结）和 <b>2.x → 3.x</b>（一次能力型的 major：一切照旧带过去）。每一章都明确写清：什么自动升级、什么需要改代码、以及怎么退回去。</p>
+<p>两章，新的在前：<b>3.x → 4.0</b>（一次 API 定义型的 major：客户端线协议照旧，磁盘目录原样打开、格式在首次重写时升级，Rust 接口面改了这一次，此后冻结）和 <b>2.x → 3.x</b>（一次能力型的 major：一切照旧带过去）。每一章都明确写清：什么自动升级、什么需要改代码、以及怎么退回去。</p>
 <hr>
 <h1 id="3x-40">3.x → 4.0</h1>
 <p>4.0 是工业生产级的宣告。这个 semver major 是刻意花掉的——用一次破坏窗口，把所有积欠已久的公开 API 债一次还清，此后接口面<b>冻结</b>：后续的 4.x 只做加法。如果你是通过线协议跟 kevy 说话，4.0 就是换个二进制。如果你链接了某个 kevy crate，预期是一次短促而机械的迁移——下面每一条变更都有一句话的规则。</p>
@@ -52,7 +52,10 @@
 <div class="tbl"><table><thead><tr><th>组件</th><th>3.x 时代</th><th>4.0</th><th>动作</th></tr></thead><tbody><tr><td><code>kevy</code>（服务器）</td><td>3.18.x</td><td>4.0.0</td><td>换二进制，在同一个数据目录上重启</td></tr><tr><td><code>kevy-embedded</code></td><td>3.18.x</td><td>4.0.0</td><td>升版本 + 照下面的 API 表改</td></tr><tr><td><code>kevy-client</code></td><td><b>1.14.x</b></td><td><b>4.0.0</b></td><td>升版本——版本线统一（<code>kevy-embedded</code> 在 3.0.0 做过同样的动作）+ 那张 API 表</td></tr><tr><td><code>kevy-client-async</code></td><td><b>1.1.x</b></td><td><b>4.0.0</b></td><td>同上</td></tr><tr><td><code>kevy-wasm</code> / <code>@goliajp/kevy</code>（npm）</td><td>——</td><td>4.0.0</td><td>4.0 新增——见 <a href="../wasm/">wasm.md</a></td></tr><tr><td>基础设施 crate（<code>kevy-store</code>、<code>kevy-rt</code>……）</td><td>3.18.x</td><td>4.0.0</td><td>跟随工作区版本</td></tr></tbody></table></div>
 <h2 id="什么是自动兼容的">什么是自动兼容的</h2>
 <p><b>线协议。</b> RESP 没变，每一个 verb 别名（<code>SLAVEOF</code>、<code>HMSET</code>……）都保留。Redis 客户端、脚本、<code>redis-cli</code> 会话照旧可用；对着 valkey 9.1 的回复对等性套件仍然在 CI 里把关。</p>
-<p><b>快照与 AOF。</b> 4.0 的二进制能读每一种 3.x（以及 2.x）的快照格式，并原样重放 3.x 的 AOF。格式在 4.0 里没有变——所以退回 3.18 同样只是换个二进制（这一点和 3.x → 2.x 方向不同，那个方向有一处格式边缘；见 2.x → 3.x 那一章）。</p>
+<p><b>复制线协议（kevy ↔ kevy）——一处干净的断裂。</b> 内部复制握手现在携带 feed generation（<code>REPLICATE FROM &lt;gen&gt; &lt;offset&gt; ID &lt;id&gt;</code> / <code>+ACK &lt;gen&gt; &lt;offset&gt;</code>）——正是让 offset 续传在主节点 unclean 重启之后依然安全的那道栅栏。4.0 副本无法与 3.x 主节点握手，反之亦然；一个复制对的两端要在同一个窗口里升级（先副本、后主节点是停机最少的顺序——新主节点起来后副本重连并全量同步）。这只是 kevy 的内部协议；面向 Redis 客户端的一切都没变。</p>
+<p><b>快照与 AOF。</b> 4.0 的二进制能读每一种 3.x（以及 2.x）的快照格式，并原样重放 3.x 的 AOF——3.x 数据目录零迁移打开。4.0 的新东西是 AOF 的*记录格式*（<code>KEVYAOF2</code>：长度前缀 + CRC32C 校验的记录——见 <a href="../persistence/">persistence.md</a>），升级按文件惰性进行、且单向：</p>
+<ul><li>向既有 3.x（<code>KEVYAOF1</code>）文件的追加保持 v1——换二进制的第一天，你的文件和 3.18 逐字节兼容，退回去仍然只是换回二进制。</li><li>新文件、以及<b>首次重写</b>（自动重写或 <code>BGREWRITEAOF</code>）的输出是 v2——3.x 读不了它。首次重写之后，同一数据目录上不再存在退回 3.18 的路（除非经客户端把键空间重放出去）。</li></ul>
+<p>如果想在灰度窗口里保留一条 3.18 退路：窗口期间关掉自动重写（<code>auto_aof_rewrite_percentage = 0</code>）并先做一份快照备份；灰度站稳后再开回来——CRC 保护要等文件升到 v2 才生效，所以别让这个状态超出灰度所需的时长。</p>
 <p><b>配置。</b> 每一个 3.x 配置键都被接受，含义不变。有两个键的语义变得<b>更严或更真</b>——见下面的“行为变更”（<code>notify_keyspace_events</code> 拒绝未知 flag、<code>min_replicas_max_lag_ms</code> 真正生效）。</p>
 <p><b>移除了一个旋钮。</b> 自定义快照 / AOF <b>文件名</b>没有了（<code>kevy-embedded</code> 的 <code>Config::with_snapshot_filename</code> / <code>with_aof_filename</code> 两个 builder）。磁盘布局现在固定为每 shard 一组 <code>dump-{i}.rdb</code> / <code>aof-{i}.aof</code>。用默认名字写出来的目录——包括每一个遗留的单文件目录——照样原样加载；只有用<b>自定义</b>名字写过的目录，需要在第一次用 4.0 打开之前，做一次性的 <code>mv</code> 改成固定名字。</p>
 <h2 id="api-破坏对照表">API 破坏对照表</h2>

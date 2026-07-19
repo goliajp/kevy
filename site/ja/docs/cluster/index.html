@@ -150,7 +150,7 @@ let cfg = Config::default()
     .with_replica_reconnect(Duration::from_millis(50), Duration::from_secs(10));
 let replica = Store::open(cfg)?;
 # Ok::&lt;(), kevy_embedded::KevyError&gt;(())</code></pre></figure>
-<p>ハンドシェイクは<code>REPLICATE FROM &lt;last-applied-offset&gt; ID &lt;replica_id&gt;</code>を送ります。プライマリはオフセットをackし、フレームをストリーミングします。最後の<code>Store</code>クローンがdropされるとランナースレッドはjoinされ、プライマリはクリーンなFINを観測してスロットを解放します。組み込み側での<code>PUBLISH</code>はローカルに許可されます（pub/subはプロセスローカルです）が、キー空間自体は読み取り専用のままです。</p>
+<p>ハンドシェイクは<code>REPLICATE FROM &lt;generation&gt; &lt;last-applied-offset&gt; ID &lt;replica_id&gt;</code>を送ります。プライマリは世代とオフセットをackし、フレームをストリーミングします。最後の<code>Store</code>クローンがdropされるとランナースレッドはjoinされ、プライマリはクリーンなFINを観測してスロットを解放します。組み込み側での<code>PUBLISH</code>はローカルに許可されます（pub/subはプロセスローカルです）が、キー空間自体は読み取り専用のままです。</p>
 <h2 id="スコープ付きマルチライター">スコープ付きマルチライター</h2>
 <p>スコープ付きマルチライターは、キープレフィックスごとに書き込みをノードに振り分けます。各ノードは静的なconfigから所有テーブル全体を知っています。非所有者に着地した書き込みは<code>-MISDIRECTED writer is &lt;host:port&gt;</code>を返し、クライアントは正しいノードに再試行します。</p>
 <figure class="code"><pre><code class="lang-toml"># 同じ config ブロックを全メンバに置く。

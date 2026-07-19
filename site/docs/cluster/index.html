@@ -150,7 +150,7 @@ let cfg = Config::default()
     .with_replica_reconnect(Duration::from_millis(50), Duration::from_secs(10));
 let replica = Store::open(cfg)?;
 # Ok::&lt;(), kevy_embedded::KevyError&gt;(())</code></pre></figure>
-<p>The handshake sends <code>REPLICATE FROM &lt;last-applied-offset&gt; ID &lt;replica_id&gt;</code>; the primary acks the offset and streams frames. The runner thread is joined when the last <code>Store</code> clone drops, so the primary observes a clean FIN and frees the slot. <code>PUBLISH</code> is allowed locally on the embed (pub/sub is process-local), but the keyspace itself remains read-only.</p>
+<p>The handshake sends <code>REPLICATE FROM &lt;generation&gt; &lt;last-applied-offset&gt; ID &lt;replica_id&gt;</code>; the primary acks its generation and the offset and streams frames. The runner thread is joined when the last <code>Store</code> clone drops, so the primary observes a clean FIN and frees the slot. <code>PUBLISH</code> is allowed locally on the embed (pub/sub is process-local), but the keyspace itself remains read-only.</p>
 <h2 id="scoped-multi-writer">Scoped multi-writer</h2>
 <p>Scoped multi-writer splits writes by key prefix across nodes. Every node knows the full ownership table from static config; writes that land on a non-owner answer <code>-MISDIRECTED writer is &lt;host:port&gt;</code> so the client retries against the right node.</p>
 <figure class="code"><pre><code class="lang-toml"># Same config block on every member.

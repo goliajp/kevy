@@ -84,7 +84,7 @@ role     = "replica"
 upstream = "primary.internal:16004"   # the primary's listen_port_base</code></pre></figure>
 <p>Start it on a second host:</p>
 <figure class="code"><pre><code class="lang-sh">kevy --config /etc/kevy/replica.toml --port 6004</code></pre></figure>
-<p>Each local shard opens a runner thread, connects to <code>(upstream_host, upstream_port_base + shard_index)</code>, handshakes with <code>REPLICATE FROM &lt;offset&gt; ID &lt;replica_id&gt;</code>, reads <code>+ACK &lt;offset&gt;</code>, then streams frames into the shard's apply path inside a guard that suppresses local re-emission.</p>
+<p>Each local shard opens a runner thread, connects to <code>(upstream_host, upstream_port_base + shard_index)</code>, handshakes with <code>REPLICATE FROM &lt;generation&gt; &lt;offset&gt; ID &lt;replica_id&gt;</code>, reads <code>+ACK &lt;generation&gt; &lt;offset&gt;</code>, then streams frames into the shard's apply path inside a guard that suppresses local re-emission.</p>
 <h3 id="3-retarget-the-replica-at-runtime">3. Retarget the replica at runtime</h3>
 <figure class="code"><pre><code class="lang-sh">redis-cli -p 6004 REPLICAOF new-primary.internal 16004
 # +OK</code></pre></figure>

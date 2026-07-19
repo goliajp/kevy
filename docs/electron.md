@@ -1,7 +1,7 @@
 # kevy in Electron
 
 kevy embeds in an Electron app two ways. The package
-[`@goliapkg/kevy-electron`](../bindings/electron) is the **primary** door: the
+[`@goliapkg/kevy-electron`](https://github.com/goliajp/kevy/tree/develop/bindings/electron) is the **primary** door: the
 real native engine runs once in the **main process** and every renderer reaches
 it over a `contextBridge` preload + IPC. The **wasm** build
 ([`docs/wasm.md`](wasm.md)) is the alternative: the engine runs *inside* a
@@ -49,7 +49,7 @@ await window.kevy.publish("room", "hi");        // streams to the callback
 
 The verb surface mirrors the [client contract](client-contract.md) §3.1
 (core KV) and §3.11 (pub/sub). Full method table and a runnable example:
-[`bindings/electron/README.md`](../bindings/electron/README.md).
+[`bindings/electron/README.md`](https://github.com/goliajp/kevy/blob/develop/bindings/electron/README.md).
 
 ## No electron-rebuild — the Node-API story
 

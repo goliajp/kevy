@@ -260,7 +260,7 @@ feed 就是 kevy 的“binlog 即 API”——Debezium 从 RDS 里抽取的那�
 
 各子系统公式（每条都在 CI 里对实测 RSS 设了 gate）：范围索引 ≈ `rows × (value_width + avg_key_len + 48)`；文本与 ANN 公式见 [text-search](text-search.md) / [vector-search](vector-search.md)（1M × 1024 维向量 ≈ 4.1 GiB）；agg ≈ 由分组数主导（[indexes](indexes.md)）；视图成员 ≈ `order_value_width + key_len + 48`（[views](views.md)）。设好 `maxmemory` + 一个驱逐策略，或者接受 `-OOM` 拒绝（拒绝发生在写入准入时——已有数据绝不腐蚀）。
 
-**服务余量。**v3.18.0 发布竞技场（kevy vs valkey 9.1，公平对打协议，5 次取中位——`bench/PERF-LEDGER.md`）：GET 3.00×、SET 3.99×、INCR 3.00×、SADD 2.50×、HSET 2.25×、ZADD 1.73×、LPUSH 1.64×——完整的复制/心跳 pipeline 落地后 7/7 全胜。对上磁盘优先的 RDS 做点查，差距还要更大；那里诚实的比较是“kevy 同时替掉缓存层和业务查询”，不是逐查询的 benchmark。
+**服务余量。**竞技场于 2026-07-19 在 v4.0.0 上重测（kevy vs valkey 9.1，公平对打协议，5 次取中位，吞吐读的是各服务端自己的命令计数器——`bench/ARENA-2026-07-19.txt`）：GET 2.46×、SET 4.00×、INCR 2.86×、SADD 2.95×、HSET 2.17×、ZADD 1.78×、LPUSH 1.76×——完整的复制/心跳 pipeline 落地后 7/7 全胜。其中一些比值低于它们替换掉的 v3.18.0 数字，原因是那次读的是 `redis-benchmark` 自报速率，而它在 `--threads` 下会被量化偏低（`bench/PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md`）；改成服务端计数后每个引擎的数字都升高了，竞品升得更多。对上磁盘优先的 RDS 做点查，差距还要更大；那里诚实的比较是“kevy 同时替掉缓存层和业务查询”，不是逐查询的 benchmark。
 
 **与 RDS 的运维差异**，简述：单一键空间（没有 schema/database——前缀就是命名空间）；TTL 是一等公民（`EXPIRE`、按字段的 `HEXPIRE`——定时删数据的 cron 任务就此消失）；`FLUSHALL` 只有一条命令之遥（用边界把它保护起来）；派生状态（索引、视图、feed）重启后靠重建而不是加载（每百万行几秒——把它算进重启时间预算）；错误面是契约的一部分——客户端应匹配错误前缀，而不是解析消息文本（[error-replies](error-replies.md)）。
 
