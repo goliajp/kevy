@@ -76,7 +76,7 @@ unsafe extern "C" {
 // `struct epoll_event` is `__attribute__((packed))` only on x86_64; on every
 // other arch it is naturally aligned (8-byte `data` after 4-byte `events`,
 // with 4 bytes of padding). Match the kernel ABI exactly.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 #[repr(C)]
 #[cfg_attr(target_arch = "x86_64", repr(packed))]
 pub struct EpollEvent {
@@ -84,7 +84,7 @@ pub struct EpollEvent {
     pub data: u64,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 unsafe extern "C" {
     pub fn epoll_create1(flags: c_int) -> c_int;
     pub fn epoll_ctl(epfd: c_int, op: c_int, fd: c_int, event: *mut EpollEvent) -> c_int;
