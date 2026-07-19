@@ -42,7 +42,10 @@ s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 buf = [b""]
 def rd():
     while b"\r\n" not in buf[0]:
-        buf[0] += s.recv(1 << 20)
+        _chunk = s.recv(1 << 20)
+        if not _chunk:
+            raise AssertionError('server closed the connection mid-reply')
+        buf[0] += _chunk
     l, _, rest = buf[0].partition(b"\r\n")
     buf[0] = rest
     return l

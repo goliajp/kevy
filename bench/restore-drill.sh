@@ -59,7 +59,10 @@ def resp(sock, *parts):
 
 def read_line(sock, buf):
     while b"\r\n" not in buf[0]:
-        buf[0] += sock.recv(65536)
+        _chunk = sock.recv(65536)
+        if not _chunk:
+            raise AssertionError('server closed the connection mid-reply')
+        buf[0] += _chunk
     line, _, rest = buf[0].partition(b"\r\n")
     buf[0] = rest
     return line
@@ -76,7 +79,10 @@ def read_reply(sock, buf=None):
         if n < 0:
             return None
         while len(buf[0]) < n + 2:
-            buf[0] += sock.recv(65536)
+            _chunk = sock.recv(65536)
+            if not _chunk:
+                raise AssertionError('server closed the connection mid-reply')
+            buf[0] += _chunk
         out, buf[0] = buf[0][:n], buf[0][n + 2:]
         return out
     if t == b"*":
@@ -146,8 +152,13 @@ def resp(sock, *parts):
     sock.sendall(buf)
     # single-reply reads: tiny commands, one recv is enough for SET/GET here
     out = sock.recv(65536)
+    if not out:
+        raise AssertionError('server closed the connection mid-reply')
     while not (out.endswith(b"\r\n")):
-        out += sock.recv(65536)
+        _chunk = sock.recv(65536)
+        if not _chunk:
+            raise AssertionError('server closed the connection mid-reply')
+        out += _chunk
     return out
 
 s = socket.create_connection(("127.0.0.1", port))

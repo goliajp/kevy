@@ -42,14 +42,21 @@ def enc(*p):
 def rd(s, buf):
     def line():
         while b"\r\n" not in buf[0]:
-            buf[0] += s.recv(1 << 20)
+            _chunk = s.recv(1 << 20)
+            if not _chunk:
+                raise AssertionError('server closed the connection mid-reply')
+            buf[0] += _chunk
         l, _, r = buf[0].partition(b"\r\n"); buf[0] = r; return l
     l = line(); t, body = l[:1], l[1:]
     if t in (b"+", b"-", b":"): return l
     if t == b"$":
         n = int(body)
         if n < 0: return None
-        while len(buf[0]) < n + 2: buf[0] += s.recv(1 << 20)
+        while len(buf[0]) < n + 2:
+            _chunk = s.recv(1 << 20)
+            if not _chunk:
+                raise AssertionError('server closed the connection mid-reply')
+            buf[0] += _chunk
         out = buf[0][:n]; buf[0] = buf[0][n+2:]; return out
     if t in (b"*", b"%"):
         cnt = int(body) * (2 if t == b"%" else 1)

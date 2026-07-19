@@ -479,7 +479,10 @@ def drain(n):
     got = 0
     buf = b""
     while got < n:
-        buf += s.recv(1 << 20)
+        _chunk = s.recv(1 << 20)
+        if not _chunk:
+            raise AssertionError('server closed the connection mid-reply')
+        buf += _chunk
         got = buf.count(b"+OK\r\n")
 for i in range(80_000):
     batch += enc(b"SET", b"big:%d" % i, val)
