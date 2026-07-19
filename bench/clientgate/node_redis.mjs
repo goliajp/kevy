@@ -40,6 +40,7 @@ await c.pExpire("k", 30_000);
 const ttl = await c.pTTL("k");
 check(ttl > 0 && ttl <= 30_000, "PTTL");
 
+step("hash/list/zset");
 await c.hSet("h", { a: "1", b: "2" });
 check((await c.hGetAll("h")).a === "1", "HGETALL");
 await c.lPush("l", ["x", "y"]);
@@ -48,14 +49,27 @@ await c.zAdd("z", [{ score: 1, value: "one" }, { score: 2, value: "two" }]);
 check((await c.zRange("z", 0, -1)).join(",") === "one,two", "ZRANGE");
 
 // pub/sub round trip (dedicated subscriber connection, client idiom)
+step("pubsub");
 const sub = c.duplicate();
 await sub.connect();
-const got = new Promise((r) => sub.subscribe("room", (msg) => r(msg)));
+// Await the subscription before publishing. Publishing from another
+// connection while `subscribe()` is still in flight is a race with no
+// guarantee on any server: the message is delivered to whoever is
+// registered at PUBLISH time. Single-threaded Redis/valkey happens to
+// survive it because arrival order is processing order; a
+// thread-per-core server with the two connections on different shards
+// does not, and this test lost ~2 in 40 that way — which read as a
+// server hang because there is no `step()` marker after "SET", so a
+// stall here shows up as the SET line being last.
+let deliver;
+const got = new Promise((r) => { deliver = r; });
+await sub.subscribe("room", (msg) => deliver(msg));
 await c.publish("room", "hi");
 check((await got) === "hi", "pubsub");
 await sub.destroy();
 
 // the extended verb surface through the raw channel
+step("IDX.LIST raw");
 const idx = await c.sendCommand(["IDX.LIST"]);
 check(Array.isArray(idx), "IDX.LIST raw");
 
