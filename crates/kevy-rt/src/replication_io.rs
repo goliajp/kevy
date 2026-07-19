@@ -180,6 +180,30 @@ impl<C: Commands> Shard<C> {
         }
     }
 
+    /// An I/O error on a replica link kills THAT LINK, never the shard.
+    ///
+    /// A replica that goes away mid-stream makes the primary's next write
+    /// to it fail with `EPIPE` / `ECONNRESET`. Propagating that out of the
+    /// reactor ends the shard — and with it every client connection the
+    /// shard owns, none of which had anything to do with replication.
+    /// That is what `kevy: shard N exited with error: Broken pipe`
+    /// meant: killing a replica took down the primary's shards, and the
+    /// clients saw their connections close with no reply in flight.
+    ///
+    /// Closing the link is also what the streaming-output cap already
+    /// does for the same situation reached a different way; a replica
+    /// reconnects and resumes from the backlog.
+    pub(crate) fn replica_io_failed(&mut self, idx: usize, what: &str, e: &io::Error) {
+        if let Some(conn) = self.replicas.get_mut(idx) {
+            eprintln!(
+                "kevy: shard {} replica fd {} {what} failed: {e} — dropping link \
+                 (reconnect resumes from the backlog)",
+                self.id, conn.fd,
+            );
+            conn.close();
+        }
+    }
+
     /// Remove every replica in [`ReplicaState::Closed`]. Conns whose
     /// `Closed.replica_id` is `Some` get their slot's `last_seen_ns`
     /// touched before dropping so a reconnect within the window stays

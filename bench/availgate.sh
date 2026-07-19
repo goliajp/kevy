@@ -455,6 +455,12 @@ env KEVY_BIND=127.0.0.1 "$KBIN" --threads 4 --port $PPORT --dir "$DIR/p" --no-ao
     --config "$DIR/pri4.toml" > "$DIR/pri.out" 2>&1 &
 PPID_=$!
 for _ in $(seq 100); do $CLI -p $PPORT PING >/dev/null 2>&1 && break; sleep 0.2; done
+# The readiness PING proves SOMETHING answers on this port — not that it is
+# the server we just started. A previous phase's primary that has not
+# finished dying answers it happily while our own process exits on a failed
+# bind, and the next connection then gets EOF with zero replies. Check the
+# PID we actually spawned.
+kill -0 $PPID_ 2>/dev/null || fail "phase-4 primary exited during startup: $(tail -5 "$DIR/pri.out")"
 printf '[replication]\nrole = "replica"\nupstream = "127.0.0.1:%s"\n' "1$PPORT" > "$DIR/rep4.toml"
 env KEVY_BIND=127.0.0.1 "$KBIN" --threads 4 --port $RPORT --dir "$DIR/r" --no-aof \
     --config "$DIR/rep4.toml" > "$DIR/rep.out" 2>&1 &
@@ -463,6 +469,7 @@ for _ in $(seq 100); do $CLI -p $RPORT PING >/dev/null 2>&1 && break; sleep 0.2;
 sleep 2
 # Cut the replica, roll the primary far past its 64kb backlog, restart.
 kill $RPID_ 2>/dev/null; wait $RPID_ 2>/dev/null
+kill -0 $PPID_ 2>/dev/null || fail "phase-4 primary died before the seed: $(tail -5 "$DIR/pri.out")"
 python3 - "$PPORT" <<'PYEOF'
 import socket, sys
 port = int(sys.argv[1])
