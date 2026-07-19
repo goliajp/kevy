@@ -32,34 +32,25 @@
 # getting replies. Every request here carries a deadline; a missed reply
 # is a wedge is a FAIL.
 #
-# Skips cleanly (exit 0) where io_uring is unavailable — macOS dev boxes,
-# containers with a seccomp profile that blocks io_uring_setup. On Linux
-# CI runners and lx64 it runs for real.
-#
 #   bash bench/uringgate.sh [KEVY_BIN]
 #
-# STATUS 2026-07-18: RED, on purpose (same gate-first discipline crashgate
-# shipped under). This gate reproduces a wedge that survives BOTH shipped
-# uring fixes — typically within ~3 rounds on lx64 (6.12.95, 4 shards):
+# STATUS 2026-07-19: GREEN, and wired into CI. It was committed RED on
+# purpose the day before (crashgate's gate-first discipline) and stayed red
+# for both shipped uring fixes, failing at "the command after the blocking
+# timeout" within ~3 rounds. Chasing the recv side further was the wrong
+# lead: triage during a live wedge showed a FRESH connection to the same
+# server answering PING normally, which cleared the reactor loop and put
+# the fault in per-conn state. The bug was neither in io_uring nor in recv
+# — `tick_blocked_timeouts` resolved a parked command without retiring its
+# seq, so the conn ran one behind forever and the first reply to take the
+# pending path landed in a slot that was never allocated (8d8f20e9).
 #
-#   FAIL — round 3, step [bt: ZADD after the blocking timeout]: WEDGED
+# That bug is reactor-agnostic, which is why the blocking-tail scenario now
+# runs on epoll and macOS too; only sq-pressure needs a real ring. A box
+# with no io_uring covers half this gate instead of none of it.
 #
-# Server-side tracing shows the command IS received and dispatched, and the
-# reply never reaches the client; the terminating `res == 0` completion is
-# indistinguishable between a closed peer and a live one, and every
-# disambiguation tried so far (flag-only, bounded retry, a MSG_PEEK EOF
-# probe) fixes one half and breaks the other. It is NOT wired into CI until
-# it goes green — a permanently-red required gate teaches people to ignore
-# gates. Run it by hand on a uring box; see
-# bench/PERF-FINDING-2026-07-18-uring-recv-rearm-wedge.md for the trace
-# evidence and the refuted hypotheses.
-#
-# What IS fixed and proven (real-kernel A/B, 25 conformance runs each):
-# the two shipped fixes took the client-conformance blpop/bzpopmin hang
-# from 4/25 to 0/25. This gate is simply a harder workload than that.
-#
-# Exit codes: 0 = PASS (or SKIP, no io_uring), 1 = FAIL (a conn wedged),
-# 2 = refused (missing tool / server never came up).
+# Exit codes: 0 = PASS, 1 = FAIL (a conn wedged), 2 = refused (missing
+# tool / server never came up).
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
@@ -101,29 +92,43 @@ socket.create_connection(("127.0.0.1", int(sys.argv[1])), 0.2).close()
 PY
   sleep 0.1
 done
+# A server that never came up must say so. Without this the first client
+# connect fails with ECONNREFUSED and the gate reports it as a round-0
+# wedge — which is what a back-to-back run did when the previous server
+# still held the port and this one silently failed to bind.
+kill -0 "$SRV" 2>/dev/null || refuse "server exited during startup (see below)
+$(tail -20 "$DIR/srv.log")"
+python3 - "$PORT" <<'PY' >/dev/null 2>&1 || refuse "server not accepting on port $PORT
+$(tail -20 "$DIR/srv.log")"
+import socket, sys
+socket.create_connection(("127.0.0.1", int(sys.argv[1])), 1.0).close()
+PY
 
 REACTOR=$(grep -m1 -o "reactor = [a-z_]*" "$DIR/srv.log" 2>/dev/null || true)
+# The two scenarios have different reach. sq-pressure targets the io_uring
+# submission queue specifically and is meaningless elsewhere. blocking-tail is
+# reactor-agnostic: it caught a seq-retire bug in the shared blocked-client
+# registry that wedged epoll exactly as it wedged io_uring, so skipping it off
+# the ring would have left a CI box covering nothing while looking green.
 case "$REACTOR" in
-  *io_uring*) echo "uringgate: $REACTOR, ${SHARDS} shards, ${ROUNDS} rounds" ;;
+  *io_uring*) URING=1; echo "uringgate: $REACTOR, ${SHARDS} shards, ${ROUNDS} rounds" ;;
   *epoll*)
-    # Linux without a usable ring (pre-5.19, or seccomp-blocked as in a
-    # default-profile container). Nothing to gate — but say which, so a CI
-    # box that silently stopped covering uring is visible in the log.
-    echo "uringgate: SKIP — this box fell back to epoll (no usable io_uring)"
-    exit 0
+    URING=0
+    echo "uringgate: epoll (no usable io_uring) — blocking-tail only, ${ROUNDS} rounds"
     ;;
   *)
     # No reactor line at all = non-Linux (macOS/kqueue), where
     # `reactor_choice` doesn't print one.
-    echo "uringgate: SKIP — not a Linux io_uring box"
-    exit 0
+    URING=0
+    echo "uringgate: not a Linux io_uring box — blocking-tail only, ${ROUNDS} rounds"
     ;;
 esac
 
-python3 - "$PORT" "$ROUNDS" "$DEADLINE" <<'PY'
+python3 - "$PORT" "$ROUNDS" "$DEADLINE" "$URING" <<'PY'
 import socket, sys, time
 
 port, rounds, deadline = int(sys.argv[1]), int(sys.argv[2]), float(sys.argv[3])
+uring = sys.argv[4] == "1"
 
 def enc(*parts):
     out = b"*%d\r\n" % len(parts)
@@ -269,14 +274,31 @@ def round_blocking_tail(i):
 t0 = time.time()
 try:
     for i in range(rounds):
-        round_sq_pressure(i)
+        if uring:
+            round_sq_pressure(i)
         round_blocking_tail(i)
 except (AssertionError, socket.timeout, OSError) as e:
     kind = "WEDGED (no reply within the deadline)" if isinstance(e, socket.timeout) else str(e)
     print(f"uringgate: FAIL — round {i}, step [{STEP[0]}]: {kind}")
+    # Triage while the wedge is still live: is the SHARD stuck, or only
+    # this connection? A fresh conn that answers proves the reactor is
+    # running and the fault is per-conn state (recv arm / write queue);
+    # a fresh conn that also hangs proves the loop itself is stuck.
+    if isinstance(e, socket.timeout):
+        try:
+            probe = Conn("probe")
+            probe.s.settimeout(2.0)
+            pong = probe.cmd("PING")
+            print(f"uringgate: triage — fresh conn to the same server: {pong!r}"
+                  f" => {'SHARD ALIVE, per-conn wedge' if pong else 'shard stuck too'}")
+            probe.close()
+        except Exception as pe:
+            print(f"uringgate: triage — fresh conn ALSO hung ({pe!r})"
+                  f" => the reactor loop is stuck, not just the conn")
     sys.exit(1)
 
-print(f"uringgate: {rounds} rounds x (sq-pressure + blocking-tail) in {time.time()-t0:.1f}s")
+scen = "sq-pressure + blocking-tail" if uring else "blocking-tail"
+print(f"uringgate: {rounds} rounds x ({scen}) in {time.time()-t0:.1f}s")
 PY
 rc=$?
 [ $rc -eq 0 ] || { echo "uringgate: FAIL"; exit 1; }
