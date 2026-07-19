@@ -127,13 +127,32 @@ impl<C: Commands> Shard<C> {
                 self.backlog_nonempty &= !(1u64 << dst);
                 continue;
             };
+            let mut landed = false;
             while let Some(msg) = self.backlog[dst].pop_front() {
                 if let Err(m) = p.push(msg) {
                     self.backlog[dst].push_front(m);
                     // Still non-empty — leave the bit set for next iter.
                     break;
                 }
+                landed = true;
                 self.pending_wakes |= 1u64 << dst;
+            }
+            if landed {
+                // Re-announce ourselves as a dirty source. `send_to` set
+                // this bit when the message was ENQUEUED, but a message
+                // that spilled here never reached the ring: the
+                // destination may already have swapped that bit to zero
+                // and found an empty ring. Both reactors gate their drain
+                // on this bitmap (`drain_inbound` / `uring_drain_inbound`
+                // return early on a zero mask), so without re-setting it
+                // the messages we just landed sit in the ring unread. The
+                // destination still gets woken via `pending_wakes`, looks
+                // at a zero mask, finds nothing, and parks again — every
+                // shard asleep while a client waits forever for a reply.
+                // Release pairs with the AcqRel swap in the drain, same as
+                // in `send_to`, and is published AFTER the pushes so a
+                // drain that observes the bit sees the ring contents.
+                self.inbound_dirty[dst].fetch_or(1u64 << self.id, Ordering::Release);
             }
             if self.backlog[dst].is_empty() {
                 self.backlog_nonempty &= !(1u64 << dst);
