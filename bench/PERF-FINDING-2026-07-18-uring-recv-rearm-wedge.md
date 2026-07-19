@@ -142,3 +142,69 @@ res=0 flags=0x4 more=false bid=None        ← 伪终止完成落在活连接上
 
 门以**红色提交**,且**不接入 CI** —— 与 crashgate 当初 `REDpending` 同一套 gate-first 纪律:长期红的必挂门只会训练大家忽略门。已发布的两个修复各自证据独立成立(conformance 4/25 → 0/25),不因这道更重的门未绿而回退。
 
+
+---
+
+## 第四幕:根因既不在 io_uring,也不在 recv(2026-07-19)
+
+第三幕留下的两条线索,一条走对了,一条是死胡同。
+
+**先说走错的那条。** "顺着写侧查" 确实查出了一个真 bug:chunked-writev 的短写恢复
+把 `write_buf` 从下标 0 开始重新线性化,包含了前几个 chunk **已经上线的字节**,而
+`write_off` 只记这一个 chunk 被接收的量。两点之间的字节被发送两次。重复前缀对
+对端不是"多几个字节",而是 RESP 分帧错位,此后每个回复都解析失败。这个 bug 是
+真的,已修(`17c7062f`,提成独立模块 + 5 个单元测试,其中一个钉住"每个字节上线
+恰好一次")。**但它不是 wedge 的原因** —— 修完 5 轮 uringgate 依然 0-13 轮内卡死。
+
+**转折点是一行诊断,不是又一次源码通读。** 在门里加了:卡死时另开一条连接 PING。
+
+```
+uringgate: FAIL — round 13, step [bt: ZADD after the blocking timeout]: WEDGED
+uringgate: triage — fresh conn to the same server: b'+PONG' => SHARD ALIVE, per-conn wedge
+```
+
+reactor 活着。于是整个 recv 侧、io_uring 侧、SQ 压力侧全部出局 —— 故障在**单连接
+状态**里。再看失败步骤的分布:永远是"阻塞超时之后的那条命令",从来不是"立即命中
+之后的那条命令"。**命中走唤醒路径,超时走超时路径** —— 差异就在这两条路径之间。
+
+### 根因
+
+阻塞命令 miss 时 `try_inline_local` 提前返回,**故意不递增 `next_emit`**(回复推迟到
+解除阻塞的那条路径去发)。因此每条解除路径都有义务把这个 seq 退休。四条里三条做了:
+`wake_blocked_on_key`、`block_xshard::deliver_block`、跨 shard 超时清扫。**本 shard 的
+`tick_blocked_timeouts` 没做。**
+
+于是连接永久落后一个 seq。只要后续命令都走 inline 快路径(直写 `conn.output`),
+偏移就被掩盖着看不出来。**第一条走 pending 路径的命令**(跨 shard 转发,或排在别人
+后面的)把回复 fold 到 `seq - next_emit` = 1 而不是 0 —— 一个从未分配的槽位。回复被
+丢弃。客户端永远等一条服务端收到了、执行了、也答了的命令。
+
+修复是一行(`8d8f20e9`),注释比代码长十倍,因为值钱的是"为什么这里必须有它"。
+
+### 证据
+
+| | 修复前 | 修复后 |
+|---|---|---|
+| uringgate,lx64 6.12.95,4 shards | 5/5 FAIL(round 0-13) | **780 轮 0 FAIL**(300 轮单跑 + 8×60) |
+| uringgate,macOS/kqueue | round 0 FAIL | PASS |
+
+macOS 那一行是关键:**这个 bug 与 reactor 无关**。`blocked.rs` 两个 reactor 共用,
+epoll 和 kqueue 一样中招。它之所以看起来像"io_uring bug",只是因为唯一跑 uring 的
+测试层是概率性的 gate,而 Rust 集成测试全都 `KEVY_IO_URING=0`。
+
+门因此改成:blocking-tail 在所有 reactor 上跑,sq-pressure 才需要真 ring。**没有
+io_uring 的机器现在覆盖这道门的一半,而不是零。** 已接 CI。
+
+### 教训
+
+- **"trace 显示 dispatch 了但回复没到" 不等于"问题在写侧"。** 回复可以在写侧之前
+  就丢 —— 丢在 fold 的槽位索引上。第三幕把下一步定为"追写侧",方向对了一半:写侧
+  确实有 bug,但不是这个 bug。
+- **一行分诊胜过一夜通读。** "另开一条连接看看还活着吗" 一次就把搜索空间从"整个
+  io_uring 数据平面"砍到"单连接状态机"。这个诊断本该在第三幕开头就做。
+- **兄弟路径不对称 = 高危。** 四条解除阻塞的路径做同一件事,三条记得退休 seq,一条
+  忘了。这类 bug 不会被"读这个函数"发现,只会被"把做同一件事的所有地方列出来对齐"
+  发现。
+- **前三幕的两个已发布修复仍然成立**(conformance 4/25 → 0/25 是独立证据),只是它们
+  修的不是这个。一个症状可以有多个原因;修好一个不代表症状会消失,也不代表那个修复
+  是错的。
