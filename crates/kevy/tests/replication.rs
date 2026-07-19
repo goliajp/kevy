@@ -81,13 +81,23 @@ fn free_port_block(width: usize) -> u16 {
 /// caught up". Wait long enough that load alone cannot fail it, and say
 /// which port did not come up when it genuinely does not.
 fn wait_port(port: u16, what: &str) {
-    for _ in 0..4000 {
+    // 60s. The first cut of this helper used 20s and made things WORSE
+    // than the loops it replaced: `ReplicaServer::start` waited 2s and a
+    // later connect loop waited another 60s, so unifying them at 20s cut
+    // the total patience from 62s to 20s. covgate found that immediately —
+    // it runs under llvm-cov instrumentation, where a runtime takes an
+    // order of magnitude longer to bind than in a normal build.
+    //
+    // Waiting longer costs nothing on a healthy run (this returns the
+    // moment the port answers) and only spends time on a run that is
+    // already failing.
+    for _ in 0..12000 {
         if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    panic!("{what} never bound port {port} within 20s");
+    panic!("{what} never bound port {port} within 60s");
 }
 
 struct Server {
