@@ -319,6 +319,9 @@ client 生态 —— 该策略 t2 里 gate 化。
 - [x] **arc 五轴收口(2026-07-18)**:crashgate 全绿(硬门,CI PENDING_STRICT=1)/ diskgate PASS(v2 开销 112 vs 106 B/op = +5.7%,20% band 内;rewrite 24ms 持平)/ replaymemgate(峰值 O(最大记录),37MB 日志实测 RSS 4MB)/ covgate ratchet 不降 / docs 三语收口 + mailrs 回信账目 / **perfgate PASS —— 12 指标全绿,SET 轴 +0.2%/-1.9%/-0.8% 全在噪声带,v2 每记录 CRC32C 零可测吞吐代价**(交错测量 vs ref 349cafc1,box drift 单列抵消)
 - 附带产出(非 RFC 计划内,均为实测驱动):**两个 io_uring 数据面 bug 根治** —— ① SQ 满时 recv 重臂丢失致连接 wedge(`76c79c38`);② multishot `res=0` 带 `F_SOCK_NONEMPTY` 被误判 EOF(`667005f9`,lx64 真内核 A/B **4/25 挂 → 0/25**)。另修 perfgate 自身两处(`3f99373b` set-u 下 ref_binary 中止;`7a87a1aa` 空 BIN pkill 曾三次打挂 lx64)。finding:`bench/PERF-FINDING-2026-07-18-uring-recv-rearm-wedge.md`
 
+- 附带产出二批(2026-07-19,同样实测驱动):**一个真可用性 bug 根治** —— replica 链路的 I/O 错误(EPIPE)被 `?` 抛出 reactor,**杀掉一个 replica 会杀掉 primary 的 shard**,连带关闭其上全部无关客户端连接;唯一痕迹是 `shard N exited with error: Broken pipe`。修后三处统一(pump 写路径 / epoll 事件路径 / uring tick 路径),**availgate 19 clamp、四 phase 全绿**(此前多个 release 红在 phase-4,被一条误导消息掩盖)。另两个连接级 bug:阻塞超时漏退休 seq(`8d8f20e9`,uringgate 780 轮 0 FAIL,与 reactor 无关)、chunked writev 短写重发已发送前缀(`17c7062f`)。clientgate 两处 pub/sub 竞态修复后 CI 转绿。
+- gate 质量债一并清:recv 遇 EOF 必须报错而非空转(14 脚本 26 处;原状态在共享盒烧一个核 4.5 小时)/ availgate seeder 退出码检查 + 失败自带证据 / killgate 进 CI(插值 `pkill -f` 必须有紧邻空值守卫)/ perfgate 拒 root + per-run scratch + **baseline 重录(原缺 ref_commit,从干净 clone 根本跑不了)**。**教训:gate 的失败消息质量 = 调查效率的上限。**
+
 ### t5 — 总线收尾(渠道除外)
 - [ ] lx64 post-fix arena 复测(悬案)→ README 基准表解冻
 - [ ] CHANGELOG 4.0.0 补总线各 train;五轴终审(ship 挪到 t6 渠道后)

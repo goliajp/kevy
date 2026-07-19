@@ -140,10 +140,18 @@ fi
 # ---- clamp 5: MOVE-SCOPE stream slice (entries + group + PEL + TTL) ----
 PC=7073
 PD=7074
+# `scopes` is not decoration: MOVE-SCOPE refuses to run without a
+# declared ownership table, because the dispatch write-quiesce gate only
+# consults the migration table when one exists — without it the move
+# ships while local writes keep landing. That precondition arrived with
+# the v4 pre-release audit (fc049b5b, 2026-07-12) and this gate was not
+# updated, so it has been failing at this clamp ever since. It is not in
+# CI, which is why nobody saw it.
 cat > "$DIR/scope-c.toml" <<EOF
 [cluster]
 node_id = "C"
 peers = "C@127.0.0.1:17073:$PC,D@127.0.0.1:17074:$PD"
+scopes = "mv:=C"
 EOF
 env KEVY_BIND=127.0.0.1 $KEVY --threads 1 --port $PC --dir "$DIR/c" --no-aof --config "$DIR/scope-c.toml" >/dev/null 2>&1 &
 SC=$!
