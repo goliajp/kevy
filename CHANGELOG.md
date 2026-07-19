@@ -188,6 +188,30 @@ failure is now closed, each behind an executable gate.
   reading a rounded clock (measuring the ruler), and a reported v4
   SET regression was retracted as quantization noise.
 
+### Connections that stopped answering
+
+- **A blocking command that timed out left its connection one reply
+  behind, forever** — a parked `BLPOP`/`BZPOPMIN` defers its reply,
+  so whichever path resolves the block owes it a sequence retire.
+  Three of the four paths did; the in-shard timeout path did not.
+  The skew stayed invisible while every later command took the
+  inline fast path, then the first reply routed through the pending
+  path (any cross-shard forward) folded into a slot that was never
+  allocated and was dropped. The client waited forever for a command
+  the server had received, executed and answered. Present on every
+  reactor — io_uring, epoll and kqueue alike.
+- **A short write on a chunked writev re-transmitted the bytes it
+  had already sent** — the recovery flattened the remaining payload
+  from the start of the buffer rather than from the write offset.
+  A duplicated prefix does not read as extra bytes to the peer; it
+  desynchronises RESP framing, after which nothing parses.
+- **`uringgate`**, the gate that caught the first of these, is green
+  and in CI. Its sq-pressure half needs a real ring; its
+  blocking-tail half runs everywhere, because the bug it found was
+  never reactor-specific. Full investigation, including the two dead
+  ends and the one-line triage that ended it, in
+  `bench/PERF-FINDING-2026-07-18-uring-recv-rearm-wedge.md`.
+
 ### Smaller truths
 
 - TOML arrays in kevy-config — and 14 documented configs that could
