@@ -263,13 +263,25 @@ fn run_conn(
 /// EWOULDBLOCK the moment the socket buffer fills (measured: EOF at
 /// ~319KB, one buffer's worth). Returns the parsed request.
 fn handshake_and_prepare(stream: &mut TcpStream) -> Option<kevy_replicate::handshake::HandshakeReq> {
+    // Flip to blocking BEFORE the handshake read, not after it.
+    //
+    // The inheritance this function already knew about bites the
+    // handshake too: on a socket still in non-blocking mode a read
+    // issued before the client's bytes land returns EWOULDBLOCK, and
+    // `read_handshake` treats every read error as fatal — so a
+    // perfectly healthy replica gets its connection closed and sees
+    // EOF where the +ACK should be. Setting a read timeout does not
+    // help a non-blocking socket; the timeout only means anything once
+    // the socket blocks. Darwin-only and load-dependent, which is how
+    // `writer_restart_generation_fence_ships_instead_of_aliasing`
+    // failed on the macOS runner while passing everywhere else.
+    if stream.set_nonblocking(false).is_err() {
+        return None;
+    }
     if stream.set_read_timeout(Some(Duration::from_secs(2))).is_err() {
         return None;
     }
     let req = read_handshake(stream)?;
-    if stream.set_nonblocking(false).is_err() {
-        return None;
-    }
     let _ = stream.set_read_timeout(None);
     Some(req)
 }
