@@ -437,6 +437,20 @@ impl<C: Commands> Shard<C> {
             return;
         }
         *last = now;
+        // Heartbeat first, unconditionally: without it a silent dump is
+        // ambiguous between "ran and found nothing" and "never ran", and
+        // the first capture of this wedge hit exactly that ambiguity.
+        // The counters are the cross-core ones worth having anyway.
+        eprintln!(
+            "kevy: STALLDUMP shard {} conns={} arm_pending={} xshard_inflight={} \
+             backlog={} dirty={}",
+            self.id,
+            self.conns.len(),
+            self.arm_pending.len(),
+            self.xshard_inflight,
+            self.backlog.iter().map(std::collections::VecDeque::len).sum::<usize>(),
+            self.dirty.len(),
+        );
         for (cid, conn) in self.conns.iter() {
             let Some(uc) = io.get(cid) else {
                 eprintln!("kevy: STALL shard {} conn {cid}: no UringConn entry", self.id);
