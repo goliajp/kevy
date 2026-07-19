@@ -82,45 +82,30 @@ struct Server {
     /// `Some` for the normal one-shot lifecycle; taken out by
     /// [`Server::stop_take_dir`] when a test restarts a server on
     /// the same data dir (feed-generation continuity tests).
-    _dir: Option<tempdir::TempDir>,
+    _dir: Option<TmpDir>,
 }
 
-/// Tiny stand-in for the `tempfile` crate (zero-dep workspace rule).
-mod tempdir {
-    use std::path::PathBuf;
-    pub struct TempDir {
-        path: PathBuf,
-    }
-    impl TempDir {
-        pub fn new(label: &str) -> Self {
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!("{label}-{nanos}"));
-            std::fs::create_dir_all(&path).unwrap();
-            Self { path }
-        }
-        pub fn path(&self) -> &std::path::Path {
-            &self.path
-        }
-    }
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.path);
-        }
-    }
-}
+// Temp dirs come from `kevy-tmpdir`, not a local stand-in. The one that
+// lived here derived its "unique" path from `SystemTime::now().as_nanos()`
+// alone — no pid, no counter. Two tests starting in the same nanosecond
+// (the harness runs them in parallel, and a loaded machine bunches them)
+// got the SAME directory, so the second server booted on the first's data:
+// it found a feed-generation high-water with no clean-shutdown marker,
+// read that as an unclean boot, and bumped the generation. That is the
+// `+ACK 2` where the test asserted `+ACK 1`, and why it only ever failed
+// under load. `kevy-tmpdir` exists because this exact class of hand-rolled
+// scheme was wrong in nine files; this one was missed.
+use kevy_tmpdir::TmpDir;
 
 impl Server {
     fn start(nshards: usize) -> Server {
-        Self::start_in(nshards, tempdir::TempDir::new("kevy-replication-test"))
+        Self::start_in(nshards, TmpDir::new("kevy-replication-test"))
     }
 
     /// [`Self::start`] on a caller-supplied data dir — the restart
     /// half of the feed-generation tests (same dir, new process
     /// lifecycle).
-    fn start_in(nshards: usize, dir: tempdir::TempDir) -> Server {
+    fn start_in(nshards: usize, dir: TmpDir) -> Server {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         // compat port + n replication ports (no cluster mode here).
         let base = free_port_block(nshards);
@@ -188,7 +173,7 @@ impl Server {
     /// Stop the runtime but KEEP the data dir alive (hand it back to
     /// the caller) so a second server can boot on it — the restart
     /// half of the feed-generation tests.
-    fn stop_take_dir(mut self) -> tempdir::TempDir {
+    fn stop_take_dir(mut self) -> TmpDir {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(h) = self.handle.take() {
             let _ = h.join();
@@ -314,7 +299,7 @@ fn replication_disabled_means_no_listener_on_replication_port() {
     // mistake that always binds the listener regardless of config.
     let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let base = free_port_block(1);
-    let dir = tempdir::TempDir::new("kevy-replication-disabled");
+    let dir = TmpDir::new("kevy-replication-disabled");
     let dir_path = dir.path().to_path_buf();
     let stop = Arc::new(AtomicBool::new(false));
     let stop_thread = stop.clone();
@@ -664,7 +649,7 @@ fn start_small_buffer_primary(buffer_size: u64) -> Server {
     let base = free_port_block(1);
     let port = base;
     let replication_base = base + 1;
-    let dir = tempdir::TempDir::new("kevy-snapshot-ship");
+    let dir = TmpDir::new("kevy-snapshot-ship");
     let dir_path = dir.path().to_path_buf();
     let stop = Arc::new(AtomicBool::new(false));
     let stop_thread = stop.clone();
@@ -1106,14 +1091,14 @@ struct ReplicaServer {
     stop_runner: Arc<AtomicBool>,
     rt_handle: Option<std::thread::JoinHandle<()>>,
     runner_handle: Option<std::thread::JoinHandle<()>>,
-    _dir: tempdir::TempDir,
+    _dir: TmpDir,
 }
 
 impl ReplicaServer {
     fn start(upstream_replication_port: u16) -> Self {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = free_port_block(0) + 1; // one free port (no replication listener / cluster)
-        let dir = tempdir::TempDir::new("kevy-replica-rt");
+        let dir = TmpDir::new("kevy-replica-rt");
         let dir_path = dir.path().to_path_buf();
         // SAFETY: see Server::start.
         unsafe {
@@ -1484,7 +1469,7 @@ fn replicaof_command_dynamically_attaches_to_primary() {
         .expect("fresh state");
 
     let replica_port = free_port_block(1) + 1;
-    let replica_dir = tempdir::TempDir::new("kevy-dynamic-replica");
+    let replica_dir = TmpDir::new("kevy-dynamic-replica");
     let replica_dir_path = replica_dir.path().to_path_buf();
     // SAFETY: see Server::start.
     unsafe { std::env::set_var("KEVY_IO_URING", "0"); }
@@ -1608,7 +1593,7 @@ struct AttachedReplica {
     port: u16,
     stop: Arc<AtomicBool>,
     handle: Option<std::thread::JoinHandle<()>>,
-    _dir: tempdir::TempDir,
+    _dir: TmpDir,
 }
 
 impl AttachedReplica {
@@ -1617,7 +1602,7 @@ impl AttachedReplica {
         let receivers = commands.state().take_replica_inboxes().expect("fresh state");
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = free_port_block(1) + 1;
-        let dir = tempdir::TempDir::new("kevy-v316-replica");
+        let dir = TmpDir::new("kevy-v316-replica");
         let dir_path = dir.path().to_path_buf();
         // SAFETY: see Server::start.
         unsafe { std::env::set_var("KEVY_IO_URING", "0"); }
