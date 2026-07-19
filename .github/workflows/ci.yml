@@ -24,6 +24,7 @@ jobs:
   coverage:
     name: covgate (line-coverage ratchet)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - name: Install Rust (stable)
@@ -54,6 +55,7 @@ jobs:
   test:
     name: test (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -205,6 +207,7 @@ jobs:
   release-profile:
     name: test (release profile, Linux)
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     if: startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/hotfix/')
     steps:
       - uses: actions/checkout@v7
@@ -232,6 +235,7 @@ jobs:
   wasm:
     name: cargo check ${{ matrix.target }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -278,6 +282,7 @@ jobs:
   crashgate:
     name: crashgate (crash-consistency contract)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
 
@@ -309,6 +314,7 @@ jobs:
   iot:
     name: iot (musl / no_std / feature archetypes)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
@@ -402,6 +408,7 @@ jobs:
   miri:
     name: miri (kevy-map + kevy-bytes + kevy-ring + kevy-store zset)
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
 
@@ -459,6 +466,7 @@ jobs:
   fuzz-smoke:
     name: fuzz-smoke (${{ matrix.crate }}/${{ matrix.target }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -503,6 +511,7 @@ jobs:
   compat:
     name: bench/run.sh (Docker, 5-min smoke)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     # Don't block the main matrix on bench — it's a flake-prone Docker harness.
     continue-on-error: true
     steps:
@@ -520,6 +529,7 @@ jobs:
   compat-differential:
     name: compat3 differential (kevy == valkey 9.1, byte-for-byte)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     # Blocking, unlike the perf smoke above: a divergence is a deterministic
     # correctness bug (byte-diff of replies vs valkey 9.1 + redis 7.4), not
     # an environmental perf artifact. The script exits non-zero if kevy
@@ -538,6 +548,7 @@ jobs:
   clientgate:
     name: clientgate (six redis clients, one kevy server)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - name: Install Rust (stable)
@@ -579,6 +590,7 @@ jobs:
   ffigate:
     name: ffigate (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -675,6 +687,7 @@ jobs:
   client-conformance:
     name: client-conformance (${{ matrix.name }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
