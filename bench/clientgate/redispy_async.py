@@ -32,8 +32,13 @@ async def main():
     check(await c.zrange("z", 0, -1) == [b"one", b"two"], "ZRANGE")
 
     # pub/sub round trip
-    p = c.pubsub(ignore_subscribe_messages=True)
+    # See the comment in redispy.py: await the server's subscribe
+    # confirmation before publishing, or the message can be published to
+    # nobody and the get_message loop below never terminates.
+    p = c.pubsub()
     await p.subscribe("room")
+    ack = await p.get_message(timeout=5)
+    check(ack is not None and ack["type"] == "subscribe", "subscribe ack")
     await c.publish("room", "hi")
     msg = await p.get_message(timeout=5)
     while msg is None:
