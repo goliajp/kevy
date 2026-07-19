@@ -223,27 +223,41 @@ featureで段階化されており（`core` / `persist` / `index` / `text` /
 
 ベアメタルベンチマークスイートからの代表的な抜粋です（16コアのLinux
 マシン、サーバーとクライアントは互いに重ならないコアにピン留め、TCP
-loopback、精密モードでCI95 < 1%）。詳細な手法、全ワークロード、注意点は
+loopback）。下記のKV行は`bench/arena.sh`を2026-07-19に再測定した値で、
+median-of-5、スループットは各サーバー自身のコマンドカウンタを計測窓で
+読んだものです。詳細な手法、全ワークロード、注意点は
 [`bench/REPORT.md`](bench/REPORT.md)にあり、すべての数値は
 [`bench/`](bench/)のスクリプトから再現可能です。
 
 | ワークロード | kevy | valkey 9.1 | 比率 |
 |---|---:|---:|---:|
-| `GET -c 50 -P 16` | 6.39 M/s | 2.13 M/s | **3.00×** |
-| `SET -c 50 -P 16` | 6.39 M/s | 1.60 M/s | **4.00×** |
+| `GET -c 50 -P 16` | 7.24 M/s | 2.95 M/s | **2.46×** |
+| `SET -c 50 -P 16` | 6.67 M/s | 1.67 M/s | **4.00×** |
 | Pub/subファンアウト（50 subs） | 23.1 M/s | 5.1 M/s | **4.52×** |
 | 組み込み`get`（ヒット） | 9.0 M/s | — | （in-processのRedisは無い） |
 
 同じ`GET -c 50 -P 16`の面を、同一マシン上で四つのエンジンと対戦
-——kevyは6.39 M/sでそれぞれに対して（median-of-5。手法と
+——kevyは7.24 M/sでそれぞれに対して（median-of-5。手法と
 エンジンごとのサイクル記録は
 [`bench/PERF-VERDICT-V4-T9.md`](bench/PERF-VERDICT-V4-T9.md)）：
 
 | エンジン | kevyのリード |
 |---|---:|
-| valkey 9.1 | **3.00×** |
-| redis 8 | **1.60×** |
-| dragonfly | **3.60×** |
+| valkey 9.1 | **2.46×** |
+| redis 8 | **1.25×** |
+| dragonfly | **3.48×** |
+
+これらの比率は**2026-07-19以前に公表した値より低い**ですが、原因は
+エンジンではなく物差しです。以前の数値は`redis-benchmark`自身の
+報告レートで、`--threads`下では同ベンチの250 msサンプリングタイマーの
+倍数に量子化されるため系統的に低く出ます——しかもエンジンごとに
+低く出る度合いが違うので、比率も歪みます。サーバー側で数えると
+量子化は消え、kevy自身の数値はむしろ**上がりました**（6.39 →
+7.24 M/s）。競合はそれ以上に上がった、というだけです。
+[`bench/PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md`](bench/PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md)を参照。
+
+Pub/subと組み込みの2行はそれぞれ別のハーネスによるもので、今回の
+再測定の対象外です。
 
 サービング面はredis-stack 7.4.7（RediSearch）と同一シード・
 同一コーパスでrecallを揃えて比較（[`bench/PERF-LEDGER.md`](bench/PERF-LEDGER.md)）：

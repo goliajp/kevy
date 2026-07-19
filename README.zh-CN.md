@@ -202,26 +202,37 @@ loader API 与 ABI 契约见 [docs/zh-CN/wasm.md](docs/zh-CN/wasm.md)；
 ## 性能
 
 来自裸机基准测试套件的一段代表性切片（16 核 Linux 机器，服务器和
-客户端分别 pin 在不相交的核心上，TCP loopback，精确模式 CI95 < 1%）。
-完整方法、每种 workload 以及注意事项见 [`bench/REPORT.md`](bench/REPORT.md)；
-每个数字都可以由 [`bench/`](bench/) 里的脚本复现。
+客户端分别 pin 在不相交的核心上，TCP loopback）。下面的 KV 行来自
+`bench/arena.sh`，2026-07-19 重测：median-of-5，吞吐读的是各服务端
+自己的命令计数器在计时窗口内的增量。完整方法、每种 workload 以及
+注意事项见 [`bench/REPORT.md`](bench/REPORT.md)；每个数字都可以由
+[`bench/`](bench/) 里的脚本复现。
 
 | Workload | kevy | valkey 9.1 | 比值 |
 |---|---:|---:|---:|
-| `GET -c 50 -P 16` | 6.39 M/s | 2.13 M/s | **3.00×** |
-| `SET -c 50 -P 16` | 6.39 M/s | 1.60 M/s | **4.00×** |
+| `GET -c 50 -P 16` | 7.24 M/s | 2.95 M/s | **2.46×** |
+| `SET -c 50 -P 16` | 6.67 M/s | 1.67 M/s | **4.00×** |
 | Pub/sub 扇出（50 订阅） | 23.1 M/s | 5.1 M/s | **4.52×** |
 | 嵌入式 `get`（命中） | 9.0 M/s | — | （Redis 无进程内形态） |
 
 同一个 `GET -c 50 -P 16` 面，同一台机器上对打四个引擎——kevy
-以 6.39 M/s 分别对阵（median-of-5；方法与逐引擎的 cycle 记账见
+以 7.24 M/s 分别对阵（median-of-5；方法与逐引擎的 cycle 记账见
 [`bench/PERF-VERDICT-V4-T9.md`](bench/PERF-VERDICT-V4-T9.md)）：
 
 | 引擎 | kevy 领先 |
 |---|---:|
-| valkey 9.1 | **3.00×** |
-| redis 8 | **1.60×** |
-| dragonfly | **3.60×** |
+| valkey 9.1 | **2.46×** |
+| redis 8 | **1.25×** |
+| dragonfly | **3.48×** |
+
+这些比值**低于 2026-07-19 之前公布的数字**，原因在尺子，不在引擎。
+早先的数字读的是 `redis-benchmark` 自报速率，而它在 `--threads` 下
+只能被自己的 250 ms 采样计时器量化，因此系统性偏低——而且各引擎
+偏低的程度不同，比值也就跟着失真。改成服务端计数后量化消失：kevy
+自己的数字反而**上升**（6.39 → 7.24 M/s），只是每个竞品上升得更多。
+见 [`bench/PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md`](bench/PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md)。
+
+Pub/sub 与嵌入式两行来自各自的测试台，不在本次重测范围内。
 
 Serving 面对打 redis-stack 7.4.7（RediSearch），同种子同语料、
 recall 对齐（[`bench/PERF-LEDGER.md`](bench/PERF-LEDGER.md)）：
