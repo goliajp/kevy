@@ -69,6 +69,14 @@ legacy_8sh_incr legacy_8sh_sadd legacy_8sh_hset legacy_8sh_lpush legacy_8sh_zadd
 zalg_zinterstore"
 
 # ---------- preflight: never measure on a dirty box ----------
+# A perf comparison of two userland binaries never legitimately needs the
+# ability to SIGTERM init. Running this as root is what turned a foot-gun
+# into three site outages (bench/INCIDENT-2026-07-perfgate-pkill-massacre.md,
+# hard rule 4) — the privilege is the difference between "killed my own
+# processes" and "killed sshd". No override flag: an escape hatch here would
+# be used, and then it would be the default again.
+[ "$(id -u)" -ne 0 ] || refuse "refusing to run as root — use an unprivileged \
+bench account (lx64: kevybench, checkout ~/kevy)"
 command -v redis-benchmark >/dev/null || refuse "redis-benchmark not installed"
 command -v redis-cli >/dev/null || refuse "redis-cli not installed (the --threads angles read the server's counter through it)"
 [ -x "$BIN" ] || refuse "$BIN is not executable"
@@ -89,11 +97,11 @@ server_stop() {
   # substitution only exits the subshell, so a failed reference build left BIN
   # empty and `pkill -f "^"` took lx64 offline (2026-07 outages). Never pkill on
   # an empty pattern.
-  [ -n "$BIN" ] || { echo "perfgate: server_stop refusing pkill with empty BIN" >&2; return 0; }
   # Bounded by construction first: the PID we ourselves spawned. The pkill
   # below is only the leftover sweep (a server from a previous angle/binary
   # that outlived its measure_all).
   [ -n "${SRV:-}" ] && kill "$SRV" 2>/dev/null
+  [ -n "$BIN" ] || { echo "perfgate: server_stop refusing pkill with empty BIN" >&2; return 0; }
   pkill -f "^$BIN" 2>/dev/null
   while pgrep -f "^$BIN" >/dev/null; do sleep 0.1; done
 }
