@@ -196,7 +196,12 @@ median_of() { printf "%s\n" "$@" | sort -n | awk '{a[NR]=$1} END {print a[int((N
 # Interleaving the two binaries makes that drift cancel instead of deciding
 # the verdict.
 ref_binary() {
-  local sha=$1 cache="$HERE/.perfgate-ref" out="$HERE/.perfgate-ref/kevy-${sha:0:12}"
+  # Two statements, not one: `local` expands ALL its arguments before it
+  # assigns any of them, so an `out=...${sha}` sharing the line with
+  # `sha=$1` reads sha BEFORE it exists — under `set -u` that aborts the
+  # gate ("sha: unbound variable"), which is exactly what it did.
+  local sha=$1
+  local cache="$HERE/.perfgate-ref" out="$HERE/.perfgate-ref/kevy-${sha:0:12}"
   [ -x "$out" ] && { printf "%s" "$out"; return 0; }
   mkdir -p "$cache"
   local wt="$cache/wt-${sha:0:12}"
