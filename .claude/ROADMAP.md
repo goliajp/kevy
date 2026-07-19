@@ -306,15 +306,18 @@ client 生态 —— 该策略 t2 里 gate 化。
 
 ### t5.5 — durability trust arc(mailrs P0 引子;用户拍板 2026-07-17:全量进 v4、no defer、报告内外全覆盖、排 ship 前)
 - RFC:`.claude/rfcs/2026-07-17-v4-durability-trust.md`(域分解 14 轴 + AOF envelope v2 承重决策 + 关闭项账目)
-- [ ] T1【gate 先行】crashgate(SIGKILL 注入矩阵)+ persistence.md 状态机契约(丢失上界表 / 多 shard 偏斜 / feed×截断审计成文)—— 先红后修
-- [ ] T2 corrupt tail:quarantine 拷贝 + truncate(闭 docs:194 文档谎言)
-- [ ] T3 可观测:OpenReport + Replay{dropped_bytes,corrupt} + INFO 字段 + WARN 首因文案 + kevy_open_report 过各门
-- [ ] T4 生命周期:Store::shutdown()(幂等 clone 安全)+ rewrite 绝对/时间阈值 + RewriteStats 公开 + fsync/rewrite 策略过 C ABI 与各门
-- [ ] T5 AOF envelope v2(len+CRC32C+sync marker;v1 只读、rewrite 升格式)+ 流式 replay(峰值 O(最大记录),消 open 双读;memgate/diskgate 上线)
-- [ ] T6 resync:v2 确定性重扫(strict 默认 / best-effort 可选 + resynced_ranges 上报)+ v1 启发式 + 损伤注入 fuzz
+- [x] T1【gate 先行】crashgate(SIGKILL 注入矩阵)+ persistence.md 状态机契约(丢失上界表 / 多 shard 偏斜 / feed×截断审计成文)—— 先红后修
+- [x] T2 corrupt tail:quarantine 拷贝 + truncate(闭 docs:194 文档谎言)
+- [x] T3 可观测:OpenReport + Replay{dropped_bytes,corrupt} + INFO 字段 + WARN 首因文案 + kevy_open_report 过各门
+- [x] T4 生命周期:Store::shutdown()(幂等 clone 安全)+ rewrite 绝对/时间阈值 + RewriteStats 公开 + fsync/rewrite 策略过 C ABI 与各门
+- [x] T5 AOF envelope v2(len+CRC32C+sync marker;v1 只读、rewrite 升格式)+ 流式 replay(峰值 O(最大记录),消 open 双读;memgate/diskgate 上线)
+- [x] T6 resync:v2 确定性重扫(strict 默认 / best-effort 可选 + resynced_ranges 上报)+ v1 启发式 + 损伤注入 fuzz
 - [x] T8 复制世代栅栏(握手/ACK 带 gen 6-args wire;fence 落 pump 先于 caught-up 检查,顺手修 mid-stream bump stall/aliasing 第二张脸;runner data_gen + 心跳 gen 断链;embed-writer per-boot nanos gen;side-audit = resync 后本地 AOF 同步 rewrite re-base;测试 = embed_writer_e2e 重启 aliasing + kevy replication unclean 重启 + rw_split gen 化 + repligate clamp 5 全 PASS;附带修 T3 回归 OpenReport 属主入 DropGuard)
-- [ ] T7 docs/runbook/UPGRADING/CHANGELOG(修订 disk-format 表述)+ mailrs 回信账目
+- [x] T7 docs/runbook/UPGRADING/CHANGELOG(修订 disk-format 表述)+ mailrs 回信账目
 - 关闭项(有据非 defer):3.x backport 不做(指令:全在 v4 解决);大值写放大存储模型改造不做(mmap-AOF 已实测否决)
+- [x] T5b wasm host-mediated log 升 v2(arc 内新增:双格式嗅探 / fresh 流自带 magic / dump 即升级点;bit-flip 在浏览器侧也被 CRC 拒收)
+- [x] **arc 五轴收口(2026-07-18)**:crashgate 全绿(硬门,CI PENDING_STRICT=1)/ diskgate PASS(v2 开销 112 vs 106 B/op = +5.7%,20% band 内;rewrite 24ms 持平)/ replaymemgate(峰值 O(最大记录),37MB 日志实测 RSS 4MB)/ covgate ratchet 不降 / docs 三语收口 + mailrs 回信账目 / **perfgate PASS —— 12 指标全绿,SET 轴 +0.2%/-1.9%/-0.8% 全在噪声带,v2 每记录 CRC32C 零可测吞吐代价**(交错测量 vs ref 349cafc1,box drift 单列抵消)
+- 附带产出(非 RFC 计划内,均为实测驱动):**两个 io_uring 数据面 bug 根治** —— ① SQ 满时 recv 重臂丢失致连接 wedge(`76c79c38`);② multishot `res=0` 带 `F_SOCK_NONEMPTY` 被误判 EOF(`667005f9`,lx64 真内核 A/B **4/25 挂 → 0/25**)。另修 perfgate 自身两处(`3f99373b` set-u 下 ref_binary 中止;`7a87a1aa` 空 BIN pkill 曾三次打挂 lx64)。finding:`bench/PERF-FINDING-2026-07-18-uring-recv-rearm-wedge.md`
 
 ### t5 — 总线收尾(渠道除外)
 - [ ] lx64 post-fix arena 复测(悬案)→ README 基准表解冻
