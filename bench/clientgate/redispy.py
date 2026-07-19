@@ -28,8 +28,17 @@ c.zadd("z", {"one": 1, "two": 2})
 check(c.zrange("z", 0, -1) == [b"one", b"two"], "ZRANGE")
 
 # pub/sub round trip
-p = c.pubsub(ignore_subscribe_messages=True)
+# Read the server's subscribe confirmation BEFORE publishing. redis-py's
+# subscribe() only writes the command, so publishing straight after it is a
+# race: the message goes to whoever is registered at PUBLISH time, and a lost
+# message leaves the get_message loop below spinning forever. Single-threaded
+# Redis survives it because arrival order is processing order; a
+# thread-per-core server with the two connections on different shards does
+# not. go-redis and hiredis already wait for this ack explicitly.
+p = c.pubsub()
 p.subscribe("room")
+ack = p.get_message(timeout=5)
+check(ack is not None and ack["type"] == "subscribe", "subscribe ack")
 c.publish("room", "hi")
 msg = p.get_message(timeout=5)
 while msg is None:
