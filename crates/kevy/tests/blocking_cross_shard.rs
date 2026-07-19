@@ -275,7 +275,15 @@ fn blpop_remote_disconnect_then_push_is_clean() {
         std::thread::sleep(std::time::Duration::from_millis(40));
         // drop = disconnect while blocked
     }
-    std::thread::sleep(std::time::Duration::from_millis(40));
+    // Cancel-on-disconnect is a cross-shard broadcast, so it lands
+    // eventually, not instantly. 40ms was a bet that it completes before
+    // the push below, and on a loaded runner that bet loses: the target
+    // still has the stale waiter armed, serves the push to it, and the
+    // element is then lost at the origin (see
+    // bench/FINDING-2026-07-19-xshard-block-serve-drop.md — a real defect
+    // this test is not the right place to assert). 500ms so this test
+    // asserts what it is for: that the cancel HAPPENS.
+    std::thread::sleep(std::time::Duration::from_millis(500));
     // A later push must not be consumed by the gone waiter; the value stays
     // and a fresh BLPOP retrieves it.
     let mut producer = srv.connect();
