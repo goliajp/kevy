@@ -259,6 +259,20 @@ impl<C: Commands> Shard<C> {
             };
             conn.blocked = false;
             encode_block_timeout(&mut conn.output, w.kind, w.proto);
+            // The parked command's seq was never retired: `try_inline_local`
+            // returns early on the park-on-miss branch WITHOUT bumping
+            // `next_emit`, precisely because the reply is deferred to here.
+            // Retiring it now is what keeps `seq - next_emit` a valid index
+            // into `conn.pending` for every later command. Without it the
+            // conn runs one behind forever, and the first command that takes
+            // the pending path (a cross-shard forward, or anything queued
+            // behind another) folds its reply into a slot that does not
+            // exist — the reply is dropped and the connection wedges with
+            // the request dispatched and no response. The wake path
+            // (`wake_blocked_on_key`) and both cross-shard paths
+            // (`block_xshard::deliver_block` / the xshard timeout sweep)
+            // already do this; this one was the odd sibling out.
+            conn.next_emit += 1;
             self.dirty.push(w.conn_id);
         }
     }
