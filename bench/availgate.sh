@@ -475,20 +475,29 @@ def enc(*parts):
     return buf
 batch = b""
 outstanding = 0
+acked = 0
 def drain(n):
     got = 0
     buf = b""
     while got < n:
         _chunk = s.recv(1 << 20)
         if not _chunk:
-            raise AssertionError('server closed the connection mid-reply')
+            # Report what the server said LAST, not just that it left. A
+            # protocol error, an -ERR, or a clean close after N acks are
+            # three different bugs and the bare "closed" reads the same
+            # for all of them.
+            tail = buf[-200:].replace(b"+OK\r\n", b"")
+            raise AssertionError(
+                f"server closed mid-reply after {acked + got} acked SETs; "
+                f"last non-OK bytes on the wire: {tail!r}"
+            )
         buf += _chunk
         got = buf.count(b"+OK\r\n")
 for i in range(80_000):
     batch += enc(b"SET", b"big:%d" % i, val)
     outstanding += 1
     if outstanding == 500:
-        s.sendall(batch); drain(outstanding)
+        s.sendall(batch); drain(outstanding); acked += outstanding
         batch = b""; outstanding = 0
 if outstanding:
     s.sendall(batch); drain(outstanding)
