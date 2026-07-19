@@ -83,6 +83,13 @@ IDLE=$(( (i2 - i1) * 100 / ( (u2-u1) + (n2-n1) + (s2-s1) + (i2-i1) ) ))
 [ "$IDLE" -ge 80 ] || refuse "box busy (idle ${IDLE}% < 80%)"
 
 server_stop() {
+  # HARD GUARD: an empty $BIN makes "^$BIN" == "^", which pkill -f matches
+  # against EVERY process cmdline — as root that SIGTERMs sshd/systemd/the whole
+  # box. This has happened: `refuse`/`exit` inside the $(ref_binary …) command
+  # substitution only exits the subshell, so a failed reference build left BIN
+  # empty and `pkill -f "^"` took lx64 offline (2026-07 outages). Never pkill on
+  # an empty pattern.
+  [ -n "$BIN" ] || { echo "perfgate: server_stop refusing pkill with empty BIN" >&2; return 0; }
   pkill -f "^$BIN" 2>/dev/null
   while pgrep -f "^$BIN" >/dev/null; do sleep 0.1; done
 }
@@ -275,6 +282,10 @@ else
   REF_SHA=$(python3 -c "import json;print(json.load(open('$BASELINE')).get('ref_commit',''))")
   [ -n "$REF_SHA" ] || refuse "baseline has no ref_commit — re-record it with --update-baseline"
   REF_BIN=${PERFGATE_REF_BIN:-$(ref_binary "$REF_SHA")}
+  # `refuse`/`exit` inside the $(ref_binary …) subshell above does NOT abort this
+  # parent — a failed reference build returns empty. Catch it here (before it
+  # reaches measure_all → server_stop → pkill) or the empty binary is fatal.
+  [ -n "$REF_BIN" ] && [ -x "$REF_BIN" ] || fail "reference binary unavailable for ${REF_SHA:0:12} (build failed?) — aborting before it can nuke the box"
   echo "perfgate: candidate $(basename "$CAND_BIN") vs reference ${REF_SHA:0:12}, interleaved, $INSTANCES instances/angle"
   for inst in $(seq 1 "$INSTANCES"); do
     if [ $((inst % 2)) -eq 1 ]; then
