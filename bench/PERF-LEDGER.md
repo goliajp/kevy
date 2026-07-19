@@ -239,6 +239,33 @@ pinned 4 角 + zalg 保留 2026-07-03 记录不动。**feature/v4 上 gate
 = 9 绿 / 3 红(三条 SET 角)——红灯即 finding,修复(decomp →
 attack)待用户拍板排程。**
 
+## v4.0.0 release arena — bare face 复测(2026-07-19,lx64,**服务端计数口径**)
+
+本表**第一次不受顶部精度警告约束**:吞吐读的是各服务端自己的
+`total_commands_processed` 在计时窗口内的增量,不再是 redis-benchmark
+自报速率,250ms 的格子消失。原始输出:[`ARENA-2026-07-19.txt`](ARENA-2026-07-19.txt)。
+
+**7/7 全胜 valkey 9.1**(median-of-5,gap 全部远大于两侧 stdev,无 NOISE 格):
+
+| op | kevy | valkey 9.1 | 比值 | v3.18.0 旧口径 |
+|---|---:|---:|---:|---:|
+| GET | 7.24 M/s | 2.95 M/s | 2.46× | 3.00× |
+| SET | 6.67 M/s | 1.67 M/s | 4.00× | 3.99× |
+| INCR | 6.20 M/s | 2.17 M/s | 2.86× | 3.00× |
+| SADD | 6.25 M/s | 2.12 M/s | 2.95× | 2.50× |
+| HSET | 3.72 M/s | 1.72 M/s | 2.17× | 2.25× |
+| ZADD | 2.98 M/s | 1.67 M/s | 1.78× | 1.73× |
+| LPUSH | 3.07 M/s | 1.75 M/s | 1.76× | 1.64× |
+
+四引擎 GET 面(kevy 7.24 M/s):valkey **2.46×** / redis 8 **1.25×** /
+dragonfly **3.48×**(README 此前公布 3.00× / 1.60× / 3.60×,已同步下修)。
+
+**比值有升有降,不是引擎变了,是尺子换了。** 旧口径把两侧都低报,
+且低报程度按引擎不同,比值因此失真——LPUSH/SADD/ZADD 升,
+GET/INCR/HSET 降。kevy 自己的绝对值全线上升(GET 6.39 → 7.24 M/s)。
+**v3.18.0 那节留下的 LPUSH 观察项(2.91M,较 v3.17.0 低 9%)在此闭合**:
+新口径 3.07 M/s,vs valkey 1.76×,高于旧口径的 1.64×。
+
 ## v3.18.0 release arena — bare face 复测(2026-07-10,lx64)
 
 结构 arc(LOC 还债 + 热路径批 D + fuzz/polish)后的裸面确认:
