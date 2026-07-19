@@ -26,6 +26,21 @@
 # Output: markdown table rows for bench/PERF-LEDGER.md.
 # Usage (lx64): bash bench/arena.sh <kevy-binary>
 set -u
+# ROOT: arena is the one documented exception to "bench scripts do not run
+# as root" (bench/INCIDENT-2026-07-perfgate-pkill-massacre.md, rule 4). It
+# needs docker to run the competitors, docker on the bench box is root-only,
+# and rootless cannot substitute: `--cpuset-cpus` requires the cpuset
+# controller to be delegated to the user slice, and it is not (user slices
+# get cpu/memory/pids only), so a rootless run would silently lose the core
+# pinning the whole fair-fight protocol rests on. An unpinned number is
+# worse than no number.
+#
+# The exception is bounded by construction, which is what the rule is
+# actually protecting: arena never calls pkill — it kills the PID it
+# spawned and removes the containers it named — and none of its `docker
+# run` invocations mount a host path. perfgate keeps its hard root refusal,
+# because perfgate does use `pkill -f`.
+
 KBIN=${1:?usage: arena.sh <kevy-binary>}
 KBIN=$(cd "$(dirname "$KBIN")" && pwd)/$(basename "$KBIN")
 cd "$(dirname "$0")"
