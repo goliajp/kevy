@@ -494,6 +494,11 @@ if outstanding:
     s.sendall(batch); drain(outstanding)
 print("availgate: seeded 80k x 1KB past the 64kb backlog", flush=True)
 PYEOF
+# The seeder's exit status was unchecked, so a failed seed fell through to
+# the -LOADING probe, which then failed with "never observed -LOADING" — a
+# true statement about a keyspace that was never written, and a misleading
+# one about what actually broke.
+[ $? -eq 0 ] || fail "phase-4 seed did not complete (traceback above)"
 env KEVY_BIND=127.0.0.1 "$KBIN" --threads 4 --port $RPORT --dir "$DIR/r" --no-aof \
     --config "$DIR/rep4.toml" > "$DIR/rep.out" 2>&1 &
 RPID_=$!
