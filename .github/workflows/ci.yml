@@ -122,6 +122,15 @@ jobs:
       - name: killgate (no unguarded pkill -f in bench scripts)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: bash bench/killgate.sh
+      # uringgate: connection-wedge contract. The sq-pressure half needs a
+      # real ring and self-skips where there isn't one; the blocking-tail
+      # half is reactor-agnostic and runs everywhere, which is the half
+      # that caught the seq-retire wedge (8d8f20e9).
+      - name: uringgate (no connection wedges)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          cargo build -q --release -p kevy --bin kevy
+          bash bench/uringgate.sh target/release/kevy
       # commentgate (no internal vocabulary in comments — vocabulary table
       # in bench/commentgate-terms.txt): baseline driven to zero by the
       # T2 sweep; any new hit is a regression.
