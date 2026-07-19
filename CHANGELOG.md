@@ -223,6 +223,25 @@ failure is now closed, each behind an executable gate.
   ends and the one-line triage that ended it, in
   `bench/PERF-FINDING-2026-07-18-uring-recv-rearm-wedge.md`.
 
+### The published ratios, corrected downward
+
+- **The competitive numbers in the README were measured with a ruler
+  that reads low.** `redis-benchmark`'s own reported rate is quantized
+  to multiples of its 250 ms sampling timer under `--threads`, and it
+  understates by a different amount per engine — which is exactly how a
+  *ratio* ends up wrong. The arena now counts each server's own command
+  counter over a timed window. Re-measured on 2026-07-19: kevy's lead
+  over valkey 9.1 is **2.46×** on GET (published: 3.00×), over redis 8
+  **1.25×** (published: 1.60×), over dragonfly **3.48×** (published:
+  3.60×). kevy's own throughput went *up* (GET 6.39 → 7.24 M/s); the
+  competitors' went up more. SET is unchanged at 4.00×. Still 7/7 wins
+  across GET/SET/INCR/SADD/HSET/ZADD/LPUSH. Raw run in
+  `bench/ARENA-2026-07-19.txt`, ledger entry in `bench/PERF-LEDGER.md`.
+- The method line lost its "precision-mode with CI95 < 1%" claim for
+  those rows: the arena is median-of-5 with per-cell stdev, and kevy's
+  GET cell sits at 3.1%. Quoting a precision figure from a different
+  harness is the same class of error as the ratio itself.
+
 ### Smaller truths
 
 - TOML arrays in kevy-config — and 14 documented configs that could
