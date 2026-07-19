@@ -77,6 +77,18 @@ zalg_zinterstore"
 # be used, and then it would be the default again.
 [ "$(id -u)" -ne 0 ] || refuse "refusing to run as root — use an unprivileged \
 bench account (lx64: kevybench, checkout ~/kevy)"
+# Per-run scratch. A fixed /tmp/perfgate_* path is unwritable the moment a
+# different account ran the gate before you — which is exactly what the
+# root-to-kevybench migration produced.
+RUNDIR=$(mktemp -d "${TMPDIR:-/tmp}/perfgate-XXXXXX")
+# Kept on a failed/refused run — the server log in there is the only
+# evidence of why it did not come up.
+on_exit() {
+  local rc=$?
+  if [ $rc -eq 0 ]; then rm -rf "$RUNDIR"
+  else echo "perfgate: scratch kept at $RUNDIR" >&2; fi
+}
+trap on_exit EXIT
 command -v redis-benchmark >/dev/null || refuse "redis-benchmark not installed"
 command -v redis-cli >/dev/null || refuse "redis-cli not installed (the --threads angles read the server's counter through it)"
 [ -x "$BIN" ] || refuse "$BIN is not executable"
@@ -108,13 +120,13 @@ server_stop() {
 server_start() { # $1 = extra flags
   server_stop
   env KEVY_IO_URING=1 KEVY_BIND=127.0.0.1 taskset -c 0-7 \
-    "$BIN" --threads 8 --port 7001 $1 --no-aof >/tmp/perfgate_srv.log 2>&1 &
+    "$BIN" --threads 8 --port 7001 $1 --no-aof >"$RUNDIR/srv.log" 2>&1 &
   SRV=$!
   for _ in $(seq 1 100); do
     timeout 2 redis-benchmark -p 7001 -t ping -n 1 -c 1 -q >/dev/null 2>&1 && return 0
     sleep 0.1
   done
-  refuse "server did not come up (see /tmp/perfgate_srv.log)"
+  refuse "server did not come up (see $RUNDIR/srv.log)"
 }
 
 sum_rps() { # files...
@@ -127,7 +139,7 @@ run_pinned() { # $1 = get|set, $2 = cluster|compat -> echoes total rps
   for i in $(seq 0 7); do
     port=7001; [ "$mode" = cluster ] && port=$((7002 + i))
     tag=${TAGS[$i]}
-    out=/tmp/perfgate_${mode}_${t}_$i.out; outs+=("$out")
+    out=$RUNDIR/${mode}_${t}_$i.out; outs+=("$out")
     if [ "$t" = set ]; then
       taskset -c 8-15 redis-benchmark -p $port -n "$N_PINNED" -r 1000000 \
         -c 6 -P 256 -q SET "{$tag}:__rand_int__" v >"$out" 2>&1 &
