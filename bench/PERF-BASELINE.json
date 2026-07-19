@@ -1,19 +1,21 @@
 {
-  "recorded": "2026-07-11T05:55:00Z",
+  "recorded": "2026-07-19T03:42:10Z",
   "bin": "kevy",
+  "ref_commit": "4916f7ebc9b178cbf1922a8f2652a03dceba5aa4",
   "tolerance": 0.92,
+  "_note": "metrics are the reference commit's medians on the box of the day — a trend record, not the gate. The gate rebuilds ref_commit and measures it against the candidate in the same session.",
   "metrics": {
-    "pinned_cluster_get": 30403762,
-    "pinned_cluster_set": 24311952,
-    "pinned_compat_get": 19392766,
-    "pinned_compat_set": 17521321,
-    "legacy_8sh_get": 10877494,
-    "legacy_8sh_set": 9210970,
-    "legacy_8sh_incr": 6686238,
-    "legacy_8sh_sadd": 5990441,
-    "legacy_8sh_hset": 4986724,
-    "legacy_8sh_lpush": 3866992,
-    "legacy_8sh_zadd": 3624955,
-    "zalg_zinterstore": 2846
+    "pinned_cluster_get": 29434934,
+    "pinned_cluster_set": 22044290,
+    "pinned_compat_get": 19035297,
+    "pinned_compat_set": 17059781,
+    "legacy_8sh_get": 11273990,
+    "legacy_8sh_set": 8941845,
+    "legacy_8sh_incr": 8196542,
+    "legacy_8sh_sadd": 6876890,
+    "legacy_8sh_hset": 5601472,
+    "legacy_8sh_lpush": 4334847,
+    "legacy_8sh_zadd": 3984981,
+    "zalg_zinterstore": 3183
   }
 }
