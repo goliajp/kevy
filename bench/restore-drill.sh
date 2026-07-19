@@ -20,7 +20,16 @@ PORT2=7032
 DIR=$(mktemp -d /tmp/kevy-drill-XXXXXX)
 DIR2=$(mktemp -d /tmp/kevy-drill2-XXXXXX)
 CONF="$DIR/kevy.toml"
-fail() { echo "restore-drill: FAIL — $1" >&2; pkill -f "port $PORT" 2>/dev/null; exit 1; }
+# Kill ONLY the PIDs this script started. A fuzzy `pkill -f "port $PORT"`
+# lived here until the 2026-07 perfgate massacre made the rule explicit:
+# a bench kill must be blast-radius-bounded by construction, so that even
+# with every variable empty it cannot reach a process we did not spawn.
+fail() {
+  echo "restore-drill: FAIL — $1" >&2
+  [ -n "${SRV:-}" ] && kill "$SRV" 2>/dev/null
+  [ -n "${SRV2:-}" ] && kill "$SRV2" 2>/dev/null
+  exit 1
+}
 
 cat > "$CONF" <<EOF
 [feed]
