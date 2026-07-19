@@ -91,21 +91,36 @@ def spawn_server(*extra: str, config: str | None = None) -> SpawnedServer:
 
 
 def _wait_ready(srv: SpawnedServer) -> None:
+    # Probe with a raw, TIMED socket rather than a client ping.
+    #
+    # The deadline below can only bound how many times we retry — it cannot
+    # bound a single call that never returns, and the blocking client sets
+    # no socket timeout (like redis-py, by design). A server that accepts
+    # the connection and then never answers therefore parks the read
+    # forever: this suite hung for 3h46m on a CI runner that way, until the
+    # job was cancelled and left an orphan `kevy` behind. That accept-but-
+    # mute shape is the io_uring bring-up hang availgate already documents
+    # on x86 runners; it is a real and still-open server bug, and the point
+    # of this probe is that the harness reports it in 10s by name instead
+    # of burning the job's whole budget on it.
     deadline = time.time() + 10
     while time.time() < deadline:
         if srv._proc.poll() is not None:
             pytest.skip("kevy server exited before becoming ready")
         try:
-            c = kevy.connect(srv.url)
-            try:
-                c.ping()
-                return
-            finally:
-                c.close()
-        except kevy.KevyError:
-            time.sleep(0.03)
+            with socket.create_connection(("127.0.0.1", srv.port), timeout=1) as probe:
+                probe.settimeout(1)
+                probe.sendall(b"PING\r\n")
+                if probe.recv(64).startswith(b"+PONG"):
+                    return
+        except OSError:
+            pass
+        time.sleep(0.03)
     srv.stop()
-    raise RuntimeError(f"server on port {srv.port} never became ready")
+    raise RuntimeError(
+        f"server on port {srv.port} accepted connections but never answered "
+        f"PING within 10s (see the accept-but-mute note above)"
+    )
 
 
 # --- shared session server for the plain both-backends tests ------------
