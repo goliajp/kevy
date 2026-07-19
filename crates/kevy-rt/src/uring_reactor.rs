@@ -359,16 +359,10 @@ impl<C: Commands> Shard<C> {
                         }
                         for idx in 0..self.replicas.len() {
                             if let Err(e) = self.replica_readable(idx) {
-                                eprintln!(
-                                    "kevy: shard {} replica_readable[{idx}]: {e}",
-                                    self.id,
-                                );
+                                self.replica_io_failed(idx, "read", &e);
                             }
                             if let Err(e) = self.replica_writable(idx) {
-                                eprintln!(
-                                    "kevy: shard {} replica_writable[{idx}]: {e}",
-                                    self.id,
-                                );
+                                self.replica_io_failed(idx, "write", &e);
                             }
                         }
                         self.tick_replication_slots(now);

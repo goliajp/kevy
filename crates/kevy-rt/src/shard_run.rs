@@ -181,8 +181,11 @@ impl<C: Commands> Shard<C> {
                             self.flush_conn(conn_id)?;
                         }
                     } else if let Some(idx) = self.replica_index_by_fd(ev.fd) {
-                        if ev.readable || ev.hup {
-                            self.replica_readable(idx)?;
+                        let readable = ev.readable || ev.hup;
+                        if readable
+                            && let Err(e) = self.replica_readable(idx)
+                        {
+                            self.replica_io_failed(idx, "read", &e);
                         }
                         // A handshake `+ACK` is small (≤ 30 B) and
                         // usually fits in the first non-blocking write,
@@ -193,7 +196,9 @@ impl<C: Commands> Shard<C> {
                         // re-arm covers the short-write case; in
                         // practice `+ACK` drains in one syscall on
                         // every OS we test).
-                        self.replica_writable(idx)?;
+                        if let Err(e) = self.replica_writable(idx) {
+                            self.replica_io_failed(idx, "write", &e);
+                        }
                     }
                 }
                 self.events = events;

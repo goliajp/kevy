@@ -271,7 +271,10 @@ impl<C: Commands> Shard<C> {
             if self.replicas[idx].output.len() <= self.replicas[idx].write_off {
                 continue;
             }
-            self.replica_writable(idx)?;
+            if let Err(e) = self.replica_writable(idx) {
+                self.replica_io_failed(idx, "streaming write", &e);
+                continue;
+            }
             let conn = &self.replicas[idx];
             if matches!(conn.state, ReplicaState::Streaming { .. })
                 && conn.output.len() - conn.write_off >= STREAMING_OUTPUT_CAP
