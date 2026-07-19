@@ -442,25 +442,21 @@ impl<C: Commands> Shard<C> {
                 // a linear write_buf; drop all arcs; reset chunked
                 // state; advance write_off by the bytes actually
                 // written. Next iter takes the simple prep_write path.
-                let total: usize = uc.write_buf.len()
-                    + uc.write_arcs.iter().map(|(_, a)| a.len()).sum::<usize>();
-                let mut linear: Vec<u8> = Vec::with_capacity(total);
-                let mut prev = 0usize;
-                for (pos, arc) in &uc.write_arcs {
-                    let pos = *pos;
-                    if pos > prev {
-                        linear.extend_from_slice(&uc.write_buf[prev..pos]);
-                    }
-                    linear.extend_from_slice(arc.as_ref());
-                    prev = pos;
-                }
-                if prev < uc.write_buf.len() {
-                    linear.extend_from_slice(&uc.write_buf[prev..]);
-                }
+                //
+                // The flatten starts at `write_off`, not at zero — see
+                // `uring_write_linearize` for why starting at zero
+                // re-transmits an already-sent prefix and desynchronises
+                // the peer's RESP framing.
+                let (linear, new_off) = crate::uring_write_linearize::linearize_unsent(
+                    &uc.write_buf,
+                    &uc.write_arcs,
+                    uc.write_off,
+                    written,
+                );
                 uc.write_buf = linear;
+                uc.write_off = new_off;
                 uc.write_arcs.clear();
                 uc.write_iovecs.clear();
-                uc.write_off = written;
                 uc.arcs_in_flight = 0;
                 uc.write_byte_cap = 0;
                 uc.write_inflight_bytes = 0;
