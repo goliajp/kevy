@@ -84,6 +84,21 @@ kevy 把 `res <= 0` 一律当 EOF/错误 → `mark_closing` → BZPOPMIN 字节�
 - OrbStack 容器:修前 idle-wedge(cmd=NULL 永久卡);修后大多过,**残留 ~1/20** 是 OrbStack 7.0 的第二形态(res=0 但 F_SOCK_NONEMPTY 清零的伪 EOF,完成层与真 EOF 不可分,或 re-arm 活锁被守卫截断)。**这是 OrbStack 自定义内核怪癖,真 6.x 内核未必有**。
 - **真内核验证 oracle = CI 的 clientgate(已默认 uring 绿)+ client-conformance(真 Ubuntu)**;lx64(6.12 真内核)回线后再本地复验。若 CI conformance 仍 flaky → 说明真内核也有第二形态,需再攻(可能要 F_SOCK_NONEMPTY 清零时也 bounded-retry,或阻塞命令后强制单发 recv 排空)。
 
+### 真内核 A/B 判决(2026-07-18,lx64 恢复后 — 决定性)
+
+lx64(**内核 6.12.95 真主线**,16 核,空载)上跑同一套 `bindings/ts` conformance × 25:
+
+| 二进制 | 结果 |
+|---|---|
+| 修复前 `76c79c38`(仅含第一个 SQ-满 wedge 修复) | **4/25 挂**(全部 blpop/bzpopmin 20s 超时) |
+| 修复后 `a9450c9f`(含 F_SOCK_NONEMPTY 判别) | **0/25** |
+
+⟹ **F_SOCK_NONEMPTY 修复在真主线内核上被证明有效**(4/25 → 0/25),不是主观改善。
+
+两处此前的观测由此归位:
+- **OrbStack 的 ~1/20 残留**:确认是其 **7.0 自定义内核独有怪癖**(真 6.12 上 0/25),非产品缺陷。判据以真内核为准这条纪律成立。
+- **CI 那次 ts-node 残留**(run 29643489869 首次尝试,rerun 即过):GH 共享 runner 高负载下的更极端时序;lx64 空载复现不到,需要负载才能撞上。若要进一步压这个尾巴,应在**加载状态**下复现,而非空载盒。
+
 ### 教训(补 §1 系统性盲点)
 
 - **CI 单元/集成测试全程 `KEVY_IO_URING=0`,产品的 uring 数据面从来没进测试矩阵** —— 这两个 recv bug 都只有 clientgate/conformance 这类"真 server+真客户端"门能抓。**应补一条 uring-on 的多 shard + pub/sub + 阻塞命令压测门**防回归。
