@@ -405,4 +405,70 @@ impl<C: Commands> Shard<C> {
             self.arm_pending = queue;
         }
     }
+
+    /// Print every conn that can no longer make progress on its own —
+    /// opt-in via `KEVY_DEBUG_STALL_MS=<ms>`, off (one `Option` check on
+    /// the tick path) otherwise.
+    ///
+    /// The predicate is "no recv armed and no reason to be visited
+    /// again": such a conn is invisible to [`Self::uring_arm_conns`],
+    /// which walks only `arm_pending`, and has no outstanding completion
+    /// to bring it back. `arm_queued` is reported alongside actual queue
+    /// membership because a conn whose flag says "already queued" while
+    /// the queue does not contain it is permanently unreachable —
+    /// [`Self::mark_arm_pending`] short-circuits on that flag, so every
+    /// later attempt to wake the conn is a no-op.
+    ///
+    /// Written for `bench/xshardwedge.sh`, which reproduces exactly that
+    /// shape. The reactor keeps looping during that wedge (the bounded
+    /// park wakes on its timeout, which is why threads read 0% CPU rather
+    /// than spinning) and `CLIENT LIST` — an all-shards fan-out — still
+    /// answers and still lists the wedged conn, so the shard and its
+    /// cross-core messaging are fine and the fault is local to one conn.
+    pub(crate) fn uring_maybe_dump_stalled(
+        &self,
+        every: Option<std::time::Duration>,
+        last: &mut std::time::Instant,
+        now: std::time::Instant,
+        io: &KevyMap<u64, UringConn>,
+    ) {
+        let Some(iv) = every else { return };
+        if now.duration_since(*last) < iv {
+            return;
+        }
+        *last = now;
+        for (cid, conn) in self.conns.iter() {
+            let Some(uc) = io.get(cid) else {
+                eprintln!("kevy: STALL shard {} conn {cid}: no UringConn entry", self.id);
+                continue;
+            };
+            if uc.recv_armed || uc.write_inflight || uc.closing {
+                continue;
+            }
+            eprintln!(
+                "kevy: STALL shard {} conn {cid}: recv_armed=false arm_queued={} \
+                 in_arm_pending={} big_arg={} output={} write_pending={} \
+                 pending_slots={} next_seq={} next_emit={}",
+                self.id,
+                uc.arm_queued,
+                self.arm_pending.contains(cid),
+                uc.pending_big_arg.is_some(),
+                !conn.output.is_empty() || !conn.output_arcs.is_empty(),
+                uc.write_off < uc.write_buf.len() || !uc.write_arcs.is_empty(),
+                conn.pending.len(),
+                conn.next_seq,
+                conn.next_emit,
+            );
+        }
+    }
+}
+
+/// Stall-dump cadence from `KEVY_DEBUG_STALL_MS`; `None` (the default)
+/// disables [`Shard::uring_maybe_dump_stalled`] entirely.
+pub(crate) fn stall_dump_interval() -> Option<std::time::Duration> {
+    std::env::var("KEVY_DEBUG_STALL_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+        .map(std::time::Duration::from_millis)
 }

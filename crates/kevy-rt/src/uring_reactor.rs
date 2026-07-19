@@ -102,6 +102,8 @@ impl<C: Commands> Shard<C> {
         let mut un_accept_inflight = self.unix_listener.is_none();
         let mut comps: Vec<Completion> = Vec::with_capacity(URING_ENTRIES as usize);
         let mut idle_spins: u32 = 0;
+        let stall_dump_every = crate::uring_arm::stall_dump_interval();
+        let mut last_stall_dump = Instant::now();
         // Nap rung (restored, batch-gated): size of the last
         // non-empty inbound drain + whether this idle episode already
         // napped. See the idle-ladder comment below.
@@ -334,6 +336,7 @@ impl<C: Commands> Shard<C> {
                     // either reactor.
                     self.tick_blocked_timeouts();
                     self.tick_xshard_timeouts();
+                    self.uring_maybe_dump_stalled(stall_dump_every, &mut last_stall_dump, now, &io);
                     // WAIT / REPL.WAIT deadline sweep — same
                     // cadence as the BLOCK timeout reactor above.
                     self.tick_repl_waiters();
