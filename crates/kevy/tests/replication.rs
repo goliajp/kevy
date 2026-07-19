@@ -72,6 +72,24 @@ fn free_port_block(width: usize) -> u16 {
     }
 }
 
+/// Poll `port` until something accepts, or fail by name.
+///
+/// The four copies of this loop that lived here waited 2 s and then fell
+/// through in silence, which is how a slow start on a loaded runner turned
+/// into a confusing failure much later — `spop_storm` spent a full minute
+/// waiting for a replica that had never bound, then reported "replica never
+/// caught up". Wait long enough that load alone cannot fail it, and say
+/// which port did not come up when it genuinely does not.
+fn wait_port(port: u16, what: &str) {
+    for _ in 0..4000 {
+        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("{what} never bound port {port} within 20s");
+}
+
 struct Server {
     #[allow(dead_code)]
     port: u16,
@@ -315,12 +333,7 @@ fn replication_disabled_means_no_listener_on_replication_port() {
         let _ = rt.run(stop_thread);
     });
     // Wait for compat port.
-    for _ in 0..400 {
-        if std::net::TcpStream::connect(("127.0.0.1", base)).is_ok() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    wait_port(base, "server");
     // Replication port range would conventionally be base + 10000 + 0,
     // but here we just verify the default-disabled state by trying
     // base + 1 (cluster slot) — it should also be unbound. Use a
@@ -997,7 +1010,9 @@ fn role_reports_master_offset_advancing_with_writes() {
     // Before any writes — first poll within tick interval. Wait for
     // the publish loop to fire at least once + observe ROLE reply.
     let mut last = Vec::new();
-    for _ in 0..40 {
+    // 5s, not 0.4s: this waits on the per-tick publish loop (100ms
+    // default), so the old budget was four ticks.
+    for _ in 0..500 {
         send_resp(&mut s, &[b"ROLE"]);
         last = read_line_array(&mut s);
         if last.starts_with(b"*3\r\n") {
@@ -1020,7 +1035,8 @@ fn role_reports_master_offset_advancing_with_writes() {
     // The ROLE offset is published by the per-tick view (default 100
     // ms). Poll up to ~1 s until the offset reflects the 7 writes.
     let mut saw_offset = 0u64;
-    for _ in 0..100 {
+    // 10s, not 1s: same per-tick publish path as above.
+    for _ in 0..1000 {
         send_resp(&mut s, &[b"ROLE"]);
         let reply = read_line_array(&mut s);
         if let Some(off) = parse_role_master_offset(&reply) {
@@ -1117,12 +1133,7 @@ impl ReplicaServer {
             .with_replica_inboxes(vec![receiver]);
             let _ = rt.run(stop_runtime_thread);
         });
-        for _ in 0..400 {
-            if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        wait_port(port, "server");
 
         // Manual replica runner — connects to the primary, forwards
         // every event into the inbox until told to stop.
@@ -1402,7 +1413,12 @@ fn spop_storm_keeps_replica_sets_identical() {
         })
         .expect("replica accept loop never became ready within 60s");
     let mut fenced = false;
-    for _ in 0..500 {
+    // 60s, not 10s: the replica attaches mid-storm and has to replay the
+    // backlog, and on a loaded runner that is slow rather than broken. A
+    // budget that load alone can exhaust reports a real bug that is not
+    // there — this test did exactly that in CI while passing locally in
+    // 0.13s.
+    for _ in 0..3000 {
         send_resp(&mut reader, &[b"GET", b"spop-fence"]);
         if read_resp_bulks(&mut reader) == vec![b"done".to_vec()] {
             fenced = true;
@@ -1410,7 +1426,16 @@ fn spop_storm_keeps_replica_sets_identical() {
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    assert!(fenced, "replica never caught up to the post-storm fence");
+    if !fenced {
+        // What the replica DID see — "never caught up" alone cannot tell
+        // "the runner never attached" from "it attached and fell behind".
+        send_resp(&mut reader, &[b"DBSIZE"]);
+        let dbsize = read_line(&mut reader);
+        panic!(
+            "replica never caught up to the post-storm fence within 60s              (replica DBSIZE = {})",
+            String::from_utf8_lossy(&dbsize).trim_end(),
+        );
+    }
 
     // Member-for-member equality on every set. Under verb propagation
     // the replica drew its own 30 random members per set — the odds of
@@ -1482,12 +1507,7 @@ fn replicaof_command_dynamically_attaches_to_primary() {
         .with_replica_inboxes(receivers);
         let _ = rt.run(replica_stop_thread);
     });
-    for _ in 0..400 {
-        if std::net::TcpStream::connect(("127.0.0.1", replica_port)).is_ok() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    wait_port(replica_port, "server");
 
     // Pre-REPLICAOF: ROLE on the replica reports master (no live
     // upstream). Verify before issuing the command.
@@ -1615,12 +1635,7 @@ impl AttachedReplica {
                 .with_replica_inboxes(receivers);
             let _ = rt.run(stop_thread);
         });
-        for _ in 0..400 {
-            if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        wait_port(port, "server");
         drop(_gate);
         // REPLICAOF over the wire — spawns the real runner fleet.
         let mut admin = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
