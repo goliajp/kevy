@@ -168,18 +168,15 @@ impl Server {
         // mid-bind when START_GATE is released.
         let mut ports = vec![port];
         ports.extend((0..nshards as u16).map(|i| replication_base + i));
+        // One budget for every port wait in this file. This loop already
+        // carried its own, widened once from 2s to 10s for a loaded macOS
+        // runner — and a Linux runner then blew the 10s too, booting
+        // nshards+1 runtimes while the rest of the suite ran in parallel.
+        // Chasing it a third time with another hand-picked number is how a
+        // budget ends up wrong per-file; `wait_port` is the one place to
+        // set it.
         for p in ports {
-            let mut ready = false;
-            // 10s: a loaded hosted macOS runner blew the old 2s
-            // budget once (parallel test threads all booting runtimes).
-            for _ in 0..2000 {
-                if std::net::TcpStream::connect(("127.0.0.1", p)).is_ok() {
-                    ready = true;
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-            assert!(ready, "runtime did not come up on port {p}");
+            wait_port(p, "runtime");
         }
         Server {
             port,
@@ -689,15 +686,7 @@ fn start_small_buffer_primary(buffer_size: u64) -> Server {
         let _ = rt.run(stop_thread);
     });
     for p in [port, replication_base] {
-        let mut ready = false;
-        for _ in 0..400 {
-            if std::net::TcpStream::connect(("127.0.0.1", p)).is_ok() {
-                ready = true;
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        assert!(ready, "runtime did not come up on port {p}");
+        wait_port(p, "runtime");
     }
     Server {
         port,
