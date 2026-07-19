@@ -272,24 +272,37 @@ fn save_snapshot_records_feed_cursor() {
     }
     let r = cmd(&mut c, &[b"SAVE"]);
     assert!(r.starts_with(b"+OK"), "{:?}", String::from_utf8_lossy(&r));
-    // Give the bg persist commit a beat, then read each shard's dump
-    // header: its cursor must equal that shard's tail at freeze time
-    // (no writes happened since).
-    std::thread::sleep(std::time::Duration::from_millis(400));
+    // SAVE returns +OK and the persist job commits behind it, so the dumps
+    // appear shortly after. Poll for them rather than sleeping a fixed
+    // beat: a fixed wait passes on an idle box and flakes on a loaded
+    // shared runner, which is exactly how this test failed in CI while
+    // passing 20/20 locally and 10/10 under 16-way CPU contention.
+    // What is asserted is unchanged — every dump that exists must carry a
+    // cursor equal to that shard's live tail, and at least one shard must
+    // have had frames.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     let mut seen_any = false;
-    for sh in 0..NSHARDS {
-        let dump = srv.dir.join(format!("dump-{sh}.rdb"));
-        if !dump.exists() {
-            continue;
+    while !seen_any {
+        for sh in 0..NSHARDS {
+            let dump = srv.dir.join(format!("dump-{sh}.rdb"));
+            if !dump.exists() {
+                continue;
+            }
+            let cur = kevy_persist::read_snapshot_cursor(&dump).unwrap();
+            let (g, off) = parse_tail(&cmd(&mut c, &[b"FEED.TAIL", sh.to_string().as_bytes()]));
+            assert_eq!(cur, Some((g, off)), "shard {sh} snapshot cursor = live tail");
+            if off > 0 {
+                seen_any = true;
+            }
         }
-        let cur = kevy_persist::read_snapshot_cursor(&dump).unwrap();
-        let (g, off) = parse_tail(&cmd(&mut c, &[b"FEED.TAIL", sh.to_string().as_bytes()]));
-        assert_eq!(cur, Some((g, off)), "shard {sh} snapshot cursor = live tail");
-        if off > 0 {
-            seen_any = true;
+        assert!(
+            seen_any || std::time::Instant::now() < deadline,
+            "no shard had frames + a cursor within 20s of SAVE returning +OK",
+        );
+        if !seen_any {
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
     }
-    assert!(seen_any, "at least one shard had frames + a cursor");
 }
 
 #[test]
