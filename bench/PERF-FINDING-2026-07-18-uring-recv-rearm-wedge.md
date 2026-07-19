@@ -103,3 +103,42 @@ lx64(**内核 6.12.95 真主线**,16 核,空载)上跑同一套 `bindings/ts` co
 
 - **CI 单元/集成测试全程 `KEVY_IO_URING=0`,产品的 uring 数据面从来没进测试矩阵** —— 这两个 recv bug 都只有 clientgate/conformance 这类"真 server+真客户端"门能抓。**应补一条 uring-on 的多 shard + pub/sub + 阻塞命令压测门**防回归。
 - **本地 uring 复现配方(OrbStack + unconfined seccomp)是这次的关键杠杆** —— 远程盒不稳时,本机容器就能开 uring;但要记住其内核非目标内核,判据以真内核 CI 为准。
+
+---
+
+## 第三幕:`uringgate` 与仍未闭合的 wedge(2026-07-18 深夜)
+
+真内核 A/B(4/25 → 0/25)之后,补了本该早就存在的门:`bench/uringgate.sh`。它只做一件事 —— 把两个 bug 各自的触发形状**放进同一个紧循环**:pub/sub 扇出(8 订阅者,填 SQ,同轮多连接抢 arm)+ 阻塞命令超时后紧接更多命令。每个请求带 deadline,收不到回复 = wedge = FAIL。
+
+**结果:conformance 要 25 轮才露 4 次的东西,这门在 lx64 上 ~3 轮内必现。** 门本身有效,但它证明:**两个已发布修复都没把 wedge 关死** —— 更重的负载下仍然 wedge。
+
+### 服务端 trace 说了什么(以及推翻了什么)
+
+对卡死连接(cid=27,round 3)的完整完成序列:
+
+```
+res=38 → TR-disp RPUSH bl3     ✓ dispatch
+res=31 → TR-disp BLPOP bl3     ✓ dispatch
+res=33 → TR-disp BLPOP nk3     ✓ dispatch(超时返回 nil)
+res=53 → TR-disp ZADD bz3      ✓ dispatch  ← 命令收到了、也执行了
+res=0 flags=0x4 more=false bid=None        ← 伪终止完成落在活连接上
+```
+
+⟹ **wedge 不在 recv 侧**:请求被收到并 dispatch 了,**丢的是回复**。而同一个完成形状(`res=0 + F_SOCK_NONEMPTY + bid=None`)在**刚被客户端关闭的订阅者连接**上同样出现 —— 两种情形完成事件逐位相同,正确处理却相反(一个要重臂、一个要关闭)。
+
+### 三个已被实测推翻的消歧方案
+
+1. **只看 F_SOCK_NONEMPTY**(= 已发布的 `667005f9`):活连接不再被误关,但死连接无限重臂空转,**饿死同 shard 的其它连接** —— wedge 换个受害者复现。
+2. **有界重试(streak cap)**:cap=256 让死连接空转到把别人饿死;cap=1 又会在伪零上关掉**回复尚未写出**的活连接 —— 回复丢失。两端都错。
+3. **`recv(MSG_PEEK|MSG_DONTWAIT)` 权威探针**:思路是让 syscall 定分而非猜。实测仍 wedge;且一次相关性推断(probe 报 EOF vs `ss` 显示 ESTABLISHED)**不成立** —— trace 里没有 cid↔客户端端口映射,tail 到的 probe 行未必属于卡死那条连接。**该假设未被证实也未被证伪,是下一步的第一顺位。**
+
+### 下一步(需要的是证据,不是又一个补丁)
+
+- 给 trace 加 **cid ↔ 客户端端口/fd 的映射**,这样 probe 判定能和外部 `ss` 逐条对质 —— 上面第 3 条悬案就能一次定性。
+- 顺着"回复丢失"这条线查**写侧**:ZADD 已 dispatch,回复进了 `conn.output`,之后 arm 访问是否真的提交了 write SQE、write 完成是否回来。recv 侧已被 trace 排除,写侧尚未被同等强度地追。
+- 复现门已经在手(`uringgate`,秒级),不必再靠 conformance 的概率。
+
+### 纪律
+
+门以**红色提交**,且**不接入 CI** —— 与 crashgate 当初 `REDpending` 同一套 gate-first 纪律:长期红的必挂门只会训练大家忽略门。已发布的两个修复各自证据独立成立(conformance 4/25 → 0/25),不因这道更重的门未绿而回退。
+
