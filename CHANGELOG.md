@@ -190,6 +190,17 @@ failure is now closed, each behind an executable gate.
 
 ### Connections that stopped answering
 
+- **Killing a replica killed the primary's shards.** The pump's write to a
+  departed replica returns `EPIPE`; that error was propagated out of the
+  reactor and ended the shard, closing every client connection it owned —
+  none of which had anything to do with replication. The only trace was
+  `kevy: shard N exited with error: Broken pipe`. An I/O error on a
+  replica link now drops that link and nothing else, on both reactors;
+  the replica reconnects and resumes from the backlog. This is what had
+  been failing `availgate`'s phase 4 for several releases, under a
+  misleading message about `-LOADING` that described a keyspace the
+  broken seeder had never written.
+
 - **A blocking command that timed out left its connection one reply
   behind, forever** — a parked `BLPOP`/`BZPOPMIN` defers its reply,
   so whichever path resolves the block owes it a sequence retire.
