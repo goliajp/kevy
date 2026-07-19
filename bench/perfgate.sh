@@ -90,6 +90,10 @@ server_stop() {
   # empty and `pkill -f "^"` took lx64 offline (2026-07 outages). Never pkill on
   # an empty pattern.
   [ -n "$BIN" ] || { echo "perfgate: server_stop refusing pkill with empty BIN" >&2; return 0; }
+  # Bounded by construction first: the PID we ourselves spawned. The pkill
+  # below is only the leftover sweep (a server from a previous angle/binary
+  # that outlived its measure_all).
+  [ -n "${SRV:-}" ] && kill "$SRV" 2>/dev/null
   pkill -f "^$BIN" 2>/dev/null
   while pgrep -f "^$BIN" >/dev/null; do sleep 0.1; done
 }
