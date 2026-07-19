@@ -67,12 +67,12 @@ mod waker;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod poller_kq;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 mod poller_ep;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use poller_kq::Poller;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub use poller_ep::Poller;
 pub use signal::{SIGINT, SIGTERM, SIGXFSZ, install_signal_handler};
 pub use socket::{Socket, tcp_listen, tcp_listen_reuseport, unix_listen};
