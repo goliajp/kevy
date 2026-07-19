@@ -34,7 +34,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - [Indexes](https://kevy.golia.jp/docs/indexes/) · [Views](https://kevy.golia.jp/docs/views/) · [Text search](https://kevy.golia.jp/docs/text-search/) · [Vector search](https://kevy.golia.jp/docs/vector-search/)
 - [CDC feeds](https://kevy.golia.jp/docs/cdc/) · [Replication](https://kevy.golia.jp/docs/replication/) · [Availability & failover](https://kevy.golia.jp/docs/availability/) · [Persistence](https://kevy.golia.jp/docs/persistence/)
 - [Migration](https://kevy.golia.jp/docs/migration/) · [Upgrading between majors](https://kevy.golia.jp/docs/UPGRADING/)
-- [WASM / browser](https://kevy.golia.jp/docs/wasm/) · [IoT / embedded tiers](https://kevy.golia.jp/docs/iot/)
+- [WASM / browser](https://kevy.golia.jp/docs/wasm/) · [Electron apps](https://kevy.golia.jp/docs/electron/) · [Tauri apps](https://kevy.golia.jp/docs/tauri/) · [IoT / embedded tiers](https://kevy.golia.jp/docs/iot/)
 - [Error contract](https://kevy.golia.jp/docs/error-replies/) · [Tuning](https://kevy.golia.jp/docs/tuning/)
 
 ## Verbs (184 total)

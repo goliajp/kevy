@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bring your redis client — kevy</title>
+<meta name="description" content="kevy's server speaks RESP — the wire protocol every Redis-adjacent ecosystem already has a mature client for. There is no kevy-specific client to install (Rust excepted, below): co">
+<link rel="stylesheet" href="../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../docs/" aria-current="page">Docs</a>
+      <a href="../../docs/commands/">Commands</a>
+      <a href="../../benchmarks/">Benchmarks</a>
+      <a href="../../play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../docs/search-index.json" data-root="../../">
+        <input type="search" placeholder="Search docs…" aria-label="Search docs…" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../docs/clients/" aria-current="page">EN</a><a href="../../zh/docs/" class="untranslated" title="not translated yet">中文</a><a href="../../ja/docs/" class="untranslated" title="not translated yet">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell">
+  <aside class="side"><p class="side-h">Getting started</p><ul><li><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a></li><li><a href="../../docs/cookbook/">The RDS→kevy modeling cookbook</a></li><li><a href="../../docs/persistence/">Persistence</a></li><li><a href="../../docs/tuning/">Tuning kevy</a></li></ul><p class="side-h">Running it</p><ul><li><a href="../../docs/replication/">Replication</a></li><li><a href="../../docs/availability/">Availability</a></li><li><a href="../../docs/cluster/">Cluster</a></li><li><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a></li><li><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a></li><li><a href="../../docs/async/">Async client</a></li></ul><p class="side-h">Working with data</p><ul><li><a href="../../docs/indexes/">Secondary indexes (IDX. / idx_)</a></li><li><a href="../../docs/vector-search/">Vector search (KIND ann)</a></li><li><a href="../../docs/text-search/">Full-text search (KIND text)</a></li><li><a href="../../docs/views/">Views (VIEW. / view_)</a></li><li><a href="../../docs/cdc/">CDC — the change feed (FEED. / changes_since)</a></li><li><a href="../../docs/pubsub/">Pub/sub</a></li><li><a href="../../docs/lua/">Lua scripting</a></li></ul><p class="side-h">Embedding it</p><ul><li><a href="../../docs/wasm/">kevy on WebAssembly</a></li><li><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a></li><li><a href="../../docs/iot/">kevy on IoT devices</a></li></ul><p class="side-h">Reference</p><ul><li><a href="../../docs/error-replies/">Error reply catalog</a></li><li><a href="../../docs/rds-workloads/">RDS workloads on kevy</a></li><li><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></li><li><a href="../../docs/UPGRADING/">Upgrading kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../docs/commands/">All 184 commands</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>Bring your redis client</h1></div>
+<p>kevy's server speaks RESP — the wire protocol every Redis-adjacent ecosystem already has a mature client for. There is no kevy-specific client to install (Rust excepted, below): connect the client you already use, and the full verb surface — including kevy's extensions (<code>IDX.*</code>, <code>VIEW.*</code>, <code>FEED.*</code>) — is reachable through its raw-command channel.</p>
+<p>This page is not a hope: <b>clientgate</b> runs in CI on every push. Six clients each execute the same ladder against one kevy server — typed operations across the string / TTL / hash / list / zset families, a pub/sub round trip, and an extended verb through the raw channel.</p>
+<div class="tbl"><table><thead><tr><th>Ecosystem</th><th>Client</th><th>Raw channel for <code>IDX.*</code> etc.</th></tr></thead><tbody><tr><td>Node</td><td><a href="https://www.npmjs.com/package/redis">node-redis</a></td><td><code>client.sendCommand([...])</code></td></tr><tr><td>Node</td><td><a href="https://www.npmjs.com/package/ioredis">ioredis</a></td><td><code>client.call(...)</code></td></tr><tr><td>Go</td><td><a href="https://github.com/redis/go-redis">go-redis</a></td><td><code>client.Do(ctx, ...)</code></td></tr><tr><td>.NET</td><td><a href="https://www.nuget.org/packages/StackExchange.Redis">StackExchange.Redis</a></td><td><code>db.Execute(...)</code></td></tr><tr><td>Python</td><td><a href="https://pypi.org/project/redis/">redis-py</a></td><td><code>client.execute_command(...)</code></td></tr><tr><td>C</td><td><a href="https://github.com/redis/hiredis">hiredis</a></td><td><code>redisCommand(...)</code></td></tr></tbody></table></div>
+<p>Async comes with the ecosystem: ioredis, go-redis, StackExchange.Redis and redis-py's <code>asyncio</code> face are all async-native — kevy needs no special client for it.</p>
+<figure class="code"><pre><code class="lang-js">// Node — ioredis
+import Redis from "ioredis";
+const db = new Redis(6379);
+await db.set("k", "v");
+await db.call("IDX.CREATE", "idx_age", "ON", "PREFIX", "user:", "FIELD", "age", "TYPE", "i64", "KIND", "range");</code></pre></figure>
+<figure class="code"><pre><code class="lang-go">// Go — go-redis
+c := redis.NewClient(&amp;redis.Options{Addr: "localhost:6379"})
+c.Set(ctx, "k", "v", 0)
+c.Do(ctx, "IDX.CREATE", "idx_age", "ON", "PREFIX", "user:", "FIELD", "age", "TYPE", "i64", "KIND", "range")</code></pre></figure>
+<figure class="code"><pre><code class="lang-python"># Python — redis-py
+r = redis.Redis()
+r.set("k", "v")
+r.execute_command("IDX.CREATE", "idx_age", "ON", "PREFIX", "user:", "FIELD", "age", "TYPE", "i64", "KIND", "range")</code></pre></figure>
+<h2 id="rust">Rust</h2>
+<p>Rust gets first-party typed clients, because that is where the typed extension surface lives natively:</p>
+<ul><li><a href="https://crates.io/crates/kevy-client"><code>kevy-client</code></a> — synchronous, the full wrapped surface (indexes, views, feeds, pipelining, MULTI/EXEC + WATCH).</li><li><a href="https://crates.io/crates/kevy-client-async"><code>kevy-client-async</code></a> — the same surface on async I/O.</li></ul>
+<p>The smoke sources behind the gate live in <a href="https://github.com/goliajp/kevy/blob/main/bench/clientgate/"><code>bench/clientgate/</code></a> — each doubles as a copy-paste connection example for its ecosystem.</p></main>
+  
+</div>
+
+<script src="../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

@@ -150,7 +150,7 @@ let cfg = Config::default()
     .with_replica_reconnect(Duration::from_millis(50), Duration::from_secs(10));
 let replica = Store::open(cfg)?;
 # Ok::&lt;(), kevy_embedded::KevyError&gt;(())</code></pre></figure>
-<p>握手时发送 <code>REPLICATE FROM &lt;last-applied-offset&gt; ID &lt;replica_id&gt;</code>；主节点确认该 offset 后开始流式发送帧。最后一个 <code>Store</code> 克隆 drop 时会 join runner 线程，主节点因此能观察到干净的 FIN 并释放连接槽位。embed 本地允许 <code>PUBLISH</code>（pub/sub 是进程内局部的），但键空间本身保持只读。</p>
+<p>握手时发送 <code>REPLICATE FROM &lt;generation&gt; &lt;last-applied-offset&gt; ID &lt;replica_id&gt;</code>；主节点 ack 自己的世代与该 offset 后开始流式发送帧。最后一个 <code>Store</code> 克隆 drop 时会 join runner 线程，主节点因此能观察到干净的 FIN 并释放连接槽位。embed 本地允许 <code>PUBLISH</code>（pub/sub 是进程内局部的），但键空间本身保持只读。</p>
 <h2 id="作用域多写者">作用域多写者</h2>
 <p>作用域多写者按键前缀把写入切分到不同节点。每个节点都从静态配置得到完整的归属表；写请求落到非持有者时，应答 <code>-MISDIRECTED writer is &lt;host:port&gt;</code>，客户端改向正确节点重试。</p>
 <figure class="code"><pre><code class="lang-toml"># Same config block on every member.

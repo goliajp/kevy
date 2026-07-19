@@ -84,7 +84,7 @@ role     = "replica"
 upstream = "primary.internal:16004"   # the primary's listen_port_base</code></pre></figure>
 <p>在第二台主机上启动：</p>
 <figure class="code"><pre><code class="lang-sh">kevy --config /etc/kevy/replica.toml --port 6004</code></pre></figure>
-<p>每个本地 shard 开一个 runner 线程，连接 <code>(upstream_host, upstream_port_base + shard_index)</code>，以 <code>REPLICATE FROM &lt;offset&gt; ID &lt;replica_id&gt;</code> 握手，读到 <code>+ACK &lt;offset&gt;</code> 后，把帧流式写入 shard 的 apply 路径——整个过程处在一个抑制本地重新发出的 guard 之内。</p>
+<p>每个本地 shard 开一个 runner 线程，连接 <code>(upstream_host, upstream_port_base + shard_index)</code>，以 <code>REPLICATE FROM &lt;generation&gt; &lt;offset&gt; ID &lt;replica_id&gt;</code> 握手，读到 <code>+ACK &lt;generation&gt; &lt;offset&gt;</code> 后，把帧流式写入 shard 的 apply 路径——整个过程处在一个抑制本地重新发出的 guard 之内。</p>
 <h3 id="3-在运行时切换副本上游">3. 在运行时切换副本上游</h3>
 <figure class="code"><pre><code class="lang-sh">redis-cli -p 6004 REPLICAOF new-primary.internal 16004
 # +OK</code></pre></figure>

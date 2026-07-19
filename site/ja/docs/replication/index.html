@@ -84,7 +84,7 @@ role     = "replica"
 upstream = "primary.internal:16004"   # プライマリの listen_port_base</code></pre></figure>
 <p>2台目のホストで起動します：</p>
 <figure class="code"><pre><code class="lang-sh">kevy --config /etc/kevy/replica.toml --port 6004</code></pre></figure>
-<p>各ローカルシャードはランナースレッドを開き、<code>(upstream_host, upstream_port_base + shard_index)</code>に接続し、<code>REPLICATE FROM &lt;offset&gt; ID &lt;replica_id&gt;</code>でハンドシェイクし、<code>+ACK &lt;offset&gt;</code>を読み、ローカル再発行を抑止するガードの中でフレームをシャードの適用パスへストリーミングします。</p>
+<p>各ローカルシャードはランナースレッドを開き、<code>(upstream_host, upstream_port_base + shard_index)</code>に接続し、<code>REPLICATE FROM &lt;generation&gt; &lt;offset&gt; ID &lt;replica_id&gt;</code>でハンドシェイクし、<code>+ACK &lt;generation&gt; &lt;offset&gt;</code>を読み、ローカル再発行を抑止するガードの中でフレームをシャードの適用パスへストリーミングします。</p>
 <h3 id="3-レプリカを実行中に再ターゲットする">3. レプリカを実行中に再ターゲットする</h3>
 <figure class="code"><pre><code class="lang-sh">redis-cli -p 6004 REPLICAOF new-primary.internal 16004
 # +OK</code></pre></figure>
