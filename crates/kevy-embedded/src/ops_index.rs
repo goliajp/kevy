@@ -28,6 +28,22 @@ pub(crate) use crate::ops_index_sync::{each_written_key_pub, on_commit, sync_seg
 /// One page of index hits plus the cursor to resume from.
 pub type IndexPage = (Vec<(Vec<u8>, IndexValue)>, Option<Cursor>);
 
+/// Sort merged `(value, key)` hits, cut to `limit`, and derive the
+/// resume cursor. Shared by `Store::idx_query` and the transaction twin
+/// on `AtomicAllShards`, which differ only in where the segments come
+/// from — the pagination has to agree exactly or a cursor taken inside
+/// a transaction would not resume outside one.
+pub(crate) fn merge_page(mut all: Vec<(IndexValue, Vec<u8>)>, limit: usize) -> IndexPage {
+    all.sort();
+    all.truncate(limit);
+    let next = if all.len() == limit {
+        all.last().map(|(v, k)| Cursor { value: v.clone(), key: k.clone() })
+    } else {
+        None
+    };
+    (all.into_iter().map(|(v, k)| (k, v)).collect(), next)
+}
+
 /// Store-level index state: catalog + a version stamp the per-shard
 /// segment lists sync against.
 #[derive(Default)]
@@ -181,14 +197,7 @@ impl Store {
             let (hits, _) = seg.range(min, max, cursor, limit);
             all.extend(hits.into_iter().map(|(k, v)| (v, k)));
         })?;
-        all.sort();
-        all.truncate(limit);
-        let next = if all.len() == limit {
-            all.last().map(|(v, k)| Cursor { value: v.clone(), key: k.clone() })
-        } else {
-            None
-        };
-        Ok((all.into_iter().map(|(v, k)| (k, v)).collect(), next))
+        Ok(merge_page(all, limit))
     }
 
     /// Count without materializing keys.

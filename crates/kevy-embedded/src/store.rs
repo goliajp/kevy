@@ -487,6 +487,9 @@ mod tests_keyspace;
 #[cfg(test)]
 #[path = "store_tests_atomic_all.rs"]
 mod tests_atomic_all;
+#[cfg(all(test, feature = "index"))]
+#[path = "store_tests_atomic_index.rs"]
+mod tests_atomic_index;
 #[cfg(test)]
 #[path = "store_tests_replay_all.rs"]
 mod tests_replay_all;
