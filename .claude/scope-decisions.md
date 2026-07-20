@@ -268,6 +268,17 @@ N 秒陈旧的快照对排序的影响在噪声内;而把协调放进写路径�
   `BlockRestore`,由 **target 侧**按 kind 决定放回哪一端 —— target 才是知道列表语义
   的一方,origin 不该解析 RESP。
 
+**实现时修正为 escrow(2026-07-21)。** B 写的是"`BlockServeResp` 带上 kind,
+target 按 kind 决定放回哪一端"—— 但读代码发现 **target 手里也只有 RESP 字节**:
+它是把冻结的 `serve_argv` 走普通命令重放(`BLPOP key 0`),并不知道自己弹出了什么。
+所以 B 仍然要解析 reply,只是把解析挪到了 target 侧。真正的解法是 **target 在弹出
+之前先读一眼**(`LINDEX key 0` / `-1` / peek min),把"撤销命令"存进 escrow,
+等 origin 回 Ack(丢弃)或 Abort(执行)。**读,而不是解析** —— 回复形状同时取决于
+kind 和等待方协商的是 RESP2 还是 RESP3,解析器得对每种组合永远正确。
+另外发现 B 和原 finding 都漏了:六种 kind 里 **XREAD/XREADGROUP 根本不消费元素**,
+"放回"对它们无定义。全程见 `.claude/rfcs/2026-07-21-xshard-block-serve-escrow.md`
+(含两次自我推翻)。**已实现并双向验证,CI 全绿。**
+
 **B 的未决语义,必须先写进契约再实现**:元素放回后,对**已经观察过该列表的其他
 等待者**意味着什么?BLPOP 从头弹、放回头能恢复顺序;但若这期间已有另一个等待者
 被服务,顺序无法完全恢复。**这个边界由契约声明,不由实现默默决定。**

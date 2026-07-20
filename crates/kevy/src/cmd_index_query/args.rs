@@ -179,7 +179,51 @@ pub(crate) struct MatchArgs {
     pub(crate) fields: Vec<Vec<u8>>,
 }
 
+/// Clauses of the terminal MATCH surface that parse today and execute
+/// later. Listed here rather than rejected as unknown so the syntax is
+/// frozen now: every one of these would otherwise want to change the
+/// MATCH signature when it lands, and v4 is the release that freezes it.
+const NOT_YET: &[&[u8]] = &[
+    b"IN",
+    b"FILTER",
+    b"FACET",
+    b"SORT",
+    b"DISTINCT",
+    b"HIGHLIGHT",
+    b"TYPO",
+    b"OFFSET",
+];
+
+/// Outcome of parsing a MATCH query.
+pub(crate) enum MatchParse {
+    Ok(Box<MatchArgs>),
+    /// Syntax the parser does not recognise at all.
+    BadArgs,
+    /// Recognised, reserved, not built yet — reported by name.
+    NotYet(&'static [u8]),
+}
+
 impl MatchArgs {
+    /// Parse the terminal surface, distinguishing "not valid" from "not
+    /// yet". An unimplemented clause must never be silently dropped: a
+    /// FILTER that is ignored returns unfiltered results, which is a
+    /// wrong answer wearing a successful reply.
+    pub(crate) fn parse_terminal(argv: &[Vec<u8>]) -> MatchParse {
+        if let Some(i) = (4..argv.len()).find(|&i| {
+            NOT_YET.iter().any(|c| argv[i].eq_ignore_ascii_case(c))
+        }) {
+            let clause = NOT_YET
+                .iter()
+                .find(|c| argv[i].eq_ignore_ascii_case(c))
+                .expect("just matched");
+            return MatchParse::NotYet(clause);
+        }
+        match Self::parse(argv) {
+            Some(a) => MatchParse::Ok(Box::new(a)),
+            None => MatchParse::BadArgs,
+        }
+    }
+
     pub(crate) fn parse(argv: &[Vec<u8>]) -> Option<MatchArgs> {
         let name = argv.get(1)?.clone();
         if !argv.get(2)?.eq_ignore_ascii_case(b"MATCH") {
@@ -342,4 +386,56 @@ pub(crate) fn parse_groups_args(argv: &[Vec<u8>]) -> Option<(kevy_index::AggBy, 
         }
     }
     Some((by, limit.clamp(1, 1000)))
+}
+
+#[cfg(test)]
+mod terminal_surface_tests {
+    use super::*;
+
+    fn argv(parts: &[&str]) -> Vec<Vec<u8>> {
+        parts.iter().map(|p| p.as_bytes().to_vec()).collect()
+    }
+
+    /// Every reserved clause must come back named. Silently ignoring one
+    /// is the failure mode worth a test: a dropped FILTER returns
+    /// unfiltered rows, which is a wrong answer wearing a success reply.
+    #[test]
+    fn reserved_clauses_are_refused_by_name() {
+        for clause in ["IN", "FILTER", "FACET", "SORT", "DISTINCT", "HIGHLIGHT", "TYPO", "OFFSET"] {
+            let a = argv(&["IDX.QUERY", "idx", "MATCH", "hello", clause, "x"]);
+            match MatchArgs::parse_terminal(&a) {
+                MatchParse::NotYet(c) => {
+                    assert!(c.eq_ignore_ascii_case(clause.as_bytes()), "{clause}");
+                }
+                _ => panic!("{clause} should be reserved, not accepted or rejected as bad"),
+            }
+        }
+    }
+
+    #[test]
+    fn the_shipped_surface_still_parses() {
+        let a = argv(&["IDX.QUERY", "idx", "MATCH", "hello", "LIMIT", "5", "FIELDS", "title"]);
+        match MatchArgs::parse_terminal(&a) {
+            MatchParse::Ok(q) => {
+                assert_eq!(q.text, b"hello");
+                assert_eq!(q.limit, 5);
+                assert_eq!(q.fields, vec![b"title".to_vec()]);
+            }
+            _ => panic!("the existing surface must keep working unchanged"),
+        }
+    }
+
+    #[test]
+    fn genuine_nonsense_is_still_bad_args() {
+        let a = argv(&["IDX.QUERY", "idx", "MATCH", "hello", "WOBBLE"]);
+        assert!(matches!(MatchArgs::parse_terminal(&a), MatchParse::BadArgs));
+    }
+
+    /// A reserved word appearing as the search text is a query, not a
+    /// clause -- the scan starts after the text argument.
+    #[test]
+    fn a_reserved_word_as_the_query_text_is_not_a_clause() {
+        let a = argv(&["IDX.QUERY", "idx", "MATCH", "FILTER"]);
+        assert!(matches!(MatchArgs::parse_terminal(&a), MatchParse::Ok(_)));
+    }
 }

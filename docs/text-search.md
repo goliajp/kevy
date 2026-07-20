@@ -115,10 +115,21 @@ Two declared approximations:
 - **No cursor.** BM25 deep pagination is an anti-pattern (page N
   requires re-scoring everything above it); `LIMIT` caps at 1000.
 
-No phrase queries, no boolean syntax, no highlighting — that's the
-query-engine slope (deliberately out of scope). If you need those,
-you are describing a search engine; kevy's text kind stops at
-"ranked lookup over declared fields".
+Phrase queries, boolean syntax, filters, facets and highlighting are
+**reserved and not built yet**. The `MATCH` surface accepts their
+keywords — `IN`, `FILTER`, `FACET`, `SORT`, `DISTINCT`, `HIGHLIGHT`,
+`TYPO`, `OFFSET` — and returns an error naming the clause, so the
+syntax is frozen before the capabilities land and nothing that works
+today has to change shape when they do.
+
+An accepted-but-ignored clause would be worse than an error: a dropped
+`FILTER` returns unfiltered rows, which is a wrong answer wearing a
+successful reply.
+
+(This reverses an earlier boundary. Previous versions of this page said
+phrase and boolean queries were deliberately out of scope — "if you need
+those, you are describing a search engine". That was right for a text
+kind that stops at ranked lookup, and the goal changed.)
 
 ## Hybrid retrieval (BM25 + KNN)
 

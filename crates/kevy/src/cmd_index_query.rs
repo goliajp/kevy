@@ -26,6 +26,12 @@ pub(crate) const ST_BUILDING: u8 = 1;
 pub(crate) const ST_NOINDEX: u8 = 2;
 pub(crate) const ST_BADARGS: u8 = 3;
 pub(crate) const ST_OVERBUDGET: u8 = 4;
+/// A clause of the terminal MATCH surface that parses but is not built
+/// yet. Distinct from ST_BADARGS on purpose: "you wrote it wrong" and
+/// "this is coming" are different answers, and collapsing them sends
+/// people hunting for a typo in correct syntax. The chunk carries the
+/// clause name after the status byte.
+pub(crate) const ST_NOTYET: u8 = 5;
 
 /// Per-shard half: parse the IDX.* argv, run against this shard's
 /// segment, emit a status-tagged chunk.
