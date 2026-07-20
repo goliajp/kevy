@@ -60,11 +60,13 @@ pub enum Fsync {
 /// `auto_aof_rewrite_percentage` + `auto_aof_rewrite_min_size` knobs in
 /// `kevy_config`.
 pub struct Aof {
-    file: BufWriter<File>,
+    pub(crate) file: BufWriter<File>,
+    /// A begin marker has been written and its commit marker has not.
+    pub(crate) in_txn: bool,
     path: PathBuf,
-    fsync: Fsync,
-    dirty: bool,
-    last_sync: Instant,
+    pub(crate) fsync: Fsync,
+    pub(crate) dirty: bool,
+    pub(crate) last_sync: Instant,
     /// Estimated bytes currently in the AOF file (existing + appended since
     /// open). Maintained without fstat() syscalls per append.
     size_bytes: u64,
@@ -82,7 +84,7 @@ pub struct Aof {
     /// Only the multi-command reactor entry points (pipelined socket reads,
     /// cross-shard request batches) open a group; every other path keeps
     /// the per-command fsync, so the default is always the safe one.
-    deferred: bool,
+    pub(crate) deferred: bool,
     /// Non-blocking rewrite "diff buffer". While `Some`, every `append` also
     /// tees its RESP frame here, so writes that land *during* an off-lock
     /// rewrite are captured and replayed after the compacted snapshot. See
@@ -98,7 +100,7 @@ pub struct Aof {
     /// output are V2 (checksummed record envelopes); a pre-existing V1
     /// file keeps appending V1 until its first rewrite upgrades it —
     /// mixing formats within one file would corrupt it.
-    format: crate::AofFormat,
+    pub(crate) format: crate::AofFormat,
     /// Reusable payload buffer for V2 envelope encoding (and the tee,
     /// which is always V2 because the rewrite output it lands in is).
     scratch: Vec<u8>,
@@ -161,6 +163,7 @@ impl Aof {
             quarantined = crate::aof_util::repair_tail(path, &mut file, &mut size, resync)?;
         }
         Ok(Aof {
+            in_txn: false,
             file: BufWriter::with_capacity(AOF_BUF_CAP, file),
             path: path.to_path_buf(),
             fsync,
@@ -255,33 +258,6 @@ impl Aof {
                 self.file.get_ref().sync_data()?;
             }
             Fsync::EverySec | Fsync::No => self.dirty = true,
-        }
-        Ok(())
-    }
-
-    /// Open a group-commit window (no-op unless the policy is `Always`):
-    /// subsequent `append`s buffer instead of fsyncing per command. Pair
-    /// with [`Self::end_group`] **before** sending the batch's replies.
-    #[inline]
-    pub fn begin_group(&mut self) {
-        if matches!(self.fsync, Fsync::Always) {
-            self.deferred = true;
-        }
-    }
-
-    /// Close the group-commit window: one `flush()+sync_data()` for the
-    /// whole batch (if anything was buffered), then resume per-command
-    /// fsync. Must be called before the batch's replies leave the shard.
-    #[inline]
-    pub fn end_group(&mut self) -> io::Result<()> {
-        if self.deferred {
-            self.deferred = false;
-            if self.dirty {
-                self.file.flush()?;
-                self.file.get_ref().sync_data()?;
-                self.dirty = false;
-                self.last_sync = Instant::now();
-            }
         }
         Ok(())
     }

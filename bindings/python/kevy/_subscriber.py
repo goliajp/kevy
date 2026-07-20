@@ -10,6 +10,7 @@ Anonymous ``mem://`` is rejected — no other producer.
 from __future__ import annotations
 
 import time
+from collections import deque
 from typing import List, Optional, Tuple
 
 from ._decode import Bytesish, to_bytes
@@ -32,6 +33,8 @@ class Subscriber:
         self._remote = remote
         self._emb = emb
         self._read_timeout: Optional[float] = None
+        # Events read while waiting for a subscribe ack, in arrival order.
+        self._pending: "deque[PubsubEvent]" = deque()
 
     @classmethod
     def connect(cls, url: str) -> "Subscriber":
@@ -68,6 +71,7 @@ class Subscriber:
         chans = [to_bytes(c) for c in channels]
         if self._remote is not None:
             self._remote.write([b"SUBSCRIBE", *chans])
+            self._await_acks(len(chans), PubsubKind.SUBSCRIBE)
             return
         self._emb.add(chans, pattern=False)
 
@@ -77,6 +81,7 @@ class Subscriber:
         pats = [to_bytes(p) for p in patterns]
         if self._remote is not None:
             self._remote.write([b"PSUBSCRIBE", *pats])
+            self._await_acks(len(pats), PubsubKind.PSUBSCRIBE)
             return
         self._emb.add(pats, pattern=True)
 
@@ -104,8 +109,33 @@ class Subscriber:
             raise error_from_reply_text(r.data)
         raise ProtocolError(f"unexpected HELLO 3 reply shape: {r.shape()}")
 
+    def _await_acks(self, n: int, kind: "PubsubKind") -> None:
+        """Read until `n` acks of `kind` arrive, queueing everything else.
+
+        `subscribe()` used to write SUBSCRIBE and return, handing back a
+        subscriber that was not yet subscribed. Publishing straight after
+        raced the registration, and a lost message parks a blocking
+        `recv_message()` forever — that is how the python conformance job
+        hung for 3h46m in CI. See
+        bench/FINDING-2026-07-19-subscribe-returns-before-live.md.
+
+        Everything read while waiting is QUEUED, not consumed: a message
+        for an already-subscribed channel can arrive before the ack for a
+        new one, and dropping it would trade a race for a lost message.
+        The acks still reach `recv()`, so the observable event stream is
+        unchanged.
+        """
+        seen = 0
+        while seen < n:
+            ev = classify_frame(self._remote.read_reply())  # type: ignore[union-attr]
+            if ev.kind is kind:
+                seen += 1
+            self._pending.append(ev)
+
     def recv(self) -> PubsubEvent:
         """Block for the next pub/sub frame (acks and deliveries)."""
+        if self._pending:
+            return self._pending.popleft()
         if self._remote is not None:
             return classify_frame(self._remote.read_reply())
         return classify_frame(self._emb.recv(self._read_timeout))

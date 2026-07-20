@@ -28,6 +28,7 @@
 //! ```
 
 use crate::{KevyError, KevyResult};
+use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
@@ -36,7 +37,7 @@ use kevy_embedded::Subscription;
 use kevy_resp::{Reply, encode_command};
 use kevy_resp_client::ReplyReadBuf;
 
-use crate::subscribe_io::{frame_to_event, invalid, recv_remote, send_to, shape};
+use crate::subscribe_io::{await_acks, frame_to_event, invalid, recv_remote, send_to, shape};
 use crate::{Target, parse_url, resolve_store};
 
 /// One subscribed connection. Owns either a TCP socket or an in-process
@@ -53,6 +54,13 @@ enum Inner {
     Remote {
         stream: TcpStream,
         buf: ReplyReadBuf,
+        /// Events read while waiting for a subscribe ack, held in arrival
+        /// order for [`Subscriber::recv`]. Waiting for the ack means
+        /// reading whatever arrives first, and a message for an
+        /// already-subscribed channel can arrive before the ack for a new
+        /// one — dropping it to get at the ack would trade a race for a
+        /// lost message.
+        pending: VecDeque<PubsubEvent>,
     },
     /// In-process bus subscription. `timeout` mirrors the TCP
     /// `SO_RCVTIMEO` behaviour for [`Subscriber::recv`] / [`Subscriber::set_read_timeout`].
@@ -92,6 +100,7 @@ impl Subscriber {
                 Inner::Remote {
                     stream,
                     buf: ReplyReadBuf::with_capacity(8192),
+                    pending: VecDeque::new(),
                 }
             }
         };
@@ -117,7 +126,10 @@ impl Subscriber {
             return Err(KevyError::InvalidInput("SUBSCRIBE needs ≥ 1 channel".into()));
         }
         match &mut self.inner {
-            Inner::Remote { stream, .. } => send_to(stream, b"SUBSCRIBE", channels),
+            Inner::Remote { stream, buf, pending } => {
+                send_to(stream, b"SUBSCRIBE", channels)?;
+                await_acks(stream, buf, pending, channels.len(), false)
+            }
             Inner::Embedded { subscription, .. } => {
                 subscription.subscribe(channels);
                 Ok(())
@@ -132,7 +144,10 @@ impl Subscriber {
             return Err(KevyError::InvalidInput("PSUBSCRIBE needs ≥ 1 pattern".into()));
         }
         match &mut self.inner {
-            Inner::Remote { stream, .. } => send_to(stream, b"PSUBSCRIBE", patterns),
+            Inner::Remote { stream, buf, pending } => {
+                send_to(stream, b"PSUBSCRIBE", patterns)?;
+                await_acks(stream, buf, pending, patterns.len(), true)
+            }
             Inner::Embedded { subscription, .. } => {
                 subscription.psubscribe(patterns);
                 Ok(())
@@ -169,7 +184,10 @@ impl Subscriber {
     /// Connection close / bus tear-down yields `ErrorKind::UnexpectedEof`.
     pub fn recv(&mut self) -> KevyResult<PubsubEvent> {
         match &mut self.inner {
-            Inner::Remote { stream, buf } => recv_remote(stream, buf),
+            Inner::Remote { stream, buf, pending } => match pending.pop_front() {
+                Some(ev) => Ok(ev),
+                None => recv_remote(stream, buf),
+            },
             Inner::Embedded {
                 subscription,
                 timeout,
@@ -232,7 +250,7 @@ impl Subscriber {
     pub fn hello3(&mut self) -> KevyResult<PubsubEvent> {
         match &mut self.inner {
             Inner::Embedded { .. } => Err(KevyError::Unsupported("HELLO 3 is a remote/TCP-only operation; embedded backend has no proto switch".into())),
-            Inner::Remote { stream, buf } => {
+            Inner::Remote { stream, buf, .. } => {
                 let mut frame = Vec::new();
                 encode_command(&mut frame, &[b"HELLO".to_vec(), b"3".to_vec()]);
                 stream.write_all(&frame)?;

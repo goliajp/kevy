@@ -487,3 +487,77 @@ fn resync_recovers_the_good_tail_behind_a_corrupt_record() {
     assert_eq!(b - a, 20, "skip covers exactly the bad record's bytes");
     let _ = std::fs::remove_file(&path);
 }
+
+// ---- transaction markers --------------------------------------------------
+// Group commit alone only defers the fsync; frames still reach the kernel
+// when the write buffer fills, so a crash inside a transaction larger than
+// that buffer left whole, valid, individually-replayable frames on disk
+// (measured 6393/20000). These pin the property that makes size irrelevant:
+// a transaction counts only if its commit marker is there.
+
+#[test]
+fn txn_without_commit_marker_is_discarded_whole() {
+    let path = temp_file("aof-txn-torn");
+    {
+        let mut aof = Aof::open(&path, Fsync::Always).unwrap();
+        aof.append(&cmd(&[b"SET", b"before", b"1"])).unwrap();
+        aof.begin_group();
+        for i in 0..64 {
+            let k = format!("t{i}");
+            aof.append(&cmd(&[b"SET", k.as_bytes(), b"x"])).unwrap();
+        }
+        // No end_group: the process "died" mid-transaction.
+        aof.sync_now().unwrap();
+    }
+    let mut seen: Vec<Vec<u8>> = Vec::new();
+    replay_aof(&path, |a| seen.push(a[1].to_vec())).unwrap();
+    assert_eq!(seen, vec![b"before".to_vec()], "an uncommitted transaction must apply nothing");
+}
+
+#[test]
+fn txn_with_commit_marker_applies_whole() {
+    let path = temp_file("aof-txn-ok");
+    {
+        let mut aof = Aof::open(&path, Fsync::Always).unwrap();
+        aof.begin_group();
+        for i in 0..64 {
+            let k = format!("t{i}");
+            aof.append(&cmd(&[b"SET", k.as_bytes(), b"x"])).unwrap();
+        }
+        aof.end_group().unwrap();
+    }
+    let mut n = 0;
+    replay_aof(&path, |_| n += 1).unwrap();
+    assert_eq!(n, 64, "a committed transaction applies every frame");
+}
+
+#[test]
+fn records_outside_a_txn_still_apply_one_by_one() {
+    // The markers must not change plain (non-transactional) appends.
+    let path = temp_file("aof-txn-plain");
+    {
+        let mut aof = Aof::open(&path, Fsync::Always).unwrap();
+        aof.append(&cmd(&[b"SET", b"a", b"1"])).unwrap();
+        aof.append(&cmd(&[b"SET", b"b", b"2"])).unwrap();
+    }
+    let mut n = 0;
+    replay_aof(&path, |_| n += 1).unwrap();
+    assert_eq!(n, 2);
+}
+
+#[test]
+fn a_committed_txn_survives_a_torn_one_after_it() {
+    let path = temp_file("aof-txn-mixed");
+    {
+        let mut aof = Aof::open(&path, Fsync::Always).unwrap();
+        aof.begin_group();
+        aof.append(&cmd(&[b"SET", b"kept", b"1"])).unwrap();
+        aof.end_group().unwrap();
+        aof.begin_group();
+        aof.append(&cmd(&[b"SET", b"lost", b"1"])).unwrap();
+        aof.sync_now().unwrap(); // died before end_group
+    }
+    let mut seen: Vec<Vec<u8>> = Vec::new();
+    replay_aof(&path, |a| seen.push(a[1].to_vec())).unwrap();
+    assert_eq!(seen, vec![b"kept".to_vec()]);
+}

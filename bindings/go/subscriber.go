@@ -46,6 +46,9 @@ type Subscriber struct {
 	remote      *respConn
 	emb         *embSub
 	readTimeout *time.Duration
+	// pending holds events read while waiting for a subscribe ack, in
+	// arrival order. See Subscribe.
+	pending []PubsubEvent
 }
 
 // SubscriberConnect opens a fresh subscriber without subscribing yet
@@ -96,7 +99,10 @@ func (s *Subscriber) Subscribe(channels ...[]byte) error {
 		return errInvalidInput("SUBSCRIBE needs ≥ 1 channel")
 	}
 	if s.remote != nil {
-		return s.remote.write(prepend("SUBSCRIBE", channels))
+		if err := s.remote.write(prepend("SUBSCRIBE", channels)); err != nil {
+			return err
+		}
+		return s.awaitAcks(len(channels), EventSubscribe)
 	}
 	return s.emb.add(channels, false)
 }
@@ -107,7 +113,10 @@ func (s *Subscriber) Psubscribe(patterns ...[]byte) error {
 		return errInvalidInput("PSUBSCRIBE needs ≥ 1 pattern")
 	}
 	if s.remote != nil {
-		return s.remote.write(prepend("PSUBSCRIBE", patterns))
+		if err := s.remote.write(prepend("PSUBSCRIBE", patterns)); err != nil {
+			return err
+		}
+		return s.awaitAcks(len(patterns), EventPsubscribe)
 	}
 	return s.emb.add(patterns, true)
 }
@@ -155,7 +164,40 @@ func (s *Subscriber) Hello3() (PubsubEvent, error) {
 
 // Recv blocks for the next pub/sub frame (acks and deliveries). A close
 // surfaces as a Closed error; a read timeout as TimedOut.
+// awaitAcks reads until n acks of kind have arrived, queueing everything
+// else in arrival order.
+//
+// Subscribe used to write the command and return, handing back a
+// subscriber that was not yet subscribed; publishing straight after raced
+// the registration, and a lost message parks a blocking RecvMessage
+// forever. Everything read while waiting is QUEUED, not consumed — a
+// message on an already-subscribed channel can legitimately arrive before
+// the ack for a new one — so the observable event stream is unchanged.
+// See bench/FINDING-2026-07-19-subscribe-returns-before-live.md.
+func (s *Subscriber) awaitAcks(n int, kind PubsubKind) error {
+	for seen := 0; seen < n; {
+		r, err := s.remote.readReply(context.Background())
+		if err != nil {
+			return err
+		}
+		ev, err := classifyFrame(r)
+		if err != nil {
+			return err
+		}
+		if ev.Kind == kind {
+			seen++
+		}
+		s.pending = append(s.pending, ev)
+	}
+	return nil
+}
+
 func (s *Subscriber) Recv() (PubsubEvent, error) {
+	if len(s.pending) > 0 {
+		ev := s.pending[0]
+		s.pending = s.pending[1:]
+		return ev, nil
+	}
 	if s.remote != nil {
 		r, err := s.remote.readReply(context.Background())
 		if err != nil {

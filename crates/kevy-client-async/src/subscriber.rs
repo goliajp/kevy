@@ -48,6 +48,9 @@ async fn connect_default(host: &str, port: u16) -> io::Result<DefaultTransport> 
 /// [`kevy_client::Subscriber`] for TCP backends.
 pub struct AsyncSubscriber {
     codec: AsyncRespCodec<DefaultTransport>,
+    /// Events read while waiting for a subscribe ack, in arrival order.
+    /// See [`Self::subscribe`].
+    pending: std::collections::VecDeque<PubsubEvent>,
 }
 
 impl AsyncSubscriber {
@@ -58,6 +61,7 @@ impl AsyncSubscriber {
         let transport = connect_default(&parsed.host, parsed.port).await?;
         Ok(Self {
             codec: AsyncRespCodec::new(transport),
+            pending: std::collections::VecDeque::new(),
         })
     }
 
@@ -74,8 +78,15 @@ impl AsyncSubscriber {
         Ok(s)
     }
 
-    /// `SUBSCRIBE channel [channel ...]`. Per-channel Subscribe acks
-    /// arrive via [`Self::recv`].
+    /// `SUBSCRIBE channel [channel ...]`. Returns once the server has
+    /// acked every channel — you are subscribed when this resolves.
+    ///
+    /// The acks are still delivered through [`Self::recv`]: everything
+    /// read while waiting is QUEUED, not consumed, so the observable
+    /// event stream is unchanged. A message for an already-subscribed
+    /// channel can arrive before the ack for a new one, and dropping it
+    /// to get at the ack would trade a race for a lost message. See
+    /// `bench/FINDING-2026-07-19-subscribe-returns-before-live.md`.
     pub async fn subscribe(&mut self, channels: &[&[u8]]) -> io::Result<()> {
         if channels.is_empty() {
             return Err(io::Error::new(
@@ -83,7 +94,26 @@ impl AsyncSubscriber {
                 "SUBSCRIBE needs ≥ 1 channel",
             ));
         }
-        self.send_with_args(b"SUBSCRIBE", channels).await
+        self.send_with_args(b"SUBSCRIBE", channels).await?;
+        self.await_acks(channels.len(), false).await
+    }
+
+    /// Read until `n` acks have arrived, queueing everything else.
+    async fn await_acks(&mut self, n: usize, want_pattern: bool) -> io::Result<()> {
+        let mut seen = 0usize;
+        while seen < n {
+            let ev = classify(self.codec.read_reply().await?)?;
+            let is_ack = if want_pattern {
+                matches!(ev, PubsubEvent::Psubscribe { .. })
+            } else {
+                matches!(ev, PubsubEvent::Subscribe { .. })
+            };
+            if is_ack {
+                seen += 1;
+            }
+            self.pending.push_back(ev);
+        }
+        Ok(())
     }
 
     /// `PSUBSCRIBE pattern [pattern ...]`.
@@ -94,7 +124,8 @@ impl AsyncSubscriber {
                 "PSUBSCRIBE needs ≥ 1 pattern",
             ));
         }
-        self.send_with_args(b"PSUBSCRIBE", patterns).await
+        self.send_with_args(b"PSUBSCRIBE", patterns).await?;
+        self.await_acks(patterns.len(), true).await
     }
 
     /// `UNSUBSCRIBE [channel ...]`. Empty list = unsubscribe all.
@@ -109,6 +140,9 @@ impl AsyncSubscriber {
 
     /// Await the next pubsub frame. Connection close = `UnexpectedEof`.
     pub async fn recv(&mut self) -> io::Result<PubsubEvent> {
+        if let Some(ev) = self.pending.pop_front() {
+            return Ok(ev);
+        }
         let reply = self.codec.read_reply().await?;
         classify(reply)
     }
