@@ -36,6 +36,12 @@ pub struct AtomicAllShards<'a> {
     /// once.
     undo: Vec<ShardUndoEntry>,
     touched: std::collections::HashSet<Vec<u8>>,
+    /// The index catalog, for the transaction-scoped index reads in
+    /// `ops_atomic_all_index.rs`. Held as a handle rather than reached
+    /// through `Store` because those reads must use the guards above,
+    /// not take the shard locks again.
+    #[cfg(feature = "index")]
+    pub(crate) indexes: std::sync::Arc<crate::ops_index::IndexReg>,
 }
 
 impl<'a> AtomicAllShards<'a> {
@@ -406,6 +412,8 @@ impl Store {
             log: Vec::new(),
             undo: Vec::new(),
             touched: std::collections::HashSet::new(),
+            #[cfg(feature = "index")]
+            indexes: std::sync::Arc::clone(&self.indexes),
         };
         let outcome = body(&mut ctx);
         let log = std::mem::take(&mut ctx.log);

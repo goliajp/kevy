@@ -107,6 +107,8 @@ mod ops;
 mod ops_atomic;
 mod ops_atomic_all;
 mod ops_atomic_all_reads;
+#[cfg(feature = "index")]
+mod ops_atomic_all_index;
 mod ops_bitmap;
 mod ops_bonus;
 mod ops_keyspace;
