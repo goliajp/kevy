@@ -38,9 +38,11 @@
 #![warn(missing_docs)]
 
 mod aof;
+mod aof_txn;
 pub mod feed_meta;
 pub mod layout;
 mod replay;
+mod replay_txn;
 mod aof_policy;
 mod aof_util;
 mod crc32c;

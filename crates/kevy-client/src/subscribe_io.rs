@@ -40,6 +40,46 @@ pub(crate) fn send_to(
 /// in `buf`; a malformed frame returns [`KevyError::Protocol`], a
 /// 0-length read returns [`KevyError::Closed`]. Trailing partial
 /// frames stay in `buf` for the next call.
+/// Read until `n` acks of `kind` have arrived, queueing everything else in
+/// arrival order.
+///
+/// `subscribe()` used to write SUBSCRIBE and return, handing back a
+/// subscriber that was not yet subscribed. Anyone publishing straight
+/// after was racing the registration, and a lost message parks a blocking
+/// `recv_message()` forever. Three independent tests raced exactly that
+/// way in one day — see
+/// `bench/FINDING-2026-07-19-subscribe-returns-before-live.md` — including
+/// a CI job that hung for 3h46m.
+///
+/// Everything read while waiting is QUEUED, not consumed: a message for an
+/// already-subscribed channel can legitimately arrive before the ack for a
+/// new one, and dropping it would trade a race for a lost message. The
+/// acks themselves still reach `recv`, so the observable event stream is
+/// unchanged — `subscribe` simply now costs the round trip it always
+/// implied.
+pub(crate) fn await_acks(
+    stream: &mut std::net::TcpStream,
+    buf: &mut ReplyReadBuf,
+    pending: &mut std::collections::VecDeque<PubsubEvent>,
+    n: usize,
+    want_pattern_ack: bool,
+) -> KevyResult<()> {
+    let mut seen = 0usize;
+    while seen < n {
+        let ev = recv_remote(stream, buf)?;
+        let is_ack = if want_pattern_ack {
+            matches!(ev, PubsubEvent::Psubscribe { .. })
+        } else {
+            matches!(ev, PubsubEvent::Subscribe { .. })
+        };
+        if is_ack {
+            seen += 1;
+        }
+        pending.push_back(ev);
+    }
+    Ok(())
+}
+
 pub(crate) fn recv_remote(
     stream: &mut TcpStream,
     buf: &mut ReplyReadBuf,

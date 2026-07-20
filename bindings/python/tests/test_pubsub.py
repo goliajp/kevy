@@ -40,16 +40,11 @@ def test_pattern_subscribe_pmessage(backend):
 
 def test_connect_channels_and_recv_message(backend):
     url = backend.url
+    # No ack-draining dance here any more: `connect_channels` is
+    # subscribed-on-return (docs/client-contract.md), so publishing
+    # straight after is safe. The acks are queued and still arrive
+    # through recv(); `recv_message` skips them.
     sub = kevy.Subscriber.connect_channels(url, "a", "b")
-    # Drain both subscribe acks BEFORE publishing. `subscribe()` writes the
-    # SUBSCRIBE and returns — it does not wait for the server to register
-    # it (see `test_read_timeout_bounds_recv`, which reads the ack
-    # explicitly). Publishing first is a race: the message goes to whoever
-    # is registered at PUBLISH time, and losing it parks `recv_message()`
-    # forever. That is exactly how the python conformance job hung for
-    # 3h46m in CI; it reproduces about 1 run in 10 on a real Linux box.
-    for _ in range(2):
-        sub.recv()
     pub = kevy.connect(url)
     pub.publish("b", "x")
     ch, payload = sub.recv_message()

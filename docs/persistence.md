@@ -120,17 +120,33 @@ A fresh embedded store with the default config writes only the AOF — no snapsh
 
 ### Durability and AOF growth
 
-**Transactions fsync once, not once per mutation.** An embedded
-`atomic()` / `atomic_all_shards()` block appends its frames as one
-group and syncs at the end, so under `appendfsync = always` a block of
-N mutations costs one fsync rather than N — and a crash cannot land
-between two frames of the same transaction, which would otherwise
-leave a durably half-applied block that replay would faithfully
-restore. Rejecting the block (returning `Err`) appends nothing at all.
+**Transactions replay all-or-nothing, at any size.** An embedded
+`atomic()` / `atomic_all_shards()` block is bracketed in the AOF by a
+begin and a commit marker. Replay holds every frame after a begin and
+applies the batch only when it reaches the matching commit; a log that
+ends mid-transaction discards it. Rejecting the block (returning `Err`)
+appends nothing at all.
 
-This is true as of 4.0. Earlier versions documented the group-commit
-behaviour but never enabled it, so every mutation in a transaction was
-synced separately.
+The markers are what make this size-independent, and the distinction
+matters. Group commit alone only defers the *fsync* — the AOF writes
+through a 256 KiB buffer, so a longer transaction still hands whole,
+valid frames to the kernel as that buffer fills, and `kill -9` leaves
+them there. Measured before the markers existed: a 20,000-mutation
+block killed mid-commit replayed 6,393 of them. **No `appendfsync`
+setting fixes that**, because the partial state comes from the shape of
+the commit loop, not from when it syncs.
+
+`appendfsync` governs something different: the power-loss window for
+data already written. It is orthogonal to whether a transaction is
+all-or-nothing.
+
+Both are true as of 4.0. Earlier versions documented group commit but
+never enabled it, so every mutation in a transaction was synced
+separately AND replayed independently.
+
+v1-format logs have no record envelope and cannot express a transaction
+boundary; they keep the old behaviour until their first rewrite
+promotes them to v2.
 
 
 | Knob | Server (TOML / `CONFIG SET`) | Embedded (`Config::…`) | Default | Notes |

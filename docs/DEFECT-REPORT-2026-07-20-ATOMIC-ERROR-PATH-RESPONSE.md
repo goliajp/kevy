@@ -43,6 +43,33 @@ class of defect you reported, pointed at a different victim.
 Scope note: `atomic_all_shards()` had the identical shape. It is fixed
 too. A rejected transaction there was diverging several shards at once.
 
+## CORRECTION (same day) — my first answer to finding 2 was wrong
+
+I originally wired `begin_group`/`end_group` and wrote here that there was
+"no window in which half a transaction is durable". **That claim was false
+when I made it**, and your fuller report is what caught it:
+
+> `kill -9` leaves everything already handed to `write()` in the page
+> cache, so it persists regardless of fsync policy. **The partial
+> transaction comes from the loop shape, not from fsync.**
+
+That is exactly right, and it is the sentence that sent me back to
+measure instead of reason. Group commit only defers the *fsync*. The AOF
+writes through a 256 KiB `BufWriter`, so frames still reach the kernel
+whenever that buffer fills — and after `kill -9` the kernel keeps them.
+Building your harness and running it:
+
+```
+n=20000 (~760 KB of frames, 3x the buffer), group commit only:
+  kill@12ms -> 6393/20000        <-- a durable half-transaction
+```
+
+So my first fix bought atomicity only for transactions that happened to
+fit in the write buffer, with an undocumented cliff at 256 KiB. For a
+consumer choosing this engine for payroll on the strength of that
+sentence, an unqualified guarantee that silently depends on transaction
+size is worse than no guarantee.
+
 ## Finding 2 — not crash-atomic under `Fsync::Always`
 
 Confirmed, including your careful distinction between what you verified
@@ -51,14 +78,42 @@ comment at `ops_atomic.rs:6` described them, and grep confirms they had
 **never been called** from `kevy-embedded`. Both entry points now wrap
 their commit loop in a group.
 
-So both consequences are addressed: a block of N mutations costs one
-fsync, and there is no window in which half a transaction is durable.
+Fixed properly on the second attempt, with **transaction markers in the
+AOF** — the WAL answer, and the only one whose correctness does not depend
+on how much of the log happened to be flushed.
 
-I did not empirically trigger the crash window either — verifying it needs
-`kill -9` timed inside the commit loop, which is a test harness we do not
-have. Stated plainly so you can weigh it: **finding 2's fix is
-source-verified, not crash-verified.** If that matters for your risk
-assessment, say so and it is worth building the harness.
+`begin_group` now writes a begin marker and `end_group` writes a commit
+marker; replay buffers every frame after a begin and applies the batch
+only on seeing the matching commit, discarding it at EOF. "Was this
+transaction finished" becomes a property of the log itself. The markers
+ride as ordinary v2 records holding a one-element multibulk whose name
+starts with a NUL — no format change, no possible collision with a RESP
+verb, and an older reader sees a command it rejects rather than a corrupt
+frame. (v1 logs have no envelope and cannot express the boundary; they
+gain this on their first rewrite to v2.)
+
+Re-measured with your harness, same sizes:
+
+```
+n=20000  (3x buffer, 10 samples) : only 0/20000 or 20000/20000
+n=100000 (15x buffer, 12 samples): only 0/100000 or 100000/100000
+```
+
+The transition also moved later, as it should — the commit marker is
+written last, so nothing counts until it lands.
+
+Four unit tests pin it: an uncommitted transaction applies nothing, a
+committed one applies every frame, plain non-transactional appends are
+unaffected, and a committed transaction survives a torn one written after
+it (the case where a careless buffer reset loses both).
+
+**Verification status, precisely:** crash-verified now, not just
+source-verified — your harness shape, `kill -9` at swept offsets, at 3x
+and 15x the write buffer. What is *not* covered is power loss: `kill -9`
+leaves the page cache intact, so these runs exercise process death, not
+media loss. Under `Fsync::Always` the commit marker is inside the synced
+run, so power loss should behave the same, but I have not tested it and
+will not claim it.
 
 ## On your self-imposed discipline
 

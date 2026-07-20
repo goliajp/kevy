@@ -199,14 +199,22 @@ failure is now closed, each behind an executable gate.
   TTL and deleting keys the closure created. A rejected transaction
   leaves no trace, which is the guarantee `docs/cookbook.md` §5 already
   described for replacing SQL `CHECK` constraints — it is now true.
-- **`atomic()` was not crash-atomic under `appendfsync = always`.** The
-  commit loop appended one frame at a time, and each frame was flushed
-  and fsynced on its own: N syncs for a block of N mutations, and a crash
-  between frame *k* and *k+1* left a durably half-applied transaction
-  that replay would faithfully restore. The block is now one group commit
-  — one fsync, and no window where half of it is durable. The
-  group-commit path (`Aof::begin_group` / `end_group`) already existed
-  and was documented in `ops_atomic.rs`; it had never been called.
+- **`atomic()` was not crash-atomic, and no fsync setting fixed it.**
+  The commit loop appended and synced frame by frame, so a crash between
+  frame *k* and *k+1* left a durably half-applied transaction that
+  replay faithfully restored. Transactions are now bracketed in the AOF
+  by begin/commit markers: replay holds a transaction's frames until it
+  sees the commit and discards them if the log ends first, so the block
+  is all-or-nothing **at any size**. Group commit is wired too, so a
+  block of N mutations costs one fsync rather than N.
+
+  Group commit alone was not enough, which is worth stating because it
+  is the intuitive fix: it only defers the *fsync*, while the 256 KiB
+  write buffer still hands whole valid frames to the kernel as it fills.
+  A 20,000-mutation block killed mid-commit replayed 6,393 of them with
+  group commit in place and 0 or all of them with the markers. The
+  partial state came from the shape of the commit loop, not from when it
+  synced.
 - Both were reported by a consumer evaluating kevy-embedded as a primary
   store, with an empirical reproduction against the published 3.18.0:
   `docs/DEFECT-REPORT-2026-07-20-ATOMIC-ERROR-PATH.md`. **3.18.0 is

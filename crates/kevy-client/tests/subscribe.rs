@@ -12,6 +12,11 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+/// The `SUBSCRIBE chan` ack every real server sends. `subscribe()` waits
+/// for it, so a mock that omits it is modelling a server that does not
+/// exist — and would simply hang the client.
+const SUBSCRIBE_CHAN_ACK: &[u8] = b"*3\r\n$9\r\nsubscribe\r\n$4\r\nchan\r\n:1\r\n";
+
 /// Start a mock server that, after accepting one connection, reads bytes
 /// until at least `expect_in_at_least` (covers the SUBSCRIBE write) and
 /// then streams `reply_bytes` back in one chunk. Closes after lingering.
@@ -30,6 +35,11 @@ fn mock_server(expect_in_at_least: usize, reply_bytes: &'static [u8]) -> u16 {
                 Ok(n) if n > 0 => total += n,
                 _ => break, // Ok(0) eof or Err — same handling
             }
+        }
+        let already_acks = reply_bytes.starts_with(b"*3\r\n$9\r\nsubscribe\r\n")
+            || reply_bytes.starts_with(b"*3\r\n$10\r\npsubscribe\r\n");
+        if !already_acks {
+            let _ = sock.write_all(SUBSCRIBE_CHAN_ACK);
         }
         let _ = sock.write_all(reply_bytes);
         thread::sleep(Duration::from_millis(50));
@@ -115,6 +125,9 @@ fn unsubscribe_with_nil_channel_classified_as_none() {
         b"*3\r\n$11\r\nunsubscribe\r\n$-1\r\n:0\r\n",
     );
     let mut sub = Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
+    // The mock prepends the subscribe ack every real server sends;
+    // `subscribe()` queues it, so take it before the canned frame.
+    let _ack = sub.recv().unwrap();
     // After SUBSCRIBE chan, we ignore the (not-sent here) ack and
     // immediately ask the mock for its canned UNSUBSCRIBE-nil reply.
     let ev = sub.recv().unwrap();
@@ -141,7 +154,10 @@ fn server_close_yields_unexpected_eof() {
         drop(sock);
     });
     started_rx.recv().unwrap();
-    let mut sub = Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
+    // This test is about `recv` seeing EOF, not about subscribing, and
+    // its inline mock never acks — so connect without channels rather
+    // than make `subscribe()` wait for an ack that will never come.
+    let mut sub = Subscriber::connect(&format!("kevy://127.0.0.1:{port}")).unwrap();
     let err = sub.recv().unwrap_err();
     assert!(matches!(err, KevyError::Closed));
 }
@@ -150,6 +166,9 @@ fn server_close_yields_unexpected_eof() {
 fn malformed_frame_yields_invalid_data() {
     let port = mock_server(SUBSCRIBE_CHAN_REQ_LEN, b"!totally-bogus\r\n");
     let mut sub = Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
+    // The mock prepends the subscribe ack every real server sends;
+    // `subscribe()` queues it, so take it before the canned frame.
+    let _ack = sub.recv().unwrap();
     let err = sub.recv().unwrap_err();
     assert!(matches!(err, KevyError::Protocol(_)));
 }
@@ -163,6 +182,9 @@ fn unknown_pubsub_kind_yields_invalid_data() {
         b"*3\r\n$5\r\nbogus\r\n$1\r\nx\r\n:0\r\n",
     );
     let mut sub = Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
+    // The mock prepends the subscribe ack every real server sends;
+    // `subscribe()` queues it, so take it before the canned frame.
+    let _ack = sub.recv().unwrap();
     let err = sub.recv().unwrap_err();
     assert!(matches!(err, KevyError::Protocol(_)));
 }
@@ -184,7 +206,9 @@ fn read_timeout_blocks_recv() {
         thread::sleep(Duration::from_millis(500));
     });
     started_rx.recv().unwrap();
-    let mut sub = Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
+    // About `recv`'s read timeout, not about subscribing; the inline mock
+    // never acks, so connect without channels.
+    let mut sub = Subscriber::connect(&format!("kevy://127.0.0.1:{port}")).unwrap();
     sub.set_read_timeout(Some(Duration::from_millis(100))).unwrap();
     let err = sub.recv().unwrap_err();
     // Different platforms surface read-timeout as WouldBlock vs TimedOut.
