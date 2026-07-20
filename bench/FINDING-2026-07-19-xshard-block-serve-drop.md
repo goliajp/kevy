@@ -1,6 +1,26 @@
 # A cross-shard blocking serve can lose the element it popped
 
-**Status: open. Real, pre-existing, not introduced by this session's work.**
+**Status: FIXED (2026-07-21). Design round + fix:
+`.claude/rfcs/2026-07-21-xshard-block-serve-escrow.md`.**
+
+The fix is escrow: the target captures the undo by reading the element
+*before* it pops, and holds it until the origin confirms delivery. Two
+things this finding assumed turned out to be wrong, both found by reading
+the code rather than reasoning about it — the target does not know the
+element it popped (it replays a command and gets RESP bytes, same as the
+origin), and two of the six block kinds consume nothing at all, so
+"restore the element" is undefined for them.
+
+The test seam this document asks for below now exists
+(`KEVY_TEST_XSHARD_SERVE_DELAY_MS`, debug builds only). The race is
+deterministic with it: the regression test fails with the fix reverted
+and passes with it, which a first attempt without the seam did not.
+
+Original report follows.
+
+---
+
+**Status when filed: open. Real, pre-existing, not introduced by that session's work.**
 Filed with the code path and the evidence rather than fixed, because the
 correct fix is a protocol decision, not a patch.
 
