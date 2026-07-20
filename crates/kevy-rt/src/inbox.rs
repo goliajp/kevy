@@ -325,6 +325,12 @@ impl<C: Commands> Shard<C> {
                             self.mark_pending_write_dirty(conn);
                         }
                     }
+                    Inbound::BlockServeAck { origin, conn } => {
+                        self.target_release_escrow(origin, conn);
+                    }
+                    Inbound::BlockServeAbort { origin, conn } => {
+                        self.target_apply_escrow(origin, conn);
+                    }
                     Inbound::BlockCancel { origin, conn } => self.target_cancel(origin, conn),
                     // ── WAIT / REPL.WAIT barriers ──
                     Inbound::ReplWaitArm { origin, conn, seq, need, deadline_ms } => {
