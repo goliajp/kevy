@@ -133,7 +133,8 @@ impl<C: Commands> Shard<C> {
         self.commands.dispatch_into(&mut self.store, &undo, &mut sink);
         // The key has data again, so anyone else parked on it should be
         // told -- including waiters on this very shard.
-        self.target_wake_xshard(&undo[1].to_vec());
+        let key = undo[1].to_vec();
+        self.target_wake_xshard(&key);
     }
 }
 
