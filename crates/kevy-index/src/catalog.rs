@@ -222,14 +222,12 @@ impl Catalog {
         if spec.fields.is_empty() {
             return Err("ERR index needs at least one field");
         }
-        // The spec can carry several fields and the text engine still
-        // indexes only the first. Refuse rather than accept-and-ignore:
-        // a two-field index that silently scores one field returns
-        // plausible results that are wrong, which is worse than an
-        // error and much harder to notice. Lifted when the segment
-        // indexes weighted fields.
-        if spec.fields.len() > 1 {
-            return Err("ERR multi-field indexes are declared but not served yet");
+        // Multi-field is served by the text engine only. Every other
+        // kind reads one scalar, so a second field on a range or unique
+        // index would be declared and never consulted -- the
+        // accept-and-ignore shape this arc keeps refusing.
+        if spec.fields.len() > 1 && spec.kind != IndexKind::Text {
+            return Err("ERR only KIND text indexes several fields");
         }
         self.specs.push((spec, IndexState::Building));
         Ok(())
@@ -338,6 +336,34 @@ mod tests {
         assert_eq!(got.max_bytes, 1024);
         assert_eq!(st, IndexState::Building, "boot loads as Building");
         assert!(Catalog::from_sidecar("bogus").is_none());
+    }
+
+    /// Text serves several fields; every other kind reads one scalar,
+    /// so a second field there would be declared and never consulted.
+    /// Accept-and-ignore is the shape this refuses.
+    #[test]
+    fn only_text_indexes_accept_several_fields() {
+        let two = || {
+            vec![
+                FieldSpec::new(b"title".to_vec()),
+                FieldSpec::new(b"body".to_vec()),
+            ]
+        };
+        let mut range = spec("multi-range", "p:");
+        range.fields = two();
+        assert!(Catalog::new().create(range).is_err(), "range must refuse two fields");
+
+        let mut text = spec("multi-text", "p:");
+        text.kind = IndexKind::Text;
+        text.fields = two();
+        assert!(Catalog::new().create(text).is_ok(), "text must accept them");
+    }
+
+    #[test]
+    fn an_index_needs_at_least_one_field() {
+        let mut s = spec("nofields", "p:");
+        s.fields.clear();
+        assert!(Catalog::new().create(s).is_err());
     }
 
     #[test]
