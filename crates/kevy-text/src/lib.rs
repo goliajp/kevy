@@ -11,5 +11,5 @@ mod segment;
 mod token;
 
 pub use bm25::{BM25_B, BM25_K1};
-pub use segment::{TextMatch, TextSegment, TextStats};
+pub use segment::{CorpusStats, TextMatch, TextSegment, TextStats};
 pub use token::{KevyTokenizer, Tokenizer, tokenize};

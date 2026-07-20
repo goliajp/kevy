@@ -46,6 +46,24 @@ struct QueryCtx {
     limit: usize,
 }
 
+/// Corpus statistics supplied from outside a segment, for scoring one
+/// shard's documents against the whole corpus rather than its own slice.
+///
+/// A cross-shard text query builds this by summing each shard's local
+/// `n_docs` / `total_len` and, for each query token, its `df`. `df`
+/// need only carry the query's tokens — the values a query actually
+/// scores with — which is why global BM25 does not need a whole-corpus
+/// df table.
+pub struct CorpusStats {
+    /// Total documents across the corpus.
+    pub n_docs: f64,
+    /// Mean document length (unweighted tokens) across the corpus.
+    pub avgdl: f64,
+    /// Global document frequency per query token; a token missing here
+    /// falls back to the segment's local list length.
+    pub df: std::collections::HashMap<Vec<u8>, u32>,
+}
+
 /// A field's text and the BM25 weight it was indexed at. Stored per
 /// document so a removal re-derives exactly the term frequencies the
 /// insert produced.
@@ -157,6 +175,30 @@ impl TextSegment {
     /// per accumulated doc instead of walked. Selection is a bounded
     /// heap over borrowed keys (no per-candidate allocation).
     pub fn matches(&self, query: &[u8], limit: usize) -> Vec<TextMatch> {
+        self.matches_scored(query, limit, None)
+    }
+
+    /// [`TextSegment::matches`], scored against externally-supplied
+    /// corpus statistics instead of this shard's local ones.
+    ///
+    /// `None` uses the local stats — the shard-local BM25 that `matches`
+    /// has always used, byte-identical. `Some` is the global-BM25 path:
+    /// a cross-shard query aggregates each shard's `n_docs`, `avgdl` and
+    /// per-query-token `df` into one [`CorpusStats`] and scores every
+    /// shard against it, so hits from different shards are comparable.
+    /// The MaxScore upper bound uses the same injected numbers, so
+    /// pruning stays a valid bound.
+    ///
+    /// A query token absent from THIS shard's postings contributes no
+    /// score here regardless — its documents live on other shards — so
+    /// only the idf (via global df) crosses shard boundaries, never a
+    /// posting.
+    pub fn matches_scored(
+        &self,
+        query: &[u8],
+        limit: usize,
+        stats: Option<&CorpusStats>,
+    ) -> Vec<TextMatch> {
         // Top-0 of anything is empty (same convention as kevy-vector's
         // `knn` with k = 0). Also keeps the MaxScore floor well-defined:
         // `kth_of` indexes `limit - 1`.
@@ -169,49 +211,76 @@ impl TextSegment {
         if q_tokens.is_empty() || self.docs.is_empty() {
             return Vec::new();
         }
-        let n_docs = self.docs.len() as f64;
-        let avgdl = self.total_len as f64 / n_docs;
-        let lists = self.scored_lists(&q_tokens, n_docs);
+        let (n_docs, avgdl) = self.corpus_stats(stats);
+        let lists = self.scored_lists(&q_tokens, n_docs, stats);
         if lists.is_empty() {
             return Vec::new();
         }
-        let tail_ub = tail_bounds(&lists);
         let ctx = QueryCtx { n_docs, avgdl, limit };
+        let scores = self.accumulate(&lists, &ctx);
+        self.select_top(&scores, limit)
+    }
+
+    /// Corpus `(n_docs, avgdl)`: injected global stats when supplied,
+    /// this shard's local totals otherwise.
+    fn corpus_stats(&self, stats: Option<&CorpusStats>) -> (f64, f64) {
+        match stats {
+            Some(s) => (s.n_docs, s.avgdl),
+            None => {
+                let n = self.docs.len() as f64;
+                (n, self.total_len as f64 / n)
+            }
+        }
+    }
+
+    /// MaxScore accumulation: walk lists rarest-first with the tail-bound
+    /// early stop, then probe the un-walked lists per accumulated doc
+    /// (O(candidates) gets, never a walk of the common list — that walk
+    /// was the measured 30ms p95). Returns id → score.
+    fn accumulate(&self, lists: &[ScoredList<'_>], ctx: &QueryCtx) -> HashMap<u32, f64> {
+        let tail_ub = tail_bounds(lists);
         let mut scores: HashMap<u32, f64> = HashMap::new();
         let mut kth_threshold = 0.0_f64;
         let mut walked = 0usize;
         for (i, (list, df, _ub)) in lists.iter().enumerate() {
-            // Docs appearing only in the remaining lists can't reach
-            // the current top-limit floor → stop WALKING; the loop
-            // below PROBES these lists for already-seen docs.
-            if i > 0 && scores.len() >= limit && tail_ub[i] < kth_threshold {
+            // A doc seen only in the remaining lists can't reach the
+            // top-limit floor → stop WALKING; the probe loop below still
+            // credits these lists to already-seen docs.
+            if i > 0 && scores.len() >= ctx.limit && tail_ub[i] < kth_threshold {
                 break;
             }
             walked = i + 1;
             let tail_next = tail_ub.get(i + 1).copied().unwrap_or(0.0);
-            self.walk_list(list, *df, tail_next, lists.len() == 1, &ctx, &mut scores);
-            if scores.len() >= limit && i + 1 < lists.len() {
-                kth_threshold = kth_of(&scores, limit);
+            self.walk_list(list, *df, tail_next, lists.len() == 1, ctx, &mut scores);
+            if scores.len() >= ctx.limit && i + 1 < lists.len() {
+                kth_threshold = kth_of(&scores, ctx.limit);
             }
         }
-        // Probe un-walked lists PER ACCUMULATED DOC — O(candidates)
-        // hash gets, never a walk of the common list (walking here
-        // was the measured 30ms p95: a pruned 500k-posting head list
-        // still cost a full scan).
         for (list, df, _) in &lists[walked..] {
-            self.probe_list(list, *df, &[], &ctx, &mut scores);
+            self.probe_list(list, *df, &[], ctx, &mut scores);
         }
-        self.select_top(&scores, limit)
+        scores
     }
 
     /// The candidate lists for a query, rarest (highest upper bound)
     /// first. The bound is dl-independent: denom ≥ tf + k1(1-b), so
     /// score ≤ idf·tf(k1+1)/(tf + k1(1-b)).
-    fn scored_lists<'s>(&'s self, q_tokens: &[Vec<u8>], n_docs: f64) -> Vec<ScoredList<'s>> {
+    fn scored_lists<'s>(
+        &'s self,
+        q_tokens: &[Vec<u8>],
+        n_docs: f64,
+        stats: Option<&CorpusStats>,
+    ) -> Vec<ScoredList<'s>> {
         let mut lists: Vec<ScoredList<'s>> = Vec::new();
         for t in q_tokens {
             let Some(list) = self.postings.get(t) else { continue };
-            let df = list.len() as f64;
+            // Global df when supplied — the whole point of the injected
+            // stats. Falls back to the local list length, which is what
+            // the shard-local path always used.
+            let df = stats
+                .and_then(|s| s.df.get(t))
+                .map(|&d| f64::from(d))
+                .unwrap_or(list.len() as f64);
             let max_tf = f64::from(list.max_tf());
             lists.push((list, df, crate::bm25::bm25_upper(max_tf, df, n_docs)));
         }
@@ -346,47 +415,6 @@ impl TextSegment {
             .map(|(score, k)| TextMatch { key: k.to_vec(), score })
             .collect()
     }
-
-    /// Live counters.
-    pub fn stats(&self) -> TextStats {
-        let postings: u64 = self.postings.values().map(|l| l.len() as u64).sum();
-        // Hapax lists are INLINE (enum One) — no heap beyond their
-        // postings-map slot; only Many lists pay the per-posting
-        // band-vec + index costs.
-        let many_postings: u64 = self
-            .postings
-            .values()
-            .map(|l| match l {
-                Buckets::One { .. } => 0,
-                Buckets::Many(m) => m.index.len() as u64,
-            })
-            .sum();
-        let token_bytes: u64 = self.postings.keys().map(|t| (t.len() + 48) as u64).sum();
-        // docs table + the id→key/id→dl tables (key stored twice).
-        let doc_bytes: u64 = self
-            .docs
-            .iter()
-            .map(|(k, (_, _, fields))| {
-                let text: usize = fields.iter().map(|(t, _)| t.len() + 4).sum();
-                (2 * k.len() + text + 110) as u64
-            })
-            .sum();
-        TextStats {
-            docs: self.docs.len() as u64,
-            tokens: self.postings.len() as u64,
-            postings,
-            // per-Many-posting ≈ 4B band-vec slot + ~26B list-index
-            // entry (doc-id postings + log2 dl bands); hapax
-            // lists are inline. Docs keep their original text
-            // (update path re-derives tokens).
-            approx_bytes: token_bytes + many_postings * 30 + doc_bytes,
-        }
-    }
-
-    /// Verify hook: is `key` indexed here?
-    pub fn contains(&self, key: &[u8]) -> bool {
-        self.docs.contains_key(key)
-    }
 }
 
 /// Aggregate token counts for one document's token stream.
@@ -451,6 +479,9 @@ fn tail_bounds(lists: &[ScoredList<'_>]) -> Vec<f64> {
     v.reverse();
     v
 }
+
+#[path = "segment_stats.rs"]
+mod segment_stats;
 
 #[cfg(test)]
 #[path = "segment_tests.rs"]
