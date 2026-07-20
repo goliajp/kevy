@@ -91,13 +91,50 @@ fn wait_port(port: u16, what: &str) {
     // Waiting longer costs nothing on a healthy run (this returns the
     // moment the port answers) and only spends time on a run that is
     // already failing.
-    for _ in 0..12000 {
+    let budget = patience();
+    let deadline = std::time::Instant::now() + budget;
+    while std::time::Instant::now() < deadline {
         if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    panic!("{what} never bound port {port} within 60s");
+    panic!("{what} never bound port {port} within {budget:?}");
+}
+
+/// How long a test waits for something that is slow rather than broken.
+///
+/// 60s in a normal build, scaled by `KEVY_TEST_PATIENCE`. covgate sets
+/// it because llvm-cov instrumentation slows boot by an order of
+/// magnitude, and these budgets had been climbing one incident at a
+/// time -- the replica accept loop went 30s -> 60s and still lost a run.
+/// Scaling by environment beats another blind raise: a real hang in a
+/// normal build still fails at 60s instead of inheriting the slow path's
+/// patience, so the budget tracks machine speed rather than the worst
+/// case ever seen.
+fn patience() -> std::time::Duration {
+    let mult: f64 = std::env::var("KEVY_TEST_PATIENCE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1.0);
+    std::time::Duration::from_secs_f64(60.0 * mult)
+}
+
+/// Connect to `port`, retrying until `patience()` runs out.
+///
+/// A bound port is not a served port: the runtime binds (which
+/// `wait_port` sees) a moment before its accept loop serves, and under
+/// instrumentation that moment is long.
+fn connect_retry(port: u16, what: &str) -> std::net::TcpStream {
+    let budget = patience();
+    let deadline = std::time::Instant::now() + budget;
+    while std::time::Instant::now() < deadline {
+        if let Ok(s) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+            return s;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("{what} never became ready on port {port} within {budget:?}");
 }
 
 struct Server {
@@ -1242,16 +1279,7 @@ fn server_as_replica_applies_upstream_writes() {
     // instrumentation (covgate) slows boot severely — 20ms × 3000
     // = 60s hard cap (30s was observed insufficient once the suite
     // grew: parallel test threads + instrumented boot).
-    let mut reader = (0..3000)
-        .find_map(|_| {
-            std::net::TcpStream::connect(("127.0.0.1", replica.port))
-                .ok()
-                .or_else(|| {
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                    None
-                })
-        })
-        .expect("replica accept loop never became ready within 60s");
+    let mut reader = connect_retry(replica.port, "replica accept loop");
     let mut all_seen = false;
     for _ in 0..200 {
         let mut got_all = true;
@@ -1401,16 +1429,7 @@ fn spop_storm_keeps_replica_sets_identical() {
 
     // Connect to the replica (retry — see server_as_replica test) and
     // poll the fence key.
-    let mut reader = (0..3000)
-        .find_map(|_| {
-            std::net::TcpStream::connect(("127.0.0.1", replica.port))
-                .ok()
-                .or_else(|| {
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                    None
-                })
-        })
-        .expect("replica accept loop never became ready within 60s");
+    let mut reader = connect_retry(replica.port, "replica accept loop");
     let mut fenced = false;
     // 60s, not 10s: the replica attaches mid-storm and has to replay the
     // backlog, and on a loaded runner that is slow rather than broken. A
