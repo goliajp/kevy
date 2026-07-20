@@ -249,7 +249,7 @@ fn atomic_all_shards_full_surface() {
 #[test]
 fn atomic_new_writes_survive_reopen() {
     use crate::config::AppendFsync;
-    let dir = crate::store::tests::tmp_dir("atomic-v21-reopen");
+    let dir = crate::store::test_suites::tests::tmp_dir("atomic-v21-reopen");
     {
         let s = Store::open(
             Config::default()
@@ -296,7 +296,7 @@ fn zadd_flags_facade_pipeline_atomic_and_reopen() {
     use crate::ZaddFlags;
     use crate::config::AppendFsync;
     let gt = ZaddFlags { gt: true, ..ZaddFlags::default() };
-    let dir = crate::store::tests::tmp_dir("zadd-flags-reopen");
+    let dir = crate::store::test_suites::tests::tmp_dir("zadd-flags-reopen");
     {
         let s = Store::open(
             Config::default()

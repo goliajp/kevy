@@ -1,7 +1,7 @@
 //! Sharding (B2) + server-dir-interop tests for the embedded store.
 //! Split from `store_tests.rs` to keep both under the 500-LOC house rule.
 
-use super::*;
+use crate::store::*;
 use super::tests::tmp_dir;
 use crate::PubsubFrame;
 

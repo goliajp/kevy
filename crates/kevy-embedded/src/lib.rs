@@ -107,6 +107,7 @@ mod ops;
 mod ops_atomic;
 mod ops_atomic_all;
 mod ops_atomic_all_reads;
+mod ops_reconcile;
 #[cfg(feature = "index")]
 mod ops_atomic_all_index;
 mod ops_bitmap;
@@ -172,6 +173,7 @@ pub use kevy_store::{
 #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
 pub use ops_feed::{Change, ChangeBatch, FeedError, PrefixInfo};
 pub use ops_snapshot_view::{Snapshot, SnapshotEntry};
+pub use ops_reconcile::ReconcileReport;
 #[cfg(feature = "index")]
 pub use ops_index::IndexPage;
 #[cfg(feature = "index")]

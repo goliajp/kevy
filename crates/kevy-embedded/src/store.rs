@@ -455,44 +455,5 @@ impl Store {
 pub(crate) use crate::store_glue::{commit_write, lock_read, lock_write, store_err};
 
 #[cfg(test)]
-#[path = "store_tests.rs"]
-mod tests;
-#[cfg(test)]
-#[path = "store_tests_shard.rs"]
-mod tests_shard;
-#[cfg(test)]
-#[path = "store_tests_p2.rs"]
-mod tests_p2;
-#[cfg(test)]
-#[path = "store_tests_p3.rs"]
-mod tests_p3;
-#[cfg(test)]
-#[path = "store_tests_bitmap.rs"]
-mod tests_bitmap;
-#[cfg(test)]
-#[path = "store_tests_bonus.rs"]
-mod tests_bonus;
-#[cfg(test)]
-#[path = "store_tests_scan.rs"]
-mod tests_scan;
-#[cfg(test)]
-#[path = "store_tests_atomic.rs"]
-mod tests_atomic;
-#[cfg(test)]
-#[path = "store_tests_more.rs"]
-mod tests_more;
-#[cfg(test)]
-#[path = "store_tests_keyspace.rs"]
-mod tests_keyspace;
-#[cfg(test)]
-#[path = "store_tests_atomic_all.rs"]
-mod tests_atomic_all;
-#[cfg(all(test, feature = "index"))]
-#[path = "store_tests_atomic_index.rs"]
-mod tests_atomic_index;
-#[cfg(test)]
-#[path = "store_tests_replay_all.rs"]
-mod tests_replay_all;
-#[cfg(test)]
-#[path = "store_tests_op_table.rs"]
-mod tests_op_table;
+#[path = "store_test_suites.rs"]
+mod test_suites;
