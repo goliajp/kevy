@@ -148,9 +148,12 @@ fn server_close_yields_unexpected_eof() {
     let (started_tx, started_rx) = mpsc::channel();
     thread::spawn(move || {
         started_tx.send(()).unwrap();
-        let (mut sock, _) = listener.accept().unwrap();
-        let mut buf = vec![0u8; 1024];
-        let _ = sock.read(&mut buf);
+        let (sock, _) = listener.accept().unwrap();
+        // Close on accept. This mock used to block on a read first,
+        // which deadlocked once the test stopped subscribing: the client
+        // sent nothing, so the mock never returned from read, never
+        // closed, and `recv` waited for an EOF that could not arrive.
+        // Nothing here needs the client to speak first.
         drop(sock);
     });
     started_rx.recv().unwrap();
