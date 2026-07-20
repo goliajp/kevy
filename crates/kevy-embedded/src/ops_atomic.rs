@@ -323,8 +323,7 @@ impl AtomicCtx<'_> {
 
 
     // ---- collection reads --------------------------------------------
-    // Requested by a consumer (docs/REPORT-FROM-GOLIAJP-2026-07-20-…):
-    // a set could be written inside a transaction but never read back
+    // Requested by a consumer: a set could be written inside a transaction but never read back
     // inside one, so any child collection a cascade delete must
     // enumerate had to be modelled as a hash — they reshaped a whole
     // keyspace around the omission. These hold the shard write lock
@@ -395,8 +394,7 @@ impl Store {
     /// write, and return `Err` to reject — the rejection leaves no
     /// trace. (Before 4.0 the writes stayed live in memory while their
     /// AOF frames were discarded, so a restarted process disagreed
-    /// with the running one; see
-    /// `docs/DEFECT-REPORT-2026-07-20-ATOMIC-ERROR-PATH.md`.)
+    /// with the running one.)
     ///
     /// Rollback restores each touched key to the value and TTL it had
     /// before the transaction — including deleting keys the closure

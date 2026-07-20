@@ -330,11 +330,11 @@ fn apply_record(
                     w.txn = Some(Vec::new());
                 }
                 Some(TxnMarker::Commit) => {
-                    if let Some(buffered) = w.txn.take() {
-                        if let Some(f) = apply.as_deref_mut() {
-                            for a in buffered {
-                                f(a);
-                            }
+                    if let Some(buffered) = w.txn.take()
+                        && let Some(f) = apply.as_deref_mut()
+                    {
+                        for a in buffered {
+                            f(a);
                         }
                     }
                 }

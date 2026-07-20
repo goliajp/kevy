@@ -85,8 +85,7 @@ impl AsyncSubscriber {
     /// read while waiting is QUEUED, not consumed, so the observable
     /// event stream is unchanged. A message for an already-subscribed
     /// channel can arrive before the ack for a new one, and dropping it
-    /// to get at the ack would trade a race for a lost message. See
-    /// `bench/FINDING-2026-07-19-subscribe-returns-before-live.md`.
+    /// to get at the ack would trade a race for a lost message.
     pub async fn subscribe(&mut self, channels: &[&[u8]]) -> io::Result<()> {
         if channels.is_empty() {
             return Err(io::Error::new(

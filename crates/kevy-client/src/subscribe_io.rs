@@ -47,9 +47,7 @@ pub(crate) fn send_to(
 /// subscriber that was not yet subscribed. Anyone publishing straight
 /// after was racing the registration, and a lost message parks a blocking
 /// `recv_message()` forever. Three independent tests raced exactly that
-/// way in one day — see
-/// `bench/FINDING-2026-07-19-subscribe-returns-before-live.md` — including
-/// a CI job that hung for 3h46m.
+/// way in one day, including a CI job that hung for 3h46m.
 ///
 /// Everything read while waiting is QUEUED, not consumed: a message for an
 /// already-subscribed channel can legitimately arrive before the ack for a
