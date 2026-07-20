@@ -44,9 +44,82 @@ fn persist_sidecar(dir: Option<&Path>, cat: &Catalog) {
 
 // ---------- catalog mutations (Local dispatch) ----------
 
-/// `IDX.CREATE <name> ON PREFIX <p> FIELD <f> TYPE <t> KIND <k>
-/// [MAXMEM b] [DIM d] [DISTANCE cosine|l2|ip] [M m] [EF ef]`.
-const CREATE_USAGE: &str = "ERR usage: IDX.CREATE name ON PREFIX p FIELD f TYPE i64|f64|str|vector KIND range|unique|text|ann [MAXMEM b] [DIM d] [DISTANCE c] [M m] [EF e]";
+/// `IDX.CREATE <name> ON PREFIX <p> FIELD <f> | FIELDS <f…> [WEIGHTS <w…>]
+/// TYPE <t> KIND <k> [MAXMEM b] [DIM d] [DISTANCE cosine|l2|ip] [M m] [EF ef]`.
+/// `FIELDS` is text-only; every other kind takes one `FIELD`.
+const CREATE_USAGE: &str = "ERR usage: IDX.CREATE name ON PREFIX p FIELD f | FIELDS f… [WEIGHTS w…] TYPE i64|f64|str|vector KIND range|unique|text|ann [MAXMEM b] [DIM d] [DISTANCE c] [M m] [EF e]";
+
+/// Parse the field clause and return the fields plus the argv index of
+/// the `TYPE` keyword that follows it.
+///
+/// `FIELD f` is one field at a fixed offset — byte-identical to before,
+/// because every existing index test depends on it. `FIELDS f…` scans
+/// names until `WEIGHTS` or `TYPE`, then optional matching weights.
+/// Only text serves several fields; the catalog refuses the rest, so
+/// this parses the shape and lets `create` rule on the kind.
+fn parse_fields<A: ArgvView + ?Sized>(
+    args: &A,
+    out: &mut Vec<u8>,
+) -> Result<(Vec<kevy_index::FieldSpec>, usize), ()> {
+    if args[5].eq_ignore_ascii_case(b"FIELD") {
+        return Ok((vec![kevy_index::FieldSpec::new(args[6].to_vec())], 7));
+    }
+    if !args[5].eq_ignore_ascii_case(b"FIELDS") {
+        encode_error(out, CREATE_USAGE);
+        return Err(());
+    }
+    let stop = |a: &[u8]| a.eq_ignore_ascii_case(b"WEIGHTS") || a.eq_ignore_ascii_case(b"TYPE");
+    let mut i = 6;
+    let mut names: Vec<Vec<u8>> = Vec::new();
+    while i < args.len() && !stop(&args[i]) {
+        names.push(args[i].to_vec());
+        i += 1;
+    }
+    if names.is_empty() {
+        encode_error(out, "ERR FIELDS needs at least one field name");
+        return Err(());
+    }
+    let mut weights = vec![1.0f32; names.len()];
+    if i < args.len() && args[i].eq_ignore_ascii_case(b"WEIGHTS") {
+        i = parse_weights(args, i + 1, &mut weights, out)?;
+    }
+    let fields = names
+        .into_iter()
+        .zip(weights)
+        .map(|(name, weight)| kevy_index::FieldSpec { name, weight })
+        .collect();
+    Ok((fields, i))
+}
+
+/// Fill `weights` from argv starting at `start`, stopping at `TYPE`.
+/// Returns the `TYPE` index. Count must match `weights.len()` exactly.
+fn parse_weights<A: ArgvView + ?Sized>(
+    args: &A,
+    start: usize,
+    weights: &mut [f32],
+    out: &mut Vec<u8>,
+) -> Result<usize, ()> {
+    let mut i = start;
+    let mut wi = 0;
+    while i < args.len() && !args[i].eq_ignore_ascii_case(b"TYPE") {
+        let Some(w) = std::str::from_utf8(&args[i]).ok().and_then(|s| s.parse::<f32>().ok()) else {
+            encode_error(out, "ERR WEIGHTS must be numbers");
+            return Err(());
+        };
+        if wi >= weights.len() {
+            encode_error(out, "ERR more WEIGHTS than FIELDS");
+            return Err(());
+        }
+        weights[wi] = w;
+        wi += 1;
+        i += 1;
+    }
+    if wi != weights.len() {
+        encode_error(out, "ERR WEIGHTS count must match FIELDS count");
+        return Err(());
+    }
+    Ok(i)
+}
 
 pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(
     ctx: &Ctx<'_>,
@@ -54,19 +127,27 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(
     out: &mut Vec<u8>,
 ) {
     if args.len() < 11
-        || args.len() % 2 != 1
         || !args[2].eq_ignore_ascii_case(b"ON")
         || !args[3].eq_ignore_ascii_case(b"PREFIX")
-        || !args[5].eq_ignore_ascii_case(b"FIELD")
-        || !args[7].eq_ignore_ascii_case(b"TYPE")
-        || !args[9].eq_ignore_ascii_case(b"KIND")
     {
         return encode_error(out, CREATE_USAGE);
     }
-    let Ok(opts) = parse_create_opts(args, out) else {
+    let Ok((fields, type_pos)) = parse_fields(args, out) else {
         return;
     };
-    let Ok((ty, kind)) = parse_type_kind(args, out) else {
+    // After the field clause: TYPE t KIND k [opts…]. `type_pos` names
+    // the TYPE keyword; opts start four past it and come in pairs.
+    if args.len() < type_pos + 4
+        || !args[type_pos].eq_ignore_ascii_case(b"TYPE")
+        || !args[type_pos + 2].eq_ignore_ascii_case(b"KIND")
+        || !(args.len() - (type_pos + 4)).is_multiple_of(2)
+    {
+        return encode_error(out, CREATE_USAGE);
+    }
+    let Ok(opts) = parse_create_opts(args, type_pos + 4, out) else {
+        return;
+    };
+    let Ok((ty, kind)) = parse_type_kind(args, type_pos, out) else {
         return;
     };
     let Ok(ann) = validate_kind_combo(kind, ty, &opts, out) else {
@@ -75,13 +156,18 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(
     let spec = IndexSpec {
         name: args[1].to_vec(),
         prefix: args[4].to_vec(),
-        fields: vec![kevy_index::FieldSpec::new(args[6].to_vec())],
+        fields,
         ty,
         kind,
         max_bytes: opts.max_bytes,
         ann,
         group_by: opts.group_by,
     };
+    install_new_index(ctx, spec, out);
+}
+
+/// Clone the catalog, add `spec`, and on success persist + install it.
+fn install_new_index(ctx: &Ctx<'_>, spec: IndexSpec, out: &mut Vec<u8>) {
     let mut cat = ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
     match cat.create(spec) {
         Ok(()) => {
@@ -97,13 +183,16 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(
 /// already written on `Err`.
 fn parse_type_kind<A: ArgvView + ?Sized>(
     args: &A,
+    type_pos: usize,
     out: &mut Vec<u8>,
 ) -> Result<(ValType, IndexKind), ()> {
-    let Some(ty) = ValType::parse(&args[8]) else {
+    // `type_pos` is the TYPE keyword; value at +1, KIND value at +3.
+    // Fixed at 7 for `FIELD f`, scanned for `FIELDS …`.
+    let Some(ty) = ValType::parse(&args[type_pos + 1]) else {
         encode_error(out, "ERR TYPE must be i64|f64|str|vector");
         return Err(());
     };
-    let Some(kind) = IndexKind::parse(&args[10]) else {
+    let Some(kind) = IndexKind::parse(&args[type_pos + 3]) else {
         encode_error(out, "ERR KIND must be range|unique|text|ann");
         return Err(());
     };
@@ -124,14 +213,29 @@ struct CreateOpts {
     group_by: Option<Vec<u8>>,
 }
 
-/// Parse the optional key/value pairs from argv idx 11 on.
+/// A parsed integer clamped to `[lo, hi]`, or an error already written.
+fn ranged(parsed: Option<u64>, lo: u64, hi: u64, msg: &str, out: &mut Vec<u8>) -> Result<u64, ()> {
+    match parsed {
+        Some(v) if (lo..=hi).contains(&v) => Ok(v),
+        _ => {
+            encode_error(out, msg);
+            Err(())
+        }
+    }
+}
+
+/// Parse the optional key/value pairs after `TYPE t KIND k`.
 /// `Err(())` = an error reply was already encoded into `out`.
-fn parse_create_opts<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) -> Result<CreateOpts, ()> {
+fn parse_create_opts<A: ArgvView + ?Sized>(
+    args: &A,
+    start: usize,
+    out: &mut Vec<u8>,
+) -> Result<CreateOpts, ()> {
     let mut max_bytes = 0u64;
     let (mut dim, mut m, mut ef) = (0u32, 16u16, 200u16);
     let mut distance = 0u8;
     let mut group_by: Option<Vec<u8>> = None;
-    let mut i = 11;
+    let mut i = start;
     while i + 1 < args.len() {
         let (opt, val) = (&args[i], &args[i + 1]);
         let parsed: Option<u64> = std::str::from_utf8(val).ok().and_then(|s| s.parse().ok());
@@ -142,23 +246,15 @@ fn parse_create_opts<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) -> Resul
             };
             max_bytes = v;
         } else if opt.eq_ignore_ascii_case(b"DIM") {
-            match parsed {
-                Some(v) if (1..=65_536).contains(&v) => dim = v as u32,
-                _ => { encode_error(out, "ERR DIM must be 1-65536"); return Err(()) },
-            }
+            dim = ranged(parsed, 1, 65_536, "ERR DIM must be 1-65536", out)? as u32;
         } else if opt.eq_ignore_ascii_case(b"M") {
-            match parsed {
-                Some(v) if (4..=64).contains(&v) => m = v as u16,
-                _ => { encode_error(out, "ERR M must be 4-64"); return Err(()) },
-            }
+            m = ranged(parsed, 4, 64, "ERR M must be 4-64", out)? as u16;
         } else if opt.eq_ignore_ascii_case(b"EF") {
-            match parsed {
-                Some(v) if (16..=1024).contains(&v) => ef = v as u16,
-                _ => { encode_error(out, "ERR EF must be 16-1024"); return Err(()) },
-            }
+            ef = ranged(parsed, 16, 1024, "ERR EF must be 16-1024", out)? as u16;
         } else if opt.eq_ignore_ascii_case(b"GROUPBY") {
             if val.is_empty() {
-                { encode_error(out, "ERR GROUPBY requires a field"); return Err(()) };
+                encode_error(out, "ERR GROUPBY requires a field");
+                return Err(());
             }
             group_by = Some(val.to_vec());
         } else if opt.eq_ignore_ascii_case(b"DISTANCE") {
@@ -167,7 +263,8 @@ fn parse_create_opts<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) -> Resul
                 None => { encode_error(out, "ERR DISTANCE must be cosine|l2|ip"); return Err(()) },
             }
         } else {
-            { encode_error(out, "ERR syntax error"); return Err(()) };
+            encode_error(out, "ERR syntax error");
+            return Err(());
         }
         i += 2;
     }

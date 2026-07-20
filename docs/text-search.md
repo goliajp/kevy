@@ -24,6 +24,8 @@ comparable. (Every other kind reads exactly one field, as in
 
 ```console
 kevy-cli -p 6004 IDX.CREATE posts ON PREFIX post: FIELD body TYPE str KIND text
+# several weighted fields into one corpus (KIND text only):
+kevy-cli -p 6004 IDX.CREATE posts ON PREFIX post: FIELDS title body WEIGHTS 5 1 TYPE str KIND text
 kevy-cli -p 6004 HSET post:1 title "intro" body "kevy is a pure-Rust key-value store"
 kevy-cli -p 6004 HSET post:2 title "search" body "dictionary-free CJK full-text search"
 kevy-cli -p 6004 IDX.QUERY posts MATCH "full-text rust" LIMIT 10
