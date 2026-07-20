@@ -344,8 +344,7 @@ fn zadd_flags_facade_pipeline_atomic_and_reopen() {
 }
 
 // ---- rollback on Err ------------------------------------------------------
-// Reported by a consumer (docs/DEFECT-REPORT-2026-07-20-ATOMIC-ERROR-PATH.md):
-// a closure returning Err left its writes live in memory while the queued AOF
+// Reported by a consumer: a closure returning Err left its writes live in memory while the queued AOF
 // frames were discarded, so a restarted process disagreed with the running
 // one. These pin the contract the cookbook's CHECK-constraint pattern rests
 // on: a rejected transaction changes nothing.
@@ -430,8 +429,7 @@ fn atomic_ok_still_commits() {
 
 // ---- collection reads inside a transaction --------------------------------
 // A consumer reshaped an entire keyspace from sets to hashes because a set
-// could be written inside a transaction but never read back inside one
-// (docs/REPORT-FROM-GOLIAJP-2026-07-20-EMBEDDED-AS-PRIMARY-STORE.md, F1/R2).
+// could be written inside a transaction but never read back inside one.
 
 #[test]
 fn atomic_can_enumerate_a_set_it_is_deleting_from() {
