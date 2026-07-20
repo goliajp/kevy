@@ -96,7 +96,7 @@ impl Store {
         let spec = IndexSpec {
             name: name.to_vec(),
             prefix: prefix.to_vec(),
-            field: field.to_vec(),
+            fields: vec![kevy_index::FieldSpec::new(field.to_vec())],
             ty,
             kind,
             max_bytes: 0,
@@ -144,7 +144,7 @@ impl Store {
         let spec = IndexSpec {
             name: name.to_vec(),
             prefix: prefix.to_vec(),
-            field: field.to_vec(),
+            fields: vec![kevy_index::FieldSpec::new(field.to_vec())],
             ty: ValType::Vector,
             kind: IndexKind::Ann,
             max_bytes: 0,
@@ -278,7 +278,7 @@ impl Store {
         let spec = IndexSpec {
             name: name.to_vec(),
             prefix: prefix.to_vec(),
-            field: field.to_vec(),
+            fields: vec![kevy_index::FieldSpec::new(field.to_vec())],
             ty,
             kind: IndexKind::Agg,
             max_bytes: 0,

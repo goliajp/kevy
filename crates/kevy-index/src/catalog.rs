@@ -2,7 +2,6 @@
 //! compiled prefix matcher the write-path hook consults.
 
 use crate::value::IndexValue;
-use std::fmt::Write as _;
 
 /// Declared scalar type of an index (`TYPE i64|f64|str`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,15 +104,43 @@ pub enum IndexState {
     FailedOverBudget,
 }
 
+/// One indexed attribute of a document.
+///
+/// `weight` scales this field's contribution to the BM25 score, so a hit
+/// in a title can outrank one in a body. Weighting per field is exactly
+/// what a per-field index cannot express: BM25 normalises by document
+/// length, so separate indexes normalise over separate corpora and their
+/// scores are not comparable. That is why multi-attribute is a struct
+/// change rather than something a caller can assemble from several
+/// single-field indexes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldSpec {
+    /// Hash field name.
+    pub name: Vec<u8>,
+    /// BM25 weight; 1.0 is neutral.
+    pub weight: f32,
+}
+
+impl FieldSpec {
+    /// A neutrally-weighted field.
+    pub fn new(name: impl Into<Vec<u8>>) -> FieldSpec {
+        FieldSpec { name: name.into(), weight: 1.0 }
+    }
+}
+
 /// One declared index.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct IndexSpec {
     /// Unique catalog name.
     pub name: Vec<u8>,
     /// Key-prefix domain (`ON PREFIX user:`).
     pub prefix: Vec<u8>,
-    /// Hash field the value comes from.
-    pub field: Vec<u8>,
+    /// Hash fields the value comes from, in declaration order.
+    ///
+    /// No single-field twin is kept alongside this: two sources of truth
+    /// for "which field" is the shape that drifts. Single-field indexes
+    /// are the one-element case, read through [`IndexSpec::field`].
+    pub fields: Vec<FieldSpec>,
     /// Declared scalar type.
     pub ty: ValType,
     /// Range or unique.
@@ -146,7 +173,36 @@ pub const MAX_INDEXES: usize = 64;
 /// swap; shards read their clone lock-free.
 #[derive(Debug, Clone, Default)]
 pub struct Catalog {
-    specs: Vec<(IndexSpec, IndexState)>,
+    pub(crate) specs: Vec<(IndexSpec, IndexState)>,
+}
+
+impl IndexSpec {
+    /// The primary field — the first declared one. Every kind except
+    /// text indexes exactly one attribute; text is the kind that reads
+    /// [`IndexSpec::fields`] in full.
+    pub fn field(&self) -> &[u8] {
+        self.fields.first().map_or(&[][..], |f| f.name.as_slice())
+    }
+
+    /// Declare a single-field index — the shape every kind but text uses.
+    pub fn single_field(
+        name: Vec<u8>,
+        prefix: Vec<u8>,
+        field: Vec<u8>,
+        ty: ValType,
+        kind: IndexKind,
+    ) -> IndexSpec {
+        IndexSpec {
+            name,
+            prefix,
+            fields: vec![FieldSpec::new(field)],
+            ty,
+            kind,
+            max_bytes: 0,
+            ann: None,
+            group_by: None,
+        }
+    }
 }
 
 impl Catalog {
@@ -220,124 +276,6 @@ impl Catalog {
     pub fn coerce(spec: &IndexSpec, raw: &[u8]) -> Option<IndexValue> {
         IndexValue::coerce(spec.ty, raw)
     }
-
-    /// Serialize to the sidecar text form (one line per index:
-    /// `name<TAB>prefix<TAB>field<TAB>ty<TAB>kind<TAB>max_bytes[<TAB>ann]`,
-    /// fields hex-escaped for tabs/newlines via `%XX`; the 7th column
-    /// is `dim,distance,m,ef` for ANN kinds).
-    pub fn to_sidecar(&self) -> String {
-        let mut out = String::from("kevy-index-catalog v1\n");
-        for (s, _) in &self.specs {
-            let _ = write!(
-                out,
-                "{}\t{}\t{}\t{}\t{}\t{}",
-                esc(&s.name),
-                esc(&s.prefix),
-                esc(&s.field),
-                s.ty.tag(),
-                s.kind.tag(),
-                s.max_bytes
-            );
-            // 7th column is kind-interpreted: ann params for Ann,
-            // escaped group field for Agg.
-            if let Some(a) = &s.ann {
-                let _ = write!(out, "\t{},{},{},{}", a.dim, a.distance, a.m, a.ef);
-            } else if let Some(g) = &s.group_by {
-                let _ = write!(out, "\t{}", esc(g));
-            }
-            out.push('\n');
-        }
-        out
-    }
-
-    /// Parse the sidecar text form; all indexes load as `Building`
-    /// (boot rebuild). `None` on malformed input.
-    pub fn from_sidecar(text: &str) -> Option<Catalog> {
-        let mut lines = text.lines();
-        if lines.next()? != "kevy-index-catalog v1" {
-            return None;
-        }
-        let mut c = Catalog::new();
-        for line in lines {
-            if line.is_empty() {
-                continue;
-            }
-            c.create(spec_from_line(line)?).ok()?;
-        }
-        Some(c)
-    }
-}
-
-/// Parse one sidecar line back into an [`IndexSpec`] — the inverse of
-/// one `to_sidecar` line. `None` on malformed input.
-fn spec_from_line(line: &str) -> Option<IndexSpec> {
-    let parts: Vec<&str> = line.split('\t').collect();
-    if !(parts.len() == 6 || parts.len() == 7) {
-        return None;
-    }
-    let kind = IndexKind::parse(parts[4].as_bytes())?;
-    let (ann, group_by) = if parts.len() == 7 {
-        match kind {
-            IndexKind::Ann => {
-                let nums: Vec<&str> = parts[6].split(',').collect();
-                if nums.len() != 4 {
-                    return None;
-                }
-                (
-                    Some(AnnSpec {
-                        dim: nums[0].parse().ok()?,
-                        distance: nums[1].parse().ok()?,
-                        m: nums[2].parse().ok()?,
-                        ef: nums[3].parse().ok()?,
-                    }),
-                    None,
-                )
-            }
-            IndexKind::Agg => (None, Some(unesc(parts[6])?)),
-            _ => return None,
-        }
-    } else {
-        (None, None)
-    };
-    Some(IndexSpec {
-        name: unesc(parts[0])?,
-        prefix: unesc(parts[1])?,
-        field: unesc(parts[2])?,
-        ty: ValType::parse(parts[3].as_bytes())?,
-        kind,
-        max_bytes: parts[5].parse().ok()?,
-        ann,
-        group_by,
-    })
-}
-
-fn esc(b: &[u8]) -> String {
-    let mut out = String::with_capacity(b.len());
-    for &c in b {
-        if c == b'\t' || c == b'\n' || c == b'%' || !(32..127).contains(&c) {
-            let _ = write!(out, "%{c:02X}");
-        } else {
-            out.push(c as char);
-        }
-    }
-    out
-}
-
-fn unesc(s: &str) -> Option<Vec<u8>> {
-    let mut out = Vec::with_capacity(s.len());
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' {
-            let hex = s.get(i + 1..i + 3)?;
-            out.push(u8::from_str_radix(hex, 16).ok()?);
-            i += 3;
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
-    }
-    Some(out)
 }
 
 #[cfg(test)]
@@ -348,7 +286,7 @@ mod tests {
         IndexSpec {
             name: name.into(),
             prefix: prefix.into(),
-            field: b"age".to_vec(),
+            fields: vec![FieldSpec::new(b"age".to_vec())],
             ty: ValType::I64,
             kind: IndexKind::Range,
             ann: None,
@@ -377,14 +315,14 @@ mod tests {
     fn sidecar_roundtrip_with_escapes() {
         let mut c = Catalog::new();
         let mut s = spec("weird", "pre\tfix:");
-        s.field = b"f%\n".to_vec();
+        s.fields = vec![FieldSpec::new(b"f%\n".to_vec())];
         s.max_bytes = 1024;
         c.create(s).unwrap();
         let text = c.to_sidecar();
         let c2 = Catalog::from_sidecar(&text).unwrap();
         let (got, st) = c2.get(b"weird").unwrap();
         assert_eq!(got.prefix, b"pre\tfix:".to_vec());
-        assert_eq!(got.field, b"f%\n".to_vec());
+        assert_eq!(got.field(), b"f%\n");
         assert_eq!(got.max_bytes, 1024);
         assert_eq!(st, IndexState::Building, "boot loads as Building");
         assert!(Catalog::from_sidecar("bogus").is_none());

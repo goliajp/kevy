@@ -8,7 +8,7 @@ fn spec(name: &str) -> IndexSpec {
     IndexSpec {
         name: name.into(),
         prefix: b"user:".to_vec(),
-        field: b"age".to_vec(),
+        fields: vec![kevy_index::FieldSpec::new(b"age".to_vec())],
         ty: ValType::I64,
         kind: IndexKind::Range,
         ann: None,
