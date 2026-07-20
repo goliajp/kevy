@@ -131,10 +131,17 @@ impl<C: Commands> Shard<C> {
         };
         let mut sink = Vec::new();
         self.commands.dispatch_into(&mut self.store, &undo, &mut sink);
-        // The key has data again, so anyone else parked on it should be
-        // told -- including waiters on this very shard.
+        // The key has data again, so anyone parked on it must be woken --
+        // BOTH a cross-shard waiter AND a blocking client on this very
+        // shard. `dispatch_into` writes straight to the store, bypassing
+        // the commit path that normally wakes them, so wake the same two
+        // registries a normal write does (`wake_key`). Waking only the
+        // cross-shard half left a local BLPOP on the restored key parked
+        // until timeout -- a nondeterministic hang that surfaced as a
+        // slow-runner test failure precisely because the victim shard is
+        // hash-dependent.
         let key = undo[1].to_vec();
-        self.target_wake_xshard(&key);
+        self.wake_key(&key);
     }
 }
 
