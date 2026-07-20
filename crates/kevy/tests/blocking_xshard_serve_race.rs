@@ -153,30 +153,41 @@ impl Drop for Server {
 
 #[test]
 fn a_disconnect_during_the_serve_does_not_lose_the_element() {
-    // SAFETY: set before any server thread starts, and this binary runs
-    // only this test.
+    // An 800ms serve window: the disconnect lands well inside it (at
+    // ~250ms), so the origin marks the serve abandoned before the target
+    // pops at the window's end. The margin is large on purpose — the
+    // 300ms window this replaced was tight enough that a slow CI runner
+    // pushed the pop past the verify and the test read a race instead of
+    // the property. Timing that only load can break tests nothing.
+    //
+    // SAFETY: set before any server thread starts; this binary runs only
+    // this test.
     unsafe {
-        std::env::set_var("KEVY_TEST_XSHARD_SERVE_DELAY_MS", "300");
+        std::env::set_var("KEVY_TEST_XSHARD_SERVE_DELAY_MS", "800");
     }
     let srv = Server::start();
 
     let mut consumer = srv.connect();
     consumer.write_all(&req(&[b"BLPOP", b"escrowed", b"5"])).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(100)); // park
+    std::thread::sleep(std::time::Duration::from_millis(200)); // park
 
-    // The push makes the key ready, so the origin asks the target to
-    // serve. The target now sits in the widened window.
+    // The push makes the key ready; the origin asks the target to serve
+    // and the target sits in the 800ms window.
     let mut producer = srv.connect();
     producer.write_all(&req(&[b"RPUSH", b"escrowed", b"kept"])).unwrap();
     assert_eq!(read_reply(&mut producer), b":1\r\n");
 
-    // Disconnect while the serve is in flight: the pop has happened (or
-    // is about to) and its reply can no longer be delivered.
-    std::thread::sleep(std::time::Duration::from_millis(100));
+    // Disconnect while the serve is in flight — 250ms into the 800ms
+    // window, so the pop has not happened yet and the reply, once the
+    // pop does happen, has nowhere to go.
+    std::thread::sleep(std::time::Duration::from_millis(250));
     drop(consumer);
 
-    // The element must come back rather than vanish.
-    std::thread::sleep(std::time::Duration::from_millis(600));
+    // Wait past the pop (window end ~800ms) plus the abort round-trip and
+    // restore, generously, so the verify below reads the settled state
+    // rather than the pop/restore gap. The element must be back — exactly
+    // once, neither lost (the defect) nor duplicated.
+    std::thread::sleep(std::time::Duration::from_millis(2500));
     let mut c2 = srv.connect();
     c2.write_all(&req(&[b"BLPOP", b"escrowed", b"5"])).unwrap();
     assert_eq!(
@@ -184,6 +195,10 @@ fn a_disconnect_during_the_serve_does_not_lose_the_element() {
         req_pop_reply("escrowed", "kept"),
         "the element was popped for a client that vanished and never came back",
     );
+    // And only one: a second BLPOP finds the list empty.
+    let mut c3 = srv.connect();
+    c3.write_all(&req(&[b"BLPOP", b"escrowed", b"1"])).unwrap();
+    assert_eq!(read_reply(&mut c3), b"*-1\r\n", "exactly one element survived");
 }
 
 /// `*2\r\n$<klen>\r\n<key>\r\n$<vlen>\r\n<val>\r\n` — BLPOP's wake reply.
