@@ -37,7 +37,7 @@ use crate::blocked::{BlockKind, encode_block_timeout, unix_now_ms};
 use crate::message::Inbound;
 use crate::shard::Shard;
 use kevy_resp::{Argv, ArgvView, RespVersion};
-use std::collections::HashMap;
+pub(crate) use crate::block_xshard_registry::XShardWaiters;
 
 /// Origin-side record for one cross-shard-blocked conn. Lives on the conn's
 /// own shard, the sole arbiter of which ready key serves it.
@@ -50,6 +50,10 @@ pub(crate) struct OriginBlock {
     /// AND the timeout sweep, so a serve that pops data is never discarded by
     /// a timeout firing in the same window.
     pub(crate) serving: bool,
+    /// The client went away while `serving` was set. The record outlives
+    /// the connection on purpose: the serve already popped, and dropping
+    /// the record here is what used to lose the element.
+    pub(crate) abandoned: bool,
     pub(crate) keys: Vec<OriginKey>,
 }
 
@@ -64,83 +68,15 @@ pub(crate) struct OriginKey {
 /// One target-side waiter: a (possibly remote) conn watching a key this
 /// shard owns. Separate from [`crate::blocked::BlockedClients`] so the hot
 /// single-key-local path pays nothing for this feature.
-struct XWaiter {
-    origin: usize,
-    conn: u64,
-    kind: BlockKind,
+pub(crate) struct XWaiter {
+    pub(crate) origin: usize,
+    pub(crate) conn: u64,
+    pub(crate) kind: BlockKind,
     /// `$`-frozen replay command for this key (snapshotted at arm time).
-    serve_argv: Argv,
-    proto: RespVersion,
+    pub(crate) serve_argv: Argv,
+    pub(crate) proto: RespVersion,
 }
 
-/// Target-side registry of cross-shard waiters, keyed by the watched key
-/// (multiple origins may block on the same key) with an `(origin, conn)`
-/// secondary index for O(1) cancel.
-#[derive(Default)]
-pub(crate) struct XShardWaiters {
-    by_key: HashMap<Vec<u8>, Vec<XWaiter>>,
-    by_conn: HashMap<(usize, u64), Vec<Vec<u8>>>,
-}
-
-impl XShardWaiters {
-    #[inline]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.by_key.is_empty()
-    }
-
-    #[inline]
-    pub(crate) fn is_watched(&self, key: &[u8]) -> bool {
-        self.by_key.contains_key(key)
-    }
-
-    /// Register (or refresh, on a re-arm) a waiter for `(origin, conn)` on
-    /// `key`. Idempotent: a re-arm replaces the existing entry's frozen
-    /// `serve_argv` rather than appending a duplicate.
-    fn arm(&mut self, key: &[u8], w: XWaiter) {
-        let id = (w.origin, w.conn);
-        let q = self.by_key.entry(key.to_vec()).or_default();
-        if let Some(slot) = q.iter_mut().find(|e| (e.origin, e.conn) == id) {
-            slot.serve_argv = w.serve_argv;
-            slot.proto = w.proto;
-            slot.kind = w.kind;
-        } else {
-            q.push(w);
-            self.by_conn.entry(id).or_default().push(key.to_vec());
-        }
-    }
-
-    /// Every `(origin, conn)` watching `key`, in registration (FIFO) order.
-    fn waiters_on(&self, key: &[u8]) -> Vec<(usize, u64)> {
-        self.by_key
-            .get(key)
-            .map(|q| q.iter().map(|w| (w.origin, w.conn)).collect())
-            .unwrap_or_default()
-    }
-
-    /// The frozen replay command for `(origin, conn)` on `key`, if armed.
-    fn serve_argv(&self, key: &[u8], origin: usize, conn: u64) -> Option<(Argv, RespVersion)> {
-        self.by_key.get(key).and_then(|q| {
-            q.iter()
-                .find(|w| w.origin == origin && w.conn == conn)
-                .map(|w| (w.serve_argv.clone(), w.proto))
-        })
-    }
-
-    /// Drop every waiter for `(origin, conn)` across all its keys.
-    fn drop_for(&mut self, origin: usize, conn: u64) {
-        let Some(keys) = self.by_conn.remove(&(origin, conn)) else {
-            return;
-        };
-        for key in keys {
-            if let Some(q) = self.by_key.get_mut(&key) {
-                q.retain(|w| !(w.origin == origin && w.conn == conn));
-                if q.is_empty() {
-                    self.by_key.remove(&key);
-                }
-            }
-        }
-    }
-}
 
 impl<C: Commands> Shard<C> {
     // ───────────────────────── origin side ─────────────────────────
@@ -175,7 +111,7 @@ impl<C: Commands> Shard<C> {
             .collect();
         self.origin_blocks.insert(
             conn_id,
-            OriginBlock { kind, deadline_ms, proto, serving: false, keys },
+            OriginBlock { kind, deadline_ms, proto, serving: false, abandoned: false, keys },
         );
         self.arm_and_maybe_serve(conn_id, kind, proto, arms);
     }
@@ -288,16 +224,66 @@ impl<C: Commands> Shard<C> {
 
     /// origin: the serve result is back. Non-empty → deliver + unpark + cancel
     /// the rest. Empty (raced) → re-arm every key and keep waiting.
-    pub(crate) fn origin_on_serve_resp(&mut self, conn: u64, _key: Vec<u8>, reply: Vec<u8>) {
+    pub(crate) fn origin_on_serve_resp(&mut self, conn: u64, key: Vec<u8>, reply: Vec<u8>) {
         let Some(ob) = self.origin_blocks.get_mut(&conn) else {
             return; // conn timed out / disconnected during the serve
         };
         if reply.is_empty() {
             ob.serving = false;
+            if ob.abandoned {
+                // Nothing was popped, so there is nothing to put back --
+                // just finish the teardown the disconnect deferred.
+                if let Some(ob) = self.origin_blocks.remove(&conn) {
+                    self.broadcast_cancel(conn, &ob.keys);
+                }
+                return;
+            }
             self.rearm_all(conn);
             return;
         }
+        if ob.abandoned {
+            // The element is real and its client is gone. Tell the shard
+            // that popped it to put it back; it has been holding the undo
+            // since before the pop.
+            self.abort_serve(conn, &key);
+            return;
+        }
         self.deliver_block(conn, reply);
+        self.ack_serve(conn, &key);
+    }
+
+    /// origin: the serve reached a live client — let the target release
+    /// the undo it captured before popping.
+    fn ack_serve(&mut self, conn: u64, key: &[u8]) {
+        let Some(shard) = self.serve_shard_of(conn, key) else {
+            return;
+        };
+        if shard == self.id {
+            self.target_release_escrow(self.id, conn);
+        } else {
+            self.send_to(shard, Inbound::BlockServeAck { origin: self.id, conn });
+        }
+    }
+
+    /// origin: the serve could not be delivered — have the target apply
+    /// the undo, then finish the teardown the disconnect deferred.
+    fn abort_serve(&mut self, conn: u64, key: &[u8]) {
+        if let Some(shard) = self.serve_shard_of(conn, key) {
+            if shard == self.id {
+                self.target_apply_escrow(self.id, conn);
+            } else {
+                self.send_to(shard, Inbound::BlockServeAbort { origin: self.id, conn });
+            }
+        }
+        if let Some(ob) = self.origin_blocks.remove(&conn) {
+            self.broadcast_cancel(conn, &ob.keys);
+        }
+    }
+
+    /// Which shard served `key` for this conn.
+    fn serve_shard_of(&self, conn: u64, key: &[u8]) -> Option<usize> {
+        let ob = self.origin_blocks.get(&conn)?;
+        ob.keys.iter().find(|k| k.key == key).map(|k| k.shard)
     }
 
     /// Write `reply` to the parked conn, unpark it, remove the origin record,
@@ -378,100 +364,22 @@ impl<C: Commands> Shard<C> {
     /// Disconnect cleanup: cancel a cross-shard-blocked conn's target
     /// registrations. Called from `close_conn` (origin side).
     pub(crate) fn cancel_xshard_on_close(&mut self, conn: u64) {
+        // A serve in flight has already popped on the target. Tearing the
+        // record down here is what used to drop the reply on the floor and
+        // lose the element -- so mark it and let `origin_on_serve_resp`
+        // resolve it, exactly as the timeout sweep already does.
+        if let Some(ob) = self.origin_blocks.get_mut(&conn)
+            && ob.serving
+        {
+            ob.abandoned = true;
+            return;
+        }
         if let Some(ob) = self.origin_blocks.remove(&conn) {
             self.broadcast_cancel(conn, &ob.keys);
         }
     }
 
-    // ───────────────────────── target side ─────────────────────────
 
-    /// target (remote-arm handler): register the waiter, then signal
-    /// readiness if the key already has data. The origin-local arm path
-    /// uses [`Self::target_register`] directly so it can defer the signal
-    /// past the whole arm loop (see `park_blocked_xshard`).
-    pub(crate) fn target_arm(
-        &mut self,
-        origin: usize,
-        conn: u64,
-        key: Vec<u8>,
-        kind: BlockKind,
-        serve_argv: Argv,
-        proto: RespVersion,
-    ) {
-        if self.target_register(origin, conn, &key, kind, serve_argv, proto) {
-            self.signal_ready(origin, conn, &key);
-        }
-    }
-
-    /// target: register (or refresh, on re-arm) a waiter for `(origin,
-    /// conn)` on `key`, freezing any `$` in `serve_argv` against this
-    /// shard's live store. Returns whether the key already has data — the
-    /// caller decides when to signal readiness.
-    fn target_register(
-        &mut self,
-        origin: usize,
-        conn: u64,
-        key: &[u8],
-        kind: BlockKind,
-        serve_argv: Argv,
-        proto: RespVersion,
-    ) -> bool {
-        let frozen = self
-            .commands
-            .resolve_block_argv(&mut self.store, &serve_argv, kind);
-        let ready = self.commands.block_ready(&mut self.store, &frozen, kind);
-        self.xwaiters.arm(
-            key,
-            XWaiter {
-                origin,
-                conn,
-                kind,
-                serve_argv: frozen,
-                proto,
-            },
-        );
-        ready
-    }
-
-    /// target: a write landed on `key` — signal every cross-shard waiter on
-    /// it (each origin arbitrates). No pop here. Gated by the caller on
-    /// `xwaiters.is_watched(key)`.
-    pub(crate) fn target_wake_xshard(&mut self, key: &[u8]) {
-        for (origin, conn) in self.xwaiters.waiters_on(key) {
-            self.signal_ready(origin, conn, key);
-        }
-    }
-
-    /// target → origin readiness signal (inline when origin is us).
-    fn signal_ready(&mut self, origin: usize, conn: u64, key: &[u8]) {
-        if origin == self.id {
-            self.origin_on_ready(conn, key);
-        } else {
-            self.send_to(origin, Inbound::BlockReady { conn, key: key.to_vec() });
-        }
-    }
-
-    /// target: serve `(origin, conn)`'s waiter on `key` — replay its frozen
-    /// command (popping / consuming) and return the reply bytes. Empty =
-    /// raced (key drained between ready and serve) → origin re-arms.
-    pub(crate) fn target_serve(&mut self, origin: usize, conn: u64, key: &[u8]) -> Vec<u8> {
-        let Some((argv, proto)) = self.xwaiters.serve_argv(key, origin, conn) else {
-            return Vec::new();
-        };
-        let mut reply = Vec::new();
-        match proto {
-            RespVersion::V2 => self.commands.dispatch_into(&mut self.store, &argv, &mut reply),
-            RespVersion::V3 => self
-                .commands
-                .dispatch_into_resp3(&mut self.store, &argv, &mut reply),
-        }
-        reply
-    }
-
-    /// target: drop all of `(origin, conn)`'s waiters (BlockCancel handler).
-    pub(crate) fn target_cancel(&mut self, origin: usize, conn: u64) {
-        self.xwaiters.drop_for(origin, conn);
-    }
 }
 
 /// Build the per-key `(key, serve_argv)` list for a cross-shard park from

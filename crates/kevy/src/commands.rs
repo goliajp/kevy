@@ -415,6 +415,15 @@ impl Commands for KevyCommands {
         cmd_block_serve::block_serve_argv(args, kind, key)
     }
 
+    fn block_restore_argv(
+        &self,
+        store: &mut Store,
+        kind: BlockKind,
+        key: &[u8],
+    ) -> Option<Argv> {
+        cmd_block_serve::block_restore_argv(store, kind, key)
+    }
+
     fn block_ready<A: ArgvView + ?Sized>(
         &self,
         store: &mut Store,

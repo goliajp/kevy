@@ -62,6 +62,61 @@ fn pop_serve(verb: &[u8], key: &[u8]) -> Argv {
     a
 }
 
+/// The command that undoes what replaying `serve_argv` is about to
+/// consume, read from `store` **before** the serve runs.
+///
+/// A cross-shard serve pops on the target and ships the reply to the
+/// origin; if the origin's client disconnected in that window, the
+/// element would be lost. The target captures this undo first and holds
+/// it until the origin confirms delivery. See
+/// `kevy_rt::block_xshard` for the protocol.
+///
+/// Built from typed reads rather than by parsing the reply back apart.
+/// A reply's shape depends on the kind *and* on whether the waiter
+/// negotiated RESP2 or RESP3, so a parser would have to be right about
+/// every combination forever; `LINDEX` means the same thing in both.
+/// The peek runs on the owning shard immediately before the pop, with
+/// nothing interleaved, so what it reads is what the pop takes.
+pub(crate) fn block_restore_argv(
+    store: &mut Store,
+    kind: BlockKind,
+    key: &[u8],
+) -> Option<Argv> {
+    match kind {
+        // BLPOP takes the head, so putting it back is an LPUSH.
+        BlockKind::Blpop => push_restore(store, b"LPUSH", key, 0),
+        // BRPOP takes the tail — RPUSH, and index -1.
+        BlockKind::Brpop => push_restore(store, b"RPUSH", key, -1),
+        BlockKind::Bzpopmin => {
+            let (member, score) = store.zrange(key, 0, 0).ok()?.into_iter().next()?;
+            let mut a = Argv::default();
+            a.push(b"ZADD");
+            a.push(key);
+            a.push(&crate::cmd::fmt_score(score));
+            a.push(&member);
+            Some(a)
+        }
+        // Cross-shard BRPOPLPUSH does not come through this path at all
+        // — it is served by the list-move orchestrator
+        // (`serve_via_list_move`), which owns its own recovery.
+        BlockKind::Brpoplpush => None,
+        // XREAD is non-destructive and XREADGROUP moves entries into a
+        // PEL rather than consuming them. Nothing to put back.
+        BlockKind::XReadBlock | BlockKind::XReadGroupBlock => None,
+    }
+}
+
+/// `LPUSH`/`RPUSH key <elem at idx>` — None when the list is empty,
+/// which means the serve is about to race and produce no reply anyway.
+fn push_restore(store: &mut Store, verb: &[u8], key: &[u8], idx: i64) -> Option<Argv> {
+    let elem = store.lindex(key, idx).ok()??;
+    let mut a = Argv::default();
+    a.push(verb);
+    a.push(key);
+    a.push(&elem);
+    Some(a)
+}
+
 /// Options scanned out of an `XREAD` / `XREADGROUP` option preamble.
 #[derive(Default)]
 struct StreamOpts {
@@ -209,4 +264,76 @@ fn xreadgroup_ready<A: ArgvView + ?Sized>(store: &mut Store, serve_argv: &A) -> 
         i += 1;
     }
     false
+}
+
+#[cfg(test)]
+mod restore_tests {
+    use super::*;
+
+    fn argv_strings(a: &Argv) -> Vec<Vec<u8>> {
+        (0..a.len()).filter_map(|i| a.get(i).map(<[u8]>::to_vec)).collect()
+    }
+
+    #[test]
+    fn blpop_restores_the_head_with_lpush() {
+        let mut s = Store::default();
+        s.rpush(b"q", &[b"first" as &[u8], b"second"]).unwrap();
+        let undo = block_restore_argv(&mut s, BlockKind::Blpop, b"q").unwrap();
+        assert_eq!(argv_strings(&undo), vec![b"LPUSH".to_vec(), b"q".to_vec(), b"first".to_vec()]);
+    }
+
+    #[test]
+    fn brpop_restores_the_tail_with_rpush() {
+        let mut s = Store::default();
+        s.rpush(b"q", &[b"first" as &[u8], b"second"]).unwrap();
+        let undo = block_restore_argv(&mut s, BlockKind::Brpop, b"q").unwrap();
+        assert_eq!(argv_strings(&undo), vec![b"RPUSH".to_vec(), b"q".to_vec(), b"second".to_vec()]);
+    }
+
+    /// The undo has to name the member the pop will actually take, not
+    /// just any member — BZPOPMIN takes the lowest score.
+    #[test]
+    fn bzpopmin_restores_the_minimum_with_its_score() {
+        let mut s = Store::default();
+        s.zadd(b"z", &[(2.0, b"high" as &[u8]), (1.0, b"low")]).unwrap();
+        let undo = block_restore_argv(&mut s, BlockKind::Bzpopmin, b"z").unwrap();
+        assert_eq!(
+            argv_strings(&undo),
+            vec![b"ZADD".to_vec(), b"z".to_vec(), b"1".to_vec(), b"low".to_vec()]
+        );
+    }
+
+    /// Peeking must not consume. If it did, the undo would be captured
+    /// by removing the very element it exists to protect.
+    #[test]
+    fn capturing_the_undo_does_not_mutate() {
+        let mut s = Store::default();
+        s.rpush(b"q", &[b"a" as &[u8], b"b"]).unwrap();
+        s.zadd(b"z", &[(1.0, b"m" as &[u8])]).unwrap();
+        block_restore_argv(&mut s, BlockKind::Blpop, b"q").unwrap();
+        block_restore_argv(&mut s, BlockKind::Brpop, b"q").unwrap();
+        block_restore_argv(&mut s, BlockKind::Bzpopmin, b"z").unwrap();
+        assert_eq!(s.llen(b"q").unwrap(), 2);
+        assert_eq!(s.zcard(b"z").unwrap(), 1);
+    }
+
+    #[test]
+    fn an_empty_key_has_nothing_to_restore() {
+        let mut s = Store::default();
+        assert!(block_restore_argv(&mut s, BlockKind::Blpop, b"missing").is_none());
+        assert!(block_restore_argv(&mut s, BlockKind::Bzpopmin, b"missing").is_none());
+    }
+
+    /// XREAD is non-destructive and XREADGROUP moves entries to a PEL
+    /// rather than consuming them; BRPOPLPUSH is served by the list-move
+    /// orchestrator and recovers itself. None of them have an undo, and
+    /// inventing one would put an element back that was never taken.
+    #[test]
+    fn kinds_that_consume_nothing_have_no_undo() {
+        let mut s = Store::default();
+        s.rpush(b"q", &[b"a" as &[u8]]).unwrap();
+        for kind in [BlockKind::XReadBlock, BlockKind::XReadGroupBlock, BlockKind::Brpoplpush] {
+            assert!(block_restore_argv(&mut s, kind, b"q").is_none(), "{kind:?}");
+        }
+    }
 }

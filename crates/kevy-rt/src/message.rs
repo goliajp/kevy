@@ -405,6 +405,13 @@ pub(crate) enum Inbound {
         key: Vec<u8>,
         reply: Vec<u8>,
     },
+    /// origin → target: the serve landed on a live client — release the
+    /// undo the target is holding for `(origin, conn)`.
+    BlockServeAck { origin: usize, conn: u64 },
+    /// origin → target: the serve could NOT be delivered (the client
+    /// disconnected while it was in flight) — apply the held undo, so
+    /// the popped element goes back instead of vanishing.
+    BlockServeAbort { origin: usize, conn: u64 },
     /// origin → target: drop every waiter for `(origin, conn)` — sent on
     /// successful serve, timeout, or disconnect.
     BlockCancel { origin: usize, conn: u64 },
