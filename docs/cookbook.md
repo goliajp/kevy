@@ -225,7 +225,11 @@ the moment a path matters, promote it to a field.
 **SQL equivalent:** `FOREIGN KEY … ON DELETE CASCADE` —
 [matrix: constraints and triggers](rds-workloads.md#constraints-and-triggers).
 
-Cascades are app patterns, never engine magic:
+Cascades are app patterns, never engine magic. If you are writing more
+than one of these, read [§21](#21-derived-state-as-a-pure-function-of-the-row)
+first — cascade, uniqueness and drift detection are one pattern, and
+this section is a special case of it.
+
 
 - Synchronous, small blast radius: delete inside one atomic block
   (`ctx.del(row)`, `ctx.srem(parent_link, id)`).
@@ -508,6 +512,102 @@ bounded on the node, the aggregate rows stay tiny, and the feed
 cursor survives reboots — the whole edge story with zero moving
 parts beyond kevy itself.
 
+## 21. Derived state as a pure function of the row
+
+**SQL equivalent:** the whole trigger layer at once — `ON DELETE
+CASCADE`, `UNIQUE` constraints, and the reconciliation job you write
+after you stop trusting them —
+[matrix: constraints and triggers](rds-workloads.md#constraints-and-triggers).
+
+This is the pattern the recipes above keep circling: §2's link keys,
+§5's invariants, §10's cascades and §12's audit rows are all the same
+idea applied four times. Stated once, it resolves cascades, uniqueness
+and drift detection together. It comes from a production migration that
+took a day to arrive at it, which is a day worth saving.
+
+**The idea:** write one pure function from a row to every key derived
+from it. Not a procedure that updates keys — a function that *returns*
+what should exist.
+
+```rust
+// Everything user:42 implies, computed from the row alone.
+fn derived(id: &[u8], row: &Row) -> Vec<Vec<u8>> {
+    vec![
+        key(b"email:", &row.email),          // uniqueness claim
+        key(b"dept:", &row.dept, b":users"), // membership
+    ]
+}
+```
+
+Every operation is then a diff, and each falls out rather than being
+designed:
+
+| Operation | What you do | What you get for free |
+|---|---|---|
+| **Insert** | add `derived(new)` | claims and memberships appear together |
+| **Update** | add `derived(new) - derived(old)`, remove `derived(old) - derived(new)` | a renamed email **releases its old claim** — the bug everyone writes by hand |
+| **Delete** | remove `derived(old)` | the cascade is not a separate code path |
+| **Verify** | recompute `derived` for every row, diff against what exists | a drift detector you did not have to design |
+
+The update row is the one that pays for the pattern. Hand-written
+cascade code almost always adds the new claim and forgets to release the
+old one, because release is the case nobody demonstrates in a ticket.
+
+```rust
+store.atomic_all_shards(|ctx| {
+    let old = read_row(ctx, id)?;
+    let (want, had) = (derived(id, &new), derived(id, &old));
+
+    for k in want.iter().filter(|k| !had.contains(k)) {
+        if ctx.exists(&[k]) > 0 { return Err(Taken); }  // uniqueness
+        ctx.set(k, id);
+    }
+    for k in had.iter().filter(|k| !want.contains(k)) {
+        ctx.del(&[k]);                                  // release
+    }
+    write_row(ctx, id, &new)
+})
+```
+
+Returning `Err` rolls the whole thing back (§5), so a rejected write
+leaves neither the row nor a half-applied claim set.
+
+**Claims or an index?** A uniqueness claim is a second source of truth
+that can drift from the rows; a [secondary index](secondary-index.md) is
+derived by construction and cannot. Inside `atomic_all_shards` you can
+query one directly:
+
+```rust
+if ctx.idx_count(b"email_idx", &want, &want)? > 0 { return Err(Taken); }
+```
+
+Two limits, both deliberate:
+
+- **Only on `atomic_all_shards`.** An index entry lives on the shard of
+  the key it indexes, so "does any row have this email" is a question
+  about every shard. Single-shard `atomic()` holds one lock and could
+  answer only for its own slice — a uniqueness check that consults 1/N
+  of the keyspace would report "unique" nearly always, so it is not
+  offered rather than offered with a footnote.
+- **Index reads do not see the transaction's own writes.** Maintenance
+  runs at commit. A closure inserting two rows must compare them to each
+  other itself.
+
+**Verification.** Because `derived` is a function, the checker is four
+lines and needs no separate specification:
+
+```rust
+for (id, row) in every_row(&store)? {
+    for k in derived(&id, &row) {
+        if store.get(&k)?.is_none() { report_missing(&id, &k); }
+    }
+}
+```
+
+Run it at boot, or on a schedule, or never once you trust the writes —
+but write it, because it is the only thing that can tell you the
+invariant you believe in is the invariant you have.
+
 ## Recipe index
 
 Recipe ↔ the SQL construct it replaces ↔ the
@@ -536,3 +636,4 @@ semantics and limits.
 | 18 | RAG hybrid retrieval | tsvector + pgvector, fused | [SELECT](rds-workloads.md#select) |
 | 19 | Sensor cache | upsert table + staleness cron | [operational deltas](rds-workloads.md#sizing-and-operational-deltas) |
 | 20 | Edge aggregation | `GROUP BY` per refresh + ETL uplink | [GROUP BY and aggregates](rds-workloads.md#group-by-and-aggregates) |
+| 21 | Derived state as a function of the row | the trigger layer entire: cascades, `UNIQUE`, reconciliation | [constraints and triggers](rds-workloads.md#constraints-and-triggers) |
