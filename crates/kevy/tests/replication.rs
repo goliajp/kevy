@@ -194,6 +194,13 @@ impl Server {
             .with_data_dir(dir_path)
             .with_aof(false)
             .with_replication(true, 1024 * 1024)
+            // Scales with `patience()` for the same reason the waits do.
+            // The default is 60s, the same order as an instrumented run of
+            // this suite -- so under covgate the replica's slot expired
+            // while the test was still waiting for it, and no amount of
+            // extra waiting could help: the thing being waited for had
+            // lost its backlog position.
+            .with_replication_reconnect_window(patience().as_millis() as u32)
             .with_replication_listener(replication_base);
             let _ = rt.run(stop_thread);
         });
@@ -1436,7 +1443,9 @@ fn spop_storm_keeps_replica_sets_identical() {
     // budget that load alone can exhaust reports a real bug that is not
     // there — this test did exactly that in CI while passing locally in
     // 0.13s.
-    for _ in 0..3000 {
+    let budget = patience();
+    let deadline = std::time::Instant::now() + budget;
+    while std::time::Instant::now() < deadline {
         send_resp(&mut reader, &[b"GET", b"spop-fence"]);
         if read_resp_bulks(&mut reader) == vec![b"done".to_vec()] {
             fenced = true;
@@ -1450,7 +1459,7 @@ fn spop_storm_keeps_replica_sets_identical() {
         send_resp(&mut reader, &[b"DBSIZE"]);
         let dbsize = read_line(&mut reader);
         panic!(
-            "replica never caught up to the post-storm fence within 60s              (replica DBSIZE = {})",
+            "replica never caught up to the post-storm fence within {budget:?} (replica DBSIZE = {})",
             String::from_utf8_lossy(&dbsize).trim_end(),
         );
     }
