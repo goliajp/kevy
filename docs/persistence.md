@@ -183,6 +183,20 @@ promotes them to v2.
 
 **Per-policy throughput vs data loss.** `Always` blocks each reply on `fsync`; it is the only policy that survives `kill -9` with zero command loss, and it cuts SET-heavy throughput roughly in half on typical NVMe. `EverySec` runs a background flush every second and loses up to that window on a crash — the default precisely because it matches the Redis trade and the lost window is usually tolerable. `No` lets the kernel decide; throughput is highest but a crash can lose anything still in pagecache, potentially many seconds.
 
+**What `AppendFsync` does and does not govern.** It sets the power-loss
+window for individual commands. It has never had anything to do with
+whether an `atomic` block is all-or-nothing — that is transaction
+markers in the log (see [crash-consistency](#crash-consistency-contract-v4)),
+and it holds under every fsync policy as of 4.0.
+
+This is worth saying plainly because the names invite the opposite
+reading. A consumer storing financial data selected `Always` on first
+contact, reasoning that acknowledged writes must not be lost, and got a
+setting that costs the most and — before 4.0 — bought nothing at all for
+the block atomicity they actually needed. Pick `Always` when you cannot
+lose a single acknowledged command; pick `EverySec` when a one-second
+window is tolerable. Neither choice affects transactions.
+
 **AOF replay cost vs snapshot load cost.** Without a snapshot, boot time grows linearly with the AOF byte count: a 4 GiB AOF replays in a few seconds on local NVMe, a 40 GiB one in a minute or more. A snapshot caps that — load is one streaming read plus a short tail of post-snapshot AOF — but costs a transient view freeze (O(keys), nanoseconds per key, because collection values are refcount-shared) plus a one-time copy of any collection first mutated while the snapshot is in flight. For write-heavy workloads, prefer leaning on auto-rewrite to keep the AOF bounded rather than running periodic `BGSAVE`s: rewrite gives you the same boot-time bound with no second file to manage.
 
 **Background-job concurrency.** Each shard runs at most one background save or rewrite at a time. A duplicate request that arrives mid-job is skipped with a log line, never queued.
