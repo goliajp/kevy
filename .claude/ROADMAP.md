@@ -322,6 +322,26 @@ client 生态 —— 该策略 t2 里 gate 化。
 - 附带产出二批(2026-07-19,同样实测驱动):**一个真可用性 bug 根治** —— replica 链路的 I/O 错误(EPIPE)被 `?` 抛出 reactor,**杀掉一个 replica 会杀掉 primary 的 shard**,连带关闭其上全部无关客户端连接;唯一痕迹是 `shard N exited with error: Broken pipe`。修后三处统一(pump 写路径 / epoll 事件路径 / uring tick 路径),**availgate 19 clamp、四 phase 全绿**(此前多个 release 红在 phase-4,被一条误导消息掩盖)。另两个连接级 bug:阻塞超时漏退休 seq(`8d8f20e9`,uringgate 780 轮 0 FAIL,与 reactor 无关)、chunked writev 短写重发已发送前缀(`17c7062f`)。clientgate 两处 pub/sub 竞态修复后 CI 转绿。
 - gate 质量债一并清:recv 遇 EOF 必须报错而非空转(14 脚本 26 处;原状态在共享盒烧一个核 4.5 小时)/ availgate seeder 退出码检查 + 失败自带证据 / killgate 进 CI(插值 `pkill -f` 必须有紧邻空值守卫)/ perfgate 拒 root + per-run scratch + **baseline 重录(原缺 ref_commit,从干净 clone 根本跑不了)**。**教训:gate 的失败消息质量 = 调查效率的上限。**
 
+### t5.6 — 消费者信任收口(goliajp embedded-as-primary-store 报告引子;排在 ship 之前)
+
+引子 = `docs/REPORT-FROM-GOLIAJP-2026-07-20-EMBEDDED-AS-PRIMARY-STORE.md`
+(对方正拿 embedded 当薪资系统主存储)。已修:D1 拒绝事务回滚 /
+D2 事务标记(全有全无,与事务大小无关)/ R2 事务内集合读。
+**顺序原则:先把「验证」变便宜且诚实,再交付别人在等的,再收自己归档的,最后回发布列车。**
+
+- [ ] **A1 pushgate** — 一条命令在本地跑 CI 上全部「不需要起服务」的门(clippy 用 CI 的确切命令 / locgate / commentgate / killgate / docs+site parity / doc configs / CJK / vendorgate),并**显式打印它不覆盖的 CI 步骤**(uringgate / availgate / covgate / repligate / mobilegate…)。
+      根因:本地跑的命令集 ≠ CI 的命令集,导致「一轮红一个门」;且我曾把 `--all-features` 当成 CI 命令,而 CI 并没有这个 flag。子集门必须自曝子集边界,否则就是又一个隐形悬崖。
+- [ ] **A2 fmt 归属拍板** — `cargo fmt --check` 当前**不在 CI**,且仓库已有漂移(至少 `crates/kevy/examples/bench_cmd.rs`)。二选一:进门 + 一次性全仓 fmt,或明确记「不做」并从 pushgate 排除。不留「像门但不是门」的中间态。
+- [ ] **A3 三轮同码全绿** — v4「验证完备自洽」的达标线;A1 落地后再计数。
+
+- [ ] **B1 交付消费者答复** — `docs/SUPPORT-LINE-3X-VS-4X-2026-07-20.md` 已写好但**尚未交出去**;对方正在为薪资数据选型,而 3.18 带 D1 缺陷且无修复版本。交付时同时问回那个只有他们能答的问题:256 KiB 悬崖形状的 3.18.x 对他们是否仍有用(取决于他们的事务大小)。
+- [ ] **B1' 拍板项(用户)** — 依 B1 的回答决定是否建 3.18.x。默认不建(理由见支持线文档:带隐形尺寸悬崖的保证比明说没有更糟)。
+- [ ] **B2 R4 启动期不变量对账钩子** — 报告里唯一「不做则每个消费者都要重造、且各造各的错」的条目;与既有 `PREFIX.DIGEST` 配对设计。
+- [ ] **B3 R6 菜谱** — 「一行数据、多个派生键」端到端写进 `docs/cookbook.md`(对方甚至提出愿意贡献)。
+- [ ] **B4 R3 事务内索引读** — 先判定是否与 R2 同形(同一个 op-table 缺口),同形则一并补齐,不同形则单列。
+
+- [ ] **C1 跨 shard block-serve 丢元素** — 已归档未修;需要一轮协议设计(BlockServeReq/Resp 的所有权移交),修完进 gate。这是当前唯一「已知会丢数据且没修」的缺陷,不允许带着它 ship。
+
 ### t5 — 总线收尾(渠道除外)
 - [ ] lx64 post-fix arena 复测(悬案)→ README 基准表解冻
 - [ ] CHANGELOG 4.0.0 补总线各 train;五轴终审(ship 挪到 t6 渠道后)
