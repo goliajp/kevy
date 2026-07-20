@@ -342,3 +342,88 @@ fn zadd_flags_facade_pipeline_atomic_and_reopen() {
     drop(s2);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---- rollback on Err ------------------------------------------------------
+// Reported by a consumer (docs/DEFECT-REPORT-2026-07-20-ATOMIC-ERROR-PATH.md):
+// a closure returning Err left its writes live in memory while the queued AOF
+// frames were discarded, so a restarted process disagreed with the running
+// one. These pin the contract the cookbook's CHECK-constraint pattern rests
+// on: a rejected transaction changes nothing.
+
+#[test]
+fn atomic_err_rolls_back_an_overwrite() {
+    let s = s();
+    s.set(b"acct", b"100").unwrap();
+    let out = s.atomic(|tx| {
+        tx.set(b"acct", b"999");
+        Err::<(), _>(crate::KevyError::Io(std::io::Error::other("invariant violated")))
+    });
+    assert!(out.is_err());
+    assert_eq!(s.get(b"acct").unwrap().as_deref(), Some(&b"100"[..]));
+}
+
+#[test]
+fn atomic_err_removes_a_key_the_closure_created() {
+    let s = s();
+    let out = s.atomic(|tx| {
+        tx.set(b"fresh", b"v");
+        Err::<(), _>(crate::KevyError::Io(std::io::Error::other("nope")))
+    });
+    assert!(out.is_err());
+    assert_eq!(s.get(b"fresh").unwrap(), None, "a key created inside a rejected txn must not survive");
+}
+
+#[test]
+fn atomic_err_rolls_back_every_touched_type() {
+    let s = s();
+    s.set(b"str", b"s0").unwrap();
+    s.hset(b"h", &[(&b"f"[..], &b"h0"[..])]).unwrap();
+    s.sadd(b"set", &[&b"m0"[..]]).unwrap();
+    s.rpush(b"list", &[&b"l0"[..]]).unwrap();
+    s.zadd(b"z", &[(1.0, &b"z0"[..])]).unwrap();
+
+    let out = s.atomic(|tx| {
+        tx.set(b"str", b"s1");
+        tx.hset(b"h", &[(&b"f"[..], &b"h1"[..])])?;
+        tx.sadd(b"set", &[&b"m1"[..]])?;
+        tx.rpush(b"list", &[&b"l1"[..]])?;
+        tx.zadd(b"z", &[(2.0, &b"z1"[..])])?;
+        tx.del(&[&b"str"[..]]);
+        Err::<(), _>(crate::KevyError::Io(std::io::Error::other("late reject")))
+    });
+    assert!(out.is_err());
+    assert_eq!(s.get(b"str").unwrap().as_deref(), Some(&b"s0"[..]));
+    assert_eq!(s.hget(b"h", b"f").unwrap().as_deref(), Some(&b"h0"[..]));
+    assert_eq!(s.scard(b"set").unwrap(), 1);
+    assert_eq!(s.llen(b"list").unwrap(), 1);
+    assert_eq!(s.zcard(b"z").unwrap(), 1);
+}
+
+#[test]
+fn atomic_err_after_repeated_writes_restores_the_earliest_state() {
+    // A key touched several times must land on the state it had BEFORE the
+    // transaction, not on an intermediate one.
+    let s = s();
+    s.set(b"k", b"v0").unwrap();
+    let out = s.atomic(|tx| {
+        tx.set(b"k", b"v1");
+        tx.set(b"k", b"v2");
+        tx.set(b"k", b"v3");
+        Err::<(), _>(crate::KevyError::Io(std::io::Error::other("reject")))
+    });
+    assert!(out.is_err());
+    assert_eq!(s.get(b"k").unwrap().as_deref(), Some(&b"v0"[..]));
+}
+
+#[test]
+fn atomic_ok_still_commits() {
+    // The rollback path must not cost the happy path anything.
+    let s = s();
+    s.set(b"k", b"v0").unwrap();
+    s.atomic(|tx| {
+        tx.set(b"k", b"v1");
+        Ok::<(), crate::KevyError>(())
+    })
+    .unwrap();
+    assert_eq!(s.get(b"k").unwrap().as_deref(), Some(&b"v1"[..]));
+}

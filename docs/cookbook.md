@@ -116,6 +116,14 @@ is **reads inside the atomic block**: the app evaluates the
 invariant, the engine guarantees the decision and the write commit
 together.
 
+Concretely: returning `Err` from the closure rolls back every write it
+made — in memory and in the AOF — so a rejected transaction leaves no
+trace, and you do not have to arrange your closure so that validation
+precedes every write. (That guarantee is real as of 4.0; earlier
+versions left a rejected closure's writes live in memory while
+discarding their AOF frames, so a restart disagreed with the running
+process.)
+
 ```rust
 // embedded — debit that must not overdraw, plus an audit row:
 store.atomic(b"acct:7", |ctx| {

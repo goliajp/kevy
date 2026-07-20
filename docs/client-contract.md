@@ -432,13 +432,36 @@ rejected** (`Unsupported` — no other producer; use a named bus).
 | Method | Params | Returns | Notes |
 |---|---|---|---|
 | `Subscriber.connect` | `url` | `Subscriber` | open, subscribe nothing yet |
-| `Subscriber.connect_channels` | `url, channels: list` (≥1) | `Subscriber` | connect + subscribe; empty → `InvalidInput` |
-| `subscribe` | `channels: list` (≥1) | `()` | |
-| `psubscribe` | `patterns: list` (≥1) | `()` | Redis glob (`*`,`?`,`[…]`) |
+| `Subscriber.connect_channels` | `url, channels: list` (≥1) | `Subscriber` | connect + subscribe; empty → `InvalidInput`; **subscribed when it returns** |
+| `subscribe` | `channels: list` (≥1) | `()` | **returns once every channel is acked** — see below |
+| `psubscribe` | `patterns: list` (≥1) | `()` | Redis glob (`*`,`?`,`[…]`); same ack rule as `subscribe` |
 | `unsubscribe` | `channels: list` (empty = all) | `()` | |
 | `punsubscribe` | `patterns: list` (empty = all) | `()` | |
 | `recv` | — | `PubsubEvent` | block for next frame (acks + deliveries); close → `Closed` |
 | `recv_message` | — | `(channel: bytes, payload: bytes)` | skip ack frames, return next `Message`/`Pmessage` (pattern discarded) |
+
+**`subscribe` / `psubscribe` are subscribed-on-return.** They send the
+command and then read until the server has acked every channel or pattern.
+A caller may publish — or cause a publish — immediately after they return
+and be certain the subscription is live.
+
+The acks are **queued, not consumed**: they still come out of `recv` in
+arrival order, so the observable event stream is unchanged. Anything else
+that arrives while waiting (a message on an already-subscribed channel is
+normal, and can legitimately precede the ack for a new one) is queued
+ahead of them rather than dropped — dropping it would trade a race for a
+lost message.
+
+Embedded backends register synchronously in-process and have no such
+window; the rule is about remote (RESP over TCP) subscribers.
+
+Rationale: before this rule, `subscribe` wrote the command and returned,
+so it handed back a subscriber that was not yet subscribed. Anyone who
+published straight after was racing the registration, and a lost message
+parks a blocking `recv_message` forever. Three independent tests raced
+exactly that way in one day — including a CI job that hung for 3h46m. See
+`bench/FINDING-2026-07-19-subscribe-returns-before-live.md`.
+
 | `hello3` | — | `PubsubEvent` (synthetic Subscribe marker) | negotiate RESP3 push frames; **remote-only** (embedded → `Unsupported`); must precede any subscribe |
 | `set_read_timeout` | `dur: opt<duration>` | `()` | bounded blocking; timeout surfaces as `Io`(WouldBlock/TimedOut) |
 | `events` (iterator/stream) | — | stream of `PubsubEvent` | terminates on `Closed`; other errors yielded |
