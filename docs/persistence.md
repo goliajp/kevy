@@ -120,6 +120,19 @@ A fresh embedded store with the default config writes only the AOF — no snapsh
 
 ### Durability and AOF growth
 
+**Transactions fsync once, not once per mutation.** An embedded
+`atomic()` / `atomic_all_shards()` block appends its frames as one
+group and syncs at the end, so under `appendfsync = always` a block of
+N mutations costs one fsync rather than N — and a crash cannot land
+between two frames of the same transaction, which would otherwise
+leave a durably half-applied block that replay would faithfully
+restore. Rejecting the block (returning `Err`) appends nothing at all.
+
+This is true as of 4.0. Earlier versions documented the group-commit
+behaviour but never enabled it, so every mutation in a transaction was
+synced separately.
+
+
 | Knob | Server (TOML / `CONFIG SET`) | Embedded (`Config::…`) | Default | Notes |
 |---|---|---|---|---|
 | AOF fsync policy | `appendfsync` (`always` / `everysec` / `no`) | `with_appendfsync(AppendFsync::…)` | `EverySec` | Live-tunable on the server. |

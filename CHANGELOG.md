@@ -188,6 +188,30 @@ failure is now closed, each behind an executable gate.
   reading a rounded clock (measuring the ruler), and a reported v4
   SET regression was retracted as quantization noise.
 
+### Transactions that were not transactions
+
+- **A rejected `atomic()` left its writes live.** The closure's writes
+  went straight into memory while their AOF frames were only queued; an
+  `Err` return discarded the queue and returned, so the running process
+  and a restarted one answered differently for the same key — with the
+  AOF reporting itself `clean`. `atomic()` and `atomic_all_shards()` now
+  roll back every key the closure touched, restoring its prior value and
+  TTL and deleting keys the closure created. A rejected transaction
+  leaves no trace, which is the guarantee `docs/cookbook.md` §5 already
+  described for replacing SQL `CHECK` constraints — it is now true.
+- **`atomic()` was not crash-atomic under `appendfsync = always`.** The
+  commit loop appended one frame at a time, and each frame was flushed
+  and fsynced on its own: N syncs for a block of N mutations, and a crash
+  between frame *k* and *k+1* left a durably half-applied transaction
+  that replay would faithfully restore. The block is now one group commit
+  — one fsync, and no window where half of it is durable. The
+  group-commit path (`Aof::begin_group` / `end_group`) already existed
+  and was documented in `ops_atomic.rs`; it had never been called.
+- Both were reported by a consumer evaluating kevy-embedded as a primary
+  store, with an empirical reproduction against the published 3.18.0:
+  `docs/DEFECT-REPORT-2026-07-20-ATOMIC-ERROR-PATH.md`. **3.18.0 is
+  affected and has no fix released.**
+
 ### Connections that stopped answering
 
 - **Killing a replica killed the primary's shards.** The pump's write to a

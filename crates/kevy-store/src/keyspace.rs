@@ -97,6 +97,24 @@ impl Store {
         Some((entry.value, ttl_ms))
     }
 
+    /// Clone `key`'s whole entry — value plus remaining TTL — without
+    /// removing it. The read half of a transaction snapshot: pair it
+    /// with [`Self::put_with_ttl`] to restore, or with a delete when
+    /// this returns `None` (the key did not exist).
+    ///
+    /// Unlike [`Self::take_with_ttl`] this leaves the entry in place,
+    /// so a transaction can record the prior state on first touch and
+    /// still let the closure read its own writes afterwards.
+    pub fn clone_with_ttl(&mut self, key: &[u8]) -> Option<(Value, Option<u64>)> {
+        let now = now_ns();
+        if !self.reap(key, now) {
+            return None;
+        }
+        let entry = self.map.get(key)?;
+        let ttl_ms = entry.expire_at_ns.map(|ns| remaining_ms(ns, now));
+        Some((entry.value.clone(), ttl_ms))
+    }
+
     /// Cross-shard RENAME step 2: write `value` at `key` on this
     /// shard, overwriting any prior entry. `ttl_ms` is set as a TTL
     /// relative to *now* (i.e. the orchestrator should have computed
