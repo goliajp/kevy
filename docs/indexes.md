@@ -87,6 +87,31 @@ idx_count / idx_stats / idx_list` (values as `IndexValue`, cursors as
 fields with `hget`. `idx_create` builds synchronously and returns
 when the index serves.
 
+## The index budget
+
+**64 indexes, globally.** Not per prefix, not per shard — 64 for the
+whole store (`MAX_INDEXES`, `kevy-index/src/catalog.rs`).
+
+Read naively that number blocks any real schema: 58 tables against 64
+indexes looks impossible, and a migration can stall on the arithmetic
+before discovering that the arithmetic is wrong.
+
+**Indexes are a scarce global budget, and most access paths do not spend
+it.** Parent-child navigation belongs in link keys and zsets — a
+`SMEMBERS order:1001:items` costs no index slot, and neither does an
+ordered zset index you maintain yourself
+([cookbook §2](cookbook.md#2-one-to-many-many-to-many)). Spend index
+slots only on what link keys cannot express:
+
+- **global value ranges** — "every invoice over 10k", across all rows
+- **text search** — `KIND text`
+- **aggregates** — `KIND agg`, write-time GROUP BY
+
+A schema that would need 58 indexes read as "one per table" typically
+needs under 20 read as "one per global query shape". If you are
+approaching 64, the question to ask is which of them are really
+parent-child navigation wearing an index costume.
+
 ## Consistency + cost model
 
 - A write and its index update are atomic within the owning shard
