@@ -427,3 +427,69 @@ fn atomic_ok_still_commits() {
     .unwrap();
     assert_eq!(s.get(b"k").unwrap().as_deref(), Some(&b"v1"[..]));
 }
+
+// ---- collection reads inside a transaction --------------------------------
+// A consumer reshaped an entire keyspace from sets to hashes because a set
+// could be written inside a transaction but never read back inside one
+// (docs/REPORT-FROM-GOLIAJP-2026-07-20-EMBEDDED-AS-PRIMARY-STORE.md, F1/R2).
+
+#[test]
+fn atomic_can_enumerate_a_set_it_is_deleting_from() {
+    // The cascade-delete shape their report is about: read the children,
+    // then delete them, all inside one transaction.
+    let s = s();
+    s.sadd(b"parent:1:kids", &[&b"c1"[..], &b"c2"[..], &b"c3"[..]]).unwrap();
+    s.set(b"c1", b"x").unwrap();
+    s.set(b"c2", b"x").unwrap();
+    s.set(b"c3", b"x").unwrap();
+
+    let removed: usize = s
+        .atomic(|tx| {
+            let kids = tx.smembers(b"parent:1:kids")?;
+            let refs: Vec<&[u8]> = kids.iter().map(Vec::as_slice).collect();
+            let n = tx.del(&refs);
+            tx.del(&[&b"parent:1:kids"[..]]);
+            Ok::<usize, crate::KevyError>(n)
+        })
+        .unwrap();
+    assert_eq!(removed, 3);
+    assert_eq!(s.get(b"c1").unwrap(), None);
+    assert_eq!(s.scard(b"parent:1:kids").unwrap(), 0);
+}
+
+#[test]
+fn atomic_collection_reads_see_the_closures_own_writes() {
+    let s = s();
+    s.atomic(|tx| {
+        tx.sadd(b"set", &[&b"a"[..]])?;
+        assert!(tx.sismember(b"set", b"a")?);
+        assert_eq!(tx.scard(b"set")?, 1);
+        tx.rpush(b"list", &[&b"l0"[..], &b"l1"[..]])?;
+        assert_eq!(tx.llen(b"list")?, 2);
+        assert_eq!(tx.lrange(b"list", 0, -1)?.len(), 2);
+        tx.zadd(b"z", &[(1.0, &b"m"[..])])?;
+        let hits = tx.zrangebyscore(
+            b"z",
+            kevy_store::ScoreBound { value: 0.0, exclusive: false },
+            kevy_store::ScoreBound { value: 2.0, exclusive: false },
+        )?;
+        assert_eq!(hits.len(), 1);
+        Ok::<(), crate::KevyError>(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn atomic_collection_reads_do_not_defeat_rollback() {
+    // Reads must not mark keys as touched in a way that breaks undo.
+    let s = s();
+    s.sadd(b"set", &[&b"keep"[..]]).unwrap();
+    let out = s.atomic(|tx| {
+        let _ = tx.smembers(b"set")?;
+        tx.sadd(b"set", &[&b"added"[..]])?;
+        Err::<(), _>(crate::KevyError::Io(std::io::Error::other("reject")))
+    });
+    assert!(out.is_err());
+    assert_eq!(s.scard(b"set").unwrap(), 1);
+    assert!(s.sismember(b"set", b"keep").unwrap());
+}

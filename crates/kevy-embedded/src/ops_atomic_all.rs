@@ -26,7 +26,7 @@ type ShardUndoEntry = (usize, Vec<u8>, Option<(kevy_store::Value, Option<u64>)>)
 /// Context handed to the `atomic_all_shards` closure body. Methods
 /// route to the right shard by hashing the key.
 pub struct AtomicAllShards<'a> {
-    guards: Vec<RwLockWriteGuard<'a, Inner>>,
+    pub(crate) guards: Vec<RwLockWriteGuard<'a, Inner>>,
     /// (shard_idx, serialised RESP-frame parts) queued for AOF commit.
     log: Vec<(usize, Vec<Vec<u8>>)>,
     /// `(shard_idx, key, prior)` captured on first touch; `None` prior
@@ -39,9 +39,10 @@ pub struct AtomicAllShards<'a> {
 }
 
 impl<'a> AtomicAllShards<'a> {
-    fn idx(&self, key: &[u8]) -> usize {
+    pub(crate) fn idx(&self, key: &[u8]) -> usize {
         shard_idx(key, self.guards.len())
     }
+
 
     /// Record `key`'s prior state, once, before its first mutation.
     fn snap(&mut self, key: &[u8]) {
@@ -467,4 +468,5 @@ pub(crate) const ATOMIC_ALL_OPS: &[&str] = &[
     "SET", "GET", "INCR", "INCRBY", "HSET", "HGET", "HINCRBY", "ZADD",
     "ZINCRBY", "ZSCORE", "DEL", "EXISTS", "HDEL", "HGETALL", "HMGET",
     "HEXISTS", "SADD", "SREM", "LPUSH", "RPUSH", "ZREM", "ZCARD",
+    "SMEMBERS", "SISMEMBER", "LRANGE", "LLEN", "SCARD", "ZRANGEBYSCORE",
 ];

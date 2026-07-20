@@ -321,6 +321,50 @@ impl AtomicCtx<'_> {
         Ok(rep)
     }
 
+
+    // ---- collection reads --------------------------------------------
+    // Requested by a consumer (docs/REPORT-FROM-GOLIAJP-2026-07-20-…):
+    // a set could be written inside a transaction but never read back
+    // inside one, so any child collection a cascade delete must
+    // enumerate had to be modelled as a hash — they reshaped a whole
+    // keyspace around the omission. These hold the shard write lock
+    // already, so there was never a consistency reason to withhold them.
+
+    /// `SMEMBERS key`.
+    pub fn smembers(&mut self, key: &[u8]) -> KevyResult<Vec<Vec<u8>>> {
+        self.inner.store.smembers(key).map_err(store_err)
+    }
+
+    /// `SISMEMBER key member`.
+    pub fn sismember(&mut self, key: &[u8], member: &[u8]) -> KevyResult<bool> {
+        self.inner.store.sismember(key, member).map_err(store_err)
+    }
+
+    /// `LRANGE key start stop` (inclusive, negatives count from the end).
+    pub fn lrange(&mut self, key: &[u8], start: i64, stop: i64) -> KevyResult<Vec<Vec<u8>>> {
+        self.inner.store.lrange(key, start, stop).map_err(store_err)
+    }
+
+    /// `LLEN key`.
+    pub fn llen(&mut self, key: &[u8]) -> KevyResult<usize> {
+        self.inner.store.llen(key).map_err(store_err)
+    }
+
+    /// `SCARD key`.
+    pub fn scard(&mut self, key: &[u8]) -> KevyResult<usize> {
+        self.inner.store.scard(key).map_err(store_err)
+    }
+
+    /// `ZRANGEBYSCORE key min max` — `(member, score)` in score order.
+    pub fn zrangebyscore(
+        &mut self,
+        key: &[u8],
+        min: kevy_store::ScoreBound,
+        max: kevy_store::ScoreBound,
+    ) -> KevyResult<Vec<(Vec<u8>, f64)>> {
+        self.inner.store.zrange_by_score(key, min, max).map_err(store_err)
+    }
+
     /// Record `key`'s prior state, once, before its first mutation.
     fn snap(&mut self, key: &[u8]) {
         if self.touched.contains(key) {
@@ -431,4 +475,5 @@ pub(crate) const ATOMIC_OPS: &[&str] = &[
     "SET", "GET", "INCR", "INCRBY", "HSET", "HGET", "HINCRBY", "ZADD",
     "ZINCRBY", "ZSCORE", "DEL", "EXISTS", "HDEL", "HGETALL", "HMGET",
     "HEXISTS", "SADD", "SREM", "LPUSH", "RPUSH", "ZREM", "ZCARD",
+    "SMEMBERS", "SISMEMBER", "LRANGE", "LLEN", "SCARD", "ZRANGEBYSCORE",
 ];

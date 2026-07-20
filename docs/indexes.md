@@ -28,6 +28,13 @@ range|unique [MAXMEM <bytes>]`
 - **MAXMEM** caps the index's memory: a build that crosses the budget
   fails declaratively (`-INDEXOVERBUDGET` on queries) instead of
   growing unbounded.
+- Up to 64 indexes — a **global budget**, and one worth planning
+  against rather than discovering. The rule that makes 64 generous:
+  parent-child access paths belong in link keys and sorted sets, which
+  cost no index slots. Spend slots only on **global value ranges, text
+  and aggregates**. A 58-table schema converted this way needed roughly
+  19. Read naively, "58 tables vs 64 indexes" looks nearly blocked; it
+  is not, but only if the modelling rule is applied.
 - Up to 64 indexes. The catalog persists in a data-dir sidecar;
   the index CONTENT is derived state — it is never snapshotted or
   AOF-logged, and rebuilds in the background after a restart
@@ -61,6 +68,17 @@ VERIFY/LIST) and visible as multi-hit `EQ` reads. If you need hard
 uniqueness, pin the domain to one shard with a `{hashtag}` prefix in
 cluster mode, or check-then-write under `MULTI`/`WATCH`.
 
+**In the embedded API an index cannot be read inside `atomic()` at
+all**, so `KIND unique` cannot participate in the check even
+optimistically. Use a **claim key** instead: `u:<constraint>:<value>`
+holding the owner's id, read with `get` and written with `set` inside
+the transaction. The transaction makes the check-and-claim atomic,
+which is the guarantee a `unique` index deliberately does not provide.
+
+A consumer implemented 22 uniqueness constraints this way and used
+`KIND unique` for none of them; the pattern works, but they arrived at
+it by discovering the omission rather than reading it here.
+
 ## Embedded
 
 Same engine, typed API: `idx_create / idx_drop / idx_query /
@@ -89,6 +107,18 @@ IDX.CREATE ord_amt ON PREFIX ord: FIELD amount TYPE i64 KIND agg GROUPBY status
 IDX.QUERY ord_amt GROUP paid                      → [count, sum, min, max, avg]
 IDX.QUERY ord_amt GROUPS BY sum LIMIT 100         → ranked [group, count, sum, min, max]
 ```
+
+**`GROUPBY` takes one field, and the shape of real `GROUP BY` usually
+needs more.** `SUM(amount) GROUP BY month` split by direction, or any
+`SUM(CASE WHEN …)`, is expressed by moving the condition **into the
+group key**: materialise a composite field at write time
+(`ym_dir = "2026-07:in"`), group on it, and split the key in the
+application. Conditional aggregates work the same way — the condition
+becomes part of what you are grouping by, not part of the aggregate.
+
+That idiom is obvious in hindsight and invisible on first contact:
+`KIND agg` looks like it answers `GROUP BY` and then does not answer
+the shape people actually write.
 
 The engine answer to `SELECT g, COUNT(*), SUM(v) … GROUP BY g`:
 aggregates are maintained IN THE WRITE PATH (a declared access path —
