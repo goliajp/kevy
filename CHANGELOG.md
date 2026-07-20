@@ -220,6 +220,39 @@ failure is now closed, each behind an executable gate.
   `docs/DEFECT-REPORT-2026-07-20-ATOMIC-ERROR-PATH.md`. **3.18.0 is
   affected and has no fix released.**
 
+- **A transaction could not read the collections it was writing.**
+  `AtomicCtx` exposed 22 verbs and none of them read a set or a list, so
+  a cascade delete could not enumerate the children it was deleting. One
+  consumer reshaped an entire keyspace from sets to hashes to work
+  around it. `SMEMBERS`, `SISMEMBER`, `LRANGE`, `LLEN`, `SCARD` and
+  `ZRANGEBYSCORE` now exist on both transaction contexts; they hold the
+  shard write lock already, so there was never a consistency reason to
+  withhold them. A parity test pins the two contexts against each other,
+  which they had drifted apart before.
+- **A transaction can consult a declared index** —
+  `idx_query` / `idx_count` inside `atomic_all_shards`, so a uniqueness
+  check can use an index instead of a parallel set of claim keys that
+  has to be reconciled at boot.
+
+  Only on the all-shards context, and that restriction is the finding
+  rather than a shortcut: an index entry lives on the shard of the key
+  it indexes, so "does any row have this email" is a question about
+  every shard. Single-shard `atomic()` holds one lock and could answer
+  only for its own slice — a uniqueness check consulting 1/N of the
+  keyspace reports "unique" nearly always. Absent beats present with a
+  footnote. Second limit, tested: these see committed state, not the
+  transaction's own writes, because index maintenance runs at commit.
+- **`Snapshot::reconcile`** rebuilds every derived key from the rows and
+  diffs, for the boot-time check that every consumer maintaining link or
+  claim keys ends up writing by hand. It runs against a frozen snapshot,
+  so a concurrent write is not reported as drift, and it diffs **both**
+  directions — a claim whose row is gone is an orphan, not an absence,
+  and a missing-only checker reports "clean" during exactly the failure
+  it exists to catch.
+- `docs/cookbook.md` §21 states the pattern these serve — derived state
+  as a pure function of the row — which was latent across four recipes
+  and never written down once.
+
 ### Connections that stopped answering
 
 - **Killing a replica killed the primary's shards.** The pump's write to a
@@ -255,6 +288,36 @@ failure is now closed, each behind an executable gate.
   ends and the one-line triage that ended it, in
   `bench/PERF-FINDING-2026-07-18-uring-recv-rearm-wedge.md`.
 
+- **A cross-shard blocking pop could lose the element it popped.** The
+  target pops for a waiter and ships the reply to the origin; if the
+  client disconnected in that window, the origin had no record to
+  deliver into and the reply was dropped — the element gone from the
+  list and delivered to nobody. The protection already existed and one
+  path did not use it: `serving` suppressed the timeout sweep for
+  exactly this reason, but disconnect tore the record down anyway.
+
+  The record now survives an in-flight serve, and the target holds an
+  undo — captured by **reading** the element just before the pop, not by
+  parsing it back out of the reply. A reply's shape depends on the block
+  kind and on whether the waiter negotiated RESP2 or RESP3; a parser
+  would have to be right about every combination forever, while `LINDEX`
+  means the same thing in both. On delivery the undo is dropped, on
+  failure it is applied.
+
+  What this leaves, stated rather than hidden: between the pop and the
+  abort another waiter can be served the next element, so the restored
+  one arrives after it. Losing the element is not acceptable; reordering
+  under a disconnect-mid-serve race is, and it is the price of serving
+  blocked clients across shards — Redis avoids it by being single
+  threaded.
+- **`subscribe()` returned before the subscription was live**, so
+  anything publishing immediately after raced the registration and a
+  lost message parked a blocking `recv` forever. Three independent tests
+  raced exactly that way in one day, one of them hanging a CI job for
+  3h46m. All four client implementations — Rust sync and async, Python,
+  Go — now wait for the acks, queueing rather than consuming anything
+  that arrives meanwhile.
+
 ### The published ratios, corrected downward
 
 - **The competitive numbers in the README were measured with a ruler
@@ -273,6 +336,38 @@ failure is now closed, each behind an executable gate.
   those rows: the arena is median-of-5 with per-cell stdev, and kevy's
   GET cell sits at 3.1%. Quoting a precision figure from a different
   harness is the same class of error as the ratio itself.
+
+### Text search, and the surface it will grow into
+
+- **The `MATCH` surface is frozen before the capabilities land.** Every
+  text feature the roadmap wants — phrase, filter, facet, highlight,
+  typo, prefix, sort, distinct — wants to change the same signature, and
+  4.0 is the release that breaks API once. `IN`, `FILTER`, `FACET`,
+  `SORT`, `DISTINCT`, `HIGHLIGHT`, `TYPO` and `OFFSET` parse today and
+  return an error naming the clause, so the syntax is settled and
+  nothing that works now has to change shape when they arrive.
+
+  Naming the clause matters: "you wrote it wrong" and "this is coming"
+  are different answers. Accepting one and ignoring it would be worse
+  than either — a dropped `FILTER` returns unfiltered rows, which is a
+  wrong answer wearing a successful reply.
+- **An index can declare several weighted attributes.** `IndexSpec`
+  carried one hash field, so a document with a title and a body needed
+  two indexes — and that is not a workaround, because BM25 normalises by
+  document length and two indexes normalise over two corpora. The scores
+  are not comparable; the answer is wrong, not merely awkward. The
+  catalog sidecar gains a v2 that carries `name:weight` per field, with
+  v1 permanently readable — a sidecar that refuses to load is not an
+  error an operator sees, it is every index rebuilding from scratch.
+
+  **The engine still indexes only the first field**, so a multi-field
+  declaration is *refused* rather than accepted and quietly
+  single-field. The gate lifts when the segment indexes weighted fields.
+- `docs/text-search.md` records this as a reversal. It previously said
+  phrase and boolean queries were deliberately out of scope — "if you
+  need those, you are describing a search engine" — which was right for
+  a text kind that stops at ranked lookup. The goal changed, and a
+  reader should be able to see that it changed.
 
 ### Smaller truths
 
