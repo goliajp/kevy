@@ -294,12 +294,19 @@ fn apply_row(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
     // Text kind: raw field bytes tokenize into the inverted
     // segment (no scalar coercion).
     if let Some(ts) = &mut si.text {
-        match store.hget(key, si.spec.field()) {
-            Ok(Some(raw)) => {
-                let raw = raw.to_vec();
-                ts.apply(key, Some(&raw));
+        // Every declared field, each with its weight -- they score into
+        // one corpus, which is the whole reason multi-field is a spec
+        // change rather than several single-field indexes.
+        let mut fields: Vec<(Vec<u8>, f32)> = Vec::with_capacity(si.spec.fields.len());
+        for f in &si.spec.fields {
+            if let Ok(Some(raw)) = store.hget(key, &f.name) {
+                fields.push((raw.to_vec(), f.weight));
             }
-            _ => ts.apply(key, None),
+        }
+        if fields.is_empty() {
+            ts.apply_fields(key, None);
+        } else {
+            ts.apply_fields(key, Some(&fields));
         }
         return;
     }

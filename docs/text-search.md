@@ -15,9 +15,12 @@ IDX.QUERY posts MATCH "rust 全文检索" LIMIT 10 [FIELDS title body]
 
 ## Quick start (server)
 
-Rows are hash keys under the declared prefix; the indexed value is
-one declared field, exactly as with `range` indexes
-([indexes.md](indexes.md)):
+Rows are hash keys under the declared prefix. A text index reads one
+field or several — several fields score into **one** corpus, each with a
+weight, so a title hit can outrank a body hit and the scores stay
+comparable. (Every other kind reads exactly one field, as in
+[indexes.md](indexes.md); a multi-field declaration on a `range` or
+`unique` index is refused rather than half-honoured.)
 
 ```console
 kevy-cli -p 6004 IDX.CREATE posts ON PREFIX post: FIELD body TYPE str KIND text
@@ -202,8 +205,11 @@ costs one untaken branch per write.
 ## Sizing
 
 `bytes ≈ Σ_token (token_len + 48) + postings × 64 + Σ_doc (key_len +
-text_len + 72)` (docs keep their original text so updates remove
-exactly their own tokens), reported live by `IDX.VERIFY` /
+Σ_field(field_len + 4) + 72)` — docs keep each declared field's text
+(and the weight it was indexed with) so an update removes exactly the
+tokens it inserted, at the weight it inserted them. A single-field index
+is the one-element case and its sizing is unchanged. Reported live by
+`IDX.VERIFY` /
 `IDX.LIST` (entries/bytes/postings/tokens for text kinds).
 `bench/textgate.sh` gates the formula against real RSS growth.
 

@@ -161,12 +161,19 @@ fn apply_text_key(
     ts: &mut kevy_text::TextSegment,
     key: &[u8],
 ) {
-    match store.hget(key, spec.field()) {
-        Ok(Some(raw)) => {
-            let raw = raw.to_vec();
-            ts.apply(key, Some(&raw));
+    // Every declared field, each with its weight -- they score into one
+    // corpus, which is the whole reason multi-field is a spec change
+    // rather than several single-field indexes.
+    let mut fields: Vec<(Vec<u8>, f32)> = Vec::with_capacity(spec.fields.len());
+    for f in &spec.fields {
+        if let Ok(Some(raw)) = store.hget(key, &f.name) {
+            fields.push((raw.to_vec(), f.weight));
         }
-        _ => ts.apply(key, None),
+    }
+    if fields.is_empty() {
+        ts.apply_fields(key, None);
+    } else {
+        ts.apply_fields(key, Some(&fields));
     }
 }
 

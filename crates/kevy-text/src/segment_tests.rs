@@ -153,3 +153,84 @@ fn limit_zero_is_empty() {
     assert!(s.matches(b"", 0).is_empty());
     assert!(TextSegment::new().matches(b"rust", 0).is_empty());
 }
+
+// ---- weighted multi-field ------------------------------------------------
+
+/// The reason multi-field is a struct change and not "make two indexes":
+/// both fields score against ONE corpus, so their hits are comparable.
+#[test]
+fn a_weighted_field_outranks_the_same_term_in_a_plain_one() {
+    let mut s = TextSegment::new();
+    s.apply_fields(b"doc:title", Some(&[(b"rust".to_vec(), 3.0), (b"filler text here".to_vec(), 1.0)]));
+    s.apply_fields(b"doc:body", Some(&[(b"other".to_vec(), 3.0), (b"rust filler text".to_vec(), 1.0)]));
+    let hits = s.matches(b"rust", 10);
+    assert_eq!(hits.len(), 2);
+    assert_eq!(hits[0].key, b"doc:title".to_vec(), "the weighted field must rank first");
+    assert!(hits[0].score > hits[1].score);
+}
+
+/// Length normalisation is about how much text can dilute a match, so
+/// weighting must not inflate it — otherwise boosting a field would
+/// penalise the document carrying it.
+#[test]
+fn document_length_is_summed_unweighted() {
+    let mut heavy = TextSegment::new();
+    heavy.apply_fields(b"d", Some(&[(b"alpha beta".to_vec(), 5.0)]));
+    let mut plain = TextSegment::new();
+    plain.apply_fields(b"d", Some(&[(b"alpha beta".to_vec(), 1.0)]));
+    assert_eq!(heavy.stats().docs, plain.stats().docs);
+    // Same two tokens either way; only the term frequencies differ.
+    assert_eq!(heavy.stats().tokens, plain.stats().tokens);
+}
+
+/// An update must remove exactly what it inserted. If removal re-derived
+/// term frequencies at the wrong weight, postings would be left behind
+/// and the term would keep matching a document that no longer has it.
+#[test]
+fn a_weighted_document_is_removed_exactly() {
+    let mut s = TextSegment::new();
+    s.apply_fields(b"d", Some(&[(b"alpha".to_vec(), 4.0), (b"beta".to_vec(), 2.0)]));
+    assert_eq!(s.matches(b"alpha", 10).len(), 1);
+    s.apply_fields(b"d", None);
+    assert!(s.matches(b"alpha", 10).is_empty(), "alpha must not survive its document");
+    assert!(s.matches(b"beta", 10).is_empty(), "beta must not survive either");
+    assert_eq!(s.stats().tokens, 0, "no posting list may be left behind");
+    assert_eq!(s.stats().postings, 0);
+}
+
+/// Re-indexing at a different weight must not double-count: the old
+/// contribution has to be withdrawn at the old weight, not the new one.
+#[test]
+fn reindexing_at_a_new_weight_replaces_rather_than_accumulates() {
+    let mut s = TextSegment::new();
+    s.apply_fields(b"d", Some(&[(b"alpha".to_vec(), 5.0)]));
+    let before = s.stats();
+    s.apply_fields(b"d", Some(&[(b"alpha".to_vec(), 1.0)]));
+    let after = s.stats();
+    assert_eq!(after.docs, 1);
+    assert_eq!(after.postings, before.postings, "one document, one posting");
+}
+
+/// A fractional weight de-emphasises without deleting: a term that
+/// occurred is still a term that occurred.
+#[test]
+fn a_fractional_weight_never_rounds_a_hit_away() {
+    let mut s = TextSegment::new();
+    s.apply_fields(b"d", Some(&[(b"rare".to_vec(), 0.1)]));
+    assert_eq!(s.matches(b"rare", 10).len(), 1, "0.1 weight must not erase the term");
+}
+
+/// The single-field entry point is sugar over the multi-field one, so a
+/// plain apply and a neutral one-element apply_fields must be identical.
+#[test]
+fn apply_is_exactly_a_neutral_single_field() {
+    let mut sugar = TextSegment::new();
+    sugar.apply(b"d", Some(b"alpha beta alpha"));
+    let mut explicit = TextSegment::new();
+    explicit.apply_fields(b"d", Some(&[(b"alpha beta alpha".to_vec(), 1.0)]));
+    let a = sugar.matches(b"alpha", 10);
+    let b = explicit.matches(b"alpha", 10);
+    assert_eq!(a.len(), b.len());
+    assert_eq!(a[0].score, b[0].score);
+    assert_eq!(sugar.stats().approx_bytes, explicit.stats().approx_bytes);
+}
