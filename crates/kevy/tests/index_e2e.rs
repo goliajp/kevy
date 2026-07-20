@@ -474,3 +474,79 @@ fn agg_kind_group_by_e2e() {
                            b"TYPE", b"str", b"KIND", b"agg", b"GROUPBY", b"g"]);
     assert!(String::from_utf8_lossy(&r).contains("i64|f64"), "{:?}", String::from_utf8_lossy(&r));
 }
+
+/// `FIELDS a b WEIGHTS …` over the wire — the multi-attribute path that
+/// was declarable through the embedded API but had no IDX.CREATE syntax.
+/// The single-`FIELD` tests above are the byte-identical regression for
+/// the parser change that made this possible.
+#[test]
+fn fields_multi_attribute_create_and_rank() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    // Two docs. In post:1 the term is only in the (heavily weighted)
+    // title; in post:2 it is only in the body. The weight must make
+    // post:1 rank first — the comparability a single-field index cannot
+    // give, since it would score the two fields on separate corpora.
+    cmd(&mut c, &[b"HSET", b"post:1", b"title", b"rust", b"body", b"a long body about other things entirely"]);
+    cmd(&mut c, &[b"HSET", b"post:2", b"title", b"unrelated", b"body", b"this body mentions rust once among much filler text"]);
+    let r = cmd(
+        &mut c,
+        &[b"IDX.CREATE", b"posts", b"ON", b"PREFIX", b"post:", b"FIELDS", b"title", b"body",
+          b"WEIGHTS", b"5", b"1", b"TYPE", b"str", b"KIND", b"text"],
+    );
+    assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
+
+    let r = query_ready(&mut c, &[b"IDX.QUERY", b"posts", b"MATCH", b"rust", b"LIMIT", b"10"]);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.contains("post:1") && s.contains("post:2"), "both match: {s}");
+    assert!(
+        s.find("post:1\r").unwrap() < s.find("post:2\r").unwrap(),
+        "the weight-5 title hit must outrank the weight-1 body hit: {s}"
+    );
+}
+
+/// FIELDS without weights defaults every field to 1.0, and a
+/// multi-field non-text index is refused by the catalog.
+#[test]
+fn fields_defaults_and_non_text_refusal() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    cmd(&mut c, &[b"HSET", b"d:1", b"a", b"alpha", b"b", b"beta"]);
+    let r = cmd(
+        &mut c,
+        &[b"IDX.CREATE", b"unweighted", b"ON", b"PREFIX", b"d:", b"FIELDS", b"a", b"b",
+          b"TYPE", b"str", b"KIND", b"text"],
+    );
+    assert_eq!(r, b"+OK\r\n", "unweighted FIELDS defaults to 1.0: {:?}", String::from_utf8_lossy(&r));
+
+    // A range index reads one scalar; two fields must be refused.
+    let r = cmd(
+        &mut c,
+        &[b"IDX.CREATE", b"badrange", b"ON", b"PREFIX", b"d:", b"FIELDS", b"a", b"b",
+          b"TYPE", b"i64", b"KIND", b"range"],
+    );
+    assert!(String::from_utf8_lossy(&r).starts_with("-ERR"), "range refuses two fields: {:?}", String::from_utf8_lossy(&r));
+}
+
+/// Mismatched WEIGHTS/FIELDS counts and empty FIELDS are usage errors,
+/// not silent truncation.
+#[test]
+fn fields_arity_errors() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    let bad: &[&[&[u8]]] = &[
+        &[b"IDX.CREATE", b"x", b"ON", b"PREFIX", b"p:", b"FIELDS", b"a", b"b",
+          b"WEIGHTS", b"1", b"TYPE", b"str", b"KIND", b"text"], // 2 fields, 1 weight
+        &[b"IDX.CREATE", b"x", b"ON", b"PREFIX", b"p:", b"FIELDS",
+          b"TYPE", b"str", b"KIND", b"text"], // no field names
+    ];
+    for parts in bad {
+        let r = cmd(&mut c, parts);
+        assert!(
+            String::from_utf8_lossy(&r).starts_with("-ERR"),
+            "must be a usage error: {:?} -> {:?}",
+            parts.len(),
+            String::from_utf8_lossy(&r)
+        );
+    }
+}
