@@ -234,3 +234,83 @@ fn apply_is_exactly_a_neutral_single_field() {
     assert_eq!(a[0].score, b[0].score);
     assert_eq!(sugar.stats().approx_bytes, explicit.stats().approx_bytes);
 }
+
+// ---- injected corpus stats (global BM25, step 4a) ------------------------
+
+use std::collections::HashMap;
+
+/// A CorpusStats summed by hand from what the whole corpus should look
+/// like — the job step 4b's cross-shard aggregation will do for real.
+fn global_of(segments: &[&TextSegment], q_tokens: &[&[u8]]) -> CorpusStats {
+    let n_docs: f64 = segments.iter().map(|s| s.stats().docs as f64).sum();
+    let total_len: f64 = segments.iter().map(|s| s.total_len() as f64).sum();
+    let mut df = HashMap::new();
+    for t in q_tokens {
+        let d: u32 = segments.iter().map(|s| s.local_df(t)).sum();
+        df.insert(t.to_vec(), d);
+    }
+    CorpusStats { n_docs, avgdl: total_len / n_docs, df }
+}
+
+/// The property step 4a exists for: a document scored against global
+/// stats gets the same score whether it sits alone in one segment or in
+/// a segment holding half the corpus. If it did not, shard count would
+/// change ranking — the shard-local defect global BM25 removes.
+#[test]
+fn global_stats_make_split_and_whole_score_identically() {
+    let docs: &[(&[u8], &str)] = &[
+        (b"d1", "rust systems programming language rust"),
+        (b"d2", "kevy pure rust key value store"),
+        (b"d3", "the quick brown fox jumps"),
+        (b"d4", "rust memory safety without garbage collection"),
+        (b"d5", "a document with no query terms at all here"),
+        (b"d6", "rust rust rust and more rust"),
+    ];
+    // Whole corpus in one segment.
+    let mut whole = TextSegment::new();
+    for (k, t) in docs {
+        whole.apply(k, Some(t.as_bytes()));
+    }
+    // Same corpus split across two.
+    let mut a = TextSegment::new();
+    let mut b = TextSegment::new();
+    for (i, (k, t)) in docs.iter().enumerate() {
+        if i % 2 == 0 { &mut a } else { &mut b }.apply(k, Some(t.as_bytes()));
+    }
+
+    let q: &[&[u8]] = &[b"rust"];
+    let g_whole = global_of(&[&whole], q);
+    let g_split = global_of(&[&a, &b], q);
+    // The two global views must agree — same corpus, same numbers.
+    assert_eq!(g_whole.n_docs, g_split.n_docs);
+    assert_eq!(g_whole.df.get(b"rust".as_slice()), g_split.df.get(b"rust".as_slice()));
+
+    let whole_hits = whole.matches_scored(b"rust", 10, Some(&g_whole));
+    let mut split_hits = a.matches_scored(b"rust", 10, Some(&g_split));
+    split_hits.extend(b.matches_scored(b"rust", 10, Some(&g_split)));
+    split_hits.sort_by(|x, y| y.score.total_cmp(&x.score).then_with(|| x.key.cmp(&y.key)));
+
+    assert_eq!(whole_hits.len(), split_hits.len(), "same documents match");
+    for (w, s) in whole_hits.iter().zip(&split_hits) {
+        assert_eq!(w.key, s.key, "same ranking order");
+        assert!((w.score - s.score).abs() < 1e-9, "same score for {:?}", w.key);
+    }
+}
+
+/// The no-stats path must be byte-identical to before — this is the
+/// regression that adding the parameter changed nothing for existing
+/// callers.
+#[test]
+fn no_stats_matches_the_local_path() {
+    let mut s = TextSegment::new();
+    for (i, t) in ["rust here", "rust and rust", "nothing"].iter().enumerate() {
+        s.apply(format!("d{i}").as_bytes(), Some(t.as_bytes()));
+    }
+    let a = s.matches(b"rust", 10);
+    let b = s.matches_scored(b"rust", 10, None);
+    assert_eq!(a.len(), b.len());
+    for (x, y) in a.iter().zip(&b) {
+        assert_eq!(x.key, y.key);
+        assert_eq!(x.score, y.score);
+    }
+}

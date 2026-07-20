@@ -342,6 +342,21 @@ D2 事务标记(全有全无,与事务大小无关)/ R2 事务内集合读。
 
 - [~] **C1 跨 shard block-serve 丢元素**(设计轮已跑:`.claude/rfcs/2026-07-21-xshard-block-serve-escrow.md`;**第一版 escrow 设计已被代码推翻并记在同文件**——target 走的是命令重放,手里同样只有 RESP 字节。修正后的活候选 = 在 `cmd_block_serve.rs` 里给每个 kind 的 serve 加一个 restore 孪生函数;两个 stream kind 不需要。未实现) — 已归档未修;需要一轮协议设计(BlockServeReq/Resp 的所有权移交),修完进 gate。这是当前唯一「已知会丢数据且没修」的缺陷,不允许带着它 ship。
 
+### t5.7 — FTS arc(取代 Meili;施工顺序见 RFC)
+
+设计:`.claude/notes/fts-arc-design-round.md` +
+`.claude/rfcs/2026-07-21-fts-terminal-query-surface.md`(查询面) +
+`.claude/rfcs/2026-07-21-fts-deep-structures.md`(深水区,决定 2 + 位置索引 + 有序词典)。
+
+- [x] **步骤 1 冻结终局 MATCH 面** — 8 保留字解析即报错(指名),`e058450d`
+- [x] **步骤 2 多字段 IndexSpec + sidecar v2** — v1 永久可读,`b8298c2b`;守卫多字段(仅 text 收,`de99ae50`)
+- [x] **步骤 3 引擎索引加权多字段** — `apply_fields`,dl 不加权,`de99ae50`;6 新测试
+- [x] **步骤 3.5 服务端 IDX.CREATE 多字段 wire 语法(`FIELDS a b [WEIGHTS ...]`)** — `4f3a1963`;扫描式解析,单 `FIELD` 路径 byte-identical,3 wire 测试(加权排序 / 默认权重 / arity 错误);`type_pos` 参数化传给 type/kind/opts 解析
+- [ ] **步骤 4 决定 2:全局 BM25 统计快照** — 跨 shard 聚合 df/n_docs/avgdl,陈旧窗口文档化。**stone 大改,改内存公式,需 lx64 textgate 验证**。正确性(陈旧行为、全局 vs 局部打分)CI 可验
+- [ ] **步骤 5 位置索引** → phrase / proximity / HIGHLIGHT。**TextSegment 核心存储大改(每 posting 加 position vec),内存公式大变,需 lx64**
+- [ ] **步骤 6 有序词典 / FST** → prefix / TYPO。postings HashMap → 有序结构,影响所有查询 perf,需 lx64
+- [ ] textgate 在步骤 4/5 内重录基线(改内存公式的步骤内做,不事后补)
+
 ### t5 — 总线收尾(渠道除外)
 - [ ] lx64 post-fix arena 复测(悬案)→ README 基准表解冻
 - [ ] CHANGELOG 4.0.0 补总线各 train;五轴终审(ship 挪到 t6 渠道后)
