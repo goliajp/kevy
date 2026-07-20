@@ -208,3 +208,105 @@ T7b no_std spike(判决书 `.claude/notes/k101-nostd-verdict-2026-07-11.md`)按
   开关保留(默认 OFF,measurement-only),重开条件 = 布局假设变化
   (空闲核部署 / new_sqpoll CPU pin / 内核演进)。证据 =
   bench/PERF-FINDING-2026-07-11-sqpoll-refused.md。
+
+---
+
+## v4 FTS arc + 两个协议缺陷 — 决定(2026-07-20)
+
+用户要求"全文检索能完全取代 Meili,perf/disk/mem 还得好",并授权我按项目原则自行决策。
+分析全文见 `.claude/notes/fts-arc-design-round.md` 与
+`bench/FINDING-2026-07-19-*.md`。
+
+### 范围反转:文本 kind 不再止于"排序查找"
+
+`docs/text-search.md:118` 曾写明是刻意不做:
+
+> No phrase queries, no boolean syntax, no highlighting — that's the
+> query-engine slope (deliberately out of scope). If you need those,
+> you are describing a search engine.
+
+**这条决定反转。** 记为反转而非覆盖:原判断在"kevy 是 KV + 声明式索引"的定位下成立;
+现在的目标是取代一个专用搜索引擎,那就必须走下这道斜坡。文档要改的是**边界**,
+不是假装边界从来不存在。
+
+### 决定 1 — 多属性文档(IndexSpec 加 `fields`)
+
+`IndexSpec` 今天是单个 `field`,写钩子四处 `store.hget(key, &spec.field)`,
+sidecar v1 把 `field` 固定在第 3 列,全仓 9 个文件引用。
+
+**决定:走多属性。** 加 `fields: Vec<FieldSpec>`,保留 `field` 作为单字段糖;
+sidecar 升 v2(照抄 AOF v1→v2 的模式:新 magic、v1 永久可读、首次重写升级)。
+
+判据:**没有渐进路径**。用户今天可以"每字段建一个索引"绕开,但那样 BM25 的
+文档长度归一化按字段各算一套,跨字段打分不可比 —— **绕出来的结果是错的,
+不只是麻烦**。凡是"绕出来的答案本身就是错的",选正统那条。
+
+### 决定 2 — BM25 统计保持 shard-local,加周期性全局快照
+
+`bm25_score(tf, df, n_docs, dl, avgdl)` 里 `df`/`n_docs`/`avgdl` 三个都是语料级的,
+现在全取自本 shard(`segment.rs:3-5` 记着理由:全局统计要跨 shard 写协调)。
+
+**决定:不动写路径。** 周期性聚合一份全局统计快照供打分使用。
+
+判据:**这一条有真变通,决定 1 没有** —— 差别就在这里。`df` 在真实语料上变化缓慢,
+N 秒陈旧的快照对排序的影响在噪声内;而把协调放进写路径会直接损害 thread-per-core
+的核心卖点。为排序的小数点牺牲写吞吐,方向是反的。
+
+**附带义务**:文档必须写明"全局统计有 N 秒陈旧窗口",不得宣称"与单语料 BM25 一致"。
+今天刚因为尺子不对下修过三个对外比值,这条不重蹈。
+
+### 决定 3 — 跨 shard 阻塞丢元素:走 restore 消息
+
+`bench/FINDING-2026-07-19-xshard-block-serve-drop.md`。三个候选:
+
+- **A 从 reply 回推** —— 排除。要按 kind 解析 RESP 取回元素(BLPOP 2 元组 /
+  BZPOPMIN 3 元组 / BRPOPLPUSH 已移走),**每加一个阻塞命令就是一处同步修改**,
+  是永久债。同样的形状已经在 `IdxQueryMatch` 的签名上见过代价。
+- **C 两阶段服务** —— 排除。在**每一次**跨 shard 阻塞弹出上加一个往返,只为覆盖
+  "客户端恰好在服务窗口内断开"的竞态。**代价加在健康路径,收益只在异常路径。**
+- **B restore 消息** —— 采纳。`BlockServeResp` 带上 kind;origin 投递不了就原样回
+  `BlockRestore`,由 **target 侧**按 kind 决定放回哪一端 —— target 才是知道列表语义
+  的一方,origin 不该解析 RESP。
+
+**B 的未决语义,必须先写进契约再实现**:元素放回后,对**已经观察过该列表的其他
+等待者**意味着什么?BLPOP 从头弹、放回头能恢复顺序;但若这期间已有另一个等待者
+被服务,顺序无法完全恢复。**这个边界由契约声明,不由实现默默决定。**
+
+### 施工顺序(ceiling-first)
+
+天花板是"**能不能带着干净契约发布 v4**",不是"多一个功能" —— v4 是把 API break
+一次做完并定型的版本,publish 之后这些形状就冻死了。故:
+
+1. `subscribe()` 返回即已订阅(进行中) —— 一天内咬三次,零破坏性改法已验证
+2. 决定 3(restore 消息) —— 真数据丢失,且是协议行为,同样被 publish 冻结
+3. 决定 1 + 2(FTS arc) —— 新增能力,晚一步不损失什么
+
+---
+
+## 3.x 支持线的耐久性边界(2026-07-20)
+
+消费者报告(`docs/REPORT-FROM-GOLIAJP-2026-07-20-*.md`)的 D2 修复依赖
+**AOF v2 信封**(`KEVYAOF2` + 每记录 len/CRC32C),而 v2 是 4.0 耐久性 arc
+的产物 —— **3.18 是 v1-only**。
+
+**决定:D1(回滚)与 R2(事务内集合读)可以进 3.18.x;D2(事务全有全无)
+不进。**
+
+判据不是工作量,是**诚实性**。3.x 能拿到的只有 group commit,而我实测过它
+单独不够:20000 条的块在提交中途被杀,`kill@12ms -> 6393/20000`。AOF 走
+256 KiB 缓冲,group commit 只推迟 fsync,帧照样在缓冲满时进内核。所以
+3.18.x + group commit 的真实语义是:
+
+> `atomic()` 在**事务帧总量小于 256 KiB 时**崩溃原子,超过则静默地不是。
+
+**一个带不可见尺寸悬崖的保证,比明确声明"没有这个保证"更危险** —— 消费者
+会据此设计(他们的范围重叠约束就是这么用的)。我自己已经犯过一次:第一版
+只上 group commit 并写信称"没有半个事务持久化的窗口",是他们的报告纠正的。
+
+**保留的选项**:把标记移植到 v1 格式技术可行(裸 RESP 能承载标记帧,v1
+replay 可同样缓冲)。**不主动做** —— 那是在 4.0 已取代的格式上、在耐久性
+路径上、为一个 release 写新代码。若消费者的事务都远小于 256 KiB 且宁可要
+部分保证,该由他们判断并提出。
+
+**同时确立**:CI 绿 ≠ 可发布。4.0 的发行列车(渠道、打包、终审)未完成前
+不发 4.0;3.18.x 是否发由用户拍板,本文件只界定它能诚实承载什么。
