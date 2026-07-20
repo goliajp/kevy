@@ -16,13 +16,14 @@
 
 mod agg;
 mod catalog;
+mod catalog_sidecar;
 mod segment;
 mod value;
 mod view;
 mod view_sidecar;
 
 pub use agg::{AggBy, AggSegment, AggStats, GroupStats, merge_group, sort_groups};
-pub use catalog::{AnnSpec, Catalog, IndexKind, IndexSpec, IndexState, ValType};
+pub use catalog::{AnnSpec, Catalog, FieldSpec, IndexKind, IndexSpec, IndexState, ValType};
 pub use segment::{Cursor, Segment, SegmentStats};
 pub use value::IndexValue;
 pub use view::{

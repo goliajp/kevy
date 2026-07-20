@@ -281,7 +281,7 @@ fn apply_row(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
     // Ann kind: field bytes parse as an f32 vector (wrong shape
     // = excluded, same discipline as scalar coerce failure).
     if let Some(g) = &mut si.ann {
-        let v = match store.hget(key, &si.spec.field) {
+        let v = match store.hget(key, si.spec.field()) {
             Ok(Some(raw)) => {
                 let raw = raw.to_vec();
                 kevy_vector::parse_vector(&raw, g.dim())
@@ -294,7 +294,7 @@ fn apply_row(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
     // Text kind: raw field bytes tokenize into the inverted
     // segment (no scalar coercion).
     if let Some(ts) = &mut si.text {
-        match store.hget(key, &si.spec.field) {
+        match store.hget(key, si.spec.field()) {
             Ok(Some(raw)) => {
                 let raw = raw.to_vec();
                 ts.apply(key, Some(&raw));
@@ -324,7 +324,7 @@ fn apply_row_agg(
         Ok(Some(g)) => Some(g.to_vec()),
         _ => None,
     };
-    let val = match store.hget(key, &spec.field) {
+    let val = match store.hget(key, spec.field()) {
         Ok(Some(raw)) => {
             let raw = raw.to_vec();
             kevy_index::IndexValue::coerce(spec.ty, &raw)
@@ -348,7 +348,7 @@ pub(crate) enum RowValue {
 }
 
 pub(crate) fn row_value(store: &mut Store, spec: &IndexSpec, key: &[u8]) -> RowValue {
-    match store.hget(key, &spec.field) {
+    match store.hget(key, spec.field()) {
         Ok(Some(raw)) => {
             let raw = raw.to_vec();
             match IndexValue::coerce(spec.ty, &raw) {

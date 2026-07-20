@@ -124,7 +124,7 @@ fn apply_agg_key(
         Ok(Some(g)) => Some(g.to_vec()),
         _ => None,
     };
-    let val = match store.hget(key, &spec.field) {
+    let val = match store.hget(key, spec.field()) {
         Ok(Some(raw)) => {
             let raw = raw.to_vec();
             kevy_index::IndexValue::coerce(spec.ty, &raw)
@@ -144,7 +144,7 @@ fn apply_ann_key(
     g: &mut kevy_vector::Hnsw,
     key: &[u8],
 ) {
-    let v = match store.hget(key, &spec.field) {
+    let v = match store.hget(key, spec.field()) {
         Ok(Some(raw)) => {
             let raw = raw.to_vec();
             kevy_vector::parse_vector(&raw, g.dim())
@@ -161,7 +161,7 @@ fn apply_text_key(
     ts: &mut kevy_text::TextSegment,
     key: &[u8],
 ) {
-    match store.hget(key, &spec.field) {
+    match store.hget(key, spec.field()) {
         Ok(Some(raw)) => {
             let raw = raw.to_vec();
             ts.apply(key, Some(&raw));
@@ -271,7 +271,7 @@ fn each_written_key(verb: &[u8], parts: &[&[u8]], mut f: impl FnMut(&[u8])) {
 }
 
 fn apply_key(store: &mut kevy_store::Store, spec: &IndexSpec, seg: &mut Segment, key: &[u8]) {
-    match store.hget(key, &spec.field) {
+    match store.hget(key, spec.field()) {
         Ok(Some(raw)) => {
             let raw = raw.to_vec();
             match IndexValue::coerce(spec.ty, &raw) {

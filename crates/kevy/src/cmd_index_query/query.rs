@@ -287,7 +287,7 @@ mod verify_tests {
         IndexSpec {
             name: b"byage".to_vec(),
             prefix: b"u:".to_vec(),
-            field: b"age".to_vec(),
+            fields: vec![kevy_index::FieldSpec::new(b"age".to_vec())],
             ty: ValType::I64,
             kind: IndexKind::Range,
             max_bytes: 0,

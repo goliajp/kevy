@@ -1456,11 +1456,25 @@ fn spop_storm_keeps_replica_sets_identical() {
     if !fenced {
         // What the replica DID see — "never caught up" alone cannot tell
         // "the runner never attached" from "it attached and fell behind".
-        send_resp(&mut reader, &[b"DBSIZE"]);
-        let dbsize = read_line(&mut reader);
+        //
+        // On a FRESH connection: the polling loop above leaves `reader`
+        // mid-reply whenever it gives up between a request and its
+        // response, and reading DBSIZE off it then returns whatever was
+        // still queued. A previous failure of this test reported
+        // `DBSIZE = *1` -- an array header, which DBSIZE cannot return --
+        // so the one line that was supposed to explain the failure was
+        // itself desynced and said nothing.
+        let mut fresh = connect_retry(replica.port, "replica (diagnostic)");
+        send_resp(&mut fresh, &[b"DBSIZE"]);
+        let dbsize = read_line(&mut fresh);
+        send_resp(&mut fresh, &[b"GET", b"spop-fence"]);
+        let fence = read_line(&mut fresh);
         panic!(
-            "replica never caught up to the post-storm fence within {budget:?} (replica DBSIZE = {})",
+            "replica never caught up to the post-storm fence within {budget:?}\n\
+             replica DBSIZE = {}\n\
+             replica GET spop-fence = {}",
             String::from_utf8_lossy(&dbsize).trim_end(),
+            String::from_utf8_lossy(&fence).trim_end(),
         );
     }
 

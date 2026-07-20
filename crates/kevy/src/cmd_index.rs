@@ -75,7 +75,7 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(
     let spec = IndexSpec {
         name: args[1].to_vec(),
         prefix: args[4].to_vec(),
-        field: args[6].to_vec(),
+        fields: vec![kevy_index::FieldSpec::new(args[6].to_vec())],
         ty,
         kind,
         max_bytes: opts.max_bytes,
