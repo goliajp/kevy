@@ -329,18 +329,18 @@ client 生态 —— 该策略 t2 里 gate 化。
 D2 事务标记(全有全无,与事务大小无关)/ R2 事务内集合读。
 **顺序原则:先把「验证」变便宜且诚实,再交付别人在等的,再收自己归档的,最后回发布列车。**
 
-- [ ] **A1 pushgate** — 一条命令在本地跑 CI 上全部「不需要起服务」的门(clippy 用 CI 的确切命令 / locgate / commentgate / killgate / docs+site parity / doc configs / CJK / vendorgate),并**显式打印它不覆盖的 CI 步骤**(uringgate / availgate / covgate / repligate / mobilegate…)。
+- [x] **A1 pushgate** — 一条命令在本地跑 CI 上全部「不需要起服务」的门(clippy 用 CI 的确切命令 / locgate / commentgate / killgate / docs+site parity / doc configs / CJK / vendorgate),并**显式打印它不覆盖的 CI 步骤**(uringgate / availgate / covgate / repligate / mobilegate…)。
       根因:本地跑的命令集 ≠ CI 的命令集,导致「一轮红一个门」;且我曾把 `--all-features` 当成 CI 命令,而 CI 并没有这个 flag。子集门必须自曝子集边界,否则就是又一个隐形悬崖。
-- [ ] **A2 fmt 归属拍板** — `cargo fmt --check` 当前**不在 CI**,且仓库已有漂移(至少 `crates/kevy/examples/bench_cmd.rs`)。二选一:进门 + 一次性全仓 fmt,或明确记「不做」并从 pushgate 排除。不留「像门但不是门」的中间态。
+- [x] **A2 fmt —— 决定不采纳**(2026-07-21)。查证:仓库**没有 rustfmt.toml**,`cargo fmt --check` 报 **519 个文件 / 2642 处**(395 src + 96 tests)。这不是漂移,是本项目从不用 rustfmt、风格手工维护。采纳意味着重写 519 个文件 + 冲掉 git blame + 撞所有在飞工作;不采纳是零风险现状。CLAUDE.md 的代码质量规则只管文件/函数长度(locgate 已守),不含 fmt。pushgate 不跑 fmt,保持不跑。**要改成采纳需用户明确批准**(那是有代价的方向)。
 - [ ] **A3 三轮同码全绿** — v4「验证完备自洽」的达标线;A1 落地后再计数。
 
 - [ ] **B1 交付消费者答复** — `docs/SUPPORT-LINE-3X-VS-4X-2026-07-20.md` 已写好但**尚未交出去**;对方正在为薪资数据选型,而 3.18 带 D1 缺陷且无修复版本。交付时同时问回那个只有他们能答的问题:256 KiB 悬崖形状的 3.18.x 对他们是否仍有用(取决于他们的事务大小)。
 - [ ] **B1' 拍板项(用户)** — 依 B1 的回答决定是否建 3.18.x。默认不建(理由见支持线文档:带隐形尺寸悬崖的保证比明说没有更糟)。
-- [ ] **B2 R4 启动期不变量对账钩子** — 报告里唯一「不做则每个消费者都要重造、且各造各的错」的条目;与既有 `PREFIX.DIGEST` 配对设计。
-- [ ] **B3 R6 菜谱** — 「一行数据、多个派生键」端到端写进 `docs/cookbook.md`(对方甚至提出愿意贡献)。
-- [ ] **B4 R3 事务内索引读** — 先判定是否与 R2 同形(同一个 op-table 缺口),同形则一并补齐,不同形则单列。
+- [x] **B2 R4 启动期不变量对账钩子** — 报告里唯一「不做则每个消费者都要重造、且各造各的错」的条目;与既有 `PREFIX.DIGEST` 配对设计。
+- [x] **B3 R6 菜谱** — 「一行数据、多个派生键」端到端写进 `docs/cookbook.md`(对方甚至提出愿意贡献)。
+- [x] **B4 R3 事务内索引读** — 先判定是否与 R2 同形(同一个 op-table 缺口),同形则一并补齐,不同形则单列。
 
-- [ ] **C1 跨 shard block-serve 丢元素** — 已归档未修;需要一轮协议设计(BlockServeReq/Resp 的所有权移交),修完进 gate。这是当前唯一「已知会丢数据且没修」的缺陷,不允许带着它 ship。
+- [~] **C1 跨 shard block-serve 丢元素**(设计轮已跑:`.claude/rfcs/2026-07-21-xshard-block-serve-escrow.md`;**第一版 escrow 设计已被代码推翻并记在同文件**——target 走的是命令重放,手里同样只有 RESP 字节。修正后的活候选 = 在 `cmd_block_serve.rs` 里给每个 kind 的 serve 加一个 restore 孪生函数;两个 stream kind 不需要。未实现) — 已归档未修;需要一轮协议设计(BlockServeReq/Resp 的所有权移交),修完进 gate。这是当前唯一「已知会丢数据且没修」的缺陷,不允许带着它 ship。
 
 ### t5 — 总线收尾(渠道除外)
 - [ ] lx64 post-fix arena 复测(悬案)→ README 基准表解冻

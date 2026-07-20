@@ -16,7 +16,7 @@ pub(crate) use chunk::{
 use kevy_resp::encode_error;
 use kevy_rt::ExtensionReduced;
 
-use crate::cmd_index_query::{ST_BADARGS, ST_BUILDING, ST_NOINDEX, ST_OVERBUDGET};
+use crate::cmd_index_query::{ST_BADARGS, ST_BUILDING, ST_NOINDEX, ST_NOTYET, ST_OVERBUDGET};
 use crate::state::CatalogState;
 
 /// Origin half: merge chunks → RESP (or a follow-up fan-out — the
@@ -103,6 +103,14 @@ fn triage_status(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Option<Vec<u8>> {
                 encode_error(
                     &mut out,
                     &format!("ERR {verb_s} '{name_s}': bad arguments — run COMMAND DOCS {verb_s} for the syntax"),
+                );
+                return Some(out);
+            }
+            Some(ST_NOTYET) => {
+                let clause = String::from_utf8_lossy(&c[1..]).to_string();
+                encode_error(
+                    &mut out,
+                    &format!("ERR {verb_s} '{name_s}': the {clause} clause is accepted by the parser but not implemented yet — it is part of the text-search arc, and silently ignoring it would give you wrong results rather than an error"),
                 );
                 return Some(out);
             }

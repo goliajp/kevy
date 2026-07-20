@@ -13,8 +13,14 @@ use crate::state::Ctx;
 /// Text MATCH per-shard: BM25-ranked hits + owning-shard
 /// hydration. Chunk: `[ST_OK][n][(klen,key,score f64,fcount,fields)*]`.
 pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
-    let Some(q) = MatchArgs::parse(argv) else {
-        return vec![ST_BADARGS];
+    let q = match MatchArgs::parse_terminal(argv) {
+        crate::cmd_index_query::args::MatchParse::Ok(q) => q,
+        crate::cmd_index_query::args::MatchParse::BadArgs => return vec![ST_BADARGS],
+        crate::cmd_index_query::args::MatchParse::NotYet(clause) => {
+            let mut chunk = vec![crate::cmd_index_query::ST_NOTYET];
+            chunk.extend_from_slice(clause);
+            return chunk;
+        }
     };
     let res = index_runtime::with_ready_text_segment(ctx, store, &q.name, |ts| {
         ts.matches(&q.text, q.limit)
