@@ -179,6 +179,7 @@ fn col_to_fields(col: &str, v2: bool) -> Option<Vec<FieldSpec>> {
 #[cfg(test)]
 mod sidecar_v2_tests {
     use super::*;
+    use crate::IndexState;
 
     fn spec(name: &str) -> IndexSpec {
         IndexSpec::single_field(
@@ -205,23 +206,24 @@ mod sidecar_v2_tests {
         assert_eq!(got[0].0.fields[0].weight, 1.0, "and it is neutrally weighted");
     }
 
+    /// The format must be able to carry weighted multi-field specs
+    /// NOW, so that lifting the engine gate later is not also a disk
+    /// format change. Only the writing half is checked: `create`
+    /// refuses multi-field today, and `from_sidecar` goes through it,
+    /// so no such sidecar can exist to read back yet.
     #[test]
-    fn v2_round_trips_several_weighted_fields() {
+    fn v2_serialises_several_weighted_fields() {
         let mut s = spec("multi");
         s.fields = vec![
             FieldSpec { name: b"title".to_vec(), weight: 3.0 },
             FieldSpec { name: b"body".to_vec(), weight: 1.0 },
         ];
         let mut c = Catalog::new();
-        c.create(s).unwrap();
+        c.specs.push((s, IndexState::Building));
         let text = c.to_sidecar();
         assert!(text.starts_with("kevy-index-catalog v2"));
-        let back = Catalog::from_sidecar(&text).expect("v2 round trip");
-        let got: Vec<_> = back.iter().collect();
-        assert_eq!(got[0].0.fields.len(), 2);
-        assert_eq!(got[0].0.fields[0].name, b"title".to_vec());
-        assert_eq!(got[0].0.fields[0].weight, 3.0);
-        assert_eq!(got[0].0.fields[1].name, b"body".to_vec());
+        let col3 = text.lines().nth(1).unwrap().split('\t').nth(2).unwrap();
+        assert_eq!(col3, "title:3,body:1");
     }
 
     /// A field name containing the separators must survive, or a

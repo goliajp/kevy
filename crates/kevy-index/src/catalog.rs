@@ -219,6 +219,18 @@ impl Catalog {
         if self.specs.iter().any(|(s, _)| s.name == spec.name) {
             return Err("ERR index already exists");
         }
+        if spec.fields.is_empty() {
+            return Err("ERR index needs at least one field");
+        }
+        // The spec can carry several fields and the text engine still
+        // indexes only the first. Refuse rather than accept-and-ignore:
+        // a two-field index that silently scores one field returns
+        // plausible results that are wrong, which is worse than an
+        // error and much harder to notice. Lifted when the segment
+        // indexes weighted fields.
+        if spec.fields.len() > 1 {
+            return Err("ERR multi-field indexes are declared but not served yet");
+        }
         self.specs.push((spec, IndexState::Building));
         Ok(())
     }
