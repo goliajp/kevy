@@ -1,4 +1,4 @@
-use super::*;
+use crate::store::*;
 use crate::KevyMetric;
 use crate::config::{AppendFsync, EvictionPolicy};
 use std::path::PathBuf;

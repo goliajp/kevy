@@ -161,7 +161,7 @@ fn renamenx_succeeds_when_dst_absent() {
 fn zset_algebra_store_forms_and_reopen() {
     use crate::ZAggregate;
     use crate::config::AppendFsync;
-    let dir = crate::store::tests::tmp_dir("zalg-reopen");
+    let dir = crate::store::test_suites::tests::tmp_dir("zalg-reopen");
     {
         let s = Store::open(
             Config::default()
@@ -267,7 +267,7 @@ fn feed_flushall_bumps_generation() {
 
 #[test]
 fn feed_clean_reopen_continues_crash_bumps() {
-    let dir = crate::store::tests::tmp_dir("feed-reopen");
+    let dir = crate::store::test_suites::tests::tmp_dir("feed-reopen");
     {
         let s = Store::open(
             Config::default().with_persist(&dir).with_ttl_reaper_manual().with_feed(0),
@@ -320,7 +320,7 @@ fn info_prefix_counts() {
 
 #[test]
 fn zpopmin_below_pops_due_jobs_and_replays() {
-    let dir = crate::store::tests::tmp_dir("zpb-reopen");
+    let dir = crate::store::test_suites::tests::tmp_dir("zpb-reopen");
     {
         let s = Store::open(
             Config::default().with_persist(&dir).with_ttl_reaper_manual(),
@@ -435,7 +435,7 @@ fn snapshot_view_is_point_in_time_and_prefix_scoped() {
 fn hash_field_ttl_full_matrix_with_reopen() {
     use crate::HExpireCond;
     use crate::config::AppendFsync;
-    let dir = crate::store::tests::tmp_dir("hfttl-reopen");
+    let dir = crate::store::test_suites::tests::tmp_dir("hfttl-reopen");
     let far = kevy_store::now_unix_ms() + 200_000;
     {
         let s = Store::open(
@@ -488,7 +488,7 @@ fn hash_field_ttl_full_matrix_with_reopen() {
 #[test]
 fn idx_create_query_maintain_reopen() {
     use crate::{IndexKind, IndexValue, IndexValType};
-    let dir = crate::store::tests::tmp_dir("idx-reopen");
+    let dir = crate::store::test_suites::tests::tmp_dir("idx-reopen");
     {
         let s = Store::open(
             Config::default().with_persist(&dir).with_ttl_reaper_manual(),
@@ -567,7 +567,7 @@ fn idx_create_query_maintain_reopen() {
 #[test]
 fn view_create_query_maintain_reopen() {
     use crate::{IndexKind, IndexValType, IndexValue, ViewLeaf, ViewMode, ViewTree};
-    let dir = crate::store::tests::tmp_dir("view-reopen");
+    let dir = crate::store::test_suites::tests::tmp_dir("view-reopen");
     let leaf = |idx: &str, lo: i64, hi: i64| {
         ViewTree::Leaf(ViewLeaf {
             index: idx.into(),

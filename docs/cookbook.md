@@ -593,20 +593,36 @@ Two limits, both deliberate:
   runs at commit. A closure inserting two rows must compare them to each
   other itself.
 
-**Verification.** Because `derived` is a function, the checker is four
-lines and needs no separate specification:
+**Verification.** Because `derived` is a function, the checker *is* the
+function — pass the same one to `reconcile`:
 
 ```rust
-for (id, row) in every_row(&store)? {
-    for k in derived(&id, &row) {
-        if store.get(&k)?.is_none() { report_missing(&id, &k); }
-    }
+let report = store.snapshot().reconcile(
+    b"user:",                    // the rows
+    &[b"email:", b"dept:"],      // where derived keys live
+    |key, row| derived(key, row),
+);
+if !report.is_clean() {
+    warn!("{} missing, {} orphaned", report.missing_count, report.orphaned_count);
 }
 ```
 
+It diffs **both** directions, which is the part worth not writing
+yourself. A missing key is lost derived state; an *orphan* — a claim
+whose row is gone — is what a half-applied update leaves behind, and it
+is the failure that silently blocks a later insert. A checker that only
+looks for absences reports "clean" during exactly that failure.
+
+It runs against a [snapshot](embedded.md#snapshot), frozen under every
+shard lock, so it does not mistake a concurrent write for drift. That
+holds only if the write itself was atomic: a row and its claims must go
+in one `atomic_all_shards` block, or there is a real half-applied state
+to find. Reconciliation and atomic writes are the same guarantee seen
+from two ends.
+
 Run it at boot, or on a schedule, or never once you trust the writes —
-but write it, because it is the only thing that can tell you the
-invariant you believe in is the invariant you have.
+but run it, because it is the only thing that can tell you the invariant
+you believe in is the invariant you have.
 
 ## Recipe index
 
