@@ -413,49 +413,11 @@ impl Store {
         let r = match outcome {
             Ok(r) => r,
             Err(e) => {
-                // Rollback — see `Store::atomic`. Reverse order so a key
-                // touched more than once lands on its earliest state.
-                for (idx, key, prior) in undo.into_iter().rev() {
-                    let g = &mut ctx.guards[idx];
-                    match prior {
-                        Some((value, ttl_ms)) => g.store.put_with_ttl(key, value, ttl_ms),
-                        None => {
-                            let k: &[u8] = &key;
-                            g.store.del(&[k]);
-                        }
-                    }
-                }
+                rollback_all(&mut ctx.guards, undo);
                 return Err(e);
             }
         };
-        // Group-commit per shard: `Fsync::Always` otherwise syncs once
-        // per frame, so a crash mid-loop leaves a durable partial
-        // transaction.
-        #[cfg(feature = "persist")]
-        for g in ctx.guards.iter_mut() {
-            if let Some(aof) = g.aof.as_mut() {
-                aof.begin_group();
-            }
-        }
-        let mut commit = Ok(());
-        for (idx, parts) in log {
-            let g = &mut ctx.guards[idx];
-            let refs: Vec<&[u8]> = parts.iter().map(|v| v.as_slice()).collect();
-            commit = commit_write(g, &refs);
-            if commit.is_err() {
-                break;
-            }
-        }
-        #[cfg(feature = "persist")]
-        for g in ctx.guards.iter_mut() {
-            if let Some(aof) = g.aof.as_mut() {
-                let synced = aof.end_group().map_err(KevyError::from);
-                if commit.is_ok() {
-                    commit = synced;
-                }
-            }
-        }
-        commit?;
+        commit_group_all(&mut ctx.guards, log)?;
         Ok(r)
     }
 }
@@ -470,3 +432,52 @@ pub(crate) const ATOMIC_ALL_OPS: &[&str] = &[
     "HEXISTS", "SADD", "SREM", "LPUSH", "RPUSH", "ZREM", "ZCARD",
     "SMEMBERS", "SISMEMBER", "LRANGE", "LLEN", "SCARD", "ZRANGEBYSCORE",
 ];
+
+/// Undo a rejected cross-shard transaction. See `Store::atomic`; reverse
+/// order so a key touched more than once lands on its earliest state.
+fn rollback_all(guards: &mut [RwLockWriteGuard<'_, Inner>], undo: Vec<ShardUndoEntry>) {
+    for (idx, key, prior) in undo.into_iter().rev() {
+        let g = &mut guards[idx];
+        match prior {
+            Some((value, ttl_ms)) => g.store.put_with_ttl(key, value, ttl_ms),
+            None => {
+                let k: &[u8] = &key;
+                g.store.del(&[k]);
+            }
+        }
+    }
+}
+
+/// Bracket and group-commit each shard's queued frames. The brackets make
+/// replay all-or-nothing at any size; the group makes `Fsync::Always`
+/// cost one sync per shard instead of one per frame.
+fn commit_group_all(
+    guards: &mut [RwLockWriteGuard<'_, Inner>],
+    log: Vec<(usize, Vec<Vec<u8>>)>,
+) -> KevyResult<()> {
+    #[cfg(feature = "persist")]
+    for g in guards.iter_mut() {
+        if let Some(aof) = g.aof.as_mut() {
+            aof.begin_group();
+        }
+    }
+    let mut commit = Ok(());
+    for (idx, parts) in log {
+        let g = &mut guards[idx];
+        let refs: Vec<&[u8]> = parts.iter().map(|v| v.as_slice()).collect();
+        commit = commit_write(g, &refs);
+        if commit.is_err() {
+            break;
+        }
+    }
+    #[cfg(feature = "persist")]
+    for g in guards.iter_mut() {
+        if let Some(aof) = g.aof.as_mut() {
+            let synced = aof.end_group().map_err(KevyError::from);
+            if commit.is_ok() {
+                commit = synced;
+            }
+        }
+    }
+    commit
+}

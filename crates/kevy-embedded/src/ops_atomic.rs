@@ -424,47 +424,11 @@ impl Store {
         let r = match outcome {
             Ok(r) => r,
             Err(e) => {
-                // ROLLBACK. The closure's writes hit the store as they
-                // were made — reads inside the block have to see them —
-                // so a rejected transaction must be undone here or the
-                // rejected write stays live while its AOF frames are
-                // discarded, and a restart then disagrees with the
-                // running process. Reverse order so a key touched more
-                // than once lands on its earliest recorded state.
-                for (key, prior) in undo.into_iter().rev() {
-                    match prior {
-                        Some((value, ttl_ms)) => g.store.put_with_ttl(key, value, ttl_ms),
-                        None => {
-                            let k: &[u8] = &key;
-                            g.store.del(&[k]);
-                        }
-                    }
-                }
+                rollback(&mut g, undo);
                 return Err(e);
             }
         };
-        // Commit the queued AOF writes as ONE group: `Fsync::Always`
-        // otherwise fsyncs per frame, which is both N syncs instead of
-        // one and a durable half-transaction if the process dies
-        // between frame k and k+1.
-        #[cfg(feature = "persist")]
-        if let Some(aof) = g.aof.as_mut() {
-            aof.begin_group();
-        }
-        let mut commit = Ok(());
-        for entry in log {
-            let parts: Vec<&[u8]> = entry.iter().map(|v| v.as_slice()).collect();
-            commit = commit_write(&mut g, &parts);
-            if commit.is_err() {
-                break;
-            }
-        }
-        #[cfg(feature = "persist")]
-        if let Some(aof) = g.aof.as_mut() {
-            let synced = aof.end_group().map_err(KevyError::from);
-            commit = commit.and(synced);
-        }
-        commit?;
+        commit_group(&mut g, log)?;
         Ok(r)
     }
 }
@@ -477,3 +441,49 @@ pub(crate) const ATOMIC_OPS: &[&str] = &[
     "HEXISTS", "SADD", "SREM", "LPUSH", "RPUSH", "ZREM", "ZCARD",
     "SMEMBERS", "SISMEMBER", "LRANGE", "LLEN", "SCARD", "ZRANGEBYSCORE",
 ];
+
+/// Undo a rejected transaction.
+///
+/// The closure's writes hit the store as they were made — reads inside
+/// the block have to see them — so a rejected transaction must be undone
+/// here, or the rejected write stays live while its AOF frames are
+/// discarded and a restart disagrees with the running process. Reverse
+/// order so a key touched more than once lands on its earliest recorded
+/// state.
+fn rollback(g: &mut Inner, undo: Vec<UndoEntry>) {
+    for (key, prior) in undo.into_iter().rev() {
+        match prior {
+            Some((value, ttl_ms)) => g.store.put_with_ttl(key, value, ttl_ms),
+            None => {
+                let k: &[u8] = &key;
+                g.store.del(&[k]);
+            }
+        }
+    }
+}
+
+/// Commit the queued AOF frames as ONE bracketed group.
+///
+/// The brackets are what make replay all-or-nothing at any size, and the
+/// group is what makes `Fsync::Always` cost one sync instead of N. See
+/// `kevy_persist::Aof::begin_group`.
+fn commit_group(g: &mut Inner, log: Vec<Vec<Vec<u8>>>) -> KevyResult<()> {
+    #[cfg(feature = "persist")]
+    if let Some(aof) = g.aof.as_mut() {
+        aof.begin_group();
+    }
+    let mut commit = Ok(());
+    for entry in log {
+        let parts: Vec<&[u8]> = entry.iter().map(|v| v.as_slice()).collect();
+        commit = commit_write(g, &parts);
+        if commit.is_err() {
+            break;
+        }
+    }
+    #[cfg(feature = "persist")]
+    if let Some(aof) = g.aof.as_mut() {
+        let synced = aof.end_group().map_err(KevyError::from);
+        commit = commit.and(synced);
+    }
+    commit
+}
