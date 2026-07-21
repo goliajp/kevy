@@ -134,20 +134,17 @@ pub(super) fn reduce_match_stats(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Extens
         encode_error(&mut out, "ERR bad IDX arguments");
         return ExtensionReduced::Reply(out);
     };
-    let mut q_tokens = kevy_text::tokenize(&m.text);
-    q_tokens.sort();
-    q_tokens.dedup();
     let (mut n_docs, mut total_len) = (0u64, 0u64);
-    let mut df: std::collections::HashMap<Vec<u8>, u32> =
-        q_tokens.iter().map(|t| (t.clone(), 0)).collect();
+    // Accumulate every token each shard reports — the query's tokens and,
+    // for a `word*` prefix, that shard's expansion terms — into one global
+    // df, so a prefix expansion scores against its corpus-wide df too.
+    let mut df: std::collections::HashMap<Vec<u8>, u32> = std::collections::HashMap::new();
     for c in chunks {
         let Some((nd, tl, tokdf)) = decode_stats_chunk(c) else { continue };
         n_docs += nd;
         total_len += tl;
         for (tok, d) in tokdf {
-            if let Some(slot) = df.get_mut(&tok) {
-                *slot += d;
-            }
+            *df.entry(tok).or_insert(0) += d;
         }
     }
     let avgdl = if n_docs > 0 { total_len as f64 / n_docs as f64 } else { 0.0 };

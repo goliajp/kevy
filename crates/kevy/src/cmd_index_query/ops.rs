@@ -31,12 +31,18 @@ pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Ve
             return chunk;
         }
     };
-    let mut q_tokens = kevy_text::tokenize(&q.text);
-    q_tokens.sort();
-    q_tokens.dedup();
     let res = index_runtime::with_ready_text_segment(ctx, store, &q.name, |ts, _| {
-        let tokdf: Vec<(Vec<u8>, u32)> =
-            q_tokens.iter().map(|t| (t.clone(), ts.local_df(t))).collect();
+        // `query_df_terms` expands `word*` prefixes against this shard's
+        // dictionary, so the reported df covers the prefix's expansion
+        // terms too — the reduce unions them across shards.
+        let tokdf: Vec<(Vec<u8>, u32)> = ts
+            .query_df_terms(&q.text)
+            .into_iter()
+            .map(|t| {
+                let d = ts.local_df(&t);
+                (t, d)
+            })
+            .collect();
         (ts.stats().docs, ts.total_len(), tokdf)
     });
     match res {

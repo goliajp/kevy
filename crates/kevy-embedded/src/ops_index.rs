@@ -274,14 +274,13 @@ impl Store {
     /// df of every query token into one global [`CorpusStats`]. Errors
     /// if no shard carries a text index named `name`.
     #[cfg(feature = "text")]
-    fn text_corpus_stats(
-        &self,
-        name: &[u8],
-        q_tokens: &[Vec<u8>],
-    ) -> KevyResult<kevy_text::CorpusStats> {
+    fn text_corpus_stats(&self, name: &[u8], text: &[u8]) -> KevyResult<kevy_text::CorpusStats> {
         let (mut n_docs, mut total_len) = (0f64, 0u64);
-        let mut df: std::collections::HashMap<Vec<u8>, u32> =
-            q_tokens.iter().map(|t| (t.clone(), 0)).collect();
+        // Accumulated per shard from `query_df_terms`, which expands
+        // `word*` prefixes against that shard's dictionary — so the df map
+        // ends up keyed by the union of every shard's query terms and
+        // prefix expansions, each summed to a global df.
+        let mut df: std::collections::HashMap<Vec<u8>, u32> = std::collections::HashMap::new();
         let mut found = false;
         for shard in self.shards.iter() {
             let mut g = lock_write(shard);
@@ -291,8 +290,9 @@ impl Store {
                 found = true;
                 n_docs += ts.stats().docs as f64;
                 total_len += ts.total_len();
-                for (t, d) in &mut df {
-                    *d += ts.local_df(t);
+                for t in ts.query_df_terms(text) {
+                    let d = ts.local_df(&t);
+                    *df.entry(t).or_insert(0) += d;
                 }
             }
         }

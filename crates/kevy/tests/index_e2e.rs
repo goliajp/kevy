@@ -671,3 +671,28 @@ fn highlight_returns_match_spans() {
         assert!(s.contains(&format!("${}\r\n{n}\r\n", n.len())), "span offset {n} present: {s}");
     }
 }
+
+/// A `word*` prefix in the MATCH text matches every term sharing the
+/// prefix — search-as-you-type — over the real fan-out, with the
+/// expansion terms' df aggregated globally (pass 1 expands per shard).
+#[test]
+fn prefix_query_over_the_wire() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    cmd(&mut c, &[b"HSET", b"p:1", b"body", b"quick fox"]);
+    cmd(&mut c, &[b"HSET", b"p:2", b"body", b"quiet night"]);
+    cmd(&mut c, &[b"HSET", b"p:3", b"body", b"slow turtle"]);
+    let r = cmd(
+        &mut c,
+        &[b"IDX.CREATE", b"pf", b"ON", b"PREFIX", b"p:", b"FIELD", b"body",
+          b"TYPE", b"str", b"KIND", b"text"],
+    );
+    assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
+    let r = query_ready(&mut c, &[b"IDX.QUERY", b"pf", b"MATCH", b"qui*", b"LIMIT", b"10"]);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.contains("p:1") && s.contains("p:2"), "qui* matches quick and quiet: {s}");
+    assert!(!s.contains("p:3"), "slow has no qui- term: {s}");
+    // A plain term query is unchanged.
+    let r = query_ready(&mut c, &[b"IDX.QUERY", b"pf", b"MATCH", b"quick", b"LIMIT", b"10"]);
+    assert!(String::from_utf8_lossy(&r).contains("p:1"), "plain term still works");
+}
