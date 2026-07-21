@@ -5,13 +5,20 @@ use kevy_index::{IndexValue, ValType};
 use kevy_store::Store;
 
 use super::args::{ComposeQuery, HybridArgs, KnnArgs, MatchArgs, Shape};
-use super::wire::{encode_agg_chunk, encode_hydration};
+use super::wire::{decode_gstats_arg, encode_agg_chunk, encode_hydration, encode_stats_chunk};
 use super::{ST_BADARGS, ST_BUILDING, ST_NOINDEX, ST_OK, ST_OVERBUDGET};
 use crate::index_runtime;
 use crate::state::Ctx;
 
-/// Text MATCH per-shard: BM25-ranked hits + owning-shard
-/// hydration. Chunk: `[ST_OK][n][(klen,key,score f64,fcount,fields)*]`.
+/// Text MATCH pass 1 (per-shard): report this shard's corpus counters
+/// so the reduce can build one global [`kevy_text::CorpusStats`] and a
+/// hit's BM25 rank stops depending on which shard it landed on (global
+/// BM25, step 4b-server; the embedded twin is `idx_match`). Chunk:
+/// `[ST_OK][n_docs u64][total_len u64][ntok u32][(tlen,token,df u32)*]`.
+///
+/// The terminal-surface validation runs HERE (pass 1) so a NOTYET/BADARGS
+/// answer is returned before any second fan-out — the syntax verdict must
+/// not wait on a scoring round.
 pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let q = match MatchArgs::parse_terminal(argv) {
         crate::cmd_index_query::args::MatchParse::Ok(q) => q,
@@ -22,8 +29,41 @@ pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Ve
             return chunk;
         }
     };
+    let mut q_tokens = kevy_text::tokenize(&q.text);
+    q_tokens.sort();
+    q_tokens.dedup();
     let res = index_runtime::with_ready_text_segment(ctx, store, &q.name, |ts| {
-        ts.matches(&q.text, q.limit)
+        let tokdf: Vec<(Vec<u8>, u32)> =
+            q_tokens.iter().map(|t| (t.clone(), ts.local_df(t))).collect();
+        (ts.stats().docs, ts.total_len(), tokdf)
+    });
+    match res {
+        Ok((n_docs, total_len, tokdf)) => {
+            let mut chunk = Vec::new();
+            encode_stats_chunk(&mut chunk, n_docs, total_len, &tokdf);
+            chunk
+        }
+        Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
+        Err(_) => vec![ST_NOINDEX],
+    }
+}
+
+/// Text MATCH pass 2 (internal `MATCH.SCORE`): score this shard against
+/// the injected global stats and emit ranked hits + owning-shard
+/// hydration. Chunk `[ST_OK][n][(klen,key,score f64,fcount,fields)*]` —
+/// same layout as KNN, so the reduce shares the decoder.
+///
+/// argv: `[MATCH.SCORE, name, text, LIMIT=<n>, <gstats>, (FIELDS f…)?]`.
+pub(super) fn op_match_score(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+    let Some((name, text, limit, fields)) = super::args::parse_match_score(argv) else {
+        return vec![ST_BADARGS];
+    };
+    let Some(stats) = argv.get(4).and_then(|b| decode_gstats_arg(b)) else {
+        return vec![ST_BADARGS];
+    };
+    let res = index_runtime::with_ready_text_segment(ctx, store, &name, |ts| {
+        ts.matches_scored(&text, limit, Some(&stats))
     });
     match res {
         Ok(hits) => {
@@ -33,7 +73,7 @@ pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Ve
                 chunk.extend_from_slice(&(h.key.len() as u32).to_le_bytes());
                 chunk.extend_from_slice(&h.key);
                 chunk.extend_from_slice(&h.score.to_le_bytes());
-                encode_hydration(store, &mut chunk, &h.key, &q.fields);
+                encode_hydration(store, &mut chunk, &h.key, &fields);
             }
             chunk
         }

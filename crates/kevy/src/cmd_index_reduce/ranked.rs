@@ -2,19 +2,46 @@
 //! reciprocal-rank fusion.
 
 use kevy_resp::{encode_array_len, encode_bulk, encode_error};
+use kevy_rt::ExtensionReduced;
 
 use super::chunk::{read_hydration, read_kbytes, read_u32};
 use crate::cmd_index_query::Hydrated;
 
-/// Shared MATCH/KNN reduce: decode `[n][(key, f64, hydration)*]`
-/// chunks, sort (ascending for KNN distances, descending for BM25
-/// scores), truncate to LIMIT, emit `[key, value, fields…]` rows.
+/// One shard's decoded pass-1 report: `(n_docs, total_len, [(token, df)])`.
+type ShardCorpus = (u64, u64, Vec<(Vec<u8>, u32)>);
+
+/// KNN reduce: decode `[n][(key, f64, hydration)*]` chunks, sort
+/// distance-ascending, truncate to LIMIT, emit `[key, value, fields…]`.
+/// MATCH takes the two-pass [`reduce_match_stats`]→[`reduce_match_score`]
+/// path instead so its scores are globally comparable.
 pub(super) fn reduce_ranked(argv: &[Vec<u8>], chunks: &[Vec<u8>], ascending: bool) -> Vec<u8> {
     let mut out = Vec::new();
-    let Some((limit, fields)) = ranked_args(argv, ascending) else {
+    let Some((limit, fields)) = crate::cmd_index_query::KnnArgs::parse(argv)
+        .map(|q| (q.limit, q.fields))
+        .filter(|_| ascending)
+    else {
         encode_error(&mut out, "ERR bad IDX arguments");
         return out;
     };
+    merge_ranked(chunks, limit, &fields, ascending)
+}
+
+/// MATCH pass 2 reduce: merge the globally-scored ranked chunks
+/// (score-descending). Same chunk layout as KNN; `(limit, fields)` come
+/// from the MATCH.SCORE argv the pass-1 reduce built.
+pub(super) fn reduce_match_score(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let Some((_, _, limit, fields)) = crate::cmd_index_query::parse_match_score(argv) else {
+        encode_error(&mut out, "ERR bad IDX arguments");
+        return out;
+    };
+    merge_ranked(chunks, limit, &fields, false)
+}
+
+/// Decode `[n][(key, f64, hydration)*]` chunks, sort, truncate, emit
+/// `[key, value, fields…]` rows. Shared by KNN and MATCH pass 2.
+fn merge_ranked(chunks: &[Vec<u8>], limit: usize, fields: &[Vec<u8>], ascending: bool) -> Vec<u8> {
+    let mut out = Vec::new();
     let mut all: Vec<(f64, Vec<u8>, Hydrated)> = Vec::new();
     for c in chunks {
         let mut pos = 1usize;
@@ -51,13 +78,90 @@ pub(super) fn reduce_ranked(argv: &[Vec<u8>], chunks: &[Vec<u8>], ascending: boo
     out
 }
 
-/// `(limit, fields)` from the KNN (ascending) or MATCH argv.
-fn ranked_args(argv: &[Vec<u8>], ascending: bool) -> Option<(usize, Vec<Vec<u8>>)> {
-    if ascending {
-        crate::cmd_index_query::KnnArgs::parse(argv).map(|q| (q.limit, q.fields))
-    } else {
-        crate::cmd_index_query::MatchArgs::parse(argv).map(|q| (q.limit, q.fields))
+/// MATCH pass 1 reduce: fold each shard's corpus counters
+/// (`[ST_OK][n_docs u64][total_len u64][ntok u32][(tlen,token,df u32)*]`)
+/// into one global [`kevy_text::CorpusStats`], then re-fan-out
+/// `MATCH.SCORE` carrying it so every shard scores against the same
+/// numbers (global BM25 — a hit's rank stops depending on its shard).
+///
+/// Stateless two-phase like GROUPS→AGG.FETCH: the aggregated stats ride
+/// inside the follow-up argv, so the runtime holds no per-phase state.
+pub(super) fn reduce_match_stats(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> ExtensionReduced {
+    let mut out = Vec::new();
+    let Some(m) = crate::cmd_index_query::MatchArgs::parse(argv) else {
+        encode_error(&mut out, "ERR bad IDX arguments");
+        return ExtensionReduced::Reply(out);
+    };
+    let mut q_tokens = kevy_text::tokenize(&m.text);
+    q_tokens.sort();
+    q_tokens.dedup();
+    let (mut n_docs, mut total_len) = (0u64, 0u64);
+    let mut df: std::collections::HashMap<Vec<u8>, u32> =
+        q_tokens.iter().map(|t| (t.clone(), 0)).collect();
+    for c in chunks {
+        let Some((nd, tl, tokdf)) = decode_stats_chunk(c) else { continue };
+        n_docs += nd;
+        total_len += tl;
+        for (tok, d) in tokdf {
+            if let Some(slot) = df.get_mut(&tok) {
+                *slot += d;
+            }
+        }
     }
+    let avgdl = if n_docs > 0 { total_len as f64 / n_docs as f64 } else { 0.0 };
+    let blob = encode_gstats_arg(n_docs as f64, avgdl, &df);
+    let mut argv2: Vec<Vec<u8>> = vec![
+        b"MATCH.SCORE".to_vec(),
+        m.name,
+        m.text,
+        format!("LIMIT={}", m.limit).into_bytes(),
+        blob,
+    ];
+    if !m.fields.is_empty() {
+        argv2.push(b"FIELDS".to_vec());
+        argv2.extend(m.fields);
+    }
+    ExtensionReduced::Continue(argv2)
+}
+
+/// Encode the aggregated global stats as one MATCH.SCORE argv element
+/// (the per-shard decoder is `cmd_index_query::wire::decode_gstats_arg`).
+/// Layout: `[n_docs f64][avgdl f64][ntok u32][(tlen u32, token, df u32)*]`.
+fn encode_gstats_arg(
+    n_docs: f64,
+    avgdl: f64,
+    df: &std::collections::HashMap<Vec<u8>, u32>,
+) -> Vec<u8> {
+    let mut b = Vec::new();
+    b.extend_from_slice(&n_docs.to_le_bytes());
+    b.extend_from_slice(&avgdl.to_le_bytes());
+    b.extend_from_slice(&(df.len() as u32).to_le_bytes());
+    for (tok, d) in df {
+        b.extend_from_slice(&(tok.len() as u32).to_le_bytes());
+        b.extend_from_slice(tok);
+        b.extend_from_slice(&d.to_le_bytes());
+    }
+    b
+}
+
+/// Decode one pass-1 stats chunk into `(n_docs, total_len, [(token, df)])`.
+/// `None` on a status byte / truncated body.
+fn decode_stats_chunk(c: &[u8]) -> Option<ShardCorpus> {
+    let n_docs = u64::from_le_bytes(c.get(1..9)?.try_into().ok()?);
+    let total_len = u64::from_le_bytes(c.get(9..17)?.try_into().ok()?);
+    let ntok = u32::from_le_bytes(c.get(17..21)?.try_into().ok()?) as usize;
+    let mut pos = 21usize;
+    let mut tokdf = Vec::with_capacity(ntok);
+    for _ in 0..ntok {
+        let tlen = u32::from_le_bytes(c.get(pos..pos + 4)?.try_into().ok()?) as usize;
+        pos += 4;
+        let tok = c.get(pos..pos + tlen)?.to_vec();
+        pos += tlen;
+        let d = u32::from_le_bytes(c.get(pos..pos + 4)?.try_into().ok()?);
+        pos += 4;
+        tokdf.push((tok, d));
+    }
+    Some((n_docs, total_len, tokdf))
 }
 
 /// Decode one ranked segment `[n][(key, f64, hydration)*]`.

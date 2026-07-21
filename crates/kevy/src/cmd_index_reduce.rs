@@ -51,9 +51,14 @@ pub(crate) fn extension_reduce(
     if argv.get(1).is_some_and(|a| a.eq_ignore_ascii_case(b"HYBRID")) {
         return ExtensionReduced::Reply(ranked::reduce_hybrid(argv, &chunks));
     }
-    // MATCH: same chunk layout as KNN, sorted score-descending.
+    // MATCH pass 2 (internal): merge the globally-scored ranked chunks.
+    if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"MATCH.SCORE")) {
+        return ExtensionReduced::Reply(ranked::reduce_match_score(argv, &chunks));
+    }
+    // MATCH pass 1: fold each shard's corpus counters into one global
+    // CorpusStats, then re-fan-out MATCH.SCORE to score against it.
     if argv.get(2).is_some_and(|a| a.eq_ignore_ascii_case(b"MATCH")) {
-        return ExtensionReduced::Reply(ranked::reduce_ranked(argv, &chunks, false));
+        return ranked::reduce_match_stats(argv, &chunks);
     }
     // IDX.QUERY COMPOSE: merge key-ordered chunks.
     if argv.get(1).is_some_and(|a| a.eq_ignore_ascii_case(b"COMPOSE")) {
