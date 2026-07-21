@@ -363,6 +363,15 @@ failure is now closed, each behind an executable gate.
   **The engine still indexes only the first field**, so a multi-field
   declaration is *refused* rather than accepted and quietly
   single-field. The gate lifts when the segment indexes weighted fields.
+- **A hit's BM25 rank no longer depends on which shard it landed on.**
+  Each shard used to score its own slice against its own document count
+  and average length, so one document could outrank another purely
+  because of where the two happened to land. `MATCH` now runs two
+  query-time passes — the first sums every shard's document count, total
+  length and the query tokens' document frequency into one global
+  statistic; the second scores every shard against it — so a sharded
+  index ranks identically to a single-shard one. Only the query's
+  tokens' df crosses the wire between passes, never a posting.
 - `docs/text-search.md` records this as a reversal. It previously said
   phrase and boolean queries were deliberately out of scope — "if you
   need those, you are describing a search engine" — which was right for

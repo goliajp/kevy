@@ -9,7 +9,9 @@ mod ops;
 mod query;
 mod wire;
 
-pub(crate) use args::{ComposeQuery, HybridArgs, KnnArgs, MatchArgs, Query, parse_groups_args};
+pub(crate) use args::{
+    ComposeQuery, HybridArgs, KnnArgs, MatchArgs, Query, parse_groups_args, parse_match_score,
+};
 pub(crate) use wire::{decode_value, decode_view_cursor, encode_value, hex};
 
 use kevy_store::Store;
@@ -51,7 +53,12 @@ pub(crate) fn extension_op(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -
     if verb.eq_ignore_ascii_case(b"IDX.EXPLAIN") {
         return query::op_explain(ctx, store, argv);
     }
-    // IDX.QUERY <name> MATCH <text> [LIMIT n] [FIELDS f…]
+    // Pass 2 of MATCH (internal): MATCH.SCORE — score against the injected
+    // global CorpusStats (global BM25, step 4b-server).
+    if verb.eq_ignore_ascii_case(b"MATCH.SCORE") {
+        return ops::op_match_score(ctx, store, argv);
+    }
+    // IDX.QUERY <name> MATCH <text> [LIMIT n] [FIELDS f…] (pass 1: stats)
     if argv.get(2).is_some_and(|a| a.eq_ignore_ascii_case(b"MATCH")) {
         return ops::op_match(ctx, store, argv);
     }

@@ -252,6 +252,37 @@ impl MatchArgs {
     }
 }
 
+/// Parsed pass-2 args: `(name, text, limit, fields)`.
+pub(crate) type MatchScoreArgs = (Vec<u8>, Vec<u8>, usize, Vec<Vec<u8>>);
+
+/// Parse the internal pass-2 argv
+/// `[MATCH.SCORE, name, text, LIMIT=<n>, <gstats>, (FIELDS f…)?]` into
+/// `(name, text, limit, fields)`. The global-stats blob at index 4 is
+/// decoded separately (per-shard: [`super::wire::decode_gstats_arg`]); the
+/// reduce takes only `(limit, fields)`. Shared by the per-shard op and the
+/// origin merge so their view of LIMIT/FIELDS can never drift.
+pub(crate) fn parse_match_score(argv: &[Vec<u8>]) -> Option<MatchScoreArgs> {
+    let name = argv.get(1)?.clone();
+    let text = argv.get(2)?.clone();
+    let limit: usize = std::str::from_utf8(argv.get(3)?)
+        .ok()?
+        .strip_prefix("LIMIT=")?
+        .parse()
+        .ok()?;
+    let fields = match argv.get(5) {
+        Some(f) if f.eq_ignore_ascii_case(b"FIELDS") => {
+            let fs = argv[6..].to_vec();
+            if fs.is_empty() {
+                return None;
+            }
+            fs
+        }
+        Some(_) => return None,
+        None => Vec::new(),
+    };
+    Some((name, text, limit.clamp(1, 1000), fields))
+}
+
 /// `IDX.QUERY name KNN vec [LIMIT k] [FIELDS f…]` (no cursor; k ≤
 /// 1000 — same rationale as MATCH).
 pub(crate) struct KnnArgs {

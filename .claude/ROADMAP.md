@@ -352,7 +352,10 @@ D2 事务标记(全有全无,与事务大小无关)/ R2 事务内集合读。
 - [x] **步骤 2 多字段 IndexSpec + sidecar v2** — v1 永久可读,`b8298c2b`;守卫多字段(仅 text 收,`de99ae50`)
 - [x] **步骤 3 引擎索引加权多字段** — `apply_fields`,dl 不加权,`de99ae50`;6 新测试
 - [x] **步骤 3.5 服务端 IDX.CREATE 多字段 wire 语法(`FIELDS a b [WEIGHTS ...]`)** — `4f3a1963`;扫描式解析,单 `FIELD` 路径 byte-identical,3 wire 测试(加权排序 / 默认权重 / arity 错误);`type_pos` 参数化传给 type/kind/opts 解析
-- [ ] **步骤 4 决定 2:全局 BM25 统计快照** — 跨 shard 聚合 df/n_docs/avgdl,陈旧窗口文档化。**stone 大改,改内存公式,需 lx64 textgate 验证**。正确性(陈旧行为、全局 vs 局部打分)CI 可验
+- [x] **步骤 4a segment 用注入统计打分(全局 BM25 石头能力)** — `matches_scored(_, _, Some(stats))`,`matches` 是 None 糖 byte-identical;正确性测试=分片 vs 整体同分;`total_len`/`local_df` 暴露为 4b pass-1 API。Phase A 发现:query-time 两趟聚合(只需 query token 的 df)严格优于周期快照,无陈旧窗口——见 RFC §1
+- [x] **步骤 4b-embedded 两趟全局 BM25** — `eea588af`+`5f735114`;`idx_match` 趟1 `text_corpus_stats` 聚合全局统计、趟2 `matches_scored`;shard-invariance 测试(ranked(1)==ranked(8) 排序+分数)CI 确认;串行单锁无死锁。教训:测试断言曾误设 d:6 top,实际 BM25 长度归一化下 d:1(短+密) top,CI 纠正
+- [x] **步骤 4b-server 分布式两轮聚合** — 复用 GROUPS→AGG.FETCH 的 stateless `ExtensionReduced::Continue` 两阶段机制:pass1 `op_match` 报 stats chunk `[ST_OK][n_docs][total_len][ntok][(tok,df)*]`→`reduce_match_stats` 聚合全局 `CorpusStats`→`Continue(MATCH.SCORE argv)`;pass2 内部 verb `MATCH.SCORE`→`op_match_score` 注入全局 `matches_scored`→`reduce_match_score` 合并(与 KNN 共用 `merge_ranked`)。新增 server shard-invariance 测试(`text_global_bm25.rs`:1-shard==8-shard 排序+分数)。**本地环境瘫痪未能运行时验证(见 memory),靠 CI 裁判**。type alias 消 clippy type_complexity。perf(两轮延迟)仍需 lx64
+- [ ] **⭐ 下一项:步骤 4b perf 定夺** — 两趟 query-time vs 周期快照的延迟对比,lx64 textgate;whichever wins 更新 scope-decisions 决定 2 + docs 陈旧窗口表述(注:两趟 = 每 MATCH 多一轮 fan-out,perf 影响需实测)
 - [ ] **步骤 5 位置索引** → phrase / proximity / HIGHLIGHT。**TextSegment 核心存储大改(每 posting 加 position vec),内存公式大变,需 lx64**
 - [ ] **步骤 6 有序词典 / FST** → prefix / TYPO。postings HashMap → 有序结构,影响所有查询 perf,需 lx64
 - [ ] textgate 在步骤 4/5 内重录基线(改内存公式的步骤内做,不事后补)

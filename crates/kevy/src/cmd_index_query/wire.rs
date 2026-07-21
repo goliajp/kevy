@@ -106,6 +106,49 @@ pub(super) fn encode_hydration(store: &mut Store, chunk: &mut Vec<u8>, key: &[u8
     }
 }
 
+/// Global-BM25 pass 1 (server): one shard's corpus counters. Chunk:
+/// `[ST_OK][n_docs u64][total_len u64][ntok u32][(tlen u32, token, df u32)*]`
+/// — the reduce sums `n_docs`/`total_len` and folds `df` by token into a
+/// global [`kevy_text::CorpusStats`] (see `cmd_index_reduce::ranked`).
+pub(super) fn encode_stats_chunk(
+    chunk: &mut Vec<u8>,
+    n_docs: u64,
+    total_len: u64,
+    tokdf: &[(Vec<u8>, u32)],
+) {
+    chunk.push(ST_OK);
+    chunk.extend_from_slice(&n_docs.to_le_bytes());
+    chunk.extend_from_slice(&total_len.to_le_bytes());
+    chunk.extend_from_slice(&(tokdf.len() as u32).to_le_bytes());
+    for (tok, df) in tokdf {
+        chunk.extend_from_slice(&(tok.len() as u32).to_le_bytes());
+        chunk.extend_from_slice(tok);
+        chunk.extend_from_slice(&df.to_le_bytes());
+    }
+}
+
+/// Decode a MATCH.SCORE stats element back into a [`kevy_text::CorpusStats`]
+/// (per-shard side of pass 2; the origin encoder is
+/// `cmd_index_reduce::ranked::encode_gstats_arg`). `None` on a truncated
+/// blob.
+pub(super) fn decode_gstats_arg(b: &[u8]) -> Option<kevy_text::CorpusStats> {
+    let n_docs = f64::from_le_bytes(b.get(0..8)?.try_into().ok()?);
+    let avgdl = f64::from_le_bytes(b.get(8..16)?.try_into().ok()?);
+    let ntok = u32::from_le_bytes(b.get(16..20)?.try_into().ok()?) as usize;
+    let mut pos = 20usize;
+    let mut df = std::collections::HashMap::with_capacity(ntok);
+    for _ in 0..ntok {
+        let tlen = u32::from_le_bytes(b.get(pos..pos + 4)?.try_into().ok()?) as usize;
+        pos += 4;
+        let tok = b.get(pos..pos + tlen)?.to_vec();
+        pos += tlen;
+        let d = u32::from_le_bytes(b.get(pos..pos + 4)?.try_into().ok()?);
+        pos += 4;
+        df.insert(tok, d);
+    }
+    Some(kevy_text::CorpusStats { n_docs, avgdl, df })
+}
+
 /// Shared agg chunk encoding: `[ST_OK][n][(glen,g,count,sum,mmlen,mm)*]`.
 pub(super) fn encode_agg_chunk(rows: &[(Vec<u8>, kevy_index::GroupStats)]) -> Vec<u8> {
     let mut chunk = vec![ST_OK];
