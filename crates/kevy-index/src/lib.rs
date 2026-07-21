@@ -24,7 +24,7 @@ mod view_sidecar;
 
 pub use agg::{AggBy, AggSegment, AggStats, GroupStats, merge_group, sort_groups};
 pub use catalog::{
-    AnnSpec, Catalog, FieldSpec, IndexKind, IndexSpec, IndexState, RowInputs, ValType,
+    AnnSpec, Catalog, FieldSpec, IndexKind, IndexSpec, IndexState, RowInputs, ValType, ValueSpec,
 };
 pub use segment::{Cursor, Segment, SegmentStats};
 pub use value::IndexValue;

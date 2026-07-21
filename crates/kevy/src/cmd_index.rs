@@ -45,10 +45,10 @@ fn persist_sidecar(dir: Option<&Path>, cat: &Catalog) {
 // ---------- catalog mutations (Local dispatch) ----------
 
 /// `IDX.CREATE <name> ON PREFIX <p> FIELD <f> | FIELDS <f…> [WEIGHTS <w…>]
-/// TYPE <t> KIND <k> [WITH POSITIONS] [VALUES f…] [MAXMEM b] [DIM d] [DISTANCE cosine|l2|ip] [M m] [EF ef]`.
+/// TYPE <t> KIND <k> [WITH POSITIONS] [VALUES f… [TYPES t…]] [MAXMEM b] [DIM d] [DISTANCE cosine|l2|ip] [M m] [EF ef]`.
 /// `FIELDS` and `WITH POSITIONS` are text-only; every other kind takes
 /// one `FIELD` and no positions.
-const CREATE_USAGE: &str = "ERR usage: IDX.CREATE name ON PREFIX p FIELD f | FIELDS f… [WEIGHTS w…] TYPE i64|f64|str|vector KIND range|unique|text|ann [WITH POSITIONS] [VALUES f…] [MAXMEM b] [DIM d] [DISTANCE c] [M m] [EF e]";
+const CREATE_USAGE: &str = "ERR usage: IDX.CREATE name ON PREFIX p FIELD f | FIELDS f… [WEIGHTS w…] TYPE i64|f64|str|vector KIND range|unique|text|ann [WITH POSITIONS] [VALUES f… [TYPES t…]] [MAXMEM b] [DIM d] [DISTANCE c] [M m] [EF e]";
 
 /// Parse the field clause and return the fields plus the argv index of
 /// the `TYPE` keyword that follows it.
@@ -215,7 +215,7 @@ struct CreateOpts {
     distance: u8,
     group_by: Option<Vec<u8>>,
     with_positions: bool,
-    values: Vec<Vec<u8>>,
+    values: Vec<kevy_index::ValueSpec>,
 }
 
 /// The option keywords the CREATE tail understands — the boundary the
@@ -230,12 +230,65 @@ fn is_create_opt(a: &[u8]) -> bool {
         b"GROUPBY",
         b"DISTANCE",
         b"VALUES",
+        b"TYPES",
     ] {
         if a.eq_ignore_ascii_case(kw) {
             return true;
         }
     }
     false
+}
+
+/// `VALUES f…`: stored field names up to the next option keyword.
+/// Variadic like `FIELDS`, and typed the same way `FIELDS` is weighted —
+/// by an optional matching list (`TYPES`), defaulting to text.
+fn parse_values<A: ArgvView + ?Sized>(
+    args: &A,
+    start: usize,
+    o: &mut CreateOpts,
+    out: &mut Vec<u8>,
+) -> Result<usize, ()> {
+    let mut i = start;
+    while i < args.len() && !is_create_opt(&args[i]) {
+        o.values.push(kevy_index::ValueSpec::new(args[i].to_vec()));
+        i += 1;
+    }
+    if o.values.is_empty() {
+        encode_error(out, "ERR VALUES needs at least one field name");
+        return Err(());
+    }
+    Ok(i)
+}
+
+/// `TYPES t…`: how each declared value field's bytes compare. Declared
+/// rather than guessed per query, because a numeric range compared
+/// lexicographically is silently wrong.
+fn parse_value_types<A: ArgvView + ?Sized>(
+    args: &A,
+    start: usize,
+    o: &mut CreateOpts,
+    out: &mut Vec<u8>,
+) -> Result<usize, ()> {
+    let mut i = start;
+    let mut n = 0;
+    while i < args.len() && !is_create_opt(&args[i]) {
+        let Some(ty) = kevy_index::ValType::parse(&args[i]) else {
+            encode_error(out, "ERR TYPES must be i64|f64|str");
+            return Err(());
+        };
+        let Some(v) = o.values.get_mut(n) else {
+            encode_error(out, "ERR more TYPES than VALUES");
+            return Err(());
+        };
+        v.ty = ty;
+        n += 1;
+        i += 1;
+    }
+    if n != o.values.len() {
+        encode_error(out, "ERR TYPES count must match VALUES count");
+        return Err(());
+    }
+    Ok(i)
 }
 
 /// A parsed integer clamped to `[lo, hi]`, or an error already written.
@@ -271,16 +324,11 @@ fn parse_create_opts<A: ArgvView + ?Sized>(
         // `VALUES f…` is variadic, like `FIELDS`: it collects names up to
         // the next option keyword. Everything else is a key/value pair.
         if args[i].eq_ignore_ascii_case(b"VALUES") {
-            let mut j = i + 1;
-            while j < args.len() && !is_create_opt(&args[j]) {
-                o.values.push(args[j].to_vec());
-                j += 1;
-            }
-            if o.values.is_empty() {
-                encode_error(out, "ERR VALUES needs at least one field name");
-                return Err(());
-            }
-            i = j;
+            i = parse_values(args, i + 1, &mut o, out)?;
+            continue;
+        }
+        if args[i].eq_ignore_ascii_case(b"TYPES") {
+            i = parse_value_types(args, i + 1, &mut o, out)?;
             continue;
         }
         if i + 1 >= args.len() {
