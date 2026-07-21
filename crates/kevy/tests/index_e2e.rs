@@ -603,3 +603,32 @@ fn positions_flag_is_text_only_and_validated() {
         String::from_utf8_lossy(&r)
     );
 }
+
+/// A quoted phrase in the MATCH text matches only documents whose terms
+/// are adjacent and in order — the cross-shard payoff of the positional
+/// side-channel. Docs land on different shards, so this also exercises
+/// the two-pass fan-out carrying the quoted text verbatim to pass 2.
+#[test]
+fn phrase_query_matches_only_adjacent_docs() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    cmd(&mut c, &[b"HSET", b"p:1", b"body", b"the quick brown fox jumps"]);
+    cmd(&mut c, &[b"HSET", b"p:2", b"body", b"quick red then a brown hare"]);
+    cmd(&mut c, &[b"HSET", b"p:3", b"body", b"a brown quick animal appears"]);
+    let r = cmd(
+        &mut c,
+        &[b"IDX.CREATE", b"ph", b"ON", b"PREFIX", b"p:", b"FIELD", b"body",
+          b"TYPE", b"str", b"KIND", b"text", b"WITH", b"POSITIONS"],
+    );
+    assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
+    // The MATCH text is the single quoted argument `"quick brown"`.
+    let r = query_ready(&mut c, &[b"IDX.QUERY", b"ph", b"MATCH", b"\"quick brown\"", b"LIMIT", b"10"]);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.contains("p:1"), "adjacent, in-order phrase matches p:1: {s}");
+    assert!(!s.contains("p:2"), "far-apart terms are not a phrase: {s}");
+    assert!(!s.contains("p:3"), "reversed order is not the phrase: {s}");
+    // A plain term query still ORs — every doc has "brown".
+    let r = query_ready(&mut c, &[b"IDX.QUERY", b"ph", b"MATCH", b"brown", b"LIMIT", b"10"]);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.contains("p:1") && s.contains("p:2") && s.contains("p:3"), "term OR matches all: {s}");
+}

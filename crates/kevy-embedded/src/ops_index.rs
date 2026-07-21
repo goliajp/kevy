@@ -261,7 +261,9 @@ impl Store {
             let inner = &mut *g;
             sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
             if let Some((_, ts)) = inner.idx_segs.text.iter().find(|(s, _)| s.name == name) {
-                all.extend(ts.matches_scored(query, limit, Some(&stats)));
+                // `matches_query` parses quoted phrases out of the raw
+                // query text; with none it is the ordinary term query.
+                all.extend(ts.matches_query(query, limit, Some(&stats)));
             }
         }
         all.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.key.cmp(&b.key)));
