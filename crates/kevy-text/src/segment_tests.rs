@@ -756,3 +756,184 @@ fn typo_df_terms_include_neighbours() {
     let fuzzy = s.query_df_terms_typo(b"quik", 1);
     assert!(fuzzy.contains(&b"quick".to_vec()), "the neighbour is reported: {fuzzy:?}");
 }
+
+// ---- field-scoped queries (`IN <field…>`) -------------------------------
+
+/// Two fields — a short title and a longer body — so a scoped query has
+/// something to score differently from the whole document.
+fn field_seg() -> TextSegment {
+    let mut s = TextSegment::with_fields(2, true);
+    s.apply_fields(
+        b"a",
+        Some(&[(b"rust engine".to_vec(), 1.0), (b"a long body about gardening".to_vec(), 1.0)]),
+    );
+    s.apply_fields(
+        b"b",
+        Some(&[
+            (b"gardening weekly".to_vec(), 1.0),
+            (b"this body mentions rust once among many other words here".to_vec(), 1.0),
+        ]),
+    );
+    s
+}
+
+#[test]
+fn scoping_to_every_field_equals_the_unscoped_query() {
+    // The per-field channel is the *breakdown* of the merged posting, so
+    // asking for all of the fields must reproduce the merged scoring
+    // exactly — same frequencies, same length, same df. This is the
+    // invariant that keeps the two paths from drifting apart.
+    let s = field_seg();
+    let all = &[0usize, 1][..];
+    for q in ["rust", "gardening", "rust gardening", "body"] {
+        let plain = s.matches_query(q.as_bytes(), 10, None);
+        let scoped =
+            s.matches_query_with(q.as_bytes(), 10, QueryOpts { fields: all, ..Default::default() });
+        assert_eq!(plain.len(), scoped.len(), "hit count for {q:?}");
+        for (p, sc) in plain.iter().zip(&scoped) {
+            assert_eq!(p.key, sc.key, "ranking for {q:?}");
+            assert!((p.score - sc.score).abs() < 1e-9, "score for {q:?}: {p:?} vs {sc:?}");
+        }
+    }
+}
+
+#[test]
+fn scoping_restricts_matches_to_the_named_field() {
+    let s = field_seg();
+    // Unscoped, both documents mention rust.
+    assert_eq!(s.matches_query(b"rust", 10, None).len(), 2);
+    // Only "a" has it in the title.
+    let title =
+        s.matches_query_with(b"rust", 10, QueryOpts { fields: &[0], ..Default::default() });
+    assert_eq!(title.len(), 1, "one title mentions rust");
+    assert_eq!(title[0].key, b"a".to_vec());
+    // Only "b" has it in the body.
+    let body = s.matches_query_with(b"rust", 10, QueryOpts { fields: &[1], ..Default::default() });
+    assert_eq!(body.len(), 1);
+    assert_eq!(body[0].key, b"b".to_vec());
+}
+
+#[test]
+fn scoped_score_normalises_by_the_field_not_the_document() {
+    // "gardening" is a's whole-body topic and b's title. Scoped to the
+    // title, b is scored against a two-token field, not against its long
+    // body — the dilution a merged length normalisation would apply.
+    let s = field_seg();
+    let title =
+        s.matches_query_with(b"gardening", 10, QueryOpts { fields: &[0], ..Default::default() });
+    assert_eq!(title.len(), 1);
+    assert_eq!(title[0].key, b"b".to_vec());
+
+    // The same hit, scored over the whole document, is worth less: same
+    // frequency, far more length to dilute it.
+    let whole = s.matches_query(b"gardening", 10, None);
+    let whole_b = whole.iter().find(|h| h.key == b"b".to_vec()).expect("b matches");
+    assert!(
+        title[0].score > whole_b.score,
+        "field-scoped {} should beat whole-document {}",
+        title[0].score,
+        whole_b.score
+    );
+}
+
+#[test]
+fn scoped_document_frequency_counts_a_document_once() {
+    let mut s = TextSegment::with_fields(2, false);
+    // "rust" in both fields of one document, one field of the other.
+    s.apply_fields(b"a", Some(&[(b"rust".to_vec(), 1.0), (b"rust again".to_vec(), 1.0)]));
+    s.apply_fields(b"b", Some(&[(b"other".to_vec(), 1.0), (b"rust".to_vec(), 1.0)]));
+
+    let both = s.query_df_in(b"rust", QueryOpts { fields: &[0, 1], ..Default::default() });
+    assert_eq!(both, vec![(b"rust".to_vec(), 2)], "a is one document, not two");
+    let title = s.query_df_in(b"rust", QueryOpts { fields: &[0], ..Default::default() });
+    assert_eq!(title, vec![(b"rust".to_vec(), 1)], "only a has it in field 0");
+}
+
+#[test]
+fn scoped_phrase_must_lie_inside_one_wanted_field() {
+    let mut s = TextSegment::with_fields(2, true);
+    s.apply_fields(
+        b"a",
+        Some(&[(b"quick brown".to_vec(), 1.0), (b"nothing to see".to_vec(), 1.0)]),
+    );
+    // "brown fox" only reads as adjacent across the field boundary.
+    s.apply_fields(b"b", Some(&[(b"the brown".to_vec(), 1.0), (b"fox sleeps".to_vec(), 1.0)]));
+
+    let q = br#""quick brown""#;
+    assert_eq!(s.matches_query(q, 10, None).len(), 1, "a has the phrase");
+    let scoped = s.matches_query_with(q, 10, QueryOpts { fields: &[0], ..Default::default() });
+    assert_eq!(scoped.len(), 1, "and it is in the title");
+    assert!(
+        s.matches_query_with(q, 10, QueryOpts { fields: &[1], ..Default::default() }).is_empty(),
+        "not in the body"
+    );
+
+    let across = br#""brown fox""#;
+    assert_eq!(s.matches_query(across, 10, None).len(), 1, "adjacent when concatenated");
+    for f in [0usize, 1] {
+        assert!(
+            s.matches_query_with(across, 10, QueryOpts { fields: &[f], ..Default::default() })
+                .is_empty(),
+            "a phrase straddling the field boundary is in neither field ({f})"
+        );
+    }
+}
+
+#[test]
+fn scoping_a_single_field_segment() {
+    // One field keeps no per-field channel: scoping to it IS the
+    // unscoped query, and scoping to a position it does not have matches
+    // nothing rather than silently widening.
+    let s = seg();
+    assert_eq!(s.field_arity(), 1);
+    let plain = s.matches_query(b"rust", 10, None);
+    let scoped =
+        s.matches_query_with(b"rust", 10, QueryOpts { fields: &[0], ..Default::default() });
+    assert_eq!(plain, scoped);
+    assert!(
+        s.matches_query_with(b"rust", 10, QueryOpts { fields: &[1], ..Default::default() })
+            .is_empty(),
+        "no second field to scope to"
+    );
+}
+
+#[test]
+fn reindexing_keeps_the_field_channel_exact() {
+    let mut s = field_seg();
+    // Move "rust" out of a's title and into its body.
+    s.apply_fields(
+        b"a",
+        Some(&[(b"garden engine".to_vec(), 1.0), (b"now the body says rust".to_vec(), 1.0)]),
+    );
+    let title =
+        s.matches_query_with(b"rust", 10, QueryOpts { fields: &[0], ..Default::default() });
+    assert!(title.is_empty(), "no title mentions rust any more");
+    let mut body: Vec<Vec<u8>> = s
+        .matches_query_with(b"rust", 10, QueryOpts { fields: &[1], ..Default::default() })
+        .into_iter()
+        .map(|h| h.key)
+        .collect();
+    body.sort();
+    assert_eq!(body, vec![b"a".to_vec(), b"b".to_vec()], "both bodies do");
+
+    // Removing the row empties both the channel and the corpus totals.
+    s.apply_fields(b"a", None);
+    s.apply_fields(b"b", None);
+    assert_eq!(s.total_len_in(&[0, 1]), 0, "field totals drop with the documents");
+    assert_eq!(s.total_len(), 0);
+}
+
+#[test]
+fn scoped_typo_and_prefix_stay_inside_the_field() {
+    let s = field_seg();
+    let opts = |f: &'static [usize], typo: u32| QueryOpts { fields: f, typo, ..Default::default() };
+    // "rus*" expands to rust, which is in a's title only.
+    let pfx = s.matches_query_with(b"rus*", 10, opts(&[0], 0));
+    assert_eq!(pfx.len(), 1);
+    assert_eq!(pfx[0].key, b"a".to_vec());
+    // One edit from "rusty" reaches rust — again title-only.
+    let typo = s.matches_query_with(b"rusty", 10, opts(&[0], 1));
+    assert_eq!(typo.len(), 1);
+    assert_eq!(typo[0].key, b"a".to_vec());
+    assert_eq!(s.matches_query_with(b"rusty", 10, opts(&[1], 1)).len(), 1, "b's body has rust");
+}
