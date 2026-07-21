@@ -358,7 +358,7 @@ D2 事务标记(全有全无,与事务大小无关)/ R2 事务内集合读。
 - [ ] **⭐ 下一项:步骤 4b perf 定夺** — 两趟 query-time vs 周期快照的延迟对比,lx64 textgate;whichever wins 更新 scope-decisions 决定 2 + docs 陈旧窗口表述(注:两趟 = 每 MATCH 多一轮 fan-out,perf 影响需实测)
 - **步骤 5 位置索引** → phrase / proximity / HIGHLIGHT(施工分子步,每子步 CI-可验;positions 内存公式 lx64/textgate 在步内验)
   - [x] **5a kevy-text 存储 stone 核心** — positions 物理旁路(`Option<Positions>`,token→id→delta+varint blob),`None` 时 BM25 热路径 byte-identical;`with_positions()`/`has_positions()`;`apply_fields` 记录/撤回;`phrase_matches(phrase,limit,stats)` = 候选交集→shift-intersect 邻接验证→BM25 打分(单 token 退化为 term query,无 positions 返空非静默 OR);读/查询路径拆 `segment_query.rs` 守 500 LOC(`corpus_stats`/`select_top` 提 pub(crate) 供 phrase 复用);approx_bytes 仅在 positions 存在时加旁路项、默认公式不变。CI:邻接/顺序、off-path 空、positions-on 排序 byte-identical、更新撤回、重复 token、注入统计打分(clippy+全 workspace clippy lx64 绿)
-  - [ ] **5b catalog sidecar v3** — `WITH POSITIONS` 标志持久化(v1/v2 永久可读)
+  - [x] **5b catalog sidecar v3** — `IndexSpec.with_positions: bool`(仅 Text,`create` 守卫非 Text 报错);sidecar v3 复用"第 7 列 kind-interpreted"惯例写 `pos`(Text 与 Ann/Agg 互斥);version `bool v2`→`u8`(v1/v2/v3),v1/v2 永久可读;测试:v2-still-loads 回归 + positions 往返(pos 列存在性/plain 6 列/往返 flag)。kevy-index 27 测试 + 全 workspace clippy 绿(9 处 IndexSpec 字面量补字段)
   - [ ] **5c IDX.CREATE ... WITH POSITIONS** wire 语法(纯附加,无 flag 时 byte-identical)
   - [ ] **5d MATCH 引号 phrase 解析** → `phrase_matches`(embedded + server 两轮全局 BM25 复用)
   - [ ] **5e HIGHLIGHT spans**(reply map 已留 highlights 槽)

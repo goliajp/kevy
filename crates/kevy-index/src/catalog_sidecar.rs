@@ -18,7 +18,7 @@ impl Catalog {
     /// fields hex-escaped for tabs/newlines via `%XX`; the 7th column
     /// is `dim,distance,m,ef` for ANN kinds).
     pub fn to_sidecar(&self) -> String {
-        let mut out = String::from("kevy-index-catalog v2\n");
+        let mut out = String::from("kevy-index-catalog v3\n");
         for (s, _) in &self.specs {
             let _ = write!(
                 out,
@@ -31,11 +31,15 @@ impl Catalog {
                 s.max_bytes
             );
             // 7th column is kind-interpreted: ann params for Ann,
-            // escaped group field for Agg.
+            // escaped group field for Agg, and `pos` for a text index
+            // created WITH POSITIONS (v3). The three are mutually
+            // exclusive — a kind is at most one of Ann / Agg / Text.
             if let Some(a) = &s.ann {
                 let _ = write!(out, "\t{},{},{},{}", a.dim, a.distance, a.m, a.ef);
             } else if let Some(g) = &s.group_by {
                 let _ = write!(out, "\t{}", esc(g));
+            } else if s.with_positions {
+                out.push_str("\tpos");
             }
             out.push('\n');
         }
@@ -51,9 +55,13 @@ impl Catalog {
         // index that silently rebuilds from scratch. Same contract as the
         // AOF envelope -- read both, write the current one, upgrade on
         // the next rewrite.
-        let v2 = match lines.next()? {
-            "kevy-index-catalog v2" => true,
-            "kevy-index-catalog v1" => false,
+        // Version is a number, not a bool, now that v3 adds a text
+        // positions flag on top of v2's weighted fields. v1/v2 stay
+        // readable forever; only the writer moves to the newest form.
+        let version: u8 = match lines.next()? {
+            "kevy-index-catalog v3" => 3,
+            "kevy-index-catalog v2" => 2,
+            "kevy-index-catalog v1" => 1,
             _ => return None,
         };
         let mut c = Catalog::new();
@@ -61,18 +69,18 @@ impl Catalog {
             if line.is_empty() {
                 continue;
             }
-            c.create(spec_from_line(line, v2)?).ok()?;
+            c.create(spec_from_line(line, version)?).ok()?;
         }
         Some(c)
     }}
 
-fn spec_from_line(line: &str, v2: bool) -> Option<IndexSpec> {
+fn spec_from_line(line: &str, version: u8) -> Option<IndexSpec> {
     let parts: Vec<&str> = line.split('\t').collect();
     if !(parts.len() == 6 || parts.len() == 7) {
         return None;
     }
     let kind = IndexKind::parse(parts[4].as_bytes())?;
-    let (ann, group_by) = if parts.len() == 7 {
+    let (ann, group_by, with_positions) = if parts.len() == 7 {
         match kind {
             IndexKind::Ann => {
                 let nums: Vec<&str> = parts[6].split(',').collect();
@@ -87,23 +95,28 @@ fn spec_from_line(line: &str, v2: bool) -> Option<IndexSpec> {
                         ef: nums[3].parse().ok()?,
                     }),
                     None,
+                    false,
                 )
             }
-            IndexKind::Agg => (None, Some(unesc(parts[6])?)),
+            IndexKind::Agg => (None, Some(unesc(parts[6])?), false),
+            // A text index's 7th column is the v3 positions flag; older
+            // sidecars never wrote one, so it only appears from v3 on.
+            IndexKind::Text if version >= 3 && parts[6] == "pos" => (None, None, true),
             _ => return None,
         }
     } else {
-        (None, None)
+        (None, None, false)
     };
     Some(IndexSpec {
         name: unesc(parts[0])?,
         prefix: unesc(parts[1])?,
-        fields: col_to_fields(parts[2], v2)?,
+        fields: col_to_fields(parts[2], version >= 2)?,
         ty: ValType::parse(parts[3].as_bytes())?,
         kind,
         max_bytes: parts[5].parse().ok()?,
         ann,
         group_by,
+        with_positions,
     })
 }
 
@@ -163,9 +176,9 @@ fn fields_to_col(fields: &[FieldSpec]) -> String {
 /// Parse sidecar column 3. In v1 it is a single bare escaped name with no
 /// weight — which is exactly the neutrally-weighted one-element case, so
 /// an old sidecar loads as a one-field multi-field index rather than
-/// through a second code path.
-fn col_to_fields(col: &str, v2: bool) -> Option<Vec<FieldSpec>> {
-    if !v2 {
+/// through a second code path. v2 and v3 both carry `name:weight`.
+fn col_to_fields(col: &str, weighted: bool) -> Option<Vec<FieldSpec>> {
+    if !weighted {
         return Some(vec![FieldSpec::new(unesc(col)?)]);
     }
     let mut out = Vec::new();
@@ -212,7 +225,7 @@ mod sidecar_v2_tests {
     /// refuses multi-field today, and `from_sidecar` goes through it,
     /// so no such sidecar can exist to read back yet.
     #[test]
-    fn v2_serialises_several_weighted_fields() {
+    fn v3_serialises_several_weighted_fields() {
         let mut s = spec("multi");
         s.fields = vec![
             FieldSpec { name: b"title".to_vec(), weight: 3.0 },
@@ -221,9 +234,62 @@ mod sidecar_v2_tests {
         let mut c = Catalog::new();
         c.specs.push((s, IndexState::Building));
         let text = c.to_sidecar();
-        assert!(text.starts_with("kevy-index-catalog v2"));
+        assert!(text.starts_with("kevy-index-catalog v3"));
         let col3 = text.lines().nth(1).unwrap().split('\t').nth(2).unwrap();
         assert_eq!(col3, "title:3,body:1");
+    }
+
+    /// A v2 sidecar written before positions must keep loading — same
+    /// forever-readable contract that protects v1.
+    #[test]
+    fn a_v2_sidecar_still_loads() {
+        let v2 = "kevy-index-catalog v2\nidx\tuser:\ttitle:3,body:1\tstr\ttext\t0\n";
+        let c = Catalog::from_sidecar(v2).expect("v2 must stay readable");
+        let got: Vec<_> = c.iter().collect();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0.fields.len(), 2);
+        assert!(!got[0].0.with_positions, "a v2 text index has no positions flag");
+    }
+
+    /// A text index created WITH POSITIONS round-trips the flag through
+    /// the v3 `pos` column; a text index without it does not, and neither
+    /// grows a spurious 7th column that would collide with ann/agg.
+    #[test]
+    fn positions_flag_round_trips_on_v3() {
+        let mut with = IndexSpec::single_field(
+            b"phrase".into(),
+            b"doc:".to_vec(),
+            b"body".to_vec(),
+            ValType::Str,
+            IndexKind::Text,
+        );
+        with.with_positions = true;
+        let plain = IndexSpec::single_field(
+            b"plain".into(),
+            b"doc:".to_vec(),
+            b"body".to_vec(),
+            ValType::Str,
+            IndexKind::Text,
+        );
+        let mut c = Catalog::new();
+        c.create(with).unwrap();
+        c.create(plain).unwrap();
+        let text = c.to_sidecar();
+        // The positions index carries a 7th `pos` column; the plain one
+        // stays at six.
+        let lines: Vec<&str> = text.lines().skip(1).collect();
+        let pos_line = lines.iter().find(|l| l.starts_with("phrase")).unwrap();
+        let plain_line = lines.iter().find(|l| l.starts_with("plain")).unwrap();
+        assert_eq!(pos_line.split('\t').count(), 7);
+        assert_eq!(pos_line.split('\t').nth(6), Some("pos"));
+        assert_eq!(plain_line.split('\t').count(), 6);
+
+        let back = Catalog::from_sidecar(&text).expect("v3 round trip");
+        let specs: Vec<_> = back.iter().map(|(s, _)| s.clone()).collect();
+        let with_back = specs.iter().find(|s| s.name == b"phrase").unwrap();
+        let plain_back = specs.iter().find(|s| s.name == b"plain").unwrap();
+        assert!(with_back.with_positions, "positions flag survives the round trip");
+        assert!(!plain_back.with_positions, "plain text index stays position-free");
     }
 
     /// A field name containing the separators must survive, or a
