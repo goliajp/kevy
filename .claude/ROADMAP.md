@@ -356,7 +356,13 @@ D2 事务标记(全有全无,与事务大小无关)/ R2 事务内集合读。
 - [x] **步骤 4b-embedded 两趟全局 BM25** — `eea588af`+`5f735114`;`idx_match` 趟1 `text_corpus_stats` 聚合全局统计、趟2 `matches_scored`;shard-invariance 测试(ranked(1)==ranked(8) 排序+分数)CI 确认;串行单锁无死锁。教训:测试断言曾误设 d:6 top,实际 BM25 长度归一化下 d:1(短+密) top,CI 纠正
 - [x] **步骤 4b-server 分布式两轮聚合** — 复用 GROUPS→AGG.FETCH 的 stateless `ExtensionReduced::Continue` 两阶段机制:pass1 `op_match` 报 stats chunk `[ST_OK][n_docs][total_len][ntok][(tok,df)*]`→`reduce_match_stats` 聚合全局 `CorpusStats`→`Continue(MATCH.SCORE argv)`;pass2 内部 verb `MATCH.SCORE`→`op_match_score` 注入全局 `matches_scored`→`reduce_match_score` 合并(与 KNN 共用 `merge_ranked`)。新增 server shard-invariance 测试(`text_global_bm25.rs`:1-shard==8-shard 排序+分数)。**本地环境瘫痪未能运行时验证(见 memory),靠 CI 裁判**。type alias 消 clippy type_complexity。perf(两轮延迟)仍需 lx64
 - [ ] **⭐ 下一项:步骤 4b perf 定夺** — 两趟 query-time vs 周期快照的延迟对比,lx64 textgate;whichever wins 更新 scope-decisions 决定 2 + docs 陈旧窗口表述(注:两趟 = 每 MATCH 多一轮 fan-out,perf 影响需实测)
-- [ ] **步骤 5 位置索引** → phrase / proximity / HIGHLIGHT。**TextSegment 核心存储大改(每 posting 加 position vec),内存公式大变,需 lx64**
+- **步骤 5 位置索引** → phrase / proximity / HIGHLIGHT(施工分子步,每子步 CI-可验;positions 内存公式 lx64/textgate 在步内验)
+  - [x] **5a kevy-text 存储 stone 核心** — positions 物理旁路(`Option<Positions>`,token→id→delta+varint blob),`None` 时 BM25 热路径 byte-identical;`with_positions()`/`has_positions()`;`apply_fields` 记录/撤回;`phrase_matches(phrase,limit,stats)` = 候选交集→shift-intersect 邻接验证→BM25 打分(单 token 退化为 term query,无 positions 返空非静默 OR);读/查询路径拆 `segment_query.rs` 守 500 LOC(`corpus_stats`/`select_top` 提 pub(crate) 供 phrase 复用);approx_bytes 仅在 positions 存在时加旁路项、默认公式不变。CI:邻接/顺序、off-path 空、positions-on 排序 byte-identical、更新撤回、重复 token、注入统计打分(clippy+全 workspace clippy lx64 绿)
+  - [ ] **5b catalog sidecar v3** — `WITH POSITIONS` 标志持久化(v1/v2 永久可读)
+  - [ ] **5c IDX.CREATE ... WITH POSITIONS** wire 语法(纯附加,无 flag 时 byte-identical)
+  - [ ] **5d MATCH 引号 phrase 解析** → `phrase_matches`(embedded + server 两轮全局 BM25 复用)
+  - [ ] **5e HIGHLIGHT spans**(reply map 已留 highlights 槽)
+  - [ ] **5f lx64 textgate**:positions 内存公式重录 + phrase-query p95(改公式的步内做)
 - [ ] **步骤 6 有序词典 / FST** → prefix / TYPO。postings HashMap → 有序结构,影响所有查询 perf,需 lx64
 - [ ] textgate 在步骤 4/5 内重录基线(改内存公式的步骤内做,不事后补)
 

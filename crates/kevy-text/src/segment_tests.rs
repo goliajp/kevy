@@ -2,6 +2,9 @@
 //! segment's private fields stay reachable).
 
 use super::*;
+// The naive MaxScore reference scores by hand; `bm25_score` now lives in
+// the query submodule, so import it directly rather than via `super`.
+use crate::bm25::bm25_score;
 
 fn seg() -> TextSegment {
     let mut s = TextSegment::new();
@@ -313,4 +316,136 @@ fn no_stats_matches_the_local_path() {
         assert_eq!(x.key, y.key);
         assert_eq!(x.score, y.score);
     }
+}
+
+// ---- positional index (phrase, step 5) -----------------------------------
+
+/// Three documents whose offsets pin down adjacency: `d1` has
+/// "quick brown" consecutive, `d2` has both words but far apart, `d3`
+/// has them in the reverse order.
+fn phrase_seg() -> TextSegment {
+    let mut s = TextSegment::with_positions();
+    s.apply(b"d1", Some(b"the quick brown fox jumps"));
+    s.apply(b"d2", Some(b"quick red and then a brown hare"));
+    s.apply(b"d3", Some(b"a brown quick animal appears"));
+    s
+}
+
+/// A multi-token phrase matches only documents whose tokens are adjacent
+/// and in order — the whole reason positions exist.
+#[test]
+fn phrase_requires_adjacency_and_order() {
+    let s = phrase_seg();
+    let hits = s.phrase_matches(b"quick brown", 10, None);
+    assert_eq!(hits.len(), 1, "only d1 has quick-brown consecutive");
+    assert_eq!(hits[0].key, b"d1".to_vec());
+    // Reverse order is a different phrase.
+    let rev = s.phrase_matches(b"brown quick", 10, None);
+    assert_eq!(rev.len(), 1);
+    assert_eq!(rev[0].key, b"d3".to_vec());
+    // Words present but not adjacent → no phrase in any doc.
+    assert!(s.phrase_matches(b"quick fox", 10, None).is_empty());
+}
+
+/// Without `WITH POSITIONS` a multi-token phrase cannot be verified, so
+/// it returns empty rather than silently answering an OR query.
+#[test]
+fn phrase_without_positions_is_empty() {
+    let mut s = TextSegment::new();
+    s.apply(b"d1", Some(b"the quick brown fox"));
+    assert!(!s.has_positions());
+    assert!(s.phrase_matches(b"quick brown", 10, None).is_empty());
+    // A single-token phrase is an ordinary term query and needs none.
+    let single = s.phrase_matches(b"quick", 10, None);
+    assert_eq!(single, s.matches(b"quick", 10));
+}
+
+/// A one-token phrase degrades to the ordinary term query, positions or
+/// not — same hits, same scores.
+#[test]
+fn single_token_phrase_is_a_term_query() {
+    let s = phrase_seg();
+    let phrase = s.phrase_matches(b"brown", 10, None);
+    let term = s.matches(b"brown", 10);
+    assert_eq!(phrase, term);
+    assert_eq!(phrase.len(), 3, "every doc has brown");
+}
+
+/// Recording positions must not change ranking: a `WITH POSITIONS`
+/// segment answers ordinary `matches` byte-identically to a plain one.
+#[test]
+fn positions_do_not_change_ranking() {
+    let docs: &[(&[u8], &str)] = &[
+        (b"d1", "the quick brown fox jumps"),
+        (b"d2", "quick red and then a brown hare"),
+        (b"d3", "a brown quick animal appears"),
+        (b"d4", "quick quick quick brown"),
+    ];
+    let mut plain = TextSegment::new();
+    let mut pos = TextSegment::with_positions();
+    for (k, t) in docs {
+        plain.apply(k, Some(t.as_bytes()));
+        pos.apply(k, Some(t.as_bytes()));
+    }
+    for q in [&b"quick"[..], b"brown", b"quick brown fox"] {
+        assert_eq!(plain.matches(q, 10), pos.matches(q, 10), "ranking for {q:?}");
+    }
+    // The only stats difference is the positions side-channel's bytes.
+    assert!(pos.stats().approx_bytes > plain.stats().approx_bytes);
+    assert_eq!(pos.stats().docs, plain.stats().docs);
+    assert_eq!(pos.stats().postings, plain.stats().postings);
+}
+
+/// Re-indexing must withdraw the old positions, not leave a phantom
+/// phrase behind.
+#[test]
+fn reindexing_withdraws_old_positions() {
+    let mut s = TextSegment::with_positions();
+    s.apply(b"d", Some(b"the quick brown fox"));
+    assert_eq!(s.phrase_matches(b"quick brown", 10, None).len(), 1);
+    // Replace with text where the phrase no longer occurs.
+    s.apply(b"d", Some(b"slow green turtle"));
+    assert!(
+        s.phrase_matches(b"quick brown", 10, None).is_empty(),
+        "old positions must not survive the update"
+    );
+    assert_eq!(s.phrase_matches(b"green turtle", 10, None)[0].key, b"d".to_vec());
+    // Removal clears positions entirely.
+    s.apply(b"d", None);
+    assert!(s.phrase_matches(b"green turtle", 10, None).is_empty());
+}
+
+/// A repeated word in the phrase ("very very good") must be verified with
+/// two distinct adjacent occurrences, not one counted twice.
+#[test]
+fn phrase_with_repeated_token() {
+    let mut s = TextSegment::with_positions();
+    s.apply(b"twice", Some(b"it was very very good indeed"));
+    s.apply(b"once", Some(b"it was very good indeed"));
+    let hits = s.phrase_matches(b"very very", 10, None);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].key, b"twice".to_vec());
+}
+
+/// Phrase scoring uses global stats when injected, so cross-shard phrase
+/// hits are comparable the same way ordinary matches are.
+#[test]
+fn phrase_scores_against_injected_stats() {
+    // Two shards, each with a length-symmetric doc containing the phrase
+    // (equal dl and tf), so only the shared global stats decide the
+    // score — the cross-shard comparability global BM25 exists for.
+    let mut a = TextSegment::with_positions();
+    let mut b = TextSegment::with_positions();
+    a.apply(b"a1", Some(b"quick brown fox"));
+    a.apply(b"a2", Some(b"only quick here"));
+    b.apply(b"b1", Some(b"quick brown bear"));
+    b.apply(b"b2", Some(b"nothing relevant"));
+    let g = global_of(&[&a, &b], &[b"quick", b"brown"]);
+    let ha = a.phrase_matches(b"quick brown", 10, Some(&g));
+    let hb = b.phrase_matches(b"quick brown", 10, Some(&g));
+    assert_eq!(ha.len(), 1);
+    assert_eq!(hb.len(), 1);
+    // Equal dl + tf + shared global stats → equal scores; if either shard
+    // had scored with its own local df/avgdl they would diverge.
+    assert!((ha[0].score - hb[0].score).abs() < 1e-9, "{} vs {}", ha[0].score, hb[0].score);
 }

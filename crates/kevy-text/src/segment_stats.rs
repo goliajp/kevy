@@ -9,6 +9,7 @@
 
 use super::{TextSegment, TextStats};
 use crate::buckets::Buckets;
+use crate::positions::Positions;
 
 impl TextSegment {
     /// Live counters.
@@ -46,7 +47,11 @@ impl TextSegment {
             })
             .sum();
         // per-Many-posting ≈ 4B band-vec slot + ~26B list-index entry.
-        token_bytes + many_postings * 30 + doc_bytes
+        // Positional postings, when present (`WITH POSITIONS`), add their
+        // own side-channel term; `None` contributes nothing so the
+        // default formula is byte-identical.
+        let position_bytes = self.positions.as_ref().map_or(0, Positions::approx_bytes);
+        token_bytes + many_postings * 30 + doc_bytes + position_bytes
     }
 
     /// Verify hook: is `key` indexed here?
