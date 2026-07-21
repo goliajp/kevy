@@ -363,10 +363,11 @@ D2 事务标记(全有全无,与事务大小无关)/ R2 事务内集合读。
   - [x] **5d MATCH 引号 phrase 解析** → `matches_query(text,limit,stats)`:解析 `<text>` 为 bare term(OR)+ `"a b c"` phrase clause(邻接必需),query = clause OR 并、分数 = 各匹配 clause BM25 和(phrase 仅对邻接文档贡献);无引号 → 委托 `matches_scored` byte-identical 热路径;未闭合引号 lenient;无 positions 时 phrase clause 不贡献但 bare term 仍匹配。路由:embedded `idx_match` + server `op_match_score` swap 到 `matches_query`;两轮 df 收集 tokenize 原始 text(含 phrase token)、reduce verbatim 传引号 text 到 pass-2,无需改 pass-1/reduce。CI:纯phrase==phrase_matches / 混合 OR / 无引号委托 / lenient / 无positions;e2e(lx64 真 8-shard):`"quick brown"` 只匹配邻接 p:1,不匹配远隔 p:2/逆序 p:3。+/-/field: 属其它步骤不进 5
   - [~] **5d.1 phrase 候选剪枝** — `rarest_anchor`:phrase 候选锚定**最稀有** token(所有 phrase token 必present,故稀有 token 文档集最紧),避免 head-term 首 token 扫整表;保正确性(34 测试绿),head+tail phrase 大幅加速、head+head 仍需 skip-list(未做)
   - [ ] **5e HIGHLIGHT spans** — ⚠️ **改 reply map 形状(RFC 标的 breaking part,stone-layer wire 契约)**:HIGHLIGHT 现在 NOT_YET(args.rs:186);需 un-reserve + 解析 `HIGHLIGHT [field…]`(与 FIELDS 两个变长 clause 有歧义,需重构 MatchArgs::parse 逐 clause 扫描)+ 每 hit 从 positions 生成 span + 拓宽 reply row(merge_ranked base=2+fields*2 / emit_ranked 同步)。**RFC §0:此类深改不宜 session 尾部,待 fresh cycle**
-  - [ ] **5f lx64 textgate(部分测量已做,发现待修)** — textgate.sh 已加 `POSITIONS=1` 模式(phrase p95 + positions 内存),**未提交(阈值失败)**:
-    - **发现1(真缺陷)**:positions 内存公式低估 **3.2×**(lx64 实测 ratio 0.42 < 0.5;formula 1248MiB vs RSS 2968MiB)。根因 = **1M singleton token 各拿完整 `HashMap<u32,Vec<u8>>`**(无 `Buckets::One` 那样的 inline),正是 buckets.rs "+2GiB over 1M singleton" 教训在 Positions 重演。**修法 = 给 Positions 加 One-inline 变体(mirror Buckets::One)** + 重录公式常数。stone 改,需 fresh cycle + lx64 复测
-    - **发现2**:term p95 lx64 实测 27ms(两跑低方差)> 20ms 阈值 —— **20ms 从未在 lx64 校准**(textgate 首次 lx64 baselining);phrase head+head 102ms。**p95 阈值定基需干净独占盒(bench-isolation),lx64 共享盒(ollama/valkey/systemd)不宜**——待用户 bench-infra 决策
-    - term 内存公式 lx64 ratio 0.59 PASS(既有 term 公式成立)
+  - [x] **5f lx64 textgate — 内存公式修复 + POSITIONS 模式**(两模式 lx64 全 PASS):
+    - **内存公式修复(真缺陷,已修)**:positions `approx_bytes` 原低估 3.2×(lx64 ratio 0.42 FAIL)→ 改**模型化**(内层 `HashMap<u32,Vec<u8>>` = struct + pow2 RawTable×33B + 每 blob 独立堆分配 16B 对齐+header)→ lx64 复测 **ratio 0.75 PASS**。根因 = singleton min-table + tiny-blob malloc 开销(原 `blob.len()+30` 忽略)
+    - **p95 provisional 上限**:term 35ms(实测 27-31ms)/ phrase 150ms(实测 102-114ms),注明 = **共享盒 regression-catcher 非精确 SLA**。精确 SLA 须干净独占盒([[feedback-kevy-bench-isolation]],perf §9 不信共享盒单跑)→ 待用户 bench-infra
+  - [ ] **5f.1 Positions One-inline 内存优化(future,减内存)** — mirror `Buckets::One`(`One{id,blob}`/`Many`)消 singleton HashMap 开销;stone 改需 lx64 复测(公式随之简化)
+  - [ ] **5d.2 phrase head+head skip-list**(future)— rarest_anchor 只帮 head+tail;head+head 仍扫 head 表(lx64 ~114ms),需 positional galloping intersection
 - [ ] **步骤 6 有序词典 / FST** → prefix / TYPO。postings HashMap → 有序结构,影响所有查询 perf,需 lx64
 - [ ] textgate 在步骤 4/5 内重录基线(改内存公式的步骤内做,不事后补)
 
