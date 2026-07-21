@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 
 use crate::buckets::Buckets;
+use crate::docvalues::DocValues;
 use crate::fields::FieldStats;
 use crate::positions::Positions;
 use crate::token::tokenize;
@@ -55,6 +56,34 @@ pub struct CorpusStats {
     pub df: std::collections::HashMap<Vec<u8>, u32>,
 }
 
+/// What an index declares, in the terms a segment is built from.
+#[derive(Clone, Copy, Default)]
+pub struct SegmentShape {
+    /// Separately scored fields — `IN <field…>` scopes to these. 0 or 1
+    /// keeps no per-field breakdown, because with one field the
+    /// per-field numbers are the merged ones.
+    pub fields: usize,
+    /// Record token positions (`WITH POSITIONS`) for phrase, proximity
+    /// and adjacency-verified highlight.
+    pub positions: bool,
+    /// Value fields stored per document (`VALUES`), for the clauses that
+    /// read a document's own value rather than a term's postings.
+    pub values: usize,
+}
+
+/// A non-scoring predicate over a document's stored values.
+///
+/// The test takes raw bytes because this crate does not know what a
+/// number or a date is; the caller coerces. A document with no value for
+/// the field never passes — absent is not a value.
+#[derive(Clone, Copy)]
+pub struct Filter<'a> {
+    /// Which declared value field the predicate reads.
+    pub field: usize,
+    /// The test applied to that field's bytes.
+    pub test: &'a dyn Fn(&[u8]) -> bool,
+}
+
 /// Everything a MATCH query carries beyond its text and result limit.
 ///
 /// Grouping them keeps the query entry point from growing a parameter per
@@ -70,6 +99,9 @@ pub struct QueryOpts<'a> {
     /// Field positions the query is restricted to (`IN <field…>`); empty
     /// = every field.
     pub fields: &'a [usize],
+    /// `FILTER`: non-scoring predicates, ANDed. Applied before the top-K
+    /// — filtering afterwards would return fewer hits than exist.
+    pub filter: &'a [Filter<'a>],
 }
 
 /// A field's text and the BM25 weight it was indexed at. Stored per
@@ -112,6 +144,10 @@ pub struct TextSegment {
     /// numbers are the merged ones, so a single-field index carries
     /// nothing; an unscoped query never reads it either way.
     fields: Option<FieldStats>,
+    /// Stored-value side-channel, present only when the index declared
+    /// value fields (`VALUES`). Answers "what is THIS document's price",
+    /// which the postings cannot — see [`crate::docvalues`].
+    values: Option<DocValues>,
 }
 
 impl TextSegment {
@@ -125,20 +161,18 @@ impl TextSegment {
     /// operation behaves identically; only the positional side-channel
     /// (and its memory cost) is added.
     pub fn with_positions() -> Self {
-        Self::with_fields(1, true)
+        Self::with_shape(SegmentShape { positions: true, ..SegmentShape::default() })
     }
 
-    /// Empty segment for an index declaring `n_fields` weighted fields,
-    /// optionally recording token positions.
+    /// Empty segment shaped by what an index declares.
     ///
-    /// A multi-field segment also keeps the per-field breakdown of every
-    /// posting, which is what lets `IN <field…>` score a field on its own
-    /// terms — its own frequencies and its own length — instead of
-    /// filtering whole-document scores after the fact.
-    pub fn with_fields(n_fields: usize, positions: bool) -> Self {
+    /// Each optional channel exists only when the declaration calls for
+    /// it, so an index pays for what it asked for and nothing else.
+    pub fn with_shape(shape: SegmentShape) -> Self {
         Self {
-            positions: positions.then(Positions::default),
-            fields: (n_fields > 1).then(|| FieldStats::new(n_fields)),
+            positions: shape.positions.then(Positions::default),
+            fields: (shape.fields > 1).then(|| FieldStats::new(shape.fields)),
+            values: (shape.values > 0).then(|| DocValues::new(shape.values)),
             ..Self::default()
         }
     }
@@ -152,6 +186,12 @@ impl TextSegment {
     /// per-field breakdown (a single-field index needs none).
     pub fn field_arity(&self) -> usize {
         self.fields.as_ref().map_or(1, FieldStats::arity)
+    }
+
+    /// How many value fields this segment stores per document; 0 when it
+    /// stores none.
+    pub fn value_arity(&self) -> usize {
+        self.values.as_ref().map_or(0, DocValues::arity)
     }
 
     /// (Re-)index one row's text (`None` = row removed / excluded).
@@ -174,6 +214,19 @@ impl TextSegment {
     /// text there is to dilute a match, and weighting it would make a
     /// heavily-weighted field penalise itself.
     pub fn apply_fields(&mut self, key: &[u8], fields: Option<&[IndexedField]>) {
+        self.apply_doc(key, fields, &[]);
+    }
+
+    /// [`TextSegment::apply_fields`], also storing the row's declared
+    /// value fields (`VALUES`) so `FILTER` and friends can read them back
+    /// per document. `values` is positional against the declaration; a
+    /// short slice leaves the rest absent.
+    pub fn apply_doc(
+        &mut self,
+        key: &[u8],
+        fields: Option<&[IndexedField]>,
+        values: &[Option<&[u8]>],
+    ) {
         self.withdraw(key);
         let Some(fields) = fields else { return };
         let (per_field, lens) = field_tf(fields);
@@ -195,6 +248,9 @@ impl TextSegment {
             }
         }
         self.index_side_channels(id, fields, &per_field, &lens);
+        if let Some(dv) = self.values.as_mut() {
+            dv.set(id, values);
+        }
     }
 
     /// Claim a document id for `key`, reusing a freed slot when there is
@@ -269,6 +325,9 @@ impl TextSegment {
         }
         if let Some(fs) = self.fields.as_mut() {
             fs.clear_doc_len(old_id);
+        }
+        if let Some(dv) = self.values.as_mut() {
+            dv.clear(old_id);
         }
         self.id_key[old_id as usize] = None;
         self.free_ids.push(old_id);

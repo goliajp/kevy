@@ -225,7 +225,11 @@ fn new_text_seg(spec: &kevy_index::IndexSpec) -> Option<kevy_text::TextSegment> 
         // The declared field count decides whether the segment keeps the
         // per-field breakdown `IN <field…>` scopes to; one field needs
         // none, because its per-field numbers are the merged ones.
-        kevy_text::TextSegment::with_fields(spec.fields.len(), spec.with_positions)
+        kevy_text::TextSegment::with_shape(kevy_text::SegmentShape {
+            fields: spec.fields.len(),
+            positions: spec.with_positions,
+            values: 0,
+        })
     })
 }
 

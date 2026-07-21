@@ -78,7 +78,7 @@ impl TextSegment {
         }
         let ctx = QueryCtx { n_docs, avgdl, limit };
         let scores = self.accumulate(&lists, &ctx);
-        self.select_top(&scores, limit)
+        self.select_top(&scores, limit, &[])
     }
 
     /// Corpus `(n_docs, avgdl)`: injected global stats when supplied,
@@ -250,12 +250,24 @@ impl TextSegment {
 
     /// Bounded selection: only the winners get cloned. Ids resolve
     /// to keys here — the tiebreak (key ascending) is unchanged.
-    pub(crate) fn select_top(&self, scores: &HashMap<u32, f64>, limit: usize) -> Vec<TextMatch> {
+    pub(crate) fn select_top(
+        &self,
+        scores: &HashMap<u32, f64>,
+        limit: usize,
+        filter: &[crate::Filter],
+    ) -> Vec<TextMatch> {
         let key_of = |id: u32| -> &[u8] {
             self.id_key[id as usize].as_deref().expect("live posting id")
         };
         let mut top: Vec<(f64, &[u8])> = Vec::with_capacity(limit + 1);
         for (id, score) in scores {
+            // The candidate set is walked exactly once here, so this is
+            // the cheapest correct place to test a predicate: testing
+            // inside each term's accumulation would retest a document
+            // once per query term.
+            if !self.passes(*id, filter) {
+                continue;
+            }
             let cand = (*score, key_of(*id));
             if top.len() < limit {
                 top.push(cand);
@@ -274,6 +286,18 @@ impl TextSegment {
         top.into_iter()
             .map(|(score, k)| TextMatch { key: k.to_vec(), score })
             .collect()
+    }
+
+    /// Whether `id` satisfies every predicate (they are ANDed). A
+    /// document with no value for a filtered field never passes: absent
+    /// is not a value, and treating it as one would let rows that simply
+    /// lack the field slip through a range test.
+    fn passes(&self, id: u32, filter: &[crate::Filter]) -> bool {
+        if filter.is_empty() {
+            return true;
+        }
+        let Some(dv) = self.values.as_ref() else { return false };
+        filter.iter().all(|f| dv.get(id, f.field).is_some_and(|v| (f.test)(v)))
     }
 }
 

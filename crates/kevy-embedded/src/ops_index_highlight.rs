@@ -62,6 +62,7 @@ impl Store {
                     stats: Some(&stats),
                     typo: opts.typo,
                     fields: &scope,
+                    filter: &[],
                 };
                 for m in ts.matches_query_with(query, fetch, q) {
                     let hl = opts

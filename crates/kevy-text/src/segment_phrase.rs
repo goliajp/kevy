@@ -48,7 +48,7 @@ impl TextSegment {
         let sc = Scope { stats, n_docs, avgdl, want: &[] };
         let mut scores: HashMap<u32, f64> = HashMap::new();
         self.add_phrase(&toks, &mut scores, &sc);
-        self.select_top(&scores, limit)
+        self.select_top(&scores, limit, &[])
     }
 
     /// BM25-ranked matches for a query `text` that may mix bare terms and
@@ -85,12 +85,13 @@ impl TextSegment {
         stats: Option<&CorpusStats>,
         typo: u32,
     ) -> Vec<TextMatch> {
-        self.matches_query_with(text, limit, QueryOpts { stats, typo, fields: &[] })
+        self.matches_query_with(text, limit, QueryOpts { stats, typo, ..QueryOpts::default() })
     }
 
     /// [`TextSegment::matches_query`] with every option a MATCH carries:
-    /// injected corpus statistics, a typo budget, and the field positions
-    /// the query is restricted to (`IN <field…>`, empty = every field).
+    /// injected corpus statistics, a typo budget, the field positions the
+    /// query is restricted to (`IN <field…>`, empty = every field), and
+    /// the non-scoring predicates it must satisfy (`FILTER`).
     ///
     /// A scoped query is a *field-scoped BM25*, not a filter over
     /// whole-document scores: frequency, length and document frequency
@@ -109,11 +110,22 @@ impl TextSegment {
             return Vec::new();
         };
         let (bare, phrases, prefixes) = parse_clauses(text);
-        if phrases.is_empty() && prefixes.is_empty() && opts.typo == 0 && want.is_empty() {
-            // No phrase, prefix, typo or field clause — the ordinary
-            // pruned term query.
+        if phrases.is_empty()
+            && prefixes.is_empty()
+            && opts.typo == 0
+            && want.is_empty()
+            && opts.filter.is_empty()
+        {
+            // No phrase, prefix, typo, field or filter clause — the
+            // ordinary pruned term query.
             return self.matches_scored(text, limit, opts.stats);
         }
+        // A filtered query takes the full walk deliberately. MaxScore
+        // prunes against the k-th best score SO FAR, computed over
+        // unfiltered candidates: if the unfiltered leaders are the ones
+        // the predicate rejects, the qualifying documents behind them may
+        // never be accumulated at all. Pruning would not merely rank them
+        // wrongly — it would lose them.
         if self.docs.is_empty() {
             return Vec::new();
         }
@@ -132,7 +144,7 @@ impl TextSegment {
         for pfx in &prefixes {
             self.add_prefix(pfx, &mut scores, &sc);
         }
-        self.select_top(&scores, limit)
+        self.select_top(&scores, limit, opts.filter)
     }
 
     /// BM25-ranked documents holding any indexed term that begins with
@@ -159,7 +171,7 @@ impl TextSegment {
         let sc = Scope { stats, n_docs, avgdl, want: &[] };
         let mut scores: HashMap<u32, f64> = HashMap::new();
         self.add_prefix(&pfx, &mut scores, &sc);
-        self.select_top(&scores, limit)
+        self.select_top(&scores, limit, &[])
     }
 
     /// The terms whose document frequency a cross-shard query aggregates

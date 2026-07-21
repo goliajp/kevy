@@ -9,6 +9,7 @@
 
 use super::{TextSegment, TextStats};
 use crate::buckets::Buckets;
+use crate::docvalues::DocValues;
 use crate::fields::FieldStats;
 use crate::positions::Positions;
 
@@ -49,12 +50,14 @@ impl TextSegment {
             .sum();
         // per-Many-posting ≈ 4B band-vec slot + ~26B list-index entry.
         // The side-channels add their own terms when present (`WITH
-        // POSITIONS`, and the per-field breakdown of a multi-field
-        // index); absent, each contributes nothing, so a plain
-        // single-field segment's formula is byte-identical.
+        // POSITIONS`, the per-field breakdown of a multi-field index,
+        // and the declared stored values); absent, each contributes
+        // nothing, so a plain single-field segment's formula is
+        // byte-identical.
         let position_bytes = self.positions.as_ref().map_or(0, Positions::approx_bytes);
         let field_bytes = self.fields.as_ref().map_or(0, FieldStats::approx_bytes);
-        token_bytes + many_postings * 30 + doc_bytes + position_bytes + field_bytes
+        let value_bytes = self.values.as_ref().map_or(0, DocValues::approx_bytes);
+        token_bytes + many_postings * 30 + doc_bytes + position_bytes + field_bytes + value_bytes
     }
 
     /// Verify hook: is `key` indexed here?
