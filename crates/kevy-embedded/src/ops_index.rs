@@ -28,6 +28,19 @@ pub(crate) use crate::ops_index_sync::{each_written_key_pub, on_commit, sync_seg
 /// One page of index hits plus the cursor to resume from.
 pub type IndexPage = (Vec<(Vec<u8>, IndexValue)>, Option<Cursor>);
 
+/// One field's highlight: its name and the `(start, end)` match spans.
+#[cfg(feature = "text")]
+pub type FieldSpans = (Vec<u8>, Vec<(u32, u32)>);
+/// A highlighted MATCH hit: key, score, and per-field [`FieldSpans`].
+#[cfg(feature = "text")]
+pub type HighlightedHit = (Vec<u8>, f64, Vec<FieldSpans>);
+
+// `idx_match_highlighted` and its span-mapping helper live in a child
+// module to keep this file under the 500-LOC ceiling.
+#[cfg(feature = "text")]
+#[path = "ops_index_highlight.rs"]
+mod highlight;
+
 /// Sort merged `(value, key)` hits, cut to `limit`, and derive the
 /// resume cursor. Shared by `Store::idx_query` and the transaction twin
 /// on `AtomicAllShards`, which differ only in where the segments come
@@ -250,25 +263,11 @@ impl Store {
         query: &[u8],
         limit: usize,
     ) -> KevyResult<Vec<(Vec<u8>, f64)>> {
-        let limit = limit.clamp(1, 1000);
-        let mut q_tokens = kevy_text::tokenize(query);
-        q_tokens.sort();
-        q_tokens.dedup();
-        let stats = self.text_corpus_stats(name, &q_tokens)?;
-        let mut all: Vec<kevy_text::TextMatch> = Vec::new();
-        for shard in self.shards.iter() {
-            let mut g = lock_write(shard);
-            let inner = &mut *g;
-            sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
-            if let Some((_, ts)) = inner.idx_segs.text.iter().find(|(s, _)| s.name == name) {
-                // `matches_query` parses quoted phrases out of the raw
-                // query text; with none it is the ordinary term query.
-                all.extend(ts.matches_query(query, limit, Some(&stats)));
-            }
-        }
-        all.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.key.cmp(&b.key)));
-        all.truncate(limit);
-        Ok(all.into_iter().map(|m| (m.key, m.score)).collect())
+        Ok(self
+            .idx_match_highlighted(name, query, limit, None)?
+            .into_iter()
+            .map(|(key, score, _)| (key, score))
+            .collect())
     }
 
     /// Pass 1 of `idx_match`: sum each shard's corpus counters and the

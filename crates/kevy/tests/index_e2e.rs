@@ -632,3 +632,42 @@ fn phrase_query_matches_only_adjacent_docs() {
     let s = String::from_utf8_lossy(&r);
     assert!(s.contains("p:1") && s.contains("p:2") && s.contains("p:3"), "term OR matches all: {s}");
 }
+
+/// HIGHLIGHT adds a trailing per-hit element naming each field and the
+/// byte spans that matched — here the phrase "quick brown" in the body.
+/// Without HIGHLIGHT the row keeps its `[key, score]` shape.
+#[test]
+fn highlight_returns_match_spans() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    // "the quick brown fox": quick at bytes 4..9, brown at 10..15.
+    cmd(&mut c, &[b"HSET", b"h:1", b"body", b"the quick brown fox"]);
+    // WITH POSITIONS so the phrase query matches; highlighting itself
+    // re-analyses the text and needs no positions, but the phrase *query*
+    // does.
+    let r = cmd(
+        &mut c,
+        &[b"IDX.CREATE", b"hi", b"ON", b"PREFIX", b"h:", b"FIELD", b"body",
+          b"TYPE", b"str", b"KIND", b"text", b"WITH", b"POSITIONS"],
+    );
+    assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
+
+    // Baseline: no HIGHLIGHT → no field name, no spans in the reply.
+    let base = query_ready(&mut c, &[b"IDX.QUERY", b"hi", b"MATCH", b"quick", b"LIMIT", b"5"]);
+    let bs = String::from_utf8_lossy(&base);
+    assert!(bs.contains("h:1"), "matches: {bs}");
+    assert!(!bs.contains("body"), "no highlights requested → field name absent: {bs}");
+
+    // HIGHLIGHT the phrase: the reply carries `body` and the two spans.
+    let r = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"hi", b"MATCH", b"\"quick brown\"", b"LIMIT", b"5", b"HIGHLIGHT"],
+    );
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.contains("h:1"), "phrase matches: {s}");
+    assert!(s.contains("body"), "highlights name the field: {s}");
+    // quick 4..9 and brown 10..15 appear as bulk-string offsets.
+    for n in ["4", "9", "10", "15"] {
+        assert!(s.contains(&format!("${}\r\n{n}\r\n", n.len())), "span offset {n} present: {s}");
+    }
+}

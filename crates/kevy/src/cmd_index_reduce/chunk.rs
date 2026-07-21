@@ -4,7 +4,7 @@
 use kevy_index::IndexValue;
 use kevy_resp::{encode_array_len, encode_bulk};
 
-use crate::cmd_index_query::{Hydrated, encode_value, hex};
+use crate::cmd_index_query::{HitSpans, Hydrated, encode_value, hex};
 
 pub(super) fn read_u32(c: &[u8], pos: &mut usize) -> Option<u32> {
     let v = u32::from_le_bytes(c.get(*pos..*pos + 4)?.try_into().ok()?);
@@ -32,6 +32,26 @@ pub(super) fn read_hydration(c: &[u8], pos: &mut usize) -> Option<Hydrated> {
             *pos += len as usize;
             out.push(Some(b));
         }
+    }
+    Some(out)
+}
+
+/// Decode one hit's highlight block (written by
+/// `cmd_index_query::wire::encode_highlight`):
+/// `[nfields u32] then per field [flen u32][name][nspans u32][(start,end u32)*]`.
+pub(super) fn read_highlight(c: &[u8], pos: &mut usize) -> Option<HitSpans> {
+    let nf = read_u32(c, pos)? as usize;
+    let mut out = Vec::with_capacity(nf);
+    for _ in 0..nf {
+        let name = read_kbytes(c, pos)?;
+        let ns = read_u32(c, pos)? as usize;
+        let mut ranges = Vec::with_capacity(ns);
+        for _ in 0..ns {
+            let s = read_u32(c, pos)?;
+            let e = read_u32(c, pos)?;
+            ranges.push((s, e));
+        }
+        out.push((name, ranges));
     }
     Some(out)
 }

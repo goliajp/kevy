@@ -4,8 +4,8 @@
 use kevy_resp::{encode_array_len, encode_bulk, encode_error};
 use kevy_rt::ExtensionReduced;
 
-use super::chunk::{read_hydration, read_kbytes, read_u32};
-use crate::cmd_index_query::Hydrated;
+use super::chunk::{read_highlight, read_hydration, read_kbytes, read_u32};
+use crate::cmd_index_query::{HitSpans, Hydrated};
 
 /// One shard's decoded pass-1 report: `(n_docs, total_len, [(token, df)])`.
 type ShardCorpus = (u64, u64, Vec<(Vec<u8>, u32)>);
@@ -23,7 +23,7 @@ pub(super) fn reduce_ranked(argv: &[Vec<u8>], chunks: &[Vec<u8>], ascending: boo
         encode_error(&mut out, "ERR bad IDX arguments");
         return out;
     };
-    merge_ranked(chunks, limit, &fields, ascending)
+    merge_ranked(chunks, limit, &fields, ascending, false)
 }
 
 /// MATCH pass 2 reduce: merge the globally-scored ranked chunks
@@ -31,29 +31,30 @@ pub(super) fn reduce_ranked(argv: &[Vec<u8>], chunks: &[Vec<u8>], ascending: boo
 /// from the MATCH.SCORE argv the pass-1 reduce built.
 pub(super) fn reduce_match_score(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
     let mut out = Vec::new();
-    let Some((_, _, limit, fields)) = crate::cmd_index_query::parse_match_score(argv) else {
+    let Some((_, _, limit, fields, highlight)) = crate::cmd_index_query::parse_match_score(argv)
+    else {
         encode_error(&mut out, "ERR bad IDX arguments");
         return out;
     };
-    merge_ranked(chunks, limit, &fields, false)
+    merge_ranked(chunks, limit, &fields, false, highlight.is_some())
 }
 
-/// Decode `[n][(key, f64, hydration)*]` chunks, sort, truncate, emit
-/// `[key, value, fields…]` rows. Shared by KNN and MATCH pass 2.
-fn merge_ranked(chunks: &[Vec<u8>], limit: usize, fields: &[Vec<u8>], ascending: bool) -> Vec<u8> {
+/// Decode `[n][(key, f64, hydration, highlight?)*]` chunks, sort,
+/// truncate, emit `[key, value, fields…, highlights?]` rows. Shared by
+/// KNN and MATCH pass 2; `highlight` is true only for a MATCH that asked
+/// for it, and then each chunk carries a highlight block per hit and each
+/// row gains a trailing `[[field, start, end, …], …]` element.
+fn merge_ranked(
+    chunks: &[Vec<u8>],
+    limit: usize,
+    fields: &[Vec<u8>],
+    ascending: bool,
+    highlight: bool,
+) -> Vec<u8> {
     let mut out = Vec::new();
-    let mut all: Vec<(f64, Vec<u8>, Hydrated)> = Vec::new();
+    let mut all: Vec<(f64, Vec<u8>, Hydrated, HitSpans)> = Vec::new();
     for c in chunks {
-        let mut pos = 1usize;
-        let Some(n) = read_u32(c, &mut pos) else { continue };
-        for _ in 0..n {
-            let Some(key) = read_kbytes(c, &mut pos) else { break };
-            let Some(sb) = c.get(pos..pos + 8) else { break };
-            let v = f64::from_le_bytes(sb.try_into().expect("8 bytes"));
-            pos += 8;
-            let Some(fv) = read_hydration(c, &mut pos) else { break };
-            all.push((v, key, fv));
-        }
+        collect_hits(c, highlight, &mut all);
     }
     if ascending {
         all.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
@@ -62,8 +63,8 @@ fn merge_ranked(chunks: &[Vec<u8>], limit: usize, fields: &[Vec<u8>], ascending:
     }
     all.truncate(limit);
     encode_array_len(&mut out, all.len() as i64);
-    for (v, key, fv) in &all {
-        let base = 2 + fields.len() * 2;
+    for (v, key, fv, hl) in &all {
+        let base = 2 + fields.len() * 2 + usize::from(highlight);
         encode_array_len(&mut out, base as i64);
         encode_bulk(&mut out, key);
         encode_bulk(&mut out, format!("{v:.4}").as_bytes());
@@ -74,8 +75,49 @@ fn merge_ranked(chunks: &[Vec<u8>], limit: usize, fields: &[Vec<u8>], ascending:
                 None => out.extend_from_slice(b"$-1\r\n"),
             }
         }
+        if highlight {
+            encode_highlights(&mut out, hl);
+        }
     }
     out
+}
+
+/// Decode one shard's `[n][(key, f64, hydration, highlight?)*]` chunk
+/// into `all`; a short/corrupt chunk stops that shard's contribution.
+fn collect_hits(c: &[u8], highlight: bool, all: &mut Vec<(f64, Vec<u8>, Hydrated, HitSpans)>) {
+    let mut pos = 1usize;
+    let Some(n) = read_u32(c, &mut pos) else { return };
+    for _ in 0..n {
+        let Some(key) = read_kbytes(c, &mut pos) else { break };
+        let Some(sb) = c.get(pos..pos + 8) else { break };
+        let v = f64::from_le_bytes(sb.try_into().expect("8 bytes"));
+        pos += 8;
+        let Some(fv) = read_hydration(c, &mut pos) else { break };
+        let hl = if highlight {
+            match read_highlight(c, &mut pos) {
+                Some(h) => h,
+                None => break,
+            }
+        } else {
+            Vec::new()
+        };
+        all.push((v, key, fv, hl));
+    }
+}
+
+/// Emit the trailing highlights element: one sub-array per field,
+/// `[field_name, start, end, start, end, …]` (offsets as bulk decimals,
+/// matching the row's all-bulk convention).
+fn encode_highlights(out: &mut Vec<u8>, hl: &HitSpans) {
+    encode_array_len(out, hl.len() as i64);
+    for (name, ranges) in hl {
+        encode_array_len(out, (1 + ranges.len() * 2) as i64);
+        encode_bulk(out, name);
+        for (s, e) in ranges {
+            encode_bulk(out, s.to_string().as_bytes());
+            encode_bulk(out, e.to_string().as_bytes());
+        }
+    }
 }
 
 /// MATCH pass 1 reduce: fold each shard's corpus counters
@@ -120,6 +162,12 @@ pub(super) fn reduce_match_stats(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Extens
     if !m.fields.is_empty() {
         argv2.push(b"FIELDS".to_vec());
         argv2.extend(m.fields);
+    }
+    // Carry HIGHLIGHT to pass 2, where the segment produces the spans;
+    // an empty field list means "every field".
+    if let Some(hl) = m.highlight {
+        argv2.push(b"HIGHLIGHT".to_vec());
+        argv2.extend(hl);
     }
     ExtensionReduced::Continue(argv2)
 }

@@ -177,6 +177,29 @@ pub(crate) struct MatchArgs {
     pub(crate) text: Vec<u8>,
     pub(crate) limit: usize,
     pub(crate) fields: Vec<Vec<u8>>,
+    /// `HIGHLIGHT [field…]`: `None` = not requested, `Some(empty)` =
+    /// highlight every indexed field, `Some(fields)` = only those.
+    pub(crate) highlight: Option<Vec<Vec<u8>>>,
+}
+
+/// A MATCH clause keyword — the boundary a variadic clause (`FIELDS`,
+/// `HIGHLIGHT`) collects up to.
+fn is_clause_keyword(a: &[u8]) -> bool {
+    a.eq_ignore_ascii_case(b"LIMIT")
+        || a.eq_ignore_ascii_case(b"FIELDS")
+        || a.eq_ignore_ascii_case(b"HIGHLIGHT")
+}
+
+/// Collect a variadic clause's arguments from `start` until the next
+/// clause keyword or the end; returns them and the next keyword index.
+fn collect_clause(argv: &[Vec<u8>], start: usize) -> (Vec<Vec<u8>>, usize) {
+    let mut i = start;
+    let mut out = Vec::new();
+    while i < argv.len() && !is_clause_keyword(&argv[i]) {
+        out.push(argv[i].clone());
+        i += 1;
+    }
+    (out, i)
 }
 
 /// Clauses of the terminal MATCH surface that parse today and execute
@@ -189,7 +212,6 @@ const NOT_YET: &[&[u8]] = &[
     b"FACET",
     b"SORT",
     b"DISTINCT",
-    b"HIGHLIGHT",
     b"TYPO",
     b"OFFSET",
 ];
@@ -232,35 +254,45 @@ impl MatchArgs {
         let text = argv.get(3)?.clone();
         let mut limit = 10usize;
         let mut fields = Vec::new();
+        let mut highlight = None;
         let mut i = 4;
+        // Clauses are order-independent; each variadic one (FIELDS,
+        // HIGHLIGHT) collects up to the next keyword. FIELDS must name at
+        // least one field; HIGHLIGHT with none means every field.
         while i < argv.len() {
-            let t = &argv[i];
-            if t.eq_ignore_ascii_case(b"LIMIT") {
+            let kw = &argv[i];
+            if kw.eq_ignore_ascii_case(b"LIMIT") {
                 limit = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
                 i += 2;
-            } else if t.eq_ignore_ascii_case(b"FIELDS") {
-                fields = argv[i + 1..].to_vec();
-                if fields.is_empty() {
+            } else if kw.eq_ignore_ascii_case(b"FIELDS") {
+                let (fs, next) = collect_clause(argv, i + 1);
+                if fs.is_empty() {
                     return None;
                 }
-                break;
+                fields = fs;
+                i = next;
+            } else if kw.eq_ignore_ascii_case(b"HIGHLIGHT") {
+                let (hs, next) = collect_clause(argv, i + 1);
+                highlight = Some(hs);
+                i = next;
             } else {
                 return None;
             }
         }
-        Some(MatchArgs { name, text, limit: limit.clamp(1, 1000), fields })
+        Some(MatchArgs { name, text, limit: limit.clamp(1, 1000), fields, highlight })
     }
 }
 
-/// Parsed pass-2 args: `(name, text, limit, fields)`.
-pub(crate) type MatchScoreArgs = (Vec<u8>, Vec<u8>, usize, Vec<Vec<u8>>);
+/// Parsed pass-2 args: `(name, text, limit, fields, highlight)`.
+pub(crate) type MatchScoreArgs = (Vec<u8>, Vec<u8>, usize, Vec<Vec<u8>>, Option<Vec<Vec<u8>>>);
 
 /// Parse the internal pass-2 argv
-/// `[MATCH.SCORE, name, text, LIMIT=<n>, <gstats>, (FIELDS f…)?]` into
-/// `(name, text, limit, fields)`. The global-stats blob at index 4 is
-/// decoded separately (per-shard: [`super::wire::decode_gstats_arg`]); the
-/// reduce takes only `(limit, fields)`. Shared by the per-shard op and the
-/// origin merge so their view of LIMIT/FIELDS can never drift.
+/// `[MATCH.SCORE, name, text, LIMIT=<n>, <gstats>, (FIELDS f…)? (HIGHLIGHT h…)?]`
+/// into `(name, text, limit, fields, highlight)`. The global-stats blob
+/// at index 4 is decoded separately (per-shard:
+/// [`super::wire::decode_gstats_arg`]); the reduce takes only the rest.
+/// Shared by the per-shard op and the origin merge so their view of the
+/// clauses can never drift.
 pub(crate) fn parse_match_score(argv: &[Vec<u8>]) -> Option<MatchScoreArgs> {
     let name = argv.get(1)?.clone();
     let text = argv.get(2)?.clone();
@@ -269,18 +301,28 @@ pub(crate) fn parse_match_score(argv: &[Vec<u8>]) -> Option<MatchScoreArgs> {
         .strip_prefix("LIMIT=")?
         .parse()
         .ok()?;
-    let fields = match argv.get(5) {
-        Some(f) if f.eq_ignore_ascii_case(b"FIELDS") => {
-            let fs = argv[6..].to_vec();
+    // index 4 is the gstats blob; the optional clauses start at 5.
+    let mut fields = Vec::new();
+    let mut highlight = None;
+    let mut i = 5;
+    while i < argv.len() {
+        let kw = &argv[i];
+        if kw.eq_ignore_ascii_case(b"FIELDS") {
+            let (fs, next) = collect_clause(argv, i + 1);
             if fs.is_empty() {
                 return None;
             }
-            fs
+            fields = fs;
+            i = next;
+        } else if kw.eq_ignore_ascii_case(b"HIGHLIGHT") {
+            let (hs, next) = collect_clause(argv, i + 1);
+            highlight = Some(hs);
+            i = next;
+        } else {
+            return None;
         }
-        Some(_) => return None,
-        None => Vec::new(),
-    };
-    Some((name, text, limit.clamp(1, 1000), fields))
+    }
+    Some((name, text, limit.clamp(1, 1000), fields, highlight))
 }
 
 /// `IDX.QUERY name KNN vec [LIMIT k] [FIELDS f…]` (no cursor; k ≤
@@ -420,53 +462,5 @@ pub(crate) fn parse_groups_args(argv: &[Vec<u8>]) -> Option<(kevy_index::AggBy, 
 }
 
 #[cfg(test)]
-mod terminal_surface_tests {
-    use super::*;
-
-    fn argv(parts: &[&str]) -> Vec<Vec<u8>> {
-        parts.iter().map(|p| p.as_bytes().to_vec()).collect()
-    }
-
-    /// Every reserved clause must come back named. Silently ignoring one
-    /// is the failure mode worth a test: a dropped FILTER returns
-    /// unfiltered rows, which is a wrong answer wearing a success reply.
-    #[test]
-    fn reserved_clauses_are_refused_by_name() {
-        for clause in ["IN", "FILTER", "FACET", "SORT", "DISTINCT", "HIGHLIGHT", "TYPO", "OFFSET"] {
-            let a = argv(&["IDX.QUERY", "idx", "MATCH", "hello", clause, "x"]);
-            match MatchArgs::parse_terminal(&a) {
-                MatchParse::NotYet(c) => {
-                    assert!(c.eq_ignore_ascii_case(clause.as_bytes()), "{clause}");
-                }
-                _ => panic!("{clause} should be reserved, not accepted or rejected as bad"),
-            }
-        }
-    }
-
-    #[test]
-    fn the_shipped_surface_still_parses() {
-        let a = argv(&["IDX.QUERY", "idx", "MATCH", "hello", "LIMIT", "5", "FIELDS", "title"]);
-        match MatchArgs::parse_terminal(&a) {
-            MatchParse::Ok(q) => {
-                assert_eq!(q.text, b"hello");
-                assert_eq!(q.limit, 5);
-                assert_eq!(q.fields, vec![b"title".to_vec()]);
-            }
-            _ => panic!("the existing surface must keep working unchanged"),
-        }
-    }
-
-    #[test]
-    fn genuine_nonsense_is_still_bad_args() {
-        let a = argv(&["IDX.QUERY", "idx", "MATCH", "hello", "WOBBLE"]);
-        assert!(matches!(MatchArgs::parse_terminal(&a), MatchParse::BadArgs));
-    }
-
-    /// A reserved word appearing as the search text is a query, not a
-    /// clause -- the scan starts after the text argument.
-    #[test]
-    fn a_reserved_word_as_the_query_text_is_not_a_clause() {
-        let a = argv(&["IDX.QUERY", "idx", "MATCH", "FILTER"]);
-        assert!(matches!(MatchArgs::parse_terminal(&a), MatchParse::Ok(_)));
-    }
-}
+#[path = "args_tests.rs"]
+mod terminal_surface_tests;

@@ -48,15 +48,43 @@ pub(super) fn parse_bounds(
     }
 }
 
-/// `[LIMIT n] [CURSOR c] [FIELDS f…]` tail (server `Query::parse`).
+/// `[LIMIT n] [CURSOR c] [FIELDS f…] [HIGHLIGHT h…]` tail (server
+/// `Query::parse`). `highlight` is `None` unless the verb allows it and
+/// the query asked; `Some(empty)` means every field.
 struct Tail {
     limit: usize,
     cursor_raw: Option<Vec<u8>>,
     fields: Vec<Vec<u8>>,
+    highlight: Option<Vec<Vec<u8>>>,
 }
 
-fn parse_tail(argv: &[Vec<u8>], mut i: usize, default_limit: usize, cap: usize) -> Option<Tail> {
-    let mut t = Tail { limit: default_limit, cursor_raw: None, fields: Vec::new() };
+/// A tail clause keyword — the boundary a variadic clause collects up to.
+fn is_tail_keyword(a: &[u8]) -> bool {
+    a.eq_ignore_ascii_case(b"LIMIT")
+        || a.eq_ignore_ascii_case(b"CURSOR")
+        || a.eq_ignore_ascii_case(b"FIELDS")
+        || a.eq_ignore_ascii_case(b"HIGHLIGHT")
+}
+
+/// Collect a variadic clause's args from `start` until the next keyword.
+fn collect_until_keyword(argv: &[Vec<u8>], start: usize) -> (Vec<Vec<u8>>, usize) {
+    let mut i = start;
+    let mut out = Vec::new();
+    while i < argv.len() && !is_tail_keyword(&argv[i]) {
+        out.push(argv[i].clone());
+        i += 1;
+    }
+    (out, i)
+}
+
+fn parse_tail(
+    argv: &[Vec<u8>],
+    mut i: usize,
+    default_limit: usize,
+    cap: usize,
+    allow_highlight: bool,
+) -> Option<Tail> {
+    let mut t = Tail { limit: default_limit, cursor_raw: None, fields: Vec::new(), highlight: None };
     while i < argv.len() {
         let a = &argv[i];
         if a.eq_ignore_ascii_case(b"LIMIT") {
@@ -66,11 +94,16 @@ fn parse_tail(argv: &[Vec<u8>], mut i: usize, default_limit: usize, cap: usize) 
             t.cursor_raw = Some(argv.get(i + 1)?.clone());
             i += 2;
         } else if a.eq_ignore_ascii_case(b"FIELDS") {
-            t.fields = argv[i + 1..].to_vec();
-            if t.fields.is_empty() {
+            let (fs, next) = collect_until_keyword(argv, i + 1);
+            if fs.is_empty() {
                 return None;
             }
-            break;
+            t.fields = fs;
+            i = next;
+        } else if allow_highlight && a.eq_ignore_ascii_case(b"HIGHLIGHT") {
+            let (hs, next) = collect_until_keyword(argv, i + 1);
+            t.highlight = Some(hs);
+            i = next;
         } else {
             return None;
         }
@@ -134,7 +167,7 @@ fn scalar_query(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         return no_such_index(out, name);
     };
     let parsed = parse_bounds(spec.ty, &argv[2], argv, 3)
-        .and_then(|(min, max, i)| Some((min, max, parse_tail(argv, i, 100, 10_000)?)));
+        .and_then(|(min, max, i)| Some((min, max, parse_tail(argv, i, 100, 10_000, false)?)));
     let Some((min, max, tail)) = parsed else {
         return badargs(out, "IDX.QUERY", name);
     };
@@ -199,12 +232,18 @@ fn text_match(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         let Some(text) = argv.get(3) else {
             return badargs(out, "IDX.QUERY", name);
         };
-        let Some(tail) = parse_tail(argv, 4, 10, 1000) else {
+        let Some(tail) = parse_tail(argv, 4, 10, 1000, true) else {
             return badargs(out, "IDX.QUERY", name);
         };
-        match s.idx_match(name, text, tail.limit) {
-            Err(e) => idx_err(out, name, &e),
-            Ok(hits) => emit_ranked(s, out, &hits, &tail.fields, 4),
+        match tail.highlight.as_deref() {
+            Some(want) => match s.idx_match_highlighted(name, text, tail.limit, Some(want)) {
+                Err(e) => idx_err(out, name, &e),
+                Ok(hits) => emit_ranked_highlighted(s, out, &hits, &tail.fields),
+            },
+            None => match s.idx_match(name, text, tail.limit) {
+                Err(e) => idx_err(out, name, &e),
+                Ok(hits) => emit_ranked(s, out, &hits, &tail.fields, 4),
+            },
         }
     }
     #[cfg(not(feature = "text"))]
@@ -234,6 +273,39 @@ pub(super) fn emit_ranked(
             match s.hget(key, f) {
                 Ok(Some(val)) => bulk(out, &val),
                 _ => nil(out),
+            }
+        }
+    }
+}
+
+/// Ranked rows with a trailing highlights element, matching the server's
+/// `[key, score, fields…, [[field, start, end, …], …]]` shape.
+#[cfg(feature = "text")]
+fn emit_ranked_highlighted(
+    s: &Store,
+    out: &mut Vec<u8>,
+    hits: &[crate::ops_index::HighlightedHit],
+    fields: &[Vec<u8>],
+) {
+    arr(out, hits.len());
+    for (key, v, hl) in hits {
+        arr(out, 2 + fields.len() * 2 + 1);
+        bulk(out, key);
+        bulk(out, format!("{v:.4}").as_bytes());
+        for f in fields {
+            bulk(out, f);
+            match s.hget(key, f) {
+                Ok(Some(val)) => bulk(out, &val),
+                _ => nil(out),
+            }
+        }
+        arr(out, hl.len());
+        for (name, ranges) in hl {
+            arr(out, 1 + ranges.len() * 2);
+            bulk(out, name);
+            for (start, end) in ranges {
+                bulk(out, start.to_string().as_bytes());
+                bulk(out, end.to_string().as_bytes());
             }
         }
     }
@@ -276,7 +348,7 @@ fn knn(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
 /// `[LIMIT k] [EF e] [FIELDS f…]` tail for KNN (EF bounds 16..=4096).
 #[cfg(feature = "vector")]
 fn parse_knn_tail(argv: &[Vec<u8>]) -> Option<(Tail, usize)> {
-    let mut t = Tail { limit: 10, cursor_raw: None, fields: Vec::new() };
+    let mut t = Tail { limit: 10, cursor_raw: None, fields: Vec::new(), highlight: None };
     let mut ef = 0usize;
     let mut i = 4;
     while i < argv.len() {

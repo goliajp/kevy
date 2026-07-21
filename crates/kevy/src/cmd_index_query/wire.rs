@@ -106,6 +106,23 @@ pub(super) fn encode_hydration(store: &mut Store, chunk: &mut Vec<u8>, key: &[u8
     }
 }
 
+/// Append one hit's highlight block:
+/// `[nfields u32] then per field [flen u32][name][nspans u32][(start u32, end u32)*]`.
+/// Present in the chunk only when the query carried a HIGHLIGHT clause;
+/// the reduce recovers that fact from the same argv.
+pub(super) fn encode_highlight(chunk: &mut Vec<u8>, spans: &[super::FieldSpans]) {
+    chunk.extend_from_slice(&(spans.len() as u32).to_le_bytes());
+    for (name, ranges) in spans {
+        chunk.extend_from_slice(&(name.len() as u32).to_le_bytes());
+        chunk.extend_from_slice(name);
+        chunk.extend_from_slice(&(ranges.len() as u32).to_le_bytes());
+        for (s, e) in ranges {
+            chunk.extend_from_slice(&s.to_le_bytes());
+            chunk.extend_from_slice(&e.to_le_bytes());
+        }
+    }
+}
+
 /// Global-BM25 pass 1 (server): one shard's corpus counters. Chunk:
 /// `[ST_OK][n_docs u64][total_len u64][ntok u32][(tlen u32, token, df u32)*]`
 /// — the reduce sums `n_docs`/`total_len` and folds `df` by token into a
