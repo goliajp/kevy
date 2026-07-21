@@ -370,7 +370,12 @@ D2 事务标记(全有全无,与事务大小无关)/ R2 事务内集合读。
     - **p95 provisional 上限**:term 35ms(实测 27-31ms)/ phrase 150ms(实测 102-114ms),注明 = **共享盒 regression-catcher 非精确 SLA**。精确 SLA 须干净独占盒([[feedback-kevy-bench-isolation]],perf §9 不信共享盒单跑)→ 待用户 bench-infra
   - [x] **5f.1 Positions One-inline 内存优化** — `DocBlobs::One{id,blob}`/`Many(HashMap)` mirror `Buckets::One`:hapax token(Zipf 常态,唯一 id/email/docnum 只在一文档)inline 存 blob 免 HashMap 表,第二文档起才 materialize;不 demote(同 Buckets)。`approx_bytes` 随之分 One(仅 blob 分配)/Many(pow2 RawTable+blobs)。lx64 实测:RSS 2966→**2731MiB(省 ~235MiB**,1M singleton 免 ~128B min-table+碎片),formula 2054 / **ratio 0.75 PASS**。34 kevy-text 测试绿(枚举行为等价)
   - [ ] **5d.2 phrase head+head skip-list**(future)— rarest_anchor 只帮 head+tail;head+head 仍扫 head 表(lx64 ~114ms),需 positional galloping intersection
-- [ ] **步骤 6 有序词典 / FST** → prefix / TYPO。postings HashMap → 有序结构,影响所有查询 perf,需 lx64
+- **步骤 6 prefix / TYPO**(设计决断:不改 postings HashMap 结构=保热路径 O(1)/零 O(n²) build,prefix 用 scan;ordered-structure/FST 是 prefix perf 的 future 优化,RFC 的 sorted-vec 有 O(n²) build 问题 RFC 自己预见会逼 FST)
+  - [x] **6.a kevy-text prefix 能力(stone,CI-可验)** — `matches_prefix(prefix,limit,stats)`:ASCII-lowercase 前缀 → scan postings keys 过滤前缀 → 展开词 OR 打分(复用 add_term)→ select_top。零 postings 结构改/零写路径改/零热路径风险。CI:前缀展开(qui→quick/quiet 非 quality)、大小写不敏感+narrowing、空/无匹配/limit0、前缀=完整词。46 kevy-text 测试绿
+  - [ ] **6.b wire** — prefix 查询语法(**未在冻结 grammar,需定**:`qui*` or PREFIX clause)+ 路由(embedded + server 两轮,pass-1 需收集展开词 df)
+  - [ ] **6.c lx64** — prefix p95 + scan vs ordered-structure 定夺(scan O(dict) 对大词典是否够;若否 → FST future)
+  - [ ] **TYPO**(步骤6 之后)— Levenshtein automaton 需 ordered 词典 substrate;scan 版可先做 edit-distance filter
+- [ ] textgate 在步骤 4/5 内重录基线 → **5f 已做(POSITIONS 模式,ratio 0.75)**
 - [ ] textgate 在步骤 4/5 内重录基线(改内存公式的步骤内做,不事后补)
 
 ### t5 — 总线收尾(渠道除外)
