@@ -550,3 +550,56 @@ fn fields_arity_errors() {
         );
     }
 }
+
+/// `WITH POSITIONS` creates a text index that records token positions.
+/// The flag does not change ranking — that is what the phrase query
+/// (step 5d) uses; an ordinary MATCH ranks exactly as without it — so
+/// here the wire path is verified end-to-end: create succeeds, the index
+/// backfills, and a plain MATCH returns the expected hits.
+#[test]
+fn positions_create_succeeds_and_ranking_is_unaffected() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    cmd(&mut c, &[b"HSET", b"doc:1", b"body", b"the quick brown fox"]);
+    cmd(&mut c, &[b"HSET", b"doc:2", b"body", b"quick systems programming"]);
+    let r = cmd(
+        &mut c,
+        &[b"IDX.CREATE", b"withpos", b"ON", b"PREFIX", b"doc:", b"FIELD", b"body",
+          b"TYPE", b"str", b"KIND", b"text", b"WITH", b"POSITIONS"],
+    );
+    assert_eq!(r, b"+OK\r\n", "WITH POSITIONS creates: {:?}", String::from_utf8_lossy(&r));
+    let r = query_ready(&mut c, &[b"IDX.QUERY", b"withpos", b"MATCH", b"quick", b"LIMIT", b"10"]);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.contains("doc:1") && s.contains("doc:2"), "both docs match 'quick': {s}");
+}
+
+/// `WITH POSITIONS` is text-only, and `WITH` accepts only `POSITIONS` —
+/// both are usage errors, not silently accepted-and-ignored.
+#[test]
+fn positions_flag_is_text_only_and_validated() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    // A range index reads one scalar and maintains no positional
+    // side-channel, so the flag must be refused.
+    let r = cmd(
+        &mut c,
+        &[b"IDX.CREATE", b"rangepos", b"ON", b"PREFIX", b"n:", b"FIELD", b"age",
+          b"TYPE", b"i64", b"KIND", b"range", b"WITH", b"POSITIONS"],
+    );
+    assert!(
+        String::from_utf8_lossy(&r).starts_with("-ERR"),
+        "a range index refuses WITH POSITIONS: {:?}",
+        String::from_utf8_lossy(&r)
+    );
+    // WITH is a keyword flag that only spells POSITIONS.
+    let r = cmd(
+        &mut c,
+        &[b"IDX.CREATE", b"junkwith", b"ON", b"PREFIX", b"t:", b"FIELD", b"body",
+          b"TYPE", b"str", b"KIND", b"text", b"WITH", b"NONSENSE"],
+    );
+    assert!(
+        String::from_utf8_lossy(&r).starts_with("-ERR"),
+        "WITH NONSENSE is a usage error: {:?}",
+        String::from_utf8_lossy(&r)
+    );
+}

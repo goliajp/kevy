@@ -241,8 +241,13 @@ fn refresh(catalogs: &CatalogState, st: &mut ShardIndexes, store: &mut Store) {
                     next.push(ShardIndex {
                         agg: (spec.kind == kevy_index::IndexKind::Agg)
                             .then(kevy_index::AggSegment::new),
-                        text: (spec.kind == kevy_index::IndexKind::Text)
-                            .then(kevy_text::TextSegment::new),
+                        text: (spec.kind == kevy_index::IndexKind::Text).then(|| {
+                            if spec.with_positions {
+                                kevy_text::TextSegment::with_positions()
+                            } else {
+                                kevy_text::TextSegment::new()
+                            }
+                        }),
                         ann: spec.ann.as_ref().map(|a| {
                             kevy_vector::Hnsw::new(
                                 a.dim as usize,

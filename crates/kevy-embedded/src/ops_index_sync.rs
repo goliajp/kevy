@@ -7,6 +7,17 @@ use kevy_index::{IndexKind, IndexSpec, IndexValue, Segment};
 
 use crate::ops_index::{IndexReg, ShardSegs};
 
+/// A fresh text segment matching the spec's positions mode — the one
+/// place the `WITH POSITIONS` flag turns into a positional side-channel.
+#[cfg(feature = "text")]
+pub(crate) fn new_text(spec: &IndexSpec) -> kevy_text::TextSegment {
+    if spec.with_positions {
+        kevy_text::TextSegment::with_positions()
+    } else {
+        kevy_text::TextSegment::new()
+    }
+}
+
 #[cfg(feature = "vector")]
 pub(crate) fn new_graph(spec: &IndexSpec) -> kevy_vector::Hnsw {
     let a = spec.ann.as_ref().expect("ann spec");
@@ -72,7 +83,7 @@ fn rebuild_seg_lists(
             IndexKind::Ann => {}
             #[cfg(feature = "text")]
             IndexKind::Text => next_text
-                .push(take_or_backfill(&mut segs.text, spec, st, kevy_text::TextSegment::new, apply_text_key)),
+                .push(take_or_backfill(&mut segs.text, spec, st, || new_text(spec), apply_text_key)),
             #[cfg(not(feature = "text"))]
             IndexKind::Text => {}
             _ => next.push(take_or_backfill(&mut segs.segs, spec, st, Segment::new, apply_key)),
@@ -234,8 +245,8 @@ fn reset_all_segs(shard_segs: &mut ShardSegs) {
         *seg = Segment::new();
     }
     #[cfg(feature = "text")]
-    for (_, ts) in &mut shard_segs.text {
-        *ts = kevy_text::TextSegment::new();
+    for (spec, ts) in &mut shard_segs.text {
+        *ts = new_text(spec);
     }
     #[cfg(feature = "vector")]
     for (spec, g) in &mut shard_segs.ann {

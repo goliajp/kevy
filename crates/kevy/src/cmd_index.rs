@@ -45,9 +45,10 @@ fn persist_sidecar(dir: Option<&Path>, cat: &Catalog) {
 // ---------- catalog mutations (Local dispatch) ----------
 
 /// `IDX.CREATE <name> ON PREFIX <p> FIELD <f> | FIELDS <f…> [WEIGHTS <w…>]
-/// TYPE <t> KIND <k> [MAXMEM b] [DIM d] [DISTANCE cosine|l2|ip] [M m] [EF ef]`.
-/// `FIELDS` is text-only; every other kind takes one `FIELD`.
-const CREATE_USAGE: &str = "ERR usage: IDX.CREATE name ON PREFIX p FIELD f | FIELDS f… [WEIGHTS w…] TYPE i64|f64|str|vector KIND range|unique|text|ann [MAXMEM b] [DIM d] [DISTANCE c] [M m] [EF e]";
+/// TYPE <t> KIND <k> [WITH POSITIONS] [MAXMEM b] [DIM d] [DISTANCE cosine|l2|ip] [M m] [EF ef]`.
+/// `FIELDS` and `WITH POSITIONS` are text-only; every other kind takes
+/// one `FIELD` and no positions.
+const CREATE_USAGE: &str = "ERR usage: IDX.CREATE name ON PREFIX p FIELD f | FIELDS f… [WEIGHTS w…] TYPE i64|f64|str|vector KIND range|unique|text|ann [WITH POSITIONS] [MAXMEM b] [DIM d] [DISTANCE c] [M m] [EF e]";
 
 /// Parse the field clause and return the fields plus the argv index of
 /// the `TYPE` keyword that follows it.
@@ -162,7 +163,7 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(
         max_bytes: opts.max_bytes,
         ann,
         group_by: opts.group_by,
-        with_positions: false,
+        with_positions: opts.with_positions,
     };
     install_new_index(ctx, spec, out);
 }
@@ -212,6 +213,7 @@ struct CreateOpts {
     ef: u16,
     distance: u8,
     group_by: Option<Vec<u8>>,
+    with_positions: bool,
 }
 
 /// A parsed integer clamped to `[lo, hi]`, or an error already written.
@@ -236,11 +238,21 @@ fn parse_create_opts<A: ArgvView + ?Sized>(
     let (mut dim, mut m, mut ef) = (0u32, 16u16, 200u16);
     let mut distance = 0u8;
     let mut group_by: Option<Vec<u8>> = None;
+    let mut with_positions = false;
     let mut i = start;
     while i + 1 < args.len() {
         let (opt, val) = (&args[i], &args[i + 1]);
         let parsed: Option<u64> = std::str::from_utf8(val).ok().and_then(|s| s.parse().ok());
-        if opt.eq_ignore_ascii_case(b"MAXMEM") {
+        if opt.eq_ignore_ascii_case(b"WITH") {
+            // A bare flag written as a key/value pair so it fits the
+            // even-arity tail: `WITH POSITIONS`. Text-only; `create`
+            // rules on the kind.
+            if !val.eq_ignore_ascii_case(b"POSITIONS") {
+                encode_error(out, "ERR WITH only accepts POSITIONS");
+                return Err(());
+            }
+            with_positions = true;
+        } else if opt.eq_ignore_ascii_case(b"MAXMEM") {
             let Some(v) = parsed else {
                 encode_error(out, "ERR MAXMEM must be an integer byte count");
                 return Err(());
@@ -269,7 +281,7 @@ fn parse_create_opts<A: ArgvView + ?Sized>(
         }
         i += 2;
     }
-    Ok(CreateOpts { max_bytes, dim, m, ef, distance, group_by })
+    Ok(CreateOpts { max_bytes, dim, m, ef, distance, group_by, with_positions })
 }
 
 /// KIND × TYPE (× GROUPBY) compatibility checks; builds the `AnnSpec`
