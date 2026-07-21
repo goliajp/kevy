@@ -647,3 +647,44 @@ fn prefix_equal_to_a_term_matches_it() {
     let keys: std::collections::HashSet<Vec<u8>> = hits.iter().map(|h| h.key.clone()).collect();
     assert_eq!(keys, [b"d1".to_vec(), b"d5".to_vec()].into_iter().collect());
 }
+
+// ---- prefix in the query grammar (step 6.b) ------------------------------
+
+/// `qui*` in the MATCH text routes through `matches_query` to the same
+/// result as the `matches_prefix` primitive.
+#[test]
+fn query_grammar_prefix_equals_primitive() {
+    let s = prefix_seg();
+    let via_query = s.matches_query(b"qui*", 10, None);
+    let via_prefix = s.matches_prefix(b"qui", 10, None);
+    assert_eq!(via_query, via_prefix);
+    assert!(!via_query.is_empty());
+}
+
+/// A query mixes bare terms, phrases and prefixes as an OR of clauses.
+#[test]
+fn query_grammar_mixes_prefix_with_terms() {
+    let s = prefix_seg();
+    // "slow" (d4) OR prefix "qui*" (d1, d2, d5).
+    let hits = s.matches_query(b"slow qui*", 10, None);
+    let keys: std::collections::HashSet<Vec<u8>> = hits.iter().map(|h| h.key.clone()).collect();
+    assert_eq!(
+        keys,
+        [b"d1".to_vec(), b"d2".to_vec(), b"d4".to_vec(), b"d5".to_vec()].into_iter().collect(),
+    );
+    // A no-star, no-quote query is still the byte-identical term path.
+    assert_eq!(s.matches_query(b"quick", 10, None), s.matches_scored(b"quick", 10, None));
+}
+
+/// HIGHLIGHT over a prefix query marks every token that begins with the
+/// prefix.
+#[test]
+fn highlight_marks_prefix_matches() {
+    let text = "quick quiet slowly";
+    let mut s = TextSegment::new();
+    s.apply(b"d", Some(text.as_bytes()));
+    let hl = s.highlight_spans(b"d", b"qui*");
+    let (_, spans) = &hl[0];
+    let hits: Vec<&str> = spans.iter().map(|(a, b)| &text[*a..*b]).collect();
+    assert_eq!(hits, vec!["quick", "quiet"], "both qui- tokens, not slowly");
+}

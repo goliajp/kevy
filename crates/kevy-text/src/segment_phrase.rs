@@ -76,9 +76,9 @@ impl TextSegment {
         if limit == 0 {
             return Vec::new();
         }
-        let (bare, phrases) = parse_clauses(text);
-        if phrases.is_empty() {
-            // No phrase clause — the ordinary term query, untouched.
+        let (bare, phrases, prefixes) = parse_clauses(text);
+        if phrases.is_empty() && prefixes.is_empty() {
+            // No phrase or prefix clause — the ordinary term query, untouched.
             return self.matches_scored(text, limit, stats);
         }
         if self.docs.is_empty() {
@@ -94,6 +94,9 @@ impl TextSegment {
         }
         for phrase in &phrases {
             self.add_phrase(phrase, &mut scores, stats, n_docs, avgdl);
+        }
+        for pfx in &prefixes {
+            self.add_prefix(pfx, &mut scores, stats, n_docs, avgdl);
         }
         self.select_top(&scores, limit)
     }
@@ -119,18 +122,55 @@ impl TextSegment {
         }
         let pfx: Vec<u8> = prefix.iter().map(u8::to_ascii_lowercase).collect();
         let (n_docs, avgdl) = self.corpus_stats(stats);
-        let mut expansions: Vec<&[u8]> = self
-            .postings
-            .keys()
-            .map(Vec::as_slice)
-            .filter(|t| t.starts_with(pfx.as_slice()))
-            .collect();
-        expansions.sort_unstable();
         let mut scores: HashMap<u32, f64> = HashMap::new();
-        for t in expansions {
-            self.add_term(t, &mut scores, stats, n_docs, avgdl);
-        }
+        self.add_prefix(&pfx, &mut scores, stats, n_docs, avgdl);
         self.select_top(&scores, limit)
+    }
+
+    /// The terms whose document frequency a cross-shard query aggregates
+    /// for global BM25: the bare tokens, every phrase's tokens, and every
+    /// expansion of a `word*` prefix (expanded against THIS shard's
+    /// dictionary, since which terms share the prefix is shard-local).
+    /// Deduplicated. For a query with no prefix this is exactly the
+    /// tokenized query, so pass 1 is unchanged.
+    pub fn query_df_terms(&self, text: &[u8]) -> Vec<Vec<u8>> {
+        let (bare, phrases, prefixes) = parse_clauses(text);
+        let mut terms = bare;
+        for phrase in &phrases {
+            terms.extend(phrase.iter().cloned());
+        }
+        for pfx in &prefixes {
+            terms.extend(self.expand_prefix(pfx).into_iter().map(<[u8]>::to_vec));
+        }
+        terms.sort();
+        terms.dedup();
+        terms
+    }
+
+    /// Add one prefix clause's contribution: the OR of every expansion
+    /// term (already-lowercased `pfx` matched against the stored token
+    /// form). Scanning the dictionary is the cost an ordered dictionary
+    /// would replace with a binary search.
+    fn add_prefix(
+        &self,
+        pfx: &[u8],
+        scores: &mut HashMap<u32, f64>,
+        stats: Option<&CorpusStats>,
+        n_docs: f64,
+        avgdl: f64,
+    ) {
+        for t in self.expand_prefix(pfx) {
+            self.add_term(t, scores, stats, n_docs, avgdl);
+        }
+    }
+
+    /// The dictionary terms beginning with `pfx` (already lowercased),
+    /// sorted for a deterministic ranking tiebreak.
+    fn expand_prefix(&self, pfx: &[u8]) -> Vec<&[u8]> {
+        let mut e: Vec<&[u8]> =
+            self.postings.keys().map(Vec::as_slice).filter(|t| t.starts_with(pfx)).collect();
+        e.sort_unstable();
+        e
     }
 
     /// Add one bare term's BM25 contribution to every document that holds
@@ -239,11 +279,11 @@ impl TextSegment {
         let Some((_, _, fields)) = self.docs.get(key) else {
             return Vec::new();
         };
-        let (bare, phrases) = parse_clauses(query);
+        let (bare, phrases, prefixes) = parse_clauses(query);
         let terms: HashSet<&[u8]> = bare.iter().map(Vec::as_slice).collect();
         let mut out = Vec::new();
         for (fi, (text, _weight)) in fields.iter().enumerate() {
-            let mut spans = field_spans(&tokenize_spans(text), &terms, &phrases);
+            let mut spans = field_spans(&tokenize_spans(text), &terms, &phrases, &prefixes);
             if !spans.is_empty() {
                 spans.sort_unstable();
                 spans.dedup();
@@ -254,16 +294,18 @@ impl TextSegment {
     }
 }
 
-/// Highlight spans within one field's tokens: every bare-term token, plus
-/// the tokens of each phrase occurrence (a consecutive, in-order match).
+/// Highlight spans within one field's tokens: every bare-term token, every
+/// token matching a query prefix, plus the tokens of each phrase
+/// occurrence (a consecutive, in-order match).
 fn field_spans(
     toks: &[(Vec<u8>, usize, usize)],
     terms: &HashSet<&[u8]>,
     phrases: &[Vec<Vec<u8>>],
+    prefixes: &[Vec<u8>],
 ) -> Vec<(usize, usize)> {
     let mut spans = Vec::new();
     for (t, s, e) in toks {
-        if terms.contains(t.as_slice()) {
+        if terms.contains(t.as_slice()) || prefixes.iter().any(|p| t.starts_with(p.as_slice())) {
             spans.push((*s, *e));
         }
     }
@@ -311,14 +353,19 @@ fn doc_has_phrase(pos: &Positions, toks: &[Vec<u8>], id: u32) -> bool {
     true
 }
 
-/// Split a query into bare terms and quoted phrases. A `"…"` group whose
-/// tokens number two or more is a phrase clause; a shorter group (empty
-/// or one token) is not a phrase, so its token joins the bare terms — a
-/// one-word "phrase" is just that word. An unterminated quote is lenient:
-/// the remainder is read as bare terms rather than rejected.
-fn parse_clauses(text: &[u8]) -> (Vec<Vec<u8>>, Vec<Vec<Vec<u8>>>) {
+/// Parsed query clauses: bare terms, phrases (each a token sequence) and
+/// prefix stems.
+type Clauses = (Vec<Vec<u8>>, Vec<Vec<Vec<u8>>>, Vec<Vec<u8>>);
+
+/// Split a query into bare terms, quoted phrases, and `word*` prefixes.
+/// A `"…"` group of two or more tokens is a phrase (a shorter group joins
+/// the bare terms — a one-word "phrase" is just that word); an unquoted
+/// word ending in `*` is a prefix. An unterminated quote is lenient: the
+/// remainder is read as plain text rather than rejected.
+fn parse_clauses(text: &[u8]) -> Clauses {
     let mut bare: Vec<Vec<u8>> = Vec::new();
     let mut phrases: Vec<Vec<Vec<u8>>> = Vec::new();
+    let mut prefixes: Vec<Vec<u8>> = Vec::new();
     let mut plain: Vec<u8> = Vec::new();
     let mut i = 0;
     while i < text.len() {
@@ -327,7 +374,7 @@ fn parse_clauses(text: &[u8]) -> (Vec<Vec<u8>>, Vec<Vec<Vec<u8>>>) {
             i += 1;
             continue;
         }
-        bare.extend(tokenize(&plain));
+        extend_plain(&plain, &mut bare, &mut prefixes);
         plain.clear();
         let start = i + 1;
         match text[start..].iter().position(|&b| b == b'"') {
@@ -341,11 +388,25 @@ fn parse_clauses(text: &[u8]) -> (Vec<Vec<u8>>, Vec<Vec<Vec<u8>>>) {
                 i = start + off + 1;
             }
             None => {
-                bare.extend(tokenize(&text[start..]));
+                extend_plain(&text[start..], &mut bare, &mut prefixes);
                 i = text.len();
             }
         }
     }
-    bare.extend(tokenize(&plain));
-    (bare, phrases)
+    extend_plain(&plain, &mut bare, &mut prefixes);
+    (bare, phrases, prefixes)
+}
+
+/// Split plain (unquoted) query text: a whitespace word ending in `*`
+/// becomes a prefix clause (its stem, ASCII-lowercased to match the
+/// stored token form), every other word tokenizes into bare terms.
+fn extend_plain(plain: &[u8], bare: &mut Vec<Vec<u8>>, prefixes: &mut Vec<Vec<u8>>) {
+    for word in plain.split(u8::is_ascii_whitespace) {
+        match word.strip_suffix(b"*") {
+            Some(stem) if !stem.is_empty() => {
+                prefixes.push(stem.iter().map(u8::to_ascii_lowercase).collect());
+            }
+            _ => bare.extend(tokenize(word)),
+        }
+    }
 }

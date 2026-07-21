@@ -21,10 +21,7 @@ impl Store {
         highlight: Option<&[Vec<u8>]>,
     ) -> KevyResult<Vec<HighlightedHit>> {
         let limit = limit.clamp(1, 1000);
-        let mut q_tokens = kevy_text::tokenize(query);
-        q_tokens.sort();
-        q_tokens.dedup();
-        let stats = self.text_corpus_stats(name, &q_tokens)?;
+        let stats = self.text_corpus_stats(name, query)?;
         let mut all: Vec<HighlightedHit> = Vec::new();
         for shard in self.shards.iter() {
             let mut g = lock_write(shard);
