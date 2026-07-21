@@ -17,6 +17,7 @@
 #
 # Usage: bash bench/textgate.sh <kevy-binary>          # term baseline
 #        POSITIONS=1 bash bench/textgate.sh <kevy-binary>  # phrase / positions
+#        FIELDS=1    bash bench/textgate.sh <kevy-binary>  # multi-field / IN
 set -u
 BIN=${1:?usage: textgate.sh <kevy-binary>}
 PORT=7052
@@ -30,7 +31,7 @@ env KEVY_BIND=127.0.0.1 $PIN "$BIN" --threads 8 --port $PORT --dir "$DIR" --no-a
 SRV=$!
 sleep 1.2
 
-$CLIENT_PIN python3 - "$PORT" "$SRV" "${POSITIONS:-0}" "${PREFIX:-0}" <<'PYEOF'
+$CLIENT_PIN python3 - "$PORT" "$SRV" "${POSITIONS:-0}" "${PREFIX:-0}" "${FIELDS:-0}" <<'PYEOF'
 import socket, sys, time
 
 port = int(sys.argv[1])
@@ -40,9 +41,12 @@ srv_pid = int(sys.argv[2])
 # term in the IDX.VERIFY formula) and phrase latency are step 5's lx64
 # half. PREFIX=1 measures `word*` prefix-query p95 — the dictionary scan
 # cost that decides whether an ordered structure / FST is needed
-# (step 6). The default (0/0) is the pre-positions gate, byte-unchanged.
+# (step 6). FIELDS=1 indexes a title beside the body and runs `IN title`
+# — the per-field channel's memory term and the scoped walk's latency
+# (step 7). The default is the pre-positions gate, byte-unchanged.
 with_pos = len(sys.argv) > 3 and sys.argv[3] == "1"
 with_prefix = len(sys.argv) > 4 and sys.argv[4] == "1"
+with_fields = len(sys.argv) > 5 and sys.argv[5] == "1"
 
 def connect():
     s = socket.create_connection(("127.0.0.1", port))
@@ -123,7 +127,13 @@ for i in range(N):
     w = " ".join(pick() for _ in range(10))
     cj = "".join(pick_cjk() for _ in range(3))
     body = f"{w} {cj} doc{i}"
-    batch.append(enc("HSET", f"a:{i}", "body", body))
+    if with_fields:
+        # A short title beside the body: the shape `IN` exists for, and
+        # the one that makes a field-scoped length normalisation differ
+        # from a whole-document one.
+        batch.append(enc("HSET", f"a:{i}", "title", f"{pick()} doc{i}", "body", body))
+    else:
+        batch.append(enc("HSET", f"a:{i}", "body", body))
     if len(batch) == 2000:
         s.sendall(b"".join(batch))
         for _ in range(len(batch)):
@@ -136,7 +146,11 @@ if batch:
 print(f"textgate: loaded {N} docs in {time.time()-t0:.1f}s")
 
 rss_before = rss_kb()
-create_args = ["IDX.CREATE", "a_body", "ON", "PREFIX", "a:", "FIELD", "body", "TYPE", "str", "KIND", "text"]
+if with_fields:
+    create_args = ["IDX.CREATE", "a_body", "ON", "PREFIX", "a:", "FIELDS", "title", "body",
+                   "TYPE", "str", "KIND", "text"]
+else:
+    create_args = ["IDX.CREATE", "a_body", "ON", "PREFIX", "a:", "FIELD", "body", "TYPE", "str", "KIND", "text"]
 if with_pos:
     create_args += ["WITH", "POSITIONS"]
 r = cmd(s, buf, *create_args)
@@ -164,7 +178,13 @@ print(f"textgate: text index built in {time.time()-t0:.1f}s")
 # are not a tight SLA. A dedicated bench box — the perfgate discipline —
 # would set both lower; until then they are regression guards, not
 # promises. Measured here: term ~27ms, phrase ~102ms.
-if with_prefix:
+if with_fields:
+    # Scoped queries walk the per-field channel document by document
+    # (no impact-bucket pruning — the scoped frequency is not the one the
+    # buckets are ordered by), so their latency sits above a term query's.
+    queries = [("w0 w1",), ("w512",), ("w3 w800",), ("w9000",), ("w0 w9000",)]
+    p95_limit = 250.0
+elif with_prefix:
     # `word*` prefixes of varying breadth; the scan is O(dictionary)
     # regardless, which is exactly the cost being weighed against an
     # ordered structure. The doc-marker tokens make this a ~1M-term
@@ -186,7 +206,12 @@ for _ in range(6):
     for i in range(100):
         q = queries[i % len(queries)][0]
         t = time.time()
-        r = cmd(c, cb, "IDX.QUERY", "a_body", "MATCH", q, "LIMIT", "10")
+        args = ["IDX.QUERY", "a_body", "MATCH", q, "LIMIT", "10"]
+        if with_fields:
+            # Scoped to the title: the per-field walk, which has no
+            # MaxScore pruning, so it carries its own threshold.
+            args += ["IN", "title"]
+        r = cmd(c, cb, *args)
         lat.append(time.time() - t)
         # A phrase may legitimately match no document (adjacency is rare
         # in a shuffled corpus); a term query must return hits.
@@ -195,7 +220,7 @@ for _ in range(6):
     p95s.append(lat[94] * 1000)
     c.close()
 p95s.sort()
-kind = "phrase" if with_pos else "MATCH"
+kind = "phrase" if with_pos else ("scoped MATCH" if with_fields else "MATCH")
 print(f"textgate: {kind} p95 per-conn median={p95s[3]:.2f}ms worst={p95s[5]:.2f}ms")
 if p95s[3] >= p95_limit:
     print(f"textgate: FAIL — {kind} median-conn p95 {p95s[3]:.2f}ms >= {p95_limit}ms"); sys.exit(1)
