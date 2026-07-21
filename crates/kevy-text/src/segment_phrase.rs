@@ -98,6 +98,41 @@ impl TextSegment {
         self.select_top(&scores, limit)
     }
 
+    /// BM25-ranked documents holding any indexed term that begins with
+    /// `prefix` — a search-as-you-type `prefix*` query, scored as the OR
+    /// of its expansion terms, best `limit` hits.
+    ///
+    /// `prefix` is ASCII-lowercased first so it matches the stored token
+    /// form (Latin tokens are lowercased on the way in). This scans the
+    /// term dictionary; an ordered dictionary would binary-search to the
+    /// prefix range instead — the cost it trades is one linear pass over
+    /// the distinct terms, weighed against the write-path cost of keeping
+    /// the dictionary ordered.
+    pub fn matches_prefix(
+        &self,
+        prefix: &[u8],
+        limit: usize,
+        stats: Option<&CorpusStats>,
+    ) -> Vec<TextMatch> {
+        if limit == 0 || prefix.is_empty() || self.docs.is_empty() {
+            return Vec::new();
+        }
+        let pfx: Vec<u8> = prefix.iter().map(u8::to_ascii_lowercase).collect();
+        let (n_docs, avgdl) = self.corpus_stats(stats);
+        let mut expansions: Vec<&[u8]> = self
+            .postings
+            .keys()
+            .map(Vec::as_slice)
+            .filter(|t| t.starts_with(pfx.as_slice()))
+            .collect();
+        expansions.sort_unstable();
+        let mut scores: HashMap<u32, f64> = HashMap::new();
+        for t in expansions {
+            self.add_term(t, &mut scores, stats, n_docs, avgdl);
+        }
+        self.select_top(&scores, limit)
+    }
+
     /// Add one bare term's BM25 contribution to every document that holds
     /// it — a full-list walk (no MaxScore pruning), used only on the
     /// phrase path where a phrase clause could otherwise boost a document

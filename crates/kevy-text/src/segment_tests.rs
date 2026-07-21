@@ -584,3 +584,66 @@ fn highlight_absent_or_no_match_is_empty() {
     assert!(s.highlight_spans(b"nope", b"rust").is_empty(), "absent key");
     assert!(s.highlight_spans(b"d", b"python").is_empty(), "no match");
 }
+
+// ---- prefix query (step 6.a) ---------------------------------------------
+
+fn prefix_seg() -> TextSegment {
+    let mut s = TextSegment::new();
+    s.apply(b"d1", Some(b"quick fox"));
+    s.apply(b"d2", Some(b"quiet night"));
+    s.apply(b"d3", Some(b"quality code"));
+    s.apply(b"d4", Some(b"slow turtle"));
+    s.apply(b"d5", Some(b"quick quiet quality")); // quick + quiet both qui-
+    s
+}
+
+/// A prefix matches every indexed term that begins with it — the OR of
+/// its expansion terms. `qui` reaches quick and quiet, not quality (qua-).
+#[test]
+fn prefix_expands_to_all_matching_terms() {
+    let s = prefix_seg();
+    let hits = s.matches_prefix(b"qui", 10, None);
+    let keys: std::collections::HashSet<Vec<u8>> = hits.iter().map(|h| h.key.clone()).collect();
+    // quick(d1,d5) quiet(d2,d5); d3 is quality (qua-), d4 slow — neither qui-.
+    assert_eq!(
+        keys,
+        [b"d1".to_vec(), b"d2".to_vec(), b"d5".to_vec()].into_iter().collect(),
+        "every qui- doc, and only those"
+    );
+    // d5 holds two expansion terms (quick, quiet) → outranks the single ones.
+    assert_eq!(hits[0].key, b"d5".to_vec(), "the doc matching most expansions ranks first");
+}
+
+/// The prefix is matched case-insensitively against the lowercased token
+/// form, and a narrower prefix expands to fewer terms.
+#[test]
+fn prefix_is_case_insensitive_and_narrows() {
+    let s = prefix_seg();
+    let upper = s.matches_prefix(b"QUI", 10, None);
+    let lower = s.matches_prefix(b"qui", 10, None);
+    assert_eq!(upper, lower, "prefix is ASCII case-insensitive");
+    // "quie" only reaches quiet.
+    let narrow = s.matches_prefix(b"quie", 10, None);
+    let keys: Vec<Vec<u8>> = narrow.iter().map(|h| h.key.clone()).collect();
+    assert_eq!(keys, vec![b"d2".to_vec(), b"d5".to_vec()], "only the quiet docs");
+}
+
+/// An empty prefix, a prefix that matches nothing, and a zero limit each
+/// return no hits rather than everything.
+#[test]
+fn prefix_edge_cases_are_empty() {
+    let s = prefix_seg();
+    assert!(s.matches_prefix(b"", 10, None).is_empty(), "empty prefix is not 'match all'");
+    assert!(s.matches_prefix(b"zzz", 10, None).is_empty(), "no term has this prefix");
+    assert!(s.matches_prefix(b"qui", 0, None).is_empty(), "limit 0 is empty");
+}
+
+/// A prefix that is itself a full term still matches that term's docs
+/// (the term begins with itself).
+#[test]
+fn prefix_equal_to_a_term_matches_it() {
+    let s = prefix_seg();
+    let hits = s.matches_prefix(b"quick", 10, None);
+    let keys: std::collections::HashSet<Vec<u8>> = hits.iter().map(|h| h.key.clone()).collect();
+    assert_eq!(keys, [b"d1".to_vec(), b"d5".to_vec()].into_iter().collect());
+}
