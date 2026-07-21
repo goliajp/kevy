@@ -7,6 +7,7 @@
 
 mod bm25;
 mod buckets;
+mod edit;
 mod positions;
 mod segment;
 mod token;

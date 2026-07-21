@@ -31,7 +31,8 @@ pub(super) fn reduce_ranked(argv: &[Vec<u8>], chunks: &[Vec<u8>], ascending: boo
 /// from the MATCH.SCORE argv the pass-1 reduce built.
 pub(super) fn reduce_match_score(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
     let mut out = Vec::new();
-    let Some((_, _, limit, fields, highlight)) = crate::cmd_index_query::parse_match_score(argv)
+    let Some((_, _, limit, fields, highlight, _typo)) =
+        crate::cmd_index_query::parse_match_score(argv)
     else {
         encode_error(&mut out, "ERR bad IDX arguments");
         return out;
@@ -165,6 +166,12 @@ pub(super) fn reduce_match_stats(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Extens
     if let Some(hl) = m.highlight {
         argv2.push(b"HIGHLIGHT".to_vec());
         argv2.extend(hl);
+    }
+    // The typo budget rides along too: pass 2 fuzzes each bare term
+    // against its own shard's dictionary.
+    if m.typo > 0 {
+        argv2.push(b"TYPO".to_vec());
+        argv2.push(m.typo.to_string().into_bytes());
     }
     ExtensionReduced::Continue(argv2)
 }

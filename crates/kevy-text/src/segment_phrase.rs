@@ -73,12 +73,29 @@ impl TextSegment {
         limit: usize,
         stats: Option<&CorpusStats>,
     ) -> Vec<TextMatch> {
+        self.matches_query_typo(text, limit, stats, 0)
+    }
+
+    /// [`TextSegment::matches_query`] with a typo budget: each bare term
+    /// also matches the dictionary terms within `typo` edits of it
+    /// (`TYPO n`). A budget of 0 is the exact query, byte-identical.
+    ///
+    /// Only bare terms are fuzzed — a phrase asks for those exact tokens
+    /// adjacent, and a prefix is already an inexact match, so widening
+    /// either would answer a question the user did not ask.
+    pub fn matches_query_typo(
+        &self,
+        text: &[u8],
+        limit: usize,
+        stats: Option<&CorpusStats>,
+        typo: u32,
+    ) -> Vec<TextMatch> {
         if limit == 0 {
             return Vec::new();
         }
         let (bare, phrases, prefixes) = parse_clauses(text);
-        if phrases.is_empty() && prefixes.is_empty() {
-            // No phrase or prefix clause — the ordinary term query, untouched.
+        if phrases.is_empty() && prefixes.is_empty() && typo == 0 {
+            // No phrase, prefix or typo clause — the ordinary term query.
             return self.matches_scored(text, limit, stats);
         }
         if self.docs.is_empty() {
@@ -90,7 +107,7 @@ impl TextSegment {
         terms.dedup();
         let mut scores: HashMap<u32, f64> = HashMap::new();
         for t in &terms {
-            self.add_term(t, &mut scores, stats, n_docs, avgdl);
+            self.add_typo(t, typo, &mut scores, stats, n_docs, avgdl);
         }
         for phrase in &phrases {
             self.add_phrase(phrase, &mut scores, stats, n_docs, avgdl);
@@ -134,8 +151,21 @@ impl TextSegment {
     /// Deduplicated. For a query with no prefix this is exactly the
     /// tokenized query, so pass 1 is unchanged.
     pub fn query_df_terms(&self, text: &[u8]) -> Vec<Vec<u8>> {
+        self.query_df_terms_typo(text, 0)
+    }
+
+    /// [`TextSegment::query_df_terms`] with a typo budget, so a fuzzed
+    /// term's neighbours get their df aggregated globally too.
+    pub fn query_df_terms_typo(&self, text: &[u8], typo: u32) -> Vec<Vec<u8>> {
         let (bare, phrases, prefixes) = parse_clauses(text);
-        let mut terms = bare;
+        let mut terms: Vec<Vec<u8>> = Vec::new();
+        for t in &bare {
+            if typo == 0 {
+                terms.push(t.clone());
+            } else {
+                terms.extend(self.expand_typo(t, typo).into_iter().map(<[u8]>::to_vec));
+            }
+        }
         for phrase in &phrases {
             terms.extend(phrase.iter().cloned());
         }
@@ -171,6 +201,41 @@ impl TextSegment {
             self.postings.keys().map(Vec::as_slice).filter(|t| t.starts_with(pfx)).collect();
         e.sort_unstable();
         e
+    }
+
+    /// The dictionary terms within `budget` edits of `t` — the typo
+    /// tolerance expansion, including `t` itself when it is indexed.
+    /// Sorted for a deterministic ranking tiebreak.
+    fn expand_typo(&self, t: &[u8], budget: u32) -> Vec<&[u8]> {
+        let mut e: Vec<&[u8]> = self
+            .postings
+            .keys()
+            .map(Vec::as_slice)
+            .filter(|cand| crate::edit::edit_within(t, cand, budget).is_some())
+            .collect();
+        e.sort_unstable();
+        e
+    }
+
+    /// Add one term's contribution with typo tolerance: the OR of every
+    /// dictionary term within `budget` edits. With `budget` 0 this is
+    /// exactly [`Self::add_term`], so the exact path stays untouched.
+    fn add_typo(
+        &self,
+        t: &[u8],
+        budget: u32,
+        scores: &mut HashMap<u32, f64>,
+        stats: Option<&CorpusStats>,
+        n_docs: f64,
+        avgdl: f64,
+    ) {
+        if budget == 0 {
+            self.add_term(t, scores, stats, n_docs, avgdl);
+            return;
+        }
+        for cand in self.expand_typo(t, budget) {
+            self.add_term(cand, scores, stats, n_docs, avgdl);
+        }
     }
 
     /// Add one bare term's BM25 contribution to every document that holds

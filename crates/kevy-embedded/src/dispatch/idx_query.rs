@@ -56,6 +56,8 @@ struct Tail {
     cursor_raw: Option<Vec<u8>>,
     fields: Vec<Vec<u8>>,
     highlight: Option<Vec<Vec<u8>>>,
+    /// `TYPO n`: edit budget for each bare term; 0 = exact.
+    typo: u32,
 }
 
 /// A tail clause keyword — the boundary a variadic clause collects up to.
@@ -64,6 +66,7 @@ fn is_tail_keyword(a: &[u8]) -> bool {
         || a.eq_ignore_ascii_case(b"CURSOR")
         || a.eq_ignore_ascii_case(b"FIELDS")
         || a.eq_ignore_ascii_case(b"HIGHLIGHT")
+        || a.eq_ignore_ascii_case(b"TYPO")
 }
 
 /// Collect a variadic clause's args from `start` until the next keyword.
@@ -82,9 +85,15 @@ fn parse_tail(
     mut i: usize,
     default_limit: usize,
     cap: usize,
-    allow_highlight: bool,
+    match_clauses: bool,
 ) -> Option<Tail> {
-    let mut t = Tail { limit: default_limit, cursor_raw: None, fields: Vec::new(), highlight: None };
+    let mut t = Tail {
+        limit: default_limit,
+        cursor_raw: None,
+        fields: Vec::new(),
+        highlight: None,
+        typo: 0,
+    };
     while i < argv.len() {
         let a = &argv[i];
         if a.eq_ignore_ascii_case(b"LIMIT") {
@@ -100,10 +109,18 @@ fn parse_tail(
             }
             t.fields = fs;
             i = next;
-        } else if allow_highlight && a.eq_ignore_ascii_case(b"HIGHLIGHT") {
+        } else if match_clauses && a.eq_ignore_ascii_case(b"HIGHLIGHT") {
             let (hs, next) = collect_until_keyword(argv, i + 1);
             t.highlight = Some(hs);
             i = next;
+        } else if match_clauses && a.eq_ignore_ascii_case(b"TYPO") {
+            t.typo = match argv.get(i + 1)?.as_slice() {
+                b"0" => 0,
+                b"1" => 1,
+                b"2" => 2,
+                _ => return None,
+            };
+            i += 2;
         } else {
             return None;
         }
@@ -235,15 +252,15 @@ fn text_match(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         let Some(tail) = parse_tail(argv, 4, 10, 1000, true) else {
             return badargs(out, "IDX.QUERY", name);
         };
-        match tail.highlight.as_deref() {
-            Some(want) => match s.idx_match_highlighted(name, text, tail.limit, Some(want)) {
-                Err(e) => idx_err(out, name, &e),
-                Ok(hits) => emit_ranked_highlighted(s, out, &hits, &tail.fields),
-            },
-            None => match s.idx_match(name, text, tail.limit) {
-                Err(e) => idx_err(out, name, &e),
-                Ok(hits) => emit_ranked(s, out, &hits, &tail.fields, 4),
-            },
+        let want = tail.highlight.as_deref();
+        match s.idx_match_highlighted(name, text, tail.limit, want, tail.typo) {
+            Err(e) => idx_err(out, name, &e),
+            Ok(hits) if want.is_some() => emit_ranked_highlighted(s, out, &hits, &tail.fields),
+            Ok(hits) => {
+                let plain: Vec<(Vec<u8>, f64)> =
+                    hits.into_iter().map(|(k, v, _)| (k, v)).collect();
+                emit_ranked(s, out, &plain, &tail.fields, 4);
+            }
         }
     }
     #[cfg(not(feature = "text"))]
@@ -348,7 +365,8 @@ fn knn(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
 /// `[LIMIT k] [EF e] [FIELDS f…]` tail for KNN (EF bounds 16..=4096).
 #[cfg(feature = "vector")]
 fn parse_knn_tail(argv: &[Vec<u8>]) -> Option<(Tail, usize)> {
-    let mut t = Tail { limit: 10, cursor_raw: None, fields: Vec::new(), highlight: None };
+    let mut t =
+        Tail { limit: 10, cursor_raw: None, fields: Vec::new(), highlight: None, typo: 0 };
     let mut ef = 0usize;
     let mut i = 4;
     while i < argv.len() {

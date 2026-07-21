@@ -696,3 +696,32 @@ fn prefix_query_over_the_wire() {
     let r = query_ready(&mut c, &[b"IDX.QUERY", b"pf", b"MATCH", b"quick", b"LIMIT", b"10"]);
     assert!(String::from_utf8_lossy(&r).contains("p:1"), "plain term still works");
 }
+
+/// `TYPO n` fuzzes each bare term by up to n edits — a misspelling still
+/// finds its document over the real fan-out, and the budget is a bound.
+#[test]
+fn typo_query_over_the_wire() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    cmd(&mut c, &[b"HSET", b"t:1", b"body", b"quick brown fox"]);
+    cmd(&mut c, &[b"HSET", b"t:2", b"body", b"slow green turtle"]);
+    let r = cmd(
+        &mut c,
+        &[b"IDX.CREATE", b"tp", b"ON", b"PREFIX", b"t:", b"FIELD", b"body",
+          b"TYPE", b"str", b"KIND", b"text"],
+    );
+    assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
+    // "quik" is one edit from "quick": exact finds nothing, TYPO 1 finds it.
+    let exact = query_ready(&mut c, &[b"IDX.QUERY", b"tp", b"MATCH", b"quik", b"LIMIT", b"10"]);
+    assert!(!String::from_utf8_lossy(&exact).contains("t:1"), "exact query misses the typo");
+    let fuzzy = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"tp", b"MATCH", b"quik", b"LIMIT", b"10", b"TYPO", b"1"],
+    );
+    let s = String::from_utf8_lossy(&fuzzy);
+    assert!(s.contains("t:1"), "TYPO 1 reaches quick: {s}");
+    assert!(!s.contains("t:2"), "turtle is nowhere near: {s}");
+    // AUTO is in the frozen surface but not built — a clear error.
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"tp", b"MATCH", b"quik", b"TYPO", b"AUTO"]);
+    assert!(String::from_utf8_lossy(&r).starts_with("-ERR"), "TYPO AUTO errors clearly");
+}
