@@ -106,6 +106,7 @@ impl Store {
                     typo: opts.typo,
                     fields: &scope,
                     filter: &filter,
+                    sort: None,
                 };
                 for m in ts.matches_query_with(query, fetch, q) {
                     let hl = opts

@@ -17,6 +17,6 @@ mod token;
 
 pub use bm25::{BM25_B, BM25_K1};
 pub use segment::{
-    CorpusStats, Filter, QueryOpts, SegmentShape, TextMatch, TextSegment, TextStats,
+    CorpusStats, Filter, QueryOpts, SegmentShape, Sort, TextMatch, TextSegment, TextStats,
 };
 pub use token::{KevyTokenizer, Tokenizer, tokenize, tokenize_spans};

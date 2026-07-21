@@ -42,7 +42,13 @@ pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Ve
         // terms too — the reduce unions them across shards — and counts
         // over the query's field scope, so a scoped query's global
         // statistics describe those fields rather than whole documents.
-        let opts = kevy_text::QueryOpts { stats: None, typo: q.typo, fields: &want, filter: &[] };
+        let opts = kevy_text::QueryOpts {
+            stats: None,
+            typo: q.typo,
+            fields: &want,
+            filter: &[],
+            sort: None,
+        };
         Ok((ts.stats().docs, ts.total_len_in(&want), ts.query_df_in(&q.text, opts)))
     });
     match res {
@@ -127,7 +133,13 @@ fn scored_hits(
         .map(|(field, test)| kevy_text::Filter { field: *field, test: test.as_ref() })
         .collect();
     let opts =
-        kevy_text::QueryOpts { stats: Some(stats), typo: q.typo, fields: &scope, filter: &filter };
+        kevy_text::QueryOpts {
+        stats: Some(stats),
+        typo: q.typo,
+        fields: &scope,
+        filter: &filter,
+        sort: None,
+    };
     Ok(ts.matches_query_with(&q.text, q.limit + q.offset, opts))
 }
 
