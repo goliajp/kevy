@@ -122,6 +122,7 @@ impl Store {
             ann: None,
             group_by: None,
             with_positions: false,
+            values: Vec::new(),
         };
         self.register_spec(spec)
     }
@@ -175,6 +176,7 @@ impl Store {
             }),
             group_by: None,
             with_positions: false,
+            values: Vec::new(),
         };
         self.register_spec(spec)
     }
@@ -300,6 +302,7 @@ impl Store {
             ann: None,
             group_by: Some(group_by.to_vec()),
             with_positions: false,
+            values: Vec::new(),
         };
         self.register_spec(spec)
     }

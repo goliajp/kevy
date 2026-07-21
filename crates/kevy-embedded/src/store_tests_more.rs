@@ -821,7 +821,7 @@ fn text_index_field_scope_embedded() {
         &[(b"title", b"gardening weekly"), (b"body", b"this body mentions rust once or twice")],
     )
     .unwrap();
-    s.idx_create_text(b"ft", b"n:", &[(b"title", 1.0), (b"body", 1.0)], true).unwrap();
+    s.idx_create_text(b"ft", b"n:", &[(b"title", 1.0), (b"body", 1.0)], true, &[]).unwrap();
 
     fn scope(f: &[Vec<u8>]) -> crate::MatchOpts<'_> {
         crate::MatchOpts { scope: f, ..Default::default() }

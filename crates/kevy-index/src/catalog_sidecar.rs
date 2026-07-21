@@ -18,7 +18,7 @@ impl Catalog {
     /// fields hex-escaped for tabs/newlines via `%XX`; the 7th column
     /// is `dim,distance,m,ef` for ANN kinds).
     pub fn to_sidecar(&self) -> String {
-        let mut out = String::from("kevy-index-catalog v3\n");
+        let mut out = String::from("kevy-index-catalog v4\n");
         for (s, _) in &self.specs {
             let _ = write!(
                 out,
@@ -38,8 +38,8 @@ impl Catalog {
                 let _ = write!(out, "\t{},{},{},{}", a.dim, a.distance, a.m, a.ef);
             } else if let Some(g) = &s.group_by {
                 let _ = write!(out, "\t{}", esc(g));
-            } else if s.with_positions {
-                out.push_str("\tpos");
+            } else if let Some(col) = text_col(s) {
+                let _ = write!(out, "\t{col}");
             }
             out.push('\n');
         }
@@ -59,6 +59,7 @@ impl Catalog {
         // positions flag on top of v2's weighted fields. v1/v2 stay
         // readable forever; only the writer moves to the newest form.
         let version: u8 = match lines.next()? {
+            "kevy-index-catalog v4" => 4,
             "kevy-index-catalog v3" => 3,
             "kevy-index-catalog v2" => 2,
             "kevy-index-catalog v1" => 1,
@@ -99,9 +100,9 @@ fn spec_from_line(line: &str, version: u8) -> Option<IndexSpec> {
                 )
             }
             IndexKind::Agg => (None, Some(unesc(parts[6])?), false),
-            // A text index's 7th column is the v3 positions flag; older
+            // A text index's 7th column carries its own flags; older
             // sidecars never wrote one, so it only appears from v3 on.
-            IndexKind::Text if version >= 3 && parts[6] == "pos" => (None, None, true),
+            IndexKind::Text if version >= 3 => return text_spec(&parts, version),
             _ => return None,
         }
     } else {
@@ -117,7 +118,57 @@ fn spec_from_line(line: &str, version: u8) -> Option<IndexSpec> {
         ann,
         group_by,
         with_positions,
+        values: Vec::new(),
     })
+}
+
+/// A text index's line, whose 7th column is its own flags rather than
+/// the ann / agg forms the shared path handles.
+fn text_spec(parts: &[&str], version: u8) -> Option<IndexSpec> {
+    let (with_positions, values) = parse_text_col(parts[6])?;
+    Some(IndexSpec {
+        name: unesc(parts[0])?,
+        prefix: unesc(parts[1])?,
+        fields: col_to_fields(parts[2], version >= 2)?,
+        ty: ValType::parse(parts[3].as_bytes())?,
+        kind: IndexKind::Text,
+        max_bytes: parts[5].parse().ok()?,
+        ann: None,
+        group_by: None,
+        with_positions,
+        values,
+    })
+}
+
+/// A text index's 7th column, or `None` when it has nothing to say.
+///
+/// Comma-separated: the head is `pos` or `-` for the positions flag, the
+/// tail is the declared `VALUES` field names. A positions-only index
+/// therefore writes exactly `pos` — the v3 form — so the shape only
+/// changes for an index that actually uses the new capability.
+fn text_col(s: &IndexSpec) -> Option<String> {
+    if !s.with_positions && s.values.is_empty() {
+        return None;
+    }
+    let head = if s.with_positions { "pos" } else { "-" };
+    let mut col = String::from(head);
+    for v in &s.values {
+        let _ = write!(col, ",{}", esc_field(v));
+    }
+    Some(col)
+}
+
+/// The inverse of [`text_col`]. `esc_field` escapes commas, so splitting
+/// on one cannot break a field name in half.
+fn parse_text_col(col: &str) -> Option<(bool, Vec<Vec<u8>>)> {
+    let mut parts = col.split(',');
+    let pos = match parts.next()? {
+        "pos" => true,
+        "-" => false,
+        _ => return None,
+    };
+    let values = parts.map(unesc).collect::<Option<Vec<_>>>()?;
+    Some((pos, values))
 }
 
 /// `esc`, plus the two separators the field column introduces. A hash
@@ -234,7 +285,9 @@ mod sidecar_v2_tests {
         let mut c = Catalog::new();
         c.specs.push((s, IndexState::Building));
         let text = c.to_sidecar();
-        assert!(text.starts_with("kevy-index-catalog v3"));
+        // The writer always emits the newest version; what this test
+        // pins is the weighted-field column, which v4 did not touch.
+        assert!(text.starts_with("kevy-index-catalog v4"));
         let col3 = text.lines().nth(1).unwrap().split('\t').nth(2).unwrap();
         assert_eq!(col3, "title:3,body:1");
     }
@@ -311,3 +364,96 @@ mod sidecar_v2_tests {
     }
 }
 
+
+#[cfg(test)]
+mod sidecar_v4_tests {
+    use super::*;
+
+    fn text_spec(name: &str, positions: bool, values: &[&str]) -> IndexSpec {
+        IndexSpec {
+            name: name.into(),
+            prefix: b"a:".to_vec(),
+            fields: vec![FieldSpec::new(b"body".to_vec())],
+            ty: ValType::Str,
+            kind: IndexKind::Text,
+            max_bytes: 0,
+            ann: None,
+            group_by: None,
+            with_positions: positions,
+            values: values.iter().map(|v| v.as_bytes().to_vec()).collect(),
+        }
+    }
+
+    fn round_trip(specs: Vec<IndexSpec>) -> Vec<IndexSpec> {
+        let mut c = Catalog::new();
+        for s in specs {
+            c.create(s).expect("valid spec");
+        }
+        let text = c.to_sidecar();
+        Catalog::from_sidecar(&text)
+            .expect("round trip")
+            .iter()
+            .map(|(s, _)| s.clone())
+            .collect()
+    }
+
+    #[test]
+    fn declared_values_survive_the_round_trip() {
+        let back = round_trip(vec![
+            text_spec("plain", false, &[]),
+            text_spec("pos_only", true, &[]),
+            text_spec("vals_only", false, &["price", "status"]),
+            text_spec("both", true, &["price"]),
+        ]);
+        assert_eq!(back[0].values, Vec::<Vec<u8>>::new());
+        assert!(!back[0].with_positions);
+        assert!(back[1].with_positions && back[1].values.is_empty());
+        assert!(!back[2].with_positions);
+        assert_eq!(back[2].values, vec![b"price".to_vec(), b"status".to_vec()]);
+        assert!(back[3].with_positions);
+        assert_eq!(back[3].values, vec![b"price".to_vec()]);
+    }
+
+    /// A field name holding the column's own separators must not split
+    /// into two — the same hazard the weighted-field column escapes for.
+    #[test]
+    fn separators_inside_a_value_name_survive() {
+        let back = round_trip(vec![text_spec("odd", false, &["a,b", "c:d"])]);
+        assert_eq!(back[0].values, vec![b"a,b".to_vec(), b"c:d".to_vec()]);
+    }
+
+    /// A positions-only index still writes exactly the v3 column, so the
+    /// shape only changes for an index that uses the new capability.
+    #[test]
+    fn positions_only_keeps_the_v3_column() {
+        let mut c = Catalog::new();
+        c.create(text_spec("pos_only", true, &[])).unwrap();
+        let text = c.to_sidecar();
+        assert!(text.starts_with("kevy-index-catalog v4"));
+        assert!(text.lines().nth(1).unwrap().ends_with("\tpos"), "{text}");
+    }
+
+    /// v3 sidecars keep loading: one that predates VALUES simply has no
+    /// declared ones, and a refusing sidecar is an index that silently
+    /// rebuilds from scratch.
+    #[test]
+    fn a_v3_sidecar_still_loads() {
+        let v3 = "kevy-index-catalog v3\nold\ta:\tbody:1\tstr\ttext\t0\tpos\n";
+        let got: Vec<IndexSpec> =
+            Catalog::from_sidecar(v3).expect("v3 loads").iter().map(|(s, _)| s.clone()).collect();
+        assert_eq!(got.len(), 1);
+        assert!(got[0].with_positions, "the v3 flag still means positions");
+        assert!(got[0].values.is_empty(), "a v3 index declares no values");
+    }
+
+    /// VALUES is a text-only capability, like WITH POSITIONS: accepting
+    /// it elsewhere would store nothing and filter on nothing.
+    #[test]
+    fn values_outside_a_text_index_is_refused() {
+        let mut c = Catalog::new();
+        let mut s = text_spec("r", false, &["price"]);
+        s.kind = IndexKind::Range;
+        s.ty = ValType::I64;
+        assert!(c.create(s).is_err(), "VALUES on a range index");
+    }
+}

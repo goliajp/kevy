@@ -17,12 +17,15 @@ impl Store {
     ///
     /// `positions` records token offsets so phrase queries can verify
     /// adjacency, at the cost of the positional side-channel's memory.
+    /// `values` names hash fields stored per document, which is what
+    /// `FILTER` reads — an index that never filters declares none.
     pub fn idx_create_text(
         &self,
         name: &[u8],
         prefix: &[u8],
         fields: &[(&[u8], f32)],
         positions: bool,
+        values: &[&[u8]],
     ) -> KevyResult<()> {
         if prefix.is_empty() {
             return Err(KevyError::InvalidInput("empty prefix".into()));
@@ -43,6 +46,7 @@ impl Store {
             ann: None,
             group_by: None,
             with_positions: positions,
+            values: values.iter().map(|v| v.to_vec()).collect(),
         };
         self.register_spec(spec)
     }

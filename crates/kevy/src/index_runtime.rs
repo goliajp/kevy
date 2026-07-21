@@ -228,7 +228,7 @@ fn new_text_seg(spec: &kevy_index::IndexSpec) -> Option<kevy_text::TextSegment> 
         kevy_text::TextSegment::with_shape(kevy_text::SegmentShape {
             fields: spec.fields.len(),
             positions: spec.with_positions,
-            values: 0,
+            values: spec.values.len(),
         })
     })
 }
@@ -308,19 +308,19 @@ fn apply_row(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
     // Text kind: raw field bytes tokenize into the inverted
     // segment (no scalar coercion).
     if let Some(ts) = &mut si.text {
-        // Every declared field, each with its weight -- they score into
-        // one corpus, which is the whole reason multi-field is a spec
-        // change rather than several single-field indexes.
-        let mut fields: Vec<(Vec<u8>, f32)> = Vec::with_capacity(si.spec.fields.len());
-        for f in &si.spec.fields {
-            if let Ok(Some(raw)) = store.hget(key, &f.name) {
-                fields.push((raw.to_vec(), f.weight));
-            }
-        }
+        // What the spec reads out of the row -- every declared field with
+        // its weight (they score into one corpus, which is the whole
+        // reason multi-field is a spec change rather than several
+        // single-field indexes) and every declared stored value. The spec
+        // owns that mapping, so the server and the embedded store cannot
+        // read a row differently.
+        let (fields, values) =
+            si.spec.read_row(|f| store.hget(key, f).ok().flatten().map(|v| v.to_vec()));
+        let vals: Vec<Option<&[u8]>> = values.iter().map(|v| v.as_deref()).collect();
         if fields.is_empty() {
-            ts.apply_fields(key, None);
+            ts.apply_doc(key, None, &vals);
         } else {
-            ts.apply_fields(key, Some(&fields));
+            ts.apply_doc(key, Some(&fields), &vals);
         }
         return;
     }

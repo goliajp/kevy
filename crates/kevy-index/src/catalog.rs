@@ -156,6 +156,12 @@ pub struct IndexSpec {
     /// by default: a corpus that never runs a phrase query does not pay
     /// the positional side-channel's memory.
     pub with_positions: bool,
+    /// Hash fields stored per document (`VALUES`, kind == Text only), so
+    /// the clauses that read a document's own value — `FILTER` and, in
+    /// time, `SORT` / `DISTINCT` / `FACET` — have something to read.
+    /// Empty by default: an index that never filters does not pay for
+    /// the stored column.
+    pub values: Vec<Vec<u8>>,
 }
 
 /// HNSW declaration (immutable once created).
@@ -181,9 +187,36 @@ pub struct Catalog {
     pub(crate) specs: Vec<(IndexSpec, IndexState)>,
 }
 
+/// What one row looks like to an index: each declared field's raw bytes
+/// with its BM25 weight, and each declared `VALUES` field's raw bytes
+/// (`None` where the row has none).
+pub type RowInputs = (Vec<(Vec<u8>, f32)>, Vec<Option<Vec<u8>>>);
+
 impl IndexSpec {
     /// The primary field — the first declared one. Every kind except
     /// text indexes exactly one attribute; text is the kind that reads
+    /// What this index reads out of one row: each declared field's raw
+    /// bytes with its BM25 weight, and each declared `VALUES` field's raw
+    /// bytes (`None` where the row has none).
+    ///
+    /// `get` fetches a hash field, so this stays free of any storage
+    /// dependency while keeping the answer in one place — the server and
+    /// the embedded store index the same row the same way by
+    /// construction, rather than by two copies of the same loop agreeing.
+    pub fn read_row(
+        &self,
+        mut get: impl FnMut(&[u8]) -> Option<Vec<u8>>,
+    ) -> RowInputs {
+        let mut fields = Vec::with_capacity(self.fields.len());
+        for f in &self.fields {
+            if let Some(raw) = get(&f.name) {
+                fields.push((raw, f.weight));
+            }
+        }
+        let values = self.values.iter().map(|v| get(v)).collect();
+        (fields, values)
+    }
+
     /// [`IndexSpec::fields`] in full.
     pub fn field(&self) -> &[u8] {
         self.fields.first().map_or(&[][..], |f| f.name.as_slice())
@@ -207,6 +240,7 @@ impl IndexSpec {
             ann: None,
             group_by: None,
             with_positions: false,
+            values: Vec::new(),
         }
     }
 }
@@ -241,6 +275,12 @@ impl Catalog {
         // accept-and-ignore shape this arc keeps refusing.
         if spec.with_positions && spec.kind != IndexKind::Text {
             return Err("ERR WITH POSITIONS requires KIND text");
+        }
+        // Same contract for VALUES: only a text segment carries the
+        // stored-value column, so accepting the declaration on any other
+        // kind would store nothing and filter on nothing.
+        if !spec.values.is_empty() && spec.kind != IndexKind::Text {
+            return Err("ERR VALUES requires KIND text");
         }
         self.specs.push((spec, IndexState::Building));
         Ok(())
@@ -316,6 +356,7 @@ mod tests {
             max_bytes: 0,
             group_by: None,
             with_positions: false,
+            values: Vec::new(),
         }
     }
 

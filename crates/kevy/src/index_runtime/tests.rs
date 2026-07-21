@@ -15,6 +15,7 @@ fn spec(name: &str) -> IndexSpec {
         max_bytes: 0,
         group_by: None,
         with_positions: false,
+        values: Vec::new(),
     }
 }
 

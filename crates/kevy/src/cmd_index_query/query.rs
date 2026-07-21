@@ -294,6 +294,7 @@ mod verify_tests {
             ann: None,
             group_by: None,
             with_positions: false,
+            values: Vec::new(),
         }
     }
 
