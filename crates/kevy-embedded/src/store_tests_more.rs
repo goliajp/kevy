@@ -741,3 +741,39 @@ fn agg_index_group_by_embedded() {
     assert!(s.idx_create_agg(b"bad", b"m:", b"val", IndexValType::Str, b"grp").is_err());
     assert!(s.idx_group(b"nope", b"a").is_err());
 }
+
+/// Global-BM25 (step 4b): a document's rank must not depend on which
+/// shard it landed on. Two runs of the same corpus over different shard
+/// counts must produce the same ranking and the same scores, which
+/// shard-local statistics could not guarantee.
+#[test]
+#[cfg(feature = "text")]
+fn text_match_is_shard_count_invariant() {
+    use crate::{Config, IndexKind, IndexValType};
+    let corpus: &[(&str, &str)] = &[
+        ("d:1", "rust systems programming rust"),
+        ("d:2", "kevy is a pure rust key value store"),
+        ("d:3", "the quick brown fox"),
+        ("d:4", "rust memory safety story"),
+        ("d:5", "nothing relevant to the query here at all"),
+        ("d:6", "rust rust rust everywhere in this doc"),
+    ];
+    let ranked = |shards: usize| -> Vec<(Vec<u8>, f64)> {
+        let s = Store::open(Config::default().with_shards(shards).with_ttl_reaper_manual()).unwrap();
+        for (k, body) in corpus {
+            s.hset(k.as_bytes(), &[(b"body", body.as_bytes())]).unwrap();
+        }
+        s.idx_create(b"b", b"d:", b"body", IndexValType::Str, IndexKind::Text).unwrap();
+        s.idx_match(b"b", b"rust", 10).unwrap()
+    };
+    let one = ranked(1);
+    let eight = ranked(8);
+    assert_eq!(one.len(), eight.len(), "same documents match regardless of sharding");
+    for (a, b) in one.iter().zip(&eight) {
+        assert_eq!(a.0, b.0, "same ranking order across shard counts");
+        assert!((a.1 - b.1).abs() < 1e-9, "same score for {:?}: {} vs {}", a.0, a.1, b.1);
+    }
+    // And the ranking is the sensible one: d:6 (rust×4) tops, d:5 absent.
+    assert_eq!(eight[0].0, b"d:6".to_vec());
+    assert!(!eight.iter().any(|(k, _)| k == b"d:5"));
+}
