@@ -103,14 +103,32 @@ impl Positions {
     }
 
     /// Approximate heap bytes — the positions term of the memory formula
-    /// (an estimate the memory gate calibrates against real RSS growth).
+    /// (the memory gate calibrates it against real RSS growth).
+    ///
+    /// A first cut charged a flat `blob.len() + 30` per posting and
+    /// underestimated real growth ~3× at 1M docs: it ignored that every
+    /// token owns a nested `HashMap<u32, Vec<u8>>` — a struct plus a
+    /// power-of-two RawTable even for a single hapax posting — and that
+    /// each tiny positions blob is a separate heap allocation the system
+    /// allocator rounds up and headers. This models both.
     pub(crate) fn approx_bytes(&self) -> u64 {
         self.map
             .iter()
             .map(|(t, inner)| {
-                let key = (t.len() + 48) as u64;
-                let blobs: u64 = inner.values().map(|b| (b.len() + 30) as u64).sum();
-                key + blobs
+                let n = inner.len() as u64;
+                // Inner RawTable: capacity is the next power of two above
+                // n / 0.875 (its load factor); each bucket holds
+                // (u32, Vec<u8>) ≈ 32 B plus a 1-byte control.
+                let cap = (n * 8 / 7 + 1).next_power_of_two().max(4);
+                let table = cap * 33;
+                // Each blob is its own allocation: 16-byte granularity
+                // plus a per-allocation header.
+                let blobs: u64 = inner
+                    .values()
+                    .map(|b| (b.len().max(1) as u64).next_multiple_of(16) + 16)
+                    .sum();
+                // Outer entry: the token-key Vec and the inner map struct.
+                t.len() as u64 + 24 + 48 + table + blobs
             })
             .sum()
     }
