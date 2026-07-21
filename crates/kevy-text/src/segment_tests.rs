@@ -427,6 +427,74 @@ fn phrase_with_repeated_token() {
     assert_eq!(hits[0].key, b"twice".to_vec());
 }
 
+// ---- query grammar: bare terms + quoted phrases (step 5d) ----------------
+
+/// A wholly-quoted query is exactly the phrase primitive.
+#[test]
+fn matches_query_pure_phrase_equals_phrase_matches() {
+    let s = phrase_seg();
+    let via_query = s.matches_query(b"\"quick brown\"", 10, None);
+    let via_phrase = s.phrase_matches(b"quick brown", 10, None);
+    assert_eq!(via_query, via_phrase);
+    assert_eq!(via_query.len(), 1);
+    assert_eq!(via_query[0].key, b"d1".to_vec());
+}
+
+/// A query with no quotes is byte-identical to the ordinary term query —
+/// the pruned hot path is untouched when no phrase is present.
+#[test]
+fn matches_query_without_quotes_delegates_to_matches_scored() {
+    let s = phrase_seg();
+    for q in [&b"quick"[..], b"quick brown", b"brown fox jumps"] {
+        assert_eq!(s.matches_query(q, 10, None), s.matches_scored(q, 10, None), "query {q:?}");
+    }
+}
+
+/// A mixed query ORs its clauses: a bare term matches its documents, a
+/// phrase matches only the adjacent ones, and a document satisfying both
+/// scores higher than one satisfying only the term.
+#[test]
+fn matches_query_mixes_terms_and_phrases() {
+    let mut s = TextSegment::with_positions();
+    s.apply(b"both", Some(b"the quick brown fox and a jumps word"));
+    s.apply(b"term_only", Some(b"jumps over something unrelated here"));
+    s.apply(b"phrase_only", Some(b"a quick brown hare"));
+    // Query: bare "jumps" OR phrase "quick brown".
+    let hits = s.matches_query(b"jumps \"quick brown\"", 10, None);
+    let keys: Vec<_> = hits.iter().map(|h| h.key.clone()).collect();
+    assert!(keys.contains(&b"both".to_vec()), "matches both clauses");
+    assert!(keys.contains(&b"term_only".to_vec()), "matches the bare term");
+    assert!(keys.contains(&b"phrase_only".to_vec()), "matches the phrase");
+    // `both` gets term + phrase contributions, so it outranks the others.
+    assert_eq!(hits[0].key, b"both".to_vec(), "both clauses beat one: {keys:?}");
+}
+
+/// An unterminated quote is lenient — the remainder is read as bare
+/// terms, so the query still answers instead of erroring.
+#[test]
+fn matches_query_unterminated_quote_is_lenient() {
+    let s = phrase_seg();
+    // No closing quote: `quick brown` becomes bare terms → OR query.
+    let lenient = s.matches_query(b"\"quick brown", 10, None);
+    let or = s.matches_scored(b"quick brown", 10, None);
+    assert_eq!(lenient, or);
+}
+
+/// A phrase clause on a positionless segment verifies nothing, but a bare
+/// term in the same query still matches — the OR keeps what it can prove.
+#[test]
+fn matches_query_phrase_clause_needs_positions_but_term_survives() {
+    let mut s = TextSegment::new();
+    s.apply(b"d1", Some(b"the quick brown fox"));
+    s.apply(b"d2", Some(b"a slow green turtle named fox"));
+    // "fox" OR phrase "quick brown": no positions, so the phrase proves
+    // nothing, but "fox" still matches both docs.
+    let hits = s.matches_query(b"fox \"quick brown\"", 10, None);
+    assert_eq!(hits.len(), 2, "the bare term still matches: {hits:?}");
+    // A pure phrase with no positions matches nothing.
+    assert!(s.matches_query(b"\"quick brown\"", 10, None).is_empty());
+}
+
 /// Phrase scoring uses global stats when injected, so cross-shard phrase
 /// hits are comparable the same way ordinary matches are.
 #[test]

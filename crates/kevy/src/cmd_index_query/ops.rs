@@ -63,7 +63,9 @@ pub(super) fn op_match_score(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>])
         return vec![ST_BADARGS];
     };
     let res = index_runtime::with_ready_text_segment(ctx, store, &name, |ts| {
-        ts.matches_scored(&text, limit, Some(&stats))
+        // `matches_query` parses quoted phrases out of the raw query
+        // text; with none it is the ordinary term query.
+        ts.matches_query(&text, limit, Some(&stats))
     });
     match res {
         Ok(hits) => {

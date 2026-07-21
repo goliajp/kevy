@@ -53,6 +53,98 @@ impl TextSegment {
         self.select_top(&scores, limit)
     }
 
+    /// BM25-ranked matches for a query `text` that may mix bare terms and
+    /// double-quoted phrases (`foo "quick brown" bar`), best `limit` hits.
+    ///
+    /// The query is the OR of its clauses — each bare term and each
+    /// phrase — scored by the summed BM25 an OR query would give, with a
+    /// phrase clause contributing only to documents where its tokens are
+    /// adjacent. With no quoted phrase in `text` this is byte-identical
+    /// to [`TextSegment::matches_scored`] (the pruned hot path); the
+    /// phrase branch trades that pruning for exactness and is what the
+    /// positional side-channel exists for. `stats` injects global corpus
+    /// statistics (the cross-shard path); `None` scores shard-local.
+    pub fn matches_query(
+        &self,
+        text: &[u8],
+        limit: usize,
+        stats: Option<&CorpusStats>,
+    ) -> Vec<TextMatch> {
+        if limit == 0 {
+            return Vec::new();
+        }
+        let (bare, phrases) = parse_clauses(text);
+        if phrases.is_empty() {
+            // No phrase clause — the ordinary term query, untouched.
+            return self.matches_scored(text, limit, stats);
+        }
+        if self.docs.is_empty() {
+            return Vec::new();
+        }
+        let (n_docs, avgdl) = self.corpus_stats(stats);
+        let mut terms = bare;
+        terms.sort();
+        terms.dedup();
+        let mut scores: HashMap<u32, f64> = HashMap::new();
+        for t in &terms {
+            self.add_term(t, &mut scores, stats, n_docs, avgdl);
+        }
+        for phrase in &phrases {
+            self.add_phrase(phrase, &mut scores, stats, n_docs, avgdl);
+        }
+        self.select_top(&scores, limit)
+    }
+
+    /// Add one bare term's BM25 contribution to every document that holds
+    /// it — a full-list walk (no MaxScore pruning), used only on the
+    /// phrase path where a phrase clause could otherwise boost a document
+    /// pruning would have dropped.
+    fn add_term(
+        &self,
+        t: &[u8],
+        scores: &mut HashMap<u32, f64>,
+        stats: Option<&CorpusStats>,
+        n_docs: f64,
+        avgdl: f64,
+    ) {
+        let Some(list) = self.postings.get(t) else { return };
+        let df = stats
+            .and_then(|s| s.df.get(t))
+            .map(|&d| f64::from(d))
+            .unwrap_or(list.len() as f64);
+        for (tf, bands) in list.tf_groups() {
+            for (_b, band) in bands.iter() {
+                for &id in band {
+                    let dl = f64::from(self.id_dl[id as usize]);
+                    *scores.entry(id).or_insert(0.0) +=
+                        bm25_score(f64::from(tf), df, n_docs, dl, avgdl);
+                }
+            }
+        }
+    }
+
+    /// Add one phrase clause's contribution: for every document whose
+    /// positions place the phrase adjacently, the BM25 sum of its tokens.
+    /// A segment without positions can verify nothing, so the clause
+    /// contributes to no document.
+    fn add_phrase(
+        &self,
+        toks: &[Vec<u8>],
+        scores: &mut HashMap<u32, f64>,
+        stats: Option<&CorpusStats>,
+        n_docs: f64,
+        avgdl: f64,
+    ) {
+        let Some(pos) = self.positions.as_ref() else { return };
+        let distinct = distinct_tokens(toks);
+        for id in pos.ids(&toks[0]) {
+            if doc_has_phrase(pos, toks, id) {
+                *scores.entry(id).or_insert(0.0) +=
+                    self.phrase_score(&distinct, id, stats, n_docs, avgdl);
+            }
+        }
+    }
+
     /// BM25 sum over the phrase's distinct tokens for one matching doc —
     /// exactly what an AND query over those terms would score it.
     fn phrase_score(
@@ -107,4 +199,43 @@ fn doc_has_phrase(pos: &Positions, toks: &[Vec<u8>], id: u32) -> bool {
         }
     }
     true
+}
+
+/// Split a query into bare terms and quoted phrases. A `"…"` group whose
+/// tokens number two or more is a phrase clause; a shorter group (empty
+/// or one token) is not a phrase, so its token joins the bare terms — a
+/// one-word "phrase" is just that word. An unterminated quote is lenient:
+/// the remainder is read as bare terms rather than rejected.
+fn parse_clauses(text: &[u8]) -> (Vec<Vec<u8>>, Vec<Vec<Vec<u8>>>) {
+    let mut bare: Vec<Vec<u8>> = Vec::new();
+    let mut phrases: Vec<Vec<Vec<u8>>> = Vec::new();
+    let mut plain: Vec<u8> = Vec::new();
+    let mut i = 0;
+    while i < text.len() {
+        if text[i] != b'"' {
+            plain.push(text[i]);
+            i += 1;
+            continue;
+        }
+        bare.extend(tokenize(&plain));
+        plain.clear();
+        let start = i + 1;
+        match text[start..].iter().position(|&b| b == b'"') {
+            Some(off) => {
+                let toks = tokenize(&text[start..start + off]);
+                if toks.len() >= 2 {
+                    phrases.push(toks);
+                } else {
+                    bare.extend(toks);
+                }
+                i = start + off + 1;
+            }
+            None => {
+                bare.extend(tokenize(&text[start..]));
+                i = text.len();
+            }
+        }
+    }
+    bare.extend(tokenize(&plain));
+    (bare, phrases)
 }
