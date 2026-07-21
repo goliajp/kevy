@@ -197,6 +197,28 @@ fn push_clauses(argv2: &mut Vec<Vec<u8>>, m: crate::cmd_index_query::MatchArgs) 
         argv2.push(b"OFFSET".to_vec());
         argv2.push(m.offset.to_string().into_bytes());
     }
+    // FILTER travels to pass 2 and is applied only there. It is
+    // non-scoring: it decides which documents are eligible, not what a
+    // term is worth, so pass 1's corpus statistics stay whole-corpus and
+    // a filtered search ranks by the same notion of term importance an
+    // unfiltered one would. (`IN` is the other axis and does move the
+    // statistics — it changes WHERE IN a document we look, which changes
+    // what a frequency and a length mean.)
+    for f in m.filters {
+        argv2.push(b"FILTER".to_vec());
+        argv2.push(f.field);
+        match f.shape {
+            crate::cmd_index_query::FilterShape::Range { min, max } => {
+                argv2.push(b"RANGE".to_vec());
+                argv2.push(min);
+                argv2.push(max);
+            }
+            crate::cmd_index_query::FilterShape::Eq { value } => {
+                argv2.push(b"EQ".to_vec());
+                argv2.push(value);
+            }
+        }
+    }
 }
 
 /// Encode the aggregated global stats as one MATCH.SCORE argv element
