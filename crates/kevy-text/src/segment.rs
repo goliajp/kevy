@@ -84,6 +84,25 @@ pub struct Filter<'a> {
     pub test: &'a dyn Fn(&[u8]) -> bool,
 }
 
+/// An order to select the top hits by, other than the score.
+///
+/// The key function maps a stored value's raw bytes to an
+/// order-preserving encoding, computed once per candidate; the segment
+/// then compares bytes and never learns what a number is. `None` from it
+/// means the document has no usable value for the field, which sorts
+/// **last in both directions** — missing is not a value, and placing it
+/// at one end or the other by direction would make "the oldest" and "the
+/// newest" disagree about where the unknowns went.
+#[derive(Clone, Copy)]
+pub struct Sort<'a> {
+    /// Which declared value field orders the result.
+    pub field: usize,
+    /// Descending when true.
+    pub desc: bool,
+    /// The order-preserving encoding of one stored value.
+    pub key: &'a dyn Fn(&[u8]) -> Option<Vec<u8>>,
+}
+
 /// Everything a MATCH query carries beyond its text and result limit.
 ///
 /// Grouping them keeps the query entry point from growing a parameter per
@@ -102,6 +121,10 @@ pub struct QueryOpts<'a> {
     /// `FILTER`: non-scoring predicates, ANDed. Applied before the top-K
     /// — filtering afterwards would return fewer hits than exist.
     pub filter: &'a [Filter<'a>],
+    /// `SORT`: select by a stored value instead of by score. Selecting,
+    /// not re-ordering: a document that wins on the sort key must be
+    /// chosen even when its score would never have reached the page.
+    pub sort: Option<Sort<'a>>,
 }
 
 /// A field's text and the BM25 weight it was indexed at. Stored per

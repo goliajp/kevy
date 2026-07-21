@@ -1051,3 +1051,79 @@ fn the_memory_formula_counts_stored_values() {
     assert!(with_values > without.stats().approx_bytes, "the value column is accounted for");
     assert!(with_values > bare);
 }
+
+// ---- SORT: selecting by a stored value, not re-ordering ----------------
+
+#[test]
+fn sorting_selects_by_the_key_not_the_score() {
+    // Price falls with the term count, so the cheapest documents are the
+    // worst scorers. Sorting ascending by price with LIMIT 3 must return
+    // the three cheapest — none of which the score would ever have put on
+    // the page. Re-ordering a top-3 by score would return d0..d2 instead.
+    let s = value_seg();
+    let key = |raw: &[u8]| {
+        let n: u32 = std::str::from_utf8(raw).ok()?.parse().ok()?;
+        Some(n.to_be_bytes().to_vec())
+    };
+    let asc = QueryOpts {
+        sort: Some(Sort { field: 0, desc: false, key: &key }),
+        ..Default::default()
+    };
+    let hits = s.matches_query_with(b"rust", 3, asc);
+    let keys: Vec<Vec<u8>> = hits.iter().map(|h| h.key.clone()).collect();
+    assert_eq!(keys, vec![b"d9".to_vec(), b"d8".to_vec(), b"d7".to_vec()], "cheapest first");
+    assert!(hits[0].score < hits[2].score, "scores are still reported, just not ranked by");
+
+    let desc = QueryOpts {
+        sort: Some(Sort { field: 0, desc: true, key: &key }),
+        ..Default::default()
+    };
+    let keys: Vec<Vec<u8>> =
+        s.matches_query_with(b"rust", 3, desc).into_iter().map(|h| h.key).collect();
+    assert_eq!(keys, vec![b"d0".to_vec(), b"d1".to_vec(), b"d2".to_vec()], "priciest first");
+}
+
+#[test]
+fn documents_without_a_value_sort_last_in_both_directions() {
+    let mut s = value_seg();
+    // Two documents that match but carry no price.
+    s.apply_doc(b"none1", Some(&[(b"rust".to_vec(), 1.0)]), &[]);
+    s.apply_doc(b"none2", Some(&[(b"rust".to_vec(), 1.0)]), &[Some(b"not a number")]);
+    let key = |raw: &[u8]| {
+        let n: u32 = std::str::from_utf8(raw).ok()?.parse().ok()?;
+        Some(n.to_be_bytes().to_vec())
+    };
+    for desc in [false, true] {
+        let opts =
+            QueryOpts { sort: Some(Sort { field: 0, desc, key: &key }), ..Default::default() };
+        let all: Vec<Vec<u8>> =
+            s.matches_query_with(b"rust", 12, opts).into_iter().map(|h| h.key).collect();
+        assert_eq!(all.len(), 12);
+        let tail = &all[10..];
+        assert!(
+            tail.contains(&b"none1".to_vec()) && tail.contains(&b"none2".to_vec()),
+            "missing and uncoercible sort last (desc={desc}): {all:?}"
+        );
+    }
+}
+
+#[test]
+fn sorting_composes_with_a_filter() {
+    let s = value_seg();
+    let key = |raw: &[u8]| {
+        let n: u32 = std::str::from_utf8(raw).ok()?.parse().ok()?;
+        Some(n.to_be_bytes().to_vec())
+    };
+    let cheap = |v: &[u8]| std::str::from_utf8(v).unwrap().parse::<u32>().unwrap() >= 50;
+    let f = [Filter { field: 0, test: &cheap }];
+    let opts = QueryOpts {
+        filter: &f,
+        sort: Some(Sort { field: 0, desc: false, key: &key }),
+        ..Default::default()
+    };
+    let keys: Vec<Vec<u8>> =
+        s.matches_query_with(b"rust", 3, opts).into_iter().map(|h| h.key).collect();
+    // prices 50..100 are d5..d0; ascending, the cheapest qualifying are
+    // d5 (50), d4 (60), d3 (70).
+    assert_eq!(keys, vec![b"d5".to_vec(), b"d4".to_vec(), b"d3".to_vec()]);
+}

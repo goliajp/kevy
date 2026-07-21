@@ -78,7 +78,7 @@ impl TextSegment {
         }
         let ctx = QueryCtx { n_docs, avgdl, limit };
         let scores = self.accumulate(&lists, &ctx);
-        self.select_top(&scores, limit, &[])
+        self.select_top(&scores, limit, &[], None)
     }
 
     /// Corpus `(n_docs, avgdl)`: injected global stats when supplied,
@@ -255,37 +255,40 @@ impl TextSegment {
         scores: &HashMap<u32, f64>,
         limit: usize,
         filter: &[crate::Filter],
+        sort: Option<crate::Sort>,
     ) -> Vec<TextMatch> {
-        let key_of = |id: u32| -> &[u8] {
-            self.id_key[id as usize].as_deref().expect("live posting id")
-        };
-        let mut top: Vec<(f64, &[u8])> = Vec::with_capacity(limit + 1);
+        let order = Order { desc: sort.is_some_and(|s| s.desc), sorted: sort.is_some() };
+        let mut top: Vec<Cand> = Vec::with_capacity(limit + 1);
         for (id, score) in scores {
             // The candidate set is walked exactly once here, so this is
-            // the cheapest correct place to test a predicate: testing
-            // inside each term's accumulation would retest a document
-            // once per query term.
+            // the cheapest correct place to test a predicate and to build
+            // a sort key: testing inside each term's accumulation would
+            // retest a document once per query term.
             if !self.passes(*id, filter) {
                 continue;
             }
-            let cand = (*score, key_of(*id));
+            let cand = Cand {
+                score: *score,
+                key: self.id_key[*id as usize].as_deref().expect("live posting id"),
+                okey: sort.and_then(|s| {
+                    self.values.as_ref().and_then(|dv| dv.get(*id, s.field)).and_then(s.key)
+                }),
+            };
             if top.len() < limit {
                 top.push(cand);
                 if top.len() == limit {
-                    top.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(b.1)));
+                    order.sort(&mut top);
                 }
-            } else if better(cand, top[limit - 1]) {
-                let pos = top.partition_point(|e| better(*e, cand));
+            } else if order.better(&cand, &top[limit - 1]) {
+                let pos = top.partition_point(|e| order.better(e, &cand));
                 top.insert(pos, cand);
                 top.pop();
             }
         }
         if top.len() < limit {
-            top.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(b.1)));
+            order.sort(&mut top);
         }
-        top.into_iter()
-            .map(|(score, k)| TextMatch { key: k.to_vec(), score })
-            .collect()
+        top.into_iter().map(|c| TextMatch { key: c.key.to_vec(), score: c.score }).collect()
     }
 
     /// Whether `id` satisfies every predicate (they are ANDed). A
@@ -306,8 +309,57 @@ impl TextSegment {
 // float_cmp: exact equality is the tiebreak trigger — an epsilon here would
 // make ranking non-deterministic for genuinely equal BM25 scores.
 #[allow(clippy::float_cmp)]
-fn better(a: (f64, &[u8]), b: (f64, &[u8])) -> bool {
-    a.0 > b.0 || (a.0 == b.0 && a.1 < b.1)
+/// One candidate in the top-K selection.
+struct Cand<'a> {
+    score: f64,
+    key: &'a [u8],
+    /// The sort field's order-preserving key, when the query sorts by a
+    /// stored value; `None` when it does not, or when this document has
+    /// no usable value for the field.
+    okey: Option<Vec<u8>>,
+}
+
+/// What the selection ranks by.
+#[derive(Clone, Copy)]
+struct Order {
+    sorted: bool,
+    desc: bool,
+}
+
+impl Order {
+    /// Whether `a` outranks `b`.
+    ///
+    /// The row key breaks every tie, so two shards holding equally-ranked
+    /// documents agree on their order and the merged page is stable.
+    /// Under a sort, a document WITH a value always outranks one without,
+    /// in both directions.
+    fn better(self, a: &Cand, b: &Cand) -> bool {
+        if !self.sorted {
+            return a.score > b.score || (a.score == b.score && a.key < b.key);
+        }
+        match (&a.okey, &b.okey) {
+            (Some(x), Some(y)) => {
+                let ord = if self.desc { y.cmp(x) } else { x.cmp(y) };
+                ord == std::cmp::Ordering::Less
+                    || (ord == std::cmp::Ordering::Equal && a.key < b.key)
+            }
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (None, None) => a.key < b.key,
+        }
+    }
+
+    fn sort(self, top: &mut [Cand]) {
+        top.sort_by(|a, b| {
+            if self.better(a, b) {
+                std::cmp::Ordering::Less
+            } else if self.better(b, a) {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        });
+    }
 }
 
 /// The `limit`-th best score currently accumulated (the MaxScore

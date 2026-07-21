@@ -48,7 +48,7 @@ impl TextSegment {
         let sc = Scope { stats, n_docs, avgdl, want: &[] };
         let mut scores: HashMap<u32, f64> = HashMap::new();
         self.add_phrase(&toks, &mut scores, &sc);
-        self.select_top(&scores, limit, &[])
+        self.select_top(&scores, limit, &[], None)
     }
 
     /// BM25-ranked matches for a query `text` that may mix bare terms and
@@ -115,22 +115,41 @@ impl TextSegment {
             && opts.typo == 0
             && want.is_empty()
             && opts.filter.is_empty()
+            && opts.sort.is_none()
         {
-            // No phrase, prefix, typo, field or filter clause — the
+            // No phrase, prefix, typo, field, filter or sort clause — the
             // ordinary pruned term query.
             return self.matches_scored(text, limit, opts.stats);
         }
-        // A filtered query takes the full walk deliberately. MaxScore
+        // A filtered or sorted query takes the full walk deliberately.
+        // MaxScore
         // prunes against the k-th best score SO FAR, computed over
         // unfiltered candidates: if the unfiltered leaders are the ones
         // the predicate rejects, the qualifying documents behind them may
         // never be accumulated at all. Pruning would not merely rank them
-        // wrongly — it would lose them.
+        // wrongly — it would lose them. A sort is the same hazard read
+        // the other way: the buckets are ordered by score, which under
+        // SORT is not what decides the page at all.
         if self.docs.is_empty() {
             return Vec::new();
         }
-        let (n_docs, avgdl) = self.scope_stats(opts.stats, &want);
-        let sc = Scope { stats: opts.stats, n_docs, avgdl, want: &want };
+        let scores = self.accumulate_clauses(bare, &phrases, &prefixes, &want, &opts);
+        self.select_top(&scores, limit, opts.filter, opts.sort)
+    }
+
+    /// Every clause's BM25 contribution, accumulated over the whole
+    /// candidate set — the un-pruned walk the phrase, prefix, typo,
+    /// field-scoped, filtered and sorted paths all share.
+    fn accumulate_clauses(
+        &self,
+        bare: Vec<Vec<u8>>,
+        phrases: &[Vec<Vec<u8>>],
+        prefixes: &[Vec<u8>],
+        want: &[usize],
+        opts: &QueryOpts,
+    ) -> HashMap<u32, f64> {
+        let (n_docs, avgdl) = self.scope_stats(opts.stats, want);
+        let sc = Scope { stats: opts.stats, n_docs, avgdl, want };
         let mut terms = bare;
         terms.sort();
         terms.dedup();
@@ -138,13 +157,13 @@ impl TextSegment {
         for t in &terms {
             self.add_typo(t, opts.typo, &mut scores, &sc);
         }
-        for phrase in &phrases {
+        for phrase in phrases {
             self.add_phrase(phrase, &mut scores, &sc);
         }
-        for pfx in &prefixes {
+        for pfx in prefixes {
             self.add_prefix(pfx, &mut scores, &sc);
         }
-        self.select_top(&scores, limit, opts.filter)
+        scores
     }
 
     /// BM25-ranked documents holding any indexed term that begins with
@@ -171,7 +190,7 @@ impl TextSegment {
         let sc = Scope { stats, n_docs, avgdl, want: &[] };
         let mut scores: HashMap<u32, f64> = HashMap::new();
         self.add_prefix(&pfx, &mut scores, &sc);
-        self.select_top(&scores, limit, &[])
+        self.select_top(&scores, limit, &[], None)
     }
 
     /// The terms whose document frequency a cross-shard query aggregates
