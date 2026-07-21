@@ -162,6 +162,7 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(
         max_bytes: opts.max_bytes,
         ann,
         group_by: opts.group_by,
+        with_positions: false,
     };
     install_new_index(ctx, spec, out);
 }

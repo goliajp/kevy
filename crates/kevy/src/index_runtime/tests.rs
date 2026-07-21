@@ -14,6 +14,7 @@ fn spec(name: &str) -> IndexSpec {
         ann: None,
         max_bytes: 0,
         group_by: None,
+        with_positions: false,
     }
 }
 

@@ -293,6 +293,7 @@ mod verify_tests {
             max_bytes: 0,
             ann: None,
             group_by: None,
+            with_positions: false,
         }
     }
 

@@ -102,6 +102,7 @@ impl Store {
             max_bytes: 0,
             ann: None,
             group_by: None,
+            with_positions: false,
         };
         self.register_spec(spec)
     }
@@ -154,6 +155,7 @@ impl Store {
                 ..params
             }),
             group_by: None,
+            with_positions: false,
         };
         self.register_spec(spec)
     }
@@ -322,6 +324,7 @@ impl Store {
             max_bytes: 0,
             ann: None,
             group_by: Some(group_by.to_vec()),
+            with_positions: false,
         };
         self.register_spec(spec)
     }

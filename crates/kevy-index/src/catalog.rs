@@ -151,6 +151,11 @@ pub struct IndexSpec {
     pub ann: Option<AnnSpec>,
     /// Grouping field (`Some` iff kind == Agg).
     pub group_by: Option<Vec<u8>>,
+    /// Record token positions (`WITH POSITIONS`, kind == Text only), so
+    /// phrase / proximity / highlight queries can verify adjacency. Off
+    /// by default: a corpus that never runs a phrase query does not pay
+    /// the positional side-channel's memory.
+    pub with_positions: bool,
 }
 
 /// HNSW declaration (immutable once created).
@@ -201,6 +206,7 @@ impl IndexSpec {
             max_bytes: 0,
             ann: None,
             group_by: None,
+            with_positions: false,
         }
     }
 }
@@ -228,6 +234,13 @@ impl Catalog {
         // accept-and-ignore shape this arc keeps refusing.
         if spec.fields.len() > 1 && spec.kind != IndexKind::Text {
             return Err("ERR only KIND text indexes several fields");
+        }
+        // Positions are a text-only capability: phrase / proximity /
+        // highlight all read the positional side-channel, which no other
+        // kind maintains, so accepting the flag elsewhere would be the
+        // accept-and-ignore shape this arc keeps refusing.
+        if spec.with_positions && spec.kind != IndexKind::Text {
+            return Err("ERR WITH POSITIONS requires KIND text");
         }
         self.specs.push((spec, IndexState::Building));
         Ok(())
@@ -302,6 +315,7 @@ mod tests {
             ann: None,
             max_bytes: 0,
             group_by: None,
+            with_positions: false,
         }
     }
 
