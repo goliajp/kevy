@@ -310,6 +310,7 @@ fn parse_knn_tail(argv: &[Vec<u8>]) -> Option<(tail::Tail, usize)> {
             typo: 0,
             offset: 0,
             scope: Vec::new(),
+            #[cfg(feature = "text")]
             filters: Vec::new(),
         };
     let mut ef = 0usize;

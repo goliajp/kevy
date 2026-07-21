@@ -19,21 +19,27 @@ pub(super) struct Tail {
     pub(super) scope: Vec<Vec<u8>>,
     /// `FILTER …`: non-scoring predicates over stored values, ANDed.
     /// Owned here because the borrowed form the store takes points at
-    /// them.
+    /// them. Only with the text surface: without it there is no MATCH
+    /// for a predicate to restrict, so the clause is not a thing rather
+    /// than a thing that is ignored.
+    #[cfg(feature = "text")]
     pub(super) filters: Vec<FilterClause>,
 }
 
 /// One parsed `FILTER <field> RANGE <min> <max>` / `EQ <v>`.
+#[cfg(feature = "text")]
 pub(super) struct FilterClause {
     pub(super) field: Vec<u8>,
     pub(super) shape: FilterShape,
 }
 
+#[cfg(feature = "text")]
 pub(super) enum FilterShape {
     Range(Vec<u8>, Vec<u8>),
     Eq(Vec<u8>),
 }
 
+#[cfg(feature = "text")]
 impl FilterClause {
     /// The borrowed form [`crate::MatchOpts`] takes.
     pub(super) fn as_value_filter(&self) -> crate::ValueFilter<'_> {
@@ -60,6 +66,15 @@ fn is_tail_keyword(a: &[u8]) -> bool {
 
 /// One `FILTER <field> RANGE <min> <max>` / `EQ <v>`; several AND, which
 /// is why each appends rather than replaces.
+/// Without the text surface there is no MATCH for a predicate to
+/// restrict, so `FILTER` is a syntax error rather than a clause that
+/// parses and does nothing.
+#[cfg(not(feature = "text"))]
+fn apply_filter(_argv: &[Vec<u8>], _i: usize, _t: &mut Tail) -> Option<usize> {
+    None
+}
+
+#[cfg(feature = "text")]
 fn apply_filter(argv: &[Vec<u8>], i: usize, t: &mut Tail) -> Option<usize> {
     let field = argv.get(i + 1)?.clone();
     let mode = argv.get(i + 2)?;
@@ -101,6 +116,7 @@ pub(super) fn parse_tail(
         typo: 0,
         offset: 0,
         scope: Vec::new(),
+        #[cfg(feature = "text")]
         filters: Vec::new(),
     };
     while i < argv.len() {
