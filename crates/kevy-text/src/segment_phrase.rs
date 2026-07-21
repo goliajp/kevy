@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use super::{CorpusStats, TextMatch, TextSegment};
 use crate::bm25::bm25_score;
 use crate::positions::Positions;
-use crate::token::tokenize;
+use crate::token::{tokenize, tokenize_spans};
 
 impl TextSegment {
     /// BM25-ranked documents that contain `phrase`'s tokens **adjacent
@@ -188,6 +188,61 @@ impl TextSegment {
         }
         score
     }
+}
+
+impl TextSegment {
+    /// Byte spans in `key`'s stored fields where `query` matched: a bare
+    /// term highlights every occurrence, a phrase only its adjacent runs.
+    /// Returns `(field_index, spans)` for each field with a match, each
+    /// span list sorted and de-duplicated. Empty when `key` is not
+    /// indexed.
+    ///
+    /// It re-analyses the winning document's own text — the fields are
+    /// stored for re-indexing already — so it needs no positional
+    /// side-channel: highlighting a handful of hits is cheap.
+    pub fn highlight_spans(&self, key: &[u8], query: &[u8]) -> Vec<(usize, Vec<(usize, usize)>)> {
+        let Some((_, _, fields)) = self.docs.get(key) else {
+            return Vec::new();
+        };
+        let (bare, phrases) = parse_clauses(query);
+        let terms: HashSet<&[u8]> = bare.iter().map(Vec::as_slice).collect();
+        let mut out = Vec::new();
+        for (fi, (text, _weight)) in fields.iter().enumerate() {
+            let mut spans = field_spans(&tokenize_spans(text), &terms, &phrases);
+            if !spans.is_empty() {
+                spans.sort_unstable();
+                spans.dedup();
+                out.push((fi, spans));
+            }
+        }
+        out
+    }
+}
+
+/// Highlight spans within one field's tokens: every bare-term token, plus
+/// the tokens of each phrase occurrence (a consecutive, in-order match).
+fn field_spans(
+    toks: &[(Vec<u8>, usize, usize)],
+    terms: &HashSet<&[u8]>,
+    phrases: &[Vec<Vec<u8>>],
+) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    for (t, s, e) in toks {
+        if terms.contains(t.as_slice()) {
+            spans.push((*s, *e));
+        }
+    }
+    for phrase in phrases {
+        let last = toks.len().saturating_sub(phrase.len() - 1);
+        for start in 0..last {
+            if (0..phrase.len()).all(|k| toks[start + k].0 == phrase[k]) {
+                for (_, s, e) in &toks[start..start + phrase.len()] {
+                    spans.push((*s, *e));
+                }
+            }
+        }
+    }
+    spans
 }
 
 /// The phrase's distinct tokens (dedup for scoring — a repeated word

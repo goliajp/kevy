@@ -517,3 +517,70 @@ fn phrase_scores_against_injected_stats() {
     // had scored with its own local df/avgdl they would diverge.
     assert!((ha[0].score - hb[0].score).abs() < 1e-9, "{} vs {}", ha[0].score, hb[0].score);
 }
+
+// ---- highlight spans (step 5e.a) -----------------------------------------
+
+/// A bare term highlights every occurrence, and each span slices back to
+/// the source text (un-lowercased).
+#[test]
+fn highlight_marks_every_term_occurrence() {
+    let text = "Rust is a systems language and rust is fast";
+    let mut s = TextSegment::new();
+    s.apply(b"d", Some(text.as_bytes()));
+    let hl = s.highlight_spans(b"d", b"rust");
+    assert_eq!(hl.len(), 1, "one field");
+    let (fi, spans) = &hl[0];
+    assert_eq!(*fi, 0);
+    let hits: Vec<&str> = spans.iter().map(|(a, b)| &text[*a..*b]).collect();
+    assert_eq!(hits, vec!["Rust", "rust"], "both occurrences, source-cased");
+}
+
+/// A phrase highlights only its adjacent, in-order occurrence — the words
+/// scattered elsewhere are not the phrase.
+#[test]
+fn highlight_marks_only_the_adjacent_phrase() {
+    let text = "the quick brown fox and a quick red brown thing";
+    let mut s = TextSegment::new();
+    s.apply(b"d", Some(text.as_bytes()));
+    let hl = s.highlight_spans(b"d", b"\"quick brown\"");
+    let (_, spans) = &hl[0];
+    let hits: Vec<&str> = spans.iter().map(|(a, b)| &text[*a..*b]).collect();
+    assert_eq!(hits, vec!["quick", "brown"], "only the adjacent pair, not the scattered words");
+}
+
+/// Highlighting reports spans per field, each indexing that field's text.
+#[test]
+fn highlight_is_per_field() {
+    let (f0, f1) = ("rust title", "body about rust systems");
+    let mut s = TextSegment::new();
+    s.apply_fields(b"d", Some(&[(f0.as_bytes().to_vec(), 2.0), (f1.as_bytes().to_vec(), 1.0)]));
+    let hl = s.highlight_spans(b"d", b"rust");
+    assert_eq!(hl.len(), 2, "both fields match");
+    assert_eq!(hl[0].0, 0);
+    assert_eq!(&f0[hl[0].1[0].0..hl[0].1[0].1], "rust");
+    assert_eq!(hl[1].0, 1);
+    assert_eq!(&f1[hl[1].1[0].0..hl[1].1[0].1], "rust");
+}
+
+/// A CJK phrase highlights the bigrams covering the adjacent match.
+#[test]
+fn highlight_cjk_phrase() {
+    let text = "全文检索引擎";
+    let mut s = TextSegment::new();
+    s.apply(b"d", Some(text.as_bytes()));
+    // "检索" is one query bigram — a single-token phrase degrades to a
+    // term, so it highlights the 检索 bigram's span.
+    let hl = s.highlight_spans(b"d", "检索".as_bytes());
+    let (_, spans) = &hl[0];
+    let hits: Vec<&str> = spans.iter().map(|(a, b)| &text[*a..*b]).collect();
+    assert_eq!(hits, vec!["检索"]);
+}
+
+/// An absent key or a query that matches nothing yields no spans.
+#[test]
+fn highlight_absent_or_no_match_is_empty() {
+    let mut s = TextSegment::new();
+    s.apply(b"d", Some(b"rust systems"));
+    assert!(s.highlight_spans(b"nope", b"rust").is_empty(), "absent key");
+    assert!(s.highlight_spans(b"d", b"python").is_empty(), "no match");
+}
