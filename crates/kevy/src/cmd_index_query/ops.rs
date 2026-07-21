@@ -5,7 +5,9 @@ use kevy_index::{IndexValue, ValType};
 use kevy_store::Store;
 
 use super::args::{ComposeQuery, HybridArgs, KnnArgs, MatchArgs, Shape};
-use super::wire::{decode_gstats_arg, encode_agg_chunk, encode_hydration, encode_stats_chunk};
+use super::wire::{
+    decode_gstats_arg, encode_agg_chunk, encode_highlight, encode_hydration, encode_stats_chunk,
+};
 use super::{ST_BADARGS, ST_BUILDING, ST_NOINDEX, ST_OK, ST_OVERBUDGET};
 use crate::index_runtime;
 use crate::state::Ctx;
@@ -32,7 +34,7 @@ pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Ve
     let mut q_tokens = kevy_text::tokenize(&q.text);
     q_tokens.sort();
     q_tokens.dedup();
-    let res = index_runtime::with_ready_text_segment(ctx, store, &q.name, |ts| {
+    let res = index_runtime::with_ready_text_segment(ctx, store, &q.name, |ts, _| {
         let tokdf: Vec<(Vec<u8>, u32)> =
             q_tokens.iter().map(|t| (t.clone(), ts.local_df(t))).collect();
         (ts.stats().docs, ts.total_len(), tokdf)
@@ -51,31 +53,40 @@ pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Ve
 
 /// Text MATCH pass 2 (internal `MATCH.SCORE`): score this shard against
 /// the injected global stats and emit ranked hits + owning-shard
-/// hydration. Chunk `[ST_OK][n][(klen,key,score f64,fcount,fields)*]` —
-/// same layout as KNN, so the reduce shares the decoder.
+/// hydration, and (when HIGHLIGHT was asked) each hit's match spans.
+/// Chunk `[ST_OK][n][(klen,key,score f64,hydration,highlight?)*]` — the
+/// highlight block is present iff the argv carried a HIGHLIGHT clause, a
+/// fact the reduce recovers from the same argv, so the two never drift.
 ///
-/// argv: `[MATCH.SCORE, name, text, LIMIT=<n>, <gstats>, (FIELDS f…)?]`.
+/// argv: `[MATCH.SCORE, name, text, LIMIT=<n>, <gstats>, (FIELDS f…)? (HIGHLIGHT h…)?]`.
 pub(super) fn op_match_score(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
-    let Some((name, text, limit, fields)) = super::args::parse_match_score(argv) else {
+    let Some((name, text, limit, fields, highlight)) = super::args::parse_match_score(argv) else {
         return vec![ST_BADARGS];
     };
     let Some(stats) = argv.get(4).and_then(|b| decode_gstats_arg(b)) else {
         return vec![ST_BADARGS];
     };
-    let res = index_runtime::with_ready_text_segment(ctx, store, &name, |ts| {
+    let res = index_runtime::with_ready_text_segment(ctx, store, &name, |ts, spec| {
         // `matches_query` parses quoted phrases out of the raw query
         // text; with none it is the ordinary term query.
-        ts.matches_query(&text, limit, Some(&stats))
+        let hits = ts.matches_query(&text, limit, Some(&stats));
+        let spans = highlight.as_ref().map(|want| {
+            hits.iter().map(|h| hit_highlight(ts, spec, &h.key, &text, want)).collect::<Vec<_>>()
+        });
+        (hits, spans)
     });
     match res {
-        Ok(hits) => {
+        Ok((hits, spans)) => {
             let mut chunk = vec![ST_OK];
             chunk.extend_from_slice(&(hits.len() as u32).to_le_bytes());
-            for h in &hits {
+            for (i, h) in hits.iter().enumerate() {
                 chunk.extend_from_slice(&(h.key.len() as u32).to_le_bytes());
                 chunk.extend_from_slice(&h.key);
                 chunk.extend_from_slice(&h.score.to_le_bytes());
                 encode_hydration(store, &mut chunk, &h.key, &fields);
+                if let Some(spans) = &spans {
+                    encode_highlight(&mut chunk, &spans[i]);
+                }
             }
             chunk
         }
@@ -83,6 +94,30 @@ pub(super) fn op_match_score(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>])
         Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
         Err(_) => vec![ST_NOINDEX],
     }
+}
+
+/// One hit's highlight spans as `(field name, [(start, end)])`, filtered
+/// to the requested fields (`want` empty = every field with a match).
+/// Field names come from the spec, positionally aligned with the
+/// segment's stored field order.
+fn hit_highlight(
+    ts: &kevy_text::TextSegment,
+    spec: &kevy_index::IndexSpec,
+    key: &[u8],
+    text: &[u8],
+    want: &[Vec<u8>],
+) -> super::HitSpans {
+    ts.highlight_spans(key, text)
+        .into_iter()
+        .filter_map(|(fi, spans)| {
+            let name = spec.fields.get(fi)?.name.clone();
+            if !want.is_empty() && !want.contains(&name) {
+                return None;
+            }
+            let ranges = spans.into_iter().map(|(s, e)| (s as u32, e as u32)).collect();
+            Some((name, ranges))
+        })
+        .collect()
 }
 
 /// Agg per-shard. Chunk (both shapes):
@@ -202,7 +237,7 @@ pub(super) fn op_hybrid(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> V
         return vec![ST_BADARGS];
     };
     let depth = q.limit * 4;
-    let m = index_runtime::with_ready_text_segment(ctx, store, &q.text_idx, |ts| {
+    let m = index_runtime::with_ready_text_segment(ctx, store, &q.text_idx, |ts, _| {
         ts.matches(&q.text, depth)
     });
     let k = index_runtime::with_ready_ann(ctx, store, &q.ann_idx, |g| {

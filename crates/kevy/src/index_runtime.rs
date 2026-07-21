@@ -150,7 +150,7 @@ pub(crate) fn with_ready_text_segment<R>(
     ctx: &Ctx<'_>,
     store: &mut Store,
     name: &[u8],
-    f: impl FnOnce(&kevy_text::TextSegment) -> R,
+    f: impl FnOnce(&kevy_text::TextSegment, &kevy_index::IndexSpec) -> R,
 ) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st, store);
@@ -160,7 +160,7 @@ pub(crate) fn with_ready_text_segment<R>(
         .find(|si| si.spec.name == name)
         .ok_or("ERR no such index")?;
     match (&si.build, &si.text) {
-        (BuildState::Ready, Some(ts)) => Ok(f(ts)),
+        (BuildState::Ready, Some(ts)) => Ok(f(ts, &si.spec)),
         (BuildState::Backfilling { .. }, _) => Err(CmdError::Wire("INDEXBUILDING index is still building")),
         (BuildState::FailedOverBudget, _) => Err(CmdError::Wire("INDEXOVERBUDGET index build exceeded MAXMEM")),
         (_, None) => Err(CmdError::Wire("ERR not a text index")),

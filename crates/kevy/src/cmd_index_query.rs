@@ -21,6 +21,12 @@ use crate::state::Ctx;
 /// One hit's hydrated field values (None = field absent).
 pub(crate) type Hydrated = Vec<Option<Vec<u8>>>;
 
+/// One field's highlight: its name and the `(start, end)` match spans.
+pub(crate) type FieldSpans = (Vec<u8>, Vec<(u32, u32)>);
+/// One hit's highlight: [`FieldSpans`] per matched field. Shared across
+/// the per-shard op, the wire codec and the reduce.
+pub(crate) type HitSpans = Vec<FieldSpans>;
+
 // ---------- extension fan-out (reads) ----------
 
 pub(crate) const ST_OK: u8 = 0;
