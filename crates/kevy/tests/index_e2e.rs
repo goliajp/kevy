@@ -770,3 +770,69 @@ fn offset_pages_the_merged_ranking() {
     );
     assert_eq!(String::from_utf8_lossy(&past).matches("o:").count(), 0, "past the end is empty");
 }
+
+/// `IN <field…>` scopes a MATCH to the named fields over the real
+/// cross-shard fan-out: the two-pass statistics are gathered over those
+/// fields, so it is a field-scoped BM25, and naming a field the index
+/// does not declare is an error rather than an empty result.
+#[test]
+fn field_scope_over_the_wire() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    cmd(&mut c, &[b"HSET", b"f:1", b"title", b"rust engine", b"body", b"a long body about gardening"]);
+    cmd(&mut c, &[b"HSET", b"f:2", b"title", b"gardening weekly", b"body", b"this body mentions rust once or twice"]);
+    let r = cmd(
+        &mut c,
+        &[b"IDX.CREATE", b"fs", b"ON", b"PREFIX", b"f:", b"FIELDS", b"title", b"body",
+          b"TYPE", b"str", b"KIND", b"text", b"WITH", b"POSITIONS"],
+    );
+    assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
+
+    // Unscoped: both rows mention rust somewhere.
+    let all = query_ready(&mut c, &[b"IDX.QUERY", b"fs", b"MATCH", b"rust", b"LIMIT", b"5"]);
+    let s = String::from_utf8_lossy(&all);
+    assert!(s.contains("f:1") && s.contains("f:2"), "both match unscoped: {s}");
+
+    // Scoped to the title, only f:1 does.
+    let title = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"fs", b"MATCH", b"rust", b"LIMIT", b"5", b"IN", b"title"],
+    );
+    let s = String::from_utf8_lossy(&title);
+    assert!(s.contains("f:1"), "the title match survives: {s}");
+    assert!(!s.contains("f:2"), "the body-only row is out of scope: {s}");
+
+    // Scoped to the body, only f:2.
+    let body = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"fs", b"MATCH", b"rust", b"LIMIT", b"5", b"IN", b"body"],
+    );
+    let s = String::from_utf8_lossy(&body);
+    assert!(s.contains("f:2") && !s.contains("f:1"), "body scope: {s}");
+
+    // Naming both fields is the unscoped query again.
+    let both = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"fs", b"MATCH", b"rust", b"LIMIT", b"5", b"IN", b"title", b"body"],
+    );
+    let s = String::from_utf8_lossy(&both);
+    assert!(s.contains("f:1") && s.contains("f:2"), "every field = unscoped: {s}");
+
+    // IN composes with the other clauses.
+    let combo = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"fs", b"MATCH", b"rusty", b"LIMIT", b"5", b"IN", b"title", b"TYPO", b"1"],
+    );
+    let s = String::from_utf8_lossy(&combo);
+    assert!(s.contains("f:1") && !s.contains("f:2"), "typo inside the title scope: {s}");
+
+    // An undeclared field errors, and the error says what IS indexed.
+    let bad = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"fs", b"MATCH", b"rust", b"LIMIT", b"5", b"IN", b"titel"],
+    );
+    let s = String::from_utf8_lossy(&bad);
+    assert!(s.starts_with("-ERR"), "undeclared field is an error: {s}");
+    assert!(s.contains("titel"), "names the offending field: {s}");
+    assert!(s.contains("title") && s.contains("body"), "lists the declared fields: {s}");
+}

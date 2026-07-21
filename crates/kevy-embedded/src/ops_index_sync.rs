@@ -7,15 +7,12 @@ use kevy_index::{IndexKind, IndexSpec, IndexValue, Segment};
 
 use crate::ops_index::{IndexReg, ShardSegs};
 
-/// A fresh text segment matching the spec's positions mode — the one
-/// place the `WITH POSITIONS` flag turns into a positional side-channel.
+/// A fresh text segment shaped by the spec: as many separately scored
+/// fields as it declares (the breakdown `IN <field…>` scopes to), and a
+/// positional side-channel when it asked for `WITH POSITIONS`.
 #[cfg(feature = "text")]
 pub(crate) fn new_text(spec: &IndexSpec) -> kevy_text::TextSegment {
-    if spec.with_positions {
-        kevy_text::TextSegment::with_positions()
-    } else {
-        kevy_text::TextSegment::new()
-    }
+    kevy_text::TextSegment::with_fields(spec.fields.len(), spec.with_positions)
 }
 
 #[cfg(feature = "vector")]

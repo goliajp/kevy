@@ -12,9 +12,9 @@
     /// unfiltered rows, which is a wrong answer wearing a success reply.
     #[test]
     fn reserved_clauses_are_refused_by_name() {
-        // HIGHLIGHT is no longer here — it ships now (see the highlight
-        // tests below); the rest stay reserved-by-name.
-        for clause in ["IN", "FILTER", "FACET", "SORT", "DISTINCT"] {
+        // HIGHLIGHT and IN are no longer here — they ship now (see the
+        // clause tests below); the rest stay reserved-by-name.
+        for clause in ["FILTER", "FACET", "SORT", "DISTINCT"] {
             let a = argv(&["IDX.QUERY", "idx", "MATCH", "hello", clause, "x"]);
             match MatchArgs::parse_terminal(&a) {
                 MatchParse::NotYet(c) => {
@@ -124,4 +124,55 @@ fn offset_parses() {
     }
     let bad = argv(&["IDX.QUERY", "idx", "MATCH", "hello", "OFFSET", "x"]);
     assert!(matches!(MatchArgs::parse_terminal(&bad), MatchParse::BadArgs));
+}
+
+/// IN ships now: it names the declared fields a query scores within, and
+/// coexists with every other clause in any order.
+#[test]
+fn scope_parses() {
+    let none = argv(&["IDX.QUERY", "idx", "MATCH", "hello"]);
+    assert!(matches!(MatchArgs::parse_terminal(&none), MatchParse::Ok(q) if q.scope.is_empty()));
+
+    let one = argv(&["IDX.QUERY", "idx", "MATCH", "hello", "IN", "title"]);
+    match MatchArgs::parse_terminal(&one) {
+        MatchParse::Ok(q) => assert_eq!(q.scope, vec![b"title".to_vec()]),
+        _ => panic!("IN <field> should parse"),
+    }
+
+    // Variadic, and it stops at the next clause keyword rather than
+    // swallowing it.
+    let many =
+        argv(&["IDX.QUERY", "idx", "MATCH", "hi", "IN", "title", "body", "LIMIT", "3", "TYPO", "1"]);
+    match MatchArgs::parse_terminal(&many) {
+        MatchParse::Ok(q) => {
+            assert_eq!(q.scope, vec![b"title".to_vec(), b"body".to_vec()]);
+            assert_eq!(q.limit, 3);
+            assert_eq!(q.typo, 1);
+        }
+        _ => panic!("IN must stop at the next keyword"),
+    }
+
+    // An empty IN is a syntax error, not "every field" — the query said
+    // it wanted a scope.
+    let empty = argv(&["IDX.QUERY", "idx", "MATCH", "hi", "IN"]);
+    assert!(matches!(MatchArgs::parse_terminal(&empty), MatchParse::BadArgs));
+}
+
+/// Pass 2 parses the clauses with the same code pass 1 does, so a clause
+/// cannot mean one thing to the shard fan-out and another to the merge.
+#[test]
+fn pass_two_reparses_every_clause() {
+    let argv2 = argv(&[
+        "MATCH.SCORE", "idx", "hello", "LIMIT=7", "<gstats>", "FIELDS", "a", "HIGHLIGHT", "TYPO",
+        "2", "OFFSET", "4", "IN", "title", "body",
+    ]);
+    let q = crate::cmd_index_query::parse_match_score(&argv2).expect("pass-2 argv parses");
+    assert_eq!(q.name, b"idx".to_vec());
+    assert_eq!(q.text, b"hello".to_vec());
+    assert_eq!(q.limit, 7);
+    assert_eq!(q.fields, vec![b"a".to_vec()]);
+    assert_eq!(q.highlight, Some(Vec::new()), "bare HIGHLIGHT = every field");
+    assert_eq!(q.typo, 2);
+    assert_eq!(q.offset, 4);
+    assert_eq!(q.scope, vec![b"title".to_vec(), b"body".to_vec()]);
 }

@@ -31,26 +31,23 @@ pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Ve
             return chunk;
         }
     };
-    let res = index_runtime::with_ready_text_segment(ctx, store, &q.name, |ts, _| {
-        // `query_df_terms` expands `word*` prefixes against this shard's
+    let res = index_runtime::with_ready_text_segment(ctx, store, &q.name, |ts, spec| {
+        let want = scope_positions(spec, &q.scope)?;
+        // `query_df_in` expands `word*` prefixes against this shard's
         // dictionary, so the reported df covers the prefix's expansion
-        // terms too — the reduce unions them across shards.
-        let tokdf: Vec<(Vec<u8>, u32)> = ts
-            .query_df_terms_typo(&q.text, q.typo)
-            .into_iter()
-            .map(|t| {
-                let d = ts.local_df(&t);
-                (t, d)
-            })
-            .collect();
-        (ts.stats().docs, ts.total_len(), tokdf)
+        // terms too — the reduce unions them across shards — and counts
+        // over the query's field scope, so a scoped query's global
+        // statistics describe those fields rather than whole documents.
+        let opts = kevy_text::QueryOpts { stats: None, typo: q.typo, fields: &want };
+        Ok((ts.stats().docs, ts.total_len_in(&want), ts.query_df_in(&q.text, opts)))
     });
     match res {
-        Ok((n_docs, total_len, tokdf)) => {
+        Ok(Ok((n_docs, total_len, tokdf))) => {
             let mut chunk = Vec::new();
             encode_stats_chunk(&mut chunk, n_docs, total_len, &tokdf);
             chunk
         }
+        Ok(Err(chunk)) => chunk,
         Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
         Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
         Err(_) => vec![ST_NOINDEX],
@@ -66,34 +63,36 @@ pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Ve
 ///
 /// argv: `[MATCH.SCORE, name, text, LIMIT=<n>, <gstats>, (FIELDS f…)? (HIGHLIGHT h…)?]`.
 pub(super) fn op_match_score(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
-    let Some((name, text, limit, fields, highlight, typo, offset)) =
-        super::args::parse_match_score(argv)
-    else {
+    let Some(q) = super::args::parse_match_score(argv) else {
         return vec![ST_BADARGS];
     };
     let Some(stats) = argv.get(4).and_then(|b| decode_gstats_arg(b)) else {
         return vec![ST_BADARGS];
     };
-    let res = index_runtime::with_ready_text_segment(ctx, store, &name, |ts, spec| {
-        // `matches_query` parses quoted phrases out of the raw query
+    let res = index_runtime::with_ready_text_segment(ctx, store, &q.name, |ts, spec| {
+        // `matches_query_with` parses quoted phrases out of the raw query
         // text; with none it is the ordinary term query.
         // Fetch deep enough for the origin to skip OFFSET and still fill
         // LIMIT: a shard cannot know which of its hits survive the merge.
-        let hits = ts.matches_query_typo(&text, limit + offset, Some(&stats), typo);
-        let spans = highlight.as_ref().map(|want| {
-            hits.iter().map(|h| hit_highlight(ts, spec, &h.key, &text, want)).collect::<Vec<_>>()
+        let scope = scope_positions(spec, &q.scope)?;
+        let opts =
+            kevy_text::QueryOpts { stats: Some(&stats), typo: q.typo, fields: &scope };
+        let hits = ts.matches_query_with(&q.text, q.limit + q.offset, opts);
+        let spans = q.highlight.as_ref().map(|want| {
+            hits.iter().map(|h| hit_highlight(ts, spec, &h.key, &q.text, want)).collect::<Vec<_>>()
         });
-        (hits, spans)
+        Ok((hits, spans))
     });
     match res {
-        Ok((hits, spans)) => {
+        Ok(Err(chunk)) => chunk,
+        Ok(Ok((hits, spans))) => {
             let mut chunk = vec![ST_OK];
             chunk.extend_from_slice(&(hits.len() as u32).to_le_bytes());
             for (i, h) in hits.iter().enumerate() {
                 chunk.extend_from_slice(&(h.key.len() as u32).to_le_bytes());
                 chunk.extend_from_slice(&h.key);
                 chunk.extend_from_slice(&h.score.to_le_bytes());
-                encode_hydration(store, &mut chunk, &h.key, &fields);
+                encode_hydration(store, &mut chunk, &h.key, &q.fields);
                 if let Some(spans) = &spans {
                     encode_highlight(&mut chunk, &spans[i]);
                 }
@@ -104,6 +103,37 @@ pub(super) fn op_match_score(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>])
         Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
         Err(_) => vec![ST_NOINDEX],
     }
+}
+
+/// Map an `IN <field…>` clause's names onto the segment's field
+/// positions, in declaration order.
+///
+/// `Err` carries a ready-made error chunk naming the field that is not
+/// declared, and listing the ones that are. Scoping to an undeclared
+/// field could just match nothing — but a typo in a field name would
+/// then return an empty result that looks exactly like a working query
+/// over a corpus with no hits, which is the one failure mode a search
+/// engine must not have.
+fn scope_positions(
+    spec: &kevy_index::IndexSpec,
+    scope: &[Vec<u8>],
+) -> Result<Vec<usize>, Vec<u8>> {
+    let mut out = Vec::with_capacity(scope.len());
+    for want in scope {
+        match spec.fields.iter().position(|f| f.name == *want) {
+            Some(i) => out.push(i),
+            None => {
+                let declared: Vec<Vec<u8>> =
+                    spec.fields.iter().map(|f| f.name.clone()).collect();
+                let mut chunk = vec![crate::cmd_index_query::ST_NOFIELD];
+                chunk.extend_from_slice(want);
+                chunk.push(0);
+                chunk.extend_from_slice(&declared.join(&b", "[..]));
+                return Err(chunk);
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// One hit's highlight spans as `(field name, [(start, end)])`, filtered

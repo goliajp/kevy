@@ -176,6 +176,8 @@ pub use ops_snapshot_view::{Snapshot, SnapshotEntry};
 pub use ops_reconcile::ReconcileReport;
 #[cfg(feature = "index")]
 pub use ops_index::IndexPage;
+#[cfg(feature = "text")]
+pub use ops_index::highlight::MatchOpts;
 #[cfg(feature = "index")]
 pub use ops_view::ViewPage;
 #[cfg(feature = "index")]
