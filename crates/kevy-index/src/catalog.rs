@@ -128,6 +128,30 @@ impl FieldSpec {
     }
 }
 
+/// One stored value field: which hash field it reads, and how its bytes
+/// compare.
+///
+/// The type is declared, not guessed per query. A numeric range compared
+/// lexicographically is silently wrong — `"9"` sorts above `"10"` — and
+/// deciding it by whether both sides happen to parse as a number would
+/// make the answer depend on the data. Declaring it also means `SORT` and
+/// `FACET` inherit an order and an identity rather than re-deciding one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValueSpec {
+    /// Hash field name.
+    pub name: Vec<u8>,
+    /// How the stored bytes compare.
+    pub ty: ValType,
+}
+
+impl ValueSpec {
+    /// A value field compared as text — the default when no type is
+    /// declared for it.
+    pub fn new(name: impl Into<Vec<u8>>) -> ValueSpec {
+        ValueSpec { name: name.into(), ty: ValType::Str }
+    }
+}
+
 /// One declared index.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IndexSpec {
@@ -161,7 +185,7 @@ pub struct IndexSpec {
     /// time, `SORT` / `DISTINCT` / `FACET` — have something to read.
     /// Empty by default: an index that never filters does not pay for
     /// the stored column.
-    pub values: Vec<Vec<u8>>,
+    pub values: Vec<ValueSpec>,
 }
 
 /// HNSW declaration (immutable once created).
@@ -213,7 +237,7 @@ impl IndexSpec {
                 fields.push((raw, f.weight));
             }
         }
-        let values = self.values.iter().map(|v| get(v)).collect();
+        let values = self.values.iter().map(|v| get(&v.name)).collect();
         (fields, values)
     }
 
