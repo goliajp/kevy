@@ -58,6 +58,8 @@ struct Tail {
     highlight: Option<Vec<Vec<u8>>>,
     /// `TYPO n`: edit budget for each bare term; 0 = exact.
     typo: u32,
+    /// `OFFSET n`: hits to skip before `LIMIT`.
+    offset: usize,
 }
 
 /// A tail clause keyword — the boundary a variadic clause collects up to.
@@ -67,6 +69,7 @@ fn is_tail_keyword(a: &[u8]) -> bool {
         || a.eq_ignore_ascii_case(b"FIELDS")
         || a.eq_ignore_ascii_case(b"HIGHLIGHT")
         || a.eq_ignore_ascii_case(b"TYPO")
+        || a.eq_ignore_ascii_case(b"OFFSET")
 }
 
 /// Collect a variadic clause's args from `start` until the next keyword.
@@ -93,40 +96,56 @@ fn parse_tail(
         fields: Vec::new(),
         highlight: None,
         typo: 0,
+        offset: 0,
     };
     while i < argv.len() {
-        let a = &argv[i];
-        if a.eq_ignore_ascii_case(b"LIMIT") {
-            t.limit = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
-            i += 2;
-        } else if a.eq_ignore_ascii_case(b"CURSOR") {
-            t.cursor_raw = Some(argv.get(i + 1)?.clone());
-            i += 2;
-        } else if a.eq_ignore_ascii_case(b"FIELDS") {
-            let (fs, next) = collect_until_keyword(argv, i + 1);
-            if fs.is_empty() {
-                return None;
-            }
-            t.fields = fs;
-            i = next;
-        } else if match_clauses && a.eq_ignore_ascii_case(b"HIGHLIGHT") {
-            let (hs, next) = collect_until_keyword(argv, i + 1);
-            t.highlight = Some(hs);
-            i = next;
-        } else if match_clauses && a.eq_ignore_ascii_case(b"TYPO") {
-            t.typo = match argv.get(i + 1)?.as_slice() {
-                b"0" => 0,
-                b"1" => 1,
-                b"2" => 2,
-                _ => return None,
-            };
-            i += 2;
-        } else {
-            return None;
-        }
+        i = apply_tail_clause(argv, i, &mut t, match_clauses)?;
     }
     t.limit = t.limit.clamp(1, cap);
     Some(t)
+}
+
+/// Apply the tail clause starting at `i`; returns the next index, or
+/// `None` on a syntax error. `match_clauses` gates the MATCH-only ones
+/// (HIGHLIGHT / TYPO / OFFSET) so a RANGE query cannot smuggle them in.
+fn apply_tail_clause(
+    argv: &[Vec<u8>],
+    i: usize,
+    t: &mut Tail,
+    match_clauses: bool,
+) -> Option<usize> {
+    let a = &argv[i];
+    if a.eq_ignore_ascii_case(b"LIMIT") {
+        t.limit = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
+        Some(i + 2)
+    } else if a.eq_ignore_ascii_case(b"CURSOR") {
+        t.cursor_raw = Some(argv.get(i + 1)?.clone());
+        Some(i + 2)
+    } else if a.eq_ignore_ascii_case(b"FIELDS") {
+        let (fs, next) = collect_until_keyword(argv, i + 1);
+        if fs.is_empty() {
+            return None;
+        }
+        t.fields = fs;
+        Some(next)
+    } else if match_clauses && a.eq_ignore_ascii_case(b"HIGHLIGHT") {
+        let (hs, next) = collect_until_keyword(argv, i + 1);
+        t.highlight = Some(hs);
+        Some(next)
+    } else if match_clauses && a.eq_ignore_ascii_case(b"TYPO") {
+        t.typo = match argv.get(i + 1)?.as_slice() {
+            b"0" => 0,
+            b"1" => 1,
+            b"2" => 2,
+            _ => return None,
+        };
+        Some(i + 2)
+    } else if match_clauses && a.eq_ignore_ascii_case(b"OFFSET") {
+        t.offset = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
+        Some(i + 2)
+    } else {
+        None
+    }
 }
 
 /// One hydrated row: `*(1|2)+2F [key, value?, (fname, fval|nil)…]` —
@@ -253,7 +272,7 @@ fn text_match(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
             return badargs(out, "IDX.QUERY", name);
         };
         let want = tail.highlight.as_deref();
-        match s.idx_match_highlighted(name, text, tail.limit, want, tail.typo) {
+        match s.idx_match_highlighted(name, text, tail.limit, want, tail.typo, tail.offset) {
             Err(e) => idx_err(out, name, &e),
             Ok(hits) if want.is_some() => emit_ranked_highlighted(s, out, &hits, &tail.fields),
             Ok(hits) => {
@@ -366,7 +385,7 @@ fn knn(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
 #[cfg(feature = "vector")]
 fn parse_knn_tail(argv: &[Vec<u8>]) -> Option<(Tail, usize)> {
     let mut t =
-        Tail { limit: 10, cursor_raw: None, fields: Vec::new(), highlight: None, typo: 0 };
+        Tail { limit: 10, cursor_raw: None, fields: Vec::new(), highlight: None, typo: 0, offset: 0 };
     let mut ef = 0usize;
     let mut i = 4;
     while i < argv.len() {

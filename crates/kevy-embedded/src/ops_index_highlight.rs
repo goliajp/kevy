@@ -20,8 +20,13 @@ impl Store {
         limit: usize,
         highlight: Option<&[Vec<u8>]>,
         typo: u32,
+        offset: usize,
     ) -> KevyResult<Vec<HighlightedHit>> {
         let limit = limit.clamp(1, 1000);
+        let offset = offset.min(10_000);
+        // Fetch deep enough to skip OFFSET and still fill LIMIT after the
+        // cross-shard merge.
+        let fetch = limit + offset;
         let stats = self.text_corpus_stats(name, query, typo)?;
         let mut all: Vec<HighlightedHit> = Vec::new();
         for shard in self.shards.iter() {
@@ -31,7 +36,7 @@ impl Store {
             if let Some((spec, ts)) = inner.idx_segs.text.iter().find(|(s, _)| s.name == name) {
                 // `matches_query` parses quoted phrases out of the raw
                 // query text; with none it is the ordinary term query.
-                for m in ts.matches_query_typo(query, limit, Some(&stats), typo) {
+                for m in ts.matches_query_typo(query, fetch, Some(&stats), typo) {
                     let hl =
                         highlight.map_or_else(Vec::new, |w| hit_highlight(ts, spec, &m.key, query, w));
                     all.push((m.key, m.score, hl));
@@ -39,6 +44,9 @@ impl Store {
             }
         }
         all.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        if offset > 0 {
+            all.drain(..offset.min(all.len()));
+        }
         all.truncate(limit);
         Ok(all)
     }

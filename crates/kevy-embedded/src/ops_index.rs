@@ -264,7 +264,7 @@ impl Store {
         limit: usize,
     ) -> KevyResult<Vec<(Vec<u8>, f64)>> {
         Ok(self
-            .idx_match_highlighted(name, query, limit, None, 0)?
+            .idx_match_highlighted(name, query, limit, None, 0, 0)?
             .into_iter()
             .map(|(key, score, _)| (key, score))
             .collect())

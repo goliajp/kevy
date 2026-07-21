@@ -66,7 +66,8 @@ pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Ve
 ///
 /// argv: `[MATCH.SCORE, name, text, LIMIT=<n>, <gstats>, (FIELDS f…)? (HIGHLIGHT h…)?]`.
 pub(super) fn op_match_score(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
-    let Some((name, text, limit, fields, highlight, typo)) = super::args::parse_match_score(argv)
+    let Some((name, text, limit, fields, highlight, typo, offset)) =
+        super::args::parse_match_score(argv)
     else {
         return vec![ST_BADARGS];
     };
@@ -76,7 +77,9 @@ pub(super) fn op_match_score(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>])
     let res = index_runtime::with_ready_text_segment(ctx, store, &name, |ts, spec| {
         // `matches_query` parses quoted phrases out of the raw query
         // text; with none it is the ordinary term query.
-        let hits = ts.matches_query_typo(&text, limit, Some(&stats), typo);
+        // Fetch deep enough for the origin to skip OFFSET and still fill
+        // LIMIT: a shard cannot know which of its hits survive the merge.
+        let hits = ts.matches_query_typo(&text, limit + offset, Some(&stats), typo);
         let spans = highlight.as_ref().map(|want| {
             hits.iter().map(|h| hit_highlight(ts, spec, &h.key, &text, want)).collect::<Vec<_>>()
         });
