@@ -75,7 +75,7 @@ pub(super) fn emit_row(
 
 #[path = "idx_query_tail.rs"]
 mod tail;
-use tail::{Tail, parse_tail};
+use tail::parse_tail;
 
 fn cmd_idx_query(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let Some(name) = argv.get(1) else {
@@ -297,9 +297,9 @@ fn knn(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
 
 /// `[LIMIT k] [EF e] [FIELDS f…]` tail for KNN (EF bounds 16..=4096).
 #[cfg(feature = "vector")]
-fn parse_knn_tail(argv: &[Vec<u8>]) -> Option<(Tail, usize)> {
+fn parse_knn_tail(argv: &[Vec<u8>]) -> Option<(tail::Tail, usize)> {
     let mut t =
-        Tail {
+        tail::Tail {
             limit: 10,
             cursor_raw: None,
             fields: Vec::new(),
