@@ -15,7 +15,7 @@ pub(crate) fn new_text(spec: &IndexSpec) -> kevy_text::TextSegment {
     kevy_text::TextSegment::with_shape(kevy_text::SegmentShape {
         fields: spec.fields.len(),
         positions: spec.with_positions,
-        values: 0,
+        values: spec.values.len(),
     })
 }
 
@@ -173,19 +173,15 @@ fn apply_text_key(
     ts: &mut kevy_text::TextSegment,
     key: &[u8],
 ) {
-    // Every declared field, each with its weight -- they score into one
-    // corpus, which is the whole reason multi-field is a spec change
-    // rather than several single-field indexes.
-    let mut fields: Vec<(Vec<u8>, f32)> = Vec::with_capacity(spec.fields.len());
-    for f in &spec.fields {
-        if let Ok(Some(raw)) = store.hget(key, &f.name) {
-            fields.push((raw.to_vec(), f.weight));
-        }
-    }
+    // The spec owns what it reads out of a row -- declared fields with
+    // their weights, declared stored values -- so this path and the
+    // server's cannot index the same row differently.
+    let (fields, values) = spec.read_row(|f| store.hget(key, f).ok().flatten().map(|v| v.to_vec()));
+    let vals: Vec<Option<&[u8]>> = values.iter().map(|v| v.as_deref()).collect();
     if fields.is_empty() {
-        ts.apply_fields(key, None);
+        ts.apply_doc(key, None, &vals);
     } else {
-        ts.apply_fields(key, Some(&fields));
+        ts.apply_doc(key, Some(&fields), &vals);
     }
 }
 

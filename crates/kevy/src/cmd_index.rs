@@ -45,10 +45,10 @@ fn persist_sidecar(dir: Option<&Path>, cat: &Catalog) {
 // ---------- catalog mutations (Local dispatch) ----------
 
 /// `IDX.CREATE <name> ON PREFIX <p> FIELD <f> | FIELDS <f…> [WEIGHTS <w…>]
-/// TYPE <t> KIND <k> [WITH POSITIONS] [MAXMEM b] [DIM d] [DISTANCE cosine|l2|ip] [M m] [EF ef]`.
+/// TYPE <t> KIND <k> [WITH POSITIONS] [VALUES f…] [MAXMEM b] [DIM d] [DISTANCE cosine|l2|ip] [M m] [EF ef]`.
 /// `FIELDS` and `WITH POSITIONS` are text-only; every other kind takes
 /// one `FIELD` and no positions.
-const CREATE_USAGE: &str = "ERR usage: IDX.CREATE name ON PREFIX p FIELD f | FIELDS f… [WEIGHTS w…] TYPE i64|f64|str|vector KIND range|unique|text|ann [WITH POSITIONS] [MAXMEM b] [DIM d] [DISTANCE c] [M m] [EF e]";
+const CREATE_USAGE: &str = "ERR usage: IDX.CREATE name ON PREFIX p FIELD f | FIELDS f… [WEIGHTS w…] TYPE i64|f64|str|vector KIND range|unique|text|ann [WITH POSITIONS] [VALUES f…] [MAXMEM b] [DIM d] [DISTANCE c] [M m] [EF e]";
 
 /// Parse the field clause and return the fields plus the argv index of
 /// the `TYPE` keyword that follows it.
@@ -164,6 +164,7 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(
         ann,
         group_by: opts.group_by,
         with_positions: opts.with_positions,
+        values: opts.values,
     };
     install_new_index(ctx, spec, out);
 }
@@ -214,6 +215,27 @@ struct CreateOpts {
     distance: u8,
     group_by: Option<Vec<u8>>,
     with_positions: bool,
+    values: Vec<Vec<u8>>,
+}
+
+/// The option keywords the CREATE tail understands — the boundary the
+/// variadic `VALUES` collects up to.
+fn is_create_opt(a: &[u8]) -> bool {
+    for kw in [
+        b"WITH".as_slice(),
+        b"MAXMEM",
+        b"DIM",
+        b"M",
+        b"EF",
+        b"GROUPBY",
+        b"DISTANCE",
+        b"VALUES",
+    ] {
+        if a.eq_ignore_ascii_case(kw) {
+            return true;
+        }
+    }
+    false
 }
 
 /// A parsed integer clamped to `[lo, hi]`, or an error already written.
@@ -242,9 +264,28 @@ fn parse_create_opts<A: ArgvView + ?Sized>(
         distance: 0,
         group_by: None,
         with_positions: false,
+        values: Vec::new(),
     };
     let mut i = start;
-    while i + 1 < args.len() {
+    while i < args.len() {
+        // `VALUES f…` is variadic, like `FIELDS`: it collects names up to
+        // the next option keyword. Everything else is a key/value pair.
+        if args[i].eq_ignore_ascii_case(b"VALUES") {
+            let mut j = i + 1;
+            while j < args.len() && !is_create_opt(&args[j]) {
+                o.values.push(args[j].to_vec());
+                j += 1;
+            }
+            if o.values.is_empty() {
+                encode_error(out, "ERR VALUES needs at least one field name");
+                return Err(());
+            }
+            i = j;
+            continue;
+        }
+        if i + 1 >= args.len() {
+            break;
+        }
         apply_create_opt(&args[i], &args[i + 1], &mut o, out)?;
         i += 2;
     }
