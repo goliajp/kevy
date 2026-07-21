@@ -30,7 +30,7 @@ env KEVY_BIND=127.0.0.1 $PIN "$BIN" --threads 8 --port $PORT --dir "$DIR" --no-a
 SRV=$!
 sleep 1.2
 
-$CLIENT_PIN python3 - "$PORT" "$SRV" "${POSITIONS:-0}" <<'PYEOF'
+$CLIENT_PIN python3 - "$PORT" "$SRV" "${POSITIONS:-0}" "${PREFIX:-0}" <<'PYEOF'
 import socket, sys, time
 
 port = int(sys.argv[1])
@@ -38,8 +38,11 @@ srv_pid = int(sys.argv[2])
 # POSITIONS=1 creates the index WITH POSITIONS and measures phrase-query
 # p95 instead of term p95 — the positional side-channel's memory (its
 # term in the IDX.VERIFY formula) and phrase latency are step 5's lx64
-# half. The default (0) is the pre-positions gate, byte-unchanged.
+# half. PREFIX=1 measures `word*` prefix-query p95 — the dictionary scan
+# cost that decides whether an ordered structure / FST is needed
+# (step 6). The default (0/0) is the pre-positions gate, byte-unchanged.
 with_pos = len(sys.argv) > 3 and sys.argv[3] == "1"
+with_prefix = len(sys.argv) > 4 and sys.argv[4] == "1"
 
 def connect():
     s = socket.create_connection(("127.0.0.1", port))
@@ -161,7 +164,14 @@ print(f"textgate: text index built in {time.time()-t0:.1f}s")
 # are not a tight SLA. A dedicated bench box — the perfgate discipline —
 # would set both lower; until then they are regression guards, not
 # promises. Measured here: term ~27ms, phrase ~102ms.
-if with_pos:
+if with_prefix:
+    # `word*` prefixes of varying breadth; the scan is O(dictionary)
+    # regardless, which is exactly the cost being weighed against an
+    # ordered structure. The doc-marker tokens make this a ~1M-term
+    # dictionary — a deliberate stress.
+    queries = [("w1*",), ("w50*",), ("w9*",), ("w123*",), ("w7*",)]
+    p95_limit = 200.0
+elif with_pos:
     queries = [('"w0 w1"',), ('"w2 w300"',), ('"w0 w9000"',),
                ('"w100 w4000"',), ('"w5 w50"',)]
     p95_limit = 150.0
