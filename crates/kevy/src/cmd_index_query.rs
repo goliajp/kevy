@@ -10,7 +10,8 @@ mod query;
 mod wire;
 
 pub(crate) use args::{
-    ComposeQuery, HybridArgs, KnnArgs, MatchArgs, Query, parse_groups_args, parse_match_score,
+    ComposeQuery, FilterShape, HybridArgs, KnnArgs, MatchArgs, Query, parse_groups_args,
+    parse_match_score,
 };
 pub(crate) use wire::{decode_value, decode_view_cursor, encode_value, hex};
 
@@ -40,10 +41,13 @@ pub(crate) const ST_OVERBUDGET: u8 = 4;
 /// people hunting for a typo in correct syntax. The chunk carries the
 /// clause name after the status byte.
 pub(crate) const ST_NOTYET: u8 = 5;
-/// `IN` named a field the index does not declare. The chunk carries the
-/// offending name, a NUL, then the declared names — so the error can say
-/// what IS there instead of leaving the caller to guess.
-pub(crate) const ST_NOFIELD: u8 = 6;
+/// A clause the parser accepted but this index cannot answer — `IN`
+/// naming an undeclared field, `FILTER` naming an unstored one, a bound
+/// that is not of the declared type. The chunk carries the whole
+/// explanation, because only the shard holding the spec knows what IS
+/// declared, and "bad arguments" would send the caller hunting for a
+/// typo in correct syntax.
+pub(crate) const ST_CLAUSE: u8 = 6;
 
 /// Per-shard half: parse the IDX.* argv, run against this shard's
 /// segment, emit a status-tagged chunk.

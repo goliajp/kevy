@@ -12,9 +12,9 @@
     /// unfiltered rows, which is a wrong answer wearing a success reply.
     #[test]
     fn reserved_clauses_are_refused_by_name() {
-        // HIGHLIGHT and IN are no longer here — they ship now (see the
-        // clause tests below); the rest stay reserved-by-name.
-        for clause in ["FILTER", "FACET", "SORT", "DISTINCT"] {
+        // HIGHLIGHT, IN and FILTER are no longer here — they ship now
+        // (see the clause tests below); the rest stay reserved-by-name.
+        for clause in ["FACET", "SORT", "DISTINCT"] {
             let a = argv(&["IDX.QUERY", "idx", "MATCH", "hello", clause, "x"]);
             match MatchArgs::parse_terminal(&a) {
                 MatchParse::NotYet(c) => {
@@ -175,4 +175,51 @@ fn pass_two_reparses_every_clause() {
     assert_eq!(q.typo, 2);
     assert_eq!(q.offset, 4);
     assert_eq!(q.scope, vec![b"title".to_vec(), b"body".to_vec()]);
+}
+
+/// FILTER ships now: it reuses the index query grammar's own RANGE / EQ
+/// rather than a second expression language, and several AND together.
+#[test]
+fn filter_parses() {
+    let none = argv(&["IDX.QUERY", "idx", "MATCH", "hello"]);
+    assert!(matches!(MatchArgs::parse_terminal(&none), MatchParse::Ok(q) if q.filters.is_empty()));
+
+    let one = argv(&["IDX.QUERY", "idx", "MATCH", "hi", "FILTER", "price", "RANGE", "10", "100"]);
+    match MatchArgs::parse_terminal(&one) {
+        MatchParse::Ok(q) => {
+            assert_eq!(q.filters.len(), 1);
+            assert_eq!(q.filters[0].field, b"price".to_vec());
+            assert_eq!(
+                q.filters[0].shape,
+                FilterShape::Range { min: b"10".to_vec(), max: b"100".to_vec() }
+            );
+        }
+        _ => panic!("FILTER … RANGE should parse"),
+    }
+
+    // Several predicates AND, and they coexist with the other clauses in
+    // any order.
+    let many = argv(&[
+        "IDX.QUERY", "idx", "MATCH", "hi", "FILTER", "price", "RANGE", "1", "9", "IN", "title",
+        "FILTER", "status", "EQ", "live", "LIMIT", "3",
+    ]);
+    match MatchArgs::parse_terminal(&many) {
+        MatchParse::Ok(q) => {
+            assert_eq!(q.filters.len(), 2, "both predicates kept");
+            assert_eq!(q.filters[1].shape, FilterShape::Eq { value: b"live".to_vec() });
+            assert_eq!(q.scope, vec![b"title".to_vec()]);
+            assert_eq!(q.limit, 3);
+        }
+        _ => panic!("FILTER must compose with the other clauses"),
+    }
+
+    for bad in [
+        vec!["IDX.QUERY", "idx", "MATCH", "hi", "FILTER"],
+        vec!["IDX.QUERY", "idx", "MATCH", "hi", "FILTER", "price"],
+        vec!["IDX.QUERY", "idx", "MATCH", "hi", "FILTER", "price", "NEAR", "5"],
+        vec!["IDX.QUERY", "idx", "MATCH", "hi", "FILTER", "price", "RANGE", "10"],
+    ] {
+        let a = argv(&bad);
+        assert!(matches!(MatchArgs::parse_terminal(&a), MatchParse::BadArgs), "{bad:?}");
+    }
 }

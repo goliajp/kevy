@@ -836,3 +836,82 @@ fn field_scope_over_the_wire() {
     assert!(s.contains("titel"), "names the offending field: {s}");
     assert!(s.contains("title") && s.contains("body"), "lists the declared fields: {s}");
 }
+
+/// `FILTER` restricts which documents can be hits without changing what
+/// a term is worth, over the real cross-shard fan-out — and the
+/// predicate reaches documents that rank below the unfiltered leaders,
+/// which is the whole reason it cannot be applied after the merge.
+#[test]
+fn filter_over_the_wire() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    // Ten documents that all match "rust"; the term count falls with the
+    // index, and so does the price — so the cheap ones rank worst.
+    for i in 0..10u32 {
+        let body = format!("rust {}", "rust ".repeat((10 - i) as usize));
+        let price = format!("{}", (10 - i) * 10);
+        cmd(&mut c, &[b"HSET", format!("p:{i}").as_bytes(), b"body", body.as_bytes(),
+                      b"price", price.as_bytes(), b"status", if i % 2 == 0 { b"live" } else { b"draft" }]);
+    }
+    let r = cmd(
+        &mut c,
+        &[b"IDX.CREATE", b"pf", b"ON", b"PREFIX", b"p:", b"FIELD", b"body",
+          b"TYPE", b"str", b"KIND", b"text",
+          b"VALUES", b"price", b"status", b"TYPES", b"i64", b"str"],
+    );
+    assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
+
+    // Unfiltered, the top 3 are the priciest — the ones the filter below
+    // rejects.
+    let plain = query_ready(&mut c, &[b"IDX.QUERY", b"pf", b"MATCH", b"rust", b"LIMIT", b"3"]);
+    let s = String::from_utf8_lossy(&plain);
+    assert!(s.contains("p:0") && s.contains("p:1"), "unfiltered leaders: {s}");
+
+    // Filtered to the cheap half, the same LIMIT 3 returns documents that
+    // rank below those leaders — not an empty page.
+    let cheap = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"pf", b"MATCH", b"rust", b"LIMIT", b"3", b"FILTER", b"price", b"RANGE", b"10", b"50"],
+    );
+    let s = String::from_utf8_lossy(&cheap);
+    assert!(!s.contains("p:0") && !s.contains("p:1"), "the pricey leaders are out: {s}");
+    let hits = s.matches("p:").count();
+    assert_eq!(hits, 3, "the page is filled from further down the ranking: {s}");
+
+    // A numeric range compares as a number, not as text: "9" must not
+    // sort above "10".
+    let numeric = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"pf", b"MATCH", b"rust", b"LIMIT", b"10", b"FILTER", b"price", b"RANGE", b"10", b"20"],
+    );
+    let s = String::from_utf8_lossy(&numeric);
+    assert_eq!(s.matches("p:").count(), 2, "prices 10 and 20 only: {s}");
+
+    // EQ on a text value, and two predicates ANDing.
+    let both = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"pf", b"MATCH", b"rust", b"LIMIT", b"10",
+          b"FILTER", b"status", b"EQ", b"live", b"FILTER", b"price", b"RANGE", b"10", b"50"],
+    );
+    let s = String::from_utf8_lossy(&both);
+    assert!(s.contains("p:6") && s.contains("p:8"), "even indexes are live: {s}");
+    assert!(!s.contains("p:5") && !s.contains("p:7"), "odd ones are drafts: {s}");
+
+    // A field the index does not store is an error naming what it does.
+    let bad = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"pf", b"MATCH", b"rust", b"FILTER", b"colour", b"EQ", b"red"],
+    );
+    let s = String::from_utf8_lossy(&bad);
+    assert!(s.starts_with("-ERR"), "unstored field errors: {s}");
+    assert!(s.contains("colour") && s.contains("price") && s.contains("status"), "{s}");
+
+    // A bound that is not of the declared type is an error too, rather
+    // than a silently empty page.
+    let badbound = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"pf", b"MATCH", b"rust", b"FILTER", b"price", b"RANGE", b"cheap", b"50"],
+    );
+    let s = String::from_utf8_lossy(&badbound);
+    assert!(s.starts_with("-ERR") && s.contains("i64"), "bad bound errors: {s}");
+}

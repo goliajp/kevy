@@ -188,6 +188,8 @@ pub(crate) struct MatchArgs {
     /// empty = every field. Names, not positions — the mapping needs the
     /// index spec, which only the shard holding the segment has.
     pub(crate) scope: Vec<Vec<u8>>,
+    /// `FILTER …`: non-scoring predicates over stored values, ANDed.
+    pub(crate) filters: Vec<FilterArg>,
 }
 
 /// A MATCH clause keyword — the boundary a variadic clause (`FIELDS`,
@@ -199,6 +201,7 @@ fn is_clause_keyword(a: &[u8]) -> bool {
         || a.eq_ignore_ascii_case(b"TYPO")
         || a.eq_ignore_ascii_case(b"OFFSET")
         || a.eq_ignore_ascii_case(b"IN")
+        || a.eq_ignore_ascii_case(b"FILTER")
 }
 
 /// Parse a `TYPO` budget: 0, 1 or 2. `AUTO` (in the frozen surface but
@@ -237,6 +240,8 @@ fn apply_clause(argv: &[Vec<u8>], i: usize, a: &mut MatchArgs) -> Option<usize> 
     } else if kw.eq_ignore_ascii_case(b"OFFSET") {
         a.offset = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
         Some(i + 2)
+    } else if kw.eq_ignore_ascii_case(b"FILTER") {
+        apply_filter(argv, i, a)
     } else if kw.eq_ignore_ascii_case(b"IN") {
         let (fs, next) = collect_clause(argv, i + 1);
         if fs.is_empty() {
@@ -265,7 +270,7 @@ fn collect_clause(argv: &[Vec<u8>], start: usize) -> (Vec<Vec<u8>>, usize) {
 /// later. Listed here rather than rejected as unknown so the syntax is
 /// frozen now: every one of these would otherwise want to change the
 /// MATCH signature when it lands, and v4 is the release that freezes it.
-const NOT_YET: &[&[u8]] = &[b"FILTER", b"FACET", b"SORT", b"DISTINCT"];
+const NOT_YET: &[&[u8]] = &[b"FACET", b"SORT", b"DISTINCT"];
 
 /// Outcome of parsing a MATCH query.
 pub(crate) enum MatchParse {
@@ -311,6 +316,7 @@ impl MatchArgs {
             typo: 0,
             offset: 0,
             scope: Vec::new(),
+            filters: Vec::new(),
         };
         // Clauses are order-independent; each variadic one (FIELDS,
         // HIGHLIGHT) collects up to the next keyword.
@@ -324,6 +330,11 @@ impl MatchArgs {
     }
 
 }
+
+#[path = "args_filter.rs"]
+mod filter;
+pub(crate) use filter::{FilterArg, FilterShape};
+use filter::apply_filter;
 
 #[path = "args_match_score.rs"]
 mod match_score;

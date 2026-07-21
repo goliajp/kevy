@@ -152,6 +152,43 @@ impl ValueSpec {
     }
 }
 
+/// A comparison over a stored value's raw bytes, built once from the
+/// type the field was declared as.
+///
+/// `EQ` is the degenerate range `[v, v]`: stored values are totally
+/// ordered, so equality needs no second code path — and one path cannot
+/// disagree with itself about what a bound means.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValueTest {
+    ty: ValType,
+    lo: IndexValue,
+    hi: IndexValue,
+}
+
+impl ValueTest {
+    /// `RANGE min max` on a field declared as `ty`. `None` when a bound
+    /// is not of that type — a bound the index cannot interpret is an
+    /// error, not an empty result.
+    pub fn range(ty: ValType, min: &[u8], max: &[u8]) -> Option<ValueTest> {
+        Some(ValueTest { ty, lo: IndexValue::coerce(ty, min)?, hi: IndexValue::coerce(ty, max)? })
+    }
+
+    /// `EQ v` on a field declared as `ty`.
+    pub fn eq(ty: ValType, v: &[u8]) -> Option<ValueTest> {
+        let v = IndexValue::coerce(ty, v)?;
+        Some(ValueTest { ty, lo: v.clone(), hi: v })
+    }
+
+    /// Whether a stored value's bytes satisfy the test.
+    ///
+    /// A value that does not coerce fails: text sitting in a field
+    /// declared numeric is not inside any numeric range, and passing it
+    /// would be the accept-and-ignore shape this surface keeps refusing.
+    pub fn passes(&self, raw: &[u8]) -> bool {
+        IndexValue::coerce(self.ty, raw).is_some_and(|v| v >= self.lo && v <= self.hi)
+    }
+}
+
 /// One declared index.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IndexSpec {
