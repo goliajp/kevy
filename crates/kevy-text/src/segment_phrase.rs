@@ -1,6 +1,8 @@
-//! Phrase / adjacency queries over the positional side-channel
-//! (`crate::positions`). A child module of `segment` (declared via
-//! `#[path]`), so it reaches `TextSegment`'s private fields and helpers.
+//! What a query *means* — clause parsing plus the phrase / prefix /
+//! typo / field-scoped entry points. A child module of `segment`
+//! (declared via `#[path]`), so it reaches `TextSegment`'s private
+//! fields and helpers. What each clause *contributes* to a score lives
+//! next door in `segment_scope`.
 //!
 //! A phrase is an AND of its terms with an adjacency constraint: it
 //! scores with the same BM25 sum an AND query would use, restricted to
@@ -10,8 +12,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::{CorpusStats, TextMatch, TextSegment};
-use crate::bm25::bm25_score;
+use super::segment_scope::Scope;
+use super::{CorpusStats, QueryOpts, TextMatch, TextSegment};
 use crate::positions::Positions;
 use crate::token::{tokenize, tokenize_spans};
 
@@ -39,20 +41,13 @@ impl TextSegment {
             1 => return self.matches_scored(phrase, limit, stats),
             _ => {}
         }
-        let Some(pos) = self.positions.as_ref() else {
+        if self.positions.is_none() {
             return Vec::new();
-        };
-        let Some(anchor) = self.rarest_anchor(&toks) else {
-            return Vec::new();
-        };
-        let (n_docs, avgdl) = self.corpus_stats(stats);
-        let distinct = distinct_tokens(&toks);
-        let mut scores: HashMap<u32, f64> = HashMap::new();
-        for id in pos.ids(anchor) {
-            if doc_has_phrase(pos, &toks, id) {
-                scores.insert(id, self.phrase_score(&distinct, id, stats, n_docs, avgdl));
-            }
         }
+        let (n_docs, avgdl) = self.corpus_stats(stats);
+        let sc = Scope { stats, n_docs, avgdl, want: &[] };
+        let mut scores: HashMap<u32, f64> = HashMap::new();
+        self.add_phrase(&toks, &mut scores, &sc);
         self.select_top(&scores, limit)
     }
 
@@ -90,30 +85,52 @@ impl TextSegment {
         stats: Option<&CorpusStats>,
         typo: u32,
     ) -> Vec<TextMatch> {
+        self.matches_query_with(text, limit, QueryOpts { stats, typo, fields: &[] })
+    }
+
+    /// [`TextSegment::matches_query`] with every option a MATCH carries:
+    /// injected corpus statistics, a typo budget, and the field positions
+    /// the query is restricted to (`IN <field…>`, empty = every field).
+    ///
+    /// A scoped query is a *field-scoped BM25*, not a filter over
+    /// whole-document scores: frequency, length and document frequency
+    /// all come from the wanted fields alone, so a match in a short title
+    /// is not diluted by a long body that never mentioned the term.
+    pub fn matches_query_with(
+        &self,
+        text: &[u8],
+        limit: usize,
+        opts: QueryOpts,
+    ) -> Vec<TextMatch> {
         if limit == 0 {
             return Vec::new();
         }
+        let Some(want) = self.normalize_scope(opts.fields) else {
+            return Vec::new();
+        };
         let (bare, phrases, prefixes) = parse_clauses(text);
-        if phrases.is_empty() && prefixes.is_empty() && typo == 0 {
-            // No phrase, prefix or typo clause — the ordinary term query.
-            return self.matches_scored(text, limit, stats);
+        if phrases.is_empty() && prefixes.is_empty() && opts.typo == 0 && want.is_empty() {
+            // No phrase, prefix, typo or field clause — the ordinary
+            // pruned term query.
+            return self.matches_scored(text, limit, opts.stats);
         }
         if self.docs.is_empty() {
             return Vec::new();
         }
-        let (n_docs, avgdl) = self.corpus_stats(stats);
+        let (n_docs, avgdl) = self.scope_stats(opts.stats, &want);
+        let sc = Scope { stats: opts.stats, n_docs, avgdl, want: &want };
         let mut terms = bare;
         terms.sort();
         terms.dedup();
         let mut scores: HashMap<u32, f64> = HashMap::new();
         for t in &terms {
-            self.add_typo(t, typo, &mut scores, stats, n_docs, avgdl);
+            self.add_typo(t, opts.typo, &mut scores, &sc);
         }
         for phrase in &phrases {
-            self.add_phrase(phrase, &mut scores, stats, n_docs, avgdl);
+            self.add_phrase(phrase, &mut scores, &sc);
         }
         for pfx in &prefixes {
-            self.add_prefix(pfx, &mut scores, stats, n_docs, avgdl);
+            self.add_prefix(pfx, &mut scores, &sc);
         }
         self.select_top(&scores, limit)
     }
@@ -139,8 +156,9 @@ impl TextSegment {
         }
         let pfx: Vec<u8> = prefix.iter().map(u8::to_ascii_lowercase).collect();
         let (n_docs, avgdl) = self.corpus_stats(stats);
+        let sc = Scope { stats, n_docs, avgdl, want: &[] };
         let mut scores: HashMap<u32, f64> = HashMap::new();
-        self.add_prefix(&pfx, &mut scores, stats, n_docs, avgdl);
+        self.add_prefix(&pfx, &mut scores, &sc);
         self.select_top(&scores, limit)
     }
 
@@ -177,156 +195,72 @@ impl TextSegment {
         terms
     }
 
-    /// Add one prefix clause's contribution: the OR of every expansion
-    /// term (already-lowercased `pfx` matched against the stored token
-    /// form). Scanning the dictionary is the cost an ordered dictionary
-    /// would replace with a binary search.
-    fn add_prefix(
-        &self,
-        pfx: &[u8],
-        scores: &mut HashMap<u32, f64>,
-        stats: Option<&CorpusStats>,
-        n_docs: f64,
-        avgdl: f64,
-    ) {
-        for t in self.expand_prefix(pfx) {
-            self.add_term(t, scores, stats, n_docs, avgdl);
-        }
+    /// The document frequency this shard contributes for each of a
+    /// query's terms, over the query's field scope.
+    ///
+    /// Unscoped this is the ordinary posting-list length. Scoped it is
+    /// the number of documents holding the term *in the wanted fields* —
+    /// counted by the same walk that would score them, because summing
+    /// stored per-field counts would count a document twice when it holds
+    /// the term in two of the fields.
+    pub fn query_df_in(&self, text: &[u8], opts: QueryOpts) -> Vec<(Vec<u8>, u32)> {
+        let want = self.normalize_scope(opts.fields).unwrap_or_default();
+        self.query_df_terms_typo(text, opts.typo)
+            .into_iter()
+            .map(|t| {
+                let df = match self.fields.as_ref() {
+                    Some(fs) if !want.is_empty() => fs.docs_in(&t, &want).len(),
+                    _ => self.postings.get(&t).map_or(0, super::Buckets::len),
+                };
+                (t, df as u32)
+            })
+            .collect()
     }
 
-    /// The dictionary terms beginning with `pfx` (already lowercased),
-    /// sorted for a deterministic ranking tiebreak.
-    fn expand_prefix(&self, pfx: &[u8]) -> Vec<&[u8]> {
-        let mut e: Vec<&[u8]> =
-            self.postings.keys().map(Vec::as_slice).filter(|t| t.starts_with(pfx)).collect();
-        e.sort_unstable();
-        e
-    }
-
-    /// The dictionary terms within `budget` edits of `t` — the typo
-    /// tolerance expansion, including `t` itself when it is indexed.
-    /// Sorted for a deterministic ranking tiebreak.
-    fn expand_typo(&self, t: &[u8], budget: u32) -> Vec<&[u8]> {
-        let mut e: Vec<&[u8]> = self
-            .postings
-            .keys()
-            .map(Vec::as_slice)
-            .filter(|cand| crate::edit::edit_within(t, cand, budget).is_some())
-            .collect();
-        e.sort_unstable();
-        e
-    }
-
-    /// Add one term's contribution with typo tolerance: the OR of every
-    /// dictionary term within `budget` edits. With `budget` 0 this is
-    /// exactly [`Self::add_term`], so the exact path stays untouched.
-    fn add_typo(
-        &self,
-        t: &[u8],
-        budget: u32,
-        scores: &mut HashMap<u32, f64>,
-        stats: Option<&CorpusStats>,
-        n_docs: f64,
-        avgdl: f64,
-    ) {
-        if budget == 0 {
-            self.add_term(t, scores, stats, n_docs, avgdl);
-            return;
+    /// The field positions a query is really scoped to, or `None` when
+    /// the scope cannot match anything in this segment.
+    ///
+    /// A single-field segment keeps no per-field channel because it needs
+    /// none: scoping to its only field *is* the unscoped query, and
+    /// scoping to any other position matches nothing.
+    fn normalize_scope(&self, want: &[usize]) -> Option<Vec<usize>> {
+        let mut w = want.to_vec();
+        w.sort_unstable();
+        w.dedup();
+        if w.is_empty() {
+            return Some(Vec::new());
         }
-        for cand in self.expand_typo(t, budget) {
-            self.add_term(cand, scores, stats, n_docs, avgdl);
+        if self.fields.is_none() {
+            return (w == [0]).then(Vec::new);
         }
-    }
-
-    /// Add one bare term's BM25 contribution to every document that holds
-    /// it — a full-list walk (no MaxScore pruning), used only on the
-    /// phrase path where a phrase clause could otherwise boost a document
-    /// pruning would have dropped.
-    fn add_term(
-        &self,
-        t: &[u8],
-        scores: &mut HashMap<u32, f64>,
-        stats: Option<&CorpusStats>,
-        n_docs: f64,
-        avgdl: f64,
-    ) {
-        let Some(list) = self.postings.get(t) else { return };
-        let df = stats
-            .and_then(|s| s.df.get(t))
-            .map(|&d| f64::from(d))
-            .unwrap_or(list.len() as f64);
-        for (tf, bands) in list.tf_groups() {
-            for (_b, band) in bands.iter() {
-                for &id in band {
-                    let dl = f64::from(self.id_dl[id as usize]);
-                    *scores.entry(id).or_insert(0.0) +=
-                        bm25_score(f64::from(tf), df, n_docs, dl, avgdl);
-                }
-            }
-        }
+        Some(w)
     }
 
     /// Add one phrase clause's contribution: for every document whose
     /// positions place the phrase adjacently, the BM25 sum of its tokens.
     /// A segment without positions can verify nothing, so the clause
     /// contributes to no document.
-    fn add_phrase(
-        &self,
-        toks: &[Vec<u8>],
-        scores: &mut HashMap<u32, f64>,
-        stats: Option<&CorpusStats>,
-        n_docs: f64,
-        avgdl: f64,
-    ) {
+    fn add_phrase(&self, toks: &[Vec<u8>], scores: &mut HashMap<u32, f64>, sc: &Scope) {
         let Some(pos) = self.positions.as_ref() else { return };
         let Some(anchor) = self.rarest_anchor(toks) else { return };
         let distinct = distinct_tokens(toks);
         for id in pos.ids(anchor) {
-            if doc_has_phrase(pos, toks, id) {
-                *scores.entry(id).or_insert(0.0) +=
-                    self.phrase_score(&distinct, id, stats, n_docs, avgdl);
+            if self.phrase_hit(pos, toks, id, sc) {
+                *scores.entry(id).or_insert(0.0) += self.clause_score(&distinct, id, sc);
             }
         }
     }
 
-    /// The phrase token with the fewest postings — the tightest candidate
-    /// set, since every phrase token must appear in a matching document,
-    /// so anchoring the scan on the rarest one avoids walking a head
-    /// term's whole list. `None` if any token is absent (the phrase then
-    /// matches nothing).
-    fn rarest_anchor<'a>(&self, toks: &'a [Vec<u8>]) -> Option<&'a [u8]> {
-        let mut best: Option<(&'a [u8], usize)> = None;
-        for t in toks {
-            let df = self.postings.get(t)?.len();
-            if best.is_none_or(|(_, b)| df < b) {
-                best = Some((t, df));
-            }
+    /// Whether `id` contains the phrase — and, when the query is scoped,
+    /// contains it *inside* one of the wanted fields rather than
+    /// somewhere else in the document.
+    fn phrase_hit(&self, pos: &Positions, toks: &[Vec<u8>], id: u32, sc: &Scope) -> bool {
+        let starts = phrase_starts(pos, toks, id);
+        if !sc.scoped() {
+            return !starts.is_empty();
         }
-        best.map(|(t, _)| t)
-    }
-
-    /// BM25 sum over the phrase's distinct tokens for one matching doc —
-    /// exactly what an AND query over those terms would score it.
-    fn phrase_score(
-        &self,
-        distinct: &[Vec<u8>],
-        id: u32,
-        stats: Option<&CorpusStats>,
-        n_docs: f64,
-        avgdl: f64,
-    ) -> f64 {
-        let dl = f64::from(self.id_dl[id as usize]);
-        let mut score = 0.0;
-        for t in distinct {
-            let Some(list) = self.postings.get(t) else { continue };
-            let Some(tf) = list.get(id) else { continue };
-            let df = stats
-                .and_then(|s| s.df.get(t))
-                .map(|&d| f64::from(d))
-                .unwrap_or(list.len() as f64);
-            score += bm25_score(f64::from(tf), df, n_docs, dl, avgdl);
-        }
-        score
+        let len = toks.len() as u32;
+        starts.iter().any(|&s| self.phrase_in_scope(id, s, len, sc.want))
     }
 }
 
@@ -396,26 +330,27 @@ fn distinct_tokens(toks: &[Vec<u8>]) -> Vec<Vec<u8>> {
     d
 }
 
-/// Whether `id`'s positions place `toks` consecutively and in order at
-/// least once. Shift each token's offsets left by its phrase index and
-/// intersect: a surviving offset is where one occurrence begins.
-fn doc_has_phrase(pos: &Positions, toks: &[Vec<u8>], id: u32) -> bool {
+/// Where in `id`'s token stream `toks` occur consecutively and in order.
+/// Shift each token's offsets left by its phrase index and intersect: a
+/// surviving offset is where one occurrence begins. Empty = no
+/// occurrence, which is also what a scoped query filters further.
+fn phrase_starts(pos: &Positions, toks: &[Vec<u8>], id: u32) -> HashSet<u32> {
     let Some(first) = pos.get(&toks[0], id) else {
-        return false;
+        return HashSet::new();
     };
     let mut starts: HashSet<u32> = first.into_iter().collect();
     for (i, t) in toks.iter().enumerate().skip(1) {
         let Some(offs) = pos.get(t, id) else {
-            return false;
+            return HashSet::new();
         };
         let shifted: HashSet<u32> =
             offs.iter().filter_map(|&p| p.checked_sub(i as u32)).collect();
         starts.retain(|s| shifted.contains(s));
         if starts.is_empty() {
-            return false;
+            return starts;
         }
     }
-    true
+    starts
 }
 
 /// Parsed query clauses: bare terms, phrases (each a token sequence) and

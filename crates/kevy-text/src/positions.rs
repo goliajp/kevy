@@ -6,26 +6,14 @@
 //! (`None`) is byte-identical to the pre-positions structure.
 //!
 //! Layout: token → (doc id → delta+varint blob of ascending token
-//! offsets). Offsets are a token's ordinals within a document's
-//! concatenated fields (field order), so a phrase check decodes two
-//! blobs and walks them in lockstep. Delta+varint keeps a
-//! high-frequency term from paying 4 bytes per occurrence — the standard
-//! Lucene positions layout.
+//! offsets), over the shared [`crate::docblobs`] storage. Offsets are a
+//! token's ordinals within a document's concatenated fields (field
+//! order), so a phrase check decodes two blobs and walks them in
+//! lockstep. Delta+varint keeps a high-frequency term from paying 4
+//! bytes per occurrence — the standard Lucene positions layout.
 
+use crate::docblobs::{DocBlobs, channel_bytes, get_varints, put_varint};
 use std::collections::HashMap;
-
-/// LEB128-encode one delta onto `out`.
-fn put_varint(out: &mut Vec<u8>, mut v: u32) {
-    loop {
-        let byte = (v & 0x7f) as u8;
-        v >>= 7;
-        if v == 0 {
-            out.push(byte);
-            return;
-        }
-        out.push(byte | 0x80);
-    }
-}
 
 /// Encode ascending `offsets` as a delta+varint blob. Offsets are
 /// strictly ascending (distinct ordinals), so every delta after the
@@ -42,100 +30,14 @@ fn encode(offsets: &[u32]) -> Vec<u8> {
 
 /// Decode a delta+varint blob back to ascending offsets.
 fn decode(blob: &[u8]) -> Vec<u32> {
-    let mut out = Vec::new();
     let mut acc = 0u32;
-    let mut cur = 0u32;
-    let mut shift = 0u32;
-    for &b in blob {
-        cur |= u32::from(b & 0x7f) << shift;
-        if b & 0x80 == 0 {
-            acc += cur;
-            out.push(acc);
-            cur = 0;
-            shift = 0;
-        } else {
-            shift += 7;
-        }
-    }
-    out
-}
-
-/// One token's per-document blobs. A hapax token — a unique id / email /
-/// doc number that appears in exactly one document, the common Zipf case
-/// — keeps its blob inline; the map only materializes from the second
-/// document on. Mirrors [`crate::buckets::Buckets::One`], so a singleton
-/// token pays no HashMap allocation (the "+2GiB over 1M singletons" shape
-/// the impact buckets already avoid).
-#[derive(Debug)]
-enum DocBlobs {
-    One { id: u32, blob: Vec<u8> },
-    Many(HashMap<u32, Vec<u8>>),
-}
-
-impl DocBlobs {
-    fn set(&mut self, id: u32, blob: Vec<u8>) {
-        match self {
-            DocBlobs::One { id: id0, blob: b0 } => {
-                if *id0 == id {
-                    *b0 = blob;
-                } else {
-                    let mut m = HashMap::with_capacity(2);
-                    m.insert(*id0, std::mem::take(b0));
-                    m.insert(id, blob);
-                    *self = DocBlobs::Many(m);
-                }
-            }
-            DocBlobs::Many(m) => {
-                m.insert(id, blob);
-            }
-        }
-    }
-
-    fn get(&self, id: u32) -> Option<&[u8]> {
-        match self {
-            DocBlobs::One { id: id0, blob } => (*id0 == id).then_some(blob.as_slice()),
-            DocBlobs::Many(m) => m.get(&id).map(Vec::as_slice),
-        }
-    }
-
-    fn ids(&self) -> Vec<u32> {
-        match self {
-            DocBlobs::One { id, .. } => vec![*id],
-            DocBlobs::Many(m) => m.keys().copied().collect(),
-        }
-    }
-
-    /// Remove `id`; `true` when no document is left, so the caller drops
-    /// the token. Like `Buckets`, a shrinking `Many` is not demoted.
-    fn remove(&mut self, id: u32) -> bool {
-        match self {
-            DocBlobs::One { id: id0, .. } => *id0 == id,
-            DocBlobs::Many(m) => {
-                m.remove(&id);
-                m.is_empty()
-            }
-        }
-    }
-
-    /// Heap bytes for this token's blobs: `One` pays only its blob's
-    /// allocation, `Many` the power-of-two RawTable plus each blob's.
-    fn approx_bytes(&self) -> u64 {
-        match self {
-            DocBlobs::One { blob, .. } => blob_alloc(blob),
-            DocBlobs::Many(m) => {
-                let n = m.len() as u64;
-                // RawTable capacity: next power of two above n / 0.875,
-                // each bucket (u32, Vec<u8>) ≈ 32 B plus a control byte.
-                let cap = (n * 8 / 7 + 1).next_power_of_two().max(4);
-                cap * 33 + m.values().map(|b| blob_alloc(b)).sum::<u64>()
-            }
-        }
-    }
-}
-
-/// One position blob's real allocation: 16-byte granularity + header.
-fn blob_alloc(b: &[u8]) -> u64 {
-    (b.len().max(1) as u64).next_multiple_of(16) + 16
+    get_varints(blob)
+        .into_iter()
+        .map(|d| {
+            acc += d;
+            acc
+        })
+        .collect()
 }
 
 /// The positional side-channel: token → per-document position blobs.
@@ -181,15 +83,8 @@ impl Positions {
 
     /// Approximate heap bytes — the positions term of the memory formula
     /// (the memory gate calibrates it against real RSS growth).
-    ///
-    /// Each outer entry pays its token-key Vec plus the [`DocBlobs`] enum
-    /// stored inline (its Vec / HashMap struct); the token's blob heap —
-    /// and, for a `Many` token, its RawTable — is added per variant.
     pub(crate) fn approx_bytes(&self) -> u64 {
-        self.map
-            .iter()
-            .map(|(t, db)| t.len() as u64 + 24 + 56 + db.approx_bytes())
-            .sum()
+        channel_bytes(&self.map)
     }
 }
 
@@ -213,20 +108,28 @@ mod tests {
     #[test]
     fn set_get_remove() {
         let mut p = Positions::default();
-        p.set(b"quick", 7, &[0, 4, 9]);
-        p.set(b"brown", 7, &[1, 5]);
-        p.set(b"quick", 3, &[2]);
-        assert_eq!(p.get(b"quick", 7), Some(vec![0, 4, 9]));
-        assert_eq!(p.get(b"brown", 7), Some(vec![1, 5]));
-        assert_eq!(p.get(b"quick", 99), None);
-        assert_eq!(p.get(b"missing", 7), None);
-        let mut ids = p.ids(b"quick");
+        p.set(b"a", 1, &[0, 5, 9]);
+        p.set(b"a", 2, &[3]);
+        p.set(b"b", 1, &[1]);
+        assert_eq!(p.get(b"a", 1), Some(vec![0, 5, 9]));
+        assert_eq!(p.get(b"a", 2), Some(vec![3]));
+        assert_eq!(p.get(b"a", 3), None);
+        let mut ids = p.ids(b"a");
         ids.sort_unstable();
-        assert_eq!(ids, vec![3, 7]);
-        p.remove(b"quick", 7);
-        assert_eq!(p.get(b"quick", 7), None);
-        assert_eq!(p.ids(b"quick"), vec![3]);
-        p.remove(b"quick", 3);
-        assert!(p.ids(b"quick").is_empty(), "token dropped when last doc gone");
+        assert_eq!(ids, vec![1, 2]);
+
+        p.remove(b"a", 1);
+        assert_eq!(p.get(b"a", 1), None);
+        assert_eq!(p.get(b"a", 2), Some(vec![3]));
+        p.remove(b"b", 1);
+        assert_eq!(p.ids(b"b"), Vec::<u32>::new(), "empty token dropped");
+    }
+
+    #[test]
+    fn approx_bytes_grows_with_content() {
+        let mut p = Positions::default();
+        let empty = p.approx_bytes();
+        p.set(b"token", 1, &[0, 1, 2, 3, 4, 5, 6, 7]);
+        assert!(p.approx_bytes() > empty, "storing positions costs bytes");
     }
 }

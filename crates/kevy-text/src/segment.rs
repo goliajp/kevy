@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 
 use crate::buckets::Buckets;
+use crate::fields::FieldStats;
 use crate::positions::Positions;
 use crate::token::tokenize;
 
@@ -54,6 +55,23 @@ pub struct CorpusStats {
     pub df: std::collections::HashMap<Vec<u8>, u32>,
 }
 
+/// Everything a MATCH query carries beyond its text and result limit.
+///
+/// Grouping them keeps the query entry point from growing a parameter per
+/// clause, and gives every clause one place to be defaulted from
+/// ([`QueryOpts::default`] is the plain, exact, unscoped query).
+#[derive(Clone, Copy, Default)]
+pub struct QueryOpts<'a> {
+    /// Corpus-wide BM25 statistics — the second pass of a cross-shard
+    /// query. `None` scores against this segment's own slice.
+    pub stats: Option<&'a CorpusStats>,
+    /// Edit distance allowed on bare terms (`TYPO n`); 0 = exact.
+    pub typo: u32,
+    /// Field positions the query is restricted to (`IN <field…>`); empty
+    /// = every field.
+    pub fields: &'a [usize],
+}
+
 /// A field's text and the BM25 weight it was indexed at. Stored per
 /// document so a removal re-derives exactly the term frequencies the
 /// insert produced.
@@ -89,6 +107,11 @@ pub struct TextSegment {
     /// the BM25 path byte-identical to the pre-positions structure —
     /// the ranking hot path never touches it.
     positions: Option<Positions>,
+    /// Per-field side-channel, present only on a multi-field index — the
+    /// breakdown `IN <field…>` scopes to. With one field the per-field
+    /// numbers are the merged ones, so a single-field index carries
+    /// nothing; an unscoped query never reads it either way.
+    fields: Option<FieldStats>,
 }
 
 impl TextSegment {
@@ -102,12 +125,33 @@ impl TextSegment {
     /// operation behaves identically; only the positional side-channel
     /// (and its memory cost) is added.
     pub fn with_positions() -> Self {
-        Self { positions: Some(Positions::default()), ..Self::default() }
+        Self::with_fields(1, true)
+    }
+
+    /// Empty segment for an index declaring `n_fields` weighted fields,
+    /// optionally recording token positions.
+    ///
+    /// A multi-field segment also keeps the per-field breakdown of every
+    /// posting, which is what lets `IN <field…>` score a field on its own
+    /// terms — its own frequencies and its own length — instead of
+    /// filtering whole-document scores after the fact.
+    pub fn with_fields(n_fields: usize, positions: bool) -> Self {
+        Self {
+            positions: positions.then(Positions::default),
+            fields: (n_fields > 1).then(|| FieldStats::new(n_fields)),
+            ..Self::default()
+        }
     }
 
     /// Whether this segment records token positions.
     pub fn has_positions(&self) -> bool {
         self.positions.is_some()
+    }
+
+    /// How many fields this segment scores separately; 1 when it keeps no
+    /// per-field breakdown (a single-field index needs none).
+    pub fn field_arity(&self) -> usize {
+        self.fields.as_ref().map_or(1, FieldStats::arity)
     }
 
     /// (Re-)index one row's text (`None` = row removed / excluded).
@@ -132,19 +176,12 @@ impl TextSegment {
     pub fn apply_fields(&mut self, key: &[u8], fields: Option<&[IndexedField]>) {
         self.withdraw(key);
         let Some(fields) = fields else { return };
-        let (tf_map, dl) = weighted_tf(fields);
+        let (per_field, lens) = field_tf(fields);
+        let (tf_map, dl) = merge_field_tf(&per_field, &lens);
         if tf_map.is_empty() {
             return;
         }
-        let id = if let Some(id) = self.free_ids.pop() {
-            self.id_key[id as usize] = Some(key.to_vec());
-            self.id_dl[id as usize] = dl;
-            id
-        } else {
-            self.id_key.push(Some(key.to_vec()));
-            self.id_dl.push(dl);
-            (self.id_key.len() - 1) as u32
-        };
+        let id = self.take_id(key, dl);
         self.docs.insert(key.to_vec(), (id, dl, fields.to_vec()));
         self.total_len += u64::from(dl);
         for (t, tf) in tf_map {
@@ -157,10 +194,53 @@ impl TextSegment {
                 }
             }
         }
+        self.index_side_channels(id, fields, &per_field, &lens);
+    }
+
+    /// Claim a document id for `key`, reusing a freed slot when there is
+    /// one.
+    fn take_id(&mut self, key: &[u8], dl: u32) -> u32 {
+        if let Some(id) = self.free_ids.pop() {
+            self.id_key[id as usize] = Some(key.to_vec());
+            self.id_dl[id as usize] = dl;
+            id
+        } else {
+            self.id_key.push(Some(key.to_vec()));
+            self.id_dl.push(dl);
+            (self.id_key.len() - 1) as u32
+        }
+    }
+
+    /// Fill the physical side-channels for a freshly indexed document:
+    /// token offsets for phrase / highlight, and the per-field breakdown
+    /// for field-scoped scoring. Both are derived from the same single
+    /// tokenisation the merged postings came from.
+    fn index_side_channels(
+        &mut self,
+        id: u32,
+        fields: &[IndexedField],
+        per_field: &[HashMap<Vec<u8>, u32>],
+        lens: &[u32],
+    ) {
         if let Some(pos) = self.positions.as_mut() {
             for (t, offsets) in token_offsets(fields) {
                 pos.set(&t, id, &offsets);
             }
+        }
+        let Some(fs) = self.fields.as_mut() else { return };
+        fs.set_doc_len(id, lens);
+        let arity = fs.arity();
+        let mut by_token: HashMap<&[u8], Vec<u32>> = HashMap::new();
+        for (f, m) in per_field.iter().enumerate() {
+            for (t, v) in m {
+                let row = by_token.entry(t).or_insert_with(|| vec![0; arity]);
+                if let Some(slot) = row.get_mut(f) {
+                    *slot = *v;
+                }
+            }
+        }
+        for (t, row) in by_token {
+            fs.set(t, id, &row);
         }
     }
 
@@ -183,6 +263,12 @@ impl TextSegment {
             if let Some(pos) = self.positions.as_mut() {
                 pos.remove(&t, old_id);
             }
+            if let Some(fs) = self.fields.as_mut() {
+                fs.remove(&t, old_id);
+            }
+        }
+        if let Some(fs) = self.fields.as_mut() {
+            fs.clear_doc_len(old_id);
         }
         self.id_key[old_id as usize] = None;
         self.free_ids.push(old_id);
@@ -198,16 +284,45 @@ impl TextSegment {
 /// field still occurred, and rounding it to zero would delete a match
 /// rather than de-emphasise it.
 fn weighted_tf(fields: &[IndexedField]) -> (HashMap<Vec<u8>, u32>, u32) {
-    let mut out: HashMap<Vec<u8>, u32> = HashMap::new();
-    let mut dl = 0u32;
+    let (per_field, lens) = field_tf(fields);
+    merge_field_tf(&per_field, &lens)
+}
+
+/// One document's weighted term frequencies **kept per field**, plus each
+/// field's unweighted length in tokens.
+///
+/// This is the shape the per-field channel stores and the merged postings
+/// are the sum of; deriving both from one call is what guarantees the
+/// scoped and unscoped paths agree on what a field contributed.
+fn field_tf(fields: &[IndexedField]) -> (Vec<HashMap<Vec<u8>, u32>>, Vec<u32>) {
+    let mut per_field = Vec::with_capacity(fields.len());
+    let mut lens = Vec::with_capacity(fields.len());
     for (text, weight) in fields {
         let toks = tokenize(text);
-        dl = dl.saturating_add(toks.len() as u32);
-        for (t, n) in tf_of(&toks) {
-            let scaled = (f64::from(n) * f64::from(*weight)).ceil().max(1.0) as u32;
-            *out.entry(t).or_insert(0) = out.get(&t).copied().unwrap_or(0).saturating_add(scaled);
+        lens.push(toks.len() as u32);
+        let scaled = tf_of(&toks)
+            .into_iter()
+            .map(|(t, n)| (t, (f64::from(n) * f64::from(*weight)).ceil().max(1.0) as u32))
+            .collect();
+        per_field.push(scaled);
+    }
+    (per_field, lens)
+}
+
+/// Fold a per-field breakdown back into the merged frequencies and length
+/// the ranking postings store.
+fn merge_field_tf(
+    per_field: &[HashMap<Vec<u8>, u32>],
+    lens: &[u32],
+) -> (HashMap<Vec<u8>, u32>, u32) {
+    let mut out: HashMap<Vec<u8>, u32> = HashMap::new();
+    for m in per_field {
+        for (t, v) in m {
+            let slot = out.entry(t.clone()).or_insert(0);
+            *slot = slot.saturating_add(*v);
         }
     }
+    let dl = lens.iter().fold(0u32, |a, &b| a.saturating_add(b));
     (out, dl)
 }
 
@@ -243,6 +358,9 @@ mod segment_stats;
 
 #[path = "segment_phrase.rs"]
 mod segment_phrase;
+
+#[path = "segment_scope.rs"]
+mod segment_scope;
 
 #[cfg(test)]
 #[path = "segment_tests.rs"]
