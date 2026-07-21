@@ -178,11 +178,14 @@ fn text_match(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
             return badargs(out, "IDX.QUERY", name);
         };
         let want = tail.highlight.as_deref();
+        let filters: Vec<crate::ValueFilter> =
+            tail.filters.iter().map(tail::FilterClause::as_value_filter).collect();
         let opts = crate::MatchOpts {
             highlight: want,
             typo: tail.typo,
             offset: tail.offset,
             scope: &tail.scope,
+            filters: &filters,
         };
         match s.idx_match_with(name, text, tail.limit, opts) {
             Err(e) => idx_err(out, name, &e),
@@ -307,6 +310,7 @@ fn parse_knn_tail(argv: &[Vec<u8>]) -> Option<(tail::Tail, usize)> {
             typo: 0,
             offset: 0,
             scope: Vec::new(),
+            filters: Vec::new(),
         };
     let mut ef = 0usize;
     let mut i = 4;

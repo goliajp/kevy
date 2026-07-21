@@ -852,3 +852,56 @@ fn text_index_field_scope_embedded() {
     assert!(msg.contains("titel"), "names the offending field: {msg}");
     assert!(msg.contains("title") && msg.contains("body"), "lists the declared ones: {msg}");
 }
+
+
+///  in-process matches the wire: predicates decide eligibility,
+/// not score, and they reach documents ranked below the unfiltered
+/// leaders. Typed by the declaration, so a numeric range compares as a
+/// number.
+#[test]
+fn text_index_filter_embedded() {
+    use crate::IndexValType;
+    let s = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
+    for i in 0..10u32 {
+        let body = format!("rust {}", "rust ".repeat((10 - i) as usize));
+        let price = format!("{}", (10 - i) * 10);
+        s.hset(
+            format!("p:{i}").as_bytes(),
+            &[(b"body" as &[u8], body.as_bytes()), (b"price", price.as_bytes())],
+        )
+        .unwrap();
+    }
+    s.idx_create_text(b"pf", b"p:", &[(b"body", 1.0)], false, &[(b"price", IndexValType::I64)])
+        .unwrap();
+
+    // Unfiltered, the priciest rank first.
+    let plain = s.idx_match(b"pf", b"rust", 3).unwrap();
+    assert_eq!(plain[0].0, b"p:0".to_vec());
+
+    // Filtered to the cheap half, the page fills from further down.
+    let cheap = [crate::ValueFilter::Range { field: b"price", min: b"10", max: b"50" }];
+    let hits = s
+        .idx_match_with(b"pf", b"rust", 3, crate::MatchOpts { filters: &cheap, ..Default::default() })
+        .unwrap();
+    assert_eq!(hits.len(), 3, "not an empty page");
+    assert!(hits.iter().all(|h| h.0 != b"p:0".to_vec()), "the leader is filtered out");
+
+    // Numeric, not lexicographic: 10..20 is two documents.
+    let narrow = [crate::ValueFilter::Range { field: b"price", min: b"10", max: b"20" }];
+    let hits = s
+        .idx_match_with(b"pf", b"rust", 10, crate::MatchOpts { filters: &narrow, ..Default::default() })
+        .unwrap();
+    assert_eq!(hits.len(), 2, "9 must not sort above 10");
+
+    // An unstored field and a bad bound both error rather than paging empty.
+    let unstored = [crate::ValueFilter::Eq { field: b"colour", value: b"red" }];
+    let e = s
+        .idx_match_with(b"pf", b"rust", 10, crate::MatchOpts { filters: &unstored, ..Default::default() })
+        .expect_err("unstored field");
+    assert!(format!("{e}").contains("price"), "names what it does store: {e}");
+    let badbound = [crate::ValueFilter::Range { field: b"price", min: b"cheap", max: b"50" }];
+    let e = s
+        .idx_match_with(b"pf", b"rust", 10, crate::MatchOpts { filters: &badbound, ..Default::default() })
+        .expect_err("bad bound");
+    assert!(format!("{e}").contains("i64"), "names the declared type: {e}");
+}
