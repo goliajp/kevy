@@ -368,7 +368,7 @@ D2 事务标记(全有全无,与事务大小无关)/ R2 事务内集合读。
   - [x] **5f lx64 textgate — 内存公式修复 + POSITIONS 模式**(两模式 lx64 全 PASS):
     - **内存公式修复(真缺陷,已修)**:positions `approx_bytes` 原低估 3.2×(lx64 ratio 0.42 FAIL)→ 改**模型化**(内层 `HashMap<u32,Vec<u8>>` = struct + pow2 RawTable×33B + 每 blob 独立堆分配 16B 对齐+header)→ lx64 复测 **ratio 0.75 PASS**。根因 = singleton min-table + tiny-blob malloc 开销(原 `blob.len()+30` 忽略)
     - **p95 provisional 上限**:term 35ms(实测 27-31ms)/ phrase 150ms(实测 102-114ms),注明 = **共享盒 regression-catcher 非精确 SLA**。精确 SLA 须干净独占盒([[feedback-kevy-bench-isolation]],perf §9 不信共享盒单跑)→ 待用户 bench-infra
-  - [ ] **5f.1 Positions One-inline 内存优化(future,减内存)** — mirror `Buckets::One`(`One{id,blob}`/`Many`)消 singleton HashMap 开销;stone 改需 lx64 复测(公式随之简化)
+  - [x] **5f.1 Positions One-inline 内存优化** — `DocBlobs::One{id,blob}`/`Many(HashMap)` mirror `Buckets::One`:hapax token(Zipf 常态,唯一 id/email/docnum 只在一文档)inline 存 blob 免 HashMap 表,第二文档起才 materialize;不 demote(同 Buckets)。`approx_bytes` 随之分 One(仅 blob 分配)/Many(pow2 RawTable+blobs)。lx64 实测:RSS 2966→**2731MiB(省 ~235MiB**,1M singleton 免 ~128B min-table+碎片),formula 2054 / **ratio 0.75 PASS**。34 kevy-text 测试绿(枚举行为等价)
   - [ ] **5d.2 phrase head+head skip-list**(future)— rarest_anchor 只帮 head+tail;head+head 仍扫 head 表(lx64 ~114ms),需 positional galloping intersection
 - [ ] **步骤 6 有序词典 / FST** → prefix / TYPO。postings HashMap → 有序结构,影响所有查询 perf,需 lx64
 - [ ] textgate 在步骤 4/5 内重录基线(改内存公式的步骤内做,不事后补)

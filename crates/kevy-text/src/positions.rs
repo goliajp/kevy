@@ -60,76 +60,135 @@ fn decode(blob: &[u8]) -> Vec<u32> {
     out
 }
 
-/// The positional side-channel: token → (doc id → position blob).
+/// One token's per-document blobs. A hapax token — a unique id / email /
+/// doc number that appears in exactly one document, the common Zipf case
+/// — keeps its blob inline; the map only materializes from the second
+/// document on. Mirrors [`crate::buckets::Buckets::One`], so a singleton
+/// token pays no HashMap allocation (the "+2GiB over 1M singletons" shape
+/// the impact buckets already avoid).
+#[derive(Debug)]
+enum DocBlobs {
+    One { id: u32, blob: Vec<u8> },
+    Many(HashMap<u32, Vec<u8>>),
+}
+
+impl DocBlobs {
+    fn set(&mut self, id: u32, blob: Vec<u8>) {
+        match self {
+            DocBlobs::One { id: id0, blob: b0 } => {
+                if *id0 == id {
+                    *b0 = blob;
+                } else {
+                    let mut m = HashMap::with_capacity(2);
+                    m.insert(*id0, std::mem::take(b0));
+                    m.insert(id, blob);
+                    *self = DocBlobs::Many(m);
+                }
+            }
+            DocBlobs::Many(m) => {
+                m.insert(id, blob);
+            }
+        }
+    }
+
+    fn get(&self, id: u32) -> Option<&[u8]> {
+        match self {
+            DocBlobs::One { id: id0, blob } => (*id0 == id).then_some(blob.as_slice()),
+            DocBlobs::Many(m) => m.get(&id).map(Vec::as_slice),
+        }
+    }
+
+    fn ids(&self) -> Vec<u32> {
+        match self {
+            DocBlobs::One { id, .. } => vec![*id],
+            DocBlobs::Many(m) => m.keys().copied().collect(),
+        }
+    }
+
+    /// Remove `id`; `true` when no document is left, so the caller drops
+    /// the token. Like `Buckets`, a shrinking `Many` is not demoted.
+    fn remove(&mut self, id: u32) -> bool {
+        match self {
+            DocBlobs::One { id: id0, .. } => *id0 == id,
+            DocBlobs::Many(m) => {
+                m.remove(&id);
+                m.is_empty()
+            }
+        }
+    }
+
+    /// Heap bytes for this token's blobs: `One` pays only its blob's
+    /// allocation, `Many` the power-of-two RawTable plus each blob's.
+    fn approx_bytes(&self) -> u64 {
+        match self {
+            DocBlobs::One { blob, .. } => blob_alloc(blob),
+            DocBlobs::Many(m) => {
+                let n = m.len() as u64;
+                // RawTable capacity: next power of two above n / 0.875,
+                // each bucket (u32, Vec<u8>) ≈ 32 B plus a control byte.
+                let cap = (n * 8 / 7 + 1).next_power_of_two().max(4);
+                cap * 33 + m.values().map(|b| blob_alloc(b)).sum::<u64>()
+            }
+        }
+    }
+}
+
+/// One position blob's real allocation: 16-byte granularity + header.
+fn blob_alloc(b: &[u8]) -> u64 {
+    (b.len().max(1) as u64).next_multiple_of(16) + 16
+}
+
+/// The positional side-channel: token → per-document position blobs.
 /// Present only on a `WITH POSITIONS` segment.
 #[derive(Debug, Default)]
 pub(crate) struct Positions {
-    map: HashMap<Vec<u8>, HashMap<u32, Vec<u8>>>,
+    map: HashMap<Vec<u8>, DocBlobs>,
 }
 
 impl Positions {
     /// Store `id`'s ascending offsets for `token`.
     pub(crate) fn set(&mut self, token: &[u8], id: u32, offsets: &[u32]) {
-        self.map
-            .entry(token.to_vec())
-            .or_default()
-            .insert(id, encode(offsets));
+        let blob = encode(offsets);
+        match self.map.get_mut(token) {
+            Some(db) => db.set(id, blob),
+            None => {
+                self.map.insert(token.to_vec(), DocBlobs::One { id, blob });
+            }
+        }
     }
 
     /// Drop `id` from `token`'s postings, removing the token entirely
     /// once its last document is gone.
     pub(crate) fn remove(&mut self, token: &[u8], id: u32) {
-        if let Some(inner) = self.map.get_mut(token) {
-            inner.remove(&id);
-            if inner.is_empty() {
-                self.map.remove(token);
-            }
+        if let Some(db) = self.map.get_mut(token)
+            && db.remove(id)
+        {
+            self.map.remove(token);
         }
     }
 
     /// `id`'s decoded ascending offsets for `token`, or `None` when the
     /// document does not contain it.
     pub(crate) fn get(&self, token: &[u8], id: u32) -> Option<Vec<u32>> {
-        self.map.get(token)?.get(&id).map(|b| decode(b))
+        self.map.get(token)?.get(id).map(decode)
     }
 
     /// Documents containing `token`, as ids — the phrase-query candidate
     /// set for that token.
     pub(crate) fn ids(&self, token: &[u8]) -> Vec<u32> {
-        self.map
-            .get(token)
-            .map(|inner| inner.keys().copied().collect())
-            .unwrap_or_default()
+        self.map.get(token).map(DocBlobs::ids).unwrap_or_default()
     }
 
     /// Approximate heap bytes — the positions term of the memory formula
     /// (the memory gate calibrates it against real RSS growth).
     ///
-    /// A first cut charged a flat `blob.len() + 30` per posting and
-    /// underestimated real growth ~3× at 1M docs: it ignored that every
-    /// token owns a nested `HashMap<u32, Vec<u8>>` — a struct plus a
-    /// power-of-two RawTable even for a single hapax posting — and that
-    /// each tiny positions blob is a separate heap allocation the system
-    /// allocator rounds up and headers. This models both.
+    /// Each outer entry pays its token-key Vec plus the [`DocBlobs`] enum
+    /// stored inline (its Vec / HashMap struct); the token's blob heap —
+    /// and, for a `Many` token, its RawTable — is added per variant.
     pub(crate) fn approx_bytes(&self) -> u64 {
         self.map
             .iter()
-            .map(|(t, inner)| {
-                let n = inner.len() as u64;
-                // Inner RawTable: capacity is the next power of two above
-                // n / 0.875 (its load factor); each bucket holds
-                // (u32, Vec<u8>) ≈ 32 B plus a 1-byte control.
-                let cap = (n * 8 / 7 + 1).next_power_of_two().max(4);
-                let table = cap * 33;
-                // Each blob is its own allocation: 16-byte granularity
-                // plus a per-allocation header.
-                let blobs: u64 = inner
-                    .values()
-                    .map(|b| (b.len().max(1) as u64).next_multiple_of(16) + 16)
-                    .sum();
-                // Outer entry: the token-key Vec and the inner map struct.
-                t.len() as u64 + 24 + 48 + table + blobs
-            })
+            .map(|(t, db)| t.len() as u64 + 24 + 56 + db.approx_bytes())
             .sum()
     }
 }
