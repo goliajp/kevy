@@ -23,7 +23,7 @@ pub(super) fn reduce_ranked(argv: &[Vec<u8>], chunks: &[Vec<u8>], ascending: boo
         encode_error(&mut out, "ERR bad IDX arguments");
         return out;
     };
-    merge_ranked(chunks, limit, &fields, ascending, false)
+    merge_ranked(chunks, limit, &fields, ascending, false, 0)
 }
 
 /// MATCH pass 2 reduce: merge the globally-scored ranked chunks
@@ -31,13 +31,13 @@ pub(super) fn reduce_ranked(argv: &[Vec<u8>], chunks: &[Vec<u8>], ascending: boo
 /// from the MATCH.SCORE argv the pass-1 reduce built.
 pub(super) fn reduce_match_score(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
     let mut out = Vec::new();
-    let Some((_, _, limit, fields, highlight, _typo)) =
+    let Some((_, _, limit, fields, highlight, _typo, offset)) =
         crate::cmd_index_query::parse_match_score(argv)
     else {
         encode_error(&mut out, "ERR bad IDX arguments");
         return out;
     };
-    merge_ranked(chunks, limit, &fields, false, highlight.is_some())
+    merge_ranked(chunks, limit, &fields, false, highlight.is_some(), offset)
 }
 
 /// Decode `[n][(key, f64, hydration, highlight?)*]` chunks, sort,
@@ -51,6 +51,7 @@ fn merge_ranked(
     fields: &[Vec<u8>],
     ascending: bool,
     highlight: bool,
+    offset: usize,
 ) -> Vec<u8> {
     let mut out = Vec::new();
     let mut all: Vec<(f64, Vec<u8>, Hydrated, HitSpans)> = Vec::new();
@@ -61,6 +62,11 @@ fn merge_ranked(
         all.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
     } else {
         all.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    }
+    // OFFSET applies to the MERGED ranking, not per shard: drop the
+    // first `offset` globally-ranked hits, then fill LIMIT.
+    if offset > 0 {
+        all.drain(..offset.min(all.len()));
     }
     all.truncate(limit);
     encode_array_len(&mut out, all.len() as i64);
@@ -172,6 +178,10 @@ pub(super) fn reduce_match_stats(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Extens
     if m.typo > 0 {
         argv2.push(b"TYPO".to_vec());
         argv2.push(m.typo.to_string().into_bytes());
+    }
+    if m.offset > 0 {
+        argv2.push(b"OFFSET".to_vec());
+        argv2.push(m.offset.to_string().into_bytes());
     }
     ExtensionReduced::Continue(argv2)
 }

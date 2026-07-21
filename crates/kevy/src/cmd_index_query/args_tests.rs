@@ -14,7 +14,7 @@
     fn reserved_clauses_are_refused_by_name() {
         // HIGHLIGHT is no longer here — it ships now (see the highlight
         // tests below); the rest stay reserved-by-name.
-        for clause in ["IN", "FILTER", "FACET", "SORT", "DISTINCT", "OFFSET"] {
+        for clause in ["IN", "FILTER", "FACET", "SORT", "DISTINCT"] {
             let a = argv(&["IDX.QUERY", "idx", "MATCH", "hello", clause, "x"]);
             match MatchArgs::parse_terminal(&a) {
                 MatchParse::NotYet(c) => {
@@ -106,4 +106,22 @@ fn typo_parses() {
         }
         _ => panic!("TYPO and FIELDS must coexist"),
     }
+}
+
+/// OFFSET ships now: it parses into a skip count and coexists with the
+/// other clauses.
+#[test]
+fn offset_parses() {
+    let none = argv(&["IDX.QUERY", "idx", "MATCH", "hello"]);
+    assert!(matches!(MatchArgs::parse_terminal(&none), MatchParse::Ok(q) if q.offset == 0));
+    let a = argv(&["IDX.QUERY", "idx", "MATCH", "hello", "LIMIT", "5", "OFFSET", "10"]);
+    match MatchArgs::parse_terminal(&a) {
+        MatchParse::Ok(q) => {
+            assert_eq!(q.limit, 5);
+            assert_eq!(q.offset, 10);
+        }
+        _ => panic!("LIMIT and OFFSET must coexist"),
+    }
+    let bad = argv(&["IDX.QUERY", "idx", "MATCH", "hello", "OFFSET", "x"]);
+    assert!(matches!(MatchArgs::parse_terminal(&bad), MatchParse::BadArgs));
 }

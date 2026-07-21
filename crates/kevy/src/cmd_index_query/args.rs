@@ -182,6 +182,8 @@ pub(crate) struct MatchArgs {
     pub(crate) highlight: Option<Vec<Vec<u8>>>,
     /// `TYPO n`: edit-distance budget for each bare term; 0 = exact.
     pub(crate) typo: u32,
+    /// `OFFSET n`: hits to skip before `LIMIT` takes effect.
+    pub(crate) offset: usize,
 }
 
 /// A MATCH clause keyword — the boundary a variadic clause (`FIELDS`,
@@ -191,6 +193,7 @@ fn is_clause_keyword(a: &[u8]) -> bool {
         || a.eq_ignore_ascii_case(b"FIELDS")
         || a.eq_ignore_ascii_case(b"HIGHLIGHT")
         || a.eq_ignore_ascii_case(b"TYPO")
+        || a.eq_ignore_ascii_case(b"OFFSET")
 }
 
 /// Parse a `TYPO` budget: 0, 1 or 2. `AUTO` (in the frozen surface but
@@ -202,6 +205,35 @@ fn parse_typo(v: &[u8]) -> Option<u32> {
         b"1" => Some(1),
         b"2" => Some(2),
         _ => None,
+    }
+}
+
+/// Apply the MATCH clause starting at `i` to `a`; returns the index of
+/// the next clause, or `None` on a syntax error.
+fn apply_clause(argv: &[Vec<u8>], i: usize, a: &mut MatchArgs) -> Option<usize> {
+    let kw = &argv[i];
+    if kw.eq_ignore_ascii_case(b"LIMIT") {
+        a.limit = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
+        Some(i + 2)
+    } else if kw.eq_ignore_ascii_case(b"FIELDS") {
+        let (fs, next) = collect_clause(argv, i + 1);
+        if fs.is_empty() {
+            return None;
+        }
+        a.fields = fs;
+        Some(next)
+    } else if kw.eq_ignore_ascii_case(b"HIGHLIGHT") {
+        let (hs, next) = collect_clause(argv, i + 1);
+        a.highlight = Some(hs);
+        Some(next)
+    } else if kw.eq_ignore_ascii_case(b"TYPO") {
+        a.typo = parse_typo(argv.get(i + 1)?)?;
+        Some(i + 2)
+    } else if kw.eq_ignore_ascii_case(b"OFFSET") {
+        a.offset = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
+        Some(i + 2)
+    } else {
+        None
     }
 }
 
@@ -221,7 +253,7 @@ fn collect_clause(argv: &[Vec<u8>], start: usize) -> (Vec<Vec<u8>>, usize) {
 /// later. Listed here rather than rejected as unknown so the syntax is
 /// frozen now: every one of these would otherwise want to change the
 /// MATCH signature when it lands, and v4 is the release that freezes it.
-const NOT_YET: &[&[u8]] = &[b"IN", b"FILTER", b"FACET", b"SORT", b"DISTINCT", b"OFFSET"];
+const NOT_YET: &[&[u8]] = &[b"IN", b"FILTER", b"FACET", b"SORT", b"DISTINCT"];
 
 /// Outcome of parsing a MATCH query.
 pub(crate) enum MatchParse {
@@ -258,88 +290,31 @@ impl MatchArgs {
         if !argv.get(2)?.eq_ignore_ascii_case(b"MATCH") {
             return None;
         }
-        let text = argv.get(3)?.clone();
-        let mut limit = 10usize;
-        let mut fields = Vec::new();
-        let mut highlight = None;
-        let mut typo = 0u32;
-        let mut i = 4;
+        let mut a = MatchArgs {
+            name,
+            text: argv.get(3)?.clone(),
+            limit: 10,
+            fields: Vec::new(),
+            highlight: None,
+            typo: 0,
+            offset: 0,
+        };
         // Clauses are order-independent; each variadic one (FIELDS,
-        // HIGHLIGHT) collects up to the next keyword. FIELDS must name at
-        // least one field; HIGHLIGHT with none means every field.
+        // HIGHLIGHT) collects up to the next keyword.
+        let mut i = 4;
         while i < argv.len() {
-            let kw = &argv[i];
-            if kw.eq_ignore_ascii_case(b"LIMIT") {
-                limit = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
-                i += 2;
-            } else if kw.eq_ignore_ascii_case(b"FIELDS") {
-                let (fs, next) = collect_clause(argv, i + 1);
-                if fs.is_empty() {
-                    return None;
-                }
-                fields = fs;
-                i = next;
-            } else if kw.eq_ignore_ascii_case(b"HIGHLIGHT") {
-                let (hs, next) = collect_clause(argv, i + 1);
-                highlight = Some(hs);
-                i = next;
-            } else if kw.eq_ignore_ascii_case(b"TYPO") {
-                typo = parse_typo(argv.get(i + 1)?)?;
-                i += 2;
-            } else {
-                return None;
-            }
+            i = apply_clause(argv, i, &mut a)?;
         }
-        Some(MatchArgs { name, text, limit: limit.clamp(1, 1000), fields, highlight, typo })
+        a.limit = a.limit.clamp(1, 1000);
+        a.offset = a.offset.min(10_000);
+        Some(a)
     }
+
 }
 
-/// Parsed pass-2 args: `(name, text, limit, fields, highlight, typo)`.
-pub(crate) type MatchScoreArgs =
-    (Vec<u8>, Vec<u8>, usize, Vec<Vec<u8>>, Option<Vec<Vec<u8>>>, u32);
-
-/// Parse the internal pass-2 argv
-/// `[MATCH.SCORE, name, text, LIMIT=<n>, <gstats>, (FIELDS f…)? (HIGHLIGHT h…)?]`
-/// into `(name, text, limit, fields, highlight)`. The global-stats blob
-/// at index 4 is decoded separately (per-shard:
-/// [`super::wire::decode_gstats_arg`]); the reduce takes only the rest.
-/// Shared by the per-shard op and the origin merge so their view of the
-/// clauses can never drift.
-pub(crate) fn parse_match_score(argv: &[Vec<u8>]) -> Option<MatchScoreArgs> {
-    let name = argv.get(1)?.clone();
-    let text = argv.get(2)?.clone();
-    let limit: usize = std::str::from_utf8(argv.get(3)?)
-        .ok()?
-        .strip_prefix("LIMIT=")?
-        .parse()
-        .ok()?;
-    // index 4 is the gstats blob; the optional clauses start at 5.
-    let mut fields = Vec::new();
-    let mut highlight = None;
-    let mut typo = 0u32;
-    let mut i = 5;
-    while i < argv.len() {
-        let kw = &argv[i];
-        if kw.eq_ignore_ascii_case(b"FIELDS") {
-            let (fs, next) = collect_clause(argv, i + 1);
-            if fs.is_empty() {
-                return None;
-            }
-            fields = fs;
-            i = next;
-        } else if kw.eq_ignore_ascii_case(b"HIGHLIGHT") {
-            let (hs, next) = collect_clause(argv, i + 1);
-            highlight = Some(hs);
-            i = next;
-        } else if kw.eq_ignore_ascii_case(b"TYPO") {
-            typo = parse_typo(argv.get(i + 1)?)?;
-            i += 2;
-        } else {
-            return None;
-        }
-    }
-    Some((name, text, limit.clamp(1, 1000), fields, highlight, typo))
-}
+#[path = "args_match_score.rs"]
+mod match_score;
+pub(crate) use match_score::parse_match_score;
 
 /// `IDX.QUERY name KNN vec [LIMIT k] [FIELDS f…]` (no cursor; k ≤
 /// 1000 — same rationale as MATCH).

@@ -725,3 +725,48 @@ fn typo_query_over_the_wire() {
     let r = cmd(&mut c, &[b"IDX.QUERY", b"tp", b"MATCH", b"quik", b"TYPO", b"AUTO"]);
     assert!(String::from_utf8_lossy(&r).starts_with("-ERR"), "TYPO AUTO errors clearly");
 }
+
+/// `OFFSET n` skips the first n hits of the MERGED ranking, so paging
+/// with LIMIT/OFFSET never repeats or drops a row across shards.
+#[test]
+fn offset_pages_the_merged_ranking() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    // Five docs all containing "rust", with decreasing term density so
+    // the ranking is stable.
+    for i in 0..5 {
+        let body = format!("rust {}", "filler ".repeat(i));
+        cmd(&mut c, &[b"HSET", format!("o:{i}").as_bytes(), b"body", body.as_bytes()]);
+    }
+    let r = cmd(
+        &mut c,
+        &[b"IDX.CREATE", b"off", b"ON", b"PREFIX", b"o:", b"FIELD", b"body",
+          b"TYPE", b"str", b"KIND", b"text"],
+    );
+    assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
+
+    let all = query_ready(&mut c, &[b"IDX.QUERY", b"off", b"MATCH", b"rust", b"LIMIT", b"10"]);
+    let all_s = String::from_utf8_lossy(&all);
+    assert_eq!(all_s.matches("o:").count(), 5, "all five match: {all_s}");
+
+    // Page 1 (LIMIT 2) and page 2 (LIMIT 2 OFFSET 2) must not overlap and
+    // together cover the first four of the merged ranking.
+    let p1 = query_ready(&mut c, &[b"IDX.QUERY", b"off", b"MATCH", b"rust", b"LIMIT", b"2"]);
+    let p2 = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"off", b"MATCH", b"rust", b"LIMIT", b"2", b"OFFSET", b"2"],
+    );
+    let (s1, s2) = (String::from_utf8_lossy(&p1), String::from_utf8_lossy(&p2));
+    assert_eq!(s1.matches("o:").count(), 2, "page 1 has two rows: {s1}");
+    assert_eq!(s2.matches("o:").count(), 2, "page 2 has two rows: {s2}");
+    for i in 0..5 {
+        let k = format!("o:{i}\r");
+        assert!(!(s1.contains(&k) && s2.contains(&k)), "o:{i} appears on both pages");
+    }
+    // An offset past the end is empty, not an error.
+    let past = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"off", b"MATCH", b"rust", b"LIMIT", b"2", b"OFFSET", b"99"],
+    );
+    assert_eq!(String::from_utf8_lossy(&past).matches("o:").count(), 0, "past the end is empty");
+}
