@@ -42,10 +42,13 @@ impl TextSegment {
         let Some(pos) = self.positions.as_ref() else {
             return Vec::new();
         };
+        let Some(anchor) = self.rarest_anchor(&toks) else {
+            return Vec::new();
+        };
         let (n_docs, avgdl) = self.corpus_stats(stats);
         let distinct = distinct_tokens(&toks);
         let mut scores: HashMap<u32, f64> = HashMap::new();
-        for id in pos.ids(&toks[0]) {
+        for id in pos.ids(anchor) {
             if doc_has_phrase(pos, &toks, id) {
                 scores.insert(id, self.phrase_score(&distinct, id, stats, n_docs, avgdl));
             }
@@ -136,13 +139,30 @@ impl TextSegment {
         avgdl: f64,
     ) {
         let Some(pos) = self.positions.as_ref() else { return };
+        let Some(anchor) = self.rarest_anchor(toks) else { return };
         let distinct = distinct_tokens(toks);
-        for id in pos.ids(&toks[0]) {
+        for id in pos.ids(anchor) {
             if doc_has_phrase(pos, toks, id) {
                 *scores.entry(id).or_insert(0.0) +=
                     self.phrase_score(&distinct, id, stats, n_docs, avgdl);
             }
         }
+    }
+
+    /// The phrase token with the fewest postings — the tightest candidate
+    /// set, since every phrase token must appear in a matching document,
+    /// so anchoring the scan on the rarest one avoids walking a head
+    /// term's whole list. `None` if any token is absent (the phrase then
+    /// matches nothing).
+    fn rarest_anchor<'a>(&self, toks: &'a [Vec<u8>]) -> Option<&'a [u8]> {
+        let mut best: Option<(&'a [u8], usize)> = None;
+        for t in toks {
+            let df = self.postings.get(t)?.len();
+            if best.is_none_or(|(_, b)| df < b) {
+                best = Some((t, df));
+            }
+        }
+        best.map(|(t, _)| t)
     }
 
     /// BM25 sum over the phrase's distinct tokens for one matching doc —
