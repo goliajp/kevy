@@ -16,11 +16,29 @@ pub(crate) use chunk::{
 use kevy_resp::encode_error;
 use kevy_rt::ExtensionReduced;
 
-use crate::cmd_index_query::{ST_BADARGS, ST_BUILDING, ST_NOINDEX, ST_NOTYET, ST_OVERBUDGET};
+use crate::cmd_index_query::{
+    ST_BADARGS, ST_BUILDING, ST_NOFIELD, ST_NOINDEX, ST_NOTYET, ST_OVERBUDGET,
+};
 use crate::state::CatalogState;
 
 /// Origin half: merge chunks → RESP (or a follow-up fan-out — the
 /// GROUPS top-K and its AGG.FETCH phase are the two-phase shapes).
+/// Explain an `IN` clause that named an undeclared field. The chunk
+/// carries the offending name, a NUL, then the names the index does
+/// declare — so the answer can point at what IS there.
+fn nofield(chunk: &[u8]) -> String {
+    let body = &chunk[1..];
+    let (bad, declared) = match body.iter().position(|&b| b == 0) {
+        Some(i) => (&body[..i], &body[i + 1..]),
+        None => (body, &body[body.len()..]),
+    };
+    format!(
+        "IN names field '{}', which this index does not declare — it indexes: {}",
+        String::from_utf8_lossy(bad),
+        String::from_utf8_lossy(declared),
+    )
+}
+
 pub(crate) fn extension_reduce(
     catalogs: &CatalogState,
     argv: &[Vec<u8>],
@@ -100,48 +118,42 @@ fn triage_status(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Option<Vec<u8>> {
     let verb = argv.first().map(Vec::as_slice).unwrap_or(b"");
     let verb_s = String::from_utf8_lossy(verb);
     let name_i = if argv.get(1).is_some_and(|a| a.eq_ignore_ascii_case(b"HYBRID")) { 2 } else { 1 };
-    let name_s = argv.get(name_i).map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
-    let mut out = Vec::new();
+    let name_s =
+        argv.get(name_i).map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
     for c in chunks {
-        match c.first().copied() {
-            Some(ST_BADARGS) | None => {
-                encode_error(
-                    &mut out,
-                    &format!("ERR {verb_s} '{name_s}': bad arguments — run COMMAND DOCS {verb_s} for the syntax"),
-                );
-                return Some(out);
-            }
-            Some(ST_NOTYET) => {
-                let clause = String::from_utf8_lossy(&c[1..]).to_string();
-                encode_error(
-                    &mut out,
-                    &format!("ERR {verb_s} '{name_s}': the {clause} clause is accepted by the parser but not implemented yet — it is part of the text-search arc, and silently ignoring it would give you wrong results rather than an error"),
-                );
-                return Some(out);
-            }
-            Some(ST_NOINDEX) => {
-                encode_error(
-                    &mut out,
-                    &format!("ERR no such index '{name_s}' (IDX.LIST enumerates them)"),
-                );
-                return Some(out);
-            }
-            Some(ST_BUILDING) => {
-                encode_error(
-                    &mut out,
-                    &format!("INDEXBUILDING index '{name_s}' is still building (poll IDX.LIST until state=ready)"),
-                );
-                return Some(out);
-            }
-            Some(ST_OVERBUDGET) => {
-                encode_error(
-                    &mut out,
-                    &format!("INDEXOVERBUDGET index '{name_s}' build exceeded MAXMEM (raise maxmemory or DROP the index)"),
-                );
-                return Some(out);
-            }
-            _ => {}
+        if let Some(msg) = status_error(c, &verb_s, &name_s) {
+            let mut out = Vec::new();
+            encode_error(&mut out, &msg);
+            return Some(out);
         }
     }
     None
+}
+
+/// The error one status-tagged chunk stands for, or `None` when the shard
+/// answered normally. Each status gets its own sentence: collapsing them
+/// would send people hunting for a typo in correct syntax.
+fn status_error(c: &[u8], verb_s: &str, name_s: &str) -> Option<String> {
+    match c.first().copied() {
+        Some(ST_BADARGS) | None => Some(format!(
+            "ERR {verb_s} '{name_s}': bad arguments — run COMMAND DOCS {verb_s} for the syntax"
+        )),
+        Some(ST_NOTYET) => {
+            let clause = String::from_utf8_lossy(&c[1..]);
+            Some(format!(
+                "ERR {verb_s} '{name_s}': the {clause} clause is accepted by the parser but not implemented yet — it is part of the text-search arc, and silently ignoring it would give you wrong results rather than an error"
+            ))
+        }
+        Some(ST_NOFIELD) => Some(format!("ERR {verb_s} '{name_s}': {}", nofield(c))),
+        Some(ST_NOINDEX) => {
+            Some(format!("ERR no such index '{name_s}' (IDX.LIST enumerates them)"))
+        }
+        Some(ST_BUILDING) => Some(format!(
+            "INDEXBUILDING index '{name_s}' is still building (poll IDX.LIST until state=ready)"
+        )),
+        Some(ST_OVERBUDGET) => Some(format!(
+            "INDEXOVERBUDGET index '{name_s}' build exceeded MAXMEM (raise maxmemory or DROP the index)"
+        )),
+        _ => None,
+    }
 }

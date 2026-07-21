@@ -35,11 +35,17 @@ pub type FieldSpans = (Vec<u8>, Vec<(u32, u32)>);
 #[cfg(feature = "text")]
 pub type HighlightedHit = (Vec<u8>, f64, Vec<FieldSpans>);
 
-// `idx_match_highlighted` and its span-mapping helper live in a child
-// module to keep this file under the 500-LOC ceiling.
+// `idx_match_with`, its clause options and the span-mapping helper live
+// in a child module to keep this file under the 500-LOC ceiling; the
+// text-index specifics — declaring a multi-field one, and gathering the
+// corpus statistics a global BM25 scores against — live in another.
 #[cfg(feature = "text")]
 #[path = "ops_index_highlight.rs"]
-mod highlight;
+pub(crate) mod highlight;
+
+#[cfg(feature = "text")]
+#[path = "ops_index_text.rs"]
+mod text;
 
 /// Sort merged `(value, key)` hits, cut to `limit`, and derive the
 /// resume cursor. Shared by `Store::idx_query` and the transaction twin
@@ -264,49 +270,12 @@ impl Store {
         limit: usize,
     ) -> KevyResult<Vec<(Vec<u8>, f64)>> {
         Ok(self
-            .idx_match_highlighted(name, query, limit, None, 0, 0)?
+            .idx_match_with(name, query, limit, crate::MatchOpts::default())?
             .into_iter()
             .map(|(key, score, _)| (key, score))
             .collect())
     }
 
-    /// Pass 1 of `idx_match`: sum each shard's corpus counters and the
-    /// df of every query token into one global [`CorpusStats`]. Errors
-    /// if no shard carries a text index named `name`.
-    #[cfg(feature = "text")]
-    fn text_corpus_stats(
-        &self,
-        name: &[u8],
-        text: &[u8],
-        typo: u32,
-    ) -> KevyResult<kevy_text::CorpusStats> {
-        let (mut n_docs, mut total_len) = (0f64, 0u64);
-        // Accumulated per shard from `query_df_terms`, which expands
-        // `word*` prefixes against that shard's dictionary — so the df map
-        // ends up keyed by the union of every shard's query terms and
-        // prefix expansions, each summed to a global df.
-        let mut df: std::collections::HashMap<Vec<u8>, u32> = std::collections::HashMap::new();
-        let mut found = false;
-        for shard in self.shards.iter() {
-            let mut g = lock_write(shard);
-            let inner = &mut *g;
-            sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
-            if let Some((_, ts)) = inner.idx_segs.text.iter().find(|(s, _)| s.name == name) {
-                found = true;
-                n_docs += ts.stats().docs as f64;
-                total_len += ts.total_len();
-                for t in ts.query_df_terms_typo(text, typo) {
-                    let d = ts.local_df(&t);
-                    *df.entry(t).or_insert(0) += d;
-                }
-            }
-        }
-        if !found {
-            return Err(KevyError::NotFound("no such text index".into()));
-        }
-        let avgdl = if n_docs > 0.0 { total_len as f64 / n_docs } else { 0.0 };
-        Ok(kevy_text::CorpusStats { n_docs, avgdl, df })
-    }
 
     /// Declare an aggregate index (KIND agg — write-time GROUP
     /// BY). `ty` must be numeric.

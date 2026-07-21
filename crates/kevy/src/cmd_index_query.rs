@@ -40,6 +40,10 @@ pub(crate) const ST_OVERBUDGET: u8 = 4;
 /// people hunting for a typo in correct syntax. The chunk carries the
 /// clause name after the status byte.
 pub(crate) const ST_NOTYET: u8 = 5;
+/// `IN` named a field the index does not declare. The chunk carries the
+/// offending name, a NUL, then the declared names — so the error can say
+/// what IS there instead of leaving the caller to guess.
+pub(crate) const ST_NOFIELD: u8 = 6;
 
 /// Per-shard half: parse the IDX.* argv, run against this shard's
 /// segment, emit a status-tagged chunk.

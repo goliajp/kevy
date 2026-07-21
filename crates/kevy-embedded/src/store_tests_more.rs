@@ -660,16 +660,21 @@ fn text_index_highlight_embedded() {
     s.hset(b"n:1", &[(b"body", b"the quick brown fox")]).unwrap();
     s.idx_create(b"hb", b"n:", b"body", IndexValType::Str, IndexKind::Text).unwrap();
     // No highlight requested → the hit carries no spans.
-    let plain = s.idx_match_highlighted(b"hb", b"quick", 10, None, 0, 0).unwrap();
+    let plain = s.idx_match_with(b"hb", b"quick", 10, crate::MatchOpts::default()).unwrap();
     assert_eq!(plain.len(), 1);
     assert!(plain[0].2.is_empty(), "no spans without a highlight request");
     // Highlight the term: "quick" is bytes 4..9 of field "body".
-    let hl = s.idx_match_highlighted(b"hb", b"quick", 10, Some(&[]), 0, 0).unwrap();
+    let hl = s.idx_match_with(b"hb", b"quick", 10, crate::MatchOpts { highlight: Some(&[]), ..Default::default() }).unwrap();
     assert_eq!(hl.len(), 1);
     assert_eq!(hl[0].0, b"n:1".to_vec());
     assert_eq!(hl[0].2, vec![(b"body".to_vec(), vec![(4u32, 9u32)])]);
     // A field filter that names no indexed field yields no spans.
-    let none = s.idx_match_highlighted(b"hb", b"quick", 10, Some(&[b"title".to_vec()]), 0, 0).unwrap();
+    let none = s.idx_match_with(
+        b"hb",
+        b"quick",
+        10,
+        crate::MatchOpts { highlight: Some(&[b"title".to_vec()]), ..Default::default() },
+    ).unwrap();
     assert!(none[0].2.is_empty(), "the 'body' spans are filtered out");
 }
 
@@ -801,4 +806,49 @@ fn text_match_is_shard_count_invariant() {
     // all and must be absent.)
     assert_eq!(eight[0].0, b"d:1".to_vec());
     assert!(!eight.iter().any(|(k, _)| k == b"d:5"));
+}
+
+/// `IN <field…>` scores within the named fields — a field-scoped BM25,
+/// not a filter over whole-document scores — and refuses a field the
+/// index does not declare rather than returning a plausible empty result.
+#[test]
+fn text_index_field_scope_embedded() {
+    let s = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
+    s.hset(b"n:1", &[(b"title", b"rust engine"), (b"body", b"a long body about gardening")])
+        .unwrap();
+    s.hset(
+        b"n:2",
+        &[(b"title", b"gardening weekly"), (b"body", b"this body mentions rust once or twice")],
+    )
+    .unwrap();
+    s.idx_create_text(b"ft", b"n:", &[(b"title", 1.0), (b"body", 1.0)], true).unwrap();
+
+    fn scope(f: &[Vec<u8>]) -> crate::MatchOpts<'_> {
+        crate::MatchOpts { scope: f, ..Default::default() }
+    }
+    let one = |f: &str| vec![f.as_bytes().to_vec()];
+    // Unscoped, both documents mention rust.
+    assert_eq!(s.idx_match(b"ft", b"rust", 10).unwrap().len(), 2);
+    // Scoped, each field has exactly one.
+    let title = s.idx_match_with(b"ft", b"rust", 10, scope(&one("title"))).unwrap();
+    assert_eq!(title.len(), 1);
+    assert_eq!(title[0].0, b"n:1".to_vec());
+    let body = s.idx_match_with(b"ft", b"rust", 10, scope(&one("body"))).unwrap();
+    assert_eq!(body.len(), 1);
+    assert_eq!(body[0].0, b"n:2".to_vec());
+
+    // Naming both fields is the unscoped query again.
+    let both = vec![b"title".to_vec(), b"body".to_vec()];
+    let all = s
+        .idx_match_with(b"ft", b"rust", 10, crate::MatchOpts { scope: &both, ..Default::default() })
+        .unwrap();
+    assert_eq!(all.len(), 2);
+
+    // A field the index does not declare is an error naming what it does.
+    let err = s
+        .idx_match_with(b"ft", b"rust", 10, scope(&one("titel")))
+        .expect_err("an undeclared field must not look like an empty corpus");
+    let msg = format!("{err}");
+    assert!(msg.contains("titel"), "names the offending field: {msg}");
+    assert!(msg.contains("title") && msg.contains("body"), "lists the declared ones: {msg}");
 }

@@ -31,13 +31,11 @@ pub(super) fn reduce_ranked(argv: &[Vec<u8>], chunks: &[Vec<u8>], ascending: boo
 /// from the MATCH.SCORE argv the pass-1 reduce built.
 pub(super) fn reduce_match_score(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
     let mut out = Vec::new();
-    let Some((_, _, limit, fields, highlight, _typo, offset)) =
-        crate::cmd_index_query::parse_match_score(argv)
-    else {
+    let Some(q) = crate::cmd_index_query::parse_match_score(argv) else {
         encode_error(&mut out, "ERR bad IDX arguments");
         return out;
     };
-    merge_ranked(chunks, limit, &fields, false, highlight.is_some(), offset)
+    merge_ranked(chunks, q.limit, &q.fields, false, q.highlight.is_some(), q.offset)
 }
 
 /// Decode `[n][(key, f64, hydration, highlight?)*]` chunks, sort,
@@ -137,7 +135,7 @@ fn encode_highlights(out: &mut Vec<u8>, hl: &HitSpans) {
 /// inside the follow-up argv, so the runtime holds no per-phase state.
 pub(super) fn reduce_match_stats(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> ExtensionReduced {
     let mut out = Vec::new();
-    let Some(m) = crate::cmd_index_query::MatchArgs::parse(argv) else {
+    let Some(mut m) = crate::cmd_index_query::MatchArgs::parse(argv) else {
         encode_error(&mut out, "ERR bad IDX arguments");
         return ExtensionReduced::Reply(out);
     };
@@ -158,17 +156,27 @@ pub(super) fn reduce_match_stats(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Extens
     let blob = encode_gstats_arg(n_docs as f64, avgdl, &df);
     let mut argv2: Vec<Vec<u8>> = vec![
         b"MATCH.SCORE".to_vec(),
-        m.name,
-        m.text,
+        std::mem::take(&mut m.name),
+        std::mem::take(&mut m.text),
         format!("LIMIT={}", m.limit).into_bytes(),
         blob,
     ];
+    push_clauses(&mut argv2, m);
+    ExtensionReduced::Continue(argv2)
+}
+
+/// Carry the user's MATCH clauses onto the pass-2 argv.
+///
+/// Pass 2 re-parses these with the very parser pass 1 used, so a clause
+/// missing here simply does not happen on the second pass — which is why
+/// they are gathered in one place instead of inline at the call.
+fn push_clauses(argv2: &mut Vec<Vec<u8>>, m: crate::cmd_index_query::MatchArgs) {
     if !m.fields.is_empty() {
         argv2.push(b"FIELDS".to_vec());
         argv2.extend(m.fields);
     }
-    // Carry HIGHLIGHT to pass 2, where the segment produces the spans;
-    // an empty field list means "every field".
+    // HIGHLIGHT goes to pass 2, where the segment produces the spans; an
+    // empty field list means "every field".
     if let Some(hl) = m.highlight {
         argv2.push(b"HIGHLIGHT".to_vec());
         argv2.extend(hl);
@@ -179,11 +187,16 @@ pub(super) fn reduce_match_stats(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Extens
         argv2.push(b"TYPO".to_vec());
         argv2.push(m.typo.to_string().into_bytes());
     }
+    // And the field scope: pass 2 maps the names onto positions with its
+    // own shard's spec, the same mapping pass 1 already validated.
+    if !m.scope.is_empty() {
+        argv2.push(b"IN".to_vec());
+        argv2.extend(m.scope);
+    }
     if m.offset > 0 {
         argv2.push(b"OFFSET".to_vec());
         argv2.push(m.offset.to_string().into_bytes());
     }
-    ExtensionReduced::Continue(argv2)
 }
 
 /// Encode the aggregated global stats as one MATCH.SCORE argv element

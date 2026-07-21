@@ -222,11 +222,10 @@ pub(crate) fn segment_building(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) ->
 /// positional side-channel iff it was created WITH POSITIONS.
 fn new_text_seg(spec: &kevy_index::IndexSpec) -> Option<kevy_text::TextSegment> {
     (spec.kind == kevy_index::IndexKind::Text).then(|| {
-        if spec.with_positions {
-            kevy_text::TextSegment::with_positions()
-        } else {
-            kevy_text::TextSegment::new()
-        }
+        // The declared field count decides whether the segment keeps the
+        // per-field breakdown `IN <field…>` scopes to; one field needs
+        // none, because its per-field numbers are the merged ones.
+        kevy_text::TextSegment::with_fields(spec.fields.len(), spec.with_positions)
     })
 }
 
