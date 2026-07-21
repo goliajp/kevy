@@ -233,8 +233,14 @@ impl Store {
             .collect()
     }
 
-    /// `MATCH` — BM25-ranked hits merged across shards
-    /// (shard-local statistics; see docs/text-search.md).
+    /// `MATCH` — BM25-ranked hits merged across shards, scored against
+    /// **global** corpus statistics so a hit's rank does not depend on
+    /// which shard it landed on (see docs/text-search.md).
+    ///
+    /// Two query-time passes: the first sums each shard's `n_docs`,
+    /// `total_len` and per-query-token `df` into one [`CorpusStats`]; the
+    /// second scores every shard against it. Only the query's tokens'
+    /// df is aggregated, not a whole-corpus table — the query narrows it.
     #[cfg(feature = "text")]
     pub fn idx_match(
         &self,
@@ -243,7 +249,36 @@ impl Store {
         limit: usize,
     ) -> KevyResult<Vec<(Vec<u8>, f64)>> {
         let limit = limit.clamp(1, 1000);
+        let mut q_tokens = kevy_text::tokenize(query);
+        q_tokens.sort();
+        q_tokens.dedup();
+        let stats = self.text_corpus_stats(name, &q_tokens)?;
         let mut all: Vec<kevy_text::TextMatch> = Vec::new();
+        for shard in self.shards.iter() {
+            let mut g = lock_write(shard);
+            let inner = &mut *g;
+            sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
+            if let Some((_, ts)) = inner.idx_segs.text.iter().find(|(s, _)| s.name == name) {
+                all.extend(ts.matches_scored(query, limit, Some(&stats)));
+            }
+        }
+        all.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.key.cmp(&b.key)));
+        all.truncate(limit);
+        Ok(all.into_iter().map(|m| (m.key, m.score)).collect())
+    }
+
+    /// Pass 1 of `idx_match`: sum each shard's corpus counters and the
+    /// df of every query token into one global [`CorpusStats`]. Errors
+    /// if no shard carries a text index named `name`.
+    #[cfg(feature = "text")]
+    fn text_corpus_stats(
+        &self,
+        name: &[u8],
+        q_tokens: &[Vec<u8>],
+    ) -> KevyResult<kevy_text::CorpusStats> {
+        let (mut n_docs, mut total_len) = (0f64, 0u64);
+        let mut df: std::collections::HashMap<Vec<u8>, u32> =
+            q_tokens.iter().map(|t| (t.clone(), 0)).collect();
         let mut found = false;
         for shard in self.shards.iter() {
             let mut g = lock_write(shard);
@@ -251,15 +286,18 @@ impl Store {
             sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
             if let Some((_, ts)) = inner.idx_segs.text.iter().find(|(s, _)| s.name == name) {
                 found = true;
-                all.extend(ts.matches(query, limit));
+                n_docs += ts.stats().docs as f64;
+                total_len += ts.total_len();
+                for (t, d) in &mut df {
+                    *d += ts.local_df(t);
+                }
             }
         }
         if !found {
             return Err(KevyError::NotFound("no such text index".into()));
         }
-        all.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.key.cmp(&b.key)));
-        all.truncate(limit);
-        Ok(all.into_iter().map(|m| (m.key, m.score)).collect())
+        let avgdl = if n_docs > 0.0 { total_len as f64 / n_docs } else { 0.0 };
+        Ok(kevy_text::CorpusStats { n_docs, avgdl, df })
     }
 
     /// Declare an aggregate index (KIND agg — write-time GROUP
