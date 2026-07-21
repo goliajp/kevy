@@ -12,9 +12,9 @@
     /// unfiltered rows, which is a wrong answer wearing a success reply.
     #[test]
     fn reserved_clauses_are_refused_by_name() {
-        // HIGHLIGHT, IN and FILTER are no longer here — they ship now
-        // (see the clause tests below); the rest stay reserved-by-name.
-        for clause in ["FACET", "SORT", "DISTINCT"] {
+        // HIGHLIGHT, IN, FILTER and SORT are no longer here — they ship
+        // now (see the clause tests below); the rest stay reserved.
+        for clause in ["FACET", "DISTINCT"] {
             let a = argv(&["IDX.QUERY", "idx", "MATCH", "hello", clause, "x"]);
             match MatchArgs::parse_terminal(&a) {
                 MatchParse::NotYet(c) => {
@@ -218,6 +218,47 @@ fn filter_parses() {
         vec!["IDX.QUERY", "idx", "MATCH", "hi", "FILTER", "price"],
         vec!["IDX.QUERY", "idx", "MATCH", "hi", "FILTER", "price", "NEAR", "5"],
         vec!["IDX.QUERY", "idx", "MATCH", "hi", "FILTER", "price", "RANGE", "10"],
+    ] {
+        let a = argv(&bad);
+        assert!(matches!(MatchArgs::parse_terminal(&a), MatchParse::BadArgs), "{bad:?}");
+    }
+}
+
+
+/// SORT ships now: it names a stored field and a direction, and it is
+/// carried to pass 2 because that is where the selection happens.
+#[test]
+fn sort_parses() {
+    let none = argv(&["IDX.QUERY", "idx", "MATCH", "hi"]);
+    assert!(matches!(MatchArgs::parse_terminal(&none), MatchParse::Ok(q) if q.sort.is_none()));
+
+    for (dir, desc) in [("ASC", false), ("DESC", true), ("desc", true)] {
+        let a = argv(&["IDX.QUERY", "idx", "MATCH", "hi", "SORT", "price", dir]);
+        match MatchArgs::parse_terminal(&a) {
+            MatchParse::Ok(q) => assert_eq!(q.sort, Some((b"price".to_vec(), desc)), "{dir}"),
+            _ => panic!("SORT {dir} should parse"),
+        }
+    }
+
+    // Composes with the rest, and pass 2 re-parses it identically.
+    let full = argv(&[
+        "IDX.QUERY", "idx", "MATCH", "hi", "SORT", "price", "ASC", "FILTER", "price",
+        "RANGE", "1", "9", "LIMIT", "5",
+    ]);
+    match MatchArgs::parse_terminal(&full) {
+        MatchParse::Ok(q) => {
+            assert_eq!(q.sort, Some((b"price".to_vec(), false)));
+            assert_eq!(q.filters.len(), 1);
+            assert_eq!(q.limit, 5);
+        }
+        _ => panic!("SORT must compose"),
+    }
+
+    // A direction is required and must be one of the two.
+    for bad in [
+        vec!["IDX.QUERY", "idx", "MATCH", "hi", "SORT"],
+        vec!["IDX.QUERY", "idx", "MATCH", "hi", "SORT", "price"],
+        vec!["IDX.QUERY", "idx", "MATCH", "hi", "SORT", "price", "SIDEWAYS"],
     ] {
         let a = argv(&bad);
         assert!(matches!(MatchArgs::parse_terminal(&a), MatchParse::BadArgs), "{bad:?}");

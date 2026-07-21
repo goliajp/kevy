@@ -110,3 +110,20 @@ fn filter_preds(
     Ok(out)
 }
 
+
+/// Resolve a `SORT <field> ASC|DESC` clause: which stored value orders
+/// the page, and the order-preserving encoding of that field's type.
+///
+/// Errors when the field is not stored, naming what is — the same
+/// contract `IN` and `FILTER` keep.
+pub(super) fn sort_field(
+    spec: &kevy_index::IndexSpec,
+    sort: &Option<(Vec<u8>, bool)>,
+) -> Result<Option<(usize, bool, kevy_index::ValType)>, Vec<u8>> {
+    let Some((field, desc)) = sort else { return Ok(None) };
+    let Some(pos) = spec.values.iter().position(|v| v.name == *field) else {
+        let stored: Vec<&[u8]> = spec.values.iter().map(|v| v.name.as_slice()).collect();
+        return Err(clause_error("SORT", field, "store", &stored));
+    };
+    Ok(Some((pos, *desc, spec.values[pos].ty)))
+}

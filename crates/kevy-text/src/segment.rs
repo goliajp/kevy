@@ -217,6 +217,18 @@ impl TextSegment {
         self.values.as_ref().map_or(0, DocValues::arity)
     }
 
+    /// One row's stored value for a declared value field, as raw bytes.
+    /// `None` when the row is not indexed here, the field was not
+    /// declared, or this document has no value for it.
+    ///
+    /// The cross-shard merge needs each returned hit's sort value, and it
+    /// is cheaper to look it up for the handful of hits a shard returns
+    /// than to carry it through the ranking.
+    pub fn stored_value(&self, key: &[u8], field: usize) -> Option<&[u8]> {
+        let (id, _, _) = self.docs.get(key)?;
+        self.values.as_ref()?.get(*id, field)
+    }
+
     /// (Re-)index one row's text (`None` = row removed / excluded).
     ///
     /// Single-field sugar over [`TextSegment::apply_fields`] at neutral
@@ -434,6 +446,7 @@ fn token_offsets(fields: &[IndexedField]) -> HashMap<Vec<u8>, Vec<u32>> {
 
 #[path = "segment_query.rs"]
 mod segment_query;
+pub use segment_query::sorted_order;
 
 #[path = "segment_stats.rs"]
 mod segment_stats;

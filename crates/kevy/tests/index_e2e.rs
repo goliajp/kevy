@@ -915,3 +915,88 @@ fn filter_over_the_wire() {
     let s = String::from_utf8_lossy(&badbound);
     assert!(s.starts_with("-ERR") && s.contains("i64"), "bad bound errors: {s}");
 }
+
+/// `SORT` selects by a stored value across the real fan-out: the page is
+/// the globally cheapest matching documents, not the best-scoring ones
+/// re-ordered. Documents spread over shards, so this only works if each
+/// shard picked its page BY the key and the origin merged by it too.
+#[test]
+fn sort_over_the_wire() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    for i in 0..10u32 {
+        let body = format!("rust {}", "rust ".repeat((10 - i) as usize));
+        let price = format!("{}", (10 - i) * 10);
+        cmd(&mut c, &[b"HSET", format!("s:{i}").as_bytes(), b"body", body.as_bytes(),
+                      b"price", price.as_bytes()]);
+    }
+    // Two rows that match but carry no price at all.
+    cmd(&mut c, &[b"HSET", b"s:x", b"body", b"rust"]);
+    cmd(&mut c, &[b"HSET", b"s:y", b"body", b"rust", b"price", b"not a number"]);
+    let r = cmd(
+        &mut c,
+        &[b"IDX.CREATE", b"sf", b"ON", b"PREFIX", b"s:", b"FIELD", b"body",
+          b"TYPE", b"str", b"KIND", b"text", b"VALUES", b"price", b"TYPES", b"i64"],
+    );
+    assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
+
+    // By score, the top 3 are the priciest (most repeats).
+    let plain = query_ready(&mut c, &[b"IDX.QUERY", b"sf", b"MATCH", b"rust", b"LIMIT", b"3"]);
+    let s = String::from_utf8_lossy(&plain);
+    assert!(s.contains("s:0") && s.contains("s:1") && s.contains("s:2"), "by score: {s}");
+
+    // Ascending by price, the page is the three cheapest — which are the
+    // three WORST scorers, so a re-order of the score page would have
+    // returned none of them.
+    let asc = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"sf", b"MATCH", b"rust", b"LIMIT", b"3", b"SORT", b"price", b"ASC"],
+    );
+    let s = String::from_utf8_lossy(&asc);
+    assert!(s.contains("s:9") && s.contains("s:8") && s.contains("s:7"), "cheapest: {s}");
+    assert!(!s.contains("s:0") && !s.contains("s:1"), "the score leaders are not on this page: {s}");
+
+    // Descending is the other end.
+    let desc = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"sf", b"MATCH", b"rust", b"LIMIT", b"3", b"SORT", b"price", b"DESC"],
+    );
+    let s = String::from_utf8_lossy(&desc);
+    assert!(s.contains("s:0") && s.contains("s:1") && s.contains("s:2"), "priciest: {s}");
+
+    // Numeric, not lexicographic: ascending must start at 10, not at 100.
+    let one = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"sf", b"MATCH", b"rust", b"LIMIT", b"1", b"SORT", b"price", b"ASC"],
+    );
+    let s = String::from_utf8_lossy(&one);
+    assert!(s.contains("s:9"), "10 sorts below 100: {s}");
+
+    // Missing and uncoercible values sort last in BOTH directions.
+    for dir in [b"ASC" as &[u8], b"DESC"] {
+        let all = query_ready(
+            &mut c,
+            &[b"IDX.QUERY", b"sf", b"MATCH", b"rust", b"LIMIT", b"12", b"SORT", b"price", dir],
+        );
+        let s = String::from_utf8_lossy(&all);
+        let x = s.find("s:x").expect("s:x present");
+        let y = s.find("s:y").expect("s:y present");
+        let last_priced = s.rfind("s:9").max(s.rfind("s:0")).expect("a priced row");
+        assert!(x > last_priced && y > last_priced, "unknowns last ({:?}): {s}", dir);
+    }
+
+    // SORT composes with FILTER, and an unstored field errors.
+    let both = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"sf", b"MATCH", b"rust", b"LIMIT", b"2",
+          b"FILTER", b"price", b"RANGE", b"50", b"100", b"SORT", b"price", b"ASC"],
+    );
+    let s = String::from_utf8_lossy(&both);
+    assert!(s.contains("s:5") && s.contains("s:4"), "cheapest of the qualifying: {s}");
+    let bad = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"sf", b"MATCH", b"rust", b"SORT", b"colour", b"ASC"],
+    );
+    let s = String::from_utf8_lossy(&bad);
+    assert!(s.starts_with("-ERR") && s.contains("price"), "unstored sort field: {s}");
+}

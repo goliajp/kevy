@@ -23,7 +23,7 @@ pub(super) fn reduce_ranked(argv: &[Vec<u8>], chunks: &[Vec<u8>], ascending: boo
         encode_error(&mut out, "ERR bad IDX arguments");
         return out;
     };
-    merge_ranked(chunks, limit, &fields, ascending, false, 0)
+    merge_ranked(chunks, limit, &fields, ascending, false, 0, None)
 }
 
 /// MATCH pass 2 reduce: merge the globally-scored ranked chunks
@@ -35,7 +35,58 @@ pub(super) fn reduce_match_score(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8
         encode_error(&mut out, "ERR bad IDX arguments");
         return out;
     };
-    merge_ranked(chunks, q.limit, &q.fields, false, q.highlight.is_some(), q.offset)
+    let sort_desc = q.sort.as_ref().map(|(_, desc)| *desc);
+    merge_ranked(chunks, q.limit, &q.fields, false, q.highlight.is_some(), q.offset, sort_desc)
+}
+
+/// Emit the merged page as RESP rows.
+fn emit_rows(out: &mut Vec<u8>, all: &[Hit], fields: &[Vec<u8>], highlight: bool) {
+    encode_array_len(out, all.len() as i64);
+    for h in all {
+        let base = 2 + fields.len() * 2 + usize::from(highlight);
+        encode_array_len(out, base as i64);
+        encode_bulk(out, &h.key);
+        encode_bulk(out, format!("{:.4}", h.score).as_bytes());
+        for (f, val) in fields.iter().zip(h.fields.iter().chain(std::iter::repeat(&None))) {
+            encode_bulk(out, f);
+            match val {
+                Some(b) => encode_bulk(out, b),
+                None => out.extend_from_slice(b"$-1\r\n"),
+            }
+        }
+        if highlight {
+            encode_highlights(out, &h.spans);
+        }
+    }
+}
+
+/// The `FILTER` predicates, in the grammar pass 2 re-parses them with.
+fn push_filters(argv2: &mut Vec<Vec<u8>>, filters: Vec<crate::cmd_index_query::FilterArg>) {
+    for f in filters {
+        argv2.push(b"FILTER".to_vec());
+        argv2.push(f.field);
+        match f.shape {
+            crate::cmd_index_query::FilterShape::Range { min, max } => {
+                argv2.push(b"RANGE".to_vec());
+                argv2.push(min);
+                argv2.push(max);
+            }
+            crate::cmd_index_query::FilterShape::Eq { value } => {
+                argv2.push(b"EQ".to_vec());
+                argv2.push(value);
+            }
+        }
+    }
+}
+
+/// One merged hit.
+struct Hit {
+    score: f64,
+    key: Vec<u8>,
+    fields: Hydrated,
+    spans: HitSpans,
+    /// The sort field's order key, when the query sorted by one.
+    okey: Option<Vec<u8>>,
 }
 
 /// Decode `[n][(key, f64, hydration, highlight?)*]` chunks, sort,
@@ -50,16 +101,27 @@ fn merge_ranked(
     ascending: bool,
     highlight: bool,
     offset: usize,
+    sort_desc: Option<bool>,
 ) -> Vec<u8> {
     let mut out = Vec::new();
-    let mut all: Vec<(f64, Vec<u8>, Hydrated, HitSpans)> = Vec::new();
+    let mut all: Vec<Hit> = Vec::new();
     for c in chunks {
-        collect_hits(c, highlight, &mut all);
+        collect_hits(c, highlight, sort_desc.is_some(), &mut all);
     }
-    if ascending {
-        all.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-    } else {
-        all.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    match sort_desc {
+        // Order the union exactly as each shard ordered its own page —
+        // one definition of that order, in kevy-text, used by both.
+        Some(desc) => all.sort_by(|a, b| {
+            kevy_text::sorted_order(
+                (a.okey.as_deref(), &a.key),
+                (b.okey.as_deref(), &b.key),
+                desc,
+            )
+        }),
+        None if ascending => {
+            all.sort_by(|a, b| a.score.total_cmp(&b.score).then_with(|| a.key.cmp(&b.key)));
+        }
+        None => all.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.key.cmp(&b.key))),
     }
     // OFFSET applies to the MERGED ranking, not per shard: drop the
     // first `offset` globally-ranked hits, then fill LIMIT.
@@ -67,29 +129,13 @@ fn merge_ranked(
         all.drain(..offset.min(all.len()));
     }
     all.truncate(limit);
-    encode_array_len(&mut out, all.len() as i64);
-    for (v, key, fv, hl) in &all {
-        let base = 2 + fields.len() * 2 + usize::from(highlight);
-        encode_array_len(&mut out, base as i64);
-        encode_bulk(&mut out, key);
-        encode_bulk(&mut out, format!("{v:.4}").as_bytes());
-        for (f, val) in fields.iter().zip(fv.iter().chain(std::iter::repeat(&None))) {
-            encode_bulk(&mut out, f);
-            match val {
-                Some(b) => encode_bulk(&mut out, b),
-                None => out.extend_from_slice(b"$-1\r\n"),
-            }
-        }
-        if highlight {
-            encode_highlights(&mut out, hl);
-        }
-    }
+    emit_rows(&mut out, &all, fields, highlight);
     out
 }
 
 /// Decode one shard's `[n][(key, f64, hydration, highlight?)*]` chunk
 /// into `all`; a short/corrupt chunk stops that shard's contribution.
-fn collect_hits(c: &[u8], highlight: bool, all: &mut Vec<(f64, Vec<u8>, Hydrated, HitSpans)>) {
+fn collect_hits(c: &[u8], highlight: bool, sorted: bool, all: &mut Vec<Hit>) {
     let mut pos = 1usize;
     let Some(n) = read_u32(c, &mut pos) else { return };
     for _ in 0..n {
@@ -106,7 +152,33 @@ fn collect_hits(c: &[u8], highlight: bool, all: &mut Vec<(f64, Vec<u8>, Hydrated
         } else {
             Vec::new()
         };
-        all.push((v, key, fv, hl));
+        let okey = if sorted {
+            match read_okey(c, &mut pos) {
+                Some(k) => k,
+                None => break,
+            }
+        } else {
+            None
+        };
+        all.push(Hit { score: v, key, fields: fv, spans: hl, okey });
+    }
+}
+
+/// One hit's sort key: a present flag, then the bytes. The outer `Option`
+/// is the read succeeding; the inner one is whether the document had a
+/// value at all.
+fn read_okey(c: &[u8], pos: &mut usize) -> Option<Option<Vec<u8>>> {
+    let tag = *c.get(*pos)?;
+    *pos += 1;
+    match tag {
+        0 => Some(None),
+        1 => {
+            let n = read_u32(c, pos)? as usize;
+            let bytes = c.get(*pos..*pos + n)?.to_vec();
+            *pos += n;
+            Some(Some(bytes))
+        }
+        _ => None,
     }
 }
 
@@ -204,20 +276,14 @@ fn push_clauses(argv2: &mut Vec<Vec<u8>>, m: crate::cmd_index_query::MatchArgs) 
     // unfiltered one would. (`IN` is the other axis and does move the
     // statistics — it changes WHERE IN a document we look, which changes
     // what a frequency and a length mean.)
-    for f in m.filters {
-        argv2.push(b"FILTER".to_vec());
-        argv2.push(f.field);
-        match f.shape {
-            crate::cmd_index_query::FilterShape::Range { min, max } => {
-                argv2.push(b"RANGE".to_vec());
-                argv2.push(min);
-                argv2.push(max);
-            }
-            crate::cmd_index_query::FilterShape::Eq { value } => {
-                argv2.push(b"EQ".to_vec());
-                argv2.push(value);
-            }
-        }
+    push_filters(argv2, m.filters);
+    // SORT reaches pass 2 because that is where the selection happens:
+    // each shard must pick its page BY the sort key, not pick by score
+    // and leave the merge to repair what was never chosen.
+    if let Some((field, desc)) = m.sort {
+        argv2.push(b"SORT".to_vec());
+        argv2.push(field);
+        argv2.push(if desc { b"DESC".to_vec() } else { b"ASC".to_vec() });
     }
 }
 
