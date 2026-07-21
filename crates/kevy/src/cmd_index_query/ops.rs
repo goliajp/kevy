@@ -23,7 +23,7 @@ use crate::state::Ctx;
 /// not wait on a scoring round.
 #[path = "ops_clauses.rs"]
 mod clauses;
-use clauses::{boxed_preds, scope_positions};
+use clauses::{boxed_preds, scope_positions, sort_field};
 
 pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let q = match MatchArgs::parse_terminal(argv) {
@@ -84,27 +84,25 @@ pub(super) fn op_match_score(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>])
         // text; with none it is the ordinary term query.
         // Fetch deep enough for the origin to skip OFFSET and still fill
         // LIMIT: a shard cannot know which of its hits survive the merge.
-        let hits = scored_hits(ts, spec, &q, &stats)?;
+        let (hits, sort_field) = scored_hits(ts, spec, &q, &stats)?;
         let spans = q.highlight.as_ref().map(|want| {
             hits.iter().map(|h| hit_highlight(ts, spec, &h.key, &q.text, want)).collect::<Vec<_>>()
         });
-        Ok((hits, spans))
+        // The origin merges the shards' pages and must order the union
+        // exactly as each shard ordered its own, so every hit carries its
+        // sort key back. Only the shard knows the field's declared type,
+        // so it sends the comparable encoding, not the raw value.
+        let okeys = sort_field.map(|f| {
+            hits.iter()
+                .map(|h| ts.stored_value(&h.key, f).and_then(|raw| kevy_index::order_key(spec.values[f].ty, raw)))
+                .collect::<Vec<_>>()
+        });
+        Ok((hits, spans, okeys))
     });
     match res {
         Ok(Err(chunk)) => chunk,
-        Ok(Ok((hits, spans))) => {
-            let mut chunk = vec![ST_OK];
-            chunk.extend_from_slice(&(hits.len() as u32).to_le_bytes());
-            for (i, h) in hits.iter().enumerate() {
-                chunk.extend_from_slice(&(h.key.len() as u32).to_le_bytes());
-                chunk.extend_from_slice(&h.key);
-                chunk.extend_from_slice(&h.score.to_le_bytes());
-                encode_hydration(store, &mut chunk, &h.key, &q.fields);
-                if let Some(spans) = &spans {
-                    encode_highlight(&mut chunk, &spans[i]);
-                }
-            }
-            chunk
+        Ok(Ok((hits, spans, okeys))) => {
+            encode_hits(store, &hits, &spans, &okeys, &q.fields)
         }
         Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
         Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
@@ -123,7 +121,7 @@ fn scored_hits(
     spec: &kevy_index::IndexSpec,
     q: &super::args::MatchArgs,
     stats: &kevy_text::CorpusStats,
-) -> Result<Vec<kevy_text::TextMatch>, Vec<u8>> {
+) -> Result<(Vec<kevy_text::TextMatch>, Option<usize>), Vec<u8>> {
     // `matches_query_with` parses quoted phrases out of the raw query
     // text; with none it is the ordinary term query.
     let scope = scope_positions(spec, &q.scope)?;
@@ -132,15 +130,66 @@ fn scored_hits(
         .iter()
         .map(|(field, test)| kevy_text::Filter { field: *field, test: test.as_ref() })
         .collect();
-    let opts =
-        kevy_text::QueryOpts {
+    let sorted = sort_field(spec, &q.sort)?;
+    let key = sorted.map(|(_, _, ty)| move |raw: &[u8]| kevy_index::order_key(ty, raw));
+    let sort = sorted.zip(key.as_ref()).map(|((field, desc, _), k)| kevy_text::Sort {
+        field,
+        desc,
+        key: k,
+    });
+    let opts = kevy_text::QueryOpts {
         stats: Some(stats),
         typo: q.typo,
         fields: &scope,
         filter: &filter,
-        sort: None,
+        sort,
     };
-    Ok(ts.matches_query_with(&q.text, q.limit + q.offset, opts))
+    let hits = ts.matches_query_with(&q.text, q.limit + q.offset, opts);
+    Ok((hits, sorted.map(|(field, _, _)| field)))
+}
+
+/// This shard's ranked chunk: `[ST_OK][n][(klen, key, score, hydration,
+/// highlight?, sort key?)*]`. The two optional blocks are present exactly
+/// when the query asked for them, a fact the reduce recovers from the
+/// same argv, so the two never drift.
+fn encode_hits(
+    store: &mut Store,
+    hits: &[kevy_text::TextMatch],
+    spans: &Option<Vec<super::HitSpans>>,
+    okeys: &Option<Vec<Option<Vec<u8>>>>,
+    fields: &[Vec<u8>],
+) -> Vec<u8> {
+    let mut chunk = vec![ST_OK];
+    chunk.extend_from_slice(&(hits.len() as u32).to_le_bytes());
+    for (i, h) in hits.iter().enumerate() {
+        chunk.extend_from_slice(&(h.key.len() as u32).to_le_bytes());
+        chunk.extend_from_slice(&h.key);
+        chunk.extend_from_slice(&h.score.to_le_bytes());
+        encode_hydration(store, &mut chunk, &h.key, fields);
+        if let Some(spans) = &spans {
+            encode_highlight(&mut chunk, &spans[i]);
+        }
+        if let Some(okeys) = &okeys {
+            encode_okey(&mut chunk, okeys[i].as_deref());
+        }
+    }
+    chunk
+}
+
+/// One hit's sort key on the wire: a present flag, then the bytes.
+///
+/// Absent is its own tag rather than an empty key, because an empty
+/// stored value is a value and must not sort with the documents that have
+/// none.
+fn encode_okey(chunk: &mut Vec<u8>, okey: Option<&[u8]>) {
+    match okey {
+        Some(k) => {
+            chunk.push(1);
+            chunk.extend_from_slice(&(k.len() as u32).to_le_bytes());
+            chunk.extend_from_slice(k);
+        }
+        None => chunk.push(0),
+    }
 }
 
 /// One hit's highlight spans as `(field name, [(start, end)])`, filtered

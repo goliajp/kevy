@@ -30,6 +30,11 @@ pub struct MatchOpts<'a> {
     /// They decide which documents are eligible, not what a term is
     /// worth, so the corpus statistics stay whole-corpus.
     pub filters: &'a [ValueFilter<'a>],
+    /// `SORT <field> ASC|DESC`: select by a stored value instead of by
+    /// score. Selecting, not re-ordering — a document that wins on the
+    /// key is chosen even when its score would never have reached the
+    /// page.
+    pub sort: Option<(&'a [u8], bool)>,
 }
 
 /// One `FILTER` predicate: which stored value field it reads, and the
@@ -87,36 +92,26 @@ impl Store {
         // cross-shard merge.
         let fetch = limit + offset;
         let (scope, tests) = self.resolve_clauses(name, opts.scope, opts.filters)?;
+        let sorted = self.sort_field(name, opts.sort)?;
+        let key = sorted.map(|(_, _, ty)| move |raw: &[u8]| kevy_index::order_key(ty, raw));
+        let sort = sorted
+            .zip(key.as_ref())
+            .map(|((field, desc, _), k)| kevy_text::Sort { field, desc, key: k });
         let boxed = box_tests(tests);
         let filter: Vec<kevy_text::Filter> = boxed
             .iter()
             .map(|(f, t)| kevy_text::Filter { field: *f, test: t.as_ref() })
             .collect();
         let stats = self.text_corpus_stats_in(name, query, opts.typo, &scope)?;
-        let mut all: Vec<HighlightedHit> = Vec::new();
-        for shard in self.shards.iter() {
-            let mut g = lock_write(shard);
-            let inner = &mut *g;
-            sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
-            if let Some((spec, ts)) = inner.idx_segs.text.iter().find(|(s, _)| s.name == name) {
-                // `matches_query_with` parses quoted phrases out of the
-                // raw query text; with none it is the ordinary term query.
-                let q = kevy_text::QueryOpts {
-                    stats: Some(&stats),
-                    typo: opts.typo,
-                    fields: &scope,
-                    filter: &filter,
-                    sort: None,
-                };
-                for m in ts.matches_query_with(query, fetch, q) {
-                    let hl = opts
-                        .highlight
-                        .map_or_else(Vec::new, |w| hit_highlight(ts, spec, &m.key, query, w));
-                    all.push((m.key, m.score, hl));
-                }
-            }
-        }
-        all.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let q = kevy_text::QueryOpts {
+            stats: Some(&stats),
+            typo: opts.typo,
+            fields: &scope,
+            filter: &filter,
+            sort,
+        };
+        let mut all = self.gather_hits(name, query, fetch, q, opts.highlight);
+        self.order_page(name, &mut all, sorted);
         if offset > 0 {
             all.drain(..offset.min(all.len()));
         }
@@ -206,6 +201,99 @@ fn value_test(
         ))
     })?;
     Ok((pos, test))
+}
+
+impl Store {
+    /// Every shard's page for this query, unmerged.
+    fn gather_hits(
+        &self,
+        name: &[u8],
+        query: &[u8],
+        fetch: usize,
+        q: kevy_text::QueryOpts<'_>,
+        highlight: Option<&[Vec<u8>]>,
+    ) -> Vec<HighlightedHit> {
+        let mut all = Vec::new();
+        for shard in self.shards.iter() {
+            let mut g = lock_write(shard);
+            let inner = &mut *g;
+            sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
+            if let Some((spec, ts)) = inner.idx_segs.text.iter().find(|(s, _)| s.name == name) {
+                // `matches_query_with` parses quoted phrases out of the
+                // raw query text; with none it is the ordinary term query.
+                for m in ts.matches_query_with(query, fetch, q) {
+                    let hl = highlight
+                        .map_or_else(Vec::new, |w| hit_highlight(ts, spec, &m.key, query, w));
+                    all.push((m.key, m.score, hl));
+                }
+            }
+        }
+        all
+    }
+
+    /// Put the merged hits in the page's order: by the sort key when the
+    /// query gave one — the same definition each shard selected by — else
+    /// by score.
+    fn order_page(
+        &self,
+        name: &[u8],
+        all: &mut Vec<HighlightedHit>,
+        sorted: Option<(usize, bool, kevy_index::ValType)>,
+    ) {
+        let Some((field, desc, ty)) = sorted else {
+            all.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            return;
+        };
+        let mut keyed: Vec<(Option<Vec<u8>>, HighlightedHit)> = std::mem::take(all)
+            .into_iter()
+            .map(|h| (self.stored_order_key(name, &h.0, field, ty), h))
+            .collect();
+        keyed.sort_by(|a, b| {
+            kevy_text::sorted_order((a.0.as_deref(), &a.1.0), (b.0.as_deref(), &b.1.0), desc)
+        });
+        *all = keyed.into_iter().map(|(_, h)| h).collect();
+    }
+
+    /// Resolve a `SORT <field> ASC|DESC` clause to the stored-value
+    /// position, the direction, and that field's declared type.
+    fn sort_field(
+        &self,
+        name: &[u8],
+        sort: Option<(&[u8], bool)>,
+    ) -> KevyResult<Option<(usize, bool, kevy_index::ValType)>> {
+        let Some((field, desc)) = sort else { return Ok(None) };
+        let guard = self.indexes.catalog.read().unwrap_or_else(|e| e.into_inner());
+        let Some((spec, _)) = guard.1.get(name) else {
+            return Err(KevyError::NotFound("no such text index".into()));
+        };
+        let stored: Vec<&[u8]> = spec.values.iter().map(|v| v.name.as_slice()).collect();
+        let pos = spec
+            .values
+            .iter()
+            .position(|v| v.name == field)
+            .ok_or_else(|| unknown_field("SORT", field, "store", &stored))?;
+        Ok(Some((pos, desc, spec.values[pos].ty)))
+    }
+
+    /// One row's sort key: its stored value, in the order-preserving
+    /// encoding of that field's declared type.
+    fn stored_order_key(
+        &self,
+        name: &[u8],
+        key: &[u8],
+        field: usize,
+        ty: kevy_index::ValType,
+    ) -> Option<Vec<u8>> {
+        for shard in self.shards.iter() {
+            let g = lock_write(shard);
+            if let Some((_, ts)) = g.idx_segs.text.iter().find(|(s, _)| s.name == name)
+                && let Some(raw) = ts.stored_value(key, field)
+            {
+                return kevy_index::order_key(ty, raw);
+            }
+        }
+        None
+    }
 }
 
 /// A clause naming a field the index does not offer, saying what it does.

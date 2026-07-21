@@ -905,3 +905,44 @@ fn text_index_filter_embedded() {
         .expect_err("bad bound");
     assert!(format!("{e}").contains("i64"), "names the declared type: {e}");
 }
+
+
+/// SORT in-process matches the wire: the page is selected BY the key, so
+/// it holds documents the score would never have reached, and unknowns
+/// land last in both directions.
+#[test]
+fn text_index_sort_embedded() {
+    use crate::IndexValType;
+    let s = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
+    for i in 0..10u32 {
+        let body = format!("rust {}", "rust ".repeat((10 - i) as usize));
+        let price = format!("{}", (10 - i) * 10);
+        s.hset(
+            format!("s:{i}").as_bytes(),
+            &[(b"body" as &[u8], body.as_bytes()), (b"price", price.as_bytes())],
+        )
+        .unwrap();
+    }
+    s.hset(b"s:x", &[(b"body" as &[u8], b"rust" as &[u8])]).unwrap();
+    s.idx_create_text(b"sf", b"s:", &[(b"body", 1.0)], false, &[(b"price", IndexValType::I64)])
+        .unwrap();
+
+    let opts = |desc| crate::MatchOpts { sort: Some((b"price" as &[u8], desc)), ..Default::default() };
+    let asc: Vec<Vec<u8>> =
+        s.idx_match_with(b"sf", b"rust", 3, opts(false)).unwrap().into_iter().map(|h| h.0).collect();
+    assert_eq!(asc, vec![b"s:9".to_vec(), b"s:8".to_vec(), b"s:7".to_vec()], "cheapest, numerically");
+    let desc: Vec<Vec<u8>> =
+        s.idx_match_with(b"sf", b"rust", 3, opts(true)).unwrap().into_iter().map(|h| h.0).collect();
+    assert_eq!(desc, vec![b"s:0".to_vec(), b"s:1".to_vec(), b"s:2".to_vec()], "priciest");
+
+    for d in [false, true] {
+        let all: Vec<Vec<u8>> =
+            s.idx_match_with(b"sf", b"rust", 11, opts(d)).unwrap().into_iter().map(|h| h.0).collect();
+        assert_eq!(all.last(), Some(&b"s:x".to_vec()), "the priceless row is last (desc={d})");
+    }
+
+    let e = s
+        .idx_match_with(b"sf", b"rust", 3, crate::MatchOpts { sort: Some((b"colour", false)), ..Default::default() })
+        .expect_err("unstored sort field");
+    assert!(format!("{e}").contains("price"), "names what it stores: {e}");
+}

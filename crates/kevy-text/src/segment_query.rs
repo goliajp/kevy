@@ -326,6 +326,32 @@ struct Order {
     desc: bool,
 }
 
+/// The order a page sorted by a stored value is in: a document WITH a
+/// value outranks one without (in both directions — missing is not a
+/// value), then by that value's order key, then by row key so ties are
+/// stable.
+///
+/// Public because the cross-shard merge orders the union of the shards'
+/// pages and must do it exactly as each shard ordered its own. Two copies
+/// of this rule would be two chances to disagree about where the
+/// unknowns went.
+pub fn sorted_order(
+    a: (Option<&[u8]>, &[u8]),
+    b: (Option<&[u8]>, &[u8]),
+    desc: bool,
+) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (a.0, b.0) {
+        (Some(x), Some(y)) => {
+            let ord = if desc { y.cmp(x) } else { x.cmp(y) };
+            ord.then_with(|| a.1.cmp(b.1))
+        }
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => a.1.cmp(b.1),
+    }
+}
+
 impl Order {
     /// Whether `a` outranks `b`.
     ///
@@ -337,16 +363,8 @@ impl Order {
         if !self.sorted {
             return a.score > b.score || (a.score == b.score && a.key < b.key);
         }
-        match (&a.okey, &b.okey) {
-            (Some(x), Some(y)) => {
-                let ord = if self.desc { y.cmp(x) } else { x.cmp(y) };
-                ord == std::cmp::Ordering::Less
-                    || (ord == std::cmp::Ordering::Equal && a.key < b.key)
-            }
-            (Some(_), None) => true,
-            (None, Some(_)) => false,
-            (None, None) => a.key < b.key,
-        }
+        sorted_order((a.okey.as_deref(), a.key), (b.okey.as_deref(), b.key), self.desc)
+            == std::cmp::Ordering::Less
     }
 
     fn sort(self, top: &mut [Cand]) {

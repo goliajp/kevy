@@ -10,7 +10,7 @@ mod query;
 mod wire;
 
 pub(crate) use args::{
-    ComposeQuery, FilterShape, HybridArgs, KnnArgs, MatchArgs, Query, parse_groups_args,
+    ComposeQuery, FilterArg, FilterShape, HybridArgs, KnnArgs, MatchArgs, Query, parse_groups_args,
     parse_match_score,
 };
 pub(crate) use wire::{decode_value, decode_view_cursor, encode_value, hex};

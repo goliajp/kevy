@@ -24,6 +24,10 @@ pub(super) struct Tail {
     /// than a thing that is ignored.
     #[cfg(feature = "text")]
     pub(super) filters: Vec<FilterClause>,
+    /// `SORT <field> ASC|DESC`: select by a stored value rather than by
+    /// score.
+    #[cfg(feature = "text")]
+    pub(super) sort: Option<(Vec<u8>, bool)>,
 }
 
 /// One parsed `FILTER <field> RANGE <min> <max>` / `EQ <v>`.
@@ -62,10 +66,34 @@ fn is_tail_keyword(a: &[u8]) -> bool {
         || a.eq_ignore_ascii_case(b"OFFSET")
         || a.eq_ignore_ascii_case(b"IN")
         || a.eq_ignore_ascii_case(b"FILTER")
+        || a.eq_ignore_ascii_case(b"SORT")
 }
 
 /// One `FILTER <field> RANGE <min> <max>` / `EQ <v>`; several AND, which
 /// is why each appends rather than replaces.
+/// `SORT <field> ASC|DESC`.
+#[cfg(feature = "text")]
+fn apply_sort(argv: &[Vec<u8>], i: usize, t: &mut Tail) -> Option<usize> {
+    let field = argv.get(i + 1)?.clone();
+    let dir = argv.get(i + 2)?;
+    let desc = if dir.eq_ignore_ascii_case(b"DESC") {
+        true
+    } else if dir.eq_ignore_ascii_case(b"ASC") {
+        false
+    } else {
+        return None;
+    };
+    t.sort = Some((field, desc));
+    Some(i + 3)
+}
+
+/// Without the text surface there is no MATCH to order, so `SORT` is a
+/// syntax error rather than a clause that parses and does nothing.
+#[cfg(not(feature = "text"))]
+fn apply_sort(_argv: &[Vec<u8>], _i: usize, _t: &mut Tail) -> Option<usize> {
+    None
+}
+
 /// Without the text surface there is no MATCH for a predicate to
 /// restrict, so `FILTER` is a syntax error rather than a clause that
 /// parses and does nothing.
@@ -118,6 +146,8 @@ pub(super) fn parse_tail(
         scope: Vec::new(),
         #[cfg(feature = "text")]
         filters: Vec::new(),
+        #[cfg(feature = "text")]
+        sort: None,
     };
     while i < argv.len() {
         i = apply_tail_clause(argv, i, &mut t, match_clauses)?;
@@ -164,6 +194,8 @@ fn apply_tail_clause(
     } else if match_clauses && a.eq_ignore_ascii_case(b"OFFSET") {
         t.offset = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
         Some(i + 2)
+    } else if match_clauses && a.eq_ignore_ascii_case(b"SORT") {
+        apply_sort(argv, i, t)
     } else if match_clauses && a.eq_ignore_ascii_case(b"FILTER") {
         apply_filter(argv, i, t)
     } else if match_clauses && a.eq_ignore_ascii_case(b"IN") {
