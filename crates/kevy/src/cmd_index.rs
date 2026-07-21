@@ -234,54 +234,67 @@ fn parse_create_opts<A: ArgvView + ?Sized>(
     start: usize,
     out: &mut Vec<u8>,
 ) -> Result<CreateOpts, ()> {
-    let mut max_bytes = 0u64;
-    let (mut dim, mut m, mut ef) = (0u32, 16u16, 200u16);
-    let mut distance = 0u8;
-    let mut group_by: Option<Vec<u8>> = None;
-    let mut with_positions = false;
+    let mut o = CreateOpts {
+        max_bytes: 0,
+        dim: 0,
+        m: 16,
+        ef: 200,
+        distance: 0,
+        group_by: None,
+        with_positions: false,
+    };
     let mut i = start;
     while i + 1 < args.len() {
-        let (opt, val) = (&args[i], &args[i + 1]);
-        let parsed: Option<u64> = std::str::from_utf8(val).ok().and_then(|s| s.parse().ok());
-        if opt.eq_ignore_ascii_case(b"WITH") {
-            // A bare flag written as a key/value pair so it fits the
-            // even-arity tail: `WITH POSITIONS`. Text-only; `create`
-            // rules on the kind.
-            if !val.eq_ignore_ascii_case(b"POSITIONS") {
-                encode_error(out, "ERR WITH only accepts POSITIONS");
-                return Err(());
-            }
-            with_positions = true;
-        } else if opt.eq_ignore_ascii_case(b"MAXMEM") {
-            let Some(v) = parsed else {
-                encode_error(out, "ERR MAXMEM must be an integer byte count");
-                return Err(());
-            };
-            max_bytes = v;
-        } else if opt.eq_ignore_ascii_case(b"DIM") {
-            dim = ranged(parsed, 1, 65_536, "ERR DIM must be 1-65536", out)? as u32;
-        } else if opt.eq_ignore_ascii_case(b"M") {
-            m = ranged(parsed, 4, 64, "ERR M must be 4-64", out)? as u16;
-        } else if opt.eq_ignore_ascii_case(b"EF") {
-            ef = ranged(parsed, 16, 1024, "ERR EF must be 16-1024", out)? as u16;
-        } else if opt.eq_ignore_ascii_case(b"GROUPBY") {
-            if val.is_empty() {
-                encode_error(out, "ERR GROUPBY requires a field");
-                return Err(());
-            }
-            group_by = Some(val.to_vec());
-        } else if opt.eq_ignore_ascii_case(b"DISTANCE") {
-            match kevy_vector::Distance::parse(val) {
-                Some(d) => distance = d as u8,
-                None => { encode_error(out, "ERR DISTANCE must be cosine|l2|ip"); return Err(()) },
-            }
-        } else {
-            encode_error(out, "ERR syntax error");
-            return Err(());
-        }
+        apply_create_opt(&args[i], &args[i + 1], &mut o, out)?;
         i += 2;
     }
-    Ok(CreateOpts { max_bytes, dim, m, ef, distance, group_by, with_positions })
+    Ok(o)
+}
+
+/// Apply one `KEY value` option pair to the accumulating [`CreateOpts`].
+/// `Err(())` = an error reply was already encoded.
+fn apply_create_opt(opt: &[u8], val: &[u8], o: &mut CreateOpts, out: &mut Vec<u8>) -> Result<(), ()> {
+    let parsed: Option<u64> = std::str::from_utf8(val).ok().and_then(|s| s.parse().ok());
+    if opt.eq_ignore_ascii_case(b"WITH") {
+        // A bare flag written as a key/value pair so it fits the
+        // even-arity tail: `WITH POSITIONS`. Text-only; `create` rules
+        // on the kind.
+        if !val.eq_ignore_ascii_case(b"POSITIONS") {
+            encode_error(out, "ERR WITH only accepts POSITIONS");
+            return Err(());
+        }
+        o.with_positions = true;
+    } else if opt.eq_ignore_ascii_case(b"MAXMEM") {
+        let Some(v) = parsed else {
+            encode_error(out, "ERR MAXMEM must be an integer byte count");
+            return Err(());
+        };
+        o.max_bytes = v;
+    } else if opt.eq_ignore_ascii_case(b"DIM") {
+        o.dim = ranged(parsed, 1, 65_536, "ERR DIM must be 1-65536", out)? as u32;
+    } else if opt.eq_ignore_ascii_case(b"M") {
+        o.m = ranged(parsed, 4, 64, "ERR M must be 4-64", out)? as u16;
+    } else if opt.eq_ignore_ascii_case(b"EF") {
+        o.ef = ranged(parsed, 16, 1024, "ERR EF must be 16-1024", out)? as u16;
+    } else if opt.eq_ignore_ascii_case(b"GROUPBY") {
+        if val.is_empty() {
+            encode_error(out, "ERR GROUPBY requires a field");
+            return Err(());
+        }
+        o.group_by = Some(val.to_vec());
+    } else if opt.eq_ignore_ascii_case(b"DISTANCE") {
+        match kevy_vector::Distance::parse(val) {
+            Some(d) => o.distance = d as u8,
+            None => {
+                encode_error(out, "ERR DISTANCE must be cosine|l2|ip");
+                return Err(());
+            }
+        }
+    } else {
+        encode_error(out, "ERR syntax error");
+        return Err(());
+    }
+    Ok(())
 }
 
 /// KIND × TYPE (× GROUPBY) compatibility checks; builds the `AnnSpec`

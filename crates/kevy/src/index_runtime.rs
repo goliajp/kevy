@@ -218,6 +218,18 @@ pub(crate) fn segment_building(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) ->
         .is_some_and(|si| matches!(si.build, BuildState::Backfilling { .. }))
 }
 
+/// A fresh text segment for `spec` when it is a text index — with the
+/// positional side-channel iff it was created WITH POSITIONS.
+fn new_text_seg(spec: &kevy_index::IndexSpec) -> Option<kevy_text::TextSegment> {
+    (spec.kind == kevy_index::IndexKind::Text).then(|| {
+        if spec.with_positions {
+            kevy_text::TextSegment::with_positions()
+        } else {
+            kevy_text::TextSegment::new()
+        }
+    })
+}
+
 /// Reconcile this shard's segment list with the shared catalog:
 /// keep segments whose spec is unchanged, start backfills for new
 /// ones, drop removed ones.
@@ -241,13 +253,7 @@ fn refresh(catalogs: &CatalogState, st: &mut ShardIndexes, store: &mut Store) {
                     next.push(ShardIndex {
                         agg: (spec.kind == kevy_index::IndexKind::Agg)
                             .then(kevy_index::AggSegment::new),
-                        text: (spec.kind == kevy_index::IndexKind::Text).then(|| {
-                            if spec.with_positions {
-                                kevy_text::TextSegment::with_positions()
-                            } else {
-                                kevy_text::TextSegment::new()
-                            }
-                        }),
+                        text: new_text_seg(spec),
                         ann: spec.ann.as_ref().map(|a| {
                             kevy_vector::Hnsw::new(
                                 a.dim as usize,
