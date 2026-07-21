@@ -773,7 +773,12 @@ fn text_match_is_shard_count_invariant() {
         assert_eq!(a.0, b.0, "same ranking order across shard counts");
         assert!((a.1 - b.1).abs() < 1e-9, "same score for {:?}: {} vs {}", a.0, a.1, b.1);
     }
-    // And the ranking is the sensible one: d:6 (rust×4) tops, d:5 absent.
-    assert_eq!(eight[0].0, b"d:6".to_vec());
+    // And the ranking is a real BM25: d:1 tops, not d:6. d:1
+    // ("rust systems programming rust", tf=2, 4 tokens) beats d:6
+    // ("rust rust rust everywhere in this doc", tf=3, 7 tokens) because
+    // BM25 normalises by document length — the shorter doc's higher term
+    // density wins over the longer doc's raw count. (d:5 has no "rust" at
+    // all and must be absent.)
+    assert_eq!(eight[0].0, b"d:1".to_vec());
     assert!(!eight.iter().any(|(k, _)| k == b"d:5"));
 }
