@@ -38,7 +38,7 @@ pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Ve
         // terms too — the reduce unions them across shards — and counts
         // over the query's field scope, so a scoped query's global
         // statistics describe those fields rather than whole documents.
-        let opts = kevy_text::QueryOpts { stats: None, typo: q.typo, fields: &want };
+        let opts = kevy_text::QueryOpts { stats: None, typo: q.typo, fields: &want, filter: &[] };
         Ok((ts.stats().docs, ts.total_len_in(&want), ts.query_df_in(&q.text, opts)))
     });
     match res {
@@ -76,7 +76,12 @@ pub(super) fn op_match_score(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>])
         // LIMIT: a shard cannot know which of its hits survive the merge.
         let scope = scope_positions(spec, &q.scope)?;
         let opts =
-            kevy_text::QueryOpts { stats: Some(&stats), typo: q.typo, fields: &scope };
+            kevy_text::QueryOpts {
+                stats: Some(&stats),
+                typo: q.typo,
+                fields: &scope,
+                filter: &[],
+            };
         let hits = ts.matches_query_with(&q.text, q.limit + q.offset, opts);
         let spans = q.highlight.as_ref().map(|want| {
             hits.iter().map(|h| hit_highlight(ts, spec, &h.key, &q.text, want)).collect::<Vec<_>>()

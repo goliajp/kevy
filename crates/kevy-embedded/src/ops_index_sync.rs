@@ -12,7 +12,11 @@ use crate::ops_index::{IndexReg, ShardSegs};
 /// positional side-channel when it asked for `WITH POSITIONS`.
 #[cfg(feature = "text")]
 pub(crate) fn new_text(spec: &IndexSpec) -> kevy_text::TextSegment {
-    kevy_text::TextSegment::with_fields(spec.fields.len(), spec.with_positions)
+    kevy_text::TextSegment::with_shape(kevy_text::SegmentShape {
+        fields: spec.fields.len(),
+        positions: spec.with_positions,
+        values: 0,
+    })
 }
 
 #[cfg(feature = "vector")]

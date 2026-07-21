@@ -762,7 +762,7 @@ fn typo_df_terms_include_neighbours() {
 /// Two fields — a short title and a longer body — so a scoped query has
 /// something to score differently from the whole document.
 fn field_seg() -> TextSegment {
-    let mut s = TextSegment::with_fields(2, true);
+    let mut s = TextSegment::with_shape(SegmentShape { fields: 2, positions: true, ..Default::default() });
     s.apply_fields(
         b"a",
         Some(&[(b"rust engine".to_vec(), 1.0), (b"a long body about gardening".to_vec(), 1.0)]),
@@ -838,7 +838,7 @@ fn scoped_score_normalises_by_the_field_not_the_document() {
 
 #[test]
 fn scoped_document_frequency_counts_a_document_once() {
-    let mut s = TextSegment::with_fields(2, false);
+    let mut s = TextSegment::with_shape(SegmentShape { fields: 2, ..Default::default() });
     // "rust" in both fields of one document, one field of the other.
     s.apply_fields(b"a", Some(&[(b"rust".to_vec(), 1.0), (b"rust again".to_vec(), 1.0)]));
     s.apply_fields(b"b", Some(&[(b"other".to_vec(), 1.0), (b"rust".to_vec(), 1.0)]));
@@ -851,7 +851,7 @@ fn scoped_document_frequency_counts_a_document_once() {
 
 #[test]
 fn scoped_phrase_must_lie_inside_one_wanted_field() {
-    let mut s = TextSegment::with_fields(2, true);
+    let mut s = TextSegment::with_shape(SegmentShape { fields: 2, positions: true, ..Default::default() });
     s.apply_fields(
         b"a",
         Some(&[(b"quick brown".to_vec(), 1.0), (b"nothing to see".to_vec(), 1.0)]),
@@ -936,4 +936,118 @@ fn scoped_typo_and_prefix_stay_inside_the_field() {
     assert_eq!(typo.len(), 1);
     assert_eq!(typo[0].key, b"a".to_vec());
     assert_eq!(s.matches_query_with(b"rusty", 10, opts(&[1], 1)).len(), 1, "b's body has rust");
+}
+
+// ---- stored values and FILTER -------------------------------------------
+
+/// Ten documents that all match "rust", each with a stored `price`, so a
+/// predicate has something to reject and the ranking has something to
+/// lose if it is applied in the wrong order.
+fn value_seg() -> TextSegment {
+    let mut s = TextSegment::with_shape(SegmentShape { values: 1, ..Default::default() });
+    for i in 0..10u32 {
+        // Repeating the term makes the low-priced docs rank *worst*, so a
+        // filter that keeps only cheap ones must reach past the leaders.
+        let body = format!("rust {}", "rust ".repeat((10 - i) as usize));
+        // Price falls with the term count, so the CHEAP documents are the
+        // badly-ranked ones — the arrangement that makes "filter after
+        // the top-K" visibly wrong instead of accidentally right.
+        let price = format!("{}", (10 - i) * 10);
+        s.apply_doc(
+            format!("d{i}").as_bytes(),
+            Some(&[(body.into_bytes(), 1.0)]),
+            &[Some(price.as_bytes())],
+        );
+    }
+    s
+}
+
+#[test]
+fn a_predicate_reaches_past_the_unfiltered_leaders() {
+    // The five cheapest documents are the five WORST scorers, so a
+    // filter applied after a top-5 would return nothing at all. Applied
+    // before, it returns exactly them. This is the ordering bug the
+    // clause exists to not have.
+    let s = value_seg();
+    let cheap = |v: &[u8]| std::str::from_utf8(v).unwrap().parse::<u32>().unwrap() < 55;
+    let f = [Filter { field: 0, test: &cheap }];
+    let hits = s.matches_query_with(b"rust", 5, QueryOpts { filter: &f, ..Default::default() });
+    let mut keys: Vec<Vec<u8>> = hits.into_iter().map(|h| h.key).collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        vec![b"d5".to_vec(), b"d6".to_vec(), b"d7".to_vec(), b"d8".to_vec(), b"d9".to_vec()],
+        "the qualifying documents are found even though every one ranks below the top 5"
+    );
+    // Unfiltered, the top 5 are exactly the five the predicate rejects —
+    // so filtering a top-5 after the fact would have returned nothing.
+    let plain = s.matches_query(b"rust", 5, None);
+    assert_eq!(plain[0].key, b"d0".to_vec(), "d0 repeats 'rust' most");
+    let top: Vec<Vec<u8>> = plain.into_iter().map(|h| h.key).collect();
+    assert_eq!(
+        top,
+        vec![b"d0".to_vec(), b"d1".to_vec(), b"d2".to_vec(), b"d3".to_vec(), b"d4".to_vec()]
+    );
+}
+
+#[test]
+fn predicates_are_anded_and_absent_never_passes() {
+    let s = value_seg();
+    let ge = |v: &[u8]| std::str::from_utf8(v).unwrap().parse::<u32>().unwrap() >= 30;
+    let lt = |v: &[u8]| std::str::from_utf8(v).unwrap().parse::<u32>().unwrap() < 60;
+    let both = [Filter { field: 0, test: &ge }, Filter { field: 0, test: &lt }];
+    let hits = s.matches_query_with(b"rust", 10, QueryOpts { filter: &both, ..Default::default() });
+    let mut keys: Vec<Vec<u8>> = hits.into_iter().map(|h| h.key).collect();
+    keys.sort();
+    assert_eq!(keys, vec![b"d5".to_vec(), b"d6".to_vec(), b"d7".to_vec()], "30 <= price < 60");
+
+    // A field the segment does not store, and a document with no value,
+    // both fail closed rather than passing.
+    let any = |_: &[u8]| true;
+    let missing = [Filter { field: 7, test: &any }];
+    assert!(
+        s.matches_query_with(b"rust", 10, QueryOpts { filter: &missing, ..Default::default() })
+            .is_empty(),
+        "an undeclared value field passes nobody"
+    );
+    let plain = seg();
+    assert!(
+        plain
+            .matches_query_with(b"rust", 10, QueryOpts { filter: &missing, ..Default::default() })
+            .is_empty(),
+        "a segment storing no values passes nobody"
+    );
+}
+
+#[test]
+fn stored_values_follow_the_document() {
+    let mut s = value_seg();
+    let is5 = |v: &[u8]| v == b"5";
+    let f = [Filter { field: 0, test: &is5 }];
+    let q = |s: &TextSegment| {
+        s.matches_query_with(b"rust", 10, QueryOpts { filter: &f, ..Default::default() }).len()
+    };
+    assert_eq!(q(&s), 0, "nothing is priced 5 yet");
+    s.apply_doc(b"d3", Some(&[(b"rust".to_vec(), 1.0)]), &[Some(b"5")]);
+    assert_eq!(q(&s), 1, "a re-index updates the stored value");
+    s.apply_doc(b"d3", None, &[]);
+    assert_eq!(q(&s), 0, "and a removal takes it away");
+
+    // The freed id is handed to a new document, which must not inherit it.
+    s.apply_doc(b"fresh", Some(&[(b"rust".to_vec(), 1.0)]), &[]);
+    assert_eq!(q(&s), 0, "a reused id slot carries no stale value");
+}
+
+#[test]
+fn the_memory_formula_counts_stored_values() {
+    let bare = TextSegment::new().stats().approx_bytes;
+    let s = value_seg();
+    let with_values = s.stats().approx_bytes;
+    let mut without = TextSegment::new();
+    for i in 0..10u32 {
+        let body = format!("rust {}", "rust ".repeat((10 - i) as usize));
+        without.apply(format!("d{i}").as_bytes(), Some(body.as_bytes()));
+    }
+    assert!(with_values > without.stats().approx_bytes, "the value column is accounted for");
+    assert!(with_values > bare);
 }
