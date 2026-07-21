@@ -17,6 +17,33 @@ pub(super) struct Tail {
     /// `IN <field…>`: declared field names to score within; empty = the
     /// whole document.
     pub(super) scope: Vec<Vec<u8>>,
+    /// `FILTER …`: non-scoring predicates over stored values, ANDed.
+    /// Owned here because the borrowed form the store takes points at
+    /// them.
+    pub(super) filters: Vec<FilterClause>,
+}
+
+/// One parsed `FILTER <field> RANGE <min> <max>` / `EQ <v>`.
+pub(super) struct FilterClause {
+    pub(super) field: Vec<u8>,
+    pub(super) shape: FilterShape,
+}
+
+pub(super) enum FilterShape {
+    Range(Vec<u8>, Vec<u8>),
+    Eq(Vec<u8>),
+}
+
+impl FilterClause {
+    /// The borrowed form [`crate::MatchOpts`] takes.
+    pub(super) fn as_value_filter(&self) -> crate::ValueFilter<'_> {
+        match &self.shape {
+            FilterShape::Range(min, max) => {
+                crate::ValueFilter::Range { field: &self.field, min, max }
+            }
+            FilterShape::Eq(v) => crate::ValueFilter::Eq { field: &self.field, value: v },
+        }
+    }
 }
 
 /// A tail clause keyword — the boundary a variadic clause collects up to.
@@ -28,6 +55,24 @@ fn is_tail_keyword(a: &[u8]) -> bool {
         || a.eq_ignore_ascii_case(b"TYPO")
         || a.eq_ignore_ascii_case(b"OFFSET")
         || a.eq_ignore_ascii_case(b"IN")
+        || a.eq_ignore_ascii_case(b"FILTER")
+}
+
+/// One `FILTER <field> RANGE <min> <max>` / `EQ <v>`; several AND, which
+/// is why each appends rather than replaces.
+fn apply_filter(argv: &[Vec<u8>], i: usize, t: &mut Tail) -> Option<usize> {
+    let field = argv.get(i + 1)?.clone();
+    let mode = argv.get(i + 2)?;
+    if mode.eq_ignore_ascii_case(b"RANGE") {
+        let shape = FilterShape::Range(argv.get(i + 3)?.clone(), argv.get(i + 4)?.clone());
+        t.filters.push(FilterClause { field, shape });
+        Some(i + 5)
+    } else if mode.eq_ignore_ascii_case(b"EQ") {
+        t.filters.push(FilterClause { field, shape: FilterShape::Eq(argv.get(i + 3)?.clone()) });
+        Some(i + 4)
+    } else {
+        None
+    }
 }
 
 /// Collect a variadic clause's args from `start` until the next keyword.
@@ -56,6 +101,7 @@ pub(super) fn parse_tail(
         typo: 0,
         offset: 0,
         scope: Vec::new(),
+        filters: Vec::new(),
     };
     while i < argv.len() {
         i = apply_tail_clause(argv, i, &mut t, match_clauses)?;
@@ -102,6 +148,8 @@ fn apply_tail_clause(
     } else if match_clauses && a.eq_ignore_ascii_case(b"OFFSET") {
         t.offset = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
         Some(i + 2)
+    } else if match_clauses && a.eq_ignore_ascii_case(b"FILTER") {
+        apply_filter(argv, i, t)
     } else if match_clauses && a.eq_ignore_ascii_case(b"IN") {
         let (fs, next) = collect_until_keyword(argv, i + 1);
         if fs.is_empty() {
