@@ -660,16 +660,16 @@ fn text_index_highlight_embedded() {
     s.hset(b"n:1", &[(b"body", b"the quick brown fox")]).unwrap();
     s.idx_create(b"hb", b"n:", b"body", IndexValType::Str, IndexKind::Text).unwrap();
     // No highlight requested → the hit carries no spans.
-    let plain = s.idx_match_highlighted(b"hb", b"quick", 10, None).unwrap();
+    let plain = s.idx_match_highlighted(b"hb", b"quick", 10, None, 0).unwrap();
     assert_eq!(plain.len(), 1);
     assert!(plain[0].2.is_empty(), "no spans without a highlight request");
     // Highlight the term: "quick" is bytes 4..9 of field "body".
-    let hl = s.idx_match_highlighted(b"hb", b"quick", 10, Some(&[])).unwrap();
+    let hl = s.idx_match_highlighted(b"hb", b"quick", 10, Some(&[]), 0).unwrap();
     assert_eq!(hl.len(), 1);
     assert_eq!(hl[0].0, b"n:1".to_vec());
     assert_eq!(hl[0].2, vec![(b"body".to_vec(), vec![(4u32, 9u32)])]);
     // A field filter that names no indexed field yields no spans.
-    let none = s.idx_match_highlighted(b"hb", b"quick", 10, Some(&[b"title".to_vec()])).unwrap();
+    let none = s.idx_match_highlighted(b"hb", b"quick", 10, Some(&[b"title".to_vec()]), 0).unwrap();
     assert!(none[0].2.is_empty(), "the 'body' spans are filtered out");
 }
 

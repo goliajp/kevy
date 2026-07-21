@@ -264,7 +264,7 @@ impl Store {
         limit: usize,
     ) -> KevyResult<Vec<(Vec<u8>, f64)>> {
         Ok(self
-            .idx_match_highlighted(name, query, limit, None)?
+            .idx_match_highlighted(name, query, limit, None, 0)?
             .into_iter()
             .map(|(key, score, _)| (key, score))
             .collect())
@@ -274,7 +274,12 @@ impl Store {
     /// df of every query token into one global [`CorpusStats`]. Errors
     /// if no shard carries a text index named `name`.
     #[cfg(feature = "text")]
-    fn text_corpus_stats(&self, name: &[u8], text: &[u8]) -> KevyResult<kevy_text::CorpusStats> {
+    fn text_corpus_stats(
+        &self,
+        name: &[u8],
+        text: &[u8],
+        typo: u32,
+    ) -> KevyResult<kevy_text::CorpusStats> {
         let (mut n_docs, mut total_len) = (0f64, 0u64);
         // Accumulated per shard from `query_df_terms`, which expands
         // `word*` prefixes against that shard's dictionary — so the df map
@@ -290,7 +295,7 @@ impl Store {
                 found = true;
                 n_docs += ts.stats().docs as f64;
                 total_len += ts.total_len();
-                for t in ts.query_df_terms(text) {
+                for t in ts.query_df_terms_typo(text, typo) {
                     let d = ts.local_df(&t);
                     *df.entry(t).or_insert(0) += d;
                 }

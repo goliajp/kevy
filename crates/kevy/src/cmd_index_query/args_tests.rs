@@ -14,7 +14,7 @@
     fn reserved_clauses_are_refused_by_name() {
         // HIGHLIGHT is no longer here — it ships now (see the highlight
         // tests below); the rest stay reserved-by-name.
-        for clause in ["IN", "FILTER", "FACET", "SORT", "DISTINCT", "TYPO", "OFFSET"] {
+        for clause in ["IN", "FILTER", "FACET", "SORT", "DISTINCT", "OFFSET"] {
             let a = argv(&["IDX.QUERY", "idx", "MATCH", "hello", clause, "x"]);
             match MatchArgs::parse_terminal(&a) {
                 MatchParse::NotYet(c) => {
@@ -78,3 +78,32 @@
         let a = argv(&["IDX.QUERY", "idx", "MATCH", "FILTER"]);
         assert!(matches!(MatchArgs::parse_terminal(&a), MatchParse::Ok(_)));
     }
+
+/// TYPO ships now: 0/1/2 parse into a budget; anything else — including
+/// the frozen surface's AUTO, which is not built — is a syntax error
+/// rather than a silently clamped budget.
+#[test]
+fn typo_parses() {
+    let none = argv(&["IDX.QUERY", "idx", "MATCH", "hello"]);
+    assert!(matches!(MatchArgs::parse_terminal(&none), MatchParse::Ok(q) if q.typo == 0));
+    for (v, want) in [("0", 0u32), ("1", 1), ("2", 2)] {
+        let a = argv(&["IDX.QUERY", "idx", "MATCH", "hello", "TYPO", v]);
+        assert!(
+            matches!(MatchArgs::parse_terminal(&a), MatchParse::Ok(q) if q.typo == want),
+            "TYPO {v}"
+        );
+    }
+    for bad in ["AUTO", "3", "x"] {
+        let a = argv(&["IDX.QUERY", "idx", "MATCH", "hello", "TYPO", bad]);
+        assert!(matches!(MatchArgs::parse_terminal(&a), MatchParse::BadArgs), "TYPO {bad}");
+    }
+    // Coexists with the other clauses, in either order.
+    let both = argv(&["IDX.QUERY", "idx", "MATCH", "hi", "TYPO", "1", "FIELDS", "a"]);
+    match MatchArgs::parse_terminal(&both) {
+        MatchParse::Ok(q) => {
+            assert_eq!(q.typo, 1);
+            assert_eq!(q.fields, vec![b"a".to_vec()]);
+        }
+        _ => panic!("TYPO and FIELDS must coexist"),
+    }
+}

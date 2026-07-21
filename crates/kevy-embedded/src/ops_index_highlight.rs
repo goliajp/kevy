@@ -19,9 +19,10 @@ impl Store {
         query: &[u8],
         limit: usize,
         highlight: Option<&[Vec<u8>]>,
+        typo: u32,
     ) -> KevyResult<Vec<HighlightedHit>> {
         let limit = limit.clamp(1, 1000);
-        let stats = self.text_corpus_stats(name, query)?;
+        let stats = self.text_corpus_stats(name, query, typo)?;
         let mut all: Vec<HighlightedHit> = Vec::new();
         for shard in self.shards.iter() {
             let mut g = lock_write(shard);
@@ -30,7 +31,7 @@ impl Store {
             if let Some((spec, ts)) = inner.idx_segs.text.iter().find(|(s, _)| s.name == name) {
                 // `matches_query` parses quoted phrases out of the raw
                 // query text; with none it is the ordinary term query.
-                for m in ts.matches_query(query, limit, Some(&stats)) {
+                for m in ts.matches_query_typo(query, limit, Some(&stats), typo) {
                     let hl =
                         highlight.map_or_else(Vec::new, |w| hit_highlight(ts, spec, &m.key, query, w));
                     all.push((m.key, m.score, hl));

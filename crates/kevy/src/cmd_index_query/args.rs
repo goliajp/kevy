@@ -180,6 +180,8 @@ pub(crate) struct MatchArgs {
     /// `HIGHLIGHT [field…]`: `None` = not requested, `Some(empty)` =
     /// highlight every indexed field, `Some(fields)` = only those.
     pub(crate) highlight: Option<Vec<Vec<u8>>>,
+    /// `TYPO n`: edit-distance budget for each bare term; 0 = exact.
+    pub(crate) typo: u32,
 }
 
 /// A MATCH clause keyword — the boundary a variadic clause (`FIELDS`,
@@ -188,6 +190,19 @@ fn is_clause_keyword(a: &[u8]) -> bool {
     a.eq_ignore_ascii_case(b"LIMIT")
         || a.eq_ignore_ascii_case(b"FIELDS")
         || a.eq_ignore_ascii_case(b"HIGHLIGHT")
+        || a.eq_ignore_ascii_case(b"TYPO")
+}
+
+/// Parse a `TYPO` budget: 0, 1 or 2. `AUTO` (in the frozen surface but
+/// not built) and anything else are a syntax error rather than a silently
+/// clamped budget.
+fn parse_typo(v: &[u8]) -> Option<u32> {
+    match v {
+        b"0" => Some(0),
+        b"1" => Some(1),
+        b"2" => Some(2),
+        _ => None,
+    }
 }
 
 /// Collect a variadic clause's arguments from `start` until the next
@@ -206,15 +221,7 @@ fn collect_clause(argv: &[Vec<u8>], start: usize) -> (Vec<Vec<u8>>, usize) {
 /// later. Listed here rather than rejected as unknown so the syntax is
 /// frozen now: every one of these would otherwise want to change the
 /// MATCH signature when it lands, and v4 is the release that freezes it.
-const NOT_YET: &[&[u8]] = &[
-    b"IN",
-    b"FILTER",
-    b"FACET",
-    b"SORT",
-    b"DISTINCT",
-    b"TYPO",
-    b"OFFSET",
-];
+const NOT_YET: &[&[u8]] = &[b"IN", b"FILTER", b"FACET", b"SORT", b"DISTINCT", b"OFFSET"];
 
 /// Outcome of parsing a MATCH query.
 pub(crate) enum MatchParse {
@@ -255,6 +262,7 @@ impl MatchArgs {
         let mut limit = 10usize;
         let mut fields = Vec::new();
         let mut highlight = None;
+        let mut typo = 0u32;
         let mut i = 4;
         // Clauses are order-independent; each variadic one (FIELDS,
         // HIGHLIGHT) collects up to the next keyword. FIELDS must name at
@@ -275,16 +283,20 @@ impl MatchArgs {
                 let (hs, next) = collect_clause(argv, i + 1);
                 highlight = Some(hs);
                 i = next;
+            } else if kw.eq_ignore_ascii_case(b"TYPO") {
+                typo = parse_typo(argv.get(i + 1)?)?;
+                i += 2;
             } else {
                 return None;
             }
         }
-        Some(MatchArgs { name, text, limit: limit.clamp(1, 1000), fields, highlight })
+        Some(MatchArgs { name, text, limit: limit.clamp(1, 1000), fields, highlight, typo })
     }
 }
 
-/// Parsed pass-2 args: `(name, text, limit, fields, highlight)`.
-pub(crate) type MatchScoreArgs = (Vec<u8>, Vec<u8>, usize, Vec<Vec<u8>>, Option<Vec<Vec<u8>>>);
+/// Parsed pass-2 args: `(name, text, limit, fields, highlight, typo)`.
+pub(crate) type MatchScoreArgs =
+    (Vec<u8>, Vec<u8>, usize, Vec<Vec<u8>>, Option<Vec<Vec<u8>>>, u32);
 
 /// Parse the internal pass-2 argv
 /// `[MATCH.SCORE, name, text, LIMIT=<n>, <gstats>, (FIELDS f…)? (HIGHLIGHT h…)?]`
@@ -304,6 +316,7 @@ pub(crate) fn parse_match_score(argv: &[Vec<u8>]) -> Option<MatchScoreArgs> {
     // index 4 is the gstats blob; the optional clauses start at 5.
     let mut fields = Vec::new();
     let mut highlight = None;
+    let mut typo = 0u32;
     let mut i = 5;
     while i < argv.len() {
         let kw = &argv[i];
@@ -318,11 +331,14 @@ pub(crate) fn parse_match_score(argv: &[Vec<u8>]) -> Option<MatchScoreArgs> {
             let (hs, next) = collect_clause(argv, i + 1);
             highlight = Some(hs);
             i = next;
+        } else if kw.eq_ignore_ascii_case(b"TYPO") {
+            typo = parse_typo(argv.get(i + 1)?)?;
+            i += 2;
         } else {
             return None;
         }
     }
-    Some((name, text, limit.clamp(1, 1000), fields, highlight))
+    Some((name, text, limit.clamp(1, 1000), fields, highlight, typo))
 }
 
 /// `IDX.QUERY name KNN vec [LIMIT k] [FIELDS f…]` (no cursor; k ≤

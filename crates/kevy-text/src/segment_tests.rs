@@ -688,3 +688,71 @@ fn highlight_marks_prefix_matches() {
     let hits: Vec<&str> = spans.iter().map(|(a, b)| &text[*a..*b]).collect();
     assert_eq!(hits, vec!["quick", "quiet"], "both qui- tokens, not slowly");
 }
+
+// ---- typo tolerance (step 6.d) -------------------------------------------
+
+fn typo_seg() -> TextSegment {
+    let mut s = TextSegment::new();
+    s.apply(b"d1", Some(b"quick brown fox"));
+    s.apply(b"d2", Some(b"slow green turtle"));
+    s
+}
+
+/// A budget of 1 reaches a one-edit misspelling; a budget of 0 does not.
+#[test]
+fn typo_budget_reaches_near_terms() {
+    let s = typo_seg();
+    // "quik" is one deletion from "quick".
+    let fuzzy = s.matches_query_typo(b"quik", 10, None, 1);
+    assert_eq!(fuzzy.len(), 1);
+    assert_eq!(fuzzy[0].key, b"d1".to_vec());
+    // Budget 0 is the exact query — "quik" is not indexed.
+    assert!(s.matches_query_typo(b"quik", 10, None, 0).is_empty());
+    // …and the sugar is the budget-0 form.
+    assert_eq!(s.matches_query(b"quik", 10, None), s.matches_query_typo(b"quik", 10, None, 0));
+}
+
+/// The budget is a real bound: two edits need a budget of two.
+#[test]
+fn typo_budget_is_a_bound() {
+    let s = typo_seg();
+    // "qvik" is two edits from "quick" (substitute + delete).
+    assert!(s.matches_query_typo(b"qvik", 10, None, 1).is_empty(), "over a budget of 1");
+    let two = s.matches_query_typo(b"qvik", 10, None, 2);
+    assert_eq!(two.len(), 1);
+    assert_eq!(two[0].key, b"d1".to_vec());
+}
+
+/// An exact term still matches under a budget (distance 0 is included),
+/// and a term far from everything matches nothing.
+#[test]
+fn typo_keeps_exact_and_rejects_far() {
+    let s = typo_seg();
+    let exact = s.matches_query_typo(b"quick", 10, None, 2);
+    assert_eq!(exact.len(), 1);
+    assert_eq!(exact[0].key, b"d1".to_vec());
+    assert!(s.matches_query_typo(b"zzzzz", 10, None, 2).is_empty());
+}
+
+/// Phrases and prefixes are not fuzzed — only bare terms are.
+#[test]
+fn typo_does_not_widen_phrases() {
+    let mut s = TextSegment::with_positions();
+    s.apply(b"d", Some(b"quick brown fox"));
+    // A phrase with a misspelled token stays exact, so it matches nothing
+    // even under a budget.
+    assert!(s.matches_query_typo(b"\"quik brown\"", 10, None, 2).is_empty());
+    // The correctly-spelled phrase still matches.
+    assert_eq!(s.matches_query_typo(b"\"quick brown\"", 10, None, 2).len(), 1);
+}
+
+/// The df term set a cross-shard query aggregates includes the fuzzed
+/// term's neighbours, so their global df is available at scoring time.
+#[test]
+fn typo_df_terms_include_neighbours() {
+    let s = typo_seg();
+    let exact = s.query_df_terms(b"quik");
+    assert_eq!(exact, vec![b"quik".to_vec()], "budget 0 reports the term as written");
+    let fuzzy = s.query_df_terms_typo(b"quik", 1);
+    assert!(fuzzy.contains(&b"quick".to_vec()), "the neighbour is reported: {fuzzy:?}");
+}

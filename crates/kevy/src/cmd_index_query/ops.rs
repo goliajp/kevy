@@ -36,7 +36,7 @@ pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Ve
         // dictionary, so the reported df covers the prefix's expansion
         // terms too — the reduce unions them across shards.
         let tokdf: Vec<(Vec<u8>, u32)> = ts
-            .query_df_terms(&q.text)
+            .query_df_terms_typo(&q.text, q.typo)
             .into_iter()
             .map(|t| {
                 let d = ts.local_df(&t);
@@ -66,7 +66,8 @@ pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Ve
 ///
 /// argv: `[MATCH.SCORE, name, text, LIMIT=<n>, <gstats>, (FIELDS f…)? (HIGHLIGHT h…)?]`.
 pub(super) fn op_match_score(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
-    let Some((name, text, limit, fields, highlight)) = super::args::parse_match_score(argv) else {
+    let Some((name, text, limit, fields, highlight, typo)) = super::args::parse_match_score(argv)
+    else {
         return vec![ST_BADARGS];
     };
     let Some(stats) = argv.get(4).and_then(|b| decode_gstats_arg(b)) else {
@@ -75,7 +76,7 @@ pub(super) fn op_match_score(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>])
     let res = index_runtime::with_ready_text_segment(ctx, store, &name, |ts, spec| {
         // `matches_query` parses quoted phrases out of the raw query
         // text; with none it is the ordinary term query.
-        let hits = ts.matches_query(&text, limit, Some(&stats));
+        let hits = ts.matches_query_typo(&text, limit, Some(&stats), typo);
         let spans = highlight.as_ref().map(|want| {
             hits.iter().map(|h| hit_highlight(ts, spec, &h.key, &text, want)).collect::<Vec<_>>()
         });
