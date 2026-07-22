@@ -437,6 +437,13 @@ impl Hnsw {
         self.by_key.contains_key(key)
     }
 
+    /// Live (non-tombstoned) vectors — already tracked, so `O(1)`.
+    /// [`Self::stats`] walks every node and every link to estimate bytes;
+    /// a caller that only wants the count should not trigger that walk.
+    pub fn vectors(&self) -> u64 {
+        self.live
+    }
+
     /// Counters.
     pub fn stats(&self) -> VectorStats {
         let links: u64 = self.nodes.iter().map(|n| n.links.iter().map(Vec::len).sum::<usize>() as u64).sum();
