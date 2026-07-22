@@ -40,6 +40,14 @@ int main(int argc, char **argv) {
   {
     kevy::Db db(dir);  // reopen: the key survived
     assert(db.cmd({"GET", "smoke:cpp"}).bulk() == "v1");
+
+    // Scalar fast path — the contract row this door used to skip, because
+    // the wrapper had no way to reach it.
+    db.set("fast:cpp", "fv");
+    assert(db.get("fast:cpp") == "fv");
+    assert(!db.get("fast:none").has_value());  // a miss is absence, not error
+    assert(db.cmd({"GET", "fast:cpp"}).bulk() == "fv");  // same store either way
+
     assert(db.cmd({"DEL", "smoke:cpp"}).integer() == 1);
   }
 

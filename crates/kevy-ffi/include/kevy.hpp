@@ -172,6 +172,34 @@ class Db {
     return detail::take(out);
   }
 
+  // Scalar fast path: string GET/SET without the RESP round trip, which is
+  // what the mobile bindings' hot loop runs on. The C door has had these
+  // since they landed; this wrapper did not, so a C++ caller had no way to
+  // reach them without dropping to the C API.
+  //
+  // `get` returns nullopt for a miss — absent is not an error — and copies,
+  // so the caller never has to know which of the two free functions the
+  // engine's buffer belongs to. Reach for kevy_get_shared directly if the
+  // copy is the thing you are trying to avoid.
+  std::optional<std::string> get(std::string_view key) {
+    KevyBuf out;
+    const int32_t rc = kevy_get(db_.get(), reinterpret_cast<const uint8_t *>(key.data()),
+                                key.size(), &out);
+    if (rc < 0) throw std::runtime_error("kevy: kevy_get misuse");
+    if (rc == 0) return std::nullopt;
+    std::string v(reinterpret_cast<const char *>(out.ptr), out.len);
+    kevy_buf_free(out.ptr, out.len, out.cap);
+    return v;
+  }
+
+  // ttl_ms 0 = no expiry. SET overwrites, so there is no WRONGTYPE hazard.
+  void set(std::string_view key, std::string_view value, uint64_t ttl_ms = 0) {
+    const int32_t rc = kevy_set(db_.get(), reinterpret_cast<const uint8_t *>(key.data()),
+                                key.size(), reinterpret_cast<const uint8_t *>(value.data()),
+                                value.size(), ttl_ms);
+    if (rc < 0) throw std::runtime_error("kevy: kevy_set misuse or storage error");
+  }
+
   Subscription subscribe(std::string_view chan) {
     KevySub *s = kevy_subscribe(
         db_.get(), reinterpret_cast<const uint8_t *>(chan.data()), chan.size());
