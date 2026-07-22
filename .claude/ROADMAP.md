@@ -284,7 +284,7 @@ client 生态 —— 该策略 t2 里 gate 化。
 - [ ] npm @goliajp/kevy-node prebuilt 打包:kevy-napi .node × (darwin-arm64 / linux-x64 / linux-arm64) + bun cdylib 同装;packaging/npm 加脚本;tarball 装机 smoke(node + bun 双跑)
 - [ ] NuGet Kevy.Embedded 打包:runtimes/<rid>/native 三平台 cdylib;dotnet pack + 本地 feed 装机 smoke
 - [ ] Go module 发布形态核对(libs/<target>/libkevy_ffi.a 内嵌布局 + go.mod 门面);pkg.go.dev 门面 README
-- [ ] 各包 README(npm / NuGet / SwiftPM / Maven / go)= 装法 + typed 面 + cmd 逃生门 + 版本对齐 4.0.0
+- [x] 各包 README(npm / NuGet / SwiftPM / Maven / go)= 装法 + typed 面 + cmd 逃生门 + 版本对齐 4.0.0 —— 五份都齐 typed 面 + cmd 逃生门;**修了一个诚实问题**:除 go 外四份都让用户跑今天不存在的装包命令(dotnet add / npm install / SwiftPM from:"4.0.0",而最新 tag 只到 v3.18.0),现五份都标注 4.0.0 且都给出 pre-release 说明 + 仓库内可跑的替代路径(本地 feed / path 依赖 / run-tests.sh)
 - [x] ffigate 升级:六门断言对齐一张契约表(cmd 面 / error-as-data / pubsub / durability / 标量快路) —— `bench/ffigate-contract.sh`(6 门 × 5 行 = 30 格,表在脚本里即契约本身),接进 CI 的 ffigate job 最前面(纯源码检查,秒级失败)。**查出两个真缺口并已补**:① C++ 的 `kevy.hpp` 根本没有暴露标量 get/set,C++ 调用方只能掉到 C API —— 已加 RAII 包装(`std::optional<std::string> get` / `set`,miss 是 nullopt 不是错误)并在 smoke.cpp 断言,本机 c++17 实编跑绿;② Bun 门的 `bun.js` 有 `getScalar`/`setScalar` 但测试从没碰过 —— 已补断言(含"标量写入也要能重开后存活"),本机 bun 跑绿。反例验证:破坏任一格 → 只有该格 MISS 且退出 1
 
 ### t2 — client 面:兼容矩阵 gate 化(RFC 已内含推荐,自研与否留拍板)
