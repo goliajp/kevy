@@ -11,6 +11,13 @@ ios-sim-arm64 / macos-arm64 static libraries).
 .package(url: "https://github.com/goliajp/kevy", from: "4.0.0")
 ```
 
+> **Pre-release.** `from: "4.0.0"` needs a `4.0.0` tag, and the newest
+> tag today is `v3.18.0` — so the line above resolves to nothing yet.
+> Until v4 is tagged, depend on the package by path:
+> `.package(path: "/path/to/kevy/bindings/apple/KevyKit")`, after
+> `bash packaging/apple/build-xcframework.sh` has produced
+> `Artifacts/Kevy.xcframework`.
+
 ```swift
 import KevyKit
 
