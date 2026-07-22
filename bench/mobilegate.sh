@@ -135,7 +135,15 @@ case "$framework" in
           app=$(find ios/build/Build/Products/Release-iphonesimulator -maxdepth 1 -name "*.app" | head -1) && \
           xcrun simctl install "$sim" "$app" && \
           xcrun simctl launch "$sim" org.reactjs.native.example.BareKevy'
-        android_cmd="npx react-native run-android --mode release"
+        # --deviceId pins the install, same reason expo and flutter pin
+        # theirs: without it `run-android` takes adb's first device, and on a
+        # host with a real phone plugged in that is the phone. This door was
+        # the one that did not pin — the exact hazard the header warns about.
+        # --deviceId (not --device) because android_dev_id yields an adb
+        # serial, which is what --deviceId matches; --device matches by name.
+        # It is marked deprecated in RN 0.86's CLI but still the serial-exact
+        # flag; revisit if a future CLI drops it.
+        android_cmd="npx react-native run-android --mode release --deviceId $(android_dev_id)"
         ;;
     *) echo "unknown framework: $framework" >&2; exit 2 ;;
 esac
