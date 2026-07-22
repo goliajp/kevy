@@ -6,7 +6,7 @@ use kevy_store::Store;
 
 use super::args::{ComposeQuery, HybridArgs, KnnArgs, MatchArgs, Shape};
 use super::wire::{
-    decode_gstats_arg, encode_agg_chunk, encode_highlight, encode_hydration, encode_stats_chunk,
+    decode_gstats_arg, encode_agg_chunk, encode_hydration, encode_stats_chunk,
 };
 use super::{ST_BADARGS, ST_BUILDING, ST_NOINDEX, ST_OK, ST_OVERBUDGET};
 use crate::index_runtime;
@@ -21,9 +21,13 @@ use crate::state::Ctx;
 /// The terminal-surface validation runs HERE (pass 1) so a NOTYET/BADARGS
 /// answer is returned before any second fan-out — the syntax verdict must
 /// not wait on a scoring round.
+#[path = "ops_encode.rs"]
+mod encode;
+use encode::encode_hits;
+
 #[path = "ops_clauses.rs"]
 mod clauses;
-use clauses::{boxed_preds, distinct_field, scope_positions, sort_field};
+use clauses::{boxed_preds, distinct_field, facet_fields, scope_positions, sort_field};
 
 pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let q = match MatchArgs::parse_terminal(argv) {
@@ -85,7 +89,7 @@ pub(super) fn op_match_score(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>])
         // text; with none it is the ordinary term query.
         // Fetch deep enough for the origin to skip OFFSET and still fill
         // LIMIT: a shard cannot know which of its hits survive the merge.
-        let (hits, sort_field, distinct_field) = scored_hits(ts, spec, &q, &stats)?;
+        let (hits, sort_field, distinct_field, facets) = scored_hits(ts, spec, &q, &stats)?;
         let spans = q.highlight.as_ref().map(|want| {
             hits.iter().map(|h| hit_highlight(ts, spec, &h.key, &q.text, want)).collect::<Vec<_>>()
         });
@@ -105,12 +109,12 @@ pub(super) fn op_match_score(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>])
         // The origin collapses the union too, and needs the same identity
         // the shard grouped by.
         let dkeys = distinct_field.map(hit_keys);
-        Ok((hits, spans, okeys, dkeys))
+        Ok((hits, spans, okeys, dkeys, facets))
     });
     match res {
         Ok(Err(chunk)) => chunk,
-        Ok(Ok((hits, spans, okeys, dkeys))) => {
-            encode_hits(store, &hits, &spans, &okeys, &dkeys, &q.fields)
+        Ok(Ok((hits, spans, okeys, dkeys, facets))) => {
+            encode_hits(store, &hits, &spans, &okeys, &dkeys, &facets, &q.fields)
         }
         Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
         Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
@@ -122,7 +126,8 @@ pub(super) fn op_match_score(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>])
 /// One shard's pass-2 answer: its hits, and which stored-value fields
 /// the origin will need each hit's key for (the sort field, the distinct
 /// field).
-type ShardPage = (Vec<kevy_text::TextMatch>, Option<usize>, Option<usize>);
+type ShardPage =
+    (Vec<kevy_text::TextMatch>, Option<usize>, Option<usize>, Vec<Vec<kevy_text::Bucket>>);
 
 /// This shard's hits for a pass-2 MATCH, scored against the injected
 /// global statistics with every clause the query carried.
@@ -163,56 +168,16 @@ fn scored_hits(
         sort,
         distinct,
     };
-    let hits = ts.matches_query_with(&q.text, q.limit + q.offset, opts);
-    Ok((hits, sorted.map(|(field, _, _)| field), grouped.map(|(field, _)| field)))
-}
-
-/// This shard's ranked chunk: `[ST_OK][n][(klen, key, score, hydration,
-/// highlight?, sort key?)*]`. The two optional blocks are present exactly
-/// when the query asked for them, a fact the reduce recovers from the
-/// same argv, so the two never drift.
-fn encode_hits(
-    store: &mut Store,
-    hits: &[kevy_text::TextMatch],
-    spans: &Option<Vec<super::HitSpans>>,
-    okeys: &Option<Vec<Option<Vec<u8>>>>,
-    dkeys: &Option<Vec<Option<Vec<u8>>>>,
-    fields: &[Vec<u8>],
-) -> Vec<u8> {
-    let mut chunk = vec![ST_OK];
-    chunk.extend_from_slice(&(hits.len() as u32).to_le_bytes());
-    for (i, h) in hits.iter().enumerate() {
-        chunk.extend_from_slice(&(h.key.len() as u32).to_le_bytes());
-        chunk.extend_from_slice(&h.key);
-        chunk.extend_from_slice(&h.score.to_le_bytes());
-        encode_hydration(store, &mut chunk, &h.key, fields);
-        if let Some(spans) = &spans {
-            encode_highlight(&mut chunk, &spans[i]);
-        }
-        if let Some(okeys) = okeys {
-            encode_okey(&mut chunk, okeys[i].as_deref());
-        }
-        if let Some(dkeys) = dkeys {
-            encode_okey(&mut chunk, dkeys[i].as_deref());
-        }
-    }
-    chunk
-}
-
-/// One hit's sort key on the wire: a present flag, then the bytes.
-///
-/// Absent is its own tag rather than an empty key, because an empty
-/// stored value is a value and must not sort with the documents that have
-/// none.
-fn encode_okey(chunk: &mut Vec<u8>, okey: Option<&[u8]>) {
-    match okey {
-        Some(k) => {
-            chunk.push(1);
-            chunk.extend_from_slice(&(k.len() as u32).to_le_bytes());
-            chunk.extend_from_slice(k);
-        }
-        None => chunk.push(0),
-    }
+    let counted = facet_fields(spec, &q.facets)?;
+    let fkeys: Vec<_> =
+        counted.iter().map(|(_, ty)| { let ty = *ty; move |raw: &[u8]| kevy_index::order_key(ty, raw) }).collect();
+    let facets: Vec<kevy_text::Facet> = counted
+        .iter()
+        .zip(&fkeys)
+        .map(|((field, _), k)| kevy_text::Facet { field: *field, key: k })
+        .collect();
+    let r = ts.matches_query_faceted(&q.text, q.limit + q.offset, opts, &facets);
+    Ok((r.hits, sorted.map(|(field, _, _)| field), grouped.map(|(field, _)| field), r.facets))
 }
 
 /// One hit's highlight spans as `(field name, [(start, end)])`, filtered

@@ -195,6 +195,9 @@ pub(crate) struct MatchArgs {
     pub(crate) sort: Option<(Vec<u8>, bool)>,
     /// `DISTINCT <field>`: at most one hit per value of a stored field.
     pub(crate) distinct: Option<Vec<u8>>,
+    /// `FACET <field…>`: count each field's values over the whole match
+    /// set, reported alongside the page.
+    pub(crate) facets: Vec<Vec<u8>>,
 }
 
 /// A MATCH clause keyword — the boundary a variadic clause (`FIELDS`,
@@ -209,6 +212,7 @@ fn is_clause_keyword(a: &[u8]) -> bool {
         || a.eq_ignore_ascii_case(b"FILTER")
         || a.eq_ignore_ascii_case(b"SORT")
         || a.eq_ignore_ascii_case(b"DISTINCT")
+        || a.eq_ignore_ascii_case(b"FACET")
 }
 
 /// Parse a `TYPO` budget: 0, 1 or 2. `AUTO` (in the frozen surface but
@@ -247,11 +251,11 @@ fn apply_clause(argv: &[Vec<u8>], i: usize, a: &mut MatchArgs) -> Option<usize> 
     } else if kw.eq_ignore_ascii_case(b"OFFSET") {
         a.offset = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
         Some(i + 2)
-    } else if kw.eq_ignore_ascii_case(b"DISTINCT") {
-        a.distinct = Some(argv.get(i + 1)?.clone());
-        Some(i + 2)
-    } else if kw.eq_ignore_ascii_case(b"SORT") {
-        apply_sort(argv, i, a)
+    } else if kw.eq_ignore_ascii_case(b"FACET")
+        || kw.eq_ignore_ascii_case(b"DISTINCT")
+        || kw.eq_ignore_ascii_case(b"SORT")
+    {
+        apply_value_clause(argv, i, a)
     } else if kw.eq_ignore_ascii_case(b"FILTER") {
         apply_filter(argv, i, a)
     } else if kw.eq_ignore_ascii_case(b"IN") {
@@ -282,7 +286,7 @@ fn collect_clause(argv: &[Vec<u8>], start: usize) -> (Vec<Vec<u8>>, usize) {
 /// later. Listed here rather than rejected as unknown so the syntax is
 /// frozen now: every one of these would otherwise want to change the
 /// MATCH signature when it lands, and v4 is the release that freezes it.
-const NOT_YET: &[&[u8]] = &[b"FACET"];
+const NOT_YET: &[&[u8]] = &[];
 
 /// Outcome of parsing a MATCH query.
 pub(crate) enum MatchParse {
@@ -331,6 +335,7 @@ impl MatchArgs {
             filters: Vec::new(),
             sort: None,
             distinct: None,
+            facets: Vec::new(),
         };
         // Clauses are order-independent; each variadic one (FIELDS,
         // HIGHLIGHT) collects up to the next keyword.
@@ -348,7 +353,7 @@ impl MatchArgs {
 #[path = "args_filter.rs"]
 mod filter;
 pub(crate) use filter::{FilterArg, FilterShape};
-use filter::{apply_filter, apply_sort};
+use filter::{apply_filter, apply_value_clause};
 
 #[path = "args_match_score.rs"]
 mod match_score;

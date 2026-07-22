@@ -188,16 +188,20 @@ fn text_match(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
             filters: &filters,
             sort: tail.sort.as_ref().map(|(f, d)| (f.as_slice(), *d)),
             distinct: tail.distinct.as_deref(),
+            facets: &tail.facets,
         };
-        match s.idx_match_with(name, text, tail.limit, opts) {
+        let facet_extra = usize::from(!tail.facets.is_empty());
+        match s.idx_match_faceted(name, text, tail.limit, opts) {
             Err(e) => idx_err(out, name, &e),
-            Ok(hits) if want.is_some() => {
-                emit_ranked_highlighted(s, out, &hits, &tail.fields);
+            Ok(page) if want.is_some() => {
+                emit_ranked_highlighted(s, out, &page.hits, &tail.fields, facet_extra);
+                emit_facets(out, &tail.facets, &page.facets);
             }
-            Ok(hits) => {
+            Ok(page) => {
                 let plain: Vec<(Vec<u8>, f64)> =
-                    hits.into_iter().map(|(k, v, _)| (k, v)).collect();
-                emit_ranked(s, out, &plain, &tail.fields, 4);
+                    page.hits.into_iter().map(|(k, v, _)| (k, v)).collect();
+                emit_ranked(s, out, &plain, &tail.fields, 4, facet_extra);
+                emit_facets(out, &tail.facets, &page.facets);
             }
         }
     }
@@ -205,6 +209,24 @@ fn text_match(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     {
         let _ = (s, argv);
         no_such_index(out, name);
+    }
+}
+
+/// The faceted reply's one trailing element: `[field, [value, count, …],
+/// field, …]`, matching the wire's shape exactly.
+#[cfg(feature = "text")]
+fn emit_facets(out: &mut Vec<u8>, names: &[Vec<u8>], buckets: &[Vec<(Vec<u8>, u64)>]) {
+    if names.is_empty() {
+        return;
+    }
+    arr(out, names.len() * 2);
+    for (name, field) in names.iter().zip(buckets) {
+        bulk(out, name);
+        arr(out, field.len() * 2);
+        for (label, n) in field {
+            bulk(out, label);
+            bulk(out, n.to_string().as_bytes());
+        }
     }
 }
 
@@ -217,8 +239,12 @@ pub(super) fn emit_ranked(
     hits: &[(Vec<u8>, f64)],
     fields: &[Vec<u8>],
     prec: usize,
+    // Elements the caller will append after the rows (the faceted
+    // reply's one trailing element). Counted here because the array
+    // header is written before them.
+    extra: usize,
 ) {
-    arr(out, hits.len());
+    arr(out, hits.len() + extra);
     for (key, v) in hits {
         arr(out, 2 + fields.len() * 2);
         bulk(out, key);
@@ -241,8 +267,9 @@ fn emit_ranked_highlighted(
     out: &mut Vec<u8>,
     hits: &[crate::ops_index::HighlightedHit],
     fields: &[Vec<u8>],
+    extra: usize,
 ) {
-    arr(out, hits.len());
+    arr(out, hits.len() + extra);
     for (key, v, hl) in hits {
         arr(out, 2 + fields.len() * 2 + 1);
         bulk(out, key);
@@ -289,7 +316,7 @@ fn knn(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
             Ok(hits) => {
                 let hits: Vec<(Vec<u8>, f64)> =
                     hits.into_iter().map(|(k, d)| (k, f64::from(d))).collect();
-                emit_ranked(s, out, &hits, &tail.fields, 4);
+                emit_ranked(s, out, &hits, &tail.fields, 4, 0);
             }
         }
     }
@@ -318,6 +345,8 @@ fn parse_knn_tail(argv: &[Vec<u8>]) -> Option<(tail::Tail, usize)> {
             sort: None,
             #[cfg(feature = "text")]
             distinct: None,
+            #[cfg(feature = "text")]
+            facets: Vec::new(),
         };
     let mut ef = 0usize;
     let mut i = 4;

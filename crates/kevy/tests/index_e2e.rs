@@ -1066,3 +1066,70 @@ fn distinct_over_the_wire() {
     let s = String::from_utf8_lossy(&bad);
     assert!(s.starts_with("-ERR") && s.contains("price"), "unstored distinct field: {s}");
 }
+
+/// `FACET` counts every match across the fan-out, not just the page, and
+/// rides back as one trailing element so an unfaceted reply keeps its
+/// previous shape.
+#[test]
+fn facet_over_the_wire() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    for (k, reps, price) in [
+        ("a1", 9, "10"), ("a2", 8, "10"),
+        ("b1", 7, "20"), ("b2", 6, "20"),
+        ("c1", 5, "30"), ("c2", 4, "30"),
+    ] {
+        let body = format!("rust {}", "rust ".repeat(reps));
+        cmd(&mut c, &[b"HSET", format!("f2:{k}").as_bytes(), b"body", body.as_bytes(),
+                      b"price", price.as_bytes()]);
+    }
+    let r = cmd(
+        &mut c,
+        &[b"IDX.CREATE", b"ff", b"ON", b"PREFIX", b"f2:", b"FIELD", b"body",
+          b"TYPE", b"str", b"KIND", b"text", b"VALUES", b"price", b"TYPES", b"i64"],
+    );
+    assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
+
+    // A LIMIT-1 page still reports every bucket with both documents —
+    // the counts come from the match set, not the page.
+    let f = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"ff", b"MATCH", b"rust", b"LIMIT", b"1", b"FACET", b"price"],
+    );
+    let s = String::from_utf8_lossy(&f);
+    assert!(s.contains("price"), "the facet field is named: {s}");
+    for v in ["10", "20", "30"] {
+        assert!(s.contains(&format!("${}\r\n{v}\r\n", v.len())), "bucket {v} present: {s}");
+    }
+    // Three buckets of two, summed across shards.
+    assert_eq!(s.matches("$1\r\n2\r\n").count(), 3, "each bucket counts two: {s}");
+
+    // FILTER restricts the counts; DISTINCT does not.
+    let filtered = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"ff", b"MATCH", b"rust", b"LIMIT", b"10",
+          b"FILTER", b"price", b"RANGE", b"20", b"30", b"FACET", b"price"],
+    );
+    let s = String::from_utf8_lossy(&filtered);
+    assert!(!s.contains("\r\n10\r\n"), "the excluded price has no bucket: {s}");
+    let collapsed = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"ff", b"MATCH", b"rust", b"LIMIT", b"10",
+          b"DISTINCT", b"price", b"FACET", b"price"],
+    );
+    let s = String::from_utf8_lossy(&collapsed);
+    assert_eq!(s.matches("$1\r\n2\r\n").count(), 3, "collapsing the page does not change what matched: {s}");
+
+    // Without FACET the reply is exactly the rows, no trailing element.
+    let plain = query_ready(&mut c, &[b"IDX.QUERY", b"ff", b"MATCH", b"rust", b"LIMIT", b"2"]);
+    let s = String::from_utf8_lossy(&plain);
+    assert!(s.starts_with("*2\r\n"), "two rows and nothing else: {s}");
+
+    // An unstored field errors rather than counting nothing.
+    let bad = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"ff", b"MATCH", b"rust", b"FACET", b"colour"],
+    );
+    let s = String::from_utf8_lossy(&bad);
+    assert!(s.starts_with("-ERR") && s.contains("price"), "unstored facet field: {s}");
+}

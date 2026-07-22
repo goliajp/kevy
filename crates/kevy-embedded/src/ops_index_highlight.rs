@@ -39,6 +39,9 @@ pub struct MatchOpts<'a> {
     /// applied during selection so the page holds `limit` distinct
     /// documents rather than `limit` that then collapse.
     pub distinct: Option<&'a [u8]>,
+    /// `FACET <field…>`: count each field's values over the whole match
+    /// set. Reported alongside the page rather than shaping it.
+    pub facets: &'a [Vec<u8>],
 }
 
 /// One `FILTER` predicate: which stored value field it reads, and the
@@ -90,6 +93,19 @@ impl Store {
         limit: usize,
         opts: MatchOpts<'_>,
     ) -> KevyResult<Vec<HighlightedHit>> {
+        self.idx_match_faceted(name, query, limit, opts).map(|p| p.hits)
+    }
+
+    /// [`Self::idx_match_with`], additionally counting the values of the
+    /// `FACET` fields over the whole match set — not just the page, which
+    /// is why the counts cannot be derived from the hits.
+    pub fn idx_match_faceted(
+        &self,
+        name: &[u8],
+        query: &[u8],
+        limit: usize,
+        opts: MatchOpts<'_>,
+    ) -> KevyResult<MatchPage> {
         let limit = limit.clamp(1, 1000);
         let offset = opts.offset.min(10_000);
         // Fetch deep enough to skip OFFSET and still fill LIMIT after the
@@ -97,6 +113,9 @@ impl Store {
         let fetch = limit + offset;
         let (scope, tests) = self.resolve_clauses(name, opts.scope, opts.filters)?;
         let sorted = self.sort_field(name, opts.sort)?;
+        let fkeys = self.facet_keys(name, opts.facets)?;
+        let fac: Vec<kevy_text::Facet> =
+            fkeys.iter().map(|(field, k)| kevy_text::Facet { field: *field, key: k.as_ref() }).collect();
         let grouped = self.value_field("DISTINCT", name, opts.distinct)?;
         let dkey = grouped.map(|(_, ty)| move |raw: &[u8]| kevy_index::order_key(ty, raw));
         let distinct = grouped
@@ -120,14 +139,15 @@ impl Store {
             sort,
             distinct,
         };
-        let mut all = self.gather_hits(name, query, fetch, q, opts.highlight);
+        let (mut all, facets) =
+            self.gather_hits(name, query, fetch, q, opts.highlight, &fac);
         self.order_page(name, &mut all, sorted);
         self.collapse_union(name, &mut all, grouped);
         if offset > 0 {
             all.drain(..offset.min(all.len()));
         }
         all.truncate(limit);
-        Ok(all)
+        Ok(MatchPage { hits: all, facets })
     }
 
     /// Resolve the clauses that need the index spec: `IN` names onto
@@ -215,7 +235,8 @@ fn value_test(
 }
 
 impl Store {
-    /// Every shard's page for this query, unmerged.
+    /// Every shard's page for this query, unmerged, with the facet
+    /// buckets summed by identity as the shards report them.
     fn gather_hits(
         &self,
         name: &[u8],
@@ -223,8 +244,10 @@ impl Store {
         fetch: usize,
         q: kevy_text::QueryOpts<'_>,
         highlight: Option<&[Vec<u8>]>,
-    ) -> Vec<HighlightedHit> {
+        facets: &[kevy_text::Facet],
+    ) -> (Vec<HighlightedHit>, Vec<FacetCounts>) {
         let mut all = Vec::new();
+        let mut buckets: Vec<Vec<RawBucket>> = vec![Vec::new(); facets.len()];
         for shard in self.shards.iter() {
             let mut g = lock_write(shard);
             let inner = &mut *g;
@@ -232,14 +255,23 @@ impl Store {
             if let Some((spec, ts)) = inner.idx_segs.text.iter().find(|(s, _)| s.name == name) {
                 // `matches_query_with` parses quoted phrases out of the
                 // raw query text; with none it is the ordinary term query.
-                for m in ts.matches_query_with(query, fetch, q) {
+                let r = ts.matches_query_faceted(query, fetch, q, facets);
+                for m in r.hits {
                     let hl = highlight
                         .map_or_else(Vec::new, |w| hit_highlight(ts, spec, &m.key, query, w));
                     all.push((m.key, m.score, hl));
                 }
+                for (into, from) in buckets.iter_mut().zip(r.facets) {
+                    for (key, label, n) in from {
+                        match into.iter_mut().find(|(k, _, _)| *k == key) {
+                            Some(e) => e.2 += n,
+                            None => into.push((key, label, n)),
+                        }
+                    }
+                }
             }
         }
-        all
+        (all, finish_buckets(buckets))
     }
 
     /// Put the merged hits in the page's order: by the sort key when the
@@ -300,6 +332,40 @@ impl Store {
         Ok(Some((pos, desc, ty)))
     }
 
+    /// Each `FACET` field's position paired with the order-preserving
+    /// encoding of its declared type — the identity buckets are grouped
+    /// by. Returned rather than built inline because the borrowed
+    /// `Facet` list points at these closures.
+    fn facet_keys(
+        &self,
+        name: &[u8],
+        facets: &[Vec<u8>],
+    ) -> KevyResult<Vec<FacetKey>> {
+        Ok(self
+            .facet_fields(name, facets)?
+            .into_iter()
+            .map(|(field, ty)| -> FacetKey {
+                (field, Box::new(move |raw: &[u8]| kevy_index::order_key(ty, raw)))
+            })
+            .collect())
+    }
+
+    /// Each `FACET` field's stored-value position and declared type.
+    fn facet_fields(
+        &self,
+        name: &[u8],
+        facets: &[Vec<u8>],
+    ) -> KevyResult<Vec<(usize, kevy_index::ValType)>> {
+        facets
+            .iter()
+            .map(|f| {
+                Ok(self
+                    .value_field("FACET", name, Some(f))?
+                    .expect("a named field always resolves or errors"))
+            })
+            .collect()
+    }
+
     /// A clause's named stored-value field, as a position and its
     /// declared type. Errors naming what the index does store.
     fn value_field(
@@ -341,6 +407,39 @@ impl Store {
         }
         None
     }
+}
+
+/// A facet field's position paired with the order-preserving encoding of
+/// its declared type — the identity its buckets are grouped by.
+type FacetKey = (usize, Box<dyn Fn(&[u8]) -> Option<Vec<u8>>>);
+
+/// One facet field's reported buckets: `(value, count)`, most frequent
+/// first.
+pub type FacetCounts = Vec<(Vec<u8>, u64)>;
+
+/// One facet bucket in flight, before the grouping identity is dropped.
+type RawBucket = (Vec<u8>, Vec<u8>, u64);
+
+/// A faceted query's answer: the page, and per requested `FACET` field
+/// its `(value, count)` buckets over the whole match set.
+#[derive(Debug)]
+pub struct MatchPage {
+    /// The ranked page — exactly what [`Store::idx_match_with`] returns.
+    pub hits: Vec<HighlightedHit>,
+    /// One entry per requested facet field, most frequent first.
+    pub facets: Vec<FacetCounts>,
+}
+
+/// Drop the grouping identity and order the buckets for reporting: most
+/// frequent first, the label breaking ties so the order is stable.
+fn finish_buckets(buckets: Vec<Vec<RawBucket>>) -> Vec<FacetCounts> {
+    buckets
+        .into_iter()
+        .map(|mut field| {
+            field.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.1.cmp(&b.1)));
+            field.into_iter().map(|(_, label, n)| (label, n)).collect()
+        })
+        .collect()
 }
 
 /// A clause naming a field the index does not offer, saying what it does.
