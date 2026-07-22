@@ -70,6 +70,10 @@ public sealed class ServerFixture : IDisposable
 {
     private readonly Process? _proc;
     private readonly string _tmp;
+    /// <summary>The server's stderr, drained as it arrives. A spawn that
+    /// dies during startup otherwise reports only "exited", which is the
+    /// one thing already known.</summary>
+    private readonly System.Text.StringBuilder _stderr = new();
     public string? Url { get; }
     public int Port { get; }
 
@@ -94,8 +98,15 @@ public sealed class ServerFixture : IDisposable
             args.Add("--config"); args.Add(cfg);
         }
         args.AddRange(extra);
-        _proc = Process.Start(new ProcessStartInfo(bin) { RedirectStandardOutput = false, RedirectStandardError = false }
+        _proc = Process.Start(new ProcessStartInfo(bin) { RedirectStandardOutput = false, RedirectStandardError = true }
             .With(args));
+        if (_proc is not null)
+        {
+            // Drained asynchronously: a pipe nobody reads fills up and
+            // blocks the very process being waited on.
+            _proc.ErrorDataReceived += (_, e) => { if (e.Data is not null) lock (_stderr) _stderr.AppendLine(e.Data); };
+            _proc.BeginErrorReadLine();
+        }
         Url = $"kevy://127.0.0.1:{port}";
         WaitReady();
     }
@@ -111,7 +122,14 @@ public sealed class ServerFixture : IDisposable
         var deadline = DateTime.UtcNow.AddSeconds(10);
         while (DateTime.UtcNow < deadline)
         {
-            if (_proc is { HasExited: true }) throw new InvalidOperationException("server exited before ready");
+            if (_proc is { HasExited: true })
+            {
+                string why;
+                lock (_stderr) why = _stderr.ToString().Trim();
+                throw new InvalidOperationException(
+                    $"server exited before ready (port {Port}, exit {_proc.ExitCode})"
+                    + (why.Length == 0 ? " with no output" : $": {why}"));
+            }
             try
             {
                 using var c = KevyClient.Connect(Url!);
@@ -123,6 +141,15 @@ public sealed class ServerFixture : IDisposable
         throw new InvalidOperationException("server never became ready");
     }
 
+    /// <summary>A port the OS says is free.
+    ///
+    /// There is a window between this listener closing and the server
+    /// binding, so two spawns close together can be handed the same port
+    /// and the loser exits immediately. That is the leading suspect for
+    /// the occasional "exited before ready" here, but it is a suspicion,
+    /// not a diagnosis — the stderr now captured in
+    /// <see cref="ServerFixture"/> will say so outright the next time it
+    /// happens, and the fix belongs after that, not before.</summary>
     internal static int FreePort()
     {
         var l = new TcpListener(IPAddress.Loopback, 0);
