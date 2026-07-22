@@ -143,7 +143,12 @@ case "$framework" in
         # serial, which is what --deviceId matches; --device matches by name.
         # It is marked deprecated in RN 0.86's CLI but still the serial-exact
         # flag; revisit if a future CLI drops it.
-        android_cmd="npx react-native run-android --mode release --deviceId $(android_dev_id)"
+        # --no-packager because a release build bundles the JS (no metro
+        # needed), and without it run-android tries to start metro on 8081 —
+        # if that port is taken it prints an INTERACTIVE "use 8082? [Y/n]"
+        # prompt and blocks forever on a gate that has no stdin, which reads
+        # as a 16-minute timeout with no verdict.
+        android_cmd="npx react-native run-android --mode release --no-packager --deviceId $(android_dev_id)"
         ;;
     *) echo "unknown framework: $framework" >&2; exit 2 ;;
 esac

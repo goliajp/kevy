@@ -185,27 +185,30 @@ fn a_disconnect_during_the_serve_does_not_lose_the_element() {
 
     // Wait past the pop (window end ~800ms) plus the abort round-trip and
     // restore, generously, so the verify below reads the settled state
-    // rather than the pop/restore gap. The element must be back — exactly
-    // once, neither lost (the defect) nor duplicated.
+    // rather than the pop/restore gap.
     std::thread::sleep(std::time::Duration::from_millis(2500));
+
+    // Verify with LRANGE, not BLPOP. The property is "the element survived,
+    // exactly once" — a fact about the list, which LRANGE reads directly
+    // and without consuming. BLPOP here would fold in a second timing
+    // dependency (whether the serve completes inside its own 5s) on top of
+    // the one being tested, and on a loaded macOS runner that is what
+    // failed: the pop lost the race with the verify, not the escrow. The
+    // three outcomes map to the three states — one element restored, zero
+    // means the defect (lost), two means duplicated.
     let mut c2 = srv.connect();
-    c2.write_all(&req(&[b"BLPOP", b"escrowed", b"5"])).unwrap();
+    c2.write_all(&req(&[b"LRANGE", b"escrowed", b"0", b"-1"])).unwrap();
+    let list = read_reply(&mut c2);
+    let expected = {
+        let mut e = Vec::new();
+        e.extend_from_slice(b"*1\r\n$4\r\nkept\r\n");
+        e
+    };
     assert_eq!(
-        read_reply(&mut c2),
-        req_pop_reply("escrowed", "kept"),
-        "the element was popped for a client that vanished and never came back",
+        list, expected,
+        "escrow property broken: list should hold exactly one 'kept'. \
+         *0 = the element was popped for a vanished client and lost (the \
+         defect); *2 = it was restored AND kept, duplicated. got: {list:?}",
     );
-    // And only one: a second BLPOP finds the list empty.
-    let mut c3 = srv.connect();
-    c3.write_all(&req(&[b"BLPOP", b"escrowed", b"1"])).unwrap();
-    assert_eq!(read_reply(&mut c3), b"*-1\r\n", "exactly one element survived");
 }
 
-/// `*2\r\n$<klen>\r\n<key>\r\n$<vlen>\r\n<val>\r\n` — BLPOP's wake reply.
-fn req_pop_reply(key: &str, val: &str) -> Vec<u8> {
-    let mut e = Vec::new();
-    e.extend_from_slice(b"*2\r\n");
-    e.extend_from_slice(format!("${}\r\n{}\r\n", key.len(), key).as_bytes());
-    e.extend_from_slice(format!("${}\r\n{}\r\n", val.len(), val).as_bytes());
-    e
-}
