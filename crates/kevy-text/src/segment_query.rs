@@ -78,7 +78,7 @@ impl TextSegment {
         }
         let ctx = QueryCtx { n_docs, avgdl, limit };
         let scores = self.accumulate(&lists, &ctx);
-        self.select_top(&scores, limit, &[], None)
+        self.select_top(&scores, limit, &[], None, None)
     }
 
     /// Corpus `(n_docs, avgdl)`: injected global stats when supplied,
@@ -256,39 +256,92 @@ impl TextSegment {
         limit: usize,
         filter: &[crate::Filter],
         sort: Option<crate::Sort>,
+        distinct: Option<crate::Distinct>,
     ) -> Vec<TextMatch> {
         let order = Order { desc: sort.is_some_and(|s| s.desc), sorted: sort.is_some() };
-        let mut top: Vec<Cand> = Vec::with_capacity(limit + 1);
-        for (id, score) in scores {
-            // The candidate set is walked exactly once here, so this is
-            // the cheapest correct place to test a predicate and to build
-            // a sort key: testing inside each term's accumulation would
-            // retest a document once per query term.
-            if !self.passes(*id, filter) {
-                continue;
-            }
-            let cand = Cand {
-                score: *score,
-                key: self.id_key[*id as usize].as_deref().expect("live posting id"),
-                okey: sort.and_then(|s| {
-                    self.values.as_ref().and_then(|dv| dv.get(*id, s.field)).and_then(s.key)
-                }),
-            };
-            if top.len() < limit {
-                top.push(cand);
-                if top.len() == limit {
-                    order.sort(&mut top);
+        let mut top = TopK::new(limit, order);
+        match distinct {
+            // The plain path stays streaming: a candidate that loses is
+            // dropped, never collected.
+            None => {
+                for (id, score) in scores {
+                    if let Some(c) = self.candidate(*id, *score, filter, sort) {
+                        top.push(c);
+                    }
                 }
-            } else if order.better(&cand, &top[limit - 1]) {
-                let pos = top.partition_point(|e| order.better(e, &cand));
-                top.insert(pos, cand);
-                top.pop();
+            }
+            Some(d) => {
+                for c in self.collapse(scores, filter, sort, d, order) {
+                    top.push(c);
+                }
             }
         }
-        if top.len() < limit {
-            order.sort(&mut top);
+        top.finish()
+    }
+
+    /// One candidate, or `None` when a predicate rejects it.
+    ///
+    /// The candidate set is walked exactly once, so this is the cheapest
+    /// correct place to test a predicate and to build a sort key: testing
+    /// inside each term's accumulation would retest a document once per
+    /// query term.
+    fn candidate(
+        &self,
+        id: u32,
+        score: f64,
+        filter: &[crate::Filter],
+        sort: Option<crate::Sort>,
+    ) -> Option<Cand<'_>> {
+        if !self.passes(id, filter) {
+            return None;
         }
-        top.into_iter().map(|c| TextMatch { key: c.key.to_vec(), score: c.score }).collect()
+        Some(Cand {
+            score,
+            key: self.id_key[id as usize].as_deref().expect("live posting id"),
+            okey: sort.and_then(|s| self.stored(id, s.field).and_then(s.key)),
+        })
+    }
+
+    /// One document's stored value for a field, by id.
+    fn stored(&self, id: u32, field: usize) -> Option<&[u8]> {
+        self.values.as_ref().and_then(|dv| dv.get(id, field))
+    }
+
+    /// The candidates with duplicates removed: at most one document per
+    /// value of the distinct field, the best of them by the page's order.
+    ///
+    /// A document with **no** value for the field is its own group.
+    /// `DISTINCT` removes documents shown to share a value; one that has
+    /// no value has not been shown to share anything, and collapsing them
+    /// together would hide rows on the strength of a value none of them
+    /// has.
+    fn collapse(
+        &self,
+        scores: &HashMap<u32, f64>,
+        filter: &[crate::Filter],
+        sort: Option<crate::Sort>,
+        distinct: crate::Distinct,
+        order: Order,
+    ) -> Vec<Cand<'_>> {
+        let mut best: HashMap<Vec<u8>, Cand> = HashMap::new();
+        let mut ungrouped: Vec<Cand> = Vec::new();
+        for (id, score) in scores {
+            let Some(c) = self.candidate(*id, *score, filter, sort) else { continue };
+            match self.stored(*id, distinct.field).and_then(distinct.key) {
+                Some(k) => match best.entry(k) {
+                    std::collections::hash_map::Entry::Occupied(mut e) => {
+                        if order.better(&c, e.get()) {
+                            e.insert(c);
+                        }
+                    }
+                    std::collections::hash_map::Entry::Vacant(v) => {
+                        v.insert(c);
+                    }
+                },
+                None => ungrouped.push(c),
+            }
+        }
+        best.into_values().chain(ungrouped).collect()
     }
 
     /// Whether `id` satisfies every predicate (they are ANDed). A
@@ -309,6 +362,40 @@ impl TextSegment {
 // float_cmp: exact equality is the tiebreak trigger — an epsilon here would
 // make ranking non-deterministic for genuinely equal BM25 scores.
 #[allow(clippy::float_cmp)]
+/// The best `limit` candidates seen so far, kept sorted so the worst
+/// survivor is always at the end.
+struct TopK<'a> {
+    top: Vec<Cand<'a>>,
+    limit: usize,
+    order: Order,
+}
+
+impl<'a> TopK<'a> {
+    fn new(limit: usize, order: Order) -> Self {
+        Self { top: Vec::with_capacity(limit + 1), limit, order }
+    }
+
+    fn push(&mut self, cand: Cand<'a>) {
+        if self.top.len() < self.limit {
+            self.top.push(cand);
+            if self.top.len() == self.limit {
+                self.order.sort(&mut self.top);
+            }
+        } else if self.order.better(&cand, &self.top[self.limit - 1]) {
+            let pos = self.top.partition_point(|e| self.order.better(e, &cand));
+            self.top.insert(pos, cand);
+            self.top.pop();
+        }
+    }
+
+    fn finish(mut self) -> Vec<TextMatch> {
+        if self.top.len() < self.limit {
+            self.order.sort(&mut self.top);
+        }
+        self.top.into_iter().map(|c| TextMatch { key: c.key.to_vec(), score: c.score }).collect()
+    }
+}
+
 /// One candidate in the top-K selection.
 struct Cand<'a> {
     score: f64,

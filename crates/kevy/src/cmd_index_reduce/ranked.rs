@@ -23,7 +23,18 @@ pub(super) fn reduce_ranked(argv: &[Vec<u8>], chunks: &[Vec<u8>], ascending: boo
         encode_error(&mut out, "ERR bad IDX arguments");
         return out;
     };
-    merge_ranked(chunks, limit, &fields, ascending, false, 0, None)
+    merge_ranked(
+        chunks,
+        Merge {
+            limit,
+            fields: &fields,
+            ascending,
+            highlight: false,
+            offset: 0,
+            sort_desc: None,
+            grouped: false,
+        },
+    )
 }
 
 /// MATCH pass 2 reduce: merge the globally-scored ranked chunks
@@ -36,7 +47,18 @@ pub(super) fn reduce_match_score(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8
         return out;
     };
     let sort_desc = q.sort.as_ref().map(|(_, desc)| *desc);
-    merge_ranked(chunks, q.limit, &q.fields, false, q.highlight.is_some(), q.offset, sort_desc)
+    merge_ranked(
+        chunks,
+        Merge {
+            limit: q.limit,
+            fields: &q.fields,
+            ascending: false,
+            highlight: q.highlight.is_some(),
+            offset: q.offset,
+            sort_desc,
+            grouped: q.distinct.is_some(),
+        },
+    )
 }
 
 /// Emit the merged page as RESP rows.
@@ -79,6 +101,21 @@ fn push_filters(argv2: &mut Vec<Vec<u8>>, filters: Vec<crate::cmd_index_query::F
     }
 }
 
+/// Collapse the union of the shards' pages: two shards can each hold a
+/// document with the same value, and only the better one survives.
+///
+/// `all` is already in the page's order, so the first occurrence of a
+/// value is its best and a stable retain keeps exactly that. Documents
+/// with no value are their own group and all survive — the same rule each
+/// shard collapsed by.
+fn collapse_union(all: &mut Vec<Hit>) {
+    let mut seen: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
+    all.retain(|h| match &h.dkey {
+        Some(k) => seen.insert(k.clone()),
+        None => true,
+    });
+}
+
 /// One merged hit.
 struct Hit {
     score: f64,
@@ -87,6 +124,8 @@ struct Hit {
     spans: HitSpans,
     /// The sort field's order key, when the query sorted by one.
     okey: Option<Vec<u8>>,
+    /// The distinct field's identity, when the query collapsed by one.
+    dkey: Option<Vec<u8>>,
 }
 
 /// Decode `[n][(key, f64, hydration, highlight?)*]` chunks, sort,
@@ -94,19 +133,27 @@ struct Hit {
 /// KNN and MATCH pass 2; `highlight` is true only for a MATCH that asked
 /// for it, and then each chunk carries a highlight block per hit and each
 /// row gains a trailing `[[field, start, end, …], …]` element.
-fn merge_ranked(
-    chunks: &[Vec<u8>],
+/// How a merged page is shaped: what each hit carries back and how the
+/// union is ordered, cut and collapsed.
+struct Merge<'a> {
     limit: usize,
-    fields: &[Vec<u8>],
+    fields: &'a [Vec<u8>],
+    /// Score-ascending (KNN distance) rather than descending.
     ascending: bool,
     highlight: bool,
     offset: usize,
+    /// `Some(desc)` when the page is ordered by a stored value.
     sort_desc: Option<bool>,
-) -> Vec<u8> {
+    /// Whether the page collapses by a stored value.
+    grouped: bool,
+}
+
+fn merge_ranked(chunks: &[Vec<u8>], m: Merge<'_>) -> Vec<u8> {
+    let Merge { limit, fields, ascending, highlight, offset, sort_desc, grouped } = m;
     let mut out = Vec::new();
     let mut all: Vec<Hit> = Vec::new();
     for c in chunks {
-        collect_hits(c, highlight, sort_desc.is_some(), &mut all);
+        collect_hits(c, highlight, sort_desc.is_some(), grouped, &mut all);
     }
     match sort_desc {
         // Order the union exactly as each shard ordered its own page —
@@ -123,6 +170,9 @@ fn merge_ranked(
         }
         None => all.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.key.cmp(&b.key))),
     }
+    if grouped {
+        collapse_union(&mut all);
+    }
     // OFFSET applies to the MERGED ranking, not per shard: drop the
     // first `offset` globally-ranked hits, then fill LIMIT.
     if offset > 0 {
@@ -135,7 +185,7 @@ fn merge_ranked(
 
 /// Decode one shard's `[n][(key, f64, hydration, highlight?)*]` chunk
 /// into `all`; a short/corrupt chunk stops that shard's contribution.
-fn collect_hits(c: &[u8], highlight: bool, sorted: bool, all: &mut Vec<Hit>) {
+fn collect_hits(c: &[u8], highlight: bool, sorted: bool, grouped: bool, all: &mut Vec<Hit>) {
     let mut pos = 1usize;
     let Some(n) = read_u32(c, &mut pos) else { return };
     for _ in 0..n {
@@ -160,7 +210,15 @@ fn collect_hits(c: &[u8], highlight: bool, sorted: bool, all: &mut Vec<Hit>) {
         } else {
             None
         };
-        all.push(Hit { score: v, key, fields: fv, spans: hl, okey });
+        let dkey = if grouped {
+            match read_okey(c, &mut pos) {
+                Some(k) => k,
+                None => break,
+            }
+        } else {
+            None
+        };
+        all.push(Hit { score: v, key, fields: fv, spans: hl, okey, dkey });
     }
 }
 
@@ -277,13 +335,27 @@ fn push_clauses(argv2: &mut Vec<Vec<u8>>, m: crate::cmd_index_query::MatchArgs) 
     // statistics — it changes WHERE IN a document we look, which changes
     // what a frequency and a length mean.)
     push_filters(argv2, m.filters);
-    // SORT reaches pass 2 because that is where the selection happens:
-    // each shard must pick its page BY the sort key, not pick by score
-    // and leave the merge to repair what was never chosen.
-    if let Some((field, desc)) = m.sort {
+    push_order(argv2, m.sort, m.distinct);
+}
+
+/// The clauses that decide WHICH documents make the page rather than how
+/// they score. They reach pass 2 because that is where the selection
+/// happens: a shard that picked its best `limit` by score and left the
+/// re-ordering or the collapsing to the origin would hand back a page
+/// missing the rows that should have been on it.
+fn push_order(
+    argv2: &mut Vec<Vec<u8>>,
+    sort: Option<(Vec<u8>, bool)>,
+    distinct: Option<Vec<u8>>,
+) {
+    if let Some((field, desc)) = sort {
         argv2.push(b"SORT".to_vec());
         argv2.push(field);
         argv2.push(if desc { b"DESC".to_vec() } else { b"ASC".to_vec() });
+    }
+    if let Some(field) = distinct {
+        argv2.push(b"DISTINCT".to_vec());
+        argv2.push(field);
     }
 }
 

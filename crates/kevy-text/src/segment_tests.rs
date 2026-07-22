@@ -1127,3 +1127,92 @@ fn sorting_composes_with_a_filter() {
     // d5 (50), d4 (60), d3 (70).
     assert_eq!(keys, vec![b"d5".to_vec(), b"d4".to_vec(), b"d3".to_vec()]);
 }
+
+// ---- DISTINCT: collapsing during selection ------------------------------
+
+/// Six documents in three price groups, arranged so the best of each
+/// group is NOT among the top scorers overall.
+fn group_seg() -> TextSegment {
+    let mut s = TextSegment::with_shape(SegmentShape { values: 1, ..Default::default() });
+    for (k, reps, price) in [
+        ("a1", 9, "10"),
+        ("a2", 8, "10"),
+        ("b1", 7, "20"),
+        ("b2", 6, "20"),
+        ("c1", 5, "30"),
+        ("c2", 4, "30"),
+    ] {
+        let body = format!("rust {}", "rust ".repeat(reps));
+        s.apply_doc(k.as_bytes(), Some(&[(body.into_bytes(), 1.0)]), &[Some(price.as_bytes())]);
+    }
+    s
+}
+
+#[test]
+fn distinct_fills_the_page_with_distinct_values() {
+    // Without DISTINCT the top 3 are a1, a2, b1 — two of them the same
+    // price. With it, the page is one document per price, and each is the
+    // best of its group.
+    let s = group_seg();
+    let key = |raw: &[u8]| Some(raw.to_vec());
+    let plain: Vec<Vec<u8>> =
+        s.matches_query(b"rust", 3, None).into_iter().map(|h| h.key).collect();
+    assert_eq!(plain, vec![b"a1".to_vec(), b"a2".to_vec(), b"b1".to_vec()]);
+
+    let opts = QueryOpts { distinct: Some(Distinct { field: 0, key: &key }), ..Default::default() };
+    let hits: Vec<Vec<u8>> =
+        s.matches_query_with(b"rust", 3, opts).into_iter().map(|h| h.key).collect();
+    assert_eq!(
+        hits,
+        vec![b"a1".to_vec(), b"b1".to_vec(), b"c1".to_vec()],
+        "one per price, the best of each — collapsing a top-3 after the fact would have \
+         returned two rows, not three"
+    );
+}
+
+#[test]
+fn a_document_with_no_value_is_its_own_group() {
+    let mut s = group_seg();
+    s.apply_doc(b"n1", Some(&[(b"rust".to_vec(), 1.0)]), &[]);
+    s.apply_doc(b"n2", Some(&[(b"rust".to_vec(), 1.0)]), &[]);
+    let key = |raw: &[u8]| Some(raw.to_vec());
+    let opts = QueryOpts { distinct: Some(Distinct { field: 0, key: &key }), ..Default::default() };
+    let hits: Vec<Vec<u8>> =
+        s.matches_query_with(b"rust", 10, opts).into_iter().map(|h| h.key).collect();
+    assert_eq!(hits.len(), 5, "three priced groups plus two priceless rows: {hits:?}");
+    assert!(hits.contains(&b"n1".to_vec()) && hits.contains(&b"n2".to_vec()));
+}
+
+#[test]
+fn distinct_composes_with_sort_and_filter() {
+    let s = group_seg();
+    let key = |raw: &[u8]| Some(raw.to_vec());
+    let okey = |raw: &[u8]| {
+        let n: u32 = std::str::from_utf8(raw).ok()?.parse().ok()?;
+        Some(n.to_be_bytes().to_vec())
+    };
+    // Sorted ascending by price, one per price: the group leaders in
+    // price order. The group leader is the best BY THAT ORDER, and with a
+    // sort every member of a group ties on the key, so the row key breaks
+    // it — a1, b1, c1.
+    let opts = QueryOpts {
+        distinct: Some(Distinct { field: 0, key: &key }),
+        sort: Some(Sort { field: 0, desc: false, key: &okey }),
+        ..Default::default()
+    };
+    let hits: Vec<Vec<u8>> =
+        s.matches_query_with(b"rust", 5, opts).into_iter().map(|h| h.key).collect();
+    assert_eq!(hits, vec![b"a1".to_vec(), b"b1".to_vec(), b"c1".to_vec()]);
+
+    // With a filter, only the surviving groups appear.
+    let dear = |v: &[u8]| v != b"10";
+    let f = [Filter { field: 0, test: &dear }];
+    let opts = QueryOpts {
+        distinct: Some(Distinct { field: 0, key: &key }),
+        filter: &f,
+        ..Default::default()
+    };
+    let hits: Vec<Vec<u8>> =
+        s.matches_query_with(b"rust", 5, opts).into_iter().map(|h| h.key).collect();
+    assert_eq!(hits, vec![b"b1".to_vec(), b"c1".to_vec()]);
+}

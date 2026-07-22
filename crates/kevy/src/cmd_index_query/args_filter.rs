@@ -1,5 +1,6 @@
-//! The `FILTER` clause's shapes and parser, split from `args.rs` for the
-//! 500-LOC house rule (a `#[path]` child of `args`).
+//! The clauses that read a stored value — `FILTER` and `SORT` — with
+//! their shapes and parsers. Split from `args.rs` for the 500-LOC house
+//! rule (a `#[path]` child of `args`).
 
 use super::MatchArgs;
 
@@ -40,3 +41,19 @@ pub(crate) fn apply_filter(argv: &[Vec<u8>], i: usize, a: &mut MatchArgs) -> Opt
     }
 }
 
+
+/// `SORT <field> ASC|DESC`. The direction is required: a default would
+/// have to be one of them, and guessing which is a ranking decision.
+pub(crate) fn apply_sort(argv: &[Vec<u8>], i: usize, a: &mut MatchArgs) -> Option<usize> {
+    let field = argv.get(i + 1)?.clone();
+    let dir = argv.get(i + 2)?;
+    let desc = if dir.eq_ignore_ascii_case(b"DESC") {
+        true
+    } else if dir.eq_ignore_ascii_case(b"ASC") {
+        false
+    } else {
+        return None;
+    };
+    a.sort = Some((field, desc));
+    Some(i + 3)
+}

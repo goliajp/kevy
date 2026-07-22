@@ -35,6 +35,10 @@ pub struct MatchOpts<'a> {
     /// key is chosen even when its score would never have reached the
     /// page.
     pub sort: Option<(&'a [u8], bool)>,
+    /// `DISTINCT <field>`: at most one hit per value of a stored field,
+    /// applied during selection so the page holds `limit` distinct
+    /// documents rather than `limit` that then collapse.
+    pub distinct: Option<&'a [u8]>,
 }
 
 /// One `FILTER` predicate: which stored value field it reads, and the
@@ -93,6 +97,11 @@ impl Store {
         let fetch = limit + offset;
         let (scope, tests) = self.resolve_clauses(name, opts.scope, opts.filters)?;
         let sorted = self.sort_field(name, opts.sort)?;
+        let grouped = self.value_field("DISTINCT", name, opts.distinct)?;
+        let dkey = grouped.map(|(_, ty)| move |raw: &[u8]| kevy_index::order_key(ty, raw));
+        let distinct = grouped
+            .zip(dkey.as_ref())
+            .map(|((field, _), k)| kevy_text::Distinct { field, key: k });
         let key = sorted.map(|(_, _, ty)| move |raw: &[u8]| kevy_index::order_key(ty, raw));
         let sort = sorted
             .zip(key.as_ref())
@@ -109,9 +118,11 @@ impl Store {
             fields: &scope,
             filter: &filter,
             sort,
+            distinct,
         };
         let mut all = self.gather_hits(name, query, fetch, q, opts.highlight);
         self.order_page(name, &mut all, sorted);
+        self.collapse_union(name, &mut all, grouped);
         if offset > 0 {
             all.drain(..offset.min(all.len()));
         }
@@ -254,6 +265,27 @@ impl Store {
         *all = keyed.into_iter().map(|(_, h)| h).collect();
     }
 
+    /// Collapse the union of the shards' pages: two shards can each hold
+    /// a document with the same value, and only the better survives.
+    ///
+    /// `all` is already in the page's order, so the first occurrence of a
+    /// value is its best and a stable retain keeps exactly that.
+    /// Documents with no value are their own group and all survive — the
+    /// same rule each shard collapsed by.
+    fn collapse_union(
+        &self,
+        name: &[u8],
+        all: &mut Vec<HighlightedHit>,
+        grouped: Option<(usize, kevy_index::ValType)>,
+    ) {
+        let Some((field, ty)) = grouped else { return };
+        let mut seen: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
+        all.retain(|h| match self.stored_order_key(name, &h.0, field, ty) {
+            Some(k) => seen.insert(k),
+            None => true,
+        });
+    }
+
     /// Resolve a `SORT <field> ASC|DESC` clause to the stored-value
     /// position, the direction, and that field's declared type.
     fn sort_field(
@@ -262,6 +294,21 @@ impl Store {
         sort: Option<(&[u8], bool)>,
     ) -> KevyResult<Option<(usize, bool, kevy_index::ValType)>> {
         let Some((field, desc)) = sort else { return Ok(None) };
+        let Some((pos, ty)) = self.value_field("SORT", name, Some(field))? else {
+            return Ok(None);
+        };
+        Ok(Some((pos, desc, ty)))
+    }
+
+    /// A clause's named stored-value field, as a position and its
+    /// declared type. Errors naming what the index does store.
+    fn value_field(
+        &self,
+        clause: &str,
+        name: &[u8],
+        field: Option<&[u8]>,
+    ) -> KevyResult<Option<(usize, kevy_index::ValType)>> {
+        let Some(field) = field else { return Ok(None) };
         let guard = self.indexes.catalog.read().unwrap_or_else(|e| e.into_inner());
         let Some((spec, _)) = guard.1.get(name) else {
             return Err(KevyError::NotFound("no such text index".into()));
@@ -271,8 +318,8 @@ impl Store {
             .values
             .iter()
             .position(|v| v.name == field)
-            .ok_or_else(|| unknown_field("SORT", field, "store", &stored))?;
-        Ok(Some((pos, desc, spec.values[pos].ty)))
+            .ok_or_else(|| unknown_field(clause, field, "store", &stored))?;
+        Ok(Some((pos, spec.values[pos].ty)))
     }
 
     /// One row's sort key: its stored value, in the order-preserving

@@ -23,7 +23,7 @@ use crate::state::Ctx;
 /// not wait on a scoring round.
 #[path = "ops_clauses.rs"]
 mod clauses;
-use clauses::{boxed_preds, scope_positions, sort_field};
+use clauses::{boxed_preds, distinct_field, scope_positions, sort_field};
 
 pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let q = match MatchArgs::parse_terminal(argv) {
@@ -48,6 +48,7 @@ pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Ve
             fields: &want,
             filter: &[],
             sort: None,
+            distinct: None,
         };
         Ok((ts.stats().docs, ts.total_len_in(&want), ts.query_df_in(&q.text, opts)))
     });
@@ -84,7 +85,7 @@ pub(super) fn op_match_score(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>])
         // text; with none it is the ordinary term query.
         // Fetch deep enough for the origin to skip OFFSET and still fill
         // LIMIT: a shard cannot know which of its hits survive the merge.
-        let (hits, sort_field) = scored_hits(ts, spec, &q, &stats)?;
+        let (hits, sort_field, distinct_field) = scored_hits(ts, spec, &q, &stats)?;
         let spans = q.highlight.as_ref().map(|want| {
             hits.iter().map(|h| hit_highlight(ts, spec, &h.key, &q.text, want)).collect::<Vec<_>>()
         });
@@ -92,17 +93,24 @@ pub(super) fn op_match_score(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>])
         // exactly as each shard ordered its own, so every hit carries its
         // sort key back. Only the shard knows the field's declared type,
         // so it sends the comparable encoding, not the raw value.
-        let okeys = sort_field.map(|f| {
+        let hit_keys = |f: usize| {
             hits.iter()
-                .map(|h| ts.stored_value(&h.key, f).and_then(|raw| kevy_index::order_key(spec.values[f].ty, raw)))
+                .map(|h| {
+                    ts.stored_value(&h.key, f)
+                        .and_then(|raw| kevy_index::order_key(spec.values[f].ty, raw))
+                })
                 .collect::<Vec<_>>()
-        });
-        Ok((hits, spans, okeys))
+        };
+        let okeys = sort_field.map(hit_keys);
+        // The origin collapses the union too, and needs the same identity
+        // the shard grouped by.
+        let dkeys = distinct_field.map(hit_keys);
+        Ok((hits, spans, okeys, dkeys))
     });
     match res {
         Ok(Err(chunk)) => chunk,
-        Ok(Ok((hits, spans, okeys))) => {
-            encode_hits(store, &hits, &spans, &okeys, &q.fields)
+        Ok(Ok((hits, spans, okeys, dkeys))) => {
+            encode_hits(store, &hits, &spans, &okeys, &dkeys, &q.fields)
         }
         Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
         Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
@@ -110,6 +118,11 @@ pub(super) fn op_match_score(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>])
     }
 }
 
+
+/// One shard's pass-2 answer: its hits, and which stored-value fields
+/// the origin will need each hit's key for (the sort field, the distinct
+/// field).
+type ShardPage = (Vec<kevy_text::TextMatch>, Option<usize>, Option<usize>);
 
 /// This shard's hits for a pass-2 MATCH, scored against the injected
 /// global statistics with every clause the query carried.
@@ -121,7 +134,7 @@ fn scored_hits(
     spec: &kevy_index::IndexSpec,
     q: &super::args::MatchArgs,
     stats: &kevy_text::CorpusStats,
-) -> Result<(Vec<kevy_text::TextMatch>, Option<usize>), Vec<u8>> {
+) -> Result<ShardPage, Vec<u8>> {
     // `matches_query_with` parses quoted phrases out of the raw query
     // text; with none it is the ordinary term query.
     let scope = scope_positions(spec, &q.scope)?;
@@ -131,6 +144,11 @@ fn scored_hits(
         .map(|(field, test)| kevy_text::Filter { field: *field, test: test.as_ref() })
         .collect();
     let sorted = sort_field(spec, &q.sort)?;
+    let grouped = distinct_field(spec, &q.distinct)?;
+    let dkey = grouped.map(|(_, ty)| move |raw: &[u8]| kevy_index::order_key(ty, raw));
+    let distinct = grouped
+        .zip(dkey.as_ref())
+        .map(|((field, _), k)| kevy_text::Distinct { field, key: k });
     let key = sorted.map(|(_, _, ty)| move |raw: &[u8]| kevy_index::order_key(ty, raw));
     let sort = sorted.zip(key.as_ref()).map(|((field, desc, _), k)| kevy_text::Sort {
         field,
@@ -143,9 +161,10 @@ fn scored_hits(
         fields: &scope,
         filter: &filter,
         sort,
+        distinct,
     };
     let hits = ts.matches_query_with(&q.text, q.limit + q.offset, opts);
-    Ok((hits, sorted.map(|(field, _, _)| field)))
+    Ok((hits, sorted.map(|(field, _, _)| field), grouped.map(|(field, _)| field)))
 }
 
 /// This shard's ranked chunk: `[ST_OK][n][(klen, key, score, hydration,
@@ -157,6 +176,7 @@ fn encode_hits(
     hits: &[kevy_text::TextMatch],
     spans: &Option<Vec<super::HitSpans>>,
     okeys: &Option<Vec<Option<Vec<u8>>>>,
+    dkeys: &Option<Vec<Option<Vec<u8>>>>,
     fields: &[Vec<u8>],
 ) -> Vec<u8> {
     let mut chunk = vec![ST_OK];
@@ -169,8 +189,11 @@ fn encode_hits(
         if let Some(spans) = &spans {
             encode_highlight(&mut chunk, &spans[i]);
         }
-        if let Some(okeys) = &okeys {
+        if let Some(okeys) = okeys {
             encode_okey(&mut chunk, okeys[i].as_deref());
+        }
+        if let Some(dkeys) = dkeys {
+            encode_okey(&mut chunk, dkeys[i].as_deref());
         }
     }
     chunk

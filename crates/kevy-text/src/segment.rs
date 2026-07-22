@@ -103,6 +103,22 @@ pub struct Sort<'a> {
     pub key: &'a dyn Fn(&[u8]) -> Option<Vec<u8>>,
 }
 
+/// Collapse the page so only the best document per value of a stored
+/// field appears.
+///
+/// The key is the value's *identity*, coerced — so `1` and `1.0` in a
+/// field declared `f64` are one value rather than two. A document with no
+/// value for the field is its own group: `DISTINCT` removes documents
+/// shown to share a value, and one that has none has not been shown to
+/// share anything.
+#[derive(Clone, Copy)]
+pub struct Distinct<'a> {
+    /// Which declared value field identifies a group.
+    pub field: usize,
+    /// The identity of one stored value.
+    pub key: &'a dyn Fn(&[u8]) -> Option<Vec<u8>>,
+}
+
 /// Everything a MATCH query carries beyond its text and result limit.
 ///
 /// Grouping them keeps the query entry point from growing a parameter per
@@ -125,6 +141,10 @@ pub struct QueryOpts<'a> {
     /// not re-ordering: a document that wins on the sort key must be
     /// chosen even when its score would never have reached the page.
     pub sort: Option<Sort<'a>>,
+    /// `DISTINCT`: at most one hit per value of a stored field. Applied
+    /// during selection, so the page is filled with `limit` DISTINCT
+    /// documents rather than `limit` documents that then collapse.
+    pub distinct: Option<Distinct<'a>>,
 }
 
 /// A field's text and the BM25 weight it was indexed at. Stored per

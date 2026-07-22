@@ -12,16 +12,15 @@
     /// unfiltered rows, which is a wrong answer wearing a success reply.
     #[test]
     fn reserved_clauses_are_refused_by_name() {
-        // HIGHLIGHT, IN, FILTER and SORT are no longer here — they ship
-        // now (see the clause tests below); the rest stay reserved.
-        for clause in ["FACET", "DISTINCT"] {
-            let a = argv(&["IDX.QUERY", "idx", "MATCH", "hello", clause, "x"]);
-            match MatchArgs::parse_terminal(&a) {
-                MatchParse::NotYet(c) => {
-                    assert!(c.eq_ignore_ascii_case(clause.as_bytes()), "{clause}");
-                }
-                _ => panic!("{clause} should be reserved, not accepted or rejected as bad"),
+        // Only FACET is still reserved; every other clause ships now
+        // (see the clause tests below).
+        let clause = "FACET";
+        let a = argv(&["IDX.QUERY", "idx", "MATCH", "hello", clause, "x"]);
+        match MatchArgs::parse_terminal(&a) {
+            MatchParse::NotYet(c) => {
+                assert!(c.eq_ignore_ascii_case(clause.as_bytes()), "{clause}");
             }
+            _ => panic!("{clause} should be reserved, not accepted or rejected as bad"),
         }
     }
 
