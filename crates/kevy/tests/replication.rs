@@ -127,11 +127,14 @@ fn patience() -> std::time::Duration {
 /// instrumentation that moment is long.
 /// Connect if it can, within a short budget, and say so if it cannot.
 ///
-/// Diagnostics use this rather than [`connect_retry`]: a diagnostic that
+/// Diagnostics use this rather than a panicking retry: a diagnostic that
 /// panics REPLACES the failure it was there to explain. This test used to
 /// report "replica (diagnostic) never became ready" whenever the replica
 /// fell behind — naming the wrong thing entirely, and sending two rounds
 /// of budget-raising after a startup problem that was never the problem.
+///
+/// The replica's own [`ReplicaServer::connect_or_explain`] is the retrying
+/// form now, and it reports thread liveness on timeout.
 fn try_connect(port: u16) -> Option<std::net::TcpStream> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while std::time::Instant::now() < deadline {
@@ -141,18 +144,6 @@ fn try_connect(port: u16) -> Option<std::net::TcpStream> {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     None
-}
-
-fn connect_retry(port: u16, what: &str) -> std::net::TcpStream {
-    let budget = patience();
-    let deadline = std::time::Instant::now() + budget;
-    while std::time::Instant::now() < deadline {
-        if let Ok(s) = std::net::TcpStream::connect(("127.0.0.1", port)) {
-            return s;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    panic!("{what} never became ready on port {port} within {budget:?}");
 }
 
 struct Server {
@@ -1255,6 +1246,39 @@ impl ReplicaServer {
         }
     }
 
+    /// Whether the replica's in-process runtime thread is still running.
+    /// `false` means it panicked and exited — which is a different failure
+    /// from "slow to accept", and the one a bare connect-timeout cannot
+    /// distinguish. Used to make that timeout say which it was.
+    fn runtime_alive(&self) -> bool {
+        self.rt_handle.as_ref().is_some_and(|h| !h.is_finished())
+    }
+
+    /// [`connect_retry`] to this replica, but if the budget runs out, say
+    /// whether the runtime thread is still alive. A bare connect-timeout
+    /// reads the same whether the replica is merely slow to accept or has
+    /// panicked and gone — and on a loaded CI runner those want opposite
+    /// responses (widen patience vs. find the crash). Checking the thread
+    /// handle separates them.
+    fn connect_or_explain(&self, what: &str) -> std::net::TcpStream {
+        let budget = patience();
+        let deadline = std::time::Instant::now() + budget;
+        while std::time::Instant::now() < deadline {
+            if let Some(s) = try_connect(self.port) {
+                return s;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let state = if self.runtime_alive() {
+            "the runtime thread is still alive — it bound the port but never \
+             served in time: a slow runner, widen KEVY_TEST_PATIENCE"
+        } else {
+            "the runtime thread has EXITED — the replica panicked rather than \
+             fell behind; look for its panic, not a timing budget"
+        };
+        panic!("{what} never became ready on port {} within {budget:?}. {state}", self.port);
+    }
+
     fn shutdown(mut self) {
         self.stop_runner.store(true, std::sync::atomic::Ordering::Relaxed);
         if let Some(h) = self.runner_handle.take() {
@@ -1304,7 +1328,7 @@ fn server_as_replica_applies_upstream_writes() {
     // instrumentation (covgate) slows boot severely — 20ms × 3000
     // = 60s hard cap (30s was observed insufficient once the suite
     // grew: parallel test threads + instrumented boot).
-    let mut reader = connect_retry(replica.port, "replica accept loop");
+    let mut reader = replica.connect_or_explain("replica accept loop");
     let mut all_seen = false;
     for _ in 0..200 {
         let mut got_all = true;
@@ -1454,7 +1478,7 @@ fn spop_storm_keeps_replica_sets_identical() {
 
     // Connect to the replica (retry — see server_as_replica test) and
     // poll the fence key.
-    let mut reader = connect_retry(replica.port, "replica accept loop");
+    let mut reader = replica.connect_or_explain("replica accept loop");
     let mut fenced = false;
     // 60s, not 10s: the replica attaches mid-storm and has to replay the
     // backlog, and on a loaded runner that is slow rather than broken. A
