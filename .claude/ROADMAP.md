@@ -294,9 +294,9 @@ client 生态 —— 该策略 t2 里 gate 化。
 
 ### t3 — 移动做实:RN(expo + bare)+ Flutter(工具链本机已备:Xcode/模拟器/NDK;Flutter SDK 待装)
 - [x] expo-kevy example app + mobilegate 一期:iOS 模拟器 + Android 模拟器双端 e2e smoke —— **双端 ALL PASS**(2788f735/9ac1303e);真机抓到 open() file:// URI bug 已下沉库层;mobilegate.sh 用 simctl/adb logcat 独立捕获 verdict
-- [ ] bare RN 验证:expo-modules-core in bare RN 路线跑通 + 文档;不可行则 TurboModule 壳兜底
+- [x] bare RN 验证:expo-modules-core in bare RN 路线跑通 + 文档;不可行则 TurboModule 壳兜底 —— `bindings/expo/barern-example`(RN 0.86 / SDK 57,Podfile+gradle 手工接线 expo-modules autolinking,mirror `expo prebuild`)。**本机实跑双端全绿**(2026-07-23):barern/android PASS + barern/ios PASS。过程修了两个 gate bug:barern android_cmd 未锁设备(会装进插着的真机)+ 端口提示挂死(`--no-packager`)
 - [x] flutter_kevy:dart:ffi 直连 kevy-ffi cdylib,federated plugin(android jniLibs + ios xcframework);smoke 进 mobilegate —— `bindings/flutter`(dart:ffi 绑定 + ffigen + 双平台 + test/)完整存在;mobilegate flutter 分支真跑 `flutter run`(iOS debug 模拟器 / Android release 模拟器)。**本机实跑双端全绿**(2026-07-23):flutter/ios PASS + flutter/android PASS(后者 ANDROID_SERIAL 锁定模拟器,避开插着的真机)
-- [ ] mobilegate 二期:三框架(expo / bare RN / flutter)all-green 一张表
+- [x] mobilegate 二期:三框架(expo / bare RN / flutter)all-green 一张表 —— `bench/mobilegate-all.sh`:driver 跑三框架×双端六格,各捕获 verdict,产出 PASS/FAIL 网格,任一非 PASS 整体退 1。**六格本机当场全绿(2026-07-23)**:expo/ios+android、barern/ios+android、flutter/ios+android 全 PASS。(developer/CI-on-macOS gate,非 per-push;需 booted 模拟器+emulator,ANDROID_SERIAL 锁定避真机)
 
 ### t4 — 竞品对比:mmkvgate + embedded bench(性能北极星 = 全轴超越 MMKV)
 - [ ] mmkvgate:iOS XCTest measure + androidx microbenchmark;轴 = 同步标量 get/set × value 尺寸 × 冷/热 + 批量 + 启动加载;对手 = MMKV 原生 + react-native-mmkv(RN 层再对一轮);数字如实入账,输的轴列明
