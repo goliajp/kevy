@@ -239,7 +239,7 @@ elif with_typo:
     # on the same 1M-term dictionary: this is the most expensive query
     # shape the engine offers, and it shipped without a ceiling.
     queries = [("w123",), ("w4567",), ("w89",), ("w2345",), ("w678",)]
-    p95_limit = 2000.0
+    p95_limit = 150.0
 elif with_prefix:
     # `word*` prefixes of varying breadth; the scan is O(dictionary)
     # regardless, which is exactly the cost being weighed against an

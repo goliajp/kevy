@@ -33,7 +33,7 @@ set -uo pipefail
 NAME=${1:-kevy-prof}
 WINDOW=${WINDOW:-6}
 USER_ACCT=${USER_ACCT:-kevybench}
-MODE="POSITIONS=${POSITIONS:-0} PREFIX=${PREFIX:-0} FIELDS=${FIELDS:-0} VALUES=${VALUES:-0} ORDER=${ORDER:-0}"
+MODE="POSITIONS=${POSITIONS:-0} PREFIX=${PREFIX:-0} FIELDS=${FIELDS:-0} VALUES=${VALUES:-0} ORDER=${ORDER:-0} TYPO=${TYPO:-0}"
 
 su - "$USER_ACCT" -c "cd ~/kevy && cargo build -q --profile profiling -p kevy && cp target/profiling/kevy /tmp/$NAME" || exit 1
 
