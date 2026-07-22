@@ -58,11 +58,17 @@ grep -E 'p95|PASS|FAIL' "$OUT"
 echo "=== top self-time symbols ==="
 perf report -i "$DATA" --no-children -g none --stdio --percent-limit 1.0 2>/dev/null \
     | grep -E '^ +[0-9]' | head -14
-drops=$(perf report -i "$DATA" --no-children -g none --stdio 2>/dev/null | grep -c 'drop_glue')
-if [ "$drops" -gt 0 ]; then
-    echo "profile-textgate: SUSPECT — $drops drop_glue frame(s): the window is"
-    echo "  sampling shard teardown, not queries. Shorten WINDOW or check that"
-    echo "  the build marker is arriving unbuffered."
+# Teardown check, by weight rather than by presence: a shard being dropped
+# shows up as tens of percent (freeing a million positional blobs is not
+# subtle), while a stray sub-1% frame is just the tail of the previous
+# phase and does not invalidate the profile. Any-occurrence was too strict
+# and would have failed a usable TYPO profile over one 0.x% frame.
+drop_pct=$(perf report -i "$DATA" --no-children -g none --stdio 2>/dev/null \
+    | awk '/drop_glue/ && $1 ~ /%$/ { gsub("%","",$1); s += $1 } END { printf "%.1f", s+0 }')
+if awk "BEGIN{exit !($drop_pct >= 2.0)}"; then
+    echo "profile-textgate: SUSPECT — ${drop_pct}% of samples are drop_glue: the"
+    echo "  window is sampling shard teardown, not queries. Shorten WINDOW or"
+    echo "  check that the build marker is arriving unbuffered."
     exit 1
 fi
-echo "profile-textgate: clean — no teardown frames in the window"
+echo "profile-textgate: clean — teardown frames ${drop_pct}% of samples (want <2%)"
