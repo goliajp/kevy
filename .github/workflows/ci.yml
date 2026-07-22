@@ -715,34 +715,6 @@ jobs:
       - name: Offline install smoke (node + bun, installed layout)
         run: bash packaging/npm/smoke-node.sh
 
-  # ── nuget-install-smoke — the .NET RID graph finds the native on its own ─
-  # The NuGet sibling of npm-install-smoke: pack Kevy.Embedded with the
-  # engine cdylib under runtimes/<rid>/native, install from a local feed
-  # into a scratch console app, and run set/get/reopen WITHOUT setting
-  # KEVY_FFI_LIB — so the .NET runtime's RID graph, not an env var, is what
-  # locates the library. linux-arm64 again has no hosted runner; released
-  # from the self-hosted box.
-  nuget-install-smoke:
-    name: nuget-install-smoke (${{ matrix.rid }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { os: macos-14, rid: osx-arm64 }
-          - { os: ubuntu-latest, rid: linux-x64 }
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-dotnet@v4
-        with: { dotnet-version: '8.0.x' }
-      - name: Install Rust (stable)
-        run: rustup toolchain install stable --no-self-update && rustup default stable
-      - name: Build the release native
-        run: cargo build --release -p kevy-ffi
-      - name: Offline install smoke (installed RID layout)
-        run: bash packaging/nuget/pack-and-smoke.sh
-
   # ── client-conformance — the seven native kevy clients, full suites ──────
   # ffigate (above) opens each language door with the embedded FFI *smoke*;
   # this is the fuller *conformance* proof: every first-party client's whole

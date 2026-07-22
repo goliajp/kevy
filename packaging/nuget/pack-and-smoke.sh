@@ -28,9 +28,20 @@ PKGDIR=bindings/csharp/Kevy.Embedded
 mkdir -p "$PKGDIR/runtimes/$rid/native"
 cp "target/release/libkevy_ffi.$ext" "$PKGDIR/runtimes/$rid/native/"
 
-STAGE=$(mktemp -d /tmp/kevy-nuget-XXXXXX)
+# realpath, because on macOS mktemp hands back /tmp/... while the path
+# dotnet resolves the project to is /private/tmp/... — nuget.config's
+# `local` source is then a string that does not match the feed dotnet
+# actually sees, and restore fails with NU1301 "source doesn't exist"
+# even though the .nupkg is right there. Canonicalise once, up front, so
+# every path below agrees.
+STAGE=$(cd "$(mktemp -d /tmp/kevy-nuget-XXXXXX)" && pwd -P)
 trap 'rm -rf "$STAGE"' EXIT
 dotnet pack "$PKGDIR" -c Release -o "$STAGE/feed" >/dev/null
+# Fail where the cause is, not three steps later at restore.
+ls "$STAGE"/feed/*.nupkg >/dev/null 2>&1 || {
+    echo "nuget-smoke: FAIL — dotnet pack produced no .nupkg in $STAGE/feed" >&2
+    exit 1
+}
 
 APP="$STAGE/app"
 mkdir -p "$APP"
