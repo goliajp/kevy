@@ -208,39 +208,43 @@ print(f"textgate: text index built in {time.time()-t0:.1f}s")
 # (background services inflate p95): they catch a gross regression, they
 # are not a tight SLA. A dedicated bench box — the perfgate discipline —
 # would set both lower; until then they are regression guards, not
-# promises. Measured here: term ~27ms, phrase ~102ms.
+# promises. Retuned 2026-07-23 after the pass-1 `stats()` fix cut every
+# mode (term 27.6->3.2, phrase 87.4->23.4, scoped 124->57, ordered ->30.3,
+# filtered ->24.2, prefix 98->73): the old ceilings sat 6-13x above the
+# measured medians, which guards nothing. Each is now ~2.2x its median,
+# three rounds, spread under 1%.
 if with_order:
     # SORT and DISTINCT both walk every candidate: the impact buckets are
     # ordered by score, which is not what either selects by.
     queries = [("w0 w1",), ("w512",), ("w3 w800",), ("w9000",), ("w0 w9000",)]
-    p95_limit = 400.0
+    p95_limit = 70.0
 elif with_values:
     # A filtered query gives up MaxScore pruning by design (the buckets
     # are ordered by an unfiltered score), so it walks every candidate.
     # That is the cost being measured, and it carries its own threshold.
     queries = [("w0 w1",), ("w512",), ("w3 w800",), ("w9000",), ("w0 w9000",)]
-    p95_limit = 300.0
+    p95_limit = 55.0
 elif with_fields:
     # Scoped queries walk the per-field channel document by document
     # (no impact-bucket pruning — the scoped frequency is not the one the
     # buckets are ordered by), so their latency sits above a term query's.
     queries = [("w0 w1",), ("w512",), ("w3 w800",), ("w9000",), ("w0 w9000",)]
-    p95_limit = 250.0
+    p95_limit = 120.0
 elif with_prefix:
     # `word*` prefixes of varying breadth; the scan is O(dictionary)
     # regardless, which is exactly the cost being weighed against an
     # ordered structure. The doc-marker tokens make this a ~1M-term
     # dictionary — a deliberate stress.
     queries = [("w1*",), ("w50*",), ("w9*",), ("w123*",), ("w7*",)]
-    p95_limit = 200.0
+    p95_limit = 160.0
 elif with_pos:
     queries = [('"w0 w1"',), ('"w2 w300"',), ('"w0 w9000"',),
                ('"w100 w4000"',), ('"w5 w50"',)]
-    p95_limit = 150.0
+    p95_limit = 50.0
 else:
     queries = [("w0 w1 w512",), (CJK_VOCAB[0] + CJK_VOCAB[70],), ("w3 w800 w4000",),
                (CJK_VOCAB[2] + " " + CJK_VOCAB[900],), ("w0 w9000",)]
-    p95_limit = 35.0
+    p95_limit = 8.0
 p95s = []
 for _ in range(6):
     c = connect(); cb = [b""]
