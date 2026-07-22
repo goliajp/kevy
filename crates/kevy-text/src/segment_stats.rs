@@ -65,6 +65,19 @@ impl TextSegment {
         self.docs.contains_key(key)
     }
 
+    /// This shard's live document count — the Σ n_docs half of the same
+    /// global-BM25 sum [`Self::total_len`] feeds.
+    ///
+    /// Its own accessor because the number is a `len()` and [`Self::stats`]
+    /// is not: `stats` also computes `approx_bytes`, which walks every
+    /// token, every posting and every positional blob. Pass 1 of a
+    /// cross-shard query read `stats().docs` and dropped the rest, so a
+    /// phrase query over a million documents spent 82% of its CPU
+    /// re-measuring the index's memory footprint once per shard per query.
+    pub fn docs(&self) -> u64 {
+        self.docs.len() as u64
+    }
+
     /// This shard's total document length in tokens (unweighted) — one
     /// of the three numbers a cross-shard query sums for global BM25
     /// (step 4b, pass 1): global avgdl = Σ total_len / Σ n_docs.

@@ -54,7 +54,7 @@ pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Ve
             sort: None,
             distinct: None,
         };
-        Ok((ts.stats().docs, ts.total_len_in(&want), ts.query_df_in(&q.text, opts)))
+        Ok((ts.docs(), ts.total_len_in(&want), ts.query_df_in(&q.text, opts)))
     });
     match res {
         Ok(Ok((n_docs, total_len, tokdf))) => {

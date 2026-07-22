@@ -189,7 +189,7 @@ fn kind_entries(ctx: &Ctx<'_>, store: &mut Store, kind: kevy_index::IndexKind, n
             index_runtime::with_ready_ann(ctx, store, name, |g| g.stats().vectors).unwrap_or_default()
         }
         kevy_index::IndexKind::Text => {
-            index_runtime::with_ready_text_segment(ctx, store, name, |t, _| t.stats().docs)
+            index_runtime::with_ready_text_segment(ctx, store, name, |t, _| t.docs())
                 .unwrap_or_default()
         }
         _ => index_runtime::with_ready_segment(ctx, store, name, |_, s| s.stats().entries)
