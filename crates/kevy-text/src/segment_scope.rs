@@ -167,9 +167,26 @@ impl TextSegment {
 
     /// The dictionary terms beginning with `pfx` (already lowercased),
     /// sorted for a deterministic ranking tiebreak.
+    ///
+    /// The first byte is checked inline before `starts_with`, which for a
+    /// runtime-length needle is a `memcmp` **call** per term. This scan
+    /// visits the whole dictionary, so that call is made once per indexed
+    /// term per prefix clause, and a profile of the prefix workload puts
+    /// 55% of query time inside `__memcmp_avx2_movbe`. One byte rejects
+    /// nearly all of them without the call.
     pub(crate) fn expand_prefix(&self, pfx: &[u8]) -> Vec<&[u8]> {
-        let mut e: Vec<&[u8]> =
-            self.postings.keys().map(Vec::as_slice).filter(|t| t.starts_with(pfx)).collect();
+        // An empty prefix matches everything, which is what `starts_with`
+        // did and what the head-byte filter would not: callers never send
+        // one, but the shortcut must not be where that stops being true.
+        let mut e: Vec<&[u8]> = match pfx.first() {
+            None => self.postings.keys().map(Vec::as_slice).collect(),
+            Some(&head) => self
+                .postings
+                .keys()
+                .map(Vec::as_slice)
+                .filter(|t| t.first() == Some(&head) && t.starts_with(pfx))
+                .collect(),
+        };
         e.sort_unstable();
         e
     }
