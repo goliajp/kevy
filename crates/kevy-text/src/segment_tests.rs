@@ -1216,3 +1216,77 @@ fn distinct_composes_with_sort_and_filter() {
         s.matches_query_with(b"rust", 5, opts).into_iter().map(|h| h.key).collect();
     assert_eq!(hits, vec![b"b1".to_vec(), b"c1".to_vec()]);
 }
+
+// ---- FACET: counting the match set, not the page -----------------------
+
+#[test]
+fn facets_count_every_match_not_the_page() {
+    // Six documents, three prices, two each. A LIMIT-1 page still reports
+    // all three buckets with two documents apiece — which is the whole
+    // reason facets need the stored column rather than the page.
+    let s = group_seg();
+    let key = |raw: &[u8]| Some(raw.to_vec());
+    let f = [Facet { field: 0, key: &key }];
+    let r = s.matches_query_faceted(b"rust", 1, QueryOpts::default(), &f);
+    assert_eq!(r.hits.len(), 1, "the page is still one document");
+    let counts: Vec<(Vec<u8>, u64)> =
+        r.facets[0].iter().map(|(_, label, n)| (label.clone(), *n)).collect();
+    let mut sorted = counts.clone();
+    sorted.sort();
+    assert_eq!(
+        sorted,
+        vec![(b"10".to_vec(), 2), (b"20".to_vec(), 2), (b"30".to_vec(), 2)],
+        "every match is counted: {counts:?}"
+    );
+}
+
+#[test]
+fn a_filter_restricts_the_counts_but_distinct_does_not() {
+    let s = group_seg();
+    let key = |raw: &[u8]| Some(raw.to_vec());
+    let f = [Facet { field: 0, key: &key }];
+
+    // FILTER: a filtered-out document did not match, so it is not counted.
+    let dear = |v: &[u8]| v != b"10";
+    let pred = [Filter { field: 0, test: &dear }];
+    let r = s.matches_query_faceted(
+        b"rust",
+        10,
+        QueryOpts { filter: &pred, ..Default::default() },
+        &f,
+    );
+    assert_eq!(r.facets[0].len(), 2, "the excluded price has no bucket");
+
+    // DISTINCT: collapsing decides what is SHOWN, not what matched, so
+    // the counts are unchanged even though the page shrinks to three.
+    let r = s.matches_query_faceted(
+        b"rust",
+        10,
+        QueryOpts { distinct: Some(Distinct { field: 0, key: &key }), ..Default::default() },
+        &f,
+    );
+    assert_eq!(r.hits.len(), 3, "one document per price on the page");
+    let total: u64 = r.facets[0].iter().map(|(_, _, n)| n).sum();
+    assert_eq!(total, 6, "all six still matched: {:?}", r.facets[0]);
+}
+
+#[test]
+fn buckets_are_the_coerced_value_and_absence_is_not_one() {
+    let mut s = TextSegment::with_shape(SegmentShape { values: 1, ..Default::default() });
+    // Two spellings of the same number, and one document with no value.
+    s.apply_doc(b"a", Some(&[(b"rust".to_vec(), 1.0)]), &[Some(b"1")]);
+    s.apply_doc(b"b", Some(&[(b"rust".to_vec(), 1.0)]), &[Some(b"1.0")]);
+    s.apply_doc(b"c", Some(&[(b"rust".to_vec(), 1.0)]), &[]);
+    // A key function that coerces, as the declared type would.
+    let key = |raw: &[u8]| {
+        let v: f64 = std::str::from_utf8(raw).ok()?.parse().ok()?;
+        Some(v.to_bits().to_be_bytes().to_vec())
+    };
+    let f = [Facet { field: 0, key: &key }];
+    let r = s.matches_query_faceted(b"rust", 10, QueryOpts::default(), &f);
+    assert_eq!(r.facets[0].len(), 1, "1 and 1.0 are one bucket: {:?}", r.facets[0]);
+    assert_eq!(r.facets[0][0].2, 2, "counting both spellings");
+    let label = &r.facets[0][0].1;
+    assert!(label == b"1" || label == b"1.0", "the label is a spelling that occurs: {label:?}");
+    assert_eq!(r.hits.len(), 3, "the document with no value still matched");
+}

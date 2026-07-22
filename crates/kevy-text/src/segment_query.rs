@@ -10,6 +10,11 @@
 
 use std::collections::HashMap;
 
+#[path = "segment_select.rs"]
+mod segment_select;
+pub use segment_select::sorted_order;
+use segment_select::{Cand, Order, TopK};
+
 use super::{CorpusStats, TextMatch, TextSegment};
 use crate::bm25::{bm25_score, bm25_upper};
 use crate::buckets::{BAND_MIN_DL, BandsView, Buckets};
@@ -307,6 +312,39 @@ impl TextSegment {
         self.values.as_ref().and_then(|dv| dv.get(id, field))
     }
 
+    /// One field's value counts over the match set, most frequent first.
+    ///
+    /// Predicates apply — a filtered-out document did not match — but
+    /// nothing else does: not the top-K, and not `DISTINCT`. The question
+    /// a facet answers is how many documents matched per value, and
+    /// collapsing decides which of them are shown, not which matched.
+    ///
+    /// Documents with no value for the field are in no bucket. A facet
+    /// reports the values that occur; absence is not one of them.
+    pub(crate) fn count_facet(
+        &self,
+        scores: &HashMap<u32, f64>,
+        filter: &[crate::Filter],
+        facet: crate::Facet,
+    ) -> Vec<crate::Bucket> {
+        let mut counts: HashMap<Vec<u8>, (Vec<u8>, u64)> = HashMap::new();
+        for id in scores.keys() {
+            if !self.passes(*id, filter) {
+                continue;
+            }
+            let Some(raw) = self.stored(*id, facet.field) else { continue };
+            let Some(k) = (facet.key)(raw) else { continue };
+            let e = counts.entry(k).or_insert_with(|| (raw.to_vec(), 0));
+            e.1 += 1;
+        }
+        let mut out: Vec<crate::Bucket> =
+            counts.into_iter().map(|(k, (label, n))| (k, label, n)).collect();
+        // Most frequent first, label breaking ties so two shards counting
+        // the same corpus report the same order.
+        out.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.1.cmp(&b.1)));
+        out
+    }
+
     /// The candidates with duplicates removed: at most one document per
     /// value of the distinct field, the best of them by the page's order.
     ///
@@ -354,116 +392,6 @@ impl TextSegment {
         }
         let Some(dv) = self.values.as_ref() else { return false };
         filter.iter().all(|f| dv.get(id, f.field).is_some_and(|v| (f.test)(v)))
-    }
-}
-
-/// Strict "ranks ahead of" for (score, key) — higher score first,
-/// key ascending as the tiebreak.
-// float_cmp: exact equality is the tiebreak trigger — an epsilon here would
-// make ranking non-deterministic for genuinely equal BM25 scores.
-#[allow(clippy::float_cmp)]
-/// The best `limit` candidates seen so far, kept sorted so the worst
-/// survivor is always at the end.
-struct TopK<'a> {
-    top: Vec<Cand<'a>>,
-    limit: usize,
-    order: Order,
-}
-
-impl<'a> TopK<'a> {
-    fn new(limit: usize, order: Order) -> Self {
-        Self { top: Vec::with_capacity(limit + 1), limit, order }
-    }
-
-    fn push(&mut self, cand: Cand<'a>) {
-        if self.top.len() < self.limit {
-            self.top.push(cand);
-            if self.top.len() == self.limit {
-                self.order.sort(&mut self.top);
-            }
-        } else if self.order.better(&cand, &self.top[self.limit - 1]) {
-            let pos = self.top.partition_point(|e| self.order.better(e, &cand));
-            self.top.insert(pos, cand);
-            self.top.pop();
-        }
-    }
-
-    fn finish(mut self) -> Vec<TextMatch> {
-        if self.top.len() < self.limit {
-            self.order.sort(&mut self.top);
-        }
-        self.top.into_iter().map(|c| TextMatch { key: c.key.to_vec(), score: c.score }).collect()
-    }
-}
-
-/// One candidate in the top-K selection.
-struct Cand<'a> {
-    score: f64,
-    key: &'a [u8],
-    /// The sort field's order-preserving key, when the query sorts by a
-    /// stored value; `None` when it does not, or when this document has
-    /// no usable value for the field.
-    okey: Option<Vec<u8>>,
-}
-
-/// What the selection ranks by.
-#[derive(Clone, Copy)]
-struct Order {
-    sorted: bool,
-    desc: bool,
-}
-
-/// The order a page sorted by a stored value is in: a document WITH a
-/// value outranks one without (in both directions — missing is not a
-/// value), then by that value's order key, then by row key so ties are
-/// stable.
-///
-/// Public because the cross-shard merge orders the union of the shards'
-/// pages and must do it exactly as each shard ordered its own. Two copies
-/// of this rule would be two chances to disagree about where the
-/// unknowns went.
-pub fn sorted_order(
-    a: (Option<&[u8]>, &[u8]),
-    b: (Option<&[u8]>, &[u8]),
-    desc: bool,
-) -> std::cmp::Ordering {
-    use std::cmp::Ordering;
-    match (a.0, b.0) {
-        (Some(x), Some(y)) => {
-            let ord = if desc { y.cmp(x) } else { x.cmp(y) };
-            ord.then_with(|| a.1.cmp(b.1))
-        }
-        (Some(_), None) => Ordering::Less,
-        (None, Some(_)) => Ordering::Greater,
-        (None, None) => a.1.cmp(b.1),
-    }
-}
-
-impl Order {
-    /// Whether `a` outranks `b`.
-    ///
-    /// The row key breaks every tie, so two shards holding equally-ranked
-    /// documents agree on their order and the merged page is stable.
-    /// Under a sort, a document WITH a value always outranks one without,
-    /// in both directions.
-    fn better(self, a: &Cand, b: &Cand) -> bool {
-        if !self.sorted {
-            return a.score > b.score || (a.score == b.score && a.key < b.key);
-        }
-        sorted_order((a.okey.as_deref(), a.key), (b.okey.as_deref(), b.key), self.desc)
-            == std::cmp::Ordering::Less
-    }
-
-    fn sort(self, top: &mut [Cand]) {
-        top.sort_by(|a, b| {
-            if self.better(a, b) {
-                std::cmp::Ordering::Less
-            } else if self.better(b, a) {
-                std::cmp::Ordering::Greater
-            } else {
-                std::cmp::Ordering::Equal
-            }
-        });
     }
 }
 

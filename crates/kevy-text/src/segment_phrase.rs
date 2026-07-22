@@ -103,11 +103,29 @@ impl TextSegment {
         limit: usize,
         opts: QueryOpts,
     ) -> Vec<TextMatch> {
+        self.matches_query_faceted(text, limit, opts, &[]).hits
+    }
+
+    /// [`TextSegment::matches_query_with`], additionally counting the
+    /// values of stored fields over the **whole match set**.
+    ///
+    /// Counted before the top-K, because a facet is about what matched
+    /// and the page is only `limit` of it. `FILTER` restricts the count —
+    /// a filtered-out document did not match — but `DISTINCT` does not:
+    /// collapsing decides which documents are shown, not which matched.
+    pub fn matches_query_faceted(
+        &self,
+        text: &[u8],
+        limit: usize,
+        opts: QueryOpts,
+        facets: &[crate::Facet],
+    ) -> crate::FacetedMatches {
+        let empty = || crate::FacetedMatches { hits: Vec::new(), facets: vec![Vec::new(); facets.len()] };
         if limit == 0 {
-            return Vec::new();
+            return empty();
         }
         let Some(want) = self.normalize_scope(opts.fields) else {
-            return Vec::new();
+            return empty();
         };
         let (bare, phrases, prefixes) = parse_clauses(text);
         if phrases.is_empty()
@@ -117,11 +135,15 @@ impl TextSegment {
             && opts.filter.is_empty()
             && opts.sort.is_none()
             && opts.distinct.is_none()
+            && facets.is_empty()
         {
             // No phrase, prefix, typo, field, filter, sort or distinct
             // clause — the
             // ordinary pruned term query.
-            return self.matches_scored(text, limit, opts.stats);
+            return crate::FacetedMatches {
+                hits: self.matches_scored(text, limit, opts.stats),
+                facets: Vec::new(),
+            };
         }
         // A filtered or sorted query takes the full walk deliberately.
         // MaxScore
@@ -133,10 +155,13 @@ impl TextSegment {
         // the other way: the buckets are ordered by score, which under
         // SORT is not what decides the page at all.
         if self.docs.is_empty() {
-            return Vec::new();
+            return empty();
         }
         let scores = self.accumulate_clauses(bare, &phrases, &prefixes, &want, &opts);
-        self.select_top(&scores, limit, opts.filter, opts.sort, opts.distinct)
+        crate::FacetedMatches {
+            facets: facets.iter().map(|f| self.count_facet(&scores, opts.filter, *f)).collect(),
+            hits: self.select_top(&scores, limit, opts.filter, opts.sort, opts.distinct),
+        }
     }
 
     /// Every clause's BM25 contribution, accumulated over the whole

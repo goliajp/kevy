@@ -84,69 +84,6 @@ pub struct Filter<'a> {
     pub test: &'a dyn Fn(&[u8]) -> bool,
 }
 
-/// An order to select the top hits by, other than the score.
-///
-/// The key function maps a stored value's raw bytes to an
-/// order-preserving encoding, computed once per candidate; the segment
-/// then compares bytes and never learns what a number is. `None` from it
-/// means the document has no usable value for the field, which sorts
-/// **last in both directions** — missing is not a value, and placing it
-/// at one end or the other by direction would make "the oldest" and "the
-/// newest" disagree about where the unknowns went.
-#[derive(Clone, Copy)]
-pub struct Sort<'a> {
-    /// Which declared value field orders the result.
-    pub field: usize,
-    /// Descending when true.
-    pub desc: bool,
-    /// The order-preserving encoding of one stored value.
-    pub key: &'a dyn Fn(&[u8]) -> Option<Vec<u8>>,
-}
-
-/// Collapse the page so only the best document per value of a stored
-/// field appears.
-///
-/// The key is the value's *identity*, coerced — so `1` and `1.0` in a
-/// field declared `f64` are one value rather than two. A document with no
-/// value for the field is its own group: `DISTINCT` removes documents
-/// shown to share a value, and one that has none has not been shown to
-/// share anything.
-#[derive(Clone, Copy)]
-pub struct Distinct<'a> {
-    /// Which declared value field identifies a group.
-    pub field: usize,
-    /// The identity of one stored value.
-    pub key: &'a dyn Fn(&[u8]) -> Option<Vec<u8>>,
-}
-
-/// Everything a MATCH query carries beyond its text and result limit.
-///
-/// Grouping them keeps the query entry point from growing a parameter per
-/// clause, and gives every clause one place to be defaulted from
-/// ([`QueryOpts::default`] is the plain, exact, unscoped query).
-#[derive(Clone, Copy, Default)]
-pub struct QueryOpts<'a> {
-    /// Corpus-wide BM25 statistics — the second pass of a cross-shard
-    /// query. `None` scores against this segment's own slice.
-    pub stats: Option<&'a CorpusStats>,
-    /// Edit distance allowed on bare terms (`TYPO n`); 0 = exact.
-    pub typo: u32,
-    /// Field positions the query is restricted to (`IN <field…>`); empty
-    /// = every field.
-    pub fields: &'a [usize],
-    /// `FILTER`: non-scoring predicates, ANDed. Applied before the top-K
-    /// — filtering afterwards would return fewer hits than exist.
-    pub filter: &'a [Filter<'a>],
-    /// `SORT`: select by a stored value instead of by score. Selecting,
-    /// not re-ordering: a document that wins on the sort key must be
-    /// chosen even when its score would never have reached the page.
-    pub sort: Option<Sort<'a>>,
-    /// `DISTINCT`: at most one hit per value of a stored field. Applied
-    /// during selection, so the page is filled with `limit` DISTINCT
-    /// documents rather than `limit` documents that then collapse.
-    pub distinct: Option<Distinct<'a>>,
-}
-
 /// A field's text and the BM25 weight it was indexed at. Stored per
 /// document so a removal re-derives exactly the term frequencies the
 /// insert produced.
@@ -463,6 +400,10 @@ fn token_offsets(fields: &[IndexedField]) -> HashMap<Vec<u8>, Vec<u32>> {
     }
     out
 }
+
+#[path = "segment_opts.rs"]
+mod segment_opts;
+pub use segment_opts::{Bucket, Distinct, Facet, FacetedMatches, QueryOpts, Sort};
 
 #[path = "segment_query.rs"]
 mod segment_query;
