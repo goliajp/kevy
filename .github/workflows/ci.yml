@@ -709,6 +709,8 @@ jobs:
           - { name: electron, lang: electron, ffi: kevy-napi }
           - { name: expo,     lang: expo,     ffi: "" }
           - { name: tauri,    lang: tauri,    ffi: "" }
+          - { name: nitro,    lang: nitro,    ffi: "" }
+          - { name: flutter,  lang: flutter,  ffi: kevy-ffi }
     steps:
       - uses: actions/checkout@v7
 
@@ -779,6 +781,28 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
+
+      # jnigate gates the raw JNI surface with javac alone and SKIPs the
+      # Kotlin shell above it when `kotlinc` is absent — which, until now,
+      # was everywhere. Installing it is what turns that half from a
+      # documented skip into a gate.
+      - name: Set up Kotlin (android door's Kotlin shell)
+        if: matrix.lang == 'android'
+        run: |
+          curl -fsSL -o /tmp/kotlin.zip \
+            https://github.com/JetBrains/kotlin/releases/download/v2.1.0/kotlin-compiler-2.1.0.zip
+          unzip -q /tmp/kotlin.zip -d /opt
+          echo "/opt/kotlinc/bin" >> "$GITHUB_PATH"
+
+      - name: Set up Bun (nitro door)
+        if: matrix.lang == 'nitro'
+        uses: oven-sh/setup-bun@v2
+
+      - name: Set up Flutter
+        if: matrix.lang == 'flutter'
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
 
       - name: Set up Node (electron door)
         if: matrix.lang == 'electron'
@@ -876,7 +900,65 @@ jobs:
       # Standalone crate on purpose (it depends on `tauri`, which must stay
       # out of the 0-dependency workspace), so nothing at the repo root ever
       # built it.
+      # The nitro door's TypeScript had never been checked by anything in
+      # this repo: no installed deps, no script, no gate. Its NATIVE side
+      # is compiled by the expo iOS device gate (the expo example depends
+      # on this package), but that gate is macOS-only and manual.
+      - name: Nitro — tsc (TypeScript surface)
+        if: matrix.lang == 'nitro'
+        working-directory: bindings/nitro
+        run: |
+          bun install
+          bun run typecheck
+
+      # `flutter test` drives the real engine through dart:ffi, so this is
+      # a behavioural gate and not just an analyze pass.
+      - name: Flutter — analyze + test
+        if: matrix.lang == 'flutter'
+        working-directory: bindings/flutter
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test
+
       - name: Tauri — cargo test (standalone plugin crate)
         if: matrix.lang == 'tauri'
         working-directory: bindings/tauri/tauri-plugin-kevy
         run: cargo test
+
+  # The Apple door needs a macOS runner, which is why it sat uncovered
+  # while every other host-runnable door joined the matrix above: this is
+  # a cost decision, not a wiring one. KevyKit links the vendored
+  # xcframework, so `swift test` exercises the real engine through the C
+  # ABI rather than a mock.
+  apple-door:
+    name: apple (KevyKit on macOS)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # vendorgate refuses a stale artifact, and a door tested against
+      # yesterday's engine is the failure this whole audit turned up.
+      - name: Install Rust (stable)
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: apple-door-${{ hashFiles('Cargo.lock') }}
+
+      - name: vendorgate (the vendored natives match the source)
+        run: bash bench/vendorgate.sh
+
+      - name: KevyKit — swift build + swift test
+        working-directory: bindings/apple/KevyKit
+        run: |
+          swift build
+          swift test
+
