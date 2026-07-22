@@ -284,33 +284,27 @@ fn blpop_remote_disconnect_then_push_is_clean() {
     // this test is not the right place to assert). 500ms so this test
     // asserts what it is for: that the cancel HAPPENS.
     std::thread::sleep(std::time::Duration::from_millis(500));
-    // A later push must not be consumed by the gone waiter; the value stays
-    // and a fresh BLPOP retrieves it.
+    // The property: a later push must NOT be consumed by the gone waiter —
+    // the value stays in the list. Verify it with LRANGE, which reads that
+    // fact directly. An earlier version asserted with BLPOP plus a
+    // diagnostic branch, but BLPOP folds in a second timing dependency
+    // (whether the serve completes inside its 5s): on a starved runner it
+    // returns *-1 and the test fails even when the element is sitting in
+    // the list untouched — which is exactly the property holding. LRANGE
+    // asks only the question this test is about. *1 = stayed (correct),
+    // *0 = the gone waiter consumed it (the defect).
     let mut producer = srv.connect();
     producer.write_all(&req(&[b"RPUSH", b"dc", b"stay"])).unwrap();
     assert_eq!(read_reply(&mut producer), b":1\r\n");
-    let mut c2 = srv.connect();
-    c2.write_all(&req(&[b"BLPOP", b"dc", b"5"])).unwrap();
-    let got = read_reply(&mut c2);
-    if got != req_pop_reply("dc", "stay") {
-        // Two failures with opposite meanings share this symptom, and the
-        // reply alone cannot tell them apart: the gone waiter consumed the
-        // element and it was lost (the defect escrow closes — see
-        // bench/FINDING-2026-07-19-xshard-block-serve-drop.md), or BLPOP
-        // was simply never served inside its 5s on a starved runner. The
-        // list itself answers it, so ask before failing.
-        let mut probe = srv.connect();
-        probe
-            .write_all(&req(&[b"LRANGE", b"dc", b"0", b"-1"]))
-            .unwrap();
-        let left = read_reply(&mut probe);
-        let verdict = if left.starts_with(b"*0") {
-            "list EMPTY -> the element was consumed and lost: the real defect"
-        } else {
-            "list still holds it -> BLPOP was never served in time: a starved runner, not data loss"
-        };
-        panic!("BLPOP missed the pushed element.\n  reply: {got:?}\n  list: {left:?}\n  {verdict}");
-    }
+    let mut probe = srv.connect();
+    probe.write_all(&req(&[b"LRANGE", b"dc", b"0", b"-1"])).unwrap();
+    let left = read_reply(&mut probe);
+    assert_eq!(
+        left, b"*1\r\n$4\r\nstay\r\n",
+        "the gone waiter must not consume the later push. *0 = it did (the \
+         defect escrow closes, bench/FINDING-2026-07-19-xshard-block-serve-drop.md); \
+         got: {left:?}",
+    );
 }
 
 /// `*2\r\n$<klen>\r\n<key>\r\n$<vlen>\r\n<val>\r\n` — BLPOP's wake reply.
