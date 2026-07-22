@@ -386,6 +386,13 @@ D2 事务标记(全有全无,与事务大小无关)/ R2 事务内集合读。
   - [x] **8.b VALUES 声明** — `IDX.CREATE … VALUES f… [TYPES t…]`(text-only);sidecar v3→v4(文本第7列=逗号分隔,首 token `pos`/`-`,**只有位置时写出的仍是 v3 的 `pos`**);**类型是声明的不是猜的**(数值范围按字典序比是静默错误;按"两边都能 parse 成数"决定则答案随数据而变);`IndexSpec::read_row` **消掉 server/embedded 两份"按 spec 读行"的重复**(闭包供给 hget,kevy-index 保持零依赖)
   - [x] **8.c FILTER 端到端 + 8.c.2 embedded 对等** — 语法=既有 `RANGE`/`EQ`;**FILTER 不动语料统计**(非打分谓词;IN 才动=两条正交轴);比较下沉 `kevy-index::ValueTest`(EQ=退化区间 `[v,v]`,两 crate 共用);三种错法三种报错(字段未存储/bound 类型不符/存值无法 coerce 则不通过);`ST_NOFIELD`→`ST_CLAUSE`(载荷即完整解释)。e2e 19 真8-shard
   - [x] **8.d textgate VALUES 模式** — **同日同盒 baseline 对照**:默认 691MiB/1176MiB ratio 0.59,VALUES 723MiB/1227MiB ratio **0.59**(公式增 32MiB、RSS 增 51MiB、**比值一动不动**=新项精度与既有模型同级)。filtered p95 46.17ms vs 未过滤 26.82ms=放弃 MaxScore 的代价,已实测非假设
+
+  - [x] **8.e SORT / 8.f DISTINCT / 8.g FACET —— 三条全落且**跨分片精确**(RFC Addendum 2/3 记下了对本 RFC step 5 的更正:让分数 fan-out 精确的 k 路归并论证**没提分数**,对分片一致同意的任何全序都成立)
+    - **SORT**:分片**按排序键**选页(不是按分数选完再重排——那会丢掉排名靠后但键上该赢的文档);次序只有一个定义 `kevy_text::sorted_order`,分片与 origin 共用;回传顺序保持编码 `kevy_index::order_key`(i64 翻符号位/f64 IEEE 全序/str 原样),origin 不需懂类型;**缺值两向都排最后**
+    - **DISTINCT**:折叠在**选择期**(否则页会缩水);精确性证明在 RFC;身份=coerce 后的值(复用 order_key);**无值文档自成一组**
+    - **FACET**:在截断**之前**计数(LIMIT-1 也报全部桶);`FILTER` 减计数、**`DISTINCT` 不减**;按身份求和、按语料里真实出现过的标签上报;回复**追加一个末元素**,无 FACET 时逐字节不变
+    - **NOT_YET 表清空** —— v4 冻结的终端查询面全部可执行;保留机制本身(新加子句仍会具名报错而非静默忽略)
+  - [x] **8.h textgate ORDER 模式** — 纯 MATCH 26.82ms / FILTER 46.17ms / **SORT·DISTINCT 55.92ms**(<400 provisional)。约为剪枝路径两倍,是"按分数以外的东西选择就必须看每个候选"的诚实形状;此前只在 commit 里声明过代价,现在有数
 - [ ] textgate 在步骤 4/5 内重录基线 → **5f 已做(POSITIONS 模式,ratio 0.75)**
 - [ ] textgate 在步骤 4/5 内重录基线(改内存公式的步骤内做,不事后补)
 
