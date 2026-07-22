@@ -183,10 +183,10 @@ pub(super) fn op_explain(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> 
 fn kind_entries(ctx: &Ctx<'_>, store: &mut Store, kind: kevy_index::IndexKind, name: &[u8]) -> u64 {
     match kind {
         kevy_index::IndexKind::Agg => {
-            index_runtime::with_ready_agg(ctx, store, name, |a| a.stats().rows).unwrap_or_default()
+            index_runtime::with_ready_agg(ctx, store, name, |a| a.rows()).unwrap_or_default()
         }
         kevy_index::IndexKind::Ann => {
-            index_runtime::with_ready_ann(ctx, store, name, |g| g.stats().vectors).unwrap_or_default()
+            index_runtime::with_ready_ann(ctx, store, name, |g| g.vectors()).unwrap_or_default()
         }
         kevy_index::IndexKind::Text => {
             index_runtime::with_ready_text_segment(ctx, store, name, |t, _| t.docs())

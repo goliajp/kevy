@@ -234,6 +234,14 @@ impl AggSegment {
         self.rows.contains_key(key)
     }
 
+    /// This segment's live row count — the one field of [`Self::stats`]
+    /// that is a `len()`. Its own accessor because `stats` also sums every
+    /// group's values, every group key and every row key to estimate bytes,
+    /// and a caller asking "how many rows" should not pay for that.
+    pub fn rows(&self) -> u64 {
+        self.rows.len() as u64
+    }
+
     /// Live counters. Byte constants calibrated against measured RSS
     /// growth at 1M rows / 10k Zipf groups (the first-cut 40/24
     /// constants overestimated 2× — BTreeMap packs ~11 entries per
