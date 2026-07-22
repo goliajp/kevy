@@ -684,6 +684,37 @@ jobs:
         run: npx -y -p typescript@5 tsc --noEmit -p tsconfig.json
         working-directory: bindings/expo
 
+  # ── npm-install-smoke — the published layout resolves and runs ───────────
+  # ffigate proves the binding works from the checkout; this proves the
+  # PACKAGE works. It stages the platform package, packs both tarballs, and
+  # installs them into a scratch project by file: spec — no registry — then
+  # runs the typed surface on both Node and Bun. Catches the failure ffigate
+  # cannot: a loader that finds target/ in a checkout but not the platform
+  # package a user actually installs. One leg per RID CI can give us;
+  # linux-arm64 (the third published target) has no hosted runner, so it is
+  # covered at release time on the self-hosted box, not here.
+  npm-install-smoke:
+    name: npm-install-smoke (${{ matrix.rid }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, rid: darwin-arm64 }
+          - { os: ubuntu-latest, rid: linux-x64 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - uses: oven-sh/setup-bun@v2
+      - name: Install Rust (stable)
+        run: rustup toolchain install stable --no-self-update && rustup default stable
+      - name: Build the release natives
+        run: cargo build --release -p kevy-ffi -p kevy-napi
+      - name: Offline install smoke (node + bun, installed layout)
+        run: bash packaging/npm/smoke-node.sh
+
   # ── client-conformance — the seven native kevy clients, full suites ──────
   # ffigate (above) opens each language door with the embedded FFI *smoke*;
   # this is the fuller *conformance* proof: every first-party client's whole
