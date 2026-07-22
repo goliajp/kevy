@@ -230,3 +230,60 @@ What changes is that none of them needs a second round or an accuracy
 disclaimer. The work is: teach the top-K selection to order by a
 comparator (SORT), to collapse by a key (DISTINCT), and teach the reduce
 to sum per-value maps (FACET).
+
+---
+
+# Addendum 3 — FACET's three decisions
+
+Written before implementing the last clause. Each of these is a choice
+with a defensible alternative, so they are recorded rather than left in
+the code to be inferred.
+
+## Where the counts go in the reply
+
+The surface RFC planned for the reply to become a map (`hits` / `total` /
+`facets`). It has not, and rows are still flat arrays — `HIGHLIGHT`
+landed as an additive trailing element per row precisely so the row shape
+would be unchanged when the clause is absent.
+
+`FACET` is per query, not per row, so it takes the same treatment one
+level up: when the clause is present the top-level array gains **one
+final element**, `[field, [value, count, …], field, …]`. A query without
+`FACET` is byte-identical to before.
+
+Restructuring the whole reply into a map for one clause would change
+every client's parse for a feature most of them do not use. If the map
+shape is wanted it should be a deliberate surface migration, not a side
+effect of FACET.
+
+## Counted over the matches, not the page — and not the collapsed set
+
+Facets describe **what matched**, so they are counted before the top-K
+truncation. That is the whole reason they need doc values: the page is
+`limit` documents and the answer is about all of them.
+
+`FILTER` does restrict the count, because a filtered-out document did not
+match. `DISTINCT` does **not**: collapsing decides which documents are
+shown, not which matched, and "how many matching documents per category"
+is the question a facet answers. Same split Elasticsearch draws between
+`collapse` and aggregations.
+
+## Bucket identity is the coerced value; the label is a stored spelling
+
+Two shards can hold `1` and `1.0` in a field declared `f64`. Those are
+one value, so they must be one bucket — the same identity `DISTINCT`
+groups by, which is `order_key`.
+
+But a bucket has to be *reported*, and the coerced identity is an opaque
+encoding. So a shard sends `(key, label, count)` and the origin sums by
+`key`, reporting the first label it saw for it. The label is therefore
+always a spelling that really occurs in the corpus, never a
+re-serialisation invented by the engine.
+
+## Cost, stated
+
+A shard's map is as large as the field's cardinality within that shard.
+That is a cost, not an inexactness. Truncating per shard (Elasticsearch's
+`shard_size`, with its `doc_count_error_upper_bound`) would trade exact
+counts for a smaller chunk; if a real corpus makes the chunk hurt, that
+approximation can be added **and declared**, not assumed now.
