@@ -7,20 +7,20 @@
         parts.iter().map(|p| p.as_bytes().to_vec()).collect()
     }
 
-    /// Every reserved clause must come back named. Silently ignoring one
-    /// is the failure mode worth a test: a dropped FILTER returns
-    /// unfiltered rows, which is a wrong answer wearing a success reply.
+    /// Nothing is reserved any more — every clause of the terminal
+    /// surface executes. The mechanism stays: a clause added to the
+    /// frozen surface ahead of its implementation still comes back named
+    /// rather than silently ignored, which is the failure mode worth
+    /// keeping a guard for.
     #[test]
-    fn reserved_clauses_are_refused_by_name() {
-        // Only FACET is still reserved; every other clause ships now
-        // (see the clause tests below).
-        let clause = "FACET";
-        let a = argv(&["IDX.QUERY", "idx", "MATCH", "hello", clause, "x"]);
-        match MatchArgs::parse_terminal(&a) {
-            MatchParse::NotYet(c) => {
-                assert!(c.eq_ignore_ascii_case(clause.as_bytes()), "{clause}");
-            }
-            _ => panic!("{clause} should be reserved, not accepted or rejected as bad"),
+    fn nothing_is_reserved_and_the_surface_is_complete() {
+        assert!(NOT_YET.is_empty(), "the last reserved clause has shipped");
+        for c in ["IN", "FILTER", "FACET", "SORT", "DISTINCT", "HIGHLIGHT"] {
+            let a = argv(&["IDX.QUERY", "idx", "MATCH", "hello", c, "x"]);
+            assert!(
+                !matches!(MatchArgs::parse_terminal(&a), MatchParse::NotYet(_)),
+                "{c} executes now"
+            );
         }
     }
 

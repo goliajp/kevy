@@ -31,6 +31,9 @@ pub(super) struct Tail {
     /// `DISTINCT <field>`: at most one hit per value of a stored field.
     #[cfg(feature = "text")]
     pub(super) distinct: Option<Vec<u8>>,
+    /// `FACET <field…>`: count each field's values over the match set.
+    #[cfg(feature = "text")]
+    pub(super) facets: Vec<Vec<u8>>,
 }
 
 /// One parsed `FILTER <field> RANGE <min> <max>` / `EQ <v>`.
@@ -71,6 +74,7 @@ fn is_tail_keyword(a: &[u8]) -> bool {
         || a.eq_ignore_ascii_case(b"FILTER")
         || a.eq_ignore_ascii_case(b"SORT")
         || a.eq_ignore_ascii_case(b"DISTINCT")
+        || a.eq_ignore_ascii_case(b"FACET")
 }
 
 /// One `FILTER <field> RANGE <min> <max>` / `EQ <v>`; several AND, which
@@ -94,6 +98,8 @@ fn apply_match_clause(argv: &[Vec<u8>], i: usize, t: &mut Tail) -> Option<usize>
     } else if a.eq_ignore_ascii_case(b"OFFSET") {
         t.offset = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
         Some(i + 2)
+    } else if a.eq_ignore_ascii_case(b"FACET") {
+        apply_facet(argv, i, t)
     } else if a.eq_ignore_ascii_case(b"DISTINCT") {
         apply_distinct(argv, i, t)
     } else if a.eq_ignore_ascii_case(b"SORT") {
@@ -126,6 +132,23 @@ fn apply_sort(argv: &[Vec<u8>], i: usize, t: &mut Tail) -> Option<usize> {
     };
     t.sort = Some((field, desc));
     Some(i + 3)
+}
+
+/// `FACET <field…>`.
+#[cfg(feature = "text")]
+fn apply_facet(argv: &[Vec<u8>], i: usize, t: &mut Tail) -> Option<usize> {
+    let (fs, next) = collect_until_keyword(argv, i + 1);
+    if fs.is_empty() {
+        return None;
+    }
+    t.facets = fs;
+    Some(next)
+}
+
+/// No MATCH without the text surface, so nothing to count.
+#[cfg(not(feature = "text"))]
+fn apply_facet(_argv: &[Vec<u8>], _i: usize, _t: &mut Tail) -> Option<usize> {
+    None
 }
 
 /// `DISTINCT <field>`.
@@ -204,6 +227,8 @@ pub(super) fn parse_tail(
         sort: None,
         #[cfg(feature = "text")]
         distinct: None,
+        #[cfg(feature = "text")]
+        facets: Vec::new(),
     };
     while i < argv.len() {
         i = apply_tail_clause(argv, i, &mut t, match_clauses)?;

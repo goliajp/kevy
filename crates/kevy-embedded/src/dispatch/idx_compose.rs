@@ -157,7 +157,7 @@ fn hybrid_impl(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let mut all: Vec<(Vec<u8>, f64)> = fused.into_iter().collect();
     all.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     all.truncate(q.limit);
-    super::idx_query::emit_ranked(s, out, &all, &q.fields, 6);
+    super::idx_query::emit_ranked(s, out, &all, &q.fields, 6, 0);
 }
 
 #[cfg(all(feature = "text", feature = "vector"))]

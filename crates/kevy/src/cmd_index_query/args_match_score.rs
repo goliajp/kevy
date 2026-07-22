@@ -29,6 +29,7 @@ pub(crate) fn parse_match_score(argv: &[Vec<u8>]) -> Option<MatchArgs> {
         filters: Vec::new(),
         sort: None,
         distinct: None,
+        facets: Vec::new(),
     };
     let mut i = 5;
     while i < argv.len() {

@@ -987,3 +987,56 @@ fn text_index_distinct_embedded() {
         .expect_err("unstored distinct field");
     assert!(format!("{e}").contains("price"), "names what it stores: {e}");
 }
+
+
+/// FACET in-process matches the wire: counts come from the match set, so
+/// a LIMIT-1 page still reports every bucket.
+#[test]
+fn text_index_facet_embedded() {
+    use crate::IndexValType;
+    let s = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
+    for (k, reps, price) in [
+        ("a1", 9, "10"), ("a2", 8, "10"),
+        ("b1", 7, "20"), ("b2", 6, "20"),
+        ("c1", 5, "30"), ("c2", 4, "30"),
+    ] {
+        let body = format!("rust {}", "rust ".repeat(reps));
+        s.hset(
+            format!("f2:{k}").as_bytes(),
+            &[(b"body" as &[u8], body.as_bytes()), (b"price", price.as_bytes())],
+        )
+        .unwrap();
+    }
+    s.idx_create_text(b"ff", b"f2:", &[(b"body", 1.0)], false, &[(b"price", IndexValType::I64)])
+        .unwrap();
+
+    let names = vec![b"price".to_vec()];
+    let page = s
+        .idx_match_faceted(b"ff", b"rust", 1, crate::MatchOpts { facets: &names, ..Default::default() })
+        .unwrap();
+    assert_eq!(page.hits.len(), 1, "the page is one document");
+    let mut got: Vec<(Vec<u8>, u64)> = page.facets[0].clone();
+    got.sort();
+    assert_eq!(
+        got,
+        vec![(b"10".to_vec(), 2), (b"20".to_vec(), 2), (b"30".to_vec(), 2)],
+        "every match counted, not just the page"
+    );
+
+    // DISTINCT shrinks the page but not the counts.
+    let page = s
+        .idx_match_faceted(
+            b"ff",
+            b"rust",
+            10,
+            crate::MatchOpts { facets: &names, distinct: Some(b"price"), ..Default::default() },
+        )
+        .unwrap();
+    assert_eq!(page.hits.len(), 3);
+    assert_eq!(page.facets[0].iter().map(|(_, n)| n).sum::<u64>(), 6);
+
+    let e = s
+        .idx_match_faceted(b"ff", b"rust", 3, crate::MatchOpts { facets: &[b"colour".to_vec()], ..Default::default() })
+        .expect_err("unstored facet field");
+    assert!(format!("{e}").contains("price"), "names what it stores: {e}");
+}

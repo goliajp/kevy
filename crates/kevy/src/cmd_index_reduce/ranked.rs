@@ -5,6 +5,10 @@ use kevy_resp::{encode_array_len, encode_bulk, encode_error};
 use kevy_rt::ExtensionReduced;
 
 use super::chunk::{read_highlight, read_hydration, read_kbytes, read_u32};
+#[path = "ranked_chunk.rs"]
+mod chunk;
+use chunk::{collect_facets, collect_hits};
+
 use crate::cmd_index_query::{HitSpans, Hydrated};
 
 /// One shard's decoded pass-1 report: `(n_docs, total_len, [(token, df)])`.
@@ -33,6 +37,7 @@ pub(super) fn reduce_ranked(argv: &[Vec<u8>], chunks: &[Vec<u8>], ascending: boo
             offset: 0,
             sort_desc: None,
             grouped: false,
+            facets: &[],
         },
     )
 }
@@ -57,13 +62,23 @@ pub(super) fn reduce_match_score(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8
             offset: q.offset,
             sort_desc,
             grouped: q.distinct.is_some(),
+            facets: &q.facets,
         },
     )
 }
 
 /// Emit the merged page as RESP rows.
-fn emit_rows(out: &mut Vec<u8>, all: &[Hit], fields: &[Vec<u8>], highlight: bool) {
-    encode_array_len(out, all.len() as i64);
+fn emit_rows(
+    out: &mut Vec<u8>,
+    all: &[Hit],
+    fields: &[Vec<u8>],
+    highlight: bool,
+    facets: &[Vec<u8>],
+    buckets: &[Vec<Bucket>],
+) {
+    // A faceted reply gains ONE trailing element; without the clause the
+    // array is exactly what it was before facets existed.
+    encode_array_len(out, (all.len() + usize::from(!facets.is_empty())) as i64);
     for h in all {
         let base = 2 + fields.len() * 2 + usize::from(highlight);
         encode_array_len(out, base as i64);
@@ -78,6 +93,31 @@ fn emit_rows(out: &mut Vec<u8>, all: &[Hit], fields: &[Vec<u8>], highlight: bool
         }
         if highlight {
             encode_highlights(out, &h.spans);
+        }
+    }
+    emit_facets(out, facets, buckets);
+}
+
+/// The faceted reply's one trailing element: `[field, [value, count, …],
+/// field, …]`, each field's buckets most-frequent-first with the label
+/// breaking ties so the order is stable across runs.
+fn emit_facets(
+    out: &mut Vec<u8>,
+    facets: &[Vec<u8>],
+    buckets: &[Vec<Bucket>],
+) {
+    if facets.is_empty() {
+        return;
+    }
+    encode_array_len(out, (facets.len() * 2) as i64);
+    for (name, field) in facets.iter().zip(buckets) {
+        encode_bulk(out, name);
+        let mut sorted = field.clone();
+        sorted.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.1.cmp(&b.1)));
+        encode_array_len(out, (sorted.len() * 2) as i64);
+        for (_, label, n) in &sorted {
+            encode_bulk(out, label);
+            encode_bulk(out, n.to_string().as_bytes());
         }
     }
 }
@@ -116,6 +156,10 @@ fn collapse_union(all: &mut Vec<Hit>) {
     });
 }
 
+/// One facet bucket in flight: the identity shards are summed by, a
+/// label that occurs in the corpus, and the running count.
+pub(super) type Bucket = (Vec<u8>, Vec<u8>, u64);
+
 /// One merged hit.
 struct Hit {
     score: f64,
@@ -146,14 +190,19 @@ struct Merge<'a> {
     sort_desc: Option<bool>,
     /// Whether the page collapses by a stored value.
     grouped: bool,
+    /// The `FACET` field names, in the order they were asked for. Empty
+    /// = no facets, and then the reply keeps its previous shape exactly.
+    facets: &'a [Vec<u8>],
 }
 
 fn merge_ranked(chunks: &[Vec<u8>], m: Merge<'_>) -> Vec<u8> {
-    let Merge { limit, fields, ascending, highlight, offset, sort_desc, grouped } = m;
+    let Merge { limit, fields, ascending, highlight, offset, sort_desc, grouped, facets } = m;
+    let mut buckets = vec![Vec::new(); facets.len()];
     let mut out = Vec::new();
     let mut all: Vec<Hit> = Vec::new();
     for c in chunks {
-        collect_hits(c, highlight, sort_desc.is_some(), grouped, &mut all);
+        let read = collect_hits(c, highlight, sort_desc.is_some(), grouped, &mut all);
+        collect_facets(c, read, facets.len(), &mut buckets);
     }
     match sort_desc {
         // Order the union exactly as each shard ordered its own page —
@@ -179,65 +228,8 @@ fn merge_ranked(chunks: &[Vec<u8>], m: Merge<'_>) -> Vec<u8> {
         all.drain(..offset.min(all.len()));
     }
     all.truncate(limit);
-    emit_rows(&mut out, &all, fields, highlight);
+    emit_rows(&mut out, &all, fields, highlight, facets, &buckets);
     out
-}
-
-/// Decode one shard's `[n][(key, f64, hydration, highlight?)*]` chunk
-/// into `all`; a short/corrupt chunk stops that shard's contribution.
-fn collect_hits(c: &[u8], highlight: bool, sorted: bool, grouped: bool, all: &mut Vec<Hit>) {
-    let mut pos = 1usize;
-    let Some(n) = read_u32(c, &mut pos) else { return };
-    for _ in 0..n {
-        let Some(key) = read_kbytes(c, &mut pos) else { break };
-        let Some(sb) = c.get(pos..pos + 8) else { break };
-        let v = f64::from_le_bytes(sb.try_into().expect("8 bytes"));
-        pos += 8;
-        let Some(fv) = read_hydration(c, &mut pos) else { break };
-        let hl = if highlight {
-            match read_highlight(c, &mut pos) {
-                Some(h) => h,
-                None => break,
-            }
-        } else {
-            Vec::new()
-        };
-        let okey = if sorted {
-            match read_okey(c, &mut pos) {
-                Some(k) => k,
-                None => break,
-            }
-        } else {
-            None
-        };
-        let dkey = if grouped {
-            match read_okey(c, &mut pos) {
-                Some(k) => k,
-                None => break,
-            }
-        } else {
-            None
-        };
-        all.push(Hit { score: v, key, fields: fv, spans: hl, okey, dkey });
-    }
-}
-
-/// One hit's sort key: a present flag, then the bytes. The outer `Option`
-/// is the read succeeding; the inner one is whether the document had a
-/// value at all.
-fn read_okey(c: &[u8], pos: &mut usize) -> Option<Option<Vec<u8>>> {
-    let tag = *c.get(*pos)?;
-    *pos += 1;
-    match tag {
-        0 => Some(None),
-        1 => {
-            let n = read_u32(c, pos)? as usize;
-            let bytes = c.get(*pos..*pos + n)?.to_vec();
-            *pos += n;
-            Some(Some(bytes))
-        }
-        _ => None,
-    }
 }
 
 /// Emit the trailing highlights element: one sub-array per field,
@@ -336,6 +328,7 @@ fn push_clauses(argv2: &mut Vec<Vec<u8>>, m: crate::cmd_index_query::MatchArgs) 
     // what a frequency and a length mean.)
     push_filters(argv2, m.filters);
     push_order(argv2, m.sort, m.distinct);
+    push_facets(argv2, m.facets);
 }
 
 /// The clauses that decide WHICH documents make the page rather than how
@@ -356,6 +349,15 @@ fn push_order(
     if let Some(field) = distinct {
         argv2.push(b"DISTINCT".to_vec());
         argv2.push(field);
+    }
+}
+
+/// `FACET <field…>` — counted per shard over its whole match set and
+/// summed here, so it travels to pass 2 like every other clause.
+fn push_facets(argv2: &mut Vec<Vec<u8>>, facets: Vec<Vec<u8>>) {
+    if !facets.is_empty() {
+        argv2.push(b"FACET".to_vec());
+        argv2.extend(facets);
     }
 }
 

@@ -131,6 +131,24 @@ pub(super) fn distinct_field(
     Ok(Some((pos, spec.values[pos].ty)))
 }
 
+/// Resolve a `FACET <field…>` clause: each named field's stored-value
+/// position and declared type. Errors when one is not stored, naming
+/// what is.
+pub(super) fn facet_fields(
+    spec: &kevy_index::IndexSpec,
+    facets: &[Vec<u8>],
+) -> Result<Vec<(usize, kevy_index::ValType)>, Vec<u8>> {
+    let mut out = Vec::with_capacity(facets.len());
+    for field in facets {
+        let Some(pos) = spec.values.iter().position(|v| v.name == *field) else {
+            let stored: Vec<&[u8]> = spec.values.iter().map(|v| v.name.as_slice()).collect();
+            return Err(clause_error("FACET", field, "store", &stored));
+        };
+        out.push((pos, spec.values[pos].ty));
+    }
+    Ok(out)
+}
+
 pub(super) fn sort_field(
     spec: &kevy_index::IndexSpec,
     sort: &Option<(Vec<u8>, bool)>,
