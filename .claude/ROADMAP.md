@@ -340,7 +340,7 @@ D2 事务标记(全有全无,与事务大小无关)/ R2 事务内集合读。
 - [x] **B3 R6 菜谱** — 「一行数据、多个派生键」端到端写进 `docs/cookbook.md`(对方甚至提出愿意贡献)。
 - [x] **B4 R3 事务内索引读** — 先判定是否与 R2 同形(同一个 op-table 缺口),同形则一并补齐,不同形则单列。
 
-- [~] **C1 跨 shard block-serve 丢元素**(设计轮已跑:`.claude/rfcs/2026-07-21-xshard-block-serve-escrow.md`;**第一版 escrow 设计已被代码推翻并记在同文件**——target 走的是命令重放,手里同样只有 RESP 字节。修正后的活候选 = 在 `cmd_block_serve.rs` 里给每个 kind 的 serve 加一个 restore 孪生函数;两个 stream kind 不需要。未实现) — 已归档未修;需要一轮协议设计(BlockServeReq/Resp 的所有权移交),修完进 gate。这是当前唯一「已知会丢数据且没修」的缺陷,不允许带着它 ship。
+- [x] **C1 跨 shard block-serve 丢元素** — **已修(2026-07-21,escrow)**,本条 `[~]` 标记严重滞后现实。修法 = escrow:target 在 pop *之前* 读下元素、扣在手里,直到 origin 确认投递才释放;origin 记录没了就 apply escrow 把元素还回去。实现 `crates/kevy-rt/src/block_xshard.rs`(`target_apply_escrow`/`target_release_escrow`),设计定案 `.claude/rfcs/2026-07-21-xshard-block-serve-escrow.md`(第一版 restore-twin 设计已被代码推翻,改用 escrow——见 RFC 末尾更正)。确定性回归 `crates/kevy/tests/blocking_xshard_serve_race.rs`(`KEVY_TEST_XSHARD_SERVE_DELAY_MS` seam 强制竞态,修复 revert 则红),在 CI `test` job(`cargo test --workspace --tests`)覆盖。FINDING 文档头已标 `Status: FIXED`。**"唯一已知会丢数据且没修"的 ship 阻塞项已清除。**(2026-07-23 去竞态:回归测试改用 LRANGE 读稳定态,不再受 CI 负载下 BLPOP 服务时机影响)
 
 ### t5.7 — FTS arc(取代 Meili;施工顺序见 RFC)
 
