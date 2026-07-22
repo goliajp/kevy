@@ -177,10 +177,10 @@ v1.x → v2.0 的完整历史账目见 git log + `CHANGELOG.md` + `.claude/plans
 - [ ] **gap 表评审:据数据修订 v3.4-v3.7 train 内容**(写回本表)
 
 ### v3.4 — tails 清偿 + 真上限复测(gap 表评审 2026-07-05:裸面全胜 1.67-2.5×,无 gap)
-- [ ] client-bound 上限复测(arena kevy 数字疑似 client 打满;加宽 client 定真值入 ledger)
-- [ ] 286c4a2 -4% micro-mechanism 根因收口
-- [ ] epoll stay-hot 对称性收口
-- [ ] IDX.QUERY conn-tail 根因收口
+- [x] client-bound 上限复测 — **疑似不成立**(2026-07-22):`bench/clientbound.sh` 扫客户端宽度,线程 4×/核 1.5× 吞吐平(±2.5%),生成器 CPU 峰值 698%/800% 始终有余量 → 7.2M 是**服务端**上限,arena 比值分母是真的。入 PERF-LEDGER
+- [x] 286c4a2 -4% micro-mechanism 根因收口 — **CLOSED,该开销已不存在**(2026-07-05,A/B no-op 两个热路径钩子,见 `bench/PERF-FINDING-2026-07-05-tails-closure.md` Case 1)
+- [x] epoll stay-hot 对称性收口 — **FIXED**(同上 Case 2:`shard.rs` idle ladder 在 `xshard_inflight > 0` 时重置 `idle_spins`,与 uring 侧 65b7515 对齐)
+- [x] IDX.QUERY conn-tail 根因收口 — **CLOSED,根因 = accept 落位**(SO_REUSEPORT 选中的属主分片与它的 extension fan-out 角色冲突;v1.30 `--accept-shards` 完全消除。见 `bench/PERF-FINDING-2026-07-04-idxquery-conn-tail.md`)
 
 ### v3.5 — FTS 巩固(gap 表评审:p95 NOISE、qps +21% 已胜;自 ratchet 改进)
 - [ ] 单常见词 postings scan → impact-ordering(textgate 加线)
@@ -355,7 +355,7 @@ D2 事务标记(全有全无,与事务大小无关)/ R2 事务内集合读。
 - [x] **步骤 4a segment 用注入统计打分(全局 BM25 石头能力)** — `matches_scored(_, _, Some(stats))`,`matches` 是 None 糖 byte-identical;正确性测试=分片 vs 整体同分;`total_len`/`local_df` 暴露为 4b pass-1 API。Phase A 发现:query-time 两趟聚合(只需 query token 的 df)严格优于周期快照,无陈旧窗口——见 RFC §1
 - [x] **步骤 4b-embedded 两趟全局 BM25** — `eea588af`+`5f735114`;`idx_match` 趟1 `text_corpus_stats` 聚合全局统计、趟2 `matches_scored`;shard-invariance 测试(ranked(1)==ranked(8) 排序+分数)CI 确认;串行单锁无死锁。教训:测试断言曾误设 d:6 top,实际 BM25 长度归一化下 d:1(短+密) top,CI 纠正
 - [x] **步骤 4b-server 分布式两轮聚合** — 复用 GROUPS→AGG.FETCH 的 stateless `ExtensionReduced::Continue` 两阶段机制:pass1 `op_match` 报 stats chunk `[ST_OK][n_docs][total_len][ntok][(tok,df)*]`→`reduce_match_stats` 聚合全局 `CorpusStats`→`Continue(MATCH.SCORE argv)`;pass2 内部 verb `MATCH.SCORE`→`op_match_score` 注入全局 `matches_scored`→`reduce_match_score` 合并(与 KNN 共用 `merge_ranked`)。新增 server shard-invariance 测试(`text_global_bm25.rs`:1-shard==8-shard 排序+分数)。**本地环境瘫痪未能运行时验证(见 memory),靠 CI 裁判**。type alias 消 clippy type_complexity。perf(两轮延迟)仍需 lx64
-- [ ] **⭐ 下一项:步骤 4b perf 定夺** — 两趟 query-time vs 周期快照的延迟对比,lx64 textgate;whichever wins 更新 scope-decisions 决定 2 + docs 陈旧窗口表述(注:两趟 = 每 MATCH 多一轮 fan-out,perf 影响需实测)
+- [x] **步骤 4b perf 定夺 — 两趟胜,代价 0.06ms**(2026-07-23)。A/B:两趟(线上)MATCH p95 28.19ms vs 单趟(4b 前行为的实验构建)28.13ms,worst-conn 两趟反更好 → **多一轮 fan-out 在噪声内**(pass 1 只搬被查询词的 `(token, df)`)。scope-decisions **决定 2 已推翻**:其"全局统计 ⇒ 写路径协调"的前提不成立——读时两趟既无协调也无陈旧窗口。`docs/text-search.md` 三处过期表述已更正(此前仍写着 "Scores are shard-local" 与 "filters/facets/highlighting 尚未构建")
 - **步骤 5 位置索引** → phrase / proximity / HIGHLIGHT(施工分子步,每子步 CI-可验;positions 内存公式 lx64/textgate 在步内验)
   - [x] **5a kevy-text 存储 stone 核心** — positions 物理旁路(`Option<Positions>`,token→id→delta+varint blob),`None` 时 BM25 热路径 byte-identical;`with_positions()`/`has_positions()`;`apply_fields` 记录/撤回;`phrase_matches(phrase,limit,stats)` = 候选交集→shift-intersect 邻接验证→BM25 打分(单 token 退化为 term query,无 positions 返空非静默 OR);读/查询路径拆 `segment_query.rs` 守 500 LOC(`corpus_stats`/`select_top` 提 pub(crate) 供 phrase 复用);approx_bytes 仅在 positions 存在时加旁路项、默认公式不变。CI:邻接/顺序、off-path 空、positions-on 排序 byte-identical、更新撤回、重复 token、注入统计打分(clippy+全 workspace clippy lx64 绿)
   - [x] **5b catalog sidecar v3** — `IndexSpec.with_positions: bool`(仅 Text,`create` 守卫非 Text 报错);sidecar v3 复用"第 7 列 kind-interpreted"惯例写 `pos`(Text 与 Ann/Agg 互斥);version `bool v2`→`u8`(v1/v2/v3),v1/v2 永久可读;测试:v2-still-loads 回归 + positions 往返(pos 列存在性/plain 6 列/往返 flag)。kevy-index 27 测试 + 全 workspace clippy 绿(9 处 IndexSpec 字面量补字段)
@@ -393,8 +393,7 @@ D2 事务标记(全有全无,与事务大小无关)/ R2 事务内集合读。
     - **FACET**:在截断**之前**计数(LIMIT-1 也报全部桶);`FILTER` 减计数、**`DISTINCT` 不减**;按身份求和、按语料里真实出现过的标签上报;回复**追加一个末元素**,无 FACET 时逐字节不变
     - **NOT_YET 表清空** —— v4 冻结的终端查询面全部可执行;保留机制本身(新加子句仍会具名报错而非静默忽略)
   - [x] **8.h textgate ORDER 模式** — 纯 MATCH 26.82ms / FILTER 46.17ms / **SORT·DISTINCT 55.92ms**(<400 provisional)。约为剪枝路径两倍,是"按分数以外的东西选择就必须看每个候选"的诚实形状;此前只在 commit 里声明过代价,现在有数
-- [ ] textgate 在步骤 4/5 内重录基线 → **5f 已做(POSITIONS 模式,ratio 0.75)**
-- [ ] textgate 在步骤 4/5 内重录基线(改内存公式的步骤内做,不事后补)
+- [x] textgate 在步骤 4/5 内重录基线 — 5f 已做(POSITIONS 模式 ratio 0.75);此后每个改内存公式的步骤都在步内重录:7.c FIELDS 0.75、8.d VALUES 0.59(同日 baseline 对照)
 
 ### t5 — 总线收尾(渠道除外)
 - [ ] lx64 post-fix arena 复测(悬案)→ README 基准表解冻

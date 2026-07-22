@@ -109,27 +109,48 @@ b=0.75, non-negative idf variant). Documents matching more (and
 rarer) query terms rank higher; term frequency saturates; long
 documents are normalized down.
 
-Two declared approximations:
+**Scores are global, not per shard.** `df`, `n_docs` and `avgdl` are
+the whole corpus's, gathered at query time: pass 1 asks each shard for
+its counts of the query's own terms, the origin sums them, pass 2 scores
+every shard against that total. So a query returns the same ranking AND
+the same scores on one shard as on eight — there is a test that asserts
+exactly that, and it runs in CI.
 
-- **Scores are shard-local.** df/avgdl come from each shard's own
-  corpus (global statistics would require cross-shard write
-  coordination). With hash-sharded keys the statistics converge
-  across shards and the merged ranking is stable; scores from
-  different shards are comparable, not identical to a single-corpus
-  run.
+Query time, not a periodic snapshot: nothing is cached, so there is no
+staleness window to document, and nothing is coordinated on the write
+path. The second round costs 0.06 ms of a 28 ms p95 over a million
+documents (measured — [PERF-LEDGER.md](../bench/PERF-LEDGER.md)),
+because pass 1 moves only `(term, df)` pairs for the terms actually
+queried.
+
+One declared approximation remains:
+
 - **No cursor.** BM25 deep pagination is an anti-pattern (page N
-  requires re-scoring everything above it); `LIMIT` caps at 1000.
+  requires re-scoring everything above it); `LIMIT` caps at 1000, and
+  `OFFSET` pages within that cap.
 
-Phrase queries, boolean syntax, filters, facets and highlighting are
-**reserved and not built yet**. The `MATCH` surface accepts their
-keywords — `IN`, `FILTER`, `FACET`, `SORT`, `DISTINCT`, `HIGHLIGHT`,
-`TYPO`, `OFFSET` — and returns an error naming the clause, so the
-syntax is frozen before the capabilities land and nothing that works
-today has to change shape when they do.
+Every clause of that surface now executes:
+
+| clause | what it does |
+|---|---|
+| `IN <field…>` | score within those fields only — a field-scoped BM25 (own frequencies, own lengths), not a filter over whole-document scores |
+| `FILTER <field> RANGE\|EQ …` | a non-scoring predicate over a stored value; applied before the top-K, so a qualifying document ranked 40th still reaches a `LIMIT 10` page |
+| `SORT <field> ASC\|DESC` | select by a stored value instead of by score; documents with no value sort last in both directions |
+| `DISTINCT <field>` | at most one hit per value, the best of its group, collapsed during selection so the page still holds `LIMIT` rows |
+| `FACET <field…>` | value counts over the **whole** match set, not the page; `FILTER` narrows them, `DISTINCT` does not |
+| `HIGHLIGHT [field…]` | byte spans of the matched terms, per field |
+| `TYPO 0\|1\|2` | edit-distance tolerance on bare terms (phrases and prefixes stay exact) |
+| `LIMIT n` / `OFFSET m` / `FIELDS f…` | page size, page offset, hydration |
+
+`"quoted phrases"` and `word*` prefixes go in the `MATCH` text itself.
+`FILTER`, `SORT`, `DISTINCT` and `FACET` read fields the index stored at
+`VALUES` declaration time; naming a field it did not store is an error
+that names the fields it did.
 
 An accepted-but-ignored clause would be worse than an error: a dropped
 `FILTER` returns unfiltered rows, which is a wrong answer wearing a
-successful reply.
+successful reply. That is why the keywords were frozen — and rejected by
+name — before any of them worked.
 
 (This reverses an earlier boundary. Previous versions of this page said
 phrase and boolean queries were deliberately out of scope — "if you need
@@ -164,8 +185,9 @@ Same envelope as every index kind ([indexes.md](indexes.md)):
   tombstone drift.
 - A row whose declared field is missing simply contributes no
   tokens; there is no coercion failure for `TYPE str` text fields.
-- Cross-shard queries merge per-shard top-K without a global
-  snapshot (SCAN-class, same as `DBSIZE`).
+- Cross-shard queries gather their corpus statistics per query rather
+  than from a snapshot, so the ranking is global without anything being
+  cached or coordinated on the write path.
 - **Server backfill is asynchronous**: after `IDX.CREATE` on a live
   keyspace, or after a restart, queries answer `-INDEXBUILDING`
   until the rebuild completes (data availability never waits for
