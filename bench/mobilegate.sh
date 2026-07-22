@@ -55,8 +55,17 @@ case "$framework" in
         # vendored sim slice is arm64, and a fat Release build finds no
         # matching slice (CocoaPods then copies NOTHING and the Swift shell
         # fails with "no such module 'Kevy'").
+        # `pod install` runs EVERY time, not just when the workspace is
+        # missing. CocoaPods copies the generated nitro headers into the
+        # pod's public header dir at install time, so a header that appears
+        # after the last install is simply absent from the build — which
+        # surfaces as `'KevyOpenStats.hpp' file not found` deep inside a
+        # Swift module error, not as anything resembling "your pods are
+        # stale" (observed 2026-07-22). Same reasoning as the vendorgate
+        # check above: a gate that builds against a stale input is testing
+        # yesterday's code and reporting on today's.
         ios_cmd='sim=$(ios_sim_id); \
-          [ -d ios/HelloWorld.xcworkspace ] || ( cd ios && pod install ); \
+          ( cd ios && pod install ); \
           xcodebuild -workspace ios/HelloWorld.xcworkspace -scheme HelloWorld \
             -configuration Release -sdk iphonesimulator \
             -destination "id=$sim" ONLY_ACTIVE_ARCH=YES ARCHS=arm64 EXCLUDED_ARCHS=x86_64 \
@@ -95,7 +104,7 @@ case "$framework" in
         appdir="$HERE/bindings/expo/barern-example"
         [ -d "$appdir/node_modules" ] || ( cd "$appdir" && npm install --no-audit --no-fund )
         ios_cmd='sim=$(ios_sim_id); \
-          [ -d ios/BareKevy.xcworkspace ] || ( cd ios && pod install ); \
+          ( cd ios && pod install ); \
           xcodebuild -workspace ios/BareKevy.xcworkspace -scheme BareKevy \
             -configuration Release -sdk iphonesimulator -derivedDataPath ios/build \
             -destination "id=$sim" ONLY_ACTIVE_ARCH=YES ARCHS=arm64 EXCLUDED_ARCHS=x86_64 \
