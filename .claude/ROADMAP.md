@@ -288,8 +288,8 @@ client 生态 —— 该策略 t2 里 gate 化。
 - [ ] ffigate 升级:六门断言对齐一张契约表(cmd 面 / error-as-data / pubsub / durability / 标量快路)
 
 ### t2 — client 面:兼容矩阵 gate 化(RFC 已内含推荐,自研与否留拍板)
-- [ ] clientgate:主流 redis client 连 kevy server 的兼容矩阵进 CI —— node-redis / ioredis / go-redis / StackExchange.Redis / hiredis / redis-py × (基本 KV + 扩展面 raw 通道 IDX./VIEW./FEED.);async 由各生态 client 自带覆盖
-- [ ] docs:「bring your redis client」页(六语言连接示例)+ Rust 自家双 client 挂链
+- [x] clientgate:主流 redis client 连 kevy server 的兼容矩阵进 CI —— node-redis / ioredis / go-redis / StackExchange.Redis / hiredis / redis-py × (基本 KV + 扩展面 raw 通道 IDX./VIEW./FEED.);async 由各生态 client 自带覆盖 —— `bench/clientgate.sh` + `bench/clientgate/`(六个 client 各一份),CI job `clientgate (six redis clients, one kevy server)` 每次推送跑,run 29955415164 绿
+- [x] docs:「bring your redis client」页(六语言连接示例)+ Rust 自家双 client 挂链 —— `docs/clients.md`
 - [ ] 拍板项:是否自研 per 语言 typed client(暴露 IDX./FEED. typed 面)—— 推荐不做,RESP 兼容即生态;要做则另立 train
 
 ### t3 — 移动做实:RN(expo + bare)+ Flutter(工具链本机已备:Xcode/模拟器/NDK;Flutter SDK 待装)
