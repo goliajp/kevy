@@ -94,9 +94,15 @@ impl Positions {
     ///
     /// The decoding form below allocates a `Vec` per call, which a phrase
     /// check makes once per candidate document per token — on a phrase of
-    /// two head terms that is two allocations per document in the corpus,
-    /// and a profile of that query spends 87% of its time in the
-    /// allocator. Handing back the bytes lets a caller walk them in place.
+    /// two head terms that is two allocations per document in the corpus.
+    /// Handing back the bytes lets a caller walk them in place, worth a
+    /// measured 6.2% of phrase p95.
+    ///
+    /// An earlier version of this comment blamed a profile showing 87% of
+    /// query time in the allocator. That profile was of the shard's
+    /// teardown, not its queries — see bench/profile-textgate.sh. The
+    /// allocations described here are real and removing them helped; the
+    /// 87% was measuring something else entirely.
     pub(crate) fn blob(&self, token: &[u8], id: u32) -> Option<&[u8]> {
         self.map.get(token)?.get(id)
     }

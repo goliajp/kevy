@@ -394,11 +394,14 @@ fn distinct_tokens(toks: &[Vec<u8>]) -> Vec<Vec<u8>> {
 /// least once — the same question [`phrase_starts`] answers, without
 /// building any of the answer.
 ///
-/// Allocation-free on purpose. A profile of a two-head-term phrase over
-/// a million documents spends 87% of its self time in the allocator, and
-/// this is where those allocations were: `Positions::get` decodes a blob
-/// into a fresh `Vec` once per candidate document per token. Walking the
-/// bytes in place removes both.
+/// Allocation-free on purpose: `Positions::get` decodes a blob into a
+/// fresh `Vec` once per candidate document per token, and walking the
+/// bytes in place removes that. Worth a measured 6.2% of phrase p95.
+///
+/// The claim this comment used to make — that a profile put 87% of query
+/// time in the allocator — was wrong. That profile had caught the shard
+/// tearing down, where freeing a million positional blobs does dominate.
+/// The real query profile puts the whole phrase check at a few percent.
 ///
 /// Re-walking a later token's blob per candidate start looks quadratic
 /// and is not, in the shape that matters: a blob holds ONE document's
