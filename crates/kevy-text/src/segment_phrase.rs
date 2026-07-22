@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::segment_scope::Scope;
 use super::{CorpusStats, QueryOpts, TextMatch, TextSegment};
-use crate::positions::Positions;
+use crate::positions::{Positions, walk};
 use crate::token::{tokenize, tokenize_spans};
 
 impl TextSegment {
@@ -313,10 +313,12 @@ impl TextSegment {
     /// contains it *inside* one of the wanted fields rather than
     /// somewhere else in the document.
     fn phrase_hit(&self, pos: &Positions, toks: &[Vec<u8>], id: u32, sc: &Scope) -> bool {
-        let starts = phrase_starts(pos, toks, id);
+        // Unscoped only needs "does it occur", which is answerable without
+        // materialising where.
         if !sc.scoped() {
-            return !starts.is_empty();
+            return phrase_occurs(pos, toks, id);
         }
+        let starts = phrase_starts(pos, toks, id);
         let len = toks.len() as u32;
         starts.iter().any(|&s| self.phrase_in_scope(id, s, len, sc.want))
     }
@@ -386,6 +388,31 @@ fn distinct_tokens(toks: &[Vec<u8>]) -> Vec<Vec<u8>> {
     d.sort();
     d.dedup();
     d
+}
+
+/// Whether `id`'s positions place `toks` consecutively and in order at
+/// least once — the same question [`phrase_starts`] answers, without
+/// building any of the answer.
+///
+/// Allocation-free on purpose. A profile of a two-head-term phrase over
+/// a million documents spends 87% of its self time in the allocator, and
+/// this is where those allocations were: `Positions::get` decodes a blob
+/// into a fresh `Vec` once per candidate document per token. Walking the
+/// bytes in place removes both.
+///
+/// Re-walking a later token's blob per candidate start looks quadratic
+/// and is not, in the shape that matters: a blob holds ONE document's
+/// occurrences of ONE token, which is almost always one or two. The scan
+/// short-circuits on the first occurrence found.
+fn phrase_occurs(pos: &Positions, toks: &[Vec<u8>], id: u32) -> bool {
+    let Some(first) = pos.blob(&toks[0], id) else {
+        return false;
+    };
+    walk(first).any(|start| {
+        toks.iter().enumerate().skip(1).all(|(i, t)| {
+            pos.blob(t, id).is_some_and(|b| walk(b).any(|p| p == start + i as u32))
+        })
+    })
 }
 
 /// Where in `id`'s token stream `toks` occur consecutively and in order.

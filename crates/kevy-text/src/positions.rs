@@ -28,6 +28,27 @@ fn encode(offsets: &[u32]) -> Vec<u8> {
     out
 }
 
+/// Walk a delta+varint blob's ascending offsets without building a
+/// `Vec` — the allocation-free twin of [`decode`], for the hot phrase
+/// check.
+pub(crate) fn walk(blob: &[u8]) -> impl Iterator<Item = u32> + '_ {
+    let mut acc = 0u32;
+    let mut cur = 0u32;
+    let mut shift = 0u32;
+    blob.iter().filter_map(move |&b| {
+        cur |= u32::from(b & 0x7f) << shift;
+        if b & 0x80 == 0 {
+            acc += cur;
+            cur = 0;
+            shift = 0;
+            Some(acc)
+        } else {
+            shift += 7;
+            None
+        }
+    })
+}
+
 /// Decode a delta+varint blob back to ascending offsets.
 fn decode(blob: &[u8]) -> Vec<u32> {
     let mut acc = 0u32;
@@ -67,6 +88,17 @@ impl Positions {
         {
             self.map.remove(token);
         }
+    }
+
+    /// `id`'s raw position blob for `token`, undecoded.
+    ///
+    /// The decoding form below allocates a `Vec` per call, which a phrase
+    /// check makes once per candidate document per token — on a phrase of
+    /// two head terms that is two allocations per document in the corpus,
+    /// and a profile of that query spends 87% of its time in the
+    /// allocator. Handing back the bytes lets a caller walk them in place.
+    pub(crate) fn blob(&self, token: &[u8], id: u32) -> Option<&[u8]> {
+        self.map.get(token)?.get(id)
     }
 
     /// `id`'s decoded ascending offsets for `token`, or `None` when the
