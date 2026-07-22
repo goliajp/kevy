@@ -10,6 +10,9 @@ fuzz/coverage/
 dump-*.rdb
 aof-*.aof
 shards.meta
+feed-*.gen
+feed-*.meta
+index-catalog.meta
 .premigration/
 
 # Claude Code workspace — kept entirely local, not part of the public repo.
