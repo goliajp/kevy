@@ -125,6 +125,24 @@ fn patience() -> std::time::Duration {
 /// A bound port is not a served port: the runtime binds (which
 /// `wait_port` sees) a moment before its accept loop serves, and under
 /// instrumentation that moment is long.
+/// Connect if it can, within a short budget, and say so if it cannot.
+///
+/// Diagnostics use this rather than [`connect_retry`]: a diagnostic that
+/// panics REPLACES the failure it was there to explain. This test used to
+/// report "replica (diagnostic) never became ready" whenever the replica
+/// fell behind — naming the wrong thing entirely, and sending two rounds
+/// of budget-raising after a startup problem that was never the problem.
+fn try_connect(port: u16) -> Option<std::net::TcpStream> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if let Ok(s) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+            return Some(s);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    None
+}
+
 fn connect_retry(port: u16, what: &str) -> std::net::TcpStream {
     let budget = patience();
     let deadline = std::time::Instant::now() + budget;
@@ -1464,17 +1482,28 @@ fn spop_storm_keeps_replica_sets_identical() {
         // `DBSIZE = *1` -- an array header, which DBSIZE cannot return --
         // so the one line that was supposed to explain the failure was
         // itself desynced and said nothing.
-        let mut fresh = connect_retry(replica.port, "replica (diagnostic)");
-        send_resp(&mut fresh, &[b"DBSIZE"]);
-        let dbsize = read_line(&mut fresh);
-        send_resp(&mut fresh, &[b"GET", b"spop-fence"]);
-        let fence = read_line(&mut fresh);
+        let detail = match try_connect(replica.port) {
+            Some(mut fresh) => {
+                send_resp(&mut fresh, &[b"DBSIZE"]);
+                let dbsize = read_line(&mut fresh);
+                send_resp(&mut fresh, &[b"GET", b"spop-fence"]);
+                let fence = read_line(&mut fresh);
+                format!(
+                    "replica DBSIZE = {}\n\
+                     replica GET spop-fence = {}",
+                    String::from_utf8_lossy(&dbsize).trim_end(),
+                    String::from_utf8_lossy(&fence).trim_end(),
+                )
+            }
+            // Still a real answer about the replica, and a different one:
+            // it is not merely behind, it is not accepting.
+            None => format!(
+                "replica is not accepting connections on port {} either",
+                replica.port
+            ),
+        };
         panic!(
-            "replica never caught up to the post-storm fence within {budget:?}\n\
-             replica DBSIZE = {}\n\
-             replica GET spop-fence = {}",
-            String::from_utf8_lossy(&dbsize).trim_end(),
-            String::from_utf8_lossy(&fence).trim_end(),
+            "replica never caught up to the post-storm fence within {budget:?}\n{detail}"
         );
     }
 
