@@ -19,6 +19,7 @@
 #        POSITIONS=1 bash bench/textgate.sh <kevy-binary>  # phrase / positions
 #        FIELDS=1    bash bench/textgate.sh <kevy-binary>  # multi-field / IN
 #        VALUES=1    bash bench/textgate.sh <kevy-binary>  # stored values / FILTER
+#        ORDER=1     bash bench/textgate.sh <kevy-binary>  # SORT / DISTINCT
 set -u
 BIN=${1:?usage: textgate.sh <kevy-binary>}
 PORT=7052
@@ -32,7 +33,7 @@ env KEVY_BIND=127.0.0.1 $PIN "$BIN" --threads 8 --port $PORT --dir "$DIR" --no-a
 SRV=$!
 sleep 1.2
 
-$CLIENT_PIN python3 - "$PORT" "$SRV" "${POSITIONS:-0}" "${PREFIX:-0}" "${FIELDS:-0}" "${VALUES:-0}" <<'PYEOF'
+$CLIENT_PIN python3 - "$PORT" "$SRV" "${POSITIONS:-0}" "${PREFIX:-0}" "${FIELDS:-0}" "${VALUES:-0}" "${ORDER:-0}" <<'PYEOF'
 import socket, sys, time
 
 port = int(sys.argv[1])
@@ -46,11 +47,16 @@ srv_pid = int(sys.argv[2])
 # — the per-field channel's memory term and the scoped walk's latency
 # (step 7). VALUES=1 stores a price per document and runs `FILTER price
 # RANGE …` — the stored column's memory term and the filtered walk's
-# latency (step 8). The default is the pre-positions gate, byte-unchanged.
+# latency (step 8). ORDER=1 reuses that corpus for `SORT price ASC` and
+# `DISTINCT price`: both select by a stored value rather than by score, so
+# neither can use the impact buckets' ordering, and the cost of that is
+# measured rather than assumed. The default is the pre-positions gate,
+# byte-unchanged.
 with_pos = len(sys.argv) > 3 and sys.argv[3] == "1"
 with_prefix = len(sys.argv) > 4 and sys.argv[4] == "1"
 with_fields = len(sys.argv) > 5 and sys.argv[5] == "1"
 with_values = len(sys.argv) > 6 and sys.argv[6] == "1"
+with_order = len(sys.argv) > 7 and sys.argv[7] == "1"
 
 def connect():
     s = socket.create_connection(("127.0.0.1", port))
@@ -136,7 +142,7 @@ for i in range(N):
         # the one that makes a field-scoped length normalisation differ
         # from a whole-document one.
         batch.append(enc("HSET", f"a:{i}", "title", f"{pick()} doc{i}", "body", body))
-    elif with_values:
+    elif with_values or with_order:
         # A price per document, so the stored column has a full corpus in
         # it and a filter has a spread to select from.
         batch.append(enc("HSET", f"a:{i}", "body", body, "price", str(i % 1000)))
@@ -157,7 +163,7 @@ rss_before = rss_kb()
 if with_fields:
     create_args = ["IDX.CREATE", "a_body", "ON", "PREFIX", "a:", "FIELDS", "title", "body",
                    "TYPE", "str", "KIND", "text"]
-elif with_values:
+elif with_values or with_order:
     create_args = ["IDX.CREATE", "a_body", "ON", "PREFIX", "a:", "FIELD", "body",
                    "TYPE", "str", "KIND", "text", "VALUES", "price", "TYPES", "i64"]
 else:
@@ -189,7 +195,12 @@ print(f"textgate: text index built in {time.time()-t0:.1f}s")
 # are not a tight SLA. A dedicated bench box — the perfgate discipline —
 # would set both lower; until then they are regression guards, not
 # promises. Measured here: term ~27ms, phrase ~102ms.
-if with_values:
+if with_order:
+    # SORT and DISTINCT both walk every candidate: the impact buckets are
+    # ordered by score, which is not what either selects by.
+    queries = [("w0 w1",), ("w512",), ("w3 w800",), ("w9000",), ("w0 w9000",)]
+    p95_limit = 400.0
+elif with_values:
     # A filtered query gives up MaxScore pruning by design (the buckets
     # are ordered by an unfiltered score), so it walks every candidate.
     # That is the cost being measured, and it carries its own threshold.
@@ -228,6 +239,9 @@ for _ in range(6):
             # Half the corpus qualifies: selective enough to exercise the
             # predicate, broad enough that the page still fills.
             args += ["FILTER", "price", "RANGE", "0", "499"]
+        if with_order:
+            # Alternate the two clauses so one run covers both walks.
+            args += ["SORT", "price", "ASC"] if i % 2 == 0 else ["DISTINCT", "price"]
         if with_fields:
             # Scoped to the title: the per-field walk, which has no
             # MaxScore pruning, so it carries its own threshold.
@@ -242,7 +256,9 @@ for _ in range(6):
     c.close()
 p95s.sort()
 kind = "phrase" if with_pos else (
-    "scoped MATCH" if with_fields else ("filtered MATCH" if with_values else "MATCH")
+    "scoped MATCH"
+    if with_fields
+    else ("ordered MATCH" if with_order else ("filtered MATCH" if with_values else "MATCH"))
 )
 print(f"textgate: {kind} p95 per-conn median={p95s[3]:.2f}ms worst={p95s[5]:.2f}ms")
 if p95s[3] >= p95_limit:
