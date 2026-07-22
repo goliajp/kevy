@@ -26,6 +26,7 @@ node_modules/
 package.json
 package-lock.json
 yarn.lock
+bun.lock
 # …but the packages we SHIP are real: their manifests are exempt
 # (bindings/expo/package.json was silently swallowed by the rule
 # above once — the npm package landed on origin with no manifest).
