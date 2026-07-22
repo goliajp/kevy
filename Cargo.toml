@@ -140,6 +140,18 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
+# Release codegen, but readable under a profiler. `strip = true` above is
+# right for what ships and wrong for what you measure: a perf record of the
+# release binary resolves nothing but libc, so every frame of our own code
+# comes back a bare address. Three phrase-query profiles were spent finding
+# that out. Same opt-level/lto/codegen-units as release — the thing being
+# measured has to be the thing that ships — plus the symbols to attribute it.
+# Build with `cargo build --profile profiling`.
+[profile.profiling]
+inherits = "release"
+strip = false
+debug = 1
+
 # Size-optimized profile: opt-level "z" + same hardening. Used to measure
 # the size/perf trade-off of opt-level "z" vs the default release profile.
 # Invoke with `cargo build --profile release-min`.
