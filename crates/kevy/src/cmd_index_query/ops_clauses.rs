@@ -116,6 +116,21 @@ fn filter_preds(
 ///
 /// Errors when the field is not stored, naming what is — the same
 /// contract `IN` and `FILTER` keep.
+/// Resolve a `DISTINCT <field>` clause to the stored-value position and
+/// that field's declared type. Errors when the field is not stored,
+/// naming what is.
+pub(super) fn distinct_field(
+    spec: &kevy_index::IndexSpec,
+    distinct: &Option<Vec<u8>>,
+) -> Result<Option<(usize, kevy_index::ValType)>, Vec<u8>> {
+    let Some(field) = distinct else { return Ok(None) };
+    let Some(pos) = spec.values.iter().position(|v| v.name == *field) else {
+        let stored: Vec<&[u8]> = spec.values.iter().map(|v| v.name.as_slice()).collect();
+        return Err(clause_error("DISTINCT", field, "store", &stored));
+    };
+    Ok(Some((pos, spec.values[pos].ty)))
+}
+
 pub(super) fn sort_field(
     spec: &kevy_index::IndexSpec,
     sort: &Option<(Vec<u8>, bool)>,

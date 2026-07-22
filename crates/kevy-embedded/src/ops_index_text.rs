@@ -85,7 +85,14 @@ impl Store {
                 found = true;
                 n_docs += ts.stats().docs as f64;
                 total_len += ts.total_len_in(scope);
-                let opts = kevy_text::QueryOpts { stats: None, typo, fields: scope, filter: &[], sort: None };
+                let opts = kevy_text::QueryOpts {
+                    stats: None,
+                    typo,
+                    fields: scope,
+                    filter: &[],
+                    sort: None,
+                    distinct: None,
+                };
                 for (t, d) in ts.query_df_in(text, opts) {
                     *df.entry(t).or_insert(0) += d;
                 }

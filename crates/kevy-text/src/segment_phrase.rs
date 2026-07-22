@@ -48,7 +48,7 @@ impl TextSegment {
         let sc = Scope { stats, n_docs, avgdl, want: &[] };
         let mut scores: HashMap<u32, f64> = HashMap::new();
         self.add_phrase(&toks, &mut scores, &sc);
-        self.select_top(&scores, limit, &[], None)
+        self.select_top(&scores, limit, &[], None, None)
     }
 
     /// BM25-ranked matches for a query `text` that may mix bare terms and
@@ -116,8 +116,10 @@ impl TextSegment {
             && want.is_empty()
             && opts.filter.is_empty()
             && opts.sort.is_none()
+            && opts.distinct.is_none()
         {
-            // No phrase, prefix, typo, field, filter or sort clause — the
+            // No phrase, prefix, typo, field, filter, sort or distinct
+            // clause — the
             // ordinary pruned term query.
             return self.matches_scored(text, limit, opts.stats);
         }
@@ -134,7 +136,7 @@ impl TextSegment {
             return Vec::new();
         }
         let scores = self.accumulate_clauses(bare, &phrases, &prefixes, &want, &opts);
-        self.select_top(&scores, limit, opts.filter, opts.sort)
+        self.select_top(&scores, limit, opts.filter, opts.sort, opts.distinct)
     }
 
     /// Every clause's BM25 contribution, accumulated over the whole
@@ -190,7 +192,7 @@ impl TextSegment {
         let sc = Scope { stats, n_docs, avgdl, want: &[] };
         let mut scores: HashMap<u32, f64> = HashMap::new();
         self.add_prefix(&pfx, &mut scores, &sc);
-        self.select_top(&scores, limit, &[], None)
+        self.select_top(&scores, limit, &[], None, None)
     }
 
     /// The terms whose document frequency a cross-shard query aggregates

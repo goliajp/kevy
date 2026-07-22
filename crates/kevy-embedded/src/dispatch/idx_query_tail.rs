@@ -28,6 +28,9 @@ pub(super) struct Tail {
     /// score.
     #[cfg(feature = "text")]
     pub(super) sort: Option<(Vec<u8>, bool)>,
+    /// `DISTINCT <field>`: at most one hit per value of a stored field.
+    #[cfg(feature = "text")]
+    pub(super) distinct: Option<Vec<u8>>,
 }
 
 /// One parsed `FILTER <field> RANGE <min> <max>` / `EQ <v>`.
@@ -67,10 +70,48 @@ fn is_tail_keyword(a: &[u8]) -> bool {
         || a.eq_ignore_ascii_case(b"IN")
         || a.eq_ignore_ascii_case(b"FILTER")
         || a.eq_ignore_ascii_case(b"SORT")
+        || a.eq_ignore_ascii_case(b"DISTINCT")
 }
 
 /// One `FILTER <field> RANGE <min> <max>` / `EQ <v>`; several AND, which
 /// is why each appends rather than replaces.
+/// The clauses only a MATCH takes. Split out so the shared tail
+/// dispatcher stays readable as the surface grows.
+fn apply_match_clause(argv: &[Vec<u8>], i: usize, t: &mut Tail) -> Option<usize> {
+    let a = &argv[i];
+    if a.eq_ignore_ascii_case(b"HIGHLIGHT") {
+        let (hs, next) = collect_until_keyword(argv, i + 1);
+        t.highlight = Some(hs);
+        Some(next)
+    } else if a.eq_ignore_ascii_case(b"TYPO") {
+        t.typo = match argv.get(i + 1)?.as_slice() {
+            b"0" => 0,
+            b"1" => 1,
+            b"2" => 2,
+            _ => return None,
+        };
+        Some(i + 2)
+    } else if a.eq_ignore_ascii_case(b"OFFSET") {
+        t.offset = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
+        Some(i + 2)
+    } else if a.eq_ignore_ascii_case(b"DISTINCT") {
+        apply_distinct(argv, i, t)
+    } else if a.eq_ignore_ascii_case(b"SORT") {
+        apply_sort(argv, i, t)
+    } else if a.eq_ignore_ascii_case(b"FILTER") {
+        apply_filter(argv, i, t)
+    } else if a.eq_ignore_ascii_case(b"IN") {
+        let (fs, next) = collect_until_keyword(argv, i + 1);
+        if fs.is_empty() {
+            return None;
+        }
+        t.scope = fs;
+        Some(next)
+    } else {
+        None
+    }
+}
+
 /// `SORT <field> ASC|DESC`.
 #[cfg(feature = "text")]
 fn apply_sort(argv: &[Vec<u8>], i: usize, t: &mut Tail) -> Option<usize> {
@@ -85,6 +126,19 @@ fn apply_sort(argv: &[Vec<u8>], i: usize, t: &mut Tail) -> Option<usize> {
     };
     t.sort = Some((field, desc));
     Some(i + 3)
+}
+
+/// `DISTINCT <field>`.
+#[cfg(feature = "text")]
+fn apply_distinct(argv: &[Vec<u8>], i: usize, t: &mut Tail) -> Option<usize> {
+    t.distinct = Some(argv.get(i + 1)?.clone());
+    Some(i + 2)
+}
+
+/// No MATCH without the text surface, so nothing to collapse.
+#[cfg(not(feature = "text"))]
+fn apply_distinct(_argv: &[Vec<u8>], _i: usize, _t: &mut Tail) -> Option<usize> {
+    None
 }
 
 /// Without the text surface there is no MATCH to order, so `SORT` is a
@@ -148,6 +202,8 @@ pub(super) fn parse_tail(
         filters: Vec::new(),
         #[cfg(feature = "text")]
         sort: None,
+        #[cfg(feature = "text")]
+        distinct: None,
     };
     while i < argv.len() {
         i = apply_tail_clause(argv, i, &mut t, match_clauses)?;
@@ -179,32 +235,8 @@ fn apply_tail_clause(
         }
         t.fields = fs;
         Some(next)
-    } else if match_clauses && a.eq_ignore_ascii_case(b"HIGHLIGHT") {
-        let (hs, next) = collect_until_keyword(argv, i + 1);
-        t.highlight = Some(hs);
-        Some(next)
-    } else if match_clauses && a.eq_ignore_ascii_case(b"TYPO") {
-        t.typo = match argv.get(i + 1)?.as_slice() {
-            b"0" => 0,
-            b"1" => 1,
-            b"2" => 2,
-            _ => return None,
-        };
-        Some(i + 2)
-    } else if match_clauses && a.eq_ignore_ascii_case(b"OFFSET") {
-        t.offset = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
-        Some(i + 2)
-    } else if match_clauses && a.eq_ignore_ascii_case(b"SORT") {
-        apply_sort(argv, i, t)
-    } else if match_clauses && a.eq_ignore_ascii_case(b"FILTER") {
-        apply_filter(argv, i, t)
-    } else if match_clauses && a.eq_ignore_ascii_case(b"IN") {
-        let (fs, next) = collect_until_keyword(argv, i + 1);
-        if fs.is_empty() {
-            return None;
-        }
-        t.scope = fs;
-        Some(next)
+    } else if match_clauses {
+        apply_match_clause(argv, i, t)
     } else {
         None
     }

@@ -1000,3 +1000,69 @@ fn sort_over_the_wire() {
     let s = String::from_utf8_lossy(&bad);
     assert!(s.starts_with("-ERR") && s.contains("price"), "unstored sort field: {s}");
 }
+
+/// `DISTINCT` collapses across the whole fan-out: the page holds one
+/// document per value, each the best of its group, even when the group's
+/// members are spread over different shards.
+#[test]
+fn distinct_over_the_wire() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    // Six documents in three price groups; the leaders are not the three
+    // top scorers, so collapsing a score page after the fact would return
+    // a short page.
+    for (k, reps, price) in [
+        ("a1", 9, "10"), ("a2", 8, "10"),
+        ("b1", 7, "20"), ("b2", 6, "20"),
+        ("c1", 5, "30"), ("c2", 4, "30"),
+    ] {
+        let body = format!("rust {}", "rust ".repeat(reps));
+        cmd(&mut c, &[b"HSET", format!("g:{k}").as_bytes(), b"body", body.as_bytes(),
+                      b"price", price.as_bytes()]);
+    }
+    let r = cmd(
+        &mut c,
+        &[b"IDX.CREATE", b"gf", b"ON", b"PREFIX", b"g:", b"FIELD", b"body",
+          b"TYPE", b"str", b"KIND", b"text", b"VALUES", b"price", b"TYPES", b"i64"],
+    );
+    assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
+
+    // Plain: the top 3 are a1, a2, b1 — two share a price.
+    let plain = query_ready(&mut c, &[b"IDX.QUERY", b"gf", b"MATCH", b"rust", b"LIMIT", b"3"]);
+    let s = String::from_utf8_lossy(&plain);
+    assert!(s.contains("g:a1") && s.contains("g:a2"), "duplicates ride along: {s}");
+
+    // DISTINCT: one per price, each the best of its group, and the page
+    // is still full.
+    let d = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"gf", b"MATCH", b"rust", b"LIMIT", b"3", b"DISTINCT", b"price"],
+    );
+    let s = String::from_utf8_lossy(&d);
+    assert_eq!(s.matches("g:").count(), 3, "the page is filled with distinct rows: {s}");
+    for k in ["g:a1", "g:b1", "g:c1"] {
+        assert!(s.contains(k), "{k} is its group's best: {s}");
+    }
+    for k in ["g:a2", "g:b2", "g:c2"] {
+        assert!(!s.contains(k), "{k} is collapsed away: {s}");
+    }
+
+    // Composes with SORT and FILTER.
+    let both = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"gf", b"MATCH", b"rust", b"LIMIT", b"5",
+          b"DISTINCT", b"price", b"SORT", b"price", b"DESC"],
+    );
+    let s = String::from_utf8_lossy(&both);
+    let c1 = s.find("g:c1").expect("c1 present");
+    let a1 = s.find("g:a1").expect("a1 present");
+    assert!(c1 < a1, "descending by price puts 30 before 10: {s}");
+
+    // An unstored field errors rather than collapsing nothing.
+    let bad = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"gf", b"MATCH", b"rust", b"DISTINCT", b"colour"],
+    );
+    let s = String::from_utf8_lossy(&bad);
+    assert!(s.starts_with("-ERR") && s.contains("price"), "unstored distinct field: {s}");
+}

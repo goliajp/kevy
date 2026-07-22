@@ -946,3 +946,44 @@ fn text_index_sort_embedded() {
         .expect_err("unstored sort field");
     assert!(format!("{e}").contains("price"), "names what it stores: {e}");
 }
+
+
+/// DISTINCT in-process matches the wire: one hit per value, each its
+/// group's best, and the page is still filled.
+#[test]
+fn text_index_distinct_embedded() {
+    use crate::IndexValType;
+    let s = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
+    for (k, reps, price) in [
+        ("a1", 9, "10"), ("a2", 8, "10"),
+        ("b1", 7, "20"), ("b2", 6, "20"),
+        ("c1", 5, "30"), ("c2", 4, "30"),
+    ] {
+        let body = format!("rust {}", "rust ".repeat(reps));
+        s.hset(
+            format!("g:{k}").as_bytes(),
+            &[(b"body" as &[u8], body.as_bytes()), (b"price", price.as_bytes())],
+        )
+        .unwrap();
+    }
+    s.idx_create_text(b"gf", b"g:", &[(b"body", 1.0)], false, &[(b"price", IndexValType::I64)])
+        .unwrap();
+
+    let plain: Vec<Vec<u8>> =
+        s.idx_match(b"gf", b"rust", 3).unwrap().into_iter().map(|h| h.0).collect();
+    assert_eq!(plain, vec![b"g:a1".to_vec(), b"g:a2".to_vec(), b"g:b1".to_vec()]);
+
+    let opts = crate::MatchOpts { distinct: Some(b"price"), ..Default::default() };
+    let d: Vec<Vec<u8>> =
+        s.idx_match_with(b"gf", b"rust", 3, opts).unwrap().into_iter().map(|h| h.0).collect();
+    assert_eq!(
+        d,
+        vec![b"g:a1".to_vec(), b"g:b1".to_vec(), b"g:c1".to_vec()],
+        "one per price, each its group best, page still full"
+    );
+
+    let e = s
+        .idx_match_with(b"gf", b"rust", 3, crate::MatchOpts { distinct: Some(b"colour"), ..Default::default() })
+        .expect_err("unstored distinct field");
+    assert!(format!("{e}").contains("price"), "names what it stores: {e}");
+}

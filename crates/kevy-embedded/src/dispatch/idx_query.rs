@@ -187,6 +187,7 @@ fn text_match(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
             scope: &tail.scope,
             filters: &filters,
             sort: tail.sort.as_ref().map(|(f, d)| (f.as_slice(), *d)),
+            distinct: tail.distinct.as_deref(),
         };
         match s.idx_match_with(name, text, tail.limit, opts) {
             Err(e) => idx_err(out, name, &e),
@@ -315,6 +316,8 @@ fn parse_knn_tail(argv: &[Vec<u8>]) -> Option<(tail::Tail, usize)> {
             filters: Vec::new(),
             #[cfg(feature = "text")]
             sort: None,
+            #[cfg(feature = "text")]
+            distinct: None,
         };
     let mut ef = 0usize;
     let mut i = 4;

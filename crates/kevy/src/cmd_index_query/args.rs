@@ -193,6 +193,8 @@ pub(crate) struct MatchArgs {
     /// `SORT <field> ASC|DESC`: select by a stored value instead of by
     /// score. `None` = rank by score.
     pub(crate) sort: Option<(Vec<u8>, bool)>,
+    /// `DISTINCT <field>`: at most one hit per value of a stored field.
+    pub(crate) distinct: Option<Vec<u8>>,
 }
 
 /// A MATCH clause keyword — the boundary a variadic clause (`FIELDS`,
@@ -206,6 +208,7 @@ fn is_clause_keyword(a: &[u8]) -> bool {
         || a.eq_ignore_ascii_case(b"IN")
         || a.eq_ignore_ascii_case(b"FILTER")
         || a.eq_ignore_ascii_case(b"SORT")
+        || a.eq_ignore_ascii_case(b"DISTINCT")
 }
 
 /// Parse a `TYPO` budget: 0, 1 or 2. `AUTO` (in the frozen surface but
@@ -244,18 +247,11 @@ fn apply_clause(argv: &[Vec<u8>], i: usize, a: &mut MatchArgs) -> Option<usize> 
     } else if kw.eq_ignore_ascii_case(b"OFFSET") {
         a.offset = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
         Some(i + 2)
+    } else if kw.eq_ignore_ascii_case(b"DISTINCT") {
+        a.distinct = Some(argv.get(i + 1)?.clone());
+        Some(i + 2)
     } else if kw.eq_ignore_ascii_case(b"SORT") {
-        let field = argv.get(i + 1)?.clone();
-        let dir = argv.get(i + 2)?;
-        let desc = if dir.eq_ignore_ascii_case(b"DESC") {
-            true
-        } else if dir.eq_ignore_ascii_case(b"ASC") {
-            false
-        } else {
-            return None;
-        };
-        a.sort = Some((field, desc));
-        Some(i + 3)
+        apply_sort(argv, i, a)
     } else if kw.eq_ignore_ascii_case(b"FILTER") {
         apply_filter(argv, i, a)
     } else if kw.eq_ignore_ascii_case(b"IN") {
@@ -286,7 +282,7 @@ fn collect_clause(argv: &[Vec<u8>], start: usize) -> (Vec<Vec<u8>>, usize) {
 /// later. Listed here rather than rejected as unknown so the syntax is
 /// frozen now: every one of these would otherwise want to change the
 /// MATCH signature when it lands, and v4 is the release that freezes it.
-const NOT_YET: &[&[u8]] = &[b"FACET", b"DISTINCT"];
+const NOT_YET: &[&[u8]] = &[b"FACET"];
 
 /// Outcome of parsing a MATCH query.
 pub(crate) enum MatchParse {
@@ -334,6 +330,7 @@ impl MatchArgs {
             scope: Vec::new(),
             filters: Vec::new(),
             sort: None,
+            distinct: None,
         };
         // Clauses are order-independent; each variadic one (FIELDS,
         // HIGHLIGHT) collects up to the next keyword.
@@ -351,7 +348,7 @@ impl MatchArgs {
 #[path = "args_filter.rs"]
 mod filter;
 pub(crate) use filter::{FilterArg, FilterShape};
-use filter::apply_filter;
+use filter::{apply_filter, apply_sort};
 
 #[path = "args_match_score.rs"]
 mod match_score;
