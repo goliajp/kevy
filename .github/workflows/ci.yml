@@ -702,6 +702,13 @@ jobs:
           - { name: csharp,  lang: dotnet, ffi: kevy-ffi }
           - { name: cpp,     lang: cpp,    ffi: kevy-ffi }
           - { name: java,    lang: java,   ffi: "" }
+          # The long-tail doors. Each was verified by hand and then left
+          # with no gate, which is how a door rots without anyone noticing:
+          # nothing here spawns a device, so all four run on this image.
+          - { name: android,  lang: android,  ffi: "" }
+          - { name: electron, lang: electron, ffi: kevy-napi }
+          - { name: expo,     lang: expo,     ffi: "" }
+          - { name: tauri,    lang: tauri,    ffi: "" }
     steps:
       - uses: actions/checkout@v7
 
@@ -767,11 +774,21 @@ jobs:
         # JDK is what makes the Java leg a real gate instead of a silent pass.
         # (cmake + g++ for the C++ leg are already on the ubuntu-latest image,
         # so that door needs no setup step.)
-        if: matrix.lang == 'java'
+        if: matrix.lang == 'java' || matrix.lang == 'android'
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
+
+      - name: Set up Node (electron door)
+        if: matrix.lang == 'electron'
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      - name: Set up Bun (expo door)
+        if: matrix.lang == 'expo'
+        uses: oven-sh/setup-bun@v2
 
       # ── each port's own, known-green conformance command (verbatim) ──────
       - name: Go — go test ./...
@@ -817,3 +834,37 @@ jobs:
       - name: Java — run-tests.sh (kevy-jni + JUnit 5, both backends)
         if: matrix.lang == 'java'
         run: bash bindings/java/run-tests.sh
+
+      # jnigate builds kevy-jni itself, compiles the raw JNI surface and
+      # runs its smoke on the host JVM. Its own header always said CI needs
+      # only a JDK and cargo; it had simply never been wired in, leaving the
+      # Android door's JNI layer ungated everywhere.
+      - name: Android — jnigate (raw JNI door on the JVM)
+        if: matrix.lang == 'android'
+        run: bash bench/jnigate.sh
+
+      # The main-process bridge and preload API against a REAL in-process
+      # engine behind a fake ipcMain — no display, no BrowserWindow, which
+      # is exactly what the bridge's dependency injection exists for.
+      - name: Electron — node --test (headless bridge + preload)
+        if: matrix.lang == 'electron'
+        working-directory: bindings/electron
+        run: node --test test/*.test.js
+
+      # The expo door's TypeScript surface with expo-modules-core mocked, so
+      # it needs no simulator: it locks the one behaviour every door must
+      # agree on, that GET on a non-string key surfaces a typed WRONGTYPE.
+      - name: Expo — bun test (native mocked) + tsc
+        if: matrix.lang == 'expo'
+        working-directory: bindings/expo
+        run: |
+          bun test src/index.test.ts
+          bunx tsc --noEmit -p tsconfig.json
+
+      # Standalone crate on purpose (it depends on `tauri`, which must stay
+      # out of the 0-dependency workspace), so nothing at the repo root ever
+      # built it.
+      - name: Tauri — cargo test (standalone plugin crate)
+        if: matrix.lang == 'tauri'
+        working-directory: bindings/tauri/tauri-plugin-kevy
+        run: cargo test
