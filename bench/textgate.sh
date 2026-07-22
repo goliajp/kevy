@@ -24,11 +24,25 @@ set -u
 BIN=${1:?usage: textgate.sh <kevy-binary>}
 PORT=7052
 DIR=$(mktemp -d /tmp/kevy-textgate-XXXXXX)
+# The rule the repo already has (.claude/rule/hygiene.md): a gate script
+# traps its own cleanup. Without this an interrupted run leaks both the
+# server and $DIR.
+trap 'kill $SRV 2>/dev/null; wait $SRV 2>/dev/null; rm -rf "$DIR"' EXIT INT TERM
 
 PIN=""
 command -v taskset >/dev/null 2>&1 && PIN="taskset -c 0-7"
 CLIENT_PIN=""
 command -v taskset >/dev/null 2>&1 && CLIENT_PIN="taskset -c 8-15"
+# The port is fixed, so back-to-back runs race: the previous server can
+# still hold it when the next one starts, and the new server dies on bind
+# while the client talks to a corpse. Seen as a run that reports no p95 at
+# all. Wait for the port to come free instead of assuming it is.
+for _ in $(seq 1 60); do
+    # A successful connect means someone still holds it; the subshell drops
+    # the descriptor either way.
+    (exec 3<>/dev/tcp/127.0.0.1/$PORT) 2>/dev/null || break
+    sleep 0.5
+done
 env KEVY_BIND=127.0.0.1 $PIN "$BIN" --threads 8 --port $PORT --dir "$DIR" --no-aof >/dev/null 2>&1 &
 SRV=$!
 sleep 1.2
@@ -279,6 +293,6 @@ if not (0.5 <= ratio <= 1.5):
 print("textgate: PASS")
 PYEOF
 RC=$?
-kill $SRV 2>/dev/null
-rm -rf "$DIR"
+# Teardown is the trap's job now, including the `wait` that keeps the next
+# run from racing this server for the port.
 exit $RC
