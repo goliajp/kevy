@@ -83,7 +83,7 @@ impl Store {
             sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
             if let Some((_, ts)) = inner.idx_segs.text.iter().find(|(s, _)| s.name == name) {
                 found = true;
-                n_docs += ts.stats().docs as f64;
+                n_docs += ts.docs() as f64;
                 total_len += ts.total_len_in(scope);
                 let opts = kevy_text::QueryOpts {
                     stats: None,
