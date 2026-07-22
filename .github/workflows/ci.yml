@@ -616,6 +616,12 @@ jobs:
             target
           key: ffigate-${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}
 
+      # Before building anything: every door must still cover every row of
+      # the contract. Source-only, so it fails in seconds rather than after
+      # six toolchains have warmed up.
+      - name: ffigate contract table (6 doors x 5 rows)
+        run: bash bench/ffigate-contract.sh
+
       - name: Build the stone
         run: cargo build -p kevy-ffi
 

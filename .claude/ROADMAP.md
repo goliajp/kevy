@@ -285,7 +285,7 @@ client 生态 —— 该策略 t2 里 gate 化。
 - [ ] NuGet Kevy.Embedded 打包:runtimes/<rid>/native 三平台 cdylib;dotnet pack + 本地 feed 装机 smoke
 - [ ] Go module 发布形态核对(libs/<target>/libkevy_ffi.a 内嵌布局 + go.mod 门面);pkg.go.dev 门面 README
 - [ ] 各包 README(npm / NuGet / SwiftPM / Maven / go)= 装法 + typed 面 + cmd 逃生门 + 版本对齐 4.0.0
-- [ ] ffigate 升级:六门断言对齐一张契约表(cmd 面 / error-as-data / pubsub / durability / 标量快路)
+- [x] ffigate 升级:六门断言对齐一张契约表(cmd 面 / error-as-data / pubsub / durability / 标量快路) —— `bench/ffigate-contract.sh`(6 门 × 5 行 = 30 格,表在脚本里即契约本身),接进 CI 的 ffigate job 最前面(纯源码检查,秒级失败)。**查出两个真缺口并已补**:① C++ 的 `kevy.hpp` 根本没有暴露标量 get/set,C++ 调用方只能掉到 C API —— 已加 RAII 包装(`std::optional<std::string> get` / `set`,miss 是 nullopt 不是错误)并在 smoke.cpp 断言,本机 c++17 实编跑绿;② Bun 门的 `bun.js` 有 `getScalar`/`setScalar` 但测试从没碰过 —— 已补断言(含"标量写入也要能重开后存活"),本机 bun 跑绿。反例验证:破坏任一格 → 只有该格 MISS 且退出 1
 
 ### t2 — client 面:兼容矩阵 gate 化(RFC 已内含推荐,自研与否留拍板)
 - [x] clientgate:主流 redis client 连 kevy server 的兼容矩阵进 CI —— node-redis / ioredis / go-redis / StackExchange.Redis / hiredis / redis-py × (基本 KV + 扩展面 raw 通道 IDX./VIEW./FEED.);async 由各生态 client 自带覆盖 —— `bench/clientgate.sh` + `bench/clientgate/`(六个 client 各一份),CI job `clientgate (six redis clients, one kevy server)` 每次推送跑,run 29955415164 绿
