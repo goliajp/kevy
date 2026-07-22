@@ -913,9 +913,15 @@ jobs:
 
       # `flutter test` drives the real engine through dart:ffi, so this is
       # a behavioural gate and not just an analyze pass.
+      # `flutter test` runs on the HOST, where the package resolves
+      # `libkevy_ffi.so` by bare name through the dynamic loader — so the
+      # freshly built cdylib has to be on the search path. That is what
+      # makes this a behavioural gate rather than an analyze pass.
       - name: Flutter — analyze + test
         if: matrix.lang == 'flutter'
         working-directory: bindings/flutter
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/target/debug
         run: |
           flutter pub get
           flutter analyze
@@ -952,6 +958,16 @@ jobs:
             ~/.cargo/registry
             target
           key: apple-door-${{ hashFiles('Cargo.lock') }}
+
+      # The xcframework KevyKit wraps is a build artifact — the package's
+      # own .gitignore keeps Artifacts/ out of the tree — so a fresh
+      # checkout has the directory's shape and none of its binaries, and
+      # SwiftPM says only "does not contain a binary artifact". Build it
+      # first; vendorgate then has something real to check.
+      - name: Build Kevy.xcframework (the binary target)
+        run: |
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin
+          bash packaging/apple/build-xcframework.sh bindings/apple/KevyKit/Artifacts
 
       - name: vendorgate (the vendored natives match the source)
         run: bash bench/vendorgate.sh
