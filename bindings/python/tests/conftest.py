@@ -20,7 +20,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..")))
 
 import kevy  # noqa: E402
 
-_PRIMARY = "/Users/doracawl/workspace/goliajp/kevy"
 _counter = itertools.count(1)
 
 
@@ -43,8 +42,6 @@ def server_binary() -> str | None:
     candidates += [
         os.path.join(repo, "target", "release", "kevy"),
         os.path.join(repo, "target", "debug", "kevy"),
-        os.path.join(_PRIMARY, "target", "release", "kevy"),
-        os.path.join(_PRIMARY, "target", "debug", "kevy"),
     ]
     for c in candidates:
         if c and os.path.exists(c):
