@@ -40,7 +40,30 @@ command -v flutter >/dev/null 2>&1 || export PATH="/opt/homebrew/bin:$PATH"
 ios_sim_id() {
     xcrun simctl list devices booted -j | grep -o '"udid" : "[^"]*"' | head -1 | sed 's/.*: "//;s/"//'
 }
-android_dev_id() { adb devices | grep -w device | grep -v List | head -1 | cut -f1; }
+# The target device, honouring ANDROID_SERIAL (adb's own variable) when
+# it is set. Without it this takes whatever `adb devices` lists first,
+# which on a machine with a phone plugged in AND an emulator running is a
+# coin toss — and the losing side of that toss installs a gate build onto
+# somebody's actual phone.
+android_dev_id() {
+    if [ -n "${ANDROID_SERIAL:-}" ]; then
+        printf '%s' "$ANDROID_SERIAL"
+        return
+    fi
+    adb devices | grep -w device | grep -v List | head -1 | cut -f1
+}
+
+# The same device, named the way `expo run:android --device` wants it.
+# Flutter's `-d` takes the adb serial; expo takes the DEVICE NAME, and for
+# an emulator that is its AVD name — passing the serial there fails with
+# "Could not find device with name: emulator-5554".
+android_expo_device() {
+    id=$(android_dev_id)
+    case "$id" in
+        emulator-*) adb -s "$id" emu avd name 2>/dev/null | head -1 | tr -d '\r' ;;
+        *) printf '%s' "$id" ;;
+    esac
+}
 
 case "$framework" in
     expo)
@@ -77,7 +100,7 @@ case "$framework" in
           xcrun simctl launch "$sim" com.anonymous.expo-template-blank-typescript'
         # Android keeps the dev build (Metro) but on a dedicated port for the
         # same shared-box reason.
-        android_cmd="npx expo run:android --port 8087"
+        android_cmd="npx expo run:android --port 8087 --device $(android_expo_device)"
         ;;
     flutter)
         appdir="$HERE/bindings/flutter/example"
