@@ -18,6 +18,6 @@ mod token;
 pub use bm25::{BM25_B, BM25_K1};
 pub use segment::sorted_order;
 pub use segment::{
-    CorpusStats, Distinct, Filter, QueryOpts, SegmentShape, Sort, TextMatch, TextSegment, TextStats,
+    Bucket, CorpusStats, Distinct, Facet, FacetedMatches, Filter, QueryOpts, SegmentShape, Sort, TextMatch, TextSegment, TextStats,
 };
 pub use token::{KevyTokenizer, Tokenizer, tokenize, tokenize_spans};
