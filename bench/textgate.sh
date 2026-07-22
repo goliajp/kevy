@@ -246,7 +246,7 @@ elif with_prefix:
     # ordered structure. The doc-marker tokens make this a ~1M-term
     # dictionary — a deliberate stress.
     queries = [("w1*",), ("w50*",), ("w9*",), ("w123*",), ("w7*",)]
-    p95_limit = 160.0
+    p95_limit = 130.0
 elif with_pos:
     queries = [('"w0 w1"',), ('"w2 w300"',), ('"w0 w9000"',),
                ('"w100 w4000"',), ('"w5 w50"',)]
