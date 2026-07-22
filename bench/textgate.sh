@@ -20,6 +20,7 @@
 #        FIELDS=1    bash bench/textgate.sh <kevy-binary>  # multi-field / IN
 #        VALUES=1    bash bench/textgate.sh <kevy-binary>  # stored values / FILTER
 #        ORDER=1     bash bench/textgate.sh <kevy-binary>  # SORT / DISTINCT
+#        TYPO=1      bash bench/textgate.sh <kevy-binary>  # edit-distance expansion
 set -u
 BIN=${1:?usage: textgate.sh <kevy-binary>}
 PORT=7052
@@ -47,7 +48,7 @@ env KEVY_BIND=127.0.0.1 $PIN "$BIN" --threads 8 --port $PORT --dir "$DIR" --no-a
 SRV=$!
 sleep 1.2
 
-$CLIENT_PIN python3 - "$PORT" "$SRV" "${POSITIONS:-0}" "${PREFIX:-0}" "${FIELDS:-0}" "${VALUES:-0}" "${ORDER:-0}" <<'PYEOF'
+$CLIENT_PIN python3 - "$PORT" "$SRV" "${POSITIONS:-0}" "${PREFIX:-0}" "${FIELDS:-0}" "${VALUES:-0}" "${ORDER:-0}" "${TYPO:-0}" <<'PYEOF'
 import socket, sys, time
 
 port = int(sys.argv[1])
@@ -71,6 +72,7 @@ with_prefix = len(sys.argv) > 4 and sys.argv[4] == "1"
 with_fields = len(sys.argv) > 5 and sys.argv[5] == "1"
 with_values = len(sys.argv) > 6 and sys.argv[6] == "1"
 with_order = len(sys.argv) > 7 and sys.argv[7] == "1"
+with_typo = len(sys.argv) > 8 and sys.argv[8] == "1"
 
 def connect():
     s = socket.create_connection(("127.0.0.1", port))
@@ -230,6 +232,14 @@ elif with_fields:
     # buckets are ordered by), so their latency sits above a term query's.
     queries = [("w0 w1",), ("w512",), ("w3 w800",), ("w9000",), ("w0 w9000",)]
     p95_limit = 120.0
+elif with_typo:
+    # TYPO expands each bare term against the dictionary by edit distance,
+    # which is the same O(dictionary) walk a prefix does — with a DP per
+    # surviving candidate instead of a byte compare. Deliberately measured
+    # on the same 1M-term dictionary: this is the most expensive query
+    # shape the engine offers, and it shipped without a ceiling.
+    queries = [("w123",), ("w4567",), ("w89",), ("w2345",), ("w678",)]
+    p95_limit = 2000.0
 elif with_prefix:
     # `word*` prefixes of varying breadth; the scan is O(dictionary)
     # regardless, which is exactly the cost being weighed against an
@@ -260,6 +270,8 @@ for _ in range(6):
         if with_order:
             # Alternate the two clauses so one run covers both walks.
             args += ["SORT", "price", "ASC"] if i % 2 == 0 else ["DISTINCT", "price"]
+        if with_typo:
+            args += ["TYPO", "1"]
         if with_fields:
             # Scoped to the title: the per-field walk, which has no
             # MaxScore pruning, so it carries its own threshold.
@@ -273,11 +285,11 @@ for _ in range(6):
     p95s.append(lat[94] * 1000)
     c.close()
 p95s.sort()
-kind = "phrase" if with_pos else (
+kind = "typo" if with_typo else ("phrase" if with_pos else (
     "scoped MATCH"
     if with_fields
     else ("ordered MATCH" if with_order else ("filtered MATCH" if with_values else "MATCH"))
-)
+))
 print(f"textgate: {kind} p95 per-conn median={p95s[3]:.2f}ms worst={p95s[5]:.2f}ms")
 if p95s[3] >= p95_limit:
     print(f"textgate: FAIL — {kind} median-conn p95 {p95s[3]:.2f}ms >= {p95_limit}ms"); sys.exit(1)
