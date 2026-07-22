@@ -291,7 +291,26 @@ fn blpop_remote_disconnect_then_push_is_clean() {
     assert_eq!(read_reply(&mut producer), b":1\r\n");
     let mut c2 = srv.connect();
     c2.write_all(&req(&[b"BLPOP", b"dc", b"5"])).unwrap();
-    assert_eq!(read_reply(&mut c2), req_pop_reply("dc", "stay"));
+    let got = read_reply(&mut c2);
+    if got != req_pop_reply("dc", "stay") {
+        // Two failures with opposite meanings share this symptom, and the
+        // reply alone cannot tell them apart: the gone waiter consumed the
+        // element and it was lost (the defect escrow closes — see
+        // bench/FINDING-2026-07-19-xshard-block-serve-drop.md), or BLPOP
+        // was simply never served inside its 5s on a starved runner. The
+        // list itself answers it, so ask before failing.
+        let mut probe = srv.connect();
+        probe
+            .write_all(&req(&[b"LRANGE", b"dc", b"0", b"-1"]))
+            .unwrap();
+        let left = read_reply(&mut probe);
+        let verdict = if left.starts_with(b"*0") {
+            "list EMPTY -> the element was consumed and lost: the real defect"
+        } else {
+            "list still holds it -> BLPOP was never served in time: a starved runner, not data loss"
+        };
+        panic!("BLPOP missed the pushed element.\n  reply: {got:?}\n  list: {left:?}\n  {verdict}");
+    }
 }
 
 /// `*2\r\n$<klen>\r\n<key>\r\n$<vlen>\r\n<val>\r\n` — BLPOP's wake reply.
