@@ -100,10 +100,17 @@ bindings give it back. A view-returning binding API (lifetime-managed) is the
 fix — deferred (most callers want owned bytes; it is a niche API + a real
 lifetime-safety surface).
 
-_Status: `kevy_set_many` (FFI) + `SetMany` (kevy-go, Kevy.Embedded) landed +
-tested. The finding — bulk gap is engine-architectural, batching only pays off
-for expensive crossings — makes a Node napi `setMany` an optional confirming
-data point, not ceiling work. The engine gap is the real limiter → RFC._
+_Status: **Attack #1 COMPLETE.** Binding half closed (`kevy_set_many` FFI +
+`SetMany` in kevy-go/Kevy.Embedded, tested). Engine half decomposed to root
+(per-op durable AOF frame — kevy's durability model) and **decided** in
+`.claude/rfcs/2026-07-24-embedded-bulk-write-ceiling.md`: **keep per-op durable
+logging; do not add a deferred-commit batch mode** — trading kevy's
+every-write-recoverable guarantee (the durability-trust arc, the goliajp
+payroll consumer) for LMDB-parity on bulk write throughput is the wrong trade
+for a serving engine. The 2.5–2.7× bulk-write gap is the honest price of per-op
+durability against engines that offer no durability until commit. A considered
+no, not a to-do. Node napi `setMany` = optional confirming data point, not
+ceiling work._
 
 The read-side loss is **binding-shape, not engine**: proven twice — kevy's
 zero-copy C lane beats LMDB at every size (C track), while the copying Go/C#
