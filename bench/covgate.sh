@@ -20,8 +20,10 @@ set -u
 # llvm-cov instrumentation slows server boot by an order of magnitude, so
 # the tests' wait budgets are scaled here rather than raised globally -- a
 # normal build keeps its tight 60s bound and still fails fast on a real
-# hang. See `patience()` in crates/kevy/tests/replication.rs.
-export KEVY_TEST_PATIENCE=3
+# hang. See `patience()` in crates/kevy/tests/replication.rs. Bumped 3→6
+# after spop_storm's replica (a full second runtime, in-process) still
+# starved under the instrumented full-suite load at 180s.
+export KEVY_TEST_PATIENCE=6
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 BASELINE="$HERE/COV-BASELINE.json"
