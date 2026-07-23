@@ -227,6 +227,42 @@ func (d *DB) GetScalar(key []byte) (value []byte, ok bool, err error) {
 	return v, true, nil
 }
 
+// GetView is the zero-copy read: it hands fn a []byte that VIEWS the value's
+// bytes directly (an Arc refcount bump, no copy into Go memory), then releases
+// the view when fn returns. This is the lane that beats a memory-mapped store
+// on large reads — kevy_get_shared is O(1) regardless of value size, where an
+// mmap Get still copies out. ok is false on a miss (fn is not called).
+//
+// The []byte passed to fn is valid ONLY for the duration of fn — it aliases
+// engine memory freed on return. Do NOT retain it or hand it to a goroutine
+// that outlives fn; copy it out (append/GetScalar) if you need to keep it. The
+// scoping mirrors bbolt's `db.View` slice contract.
+func (d *DB) GetView(key []byte, fn func(value []byte)) (ok bool, err error) {
+	if d.p == nil {
+		return false, errors.New("kevy: closed handle")
+	}
+	var pin runtime.Pinner
+	defer pin.Unpin()
+	kp := keyPtr(key, &pin)
+	var out C.KevyBuf
+	rc := C.kevy_get_shared(d.p, kp, C.size_t(len(key)), &out)
+	runtime.KeepAlive(key)
+	if rc < 0 {
+		return false, errors.New("kevy: kevy_get_shared misuse")
+	}
+	if rc == 0 {
+		return false, nil
+	}
+	// View the value in place; free the shared buffer (drops the Arc) after fn.
+	if out.len > 0 {
+		fn(unsafe.Slice((*byte)(unsafe.Pointer(out.ptr)), int(out.len)))
+	} else {
+		fn(nil)
+	}
+	C.kevy_buf_free_shared(out.ptr, out.len, out.cap)
+	return true, nil
+}
+
 // SetScalar is the scalar fast SET (contract §5.2). ttlMs == 0 means no
 // TTL.
 func (d *DB) SetScalar(key, val []byte, ttlMs uint64) error {
