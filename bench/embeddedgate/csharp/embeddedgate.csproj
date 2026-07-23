@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- embeddedgate C# — kevy C# scalar (KevyDb.Get/Set) vs LMDB via
+       LightningDB. Measures LMDB a SECOND time (the C track is LMDB direct):
+       comparing both through .NET bindings isolates the managed-binding tax
+       from the engine. See bench/EMBEDDED-LEDGER.md +
+       .claude/rfcs/2026-07-23-v4-embedded-bench.md. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>embeddedgate</AssemblyName>
+    <RootNamespace>Embeddedgate</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../bindings/csharp/Kevy.Embedded/Kevy.Embedded.csproj" />
+    <PackageReference Include="LightningDB" Version="0.22.0" />
+  </ItemGroup>
+</Project>

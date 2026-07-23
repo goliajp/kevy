@@ -41,9 +41,9 @@ C# KV peer (LMDB via Lightning.NET is).
 
 ## Results
 
-### Cross-track synthesis (Node ✓ / Go ✓ / C ✓ measured; C# pending)
+### Cross-track synthesis (Node ✓ / Go ✓ / C ✓ / C# ✓ — all four measured)
 
-Three tracks measured against four engines (SQLite, bbolt, badger, LMDB).
+Four tracks measured against five engines (SQLite, bbolt, badger, LMDB ×2).
 A consistent, honest pattern — kevy's wins and losses are **structural**, the
 same axes every time:
 
@@ -74,6 +74,12 @@ same axes every time:
    beats kevy on bulk load because it has a transaction to amortize into.
 2. **Zero-copy binding read lanes** (Go first) — the engine lane already wins
    (C track); the copying bindings give the win back.
+
+The read-side loss is **binding-shape, not engine**: proven twice — kevy's
+zero-copy C lane beats LMDB at every size (C track), while the copying Go/C#
+bindings give it back at large values. The write-side loss (bulk/batch) is
+**structural** — kevy has no transaction to amortize N writes into, and every
+one of the five engines does.
 
 lx64 definitive pass pending (perf §9); numbers below are dev-host relative
 standing. Per-track detail follows.
@@ -254,6 +260,46 @@ writes** (no batch-write path; double-copy). The universal north-star gap,
 now seen against three engines (SQLite, bbolt/badger, LMDB), is
 **batch/bulk write** — the indicated decomposition target.
 
-### C# — kevy C# scalar vs LMDB (Lightning.NET)
+### C# — kevy C# scalar vs LMDB (LightningDB) — validates the RFC's LiteDB→LMDB correction
 
-_pending_
+**Harness:** `bench/embeddedgate/csharp/` (`run.sh` builds the release kevy
+cdylib, points `Kevy.Embedded` at it via `KEVY_FFI_LIB`, restores LightningDB
+from nuget). Dev host, N=100k, 200 warm keys, median-of-3, .NET 8.0.129,
+LightningDB 0.22.0 (LMDB 0.9.x native). **T-async:** kevy AOF EverySec, LMDB
+`EnvironmentOpenFlags.NoSync`. **Both bindings return owned `byte[]` on read**
+(kevy `KevyDb.Get`, LMDB `MDBValue.CopyToNewArray`) — this track is
+**copy-vs-copy through .NET bindings**, isolating the managed-binding tax from
+the engine (the C track measured LMDB direct + zero-copy). `k/p < 1` = kevy.
+
+| axis \ size | 16 B | 256 B | 4 KB | 64 KB |
+|-------------|:----:|:-----:|:----:|:-----:|
+| GET cold-1op | 0.18 (kevy 5.4×) | 0.19 (5.2×) | 0.61 (kevy 1.6×) | 0.92 (kevy 1.1×) |
+| GET amortized | 0.40 (kevy 2.5×) | 0.36 (2.8×) | 0.77 (kevy 1.3×) | **1.17 (peer 1.2×)** |
+| SET cold-1op | 0.07 (kevy 13×) | 0.07 (14×) | 0.38 (kevy 2.6×) | **2.40 (peer 2.4×)** |
+| SET amortized | 2.65 (peer 2.7×) | 3.15 (peer 3.2×) | 9.41 (peer 9.4×) | **35.4 (peer 35×)** |
+
+**Reading it:**
+
+- **The RFC's correction is validated.** LMDB via LightningDB is a real,
+  working, fair KV peer (native `mdb_put`/`mdb_get` through a .NET binding),
+  and it produced clean comparable numbers — confirming the decision to drop
+  LiteDB (a document store with no KV path, a category mismatch) and anchor
+  the C# track on LMDB was right.
+- **GET: kevy wins small, and the lead shrinks with size to a near-tie /
+  small loss at 64 KB.** Contrast the C track, where kevy's `kevy_get_shared`
+  **zero-copy** lane beat LMDB 6.5× at 64 KB — here kevy's C# `Get` **copies
+  the value out into a `byte[]`**, so at 64 KB it is copy-vs-copy and the
+  engine edge is spent on the copy (2.48× small → 1.17× loss at 64 KB
+  amortized). **Same binding-copy-out tax as kevy-go** — reinforcing that the
+  zero-copy read win (C track) is given back by any binding that returns
+  owned bytes. The zero-copy-lane attack surface applies to C# and Go alike.
+- **SET cold-single-op: kevy wins** (13–14× small), loses only at 64 KB
+  (2.4×, the double-copy). **SET amortized: kevy loses** (up to 35× at
+  64 KB) — the universal bulk-write gap, a fourth engine confirming it.
+
+**Honest bottom line (C#):** consistent with the other tracks — kevy wins
+single-op small reads/writes, ties/loses large reads *through the copying
+binding*, loses bulk writes. Two data points this track adds: it **validates
+the LiteDB→LMDB correction**, and it shows the **binding copy-out tax is on
+kevy's side too** (not just Go) — the engine's zero-copy read lane (C track)
+is the real advantage, and exposing it per-binding is the read-side fix.
