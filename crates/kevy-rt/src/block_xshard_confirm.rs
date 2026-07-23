@@ -12,12 +12,29 @@ use crate::Commands;
 use crate::message::Inbound;
 use crate::shard::Shard;
 
+/// Debug-only serve-resolution counters (release vs restore), read by the
+/// deterministic regression to see which branch a failure took. Non-I/O so
+/// they do not perturb the race they measure.
+#[cfg(debug_assertions)]
+pub mod counters {
+    use std::sync::atomic::AtomicU64;
+    pub static RELEASED: AtomicU64 = AtomicU64::new(0);
+    pub static RESTORED: AtomicU64 = AtomicU64::new(0);
+    /// `(released, restored)` since process start.
+    pub fn snapshot() -> (u64, u64) {
+        use std::sync::atomic::Ordering::Relaxed;
+        (RELEASED.load(Relaxed), RESTORED.load(Relaxed))
+    }
+}
+
 impl<C: Commands> Shard<C> {
     /// The serve reply for `conn` reached the socket (its output flushed
     /// without error): release the escrow the target has been holding.
     /// Idempotent — a spurious flush after the confirm is a no-op.
     pub(crate) fn confirm_serve_delivered(&mut self, conn: u64) {
         if let Some(shard) = self.serve_confirm.remove(&conn) {
+            #[cfg(debug_assertions)]
+            counters::RELEASED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if shard == self.id {
                 self.target_release_escrow(self.id, conn);
             } else {
@@ -31,6 +48,8 @@ impl<C: Commands> Shard<C> {
     /// Restore it. Idempotent. Called from the connection-close path.
     pub(crate) fn restore_serve_on_teardown(&mut self, conn: u64) {
         if let Some(shard) = self.serve_confirm.remove(&conn) {
+            #[cfg(debug_assertions)]
+            counters::RESTORED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if shard == self.id {
                 self.target_apply_escrow(self.id, conn);
             } else {
