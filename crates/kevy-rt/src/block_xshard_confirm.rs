@@ -20,10 +20,23 @@ pub mod counters {
     use std::sync::atomic::AtomicU64;
     pub static RELEASED: AtomicU64 = AtomicU64::new(0);
     pub static RESTORED: AtomicU64 = AtomicU64::new(0);
-    /// `(released, restored)` since process start.
-    pub fn snapshot() -> (u64, u64) {
+    pub static FASTPATH_ABORT: AtomicU64 = AtomicU64::new(0);
+    pub static RECORD_GONE: AtomicU64 = AtomicU64::new(0);
+    pub static DELIVER: AtomicU64 = AtomicU64::new(0);
+    #[inline]
+    pub fn bump(c: &AtomicU64) {
+        c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    /// `(released, restored, fastpath_abort, record_gone, deliver)`.
+    pub fn snapshot() -> (u64, u64, u64, u64, u64) {
         use std::sync::atomic::Ordering::Relaxed;
-        (RELEASED.load(Relaxed), RESTORED.load(Relaxed))
+        (
+            RELEASED.load(Relaxed),
+            RESTORED.load(Relaxed),
+            FASTPATH_ABORT.load(Relaxed),
+            RECORD_GONE.load(Relaxed),
+            DELIVER.load(Relaxed),
+        )
     }
 }
 
