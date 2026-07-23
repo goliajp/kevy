@@ -31,17 +31,20 @@ double Timeit(Action fn)
     return s[1];
 }
 
-(double get, double setCold, double setAmort) BenchKevy(KevyDb db, byte[] v)
+(double get, double getView, double setCold, double setAmort) BenchKevy(KevyDb db, byte[] v)
 {
     for (int i = 0; i < KEYS; i++) db.Set(keys[i], v);
     double get = Timeit(() => { for (int i = 0; i < N; i++) _ = db.Get(keys[i % KEYS]); });
+    // zero-copy read: view the value span in place, no managed copy
+    KevyDb.SpanReader noop = _ => { };
+    double getView = Timeit(() => { for (int i = 0; i < N; i++) db.GetView(keys[i % KEYS], noop); });
     double setCold = Timeit(() => { for (int i = 0; i < N; i++) db.Set(keys[i % KEYS], v); });
     // amortized: SetMany — one P/Invoke crossing per ~1 MiB chunk (batch path)
     var mk = new byte[N][];
     var mv = new byte[N][];
     for (int i = 0; i < N; i++) { mk[i] = keys[i % KEYS]; mv[i] = v; }
     double setAmort = Timeit(() => db.SetMany(mk, mv));
-    return (get, setCold, setAmort);
+    return (get, getView, setCold, setAmort);
 }
 
 (double getCold, double getAmort, double setCold, double setAmort) BenchLmdb(LightningEnvironment env, byte[] v)
@@ -126,7 +129,15 @@ using (var vdb = KevyDb.OpenInMemory())
         var got = vdb.Get(vk[i]) ?? throw new Exception($"SetMany: key {i} missing");
         if (got.Length != vv[i].Length) throw new Exception($"SetMany: key {i} len {got.Length} != {vv[i].Length}");
     }
-    Console.WriteLine("setmany-verify: OK");
+    // GetView zero-copy: the viewed span must equal the stored value; a miss
+    // must not call the reader.
+    int viewLen = -1;
+    bool hit = vdb.GetView(vk[1], span => viewLen = span.Length);
+    if (!hit || viewLen != vv[1].Length) throw new Exception($"GetView: hit={hit} len={viewLen}");
+    bool missCalled = false;
+    if (vdb.GetView("nope"u8.ToArray(), _ => missCalled = true) || missCalled)
+        throw new Exception("GetView(miss) should return false and not call reader");
+    Console.WriteLine("setmany-verify: OK · getview-verify: OK");
 }
 
 Console.WriteLine("# embeddedgate — C# — kevy C# scalar vs LMDB (LightningDB)");
@@ -135,7 +146,7 @@ Console.WriteLine("kevy: cold==amortized (no txn). LMDB: cold=txn/op, amort=one 
 Console.WriteLine("\n## T-async — kevy AOF EverySec / LMDB NoSync (OS-flush, no per-op fsync)");
 
 int NS = sizes.Length;
-double[] kgc = new double[NS], kga = new double[NS], ksc = new double[NS], ksa = new double[NS];
+double[] kgc = new double[NS], kga = new double[NS], kgv = new double[NS], ksc = new double[NS], ksa = new double[NS];
 double[] lgc = new double[NS], lga = new double[NS], lsc = new double[NS], lsa = new double[NS];
 
 for (int i = 0; i < NS; i++)
@@ -147,8 +158,8 @@ for (int i = 0; i < NS; i++)
     Directory.CreateDirectory(kdir);
     using (var kdb = KevyDb.Open(kdir))
     {
-        var (g, sc, sa) = BenchKevy(kdb, v);
-        kgc[i] = g; kga[i] = g; ksc[i] = sc; ksa[i] = sa;
+        var (g, gv, sc, sa) = BenchKevy(kdb, v);
+        kgc[i] = g; kga[i] = g; kgv[i] = gv; ksc[i] = sc; ksa[i] = sa;
     }
 
     var ldir = Path.Combine(root, $"lmdb-{sizes[i]}");
@@ -163,6 +174,7 @@ for (int i = 0; i < NS; i++)
 
 Table("GET cold-1op", kgc, lgc);
 Table("GET amortized", kga, lga);
+Table("GET zero-copy — kevy GetView vs LMDB copy-out", kgv, lga);
 Table("SET cold-1op", ksc, lsc);
 Table("SET amortized", ksa, lsa);
 Console.WriteLine("\n(relative standing — dev host; definitive SLA = lx64 per perf §9)");

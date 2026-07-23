@@ -103,9 +103,11 @@ copying `ValueCopy` **52×**. kevy `GetView` is flat ~100 ns at every size (the
 ~12 ns engine + fixed cgo crossing); only the small-value read still trails
 bbolt's in-process mmap pointer (1.89× at 16 B — the crossing-bound floor).
 The engine's read advantage (C track: beats LMDB) is now reachable through the
-binding for callers that can scope the read. C# gets the same
-callback-scoped lane next (safer there — a `ReadOnlySpan` in a scoped
-delegate); tested (`TestGetViewZeroCopy`).
+binding for callers that can scope the read. **C# has the same lane**
+(`KevyDb.GetView`, a scoped-delegate `ReadOnlySpan`): flat ~28–48 ns, beating
+LMDB's copy-out **1.8× → 78× at 64 KB**. Both bindings tested
+(`TestGetViewZeroCopy` / `getview-verify`). Attack #2 is BUILT for both
+copying bindings; the C track needs no view lane (raw C already zero-copy).
 
 _Status: **Attack #1 COMPLETE.** Binding half closed (`kevy_set_many` FFI +
 `SetMany` in kevy-go/Kevy.Embedded, tested). Engine half decomposed to root
@@ -339,8 +341,19 @@ the engine (the C track measured LMDB direct + zero-copy). `k/p < 1` = kevy.
 |-------------|:----:|:-----:|:----:|:-----:|
 | GET cold-1op | 0.18 (kevy 5.4×) | 0.19 (5.2×) | 0.61 (kevy 1.6×) | 0.92 (kevy 1.1×) |
 | GET amortized | 0.40 (kevy 2.5×) | 0.36 (2.8×) | 0.77 (kevy 1.3×) | **1.17 (peer 1.2×)** |
+| GET zero-copy ³ | 0.56 (kevy 1.8×) | 0.40 (kevy 2.5×) | 0.09 (kevy 11×) | **0.01 (kevy 78×)** |
 | SET cold-1op | 0.07 (kevy 13×) | 0.07 (14×) | 0.38 (kevy 2.6×) | **2.40 (peer 2.4×)** |
 | SET amortized ² | 3.08 (peer 3.1×) | 3.60 (peer 3.6×) | 8.18 (peer 8.2×) | 28.5 (peer 28×) |
+
+³ GET zero-copy is **`KevyDb.GetView`** (Attack #2) — a scoped-delegate
+zero-copy read (a `ReadOnlySpan` over engine memory, valid only in the
+callback), vs LMDB's copy-out (`CopyToNewArray`, the byte[]-returning path the
+GET rows above use). kevy `GetView` is **flat ~28–48 ns at every size** (C#'s
+`LibraryImport` crossing is cheaper than Go's cgo, so it beats even Go's
+~100 ns GetView); LMDB's copy scales with size, so kevy wins **1.8× → 78× at
+64 KB**. (LMDB also offers a zero-copy `AsSpan`; against *that* the two would
+be closer — the point is kevy's C# binding now has the zero-copy lane it
+lacked, exposing the engine read win the plain byte[] `Get` gave away.)
 
 ² SET amortized uses **`KevyDb.SetMany`** (the batch path via `kevy_set_many`).
 Unlike Go, **it does not help C#** — and slightly hurts small values (16 B
