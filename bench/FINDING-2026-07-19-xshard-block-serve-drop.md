@@ -1,20 +1,70 @@
 # A cross-shard blocking serve can lose the element it popped
 
-**Status: FIXED (2026-07-21). Design round + fix:
+**Status: PARTIALLY FIXED — escrow (2026-07-21) closes one window, a
+second is still open and still loses the element under load. Design:
 `.claude/rfcs/2026-07-21-xshard-block-serve-escrow.md`.**
+
+## The still-open window (found 2026-07-23)
+
+The escrow fix closes the window where the origin's block record is *gone*
+by reply time: the target holds the element until the origin says
+delivered-or-abort, and `abandoned` marks a disconnect noticed while
+`serving`. But there is a second window it does not close, and it lost an
+element on the macOS CI runner (`a_disconnect_during_the_serve` FAILED,
+LRANGE showed `*0` — an empty list, the element gone; local single runs
+pass 10/10, it only surfaces under the full parallel suite's load).
+
+Both the serve reply (`BlockServeResp`) and the disconnect detection
+(`close_conn` → `cancel_xshard_on_close`) are events on the *origin*
+shard's single-threaded loop, both after `serving = true`. Their order is
+not guaranteed:
+
+- disconnect first → `abandoned = true` → reply runs `abort_serve` →
+  escrow applied, element restored. Correct.
+- **reply first → `abandoned` is still false → `deliver_block` buffers the
+  reply into `c.output` of a conn that is about to be reaped, and
+  `ack_serve` releases the escrow. Then the disconnect is processed and
+  the conn is dropped. The element was popped, "delivered" to a dead
+  output buffer, and the undo released — lost.**
+
+`deliver_block` (block_xshard.rs) writes to `c.output` unconditionally; it
+has no way to know the client is gone, because the FIN may not have been
+read yet. On a loaded runner the origin shard can process the reply
+(arriving at the serve-delay deadline) before it polls the FIN from the
+dropped socket — so `abandoned` is false at reply time even though the
+client left long before.
+
+## Why this is not a guess-fix
+
+The sound fix ties escrow release to *actual write success*, not to
+synchronous buffering: release the undo only once the reply has flushed to
+the socket without EPIPE/ECONNRESET, and apply it (restore) on write
+failure. That is a real change to the reply path — escrow release becomes
+asynchronous, resolved by the flush result — and it cannot be verified
+locally because the bug only reproduces under CI load. It needs a design
+round and a determinism seam for the reply-before-disconnect ordering (the
+existing `KEVY_TEST_XSHARD_SERVE_DELAY_MS` controls the serve delay, not
+this ordering), so it is left open rather than patched blind. **Still a
+ship blocker: this is known data loss.**
+
+An earlier version of this header read "Status: FIXED". That was wrong on
+a data-loss defect, and is corrected here — the escrow closed the window
+it was designed for and a second one went unnoticed until the LRANGE
+diagnostic (2026-07-23) separated "element lost" from "test flaked."
+
+## What the 2026-07-21 escrow round did establish (still true)
 
 The fix is escrow: the target captures the undo by reading the element
 *before* it pops, and holds it until the origin confirms delivery. Two
-things this finding assumed turned out to be wrong, both found by reading
-the code rather than reasoning about it — the target does not know the
-element it popped (it replays a command and gets RESP bytes, same as the
-origin), and two of the six block kinds consume nothing at all, so
-"restore the element" is undefined for them.
+things this finding originally assumed turned out to be wrong, both found
+by reading the code — the target does not know the element it popped (it
+replays a command and gets RESP bytes, same as the origin), and two of the
+six block kinds consume nothing at all, so "restore the element" is
+undefined for them.
 
-The test seam this document asks for below now exists
-(`KEVY_TEST_XSHARD_SERVE_DELAY_MS`, debug builds only). The race is
-deterministic with it: the regression test fails with the fix reverted
-and passes with it, which a first attempt without the seam did not.
+The seam `KEVY_TEST_XSHARD_SERVE_DELAY_MS` (debug builds only) makes the
+*first* window deterministic. It does not cover the reply-before-disconnect
+ordering above, which is why that window passed review.
 
 Original report follows.
 
