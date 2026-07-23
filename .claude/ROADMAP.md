@@ -340,7 +340,7 @@ D2 事务标记(全有全无,与事务大小无关)/ R2 事务内集合读。
 - [x] **B3 R6 菜谱** — 「一行数据、多个派生键」端到端写进 `docs/cookbook.md`(对方甚至提出愿意贡献)。
 - [x] **B4 R3 事务内索引读** — 先判定是否与 R2 同形(同一个 op-table 缺口),同形则一并补齐,不同形则单列。
 
-- [x] **C1 跨 shard block-serve 丢元素** — **已修(2026-07-21,escrow)**,本条 `[~]` 标记严重滞后现实。修法 = escrow:target 在 pop *之前* 读下元素、扣在手里,直到 origin 确认投递才释放;origin 记录没了就 apply escrow 把元素还回去。实现 `crates/kevy-rt/src/block_xshard.rs`(`target_apply_escrow`/`target_release_escrow`),设计定案 `.claude/rfcs/2026-07-21-xshard-block-serve-escrow.md`(第一版 restore-twin 设计已被代码推翻,改用 escrow——见 RFC 末尾更正)。确定性回归 `crates/kevy/tests/blocking_xshard_serve_race.rs`(`KEVY_TEST_XSHARD_SERVE_DELAY_MS` seam 强制竞态,修复 revert 则红),在 CI `test` job(`cargo test --workspace --tests`)覆盖。FINDING 文档头已标 `Status: FIXED`。**"唯一已知会丢数据且没修"的 ship 阻塞项已清除。**(2026-07-23 去竞态:回归测试改用 LRANGE 读稳定态,不再受 CI 负载下 BLPOP 服务时机影响)
+- [~] **C1 跨 shard block-serve 丢元素** — escrow 修复(2026-07-21)**不完整**:仍会在 macOS CI 负载下丢元素。修法 = escrow(target pop *前* 读下元素扣手里,origin 确认投递才释放;记录没了则 apply escrow 还回),实现 `crates/kevy-rt/src/block_xshard.rs`,设计 `.claude/rfcs/2026-07-21-xshard-block-serve-escrow.md`。**2026-07-23 复现:回归测试 `a_disconnect_during_the_serve_does_not_lose_the_element` 在 darwin CI 全套并行下 FAIL,LRANGE 诊断报 `*0`=空列表=元素真丢**(不是脆测——LRANGE 改造已把 BLPOP 时序移出断言,失败只能是属性真破)。本机单跑 10/10 不复现,只在 CI 全套负载下现。**我曾错误地把本条标 `[x] 已清除`,已撤回**——这是"已知会丢数据"的缺陷,**仍是 ship 阻塞项**,escrow 有未兜住的竞态窗口(疑似:cancel 传播慢时 origin 仍持记录、写死 socket "成功"→释放 escrow→丢失,即 FINDING 原文"cancel 传播慢到输给 push"的窗口 escrow 没关严)。需再一轮协议分析,未修完不许 ship。
 
 ### t5.7 — FTS arc(取代 Meili;施工顺序见 RFC)
 
