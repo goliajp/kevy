@@ -211,7 +211,7 @@ impl<C: Commands> Shard<C> {
             (close, out_remaining, conn.sock.raw())
         };
 
-        if close {
+        if close && !self.hold_serving_close_for_tests(conn_id) {
             self.close_conn(conn_id);
             return Ok(());
         }

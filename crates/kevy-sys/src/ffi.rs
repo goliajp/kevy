@@ -21,6 +21,7 @@ unsafe extern "C" {
     pub fn getsockname(fd: c_int, addr: *mut c_void, addrlen: *mut u32) -> c_int;
     pub fn getpeername(fd: c_int, addr: *mut c_void, addrlen: *mut u32) -> c_int;
     pub fn read(fd: c_int, buf: *mut c_void, count: usize) -> isize;
+    pub fn recv(fd: c_int, buf: *mut c_void, count: usize, flags: c_int) -> isize;
     pub fn write(fd: c_int, buf: *const c_void, count: usize) -> isize;
     pub fn close(fd: c_int) -> c_int;
     // Variadic in C; we only ever pass a single int arg (F_GETFL/F_SETFL).

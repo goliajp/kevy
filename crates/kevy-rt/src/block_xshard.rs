@@ -241,7 +241,18 @@ impl<C: Commands> Shard<C> {
             self.rearm_all(conn);
             return;
         }
-        if ob.abandoned {
+        // `abandoned` is set when this shard has already PROCESSED the
+        // disconnect, but the reply can arrive on this shard's loop before
+        // it reaps the recv completion that carries the client's FIN — under
+        // load the gap has been hundreds of ms. So `abandoned` alone is a
+        // stale view: it can be false while the client left long ago. Ask
+        // the kernel directly, which has the FIN regardless of this shard's
+        // completion backlog. Either signal — the processed disconnect, or a
+        // socket the kernel reports gone — means deliver-to-a-corpse, and the
+        // element must be restored, not popped into a dead output buffer.
+        let abandoned = ob.abandoned;
+        let gone = abandoned || self.conns.get(&conn).is_none_or(|c| c.sock.peer_gone());
+        if gone {
             // The element is real and its client is gone. Tell the shard
             // that popped it to put it back; it has been holding the undo
             // since before the pop.
@@ -379,7 +390,31 @@ impl<C: Commands> Shard<C> {
         }
     }
 
+    /// Test seam: hold a cross-shard-serving conn's teardown so the serve
+    /// reply is processed while the disconnect is still unnoticed — the
+    /// exact load-induced ordering that lost an element (the reply reaches
+    /// `origin_on_serve_resp` with `abandoned` false and the socket already
+    /// dead). Deferring `close_conn` for such a conn keeps it present with
+    /// `abandoned` false, so the peek-at-delivery guard is what has to catch
+    /// it. Without a seam the window is real but load-only; this makes it
+    /// certain, the honest way (per the existing serve-delay seam).
+    ///
+    /// Debug builds only, and only when the variable is set.
+    #[cfg(debug_assertions)]
+    pub(crate) fn hold_serving_close_for_tests(&self, conn: u64) -> bool {
+        use std::sync::OnceLock;
+        static ON: OnceLock<bool> = OnceLock::new();
+        let on = *ON.get_or_init(|| std::env::var_os("KEVY_TEST_XSHARD_HOLD_CLOSE").is_some());
+        on && self
+            .origin_blocks
+            .get(&conn)
+            .is_some_and(|ob| ob.serving && !ob.abandoned)
+    }
 
+    #[cfg(not(debug_assertions))]
+    pub(crate) fn hold_serving_close_for_tests(&self, _conn: u64) -> bool {
+        false
+    }
 }
 
 /// Build the per-key `(key, serve_argv)` list for a cross-shard park from

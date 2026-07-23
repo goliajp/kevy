@@ -61,6 +61,45 @@ impl Socket {
         }
     }
 
+    /// Whether the peer has gone — a non-blocking, non-consuming probe that
+    /// asks the kernel directly rather than the reactor's completion backlog.
+    ///
+    /// `recv` with `MSG_PEEK | MSG_DONTWAIT` reads nothing from the stream:
+    /// it returns 0 once the peer's FIN has reached the kernel (EOF), a
+    /// positive count if unread bytes are queued (peer alive, and its FIN
+    /// hasn't been read yet either way), or `EWOULDBLOCK` when the socket is
+    /// open with nothing pending. So `true` = the connection is closed or
+    /// reset even if this shard has not yet reaped the recv completion that
+    /// would tell it so — which is exactly the case a cross-shard block
+    /// serve must catch before delivering a popped element to a dead client.
+    /// `EINTR` retries; any other error is treated as gone.
+    pub fn peer_gone(&self) -> bool {
+        let mut byte = [0u8; 1];
+        loop {
+            let n = unsafe {
+                ffi::recv(
+                    self.fd,
+                    byte.as_mut_ptr().cast::<c_void>(),
+                    1,
+                    crate::addr::MSG_PEEK | crate::addr::MSG_DONTWAIT,
+                )
+            };
+            if n == 0 {
+                return true; // EOF: peer sent FIN
+            }
+            if n > 0 {
+                return false; // unread data queued: peer still there
+            }
+            let e = io::Error::last_os_error();
+            if e.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            // WouldBlock = open, nothing pending = alive. Anything else
+            // (ECONNRESET, ENOTCONN, EBADF, …) = gone.
+            return e.kind() != io::ErrorKind::WouldBlock;
+        }
+    }
+
     /// A single `write` syscall; may write fewer bytes than requested, or return
     /// `WouldBlock` on a full non-blocking socket. Retries on EINTR.
     pub fn write(&self, buf: &[u8]) -> io::Result<usize> {
