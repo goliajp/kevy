@@ -311,6 +311,13 @@ pub(crate) struct Shard<C: Commands> {
     /// keys this shard owns. Kept separate from `blocked` so the hot
     /// single-key-local path is untouched. Empty in steady state.
     pub(crate) xwaiters: crate::block_xshard::XShardWaiters,
+    /// Cross-shard block serves whose escrow release is waiting on the
+    /// reply's write result: `conn -> target_shard`. A serve reply is
+    /// buffered but the escrow is NOT released until the write succeeds
+    /// (drained → release) or the conn is torn down (write failed / FIN →
+    /// restore). This is what ties escrow release to actual delivery rather
+    /// than to a point-in-time liveness guess. Empty in steady state.
+    pub(crate) serve_confirm: HashMap<u64, usize>,
     /// Reused staging buffer for forwarded-dispatch replies
     /// (`Shard::run_dispatch`): `dispatch_into` writes here, then ≤30 B replies
     /// copy into a stack-inline [`crate::message::SmallReply`] — zero

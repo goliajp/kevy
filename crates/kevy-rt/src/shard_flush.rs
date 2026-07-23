@@ -175,7 +175,7 @@ impl<C: Commands> Shard<C> {
     /// served truncated GET replies for any value > `BULK_THRESHOLD`. We
     /// now materialise the iovec content into `output` before the write loop.
     pub(crate) fn flush_conn(&mut self, conn_id: u64) -> io::Result<()> {
-        let (close, want_write, fd) = {
+        let (close, want_write, fd, closing_now, drained) = {
             let Some(conn) = self.conns.get_mut(&conn_id) else {
                 return Ok(());
             };
@@ -208,8 +208,23 @@ impl<C: Commands> Shard<C> {
             }
             let out_remaining = conn.write_pos < conn.output.len();
             let close = conn.closing && conn.pending.is_empty() && !out_remaining;
-            (close, out_remaining, conn.sock.raw())
+            (close, out_remaining, conn.sock.raw(), conn.closing, !out_remaining)
         };
+
+        // Cross-shard block-serve escrow, resolved by the write result rather
+        // than a point-in-time guess: `closing` (the client's FIN was read,
+        // or a write to it errored) means the reply never reached a live
+        // client → restore; a clean full drain on a live conn means it did →
+        // release. Gated on the map being non-empty so the reply hot path
+        // pays only a length check. Idempotent, so a later close_conn's own
+        // restore is a no-op.
+        if !self.serve_confirm.is_empty() {
+            if closing_now {
+                self.restore_serve_on_teardown(conn_id);
+            } else if drained {
+                self.confirm_serve_delivered(conn_id);
+            }
+        }
 
         if close && !self.hold_serving_close_for_tests(conn_id) {
             self.close_conn(conn_id);

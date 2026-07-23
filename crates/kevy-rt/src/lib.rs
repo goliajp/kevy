@@ -69,6 +69,7 @@
 
 mod bio;
 mod block_xshard;
+mod block_xshard_confirm;
 mod block_xshard_registry;
 mod block_xshard_target;
 mod blocked;
