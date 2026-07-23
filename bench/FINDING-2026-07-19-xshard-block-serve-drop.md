@@ -1,11 +1,45 @@
 # A cross-shard blocking serve can lose the element it popped
 
-**Status: FIXED — both windows. Escrow (2026-07-21) closed the first; a
-delivery-time socket peek (2026-07-23) closed the second, verified by a
-deterministic red/green regression. Design:
-`.claude/rfcs/2026-07-21-xshard-block-serve-escrow.md`.**
+**Status: PARTIALLY FIXED. Escrow (2026-07-21) closed window 1. The
+delivery peek (2026-07-23) closes window 2 on kqueue (macOS) and uring has
+no such window, but the epoll fallback (`KEVY_IO_URING=0`) keeps a residual
+~10% loss (18/20 on lx64) — the peek is a point-in-time check and cannot be
+perfectly synchronised with delivery. The complete fix ties escrow release
+to the write result and is a larger reactor change; see "Residual on epoll"
+below. Design: `.claude/rfcs/2026-07-21-xshard-block-serve-escrow.md`.**
 
-## The second window (found and fixed 2026-07-23)
+## Residual on epoll — the peek's ceiling (2026-07-23)
+
+The peek asks the kernel at the delivery *decision*, but the decision and
+the actual send are not one atomic step, so a point-in-time "alive" can go
+stale before `ack_serve` releases the escrow. On kqueue the timing never
+lost the race across every run tried; on epoll it loses ~10% (measured
+18/20, `*0` — element lost). By elimination this is the peek-returns-alive
+path: `*0` requires `abandoned` false AND the conn present AND
+`peer_gone()` false, which is exactly a stale "alive". uring never had
+window 2 (it sets `abandoned` at EOF detection), and Linux defaults to
+uring, so the residual is specific to the explicit epoll fallback.
+
+Adding an `eprintln` probe flipped the epoll failure to a pass — a
+Heisenbug confirming it is timing, not a logic branch, and the reason the
+seam that determinises kqueue does not fully determinise epoll.
+
+The sound completion is the write-result approach I set aside for the peek:
+do not release the escrow at deliver time; buffer the reply, and release
+only once the conn's output flushes without error, restoring on write
+failure or teardown. That removes the point-in-time race entirely, but it
+touches the reactor write path in both reactors — code whose blast radius
+is *every* reply, not just block serves — so it is a steel-layer change
+that wants an explicit decision before it lands, not an autorun patch.
+
+Also fixed this round, independent of the windows: a non-empty serve reply
+arriving after the origin record is already gone stranded the escrow on the
+target (element lost). `origin_on_serve_resp` now routes that restore by the
+key's owning shard.
+
+## Window 2 (found 2026-07-23) — the mechanism
+
+The peek closes this on kqueue/uring; see the epoll residual above.
 
 The escrow fix closes the window where the origin's block record is *gone*
 by reply time: the target holds the element until the origin says
