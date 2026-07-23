@@ -123,6 +123,10 @@ internal static unsafe partial class KevyNative
         IntPtr db, byte* key, nuint keyLen, byte* val, nuint valLen, ulong ttlMs);
 
     [LibraryImport(Lib)]
+    internal static partial int kevy_set_many(
+        IntPtr db, nuint n, byte** keys, nuint* keyLens, byte** vals, nuint* valLens);
+
+    [LibraryImport(Lib)]
     internal static partial int kevy_open_report(IntPtr db, KevyOpenReport* @out);
 
     [LibraryImport(Lib)]

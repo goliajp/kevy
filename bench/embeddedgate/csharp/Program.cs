@@ -35,8 +35,13 @@ double Timeit(Action fn)
 {
     for (int i = 0; i < KEYS; i++) db.Set(keys[i], v);
     double get = Timeit(() => { for (int i = 0; i < N; i++) _ = db.Get(keys[i % KEYS]); });
-    double set = Timeit(() => { for (int i = 0; i < N; i++) db.Set(keys[i % KEYS], v); });
-    return (get, set, set); // no txn to amortize
+    double setCold = Timeit(() => { for (int i = 0; i < N; i++) db.Set(keys[i % KEYS], v); });
+    // amortized: SetMany — one P/Invoke crossing per ~1 MiB chunk (batch path)
+    var mk = new byte[N][];
+    var mv = new byte[N][];
+    for (int i = 0; i < N; i++) { mk[i] = keys[i % KEYS]; mv[i] = v; }
+    double setAmort = Timeit(() => db.SetMany(mk, mv));
+    return (get, setCold, setAmort);
 }
 
 (double getCold, double getAmort, double setCold, double setAmort) BenchLmdb(LightningEnvironment env, byte[] v)
@@ -104,6 +109,26 @@ void Table(string field, double[] kevy, double[] peer)
 }
 
 var root = Directory.CreateTempSubdirectory("embgate-cs-").FullName;
+
+// SetMany correctness gate before timing: batch a mix incl. an empty key and a
+// 2 MiB value (exercises the oversized-item direct fallback), read each back.
+using (var vdb = KevyDb.OpenInMemory())
+{
+    // (empty keys are a separate C# Get limitation — fixed on an empty span is
+    // a null ptr — unrelated to SetMany; not exercised here.)
+    var vk = new byte[][] { "a"u8.ToArray(), "bb"u8.ToArray(), "ccc"u8.ToArray(), "big"u8.ToArray() };
+    var vv = new byte[][] { "1"u8.ToArray(), new byte[4096], "z"u8.ToArray(), new byte[2 << 20] };
+    Array.Fill(vv[1], (byte)0x61);
+    Array.Fill(vv[3], (byte)0x62);
+    vdb.SetMany(vk, vv);
+    for (int i = 0; i < vk.Length; i++)
+    {
+        var got = vdb.Get(vk[i]) ?? throw new Exception($"SetMany: key {i} missing");
+        if (got.Length != vv[i].Length) throw new Exception($"SetMany: key {i} len {got.Length} != {vv[i].Length}");
+    }
+    Console.WriteLine("setmany-verify: OK");
+}
+
 Console.WriteLine("# embeddedgate — C# — kevy C# scalar vs LMDB (LightningDB)");
 Console.WriteLine($"N={N} ops, {KEYS} warm keys, median-of-{RUNS}, sizes 16/256/4096/65536 B");
 Console.WriteLine("kevy: cold==amortized (no txn). LMDB: cold=txn/op, amort=one txn/N. Both copy out to byte[].");

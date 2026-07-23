@@ -201,6 +201,66 @@ public sealed unsafe class KevyDb : IDisposable
     public void Set(string key, string value, long ttlMs = 0) =>
         Set(key, Encoding.UTF8.GetBytes(value), ttlMs);
 
+    /// <summary>Apply many SETs in one P/Invoke crossing — the batch-write
+    /// path (kevy_set_many). A loop of <see cref="Set(string,byte[],long)"/>
+    /// pays the boundary once per key; SetMany pays it once per ~1 MiB chunk,
+    /// closing most of the bulk-write gap. keys and values must be equal
+    /// length; durability is unchanged (each set appends to the AOF).</summary>
+    public unsafe void SetMany(IReadOnlyList<byte[]> keys, IReadOnlyList<byte[]> values)
+    {
+        if (keys.Count != values.Count)
+            throw new ArgumentException("kevy: SetMany keys/values length mismatch");
+        int n = keys.Count;
+        if (n == 0) return;
+        const int arenaCap = 1 << 20; // ~1 MiB per crossing; memory stays bounded
+        byte* arena = (byte*)NativeMemory.Alloc(arenaCap);
+        byte** kp = (byte**)NativeMemory.Alloc((nuint)n, (nuint)sizeof(byte*));
+        nuint* kl = (nuint*)NativeMemory.Alloc((nuint)n, (nuint)sizeof(nuint));
+        byte** vp = (byte**)NativeMemory.Alloc((nuint)n, (nuint)sizeof(byte*));
+        nuint* vl = (nuint*)NativeMemory.Alloc((nuint)n, (nuint)sizeof(nuint));
+        try
+        {
+            int off = 0, cnt = 0;
+            void Flush()
+            {
+                if (cnt == 0) return;
+                if (KevyNative.kevy_set_many(Live(), (nuint)cnt, kp, kl, vp, vl) < 0)
+                    throw new KevyException("kevy: kevy_set_many misuse");
+                off = 0;
+                cnt = 0;
+            }
+            for (int i = 0; i < n; i++)
+            {
+                int need = keys[i].Length + values[i].Length;
+                if (need > arenaCap)
+                {
+                    Flush();
+                    Set(keys[i], values[i]); // oversized: direct, no arena copy
+                    continue;
+                }
+                if (cnt > 0 && off + need > arenaCap) { Flush(); i--; continue; }
+                keys[i].CopyTo(new Span<byte>(arena + off, keys[i].Length));
+                kp[cnt] = arena + off;
+                kl[cnt] = (nuint)keys[i].Length;
+                off += keys[i].Length;
+                values[i].CopyTo(new Span<byte>(arena + off, values[i].Length));
+                vp[cnt] = arena + off;
+                vl[cnt] = (nuint)values[i].Length;
+                off += values[i].Length;
+                cnt++;
+            }
+            Flush();
+        }
+        finally
+        {
+            NativeMemory.Free(arena);
+            NativeMemory.Free(kp);
+            NativeMemory.Free(kl);
+            NativeMemory.Free(vp);
+            NativeMemory.Free(vl);
+        }
+    }
+
     /// <summary>Fetch <paramref name="key"/>'s raw bytes; null on a miss.
     /// Binary-safe: the key bytes are pinned as-is (no UTF-8 round-trip), so
     /// arbitrary binary keys work. Uses the zero-copy shared lane
