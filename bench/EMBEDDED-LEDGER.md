@@ -70,25 +70,29 @@ same axes every time:
   track disproves at the engine level.
 
 **Attack #1 — batch-write path — BUILT + MEASURED (2026-07-24).** Added
-`kevy_set_many` to the C ABI (one crossing, N sets, durability unchanged) and
-wired it into kevy-go as `SetMany`. Decomposition result, both halves named:
+`kevy_set_many` to the C ABI (one crossing, N sets, durability unchanged),
+wired into kevy-go (`SetMany`) and Kevy.Embedded C# (`SetMany`). The
+measurement **refuted the naive "batching closes the bulk gap everywhere"** —
+the truth is sharper and split cleanly in two:
 
-- **The binding half of the bulk gap was the per-op FFI crossing, and it is
-  now closed for small values.** kevy-go 16 B amortized SET went from **147×
-  off bbolt (per-op) to 2.70×** — i.e. down to the engine floor. The 147× was
-  never the engine; it was paying the cgo boundary 100k times. One crossing
-  removes it.
-- **The residual (~2.5×) is engine-level and architectural.** The C track
-  (no FFI crossing) is unchanged by `kevy_set_many` (kevy 219 ns vs LMDB
-  78 ns, in-process): kevy's write is a **durable append-log entry per op**
-  (in the recoverable AOF immediately), a B+tree/LSM txn batches **dirty
-  pages into one deferred commit**. Different work, different durability.
-  Closing it would be a persistence-core redesign (its own RFC) — not
-  autorun-dived, named honestly.
-- **Large values stay copy-bound.** At 64 KB the batch API is neutral-to-
-  worse (the safe cgo marshalling copies the value into a bounded C arena
-  before the store copies it again) — the batch path is for *many small*
-  keys (the RDS on-ramp shape), not few huge ones. Stated, not hidden.
+- **The bulk gap is engine-level, confirmed on two bindings that don't pay an
+  expensive crossing.** The C track (no FFI crossing) and C# (`LibraryImport`
+  P/Invoke is nearly free) both sit at **~200 ns/op vs LMDB ~80 ns**, and
+  `kevy_set_many` does **not** move either — C# SetMany is even slightly
+  *worse* at 16 B (per-op 208 ns → 276 ns, the arena copy with nothing to
+  amortize). kevy's write is a **durable append-log entry per op** (in the
+  recoverable AOF immediately); a B+tree/LSM txn batches **dirty pages into
+  one deferred commit**. Different work, different durability. Closing this is
+  a persistence-core redesign (its own RFC) — not autorun-dived, named.
+- **The batch API helps only bindings with an expensive crossing.** kevy-go's
+  cgo boundary is ~50–100 ns/op, so a per-op loop paid it 100k times: `SetMany`
+  took 16 B amortized SET from **147× off bbolt to 2.70×** (down to the engine
+  floor). Same primitive, no help for C# — because there was no crossing tax
+  to remove. So `kevy_set_many`'s value is binding-specific (cgo/napi), plus
+  fsync-batching at Always durability; it is not an engine-level win.
+- **Large values stay copy-bound** on the FFI bindings (the safe marshalling
+  copies the value into a bounded arena before the store copies it again) —
+  the batch path is for *many small* keys (the RDS on-ramp shape).
 
 **Attack #2 — zero-copy binding read lanes** (Go/C#) — still open. The engine
 lane already wins (C track, `kevy_get_shared` beats LMDB); the copying
@@ -96,9 +100,10 @@ bindings give it back. A view-returning binding API (lifetime-managed) is the
 fix — deferred (most callers want owned bytes; it is a niche API + a real
 lifetime-safety surface).
 
-_Status: `kevy_set_many` (FFI) + `SetMany` (kevy-go) landed + tested. C# and
-Node bindings get the same treatment next; the C track needs no batch entry
-(no crossing to amortize)._
+_Status: `kevy_set_many` (FFI) + `SetMany` (kevy-go, Kevy.Embedded) landed +
+tested. The finding — bulk gap is engine-architectural, batching only pays off
+for expensive crossings — makes a Node napi `setMany` an optional confirming
+data point, not ceiling work. The engine gap is the real limiter → RFC._
 
 The read-side loss is **binding-shape, not engine**: proven twice — kevy's
 zero-copy C lane beats LMDB at every size (C track), while the copying Go/C#
@@ -306,7 +311,17 @@ the engine (the C track measured LMDB direct + zero-copy). `k/p < 1` = kevy.
 | GET cold-1op | 0.18 (kevy 5.4×) | 0.19 (5.2×) | 0.61 (kevy 1.6×) | 0.92 (kevy 1.1×) |
 | GET amortized | 0.40 (kevy 2.5×) | 0.36 (2.8×) | 0.77 (kevy 1.3×) | **1.17 (peer 1.2×)** |
 | SET cold-1op | 0.07 (kevy 13×) | 0.07 (14×) | 0.38 (kevy 2.6×) | **2.40 (peer 2.4×)** |
-| SET amortized | 2.65 (peer 2.7×) | 3.15 (peer 3.2×) | 9.41 (peer 9.4×) | **35.4 (peer 35×)** |
+| SET amortized ² | 3.08 (peer 3.1×) | 3.60 (peer 3.6×) | 8.18 (peer 8.2×) | 28.5 (peer 28×) |
+
+² SET amortized uses **`KevyDb.SetMany`** (the batch path via `kevy_set_many`).
+Unlike Go, **it does not help C#** — and slightly hurts small values (16 B
+per-op 208 ns → SetMany 276 ns). The reason is the decisive cross-binding
+finding: **C#'s `LibraryImport` P/Invoke crossing is nearly free**, so the C#
+per-op path is already engine-bound (~200 ns of store insert + AOF append),
+and the batch path only adds an arena copy on top. Go's cgo crossing is
+~50–100 ns/op, so there batching was a 147×→2.7× win; here there was nothing
+to amortize. `SetMany` stays as a bulk-ergonomics API (and batches fsyncs at
+Always durability), not a T-async perf win for C#.
 
 **Reading it:**
 
