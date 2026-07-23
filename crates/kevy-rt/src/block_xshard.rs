@@ -236,6 +236,8 @@ impl<C: Commands> Shard<C> {
             // that popped it. `target_apply_escrow` is idempotent (escrow_take
             // removes), so this cannot double-restore against the normal path.
             if !reply.is_empty() {
+                #[cfg(debug_assertions)]
+                crate::block_xshard_confirm::counters::bump(&crate::block_xshard_confirm::counters::RECORD_GONE);
                 let shard = self.shard_of(&key);
                 if shard == self.id {
                     self.target_apply_escrow(self.id, conn);
@@ -265,6 +267,8 @@ impl<C: Commands> Shard<C> {
         let abandoned = ob.abandoned;
         let gone = abandoned || self.conns.get(&conn).is_none_or(|c| c.sock.peer_gone());
         if gone {
+            #[cfg(debug_assertions)]
+            crate::block_xshard_confirm::counters::bump(&crate::block_xshard_confirm::counters::FASTPATH_ABORT);
             self.abort_serve(conn, &key);
             return;
         }
@@ -284,6 +288,8 @@ impl<C: Commands> Shard<C> {
         self.deliver_block(conn, reply);
         match target_shard {
             Some(shard) => {
+                #[cfg(debug_assertions)]
+                crate::block_xshard_confirm::counters::bump(&crate::block_xshard_confirm::counters::DELIVER);
                 self.serve_confirm.insert(conn, shard);
             }
             // Unreachable for a real serve (we just served this key), but do
