@@ -1,18 +1,19 @@
 # A cross-shard blocking serve can lose the element it popped
 
-**Status: PARTIALLY FIXED — escrow (2026-07-21) closes one window, a
-second is still open and still loses the element under load. Design:
+**Status: FIXED — both windows. Escrow (2026-07-21) closed the first; a
+delivery-time socket peek (2026-07-23) closed the second, verified by a
+deterministic red/green regression. Design:
 `.claude/rfcs/2026-07-21-xshard-block-serve-escrow.md`.**
 
-## The still-open window (found 2026-07-23)
+## The second window (found and fixed 2026-07-23)
 
 The escrow fix closes the window where the origin's block record is *gone*
 by reply time: the target holds the element until the origin says
 delivered-or-abort, and `abandoned` marks a disconnect noticed while
-`serving`. But there is a second window it does not close, and it lost an
-element on the macOS CI runner (`a_disconnect_during_the_serve` FAILED,
-LRANGE showed `*0` — an empty list, the element gone; local single runs
-pass 10/10, it only surfaces under the full parallel suite's load).
+`serving`. A second window remained, and it lost an element on the macOS
+CI runner (`a_disconnect_during_the_serve` FAILED, LRANGE showed `*0` — an
+empty list, the element gone; local single runs pass 10/10, it only
+surfaced under the full parallel suite's load).
 
 Both the serve reply (`BlockServeResp`) and the disconnect detection
 (`close_conn` → `cancel_xshard_on_close`) are events on the *origin*
@@ -34,23 +35,40 @@ read yet. On a loaded runner the origin shard can process the reply
 dropped socket — so `abandoned` is false at reply time even though the
 client left long before.
 
-## Why this is not a guess-fix
+## The fix: ask the kernel at delivery
 
-The sound fix ties escrow release to *actual write success*, not to
-synchronous buffering: release the undo only once the reply has flushed to
-the socket without EPIPE/ECONNRESET, and apply it (restore) on write
-failure. That is a real change to the reply path — escrow release becomes
-asynchronous, resolved by the flush result — and it cannot be verified
-locally because the bug only reproduces under CI load. It needs a design
-round and a determinism seam for the reply-before-disconnect ordering (the
-existing `KEVY_TEST_XSHARD_SERVE_DELAY_MS` controls the serve delay, not
-this ordering), so it is left open rather than patched blind. **Still a
-ship blocker: this is known data loss.**
+`abandoned` is this shard's *processed* view of the disconnect, and it can
+lag the truth by the reactor's completion backlog. So instead of trusting
+it alone, `origin_on_serve_resp` asks the kernel directly right before
+delivering: `Socket::peer_gone()` does a non-blocking
+`recv(MSG_PEEK|MSG_DONTWAIT)`, which reports the peer's FIN whether or not
+this shard has reaped the recv completion that carries it. A dead socket —
+or a conn already reaped — routes to `abort_serve` (restore) rather than a
+buffered-and-released delivery. The peek's one blind spot (unread data
+ahead of the FIN hides it) does not apply here: a blocked BLPOP client sent
+its command and nothing more, so its buffer is empty and the FIN is what
+`recv` returns.
 
-An earlier version of this header read "Status: FIXED". That was wrong on
-a data-loss defect, and is corrected here — the escrow closed the window
-it was designed for and a second one went unnoticed until the LRANGE
-diagnostic (2026-07-23) separated "element lost" from "test flaked."
+Chosen over tying escrow release to the async write result — which would
+have been correct too but reworked the reply path across both reactors —
+because the peek is localized to the one delivery decision and is correct
+by construction: it reads the authoritative kernel state at the exact
+moment the decision is made.
+
+## Verified deterministically, not by load luck
+
+An earlier header read "Status: FIXED" after the escrow round, then was
+corrected to "PARTIALLY FIXED" when the second window surfaced — a false
+"fixed" on a data-loss defect is the worst kind, so it was walked back
+until there was proof. That proof now exists. A debug-only seam
+`KEVY_TEST_XSHARD_HOLD_CLOSE` defers the serving conn's teardown to
+reproduce the exact reply-before-disconnect ordering (the existing
+`KEVY_TEST_XSHARD_SERVE_DELAY_MS` only controls the serve delay). With the
+peek removed the regression fails `*0` (element lost); with it, `*1`. Plus
+a `peer_gone` unit test on live / has-data / dropped sockets. The
+io_uring path never had the second window — it sets `abandoned` at EOF
+detection — so this is a poller-path fix, which is why the failure was
+macOS-only.
 
 ## What the 2026-07-21 escrow round did establish (still true)
 
