@@ -225,6 +225,8 @@ impl<C: Commands> Shard<C> {
     /// origin: the serve result is back. Non-empty → deliver + unpark + cancel
     /// the rest. Empty (raced) → re-arm every key and keep waiting.
     pub(crate) fn origin_on_serve_resp(&mut self, conn: u64, key: Vec<u8>, reply: Vec<u8>) {
+        #[cfg(debug_assertions)]
+        crate::block_xshard_confirm::counters::bump(&crate::block_xshard_confirm::counters::ENTERED);
         let Some(ob) = self.origin_blocks.get_mut(&conn) else {
             // The record is gone — the conn timed out or disconnected and was
             // torn down before the reply came back. If the reply is empty the
@@ -248,6 +250,8 @@ impl<C: Commands> Shard<C> {
             return;
         };
         if reply.is_empty() {
+            #[cfg(debug_assertions)]
+            crate::block_xshard_confirm::counters::bump(&crate::block_xshard_confirm::counters::EMPTY);
             ob.serving = false;
             if ob.abandoned {
                 // Nothing was popped, so there is nothing to put back --
@@ -294,7 +298,11 @@ impl<C: Commands> Shard<C> {
             }
             // Unreachable for a real serve (we just served this key), but do
             // not silently hold an escrow if it ever is.
-            None => self.abort_serve(conn, &key),
+            None => {
+                #[cfg(debug_assertions)]
+                crate::block_xshard_confirm::counters::bump(&crate::block_xshard_confirm::counters::NONE_FB);
+                self.abort_serve(conn, &key);
+            }
         }
     }
 

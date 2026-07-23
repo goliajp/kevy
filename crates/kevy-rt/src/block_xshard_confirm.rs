@@ -23,12 +23,15 @@ pub mod counters {
     pub static FASTPATH_ABORT: AtomicU64 = AtomicU64::new(0);
     pub static RECORD_GONE: AtomicU64 = AtomicU64::new(0);
     pub static DELIVER: AtomicU64 = AtomicU64::new(0);
+    pub static ENTERED: AtomicU64 = AtomicU64::new(0);
+    pub static EMPTY: AtomicU64 = AtomicU64::new(0);
+    pub static NONE_FB: AtomicU64 = AtomicU64::new(0);
     #[inline]
     pub fn bump(c: &AtomicU64) {
         c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
     /// `(released, restored, fastpath_abort, record_gone, deliver)`.
-    pub fn snapshot() -> (u64, u64, u64, u64, u64) {
+    pub fn snapshot() -> (u64, u64, u64, u64, u64, u64, u64, u64) {
         use std::sync::atomic::Ordering::Relaxed;
         (
             RELEASED.load(Relaxed),
@@ -36,6 +39,9 @@ pub mod counters {
             FASTPATH_ABORT.load(Relaxed),
             RECORD_GONE.load(Relaxed),
             DELIVER.load(Relaxed),
+            ENTERED.load(Relaxed),
+            EMPTY.load(Relaxed),
+            NONE_FB.load(Relaxed),
         )
     }
 }
