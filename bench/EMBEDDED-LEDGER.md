@@ -41,9 +41,42 @@ C# KV peer (LMDB via Lightning.NET is).
 
 ## Results
 
-_Pending — harnesses under `bench/embeddedgate/<lang>/`. Each track's table
-lands here as it is measured (dev-host relative standing first, lx64
-definitive pass second). Losing axes named per the rules above._
+### Cross-track synthesis (Node ✓ / Go ✓ / C ✓ measured; C# pending)
+
+Three tracks measured against four engines (SQLite, bbolt, badger, LMDB).
+A consistent, honest pattern — kevy's wins and losses are **structural**, the
+same axes every time:
+
+**kevy wins:**
+- **Single-op reads.** The `kevy_get_shared` zero-copy Arc lane is **flat
+  ~12 ns at every value size** and **beats LMDB** — the acknowledged
+  read-latency leader — 2–9× (C track). It beats SQLite (Node) and badger
+  (Go) too. Only bbolt's zero-copy mmap pointer beats it, and only *through
+  the Go binding's copy-out*, not the engine.
+- **Single-op writes (small→mid).** A one-off scalar `set` pays kevy a
+  buffered AOF append; every peer pays a full per-op transaction commit —
+  kevy wins 12–62× at 16 B, holding to ~4 KB.
+
+**kevy loses (named, not hidden):**
+- **Bulk / batch writes — the sharpest gap, on every engine.** Peers
+  amortize N writes into one transaction (bbolt B+tree bulk fill ~90–140
+  ns/op, badger `WriteBatch`, LMDB one-txn, SQLite one-txn): kevy's per-op
+  AOF path can't, losing up to 147× (bbolt) / 37× (LMDB) / 3.8× (SQLite) at
+  64 KB. kevy has **no batch-write path**.
+- **Large single writes (64 KB).** kevy copies the value twice (store insert
+  + AOF BufWriter) — the cost the mmkvgate SET decomposition already named.
+- **Reads through a copying binding.** kevy-go's `GetScalar` copies out
+  across cgo and loses to bbolt's zero-copy pointer — a *binding* loss the C
+  track disproves at the engine level.
+
+**Two indicated attack surfaces** (decomposition, not polish — perf-vs-foss):
+1. **A batch-write path for kevy embedded** — the universal gap. Every engine
+   beats kevy on bulk load because it has a transaction to amortize into.
+2. **Zero-copy binding read lanes** (Go first) — the engine lane already wins
+   (C track); the copying bindings give the win back.
+
+lx64 definitive pass pending (perf §9); numbers below are dev-host relative
+standing. Per-track detail follows.
 
 ### Node — kevy-node vs better-sqlite3 (sync) / classic-level (async)
 
@@ -111,11 +144,115 @@ headline tier, what a real app runs; both OS-flush, neither fsyncs per op):
 
 ### Go — kevy-go vs bbolt / badger
 
-_pending_
+**Harness:** `bench/embeddedgate/go/` (`run.sh` stages release
+`libkevy_ffi.a` for the cgo link, restores debug after). Dev host, N=100k,
+200 warm keys, median-of-3. bbolt v1.5.0, badger v4.9.4, go 1.25. **T-async
+only** (both peers are disk-only — no pure-mem tier): kevy AOF EverySec,
+bbolt `NoSync=true`, badger `SyncWrites=false`. Neither peer has a bare
+get/set — both force a txn closure; cold-1op = one txn/op, amortized = one
+txn/N (badger via `WriteBatch`). `k/p < 1` = kevy faster.
 
-### C — kevy C ABI vs LMDB
+**kevy vs bbolt** (mmap B+tree):
 
-_pending_
+| axis \ size | 16 B | 256 B | 4 KB | 64 KB |
+|-------------|:----:|:-----:|:----:|:-----:|
+| GET cold-1op | 0.48 (kevy 2.1×) | 0.48 (2.1×) | **1.98 (peer 2.0×)** | **21.3 (peer 21×)** |
+| GET amortized | **2.50 (peer 2.5×)** | **1.59 (peer 1.6×)** | 4.81 (peer 4.8×) | **62.2 (peer 62×)** |
+| SET cold-1op | 0.02 (kevy 45×) | 0.03 (31×) | 0.15 (kevy 6.5×) | 0.64 (kevy 1.6×) |
+| SET amortized | 3.25 (peer 3.3×) | 2.94 (peer 2.9×) | 16.5 (peer 16×) | **147 (peer 147×)** |
+
+**kevy vs badger** (LSM + value log):
+
+| axis \ size | 16 B | 256 B | 4 KB | 64 KB |
+|-------------|:----:|:-----:|:----:|:-----:|
+| GET cold-1op | 0.25 (kevy 4.0×) | 0.33 (3.0×) | 0.43 (kevy 2.4×) | 1.04 (peer 1.0×) |
+| GET amortized | 0.68 (kevy 1.5×) | 0.64 (1.6×) | 0.53 (kevy 1.9×) | 1.30 (peer 1.3×) |
+| SET cold-1op | 0.07 (kevy 14×) | 0.09 (12×) | 0.32 (kevy 3.2×) | 0.86 (kevy 1.2×) |
+| SET amortized | 5.29 (peer 5×) | 6.24 (peer 6×) | 10.5 (peer 10×) | 0.99 (tie) |
+
+**Reading it — losing axes named, and the binding-vs-engine split:**
+
+- **GET vs bbolt: kevy-go LOSES, at every size on the amortized read** (2.5×
+  at 16 B up to **62× at 64 KB**). bbolt's `Get` returns a **zero-copy
+  pointer into the mmap** (~90 ns flat, no byte copy); kevy-go's `GetScalar`
+  **copies the value out across the cgo boundary** into a Go `[]byte`
+  (~133 ns at 16 B, ~5.9 µs at 64 KB, scaling with size). **This is a
+  binding-shape loss, not an engine loss** — the C track below proves it:
+  kevy's own `kevy_get_shared` zero-copy lane is flat ~12 ns and **beats
+  LMDB**, the read leader. Go loses here because `GetScalar` returns owned
+  bytes, exactly the copy-vs-wrap gap the mmkvgate Nitro work found decisive
+  on mobile. A zero-copy Go GET lane (a view valid until the next call, à la
+  bbolt's txn-scoped slice) is the indicated binding-level fix.
+- **GET vs badger: kevy wins to 4 KB, loses only ~1.0–1.3× at 64 KB** —
+  badger's `ValueCopy` copies too, so it is copy-vs-copy and kevy's engine
+  wins except where its own 64 KB copy-out catches up. Confirms the bbolt
+  loss is bbolt's *zero-copy*, not kevy's engine being slow.
+- **SET cold-single-op: kevy wins decisively** (up to 45× vs bbolt, 14× vs
+  badger at 16 B). A one-off scalar write pays kevy only a buffered AOF
+  append; the peers pay a full transaction commit (B+tree rebalance /
+  LSM memtable) per op. The real-app write path, and kevy's clearest win.
+- **SET amortized: kevy LOSES, the largest gaps on any track.** bbolt in one
+  transaction bulk-loads at a flat **~90–140 ns/op** (147× faster than kevy
+  at 64 KB); badger `WriteBatch` similar (only ties kevy at 64 KB). A
+  single-transaction bulk fill is what a B+tree/LSM is built for — sequential
+  page fill, one durability event. kevy's per-op AOF-append + store-insert
+  has no batch path to amortize into. **The sharpest north-star gap:
+  batch/bulk write.**
+
+**Honest bottom line (Go):** kevy owns the **single-op writes** (small→mid
+cold SET) and **beats badger on reads**; it **loses reads to bbolt purely
+through the cgo copy-out** (a binding fix, not the engine — see C track) and
+**loses bulk/batch writes** to both. The two indicated attack surfaces:
+(1) a zero-copy Go GET lane, (2) a batch-write path for kevy embedded — both
+decomposition targets if the north star is all-axis ≥ peer.
+
+### C — kevy C ABI vs LMDB (the read-latency leader — the toughest bar)
+
+**Harness:** `bench/embeddedgate/c/` (`run.sh` compiles vendored LMDB 0.9.33
+— self-contained, no system install — + the harness, links the release kevy
+cdylib). Dev host, N=100k, 200 warm keys, median-of-3. **T-async:** kevy AOF
+EverySec, LMDB `MDB_NOSYNC`. kevy uses the **`kevy_get_shared` zero-copy Arc
+lane** (freed with `kevy_buf_free_shared`) — the true peer to LMDB's
+`mdb_get`, which returns a **zero-copy pointer into the mmap**. So this track
+is **zero-copy read vs zero-copy read** — no copy-out artifact. LMDB forces a
+txn; cold-1op = txn/op, amortized = one txn reused for N. `k/p < 1` = kevy.
+
+| axis \ size | 16 B | 256 B | 4 KB | 64 KB |
+|-------------|:----:|:-----:|:----:|:-----:|
+| GET cold-1op | 0.29 (kevy 3.5×) | 0.14 (7.3×) | 0.11 (9.0×) | 0.15 (6.5×) |
+| GET amortized | 0.50 (kevy 2.0×) | 0.21 (4.7×) | 0.16 (6.2×) | 0.24 (4.1×) |
+| SET cold-1op | 0.07 (kevy 15×) | 0.06 (16×) | 0.34 (kevy 2.9×) | **2.23 (peer 2.2×)** |
+| SET amortized | 2.79 (peer 2.8×) | 3.61 (peer 3.6×) | 8.83 (peer 8.8×) | **36.8 (peer 37×)** |
+
+**Reading it — the headline finding of the whole track:**
+
+- **GET: kevy wins every size, cold AND amortized — it beats LMDB, the
+  read-latency leader, on its home turf.** kevy's `kevy_get_shared` is a
+  **flat ~12 ns at every value size** (hashmap hit + O(1) `Arc::clone`,
+  zero byte copy); LMDB's `mdb_get` is a B+tree descent through the mmap
+  (~50–75 ns amortized, ~85–110 ns with a per-get txn). Even when LMDB
+  reuses one read txn (its best case), kevy is **2–6× faster**. This is the
+  strongest result on any embeddedgate track: the mmap-view read that beat
+  kevy 21× **through the cgo copy in the Go track is beaten by kevy's own
+  zero-copy lane here** — proving that Go loss was the binding's copy-out,
+  not the engine. Symas + Mozilla call LMDB the read leader; kevy's in-memory
+  Arc lane is faster still.
+- **SET cold-single-op: kevy wins small** (15–16× at 16–256 B), crosses over
+  at ~4 KB, **loses at 64 KB** (peer 2.2×). LMDB pays a full B+tree txn
+  commit per op (2.7–12 µs); kevy pays a buffered AOF append — until 64 KB,
+  where kevy's double-copy (store insert + AOF BufWriter) overtakes.
+- **SET amortized: kevy loses** (2.8× → **37× at 64 KB**). One LMDB txn
+  bulk-writes at ~78–722 ns/op; kevy has no batch-write path. Same universal
+  gap as the Go track (bbolt/badger bulk-txn) — bulk loading is where the
+  purpose-built B+tree/LSM engines win, and kevy's per-op AOF path can't
+  amortize into a single durability event.
+
+**Honest bottom line (C):** on the toughest bar, kevy **wins reads outright**
+(zero-copy Arc beats mmap-view, every size, 2–9×) and **wins single-op small
+writes** (no per-op txn), but **loses bulk/batch writes and large single
+writes** (no batch-write path; double-copy). The universal north-star gap,
+now seen against three engines (SQLite, bbolt/badger, LMDB), is
+**batch/bulk write** — the indicated decomposition target.
 
 ### C# — kevy C# scalar vs LMDB (Lightning.NET)
 
