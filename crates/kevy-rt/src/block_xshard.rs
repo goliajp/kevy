@@ -252,6 +252,13 @@ impl<C: Commands> Shard<C> {
         // element must be restored, not popped into a dead output buffer.
         let abandoned = ob.abandoned;
         let gone = abandoned || self.conns.get(&conn).is_none_or(|c| c.sock.peer_gone());
+        if std::env::var_os("KEVY_TEST_XSHARD_HOLD_CLOSE").is_some() {
+            eprintln!(
+                "C1-PROBE conn={conn} abandoned={abandoned} present={} peer_gone={:?} gone={gone}",
+                self.conns.contains_key(&conn),
+                self.conns.get(&conn).map(|c| c.sock.peer_gone()),
+            );
+        }
         if gone {
             // The element is real and its client is gone. Tell the shard
             // that popped it to put it back; it has been holding the undo
