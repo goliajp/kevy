@@ -1520,10 +1520,14 @@ fn spop_storm_keeps_replica_sets_identical() {
                 )
             }
             // Still a real answer about the replica, and a different one:
-            // it is not merely behind, it is not accepting.
+            // it is not merely behind, it is not accepting. Say whether its
+            // runtime thread is still alive — "slow to accept under load" and
+            // "the replica panicked and is gone" want opposite responses, and
+            // a bare "not accepting" cannot tell them apart.
             None => format!(
-                "replica is not accepting connections on port {} either",
-                replica.port
+                "replica is not accepting connections on port {}; runtime thread {}",
+                replica.port,
+                if replica.runtime_alive() { "still ALIVE (slow, widen KEVY_TEST_PATIENCE)" } else { "has EXITED (panicked, find the crash)" },
             ),
         };
         panic!(

@@ -90,6 +90,13 @@ jobs:
         run: cargo build --workspace --target ${{ matrix.target }}
 
       - name: Test (workspace, --lib --tests)
+        # KEVY_TEST_PATIENCE widens the replication tests' catch-up budgets:
+        # they spawn a full second runtime in-process, and under the parallel
+        # suite that replica is CPU-starved, so the 60s default flakes on a
+        # loaded runner (spop_storm's fence never lands in time). covgate sets
+        # this for the same reason; the plain test job needs it too.
+        env:
+          KEVY_TEST_PATIENCE: "3"
         run: cargo test --workspace --lib --tests --target ${{ matrix.target }}
       # After the tests, not before: the point is that running them leaves
       # the repo root clean. See bench/rootgate.sh for why `git status`
