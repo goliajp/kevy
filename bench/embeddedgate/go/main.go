@@ -53,7 +53,7 @@ func timeit(fn func()) float64 {
 	return s[1]
 }
 
-type res struct{ getCold, getAmort, setCold, setAmort float64 }
+type res struct{ getCold, getAmort, getView, setCold, setAmort float64 }
 
 func benchKevy(db *kevy.DB, ks [][]byte, v []byte) res {
 	for _, k := range ks {
@@ -62,6 +62,13 @@ func benchKevy(db *kevy.DB, ks [][]byte, v []byte) res {
 	get := timeit(func() {
 		for i := 0; i < N; i++ {
 			_, _, _ = db.GetScalar(ks[i%KEYS])
+		}
+	})
+	// zero-copy read: view the value in place, no copy into Go memory
+	noop := func([]byte) {}
+	getView := timeit(func() {
+		for i := 0; i < N; i++ {
+			_, _ = db.GetView(ks[i%KEYS], noop)
 		}
 	})
 	setCold := timeit(func() {
@@ -77,7 +84,7 @@ func benchKevy(db *kevy.DB, ks [][]byte, v []byte) res {
 		mv[i] = v
 	}
 	setAmort := timeit(func() { _ = db.SetMany(mk, mv) })
-	return res{get, get, setCold, setAmort} // GET: no read txn to amortize (cold==amort)
+	return res{get, get, getView, setCold, setAmort} // GET copy: no read txn to amortize (cold==amort)
 }
 
 var bucket = []byte("kv")
@@ -126,7 +133,7 @@ func benchBolt(db *bolt.DB, ks [][]byte, v []byte) res {
 			return nil
 		})
 	})
-	return res{getCold, getAmort, setCold, setAmort}
+	return res{getCold, getAmort, getAmort, setCold, setAmort} // getView col = peer zero-copy amort read
 }
 
 func benchBadger(db *badger.DB, ks [][]byte, v []byte) res {
@@ -173,7 +180,7 @@ func benchBadger(db *badger.DB, ks [][]byte, v []byte) res {
 		}
 		_ = wb.Flush()
 	})
-	return res{getCold, getAmort, setCold, setAmort}
+	return res{getCold, getAmort, getAmort, setCold, setAmort} // getView col = peer zero-copy amort read
 }
 
 func verdict(k, p float64) string {
@@ -245,12 +252,14 @@ func main() {
 	fmt.Println("\n## kevy vs bbolt")
 	table("bbolt", "GET cold-1op", kevyR, boltR, func(r res) float64 { return r.getCold })
 	table("bbolt", "GET amortized", kevyR, boltR, func(r res) float64 { return r.getAmort })
+	table("bbolt", "GET zero-copy — kevy GetView vs bbolt mmap view", kevyR, boltR, func(r res) float64 { return r.getView })
 	table("bbolt", "SET cold-1op", kevyR, boltR, func(r res) float64 { return r.setCold })
 	table("bbolt", "SET amortized", kevyR, boltR, func(r res) float64 { return r.setAmort })
 
 	fmt.Println("\n## kevy vs badger")
 	table("badger", "GET cold-1op", kevyR, badgerR, func(r res) float64 { return r.getCold })
 	table("badger", "GET amortized", kevyR, badgerR, func(r res) float64 { return r.getAmort })
+	table("badger", "GET zero-copy — kevy GetView vs badger ValueCopy", kevyR, badgerR, func(r res) float64 { return r.getView })
 	table("badger", "SET cold-1op", kevyR, badgerR, func(r res) float64 { return r.setCold })
 	table("badger", "SET amortized", kevyR, badgerR, func(r res) float64 { return r.setAmort })
 

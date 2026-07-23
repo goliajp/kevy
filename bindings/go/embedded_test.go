@@ -45,6 +45,38 @@ func TestSetManyBatch(t *testing.T) {
 	}
 }
 
+func TestGetViewZeroCopy(t *testing.T) {
+	db, err := OpenMem()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	big := make([]byte, 4096) // > 64 B → Arc bulk (the zero-copy lane)
+	for i := range big {
+		big[i] = 'a'
+	}
+	if err := db.SetScalar([]byte("k"), big, 0); err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	ok, err := db.GetView([]byte("k"), func(v []byte) {
+		seen = len(v)
+		if string(v) != string(big) {
+			t.Fatalf("GetView value mismatch: %d bytes", len(v))
+		}
+	})
+	if err != nil || !ok || seen != len(big) {
+		t.Fatalf("GetView ok=%v err=%v seen=%d", ok, err, seen)
+	}
+	// A miss must not call fn.
+	called := false
+	ok, _ = db.GetView([]byte("absent"), func([]byte) { called = true })
+	if ok || called {
+		t.Fatalf("GetView(absent) ok=%v called=%v", ok, called)
+	}
+}
+
 func TestEmbeddedScalarAndCmd(t *testing.T) {
 	db, err := OpenMem()
 	if err != nil {

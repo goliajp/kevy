@@ -94,11 +94,18 @@ the truth is sharper and split cleanly in two:
   copies the value into a bounded arena before the store copies it again) —
   the batch path is for *many small* keys (the RDS on-ramp shape).
 
-**Attack #2 — zero-copy binding read lanes** (Go/C#) — still open. The engine
-lane already wins (C track, `kevy_get_shared` beats LMDB); the copying
-bindings give it back. A view-returning binding API (lifetime-managed) is the
-fix — deferred (most callers want owned bytes; it is a niche API + a real
-lifetime-safety surface).
+**Attack #2 — zero-copy binding read lanes — BUILT for Go (2026-07-24).**
+kevy-go now exposes `GetView(key, fn)`: a callback-scoped zero-copy read (the
+`[]byte` VIEWs engine memory, valid only inside `fn`, freed on return — bbolt's
+txn-slice contract). It **closes the large-GET binding loss**: 64 KB went from
+62× off bbolt (`GetScalar` copy) to a **1.04× win**, and beats badger's
+copying `ValueCopy` **52×**. kevy `GetView` is flat ~100 ns at every size (the
+~12 ns engine + fixed cgo crossing); only the small-value read still trails
+bbolt's in-process mmap pointer (1.89× at 16 B — the crossing-bound floor).
+The engine's read advantage (C track: beats LMDB) is now reachable through the
+binding for callers that can scope the read. C# gets the same
+callback-scoped lane next (safer there — a `ReadOnlySpan` in a scoped
+delegate); tested (`TestGetViewZeroCopy`).
 
 _Status: **Attack #1 COMPLETE.** Binding half closed (`kevy_set_many` FFI +
 `SetMany` in kevy-go/Kevy.Embedded, tested). Engine half decomposed to root
@@ -220,17 +227,32 @@ closed the 16 B gap from 147× (per-op) to 2.7×; see the cross-track synthesis
 
 **Reading it — losing axes named, and the binding-vs-engine split:**
 
-- **GET vs bbolt: kevy-go LOSES, at every size on the amortized read** (2.5×
-  at 16 B up to **62× at 64 KB**). bbolt's `Get` returns a **zero-copy
+- **GET vs bbolt (`GetScalar`, copy-out): kevy-go LOSES the amortized read**
+  (2.5× at 16 B up to **62× at 64 KB**). bbolt's `Get` returns a **zero-copy
   pointer into the mmap** (~90 ns flat, no byte copy); kevy-go's `GetScalar`
   **copies the value out across the cgo boundary** into a Go `[]byte`
   (~133 ns at 16 B, ~5.9 µs at 64 KB, scaling with size). **This is a
   binding-shape loss, not an engine loss** — the C track below proves it:
   kevy's own `kevy_get_shared` zero-copy lane is flat ~12 ns and **beats
-  LMDB**, the read leader. Go loses here because `GetScalar` returns owned
-  bytes, exactly the copy-vs-wrap gap the mmkvgate Nitro work found decisive
-  on mobile. A zero-copy Go GET lane (a view valid until the next call, à la
-  bbolt's txn-scoped slice) is the indicated binding-level fix.
+  LMDB**, the read leader.
+- **GET vs bbolt (`GetView`, zero-copy — Attack #2, BUILT): the large-GET
+  loss is CLOSED.** kevy-go now exposes `GetView(key, fn)` — a callback-scoped
+  zero-copy read (the value bytes VIEW engine memory, freed when `fn` returns;
+  the same lifetime contract as bbolt's txn-scoped slice). Measured against
+  bbolt's own zero-copy mmap view:
+
+  | GET zero-copy \ size | 16 B | 256 B | 4 KB | 64 KB |
+  |----------------------|:----:|:-----:|:----:|:-----:|
+  | kevy GetView / bbolt | 1.89 (peer 1.9×) | 1.13 (peer 1.1×) | 1.10 (peer 1.1×) | **0.96 (kevy 1.04×)** |
+  | kevy GetView / badger (ValueCopy) | 0.55 (kevy 1.8×) | 0.46 (kevy 2.2×) | 0.10 (kevy 10×) | **0.02 (kevy 52×)** |
+
+  kevy `GetView` is **flat ~100 ns at every size** (the ~12 ns engine + the
+  fixed cgo crossing). The **62× loss at 64 KB became a 1.04× win** vs bbolt,
+  and a **52× win** vs badger (which copies via `ValueCopy`, scaling with
+  size). The residual small-value loss to bbolt (1.89× at 16 B) is bbolt's
+  in-process mmap pointer vs kevy's fixed cgo crossing — the same
+  crossing-bound small-value floor the mmkvgate mobile work proved not
+  closable. **The engine's read advantage is now exposed through the binding.**
 - **GET vs badger: kevy wins to 4 KB, loses only ~1.0–1.3× at 64 KB** —
   badger's `ValueCopy` copies too, so it is copy-vs-copy and kevy's engine
   wins except where its own 64 KB copy-out catches up. Confirms the bbolt
