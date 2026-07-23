@@ -64,12 +64,20 @@ func benchKevy(db *kevy.DB, ks [][]byte, v []byte) res {
 			_, _, _ = db.GetScalar(ks[i%KEYS])
 		}
 	})
-	set := timeit(func() {
+	setCold := timeit(func() {
 		for i := 0; i < N; i++ {
 			_ = db.SetScalar(ks[i%KEYS], v, 0)
 		}
 	})
-	return res{get, get, set, set} // no txn to amortize (cold == amortized)
+	// amortized: SetMany — one cgo crossing for all N sets (the batch path)
+	mk := make([][]byte, N)
+	mv := make([][]byte, N)
+	for i := 0; i < N; i++ {
+		mk[i] = ks[i%KEYS]
+		mv[i] = v
+	}
+	setAmort := timeit(func() { _ = db.SetMany(mk, mv) })
+	return res{get, get, setCold, setAmort} // GET: no read txn to amortize (cold==amort)
 }
 
 var bucket = []byte("kv")

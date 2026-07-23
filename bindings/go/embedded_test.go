@@ -8,6 +8,43 @@ import (
 
 // Embedded store contract (contract §5.2, §5.3, §6).
 
+func TestSetManyBatch(t *testing.T) {
+	db, err := OpenMem()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// Includes an empty key, a 4 KiB value (batched), and a 2 MiB value that
+	// exceeds the ~1 MiB arena and must take the direct SetScalar fallback.
+	keys := [][]byte{[]byte("a"), []byte("bb"), []byte("ccc"), {}, []byte("big")}
+	vals := [][]byte{[]byte("1"), []byte("22"), make([]byte, 4096), []byte("z"), make([]byte, 2<<20)}
+	for i := range vals[2] {
+		vals[2][i] = 'a'
+	}
+	for i := range vals[4] {
+		vals[4][i] = 'b'
+	}
+	if err := db.SetMany(keys, vals); err != nil {
+		t.Fatalf("SetMany: %v", err)
+	}
+	for i, k := range keys {
+		got, ok, err := db.GetScalar(k)
+		if err != nil || !ok {
+			t.Fatalf("GetScalar(%q) ok=%v err=%v", k, ok, err)
+		}
+		if string(got) != string(vals[i]) {
+			t.Fatalf("key %q: got %d bytes, want %d", k, len(got), len(vals[i]))
+		}
+	}
+	if err := db.SetMany([][]byte{[]byte("x")}, nil); err == nil {
+		t.Fatal("SetMany length mismatch should error")
+	}
+	if err := db.SetMany(nil, nil); err != nil {
+		t.Fatalf("SetMany empty should be a no-op: %v", err)
+	}
+}
+
 func TestEmbeddedScalarAndCmd(t *testing.T) {
 	db, err := OpenMem()
 	if err != nil {

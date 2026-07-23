@@ -246,6 +246,101 @@ func (d *DB) SetScalar(key, val []byte, ttlMs uint64) error {
 	return nil
 }
 
+// SetMany applies len(keys) SETs in one FFI crossing — the batch-write path
+// (contract §5.2, kevy_set_many). A loop of SetScalar pays the cgo boundary
+// once per key; SetMany pays it once for the whole batch, closing most of the
+// bulk-write gap to native embedded stores. keys and vals must be equal length.
+// Durability is unchanged (each set appends to the AOF; EverySec/Always govern
+// the fsync).
+func (d *DB) SetMany(keys, vals [][]byte) error {
+	if d.p == nil {
+		return errors.New("kevy: closed handle")
+	}
+	if len(keys) != len(vals) {
+		return errors.New("kevy: SetMany keys/vals length mismatch")
+	}
+	if len(keys) != len(vals) {
+		return errors.New("kevy: SetMany keys/vals length mismatch")
+	}
+	n := len(keys)
+	if n == 0 {
+		return nil
+	}
+	// The key/val bytes are copied into a fixed ~1 MiB C arena and flushed in
+	// byte-bounded chunks: every pointer handed to C then points at C memory
+	// (storing Go pointers in C memory is unsafe — the GC neither scans nor
+	// keeps them alive). One crossing amortizes a whole chunk — many ops for
+	// small values, fewer for large (where the per-op crossing is already a
+	// small fraction). Memory stays bounded regardless of batch size.
+	return d.setManyChunked(keys, vals)
+}
+
+const setManyArenaBytes = 1 << 20 // ~1 MiB per crossing
+
+func (d *DB) setManyChunked(keys, vals [][]byte) error {
+	n := len(keys)
+	arenaCap := setManyArenaBytes
+	arena := C.malloc(C.size_t(arenaCap))
+	kp := C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(uintptr(0))))
+	kl := C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(C.size_t(0))))
+	vp := C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(uintptr(0))))
+	vl := C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(C.size_t(0))))
+	defer C.free(arena)
+	defer C.free(kp)
+	defer C.free(kl)
+	defer C.free(vp)
+	defer C.free(vl)
+	buf := unsafe.Slice((*byte)(arena), arenaCap)
+	kpa := unsafe.Slice((**C.uint8_t)(kp), n)
+	kla := unsafe.Slice((*C.size_t)(kl), n)
+	vpa := unsafe.Slice((**C.uint8_t)(vp), n)
+	vla := unsafe.Slice((*C.size_t)(vl), n)
+
+	i, off, cnt := 0, 0, 0
+	flush := func() error {
+		if cnt == 0 {
+			return nil
+		}
+		rc := C.kevy_set_many(d.p, C.size_t(cnt),
+			(**C.uint8_t)(kp), (*C.size_t)(kl), (**C.uint8_t)(vp), (*C.size_t)(vl))
+		if rc < 0 {
+			return errors.New("kevy: kevy_set_many misuse or storage error")
+		}
+		off, cnt = 0, 0
+		return nil
+	}
+	for i < n {
+		need := len(keys[i]) + len(vals[i])
+		if need > arenaCap {
+			// One item larger than the arena: flush what's queued and set it
+			// directly (SetScalar passes the pointer, no arena copy/limit).
+			if err := flush(); err != nil {
+				return err
+			}
+			if err := d.SetScalar(keys[i], vals[i], 0); err != nil {
+				return err
+			}
+			i++
+			continue
+		}
+		if cnt > 0 && off+need > arenaCap {
+			if err := flush(); err != nil {
+				return err
+			}
+			continue // re-check the same i against the fresh arena
+		}
+		kpa[cnt] = (*C.uint8_t)(unsafe.Add(unsafe.Pointer((*byte)(arena)), off))
+		kla[cnt] = C.size_t(len(keys[i]))
+		off += copy(buf[off:], keys[i])
+		vpa[cnt] = (*C.uint8_t)(unsafe.Add(unsafe.Pointer((*byte)(arena)), off))
+		vla[cnt] = C.size_t(len(vals[i]))
+		off += copy(buf[off:], vals[i])
+		cnt++
+		i++
+	}
+	return flush()
+}
+
 // OpenReport is the boot-replay verdict: what an open restored — and what
 // it could not. DroppedBytes > 0 or Corrupt means the store recovered LESS
 // than its files held (the dropped region was quarantined next to the

@@ -20,6 +20,7 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use kevy_embedded::{Config, KevyError, Store, Subscription};
+mod batch;
 mod dispatch;
 mod frame;
 use frame::encode_frame;
