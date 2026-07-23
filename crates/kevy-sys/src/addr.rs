@@ -24,6 +24,10 @@ pub(crate) const SO_REUSEADDR: c_int = 2;
 pub(crate) const SO_REUSEPORT: c_int = 15;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) const O_NONBLOCK: c_int = 0x800;
+// MSG_PEEK is 2 on every Unix; MSG_DONTWAIT differs by platform.
+pub(crate) const MSG_PEEK: c_int = 2;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub(crate) const MSG_DONTWAIT: c_int = 0x40;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) const SOL_SOCKET: c_int = 0xffff;
@@ -33,6 +37,8 @@ pub(crate) const SO_REUSEADDR: c_int = 0x0004;
 pub(crate) const SO_REUSEPORT: c_int = 0x0200;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) const O_NONBLOCK: c_int = 0x0004;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub(crate) const MSG_DONTWAIT: c_int = 0x80;
 
 // ---- sockaddr_in -----------------------------------------------------------
 

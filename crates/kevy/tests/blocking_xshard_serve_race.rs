@@ -153,17 +153,26 @@ impl Drop for Server {
 
 #[test]
 fn a_disconnect_during_the_serve_does_not_lose_the_element() {
-    // An 800ms serve window: the disconnect lands well inside it (at
-    // ~250ms), so the origin marks the serve abandoned before the target
-    // pops at the window's end. The margin is large on purpose — the
-    // 300ms window this replaced was tight enough that a slow CI runner
-    // pushed the pop past the verify and the test read a race instead of
-    // the property. Timing that only load can break tests nothing.
+    // Two seams make the lossy interleaving deterministic instead of
+    // load-only. SERVE_DELAY_MS opens an 800ms window between "origin asks
+    // the target to serve" and "the reply comes back", so the disconnect
+    // lands inside it. HOLD_CLOSE then defers the origin's teardown of that
+    // serving conn, reproducing the exact ordering that lost an element on
+    // the macOS CI runner: the reply reaches `origin_on_serve_resp` while
+    // the disconnect is still unnoticed — `abandoned` false, the socket
+    // already dead. That is the window escrow's `abandoned` flag does NOT
+    // cover; the only thing that catches it is the peek-the-socket guard at
+    // delivery. Without HOLD_CLOSE this passed on an unloaded machine (the
+    // disconnect was noticed first, `abandoned` true) and failed only under
+    // CI load — a test that exercises the defect only sometimes is worse
+    // than one that clearly does. With both seams it fails deterministically
+    // without the peek guard and passes with it.
     //
     // SAFETY: set before any server thread starts; this binary runs only
     // this test.
     unsafe {
         std::env::set_var("KEVY_TEST_XSHARD_SERVE_DELAY_MS", "800");
+        std::env::set_var("KEVY_TEST_XSHARD_HOLD_CLOSE", "1");
     }
     let srv = Server::start();
 
