@@ -12,37 +12,24 @@ use crate::Commands;
 use crate::message::Inbound;
 use crate::shard::Shard;
 
-/// Debug-only serve-resolution counters (release vs restore), read by the
-/// deterministic regression to see which branch a failure took. Non-I/O so
-/// they do not perturb the race they measure.
+/// Debug-only signal that a cross-shard serve reply was processed by the
+/// origin (i.e. `origin_on_serve_resp` ran). The escrow regression uses it
+/// to tell a genuine cross-shard placement from a co-located one: with N
+/// shards a random key lands on the conn's own shard ~1/N of the time, and
+/// that takes the LOCAL block path, not this cross-shard one — so the test
+/// retries until it provably exercised the cross-shard code. Non-I/O, so it
+/// does not perturb the timing.
 #[cfg(debug_assertions)]
 pub mod counters {
-    use std::sync::atomic::AtomicU64;
-    pub static RELEASED: AtomicU64 = AtomicU64::new(0);
-    pub static RESTORED: AtomicU64 = AtomicU64::new(0);
-    pub static FASTPATH_ABORT: AtomicU64 = AtomicU64::new(0);
-    pub static RECORD_GONE: AtomicU64 = AtomicU64::new(0);
-    pub static DELIVER: AtomicU64 = AtomicU64::new(0);
-    pub static ENTERED: AtomicU64 = AtomicU64::new(0);
-    pub static EMPTY: AtomicU64 = AtomicU64::new(0);
-    pub static NONE_FB: AtomicU64 = AtomicU64::new(0);
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+    pub static CROSS_SHARD_SERVES: AtomicU64 = AtomicU64::new(0);
     #[inline]
-    pub fn bump(c: &AtomicU64) {
-        c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    pub fn note_cross_shard_serve() {
+        CROSS_SHARD_SERVES.fetch_add(1, Relaxed);
     }
-    /// `(released, restored, fastpath_abort, record_gone, deliver)`.
-    pub fn snapshot() -> (u64, u64, u64, u64, u64, u64, u64, u64) {
-        use std::sync::atomic::Ordering::Relaxed;
-        (
-            RELEASED.load(Relaxed),
-            RESTORED.load(Relaxed),
-            FASTPATH_ABORT.load(Relaxed),
-            RECORD_GONE.load(Relaxed),
-            DELIVER.load(Relaxed),
-            ENTERED.load(Relaxed),
-            EMPTY.load(Relaxed),
-            NONE_FB.load(Relaxed),
-        )
+    /// Cross-shard serves processed since process start.
+    pub fn cross_shard_serves() -> u64 {
+        CROSS_SHARD_SERVES.load(Relaxed)
     }
 }
 
@@ -52,8 +39,6 @@ impl<C: Commands> Shard<C> {
     /// Idempotent — a spurious flush after the confirm is a no-op.
     pub(crate) fn confirm_serve_delivered(&mut self, conn: u64) {
         if let Some(shard) = self.serve_confirm.remove(&conn) {
-            #[cfg(debug_assertions)]
-            counters::RELEASED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if shard == self.id {
                 self.target_release_escrow(self.id, conn);
             } else {
@@ -67,8 +52,6 @@ impl<C: Commands> Shard<C> {
     /// Restore it. Idempotent. Called from the connection-close path.
     pub(crate) fn restore_serve_on_teardown(&mut self, conn: u64) {
         if let Some(shard) = self.serve_confirm.remove(&conn) {
-            #[cfg(debug_assertions)]
-            counters::RESTORED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if shard == self.id {
                 self.target_apply_escrow(self.id, conn);
             } else {
