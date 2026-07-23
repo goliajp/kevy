@@ -213,11 +213,13 @@ fn a_disconnect_during_the_serve_does_not_lose_the_element() {
         e.extend_from_slice(b"*1\r\n$4\r\nkept\r\n");
         e
     };
+    let (released, restored) = kevy_rt::serve_counters::snapshot();
     assert_eq!(
         list, expected,
         "escrow property broken: list should hold exactly one 'kept'. \
          *0 = the element was popped for a vanished client and lost (the \
-         defect); *2 = it was restored AND kept, duplicated. got: {list:?}",
+         defect); *2 = it was restored AND kept, duplicated. got: {list:?} \
+         [serve released={released} restored={restored}]",
     );
 }
 

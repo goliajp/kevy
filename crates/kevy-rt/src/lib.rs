@@ -70,6 +70,8 @@
 mod bio;
 mod block_xshard;
 mod block_xshard_confirm;
+#[cfg(debug_assertions)]
+pub use block_xshard_confirm::counters as serve_counters;
 mod block_xshard_registry;
 mod block_xshard_target;
 mod blocked;
