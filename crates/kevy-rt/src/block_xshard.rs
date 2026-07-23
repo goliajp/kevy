@@ -226,7 +226,7 @@ impl<C: Commands> Shard<C> {
     /// the rest. Empty (raced) → re-arm every key and keep waiting.
     pub(crate) fn origin_on_serve_resp(&mut self, conn: u64, key: Vec<u8>, reply: Vec<u8>) {
         #[cfg(debug_assertions)]
-        crate::block_xshard_confirm::counters::bump(&crate::block_xshard_confirm::counters::ENTERED);
+        crate::block_xshard_confirm::counters::note_cross_shard_serve();
         let Some(ob) = self.origin_blocks.get_mut(&conn) else {
             // The record is gone — the conn timed out or disconnected and was
             // torn down before the reply came back. If the reply is empty the
@@ -238,8 +238,6 @@ impl<C: Commands> Shard<C> {
             // that popped it. `target_apply_escrow` is idempotent (escrow_take
             // removes), so this cannot double-restore against the normal path.
             if !reply.is_empty() {
-                #[cfg(debug_assertions)]
-                crate::block_xshard_confirm::counters::bump(&crate::block_xshard_confirm::counters::RECORD_GONE);
                 let shard = self.shard_of(&key);
                 if shard == self.id {
                     self.target_apply_escrow(self.id, conn);
@@ -250,8 +248,6 @@ impl<C: Commands> Shard<C> {
             return;
         };
         if reply.is_empty() {
-            #[cfg(debug_assertions)]
-            crate::block_xshard_confirm::counters::bump(&crate::block_xshard_confirm::counters::EMPTY);
             ob.serving = false;
             if ob.abandoned {
                 // Nothing was popped, so there is nothing to put back --
@@ -271,8 +267,6 @@ impl<C: Commands> Shard<C> {
         let abandoned = ob.abandoned;
         let gone = abandoned || self.conns.get(&conn).is_none_or(|c| c.sock.peer_gone());
         if gone {
-            #[cfg(debug_assertions)]
-            crate::block_xshard_confirm::counters::bump(&crate::block_xshard_confirm::counters::FASTPATH_ABORT);
             self.abort_serve(conn, &key);
             return;
         }
@@ -292,17 +286,11 @@ impl<C: Commands> Shard<C> {
         self.deliver_block(conn, reply);
         match target_shard {
             Some(shard) => {
-                #[cfg(debug_assertions)]
-                crate::block_xshard_confirm::counters::bump(&crate::block_xshard_confirm::counters::DELIVER);
                 self.serve_confirm.insert(conn, shard);
             }
             // Unreachable for a real serve (we just served this key), but do
             // not silently hold an escrow if it ever is.
-            None => {
-                #[cfg(debug_assertions)]
-                crate::block_xshard_confirm::counters::bump(&crate::block_xshard_confirm::counters::NONE_FB);
-                self.abort_serve(conn, &key);
-            }
+            None => self.abort_serve(conn, &key),
         }
     }
 

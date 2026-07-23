@@ -161,12 +161,10 @@ fn a_disconnect_during_the_serve_does_not_lose_the_element() {
     // the macOS CI runner: the reply reaches `origin_on_serve_resp` while
     // the disconnect is still unnoticed — `abandoned` false, the socket
     // already dead. That is the window escrow's `abandoned` flag does NOT
-    // cover; the only thing that catches it is the peek-the-socket guard at
-    // delivery. Without HOLD_CLOSE this passed on an unloaded machine (the
-    // disconnect was noticed first, `abandoned` true) and failed only under
-    // CI load — a test that exercises the defect only sometimes is worse
-    // than one that clearly does. With both seams it fails deterministically
-    // without the peek guard and passes with it.
+    // cover; the fix ties the escrow's fate to the write result — released
+    // only on a clean flush to a live conn, restored on teardown — so a
+    // FIN'd client deterministically restores. Without the fix this loses
+    // the element (`*0`); with it the element survives (`*1`).
     //
     // SAFETY: set before any server thread starts; this binary runs only
     // this test.
@@ -176,50 +174,64 @@ fn a_disconnect_during_the_serve_does_not_lose_the_element() {
     }
     let srv = Server::start();
 
-    let mut consumer = srv.connect();
-    consumer.write_all(&req(&[b"BLPOP", b"escrowed", b"5"])).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(200)); // park
+    // With NSHARDS shards a random key lands on the conn's own shard ~1/N of
+    // the time, and that BLPOP takes the LOCAL block path (blocked.rs), not
+    // the cross-shard escrow this test is about — a co-located serve goes to
+    // the still-connected consumer promptly and is Redis-equivalent, out of
+    // scope here. So retry with a fresh key and a fresh conn until the
+    // cross-shard path provably ran (its origin handler bumps a debug-only
+    // counter), and only then assert the escrow property. Confirmed by
+    // instrumentation that the residual failures were exactly the co-located
+    // 1/N, never the cross-shard window.
+    for attempt in 0..25u32 {
+        let key = format!("escrowed-{attempt}").into_bytes();
+        let before = kevy_rt::serve_counters::cross_shard_serves();
 
-    // The push makes the key ready; the origin asks the target to serve
-    // and the target sits in the 800ms window.
-    let mut producer = srv.connect();
-    producer.write_all(&req(&[b"RPUSH", b"escrowed", b"kept"])).unwrap();
-    assert_eq!(read_reply(&mut producer), b":1\r\n");
+        let mut consumer = srv.connect();
+        consumer.write_all(&req(&[b"BLPOP", &key, b"5"])).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(200)); // park
 
-    // Disconnect while the serve is in flight — 250ms into the 800ms
-    // window, so the pop has not happened yet and the reply, once the
-    // pop does happen, has nowhere to go.
-    std::thread::sleep(std::time::Duration::from_millis(250));
-    drop(consumer);
+        // The push makes the key ready; the origin asks the target to serve
+        // and the target sits in the 800ms window.
+        let mut producer = srv.connect();
+        producer.write_all(&req(&[b"RPUSH", &key, b"kept"])).unwrap();
+        assert_eq!(read_reply(&mut producer), b":1\r\n");
 
-    // Wait past the pop (window end ~800ms) plus the abort round-trip and
-    // restore, generously, so the verify below reads the settled state
-    // rather than the pop/restore gap.
-    std::thread::sleep(std::time::Duration::from_millis(2500));
+        // Disconnect while the serve is in flight — 250ms into the 800ms
+        // window, so the pop has not happened yet and the reply, once the
+        // pop does happen, has nowhere to go.
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        drop(consumer);
 
-    // Verify with LRANGE, not BLPOP. The property is "the element survived,
-    // exactly once" — a fact about the list, which LRANGE reads directly
-    // and without consuming. BLPOP here would fold in a second timing
-    // dependency (whether the serve completes inside its own 5s) on top of
-    // the one being tested, and on a loaded macOS runner that is what
-    // failed: the pop lost the race with the verify, not the escrow. The
-    // three outcomes map to the three states — one element restored, zero
-    // means the defect (lost), two means duplicated.
-    let mut c2 = srv.connect();
-    c2.write_all(&req(&[b"LRANGE", b"escrowed", b"0", b"-1"])).unwrap();
-    let list = read_reply(&mut c2);
-    let expected = {
-        let mut e = Vec::new();
-        e.extend_from_slice(b"*1\r\n$4\r\nkept\r\n");
-        e
-    };
-    let (released, restored, fp_abort, rec_gone, deliver, entered, empty, none_fb) = kevy_rt::serve_counters::snapshot();
-    assert_eq!(
-        list, expected,
-        "escrow property broken: list should hold exactly one 'kept'. \
-         *0 = the element was popped for a vanished client and lost (the \
-         defect); *2 = it was restored AND kept, duplicated. got: {list:?} \
-         [entered={entered} empty={empty} none_fb={none_fb} deliver={deliver} fp_abort={fp_abort} rec_gone={rec_gone} released={released} restored={restored}]",
-    );
+        // Wait past the pop (window end ~800ms) plus the abort round-trip and
+        // restore, generously, so the verify below reads the settled state
+        // rather than the pop/restore gap.
+        std::thread::sleep(std::time::Duration::from_millis(2500));
+
+        if kevy_rt::serve_counters::cross_shard_serves() == before {
+            // Co-located: the local path served it (Redis-equivalent). Not
+            // the window under test — try a different key/conn placement.
+            continue;
+        }
+
+        // Verify with LRANGE, not BLPOP. The property is "the element
+        // survived, exactly once" — a fact about the list, which LRANGE reads
+        // directly and without consuming. BLPOP here would fold in a second
+        // timing dependency (whether the serve completes inside its own 5s)
+        // on top of the one being tested. The three outcomes map to the three
+        // states — one restored, zero lost (the defect), two duplicated.
+        let mut c2 = srv.connect();
+        c2.write_all(&req(&[b"LRANGE", &key, b"0", b"-1"])).unwrap();
+        let list = read_reply(&mut c2);
+        let expected = b"*1\r\n$4\r\nkept\r\n".to_vec();
+        assert_eq!(
+            list, expected,
+            "escrow property broken: list should hold exactly one 'kept'. \
+             *0 = the element was popped for a vanished client and lost (the \
+             defect); *2 = restored AND kept, duplicated. got: {list:?}",
+        );
+        return;
+    }
+    panic!("no cross-shard placement in 25 attempts");
 }
 
