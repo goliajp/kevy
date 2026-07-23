@@ -290,6 +290,42 @@ public sealed unsafe class KevyDb : IDisposable
     /// binary-safe <see cref="Get(ReadOnlySpan{byte})"/>.</summary>
     public byte[]? Get(string key) => Get(Encoding.UTF8.GetBytes(key));
 
+    /// <summary>Reader for <see cref="GetView"/> — receives a span that VIEWS
+    /// the value bytes in place. The span is valid ONLY for the call; do not
+    /// stash it.</summary>
+    public delegate void SpanReader(ReadOnlySpan<byte> value);
+
+    /// <summary>Zero-copy read: hand <paramref name="reader"/> a span that
+    /// VIEWs the value's bytes directly (an Arc refcount bump, no copy into
+    /// managed memory), then release the view when it returns. This is the
+    /// lane that beats a memory-mapped store on large reads — the shared lane
+    /// is O(1) regardless of value size, where an mmap Get still copies out.
+    /// Returns false on a miss (<paramref name="reader"/> is not called).
+    ///
+    /// The span is valid ONLY for the duration of the call — it aliases engine
+    /// memory freed on return. Copy it out (<c>.ToArray()</c>) if you need to
+    /// keep it. Throws on a non-string key (WRONGTYPE), like <see cref="Get(ReadOnlySpan{byte})"/>.</summary>
+    public bool GetView(ReadOnlySpan<byte> key, SpanReader reader)
+    {
+        int rc;
+        KevyBuf @out;
+        fixed (byte* kp = key)
+        {
+            rc = KevyNative.kevy_get_shared(Live(), kp, (nuint)key.Length, &@out);
+        }
+        if (rc == 0) return false;
+        if (rc < 0) throw new KevyException("kevy: kevy_get_shared misuse");
+        try
+        {
+            reader(new ReadOnlySpan<byte>(@out.Ptr, checked((int)@out.Len)));
+        }
+        finally
+        {
+            KevyNative.kevy_buf_free_shared(@out.Ptr, @out.Len, @out.Cap);
+        }
+        return true;
+    }
+
     /// <summary>Fetch <paramref name="key"/> as UTF-8 text; null on a miss.</summary>
     public string? GetText(string key)
     {
