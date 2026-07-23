@@ -340,7 +340,7 @@ D2 事务标记(全有全无,与事务大小无关)/ R2 事务内集合读。
 - [x] **B3 R6 菜谱** — 「一行数据、多个派生键」端到端写进 `docs/cookbook.md`(对方甚至提出愿意贡献)。
 - [x] **B4 R3 事务内索引读** — 先判定是否与 R2 同形(同一个 op-table 缺口),同形则一并补齐,不同形则单列。
 
-- [~] **C1 跨 shard block-serve 丢元素** — escrow 修复(2026-07-21)**不完整**:仍会在 macOS CI 负载下丢元素。修法 = escrow(target pop *前* 读下元素扣手里,origin 确认投递才释放;记录没了则 apply escrow 还回),实现 `crates/kevy-rt/src/block_xshard.rs`,设计 `.claude/rfcs/2026-07-21-xshard-block-serve-escrow.md`。**2026-07-23 复现:回归测试 `a_disconnect_during_the_serve_does_not_lose_the_element` 在 darwin CI 全套并行下 FAIL,LRANGE 诊断报 `*0`=空列表=元素真丢**(不是脆测——LRANGE 改造已把 BLPOP 时序移出断言,失败只能是属性真破)。本机单跑 10/10 不复现,只在 CI 全套负载下现。**我曾错误地把本条标 `[x] 已清除`,已撤回**——这是"已知会丢数据"的缺陷,**仍是 ship 阻塞项**,escrow 有未兜住的竞态窗口(疑似:cancel 传播慢时 origin 仍持记录、写死 socket "成功"→释放 escrow→丢失,即 FINDING 原文"cancel 传播慢到输给 push"的窗口 escrow 没关严)。需再一轮协议分析,未修完不许 ship。
+- [x] **C1 跨 shard block-serve 丢元素** — **两个窗口都已修,经确定性"先红后绿"验证(2026-07-23 设计 round)**。① escrow(2026-07-21)关"reply 回来时 origin 记录已没"窗口(`abandoned` 标记 → abort_serve 恢复)。② 第二窗口(2026-07-23):poller 路径 EOF 只设 `conn.closing`、`close_conn`(设 abandoned)延到 flush reap,故 reply 可在断连被处理**前**到达 `origin_on_serve_resp`,`abandoned` 仍 false + socket 已死 → 旧码 deliver 进死 conn + 释放 escrow → 丢(uring 路径 EOF 时立即置 abandoned,无此窗口,所以只在 macOS 现)。修法 = 投递前 `Socket::peer_gone()`(非阻塞 `MSG_PEEK` 直接问内核,绕过 reactor 未处理的 CQE 积压),死 socket → abort_serve 恢复。**验证**:debug-only seam `KEVY_TEST_XSHARD_HOLD_CLOSE` 确定性复现第二窗口,去 peek → 红(`*0` 丢),加 peek → 绿(`*1`);新增 `kevy-sys::Socket::peer_gone` 带单测。实现 `block_xshard.rs`+`shard_flush.rs`+`kevy-sys`,设计 `.claude/rfcs/2026-07-21-xshard-block-serve-escrow.md` + FINDING 文档。**曾误标 `[x]`(第二窗口未发现时)→ 撤回 → 现真修完再标 `[x]`。ship 阻塞项清除(这次有确定性回归撑腰)。**
 
 ### t5.7 — FTS arc(取代 Meili;施工顺序见 RFC)
 
