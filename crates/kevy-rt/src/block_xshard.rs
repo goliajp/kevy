@@ -228,30 +228,15 @@ impl<C: Commands> Shard<C> {
         #[cfg(debug_assertions)]
         crate::block_xshard_confirm::counters::note_cross_shard_serve();
         let Some(ob) = self.origin_blocks.get_mut(&conn) else {
-            // The record is gone — the conn timed out or disconnected and was
-            // torn down before the reply came back. If the reply is empty the
-            // target popped nothing and there is nothing to do. But a
-            // non-empty reply means the target popped an element and is
-            // holding it in escrow, and with no record here nobody will ever
-            // tell it the outcome: the escrow strands and the element is lost.
-            // Route the restore by the key's owning shard — that is the target
-            // that popped it. `target_apply_escrow` is idempotent (escrow_take
-            // removes), so this cannot double-restore against the normal path.
-            if !reply.is_empty() {
-                let shard = self.shard_of(&key);
-                if shard == self.id {
-                    self.target_apply_escrow(self.id, conn);
-                } else {
-                    self.send_to(shard, Inbound::BlockServeAbort { origin: self.id, conn });
-                }
-            }
+            self.restore_serve_for_gone_record(conn, &key, &reply);
             return;
         };
         if reply.is_empty() {
+            // Raced empty (key drained between ready and serve): nothing was
+            // popped. Re-arm and keep waiting, unless the disconnect already
+            // abandoned this — then just finish its deferred teardown.
             ob.serving = false;
             if ob.abandoned {
-                // Nothing was popped, so there is nothing to put back --
-                // just finish the teardown the disconnect deferred.
                 if let Some(ob) = self.origin_blocks.remove(&conn) {
                     self.broadcast_cancel(conn, &ob.keys);
                 }
@@ -260,37 +245,24 @@ impl<C: Commands> Shard<C> {
             self.rearm_all(conn);
             return;
         }
-        // Fast path: if the disconnect is already processed (`abandoned`) or
-        // the kernel already reports the peer gone (`peer_gone` — a
-        // point-in-time peek that catches the obvious-dead case cheaply),
-        // restore now without buffering a doomed reply.
-        let abandoned = ob.abandoned;
-        let gone = abandoned || self.conns.get(&conn).is_none_or(|c| c.sock.peer_gone());
+        // Fast path: the disconnect is already processed, or the kernel
+        // already reports the peer gone — restore now, skip a doomed reply.
+        let gone = ob.abandoned || self.conns.get(&conn).is_none_or(|c| c.sock.peer_gone());
         if gone {
             self.abort_serve(conn, &key);
             return;
         }
-        // Appears alive — but "appears" is point-in-time and can go stale
-        // between here and the write that actually sends the reply. So do
-        // NOT release the escrow now. Capture the target shard (the record
-        // is about to be removed), deliver the reply, and hand the escrow's
-        // fate to the write result: released when the conn's output flushes
-        // successfully (`confirm_serve_delivered`), restored if the conn is
-        // torn down first — write failure or FIN — before that
-        // (`restore_serve_on_teardown`). This is what removes the residual
-        // the peek alone left on the epoll fallback. It also fixes a
-        // pre-existing leak: the old `ack_serve` ran AFTER `deliver_block`
-        // had removed the record, so `serve_shard_of` returned `None` and
-        // the escrow was never released on a normal delivery at all.
+        // Appears alive, but "appears" is point-in-time. Do NOT release the
+        // escrow now: deliver, record the target shard, and let the write
+        // result decide (`resolve_serve_by_write`) — release on a clean flush
+        // to a live conn, restore on teardown. See block_xshard_confirm.
         let target_shard = self.serve_shard_of(conn, &key);
         self.deliver_block(conn, reply);
         match target_shard {
             Some(shard) => {
                 self.serve_confirm.insert(conn, shard);
             }
-            // Unreachable for a real serve (we just served this key), but do
-            // not silently hold an escrow if it ever is.
-            None => self.abort_serve(conn, &key),
+            None => self.abort_serve(conn, &key), // unreachable for a real serve
         }
     }
 

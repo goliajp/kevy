@@ -60,6 +60,44 @@ impl<C: Commands> Shard<C> {
         }
     }
 
+    /// The serve reply came back but the origin's block record is already
+    /// gone — the conn timed out or disconnected and was torn down first. An
+    /// empty reply popped nothing; a non-empty one means the target popped an
+    /// element and holds it in escrow with no record here to tell it the
+    /// outcome, so the escrow would strand and the element be lost. Route the
+    /// restore by the key's owning shard (the target that popped it).
+    /// Idempotent via `escrow_take`, so it cannot double-restore.
+    pub(crate) fn restore_serve_for_gone_record(&mut self, conn: u64, key: &[u8], reply: &[u8]) {
+        if reply.is_empty() {
+            return;
+        }
+        let shard = self.shard_of(key);
+        if shard == self.id {
+            self.target_apply_escrow(self.id, conn);
+        } else {
+            self.send_to(shard, Inbound::BlockServeAbort { origin: self.id, conn });
+        }
+    }
+
+    /// Resolve a cross-shard block serve's escrow by the write result rather
+    /// than a point-in-time guess: `closing` (the client's FIN was read, or a
+    /// write to it errored) means the reply never reached a live client →
+    /// restore; a clean full drain on a live conn means it did → release.
+    /// Gated on the map being non-empty so the reply hot path pays only a
+    /// length check. Idempotent — a later `close_conn` restore is a no-op.
+    /// The poller calls this from `flush_conn`; io_uring from its own write
+    /// completion.
+    pub(crate) fn resolve_serve_by_write(&mut self, conn: u64, closing: bool, drained: bool) {
+        if self.serve_confirm.is_empty() {
+            return;
+        }
+        if closing {
+            self.restore_serve_on_teardown(conn);
+        } else if drained {
+            self.confirm_serve_delivered(conn);
+        }
+    }
+
     /// io_uring twin of the poller's flush-conn escrow resolution: settle a
     /// cross-shard block serve by the write outcome. `closing` (the client's
     /// FIN was seen, or a write to it errored) → the reply never reached a
@@ -81,10 +119,6 @@ impl<C: Commands> Shard<C> {
             uc.is_none_or(|u| u.closing) || self.conns.get(&cid).is_none_or(|c| c.closing);
         let drained = uc.is_some_and(|u| u.write_buf.is_empty() && u.write_arcs.is_empty())
             && self.conns.get(&cid).is_some_and(|c| c.output.is_empty());
-        if closing {
-            self.restore_serve_on_teardown(cid);
-        } else if drained {
-            self.confirm_serve_delivered(cid);
-        }
+        self.resolve_serve_by_write(cid, closing, drained);
     }
 }
