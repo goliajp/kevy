@@ -301,7 +301,7 @@ client 生态 —— 该策略 t2 里 gate 化。
 ### t4 — 竞品对比:mmkvgate + embedded bench(性能北极星 = 全轴超越 MMKV)
 - [ ] mmkvgate:iOS XCTest measure + androidx microbenchmark;轴 = 同步标量 get/set × value 尺寸 × 冷/热 + 批量 + 启动加载;对手 = MMKV 原生 + react-native-mmkv(RN 层再对一轮);数字如实入账,输的轴列明
 - [ ] 输轴 → decomposition + attack(perf-vs-foss 方法论,2 轮 polish 不动针即 decomp;目标全轴 ≥ MMKV)
-- [ ] embedded bench RFC:竞品名单+轴先 RFC(候选:Go vs bbolt/badger;Node vs better-sqlite3/classic-level;C# vs LiteDB;C vs lmdb)→ 拍板后跑 → bench/EMBEDDED-LEDGER.md
+- [~] embedded bench RFC:竞品名单+轴 **RFC 已写**(`.claude/rfcs/2026-07-23-v4-embedded-bench.md`,四路竞品调研入账,marketing vs 第三方已标)。**一处更正 ROADMAP 候选**:C# 侧 LiteDB **降级为文档存储参考**(它无原生 KV 路径,只有 collection Insert/FindOne=品类错配),真正公平的 C# KV 对手 = **LMDB via Lightning.NET**(原生 mdb_put/mdb_get 同步)。选定:Go=bbolt(读型)+badger(LSM/append 近 kevy AOF);Node=better-sqlite3(同步,真 bar)+classic-level(异步,标记为跨模型参考);C=LMDB(读延迟王,最硬 bar);C#=LMDB via Lightning.NET。**公平性框架**:durability 三层(T-mem/T-async/T-fsync,只同层比)/ 同步异步不同表 / 冷单操作 vs 摊销双轴 / 值尺寸扫 16B-64KB + 冷启动。**四语言工具链本机全在,harness 建后先测相对位次,lx64 出定值(perf §9,mmkvgate SET 翻盘先例)** → bench/EMBEDDED-LEDGER.md(骨架已建)。**拍板项**:LiteDB 文档行是否纳入 / classic-level 异步是否保留 / lx64 定值 pass 时机(RFC §8)
 - [ ] server 面 vs valkey 沿用 arena/perfgate 常驻,不重复建
 
 ### t5.5 — durability trust arc(mailrs P0 引子;用户拍板 2026-07-17:全量进 v4、no defer、报告内外全覆盖、排 ship 前)
