@@ -226,7 +226,24 @@ impl<C: Commands> Shard<C> {
     /// the rest. Empty (raced) → re-arm every key and keep waiting.
     pub(crate) fn origin_on_serve_resp(&mut self, conn: u64, key: Vec<u8>, reply: Vec<u8>) {
         let Some(ob) = self.origin_blocks.get_mut(&conn) else {
-            return; // conn timed out / disconnected during the serve
+            // The record is gone — the conn timed out or disconnected and was
+            // torn down before the reply came back. If the reply is empty the
+            // target popped nothing and there is nothing to do. But a
+            // non-empty reply means the target popped an element and is
+            // holding it in escrow, and with no record here nobody will ever
+            // tell it the outcome: the escrow strands and the element is lost.
+            // Route the restore by the key's owning shard — that is the target
+            // that popped it. `target_apply_escrow` is idempotent (escrow_take
+            // removes), so this cannot double-restore against the normal path.
+            if !reply.is_empty() {
+                let shard = self.shard_of(&key);
+                if shard == self.id {
+                    self.target_apply_escrow(self.id, conn);
+                } else {
+                    self.send_to(shard, Inbound::BlockServeAbort { origin: self.id, conn });
+                }
+            }
+            return;
         };
         if reply.is_empty() {
             ob.serving = false;
