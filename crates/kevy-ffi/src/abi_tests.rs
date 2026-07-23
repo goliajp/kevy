@@ -4,6 +4,7 @@
 //! ABI regression fails without a C toolchain in the loop.
 
 use super::*;
+use crate::batch::kevy_set_many;
 
 fn cmd(db: *mut KevyDb, argv: &[&[u8]]) -> Vec<u8> {
     let ptrs: Vec<*const u8> = argv.iter().map(|a| a.as_ptr()).collect();
@@ -403,6 +404,45 @@ fn persistent_open_survives_close_and_reopen() {
     assert!(unsafe { kevy_open(std::ptr::null(), 0) }.is_null());
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn set_many_batches_writes_and_each_key_reads_back() {
+    let db = kevy_open_mem();
+    let keys: [&[u8]; 3] = [b"a", b"bb", b"ccc"];
+    let big = vec![0x61u8; 4096]; // > 64 B → Value::ArcBulk
+    let vals: [&[u8]; 3] = [b"1", b"22", &big];
+    let kptrs: Vec<*const u8> = keys.iter().map(|k| k.as_ptr()).collect();
+    let klens: Vec<usize> = keys.iter().map(|k| k.len()).collect();
+    let vptrs: Vec<*const u8> = vals.iter().map(|v| v.as_ptr()).collect();
+    let vlens: Vec<usize> = vals.iter().map(|v| v.len()).collect();
+    let rc = unsafe {
+        kevy_set_many(db, 3, kptrs.as_ptr(), klens.as_ptr(), vptrs.as_ptr(), vlens.as_ptr())
+    };
+    assert_eq!(rc, 0);
+    for (k, expect) in keys.iter().zip(vals.iter()) {
+        let mut out = KevyBuf::empty();
+        let hit = unsafe { kevy_get(db, k.as_ptr(), k.len(), &raw mut out) };
+        assert_eq!(hit, 1, "key not found after set_many");
+        assert_eq!(take(out), *expect);
+    }
+    // n == 0 is a clean no-op; a null db is misuse.
+    let no_op = unsafe {
+        kevy_set_many(
+            db,
+            0,
+            std::ptr::null::<*const u8>(),
+            std::ptr::null::<usize>(),
+            std::ptr::null::<*const u8>(),
+            std::ptr::null::<usize>(),
+        )
+    };
+    assert_eq!(no_op, 0);
+    let rc_null = unsafe {
+        kevy_set_many(std::ptr::null_mut(), 3, kptrs.as_ptr(), klens.as_ptr(), vptrs.as_ptr(), vlens.as_ptr())
+    };
+    assert_eq!(rc_null, -1);
+    unsafe { kevy_close(db) };
 }
 
 /// A per-test unique dir without pulling kevy-tmpdir into the deps of a

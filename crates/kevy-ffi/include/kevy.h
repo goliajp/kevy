@@ -65,6 +65,14 @@ int32_t kevy_get(KevyDb *db, const uint8_t *key, size_t key_len, KevyBuf *out);
 int32_t kevy_set(KevyDb *db, const uint8_t *key, size_t key_len,
                  const uint8_t *val, size_t val_len, uint64_t ttl_ms);
 
+/* Batch SET — apply n sets in one crossing (amortizes the per-call boundary a
+ * binding pays once per key on a bulk load). keys[i]/vals[i] point at
+ * key_lens[i]/val_lens[i] bytes. Durability is unchanged from kevy_set. 0 ok /
+ * -1 misuse / -2 store error. */
+int32_t kevy_set_many(KevyDb *db, size_t n, const uint8_t *const *keys,
+                      const size_t *key_lens, const uint8_t *const *vals,
+                      const size_t *val_lens);
+
 /* Zero-copy GET: a bulk value comes back as an Arc clone (refcount bump, no
  * byte copy) whose bytes the returned buffer VIEWS — the analog of MMKV
  * returning a view of its mmap page. In the out KevyBuf, ptr/len are the value

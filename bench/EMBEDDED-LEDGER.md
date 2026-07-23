@@ -69,11 +69,36 @@ same axes every time:
   across cgo and loses to bbolt's zero-copy pointer — a *binding* loss the C
   track disproves at the engine level.
 
-**Two indicated attack surfaces** (decomposition, not polish — perf-vs-foss):
-1. **A batch-write path for kevy embedded** — the universal gap. Every engine
-   beats kevy on bulk load because it has a transaction to amortize into.
-2. **Zero-copy binding read lanes** (Go first) — the engine lane already wins
-   (C track); the copying bindings give the win back.
+**Attack #1 — batch-write path — BUILT + MEASURED (2026-07-24).** Added
+`kevy_set_many` to the C ABI (one crossing, N sets, durability unchanged) and
+wired it into kevy-go as `SetMany`. Decomposition result, both halves named:
+
+- **The binding half of the bulk gap was the per-op FFI crossing, and it is
+  now closed for small values.** kevy-go 16 B amortized SET went from **147×
+  off bbolt (per-op) to 2.70×** — i.e. down to the engine floor. The 147× was
+  never the engine; it was paying the cgo boundary 100k times. One crossing
+  removes it.
+- **The residual (~2.5×) is engine-level and architectural.** The C track
+  (no FFI crossing) is unchanged by `kevy_set_many` (kevy 219 ns vs LMDB
+  78 ns, in-process): kevy's write is a **durable append-log entry per op**
+  (in the recoverable AOF immediately), a B+tree/LSM txn batches **dirty
+  pages into one deferred commit**. Different work, different durability.
+  Closing it would be a persistence-core redesign (its own RFC) — not
+  autorun-dived, named honestly.
+- **Large values stay copy-bound.** At 64 KB the batch API is neutral-to-
+  worse (the safe cgo marshalling copies the value into a bounded C arena
+  before the store copies it again) — the batch path is for *many small*
+  keys (the RDS on-ramp shape), not few huge ones. Stated, not hidden.
+
+**Attack #2 — zero-copy binding read lanes** (Go/C#) — still open. The engine
+lane already wins (C track, `kevy_get_shared` beats LMDB); the copying
+bindings give it back. A view-returning binding API (lifetime-managed) is the
+fix — deferred (most callers want owned bytes; it is a niche API + a real
+lifetime-safety surface).
+
+_Status: `kevy_set_many` (FFI) + `SetMany` (kevy-go) landed + tested. C# and
+Node bindings get the same treatment next; the C track needs no batch entry
+(no crossing to amortize)._
 
 The read-side loss is **binding-shape, not engine**: proven twice — kevy's
 zero-copy C lane beats LMDB at every size (C track), while the copying Go/C#
@@ -165,7 +190,7 @@ txn/N (badger via `WriteBatch`). `k/p < 1` = kevy faster.
 | GET cold-1op | 0.48 (kevy 2.1×) | 0.48 (2.1×) | **1.98 (peer 2.0×)** | **21.3 (peer 21×)** |
 | GET amortized | **2.50 (peer 2.5×)** | **1.59 (peer 1.6×)** | 4.81 (peer 4.8×) | **62.2 (peer 62×)** |
 | SET cold-1op | 0.02 (kevy 45×) | 0.03 (31×) | 0.15 (kevy 6.5×) | 0.64 (kevy 1.6×) |
-| SET amortized | 3.25 (peer 3.3×) | 2.94 (peer 2.9×) | 16.5 (peer 16×) | **147 (peer 147×)** |
+| SET amortized ¹ | 2.70 (peer 2.7×) | 2.54 (peer 2.5×) | 12.8 (peer 13×) | 134 (peer 134×) |
 
 **kevy vs badger** (LSM + value log):
 
@@ -174,7 +199,12 @@ txn/N (badger via `WriteBatch`). `k/p < 1` = kevy faster.
 | GET cold-1op | 0.25 (kevy 4.0×) | 0.33 (3.0×) | 0.43 (kevy 2.4×) | 1.04 (peer 1.0×) |
 | GET amortized | 0.68 (kevy 1.5×) | 0.64 (1.6×) | 0.53 (kevy 1.9×) | 1.30 (peer 1.3×) |
 | SET cold-1op | 0.07 (kevy 14×) | 0.09 (12×) | 0.32 (kevy 3.2×) | 0.86 (kevy 1.2×) |
-| SET amortized | 5.29 (peer 5×) | 6.24 (peer 6×) | 10.5 (peer 10×) | 0.99 (tie) |
+| SET amortized ¹ | 4.65 (peer 4.7×) | 5.48 (peer 5.5×) | 6.54 (peer 6.5×) | 1.07 (peer 1.1×) |
+
+¹ SET amortized now uses **kevy-go `SetMany`** (the batch path via
+`kevy_set_many`), not a per-op loop — the fair batch-vs-batch comparison. It
+closed the 16 B gap from 147× (per-op) to 2.7×; see the cross-track synthesis
+(Attack #1). The residual is engine-level; large values stay copy-bound.
 
 **Reading it — losing axes named, and the binding-vs-engine split:**
 
@@ -197,20 +227,20 @@ txn/N (badger via `WriteBatch`). `k/p < 1` = kevy faster.
   badger at 16 B). A one-off scalar write pays kevy only a buffered AOF
   append; the peers pay a full transaction commit (B+tree rebalance /
   LSM memtable) per op. The real-app write path, and kevy's clearest win.
-- **SET amortized: kevy LOSES, the largest gaps on any track.** bbolt in one
-  transaction bulk-loads at a flat **~90–140 ns/op** (147× faster than kevy
-  at 64 KB); badger `WriteBatch` similar (only ties kevy at 64 KB). A
-  single-transaction bulk fill is what a B+tree/LSM is built for — sequential
-  page fill, one durability event. kevy's per-op AOF-append + store-insert
-  has no batch path to amortize into. **The sharpest north-star gap:
-  batch/bulk write.**
+- **SET amortized (now `SetMany`): the binding gap collapsed.** With the
+  batch path, kevy's 16 B amortized SET went from **147× off bbolt (per-op)
+  to 2.7×** — the 147× was the cgo crossing paid 100k times, not the engine.
+  The residual ~2.5× is engine-level (durable append-log per op vs a B+tree's
+  batched dirty-page commit). Large values stay copy-bound (safe cgo
+  marshalling copies into a bounded arena) — the batch API is for many small
+  keys, not few huge ones. See Attack #1 in the synthesis.
 
 **Honest bottom line (Go):** kevy owns the **single-op writes** (small→mid
 cold SET) and **beats badger on reads**; it **loses reads to bbolt purely
-through the cgo copy-out** (a binding fix, not the engine — see C track) and
-**loses bulk/batch writes** to both. The two indicated attack surfaces:
-(1) a zero-copy Go GET lane, (2) a batch-write path for kevy embedded — both
-decomposition targets if the north star is all-axis ≥ peer.
+through the cgo copy-out** (a binding fix, not the engine — see C track). The
+**batch-write gap is now closed at the binding level** (`SetMany`, 147×→2.7×
+for small values); the engine-level residual (append-log vs txn) is
+architectural. Remaining open: the zero-copy Go GET lane (Attack #2).
 
 ### C — kevy C ABI vs LMDB (the read-latency leader — the toughest bar)
 

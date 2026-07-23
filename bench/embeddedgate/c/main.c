@@ -86,7 +86,23 @@ static res bench_kevy(KevyDb *db, const uint8_t *val, size_t vlen) {
       kevy_set(db, (uint8_t *)keybuf[k], keylen[k], val, vlen, 0);
     }
   });
-  r.set_amort = r.set_cold;
+  /* SET amortized: kevy_set_many — one crossing, N sets (the batch path) */
+  const uint8_t **mk = malloc(N * sizeof(uint8_t *));
+  size_t *mkl = malloc(N * sizeof(size_t));
+  const uint8_t **mv = malloc(N * sizeof(uint8_t *));
+  size_t *mvl = malloc(N * sizeof(size_t));
+  for (int i = 0; i < N; i++) {
+    int k = i % KEYS;
+    mk[i] = (const uint8_t *)keybuf[k];
+    mkl[i] = keylen[k];
+    mv[i] = val;
+    mvl[i] = vlen;
+  }
+  TIME(r.set_amort, { kevy_set_many(db, N, mk, mkl, mv, mvl); });
+  free(mk);
+  free(mkl);
+  free(mv);
+  free(mvl);
   return r;
 }
 
