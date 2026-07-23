@@ -339,18 +339,26 @@ failure is now closed, each behind an executable gate.
 
 ### Text search, and the surface it will grow into
 
-- **The `MATCH` surface is frozen before the capabilities land.** Every
-  text feature the roadmap wants — phrase, filter, facet, highlight,
-  typo, prefix, sort, distinct — wants to change the same signature, and
-  4.0 is the release that breaks API once. `IN`, `FILTER`, `FACET`,
-  `SORT`, `DISTINCT`, `HIGHLIGHT`, `TYPO` and `OFFSET` parse today and
-  return an error naming the clause, so the syntax is settled and
-  nothing that works now has to change shape when they arrive.
+- **The `MATCH` surface was frozen before the capabilities landed —
+  and then they all landed.** Every text feature the roadmap wanted —
+  phrase, filter, facet, highlight, typo, prefix, sort, distinct —
+  changes the same signature, and 4.0 is the release that breaks API
+  once, so the syntax was settled first. It is no longer a promise:
+  `IN`, `FILTER`, `FACET`, `SORT`, `DISTINCT`, `HIGHLIGHT`, `TYPO`,
+  `PREFIX` and `OFFSET` all execute today, on a global BM25 index with a
+  positional side-channel, an ordered term dictionary, per-field
+  postings and columnar doc-values.
 
-  Naming the clause matters: "you wrote it wrong" and "this is coming"
-  are different answers. Accepting one and ignoring it would be worse
-  than either — a dropped `FILTER` returns unfiltered rows, which is a
-  wrong answer wearing a successful reply.
+  The three top-K clauses are exact across shards, not approximate: the
+  k-way merge that makes a scored fan-out exact holds for *any* total
+  order the shards agree on, so `SORT` (by a stored value), `DISTINCT`
+  (collapse by identity) and `FACET` (count the whole match set) each
+  return the true global page — the correction the design RFC recorded
+  against its own first sketch.
+
+  Naming a clause when it could not answer mattered while they were
+  landing: a dropped `FILTER` returning unfiltered rows is a wrong
+  answer wearing a successful reply.
 - **An index can declare several weighted attributes.** `IndexSpec`
   carried one hash field, so a document with a title and a body needed
   two indexes — and that is not a workaround, because BM25 normalises by
@@ -377,6 +385,34 @@ failure is now closed, each behind an executable gate.
   need those, you are describing a search engine" — which was right for
   a text kind that stops at ranked lookup. The goal changed, and a
   reader should be able to see that it changed.
+- **A text query stopped re-measuring the index's memory on every
+  call.** Pass 1 of a cross-shard query needs one number per shard — how
+  many documents it holds — and was reading it off `stats()`, which also
+  walks every token, posting and positional blob to estimate bytes, then
+  discarded that. A clean profile put 82% of query CPU in that
+  accounting; a `docs()` accessor that is just a `len()` cut term-query
+  p95 27.6→3.2ms (-88%), phrase 87→23.5ms (-73%), and every other mode
+  in between. Getting there first cost four broken profiles — a stripped
+  binary, an unbounded sampling window, attaching to the wrong process,
+  a block-buffered marker — each of which produced a plausible wrong
+  number; the recipe and its self-check now live in
+  `bench/profile-textgate.sh`.
+
+### Blocking across shards
+
+- **A cross-shard `BLPOP`/`BRPOP` no longer loses the element on a
+  disconnect mid-serve.** The origin arbitrates and a target pops only
+  when told to, but a network round-trip separates the pop from the
+  origin's delivery decision — and if the client vanished in that window
+  the popped element went to a dead socket and was gone. The fix is
+  escrow tied to the *write result*: the target holds the element until
+  the origin confirms delivery, and the origin releases it only once the
+  reply flushes clean to a live conn, restoring it if the conn is torn
+  down first (its FIN read, or the write errored). Verified
+  deterministically on all three reactors (kqueue, epoll, io_uring) with
+  a debug seam that forces the ordering. Redis does not have this race —
+  it serves blocked clients synchronously — so closing it is what makes
+  kevy's sharded `BLPOP` match the single-instance contract.
 
 ### Smaller truths
 
