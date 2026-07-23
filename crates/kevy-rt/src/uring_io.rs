@@ -384,6 +384,7 @@ impl<C: Commands> Shard<C> {
         uc.write_inflight = false;
         if res < 0 {
             self.uring_mark_closing(cid, io);
+            self.uring_resolve_serve(cid, io);
             return;
         }
         // The writev path mixes write_buf
@@ -461,6 +462,7 @@ impl<C: Commands> Shard<C> {
                 uc.write_byte_cap = 0;
                 uc.write_inflight_bytes = 0;
             }
+            self.uring_resolve_serve(cid, io);
             return;
         }
         uc.write_off += res as usize;
@@ -474,5 +476,6 @@ impl<C: Commands> Shard<C> {
                 conn.pending_write = false;
             }
         }
+        self.uring_resolve_serve(cid, io);
     }
 }

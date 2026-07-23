@@ -258,38 +258,37 @@ impl<C: Commands> Shard<C> {
             self.rearm_all(conn);
             return;
         }
-        // `abandoned` is set when this shard has already PROCESSED the
-        // disconnect, but the reply can arrive on this shard's loop before
-        // it reaps the recv completion that carries the client's FIN — under
-        // load the gap has been hundreds of ms. So `abandoned` alone is a
-        // stale view: it can be false while the client left long ago. Ask
-        // the kernel directly, which has the FIN regardless of this shard's
-        // completion backlog. Either signal — the processed disconnect, or a
-        // socket the kernel reports gone — means deliver-to-a-corpse, and the
-        // element must be restored, not popped into a dead output buffer.
+        // Fast path: if the disconnect is already processed (`abandoned`) or
+        // the kernel already reports the peer gone (`peer_gone` — a
+        // point-in-time peek that catches the obvious-dead case cheaply),
+        // restore now without buffering a doomed reply.
         let abandoned = ob.abandoned;
         let gone = abandoned || self.conns.get(&conn).is_none_or(|c| c.sock.peer_gone());
         if gone {
-            // The element is real and its client is gone. Tell the shard
-            // that popped it to put it back; it has been holding the undo
-            // since before the pop.
             self.abort_serve(conn, &key);
             return;
         }
+        // Appears alive — but "appears" is point-in-time and can go stale
+        // between here and the write that actually sends the reply. So do
+        // NOT release the escrow now. Capture the target shard (the record
+        // is about to be removed), deliver the reply, and hand the escrow's
+        // fate to the write result: released when the conn's output flushes
+        // successfully (`confirm_serve_delivered`), restored if the conn is
+        // torn down first — write failure or FIN — before that
+        // (`restore_serve_on_teardown`). This is what removes the residual
+        // the peek alone left on the epoll fallback. It also fixes a
+        // pre-existing leak: the old `ack_serve` ran AFTER `deliver_block`
+        // had removed the record, so `serve_shard_of` returned `None` and
+        // the escrow was never released on a normal delivery at all.
+        let target_shard = self.serve_shard_of(conn, &key);
         self.deliver_block(conn, reply);
-        self.ack_serve(conn, &key);
-    }
-
-    /// origin: the serve reached a live client — let the target release
-    /// the undo it captured before popping.
-    fn ack_serve(&mut self, conn: u64, key: &[u8]) {
-        let Some(shard) = self.serve_shard_of(conn, key) else {
-            return;
-        };
-        if shard == self.id {
-            self.target_release_escrow(self.id, conn);
-        } else {
-            self.send_to(shard, Inbound::BlockServeAck { origin: self.id, conn });
+        match target_shard {
+            Some(shard) => {
+                self.serve_confirm.insert(conn, shard);
+            }
+            // Unreachable for a real serve (we just served this key), but do
+            // not silently hold an escrow if it ever is.
+            None => self.abort_serve(conn, &key),
         }
     }
 
