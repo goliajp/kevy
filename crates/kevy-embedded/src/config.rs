@@ -57,6 +57,11 @@ pub struct Config {
     /// on every reaper tick.
     #[cfg(feature = "tier")]
     pub tier_budget: Option<TierBudgetSpec>,
+    /// Largest value the tier may spill (bytes; 0 = unlimited). Default
+    /// 256 KiB (RFC §7): an embedded cold read holds the shard lock for
+    /// the pread, so the cap bounds that hold time. Over-cap values
+    /// simply stay hot.
+    pub max_spill_value: u64,
     /// TTL reaper mode. Default `Background`.
     pub ttl_reaper: TtlReaperMode,
     /// Reaper tick interval. Default 100 ms (10 Hz).
@@ -165,6 +170,7 @@ impl Default for Config {
             appendfsync: AppendFsync::EverySec,
             #[cfg(feature = "tier")]
             tier_budget: None,
+            max_spill_value: 256 << 10,
             ttl_reaper: TtlReaperMode::Background,
             reaper_interval: Duration::from_millis(100),
             reaper_samples: 20,
@@ -346,6 +352,14 @@ impl Config {
     #[must_use]
     pub fn with_tier_budget_auto(mut self) -> Self {
         self.tier_budget = Some(TierBudgetSpec::Auto);
+        self
+    }
+
+    /// Cap the largest spillable value (bytes; 0 = unlimited). Bounds
+    /// the embedded cold-read lock-hold time; default 256 KiB.
+    #[must_use]
+    pub fn with_max_spill_value(mut self, bytes: u64) -> Self {
+        self.max_spill_value = bytes;
         self
     }
 

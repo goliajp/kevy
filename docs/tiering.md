@@ -255,10 +255,13 @@ Stated honestly, with the measured/pending status of each number:
   preads under the shard's write lock (the 1-shard default = the
   whole store), stalling that shard's readers for the read's duration
   — ~µs-class on NVMe, potentially ms-class on cloud block storage,
-  and proportionally longer for large values. Keep spillable values
-  small or shard more if this window matters; the
-  drop-lock/pread/relock dance that removes it is designed and
-  explicitly post-v4.
+  and proportionally longer for large values. The embedded config
+  caps the largest spillable value at **256 KiB by default**
+  (`max_spill_value`; `with_max_spill_value(bytes)`, 0 = unlimited) so
+  that window is bounded — an over-cap value simply stays hot. The
+  server leaves the cap unlimited (thread-per-core shards don't share
+  a lock). The drop-lock/pread/relock dance that removes the window
+  entirely is designed and explicitly post-v4.
 - **Batched hydration: one read per row.** A `FIELDS` hydration page
   or `VIEW.HYDRATE` over cold rows coalesces its reads by log
   position and submits them as one batch (io_uring: linked reads on a

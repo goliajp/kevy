@@ -172,6 +172,7 @@ fn enable_tiering(config: &Config, dir: &Path, stores: &mut [Keyspace]) -> io::R
         let per_shard = resolve_tier_budget(config, stores.len())?;
         for (i, store) in stores.iter_mut().enumerate() {
             store.enable_tiering(&dir.join("tier").join(i.to_string()), per_shard)?;
+            store.set_tier_max_spill(config.max_spill_value);
         }
     }
     #[cfg(not(all(feature = "tier", not(target_arch = "wasm32"))))]
@@ -373,6 +374,7 @@ fn merge_into_temp(dir: &Path, config: &Config, src_n: usize) -> io::Result<(Key
         // The merge temp holds the whole keyspace — full store budget.
         let budget = resolve_tier_budget(config, 1)?;
         temp.enable_tiering(&dir.join("tier").join(".reshard-merge"), budget)?;
+        temp.set_tier_max_spill(config.max_spill_value);
     }
     let mut total_cmds = 0u64;
     let start = Instant::now();

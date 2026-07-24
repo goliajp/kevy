@@ -23,7 +23,10 @@ line() {
 # Run one cargo test filter; echo PASS/FAIL (logs kept on failure).
 run_t() { # $1 = package, $2 = test target, $3 = filter ("" = all)
   local log
-  log=$(mktemp "${TMPDIR:-/tmp}/tablegate-XXXXXX.log")
+  # NOTE: BSD mktemp refuses templates with a suffix after the Xs —
+  # a .log suffix here created a LITERAL tablegate-XXXXXX.log once and
+  # then failed every later call with "File exists" (false gate red).
+  log=$(mktemp "${TMPDIR:-/tmp}/tablegate-XXXXXX")
   if cargo test -p "$1" --test "$2" $3 >"$log" 2>&1; then
     rm -f "$log"
     echo "PASS"

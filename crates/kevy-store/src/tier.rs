@@ -61,6 +61,11 @@ mod enabled {
         pub(crate) batch_submissions_total: u64,
         pub(crate) cold_keys: u64,
         pub(crate) cold_bytes: u64,
+        /// Largest value weight demotion may spill (bytes; 0 =
+        /// unlimited). Bounds the pread-under-shard-lock hold time on
+        /// the embedded RwLock shape (RFC §7: embedded default 256 KiB,
+        /// server unlimited) — an over-cap value simply stays hot.
+        pub(crate) max_spill: u64,
         /// Index/view memory floor (Σ segment `approx_bytes` on this
         /// shard), fed per shard tick by [`Store::set_tier_reserved`].
         /// Subtracted from the demote watermark (T5, RFC §1 D3): the
@@ -143,6 +148,7 @@ mod enabled {
                 batch_submissions_total: 0,
                 cold_keys: 0,
                 cold_bytes: 0,
+                max_spill: 0,
                 reserved_bytes: 0,
                 stub_bytes: 0,
                 renames: std::collections::HashMap::new(),
@@ -159,6 +165,17 @@ mod enabled {
         pub fn set_tier_budget(&mut self, bytes: u64) {
             if let Some(t) = &mut self.tier {
                 t.budget = bytes;
+            }
+        }
+
+        /// Cap the largest spillable value (0 = unlimited). Embedded
+        /// sets 256 KiB by default (RFC §7) to bound cold-read
+        /// lock-hold time; the server leaves it unlimited. No-op when
+        /// tiering is off.
+        #[inline]
+        pub fn set_tier_max_spill(&mut self, bytes: u64) {
+            if let Some(t) = &mut self.tier {
+                t.max_spill = bytes;
             }
         }
 
