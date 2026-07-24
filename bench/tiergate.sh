@@ -12,7 +12,8 @@
 #   T4: L4 replay-with-spill, L10 rewrite-on-cold, L11 boot>budget
 #   T5: L8 rss-budget/auto-probe
 #   T9: L2 cold-read-p99, L5 vlog-amplification, L6 capacity-10x,
-#       L12 D1-envelope, L13 hydration-batch, L14 mixed-isolation
+#       L12 D1-envelope, L13 hydration-batch (mechanism landed in T6;
+#       the envelope-scale measurement is T9's), L14 mixed-isolation
 set -euo pipefail
 
 fail=0
@@ -20,6 +21,30 @@ line() { # name, status, detail
   local name="$1" status="$2" detail="$3"
   printf '%-24s %-12s %s\n' "$name" "$status" "$detail"
   if [ "$status" != "PASS" ]; then fail=1; fi
+}
+
+# ── T9 envelope wiring: bench/capacity-envelope.sh writes one verdict
+# line per gate line it owns into bench/.capacity-envelope-results.
+# With TIERGATE_RUN_ENVELOPE=1 those verdicts render here (the same
+# results-from-a-runner pattern tablegate's run_t uses for cargo).
+# Only a SCALE=full run counts — the kevybench discipline: a tiny-scale
+# (harness-proof) results file flips nothing.
+ENV_RESULTS=${TIERGATE_ENVELOPE_RESULTS:-$(cd "$(dirname "$0")" && pwd)/.capacity-envelope-results}
+env_ok=0
+if [ "${TIERGATE_RUN_ENVELOPE:-0}" = 1 ] && [ -f "$ENV_RESULTS" ] \
+   && grep -q '^SCALE=full$' "$ENV_RESULTS"; then
+  env_ok=1
+fi
+env_line() { # $1 = results key (L2…), $2 = display name, $3 = pending detail
+  local rec
+  if [ "$env_ok" = 1 ]; then
+    rec=$(sed -n "s/^$1=//p" "$ENV_RESULTS")
+    if [ -n "$rec" ]; then
+      line "$2" "${rec%% *}" "${rec#* }"
+      return
+    fi
+  fi
+  line "$2" "PENDING(T9)" "$3 [runner: capacity-envelope.sh on lx64, then TIERGATE_RUN_ENVELOPE=1]"
 }
 
 # ── L8 assertion body (T5): RSS ≤ budget × 1.05 sustained + the auto
@@ -64,11 +89,11 @@ echo "tiergate — capacity-arc tiering acceptance (RFC §2 B/D groups)"
 echo
 
 line "L1  hot-p99 (B1)"        "PENDING(T3)" "hot GET/SET p99 delta <= noise across cold:hot sweeps"
-line "L2  cold-read-p99 (B2)"  "PENDING(T9)" "scalar <=100us/300us, hash-row <=200us/500us on NVMe"
+env_line L2 "L2  cold-read-p99 (B2)"  "scalar <=100us/300us, hash-row <=200us/500us on NVMe"
 line "L3  spill-budget (B3)"   "PENDING(T3)" "sustained-ingest RAM plateau; spill stall p99 <= 1ms"
 line "L4  replay-spill (B4)"   "PENDING(T4)" "replay-with-spill >= 0.70 x plain replay"
-line "L5  vlog-amp (B5)"       "PENDING(T9)" "vlog_size <= 2.0 x cold_bytes after churn + compaction"
-line "L6  capacity-10x (B6)"   "PENDING(T9)" "5M x 4KiB = 20GB on 2GB budget, op sweep green + RSS cap"
+env_line L5 "L5  vlog-amp (B5)"       "vlog_size <= 2.0 x cold_bytes after churn + compaction"
+env_line L6 "L6  capacity-10x (B6)"   "5M x 4KiB = 20GB on 2GB budget, op sweep green + RSS cap"
 # L8: the assertion body is implemented (T5, above) but a tiered
 # SERVER run only exists on lx64 — the line stays PENDING-red until the
 # T9 close-out runs it there (TIERGATE_RUN_L8=1 KEVY_BIN=… flips it).
@@ -84,9 +109,9 @@ else
 fi
 line "L10 rewrite-cold (B10)"  "PENDING(T4)" "BGREWRITEAOF on mostly-cold: digest equal + RAM bounded"
 line "L11 boot>budget (B11)"   "PENDING(T4)" "replay of dataset>budget: RSS <= budget x 1.05 throughout"
-line "L12 D1-envelope"         "PENDING(T9)" "10M x 1KiB on 3GB + 2 idx: C4/C5 hold, hydration p95<=10ms"
-line "L13 hydration-batch (D3)" "PENDING(T6)" "one batched submission per page; preads == rows"
-line "L14 mixed-isolation (D4)" "PENDING(T9)" "hot p99 unchanged under cold scan + backfill"
+env_line L12 "L12 D1-envelope"         "10M x 1KiB on 3GB + 2 idx: C4/C5 hold, hydration p95<=10ms"
+env_line L13 "L13 hydration-batch (D3)" "one batched submission per page; preads == rows"
+env_line L14 "L14 mixed-isolation (D4)" "hot p99 unchanged under cold scan + backfill"
 
 echo
 if [ "$fail" -ne 0 ]; then

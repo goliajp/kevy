@@ -35,7 +35,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - [WASM / browser](docs/wasm.md) · [Electron apps](docs/electron.md) · [Tauri apps](docs/tauri.md) · [IoT / embedded tiers](docs/iot.md)
 - [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)
 
-## Verbs (184 total)
+## Verbs (188 total)
 
 ### scan
 
@@ -591,7 +591,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `IDX.EXPLAIN name RANGE min max|EQ value|MATCH text|KNN vector|GROUPS [args ...]` [readonly,extension] — The IDX.QUERY parse without the execution: kind, state, est_rows, and the plan line.
   - complexity: The plan is parse-only, but est_rows costs the same live stats walk as IDX.LIST
   - compat: kevy-only: nearest is FT.EXPLAIN, which returns a parsed query tree; ours returns kind, build state, estimated rows and a one-line plan
-- `IDX.QUERY name RANGE min max [LIMIT n] [CURSOR c] [FIELDS field ...] | name EQ value [LIMIT n] [CURSOR c] [FIELDS field ...] | name MATCH text [LIMIT n] [FIELDS field ...] | name KNN vector [LIMIT k] [EF ef] [FIELDS field ...] | name GROUP group | name GROUPS [BY count|sum|min|max] [LIMIT n] | HYBRID text_idx MATCH text ann_idx KNN vector [LIMIT n] [RRFK k] [EF ef] [FIELDS field ...] | COMPOSE AND|OR nameA RANGE min max|EQ value nameB RANGE min max|EQ value [LIMIT n] [CURSOR c] [FIELDS field ...]` [readonly,extension] — Query an index: range/equality, text MATCH, vector KNN, aggregation groups, or a two-index COMPOSE.
+- `IDX.QUERY name RANGE min max|EQ value [LIMIT n] [CURSOR c] [FILTER field RANGE min max|EQ value ...] [SORT field ASC|DESC] [DISTINCT field] [FACET field ...] [OFFSET n] [FIELDS field ...] | name MATCH text [LIMIT n] [FIELDS field ...] | name KNN vector [LIMIT k] [EF ef] [FIELDS field ...] | name GROUP group | name GROUPS [BY count|sum|min|max] [LIMIT n] | HYBRID text_idx MATCH text ann_idx KNN vector [LIMIT n] [RRFK k] [EF ef] [FIELDS field ...] | COMPOSE AND|OR nameA RANGE min max|EQ value nameB RANGE min max|EQ value [LIMIT n] [CURSOR c] [FIELDS field ...]` [readonly,extension] — Query an index: range/equality, text MATCH, vector KNN, aggregation groups, or a two-index COMPOSE.
   - complexity: Depends on the index kind. range: O(log N + limit). unique: O(log N + hits). full-text: O(sum of the posting lists), MaxScore-pruned. vector ANN: O(dim * (M log N + ef * M)) distance evaluations (HNSW). agg GROUPS: a bounded top-K with 1 to 3 fan-out rounds. HYBRID: both sub-queries at 4x depth, fused by RRF at the origin. COMPOSE: NOT limit-bounded — both leaves are materialised in full, because the result is key-ordered while a segment is value-ordered
   - compat: kevy-only: nearest is RediSearch FT.SEARCH — genuinely comparable on two axes (our text index is BM25 over inverted segments, our vector index is HNSW, and RediSearch offers both). Differences: no separate module or index server; our BM25 statistics are per-shard, not global; and our query surface is a fixed grammar, not a DSL — no field boosting, no phrase or proximity search, no stemming, no aggregation pipeline
 - `IDX.REBUILD name` [write,extension] — Rebuild an ANN index (tombstone compaction).
@@ -600,6 +600,21 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `IDX.VERIFY name` [readonly,extension] — Verify an index: re-read every held entry against its row and report entries/bytes/coerce_failures/duplicates/drift/checked.
   - complexity: O(N) per shard — every held entry is re-read against its row and re-coerced, which is the point: it makes index drift falsifiable rather than merely asserted
   - compat: kevy-only: no Redis analogue — RediSearch's index is asynchronously maintained and offers no consistency-verify verb
+
+### table
+
+- `TABLE.DECLARE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX col range|unique [VALUES col ...]] [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...]` [write,extension] — Declare a relational table that compiles at declare time into named indexes (catalog mutation, sidecar-persisted).
+  - complexity: O(declaration size) at the call; each compiled index then backfills like IDX.CREATE (2048 rows per tick per shard). The engine gains no query planner: queries name the compiled paths (`<table>.<col>`, `<table>.<orderpath>`) explicitly
+  - compat: kevy-only: nearest is CREATE TABLE in an RDBMS — but this is a declaration compiler, not a schema enforcer: a row with a missing column is a row with an absent field (NULL semantics), never an error, and no SQL executes at query time
+- `TABLE.DROP name` [write,extension] — Drop a declared table and its compiled indexes (catalog mutation, sidecar-persisted).
+  - complexity: O(catalog size + compiled indexes)
+  - compat: kevy-only
+- `TABLE.LIST` [readonly,extension] — List declared tables with their prefix, PK and declaration counts.
+  - complexity: O(tables) at the origin — the catalog is process-global
+  - compat: kevy-only
+- `TABLE.VERIFY name` [readonly,extension] — Verify a table: each compiled index's full drift recheck plus a bounded column-type spot check over sampled rows.
+  - complexity: O(sum of compiled index entries) per shard for the drift recheck (the IDX.VERIFY discipline, composites re-derive their byte encoding) plus a bounded 64-row-per-shard column spot check through the no-promote peek
+  - compat: kevy-only: nearest is a relational fsck; verify-not-enforce is the declarative fence
 
 ### view
 

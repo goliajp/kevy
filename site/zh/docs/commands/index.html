@@ -48,13 +48,13 @@
 <main id="main" class="page">
   <div class="band">
     <p class="eyebrow">命令</p>
-    <h1>184 个命令</h1>
+    <h1>188 个命令</h1>
     <p class="lede">服务器会应答的每一个动词，直接来自它自己的注册表 —— 也就是 <code>COMMAND DOCS</code> 读的同一张表。有两栏是 Redis 的参考文档里没有的：这个命令在<b>本引擎里的真实代价</b>，以及它<b>与 Redis 的差异</b>。</p>
 
     <div class="filters">
       <input id="q" type="search" placeholder="筛选命令……" aria-label="筛选命令……" autocomplete="off">
       <select id="g" aria-label="分组">
-        <option value="">全部分组</option><option value="string">字符串</option><option value="generic">通用键操作</option><option value="scan">键空间扫描</option><option value="list">列表</option><option value="hash">哈希</option><option value="set">集合</option><option value="zset">有序集合</option><option value="stream">流</option><option value="geo">地理空间</option><option value="connection">连接</option><option value="server">服务器</option><option value="tx">事务</option><option value="script">脚本</option><option value="pubsub">发布订阅</option><option value="replication">复制</option><option value="index">索引</option><option value="view">视图</option><option value="feed">变更流</option><option value="migration">迁移</option>
+        <option value="">全部分组</option><option value="string">字符串</option><option value="generic">通用键操作</option><option value="scan">键空间扫描</option><option value="list">列表</option><option value="hash">哈希</option><option value="set">集合</option><option value="zset">有序集合</option><option value="stream">流</option><option value="geo">地理空间</option><option value="connection">连接</option><option value="server">服务器</option><option value="tx">事务</option><option value="script">脚本</option><option value="pubsub">发布订阅</option><option value="replication">复制</option><option value="index">索引</option><option value="table">表</option><option value="view">视图</option><option value="feed">变更流</option><option value="migration">迁移</option>
       </select>
       <select id="c" aria-label="与 Redis 的兼容性">
         <option value="">全部 — 与 Redis 的兼容性</option>
@@ -245,6 +245,10 @@
 <tr data-name="idx.query" data-group="index" data-compat="only"><td class="k"><a href="IDX.QUERY/">IDX.QUERY</a></td><td class="g">索引</td><td class="cx mono">取决于索引种类</td><td><span class="badge only">kevy 独有</span></td><td class="sum">查询索引：区间 / 等值、文本 MATCH、向量 KNN、聚合分组，或跨两个索引的 COMPOSE。</td></tr>
 <tr data-name="idx.rebuild" data-group="index" data-compat="only"><td class="k"><a href="IDX.REBUILD/">IDX.REBUILD</a></td><td class="g">索引</td><td class="cx mono">仅对向量索引有效（墓碑压实）</td><td><span class="badge only">kevy 独有</span></td><td class="sum">重建一个 ANN 索引（墓碑压实）。</td></tr>
 <tr data-name="idx.verify" data-group="index" data-compat="only"><td class="k"><a href="IDX.VERIFY/">IDX.VERIFY</a></td><td class="g">索引</td><td class="cx mono">每个 shard 上 O(N)</td><td><span class="badge only">kevy 独有</span></td><td class="sum">校验索引：把每一条索引项都拿回它对应的行重读一遍，报告 entries / bytes / coerce_failures / duplicates / drift / checked。</td></tr>
+<tr data-name="table.declare" data-group="table" data-compat="only"><td class="k"><a href="TABLE.DECLARE/">TABLE.DECLARE</a></td><td class="g">表</td><td class="cx mono">O(declaration size) at the call</td><td><span class="badge only">kevy 独有</span></td><td class="sum">Declare a relational table that compiles at declare time into named indexes (catalog mutation, sidecar-persisted).</td></tr>
+<tr data-name="table.drop" data-group="table" data-compat="only"><td class="k"><a href="TABLE.DROP/">TABLE.DROP</a></td><td class="g">表</td><td class="cx mono">O(catalog size + compiled indexes)</td><td><span class="badge only">kevy 独有</span></td><td class="sum">Drop a declared table and its compiled indexes (catalog mutation, sidecar-persisted).</td></tr>
+<tr data-name="table.list" data-group="table" data-compat="only"><td class="k"><a href="TABLE.LIST/">TABLE.LIST</a></td><td class="g">表</td><td class="cx mono">O(tables) at the origin</td><td><span class="badge only">kevy 独有</span></td><td class="sum">List declared tables with their prefix, PK and declaration counts.</td></tr>
+<tr data-name="table.verify" data-group="table" data-compat="only"><td class="k"><a href="TABLE.VERIFY/">TABLE.VERIFY</a></td><td class="g">表</td><td class="cx mono">O(sum of compiled index entries) per s…</td><td><span class="badge only">kevy 独有</span></td><td class="sum">Verify a table: each compiled index's full drift recheck plus a bounded column-type spot check over sampled rows.</td></tr>
 <tr data-name="view.create" data-group="view" data-compat="only"><td class="k"><a href="VIEW.CREATE/">VIEW.CREATE</a></td><td class="g">视图</td><td class="cx mono">调用本身 O(树的大小)</td><td><span class="badge only">kevy 独有</span></td><td class="sum">在若干索引之上声明一个组合视图，并指定 ORDER BY(catalog 变更，由 sidecar 持久化)。</td></tr>
 <tr data-name="view.drop" data-group="view" data-compat="only"><td class="k"><a href="VIEW.DROP/">VIEW.DROP</a></td><td class="g">视图</td><td class="cx mono">O(catalog 大小)</td><td><span class="badge only">kevy 独有</span></td><td class="sum">删除一个已声明的视图（catalog 变更，由 sidecar 持久化）。</td></tr>
 <tr data-name="view.explain" data-group="view" data-compat="only"><td class="k"><a href="VIEW.EXPLAIN/">VIEW.EXPLAIN</a></td><td class="g">视图</td><td class="cx mono">O(各叶子的 (log N + matched) 之和)</td><td><span class="badge only">kevy 独有</span></td><td class="sum">展开视图的组合树，并给出每个叶子的基数。</td></tr>
