@@ -53,6 +53,8 @@ pub(crate) fn publish_gauges(shard: &ShardCtx, store: &Store) {
             s.tier.cold_bytes.store(ts.cold_bytes, Relaxed);
             s.tier.demotions_total.store(ts.demotions_total, Relaxed);
             s.tier.promotions_total.store(ts.promotions_total, Relaxed);
+            s.tier.peek_preads_total.store(ts.peek_preads_total, Relaxed);
+            s.tier.batch_submissions_total.store(ts.batch_submissions_total, Relaxed);
             s.tier.vlog_files.store(ts.vlog_files, Relaxed);
             s.tier.vlog_bytes.store(ts.vlog_bytes, Relaxed);
             s.tier.vlog_live_bytes.store(ts.vlog_live_bytes, Relaxed);

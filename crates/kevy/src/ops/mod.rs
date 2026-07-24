@@ -22,6 +22,7 @@ pub(crate) mod config;
 mod memory;
 pub(crate) mod replication;
 pub(crate) mod scope_move;
+mod scope_move_emit;
 mod scope_move_stream;
 pub(crate) mod stats;
 
@@ -224,6 +225,8 @@ fn info_tiering(totals: &crate::state::Totals, b: &mut String) {
     b.push_str(&format!("vlog_epoch:{}\r\n", t.vlog_epoch));
     b.push_str(&format!("demotions_total:{}\r\n", t.demotions_total));
     b.push_str(&format!("promotions_total:{}\r\n", t.promotions_total));
+    b.push_str(&format!("peek_preads_total:{}\r\n", t.peek_preads_total));
+    b.push_str(&format!("batch_submissions_total:{}\r\n", t.batch_submissions_total));
     b.push_str("\r\n");
 }
 

@@ -15,7 +15,7 @@ use kevy_store::Store;
 
 use super::args::Query;
 use super::ops_clauses::{distinct_field, facet_fields, filter_tests, sort_field};
-use super::wire::{encode_hydration, encode_value};
+use super::wire::{encode_hydration_row, encode_value, peek_hydration};
 use super::{ST_BADARGS, ST_BUILDING, ST_CLAUSE, ST_NOINDEX, ST_OK, ST_OVERBUDGET};
 use crate::index_runtime;
 use crate::state::Ctx;
@@ -75,11 +75,15 @@ fn encode_claused_chunk(
 ) -> Vec<u8> {
     let mut chunk = vec![ST_OK];
     chunk.extend_from_slice(&(page.hits.len() as u32).to_le_bytes());
-    for h in &page.hits {
+    // T6: hydration rows prefetched as ONE batched page (cold rows
+    // coalesce into one submission), then encoded in hit order.
+    let keys: Vec<&[u8]> = page.hits.iter().map(|h| h.key.as_slice()).collect();
+    let rows = peek_hydration(store, &keys, &q.fields);
+    for (i, h) in page.hits.iter().enumerate() {
         chunk.extend_from_slice(&(h.key.len() as u32).to_le_bytes());
         chunk.extend_from_slice(&h.key);
         encode_value(&mut chunk, &h.value);
-        encode_hydration(store, &mut chunk, &h.key, &q.fields);
+        encode_hydration_row(&mut chunk, q.fields.len(), &rows[i]);
         if q.sort.is_some() {
             encode_okey(&mut chunk, h.okey.as_deref());
         }

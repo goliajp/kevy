@@ -35,6 +35,37 @@ impl IoUring {
         true
     }
 
+    /// Queue a positional `pread(fd, buf, len, offset)` — an
+    /// `IORING_OP_READ` with the SQE `off` field set, so N of these on
+    /// one file batch into one `io_uring_enter` (the T6 cold-hydration
+    /// secondary ring). Returns `false` if the SQ is full.
+    ///
+    /// # Safety
+    /// `buf` must point to `len` writable bytes and stay valid until the
+    /// matching completion is reaped.
+    pub unsafe fn prep_read_at(
+        &mut self,
+        fd: i32,
+        buf: *mut u8,
+        len: u32,
+        offset: u64,
+        user_data: u64,
+    ) -> bool {
+        let Some(idx) = self.reserve() else {
+            return false;
+        };
+        // SAFETY: `idx` is a freshly reserved, in-bounds SQE slot we own alone.
+        unsafe {
+            let sqe = self.sqes_ptr().add(idx);
+            ptr::write(
+                sqe,
+                IoUringSqe::new(IORING_OP_READ, fd, buf as u64, len, user_data),
+            );
+            (*sqe).off = offset;
+        }
+        true
+    }
+
     /// Queue a `write(fd)` of `len` bytes from `buf`, tagged with `user_data`.
     /// Returns `false` if the SQ is full.
     ///

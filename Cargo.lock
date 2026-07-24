@@ -438,6 +438,7 @@ dependencies = [
  "kevy-sys",
  "kevy-text",
  "kevy-tmpdir",
+ "kevy-uring",
  "kevy-vector",
 ]
 

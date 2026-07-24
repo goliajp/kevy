@@ -45,6 +45,8 @@ pub(crate) struct TierGauges {
     pub cold_bytes: AtomicU64,
     pub demotions_total: AtomicU64,
     pub promotions_total: AtomicU64,
+    pub peek_preads_total: AtomicU64,
+    pub batch_submissions_total: AtomicU64,
     pub vlog_files: AtomicU64,
     pub vlog_bytes: AtomicU64,
     pub vlog_live_bytes: AtomicU64,
@@ -81,6 +83,8 @@ pub(crate) struct TierTotals {
     pub cold_bytes: u64,
     pub demotions_total: u64,
     pub promotions_total: u64,
+    pub peek_preads_total: u64,
+    pub batch_submissions_total: u64,
     pub vlog_files: u64,
     pub vlog_bytes: u64,
     pub vlog_live_bytes: u64,
@@ -178,6 +182,8 @@ impl ObsState {
             t.tier.cold_bytes += s.tier.cold_bytes.load(Relaxed);
             t.tier.demotions_total += s.tier.demotions_total.load(Relaxed);
             t.tier.promotions_total += s.tier.promotions_total.load(Relaxed);
+            t.tier.peek_preads_total += s.tier.peek_preads_total.load(Relaxed);
+            t.tier.batch_submissions_total += s.tier.batch_submissions_total.load(Relaxed);
             t.tier.vlog_files += s.tier.vlog_files.load(Relaxed);
             t.tier.vlog_bytes += s.tier.vlog_bytes.load(Relaxed);
             t.tier.vlog_live_bytes += s.tier.vlog_live_bytes.load(Relaxed);

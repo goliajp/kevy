@@ -121,8 +121,11 @@ mod tier;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 mod tier_codec;
 mod tier_demote;
+mod tier_serve;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub use tier::TierStats;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+pub use tier_serve::{ColdBatchReader, ColdRead, PeekRow, SyncColdRead};
 mod types;
 pub use types::{EvictionPolicy, RenameOutcome, StoreError};
 mod util;
@@ -284,6 +287,13 @@ pub struct Store {
     /// a cold value decoded for ONE read, never installed in the map.
     #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
     pub(crate) tier_scratch: Option<Entry>,
+    /// Bulk-read (no-promote peek) mode, scoped by [`Store::peek_scope`]
+    /// (capacity arc T6): while set, a cold materializing read serves
+    /// via pread WITHOUT setting the probation mark and WITHOUT
+    /// promoting — digest / scope-move / export reads are not access
+    /// signals.
+    #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+    pub(crate) tier_peek: bool,
 }
 
 
@@ -469,24 +479,10 @@ impl Store {
 
 }
 
-/// Apply a signed delta to a `u64` (saturating both directions). Used by
-/// `Store::account_delta` / `reweigh_entry` so the in-place mutators don't
-/// have to repeat the same overflow-guarded match.
-#[inline]
-pub(crate) fn apply_delta(v: &mut u64, delta: i64) {
-    if delta >= 0 {
-        *v = v.saturating_add(delta as u64);
-    } else {
-        *v = v.saturating_sub((-delta) as u64);
-    }
-}
-
-/// Heap bytes a `SmallBytes`-encoded key would own (`&[u8]` mirror of
-/// `SmallBytes::heap_bytes`; 22-byte inline boundary per `kevy-bytes`).
-#[inline]
-pub(crate) fn key_heap_bytes_for(key: &[u8]) -> u64 {
-    if key.len() <= 22 { 0 } else { key.len() as u64 }
-}
+// Accounting micro-helpers live in `util` (500-LOC split); re-exported
+// so the crate-wide `crate::apply_delta` / `crate::key_heap_bytes_for`
+// paths keep working.
+pub(crate) use util::{apply_delta, key_heap_bytes_for};
 
 #[cfg(test)]
 mod tests;
@@ -498,3 +494,5 @@ mod tests_snapshot;
 mod tests_string_encoding;
 #[cfg(all(test, feature = "std", not(target_arch = "wasm32")))]
 mod tests_tier;
+#[cfg(all(test, feature = "std", not(target_arch = "wasm32")))]
+mod tests_tier_peek;

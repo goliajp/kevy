@@ -173,21 +173,22 @@ fn apply_agg_key(
     a: &mut kevy_index::AggSegment,
     key: &[u8],
 ) {
+    // T6: both fields in ONE row peek (server twin: `apply_row_agg`) —
+    // one record read on a cold row, no promotion, no gate mark; the
+    // `Ok(None)`/`Err` arms carry the old `exists()` distinction.
     let group_field = spec.group_by.as_deref().unwrap_or_default();
-    let group = match store.hget(key, group_field) {
-        Ok(Some(g)) => Some(g.to_vec()),
-        _ => None,
-    };
-    let val = match store.hget(key, spec.field()) {
-        Ok(Some(raw)) => {
-            let raw = raw.to_vec();
-            kevy_index::IndexValue::coerce(spec.ty, &raw)
+    match store.peek_hash_fields(key, &[group_field, spec.field()]) {
+        Ok(Some(mut vals)) => {
+            let group = vals[0].take();
+            let val =
+                vals[1].take().and_then(|raw| kevy_index::IndexValue::coerce(spec.ty, &raw));
+            match (group, val) {
+                (Some(g), Some(v)) => a.apply(key, Some((g, v)), false),
+                _ => a.apply(key, None, true),
+            }
         }
-        _ => None,
-    };
-    match (group, val) {
-        (Some(g), Some(v)) => a.apply(key, Some((g, v)), false),
-        _ => a.apply(key, None, store.exists(&[key]) > 0),
+        Ok(None) => a.apply(key, None, false),
+        Err(_) => a.apply(key, None, true),
     }
 }
 
@@ -198,10 +199,11 @@ fn apply_ann_key(
     g: &mut kevy_vector::Hnsw,
     key: &[u8],
 ) {
-    let v = match store.hget(key, spec.field()) {
-        Ok(Some(raw)) => {
-            let raw = raw.to_vec();
-            kevy_vector::parse_vector(&raw, g.dim())
+    // T6: the row peek — one record read on cold, no promotion, no
+    // gate mark (server twin: `apply_row`'s ann arm).
+    let v = match store.peek_hash_fields(key, &[spec.field()]) {
+        Ok(Some(mut vals)) => {
+            vals[0].take().and_then(|raw| kevy_vector::parse_vector(&raw, g.dim()))
         }
         _ => None,
     };
@@ -217,8 +219,21 @@ fn apply_text_key(
 ) {
     // The spec owns what it reads out of a row -- declared fields with
     // their weights, declared stored values -- so this path and the
-    // server's cannot index the same row differently.
-    let (fields, values) = spec.read_row(|f| store.hget(key, f).ok().flatten().map(|v| v.to_vec()));
+    // server's cannot index the same row differently. T6: every
+    // declared field + value prefetched with ONE row peek (one record
+    // read on a cold row, no promotion, no gate mark); `read_row`
+    // resolves from the prefetch, not per-field hgets.
+    let names: Vec<&[u8]> = spec
+        .fields
+        .iter()
+        .map(|f| f.name.as_slice())
+        .chain(spec.values.iter().map(|v| v.name.as_slice()))
+        .collect();
+    let fetched = store.peek_hash_fields(key, &names).ok().flatten();
+    let (fields, values) = spec.read_row(|f| {
+        let vals = fetched.as_ref()?;
+        names.iter().position(|n| *n == f).and_then(|i| vals[i].clone())
+    });
     let vals: Vec<Option<&[u8]>> = values.iter().map(|v| v.as_deref()).collect();
     if fields.is_empty() {
         ts.apply_doc(key, None, &vals);
@@ -338,45 +353,29 @@ fn new_scalar(spec: &IndexSpec) -> Segment {
     }
 }
 
+/// T6: the primary field AND every declared VALUES column read with
+/// ONE `peek_hash_fields` row peek — a cold row costs one record read
+/// plus one decode (never one per field), promotes nothing and never
+/// advances the 2nd-touch gate (the server twin is
+/// `index_runtime::apply_scalar_row`). The peek's `Ok(None)`/`Err`
+/// arms replace the old `exists()` disambiguation probe exactly.
 fn apply_key(store: &mut kevy_store::Store, spec: &IndexSpec, seg: &mut Segment, key: &[u8]) {
-    match store.hget(key, spec.field()) {
-        Ok(Some(raw)) => {
-            let raw = raw.to_vec();
-            match IndexValue::coerce(spec.ty, &raw) {
-                Some(v) => apply_indexed(store, spec, seg, key, v),
+    let mut names: Vec<&[u8]> = Vec::with_capacity(1 + spec.values.len());
+    names.push(spec.field());
+    names.extend(spec.values.iter().map(|f| f.name.as_slice()));
+    match store.peek_hash_fields(key, &names) {
+        Ok(None) | Err(_) => seg.remove(key),
+        Ok(Some(mut vals)) => {
+            let primary = vals[0].take().and_then(|raw| IndexValue::coerce(spec.ty, &raw));
+            match primary {
                 None => seg.apply_with_values(key, None, &[]),
+                Some(v) if spec.values.is_empty() => seg.apply(key, Some(v)),
+                Some(v) => {
+                    let refs: Vec<Option<&[u8]>> =
+                        vals[1..].iter().map(|o| o.as_deref()).collect();
+                    seg.apply_with_values(key, Some(v), &refs);
+                }
             }
         }
-        Ok(None) => {
-            if store.exists(&[key]) == 0 {
-                seg.remove(key);
-            } else {
-                seg.apply_with_values(key, None, &[]);
-            }
-        }
-        Err(_) => seg.remove(key),
-    }
-}
-
-/// Apply an indexed row plus — when the spec declares `VALUES` — its
-/// stored values riding the same write (the server twin is
-/// `index_runtime::apply_scalar_row`).
-fn apply_indexed(
-    store: &mut kevy_store::Store,
-    spec: &IndexSpec,
-    seg: &mut Segment,
-    key: &[u8],
-    v: IndexValue,
-) {
-    if spec.values.is_empty() {
-        seg.apply(key, Some(v));
-    } else {
-        let owned: Vec<Option<Vec<u8>>> = spec
-            .values
-            .iter()
-            .map(|f| store.hget(key, &f.name).ok().flatten().map(|b| b.to_vec()))
-            .collect();
-        let vals: Vec<Option<&[u8]>> = owned.iter().map(|x| x.as_deref()).collect();
-        seg.apply_with_values(key, Some(v), &vals);
     }
 }

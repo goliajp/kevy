@@ -17,7 +17,7 @@
 //! a newer hook-applied value is never clobbered by a stale scan.
 
 use kevy_resp::CmdError;
-use kevy_index::{IndexSpec, IndexValue, Segment};
+use kevy_index::{IndexSpec, Segment};
 use kevy_store::Store;
 
 use crate::state::{CatalogState, Ctx};
@@ -250,27 +250,6 @@ fn new_scalar_seg(spec: &IndexSpec) -> Segment {
     }
 }
 
-/// Apply one scalar row: the coerced primary field, and — when the spec
-/// declares `VALUES` — the row's stored values riding the same write.
-fn apply_scalar_row(store: &mut Store, spec: &IndexSpec, seg: &mut Segment, key: &[u8]) {
-    match row_value(store, spec, key) {
-        RowValue::Value(v) => {
-            if spec.values.is_empty() {
-                seg.apply(key, Some(v));
-            } else {
-                let owned: Vec<Option<Vec<u8>>> = spec
-                    .values
-                    .iter()
-                    .map(|f| store.hget(key, &f.name).ok().flatten().map(|b| b.to_vec()))
-                    .collect();
-                let vals: Vec<Option<&[u8]>> = owned.iter().map(|v| v.as_deref()).collect();
-                seg.apply_with_values(key, Some(v), &vals);
-            }
-        }
-        RowValue::CoerceFailed => seg.apply_with_values(key, None, &[]),
-        RowValue::Gone => seg.remove(key),
-    }
-}
 
 /// A fresh text segment for `spec` when it is a text index — with the
 /// positional side-channel iff it was created WITH POSITIONS.
@@ -337,156 +316,9 @@ fn refresh(catalogs: &CatalogState, st: &mut ShardIndexes, store: &mut Store) {
     st.generation = generation;
 }
 
-/// Index one row: read the field from the hash at `key`, coerce,
-/// apply. A missing key / non-hash / missing field clears the row.
-fn apply_row(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
-    // Agg kind: both fields must resolve — the aggregated value
-    // coerces per the declared type, the group key is raw bytes.
-    if let Some(a) = &mut si.agg {
-        apply_row_agg(store, &si.spec, a, key);
-        return;
-    }
-    // Ann kind: field bytes parse as an f32 vector (wrong shape
-    // = excluded, same discipline as scalar coerce failure).
-    if let Some(g) = &mut si.ann {
-        let v = match store.hget(key, si.spec.field()) {
-            Ok(Some(raw)) => {
-                let raw = raw.to_vec();
-                kevy_vector::parse_vector(&raw, g.dim())
-            }
-            _ => None,
-        };
-        g.apply(key, v);
-        return;
-    }
-    // Text kind: raw field bytes tokenize into the inverted
-    // segment (no scalar coercion).
-    if let Some(ts) = &mut si.text {
-        // What the spec reads out of the row -- every declared field with
-        // its weight (they score into one corpus, which is the whole
-        // reason multi-field is a spec change rather than several
-        // single-field indexes) and every declared stored value. The spec
-        // owns that mapping, so the server and the embedded store cannot
-        // read a row differently.
-        let (fields, values) =
-            si.spec.read_row(|f| store.hget(key, f).ok().flatten().map(|v| v.to_vec()));
-        let vals: Vec<Option<&[u8]>> = values.iter().map(|v| v.as_deref()).collect();
-        if fields.is_empty() {
-            ts.apply_doc(key, None, &vals);
-        } else {
-            ts.apply_doc(key, Some(&fields), &vals);
-        }
-        return;
-    }
-    apply_scalar_row(store, &si.spec, &mut si.seg, key);
-}
-
-/// [`apply_row`]'s agg half: both fields must resolve — the aggregated
-/// value coerces per the declared type, the group key is raw bytes.
-fn apply_row_agg(
-    store: &mut Store,
-    spec: &IndexSpec,
-    a: &mut kevy_index::AggSegment,
-    key: &[u8],
-) {
-    let group_field = spec.group_by.as_deref().unwrap_or_default();
-    let group = match store.hget(key, group_field) {
-        Ok(Some(g)) => Some(g.to_vec()),
-        _ => None,
-    };
-    let val = match store.hget(key, spec.field()) {
-        Ok(Some(raw)) => {
-            let raw = raw.to_vec();
-            kevy_index::IndexValue::coerce(spec.ty, &raw)
-        }
-        _ => None,
-    };
-    match (group, val) {
-        (Some(g), Some(v)) => a.apply(key, Some((g, v)), false),
-        // Slow path only: distinguish a DELETED row (plain
-        // retract) from an in-domain row missing/failing a field
-        // (excluded, counted). The happy path above never pays
-        // the exists() probe.
-        _ => a.apply(key, None, store.exists(&[key]) > 0),
-    }
-}
-
-pub(crate) enum RowValue {
-    Value(IndexValue),
-    CoerceFailed,
-    Gone,
-}
-
-pub(crate) fn row_value(store: &mut Store, spec: &IndexSpec, key: &[u8]) -> RowValue {
-    match store.hget(key, spec.field()) {
-        Ok(Some(raw)) => {
-            let raw = raw.to_vec();
-            match IndexValue::coerce(spec.ty, &raw) {
-                Some(v) => RowValue::Value(v),
-                None => RowValue::CoerceFailed,
-            }
-        }
-        // `hget` answers None for BOTH a missing key and a missing
-        // field; only the latter is a row excluded by coercion — a
-        // missing key is simply not a row.
-        Ok(None) => {
-            if store.exists(&[key]) == 0 {
-                RowValue::Gone
-            } else {
-                RowValue::CoerceFailed
-            }
-        }
-        Err(_) => RowValue::Gone, // not a hash → not a row
-    }
-}
-
-fn advance_backfill(store: &mut Store, si: &mut ShardIndex, batch: usize) {
-    let BuildState::Backfilling { keys, pos } = &mut si.build else {
-        return;
-    };
-    let end = (*pos + batch).min(keys.len());
-    // Split the borrow: take the key slice out while applying.
-    let slice: Vec<Vec<u8>> = keys[*pos..end].to_vec();
-    *pos = end;
-    let done = *pos >= keys.len();
-    for key in &slice {
-        // Hook-applied entries win: only fill keys not yet indexed.
-        let already = match (&si.text, &si.ann, &si.agg) {
-            (Some(ts), _, _) => ts.contains(key),
-            (_, Some(g), _) => g.contains(key),
-            (_, _, Some(a)) => a.contains(key),
-            _ => si.seg.verify_entry(key).is_some(),
-        };
-        if !already {
-            apply_row_backfill(store, si, key);
-        }
-    }
-    // A MAXMEM budget is enforced at build time — declarative failure
-    // instead of OOM. The tiering floor joins it (T5): a build whose
-    // growing segment leaves the tier no demotable headroom fails the
-    // same declarative way (the per-tick `reserved_bytes` feed already
-    // counts this segment's current size).
-    if (si.spec.max_bytes > 0 && si.seg.stats().approx_bytes > si.spec.max_bytes)
-        || store.tier_index_floor_blocked(0)
-    {
-        si.seg = Segment::new();
-        si.build = BuildState::FailedOverBudget;
-        return;
-    }
-    if done {
-        si.build = BuildState::Ready;
-    }
-}
-
-fn apply_row_backfill(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
-    if si.text.is_some() || si.ann.is_some() || si.agg.is_some() {
-        apply_row(store, si, key);
-        return;
-    }
-    // A key deleted since the snapshot resolves to `Gone` → `remove`,
-    // which is a no-op on a segment that never held it.
-    apply_scalar_row(store, &si.spec, &mut si.seg, key);
-}
+mod row_apply;
+use row_apply::{advance_backfill, apply_row};
+pub(crate) use row_apply::{RowValue, row_value};
 
 #[cfg(test)]
 mod tests;

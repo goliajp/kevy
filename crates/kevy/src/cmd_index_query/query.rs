@@ -5,7 +5,7 @@ use kevy_index::{IndexSpec, IndexValue, SegmentStats};
 use kevy_store::Store;
 
 use super::args::{KnnArgs, Query, Shape, parse_groups_args};
-use super::wire::{encode_hydration, encode_value};
+use super::wire::{encode_hydration_row, encode_value, peek_hydration};
 use super::{ST_BADARGS, ST_BUILDING, ST_NOINDEX, ST_OK, ST_OVERBUDGET};
 use crate::index_runtime;
 use crate::state::Ctx;
@@ -145,11 +145,15 @@ fn encode_hits_chunk(
 ) -> Vec<u8> {
     let mut chunk = vec![ST_OK];
     chunk.extend_from_slice(&(hits.len() as u32).to_le_bytes());
-    for (k, v) in hits {
+    // T6: hydration rows prefetched as ONE batched page (cold rows
+    // coalesce into one submission), then encoded in hit order.
+    let keys: Vec<&[u8]> = hits.iter().map(|(k, _)| k.as_slice()).collect();
+    let rows = peek_hydration(store, &keys, fields);
+    for (i, (k, v)) in hits.iter().enumerate() {
         chunk.extend_from_slice(&(k.len() as u32).to_le_bytes());
         chunk.extend_from_slice(k);
         encode_value(&mut chunk, v);
-        encode_hydration(store, &mut chunk, k, fields);
+        encode_hydration_row(&mut chunk, fields.len(), &rows[i]);
     }
     chunk
 }
@@ -277,13 +281,18 @@ fn encode_verify_chunk(
     entries: &[(Vec<u8>, IndexValue)],
     stats: &SegmentStats,
 ) -> Vec<u8> {
-    let mut drift = 0u64;
-    for (key, held) in entries {
-        match index_runtime::row_value(store, spec, key) {
-            index_runtime::RowValue::Value(actual) if &actual == held => {}
-            _ => drift += 1,
+    // T6: VERIFY's recheck is a bulk sweep — inside the peek scope a
+    // cold row costs one pread and never promotes or marks the gate.
+    let drift = store.peek_scope(|s| {
+        let mut drift = 0u64;
+        for (key, held) in entries {
+            match index_runtime::row_value(s, spec, key) {
+                index_runtime::RowValue::Value(actual) if &actual == held => {}
+                _ => drift += 1,
+            }
         }
-    }
+        drift
+    });
     let mut chunk = vec![ST_OK];
     chunk.extend_from_slice(&stats.entries.to_le_bytes());
     chunk.extend_from_slice(&stats.approx_bytes.to_le_bytes());
