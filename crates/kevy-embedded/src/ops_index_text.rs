@@ -51,6 +51,7 @@ impl Store {
                 .iter()
                 .map(|(n, ty)| kevy_index::ValueSpec { name: n.to_vec(), ty: *ty })
                 .collect(),
+            composite: None,
         };
         self.register_spec(spec)
     }

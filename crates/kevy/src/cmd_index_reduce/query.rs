@@ -33,6 +33,7 @@ pub(super) fn reduce_explain(
         b'G' => "groups",
         b'R' => "range",
         b'E' => "eq",
+        b'W' => "where",
         _ => "query",
     };
     let state = if building { "building" } else { "ready" };

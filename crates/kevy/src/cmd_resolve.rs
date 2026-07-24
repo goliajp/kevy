@@ -192,6 +192,10 @@ fn route_for_verb<A: ArgvView + ?Sized>(
         b"VIEW.VERIFY" if args.len() == 2 => Route::Extension,
         b"VIEW.REBUILD" if args.len() == 2 => Route::Extension,
         b"VIEW.EXPLAIN" if args.len() == 2 => Route::Extension,
+        // TABLE.DECLARE / TABLE.DROP are Local catalog mutations —
+        // they fall through to the default arm like IDX.CREATE.
+        b"TABLE.LIST" if args.len() == 1 => Route::Extension,
+        b"TABLE.VERIFY" if args.len() == 2 => Route::Extension,
         b"PREFIX.STATS" if args.len() == 2 => Route::PrefixStats,
         b"PREFIX.DIGEST" if args.len() == 2 => Route::Extension,
         b"FEED.READ" if args.len() >= 4 => Route::FeedRead,

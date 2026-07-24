@@ -52,6 +52,7 @@ mod cmd_data;
 mod cmd_hash_ttl;
 mod cmd_index;
 mod cmd_digest;
+mod cmd_table;
 mod cmd_view;
 mod cmd_view_reduce;
 mod cmd_index_query;
@@ -234,6 +235,7 @@ fn boot_state(cfg: &Arc<kevy_config::Config>) -> Arc<RuntimeState> {
     };
     cmd_index::boot(&state);
     cmd_view::boot(&state);
+    cmd_table::boot(&state);
     state
 }
 

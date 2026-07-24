@@ -129,11 +129,12 @@ impl Store {
             group_by: None,
             with_positions: false,
             values: Vec::new(),
+            composite: None,
         };
         self.register_spec(spec)
     }
 
-    fn register_spec(&self, spec: IndexSpec) -> KevyResult<()> {
+    pub(crate) fn register_spec(&self, spec: IndexSpec) -> KevyResult<()> {
         // Tiering floor refusal (T5, RFC §4 row 16): body in
         // `ops_index_sync::tier_floor_check` (500-LOC rule).
         #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
@@ -187,6 +188,7 @@ impl Store {
             group_by: None,
             with_positions: false,
             values: Vec::new(),
+            composite: None,
         };
         self.register_spec(spec)
     }
@@ -313,6 +315,7 @@ impl Store {
             group_by: Some(group_by.to_vec()),
             with_positions: false,
             values: Vec::new(),
+            composite: None,
         };
         self.register_spec(spec)
     }

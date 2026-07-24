@@ -16,7 +16,7 @@ use kevy_store::Store;
 use super::args::Query;
 use super::ops_clauses::{distinct_field, facet_fields, filter_tests, sort_field};
 use super::wire::{encode_hydration_row, encode_value, peek_hydration};
-use super::{ST_BADARGS, ST_BUILDING, ST_CLAUSE, ST_NOINDEX, ST_OK, ST_OVERBUDGET};
+use super::{ST_BUILDING, ST_CLAUSE, ST_NOINDEX, ST_OK, ST_OVERBUDGET};
 use crate::index_runtime;
 use crate::state::Ctx;
 
@@ -36,9 +36,7 @@ pub(super) fn clause_chunk(msg: &str) -> Vec<u8> {
 /// encode the chunk. The caller has already refused CURSOR × selection.
 pub(super) fn run_claused_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> Vec<u8> {
     let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg| {
-        let Some((min, max)) = q.bounds(spec.ty) else {
-            return Err(vec![ST_BADARGS]);
-        };
+        let (min, max) = q.bounds_for(spec)?;
         let filters: Vec<(usize, ValueTest)> = filter_tests(spec, &q.filters)?;
         let sort = sort_field(spec, &q.sort)?;
         let distinct = distinct_field(spec, &q.distinct)?;

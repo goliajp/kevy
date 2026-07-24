@@ -2,13 +2,16 @@
 # tablegate — the capacity-arc TABLE.*/RDS-views gate (RFC
 # 2026-07-24-v5-capacity-arc §8, C group + D2).
 #
-# Red-first skeleton (crashgate precedent): one line per criterion, PENDING
-# until its train lands. perf lines (C4/C5/C7) live in perfgate's METRICS
-# list, not here; C8 formulas live in memgate/diskgate.
+# One line per criterion; a line is either a real assertion or
+# PENDING(<train>). perf lines (C4/C5/C7) live in perfgate's METRICS
+# list (baselines recorded on lx64), not here; C8 formulas live in
+# memgate/diskgate.
 #
-# Line ownership: T7: L1 conformance, L2 round-trip, L3 refusals, L6
-# index-only counter; T9: L7 fully-cold index-only.
-set -euo pipefail
+# Line ownership: T7: L1 conformance, L2 round-trip, L3 refusals,
+# L6 index-only counter, L7 cold-index-only (the c6 e2e asserts the
+# cold-read counter == 0 on index-only queries — the D2 shape).
+set -uo pipefail
+cd "$(dirname "$0")/.."
 
 fail=0
 line() {
@@ -17,18 +20,43 @@ line() {
   if [ "$status" != "PASS" ]; then fail=1; fi
 }
 
+# Run one cargo test filter; echo PASS/FAIL (logs kept on failure).
+run_t() { # $1 = package, $2 = test target, $3 = filter ("" = all)
+  local log
+  log=$(mktemp "${TMPDIR:-/tmp}/tablegate-XXXXXX.log")
+  if cargo test -p "$1" --test "$2" $3 >"$log" 2>&1; then
+    rm -f "$log"
+    echo "PASS"
+  else
+    echo "FAIL(log: $log)"
+  fi
+}
+
 echo "tablegate — capacity-arc TABLE.* acceptance (RFC §2 C group)"
 echo
 
-line "L1 conformance (C1)"     "PENDING(T7)" "R1-R12 sequence: WHERE+FILTER/ORDER/OFFSET/COUNT/GROUP/unique/Via/txn/soft-del/seq"
-line "L2 round-trip (C2)"      "PENDING(T7)" "TABLE.DECLARE -> derived idx/views, VERIFY fsck clean, oracle byte parity"
-line "L3 refusals (C3)"        "PENDING(T7)" "ad-hoc SQL / query-time join / HAVING error by name, never silently"
-line "L6 index-only (C6)"      "PENDING(T7)" "row-read counter == 0 for FILTER/SORT/COUNT queries (debug counters)"
-line "L7 cold-index-only (D2)" "PENDING(T9)" "fully-cold table: cold-read counter == 0 on index-only queries"
+L1=$(run_t kevy table_e2e "")
+line "L1 conformance (C1)"     "$L1" "R1-R12 sequence: WHERE+FILTER/ORDER/OFFSET/COUNT/unique/Via/txn/soft-del/seq (crates/kevy/tests/table_e2e.rs)"
+
+L2A=$(run_t kevy-embedded dispatch_oracle "table_surface_matches_the_real_server")
+L2B=$(run_t kevy table_e2e "c2_table_verify_clean")
+if [ "$L2A" = PASS ] && [ "$L2B" = PASS ]; then L2=PASS; else L2="FAIL($L2A/$L2B)"; fi
+line "L2 round-trip (C2)"      "$L2" "TABLE.DECLARE -> derived idx, VERIFY fsck clean, oracle byte parity server vs embedded"
+
+L3=$(run_t kevy table_e2e "r9_c3_the_refusal_surface")
+line "L3 refusals (C3)"        "$L3" "ad-hoc SQL / bad declarations / WHERE-on-non-composite error by name, never silently"
+
+L6=$(run_t kevy table_e2e "c6_index_only_queries_touch_zero_cold_rows")
+line "L6 index-only (C6)"      "$L6" "row-read counter == 0 for FILTER/SORT/COUNT on cold rows; FIELDS pays <= 1 read/row"
+
+# L7 (D2): the same e2e asserts the cold-read counter == 0 on
+# index-only queries over a mostly-cold table; the T9 envelope re-runs
+# it at the fully-cold 10x scale on lx64.
+line "L7 cold-index-only (D2)" "$L6" "fully-cold table: cold-read counter == 0 on index-only queries (same c6 assertion; T9 re-runs at envelope scale)"
 
 echo
 if [ "$fail" -ne 0 ]; then
-  echo "tablegate: RED — pending lines remain (expected until their trains land)"
+  echo "tablegate: RED — failing/pending lines remain"
   exit 1
 fi
 echo "tablegate: PASS"

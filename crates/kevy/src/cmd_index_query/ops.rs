@@ -460,6 +460,9 @@ fn sub_bounds(shape: &Shape, ty: ValType) -> Option<(IndexValue, IndexValue)> {
             let v = IndexValue::parse_literal(ty, value)?;
             Some((v.clone(), v))
         }
-        Shape::Verify => None,
+        // COMPOSE legs take RANGE/EQ only (parse_sub never builds the
+        // other shapes) — unreachable by construction, refused if a
+        // future parse change lets one through.
+        Shape::Where(_) | Shape::Verify => None,
     }
 }

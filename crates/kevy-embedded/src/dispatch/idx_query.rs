@@ -8,7 +8,7 @@ use crate::KevyError;
 use kevy_index::{IndexValue, ValType};
 
 use super::idx::{badargs, decode_cursor, encode_cursor, no_such_index, spec_of, value_repr};
-use super::util::{arr, bulk, err, int, kevy_err, nil};
+use super::util::{arr, bulk, err, kevy_err, nil};
 
 /// One IDX query request; `false` = verb not in this group.
 pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
@@ -81,6 +81,10 @@ use tail::parse_tail;
 mod claused;
 use claused::claused_query;
 
+#[path = "idx_query_where.rs"]
+mod where_head;
+use where_head::{cmd_idx_count, driving_bounds, parse_scalar_head};
+
 fn cmd_idx_query(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let Some(name) = argv.get(1) else {
         return badargs(out, "IDX.QUERY", b"");
@@ -106,20 +110,16 @@ fn cmd_idx_query(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     scalar_query(s, argv, out);
 }
 
-/// `IDX.QUERY name RANGE min max | EQ v [LIMIT n] [CURSOR c]
-/// [FILTER …]… [SORT f ASC|DESC] [DISTINCT f] [FACET f…] [OFFSET n]
-/// [FIELDS f…]`.
+/// `IDX.QUERY name RANGE min max | EQ v | WHERE col EQ v … [LIMIT n]
+/// [CURSOR c] [FILTER …]… [SORT f ASC|DESC] [DISTINCT f] [FACET f…]
+/// [OFFSET n] [FIELDS f…]`.
 fn scalar_query(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let name = &argv[1];
     // Structure first (arg presence — needs no spec), then the pure
     // CURSOR × selection grammar refusal, then the catalog, then bound
     // coercion — the server's exact error ORDER, so the oracle can pin
     // any of these cases byte-for-byte.
-    let tail_at = if argv[2].eq_ignore_ascii_case(b"RANGE") && argv.len() >= 5 {
-        5
-    } else if argv[2].eq_ignore_ascii_case(b"EQ") && argv.len() >= 4 {
-        4
-    } else {
+    let Some((where_clause, tail_at)) = parse_scalar_head(argv) else {
         return badargs(out, "IDX.QUERY", name);
     };
     let Some(tail) = parse_tail(argv, tail_at, 100, 10_000, tail::TailMode::Scalar) else {
@@ -138,11 +138,8 @@ fn scalar_query(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
             &format!("ERR IDX.QUERY '{n}': CURSOR cannot combine with SORT|DISTINCT|FACET|OFFSET"),
         );
     }
-    let Some(spec) = spec_of(s, name) else {
-        return no_such_index(out, name);
-    };
-    let Some((min, max, _)) = parse_bounds(spec.ty, &argv[2], argv, 3) else {
-        return badargs(out, "IDX.QUERY", name);
+    let Some((min, max)) = driving_bounds(s, &where_clause, argv, "IDX.QUERY", name, out) else {
+        return;
     };
     let cursor = match tail.cursor_raw.as_deref() {
         None | Some(b"0") => None,
@@ -186,32 +183,6 @@ fn emit_scalar_page(
         for (k, v) in rows {
             emit_row(s, out, k, Some(v), fields);
         }
-    }
-}
-
-/// `IDX.COUNT name RANGE min max | EQ v` — and NOTHING else: the count
-/// covers the driving range only, so a clause it would not apply is
-/// refused up front (the server's exact order: arity before catalog).
-fn cmd_idx_count(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
-    let Some(name) = argv.get(1) else {
-        return badargs(out, "IDX.COUNT", b"");
-    };
-    let arity_ok = argv.get(2).is_some_and(|shape| {
-        (shape.eq_ignore_ascii_case(b"RANGE") && argv.len() == 5)
-            || (shape.eq_ignore_ascii_case(b"EQ") && argv.len() == 4)
-    });
-    if !arity_ok {
-        return badargs(out, "IDX.COUNT", name);
-    }
-    let Some(spec) = spec_of(s, name) else {
-        return no_such_index(out, name);
-    };
-    let Some((min, max, _)) = parse_bounds(spec.ty, &argv[2], argv, 3) else {
-        return badargs(out, "IDX.COUNT", name);
-    };
-    match s.idx_count(name, &min, &max) {
-        Ok(n) => int(out, n as i64),
-        Err(e) => idx_err(out, name, &e),
     }
 }
 
