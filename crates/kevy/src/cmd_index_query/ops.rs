@@ -25,9 +25,7 @@ use crate::state::Ctx;
 mod encode;
 use encode::encode_hits;
 
-#[path = "ops_clauses.rs"]
-mod clauses;
-use clauses::{boxed_preds, distinct_field, facet_fields, scope_positions, sort_field};
+use super::ops_clauses::{boxed_preds, distinct_field, facet_fields, scope_positions, sort_field};
 
 pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let q = match MatchArgs::parse_terminal(argv) {

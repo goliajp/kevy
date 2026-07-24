@@ -177,7 +177,9 @@ pub use ops_reconcile::ReconcileReport;
 #[cfg(feature = "index")]
 pub use ops_index::IndexPage;
 #[cfg(feature = "text")]
-pub use ops_index::highlight::{FacetCounts, MatchOpts, MatchPage, ValueFilter};
+pub use ops_index::highlight::{FacetCounts, MatchOpts, MatchPage};
+#[cfg(feature = "index")]
+pub use ops_index::claused::{ScalarPage, ScalarQueryOpts, ValueFilter};
 #[cfg(feature = "index")]
 pub use ops_view::ViewPage;
 #[cfg(feature = "index")]

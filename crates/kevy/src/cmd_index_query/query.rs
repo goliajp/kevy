@@ -30,10 +30,26 @@ pub(super) fn op_query(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>], verb:
     let Some(q) = Query::parse(argv) else {
         return vec![ST_BADARGS];
     };
+    // IDX.COUNT counts the driving range and nothing else; accepting a
+    // clause it will not apply would be the accept-and-ignore shape.
+    if verb.eq_ignore_ascii_case(b"IDX.COUNT") && q.has_clauses() {
+        return vec![ST_BADARGS];
+    }
+    // Pure grammar, refused before the segment is consulted: the
+    // selection clauses re-shape the page, so a resume point in the
+    // driving order has nothing to resume.
+    if q.cursor_raw.is_some() && q.selects() {
+        return super::query_claused::clause_chunk(
+            super::query_claused::CURSOR_CLAUSE_CONFLICT,
+        );
+    }
     if matches!(q.shape, Shape::Verify)
         && let Some(chunk) = verify_kind_stats(ctx, store, &q.name)
     {
         return chunk;
+    }
+    if q.has_clauses() {
+        return super::query_claused::run_claused_query(ctx, store, &q);
     }
     run_scalar_query(ctx, store, &q, verb)
 }

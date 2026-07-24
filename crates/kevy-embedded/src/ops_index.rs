@@ -43,6 +43,12 @@ pub type HighlightedHit = (Vec<u8>, f64, Vec<FieldSpans>);
 #[path = "ops_index_highlight.rs"]
 pub(crate) mod highlight;
 
+// The clause-carrying scalar query (capacity arc G1) and the
+// [`ValueFilter`] predicate shape it shares with MATCH — independent of
+// the `text` feature: a range index filters fine without a tokenizer.
+#[path = "ops_index_claused.rs"]
+pub(crate) mod claused;
+
 #[cfg(feature = "text")]
 #[path = "ops_index_text.rs"]
 mod text;

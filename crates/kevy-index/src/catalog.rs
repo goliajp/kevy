@@ -337,11 +337,15 @@ impl Catalog {
         if spec.with_positions && spec.kind != IndexKind::Text {
             return Err("ERR WITH POSITIONS requires KIND text");
         }
-        // Same contract for VALUES: only a text segment carries the
-        // stored-value column, so accepting the declaration on any other
-        // kind would store nothing and filter on nothing.
-        if !spec.values.is_empty() && spec.kind != IndexKind::Text {
-            return Err("ERR VALUES requires KIND text");
+        // VALUES rides the kinds that carry a stored-value column: the
+        // text segment and the scalar segments (range / unique — the
+        // capacity arc's G1 generalization). Ann and agg carry none, so
+        // accepting the declaration there would store nothing and
+        // filter on nothing.
+        if !spec.values.is_empty()
+            && !matches!(spec.kind, IndexKind::Text | IndexKind::Range | IndexKind::Unique)
+        {
+            return Err("ERR VALUES requires KIND text|range|unique");
         }
         self.specs.push((spec, IndexState::Building));
         Ok(())
