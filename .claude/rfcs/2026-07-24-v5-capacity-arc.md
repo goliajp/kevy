@@ -1,7 +1,12 @@
-# RFC — v5 capacity arc: transparent tiering × virtual RDS views, fused
+# RFC — capacity arc: transparent tiering × virtual RDS views, fused
 
-**Date:** 2026-07-24 · **Status:** APPROVED DESIGN (user-approved plan,
-2026-07-24) — acceptance criteria are binding; T0 turns them into gates.
+**Date:** 2026-07-24 · **Status:** APPROVED — **SHIPS IN v4.0.0** (user
+decision 2026-07-24: the capacity arc is a headline v4 release feature;
+the ROADMAP places it as t5.8, before the t6 channel/ship train).
+Acceptance criteria are binding; T0 turns them into gates. Execution is
+**fully linear with no mid-course decisions** — every knob is
+pre-resolved in §7; anything not resolvable now is explicitly OUT of v4
+(the named post-v4 list).
 **Supersedes:** `2026-07-24-tiered-storage-arc.md` and
 `2026-07-24-virtual-rds-views-arc.md` (kept for design history; their
 standalone conclusions are folded in here, one of them — the cold
@@ -426,7 +431,61 @@ verify-not-enforce). And tiering v1: scalar + hash values spill;
 lists/sets/zsets/streams stay hot; embedded cold reads hold the shard
 lock (documented, capped, v2-designed).
 
-## 7. Design history (recorded, not hidden)
+## 7. Pre-resolved decisions (no mid-course decisions — every knob
+fixed now; changing any of these is a user-level re-decision, not an
+implementation-time choice)
+
+**Tiering config** (both surfaces: kevy-config TOML/CLI/env + embedded
+builder):
+- Tiering is **OFF by default** (no `[tiering]` section = today's
+  behavior exactly — the A1 gate's precondition).
+- `budget = "auto"` default when the section is present. Auto = Linux:
+  min(cgroup v2 `memory.max`, `/proc/meminfo MemAvailable`) × **0.70**;
+  macOS: `hw.memsize` × 0.70. Absolute (`"4gb"`) and percent (`"70%"`)
+  forms accepted. Re-probed on the shard tick.
+- Policy: **`tiered-lru`** default when tiering is on; `tiered-lfu`
+  selectable. The existing 8 delete-eviction policies keep their exact
+  semantics; `maxmemory` (if also set) stays the hard delete-eviction
+  backstop above the tier budget.
+- `min_spill_bytes = 64` (BULK_THRESHOLD — values at or below inline
+  size are never spilled).
+- Promotion: **promote on the 2nd materializing access** (first cold
+  read serves via pread without installing; the ColdRef stamps a
+  probationary mark in `lru_clock`); bulk paths (hydration, backfill,
+  digest, scope_move, export, snapshot/rewrite) NEVER promote.
+- Embedded: `max_spill_value = 256 KiB` default (bounds
+  pread-under-write-lock hold time); server: unlimited.
+- Spill batch: **32 records per demotion call**, continuation on the
+  shard tick; watermark hysteresis band = [19/20 · effective_budget,
+  effective_budget] where effective_budget = budget − index_bytes −
+  stub_bytes.
+- vlog: rotate files at **256 MiB**; compact a file when its live
+  ratio < **0.5** (subject to view pins); one CRC32C per record
+  (envelope genre); vlog dir = `<data>/tier/` inside the store dir,
+  deleted at open.
+
+**RDS layer**:
+- Namespace: **`TABLE.*`** (DECLARE / VERIFY / LIST / DROP).
+- `kevy-sql` = a **standalone crate** (kevy- prefix, 0-dep) plus a
+  `kevy-cli sql` subcommand wrapper.
+- SQL subset v1 (declaration-time only): `CREATE TABLE`,
+  `CREATE [UNIQUE] INDEX`, single-table `CREATE VIEW … AS SELECT` with
+  indexed-column WHERE + declared-column residual filters + ORDER BY +
+  LIMIT/OFFSET. Nothing else parses; everything else errors by name.
+- G1 stored-VALUES columns cap per index: same as text kind (no new
+  limit class).
+
+**Envelope**: gate numbers on **lx64** (kevybench discipline); 10× is
+the gate, 100× stretch runs on lx64 if disk allows, else recorded
+not-run (no box decision mid-arc).
+
+**Explicitly OUT of v4** (post-v4 named list — needs future user
+decisions, deliberately not taken now): G4 view-FILTER constitution
+round; collection (List/Set/ZSet/Stream) spill; embedded
+drop-lock/pread/relock dance; fully-async cold reads; kvrocks
+competitive bench; PG-wire proxy exploration.
+
+## 8. Design history (recorded, not hidden)
 
 The standalone tiering RFC (superseded) proposed a cold **side-table**
 and ruled out a `Value` variant, citing ~196 match sites and the 32 B
