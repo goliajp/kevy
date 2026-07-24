@@ -247,6 +247,15 @@ impl Vlog {
         self.files.iter().find(|s| s.handle.id == file_id).map(|s| Arc::clone(&s.handle))
     }
 
+    /// Pin EVERY current file — a point-in-time reader (snapshot view /
+    /// AOF rewrite / replication ship) captures this alongside its
+    /// frozen refs: any ref frozen at the same instant can only name a
+    /// file that exists now, so the whole set keeps the view readable
+    /// across compaction for its entire life.
+    pub fn pin_all(&self) -> Vec<Arc<VlogFile>> {
+        self.files.iter().map(|s| Arc::clone(&s.handle)).collect()
+    }
+
     /// The owner overwrote / deleted / promoted the record at `r`: its
     /// bytes are dead, feeding the compaction trigger.
     pub fn note_dead(&mut self, r: VlogRef) {

@@ -114,16 +114,33 @@ fn build_shards_persist(
     // Complete (or safely discard) a reshard a crash interrupted, before
     // reading the layout — same roll-forward the server runtime does.
     recover_journal(&dir, &EmbLayout)?;
+    // Tiering comes up BEFORE the load (T4 / B11): replay drives entries
+    // into the hot map, so a dataset bigger than the budget must spill
+    // inline as it replays — TierState has to exist by then. The vlog
+    // wipe-at-open (T1 contract) precedes the refill, so a reopen never
+    // double-counts.
+    enable_tiering(config, &dir, &mut stores)?;
     let mut report = load_or_reshard(&dir, config, n, &mut stores)?;
 
-    // Open each shard's live AOF for append (if persistence is on). The
-    // open repairs (quarantines + truncates) any dropped tail replay just
-    // tolerated — collect the quarantine paths into the report.
+    let aofs = open_live_aofs(config, &dir, n, &mut report)?;
+    Ok((into_inners(stores, aofs), report))
+}
+
+/// Open each shard's live AOF for append (if persistence is on). The
+/// open repairs (quarantines + truncates) any dropped tail replay just
+/// tolerated — the quarantine paths land in `report`.
+#[cfg(feature = "persist")]
+fn open_live_aofs(
+    config: &Config,
+    dir: &Path,
+    n: usize,
+    report: &mut OpenReport,
+) -> io::Result<Vec<Option<Aof>>> {
     let aofs: Vec<Option<Aof>> = if config.aof {
         (0..n)
             .map(|i| {
                 Aof::open_with_repair(
-                    &layout::aof_path(&dir, i),
+                    &layout::aof_path(dir, i),
                     config.appendfsync,
                     config.replay_resync,
                 )
@@ -138,13 +155,13 @@ fn build_shards_persist(
             report.quarantine_paths.push(q.to_path_buf());
         }
     }
-    enable_tiering(config, &dir, &mut stores)?;
-    Ok((into_inners(stores, aofs), report))
+    Ok(aofs)
 }
 
-/// Tiering bring-up (capacity arc T3): per-shard vlog at
+/// Tiering bring-up (capacity arc T3/T4): per-shard vlog at
 /// `<dir>/tier/<i>`, opened (wiped — the vlog is per-boot disposable)
-/// after replay. In-replay demotion for boot-larger-than-RAM is T4.
+/// BEFORE replay, so in-replay demotion (B11) can spill a
+/// bigger-than-budget dataset as it loads.
 #[cfg(feature = "persist")]
 fn enable_tiering(config: &Config, dir: &Path, stores: &mut [Keyspace]) -> io::Result<()> {
     #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
@@ -214,7 +231,18 @@ fn load_in_place(
         }
         let aof = layout::aof_path(dir, i);
         if aof.exists() {
-            let apply = |args: kevy_persist::Argv| crate::replay::apply(store, &args);
+            // In-replay demotion (T4 / B11): the embedded replay applies
+            // straight to the bare store (no dispatch glue, so no
+            // per-write demote hook) — check the watermark every K
+            // frames and drain once more after the log ends.
+            let mut frames: u64 = 0;
+            let apply = |args: kevy_persist::Argv| {
+                crate::replay::apply(store, &args);
+                frames += 1;
+                if frames.is_multiple_of(kevy_persist::REPLAY_DEMOTE_INTERVAL) {
+                    store.demote_to_watermark();
+                }
+            };
             let r = if config.replay_resync {
                 kevy_persist::replay_aof_resync(&aof, apply)?
             } else {
@@ -226,6 +254,7 @@ fn load_in_place(
             report.corrupt |= r.corrupt;
             report.resynced_bytes += r.resynced_ranges.iter().map(|(a, b)| b - a).sum::<u64>();
         }
+        store.demote_to_watermark();
     }
     report.elapsed_ms = start.elapsed().as_millis() as u64;
     emit_replay(config, &report);
@@ -249,14 +278,41 @@ fn reshard(
     stores: &mut [Keyspace],
 ) -> io::Result<OpenReport> {
     let lay = EmbLayout;
-    let mut temp = fresh_keyspace(config);
-    let mut total_cmds = 0u64;
-    let start = Instant::now();
     // Source layout: prior shard files, or a legacy single AOF/snapshot.
     let src_n = prev_n.unwrap_or(1);
+    let (temp, report) = merge_into_temp(dir, config, src_n)?;
+    redistribute(&temp, n, stores);
+    commit_reshard(dir, src_n, ShardsMeta { n, routing: Routing::KevyHash }, stores, &lay)?;
+    // The merge scratch vlog is dead once the temp keyspace is gone.
+    #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+    if config.tier_budget.is_some() {
+        drop(temp);
+        let _ = std::fs::remove_dir_all(dir.join("tier").join(".reshard-merge"));
+    }
+    Ok(report)
+}
+
+/// Merge every source file into one temp keyspace and report the replay
+/// metrics. B11 on the migration path: a merged dataset bigger than the
+/// tier budget must not OOM either — the temp keyspace tiers into a
+/// scratch vlog dir (wiped by `reshard` after redistribution) and the
+/// merge demotes inline exactly like boot replay does.
+#[cfg(feature = "persist")]
+fn merge_into_temp(dir: &Path, config: &Config, src_n: usize) -> io::Result<(Keyspace, OpenReport)> {
+    let lay = EmbLayout;
+    let mut temp = fresh_keyspace(config);
+    #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+    if let Some(budget) = config.tier_budget {
+        temp.enable_tiering(&dir.join("tier").join(".reshard-merge"), budget)?;
+    }
+    let mut total_cmds = 0u64;
+    let start = Instant::now();
     merge_sources(dir, src_n, &lay, &mut temp, |store, args| {
         total_cmds += 1;
         crate::replay::apply(store, &args);
+        if total_cmds.is_multiple_of(kevy_persist::REPLAY_DEMOTE_INTERVAL) {
+            store.demote_to_watermark();
+        }
     })?;
     // Replay-metric byte count: the source AOFs (sizes read before the
     // commit renames them away). Per-file drop/corrupt detail is not
@@ -273,14 +329,29 @@ fn reshard(
         ..OpenReport::default()
     };
     emit_replay(config, &report);
+    Ok((temp, report))
+}
 
-    // Redistribute the merged keyspace into the target shards.
+/// Redistribute the merged keyspace into the target shards. A cold
+/// stub names the TEMP keyspace's vlog — a foreign log the target
+/// cannot read — so the source side materializes before shipping
+/// (`load_value`'s Cold arm is unreachable by this contract); the
+/// target demotes inline to stay under its own budget (B11).
+#[cfg(feature = "persist")]
+fn redistribute(temp: &Keyspace, n: usize, stores: &mut [Keyspace]) {
     temp.snapshot_each(|key, value, ttl_ms| {
-        stores[shard_idx(key, n)].load_value(key, value, ttl_ms);
+        let hot;
+        let value = match temp.materialize_cold(value) {
+            Some(v) => {
+                hot = v;
+                &hot
+            }
+            None => value,
+        };
+        let target = &mut stores[shard_idx(key, n)];
+        target.load_value(key, value, ttl_ms);
+        target.try_demote_after_write();
     });
-
-    commit_reshard(dir, src_n, ShardsMeta { n, routing: Routing::KevyHash }, stores, &lay)?;
-    Ok(report)
 }
 
 #[cfg(feature = "persist")]

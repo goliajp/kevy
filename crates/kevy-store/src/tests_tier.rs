@@ -303,6 +303,82 @@ fn flushall_clears_the_cold_tier() {
     assert_eq!(s.get(b"k").unwrap(), None);
 }
 
+// ---- T4: view pinning + serialization-side materialization ----------
+
+#[test]
+fn materialize_cold_returns_hot_twin_without_promotion() {
+    let (mut s, _d) = tiered("tier-materialize", u64::MAX);
+    s.set(b"bulk", vec![b'm'; 3000], None, false, false);
+    s.hset(b"row", &[(b"f".as_slice(), b"v".as_slice())]).unwrap();
+    assert!(s.debug_force_demote(b"bulk"));
+    assert!(s.debug_force_demote(b"row"));
+
+    let bulk = s.map.get(b"bulk".as_slice()).map(|e| e.value.clone()).unwrap();
+    let row = s.map.get(b"row".as_slice()).map(|e| e.value.clone()).unwrap();
+    match s.materialize_cold(&bulk).expect("cold materializes") {
+        Value::ArcBulk(a) => assert_eq!(&a[..], &[b'm'; 3000][..]),
+        other => panic!("unexpected variant {:?}", other.type_name()),
+    }
+    match s.materialize_cold(&row).expect("cold materializes") {
+        Value::Hash(h) => assert_eq!(h.get(b"f".as_slice()).unwrap().as_slice(), b"v"),
+        other => panic!("unexpected variant {:?}", other.type_name()),
+    }
+    // A hot value passes through as None (caller uses it verbatim).
+    assert!(s.materialize_cold(&Value::Int(7)).is_none());
+    // Peek only: nothing promoted, both stubs still cold.
+    assert_eq!(s.tier_stats().promotions_total, 0);
+    assert!(is_cold(&s, b"bulk") && is_cold(&s, b"row"));
+}
+
+/// The T4 pin proof: a snapshot view captured from a tiered store keeps
+/// every vlog file alive across compaction — a file retired (and
+/// scheduled for unlink) after the freeze still serves the view's
+/// stubs, and only the view's last pin dropping deletes it.
+#[test]
+fn snapshot_view_pins_survive_file_retirement() {
+    let (mut s, d) = tiered("tier-view-pins", u64::MAX);
+    // Small rotate threshold so a handful of demotes seal real files
+    // (enable_tiering hardcodes the production 256 MiB default).
+    s.tier.as_mut().unwrap().vlog = kevy_vlog::Vlog::open(d.path(), 4096).unwrap();
+
+    let frozen = vec![b'p'; 3000];
+    s.set(b"pinned", frozen.clone(), None, false, false);
+    assert!(s.debug_force_demote(b"pinned")); // → file 0
+    s.set(b"filler", vec![b'f'; 3000], None, false, false);
+    assert!(s.debug_force_demote(b"filler")); // → file 0 (now past rotate)
+    s.set(b"other", vec![b'o'; 3000], None, false, false);
+    assert!(s.debug_force_demote(b"other")); // rotates → file 1
+
+    let view = s.collect_snapshot();
+
+    // Kill file 0's records and retire it: the view is now the only
+    // holder of that file.
+    s.del(&[b"pinned".as_slice(), b"filler".as_slice()]);
+    s.tier_force_compact_for_tests();
+    let file0 = d.path().join("vlog-00000000.dat");
+    assert!(file0.exists(), "a pinned retired file must not be unlinked");
+
+    // The view still materializes the frozen instant from the retired
+    // file — no store involvement, no promotion.
+    let mut seen = false;
+    view.each(|k, v, _| {
+        if k == b"pinned" {
+            assert!(matches!(v, Value::Cold(_)), "the view froze the stub");
+            match view.materialize_cold(v).expect("stub materializes via pins") {
+                Value::ArcBulk(a) => assert_eq!(&a[..], frozen.as_slice()),
+                other => panic!("unexpected variant {:?}", other.type_name()),
+            }
+            seen = true;
+        }
+    });
+    assert!(seen, "the frozen entry must be in the view");
+    assert_eq!(s.tier_stats().promotions_total, 0);
+
+    // Dropping the last pin deletes the retired file.
+    drop(view);
+    assert!(!file0.exists(), "the last pin dropping unlinks the retired file");
+}
+
 #[test]
 fn del_and_overwrite_credit_dead_bytes() {
     let (mut s, _d) = tiered("tier-dead", u64::MAX);

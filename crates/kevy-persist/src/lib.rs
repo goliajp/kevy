@@ -61,6 +61,15 @@ pub use aof_util::write_aof_base;
 pub use aof_policy::RewritePolicy;
 pub use record::{AOF2_MAGIC, AofFormat, RecordStep, next_record, write_record_multibulk};
 pub use replay::{ReplayReport, replay_aof, replay_aof_resync};
+
+/// How often bulk-load paths check the tiering demote watermark (T4 /
+/// B11): every this many applied frames/records, the loading store runs
+/// `demote_to_watermark`. Replay executes into the hot map, so a boot
+/// whose dataset exceeds the tier budget would OOM before tiering ever
+/// ran without the inline spill. One shared constant so AOF replay
+/// (whose drive loops live in the callers — kevy-rt / kevy-embedded)
+/// and the snapshot loader stride identically.
+pub const REPLAY_DEMOTE_INTERVAL: u64 = 1024;
 pub use shards_meta::{Routing, ShardsMeta, read_shards_meta, write_shards_meta};
 pub use kevy_resp::{Argv, ArgvView};
 pub use rewrite_fmt::{dump_aof, dump_store_to_buf, write_multibulk, write_stream_as_commands};
@@ -80,6 +89,12 @@ use kevy_store::Value;
 /// serialization: a live [`Store`] (its `snapshot_each`, the synchronous
 /// paths) or a frozen [`kevy_store::SnapshotView`] (the COW paths — collect
 /// on the owning thread, serialize on a background one).
+///
+/// **Tiering contract (capacity arc T4)**: `for_each_entry` never yields a
+/// `Value::Cold` stub — each source materializes cold values from its vlog
+/// (the store reads its own log; a view reads through the `Arc<VlogFile>`
+/// pins captured at collect time) one value at a time, so serializer
+/// memory stays bounded and nothing is ever promoted into the hot map.
 pub trait SnapshotSource {
     /// Visit every live entry as `(key, &value, remaining_ttl_ms)`.
     fn for_each_entry(&self, f: impl FnMut(&[u8], &Value, Option<u64>));
@@ -91,8 +106,14 @@ pub trait SnapshotSource {
 }
 
 impl SnapshotSource for Store {
-    fn for_each_entry(&self, f: impl FnMut(&[u8], &Value, Option<u64>)) {
-        self.snapshot_each(f);
+    fn for_each_entry(&self, mut f: impl FnMut(&[u8], &Value, Option<u64>)) {
+        self.snapshot_each(|k, v, ttl| match self.materialize_cold(v) {
+            // Cold stub: decode the vlog record into a transient hot
+            // value (dropped after the callback — memory bound = one
+            // value) and emit exactly what the hot value would have.
+            Some(hot) => f(k, &hot, ttl),
+            None => f(k, v, ttl),
+        });
     }
     fn for_each_hash_ttl(&self, f: impl FnMut(&[u8], &[u8], u64)) {
         self.hash_ttl_each(f);
@@ -100,8 +121,13 @@ impl SnapshotSource for Store {
 }
 
 impl SnapshotSource for kevy_store::SnapshotView {
-    fn for_each_entry(&self, f: impl FnMut(&[u8], &Value, Option<u64>)) {
-        self.each(f);
+    fn for_each_entry(&self, mut f: impl FnMut(&[u8], &Value, Option<u64>)) {
+        self.each(|k, v, ttl| match self.materialize_cold(v) {
+            // Cold stub: resolve against the view's pinned files — the
+            // serializer thread never touches the store (no promotion).
+            Some(hot) => f(k, &hot, ttl),
+            None => f(k, v, ttl),
+        });
     }
     fn for_each_hash_ttl(&self, f: impl FnMut(&[u8], &[u8], u64)) {
         self.each_hash_ttl(f);
@@ -114,3 +140,5 @@ mod tests;
 mod tests_aof;
 #[cfg(test)]
 mod tests_rewrite;
+#[cfg(test)]
+mod tests_tier_stream;

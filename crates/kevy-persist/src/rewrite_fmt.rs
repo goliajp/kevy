@@ -150,10 +150,15 @@ fn write_value_as_commands<W: Write>(
     scratch: &mut Vec<u8>,
 ) -> io::Result<()> {
     match value {
-        // Tiering T4 streams cold values from the pinned vlog; until
-        // it lands no tiered store reaches a rewrite (B10/T4-gated).
+        // T4: every SnapshotSource materializes cold values from the
+        // (pinned) vlog before yielding them, so a stub here means a
+        // producer bypassed the source contract. Failing the rewrite is
+        // the only honest outcome — a skip would silently drop the value
+        // from the sole durability truth.
         Value::Cold(_) => {
-            debug_assert!(false, "rewrite of a cold stub — T4 streams these from the vlog");
+            return Err(io::Error::other(
+                "cold stub reached the AOF rewrite — SnapshotSource must materialize (T4)",
+            ));
         }
         Value::Str(s) => write_verb_items(w, b"SET", key, 1, [s.to_vec()], fmt, scratch)?,
         // L2: persist Int as the canonical ASCII bytes; replay's SET

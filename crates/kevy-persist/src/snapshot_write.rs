@@ -122,13 +122,14 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
         Value::Set(_) | Value::SmallSetInline(_) => OP_SET,
         Value::ZSet(_) | Value::SmallZSetInline(_) => OP_ZSET,
         Value::Stream(_) => OP_STREAM,
-        // Tiering T4 (persistence streaming) materializes cold values
-        // from the pinned vlog on the serializer thread; until it
-        // lands, no tiered store reaches a snapshot (crashgate on
-        // tiered stores is B10/T4-gated). Skip loudly in debug.
+        // T4: every SnapshotSource materializes cold values from the
+        // (pinned) vlog before yielding them — a stub here means a
+        // producer bypassed the source contract. Fail the snapshot
+        // rather than silently dropping the value.
         Value::Cold(_) => {
-            debug_assert!(false, "snapshot of a cold stub — T4 streams these from the vlog");
-            return Ok(());
+            return Err(io::Error::other(
+                "cold stub reached the snapshot writer — SnapshotSource must materialize (T4)",
+            ));
         }
     };
     w.write_all(&[op])?;
