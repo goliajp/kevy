@@ -81,7 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           chain=$(printf '%s\n' \
-            kevy-madvise kevy-sys kevy-hash kevy-config kevy-uring \
+            kevy-madvise kevy-sys kevy-vlog kevy-hash kevy-config kevy-uring \
             kevy-bytes kevy-resp kevy-ring kevy-map kevy-geo kevy-scope \
             kevy-resp-client kevy-store \
             kevy-text kevy-vector kevy-index \
@@ -166,7 +166,7 @@ jobs:
           # dev-dep kevy-client doesn't affect publish — placed at the
           # end alongside kevy-cluster-rw).
           for c in \
-            kevy-madvise kevy-sys kevy-hash kevy-config kevy-uring \
+            kevy-madvise kevy-sys kevy-vlog kevy-hash kevy-config kevy-uring \
             kevy-bytes kevy-resp kevy-ring kevy-map kevy-geo kevy-scope \
             kevy-resp-client kevy-store \
             kevy-text kevy-vector kevy-index \
