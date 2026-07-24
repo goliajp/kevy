@@ -28,6 +28,7 @@ impl Config {
             "cluster" => self.apply_cluster(item),
             "replication" => self.apply_replication(item),
             "feed" => self.apply_feed(item),
+            "tiering" => self.apply_tiering(item),
             "lua" => self.apply_lua(item),
             "metrics" => self.apply_metrics(item),
             "audit" => self.apply_audit(item),
@@ -313,6 +314,8 @@ impl Config {
                 })?);
             }
             "KEVY_DIR" => self.server.data_dir = PathBuf::from(value),
+            // All three budget forms (T5); plain bytes stay back-compat.
+            "KEVY_TIER_BUDGET" => self.apply_env_tier_budget(value)?,
             "KEVY_AOF" => {
                 self.persistence.aof = !matches!(value, "0" | "off" | "false" | "no");
             }
@@ -327,7 +330,8 @@ impl Config {
 
 // ───────────── value coercion helpers ─────────────
 
-fn value_as_string(item: &Item) -> Result<String, ConfigError> {
+/// String coercion for sibling modules ([`crate::tiering`]).
+pub(crate) fn value_as_string(item: &Item) -> Result<String, ConfigError> {
     match &item.value {
         Value::Str(s) => Ok(s.clone()),
         other => Err(schema_err(item, format!("expected string, got {other:?}"))),
@@ -405,7 +409,7 @@ fn value_as_list(item: &Item) -> Result<Vec<String>, ConfigError> {
     }
 }
 
-fn schema_err(item: &Item, msg: impl Into<String>) -> ConfigError {
+pub(crate) fn schema_err(item: &Item, msg: impl Into<String>) -> ConfigError {
     let field = match &item.section {
         Some(s) => format!("[{}].{}", s, item.key),
         None => item.key.clone(),

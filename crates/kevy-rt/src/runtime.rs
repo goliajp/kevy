@@ -103,6 +103,15 @@ pub struct Runtime<C: Commands> {
     /// overhead. TCP listener stays bound regardless.
     #[allow(dead_code)] // consumed during run() via take-into-Shard
     pub(crate) unix_socket_path: Option<PathBuf>,
+    /// Transparent-tiering RAM budget for the WHOLE process, in
+    /// resolved bytes (the server resolves auto/percent forms before
+    /// building the runtime). Split evenly across shards at
+    /// construction. `None` = check the minimal `KEVY_TIER_BUDGET`
+    /// plain-bytes env knob (T3 back-compat), else tiering off.
+    pub(crate) tier_budget: Option<u64>,
+    /// Cold-tier spill dir override (`[tiering] spill_dir`). `None` =
+    /// `<data_dir>/tier/`.
+    pub(crate) tier_dir: Option<PathBuf>,
 }
 
 impl<C: Commands> Runtime<C> {
@@ -142,7 +151,35 @@ impl<C: Commands> Runtime<C> {
             replication_port_base: None,
             replication_reconnect_window_ms: 60_000,
             unix_socket_path: None,
+            tier_budget: None,
+            tier_dir: None,
         }
+    }
+
+    /// The process-level tiering budget in bytes (`None` = env-knob
+    /// fallback / off) and per-shard slice of it. The vlog dir root is
+    /// [`Self::tier_root`].
+    pub(crate) fn resolved_tier_budget(&self) -> Option<u64> {
+        self.tier_budget.or_else(|| {
+            std::env::var("KEVY_TIER_BUDGET")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+        })
+    }
+
+    /// One shard's slice of the process tiering budget (even split,
+    /// floored at 1 byte so a tiny budget still tiers rather than
+    /// silently disabling).
+    pub(crate) fn per_shard_tier_budget(total: u64, nshards: usize) -> u64 {
+        (total / nshards.max(1) as u64).max(1)
+    }
+
+    /// The cold-tier root dir: the `[tiering] spill_dir` override, or
+    /// `<data_dir>/tier/`.
+    pub(crate) fn tier_root(&self) -> PathBuf {
+        self.tier_dir
+            .clone()
+            .unwrap_or_else(|| self.data_dir.join("tier"))
     }
 
     /// Listen address for the client TCP listener (every shard binds it

@@ -134,6 +134,10 @@ impl Store {
     }
 
     fn register_spec(&self, spec: IndexSpec) -> KevyResult<()> {
+        // Tiering floor refusal (T5, RFC §4 row 16): body in
+        // `ops_index_sync::tier_floor_check` (500-LOC rule).
+        #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+        crate::ops_index_sync::tier_floor_check(&self.shards)?;
         {
             let mut g = self
                 .indexes

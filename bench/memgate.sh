@@ -50,6 +50,43 @@ BPE_16=$(measure 16)
 BPE_1024=$(measure 1024)
 echo "memgate: measured bytes/entry — 16B values: $BPE_16, 1024B values: $BPE_1024"
 
+# ── B7 (T5): cold-key formula — stub bytes/entry ≈ ENTRY_OVERHEAD(96) +
+# key heap bytes, ±BAND_PCT (RFC 2026-07-24-v5-capacity-arc §2 B7).
+# Analytic formula, no baseline entry: measured = stub_bytes/cold_keys
+# from the new `INFO # Tiering` gauges on a second, tiered server
+# instance (small budget so the benchmark's working set demotes).
+# redis-benchmark keys ("key:____rand____", 16 B) sit under the 22-byte
+# inline boundary → key heap = 0 → formula = 96 exactly.
+b7_cold_bpe() {
+    local port=$((PORT + 1)) formula=96
+    local tdir; tdir=$(mktemp -d)
+    KEVY_TIER_BUDGET=8mb "$BIN" --port "$port" --threads 1 --dir "$tdir" \
+        &> "$DIR/server-tier.log" &
+    local srv=$!
+    # shellcheck disable=SC2064  # expand $srv/$tdir now, not at trap time
+    trap "kill $srv 2>/dev/null; sleep 0.2; kill -9 $srv 2>/dev/null; wait $srv 2>/dev/null; rm -rf '$tdir'" RETURN
+    sleep 1
+    redis-benchmark -p "$port" -t set -n 20000 -r 20000 -d 4096 -q >/dev/null 2>&1
+    sleep 1  # let the tick continuation drain the spill backlog
+    local cold stub
+    cold=$(redis-cli -p "$port" info tiering 2>/dev/null | tr -d '\r' | awk -F: '/^cold_keys:/{print $2}')
+    stub=$(redis-cli -p "$port" info tiering 2>/dev/null | tr -d '\r' | awk -F: '/^stub_bytes:/{print $2}')
+    if [ -z "${cold:-}" ] || [ "${cold:-0}" -eq 0 ]; then
+        echo "memgate: B7 FAIL — tiered instance demoted nothing (cold_keys=${cold:-absent})" >&2
+        return 1
+    fi
+    local bpe=$(( stub / cold ))
+    local lo=$(( formula * (100 - BAND_PCT) / 100 )) hi=$(( formula * (100 + BAND_PCT) / 100 ))
+    echo "memgate: B7 (T5) cold-key bytes/entry: $bpe (cold_keys=$cold) vs formula $formula ±${BAND_PCT}%"
+    if [ "$bpe" -lt "$lo" ] || [ "$bpe" -gt "$hi" ]; then
+        echo "memgate: B7 FAIL — cold bytes/entry $bpe outside [$lo, $hi]" >&2
+        return 1
+    fi
+    return 0
+}
+B7_FAIL=0
+b7_cold_bpe || B7_FAIL=1
+
 if [ "$MODE" = "--update-baseline" ]; then
     printf '{\n  "string_bpe_d16": %s,\n  "string_bpe_d1024": %s,\n  "band_pct": %s,\n  "recorded": "%s"\n}\n' \
         "$BPE_16" "$BPE_1024" "$BAND_PCT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$BASELINE"
@@ -68,5 +105,6 @@ for KEY in string_bpe_d16 string_bpe_d1024; do
         FAIL=1
     fi
 done
+FAIL=$(( FAIL | B7_FAIL ))
 [ "$FAIL" = "0" ] && echo "memgate: PASS"
 exit "$FAIL"

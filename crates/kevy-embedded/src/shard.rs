@@ -158,21 +158,88 @@ fn open_live_aofs(
     Ok(aofs)
 }
 
-/// Tiering bring-up (capacity arc T3/T4): per-shard vlog at
+/// Tiering bring-up (capacity arc T3/T4/T5): per-shard vlog at
 /// `<dir>/tier/<i>`, opened (wiped — the vlog is per-boot disposable)
 /// BEFORE replay, so in-replay demotion (B11) can spill a
-/// bigger-than-budget dataset as it loads.
+/// bigger-than-budget dataset as it loads. T5: the configured budget
+/// resolves here (auto/percent probe the memory bound; both refuse by
+/// name on failure) and is the whole store's — each shard gets an
+/// even slice.
 #[cfg(feature = "persist")]
 fn enable_tiering(config: &Config, dir: &Path, stores: &mut [Keyspace]) -> io::Result<()> {
     #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
-    if let Some(budget) = config.tier_budget {
+    if config.tier_budget.is_some() {
+        let per_shard = resolve_tier_budget(config, stores.len())?;
         for (i, store) in stores.iter_mut().enumerate() {
-            store.enable_tiering(&dir.join("tier").join(i.to_string()), budget)?;
+            store.enable_tiering(&dir.join("tier").join(i.to_string()), per_shard)?;
         }
     }
     #[cfg(not(all(feature = "tier", not(target_arch = "wasm32"))))]
     let _ = (config, dir, stores);
     Ok(())
+}
+
+/// Resolve the configured tier budget spec to a PER-SHARD byte count
+/// (whole-store budget / `nshards`, floored at 1). Named refusals:
+/// percent out of 1..=100, auto/percent with no detectable bound.
+#[cfg(all(feature = "persist", feature = "tier", not(target_arch = "wasm32")))]
+pub(crate) fn resolve_tier_budget(config: &Config, nshards: usize) -> io::Result<u64> {
+    let spec = config
+        .tier_budget
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "tiering is not configured"))?;
+    resolve_tier_spec(spec, nshards)
+}
+
+/// Spec-level half of [`resolve_tier_budget`] — also the reaper tick's
+/// re-resolution entry (auto/percent re-probe the memory bound live).
+#[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+pub(crate) fn resolve_tier_spec(
+    spec: crate::config::TierBudgetSpec,
+    nshards: usize,
+) -> io::Result<u64> {
+    use crate::config::TierBudgetSpec;
+    if let TierBudgetSpec::Percent(p) = spec
+        && !(1..=100).contains(&p)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("tiering budget percent must be 1..=100, got {p}"),
+        ));
+    }
+    let total = spec.resolve().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::Unsupported,
+            "tiering budget auto/percent: no memory bound detected on this host — \
+             use with_tier_budget(bytes)",
+        )
+    })?;
+    Ok((total / nshards.max(1) as u64).max(1))
+}
+
+/// Per-tick tiering upkeep (T5): re-resolve a probe-backed budget and
+/// feed the index/view memory floor into the unified watermark. Runs
+/// under the shard lock the tick already holds; one branch when
+/// tiering is off.
+#[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+pub(crate) fn tier_tick_upkeep(
+    g: &mut crate::store::Inner,
+    spec: Option<crate::config::TierBudgetSpec>,
+    nshards: usize,
+) {
+    use crate::config::TierBudgetSpec;
+    if !g.store.tier_enabled() {
+        return;
+    }
+    if let Some(spec @ (TierBudgetSpec::Auto | TierBudgetSpec::Percent(_))) = spec
+        && let Ok(per_shard) = resolve_tier_spec(spec, nshards)
+    {
+        g.store.set_tier_budget(per_shard);
+    }
+    #[cfg(feature = "index")]
+    let reserved = g.idx_segs.reserved_bytes() + g.view_segs.reserved_bytes();
+    #[cfg(not(feature = "index"))]
+    let reserved = 0u64;
+    g.store.set_tier_reserved(reserved);
 }
 
 /// Read the shard layout meta and either load in place (same layout)
@@ -302,7 +369,9 @@ fn merge_into_temp(dir: &Path, config: &Config, src_n: usize) -> io::Result<(Key
     let lay = EmbLayout;
     let mut temp = fresh_keyspace(config);
     #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
-    if let Some(budget) = config.tier_budget {
+    if config.tier_budget.is_some() {
+        // The merge temp holds the whole keyspace — full store budget.
+        let budget = resolve_tier_budget(config, 1)?;
         temp.enable_tiering(&dir.join("tier").join(".reshard-merge"), budget)?;
     }
     let mut total_cmds = 0u64;

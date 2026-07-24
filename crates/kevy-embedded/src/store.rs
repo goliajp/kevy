@@ -361,7 +361,11 @@ impl Store {
         for shard in self.shards.iter() {
             let stats = {
                 let mut g = lock_write(shard);
-                // Tiering: tick continuation of the budgeted spill.
+                // Tiering (T5): budget re-resolution + the index/view
+                // floor feed, then the tick continuation of the
+                // budgeted spill.
+                #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+                crate::shard::tier_tick_upkeep(&mut g, self.config.tier_budget, self.shards.len());
                 let _ = g.store.demote_step();
                 g.store.tick_expire(self.config.reaper_samples, self.config.reaper_max_rounds)
             };

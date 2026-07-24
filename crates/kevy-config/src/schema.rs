@@ -408,6 +408,9 @@ pub struct Config {
     pub replication: crate::replication::ReplicationSection,
     /// `[feed]` settings — CDC consumer surface (FEED.*).
     pub feed: FeedSection,
+    /// `[tiering]` settings — the transparent-tiering RAM budget
+    /// (capacity arc). No budget = tiering off.
+    pub tiering: crate::tiering::TieringSection,
     /// Path the config was loaded from (for `CONFIG REWRITE`). `None` =
     /// loaded from defaults only / from in-memory string.
     pub source_path: Option<PathBuf>,

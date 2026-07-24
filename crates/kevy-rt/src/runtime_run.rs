@@ -180,7 +180,14 @@ impl<C: Commands> Runtime<C> {
             } else {
                 kevy_persist::Routing::KevyHash
             };
-            crate::reshard::ensure_layout(&self.data_dir, n, routing, &self.commands)?;
+            crate::reshard::ensure_layout(
+                &self.data_dir,
+                n,
+                routing,
+                &self.commands,
+                self.resolved_tier_budget(),
+                &self.tier_root(),
+            )?;
         }
         Ok(())
     }
@@ -252,15 +259,16 @@ impl<C: Commands> Runtime<C> {
             // (`Arc::clone`); the bio thread is shared across all shards
             // (single global thread, mirrors valkey `bio.c`).
             store.set_bio_drop_sender(bio_send.clone());
-            // Minimal tiering knob (capacity arc T3): `KEVY_TIER_BUDGET`
-            // (bytes) enables the cold tier per shard under
-            // `<data_dir>/tier/<id>`. The full config surface
-            // (TOML/auto/percent) is T5.
-            if let Some(budget) = std::env::var("KEVY_TIER_BUDGET")
-                .ok()
-                .and_then(|v| v.parse::<u64>().ok())
-            {
-                store.enable_tiering(&self.data_dir.join("tier").join(id.to_string()), budget)?;
+            // Tiering (capacity arc T5): the process budget — resolved
+            // bytes from the builder (`[tiering]` TOML/CLI/env full
+            // surface), or the minimal `KEVY_TIER_BUDGET` plain-bytes
+            // env knob — split evenly across shards; per-shard cold
+            // tier under `<tier root>/<id>`.
+            if let Some(total) = self.resolved_tier_budget() {
+                store.enable_tiering(
+                    &self.tier_root().join(id.to_string()),
+                    Self::per_shard_tier_budget(total, n),
+                )?;
             }
             self.commands.on_shard_init(&mut store);
             shards.push(Shard {

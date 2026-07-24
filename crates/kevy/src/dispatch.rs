@@ -141,7 +141,7 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
     }
     let handled = (proto_v3
         && crate::dispatch_resp3::try_resp3_overrides(ctx, cmd, store, args, out))
-        || dispatch_conn(ctx, cmd, args, out)
+        || dispatch_conn(ctx, cmd, store, args, out)
         || crate::ops::dispatch_ops(ctx, cmd, store, args, out)
         || dispatch_string(cmd, store, args, out)
         || crate::dispatch_collections::dispatch_hash(cmd, store, args, out)
@@ -177,12 +177,15 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
 // 500-LOC house rule. Same dispatch fan-out, same call shape; the
 // V3 arm in `dispatch_with_proto` calls into the sibling module.
 
-/// Connection / introspection commands (no keyspace access). Takes
-/// `ctx` for the catalog-mutation verbs (IDX.* / VIEW.*), whose
-/// sidecar persistence roots at `state.sidecar_dir()`.
+/// Connection / introspection commands (no keyspace access — except
+/// IDX.CREATE's tiering-floor precheck, which reads the answering
+/// shard's tier gauges). Takes `ctx` for the catalog-mutation verbs
+/// (IDX.* / VIEW.*), whose sidecar persistence roots at
+/// `state.sidecar_dir()`.
 fn dispatch_conn<A: ArgvView + ?Sized>(
     ctx: &Ctx<'_>,
     cmd: &[u8],
+    store: &Store,
     args: &A,
     out: &mut Vec<u8>,
 ) -> bool {
@@ -192,7 +195,7 @@ fn dispatch_conn<A: ArgvView + ?Sized>(
             2 => encode_bulk(out, &args[1]),
             _ => wrong_args(out, "ping"),
         },
-        b"IDX.CREATE" => crate::cmd_index::cmd_idx_create(ctx, args, out),
+        b"IDX.CREATE" => crate::cmd_index::cmd_idx_create(ctx, store, args, out),
         b"VIEW.CREATE" => crate::cmd_view::cmd_view_create(ctx, args, out),
         b"VIEW.DROP" => crate::cmd_view::cmd_view_drop(ctx, args, out),
         b"IDX.DROP" => crate::cmd_index::cmd_idx_drop(ctx, args, out),

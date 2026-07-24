@@ -191,8 +191,9 @@ impl Store {
         // needs removal.
         self.remove_entry(dst);
         // The record's embedded key is stale now — register the
-        // forward pointer compaction resolves through.
-        self.tier_note_renamed(&entry.value, dst);
+        // forward pointer compaction resolves through (and re-account
+        // the stub cost for dst's key heap bytes).
+        self.tier_note_renamed(&entry.value, src, dst);
         self.insert_entry(SmallBytes::from_vec(dst.to_vec()), entry);
         RenameOutcome::Renamed
     }

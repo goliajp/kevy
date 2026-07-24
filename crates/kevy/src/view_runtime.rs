@@ -77,6 +77,18 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
     }
 }
 
+/// Σ approximate heap bytes of this shard's materialized view sets —
+/// the view half of the tier's `reserved_bytes` floor feed (T5).
+/// Virtual views hold no set, so they contribute nothing.
+pub(crate) fn reserved_bytes(ctx: &Ctx<'_>) -> u64 {
+    let mut st = ctx.shard.views.borrow_mut();
+    refresh(&ctx.state.catalogs, &mut st);
+    st.views
+        .iter()
+        .map(|vs| vs.mat.as_ref().map_or(0, kevy_index::MaterializedSet::approx_bytes))
+        .sum()
+}
+
 /// Query access to one view's per-shard answer. For virtual views the
 /// tree evaluates now; materialized views page their set. Returns
 /// `(order, key)` ascending (the reduce applies DESC).
