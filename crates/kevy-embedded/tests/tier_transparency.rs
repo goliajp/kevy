@@ -1,20 +1,21 @@
 //! The tiering transparency suite (capacity arc, RFC
 //! 2026-07-24-v5-capacity-arc §2 B9/B12) — dispatch-oracle genre, but the
 //! two sides are TWO EMBEDDED STORES fed the same op sequence: one untiered,
-//! one tiered with deterministic demotion points (the `KEVY_TEST_FORCE_DEMOTE`
-//! seam, T3). Semantic replies must be byte-identical; memory-reporting
-//! replies (INFO/MEMORY USAGE/DEBUG) are shape-compared — they legitimately
-//! differ under tiering.
+//! one tiered with deterministic demotion points (the store's
+//! `debug_force_demote` seam — the `KEVY_TEST_FORCE_DEMOTE` genre, T3).
+//! Semantic replies must be byte-identical; memory-reporting replies
+//! (INFO/MEMORY USAGE/DEBUG) are shape-compared — they legitimately differ
+//! under tiering.
 //!
-//! T0 state: the harness + op sequence + compare machinery exist and
-//! self-check green (untiered vs untiered). The tiered side is `#[ignore]`d
-//! with a PENDING(T3) message — bench/tiergate.sh carries the red until the
-//! `Value::Cold` funnel lands and this suite's ignore is lifted. The named
-//! B9 specials (NX/XX on cold, WRONGTYPE without a pread, DEL/RENAME/
-//! FLUSHALL, EXPIRE family, field-TTL survival across a demote/promote round
-//! trip, WATCH not bumped by demotion, SCAN/KEYS/DBSIZE seeing cold keys)
-//! are already present in the sequence below, marked with `// B9:` — the
-//! tiered run will interleave FORCE_DEMOTE at every marker.
+//! Each case carries its `// B9:` demotion point as data: the keys the
+//! tiered run force-demotes BEFORE executing the op — so every special
+//! runs against a genuinely cold key, never against eviction timing.
+//! The named B9 specials (NX/XX on cold, WRONGTYPE without a pread,
+//! DEL/RENAME/COPY, EXPIRE family, field-TTL survival across a
+//! demote/promote round trip, cold RMW paging in, SCAN/KEYS/DBSIZE
+//! seeing cold keys, FLUSHALL clearing the cold tier) are all in the
+//! sequence. B12 (zero events + tier counters move, evictions do not)
+//! is the second test.
 
 use kevy_embedded::{Config, Store};
 
@@ -34,6 +35,14 @@ enum Cmp {
     Shape,
 }
 use Cmp::{Exact, Shape};
+
+/// One scripted op: argv + compare mode + the keys the tiered run
+/// force-demotes right before dispatching it (the `// B9:` markers).
+struct Case {
+    argv: Vec<Vec<u8>>,
+    cmp: Cmp,
+    demote: &'static [&'static [u8]],
+}
 
 fn first_count(reply: &[u8]) -> i64 {
     let nl = reply.windows(2).position(|w| w == b"\r\n").expect("resp header");
@@ -58,92 +67,166 @@ fn assert_match(what: &str, cmp: &Cmp, a: &[u8], b: &[u8]) {
     }
 }
 
-/// The op sequence. `// B9:` markers are the deterministic demotion points
-/// the tiered run (T3+) will apply FORCE_DEMOTE at, so every special runs
-/// against a genuinely cold key — never against eviction timing.
-fn cases() -> Vec<(Vec<Vec<u8>>, Cmp)> {
-    fn c(argv: &[&[u8]], cmp: Cmp) -> (Vec<Vec<u8>>, Cmp) {
-        (argv.iter().map(|a| a.to_vec()).collect(), cmp)
+/// The op sequence. Every `demote` list is a deterministic demotion
+/// point: those keys are warm + spillable at that moment, so the force
+/// MUST succeed (asserted) — the op then runs against a cold key.
+fn cases() -> Vec<Case> {
+    fn c(argv: &[&[u8]], cmp: Cmp, demote: &'static [&'static [u8]]) -> Case {
+        Case { argv: argv.iter().map(|a| a.to_vec()).collect(), cmp, demote }
     }
+    const NONE: &[&[u8]] = &[];
     vec![
         // strings, small + bulk (bulk = the spillable class)
-        c(&[b"SET", b"s:small", b"v1"], Exact),
-        c(&[b"SET", b"s:bulk", &[b'a'; 4096]], Exact),
-        c(&[b"GET", b"s:bulk"], Exact), // B9: cold GET serves identical bytes
-        c(&[b"STRLEN", b"s:bulk"], Exact),
-        c(&[b"APPEND", b"s:bulk", b"tail"], Exact), // B9: RMW on cold pages in
+        c(&[b"SET", b"s:small", b"v1"], Exact, NONE),
+        c(&[b"SET", b"s:bulk", &[b'a'; 4096]], Exact, NONE),
+        // B9: cold GET serves identical bytes (gate 1st touch — no install)
+        c(&[b"GET", b"s:bulk"], Exact, &[b"s:bulk"]),
+        // gate 2nd touch — promotes, same bytes
+        c(&[b"STRLEN", b"s:bulk"], Exact, NONE),
+        // B9: cold GETRANGE serves the same window
+        c(&[b"GETRANGE", b"s:bulk", b"0", b"9"], Exact, &[b"s:bulk"]),
+        // cold-touched SETRANGE pages in and patches
+        c(&[b"SETRANGE", b"s:bulk", b"10", b"XY"], Exact, NONE),
+        // B9: RMW on cold pages in
+        c(&[b"APPEND", b"s:bulk", b"tail"], Exact, &[b"s:bulk"]),
         // NX/XX on an existing (cold) key
-        c(&[b"SET", b"s:bulk", b"nope", b"NX"], Exact), // B9: NX must fail on cold
-        c(&[b"SET", b"s:bulk", b"xxv", b"XX"], Exact),  // B9: XX must succeed on cold
-        // WRONGTYPE against a cold string — must refuse without resurrecting
-        c(&[b"LPUSH", b"s:bulk", b"x"], Exact), // B9: WRONGTYPE, zero pread
-        c(&[b"HSET", b"s:bulk", b"f", b"v"], Exact), // B9: WRONGTYPE
+        c(&[b"SET", b"s:bulk", b"nope", b"NX"], Exact, &[b"s:bulk"]), // B9: NX must fail on cold
+        c(&[b"SET", b"s:bulk", b"xxv", b"XX"], Exact, NONE), // B9: XX overwrites the stub
+        // re-bigged so the WRONGTYPE specials run against a cold key
+        c(&[b"SET", b"s:bulk", &[b'b'; 2500]], Exact, NONE),
+        // WRONGTYPE against a cold string — refuse without resurrecting
+        c(&[b"LPUSH", b"s:bulk", b"x"], Exact, &[b"s:bulk"]), // B9: WRONGTYPE, zero pread
+        c(&[b"HSET", b"s:bulk", b"f", b"v"], Exact, NONE),    // B9: WRONGTYPE (still cold)
         // hashes (rows) — the RDS payload class
-        c(&[b"HSET", b"h:row", b"name", b"ada", b"dept", b"eng", b"age", b"36"], Exact),
-        c(&[b"HGET", b"h:row", b"name"], Exact), // B9: cold-row field read
-        c(&[b"HSET", b"h:row", b"age", b"37"], Exact), // B9: cold-row write pages in, no shadow
-        c(&[b"HGETALL", b"h:row"], Shape), // field order is map order
-        c(&[b"HDEL", b"h:row", b"dept"], Exact),
-        c(&[b"HLEN", b"h:row"], Exact),
+        c(&[b"HSET", b"h:row", b"name", b"ada", b"dept", b"eng", b"age", b"36"], Exact, NONE),
+        c(&[b"HGET", b"h:row", b"name"], Exact, &[b"h:row"]), // B9: cold-row field read
+        c(&[b"HSET", b"h:row", b"age", b"37"], Exact, NONE), // B9: cold-row write pages in, no shadow
+        c(&[b"HGETALL", b"h:row"], Shape, NONE), // field order is map order
+        // B9: HGETALL straight off a cold row (gate serve)
+        c(&[b"HGETALL", b"h:row"], Shape, &[b"h:row"]),
+        c(&[b"HDEL", b"h:row", b"dept"], Exact, NONE), // pages back in
+        c(&[b"HLEN", b"h:row"], Exact, NONE),
         // field TTL survival across demote/promote (B9 special)
-        c(&[b"HSET", b"h:ttl", b"f1", b"v1", b"f2", b"v2"], Exact),
-        c(&[b"HPEXPIRE", b"h:ttl", b"60000", b"FIELDS", b"1", b"f1"], Exact),
-        c(&[b"HPERSIST", b"h:ttl", b"FIELDS", b"1", b"f1"], Exact), // B9: after a demote round trip
+        c(&[b"HSET", b"h:ttl", b"f1", b"v1", b"f2", b"v2"], Exact, NONE),
+        c(&[b"HPEXPIRE", b"h:ttl", b"60000", b"FIELDS", b"1", b"f1"], Exact, NONE),
+        // B9: after a demote round trip (inline hash forces too)
+        c(&[b"HPERSIST", b"h:ttl", b"FIELDS", b"1", b"f1"], Exact, &[b"h:ttl"]),
         // TTL family on cold keys
-        c(&[b"SET", b"t:k", &[b'b'; 1024]], Exact),
-        c(&[b"PEXPIRE", b"t:k", b"600000"], Exact), // B9: EXPIRE on cold
-        c(&[b"PERSIST", b"t:k"], Exact),
-        c(&[b"TYPE", b"t:k"], Exact), // B9: TYPE from type_tag, zero pread
+        c(&[b"SET", b"t:k", &[b'b'; 1024]], Exact, NONE),
+        c(&[b"PEXPIRE", b"t:k", b"600000"], Exact, &[b"t:k"]), // B9: EXPIRE on cold
+        c(&[b"PERSIST", b"t:k"], Exact, NONE),
+        c(&[b"TYPE", b"t:k"], Exact, NONE), // B9: TYPE from type_tag, zero pread
         // keyspace ops over cold keys
-        c(&[b"EXISTS", b"s:bulk", b"h:row", b"absent"], Exact),
-        c(&[b"RENAME", b"t:k", b"t:k2"], Exact), // B9: RENAME moves stub, no read
-        c(&[b"COPY", b"t:k2", b"t:k3"], Exact),
-        c(&[b"DEL", b"t:k3"], Exact), // B9: DEL counts the cold key
-        c(&[b"DBSIZE"], Exact),       // B9: cold keys counted
-        c(&[b"KEYS", b"*"], Shape),   // B9: cold keys visible (order = map order)
-        c(&[b"SCAN", b"0"], Shape),   // B9: cold keys swept
-        c(&[b"RANDOMKEY"], Shape),
+        c(&[b"EXISTS", b"s:bulk", b"h:row", b"absent"], Exact, NONE),
+        c(&[b"RENAME", b"t:k", b"t:k2"], Exact, NONE), // B9: RENAME moves the stub, no read
+        c(&[b"COPY", b"t:k2", b"t:k3"], Exact, NONE),  // materializes the copy, src stays cold
+        c(&[b"DEL", b"t:k3"], Exact, &[b"t:k3"]), // B9: DEL counts the cold key
+        c(&[b"DBSIZE"], Exact, NONE),       // B9: cold keys counted
+        c(&[b"KEYS", b"*"], Shape, NONE),   // B9: cold keys visible (order = map order)
+        c(&[b"SCAN", b"0"], Shape, NONE),   // B9: cold keys swept
+        c(&[b"RANDOMKEY"], Shape, NONE),
         // memory-reporting: legitimately differs under tiering
-        c(&[b"MEMORY", b"USAGE", b"s:bulk"], Shape),
+        c(&[b"MEMORY", b"USAGE", b"s:bulk"], Shape, NONE),
         // collections stay hot in v1 — still must behave identically
-        c(&[b"RPUSH", b"l:q", b"a", b"b"], Exact),
-        c(&[b"LRANGE", b"l:q", b"0", b"-1"], Exact),
-        c(&[b"ZADD", b"z:s", b"1", b"m1"], Exact),
-        c(&[b"ZSCORE", b"z:s", b"m1"], Exact),
+        c(&[b"RPUSH", b"l:q", b"a", b"b"], Exact, NONE),
+        c(&[b"LRANGE", b"l:q", b"0", b"-1"], Exact, NONE),
+        c(&[b"ZADD", b"z:s", b"1", b"m1"], Exact, NONE),
+        c(&[b"ZSCORE", b"z:s", b"m1"], Exact, NONE),
         // wipe-out
-        c(&[b"FLUSHALL"], Exact), // B9: clears cold tier too
-        c(&[b"DBSIZE"], Exact),
+        c(&[b"FLUSHALL"], Exact, NONE), // B9: clears cold tier too
+        c(&[b"DBSIZE"], Exact, NONE),
     ]
 }
 
-fn run_pair(a: &Store, b: &Store) -> usize {
+/// Drive both stores through the sequence; `demote` runs each case's
+/// marker keys against the tiered side (`None` for the self-check).
+fn run_pair(a: &Store, b: &Store, demote: bool) -> usize {
     let mut checked = 0;
-    for (argv, cmp) in cases() {
-        let refs: Vec<&[u8]> = argv.iter().map(|v| v.as_slice()).collect();
+    for case in cases() {
+        let what = case
+            .argv
+            .iter()
+            .map(|x| String::from_utf8_lossy(x))
+            .collect::<Vec<_>>()
+            .join(" ");
+        if demote {
+            for key in case.demote {
+                assert!(
+                    b.debug_force_demote(key),
+                    "B9 marker must demote a warm spillable key: `{}` before `{what}`",
+                    String::from_utf8_lossy(key)
+                );
+            }
+        }
+        let refs: Vec<&[u8]> = case.argv.iter().map(|v| v.as_slice()).collect();
         let ra = reply(a, &refs);
         let rb = reply(b, &refs);
-        let what = argv.iter().map(|x| String::from_utf8_lossy(x)).collect::<Vec<_>>().join(" ");
-        assert_match(&what, &cmp, &ra, &rb);
+        assert_match(&what, &case.cmp, &ra, &rb);
         checked += 1;
     }
     checked
 }
 
 /// Harness self-check: two identical untiered stores must agree on every
-/// case — proves the sequence + compare machinery before tiering exists.
+/// case — proves the sequence + compare machinery independent of tiering.
 #[test]
 fn transparency_harness_self_check_untiered() {
     let a = Store::open(Config::default().with_ttl_reaper_manual()).expect("open a");
     let b = Store::open(Config::default().with_ttl_reaper_manual()).expect("open b");
-    let checked = run_pair(&a, &b);
+    let checked = run_pair(&a, &b, false);
     assert!(checked >= 30, "sequence unexpectedly short: {checked}");
 }
 
-/// The real suite (B9): tiered vs untiered with FORCE_DEMOTE at every
-/// `// B9:` marker. PENDING until T3 lands the `Value::Cold` funnel and the
-/// tiering config knob — bench/tiergate.sh carries the red meanwhile.
+/// The real suite (B9): tiered vs untiered, force-demoting at every
+/// `// B9:` marker. Budget is huge so demotion happens ONLY at the
+/// deterministic seam — never by watermark timing.
 #[test]
-#[ignore = "PENDING(T3): needs the Value::Cold funnel + [tiering] config + KEVY_TEST_FORCE_DEMOTE seam"]
 fn transparency_tiered_vs_untiered() {
-    unimplemented!("T3: open one store tiered (tiny budget), interleave FORCE_DEMOTE at B9 markers, run_pair");
+    let dir = kevy_tmpdir::TmpDir::new("tier-transparency");
+    let a = Store::open(Config::default().with_ttl_reaper_manual()).expect("open untiered");
+    let b = Store::open(
+        Config::default()
+            .with_ttl_reaper_manual()
+            .with_persist(dir.path())
+            .with_tier_budget(u64::MAX),
+    )
+    .expect("open tiered");
+    let checked = run_pair(&a, &b, true);
+    assert!(checked >= 30, "sequence unexpectedly short: {checked}");
+    let (demotions, promotions) = b.tier_counters();
+    assert!(demotions >= 8, "the markers must actually have demoted: {demotions}");
+    assert!(promotions >= 3, "the write/2nd-touch paths must have promoted: {promotions}");
+}
+
+/// B12: demote/promote emit ZERO store-origin keyspace events and move
+/// ONLY the tier counters — `evictions_total` stays untouched.
+#[test]
+fn demote_promote_move_tier_counters_only_and_emit_no_events() {
+    let dir = kevy_tmpdir::TmpDir::new("tier-b12");
+    let s = Store::open(
+        Config::default()
+            .with_ttl_reaper_manual()
+            .with_persist(dir.path())
+            .with_tier_budget(u64::MAX),
+    )
+    .expect("open tiered");
+    s.set(b"cold:k", &[b'x'; 4096]).unwrap();
+    // Capture every store-origin event kind, then drain the SET's `new`.
+    s.with(|st| {
+        st.set_notify_capture(true, true, true);
+        st.take_notify_events();
+    });
+    assert!(s.debug_force_demote(b"cold:k"));
+    // Two GETs: serve, then promote.
+    assert_eq!(s.get(b"cold:k").unwrap().unwrap().len(), 4096);
+    assert_eq!(s.get(b"cold:k").unwrap().unwrap().len(), 4096);
+    let (demotions, promotions) = s.tier_counters();
+    assert_eq!((demotions, promotions), (1, 1));
+    s.with(|st| {
+        assert_eq!(st.evictions_total(), 0, "demotion must not count as eviction");
+        assert!(
+            st.take_notify_events().is_empty(),
+            "demote/promote must emit zero keyspace events"
+        );
+    });
 }

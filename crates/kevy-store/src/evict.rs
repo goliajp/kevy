@@ -126,7 +126,11 @@ pub(crate) fn evict_until_under_limit(store: &mut Store) -> usize {
 /// Returns `true` if a key was evicted, `false` if no eligible candidate was
 /// found (e.g. volatile-* policy on a TTL-free keyspace).
 fn evict_one(store: &mut Store) -> bool {
-    let Some(victim) = sample_and_pick(store, N_SAMPLES) else {
+    let policy = store.eviction_policy;
+    let volatile_only = policy.is_volatile();
+    let Some(victim) = sample_pick_with(store, policy, |e| {
+        !volatile_only || e.expire_at_ns.is_some()
+    }) else {
         return false;
     };
     if store.remove_entry(&victim).is_some() {
@@ -140,16 +144,22 @@ fn evict_one(store: &mut Store) -> bool {
     }
 }
 
-/// Pick the worst key from `n` random samples per the active policy. Returns
-/// `None` when no eligible candidate exists (empty map, or volatile-* with
-/// zero TTL-bearing keys).
-fn sample_and_pick(store: &mut Store, n: usize) -> Option<Vec<u8>> {
+/// Pick the worst key from [`N_SAMPLES`] random samples, scored per
+/// `policy`, restricted to entries passing `eligible`. Cold stubs are
+/// NEVER candidates (tiering, RFC §1 D2): delete-evicting a 24-byte
+/// stub frees ~nothing and degenerates the loop; the demotion sampler
+/// must not re-spill what is already cold. Returns `None` when no
+/// eligible candidate exists (empty map, volatile-* with zero
+/// TTL-bearing keys, or an all-cold sample window).
+pub(crate) fn sample_pick_with<F: Fn(&Entry) -> bool>(
+    store: &Store,
+    policy: EvictionPolicy,
+    eligible: F,
+) -> Option<Vec<u8>> {
     let cap = store.map.capacity();
     if cap == 0 || store.map.is_empty() {
         return None;
     }
-    let policy = store.eviction_policy;
-    let volatile_only = policy.is_volatile();
     let now = now_ns();
     let clock = store.clock_counter as u32;
     // Random start derived from the access ordinal — every call shifts so we
@@ -160,12 +170,12 @@ fn sample_and_pick(store: &mut Store, n: usize) -> Option<Vec<u8>> {
     let mut taken = 0;
     // Walk the bucket ring beginning at `start`; cap the linear scan so a
     // sparsely-populated table doesn't spin forever. `.take(visit_cap)` is
-    // the safety net; the inner `taken >= n` break is the normal exit.
+    // the safety net; the inner `taken >= N_SAMPLES` break is the normal exit.
     let visit_cap = cap.saturating_mul(2);
     let primary = store.map.iter_from_bucket(start);
     let wrap = store.map.iter_from_bucket(0);
     for (k, e) in primary.chain(wrap).take(visit_cap) {
-        if volatile_only && e.expire_at_ns.is_none() {
+        if matches!(e.value, crate::value::Value::Cold(_)) || !eligible(e) {
             continue;
         }
         let score = score_entry(e, policy, now, clock);
@@ -173,7 +183,7 @@ fn sample_and_pick(store: &mut Store, n: usize) -> Option<Vec<u8>> {
             best = Some((k.to_vec(), score));
         }
         taken += 1;
-        if taken >= n {
+        if taken >= N_SAMPLES {
             break;
         }
     }

@@ -244,6 +244,10 @@ impl Commands for KevyCommands {
             // logging needed here, same determinism argument as key TTLs.
             let _ = store.tick_hash_ttl(64);
         }
+        // Tiering: tick continuation of the budgeted spill (no-op when
+        // tiering is off or under the watermark). Replicas tier too —
+        // applied frames grow their keyspace like any write.
+        store.demote_step();
         // Re-apply maxmemory + eviction policy in case `CONFIG SET` has
         // swapped the global since the previous tick. `store.set_max_memory`
         // is idempotent and cheap (compares + assigns two scalars + may

@@ -150,6 +150,11 @@ fn write_value_as_commands<W: Write>(
     scratch: &mut Vec<u8>,
 ) -> io::Result<()> {
     match value {
+        // Tiering T4 streams cold values from the pinned vlog; until
+        // it lands no tiered store reaches a rewrite (B10/T4-gated).
+        Value::Cold(_) => {
+            debug_assert!(false, "rewrite of a cold stub — T4 streams these from the vlog");
+        }
         Value::Str(s) => write_verb_items(w, b"SET", key, 1, [s.to_vec()], fmt, scratch)?,
         // L2: persist Int as the canonical ASCII bytes; replay's SET
         // auto-detects it back to Int via parse_canonical_i64.

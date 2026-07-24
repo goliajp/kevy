@@ -93,7 +93,7 @@ impl Store {
         // Overwrite path drops from 2 probes (live_entry_mut: get+get_mut)
         // to 1 probe. New-key + expired-removed paths still pay the
         // insert_entry probe (same as before).
-        if self.maxmemory == 0 {
+        if !self.clock_on() {
             return self.set_value_no_evict(key, new_value, expire, nx, xx);
         }
         self.set_value_evict(key, new_value, expire, nx, xx)
@@ -144,8 +144,9 @@ impl Store {
         }
         // Phase 2: hand the old value off if heavy. Done last so the
         // critical mutation + bookkeeping commit before any (sub-µs in
-        // steady state) channel send.
+        // steady state) channel send. A cold stub's record dies here.
         if let Some(old) = old_value {
+            self.tier_note_dead(&old);
             self.maybe_offload_drop(old);
         }
         true
@@ -176,6 +177,7 @@ impl Store {
                 if let Some(old) = drop_first {
                     // No insert; the expired `Value` still needs
                     // to drop. Ship via the bio path on its way out.
+                    self.tier_note_dead(&old);
                     self.maybe_offload_drop(old);
                 }
                 return false;
@@ -197,8 +199,10 @@ impl Store {
             }
         };
         // Phase 3: ship the displaced Value if any. Last so the keyspace
-        // commit precedes any (sub-µs steady-state) channel send.
+        // commit precedes any (sub-µs steady-state) channel send. A
+        // displaced cold stub credits its vlog record dead first.
         if let Some(old) = old_value {
+            self.tier_note_dead(&old);
             self.maybe_offload_drop(old);
         }
         true

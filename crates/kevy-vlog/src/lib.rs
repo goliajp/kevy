@@ -255,6 +255,17 @@ impl Vlog {
         }
     }
 
+    /// The owner dropped its entire cold-ref universe in one stroke
+    /// (`FLUSHALL`): every record in every file is now dead. O(files),
+    /// no IO — sealed files become full-dead (dropped by the next
+    /// [`Self::compact_below`] without a scan); the active file's
+    /// garbage bytes fall out at its own retirement.
+    pub fn mark_all_dead(&mut self) {
+        for s in &mut self.files {
+            s.live = 0;
+        }
+    }
+
     /// Monotone compaction counter — bumped once per retired file. A
     /// reader holding `(epoch, VlogRef)` can verify in O(1) that no
     /// compaction has run (so its ref cannot have moved).

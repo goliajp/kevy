@@ -45,6 +45,14 @@ pub struct Config {
     /// AOF fsync policy. Default `EverySec` (matches Redis: ≤ 1 s loss).
     #[cfg(feature = "persist")]
     pub appendfsync: AppendFsync,
+    /// Transparent-tiering RAM budget in bytes (capacity arc). `None`
+    /// (default) = tiering off — today's paths byte-identical. `Some`
+    /// requires a disk `data_dir` (the cold value log lives at
+    /// `<data_dir>/tier/`); a mem-only store rejects the combo at open.
+    /// T3 ships this minimal knob; the full surface (auto/percent
+    /// budgets, INFO gauges) is T5.
+    #[cfg(feature = "tier")]
+    pub tier_budget: Option<u64>,
     /// TTL reaper mode. Default `Background`.
     pub ttl_reaper: TtlReaperMode,
     /// Reaper tick interval. Default 100 ms (10 Hz).
@@ -151,6 +159,8 @@ impl Default for Config {
             aof: true,
             #[cfg(feature = "persist")]
             appendfsync: AppendFsync::EverySec,
+            #[cfg(feature = "tier")]
+            tier_budget: None,
             ttl_reaper: TtlReaperMode::Background,
             reaper_interval: Duration::from_millis(100),
             reaper_samples: 20,
@@ -309,6 +319,18 @@ impl Config {
         sink: impl Fn(crate::KevyMetric) + Send + Sync + 'static,
     ) -> Self {
         self.metric_sink = Some(crate::metric::MetricSink::new(sink));
+        self
+    }
+
+    /// Enable transparent tiering with a RAM budget of `bytes`: values
+    /// past the demote watermark spill to the cold tier on disk
+    /// (`<data_dir>/tier/`) and page back in on access — every command
+    /// keeps its exact semantics. Requires [`Self::with_persist`]; a
+    /// memory-only store fails at open with a named error.
+    #[cfg(feature = "tier")]
+    #[must_use]
+    pub fn with_tier_budget(mut self, bytes: u64) -> Self {
+        self.tier_budget = Some(bytes);
         self
     }
 

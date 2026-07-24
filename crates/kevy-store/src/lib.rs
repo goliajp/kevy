@@ -95,6 +95,7 @@ mod hash;
 mod hash_ttl;
 pub use hash_ttl::{HExpireCode, HExpireCond};
 mod keyspace;
+mod keyspace_load;
 mod list;
 mod notify;
 mod rng;
@@ -116,6 +117,12 @@ mod stream;
 mod string;
 mod string_rmw;
 mod string_set;
+mod tier;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+mod tier_codec;
+mod tier_demote;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+pub use tier::TierStats;
 mod types;
 pub use types::{EvictionPolicy, RenameOutcome, StoreError};
 mod util;
@@ -139,7 +146,6 @@ pub use value::*;
 
 pub(crate) use clock::{deadline_at, now_ns, pack_deadline, remaining_ms};
 use kevy_map::KevyMap;
-
 /// Feed kevy's monotonic clock on `wasm32-unknown-unknown`, which has no
 /// `Instant`. The embedding host advances time (ns since an arbitrary fixed
 /// epoch, e.g. `Date.now() * 1e6`) before TTL-sensitive ops and once per
@@ -270,6 +276,14 @@ pub struct Store {
     /// the iter ends).
     #[cfg(feature = "std")]
     pub(crate) pending_drops: Vec<Value>,
+    /// Transparent-tiering state (capacity arc T3). `None` = off —
+    /// today's paths byte-identical ([`Store::enable_tiering`]).
+    #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+    pub(crate) tier: Option<tier::TierState>,
+    /// The promotion gate's first-touch serve scratch (`tier_serve`):
+    /// a cold value decoded for ONE read, never installed in the map.
+    #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+    pub(crate) tier_scratch: Option<Entry>,
 }
 
 
@@ -482,3 +496,5 @@ mod tests_memory;
 mod tests_snapshot;
 #[cfg(test)]
 mod tests_string_encoding;
+#[cfg(all(test, feature = "std", not(target_arch = "wasm32")))]
+mod tests_tier;

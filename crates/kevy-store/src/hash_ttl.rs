@@ -50,7 +50,7 @@ pub enum HExpireCond {
 impl Store {
     /// Does this hash field exist (ignoring TTL state)?
     fn hash_has_field(&mut self, key: &[u8], field: &[u8]) -> Result<bool, StoreError> {
-        match self.live_entry(key) {
+        match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
             None => Ok(false),
             Some(e) => match &e.value {
                 Value::Hash(h) => Ok(h.get(field).is_some()),
