@@ -531,7 +531,39 @@ round; collection (List/Set/ZSet/Stream) spill; embedded
 drop-lock/pread/relock dance; fully-async cold reads; kvrocks
 competitive bench; PG-wire proxy exploration.
 
-## 8. Design history (recorded, not hidden)
+## 8. Validation map (T0 deliverable — every criterion, one assertion home)
+
+| Criterion | Gate / harness | Assertion |
+|---|---|---|
+| A1 | bench/perfgate.sh | existing 12 metrics, tiering-off instance, 0.92 tol; + perf-record no-new-symbols note in T3 finding |
+| A2 | bench/perfgate.sh | new `tiered_hotset_get/set` metric lines, 0.92 tol |
+| A3 | CI + existing gates | unchanged green (crashgate/availgate/textgate/covgate/oracle/repligate) |
+| A4 | bench/crashgate.sh | unchanged matrix on a tiered store (with T4) |
+| A5 | bench/idxgate.sh + perfgate | no-VALUES formula line byte-par + Clamp #0-genre empty-declaration line |
+| B1,B2 | bench/tiergate.sh L1,L2 | hot p99 delta ≤ noise @ cold:hot sweeps; cold pread p99 vs targets (scalar/hash split) |
+| B3 | bench/tiergate.sh L3 | sustained-ingest RAM plateau + stall p99 ≤1ms |
+| B4 | bench/tiergate.sh L4 | replay-with-spill / plain-replay ≥ 0.70 |
+| B5 | bench/tiergate.sh L5 | vlog_size ≤ 2.0 × cold_bytes after churn+compaction |
+| B6 | bench/tiergate.sh L6 | 5M×4KiB on 2GB budget: all-green op sweep + RSS cap |
+| B7 | bench/memgate.sh | cold-key bytes/entry vs (96 + key) ±20% |
+| B8 | bench/tiergate.sh L8 | RSS ≤ budget×1.05 sustained; auto probe asserted in container + bare |
+| B9 | crates/kevy-embedded/tests/tier_transparency.rs | dual-Store byte/shape compare, FORCE_DEMOTE seam, named specials |
+| B10 | bench/tiergate.sh L10 + crashgate | rewrite/snapshot on mostly-cold: digest equal + RSS bound |
+| B11 | bench/tiergate.sh L11 | boot dataset>budget: RSS ≤ budget×1.05 during replay |
+| B12 | tier_transparency.rs + INFO | zero feed/notify counters across demote/promote; gauges present |
+| C1 | bench/tablegate.sh L1 | R1-R12 conformance sequence green |
+| C2 | tablegate L2 + dispatch_oracle | TABLE.* round-trip + VERIFY + server/embedded byte parity |
+| C3 | tablegate L3 | refusal surface named-error asserts |
+| C4,C5 | bench/perfgate.sh | `table_point_get` / `table_filter_sort_page` metric lines |
+| C6 | tablegate L6 | row-read counter == 0 on index-only queries (debug counters) |
+| C7 | bench/perfgate.sh | `table_write_tax` line: 3-index HSET ≥ 0.85 × bare |
+| C8 | bench/memgate.sh + diskgate | per-index-row + per-table formulas ±20% |
+| D1 | bench/tiergate.sh L12 | model-sized envelope: C4/C5 hold + hydration p95 ≤10ms + preads==rows |
+| D2 | tablegate L7 | fully-cold table, index-only: cold-read counter == 0 |
+| D3 | bench/tiergate.sh L13 | batch submission counter: 1 batch per page |
+| D4 | bench/tiergate.sh L14 | hot p99 unchanged under concurrent cold scan + backfill |
+
+## 9. Design history (recorded, not hidden)
 
 The standalone tiering RFC (superseded) proposed a cold **side-table**
 and ruled out a `Value` variant, citing ~196 match sites and the 32 B
