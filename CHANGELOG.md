@@ -98,6 +98,29 @@ the replication handshake now carries the feed generation).
   dominate mobile KV (16 B 1.3×, 256 B 1.1×), MMKV's page model wins
   multi-KB durable blobs (4 KB ~5-10× — the AOF appends every value
   byte, mmap re-dirties a page). In-memory kevy wins every size.
+- **Measured against the native embedded stores, per language** (a new
+  `bench/embeddedgate` harness + `bench/EMBEDDED-LEDGER.md`): kevy's
+  scalar path vs Go's bbolt / badger, Node's better-sqlite3, and LMDB
+  (from C directly and from C# via LightningDB), losing axes named.
+  kevy's `kevy_get_shared` zero-copy read is flat ~12 ns at every value
+  size and **beats LMDB** — the acknowledged read-latency leader —
+  2–9×, and wins single-op writes (no per-op transaction). It **loses
+  batched/bulk writes**: kevy logs a crash-recoverable AOF frame per
+  write where a B+tree/LSM defers all durability to one commit — the
+  honest price of per-op durability, decomposed and decided in
+  `.claude/rfcs/2026-07-24-embedded-bulk-write-ceiling.md` (keep it).
+- **Batch write** — `kevy_set_many` (C ABI) + `SetMany` (Go, C#) +
+  `setMany` (Node): apply N writes in one boundary crossing, durability
+  unchanged. It closes the crossing tax for the one binding that pays an
+  expensive one (Go cgo: a bulk SET went from 147× to 2.7× off bbolt);
+  C#, Node and C were already engine-bound (cheap / no crossing) — the
+  cleanest proof the bulk gap is the engine, not the binding.
+- **Zero-copy read** — `GetView` (Go, C#): a scoped callback receives a
+  view of the value's bytes (an Arc refcount bump, no copy out), freed
+  when it returns — bbolt's txn-slice lifetime. It closes the
+  large-value read loss the copying `Get` / `GetScalar` gave back: a
+  64 KB read went from 62× off bbolt's mmap view to a 1.04× win, and
+  beats a copying peer up to ~78×.
 
 ### The durability-trust arc
 
@@ -397,6 +420,15 @@ failure is now closed, each behind an executable gate.
   a block-buffered marker — each of which produced a plausible wrong
   number; the recipe and its self-check now live in
   `bench/profile-textgate.sh`.
+- **The embedded `IDX.CREATE` command caught up to the server's full
+  syntax.** The typed `idx_create_text` had multi-field indexes, weights,
+  positions and stored values all along, but the embedded RESP-command
+  parser still only understood the old single `FIELD` form — so
+  `db.cmd("IDX.CREATE", …, "FIELDS", …)` worked against the server and
+  not in-process. A server-vs-embedded oracle test (byte-for-byte over
+  ~150 commands) caught the drift; the embedded parser now mirrors the
+  server's — `FIELDS`/`WEIGHTS`/`WITH POSITIONS`/`VALUES`/`TYPES`,
+  identical error text — and routes to the full-capability store methods.
 
 ### Blocking across shards
 
