@@ -248,23 +248,41 @@ assertion in T0 — a criterion with no assertion does not exist)
   + a perfgate "Clamp #0"-genre empty-declaration line).
 
 ### B. Tiering
+**The capacity model (formulas first — every envelope number below is
+computed from these, never asserted):**
+```
+RAM_floor ≈ keys × (ENTRY_OVERHEAD 96 + key heap bytes)          # stubs
+          + Σ_per_index keys × (~68 + Σ declared VALUES col bytes) # hot paths
+data:RAM ratio is therefore value-size-bound: a 64 B value can never
+tier profitably (stub ≈ value); the ratio grows linearly with value
+size. All capacity gates name their value size.
+```
 - **Perf**: **B1** hot GET/SET p99 unchanged at any cold:hot ratio;
-  **B2** cold GET p99 ≤ 100 µs embedded / ≤ 300 µs server e2e at 10×
-  data:RAM on NVMe; **B3** demotion throughput ≥ sustained write
+  **B2** cold point-read p99 on NVMe: scalar ≤ 100 µs embedded /
+  ≤ 300 µs server e2e; hash-row materialization (whole-record decode)
+  ≤ 200 µs / ≤ 500 µs; **B3** demotion throughput ≥ sustained write
   ingest (no unbounded RAM growth) with spill-induced reactor stall
   p99 ≤ 1 ms (budgeted + background); **B4** boot replay with
   in-replay spill ≥ 70 % of plain replay throughput.
 - **Disk**: **B5** vlog space amplification ≤ 2.0× live cold bytes
   (compaction keeps live ratio ≥ 50 % under pin semantics); **B6**
-  capacity ≥ 10× data:RAM demonstrated (gate), 100× stretch.
+  capacity gate **at 4 KiB values**: ≥ 10× data:RAM demonstrated
+  (e.g. 5M × 4 KiB = 20 GB on a 2 GB budget; stub floor ≈ 5M × ~108 B
+  ≈ 540 MB — computed from the model), 100× stretch as disk allows.
 - **Mem**: **B7** declared formulas within ±20 % (memgate): hot key =
-  today's cost; cold key = 48 B Entry + key bytes (stub actual);
-  **B8** RSS ≤ budget × 1.05 sustained; auto-detection correct in a
-  cgroup container and on bare metal.
+  today's cost; cold key ≈ ENTRY_OVERHEAD (96 B) + key heap bytes —
+  i.e. the value bytes are fully reclaimed; **B8** RSS ≤ budget × 1.05
+  sustained; auto-detection correct in a cgroup container and on bare
+  metal.
 - **Correctness**: **B9** the transparency suite (dispatch-oracle-genre
-  dual run: same op sequence, tiered vs untiered, byte-identical
-  replies) over the full op surface, PLUS named specials: NX/XX on
-  cold keys; WRONGTYPE with zero preads; DEL/RENAME/FLUSHALL;
+  dual run: same op sequence, tiered vs untiered): **byte-identical
+  replies for all semantic commands; memory-reporting commands (INFO,
+  MEMORY USAGE, DEBUG) are shape-compared** (they legitimately differ —
+  the `Cmp::Shape` precedent). Determinism: demotion points are forced
+  by a **`KEVY_TEST_FORCE_DEMOTE` seam** (the KEVY_TEST_XSHARD_*
+  precedent), never by watermark timing — a suite that depends on
+  eviction timing is flaky by design. Named specials: NX/XX on cold
+  keys; WRONGTYPE with zero preads; DEL/RENAME/FLUSHALL;
   EXPIRE-family; field-TTL survival across a demote/promote round
   trip; WATCH not bumped by demotion; SCAN/KEYS/RANDOMKEY/DBSIZE see
   cold keys. **B10** tiered store passes crashgate, and
@@ -295,9 +313,15 @@ assertion in T0 — a criterion with no assertion does not exist)
   vlog share).
 
 ### D. Fused scenarios (the real acceptance)
-- **D1** 50M rows (~200 B) on a 2 GB budget: indexes hot, rows cold;
-  C4/C5 hold for index-only queries; cold-row hydration page (20
-  rows) p95 ≤ 10 ms; **one pread per row, not per field**
+- **D1** **10M rows × ~1 KiB (≈10 GB table) on a 3 GB budget**, with 2
+  secondary indexes + declared VALUES columns — sized FROM the capacity
+  model: stub floor 10M × ~108 B ≈ 1.1 GB + index floor 10M × (68+68+
+  ~30 VALUES) ≈ 1.7 GB ≈ 2.8 GB ≤ 3 GB (the earlier 50M-on-2GB draft
+  violated its own model — stubs alone would exceed the budget — and
+  was corrected here; per-key fixed costs dominate narrow rows, which
+  is itself a published capacity-model lesson). Indexes hot, rows
+  cold; C4/C5 hold for index-only queries; cold-row hydration page
+  (20 rows) p95 ≤ 10 ms; **one pread per row, not per field**
   (counter-asserted).
 - **D2** index-only queries on a fully-cold table: cold-read counter
   = 0.
@@ -475,9 +499,31 @@ builder):
 - G1 stored-VALUES columns cap per index: same as text kind (no new
   limit class).
 
+**Build/compile surface**:
+- Server: tiering compiled in always, runtime-off by default (A1 gates
+  the off-cost). Embedded: new cargo feature **`tier`** (requires
+  `persist`), in the default feature set; wasm/mem:// reject the config.
+- `kevy-sql`'s parser is **hand-written recursive descent** (0-dep
+  charter — no sqlparser/crates.io parser).
+- T3 ships a **minimal tiering config knob** (env + TOML `[tiering]
+  budget = <bytes>`) sufficient for gates; T5 completes the full
+  surface (auto probes, percent form, INFO, embedded builder parity).
+- vlog **compaction trigger wiring** (dead-bytes counter → compact on
+  the shard tick) belongs to T3 (the store owns the vlog lifecycle);
+  T1 only provides the primitive.
+- Test seam: **`KEVY_TEST_FORCE_DEMOTE`** (deterministic demotion for
+  B9/crashgate; house KEVY_TEST_* precedent).
+
+**Gate-to-train assignment** (tiergate/tablegate lines fill in as
+trains land): T2 → A5 · T3 → A1/A2/B3/B9/B12 · T4 → B4/B10/B11 ·
+T5 → B7/B8 · T6 → D3 + D1(hydration axis)/D4 · T7 → C1-C7 ·
+T9 → B1/B2/B5/B6/C8 + D1/D2/D4 (envelope).
+
 **Envelope**: gate numbers on **lx64** (kevybench discipline); 10× is
-the gate, 100× stretch runs on lx64 if disk allows, else recorded
-not-run (no box decision mid-arc).
+the gate (at 4 KiB values, per the capacity model), 100× stretch runs
+on lx64 if disk allows, else recorded not-run (no box decision
+mid-arc). New crates (`kevy-vlog`, `kevy-sql`) join the crates.io
+publish set at v4.0.0 (t6).
 
 **Explicitly OUT of v4** (post-v4 named list — needs future user
 decisions, deliberately not taken now): G4 view-FILTER constitution
