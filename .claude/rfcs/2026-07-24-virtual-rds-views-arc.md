@@ -1,5 +1,14 @@
 # RFC — virtual RDS views: serving PG/MySQL-shaped business logic on kevy
 
+> **SUPERSEDED (2026-07-24, same day)** by
+> `2026-07-24-v5-capacity-arc.md` — the fused tiering × RDS-views arc.
+> The conclusions here (G1 doc-values generalization, TABLE.*
+> declaration layer, out-of-engine kevy-sql, Law 3 unamended) carry
+> into the fused RFC unchanged; what changes is the ordering and the
+> read path: G1 becomes the fusion keystone (index-only queries keep
+> tiered tables fast), and hydration gains the cold-batch clause.
+> Kept for design history.
+
 **Date:** 2026-07-24 · **Status:** DESIGN ROUND — user vision received
 ("我们需要在索引能力上做好充分的设计，要用虚拟 rds 视图可以兼容 pg / mysql
 等业务"), this RFC turns it into a lawful, staged path. **Nothing here is

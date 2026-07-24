@@ -1,5 +1,14 @@
 # RFC — transparent hot/cold tiering: a memory budget with disk overflow
 
+> **SUPERSEDED (2026-07-24, same day)** by
+> `2026-07-24-v5-capacity-arc.md` — the fused tiering × RDS-views arc.
+> Two conclusions here were **reversed** by the adversarial review
+> recorded there (§4/§7): the cold **side-table** (breaks SCAN's sweep
+> guarantee, blinds the reaper, and creates a shadow-resurrection bug
+> class at ~12 raw map probes — replaced by an in-map `Value::Cold`
+> stub) and the **scalar-only v1 spill** (rows are hashes; hash spill
+> is v1-mandatory in the fused arc). Kept for design history.
+
 **Date:** 2026-07-24 · **Status:** DESIGN ROUND — user vision received
 ("透明冷热数据…配置或自动探测环境,只允许最大占用的内存值,其他的要允许在
 硬盘上,否则大容量的存储我们根本做不了"). This RFC turns it into a staged,
