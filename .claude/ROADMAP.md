@@ -395,33 +395,27 @@ D2 事务标记(全有全无,与事务大小无关)/ R2 事务内集合读。
   - [x] **8.h textgate ORDER 模式** — 纯 MATCH 26.82ms / FILTER 46.17ms / **SORT·DISTINCT 55.92ms**(<400 provisional)。约为剪枝路径两倍,是"按分数以外的东西选择就必须看每个候选"的诚实形状;此前只在 commit 里声明过代价,现在有数
 - [x] textgate 在步骤 4/5 内重录基线 — 5f 已做(POSITIONS 模式 ratio 0.75);此后每个改内存公式的步骤都在步内重录:7.c FIELDS 0.75、8.d VALUES 0.59(同日 baseline 对照)
 
+### t5.8 — capacity arc(容量时代:透明分层 × 虚拟 RDS 视图,融合;**v4 发布重要功能,用户拍板 2026-07-24 列入 v4**)
+
+主设计 = `.claude/rfcs/2026-07-24-v5-capacity-arc.md`(验收标准 A-D 全 gate 映射 / 核心设计 D0-D4 / 16 项交互矩阵 / **§7 预决策清单 —— 全部旋钮已定死,执行期零决策**;文件名带 v5 为历史命名,内容已改标 SHIPS IN v4.0.0)。要点:主表内 `Value::Cold` stub + 两段式 funnel;vlog 可弃(AOF 唯一 durability;持久化从 pinned vlog 流式不 promote;replay 内联下沉 —— 两条 launch-blocking);demote/promote_in_place 零事件原语;统一水位 = budget·19/20 − index_bytes − stub_bytes;G1 泛化为融合基石;TABLE.* 声明期编译;kevy-sql 引擎外。默认值全在 RFC §7(tiering 默认 OFF / auto=0.70 / tiered-lru / min_spill=64B / 二次访问才 promote / embedded max_spill_value=256KiB / spill 批 32 / vlog 轮转 256MiB·活率<0.5 压实 / TABLE.* / kevy-sql 独立 crate + kevy-cli sql / envelope 于 lx64,10× gate·100× stretch)。G4 视图 FILTER、集合 spill、embedded 放锁 dance、冷读全异步、kvrocks 竞对 = **明确不在 v4**(RFC §7 末,post-v4 具名)。
+
+- [ ] **T0 门先行**:RFC §2 验收标准逐条映射 gate 断言(对应表进 RFC §validation);`bench/tiergate.sh` + `bench/tablegate.sh` 骨架;透明套件 harness(dispatch_oracle 体裁,同 op 序 tiered vs untiered 逐字节,先红)。开工第一动 = feature 分支
+- [ ] **T1 kevy-vlog 石头**:新 crate(0-dep):append/read_at/rotate(256MiB)/compact(活率<0.5,pin 语义)+ 每记录 CRC32C + pin(Arc<VlogFile> 引用计数)+ epoch(u64,compaction 递增)+ hash 记录格式(复用 write_hash_payload + field-TTL 共序列化);unit + fuzz + bench;出口 = 单测/模糊全绿 + µs 级 bench 入账
+- [ ] **T2 G1 引擎泛化**:VALUES/FILTER/SORT/DISTINCT/FACET/OFFSET 从 text-only 放开到 Range/Unique(catalog.rs:343 守卫改 + 查询面接线,server+embedded 同步);出口 = A5 关断证明(无 VALUES 索引 byte-identical:idxgate 公式线 + perfgate Clamp #0 体裁)+ dispatch oracle 扩展用例绿
+- [ ] **T3 store 核心**:`Value::Cold(ColdRef{vlog_id,offset,len,weight,type_tag})` + 两段式 funnel(live_entry 族 accounting.rs:171,204 + typed helper 臂 hash.rs:376/list.rs:123/zset.rs:199/set.rs:87 + SET 裸探测 string_set.rs:96 的 Occupied-Cold 臂)+ `demote/promote_in_place`(不清 hfttl/零事件/不动 expires/保 lru_clock)+ evict_one 分叉(采样跳 Cold,spill 批 32 + tick 续,滞回)+ 二次访问 promote 门;出口 = **B9 透明套件转绿** + A1/A2 perfgate + B12 零事件计数器断言
+- [ ] **T4 持久化流式集成**(launch-blocking):collect_snapshot 克隆 stub + pin vlog;rewrite_fmt/snapshot_write 的 Cold 臂在序列化线程 read_at 物化(零 promote);full-sync/reshard 同钩;**replay 每 K 帧查水位内联下沉**;出口 = B10(多冷店 BGREWRITEAOF 零丢失 + RAM 有界)+ B11(boot 数据集>预算,RSS ≤ budget×1.05 全程)+ crashgate 于 tiered store
+- [ ] **T5 统一预算 + auto 探测 + INFO**:used_memory + Σ approx_bytes 统一水位;cgroup v2/meminfo/sysctl(kevy-sys 手绑 extern);floor 超预算 IDX.CREATE 具名拒;MEMORY USAGE 报 stub 实占;INFO gauges(cold_keys/cold_bytes/vlog_size/vlog_dead_bytes/demotions/promotions/index_bytes);两 config 面(TOML/CLI/env + embedded builder);出口 = B7 公式 memgate ±20% + B8 RSS 依从 + auto 双环境正确
+- [ ] **T6 hydration 冷批量 + no-promote peek 推广**:peek_value/peek_hash_field 原语;encode_hydration(wire.rs:95-107)与 op_hydrate(cmd_view.rs:237-275)改收集-按(vlog_id,offset)排序-批读-编码,**每行一次 pread**;uring 文件读新 tag 类(READ=22 已绑,ring_tests.rs:80 已证文件 fd);poller/embedded 有序 read_at;backfill(index_runtime.rs:394-414)/digest/scope_move/export 接 peek;出口 = D1 hydration 轴(20 行页 p95≤10ms,每行一 pread 计数器断言)+ D3 批量实测 + D4 隔离(IDX.CREATE 不 thrash 热层)
+- [ ] **T7 TABLE.* 声明层**:TABLE.DECLARE(prefix/typed columns/PK/INDEX…/ORDERPATH 复合排序自动化 = cookbook §8 机械化派生 score 索引)编译到既有 IDX/VIEW;TABLE.VERIFY = 组件 fsck + 列类型抽查;TABLE.LIST/DROP;sidecar catalog;server+embedded 同步 + dispatch oracle 扩展;出口 = tablegate C1(R1-R12 一致性套件)/C2(往返+fsck+oracle)/C3(拒绝面具名)全绿 + C4/C5/C7 perf 线 + C6 index-only 行读=0 计数器
+- [ ] **T8 kevy-sql 编译器**:独立 crate + `kevy-cli sql` 子命令;SQL 子集 v1(CREATE TABLE / CREATE [UNIQUE] INDEX / 单表 CREATE VIEW AS SELECT:索引列 WHERE + 声明列残余 FILTER + ORDER BY + LIMIT/OFFSET),其余具名报错;`docs/cookbook.md` 新章"porting a PG/MySQL schema"(真 schema 端到端);出口 = 编译器单测 + cookbook 章可执行 smoke
+- [ ] **T9 容量终账**:D1(50M 行 on 2GB,索引热行冷,C4/C5 保持)/ D2(全冷表 index-only 冷读=0)/ D4(混合负载隔离)于 lx64;B6 容量 10× gate(100× stretch 视盘容记录);B2 冷读 p99 线;memgate/diskgate 公式(B7/C8)定稿;docs 三语(tiering.md + tables.md + UPGRADING 注记);CHANGELOG 4.0.0 capacity 段;五轴收口 → merge
+
 ### t5 — 总线收尾(渠道除外)
 - [ ] lx64 post-fix arena 复测(悬案)→ README 基准表解冻
-- [ ] CHANGELOG 4.0.0 补总线各 train;五轴终审(ship 挪到 t6 渠道后)
+- [ ] CHANGELOG 4.0.0 补总线各 train(**含 t5.8 capacity arc 头条**);五轴终审(ship 挪到 t6 渠道后,t6 在 t5.8 完成之后)
 
 ### t6 — 渠道真发行 + ship(用户拍板 2026-07-14 放最后;名字勘定同日:brew formula `kevy` 404 可用、npm 裸名 `kevy` 与 `expo-kevy` 可用、nuget `Kevy` 0 hits 可用、apt 自建仓库包名 `kevy`;npm scope 统一 **@goliapkg**(两 scope 均未发布过,零迁移),包机制文件已全部切换)
 - [ ] 拍板后:brew tap 建 repo + formula 发布;apt 仓库上线 t01;npm 平台分包发布(kevy-bin + kevy-node + expo-kevy);NuGet push;kevy-go repo 剥离 + tag
 - [ ] 发行后三渠道真装 smoke 重跑(脚本已有)+ site 安装页六语言
 - [ ] README 六语言矩阵 + llms.txt 同步
 - [ ] 五轴终审 → ship **v4.0.0**(tag 前 CI 真绿 + 用户验收)
-
----
-
-# v5 — capacity arc(容量时代:透明分层 × 虚拟 RDS 视图,融合;**设计已批准 2026-07-24**)
-
-主设计 = `.claude/rfcs/2026-07-24-v5-capacity-arc.md`(融合 RFC:验收标准 A-D 四组全 gate 映射 / 核心设计 D0-D4 / 16 项交互矩阵对抗审查 + top-5 风险条款 / 设计翻盘史 §7)。两份同日独立 RFC(tiered-storage / virtual-rds-views)已标 SUPERSEDED。用户 mandate:验收标准先行、两目标融合、主干(尤其 perf)零损、不计工期/ROI、最高 ceiling-first perf/disk/mem。
-
-要点速记:冷表示 = 主表内 `Value::Cold(ColdRef)` stub(侧表被对抗审查驳倒——SCAN 保证/reaper/影子复活三类缺陷);两段式 funnel(存在性+类型零 IO,下游 196 match 点构造上不见 Cold);vlog 可弃(AOF 唯一 durability,持久化生产者从 pinned vlog 流式读不 promote;**boot>RAM = replay 内联下沉,launch-blocking**);demote/promote_in_place 专用原语(零事件/保 hfttl/保 lru);统一预算水位 = budget·19/20 − index_bytes − stub_bytes;G1(VALUES→Range/Unique)为融合基石;TABLE.* 声明期编译;kevy-sql 引擎外;Law 3 零修改。
-
-### 线性 checklist(每 train 五轴收口;开工第一动 = feature 分支)
-- [ ] **T0 门先行**:RFC §2 逐条映射 gate 断言;tiergate/tablegate 骨架;透明套件 harness(先红)
-- [ ] **T1 kevy-vlog 石头**:append/read_at/rotate/compact + CRC + pin/epoch + hash 记录格式(write_hash_payload 复用 + field-TTL 共序列化);unit+fuzz+bench
-- [ ] **T2 G1 引擎泛化**:VALUES/FILTER/SORT/DISTINCT/FACET/OFFSET → Range/Unique;A5 关断证明
-- [ ] **T3 store 核心**:Value::Cold stub + 两段式 funnel + demote/promote_in_place + evict_one 分叉 + 采样跳冷 + spill 预算化 + promotion 策略门;B9 透明套件转绿;A1/A2
-- [ ] **T4 持久化流式集成**(launch-blocking):snapshot/rewrite/full-sync/reshard 从 vlog 流式不 promote + replay 内联下沉;B10/B11
-- [ ] **T5 统一预算 + auto 探测 + INFO**:cgroup/meminfo/sysctl(kevy-sys 手绑);B7/B8/B12
-- [ ] **T6 hydration 冷批量 + no-promote peek 推广**:每行一次 pread、按 offset 合并、uring 新 tag 类;backfill/digest/scope-move 接 peek;D1/D3/D4
-- [ ] **T7 TABLE.* 声明层**:编译到 IDX/VIEW + ORDERPATH + VERIFY;dispatch oracle 扩展;tablegate C1-C3
-- [ ] **T8 kevy-sql 编译器**(引擎外)+ PG/MySQL schema 迁移 cookbook 章
-- [ ] **T9 容量终账**:D1/D2/D4 独占盒 envelope(10× gate / 100× stretch)+ memgate/diskgate 公式 + docs 三语 + 五轴终审
-- (v2 具名不进本 arc:embedded 放锁-pread-重锁 / 冷读全异步 / 集合 spill / kvrocks 竞对 / G4 视图 FILTER 宪法轮)
