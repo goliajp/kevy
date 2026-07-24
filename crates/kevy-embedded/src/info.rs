@@ -58,6 +58,11 @@ pub struct KevyTierInfo {
     pub demotions_total: u64,
     /// Keys promoted back since boot.
     pub promotions_total: u64,
+    /// No-promote peek record reads (T6) — one per cold row swept by
+    /// hydration / backfill / digest / export.
+    pub peek_preads_total: u64,
+    /// Batched cold-read submissions (T6) — one per peeked page.
+    pub batch_submissions_total: u64,
 }
 
 impl Store {
@@ -101,6 +106,8 @@ impl Store {
             t.vlog_epoch += s.vlog_epoch;
             t.demotions_total += s.demotions_total;
             t.promotions_total += s.promotions_total;
+            t.peek_preads_total += s.peek_preads_total;
+            t.batch_submissions_total += s.batch_submissions_total;
         }
         Some(t)
     }

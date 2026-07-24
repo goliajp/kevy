@@ -54,6 +54,12 @@ kevy-scope = { path = "../kevy-scope", version = "4.0.0" }
 kevy-lua = { path = "../kevy-lua", version = "=4.0.0" }
 kevy-lua-host = { path = "../kevy-lua-host", version = "4.0.0" }
 
+# T6 hydration cold-batching: the per-shard-thread SECONDARY ring that
+# submits a cold page's vlog reads as one io_uring batch (Linux only;
+# other platforms use the ordered read_at loop from kevy-store).
+[target.'cfg(target_os = "linux")'.dependencies]
+kevy-uring = { path = "../kevy-uring", version = "4.0.0" }
+
 [dev-dependencies]
 kevy-tmpdir = { path = "../kevy-tmpdir", version = "4.0.0" }
 kevy-embedded = { path = "../kevy-embedded", version = "4.0.0" }

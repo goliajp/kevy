@@ -35,7 +35,7 @@ mod enabled {
     use kevy_vlog::{Vlog, VlogRef};
 
     use crate::value::{ColdRef, Value};
-    use crate::{Entry, EvictionPolicy, SmallBytes, Store, StoreError};
+    use crate::{EvictionPolicy, SmallBytes, Store};
 
     /// Per-shard tiering state — present only when tiering is enabled
     /// (`tier: Option<TierState>`; `None` = today's paths, the A1 gate's
@@ -50,6 +50,15 @@ mod enabled {
         /// Every vlog record read (serve, promote, peek) — the
         /// WRONGTYPE-without-read proof counter.
         pub(crate) preads_total: u64,
+        /// Record reads made by NO-PROMOTE peeks only (T6): hydration,
+        /// backfill, digest, scope-move. One per cold ROW — the
+        /// preads==rows (not rows×fields) proof counter (D1).
+        pub(crate) peek_preads_total: u64,
+        /// Batched cold-read submissions (T6): one per
+        /// [`Store::peek_hash_rows`] page with ≥1 cold row, weighted by
+        /// the reader's kernel submission count — the one-batch-per-page
+        /// proof counter (D3).
+        pub(crate) batch_submissions_total: u64,
         pub(crate) cold_keys: u64,
         pub(crate) cold_bytes: u64,
         /// Index/view memory floor (Σ segment `approx_bytes` on this
@@ -90,6 +99,11 @@ mod enabled {
         pub promotions_total: u64,
         /// Vlog record reads (serve + promote + peek).
         pub preads_total: u64,
+        /// No-promote peek record reads only (T6) — one per cold row.
+        pub peek_preads_total: u64,
+        /// Batched cold-read submissions (T6) — one per page batch on
+        /// the sync reader; kernel submit count on the uring reader.
+        pub batch_submissions_total: u64,
         /// Currently-cold keys.
         pub cold_keys: u64,
         /// Σ original weights of currently-cold values.
@@ -125,6 +139,8 @@ mod enabled {
                 demotions_total: 0,
                 promotions_total: 0,
                 preads_total: 0,
+                peek_preads_total: 0,
+                batch_submissions_total: 0,
                 cold_keys: 0,
                 cold_bytes: 0,
                 reserved_bytes: 0,
@@ -190,6 +206,8 @@ mod enabled {
                         demotions_total: t.demotions_total,
                         promotions_total: t.promotions_total,
                         preads_total: t.preads_total,
+                        peek_preads_total: t.peek_preads_total,
+                        batch_submissions_total: t.batch_submissions_total,
                         cold_keys: t.cold_keys,
                         cold_bytes: t.cold_bytes,
                         vlog_files: v.files as u64,
@@ -220,103 +238,6 @@ mod enabled {
                 Some(t) => t.policy,
                 None => self.eviction_policy,
             }
-        }
-
-        /// Stage-2 funnel for WRITE paths: a live Cold entry whose tag
-        /// matches `want` is promoted in place; a mismatch is WRONGTYPE
-        /// with zero preads. Hot values / absent keys pass through.
-        pub(crate) fn tier_resolve(&mut self, key: &[u8], want: u8) -> Result<(), StoreError> {
-            if self.tier.is_none() {
-                return Ok(());
-            }
-            let tag = match self.live_entry(key) {
-                Some(Entry { value: Value::Cold(c), .. }) => c.type_tag,
-                _ => return Ok(()),
-            };
-            if tag != want {
-                return Err(StoreError::WrongType);
-            }
-            self.promote_in_place(key);
-            Ok(())
-        }
-
-        /// Stage-2 funnel for READ paths — `live_entry` plus the
-        /// promotion gate. On a live Cold entry with a matching tag:
-        /// first materializing access decodes into the serve scratch
-        /// (no install, probation mark set); the second promotes. A tag
-        /// mismatch is WRONGTYPE with zero preads. Hot/absent =
-        /// `live_entry` verbatim.
-        pub(crate) fn tier_serve(&mut self, key: &[u8], want: u8) -> Result<Option<&Entry>, StoreError> {
-            if self.tier.is_none() {
-                return Ok(self.live_entry(key));
-            }
-            let cold = match self.live_entry(key) {
-                None => return Ok(None),
-                Some(e) => match &e.value {
-                    Value::Cold(c) => Some((c.type_tag, c.touched != 0)),
-                    _ => None,
-                },
-            };
-            match cold {
-                None => Ok(self.live_entry(key)),
-                Some((tag, _)) if tag != want => Err(StoreError::WrongType),
-                Some((_, true)) => {
-                    self.promote_in_place(key);
-                    Ok(self.live_entry(key))
-                }
-                Some((_, false)) => self.tier_serve_cold(key),
-            }
-        }
-
-        /// First-touch cold serve: decode the record into the scratch
-        /// entry (probation mark set, nothing installed) and hand a
-        /// reference to it. The scratch mirrors the live entry's TTL so
-        /// callers that read `expire_at_ns` behave identically.
-        fn tier_serve_cold(&mut self, key: &[u8]) -> Result<Option<&Entry>, StoreError> {
-            let (cref, expire) = {
-                let e = self.map.get_mut(key).expect("probed live above");
-                let Value::Cold(c) = &mut e.value else { unreachable!("cold checked above") };
-                c.touched = 1;
-                (*c, e.expire_at_ns)
-            };
-            let value = self.tier_read_record(cref);
-            let mut entry = Entry::new(value, None);
-            entry.expire_at_ns = expire;
-            entry.set_weight(u64::from(cref.weight));
-            self.tier_scratch = Some(entry);
-            Ok(self.tier_scratch.as_ref())
-        }
-
-        /// Read + decode one cold record (bumps the pread counter). A
-        /// vlog read/decode failure is a process bug by the vlog's
-        /// per-boot doctrine — surfaced loudly, never healed silently.
-        pub(crate) fn tier_read_record(&mut self, cref: ColdRef) -> Value {
-            let t = self.tier.as_mut().expect("tier enabled");
-            t.preads_total += 1;
-            let (_key, payload) = t
-                .vlog
-                .read(cref.vref())
-                .expect("tier: vlog read failed — per-boot spill file, this is a process bug");
-            crate::tier_codec::decode(cref.type_tag, payload)
-                .expect("tier: cold record decode failed — process bug")
-        }
-
-        /// `&self` peek for the zero-copy shared lane and COPY: decode
-        /// a fresh owned value from the record WITHOUT installing,
-        /// promoting, or setting the probation mark (documented: the
-        /// shared lane pays a pread until a `&mut`-path access
-        /// promotes). `None` when the value is not Cold.
-        pub(crate) fn tier_peek_value(&self, v: &Value) -> Option<Value> {
-            let Value::Cold(c) = v else { return None };
-            let t = self.tier.as_ref().expect("cold value ⇒ tiering on");
-            let (_key, payload) = t
-                .vlog
-                .read(c.vref())
-                .expect("tier: vlog read failed — per-boot spill file, this is a process bug");
-            Some(
-                crate::tier_codec::decode(c.type_tag, payload)
-                    .expect("tier: cold record decode failed — process bug"),
-            )
         }
 
         /// Pin every current vlog file (T4 view pinning, RFC §1 D1): a
@@ -401,7 +322,7 @@ pub(crate) use enabled::TierState;
 #[cfg(not(all(feature = "std", not(target_arch = "wasm32"))))]
 mod disabled {
     use crate::value::Value;
-    use crate::{Entry, EvictionPolicy, Store, StoreError};
+    use crate::{EvictionPolicy, Store};
 
     impl Store {
         #[inline]
@@ -412,21 +333,6 @@ mod disabled {
         #[inline]
         pub(crate) fn touch_policy(&self) -> EvictionPolicy {
             self.eviction_policy
-        }
-
-        #[inline]
-        pub(crate) fn tier_resolve(&mut self, _key: &[u8], _want: u8) -> Result<(), StoreError> {
-            Ok(())
-        }
-
-        #[inline]
-        pub(crate) fn tier_serve(&mut self, key: &[u8], _want: u8) -> Result<Option<&Entry>, StoreError> {
-            Ok(self.live_entry(key))
-        }
-
-        #[inline]
-        pub(crate) fn tier_peek_value(&self, _v: &Value) -> Option<Value> {
-            None
         }
 
         /// No tier backend on this target — `Value::Cold` cannot exist.

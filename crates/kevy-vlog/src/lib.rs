@@ -60,6 +60,41 @@ pub struct VlogRef {
     pub len: u32,
 }
 
+impl VlogRef {
+    /// Total on-disk record length: header + body. The image size a
+    /// batched reader must fetch at `offset` (see [`verify_image`]).
+    #[inline]
+    pub fn disk_len(self) -> usize {
+        HEADER as usize + self.len as usize
+    }
+}
+
+/// Verify a raw record image (the `disk_len()` bytes at `r.offset`) and
+/// split it into `(key, payload)`. This is the completion half of a
+/// batched read: the io_uring path fetches images concurrently and runs
+/// each through here; [`VlogFile::read`] is exactly one fetch + this.
+/// A length or CRC mismatch is `InvalidData` — this process wrote the
+/// record this boot, so a bad image is a bug, never corruption to heal.
+pub fn verify_image(r: VlogRef, mut image: Vec<u8>) -> io::Result<(Vec<u8>, Vec<u8>)> {
+    if image.len() != r.disk_len() {
+        return Err(bad(format!(
+            "vlog: image length mismatch (want {}, got {})",
+            r.disk_len(),
+            image.len()
+        )));
+    }
+    let body_len = u32::from_le_bytes(image[..4].try_into().unwrap());
+    let crc = u32::from_le_bytes(image[4..8].try_into().unwrap());
+    if body_len != r.len || body_len > MAX_BODY {
+        return Err(bad(format!("vlog: length mismatch (ref {}, disk {body_len})", r.len)));
+    }
+    if crc32c(&image[HEADER as usize..]) != crc {
+        return Err(bad(format!("vlog: crc mismatch at {}:{}", r.file_id, r.offset)));
+    }
+    image.drain(..HEADER as usize);
+    split_body(image)
+}
+
 /// One log file. Shared via `Arc`: the `Vlog` holds one, and pinned
 /// readers hold more. When compaction retires the file it sets
 /// `delete_on_drop`; the underlying file is unlinked by whichever holder
@@ -76,23 +111,30 @@ impl VlogFile {
         self.id
     }
 
-    /// Read one record back: `(key, payload)`. Verifies the stored length
-    /// and CRC — a mismatch is `InvalidData` (this process wrote the
-    /// record this boot; a bad read is a bug, never "corruption to heal").
+    /// Read one record back: `(key, payload)`. ONE positional pread of
+    /// the whole record image (the body length is already in the ref),
+    /// then [`verify_image`] — a length/CRC mismatch is `InvalidData`
+    /// (this process wrote the record this boot; a bad read is a bug,
+    /// never "corruption to heal").
     pub fn read(&self, r: VlogRef) -> io::Result<(Vec<u8>, Vec<u8>)> {
-        let mut header = [0u8; HEADER as usize];
-        self.file.read_exact_at(&mut header, r.offset)?;
-        let body_len = u32::from_le_bytes(header[..4].try_into().unwrap());
-        let crc = u32::from_le_bytes(header[4..].try_into().unwrap());
-        if body_len != r.len || body_len > MAX_BODY {
-            return Err(bad(format!("vlog: length mismatch (ref {}, disk {body_len})", r.len)));
-        }
-        let mut body = vec![0u8; body_len as usize];
-        self.file.read_exact_at(&mut body, r.offset + HEADER)?;
-        if crc32c(&body) != crc {
-            return Err(bad(format!("vlog: crc mismatch at {}:{}", self.id, r.offset)));
-        }
-        split_body(body)
+        verify_image(r, self.read_image(r)?)
+    }
+
+    /// Fetch the raw record image (`r.disk_len()` bytes at `r.offset`)
+    /// in one pread, UNverified — the batched-read issuance half; pair
+    /// with [`verify_image`] on completion.
+    pub fn read_image(&self, r: VlogRef) -> io::Result<Vec<u8>> {
+        let mut image = vec![0u8; r.disk_len()];
+        self.file.read_exact_at(&mut image, r.offset)?;
+        Ok(image)
+    }
+
+    /// The underlying file descriptor — what an io_uring batch reader
+    /// preps its READ SQEs against. The fd stays valid for the life of
+    /// this pin (the whole point of holding the `Arc<VlogFile>`).
+    pub fn raw_fd(&self) -> i32 {
+        use std::os::fd::AsRawFd;
+        self.file.as_raw_fd()
     }
 }
 

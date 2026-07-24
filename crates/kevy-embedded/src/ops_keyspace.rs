@@ -120,59 +120,71 @@ impl crate::Store {
         (keys.len() as u64, xor)
     }
 
+    /// One row's digest under a SINGLE shard write-lock acquisition,
+    /// with the row reads inside the store's bulk-read peek scope
+    /// (T6): a cold row hashes from ONE record read, never promotes
+    /// and never advances the 2nd-touch gate — a full-prefix digest
+    /// must not thrash the hot tier (server twin: `cmd_digest`).
     fn row_digest_embedded(&self, key: &[u8]) -> u64 {
-        let mut h = FNV_OFFSET;
-        fnv(&mut h, key);
-        let ty = self.type_of(key);
-        fnv(&mut h, ty.as_bytes());
-        self.digest_row_body(key, ty, &mut h);
-        h
+        let mut g = self.wshard(key);
+        g.store.peek_scope(|s| {
+            let mut h = FNV_OFFSET;
+            fnv(&mut h, key);
+            let ty = s.type_of(key);
+            fnv(&mut h, ty.as_bytes());
+            digest_row_body(s, key, ty, &mut h);
+            h
+        })
     }
+}
 
-    /// Fold one row's canonicalized value into the FNV state, per type
-    /// (hash fields and set members sort first; zset folds score bits
-    /// then member, rank order).
-    fn digest_row_body(&self, key: &[u8], ty: &str, h: &mut u64) {
-        match ty {
-            "string" => {
-                if let Ok(Some(v)) = self.get(key) {
-                    fnv(h, &v);
-                }
+/// Fold one row's canonicalized value into the FNV state, per type
+/// (hash fields and set members sort first; zset folds score bits
+/// then member, rank order). Reads the store directly — the caller
+/// already holds the shard lock and the peek scope.
+fn digest_row_body(s: &mut kevy_store::Store, key: &[u8], ty: &str, h: &mut u64) {
+    match ty {
+        "string" => {
+            if let Ok(Some(v)) = s.get(key) {
+                let v = v.to_vec();
+                fnv(h, &v);
             }
-            "hash" => {
-                if let Ok(mut pairs) = self.hgetall(key) {
-                    pairs.sort();
-                    for (f, v) in pairs {
-                        fnv(h, &f);
-                        fnv(h, &v);
-                    }
-                }
-            }
-            "list" => {
-                if let Ok(items) = self.lrange(key, 0, -1) {
-                    for i in items {
-                        fnv(h, &i);
-                    }
-                }
-            }
-            "set" => {
-                if let Ok(mut ms) = self.smembers(key) {
-                    ms.sort();
-                    for m in ms {
-                        fnv(h, &m);
-                    }
-                }
-            }
-            "zset" => {
-                if let Ok(items) = self.zrange(key, 0, -1) {
-                    for (member, score) in items {
-                        fnv(h, &score.to_bits().to_le_bytes());
-                        fnv(h, &member);
-                    }
-                }
-            }
-            _ => {}
         }
+        "hash" => {
+            if let Ok(flat) = s.hgetall(key) {
+                let mut pairs: Vec<(&[u8], &[u8])> =
+                    flat.chunks(2).map(|c| (c[0].as_slice(), c[1].as_slice())).collect();
+                pairs.sort();
+                for (f, v) in pairs {
+                    fnv(h, f);
+                    fnv(h, v);
+                }
+            }
+        }
+        "list" => {
+            if let Ok(items) = s.lrange(key, 0, -1) {
+                for i in items {
+                    fnv(h, &i);
+                }
+            }
+        }
+        "set" => {
+            if let Ok(mut ms) = s.smembers(key) {
+                ms.sort();
+                for m in ms {
+                    fnv(h, &m);
+                }
+            }
+        }
+        "zset" => {
+            if let Ok(items) = s.zrange(key, 0, -1) {
+                for (member, score) in items {
+                    fnv(h, &score.to_bits().to_le_bytes());
+                    fnv(h, &member);
+                }
+            }
+        }
+        _ => {}
     }
 }
 

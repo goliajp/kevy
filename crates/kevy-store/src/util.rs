@@ -239,3 +239,22 @@ pub(crate) fn fmt_num(v: f64) -> Vec<u8> {
         format!("{v}").into_bytes()
     }
 }
+
+/// Apply a signed delta to a `u64` (saturating both directions). Used by
+/// `Store::account_delta` / `reweigh_entry` so the in-place mutators don't
+/// have to repeat the same overflow-guarded match.
+#[inline]
+pub(crate) fn apply_delta(v: &mut u64, delta: i64) {
+    if delta >= 0 {
+        *v = v.saturating_add(delta as u64);
+    } else {
+        *v = v.saturating_sub((-delta) as u64);
+    }
+}
+
+/// Heap bytes a `SmallBytes`-encoded key would own (`&[u8]` mirror of
+/// `SmallBytes::heap_bytes`; 22-byte inline boundary per `kevy-bytes`).
+#[inline]
+pub(crate) fn key_heap_bytes_for(key: &[u8]) -> u64 {
+    if key.len() <= 22 { 0 } else { key.len() as u64 }
+}

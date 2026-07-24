@@ -75,6 +75,7 @@ mod ops;
 mod replica_runner;
 mod replica_runner_routed;
 mod state;
+mod tier_read;
 pub mod verb_meta;
 mod cmd_command;
 mod cmd_failover;

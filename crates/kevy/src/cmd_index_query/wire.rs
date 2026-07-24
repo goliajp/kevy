@@ -90,18 +90,49 @@ pub(crate) fn hex(b: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Append `[fcount u8][(flen u32|MAX=nil, bytes)*]` for the FIELDS
-/// hydration list (owning-shard hash reads).
-pub(super) fn encode_hydration(store: &mut Store, chunk: &mut Vec<u8>, key: &[u8], fields: &[Vec<u8>]) {
-    chunk.push(fields.len() as u8);
-    for f in fields {
-        match store.hget(key, f) {
-            Ok(Some(v)) => {
-                let v = v.to_vec();
+/// One prefetched hydration row: per-field values (`Ok(Some)`), a
+/// missing target (`Ok(None)`) or a non-hash target (`Err`) — the
+/// latter two both encode as all-nil, exactly what the per-field
+/// `hget` loop used to produce.
+pub(crate) type HydrationRow = kevy_store::PeekRow;
+
+/// Batched FIELDS hydration prefetch (T6): ONE [`Store::peek_hash_rows`]
+/// page over the hits' keys — cold rows coalesce, sorted by
+/// `(file_id, offset)`, into one batched read (io_uring secondary ring
+/// on Linux, ordered preads elsewhere); one decode per cold ROW covers
+/// every requested field; nothing promotes and the 2nd-touch gate
+/// never advances (a hydrated page is not an access signal). Returns
+/// one row per key, in hit order — encode with
+/// [`encode_hydration_row`]. Empty `fields` = no store reads at all.
+pub(crate) fn peek_hydration(
+    store: &mut Store,
+    keys: &[&[u8]],
+    fields: &[Vec<u8>],
+) -> Vec<HydrationRow> {
+    if fields.is_empty() {
+        return keys.iter().map(|_| Ok(None)).collect();
+    }
+    let frefs: Vec<&[u8]> = fields.iter().map(Vec::as_slice).collect();
+    crate::tier_read::with_cold_reader(|r| store.peek_hash_rows(keys, &frefs, r))
+}
+
+/// Append `[fcount u8][(flen u32|MAX=nil, bytes)*]` for one hit from
+/// its prefetched [`HydrationRow`] — byte-identical to the retired
+/// per-field `hget` loop (missing key / wrong type / missing field all
+/// encode nil).
+pub(crate) fn encode_hydration_row(chunk: &mut Vec<u8>, nfields: usize, row: &HydrationRow) {
+    chunk.push(nfields as u8);
+    let vals = match row {
+        Ok(Some(vals)) => vals.as_slice(),
+        _ => &[],
+    };
+    for i in 0..nfields {
+        match vals.get(i).and_then(Option::as_deref) {
+            Some(v) => {
                 chunk.extend_from_slice(&(v.len() as u32).to_le_bytes());
-                chunk.extend_from_slice(&v);
+                chunk.extend_from_slice(v);
             }
-            _ => chunk.extend_from_slice(&u32::MAX.to_le_bytes()),
+            None => chunk.extend_from_slice(&u32::MAX.to_le_bytes()),
         }
     }
 }

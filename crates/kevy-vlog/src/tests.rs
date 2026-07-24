@@ -265,3 +265,36 @@ fn randomized_churn_survives_rotations_and_compactions() {
     assert!(s.live_bytes <= s.bytes);
     assert!(s.epoch > 0, "churn at 10% compact rate must have retired files");
 }
+
+#[test]
+fn image_fetch_and_verify_round_trip() {
+    // The batched-read split: `read_image` (issuance) + `verify_image`
+    // (completion) must equal the one-call `read`.
+    let d = dir("vlog-image");
+    let mut v = Vlog::open(d.path(), DEFAULT_ROTATE_BYTES).unwrap();
+    let r = v.append(b"row:1", b"payload-bytes").unwrap();
+    let pin = v.pin(r.file_id).unwrap();
+    assert_eq!(r.disk_len(), 8 + r.len as usize);
+    let image = pin.read_image(r).unwrap();
+    assert_eq!(image.len(), r.disk_len());
+    let (k, p) = verify_image(r, image).unwrap();
+    assert_eq!((k.as_slice(), p.as_slice()), (&b"row:1"[..], &b"payload-bytes"[..]));
+    assert_eq!(pin.read(r).unwrap(), (b"row:1".to_vec(), b"payload-bytes".to_vec()));
+}
+
+#[test]
+fn verify_image_refuses_wrong_length_and_flipped_bytes() {
+    let d = dir("vlog-image-bad");
+    let mut v = Vlog::open(d.path(), DEFAULT_ROTATE_BYTES).unwrap();
+    let r = v.append(b"key", b"payload").unwrap();
+    let pin = v.pin(r.file_id).unwrap();
+    // Truncated image → length mismatch, refused.
+    let mut short = pin.read_image(r).unwrap();
+    short.pop();
+    assert!(verify_image(r, short).is_err());
+    // Flipped payload byte → CRC mismatch, refused (not healed).
+    let mut flipped = pin.read_image(r).unwrap();
+    let last = flipped.len() - 1;
+    flipped[last] ^= 0xFF;
+    assert!(verify_image(r, flipped).is_err());
+}
