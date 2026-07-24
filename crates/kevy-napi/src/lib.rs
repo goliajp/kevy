@@ -24,6 +24,7 @@ use std::ptr::null_mut;
 
 use kevy_ffi::{KevyBuf, KevyDb, KevyOpenOptions, KevyOpenReport, KevySub, unpack_argv};
 
+mod batch;
 mod napi;
 use napi::{
     NapiCallback, NapiCallbackInfo, NapiEnv, NapiValue, args, buffer_bytes, external_ptr,
@@ -432,7 +433,7 @@ unsafe extern "C" fn js_abi(env: NapiEnv, _info: NapiCallbackInfo) -> NapiValue 
 /// Called by Node only; `env` / `exports` are live for this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn napi_register_module_v1(env: NapiEnv, exports: NapiValue) -> NapiValue {
-    const FNS: [(&str, NapiCallback); 16] = [
+    const FNS: [(&str, NapiCallback); 17] = [
         ("open\0", js_open),
         ("openMem\0", js_open_mem),
         ("openWith\0", js_open_with),
@@ -441,6 +442,7 @@ pub unsafe extern "C" fn napi_register_module_v1(env: NapiEnv, exports: NapiValu
         ("cmd\0", js_cmd),
         ("get\0", js_get),
         ("set\0", js_set),
+        ("setMany\0", batch::js_set_many),
         ("openReport\0", js_open_report),
         ("subscribe\0", js_subscribe),
         ("psubscribe\0", js_psubscribe),

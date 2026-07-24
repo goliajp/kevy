@@ -21,7 +21,7 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { ClassicLevel } from "classic-level";
 
-import { open as openKevy } from "../../../bindings/node/index.js";
+import { open as openKevy, text } from "../../../bindings/node/index.js";
 
 const SIZES = [16, 256, 4096, 65536];
 const N = 100_000; // ops per measurement
@@ -55,17 +55,20 @@ async function timeAsync(fn) {
   return samples[1];
 }
 
-// ---- kevy: bare synchronous scalar, no txn (cold == amortized) -------------
+// ---- kevy: bare synchronous scalar; setCold = per-op, setAmort = setMany ----
 function benchKevy(db, v) {
   // seed
   for (const k of keyset) db.set(k, v);
   const get = timeSync(() => {
     for (let i = 0; i < N; i++) db.get(keyset[i % KEYS]);
   });
-  const set = timeSync(() => {
+  const setCold = timeSync(() => {
     for (let i = 0; i < N; i++) db.set(keyset[i % KEYS], v);
   });
-  return { get, setCold: set, setAmort: set }; // kevy has no txn to amortize
+  // amortized: setMany — one addon crossing per ~1 MiB chunk (the batch path)
+  const pairs = Array.from({ length: N }, (_, i) => [keyset[i % KEYS], v]);
+  const setAmort = timeSync(() => db.setMany(pairs));
+  return { get, setCold, setAmort };
 }
 
 // ---- better-sqlite3: sync; SET cold = autocommit/op, amortized = one txn ---
@@ -177,7 +180,23 @@ async function refAsyncLevel() {
 console.log("# embeddedgate — Node — kevy-node scalar vs better-sqlite3 / classic-level");
 console.log(`N=${N} ops/measurement, ${KEYS} warm keys, median-of-${RUNS}, sizes ${SIZES.join("/")} B`);
 console.log(`node ${process.version}, better-sqlite3 ${Database.prototype.constructor.name ? "13.0.1" : "?"}`);
-console.log("kevy: cold==amortized (no per-op txn); sqlite setCold=autocommit/op, setAmort=one txn/N");
+console.log("kevy: setCold=per-op, setAmort=setMany (batch); sqlite setCold=autocommit/op, setAmort=one txn/N");
+
+// setMany correctness gate: batch a mix incl. a 2 MiB value (exceeds the ~1 MiB
+// pack chunk), read each back.
+{
+  const vdb = await openKevy();
+  const big = Buffer.alloc(2 << 20, 0x62);
+  vdb.setMany([
+    ["a", Buffer.from("1")],
+    ["bb", Buffer.alloc(4096, 0x61)],
+    ["big", big],
+  ]);
+  const got = vdb.get("big");
+  if (!got || got.length !== big.length) throw new Error(`setMany: big len ${got?.length}`);
+  if (text(vdb.get("a")) !== "1") throw new Error("setMany: key a");
+  console.log("setmany-verify: OK");
+}
 
 await tierMem();
 await tierAsync();

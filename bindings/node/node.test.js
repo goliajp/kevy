@@ -115,3 +115,17 @@ test("typed surface", async () => {
 
   db.close();
 });
+
+test("setMany batches writes, incl. a value past the pack chunk", async () => {
+  const db = await open(); // in-memory
+  const big = Buffer.alloc(2 << 20, 0x62); // > the ~1 MiB pack chunk
+  db.setMany([
+    ["a", "1"],
+    ["bb", Buffer.alloc(4096, 0x61)],
+    ["big", big],
+  ]);
+  assert.equal(text(db.get("a")), "1");
+  assert.equal(db.get("bb").length, 4096);
+  assert.equal(db.get("big").length, big.length);
+  db.close();
+});
