@@ -56,5 +56,7 @@ bench/iot-consumer/riscv-out
 
 # perfgate builds the reference binary from the baseline commit and caches it here.
 bench/.perfgate-ref/
+# capacity-envelope.sh writes its per-run verdicts here (tiergate consumes them).
+bench/.capacity-envelope-results
 aof-*.aof.premigration.*
 dump-*.rdb.premigration.*

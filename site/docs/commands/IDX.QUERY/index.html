@@ -52,7 +52,7 @@
     <h1 class="cmd">IDX.QUERY</h1>
     <p class="lede">Query an index: range/equality, text MATCH, vector KNN, aggregation groups, or a two-index COMPOSE.</p>
 
-    <pre class="syntax"><code>IDX.QUERY name RANGE min max [LIMIT n] [CURSOR c] [FIELDS field ...] | name EQ value [LIMIT n] [CURSOR c] [FIELDS field ...] | name MATCH text [LIMIT n] [FIELDS field ...] | name KNN vector [LIMIT k] [EF ef] [FIELDS field ...] | name GROUP group | name GROUPS [BY count|sum|min|max] [LIMIT n] | HYBRID text_idx MATCH text ann_idx KNN vector [LIMIT n] [RRFK k] [EF ef] [FIELDS field ...] | COMPOSE AND|OR nameA RANGE min max|EQ value nameB RANGE min max|EQ value [LIMIT n] [CURSOR c] [FIELDS field ...]</code></pre>
+    <pre class="syntax"><code>IDX.QUERY name RANGE min max|EQ value [LIMIT n] [CURSOR c] [FILTER field RANGE min max|EQ value ...] [SORT field ASC|DESC] [DISTINCT field] [FACET field ...] [OFFSET n] [FIELDS field ...] | name MATCH text [LIMIT n] [FIELDS field ...] | name KNN vector [LIMIT k] [EF ef] [FIELDS field ...] | name GROUP group | name GROUPS [BY count|sum|min|max] [LIMIT n] | HYBRID text_idx MATCH text ann_idx KNN vector [LIMIT n] [RRFK k] [EF ef] [FIELDS field ...] | COMPOSE AND|OR nameA RANGE min max|EQ value nameB RANGE min max|EQ value [LIMIT n] [CURSOR c] [FIELDS field ...]</code></pre>
 
     <dl class="meta">
       <div><dt>Group</dt><dd>Indexes</dd></div>
