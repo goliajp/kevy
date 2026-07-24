@@ -404,3 +404,14 @@ D2 事务标记(全有全无,与事务大小无关)/ R2 事务内集合读。
 - [ ] 发行后三渠道真装 smoke 重跑(脚本已有)+ site 安装页六语言
 - [ ] README 六语言矩阵 + llms.txt 同步
 - [ ] 五轴终审 → ship **v4.0.0**(tag 前 CI 真绿 + 用户验收)
+
+---
+
+# v5 候选 arc(2026-07-24 用户愿景 → 设计轮已完成;**线性排序与开工待用户拍板,不在 v4 队列内**)
+
+两个愿景(用户 2026-07-24):① 透明冷热数据(内存预算上限,冷值下沉磁盘,Redis 语义透明,配置或自动探测) ② 索引能力充分设计 + 虚拟 RDS 视图兼容 PG/MySQL 业务。共同约束:附加能力,主干性能与逻辑零影响。设计轮产物(均 file:line 取证 + 分期 trains + 性能不回归策略 + 拍板面):
+
+- **冷热分层**:`.claude/rfcs/2026-07-24-tiered-storage-arc.md` —— keydir 常驻内存 + 值下沉一次性 vlog(**AOF 仍是唯一 durability 真相,vlog 每 boot 重建 = 零新崩溃恢复面,t5.5 不动**);热路径零新增指令(冷检查在 map-miss 路径);demote 分叉在 evict_one、rehydrate 在 live_entry 汇聚点(不加 Value 变体);预算 auto = cgroup/meminfo/sysctl(kevy-sys 手绑);v1 标量值 spill、集合留热;6 trains,tiergate 新门。
+- **虚拟 RDS 视图**:`.claude/rfcs/2026-07-24-virtual-rds-views-arc.md` —— **Law 3 零修改可达**:R1-R12 缺口分解表;三层设计 = 引擎层只做 doc-values 泛化(FILTER/SORT/DISTINCT/FACET/OFFSET 从 text-only 放开到 Range/Unique,G1/G2)+ 声明层 `TABLE.*`(声明期编译到既有 IDX/VIEW,含 ORDERPATH 复合排序自动化 = cookbook §8 机械化)+ 引擎外 `kevy-sql` 声明期编译器(SQL 子集一次编译,**每查询 ad-hoc SQL 与 PG wire 仿真仍拒**);6 trains;G4(视图 FILTER over 声明列)需单独宪法 review。
+
+拍板项:两 arc 先后顺序(建议分层先行——store 石头 blast 最大,宜在视图放大读路径前落)/ 各 RFC §5 的 open decisions。
