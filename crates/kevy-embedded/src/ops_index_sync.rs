@@ -7,6 +7,48 @@ use kevy_index::{IndexKind, IndexSpec, IndexValue, Segment};
 
 use crate::ops_index::{IndexReg, ShardSegs};
 
+impl ShardSegs {
+    /// Σ approximate heap bytes of this shard's index segments, every
+    /// kind — the tier's `reserved_bytes` floor feed (capacity arc T5).
+    pub(crate) fn reserved_bytes(&self) -> u64 {
+        let mut sum: u64 = self.segs.iter().map(|(_, s)| s.stats().approx_bytes).sum();
+        sum += self.agg.iter().map(|(_, a)| a.stats().approx_bytes).sum::<u64>();
+        #[cfg(feature = "text")]
+        {
+            sum += self.text.iter().map(|(_, t)| t.stats().approx_bytes).sum::<u64>();
+        }
+        #[cfg(feature = "vector")]
+        {
+            sum += self.ann.iter().map(|(_, g)| g.stats().approx_bytes).sum::<u64>();
+        }
+        sum
+    }
+}
+
+/// Tiering floor refusal (capacity arc T5, RFC §4 row 16 — mirrors the
+/// server's IDX.CREATE precheck, same wire message): indexes are the
+/// fixed layer demotion can never reclaim; when the existing floor
+/// already exhausts the tier's demotable headroom, a new index is
+/// refused by name. The floor is refreshed from the live segments
+/// first so the check never trails the reaper tick.
+#[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+pub(crate) fn tier_floor_check(shards: &crate::store::Shards) -> crate::KevyResult<()> {
+    for shard in shards.iter() {
+        let mut g = crate::store::lock_write(shard);
+        if !g.store.tier_enabled() {
+            break;
+        }
+        let reserved = g.idx_segs.reserved_bytes() + g.view_segs.reserved_bytes();
+        g.store.set_tier_reserved(reserved);
+        if g.store.tier_index_floor_blocked(0) {
+            return Err(crate::KevyError::InvalidInput(
+                "index memory floor exceeds the tiering budget".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// A fresh text segment shaped by the spec: as many separately scored
 /// fields as it declares (the breakdown `IN <field…>` scopes to), and a
 /// positional side-channel when it asked for `WITH POSITIONS`.

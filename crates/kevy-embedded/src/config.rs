@@ -10,6 +10,9 @@ use std::time::Duration;
 pub use kevy_persist::Fsync as AppendFsync;
 pub use kevy_store::EvictionPolicy;
 
+#[cfg(feature = "tier")]
+pub use crate::config_tier::TierBudgetSpec;
+
 /// How the active TTL reaper runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TtlReaperMode {
@@ -45,14 +48,15 @@ pub struct Config {
     /// AOF fsync policy. Default `EverySec` (matches Redis: ≤ 1 s loss).
     #[cfg(feature = "persist")]
     pub appendfsync: AppendFsync,
-    /// Transparent-tiering RAM budget in bytes (capacity arc). `None`
-    /// (default) = tiering off — today's paths byte-identical. `Some`
-    /// requires a disk `data_dir` (the cold value log lives at
-    /// `<data_dir>/tier/`); a mem-only store rejects the combo at open.
-    /// T3 ships this minimal knob; the full surface (auto/percent
-    /// budgets, INFO gauges) is T5.
+    /// Transparent-tiering RAM budget (capacity arc). `None` (default)
+    /// = tiering off — today's paths byte-identical. `Some` requires a
+    /// disk `data_dir` (the cold value log lives at `<data_dir>/tier/`);
+    /// a mem-only store rejects the combo at open. The budget is the
+    /// WHOLE store's (split evenly across shards); auto/percent forms
+    /// resolve against the detected memory bound at open and re-resolve
+    /// on every reaper tick.
     #[cfg(feature = "tier")]
-    pub tier_budget: Option<u64>,
+    pub tier_budget: Option<TierBudgetSpec>,
     /// TTL reaper mode. Default `Background`.
     pub ttl_reaper: TtlReaperMode,
     /// Reaper tick interval. Default 100 ms (10 Hz).
@@ -330,7 +334,28 @@ impl Config {
     #[cfg(feature = "tier")]
     #[must_use]
     pub fn with_tier_budget(mut self, bytes: u64) -> Self {
-        self.tier_budget = Some(bytes);
+        self.tier_budget = Some(TierBudgetSpec::Bytes(bytes));
+        self
+    }
+
+    /// Enable transparent tiering with the `auto` budget: 0.70 × the
+    /// detected memory bound (cgroup v2 limit / `MemAvailable` on
+    /// Linux, `hw.memsize` on macOS), re-probed on every reaper tick.
+    /// Open fails with a named error when no bound is detectable.
+    #[cfg(feature = "tier")]
+    #[must_use]
+    pub fn with_tier_budget_auto(mut self) -> Self {
+        self.tier_budget = Some(TierBudgetSpec::Auto);
+        self
+    }
+
+    /// Enable transparent tiering with a percent-of-detected-bound
+    /// budget (`p` in 1..=100 — validated at open with a named error,
+    /// like every other config refusal).
+    #[cfg(feature = "tier")]
+    #[must_use]
+    pub fn with_tier_budget_percent(mut self, p: u8) -> Self {
+        self.tier_budget = Some(TierBudgetSpec::Percent(p));
         self
     }
 

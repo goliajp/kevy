@@ -146,7 +146,7 @@ impl Store {
         // critical mutation + bookkeeping commit before any (sub-µs in
         // steady state) channel send. A cold stub's record dies here.
         if let Some(old) = old_value {
-            self.tier_note_dead(&old);
+            self.tier_note_dead(key_heap, &old);
             self.maybe_offload_drop(old);
         }
         true
@@ -177,7 +177,7 @@ impl Store {
                 if let Some(old) = drop_first {
                     // No insert; the expired `Value` still needs
                     // to drop. Ship via the bio path on its way out.
-                    self.tier_note_dead(&old);
+                    self.tier_note_dead(key_heap, &old);
                     self.maybe_offload_drop(old);
                 }
                 return false;
@@ -202,7 +202,7 @@ impl Store {
         // commit precedes any (sub-µs steady-state) channel send. A
         // displaced cold stub credits its vlog record dead first.
         if let Some(old) = old_value {
-            self.tier_note_dead(&old);
+            self.tier_note_dead(key_heap, &old);
             self.maybe_offload_drop(old);
         }
         true

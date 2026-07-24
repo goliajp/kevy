@@ -52,6 +52,16 @@ mod enabled {
         pub(crate) preads_total: u64,
         pub(crate) cold_keys: u64,
         pub(crate) cold_bytes: u64,
+        /// Index/view memory floor (Σ segment `approx_bytes` on this
+        /// shard), fed per shard tick by [`Store::set_tier_reserved`].
+        /// Subtracted from the demote watermark (T5, RFC §1 D3): the
+        /// premium fixed layer demotion can never reclaim.
+        pub(crate) reserved_bytes: u64,
+        /// RAM the cold stubs themselves cost (Σ per cold key of
+        /// `ENTRY_OVERHEAD + key heap bytes`) — the other unreclaimable
+        /// floor, maintained incrementally at demote / promote /
+        /// DEL-of-cold / RENAME / FLUSHALL.
+        pub(crate) stub_bytes: u64,
         /// Cold stubs RENAMEd away from their record's embedded key:
         /// `(file_id, offset) → current key`. Rename moves the stub
         /// without a pread, so the on-disk key goes stale; compaction's
@@ -60,9 +70,20 @@ mod enabled {
         pub(crate) renames: std::collections::HashMap<(u32, u64), SmallBytes>,
     }
 
-    /// Tiering gauges (`INFO` feeders land in T5; accessors now for B12).
+    /// Tiering gauges — the B12 `INFO # Tiering` feeders (T5).
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
     pub struct TierStats {
+        /// The RAM budget this shard demotes against (resolved bytes).
+        pub budget: u64,
+        /// The unified demote target: `budget·19/20 − reserved_bytes −
+        /// stub_bytes`, saturating. **0 = the floor alone exceeds the
+        /// budget** — the tier can demote nothing; visible here, never
+        /// silent (RFC §4 row 16).
+        pub effective_target: u64,
+        /// Index/view memory floor fed by [`Store::set_tier_reserved`].
+        pub reserved_bytes: u64,
+        /// RAM the cold stubs cost (Σ `ENTRY_OVERHEAD + key heap`).
+        pub stub_bytes: u64,
         /// Keys demoted to the cold tier since boot.
         pub demotions_total: u64,
         /// Keys promoted back since boot.
@@ -73,6 +94,14 @@ mod enabled {
         pub cold_keys: u64,
         /// Σ original weights of currently-cold values.
         pub cold_bytes: u64,
+        /// Vlog file count.
+        pub vlog_files: u64,
+        /// Vlog total bytes on disk.
+        pub vlog_bytes: u64,
+        /// Vlog live (non-dead) bytes.
+        pub vlog_live_bytes: u64,
+        /// Vlog compaction epoch (retired-file counter).
+        pub vlog_epoch: u64,
     }
 
     impl ColdRef {
@@ -98,9 +127,47 @@ mod enabled {
                 preads_total: 0,
                 cold_keys: 0,
                 cold_bytes: 0,
+                reserved_bytes: 0,
+                stub_bytes: 0,
                 renames: std::collections::HashMap::new(),
             });
             Ok(())
+        }
+
+        /// Live-update the tiering budget (auto/percent re-resolution on
+        /// the shard tick, `CONFIG SET` — the maxmemory reapply
+        /// precedent). Touches nothing but the number: the vlog, the
+        /// stubs and every counter stay as they are. No-op when tiering
+        /// is off.
+        #[inline]
+        pub fn set_tier_budget(&mut self, bytes: u64) {
+            if let Some(t) = &mut self.tier {
+                t.budget = bytes;
+            }
+        }
+
+        /// Feed the index/view memory floor (Σ segment `approx_bytes`
+        /// on this shard) into the unified watermark. Called per shard
+        /// tick by the serving layer. No-op when tiering is off.
+        #[inline]
+        pub fn set_tier_reserved(&mut self, bytes: u64) {
+            if let Some(t) = &mut self.tier {
+                t.reserved_bytes = bytes;
+            }
+        }
+
+        /// Whether the index/view floor (`reserved_bytes + extra`)
+        /// already exhausts the tier's demotable headroom — the
+        /// IDX.CREATE refusal predicate (RFC §4 row 16). `false` when
+        /// tiering is off.
+        pub fn tier_index_floor_blocked(&self, extra: u64) -> bool {
+            match &self.tier {
+                Some(t) => {
+                    t.reserved_bytes.saturating_add(extra)
+                        >= crate::tier_demote::watermark(t.budget).saturating_sub(t.stub_bytes)
+                }
+                None => false,
+            }
         }
 
         /// Whether tiering is on for this shard.
@@ -113,13 +180,24 @@ mod enabled {
         pub fn tier_stats(&self) -> TierStats {
             match &self.tier {
                 None => TierStats::default(),
-                Some(t) => TierStats {
-                    demotions_total: t.demotions_total,
-                    promotions_total: t.promotions_total,
-                    preads_total: t.preads_total,
-                    cold_keys: t.cold_keys,
-                    cold_bytes: t.cold_bytes,
-                },
+                Some(t) => {
+                    let v = t.vlog.stats();
+                    TierStats {
+                        budget: t.budget,
+                        effective_target: crate::tier_demote::effective_target(t),
+                        reserved_bytes: t.reserved_bytes,
+                        stub_bytes: t.stub_bytes,
+                        demotions_total: t.demotions_total,
+                        promotions_total: t.promotions_total,
+                        preads_total: t.preads_total,
+                        cold_keys: t.cold_keys,
+                        cold_bytes: t.cold_bytes,
+                        vlog_files: v.files as u64,
+                        vlog_bytes: v.bytes,
+                        vlog_live_bytes: v.live_bytes,
+                        vlog_epoch: v.epoch,
+                    }
+                }
             }
         }
 
@@ -264,23 +342,36 @@ mod enabled {
 
         /// A cold stub is being discarded (DEL / overwrite / expiry /
         /// FLUSH of the key): credit its record's bytes as dead so the
-        /// compaction trigger sees them. No-op for hot values.
-        pub(crate) fn tier_note_dead(&mut self, v: &Value) {
+        /// compaction trigger sees them, and release the stub's RAM
+        /// cost from `stub_bytes`. `key_heap` is the heap-byte cost of
+        /// the key the stub lived under (part of the stub cost —
+        /// callers pass `key_heap_bytes_for(key)` / `key.heap_bytes()`
+        /// since some sites have already moved the key into the map).
+        /// No-op for hot values.
+        pub(crate) fn tier_note_dead(&mut self, key_heap: u64, v: &Value) {
             let Value::Cold(c) = v else { return };
             if let Some(t) = &mut self.tier {
                 t.vlog.note_dead(c.vref());
                 t.cold_keys = t.cold_keys.saturating_sub(1);
                 t.cold_bytes = t.cold_bytes.saturating_sub(u64::from(c.weight));
+                t.stub_bytes = t
+                    .stub_bytes
+                    .saturating_sub(crate::value::ENTRY_OVERHEAD + key_heap);
                 t.renames.remove(&(c.file_id, c.offset));
             }
         }
 
-        /// RENAME moved a cold stub to `dst` without reading it — the
-        /// record's embedded key is now stale; register the forward
-        /// pointer compaction resolves through.
-        pub(crate) fn tier_note_renamed(&mut self, v: &Value, dst: &[u8]) {
+        /// RENAME moved a cold stub from `src` to `dst` without reading
+        /// it — the record's embedded key is now stale; register the
+        /// forward pointer compaction resolves through, and re-account
+        /// the stub cost for the new key's heap bytes.
+        pub(crate) fn tier_note_renamed(&mut self, v: &Value, src: &[u8], dst: &[u8]) {
             let Value::Cold(c) = v else { return };
             if let Some(t) = &mut self.tier {
+                t.stub_bytes = t
+                    .stub_bytes
+                    .saturating_sub(crate::key_heap_bytes_for(src))
+                    .saturating_add(crate::key_heap_bytes_for(dst));
                 t.renames.insert((c.file_id, c.offset), SmallBytes::from_slice(dst));
             }
         }
@@ -293,6 +384,7 @@ mod enabled {
                 t.renames.clear();
                 t.cold_keys = 0;
                 t.cold_bytes = 0;
+                t.stub_bytes = 0;
             }
         }
     }
@@ -350,13 +442,27 @@ mod disabled {
         }
 
         #[inline]
-        pub(crate) fn tier_note_dead(&mut self, _v: &Value) {}
+        pub(crate) fn tier_note_dead(&mut self, _key_heap: u64, _v: &Value) {}
 
         #[inline]
-        pub(crate) fn tier_note_renamed(&mut self, _v: &Value, _dst: &[u8]) {}
+        pub(crate) fn tier_note_renamed(&mut self, _v: &Value, _src: &[u8], _dst: &[u8]) {}
 
         #[inline]
         pub(crate) fn tier_on_flushall(&mut self) {}
+
+        /// No tier backend on this target — no-op.
+        #[inline]
+        pub fn set_tier_budget(&mut self, _bytes: u64) {}
+
+        /// No tier backend on this target — no-op.
+        #[inline]
+        pub fn set_tier_reserved(&mut self, _bytes: u64) {}
+
+        /// No tier backend on this target — always false.
+        #[inline]
+        pub fn tier_index_floor_blocked(&self, _extra: u64) -> bool {
+            false
+        }
 
         #[inline]
         pub(crate) fn promote_in_place(&mut self, _key: &[u8]) -> bool {

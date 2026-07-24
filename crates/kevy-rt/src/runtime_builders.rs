@@ -155,6 +155,25 @@ impl<C: Commands> Runtime<C> {
         self
     }
 
+    /// Transparent-tiering RAM budget for the whole process, in
+    /// resolved bytes (the caller resolves `auto` / percent forms
+    /// against `kevy_sys::detected_memory_bound` first). Split evenly
+    /// across shards. `None` (default) = tiering off unless the
+    /// minimal `KEVY_TIER_BUDGET` plain-bytes env knob is set.
+    #[must_use]
+    pub fn with_tier_budget(mut self, bytes: Option<u64>) -> Self {
+        self.tier_budget = bytes;
+        self
+    }
+
+    /// Cold-tier spill dir override (`[tiering] spill_dir`). `None`
+    /// (default) = `<data_dir>/tier/`.
+    #[must_use]
+    pub fn with_tier_spill_dir(mut self, dir: Option<PathBuf>) -> Self {
+        self.tier_dir = dir;
+        self
+    }
+
     /// Enable/disable the append-only log. Default: enabled.
     #[must_use]
     pub fn with_aof(mut self, on: bool) -> Self {

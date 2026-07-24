@@ -120,6 +120,12 @@ fn build_info_body(
     if want_section(want, "memory") {
         info_memory(cfg, totals, &mut body);
     }
+    // `# Tiering` (T5 / B12): present ONLY when tiering is on — an
+    // untiered instance's INFO is byte-identical to pre-tiering
+    // output (the transparency suite's Shape compare relies on it).
+    if totals.tier_enabled && want_section(want, "tiering") {
+        info_tiering(totals, &mut body);
+    }
     if want_section(want, "persistence") {
         info_persistence(ctx, cfg, &mut body);
     }
@@ -196,6 +202,28 @@ fn info_memory(cfg: &Config, totals: &crate::state::Totals, b: &mut String) {
         eviction_str(cfg.memory.maxmemory_policy)
     ));
     b.push_str(&format!("evicted_keys:{}\r\n", totals.evicted_keys));
+    b.push_str("\r\n");
+}
+
+/// `# Tiering` (capacity arc T5, RFC §1 D3 B12): the unified-budget
+/// gauges summed across shards. Emitted only when tiering is enabled —
+/// see the call site's byte-stability note.
+fn info_tiering(totals: &crate::state::Totals, b: &mut String) {
+    let t = &totals.tier;
+    b.push_str("# Tiering\r\n");
+    b.push_str("tiering_enabled:1\r\n");
+    b.push_str(&format!("tier_budget_bytes:{}\r\n", t.budget));
+    b.push_str(&format!("tier_effective_target:{}\r\n", t.effective_target));
+    b.push_str(&format!("cold_keys:{}\r\n", t.cold_keys));
+    b.push_str(&format!("cold_bytes:{}\r\n", t.cold_bytes));
+    b.push_str(&format!("stub_bytes:{}\r\n", t.stub_bytes));
+    b.push_str(&format!("index_reserved_bytes:{}\r\n", t.reserved_bytes));
+    b.push_str(&format!("vlog_size_bytes:{}\r\n", t.vlog_bytes));
+    b.push_str(&format!("vlog_live_bytes:{}\r\n", t.vlog_live_bytes));
+    b.push_str(&format!("vlog_files:{}\r\n", t.vlog_files));
+    b.push_str(&format!("vlog_epoch:{}\r\n", t.vlog_epoch));
+    b.push_str(&format!("demotions_total:{}\r\n", t.demotions_total));
+    b.push_str(&format!("promotions_total:{}\r\n", t.promotions_total));
     b.push_str("\r\n");
 }
 

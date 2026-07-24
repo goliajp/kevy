@@ -394,3 +394,123 @@ fn del_and_overwrite_credit_dead_bytes() {
     assert_eq!(st.cold_keys, 0);
     assert_eq!(st.cold_bytes, 0);
 }
+
+// ---- T5: unified budget arithmetic + stub accounting ----------------
+
+const OVERHEAD: u64 = crate::value::ENTRY_OVERHEAD;
+
+#[test]
+fn t5_effective_target_subtracts_reserved_and_stub() {
+    let budget = 1_000_000u64;
+    let (mut s, _d) = tiered("tier-t5-target", budget);
+    let wm = budget * 19 / 20;
+    assert_eq!(s.tier_stats().effective_target, wm, "fresh tier: no floors");
+    s.set_tier_reserved(100_000);
+    assert_eq!(s.tier_stats().effective_target, wm - 100_000);
+    // A demotion grows stub_bytes, which lowers the target further.
+    s.set(b"k", vec![b'x'; 4096], None, false, false);
+    assert!(s.debug_force_demote(b"k"));
+    let st = s.tier_stats();
+    assert_eq!(st.stub_bytes, OVERHEAD, "short key: stub = ENTRY_OVERHEAD only");
+    assert_eq!(st.effective_target, wm - 100_000 - OVERHEAD);
+}
+
+#[test]
+fn t5_saturated_target_is_zero_and_visible_not_silent() {
+    let budget = 1_000u64;
+    let (mut s, _d) = tiered("tier-t5-sat", budget);
+    s.set_tier_reserved(budget); // floor alone exceeds the watermark
+    let st = s.tier_stats();
+    assert_eq!(st.effective_target, 0, "saturation must surface as 0 in the gauges");
+    assert!(s.tier_index_floor_blocked(0), "IDX floor predicate sees the same state");
+    // Untiered stores never block.
+    let mut plain = Store::new();
+    plain.set_tier_reserved(u64::MAX);
+    assert!(!plain.tier_index_floor_blocked(u64::MAX));
+}
+
+#[test]
+fn t5_reserved_pressure_triggers_demotion() {
+    // 64 KiB budget; ~20 KiB hot — comfortably under the plain
+    // watermark, but a 50 KiB index floor pushes the unified target
+    // below the hot set, so the tick demotes.
+    let budget = 64 * 1024u64;
+    let (mut s, _d) = tiered("tier-t5-pressure", budget);
+    for i in 0..10u32 {
+        s.set(format!("k{i}").as_bytes(), vec![b'v'; 2048], None, false, false);
+    }
+    assert_eq!(s.demote_step(), 0, "under the plain watermark: nothing to do");
+    s.set_tier_reserved(50 * 1024);
+    assert!(s.demote_step() > 0, "the reserved floor must create demand");
+}
+
+#[test]
+fn t5_stub_bytes_exact_across_demote_promote_del_rename_flush() {
+    let (mut s, _d) = tiered("tier-t5-stub", u64::MAX);
+    let long_key = vec![b'L'; 30]; // > 22-byte inline boundary → 30 heap bytes
+    s.set(b"short", vec![b'a'; 2048], None, false, false);
+    s.set(&long_key, vec![b'b'; 2048], None, false, false);
+    assert!(s.debug_force_demote(b"short"));
+    assert!(s.debug_force_demote(&long_key));
+    let st = s.tier_stats();
+    assert_eq!(st.cold_keys, 2);
+    assert_eq!(st.stub_bytes, (OVERHEAD) + (OVERHEAD + 30), "96 + key heap each");
+    assert!(st.cold_bytes > 0);
+
+    // RENAME short → a long name: stub cost re-accounts for the key.
+    let long_dst = vec![b'D'; 40];
+    assert!(matches!(s.rename(b"short", &long_dst, false), crate::RenameOutcome::Renamed));
+    assert_eq!(s.tier_stats().stub_bytes, (OVERHEAD + 40) + (OVERHEAD + 30));
+
+    // Promote (two reads: serve, then install) releases the stub cost.
+    assert_eq!(s.get(&long_key).unwrap().unwrap().len(), 2048);
+    assert_eq!(s.get(&long_key).unwrap().unwrap().len(), 2048);
+    assert!(!is_cold(&s, &long_key), "second touch promotes");
+    let st = s.tier_stats();
+    assert_eq!(st.stub_bytes, OVERHEAD + 40);
+    assert_eq!(st.cold_keys, 1);
+
+    // DEL of the remaining cold key zeroes both gauges.
+    assert_eq!(s.del(&[long_dst.as_slice()]), 1);
+    let st = s.tier_stats();
+    assert_eq!((st.stub_bytes, st.cold_keys, st.cold_bytes), (0, 0, 0));
+
+    // FLUSHALL from a re-demoted state zeroes in one stroke.
+    s.set(b"again", vec![b'c'; 2048], None, false, false);
+    assert!(s.debug_force_demote(b"again"));
+    assert!(s.tier_stats().stub_bytes > 0);
+    s.flushall();
+    let st = s.tier_stats();
+    assert_eq!((st.stub_bytes, st.cold_keys, st.cold_bytes), (0, 0, 0));
+}
+
+#[test]
+fn t5_live_budget_update_does_not_disturb_the_vlog() {
+    let (mut s, _d) = tiered("tier-t5-budget", u64::MAX);
+    s.set(b"cold", vec![b'z'; 4096], None, false, false);
+    assert!(s.debug_force_demote(b"cold"));
+    let before = s.tier_stats();
+    s.set_tier_budget(123_456);
+    let after = s.tier_stats();
+    assert_eq!(after.budget, 123_456);
+    assert_eq!(
+        (after.vlog_files, after.vlog_bytes, after.vlog_live_bytes, after.vlog_epoch),
+        (before.vlog_files, before.vlog_bytes, before.vlog_live_bytes, before.vlog_epoch),
+        "a budget update must not touch the vlog"
+    );
+    assert_eq!((after.cold_keys, after.stub_bytes), (before.cold_keys, before.stub_bytes));
+    // The cold value still reads back through the new budget.
+    assert_eq!(s.get(b"cold").unwrap().unwrap().len(), 4096);
+}
+
+#[test]
+fn t5_stats_carry_vlog_gauges() {
+    let (mut s, _d) = tiered("tier-t5-vlog", u64::MAX);
+    s.set(b"v", vec![b'v'; 1024], None, false, false);
+    assert!(s.debug_force_demote(b"v"));
+    let st = s.tier_stats();
+    assert_eq!(st.vlog_files, 1);
+    assert!(st.vlog_bytes > 1024, "the record is on disk");
+    assert_eq!(st.vlog_live_bytes, st.vlog_bytes, "nothing dead yet");
+    assert_eq!(st.vlog_epoch, 0);
+}

@@ -272,6 +272,7 @@ fn build_runtime(cfg: &kevy_config::Config, commands: KevyCommands) -> Runtime<K
     if cfg.feed.enabled {
         runtime = runtime.with_feed(true, cfg.feed.feed_buffer_size);
     }
+    runtime = wire_tiering(runtime, cfg);
     // UDS: opt-in via `KEVY_UNIX_SOCKET=/path/to/sock` env var. Lets
     // local clients (and benches) skip TCP loopback overhead — fair
     // comparison against valkey/redis's `unixsocket` config.
@@ -280,6 +281,48 @@ fn build_runtime(cfg: &kevy_config::Config, commands: KevyCommands) -> Runtime<K
             runtime = runtime.with_unix_socket(PathBuf::from(path));
         }
     replication::apply(runtime, cfg, &state)
+}
+
+/// Tiering (T5): resolve the `[tiering]` budget to bytes — auto/percent
+/// probe the OS bound via kevy-sys — and hand the runtime the
+/// process-level number (it splits per shard). A spec that cannot
+/// resolve is a named boot refusal, never a silent off.
+fn wire_tiering(
+    runtime: Runtime<KevyCommands>,
+    cfg: &kevy_config::Config,
+) -> Runtime<KevyCommands> {
+    match resolve_tier_budget(cfg) {
+        Ok(budget) => runtime
+            .with_tier_budget(budget)
+            .with_tier_spill_dir(cfg.tiering.spill_dir.clone()),
+        Err(msg) => {
+            eprintln!("kevy: {msg}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Resolve the configured `[tiering] budget` to bytes. `Ok(None)` =
+/// tiering off; `Err` = an auto/percent form with no detectable memory
+/// bound (named refusal at boot; on the tick the caller keeps the last
+/// resolved value instead).
+pub(crate) fn resolve_tier_budget(
+    cfg: &kevy_config::Config,
+) -> Result<Option<u64>, String> {
+    match cfg.tiering.budget {
+        None => Ok(None),
+        Some(spec) => spec
+            .resolve_with(kevy_sys::detected_memory_bound())
+            .map(Some)
+            .ok_or_else(|| {
+                format!(
+                    "[tiering] budget = \"{}\": no memory bound detected on this host \
+                     (cgroup v2 memory.max / /proc/meminfo MemAvailable / hw.memsize all \
+                     unavailable) — use an absolute budget (\"4gb\")",
+                    spec.as_config_string()
+                )
+            }),
+    }
 }
 
 /// Resolved first cluster port: `[cluster].port_base`, or `server.port + 1`

@@ -158,9 +158,13 @@ mod store_wire;
 mod store_persist;
 
 pub use config::{Config, EvictionPolicy, TtlReaperMode};
+#[cfg(feature = "tier")]
+pub use config::TierBudgetSpec;
+#[cfg(feature = "tier")]
+mod config_tier;
 #[cfg(feature = "persist")]
 pub use config::AppendFsync;
-pub use info::KevyInfo;
+pub use info::{KevyInfo, KevyTierInfo};
 #[cfg(feature = "persist")]
 pub use metric::KevyMetric;
 pub use metric::OpenReport;

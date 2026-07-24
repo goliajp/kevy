@@ -31,15 +31,16 @@ fn spillable_class(v: &Value) -> bool {
 impl Store {
     /// The demotion twin of [`Store::try_evict_after_write`], called
     /// beside it from the write-commit sites. No-op unless tiering is
-    /// on AND `used_memory` is past the watermark; then spills at most
-    /// one batch (B3: a single write never funds an unbounded spill
-    /// storm — continuation rides [`Store::demote_step`] on the tick).
-    /// Returns keys demoted.
+    /// on AND `used_memory` is past the unified target (T5: the plain
+    /// watermark minus the index/view floor and the stub floor); then
+    /// spills at most one batch (B3: a single write never funds an
+    /// unbounded spill storm — continuation rides
+    /// [`Store::demote_step`] on the tick). Returns keys demoted.
     #[inline]
     pub fn try_demote_after_write(&mut self) -> usize {
         match &self.tier {
             None => 0,
-            Some(t) if self.used_memory <= watermark(t.budget) => 0,
+            Some(t) if self.used_memory <= effective_target(t) => 0,
             Some(_) => self.demote_batch(),
         }
     }
@@ -69,16 +70,18 @@ impl Store {
     }
 
     /// One budgeted demotion batch: sample → demote, ≤ [`SPILL_BATCH`]
-    /// records, stop at the watermark or when sampling runs dry. Ends
-    /// with the compaction trigger.
+    /// records, stop at the unified target or when sampling runs dry.
+    /// The target is re-read per iteration — every demotion grows
+    /// `stub_bytes`, which lowers it. Ends with the compaction trigger.
     fn demote_batch(&mut self) -> usize {
-        let (target, policy) = {
-            let t = self.tier.as_ref().expect("gated by caller");
-            (watermark(t.budget), t.policy)
-        };
+        let policy = self.tier.as_ref().expect("gated by caller").policy;
         let mut demoted = 0usize;
         let mut misses = 0u32;
-        while self.used_memory > target && demoted < SPILL_BATCH {
+        loop {
+            let target = effective_target(self.tier.as_ref().expect("gated by caller"));
+            if self.used_memory <= target || demoted >= SPILL_BATCH {
+                break;
+            }
             let victim = crate::evict::sample_pick_with(self, policy, |e| {
                 spillable_class(&e.value) && e.weight() >= MIN_SPILL_BYTES
             });
@@ -145,6 +148,7 @@ impl Store {
         t.demotions_total += 1;
         t.cold_keys += 1;
         t.cold_bytes += u64::from(stub.weight);
+        t.stub_bytes += crate::value::ENTRY_OVERHEAD + key_heap;
         self.maybe_offload_drop(old_value);
         true
     }
@@ -172,6 +176,9 @@ impl Store {
         t.promotions_total += 1;
         t.cold_keys = t.cold_keys.saturating_sub(1);
         t.cold_bytes = t.cold_bytes.saturating_sub(u64::from(cref.weight));
+        t.stub_bytes = t
+            .stub_bytes
+            .saturating_sub(crate::value::ENTRY_OVERHEAD + key_heap);
         true
     }
 
@@ -211,8 +218,23 @@ impl Store {
 }
 
 #[inline]
-fn watermark(budget: u64) -> u64 {
+pub(crate) fn watermark(budget: u64) -> u64 {
     budget.saturating_mul(WATERMARK_NUM) / WATERMARK_DEN
+}
+
+/// The unified demote target (T5, RFC §1 D3): `budget·19/20 −
+/// reserved_bytes − stub_bytes`, saturating. Demotion can only reclaim
+/// hot values — the index/view floor and the stubs' own RAM cost are
+/// fixed layers, so pressure on them translates into a lower target
+/// for the hot set. **Saturated to 0** = the floor alone exceeds the
+/// budget; the tier can demote nothing further once every spillable
+/// value is cold (`TierStats::effective_target` makes the state
+/// visible in INFO).
+#[inline]
+pub(crate) fn effective_target(t: &crate::tier::TierState) -> u64 {
+    watermark(t.budget)
+        .saturating_sub(t.reserved_bytes)
+        .saturating_sub(t.stub_bytes)
 }
 
 /// [`CompactOwner`] over the store map + the rename forward-pointers.

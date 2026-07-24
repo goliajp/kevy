@@ -124,6 +124,7 @@ fn parse_weights<A: ArgvView + ?Sized>(
 
 pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(
     ctx: &Ctx<'_>,
+    store: &kevy_store::Store,
     args: &A,
     out: &mut Vec<u8>,
 ) {
@@ -166,7 +167,23 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(
         with_positions: opts.with_positions,
         values: opts.values,
     };
-    install_new_index(ctx, spec, out);
+    if !tier_floor_refused(store, out) {
+        install_new_index(ctx, spec, out);
+    }
+}
+
+/// Tiering floor refusal (T5, RFC §4 row 16): indexes are the premium
+/// fixed layer demotion can never reclaim — when the existing floor
+/// already exhausts the tier's demotable headroom, a new index is
+/// refused by name (the FailedOverBudget discipline, moved up to
+/// declaration time). Answered from this shard's per-tick gauges; a
+/// no-tier store never refuses. `true` = refused (error written).
+fn tier_floor_refused(store: &kevy_store::Store, out: &mut Vec<u8>) -> bool {
+    if store.tier_index_floor_blocked(0) {
+        encode_error(out, "ERR index memory floor exceeds the tiering budget");
+        return true;
+    }
+    false
 }
 
 /// Clone the catalog, add `spec`, and on success persist + install it.

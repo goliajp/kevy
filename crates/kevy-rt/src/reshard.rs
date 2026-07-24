@@ -25,6 +25,8 @@ pub(crate) fn ensure_layout<C: Commands>(
     n: usize,
     routing: Routing,
     commands: &C,
+    tier_budget: Option<u64>,
+    tier_root: &Path,
 ) -> io::Result<()> {
     let meta_path = layout::shards_meta_path(dir);
     recover_journal(dir, &StdLayout)?;
@@ -43,7 +45,7 @@ pub(crate) fn ensure_layout<C: Commands>(
         std::fs::create_dir_all(dir)?;
         return write_shards_meta(&meta_path, target);
     }
-    reshard(dir, prev, target, commands)
+    reshard(dir, prev, target, commands, tier_budget, tier_root)
 }
 
 /// Whether `dir` holds any kevy persistence artifacts (per-shard snapshot,
@@ -58,24 +60,25 @@ pub(crate) fn has_kevy_files(dir: &Path) -> bool {
 /// hand the crash-safe commit to the engine — which also records the new
 /// layout in `shards.meta`.
 ///
-/// Tiering (T4 / B11): under the same minimal `KEVY_TIER_BUDGET` knob the
-/// runtime reads, the temp store and the redistribution targets tier into
-/// scratch vlog dirs so a merged dataset bigger than the budget migrates
-/// without OOM. Cold stubs materialize on the SOURCE side before shipping
-/// (a stub names the source's vlog, foreign to the target); the committed
-/// snapshots materialize again through the `SnapshotSource` contract. The
-/// scratch dirs are removed after the commit — the per-shard boots re-open
-/// (and wipe) their real `<data>/tier/<id>` logs afterwards.
+/// Tiering (T4 / B11): under the runtime's tiering budget (the resolved
+/// builder value, or the minimal `KEVY_TIER_BUDGET` env knob), the temp
+/// store and the redistribution targets tier into scratch vlog dirs so
+/// a merged dataset bigger than the budget migrates without OOM. Cold
+/// stubs materialize on the SOURCE side before shipping (a stub names
+/// the source's vlog, foreign to the target); the committed snapshots
+/// materialize again through the `SnapshotSource` contract. The scratch
+/// dirs are removed after the commit — the per-shard boots re-open (and
+/// wipe) their real `<tier root>/<id>` logs afterwards. The temp store
+/// gets the full process budget; targets get their per-shard slice.
 fn reshard<C: Commands>(
     dir: &Path,
     prev: ShardsMeta,
     target: ShardsMeta,
     commands: &C,
+    tier_budget: Option<u64>,
+    tier_root: &Path,
 ) -> io::Result<()> {
-    let tier_budget = std::env::var("KEVY_TIER_BUDGET")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok());
-    let scratch = |name: String| dir.join("tier").join(name);
+    let scratch = |name: String| tier_root.join(name);
     let mut temp = Store::new();
     if let Some(budget) = tier_budget {
         temp.enable_tiering(&scratch(".reshard-merge".into()), budget)?;
@@ -91,8 +94,9 @@ fn reshard<C: Commands>(
 
     let mut stores: Vec<Store> = (0..target.n).map(|_| Store::new()).collect();
     if let Some(budget) = tier_budget {
+        let per = crate::Runtime::<C>::per_shard_tier_budget(budget, target.n);
         for (i, s) in stores.iter_mut().enumerate() {
-            s.enable_tiering(&scratch(format!(".reshard-{i}")), budget)?;
+            s.enable_tiering(&scratch(format!(".reshard-{i}")), per)?;
         }
     }
     redistribute(&temp, target, &mut stores);

@@ -78,6 +78,25 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
     }
 }
 
+/// Σ approximate heap bytes of this shard's index segments, every
+/// kind (scalar / text / ann / agg) — the tier's `reserved_bytes`
+/// floor feed (T5, RFC §1 D3). Called per shard tick, gated on
+/// tiering being enabled; refreshes the shard list first so a
+/// just-declared index counts immediately.
+pub(crate) fn reserved_bytes(ctx: &Ctx<'_>, store: &mut Store) -> u64 {
+    let mut st = ctx.shard.indexes.borrow_mut();
+    refresh(&ctx.state.catalogs, &mut st, store);
+    st.idx
+        .iter()
+        .map(|si| {
+            si.seg.stats().approx_bytes
+                + si.text.as_ref().map_or(0, |t| t.stats().approx_bytes)
+                + si.ann.as_ref().map_or(0, |g| g.stats().approx_bytes)
+                + si.agg.as_ref().map_or(0, |a| a.stats().approx_bytes)
+        })
+        .sum()
+}
+
 /// Query entry: run `f` against this shard's segment for `name`.
 /// `None` = index unknown here (a stale shard list is refreshed
 /// first) or still backfilling. Wired to IDX.QUERY fan-out in step 2b.
@@ -442,9 +461,14 @@ fn advance_backfill(store: &mut Store, si: &mut ShardIndex, batch: usize) {
             apply_row_backfill(store, si, key);
         }
     }
-    // A MAXMEM budget is enforced at build time —
-    // declarative failure instead of OOM.
-    if si.spec.max_bytes > 0 && si.seg.stats().approx_bytes > si.spec.max_bytes {
+    // A MAXMEM budget is enforced at build time — declarative failure
+    // instead of OOM. The tiering floor joins it (T5): a build whose
+    // growing segment leaves the tier no demotable headroom fails the
+    // same declarative way (the per-tick `reserved_bytes` feed already
+    // counts this segment's current size).
+    if (si.spec.max_bytes > 0 && si.seg.stats().approx_bytes > si.spec.max_bytes)
+        || store.tier_index_floor_blocked(0)
+    {
         si.seg = Segment::new();
         si.build = BuildState::FailedOverBudget;
         return;

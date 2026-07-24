@@ -23,7 +23,8 @@ impl Store {
         // A wholesale value replacement (type change / RESTORE)
         // discards any per-field hash TTLs; a fresh create is a no-op.
         self.clear_hash_key_ttls(key.as_slice());
-        entry.set_weight(key.heap_bytes() as u64 + entry.value.weight());
+        let key_heap = key.heap_bytes() as u64;
+        entry.set_weight(key_heap + entry.value.weight());
         if self.clock_on() {
             self.tick_clock();
             entry.set_lru_clock(self.clock_counter as u32);
@@ -34,7 +35,7 @@ impl Store {
         match &prev {
             Some(old) => {
                 // A displaced cold stub's vlog record dies with it.
-                self.tier_note_dead(&old.value);
+                self.tier_note_dead(key_heap, &old.value);
                 self.used_memory = self
                     .used_memory
                     .saturating_sub(old.weight())
@@ -62,7 +63,7 @@ impl Store {
     /// [`Self::take_entry_keepalive`] instead.
     pub(crate) fn remove_entry(&mut self, key: &[u8]) -> Option<Entry> {
         let old = self.take_entry_keepalive(key)?;
-        self.tier_note_dead(&old.value);
+        self.tier_note_dead(key_heap_bytes_for(key), &old.value);
         Some(old)
     }
 
