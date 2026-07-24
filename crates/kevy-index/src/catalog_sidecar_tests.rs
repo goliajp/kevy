@@ -141,6 +141,7 @@ mod sidecar_v4_tests {
             group_by: None,
             with_positions: positions,
             values: values.iter().map(|v| ValueSpec::new(v.as_bytes().to_vec())).collect(),
+            composite: None,
         }
     }
 
@@ -354,6 +355,7 @@ mod value_type_tests {
                 ValueSpec { name: b"rank".to_vec(), ty: ValType::I64 },
                 ValueSpec::new(b"status".to_vec()),
             ],
+            composite: None,
         })
         .unwrap();
         let back = Catalog::from_sidecar(&c.to_sidecar()).expect("round trip");
@@ -365,6 +367,64 @@ mod value_type_tests {
                 ValueSpec { name: b"rank".to_vec(), ty: ValType::I64 },
                 ValueSpec { name: b"status".to_vec(), ty: ValType::Str },
             ]
+        );
+    }
+}
+
+mod sidecar_v6_tests {
+    use super::super::*;
+    use crate::composite::CompositeCol;
+
+    fn composite_spec(name: &str) -> IndexSpec {
+        let mut s = IndexSpec::single_field(
+            name.into(),
+            b"t:".to_vec(),
+            b"de,pt".to_vec(),
+            ValType::Str,
+            crate::IndexKind::Range,
+        );
+        s.composite = Some(vec![
+            CompositeCol { name: b"de,pt".to_vec(), ty: ValType::Str, desc: false },
+            CompositeCol { name: b"a:ge".to_vec(), ty: ValType::I64, desc: true },
+            CompositeCol { name: b"score".to_vec(), ty: ValType::F64, desc: false },
+        ]);
+        s
+    }
+
+    #[test]
+    fn composite_round_trips_through_v6() {
+        let mut c = Catalog::new();
+        c.create(composite_spec("op")).unwrap();
+        c.create(IndexSpec::single_field(
+            b"plain".to_vec(), b"t:".to_vec(), b"n".to_vec(), ValType::I64,
+            crate::IndexKind::Range,
+        ))
+        .unwrap();
+        let text = c.to_sidecar();
+        assert!(text.starts_with("kevy-index-catalog v6\n"), "{text}");
+        let back = Catalog::from_sidecar(&text).expect("v6 round trip");
+        let (spec, _) = back.get(b"op").expect("composite index");
+        assert_eq!(spec.composite, composite_spec("op").composite,
+            "types, order and DESC flags must reload byte-exactly (the derivation depends on them)");
+        let (plain, _) = back.get(b"plain").expect("plain index");
+        assert!(plain.composite.is_none());
+    }
+
+    /// A5 for T7: a catalog with no composite index writes the exact
+    /// pre-composite bytes - the header only moves for a catalog that
+    /// uses the new capability.
+    #[test]
+    fn a5_no_composite_catalog_keeps_the_old_header() {
+        let mut c = Catalog::new();
+        c.create(IndexSpec::single_field(
+            b"i".to_vec(), b"p:".to_vec(), b"f".to_vec(), ValType::I64,
+            crate::IndexKind::Range,
+        ))
+        .unwrap();
+        assert_eq!(
+            c.to_sidecar(),
+            "kevy-index-catalog v4\ni\tp:\tf:1\ti64\trange\t0\n",
+            "byte-identical to the v4 writer"
         );
     }
 }

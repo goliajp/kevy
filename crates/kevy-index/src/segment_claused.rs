@@ -20,7 +20,8 @@
 use std::collections::HashMap;
 use std::ops::Bound;
 
-use crate::catalog::{ValType, ValueTest};
+use crate::catalog::ValType;
+use crate::value::ValueTest;
 use crate::segment::{Cursor, Segment};
 use crate::value::{IndexValue, order_key};
 

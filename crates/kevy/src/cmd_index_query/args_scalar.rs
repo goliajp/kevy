@@ -10,6 +10,11 @@ use super::filter::{FilterArg, parse_filter, parse_sort_dir};
 pub(crate) enum Shape {
     Range { min: Vec<u8>, max: Vec<u8> },
     Eq { value: Vec<u8> },
+    /// `WHERE col EQ v [col EQ v…] [RANGE col min max]` — composite
+    /// indexes only. The bounds compute against the spec's declared
+    /// columns (pure encoding, not planning: the caller still names
+    /// the index explicitly), then behave exactly like RANGE.
+    Where(kevy_index::WhereClause),
     Verify,
 }
 
@@ -73,6 +78,9 @@ impl Query {
             )
         } else if mode.eq_ignore_ascii_case(b"EQ") {
             (Shape::Eq { value: argv.get(3)?.clone() }, 4)
+        } else if mode.eq_ignore_ascii_case(b"WHERE") {
+            let (w, next) = kevy_index::parse_where(argv, 3, is_scalar_keyword)?;
+            (Shape::Where(w), next)
         } else {
             return None;
         };
@@ -170,8 +178,31 @@ impl Query {
                 let v = IndexValue::parse_literal(ty, value)?;
                 Some((v.clone(), v))
             }
-            Shape::Verify => None,
+            Shape::Where(_) | Shape::Verify => None,
         }
+    }
+
+    /// The driving bounds against a concrete spec: RANGE/EQ coerce to
+    /// the declared type; WHERE computes the composite byte-range
+    /// server-side ([`kevy_index::composite_bounds`]). `Err` carries a
+    /// ready-made status chunk — WHERE errors are ST_CLAUSE (the shard
+    /// holding the spec knows what IS declared), bad literals stay
+    /// ST_BADARGS.
+    pub(in crate::cmd_index_query) fn bounds_for(
+        &self,
+        spec: &kevy_index::IndexSpec,
+    ) -> Result<(IndexValue, IndexValue), Vec<u8>> {
+        if let Shape::Where(w) = &self.shape {
+            let Some(cols) = &spec.composite else {
+                return Err(crate::cmd_index_query::query_claused::clause_chunk(
+                    kevy_index::WHERE_NOT_COMPOSITE,
+                ));
+            };
+            let (lo, hi) = kevy_index::composite_bounds(cols, w)
+                .map_err(|e| crate::cmd_index_query::query_claused::clause_chunk(&e))?;
+            return Ok((IndexValue::Str(lo), IndexValue::Str(hi)));
+        }
+        self.bounds(spec.ty).ok_or_else(|| vec![crate::cmd_index_query::ST_BADARGS])
     }
 
     pub(in crate::cmd_index_query) fn cursor(&self, _ty: ValType) -> Option<Cursor> {

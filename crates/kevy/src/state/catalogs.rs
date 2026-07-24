@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
-use kevy_index::{Catalog, ViewCatalog};
+use kevy_index::{Catalog, TableCatalog, ViewCatalog};
 
 use super::RuntimeState;
 
@@ -30,6 +30,10 @@ pub(crate) struct CatalogState {
     view: RwLock<Option<Arc<ViewCatalog>>>,
     /// Bumped (Release) on every view-catalog install.
     view_gen: AtomicU64,
+    /// The table catalog (TABLE.DECLARE / TABLE.DROP / sidecar boot).
+    /// Declarations only — its compiled indexes live in `index`, so
+    /// shards need no per-table state and no generation.
+    table: RwLock<Option<Arc<TableCatalog>>>,
 }
 
 impl CatalogState {
@@ -40,6 +44,7 @@ impl CatalogState {
             index_gen: AtomicU64::new(0),
             view: RwLock::new(None),
             view_gen: AtomicU64::new(0),
+            table: RwLock::new(None),
         }
     }
 
@@ -90,6 +95,14 @@ impl CatalogState {
     pub(crate) fn view_gen(&self) -> u64 {
         self.view_gen.load(Ordering::Acquire)
     }
+
+    /// Snapshot the current table catalog (None = empty).
+    pub(crate) fn table(&self) -> Option<Arc<TableCatalog>> {
+        self.table
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
 }
 
 impl RuntimeState {
@@ -118,5 +131,17 @@ impl RuntimeState {
             .unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(c));
         self.catalogs.view_gen.fetch_add(1, Ordering::Release);
         self.bump_control_epoch();
+    }
+
+    /// Swap in a new table catalog. No generation, no epoch: shards
+    /// carry no per-table state — a table's runtime footprint is its
+    /// compiled indexes, installed via
+    /// [`Self::install_index_catalog`] in the same command.
+    pub(crate) fn install_table_catalog(&self, c: TableCatalog) {
+        *self
+            .catalogs
+            .table
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(c));
     }
 }

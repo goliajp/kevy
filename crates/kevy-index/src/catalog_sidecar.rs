@@ -11,6 +11,7 @@
 use core::fmt::Write as _;
 
 use crate::catalog::{AnnSpec, Catalog, FieldSpec, IndexKind, IndexSpec, ValType, ValueSpec};
+use crate::composite::CompositeCol;
 
 impl Catalog {
     /// Serialize to the sidecar text form (one line per index:
@@ -19,14 +20,22 @@ impl Catalog {
     /// is `dim,distance,m,ef` for ANN kinds).
     pub fn to_sidecar(&self) -> String {
         // Write the OLDEST header that can represent the data: v5 exists
-        // only for scalar-kind VALUES (capacity arc G1), so a catalog
-        // without one serializes byte-identically to the v4 writer (A5)
-        // — and stays readable by every pre-G1 binary.
+        // only for scalar-kind VALUES (capacity arc G1), v6 only for
+        // composite (ORDERPATH) indexes — a catalog using neither
+        // serializes byte-identically to the v4 writer (A5) and stays
+        // readable by every earlier binary.
+        let needs_v6 = self.specs.iter().any(|(s, _)| s.composite.is_some());
         let needs_v5 = self.specs.iter().any(|(s, _)| {
             matches!(s.kind, IndexKind::Range | IndexKind::Unique) && !s.values.is_empty()
         });
-        let mut out =
-            String::from(if needs_v5 { "kevy-index-catalog v5\n" } else { "kevy-index-catalog v4\n" });
+        let header = if needs_v6 {
+            "kevy-index-catalog v6\n"
+        } else if needs_v5 {
+            "kevy-index-catalog v5\n"
+        } else {
+            "kevy-index-catalog v4\n"
+        };
+        let mut out = String::from(header);
         for (s, _) in &self.specs {
             let _ = write!(
                 out,
@@ -46,6 +55,10 @@ impl Catalog {
                 let _ = write!(out, "\t{},{},{},{}", a.dim, a.distance, a.m, a.ef);
             } else if let Some(g) = &s.group_by {
                 let _ = write!(out, "\t{}", esc(g));
+            } else if let Some(cols) = &s.composite {
+                // v6: a composite (ORDERPATH) index's 7th column —
+                // head `comp`, then `name:ty:a|d` per column.
+                let _ = write!(out, "\t{}", composite_col_text(cols));
             } else if let Some(col) = values_col(s) {
                 // Text (v3+) and, from v5, the scalar kinds: the same
                 // `pos|-,name:ty,…` column, `pos` being text-only.
@@ -69,6 +82,7 @@ impl Catalog {
         // positions flag on top of v2's weighted fields. v1/v2 stay
         // readable forever; only the writer moves to the newest form.
         let version: u8 = match lines.next()? {
+            "kevy-index-catalog v6" => 6,
             "kevy-index-catalog v5" => 5,
             "kevy-index-catalog v4" => 4,
             "kevy-index-catalog v3" => 3,
@@ -99,6 +113,11 @@ fn spec_from_line(line: &str, version: u8) -> Option<IndexSpec> {
             // A text index's 7th column carries its own flags; older
             // sidecars never wrote one, so it only appears from v3 on.
             IndexKind::Text if version >= 3 => return text_spec(&parts, version),
+            // A composite (ORDERPATH) line's 7th column has the `comp`
+            // head (v6 — the capacity arc's T7).
+            IndexKind::Range if version >= 6 && parts[6].starts_with("comp,") => {
+                return composite_spec(&parts, version);
+            }
             // A scalar kind's 7th column is its VALUES list (v5 — the
             // capacity arc's G1). `pos` stays text-only: a positions
             // head on a scalar line is malformed, not ignored.
@@ -121,6 +140,59 @@ fn spec_from_line(line: &str, version: u8) -> Option<IndexSpec> {
         group_by,
         with_positions,
         values: Vec::new(),
+        composite: None,
+    })
+}
+
+/// A composite line's 7th column: `comp` head, then one `name:ty:a|d`
+/// entry per declared column (names escaped for `,` / `:`).
+fn composite_col_text(cols: &[CompositeCol]) -> String {
+    let mut out = String::from("comp");
+    for c in cols {
+        let _ = write!(
+            out,
+            ",{}:{}:{}",
+            esc_field(&c.name),
+            c.ty.tag(),
+            if c.desc { 'd' } else { 'a' }
+        );
+    }
+    out
+}
+
+/// The inverse of [`composite_col_text`] on a v6 line.
+fn composite_spec(parts: &[&str], version: u8) -> Option<IndexSpec> {
+    let cols = parts[6]
+        .split(',')
+        .skip(1)
+        .map(|e| {
+            let segs: Vec<&str> = e.split(':').collect();
+            if segs.len() != 3 {
+                return None;
+            }
+            let desc = match segs[2] {
+                "a" => false,
+                "d" => true,
+                _ => return None,
+            };
+            Some(CompositeCol { name: unesc(segs[0])?, ty: ValType::parse(segs[1].as_bytes())?, desc })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    if cols.is_empty() {
+        return None;
+    }
+    Some(IndexSpec {
+        name: unesc(parts[0])?,
+        prefix: unesc(parts[1])?,
+        fields: col_to_fields(parts[2], version >= 2)?,
+        ty: ValType::parse(parts[3].as_bytes())?,
+        kind: IndexKind::Range,
+        max_bytes: parts[5].parse().ok()?,
+        ann: None,
+        group_by: None,
+        with_positions: false,
+        values: Vec::new(),
+        composite: Some(cols),
     })
 }
 
@@ -153,6 +225,7 @@ fn text_spec(parts: &[&str], version: u8) -> Option<IndexSpec> {
         group_by: None,
         with_positions,
         values,
+        composite: None,
     })
 }
 
@@ -195,6 +268,7 @@ fn scalar_spec(parts: &[&str], version: u8) -> Option<IndexSpec> {
         group_by: None,
         with_positions: false,
         values,
+        composite: None,
     })
 }
 

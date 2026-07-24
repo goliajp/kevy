@@ -94,3 +94,43 @@ pub(crate) fn wire_registries(
     }
     (indexes, views)
 }
+
+/// The engine-lifetime `DropGuard` (owner of the boot report and the
+/// table registry — `WeakStore::upgrade` rebuilds a full `Store` from
+/// it even after every strong handle dropped while a subscription kept
+/// the engine alive). Split from `open_inner` for the fn-length rule.
+#[allow(clippy::too_many_arguments)] // one-call-site bring-up bundle
+pub(crate) fn build_guard(
+    open_report: &Arc<crate::metric::OpenReport>,
+    reaper_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
+    reaper_join: Option<std::thread::JoinHandle<()>>,
+    shards: &Shards,
+    #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+    replica_runner: Option<crate::replica_runner::ReplicaRunner>,
+    #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+    replica_source: Option<crate::replica_source::ReplicaSource>,
+    #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+    feed: &Option<Arc<std::sync::Mutex<kevy_replicate::feed::FeedSource>>>,
+    config: &crate::config::Config,
+) -> Arc<crate::store_inner::DropGuard> {
+    #[cfg(any(target_arch = "wasm32", not(feature = "replicate")))]
+    let _ = config;
+    Arc::new(crate::store_inner::DropGuard {
+        shutdown: std::sync::atomic::AtomicBool::new(false),
+        open_report: open_report.clone(),
+        #[cfg(feature = "index")]
+        tables: Arc::new(crate::ops_table::TableReg::default()),
+        reaper_stop,
+        reaper_join: std::sync::Mutex::new(reaper_join),
+        shards_for_flush: shards.clone(),
+        #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+        replica_runner,
+        #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+        feed_close: match (feed, &config.data_dir) {
+            (Some(f), Some(d)) => Some((f.clone(), d.clone())),
+            _ => None,
+        },
+        #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+        replica_source,
+    })
+}

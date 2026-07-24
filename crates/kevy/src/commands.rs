@@ -151,6 +151,9 @@ impl Commands for KevyCommands {
         if argv.first().is_some_and(|v| v.len() > 5 && v[..5].eq_ignore_ascii_case(b"VIEW.")) {
             return crate::cmd_view::extension_op(&self.ctx(), store, argv);
         }
+        if argv.first().is_some_and(|v| v.len() > 6 && v[..6].eq_ignore_ascii_case(b"TABLE.")) {
+            return crate::cmd_table::extension_op(&self.ctx(), store, argv);
+        }
         crate::cmd_index_query::extension_op(&self.ctx(), store, argv)
     }
 
@@ -166,6 +169,11 @@ impl Commands for KevyCommands {
         } else if argv.first().is_some_and(|v| v.len() > 5 && v[..5].eq_ignore_ascii_case(b"VIEW."))
         {
             crate::cmd_view::extension_reduce(catalogs, argv, chunks)
+        } else if argv
+            .first()
+            .is_some_and(|v| v.len() > 6 && v[..6].eq_ignore_ascii_case(b"TABLE."))
+        {
+            crate::cmd_table::extension_reduce(catalogs, argv, chunks)
         } else {
             crate::cmd_index_reduce::extension_reduce(catalogs, argv, chunks)
         };

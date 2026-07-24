@@ -3,7 +3,7 @@
 //! `ops_index.rs` to keep it under the 500-LOC project ceiling;
 //! behaviour unchanged).
 
-use kevy_index::{IndexKind, IndexSpec, IndexValue, Segment};
+use kevy_index::{IndexKind, IndexSpec, Segment};
 
 use crate::ops_index::{IndexReg, ShardSegs};
 
@@ -360,19 +360,23 @@ fn new_scalar(spec: &IndexSpec) -> Segment {
 /// `index_runtime::apply_scalar_row`). The peek's `Ok(None)`/`Err`
 /// arms replace the old `exists()` disambiguation probe exactly.
 fn apply_key(store: &mut kevy_store::Store, spec: &IndexSpec, seg: &mut Segment, key: &[u8]) {
-    let mut names: Vec<&[u8]> = Vec::with_capacity(1 + spec.values.len());
-    names.push(spec.field());
-    names.extend(spec.values.iter().map(|f| f.name.as_slice()));
+    // The driving columns (composite or single FIELD) + VALUES in one
+    // row peek; the derivation is the spec's own
+    // ([`IndexSpec::derive_scalar`]) — the single implementation the
+    // server's `apply_scalar_row` applies too, so the two engines
+    // cannot index one row differently.
+    let names = spec.scalar_read_names();
+    let w = spec.primary_width();
     match store.peek_hash_fields(key, &names) {
         Ok(None) | Err(_) => seg.remove(key),
-        Ok(Some(mut vals)) => {
-            let primary = vals[0].take().and_then(|raw| IndexValue::coerce(spec.ty, &raw));
+        Ok(Some(vals)) => {
+            let primary = spec.derive_scalar(&vals[..w]);
             match primary {
                 None => seg.apply_with_values(key, None, &[]),
                 Some(v) if spec.values.is_empty() => seg.apply(key, Some(v)),
                 Some(v) => {
                     let refs: Vec<Option<&[u8]>> =
-                        vals[1..].iter().map(|o| o.as_deref()).collect();
+                        vals[w..].iter().map(|o| o.as_deref()).collect();
                     seg.apply_with_values(key, Some(v), &refs);
                 }
             }

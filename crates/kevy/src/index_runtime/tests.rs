@@ -16,6 +16,7 @@ fn spec(name: &str) -> IndexSpec {
         group_by: None,
         with_positions: false,
         values: Vec::new(),
+        composite: None,
     }
 }
 

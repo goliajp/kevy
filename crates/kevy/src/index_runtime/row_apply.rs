@@ -27,19 +27,23 @@ use super::{BuildState, ShardIndex};
 /// key / non-hash is not a row; a present hash whose primary field is
 /// missing or fails coercion is an excluded row.
 pub(super) fn apply_scalar_row(store: &mut Store, spec: &IndexSpec, seg: &mut Segment, key: &[u8]) {
-    let mut names: Vec<&[u8]> = Vec::with_capacity(1 + spec.values.len());
-    names.push(spec.field());
-    names.extend(spec.values.iter().map(|f| f.name.as_slice()));
+    // The driving columns (the composite's declared columns, or the
+    // single FIELD) and the stored VALUES columns, one row peek. The
+    // derivation itself — coercion or the composite byte encoding —
+    // lives with the spec ([`IndexSpec::derive_scalar`]), so the
+    // server and the embedded store cannot index one row differently.
+    let names = spec.scalar_read_names();
+    let w = spec.primary_width();
     match store.peek_hash_fields(key, &names) {
         Ok(None) | Err(_) => seg.remove(key),
-        Ok(Some(mut vals)) => {
-            let primary = vals[0].take().and_then(|raw| IndexValue::coerce(spec.ty, &raw));
+        Ok(Some(vals)) => {
+            let primary = spec.derive_scalar(&vals[..w]);
             match primary {
                 None => seg.apply_with_values(key, None, &[]),
                 Some(v) if spec.values.is_empty() => seg.apply(key, Some(v)),
                 Some(v) => {
                     let refs: Vec<Option<&[u8]>> =
-                        vals[1..].iter().map(|o| o.as_deref()).collect();
+                        vals[w..].iter().map(|o| o.as_deref()).collect();
                     seg.apply_with_values(key, Some(v), &refs);
                 }
             }
@@ -148,6 +152,19 @@ pub(crate) enum RowValue {
 }
 
 pub(crate) fn row_value(store: &mut Store, spec: &IndexSpec, key: &[u8]) -> RowValue {
+    // Composite (ORDERPATH) indexes: VERIFY recomputes the whole byte
+    // derivation from the declared columns — one row peek, drift stays
+    // falsifiable for the mechanical encoding too.
+    if spec.composite.is_some() {
+        let names = spec.scalar_read_names();
+        return match store.peek_hash_fields(key, &names[..spec.primary_width()]) {
+            Ok(None) | Err(_) => RowValue::Gone,
+            Ok(Some(vals)) => match spec.derive_scalar(&vals) {
+                Some(v) => RowValue::Value(v),
+                None => RowValue::CoerceFailed,
+            },
+        };
+    }
     match store.hget(key, spec.field()) {
         Ok(Some(raw)) => {
             let raw = raw.to_vec();

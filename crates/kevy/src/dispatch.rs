@@ -199,6 +199,12 @@ fn dispatch_conn<A: ArgvView + ?Sized>(
         b"VIEW.CREATE" => crate::cmd_view::cmd_view_create(ctx, args, out),
         b"VIEW.DROP" => crate::cmd_view::cmd_view_drop(ctx, args, out),
         b"IDX.DROP" => crate::cmd_index::cmd_idx_drop(ctx, args, out),
+        b"TABLE.DECLARE" => crate::cmd_table::cmd_table_declare(ctx, store, args, out),
+        b"TABLE.DROP" => crate::cmd_table::cmd_table_drop(ctx, args, out),
+        // Well-formed LIST/VERIFY ride the extension fan-out; only a
+        // malformed arity falls through to these usage arms.
+        b"TABLE.LIST" => encode_error(out, "ERR usage: TABLE.LIST"),
+        b"TABLE.VERIFY" => encode_error(out, "ERR usage: TABLE.VERIFY name"),
         b"ECHO" => {
             if args.len() == 2 {
                 encode_bulk(out, &args[1]);

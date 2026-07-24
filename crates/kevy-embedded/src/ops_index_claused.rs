@@ -212,6 +212,7 @@ impl Store {
                 .iter()
                 .map(|(n, t)| kevy_index::ValueSpec { name: n.to_vec(), ty: *t })
                 .collect(),
+            composite: None,
         };
         self.register_spec(spec)
     }

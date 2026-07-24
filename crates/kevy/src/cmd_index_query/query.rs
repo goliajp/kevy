@@ -17,7 +17,7 @@ enum HitsOrChunk {
     /// recheck needs the store, which the segment borrow holds, so it runs
     /// after that borrow ends — same shape as `encode_hits_chunk`'s hydration.
     Verify {
-        spec: IndexSpec,
+        spec: Box<IndexSpec>,
         entries: Vec<(Vec<u8>, IndexValue)>,
         stats: SegmentStats,
     },
@@ -96,9 +96,10 @@ fn verify_kind_stats(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> Option<Ve
 /// Range / Eq / scalar-Verify against this shard's segment.
 fn run_scalar_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8]) -> Vec<u8> {
     let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg| match q.shape {
-        Shape::Range { .. } | Shape::Eq { .. } => {
-            let Some((min, max)) = q.bounds(spec.ty) else {
-                return HitsOrChunk::Chunk(vec![ST_BADARGS]);
+        Shape::Range { .. } | Shape::Eq { .. } | Shape::Where(_) => {
+            let (min, max) = match q.bounds_for(spec) {
+                Ok(b) => b,
+                Err(chunk) => return HitsOrChunk::Chunk(chunk),
             };
             if verb.eq_ignore_ascii_case(b"IDX.COUNT") {
                 let mut chunk = vec![ST_OK];
@@ -121,7 +122,7 @@ fn run_scalar_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8]) ->
         Shape::Verify => {
             let mut entries: Vec<(Vec<u8>, IndexValue)> = Vec::new();
             seg.each_entry(|k, v| entries.push((k.to_vec(), v.clone())));
-            HitsOrChunk::Verify { spec: spec.clone(), entries, stats: seg.stats() }
+            HitsOrChunk::Verify { spec: Box::new(spec.clone()), entries, stats: seg.stats() }
         }
     });
     match res {
@@ -320,6 +321,7 @@ mod verify_tests {
             group_by: None,
             with_positions: false,
             values: Vec::new(),
+            composite: None,
         }
     }
 

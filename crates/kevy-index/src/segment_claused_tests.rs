@@ -3,7 +3,8 @@
 //! surface's behaviour exactly.
 
 use super::*;
-use crate::catalog::{ValType, ValueTest};
+use crate::catalog::ValType;
+use crate::value::ValueTest;
 use crate::segment::Segment;
 use crate::value::IndexValue;
 
