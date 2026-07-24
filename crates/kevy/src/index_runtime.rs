@@ -218,6 +218,41 @@ pub(crate) fn segment_building(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) ->
         .is_some_and(|si| matches!(si.build, BuildState::Backfilling { .. }))
 }
 
+/// A fresh scalar segment for `spec` — with the stored-value
+/// side-channel iff a scalar kind declared `VALUES` (text keeps its
+/// values in the text segment; without the declaration this is the
+/// plain `Segment::new()`, byte-identical to before — A5).
+fn new_scalar_seg(spec: &IndexSpec) -> Segment {
+    let scalar = matches!(spec.kind, kevy_index::IndexKind::Range | kevy_index::IndexKind::Unique);
+    if scalar && !spec.values.is_empty() {
+        Segment::with_values(spec.values.len())
+    } else {
+        Segment::new()
+    }
+}
+
+/// Apply one scalar row: the coerced primary field, and — when the spec
+/// declares `VALUES` — the row's stored values riding the same write.
+fn apply_scalar_row(store: &mut Store, spec: &IndexSpec, seg: &mut Segment, key: &[u8]) {
+    match row_value(store, spec, key) {
+        RowValue::Value(v) => {
+            if spec.values.is_empty() {
+                seg.apply(key, Some(v));
+            } else {
+                let owned: Vec<Option<Vec<u8>>> = spec
+                    .values
+                    .iter()
+                    .map(|f| store.hget(key, &f.name).ok().flatten().map(|b| b.to_vec()))
+                    .collect();
+                let vals: Vec<Option<&[u8]>> = owned.iter().map(|v| v.as_deref()).collect();
+                seg.apply_with_values(key, Some(v), &vals);
+            }
+        }
+        RowValue::CoerceFailed => seg.apply_with_values(key, None, &[]),
+        RowValue::Gone => seg.remove(key),
+    }
+}
+
 /// A fresh text segment for `spec` when it is a text index — with the
 /// positional side-channel iff it was created WITH POSITIONS.
 fn new_text_seg(spec: &kevy_index::IndexSpec) -> Option<kevy_text::TextSegment> {
@@ -271,8 +306,8 @@ fn refresh(catalogs: &CatalogState, st: &mut ShardIndexes, store: &mut Store) {
                                 },
                             )
                         }),
+                        seg: new_scalar_seg(spec),
                         spec: spec.clone(),
-                        seg: Segment::new(),
                         build: BuildState::Backfilling { keys, pos: 0 },
                     });
                 }
@@ -324,12 +359,7 @@ fn apply_row(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
         }
         return;
     }
-    let val = row_value(store, &si.spec, key);
-    match val {
-        RowValue::Value(v) => si.seg.apply(key, Some(v)),
-        RowValue::CoerceFailed => si.seg.apply(key, None),
-        RowValue::Gone => si.seg.remove(key),
-    }
+    apply_scalar_row(store, &si.spec, &mut si.seg, key);
 }
 
 /// [`apply_row`]'s agg half: both fields must resolve — the aggregated
@@ -429,11 +459,9 @@ fn apply_row_backfill(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
         apply_row(store, si, key);
         return;
     }
-    match row_value(store, &si.spec, key) {
-        RowValue::Value(v) => si.seg.apply(key, Some(v)),
-        RowValue::CoerceFailed => si.seg.apply(key, None),
-        RowValue::Gone => {} // deleted since snapshot — nothing to do
-    }
+    // A key deleted since the snapshot resolves to `Gone` → `remove`,
+    // which is a no-op on a segment that never held it.
+    apply_scalar_row(store, &si.spec, &mut si.seg, key);
 }
 
 #[cfg(test)]

@@ -17,7 +17,9 @@
 mod agg;
 mod catalog;
 mod catalog_sidecar;
+mod rowvalues;
 mod segment;
+mod segment_claused;
 mod value;
 mod view;
 mod view_sidecar;
@@ -27,6 +29,10 @@ pub use catalog::{
     AnnSpec, Catalog, FieldSpec, IndexKind, IndexSpec, IndexState, RowInputs, ValType, ValueSpec, ValueTest,
 };
 pub use segment::{Cursor, Segment, SegmentStats};
+pub use segment_claused::{
+    ClausedPage, FacetBucket, ScalarClauses, ScalarHit, fold_facets, merge_claused,
+    scalar_sorted_order, sort_facets,
+};
 pub use value::{IndexValue, order_key};
 pub use view::{
     Leaf, MAX_TREE_DEPTH, MAX_TREE_LEAVES, MAX_VIEWS, MaterializedSet, Tree, ViewCatalog,

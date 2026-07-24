@@ -6,7 +6,9 @@
 
 mod args;
 mod ops;
+mod ops_clauses;
 mod query;
+mod query_claused;
 mod wire;
 
 pub(crate) use args::{

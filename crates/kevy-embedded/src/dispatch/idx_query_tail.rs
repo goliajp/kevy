@@ -19,37 +19,29 @@ pub(super) struct Tail {
     pub(super) scope: Vec<Vec<u8>>,
     /// `FILTER …`: non-scoring predicates over stored values, ANDed.
     /// Owned here because the borrowed form the store takes points at
-    /// them. Only with the text surface: without it there is no MATCH
-    /// for a predicate to restrict, so the clause is not a thing rather
-    /// than a thing that is ignored.
-    #[cfg(feature = "text")]
+    /// them. Shared by MATCH and — since the capacity arc's G1 — the
+    /// scalar RANGE/EQ shapes, so the clause set is feature-independent.
     pub(super) filters: Vec<FilterClause>,
     /// `SORT <field> ASC|DESC`: select by a stored value rather than by
     /// score.
-    #[cfg(feature = "text")]
     pub(super) sort: Option<(Vec<u8>, bool)>,
     /// `DISTINCT <field>`: at most one hit per value of a stored field.
-    #[cfg(feature = "text")]
     pub(super) distinct: Option<Vec<u8>>,
     /// `FACET <field…>`: count each field's values over the match set.
-    #[cfg(feature = "text")]
     pub(super) facets: Vec<Vec<u8>>,
 }
 
 /// One parsed `FILTER <field> RANGE <min> <max>` / `EQ <v>`.
-#[cfg(feature = "text")]
 pub(super) struct FilterClause {
     pub(super) field: Vec<u8>,
     pub(super) shape: FilterShape,
 }
 
-#[cfg(feature = "text")]
 pub(super) enum FilterShape {
     Range(Vec<u8>, Vec<u8>),
     Eq(Vec<u8>),
 }
 
-#[cfg(feature = "text")]
 impl FilterClause {
     /// The borrowed form [`crate::MatchOpts`] takes.
     pub(super) fn as_value_filter(&self) -> crate::ValueFilter<'_> {
@@ -77,10 +69,8 @@ fn is_tail_keyword(a: &[u8]) -> bool {
         || a.eq_ignore_ascii_case(b"FACET")
 }
 
-/// One `FILTER <field> RANGE <min> <max>` / `EQ <v>`; several AND, which
-/// is why each appends rather than replaces.
-/// The clauses only a MATCH takes. Split out so the shared tail
-/// dispatcher stays readable as the surface grows.
+/// The clauses only a MATCH takes (the shared stored-value clauses are
+/// routed by `apply_tail_clause` itself).
 fn apply_match_clause(argv: &[Vec<u8>], i: usize, t: &mut Tail) -> Option<usize> {
     let a = &argv[i];
     if a.eq_ignore_ascii_case(b"HIGHLIGHT") {
@@ -95,17 +85,6 @@ fn apply_match_clause(argv: &[Vec<u8>], i: usize, t: &mut Tail) -> Option<usize>
             _ => return None,
         };
         Some(i + 2)
-    } else if a.eq_ignore_ascii_case(b"OFFSET") {
-        t.offset = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
-        Some(i + 2)
-    } else if a.eq_ignore_ascii_case(b"FACET") {
-        apply_facet(argv, i, t)
-    } else if a.eq_ignore_ascii_case(b"DISTINCT") {
-        apply_distinct(argv, i, t)
-    } else if a.eq_ignore_ascii_case(b"SORT") {
-        apply_sort(argv, i, t)
-    } else if a.eq_ignore_ascii_case(b"FILTER") {
-        apply_filter(argv, i, t)
     } else if a.eq_ignore_ascii_case(b"IN") {
         let (fs, next) = collect_until_keyword(argv, i + 1);
         if fs.is_empty() {
@@ -119,7 +98,6 @@ fn apply_match_clause(argv: &[Vec<u8>], i: usize, t: &mut Tail) -> Option<usize>
 }
 
 /// `SORT <field> ASC|DESC`.
-#[cfg(feature = "text")]
 fn apply_sort(argv: &[Vec<u8>], i: usize, t: &mut Tail) -> Option<usize> {
     let field = argv.get(i + 1)?.clone();
     let dir = argv.get(i + 2)?;
@@ -135,7 +113,6 @@ fn apply_sort(argv: &[Vec<u8>], i: usize, t: &mut Tail) -> Option<usize> {
 }
 
 /// `FACET <field…>`.
-#[cfg(feature = "text")]
 fn apply_facet(argv: &[Vec<u8>], i: usize, t: &mut Tail) -> Option<usize> {
     let (fs, next) = collect_until_keyword(argv, i + 1);
     if fs.is_empty() {
@@ -145,41 +122,12 @@ fn apply_facet(argv: &[Vec<u8>], i: usize, t: &mut Tail) -> Option<usize> {
     Some(next)
 }
 
-/// No MATCH without the text surface, so nothing to count.
-#[cfg(not(feature = "text"))]
-fn apply_facet(_argv: &[Vec<u8>], _i: usize, _t: &mut Tail) -> Option<usize> {
-    None
-}
-
 /// `DISTINCT <field>`.
-#[cfg(feature = "text")]
 fn apply_distinct(argv: &[Vec<u8>], i: usize, t: &mut Tail) -> Option<usize> {
     t.distinct = Some(argv.get(i + 1)?.clone());
     Some(i + 2)
 }
 
-/// No MATCH without the text surface, so nothing to collapse.
-#[cfg(not(feature = "text"))]
-fn apply_distinct(_argv: &[Vec<u8>], _i: usize, _t: &mut Tail) -> Option<usize> {
-    None
-}
-
-/// Without the text surface there is no MATCH to order, so `SORT` is a
-/// syntax error rather than a clause that parses and does nothing.
-#[cfg(not(feature = "text"))]
-fn apply_sort(_argv: &[Vec<u8>], _i: usize, _t: &mut Tail) -> Option<usize> {
-    None
-}
-
-/// Without the text surface there is no MATCH for a predicate to
-/// restrict, so `FILTER` is a syntax error rather than a clause that
-/// parses and does nothing.
-#[cfg(not(feature = "text"))]
-fn apply_filter(_argv: &[Vec<u8>], _i: usize, _t: &mut Tail) -> Option<usize> {
-    None
-}
-
-#[cfg(feature = "text")]
 fn apply_filter(argv: &[Vec<u8>], i: usize, t: &mut Tail) -> Option<usize> {
     let field = argv.get(i + 1)?.clone();
     let mode = argv.get(i + 2)?;
@@ -206,12 +154,21 @@ fn collect_until_keyword(argv: &[Vec<u8>], start: usize) -> (Vec<Vec<u8>>, usize
     (out, i)
 }
 
+/// Which clause set a verb's tail admits. `Scalar` (RANGE / EQ) takes
+/// the stored-value clauses but not the text-only ones (HIGHLIGHT /
+/// TYPO / IN); `Match` takes everything.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum TailMode {
+    Scalar,
+    Match,
+}
+
 pub(super) fn parse_tail(
     argv: &[Vec<u8>],
     mut i: usize,
     default_limit: usize,
     cap: usize,
-    match_clauses: bool,
+    mode: TailMode,
 ) -> Option<Tail> {
     let mut t = Tail {
         limit: default_limit,
@@ -221,30 +178,30 @@ pub(super) fn parse_tail(
         typo: 0,
         offset: 0,
         scope: Vec::new(),
-        #[cfg(feature = "text")]
         filters: Vec::new(),
-        #[cfg(feature = "text")]
         sort: None,
-        #[cfg(feature = "text")]
         distinct: None,
-        #[cfg(feature = "text")]
         facets: Vec::new(),
     };
     while i < argv.len() {
-        i = apply_tail_clause(argv, i, &mut t, match_clauses)?;
+        i = apply_tail_clause(argv, i, &mut t, mode)?;
     }
     t.limit = t.limit.clamp(1, cap);
+    t.offset = t.offset.min(10_000);
     Some(t)
 }
 
 /// Apply the tail clause starting at `i`; returns the next index, or
-/// `None` on a syntax error. `match_clauses` gates the MATCH-only ones
-/// (HIGHLIGHT / TYPO / OFFSET) so a RANGE query cannot smuggle them in.
+/// `None` on a syntax error. The mode gates the text-only clauses
+/// (HIGHLIGHT / TYPO / IN) so a RANGE query cannot smuggle them in; the
+/// stored-value clauses are shared. A scalar `FIELDS` consumes the rest
+/// of the argv (the server's terminal contract); a MATCH one collects
+/// up to the next keyword.
 fn apply_tail_clause(
     argv: &[Vec<u8>],
     i: usize,
     t: &mut Tail,
-    match_clauses: bool,
+    mode: TailMode,
 ) -> Option<usize> {
     let a = &argv[i];
     if a.eq_ignore_ascii_case(b"LIMIT") {
@@ -254,13 +211,28 @@ fn apply_tail_clause(
         t.cursor_raw = Some(argv.get(i + 1)?.clone());
         Some(i + 2)
     } else if a.eq_ignore_ascii_case(b"FIELDS") {
-        let (fs, next) = collect_until_keyword(argv, i + 1);
+        let (fs, next) = if mode == TailMode::Scalar {
+            (argv[i + 1..].to_vec(), argv.len())
+        } else {
+            collect_until_keyword(argv, i + 1)
+        };
         if fs.is_empty() {
             return None;
         }
         t.fields = fs;
         Some(next)
-    } else if match_clauses {
+    } else if a.eq_ignore_ascii_case(b"OFFSET") {
+        t.offset = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
+        Some(i + 2)
+    } else if a.eq_ignore_ascii_case(b"FILTER") {
+        apply_filter(argv, i, t)
+    } else if a.eq_ignore_ascii_case(b"SORT") {
+        apply_sort(argv, i, t)
+    } else if a.eq_ignore_ascii_case(b"DISTINCT") {
+        apply_distinct(argv, i, t)
+    } else if a.eq_ignore_ascii_case(b"FACET") {
+        apply_facet(argv, i, t)
+    } else if mode == TailMode::Match {
         apply_match_clause(argv, i, t)
     } else {
         None

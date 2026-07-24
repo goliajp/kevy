@@ -87,7 +87,7 @@ fn rebuild_seg_lists(
                 .push(take_or_backfill(&mut segs.text, spec, st, || new_text(spec), apply_text_key)),
             #[cfg(not(feature = "text"))]
             IndexKind::Text => {}
-            _ => next.push(take_or_backfill(&mut segs.segs, spec, st, Segment::new, apply_key)),
+            _ => next.push(take_or_backfill(&mut segs.segs, spec, st, || new_scalar(spec), apply_key)),
         }
     }
     shard_segs.segs = next;
@@ -285,22 +285,56 @@ fn each_written_key(verb: &[u8], parts: &[&[u8]], mut f: impl FnMut(&[u8])) {
     }
 }
 
+/// A fresh scalar segment shaped by the spec — with the stored-value
+/// side-channel iff it declared `VALUES` (undeclared = the plain
+/// `Segment::new()`, byte-identical to before; A5).
+fn new_scalar(spec: &IndexSpec) -> Segment {
+    if spec.values.is_empty() {
+        Segment::new()
+    } else {
+        Segment::with_values(spec.values.len())
+    }
+}
+
 fn apply_key(store: &mut kevy_store::Store, spec: &IndexSpec, seg: &mut Segment, key: &[u8]) {
     match store.hget(key, spec.field()) {
         Ok(Some(raw)) => {
             let raw = raw.to_vec();
             match IndexValue::coerce(spec.ty, &raw) {
-                Some(v) => seg.apply(key, Some(v)),
-                None => seg.apply(key, None),
+                Some(v) => apply_indexed(store, spec, seg, key, v),
+                None => seg.apply_with_values(key, None, &[]),
             }
         }
         Ok(None) => {
             if store.exists(&[key]) == 0 {
                 seg.remove(key);
             } else {
-                seg.apply(key, None);
+                seg.apply_with_values(key, None, &[]);
             }
         }
         Err(_) => seg.remove(key),
+    }
+}
+
+/// Apply an indexed row plus — when the spec declares `VALUES` — its
+/// stored values riding the same write (the server twin is
+/// `index_runtime::apply_scalar_row`).
+fn apply_indexed(
+    store: &mut kevy_store::Store,
+    spec: &IndexSpec,
+    seg: &mut Segment,
+    key: &[u8],
+    v: IndexValue,
+) {
+    if spec.values.is_empty() {
+        seg.apply(key, Some(v));
+    } else {
+        let owned: Vec<Option<Vec<u8>>> = spec
+            .values
+            .iter()
+            .map(|f| store.hget(key, &f.name).ok().flatten().map(|b| b.to_vec()))
+            .collect();
+        let vals: Vec<Option<&[u8]>> = owned.iter().map(|x| x.as_deref()).collect();
+        seg.apply_with_values(key, Some(v), &vals);
     }
 }
