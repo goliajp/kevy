@@ -19,6 +19,8 @@ mod hash;
 #[cfg(feature = "index")]
 mod idx;
 #[cfg(feature = "index")]
+mod idx_create;
+#[cfg(feature = "index")]
 mod idx_compose;
 #[cfg(feature = "index")]
 mod idx_query;
