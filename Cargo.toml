@@ -50,6 +50,7 @@ members = [
     "crates/kevy-rt",
     "crates/kevy-persist",
     "crates/kevy",
+    "crates/kevy-sql",
     "crates/kevy-cli",
     "crates/kevy-pubsub-bench",
     "crates/kevy-bench",

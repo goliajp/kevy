@@ -21,6 +21,22 @@ OPTIONS:
 
 With a trailing command, runs once and exits non-zero on a RESP error.
 Without a command, opens an interactive REPL (Ctrl-D / `quit` / `exit` to leave).
+"
+    );
+    print_help_tools();
+}
+
+/// The tool-subcommand half of `--help` (split: fn ≤ 50 LOC rule).
+fn print_help_tools() {
+    println!(
+        "\
+SQL COMPILER (declaration-time only — never per-query):
+    sql compile <file.sql>                      compile CREATE TABLE/INDEX/VIEW
+                                                into TABLE.DECLARE / VIEW.CREATE
+                                                commands + IDX.QUERY query cards
+    sql compile <file.sql> --apply --url <h:p>  additionally run the commands
+                                                against a server (exits non-zero
+                                                on any error reply)
 
 MIGRATION TOOLS:
     export  -p <port> [--prefix <p>] <file>     dump the keyspace to a RESP file

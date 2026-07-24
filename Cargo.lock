@@ -474,6 +474,7 @@ dependencies = [
  "kevy-persist",
  "kevy-resp",
  "kevy-resp-client",
+ "kevy-sql",
  "kevy-tmpdir",
 ]
 
@@ -683,6 +684,13 @@ dependencies = [
 [[package]]
 name = "kevy-scope"
 version = "4.0.0"
+
+[[package]]
+name = "kevy-sql"
+version = "4.0.0"
+dependencies = [
+ "kevy-index",
+]
 
 [[package]]
 name = "kevy-store"

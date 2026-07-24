@@ -54,6 +54,23 @@ kevy-cli restore --from ./snapshot-2026-07-01.kbackup --to /var/lib/kevy
 `backup` runs against a live server. `restore` writes into a fresh
 data directory so the server picks the contents up on the next boot.
 
+## SQL schema compiler
+
+```sh
+kevy-cli sql compile schema.sql                           # print the compiled script
+kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004
+```
+
+The [`kevy-sql`](https://crates.io/crates/kevy-sql) declaration-time
+compiler: `CREATE TABLE` / `CREATE [UNIQUE] INDEX` /
+single-table `CREATE VIEW` compile ONCE into explicit `TABLE.DECLARE`
+and `VIEW.CREATE` commands plus `IDX.QUERY` query cards (`$N`
+templates the app fills at runtime). `--apply` runs the declaration
+commands against a server, printing each reply, and exits non-zero on
+any error reply. This is a build step, like a migration tool — ad-hoc
+runtime SQL stays refused by the engine (Law 3). The full walk-through
+lives in the cookbook's "Porting a PG/MySQL schema" chapter.
+
 ## License
 
 Licensed under either of [MIT](../../LICENSE-MIT) or

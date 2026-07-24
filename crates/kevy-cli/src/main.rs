@@ -27,6 +27,7 @@ const DEFAULT_PORT: u16 = 6379;
 
 mod args;
 mod embed;
+mod sqlcmd;
 
 use args::{Config, print_help};
 
@@ -93,6 +94,11 @@ fn route_subcommand(args: &[String]) -> Option<ExitCode> {
         };
         let cmd: Vec<Vec<u8>> = args[2..].iter().map(|s| s.clone().into_bytes()).collect();
         return Some(embed::run_embed_cli(&dir, &cmd));
+    }
+    // `sql compile <file.sql> [--apply --url h:p]`: the declaration-time
+    // SQL compiler (kevy-sql). File-first; TCP only under --apply.
+    if !args.is_empty() && args[0] == "sql" {
+        return Some(sqlcmd::run_sql_cli(&args[1..]));
     }
     // Migration subcommands (TCP, host/port flags inline).
     if !args.is_empty() && (args[0] == "export" || args[0] == "import") {
