@@ -717,6 +717,14 @@ name = "kevy-vector"
 version = "4.0.0"
 
 [[package]]
+name = "kevy-vlog"
+version = "4.0.0"
+dependencies = [
+ "kevy-sys",
+ "kevy-tmpdir",
+]
+
+[[package]]
 name = "kevy-wasm"
 version = "4.0.0"
 dependencies = [

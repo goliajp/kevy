@@ -1,0 +1,23 @@
+[package]
+name = "kevy-vlog"
+description = "Disposable value-log for tiered storage: append-only spill files with CRC'd records, pinned readers, and owner-driven compaction."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/kevy-vlog"
+readme = "README.md"
+keywords = ["value-log", "tiered-storage", "spill", "kevy"]
+categories = ["database-implementations", "filesystem"]
+
+[lints]
+workspace = true
+
+[dependencies]
+kevy-sys = { path = "../kevy-sys", version = "4.0.0" }
+
+[dev-dependencies]
+kevy-tmpdir = { path = "../kevy-tmpdir" }
