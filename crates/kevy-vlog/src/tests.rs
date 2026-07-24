@@ -76,6 +76,31 @@ fn open_is_disposable_by_contract() {
     assert_eq!(v.stats().bytes, 0, "open() must start empty (disposable)");
 }
 
+#[test]
+fn mark_all_dead_lets_compaction_drop_sealed_files_without_a_scan() {
+    let d = dir("vlog-mark-all-dead");
+    let mut v = Vlog::open(d.path(), 64).unwrap(); // tiny threshold → several sealed files
+    for i in 0..10 {
+        v.append(format!("k{i}").as_bytes(), &[i as u8; 40]).unwrap();
+    }
+    assert!(v.stats().files >= 3);
+    v.mark_all_dead();
+    assert_eq!(v.stats().live_bytes, 0);
+    // Owner that panics on any callback: full-dead files must drop scan-free.
+    struct Nobody;
+    impl CompactOwner for Nobody {
+        fn is_live(&mut self, _: &[u8], _: VlogRef) -> bool {
+            panic!("full-dead file must not be scanned")
+        }
+        fn moved(&mut self, _: &[u8], _: VlogRef, _: VlogRef) {
+            panic!("nothing may move")
+        }
+    }
+    let retired = v.compact_below(50, &mut Nobody).unwrap();
+    assert!(retired >= 2, "sealed full-dead files must retire: {retired}");
+    assert_eq!(v.stats().files, 1, "only the active file remains");
+}
+
 /// The store side of compaction, simulated: key -> live ref.
 struct MapOwner {
     live: HashMap<Vec<u8>, VlogRef>,

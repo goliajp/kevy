@@ -122,6 +122,14 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
         Value::Set(_) | Value::SmallSetInline(_) => OP_SET,
         Value::ZSet(_) | Value::SmallZSetInline(_) => OP_ZSET,
         Value::Stream(_) => OP_STREAM,
+        // Tiering T4 (persistence streaming) materializes cold values
+        // from the pinned vlog on the serializer thread; until it
+        // lands, no tiered store reaches a snapshot (crashgate on
+        // tiered stores is B10/T4-gated). Skip loudly in debug.
+        Value::Cold(_) => {
+            debug_assert!(false, "snapshot of a cold stub — T4 streams these from the vlog");
+            return Ok(());
+        }
     };
     w.write_all(&[op])?;
     write_ttl(w, ttl)?;
@@ -139,6 +147,7 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
         Value::ZSet(z) => snapshot_payload::write_zset_payload(w, z),
         Value::SmallZSetInline(z) => snapshot_payload::write_small_zset_payload(w, z),
         Value::Stream(s) => snapshot_payload::write_stream_payload(w, s),
+        Value::Cold(_) => unreachable!("filtered by the op match above"),
     }
 }
 

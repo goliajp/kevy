@@ -125,6 +125,9 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
             } else {
                 cmd_set(store, args, out);
             }
+            // Tiering's demotion twin: internally gated on
+            // `tier.is_some()` — one not-taken branch when off.
+            store.try_demote_after_write();
             return;
         }
         _ => {}
@@ -161,6 +164,11 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
     // case is two not-taken branches.
     if is_grow && store.maxmemory() > 0 {
         store.try_evict_after_write();
+    }
+    // Tiering: one budgeted spill batch after a growing write (cheap
+    // not-taken branch when tiering is off).
+    if is_grow {
+        store.try_demote_after_write();
     }
 }
 

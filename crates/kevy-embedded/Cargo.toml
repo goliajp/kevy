@@ -26,7 +26,7 @@ workspace = true
 # every other feature adds one subsystem back. `default` keeps the full
 # 3.x surface so existing consumers see no change.
 [features]
-default = ["core", "persist", "index", "text", "vector", "replicate", "listener"]
+default = ["core", "persist", "index", "text", "vector", "replicate", "listener", "tier"]
 # Marker for the base surface (KV + TTL + pubsub + atomic/pipeline).
 # Always on in practice — named so the minimal archetype is spellable.
 core = []
@@ -44,6 +44,10 @@ vector = ["index", "dep:kevy-vector"]
 replicate = ["persist", "dep:kevy-replicate", "dep:kevy-resp"]
 # Read-only RESP listener (ops tooling against a live embedded store).
 listener = []
+# Transparent tiering (capacity arc): `with_tier_budget` + the cold
+# value log under `<data_dir>/tier/`. Needs `persist` (a disk dir);
+# wasm / mem:// stores reject the config at open.
+tier = ["persist"]
 
 [dependencies]
 kevy-store = { path = "../kevy-store", version = "4.0.0" }

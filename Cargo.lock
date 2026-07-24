@@ -691,6 +691,8 @@ dependencies = [
  "kevy-hash",
  "kevy-map",
  "kevy-ranktree",
+ "kevy-tmpdir",
+ "kevy-vlog",
 ]
 
 [[package]]

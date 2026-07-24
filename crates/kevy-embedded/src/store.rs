@@ -361,6 +361,8 @@ impl Store {
         for shard in self.shards.iter() {
             let stats = {
                 let mut g = lock_write(shard);
+                // Tiering: tick continuation of the budgeted spill.
+                let _ = g.store.demote_step();
                 g.store.tick_expire(self.config.reaper_samples, self.config.reaper_max_rounds)
             };
             total.sampled += stats.sampled;
@@ -380,6 +382,32 @@ impl Store {
             );
         }
         total
+    }
+
+    /// The B9 transparency suite's deterministic demotion seam
+    /// (`KEVY_TEST_FORCE_DEMOTE` genre): demote `key` to the cold tier
+    /// NOW, ignoring the watermark — the suite drives cold state
+    /// per-key, never by eviction timing. Returns whether a demotion
+    /// happened (false: tiering off / key absent / not spillable).
+    #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+    #[doc(hidden)]
+    pub fn debug_force_demote(&self, key: &[u8]) -> bool {
+        self.wshard(key).store.debug_force_demote(key)
+    }
+
+    /// Tiering counters summed across shards:
+    /// `(demotions_total, promotions_total)` — the B12 surface (INFO
+    /// gauges land in T5). Zeros when tiering is off.
+    #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+    pub fn tier_counters(&self) -> (u64, u64) {
+        let mut d = 0u64;
+        let mut p = 0u64;
+        for shard in self.shards.iter() {
+            let s = lock_read(shard).store.tier_stats();
+            d += s.demotions_total;
+            p += s.promotions_total;
+        }
+        (d, p)
     }
 
     // Durability methods (`rewrite_aof`, `save_snapshot`) live in

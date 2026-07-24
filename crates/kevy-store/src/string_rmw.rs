@@ -13,6 +13,7 @@ use crate::{Entry, Store, StoreError};
 
 impl Store {
     pub fn append(&mut self, key: &[u8], data: &[u8]) -> Result<usize, StoreError> {
+        self.tier_resolve(key, crate::value::COLD_TAG_STRING)?; // cold string pages in
         let outcome = match self.live_entry_mut(key) {
             Some(e) => match &mut e.value {
                 Value::Str(v) => {
@@ -23,9 +24,8 @@ impl Store {
                     *v = SmallBytes::from_vec(owned);
                     AppendOutcome::Reweigh(new_len)
                 }
-                // L2: Int-encoded value — materialise the digits, append,
-                // then re-pick the encoding ("1" + "2" = canonical "12"
-                // goes straight back to Int so follow-up INCR stays fast).
+                // L2: Int — materialise digits, append, re-pick the
+                // encoding (canonical results go straight back to Int).
                 Value::Int(n) => {
                     let mut buf = itoa_i64_stack();
                     let mut owned = format_i64_into(*n, &mut buf).to_vec();
@@ -65,6 +65,7 @@ impl Store {
     /// `GETSET` — set to `val`, return the previous string (WRONGTYPE if the old
     /// value isn't a string). Clears any TTL, like SET.
     pub fn getset(&mut self, key: &[u8], val: Vec<u8>) -> Result<Option<Vec<u8>>, StoreError> {
+        self.tier_resolve(key, crate::value::COLD_TAG_STRING)?;
         let old = match self.live_entry(key) {
             Some(e) => match &e.value {
                 Value::Str(v) => Some(v.to_vec()),
@@ -88,6 +89,7 @@ impl Store {
 
     /// `GETDEL` — get then delete (WRONGTYPE if non-string).
     pub fn getdel(&mut self, key: &[u8]) -> Result<Option<Vec<u8>>, StoreError> {
+        self.tier_resolve(key, crate::value::COLD_TAG_STRING)?;
         match self.live_entry(key) {
             None => return Ok(None),
             Some(e) => match &e.value {
@@ -117,6 +119,7 @@ impl Store {
 
     /// `INCRBYFLOAT` — returns the new value formatted as Redis would. Preserves TTL.
     pub fn incr_by_float(&mut self, key: &[u8], delta: f64) -> Result<Vec<u8>, StoreError> {
+        self.tier_resolve(key, crate::value::COLD_TAG_STRING)?;
         let outcome = if let Some(e) = self.live_entry_mut(key) { match &mut e.value {
             Value::Str(v) => {
                 let cur = parse_f64(v.as_slice()).ok_or(StoreError::NotFloat)?;

@@ -74,6 +74,9 @@ fn reaper_loop(
                 let mut g = lock_inner(shard);
                 let _ = g.store.tick_expire(samples, rounds);
                 let _ = g.store.tick_hash_ttl(64);
+                // Tiering: continue any spill the budgeted write-path
+                // batches left unfinished (no-op when off/under budget).
+                let _ = g.store.demote_step();
                 // EverySec AOF fsync window check — runs from the same tick.
                 #[cfg(feature = "persist")]
                 if let Some(aof) = &mut g.aof {

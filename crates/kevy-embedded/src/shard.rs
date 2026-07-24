@@ -98,7 +98,16 @@ fn build_shards_persist(
     mut stores: Vec<Keyspace>,
 ) -> io::Result<(Vec<Arc<RwLock<Inner>>>, OpenReport)> {
     let Some(dir) = config.data_dir.clone() else {
-        // Pure in-memory: no persistence, no AOF.
+        // Pure in-memory: no persistence, no AOF — and no disk for a
+        // cold tier: tiering config on a mem-only store is a named
+        // refusal, never a silent ignore.
+        #[cfg(feature = "tier")]
+        if config.tier_budget.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "tiering requires a disk data dir (with_persist); a memory-only store has no cold tier",
+            ));
+        }
         return Ok((into_inners(stores, (0..n).map(|_| None).collect()), OpenReport::default()));
     };
     std::fs::create_dir_all(&dir)?;
@@ -129,7 +138,24 @@ fn build_shards_persist(
             report.quarantine_paths.push(q.to_path_buf());
         }
     }
+    enable_tiering(config, &dir, &mut stores)?;
     Ok((into_inners(stores, aofs), report))
+}
+
+/// Tiering bring-up (capacity arc T3): per-shard vlog at
+/// `<dir>/tier/<i>`, opened (wiped — the vlog is per-boot disposable)
+/// after replay. In-replay demotion for boot-larger-than-RAM is T4.
+#[cfg(feature = "persist")]
+fn enable_tiering(config: &Config, dir: &Path, stores: &mut [Keyspace]) -> io::Result<()> {
+    #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+    if let Some(budget) = config.tier_budget {
+        for (i, store) in stores.iter_mut().enumerate() {
+            store.enable_tiering(&dir.join("tier").join(i.to_string()), budget)?;
+        }
+    }
+    #[cfg(not(all(feature = "tier", not(target_arch = "wasm32"))))]
+    let _ = (config, dir, stores);
+    Ok(())
 }
 
 /// Read the shard layout meta and either load in place (same layout)

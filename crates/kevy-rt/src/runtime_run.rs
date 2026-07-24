@@ -252,6 +252,16 @@ impl<C: Commands> Runtime<C> {
             // (`Arc::clone`); the bio thread is shared across all shards
             // (single global thread, mirrors valkey `bio.c`).
             store.set_bio_drop_sender(bio_send.clone());
+            // Minimal tiering knob (capacity arc T3): `KEVY_TIER_BUDGET`
+            // (bytes) enables the cold tier per shard under
+            // `<data_dir>/tier/<id>`. The full config surface
+            // (TOML/auto/percent) is T5.
+            if let Some(budget) = std::env::var("KEVY_TIER_BUDGET")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+            {
+                store.enable_tiering(&self.data_dir.join("tier").join(id.to_string()), budget)?;
+            }
             self.commands.on_shard_init(&mut store);
             shards.push(Shard {
                 xshard_inflight: 0,
