@@ -60,6 +60,12 @@ pub(crate) fn apply_for_test(store: &mut Store, args: &Argv) {
             let deadline: u64 = std::str::from_utf8(&args[2]).unwrap().parse().unwrap();
             store.expire_at_unix_ms(&args[1], deadline);
         }
+        b"HPEXPIREAT" => {
+            // Fixed rewrite shape: HPEXPIREAT key deadline FIELDS 1 field.
+            assert_eq!(args[3].to_ascii_uppercase(), b"FIELDS");
+            let deadline: u64 = std::str::from_utf8(&args[2]).unwrap().parse().unwrap();
+            store.load_hash_field_ttl(&args[1], &args[5], deadline);
+        }
         b"XADD" => {
             // Two rewrite shapes: `XADD key id f v …` and the empty-stream
             // re-creation trick `XADD key MAXLEN 0 id x x`.

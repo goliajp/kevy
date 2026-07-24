@@ -241,6 +241,27 @@ mod enabled {
             )
         }
 
+        /// Pin every current vlog file (T4 view pinning, RFC §1 D1): a
+        /// snapshot view / rewrite plan captured from a tiered store
+        /// carries these so its frozen [`ColdRef`]s stay readable on the
+        /// serializer thread across compaction — a retired file is
+        /// unlinked only when the last pin drops. Empty when tiering is
+        /// off.
+        pub fn tier_pins(&self) -> Vec<std::sync::Arc<kevy_vlog::VlogFile>> {
+            match &self.tier {
+                Some(t) => t.vlog.pin_all(),
+                None => Vec::new(),
+            }
+        }
+
+        /// Serialization-side cold materialization (T4): decode `v`'s
+        /// record into a fresh owned hot value WITHOUT installing,
+        /// promoting, or setting the probation mark — persistence is a
+        /// bulk path and never promotes. `None` when `v` is hot.
+        pub fn materialize_cold(&self, v: &Value) -> Option<Value> {
+            self.tier_peek_value(v)
+        }
+
         /// A cold stub is being discarded (DEL / overwrite / expiry /
         /// FLUSH of the key): credit its record's bytes as dead so the
         /// compaction trigger sees them. No-op for hot values.
@@ -314,6 +335,18 @@ mod disabled {
         #[inline]
         pub(crate) fn tier_peek_value(&self, _v: &Value) -> Option<Value> {
             None
+        }
+
+        /// No tier backend on this target — `Value::Cold` cannot exist.
+        #[inline]
+        pub fn materialize_cold(&self, _v: &Value) -> Option<Value> {
+            None
+        }
+
+        /// No tier backend on this target — always 0.
+        #[inline]
+        pub fn demote_to_watermark(&mut self) -> usize {
+            0
         }
 
         #[inline]

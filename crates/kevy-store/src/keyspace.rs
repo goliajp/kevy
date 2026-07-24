@@ -314,7 +314,16 @@ impl Store {
     }
 
     pub fn load_str(&mut self, key: Vec<u8>, value: Vec<u8>, ttl_ms: Option<u64>) {
-        self.insert_loaded(key, Value::Str(SmallBytes::from_vec(value)), ttl_ms);
+        // Re-materialize through the SET encoding rules so a loaded
+        // value lands on the exact variant a live SET of these bytes
+        // would: canonical integers back to `Int` (the L2 shape the
+        // snapshot serialized them from), > BULK_THRESHOLD bytes back
+        // to `ArcBulk` — restoring GET's writev path AND the tiering
+        // spillable class (T4/B11: a snapshot-loaded bulk value must be
+        // demotable; the old unconditional `Value::Str` made every
+        // loaded string permanently unspillable).
+        let value = crate::string_set::pick_value_for_set_owned(value);
+        self.insert_loaded(key, value, ttl_ms);
     }
 
     pub fn load_hash(

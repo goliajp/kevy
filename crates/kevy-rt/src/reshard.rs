@@ -57,27 +57,80 @@ pub(crate) fn has_kevy_files(dir: &Path) -> bool {
 /// through the command table), redistribute under `target`'s routing, then
 /// hand the crash-safe commit to the engine — which also records the new
 /// layout in `shards.meta`.
+///
+/// Tiering (T4 / B11): under the same minimal `KEVY_TIER_BUDGET` knob the
+/// runtime reads, the temp store and the redistribution targets tier into
+/// scratch vlog dirs so a merged dataset bigger than the budget migrates
+/// without OOM. Cold stubs materialize on the SOURCE side before shipping
+/// (a stub names the source's vlog, foreign to the target); the committed
+/// snapshots materialize again through the `SnapshotSource` contract. The
+/// scratch dirs are removed after the commit — the per-shard boots re-open
+/// (and wipe) their real `<data>/tier/<id>` logs afterwards.
 fn reshard<C: Commands>(
     dir: &Path,
     prev: ShardsMeta,
     target: ShardsMeta,
     commands: &C,
 ) -> io::Result<()> {
+    let tier_budget = std::env::var("KEVY_TIER_BUDGET")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok());
+    let scratch = |name: String| dir.join("tier").join(name);
     let mut temp = Store::new();
+    if let Some(budget) = tier_budget {
+        temp.enable_tiering(&scratch(".reshard-merge".into()), budget)?;
+    }
+    let mut frames: u64 = 0;
     let sources = merge_sources(dir, prev.n, &StdLayout, &mut temp, |store, args| {
         crate::shard_run::replay_dispatch(commands, store, &args);
+        frames += 1;
+        if frames.is_multiple_of(kevy_persist::REPLAY_DEMOTE_INTERVAL) {
+            store.demote_to_watermark();
+        }
     })?;
 
     let mut stores: Vec<Store> = (0..target.n).map(|_| Store::new()).collect();
-    let slots = target.routing == Routing::Slots;
-    temp.snapshot_each(|key, value, ttl_ms| {
-        stores[shard_of(key, target.n, slots)].load_value(key, value, ttl_ms);
-    });
+    if let Some(budget) = tier_budget {
+        for (i, s) in stores.iter_mut().enumerate() {
+            s.enable_tiering(&scratch(format!(".reshard-{i}")), budget)?;
+        }
+    }
+    redistribute(&temp, target, &mut stores);
 
     let stamp = commit_reshard(dir, prev.n, target, &stores, &StdLayout)?;
+    if tier_budget.is_some() {
+        drop(temp);
+        drop(stores);
+        let _ = std::fs::remove_dir_all(scratch(".reshard-merge".into()));
+        for i in 0..target.n {
+            let _ = std::fs::remove_dir_all(scratch(format!(".reshard-{i}")));
+        }
+    }
     eprintln!(
         "kevy: re-sharded {} -> {} shards ({:?} -> {:?} routing); {} source file(s) backed up as .premigration.{stamp}",
         prev.n, target.n, prev.routing, target.routing, sources.len(),
     );
     Ok(())
+}
+
+/// Re-home every merged key under the target routing. A cold stub names
+/// the TEMP store's vlog — a foreign log the target cannot read — so
+/// the source side materializes before shipping (`load_value`'s Cold
+/// arm is unreachable by this contract); the target demotes inline to
+/// stay under its own budget (B11).
+fn redistribute(temp: &Store, target: ShardsMeta, stores: &mut [Store]) {
+    let slots = target.routing == Routing::Slots;
+    temp.snapshot_each(|key, value, ttl_ms| {
+        let hot;
+        let value = match temp.materialize_cold(value) {
+            Some(v) => {
+                hot = v;
+                &hot
+            }
+            None => value,
+        };
+        let t = &mut stores[shard_of(key, target.n, slots)];
+        t.load_value(key, value, ttl_ms);
+        t.try_demote_after_write();
+    });
 }

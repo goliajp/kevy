@@ -51,6 +51,23 @@ impl Store {
         self.try_demote_after_write()
     }
 
+    /// Bulk-load drain (T4 / B11): demote batch after batch until the
+    /// store is back under the watermark or candidates run dry. Replay /
+    /// snapshot-load / reshard call this every K applied frames — those
+    /// paths are single-threaded, so draining more than one write-path
+    /// batch per check is safe (there is no reactor to stall). Returns
+    /// total keys demoted.
+    pub fn demote_to_watermark(&mut self) -> usize {
+        let mut total = 0usize;
+        loop {
+            let n = self.try_demote_after_write();
+            if n == 0 {
+                return total;
+            }
+            total += n;
+        }
+    }
+
     /// One budgeted demotion batch: sample → demote, ≤ [`SPILL_BATCH`]
     /// records, stop at the watermark or when sampling runs dry. Ends
     /// with the compaction trigger.
