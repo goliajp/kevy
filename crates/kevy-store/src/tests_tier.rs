@@ -514,3 +514,21 @@ fn t5_stats_carry_vlog_gauges() {
     assert_eq!(st.vlog_live_bytes, st.vlog_bytes, "nothing dead yet");
     assert_eq!(st.vlog_epoch, 0);
 }
+
+// ---- max_spill cap (RFC §7: embedded bounds cold-read lock hold) ----
+
+#[test]
+fn max_spill_caps_the_largest_demotable_value() {
+    let (mut s, _d) = tiered("tier-maxspill", 1 << 30);
+    s.set_tier_max_spill(1024);
+    s.set(b"big", vec![b'a'; 4096], None, false, false); // over the cap
+    s.set(b"small", vec![b'b'; 300], None, false, false); // under the cap
+    assert!(!s.debug_force_demote(b"big"), "over-cap value must stay hot");
+    assert!(!is_cold(&s, b"big"));
+    assert!(s.debug_force_demote(b"small"), "under-cap value demotes");
+    assert!(is_cold(&s, b"small"));
+    // Lifting the cap (0 = unlimited) makes the big value eligible.
+    s.set_tier_max_spill(0);
+    assert!(s.debug_force_demote(b"big"));
+    assert!(is_cold(&s, b"big"));
+}

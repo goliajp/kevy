@@ -82,8 +82,11 @@ impl Store {
             if self.used_memory <= target || demoted >= SPILL_BATCH {
                 break;
             }
+            let cap = self.tier.as_ref().expect("gated by caller").max_spill;
             let victim = crate::evict::sample_pick_with(self, policy, |e| {
-                spillable_class(&e.value) && e.weight() >= MIN_SPILL_BYTES
+                spillable_class(&e.value)
+                    && e.weight() >= MIN_SPILL_BYTES
+                    && (cap == 0 || e.weight() <= cap)
             });
             match victim {
                 None => break,
@@ -113,9 +116,16 @@ impl Store {
     /// `false` when the key is absent/expired/non-spillable or the
     /// append failed (value stays hot).
     pub(crate) fn demote_in_place(&mut self, key: &[u8]) -> bool {
+        let cap = match self.tier.as_ref() {
+            Some(t) => t.max_spill,
+            None => return false,
+        };
         let Some((payload, tag)) = ({
             match self.map.get(key) {
-                Some(e) if !e.is_expired(self.cached_clock, self.cached_ns) => {
+                Some(e)
+                    if !e.is_expired(self.cached_clock, self.cached_ns)
+                        && (cap == 0 || e.weight() <= cap) =>
+                {
                     tier_codec::encode(&e.value)
                 }
                 _ => None,
