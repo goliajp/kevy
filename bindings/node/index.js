@@ -77,6 +77,17 @@ class Db {
     }
   }
 
+  // Batch SET: apply many [key, value] pairs in one native crossing (the
+  // batch-write path). Amortizes the per-call addon boundary a loop of set()
+  // pays once per key. Falls back to a set() loop if the addon lacks setMany.
+  setMany(pairs) {
+    if (this.#raw.setMany) {
+      this.#raw.setMany(pairs);
+      return;
+    }
+    for (const [k, v] of pairs) this.set(k, v);
+  }
+
   get(key) {
     // Scalar lane when available (Bun and Node — kevy-napi ships get/set as of
     // #27): skips the structural RESP-framing floor (~575 ns even at 16B; see

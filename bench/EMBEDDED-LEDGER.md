@@ -84,12 +84,16 @@ the truth is sharper and split cleanly in two:
   recoverable AOF immediately); a B+tree/LSM txn batches **dirty pages into
   one deferred commit**. Different work, different durability. Closing this is
   a persistence-core redesign (its own RFC) — not autorun-dived, named.
-- **The batch API helps only bindings with an expensive crossing.** kevy-go's
-  cgo boundary is ~50–100 ns/op, so a per-op loop paid it 100k times: `SetMany`
-  took 16 B amortized SET from **147× off bbolt to 2.70×** (down to the engine
-  floor). Same primitive, no help for C# — because there was no crossing tax
-  to remove. So `kevy_set_many`'s value is binding-specific (cgo/napi), plus
-  fsync-batching at Always durability; it is not an engine-level win.
+- **The batch API helps only bindings with an expensive crossing — and, with
+  all four now measured, that is Go alone.** kevy-go's cgo boundary is
+  ~50–100 ns/op, so a per-op loop paid it 100k times: `SetMany` took 16 B
+  amortized SET from **147× off bbolt to 2.70×** (down to the engine floor).
+  The same primitive **barely moves C#, Node, or C**: C#'s `LibraryImport` and
+  Node's node-api crossings are cheap, and C has none — all three per-op paths
+  are already engine-bound (~200 ns), so there is no crossing tax to amortize.
+  So `kevy_set_many`'s throughput value is **cgo-specific** (plus fsync-batching
+  at Always durability); it is not an engine-level win. Three of four bindings
+  being engine-bound is the cleanest proof the bulk gap is the engine.
 - **Large values stay copy-bound** on the FFI bindings (the safe marshalling
   copies the value into a bounded arena before the store copies it again) —
   the batch path is for *many small* keys (the RDS on-ramp shape).
@@ -157,7 +161,16 @@ headline tier, what a real app runs; both OS-flush, neither fsyncs per op):
 |-------------|:----:|:-----:|:----:|:-----:|
 | GET | 0.58 (kevy 1.7×) | 0.25 (4.0×) | 0.35 (2.8×) | 0.29 (3.4×) |
 | SET cold-1op | 0.04 (kevy 28×) | 0.03 (30×) | 0.07 (15×) | 0.23 (4.3×) |
-| SET amortized | 0.63 (kevy 1.6×) | 0.71 (kevy 1.4×) | **1.75 (peer 1.8×)** | **3.80 (peer 3.8×)** |
+| SET amortized ⁴ | 0.55 (kevy 1.8×) | 0.69 (kevy 1.5×) | **1.87 (peer 1.9×)** | **3.84 (peer 3.8×)** |
+
+⁴ SET amortized uses **kevy-node `setMany`** (the batch path — one addon
+crossing per ~1 MiB packed chunk, via `js_set_many` looping `kevy_set`) vs
+better-sqlite3's one-transaction batch. Like C#, **it barely moves the number
+vs the per-op loop** (16 B per-op 0.63 → setMany 0.55): **node-api's crossing
+is cheap** (like C#'s `LibraryImport`, unlike Go's cgo), so the Node per-op
+path is already engine-bound and there is no crossing tax to amortize. kevy
+still wins the small-value batch (SQLite's per-row transaction overhead) and
+loses large (SQLite's WAL batch vs kevy's per-op AOF — the engine gap).
 
 **Reading it — losing axes named:**
 

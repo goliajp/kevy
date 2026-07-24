@@ -113,6 +113,31 @@ class Db {
     c.set(this.#p, Buffer.from(toBytes(key)), Buffer.from(toBytes(value)), ttlMs);
   }
 
+  // Batch SET: apply many [key, value] pairs in one addon crossing (the
+  // batch-write path). `pairs` is any iterable of [key, value]. Packed into
+  // ~1 MiB chunks so memory stays bounded regardless of batch size; each set
+  // appends to the AOF (durability unchanged).
+  setMany(pairs) {
+    if (!this.#p) throw new Error("kevy: closed handle");
+    const CHUNK = 1 << 20;
+    let flat = [];
+    let bytes = 0;
+    const flush = () => {
+      if (flat.length) c.setMany(this.#p, pack(flat));
+      flat = [];
+      bytes = 0;
+    };
+    for (const [k, v] of pairs) {
+      const kb = toBytes(k);
+      const vb = toBytes(v);
+      const need = 8 + kb.length + vb.length;
+      if (bytes > 0 && bytes + need > CHUNK) flush();
+      flat.push(kb, vb);
+      bytes += need;
+    }
+    flush();
+  }
+
   // The boot-replay verdict: what this open restored — and what it could not,
   // as { replayedCommands, replayedBytes, elapsedMs, droppedBytes, corrupt,
   // quarantineCount } (numbers; corrupt is a boolean). droppedBytes > 0 or
