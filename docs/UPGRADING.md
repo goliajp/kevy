@@ -26,7 +26,7 @@ mechanical migration — every change below has a one-line rule.
 | `kevy-embedded` | 3.18.x | 4.0.0 | bump + apply the API table below |
 | `kevy-client` | **1.14.x** | **4.0.0** | bump — version-line unification (same move `kevy-embedded` made at 3.0.0) + the API table |
 | `kevy-client-async` | **1.1.x** | **4.0.0** | same |
-| `kevy-wasm` / `@goliajp/kevy` (npm) | — | 4.0.0 | new in 4.0 — [docs/wasm.md](wasm.md) |
+| `kevy-wasm` / `@goliapkg/kevy` (npm) | — | 4.0.0 | new in 4.0 — [docs/wasm.md](wasm.md) |
 | Infra crates (`kevy-store`, `kevy-rt`, …) | 3.18.x | 4.0.0 | follow the workspace version |
 
 ## What is compatible automatically
@@ -316,7 +316,7 @@ The `core` tier cross-compiles for musl targets and holds an
 enforced budget (≤ 700 KB binary, ≤ 2 MB empty-store RSS); five
 foundation crates additionally build `no_std`. See
 [docs/iot.md](iot.md). At the other end of the size spectrum, the
-same embedded core now runs in the browser as `@goliajp/kevy` —
+same embedded core now runs in the browser as `@goliapkg/kevy` —
 see [docs/wasm.md](wasm.md).
 
 ## Tiering and the TABLE layer (new in 4.0, all additive)

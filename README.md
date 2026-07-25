@@ -27,7 +27,7 @@ kevy ships in three forms, all built from the same engine:
   network. Drop it into a Rust binary and call `Store` directly. Pure
   Rust, zero dependencies, feature-tiered from a bare `core` KV up to
   the full index/replication surface — and it reaches both extremes:
-  the browser ([`@goliajp/kevy`](docs/wasm.md) on npm) and 655 KB IoT
+  the browser ([`@goliapkg/kevy`](docs/wasm.md) on npm) and 655 KB IoT
   builds ([docs/iot.md](docs/iot.md)).
 - **Clients** — `kevy-client` (blocking) and `kevy-client-async` (one
   feature flag per runtime: tokio / smol / async-std). Both accept a
@@ -87,6 +87,31 @@ recall ≥ 0.9 — see [the design map](docs/designing-on-kevy.md),
 | I want the same code to switch between embed and server with one URL | `kevy-client` + `kevy-embedded` |
 
 ## Install
+
+**Talking to a kevy server needs no kevy package.** It speaks RESP, so
+the Redis client your language already has connects unchanged — kevy's
+own verbs (`IDX.*`, `VIEW.*`, `TABLE.*`, `FEED.*`) come through that
+client's raw-command channel. Six of them run the same ladder against a
+live server in CI on every push (**clientgate**):
+
+| Language | Client to install | kevy verbs via |
+|---|---|---|
+| Node | `npm i redis` / `npm i ioredis` | `sendCommand([...])` / `call(...)` |
+| Go | `go get github.com/redis/go-redis/v9` | `client.Do(ctx, ...)` |
+| .NET | `dotnet add package StackExchange.Redis` | `db.Execute(...)` |
+| Python | `pip install redis` | `execute_command(...)` |
+| C | `hiredis` (your package manager) | `redisCommand(...)` |
+| Rust | `cargo add kevy-client` | typed, plus `cmd(...)` |
+
+Full examples per language: [docs/clients.md](docs/clients.md).
+
+For the browser, the engine itself ships as an npm package —
+`npm install @goliapkg/kevy` ([In the browser](#in-the-browser)).
+Native in-process bindings for Node, Python, Go, C#, Java, Swift,
+Kotlin, Flutter and React Native live under [`bindings/`](bindings) and
+build from source today; they are not on their language registries yet.
+
+The Rust surface is on crates.io:
 
 ```sh
 # Server
@@ -175,17 +200,17 @@ the crate refuses to compile on zero or more than one.
 ## In the browser
 
 kevy runs in the browser as a real store: the npm package
-[`@goliajp/kevy`](https://www.npmjs.com/package/@goliajp/kevy) ships
+[`@goliapkg/kevy`](https://www.npmjs.com/package/@goliapkg/kevy) ships
 the engine compiled to `wasm32-unknown-unknown` behind a hand-written
 ES-module loader — no wasm-bindgen, zero dependencies on either side
 of the boundary; six files, ~165 KB packed.
 
 ```sh
-npm install @goliajp/kevy
+npm install @goliapkg/kevy
 ```
 
 ```js
-import { open } from "@goliajp/kevy";
+import { open } from "@goliapkg/kevy";
 
 const db = await open({ persist: { name: "app" } });
 db.set("session", "abc123", { ttlMs: 60_000 });
@@ -329,7 +354,7 @@ All run unmodified against a default `kevy --port 6379` instance.
 | [`kevy-madvise`](crates/kevy-madvise) | Linux `MADV_HUGEPAGE` wrapper; no-op elsewhere |
 | [`kevy-uring`](crates/kevy-uring) | Pure-Rust io_uring bindings — no liburing linked |
 | [`kevy-geo`](crates/kevy-geo) | Geospatial command primitives |
-| [`kevy-wasm`](crates/kevy-wasm) | The browser build: hand-written C ABI + the `@goliajp/kevy` loader |
+| [`kevy-wasm`](crates/kevy-wasm) | The browser build: hand-written C ABI + the `@goliapkg/kevy` loader |
 | [`kevy-lua`](crates/kevy-lua) | Lua scripting bridge (backed by the [luna](https://github.com/goliajp/luna) runtime) |
 
 The remaining crates (`kevy-store`, `kevy-rt`, `kevy-persist`,

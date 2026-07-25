@@ -1,9 +1,9 @@
-# @goliajp/kevy
+# @goliapkg/kevy
 
 [kevy](https://github.com/goliajp/kevy) in the browser: a Redis-compatible KV engine (values, TTLs, counters, pub/sub) compiled to WebAssembly, with real persistence (OPFS, IndexedDB fallback) and cross-tab pub/sub. Zero dependencies — a bare wasm module plus a hand-written ES-module loader.
 
 ```js
-import { open } from "@goliajp/kevy";
+import { open } from "@goliapkg/kevy";
 
 const db = await open({ persist: { name: "app" } });
 

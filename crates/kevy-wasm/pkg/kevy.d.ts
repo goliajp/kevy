@@ -1,4 +1,4 @@
-// Type definitions for @goliajp/kevy — hand-written, matching pkg/kevy.js.
+// Type definitions for @goliapkg/kevy — hand-written, matching pkg/kevy.js.
 
 /** Bytes in: strings are UTF-8 encoded; byte views pass through. */
 export type Bytes = string | Uint8Array | ArrayBuffer;

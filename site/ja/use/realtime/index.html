@@ -65,7 +65,7 @@ SREM online ada            # on clean disconnect</code></pre></li></ol>
 </section>
 <section class="band">
   <div class="sec-h"><h2>同じことを、2 つのブラウザタブの間で</h2><p class="sec-lede">同一オリジンの 2 つのタブ。片方で publish すれば、もう片方が描画します。サーバーも、WebSocket も、接続の状態管理もありません。</p></div>
-  <ol class="steps recipe"><li><h3>それぞれのタブでエンジンを開く</h3><pre><code>import { open } from &quot;@goliajp/kevy&quot;;
+  <ol class="steps recipe"><li><h3>それぞれのタブでエンジンを開く</h3><pre><code>import { open } from &quot;@goliapkg/kevy&quot;;
 
 const db = await open({ persist: { name: &quot;app&quot; } });</code></pre></li><li><h3>タブ A が購読する</h3><pre><code>db.subscribe(&quot;room:42&quot;, (payload, channel) =&gt; {
   render(JSON.parse(new TextDecoder().decode(payload)));

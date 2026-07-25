@@ -1,17 +1,17 @@
 # WebAssembly上のkevy
 
-kevyはブラウザの中で、コンパイルが通るだけの珍品ではなく本物のストアとして動きます。npmパッケージ[`@goliajp/kevy`](https://www.npmjs.com/package/@goliajp/kevy)は、`wasm32-unknown-unknown`向けにコンパイルしたエンジン（KV＋TTL＋カウンタ＋スキャン＋pub/sub）を手書きのESモジュールローダーの後ろに載せて出荷し、OPFS（IndexedDBフォールバック付き）による永続化と、タブをまたぐpub/subを備えます。同じクレート群は`wasm32-wasip1`向けにもビルドできるので、Rust APIは`wasmtime`／`wasmer`やエッジランタイムでも動きます。
+kevyはブラウザの中で、コンパイルが通るだけの珍品ではなく本物のストアとして動きます。npmパッケージ[`@goliapkg/kevy`](https://www.npmjs.com/package/@goliapkg/kevy)は、`wasm32-unknown-unknown`向けにコンパイルしたエンジン（KV＋TTL＋カウンタ＋スキャン＋pub/sub）を手書きのESモジュールローダーの後ろに載せて出荷し、OPFS（IndexedDBフォールバック付き）による永続化と、タブをまたぐpub/subを備えます。同じクレート群は`wasm32-wasip1`向けにもビルドできるので、Rust APIは`wasmtime`／`wasmer`やエッジランタイムでも動きます。
 
 ライブで試せます。[kevy.golia.jpのデモ](https://kevy.golia.jp/demo/)は、まさにこのモジュールの上のブラウザREPLです——コマンド、リロードを生き延びるOPFS永続化、タブ間pub/subを、バックエンドなしで。
 
 ## クイックスタート（ブラウザ）
 
 ```sh
-npm install @goliajp/kevy
+npm install @goliapkg/kevy
 ```
 
 ```js
-import { open } from "@goliajp/kevy";
+import { open } from "@goliapkg/kevy";
 
 const db = await open({ persist: { name: "app" } });
 

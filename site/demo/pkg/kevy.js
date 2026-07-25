@@ -1,4 +1,4 @@
-// @goliajp/kevy — hand-written ES-module loader for the kevy WebAssembly
+// @goliapkg/kevy — hand-written ES-module loader for the kevy WebAssembly
 // module. No dependencies, no binding generator: this file owns the
 // TypedArray boundary, UTF-8 codecs, the persistence pump (OPFS worker or
 // IndexedDB), and the cross-tab pub/sub bridge (BroadcastChannel).
@@ -13,6 +13,82 @@ const ABI_VERSION = 1;
 
 const te = new TextEncoder();
 const td = new TextDecoder();
+
+/**
+ * A RESP error reply (`-ERR …`) decoded by {@link Kevy#cmd}. Returned, not
+ * thrown: the engine saying "no" to a verb is data, exactly as the client
+ * contract models it (`Reply::Error` inline). Extends `Error` so it still
+ * survives a `throw` intact if a caller chooses to raise it. Mirrors the
+ * sibling `bindings/node` decoder.
+ */
+export class KevyError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "KevyError";
+  }
+}
+
+/** Decode a `Uint8Array` bulk (or pass a string through) to text. */
+export function text(v) {
+  return v instanceof Uint8Array ? td.decode(v) : v;
+}
+
+/**
+ * Decode one complete RESP2 reply into a JS value:
+ *   `+OK` → "OK"; `-ERR …` → {@link KevyError}; `:N` → number (BigInt when
+ *   outside the safe-integer range); `$N …` → Uint8Array; `$-1`/`*-1` →
+ *   null; `*N …` → Array. The embedded `cmd` path always replies in RESP2
+ *   (no RESP3 negotiation on the wasm build); an unexpected tag throws.
+ */
+function parseReply(buf) {
+  const [v, used] = decodeOne(buf, 0);
+  if (used !== buf.length) throw new Error("kevy: trailing RESP bytes");
+  return v;
+}
+
+function decodeOne(b, at) {
+  const nl = respLine(b, at + 1);
+  const head = td.decode(b.subarray(at + 1, nl));
+  const after = nl + 2;
+  switch (b[at]) {
+    case 0x2b /* + */:
+      return [head, after];
+    case 0x2d /* - */:
+      return [new KevyError(head), after];
+    case 0x3a /* : */: {
+      const n = BigInt(head);
+      const safe =
+        n >= BigInt(Number.MIN_SAFE_INTEGER) && n <= BigInt(Number.MAX_SAFE_INTEGER);
+      return [safe ? Number(n) : n, after];
+    }
+    case 0x24 /* $ */: {
+      const n = parseInt(head, 10);
+      if (n < 0) return [null, after];
+      return [b.subarray(after, after + n), after + n + 2];
+    }
+    case 0x2a /* * */: {
+      const n = parseInt(head, 10);
+      if (n < 0) return [null, after];
+      const items = [];
+      let pos = after;
+      for (let i = 0; i < n; i++) {
+        const [item, next] = decodeOne(b, pos);
+        items.push(item);
+        pos = next;
+      }
+      return [items, pos];
+    }
+    default:
+      throw new Error(`kevy: unknown RESP tag ${b[at]}`);
+  }
+}
+
+function respLine(b, from) {
+  for (let i = from; i + 1 < b.length; i++) {
+    if (b[i] === 13 && b[i + 1] === 10) return i;
+  }
+  throw new Error("kevy: truncated RESP reply");
+}
 
 /**
  * Open a kevy instance.
@@ -397,6 +473,54 @@ export class Kevy {
       i += len;
     }
     return out;
+  }
+
+  /**
+   * Raw command channel — run any verb the wasm build compiled in and get
+   * the decoded RESP2 reply. This is the universal escape hatch the client
+   * contract mandates (§5.2 / §7): the typed methods above wrap the common
+   * verbs; `cmd` reaches every other verb in the module (LPUSH, HSET,
+   * ZADD, SETRANGE, …) by funnelling through the full engine dispatcher.
+   *
+   * The wasm module ships the `core` + `persist` verb closure, so `cmd`
+   * reaches the string/hash/list/set/zset/bitmap/keyspace/misc surfaces.
+   * Index (`IDX.*` / `VIEW.*`) and replication verbs are NOT in this build
+   * and come back as an unknown-command error (a returned {@link
+   * KevyError}) — the correct, expected answer, not a loader bug.
+   *
+   * Reply mapping (RESP2): `+OK` → string, `:N` → number/bigint, `$…` →
+   * `Uint8Array` (`null` on a null bulk), `*…` → `Array` (`null` on a null
+   * array), `-ERR …` → a returned {@link KevyError}. Use {@link text} to
+   * decode a bulk to a string.
+   *
+   * Note: writes issued via `cmd` are NOT mirrored into the persistence
+   * pump — the typed setters (`set`/`del`/`incrby`/…) are the durable
+   * write path. Reach for `cmd` for verbs the typed surface does not wrap.
+   *
+   * @param {...Bytes} args verb then its arguments, e.g. `cmd("SET","k","v")`.
+   * @returns {string | number | bigint | Uint8Array | Array<any> | null | KevyError}
+   */
+  cmd(...args) {
+    if (args.length === 0) throw new Error("kevy: cmd requires a verb");
+    this.#clock();
+    // Pack argv into one scratch buffer: [len u32 LE][arg bytes]…
+    let cap = 0;
+    for (const a of args) cap += 4 + this.#cap(a);
+    const ptr = this.#ensureScratch(cap);
+    const mem = this.#mem();
+    const dv = new DataView(mem.buffer);
+    let off = ptr;
+    for (const a of args) {
+      const body = off + 4;
+      const len = this.#encodeAt(mem, a, body);
+      dv.setUint32(off, len, true);
+      off = body + len;
+    }
+    // A negative status is ABI misuse (malformed argv / closed handle) —
+    // #check throws. A verb-level `-ERR`/`WRONGTYPE` is a *successful* call
+    // whose reply bytes decode to a returned KevyError.
+    this.#check(this.#e.kevy_cmd(this.#h, ptr, off - ptr));
+    return parseReply(this.#out());
   }
 
   /** One manual TTL sweep + event poll. Returns expired-key count. */

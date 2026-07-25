@@ -8,10 +8,10 @@ WebAssembly bindings for [kevy](https://github.com/goliajp/kevy) — the embedde
 
 ## Use from JavaScript
 
-The published npm package `@goliajp/kevy` wraps this module; see [`pkg/`](pkg/) for the loader, typings, and worker.
+The published npm package `@goliapkg/kevy` wraps this module; see [`pkg/`](pkg/) for the loader, typings, and worker.
 
 ```js
-import { open } from "@goliajp/kevy";
+import { open } from "@goliapkg/kevy";
 
 const db = await open({ persist: { name: "app" } });
 await db.set("greeting", "hello");

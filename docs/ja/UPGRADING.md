@@ -16,7 +16,7 @@
 | `kevy-embedded` | 3.18.x | 4.0.0 | バージョンを上げ、下のAPI表を適用する |
 | `kevy-client` | **1.14.x** | **4.0.0** | バージョンを上げる —— バージョンラインの統一（`kevy-embedded`が3.0.0でやったのと同じ動き）+ API表 |
 | `kevy-client-async` | **1.1.x** | **4.0.0** | 同上 |
-| `kevy-wasm` / `@goliajp/kevy`（npm） | — | 4.0.0 | 4.0での新顔 —— [docs/wasm.md](wasm.md) |
+| `kevy-wasm` / `@goliapkg/kevy`（npm） | — | 4.0.0 | 4.0での新顔 —— [docs/wasm.md](wasm.md) |
 | インフラcrate（`kevy-store`、`kevy-rt`、…） | 3.18.x | 4.0.0 | ワークスペースのバージョンに追従する |
 
 ## 自動で互換なもの
@@ -188,7 +188,7 @@ store.del(&[b"k1".as_slice(), b"k2".as_slice()]);
 | `replicate` | レプリケーション + CDCフィード | `persist`、`kevy-replicate` |
 | `listener` | 読み取り専用のRESPリスナー | （なし） |
 
-`core`階層はmuslターゲット向けにクロスコンパイルでき、強制された予算を持ちます（バイナリ700 KB以下、空ストアのRSS 2 MB以下）。加えて、5つの基盤crateは`no_std`でもビルドされます。[docs/iot.md](iot.md)を参照してください。サイズのスペクトルの反対側では、その同じ組み込みコアが`@goliajp/kevy`としてブラウザ上でも走ります——[docs/wasm.md](wasm.md)を参照してください。
+`core`階層はmuslターゲット向けにクロスコンパイルでき、強制された予算を持ちます（バイナリ700 KB以下、空ストアのRSS 2 MB以下）。加えて、5つの基盤crateは`no_std`でもビルドされます。[docs/iot.md](iot.md)を参照してください。サイズのスペクトルの反対側では、その同じ組み込みコアが`@goliapkg/kevy`としてブラウザ上でも走ります——[docs/wasm.md](wasm.md)を参照してください。
 
 ## 4.0 → 3.18のダウングレード
 
