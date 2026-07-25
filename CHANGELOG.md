@@ -53,8 +53,12 @@ touches the cold tier.
 - **Transparent tiering** — a RAM budget (`[tiering] budget = "auto"
   | "70%" | "4gb"`; embedded `with_tier_budget*`; off by default,
   and the off-cost is gated as byte-identical). Past the watermark,
-  cold values spill to a value log on disk and their RAM is fully
-  reclaimed — a cold key costs ~96 B plus its key bytes — while the
+  cold values spill to a value log on disk and their memory is
+  reclaimed against the budget — a logical bound, like Redis
+  `maxmemory` (RSS follows the allocator; the process's resident set
+  can run above the budget under heavy write churn, reported as a
+  fragmentation ratio). A cold key costs ~96 B plus its key bytes while
+  the
   key, TTL, type and LRU history stay resident. Every command keeps
   its exact semantics on a cold key: SCAN/KEYS/TYPE/TTL/RENAME/DEL
   never read disk, a WRONGTYPE refusal never pays a read, and the
