@@ -124,6 +124,19 @@ impl<C: Commands> Shard<C> {
         // or -EALREADY (target executing). All three end the cancel
         // side — proceed to transition checks.
         let Some(uc) = io.get_mut(&cid) else { return };
+        // The multishot recv can self-terminate (buffer-ring ENOBUFS /
+        // EOF) in the window between the cancel submission and this ack.
+        // Its terminal CQE is then NOT -ECANCELED, so the
+        // `target_canceled` path never fires and the cancel completes
+        // -ENOENT. `recv_armed == false` is the authoritative "multishot
+        // is gone" signal — `uring_on_recv` clears it on EVERY terminal
+        // (cancel or not), and that terminal always precedes the -ENOENT
+        // ack, so it is already false here. Treat it as the target side
+        // being done: waiting only on `target_canceled` wedged the conn
+        // forever in BareSetCancelling under a deep pipeline of big-arg
+        // SETs (captured: big_arg=true recv_armed=false, target_canceled
+        // never set).
+        let multishot_gone = !uc.recv_armed;
         let Some(state) = uc.pending_big_arg.as_mut() else {
             // The body completed via multishot slabs while the cancel
             // was in flight — request a multishot re-arm so the conn
@@ -141,7 +154,7 @@ impl<C: Commands> Shard<C> {
             return;
         };
         *cancel_acked = true;
-        if *cancel_acked && *target_canceled {
+        if *cancel_acked && (*target_canceled || multishot_gone) {
             self.transition_to_reading(cid, io);
         }
     }

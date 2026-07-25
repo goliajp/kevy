@@ -138,6 +138,8 @@ mod uring_inbox;
 #[cfg(target_os = "linux")]
 mod uring_io;
 #[cfg(target_os = "linux")]
+mod uring_io_write;
+#[cfg(target_os = "linux")]
 mod uring_ops;
 #[cfg(target_os = "linux")]
 mod uring_park;
@@ -145,6 +147,8 @@ mod uring_park;
 mod uring_reactor;
 #[cfg(target_os = "linux")]
 mod uring_setup;
+#[cfg(target_os = "linux")]
+mod uring_stalldump;
 #[cfg(any(target_os = "linux", test))] // `test` too: pure, tested everywhere
 mod uring_write_linearize;
 

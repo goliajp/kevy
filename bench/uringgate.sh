@@ -202,6 +202,39 @@ def check(cond, what):
     if not cond:
         raise AssertionError(what)
 
+# ── big-arg-pipeline: a deep pipeline of values past the promote line ────
+# Values >= BIG_ARG_PROMOTE_THRESHOLD (4 KiB) route through the big-arg
+# machinery. A 512-deep pipeline of them keeps the buffer ring under
+# pressure, so the multishot recv terminates on its own (ENOBUFS) mid
+# frame — routinely, not rarely. The `Frame` variant (cross-shard
+# bare-SET, i.e. most keys on a multi-shard instance) needs that
+# multishot re-armed to finish stitching; when the arm pass refused to
+# re-arm any conn with a big-arg in flight, the frame never completed and
+# the conn wedged with no armed recv and nothing queued to fix it
+# (`big_arg=Frame(3232/4132) recv_armed=false arm_queued=false`, ~1 wedge
+# per 2 runs of 120k keys). Deep pipelines of large values are ordinary
+# bulk-load client behaviour, so this is a first-class contract.
+def round_big_arg_pipeline(i):
+    step("bap: connect")
+    c = Conn(f"bap{i}")
+    try:
+        for size in (4096, 8192):
+            val = bytes((i + size) % 251 for _ in range(size))
+            step(f"bap: pipeline 512 x SET {size}B")
+            frames = b"".join(
+                enc("SET", f"bap:{i}:{size}:{k}", val) for k in range(512)
+            )
+            c.s.sendall(frames)
+            for k in range(512):
+                step(f"bap: reply {k + 1}/512 ({size}B values)")
+                check(c.reply() == b"+OK", f"SET reply {k} at {size}B")
+        step("bap: read back after the pipeline")
+        check(len(c.cmd("GET", f"bap:{i}:4096:0")) == 4096, "value round-trips")
+        step("bap: conn still serves after the pipeline")
+        check(c.cmd("PING") == b"+PONG", "PING after big-arg pipeline")
+    finally:
+        c.close()
+
 # ── sq-pressure: pub/sub fan-out while many conns arm at once ────────────
 # A publish to N subscribers queues N writes in the same iteration; every
 # subscriber conn also wants a recv arm. That is the ring-full window where
@@ -276,6 +309,7 @@ try:
     for i in range(rounds):
         if uring:
             round_sq_pressure(i)
+            round_big_arg_pipeline(i)
         round_blocking_tail(i)
 except (AssertionError, socket.timeout, OSError) as e:
     kind = "WEDGED (no reply within the deadline)" if isinstance(e, socket.timeout) else str(e)
@@ -297,9 +331,9 @@ except (AssertionError, socket.timeout, OSError) as e:
                   f" => the reactor loop is stuck, not just the conn")
     sys.exit(1)
 
-scen = "sq-pressure + blocking-tail" if uring else "blocking-tail"
+scen = "sq-pressure + big-arg-pipeline + blocking-tail" if uring else "blocking-tail"
 print(f"uringgate: {rounds} rounds x ({scen}) in {time.time()-t0:.1f}s")
 PY
 rc=$?
 [ $rc -eq 0 ] || { echo "uringgate: FAIL"; exit 1; }
-echo "uringgate: PASS — no connection wedged under SQ pressure or after a blocking timeout"
+echo "uringgate: PASS — no connection wedged under SQ pressure, a deep big-arg pipeline, or after a blocking timeout"

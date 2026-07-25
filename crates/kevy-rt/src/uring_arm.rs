@@ -357,9 +357,28 @@ impl<C: Commands> Shard<C> {
             //  (b) big-arg path — after big-arg completion, when
             //      `big_arg_rearm_recv` is set.
             // Both paths converge on the same `prep_recv_multishot` call.
-            let want_multishot = !uc.recv_armed
-                && !uc.closing
-                && uc.pending_big_arg.is_none();
+            //
+            // Only the BareSet cancel/read cycle OWNS recv mode (it
+            // cancels the multishot and reads the body itself). The
+            // `Frame` variant — cross-shard bare-SET, SETEX/APPEND/MSET,
+            // the common path on a multi-shard instance — stitches its
+            // bytes from the ORDINARY multishot, so gating the re-arm on
+            // `pending_big_arg.is_none()` wedged it: when the multishot
+            // ended on its own (ENOBUFS on the buffer ring is routine
+            // under a deep pipeline), nothing re-armed it, the frame
+            // never completed, and with no pending SQE and no output the
+            // conn dropped out of the arm queue for good. Captured:
+            // `big_arg=Frame(3232/4132) recv_armed=false arm_queued=false`.
+            // `uring_on_recv`'s `suppress_rearm` already made exactly
+            // this distinction — the two sites were inconsistent.
+            let big_arg_owns_recv = matches!(
+                uc.pending_big_arg.as_deref(),
+                Some(
+                    crate::uring_conn::BigArgState::BareSetCancelling { .. }
+                        | crate::uring_conn::BigArgState::BareSetReading { .. }
+                )
+            );
+            let want_multishot = !uc.recv_armed && !uc.closing && !big_arg_owns_recv;
             let recv_arm_wanted = (want_multishot || uc.big_arg_rearm_recv)
                 && !uc.recv_armed
                 && !uc.closing;
@@ -388,8 +407,20 @@ impl<C: Commands> Shard<C> {
             // (no inflight chunked-writev tail, recv armed, no fresh
             // output) drop out — the completion handlers and the
             // wake-up sites will re-queue them when there's work.
+            // A big-arg cancel / single-shot read the SQ couldn't take
+            // THIS iter is the same trap as `recv_arm_deferred`: the flag
+            // stays set (correct — it retries), but nothing else re-queues
+            // the conn, because the CQE that would is for the SQE we just
+            // failed to submit. Under a deep pipeline of big-arg SETs the
+            // ring fills routinely, so this wedged the conn for good
+            // (captured: big_arg=true recv_armed=false arm_queued=false
+            // in_arm_pending=false, output/write empty). Both flags are
+            // cleared on successful submission or when their state goes
+            // away, so keeping the conn queued always terminates.
+            let big_arg_submit_deferred = uc.big_arg_cancel_pending || uc.big_arg_read_pending;
             let needs_more = uc.closing
                 || recv_arm_deferred
+                || big_arg_submit_deferred
                 || (!uc.write_inflight
                     && (uc.write_off < uc.write_buf.len() || !uc.write_arcs.is_empty()))
                 || (!conn.output.is_empty() || !conn.output_arcs.is_empty());
@@ -405,84 +436,4 @@ impl<C: Commands> Shard<C> {
             self.arm_pending = queue;
         }
     }
-
-    /// Print every conn that can no longer make progress on its own —
-    /// opt-in via `KEVY_DEBUG_STALL_MS=<ms>`, off (one `Option` check on
-    /// the tick path) otherwise.
-    ///
-    /// The predicate is "no recv armed and no reason to be visited
-    /// again": such a conn is invisible to [`Self::uring_arm_conns`],
-    /// which walks only `arm_pending`, and has no outstanding completion
-    /// to bring it back. `arm_queued` is reported alongside actual queue
-    /// membership because a conn whose flag says "already queued" while
-    /// the queue does not contain it is permanently unreachable —
-    /// [`Self::mark_arm_pending`] short-circuits on that flag, so every
-    /// later attempt to wake the conn is a no-op.
-    ///
-    /// Written for `bench/xshardwedge.sh`, which reproduces exactly that
-    /// shape. The reactor keeps looping during that wedge (the bounded
-    /// park wakes on its timeout, which is why threads read 0% CPU rather
-    /// than spinning) and `CLIENT LIST` — an all-shards fan-out — still
-    /// answers and still lists the wedged conn, so the shard and its
-    /// cross-core messaging are fine and the fault is local to one conn.
-    pub(crate) fn uring_maybe_dump_stalled(
-        &self,
-        every: Option<std::time::Duration>,
-        last: &mut std::time::Instant,
-        now: std::time::Instant,
-        io: &KevyMap<u64, UringConn>,
-    ) {
-        let Some(iv) = every else { return };
-        if now.duration_since(*last) < iv {
-            return;
-        }
-        *last = now;
-        // Heartbeat first, unconditionally: without it a silent dump is
-        // ambiguous between "ran and found nothing" and "never ran", and
-        // the first capture of this wedge hit exactly that ambiguity.
-        // The counters are the cross-core ones worth having anyway.
-        eprintln!(
-            "kevy: STALLDUMP shard {} conns={} arm_pending={} xshard_inflight={} \
-             backlog={} dirty={}",
-            self.id,
-            self.conns.len(),
-            self.arm_pending.len(),
-            self.xshard_inflight,
-            self.backlog.iter().map(std::collections::VecDeque::len).sum::<usize>(),
-            self.dirty.len(),
-        );
-        for (cid, conn) in self.conns.iter() {
-            let Some(uc) = io.get(cid) else {
-                eprintln!("kevy: STALL shard {} conn {cid}: no UringConn entry", self.id);
-                continue;
-            };
-            if uc.recv_armed || uc.write_inflight || uc.closing {
-                continue;
-            }
-            eprintln!(
-                "kevy: STALL shard {} conn {cid}: recv_armed=false arm_queued={} \
-                 in_arm_pending={} big_arg={} output={} write_pending={} \
-                 pending_slots={} next_seq={} next_emit={}",
-                self.id,
-                uc.arm_queued,
-                self.arm_pending.contains(cid),
-                uc.pending_big_arg.is_some(),
-                !conn.output.is_empty() || !conn.output_arcs.is_empty(),
-                uc.write_off < uc.write_buf.len() || !uc.write_arcs.is_empty(),
-                conn.pending.len(),
-                conn.next_seq,
-                conn.next_emit,
-            );
-        }
-    }
-}
-
-/// Stall-dump cadence from `KEVY_DEBUG_STALL_MS`; `None` (the default)
-/// disables [`Shard::uring_maybe_dump_stalled`] entirely.
-pub(crate) fn stall_dump_interval() -> Option<std::time::Duration> {
-    std::env::var("KEVY_DEBUG_STALL_MS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .filter(|ms| *ms > 0)
-        .map(std::time::Duration::from_millis)
 }
