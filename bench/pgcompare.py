@@ -78,6 +78,12 @@ def run_gen():
     # payload and kevy cannot is a real difference — but it belongs in the
     # findings as its own line, not hidden inside every other column.)
     alphabet = "0123456789abcdef"
+    # `sku` exists so the indexed-lookup shape actually scatters. With
+    # `age` (60 values) or `dept` (8) a LIMIT 20 returns the same handful
+    # of rows every time and their pages never leave cache, however large
+    # the table — which is what made the first "data exceeds RAM" round
+    # unable to test what it claimed. ~20 rows per sku, placed at random.
+    skus = max(1, rows // 20)
     t0 = time.time()
     with open(out, "w", newline="") as f:
         w = csv.writer(f)
@@ -89,6 +95,7 @@ def run_gen():
                 DEPTS[i % len(DEPTS)],
                 18 + (i % 60),
                 1700000000 + i,
+                rng.randrange(skus),
                 pad,
             ])
     size = os.path.getsize(out)
@@ -165,17 +172,17 @@ def run_pg():
         c.execute("DROP TABLE IF EXISTS t")
         c.execute("""CREATE TABLE t (
             id BIGINT PRIMARY KEY, name TEXT, dept TEXT,
-            age INT, ts BIGINT, pad TEXT)""")
+            age INT, ts BIGINT, sku BIGINT, pad TEXT)""")
         # The same two access paths kevy declares: a range index on age
         # (with the columns a list page shows) and a composite dept+age.
         t0 = time.time()
         with open(csv_path) as f, c.cursor().copy(
-            "COPY t (id, name, dept, age, ts, pad) FROM STDIN WITH (FORMAT csv)"
+            "COPY t (id, name, dept, age, ts, sku, pad) FROM STDIN WITH (FORMAT csv)"
         ) as cp:
             while chunk := f.read(1 << 20):
                 cp.write(chunk)
-        c.execute("CREATE INDEX t_age ON t (age)")
-        c.execute("CREATE INDEX t_dept_age ON t (dept, age)")
+        c.execute("CREATE INDEX t_sku ON t (sku)")
+        c.execute("CREATE INDEX t_dept_ts ON t (dept, ts)")
         c.execute("ANALYZE t")
         load_s = time.time() - t0
 
@@ -189,19 +196,22 @@ def run_pg():
             cur.execute("SELECT name, dept, age FROM t WHERE id = %s", (i,))
             cur.fetchall()
             lat["pk"].append((time.perf_counter_ns() - t) / 1000)
+        skus = max(1, rows // 20)
         for _ in range(n):
-            a = 18 + rng.randrange(60)
+            k = rng.randrange(skus)
             t = time.perf_counter_ns()
-            cur.execute("SELECT id, name FROM t WHERE age = %s LIMIT 20", (a,))
+            cur.execute("SELECT id, name FROM t WHERE sku = %s LIMIT 20", (k,))
             cur.fetchall()
             lat["idx"].append((time.perf_counter_ns() - t) / 1000)
         for _ in range(n):
+            # A random time window anywhere in the table, not a fixed
+            # low-cardinality slice: the page a real user asks for.
             d = DEPTS[rng.randrange(len(DEPTS))]
-            a = 18 + rng.randrange(40)
+            lo = 1700000000 + rng.randrange(max(1, rows - 2000))
             t = time.perf_counter_ns()
             cur.execute(
-                "SELECT id, name, age FROM t WHERE dept = %s AND age BETWEEN %s AND %s "
-                "ORDER BY age LIMIT 20", (d, a, a + 20))
+                "SELECT id, name, ts FROM t WHERE dept = %s AND ts BETWEEN %s AND %s "
+                "ORDER BY ts LIMIT 20", (d, lo, lo + 2000))
             cur.fetchall()
             lat["page"].append((time.perf_counter_ns() - t) / 1000)
         for _ in range(n):
@@ -280,9 +290,9 @@ def run_kevy():
     frames, chunk, chunks = [], [], []
     with open(csv_path) as f:
         for line in csv.reader(f):
-            i, name, dept, age, ts, pad = line
+            i, name, dept, age, ts, sku, pad = line
             chunk.append(enc("HSET", f"row:{i}", "id", i, "name", name, "dept", dept,
-                             "age", age, "ts", ts, "pad", pad))
+                             "age", age, "ts", ts, "sku", sku, "pad", pad))
             if len(chunk) == 200:
                 chunks.append((b"".join(chunk), 200)); chunk = []
     if chunk:
@@ -296,11 +306,11 @@ def run_kevy():
             c.reply()
     c.cmd("TABLE.DECLARE", "t", "PREFIX", "row:", "PK", "id",
           "COLUMN", "id", "i64", "COLUMN", "name", "str", "COLUMN", "dept", "str",
-          "COLUMN", "age", "i64", "COLUMN", "ts", "i64",
-          "INDEX", "age", "range", "VALUES", "name", "dept",
-          "ORDERPATH", "by_dept_age", "ON", "dept", "THEN", "age")
-    for probe in (("IDX.QUERY", "t.age", "EQ", "20"),
-                  ("IDX.QUERY", "t.by_dept_age", "WHERE", "dept", "EQ", "eng", "LIMIT", "1")):
+          "COLUMN", "age", "i64", "COLUMN", "ts", "i64", "COLUMN", "sku", "i64",
+          "INDEX", "sku", "range", "VALUES", "name",
+          "ORDERPATH", "by_dept_ts", "ON", "dept", "THEN", "ts")
+    for probe in (("IDX.QUERY", "t.sku", "EQ", "1"),
+                  ("IDX.QUERY", "t.by_dept_ts", "WHERE", "dept", "EQ", "eng", "LIMIT", "1")):
         for _ in range(3600):
             r = c.cmd(*probe)
             if not (isinstance(r, bytes) and r.startswith(b"-INDEXBUILDING")):
@@ -315,17 +325,18 @@ def run_kevy():
         t = time.perf_counter_ns()
         c.cmd("HMGET", f"row:{i}", "name", "dept", "age")
         lat["pk"].append((time.perf_counter_ns() - t) / 1000)
+    skus = max(1, rows // 20)
     for _ in range(n):
-        a = 18 + rng.randrange(60)
+        k = rng.randrange(skus)
         t = time.perf_counter_ns()
-        c.cmd("IDX.QUERY", "t.age", "EQ", str(a), "LIMIT", "20")
+        c.cmd("IDX.QUERY", "t.sku", "EQ", str(k), "LIMIT", "20")
         lat["idx"].append((time.perf_counter_ns() - t) / 1000)
     for _ in range(n):
         d = DEPTS[rng.randrange(len(DEPTS))]
-        a = 18 + rng.randrange(40)
+        lo = 1700000000 + rng.randrange(max(1, rows - 2000))
         t = time.perf_counter_ns()
-        c.cmd("IDX.QUERY", "t.by_dept_age", "WHERE", "dept", "EQ", d,
-              "RANGE", "age", str(a), str(a + 20), "LIMIT", "20")
+        c.cmd("IDX.QUERY", "t.by_dept_ts", "WHERE", "dept", "EQ", d,
+              "RANGE", "ts", str(lo), str(lo + 2000), "LIMIT", "20")
         lat["page"].append((time.perf_counter_ns() - t) / 1000)
     for _ in range(n):
         i = rng.randrange(rows)

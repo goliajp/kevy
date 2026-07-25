@@ -55,10 +55,14 @@ When the dataset stops fitting — 11.5 GB of CSV, PostgreSQL capped at
 2 GB of memory, kevy at a 1 GB tiering budget — only the *random-access*
 shape changes hands: a lookup by random primary key is **184 µs on PG
 against 78 µs on tiered kevy**, whose rows are on disk and still answer
-faster than a buffer-pool miss. The indexed shapes above stay with PG,
-because the test predicates have too few distinct values to leave its
-cache; a high-cardinality rerun is the honest next step. Tiering holds
-the same 12 GB in **2.95 GB of RSS instead of 17.95 GB**.
+faster than a buffer-pool miss. The indexed shapes above stay with PG, and a
+follow-up run with predicates that genuinely scatter across the table
+widened rather than closed that gap — **176 µs against 385 µs** on the
+indexed lookup. It is not an I/O effect: kevy loses it while holding
+everything in RAM, so the cost is the query path, not the fetch.
+Tiering holds the same 12 GB in **2.95 GB of RSS instead of 17.95 GB**,
+and answers that lookup from the index without touching the 98 % of
+rows that live on disk.
 
 The boundary is a charter, not a backlog: no query language, no
 planner, no joins, no server-side validation DSL, no triggers
