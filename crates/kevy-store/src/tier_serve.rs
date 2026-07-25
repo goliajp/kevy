@@ -346,6 +346,8 @@ pub use enabled::{ColdBatchReader, ColdRead, PeekRow, SyncColdRead};
 /// funnel degenerates to `live_entry` and the peeks to plain hot reads.
 #[cfg(not(all(feature = "std", not(target_arch = "wasm32"))))]
 mod disabled {
+    use alloc::vec::Vec;
+
     use crate::value::Value;
     use crate::{Entry, Store, StoreError};
 

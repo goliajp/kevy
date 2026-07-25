@@ -17,6 +17,7 @@ pub enum TierBudgetSpec {
     Bytes(u64),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl TierBudgetSpec {
     /// The `auto` form's fraction of the detected bound (RFC §7: 0.70).
     const AUTO_PCT: u64 = 70;
@@ -26,10 +27,16 @@ impl TierBudgetSpec {
     pub(crate) fn resolve(self) -> Option<u64> {
         match self {
             Self::Bytes(b) => Some(b),
-            Self::Auto => kevy_sys::detected_memory_bound().map(|d| d / 100 * Self::AUTO_PCT),
-            Self::Percent(p) => {
-                kevy_sys::detected_memory_bound().map(|d| d / 100 * u64::from(p))
-            }
+            Self::Auto => probe().map(|d| d / 100 * Self::AUTO_PCT),
+            Self::Percent(p) => probe().map(|d| d / 100 * u64::from(p)),
         }
     }
+}
+
+/// The OS memory-bound probe. On wasm32 there is no OS to ask (and
+/// kevy-sys never links there): auto/percent budgets resolve to `None`,
+/// which the open path reports as a named error.
+#[cfg(not(target_arch = "wasm32"))]
+fn probe() -> Option<u64> {
+    kevy_sys::detected_memory_bound()
 }

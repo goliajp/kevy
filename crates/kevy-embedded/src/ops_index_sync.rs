@@ -10,6 +10,7 @@ use crate::ops_index::{IndexReg, ShardSegs};
 impl ShardSegs {
     /// Σ approximate heap bytes of this shard's index segments, every
     /// kind — the tier's `reserved_bytes` floor feed.
+    #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
     pub(crate) fn reserved_bytes(&self) -> u64 {
         let mut sum: u64 = self.segs.iter().map(|(_, s)| s.stats().approx_bytes).sum();
         sum += self.agg.iter().map(|(_, a)| a.stats().approx_bytes).sum::<u64>();
