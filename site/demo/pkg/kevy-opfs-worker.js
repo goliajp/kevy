@@ -1,4 +1,4 @@
-// @goliajp/kevy — OPFS storage worker. Owns a FileSystemSyncAccessHandle
+// @goliapkg/kevy — OPFS storage worker. Owns a FileSystemSyncAccessHandle
 // on `kevy-wasm/<name>.aof` (sync handles are worker-only) and serves the
 // loader's pump: load the whole log at startup, append write frames,
 // replace the file with a compacted image. Every append/replace flushes

@@ -26,7 +26,7 @@ kevy 以三种形态交付，全部构建自同一个引擎：
 - **嵌入式库**——`kevy-embedded` 是去掉网络层的同一个引擎。把它放进
   Rust 二进制里，直接调用 `Store`。纯 Rust、零依赖，feature 分档从
   裸 `core` KV 一路到完整的索引/复制面——并且两个极端都够得着：
-  浏览器（npm 上的 [`@goliajp/kevy`](docs/zh-CN/wasm.md)）和 655 KB
+  浏览器（npm 上的 [`@goliapkg/kevy`](docs/zh/wasm.md)）和 655 KB
   的 IoT 构建（[docs/iot.md](docs/iot.md)）。
 - **客户端**——`kevy-client`（阻塞式）与 `kevy-client-async`（每种
   运行时一个 feature flag：tokio / smol / async-std）。两者都接受
@@ -46,7 +46,7 @@ derived-by-construction（在写路径里同步维护、永不漂移、可从数
 线：带心跳/ACK 滞后真值的流式复制、计划内零丢失交接（`FAILOVER`）
 加多数派崩溃选举，以及按需启用的一致性阶梯（`WAIT`、读己之写
 token、有界陈旧读、多数派围栏写入）——见
-[docs/zh-CN/availability.md](docs/zh-CN/availability.md)。
+[docs/zh/availability.md](docs/zh/availability.md)。
 4.0 把这一切一次定型：公开 Rust API 做了一次性整备——统一错误类型
 （`KevyError`）、统一 builder、借用化写面
 （[docs/UPGRADING.md](docs/UPGRADING.md)）——此后冻结、只增不减；
@@ -77,6 +77,29 @@ index-only 查询即使全表皆冷也只读 RAM。见
 | 我想让同一份代码用一个 URL 在嵌入式和服务器之间切换 | `kevy-client` + `kevy-embedded` |
 
 ## 安装
+
+**连 kevy 服务器不需要装任何 kevy 包。** 它说 RESP，你手上已有的 Redis
+客户端直接连得上——kevy 自己的动词（`IDX.*`、`VIEW.*`、`TABLE.*`、
+`FEED.*`）走该客户端的原始命令通道即可。其中六种语言每次 push 都会在
+CI 里对一台真实服务器跑同一套梯子（**clientgate**）：
+
+| 语言 | 装这个客户端 | kevy 动词走 |
+|---|---|---|
+| Node | `npm i redis` / `npm i ioredis` | `sendCommand([...])` / `call(...)` |
+| Go | `go get github.com/redis/go-redis/v9` | `client.Do(ctx, ...)` |
+| .NET | `dotnet add package StackExchange.Redis` | `db.Execute(...)` |
+| Python | `pip install redis` | `execute_command(...)` |
+| C | `hiredis`（用你的包管理器） | `redisCommand(...)` |
+| Rust | `cargo add kevy-client` | 类型化接口，外加 `cmd(...)` |
+
+各语言完整示例见 [docs/clients.md](docs/clients.md)（英文）。
+
+浏览器场景下引擎本身就是一个 npm 包——`npm install @goliapkg/kevy`
+（见[在浏览器里](#在浏览器里)）。Node、Python、Go、C#、Java、Swift、
+Kotlin、Flutter、React Native 的原生进程内绑定在 [`bindings/`](bindings)
+下，目前从源码构建，尚未进入各自语言的包仓库。
+
+Rust 侧已在 crates.io：
 
 ```sh
 # 服务器
@@ -163,17 +186,17 @@ let v = conn.get(b"k").await?;
 ## 在浏览器里
 
 kevy 在浏览器里是一个真正的存储：npm 包
-[`@goliajp/kevy`](https://www.npmjs.com/package/@goliajp/kevy) 把
+[`@goliapkg/kevy`](https://www.npmjs.com/package/@goliapkg/kevy) 把
 编译到 `wasm32-unknown-unknown` 的引擎装进一个手写的 ES module
 loader——没有 wasm-bindgen，边界两侧都是零依赖；六个文件，打包约
 165 KB。
 
 ```sh
-npm install @goliajp/kevy
+npm install @goliapkg/kevy
 ```
 
 ```js
-import { open } from "@goliajp/kevy";
+import { open } from "@goliapkg/kevy";
 
 const db = await open({ persist: { name: "app" } });
 db.set("session", "abc123", { ttlMs: 60_000 });
@@ -189,7 +212,7 @@ db.subscribe("events", (payload) => { /* 任何 tab 里都会触发 */ });
   166–189×，持久写吞吐是其 12.6–17.4×
   （[`bench/WASM-BENCH.md`](bench/WASM-BENCH.md)）。
 
-loader API 与 ABI 契约见 [docs/zh-CN/wasm.md](docs/zh-CN/wasm.md)；
+loader API 与 ABI 契约见 [docs/zh/wasm.md](docs/zh/wasm.md)；
 [kevy.golia.jp/demo](https://kevy.golia.jp/demo/) 是这一切的在线
 版本——一个带持久化和跨 tab pub/sub 的浏览器 REPL，没有任何后端。
 
@@ -306,7 +329,7 @@ recall 对齐（[`bench/PERF-LEDGER.md`](bench/PERF-LEDGER.md)）：
 | [`kevy-madvise`](crates/kevy-madvise) | Linux `MADV_HUGEPAGE` 封装；其他平台是 no-op |
 | [`kevy-uring`](crates/kevy-uring) | 纯 Rust io_uring 绑定——不链接 liburing |
 | [`kevy-geo`](crates/kevy-geo) | 地理空间命令原语 |
-| [`kevy-wasm`](crates/kevy-wasm) | 浏览器构建：手写 C ABI + `@goliajp/kevy` loader |
+| [`kevy-wasm`](crates/kevy-wasm) | 浏览器构建：手写 C ABI + `@goliapkg/kevy` loader |
 | [`kevy-lua`](crates/kevy-lua) | Lua 脚本桥接（基于 [luna](https://github.com/goliajp/luna) 运行时） |
 
 其余 crate（`kevy-store`、`kevy-rt`、`kevy-persist`、`kevy-sys`、
@@ -323,17 +346,17 @@ recall 对齐（[`bench/PERF-LEDGER.md`](bench/PERF-LEDGER.md)）：
 
 | 主题 | 文档 |
 |---|---|
-| RDS workload 映射（SQL → kevy） | [`docs/zh-CN/rds-workloads.md`](docs/zh-CN/rds-workloads.md) |
+| RDS workload 映射（SQL → kevy） | [`docs/zh/rds-workloads.md`](docs/zh/rds-workloads.md) |
 | 迁移手册与工具链 | [`docs/migration.md`](docs/migration.md) |
-| 配置调优 | [`docs/zh-CN/tuning.md`](docs/zh-CN/tuning.md) |
-| 持久化（AOF + RDB） | [`docs/zh-CN/persistence.md`](docs/zh-CN/persistence.md) |
-| Pub/Sub | [`docs/zh-CN/pubsub.md`](docs/zh-CN/pubsub.md) |
-| 复制 | [`docs/zh-CN/replication.md`](docs/zh-CN/replication.md) |
-| Cluster 模式 | [`docs/zh-CN/cluster.md`](docs/zh-CN/cluster.md) |
+| 配置调优 | [`docs/zh/tuning.md`](docs/zh/tuning.md) |
+| 持久化（AOF + RDB） | [`docs/zh/persistence.md`](docs/zh/persistence.md) |
+| Pub/Sub | [`docs/zh/pubsub.md`](docs/zh/pubsub.md) |
+| 复制 | [`docs/zh/replication.md`](docs/zh/replication.md) |
+| Cluster 模式 | [`docs/zh/cluster.md`](docs/zh/cluster.md) |
 | Lua 脚本 | [`docs/lua.md`](docs/lua.md) |
-| Unix 域套接字 | [`docs/zh-CN/uds.md`](docs/zh-CN/uds.md) |
-| 异步客户端 | [`docs/zh-CN/async.md`](docs/zh-CN/async.md) |
-| 浏览器 / WASM | [`docs/zh-CN/wasm.md`](docs/zh-CN/wasm.md) |
+| Unix 域套接字 | [`docs/zh/uds.md`](docs/zh/uds.md) |
+| 异步客户端 | [`docs/zh/async.md`](docs/zh/async.md) |
+| 浏览器 / WASM | [`docs/zh/wasm.md`](docs/zh/wasm.md) |
 | IoT 与 feature 档位 | [`docs/iot.md`](docs/iot.md) |
 | Accept-shard 容量规划 | [`docs/accept-shards.md`](docs/accept-shards.md) |
 | 错误回复参考 | [`docs/error-replies.md`](docs/error-replies.md) |

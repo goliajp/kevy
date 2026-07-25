@@ -131,7 +131,7 @@ touches the cold tier.
   with the same typed face and a `cmd()` escape hatch: C and C++
   (the headers are the package), Go (`bindings/go`, cgo over the
   staticlib), **Bun and Node in one npm package**
-  (`@goliajp/kevy-node` — bun:ffi on Bun, and on Node a hand-written
+  (`@goliapkg/kevy-node` — bun:ffi on Bun, and on Node a hand-written
   N-API addon, `kevy-napi`: twelve `node_api` symbols declared by
   hand, no napi crate), C# (`Kevy.Embedded` for NuGet — net8
   `LibraryImport` P/Invoke, `runtimes/<rid>/native` layout), Swift

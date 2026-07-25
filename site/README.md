@@ -15,7 +15,7 @@ site/
 ├── assets/site.css     shared stylesheet
 ├── demo/
 │   ├── index.html      live wasm demo (browser REPL)
-│   ├── repl.js         REPL over the @goliajp/kevy loader API
+│   ├── repl.js         REPL over the @goliapkg/kevy loader API
 │   └── pkg/            wasm artifacts, copied from crates/kevy-wasm/pkg/
 │                       (kevy.js · kevy.d.ts · kevy-opfs-worker.js · kevy.wasm)
 ├── CNAME               kevy.golia.jp (legacy; domain is configured on the box)
