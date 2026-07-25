@@ -55,7 +55,7 @@ line "L6 index-only (C6)"      "$L6" "row-read counter == 0 for FILTER/SORT/COUN
 # L7 (D2): the same e2e asserts the cold-read counter == 0 on
 # index-only queries over a mostly-cold table; the T9 envelope re-runs
 # it at the fully-cold 10x scale on lx64.
-line "L7 cold-index-only (D2)" "$L6" "fully-cold table: cold-read counter == 0 on index-only queries (same c6 assertion; T9 re-runs at envelope scale)"
+line "L7 cold-index-only (D2)" "$L6" "cold rows (c6 fixture, mostly-cold): cold-read counter == 0 on index-only queries — alias of L6; T9 envelope re-runs it FULLY-cold at scale"
 
 echo
 if [ "$fail" -ne 0 ]; then
