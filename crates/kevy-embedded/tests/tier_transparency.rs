@@ -194,8 +194,13 @@ fn transparency_tiered_vs_untiered() {
     let checked = run_pair(&a, &b, true);
     assert!(checked >= 30, "sequence unexpectedly short: {checked}");
     let (demotions, promotions) = b.tier_counters();
-    assert!(demotions >= 8, "the markers must actually have demoted: {demotions}");
-    assert!(promotions >= 3, "the write/2nd-touch paths must have promoted: {promotions}");
+    // EXACT, not lower bounds (honesty audit 2026-07-25): all 10 markers
+    // demote (each force is asserted), and the sequence deterministically
+    // promotes exactly 5 times (the cold write-resolves — APPEND, XX SET
+    // re-big, HSET on the cold row, HPERSIST on the cold hash — plus the
+    // one second-touch gate promotion). Editing the sequence must re-derive
+    // these numbers; that friction is the point.
+    assert_eq!((demotions, promotions), (10, 5), "got {demotions}/{promotions}");
 }
 
 /// B12: demote/promote emit ZERO store-origin keyspace events and move

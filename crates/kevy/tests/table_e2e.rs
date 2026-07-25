@@ -546,3 +546,81 @@ fn c6_index_only_queries_touch_zero_cold_rows() {
     assert!(preads > 0, "a mostly-cold page must have paid some reads");
     assert_eq!(info_gauge(&mut c, "promotions_total"), 0, "hydration is not an access signal");
 }
+
+/// D2 proper (tablegate L7): a FULLY-cold table — budget crushed to 1 byte
+/// saturates the demote target to 0, so the tick drains EVERY spillable row
+/// — then index-only queries must pay zero cold reads. This is the fixture
+/// the mostly-cold c6 test cannot provide; the T9 envelope re-runs the same
+/// shape at 10M-row scale on the bench box.
+#[test]
+fn d2_fully_cold_table_index_only_queries_pay_zero_cold_reads() {
+    let srv = Server::start(Some(256 * 1024));
+    let mut c = srv.connect();
+    let pad = vec![b'p'; 8192];
+    for i in 0..60u32 {
+        let key = format!("row:{i:02}");
+        let n = i.to_string();
+        let cval = if i % 2 == 0 { "even" } else { "odd" };
+        let reply = cmd(&mut c, &[
+            b"HSET", key.as_bytes(), b"id", n.as_bytes(), b"n", n.as_bytes(),
+            b"c", cval.as_bytes(), b"pad", &pad,
+        ]);
+        assert!(reply.starts_with(b":"), "HSET {key}");
+    }
+    assert_eq!(
+        cmd(&mut c, &[
+            b"TABLE.DECLARE", b"bench", b"PREFIX", b"row:", b"PK", b"id",
+            b"COLUMN", b"id", b"str", b"COLUMN", b"n", b"i64", b"COLUMN", b"c", b"str",
+            b"INDEX", b"n", b"RANGE", b"VALUES", b"c",
+        ]),
+        b"+OK\r\n"
+    );
+    wait_ready(&mut c, &[b"IDX.QUERY", b"bench.n", b"RANGE", b"0", b"0"]);
+    // Crush the budget: the demote target saturates to 0 and the shard
+    // tick drains EVERY spillable value — the fully-cold state.
+    assert_eq!(cmd(&mut c, &[b"CONFIG", b"SET", b"tiering-budget", b"1"]), b"+OK\r\n");
+    let mut cold = 0;
+    for _ in 0..200 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        cold = info_gauge(&mut c, "cold_keys");
+        if cold >= 60 {
+            break;
+        }
+    }
+    assert!(cold >= 60, "every row must be cold, got {cold}");
+
+    let pre_preads = info_gauge(&mut c, "peek_preads_total");
+    let pre_promo = info_gauge(&mut c, "promotions_total");
+    let filtered = page_keys(&cmd(&mut c, &[
+        b"IDX.QUERY", b"bench.n", b"RANGE", b"0", b"100", b"FILTER", b"c", b"EQ", b"even",
+        b"LIMIT", b"100",
+    ]));
+    assert_eq!(filtered.len(), 30);
+    let sorted = page_keys(&cmd(&mut c, &[
+        b"IDX.QUERY", b"bench.n", b"RANGE", b"0", b"100", b"SORT", b"c", b"DESC", b"LIMIT", b"10",
+    ]));
+    assert_eq!(sorted.len(), 10);
+    assert_eq!(cmd(&mut c, &[b"IDX.COUNT", b"bench.n", b"RANGE", b"0", b"100"]), b":60\r\n");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(
+        info_gauge(&mut c, "peek_preads_total") - pre_preads,
+        0,
+        "index-only queries on a FULLY-cold table must touch zero rows"
+    );
+    assert_eq!(info_gauge(&mut c, "promotions_total") - pre_promo, 0);
+
+    // And with FIELDS on the fully-cold table: EXACTLY one read per row.
+    let pre = info_gauge(&mut c, "peek_preads_total");
+    let page = cmd(&mut c, &[
+        b"IDX.QUERY", b"bench.n", b"RANGE", b"0", b"9", b"LIMIT", b"10", b"FIELDS", b"c", b"n",
+    ]);
+    let returned = bulks(&page).iter().filter(|b| b.starts_with(b"row:")).count() as u64;
+    assert_eq!(returned, 10);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(
+        info_gauge(&mut c, "peek_preads_total") - pre,
+        returned,
+        "fully-cold: exactly one read per returned row"
+    );
+    assert_eq!(info_gauge(&mut c, "promotions_total") - pre_promo, 0);
+}
