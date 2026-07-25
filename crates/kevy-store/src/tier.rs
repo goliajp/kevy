@@ -403,6 +403,12 @@ mod disabled {
             0
         }
 
+        /// No tier backend on this target — always 0.
+        #[inline]
+        pub fn tier_compact_tick(&mut self) -> usize {
+            0
+        }
+
         /// No tier backend on this target — always false.
         #[doc(hidden)]
         pub fn debug_force_demote(&mut self, _key: &[u8]) -> bool {

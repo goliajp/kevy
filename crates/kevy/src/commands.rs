@@ -259,6 +259,8 @@ impl Commands for KevyCommands {
         // frames grow their keyspace like any write.
         tier_tick(self, store, bits, &cfg);
         store.demote_step();
+        store.tier_compact_tick(); // bounded vlog compaction — off the query-tail path
+
         // Re-apply maxmemory + eviction policy in case `CONFIG SET` has
         // swapped the global since the previous tick. `store.set_max_memory`
         // is idempotent and cheap (compares + assigns two scalars + may

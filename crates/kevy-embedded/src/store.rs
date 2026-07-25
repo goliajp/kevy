@@ -373,6 +373,7 @@ impl Store {
                 #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
                 crate::shard::tier_tick_upkeep(&mut g, self.config.tier_budget, self.shards.len());
                 let _ = g.store.demote_step();
+                let _ = g.store.tier_compact_tick();
                 g.store.tick_expire(self.config.reaper_samples, self.config.reaper_max_rounds)
             };
             total.sampled += stats.sampled;
