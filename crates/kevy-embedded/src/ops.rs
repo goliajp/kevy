@@ -84,6 +84,12 @@ impl Store {
     /// writes still tick the clock the `*Random` policies sample). Only the
     /// `*Lru` / `*Lfu` policies need the exclusive lock to stamp the access clock.
     fn reads_use_shared_lock(&self) -> bool {
+        // Tiering consumes per-read state like LRU/LFU (gate marks +
+        // access-clock stamps) — it needs the exclusive lock.
+        #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+        if self.config().tier_budget.is_some() {
+            return false;
+        }
         let p = self.config().eviction_policy;
         self.config().maxmemory == 0 || !(p.uses_lru() || p.uses_lfu())
     }
@@ -91,11 +97,9 @@ impl Store {
     /// `GET` for the FFI zero-copy *shared* lane (`kevy_get_shared`). Bulk
     /// values come back as an `Arc::clone` — **no byte copy** — so the FFI can
     /// hand JS a buffer viewing the engine's own storage (the win vs the plain
-    /// [`Self::get`], which `into_owned`-copies). The underlying lookup is
-    /// non-mutating, so the lock is policy-gated exactly like [`Self::get`]
-    /// (see [`Self::reads_use_shared_lock`]): the SHARED shard lock whenever no
-    /// per-read LRU/LFU tick would be consumed, else the exclusive lock (this
-    /// lane never stamps the LRU clock regardless).
+    /// [`Self::get`], which `into_owned`-copies). The lookup is non-mutating;
+    /// the lock is policy-gated like [`Self::get`] ([`Self::reads_use_shared_lock`]).
+    /// This lane never stamps the LRU clock and never promotes a cold value.
     pub fn get_shared_owned(&self, key: &[u8]) -> KevyResult<Option<kevy_store::GetShared>> {
         if self.reads_use_shared_lock() {
             let g = self.rshard(key);

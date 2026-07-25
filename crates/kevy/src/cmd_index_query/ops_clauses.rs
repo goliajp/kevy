@@ -59,9 +59,9 @@ type BoxedPred = (usize, ValuePred);
 
 pub(super) fn boxed_preds(
     spec: &kevy_index::IndexSpec,
-    filters: &[super::super::args::FilterArg],
+    filters: &[super::args::FilterArg],
 ) -> Result<Vec<BoxedPred>, Vec<u8>> {
-    Ok(filter_preds(spec, filters)?
+    Ok(filter_tests(spec, filters)?
         .into_iter()
         .map(|(field, t)| {
             let f: ValuePred = Box::new(move |v: &[u8]| t.passes(v));
@@ -76,11 +76,11 @@ pub(super) fn boxed_preds(
 ///
 /// The comparison itself lives with the spec (`ValueTest`), so the server
 /// and the embedded store cannot disagree about what a bound means.
-fn filter_preds(
+pub(super) fn filter_tests(
     spec: &kevy_index::IndexSpec,
-    filters: &[super::super::args::FilterArg],
+    filters: &[super::args::FilterArg],
 ) -> Result<Vec<(usize, kevy_index::ValueTest)>, Vec<u8>> {
-    use super::super::args::FilterShape;
+    use super::args::FilterShape;
     let mut out = Vec::with_capacity(filters.len());
     for f in filters {
         let Some(pos) = spec.values.iter().position(|v| v.name == f.field) else {

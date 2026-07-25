@@ -25,6 +25,7 @@ impl Store {
     /// path), matching pre-A.8 behaviour for read-modify-write entry
     /// points that don't carry per-pair size info.
     fn hash_mut(&mut self, key: &[u8], create: bool) -> Result<Option<&mut HashData>, StoreError> {
+        self.tier_resolve(key, crate::value::COLD_TAG_HASH)?;
         if self.live_entry_mut(key).is_none() {
             if !create {
                 return Ok(None);
@@ -64,6 +65,9 @@ impl Store {
     /// is not a hash. Returns `None` when the key is absent — caller
     /// (`hset_one`) creates the entry then.
     fn hash_value_for_set(&mut self, key: &[u8]) -> Result<Option<&mut Value>, StoreError> {
+        // Write path: a cold hash pages in; a cold string refuses with
+        // zero preads (the stage-1 tag check).
+        self.tier_resolve(key, crate::value::COLD_TAG_HASH)?;
         match self.live_entry_mut(key) {
             None => Ok(None),
             Some(e) => match &e.value {
@@ -78,7 +82,7 @@ impl Store {
     /// Internal helper for read-only paths; collects into a new Vec to
     /// avoid the two-encoding match dance at every callsite.
     fn hash_pairs(&mut self, key: &[u8]) -> Result<Option<FieldValuePairs>, StoreError> {
-        match self.live_entry(key) {
+        match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
             None => Ok(None),
             Some(e) => match &e.value {
                 Value::Hash(h) => Ok(Some(
@@ -134,6 +138,7 @@ impl Store {
     /// `HSETNX` — set only if the field is absent; returns whether it was set.
     pub fn hsetnx(&mut self, key: &[u8], field: &[u8], val: &[u8]) -> Result<bool, StoreError> {
         self.purge_hash_ttl(key);
+        self.tier_resolve(key, crate::value::COLD_TAG_HASH)?;
         // Existing-field fast check via the encoding-aware reader.
         let exists = match self.live_entry(key) {
             None => false,
@@ -158,7 +163,7 @@ impl Store {
 
     pub fn hget(&mut self, key: &[u8], field: &[u8]) -> Result<Option<&[u8]>, StoreError> {
         self.purge_hash_ttl(key);
-        match self.live_entry(key) {
+        match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
             None => Ok(None),
             Some(e) => match &e.value {
                 Value::Hash(h) => Ok(h.get(field).map(Vec::as_slice)),
@@ -170,7 +175,7 @@ impl Store {
 
     pub fn hexists(&mut self, key: &[u8], field: &[u8]) -> Result<bool, StoreError> {
         self.purge_hash_ttl(key);
-        match self.live_entry(key) {
+        match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
             None => Ok(false),
             Some(e) => match &e.value {
                 Value::Hash(h) => Ok(h.contains_key(field)),
@@ -182,7 +187,7 @@ impl Store {
 
     pub fn hlen(&mut self, key: &[u8]) -> Result<usize, StoreError> {
         self.purge_hash_ttl(key);
-        match self.live_entry(key) {
+        match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
             None => Ok(0),
             Some(e) => match &e.value {
                 Value::Hash(h) => Ok(h.len()),
@@ -199,7 +204,7 @@ impl Store {
         fields: &[&[u8]],
     ) -> Result<Vec<Option<Vec<u8>>>, StoreError> {
         self.purge_hash_ttl(key);
-        match self.live_entry(key) {
+        match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
             None => Ok(fields.iter().map(|_| None).collect()),
             Some(e) => match &e.value {
                 Value::Hash(h) => Ok(fields.iter().map(|f| h.get(*f).cloned()).collect()),
@@ -230,7 +235,7 @@ impl Store {
 
     pub fn hkeys(&mut self, key: &[u8]) -> Result<Vec<Vec<u8>>, StoreError> {
         self.purge_hash_ttl(key);
-        match self.live_entry(key) {
+        match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
             None => Ok(Vec::new()),
             Some(e) => match &e.value {
                 Value::Hash(h) => Ok(h.keys().map(kevy_bytes::SmallBytes::to_vec).collect()),
@@ -242,7 +247,7 @@ impl Store {
 
     pub fn hvals(&mut self, key: &[u8]) -> Result<Vec<Vec<u8>>, StoreError> {
         self.purge_hash_ttl(key);
-        match self.live_entry(key) {
+        match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
             None => Ok(Vec::new()),
             Some(e) => match &e.value {
                 Value::Hash(h) => Ok(h.values().cloned().collect()),
@@ -259,6 +264,7 @@ impl Store {
         fields: &[&[u8]],
     ) -> Result<usize, StoreError> {
         self.purge_hash_ttl(key);
+        self.tier_resolve(key, crate::value::COLD_TAG_HASH)?;
         let now = now_ns();
         if !self.reap(key, now) {
             return Ok(0);

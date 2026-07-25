@@ -43,7 +43,7 @@ impl Store {
     /// into the conn's output Vec). ONE keyspace lookup; the variant tag
     /// chooses the encoding without a second probe.
     pub fn get_for_reply(&mut self, key: &[u8]) -> Result<Option<GetReply<'_>>, StoreError> {
-        match self.live_entry(key) {
+        match self.tier_serve(key, crate::value::COLD_TAG_STRING)? {
             None => Ok(None),
             Some(e) => match &e.value {
                 Value::Str(v) => Ok(Some(GetReply::Bytes(Cow::Borrowed(v.as_slice())))),
@@ -83,6 +83,16 @@ impl Store {
                     let s = format_i64_into(*n, &mut tmp);
                     Ok(Some(GetShared::Bytes(s.to_vec())))
                 }
+                // Cold, `&self` shared lane: pread a fresh value — never
+                // promotes, never sets the probation mark (it cannot:
+                // no `&mut`). Documented: shared-lane reads pay a pread
+                // until a `&mut`-path access promotes the key.
+                Value::Cold(c) if c.type_tag == crate::value::COLD_TAG_STRING => {
+                    match self.tier_peek_value(&e.value).expect("cold peek") {
+                        Value::ArcBulk(a) => Ok(Some(GetShared::Arc(a))),
+                        v => Ok(Some(GetShared::Bytes(cold_string_bytes(&v)))),
+                    }
+                }
                 _ => Err(StoreError::WrongType),
             },
         }
@@ -102,7 +112,7 @@ impl Store {
         output: &mut Vec<u8>,
         output_arcs: &mut Vec<(usize, Arc<Box<[u8]>>)>,
     ) -> Result<bool, StoreError> {
-        match self.live_entry(key) {
+        match self.tier_serve(key, crate::value::COLD_TAG_STRING)? {
             None => Ok(false),
             Some(e) => match &e.value {
                 Value::Str(v) => {
@@ -137,7 +147,7 @@ impl Store {
     /// returns `Cow::Borrowed` (zero copy); `Value::Int`
     /// formats to a small owned `Vec<u8>` (up to 20 bytes for `i64::MIN`).
     pub fn get(&mut self, key: &[u8]) -> Result<Option<Cow<'_, [u8]>>, StoreError> {
-        match self.live_entry(key) {
+        match self.tier_serve(key, crate::value::COLD_TAG_STRING)? {
             None => Ok(None),
             Some(e) => match &e.value {
                 Value::Str(v) => Ok(Some(Cow::Borrowed(v.as_slice()))),
@@ -176,6 +186,11 @@ impl Store {
                     let s = format_i64_into(*n, &mut tmp);
                     Ok(Some(Cow::Owned(s.to_vec())))
                 }
+                // Cold, `&self` shared lane — see `get_shared_owned`.
+                Value::Cold(c) if c.type_tag == crate::value::COLD_TAG_STRING => {
+                    let v = self.tier_peek_value(&e.value).expect("cold peek");
+                    Ok(Some(Cow::Owned(cold_string_bytes(&v))))
+                }
                 _ => Err(StoreError::WrongType),
             },
         }
@@ -193,6 +208,8 @@ impl Store {
     /// increments, and **promotes** to `Value::Int(next)` so subsequent
     /// INCRs land on the fast path. Insert-new path also lands as `Int`.
     pub fn incr_by(&mut self, key: &[u8], delta: i64) -> Result<i64, StoreError> {
+        self.tier_resolve(key, crate::value::COLD_TAG_STRING)?; // cold string pages in
+
         let outcome = match self.live_entry_mut(key) {
             Some(e) => match &mut e.value {
                 Value::Int(n) => {
@@ -246,4 +263,19 @@ impl Store {
 enum IncrOutcome {
     Reweigh(i64),
     Insert(i64),
+}
+
+/// The bytes a string-class value materializes to on the cold shared
+/// lane (the `Value::Int` re-pick case included — a canonical-integer
+/// spill decodes back through the SET rules).
+fn cold_string_bytes(v: &Value) -> Vec<u8> {
+    match v {
+        Value::Str(s) => s.as_slice().to_vec(),
+        Value::ArcBulk(a) => a.as_ref().to_vec(),
+        Value::Int(n) => {
+            let mut tmp = itoa_i64_stack();
+            format_i64_into(*n, &mut tmp).to_vec()
+        }
+        _ => unreachable!("string-tagged cold record decodes to a string class"),
+    }
 }

@@ -63,10 +63,22 @@ fail()   { echo "perfgate: FAIL — $1" >&2; exit 1; }
 # Every gated metric, in report order. The single source of truth for
 # the measure loop, --update-baseline, and the gate comparison — three
 # hand-copied lists drifted once already.
+#
+# The tiered_hotset_* metrics (capacity arc A2: hot-set throughput with
+# tiering ON, working set fully resident — must match untiered within
+# tolerance) follow the same skip-with-notice discipline until lx64
+# records them against a tiered instance.
+# The table_* metrics (capacity arc T7: C4 point lookup / C5
+# filter+sort page / C7 write tax) have no measurement body yet — their
+# baselines get recorded on lx64 (kevybench discipline) when the T9
+# envelope lands the workload; until then the gate SKIPS them with a
+# notice (never invents a number, never crashes on the hole).
 METRICS="pinned_cluster_get pinned_cluster_set pinned_compat_get pinned_compat_set \
 legacy_8sh_get legacy_8sh_set \
 legacy_8sh_incr legacy_8sh_sadd legacy_8sh_hset legacy_8sh_lpush legacy_8sh_zadd \
-zalg_zinterstore"
+zalg_zinterstore \
+table_point_get table_filter_sort_page table_write_tax \
+tiered_hotset_get tiered_hotset_set"
 
 # ---------- preflight: never measure on a dirty box ----------
 # A perf comparison of two userland binaries never legitimately needs the
@@ -320,8 +332,16 @@ else
   done
 fi
 
-declare -A MED REF_MED
+declare -A MED REF_MED SKIPPED
 for m in $METRICS; do
+  # A metric with NO samples at all is one whose measurement body has
+  # not landed yet (the table_* group): skip with a notice — an absent
+  # baseline is a hole to report, not a number to invent or a crash.
+  if [ -z "${SAMPLES["cand:$m"]:-}" ]; then
+    SKIPPED[$m]=1
+    echo "perfgate: NOTE — $m has no measurement in this run (baseline pending; recorded on lx64)"
+    continue
+  fi
   # An angle that produced a zero or an empty sample was not measured. That is
   # a broken run, not a slow one — refuse rather than gate on a hole.
   for s in ${SAMPLES["cand:$m"]:-} ${SAMPLES["ref:$m"]:-}; do
@@ -355,7 +375,9 @@ if [ "$MODE" = "--update-baseline" ]; then
     first=1
     for k in $METRICS; do
       [ $first -eq 0 ] && echo ","
-      printf '    "%s": %s' "$k" "${MED[$k]}"
+      # A skipped metric records null — the explicit "not yet measured"
+      # marker (json-parsable; the gate skips null lines by name).
+      printf '    "%s": %s' "$k" "${MED[$k]:-null}"
       first=0
     done
     echo ""
@@ -370,8 +392,12 @@ TOL=$(python3 -c "import json;print(json.load(open('$BASELINE'))['tolerance'])")
 STATUS=0
 echo "perfgate: gate — candidate vs reference ${REF_SHA:0:12}, both measured just now (floor = reference x $TOL)"
 for k in $METRICS; do
+  if [ -n "${SKIPPED[$k]:-}" ]; then
+    echo "  ~ $k: SKIPPED (no measurement body yet — baseline pending, recorded on lx64)"
+    continue
+  fi
   GOT=${MED[$k]}
-  REF=${REF_MED[$k]}
+  REF=${REF_MED[$k]:-}
   if [ -z "$REF" ] || [ "$REF" -eq 0 ] 2>/dev/null; then
     echo "  ~ $k: $GOT (reference produced no sample — angle is new to the reference commit)"
     continue
@@ -391,8 +417,11 @@ done
 # later. Now the reference absorbs it, and the number is on the record.
 echo "perfgate: box drift since the baseline was recorded (reference commit, same code):"
 for k in $METRICS; do
-  BASE=$(python3 -c "import json;print(json.load(open('$BASELINE'))['metrics'].get('$k',''))")
-  REF=${REF_MED[$k]}
+  [ -n "${SKIPPED[$k]:-}" ] && continue
+  BASE=$(python3 -c "import json
+v = json.load(open('$BASELINE'))['metrics'].get('$k')
+print(v if isinstance(v, int) else '')")
+  REF=${REF_MED[$k]:-}
   [ -n "$BASE" ] && [ -n "$REF" ] && [ "$BASE" -ne 0 ] 2>/dev/null \
     && awk -v k="$k" -v b="$BASE" -v r="$REF" 'BEGIN{printf "    %-22s recorded %10d  now %10d  (%+.1f%%)\n", k, b, r, (r/b - 1) * 100}'
 done

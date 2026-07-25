@@ -62,6 +62,9 @@ pub(crate) fn commit_write(inner: &mut Inner, parts: &[&[u8]]) -> KevyResult<()>
         crate::ops_view::on_commit(&vreg, &mut inner.view_segs, &inner.idx_segs, parts);
     }
     inner.store.try_evict_after_write();
+    // The demotion twin (tiering): one budgeted spill batch when past
+    // the watermark; a cheap not-taken branch when tiering is off.
+    inner.store.try_demote_after_write();
     Ok(())
 }
 

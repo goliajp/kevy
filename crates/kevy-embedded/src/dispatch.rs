@@ -31,6 +31,8 @@ mod set;
 mod strings;
 mod util;
 #[cfg(feature = "index")]
+mod table;
+#[cfg(feature = "index")]
 mod view;
 mod zset;
 mod zset_algebra;
@@ -84,6 +86,7 @@ fn dispatch_index(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) -> 
     idx::dispatch(s, up, argv, out)
         || idx_query::dispatch(s, up, argv, out)
         || view::dispatch(s, up, argv, out)
+        || table::dispatch(s, up, argv, out)
 }
 
 #[cfg(not(feature = "index"))]
@@ -155,9 +158,9 @@ pub(crate) const DISPATCH_VERBS: &[&str] = &[
     "TTL", "TYPE", "UNLINK",
     // feed + digests
     "FEED.READ", "FEED.SHARDS", "FEED.TAIL", "PREFIX.DIGEST", "PREFIX.STATS",
-    // index + views
+    // index + views + tables
     "IDX.COUNT", "IDX.CREATE", "IDX.DROP", "IDX.LIST", "IDX.QUERY", "VIEW.CREATE", "VIEW.DROP",
-    "VIEW.LIST", "VIEW.QUERY",
+    "VIEW.LIST", "VIEW.QUERY", "TABLE.DECLARE", "TABLE.DROP", "TABLE.LIST", "TABLE.VERIFY",
     // conn face
     "ECHO", "PING", "PUBLISH",
 ];

@@ -151,6 +151,9 @@ impl Commands for KevyCommands {
         if argv.first().is_some_and(|v| v.len() > 5 && v[..5].eq_ignore_ascii_case(b"VIEW.")) {
             return crate::cmd_view::extension_op(&self.ctx(), store, argv);
         }
+        if argv.first().is_some_and(|v| v.len() > 6 && v[..6].eq_ignore_ascii_case(b"TABLE.")) {
+            return crate::cmd_table::extension_op(&self.ctx(), store, argv);
+        }
         crate::cmd_index_query::extension_op(&self.ctx(), store, argv)
     }
 
@@ -166,6 +169,11 @@ impl Commands for KevyCommands {
         } else if argv.first().is_some_and(|v| v.len() > 5 && v[..5].eq_ignore_ascii_case(b"VIEW."))
         {
             crate::cmd_view::extension_reduce(catalogs, argv, chunks)
+        } else if argv
+            .first()
+            .is_some_and(|v| v.len() > 6 && v[..6].eq_ignore_ascii_case(b"TABLE."))
+        {
+            crate::cmd_table::extension_reduce(catalogs, argv, chunks)
         } else {
             crate::cmd_index_reduce::extension_reduce(catalogs, argv, chunks)
         };
@@ -244,6 +252,15 @@ impl Commands for KevyCommands {
             // logging needed here, same determinism argument as key TTLs.
             let _ = store.tick_hash_ttl(64);
         }
+        // Tiering upkeep: budget re-resolution + the index/view floor
+        // feed (body in `tier_tick` below — 50-LOC rule), then the
+        // tick continuation of the budgeted spill (no-op when tiering
+        // is off or under the watermark). Replicas tier too — applied
+        // frames grow their keyspace like any write.
+        tier_tick(self, store, bits, &cfg);
+        store.demote_step();
+        store.tier_compact_tick(); // bounded vlog compaction — off the query-tail path
+
         // Re-apply maxmemory + eviction policy in case `CONFIG SET` has
         // swapped the global since the previous tick. `store.set_max_memory`
         // is idempotent and cheap (compares + assigns two scalars + may
@@ -440,4 +457,27 @@ impl Commands for KevyCommands {
     fn resolve<A: ArgvView + ?Sized>(&self, args: &A) -> ResolvedCmd {
         cmd_resolve::kevy_resolve(&self.state().replication, args)
     }
+}
+
+/// The shard tick's tiering upkeep: re-resolve the
+/// budget spec — auto/percent re-probe the cgroup/meminfo bound so
+/// live limit changes are honored (the maxmemory reapply precedent) —
+/// and feed the index/view memory floor into the unified watermark.
+/// Gated on tiering being on: an untiered tick pays one branch.
+fn tier_tick(c: &KevyCommands, store: &mut Store, bits: u32, cfg: &kevy_config::Config) {
+    if !store.tier_enabled() {
+        return;
+    }
+    if let Ok(Some(total)) = crate::resolve_tier_budget(cfg) {
+        let n = c.state().nshards().max(1) as u64;
+        store.set_tier_budget((total / n).max(1));
+    }
+    let mut reserved = 0u64;
+    if bits & crate::state::IDX_NONEMPTY != 0 {
+        reserved += crate::index_runtime::reserved_bytes(&c.ctx(), store);
+    }
+    if bits & crate::state::VIEW_NONEMPTY != 0 {
+        reserved += crate::view_runtime::reserved_bytes(&c.ctx());
+    }
+    store.set_tier_reserved(reserved);
 }

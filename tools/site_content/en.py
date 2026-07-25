@@ -128,6 +128,34 @@ VIEW.QUERY v:open881
                     "href": "use/app-store/",
                 },
                 {
+                    "label": "Tables",
+                    "code": """# a table is a declaration — compiled to named indexes, once
+TABLE.DECLARE user PREFIX u: PK id COLUMN id str COLUMN name str COLUMN age i64 COLUMN dept str INDEX age range VALUES dept name ORDERPATH by_dept_age ON dept THEN age DESC
+
+HSET u:1 id 1 name ada age 34 dept eng
+
+# the ORDER BY dept, age DESC walk — one composite index, no planner
+IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name age""",
+                    "note": "Typed columns, secondary indexes, composite ORDER BY paths — even your PG/MySQL schema file, via kevy-cli sql compile. No runtime SQL, no joins: those stay in Postgres.",
+                    "go": "Single-table serving",
+                    "href": "use/app-store/",
+                },
+                {
+                    "label": "Bigger than RAM",
+                    "code": """# kevy.toml — a RAM budget for the whole store
+[tiering]
+budget = "70%"               # or "4gb", or "auto"
+
+# past the budget, the coldest values spill to a disk log
+# and page back on access. a cold key is an ordinary key:
+GET archive:2019:q3          # pays one disk read, same reply
+TTL archive:2019:q3          # metadata answers from RAM
+SCAN 0 MATCH archive:*       # sees cold keys — one key table""",
+                    "note": "RAM bounds your keys, disk bounds your data; the AOF durability contract is untouched. v1 spills strings and hashes — lists, sets and streams stay hot.",
+                    "go": "How tiering works",
+                    "href": "docs/tiering/",
+                },
+                {
                     "label": "Change feed",
                     "code": """# tail every write from another process — or an agent.
 # [feed] enabled = true in kevy.toml
@@ -165,7 +193,7 @@ let mut store = Store::new_in(&mut arena);""",
             "eyebrow": "Why you can replace Redis",
             "h2": "Same protocol. More throughput.",
             "intro": (
-                "RESP2 and RESP3, 184 commands — redis-cli and your client library "
+                "RESP2 and RESP3, 188 commands — redis-cli and your client library "
                 "connect unchanged. One machine, 16 cores, loopback, median of five."
             ),
             "rows": [
@@ -255,10 +283,10 @@ PAGES["migrate"] = {
             "h2": "Coming from Redis",
             "body": [
                 "<b>Your client does not change.</b> kevy speaks RESP2 and RESP3 and "
-                "answers 184 commands. Point your existing library at it, keep your "
+                "answers 188 commands. Point your existing library at it, keep your "
                 "code, keep your redis-cli. There is no SDK to adopt and no new "
                 "protocol to learn.",
-                "<b>So the only real question is what you gain.</b> Three things, and "
+                "<b>So the only real question is what you gain.</b> Four things, and "
                 "if none of them is worth anything to you, then stay on Redis — it is "
                 "a superb piece of software and switching for its own sake is a waste "
                 "of your week.",
@@ -289,6 +317,11 @@ PAGES["migrate"] = {
                 {
                     "title": "It is faster on the operations you already run",
                     "body": "1.4× on GET, 2.7× on SET, 1.8× on INCR against Redis 8 on the same machine. Read the whole table before you count on it, though — LPUSH and ZADD are only 12% and 10% ahead, and if lists or sorted sets are your hot path this is not the reason to move.",
+                },
+                {
+                    "title": "Your dataset no longer has to fit in RAM",
+                    "body": "Give the store a RAM budget and the coldest values spill to a disposable value log on disk, paging back on access — every command unchanged on a cold key, the append-only-log durability contract untouched. RAM bounds how many keys you hold; disk bounds how much data. That replaces the Redis-plus-separate-disk-store split for big-value and long-tail workloads. The honest limits: it is off by default, v1 spills strings and hashes (lists, sets and streams stay hot), and values under 64 bytes never spill — a stub would be as big as the value.",
+                    "code": "# kevy.toml\n[tiering]\nbudget = \"70%\"      # or \"4gb\", or \"auto\"",
                 },
             ],
         },
@@ -343,10 +376,15 @@ kevy-cli import -p 6380 --resume dump.resp""",
                 "queries, analytics, transactions with real isolation across unrelated "
                 "rows. kevy takes the serving path and gives the database its evenings "
                 "back.",
-                "<b>And some questions can move too.</b> Secondary indexes and "
-                "materialised views mean a filtered list or a running total does not "
-                "have to become a query — the write path keeps the answer ready. That "
-                "is the part of an ORM most applications actually use.",
+                "<b>And single-table serving reads can move too.</b> Declare typed "
+                "columns, secondary indexes and composite <code>ORDER BY</code> paths "
+                "once with <code>TABLE.DECLARE</code> — or compile the PG/MySQL schema "
+                "file you already have with <code>kevy-sql</code> — and the read path "
+                "of one table (indexed WHERE, residual filters, ORDER BY, pagination, "
+                "COUNT) compiles onto kevy indexes, with no planner at query time. "
+                "kevy-sql is a build-time compiler, not a SQL engine: joins and ad-hoc "
+                "SQL are refused by name, and they stay in Postgres. That is the part "
+                "of an ORM most applications actually use.",
             ],
         },
         {
@@ -359,7 +397,7 @@ kevy-cli import -p 6380 --resume dump.resp""",
                 ["Rate limits, counters", "*Yes", "INCR with an expiry is atomic and O(1). In SQL this is a row lock on your hottest row."],
                 ["Job queues", "*Yes", "Lists and streams, with consumer groups and per-message acknowledgement. A queue table is a lock convention with extra steps."],
                 ["Feature flags, config", "*Yes", "Read constantly, written rarely, joined never."],
-                ["Filtered lists (by status, by owner)", "*Often", "A secondary index answers it without a query planner. See <a href=\"~/use/app-store/\">serving reads</a>."],
+                ["Single-table reads (filtered, ordered, paged)", "*Yes", "Declare the table's access paths once — or compile your schema file with <code>kevy-sql</code> — and the indexed WHERE + ORDER BY + LIMIT read stays a lookup. See <a href=\"~/use/app-store/\">serving reads</a>."],
                 ["Aggregates (counts, totals)", "*Often", "A materialised view keeps it current on the write path instead of recomputing it on every read."],
                 ["Joins across several tables", "!No", "kevy has no joins and will not grow them. This is what Postgres is for."],
                 ["Analytics, ad-hoc queries", "!No", "There is no query planner and no optimiser. Do not try."],
@@ -420,7 +458,10 @@ PAGES["choose"] = {
                 "queue's name, a cache key. Reads are lookups, not questions. That "
                 "covers more of an application than people expect — and secondary "
                 "indexes and materialised views turn some of the questions into "
-                "lookups too.",
+                "lookups too. The TABLE layer goes further: declare typed columns and "
+                "indexes once (or compile a PG/MySQL schema file with "
+                "<code>kevy-sql</code>) and a single table's read path — indexed "
+                "WHERE, residual filters, ORDER BY, pagination — stays a lookup.",
                 "<b>Do not use kevy when your reads are genuinely queries.</b> Joins "
                 "across five tables, ad-hoc analytics, a transaction spanning "
                 "unrelated rows with real isolation — that is PostgreSQL, and it "
@@ -429,9 +470,10 @@ PAGES["choose"] = {
                 "here</a>, including the ones where the answer is do not.",
                 "<b>Do not use kevy if one machine is not enough.</b> There is no "
                 "cluster mode and there will not be one. A single kevy does several "
-                "million operations a second, which is more headroom than most "
-                "products ever reach — but past it you need something that shards, and "
-                "that is not this.",
+                "million operations a second, and with a RAM budget its dataset can "
+                "be bigger than RAM (cold values spill to disk — RAM bounds keys, "
+                "disk bounds data) — but past one machine's throughput you need "
+                "something that shards, and that is not this.",
             ],
         },
         {
@@ -464,7 +506,11 @@ PAGES["choose"] = {
             "items": [
                 {
                     "q": "Is it really a drop-in replacement for Redis?",
-                    "a": "On the wire, yes — RESP2 and RESP3, 184 commands, and your client library will not notice. In behaviour, mostly, and the exceptions are the point. A cross-shard <code>RENAME</code> is not atomic — multi-key writes are atomic per shard, not globally. And a SCAN cursor is only valid on the server that issued it, the same per-node property Redis Cluster has. <a href=\"~/docs/commands/\">All 184 commands carry their real deviation and their real cost</a>, read out of the implementation rather than copied from Redis's documentation.",
+                    "a": "On the wire, yes — RESP2 and RESP3, 188 commands, and your client library will not notice. In behaviour, mostly, and the exceptions are the point. A cross-shard <code>RENAME</code> is not atomic — multi-key writes are atomic per shard, not globally. And a SCAN cursor is only valid on the server that issued it, the same per-node property Redis Cluster has. <a href=\"~/docs/commands/\">All 188 commands carry their real deviation and their real cost</a>, read out of the implementation rather than copied from Redis's documentation.",
+                },
+                {
+                    "q": "Does the dataset have to fit in RAM?",
+                    "a": "Not any more. Turn on tiering and give the store a RAM budget: the coldest values spill to a disposable value log on disk and page back on access. Every command keeps its exact semantics on a cold key, and the append-only-log durability contract is untouched — RAM bounds how many keys you can hold, disk bounds how much data. The honest limits: it is off by default, v1 spills strings and hashes (lists, sets, sorted sets and streams stay hot), and values under 64 bytes never spill. <a href=\"~/docs/tiering/\">The tiering guide</a> states which numbers are measured and which are still targets pending the bench-box run.",
                 },
                 {
                     "q": "What happens when the machine dies?",
@@ -529,6 +575,13 @@ PAGES["use/cache"] = {
                 "Here the engine drops the key when its time is up, whether or not "
                 "anyone asks for it. Four tasks below — each one is pasteable into "
                 "<code>redis-cli</code> against a running kevy.",
+                "<b>And the long tail can outgrow RAM.</b> With a RAM budget on "
+                "(<code>[tiering]</code>), the coldest values spill to a disposable "
+                "disk log and page back on access — every command unchanged on a cold "
+                "key, durability untouched — so rarely-read sessions and archives stop "
+                "costing RAM without a second store. Off by default; v1 spills strings "
+                "and hashes. <a href=\"~/docs/tiering/\">The tiering guide</a> has the "
+                "honest limits.",
             ],
         },
         {
@@ -659,7 +712,7 @@ HGETALL flags""",
             "items": [
                 {"kicker": "Guide", "title": "The cookbook", "body": "Working recipes for sessions, rate limits, leaderboards and feeds.", "go": "Read it", "href": "docs/cookbook/"},
                 {"kicker": "Guide", "title": "Persistence", "body": "What survives a kill -9, and what the fsync policy costs you.", "go": "Read it", "href": "docs/persistence/"},
-                {"kicker": "Reference", "title": "Every command", "body": "184 commands, each with its real cost and its deviation from Redis.", "go": "Look it up", "href": "docs/commands/"},
+                {"kicker": "Reference", "title": "Every command", "body": "188 commands, each with its real cost and its deviation from Redis.", "go": "Look it up", "href": "docs/commands/"},
             ],
         },
     ],
@@ -1055,7 +1108,7 @@ FEED.TAIL 0                 -> 1) (integer) 1     # generation
             "body": (
                 "<a href=\"~/llms-full.txt\">llms-full.txt</a> is one fetch: every "
                 "command with its real cost and its real deviation from Redis, plus the "
-                "complete text of all twenty-four guides. It is generated from the "
+                "complete text of every guide. It is generated from the "
                 "engine's own verb table, so it cannot drift from what the server does."
             ),
         },
@@ -1105,6 +1158,13 @@ PAGES["use/app-store"] = {
                 "so a count or a total is read rather than computed. This is what most "
                 "applications are actually asking their ORM for, and it is why their "
                 "database is busy.",
+                "<b>And a whole table can be declared at once.</b> "
+                "<code>TABLE.DECLARE</code> takes typed columns, secondary indexes "
+                "and composite <code>ORDER BY</code> paths and compiles them to named "
+                "indexes at declare time — <code>kevy-sql</code> does the same from "
+                "the PG/MySQL schema file you already have. The engine still plans "
+                "nothing and enforces no schema; joins and runtime SQL stay refused "
+                "by name.",
             ],
         },
         {
@@ -1175,10 +1235,50 @@ IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range""",
             ),
         },
         {
+            "t": "recipe",
+            "h2": "Declare the whole table once",
+            "goal": "The read path of a relational table — indexed WHERE, residual filter, ORDER BY, pagination, COUNT — compiled onto named indexes by one declaration. Or by your existing schema file.",
+            "cost_t": "Cost & limits",
+            "items": [
+                {
+                    "do": "Columns, indexes and sort paths, in one declaration",
+                    "note": "Rows stay ordinary hashes under the prefix — a missing column is NULL, and kevy-cli sql compile schema.sql emits this line from CREATE TABLE / CREATE INDEX.",
+                    "code": """TABLE.DECLARE orders PREFIX order: PK id COLUMN id str COLUMN customer i64 COLUMN status str COLUMN total f64 INDEX status range VALUES total customer ORDERPATH by_customer ON customer THEN total DESC
+-> OK""",
+                },
+                {
+                    "do": "Filter and count on stored columns — no row is read",
+                    "code": """IDX.QUERY orders.status EQ open FILTER total RANGE 2000 inf LIMIT 20
+-> 1) "0"
+   2) 1) "order:1001"  2) "open"
+
+IDX.COUNT orders.status EQ open
+-> (integer) 2""",
+                },
+                {
+                    "do": "The ORDER BY customer, total DESC walk",
+                    "note": "One composite index answers it the way a relational composite index does — each customer's orders, largest first, no re-sort.",
+                    "code": """IDX.QUERY orders.by_customer WHERE customer EQ 881 LIMIT 20 FIELDS status total""",
+                },
+            ],
+            "cost": (
+                "<b>No runtime SQL and no joins.</b> The server refuses "
+                "<code>SELECT</code> as an unknown command; <code>kevy-cli sql "
+                "compile</code> turns a PG/MySQL schema file into these declarations "
+                "at build time and refuses JOIN, subqueries and GROUP BY by name, "
+                "pointing at the recipe that replaces each. Uniqueness is "
+                "verify-not-enforce, and constraints are recipes, not engine checks. "
+                "With <a href=\"~/docs/tiering/\">tiering</a> on, index-only queries "
+                "answer from RAM even when every row is cold — only the final "
+                "<code>FIELDS</code> page reads cold rows, one read per row."
+            ),
+        },
+        {
             "t": "cards",
             "h2": "Next",
             "intro": "",
             "items": [
+                {"kicker": "Guide", "title": "Tables", "body": "Declare typed columns and indexes once; query them like a table.", "go": "Read it", "href": "docs/tables/"},
                 {"kicker": "Guide", "title": "Designing on kevy", "body": "How to think in keys when you are used to thinking in tables.", "go": "Read it", "href": "docs/designing-on-kevy/"},
                 {"kicker": "Guide", "title": "Secondary indexes", "body": "How they build, what they cost, and how to explain a query plan.", "go": "Read it", "href": "docs/indexes/"},
                 {"kicker": "Reference", "title": "RDS workloads", "body": "Every relational pattern, with the honest cost of doing it here.", "go": "Read it", "href": "docs/rds-workloads/"},
@@ -1247,7 +1347,12 @@ assert_eq!(db.get(b"session:7f3a")?.is_some(), true);""",
                 "<b>An embedded store is not shared.</b> One process owns the data "
                 "directory; if a second process needs the data, that is what the "
                 "listener above — or <a href=\"~/docs/embedded-listener/\">the full "
-                "server</a> — is for."
+                "server</a> — is for. The store can also take a RAM budget in-process "
+                "(<code>with_tier_budget</code>): cold values spill to disk and page "
+                "back inside your process — with the honest note that an in-process "
+                "cold read holds the store's lock for the read's duration, which is "
+                "why the largest spillable value is capped at 256 KiB by default. "
+                "<a href=\"~/docs/tiering/\">The tiering guide</a> has the details."
             ),
         },
         {

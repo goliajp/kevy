@@ -141,6 +141,7 @@ mod sidecar_v4_tests {
             group_by: None,
             with_positions: positions,
             values: values.iter().map(|v| ValueSpec::new(v.as_bytes().to_vec())).collect(),
+            composite: None,
         }
     }
 
@@ -209,15 +210,124 @@ mod sidecar_v4_tests {
         assert!(got[0].values.is_empty(), "a v3 index declares no values");
     }
 
-    /// VALUES is a text-only capability, like WITH POSITIONS: accepting
-    /// it elsewhere would store nothing and filter on nothing.
+    /// VALUES rides the kinds with a stored-value column (text, range,
+    /// unique — the capacity arc's G1); ann and agg carry none, so
+    /// accepting the declaration there would store nothing and filter
+    /// on nothing.
     #[test]
-    fn values_outside_a_text_index_is_refused() {
-        let mut c = Catalog::new();
-        let mut s = text_spec("r", false, &["price"]);
-        s.kind = IndexKind::Range;
+    fn values_on_ann_or_agg_is_refused_scalar_kinds_accept() {
+        for kind in [IndexKind::Range, IndexKind::Unique] {
+            let mut s = text_spec("ok", false, &["price"]);
+            s.kind = kind;
+            s.ty = ValType::I64;
+            assert!(Catalog::new().create(s).is_ok(), "VALUES on {kind:?}");
+        }
+        let mut s = text_spec("agg", false, &["price"]);
+        s.kind = IndexKind::Agg;
         s.ty = ValType::I64;
-        assert!(c.create(s).is_err(), "VALUES on a range index");
+        s.group_by = Some(b"g".to_vec());
+        assert_eq!(
+            Catalog::new().create(s),
+            Err("ERR VALUES requires KIND text|range|unique")
+        );
+    }
+}
+
+mod sidecar_v5_tests {
+    use super::super::*;
+
+    fn scalar_spec(name: &str, kind: IndexKind, values: &[(&str, ValType)]) -> IndexSpec {
+        let mut s = IndexSpec::single_field(
+            name.into(),
+            b"user:".to_vec(),
+            b"age".to_vec(),
+            ValType::I64,
+            kind,
+        );
+        s.values = values
+            .iter()
+            .map(|(n, ty)| ValueSpec { name: n.as_bytes().to_vec(), ty: *ty })
+            .collect();
+        s
+    }
+
+    /// A5 — the acceptance criterion, as serialized bytes: a catalog
+    /// without scalar-kind VALUES must serialize EXACTLY as the pre-G1
+    /// writer did (v4 header, six columns), so a store that never
+    /// declares the capability is byte-identical on disk.
+    #[test]
+    fn a5_no_values_catalog_serializes_byte_identically_to_v4() {
+        let mut c = Catalog::new();
+        c.create(scalar_spec("byage", IndexKind::Range, &[])).unwrap();
+        c.create(scalar_spec("uniq", IndexKind::Unique, &[])).unwrap();
+        assert_eq!(
+            c.to_sidecar(),
+            "kevy-index-catalog v4\n\
+             byage\tuser:\tage:1\ti64\trange\t0\n\
+             uniq\tuser:\tage:1\ti64\tunique\t0\n",
+            "the exact pre-change writer output"
+        );
+    }
+
+    /// Even a text index WITH values keeps the v4 header — v5 exists
+    /// only for the scalar-kind column, so downgrade compatibility is
+    /// surrendered only by stores that use the new capability.
+    #[test]
+    fn text_values_alone_do_not_bump_the_header() {
+        let mut s = scalar_spec("t", IndexKind::Text, &[("price", ValType::F64)]);
+        s.ty = ValType::Str;
+        let mut c = Catalog::new();
+        c.create(s).unwrap();
+        assert!(c.to_sidecar().starts_with("kevy-index-catalog v4\n"));
+    }
+
+    #[test]
+    fn scalar_values_round_trip_through_v5() {
+        let mut c = Catalog::new();
+        c.create(scalar_spec(
+            "byage",
+            IndexKind::Range,
+            &[("city", ValType::Str), ("price", ValType::F64)],
+        ))
+        .unwrap();
+        c.create(scalar_spec("plain", IndexKind::Unique, &[])).unwrap();
+        let text = c.to_sidecar();
+        assert!(text.starts_with("kevy-index-catalog v5\n"), "{text}");
+        let byage_line = text.lines().nth(1).unwrap();
+        assert_eq!(byage_line.split('\t').nth(6), Some("-,city:str,price:f64"));
+        assert_eq!(
+            text.lines().nth(2).unwrap().split('\t').count(),
+            6,
+            "an undeclared index keeps its six columns even inside a v5 file"
+        );
+
+        let back = Catalog::from_sidecar(&text).expect("v5 round trip");
+        let (spec, _) = back.get(b"byage").expect("index");
+        assert_eq!(spec.kind, IndexKind::Range);
+        assert_eq!(
+            spec.values,
+            vec![
+                ValueSpec { name: b"city".to_vec(), ty: ValType::Str },
+                ValueSpec { name: b"price".to_vec(), ty: ValType::F64 },
+            ]
+        );
+        assert!(back.get(b"plain").expect("index").0.values.is_empty());
+    }
+
+    /// A `pos` head on a scalar line is malformed, not ignored —
+    /// positions stay text-only.
+    #[test]
+    fn a_positions_head_on_a_scalar_line_is_refused() {
+        let bad = "kevy-index-catalog v5\nidx\tuser:\tage:1\ti64\trange\t0\tpos,city:str\n";
+        assert!(Catalog::from_sidecar(bad).is_none());
+    }
+
+    /// A scalar 7th column before v5 never existed on disk; refusing it
+    /// keeps the version headers honest.
+    #[test]
+    fn a_scalar_values_column_under_a_v4_header_is_refused() {
+        let bad = "kevy-index-catalog v4\nidx\tuser:\tage:1\ti64\trange\t0\t-,city:str\n";
+        assert!(Catalog::from_sidecar(bad).is_none());
     }
 }
 
@@ -245,6 +355,7 @@ mod value_type_tests {
                 ValueSpec { name: b"rank".to_vec(), ty: ValType::I64 },
                 ValueSpec::new(b"status".to_vec()),
             ],
+            composite: None,
         })
         .unwrap();
         let back = Catalog::from_sidecar(&c.to_sidecar()).expect("round trip");
@@ -256,6 +367,64 @@ mod value_type_tests {
                 ValueSpec { name: b"rank".to_vec(), ty: ValType::I64 },
                 ValueSpec { name: b"status".to_vec(), ty: ValType::Str },
             ]
+        );
+    }
+}
+
+mod sidecar_v6_tests {
+    use super::super::*;
+    use crate::composite::CompositeCol;
+
+    fn composite_spec(name: &str) -> IndexSpec {
+        let mut s = IndexSpec::single_field(
+            name.into(),
+            b"t:".to_vec(),
+            b"de,pt".to_vec(),
+            ValType::Str,
+            crate::IndexKind::Range,
+        );
+        s.composite = Some(vec![
+            CompositeCol { name: b"de,pt".to_vec(), ty: ValType::Str, desc: false },
+            CompositeCol { name: b"a:ge".to_vec(), ty: ValType::I64, desc: true },
+            CompositeCol { name: b"score".to_vec(), ty: ValType::F64, desc: false },
+        ]);
+        s
+    }
+
+    #[test]
+    fn composite_round_trips_through_v6() {
+        let mut c = Catalog::new();
+        c.create(composite_spec("op")).unwrap();
+        c.create(IndexSpec::single_field(
+            b"plain".to_vec(), b"t:".to_vec(), b"n".to_vec(), ValType::I64,
+            crate::IndexKind::Range,
+        ))
+        .unwrap();
+        let text = c.to_sidecar();
+        assert!(text.starts_with("kevy-index-catalog v6\n"), "{text}");
+        let back = Catalog::from_sidecar(&text).expect("v6 round trip");
+        let (spec, _) = back.get(b"op").expect("composite index");
+        assert_eq!(spec.composite, composite_spec("op").composite,
+            "types, order and DESC flags must reload byte-exactly (the derivation depends on them)");
+        let (plain, _) = back.get(b"plain").expect("plain index");
+        assert!(plain.composite.is_none());
+    }
+
+    /// A5 for T7: a catalog with no composite index writes the exact
+    /// pre-composite bytes - the header only moves for a catalog that
+    /// uses the new capability.
+    #[test]
+    fn a5_no_composite_catalog_keeps_the_old_header() {
+        let mut c = Catalog::new();
+        c.create(IndexSpec::single_field(
+            b"i".to_vec(), b"p:".to_vec(), b"f".to_vec(), ValType::I64,
+            crate::IndexKind::Range,
+        ))
+        .unwrap();
+        assert_eq!(
+            c.to_sidecar(),
+            "kevy-index-catalog v4\ni\tp:\tf:1\ti64\trange\t0\n",
+            "byte-identical to the v4 writer"
         );
     }
 }

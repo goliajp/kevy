@@ -46,7 +46,7 @@
     <p class="lede">会话、限流、功能开关，还有每个请求都要读的那一行热点行。在大多数应用里，它们都住在 Postgres 里，也正是被敲得最狠的那些行——不是因为数据库做不好，而是因为<b>它们从来就不是提问。key 你早就知道了。</b></p>
     
   </div></section>
-<section class="band prose"><h2>为什么合适</h2><div class="pcols"><p>这些东西的形状是同一个：一个你手里已经有的 key、一个很小的 value、一段寿命。kevy 用 O(1) 查到它，不靠定时任务就让它自己过期，并且在一台机器上每秒做几百万次。</p><p>被低估的那一部分是<b>过期</b>。建在数据库上的缓存需要一个清理任务，而 bug 就住在清理任务里。在这里，时间一到引擎就把 key 丢掉，不管有没有人来问它。下面是四个任务——每一个都可以原样粘进 <code>redis-cli</code>，对着一个跑起来的 kevy 直接执行。</p></div></section>
+<section class="band prose"><h2>为什么合适</h2><div class="pcols"><p>这些东西的形状是同一个：一个你手里已经有的 key、一个很小的 value、一段寿命。kevy 用 O(1) 查到它，不靠定时任务就让它自己过期，并且在一台机器上每秒做几百万次。</p><p>被低估的那一部分是<b>过期</b>。建在数据库上的缓存需要一个清理任务，而 bug 就住在清理任务里。在这里，时间一到引擎就把 key 丢掉，不管有没有人来问它。下面是四个任务——每一个都可以原样粘进 <code>redis-cli</code>，对着一个跑起来的 kevy 直接执行。</p><p><b>而且长尾可以大过 RAM。</b>开着 RAM 预算（<code>[tiering]</code>）时，最冷的值会下沉到一份可丢弃的磁盘日志、访问时换回——冷键上每条命令不变，持久化不动——于是很少被读的会话和归档不再占 RAM，也不用再养第二个存储。默认关闭；v1 只下沉字符串和 hash。<a href="../../../zh/docs/tiering/">分层存储指南</a>写着诚实的边界。</p></div></section>
 <section class="band">
   <div class="sec-h"><h2>一个会自己收尾的会话</h2><p class="sec-lede">一个会话一个 key，最后一次活动一小时后自己消失——没有清理任务，没有定时任务，也没有一张存过期行的表。</p></div>
   <ol class="steps recipe"><li><h3>把会话连同寿命一起写进去</h3><pre><code>SET session:7f3a &#x27;{&quot;user&quot;:&quot;ada&quot;,&quot;role&quot;:&quot;admin&quot;}&#x27; EX 3600
@@ -94,7 +94,7 @@ HGETALL flags</code></pre></li></ol>
     </a><a class="card" href="../../../zh/docs/commands/">
       <span class="card-k">参考</span>
       <h3>全部命令</h3>
-      <p>184 条命令，每一条都标着真实代价和相对 Redis 的偏差。</p>
+      <p>188 条命令，每一条都标着真实代价和相对 Redis 的偏差。</p>
       <span class="card-go">去查</span>
     </a></div></section>
 </main>

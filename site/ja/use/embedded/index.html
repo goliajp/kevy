@@ -53,7 +53,7 @@
 kevy-embedded = &quot;4.0&quot;</code></pre></li><li><h3>開いて、書いて、読む</h3><pre><code>let db = Db::open(&quot;data/&quot;)?;
 db.set(b&quot;session:7f3a&quot;, b&quot;{\&quot;user\&quot;:\&quot;ada\&quot;}&quot;, Some(Duration::from_secs(3600)))?;
 assert_eq!(db.get(b&quot;session:7f3a&quot;)?.is_some(), true);</code></pre></li><li><h3>あとで redis-cli が要るなら、リスナーを開く</h3><p>他のプロセスが、同じストアに RESP で届くようになります。上のコードは、何ひとつ変わりません。</p><pre><code>db.listen(&quot;127.0.0.1:6379&quot;)?;</code></pre></li></ol>
-  <div class="call loss r-cost"><span class="h">コストと制約</span><p><b>組み込みのストアは、共有されません。</b>データディレクトリを所有するのは 1 つのプロセスです。2 つ目のプロセスがデータを必要とするなら、そのためにあるのが上のリスナー——あるいは<a href="../../../ja/docs/embedded-listener/">フルのサーバー</a>——です。</p></div>
+  <div class="call loss r-cost"><span class="h">コストと制約</span><p><b>組み込みのストアは、共有されません。</b>データディレクトリを所有するのは 1 つのプロセスです。2 つ目のプロセスがデータを必要とするなら、そのためにあるのが上のリスナー——あるいは<a href="../../../ja/docs/embedded-listener/">フルのサーバー</a>——です。ストアはプロセス内でも RAM 予算を取れます(<code>with_tier_budget</code>)。コールドな値はディスクへ退避し、あなたのプロセスの中で戻ります——正直な注記として、プロセス内のコールド読み取りは、その読み取りの間ストアのロックを保持します。退避できる値の最大が既定で 256 KiB に制限されているのは、そのためです。詳細は<a href="../../../ja/docs/tiering/">ティアリングのガイド</a>にあります。</p></div>
 </section>
 <section class="band">
   <div class="sec-h"><h2>ブラウザのタブで</h2><p class="sec-lede">gzip 後 151 KB。ブラウザ自身のファイルシステムに永続化され、リロードに耐え、タブをまたいで pub/sub を話します。</p></div>

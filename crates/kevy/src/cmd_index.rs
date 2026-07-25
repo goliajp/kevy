@@ -34,7 +34,7 @@ pub(crate) fn boot(state: &RuntimeState) {
     }
 }
 
-fn persist_sidecar(dir: Option<&Path>, cat: &Catalog) {
+pub(crate) fn persist_sidecar(dir: Option<&Path>, cat: &Catalog) {
     let Some(dir) = dir else { return };
     let tmp = dir.join("index-catalog.meta.tmp");
     if std::fs::write(&tmp, cat.to_sidecar()).is_ok() {
@@ -124,6 +124,7 @@ fn parse_weights<A: ArgvView + ?Sized>(
 
 pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(
     ctx: &Ctx<'_>,
+    store: &kevy_store::Store,
     args: &A,
     out: &mut Vec<u8>,
 ) {
@@ -154,7 +155,24 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(
     let Ok(ann) = validate_kind_combo(kind, ty, &opts, out) else {
         return;
     };
-    let spec = IndexSpec {
+    let spec = build_spec(args, fields, ty, kind, ann, opts);
+    if !tier_floor_refused(store, out) {
+        install_new_index(ctx, spec, out);
+    }
+}
+
+/// The parsed CREATE's spec. Composite stays `None` here: composite
+/// indexes are ORDERPATH-compiled (TABLE.DECLARE), never hand-declared
+/// through IDX.CREATE.
+fn build_spec<A: ArgvView + ?Sized>(
+    args: &A,
+    fields: Vec<kevy_index::FieldSpec>,
+    ty: ValType,
+    kind: IndexKind,
+    ann: Option<kevy_index::AnnSpec>,
+    opts: CreateOpts,
+) -> IndexSpec {
+    IndexSpec {
         name: args[1].to_vec(),
         prefix: args[4].to_vec(),
         fields,
@@ -165,8 +183,22 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(
         group_by: opts.group_by,
         with_positions: opts.with_positions,
         values: opts.values,
-    };
-    install_new_index(ctx, spec, out);
+        composite: None,
+    }
+}
+
+/// Tiering floor refusal: indexes are the premium
+/// fixed layer demotion can never reclaim — when the existing floor
+/// already exhausts the tier's demotable headroom, a new index is
+/// refused by name (the FailedOverBudget discipline, moved up to
+/// declaration time). Answered from this shard's per-tick gauges; a
+/// no-tier store never refuses. `true` = refused (error written).
+pub(crate) fn tier_floor_refused(store: &kevy_store::Store, out: &mut Vec<u8>) -> bool {
+    if store.tier_index_floor_blocked(0) {
+        encode_error(out, "ERR index memory floor exceeds the tiering budget");
+        return true;
+    }
+    false
 }
 
 /// Clone the catalog, add `spec`, and on success persist + install it.

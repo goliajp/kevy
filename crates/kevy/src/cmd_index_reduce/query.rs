@@ -33,6 +33,7 @@ pub(super) fn reduce_explain(
         b'G' => "groups",
         b'R' => "range",
         b'E' => "eq",
+        b'W' => "where",
         _ => "query",
     };
     let state = if building { "building" } else { "ready" };
@@ -134,12 +135,17 @@ pub(super) fn reduce_compose(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
 }
 
 /// IDX.QUERY: k-way merge by (value, key), global LIMIT + cursor.
+/// Selection clauses (SORT / DISTINCT / FACET / OFFSET) take the
+/// claused reduce; FILTER alone rides this path unchanged — the shards
+/// already thinned their pages, and the global cursor still works.
 pub(super) fn reduce_query(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
-    let mut out = Vec::new();
     let Some(q) = Query::parse(argv) else {
-        encode_error(&mut out, "ERR bad IDX arguments");
-        return out;
+        return super::claused::bad_args();
     };
+    if q.selects() {
+        return super::claused::reduce_query_claused(&q, chunks);
+    }
+    let mut out = Vec::new();
     let mut all: Vec<(IndexValue, Vec<u8>, Hydrated)> = Vec::new();
     for c in chunks {
         let mut pos = 1usize;

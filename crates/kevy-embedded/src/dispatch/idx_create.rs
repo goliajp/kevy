@@ -309,6 +309,13 @@ fn validate_kind_combo(kind: IndexKind, ty: ValType, opts: &CreateOpts) -> Resul
 fn route(s: &Store, argv: &[Vec<u8>], p: &Parsed, out: &mut Vec<u8>) {
     let (name, prefix) = (&argv[1], &argv[4]);
     let field0 = &p.fields[0].name;
+    // VALUES rides text and the scalar kinds; on ann / agg the catalog
+    // refuses it — the server's exact wording, produced here because
+    // the typed `idx_create_agg` / `idx_create_ann` capabilities do not
+    // carry a values list to be refused downstream.
+    if !p.opts.values.is_empty() && matches!(p.kind, IndexKind::Agg | IndexKind::Ann) {
+        return err(out, "ERR VALUES requires KIND text|range|unique");
+    }
     let res = match p.kind {
         #[cfg(feature = "text")]
         IndexKind::Text => create_text(s, name, prefix, p),
@@ -326,7 +333,12 @@ fn route(s: &Store, argv: &[Vec<u8>], p: &Parsed, out: &mut Vec<u8>) {
         IndexKind::Ann => return err(out, "ERR vector indexes need the `vector` feature"),
         // range / unique (and text / ann when their feature is off — the
         // Store returns the same feature error the server would).
-        _ => s.idx_create(name, prefix, field0, p.ty, p.kind),
+        _ if p.opts.values.is_empty() => s.idx_create(name, prefix, field0, p.ty, p.kind),
+        _ => {
+            let values: Vec<(&[u8], ValType)> =
+                p.opts.values.iter().map(|v| (v.name.as_slice(), v.ty)).collect();
+            s.idx_create_with_values(name, prefix, field0, p.ty, p.kind, &values)
+        }
     };
     match res {
         Ok(()) => out.extend_from_slice(b"+OK\r\n"),

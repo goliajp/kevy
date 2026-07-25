@@ -40,6 +40,26 @@ pub(crate) fn publish_gauges(shard: &ShardCtx, store: &Store) {
         s.evicted_keys.store(store.evictions_total(), Relaxed);
         s.commands_processed.store(cmds, Relaxed);
         s.connections_received.store(conns, Relaxed);
+        // Tiering gauges: one cheap struct read when on,
+        // one branch + a zero-store of `enabled` when off.
+        s.tier.enabled.store(u64::from(store.tier_enabled()), Relaxed);
+        if store.tier_enabled() {
+            let ts = store.tier_stats();
+            s.tier.budget.store(ts.budget, Relaxed);
+            s.tier.effective_target.store(ts.effective_target, Relaxed);
+            s.tier.reserved_bytes.store(ts.reserved_bytes, Relaxed);
+            s.tier.stub_bytes.store(ts.stub_bytes, Relaxed);
+            s.tier.cold_keys.store(ts.cold_keys, Relaxed);
+            s.tier.cold_bytes.store(ts.cold_bytes, Relaxed);
+            s.tier.demotions_total.store(ts.demotions_total, Relaxed);
+            s.tier.promotions_total.store(ts.promotions_total, Relaxed);
+            s.tier.peek_preads_total.store(ts.peek_preads_total, Relaxed);
+            s.tier.batch_submissions_total.store(ts.batch_submissions_total, Relaxed);
+            s.tier.vlog_files.store(ts.vlog_files, Relaxed);
+            s.tier.vlog_bytes.store(ts.vlog_bytes, Relaxed);
+            s.tier.vlog_live_bytes.store(ts.vlog_live_bytes, Relaxed);
+            s.tier.vlog_epoch.store(ts.vlog_epoch, Relaxed);
+        }
     });
 }
 

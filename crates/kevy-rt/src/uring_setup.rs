@@ -34,8 +34,16 @@ impl<C: Commands> Shard<C> {
             let aof_path = self.aof_path();
             let commands = &self.commands;
             let store = &mut self.store;
-            let apply =
-                |args: kevy_persist::Argv| crate::shard_run::replay_dispatch(commands, store, &args);
+            // In-replay demotion — same K-frame watermark
+            // drain as the readiness path's replay.
+            let mut frames: u64 = 0;
+            let apply = |args: kevy_persist::Argv| {
+                crate::shard_run::replay_dispatch(commands, store, &args);
+                frames += 1;
+                if frames.is_multiple_of(kevy_persist::REPLAY_DEMOTE_INTERVAL) {
+                    store.demote_to_watermark();
+                }
+            };
             let report = if self.replay_resync {
                 kevy_persist::replay_aof_resync(&aof_path, apply)?
             } else {
@@ -43,6 +51,7 @@ impl<C: Commands> Shard<C> {
             };
             self.commands.on_replay_report(report.dropped_bytes, report.corrupt);
         }
+        self.store.demote_to_watermark();
         Ok(())
     }
 }

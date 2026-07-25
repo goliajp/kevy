@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 
 use super::*;
 use crate::RuntimeState;
-use kevy_index::{Catalog, IndexKind, ValType};
+use kevy_index::{Catalog, IndexKind, IndexValue, ValType};
 
 fn spec(name: &str) -> IndexSpec {
     IndexSpec {
@@ -16,6 +16,7 @@ fn spec(name: &str) -> IndexSpec {
         group_by: None,
         with_positions: false,
         values: Vec::new(),
+        composite: None,
     }
 }
 

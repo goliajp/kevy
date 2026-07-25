@@ -438,6 +438,7 @@ dependencies = [
  "kevy-sys",
  "kevy-text",
  "kevy-tmpdir",
+ "kevy-uring",
  "kevy-vector",
 ]
 
@@ -473,6 +474,7 @@ dependencies = [
  "kevy-persist",
  "kevy-resp",
  "kevy-resp-client",
+ "kevy-sql",
  "kevy-tmpdir",
 ]
 
@@ -536,6 +538,7 @@ dependencies = [
  "kevy-resp",
  "kevy-rt",
  "kevy-store",
+ "kevy-sys",
  "kevy-text",
  "kevy-tmpdir",
  "kevy-vector",
@@ -683,6 +686,13 @@ name = "kevy-scope"
 version = "4.0.0"
 
 [[package]]
+name = "kevy-sql"
+version = "4.0.0"
+dependencies = [
+ "kevy-index",
+]
+
+[[package]]
 name = "kevy-store"
 version = "4.0.0"
 dependencies = [
@@ -691,6 +701,8 @@ dependencies = [
  "kevy-hash",
  "kevy-map",
  "kevy-ranktree",
+ "kevy-tmpdir",
+ "kevy-vlog",
 ]
 
 [[package]]
@@ -715,6 +727,14 @@ dependencies = [
 [[package]]
 name = "kevy-vector"
 version = "4.0.0"
+
+[[package]]
+name = "kevy-vlog"
+version = "4.0.0"
+dependencies = [
+ "kevy-sys",
+ "kevy-tmpdir",
+]
 
 [[package]]
 name = "kevy-wasm"

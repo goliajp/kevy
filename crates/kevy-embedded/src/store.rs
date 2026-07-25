@@ -4,7 +4,9 @@
 
 use crate::KevyError;
 use crate::KevyResult;
-use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+use std::sync::Mutex;
 
 #[cfg(feature = "persist")]
 use kevy_persist::Argv;
@@ -79,6 +81,10 @@ pub struct Store {
     /// View registry.
     #[cfg(feature = "index")]
     pub(crate) views: Arc<crate::ops_view::ViewReg>,
+    /// Table registry (declarations only; runtime state = the
+    /// compiled indexes in `indexes`).
+    #[cfg(feature = "index")]
+    pub(crate) tables: Arc<crate::ops_table::TableReg>,
     /// What this open's replay restored — and what it could not.
     pub(crate) open_report: Arc<crate::metric::OpenReport>,
 }
@@ -130,28 +136,24 @@ impl Store {
         #[cfg(feature = "index")]
         let (indexes, views) = crate::store_wire::wire_registries(&shards);
         let open_report = Arc::new(open_report);
-        let guard = Arc::new(DropGuard {
-            shutdown: std::sync::atomic::AtomicBool::new(false),
-            // Owned here (engine lifetime), not only by Store handles:
-            // WeakStore::upgrade rebuilds a Store from the guard, and
-            // a registry resurrection (kevy-client `mem://`) can
-            // outlive every full Store handle. Requiring a live
-            // Store-held Arc broke exactly that (publish saw a
-            // second, empty bus).
-            open_report: open_report.clone(),
+        // Guard construction (engine-lifetime state incl. the table
+        // registry — WeakStore::upgrade rebuilds from it) lives in
+        // `store_wire::build_guard`, split for the fn-length rule.
+        let guard = crate::store_wire::build_guard(
+            &open_report,
             reaper_stop,
-            reaper_join: Mutex::new(reaper_join),
-            shards_for_flush: shards.clone(),
+            reaper_join,
+            &shards,
             #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
             replica_runner,
             #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
-            feed_close: match (&feed, &config.data_dir) {
-                (Some(f), Some(d)) => Some((f.clone(), d.clone())),
-                _ => None,
-            },
-            #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
             replica_source,
-        });
+            #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+            &feed,
+            &config,
+        );
+        #[cfg(feature = "index")]
+        let tables = guard.tables.clone();
         let store = Store {
             shards,
             guard,
@@ -163,6 +165,8 @@ impl Store {
             indexes,
             #[cfg(feature = "index")]
             views,
+            #[cfg(feature = "index")]
+            tables,
             open_report,
         };
         store.boot_ancillary()?;
@@ -177,6 +181,8 @@ impl Store {
         self.idx_boot();
         #[cfg(feature = "index")]
         self.view_boot();
+        #[cfg(feature = "index")]
+        self.table_boot();
         #[cfg(all(feature = "listener", not(target_arch = "wasm32")))]
         if let Some(addr) = self.config.resp_listener {
             crate::listener::spawn(addr, self.downgrade())?;
@@ -361,6 +367,13 @@ impl Store {
         for shard in self.shards.iter() {
             let stats = {
                 let mut g = lock_write(shard);
+                // Tiering upkeep: budget re-resolution + the index/view
+                // floor feed, then the tick continuation of the
+                // budgeted spill.
+                #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+                crate::shard::tier_tick_upkeep(&mut g, self.config.tier_budget, self.shards.len());
+                let _ = g.store.demote_step();
+                let _ = g.store.tier_compact_tick();
                 g.store.tick_expire(self.config.reaper_samples, self.config.reaper_max_rounds)
             };
             total.sampled += stats.sampled;
@@ -380,6 +393,32 @@ impl Store {
             );
         }
         total
+    }
+
+    /// The B9 transparency suite's deterministic demotion seam
+    /// (`KEVY_TEST_FORCE_DEMOTE` genre): demote `key` to the cold tier
+    /// NOW, ignoring the watermark — the suite drives cold state
+    /// per-key, never by eviction timing. Returns whether a demotion
+    /// happened (false: tiering off / key absent / not spillable).
+    #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+    #[doc(hidden)]
+    pub fn debug_force_demote(&self, key: &[u8]) -> bool {
+        self.wshard(key).store.debug_force_demote(key)
+    }
+
+    /// Tiering counters summed across shards:
+    /// `(demotions_total, promotions_total)` — the minimal counter pair
+    /// (the full INFO gauge set is `tier_info`). Zeros when tiering is off.
+    #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+    pub fn tier_counters(&self) -> (u64, u64) {
+        let mut d = 0u64;
+        let mut p = 0u64;
+        for shard in self.shards.iter() {
+            let s = lock_read(shard).store.tier_stats();
+            d += s.demotions_total;
+            p += s.promotions_total;
+        }
+        (d, p)
     }
 
     // Durability methods (`rewrite_aof`, `save_snapshot`) live in

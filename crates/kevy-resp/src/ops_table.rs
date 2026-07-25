@@ -257,6 +257,13 @@ pub const OP_TABLE: &[OpSpec] = &[
     // view_count instead).
     op("IDX.REBUILD",  RD, NG,   None,            None,    SERVER),
     op("PREFIX.DIGEST", RD, NG,  None,            None,    SERVER | ESTORE),
+    // Tables (the TABLE.* namespace). DECLARE compiles
+    // to IDX specs at declare time; catalog ops are sidecar-persisted,
+    // not data writes — same reasoning as IDX.*.
+    op("TABLE.DECLARE", RD, NG,  None,            None,    SERVER | ESTORE),
+    op("TABLE.DROP",   RD, NG,   None,            None,    SERVER | ESTORE),
+    op("TABLE.LIST",   RD, NG,   None,            None,    SERVER | ESTORE),
+    op("TABLE.VERIFY", RD, NG,   None,            None,    SERVER | ESTORE),
     op("VIEW.CREATE",  RD, NG,   None,            None,    SERVER | ESTORE),
     op("VIEW.DROP",    RD, NG,   None,            None,    SERVER | ESTORE),
     op("VIEW.LIST",    RD, NG,   None,            None,    SERVER | ESTORE),

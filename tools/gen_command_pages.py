@@ -178,6 +178,7 @@ GROUP_LABEL = {
     "pubsub": {"en": "Pub/Sub", "zh": "发布订阅", "ja": "Pub/Sub"},
     "replication": {"en": "Replication", "zh": "复制", "ja": "レプリケーション"},
     "index": {"en": "Indexes", "zh": "索引", "ja": "インデックス"},
+    "table": {"en": "Tables", "zh": "表", "ja": "テーブル"},
     "view": {"en": "Views", "zh": "视图", "ja": "ビュー"},
     "feed": {"en": "Change feed", "zh": "变更流", "ja": "変更フィード"},
     "migration": {"en": "Migration", "zh": "迁移", "ja": "マイグレーション"},
@@ -186,7 +187,7 @@ GROUP_LABEL = {
 ORDER = [
     "string", "generic", "scan", "list", "hash", "set", "zset", "stream", "geo",
     "connection", "server", "tx", "script", "pubsub", "replication",
-    "index", "view", "feed", "migration",
+    "index", "table", "view", "feed", "migration",
 ]
 
 

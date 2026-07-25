@@ -57,7 +57,7 @@
     <h2>One engine. The whole stack an AI system needs.</h2>
     <p class="sec-lede">Every command below runs against a real server in CI before this page ships. Click through — this is what using kevy looks like.</p>
   </div>
-  <div class="tabs"><div class="tab-heads"><button class="tab on" type="button" data-tab="0">Vectors</button><button class="tab" type="button" data-tab="1">Full text</button><button class="tab" type="button" data-tab="2">Indexes</button><button class="tab" type="button" data-tab="3">Views</button><button class="tab" type="button" data-tab="4">Change feed</button><button class="tab" type="button" data-tab="5">Anywhere</button></div><div class="tab-panel on" data-panel="0"><pre><code># an HNSW index over your keys — declared once,
+  <div class="tabs"><div class="tab-heads"><button class="tab on" type="button" data-tab="0">Vectors</button><button class="tab" type="button" data-tab="1">Full text</button><button class="tab" type="button" data-tab="2">Indexes</button><button class="tab" type="button" data-tab="3">Views</button><button class="tab" type="button" data-tab="4">Tables</button><button class="tab" type="button" data-tab="5">Bigger than RAM</button><button class="tab" type="button" data-tab="6">Change feed</button><button class="tab" type="button" data-tab="7">Anywhere</button></div><div class="tab-panel on" data-panel="0"><pre><code># an HNSW index over your keys — declared once,
 # kept current by the write path
 IDX.CREATE idx:sem ON PREFIX doc: FIELD vec TYPE vector KIND ann DIM 768 DISTANCE cosine M 16 EF 200
 
@@ -91,12 +91,26 @@ VIEW.QUERY v:open881
 -&gt; 1) &quot;0&quot;
    2) 1) &quot;order:1001&quot;  2) &quot;881&quot;
 
-# reads never recompute it; writes keep it fresh</code></pre><p class="tab-note">What most applications actually want from their ORM.</p><a class="tab-more" href="use/app-store/">Materialised views</a></div><div class="tab-panel" data-panel="4"><pre><code># tail every write from another process — or an agent.
+# reads never recompute it; writes keep it fresh</code></pre><p class="tab-note">What most applications actually want from their ORM.</p><a class="tab-more" href="use/app-store/">Materialised views</a></div><div class="tab-panel" data-panel="4"><pre><code># a table is a declaration — compiled to named indexes, once
+TABLE.DECLARE user PREFIX u: PK id COLUMN id str COLUMN name str COLUMN age i64 COLUMN dept str INDEX age range VALUES dept name ORDERPATH by_dept_age ON dept THEN age DESC
+
+HSET u:1 id 1 name ada age 34 dept eng
+
+# the ORDER BY dept, age DESC walk — one composite index, no planner
+IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name age</code></pre><p class="tab-note">Typed columns, secondary indexes, composite ORDER BY paths — even your PG/MySQL schema file, via kevy-cli sql compile. No runtime SQL, no joins: those stay in Postgres.</p><a class="tab-more" href="use/app-store/">Single-table serving</a></div><div class="tab-panel" data-panel="5"><pre><code># kevy.toml — a RAM budget for the whole store
+[tiering]
+budget = &quot;70%&quot;               # or &quot;4gb&quot;, or &quot;auto&quot;
+
+# past the budget, the coldest values spill to a disk log
+# and page back on access. a cold key is an ordinary key:
+GET archive:2019:q3          # pays one disk read, same reply
+TTL archive:2019:q3          # metadata answers from RAM
+SCAN 0 MATCH archive:*       # sees cold keys — one key table</code></pre><p class="tab-note">RAM bounds your keys, disk bounds your data; the AOF durability contract is untouched. v1 spills strings and hashes — lists, sets and streams stay hot.</p><a class="tab-more" href="docs/tiering/">How tiering works</a></div><div class="tab-panel" data-panel="6"><pre><code># tail every write from another process — or an agent.
 # [feed] enabled = true in kevy.toml
 FEED.SHARDS                 -&gt; (integer) 16
 FEED.TAIL 0                 -&gt; 1) (integer) 1     # generation
                                2) (integer) 1     # offset
-FEED.READ 0 1 0 COUNT 2     -&gt; the writes themselves, replayable</code></pre><p class="tab-note">Resumable offsets. Nothing to poll, nothing to miss.</p><a class="tab-more" href="use/ai/">The change feed</a></div><div class="tab-panel" data-panel="5"><pre><code># a 16-core server
+FEED.READ 0 1 0 COUNT 2     -&gt; the writes themselves, replayable</code></pre><p class="tab-note">Resumable offsets. Nothing to poll, nothing to miss.</p><a class="tab-more" href="use/ai/">The change feed</a></div><div class="tab-panel" data-panel="7"><pre><code># a 16-core server
 cargo install kevy &amp;&amp; kevy --port 6379
 
 # inside your binary — no socket, no process
@@ -106,17 +120,14 @@ db.set(b&quot;k&quot;, b&quot;v&quot;, None)?;
 # a browser tab — 151 KB, persists to OPFS
 const db = await open({ persist: { name: &quot;app&quot; } });
 
-# a phone — inside your React Native or Flutter app
-db.set(&quot;session:7f3a&quot;, token, { ttlMs: 3_600_000 });
-
 # a microcontroller — no OS, no allocator
-let mut store = Store::new_in(&amp;mut arena);</code></pre><p class="tab-note">The same engine and the same commands in all five places — and on a phone it is faster than MMKV.</p><a class="tab-more" href="use/embedded/">Embedding kevy</a></div></div>
+let mut store = Store::new_in(&amp;mut arena);</code></pre><p class="tab-note">The same engine and the same commands in all four places.</p><a class="tab-more" href="use/embedded/">Embedding kevy</a></div></div>
 </section>
 <section class="band" id="swap">
   <div class="sec-h">
     <p class="eyebrow">Why you can replace Redis</p>
     <h2>Same protocol. More throughput.</h2>
-    <p class="sec-lede">RESP2 and RESP3, 184 commands — redis-cli and your client library connect unchanged. One machine, 16 cores, loopback, median of five.</p>
+    <p class="sec-lede">RESP2 and RESP3, 188 commands — redis-cli and your client library connect unchanged. One machine, 16 cores, loopback, median of five.</p>
   </div>
   <div class="bars"><div class="bar-row"><div class="bar-k">GET</div><div class="bar-track"><div class="bar us" style="width:100.0%"></div><div class="bar them" style="width:71.8%"></div></div><div class="bar-n">1.39×</div></div><div class="bar-row"><div class="bar-k">SET</div><div class="bar-track"><div class="bar us" style="width:88.7%"></div><div class="bar them" style="width:33.0%"></div></div><div class="bar-n">2.69×</div></div><div class="bar-row"><div class="bar-k">INCR</div><div class="bar-track"><div class="bar us" style="width:78.6%"></div><div class="bar them" style="width:44.3%"></div></div><div class="bar-n">1.77×</div></div><div class="bar-row"><div class="bar-k">SADD</div><div class="bar-track"><div class="bar us" style="width:71.8%"></div><div class="bar them" style="width:47.3%"></div></div><div class="bar-n">1.52×</div></div><div class="bar-row"><div class="bar-k">HSET</div><div class="bar-track"><div class="bar us" style="width:55.0%"></div><div class="bar them" style="width:38.7%"></div></div><div class="bar-n">1.42×</div></div><div class="bar-row"><div class="bar-k">LPUSH</div><div class="bar-track"><div class="bar us narrow" style="width:41.2%"></div><div class="bar them" style="width:36.7%"></div></div><div class="bar-n narrow">1.12×</div></div><div class="bar-row"><div class="bar-k">ZADD</div><div class="bar-track"><div class="bar us narrow" style="width:39.1%"></div><div class="bar them" style="width:35.6%"></div></div><div class="bar-n narrow">1.10×</div></div></div>
   <div class="bars-legend">

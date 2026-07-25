@@ -126,6 +126,8 @@ mod ops_index;
 #[cfg(feature = "index")]
 mod ops_index_sync;
 #[cfg(feature = "index")]
+mod ops_table;
+#[cfg(feature = "index")]
 mod ops_view;
 #[cfg(all(feature = "listener", not(target_arch = "wasm32")))]
 mod listener;
@@ -158,9 +160,13 @@ mod store_wire;
 mod store_persist;
 
 pub use config::{Config, EvictionPolicy, TtlReaperMode};
+#[cfg(feature = "tier")]
+pub use config::TierBudgetSpec;
+#[cfg(feature = "tier")]
+mod config_tier;
 #[cfg(feature = "persist")]
 pub use config::AppendFsync;
-pub use info::KevyInfo;
+pub use info::{KevyInfo, KevyTierInfo};
 #[cfg(feature = "persist")]
 pub use metric::KevyMetric;
 pub use metric::OpenReport;
@@ -177,7 +183,9 @@ pub use ops_reconcile::ReconcileReport;
 #[cfg(feature = "index")]
 pub use ops_index::IndexPage;
 #[cfg(feature = "text")]
-pub use ops_index::highlight::{FacetCounts, MatchOpts, MatchPage, ValueFilter};
+pub use ops_index::highlight::{FacetCounts, MatchOpts, MatchPage};
+#[cfg(feature = "index")]
+pub use ops_index::claused::{ScalarPage, ScalarQueryOpts, ValueFilter};
 #[cfg(feature = "index")]
 pub use ops_view::ViewPage;
 #[cfg(feature = "index")]

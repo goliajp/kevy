@@ -41,18 +41,32 @@ pub(crate) fn spawn_reaper(
             };
             #[cfg(feature = "persist")]
             let sink = config.metric_sink.clone();
+            #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+            let tier_spec = config.tier_budget;
             let handle = std::thread::Builder::new()
                 .name(String::from("kevy-embedded-reaper"))
                 .spawn(move || {
+                    #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+                    let tier = tier_spec;
+                    #[cfg(not(all(feature = "tier", not(target_arch = "wasm32"))))]
+                    let tier = ();
                     #[cfg(feature = "persist")]
-                    reaper_loop(shards_t, stop_t, interval, samples, rounds, policy, sink);
+                    reaper_loop(shards_t, stop_t, interval, samples, rounds, tier, policy, sink);
                     #[cfg(not(feature = "persist"))]
-                    reaper_loop(shards_t, stop_t, interval, samples, rounds);
+                    reaper_loop(shards_t, stop_t, interval, samples, rounds, tier);
                 })?;
             Ok((Some(stop), Some(handle)))
         }
     }
 }
+
+/// The reaper's tiering-config slot: the budget spec when the tier
+/// backend is compiled in, `()` otherwise (keeps `reaper_loop`'s
+/// signature cfg-stable at the call sites).
+#[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+type TierSpecOpt = Option<crate::config::TierBudgetSpec>;
+#[cfg(not(all(feature = "tier", not(target_arch = "wasm32"))))]
+type TierSpecOpt = ();
 
 #[allow(clippy::too_many_arguments)] // reaper config knobs, all primitives
 fn reaper_loop(
@@ -61,9 +75,12 @@ fn reaper_loop(
     interval: Duration,
     samples: usize,
     rounds: u32,
+    tier: TierSpecOpt,
     #[cfg(feature = "persist")] policy: kevy_persist::RewritePolicy,
     #[cfg(feature = "persist")] sink: Option<MetricSink>,
 ) {
+    #[cfg(not(all(feature = "tier", not(target_arch = "wasm32"))))]
+    let _ = tier;
     while !stop.load(Ordering::Relaxed) {
         std::thread::sleep(interval);
         if stop.load(Ordering::Relaxed) {
@@ -74,6 +91,15 @@ fn reaper_loop(
                 let mut g = lock_inner(shard);
                 let _ = g.store.tick_expire(samples, rounds);
                 let _ = g.store.tick_hash_ttl(64);
+                // Tiering upkeep: budget re-resolution (auto/percent
+                // re-probe the memory bound) + the index/view floor
+                // feed, THEN continue any spill the budgeted
+                // write-path batches left unfinished (no-op when
+                // off/under budget).
+                #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+                crate::shard::tier_tick_upkeep(&mut g, tier, shards.len());
+                let _ = g.store.demote_step();
+                let _ = g.store.tier_compact_tick();
                 // EverySec AOF fsync window check — runs from the same tick.
                 #[cfg(feature = "persist")]
                 if let Some(aof) = &mut g.aof {

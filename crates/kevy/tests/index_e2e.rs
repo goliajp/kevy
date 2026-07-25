@@ -1133,3 +1133,157 @@ fn facet_over_the_wire() {
     let s = String::from_utf8_lossy(&bad);
     assert!(s.starts_with("-ERR") && s.contains("price"), "unstored facet field: {s}");
 }
+
+/// The scalar-VALUES clause fixture: six rows on `v:` — ages 10..60;
+/// v:3 has no city, v:4 no price, v:6 an uncoercible price — spread
+/// over the real 8-shard reactor so every clause exercises the
+/// extension fan-out and the origin merge.
+fn seed_values_rows(c: &mut std::net::TcpStream) {
+    let rows: &[(&str, &[(&str, &str)])] = &[
+        ("v:1", &[("age", "10"), ("city", "tokyo"), ("price", "5")]),
+        ("v:2", &[("age", "20"), ("city", "osaka"), ("price", "3")]),
+        ("v:3", &[("age", "30"), ("price", "8")]),
+        ("v:4", &[("age", "40"), ("city", "tokyo")]),
+        ("v:5", &[("age", "50"), ("city", "kyoto"), ("price", "3")]),
+        ("v:6", &[("age", "60"), ("city", "osaka"), ("price", "x")]),
+    ];
+    for (key, fields) in rows {
+        let mut argv: Vec<&[u8]> = vec![b"HSET", key.as_bytes()];
+        for (f, v) in *fields {
+            argv.push(f.as_bytes());
+            argv.push(v.as_bytes());
+        }
+        cmd(c, &argv);
+    }
+}
+
+/// The flat `[cursor "0", rows]` reply for keys+values.
+fn flat_reply(rows: &[(&str, &str)]) -> Vec<u8> {
+    let mut out = String::from("*2\r\n$1\r\n0\r\n");
+    out.push_str(&format!("*{}\r\n", rows.len() * 2));
+    for (k, v) in rows {
+        out.push_str(&format!("${}\r\n{}\r\n", k.len(), k));
+        out.push_str(&format!("${}\r\n{}\r\n", v.len(), v));
+    }
+    out.into_bytes()
+}
+
+#[test]
+fn scalar_values_filter_sort_distinct_facet_offset() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    seed_values_rows(&mut c);
+    let r = cmd(
+        &mut c,
+        &[b"IDX.CREATE", b"vals", b"ON", b"PREFIX", b"v:", b"FIELD", b"age", b"TYPE", b"i64",
+          b"KIND", b"range", b"VALUES", b"city", b"price", b"TYPES", b"str", b"i64"],
+    );
+    assert_eq!(r, b"+OK\r\n");
+    // A twin without VALUES over the same domain: the plain reply's
+    // byte-stability proof (A5 on the wire).
+    let r = cmd(
+        &mut c,
+        &[b"IDX.CREATE", b"plainidx", b"ON", b"PREFIX", b"v:", b"FIELD", b"age", b"TYPE", b"i64",
+          b"KIND", b"range"],
+    );
+    assert_eq!(r, b"+OK\r\n");
+
+    let all = flat_reply(&[
+        ("v:1", "10"), ("v:2", "20"), ("v:3", "30"), ("v:4", "40"), ("v:5", "50"), ("v:6", "60"),
+    ]);
+    let with_values =
+        query_ready(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"LIMIT", b"100"]);
+    let without = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"plainidx", b"RANGE", b"0", b"100", b"LIMIT", b"100"],
+    );
+    assert_eq!(with_values, all, "plain RANGE reply bytes unchanged by the declaration");
+    assert_eq!(without, all, "and identical to the VALUES-free twin's");
+
+    // FILTER: missing value FAILS; an uncoercible stored value is
+    // excluded from a numeric range, not matched.
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo"]);
+    assert_eq!(r, flat_reply(&[("v:1", "10"), ("v:4", "40")]));
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"price", b"RANGE", b"0", b"6"]);
+    assert_eq!(r, flat_reply(&[("v:1", "10"), ("v:2", "20"), ("v:5", "50")]));
+
+    // FILTER pages with a cursor (driving order unchanged).
+    let p1 = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo", b"LIMIT", b"1"]);
+    let s1 = String::from_utf8_lossy(&p1).into_owned();
+    assert!(s1.contains("v:1") && !s1.contains("v:4"), "{s1}");
+    let cursor = s1.lines().nth(2).unwrap().to_string();
+    assert_ne!(cursor, "0", "full filtered page carries a cursor: {s1}");
+    let p2 = cmd(
+        &mut c,
+        &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo",
+          b"LIMIT", b"5", b"CURSOR", cursor.as_bytes()],
+    );
+    assert_eq!(p2, flat_reply(&[("v:4", "40")]), "non-overlapping resume");
+
+    // SORT ASC/DESC: missing value LAST in both directions; str vs i64
+    // declared types order differently.
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"SORT", b"city", b"ASC"]);
+    assert_eq!(r, flat_reply(&[("v:5", "50"), ("v:2", "20"), ("v:6", "60"), ("v:1", "10"), ("v:4", "40"), ("v:3", "30")]));
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"SORT", b"city", b"DESC"]);
+    assert_eq!(r, flat_reply(&[("v:1", "10"), ("v:4", "40"), ("v:2", "20"), ("v:6", "60"), ("v:5", "50"), ("v:3", "30")]));
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"SORT", b"price", b"ASC"]);
+    assert_eq!(
+        r,
+        flat_reply(&[("v:2", "20"), ("v:5", "50"), ("v:1", "10"), ("v:3", "30"), ("v:4", "40"), ("v:6", "60")]),
+        "numeric under TYPES i64; no-price and uncoercible-price sort last"
+    );
+
+    // DISTINCT collapses to the first per city in driving order; the
+    // cityless row is its own group.
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"DISTINCT", b"city"]);
+    assert_eq!(r, flat_reply(&[("v:1", "10"), ("v:2", "20"), ("v:3", "30"), ("v:5", "50")]));
+
+    // FACET: counts over the WHOLE match set before truncation, ONE
+    // trailing element appended to the rows array.
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FACET", b"city", b"LIMIT", b"2"]);
+    let expect = "*2\r\n$1\r\n0\r\n*5\r\n$3\r\nv:1\r\n$2\r\n10\r\n$3\r\nv:2\r\n$2\r\n20\r\n\
+                  *2\r\n$4\r\ncity\r\n*6\r\n$5\r\nosaka\r\n$1\r\n2\r\n$5\r\ntokyo\r\n$1\r\n2\r\n$5\r\nkyoto\r\n$1\r\n1\r\n";
+    assert_eq!(String::from_utf8_lossy(&r), expect);
+    // FILTER reduces the counts; DISTINCT does not.
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"price", b"RANGE", b"0", b"6", b"FACET", b"city"]);
+    let s = String::from_utf8_lossy(&r);
+    for label in ["kyoto", "osaka", "tokyo"] {
+        assert!(s.contains(&format!("{label}\r\n$1\r\n1")), "{s}");
+    }
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"DISTINCT", b"city", b"FACET", b"city"]);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.contains("osaka\r\n$1\r\n2") && s.contains("tokyo\r\n$1\r\n2"), "{s}");
+
+    // OFFSET: non-overlapping pages; past the end = empty, not error.
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"OFFSET", b"2", b"LIMIT", b"2"]);
+    assert_eq!(r, flat_reply(&[("v:3", "30"), ("v:4", "40")]));
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"OFFSET", b"4", b"LIMIT", b"2"]);
+    assert_eq!(r, flat_reply(&[("v:5", "50"), ("v:6", "60")]));
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"OFFSET", b"100"]);
+    assert_eq!(r, flat_reply(&[]));
+
+    // CURSOR × selection clauses: the named refusal.
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"CURSOR", b"0", b"SORT", b"city", b"ASC"]);
+    assert_eq!(
+        String::from_utf8_lossy(&r),
+        "-ERR IDX.QUERY 'vals': CURSOR cannot combine with SORT|DISTINCT|FACET|OFFSET\r\n"
+    );
+
+    // Clause errors name the field / the declared type.
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"nope", b"EQ", b"1"]);
+    assert!(String::from_utf8_lossy(&r).contains("FILTER names field 'nope'"), "{:?}", String::from_utf8_lossy(&r));
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"price", b"EQ", b"abc"]);
+    assert!(String::from_utf8_lossy(&r).contains("is not a valid i64"), "{:?}", String::from_utf8_lossy(&r));
+
+    // IDX.COUNT takes no clauses — refused, not ignored.
+    let r = cmd(&mut c, &[b"IDX.COUNT", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo"]);
+    assert!(r.starts_with(b"-ERR"), "{:?}", String::from_utf8_lossy(&r));
+
+    // A live update moves the stored value with the row.
+    cmd(&mut c, &[b"HSET", b"v:3", b"city", b"tokyo"]);
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo"]);
+    assert_eq!(r, flat_reply(&[("v:1", "10"), ("v:3", "30"), ("v:4", "40")]));
+    cmd(&mut c, &[b"DEL", b"v:1"]);
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo"]);
+    assert_eq!(r, flat_reply(&[("v:3", "30"), ("v:4", "40")]));
+}

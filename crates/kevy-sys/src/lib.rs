@@ -61,6 +61,7 @@
 pub(crate) mod addr;
 pub(crate) mod ffi;
 pub mod checksum;
+mod mem;
 mod signal;
 mod socket;
 mod waker;
@@ -74,6 +75,7 @@ mod poller_ep;
 pub use poller_kq::Poller;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub use poller_ep::Poller;
+pub use mem::detected_memory_bound;
 pub use signal::{SIGINT, SIGTERM, SIGXFSZ, install_signal_handler};
 pub use socket::{Socket, tcp_listen, tcp_listen_reuseport, unix_listen};
 pub use waker::{Waker, waker};

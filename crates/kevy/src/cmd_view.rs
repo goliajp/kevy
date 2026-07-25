@@ -247,29 +247,40 @@ fn op_hydrate(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     // No shard-identity check needed: each shard's store holds only
     // its own keys, so "target present here" IS ownership. Missing
     // targets are nobody's row — the reduce fills them with nils
-    // (RFC: target missing = nil).
+    // (RFC: target missing = nil). The existence probe is stage-1
+    // metadata only — a cold target pays no pread here.
+    let present: Vec<(usize, &[u8])> = rows
+        .chunks(3)
+        .enumerate()
+        .filter_map(|(row_idx, row)| {
+            let [_member, _order, target] = row else { return None };
+            (store.exists(&[target.as_slice()]) > 0).then_some((row_idx, target.as_slice()))
+        })
+        .collect();
+    // This shard's target rows hydrate as ONE batched page — cold
+    // rows coalesce into one submission, one decode per row, no
+    // promotion, no gate advancement.
+    let keys: Vec<&[u8]> = present.iter().map(|(_, t)| *t).collect();
+    let prefetched = crate::cmd_index_query::peek_hydration(store, &keys, fields);
     let mut chunk = vec![ST_OK];
     let mut body = Vec::new();
-    let mut hits = 0u32;
-    for (row_idx, row) in rows.chunks(3).enumerate() {
-        let [_member, _order, target] = row else { break };
-        if store.exists(&[target.as_slice()]) == 0 {
-            continue;
-        }
-        hits += 1;
-        body.extend_from_slice(&(row_idx as u32).to_le_bytes());
-        for f in fields {
-            match store.hget(target, f) {
-                Ok(Some(v)) => {
-                    let v = v.to_vec();
+    for ((row_idx, _), row) in present.iter().zip(&prefetched) {
+        body.extend_from_slice(&(*row_idx as u32).to_le_bytes());
+        let vals = match row {
+            Ok(Some(vals)) => vals.as_slice(),
+            _ => &[],
+        };
+        for i in 0..fields.len() {
+            match vals.get(i).and_then(Option::as_deref) {
+                Some(v) => {
                     body.extend_from_slice(&(v.len() as u32).to_le_bytes());
-                    body.extend_from_slice(&v);
+                    body.extend_from_slice(v);
                 }
-                _ => body.extend_from_slice(&u32::MAX.to_le_bytes()),
+                None => body.extend_from_slice(&u32::MAX.to_le_bytes()),
             }
         }
     }
-    chunk.extend_from_slice(&hits.to_le_bytes());
+    chunk.extend_from_slice(&(present.len() as u32).to_le_bytes());
     chunk.extend_from_slice(&body);
     chunk
 }
@@ -381,3 +392,71 @@ impl QueryArgs {
 /// Origin reduce for VIEW.* verbs lives in [`crate::cmd_view_reduce`];
 /// re-exported so callers keep the `cmd_view::extension_reduce` path.
 pub(crate) use crate::cmd_view_reduce::extension_reduce;
+
+#[cfg(test)]
+mod hydrate_tests {
+    //! `op_hydrate` on cold rows — byte-identical to the hot twin,
+    //! zero promotions, one record read per cold row, one batch per
+    //! page (the VIEW.QUERY+VIA server harness is disproportionate for
+    //! this; the reduce/fan-out layers above are covered by the
+    //! existing view e2e, and this pins the shard half's tier
+    //! behavior).
+
+    use super::op_hydrate;
+    use kevy_store::Store;
+
+    fn argv(fields: &[&[u8]], rows: &[(&[u8], &[u8], &[u8])]) -> Vec<Vec<u8>> {
+        let mut v = vec![b"VIEW.HYDRATE".to_vec(), b"0".to_vec()];
+        v.push((fields.len() as u32).to_le_bytes().to_vec());
+        v.extend(fields.iter().map(|f| f.to_vec()));
+        for (m, o, t) in rows {
+            v.push(m.to_vec());
+            v.push(o.to_vec());
+            v.push(t.to_vec());
+        }
+        v
+    }
+
+    #[test]
+    fn cold_rows_hydrate_byte_identical_without_promoting() {
+        let d = kevy_tmpdir::TmpDir::new("view-hydrate-cold");
+        let mut s = Store::new();
+        s.enable_tiering(d.path(), 1 << 30).unwrap();
+        for i in 0..3u8 {
+            let big = vec![b'v'; 80];
+            s.hset(
+                format!("t:{i}").as_bytes(),
+                &[
+                    (b"a".as_slice(), big.as_slice()),
+                    (b"b".as_slice(), b"small".as_slice()),
+                    (b"c".as_slice(), b"x".as_slice()),
+                ],
+            )
+            .unwrap();
+        }
+        let a = argv(
+            &[b"a", b"b", b"missing"],
+            &[
+                (b"m0", b"o0", b"t:0"),
+                (b"m1", b"o1", b"absent-target"),
+                (b"m2", b"o2", b"t:1"),
+                (b"m3", b"o3", b"t:2"),
+            ],
+        );
+        let hot = op_hydrate(&mut s, &a);
+        for i in 0..3u8 {
+            assert!(s.debug_force_demote(format!("t:{i}").as_bytes()));
+        }
+        let before = s.tier_stats();
+        let cold = op_hydrate(&mut s, &a);
+        let after = s.tier_stats();
+        assert_eq!(cold, hot, "cold hydration must be byte-identical to the hot twin");
+        assert_eq!(after.promotions_total, 0, "a hydrated page is not an access signal");
+        assert_eq!(after.peek_preads_total - before.peek_preads_total, 3, "one read per cold ROW");
+        assert_eq!(after.batch_submissions_total - before.batch_submissions_total, 1, "one batch per page");
+        // Rows are still cold; the client 2-touch gate starts fresh.
+        let again = op_hydrate(&mut s, &a);
+        assert_eq!(again, hot);
+        assert_eq!(s.tier_stats().promotions_total, 0);
+    }
+}
