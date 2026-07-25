@@ -68,11 +68,21 @@ def run_gen():
     rows, out = int(opt("--rows")), opt("--out")
     pad_len = int(opt("--pad", "400"))
     rng = random.Random(42)
-    pad = "x" * pad_len
+    # The pad MUST be incompressible. A constant pad ("x" * n) past
+    # Postgres's ~2 KB TOAST threshold gets compressed roughly 25:1, which
+    # silently turns a 12 GB dataset into 488 MB on PG's disk — it then
+    # fits entirely in the cache the run was trying to overflow, and the
+    # whole "data exceeds RAM" premise collapses. Measured that way once;
+    # the numbers were meaningless. Random hex per row keeps both engines
+    # storing what they were given. (That PG *can* compress a repetitive
+    # payload and kevy cannot is a real difference — but it belongs in the
+    # findings as its own line, not hidden inside every other column.)
+    alphabet = "0123456789abcdef"
     t0 = time.time()
     with open(out, "w", newline="") as f:
         w = csv.writer(f)
         for i in range(rows):
+            pad = "".join(rng.choices(alphabet, k=pad_len))
             w.writerow([
                 i,
                 f"user{i:08d}",
@@ -323,6 +333,30 @@ def run_kevy():
         c.cmd("HSET", f"row:{i}", "age", str(18 + rng.randrange(60)))
         lat["write"].append((time.perf_counter_ns() - t) / 1000)
 
+    # A "tiered" row nobody can check is worth nothing: pull the gauges so
+    # the finding can show demotion actually happened and what stayed
+    # resident (indexes are RAM-resident by design).
+    extra = {}
+    if mode.startswith("tier"):
+        info = c.cmd("INFO", "tiering")
+        text = info.decode(errors="replace") if isinstance(info, bytes) else ""
+        for line in text.splitlines():
+            if ":" in line and line.split(":")[0] in (
+                "tier_budget_bytes", "tier_effective_target", "cold_keys",
+                "cold_bytes", "stub_bytes", "index_reserved_bytes",
+                "vlog_size_bytes", "promotions_total", "demotions_total",
+            ):
+                k, v = line.split(":", 1)
+                try:
+                    extra[k] = int(v.strip())
+                except ValueError:
+                    pass
+        um = c.cmd("INFO", "memory")
+        umt = um.decode(errors="replace") if isinstance(um, bytes) else ""
+        for line in umt.splitlines():
+            if line.startswith("used_memory:"):
+                extra["used_memory"] = int(line.split(":", 1)[1].strip())
+
     time.sleep(3)  # let the AOF settle before sizing it
     disk = 0
     if datadir:
@@ -337,7 +371,8 @@ def run_kevy():
             for line in f:
                 if line.startswith("VmRSS:"):
                     rss = int(line.split()[1]) * 1024
-    report("kevy4", mode, csv_path, load_s, lat, disk, rss, rows)
+    report("kevy4", mode, csv_path, load_s, lat, disk, rss, rows,
+           extra=extra or None)
 
 
 CMDS = {"gen": run_gen, "pg": run_pg, "kevy": run_kevy}
