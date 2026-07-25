@@ -61,6 +61,14 @@ impl Val {
     }
 }
 
+/// One row's contribution to the memory term: its key copy, the fixed
+/// slot array, and any spilled (heap) values.
+fn row_bytes(key_len: usize, slots: &[Val]) -> u64 {
+    key_len as u64
+        + slots.len() as u64 * std::mem::size_of::<Val>() as u64
+        + slots.iter().map(Val::heap).sum::<u64>()
+}
+
 /// The stored-value side-channel: row key → its declared values.
 #[derive(Debug)]
 pub(crate) struct RowValues {
@@ -68,11 +76,16 @@ pub(crate) struct RowValues {
     /// slot array.
     n: usize,
     rows: HashMap<Vec<u8>, Box<[Val]>>,
+    /// Running Σ of [`row_bytes`], maintained on every `set`/`clear` so
+    /// [`RowValues::approx_bytes`] is O(1). A full-map rescan per call
+    /// was ~50 ms on the reactor at 10M rows — `Segment::stats()` (hence
+    /// the tiering reserved-floor feed) reads it every 100 ms tick.
+    heap: u64,
 }
 
 impl RowValues {
     pub(crate) fn new(n: usize) -> Self {
-        Self { n, rows: HashMap::new() }
+        Self { n, rows: HashMap::new(), heap: 0 }
     }
 
     /// Store `key`'s values. A shorter slice than the declared arity
@@ -84,13 +97,18 @@ impl RowValues {
                 *slot = Val::store(v);
             }
         }
-        self.rows.insert(key.to_vec(), slots);
+        self.heap += row_bytes(key.len(), &slots);
+        if let Some(old) = self.rows.insert(key.to_vec(), slots) {
+            self.heap = self.heap.saturating_sub(row_bytes(key.len(), &old));
+        }
     }
 
     /// Forget `key`'s values — the withdrawal counterpart of
     /// [`RowValues::set`].
     pub(crate) fn clear(&mut self, key: &[u8]) {
-        self.rows.remove(key);
+        if let Some(old) = self.rows.remove(key) {
+            self.heap = self.heap.saturating_sub(row_bytes(key.len(), &old));
+        }
     }
 
     /// `key`'s value for `field`, or `None` when the row has none.
@@ -99,16 +117,10 @@ impl RowValues {
     }
 
     /// Approximate heap bytes — the stored-value term of the memory
-    /// formula (slot arrays + key copies + spilled values).
+    /// formula (slot arrays + key copies + spilled values). O(1): the
+    /// running total is maintained by `set`/`clear`.
     pub(crate) fn approx_bytes(&self) -> u64 {
-        self.rows
-            .iter()
-            .map(|(k, slots)| {
-                k.len() as u64
-                    + slots.len() as u64 * std::mem::size_of::<Val>() as u64
-                    + slots.iter().map(Val::heap).sum::<u64>()
-            })
-            .sum()
+        self.heap
     }
 }
 
@@ -152,5 +164,30 @@ mod tests {
         let inline_only = rv.approx_bytes();
         rv.set(b"k", &[Some(&[b'z'; 200])]);
         assert!(rv.approx_bytes() > inline_only, "a spilled value costs heap");
+    }
+
+    #[test]
+    fn incremental_heap_matches_a_full_rescan() {
+        // The O(1) running total must equal a from-scratch sum after any
+        // mix of inserts, overwrites (inline↔spill), and clears — the
+        // property that lets Segment::stats() skip the per-tick rescan.
+        let recompute = |rv: &RowValues| -> u64 {
+            rv.rows
+                .iter()
+                .map(|(k, slots)| row_bytes(k.len(), slots))
+                .sum()
+        };
+        let mut rv = RowValues::new(2);
+        rv.set(b"a", &[Some(b"x"), Some(&[b'z'; 40])]);
+        rv.set(b"bb", &[Some(&[b'y'; 100]), None]);
+        rv.set(b"a", &[Some(b"short"), None]); // overwrite: spill → inline, arity shrinks
+        rv.set(b"ccc", &[Some(b"1"), Some(b"2")]);
+        rv.clear(b"bb");
+        rv.clear(b"missing"); // no-op must not perturb the total
+        assert_eq!(rv.approx_bytes(), recompute(&rv), "counter drifted from truth");
+        rv.clear(b"a");
+        rv.clear(b"ccc");
+        assert_eq!(rv.approx_bytes(), recompute(&rv));
+        assert_eq!(rv.approx_bytes(), 0, "an empty side-channel costs nothing");
     }
 }

@@ -26,7 +26,43 @@ an occasional multi-ms stall on the shared shard reactor, not a per-op cost.
 The earlier demotion-sampler bound (write-path visit window = 512) removed one
 O(map) scan but did **not** move these tails — a second, larger stall remained.
 
-## Decomposition — the stall is inline vlog compaction
+## CORRECTION (perf-confirmed) — the stall is a per-tick O(rows) rescan, NOT compaction
+
+The compaction theory below was **refuted by measurement**: budgeting
+compaction (bounded per-tick steps) left the tails unchanged, and the
+faithful repro (load + declare + backfill + a read-only c4 sweep) creates
+no dead vlog records, so compaction never even runs during it. Two
+source-only root-cause guesses (sampler walk, then compaction IO) were
+both wrong — exactly the "source-only Phase A picks the wrong attack
+surface" anti-pattern.
+
+An authoritative root-profile (root perf bypasses `perf_event_paranoid=3`;
+non-root perf silently captured zero samples, which had masqueraded as
+"off-CPU") nailed it: **74% of all CPU in `rowvalues.rs` `RowValues::
+approx_bytes`, on-CPU.** The chain:
+
+- `tier_tick` runs every 100 ms tick and feeds the tier's index/view
+  memory floor via `index_runtime::reserved_bytes` → `Segment::stats()`.
+- `Segment::stats()` maintained the scalar-postings byte total
+  incrementally, but re-derived the `VALUES` side-channel term by calling
+  `RowValues::approx_bytes()`, which **iterated every row** in the map.
+- At 10M rows with a `VALUES` index that is a full-map scan (~50 ms) on
+  the reactor every tick — a query landing in that window eats it. This
+  matches every observation: tiering-only (`reserved_bytes` is only fed
+  when tiering is on → non-tiered 10M had zero tail), `VALUES`-only (a
+  no-index repro had none), O(rows)-scaling (3M ≈ 10 ms, 10M ≈ 55 ms),
+  on-CPU, and it stalls even index-only `c4` (the stall is the shard
+  tick, blocking the query fan-out).
+
+**Fix:** `RowValues` keeps a running `heap` total, updated on every
+`set`/`clear`, so `approx_bytes()` is O(1) — the same incremental pattern
+the scalar postings already used. `Segment::stats()` now reads it. A
+regression test asserts the counter equals a from-scratch rescan after
+mixed insert/overwrite/clear.
+
+---
+
+## (superseded) Decomposition — the stall is inline vlog compaction
 
 `kevy/src/commands.rs:261` runs `store.demote_step()` on every shard tick
 (10 Hz). Cold point/row reads promote on second access → `used_memory` climbs
