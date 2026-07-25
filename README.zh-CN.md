@@ -52,14 +52,15 @@ token、有界陈旧读、多数派围栏写入）——见
 （[docs/UPGRADING.md](docs/UPGRADING.md)）——此后冻结、只增不减；
 运行时按实例作用域化，一个进程可以跑多个互不干扰的 kevy；同一个
 引擎现在还能进浏览器、上边缘设备（见下面两节）。
-4.0 还把容量上限抬了一档——capacity arc：**透明分层存储**给整个
-store 一个 RAM 预算（冷值下沉到可丢弃的磁盘 value log、访问时换回；
-冷键上每条命令语义精确不变；AOF 持久化契约逐字节不动——RAM 决定键的
-上限、磁盘决定数据的上限）；**TABLE 层**在声明期把关系式声明——类型
-化列、二级索引、复合 `ORDER BY` 路径、乃至 `kevy-sql` 直接编译
-PG/MySQL schema 文件——编译成具名索引，index-only 查询即使全表皆冷也
-只读 RAM。见 [docs/tiering.md](docs/tiering.md) 与
-[docs/tables.md](docs/tables.md)（英文）。
+4.0 还把容量上限抬了一档：数据集不必再装进 RAM。**透明分层存储**给
+整个 store 一个 RAM 预算——冷值下沉到可丢弃的磁盘 value log、访问时
+换回，冷键上每条命令语义精确不变，AOF 持久化契约逐字节不动——RAM
+决定键的上限、磁盘决定数据的上限。**TABLE 层**在声明期把关系式声明
+——类型化列、二级索引、复合 `ORDER BY` 路径、乃至 `kevy-sql` 直接编
+译 PG/MySQL schema 文件——编译成具名索引，单表读路径始终是一次查表，
+index-only 查询即使全表皆冷也只读 RAM。见
+[docs/zh/tiering.md](docs/zh/tiering.md) 与
+[docs/zh/tables.md](docs/zh/tables.md)。
 每个 headline 指标都有门禁，并在每列 train 上复测：hydrated
 行列表页 p99 < 1ms、写扇出 p99 < 200µs、ANN recall ≥ 0.9——见
 [设计地图](docs/designing-on-kevy.md)、[cookbook](docs/cookbook.md)

@@ -462,6 +462,8 @@ parks a blocking `recv_message` forever. Three independent tests raced
 exactly that way in one day — including a CI job that hung for 3h46m. See
 `bench/FINDING-2026-07-19-subscribe-returns-before-live.md`.
 
+| Method | Params | Returns | Notes |
+|---|---|---|---|
 | `hello3` | — | `PubsubEvent` (synthetic Subscribe marker) | negotiate RESP3 push frames; **remote-only** (embedded → `Unsupported`); must precede any subscribe |
 | `set_read_timeout` | `dur: opt<duration>` | `()` | bounded blocking; timeout surfaces as `Io`(WouldBlock/TimedOut) |
 | `events` (iterator/stream) | — | stream of `PubsubEvent` | terminates on `Closed`; other errors yielded |

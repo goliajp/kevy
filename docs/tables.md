@@ -68,7 +68,8 @@ TABLE.VERIFY name      # component fsck + a bounded column spot check
 - `PK` names a declared column; it is documentation plus a `VERIFY`
   surface — rows are addressed by their key, exactly as today.
   `serial`-style id allocation is a recipe
-  ([cookbook §3](cookbook.md#3-sequences)), not an engine feature.
+  ([the sequences recipe](cookbook.md#3-sequences)), not an engine
+  feature.
 - Up to 64 tables; every structural refusal is named (duplicate
   column, unknown `VALUES` column, name collisions, …), never
   silent.
@@ -83,7 +84,7 @@ still backfilling.
 
 ## Composite ORDERPATH semantics
 
-An ORDERPATH mechanizes [cookbook §8](cookbook.md#8-composite-ordering-order-by-a-b)
+An ORDERPATH mechanizes [the composite-ordering recipe](cookbook.md#8-composite-ordering-order-by-a-b)
 — the `ORDER BY a, b DESC` walk — into a real composite index: one
 order-preserving byte string per row, so a single B-tree answers the
 query the way a relational composite index does. The rules:
@@ -140,19 +141,20 @@ range/EQ/WHERE — there is no `WHERE`-without-an-index.
 **Index-only queries touch zero rows.** A FILTER/SORT/COUNT query
 answers entirely from the RAM-resident index — the row-read counter
 is asserted `== 0` in the gate suite (`bench/tablegate.sh`). This is
-the tiering synergy the capacity arc was built around: with
+the tiering synergy the two features were designed around: with
 [transparent tiering](tiering.md) on, a fully-cold table serves
 index-only queries with **zero disk reads**, and only the final
 hydration page (`FIELDS …`) pays cold reads — one per row, batched.
 An index without `VALUES` columns is byte-identical in memory and
-query path to the pre-arc index (the zero-cost-when-undeclared gate).
+query path to one on a store that never declares them (the
+zero-cost-when-undeclared gate).
 
 ## NULL, uniqueness, and what is enforced
 
 - **NULL = absent field.** No column is required; a row missing an
   indexed column is simply not in that index. There are no engine
   `CHECK`s, defaults, or NOT NULL — constraints are recipes
-  ([cookbook §5](cookbook.md#5-check-constraints-and-multi-key-invariants),
+  ([the constraints recipe](cookbook.md#5-check-constraints-and-multi-key-invariants),
   atomic blocks).
 - **Uniqueness is verify-not-enforce** at the table layer: a `unique`
   index is the same fence `IDX.CREATE KIND unique` builds
@@ -199,7 +201,7 @@ kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004
 
 The end-to-end walkthrough — a real users/orders/order_items schema
 compiled, applied and queried — is
-[cookbook §22](cookbook.md#22-porting-a-pgmysql-schema).
+[the schema-porting recipe](cookbook.md#22-porting-a-pgmysql-schema).
 
 ## Embedded
 
@@ -219,19 +221,18 @@ store.table_drop(b"user");
 
 The wire form (`db.cmd("TABLE.DECLARE", …)`) works too and parses
 with the identical shared grammar — server/embedded byte parity is
-pinned by the dispatch oracle, the discipline that exists because the
-two faces drifted once before.
+pinned in CI by the dispatch oracle.
 
 ## Performance
 
 The gate clamps, and their measurement status stated plainly: the
 conformance/parity/refusal/index-only assertions run green in this
-tree (`bench/tablegate.sh`, 5/5). The **throughput clamps** — indexed
-point lookup p99 ≤ 1 ms @ 10 M rows (C4), FILTER+SORT+LIMIT-20 page
-p95 ≤ 5 ms @ 10 M rows (C5), write tax with 3 indexes + declared
-VALUES ≤ 15 % vs bare `HSET` (C7) — are perfgate metric lines whose
-baselines are **pending the dedicated bench box** (lx64;
-`bench/capacity-envelope.sh` records the C4/C5-shape numbers). Until
+tree (`bench/tablegate.sh`). The **throughput clamps** — indexed
+point lookup p99 ≤ 1 ms @ 10 M rows, FILTER+SORT+LIMIT-20 page
+p95 ≤ 5 ms @ 10 M rows, write tax with 3 indexes + declared
+VALUES ≤ 15 % vs bare `HSET` — are perfgate metric lines whose
+baselines are **pending the dedicated bench box**
+(`bench/capacity-envelope.sh` records them). Until
 recorded there, they are targets, not measurements — this page will
 not quote them as results.
 
@@ -242,10 +243,10 @@ one untaken branch.
 ## See also
 
 - [indexes.md](indexes.md) — the index engine tables compile into.
-- [tiering.md](tiering.md) — the other half of the capacity arc:
-  indexes hot, rows cold.
+- [tiering.md](tiering.md) — the companion feature: indexes hot,
+  rows cold.
 - [rds-workloads.md](rds-workloads.md) — the full SQL-vocabulary
   mapping (what compiles, what is a recipe, what is refused).
-- [cookbook.md](cookbook.md) — §8 composite ordering, §22 porting a
-  schema.
+- [cookbook.md](cookbook.md) — the composite-ordering and
+  schema-porting recipes.
 - [views.md](views.md) — named compositions over the same indexes.
