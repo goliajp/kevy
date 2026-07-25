@@ -96,7 +96,7 @@ pub(crate) fn hex(b: &[u8]) -> Vec<u8> {
 /// `hget` loop used to produce.
 pub(crate) type HydrationRow = kevy_store::PeekRow;
 
-/// Batched FIELDS hydration prefetch (T6): ONE [`Store::peek_hash_rows`]
+/// Batched FIELDS hydration prefetch: ONE [`Store::peek_hash_rows`]
 /// page over the hits' keys — cold rows coalesce, sorted by
 /// `(file_id, offset)`, into one batched read (io_uring secondary ring
 /// on Linux, ordered preads elsewhere); one decode per cold ROW covers

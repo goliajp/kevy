@@ -37,7 +37,7 @@ impl IoUring {
 
     /// Queue a positional `pread(fd, buf, len, offset)` — an
     /// `IORING_OP_READ` with the SQE `off` field set, so N of these on
-    /// one file batch into one `io_uring_enter` (the T6 cold-hydration
+    /// one file batch into one `io_uring_enter` (the cold-hydration
     /// secondary ring). Returns `false` if the SQ is full.
     ///
     /// # Safety

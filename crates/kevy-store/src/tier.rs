@@ -1,5 +1,4 @@
-//! Transparent tiering — the store core (capacity arc T3, RFC
-//! 2026-07-24-v5-capacity-arc §1 D0/D2).
+//! Transparent tiering — the store core.
 //!
 //! Cold values live in a per-shard [`kevy_vlog::Vlog`]; each leaves a
 //! 24-byte [`ColdRef`] stub *in the map* (`Value::Cold`), so every raw
@@ -50,14 +49,14 @@ mod enabled {
         /// Every vlog record read (serve, promote, peek) — the
         /// WRONGTYPE-without-read proof counter.
         pub(crate) preads_total: u64,
-        /// Record reads made by NO-PROMOTE peeks only (T6): hydration,
+        /// Record reads made by NO-PROMOTE peeks only: hydration,
         /// backfill, digest, scope-move. One per cold ROW — the
-        /// preads==rows (not rows×fields) proof counter (D1).
+        /// preads==rows (not rows×fields) proof counter.
         pub(crate) peek_preads_total: u64,
-        /// Batched cold-read submissions (T6): one per
+        /// Batched cold-read submissions: one per
         /// [`Store::peek_hash_rows`] page with ≥1 cold row, weighted by
         /// the reader's kernel submission count — the one-batch-per-page
-        /// proof counter (D3).
+        /// proof counter.
         pub(crate) batch_submissions_total: u64,
         pub(crate) cold_keys: u64,
         pub(crate) cold_bytes: u64,
@@ -68,7 +67,7 @@ mod enabled {
         pub(crate) max_spill: u64,
         /// Index/view memory floor (Σ segment `approx_bytes` on this
         /// shard), fed per shard tick by [`Store::set_tier_reserved`].
-        /// Subtracted from the demote watermark (T5, RFC §1 D3): the
+        /// Subtracted from the demote watermark: the
         /// premium fixed layer demotion can never reclaim.
         pub(crate) reserved_bytes: u64,
         /// RAM the cold stubs themselves cost (Σ per cold key of
@@ -84,7 +83,7 @@ mod enabled {
         pub(crate) renames: std::collections::HashMap<(u32, u64), SmallBytes>,
     }
 
-    /// Tiering gauges — the B12 `INFO # Tiering` feeders (T5).
+    /// Tiering gauges — the `INFO # Tiering` feeders.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
     pub struct TierStats {
         /// The RAM budget this shard demotes against (resolved bytes).
@@ -104,9 +103,9 @@ mod enabled {
         pub promotions_total: u64,
         /// Vlog record reads (serve + promote + peek).
         pub preads_total: u64,
-        /// No-promote peek record reads only (T6) — one per cold row.
+        /// No-promote peek record reads only — one per cold row.
         pub peek_preads_total: u64,
-        /// Batched cold-read submissions (T6) — one per page batch on
+        /// Batched cold-read submissions — one per page batch on
         /// the sync reader; kernel submit count on the uring reader.
         pub batch_submissions_total: u64,
         /// Currently-cold keys.
@@ -257,7 +256,7 @@ mod enabled {
             }
         }
 
-        /// Pin every current vlog file (T4 view pinning, RFC §1 D1): a
+        /// Pin every current vlog file (view pinning): a
         /// snapshot view / rewrite plan captured from a tiered store
         /// carries these so its frozen [`ColdRef`]s stay readable on the
         /// serializer thread across compaction — a retired file is
@@ -270,7 +269,7 @@ mod enabled {
             }
         }
 
-        /// Serialization-side cold materialization (T4): decode `v`'s
+        /// Serialization-side cold materialization: decode `v`'s
         /// record into a fresh owned hot value WITHOUT installing,
         /// promoting, or setting the probation mark — persistence is a
         /// bulk path and never promotes. `None` when `v` is hot.

@@ -1,4 +1,4 @@
-//! Cold-batch read issuance (capacity arc T6, RFC §1 D2/D4): which
+//! Cold-batch read issuance: which
 //! reader a hydration page's cold rows go through.
 //!
 //! - **Linux**: a small per-shard-thread SECONDARY io_uring ring

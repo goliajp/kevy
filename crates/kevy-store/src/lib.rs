@@ -279,7 +279,7 @@ pub struct Store {
     /// the iter ends).
     #[cfg(feature = "std")]
     pub(crate) pending_drops: Vec<Value>,
-    /// Transparent-tiering state (capacity arc T3). `None` = off —
+    /// Transparent-tiering state. `None` = off —
     /// today's paths byte-identical ([`Store::enable_tiering`]).
     #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
     pub(crate) tier: Option<tier::TierState>,
@@ -287,8 +287,8 @@ pub struct Store {
     /// a cold value decoded for ONE read, never installed in the map.
     #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
     pub(crate) tier_scratch: Option<Entry>,
-    /// Bulk-read (no-promote peek) mode, scoped by [`Store::peek_scope`]
-    /// (capacity arc T6): while set, a cold materializing read serves
+    /// Bulk-read (no-promote peek) mode, scoped by
+    /// [`Store::peek_scope`]: while set, a cold materializing read serves
     /// via pread WITHOUT setting the probation mark and WITHOUT
     /// promoting — digest / scope-move / export reads are not access
     /// signals.

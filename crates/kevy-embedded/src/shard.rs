@@ -114,10 +114,10 @@ fn build_shards_persist(
     // Complete (or safely discard) a reshard a crash interrupted, before
     // reading the layout — same roll-forward the server runtime does.
     recover_journal(&dir, &EmbLayout)?;
-    // Tiering comes up BEFORE the load (T4 / B11): replay drives entries
+    // Tiering comes up BEFORE the load: replay drives entries
     // into the hot map, so a dataset bigger than the budget must spill
     // inline as it replays — TierState has to exist by then. The vlog
-    // wipe-at-open (T1 contract) precedes the refill, so a reopen never
+    // wipe-at-open contract precedes the refill, so a reopen never
     // double-counts.
     enable_tiering(config, &dir, &mut stores)?;
     let mut report = load_or_reshard(&dir, config, n, &mut stores)?;
@@ -158,10 +158,10 @@ fn open_live_aofs(
     Ok(aofs)
 }
 
-/// Tiering bring-up (capacity arc T3/T4/T5): per-shard vlog at
+/// Tiering bring-up: per-shard vlog at
 /// `<dir>/tier/<i>`, opened (wiped — the vlog is per-boot disposable)
-/// BEFORE replay, so in-replay demotion (B11) can spill a
-/// bigger-than-budget dataset as it loads. T5: the configured budget
+/// BEFORE replay, so in-replay demotion can spill a
+/// bigger-than-budget dataset as it loads. The configured budget
 /// resolves here (auto/percent probe the memory bound; both refuse by
 /// name on failure) and is the whole store's — each shard gets an
 /// even slice.
@@ -217,7 +217,7 @@ pub(crate) fn resolve_tier_spec(
     Ok((total / nshards.max(1) as u64).max(1))
 }
 
-/// Per-tick tiering upkeep (T5): re-resolve a probe-backed budget and
+/// Per-tick tiering upkeep: re-resolve a probe-backed budget and
 /// feed the index/view memory floor into the unified watermark. Runs
 /// under the shard lock the tick already holds; one branch when
 /// tiering is off.
@@ -299,7 +299,7 @@ fn load_in_place(
         }
         let aof = layout::aof_path(dir, i);
         if aof.exists() {
-            // In-replay demotion (T4 / B11): the embedded replay applies
+            // In-replay demotion: the embedded replay applies
             // straight to the bare store (no dispatch glue, so no
             // per-write demote hook) — check the watermark every K
             // frames and drain once more after the log ends.

@@ -1,4 +1,4 @@
-//! The tiering budget spec (capacity arc T5) — split out of
+//! The tiering budget spec — split out of
 //! [`crate::config`] for the 500-LOC house rule. Mirrors the server's
 //! `[tiering] budget` forms; resolution happens at open and re-runs on
 //! every reaper tick for the probe-backed forms.

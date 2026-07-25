@@ -1,4 +1,4 @@
-//! The `TABLE.*` declaration layer (capacity arc T7, RFC §1 D4).
+//! The `TABLE.*` declaration layer.
 //!
 //! A table is a named, verifiable, catalog-managed DECLARATION that
 //! compiles AT DECLARE TIME into the existing IDX primitives — the

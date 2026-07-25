@@ -1,5 +1,4 @@
-//! The tiering READ funnel + the no-promote peek surface (capacity
-//! arc T3 stage-2 funnel; T6 peek/batch, RFC 2026-07-24 §1 D2/D4).
+//! The tiering READ funnel + the no-promote peek surface.
 //!
 //! Three read lanes come through here:
 //!
@@ -209,8 +208,8 @@ mod enabled {
         /// Run `f` in bulk-read (no-promote peek) mode: every cold
         /// materializing read inside serves via pread WITHOUT setting
         /// the probation mark and WITHOUT promoting. The whole-value
-        /// peek for digest / scope-move / export sweeps (T6, RFC §4
-        /// row 15) — a bulk sweep must never thrash the hot tier.
+        /// peek for digest / scope-move / export sweeps — a bulk
+        /// sweep must never thrash the hot tier.
         pub fn peek_scope<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
             let prev = self.tier_peek;
             self.tier_peek = true;
@@ -219,7 +218,7 @@ mod enabled {
             r
         }
 
-        /// T6 row peek: `fields` of the hash at `key`, without
+        /// Row peek: `fields` of the hash at `key`, without
         /// promotion and without advancing the touched gate. A hot row
         /// reads as `hmget` does; a COLD hash stub costs ONE record
         /// read + ONE decode for all fields. `Ok(None)` = missing key;
@@ -264,7 +263,7 @@ mod enabled {
             }
         }
 
-        /// T6 page peek: `keys` × `fields` with every cold row
+        /// Page peek: `keys` × `fields` with every cold row
         /// coalesced — sorted by `(file_id, offset)` — into ONE
         /// [`ColdBatchReader`] batch, decoded once per row, results in
         /// input order. Per-key result mirrors

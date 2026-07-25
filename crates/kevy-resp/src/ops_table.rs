@@ -257,7 +257,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     // view_count instead).
     op("IDX.REBUILD",  RD, NG,   None,            None,    SERVER),
     op("PREFIX.DIGEST", RD, NG,  None,            None,    SERVER | ESTORE),
-    // Tables (TABLE.* namespace — capacity arc T7). DECLARE compiles
+    // Tables (the TABLE.* namespace). DECLARE compiles
     // to IDX specs at declare time; catalog ops are sidecar-persisted,
     // not data writes — same reasoning as IDX.*.
     op("TABLE.DECLARE", RD, NG,  None,            None,    SERVER | ESTORE),

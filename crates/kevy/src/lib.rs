@@ -286,7 +286,7 @@ fn build_runtime(cfg: &kevy_config::Config, commands: KevyCommands) -> Runtime<K
     replication::apply(runtime, cfg, &state)
 }
 
-/// Tiering (T5): resolve the `[tiering]` budget to bytes — auto/percent
+/// Tiering: resolve the `[tiering]` budget to bytes — auto/percent
 /// probe the OS bound via kevy-sys — and hand the runtime the
 /// process-level number (it splits per shard). A spec that cannot
 /// resolve is a named boot refusal, never a silent off.

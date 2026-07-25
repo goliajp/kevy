@@ -314,7 +314,7 @@ impl Config {
                 })?);
             }
             "KEVY_DIR" => self.server.data_dir = PathBuf::from(value),
-            // All three budget forms (T5); plain bytes stay back-compat.
+            // All three budget forms (auto / percent / bytes); plain bytes stay back-compat.
             "KEVY_TIER_BUDGET" => self.apply_env_tier_budget(value)?,
             "KEVY_AOF" => {
                 self.persistence.aof = !matches!(value, "0" | "off" | "false" | "no");

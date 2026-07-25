@@ -1,5 +1,5 @@
-//! Tiering demotion/promotion primitives + the eviction fork (T3,
-//! RFC §1 D2): the budgeted spill loop, victim sampling (reusing the
+//! Tiering demotion/promotion primitives + the eviction fork: the
+//! budgeted spill loop, victim sampling (reusing the
 //! eviction sampler's scoring), in-place swap primitives, and the
 //! compaction trigger. Compiled with the tier backend only (std,
 //! off-wasm); the disabled builds' no-op twins live in `tier.rs`.
@@ -31,9 +31,9 @@ fn spillable_class(v: &Value) -> bool {
 impl Store {
     /// The demotion twin of [`Store::try_evict_after_write`], called
     /// beside it from the write-commit sites. No-op unless tiering is
-    /// on AND `used_memory` is past the unified target (T5: the plain
+    /// on AND `used_memory` is past the unified target (the plain
     /// watermark minus the index/view floor and the stub floor); then
-    /// spills at most one batch (B3: a single write never funds an
+    /// spills at most one batch (a single write never funds an
     /// unbounded spill storm — continuation rides
     /// [`Store::demote_step`] on the tick). Returns keys demoted.
     #[inline]
@@ -52,7 +52,7 @@ impl Store {
         self.try_demote_after_write()
     }
 
-    /// Bulk-load drain (T4 / B11): demote batch after batch until the
+    /// Bulk-load drain: demote batch after batch until the
     /// store is back under the watermark or candidates run dry. Replay /
     /// snapshot-load / reshard call this every K applied frames — those
     /// paths are single-threaded, so draining more than one write-path
@@ -232,7 +232,7 @@ pub(crate) fn watermark(budget: u64) -> u64 {
     budget.saturating_mul(WATERMARK_NUM) / WATERMARK_DEN
 }
 
-/// The unified demote target (T5, RFC §1 D3): `budget·19/20 −
+/// The unified demote target: `budget·19/20 −
 /// reserved_bytes − stub_bytes`, saturating. Demotion can only reclaim
 /// hot values — the index/view floor and the stubs' own RAM cost are
 /// fixed layers, so pressure on them translates into a lower target

@@ -114,7 +114,7 @@ fn spec_from_line(line: &str, version: u8) -> Option<IndexSpec> {
             // sidecars never wrote one, so it only appears from v3 on.
             IndexKind::Text if version >= 3 => return text_spec(&parts, version),
             // A composite (ORDERPATH) line's 7th column has the `comp`
-            // head (v6 — the capacity arc's T7).
+            // head (v6 — the version that added composite lines).
             IndexKind::Range if version >= 6 && parts[6].starts_with("comp,") => {
                 return composite_spec(&parts, version);
             }

@@ -24,7 +24,7 @@ pub struct KevyInfo {
     pub evictions: u64,
     /// Total keys expired (lazy + active reaper) so far.
     pub expired_keys: u64,
-    /// Tiering gauges (capacity arc T5, `# Tiering`). `None` when
+    /// Tiering gauges (the `# Tiering` INFO section). `None` when
     /// tiering is off — the untiered snapshot is unchanged.
     pub tiering: Option<KevyTierInfo>,
 }
@@ -58,10 +58,10 @@ pub struct KevyTierInfo {
     pub demotions_total: u64,
     /// Keys promoted back since boot.
     pub promotions_total: u64,
-    /// No-promote peek record reads (T6) — one per cold row swept by
+    /// No-promote peek record reads — one per cold row swept by
     /// hydration / backfill / digest / export.
     pub peek_preads_total: u64,
-    /// Batched cold-read submissions (T6) — one per peeked page.
+    /// Batched cold-read submissions — one per peeked page.
     pub batch_submissions_total: u64,
 }
 

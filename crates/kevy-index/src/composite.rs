@@ -1,5 +1,5 @@
-//! Composite (multi-column) Range indexes — the capacity arc's
-//! ORDERPATH engine piece (T7).
+//! Composite (multi-column) Range indexes — the ORDERPATH engine
+//! piece.
 //!
 //! A composite index derives ONE order-preserving byte string per row
 //! from several declared columns, so a single `(value, key)` B-tree
@@ -291,7 +291,7 @@ impl IndexSpec {
     /// Column names a scalar (range/unique) row read fetches, in
     /// order: the driving columns — the composite's declared columns,
     /// or the single `FIELD` — then the declared `VALUES` columns.
-    /// One row peek covers everything (the T6 one-pread-per-row rule).
+    /// One row peek covers everything (the one-pread-per-row rule).
     pub fn scalar_read_names(&self) -> Vec<&[u8]> {
         let mut names: Vec<&[u8]> = match &self.composite {
             Some(cols) => cols.iter().map(|c| c.name.as_slice()).collect(),

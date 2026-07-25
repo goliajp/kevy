@@ -80,7 +80,7 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
 
 /// Σ approximate heap bytes of this shard's index segments, every
 /// kind (scalar / text / ann / agg) — the tier's `reserved_bytes`
-/// floor feed (T5, RFC §1 D3). Called per shard tick, gated on
+/// floor feed. Called per shard tick, gated on
 /// tiering being enabled; refreshes the shard list first so a
 /// just-declared index counts immediately.
 pub(crate) fn reserved_bytes(ctx: &Ctx<'_>, store: &mut Store) -> u64 {

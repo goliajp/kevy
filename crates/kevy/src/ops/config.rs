@@ -403,7 +403,7 @@ fn config_pairs(cfg: &Config) -> Vec<(&'static str, String)> {
     v
 }
 
-/// Tiering (T5): the budget in its configured form (`auto` / `N%` /
+/// Tiering: the budget in its configured form (`auto` / `N%` /
 /// bytes); empty string = tiering off (the `save`-style "off" value).
 fn push_tiering_pairs(v: &mut Vec<(&'static str, String)>, cfg: &Config) {
     v.push((

@@ -320,7 +320,7 @@ impl Store {
         // would: canonical integers back to `Int` (the L2 shape the
         // snapshot serialized them from), > BULK_THRESHOLD bytes back
         // to `ArcBulk` — restoring GET's writev path AND the tiering
-        // spillable class (T4/B11: a snapshot-loaded bulk value must be
+        // spillable class (a snapshot-loaded bulk value must be
         // demotable; the old unconditional `Value::Str` made every
         // loaded string permanently unspillable).
         let value = crate::string_set::pick_value_for_set_owned(value);

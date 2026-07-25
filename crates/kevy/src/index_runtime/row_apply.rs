@@ -3,12 +3,12 @@
 //! backfill driver. Split from the runtime parent for the 500-LOC
 //! house rule.
 //!
-//! T6 (capacity arc): every row read here goes through the no-promote
+//! Tier discipline: every row read here goes through the no-promote
 //! peek — ONE record read + one decode per cold row covers the primary
 //! field, the group field, and every declared VALUES column; nothing
 //! promotes and the 2nd-touch gate never advances, so an IDX.CREATE
 //! backfill (2048 rows/tick) or a live hook re-derive can never thrash
-//! the hot tier (RFC 2026-07-24 §4 row 9).
+//! the hot tier.
 
 use kevy_index::{IndexSpec, IndexValue, Segment};
 use kevy_store::Store;
@@ -18,7 +18,7 @@ use super::{BuildState, ShardIndex};
 /// Apply one scalar row: the coerced primary field, and — when the spec
 /// declares `VALUES` — the row's stored values riding the same write.
 ///
-/// T6: the primary field AND every declared VALUES column read in ONE
+/// The primary field AND every declared VALUES column read in ONE
 /// [`Store::peek_hash_fields`] row peek — a cold row costs one record
 /// read + one decode (never one per field), promotes nothing and never
 /// advances the 2nd-touch gate (backfill at 2048 rows/tick would
@@ -61,7 +61,7 @@ pub(super) fn apply_row(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
         return;
     }
     // Ann kind: field bytes parse as an f32 vector (wrong shape
-    // = excluded, same discipline as scalar coerce failure). T6: the
+    // = excluded, same discipline as scalar coerce failure). The
     // row peek — one record read on cold, no promotion, no gate mark.
     if let Some(g) = &mut si.ann {
         let v = match store.peek_hash_fields(key, &[si.spec.field()]) {
@@ -87,7 +87,7 @@ pub(super) fn apply_row(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
 /// which is the whole reason multi-field is a spec change rather than
 /// several single-field indexes) and every declared stored value. The
 /// spec owns that mapping, so the server and the embedded store cannot
-/// read a row differently. T6: every declared field + value is
+/// read a row differently. Every declared field + value is
 /// prefetched with ONE row peek (one record read on a cold row, no
 /// promotion, no gate mark); `read_row` resolves from the prefetch.
 fn apply_row_text(
@@ -123,7 +123,7 @@ fn apply_row_agg(
     a: &mut kevy_index::AggSegment,
     key: &[u8],
 ) {
-    // T6: both fields read with ONE row peek — a cold row costs one
+    // Both fields read with ONE row peek — a cold row costs one
     // record read, promotes nothing, never marks the gate. The peek's
     // `Ok(None)`/`Err` arms carry the deleted-vs-excluded distinction
     // the old `exists()` probe answered: missing key = not a row
@@ -209,7 +209,7 @@ pub(super) fn advance_backfill(store: &mut Store, si: &mut ShardIndex, batch: us
         }
     }
     // A MAXMEM budget is enforced at build time — declarative failure
-    // instead of OOM. The tiering floor joins it (T5): a build whose
+    // instead of OOM. The tiering floor joins it: a build whose
     // growing segment leaves the tier no demotable headroom fails the
     // same declarative way (the per-tick `reserved_bytes` feed already
     // counts this segment's current size).

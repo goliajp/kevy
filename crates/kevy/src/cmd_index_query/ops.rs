@@ -340,7 +340,7 @@ pub(super) fn op_hybrid(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> V
     };
     let mut chunk = vec![ST_OK];
     chunk.extend_from_slice(&(m.len() as u32).to_le_bytes());
-    // T6: ONE batched hydration page covers both ranked segments.
+    // ONE batched hydration page covers both ranked segments.
     let keys: Vec<&[u8]> = m
         .iter()
         .map(|h| h.key.as_slice())
