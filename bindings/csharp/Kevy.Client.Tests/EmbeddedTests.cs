@@ -1,0 +1,144 @@
+// The kevy-embedded store contract (contract §6 "Embedded store contract",
+// §5.2): open/openMem/close, cmd(argv) → parseable RESP, scalar get/set
+// fast paths, subscribe poll + blocking wait, and persistence replay.
+
+using Kevy;
+using KEmb = Kevy.Embedded;
+using Xunit;
+
+namespace Kevy.Tests;
+
+public class EmbeddedTests
+{
+    [Fact]
+    public void CmdRawAndScalarFastPaths()
+    {
+        using var db = KEmb.KevyDb.OpenInMemory();
+
+        // cmd(argv) runs an arbitrary verb and returns parseable RESP.
+        var raw = db.CmdRaw(new[] { H.B("SET"), H.B("k"), H.B("v") });
+        Assert.Equal(ReplyKind.Simple, Reply.Decode(raw).Kind);
+
+        var got = Reply.Decode(db.CmdRaw(new[] { H.B("GET"), H.B("k") }));
+        Assert.Equal("v", got.Str());
+
+        // Scalar fast paths (no argv/RESP framing).
+        db.Set("s", H.B("scalar"), ttlMs: 60_000);
+        Assert.Equal("scalar", H.Str(db.Get("s")));
+        Assert.Null(db.Get("absent"));
+    }
+
+    [Fact]
+    public void SubscribePollAndWait()
+    {
+        using var db = KEmb.KevyDb.OpenInMemory();
+        using var sub = db.OpenRawSub(H.B("room"), pattern: false);
+
+        db.Publish("room", H.B("hello"));
+
+        // Blocking wait yields the RESP frames the server would push — a
+        // subscribe ack first, then the message. Skip acks to the delivery.
+        var (chan, payload) = NextMessage(sub);
+        Assert.Equal("room", H.Str(chan));
+        Assert.Equal("hello", H.Str(payload));
+
+        // Poll drains non-blocking (empty now → null).
+        Assert.Null(sub.PollRaw());
+    }
+
+    [Fact]
+    public void PersistenceSurvivesReopen()
+    {
+        var dir = Directory.CreateTempSubdirectory("kevy-emb-persist-").FullName;
+        using (var db = KEmb.KevyDb.Open(dir))
+            db.Set("durable", H.B("x"));
+        // Reopen the same dir → snapshot + AOF replay.
+        using var db2 = KEmb.KevyDb.Open(dir);
+        Assert.Equal("x", H.Str(db2.Get("durable")));
+    }
+
+    [Fact]
+    public void OpenReportVerdict()
+    {
+        // A clean in-memory open has nothing to replay: all zeros.
+        using (var mem = KEmb.KevyDb.OpenInMemory())
+        {
+            var zero = mem.OpenReport();
+            Assert.Equal(0UL, zero.ReplayedCommands);
+            Assert.Equal(0UL, zero.DroppedBytes);
+            Assert.False(zero.Corrupt);
+            Assert.Equal(0U, zero.QuarantineCount);
+        }
+
+        // A reopen over real files replays them — the report says how much.
+        var dir = Directory.CreateTempSubdirectory("kevy-emb-report-").FullName;
+        using (var db = KEmb.KevyDb.Open(dir))
+            db.Set("k", H.B("v"));
+        using var db2 = KEmb.KevyDb.Open(dir);
+        var r = db2.OpenReport();
+        Assert.True(r.ReplayedCommands > 0);
+        Assert.True(r.ReplayedBytes > 0);
+        Assert.Equal(0UL, r.DroppedBytes);
+        Assert.False(r.Corrupt);
+    }
+
+    [Fact]
+    public void OpenWithExplicitOptions()
+    {
+        // Null dir + null options = a plain in-memory open.
+        using (var mem = KEmb.KevyDb.OpenWith(null))
+        {
+            mem.Set("k", H.B("v"));
+            Assert.Equal("v", H.Str(mem.Get("k")));
+        }
+
+        // Explicit options round-trip on a durable dir.
+        var dir = Directory.CreateTempSubdirectory("kevy-emb-openwith-").FullName;
+        var opts = new KEmb.KevyOpenOptions
+        {
+            Fsync = KEmb.KevyFsync.Always,
+            Shards = 2,
+            RewriteBytes = 1UL << 30,
+            RewriteIntervalSecs = 3600,
+        };
+        using var db = KEmb.KevyDb.OpenWith(dir, opts);
+        db.Set("opt", H.B("set"));
+        Assert.Equal("set", H.Str(db.Get("opt")));
+    }
+
+    [Fact]
+    public void ShutdownRefusesWritesKeepsReads()
+    {
+        var dir = Directory.CreateTempSubdirectory("kevy-emb-shutdown-").FullName;
+        using (var db = KEmb.KevyDb.Open(dir))
+        {
+            db.Set("k", H.B("pre-shutdown"));
+
+            // The deterministic teardown: flushed + fsynced, idempotent.
+            db.Shutdown();
+            db.Shutdown();
+
+            // Later writes are refused; reads stay available.
+            Assert.Throws<KEmb.KevyException>(() => db.Set("k2", H.B("x")));
+            Assert.Equal("pre-shutdown", H.Str(db.Get("k")));
+        }
+
+        // A reopen sees the pre-shutdown writes.
+        using var db2 = KEmb.KevyDb.Open(dir);
+        Assert.Equal("pre-shutdown", H.Str(db2.Get("k")));
+    }
+
+    private static (byte[] channel, byte[] payload) NextMessage(KEmb.KevyRawSub sub)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (DateTime.UtcNow < deadline)
+        {
+            var frame = sub.WaitRaw(2000);
+            if (frame is null) continue;
+            var r = Reply.Decode(frame);
+            if (r.Kind == ReplyKind.Array && r.Items.Count == 3 && r.Items[0].Str() == "message")
+                return (r.Items[1].Bytes, r.Items[2].Bytes);
+        }
+        throw new Xunit.Sdk.XunitException("no message frame");
+    }
+}

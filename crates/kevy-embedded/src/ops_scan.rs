@@ -14,7 +14,7 @@
 //! while other writers mutate concurrently, and the memory cost is
 //! bounded by the matching subset.
 
-use std::io;
+use crate::KevyResult;
 
 use crate::store::{Store, store_err};
 
@@ -61,7 +61,7 @@ impl Store {
         key: &[u8],
         cursor: u64,
         count: usize,
-    ) -> io::Result<PairPage> {
+    ) -> KevyResult<PairPage> {
         let pairs = self.hgetall(key)?;
         Ok(page_into(pairs, cursor, count))
     }
@@ -70,7 +70,7 @@ impl Store {
     pub fn hash_iter(
         &self,
         key: &[u8],
-    ) -> io::Result<std::vec::IntoIter<(Vec<u8>, Vec<u8>)>> {
+    ) -> KevyResult<std::vec::IntoIter<(Vec<u8>, Vec<u8>)>> {
         Ok(self.hgetall(key)?.into_iter())
     }
 
@@ -84,7 +84,7 @@ impl Store {
         key: &[u8],
         cursor: u64,
         count: usize,
-    ) -> io::Result<ScorePage> {
+    ) -> KevyResult<ScorePage> {
         let pairs = self
             .wshard(key)
             .store
@@ -97,7 +97,7 @@ impl Store {
     pub fn zset_iter(
         &self,
         key: &[u8],
-    ) -> io::Result<std::vec::IntoIter<(Vec<u8>, f64)>> {
+    ) -> KevyResult<std::vec::IntoIter<(Vec<u8>, f64)>> {
         let pairs = self
             .wshard(key)
             .store

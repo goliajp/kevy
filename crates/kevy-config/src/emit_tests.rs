@@ -1,7 +1,7 @@
 //! Round-trip lock for BOTH serializers (template + preserving): every
 //! schema section, every field non-default. A field missing from either
 //! serializer makes the whole-config equality below fail — this is the
-//! regression net for the 2026-07-10 fuzz finding (six whole sections
+//! regression net for a fuzz finding (six whole sections
 //! plus `server.max_clients` were silently dropped by `CONFIG REWRITE`).
 
 use std::path::PathBuf;

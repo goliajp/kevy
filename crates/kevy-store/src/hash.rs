@@ -1,5 +1,7 @@
 //! `Store` hash commands.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::small_hash::{self, AddResult as HAddResult, SmallHashData};
 use crate::util::{parse_f64, parse_i64};
 use crate::value::{HashData, SmallBytes, Value, hash_field_weight};
@@ -7,7 +9,7 @@ use crate::value::{HashData, SmallBytes, Value, hash_field_weight};
 type FieldValuePairs = Vec<(Vec<u8>, Vec<u8>)>;
 
 use crate::{Entry, Store, StoreError, now_ns};
-use std::sync::Arc;
+use alloc::sync::Arc;
 
 impl Store {
     // ---- hashes --------------------------------------------------------
@@ -23,6 +25,7 @@ impl Store {
     /// path), matching pre-A.8 behaviour for read-modify-write entry
     /// points that don't carry per-pair size info.
     fn hash_mut(&mut self, key: &[u8], create: bool) -> Result<Option<&mut HashData>, StoreError> {
+        self.tier_resolve(key, crate::value::COLD_TAG_HASH)?;
         if self.live_entry_mut(key).is_none() {
             if !create {
                 return Ok(None);
@@ -62,6 +65,9 @@ impl Store {
     /// is not a hash. Returns `None` when the key is absent — caller
     /// (`hset_one`) creates the entry then.
     fn hash_value_for_set(&mut self, key: &[u8]) -> Result<Option<&mut Value>, StoreError> {
+        // Write path: a cold hash pages in; a cold string refuses with
+        // zero preads (the stage-1 tag check).
+        self.tier_resolve(key, crate::value::COLD_TAG_HASH)?;
         match self.live_entry_mut(key) {
             None => Ok(None),
             Some(e) => match &e.value {
@@ -76,7 +82,7 @@ impl Store {
     /// Internal helper for read-only paths; collects into a new Vec to
     /// avoid the two-encoding match dance at every callsite.
     fn hash_pairs(&mut self, key: &[u8]) -> Result<Option<FieldValuePairs>, StoreError> {
-        match self.live_entry(key) {
+        match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
             None => Ok(None),
             Some(e) => match &e.value {
                 Value::Hash(h) => Ok(Some(
@@ -90,16 +96,15 @@ impl Store {
         }
     }
 
-    /// G4 (v1.25): borrowed-pair `HSET` — kills the per-field+value
-    /// `Vec<u8>` allocs the dispatch layer used to do before calling
-    /// [`Self::hset`]. A.8: routes through the encoding-switch path.
-    pub fn hset_borrowed(
+    /// `HSET` — returns the count of newly-added fields. Borrowed argv:
+    /// no per-field allocation; routes through the encoding-switch path.
+    pub fn hset(
         &mut self,
         key: &[u8],
         pairs: &[(&[u8], &[u8])],
     ) -> Result<usize, StoreError> {
         self.purge_hash_ttl(key);
-        // v2.4: overwriting a field discards its TTL (Redis 7.4).
+        // Overwriting a field discards its TTL (Redis 7.4).
         if !self.hfttl.is_empty() {
             let fs: Vec<&[u8]> = pairs.iter().map(|(f, _)| *f).collect();
             self.clear_hash_field_ttls(key, &fs);
@@ -130,21 +135,10 @@ impl Store {
         Ok(added)
     }
 
-    /// `HSET` — returns the count of newly-added fields.
-    pub fn hset(&mut self, key: &[u8], pairs: &[(Vec<u8>, Vec<u8>)]) -> Result<usize, StoreError> {
-        self.purge_hash_ttl(key);
-        if !self.hfttl.is_empty() {
-            let fs: Vec<&[u8]> = pairs.iter().map(|(f, _)| f.as_slice()).collect();
-            self.clear_hash_field_ttls(key, &fs);
-        }
-        let borrowed: Vec<(&[u8], &[u8])> =
-            pairs.iter().map(|(f, v)| (f.as_slice(), v.as_slice())).collect();
-        self.hset_borrowed(key, &borrowed)
-    }
-
     /// `HSETNX` — set only if the field is absent; returns whether it was set.
     pub fn hsetnx(&mut self, key: &[u8], field: &[u8], val: &[u8]) -> Result<bool, StoreError> {
         self.purge_hash_ttl(key);
+        self.tier_resolve(key, crate::value::COLD_TAG_HASH)?;
         // Existing-field fast check via the encoding-aware reader.
         let exists = match self.live_entry(key) {
             None => false,
@@ -169,7 +163,7 @@ impl Store {
 
     pub fn hget(&mut self, key: &[u8], field: &[u8]) -> Result<Option<&[u8]>, StoreError> {
         self.purge_hash_ttl(key);
-        match self.live_entry(key) {
+        match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
             None => Ok(None),
             Some(e) => match &e.value {
                 Value::Hash(h) => Ok(h.get(field).map(Vec::as_slice)),
@@ -181,7 +175,7 @@ impl Store {
 
     pub fn hexists(&mut self, key: &[u8], field: &[u8]) -> Result<bool, StoreError> {
         self.purge_hash_ttl(key);
-        match self.live_entry(key) {
+        match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
             None => Ok(false),
             Some(e) => match &e.value {
                 Value::Hash(h) => Ok(h.contains_key(field)),
@@ -193,7 +187,7 @@ impl Store {
 
     pub fn hlen(&mut self, key: &[u8]) -> Result<usize, StoreError> {
         self.purge_hash_ttl(key);
-        match self.live_entry(key) {
+        match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
             None => Ok(0),
             Some(e) => match &e.value {
                 Value::Hash(h) => Ok(h.len()),
@@ -203,24 +197,14 @@ impl Store {
         }
     }
 
+    /// `HMGET` — one `Option` per requested field, in input order.
     pub fn hmget(
-        &mut self,
-        key: &[u8],
-        fields: &[Vec<u8>],
-    ) -> Result<Vec<Option<Vec<u8>>>, StoreError> {
-        self.purge_hash_ttl(key);
-        let borrowed: Vec<&[u8]> = fields.iter().map(Vec::as_slice).collect();
-        self.hmget_borrowed(key, &borrowed)
-    }
-
-    /// G4 (v1.25): borrowed-slice `HMGET`.
-    pub fn hmget_borrowed(
         &mut self,
         key: &[u8],
         fields: &[&[u8]],
     ) -> Result<Vec<Option<Vec<u8>>>, StoreError> {
         self.purge_hash_ttl(key);
-        match self.live_entry(key) {
+        match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
             None => Ok(fields.iter().map(|_| None).collect()),
             Some(e) => match &e.value {
                 Value::Hash(h) => Ok(fields.iter().map(|f| h.get(*f).cloned()).collect()),
@@ -251,7 +235,7 @@ impl Store {
 
     pub fn hkeys(&mut self, key: &[u8]) -> Result<Vec<Vec<u8>>, StoreError> {
         self.purge_hash_ttl(key);
-        match self.live_entry(key) {
+        match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
             None => Ok(Vec::new()),
             Some(e) => match &e.value {
                 Value::Hash(h) => Ok(h.keys().map(kevy_bytes::SmallBytes::to_vec).collect()),
@@ -263,7 +247,7 @@ impl Store {
 
     pub fn hvals(&mut self, key: &[u8]) -> Result<Vec<Vec<u8>>, StoreError> {
         self.purge_hash_ttl(key);
-        match self.live_entry(key) {
+        match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
             None => Ok(Vec::new()),
             Some(e) => match &e.value {
                 Value::Hash(h) => Ok(h.values().cloned().collect()),
@@ -274,19 +258,13 @@ impl Store {
     }
 
     /// `HDEL` — returns count removed; deletes the key if hash becomes empty.
-    pub fn hdel(&mut self, key: &[u8], fields: &[Vec<u8>]) -> Result<usize, StoreError> {
-        self.purge_hash_ttl(key);
-        let borrowed: Vec<&[u8]> = fields.iter().map(Vec::as_slice).collect();
-        self.hdel_borrowed(key, &borrowed)
-    }
-
-    /// G4 (v1.25): borrowed-slice `HDEL`. A.8: encoding-aware.
-    pub fn hdel_borrowed(
+    pub fn hdel(
         &mut self,
         key: &[u8],
         fields: &[&[u8]],
     ) -> Result<usize, StoreError> {
         self.purge_hash_ttl(key);
+        self.tier_resolve(key, crate::value::COLD_TAG_HASH)?;
         let now = now_ns();
         if !self.reap(key, now) {
             return Ok(0);

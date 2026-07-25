@@ -1,7 +1,9 @@
 //! `ZADD` condition flags (Redis 6.2): `NX` / `XX` / `GT` / `LT` /
 //! `CH` / `INCR`. Split from `zset.rs` (500-LOC rule). The no-flags
-//! hot path stays `zadd` / `zadd_borrowed` — nothing here taxes it.
+//! hot path stays `zadd` / `zadd` — nothing here taxes it.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::{Store, StoreError};
 
 /// Parsed `ZADD` condition flags. `CH` only changes the *reply*
@@ -47,7 +49,7 @@ impl Store {
     /// Flags-aware `ZADD`. Caller validates [`ZaddFlags::valid`] at
     /// its input boundary (RESP parse / typed API) — invalid combos
     /// here are a caller bug.
-    pub fn zadd_flags_borrowed(
+    pub fn zadd_flags(
         &mut self,
         key: &[u8],
         pairs: &[(f64, &[u8])],
@@ -65,7 +67,7 @@ impl Store {
                         continue;
                     }
                     if *score != old {
-                        self.zadd_borrowed(key, &[(*score, m)])?;
+                        self.zadd(key, &[(*score, m)])?;
                         rep.changed += 1;
                         rep.applied.push((*score, m.to_vec()));
                     }
@@ -74,7 +76,7 @@ impl Store {
                     if flags.xx {
                         continue;
                     }
-                    self.zadd_borrowed(key, &[(*score, m)])?;
+                    self.zadd(key, &[(*score, m)])?;
                     rep.added += 1;
                     rep.changed += 1;
                     rep.applied.push((*score, m.to_vec()));
@@ -106,7 +108,7 @@ impl Store {
                 if (flags.gt && next <= old) || (flags.lt && next >= old) {
                     return Ok(None);
                 }
-                self.zadd_borrowed(key, &[(next, member)])?;
+                self.zadd(key, &[(next, member)])?;
                 Ok(Some(next))
             }
             None => {
@@ -116,7 +118,7 @@ impl Store {
                 if !delta.is_finite() {
                     return Err(StoreError::NotFloat);
                 }
-                self.zadd_borrowed(key, &[(delta, member)])?;
+                self.zadd(key, &[(delta, member)])?;
                 Ok(Some(delta))
             }
         }
@@ -144,9 +146,9 @@ mod tests {
     #[test]
     fn nx_only_adds() {
         let mut s = Store::new();
-        s.zadd(b"z", &[(1.0, b"m".to_vec())]).unwrap();
+        s.zadd(b"z", &[(1.0, b"m".as_slice())]).unwrap();
         let r = s
-            .zadd_flags_borrowed(b"z", &[(9.0, b"m"), (2.0, b"n")], ZaddFlags { nx: true, ..zf() })
+            .zadd_flags(b"z", &[(9.0, b"m"), (2.0, b"n")], ZaddFlags { nx: true, ..zf() })
             .unwrap();
         assert_eq!((r.added, r.changed), (1, 1));
         assert_eq!(s.zscore(b"z", b"m").unwrap(), Some(1.0)); // untouched
@@ -156,9 +158,9 @@ mod tests {
     #[test]
     fn xx_only_updates() {
         let mut s = Store::new();
-        s.zadd(b"z", &[(1.0, b"m".to_vec())]).unwrap();
+        s.zadd(b"z", &[(1.0, b"m".as_slice())]).unwrap();
         let r = s
-            .zadd_flags_borrowed(b"z", &[(9.0, b"m"), (2.0, b"n")], ZaddFlags { xx: true, ..zf() })
+            .zadd_flags(b"z", &[(9.0, b"m"), (2.0, b"n")], ZaddFlags { xx: true, ..zf() })
             .unwrap();
         assert_eq!((r.added, r.changed), (0, 1));
         assert_eq!(s.zscore(b"z", b"m").unwrap(), Some(9.0));
@@ -168,37 +170,37 @@ mod tests {
     #[test]
     fn gt_is_monotonic_heal() {
         let mut s = Store::new();
-        s.zadd(b"z", &[(5.0, b"m".to_vec())]).unwrap();
+        s.zadd(b"z", &[(5.0, b"m".as_slice())]).unwrap();
         let gt = ZaddFlags { gt: true, ..zf() };
         // Stale (lower) score: vetoed.
-        let r = s.zadd_flags_borrowed(b"z", &[(3.0, b"m")], gt).unwrap();
+        let r = s.zadd_flags(b"z", &[(3.0, b"m")], gt).unwrap();
         assert_eq!(r.changed, 0);
         assert_eq!(s.zscore(b"z", b"m").unwrap(), Some(5.0));
         // Newer (higher) score: applied.
-        let r = s.zadd_flags_borrowed(b"z", &[(7.0, b"m")], gt).unwrap();
+        let r = s.zadd_flags(b"z", &[(7.0, b"m")], gt).unwrap();
         assert_eq!(r.changed, 1);
         assert_eq!(s.zscore(b"z", b"m").unwrap(), Some(7.0));
         // GT still ADDS missing members (only XX suppresses adds).
-        let r = s.zadd_flags_borrowed(b"z", &[(1.0, b"new")], gt).unwrap();
+        let r = s.zadd_flags(b"z", &[(1.0, b"new")], gt).unwrap();
         assert_eq!(r.added, 1);
     }
 
     #[test]
     fn lt_mirror() {
         let mut s = Store::new();
-        s.zadd(b"z", &[(5.0, b"m".to_vec())]).unwrap();
+        s.zadd(b"z", &[(5.0, b"m".as_slice())]).unwrap();
         let lt = ZaddFlags { lt: true, ..zf() };
-        assert_eq!(s.zadd_flags_borrowed(b"z", &[(7.0, b"m")], lt).unwrap().changed, 0);
-        assert_eq!(s.zadd_flags_borrowed(b"z", &[(3.0, b"m")], lt).unwrap().changed, 1);
+        assert_eq!(s.zadd_flags(b"z", &[(7.0, b"m")], lt).unwrap().changed, 0);
+        assert_eq!(s.zadd_flags(b"z", &[(3.0, b"m")], lt).unwrap().changed, 1);
         assert_eq!(s.zscore(b"z", b"m").unwrap(), Some(3.0));
     }
 
     #[test]
     fn applied_reflects_effect_only() {
         let mut s = Store::new();
-        s.zadd(b"z", &[(5.0, b"a".to_vec()), (5.0, b"b".to_vec())]).unwrap();
+        s.zadd(b"z", &[(5.0, b"a".as_slice()), (5.0, b"b".as_slice())]).unwrap();
         let r = s
-            .zadd_flags_borrowed(
+            .zadd_flags(
                 b"z",
                 &[(9.0, b"a"), (1.0, b"b"), (5.0, b"c")],
                 ZaddFlags { gt: true, ..zf() },
@@ -214,7 +216,7 @@ mod tests {
     #[test]
     fn incr_form_vetoes_to_none() {
         let mut s = Store::new();
-        s.zadd(b"z", &[(5.0, b"m".to_vec())]).unwrap();
+        s.zadd(b"z", &[(5.0, b"m".as_slice())]).unwrap();
         let gt = ZaddFlags { gt: true, ..zf() };
         // Negative delta under GT: next < old → nil, score untouched.
         assert_eq!(s.zadd_incr(b"z", -2.0, b"m", gt).unwrap(), None);
@@ -232,7 +234,7 @@ mod tests {
     fn wrongtype_propagates() {
         let mut s = Store::new();
         s.set(b"str", b"v".to_vec(), None, false, false);
-        assert!(s.zadd_flags_borrowed(b"str", &[(1.0, b"m")], zf()).is_err());
+        assert!(s.zadd_flags(b"str", &[(1.0, b"m")], zf()).is_err());
         assert!(s.zadd_incr(b"str", 1.0, b"m", zf()).is_err());
     }
 }

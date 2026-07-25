@@ -1,10 +1,9 @@
-//! v1.27 P7d — EVAL / EVALSHA cross-slot enforcement when cluster
+//! EVAL / EVALSHA cross-slot enforcement when cluster
 //! mode is enabled.
 //!
-//! Separate test binary because we install a cluster-enabled global
-//! Config (`kevy::config_init`) which is process-wide. Putting these
-//! cases alongside `lua_eval.rs` would race the default-config tests
-//! that file relies on.
+//! Each test builds its own cluster-enabled `RuntimeState`, so the
+//! CROSSSLOT enforcement is exercised in isolation from the
+//! default-config tests in `lua_eval.rs`.
 
 use kevy_config::{ClusterSection, Config};
 use kevy_resp::Argv;
@@ -19,28 +18,23 @@ fn argv(parts: &[&[u8]]) -> Argv {
     a
 }
 
-fn install_cluster_enabled() {
-    // Use `replace` so re-running individual tests in the same
-    // binary is safe (init can only be called once globally).
+fn cluster_enabled_kevy() -> kevy::KevyCommands {
     let cfg = Config {
         cluster: ClusterSection { enabled: true, ..ClusterSection::default() },
         ..Config::default()
     };
-    // Try init first (idempotent across the test-binary lifetime);
-    // fall back to replace if another test already initialised it.
-    let arc = Arc::new(cfg);
-    if kevy::config_replace(arc.clone()).is_err() {
-        kevy::config_init(arc);
-    }
+    kevy::KevyCommands::with_state(Arc::new(
+        kevy::RuntimeState::new(Arc::new(cfg), std::path::PathBuf::new(), 1).unwrap(),
+    ))
 }
 
 #[test]
 fn eval_cross_slot_rejected_under_cluster() {
-    install_cluster_enabled();
+    let kevy = cluster_enabled_kevy();
     let mut store = Store::new();
     // `foo` and `bar` hash to different CRC16 slots — they don't
     // share a `{hashtag}`, so they'll collide and trigger CROSSSLOT.
-    let reply = kevy::dispatch(
+    let reply = kevy.dispatch(
         &mut store,
         &argv(&[
             b"EVAL",
@@ -59,10 +53,10 @@ fn eval_cross_slot_rejected_under_cluster() {
 
 #[test]
 fn eval_same_slot_via_hashtag_accepted_under_cluster() {
-    install_cluster_enabled();
+    let kevy = cluster_enabled_kevy();
     let mut store = Store::new();
     // `{tag}` shared between both keys → both hash to the same slot.
-    let reply = kevy::dispatch(
+    let reply = kevy.dispatch(
         &mut store,
         &argv(&[
             b"EVAL",
@@ -77,14 +71,14 @@ fn eval_same_slot_via_hashtag_accepted_under_cluster() {
 
 #[test]
 fn evalsha_cross_slot_rejected_under_cluster() {
-    install_cluster_enabled();
+    let kevy = cluster_enabled_kevy();
     let mut store = Store::new();
-    let load_reply = kevy::dispatch(
+    let load_reply = kevy.dispatch(
         &mut store,
         &argv(&[b"SCRIPT", b"LOAD", b"return KEYS[1] .. KEYS[2]"]),
     );
     let sha_hex = load_reply[5..45].to_vec();
-    let reply = kevy::dispatch(
+    let reply = kevy.dispatch(
         &mut store,
         &argv(&[b"EVALSHA", &sha_hex, b"2", b"foo", b"bar"]),
     );
@@ -93,9 +87,9 @@ fn evalsha_cross_slot_rejected_under_cluster() {
 
 #[test]
 fn eval_single_key_accepted_under_cluster() {
-    install_cluster_enabled();
+    let kevy = cluster_enabled_kevy();
     let mut store = Store::new();
-    let reply = kevy::dispatch(
+    let reply = kevy.dispatch(
         &mut store,
         &argv(&[b"EVAL", b"return KEYS[1]", b"1", b"foo"]),
     );
@@ -104,9 +98,9 @@ fn eval_single_key_accepted_under_cluster() {
 
 #[test]
 fn eval_zero_keys_accepted_under_cluster() {
-    install_cluster_enabled();
+    let kevy = cluster_enabled_kevy();
     let mut store = Store::new();
-    let reply = kevy::dispatch(&mut store, &argv(&[b"EVAL", b"return 1", b"0"]));
+    let reply = kevy.dispatch(&mut store, &argv(&[b"EVAL", b"return 1", b"0"]));
     assert_eq!(reply, b":1\r\n");
 }
 

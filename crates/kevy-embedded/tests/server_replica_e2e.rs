@@ -1,4 +1,4 @@
-//! Phase 2 / T2.8, T2.10, T2.11 — end-to-end: real kevy server primary
+//! End-to-end: real kevy server primary
 //! in-process + `kevy_embedded::Store::open_replica` against its
 //! replication port. Verifies the full chain — handshake, streaming,
 //! apply, READONLY enforcement — over a real socket, the same path
@@ -84,8 +84,8 @@ impl Server {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         // SAFETY: integration test owns its own process state; setting
         // an env var here is safe since no other thread reads
-        // KEVY_IO_URING in parallel. Replication listener is gated to
-        // epoll/kqueue in v1.18/19.
+        // KEVY_IO_URING in parallel. The replication listener only
+        // runs on the epoll/kqueue reactor.
         unsafe {
             std::env::set_var("KEVY_IO_URING", "0");
         }
@@ -97,7 +97,7 @@ impl Server {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_t = stop.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, 1, kevy::KevyCommands)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1)).bind([127, 0, 0, 1], port).shards(1)
                 .with_data_dir(dir_path)
                 .with_aof(false)
                 .with_replication(true, 1024 * 1024)
@@ -224,7 +224,7 @@ fn embed_replica_rejects_local_writes_with_readonly() {
 
 #[test]
 fn embed_replica_streams_multiple_writes_on_same_connection() {
-    // T2.8 follow-up: validate that a single ReplicaClient session
+    // Validate that a single ReplicaClient session
     // ingests an arbitrary sequence of writes without re-handshaking.
     // (The streaming-pump in `kevy_rt::replication_pump` already
     // handles this for server↔server; this asserts the embed runner
@@ -257,12 +257,11 @@ fn embed_replica_streams_multiple_writes_on_same_connection() {
 
 #[test]
 fn fresh_embed_catches_up_against_existing_primary_backlog() {
-    // T2.11: an embed that opens AFTER the primary has already
+    // An embed that opens AFTER the primary has already
     // applied writes catches up by streaming from offset 0 against
-    // the primary's backlog. This is the v1.20 MVP path — the
-    // primary's backlog must still cover offset 0 (snapshot ingest
-    // is not yet wired; if the backlog has rolled past offset 0 the
-    // primary will need a future snapshot-ship handshake).
+    // the primary's backlog. This exercises the backlog-stream path:
+    // the backlog still covers offset 0 here (had it rolled past,
+    // the primary would ship a snapshot instead).
     let server = Server::start();
     // Pre-fill the primary; embed has not connected yet.
     for i in 0..10 {
@@ -298,7 +297,7 @@ fn fresh_embed_catches_up_against_existing_primary_backlog() {
 
 #[test]
 fn embed_retargets_to_new_primary_via_set_replica_upstream() {
-    // T2.7 + T2.9: an application observing a kevy-elect ANNOUNCE
+    // An application observing a kevy-elect ANNOUNCE
     // (or any other failover signal) calls `Store::set_replica_upstream`
     // to point the embed runner at the new primary. The runner
     // shuts the live socket so the retarget lands within
@@ -346,18 +345,18 @@ fn set_replica_upstream_on_non_replica_returns_error() {
     let err = s
         .set_replica_upstream("127.0.0.1:1")
         .expect_err("should error on a non-replica");
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(matches!(err, kevy_embedded::KevyError::InvalidInput(_)));
 }
 
 #[test]
 fn embed_restart_resumes_via_fresh_handshake() {
-    // T2.11: dropping the embed store stops its runner thread; opening
+    // Dropping the embed store stops its runner thread; opening
     // a new embed against the same primary re-handshakes from offset
     // 0 and re-applies the full backlog. The new embed has no AOF
     // (replicas force-disable it) so its state is necessarily empty
-    // at open and catch-up replays from scratch — exactly the
-    // semantics promised in the v1.20 anti-scope (no snapshot ingest,
-    // no offset-persistence on the replica side).
+    // at open and catch-up replays from scratch — the documented
+    // replica contract (no offset-persistence on the replica side;
+    // a fresh open always re-syncs from the primary).
     let server = Server::start();
     let upstream = format!("127.0.0.1:{}", server.replication_base);
 

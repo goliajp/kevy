@@ -1,4 +1,4 @@
-//! v2.10 — export → import round-trip against two real servers.
+//! Export → import round-trip against two real servers.
 
 use std::process::{Child, Command};
 
@@ -36,7 +36,11 @@ impl Srv {
             .stderr(std::process::Stdio::null())
             .spawn()
             .expect("spawn kevy server");
-        for _ in 0..100 {
+        // 10 s, not 2: under full-workspace parallelism this test shares the
+        // machine with every other build and suite, and a server that needs
+        // 3 s to come up is slow, not absent. A wait budget tuned on an idle
+        // machine is a flake scheduled for the first busy one.
+        for _ in 0..500 {
             if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
                 break;
             }

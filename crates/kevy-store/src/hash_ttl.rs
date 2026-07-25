@@ -1,4 +1,4 @@
-//! v2.4 — per-field hash TTLs (`HEXPIRE` / `HPEXPIRE` / `HPEXPIREAT` /
+//! Per-field hash TTLs (`HEXPIRE` / `HPEXPIRE` / `HPEXPIREAT` /
 //! `HTTL` / `HPERSIST`, Redis 7.4 semantics).
 //!
 //! Storage: a store-level sidecar `hfttl: key → (field → absolute
@@ -21,6 +21,8 @@
 //!   [`Store::clear_hash_field_ttls`]; whole-key removal drops the
 //!   sidecar entry in `remove_entry`.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::{SmallBytes, Store, StoreError, Value, now_unix_ms};
 
 /// Per-field reply codes for `HEXPIRE`-family calls (Redis 7.4):
@@ -48,7 +50,7 @@ pub enum HExpireCond {
 impl Store {
     /// Does this hash field exist (ignoring TTL state)?
     fn hash_has_field(&mut self, key: &[u8], field: &[u8]) -> Result<bool, StoreError> {
-        match self.live_entry(key) {
+        match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
             None => Ok(false),
             Some(e) => match &e.value {
                 Value::Hash(h) => Ok(h.get(field).is_some()),
@@ -96,14 +98,11 @@ impl Store {
                 if let Some(m) = self.hfttl.get_mut(key) {
                     m.remove(*f);
                 }
-                let owned = [f.to_vec()];
-                self.hdel(key, &owned)?;
+                self.hdel(key, &[f])?;
                 codes.push(2);
                 continue;
             }
-            self.hfttl
-                .entry(SmallBytes::from_slice(key))
-                .or_default()
+            hfttl_slot(&mut self.hfttl, key)
                 .insert(SmallBytes::from_slice(f), deadline_ms);
             codes.push(1);
         }
@@ -113,7 +112,7 @@ impl Store {
 
     /// Remaining TTL per field: `-2` key/field missing, `-1` no TTL,
     /// else remaining ms.
-    pub fn httl(&mut self, key: &[u8], fields: &[&[u8]]) -> Result<Vec<i64>, StoreError> {
+    pub fn hpttl(&mut self, key: &[u8], fields: &[&[u8]]) -> Result<Vec<i64>, StoreError> {
         self.purge_hash_ttl(key);
         let now = now_unix_ms();
         let mut out = Vec::with_capacity(fields.len());
@@ -177,7 +176,8 @@ impl Store {
             }
         }
         self.prune_hfttl_key(key);
-        let _ = self.hdel(key, &due);
+        let due_refs: Vec<&[u8]> = due.iter().map(Vec::as_slice).collect();
+        let _ = self.hdel(key, &due_refs);
     }
 
     /// Overwrite hook — `HSET`/`HINCRBY*` on a field discards its TTL.
@@ -242,7 +242,8 @@ impl Store {
                 }
             }
             self.prune_hfttl_key(&k);
-            let _ = self.hdel(&k, &due);
+            let due_refs: Vec<&[u8]> = due.iter().map(Vec::as_slice).collect();
+            let _ = self.hdel(&k, &due_refs);
             out.push((k, due));
         }
         out
@@ -251,9 +252,7 @@ impl Store {
     /// Snapshot loader hook: restore one field TTL (deadlines already
     /// absolute unix-ms; past deadlines simply purge on first access).
     pub fn load_hash_field_ttl(&mut self, key: &[u8], field: &[u8], deadline_ms: u64) {
-        self.hfttl
-            .entry(SmallBytes::from_slice(key))
-            .or_default()
+        hfttl_slot(&mut self.hfttl, key)
             .insert(SmallBytes::from_slice(field), deadline_ms);
     }
 
@@ -271,6 +270,27 @@ fn kevy_map_is_empty(m: &crate::KevyMap<SmallBytes, u64>) -> bool {
     m.iter().next().is_none()
 }
 
+
+/// `entry().or_default()` over both side-map backends — `KevyMap` (the
+/// `no_std` arm) has no entry API, so that arm inserts-if-absent and
+/// re-probes.
+fn hfttl_slot<'a>(
+    hfttl: &'a mut crate::SideMap<SmallBytes, kevy_map::KevyMap<SmallBytes, u64>>,
+    key: &[u8],
+) -> &'a mut kevy_map::KevyMap<SmallBytes, u64> {
+    #[cfg(feature = "std")]
+    {
+        hfttl.entry(SmallBytes::from_slice(key)).or_default()
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        if hfttl.get(key).is_none() {
+            hfttl.insert(SmallBytes::from_slice(key), kevy_map::KevyMap::default());
+        }
+        hfttl.get_mut(key).expect("inserted above")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,7 +298,7 @@ mod tests {
     fn h(s: &mut Store) {
         s.hset(
             b"h",
-            &[(b"a".to_vec(), b"1".to_vec()), (b"b".to_vec(), b"2".to_vec())],
+            &[(b"a".as_slice(), b"1".as_slice()), (b"b".as_slice(), b"2".as_slice())],
         )
         .unwrap();
     }
@@ -293,7 +313,7 @@ mod tests {
             .hexpire_at(b"h", &[b"a", b"nope"], far, HExpireCond::Always)
             .unwrap();
         assert_eq!(codes, vec![1, -2]);
-        let ttls = s.httl(b"h", &[b"a", b"b", b"nope"]).unwrap();
+        let ttls = s.hpttl(b"h", &[b"a", b"b", b"nope"]).unwrap();
         assert!(ttls[0] > 90_000 && ttls[0] <= 100_000);
         assert_eq!(&ttls[1..], &[-1, -2]);
         // NX refuses existing, XX refuses missing
@@ -316,7 +336,7 @@ mod tests {
         );
         // persist
         assert_eq!(s.hpersist(b"h", &[b"a", b"b", b"nope"]).unwrap(), vec![1, -1, -2]);
-        assert_eq!(s.httl(b"h", &[b"a"]).unwrap(), vec![-1]);
+        assert_eq!(s.hpttl(b"h", &[b"a"]).unwrap(), vec![-1]);
     }
 
     #[test]
@@ -332,7 +352,7 @@ mod tests {
         // near-future deadline → lazily gone after it passes
         let soon = now_unix_ms() + 30;
         s.hexpire_at(b"h", &[b"b"], soon, HExpireCond::Always).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::thread::sleep(core::time::Duration::from_millis(50));
         assert!(!s.hexists(b"h", b"b").unwrap(), "lazy purge on access");
         // hash is now empty → hlen 0, sidecar pruned
         assert_eq!(s.hlen(b"h").unwrap(), 0);
@@ -346,9 +366,9 @@ mod tests {
         let soon = now_unix_ms() + 20;
         s.hexpire_at(b"h", &[b"a", b"b"], soon, HExpireCond::Always).unwrap();
         // overwrite a → its TTL is discarded (Redis 7.4)
-        s.hset(b"h", &[(b"a".to_vec(), b"new".to_vec())]).unwrap();
-        assert_eq!(s.httl(b"h", &[b"a"]).unwrap(), vec![-1]);
-        std::thread::sleep(std::time::Duration::from_millis(40));
+        s.hset(b"h", &[(b"a".as_slice(), b"new".as_slice())]).unwrap();
+        assert_eq!(s.hpttl(b"h", &[b"a"]).unwrap(), vec![-1]);
+        std::thread::sleep(core::time::Duration::from_millis(40));
         // reaper sweeps b, reports the removal for effect logging
         let swept = s.tick_hash_ttl(100);
         assert_eq!(swept, vec![(b"h".to_vec(), vec![b"b".to_vec()])]);
@@ -356,7 +376,7 @@ mod tests {
         // whole-key delete drops the sidecar
         let far = now_unix_ms() + 100_000;
         s.hexpire_at(b"h", &[b"a"], far, HExpireCond::Always).unwrap();
-        s.del(&[b"h".to_vec()]);
+        s.del(&[b"h".as_slice()]);
         assert!(s.hfttl.is_empty());
     }
 }

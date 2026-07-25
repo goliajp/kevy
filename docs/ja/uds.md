@@ -40,12 +40,7 @@ redis-cli -p 6379 GET foo
 # "bar"
 ```
 
-Rustからは、リポジトリ内クライアントが`unix://`のURLを受け付けます：
-
-```rust
-let mut conn = kevy_client::Connection::open("unix:///tmp/kevy.sock")?;
-conn.set(b"k", b"v")?;
-```
+リポジトリ内のRustクライアント（`kevy-client`／`kevy-client-async`）が話すのは`tcp://`／`kevy://`／`redis://`と、プロセス内の`mem://`／`file:///`スキームです——`unix://`のURLは受け付けません。Rustからは、同一ホストのクライアントはTCPループバックで接続するか、同じ*プロセス*に住んでいるなら組み込みバックエンド（`file:///`／`mem://`）でソケットを丸ごと省きます。こちらはUDSがなり得るどんな速さよりも速いのです。UDSは、他言語やエコシステムドライバの、プロセス外・同一ホストのクライアントのためのものです。
 
 ## パーミッションとセキュリティ
 
@@ -102,7 +97,7 @@ UDSの信頼境界は**ファイルシステム**です。UnixソケットにRES
 
 ### 自分のクライアントライブラリはUDSを使えますか？
 
-多くのライブラリが使えます。`redis-cli`と`redis-benchmark`は`-s <path>`を取ります。ioredis、node-redis、redis-py、redis-rb、go-redis、lettuce、jedis、そしてリポジトリ内の[kevy-client](https://github.com/goliajp/kevy/tree/develop/crates/kevy-client) / [kevy-client-async](https://github.com/goliajp/kevy/tree/develop/crates/kevy-client-async)は、いずれも`unix:///path`のURLか明示的なソケットパスオプションを受け付けます。正確なキー名は各ドライバの接続オプションのドキュメントで確認してください。
+エコシステムドライバの多くが使えます。`redis-cli`と`redis-benchmark`は`-s <path>`を取ります。ioredis、node-redis、redis-py、redis-rb、go-redis、lettuce、jedisはいずれも`unix:///path`のURLか明示的なソケットパスオプションを受け付けます——正確なキー名は各ドライバの接続オプションのドキュメントで確認してください。リポジトリ内の[kevy-client](https://github.com/goliajp/kevy/tree/develop/crates/kevy-client) / [kevy-client-async](https://github.com/goliajp/kevy/tree/develop/crates/kevy-client-async)はUDSを話しま**せん**。同一プロセスのRustクライアントには組み込みの`file:///`／`mem://`バックエンドがどんなソケットにも勝ち、プロセスをまたぐときはTCPを使います。
 
 ### 全クライアントが同一ホストにあるならTCPを完全に外すべきですか？
 

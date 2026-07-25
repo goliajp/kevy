@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  jp.golia:kevy — the native Java kevy client (a first-party port of the
+  language-agnostic client contract in docs/client-contract.md).
+
+  One artifact, both faces: a blocking KevyClient and an async
+  KevyAsyncClient (java.util.concurrent.CompletableFuture), agreeing on
+  results. connect(url): mem:// / file:// -> embedded (over the libkevy_jni
+  desktop-JVM door), kevy:// / redis:// / tcp:// -> a native RESP2/3 TCP
+  client. Zero runtime dependencies beyond the JDK; JUnit 5 is test-only.
+
+  Maven/Gradle are not required to build or test in this repo — see
+  run-tests.sh, which compiles with javac and runs JUnit 5 via the
+  junit-platform-console-standalone jar (matching bench/jnigate.sh). This
+  POM is the canonical artifact definition for a Maven-based consumer.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>jp.golia</groupId>
+    <artifactId>kevy</artifactId>
+    <version>4.0.0</version>
+    <packaging>jar</packaging>
+
+    <name>kevy</name>
+    <description>Native Java client for kevy — blocking + async faces, embedded (JNI) and remote (RESP2/3 TCP).</description>
+    <url>https://kevy.golia.jp</url>
+
+    <organization>
+        <name>GOLIA K.K.</name>
+    </organization>
+
+    <properties>
+        <maven.compiler.release>17</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <junit.version>5.10.2</junit.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+                <configuration>
+                    <!-- libkevy_jni lives under the cargo target dir. -->
+                    <argLine>-Djava.library.path=${kevy.jni.dir}</argLine>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

@@ -6,7 +6,7 @@
 
 use kevy_embedded::{Config, EvictionPolicy, Store};
 
-fn main() -> std::io::Result<()> {
+fn main() -> kevy_embedded::KevyResult<()> {
     let s = Store::open(
         Config::default()
             .with_max_memory(200 * 1024)

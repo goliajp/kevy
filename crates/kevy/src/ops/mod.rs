@@ -22,6 +22,8 @@ pub(crate) mod config;
 mod memory;
 pub(crate) mod replication;
 pub(crate) mod scope_move;
+mod scope_move_emit;
+mod scope_move_stream;
 pub(crate) mod stats;
 
 use std::time::SystemTime;
@@ -33,45 +35,38 @@ use kevy_resp::{
 };
 use kevy_store::Store;
 
-use crate::config_global;
+use crate::state::Ctx;
 
 /// Operational-command dispatcher. Returns `true` if the verb was
-/// recognised (and a reply has been written to `out`). `config_global::get`
-/// is paid only inside the arms that actually need it — GET / SET and the
-/// other string / collection verbs flow past via the early `_ => false`
-/// without touching the global config Arc clone.
+/// recognised (and a reply has been written to `out`). The config
+/// snapshot is paid only inside the arms that actually need it —
+/// GET / SET and the other string / collection verbs flow past via
+/// the early `_ => false` without touching the config lock.
 pub(crate) fn dispatch_ops<A: ArgvView + ?Sized>(
+    ctx: &Ctx<'_>,
     cmd: &[u8],
     store: &mut Store,
     args: &A,
     out: &mut Vec<u8>,
 ) -> bool {
     match cmd {
-        b"INFO" => {
-            let cfg = config_global::get();
-            cmd_info(&cfg, store, args, out, RespVersion::V2);
-        }
-        b"CLUSTER" => {
-            let cfg = config_global::get();
-            cluster::cmd_cluster(&cfg, store, args, out);
-        }
-        b"DEBUG" => cmd_debug(args, out),
-        b"WAIT" => crate::cmd_repl::cmd_wait(args, out),
-        b"REPL.TOKEN" => crate::cmd_repl::cmd_repl_token(args, out),
-        b"REPL.WAIT" => crate::cmd_repl::cmd_repl_wait(args, out),
-        b"SHUTDOWN" => cmd_shutdown(args, out),
-        b"CONFIG" => {
-            let cfg = config_global::get();
-            config::cmd_config(&cfg, args, out, RespVersion::V2);
-        }
+        b"INFO" => cmd_info(ctx, store, args, out, RespVersion::V2),
+        b"CLUSTER" => cluster::cmd_cluster(ctx, store, args, out),
+        b"DEBUG" => cmd_debug(ctx, args, out),
+        b"WAIT" => crate::cmd_repl::cmd_wait(&ctx.state.replication, args, out),
+        b"REPL.TOKEN" => crate::cmd_repl::cmd_repl_token(&ctx.state.replication, args, out),
+        b"REPL.WAIT" => crate::cmd_repl::cmd_repl_wait(&ctx.state.replication, args, out),
+        b"SHUTDOWN" => cmd_shutdown(ctx, args, out),
+        b"CONFIG" => config::cmd_config(ctx, args, out, RespVersion::V2),
         b"CLIENT" => client::cmd_client(args, out, RespVersion::V2),
-        b"ROLE" => replication::cmd_role(args, out),
-        b"REPLICAOF" | b"SLAVEOF" => replication::cmd_replicaof(args, out),
-        b"MOVE-SCOPE" => scope_move::cmd_move_scope(store, args, out),
-        b"MOVE-SCOPE-INGEST" => scope_move::cmd_move_scope_ingest(store, args, out),
+        b"ROLE" => replication::cmd_role(ctx, args, out),
+        b"REPLICAOF" | b"SLAVEOF" => replication::cmd_replicaof(ctx, args, out),
+        b"MOVE-SCOPE" => scope_move::cmd_move_scope(ctx, store, args, out),
+        b"MOVE-SCOPE-INGEST" => scope_move::cmd_move_scope_ingest(ctx, store, args, out),
         b"MEMORY" => {
-            let cfg = config_global::get();
-            memory::cmd_memory(&cfg, store, args, out);
+            let cfg = ctx.state.config();
+            let totals = ctx.state.obs.aggregate();
+            memory::cmd_memory(&cfg, &totals, store, args, out);
         }
         _ => return false,
     }
@@ -81,12 +76,13 @@ pub(crate) fn dispatch_ops<A: ArgvView + ?Sized>(
 // ───────────── INFO ─────────────
 
 pub(crate) fn cmd_info<A: ArgvView + ?Sized>(
-    cfg: &Config,
+    ctx: &Ctx<'_>,
     store: &Store,
     args: &A,
     out: &mut Vec<u8>,
     proto: RespVersion,
 ) {
+    let cfg = ctx.state.config();
     // INFO [section]; we always emit the requested section (or all when
     // none / "default" / "all" / "everything" is requested).
     let section = args.get(1).map(<[u8]>::to_ascii_lowercase);
@@ -95,9 +91,9 @@ pub(crate) fn cmd_info<A: ArgvView + ?Sized>(
     // reports the whole process. Freshen this shard's slot from the live store
     // it already holds (so the answering shard is never stale, even with the
     // active reaper disabled), then sum every shard's slot.
-    stats::publish_gauges(store);
-    let totals = stats::aggregate();
-    let body = build_info_body(cfg, want, &totals);
+    stats::publish_gauges(ctx.shard, store);
+    let totals = ctx.state.obs.aggregate();
+    let body = build_info_body(ctx, &cfg, want, &totals);
     // RESP3: Verbatim text frame (`=N\r\ntxt:<body>\r\n`) so the
     // client can render it as plain text (e.g. redis-cli prints it
     // unchanged). RESP2 stays as a length-prefixed bulk.
@@ -109,25 +105,36 @@ pub(crate) fn cmd_info<A: ArgvView + ?Sized>(
 
 /// Assemble the INFO body — every requested section in the
 /// canonical valkey order.
-fn build_info_body(cfg: &Config, want: Option<&[u8]>, totals: &stats::Totals) -> String {
+fn build_info_body(
+    ctx: &Ctx<'_>,
+    cfg: &Config,
+    want: Option<&[u8]>,
+    totals: &crate::state::Totals,
+) -> String {
     let mut body = String::new();
     if want_section(want, "server") {
         info_server(cfg, &mut body);
     }
     if want_section(want, "clients") {
-        info_clients(cfg, &mut body);
+        info_clients(cfg, totals, &mut body);
     }
     if want_section(want, "memory") {
         info_memory(cfg, totals, &mut body);
     }
+    // `# Tiering`: present ONLY when tiering is on — an
+    // untiered instance's INFO is byte-identical to pre-tiering
+    // output (the transparency suite's Shape compare relies on it).
+    if totals.tier_enabled && want_section(want, "tiering") {
+        info_tiering(totals, &mut body);
+    }
     if want_section(want, "persistence") {
-        info_persistence(cfg, &mut body);
+        info_persistence(ctx, cfg, &mut body);
     }
     if want_section(want, "stats") {
-        info_stats(totals, &mut body);
+        info_stats(ctx, totals, &mut body);
     }
     if want_section(want, "replication") {
-        info_replication(&mut body);
+        info_replication(ctx, &mut body);
     }
     if want_section(want, "cluster") {
         info_cluster(cfg, &mut body);
@@ -160,14 +167,19 @@ fn info_server(cfg: &Config, b: &mut String) {
     b.push_str("\r\n");
 }
 
-fn info_clients(cfg: &Config, b: &mut String) {
+fn info_clients(cfg: &Config, totals: &crate::state::Totals, b: &mut String) {
     b.push_str("# Clients\r\n");
-    b.push_str("connected_clients:1\r\n"); // TODO: real count when conn-info plumbed
+    // Live client conns summed over every shard's per-tick gauge
+    // (stale by at most one tick interval).
+    b.push_str(&format!(
+        "connected_clients:{}\r\n",
+        totals.clients_connected
+    ));
     b.push_str(&format!("maxclients:{}\r\n", cfg.server.max_clients));
     b.push_str("\r\n");
 }
 
-fn info_memory(cfg: &Config, totals: &stats::Totals, b: &mut String) {
+fn info_memory(cfg: &Config, totals: &crate::state::Totals, b: &mut String) {
     let used = totals.used_memory;
     let peak = totals.used_memory_peak;
     b.push_str("# Memory\r\n");
@@ -194,25 +206,43 @@ fn info_memory(cfg: &Config, totals: &stats::Totals, b: &mut String) {
     b.push_str("\r\n");
 }
 
-thread_local! {
-    /// The answering shard's background-persistence view, refreshed by the
-    /// reactor tick via `Commands::on_persist_stats` (thread-per-core:
-    /// thread == shard, the `cluster::CURRENT_SHARD` pattern). Stale by at
-    /// most one tick interval. `(in_flight, aof_rewrites_total)`.
-    static PERSIST_STATS: std::cell::Cell<(bool, u64)> =
-        const { std::cell::Cell::new((false, 0)) };
+/// `# Tiering`: the unified-budget
+/// gauges summed across shards. Emitted only when tiering is enabled —
+/// see the call site's byte-stability note.
+fn info_tiering(totals: &crate::state::Totals, b: &mut String) {
+    let t = &totals.tier;
+    b.push_str("# Tiering\r\n");
+    b.push_str("tiering_enabled:1\r\n");
+    b.push_str(&format!("tier_budget_bytes:{}\r\n", t.budget));
+    b.push_str(&format!("tier_effective_target:{}\r\n", t.effective_target));
+    b.push_str(&format!("cold_keys:{}\r\n", t.cold_keys));
+    b.push_str(&format!("cold_bytes:{}\r\n", t.cold_bytes));
+    b.push_str(&format!("stub_bytes:{}\r\n", t.stub_bytes));
+    b.push_str(&format!("index_reserved_bytes:{}\r\n", t.reserved_bytes));
+    b.push_str(&format!("vlog_size_bytes:{}\r\n", t.vlog_bytes));
+    b.push_str(&format!("vlog_live_bytes:{}\r\n", t.vlog_live_bytes));
+    b.push_str(&format!("vlog_files:{}\r\n", t.vlog_files));
+    b.push_str(&format!("vlog_epoch:{}\r\n", t.vlog_epoch));
+    b.push_str(&format!("demotions_total:{}\r\n", t.demotions_total));
+    b.push_str(&format!("promotions_total:{}\r\n", t.promotions_total));
+    b.push_str(&format!("peek_preads_total:{}\r\n", t.peek_preads_total));
+    b.push_str(&format!("batch_submissions_total:{}\r\n", t.batch_submissions_total));
+    b.push_str("\r\n");
 }
 
-/// Record the reactor's persistence stats for `INFO persistence` (see
-/// [`PERSIST_STATS`]).
-pub(crate) fn set_persist_stats(in_flight: bool, aof_rewrites_total: u64) {
-    PERSIST_STATS.with(|c| c.set((in_flight, aof_rewrites_total)));
-}
-
-fn info_persistence(cfg: &Config, b: &mut String) {
-    let (in_flight, rewrites) = PERSIST_STATS.with(std::cell::Cell::get);
+fn info_persistence(ctx: &Ctx<'_>, cfg: &Config, b: &mut String) {
+    // The answering shard's background-persistence view, refreshed by
+    // the reactor tick via `Commands::on_persist_stats` into the shard
+    // zone. Stale by at most one tick interval.
+    let (in_flight, rewrites) = ctx.shard.persist_stats();
     b.push_str("# Persistence\r\n");
-    b.push_str("loading:0\r\n");
+    // `loading` = a full-resync snapshot ship is being received (the
+    // window where reads answer -LOADING). Startup AOF replay never
+    // shows here — it completes before the listener accepts.
+    b.push_str(&format!(
+        "loading:{}\r\n",
+        i32::from(ctx.state.replication.loading())
+    ));
     b.push_str(&format!(
         "aof_enabled:{}\r\n",
         i32::from(cfg.persistence.aof)
@@ -230,10 +260,17 @@ fn info_persistence(cfg: &Config, b: &mut String) {
     ));
     b.push_str(&format!("aof_rewrites_total:{rewrites}\r\n"));
     b.push_str("aof_last_rewrite_time_sec:-1\r\n");
+    // Boot-replay verdict (answering shard): bytes the startup replay had
+    // to drop (quarantined + truncated), and whether the stop was a
+    // corrupt frame. Non-zero dropped bytes = the shard recovered less
+    // than its AOF held — alert on it.
+    let (dropped, corrupt) = ctx.shard.replay_report();
+    b.push_str(&format!("aof_last_open_dropped_bytes:{dropped}\r\n"));
+    b.push_str(&format!("aof_last_open_corrupt:{}\r\n", i32::from(corrupt)));
     b.push_str("\r\n");
 }
 
-fn info_stats(totals: &stats::Totals, b: &mut String) {
+fn info_stats(ctx: &Ctx<'_>, totals: &crate::state::Totals, b: &mut String) {
     b.push_str("# Stats\r\n");
     b.push_str(&format!(
         "total_connections_received:{}\r\n",
@@ -245,44 +282,38 @@ fn info_stats(totals: &stats::Totals, b: &mut String) {
     ));
     b.push_str(&format!(
         "instantaneous_ops_per_sec:{}\r\n",
-        stats::instantaneous_ops_per_sec(totals.commands_processed)
+        ctx.state.obs.instantaneous_ops_per_sec(totals.commands_processed)
     ));
     b.push_str(&format!("expired_keys:{}\r\n", totals.expired_keys));
     b.push_str("\r\n");
 }
 
-fn info_replication(b: &mut String) {
-    // T1.31: live `INFO replication` — reads `current_upstream()` to
-    // decide the section shape, then drains the per-tick view
-    // (`replication_view()`) for offset + connected-replicas count.
-    // The fields mirror Redis 7.x; the v1.18 simplifications are:
-    //   - master_replid is a single zeros-string (no failover ID
-    //     bookkeeping yet — kevy-elect (Phase 1.5) introduces real IDs)
-    //   - master_link_status is fixed to "up" when an upstream is
-    //     installed (no runner→view feedback yet — T1.31.x follow-up)
-    //   - the per-replica list is omitted (peer-addr capture is
-    //     T1.28.5 — see plan).
+fn info_replication(ctx: &Ctx<'_>, b: &mut String) {
+    // Live `INFO replication` — reads `current_upstream()` to decide
+    // the section shape. The primary half folds every shard's view
+    // slot into the instance-wide answer (offset sum, one slaveN line
+    // per replica process). The fields mirror Redis 7.x, with one
+    // simplification: master_replid is a single zeros-string (no
+    // failover ID bookkeeping — kevy-elect keeps its own epoch
+    // instead). Link status is heartbeat-derived and the per-replica
+    // list is live (see the two halves below).
     b.push_str("# Replication\r\n");
-    let upstream = crate::replica_state::current_upstream();
-    let view = replication::replication_view();
-    let offset = view.master_repl_offset;
-    let connected = view.replicas.len();
-    match upstream {
-        Some((host, port)) => info_repl_replica(b, host, port),
-        None => info_repl_master(b, &view, offset, connected),
+    match ctx.state.replication.current_upstream() {
+        Some((host, port)) => info_repl_replica(ctx, b, host, port),
+        None => info_repl_master(ctx, b),
     }
     b.push_str("\r\n");
 }
 
 /// The replica-side (`role:slave`) half of `INFO replication`.
-fn info_repl_replica(b: &mut String, host: std::net::IpAddr, port: u16) {
+fn info_repl_replica(ctx: &Ctx<'_>, b: &mut String, host: std::net::IpAddr, port: u16) {
     b.push_str("role:slave\r\n");
     b.push_str(&format!("master_host:{host}\r\n"));
     b.push_str(&format!("master_port:{port}\r\n"));
-    // v3.14 D3/D4: heartbeat-derived truth — link status by
+    // Heartbeat-derived truth — link status by
     // ping freshness (<3s), applied offset and frame lag from
     // the runner registry.
-    let (up, applied, lag, last_io) = crate::replica_state::replica_link_view();
+    let (up, applied, lag, last_io) = ctx.state.replication.replica_link_view();
     b.push_str(if up {
         "master_link_status:up\r\n"
     } else {
@@ -290,7 +321,7 @@ fn info_repl_replica(b: &mut String, host: std::net::IpAddr, port: u16) {
     });
     b.push_str(&format!("master_last_io_seconds_ago:{last_io}\r\n"));
     b.push_str("master_sync_in_progress:0\r\n");
-    b.push_str(if crate::replica_state::read_only() {
+    b.push_str(if ctx.state.replication.read_only() {
         "slave_read_only:1\r\n"
     } else {
         "slave_read_only:0\r\n"
@@ -299,23 +330,24 @@ fn info_repl_replica(b: &mut String, host: std::net::IpAddr, port: u16) {
     b.push_str(&format!("slave_lag_frames:{lag}\r\n"));
 }
 
-/// The primary-side (`role:master`) half of `INFO replication`.
-fn info_repl_master(
-    b: &mut String,
-    view: &replication::ReplicationView,
-    offset: u64,
-    connected: usize,
-) {
+/// The primary-side (`role:master`) half of `INFO replication` —
+/// instance-wide: every shard's view slot folded into one offset sum
+/// and one `slaveN` line per replica process.
+fn info_repl_master(ctx: &Ctx<'_>, b: &mut String) {
+    let views = ctx.state.obs.repl_views();
+    let (offset, replicas) = replication::aggregate_replication(&views);
     b.push_str("role:master\r\n");
-    b.push_str(&format!("connected_slaves:{connected}\r\n"));
-    // v3.14 D2: per-replica truth — sent (pumped), acked
-    // (REPLCONF ACK), lag in frames vs master_repl_offset.
-    for (i, (ip, port, sent, acked)) in view.replicas.iter().enumerate() {
-        let acked_v = acked.unwrap_or(0);
+    b.push_str(&format!("connected_slaves:{}\r\n", replicas.len()));
+    // Per-replica truth — port is the replica's advertised client
+    // port; sent (pumped) / offset (acked) / lag sum its per-shard
+    // streams; a replica missing an ACK on ANY stream is `syncing`.
+    for (i, agg) in replicas.iter().enumerate() {
+        let acked_v = agg.acked.unwrap_or(0);
         let lag = offset.saturating_sub(acked_v);
-        let state = if acked.is_some() { "online" } else { "syncing" };
+        let state = if agg.acked.is_some() { "online" } else { "syncing" };
         b.push_str(&format!(
-            "slave{i}:ip={ip},port={port},state={state},offset={acked_v},sent={sent},lag={lag}\r\n"
+            "slave{i}:ip={},port={},state={state},offset={acked_v},sent={},lag={lag}\r\n",
+            agg.ip, agg.port, agg.sent,
         ));
     }
     b.push_str("master_replid:0000000000000000000000000000000000000000\r\n");
@@ -332,7 +364,7 @@ fn info_cluster(cfg: &Config, b: &mut String) {
     b.push_str("\r\n");
 }
 
-fn info_keyspace(totals: &stats::Totals, b: &mut String) {
+fn info_keyspace(totals: &crate::state::Totals, b: &mut String) {
     b.push_str("# Keyspace\r\n");
     // Redis omits the `dbN:` line entirely for an empty keyspace. `avg_ttl` is
     // a Redis estimate we don't track; report 0 (its "unknown" value).
@@ -347,18 +379,18 @@ fn info_keyspace(totals: &stats::Totals, b: &mut String) {
 
 // ───────────── DEBUG ─────────────
 
-fn cmd_debug<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
+fn cmd_debug<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) {
     let sub = match args.get(1) {
         Some(s) => s.to_ascii_uppercase(),
         None => return wrong_args(out, "debug"),
     };
-    // v1.42 — audit every DEBUG call (admin command).
+    // Audit every DEBUG call (admin command).
     let mut event: Vec<&[u8]> = Vec::with_capacity(args.len());
     event.push(b"DEBUG");
     for i in 1..args.len() {
         event.push(&args[i]);
     }
-    crate::audit_log::record(&event);
+    ctx.state.obs.audit_record(&event);
     match sub.as_slice() {
         b"SLEEP" => {
             let secs: f64 = args
@@ -378,21 +410,36 @@ fn cmd_debug<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     }
 }
 
-// WAIT lives in crate::cmd_repl since v3.16 (D1: real all-shard ack
+// WAIT lives in crate::cmd_repl (real all-shard ack
 // barrier through the runtime; the dispatch fallback there handles
 // arity errors, the replica rejection, and runtime-less contexts).
 
 // ───────────── SHUTDOWN ─────────────
 
-fn cmd_shutdown<A: ArgvView + ?Sized>(args: &A, _out: &mut Vec<u8>) {
-    // SHUTDOWN [NOSAVE | SAVE] — Redis exits without sending a reply
-    // (client sees connection drop). v1.0 stub: parse the subcommand
-    // for forward compatibility, then exit(0). Wave 2 will add the
-    // AOF-flush-on-exit graceful path; for now we rely on appendfsync
-    // = always or everysec to have flushed recent writes.
-    let mode = args.get(1).map(<[u8]>::to_ascii_uppercase);
-    let _ = mode; // accepted for parity; behavior identical for now
-    std::process::exit(0);
+fn cmd_shutdown<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) {
+    // SHUTDOWN [NOSAVE | SAVE] — a successful shutdown never sends a
+    // reply: the client observes the connection closing as the process
+    // drains and exits (Redis behavior). The command trips the same
+    // stop flag the SIGTERM handler uses, so every shard leaves its
+    // reactor loop and runs the full drain: land in-flight persist
+    // jobs, force-fsync the AOF tail, write the feed marker. `SAVE`
+    // additionally requests one final snapshot per shard before the
+    // drain; `NOSAVE` (and the bare form) skip the snapshot but keep
+    // the AOF durable.
+    if args.len() > 2 {
+        return encode_error(out, "ERR syntax error");
+    }
+    let save = match args.get(1).map(<[u8]>::to_ascii_uppercase).as_deref() {
+        None => false,
+        Some(b"NOSAVE") => false,
+        Some(b"SAVE") => true,
+        Some(_) => return encode_error(out, "ERR syntax error"),
+    };
+    if !ctx.state.request_shutdown(save) {
+        // No registered runtime stop flag (embedded / bare-dispatch
+        // contexts): keep the immediate-exit contract.
+        std::process::exit(0);
+    }
 }
 
 // ───────────── value → string converters (shared with config submodule) ─────────────

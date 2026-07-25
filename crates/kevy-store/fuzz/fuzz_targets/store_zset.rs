@@ -105,11 +105,11 @@ fuzz_target!(|data: &[u8]| {
                 };
                 let want_added = usize::from(!oracle.contains_key(&member));
                 oracle.insert(member.clone(), score);
-                let added = store.zadd(key, &[(score, member)]).expect("zadd");
+                let added = store.zadd(key, &[(score, member.as_slice())]).expect("zadd");
                 assert_eq!(added, want_added, "zadd added-count diverged");
             }
             2 => {
-                // Batch zadd (borrowed form), duplicate members allowed —
+                // Batch zadd, duplicate members allowed —
                 // the store applies pairs in order, so does the oracle.
                 let n = (input.byte().unwrap_or(0) % 5) as usize;
                 let mut pairs: Vec<(f64, Vec<u8>)> = Vec::new();
@@ -125,13 +125,13 @@ fuzz_target!(|data: &[u8]| {
                 }
                 let borrowed: Vec<(f64, &[u8])> =
                     pairs.iter().map(|(s, m)| (*s, m.as_slice())).collect();
-                let added = store.zadd_borrowed(key, &borrowed).expect("zadd_borrowed");
+                let added = store.zadd(key, &borrowed).expect("zadd");
                 assert_eq!(added, want_added, "batch zadd added-count diverged");
             }
             3 => {
                 let Some(member) = input.member() else { break };
                 let want = usize::from(oracle.remove(&member).is_some());
-                let removed = store.zrem(key, &[member]).expect("zrem");
+                let removed = store.zrem(key, &[member.as_slice()]).expect("zrem");
                 assert_eq!(removed, want, "zrem removed-count diverged");
             }
             4 => {

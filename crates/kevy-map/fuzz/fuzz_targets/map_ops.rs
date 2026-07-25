@@ -115,8 +115,12 @@ fuzz_target!(|data: &[u8]| {
                 for _ in 0..n {
                     counter += 1;
                     let k = format!("bulk-{counter}").into_bytes();
-                    assert_eq!(map.insert(k.clone(), counter), None);
-                    assert_eq!(oracle.insert(k, counter), None);
+                    // NOT asserted fresh: the fuzzer can forge a literal
+                    // "bulk-N" through the generic insert op (CI found
+                    // exactly that input). Equivalence is the invariant.
+                    let got = map.insert(k.clone(), counter);
+                    let want = oracle.insert(k, counter);
+                    assert_eq!(got, want, "bulk insert diverged");
                 }
             }
             7 => {

@@ -21,6 +21,42 @@ impl<C: Commands> Shard<C> {
     /// beyond one struct build).
     pub(crate) fn apply_live_runtime_config(&mut self, tick_interval: &mut Option<Duration>) {
         let live = self.commands.live_runtime_config();
+        self.apply_live_persist_knobs(&live);
+        if let Some(ms) = live.tick_interval_ms {
+            *tick_interval = if ms == 0 {
+                None
+            } else {
+                Some(Duration::from_millis(ms))
+            };
+        }
+        if let Some(flags) = live.notify_flags {
+            self.notify_flags = flags;
+            // Mirror the store-origin event classes into the store's
+            // capture mask (all-off keeps every store hook at a single
+            // byte test). Channel gating still happens at publish time.
+            let on = !flags.is_empty();
+            self.store.set_notify_capture(
+                on && flags.new_key,
+                on && flags.expired,
+                on && flags.evicted,
+            );
+        }
+        if let Some(t) = live.slowlog_slower_than_micros {
+            self.slowlog.slower_than_micros = t;
+        }
+        if let Some(n) = live.slowlog_max_len {
+            self.slowlog.max_len = n;
+            let cap = n as usize;
+            while self.slowlog.buf.len() > cap {
+                self.slowlog.buf.pop_front();
+            }
+        }
+        self.apply_promotion_epoch(live.promotion_epoch);
+    }
+
+    /// The persistence half of [`Self::apply_live_runtime_config`]:
+    /// fsync policy + the three rewrite triggers.
+    fn apply_live_persist_knobs(&mut self, live: &crate::LiveRuntimeConfig) {
         if let Some(f) = live.appendfsync
             && let Some(aof) = &mut self.aof
         {
@@ -37,30 +73,15 @@ impl<C: Commands> Shard<C> {
         if let Some(m) = live.auto_aof_rewrite_min_size {
             self.auto_aof_rewrite_min_size = m;
         }
-        if let Some(ms) = live.tick_interval_ms {
-            *tick_interval = if ms == 0 {
-                None
-            } else {
-                Some(Duration::from_millis(ms))
-            };
+        if let Some(b) = live.auto_aof_rewrite_bytes {
+            self.auto_aof_rewrite_bytes = b;
         }
-        if let Some(flags) = live.notify_flags {
-            self.notify_flags = flags;
+        if let Some(i) = live.auto_aof_rewrite_interval_secs {
+            self.auto_aof_rewrite_interval_secs = i;
         }
-        if let Some(t) = live.slowlog_slower_than_micros {
-            self.slowlog.slower_than_micros = t;
-        }
-        if let Some(n) = live.slowlog_max_len {
-            self.slowlog.max_len = n;
-            let cap = n as usize;
-            while self.slowlog.buf.len() > cap {
-                self.slowlog.buf.pop_front();
-            }
-        }
-        self.apply_promotion_epoch(live.promotion_epoch);
     }
 
-    /// v3.16 D2 — promotion fences the old offset space: when the
+    /// Promotion fences the old offset space: when the
     /// command layer's promotion counter moved (this process went
     /// replica → primary), bump this shard's feed generation (offsets
     /// restart at 0, persisted via the feed-gen sidecar). Tokens
@@ -91,26 +112,21 @@ impl<C: Commands> Shard<C> {
         }
     }
 
-    /// Check whether the live AOF has grown enough to warrant an automatic
-    /// `BGREWRITEAOF`, and run it inline if so. Called from the tick path
-    /// — at most every `tick_interval_ms`, so the cost is amortised across
-    /// thousands of writes per check. No-op when AOF is disabled, when the
-    /// `auto_aof_rewrite_pct` knob is `0`, or when the current AOF is
-    /// smaller than `auto_aof_rewrite_min_size`.
+    /// Check whether the live AOF is due for an automatic `BGREWRITEAOF`
+    /// under the three-trigger [`kevy_persist::RewritePolicy`] (growth,
+    /// absolute cap, staleness — the same decision the embedded reaper
+    /// uses), and run it inline if so. Called from the tick path — at most
+    /// every `tick_interval_ms`, so the cost is amortised across thousands
+    /// of writes per check. No-op when AOF is disabled or all rules are 0.
     pub(crate) fn maybe_auto_rewrite_aof(&mut self) {
-        if self.auto_aof_rewrite_pct == 0 {
-            return;
-        }
+        let policy = kevy_persist::RewritePolicy {
+            pct: self.auto_aof_rewrite_pct,
+            min_size: self.auto_aof_rewrite_min_size,
+            bytes: self.auto_aof_rewrite_bytes,
+            interval_secs: self.auto_aof_rewrite_interval_secs,
+        };
         let Some(aof) = &self.aof else { return };
-        let cur = aof.size_bytes();
-        if cur < self.auto_aof_rewrite_min_size {
-            return;
-        }
-        let baseline = aof.size_at_last_rewrite().max(1);
-        // (cur - baseline) * 100 / baseline ≥ pct  ⇔  cur * 100 ≥ baseline * (100 + pct)
-        let lhs = cur.saturating_mul(100);
-        let rhs = baseline.saturating_mul(100u64.saturating_add(u64::from(self.auto_aof_rewrite_pct)));
-        if lhs < rhs {
+        if !aof.rewrite_due(policy) {
             return;
         }
         self.start_bg_rewrite();
@@ -128,6 +144,48 @@ impl<C: Commands> Shard<C> {
         self.commands.on_persist_stats(in_flight, rewrites);
     }
 
+    /// Publish this shard's live client-conn count (cluster-bus links
+    /// excluded) — the `INFO connected_clients` truth source. Same
+    /// per-tick cadence as [`Self::tick_persist`].
+    pub(crate) fn tick_conn_gauge(&mut self) {
+        let live = self.conns.iter().filter(|(_, c)| !c.cluster).count() as u64;
+        self.commands.on_conn_gauge(live);
+    }
+
+    /// Disconnect any conn whose pending reply buffer has grown past
+    /// [`crate::CLIENT_OUTPUT_HARD_LIMIT`] — a client that stopped
+    /// reading (or a slow pub/sub subscriber) would otherwise let the
+    /// per-conn `output` grow without bound and OOM the shard. The cap
+    /// is on ACCUMULATED unflushed bytes, so a legitimate large reply
+    /// (which drains progressively) never trips it; only a reader that
+    /// isn't draining does. Async sweep (per-tick), matching Redis's
+    /// out-of-band `client-output-buffer-limit` enforcement rather
+    /// than a hot-path check. Epoll backend; the io_uring twin is
+    /// [`Self::uring_enforce_output_limit`].
+    pub(crate) fn enforce_output_limit(&mut self) {
+        let mut over: Vec<u64> = Vec::new();
+        for (id, c) in self.conns.iter() {
+            if c.closing {
+                continue;
+            }
+            let arc_bytes: usize = c.output_arcs.iter().map(|(_, a)| a.len()).sum();
+            if c.output.len().saturating_add(arc_bytes) > crate::CLIENT_OUTPUT_HARD_LIMIT {
+                over.push(*id);
+            }
+        }
+        for id in over {
+            eprintln!(
+                "kevy: shard {} closing conn {id}: output buffer exceeded {} bytes",
+                self.id,
+                crate::CLIENT_OUTPUT_HARD_LIMIT,
+            );
+            if let Some(c) = self.conns.get_mut(&id) {
+                c.closing = true;
+            }
+            self.dirty.push(id);
+        }
+    }
+
     /// Publish this shard's replication view (master offset + connected
     /// replicas count) to the embedder. No-op when replication is off
     /// (the standalone fast path: one Option-discriminant check + an
@@ -135,7 +193,7 @@ impl<C: Commands> Shard<C> {
     /// [`Self::tick_persist`]; the command layer that serves `ROLE` /
     /// `INFO replication` reads from the thread-local the embedder
     /// stashes in [`crate::Commands::on_replication_view`].
-    /// T1.22.5: compute the per-shard backlog retention watermark
+    /// Watermark: compute the per-shard backlog retention watermark
     /// — `min(live sent_offsets, slot.min_acked_offset)` — and tell
     /// the source to drop frames every consumer has moved past.
     /// No-op when no consumer position exists yet (cold startup,
@@ -169,30 +227,38 @@ impl<C: Commands> Shard<C> {
         let offset = src.next_offset();
         // Collect per-replica `(ipv4, port, sent_offset)` from every
         // handshake-complete replica conn. `peer` was captured at
-        // accept time (T1.28.5); `sent_offset` is the live value
+        // accept time; `sent_offset` is the live value
         // from the state machine. For `SnapshotShipping`, report
         // `ack_offset` (the snapshot's frozen-at offset) since
         // streaming hasn't started yet.
+        let now_ns = std::time::Instant::now()
+            .duration_since(self.replication_epoch)
+            .as_nanos() as u64;
         let mut replicas = Vec::with_capacity(self.replicas.len());
         for c in &self.replicas {
             let (sent, id) = match &c.state {
-                ReplicaState::AckSent { from_offset, replica_id } => {
-                    (*from_offset, Some(replica_id.as_str()))
+                ReplicaState::AckSent { from_offset, replica_id, .. } => {
+                    (*from_offset, replica_id.as_str())
                 }
-                ReplicaState::Streaming { sent_offset, replica_id } => {
-                    (*sent_offset, Some(replica_id.as_str()))
+                ReplicaState::Streaming { sent_offset, replica_id, .. } => {
+                    (*sent_offset, replica_id.as_str())
                 }
                 ReplicaState::SnapshotShipping { ack_offset, replica_id, .. } => {
-                    (*ack_offset, Some(replica_id.as_str()))
+                    (*ack_offset, replica_id.as_str())
                 }
                 _ => continue,
             };
-            // v3.14 D2: the replica's ACKED offset from the slot table
+            // The replica's ACKED offset from the slot table
             // (0 until its first REPLCONF ACK lands).
             // None = never ACKed; Some(0) is a REAL ack from an empty
             // replica's heartbeat round trip (min-replicas counts it).
-            let acked = id.and_then(|i| self.slots.get(i).map(|s| s.acked_offset));
-            replicas.push((c.peer.0, c.peer.1, sent, acked));
+            // The ACK age (vs the same epoch clock the slot was
+            // touched with) feeds the min_replicas_max_lag_ms gate.
+            let acked = self.slots.get(id).map(|s| crate::ReplicaAck {
+                acked_offset: s.acked_offset,
+                ack_age_ms: now_ns.saturating_sub(s.last_seen_ns) / 1_000_000,
+            });
+            replicas.push((id.to_string(), c.peer.0, c.peer.1, sent, acked));
         }
         self.commands.on_replication_view(offset, replicas);
     }

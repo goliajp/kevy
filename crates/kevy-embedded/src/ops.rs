@@ -5,26 +5,22 @@
 //! and `pubsub::PubsubBus` (the in-process bus); they hold the embedded
 //! mutex for the duration of the underlying call, then drop it. AOF
 //! logging + post-write eviction sweep run via `commit_write` from
-//! `store.rs`. Behaviour and ABI are unchanged from the v1.1.0 single-file
-//! layout — this module only exists to keep `store.rs` under the 500-LOC
-//! cap.
+//! `store.rs`. Behaviour and ABI are unchanged from the original
+//! single-file layout — this module only exists to keep `store.rs` under
+//! the 500-LOC cap.
 
-use std::io;
+use crate::KevyResult;
 use std::time::Duration;
 
 use kevy_store::StoreError;
 
 use crate::pubsub::Subscription;
-#[cfg(not(target_arch = "wasm32"))]
-use crate::replica_glue::ensure_writable;
+use crate::store::ensure_writable;
 use crate::store::{Store, commit_write, store_err};
 
 // wasm has no replica runner, so the read-only guard is unconditionally a
 // no-op. Mirrors `replica_glue::ensure_writable`'s signature so the rest of
 // this file is target-agnostic.
-#[cfg(target_arch = "wasm32")]
-fn ensure_writable(_s: &Store) -> io::Result<()> { Ok(()) }
-
 impl Store {
     // ---- string ops -----------------------------------------------------
 
@@ -32,7 +28,7 @@ impl Store {
     /// embedded API (Redis semantics: SET overwrites; NX/XX vetoes would
     /// return `false` but we don't expose those here — use [`Store::with`]
     /// for the full surface).
-    pub fn set(&self, key: &[u8], value: &[u8]) -> io::Result<bool> {
+    pub fn set(&self, key: &[u8], value: &[u8]) -> KevyResult<bool> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let ok = g.store.set(key, value.to_vec(), None, false, false);
@@ -44,8 +40,9 @@ impl Store {
     /// **absolute** `PEXPIREAT` deadline (not the relative `ttl`) so the key
     /// expires at the same wall-clock instant after a restart — a relative
     /// `PEXPIRE` would be re-anchored to replay-time, resetting the TTL to a
-    /// fresh full duration on every restart (INC-2026-06-09).
-    pub fn set_with_ttl(&self, key: &[u8], value: &[u8], ttl: Duration) -> io::Result<bool> {
+    /// fresh full duration on every restart (seen as a production
+    /// incident: cache keys never expired across restarts).
+    pub fn set_with_ttl(&self, key: &[u8], value: &[u8], ttl: Duration) -> KevyResult<bool> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let ok = g.store.set(key, value.to_vec(), Some(ttl), false, false);
@@ -58,13 +55,21 @@ impl Store {
 
     /// `GET key` — `Some(bytes)` on hit, `None` on miss or expired.
     ///
-    /// With eviction off (`maxmemory == 0`, the default) this takes the **read**
-    /// lock and a non-mutating store lookup, so concurrent readers scale across
-    /// cores — the path a read-heavy embed cache lives on. With eviction on it
-    /// falls back to the exclusive lock + mutating get so each access still
-    /// stamps the LRU clock.
-    pub fn get(&self, key: &[u8]) -> io::Result<Option<Vec<u8>>> {
-        if self.config().maxmemory == 0 {
+    /// The lock is **policy-gated** (see [`Self::reads_use_shared_lock`]):
+    /// whenever the active eviction policy won't consume a per-read LRU/LFU
+    /// tick — `maxmemory == 0` (the default), or the `NoEviction` /
+    /// `*Random` / `VolatileTtl` policies — this takes the **shared** lock and a
+    /// non-mutating [`get_shared`](kevy_store::Store::get_shared) lookup. That
+    /// is a lock-*correctness* choice: a read-only GET has no business holding
+    /// the exclusive lock and blocking a concurrent writer on its shard. It is
+    /// **not** a throughput win — concurrent GETs still contend on the shard's
+    /// `RwLock` word (there is no lock-free read path), so read scaling is
+    /// bounded by shard count, not core count. Expired keys still read as
+    /// `None` here (lazy expire-skip; the reaper / next write reclaims them).
+    /// Only the true LRU/LFU policies fall back to the exclusive lock + mutating
+    /// get so each access stamps the clock the eviction scorer ranks by.
+    pub fn get(&self, key: &[u8]) -> KevyResult<Option<Vec<u8>>> {
+        if self.reads_use_shared_lock() {
             let g = self.rshard(key);
             return Ok(g.store.get_shared(key).map_err(store_err)?.map(|c| c.into_owned()));
         }
@@ -72,15 +77,46 @@ impl Store {
         Ok(g.store.get(key).map_err(store_err)?.map(|c| c.into_owned()))
     }
 
+    /// Whether the GET read-lane can take the SHARED shard lock rather than the
+    /// exclusive one — true when no per-read LRU/LFU tick would be consumed:
+    /// `maxmemory == 0` (eviction never runs), or the `NoEviction` / `*Random`
+    /// / `VolatileTtl` policies (whose scorer ignores the per-read clock —
+    /// writes still tick the clock the `*Random` policies sample). Only the
+    /// `*Lru` / `*Lfu` policies need the exclusive lock to stamp the access clock.
+    fn reads_use_shared_lock(&self) -> bool {
+        // Tiering consumes per-read state like LRU/LFU (gate marks +
+        // access-clock stamps) — it needs the exclusive lock.
+        #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+        if self.config().tier_budget.is_some() {
+            return false;
+        }
+        let p = self.config().eviction_policy;
+        self.config().maxmemory == 0 || !(p.uses_lru() || p.uses_lfu())
+    }
+
+    /// `GET` for the FFI zero-copy *shared* lane (`kevy_get_shared`). Bulk
+    /// values come back as an `Arc::clone` — **no byte copy** — so the FFI can
+    /// hand JS a buffer viewing the engine's own storage (the win vs the plain
+    /// [`Self::get`], which `into_owned`-copies). The lookup is non-mutating;
+    /// the lock is policy-gated like [`Self::get`] ([`Self::reads_use_shared_lock`]).
+    /// This lane never stamps the LRU clock and never promotes a cold value.
+    pub fn get_shared_owned(&self, key: &[u8]) -> KevyResult<Option<kevy_store::GetShared>> {
+        if self.reads_use_shared_lock() {
+            let g = self.rshard(key);
+            return g.store.get_shared_owned(key).map_err(store_err);
+        }
+        let g = self.wshard(key);
+        g.store.get_shared_owned(key).map_err(store_err)
+    }
+
     /// `DEL key1 [key2 ...]`. Returns the count of keys actually removed.
     /// Keys fan out to their owning shards.
-    pub fn del(&self, keys: &[&[u8]]) -> io::Result<usize> {
+    pub fn del(&self, keys: &[&[u8]]) -> KevyResult<usize> {
         ensure_writable(self)?;
         let mut total = 0;
         for k in keys {
-            let owned = vec![k.to_vec()];
             let mut g = self.wshard(k);
-            let n = g.store.del(&owned);
+            let n = g.store.del(&[*k]);
             if n > 0 {
                 total += n;
                 commit_write(&mut g, &[b"DEL", k])?;
@@ -91,21 +127,21 @@ impl Store {
 
     /// `EXISTS key1 [key2 ...]`. Count of existing keys (duplicates counted
     /// multiple times, matching Redis).
-    pub fn exists(&self, keys: &[&[u8]]) -> io::Result<usize> {
+    pub fn exists(&self, keys: &[&[u8]]) -> KevyResult<usize> {
         let mut total = 0;
         for k in keys {
-            total += self.wshard(k).store.exists(&[k.to_vec()]);
+            total += self.wshard(k).store.exists(&[*k]);
         }
         Ok(total)
     }
 
     /// `INCR key`. Returns the post-increment value.
-    pub fn incr(&self, key: &[u8]) -> io::Result<i64> {
+    pub fn incr(&self, key: &[u8]) -> KevyResult<i64> {
         self.incr_by(key, 1)
     }
 
     /// `INCRBY key delta`. Negative `delta` does DECR-style work.
-    pub fn incr_by(&self, key: &[u8], delta: i64) -> io::Result<i64> {
+    pub fn incr_by(&self, key: &[u8], delta: i64) -> KevyResult<i64> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let n = g.store.incr_by(key, delta).map_err(store_err)?;
@@ -116,7 +152,7 @@ impl Store {
     /// `EXPIRE key seconds`. Returns `true` if a key was touched. The AOF
     /// records an absolute `PEXPIREAT` deadline (see [`Self::set_with_ttl`])
     /// so the TTL survives a restart unchanged.
-    pub fn expire(&self, key: &[u8], ttl: Duration) -> io::Result<bool> {
+    pub fn expire(&self, key: &[u8], ttl: Duration) -> KevyResult<bool> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let touched = g.store.expire(key, ttl);
@@ -129,7 +165,7 @@ impl Store {
     }
 
     /// `PERSIST key`. Returns `true` if a TTL was actually cleared.
-    pub fn persist(&self, key: &[u8]) -> io::Result<bool> {
+    pub fn persist(&self, key: &[u8]) -> KevyResult<bool> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let touched = g.store.persist(key);
@@ -150,8 +186,13 @@ impl Store {
     }
 
     /// `DBSIZE` — total live keys across all shards.
+    ///
+    /// Aggregates under each shard's SHARED lock (the underlying `dbsize` is
+    /// `&self`). This is a latency fix, not a scaling one: a full-keyspace
+    /// count shouldn't hold every shard's *write* lock and stall concurrent
+    /// writers while it sums.
     pub fn dbsize(&self) -> usize {
-        self.sum_shards(|i| i.store.dbsize())
+        self.sum_shards_read(|i| i.store.dbsize())
     }
 
     /// `FLUSHALL` — empty every shard (each logs `FLUSHALL` so a replay reaches
@@ -164,58 +205,55 @@ impl Store {
     /// and on drop).
     ///
     /// [`AppendFsync`]: crate::AppendFsync
-    pub fn flushall(&self) -> io::Result<()> {
+    pub fn flushall(&self) -> KevyResult<()> {
         ensure_writable(self)?;
         let r = self.try_for_each_shard(|inner| {
             inner.store.flushall();
             commit_write(inner, &[b"FLUSHALL"])
         });
-        // v2.3 feed contract: FLUSHALL breaks stream continuity.
-        #[cfg(not(target_arch = "wasm32"))]
+        // CDC feed contract: FLUSHALL breaks stream continuity.
+        #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
         self.feed_bump_on_flush();
         r
     }
 
-    /// Deprecated alias for [`Self::flushall`]. The old name read like
-    /// `Write::flush` (sync-to-disk) but actually WIPES the store — a
-    /// data-loss footgun.
-    #[deprecated(
-        since = "1.2.0",
-        note = "renamed to `flushall`: `flush` collides with Write::flush (sync-to-disk); this WIPES the store"
-    )]
-    pub fn flush(&self) -> io::Result<()> {
-        self.flushall()
-    }
-
     /// `MEMORY USAGE` for one key — `Some(bytes)` or `None` if absent.
+    ///
+    /// Read-only (`estimate_key_bytes` is `&self`), so it takes the shard's
+    /// SHARED lock rather than blocking a concurrent writer on that shard.
     pub fn key_bytes(&self, key: &[u8]) -> Option<u64> {
-        self.wshard(key).store.estimate_key_bytes(key)
+        self.rshard(key).store.estimate_key_bytes(key)
     }
 
     /// Live `used_memory` estimate (summed across shards).
+    ///
+    /// Aggregates under each shard's SHARED lock (latency fix — an INFO-time
+    /// memory sum shouldn't hold every shard's write lock; see [`Self::dbsize`]).
     pub fn used_memory(&self) -> u64 {
-        self.sum_shards_u64(|i| i.store.used_memory())
+        self.sum_shards_u64_read(|i| i.store.used_memory())
     }
 
     /// `INFO`-style counter: total keys evicted by `maxmemory` (all shards).
+    ///
+    /// Read-only aggregation under each shard's SHARED lock (see [`Self::dbsize`]).
     pub fn evictions_total(&self) -> u64 {
-        self.sum_shards_u64(|i| i.store.evictions_total())
+        self.sum_shards_u64_read(|i| i.store.evictions_total())
     }
 
     /// `INFO`-style counter: total keys expired (lazy + active reaper, all shards).
+    ///
+    /// Read-only aggregation under each shard's SHARED lock (see [`Self::dbsize`]).
     pub fn expired_keys_total(&self) -> u64 {
-        self.sum_shards_u64(|i| i.store.expired_keys_total())
+        self.sum_shards_u64_read(|i| i.store.expired_keys_total())
     }
 
     // ---- hash ops -------------------------------------------------------
 
     /// `HSET key field value [field value ...]`. Returns count newly added.
-    pub fn hset(&self, key: &[u8], pairs: &[(&[u8], &[u8])]) -> io::Result<usize> {
+    pub fn hset(&self, key: &[u8], pairs: &[(&[u8], &[u8])]) -> KevyResult<usize> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
-        let owned: Vec<(Vec<u8>, Vec<u8>)> =
-            pairs.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect();
-        let added = g.store.hset(key, &owned).map_err(store_err)?;
+        let added = g.store.hset(key, pairs).map_err(store_err)?;
         let mut parts: Vec<&[u8]> = Vec::with_capacity(2 + pairs.len() * 2);
         parts.push(b"HSET");
         parts.push(key);
@@ -228,7 +266,7 @@ impl Store {
     }
 
     /// `HGET key field`. `None` if absent.
-    pub fn hget(&self, key: &[u8], field: &[u8]) -> io::Result<Option<Vec<u8>>> {
+    pub fn hget(&self, key: &[u8], field: &[u8]) -> KevyResult<Option<Vec<u8>>> {
         let mut g = self.wshard(key);
         Ok(g.store
             .hget(key, field)
@@ -237,11 +275,10 @@ impl Store {
     }
 
     /// `HDEL key field [field ...]`. Returns count actually removed.
-    pub fn hdel(&self, key: &[u8], fields: &[&[u8]]) -> io::Result<usize> {
+    pub fn hdel(&self, key: &[u8], fields: &[&[u8]]) -> KevyResult<usize> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
-        let owned: Vec<Vec<u8>> = fields.iter().map(|f| f.to_vec()).collect();
-        let removed = g.store.hdel(key, &owned).map_err(store_err)?;
+        let removed = g.store.hdel(key, fields).map_err(store_err)?;
         if removed > 0 {
             let mut parts: Vec<&[u8]> = Vec::with_capacity(2 + fields.len());
             parts.push(b"HDEL");
@@ -257,43 +294,42 @@ impl Store {
     // ---- list ops -------------------------------------------------------
 
     /// `LPUSH key value [value ...]`. Returns the new list length.
-    pub fn lpush(&self, key: &[u8], values: &[&[u8]]) -> io::Result<usize> {
+    pub fn lpush(&self, key: &[u8], values: &[&[u8]]) -> KevyResult<usize> {
         push_helper(self, key, values, b"LPUSH", kevy_store::Store::lpush)
     }
 
     /// `RPUSH key value [value ...]`. Returns the new list length.
-    pub fn rpush(&self, key: &[u8], values: &[&[u8]]) -> io::Result<usize> {
+    pub fn rpush(&self, key: &[u8], values: &[&[u8]]) -> KevyResult<usize> {
         push_helper(self, key, values, b"RPUSH", kevy_store::Store::rpush)
     }
 
     /// `LPOP key count`. Returns popped values from the head.
-    pub fn lpop(&self, key: &[u8], count: usize) -> io::Result<Vec<Vec<u8>>> {
+    pub fn lpop(&self, key: &[u8], count: usize) -> KevyResult<Vec<Vec<u8>>> {
         pop_helper(self, key, count, false)
     }
 
     /// `RPOP key count`. Symmetric to `LPOP` from the tail.
-    pub fn rpop(&self, key: &[u8], count: usize) -> io::Result<Vec<Vec<u8>>> {
+    pub fn rpop(&self, key: &[u8], count: usize) -> KevyResult<Vec<Vec<u8>>> {
         pop_helper(self, key, count, true)
     }
 
     /// `LLEN key`. Length of the list at `key`; 0 if absent.
-    pub fn llen(&self, key: &[u8]) -> io::Result<usize> {
+    pub fn llen(&self, key: &[u8]) -> KevyResult<usize> {
         self.wshard(key).store.llen(key).map_err(store_err)
     }
 
     // ---- set ops --------------------------------------------------------
 
     /// `SADD key member [member ...]`. Returns count newly added.
-    pub fn sadd(&self, key: &[u8], members: &[&[u8]]) -> io::Result<usize> {
+    pub fn sadd(&self, key: &[u8], members: &[&[u8]]) -> KevyResult<usize> {
         push_helper(self, key, members, b"SADD", kevy_store::Store::sadd)
     }
 
     /// `SREM key member [member ...]`. Returns count actually removed.
-    pub fn srem(&self, key: &[u8], members: &[&[u8]]) -> io::Result<usize> {
+    pub fn srem(&self, key: &[u8], members: &[&[u8]]) -> KevyResult<usize> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
-        let owned: Vec<Vec<u8>> = members.iter().map(|m| m.to_vec()).collect();
-        let removed = g.store.srem(key, &owned).map_err(store_err)?;
+        let removed = g.store.srem(key, members).map_err(store_err)?;
         if removed > 0 {
             let mut parts: Vec<&[u8]> = Vec::with_capacity(2 + members.len());
             parts.push(b"SREM");
@@ -307,24 +343,22 @@ impl Store {
     }
 
     /// `SMEMBERS key`. Order implementation-defined; empty if absent.
-    pub fn smembers(&self, key: &[u8]) -> io::Result<Vec<Vec<u8>>> {
+    pub fn smembers(&self, key: &[u8]) -> KevyResult<Vec<Vec<u8>>> {
         self.wshard(key).store.smembers(key).map_err(store_err)
     }
 
     /// `SCARD key`. Member count; 0 if absent.
-    pub fn scard(&self, key: &[u8]) -> io::Result<usize> {
+    pub fn scard(&self, key: &[u8]) -> KevyResult<usize> {
         self.wshard(key).store.scard(key).map_err(store_err)
     }
 
     // ---- zset ops -------------------------------------------------------
 
     /// `ZADD key score member [score member ...]`. Returns count newly added.
-    pub fn zadd(&self, key: &[u8], pairs: &[(f64, &[u8])]) -> io::Result<usize> {
+    pub fn zadd(&self, key: &[u8], pairs: &[(f64, &[u8])]) -> KevyResult<usize> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
-        let owned: Vec<(f64, Vec<u8>)> =
-            pairs.iter().map(|(s, m)| (*s, m.to_vec())).collect();
-        let added = g.store.zadd(key, &owned).map_err(store_err)?;
+        let added = g.store.zadd(key, pairs).map_err(store_err)?;
         let mut score_strs: Vec<Vec<u8>> = Vec::with_capacity(pairs.len());
         for (s, _) in pairs {
             score_strs.push(format!("{s}").into_bytes());
@@ -341,11 +375,10 @@ impl Store {
     }
 
     /// `ZREM key member [member ...]`. Returns count actually removed.
-    pub fn zrem(&self, key: &[u8], members: &[&[u8]]) -> io::Result<usize> {
+    pub fn zrem(&self, key: &[u8], members: &[&[u8]]) -> KevyResult<usize> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
-        let owned: Vec<Vec<u8>> = members.iter().map(|m| m.to_vec()).collect();
-        let removed = g.store.zrem(key, &owned).map_err(store_err)?;
+        let removed = g.store.zrem(key, members).map_err(store_err)?;
         if removed > 0 {
             let mut parts: Vec<&[u8]> = Vec::with_capacity(2 + members.len());
             parts.push(b"ZREM");
@@ -359,16 +392,25 @@ impl Store {
     }
 
     /// `ZSCORE key member`. `Some(score)` if present.
-    pub fn zscore(&self, key: &[u8], member: &[u8]) -> io::Result<Option<f64>> {
+    pub fn zscore(&self, key: &[u8], member: &[u8]) -> KevyResult<Option<f64>> {
         self.wshard(key).store.zscore(key, member).map_err(store_err)
     }
 
     /// `ZCARD key`. Member count; 0 if absent.
-    pub fn zcard(&self, key: &[u8]) -> io::Result<usize> {
+    pub fn zcard(&self, key: &[u8]) -> KevyResult<usize> {
         self.wshard(key).store.zcard(key).map_err(store_err)
     }
 
     // ---- pub/sub --------------------------------------------------------
+
+    /// Dispatch one command as argv, appending the RESP-encoded reply to
+    /// `out` — the full read+write verb surface (`ESTORE_OPS` plus the
+    /// conn face). This is the generic entry the FFI layer builds every
+    /// language binding on: one function reaches the whole engine. The
+    /// read-only listener keeps its own narrower whitelist.
+    pub fn dispatch_argv(&self, argv: &[Vec<u8>], out: &mut Vec<u8>) {
+        crate::dispatch::dispatch(self, argv, out);
+    }
 
     /// `PUBLISH channel payload`. Delivers `payload` to every subscriber on
     /// `channel` (direct + pattern matches) inside this process. Returns
@@ -422,14 +464,13 @@ fn push_helper<F>(
     values: &[&[u8]],
     verb: &'static [u8],
     op: F,
-) -> io::Result<usize>
+) -> KevyResult<usize>
 where
-    F: FnOnce(&mut kevy_store::Store, &[u8], &[Vec<u8>]) -> Result<usize, StoreError>,
+    F: FnOnce(&mut kevy_store::Store, &[u8], &[&[u8]]) -> Result<usize, StoreError>,
 {
     ensure_writable(s)?;
     let mut g = s.wshard(key);
-    let owned: Vec<Vec<u8>> = values.iter().map(|v| v.to_vec()).collect();
-    let n = op(&mut g.store, key, &owned).map_err(store_err)?;
+    let n = op(&mut g.store, key, values).map_err(store_err)?;
     let mut parts: Vec<&[u8]> = Vec::with_capacity(2 + values.len());
     parts.push(verb);
     parts.push(key);
@@ -440,7 +481,7 @@ where
     Ok(n)
 }
 
-fn pop_helper(s: &Store, key: &[u8], count: usize, from_tail: bool) -> io::Result<Vec<Vec<u8>>> {
+fn pop_helper(s: &Store, key: &[u8], count: usize, from_tail: bool) -> KevyResult<Vec<Vec<u8>>> {
     ensure_writable(s)?;
     let mut g = s.wshard(key);
     let popped = if from_tail {

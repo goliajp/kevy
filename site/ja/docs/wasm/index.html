@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WebAssembly上のkevy — kevy</title>
+<meta name="description" content="kevyはブラウザの中で、コンパイルが通るだけの珍品ではなく本物のストアとして動きます。npmパッケージ@goliajp/kevyは、wasm32-unknown-unknown向けにコンパイルしたエンジン（KV＋TTL＋カウンタ＋スキャン＋pub/sub）を手書きのESモジュールローダーの後ろに載せて出荷し、OPFS（IndexedDBフォールバック付き）">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../ja/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../../ja/docs/" aria-current="page">ドキュメント</a>
+      <a href="../../../ja/docs/commands/">コマンド</a>
+      <a href="../../../ja/benchmarks/">ベンチマーク</a>
+      <a href="../../../ja/play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../../ja/docs/search-index.json" data-root="../../../ja/">
+        <input type="search" placeholder="ドキュメントを検索……" aria-label="ドキュメントを検索……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../../docs/wasm/">EN</a><a href="../../../zh/docs/wasm/">中文</a><a href="../../../ja/docs/wasm/" aria-current="page">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell has-toc">
+  <aside class="side"><p class="side-h">はじめに</p><ul><li><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a></li><li><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a></li><li><a href="../../../ja/docs/persistence/">永続化</a></li><li><a href="../../../ja/docs/tuning/">kevyのチューニング</a></li></ul><p class="side-h">運用</p><ul><li><a href="../../../ja/docs/replication/">レプリケーション</a></li><li><a href="../../../ja/docs/availability/">可用性</a></li><li><a href="../../../ja/docs/cluster/">クラスタ</a></li><li><a href="../../../ja/docs/tiering/">透過的ティアリング（[tiering] / with_tier_budget）</a></li><li><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a></li><li><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a></li><li><a href="../../../ja/docs/async/">非同期クライアント</a></li></ul><p class="side-h">データ</p><ul><li><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX. / idx_）</a></li><li><a href="../../../ja/docs/tables/">テーブル（TABLE. / table_）</a></li><li><a href="../../../ja/docs/vector-search/">ベクトル検索（KIND ann）</a></li><li><a href="../../../ja/docs/text-search/">全文検索（KIND text）</a></li><li><a href="../../../ja/docs/views/">ビュー（VIEW. / view_）</a></li><li><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED. / changes_since）</a></li><li><a href="../../../ja/docs/pubsub/">Pub/sub</a></li><li><a href="../../../ja/docs/lua/">Luaスクリプティング</a></li></ul><p class="side-h">組み込み</p><ul><li><a href="../../../ja/docs/wasm/" aria-current="page">WebAssembly上のkevy</a></li><li><a href="../../../ja/docs/embedded-listener/">組み込みの読み取り専用RESPリスナー</a></li><li><a href="../../../ja/docs/iot/">IoTデバイス上のkevy</a></li></ul><p class="side-h">リファレンス</p><ul><li><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a></li><li><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a></li><li><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></li><li><a href="../../../ja/docs/UPGRADING/">kevyのアップグレード</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../ja/docs/commands/">188 コマンド全て</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>WebAssembly上のkevy</h1></div>
+<p>kevyはブラウザの中で、コンパイルが通るだけの珍品ではなく本物のストアとして動きます。npmパッケージ<a href="https://www.npmjs.com/package/@goliajp/kevy"><code>@goliajp/kevy</code></a>は、<code>wasm32-unknown-unknown</code>向けにコンパイルしたエンジン（KV＋TTL＋カウンタ＋スキャン＋pub/sub）を手書きのESモジュールローダーの後ろに載せて出荷し、OPFS（IndexedDBフォールバック付き）による永続化と、タブをまたぐpub/subを備えます。同じクレート群は<code>wasm32-wasip1</code>向けにもビルドできるので、Rust APIは<code>wasmtime</code>／<code>wasmer</code>やエッジランタイムでも動きます。</p>
+<p>ライブで試せます。<a href="https://kevy.golia.jp/demo/">kevy.golia.jpのデモ</a>は、まさにこのモジュールの上のブラウザREPLです——コマンド、リロードを生き延びるOPFS永続化、タブ間pub/subを、バックエンドなしで。</p>
+<h2 id="クイックスタートブラウザ">クイックスタート（ブラウザ）</h2>
+<figure class="code"><pre><code class="lang-sh">npm install @goliajp/kevy</code></pre></figure>
+<figure class="code"><pre><code class="lang-js">import { open } from "@goliajp/kevy";
+
+const db = await open({ persist: { name: "app" } });
+
+db.set("greeting", "hello");
+db.set("session", "abc123", { ttlMs: 60_000 });
+db.getText("greeting");            // "hello"
+db.incrby("visits");               // 1, 2, 3, ...
+db.keys("user:*");
+
+// Pub/sub — including other tabs of the same origin:
+const off = db.subscribe("events", (payload, channel) =&gt; {
+  console.log(channel, new TextDecoder().decode(payload));
+});
+db.publish("events", "hi from this or any other tab");
+
+await db.flush();                  // durability barrier</code></pre></figure>
+<p>書き込みはkevyの追記専用ログとしてストレージへストリームされ、同じ<code>persist.name</code>での次回<code>open()</code>時にリプレイされます。4.0以降、ログはチェックサム付きv2レコードフォーマット（<code>KEVYAOF2</code>——<a href="../persistence/">persistence.md</a>参照）を話します：保存バイトのビット反転はリプレイ時に拒否され、黙って適用されることはありません。4.0以前のタブが保存したログはそのままリプレイされ（v1、永久に読める）、最初のcompactionでv2へ昇格します。ブラウザのタブから汲み出したログはネイティブのkevyで変わらずリプレイでき、逆も同様です。パッケージは6ファイル（パック後約165 KB）です。wasmモジュール、ローダー、OPFSワーカー、手書きのTypeScript型定義、そしていつものREADMEとマニフェスト。境界のどちら側も依存ゼロです。</p>
+<h2 id="ローダーapi">ローダーAPI</h2>
+<p><code>open(options)</code>はモジュールをインスタンス化し、（永続化が有効なら）保存済みログをリプレイし、tickタイマーとタブ間ブリッジを開始します。オプションは次の通りです。</p>
+<div class="tbl"><table><thead><tr><th>オプション</th><th>デフォルト</th><th>意味</th></tr></thead><tbody><tr><td><code>wasm</code></td><td>ローダーの隣の<code>kevy.wasm</code></td><td>モジュールのソース。URL、<code>ArrayBuffer</code>、<code>Uint8Array</code>、<code>Response</code>、またはコンパイル済み<code>WebAssembly.Module</code></td></tr><tr><td><code>persist</code></td><td><code>false</code>（インメモリ）</td><td><code>{ name, backend }</code>。<code>name</code>ごとに1つのログ。<code>backend</code>は<code>"auto"</code>（OPFS、IndexedDBフォールバック）、<code>"opfs"</code>、<code>"idb"</code></td></tr><tr><td><code>broadcast</code></td><td><code>true</code></td><td><code>BroadcastChannel</code>によるタブ間pub/subブリッジ</td></tr><tr><td><code>name</code></td><td><code>persist.name</code>または<code>"kevy"</code></td><td>インスタンス名。ストレージファイルとブロードキャストチャネルの両方をスコープする</td></tr><tr><td><code>tickMs</code></td><td><code>100</code></td><td>TTL掃除＋イベントポーリングの周期。<code>0</code>でタイマー無効——自分で<code>tick()</code>を呼ぶ</td></tr></tbody></table></div>
+<p>返される<code>Kevy</code>ハンドル（完全なシグネチャは<code>kevy.d.ts</code>）：</p>
+<div class="tbl"><table><thead><tr><th>メソッド</th><th>意味論</th></tr></thead><tbody><tr><td><code>set(key, value, { ttlMs? })</code></td><td>SET。オプションで期限付き</td></tr><tr><td><code>get(key)</code> / <code>getText(key)</code></td><td>GETを<code>Uint8Array</code>で／UTF-8テキストで。不在または期限切れなら<code>undefined</code></td></tr><tr><td><code>del(key)</code> / <code>exists(key)</code></td><td>DEL / EXISTS</td></tr><tr><td><code>expire(key, ttlMs)</code> / <code>persist(key)</code> / <code>pttl(key)</code></td><td>PEXPIRE / PERSIST / PTTL（<code>-1</code>はTTLなし、<code>-2</code>はキーなし）</td></tr><tr><td><code>incrby(key, delta?)</code></td><td>INCRBY。新しい値を返す</td></tr><tr><td><code>dbsize()</code> / <code>flushall()</code></td><td>DBSIZE / FLUSHALL</td></tr><tr><td><code>keys(pattern?, limit?)</code></td><td>Redisグロブ付きKEYS。上限も指定可</td></tr><tr><td><code>tick()</code></td><td>手動のTTL掃除＋イベントポーリング1回。期限切れキー数を返す</td></tr><tr><td><code>subscribe(channel, cb)</code> / <code>psubscribe(pattern, cb)</code></td><td>SUBSCRIBE / PSUBSCRIBE。どちらも購読解除関数を返す</td></tr><tr><td><code>publish(channel, payload)</code></td><td>ローカル購読者へ、（ブリッジ有効なら）同一オリジンの他タブへもPUBLISH。ローカル受信者数を返す</td></tr><tr><td><code>flush()</code></td><td>永続性バリア。保留中の書き込みフレームをストレージへフラッシュ</td></tr><tr><td><code>compact()</code></td><td>ストレージを、生きているキー空間のコンパクション済みイメージとして書き直す</td></tr><tr><td><code>close()</code></td><td>フラッシュし、ブリッジ／タイマー／ストレージを畳み、インスタンスを解放</td></tr></tbody></table></div>
+<p>キーと値はどこでも<code>string | Uint8Array | ArrayBuffer</code>です。文字列は境界でUTF-8エンコードされ、バイトビューはそのまま通ります——値は本物のバイナリであって、文字列ではありません。</p>
+<h2 id="バインディングの仕組みwasm-bindgen不使用">バインディングの仕組み（wasm-bindgen不使用）</h2>
+<p>kevyの依存ゼロの掟はツールチェーンにも及びます。境界のどちら側にもバインディングジェネレータはありません。<a href="https://docs.rs/kevy-wasm"><code>kevy-wasm</code></a>クレートはフラットな手書きC ABI——29個の<code>extern "C"</code>シンボル——をエクスポートし、<code>pkg/kevy.js</code>はTypedArray境界、UTF-8コーデック、永続化ポンプ、タブ間ブリッジを自前で持つ手書きローダーです。規約は次の通りです。</p>
+<ul><li><b>インスタンス</b>は<code>kevy_open</code>が返す<code>u32</code>ハンドルで、他のすべての呼び出しはハンドルを最初に取ります。<code>0</code>は決して有効なハンドルになりません。</li><li><b>入りのバイト列</b>は、<code>kevy_alloc</code>で確保し<code>kevy_free</code>で返す線形メモリを指す<code>(ptr, len)</code>対で渡ります。</li><li><b>出のバイト列</b>はインスタンスごとの結果バッファに置かれ、<code>kevy_out_ptr</code>／<code>kevy_out_len</code>で読みます。同じハンドルへの次の呼び出しまでが有効期間です——呼び出し側は即座にコピーアウトします。</li><li><b>ステータスコード</b>：<code>&gt;= 0</code>が成功、<code>-1</code>が操作エラー（結果バッファにUTF-8メッセージ）、<code>-2</code>が不正ハンドル。</li><li><b>数値</b>は<code>f64</code>で渡ります（クロック、TTL、カウント——すべて2^53の正確な整数範囲の内側です）。</li><li><code>kevy_abi_version()</code>がABI契約のバージョンを報告するので、ローダーは不一致のモジュールを拒否できます。</li></ul>
+<p>エクスポート面はコア（open/close/alloc/free/clock/tick/結果バッファ）、KV（<code>kevy_set</code>、<code>kevy_get</code>、<code>kevy_del</code>、<code>kevy_exists</code>、<code>kevy_expire</code>、<code>kevy_persist</code>、<code>kevy_pttl</code>、<code>kevy_incrby</code>、<code>kevy_dbsize</code>、<code>kevy_flushall</code>、<code>kevy_keys</code>など）、pub/sub（<code>kevy_subscribe</code>、<code>kevy_psubscribe</code>、<code>kevy_unsubscribe</code>、<code>kevy_publish</code>、<code>kevy_poll_events</code>）、AOFポンプ（<code>kevy_aof_frames_out</code>、<code>kevy_aof_frame_in</code>、<code>kevy_aof_dump</code>）に分かれます。同梱のローダーがあなたのホストに合わないなら、このABIこそがサポートされる統合ポイントです——クレートのドキュメントがすべてのシンボルとパック済みバイトフォーマットを規定しています。</p>
+<h2 id="永続化ネイティブkevyとバイト互換の本物のログ">永続化——ネイティブkevyとバイト互換の本物のログ</h2>
+<p>ブラウザにファイルシステムはないので、永続性はホスト仲介です。永続化が有効なら、すべての書き込みは、kevyのAOFがディスクに保存するのと同じRESPマルチバルクフレーム（<code>kevy-persist</code>フォーマット——<a href="../persistence/">persistence.md</a>）としてもエンコードされます。ローダーは保留中のフレームをマイクロタスクごとに1回ストレージへポンプするので、同期的な書き込みバーストのコストはストレージ追記1回です。<code>await db.flush()</code>が永続性バリアで、<code>flush()</code>の解決はバックエンドがディスクへフラッシュしたことを意味します。</p>
+<p><b>ブラウザのタブが書いたログは、そのままネイティブのkevyでリプレイできます</b>——同じマジックヘッダ、同じフレームです。<code>.aof</code>をOPFSからコピーしてネイティブの組み込みストア（またはサーバー）に向ければ、キー空間が戻ってきます。逆も成り立ちます。入りのポンプはネイティブが書いたログを受け付けます。壊れた末尾はネイティブのリプレイ契約に従います——無傷のプレフィックスが適用され、末尾は捨てられ、次のコンパクションがライブ状態からストレージを書き直します。</p>
+<p>バックエンドは2つあり、<code>backend: "auto"</code>では自動選択されます。</p>
+<ul><li><b>OPFS</b>（第一候補）：小さな専用ワーカーが所有する<code>FileSystemSyncAccessHandle</code>——同期ハンドルはワーカー専用だからです。追記のたびに、確認応答の前にフラッシュします。</li><li><b>IndexedDB</b>（フォールバック）：同じポンプをオブジェクトストアに対して回します。OPFS同期ハンドルのないコンテキスト（特に古いSafari）向けです。</li></ul>
+<p>コンパクションは自動です。追記されたログが<code>max(512 KB, 前回イメージの4倍)</code>を超えると、ローダーはストレージを生きているキー空間のコンパクション済みイメージとして書き直します（AOFリライトのブラウザ側等価物）。<code>compact()</code>はスナップショットやエクスポートの前に1回を強制します。</p>
+<p><b>localStorageは意図的にバックエンドにしていません</b>。約5 MBのクォータ、書き込みのたびにメインスレッドをブロックする同期API、UTF-16文字列限定のストレージ——書き込みログとしては失格です。</p>
+<h2 id="タブ間pubsub">タブ間pub/sub</h2>
+<p><code>publish()</code>は同じタブ内の購読者へはエンジン経由で配送し、（ブリッジ有効なら）インスタンスごとの<code>BroadcastChannel</code>でフレームを同一オリジンの他のすべてのタブへブロードキャストし、各タブのローカル購読者が受け取ります。配送は<b>at-most-once・バックログなし</b>です——メッセージを受け取るのはその時点で開いているタブだけで、後から開いたタブへのリプレイはありません。これはkevyサーバーのpub/sub（<a href="../pubsub/">pubsub.md</a>）と同じ契約なので、片方の面に向けて書いたコードはもう片方でも同じように振る舞います。</p>
+<h2 id="クロックtickttl">クロック、tick、TTL</h2>
+<p><code>wasm32-unknown-unknown</code>にはスレッドもOSクロックもないので、エンジンは手動TTLリーパーとホスト供給クロックで動きます。ローダーは各エントリポイントの前に<code>Date.now()</code>をABI経由で供給し、タイマー（デフォルト100 ms）で<code>tick()</code>を回します。帰結は次の通りです。</p>
+<ul><li>TTLの精度はtick周期に従います。500 msのTTLを持つキーは、期限後最初のtickで消えます。重要なら<code>tickMs</code>を詰めるか、<code>tickMs: 0</code>にして周期を完全に自分で握ってください。</li><li>呼び出しと呼び出しの間にバックグラウンド処理は一切起きません——隠れたコストはありませんが、（<code>tickMs: 0</code>で）<code>tick()</code>を忘れると期限切れキーが生き残り、イベントキューも掃けません。</li></ul>
+<h2 id="パフォーマンス">パフォーマンス</h2>
+<p>方法論・環境・生の数字の全体は<a href="https://github.com/goliajp/kevy/blob/main/bench/WASM-BENCH.md">bench/WASM-BENCH.md</a>（ヘッドレスChromeハーネス、3回実行の中央値、16バイト値、1kおよび100kキー）にあります。Webアプリが実際に持っているストレージとの比較：</p>
+<div class="tbl"><table><thead><tr><th>軸（n=100k）</th><th style="text-align:right">kevy-wasm</th><th style="text-align:right">vs IndexedDB</th><th style="text-align:right">vs localStorage</th></tr></thead><tbody><tr><td>ポイント読み取り（ops/s）</td><td style="text-align:right">1.67 M</td><td style="text-align:right"><b>77×</b></td><td style="text-align:right">0.48×</td></tr><tr><td>ポイント書き込み（ops/s）</td><td style="text-align:right">1.79 M</td><td style="text-align:right"><b>189×</b></td><td style="text-align:right">4.9×</td></tr><tr><td>バッチロード（ms）</td><td style="text-align:right">60.8</td><td style="text-align:right"><b>36×速い</b></td><td style="text-align:right">4.5×速い</td></tr><tr><td>スキャン、約10%一致（ms）</td><td style="text-align:right">5.6</td><td style="text-align:right"><b>46×速い</b></td><td style="text-align:right">5.7×速い</td></tr><tr><td>永続書き込み（ops/s）</td><td style="text-align:right">785 k（OPFS）</td><td style="text-align:right"><b>12.6–17.4×</b></td><td style="text-align:right">約2×</td></tr><tr><td>再起動から利用可能まで（ms）</td><td style="text-align:right">129</td><td style="text-align:right"><b>2.7×速い</b></td><td style="text-align:right">遅い（下記参照）</td></tr></tbody></table></div>
+<p>ヘッドラインと、正直な但し書き：</p>
+<ul><li><b>IndexedDBに対して全軸で桁違い</b>——ポイント読み取り77–86×、ポイント書き込みはデータセットサイズをまたいで166–189×。</li><li><b>永続書き込みは素のIndexedDBの12.6–17.4×</b>。ポンプが書き込みフレームをマイクロタスク単位でバッチするので、書き込みバーストのコストはストレージ追記1回です。しかも本物の追記ログでありながら、localStorageのfire-and-forgetな<code>setItem</code>を約2×上回ります。</li><li><b>localStorageのポイント読み取りだけはkevyが勝てない列です</b>（0.42–0.48×）。そしてベンチは、wasmでホストされるストアには勝てない理由まで記録しています。ChromeのlocalStorage読み取りはレンダラーメモリ内のハッシュ検索で（実測3.5–5 M ops/sは素の<code>Map</code>級であって、ストレージ級ではありません）、一方どのwasmストアも呼び出しごとにUTF-8エンコード＋境界越え＋線形メモリからのコピーアウトを払います——その天井が約2–3 M ops/sで、kevyはローダーのステージング最適化（永続スクラッチバッファ、<code>encodeInto</code>、キャッシュ済みメモリビュー——素朴なローダー比2.2倍）の後、その近く（1.7–2.1 M）に座っています。kevyが勝つのは、localStorageがどんな速度でもできないことすべてです。バイナリ値、TTL、カウンタ、スキャン、5 MB超のデータセット、pub/sub、そしてノンブロッキングな永続化。</li><li><b>タブ間RTT</b>は64 KBペイロードでstorageイベントハックに勝ち（p50 0.295 ms対0.335 ms）、1 KB未満では約0.105 msのタスクホップ床で並びます——一方storageイベントハックは遅い消費者の下でフレームを落とし、文字列限定で、pingのたびにディスククォータへ書き込みます。</li></ul>
+<h2 id="rustの顔wasiエッジランタイム直接組み込み">Rustの顔——WASI、エッジランタイム、直接組み込み</h2>
+<p>エンジンそのもの——<code>kevy-embedded</code>とその依存クロージャ（<code>kevy-store</code>、<code>kevy-persist</code>、<code>kevy-hash</code>、<code>kevy-bytes</code>、<code>kevy-map</code>、<code>kevy-resp</code>）——は両方のwasmターゲットでビルドでき、CIがこのリスト全体＋<code>kevy-wasm</code>をプッシュごとにゲートします。ネットワークリアクタのクレート（<code>kevy-rt</code>、<code>kevy-sys</code>、<code>kevy-uring</code>）は意図的にクロージャの外に置かれ、wasmビルドはクリーンに保たれます。</p>
+<div class="tbl"><table><thead><tr><th>ターゲット</th><th>コマンド</th><th>備考</th></tr></thead><tbody><tr><td><code>wasm32-unknown-unknown</code></td><td><code>cargo build -p kevy-wasm --target wasm32-unknown-unknown --release</code></td><td>ブラウザ成果物（<code>kevy_wasm.wasm</code>）。npmローダーがこれをインスタンス化する。独自ホストならC ABIを直接叩く。</td></tr><tr><td><code>wasm32-unknown-unknown</code>（Rust API）</td><td><code>cargo build -p kevy-embedded --target wasm32-unknown-unknown</code></td><td>スレッドなし・OSクロックなし。<code>Config::with_ttl_reaper_manual()</code>で開き、<code>set_clock_ns</code>／<code>set_wall_clock_ms</code>を供給し、ホストのループから<code>Store::tick()</code>を呼ぶ。</td></tr><tr><td><code>wasm32-wasip1</code></td><td><code>cargo build -p kevy-embedded --target wasm32-wasip1</code></td><td><code>Instant</code>／<code>SystemTime</code>が動く——クロック供給は不要。<code>std::fs</code>はpreopenしたディレクトリに対して動くので、<code>Config::with_persist("/data")</code>＋<code>wasmtime --dir=/data</code>で本物のAOF永続性が得られる。スレッドは依然ないので手動リーパーのまま。</td></tr></tbody></table></div>
+<p><code>wasm32-unknown-unknown</code>でのRust直接組み込み：</p>
+<figure class="code"><pre><code class="lang-rust">use kevy_embedded::{Config, Store, set_clock_ns, set_wall_clock_ms};
+
+let store = Store::open(Config::default().with_ttl_reaper_manual())?;
+
+// Host feeds the clock before time-sensitive work…
+set_clock_ns(now_ms_from_host().saturating_mul(1_000_000));
+set_wall_clock_ms(now_ms_from_host());
+
+store.set(b"hello", b"world")?;
+let v = store.get(b"hello")?;   // Some(b"world".to_vec())
+
+// …and drives expiry at its own cadence:
+let _stats = store.tick();</code></pre></figure>
+<p>エラーは<code>KevyResult</code>／<code>KevyError</code>で、argvスタイルの書き込みメソッドは借用スライスを取ります。ネイティブとまったく同じです——<a href="https://docs.rs/kevy-embedded"><code>kevy-embedded</code></a>のドキュメントを参照してください。</p>
+<p>Cloudflare Workersなどのエッジアイソレートはブラウザのレシピに従います。アイソレートごとに1インスタンス、クロックソースは<code>Date.now()</code>、<code>tick()</code>は遅延実行かスケジュールされたハンドラから。アイソレート再起動をまたぐ永続性には、ハンドラからプラットフォームの永続ストアへ書き込みをミラーします（AOFポンプがフレームをくれます）。アイソレートの内側では、kevyがホットなインメモリ層です。</p>
+<h2 id="faq">FAQ</h2>
+<p><b>ブラウザでフルのコマンド面は動きますか？</b> npmパッケージが公開するのはKV＋TTL＋カウンタ＋スキャン＋pub/subの切り出しです——ブラウザのストアに必要な面を、意図的に小さく保っています（wasmモジュールは非圧縮で約425 KB）。wasmターゲット上のRust APIは、コンパイル時に有効化した<code>kevy-embedded</code>フィーチャーの全面を公開します。</p>
+<p><b>永続化されたデータはポータブルですか？</b> はい——標準のkevy AOFです。ブラウザ→ネイティブも、ネイティブ→ブラウザも、どちらもリプレイできます。フォーマット契約は<a href="../persistence/">persistence.md</a>を参照してください。</p>
+<p><b>共有メモリスレッド（<code>+atomics</code>）は？</b> 同梱モジュールはシングルスレッドで、これはブラウザ系のすべてのターゲットに合致します。ホストがスレッドを提供する場所ではエンジンはスレッドセーフですが、手動<code>tick()</code>モデルがサポートされるパスのままです。</p>
+<p><b>BroadcastChannelではなくSharedWorkerは？</b> 単一オーナーのSharedWorkerトポロジは理論上はきれいですが、利用可能な範囲が狭い（特にAndroid Chromeに不在）。BroadcastChannelブリッジが、同じ実測レイテンシ級のまま互換性で勝ちました。</p>
+<p><b>なぜwasm-bindgenを使わないのですか？</b> kevyはサーバーも組み込みもブラウザも、サードパーティ依存ゼロで出荷します。バインディングジェネレータはビルド時依存になり、境界レイアウトの所有権を持ってしまいます。手書きのABIなら、契約は明示的で、バージョン付きで、監査可能なままです。</p></main>
+  <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#クイックスタートブラウザ">クイックスタート（ブラウザ）</a></li><li class="l2"><a href="#ローダーapi">ローダーAPI</a></li><li class="l2"><a href="#バインディングの仕組みwasm-bindgen不使用">バインディングの仕組み（wasm-bindgen不使用）</a></li><li class="l2"><a href="#永続化ネイティブkevyとバイト互換の本物のログ">永続化——ネイティブkevyとバイト互換の本物のログ</a></li><li class="l2"><a href="#タブ間pubsub">タブ間pub/sub</a></li><li class="l2"><a href="#クロックtickttl">クロック、tick、TTL</a></li><li class="l2"><a href="#パフォーマンス">パフォーマンス</a></li><li class="l2"><a href="#rustの顔wasiエッジランタイム直接組み込み">Rustの顔——WASI、エッジランタイム、直接組み込み</a></li><li class="l2"><a href="#faq">FAQ</a></li></ul></aside>
+</div>
+
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

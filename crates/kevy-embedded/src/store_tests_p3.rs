@@ -1,4 +1,4 @@
-//! Tests for the Phase 3 mailrs-feedback P1 round-out ops in `ops_p3.rs`.
+//! Tests for the consumer-feedback round-out ops in `ops_p3.rs`.
 
 use std::time::Duration;
 

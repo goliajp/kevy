@@ -21,6 +21,7 @@ unsafe extern "C" {
     pub fn getsockname(fd: c_int, addr: *mut c_void, addrlen: *mut u32) -> c_int;
     pub fn getpeername(fd: c_int, addr: *mut c_void, addrlen: *mut u32) -> c_int;
     pub fn read(fd: c_int, buf: *mut c_void, count: usize) -> isize;
+    pub fn recv(fd: c_int, buf: *mut c_void, count: usize, flags: c_int) -> isize;
     pub fn write(fd: c_int, buf: *const c_void, count: usize) -> isize;
     pub fn close(fd: c_int) -> c_int;
     // Variadic in C; we only ever pass a single int arg (F_GETFL/F_SETFL).
@@ -33,7 +34,7 @@ unsafe extern "C" {
     // `c_char = i8` continue to type-check.
     pub fn unlink(path: *const c_char) -> c_int;
     pub fn chmod(path: *const c_char, mode: u32) -> c_int;
-    // v1.39 — signal(2) for SIGTERM / SIGINT handling. Variadic-ish
+    // signal(2) for SIGTERM / SIGINT handling. Variadic-ish
     // in glibc but the fixed two-arg form is universally supported.
     pub fn signal(
         signum: c_int,
@@ -62,6 +63,16 @@ pub struct Kevent {
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 unsafe extern "C" {
+    // sysctlbyname(3) — the memory-bound auto-probe (`hw.memsize`) for
+    // the tiering budget's `auto` form. Same
+    // hand-written-binding rule as everything else in this file.
+    pub fn sysctlbyname(
+        name: *const c_char,
+        oldp: *mut c_void,
+        oldlenp: *mut usize,
+        newp: *mut c_void,
+        newlen: usize,
+    ) -> c_int;
     pub fn kqueue() -> c_int;
     pub fn kevent(
         kq: c_int,
@@ -76,7 +87,7 @@ unsafe extern "C" {
 // `struct epoll_event` is `__attribute__((packed))` only on x86_64; on every
 // other arch it is naturally aligned (8-byte `data` after 4-byte `events`,
 // with 4 bytes of padding). Match the kernel ABI exactly.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 #[repr(C)]
 #[cfg_attr(target_arch = "x86_64", repr(packed))]
 pub struct EpollEvent {
@@ -84,7 +95,7 @@ pub struct EpollEvent {
     pub data: u64,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 unsafe extern "C" {
     pub fn epoll_create1(flags: c_int) -> c_int;
     pub fn epoll_ctl(epfd: c_int, op: c_int, fd: c_int, event: *mut EpollEvent) -> c_int;

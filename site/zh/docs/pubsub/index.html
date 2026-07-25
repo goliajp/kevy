@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pub/sub — kevy</title>
+<meta name="description" content="本文讲 kevy 里发布者如何把消息扇出给多个订阅者——既可以走网络用 PUBLISH / SUBSCRIBE，也可以通过嵌入式 Store 在进程内完成，还可以走 kevy-client 其余部分共用的那套 URL 门面。">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../zh/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../../zh/docs/" aria-current="page">文档</a>
+      <a href="../../../zh/docs/commands/">命令</a>
+      <a href="../../../zh/benchmarks/">基准</a>
+      <a href="../../../zh/play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../../zh/docs/search-index.json" data-root="../../../zh/">
+        <input type="search" placeholder="搜索文档……" aria-label="搜索文档……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../../docs/pubsub/">EN</a><a href="../../../zh/docs/pubsub/" aria-current="page">中文</a><a href="../../../ja/docs/pubsub/">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell has-toc">
+  <aside class="side"><p class="side-h">上手</p><ul><li><a href="../../../zh/docs/designing-on-kevy/">在 kevy 上设计应用</a></li><li><a href="../../../zh/docs/cookbook/">RDS→kevy 建模 cookbook</a></li><li><a href="../../../zh/docs/persistence/">持久化</a></li><li><a href="../../../zh/docs/tuning/">调优 kevy</a></li></ul><p class="side-h">运行</p><ul><li><a href="../../../zh/docs/replication/">复制</a></li><li><a href="../../../zh/docs/availability/">可用性</a></li><li><a href="../../../zh/docs/cluster/">集群</a></li><li><a href="../../../zh/docs/tiering/">透明分层存储（[tiering] / with_tier_budget）</a></li><li><a href="../../../zh/docs/accept-shards/">--accept-shards N——把稀疏连接收拢到部分 shard 上</a></li><li><a href="../../../zh/docs/uds/">Unix-domain socket（UDS）传输</a></li><li><a href="../../../zh/docs/async/">异步客户端</a></li></ul><p class="side-h">数据</p><ul><li><a href="../../../zh/docs/indexes/">二级索引（IDX. / idx_）</a></li><li><a href="../../../zh/docs/tables/">表（TABLE. / table_）</a></li><li><a href="../../../zh/docs/vector-search/">向量检索（KIND ann）</a></li><li><a href="../../../zh/docs/text-search/">全文检索（KIND text）</a></li><li><a href="../../../zh/docs/views/">视图（VIEW. / view_）</a></li><li><a href="../../../zh/docs/cdc/">CDC——变更流（FEED. / changes_since）</a></li><li><a href="../../../zh/docs/pubsub/" aria-current="page">Pub/sub</a></li><li><a href="../../../zh/docs/lua/">Lua 脚本</a></li></ul><p class="side-h">嵌入</p><ul><li><a href="../../../zh/docs/wasm/">kevy 上 WebAssembly</a></li><li><a href="../../../zh/docs/embedded-listener/">Embedded 只读 RESP listener</a></li><li><a href="../../../zh/docs/iot/">kevy 跑在 IoT 设备上</a></li></ul><p class="side-h">参考</p><ul><li><a href="../../../zh/docs/error-replies/">错误回复目录</a></li><li><a href="../../../zh/docs/rds-workloads/">在 kevy 上跑 RDS 负载</a></li><li><a href="../../../zh/docs/migration/">迁移——playbook 与工具链</a></li><li><a href="../../../zh/docs/UPGRADING/">升级 kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../zh/docs/commands/">全部 188 个命令</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>Pub/sub</h1></div>
+<p>本文讲 kevy 里发布者如何把消息扇出给多个订阅者——既可以走网络用 <code>PUBLISH</code> / <code>SUBSCRIBE</code>，也可以通过嵌入式 <code>Store</code> 在进程内完成，还可以走 <code>kevy-client</code> 其余部分共用的那套 URL 门面。</p>
+<h2 id="何时需要">何时需要</h2>
+<p>当一个写入方需要*马上*通知零个或多个读取方，而且不在乎读取方离线期间发布的消息时，pub/sub 就是合适的工具：</p>
+<ul><li>“通知每个 web worker 刷新自己的配置缓存。”</li><li>“把某个 shard 刚写入的行，流式推给所有正在跟读的人。”</li><li>“任务一到就唤醒 worker 池；任务本身放在 list 里。”</li><li>“开发场景：生产者线程和消费者线程跑在同一个二进制里，不用另起一台 Redis。”</li></ul>
+<p>如果交接必须耐久（带重试的任务队列、跨重启的扇出、消息重放），请改用 list 或 stream——哪些内容会落盘，见 <a href="../persistence/"><code>docs/persistence.md</code></a>。</p>
+<h2 id="核心思路">核心思路</h2>
+<p>pub/sub 频道就是一个名字。订阅者在这个名字（或一个 glob 模式）上登记兴趣；向同名频道发布时，系统遍历订阅者索引，给每个匹配的订阅者入队一份消息体。这里没有 broker 队列、没有离线缓冲、没有 ack——发布那一刻没人在听，消息就没了。</p>
+<figure class="code"><pre><code>                   publish("news", body)
+                          |
+                          v
+             +-----------------------+
+             |  channel "news"       |   &lt;- per-channel subscriber index
+             |  subscribers: [A,B,C] |
+             +-----------------------+
+                  |       |       |
+                  v       v       v
+               sub A   sub B   sub C    &lt;- each gets its own copy</code></pre></figure>
+<p>内部实现上，每次 publish 只构建一次协议帧，把消息体包进 <code>Arc</code>，再用 <code>writev</code> 分散写给每个匹配的 TCP 订阅者——所以无论扇出多宽，消息体字节的额外拷贝次数都是<b>零</b>。同一份每频道索引同时服务着服务器连接和进程内的 <code>Subscription</code> 句柄。</p>
+<h2 id="实际示例">实际示例</h2>
+<h3 id="用-redis-cli-冒烟测试">用 <code>redis-cli</code> 冒烟测试</h3>
+<p>对着一台运行中的 kevy 服务器开两个 shell：</p>
+<figure class="code"><pre><code class="lang-sh"># shell 1 — subscriber
+$ redis-cli -p 6379 SUBSCRIBE news
+Reading messages... (press Ctrl-C to quit)
+1) "subscribe"
+2) "news"
+3) (integer) 1</code></pre></figure>
+<figure class="code"><pre><code class="lang-sh"># shell 2 — publisher
+$ redis-cli -p 6379 PUBLISH news "hello"
+(integer) 1   # one subscriber received it</code></pre></figure>
+<p>回到 shell 1：</p>
+<figure class="code"><pre><code>1) "message"
+2) "news"
+3) "hello"</code></pre></figure>
+<p>对没有订阅者的频道执行 <code>PUBLISH</code>，返回 <code>(integer) 0</code>，消息直接丢弃。契约就是这样——不会有“我们尝试投递过”之类的信号。</p>
+<h3 id="rust-走-url-门面kevy-client">Rust 走 URL 门面——<code>kevy-client</code></h3>
+<p>同一套调用形态，既能打 TCP 服务器，也能打命名的进程内总线，还能打持久化的进程内 store；换个 URL 重新编译就行，调用点不需要 <code>match scheme { … }</code>。</p>
+<figure class="code"><pre><code class="lang-rust">use kevy_client::{Connection, Subscriber, PubsubEvent};
+
+fn run(url: &amp;str) -&gt; kevy_client::KevyResult&lt;()&gt; {
+    // Open a subscriber against `news`. The first frame the bus
+    // hands back is the subscribe ack; drain it before asserting
+    // on bodies.
+    let mut sub = Subscriber::connect_channels(url, &amp;[b"news"])?;
+    let _ack = sub.recv()?;
+
+    let mut conn = Connection::connect(url)?;
+    let received = conn.publish(b"news", b"hello")?;
+    assert_eq!(received, 1);
+
+    match sub.recv()? {
+        PubsubEvent::Message { channel, payload } =&gt; {
+            assert_eq!(channel, b"news");
+            assert_eq!(payload, b"hello");
+        }
+        other =&gt; panic!("unexpected frame: {other:?}"),
+    }
+    Ok(())
+}
+
+// Dev:  in-process shared bus by name.
+run("mem://app")?;
+// Prod: real TCP server.
+run("kevy://prod-cache:6379")?;
+# Ok::&lt;(), kevy_client::KevyError&gt;(())</code></pre></figure>
+<p>跨线程用法就是同一份代码：在不同线程里对同一个 URL 各开一个 <code>Subscriber</code> 和一个 <code>Connection</code>——<code>mem://&lt;name&gt;</code> 注册表会把同一条底层总线交给两端，生产者线程调 <code>Connection::publish</code>，消费者线程阻塞在 <code>sub.recv()</code> 上。</p>
+<h3 id="进程内直连kevy-embedded">进程内直连：<code>kevy-embedded</code></h3>
+<p>嵌入方代码手里已经有 <code>Store</code> 时，可以跳过 URL 这层间接，直接跟总线打交道：</p>
+<figure class="code"><pre><code class="lang-rust">use kevy_embedded::{Config, PubsubFrame, Store};
+
+let store = Store::open(Config::default().with_ttl_reaper_manual())?;
+
+// Subscriber owns the receive queue.
+let sub = store.subscribe(&amp;[b"jobs"]);
+let _ack = sub.recv()?; // PubsubFrame::Subscribe
+
+// Any clone of `store` reaches the same bus.
+let writer = store.clone();
+assert_eq!(writer.publish(b"jobs", b"compute-pi"), 1);
+
+match sub.recv()? {
+    PubsubFrame::Message { channel, payload } =&gt; {
+        assert_eq!(channel, b"jobs");
+        assert_eq!(payload, b"compute-pi");
+    }
+    other =&gt; panic!("unexpected frame: {other:?}"),
+}
+# Ok::&lt;(), kevy_embedded::KevyError&gt;(())</code></pre></figure>
+<p><code>Store::clone</code> 很便宜（只是 <code>Arc</code> 引用计数加一），所以常见写法是给每个线程发一份 <code>store.clone()</code>，需要时各自 <code>publish</code> 或 <code>subscribe</code>。订阅者 drop 时会原子地注销；消费者线程即使 panic，也不会在索引里留下僵尸条目。</p>
+<h3 id="模式订阅">模式订阅</h3>
+<p><code>PSUBSCRIBE</code> 注册一个 glob，凡是匹配它的频道上的消息都会收到。glob 语法——<code>*</code>、<code>?</code>、<code>[abc]</code>——和 <code>KEYS</code>、<code>SCAN</code> 用的是同一个匹配器。</p>
+<figure class="code"><pre><code class="lang-rust">use kevy_client::{Connection, Subscriber, PubsubEvent};
+
+let mut sub = Subscriber::connect("mem://signals")?;
+sub.psubscribe(&amp;[b"news.*"])?;
+let _ack = sub.recv()?;            // PubsubEvent::Psubscribe
+
+let mut conn = Connection::connect("mem://signals")?;
+conn.publish(b"news.tech", b"breaking")?; // matches
+conn.publish(b"weather",   b"sunny")?;    // does NOT match
+
+match sub.recv()? {
+    PubsubEvent::Pmessage { pattern, channel, payload } =&gt; {
+        assert_eq!(pattern, b"news.*");
+        assert_eq!(channel, b"news.tech");
+        assert_eq!(payload, b"breaking");
+    }
+    other =&gt; panic!("unexpected frame: {other:?}"),
+}
+# Ok::&lt;(), kevy_client::KevyError&gt;(())</code></pre></figure>
+<p>同一个订阅者如果既订阅了某频道，<b>又</b>订阅了能匹配该频道的模式，就会收到<b>两份</b>消息——一份 <code>Message</code>，一份 <code>Pmessage</code>。发布时的去重只压掉“同一个 <code>Subscription</code> 在同一频道索引里出现两次”这种重复，不会去掉频道订阅与模式订阅的重叠。</p>
+<h2 id="keyspace-通知">Keyspace 通知</h2>
+<p>kevy 能以 Redis 风格把键空间变更广播到 pub/sub 上：对 <code>user:42</code> 的一次写入会触发 <code>__keyspace@0__:user:42</code>（载荷 = 事件名，如 <code>set</code>）和/或 <code>__keyevent@0__:set</code>（载荷 = key）。kevy 只服务 DB 0，所以频道名永远带 <code>@0</code>。</p>
+<p>默认关闭——flag 串为空时，每笔写只付一次原子读然后跳过。在配置文件里开启：</p>
+<figure class="code"><pre><code class="lang-toml">[notification]
+notify_keyspace_events = "KEA"   # 全部事件,双频道</code></pre></figure>
+<p>flag 串遵循 Redis 约定——先频道、后事件类：</p>
+<div class="tbl"><table><thead><tr><th>flag</th><th>含义</th></tr></thead><tbody><tr><td><code>K</code></td><td>在 <code>__keyspace@0__:&lt;key&gt;</code> 频道发布</td></tr><tr><td><code>E</code></td><td>在 <code>__keyevent@0__:&lt;event&gt;</code> 频道发布</td></tr><tr><td><code>g</code></td><td>通用命令——<code>DEL</code>、<code>EXPIRE</code>、<code>PERSIST</code>、<code>RENAME</code>……</td></tr><tr><td><code>$</code></td><td>字符串命令——<code>SET</code>、<code>INCR</code>、<code>APPEND</code>、<code>MSET</code>……</td></tr><tr><td><code>l</code></td><td>列表命令</td></tr><tr><td><code>s</code></td><td>集合命令</td></tr><tr><td><code>h</code></td><td>哈希命令</td></tr><tr><td><code>z</code></td><td>有序集合命令</td></tr><tr><td><code>t</code></td><td>stream 命令——<code>XADD</code>、<code>XTRIM</code>、<code>XGROUP</code>……</td></tr><tr><td><code>x</code></td><td><code>expired</code> 事件——带 TTL 的 key 被移除（访问时惰性移除或由清扫器移除）</td></tr><tr><td><code>e</code></td><td><code>evicted</code> 事件——key 被 <code>maxmemory</code> 压力逐出</td></tr><tr><td><code>n</code></td><td><code>new</code> 事件——键空间新增了一个 key</td></tr><tr><td><code>A</code></td><td><code>g$lshztxe</code> 的别名（除 <code>n</code> 外的全部事件类，与 Redis 一致）</td></tr></tbody></table></div>
+<p><code>K</code>/<code>E</code> 至少设一个、事件类至少设一个，才会有任何事件触发。串里出现未知字符是<b>启动期配置错误</b>——打错的 flag 串会被拒绝准入，而不是静默丢事件。用普通模式订阅即可接收：</p>
+<figure class="code"><pre><code class="lang-sh">redis-cli -p 6379 PSUBSCRIBE '__keyevent@0__:*'</code></pre></figure>
+<p>通知投递与本页其他一切共用同一条 at-most-once pub/sub 总线：发布瞬间没有订阅者，事件就没了。绝不能漏变更的消费者应该上 CDC feed（<a href="../cdc/"><code>docs/cdc.md</code></a>）——它有游标、可重放；keyspace 通知是「叫醒」信号，不是账本。</p>
+<h2 id="url-后端表">URL 后端表</h2>
+<div class="tbl"><table><thead><tr><th>URL</th><th>后端 store</th><th>多次 open 是否共享？</th><th>是否跨进程可见？</th></tr></thead><tbody><tr><td><code>mem://</code></td><td>进程内，匿名</td><td><b>否</b>——每次 open 都是全新的 <code>Store</code></td><td>否</td></tr><tr><td><code>mem://&lt;name&gt;</code></td><td>进程内，命名注册表</td><td><b>是</b>——同一 <code>&lt;name&gt;</code> ⇒ 同一 <code>Store</code></td><td>否</td></tr><tr><td><code>file:///abs/path</code></td><td>进程内 + AOF/快照</td><td><b>是</b>——同一路径 ⇒ 同一 <code>Store</code>，且持久化</td><td>否</td></tr><tr><td><code>kevy://host[:port][/db]</code></td><td>TCP kevy 服务器</td><td>每次 open 一条 socket；扇出在服务端完成</td><td><b>是</b></td></tr><tr><td><code>redis://host[:port][/db]</code></td><td>TCP——<code>kevy://</code> 的别名</td><td>同上</td><td><b>是</b></td></tr><tr><td><code>tcp://host[:port]</code></td><td>TCP——原始连接，不带前置 <code>SELECT</code></td><td>同上</td><td><b>是</b></td></tr></tbody></table></div>
+<p>匿名 <code>mem://</code> 收不到发布的消息——别的代码根本够不到同一个底层 <code>Store</code>，所以 <code>Subscriber::connect_channels</code> 会以 <code>KevyError::Unsupported</code> 拒绝它。只要打算发布，就用 <code>mem://&lt;some-name&gt;</code>。</p>
+<p><code>rediss://</code>、<code>kevys://</code> 和 <code>redis://user:pass@…</code> 被拒绝也是同一个原因：kevy 不带 TLS，也不带 <code>AUTH</code>。需要这两样时，在网络边界用 stunnel 加 IP allowlist 把 socket 挡在前面。</p>
+<p><code>mem://&lt;name&gt;</code> 和 <code>file:///</code> 的注册表都是<b>进程级</b>的：两个互不相干的 OS 进程打开同一个名字，看到的是两条彼此独立的总线。要跨进程投递，就得跑一台 kevy 服务器，两边都连 <code>kevy://host:port</code>。</p>
+<h2 id="取舍与限制">取舍与限制</h2>
+<ul><li><b>至多一次投递。</b> 订阅者在一帧投递中途断线，那一帧就丢了。既没有每订阅者的耐久游标，也没有重投。某一帧要是丢不起，就把它持久化到 list 或 stream 里，pub/sub 只当“叫醒”信号用。</li><li><b>没有离线 backlog。</b> 发布时一个订阅者都没有，调用返回 <code>0</code>，消息体直接丢弃。没有任何缓冲区能帮订阅者补上断线期间错过的消息。</li><li><b>订阅者反压是按订阅者算的，不是全局的。</b> 每个订阅者各有一条有界队列。慢消费者填满的是自己的队列，之后开始丢帧；TCP 场景下则会被服务器的客户端输出缓冲策略断开。发布路径在发送之前就释放了总线锁，所以一个慢的监听者拖不慢其他频道上的发布——但反过来，它也没法对发布者施加反压。</li><li><b>Linux <code>writev</code> 上限。</b> Linux 上一次 <code>writev</code> 最多向内核递交 <code>IOV_MAX = 1024</code> 个 iovec。服务器会把每订阅者的帧头和共享的消息体 Arc 打包成 iovec；单频道扇出超过约 340 个订阅者时（每个订阅者占三个 iovec 槽），服务器会自动拆成多次 <code>writev</code>。这个上限只会表现为软性的性能天花板，绝不会造成投递失败。</li><li><b>订阅中的客户端受限。</b> <code>Subscriber</code> 连接会拒绝非 pub/sub 命令；这正是 <code>kevy-client</code> 把发布者和订阅者拆成<b>两个独立类型</b>、共用同一个 URL 的原因。</li></ul>
+<h2 id="运维内省">运维内省</h2>
+<p>标准的 <code>PUBSUB</code> 管理子命令在 TCP 服务器和 URL 门面上都能用——调用时开一条普通 <code>Connection</code>，不要用 <code>Subscriber</code>。</p>
+<div class="tbl"><table><thead><tr><th>子命令</th><th>返回</th></tr></thead><tbody><tr><td><code>PUBSUB CHANNELS [pat]</code></td><td>至少有一个订阅者的频道数组，可选 glob 过滤。</td></tr><tr><td><code>PUBSUB NUMSUB [ch …]</code></td><td>每个指定频道的 <code>channel, count</code> 交错对（频道不存在时计数为 0）。</td></tr><tr><td><code>PUBSUB NUMPAT</code></td><td>整数：全体客户端注册的不同 <code>PSUBSCRIBE</code> 模式总数。</td></tr></tbody></table></div>
+<figure class="code"><pre><code class="lang-sh">$ redis-cli -p 6379 PUBSUB CHANNELS '*'
+1) "news"
+2) "jobs"
+$ redis-cli -p 6379 PUBSUB NUMSUB news jobs missing
+1) "news"
+2) (integer) 3
+3) "jobs"
+4) (integer) 1
+5) "missing"
+6) (integer) 0
+$ redis-cli -p 6379 PUBSUB NUMPAT
+(integer) 2</code></pre></figure>
+<p>三个子命令都只是对每 shard 的 pub/sub 注册表做 O(channels) 或 O(args) 的点查；监控代理放心轮询。</p>
+<h2 id="faq">FAQ</h2>
+<p><b>订阅者在发布之后才连上，还能收到那条消息吗？</b> 收不到。pub/sub 没有回放：订阅者索引在发布那一刻查询，后来的订阅者只能看到自己的订阅 ack 落地*之后*发布的帧。</p>
+<p><b><code>PUBLISH</code> 会阻塞发布者，直到订阅者把消息消费完吗？</b> 不会。消息体入队到每个匹配订阅者各自的队列（TCP 订阅者还会排进 socket 的写队列）之后，<code>publish</code> 调用就返回了。慢订阅者堵的是它自己的队列，堵不到你。</p>
+<p><b>能在多个 async 任务之间共享一个 <code>Subscriber</code> 吗？</b> 能——用 <code>Arc</code> 包起来，把 <code>recv</code> 调用放进 <code>spawn_blocking</code>。接收侧的互斥锁会把阻塞等待串行化，所以每一帧<b>恰好</b>交给一个任务。想要真正的广播扇出（每个任务都看到每一帧），就给每个任务各开一个 <code>Subscriber</code>——开销很小。完整的 async 模式见 <a href="../async/"><code>docs/async.md</code></a>。</p>
+<p><b>为什么我的测试总是先收到 subscribe ack，才收到消息？</b> 总线是有序的，而每次 <code>SUBSCRIBE</code> / <code>PSUBSCRIBE</code> 都会先入队一帧 ack，该频道的第一帧消息体在它之后才会到。先用一次 <code>sub.recv()?</code> 把 ack 取掉，再对载荷做断言——这和 redis-cli 的线上行为一致。</p>
+<p><b>pub/sub 需要集群路由吗？</b> 不需要。pub/sub 的扇出在进程层面完成，不走 slot 路由：向任意 shard 端口发布，同一进程内所有 shard 端口上的订阅者都能收到。随便挑一个 shard 端口做普通的 <code>Connection::connect("kevy://host:port")</code> 就行。*键空间*命令用的 slot 路由见 <a href="../cluster/"><code>docs/cluster.md</code></a>。</p></main>
+  <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#何时需要">何时需要</a></li><li class="l2"><a href="#核心思路">核心思路</a></li><li class="l2"><a href="#实际示例">实际示例</a></li><li class="l3"><a href="#用-redis-cli-冒烟测试">用 redis-cli 冒烟测试</a></li><li class="l3"><a href="#rust-走-url-门面kevy-client">Rust 走 URL 门面——kevy-client</a></li><li class="l3"><a href="#进程内直连kevy-embedded">进程内直连：kevy-embedded</a></li><li class="l3"><a href="#模式订阅">模式订阅</a></li><li class="l2"><a href="#keyspace-通知">Keyspace 通知</a></li><li class="l2"><a href="#url-后端表">URL 后端表</a></li><li class="l2"><a href="#取舍与限制">取舍与限制</a></li><li class="l2"><a href="#运维内省">运维内省</a></li><li class="l2"><a href="#faq">FAQ</a></li></ul></aside>
+</div>
+
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

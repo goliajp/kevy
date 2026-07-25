@@ -6,6 +6,8 @@
 #   2. Import throughput ≥ 200k cmd/s (pipelined, localhost).
 #   3. kill -9 mid-import → --resume completes → digest still equal.
 #   4. delete-prefix --rate accuracy within ±20%.
+#   5. MOVE-SCOPE stream slice: entries + consumer group + PEL + TTL
+#      survive an operator prefix migration between two writers.
 #
 # Usage: bash bench/onrampgate.sh
 set -u
@@ -40,7 +42,10 @@ s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 buf = [b""]
 def rd():
     while b"\r\n" not in buf[0]:
-        buf[0] += s.recv(1 << 20)
+        _chunk = s.recv(1 << 20)
+        if not _chunk:
+            raise AssertionError('server closed the connection mid-reply')
+        buf[0] += _chunk
     l, _, rest = buf[0].partition(b"\r\n")
     buf[0] = rest
     return l
@@ -131,4 +136,66 @@ if [ "$OK" != "1" ]; then
     echo "onrampgate: FAIL — rate accuracy off (${SECS}s for 20s of work)"
     exit 1
 fi
+
+# ---- clamp 5: MOVE-SCOPE stream slice (entries + group + PEL + TTL) ----
+PC=7073
+PD=7074
+# `scopes` is not decoration: MOVE-SCOPE refuses to run without a
+# declared ownership table, because the dispatch write-quiesce gate only
+# consults the migration table when one exists — without it the move
+# ships while local writes keep landing. That precondition arrived with
+# the v4 pre-release audit (fc049b5b, 2026-07-12) and this gate was not
+# updated, so it has been failing at this clamp ever since. It is not in
+# CI, which is why nobody saw it.
+cat > "$DIR/scope-c.toml" <<EOF
+[cluster]
+node_id = "C"
+peers = "C@127.0.0.1:17073:$PC,D@127.0.0.1:17074:$PD"
+scopes = "mv:=C"
+EOF
+env KEVY_BIND=127.0.0.1 $KEVY --threads 1 --port $PC --dir "$DIR/c" --no-aof --config "$DIR/scope-c.toml" >/dev/null 2>&1 &
+SC=$!
+env KEVY_BIND=127.0.0.1 $KEVY --threads 1 --port $PD --dir "$DIR/d" --no-aof >/dev/null 2>&1 &
+SD=$!
+trap 'kill $SA $SB $SC $SD 2>/dev/null; rm -rf "$DIR"' EXIT
+sleep 1.2
+python3 - "$PC" "$PD" <<'PYEOF' || { echo "onrampgate: FAIL — MOVE-SCOPE stream clamp"; exit 1; }
+import socket, sys, time
+def enc(*parts):
+    buf = b"*%d\r\n" % len(parts)
+    for p in parts:
+        if isinstance(p, str):
+            p = p.encode()
+        buf += b"$%d\r\n%s\r\n" % (len(p), p)
+    return buf
+def conn(port):
+    s = socket.create_connection(("127.0.0.1", port), timeout=10)
+    s.settimeout(10)
+    return s
+def cmd(s, *parts):
+    s.sendall(enc(*parts))
+    time.sleep(0.05)
+    return s.recv(1 << 20)
+src, dst = conn(int(sys.argv[1])), conn(int(sys.argv[2]))
+for i in range(1, 51):
+    assert cmd(src, "XADD", "mv:st", f"{i}-1", "f", f"v{i}").startswith(b"$"), "seed XADD"
+assert cmd(src, "XDEL", "mv:st", "50-1") == b":1\r\n", "seed XDEL"
+assert cmd(src, "XGROUP", "CREATE", "mv:st", "grp", "0") == b"+OK\r\n", "seed XGROUP"
+assert cmd(src, "XREADGROUP", "GROUP", "grp", "worker", "COUNT", "3",
+           "STREAMS", "mv:st", ">").startswith(b"*"), "seed XREADGROUP"
+assert cmd(src, "PEXPIRE", "mv:st", "3600000") == b":1\r\n", "seed PEXPIRE"
+mv = cmd(src, "MOVE-SCOPE", "mv:", "FROM", "C", "TO", "D")
+assert mv.startswith(b"+OK"), f"MOVE-SCOPE failed: {mv!r}"
+rng = cmd(dst, "XRANGE", "mv:st", "-", "+")
+assert rng.startswith(b"*49\r\n"), f"target entry count: {rng[:16]!r}"
+assert b"v49" in rng, "last live entry present"
+gi = cmd(dst, "XINFO", "GROUPS", "mv:st")
+assert b"grp" in gi, f"group missing on target: {gi!r}"
+pend = cmd(dst, "XPENDING", "mv:st", "grp")
+assert pend.startswith(b"*4\r\n:3\r\n") and b"worker" in pend, f"PEL mismatch: {pend!r}"
+ttl = cmd(dst, "PTTL", "mv:st")
+assert ttl.startswith(b":") and int(ttl[1:-2]) > 0, f"TTL lost: {ttl!r}"
+print("onrampgate: MOVE-SCOPE stream slice survived (49 entries, group, 3 PEL rows, TTL)", flush=True)
+PYEOF
+
 echo "onrampgate: PASS"

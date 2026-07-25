@@ -15,8 +15,8 @@ use kevy_resp::{Argv, ArgvView, RespVersion, encode_array_len};
 impl<C: Commands> Shard<C> {
     /// Apply transaction state (queue inside MULTI), else dispatch the command.
     pub(crate) fn handle_command<A: ArgvView + ?Sized>(&mut self, conn_id: u64, args: &A) {
-        // v2.0.16: CLIENT SETNAME / CLIENT GETNAME intercept (closes
-        // v1.52.x finding). These need per-conn state which the
+        // CLIENT SETNAME / CLIENT GETNAME intercept.
+        // These need per-conn state which the
         // stateless `cmd_client` dispatch can't access; handle in-line
         // here where we already own `&mut Conn` via `self.conns`. All
         // other CLIENT subcommands fall through to the standard
@@ -63,6 +63,7 @@ impl<C: Commands> Shard<C> {
             (false, TxnKind::Multi) => {
                 if let Some(c) = self.conns.get_mut(&conn_id) {
                     c.multi = Some(Vec::new());
+                    c.multi_dirty = false;
                 }
                 self.immediate_reply(conn_id, b"+OK\r\n".to_vec());
             }
@@ -80,6 +81,7 @@ impl<C: Commands> Shard<C> {
                 // (Redis semantics — see https://redis.io/commands/discard).
                 if let Some(c) = self.conns.get_mut(&conn_id) {
                     c.multi = None;
+                    c.multi_dirty = false;
                     c.watched.clear();
                 }
                 self.immediate_reply(conn_id, b"+OK\r\n".to_vec());
@@ -89,15 +91,28 @@ impl<C: Commands> Shard<C> {
                 conn_id,
                 b"-ERR WATCH inside MULTI is not allowed\r\n".to_vec(),
             ),
-            (true, TxnKind::Other) => {
-                if let Some(q) = self.conns.get_mut(&conn_id).and_then(|c| c.multi.as_mut()) {
-                    q.push(args.to_argv());
-                }
-                self.immediate_reply(conn_id, b"+QUEUED\r\n".to_vec());
-            }
+            (true, TxnKind::Other) => self.queue_in_multi(conn_id, args),
             // (false, Other | Watch) dispatched on the early path above.
             (false, TxnKind::Other | TxnKind::Watch) => {}
         }
+    }
+
+    /// Queue one command inside an open `MULTI`. Redis validates the
+    /// verb + arity at queue time: an unknown verb or too-few args is
+    /// answered with the error (not `+QUEUED`) and poisons the
+    /// transaction so `EXEC` returns `-EXECABORT`.
+    fn queue_in_multi<A: ArgvView + ?Sized>(&mut self, conn_id: u64, args: &A) {
+        if let Some(err) = self.commands.queue_error(args) {
+            if let Some(c) = self.conns.get_mut(&conn_id) {
+                c.multi_dirty = true;
+            }
+            self.immediate_reply(conn_id, err);
+            return;
+        }
+        if let Some(q) = self.conns.get_mut(&conn_id).and_then(|c| c.multi.as_mut()) {
+            q.push(args.to_argv());
+        }
+        self.immediate_reply(conn_id, b"+QUEUED\r\n".to_vec());
     }
 
     /// Push a slot that resolves immediately to `bytes` (preserves seq order).
@@ -127,6 +142,21 @@ impl<C: Commands> Shard<C> {
     /// If the conn has any `WATCH`-ed keys, delegate to the pre-check fan-out
     /// path in [`crate::exec_watch`] (aborts if any watched key is dirty).
     fn exec_transaction(&mut self, conn_id: u64) {
+        // A command failed to queue (unknown verb / bad arity): abort
+        // the whole transaction, running nothing (Redis EXECABORT).
+        let dirty = self.conns.get(&conn_id).is_some_and(|c| c.multi_dirty);
+        if dirty {
+            if let Some(c) = self.conns.get_mut(&conn_id) {
+                c.multi = None;
+                c.multi_dirty = false;
+                c.watched.clear();
+            }
+            self.immediate_reply(
+                conn_id,
+                b"-EXECABORT Transaction discarded because of previous errors.\r\n".to_vec(),
+            );
+            return;
+        }
         let (queued, watched) = match self.conns.get_mut(&conn_id) {
             Some(c) => (
                 c.multi.take().unwrap_or_default(),
@@ -183,7 +213,7 @@ impl<C: Commands> Shard<C> {
             wake_idx,
             ..
         } = resolved;
-        // v3.14 A0: role-gated write rejection (read-only replica).
+        // Role-gated write rejection (read-only replica).
         // `seq` is already assigned by handle_command — resolve it
         // directly (immediate_reply would double-assign and wedge the
         // emit order).
@@ -192,7 +222,7 @@ impl<C: Commands> Shard<C> {
             self.fold(conn_id, seq, Part::Reply(SmallReply::from_vec(err)));
             return;
         }
-        if !is_write && let Some(err) = self.commands.read_denied() {
+        if !is_write && let Some(err) = self.commands.read_denied(args) {
             self.push_pending_slot(conn_id, 1, Agg::First(None), false);
             self.fold(conn_id, seq, Part::Reply(SmallReply::from_vec(err)));
             return;
@@ -207,13 +237,16 @@ impl<C: Commands> Shard<C> {
             Route::Unwatch => self.do_unwatch(conn_id, seq),
             Route::Hello => self.do_hello(conn_id, seq, args),
             Route::Rename { nx } => self.start_rename(conn_id, seq, args, nx),
-            // v2.3 FEED.* — parse + shard-index dispatch live in
+            Route::ListMove { from_left, to_left } => {
+                self.start_list_move(conn_id, seq, args, from_left, to_left);
+            }
+            // FEED.* — parse + shard-index dispatch live in
             // [`crate::exec_feed`] (500-LOC house rule).
             r @ (Route::FeedShards | Route::FeedTail | Route::FeedRead) => {
                 self.start_feed_route(conn_id, seq, args, &r, is_quit);
             }
             Route::Slowlog(sub) => self.start_slowlog(conn_id, seq, sub),
-            // v3.16 WAIT / REPL.WAIT — deferred all-shard barriers; own
+            // WAIT / REPL.WAIT — deferred all-shard barriers; own
             // starters (not dispatch_targets) so a parked waiter never
             // rides `xshard_inflight` (see [`crate::exec_replwait`]).
             Route::ReplWait { numreplicas, timeout_ms } => {
@@ -249,7 +282,7 @@ impl<C: Commands> Shard<C> {
                 let meta = DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8) };
                 self.start_single(conn_id, seq, proto, args, shard, is_quit, block_hint, meta);
             }
-            // v1.56: cluster conns get `-CROSSSLOT` on cross-slot multi-key
+            // Cluster conns get `-CROSSSLOT` on cross-slot multi-key
             // (MGET/MSET/SINTER/SUNION/SDIFF); else fan-out as before.
             other => self.start_multi_or_crossslot(
                 conn_id, seq, args, other, is_quit, cluster_conn,
@@ -260,7 +293,7 @@ impl<C: Commands> Shard<C> {
     // `start_single` + `try_inline_local` (and their helpers `park_blocked`
     // / `post_write_housekeeping`) live in [`crate::exec_dispatch`] —
     // same `impl<C: Commands> Shard<C>`, split out so this file stays
-    // under the 500-LOC house rule. v1.56 CROSSSLOT helpers live in
+    // under the 500-LOC house rule. CROSSSLOT helpers live in
     // [`crate::exec_crossslot`] for the same reason.
 
     /// Multi-target / aggregating command (DEL, MGET, DBSIZE, fan-outs, …).
@@ -311,6 +344,21 @@ impl<C: Commands> Shard<C> {
     /// never come through here — `start_single` pushes them straight onto
     /// `request_batch` (the hot batched lane).
     pub(crate) fn dispatch_targets(&mut self, conn_id: u64, seq: u64, targets: Vec<(usize, Op)>) {
+        // Read-your-writes across the two cross-shard lanes. Single-key
+        // forwards (SET/GET) buffer in `request_batch` and only leave the
+        // shard when `flush_requests` runs at the end of the reactor
+        // iteration; a multi-key op fans out here via the *immediate*
+        // `send_to` below. Within one connection's command stream — most
+        // visibly a queued `SET` then `MGET` inside a MULTI/EXEC — the
+        // immediate gather would otherwise reach the owning shard BEFORE
+        // the still-buffered write, reading stale (nil) state. Flushing the
+        // batched lane first sends those writes ahead of this op's requests
+        // on the same origin→peer ring (FIFO), so the peer applies the
+        // write before it serves the gather. `flush_requests` short-circuits
+        // on an empty batch, so a lone non-transactional MGET (nothing
+        // buffered) pays one predicted-not-taken branch and still fans out
+        // fully asynchronously.
+        self.flush_requests();
         for (shard, op) in targets {
             if shard == self.id {
                 let part = self.exec_op(op);
@@ -333,8 +381,8 @@ impl<C: Commands> Shard<C> {
 
     /// Flush each shard's accumulated single-key dispatch batch as one
     /// cross-core `RequestBatch`. Call once per reactor loop. The bitmap
-    /// short-circuit (D3 2026-06-20) early-returns when no shard has
-    /// pending requests. E17 tried splitting the slow body into a
+    /// short-circuit early-returns when no shard has
+    /// pending requests. An earlier attempt tried splitting the slow body into a
     /// `#[inline(never)]` helper and reverted — body is small enough
     /// that LLVM inlines it cleanly; forcing the outline added a fn
     /// call on the cross-shard hot path with no upside.
@@ -379,13 +427,13 @@ impl<C: Commands> Shard<C> {
     /// it is a *relative*-TTL write (`EXPIRE`/`PEXPIRE`/`SETEX`/`PSETEX`/
     /// `SET … EX|PX`) it appends an absolute `PEXPIREAT key <unix_ms>` derived
     /// from the key's post-exec deadline. AOF replay re-anchors a relative TTL
-    /// to restart-time — resetting every key to a fresh full TTL
-    /// (INC-2026-06-09) — so the absolute follow-up overwrites that with the
+    /// to restart-time — resetting every key to a fresh full TTL (a
+    /// production incident root cause) — so the absolute follow-up overwrites that with the
     /// original wall-clock deadline. Already-absolute writes (`EXPIREAT`/
     /// `PEXPIREAT`) replay correctly and need no follow-up.
     pub(crate) fn log_write<A: ArgvView + ?Sized>(&mut self, args: &A) {
         self.log(args);
-        // v2.4: hash field-TTL relative forms get the same absolute
+        // Hash field-TTL relative forms get the same absolute
         // follow-up discipline — `HPEXPIREAT key <abs> FIELDS …`
         // re-anchors the replay-time deadline to the original wall
         // clock. HPEXPIREAT itself is already absolute.
@@ -413,7 +461,7 @@ impl<C: Commands> Shard<C> {
         self.log(&c);
     }
 
-    /// v2.4 log_write helper: rewrite a relative `HEXPIRE`/`HPEXPIRE`
+    /// log_write helper: rewrite a relative `HEXPIRE`/`HPEXPIRE`
     /// frame's deadline as absolute unix-ms and append the canonical
     /// `HPEXPIREAT` follow-up (fields tail copied verbatim).
     fn log_hash_ttl_followup<A: ArgvView + ?Sized>(&mut self, args: &A) {

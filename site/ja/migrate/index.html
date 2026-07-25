@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Redis やデータベースから移る — kevy</title>
+<meta name="description" content="Redis や Postgres から kevy に移る理由、何が変わるのか、何を差し出すことになるのか、そして書き直しなしで移る方法。">
+<link rel="stylesheet" href="../../assets/kevy.css?v=c5c8b1de">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../ja/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../ja/docs/">ドキュメント</a>
+      <a href="../../ja/docs/commands/">コマンド</a>
+      <a href="../../ja/benchmarks/">ベンチマーク</a>
+      <a href="../../ja/play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <nav class="lang" aria-label="Language">
+        <a href="../../migrate/">EN</a>
+        <a href="../../zh/migrate/">中文</a>
+        <a href="../../ja/migrate/" aria-current="page">日本語</a>
+      </nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+<section class="band" style="border-top:0"><div>
+    <p class="eyebrow">移行</p>
+    <h1>なぜ移るのか、<br>そして何を差し出すのか</h1>
+    <p class="lede">話は 2 つあります。<b>Redis</b> から来る場合、プロトコルは同じなので、問うべきは「何の挙動が違うのか」です。<b>リレーショナルデータベース</b>から来る場合、同じものは何ひとつないので、問うべきは「ワークロードのどの部分を移すべきか」です。答えは<b>その一部</b>であり、それがどこなのかを、これから示します。</p>
+    
+  </div></section>
+<section class="band prose"><h2>Redis から移る</h2><div class="pcols"><p><b>クライアントは変わりません。</b>kevy は RESP2 と RESP3 を話し、188 個のコマンドに応答します。既存のライブラリの接続先を変えるだけで、コードもそのまま、redis-cli もそのままです。新しく覚える SDK もプロトコルもありません。</p><p><b>だから本当の問題は、何が得られるのかだけです。</b>得られるものは 4 つあります。そのどれにも価値を感じないなら、Redis に留まってください。あれは見事なソフトウェアであり、乗り換えのための乗り換えは 1 週間の浪費です。</p></div></section>
+<section class="band">
+  <div class="sec-h"><h2>具体的に、何が得られるのか</h2></div>
+  <ol class="steps"><li><h3>Redis が動けない場所で動く</h3><p>バイナリに組み込み、ブラウザのタブに配り、アロケータのない Cortex-M で起動できます。いまはそのひとつひとつに、独自の API を持つ専用のストレージ層が要ります。ここでは同じエンジン、同じコマンドです。クライアント側に 2 つ目のキャッシュを書いた経験があるなら、それが検討する理由です。</p></li><li><h3>検索サービスも置き換えられる</h3><p>セカンダリインデックス、マテリアライズドビュー、ベクトル KNN、BM25 全文検索がエンジンに入っています。モジュールでもサイドカーでもなく、元データからずれていく 2 つ目のコピーでもありません。Redis と検索クラスタを併用しているチームは、多くの場合ひとつにまとめられます。</p><pre><code># look up by a field, not just by the key
+IDX.CREATE idx:city ON PREFIX user: FIELD city TYPE str KIND range
+IDX.QUERY  idx:city EQ osaka
+
+# vectors, in the same engine, over the same keys
+IDX.CREATE idx:sem ON PREFIX doc: FIELD vec TYPE vector KIND ann DIM 768 DISTANCE cosine
+IDX.QUERY  idx:sem KNN &quot;&lt;vector&gt;&quot; LIMIT 10</code></pre></li><li><h3>すでに使っている操作が、そのまま速くなる</h3><p>同じマシンで Redis 8 に対して、GET は 1.4 倍、SET は 2.7 倍、INCR は 1.8 倍です。ただし、当てにする前に表の全体を読んでください——LPUSH と ZADD は 12% と 10% しか上回っておらず、リストやソート済みセットがホットパスなら、これは移る理由になりません。</p></li><li><h3>データセットが RAM に収まる必要が、もうない</h3><p>ストアに RAM 予算を与えると、最もコールドな値はディスク上の使い捨て value log へ退避し、アクセスされたときに戻ります——コールドキーの上でもすべてのコマンドは変わらず、追記専用ログの永続化コントラクトも無変更です。RAM が保持できるキーの数を、ディスクがデータの量を決めます。大きな値やロングテールのために「Redis と別のディスクストア」を並べる構成を、これがひとつにします。正直な限界も述べます。既定ではオフで、v1 で退避するのは文字列とハッシュ(リスト、セット、ストリームはホットのまま)、そして 64 バイト未満の値は決して退避されません——stub が値と同じ大きさになるからです。</p><pre><code># kevy.toml
+[tiering]
+budget = &quot;70%&quot;      # or &quot;4gb&quot;, or &quot;auto&quot;</code></pre></li></ol>
+</section>
+<section class="band">
+  <div class="call loss">
+    <span class="h">Redis を離れることで失うもの</span>
+    <p><b>クラスタはありません。</b>レプリカはコピーであって、シャードではありません。<b>AUTH も TLS もありません。</b>そして<b>いくつかのコマンドは挙動が違います</b>——知っておくべき筆頭は、シャードをまたぐ <code>RENAME</code> が原子的ではないこと(複数キーの書き込みは shard 単位でのみ原子的)です。どれもバグではなく、すべてコマンドごとに文書化してあります。移ると決めたあとではなく、決める前に読んでください——<a href="../../ja/docs/commands/">各コマンドの本当のコストと、本当の差異</a>。</p>
+  </div>
+</section>
+<section class="band">
+  <div class="sec-h"><h2>移行の手順——Redis から</h2></div>
+  <figure class="code"><figcaption>Redis から export し、kevy に import して、両者が一致することを確かめます。以下のコマンドは、すべて実行したものです。</figcaption><pre><code># 1. dump what you want to move. it is a RESP file — readable,
+#    diffable, and it streams rather than loading into memory.
+kevy-cli export -p 6379 --prefix user: dump.resp
+-&gt; exported 41023 keys -&gt; dump.resp
+
+# 2. load it. --strict stops on the first error rather than
+#    limping onward with a half-migrated keyspace.
+kevy-cli import -p 6380 --strict dump.resp
+-&gt; imported 82046 ok, 0 errors, offset 4108331
+
+# 3. prove they agree, rather than hoping.
+kevy-cli digest -p 6379 user:
+kevy-cli digest -p 6380 user:
+-&gt; 41023 keys 3bca92aa52269300     # the same hash, or you did not migrate
+
+# an interrupted import resumes where it stopped:
+kevy-cli import -p 6380 --resume dump.resp</code></pre></figure>
+</section>
+<section class="band prose"><h2>リレーショナルデータベースから移る</h2><div class="pcols"><p><b>データベースを移してはいけません。</b>移すのは、そもそもデータベースの問題ではなかった部分です。</p><p>セッション。レート制限。フィーチャーフラグ。ジョブキュー。すべてのリクエストが読み、誰も結合しないホットな行。たいていのアプリケーションでこれらは Postgres の中にあり、叩かれ続けているのもそこです。リレーショナルデータベースがそれらを苦手だからではありません。それらが、そもそも問い合わせではなかったからです。ただの参照です。キーは、もう分かっています。</p><p><b>Postgres には、他に並ぶもののない仕事を残してください</b>——結合、アドホックなクエリ、分析、無関係な行にまたがる本物の分離レベルを伴うトランザクション。kevy は配信の経路を引き受け、データベースに夜を返します。</p><p><b>そして、単一テーブルの配信用の読み取りも移せます。</b><code>TABLE.DECLARE</code> で型付きカラム、セカンダリインデックス、複合 <code>ORDER BY</code> パスを一度だけ宣言する——あるいは手元の PG/MySQL スキーマファイルを <code>kevy-sql</code> でコンパイルする——それだけで、1 つのテーブルの読み取りパス(インデックスされた WHERE、残りのフィルタ、ORDER BY、ページング、COUNT)が kevy のインデックスにコンパイルされます。クエリ時のプランナはありません。kevy-sql はビルド時のコンパイラであって SQL エンジンではありません。join とアドホック SQL は名前つきで拒否され、Postgres に残ります。ほとんどのアプリケーションが ORM に実際に求めているのは、その部分です。</p></div></section>
+<section class="band">
+  <div class="sec-h"><h2>どの部分を移すべきか</h2><p class="sec-lede">ワークロードごとに。赤い 3 行が、よく間違われるところです。</p></div>
+  <div class="tbl"><table><thead><tr><th>ワークロード</th><th>移すべきか</th><th>理由</th></tr></thead><tbody><tr><td>セッション、トークン</td><td class="win">はい</td><td class="num">TTL つきの、キーによる参照です。データベースは仕事としてではなく、厚意でやってくれていました。</td></tr><tr><td>レート制限、カウンタ</td><td class="win">はい</td><td class="num">期限つきの INCR は原子的で O(1) です。SQL では、最もホットな行に対する行ロックになります。</td></tr><tr><td>ジョブキュー</td><td class="win">はい</td><td class="num">リストとストリーム。コンシューマグループと、メッセージごとの確認応答があります。キュー用のテーブルは、手数の増えたロックの慣習にすぎません。</td></tr><tr><td>フィーチャーフラグ、設定</td><td class="win">はい</td><td class="num">絶えず読まれ、めったに書かれず、結合されることはありません。</td></tr><tr><td>単一テーブルの読み取り(絞り込み、順序、ページング)</td><td class="win">はい</td><td class="num">テーブルのアクセスパスを一度宣言する——あるいはスキーマファイルを <code>kevy-sql</code> でコンパイルする——だけで、インデックスされた WHERE + ORDER BY + LIMIT の読み取りは参照のままです。<a href="../../ja/use/app-store/">読みを捌く</a>を参照してください。</td></tr><tr><td>集計(件数や合計)</td><td class="win">多くの場合</td><td class="num">マテリアライズドビューが書き込みの側で最新に保つので、読むたびに計算し直す必要がありません。</td></tr><tr><td>複数テーブルにまたがる結合</td><td class="loss">移すな</td><td class="num">kevy に結合はなく、今後も持ちません。それは Postgres の仕事です。</td></tr><tr><td>分析、アドホックなクエリ</td><td class="loss">移すな</td><td class="num">クエリプランナもオプティマイザもありません。試さないでください。</td></tr><tr><td>無関係な行にまたがるトランザクション</td><td class="loss">移すな</td><td class="num">MULTI はシャード単位であって、全体ではありません。キースペース全体で直列化可能な分離が要るなら、必要なのはデータベースです。</td></tr></tbody></table></div>
+  <p class="tbl-note">赤い 3 行は、やることリストではありません。拒否です——kevy は結合もオプティマイザも持ちません。どちらも中途半端にやるくらいなら、やらないほうがましだからです。<a href="../../ja/docs/rds-workloads/">リレーショナルなワークロードのすべてと、ここでの実際のコスト</a>を書いてあります。正直な答えが「Postgres に置いたままにしてください」になるものも含めて。</p>
+</section>
+<section class="band">
+  <div class="sec-h"><h2>移行の手順——データベースから</h2></div>
+  <figure class="code"><figcaption>一度に切り替えることはしません。ワークロードをひとつ移し、データベースを正としたまま、測ってください。</figcaption><pre><code># 1. pick ONE workload. sessions are the usual first, because
+#    nothing joins against them and losing one is survivable.
+
+# 2. write to both for a week. reads still come from Postgres.
+#    you are checking that the shapes match, not that it is fast.
+
+# 3. flip reads to kevy. keep the dual write.
+redis-cli SET session:$SID &quot;$JSON&quot; EX 3600
+
+# 4. when it has been boring for a fortnight, drop the table.
+
+# then do the next workload. rate limits, then queues, then
+# whichever of your read paths a secondary index can answer.</code></pre></figure>
+</section>
+<section class="band">
+  <div class="call note">
+    <span class="h">また出ていきたくなったら</span>
+    <p>同じ 3 つのコマンドが、逆向きにも使えます。<code>kevy-cli export</code> はプレーンな RESP ファイルを書き出し、Redis 互換のサーバーなら、どれでもそれを取り込めます。そして <code>digest</code> が、コピーが忠実であることを証明します。<a href="../../ja/docs/migration/">移行ガイドは、入ってくる手順と同じ丁寧さで、出ていく手順も扱っています</a>——動けなくなって留まられるより、きれいに出ていってもらうほうが、私たちとしてもずっといいと考えています。</p>
+  </div>
+</section>
+</main>
+
+<footer class="foot">
+  <div class="foot-in">
+    <p class="foot-b">kevy 4.0 — 何が変わり、何を差し出すのか</p>
+    <nav>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+      <a href="https://crates.io/crates/kevy">crates.io</a>
+      <a href="../../llms.txt">llms.txt</a>
+    </nav>
+  </div>
+</footer>
+
+
+
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

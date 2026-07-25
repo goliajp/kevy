@@ -1,15 +1,14 @@
-//! `CLIENT *` subcommands. v1.0 ships canonical stub replies that
-//! every Redis client library accepts at handshake / housekeeping
-//! time, without needing per-connection state plumbed through the
-//! reactor → dispatch boundary.
+//! `CLIENT *` subcommands — the conn-less dispatch fallback.
 //!
-//! Real per-connection tracking (CLIENT LIST showing N connections,
-//! CLIENT KILL actually closing them, CLIENT SETNAME persisting the
-//! name on the conn) needs a `&mut Conn` argument added to the
-//! `kevy_rt::Commands::dispatch_into` trait signature — a bigger
-//! change deferred to v1.x. For dev/docker-compose/embedded/cache
-//! scenarios these stubs cover the 95% case where a client calls
-//! CLIENT once at handshake and never inspects.
+//! On a running server every stateful form is answered elsewhere:
+//! `SETNAME` / `GETNAME` / `ID` / `INFO` at the reactor's CLIENT
+//! intercept (which owns `&mut Conn`), and `LIST` / `KILL` via the
+//! all-shard fan-out (`Route::ClientList` / `Route::ClientKill` —
+//! each shard renders or kills against its own conn table). The
+//! handlers here answer (a) shapes the server doesn't support
+//! (filtered LIST, malformed KILL) with explicit errors, and (b)
+//! runtime-less dispatch contexts (unit tests, scripted calls),
+//! which have no conn table in reach.
 
 use kevy_resp::{
     ArgvView, RespVersion, encode_bulk, encode_error, encode_integer, encode_simple_string,
@@ -31,7 +30,7 @@ pub(crate) fn cmd_client<A: ArgvView + ?Sized>(
     match sub.as_slice() {
         // ID: 1 unique-but-stable for the lifetime of the process. Clients
         // that need uniqueness across reconnects don't get it; we don't
-        // track per-conn ids in v1.0.
+        // track per-conn ids.
         b"ID" => encode_integer(out, 1),
         // GETNAME: empty bulk (no name set — we don't track per-conn names).
         b"GETNAME" => encode_bulk(out, &[]),
@@ -45,22 +44,25 @@ pub(crate) fn cmd_client<A: ArgvView + ?Sized>(
                 wrong_args(out, "client|setname");
             }
         }
-        // LIST: single canonical entry representing this connection.
-        // Field set documented at https://redis.io/commands/client-list/.
-        // Most fields are zero / placeholder; clients that PARSE this
-        // field-by-field (e.g. for monitoring) will need real per-conn
-        // state in v1.x.
+        // LIST: the bare form fans out per shard on a running server
+        // and never reaches here; a runtime-less dispatch has no conn
+        // table, so the truthful answer is an empty list. Filtered
+        // forms (TYPE / ID …) are not supported — explicit error, not
+        // a silently unfiltered table.
         b"LIST" => {
-            let body = "id=1 addr=127.0.0.1:0 laddr=127.0.0.1:0 fd=0 name= \
-                        age=0 idle=0 flags=N db=0 sub=0 psub=0 ssub=0 \
-                        multi=-1 watch=0 qbuf=0 qbuf-free=0 argv-mem=0 \
-                        multi-mem=0 tot-mem=0 rbs=0 rbp=0 obl=0 oll=0 omem=0 \
-                        events=r cmd=client|list user=default redir=-1 \
-                        resp=2 lib-name= lib-ver=\n";
-            emit_client_text(out, body.as_bytes(), proto);
+            if args.len() == 2 {
+                emit_client_text(out, &[], proto);
+            } else {
+                encode_error(out, "ERR syntax error");
+            }
         }
-        // KILL: zero connections actually killed (stub).
-        b"KILL" => encode_integer(out, 0),
+        // KILL: well-formed selectors fan out per shard on a running
+        // server; here they can only mean a runtime-less dispatch, so
+        // zero conns match. Unsupported shapes error explicitly.
+        b"KILL" => match kevy_rt::ClientKillFilter::parse(args) {
+            Some(_) => encode_integer(out, 0),
+            None => encode_error(out, "ERR syntax error"),
+        },
         // INFO: single-line info about THIS connection.
         b"INFO" => {
             let body = "id=1 addr=127.0.0.1:0 laddr=127.0.0.1:0 fd=0 name= \
@@ -68,7 +70,8 @@ pub(crate) fn cmd_client<A: ArgvView + ?Sized>(
                         multi=-1 cmd=client|info user=default resp=2";
             emit_client_text(out, body.as_bytes(), proto);
         }
-        // NO-EVICT: accept; v1.0 has no eviction so this is trivially honored.
+        // NO-EVICT: accept; kevy has no client eviction
+        // (maxmemory-clients), so this is trivially honored.
         b"NO-EVICT" => encode_simple_string(out, "OK"),
         // PAUSE / UNPAUSE / REPLY / TRACKING / TRACKINGINFO etc. —
         // tolerant OK so clients that probe defensively don't error out.
@@ -134,18 +137,27 @@ mod tests {
     }
 
     #[test]
-    fn list_returns_bulk_with_entry() {
+    fn bare_list_without_a_runtime_is_empty() {
         let out = run(&[b"LIST"]);
-        let s = String::from_utf8(out).unwrap();
-        assert!(s.starts_with('$'));
-        assert!(s.contains("id=1"));
-        assert!(s.contains("db=0"));
+        assert_eq!(out, b"$0\r\n\r\n");
+    }
+
+    #[test]
+    fn filtered_list_is_a_syntax_error() {
+        let out = run(&[b"LIST", b"TYPE", b"normal"]);
+        assert!(out.starts_with(b"-ERR"));
     }
 
     #[test]
     fn kill_returns_zero() {
         let out = run(&[b"KILL", b"ADDR", b"1.2.3.4:5"]);
         assert_eq!(out, b":0\r\n");
+    }
+
+    #[test]
+    fn malformed_kill_is_a_syntax_error() {
+        let out = run(&[b"KILL", b"LADDR", b"1.2.3.4:5"]);
+        assert!(out.starts_with(b"-ERR"));
     }
 
     #[test]

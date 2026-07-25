@@ -1,5 +1,554 @@
 # Changelog
 
+## 4.0.0 — the instance era
+
+The API break 3.x kept postponing, taken once and set in stone — plus
+the deviations from Redis that turned out to be nothing but debt, paid
+off. The client wire carries over from 3.x unchanged; a 3.x data dir
+opens with zero migration work, and the AOF upgrades itself to the
+new checksummed format on its first rewrite (one-way — see
+`docs/UPGRADING.md`, which also covers the one internal wire break:
+the replication handshake now carries the feed generation).
+
+### The break (why this is 4.0)
+
+- **The instance era**: every piece of global state — replication,
+  index/view catalogs, signal fan-out, the thread-locals — folded
+  into the runtime instance (`RuntimeState` / `ShardCtx`). Two
+  runtimes in one process is now a passing test, not a hope.
+- **The API set in stone**, consolidated once: one error currency
+  (`KevyError`) everywhere, resources `open` / network `connect`
+  naming, `kevy_rt::Runtime` built by a builder, `kevy-store` writes
+  take borrowed argv, embedders bring a `Commands` trait + `Route`;
+  the deprecated `flush()` shims are gone.
+- Versions: workspace crates → 4.0.0; **kevy-client → 2.0.0** and
+  **kevy-client-async → 2.0.0** (they carry the same break).
+
+### Deviations from Redis, fixed rather than documented
+
+- **SPOP / SRANDMEMBER / RANDOMKEY are actually random** — SPOP
+  popped in storage order, RANDOMKEY could never return keys from
+  most shards. Now: random-slot probing in the set, weighted
+  reservoir sampling across shards (every key strictly
+  equiprobable), and SRANDMEMBER's negative count is implemented
+  instead of rejected.
+- **SCAN is a real cursor iterator** — it used to materialise the
+  whole keyspace to serve page one (2.56 MB to answer COUNT 10).
+  Now a reverse-binary `(shard, position)` cursor walks buckets
+  incrementally, rehash-tolerant, O(COUNT) per call.
+- **ZRANK is O(log N)** — a rank-augmented order-statistic tree
+  (`kevy-ranktree`) replaces the linear scan.
+- **HTTL replied milliseconds** where Redis replies seconds; fixed,
+  and HPTTL added for callers who want the milliseconds.
+- Three cross-shard writes went to the wrong shard; one of them
+  lost data. All three fixed, with the routing pinned by tests.
+
+### The capacity arc: transparent tiering × the TABLE layer
+
+Two features designed as one arc, because the RDS workload's natural
+shape on a tiered store is *indexes hot, rows cold*: queries answer
+from RAM-resident index columns, and only the final result page
+touches the cold tier.
+
+- **Transparent tiering** — a RAM budget (`[tiering] budget = "auto"
+  | "70%" | "4gb"`; embedded `with_tier_budget*`; off by default,
+  and the off-cost is gated as byte-identical). Past the watermark,
+  cold values spill to a value log on disk and their memory is
+  reclaimed against the budget — a logical bound, like Redis
+  `maxmemory` (RSS follows the allocator; the process's resident set
+  can run above the budget under heavy write churn, reported as a
+  fragmentation ratio). A cold key costs ~96 B plus its key bytes while
+  the
+  key, TTL, type and LRU history stay resident. Every command keeps
+  its exact semantics on a cold key: SCAN/KEYS/TYPE/TTL/RENAME/DEL
+  never read disk, a WRONGTYPE refusal never pays a read, and the
+  transparency suite replays one op sequence against a tiered and an
+  untiered store asserting byte-identical replies. Promotion is
+  deliberate (second materializing access; bulk paths — hydration,
+  backfill, digest, export, rewrite — never promote), demotion emits
+  zero keyspace events, and hydration over cold rows batches to one
+  read per row, never per field.
+- **The disposable-vlog durability story**: the value log is a
+  per-boot spill area — deleted at open, rebuilt during replay,
+  never part of the durability contract, so tiering adds zero new
+  crash-safety surface by construction. The AOF stays the sole
+  durable truth; snapshot/rewrite/full-sync stream cold values from
+  the pinned log without promoting anything (peak extra RAM: one
+  value, pinned across compaction), and boot with dataset > budget
+  spills inline during replay instead of OOMing before tiering ever
+  runs — both pinned by the tiered persistence suite.
+- **The honest v1 limits, named**: strings and hashes spill; lists,
+  sets, zsets and streams stay hot. Embedded cold reads hold the
+  shard lock for the read's duration (the drop-lock dance is
+  designed, post-v4). Values below 64 B never spill — a stub
+  would be no smaller than the value.
+- **The TABLE layer** — `TABLE.DECLARE` compiles a relational
+  declaration (prefix, typed columns, PK, secondary indexes with
+  stored VALUES, composite ORDERPATH sort paths) into ordinary named
+  indexes at declare time; `VERIFY`/`LIST`/`DROP` complete the
+  lifecycle. The engine still plans nothing, enforces no schema
+  (absent field = NULL), and refuses ad-hoc SQL by name — Law 3
+  unamended. Composite indexes are real order-preserving byte
+  encodings (equality-prefix + range `WHERE`, per-component DESC,
+  brute-force-checked against tuple comparison), shared
+  single-implementation between server and embedded with the
+  dispatch oracle pinning byte parity.
+- **Scalar VALUES clauses**: FILTER / SORT / DISTINCT / FACET /
+  OFFSET — previously text-only — now run on range/unique indexes,
+  with the same exact-across-shards semantics; an index without
+  VALUES stays byte-identical in memory and query path (gated). This
+  is what makes index-only queries touch zero rows — asserted by a
+  row-read counter, and on a fully-cold tiered table that means zero
+  disk reads.
+- **`kevy-sql`** — an out-of-engine, declaration-time compiler:
+  CREATE TABLE / CREATE INDEX / single-table CREATE VIEW compile to
+  TABLE.DECLARE / views / parameterized query cards
+  (`kevy-cli sql compile [--apply]`); everything else is refused
+  with line:col and a pointer to the replacing recipe. Plus
+  `kevy-vlog`, the cold-log stone (CRC per record, pin/epoch
+  compaction safety, fuzzed).
+- **The new gates**: `tiergate` + `tablegate` + the transparency
+  suite gate every mechanism claim above; memgate gates the cold-key
+  formula at ±20 %. The
+  **measured envelope is pending the dedicated bench box**, stated
+  plainly: cold-read p99, the ≥10× data:RAM capacity gate at 4 KiB
+  values, vlog space amplification, the 10 M-row fused envelope and
+  mixed-workload isolation run there via
+  `bench/capacity-envelope.sh` (which flips the pending tiergate
+  lines); the perfgate table_* baselines are recorded there too.
+  Until those runs land, the numbers are targets and the gates stay
+  red — docs/tiering.md and docs/tables.md quote them as exactly
+  that.
+
+### One stone, many doors (the v4 entrypoints arc)
+
+- **kevy-ffi**, the C ABI stone: one generic `kevy_cmd` entry (argv
+  in, RESP out) reaches every verb with zero per-verb surface, plus
+  the scalar fast path `kevy_get` / `kevy_set` (the MMKV lane) and
+  polled pub/sub. Ships as cdylib + staticlib with `kevy.h` /
+  `kevy.hpp` / a Clang module map.
+- **The language doors**, all thin shells over that one stone, each
+  with the same typed face and a `cmd()` escape hatch: C and C++
+  (the headers are the package), Go (`bindings/go`, cgo over the
+  staticlib), **Bun and Node in one npm package**
+  (`@goliajp/kevy-node` — bun:ffi on Bun, and on Node a hand-written
+  N-API addon, `kevy-napi`: twelve `node_api` symbols declared by
+  hand, no napi crate), C# (`Kevy.Embedded` for NuGet — net8
+  `LibraryImport` P/Invoke, `runtimes/<rid>/native` layout), Swift
+  (`KevyKit`, SwiftPM wrapping `Kevy.xcframework`), Kotlin/JVM/
+  Android (`kevy-jni`, hand-written JNI slots, no jni crate).
+- **expo-kevy**: kevy in React Native as an Expo module —
+  synchronous JSI functions (the MMKV shape), handles as small ints,
+  the whole typed surface in TypeScript over the same packed-argv /
+  RESP contract the JNI and N-API doors speak.
+- **Channels**: a brew tap formula, apt (a hand-rolled deb, no
+  packaging toolchain), and npm platform packages for the kevy /
+  kevy-cli binaries.
+- **ffigate** in CI: every door opens on every push — C, C++, Go,
+  Bun, Node and C# smokes on both OSes (command round-trip, a
+  protocol error as data, pub/sub, close-and-reopen durability),
+  plus the expo door's TS typecheck.
+- **kevy_publish**, the scalar publish: PUBLISH without the RESP
+  round-trip (subscribe was always a direct symbol; publish no
+  longer packs argv or parses `:N` back out). Adopted by the Swift,
+  Flutter and Nitro doors; on device it lifted every RN pub/sub lane.
+- **react-native-kevy-nitro, measured to its floor on real
+  hardware**: the hot methods (`getData`/`setData`/`publish`)
+  register as raw JSI functions — no typed-converter layer, the
+  hand-written-HostObject shape MMKV uses — after on-device
+  decomposition showed the converter tax (and an unbounded per-call
+  cache) was the remaining small-value gap. SET now beats
+  react-native-mmkv at every size (up to ~3×), GET from 256 B up
+  (~3.8× at 4 KB); `publish` returns the receiver count it used to
+  drop. New `createKevyBus`: same-runtime pub/sub fan-out in JS
+  (mitt's physical position) while every publish still reaches the
+  engine bus — the honest floor against a plain JS emitter is ~4×,
+  down from ~10×, and the bare publish crossing itself measures as
+  fast as a mitt emit.
+- **expo-kevy callback pub/sub is now the local fan-out lane**:
+  handlers dispatch in JS one microtask after publish (was a ≤50 ms
+  timer pump over a native sub) — immediate delivery, zero idle
+  work; `publish` returns engine + local receiver count. The raw
+  polled lanes stay on the engine bus.
+- **The durable-SET axis, measured honestly on device** (kevy AOF
+  everysec vs MMKV's mmap): kevy wins the small/medium writes that
+  dominate mobile KV (16 B 1.3×, 256 B 1.1×), MMKV's page model wins
+  multi-KB durable blobs (4 KB ~5-10× — the AOF appends every value
+  byte, mmap re-dirties a page). In-memory kevy wins every size.
+- **Measured against the native embedded stores, per language** (a new
+  `bench/embeddedgate` harness + `bench/EMBEDDED-LEDGER.md`): kevy's
+  scalar path vs Go's bbolt / badger, Node's better-sqlite3, and LMDB
+  (from C directly and from C# via LightningDB), losing axes named.
+  kevy's `kevy_get_shared` zero-copy read is flat ~12 ns at every value
+  size and **beats LMDB** — the acknowledged read-latency leader —
+  2–9×, and wins single-op writes (no per-op transaction). It **loses
+  batched/bulk writes**: kevy logs a crash-recoverable AOF frame per
+  write where a B+tree/LSM defers all durability to one commit — the
+  honest price of per-op durability, decomposed and decided in
+  `.claude/rfcs/2026-07-24-embedded-bulk-write-ceiling.md` (keep it).
+- **Batch write** — `kevy_set_many` (C ABI) + `SetMany` (Go, C#) +
+  `setMany` (Node): apply N writes in one boundary crossing, durability
+  unchanged. It closes the crossing tax for the one binding that pays an
+  expensive one (Go cgo: a bulk SET went from 147× to 2.7× off bbolt);
+  C#, Node and C were already engine-bound (cheap / no crossing) — the
+  cleanest proof the bulk gap is the engine, not the binding.
+- **Zero-copy read** — `GetView` (Go, C#): a scoped callback receives a
+  view of the value's bytes (an Arc refcount bump, no copy out), freed
+  when it returns — bbolt's txn-slice lifetime. It closes the
+  large-value read loss the copying `Get` / `GetScalar` gave back: a
+  64 KB read went from 62× off bbolt's mmap view to a 1.04× win, and
+  beats a copying peer up to ~78×.
+
+### The durability-trust arc
+
+Provoked by a production incident report (mailrs): an AOF corrupt
+frame black-holed three days of writes — the replay stopped early on
+every boot, new writes landed behind the stop point and were dropped
+again, and the only signal lived in stderr. Every axis of that
+failure is now closed, each behind an executable gate.
+
+- **`crashgate`**, the crash-consistency gate: a SIGKILL matrix
+  (mid-append / mid-rewrite / mid-snapshot / mid-feed-emit × fsync
+  policies × shard counts) plus injected torn-tail, mid-file-splice
+  (the mailrs damage shape) and payload-bit-flip damage, asserting
+  loss bounds, the no-black-hole invariant (a restart's writes
+  always survive the next restart), quarantine, integrity, and
+  recovery rate. In CI on every push.
+- **Quarantine before truncation**: the dropped region is copied to
+  `aof-<id>.aof.corrupt-quarantine.<unix_ts>` (fsynced) before the
+  live file is repaired; if the quarantine copy cannot be written,
+  the open fails with the file intact — kevy never destroys the only
+  copy of your bytes.
+- **The boot verdict is data, not stderr**: `Store::open_report()`
+  (replayed/dropped bytes, corrupt flag, quarantine paths, resynced
+  bytes), `KevyMetric::Replay` with `dropped_bytes`/`corrupt`,
+  `INFO persistence` gains `aof_last_open_dropped_bytes` /
+  `aof_last_open_corrupt`, and the C ABI gains `kevy_open_report` —
+  every door can turn a bad boot into a refused deployment.
+- **Lifecycle**: `Store::shutdown()` (fsync everything, then refuse
+  writes with `KevyError::Closed`; clone-safe) and `kevy_open_with`
+  / `kevy_shutdown` over the C ABI; the last-clone drop now
+  force-fsyncs the AOF tail before the feed's clean-shutdown marker
+  is written (the marker could previously claim durability the tail
+  did not have).
+- **The three-trigger rewrite policy** (`kevy_persist::
+  RewritePolicy`, one decision point for server and embedded):
+  growth pair, absolute byte cap (`auto_aof_rewrite_bytes`), and
+  staleness (`auto_aof_rewrite_interval_secs`) — the latter two new,
+  live-tunable via CONFIG SET.
+- **AOF format v2** (`KEVYAOF2`): every record length-prefixed and
+  CRC32C-checksummed (hardware-accelerated on both server
+  architectures; the intrinsics live in kevy-sys, the workspace's
+  one sanctioned unsafe home). Bit-rot is refused instead of
+  replayed; torn tails are detected by arithmetic; record boundaries
+  are recoverable. v1 files are read forever and upgrade on their
+  first rewrite. Replay is streaming — peak RSS is O(largest
+  record), not O(file) (measured 4 MB against a 37 MB log;
+  `replaymemgate` holds the line). The browser's host-mediated log
+  speaks v2 too: a fresh tab's log is self-describing (`KEVYAOF2` +
+  records), a pre-4.0 log replays as v1 and upgrades at its first
+  compaction, and a flipped bit in stored bytes is refused at replay
+  — the outbound frames follow the stored log's format so a host's
+  verbatim appends never mix formats.
+- **Resync replay** (`replay_resync`, opt-in): recover the good tail
+  behind a mid-file corrupt region instead of surrendering it — a
+  record boundary is trusted only when length, CRC, and a
+  well-formed single-command parse all agree. The mailrs shape (an
+  8-byte splice in a 100k-write log) recovers 100500/100500 records
+  in crashgate; skipped ranges are reported, the corrupt flag stays
+  raised.
+- **The replication generation fence**: the handshake carries the
+  feed generation (`REPLICATE FROM <gen> <offset> ID <id>` /
+  `+ACK <gen> <offset>`), and the primary refuses offset continuity
+  across a generation mismatch — closing the offset-aliasing hole
+  where a replica reconnecting after an unclean primary restart
+  could be silently fed the new history's same-numbered offsets
+  (and its mid-stream twin, where a FLUSHALL/promotion bump left a
+  live replica stalled, then aliased). Runners track their data's
+  generation; the embed-as-writer mints a per-boot one; a replica's
+  own AOF is rebased after a snapshot resync. Proven by repligate's
+  writer-SIGKILL clamp and dedicated aliasing tests at both
+  primaries.
+
+### Proven where it claims to run
+
+- **The browser build is real** (T8): the durable backend the engine
+  actually picked (OPFS or IndexedDB) is exposed instead of guessed,
+  `mget` batches the boundary crossing, and pub/sub crosses tabs
+  over a BroadcastChannel — measured, not assumed.
+- **IoT is booted, not claimed** (T7): CI boots kevy on a Cortex-M
+  (AArch32 semihosting exit fixed, vector table filled, linker
+  script from build.rs) and on RISC-V; kevy-uring builds on 32-bit;
+  the shipped-artifact size is what the gate frames.
+- **Perf verdicts are earned** (T9): a panoramic decomposition, then
+  five kernel-level attack gates — seqlock read path REFUSED,
+  per-conn CQE batching REFUSED, idle spin reverted as productive
+  waiting, huge pages already in effect, the io_uring basket empty.
+  The harness itself was fixed first: perfgate and arena had been
+  reading a rounded clock (measuring the ruler), and a reported v4
+  SET regression was retracted as quantization noise.
+
+### Transactions that were not transactions
+
+- **A rejected `atomic()` left its writes live.** The closure's writes
+  went straight into memory while their AOF frames were only queued; an
+  `Err` return discarded the queue and returned, so the running process
+  and a restarted one answered differently for the same key — with the
+  AOF reporting itself `clean`. `atomic()` and `atomic_all_shards()` now
+  roll back every key the closure touched, restoring its prior value and
+  TTL and deleting keys the closure created. A rejected transaction
+  leaves no trace, which is the guarantee `docs/cookbook.md` §5 already
+  described for replacing SQL `CHECK` constraints — it is now true.
+- **`atomic()` was not crash-atomic, and no fsync setting fixed it.**
+  The commit loop appended and synced frame by frame, so a crash between
+  frame *k* and *k+1* left a durably half-applied transaction that
+  replay faithfully restored. Transactions are now bracketed in the AOF
+  by begin/commit markers: replay holds a transaction's frames until it
+  sees the commit and discards them if the log ends first, so the block
+  is all-or-nothing **at any size**. Group commit is wired too, so a
+  block of N mutations costs one fsync rather than N.
+
+  Group commit alone was not enough, which is worth stating because it
+  is the intuitive fix: it only defers the *fsync*, while the 256 KiB
+  write buffer still hands whole valid frames to the kernel as it fills.
+  A 20,000-mutation block killed mid-commit replayed 6,393 of them with
+  group commit in place and 0 or all of them with the markers. The
+  partial state came from the shape of the commit loop, not from when it
+  synced.
+- Both were reported by a consumer evaluating kevy-embedded as a primary
+  store, with an empirical reproduction against the published 3.18.0:
+  `docs/DEFECT-REPORT-2026-07-20-ATOMIC-ERROR-PATH.md`. **3.18.0 is
+  affected and has no fix released.**
+
+- **A transaction could not read the collections it was writing.**
+  `AtomicCtx` exposed 22 verbs and none of them read a set or a list, so
+  a cascade delete could not enumerate the children it was deleting. One
+  consumer reshaped an entire keyspace from sets to hashes to work
+  around it. `SMEMBERS`, `SISMEMBER`, `LRANGE`, `LLEN`, `SCARD` and
+  `ZRANGEBYSCORE` now exist on both transaction contexts; they hold the
+  shard write lock already, so there was never a consistency reason to
+  withhold them. A parity test pins the two contexts against each other,
+  which they had drifted apart before.
+- **A transaction can consult a declared index** —
+  `idx_query` / `idx_count` inside `atomic_all_shards`, so a uniqueness
+  check can use an index instead of a parallel set of claim keys that
+  has to be reconciled at boot.
+
+  Only on the all-shards context, and that restriction is the finding
+  rather than a shortcut: an index entry lives on the shard of the key
+  it indexes, so "does any row have this email" is a question about
+  every shard. Single-shard `atomic()` holds one lock and could answer
+  only for its own slice — a uniqueness check consulting 1/N of the
+  keyspace reports "unique" nearly always. Absent beats present with a
+  footnote. Second limit, tested: these see committed state, not the
+  transaction's own writes, because index maintenance runs at commit.
+- **`Snapshot::reconcile`** rebuilds every derived key from the rows and
+  diffs, for the boot-time check that every consumer maintaining link or
+  claim keys ends up writing by hand. It runs against a frozen snapshot,
+  so a concurrent write is not reported as drift, and it diffs **both**
+  directions — a claim whose row is gone is an orphan, not an absence,
+  and a missing-only checker reports "clean" during exactly the failure
+  it exists to catch.
+- `docs/cookbook.md` §21 states the pattern these serve — derived state
+  as a pure function of the row — which was latent across four recipes
+  and never written down once.
+
+### Connections that stopped answering
+
+- **Killing a replica killed the primary's shards.** The pump's write to a
+  departed replica returns `EPIPE`; that error was propagated out of the
+  reactor and ended the shard, closing every client connection it owned —
+  none of which had anything to do with replication. The only trace was
+  `kevy: shard N exited with error: Broken pipe`. An I/O error on a
+  replica link now drops that link and nothing else, on both reactors;
+  the replica reconnects and resumes from the backlog. This is what had
+  been failing `availgate`'s phase 4 for several releases, under a
+  misleading message about `-LOADING` that described a keyspace the
+  broken seeder had never written.
+
+- **A blocking command that timed out left its connection one reply
+  behind, forever** — a parked `BLPOP`/`BZPOPMIN` defers its reply,
+  so whichever path resolves the block owes it a sequence retire.
+  Three of the four paths did; the in-shard timeout path did not.
+  The skew stayed invisible while every later command took the
+  inline fast path, then the first reply routed through the pending
+  path (any cross-shard forward) folded into a slot that was never
+  allocated and was dropped. The client waited forever for a command
+  the server had received, executed and answered. Present on every
+  reactor — io_uring, epoll and kqueue alike.
+- **A short write on a chunked writev re-transmitted the bytes it
+  had already sent** — the recovery flattened the remaining payload
+  from the start of the buffer rather than from the write offset.
+  A duplicated prefix does not read as extra bytes to the peer; it
+  desynchronises RESP framing, after which nothing parses.
+- **`uringgate`**, the gate that caught the first of these, is green
+  and in CI. Its sq-pressure half needs a real ring; its
+  blocking-tail half runs everywhere, because the bug it found was
+  never reactor-specific. Full investigation, including the two dead
+  ends and the one-line triage that ended it, in
+  `bench/PERF-FINDING-2026-07-18-uring-recv-rearm-wedge.md`.
+
+- **A cross-shard blocking pop could lose the element it popped.** The
+  target pops for a waiter and ships the reply to the origin; if the
+  client disconnected in that window, the origin had no record to
+  deliver into and the reply was dropped — the element gone from the
+  list and delivered to nobody. The protection already existed and one
+  path did not use it: `serving` suppressed the timeout sweep for
+  exactly this reason, but disconnect tore the record down anyway.
+
+  The record now survives an in-flight serve, and the target holds an
+  undo — captured by **reading** the element just before the pop, not by
+  parsing it back out of the reply. A reply's shape depends on the block
+  kind and on whether the waiter negotiated RESP2 or RESP3; a parser
+  would have to be right about every combination forever, while `LINDEX`
+  means the same thing in both. On delivery the undo is dropped, on
+  failure it is applied.
+
+  What this leaves, stated rather than hidden: between the pop and the
+  abort another waiter can be served the next element, so the restored
+  one arrives after it. Losing the element is not acceptable; reordering
+  under a disconnect-mid-serve race is, and it is the price of serving
+  blocked clients across shards — Redis avoids it by being single
+  threaded.
+- **`subscribe()` returned before the subscription was live**, so
+  anything publishing immediately after raced the registration and a
+  lost message parked a blocking `recv` forever. Three independent tests
+  raced exactly that way in one day, one of them hanging a CI job for
+  3h46m. All four client implementations — Rust sync and async, Python,
+  Go — now wait for the acks, queueing rather than consuming anything
+  that arrives meanwhile.
+
+### The published ratios, corrected downward
+
+- **The competitive numbers in the README were measured with a ruler
+  that reads low.** `redis-benchmark`'s own reported rate is quantized
+  to multiples of its 250 ms sampling timer under `--threads`, and it
+  understates by a different amount per engine — which is exactly how a
+  *ratio* ends up wrong. The arena now counts each server's own command
+  counter over a timed window. Re-measured on 2026-07-19: kevy's lead
+  over valkey 9.1 is **2.46×** on GET (published: 3.00×), over redis 8
+  **1.25×** (published: 1.60×), over dragonfly **3.48×** (published:
+  3.60×). kevy's own throughput went *up* (GET 6.39 → 7.24 M/s); the
+  competitors' went up more. SET is unchanged at 4.00×. Still 7/7 wins
+  across GET/SET/INCR/SADD/HSET/ZADD/LPUSH. Raw run in
+  `bench/ARENA-2026-07-19.txt`, ledger entry in `bench/PERF-LEDGER.md`.
+- The method line lost its "precision-mode with CI95 < 1%" claim for
+  those rows: the arena is median-of-5 with per-cell stdev, and kevy's
+  GET cell sits at 3.1%. Quoting a precision figure from a different
+  harness is the same class of error as the ratio itself.
+
+### Text search, and the surface it will grow into
+
+- **The `MATCH` surface was frozen before the capabilities landed —
+  and then they all landed.** Every text feature the roadmap wanted —
+  phrase, filter, facet, highlight, typo, prefix, sort, distinct —
+  changes the same signature, and 4.0 is the release that breaks API
+  once, so the syntax was settled first. It is no longer a promise:
+  `IN`, `FILTER`, `FACET`, `SORT`, `DISTINCT`, `HIGHLIGHT`, `TYPO`,
+  `PREFIX` and `OFFSET` all execute today, on a global BM25 index with a
+  positional side-channel, an ordered term dictionary, per-field
+  postings and columnar doc-values.
+
+  The three top-K clauses are exact across shards, not approximate: the
+  k-way merge that makes a scored fan-out exact holds for *any* total
+  order the shards agree on, so `SORT` (by a stored value), `DISTINCT`
+  (collapse by identity) and `FACET` (count the whole match set) each
+  return the true global page — the correction the design RFC recorded
+  against its own first sketch.
+
+  Naming a clause when it could not answer mattered while they were
+  landing: a dropped `FILTER` returning unfiltered rows is a wrong
+  answer wearing a successful reply.
+- **An index can declare several weighted attributes.** `IndexSpec`
+  carried one hash field, so a document with a title and a body needed
+  two indexes — and that is not a workaround, because BM25 normalises by
+  document length and two indexes normalise over two corpora. The scores
+  are not comparable; the answer is wrong, not merely awkward. The
+  catalog sidecar gains a v2 that carries `name:weight` per field, with
+  v1 permanently readable — a sidecar that refuses to load is not an
+  error an operator sees, it is every index rebuilding from scratch.
+
+  **The engine still indexes only the first field**, so a multi-field
+  declaration is *refused* rather than accepted and quietly
+  single-field. The gate lifts when the segment indexes weighted fields.
+- **A hit's BM25 rank no longer depends on which shard it landed on.**
+  Each shard used to score its own slice against its own document count
+  and average length, so one document could outrank another purely
+  because of where the two happened to land. `MATCH` now runs two
+  query-time passes — the first sums every shard's document count, total
+  length and the query tokens' document frequency into one global
+  statistic; the second scores every shard against it — so a sharded
+  index ranks identically to a single-shard one. Only the query's
+  tokens' df crosses the wire between passes, never a posting.
+- `docs/text-search.md` records this as a reversal. It previously said
+  phrase and boolean queries were deliberately out of scope — "if you
+  need those, you are describing a search engine" — which was right for
+  a text kind that stops at ranked lookup. The goal changed, and a
+  reader should be able to see that it changed.
+- **A text query stopped re-measuring the index's memory on every
+  call.** Pass 1 of a cross-shard query needs one number per shard — how
+  many documents it holds — and was reading it off `stats()`, which also
+  walks every token, posting and positional blob to estimate bytes, then
+  discarded that. A clean profile put 82% of query CPU in that
+  accounting; a `docs()` accessor that is just a `len()` cut term-query
+  p95 27.6→3.2ms (-88%), phrase 87→23.5ms (-73%), and every other mode
+  in between. Getting there first cost four broken profiles — a stripped
+  binary, an unbounded sampling window, attaching to the wrong process,
+  a block-buffered marker — each of which produced a plausible wrong
+  number; the recipe and its self-check now live in
+  `bench/profile-textgate.sh`.
+- **The embedded `IDX.CREATE` command caught up to the server's full
+  syntax.** The typed `idx_create_text` had multi-field indexes, weights,
+  positions and stored values all along, but the embedded RESP-command
+  parser still only understood the old single `FIELD` form — so
+  `db.cmd("IDX.CREATE", …, "FIELDS", …)` worked against the server and
+  not in-process. A server-vs-embedded oracle test (byte-for-byte over
+  ~150 commands) caught the drift; the embedded parser now mirrors the
+  server's — `FIELDS`/`WEIGHTS`/`WITH POSITIONS`/`VALUES`/`TYPES`,
+  identical error text — and routes to the full-capability store methods.
+
+### Blocking across shards
+
+- **A cross-shard `BLPOP`/`BRPOP` no longer loses the element on a
+  disconnect mid-serve.** The origin arbitrates and a target pops only
+  when told to, but a network round-trip separates the pop from the
+  origin's delivery decision — and if the client vanished in that window
+  the popped element went to a dead socket and was gone. The fix is
+  escrow tied to the *write result*: the target holds the element until
+  the origin confirms delivery, and the origin releases it only once the
+  reply flushes clean to a live conn, restoring it if the conn is torn
+  down first (its FIN read, or the write errored). Verified
+  deterministically on all three reactors (kqueue, epoll, io_uring) with
+  a debug seam that forces the ordering. Redis does not have this race —
+  it serves blocked clients synchronously — so closing it is what makes
+  kevy's sharded `BLPOP` match the single-instance contract.
+
+### Smaller truths
+
+- TOML arrays in kevy-config — and 14 documented configs that could
+  not actually load now do, gated in CI forever.
+- `kevy-tmpdir`: five hand-rolled "unique" temp-dir schemes across
+  nine files were not unique (same-process `process::id`, colliding
+  `Instant`); one RAII crate now.
+- Every verb's metadata states its real cost and its real deviation
+  from Redis, pinned by two-way tests: the fixed deviations must
+  stay fixed, the deliberate ones must stay documented.
+
+### The site: kevy.golia.jp
+
+- Trilingual (en / native zh / native ja), full-bleed, one masthead.
+  The landing page boots the engine in the visitor's tab — the
+  terminal is the wasm build, not a mock-up.
+- A command reference generated from the engine's own verb table
+  (184 commands × 3 languages), docs search, `llms.txt` +
+  `llms-full.txt` for machine readers, a playground that shows the
+  keyspace, and scenario pages structured as pasteable task recipes.
+- The site cannot lie by construction: every RESP example executes
+  against a real server in CI, every documented TOML must load in
+  the real binary, every internal link is checked, and CJK prose is
+  gated against half-width punctuation.
+
+
 ## [kevy-client v1.14.0] — 2026-07-08
 
 Independent `kevy-client` minor (workspace stays at 3.17.2): **wrap

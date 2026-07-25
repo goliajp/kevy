@@ -90,9 +90,11 @@ redis-cli -s /tmp/kevy.sock SET foo bar
 
 **bindアドレスの警告。** 現時点のkevyにはAUTHもTLSもありません。非ループバックアドレス（`--bind 0.0.0.0`や公開インタフェース）にbindすると起動時に警告が出ます。ネットワーク上の誰でもコマンドを発行できてしまうためです。kevyはプライベートネットワーク境界の内側か、認証を終端するプロキシの背後で動かしてください。
 
+**コネクションのイントロスペクション。** `INFO clients`は全シャードを合算したライブの`connected_clients`ゲージを報告します。`CLIENT LIST`／`CLIENT INFO`は、実在するクライアント接続ごとにRedis 7.x形の行を1つ描画します——ピアアドレス、グローバルに一意な`id`、`name`、購読数、MULTIキュー深さ、入出力バッファサイズ（`cmd=NULL`：最後のコマンド名は追跡しません）。`CLIENT SETNAME`はLIST用に接続へラベルを付けます。`CLIENT KILL ID <id> | ADDR <ip:port> | LADDR <ip:port>`（またはレガシーな位置引数形`CLIENT KILL <ip:port>`）は、ブロッキングコマンドで待機中のものも含め、一致するすべての接続を閉じます。teardownは犠牲となる接続の保留出力がはけるのを待つので、自分自身をkillした接続も自分のリプライは受け取れます。
+
 ### レプリケーションと可用性
 
-プライマリ/レプリカのトポロジで動かすときだけ関係します（[docs/replication.md](replication.md)、[docs/availability.md](../availability.md)）。
+プライマリ/レプリカのトポロジで動かすときだけ関係します（[docs/replication.md](replication.md)、[docs/availability.md](availability.md)）。
 
 **ポートレイアウト。** 各ノードは3つのプレーンを使い、デフォルトではすべてクライアントポートから導出されます：
 
@@ -104,7 +106,7 @@ redis-cli -s /tmp/kevy.sock SET foo bar
 
 1台のマシンに複数インスタンスを同居させる場合は、クライアントポートを最低`nshards`離してください。そうしないとデフォルトのレプリケーションレンジが衝突します。`FAILOVER`と自動再ターゲットは`port + 10000`の慣習を前提にしているため、フェイルオーバーを使うデプロイでは`listen_port_base`をデフォルトのままにしてください。
 
-**整合性ノブ。** 2つの`[replication]`キーで、可用性とより強い保証を交換できます（ラダーの全体像は[docs/availability.md](../availability.md)）:
+**整合性ノブ。** 2つの`[replication]`キーで、可用性とより強い保証を交換できます（ラダーの全体像は[docs/availability.md](availability.md)）:
 
 | ノブ | デフォルト | 何をするか |
 |------|---------|--------------|

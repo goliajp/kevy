@@ -4,7 +4,7 @@
 //! (500-LOC house rule); `message` re-exports everything, so paths are
 //! unchanged. All crate-private.
 
-use crate::message::{Gathered, KeyShape, MultiOp, SmallReply, ZCombine};
+use crate::message::{Gathered, MultiOp, SmallReply, ZCombine};
 use kevy_resp::{Argv, RespVersion};
 use std::collections::HashMap;
 
@@ -12,14 +12,14 @@ use std::collections::HashMap;
 pub(crate) enum Agg {
     First(Option<SmallReply>),
     SumInt(i64),
-    /// v3.16 D1 `WAIT` accumulator: MIN over the per-shard acked-replica
+    /// `WAIT` accumulator: MIN over the per-shard acked-replica
     /// counts (starts at `i64::MAX`; every shard folds one `Part::Int`).
     MinInt(i64),
-    /// v3.16 D2 `REPL.WAIT` accumulator: every shard folds `Part::Int`
+    /// `REPL.WAIT` accumulator: every shard folds `Part::Int`
     /// (1 = applied barrier met, 0 = deadline passed). All 1 → `+OK`;
     /// any 0 → the pre-built `miss` reply bytes.
     ReplBarrier { ok: bool, miss: Vec<u8> },
-    /// v3.16 D2 `REPL.TOKEN` accumulator: per-shard `(generation,
+    /// `REPL.TOKEN` accumulator: per-shard `(generation,
     /// next_offset)` pairs dropped in by shard id, materialized as one
     /// flat `[gen0, off0, gen1, off1, …]` integer array.
     ReplTokens { slots: Vec<Option<(u64, u64)>> },
@@ -27,15 +27,25 @@ pub(crate) enum Agg {
     /// Gathered per-key payloads, reduced by `op` over `keys` (request order).
     Gather {
         op: MultiOp,
+        /// `ZINTERCARD`'s `LIMIT` cap (0 = unlimited); unused by the
+        /// other reduce shapes.
+        limit: usize,
         keys: Vec<Vec<u8>>,
         got: HashMap<Vec<u8>, Gathered>,
     },
-    /// v2.3 PREFIX.STATS accumulator (summed across shards).
+    /// PREFIX.STATS accumulator (summed across shards).
     PrefixStats { keys: u64, expires: u64 },
-    /// v2.5 extension fan-out accumulator; reduced by
+    /// CLIENT LIST accumulator: per-shard row chunks concatenated into
+    /// one bulk (RESP2) / verbatim `txt` (RESP3) reply.
+    ClientList { text: Vec<u8> },
+    /// CLIENT KILL accumulator: killed-count sum. `oldform` selects the
+    /// legacy positional form's `+OK` / `-ERR no such client` reply
+    /// over the filtered form's `:n`.
+    ClientKill { killed: i64, oldform: bool },
+    /// Extension fan-out accumulator; reduced by
     /// `Commands::extension_reduce` when the last chunk lands.
     ExtensionGather { argv: Vec<Vec<u8>>, chunks: Vec<Vec<u8>> },
-    /// v2.2 zset-algebra `*STORE` orchestrator, step 1: gather scored
+    /// zset-algebra `*STORE` orchestrator, step 1: gather scored
     /// (or set) members per source key; on completion the origin
     /// computes the combination and ships `Op::ZStoreResult` /
     /// `Op::SetStoreResult` to `dst`'s shard (step 2 folds through a
@@ -48,10 +58,44 @@ pub(crate) enum Agg {
         keys: Vec<Vec<u8>>,
         got: HashMap<Vec<u8>, Gathered>,
     },
-    /// Keys collected from all shards, shaped per `KeyShape`.
+    /// Geo `*STORE` orchestrator, step 1: the source key's shard runs the
+    /// search (`Op::GeoSearch`) and folds its [`crate::GeoHits`] here; the
+    /// origin then ships `Op::ZStoreResult` to `dst`'s shard (step 2 folds
+    /// through a re-armed `Agg::SumInt`). See [`crate::exec_geostore`].
+    GeoStore {
+        dst: Vec<u8>,
+        hits: Option<crate::GeoHits>,
+    },
+    /// KEYS: every shard's matching keys, flattened at the origin.
     Keys {
-        shape: KeyShape,
         acc: Vec<Vec<u8>>,
+    },
+    /// RANDOMKEY's weighted reservoir. Each shard's candidate replaces the held
+    /// one with probability `live / seen`, so a key's overall chance is exactly
+    /// `1 / total_keys` regardless of which shard holds it.
+    RandomKey {
+        key: Option<Vec<u8>>,
+        seen: u64,
+    },
+    /// `SCAN` paging orchestrator: one [`crate::message::Op::ScanStep`]
+    /// is in flight against `shard`; fold records the page, then
+    /// `finalize_scan_agg` either replies `[next-cursor, keys]` or —
+    /// when the shard is exhausted with budget left — re-arms the slot
+    /// and chains into `shard + 1` (so an empty server answers cursor 0
+    /// in ONE call instead of one call per shard).
+    ScanPage {
+        /// Shard the in-flight `ScanStep` targets.
+        shard: usize,
+        /// Remaining buckets-visited budget (the request's COUNT).
+        budget: usize,
+        /// MATCH glob to carry into chained shards.
+        pattern: Option<Vec<u8>>,
+        /// TYPE filter to carry into chained shards.
+        type_filter: Option<Vec<u8>>,
+        /// Keys accumulated across this call's page(s).
+        keys: Vec<Vec<u8>>,
+        /// The shard's next in-shard cursor (0 = shard exhausted).
+        next: u64,
     },
     /// `WATCH` fan-out accumulator: each owning shard returns its
     /// `(key, version)` pairs via [`Part::WatchVersions`]; the origin
@@ -117,6 +161,50 @@ pub(crate) enum Agg {
         /// (we're still in Take phase).
         put_stored: Option<bool>,
     },
+    /// Cross-shard `RPOPLPUSH` / `LMOVE` / `BRPOPLPUSH` orchestrator.
+    ///
+    /// Three steps, and the third only on failure:
+    ///   Take   — `Op::ListMoveTake` on the source's shard pops one element.
+    ///   Push   — `Op::ListMovePush` on the destination's shard pushes it.
+    ///   Restore— `Op::ListMoveRestore` back on the source, if and only if
+    ///            the destination refused it (WRONGTYPE). The element is
+    ///            never dropped.
+    ///
+    /// This is NOT atomic: between Take and Push the element exists in
+    /// neither list, and a crash in that window loses it. Redis's
+    /// single-threaded RPOPLPUSH is atomic and a job queue may be relying on
+    /// that. Co-locate the two keys with a `{hashtag}` to get the atomic
+    /// same-shard path.
+    ListMoveOrchestrator {
+        step: ListMoveStep,
+        /// Serving a parked `BRPOPLPUSH`. The reply does not go out through
+        /// this slot — it goes back through the block arbiter, which has to
+        /// unpark the conn and cancel its other watchers on a hit, and RE-ARM
+        /// on a miss (another client drained the source between the readiness
+        /// signal and our Take). A non-blocking move just replies nil there.
+        blocking: bool,
+        src: Vec<u8>,
+        dst: Vec<u8>,
+        src_shard: usize,
+        dst_shard: usize,
+        from_left: bool,
+        to_left: bool,
+        /// The element captured by step 1. `Ok(None)` = the source was
+        /// empty, and the move ends there with a nil reply. `Err(())` = the
+        /// source is not a list.
+        taken: Option<Result<Option<Vec<u8>>, ()>>,
+        /// Step 2's verdict, `Some(false)` when the destination refused.
+        pushed: Option<bool>,
+    },
+}
+
+/// Phase of the cross-shard list-move orchestrator. See
+/// [`Agg::ListMoveOrchestrator`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ListMoveStep {
+    Take,
+    Push,
+    Restore,
 }
 
 /// Phase of the cross-shard RENAME orchestrator. See [`Agg::RenameOrchestrator`].

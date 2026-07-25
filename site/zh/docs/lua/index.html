@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lua 脚本 — kevy</title>
+<meta name="description" content="kevy 的服务端 Lua 脚本：怎么用 EVAL / EVALSHA 跑原子脚本、有哪些绑定，以及如何选用比 5.1 更新的 Lua 方言。">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../zh/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../../zh/docs/" aria-current="page">文档</a>
+      <a href="../../../zh/docs/commands/">命令</a>
+      <a href="../../../zh/benchmarks/">基准</a>
+      <a href="../../../zh/play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../../zh/docs/search-index.json" data-root="../../../zh/">
+        <input type="search" placeholder="搜索文档……" aria-label="搜索文档……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../../docs/lua/">EN</a><a href="../../../zh/docs/lua/" aria-current="page">中文</a><a href="../../../ja/docs/lua/">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell has-toc">
+  <aside class="side"><p class="side-h">上手</p><ul><li><a href="../../../zh/docs/designing-on-kevy/">在 kevy 上设计应用</a></li><li><a href="../../../zh/docs/cookbook/">RDS→kevy 建模 cookbook</a></li><li><a href="../../../zh/docs/persistence/">持久化</a></li><li><a href="../../../zh/docs/tuning/">调优 kevy</a></li></ul><p class="side-h">运行</p><ul><li><a href="../../../zh/docs/replication/">复制</a></li><li><a href="../../../zh/docs/availability/">可用性</a></li><li><a href="../../../zh/docs/cluster/">集群</a></li><li><a href="../../../zh/docs/tiering/">透明分层存储（[tiering] / with_tier_budget）</a></li><li><a href="../../../zh/docs/accept-shards/">--accept-shards N——把稀疏连接收拢到部分 shard 上</a></li><li><a href="../../../zh/docs/uds/">Unix-domain socket（UDS）传输</a></li><li><a href="../../../zh/docs/async/">异步客户端</a></li></ul><p class="side-h">数据</p><ul><li><a href="../../../zh/docs/indexes/">二级索引（IDX. / idx_）</a></li><li><a href="../../../zh/docs/tables/">表（TABLE. / table_）</a></li><li><a href="../../../zh/docs/vector-search/">向量检索（KIND ann）</a></li><li><a href="../../../zh/docs/text-search/">全文检索（KIND text）</a></li><li><a href="../../../zh/docs/views/">视图（VIEW. / view_）</a></li><li><a href="../../../zh/docs/cdc/">CDC——变更流（FEED. / changes_since）</a></li><li><a href="../../../zh/docs/pubsub/">Pub/sub</a></li><li><a href="../../../zh/docs/lua/" aria-current="page">Lua 脚本</a></li></ul><p class="side-h">嵌入</p><ul><li><a href="../../../zh/docs/wasm/">kevy 上 WebAssembly</a></li><li><a href="../../../zh/docs/embedded-listener/">Embedded 只读 RESP listener</a></li><li><a href="../../../zh/docs/iot/">kevy 跑在 IoT 设备上</a></li></ul><p class="side-h">参考</p><ul><li><a href="../../../zh/docs/error-replies/">错误回复目录</a></li><li><a href="../../../zh/docs/rds-workloads/">在 kevy 上跑 RDS 负载</a></li><li><a href="../../../zh/docs/migration/">迁移——playbook 与工具链</a></li><li><a href="../../../zh/docs/UPGRADING/">升级 kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../zh/docs/commands/">全部 188 个命令</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>Lua 脚本</h1></div>
+<p>kevy 的服务端 Lua 脚本：怎么用 <code>EVAL</code> / <code>EVALSHA</code> 跑原子脚本、有哪些绑定，以及如何选用比 5.1 更新的 Lua 方言。</p>
+<h2 id="什么时候需要它">什么时候需要它</h2>
+<p>以下情况该考虑 Lua 脚本：</p>
+<ul><li>想对一个键原子地执行一小段多命令序列（先查后写、条件计数器、分布式锁）。</li><li>想把单条命令表达不了的读-改-写逻辑推进服务器，省掉往返。</li><li>想原样跑生态库发布的脚本（BullMQ、Sidekiq、Bee Queue、Redlock、滑动窗口限流器）。</li></ul>
+<p>如果只是普通的单命令访问，或者要在很多键上做带显式乐观锁的事务，请用普通命令或 <code>MULTI</code> / <code>EXEC</code>。</p>
+<h2 id="核心思路">核心思路</h2>
+<p><code>EVAL</code> 把一段 Lua 源码送到服务器，编译，然后在持有 <code>KEYS[1]</code> 的那个 shard 上执行。脚本运行期间，该 shard 上没有任何其他命令会与它交错——整个脚本是一个原子单元。脚本内部，<code>redis.call("CMD", ...)</code> 顺着正常命令路径分派回去，<code>KEYS</code> 和 <code>ARGV</code> 给出 1 起始下标、二进制安全的输入访问，脚本的返回值被编排成 RESP。加载过的脚本按 SHA1 缓存，所以 <code>SCRIPT LOAD</code> + <code>EVALSHA</code> 让客户端每次只发哈希、不发脚本体。Lua 运行时是 <a href="https://github.com/goliajp/luna">luna</a>，一个纯 Rust 的 5.1 – 5.5 解释器。默认方言是 Lua 5.1（Redis 生态里每一段脚本都是照这个写的）；一行 shebang 就能让单个脚本选用 5.2、5.3、5.4 或 5.5。</p>
+<h2 id="实例带上限的计数器">实例：带上限的计数器</h2>
+<p>这段脚本把计数器加 1，但仅当加完之后仍不超过上限。返回新值，超限则返回 <code>nil</code>。</p>
+<figure class="code"><pre><code class="lang-lua">-- KEYS[1] = counter key
+-- ARGV[1] = cap (integer)
+local cur = tonumber(redis.call("GET", KEYS[1]) or "0")
+local cap = tonumber(ARGV[1])
+if cur + 1 &gt; cap then
+  return nil
+end
+return redis.call("INCR", KEYS[1])</code></pre></figure>
+<h3 id="内联eval">内联：<code>EVAL</code></h3>
+<figure class="code"><pre><code class="lang-sh">redis-cli -p 6004 EVAL \
+  "local cur = tonumber(redis.call('GET', KEYS[1]) or '0')
+   local cap = tonumber(ARGV[1])
+   if cur + 1 &gt; cap then return nil end
+   return redis.call('INCR', KEYS[1])" \
+  1 quota:user:42 5
+# (integer) 1
+# … four more calls …
+# (integer) 5
+# next call:
+# (nil)</code></pre></figure>
+<h3 id="缓存script-load-evalsha">缓存：<code>SCRIPT LOAD</code> + <code>EVALSHA</code></h3>
+<figure class="code"><pre><code class="lang-sh">SHA=$(redis-cli -p 6004 SCRIPT LOAD \
+  "local cur = tonumber(redis.call('GET', KEYS[1]) or '0')
+   local cap = tonumber(ARGV[1])
+   if cur + 1 &gt; cap then return nil end
+   return redis.call('INCR', KEYS[1])")
+echo "$SHA"
+# e.g. 7c3e0a9b1d4f...
+
+redis-cli -p 6004 EVALSHA "$SHA" 1 quota:user:42 5
+# (integer) 1
+
+redis-cli -p 6004 SCRIPT EXISTS "$SHA"
+# 1) (integer) 1</code></pre></figure>
+<p>客户端拿一个服务器从没见过的哈希去发 <code>EVALSHA</code> 时（冷启动、<code>SCRIPT FLUSH</code> 之后），kevy 返回 <code>-NOSCRIPT</code>，客户端应当回退到 <code>EVAL</code>。按 SHA1 缓存的脚本体<b>包含</b> shebang 那一行，所以同一份源码的 5.1 版和 5.4 版是两个不同的缓存条目。</p>
+<h3 id="用-shebang-选-lua-54-方言">用 shebang 选 Lua 5.4 方言</h3>
+<figure class="code"><pre><code class="lang-lua">#!lua version=5.4
+-- ARGV[1] = max retries before giving up
+local tries = tonumber(ARGV[1])
+local i = 0
+::again::
+i = i + 1
+local ok = redis.call("SET", KEYS[1], "owned", "NX", "PX", 3000)
+if type(ok) == "table" and ok.ok == "OK" then
+  return i
+end
+if i &lt; tries then goto again end
+return redis.error_reply("LOCK_FAILED")</code></pre></figure>
+<p><code>goto</code> / 标签和整数类型的算术是 5.3+ 的特性；这行 shebang 把这一个脚本路由到 5.4 的 VM 池，其他脚本照旧跑在 5.1 上。</p>
+<h2 id="绑定">绑定</h2>
+<div class="tbl"><table><thead><tr><th>符号</th><th>行为</th></tr></thead><tbody><tr><td><code>redis.call(cmd, ...)</code></td><td>分派一条 kevy 命令。RESP 错误会抛出 Lua error 并中止脚本，除非用 <code>pcall</code> 接住。</td></tr><tr><td><code>redis.pcall(cmd, ...)</code></td><td>同样的分派，但 RESP 错误以 <code>{err = "msg"}</code> 返回，而不抛出。</td></tr><tr><td><code>redis.error_reply(msg)</code></td><td>构造 <code>{err = msg}</code>；从脚本返回时编排成 <code>-msg\r\n</code>。</td></tr><tr><td><code>redis.status_reply(msg)</code></td><td>构造 <code>{ok = msg}</code>；编排成 <code>+msg\r\n</code>（simple string）。</td></tr><tr><td><code>redis.sha1hex(s)</code></td><td>输入字节的 40 字符小写十六进制 SHA-1。</td></tr><tr><td><code>redis.replicate_commands()</code></td><td>空操作。每个脚本本来就作为一个整体原子复制。</td></tr><tr><td><code>KEYS</code></td><td><code>EVAL</code> 调用里声明的 <code>numkeys</code> 个字节串组成的表，下标从 1 起。二进制安全。</td></tr><tr><td><code>ARGV</code></td><td>其余参数组成的表，下标从 1 起。二进制安全。</td></tr><tr><td><code>cjson.encode(v)</code> / <code>cjson.decode(s)</code></td><td>纯 Rust JSON 编解码器。接口面与 Redis 的 <code>cjson</code> 库一致。</td></tr><tr><td><code>cmsgpack.pack(v)</code> / <code>cmsgpack.unpack(s)</code></td><td>纯 Rust MessagePack 编解码器。接口面与 Redis 的 <code>cmsgpack</code> 库一致。</td></tr></tbody></table></div>
+<p>Lua 返回值按标准 Redis 规则编排成 RESP：<code>nil</code> 和 <code>false</code> 变 nil-bulk，<code>true</code> 变 <code>:1</code>，整数以及无损整数浮点变整数回复，其他浮点和字符串变 bulk string，<code>{ok=...}</code> 变 simple string，<code>{err=...}</code> 变错误回复，普通数组变 multi-bulk 回复（遵守首个 nil 截断规则）。</p>
+<h2 id="方言选择">方言选择</h2>
+<div class="tbl"><table><thead><tr><th>脚本首行</th><th>使用的方言</th></tr></thead><tbody><tr><td>（无 shebang）</td><td>Lua 5.1（默认；BullMQ、Sidekiq、Redlock 以及绝大多数已发布的 Redis-Lua 片段都假定它）</td></tr><tr><td><code>#!lua version=5.1</code>（或 <code>51</code>）</td><td>Lua 5.1，显式指定</td></tr><tr><td><code>#!lua version=5.2</code>（或 <code>52</code>）</td><td>Lua 5.2——<code>goto</code>、<code>_ENV</code>、ephemeron table</td></tr><tr><td><code>#!lua version=5.3</code>（或 <code>53</code>）</td><td>Lua 5.3——整数子类型、位运算符、<code>//</code>、<code>string.pack</code> / <code>string.unpack</code></td></tr><tr><td><code>#!lua version=5.4</code>（或 <code>54</code>）</td><td>Lua 5.4——to-be-closed 变量、整数 <code>for</code> 语义、新的位运算角落</td></tr><tr><td><code>#!lua version=5.5</code>（或 <code>55</code>）</td><td>Lua 5.5——已发布的最新方言</td></tr><tr><td><code>#!lua version=&lt;其他&gt;</code></td><td><code>-ERR unknown lua version: &lt;X&gt;</code></td></tr></tbody></table></div>
+<p>shebang 行上的 Redis 7.0 Functions 元数据（<code>flags=</code>、<code>name=</code>）会被解析并忽略，所以为 Functions 接口面写的脚本可以干净地在 <code>EVAL</code> 下加载。</p>
+<p>想要纯 Redis 生态兼容性的部署，可以在配置里把可接受的方言钉死：<code>[lua] allow_dialects = ["5.1"]</code> 会拒绝任何 shebang 要求更新 VM 的脚本。默认（空列表）接受全部五种。</p>
+<h2 id="取舍与限制">取舍与限制</h2>
+<ul><li><b>没有文件系统、网络或 OS 访问。</b> <code>io</code>、<code>os</code>、<code>package</code>、<code>debug</code>、<code>coroutine</code> 都不加载。脚本无法打开文件、建立 socket、派生进程，或读取环境变量。</li><li><b>不加载字节码。</b> <code>load(bytecode)</code> 和 <code>string.dump</code> 被封死。只有 Lua 源码能进 VM，这堵死了历史上屡次攻破 Lua 沙箱的“字节码验证器”逃逸路线。</li><li><b>白名单标准库。</b> 可用的是 <code>base</code>、<code>math</code>、<code>string</code>、<code>table</code>、<code>cjson</code>、<code>cmsgpack</code>。其他标准模块一概不在。</li><li><b>逐脚本的时间预算。</b> 每次 <code>EVAL</code> 都在一份由 <code>[lua] time_limit_ms</code> 推导出的指令预算下运行（默认 5000 ms ≈ 2 亿条指令——与 Redis 默认的 <code>lua-time-limit</code> 同一条上限；设 <code>0</code> 关闭）。超出返回一个可被接住的 Lua error 并中止脚本。</li><li><b>逐脚本的内存预算。</b> 每个脚本跑在一份从逐方言 VM 池里取出的全新解释器状态上；调用期间创建的表和字符串在返回时回收。调用之间没有共享的可变 Lua 状态——要持久化什么，用 kevy 的键。</li><li><b>不能嵌套 <code>EVAL</code>。</b> 脚本里调用 <code>redis.call("EVAL", ...)</code> 返回错误，与 Redis 行为一致。</li><li><b>一个脚本只能在一个 shard 上。</b> 所有 <code>KEYS</code> 必须哈希到同一个 slot。触及跨 shard 多个键的脚本在分派时拿到 <code>-CROSSSLOT</code>。</li><li><b>JIT 是设计上关闭的。</b> 直接用解释器；luna 里的 Cranelift JIT 没有链进 kevy 服务器，这既让依赖面保持最小，也避开了 JIT 编译期的停顿。</li></ul>
+<h2 id="faq">FAQ</h2>
+<p><b>我现有的 Redis Lua 脚本能不改就跑吗？</b> 如果它面向 Lua 5.1（Redis 的默认），并且只用到 <code>redis.call</code> / <code>redis.pcall</code> / <code>redis.error_reply</code> / <code>redis.status_reply</code> / <code>KEYS</code> / <code>ARGV</code> / <code>cjson</code> / <code>cmsgpack</code>，能。如果它依赖 debug 库、OS 库，或者加载预编译字节码，不能——那些都被沙箱挡在外面了。</p>
+<p><b>怎么跨不同 shard 上的键跑一个脚本？</b> 跑不了——原子性正是它存在的全部意义。要么把工作拆成逐 shard 的脚本、在客户端侧协调，要么设计键布局让相关的键共享同一个 hash tag（<code>{user:42}:quota</code> 和 <code>{user:42}:counter</code> 路由到同一个 shard）。</p>
+<p><b><code>EVALSHA</code> 返回 <code>-NOSCRIPT</code>，怎么办？</b> 把同一份脚本体用 <code>EVAL</code> 重发一次。服务器会重新缓存它并回答这次调用。大多数客户端库会自动处理这个回退。<code>SCRIPT FLUSH</code> 和进程重启都会清空缓存。</p>
+<p><b>脚本里能调 <code>BLPOP</code> 之类的阻塞命令吗？</b> 不能。<code>EVAL</code> 内部的阻塞命令会击穿原子性契约——那个 shard 要么冻在原地等自己，要么就得交错去干别的活。从脚本里分派阻塞命令会返回错误。</p>
+<p><b>已经有更新的版本了，为什么默认还是 Lua 5.1？</b> Redis 生态里发布的每一段脚本都假定 5.1。默认 5.1 意味着那些脚本可以复制粘贴直接跑，不会在整数子类型、位运算符或 <code>goto</code> 上冒出意外。真的想要新特性时，用 shebang 把单个脚本切到新方言，是一行的改动。</p></main>
+  <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#什么时候需要它">什么时候需要它</a></li><li class="l2"><a href="#核心思路">核心思路</a></li><li class="l2"><a href="#实例带上限的计数器">实例：带上限的计数器</a></li><li class="l3"><a href="#内联eval">内联：EVAL</a></li><li class="l3"><a href="#缓存script-load-evalsha">缓存：SCRIPT LOAD + EVALSHA</a></li><li class="l3"><a href="#用-shebang-选-lua-54-方言">用 shebang 选 Lua 5.4 方言</a></li><li class="l2"><a href="#绑定">绑定</a></li><li class="l2"><a href="#方言选择">方言选择</a></li><li class="l2"><a href="#取舍与限制">取舍与限制</a></li><li class="l2"><a href="#faq">FAQ</a></li></ul></aside>
+</div>
+
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

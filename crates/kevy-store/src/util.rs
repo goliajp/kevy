@@ -1,5 +1,7 @@
 //! Small pure helpers shared across the store modules.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 pub(crate) fn norm_index(idx: i64, len: usize) -> Option<usize> {
     let len = len as i64;
     let i = if idx < 0 { idx + len } else { idx };
@@ -28,7 +30,7 @@ pub(crate) fn range_bounds(start: i64, stop: i64, len: usize) -> Option<(usize, 
 
 /// Strict base-10 `i64` parse over raw bytes (allows a leading `+`/`-`).
 pub(crate) fn parse_i64(b: &[u8]) -> Option<i64> {
-    std::str::from_utf8(b).ok()?.parse::<i64>().ok()
+    core::str::from_utf8(b).ok()?.parse::<i64>().ok()
 }
 
 /// L2: try to parse `b` as a CANONICAL `i64` ASCII representation — the same
@@ -42,7 +44,7 @@ pub(crate) fn parse_canonical_i64(b: &[u8]) -> Option<i64> {
     if b.is_empty() || b.len() > 20 {
         return None;
     }
-    // F2' (v1.25): single-byte guard — canonical i64 starts with '-' or an
+    // Single-byte guard — canonical i64 starts with '-' or an
     // ASCII digit. `redis-benchmark` defaults to 3-byte random alphanumeric
     // values ("xxx"), which paid the full UTF-8 → parse → itoa round-trip
     // only to reject at the round-trip compare. Reject up-front in ~1 ns.
@@ -50,7 +52,7 @@ pub(crate) fn parse_canonical_i64(b: &[u8]) -> Option<i64> {
     if !first.is_ascii_digit() && first != b'-' {
         return None;
     }
-    let n = std::str::from_utf8(b).ok()?.parse::<i64>().ok()?;
+    let n = core::str::from_utf8(b).ok()?.parse::<i64>().ok()?;
     let mut buf = itoa_i64_stack();
     let s = format_i64_into(n, &mut buf);
     if s == b { Some(n) } else { None }
@@ -92,7 +94,7 @@ pub(crate) fn itoa_i64_stack() -> [u8; 20] {
     [0u8; 20]
 }
 
-/// A.6 (v1.25): emit `$<len>\r\n` into `out` for a RESP bulk header. Inlined
+/// Emit `$<len>\r\n` into `out` for a RESP bulk header. Inlined
 /// at the GET fast path's `get_into_output` callsite to skip the GetReply
 /// enum tag round-trip + caller match arm. Mirror of kevy-rt's local helper.
 #[inline]
@@ -118,7 +120,7 @@ pub(crate) fn bulk_header_into(out: &mut Vec<u8>, len: usize) {
 
 /// Parse a finite f64 from raw bytes (rejects NaN/inf for value storage).
 pub(crate) fn parse_f64(b: &[u8]) -> Option<f64> {
-    let f: f64 = std::str::from_utf8(b).ok()?.trim().parse().ok()?;
+    let f: f64 = core::str::from_utf8(b).ok()?.trim().parse().ok()?;
     f.is_finite().then_some(f)
 }
 
@@ -127,57 +129,64 @@ pub fn glob_match(pat: &[u8], s: &[u8]) -> bool {
     glob(pat, s)
 }
 
-fn glob(mut p: &[u8], mut s: &[u8]) -> bool {
-    while let Some(&c) = p.first() {
-        match c {
-            b'*' => return glob_star(p, s),
-            b'?' => {
-                if s.is_empty() {
-                    return false;
-                }
-                s = &s[1..];
-                p = &p[1..];
+/// Iterative two-pointer glob with a single backtrack anchor for `*`.
+/// O(n·m) worst case — the earlier recursive `(0..=s.len()).any(glob(tail,
+/// …))` form was exponential for patterns with several literal-separated
+/// `*`s (e.g. `*a*a*a…*!`), a remote ReDoS on any `MATCH`-taking verb
+/// (`SCAN`/`KEYS`/`PSUBSCRIBE`/`CONFIG GET`). This algorithm records the
+/// position just past the last `*` plus the string index to resume from,
+/// and on a mismatch lets that `*` swallow one more character.
+fn glob(p: &[u8], s: &[u8]) -> bool {
+    let (mut pi, mut si) = (0usize, 0usize);
+    let mut star_pi: Option<usize> = None;
+    let mut star_si = 0usize;
+    while si < s.len() {
+        if pi < p.len() && p[pi] == b'*' {
+            // Collapse a run of `*`, anchor here, consume no string yet.
+            while pi < p.len() && p[pi] == b'*' {
+                pi += 1;
             }
-            b'[' => {
-                let Some(ch) = s.first().copied() else {
-                    return false;
-                };
-                let (matched, rest) = match_class(&p[1..], ch);
-                if !matched {
-                    return false;
-                }
-                p = rest;
-                s = &s[1..];
-            }
-            b'\\' if p.len() >= 2 => {
-                if s.first() != Some(&p[1]) {
-                    return false;
-                }
-                s = &s[1..];
-                p = &p[2..];
-            }
-            _ => {
-                if s.first() != Some(&c) {
-                    return false;
-                }
-                s = &s[1..];
-                p = &p[1..];
-            }
+            star_pi = Some(pi);
+            star_si = si;
+            continue;
         }
+        if pi < p.len()
+            && let Some(width) = match_token(&p[pi..], s[si])
+        {
+            pi += width;
+            si += 1;
+            continue;
+        }
+        // Mismatch: backtrack to the last `*`, letting it eat one more
+        // char; with no `*` seen, the strings can't match.
+        let Some(anchor) = star_pi else {
+            return false;
+        };
+        pi = anchor;
+        star_si += 1;
+        si = star_si;
     }
-    s.is_empty()
+    // The remaining pattern must be all `*` to match the empty suffix.
+    while pi < p.len() && p[pi] == b'*' {
+        pi += 1;
+    }
+    pi == p.len()
 }
 
-/// Handles the `*` arm of `glob`: collapse a run of `*`s, then try every tail.
-fn glob_star(mut p: &[u8], s: &[u8]) -> bool {
-    while p.get(1) == Some(&b'*') {
-        p = &p[1..];
+/// Match one non-`*` pattern token at `p[0..]` against `ch`; returns the
+/// token's byte width on a match. Mirrors the per-arm semantics of the
+/// old recursive matcher (`?` any / `[...]` class / `\x` escaped literal /
+/// plain literal).
+fn match_token(p: &[u8], ch: u8) -> Option<usize> {
+    match p[0] {
+        b'?' => Some(1),
+        b'[' => {
+            let (matched, rest) = match_class(&p[1..], ch);
+            matched.then(|| p.len() - rest.len())
+        }
+        b'\\' if p.len() >= 2 => (p[1] == ch).then_some(2),
+        c => (c == ch).then_some(1),
     }
-    if p.len() == 1 {
-        return true; // trailing '*' matches the rest
-    }
-    let tail = &p[1..];
-    (0..=s.len()).any(|i| glob(tail, &s[i..]))
 }
 
 /// Match one char against a `[...]` class; return `(matched, pattern_after_class)`.
@@ -215,11 +224,37 @@ fn match_class(p: &[u8], ch: u8) -> (bool, &[u8]) {
 pub(crate) fn fmt_num(v: f64) -> Vec<u8> {
     // Bit-exact compare is the contract: "the f64 carries no fractional bits".
     // An epsilon would mis-classify 1.0 + 1e-18 as integer-valued.
+    #[cfg(feature = "std")]
     #[allow(clippy::float_cmp)]
     let is_integer_valued = v == v.trunc();
+    // core has no float trunc; the i64 round-trip is exact for every |v|
+    // < 1e17 the integer arm accepts, and values beyond that range (where
+    // the round-trip saturates) route to the same `format!` arm anyway.
+    #[cfg(not(feature = "std"))]
+    #[allow(clippy::float_cmp)]
+    let is_integer_valued = v == ((v as i64) as f64);
     if is_integer_valued && v.abs() < 1e17 {
         (v as i64).to_string().into_bytes()
     } else {
         format!("{v}").into_bytes()
     }
+}
+
+/// Apply a signed delta to a `u64` (saturating both directions). Used by
+/// `Store::account_delta` / `reweigh_entry` so the in-place mutators don't
+/// have to repeat the same overflow-guarded match.
+#[inline]
+pub(crate) fn apply_delta(v: &mut u64, delta: i64) {
+    if delta >= 0 {
+        *v = v.saturating_add(delta as u64);
+    } else {
+        *v = v.saturating_sub((-delta) as u64);
+    }
+}
+
+/// Heap bytes a `SmallBytes`-encoded key would own (`&[u8]` mirror of
+/// `SmallBytes::heap_bytes`; 22-byte inline boundary per `kevy-bytes`).
+#[inline]
+pub(crate) fn key_heap_bytes_for(key: &[u8]) -> u64 {
+    if key.len() <= 22 { 0 } else { key.len() as u64 }
 }

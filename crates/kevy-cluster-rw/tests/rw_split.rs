@@ -1,4 +1,4 @@
-//! T1.32-37 integration: a `ReadWriteClient` against a real primary +
+//! Integration: a `ReadWriteClient` against a real primary +
 //! replica kevy Runtime pair. Verifies the read/write classification
 //! actually splits traffic — writes land at the primary, reads round-
 //! robin across replicas.
@@ -76,7 +76,7 @@ impl PrimaryServer {
             std::env::set_var("KEVY_IO_URING", "0");
         }
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, 1, kevy::KevyCommands)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1)).bind([127, 0, 0, 1], port).shards(1)
                 .with_data_dir(dir_path)
                 .with_aof(false)
                 .with_replication(true, 1024 * 1024)
@@ -135,7 +135,7 @@ impl ReplicaServer {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, 1, kevy::KevyCommands)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1)).bind([127, 0, 0, 1], port).shards(1)
                 .with_data_dir(dir_path)
                 .with_aof(false)
                 .with_replica_inboxes(vec![receiver]);
@@ -175,7 +175,7 @@ impl ReplicaServer {
                                 }
                                 kevy_replicate::replica::ReplicaEvent::SnapshotEnd { ack_offset } => {
                                     from_offset = ack_offset;
-                                    kevy_rt::ReplicaApply::SnapshotEnd { ack_offset, routed: false }
+                                    kevy_rt::ReplicaApply::SnapshotEnd { ack_offset, routed: false, gate: None }
                                 }
                                 kevy_replicate::replica::ReplicaEvent::Frame(frame) => {
                                     from_offset = frame.offset.saturating_add(1);
@@ -219,8 +219,7 @@ impl ReplicaServer {
 
 // Note: `kevy_replicate` is unused at the kevy-cluster-rw crate's
 // regular dep level, but the integration tests need it. Bring it in
-// via the kevy dev-dep edge (kevy → kevy_replicate is now a regular
-// dep since T1.29).
+// via the kevy dev-dep edge (kevy → kevy_replicate is a regular dep).
 
 #[test]
 fn write_lands_on_primary_read_round_robins_to_replica() {
@@ -341,7 +340,7 @@ fn _trait_use_anchor(s: &mut std::net::TcpStream) {
     let _ = s.write_all(&buf);
 }
 
-/// T1.38: 1 primary + 2 replicas, write every redis-type kevy
+/// 1 primary + 2 replicas, write every redis-type kevy
 /// supports, then read each key from each replica via separate
 /// ReadWriteClient instances. Content must match on both.
 ///
@@ -476,7 +475,7 @@ fn types_matrix_one_primary_two_replicas() {
     r2.shutdown();
 }
 
-/// T1.39: a fresh-written key is visible via READCONSISTENT (forced
+/// A fresh-written key is visible via READCONSISTENT (forced
 /// primary route) immediately, regardless of replica lag.
 #[test]
 fn readconsistent_sees_fresh_write_before_replica_lag() {
@@ -508,7 +507,7 @@ fn readconsistent_sees_fresh_write_before_replica_lag() {
     replica.shutdown();
 }
 
-// ────────── T1.40 / T1.41 reconnect helpers ──────────
+// ────────── reconnect-window helpers ──────────
 
 /// Test-only runner that exposes its own stop signal + tracks how
 /// many SnapshotBegin events it has seen. Lets the reconnect-window
@@ -521,11 +520,17 @@ struct TrackedReplica {
     /// Cloned upstream socket — Mutex<Option<TcpStream>> so the
     /// stop path can `shutdown(Shutdown::Both)` it, unblocking the
     /// runner thread's `next_event` blocking read. Same trick the
-    /// production `ReplicaRunner` uses (T1.29.5).
+    /// production `ReplicaRunner` uses.
     runner_socket: Arc<Mutex<Option<std::net::TcpStream>>>,
     upstream: (String, u16),
     sender: kevy_rt::ReplicaInboxSender,
     last_offset: Arc<std::sync::atomic::AtomicU64>,
+    /// Feed generation the applied data reflects — carried across
+    /// stop_runner/start_runner like the production runner's
+    /// `data_gen`, so an in-backlog reconnect presents a verifiable
+    /// resume claim (the T8 fence ships on a gen-0 nonzero-offset
+    /// claim by design).
+    data_gen: Arc<std::sync::atomic::AtomicU64>,
     snapshot_count: Arc<std::sync::atomic::AtomicUsize>,
     rt_port: u16,
     rt_stop: Arc<AtomicBool>,
@@ -544,7 +549,7 @@ impl TrackedReplica {
         let rt_stop = Arc::new(AtomicBool::new(false));
         let rt_stop_thread = rt_stop.clone();
         let rt_handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], rt_port, 1, kevy::KevyCommands)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1)).bind([127, 0, 0, 1], rt_port).shards(1)
                 .with_data_dir(dir_path)
                 .with_aof(false)
                 .with_replica_inboxes(vec![receiver]);
@@ -555,6 +560,7 @@ impl TrackedReplica {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         let last_offset = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let data_gen = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let snapshot_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut me = Self {
             port: rt_port,
@@ -564,6 +570,7 @@ impl TrackedReplica {
             upstream: ("127.0.0.1".to_string(), upstream_replication_port),
             sender,
             last_offset,
+            data_gen,
             snapshot_count,
             rt_port,
             rt_stop,
@@ -581,19 +588,29 @@ impl TrackedReplica {
         let upstream = self.upstream.clone();
         let sender = self.sender.clone();
         let last_offset = self.last_offset.clone();
+        let data_gen = self.data_gen.clone();
         let snapshot_count = self.snapshot_count.clone();
         let handle = std::thread::spawn(move || {
             while !stop.load(Ordering::Relaxed) {
                 let mut from = last_offset.load(std::sync::atomic::Ordering::Relaxed);
-                let conn = kevy_replicate::replica::ReplicaClient::connect(
+                let conn = kevy_replicate::replica::ReplicaClient::connect_at(
                     (upstream.0.as_str(), upstream.1),
                     "tracked",
+                    data_gen.load(std::sync::atomic::Ordering::Relaxed),
                     from,
+                    std::time::Duration::from_secs(5),
                 );
                 let Ok(mut client) = conn else {
                     std::thread::sleep(std::time::Duration::from_millis(20));
                     continue;
                 };
+                // Same adoption contract as the production runner:
+                // a from-0 session (or a completed ship) delivers a
+                // whole history of the ACK'd generation.
+                let ack_gen = client.primary_gen_at_handshake();
+                if from == 0 {
+                    data_gen.store(ack_gen, std::sync::atomic::Ordering::Relaxed);
+                }
                 if let Ok(h) = client.socket_handle()
                     && let Ok(mut guard) = socket_slot.lock()
                 {
@@ -614,7 +631,8 @@ impl TrackedReplica {
                                 kevy_replicate::replica::ReplicaEvent::SnapshotEnd { ack_offset } => {
                                     from = ack_offset;
                                     last_offset.store(from, std::sync::atomic::Ordering::Relaxed);
-                                    kevy_rt::ReplicaApply::SnapshotEnd { ack_offset, routed: false }
+                                    data_gen.store(ack_gen, std::sync::atomic::Ordering::Relaxed);
+                                    kevy_rt::ReplicaApply::SnapshotEnd { ack_offset, routed: false, gate: None }
                                 }
                                 kevy_replicate::replica::ReplicaEvent::Frame(frame) => {
                                     from = frame.offset.saturating_add(1);
@@ -664,7 +682,7 @@ impl TrackedReplica {
     }
 }
 
-/// T1.40: replica disconnects, primary takes more writes (still
+/// Replica disconnects, primary takes more writes (still
 /// within backlog), replica reconnects — should resume via backlog
 /// **without a snapshot ship**.
 #[test]
@@ -722,7 +740,7 @@ fn reconnect_within_backlog_resumes_no_snapshot() {
     replica.shutdown();
 }
 
-/// T1.41: replica disconnects, primary writes enough to evict the
+/// Replica disconnects, primary writes enough to evict the
 /// disconnected offset from the backlog, replica reconnects — must
 /// take the snapshot ship path.
 #[test]
@@ -739,7 +757,7 @@ fn reconnect_outside_backlog_triggers_snapshot() {
         let stop_thread = stop.clone();
         unsafe { std::env::set_var("KEVY_IO_URING", "0"); }
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, 1, kevy::KevyCommands)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1)).bind([127, 0, 0, 1], port).shards(1)
                 .with_data_dir(dir_path)
                 .with_aof(false)
                 .with_replication(true, 256) // 256-byte backlog: a few SETs evict the head

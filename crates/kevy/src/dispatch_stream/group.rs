@@ -4,6 +4,7 @@
 //! API on `Store` (see `kevy_store::stream::store`); reply emitters
 //! match the exact array shapes Redis returns.
 
+use kevy_resp::CmdError;
 use kevy_resp::{
     ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
     encode_simple_string,
@@ -54,7 +55,7 @@ fn xgroup_create<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Ve
     let group = &args[3];
     let mode = match parse_id_or_dollar(&args[4]) {
         Ok(m) => m,
-        Err(msg) => return encode_error(out, msg),
+        Err(msg) => return encode_error(out, msg.as_wire()),
     };
     let mkstream = args.len() == 6 && args[5].eq_ignore_ascii_case(b"MKSTREAM");
     match store.xgroup_create(key, group, mode, mkstream) {
@@ -89,7 +90,7 @@ fn xgroup_setid<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec
     }
     let mode = match parse_id_or_dollar(&args[4]) {
         Ok(m) => m,
-        Err(msg) => return encode_error(out, msg),
+        Err(msg) => return encode_error(out, msg.as_wire()),
     };
     match store.xgroup_setid(&args[2], &args[3], mode) {
         Ok(true) => encode_simple_string(out, "OK"),
@@ -119,13 +120,13 @@ fn xgroup_del_consumer<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &
     }
 }
 
-fn parse_id_or_dollar(s: &[u8]) -> Result<GroupCreateMode, &'static str> {
+fn parse_id_or_dollar(s: &[u8]) -> Result<GroupCreateMode, CmdError> {
     if s == b"$" {
         return Ok(GroupCreateMode::AtCurrent);
     }
     parse_explicit_id(s, /*end=*/ false)
         .map(GroupCreateMode::AtId)
-        .map_err(|_| "ERR Invalid stream ID specified as stream command argument")
+        .map_err(|_| CmdError::Wire("ERR Invalid stream ID specified as stream command argument"))
 }
 
 // ───────────── XREADGROUP ─────────────
@@ -138,7 +139,7 @@ pub(super) fn cmd_xreadgroup<A: ArgvView + ?Sized>(
 ) {
     let mut parsed = match parse_xreadgroup_argv(args) {
         Ok(p) => p,
-        Err(msg) => return encode_error(out, msg),
+        Err(msg) => return encode_error(out, msg.as_wire()),
     };
     let mut reply: Vec<super::StreamReply> = Vec::new();
     // BLOCK only takes effect when at least one stream is reading new
@@ -241,12 +242,12 @@ struct XReadGroupParsed {
 
 fn parse_xreadgroup_argv<A: ArgvView + ?Sized>(
     args: &A,
-) -> Result<XReadGroupParsed, &'static str> {
+) -> Result<XReadGroupParsed, CmdError> {
     if args.len() < 7 {
-        return Err("ERR wrong number of arguments for 'xreadgroup' command");
+        return Err(CmdError::Wire("ERR wrong number of arguments for 'xreadgroup' command"));
     }
     if !args[1].eq_ignore_ascii_case(b"GROUP") {
-        return Err("ERR syntax error");
+        return Err(CmdError::Wire("ERR syntax error"));
     }
     let group = args[2].to_vec();
     let consumer = args[3].to_vec();
@@ -280,22 +281,22 @@ fn parse_xreadgroup_argv<A: ArgvView + ?Sized>(
                     streams,
                 });
             }
-            _ => return Err("ERR syntax error"),
+            _ => return Err(CmdError::Wire("ERR syntax error")),
         }
     }
-    Err("ERR syntax error")
+    Err(CmdError::Wire("ERR syntax error"))
 }
 
 fn parse_kv_u64<A: ArgvView + ?Sized>(
     args: &A,
     idx: usize,
     bad: &'static str,
-) -> Result<u64, &'static str> {
+) -> Result<u64, CmdError> {
     let n = args.get(idx).ok_or("ERR syntax error")?;
     std::str::from_utf8(n)
         .ok()
         .and_then(|s| s.parse().ok())
-        .ok_or(bad)
+        .ok_or(CmdError::Wire(bad))
 }
 
 /// `(key, last-seen-arg)` pairs as parsed from the `STREAMS …` tail.
@@ -304,11 +305,11 @@ type StreamKeyLastSeen = (Vec<u8>, Vec<u8>);
 fn parse_xreadgroup_streams<A: ArgvView + ?Sized>(
     args: &A,
     start: usize,
-) -> Result<Vec<StreamKeyLastSeen>, &'static str> {
+) -> Result<Vec<StreamKeyLastSeen>, CmdError> {
     let rest = args.len() - start;
     if rest == 0 || !rest.is_multiple_of(2) {
         return Err(
-            "ERR Unbalanced XREADGROUP list of streams: for each stream key an ID or '>' must be specified.",
+            CmdError::Wire("ERR Unbalanced XREADGROUP list of streams: for each stream key an ID or '>' must be specified."),
         );
     }
     let n = rest / 2;
@@ -356,7 +357,7 @@ pub(super) fn cmd_xpending<A: ArgvView + ?Sized>(store: &mut Store, args: &A, ou
     }
     let parsed = match parse_xpending_extended(args) {
         Ok(p) => p,
-        Err(msg) => return encode_error(out, msg),
+        Err(msg) => return encode_error(out, msg.as_wire()),
     };
     match store.xpending_extended(
         &args[1],
@@ -384,7 +385,7 @@ struct XPendingExtendedArgs {
 
 fn parse_xpending_extended<A: ArgvView + ?Sized>(
     args: &A,
-) -> Result<XPendingExtendedArgs, &'static str> {
+) -> Result<XPendingExtendedArgs, CmdError> {
     let mut i = 3;
     let mut idle_min_ms = None;
     if args[i].eq_ignore_ascii_case(b"IDLE") {
@@ -398,12 +399,12 @@ fn parse_xpending_extended<A: ArgvView + ?Sized>(
         i += 2;
     }
     if args.len() < i + 3 {
-        return Err("ERR syntax error");
+        return Err(CmdError::Wire("ERR syntax error"));
     }
     let start = parse_range_start(&args[i])
-        .map_err(|_| "ERR Invalid stream ID specified as stream command argument")?;
+        .map_err(|_| CmdError::Wire("ERR Invalid stream ID specified as stream command argument"))?;
     let end = parse_range_end(&args[i + 1])
-        .map_err(|_| "ERR Invalid stream ID specified as stream command argument")?;
+        .map_err(|_| CmdError::Wire("ERR Invalid stream ID specified as stream command argument"))?;
     let count: usize = std::str::from_utf8(&args[i + 2])
         .ok()
         .and_then(|s| s.parse().ok())

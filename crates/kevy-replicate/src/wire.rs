@@ -29,7 +29,7 @@ pub enum WireError {
     /// and call [`decode_frame`] again.
     Truncated,
     /// Outer envelope did not start with `*2\r\n` (the only legal
-    /// envelope length in v1.18.0).
+    /// envelope length).
     BadEnvelope,
     /// Offset element did not parse as a RESP integer (`:N\r\n`).
     BadOffset,
@@ -372,7 +372,7 @@ mod tests {
         // *1 instead of *2.
         let bad = b"*1\r\n:42\r\n";
         assert!(matches!(decode_frame(bad), Err(WireError::BadEnvelope)));
-        // *3 (future-extension shape) rejected on v1.18.0.
+        // *3 (future-extension shape) is rejected too.
         let bad3 = b"*3\r\n:42\r\n*0\r\n:0\r\n";
         assert!(matches!(decode_frame(bad3), Err(WireError::BadEnvelope)));
     }
@@ -419,7 +419,7 @@ mod tests {
         assert!(matches!(decode_frame(&bad), Err(WireError::BadOffset)));
     }
 
-    // Snapshot-wire tests (T1.22) live in `tests/wire_snapshot.rs`
+    // Snapshot-wire tests live in `tests/wire_snapshot.rs`
     // as an integration test so this file stays under the 500-LOC
     // project ceiling. Only public API there.
 

@@ -6,7 +6,6 @@
 //! to opt into RESP3, just adds `sub.hello3()?` before `subscribe`.
 
 use kevy_client::{PubsubEvent, Subscriber};
-use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -41,7 +40,7 @@ impl Server {
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, 1, kevy::KevyCommands)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1)).bind([127, 0, 0, 1], port).shards(1)
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });
@@ -88,7 +87,7 @@ fn hello3_then_subscribe_recv_push_frames() {
 
     // Publisher (separate conn, regular RESP2 — proves V3 + V2 mix
     // works server-side, P4).
-    let mut pubconn = kevy_client::Connection::open(&srv.url()).unwrap();
+    let mut pubconn = kevy_client::Connection::connect(&srv.url()).unwrap();
     let n = pubconn.publish(b"news", b"hello").unwrap();
     assert_eq!(n, 1);
 
@@ -114,7 +113,7 @@ fn hello3_then_psubscribe_recv_pmessage_push() {
     let ack = sub.recv().unwrap();
     assert!(matches!(ack, PubsubEvent::Psubscribe { count: 1, .. }));
 
-    let mut pubconn = kevy_client::Connection::open(&srv.url()).unwrap();
+    let mut pubconn = kevy_client::Connection::connect(&srv.url()).unwrap();
     let _ = pubconn.publish(b"news.tech", b"hi").unwrap();
 
     let pmsg = sub.recv().unwrap();
@@ -130,7 +129,7 @@ fn hello3_then_psubscribe_recv_pmessage_push() {
 
 #[test]
 fn hello3_on_embedded_subscriber_returns_unsupported() {
-    let mut sub = Subscriber::open("mem://hello3-embed", &[b"chan"]).unwrap();
+    let mut sub = Subscriber::connect_channels("mem://hello3-embed", &[b"chan"]).unwrap();
     let err = sub.hello3().unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+    assert!(matches!(err, kevy_client::KevyError::Unsupported(_)));
 }

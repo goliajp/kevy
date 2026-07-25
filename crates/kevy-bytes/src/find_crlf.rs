@@ -18,7 +18,9 @@
 /// `None` if absent or if fewer than two bytes remain.
 #[inline]
 pub fn find_crlf(buf: &[u8], start: usize) -> Option<usize> {
-    #[cfg(target_arch = "x86_64")]
+    // Runtime AVX2 detection is a std facility; a (hypothetical) no_std
+    // x86_64 build falls through to the SWAR loop.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
     {
         if has_avx2() {
             // SAFETY: gated on runtime AVX2 detection above; the
@@ -38,7 +40,7 @@ pub fn find_crlf(buf: &[u8], start: usize) -> Option<usize> {
     find_crlf_swar(buf, start)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
 fn has_avx2() -> bool {
     use core::sync::atomic::{AtomicI8, Ordering};
     static CACHED: AtomicI8 = AtomicI8::new(-1);
@@ -51,7 +53,7 @@ fn has_avx2() -> bool {
     detected
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
 #[target_feature(enable = "avx2")]
 unsafe fn find_crlf_avx2(buf: &[u8], start: usize) -> Option<usize> {
     use core::arch::x86_64::{

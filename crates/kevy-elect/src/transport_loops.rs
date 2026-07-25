@@ -198,7 +198,7 @@ pub(crate) fn orchestrator_loop(
         let Some(outs) = pump_inbound(&shared, &inbound_rx, hb_interval) else {
             return;
         };
-        // v3.15 D2: detect (role, primary) transitions and notify.
+        // Detect (role, primary) transitions and notify.
         {
             let now = Instant::now();
             let e = shared.elector.lock().expect("elector lock");

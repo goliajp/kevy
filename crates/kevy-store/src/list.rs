@@ -1,10 +1,12 @@
 //! `Store` list commands.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::small_list::{self, PushResult, SmallListData};
 use crate::util::{norm_index, range_bounds};
 use crate::value::{ListData, SmallBytes, Value, list_item_weight};
 use crate::{Entry, Store, StoreError};
-use std::sync::Arc;
+use alloc::sync::Arc;
 
 impl Store {
     // ---- lists ---------------------------------------------------------
@@ -81,19 +83,7 @@ impl Store {
     }
 
     /// `LPUSH` — prepend each value in turn; returns the new length.
-    pub fn lpush(&mut self, key: &[u8], values: &[Vec<u8>]) -> Result<usize, StoreError> {
-        let borrowed: Vec<&[u8]> = values.iter().map(Vec::as_slice).collect();
-        self.lpush_borrowed(key, &borrowed)
-    }
-
-    /// `RPUSH` — append each value; returns the new length.
-    pub fn rpush(&mut self, key: &[u8], values: &[Vec<u8>]) -> Result<usize, StoreError> {
-        let borrowed: Vec<&[u8]> = values.iter().map(Vec::as_slice).collect();
-        self.rpush_borrowed(key, &borrowed)
-    }
-
-    /// G4 (v1.25): borrowed-slice `LPUSH`. A.8: encoding-switch.
-    pub fn lpush_borrowed(
+    pub fn lpush(
         &mut self,
         key: &[u8],
         values: &[&[u8]],
@@ -109,8 +99,8 @@ impl Store {
         Ok(self.list_len(key))
     }
 
-    /// G4 (v1.25): borrowed-slice `RPUSH`. A.8: encoding-switch.
-    pub fn rpush_borrowed(
+    /// `RPUSH` — append each value; returns the new length.
+    pub fn rpush(
         &mut self,
         key: &[u8],
         values: &[&[u8]],
@@ -177,7 +167,7 @@ impl Store {
             );
             0
         } else {
-            let mut d = std::collections::VecDeque::with_capacity(1);
+            let mut d = alloc::collections::VecDeque::with_capacity(1);
             d.push_back(v.to_vec());
             self.insert_entry(
                 SmallBytes::from_slice(key),

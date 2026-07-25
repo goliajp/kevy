@@ -1,12 +1,12 @@
 //! Hash field-TTL: `HEXPIRE` / `HPEXPIRE` / `HPERSIST` / `HTTL`
-//! (v1.14.0, server v2.4 / Redis 7.4 shape).
+//! (Redis 7.4 command shape).
 //!
 //! Per-field replies come back in request order. The `HEXPIRE` /
 //! `HPEXPIRE` result codes ([`HExpireCode`], re-exported from
 //! kevy-embedded): `-2` key or field missing, `0` condition not met,
 //! `1` deadline set, `2` field deleted (deadline already due).
 
-use std::io;
+use crate::{KevyError, KevyResult};
 
 use kevy_embedded::{HExpireCode, HExpireCond};
 use kevy_resp::Reply;
@@ -25,7 +25,7 @@ impl Connection {
         fields: &[&[u8]],
         ttl: std::time::Duration,
         cond: HExpireCond,
-    ) -> io::Result<Vec<HExpireCode>> {
+    ) -> KevyResult<Vec<HExpireCode>> {
         check_fields(fields)?;
         let secs = ttl.as_secs();
         match self {
@@ -47,7 +47,7 @@ impl Connection {
         fields: &[&[u8]],
         ttl: std::time::Duration,
         cond: HExpireCond,
-    ) -> io::Result<Vec<HExpireCode>> {
+    ) -> KevyResult<Vec<HExpireCode>> {
         check_fields(fields)?;
         let ms = ttl.as_millis().min(i64::MAX as u128) as u64;
         match self {
@@ -63,7 +63,7 @@ impl Connection {
 
     /// `HPERSIST key FIELDS n field…` — clear per-field TTLs. Codes:
     /// `-2` missing, `-1` had no TTL, `1` cleared.
-    pub fn hpersist(&mut self, key: &[u8], fields: &[&[u8]]) -> io::Result<Vec<HExpireCode>> {
+    pub fn hpersist(&mut self, key: &[u8], fields: &[&[u8]]) -> KevyResult<Vec<HExpireCode>> {
         check_fields(fields)?;
         match self {
             Self::Embedded(s) => s.hpersist(key, fields),
@@ -74,9 +74,12 @@ impl Connection {
         }
     }
 
-    /// `HTTL key FIELDS n field…` — remaining TTL per field in
-    /// **milliseconds** (`-2` key/field missing, `-1` no TTL).
-    pub fn httl(&mut self, key: &[u8], fields: &[&[u8]]) -> io::Result<Vec<i64>> {
+    /// `HTTL key FIELDS n field…` — remaining TTL per field in **seconds**
+    /// (`-2` key/field missing, `-1` no TTL).
+    ///
+    /// Before 4.0 this returned milliseconds, which no caller reading the name
+    /// would have expected. [`Self::hpttl`] is the millisecond form.
+    pub fn httl(&mut self, key: &[u8], fields: &[&[u8]]) -> KevyResult<Vec<i64>> {
         check_fields(fields)?;
         match self {
             Self::Embedded(s) => s.httl(key, fields),
@@ -85,15 +88,24 @@ impl Connection {
             }
         }
     }
+
+    /// `HPTTL key FIELDS n field…` — remaining TTL per field in
+    /// **milliseconds** (`-2` key/field missing, `-1` no TTL).
+    pub fn hpttl(&mut self, key: &[u8], fields: &[&[u8]]) -> KevyResult<Vec<i64>> {
+        check_fields(fields)?;
+        match self {
+            Self::Embedded(s) => s.hpttl(key, fields),
+            Self::Remote(c) => {
+                hash_ttl_request(c, b"HPTTL", key, None, HExpireCond::Always, fields)
+            }
+        }
+    }
 }
 
 /// The verbs require `numfields > 0` — surface that before the wire.
-fn check_fields(fields: &[&[u8]]) -> io::Result<()> {
+fn check_fields(fields: &[&[u8]]) -> KevyResult<()> {
     if fields.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "hash field-TTL verbs need at least one field",
-        ));
+        return Err(KevyError::InvalidInput("hash field-TTL verbs need at least one field".into()));
     }
     Ok(())
 }
@@ -117,7 +129,7 @@ fn hash_ttl_request(
     arg: Option<String>,
     cond: HExpireCond,
     fields: &[&[u8]],
-) -> io::Result<Vec<i64>> {
+) -> KevyResult<Vec<i64>> {
     let mut args = Vec::with_capacity(fields.len() + 6);
     args.push(verb.to_vec());
     args.push(key.to_vec());
@@ -138,7 +150,7 @@ fn hash_ttl_request(
                 other => Err(unexpected(other)),
             })
             .collect(),
-        Reply::Error(e) => Err(io::Error::other(string(e))),
+        Reply::Error(e) => Err(KevyError::Protocol(string(e))),
         other => Err(unexpected(other)),
     }
 }
@@ -154,7 +166,7 @@ mod tests {
 
     #[test]
     fn embedded_hexpire_httl_hpersist_round_trip() {
-        let mut c = Connection::open("mem://").unwrap();
+        let mut c = Connection::connect("mem://").unwrap();
         c.hset(b"h", &[(b"a".as_ref(), b"1".as_ref()), (b"b".as_ref(), b"2".as_ref())])
             .unwrap();
 
@@ -174,7 +186,7 @@ mod tests {
 
     #[test]
     fn embedded_hpexpire_ms_precision() {
-        let mut c = Connection::open("mem://").unwrap();
+        let mut c = Connection::connect("mem://").unwrap();
         c.hset(b"h", &[(b"f".as_ref(), b"v".as_ref())]).unwrap();
         let codes = c
             .hpexpire(b"h", &[&b"f"[..]], Duration::from_millis(1500), HExpireCond::Always)
@@ -186,8 +198,8 @@ mod tests {
 
     #[test]
     fn empty_fields_rejected() {
-        let mut c = Connection::open("mem://").unwrap();
+        let mut c = Connection::connect("mem://").unwrap();
         let err = c.httl(b"h", &[]).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(matches!(err, KevyError::InvalidInput(_)));
     }
 }

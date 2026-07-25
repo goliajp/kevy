@@ -9,6 +9,7 @@
 //! from a V2 helper to a RESP3 helper.
 
 use crate::cmd::{wrong_args, arg_f64, cmd_zrange, cmd_zrangebyscore, store_err};
+use crate::state::Ctx;
 use kevy_resp::{
     ArgvView, RespVersion, encode_bulk, encode_double, encode_error, encode_map_header,
     encode_null, encode_set_header,
@@ -26,6 +27,7 @@ use kevy_store::{Store, StoreError};
 /// migration.
 // LOC-WAIVER: data-driven RESP3-override verb table — one arm per shape-changing verb.
 pub(crate) fn try_resp3_overrides<A: ArgvView + ?Sized>(
+    ctx: &Ctx<'_>,
     cmd: &[u8],
     store: &mut Store,
     args: &A,
@@ -72,8 +74,7 @@ pub(crate) fn try_resp3_overrides<A: ArgvView + ?Sized>(
             // the same reply shape under both protos; cmd_config ignores
             // `proto` for those arms. Routing all CONFIG sub-cmds through
             // the V3 path here is simpler than peeking the sub-cmd.
-            let cfg = crate::config_global::get();
-            crate::ops::config::cmd_config(&cfg, args, out, RespVersion::V3);
+            crate::ops::config::cmd_config(ctx, args, out, RespVersion::V3);
             true
         }
         // ZRANGE WITHSCORES + ZRANGEBYSCORE WITHSCORES: V3 emits an
@@ -95,8 +96,7 @@ pub(crate) fn try_resp3_overrides<A: ArgvView + ?Sized>(
         // plain bulk. INFO and CLIENT INFO / LIST are the kevy verbs
         // whose body is unambiguously text.
         b"INFO" => {
-            let cfg = crate::config_global::get();
-            crate::ops::cmd_info(&cfg, store, args, out, RespVersion::V3);
+            crate::ops::cmd_info(ctx, store, args, out, RespVersion::V3);
             true
         }
         b"CLIENT" => {

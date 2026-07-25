@@ -7,16 +7,18 @@
 //!   `V1.0-BOUNDARY.md`. Hot-settable knobs (`maxmemory`,
 //!   `maxmemory-policy`, `appendfsync`, `auto-aof-rewrite-*`, `hz`,
 //!   `maxmemory-samples`, `loglevel`, `logfile`-stdout/stderr) build
-//!   a fresh `Arc<Config>` and atomically swap [`crate::config_global`].
-//!   Per-shard re-application happens lazily on the next tick via
+//!   a fresh `Arc<Config>` and atomically swap the live config via
+//!   `RuntimeState::config_replace`. Per-shard re-application happens
+//!   lazily on the next tick via
 //!   `kevy_rt::Commands::live_runtime_config` (~100 ms upper bound on
 //!   propagation; well under Redis's "best-effort" semantics).
 //! - Non-hot-settable fields (`bind`, `port`, `threads`, `dir`,
 //!   `appendonly`, `logfile`-with-path) return Redis's canonical
 //!   `ERR ... can't be changed at runtime` form.
 //! - REWRITE re-emits the live config via `Config::to_toml_string`
-//!   and rename-overwrites the source file atomically. Per the v1.0
-//!   matrix, inline comments are NOT preserved; the reply notes this.
+//!   and rename-overwrites the source file atomically. Per the
+//!   hot-settable matrix, inline comments are NOT preserved; the
+//!   reply notes this.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,12 +29,12 @@ use kevy_resp::{
     encode_simple_string,
 };
 
-use crate::config_global;
+use crate::state::Ctx;
 
 use super::{appendfsync_str, eviction_str, log_level_str, wrong_args};
 
 pub(crate) fn cmd_config<A: ArgvView + ?Sized>(
-    cfg: &Config,
+    ctx: &Ctx<'_>,
     args: &A,
     out: &mut Vec<u8>,
     proto: RespVersion,
@@ -42,9 +44,9 @@ pub(crate) fn cmd_config<A: ArgvView + ?Sized>(
         None => return wrong_args(out, "config"),
     };
     match sub.as_slice() {
-        b"GET" => cmd_config_get(cfg, args, out, proto),
-        b"SET" => cmd_config_set(args, out),
-        b"REWRITE" => cmd_config_rewrite(out),
+        b"GET" => cmd_config_get(&ctx.state.config(), args, out, proto),
+        b"SET" => cmd_config_set(ctx, args, out),
+        b"REWRITE" => cmd_config_rewrite(ctx, out),
         b"RESETSTAT" => encode_simple_string(out, "OK"),
         _ => encode_error(
             out,
@@ -89,27 +91,27 @@ fn cmd_config_get<A: ArgvView + ?Sized>(
     }
 }
 
-fn cmd_config_set<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
+fn cmd_config_set<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) {
     if args.len() != 4 {
         return wrong_args(out, "config|set");
     }
     let key = args[2].to_ascii_lowercase();
     let value = &args[3];
-    // v1.42 — record the CONFIG SET event to the audit log (if enabled).
+    // Record the CONFIG SET event to the audit log (if enabled).
     let v_slice: &[u8] = value;
-    crate::audit_log::record(&[
+    ctx.state.obs.audit_record(&[
         &b"CONFIG"[..],
         &b"SET"[..],
         &key[..],
         v_slice,
     ]);
-    let live = config_global::get();
+    let live = ctx.state.config();
     let mut new_cfg = (*live).clone();
     match apply_hot_set(&mut new_cfg, &key, value) {
-        Ok(()) => match config_global::replace(Arc::new(new_cfg)) {
-            Ok(()) => encode_simple_string(out, "OK"),
-            Err(e) => encode_error(out, &format!("ERR {e}")),
-        },
+        Ok(()) => {
+            ctx.state.config_replace(Arc::new(new_cfg));
+            encode_simple_string(out, "OK");
+        }
         Err(SetError::ReadOnly(k)) => encode_error(
             out,
             &format!("ERR config setting '{k}' can't be changed at runtime, restart required"),
@@ -125,10 +127,10 @@ fn cmd_config_set<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     }
 }
 
-fn cmd_config_rewrite(out: &mut Vec<u8>) {
-    // v1.42 — audit the admin event.
-    crate::audit_log::record(&[&b"CONFIG"[..], &b"REWRITE"[..]]);
-    let cfg = config_global::get();
+fn cmd_config_rewrite(ctx: &Ctx<'_>, out: &mut Vec<u8>) {
+    // Audit the admin event.
+    ctx.state.obs.audit_record(&[&b"CONFIG"[..], &b"REWRITE"[..]]);
+    let cfg = ctx.state.config();
     let Some(path) = cfg.source_path.clone() else {
         return encode_error(
             out,
@@ -205,7 +207,7 @@ fn atomic_write(path: &PathBuf, bytes: &[u8]) -> std::io::Result<()> {
 
 #[derive(Debug)]
 enum SetError {
-    /// Field exists but the v1.0 hot-settable matrix marks it as
+    /// Field exists but the hot-settable matrix marks it as
     /// requiring a restart (bind, port, threads, dir, appendonly,
     /// logfile-with-path).
     ReadOnly(String),
@@ -227,12 +229,25 @@ fn apply_hot_set(cfg: &mut Config, key: &[u8], value: &[u8]) -> Result<(), SetEr
         })?;
     match key_str {
         "maxmemory" | "maxmemory-policy" => set_memory(cfg, key_str, value_str),
-        "appendfsync" | "auto-aof-rewrite-percentage" | "auto-aof-rewrite-min-size" => {
+        "appendfsync" | "auto-aof-rewrite-percentage" | "auto-aof-rewrite-min-size"
+        | "auto-aof-rewrite-bytes" | "auto-aof-rewrite-interval-secs" => {
             set_persistence(cfg, key_str, value_str)
         }
         "hz" | "maxmemory-samples" => set_expiry(cfg, key_str, value_str),
         "loglevel" | "logfile" => set_log(cfg, key_str, value_str),
-        "bind" | "port" | "io-threads" | "dir" | "appendonly" => {
+        // Hot-settable ONLY as a budget change: the shard tick
+        // re-resolves + re-applies it (the maxmemory precedent).
+        // Turning tiering on/off needs the vlog lifecycle — a restart;
+        // the spill dir likewise.
+        "tiering-budget" => {
+            cfg.tiering.budget = Some(
+                kevy_config::TierBudgetSpec::parse(value_str).map_err(|reason| {
+                    SetError::BadValue { key: key_str.to_string(), reason }
+                })?,
+            );
+            Ok(())
+        }
+        "bind" | "port" | "io-threads" | "dir" | "appendonly" | "tiering-spill-dir" => {
             Err(SetError::ReadOnly(key_str.to_string()))
         }
         other => Err(SetError::Unknown(other.to_string())),
@@ -286,6 +301,20 @@ fn set_persistence(cfg: &mut Config, key: &str, value: &str) -> Result<(), SetEr
                     reason,
                 })?;
         }
+        "auto-aof-rewrite-bytes" => {
+            cfg.persistence.auto_aof_rewrite_bytes =
+                parse_size(value).map_err(|reason| SetError::BadValue {
+                    key: key.to_string(),
+                    reason,
+                })?;
+        }
+        "auto-aof-rewrite-interval-secs" => {
+            cfg.persistence.auto_aof_rewrite_interval_secs =
+                value.parse::<u64>().map_err(|_| SetError::BadValue {
+                    key: key.to_string(),
+                    reason: "expected a non-negative integer".to_string(),
+                })?;
+        }
         _ => return Err(SetError::Unknown(key.to_string())),
     }
     Ok(())
@@ -315,9 +344,9 @@ fn set_log(cfg: &mut Config, key: &str, value: &str) -> Result<(), SetError> {
         }
         "logfile" => {
             // Redis names this `logfile`; kevy's TOML calls it `log.output`.
-            // Per the v1.0 hot-settable matrix, only stdout / stderr are
+            // Per the hot-settable matrix, only stdout / stderr are
             // hot-settable. Any file path requires opening a handle the
-            // shards can write to — punted to the v1.x log-layer rewrite.
+            // shards can write to, which needs a restart.
             match LogOutput::parse(value) {
                 LogOutput::Stdout => cfg.log.output = LogOutput::Stdout,
                 LogOutput::Stderr => cfg.log.output = LogOutput::Stderr,
@@ -370,7 +399,28 @@ fn config_pairs(cfg: &Config) -> Vec<(&'static str, String)> {
         "cluster-port-base",
         crate::cluster_port_base(cfg).to_string(),
     ));
+    push_tiering_pairs(&mut v, cfg);
     v
+}
+
+/// Tiering: the budget in its configured form (`auto` / `N%` /
+/// bytes); empty string = tiering off (the `save`-style "off" value).
+fn push_tiering_pairs(v: &mut Vec<(&'static str, String)>, cfg: &Config) {
+    v.push((
+        "tiering-budget",
+        cfg.tiering
+            .budget
+            .map(kevy_config::TierBudgetSpec::as_config_string)
+            .unwrap_or_default(),
+    ));
+    v.push((
+        "tiering-spill-dir",
+        cfg.tiering
+            .spill_dir
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default(),
+    ));
 }
 
 /// Minimal glob matcher — `*` matches any run of bytes; everything else

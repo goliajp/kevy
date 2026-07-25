@@ -1,4 +1,4 @@
-//! v2.10 — `PREFIX.DIGEST <prefix>`: order-insensitive checksum of a
+//! `PREFIX.DIGEST <prefix>`: order-insensitive checksum of a
 //! prefix's rows for migration verification (kevy-cli digest / diff).
 //! Rides the extension fan-out; per-shard XOR of per-row FNV-1a
 //! digests over canonical value bytes, reduce XORs shards.
@@ -79,10 +79,17 @@ pub(crate) fn extension_op(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let mut pat = prefix.to_vec();
     pat.push(b'*');
     let keys = store.collect_keys(Some(&pat), None);
-    let mut xor = 0u64;
-    for key in &keys {
-        xor ^= row_digest(store, key);
-    }
+    // The digest sweep is a bulk read — inside the peek scope a
+    // cold row costs ONE record read (whole-value decode), never
+    // promotes and never advances the 2nd-touch gate (a full-prefix
+    // digest must not thrash the hot tier).
+    let xor = store.peek_scope(|s| {
+        let mut xor = 0u64;
+        for key in &keys {
+            xor ^= row_digest(s, key);
+        }
+        xor
+    });
     let mut chunk = vec![ST_OK];
     chunk.extend_from_slice(&(keys.len() as u64).to_le_bytes());
     chunk.extend_from_slice(&xor.to_le_bytes());

@@ -35,9 +35,9 @@ pub(crate) struct Shard<C: Commands> {
     /// not yet folded replies for. While non-zero, replies are
     /// certainly inbound within ~one cross-shard RTT — the idle
     /// ladder stays in the spin rung instead of paying a kernel
-    /// sleep/wake transition per reply batch (the v2.2-perf fix for
-    /// the 4fa4631 legacy_8sh step; see
-    /// bench/PERF-DECOMP-2026-07-04-legacy8sh-owner-starvation.md).
+    /// sleep/wake transition per reply batch (the fix for a measured
+    /// multi-shard owner-starvation regression; see the legacy8sh
+    /// owner-starvation PERF-DECOMP note in bench/).
     pub(crate) xshard_inflight: u64,
     pub(crate) id: usize,
     pub(crate) nshards: usize,
@@ -51,7 +51,7 @@ pub(crate) struct Shard<C: Commands> {
     /// `Some` iff cluster mode is on. Conns accepted here are marked
     /// [`Conn::cluster`] and get `-MOVED` instead of forwarding.
     pub(crate) cluster_listener: Option<Socket>,
-    /// v1.25 UDS: optional Unix-domain stream listener. Only shard 0 ever
+    /// UDS: optional Unix-domain stream listener. Only shard 0 ever
     /// holds it (no SO_REUSEPORT for AF_UNIX, so a single global socket
     /// like valkey's `unixsocket` config). The reactor accepts on it
     /// alongside the TCP listener. `None` on all other shards + when
@@ -61,7 +61,7 @@ pub(crate) struct Shard<C: Commands> {
     pub(crate) store: Store,
     pub(crate) commands: C,
     pub(crate) poller: Poller,
-    /// **v1.30** — `None` on off-accept-set shards; they don't bind the listener so SO_REUSEPORT redirects.
+    /// `None` on off-accept-set shards; they don't bind the listener so SO_REUSEPORT redirects.
     pub(crate) listener: Option<Socket>,
     pub(crate) waker: Arc<Waker>,
     /// Inbound SPSC ring from each peer shard (index = source id; `self` = None).
@@ -76,7 +76,7 @@ pub(crate) struct Shard<C: Commands> {
     // + fold) and per event; std's SipHash on the u64/i32 keys profiled at ~17%
     // of single-shard CPU, the dominant non-command-CPU cost.
     pub(crate) conns: KevyMap<u64, Conn>,
-    /// **K4 (v1.25 A.9, 2026-06-22)**: per-iter "needs arm work" queue
+    /// Per-iter "needs arm work" queue
     /// for the io_uring reactor. Populated by:
     ///   - accept handler (new conn, needs recv arm)
     ///   - `uring_on_recv` (produced output via dispatch / recv
@@ -89,12 +89,12 @@ pub(crate) struct Shard<C: Commands> {
     ///   - `uring_mark_closing` (closing conn needs visit until reap)
     ///
     /// Drained by `uring_arm_conns` each iter. Replaces the O(N=conns)
-    /// `active_uring_conns` Vec scan (Axis E follow-up shape), which at
+    /// `active_uring_conns` Vec scan, which at
     /// c=10k was 50 µs/iter raw — now O(active) per iter.
     /// Dedup via `UringConn::arm_queued`.
     #[allow(dead_code)] // io_uring path only — epoll reactor doesn't use it
     pub(crate) arm_pending: Vec<u64>,
-    /// **K5 (v1.25 A.4 redo, 2026-06-22)**: ready-set for
+    /// Ready-set for
     /// `uring_reap_closed`. Mirror of `arm_pending`, applied to the reap
     /// path. Populated by `uring_mark_closing` + QUIT dispatch sites
     /// (`exec_dispatch::try_inline_local` + `start_single_at_seq` —
@@ -105,10 +105,10 @@ pub(crate) struct Shard<C: Commands> {
     /// sustained): the old `uring_reap_closed` body
     /// `io.iter().filter(...).map(|(cid,_)| (cid, self.conns.get(cid)))
     /// .collect::<Vec<u64>>()` was 36.74 % of CPU at c=10 000 — pure
-    /// O(N) scan + per-entry second hash lookup into `self.conns`. A.9
-    /// K4 split this for `arm_conns` but left `uring_reap_closed`
-    /// untouched, hence A.9 bench-neutral. K5 finishes the K3 ready-set
-    /// shape across BOTH callsites.
+    /// O(N) scan + per-entry second hash lookup into `self.conns`. An
+    /// earlier change split this for `arm_conns` but left
+    /// `uring_reap_closed` untouched (hence bench-neutral); this field
+    /// finishes the ready-set shape across BOTH callsites.
     ///
     /// Dedup: a conn pushed twice ends up reaped on the first hit (the
     /// second hit's `self.conns.get(cid)` returns None and the filter
@@ -116,13 +116,18 @@ pub(crate) struct Shard<C: Commands> {
     #[allow(dead_code)] // io_uring path only
     pub(crate) closing_uring_conns: Vec<u64>,
     pub(crate) fd_to_conn: KevyMap<i32, u64>,
+    /// Next conn id to assign. Starts at `shard_id + 1` and strides by
+    /// [`Self::conn_id_step`], so ids are unique across every shard of
+    /// the instance (the CLIENT ID / CLIENT KILL ID contract).
     pub(crate) next_conn_id: u64,
+    /// Conn-id stride == the instance's shard count.
+    pub(crate) conn_id_step: u64,
     pub(crate) events: Vec<Event>,
     pub(crate) read_buf: Vec<u8>,
     /// Bitmap of targets that received a message this iteration but
     /// haven't been woken yet. Wakeups are coalesced: each target is woken
     /// at most once per loop, not once per message (one pipe-write
-    /// syscall instead of N). 2026-06-20 perf profile showed `flush_wakes`
+    /// syscall instead of N). A perf profile showed `flush_wakes`
     /// at 2.6% of -c1 CPU on its fast-path early-return alone — the
     /// `Vec<bool>::iter().any(|&w| w)` was N byte loads per iter. The u64
     /// folds it to a single `!= 0` load. Limit: `nshards ≤ 64`, shared
@@ -138,7 +143,7 @@ pub(crate) struct Shard<C: Commands> {
     /// Bitmap of `request_batch[dst]`'s that are non-empty. Same shape
     /// as `backlog_nonempty`: set by the dispatch sites that push into
     /// `request_batch[s]`, cleared in `flush_requests` when the batch
-    /// is drained. D3 (2026-06-20) — removes the per-iter
+    /// is drained. Removes the per-iter
     /// `request_batch.iter().all(Vec::is_empty)` scan from the
     /// `run_uring` main-loop self-time hot block.
     pub(crate) request_batch_nonempty: u64,
@@ -153,7 +158,7 @@ pub(crate) struct Shard<C: Commands> {
     /// `me`: a sender from shard `src` calls `inbound_dirty[me].fetch_or(1
     /// << src, Release)` after pushing a message into `inboxes[src]`, so
     /// `drain_inbound_core` can `swap(0, AcqRel)` and short-circuit when no
-    /// peer has written. 2026-06-20 perf profile showed
+    /// peer has written. A perf profile showed
     /// `uring_drain_inbound` at 17.4% of -c1 CPU even with no cross-shard
     /// traffic — the per-iteration scan of N empty ring-queue tails was
     /// the cost; this flag collapses it to one atomic load. Limit:
@@ -168,7 +173,7 @@ pub(crate) struct Shard<C: Commands> {
     /// `replicate.is_some()` and skips). `Some` when `role = "primary"`
     /// — every applied mutation is pushed to the backlog for connected
     /// replicas to consume.
-    /// Replication backlog + v2.3 feed cursor. Populated when
+    /// Replication backlog + feed cursor. Populated when
     /// replication is on OR `feed_enabled` (FEED.* consumers need the
     /// backlog even with no replicas); `None` = both features off.
     pub(crate) replicate: Option<kevy_replicate::feed::FeedSource>,
@@ -182,7 +187,7 @@ pub(crate) struct Shard<C: Commands> {
     /// Vec rather than KevyMap — N < 16 in practice, linear scan
     /// beats hashing at that size.
     pub(crate) replicas: Vec<crate::replication::ReplicaConn>,
-    /// Recently-disconnected replica slots (T1.15). A replica that
+    /// Recently-disconnected replica slots. A replica that
     /// drops within `replication_reconnect_window_ms` is correlated
     /// against its prior `sent_offset`; expired by the shard tick.
     pub(crate) slots: kevy_replicate::slot::SlotTable,
@@ -194,7 +199,7 @@ pub(crate) struct Shard<C: Commands> {
     /// `Instant::now().duration_since(replication_epoch).as_nanos()`.
     pub(crate) replication_epoch: Instant,
     /// Per-shard replica inbox — `Some` when this server runs as a
-    /// replica (T1.29). The replica runner thread sends decoded
+    /// replica. The replica runner thread sends decoded
     /// snapshot/frame events into this receiver; the reactor drains
     /// it once per tick and applies via `kevy::dispatch` (under
     /// [`crate::ReplicatedApplyGuard`]). `None` when the shard is a
@@ -205,7 +210,7 @@ pub(crate) struct Shard<C: Commands> {
     /// `SnapshotBegin`; consumed on `SnapshotEnd` (`load_snapshot_from`
     /// into `self.store`). Empty when no snapshot is in flight.
     pub(crate) replica_snapshot_buf: Vec<u8>,
-    /// v3.16 D2 — this shard's replication-apply position: the offset
+    /// This shard's replication-apply position: the offset
     /// the NEXT applied frame should carry (last applied + 1; a
     /// snapshot load jumps it to the ship's `ack_offset`). Advanced on
     /// the reactor thread in [`crate::replication_apply`], so a
@@ -215,11 +220,11 @@ pub(crate) struct Shard<C: Commands> {
     /// the inbox and would race a following GET). 0 when this shard
     /// never applied anything.
     pub(crate) replica_applied_next: u64,
-    /// v3.16 — parked WAIT / REPL.WAIT participants on this shard
+    /// Parked WAIT / REPL.WAIT participants on this shard
     /// (see [`crate::exec_replwait`]). Empty in steady state; every
     /// wake/tick hook short-circuits on `is_empty()`.
     pub(crate) repl_waiters: Vec<crate::exec_replwait::ReplWaiter>,
-    /// v3.16 D2 — last [`LiveRuntimeConfig::promotion_epoch`] this
+    /// Last [`LiveRuntimeConfig::promotion_epoch`] this
     /// shard applied. `None` until the first tick: the first observed
     /// value is RECORDED but not acted on, so a process-global counter
     /// left over from an earlier serve session (in-process restarts,
@@ -232,6 +237,12 @@ pub(crate) struct Shard<C: Commands> {
     /// `auto_aof_rewrite_min_size`: never auto-rewrite an AOF smaller than
     /// this many bytes (prevents thrash during startup / on tiny data).
     pub(crate) auto_aof_rewrite_min_size: u64,
+    /// `auto_aof_rewrite_bytes`: absolute-size trigger (0 = rule off).
+    pub(crate) auto_aof_rewrite_bytes: u64,
+    /// `auto_aof_rewrite_interval_secs`: staleness trigger (0 = rule off).
+    pub(crate) auto_aof_rewrite_interval_secs: u64,
+    /// Best-effort boot replay (see `Runtime::with_replay_resync`).
+    pub(crate) replay_resync: bool,
     /// Connections a PUBLISH appended output to this iteration; the reactor
     /// flushes them (epoll via `flush_conn`, io_uring via its arm/write loop).
     pub(crate) dirty: Vec<u64>,
@@ -247,7 +258,7 @@ pub(crate) struct Shard<C: Commands> {
     /// the steady-state O(1) `is_empty()` short-circuit keeps the
     /// channel-only PUBLISH hot path untouched).
     pub(crate) psub_local: HashMap<Vec<u8>, Vec<u64>>,
-    /// **H1.B (v1.25)** per-channel local subscriber index — mirrors
+    /// Per-channel local subscriber index — mirrors
     /// redis `pubsub.c:479-485`. Replaces the O(total_conns) global
     /// scan in `deliver_publish` with O(1) `HashMap::get`. Maintained
     /// on SUBSCRIBE/UNSUBSCRIBE + close_conn; entry removed at zero.
@@ -277,11 +288,11 @@ pub(crate) struct Shard<C: Commands> {
     /// Reactor loop iterations between wall-clock reads for the tick
     /// check. Replaces the old `TICK_CHECK_EVERY` const.
     pub(crate) tick_check_every: u32,
-    /// **v1.30** — `false` = compute-only shard (no accept SQE). See RFC.
+    /// `false` = compute-only shard (no accept SQE).
     pub(crate) arms_accept: bool,
-    /// **v1.37** — per-shard cap (`max_clients / nshards`). `0` = unlimited.
+    /// Per-shard cap (`max_clients / nshards`). `0` = unlimited.
     pub(crate) max_clients_per_shard: usize,
-    /// **v1.37** — accumulator for `rejected_connections` (INFO clients).
+    /// Accumulator for `rejected_connections` (INFO clients).
     pub(crate) rejected_connections: u64,
     /// SLOWLOG ring + threshold (see [`crate::exec_slowlog::SlowlogState`]).
     /// Hot-reload via `apply_live_runtime_config` when the embedder
@@ -300,6 +311,13 @@ pub(crate) struct Shard<C: Commands> {
     /// keys this shard owns. Kept separate from `blocked` so the hot
     /// single-key-local path is untouched. Empty in steady state.
     pub(crate) xwaiters: crate::block_xshard::XShardWaiters,
+    /// Cross-shard block serves whose escrow release is waiting on the
+    /// reply's write result: `conn -> target_shard`. A serve reply is
+    /// buffered but the escrow is NOT released until the write succeeds
+    /// (drained → release) or the conn is torn down (write failed / FIN →
+    /// restore). This is what ties escrow release to actual delivery rather
+    /// than to a point-in-time liveness guess. Empty in steady state.
+    pub(crate) serve_confirm: HashMap<u64, usize>,
     /// Reused staging buffer for forwarded-dispatch replies
     /// (`Shard::run_dispatch`): `dispatch_into` writes here, then ≤30 B replies
     /// copy into a stack-inline [`crate::message::SmallReply`] — zero
@@ -319,12 +337,11 @@ pub(crate) struct Shard<C: Commands> {
     pub(crate) persist: crate::persist_worker::PersistWorker,
 }
 
-// `SPIN_LIMIT` / `PARK_TIMEOUT_MS` / `TICK_CHECK_EVERY` moved to per-
-// shard fields (`Shard.spin_limit` / `park_timeout_ms` /
-// `tick_check_every`) since workspace v1.4 — wired through
-// `[advanced]` config + `Runtime::with_advanced`. Defaults
-// (`256` / `50ms` / `256`) match the pre-v1.4 hardcoded values, so
-// existing benchmark numbers translate one-to-one.
+// `SPIN_LIMIT` / `PARK_TIMEOUT_MS` / `TICK_CHECK_EVERY` are per-shard
+// fields (`Shard.spin_limit` / `park_timeout_ms` / `tick_check_every`)
+// — wired through `[advanced]` config + `Runtime::with_advanced`.
+// Defaults (`256` / `50ms` / `256`) match the original hardcoded
+// values, so existing benchmark numbers translate one-to-one.
 
 // The reactor loop ([`Shard::run`]) + the shared path helpers
 // (`shard_of` / `snapshot_path` / `aof_path`) live in

@@ -164,9 +164,9 @@ impl<C: Commands> Shard<C> {
     /// Drain inbound cross-core messages from every peer ring; returns
     /// whether any were processed (the epoll reactor's entry point).
     ///
-    /// **E15 (2026-06-20)** fast-path split: the post-v1.24-chain perf
+    /// Fast-path split: a perf
     /// diagnostic showed `uring_drain_inbound` at 3.59 % self at -c1
-    /// despite the E8 Acquire-load short-circuit — almost all of that
+    /// despite the Acquire-load short-circuit — almost all of that
     /// was the cost of *calling* a non-trivial monomorphised function
     /// per busy-poll iter. Split the fast-path Acquire check into a
     /// tiny `#[inline]` wrapper that LLVM can fold into the reactor
@@ -196,7 +196,7 @@ impl<C: Commands> Shard<C> {
     pub(crate) fn drain_inbound_core_slow<const DIRECT_FLUSH: bool>(
         &mut self,
     ) -> io::Result<usize> {
-        // E8 / E15: callers already paid the Acquire load. We do the
+        // Callers already paid the Acquire load. We do the
         // `lock xchg` swap unconditionally here. AcqRel-on-swap
         // synchronises with the Release `fetch_or` in `send_to`; bits
         // set BETWEEN the caller's load and our swap are still
@@ -238,7 +238,7 @@ impl<C: Commands> Shard<C> {
                         if DIRECT_FLUSH {
                             self.flush_conn(conn)?;
                         } else {
-                            // K4 (v1.25 A.9): folded reply may have
+                            // The folded reply may have
                             // appended bytes to `conn.output` via
                             // `drain_front`. Push to the dirty list
                             // so the io_uring arm loop drains it
@@ -285,7 +285,7 @@ impl<C: Commands> Shard<C> {
                                     to_flush.push(conn);
                                 }
                             } else {
-                                // K4: see the `Inbound::Response`
+                                // See the `Inbound::Response`
                                 // branch above for the rationale.
                                 self.mark_pending_write_dirty(conn);
                             }
@@ -321,12 +321,18 @@ impl<C: Commands> Shard<C> {
                         if DIRECT_FLUSH {
                             self.flush_conn(conn)?;
                         } else {
-                            // K4: see above.
+                            // See the `Inbound::Response` branch above.
                             self.mark_pending_write_dirty(conn);
                         }
                     }
+                    Inbound::BlockServeAck { origin, conn } => {
+                        self.target_release_escrow(origin, conn);
+                    }
+                    Inbound::BlockServeAbort { origin, conn } => {
+                        self.target_apply_escrow(origin, conn);
+                    }
                     Inbound::BlockCancel { origin, conn } => self.target_cancel(origin, conn),
-                    // ── v3.16 WAIT / REPL.WAIT barriers ──
+                    // ── WAIT / REPL.WAIT barriers ──
                     Inbound::ReplWaitArm { origin, conn, seq, need, deadline_ms } => {
                         self.arm_repl_wait(origin, conn, seq, need, deadline_ms);
                     }
@@ -352,7 +358,7 @@ impl<C: Commands> Shard<C> {
         Ok(did)
     }
 
-    /// **K4 (v1.25 A.9)**: signal that `cid` just had output appended
+    /// Signal that `cid` just had output appended
     /// (forwarded reply folded, BLPOP served, etc.) so the io_uring
     /// arm loop visits it on the next iter. Routes via `self.dirty`;
     /// `uring_arm_conns` drains that into `arm_pending` and the
@@ -392,6 +398,11 @@ impl<C: Commands> Shard<C> {
             // Cancel any cross-shard block this conn was the origin of, so
             // target shards drop their registrations.
             self.cancel_xshard_on_close(conn_id);
+            // If a cross-shard serve reply was buffered for this conn but its
+            // write never confirmed (the conn is dying — FIN or a failed
+            // write), the popped element never reached a live client. Restore
+            // it from the target's escrow.
+            self.restore_serve_on_teardown(conn_id);
             self.unregister_subs(&conn.sub);
             // H1.B: drop this conn from each channel's local subscriber
             // index. Channels with no remaining subs lose their entry.

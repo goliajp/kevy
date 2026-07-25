@@ -7,13 +7,13 @@
 //! `REPLICATE FROM` handshake and then streams frames from the
 //! source until the peer drops.
 //!
-//! v1.21 MVP scope:
-//! - **No snapshot ship from embed yet.** A replica reconnecting at
-//!   an offset older than the backlog's oldest gets `TooOld` →
-//!   connection closed; the embed's own snapshot serializer landing
-//!   here is a follow-up. For now operators size the backlog large
-//!   enough to cover plausible reconnect windows (or accept a
-//!   re-handshake from offset 0 by the consumer).
+//! Scope:
+//! - **Snapshot ship at handshake only.** A fresh replica (offset 0
+//!   against non-empty history) or one whose offset fell past the
+//!   backlog gets a full keyspace snapshot at handshake, then live
+//!   frames from the snapshot's as-of offset. If a live stream falls
+//!   past the backlog mid-stream, the link is closed so the replica
+//!   reconnects and takes the snapshot path.
 //! - **One-shard model.** Embed writes to a single source; the
 //!   per-shard split that the server uses is intentionally not
 //!   replicated here — an embed-as-writer for a scope is a single-
@@ -70,6 +70,17 @@ impl ReplicaSource {
         listener.set_nonblocking(true)?;
         let bound_addr = listener.local_addr()?;
         let source = Arc::new(Mutex::new(ReplicationSource::new(backlog_bytes.max(64 * 1024))));
+        // Generation of this writer's offset history. The embed
+        // writer's backlog is in-memory only — every process boot
+        // starts a NEW offset history at 0 — so the generation is
+        // minted per-boot as nanos since epoch: unique across
+        // restarts without persisting a sidecar the in-memory
+        // backlog wouldn't honour anyway. The handshake fence uses
+        // it to refuse offset-resume claims from a previous boot's
+        // history (offset aliasing).
+        let generation = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(1, |d| (d.as_nanos() as u64).max(1));
         let stop = Arc::new(AtomicBool::new(false));
         let conn_joins = Arc::new(Mutex::new(Vec::<JoinHandle<()>>::new()));
 
@@ -78,7 +89,9 @@ impl ReplicaSource {
         let conn_joins_c = Arc::clone(&conn_joins);
         let accept_join = thread::Builder::new()
             .name("kevy-embedded-writer-accept".into())
-            .spawn(move || run_accept_loop(listener, source_c, stop_c, conn_joins_c, snapshot))
+            .spawn(move || {
+                run_accept_loop(listener, source_c, generation, stop_c, conn_joins_c, snapshot);
+            })
             .expect("spawn writer-accept thread");
 
         Ok(Self {
@@ -116,9 +129,8 @@ impl ReplicaSource {
         Arc::clone(&self.source)
     }
 
-    /// Bound listener address; mostly useful for tests
-    /// (`port = 0` ⇒ OS picks a port; the test reads it back).
-    #[allow(dead_code)]
+    /// Bound listener address (`port = 0` ⇒ OS picks a port; the
+    /// caller reads it back via [`crate::Store::writer_addr`]).
     pub(crate) fn local_addr(&self) -> std::net::SocketAddr {
         self.bound_addr
     }
@@ -167,6 +179,7 @@ pub(crate) fn push_into(source: &Arc<Mutex<ReplicationSource>>, parts: &[&[u8]])
 fn run_accept_loop(
     listener: TcpListener,
     source: Arc<Mutex<ReplicationSource>>,
+    generation: u64,
     stop: Arc<AtomicBool>,
     conn_joins: Arc<Mutex<Vec<JoinHandle<()>>>>,
     snapshot: SnapshotProvider,
@@ -179,7 +192,7 @@ fn run_accept_loop(
                 let snapshot_c = Arc::clone(&snapshot);
                 let join = thread::Builder::new()
                     .name("kevy-embedded-writer-conn".into())
-                    .spawn(move || run_conn(stream, source_c, stop_c, snapshot_c))
+                    .spawn(move || run_conn(stream, source_c, generation, stop_c, snapshot_c))
                     .expect("spawn writer-conn thread");
                 conn_joins
                     .lock()
@@ -203,13 +216,15 @@ fn run_accept_loop(
 fn run_conn(
     mut stream: TcpStream,
     source: Arc<Mutex<ReplicationSource>>,
+    generation: u64,
     stop: Arc<AtomicBool>,
     snapshot: SnapshotProvider,
 ) {
-    let Some(from_offset) = handshake_and_prepare(&mut stream) else {
+    let Some(req) = handshake_and_prepare(&mut stream) else {
         return;
     };
-    let Some(from_offset) = ship_snapshot_if_needed(&mut stream, &source, &snapshot, from_offset)
+    let Some(from_offset) =
+        ship_snapshot_if_needed(&mut stream, &source, &snapshot, generation, &req)
     else {
         return;
     };
@@ -230,10 +245,10 @@ fn run_conn(
                 thread::sleep(Duration::from_millis(20));
             }
             FrameStep::TooOld | FrameStep::PeerAhead => {
-                // No snapshot ship from embed yet (v1.21 anti-scope);
-                // close the link so the replica reconnects from 0
-                // and rebuilds from the backlog (or the operator
-                // sized it bigger).
+                // No mid-stream snapshot ship; close the link so the
+                // replica reconnects — the handshake path ships a
+                // snapshot when the requested offset has fallen past
+                // the backlog.
                 let _ = stream.shutdown(Shutdown::Both);
                 break;
             }
@@ -246,44 +261,65 @@ fn run_conn(
 /// INHERIT that on some platforms (BSD/macOS semantics) — flip to
 /// blocking BEFORE any bulk write, or a snapshot ship dies with
 /// EWOULDBLOCK the moment the socket buffer fills (measured: EOF at
-/// ~319KB, one buffer's worth). Returns the requested offset.
-fn handshake_and_prepare(stream: &mut TcpStream) -> Option<u64> {
-    if stream.set_read_timeout(Some(Duration::from_secs(2))).is_err() {
-        return None;
-    }
-    let from_offset = read_handshake(stream)?;
+/// ~319KB, one buffer's worth). Returns the parsed request.
+fn handshake_and_prepare(stream: &mut TcpStream) -> Option<kevy_replicate::handshake::HandshakeReq> {
+    // Flip to blocking BEFORE the handshake read, not after it.
+    //
+    // The inheritance this function already knew about bites the
+    // handshake too: on a socket still in non-blocking mode a read
+    // issued before the client's bytes land returns EWOULDBLOCK, and
+    // `read_handshake` treats every read error as fatal — so a
+    // perfectly healthy replica gets its connection closed and sees
+    // EOF where the +ACK should be. Setting a read timeout does not
+    // help a non-blocking socket; the timeout only means anything once
+    // the socket blocks. Darwin-only and load-dependent, which is how
+    // `writer_restart_generation_fence_ships_instead_of_aliasing`
+    // failed on the macOS runner while passing everywhere else.
     if stream.set_nonblocking(false).is_err() {
         return None;
     }
+    if stream.set_read_timeout(Some(Duration::from_secs(2))).is_err() {
+        return None;
+    }
+    let req = read_handshake(stream)?;
     let _ = stream.set_read_timeout(None);
-    Some(from_offset)
+    Some(req)
 }
 
-/// Snapshot path (closing the v1.21 anti-scope): a fresh replica
-/// (offset 0 against a non-empty history) or one that fell past the
-/// backlog gets the keyspace shipped, then live frames from the
-/// snapshot's as-of offset — same branch discipline as the server
-/// primary's pump (snapshot.md). Returns the live-stream starting
-/// offset; `None` = socket error (caller drops the connection).
+/// Snapshot path: a fresh replica (offset 0 against a non-empty
+/// history), one that fell past the backlog, or one whose claimed
+/// generation isn't THIS boot's (offsets alias across boots — the
+/// in-memory backlog restarts at 0 every process start) gets the
+/// keyspace shipped, then live frames from the snapshot's as-of
+/// offset — same fence discipline as the server primary's pump.
+/// Returns the live-stream starting offset; `None` = socket error
+/// (caller drops the connection).
 fn ship_snapshot_if_needed(
     stream: &mut TcpStream,
     source: &Arc<Mutex<ReplicationSource>>,
     snapshot: &SnapshotProvider,
-    from_offset: u64,
+    generation: u64,
+    req: &kevy_replicate::handshake::HandshakeReq,
 ) -> Option<u64> {
+    let from_offset = req.from_offset;
+    // Generation fence: a resume claim is only honoured within THIS
+    // boot's history. `gen 0 + offset 0` is the fresh no-claim form —
+    // it falls through to the existing offset rules.
+    let gen_mismatch = req.generation != generation
+        && !(req.generation == 0 && req.from_offset == 0);
     let needs_snapshot = {
         let g = source.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let next = g.next_offset();
-        (from_offset == 0 && next > 0) || g.frames_from(from_offset).is_err()
+        gen_mismatch || (from_offset == 0 && next > 0) || g.frames_from(from_offset).is_err()
     };
     if !needs_snapshot {
-        if stream.write_all(&encode_ack(from_offset)).is_err() {
+        if stream.write_all(&encode_ack(generation, from_offset)).is_err() {
             return None;
         }
         return Some(from_offset);
     }
     let (payload, ack_offset) = snapshot();
-    if stream.write_all(&encode_ack(ack_offset)).is_err() {
+    if stream.write_all(&encode_ack(generation, ack_offset)).is_err() {
         return None;
     }
     if stream.write_all(&encode_snapshot_begin()).is_err() {
@@ -324,10 +360,10 @@ fn next_frame_bytes(source: &Arc<Mutex<ReplicationSource>>, sent_offset: u64) ->
     }
 }
 
-/// Read one `REPLICATE FROM <offset> ID <id>` command off `stream`,
-/// return the from_offset. None on any read / parse error — caller
-/// drops the connection.
-fn read_handshake(stream: &mut TcpStream) -> Option<u64> {
+/// Read one `REPLICATE FROM <gen> <offset> ID <id>` command off
+/// `stream`, return the parsed request. None on any read / parse
+/// error — caller drops the connection.
+fn read_handshake(stream: &mut TcpStream) -> Option<kevy_replicate::handshake::HandshakeReq> {
     let mut buf = Vec::with_capacity(256);
     let mut chunk = [0u8; 256];
     loop {
@@ -337,7 +373,7 @@ fn read_handshake(stream: &mut TcpStream) -> Option<u64> {
         }
         buf.extend_from_slice(&chunk[..n]);
         if let Ok(Some((argv, _consumed))) = kevy_resp::parse_command(&buf.clone()) {
-            return parse_replicate_from(&argv).ok().map(|req| req.from_offset);
+            return parse_replicate_from(&argv).ok();
         }
         if buf.len() > 64 * 1024 {
             return None;
@@ -379,8 +415,9 @@ pub(crate) fn freeze_and_serialize(shards: &crate::store::Shards) -> (Vec<u8>, u
         }
     }
     let mut payload = Vec::new();
-    // In-memory serialize matches the server pump's T1.23 posture
-    // (streaming straight to the socket is a follow-up on both ends).
+    // Serialize the whole snapshot into memory first, matching the
+    // server pump's posture (streaming straight to the socket is a
+    // follow-up on both ends).
     let _ = kevy_persist::write_snapshot_to(&Multi(&views), &mut payload);
     (payload, ack)
 }

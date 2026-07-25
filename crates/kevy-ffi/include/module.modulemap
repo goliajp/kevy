@@ -1,0 +1,6 @@
+// Exposes the C ABI as a Clang module so Swift can `import Kevy`
+// straight from the XCFramework — no bridging header, no shim target.
+module Kevy {
+    header "kevy.h"
+    export *
+}

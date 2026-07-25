@@ -4,16 +4,16 @@
 //! [`RespClient::request`] writes one command and blocks until exactly one
 //! reply is parsed. Works against any RESP2 server — kevy, valkey, redis.
 //!
-//! [`RespClient::from_url`] is the URL-string entry point and accepts
+//! [`RespClient::connect_url`] is the URL-string entry point and accepts
 //! `kevy://` (kevy-native alias), `redis://` (standard), and `tcp://`
 //! (plain host:port — no leading SELECT round-trip):
 //!
 //! ```no_run
 //! # use kevy_resp_client::RespClient;
-//! let _ = RespClient::from_url("kevy://localhost:6379")?;     // alias of redis://
-//! let _ = RespClient::from_url("kevy://localhost:6379/0")?;   // also issues SELECT 0
-//! let _ = RespClient::from_url("redis://10.0.0.5:6379")?;
-//! let _ = RespClient::from_url("tcp://kevy.internal:6379")?;
+//! let _ = RespClient::connect_url("kevy://localhost:6379")?;   // alias of redis://
+//! let _ = RespClient::connect_url("kevy://localhost:6379/0")?; // also issues SELECT 0
+//! let _ = RespClient::connect_url("redis://10.0.0.5:6379")?;
+//! let _ = RespClient::connect_url("tcp://kevy.internal:6379")?;
 //! # Ok::<(), std::io::Error>(())
 //! ```
 //!
@@ -37,7 +37,7 @@
 #![warn(missing_docs)]
 
 pub use kevy_resp::Reply;
-use kevy_resp::{encode_command, encode_command_borrowed, parse_reply};
+use kevy_resp::{encode_command, encode_command_borrowed};
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 
@@ -47,14 +47,20 @@ use std::net::TcpStream;
 /// reassemble across `read` calls. Not `Sync`; one client per thread.
 pub struct RespClient {
     stream: TcpStream,
-    buf: Vec<u8>,
+    /// Incremental read buffer with a consume cursor — replies are parsed
+    /// off the front by advancing a `pos` cursor rather than
+    /// front-draining per reply (O(N²) on deep `pipeline_raw` batches).
+    buf: ReplyReadBuf,
     /// Reused per-request encode buffer. Zero-allocation for steady-state
     /// command traffic — the buffer grows once during the first SET, then
     /// the same allocation backs every subsequent encode (truncated to 0
-    /// at the top of each `request*` call). Added 2026-06-20 (perf-D4)
-    /// after profiling showed Rust-client `Vec<Vec<u8>>` argv + per-call
-    /// `Vec<u8>::new()` was a measurable per-op tax even at -c1.
+    /// at the top of each `request*` call). Added after profiling showed
+    /// Rust-client `Vec<Vec<u8>>` argv + per-call `Vec<u8>::new()` was a
+    /// measurable per-op tax even on a single connection.
     write_buf: Vec<u8>,
+    /// Reused read scratch chunk — hoisted out of `read_one_reply` so the
+    /// hot path doesn't zero-init an 8 KiB stack array on every call.
+    chunk: Box<[u8]>,
 }
 
 impl RespClient {
@@ -64,8 +70,9 @@ impl RespClient {
         stream.set_nodelay(true).ok();
         Ok(Self {
             stream,
-            buf: Vec::with_capacity(8192),
+            buf: ReplyReadBuf::with_capacity(8192),
             write_buf: Vec::with_capacity(1024),
+            chunk: vec![0u8; 8192].into_boxed_slice(),
         })
     }
 
@@ -95,7 +102,7 @@ impl RespClient {
         self.read_one_reply()
     }
 
-    /// v2.10 — pipelined batch: send every pre-encoded command in
+    /// Pipelined batch: send every pre-encoded command in
     /// `raw` as one write, then read exactly `n` replies. The caller
     /// encodes with [`encode_command`]/[`encode_command_borrowed`]
     /// into one buffer (migration import path: 512-deep batches).
@@ -109,13 +116,9 @@ impl RespClient {
     }
 
     fn read_one_reply(&mut self) -> io::Result<Reply> {
-        let mut chunk = [0u8; 8192];
         loop {
-            match parse_reply(&self.buf) {
-                Ok(Some((reply, used))) => {
-                    self.buf.drain(..used);
-                    return Ok(reply);
-                }
+            match self.buf.parse_next() {
+                Ok(Some(reply)) => return Ok(reply),
                 Ok(None) => {}
                 Err(_) => {
                     return Err(io::Error::new(
@@ -124,14 +127,14 @@ impl RespClient {
                     ));
                 }
             }
-            let n = self.stream.read(&mut chunk)?;
+            let n = self.stream.read(&mut self.chunk)?;
             if n == 0 {
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "server closed connection",
                 ));
             }
-            self.buf.extend_from_slice(&chunk[..n]);
+            self.buf.extend(&self.chunk[..n]);
         }
     }
 
@@ -149,9 +152,9 @@ impl RespClient {
     ///
     /// If a `/db` path segment is present, an explicit `SELECT <db>` is
     /// issued before returning the client. For non-zero indices kevy will
-    /// reply with its "only supports DB 0" error and `from_url` propagates
-    /// that as [`io::ErrorKind::Other`].
-    pub fn from_url(url: &str) -> io::Result<Self> {
+    /// reply with its "only supports DB 0" error and `connect_url`
+    /// propagates that as [`io::ErrorKind::Other`].
+    pub fn connect_url(url: &str) -> io::Result<Self> {
         let parsed = parse_url(url)?;
         let mut client = Self::connect(&parsed.host, parsed.port)?;
         if let Some(db) = parsed.db {
@@ -165,174 +168,11 @@ impl RespClient {
     }
 }
 
-/// Parsed URL pieces. Tiny — full url-rs would be a crates.io dep, against
-/// the 0-dep charter. We only need scheme / host / port / db.
-#[derive(Debug, PartialEq, Eq)]
-struct ParsedUrl {
-    host: String,
-    port: u16,
-    db: Option<u32>,
-}
+mod url;
+pub use url::{ParsedUrl, parse_url};
 
-fn parse_url(url: &str) -> io::Result<ParsedUrl> {
-    let (scheme, rest) = split_scheme(url)?;
-    if rest.contains('@') {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "userinfo (user:pass@host) is unsupported — kevy has no AUTH",
-        ));
-    }
-    let (authority, path) = match rest.split_once('/') {
-        Some((auth, p)) => (auth, Some(p)),
-        None => (rest, None),
-    };
-    let (host, port) = parse_authority(authority)?;
-    let db = parse_db_path(scheme, path)?;
-    Ok(ParsedUrl { host, port, db })
-}
+mod pubsub_event;
+pub use pubsub_event::{PubsubEvent, classify_pubsub};
 
-/// Validate the URL scheme and return `(scheme, rest)` where `rest` is
-/// everything past `://`. Rejects TLS schemes (kevy has no TLS) and
-/// unknown schemes.
-fn split_scheme(url: &str) -> io::Result<(&str, &str)> {
-    let (scheme, rest) = url
-        .split_once("://")
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "URL missing '://'"))?;
-    match scheme {
-        "kevy" | "redis" | "tcp" => Ok((scheme, rest)),
-        "rediss" | "kevys" => Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "TLS schemes (rediss://, kevys://) are unsupported — kevy has no TLS",
-        )),
-        other => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("unknown URL scheme '{other}://'"),
-        )),
-    }
-}
-
-/// Parse `host[:port]` — defaulting to port 6379 (Redis convention)
-/// when the colon is absent. Empty hosts are rejected.
-fn parse_authority(authority: &str) -> io::Result<(String, u16)> {
-    let (host, port) = match authority.rsplit_once(':') {
-        Some((h, p)) => {
-            let port: u16 = p.parse().map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidInput, format!("bad port: {p}"))
-            })?;
-            (h.to_string(), port)
-        }
-        None => (authority.to_string(), 6379),
-    };
-    if host.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "empty host"));
-    }
-    Ok((host, port))
-}
-
-/// Optional DB index from the path component. `tcp://` is a raw-socket
-/// URL and rejects any path; `kevy://` and `redis://` honour `/N`.
-fn parse_db_path(scheme: &str, path: Option<&str>) -> io::Result<Option<u32>> {
-    match path {
-        None | Some("") => Ok(None),
-        Some(p) if scheme == "tcp" => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("tcp:// URL must not have a path: '/{p}'"),
-        )),
-        Some(p) => {
-            let n: u32 = p.parse().map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("bad db index: '{p}' (expected a non-negative integer)"),
-                )
-            })?;
-            Ok(Some(n))
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn parse(u: &str) -> ParsedUrl {
-        parse_url(u).unwrap_or_else(|e| panic!("{u}: {e}"))
-    }
-
-    #[test]
-    fn kevy_redis_tcp_schemes_all_resolve() {
-        for url in [
-            "kevy://localhost:6379",
-            "redis://localhost:6379",
-            "tcp://localhost:6379",
-        ] {
-            let p = parse(url);
-            assert_eq!(p.host, "localhost");
-            assert_eq!(p.port, 6379);
-            assert_eq!(p.db, None);
-        }
-    }
-
-    #[test]
-    fn default_port_is_6379_when_omitted() {
-        let p = parse("kevy://example.com");
-        assert_eq!(p.host, "example.com");
-        assert_eq!(p.port, 6379);
-    }
-
-    #[test]
-    fn db_path_segment_parsed() {
-        assert_eq!(parse("kevy://h:1/0").db, Some(0));
-        assert_eq!(parse("redis://h:1/3").db, Some(3));
-        assert_eq!(parse("kevy://h").db, None);
-        assert_eq!(parse("kevy://h/").db, None);
-    }
-
-    #[test]
-    fn tls_schemes_rejected() {
-        let err = parse_url("rediss://h:6379").unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
-        let err = parse_url("kevys://h:6379").unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
-    }
-
-    #[test]
-    fn auth_userinfo_rejected() {
-        let err = parse_url("kevy://user:pass@h:6379").unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
-    }
-
-    #[test]
-    fn unknown_scheme_rejected() {
-        let err = parse_url("memcached://h:11211").unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-    }
-
-    #[test]
-    fn missing_scheme_rejected() {
-        assert!(parse_url("localhost:6379").is_err());
-    }
-
-    #[test]
-    fn tcp_with_path_rejected() {
-        // tcp:// is the raw form — db indices only make sense with the
-        // redis/kevy semantic schemes.
-        assert!(parse_url("tcp://h:6379/0").is_err());
-    }
-
-    #[test]
-    fn bad_port_rejected() {
-        assert!(parse_url("kevy://h:notaport").is_err());
-        assert!(parse_url("kevy://h:99999").is_err()); // > u16::MAX
-    }
-
-    #[test]
-    fn bad_db_rejected() {
-        assert!(parse_url("kevy://h/abc").is_err());
-        assert!(parse_url("kevy://h/-1").is_err());
-    }
-
-    #[test]
-    fn empty_host_rejected() {
-        assert!(parse_url("kevy://:6379").is_err());
-    }
-}
+mod read_buf;
+pub use read_buf::ReplyReadBuf;

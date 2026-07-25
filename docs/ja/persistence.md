@@ -28,15 +28,17 @@ kevyが再起動をまたいでデータを保持する仕組みを説明しま�
 
 ```toml
 # kevy.toml
-dir         = "/var/lib/kevy"
-port        = 6379
-threads     = 4
-appendonly  = true
+[server]
+data_dir = "/var/lib/kevy"
+port     = 6379
+threads  = 4
 
-# AOF 耐久性 — 全ノブは下の表を参照。
+[persistence]
+aof = true
+# AOF durability — see the knobs table below for the full set.
 appendfsync                 = "everysec"   # always | everysec | no
-auto_aof_rewrite_percentage = 100          # 前回リライト時から AOF が倍増したらリライト
-auto_aof_rewrite_min_size   = 67108864     # …かつ少なくとも 64 MiB
+auto_aof_rewrite_percentage = 100          # rewrite when the AOF doubles since the last rewrite
+auto_aof_rewrite_min_size   = "64mb"       # …and is at least this big
 ```
 
 運用は通常のRedisスタイルのコマンドをRESP経由で行えます。
@@ -72,14 +74,17 @@ kevy-embedded = "*"
 use std::time::Duration;
 use kevy_embedded::{AppendFsync, Config, KevyMetric, Store};
 
-fn main() -> std::io::Result<()> {
+fn main() -> kevy_embedded::KevyResult<()> {
     let cfg = Config::default()
         .with_persist("/var/lib/myapp/kevy")
         .with_appendfsync(AppendFsync::EverySec)
         .with_auto_aof_rewrite(100, 64 * 1024 * 1024)
         .with_metric_sink(|m| match m {
-            KevyMetric::Replay { commands, bytes, elapsed_ms } => {
+            KevyMetric::Replay { commands, bytes, elapsed_ms, dropped_bytes, corrupt } => {
                 eprintln!("kevy replay: {commands} cmds / {bytes} B in {elapsed_ms} ms");
+                if dropped_bytes > 0 || corrupt {
+                    eprintln!("kevy replay dropped {dropped_bytes} B (corrupt: {corrupt}) — ALERT");
+                }
             }
             KevyMetric::Rewrite { keys, before_bytes, after_bytes, elapsed_ms } => {
                 eprintln!(
@@ -91,8 +96,8 @@ fn main() -> std::io::Result<()> {
 
     let store = Store::open(cfg)?;
 
-    store.set("hello", b"world")?;
-    store.pexpire("hello", Duration::from_secs(300))?;
+    store.set(b"hello", b"world")?;
+    store.expire(b"hello", Duration::from_secs(300))?;
 
     // ある時点のスナップショット。ファイルがディスクに書き出された後に戻る。
     // シャードごとのロックはビューの freeze と最後の rename のあいだだけ保持される。
@@ -118,10 +123,13 @@ fn main() -> std::io::Result<()> {
 | ノブ | サーバー（TOML / `CONFIG SET`） | 組み込み（`Config::…`） | デフォルト | 備考 |
 |---|---|---|---|---|
 | AOF fsyncポリシー | `appendfsync`（`always` / `everysec` / `no`） | `with_appendfsync(AppendFsync::…)` | `EverySec` | サーバーではライブ変更可能。 |
-| AOF有効化 | `appendonly`（`true` / `false`） | `with_persist(...)`で暗黙的に | サーバーは`true`、組み込みは`with_persist`までオフ | 無効化するとオンディスク永続化を丸ごとスキップ。 |
+| AOF有効化 | `aof`（`true` / `false`） | `with_persist(...)`で暗黙的に | サーバーは`true`、組み込みは`with_persist`までオフ | 無効化するとオンディスク永続化を丸ごとスキップ。 |
 | 自動リライトのパーセンテージ | `auto_aof_rewrite_percentage` | `with_auto_aof_rewrite(pct, min)`の第1引数 | `100` | `0`で自動リライトを無効化。 |
-| 自動リライトの最小サイズ | `auto_aof_rewrite_min_size` | `with_auto_aof_rewrite(pct, min)`の第2引数 | `67108864`（64 MiB） | 両方の閾値を満たしたときだけ自動リライトが発火。 |
-| 永続化ディレクトリ | `dir` / 環境変数`KEVY_DIR` | `with_persist(path)` | サーバーは`./data`、組み込みはなし | kevyインスタンスごとに1ディレクトリ。 |
+| 自動リライトの最小サイズ | `auto_aof_rewrite_min_size` | `with_auto_aof_rewrite(pct, min)`の第2引数 | `67108864`（64 MiB） | 両方の閾値を満たしたときだけ成長ルールが発火。 |
+| 自動リライトの絶対上限 | `auto_aof_rewrite_bytes` | `with_auto_rewrite_bytes(n)` | `0`（無効） | 独立トリガ：AOFが`n`バイトを超えたら成長率に関係なくリライト。ライブ調整可（`CONFIG SET auto-aof-rewrite-bytes`）。 |
+| 自動リライトの経過時間 | `auto_aof_rewrite_interval_secs` | `with_auto_rewrite_interval(d)` | `0`（無効） | 独立トリガ：前回リライトからこの時間が経過し、かつログが成長していたらリライト。ライブ調整可。 |
+| resyncリプレイ | `replay_resync`（`[persistence]`） | `with_replay_resync(true)` | `false`（strict） | 起動時のみ。ファイル中央の破損領域で止まらず、その後ろの無事な尾部を復旧する——resyncの節を参照。 |
+| 永続化ディレクトリ | `data_dir` / 環境変数`KEVY_DIR` | `with_persist(path)` | サーバーは`./data`、組み込みはなし | kevyインスタンスごとに1ディレクトリ。 |
 | リアクター/リーパー周期 | reactor tick、約100ms | バックグラウンドリーパー、または`Store::tick`の呼び出し | 約100ms | `EverySec`のflush、自動リライトのチェック、TTLエビクションを駆動。 |
 
 ### トリガー一覧
@@ -132,6 +140,7 @@ fn main() -> std::io::Result<()> {
 | バックグラウンドスナップショット | `BGSAVE` | ワーカースレッドから`save_snapshot`を呼ぶ | 即座に戻る。コミットはディスク書き出し完了から1 reactor tick以内に確定。 |
 | AOFリライト | `BGREWRITEAOF` | `Store::rewrite_aof()` | アトミックなrenameの後に戻る。シリアライズはキー空間がライブのまま走る。 |
 | fsyncのライブ変更 | `CONFIG SET appendfsync everysec` | `Config`を再構築 | n/a |
+| 正常終了 | `SHUTDOWN [SAVE\|NOSAVE]`（またはSIGTERM） | 最後の`Store`クローンをdrop | 全シャードをドレインする。実行中のpersistジョブが着地し、AOF末尾が強制fsyncされ、その後プロセスが終了する。`SAVE`はさらにシャードごとに最後のスナップショットを1つ取る。リプライは送られない——クライアントは接続が閉じるのを観測する（Redisの振る舞い）。 |
 
 ### fsyncポリシーの意味
 
@@ -188,7 +197,7 @@ fn main() -> std::io::Result<()> {
 
 1. **スナップショットをロード。** `dump-<id>.rdb`があればキー空間にストリーミングします。ロード中に期限切れになっているTTLは破棄されます。
 2. **AOFをリプレイ。** `aof-<id>.aof`を先頭から読み、各フレームを適用します。
-3. **末尾を処理。** クリーンなファイルはそのまま全適用します。途中で切れた末尾（クラッシュ途中の追記）は、書きかけのフレームを捨てて前半部分を適用します。破損フレームは、将来の起動をブロックしないよう不正バイトを`aof-<id>.aof.panic-quarantine.<unix_ts>`へ退避し、その後に前半部分を適用します。隔離された末尾が再適用されることは二度とありません。そこから何かを復旧する必要があれば手で調査してください。
+3. **末尾を処理。** クリーンなファイルはそのまま全適用します。破れた・破損したレコードに当たると、リプレイはその直前の最後の完全なレコードで停止します。openは切り捨てる領域を`aof-<id>.aof.corrupt-quarantine.<unix_ts>`へコピーし（fsync済み——ファイル中央の破損レコードの後ろは大半が正しいレコードで、このコピーだけが戻る道です）、最初の追記の前に**ファイルを最後の完全なレコードまで切り詰めます**。新しい書き込みがリプレイ可能な接頭辞の直後に続き、不正バイトの後ろに落ちて次のリプレイで黙って孤児になることを防ぐためです。隔離されたバイトが再適用されることは二度とありません。救出は手で。隔離コピー自体が書けない場合（ディスクフルなど）、openはファイルを無傷のまま失敗します——kevyがあなたのバイトの唯一のコピーを壊すことはありません。`replay_resync`有効時の挙動はresyncの節を参照。
 4. **壁時計時間付きの1行サマリーをログ出力**:
 
    ```text
@@ -230,7 +239,7 @@ TTLがあるはずなのに`expire_pending_count() == 0`が返るなら、それ
 | `aof-<id>.aof.rewrite` | 進行中のAOFリライト/リセット。古ければ削除して安全。 |
 | `dump-<id>.rdb.reshard` + `reshard.journal` | 進行中のシャードレイアウト移行。次回起動でロールフォワード。ジャーナルは絶対に手で消さない。 |
 | `*.premigration.<unix_ts>` | 移行前のソースバックアップ。ロールバック用に保持。 |
-| `aof-<id>.aof.panic-quarantine.<unix_ts>` | リカバリ中に退避された破損AOF末尾。何か救出するなら手で調査。kevyが再適用することはない。 |
+| `aof-<id>.aof.corrupt-quarantine.<unix_ts>` | リカバリ中に退避されたリプレイ不能領域（破れた末尾、またはファイル中央の破損レコード以降のすべて）。救出するなら手で調査。kevyが再適用することはない。 |
 | `elect.meta`（+ 一時的な`elect.meta.tmp`） | 選挙の耐久性（v3.15）。エレクターの`(epoch, votedFor)`ペアで、どの投票応答もノードを出る*前に*永続化されるため、クラッシュ再起動しても二重投票はあり得ない。tmp + fsync + renameで書かれるため、保存途中のクラッシュが残すのは旧ペアか新ペアのどちらかで、破れたファイルは決して残らない。`[cluster]`クォーラム構成時のみ存在。 |
 
 ## 耐久性契約（v2.1）
@@ -248,7 +257,70 @@ TTLがあるはずなのに`expire_pending_count() == 0`が返るなら、それ
 
 `Store::fsync_aof()`は書き込み単位の耐久性エスケープハッチです（Postgresのトランザクション単位`synchronous_commit`の系統）。デプロイはスループットのために`everysec`で走らせ、確認された瞬間からマシンクラッシュを生き延びなければならない少数の書き込みの後ろにだけバリアを置く、という使い方をします。コストはダーティなシャードごとに1回の`fdatasync`です。
 
-プロセスクラッシュ（SIGKILL）では、`always`の下では確認済みの書き込みを決して失わず、それ以外では最大でfsyncウィンドウ分を失います。AOF末尾は次のオープンでリプレイされ、破れた最終フレームは隔離されます（`panic-quarantine`）。黙って適用されることはありません。
+プロセスクラッシュ（SIGKILL）では、`always`の下では確認済みの書き込みを決して失わず、それ以外では最大でfsyncウィンドウ分を失います。AOF末尾は次のオープンでリプレイされ、破れた最終レコードはオープン時に切り詰められます（切り捨て領域は先に隔離ファイルへコピー）。黙って適用されることはありません（完全な状態機械は下のクラッシュ一貫性契約を参照）。
+
+**秩序ある停止**（`SHUTDOWN`またはSIGTERM）は、どのポリシーの下でも何も失いません。ドレインが終了前にAOF末尾を強制fsyncするので、クラッシュなら失い得る`everysec`のウィンドウは、クリーンなシャットダウンには当てはまりません。
+
+## クラッシュ一貫性契約（v4）
+
+オープンパスはシャードごとに固定の状態機械——**open → verify → replay → verdict → repair → append**——であり、各verdictは硬い損失上界を伴います。`crashgate`（`bench/crashgate.sh`）がこの表を実行します：SIGKILLマトリクス（追記中 / リライト中 / スナップショット中 / feed送出中 × fsyncポリシー × シャード数）に加え、破れた末尾 / ファイル中央 / payload損傷の注入。
+
+| クラッシュが残したもの | verdict | リプレイが復旧するもの | 硬い損失上界 |
+|---|---|---|---|
+| クリーンなファイル | `clean` | すべて | ゼロ |
+| 破れた最終レコード（追記中にkill） | 末尾切り詰め | 完全なレコードすべて | 破れたレコード + 未fsyncウィンドウ（`always`：破れたレコードのみ） |
+| ゼロ埋めの末尾（電源断 + 未fsyncページ） | 末尾切り詰め | 完全なレコードすべて | 同上 |
+| ファイル中央の破損レコード | そのレコードで停止（strict、デフォルト） | レコード前の接頭辞；切り捨て領域は隔離保存 | レコード以降の領域——**または**`replay_resync`有効なら破損領域そのものだけ：後ろの無事な尾部は復旧される（resyncの節） |
+| レコードpayload内のビット反転 | CRC不一致 → 破損レコード（v2ファイル） | 汚染値は一切適用されない——レコードは拒否される | 上の行と同じ；v1時代のファイルはチェックサムを持たず、最初のリライトでv2へ昇格するまでビット反転は黙ってリプレイされる |
+
+**ブラックホール禁止の不変量**（3.18インシデントの修正、crashgateが保持）：オープン時の切り詰めは**最初の追記の前**に行われるため、リプレイ停止点が再起動をまたいで後退することはありません——クラッシュ後の再起動で書いたデータは、必ず次の再起動を生き延びます。
+
+**マルチシャードのずれ。** 各シャードは独立に`aof-<id>.aof`を持ち独立に修復するため、クラッシュ後、シャードごとにわずかに異なる時点へ復旧することがあります（それぞれ自分の損失上界の内側）。kevyは独立した書き込みに対してシャード横断のアトミック性を約束しません——`atomic`/`atomic_all_shards`ブロックはコミット時に触れたシャードごとにfsyncし、一群の書き込みを一緒に着地させたいときの道具です。
+
+**feed（CDC）はメモリのみで、ディスクの先を走ります。** feedバックログはオープン時にAOFから再構築されません。再起動を生き延びるのは`(generation, offset)`カーソルだけです。フレームはapply時点——同じ書き込みを記録するAOFバイトのfsyncより**前**——に送出されるため、`everysec`ではクラッシュで巻き戻る最大約1秒分の書き込みをコンシューマが観測しえます（`always`：ゼロ；`no`：上界なし）。クラッシュはfeed generationをbumpするので、クラッシュ前のカーソルはすべて`-FEEDRESYNC` / `FeedError::Resync`を受け取り、コンシューマは復旧後のストアをスキャンして再構築します。あるフレームをdurableな事実として扱えるのは、それを覆うfsyncウィンドウが閉じた後だけです——未durableフレームに対して取った副作用をresyncは取り消せません。
+
+**レプリカは未fsyncフレームにdurableな主張を持ちません。** プライマリのuncleanな再起動後、プライマリは未fsyncサフィックス分を巻き戻してfeed generationをbumpします。巻き戻された書き込みを適用済みのレプリカは先行しており、再接続時にその分岐履歴はフルスナップショットresyncで破棄されます。再接続ハンドシェイクはレプリカのgenerationを運び（v4）、generation不一致でのoffset継続をプライマリは拒否します——どれだけ後に再接続しても、新しい履歴の同番offsetを黙って食わされることはありません（[replication.md](replication.md)参照）。
+
+## AOFレコードフォーマット（v2、`KEVYAOF2`）
+
+4.0以降、新しいAOFファイルは`KEVYAOF2\n` magicで始まり、各コマンドはチェックサム付きレコードとして書かれます：
+
+```text
+[payload_len: u32 LE][crc32c: u32 LE][payload: RESP multibulkコマンド]
+```
+
+このエンベロープが買うもの——どれもv1フォーマットには扱えなかったインシデントのクラスです：
+
+- **完全性。** `crc32c`（Castagnoli、aarch64とSSE4.2 x86-64ではハードウェア命令）がpayloadを覆います。1ビットの反転——媒体の劣化、不良ケーブル、切り詰め後に上書きされたページ——はチェックに失敗し、汚染値をリプレイする代わりにレコードが拒否されます。v1には完全性チェックが一切なく、ビット反転は黙ってリプレイされました。
+- **決定的なレコード境界。** 長さ接頭辞がRESPを解析せずにログをフレーミングするため、破れた末尾は算術で（ヘッダの約束よりバイトが足りない）検出されます。パーサが偶然詰まるのを当てにしません。
+- **決定的なresync。** 破損領域の後、次のレコード境界を見つけ直して*検証*できます（長さ + CRC + ちょうど1個の整形式コマンド、の三つが一致すること）——下のresyncリプレイの土台です。
+
+**互換性契約：**
+
+- 4.0バイナリはv1（`KEVYAOF1`）ファイルを永久に読めます。3.xのデータディレクトリは移行作業ゼロで開きます。
+- ひとつのファイル内でフォーマットが混ざることはありません：既存v1ファイルへの追記はv1のままです。
+- 新しいファイル、切り詰め、すべてのリライト出力はv2です。したがって最初のリライト（自動または`BGREWRITEAOF`）がv1ファイルをv2へ昇格させます——それ以降、3.xバイナリはそのファイルを読めません。ダウングレードの窓と運用手順は[UPGRADING.md](UPGRADING.md)へ。
+
+レコードあたりのオーバーヘッドは8バイト。mailrs形状のワークロード（小さめのコマンドの混合）でディスクコストは実測で低い一桁パーセント、CRCは両サーバアーキテクチャでハードウェア命令に乗ります。
+
+### resyncリプレイ——無事な尾部の復旧
+
+デフォルト（strict）のリプレイは最初の破損レコードで停止します：接頭辞は適用され、それ以降——大半は整形式のレコード——は隔離されライブファイルから切り捨てられます。これは誠実なデフォルトです（破損領域があるということは*何かが*起きたということで、推測を拒むのが最も安全）が、小さな損傷ひとつの巨大なログに対しては、無事だと証明できるデータを明け渡すことになります。
+
+`replay_resync`はそれを取り戻す選択です：
+
+```toml
+[persistence]
+replay_resync = true
+```
+
+（組み込みは`Config::with_replay_resync(true)`、手組みのruntimeは`Runtime::with_replay_resync(true)`。設定は起動時のみ——リプレイは最初のライブ設定tickより先に走ります。）
+
+resyncの下では、リプレイは破損領域を跳び越えます：長さ接頭辞・CRC・ちょうど1個の整形式コマンドの解析、の三つが同時に一致する位置まで前方スキャンし（偽の受理には三つ全部を欺く必要があります——候補オフセットあたり約2⁻³²）、そこから適用を再開します。スキップした範囲はすべて報告されます——persist層の`ReplayReport::resynced_ranges`、`Store::open_report()`の`OpenReport::resynced_bytes`——そして`corrupt`フラグは立ったままです：resyncはデータを復旧しますが、ファイルが健全だと宣言はしません。
+
+修復のセマンティクスはstrictと異なります：ディスク上のファイルは**最後の**復旧可能レコードより後だけを切り詰め（末尾は隔離保存）、内部の破損領域はその場に残ります——毎回の起動で跳び越えられ——次のリライトがファイルを圧縮するまで。「無事な尾部の復旧」の保証は実行可能です：`crashgate`のファイル中央スプライスのセル（mailrsの損傷形状、231 MB級ログの中央から8バイトを切除）は、損傷以降の全レコードの復旧を報告しなければなりません。
+
+オフのままにすべきとき：ホストが*あらゆる*破損をレプリカへのフェイルオーバーやバックアップからの復元の理由として扱うなら、strictが最も大きく最も早い停止をくれます。オンにすべきとき：AOFが唯一のコピーである単一ノード運用——mailrsの姿勢——で、「8バイトのスプライスに3日分の書き込みを飲まれる」ほうが悪い結末であるとき。
 
 ## アトミック性憲章（組み込みserving-store、v2.1）
 
@@ -259,7 +331,7 @@ TTLがあるはずなのに`expire_pending_count() == 0`が返るなら、それ
 
 ## リカバリポイント（v2.3）
 
-変更フィードを有効にすると（`[feed] enabled = true`、[cdc.md](../cdc.md)を参照）、すべてのスナップショットが採取時点のフィードカーソルを記録します。カーソルはスナップショットデータ自体と同じ追記禁止ウィンドウ内で凍結されます。これがリカバリポイント契約を与えます：
+変更フィードを有効にすると（`[feed] enabled = true`、[cdc.md](cdc.md)を参照）、すべてのスナップショットが採取時点のフィードカーソルを記録します。カーソルはスナップショットデータ自体と同じ追記禁止ウィンドウ内で凍結されます。これがリカバリポイント契約を与えます：
 
 > **スナップショットS + Sに記録されたカーソル以降のフィードフレーム = それ以降の任意のカーソルにおける正確な状態。**
 
@@ -270,3 +342,23 @@ TTLがあるはずなのに`expire_pending_count() == 0`が返るなら、それ
 ## レプリケーションワイヤ上のスナップショット（v3.15）
 
 バックログウィンドウから外れたレプリカへプライマリがインラインで送るのも、この同じスナップショットフォーマットです（[replication.md](replication.md)を参照）。知っておくべきセマンティクスが1つあります。送られたスナップショットはレプリカのローカル状態を**置き換え**ます。マージではなく、レプリカはロード前に自分のキー空間をフラッシュします。これは意図的な設計です。再合流した旧プライマリが分岐サフィックス（一度もレプリケートされなかった書き込み）を抱えているとき、再同期はその分岐を本当に破棄しなければならず、upsertだけのロードの下に残渣として残してはいけないからです。
+
+ローカルAOFを持つレプリカにとって、この「マージではなく置換」セマンティクスにはひとつの帰結があります：フラッシュ + スナップショットのロードはコミットパスを迂回するため、ロード完了後、レプリカはresync後のキー空間からローカルAOFを同期的にリライトします（4.0）。さもなければローカルログはresync前の履歴を記述したままで、プライマリへ到達できない状態での再起動は、誤った土台から組み上がった状態を提供してしまいます。
+
+## 運用ランブック
+
+インシデントの形で並べたチェックリスト。各行の裏にはゲート（`crashgate`、`repligate`、`diskgate`）か本文で名指ししたテストがあります。
+
+**kevyの停め方。** 秩序ある停止を優先——サーバは`SHUTDOWN` / SIGTERM、組み込みは最後の`Store`クローンのdropか`Store::shutdown()`。ドレインがすべてのAOF末尾を強制fsyncするので、秩序ある停止はどのfsyncポリシーでも何も失いません。feedもクリーン停止マーカーを書き、コンシューマとレプリカはgeneration bumpなしで再開します。`kill -9`は*生き延びられます*（それがcrashgateのマトリクスそのもの）が、fsyncウィンドウを支払い、feed/レプリカの連続性を断ちます（generation bump → コンシューマ再構築、レプリカはスナップショットresync）。
+
+**（再）起動のたびにverdictを読む。** 等価な三つの面。少なくともひとつをヘルスチェックに配線してください：
+
+- シャードごとの起動ログ行——`kevy: AOF … replayed N commands from M bytes in T ms (clean)`。`(clean)`以外は必ず、切り捨てバイト数と隔離ファイルパスを名指すWARNを伴います。
+- サーバの`INFO persistence`：`aof_last_open_dropped_bytes`と`aof_last_open_corrupt`——非ゼロは、この起動がファイルにあった分より少なく復旧したことを意味します。アラートを。3日間の静かな損失インシデントは、この信号がstderrにしか住んでいなかったことそのものでした。
+- 組み込みの`Store::open_report()`（C ABIは`kevy_open_report`）：`dropped_bytes`、`corrupt`、`quarantine_paths`、`resynced_bytes`がデータとして得られます——悪い起動を、誰も読まないログ行ではなく、拒否されたデプロイに変えてください。
+
+**起動が切り捨てを報告したら。** 切り捨て領域は`aof-<id>.aof.corrupt-quarantine.<unix_ts>`にバイト単位でそのまま残っています。この順で判断：（1）レプリカかバックアップにその書き込みがあるなら、そちらから復元。（2）なければ、`replay_resync = true`で一度起動することを検討——ファイル中央の破損なら無事な尾部を復旧し、スキップ範囲を報告します。（3）隔離ファイルを手でサルベージ（中身は大半が整形式のレコード / RESP）。インシデントが閉じるまで隔離ファイルは保持を。kevyが消すことはありません。
+
+**リライトの周期。** 自動リライトが起動時間とインシデント半径の上界です：リプレイ時間、隔離の爆発半径、resyncの跳躍コストはどれも未リライトのログサイズに比例します。成長ペア（`auto_aof_rewrite_percentage` / `min_size`）がデフォルト。ディスクやリプレイ予算が硬い制約なら絶対上限（`auto_aof_rewrite_bytes`）を、書き込みがまばらでログは倍にならないのに数週間分の履歴を抱える運用には経過時間トリガ（`auto_aof_rewrite_interval_secs`）を足してください。三つは独立で、先に発火したものが勝ちます。
+
+**ディスクフルと隔離失敗は大きな音で失敗します。** オープン時に隔離コピーが書けない場合（ディスクフルなど）、あなたのバイトの唯一のコピーを切り詰める代わりに、AOFを無傷のままオープンが失敗します。空きを作ってから再オープンを。

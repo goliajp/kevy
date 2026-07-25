@@ -4,12 +4,18 @@
 //! Same pattern as crates/kevy-resp-client/tests/roundtrip.rs — keeps the
 //! test self-contained (no real kevy server thread needed).
 
+use kevy_client::KevyError;
 use kevy_client::{PubsubEvent, Subscriber};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+
+/// The `SUBSCRIBE chan` ack every real server sends. `subscribe()` waits
+/// for it, so a mock that omits it is modelling a server that does not
+/// exist — and would simply hang the client.
+const SUBSCRIBE_CHAN_ACK: &[u8] = b"*3\r\n$9\r\nsubscribe\r\n$4\r\nchan\r\n:1\r\n";
 
 /// Start a mock server that, after accepting one connection, reads bytes
 /// until at least `expect_in_at_least` (covers the SUBSCRIBE write) and
@@ -30,6 +36,11 @@ fn mock_server(expect_in_at_least: usize, reply_bytes: &'static [u8]) -> u16 {
                 _ => break, // Ok(0) eof or Err — same handling
             }
         }
+        let already_acks = reply_bytes.starts_with(b"*3\r\n$9\r\nsubscribe\r\n")
+            || reply_bytes.starts_with(b"*3\r\n$10\r\npsubscribe\r\n");
+        if !already_acks {
+            let _ = sock.write_all(SUBSCRIBE_CHAN_ACK);
+        }
         let _ = sock.write_all(reply_bytes);
         thread::sleep(Duration::from_millis(50));
     });
@@ -46,7 +57,7 @@ fn open_subscribes_and_receives_subscribe_ack() {
         SUBSCRIBE_CHAN_REQ_LEN,
         b"*3\r\n$9\r\nsubscribe\r\n$4\r\nchan\r\n:1\r\n",
     );
-    let mut sub = Subscriber::open(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
+    let mut sub = Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
     let ev = sub.recv().unwrap();
     assert_eq!(
         ev,
@@ -65,7 +76,7 @@ fn message_frame_classified_with_payload() {
         b"*3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n\
           *3\r\n$7\r\nmessage\r\n$4\r\nnews\r\n$5\r\nhello\r\n",
     );
-    let mut sub = Subscriber::open(&format!("kevy://127.0.0.1:{port}"), &[b"news"]).unwrap();
+    let mut sub = Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"news"]).unwrap();
     // Drain the ack.
     let _ = sub.recv().unwrap();
     let ev = sub.recv().unwrap();
@@ -113,7 +124,10 @@ fn unsubscribe_with_nil_channel_classified_as_none() {
         // channel slot. Issued after we send UNSUBSCRIBE without args.
         b"*3\r\n$11\r\nunsubscribe\r\n$-1\r\n:0\r\n",
     );
-    let mut sub = Subscriber::open(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
+    let mut sub = Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
+    // The mock prepends the subscribe ack every real server sends;
+    // `subscribe()` queues it, so take it before the canned frame.
+    let _ack = sub.recv().unwrap();
     // After SUBSCRIBE chan, we ignore the (not-sent here) ack and
     // immediately ask the mock for its canned UNSUBSCRIBE-nil reply.
     let ev = sub.recv().unwrap();
@@ -134,23 +148,32 @@ fn server_close_yields_unexpected_eof() {
     let (started_tx, started_rx) = mpsc::channel();
     thread::spawn(move || {
         started_tx.send(()).unwrap();
-        let (mut sock, _) = listener.accept().unwrap();
-        let mut buf = vec![0u8; 1024];
-        let _ = sock.read(&mut buf);
+        let (sock, _) = listener.accept().unwrap();
+        // Close on accept. This mock used to block on a read first,
+        // which deadlocked once the test stopped subscribing: the client
+        // sent nothing, so the mock never returned from read, never
+        // closed, and `recv` waited for an EOF that could not arrive.
+        // Nothing here needs the client to speak first.
         drop(sock);
     });
     started_rx.recv().unwrap();
-    let mut sub = Subscriber::open(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
+    // This test is about `recv` seeing EOF, not about subscribing, and
+    // its inline mock never acks — so connect without channels rather
+    // than make `subscribe()` wait for an ack that will never come.
+    let mut sub = Subscriber::connect(&format!("kevy://127.0.0.1:{port}")).unwrap();
     let err = sub.recv().unwrap_err();
-    assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
+    assert!(matches!(err, KevyError::Closed));
 }
 
 #[test]
 fn malformed_frame_yields_invalid_data() {
     let port = mock_server(SUBSCRIBE_CHAN_REQ_LEN, b"!totally-bogus\r\n");
-    let mut sub = Subscriber::open(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
+    let mut sub = Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
+    // The mock prepends the subscribe ack every real server sends;
+    // `subscribe()` queues it, so take it before the canned frame.
+    let _ack = sub.recv().unwrap();
     let err = sub.recv().unwrap_err();
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(matches!(err, KevyError::Protocol(_)));
 }
 
 #[test]
@@ -161,9 +184,12 @@ fn unknown_pubsub_kind_yields_invalid_data() {
         SUBSCRIBE_CHAN_REQ_LEN,
         b"*3\r\n$5\r\nbogus\r\n$1\r\nx\r\n:0\r\n",
     );
-    let mut sub = Subscriber::open(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
+    let mut sub = Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
+    // The mock prepends the subscribe ack every real server sends;
+    // `subscribe()` queues it, so take it before the canned frame.
+    let _ack = sub.recv().unwrap();
     let err = sub.recv().unwrap_err();
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(matches!(err, KevyError::Protocol(_)));
 }
 
 #[test]
@@ -183,11 +209,16 @@ fn read_timeout_blocks_recv() {
         thread::sleep(Duration::from_millis(500));
     });
     started_rx.recv().unwrap();
-    let mut sub = Subscriber::open(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
+    // About `recv`'s read timeout, not about subscribing; the inline mock
+    // never acks, so connect without channels.
+    let mut sub = Subscriber::connect(&format!("kevy://127.0.0.1:{port}")).unwrap();
     sub.set_read_timeout(Some(Duration::from_millis(100))).unwrap();
     let err = sub.recv().unwrap_err();
     // Different platforms surface read-timeout as WouldBlock vs TimedOut.
-    let k = err.kind();
+    let KevyError::Io(ref io_err) = err else {
+        panic!("expected KevyError::Io, got {err:?}");
+    };
+    let k = io_err.kind();
     assert!(
         matches!(
             k,

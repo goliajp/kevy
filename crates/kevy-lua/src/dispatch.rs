@@ -8,8 +8,8 @@
 //! ## Flow
 //!
 //! 1. `Bridge::new(dispatch)` stores `Rc<dyn Fn(&[&[u8]]) -> Vec<u8>>`.
-//! 2. `Bridge::vm_for` installs an `Rc::clone` as a luna userdata global
-//!    `"__kevy_dispatch"` once per Vm (luna v1.1 B8).
+//! 2. `Bridge::vm_for` installs an `Rc::clone` as a userdata global
+//!    `"__kevy_dispatch"` once per Vm.
 //! 3. `redis_call` / `redis_pcall` native fns:
 //!    - read the dispatch handle via `vm.userdata_borrow`,
 //!    - collect Lua arg values into `Vec<Vec<u8>>` (binary-safe via
@@ -47,10 +47,10 @@ pub type DispatchFn = dyn Fn(&[&[u8]], bool) -> Vec<u8>;
 
 /// The boxed handle Bridge owns + every per-dialect Vm holds via
 /// userdata. `Rc` so it's `Clone` for the install-per-Vm path and
-/// `Any + 'static` so luna's userdata can store it.
+/// `Any + 'static` so the interpreter's userdata can store it.
 pub type DispatchHandle = Rc<DispatchFn>;
 
-/// Wrapper that luna's userdata can downcast back to. Carries:
+/// Wrapper that the interpreter's userdata can downcast back to. Carries:
 /// - `f`: the user-supplied dispatch callback;
 /// - `read_only`: shared mode flag set by `Bridge::eval_ro` /
 ///   `evalsha_ro` before invoking `vm.eval` and cleared right after.
@@ -64,8 +64,8 @@ pub(crate) struct DispatchSlot {
     pub read_only: Rc<Cell<bool>>,
 }
 
-// luna v1.3 Phase TB introduced `pub trait LuaUserdata` as the new
-// `set_userdata` bound (replaces the v1.1 unbounded `T: Any + 'static`).
+// luna-core's `pub trait LuaUserdata` is the `set_userdata` bound
+// (it replaced an earlier unbounded `T: Any + 'static`).
 // `DispatchSlot` carries no `Gc<…>` fields — `f` is `Rc<dyn Fn…>`,
 // `read_only` is `Rc<Cell<bool>>` — so the default no-op `trace` is
 // correct and the impl is a pure marker.

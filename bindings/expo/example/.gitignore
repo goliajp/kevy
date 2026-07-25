@@ -1,0 +1,9 @@
+# expo-kevy example — generated native projects and installed deps are
+# not committed; the app source (App.tsx / index.ts / package.json) and
+# the gate script are. `expo prebuild` regenerates ios/ and android/.
+node_modules/
+ios/
+android/
+.expo/
+dist/
+*.log

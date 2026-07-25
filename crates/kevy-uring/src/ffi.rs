@@ -19,6 +19,23 @@ unsafe extern "C" {
     pub fn syscall(num: c_long, ...) -> c_long;
 }
 
+/// Widen a `u32` syscall argument to `c_long`.
+///
+/// `c_long::from(v)` cannot be used: `c_long` is `i64` on 64-bit targets
+/// (where `From<u32>` exists) but `i32` on 32-bit ones (where it does
+/// not), so the `From` form makes the crate un-compilable for any 32-bit
+/// target — which a 32-bit build reaches through a dev-dependency even
+/// though io_uring itself only runs on 64-bit Linux.
+///
+/// Every argument passed through here is a small kernel-bounded value —
+/// a queue depth (≤ 32768), a register opcode, a registered-ring index,
+/// or a flags bitmask — so widening is lossless at either width.
+#[inline]
+#[allow(clippy::cast_possible_wrap)] // values are kernel-bounded; see above
+pub const fn arg(v: u32) -> c_long {
+    v as c_long
+}
+
 // ---- io_uring syscall numbers — identical across Linux architectures ------
 
 pub const SYS_IO_URING_SETUP: c_long = 425;
@@ -67,9 +84,12 @@ pub const IORING_SETUP_SINGLE_ISSUER: u32 = 1 << 12;
 /// `SINGLE_ISSUER` and slashes the cost of completion-side bookkeeping.
 /// Requires `SINGLE_ISSUER` set as well.
 ///
-/// **Defined but not used in kevy** — see the E2 attack notes in
-/// `bench/PERF-ATTACK-LOG-2026-06-20.md`. The constant is kept in the
-/// ABI table for documentation + future single-threaded reactor callers.
+/// **Defined but never set in `p.flags`** — this flag changes the CQ
+/// ring semantics so completions only land after `io_uring_enter` is
+/// called, but kevy's reactor busy-polls the CQ ring without entering
+/// on the steady state, so the flag starves completions (measured as a
+/// 65–73% regression). Kept in the ABI table for documentation and for
+/// future callers that block in `io_uring_enter`.
 #[allow(dead_code)]
 pub const IORING_SETUP_DEFER_TASKRUN: u32 = 1 << 13;
 
@@ -98,8 +118,8 @@ pub const IORING_OP_ACCEPT: u8 = 13;
 /// `addr` field carries the `user_data` of the target SQE. The kernel
 /// emits two CQEs: one for the cancel itself (`res = 0` on success,
 /// `-ENOENT` if no matching SQE found, `-EALREADY` if target already
-/// started executing) and one `-ECANCELED` for the target SQE. v1.29
-/// B2-alt uses this to cancel an in-flight multishot recv before
+/// started executing) and one `-ECANCELED` for the target SQE. The
+/// reactor uses this to cancel an in-flight multishot recv before
 /// switching the conn to single-shot `prep_read` for big-arg ingest.
 pub const IORING_OP_ASYNC_CANCEL: u8 = 14;
 pub const IORING_OP_READ: u8 = 22;
@@ -107,7 +127,7 @@ pub const IORING_OP_WRITEV: u8 = 2;
 pub const IORING_OP_WRITE: u8 = 23;
 
 /// POSIX `struct iovec` for `IORING_OP_WRITEV`. Matches the kernel
-/// layout (pointer + length). L1 (2026-06-21): the reactor's reply
+/// layout (pointer + length). The reactor's reply
 /// path submits an `&[Iovec]` so [bulk-header, value-bytes,
 /// trailing-CRLF] fuse into ONE syscall — skipping the per-GET
 /// memcpy of the value into the per-conn output Vec.
@@ -139,7 +159,7 @@ pub const IORING_RECV_MULTISHOT: u16 = 2; // (ioprio) re-fire one recv per arriv
 /// Kernel keeps the accept SQE armed across completions; each CQE carries
 /// the new fd in `res` and `IORING_CQE_F_MORE` in `flags` while still armed.
 /// When the kernel drops the multishot (listener closed, EAGAIN-like errors),
-/// `F_MORE` is clear and userland must re-submit. B4 (2026-06-20): cuts the
+/// `F_MORE` is clear and userland must re-submit. Cuts the
 /// one-SQE-per-accept overhead under high-conn-churn workloads.
 pub const IORING_ACCEPT_MULTISHOT: u16 = 1; // (ioprio bit for IORING_OP_ACCEPT)
 
@@ -184,7 +204,7 @@ pub const IORING_ENTER_REGISTERED_RING: u32 = 1 << 4;
 /// registered files table** (see [`IORING_REGISTER_FILES_SPARSE`]) instead
 /// of a real fd. The kernel skips the per-op `fget`/`fput` fd-table lookup
 /// — the largest single non-Spectre kernel cost in kevy's hot path
-/// (8 pp of -c1 CPU on the lx64 reference; see attack E1).
+/// (profiled at 8 pp of single-connection CPU on the reference box).
 pub const IOSQE_FIXED_FILE: u8 = 1 << 0;
 
 // ---- Completion `flags` bits ----------------------------------------------
@@ -192,6 +212,12 @@ pub const IOSQE_FIXED_FILE: u8 = 1 << 0;
 
 pub const IORING_CQE_F_BUFFER: u32 = 1 << 0;
 pub const IORING_CQE_F_MORE: u32 = 1 << 1;
+/// The socket still has data to read after this completion — a
+/// multishot recv that terminates (F_MORE clear) while this bit is
+/// set means "re-arm me to drain the rest", NOT EOF. Treating the
+/// accompanying `res == 0` as EOF strands the pending bytes and
+/// wedges the connection.
+pub const IORING_CQE_F_SOCK_NONEMPTY: u32 = 1 << 2;
 pub const IORING_CQE_BUFFER_SHIFT: u32 = 16;
 
 // ---- Provided-buffer ring layout constants --------------------------------

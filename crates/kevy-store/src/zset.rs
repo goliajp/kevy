@@ -2,10 +2,12 @@
 //! `ZSCORE` / `ZCARD` / `ZRANK`). The range / pop / range-removal family
 //! lives in `zset_range.rs` (500-LOC house cap).
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::small_zset::{self, AddResult as ZAddResult, SmallZSetData};
 use crate::value::{ZSetData, SmallBytes, Value, zset_member_weight};
 use crate::{Entry, Store, StoreError};
-use std::sync::Arc;
+use alloc::sync::Arc;
 
 impl Store {
     // ---- sorted sets ---------------------------------------------------
@@ -66,8 +68,10 @@ impl Store {
         }
     }
 
-    /// G4 (v1.25): borrowed-pair `ZADD`. A.8: encoding-switch.
-    pub fn zadd_borrowed(
+    /// `ZADD` — returns the count of newly-added members. Borrowed
+    /// argv: no per-member allocation; routes through the
+    /// encoding-switch path.
+    pub fn zadd(
         &mut self,
         key: &[u8],
         pairs: &[(f64, &[u8])],
@@ -92,13 +96,6 @@ impl Store {
         Ok(added)
     }
 
-    /// `ZADD` — returns the count of newly-added members.
-    pub fn zadd(&mut self, key: &[u8], pairs: &[(f64, Vec<u8>)]) -> Result<usize, StoreError> {
-        let borrowed: Vec<(f64, &[u8])> =
-            pairs.iter().map(|(s, m)| (*s, m.as_slice())).collect();
-        self.zadd_borrowed(key, &borrowed)
-    }
-
     pub fn zscore(&mut self, key: &[u8], member: &[u8]) -> Result<Option<f64>, StoreError> {
         match self.live_entry(key) {
             None => Ok(None),
@@ -121,13 +118,8 @@ impl Store {
         }
     }
 
-    pub fn zrem(&mut self, key: &[u8], members: &[Vec<u8>]) -> Result<usize, StoreError> {
-        let borrowed: Vec<&[u8]> = members.iter().map(Vec::as_slice).collect();
-        self.zrem_borrowed(key, &borrowed)
-    }
-
-    /// G4 (v1.25): borrowed-slice `ZREM`. A.8: encoding-aware.
-    pub fn zrem_borrowed(
+    /// `ZREM` — returns the count of members removed.
+    pub fn zrem(
         &mut self,
         key: &[u8],
         members: &[&[u8]],
@@ -164,12 +156,17 @@ impl Store {
         Ok(removed)
     }
 
-    /// `ZRANK` — 0-based position in ascending order (O(n) for now).
+    /// `ZRANK` — 0-based position in ascending order. O(log N): a hash
+    /// lookup for the score, then one order-statistic tree descent.
     pub fn zrank(&mut self, key: &[u8], member: &[u8]) -> Result<Option<usize>, StoreError> {
         match self.live_entry(key) {
             None => Ok(None),
             Some(e) => match &e.value {
-                Value::ZSet(z) => Ok(z.ordered().position(|(m, _)| m == member)),
+                Value::ZSet(z) => Ok(z
+                    .by_member
+                    .get(member)
+                    .copied()
+                    .and_then(|sc| z.rank_of(member, sc))),
                 Value::SmallZSetInline(z) => {
                     // Inline holds at most 2 entries; sort by score (then
                     // bytes) so ZRANK matches ZRANGE order.

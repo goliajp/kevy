@@ -28,12 +28,7 @@ fn main() {
     std::fs::copy(&src, &staged).expect("copy AOF into staging dir");
 
     println!("reproducer: opening Store from {}", dir.display());
-    let store = Store::open(
-        Config::default()
-            .with_persist(&dir)
-            .with_aof_filename("aof-0.aof"),
-    )
-    .expect("Store::open");
+    let store = Store::open(Config::default().with_persist(&dir)).expect("Store::open");
 
     println!("reproducer: opened OK; dbsize = {}", store.dbsize());
 }

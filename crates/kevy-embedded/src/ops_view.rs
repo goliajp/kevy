@@ -1,4 +1,4 @@
-//! v2.6 — embedded views (server parity minus VIA/FIELDS hydration:
+//! Embedded views (server parity minus VIA/FIELDS hydration:
 //! in-process callers dereference and read fields directly).
 //!
 //! Mirrors the embedded index architecture: per-shard view states in
@@ -7,6 +7,7 @@
 //! synchronous builds, typed API (`Tree` passed directly — no text
 //! grammar in-process).
 
+use crate::{KevyError, KevyResult};
 use std::io;
 use std::sync::RwLock;
 
@@ -36,9 +37,23 @@ pub(crate) struct ViewState {
     needs_rebuild: bool,
 }
 
+impl ShardViews {
+    /// Σ approximate heap bytes of the materialized view sets — the
+    /// view half of the tier's `reserved_bytes` feed.
+    /// Virtual views hold no set and contribute nothing.
+    #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+    pub(crate) fn reserved_bytes(&self) -> u64 {
+        self.views
+            .iter()
+            .map(|v| v.mat.as_ref().map_or(0, MaterializedSet::approx_bytes))
+            .sum()
+    }
+}
+
 /// One page of view members plus the resume cursor.
 pub type ViewPage = (Vec<(Vec<u8>, IndexValue)>, Option<(IndexValue, Vec<u8>)>);
 
+#[cfg(feature = "persist")]
 const SIDECAR: &str = "view-catalog.meta";
 
 impl Store {
@@ -51,7 +66,7 @@ impl Store {
         order_by: &[u8],
         desc: bool,
         mode: ViewMode,
-    ) -> io::Result<()> {
+    ) -> KevyResult<()> {
         self.check_view_refs(&tree, order_by)?;
         let spec = ViewSpec {
             name: name.to_vec(),
@@ -84,7 +99,7 @@ impl Store {
 
     /// Every index a view references (its leaves + ORDER BY) must
     /// already be declared.
-    fn check_view_refs(&self, tree: &Tree, order_by: &[u8]) -> io::Result<()> {
+    fn check_view_refs(&self, tree: &Tree, order_by: &[u8]) -> KevyResult<()> {
         let mut names: Vec<Vec<u8>> = vec![order_by.to_vec()];
         tree.each_leaf(&mut |l| names.push(l.index.clone()));
         let g = self
@@ -94,10 +109,7 @@ impl Store {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         for n in &names {
             if g.1.get(n).is_none() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "view references unknown index",
-                ));
+                return Err(KevyError::InvalidInput("view references unknown index".into()));
             }
         }
         Ok(())
@@ -131,7 +143,7 @@ impl Store {
         name: &[u8],
         after: Option<&(IndexValue, Vec<u8>)>,
         limit: usize,
-    ) -> io::Result<ViewPage> {
+    ) -> KevyResult<ViewPage> {
         let limit = limit.clamp(1, 100_000);
         let mut desc = false;
         let mut all: Vec<(IndexValue, Vec<u8>)> = Vec::new();
@@ -155,7 +167,7 @@ impl Store {
             }
         }
         if !found {
-            return Err(io::Error::new(io::ErrorKind::NotFound, "no such view"));
+            return Err(KevyError::NotFound("no such view".into()));
         }
         all.sort();
         if desc {
@@ -179,10 +191,11 @@ impl Store {
     }
 
     /// Summed member count across shards.
-    pub fn view_count(&self, name: &[u8]) -> io::Result<u64> {
+    pub fn view_count(&self, name: &[u8]) -> KevyResult<u64> {
         Ok(self.view_query(name, None, 100_000)?.0.len() as u64)
     }
 
+    #[cfg(feature = "persist")]
     fn persist_view_sidecar(&self) {
         let Some(dir) = &self.config.data_dir else { return };
         let g = self
@@ -196,7 +209,16 @@ impl Store {
         }
     }
 
+    /// Without `persist` there is no data dir — no sidecar to write
+    /// or load; both halves are no-ops.
+    #[cfg(not(feature = "persist"))]
+    fn persist_view_sidecar(&self) {}
+
+    #[cfg(not(feature = "persist"))]
+    pub(crate) fn view_boot(&self) {}
+
     /// Boot half — load the persisted view catalog.
+    #[cfg(feature = "persist")]
     pub(crate) fn view_boot(&self) {
         let Some(dir) = &self.config.data_dir else { return };
         if let Ok(text) = std::fs::read_to_string(dir.join(SIDECAR))

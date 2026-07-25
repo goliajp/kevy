@@ -8,7 +8,6 @@
 use crate::Commands;
 use crate::shard::Shard;
 use crate::uring_conn::UringConn;
-use crate::uring_reactor::ENOBUFS;
 /// Linux `errno`s referenced by [`Shard::uring_on_recv`]'s big-arg
 /// cancel handling. `ECANCELED = 125` (kernel emits `-ECANCELED` on
 /// the target's terminal CQE after a successful `IORING_OP_ASYNC_CANCEL`).
@@ -19,7 +18,7 @@ use kevy_uring::{Completion, ProvidedBufRing};
 /// Threshold above which the tail `$<N>\r\n` header in a freshly-received
 /// chunk triggers an explicit `Vec::reserve` on the conn-input buffer. Set
 /// to the multishot recv slab size so big-arg ingress avoids the 0→16→32→
-/// 48→64K realloc storm on cold conns (Axis B / v1.25 deco B-A3).
+/// 48→64K realloc storm on cold conns (identified by decomposition).
 const BIG_ARG_RESERVE_THRESHOLD: usize = 16 * 1024;
 
 /// Scan the tail of `buf` for a `$<digits>\r\n` bulk header and, if found
@@ -57,6 +56,13 @@ fn preallocate_for_big_arg_tail(buf: &mut Vec<u8>) {
     if bulk_len < BIG_ARG_RESERVE_THRESHOLD {
         return;
     }
+    // A body larger than the protocol's bulk cap will be rejected by
+    // the parser (`kevy_resp::MAX_BULK_LEN`), so don't pre-grow for
+    // it — an unclamped reserve here is a remote multi-terabyte alloc
+    // from a single forged `$<huge>\r\n` header.
+    if bulk_len > kevy_resp::MAX_BULK_LEN {
+        return;
+    }
     // Reserve room for the body bytes plus the trailing `\r\n` (+ a small
     // pad for the next command's header in pipelined traffic).
     let need = bulk_len + 32;
@@ -73,13 +79,13 @@ impl<C: Commands> Shard<C> {
     /// a prior partial frame is already buffered, recycle the slab, and
     /// re-arm if the SQE ended.
     ///
-    /// **v1.25 deco G2 (Axis I + B)** restructures this path:
-    /// - **A1 (parse-from-slab)** when `conn.input` is empty, the parser
+    /// Two decomposition-driven restructurings shape this path:
+    /// - **parse-from-slab** when `conn.input` is empty, the parser
     ///   borrows directly from `pbuf.bytes(bid, n)` and only the unparsed
     ///   suffix (rare — only on a partial trailing frame) is copied into
     ///   `conn.input`. Eliminates the always-on pbuf→input memcpy on the
     ///   single-chunk hot path (10 K SET / GET arrive in one chunk).
-    /// - **B-A3 (pre-grow)** when a `$<N>\r\n` bulk header tails the
+    /// - **pre-grow** when a `$<N>\r\n` bulk header tails the
     ///   buffer with N ≥ slab size, reserve N+32 bytes up front so the
     ///   subsequent multishot recv chunks of the same big SET body land
     ///   without the 0→16→32→48→64K realloc storm on a cold connection.
@@ -93,7 +99,7 @@ impl<C: Commands> Shard<C> {
         io: &mut KevyMap<u64, UringConn>,
         pbuf: &mut ProvidedBufRing,
     ) {
-        // v1.29 B2-alt: -ECANCELED (-125) on a multishot recv is ALWAYS
+        // -ECANCELED (-125) on a multishot recv is ALWAYS
         // the big-arg cancel cycle's terminal CQE (kevy doesn't issue
         // recv cancels anywhere else). Route to the state-machine
         // handler regardless of whether `pending_big_arg` is still set
@@ -112,30 +118,52 @@ impl<C: Commands> Shard<C> {
         // Suppress the auto-rearm only while we're mid-big-arg-cancel
         // (so the state machine drives recv mode).
         let mut suppress_rearm = false;
+        let mut cancelling = false;
         if let Some(uc) = io.get_mut(&cid)
             && let Some(state) = uc.pending_big_arg.as_ref()
-            && matches!(
+        {
+            cancelling = matches!(
                 state.as_ref(),
                 crate::uring_conn::BigArgState::BareSetCancelling { .. }
-                    | crate::uring_conn::BigArgState::BareSetReading { .. }
-            )
-        {
-            suppress_rearm = true;
+            );
+            if cancelling
+                || matches!(
+                    state.as_ref(),
+                    crate::uring_conn::BigArgState::BareSetReading { .. }
+                )
+            {
+                suppress_rearm = true;
+            }
         }
+        // A terminal that is NOT -ECANCELED still means the multishot is
+        // gone — ENOBUFS and EOF end it just as finally. While the
+        // big-arg cancel cycle is waiting for its target, that has to
+        // count as the target side completing: the cancel SQE then
+        // answers -ENOENT, no -ECANCELED can ever arrive, and a cycle
+        // that waits only for `target_canceled` sits forever with no
+        // armed recv, no pending SQE and nothing to re-queue it
+        // (captured: big_arg=true recv_armed=false arm_queued=false).
+        let target_gone_while_cancelling = cancelling && !c.has_more();
         if !c.has_more() {
             if let Some(uc) = io.get_mut(&cid) {
                 uc.recv_armed = false;
             }
             if !suppress_rearm {
-                // K4: needs an arm visit to re-prep the recv SQE.
+                // Needs an arm visit to re-prep the recv SQE.
                 self.mark_arm_pending(cid, io);
             }
         }
         if c.res <= 0 {
-            // Close on EOF (0) or a real error, but NOT on -ENOBUFS (the ring was
-            // momentarily empty; the data is still queued, so just re-arm).
-            if c.res != -ENOBUFS {
+            // res == 0 is EOF ONLY with F_SOCK_NONEMPTY clear; with it
+            // set the recv terminated but the socket still holds bytes
+            // (see [`Self::recv_terminal_recoverable`]). The !has_more
+            // block above already queued the re-arm; here, don't close.
+            if !self.recv_terminal_recoverable(cid, c, io) {
                 self.uring_mark_closing(cid, io);
+                return;
+            }
+            if target_gone_while_cancelling {
+                self.uring_on_big_arg_target_canceled(cid, io);
             }
             return;
         }
@@ -143,12 +171,14 @@ impl<C: Commands> Shard<C> {
             return; // no buffer (shouldn't happen for a successful recv)
         };
         let n = c.res as usize;
-        // **v1.29 B2-alt** — if this conn is waiting for the trailing
-        // CRLF of a kernel-direct prep_read'd big-arg body, slice it
-        // off the slab head before the regular dispatch sees it.
-        let n = if let Some(uc) = io.get_mut(&cid)
-            && uc.pending_crlf_skip > 0
-        {
+        // Data flowed: reset the zero-completion streak guard (folded
+        // into the crlf-skip probe's get_mut — res > 0 here). The probe
+        // slices any pending kernel-direct big-arg trailing CRLF off the
+        // slab head before dispatch sees it.
+        let n = if let Some(uc) = io.get_mut(&cid) && {
+            uc.recv_zero_streak = 0;
+            uc.pending_crlf_skip > 0
+        } {
             let skip = (uc.pending_crlf_skip as usize).min(n);
             uc.pending_crlf_skip -= skip as u8;
             let slab_bytes = pbuf.bytes(bid, n);
@@ -177,7 +207,7 @@ impl<C: Commands> Shard<C> {
         };
         // Recompute slab offset for the BigBulk routing below.
         let slab_offset = c.res as usize - n;
-        // **v1.25 B.4 + A.2** BigBulk routing: if this conn has a SET
+        // BigBulk routing: if this conn has a SET
         // value body in flight, feed slab bytes straight into the owned
         // dest Vec — ONE memcpy per chunk (slab → dest), same byte cost
         // as the prior slab→input path but the dest Vec is pre-sized
@@ -191,7 +221,20 @@ impl<C: Commands> Shard<C> {
             self.uring_bigbulk_feed(cid, io, slab_bytes);
             pbuf.recycle(bid);
             self.aof_end_group_logged();
-            // K4: feed may have completed the body and pushed +OK to
+            // Payload first, THEN the terminal bookkeeping: transitioning
+            // before the feed would size the single-shot read against
+            // bytes this very CQE is about to deliver.
+            if target_gone_while_cancelling
+                && io.get(&cid).is_some_and(|uc| {
+                    matches!(
+                        uc.pending_big_arg.as_deref(),
+                        Some(crate::uring_conn::BigArgState::BareSetCancelling { .. })
+                    )
+                })
+            {
+                self.uring_on_big_arg_target_canceled(cid, io);
+            }
+            // The feed may have completed the body and pushed +OK to
             // conn.output; queue the conn so the next arm visit
             // submits a write SQE.
             self.mark_arm_pending(cid, io);
@@ -224,7 +267,7 @@ impl<C: Commands> Shard<C> {
             self.protocol_error(cid);
             self.uring_mark_closing(cid, io);
         }
-        // K4: dispatch may have appended reply bytes to `conn.output` and/or
+        // Dispatch may have appended reply bytes to `conn.output` and/or
         // arc references to `conn.output_arcs` — queue the conn so the
         // next arm visit submits the write SQE. Cheap (one map probe +
         // a dedup flag) and unconditional: under bench-shape -P1 every
@@ -237,14 +280,14 @@ impl<C: Commands> Shard<C> {
     /// the combined buffer. AOF group-commit + slab recycle bookkeeping
     /// stays in [`Self::uring_on_recv`] (the caller).
     ///
-    /// **v1.25 B.4 + A.2** — after the regular dispatch, the leftover
+    /// After the regular dispatch, the leftover
     /// (unparsed) tail is checked for a `SET key $<N>` BigBulk shape; if
     /// matched, the conn flips into BigBulk-recv mode (subsequent CQE
     /// bytes go straight into an owned dest Vec). This avoids both the
     /// `conn.input` realloc storm AND the final `Arc::from(slice)`
     /// 64K memcpy on big SETs.
     #[inline]
-    // LOC-WAIVER: hot parse-from-slab dispatch fork (A1 fast path vs
+    // LOC-WAIVER: hot parse-from-slab dispatch fork (slab fast path vs
     // append-then-parse) — per-op critical path.
     pub(crate) fn uring_recv_dispatch(
         &mut self,
@@ -253,9 +296,8 @@ impl<C: Commands> Shard<C> {
         input_buf: &mut Vec<u8>,
         io: &mut KevyMap<u64, UringConn>,
     ) -> crate::inbox::BatchOutcome {
-        
         if input_buf.is_empty() {
-            // A1 fast path: parse straight from the slab. The kernel's
+            // Fast path: parse straight from the slab. The kernel's
             // provided-buffer slice lives until `pbuf.recycle(bid)`, which
             // the caller defers until after dispatch_batch returns. Any
             // bytes dispatch stores (e.g. `Arc::from(&[u8])` for SET) get
@@ -264,7 +306,7 @@ impl<C: Commands> Shard<C> {
             // `input_buf` for the next CQE.
             let o = self.dispatch_batch(cid, slab);
             if !o.conn_gone && o.consumed < slab.len() {
-                // **v1.25 B.4 + A.2** — before staging the tail into
+                // Before staging the tail into
                 // `input_buf` (where it would otherwise drive the
                 // realloc storm for any subsequent body CQEs), probe
                 // for the SET BigBulk shape. On a hit, promote: the
@@ -322,127 +364,16 @@ impl<C: Commands> Shard<C> {
         if let Some(uc) = io.get_mut(&cid) {
             uc.closing = true;
         }
-        // K4: closing conns stay in the arm queue until reap picks
+        // Closing conns stay in the arm queue until reap picks
         // them up — gives the arm loop a chance to drain any
         // outstanding write_buf before close_conn drops the fd.
         self.mark_arm_pending(cid, io);
-        // K5 (v1.25 A.4 redo): push to closing ready-set so
+        // Push to closing ready-set so
         // `uring_reap_closed` iterates O(closing) instead of O(N=conns).
         // Duplicates are harmless — the reap-side filter short-circuits
         // when self.conns.get(cid) returns None (already reaped).
         self.closing_uring_conns.push(cid);
         self.blocked.drop_for_conn(cid);
         self.cancel_xshard_on_close(cid);
-    }
-
-    /// A write completed: advance progress; resubmit the remainder next loop.
-    // LOC-WAIVER: hot write-completion state machine (chunked-writev
-    // prefix drop / short-write linearize) — per-op critical path.
-    pub(crate) fn uring_on_write(
-        &mut self,
-        cid: u64,
-        res: i32,
-        io: &mut KevyMap<u64, UringConn>,
-    ) {
-        let Some(uc) = io.get_mut(&cid) else {
-            return;
-        };
-        uc.write_inflight = false;
-        if res < 0 {
-            self.uring_mark_closing(cid, io);
-            return;
-        }
-        // L1 (2026-06-21) + A.4 (v1.25): the writev path mixes write_buf
-        // bytes with arc-bulk borrowed bytes via the iovec list. A4
-        // chunked writev: the SQE may cover only the leading
-        // `arcs_in_flight` arcs + write_buf up through `write_byte_cap`;
-        // remaining arcs / write_buf tail stay queued for the next
-        // arm_conns iter. On a full completion we drop the processed
-        // prefix; on a SHORT write we materialise EVERYTHING (in-flight
-        // chunk's unsent suffix + all remaining arcs + remaining
-        // write_buf tail) into a linear write_buf so the next iter
-        // resumes via the plain `prep_write` path.
-        if !uc.write_arcs.is_empty() {
-            let written = res as usize;
-            let submitted = uc.write_inflight_bytes;
-            if written == submitted {
-                // Full chunk completed. Drop the processed-prefix arcs;
-                // advance write_off through the included header bytes.
-                let consumed = uc.arcs_in_flight;
-                let everything_done = consumed == uc.write_arcs.len()
-                    && uc.write_byte_cap == uc.write_buf.len();
-                if everything_done {
-                    uc.write_buf.clear();
-                    uc.write_arcs.clear();
-                    uc.write_iovecs.clear();
-                    uc.write_off = 0;
-                    uc.arcs_in_flight = 0;
-                    uc.write_byte_cap = 0;
-                    uc.write_inflight_bytes = 0;
-                    // H1.C: per-conn pending_write flag tracks the
-                    // pub/sub dirty-list dedup. write_buf was swapped
-                    // from conn.output earlier; once fully sent and
-                    // conn.output is empty too, the conn is idle wrt
-                    // outbound and the next publish should re-push it
-                    // onto `dirty`.
-                    if let Some(conn) = self.conns.get_mut(&cid)
-                        && conn.output.is_empty()
-                    {
-                        conn.pending_write = false;
-                    }
-                } else {
-                    // A.4: leave the unsent tail in place. write_off
-                    // advances to the cap; the next arm_conns iter
-                    // submits the next chunk starting from there.
-                    uc.write_off = uc.write_byte_cap;
-                    uc.write_arcs.drain(..consumed);
-                    uc.write_iovecs.clear();
-                    uc.arcs_in_flight = 0;
-                    uc.write_byte_cap = 0;
-                    uc.write_inflight_bytes = 0;
-                }
-            } else {
-                // Short write: materialise the entire still-unsent
-                // payload (in-flight chunk's unsent suffix + remaining
-                // chunked-out arcs + write_buf tail past byte_cap) into
-                // a linear write_buf; drop all arcs; reset chunked
-                // state; advance write_off by the bytes actually
-                // written. Next iter takes the simple prep_write path.
-                let total: usize = uc.write_buf.len()
-                    + uc.write_arcs.iter().map(|(_, a)| a.len()).sum::<usize>();
-                let mut linear: Vec<u8> = Vec::with_capacity(total);
-                let mut prev = 0usize;
-                for (pos, arc) in &uc.write_arcs {
-                    let pos = *pos;
-                    if pos > prev {
-                        linear.extend_from_slice(&uc.write_buf[prev..pos]);
-                    }
-                    linear.extend_from_slice(arc.as_ref());
-                    prev = pos;
-                }
-                if prev < uc.write_buf.len() {
-                    linear.extend_from_slice(&uc.write_buf[prev..]);
-                }
-                uc.write_buf = linear;
-                uc.write_arcs.clear();
-                uc.write_iovecs.clear();
-                uc.write_off = written;
-                uc.arcs_in_flight = 0;
-                uc.write_byte_cap = 0;
-                uc.write_inflight_bytes = 0;
-            }
-            return;
-        }
-        uc.write_off += res as usize;
-        if uc.write_off >= uc.write_buf.len() {
-            uc.write_buf.clear();
-            uc.write_off = 0;
-            // H1.C: see comment in the arc-write branch above.
-            if let Some(conn) = self.conns.get_mut(&cid)
-                && conn.output.is_empty()
-            {
-                conn.pending_write = false;
-            }
-        }
     }
 }

@@ -1,4 +1,4 @@
-//! v0.5 detection: data written, SAVEd, and reloaded by a fresh runtime (same
+//! Detection suite: data written, SAVEd, and reloaded by a fresh runtime (same
 //! shard count) survives a "restart". Each shard persists its own store.
 
 use std::io::{Read, Write};
@@ -71,7 +71,7 @@ fn with_runtime_configured<F>(
     let stop_t = stop.clone();
     let dir = dir.to_path_buf();
     let handle = std::thread::spawn(move || {
-        let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, nshards, kevy::KevyCommands)
+        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards)).bind([127, 0, 0, 1], port).shards(nshards)
             .with_data_dir(dir);
         let rt = configure(rt);
         rt.run(stop_t).unwrap();
@@ -496,7 +496,12 @@ fn auto_aof_rewrite_respects_pct_zero_disable() {
                 read_reply(&mut c, b"+OK\r\n");
             }
 
-            let pre = wait_for_size_at_least_heartbeat(&aof_path, &mut c, 16 * 1024, 1_000);
+            // Generous deadline: the appends sit in the AOF BufWriter until a
+            // background flush tick lands them on disk, and a loaded CI
+            // runner has missed a 1 s window (observed: still 9 bytes on the
+            // macOS runner). The waiter returns the moment the floor is
+            // reached, so the slack costs nothing on a healthy run.
+            let pre = wait_for_size_at_least_heartbeat(&aof_path, &mut c, 16 * 1024, 5_000);
             assert!(pre >= 16 * 1024, "AOF did not grow: {pre} bytes");
 
             // Heartbeat across several tick cycles so the shard actually
@@ -581,7 +586,7 @@ fn read_integer(s: &mut std::net::TcpStream) -> i64 {
     String::from_utf8(n).unwrap().parse().unwrap()
 }
 
-/// INC-2026-06-09 regression: a relative TTL must survive a restart at its
+/// Incident regression: a relative TTL must survive a restart at its
 /// *original* wall-clock deadline, not be reset to a fresh full duration.
 /// Before the fix, AOF replay re-anchored `PEXPIRE` to restart-time, so PTTL
 /// after restart read back the full 100 s; the fix logs an absolute
@@ -631,7 +636,7 @@ fn relative_ttl_survives_restart_at_original_deadline() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ───────────── stream consumer groups survive restart (2026-06-11) ─────────────
+// ───────────── stream consumer groups survive restart ─────────────
 
 /// Drive the grouped-stream fixture over the wire: entries 1-1/2-1/3-1 on
 /// `st`, group `g`, consumer c1 holds 1-1+2-1, c2 holds 3-1, then 2-1 is
@@ -671,8 +676,8 @@ fn build_grouped_stream(c: &mut std::net::TcpStream) {
 
 /// Post-restart probes shared by the AOF-rewrite and snapshot paths.
 /// `pending_total` differs: the snapshot keeps the 2-1 tombstone PEL row
-/// (3 pending, c1=2), the rewrite drops it (2 pending, c1=1) — RFC
-/// 2026-06-11 trade-off.
+/// (3 pending, c1=2), the rewrite drops it (2 pending, c1=1) — a
+/// deliberate trade-off (the rewrite re-serializes only live entries).
 fn assert_grouped_stream_restored(c: &mut std::net::TcpStream, tombstone_kept: bool) {
     let (total, c1) = if tombstone_kept { (3, 2) } else { (2, 1) };
     c.write_all(&req(&[b"XPENDING", b"st", b"g"])).unwrap();
@@ -853,7 +858,7 @@ fn info_persistence_reports_rewrite_completion() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// v1.25.x A.3 follow-up: `SAVE` was migrated from inline
+/// `SAVE` was migrated from inline
 /// `save_snapshot` (synchronous, held the reactor for the disk write)
 /// to [`Shard::start_bg_save`] (per-shard `PersistWorker` does the
 /// disk work; reactor returns `+OK` as soon as the COW
@@ -886,7 +891,7 @@ fn save_does_not_block_reactor_for_disk_write() {
             c.write_all(&argv).unwrap();
             read_reply(&mut c, b"+OK\r\n");
         }
-        // SAVE: async since v1.25.x — should return `+OK` near-instantly.
+        // SAVE is async — should return `+OK` near-instantly.
         let save_t0 = std::time::Instant::now();
         c.write_all(&req(&[b"SAVE"])).unwrap();
         read_reply(&mut c, b"+OK\r\n");
@@ -942,7 +947,7 @@ fn save_does_not_block_reactor_for_disk_write() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Shutdown drain (v1.25.x A.3 follow-up): a `SAVE` submitted just
+/// Shutdown drain: a `SAVE` submitted just
 /// before `stop=true` must still land its `dump-{i}.rdb` rename + AOF
 /// reset, because the client got `+OK` on the COW view freeze and
 /// would otherwise be lied to. `with_runtime`'s normal `stop` →

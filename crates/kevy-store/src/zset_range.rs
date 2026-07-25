@@ -3,6 +3,8 @@
 //! Split out of `zset.rs` to keep it under the 500-LOC house cap; the
 //! write-path core (`ZADD` / `ZREM` / `ZINCRBY`) stays there.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::util::range_bounds;
 use crate::value::{ScoreBound, Value};
 use crate::{Store, StoreError};
@@ -20,9 +22,10 @@ impl Store {
             Some(e) => match &e.value {
                 Value::ZSet(z) => Ok(match range_bounds(start, stop, z.len()) {
                     None => Vec::new(),
+                    // O(log N) seek to the start rank, then walk M items —
+                    // no skip-walk from the front.
                     Some((s, end)) => z
-                        .ordered()
-                        .skip(s)
+                        .ordered_from(s)
                         .take(end - s + 1)
                         .map(|(m, sc)| (m.to_vec(), sc))
                         .collect(),
@@ -53,11 +56,16 @@ impl Store {
         match self.live_entry(key) {
             None => Ok(Vec::new()),
             Some(e) => match &e.value {
-                Value::ZSet(z) => Ok(z
-                    .ordered()
-                    .filter(|(_, sc)| min.ge_ok(*sc) && max.le_ok(*sc))
-                    .map(|(m, sc)| (m.to_vec(), sc))
-                    .collect()),
+                Value::ZSet(z) => {
+                    // Two O(log N) rank descents bracket the score range,
+                    // then only the M matches are walked — no scan+filter.
+                    let lo = z.score_start_rank(&min);
+                    let hi = z.score_end_rank(&max);
+                    Ok(z.ordered_from(lo)
+                        .take(hi.saturating_sub(lo))
+                        .map(|(m, sc)| (m.to_vec(), sc))
+                        .collect())
+                }
                 Value::SmallZSetInline(z) => {
                     let mut entries: Vec<(Vec<u8>, f64)> = z
                         .iter()
@@ -84,10 +92,10 @@ impl Store {
         match self.live_entry(key) {
             None => Ok(0),
             Some(e) => match &e.value {
+                // Two rank descents — O(log N), no iteration at all.
                 Value::ZSet(z) => Ok(z
-                    .ordered()
-                    .filter(|(_, sc)| min.ge_ok(*sc) && max.le_ok(*sc))
-                    .count()),
+                    .score_end_rank(&max)
+                    .saturating_sub(z.score_start_rank(&min))),
                 Value::SmallZSetInline(z) => Ok(z
                     .iter()
                     .filter(|(_, sc)| min.ge_ok(*sc) && max.le_ok(*sc))
@@ -140,11 +148,11 @@ impl Store {
             return Ok(to_pop);
         }
         let borrowed: Vec<&[u8]> = to_pop.iter().map(|(m, _)| m.as_slice()).collect();
-        self.zrem_borrowed(key, &borrowed)?;
+        self.zrem(key, &borrowed)?;
         Ok(to_pop)
     }
 
-    /// v2.4 `zpopmin_below` — pop up to `count` lowest-scored members
+    /// `zpopmin_below` — pop up to `count` lowest-scored members
     /// whose score is `< below` (strictly). The delayed-job primitive:
     /// "pop everything that is due" in one atomic call (score = due
     /// time, `below` = now). Absent key = empty; wrong type errors.
@@ -189,7 +197,7 @@ impl Store {
             return Ok(to_pop);
         }
         let borrowed: Vec<&[u8]> = to_pop.iter().map(|(m, _)| m.as_slice()).collect();
-        self.zrem_borrowed(key, &borrowed)?;
+        self.zrem(key, &borrowed)?;
         Ok(to_pop)
     }
 
@@ -207,9 +215,9 @@ impl Store {
             Some(e) => match &e.value {
                 Value::ZSet(z) => match crate::util::range_bounds(start, stop, z.len()) {
                     None => return Ok(0),
+                    // Seek to the start rank (O(log N)), collect the M hits.
                     Some((s, end)) => z
-                        .ordered()
-                        .skip(s)
+                        .ordered_from(s)
                         .take(end - s + 1)
                         .map(|(m, _)| m.to_vec())
                         .collect(),
@@ -235,7 +243,7 @@ impl Store {
             return Ok(0);
         }
         let borrowed: Vec<&[u8]> = to_remove.iter().map(Vec::as_slice).collect();
-        self.zrem_borrowed(key, &borrowed)
+        self.zrem(key, &borrowed)
     }
 
     /// `ZREMRANGEBYSCORE key min max` — remove every member whose score
@@ -257,7 +265,7 @@ impl Store {
             return Ok(0);
         }
         let borrowed: Vec<&[u8]> = hits.iter().map(|(m, _)| m.as_slice()).collect();
-        self.zrem_borrowed(key, &borrowed)
+        self.zrem(key, &borrowed)
     }
 
     /// `ZREVRANGEBYSCORE` — `zrange_by_score` reversed. Bounds are

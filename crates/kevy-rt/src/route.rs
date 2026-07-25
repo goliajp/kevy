@@ -5,7 +5,7 @@
 use crate::exec_slowlog::SlowlogSub;
 
 /// How a command maps onto shards.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Route {
     /// Keyless; execute on the connection's own shard (e.g. PING).
     Local,
@@ -26,43 +26,63 @@ pub enum Route {
     /// background; the command returns once the views are frozen.
     BgSave,
     /// `BGREWRITEAOF` — rebuild every shard's AOF from in-memory state.
-    /// Synchronous in v1.0 (each shard blocks for its own rewrite duration).
+    /// Each shard freezes a COW view and hands the dump to its persist
+    /// worker, so the reply returns before the rewrite is durable.
     RewriteAof,
     /// `MSET` — `args[1..]` are key/value pairs, routed per key's shard.
     MSet,
-    /// `MGET` — `args[1..]` are keys; values gathered in request order.
-    MGet,
-    /// `SINTER` / `SUNION` / `SDIFF` — `args[1..]` are set keys.
-    SInter,
-    SUnion,
-    SDiff,
-    /// v2.2 zset/set algebra `*STORE` family: gather sources, combine
+    /// Cross-shard multi-key gather (`MGET` / `SINTER` / `SUNION` /
+    /// `SDIFF` / `ZINTERCARD`): each key's payload is fetched on its
+    /// owning shard and the origin reduces them per [`crate::MultiOp`].
+    Gather(crate::MultiOp),
+    /// zset/set algebra `*STORE` family: gather sources, combine
     /// per [`crate::message::ZCombine`], materialize at `args[1]`.
     ZAlgebraStore(crate::ZCombine),
-    /// `ZINTERCARD numkeys key… [LIMIT n]` — read-only gathered count.
-    ZInterCard,
-    /// v2.3 `FEED.READ <shard> <gen> <offset> …` — shard-index routed.
+    /// Geo `*STORE` family — `GEOSEARCHSTORE dst src …` and
+    /// `GEORADIUS[BYMEMBER] src … STORE|STOREDIST dst`.
+    ///
+    /// These MUST be routed, not left to the catch-all `Route::Single(1)`:
+    /// GEOSEARCHSTORE puts the DESTINATION at argv[1] (so the search then
+    /// read the source off the wrong shard — `:0`, or "could not decode
+    /// requested zset member" for FROMMEMBER) while GEORADIUS puts the
+    /// SOURCE there (so the destination was written into the source's
+    /// shard, invisible to every later read of it). Both keys are carried
+    /// here because neither sits at a fixed argv index — the legacy forms
+    /// hide `dst` behind an option-soup scan.
+    ///
+    /// The search runs on `src`'s shard ([`crate::Commands::geo_search`]),
+    /// the write lands on `dst`'s (`Op::ZStoreResult`) — see
+    /// [`crate::exec_geostore`].
+    GeoStore { src: Vec<u8>, dst: Vec<u8> },
+    /// `FEED.READ <shard> <gen> <offset> …` — shard-index routed.
     FeedRead,
-    /// v2.3 `FEED.TAIL <shard>`.
+    /// `FEED.TAIL <shard>`.
     FeedTail,
-    /// v2.3 `FEED.SHARDS` — answered locally.
+    /// `FEED.SHARDS` — answered locally.
     FeedShards,
-    /// v2.3 `PREFIX.STATS <prefix>` — all-shard fanout, summed.
+    /// `PREFIX.STATS <prefix>` — all-shard fanout, summed.
     PrefixStats,
-    /// v2.5 extension fan-out (IDX.* reads): every shard runs
+    /// `CLIENT LIST` — all-shard fanout; each shard renders its conn
+    /// table rows, the origin concatenates into one bulk reply.
+    ClientList,
+    /// `CLIENT KILL …` — all-shard fanout; each shard closes its
+    /// matching conns, the origin sums (or maps the legacy positional
+    /// form to `+OK` / `-ERR`).
+    ClientKill,
+    /// Extension fan-out (IDX.* reads): every shard runs
     /// `Commands::extension_op`, the origin reduces.
     Extension,
-    /// v3.16 D1 `WAIT numreplicas timeout` — all-shard barrier: each
+    /// `WAIT numreplicas timeout` — all-shard barrier: each
     /// shard answers (possibly deferred until its replicas ACK or the
     /// deadline) with how many of its replicas acked its
     /// `master_repl_offset` at arm time; the origin replies the MIN.
     /// `timeout_ms == 0` = the Redis "wait forever" form (the runtime
     /// hard-caps it — see `exec_replwait::WAIT_HARD_CAP_MS`).
     ReplWait { numreplicas: u32, timeout_ms: u64 },
-    /// v3.16 D2 `REPL.TOKEN` on a primary — gather every shard's
+    /// `REPL.TOKEN` on a primary — gather every shard's
     /// `(feed generation, next_offset)` pair into one flat array.
     ReplToken,
-    /// v3.16 D2 `REPL.WAIT` on a replica — all-shard applied barrier:
+    /// `REPL.WAIT` on a replica — all-shard applied barrier:
     /// shard `i` answers once its replication-apply position reaches
     /// `offsets[i]` (or the deadline passes). All met → `+OK`; any
     /// timeout → the pre-built `miss` reply (kevy sends
@@ -76,8 +96,13 @@ pub enum Route {
     },
     /// `KEYS pattern` — every shard returns its matching keys.
     Keys(Option<Vec<u8>>),
-    /// `SCAN` (cursor-0 approximation) — like KEYS but replies `[cursor, keys]`.
-    Scan(Option<Vec<u8>>),
+    /// `SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]` — a real
+    /// cursor iterator: each call visits ~COUNT buckets of ONE shard
+    /// (chaining into the next shard only while the work budget lasts)
+    /// and replies `[next-cursor, keys]`. `Err` carries the pre-parsed
+    /// error message the command layer wants on the wire (invalid
+    /// cursor / syntax error) — the runtime replies it verbatim.
+    Scan(Result<ScanArgs, &'static str>),
     /// `RANDOMKEY` — one arbitrary key across all shards.
     RandomKey,
     /// `SUBSCRIBE` / `UNSUBSCRIBE` — connection-level (modifies this conn).
@@ -114,6 +139,29 @@ pub enum Route {
         /// `true` for `RENAMENX` (no overwrite — reply `:0` if dst exists).
         nx: bool,
     },
+    /// `RPOPLPUSH src dst` / `LMOVE src dst LEFT|RIGHT LEFT|RIGHT` /
+    /// `BRPOPLPUSH src dst timeout`, once the blocking form has an element
+    /// to serve.
+    ///
+    /// These MUST be routed, not left to `Route::Single(1)`. The source and
+    /// the destination are different keys and can live on different shards;
+    /// the catch-all route hashes args[1] (the source), so the destination
+    /// push executed on the SOURCE's shard and the element was written into
+    /// a keyspace nobody would ever read it from. It returned the moved
+    /// value, so the caller believed it had worked. Measured on an 8-shard
+    /// server: 11 of 12 moves silently lost the element.
+    ///
+    /// Same-shard pairs are one atomic Op on the owning shard. Cross-shard
+    /// pairs run the Take→Push orchestrator (mirroring [`Self::Rename`]),
+    /// which is NOT atomic — see `exec_listmove`.
+    ListMove {
+        /// Pop from the head of the source (`LMOVE ... LEFT ...`) rather
+        /// than the tail (`RPOPLPUSH`).
+        from_left: bool,
+        /// Push onto the head of the destination (`RPOPLPUSH`, `LMOVE ...
+        /// LEFT`) rather than the tail.
+        to_left: bool,
+    },
     /// `SLOWLOG GET / LEN / RESET / HELP`. The sub-command + parsed
     /// args are pre-decoded at routing time so the runtime knows
     /// whether to short-circuit (HELP / error) or fan out across
@@ -137,9 +185,30 @@ pub enum Route {
     },
 }
 
+/// Parsed `SCAN` arguments carried by [`Route::Scan`].
+///
+/// `cursor` is the raw wire cursor: the runtime splits it into
+/// `(shard, in-shard position)` — shard index in the top 10 bits,
+/// reverse-binary bucket cursor in the low 54 (see `exec_scan` for the
+/// documented limits). Cursors are therefore only meaningful on the
+/// server (and shard count) that issued them, like Redis Cluster
+/// cursors are per-node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanArgs {
+    /// Raw wire cursor (`0` starts a sweep).
+    pub cursor: u64,
+    /// `COUNT` — buckets-visited work bound per call (default 10).
+    pub count: usize,
+    /// `MATCH` glob, applied to each visited key.
+    pub pattern: Option<Vec<u8>>,
+    /// `TYPE` — keep only keys whose value type name matches
+    /// (case-insensitive; unknown names match nothing).
+    pub type_filter: Option<Vec<u8>>,
+}
+
 /// The `GROUP <name> <consumer>` (+ `NOACK`) context an `XREADGROUP`
 /// gather carries to each per-stream sub-query.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct XGroupCtx {
     /// Consumer-group name.
     pub group: Vec<u8>,

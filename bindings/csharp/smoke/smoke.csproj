@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The C# smoke — what ffigate runs. Same contract as the C/Go/Bun/Node
+       ones: commands, a protocol error as data, a pub/sub round trip, a
+       close-and-reopen durability check, the scalar fast path. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Kevy.Smoke</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Kevy.Embedded/Kevy.Embedded.csproj" />
+  </ItemGroup>
+
+</Project>

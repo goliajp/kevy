@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CDC——变更流（FEED. / changes_since） — kevy</title>
+<meta name="description" content="kevy 把每一笔已应用的写入都作为可消费的变更流暴露出来——就是 AOF 记录、副本应用的那一批 effect 帧。典型消费者：缓存失效器、搜索索引更新器、下游镜像——也就是 RDS 栈里那张“outbox 表”干的活，只是不需要那张表。">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../zh/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../../zh/docs/" aria-current="page">文档</a>
+      <a href="../../../zh/docs/commands/">命令</a>
+      <a href="../../../zh/benchmarks/">基准</a>
+      <a href="../../../zh/play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../../zh/docs/search-index.json" data-root="../../../zh/">
+        <input type="search" placeholder="搜索文档……" aria-label="搜索文档……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../../docs/cdc/">EN</a><a href="../../../zh/docs/cdc/" aria-current="page">中文</a><a href="../../../ja/docs/cdc/">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell has-toc">
+  <aside class="side"><p class="side-h">上手</p><ul><li><a href="../../../zh/docs/designing-on-kevy/">在 kevy 上设计应用</a></li><li><a href="../../../zh/docs/cookbook/">RDS→kevy 建模 cookbook</a></li><li><a href="../../../zh/docs/persistence/">持久化</a></li><li><a href="../../../zh/docs/tuning/">调优 kevy</a></li></ul><p class="side-h">运行</p><ul><li><a href="../../../zh/docs/replication/">复制</a></li><li><a href="../../../zh/docs/availability/">可用性</a></li><li><a href="../../../zh/docs/cluster/">集群</a></li><li><a href="../../../zh/docs/tiering/">透明分层存储（[tiering] / with_tier_budget）</a></li><li><a href="../../../zh/docs/accept-shards/">--accept-shards N——把稀疏连接收拢到部分 shard 上</a></li><li><a href="../../../zh/docs/uds/">Unix-domain socket（UDS）传输</a></li><li><a href="../../../zh/docs/async/">异步客户端</a></li></ul><p class="side-h">数据</p><ul><li><a href="../../../zh/docs/indexes/">二级索引（IDX. / idx_）</a></li><li><a href="../../../zh/docs/tables/">表（TABLE. / table_）</a></li><li><a href="../../../zh/docs/vector-search/">向量检索（KIND ann）</a></li><li><a href="../../../zh/docs/text-search/">全文检索（KIND text）</a></li><li><a href="../../../zh/docs/views/">视图（VIEW. / view_）</a></li><li><a href="../../../zh/docs/cdc/" aria-current="page">CDC——变更流（FEED. / changes_since）</a></li><li><a href="../../../zh/docs/pubsub/">Pub/sub</a></li><li><a href="../../../zh/docs/lua/">Lua 脚本</a></li></ul><p class="side-h">嵌入</p><ul><li><a href="../../../zh/docs/wasm/">kevy 上 WebAssembly</a></li><li><a href="../../../zh/docs/embedded-listener/">Embedded 只读 RESP listener</a></li><li><a href="../../../zh/docs/iot/">kevy 跑在 IoT 设备上</a></li></ul><p class="side-h">参考</p><ul><li><a href="../../../zh/docs/error-replies/">错误回复目录</a></li><li><a href="../../../zh/docs/rds-workloads/">在 kevy 上跑 RDS 负载</a></li><li><a href="../../../zh/docs/migration/">迁移——playbook 与工具链</a></li><li><a href="../../../zh/docs/UPGRADING/">升级 kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../zh/docs/commands/">全部 188 个命令</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>CDC——变更流（<code>FEED.*</code> / <code>changes_since</code>）</h1></div>
+<p>kevy 把每一笔已应用的写入都作为可消费的变更流暴露出来——就是 AOF 记录、副本应用的那一批 effect 帧。典型消费者：缓存失效器、搜索索引更新器、下游镜像——也就是 RDS 栈里那张“outbox 表”干的活，只是不需要那张表。</p>
+<p>在配置里打开：</p>
+<figure class="code"><pre><code class="lang-toml">[feed]
+enabled = true
+# feed_buffer_size = "64mb"   # per shard, caps at 1gb</code></pre></figure>
+<p>embedded 侧则是 <code>Config::default().with_feed(0)</code>。</p>
+<h2 id="游标generation-offset">游标：<code>(generation, offset)</code></h2>
+<p>每一个流位置都是一对 <code>(generation, offset)</code>：</p>
+<ul><li><code>offset</code> 在一个 generation 内，每应用一笔写入就加一。</li><li><code>generation</code> 标识一段从未断裂的 offset 历史。给定的 <code>(generation, offset)</code> <b>永远</b>指向同一段流前缀。</li><li><b>干净关停 + 重启会同时保住两者</b>——消费者从上次停下的地方继续。</li><li>连续性一旦断裂，generation 递增、offset 从 0 重开：<code>FLUSHALL</code>、从快照恢复，或者一次<b>不干净的关停</b>（崩溃）。generation 变了，就是在告诉消费者“你的视图可能已经陈旧”：先重建，再续读。</li></ul>
+<h2 id="服务器接口面">服务器接口面</h2>
+<ul><li><code>FEED.SHARDS</code> → <code>:N</code>——独立流的条数（每个 shard 一条；键映射到 shard，所以<b>逐键顺序在一条流内有保证</b>；跨 shard 没有顺序）。</li><li><code>FEED.TAIL &lt;shard&gt;</code> → <code>*2 [:generation, :next_offset]</code>——新消费者的起始游标。</li><li><code>FEED.READ &lt;shard&gt; &lt;gen&gt; &lt;offset&gt; [COUNT n] [PREFIX p ...]</code> → <code>*3 [:generation, :next_cursor, *frames]</code>，每一帧是 <code>*2 [:offset, *argv]</code>。轮询它；帧列表为空表示已追平。</li><li><code>COUNT</code> 给单次调用的帧数封顶（默认 256，最大 4096）。</li><li><code>PREFIX</code>（可重复，OR 关系）按键前缀过滤帧，<b>fail-open</b>：键布局不是普通单键形态的帧（多键 <code>DEL</code>、<code>MSET</code>、<code>FLUSHALL</code>……）总是会被投递。过滤永远不改变游标——你可以随时换过滤条件，不必重新同步。</li></ul>
+<h3 id="错误">错误</h3>
+<ul><li><code>-FEEDRESYNC &lt;gen&gt; &lt;tail&gt;</code>——你的游标已经无法服务（generation 太老，或者那段 offset 已被挤出 backlog）。先重建你的派生状态（例如 <code>SCAN</code> 一遍你的前缀），再从回复里带回来的 <code>(gen, tail)</code> 续读。</li><li><code>-ERR feed cursor ahead of stream</code>——来自未来的游标；调用方的 bug。</li></ul>
+<h2 id="embedded-接口面">Embedded 接口面</h2>
+<figure class="code"><pre><code class="lang-rust">let store = kevy_embedded::Store::open(Config::default().with_feed(0))?;
+let (gen, off) = store.changes_tail()?;             // start cursor
+let batch = store.changes_since(gen, off, 256, &amp;[b"user:"])?;
+for change in &amp;batch.changes { /* change.offset, change.argv */ }
+let (gen, off) = batch.next;                        // resume here</code></pre></figure>
+<p><code>feed_shards()</code> 恒为 1——embedded 的写路径把所有 shard 串成一条流，所以同一份消费者循环对两个接口面都成立。<code>FeedError::Resync { generation, tail }</code> 对应 <code>-FEEDRESYNC</code>。</p>
+<h2 id="投递语义">投递语义</h2>
+<p><b>At-least-once。</b> 在一次 resync 重建之后（以及某些切主形态下），你可能看到已经应用过的帧——消费者必须幂等（缓存失效天然是幂等的）。帧携带的是已应用的 <b>effect</b>（例如一次 <code>ZINTERSTORE</code> 会以 <code>DEL</code> + 普通 <code>ZADD</code> 的形式出现），所以不管源状态如何，应用这些帧都是确定性的。</p>
+<p><b>保留窗口</b>就是内存里的 backlog（每 shard 一份 <code>feed_buffer_size</code>）：落后超出这个窗口，你就会拿到 <code>-FEEDRESYNC</code>。没有磁盘归档——耐久的那一半故事，见下面的恢复点契约。</p>
+<h2 id="恢复点契约pitr">恢复点契约（PITR）</h2>
+<p>开着 feed 时拍的快照，会把流游标记进头部，并且和快照数据冻结在同一个 no-append 窗口里：</p>
+<blockquote><p><b>快照 S + 从 S 的游标起的 feed 帧 = 之后任意游标处的精确状态。</b></p></blockquote>
+<p><code>kevy_persist::read_snapshot_cursor(path)</code> 把它读回来（v2.3 之前的快照返回 <code>None</code>）。一次恢复演练：把快照载入一个全新的数据目录，然后从记录下来的游标开始重放 <code>FEED.READ</code> 的帧——得到逐字节精确的状态，可以用 <code>PREFIX.STATS</code> / 键 dump 验证。演练脚本就是 <code>bench/diskgate.sh</code> 里的 restore 那一行。</p>
+<h2 id="逐前缀统计">逐前缀统计</h2>
+<p><code>PREFIX.STATS &lt;prefix&gt;</code>（服务器）/ <code>Store::info_prefix</code>（embedded）报告某个字节前缀下的存活键数与带 TTL 的键数——这是 O(键空间) 的遍历，给运维看板用，不给热路径用。</p>
+<h2 id="这不是什么">这不是什么</h2>
+<p>没有跨 shard 的全局顺序，没有服务端保存的消费位点，没有 consumer group，没有查询谓词（前缀只是一个字节过滤器）。如果你需要这些，你描述的是一个消息中间件或者一个 RDS——kevy 的 feed 是刻意停在视界之前的（见 <a href="../designing-on-kevy/">designing-on-kevy.md</a> 里的三条法则）。</p></main>
+  <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#游标generation-offset">游标：(generation, offset)</a></li><li class="l2"><a href="#服务器接口面">服务器接口面</a></li><li class="l3"><a href="#错误">错误</a></li><li class="l2"><a href="#embedded-接口面">Embedded 接口面</a></li><li class="l2"><a href="#投递语义">投递语义</a></li><li class="l2"><a href="#恢复点契约pitr">恢复点契约（PITR）</a></li><li class="l2"><a href="#逐前缀统计">逐前缀统计</a></li><li class="l2"><a href="#这不是什么">这不是什么</a></li></ul></aside>
+</div>
+
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

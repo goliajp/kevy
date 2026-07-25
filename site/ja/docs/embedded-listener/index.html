@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>組み込みの読み取り専用RESPリスナー — kevy</title>
+<meta name="description" content="組み込み（プロセス内）のkevyストアは、読み取り専用のリスナーを通じて、外部のRESPクライアント——redis-cli、運用ツール、ダッシュボード——に自分を公開できます。ストアはあなたのプロセスの中のライブラリのままです。リスナーはそこを覗く窓であって、2台目のサーバーではありません。書き込みは、所有プロセスの排他的な権利であり続けます。">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../ja/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../../ja/docs/" aria-current="page">ドキュメント</a>
+      <a href="../../../ja/docs/commands/">コマンド</a>
+      <a href="../../../ja/benchmarks/">ベンチマーク</a>
+      <a href="../../../ja/play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../../ja/docs/search-index.json" data-root="../../../ja/">
+        <input type="search" placeholder="ドキュメントを検索……" aria-label="ドキュメントを検索……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../../docs/embedded-listener/">EN</a><a href="../../../zh/docs/embedded-listener/">中文</a><a href="../../../ja/docs/embedded-listener/" aria-current="page">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell has-toc">
+  <aside class="side"><p class="side-h">はじめに</p><ul><li><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a></li><li><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a></li><li><a href="../../../ja/docs/persistence/">永続化</a></li><li><a href="../../../ja/docs/tuning/">kevyのチューニング</a></li></ul><p class="side-h">運用</p><ul><li><a href="../../../ja/docs/replication/">レプリケーション</a></li><li><a href="../../../ja/docs/availability/">可用性</a></li><li><a href="../../../ja/docs/cluster/">クラスタ</a></li><li><a href="../../../ja/docs/tiering/">透過的ティアリング（[tiering] / with_tier_budget）</a></li><li><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a></li><li><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a></li><li><a href="../../../ja/docs/async/">非同期クライアント</a></li></ul><p class="side-h">データ</p><ul><li><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX. / idx_）</a></li><li><a href="../../../ja/docs/tables/">テーブル（TABLE. / table_）</a></li><li><a href="../../../ja/docs/vector-search/">ベクトル検索（KIND ann）</a></li><li><a href="../../../ja/docs/text-search/">全文検索（KIND text）</a></li><li><a href="../../../ja/docs/views/">ビュー（VIEW. / view_）</a></li><li><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED. / changes_since）</a></li><li><a href="../../../ja/docs/pubsub/">Pub/sub</a></li><li><a href="../../../ja/docs/lua/">Luaスクリプティング</a></li></ul><p class="side-h">組み込み</p><ul><li><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a></li><li><a href="../../../ja/docs/embedded-listener/" aria-current="page">組み込みの読み取り専用RESPリスナー</a></li><li><a href="../../../ja/docs/iot/">IoTデバイス上のkevy</a></li></ul><p class="side-h">リファレンス</p><ul><li><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a></li><li><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a></li><li><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></li><li><a href="../../../ja/docs/UPGRADING/">kevyのアップグレード</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../ja/docs/commands/">188 コマンド全て</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>組み込みの読み取り専用RESPリスナー</h1></div>
+<p>組み込み（プロセス内）のkevyストアは、読み取り専用のリスナーを通じて、外部のRESPクライアント——redis-cli、運用ツール、ダッシュボード——に自分を公開できます。ストアはあなたのプロセスの中のライブラリのままです。リスナーはそこを覗く窓であって、2台目のサーバーではありません。書き込みは、所有プロセスの排他的な権利であり続けます。</p>
+<figure class="code"><pre><code class="lang-rust">use kevy_embedded::{Config, Store};
+
+fn main() -&gt; kevy_embedded::KevyResult&lt;()&gt; {
+    let store = Store::open(
+        Config::default()
+            .with_shards(4)
+            .with_resp_listener("127.0.0.1:6009".parse().unwrap()),
+    )?;
+    store.hset(b"row:42", &amp;[
+        (b"state".as_slice(), b"live".as_slice()),
+    ])?;
+    // ... the application keeps running; clients can peek:
+    Ok(())
+}</code></pre></figure>
+<figure class="code"><pre><code>$ redis-cli -p 6009 hgetall row:42
+1) "state"
+2) "live"
+$ redis-cli -p 6009 scan 0 match 'row:*' count 100
+$ kevy-cli -p 6009 DBSIZE</code></pre></figure>
+<p>RESPクライアントならどれでも動きます。リスナーはkevyサーバーと同じプロトコルを話し、フレーム化されたリクエストもインラインコマンド（<code>redis-cli</code>のPING形式）も受け付けます。</p>
+<h2 id="有効にする">有効にする</h2>
+<ul><li><code>Config::with_resp_listener(addr)</code> — <code>SocketAddr</code>を1つ渡します。<b>デフォルトはオフ</b>です。オフのときは<b>スレッドもソケットも存在しません——税はゼロ</b>です（ゲート済み：リスナーを有効にしたまま遊休させたときの書き込みスループットが、オフのときの10%以内。<a href="https://github.com/goliajp/kevy/blob/main/bench/topogate.sh"><code>bench/topogate.sh</code></a>）。</li><li>コードは<code>listener</code> cargoフィーチャの背後にあります（デフォルトで有効。wasm32ターゲットでは利用できません）。</li><li>リスナーが持つのは弱いハンドルだけです。ストアを生かし続けることはなく、ストアがdropされればコネクションも終わります。</li><li>認証はありません（意図的です。kevyにAUTHプレーンは存在しません）。ループバックかプライベートインタフェースにbindしてください。到達できる者は誰でも、ホワイトリストが提供するものすべてを読めます。</li></ul>
+<h2 id="面">面</h2>
+<p>ホワイトリストのみです。それ以外はすべて<code>-ERR READONLY embedded listener</code>を返します。</p>
+<figure class="code"><pre><code>PING ECHO GET MGET EXISTS TYPE TTL PTTL DBSIZE KEYS SCAN
+HGET HMGET HGETALL HLEN LRANGE LLEN SMEMBERS SCARD SISMEMBER
+ZSCORE ZCARD ZRANGE FEED.READ FEED.TAIL FEED.SHARDS INFO</code></pre></figure>
+<p>拒否される側には、すべての書き込みverb、<code>MULTI</code>、ブロッキングpop、pub/sub、そして拡張プレーン（<code>IDX.*</code> / <code>VIEW.*</code>——これらはプロセス内から型付きAPIでクエリしてください）が含まれます。<code>FEED.*</code>の3つは<code>replicate</code> cargoフィーチャを必要とします（デフォルトで有効）。</p>
+<p><code>INFO</code>は、組み込み向けの小さなレポートを返します。crateのバージョン、シャード数、キー数、そして<code>listener:readonly</code>——ダッシュボードが「自分は何と話しているのか」を識別するには十分な内容です。</p>
+<p>この拒否テキストは契約です。ツールは書き込みを試み、<code>READONLY embedded listener</code>にマッチするかどうかで「これは本物のサーバーか、組み込みの窓か」を判定できます。</p>
+<h3 id="verbのセマンティクス">verbのセマンティクス</h3>
+<p>ホワイトリストのverbは、サーバー側の同名verbと同じように振る舞います。</p>
+<ul><li><code>SCAN &lt;cursor&gt; [MATCH pattern] [COUNT n]</code>は数値カーソルでページングし（<code>COUNT</code>は1..=10000にclampされ、デフォルトは100）、通常のSCAN保証を持ちます。走査全体を通じて安定していたキーはちょうど1回見えます。並行する挿入・削除は現れるかもしれないし、現れないかもしれません。</li><li><code>KEYS &lt;pattern&gt;</code>はキー空間全体を1回の応答で走査します（<code>*</code>はすべてにマッチ）——スポットチェック専用です。大きなストアでは<code>SCAN</code>を使ってください。</li><li>型の不一致は、サーバーとまったく同じように<code>-WRONGTYPE …</code>を返します。壊れた整数は<code>-ERR value is not an integer</code>を返します。</li></ul>
+<h2 id="整合性">整合性</h2>
+<p>読み出しはストア自身のシャードロックのもとで走ります。どの応答も、コミットされた、ある時点の答えです。書き込みプロセスと同時刻であり（レプリケーションなし、ラグなし、スナップショットの古さなし）。マルチキーの読み出し（<code>MGET</code>、<code>SCAN</code>、<code>KEYS</code>、<code>DBSIZE</code>）は、グローバルスナップショットなしにシャードごとにマージされます——サーバーと同じ、SCANクラスの包絡線です。</p>
+<p>コネクションごとに1スレッドです。これは運用ツール向けの面であって、サービングパスではありません（kevy*サーバー*こそがサービングパスです）。コネクション数はツールの規模にとどめてください。数秒おきにポーリングするダッシュボード、というのが想定している形です。</p>
+<h2 id="フィードとread-your-writes">フィードとread-your-writes</h2>
+<p><code>FEED.TAIL</code>は現在の<code>(generation, offset)</code>を返します。<code>FEED.READ &lt;gen&gt; &lt;offset&gt; &lt;limit&gt; [PREFIX p…]</code>は変更フレームを配送します——組み込みの<code>changes_since</code> APIと同じat-least-onceの契約です（generationが古ければ<code>Resync</code>が返るので、<code>FEED.TAIL</code>からやり直してください）。組み込みの書き込みパスは全シャードを1本のストリームに直列化するため、<code>FEED.SHARDS</code>は1を返し、フィードのverbはシャード引数を取りません——サーバー面に対して書いたコンシューマループ（<a href="../cdc/">cdc.md</a>）が、そのままここでも動きます。</p>
+<p>プロセスをまたぐフィード越しのread-your-writesは、ブロッキングのプリミティブではなく、カーソルのパターンです。書き込むプロセスが、自分の書き込みのあとに<code>changes_tail()</code>を控えておきます。読むプロセスは、まず<code>FEED.READ</code>をそのカーソルの先までdrainし、それから読みます。プロセス内の読み出しは常にread-your-writesです（書き込みは同期的にコミットするからです）。（サーバーからレプリカへのレプリケーションには、ブロッキングのプリミティブが*実際にあります*——<code>REPL.TOKEN</code> / <code>REPL.WAIT</code>、<a href="../availability/">availability.md</a>を参照——が、それはレプリケーションのプレーンであって、このフィードリスナーではありません。）</p>
+<h2 id="ソケットなしで覗く">ソケットなしで覗く</h2>
+<p>リスナーのverbテーブルは、public methodでもあります。</p>
+<figure class="code"><pre><code class="lang-rust">let mut out = Vec::new();
+store.dispatch_readonly(
+    &amp;[b"HGETALL".to_vec(), b"row:42".to_vec()], &amp;mut out);
+// `out` holds raw RESP bytes — the exact reply the listener
+// would have written to a socket.</code></pre></figure>
+<p><code>Store::dispatch_readonly(argv, out)</code>は、同じホワイトリストに対して1件のリクエストに答えます（書き込みverbには同じ<code>-ERR</code>が返ります）——リスナーのプログラム的な顔であり、所有プロセスに埋め込まれたツール向けです。</p>
+<p>そして、<b>自分が所有していない</b>ストアに対しては、<code>kevy-cli --embed &lt;dir&gt;</code>があります。組み込みストアのデータディレクトリの、読み取り専用・ある時点のビューを開きます。dump/aof/shards.metaの各ファイルはスクラッチディレクトリへ<b>コピー</b>されてからリプレイされるので、所有プロセスは触れられることなく走り続けます。REPLも単発実行も動きます。書き込みverbにはリスナーと同じ<code>-ERR READONLY</code>が返ります。これは、このリスナーの生きた窓に対する、オフラインの補完物です。</p>
+<h2 id="窓より多くを求めるとき">窓より多くを求めるとき</h2>
+<p>機構の重さの順に、エスカレーションの道筋を示します。</p>
+<ol><li><b>このリスナー</b> — 生きた読み出し、書き込みコストゼロ、1プロセス。</li><li><b>CDCフィード</b>（<a href="../cdc/">cdc.md</a>） — 相手プロセスに読み出しをポーリングさせるのではなく、変更をそちらへpushします。</li><li><b>組み込みをプライマリにするレプリケーション</b> — <code>with_embed_writer</code>がレプリケーションソースを公開し、<code>[replication] single_source = true</code>のkevyサーバーが、その組み込みストアをレプリカとして追随します。あなたのプロセスが供給し、サーバーのハードウェア上で読み出しをフルにファンアウトする形です。<a href="../replication/">replication.md</a>の*組み込みをプライマリにする*節を参照してください。</li></ol>
+<h2 id="パフォーマンス">パフォーマンス</h2>
+<p><a href="https://github.com/goliajp/kevy/blob/main/bench/topogate.sh"><code>bench/topogate.sh</code></a>がclampであり、これは<b>本物の2プロセステスト</b>です。連続的なHSET負荷の下にあるライターのバイナリと、生きたデータを表明する別プロセスのリーダーからなります。</p>
+<ul><li>所有者が連続的に書き込んでいるあいだ、リーダーの<code>GET</code> p99 &lt; 1ms（6コネクションの中央値）。</li><li>READONLYの強制（書き込みverbが契約テキストとともに拒否されること）。</li><li>ゼロ税。リスナーを有効にしたまま遊休させたときの所有者の書き込みスループットが、リスナーオフのときの10%以内。</li></ul>
+<p>読み出しがシャードロックのもとで走るという設計は、リスナーのトラフィックが重ければ、同じシャード上で所有者の書き込みと競合し<b>得る</b>ことを意味します。それが、ラグゼロの真実と引き換えに払う代償です。ツール規模の読み出しレート（ダッシュボード、スポットチェック）は、所有者の書き込みスループットの中では計測不能なほど小さくなります。サービング規模の読み出しが必要なら、このリスナーではなく、レプリケーション（上記）を使ってください。</p>
+<h2 id="関連項目">関連項目</h2>
+<ul><li><a href="../cdc/">cdc.md</a> — このリスナーも提供する、変更フィード。</li><li><a href="../replication/">replication.md</a> — 組み込みをプライマリにする。窓では足りなくなったときに。</li><li><a href="../availability/">availability.md</a> — レプリケーションのプレーン上の整合性ラダー。</li><li><a href="../uds/">uds.md</a> — kevyサーバー向けのローカルソケットトランスポート（リスナー自体はTCP専用です）。</li></ul></main>
+  <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#有効にする">有効にする</a></li><li class="l2"><a href="#面">面</a></li><li class="l3"><a href="#verbのセマンティクス">verbのセマンティクス</a></li><li class="l2"><a href="#整合性">整合性</a></li><li class="l2"><a href="#フィードとread-your-writes">フィードとread-your-writes</a></li><li class="l2"><a href="#ソケットなしで覗く">ソケットなしで覗く</a></li><li class="l2"><a href="#窓より多くを求めるとき">窓より多くを求めるとき</a></li><li class="l2"><a href="#パフォーマンス">パフォーマンス</a></li><li class="l2"><a href="#関連項目">関連項目</a></li></ul></aside>
+</div>
+
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

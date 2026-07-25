@@ -1,14 +1,28 @@
 {
-  "recorded": "2026-07-03T16:59:21Z",
+  "recorded": "2026-07-19T03:42:10Z",
   "bin": "kevy",
+  "ref_commit": "4916f7ebc9b178cbf1922a8f2652a03dceba5aa4",
   "tolerance": 0.92,
+  "_note": "metrics are the reference commit's medians on the box of the day — a trend record, not the gate. The gate rebuilds ref_commit and measures it against the candidate in the same session.",
+  "_note_tiered": "the tiered_hotset_* stubs (capacity arc A2: hot-set throughput with tiering on) are null until lx64 records them against a tiered instance — same skip-with-notice discipline.",
+  "_note_table": "the table_* stubs (capacity arc T7: C4 point lookup / C5 filter+sort page / C7 write tax) are null until their baselines are recorded on lx64 — the gate skips null lines with a notice, never invents a number.",
   "metrics": {
-    "pinned_cluster_get": 30403762,
-    "pinned_cluster_set": 24311952,
-    "pinned_compat_get": 19392766,
-    "pinned_compat_set": 17521321,
-    "legacy_8sh_get": 10877494,
-    "legacy_8sh_set": 9973447,
-    "zalg_zinterstore": 2846
+    "pinned_cluster_get": 29434934,
+    "pinned_cluster_set": 22044290,
+    "pinned_compat_get": 19035297,
+    "pinned_compat_set": 17059781,
+    "legacy_8sh_get": 11273990,
+    "legacy_8sh_set": 8941845,
+    "legacy_8sh_incr": 8196542,
+    "legacy_8sh_sadd": 6876890,
+    "legacy_8sh_hset": 5601472,
+    "legacy_8sh_lpush": 4334847,
+    "legacy_8sh_zadd": 3984981,
+    "zalg_zinterstore": 3183,
+    "table_point_get": null,
+    "table_filter_sort_page": null,
+    "table_write_tax": null,
+    "tiered_hotset_get": null,
+    "tiered_hotset_set": null
   }
 }

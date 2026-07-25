@@ -1,5 +1,5 @@
 //! File-backed [`ElectorPersist`] — the kevy-server side of the
-//! v3.15 D1 election-hardening contract. Stores the elector's
+//! election-hardening contract. Stores the elector's
 //! `(epoch, votedFor)` pair in `<data_dir>/elect.meta`:
 //!
 //! ```text
@@ -86,13 +86,7 @@ mod tests {
     use super::*;
 
     fn tmp_dir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "kevy-electmeta-{tag}-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id(),
-        ));
-        std::fs::create_dir_all(&d).unwrap();
-        d
+        kevy_tmpdir::unique_dir(&format!("elect-{tag}"))
     }
 
     #[test]

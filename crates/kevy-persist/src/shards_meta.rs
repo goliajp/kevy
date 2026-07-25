@@ -72,8 +72,7 @@ mod tests {
 
     #[test]
     fn v2_round_trip() {
-        let dir = std::env::temp_dir().join(format!("kevy-meta-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = kevy_tmpdir::unique_dir("shardsmeta");
         let p = dir.join("shards.meta");
         for meta in [
             ShardsMeta { n: 1, routing: Routing::KevyHash },
@@ -87,8 +86,7 @@ mod tests {
 
     #[test]
     fn v1_bare_count_reads_as_kevyhash() {
-        let dir = std::env::temp_dir().join(format!("kevy-meta-v1-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = kevy_tmpdir::unique_dir("shardsmeta");
         let p = dir.join("shards.meta");
         std::fs::write(&p, "4").unwrap();
         assert_eq!(

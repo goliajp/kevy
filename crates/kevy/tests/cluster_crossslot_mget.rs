@@ -1,6 +1,6 @@
-//! v1.56 — verify v1.43.x finding fix: cluster-mode MGET / MSET /
+//! Cluster-mode MGET / MSET /
 //! SINTER / SUNION / SDIFF across slots returns `-CROSSSLOT` instead
-//! of silent multi-bulk nils.
+//! of silent multi-bulk nils (regression cover for an earlier finding).
 //!
 //! Strict asserts:
 //! - Cluster-conn MGET on cross-slot keys returns `-CROSSSLOT`.

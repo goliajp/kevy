@@ -45,7 +45,7 @@ fn eq_ascii_get(name: &[u8]) -> bool {
         && (name[2] == b'T' || name[2] == b't')
 }
 
-// A.6 (v1.25): `bulk_header_into` + `format_usize_into` deleted — fused
+// `bulk_header_into` + `format_usize_into` deleted — fused
 // into `kevy_store::Store::get_into_output` so the GET inline fast path
 // emits the RESP frame directly from the store with no caller match arm
 // + no GetReply enum tag round-trip.
@@ -71,7 +71,7 @@ impl<C: Commands> Shard<C> {
         block_hint: crate::BlockHint,
         meta: DispatchMeta,
     ) {
-        // v3.14 A0: role-gated write rejection covers the single-shard
+        // Role-gated write rejection covers the single-shard
         // path too (start_command gates the fan-out routes; seq is
         // already assigned here — slot+fold, not immediate_reply).
         if meta.is_write && let Some(err) = self.commands.write_denied() {
@@ -79,7 +79,7 @@ impl<C: Commands> Shard<C> {
             self.fold(conn_id, seq, crate::message::Part::Reply(crate::message::SmallReply::from_vec(err)));
             return;
         }
-        if !meta.is_write && let Some(err) = self.commands.read_denied() {
+        if !meta.is_write && let Some(err) = self.commands.read_denied(args) {
             self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
             self.fold(conn_id, seq, crate::message::Part::Reply(crate::message::SmallReply::from_vec(err)));
             return;
@@ -133,7 +133,37 @@ impl<C: Commands> Shard<C> {
     ) -> bool {
         // Field-only read, before the conn borrow.
         let t0 = self.slowlog_t0();
-        // L1 (2026-06-21): GET handled in ONE keyspace lookup here, with
+
+        // A BRPOPLPUSH whose destination lives on another shard must NOT run
+        // the local dispatch below: `Store::rpoplpush` pushes into whatever
+        // store it is handed, so the element would land in THIS shard's
+        // keyspace and be invisible to every later read of the destination.
+        // The command still returned the moved value, so the caller believed
+        // it had worked — 9 of 12 elements vanished on an 8-shard server.
+        //
+        // Park it instead. The cross-shard arbiter arms on the source, sees it
+        // is already non-empty, and hands the serve to the orchestrator in
+        // `exec_listmove`, which pops on the source's shard and pushes on the
+        // destination's.
+        if let crate::BlockHint::Block { kind: crate::BlockKind::Brpoplpush, keys, timeout_ms } =
+            &block_hint
+            && args.len() == 4
+            && !keys.is_empty()
+            && self.shard_of(&args[2]) != self.shard_of(&keys[0])
+        {
+            let (keys, timeout_ms) = (keys.clone(), *timeout_ms);
+            self.slowlog_maybe(t0, args);
+            self.park_dispatch(
+                conn_id,
+                args,
+                crate::BlockKind::Brpoplpush,
+                keys,
+                timeout_ms,
+                proto,
+            );
+            return true;
+        }
+        // GET handled in ONE keyspace lookup here, with
         // zero-copy for ArcBulk (push the Arc to conn.output_arcs so the
         // reactor's writev sends value bytes direct from keyspace) and
         // the normal memcpy for Str/Int. Replaces the dispatch_proto →
@@ -144,10 +174,10 @@ impl<C: Commands> Shard<C> {
             && let Some(name) = args.first()
             && eq_ascii_get(name)
         {
-            // A.6 (v1.25): fused get → output. Skip the GetReply enum tag +
+            // Fused get → output. Skip the GetReply enum tag +
             // caller-side match arm by having store write the frame into
-            // conn.output / conn.output_arcs directly. ~5-8 ns/GET saved
-            // per Phase A deco D-A2.
+            // conn.output / conn.output_arcs directly. Measured ~5-8 ns/GET
+            // saved in decomposition.
             //
             // Conn lookup happens FIRST so we can pre-check `conn.pending`
             // (and bail without touching the store on out-of-order conns).
@@ -175,7 +205,7 @@ impl<C: Commands> Shard<C> {
             conn.next_emit += 1;
             if is_quit {
                 conn.closing = true;
-                // K5 (v1.25 A.4 redo): push to closing ready-set so
+                // Push to closing ready-set so
                 // `uring_reap_closed` finds this conn in O(closing)
                 // instead of an O(N=conns) scan. Duplicates harmless.
                 self.closing_uring_conns.push(conn_id);
@@ -205,7 +235,7 @@ impl<C: Commands> Shard<C> {
         conn.next_emit += 1;
         if is_quit {
             conn.closing = true;
-            // K5 (v1.25 A.4 redo): see comment above.
+            // See the closing ready-set comment above.
             self.closing_uring_conns.push(conn_id);
         }
         self.slowlog_maybe(t0, args);
@@ -275,7 +305,16 @@ impl<C: Commands> Shard<C> {
         } else {
             crate::blocked::unix_now_ms().saturating_add(timeout_ms)
         };
-        if keys.len() == 1 && self.shard_of(&keys[0]) == self.id {
+        // A cross-shard-destination BRPOPLPUSH can never take the in-shard
+        // fast path: that path's wake serves the replay through a LOCAL
+        // dispatch, which is the very thing that loses the element. Force it
+        // through the arbiter, whose serve runs the orchestrator.
+        let xshard_dst = kind == crate::BlockKind::Brpoplpush
+            && args.len() == 4
+            && !keys.is_empty()
+            && self.shard_of(&args[2]) != self.shard_of(&keys[0]);
+
+        if !xshard_dst && keys.len() == 1 && self.shard_of(&keys[0]) == self.id {
             // In-shard fast path: narrow to the one key + freeze `$`.
             let serve = self.commands.block_serve_argv(args, kind, &keys[0]);
             let serve = self.commands.resolve_block_argv(&mut self.store, &serve, kind);
@@ -319,38 +358,55 @@ impl<C: Commands> Shard<C> {
             && (idx as usize) < args.len()
         {
             self.store.bump_if_watched(&args[idx as usize]);
-            // v2.5: synchronous index maintenance (default no-op; the
+            // Synchronous index maintenance (default no-op; the
             // kevy impl gates on a process-wide catalog-empty atomic).
             let key = args[idx as usize].to_vec();
             self.commands.on_write(&mut self.store, &key);
         }
-        // A9: AOF off is the default (--no-aof). cold-tag the AOF-enabled
-        // branch so the predictor learns the off case + LLVM keeps the
-        // log_write call site off the predicted fall-through.
-        if self.aof.is_some() {
-            #[cold]
-            #[inline(never)]
-            fn cold() {}
-            cold();
-            self.log_write(args);
-        }
-        // Replication: when `[replication] role = "primary"`, push the
-        // applied mutation to this shard's backlog so connected replicas
-        // can stream it. Generic over ArgvView so no `Argv` is
-        // materialised on the borrowed fast path. `None` (the default)
-        // short-circuits to one Option-discriminant check.
-        //
-        // The `is_applying_replicated` check suppresses the push when
-        // this dispatch is itself applying a frame pulled from an
-        // upstream primary (T1.29 server-as-replica path). Defends
-        // against chain replication / infinite re-emit in the brief
-        // window during `REPLICAOF NO ONE` promotion when both an
-        // upstream link and a downstream source can coexist. The
-        // thread-local read is a cheap branch on the cold path here.
-        if let Some(src) = self.replicate.as_mut().map(|f| f.source_mut())
-            && !crate::replication_gate::is_applying_replicated()
-        {
-            src.push_mutation(args);
+        // Propagation override: a verb whose effect is nondeterministic
+        // (SPOP's random pick) replaced its wire frame with the
+        // deterministic effect (`SREM key <popped…>`) or suppressed
+        // recording (a pop off an empty set). ONE take serves both the
+        // AOF append and the replication push, so disk and replicas
+        // always record the very same frame — and the thread-local is
+        // cleared on every write, so an override can never leak into
+        // the next command of a pipelined batch (nor survive the
+        // `is_applying_replicated` apply path: the take below runs
+        // there too, and the frame — if any — goes to the replica's
+        // own AOF while the gated push stays suppressed). Deterministic
+        // writes (the overwhelming default) pay one thread-local take.
+        let prop = crate::propagation::take_override();
+        if matches!(prop, crate::propagation::Propagate::AsIs) {
+            // A9: AOF off is the default (--no-aof). cold-tag the AOF-enabled
+            // branch so the predictor learns the off case + LLVM keeps the
+            // log_write call site off the predicted fall-through.
+            if self.aof.is_some() {
+                #[cold]
+                #[inline(never)]
+                fn cold() {}
+                cold();
+                self.log_write(args);
+            }
+            // Replication: when `[replication] role = "primary"`, push the
+            // applied mutation to this shard's backlog so connected replicas
+            // can stream it. Generic over ArgvView so no `Argv` is
+            // materialised on the borrowed fast path. `None` (the default)
+            // short-circuits to one Option-discriminant check.
+            //
+            // The `is_applying_replicated` check suppresses the push when
+            // this dispatch is itself applying a frame pulled from an
+            // upstream primary (server-as-replica path). Defends
+            // against chain replication / infinite re-emit in the brief
+            // window during `REPLICAOF NO ONE` promotion when both an
+            // upstream link and a downstream source can coexist. The
+            // thread-local read is a cheap branch on the cold path here.
+            if let Some(src) = self.replicate.as_mut().map(|f| f.source_mut())
+                && !crate::replication_gate::is_applying_replicated()
+            {
+                src.push_mutation(args);
+            }
+        } else {
+            self.record_propagation_override(prop);
         }
         self.maybe_notify_dispatch(args);
         // BLOCK wake: if this write targets a key a waiter is parked on,
@@ -361,7 +417,7 @@ impl<C: Commands> Shard<C> {
         {
             self.wake_key(&key);
         }
-        // v1.27.3: drain the Lua wake bridge. `redis.call` inside an
+        // Drain the Lua wake bridge. `redis.call` inside an
         // EVAL script pushes affected write keys to a thread-local
         // buffer (see `crate::lua_wake_bridge`); this is the runtime's
         // catch-point. The drain is cheap on non-Lua dispatches —
@@ -369,6 +425,31 @@ impl<C: Commands> Shard<C> {
         let lua_wakes = crate::lua_wake_bridge::drain_lua_wake_buffer();
         for key in lua_wakes {
             self.wake_key(&key);
+        }
+    }
+
+    /// Cold sibling of the AsIs arm in [`Self::post_write_housekeeping`]:
+    /// record a `Replace` effect frame to the AOF + replication backlog
+    /// (same gates as the AsIs path), or record nothing (`Suppress`).
+    /// Out-of-line — only nondeterministic verbs (SPOP) land here.
+    #[cold]
+    #[inline(never)]
+    fn record_propagation_override(&mut self, prop: crate::propagation::Propagate) {
+        let crate::propagation::Propagate::Replace(frame) = prop else {
+            return; // Suppress: nothing recorded, nothing pushed.
+        };
+        let total: usize = frame.iter().map(Vec::len).sum();
+        let mut argv = kevy_resp::Argv::with_capacity(frame.len(), total);
+        for part in &frame {
+            argv.push(part);
+        }
+        if self.aof.is_some() {
+            self.log_write(&argv);
+        }
+        if let Some(src) = self.replicate.as_mut().map(|f| f.source_mut())
+            && !crate::replication_gate::is_applying_replicated()
+        {
+            src.push_mutation(&argv);
         }
     }
 

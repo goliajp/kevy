@@ -13,6 +13,14 @@ readme = "README.md"
 keywords = ["madvise", "hugepage", "thp", "memory", "linux"]
 categories = ["os", "memory-management", "external-ffi-bindings"]
 
+# `std` (default) keeps the crate exactly as before; without it the crate
+# is `no_std` (it is pure `core` already — the Linux ffi arms compile away
+# on OS-less targets, everything else no-ops).
+[features]
+default = ["std"]
+std = []
+alloc = []
+
 [lints]
 workspace = true
 

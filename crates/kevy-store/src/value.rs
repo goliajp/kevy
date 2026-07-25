@@ -1,10 +1,13 @@
 //! Value types — one backing structure per Redis type.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 pub use kevy_bytes::SmallBytes;
 use kevy_map::{KevyMap, KevySet};
-use std::cmp::Ordering;
-use std::collections::{BTreeSet, VecDeque};
-use std::sync::Arc;
+use kevy_ranktree::RankTree;
+use core::cmp::Ordering;
+use alloc::collections::VecDeque;
+use alloc::sync::Arc;
 
 /// Backing structure for a Hash value — [`KevyMap`] keyed by [`SmallBytes`]
 /// (22 B inline / heap-else). Field names ≤22B (the vast majority — `name`,
@@ -17,7 +20,7 @@ pub type ListData = VecDeque<Vec<u8>>;
 pub type SetData = KevySet<SmallBytes>;
 
 /// A total-ordered f64 score (Redis scores are never NaN). `total_cmp` gives a
-/// total order so scores can key a `BTreeSet`.
+/// total order so scores can key an ordered container.
 #[derive(Clone, Copy, PartialEq)]
 pub struct Score(pub f64);
 impl Eq for Score {}
@@ -57,35 +60,35 @@ impl ScoreBound {
     }
 }
 
-/// Sorted set: a member→score map plus a B-tree ordered by `(score, member)`.
-/// (A B-tree is cache-friendlier than Redis's skiplist; `ZRANK` is O(n) here —
-/// an order-statistics tree for O(log n) rank is a later perf item.)
+/// Sorted set: a member→score map plus an order-statistic B-tree keyed by
+/// `(score, member)` ([`kevy_ranktree::RankTree`] — every node carries its
+/// subtree count), so rank queries (`ZRANK`, `ZRANGE` by rank, `ZCOUNT`,
+/// score-bound seeks) are O(log N) descents instead of linear walks.
 #[derive(Default, Clone)]
 pub struct ZSetData {
     pub(crate) by_member: KevyMap<SmallBytes, f64>,
-    /// The `(score, member)` index is still keyed by `Vec<u8>` member —
-    /// changing this requires the `BTreeSet` to accept a `(Score,
-    /// SmallBytes)` ordering, which is fine but a larger sweep; keep
-    /// it as-is for now to avoid touching ZRANGE paths.
-    pub(crate) by_score: BTreeSet<(Score, Vec<u8>)>,
+    /// The `(score, member)` order-statistic index. Member is a
+    /// [`SmallBytes`] (≤22 B inline in the node's key slot), ordered by
+    /// byte-lexicographic `Ord` — the same order the old `Vec<u8>` gave.
+    pub(crate) by_score: RankTree<(Score, SmallBytes)>,
 }
 
 impl ZSetData {
     pub(crate) fn insert(&mut self, member: &[u8], score: f64) -> bool {
         let is_new = match self.by_member.insert(SmallBytes::from_slice(member), score) {
             Some(old) => {
-                self.by_score.remove(&(Score(old), member.to_vec()));
+                self.by_score.remove(&(Score(old), SmallBytes::from_slice(member)));
                 false
             }
             None => true,
         };
-        self.by_score.insert((Score(score), member.to_vec()));
+        self.by_score.insert((Score(score), SmallBytes::from_slice(member)));
         is_new
     }
     pub(crate) fn remove(&mut self, member: &[u8]) -> bool {
         match self.by_member.remove(member) {
             Some(old) => {
-                self.by_score.remove(&(Score(old), member.to_vec()));
+                self.by_score.remove(&(Score(old), SmallBytes::from_slice(member)));
                 true
             }
             None => false,
@@ -97,6 +100,67 @@ impl ZSetData {
     /// `(member, score)` pairs in ascending `(score, member)` order.
     pub fn ordered(&self) -> impl Iterator<Item = (&[u8], f64)> {
         self.by_score.iter().map(|(s, m)| (m.as_slice(), s.0))
+    }
+    /// Like [`Self::ordered`] but starting at ascending `rank` — one
+    /// O(log N) seek, no skip-walk.
+    pub(crate) fn ordered_from(&self, rank: usize) -> impl Iterator<Item = (&[u8], f64)> {
+        self.by_score.iter_from(rank).map(|(s, m)| (m.as_slice(), s.0))
+    }
+    /// The ascending rank of `member` (whose score is `score`). O(log N).
+    pub(crate) fn rank_of(&self, member: &[u8], score: f64) -> Option<usize> {
+        self.by_score.rank_of(&(Score(score), SmallBytes::from_slice(member)))
+    }
+    /// First rank whose score satisfies `min` as a lower bound. O(log N).
+    pub(crate) fn score_start_rank(&self, min: &ScoreBound) -> usize {
+        self.by_score.partition_point(|(s, _)| !min.ge_ok(s.0))
+    }
+    /// First rank whose score fails `max` as an upper bound (i.e. one past
+    /// the last in-range rank). O(log N).
+    pub(crate) fn score_end_rank(&self, max: &ScoreBound) -> usize {
+        self.by_score.partition_point(|(s, _)| max.le_ok(s.0))
+    }
+}
+
+/// Type tag a [`ColdRef`] carries so `TYPE` / SCAN's `TYPE` filter / the
+/// WRONGTYPE precheck answer with zero IO.
+pub const COLD_TAG_STRING: u8 = 1;
+/// Hash tag — see [`COLD_TAG_STRING`].
+pub const COLD_TAG_HASH: u8 = 2;
+
+/// The in-map stub a demoted (cold) value leaves behind: its vlog
+/// record's address + enough metadata to answer stage-1 questions
+/// (existence, TYPE, weight) with zero IO. Byte math: offset u64 (8) +
+/// file_id/len/weight u32 (12) + type_tag/touched u8 (2) = 22, padded
+/// to 24 by u64 alignment — fits `Value`'s 24 B payload (≤32 B assert).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ColdRef {
+    /// Byte offset of the record header inside its vlog file.
+    pub(crate) offset: u64,
+    /// The vlog file id.
+    pub(crate) file_id: u32,
+    /// Record body length (mirrors `kevy_vlog::VlogRef::len`).
+    pub(crate) len: u32,
+    /// The ORIGINAL value weight (heap bytes) at demotion time —
+    /// promotion re-accounting sanity + spill-policy input. The live
+    /// `Entry::weight` is re-stamped to the stub's actual footprint so
+    /// `MEMORY USAGE` (and Σ ≈ used_memory) stay stub-actual.
+    pub(crate) weight: u32,
+    /// [`COLD_TAG_STRING`] / [`COLD_TAG_HASH`].
+    pub(crate) type_tag: u8,
+    /// Promotion-gate probation mark: the first materializing access
+    /// serves bytes via pread WITHOUT installing and sets this; the
+    /// second access promotes. Bulk/shared-lane reads never set it.
+    pub(crate) touched: u8,
+}
+
+impl ColdRef {
+    /// The tag's Redis type name (the `TYPE` command on a cold key —
+    /// answered from RAM, never a pread).
+    pub(crate) fn type_name(self) -> &'static str {
+        match self.type_tag {
+            COLD_TAG_HASH => "hash",
+            _ => "string",
+        }
     }
 }
 
@@ -126,14 +190,14 @@ impl ZSetData {
 #[derive(Clone)]
 pub enum Value {
     Str(SmallBytes),
-    /// L2 (2026-06-21, lessons from valkey OBJ_ENCODING_INT): when a SET
+    /// Following valkey's OBJ_ENCODING_INT: when a SET
     /// stores a clean canonical i64 ASCII string (parses round-trip), we
     /// keep the integer **as i64** rather than as 22 B of inline bytes.
     /// Wins on INCR (in-place `+= delta`, no parse / no format / no
     /// SmallBytes wrap) and on memory (8 B vs 24 B). GET formats it via
     /// a per-`Store` scratch buffer.
     Int(i64),
-    /// L1 (2026-06-21) / v1.29 Option A (2026-06-29): values larger
+    /// Values larger
     /// than [`BULK_THRESHOLD`] bytes get stored behind an
     /// `Arc<Box<[u8]>>` instead of a heap-backed `SmallBytes`. The Arc
     /// lets the io_uring reactor's reply path borrow the bytes across
@@ -153,10 +217,9 @@ pub enum Value {
     /// (the boxed slice's allocation stays put — only the 32-byte
     /// `ArcInner` is freshly malloced). Per-GET cost: one extra
     /// pointer dereference (`&**arc` to get `&[u8]`), measured to be
-    /// negligible vs the per-SET memcpy savings. See
-    /// `bench/PERF-FINDING-2026-06-29-arc-from-box-memcpys.md` for
-    /// the empirical perf-record evidence of the original
-    /// `Arc<[u8]>` mandatory copy.
+    /// negligible vs the per-SET memcpy savings. The `Arc<[u8]>`
+    /// mandatory copy was confirmed with perf-record before switching
+    /// to `Arc<Box<[u8]>>`.
     ///
     /// Small values stay on `Str(SmallBytes)` because the inline
     /// cache-line storage beats an Arc indirection for the common case.
@@ -166,7 +229,7 @@ pub enum Value {
     Set(Arc<SetData>),
     ZSet(Arc<ZSetData>),
     Stream(Arc<crate::stream::StreamData>),
-    /// v1.25 A.7 O5 (valkey-orthodox encoding switch): tiny sets (1-N
+    /// Valkey-orthodox encoding switch: tiny sets (1-N
     /// short members) live inline in 24 bytes instead of behind
     /// `Arc<SetData>` — matches valkey's `OBJ_ENCODING_LISTPACK` for
     /// sets, which is what `redis-benchmark -t sadd` default `-r 0`
@@ -175,17 +238,25 @@ pub enum Value {
     /// returns `NoRoom`) the set is promoted to `Value::Set(Arc<SetData>)`
     /// — the Swiss-table path that wins for larger cardinalities.
     SmallSetInline(crate::small_set::SmallSetData),
-    /// v1.25 A.8 (extension of A.7 to hashes): tiny hashes
+    /// Tiny hashes
     /// (1-2 short field-value pairs) live inline in 24 bytes; promoted
     /// to `Value::Hash(Arc<HashData>)` on overflow. Mirrors valkey's
     /// `OBJ_ENCODING_LISTPACK` for hashes.
     SmallHashInline(crate::small_hash::SmallHashData),
-    /// v1.25 A.8: tiny lists inline encoding; promoted to
+    /// Tiny lists inline encoding; promoted to
     /// `Value::List(Arc<ListData>)` on overflow.
     SmallListInline(crate::small_list::SmallListData),
-    /// v1.25 A.8: tiny sorted sets inline encoding; promoted to
+    /// Tiny sorted sets inline encoding; promoted to
     /// `Value::ZSet(Arc<ZSetData>)` on overflow.
     SmallZSetInline(crate::small_zset::SmallZSetData),
+    /// A demoted (tiered-to-disk) value's in-map stub. The two-stage
+    /// funnel (`tier` module) resolves this before any typed match sees
+    /// it: stage 1 answers existence/TYPE/TTL from the stub with zero
+    /// IO; stage 2 materializes (serve or promote) only on a type
+    /// match. Cloning a `Cold` clones the STUB, not the record — paths
+    /// that duplicate values (COPY, cross-shard ship) materialize
+    /// first so two stubs never alias one vlog record.
+    Cold(ColdRef),
 }
 
 /// Threshold (bytes) above which a SET stores its value as
@@ -197,58 +268,57 @@ pub const BULK_THRESHOLD: usize = 64;
 
 const _: () = {
     // Don't let future variants undo box-collection's Entry-48B win.
-    assert!(std::mem::size_of::<Value>() <= 32);
+    assert!(core::mem::size_of::<Value>() <= 32);
 };
 
 /// Heap-size threshold above which an overwritten `Value` is sent to the
 /// runtime's bio thread for off-reactor drop instead of being freed inline
-/// (v1.25 A.3 lazy-drop).
+/// (lazy-drop).
 ///
-/// **Calibrated 2026-06-22 from the bench-with-256-B-floor R3 ★ finding**:
-/// dropping the threshold to 256 B regressed Axis I c=50 -d 10240 SET
+/// **Why not lower**: a 256 B threshold regressed c=50 -d 10240 SET
 /// p999 from 0.487 → 1.583 ms (worse by 3.25×). The cause: `std::sync::mpsc::Sender::send`
 /// is a few hundred ns of atomic + Box clone, which EXCEEDS the inline
-/// `Box::<[u8]>::drop` cost when jemalloc serves the free from a hot
-/// large-class slab (~ 1-3 µs for 10 KB; the bench's steady state).
+/// `Box::<[u8]>::drop` cost when the allocator serves the free from a
+/// hot large-class slab (~ 1-3 µs for 10 KB; the bench's steady state).
 /// Off-loading only wins when the inline drop's tail risk (cold-slab
 /// `munmap`/`madvise` consolidation stall, observed at 50-150 µs and
 /// occasionally millisecond-range) exceeds the per-send channel cost
 /// PLUS the cross-thread cache-line bouncing.
 ///
-/// v1.25 A.2 (batch-send follow-up to A.3): with per-shard batch
-/// accumulation flushing at the end of every reactor iteration, the
-/// per-mpsc-send cost is amortised across N drops. That makes the
-/// channel hop profitable at smaller sizes than A.3's lone-send model
-/// could justify (A.3 had to lift to 16 KB because per-`mpsc::send`
-/// cost was a few hundred ns — at 256 B the inline drop was cheaper).
+/// With per-shard batch accumulation flushing at the end of every
+/// reactor iteration, the per-mpsc-send cost is amortised across N
+/// drops. That makes the channel hop profitable at smaller sizes than
+/// a lone-send model could justify (lone-send had to lift the
+/// threshold to 16 KB because per-`mpsc::send` cost was a few hundred
+/// ns — at 256 B the inline drop was cheaper).
 ///
-/// **R3 ★ — sweet-spot threshold surprise**: the agent brief and A.3
-/// commit body both gestured at dropping the threshold to 256 B – 1 KB
-/// once batching amortises the send. Sweep on lx64 across
-/// {512, 1024, 4096, 16384} × c=50 SET -d {1K, 4K, 10K, 64K}
+/// **Sweet-spot surprise**: intuition suggested dropping the threshold
+/// to 256 B – 1 KB once batching amortises the send. A sweep across
+/// thresholds {512, 1024, 4096, 16384} × c=50 SET -d {1K, 4K, 10K, 64K}
 /// disproved that floor: at ≤ 1 KB threshold, p999 / max on small
 /// values (-d 1024, -d 4096) was variance-bounded equal or
-/// occasionally WORSE than the A.3 16 KB threshold, while the larger
+/// occasionally WORSE than a 16 KB threshold, while the larger
 /// sizes (10 KB / 64 KB) won either way. Cause: the Vec::push +
 /// occasional `MAX_PENDING_DROPS` force-flush stall costs more for
-/// small Arcs (jemalloc small-class free is sub-µs even at tail)
+/// small Arcs (allocator small-class free is sub-µs even at tail)
 /// than the inline drop it avoids.
 ///
 /// Picked **4 KB** as the lowest threshold where the bio-off-reactor
 /// win consistently dominates the batch-buffer overhead on tail
-/// metrics. The biggest A.2 wins (vs A.3 16 KB) land on `-d 64K`
-/// SET p50 (-44 %) and `-d 10K` SET max (-35 %), where each iter's
-/// batch already contains several heavy values per shard.
+/// metrics. The biggest batching wins (vs lone-send at 16 KB) land on
+/// `-d 64K` SET p50 (-44 %) and `-d 10K` SET max (-35 %), where each
+/// iter's batch already contains several heavy values per shard.
 pub const HEAP_HEAVY_BYTES: usize = 4 * 1024;
 
 /// Sender half of the runtime's bio-drop channel. Wired from
 /// `kevy-rt`'s `bio.rs` via [`crate::Store::set_bio_drop_sender`]; the
 /// concrete payload is `Vec<Value>` — a **batch** of values
-/// produced by one shard since its last flush (A.2 batch-send model).
+/// produced by one shard since its last flush.
 /// The bio thread (`kevy-rt::bio::spawn`) iterates the batch and
 /// drops each item. One mpsc message per shard-flush amortises the
 /// channel cost (atomic + cross-thread cacheline traffic) across
 /// however many values landed in the batch.
+#[cfg(feature = "std")]
 pub type BioDropSender = std::sync::mpsc::Sender<Vec<Value>>;
 
 impl Value {
@@ -261,6 +331,9 @@ impl Value {
             Value::Set(_) | Value::SmallSetInline(_) => "set",
             Value::ZSet(_) | Value::SmallZSetInline(_) => "zset",
             Value::Stream(_) => "stream",
+            // Stage-1 funnel: TYPE (and SCAN's TYPE filter) answer from
+            // the tag — a cold key never pays a pread for its type.
+            Value::Cold(c) => c.type_name(),
         }
     }
 
@@ -294,12 +367,20 @@ impl Value {
             | Value::SmallHashInline(_)
             | Value::SmallListInline(_)
             | Value::SmallZSetInline(_) => 0,
+            // The stub owns no heap — its 24 bytes live inline in the
+            // Entry. The reclaimed value bytes are exactly the point:
+            // a cold key weighs key-heap + ENTRY_OVERHEAD only (B7).
+            Value::Cold(_) => 0,
+            // Each member's bytes live twice when they spill to heap (>22 B):
+            // once as the `by_member` key, once inside the rank tree's
+            // `(Score, SmallBytes)` key — hence the ×2 on `heap_bytes`.
+            // Members ≤22 B are inline in both slots (heap_bytes = 0).
             Value::ZSet(z) => collection_overhead(z.by_member.capacity(), HASH_SLOT_BYTES)
                 + z.by_member
                     .iter()
-                    .map(|(m, _)| m.heap_bytes() as u64)
+                    .map(|(m, _)| 2 * m.heap_bytes() as u64)
                     .sum::<u64>()
-                + (z.by_score.len() as u64).saturating_mul(BTREE_SLOT_BYTES),
+                + (z.by_score.len() as u64).saturating_mul(RANKTREE_SLOT_BYTES),
             Value::Stream(s) => s.weight(),
         }
     }
@@ -321,7 +402,9 @@ impl Value {
             | Value::SmallHashInline(_)
             | Value::SmallListInline(_)
             | Value::SmallZSetInline(_) => false,
-            // The Axis I culprit. v1.25 A.3 lazy-drop's primary case.
+            // 24 inline bytes; dropping a stub frees nothing.
+            Value::Cold(_) => false,
+            // Lazy-drop's primary case: the large-value SET tail culprit.
             Value::ArcBulk(a) => a.len() >= HEAP_HEAVY_BYTES,
             // Collection drops walk every element + the bucket array;
             // worst-case microseconds on a multi-KB hash/zset. Send to
@@ -334,14 +417,14 @@ impl Value {
             // thread to only do a refcount-decrement, which is wasted
             // cross-thread traffic. A unique Arc IS the case where
             // drop is expensive (it really frees the inner payload).
-            Value::Hash(a) => std::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
-            Value::List(a) => std::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
-            Value::Set(a) => std::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
+            Value::Hash(a) => alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
+            Value::List(a) => alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
+            Value::Set(a) => alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
             Value::ZSet(a) => {
-                std::sync::Arc::strong_count(a) == 1 && !a.by_member.is_empty()
+                alloc::sync::Arc::strong_count(a) == 1 && !a.by_member.is_empty()
             }
             Value::Stream(a) => {
-                std::sync::Arc::strong_count(a) == 1 && a.length() > 0
+                alloc::sync::Arc::strong_count(a) == 1 && a.length() > 0
             }
         }
     }
@@ -363,8 +446,18 @@ pub(crate) const HASH_SLOT_BYTES: u64 = 32;
 pub(crate) const SET_SLOT_BYTES: u64 = 24;
 /// `VecDeque` ring-buffer slot per stored `Vec<u8>` header (24 B Vec metadata).
 pub(crate) const LIST_SLOT_BYTES: u64 = 24;
-/// `BTreeSet` per-entry overhead (node pointers + 6-element B-tree node padding).
+/// `BTreeSet`/`BTreeMap` per-entry overhead (node pointers + B-tree node
+/// padding) — the stream index's accounting constant.
 pub(crate) const BTREE_SLOT_BYTES: u64 = 40;
+/// `kevy_ranktree::RankTree` per-key overhead. Measured from the structure:
+/// the `(Score, SmallBytes)` key slot is 32 B; nodes hold ≤15 keys in a Vec
+/// whose buffer rounds to 16 slots at ~2/3 fill (≈10-11 live keys), so the
+/// key arrays amortise to ≈48 B per key; the per-node fixed cost (56 B
+/// header + Box allocation, ~1 node per 10 keys) and the internal nodes'
+/// child-pointer arrays add ≈8 B more. 64 errs slightly high (allocator
+/// size-class rounding), keeping `used_memory` a conservative upper bound —
+/// same policy as [`ENTRY_OVERHEAD`].
+pub(crate) const RANKTREE_SLOT_BYTES: u64 = 64;
 /// Per-entry overhead in the top-level keyspace map: the inline 24-byte
 /// `SmallBytes` key cell + the 64-byte `Entry` (post weight/clock fields) +
 /// metadata. Approximation that errs slightly high so `used_memory` stays a
@@ -398,8 +491,10 @@ pub fn list_item_weight(value_cap: usize) -> u64 {
 }
 
 /// Per-member delta a new zset member charges: hash slot for `by_member` +
-/// BTreeSet slot for `by_score` + the member's heap bytes.
+/// rank-tree slot for `by_score` + the member's heap bytes — twice, because
+/// a heap-spilling member (>22 B) is stored in both structures (inline
+/// members cost 0 here, matching [`Value::weight`]'s ZSet arm).
 #[inline]
 pub fn zset_member_weight(member: &SmallBytes) -> u64 {
-    member.heap_bytes() as u64 + HASH_SLOT_BYTES + BTREE_SLOT_BYTES
+    2 * member.heap_bytes() as u64 + HASH_SLOT_BYTES + RANKTREE_SLOT_BYTES
 }

@@ -1,11 +1,12 @@
-//! v3.1 GROUP/GROUPS reduce — distributed EXACT top-K over group
+//! GROUP/GROUPS reduce — distributed EXACT top-K over group
 //! aggregates (TPUT-style) plus the AGG.FETCH phase-2 merge.
 
 use kevy_resp::{encode_array_len, encode_bulk, encode_error};
+use kevy_rt::ExtensionReduced;
 
 use super::chunk::{read_kbytes, read_u32, value_repr};
 
-/// v3.1 reduce — distributed EXACT top-K over group aggregates
+/// Reduce — distributed EXACT top-K over group aggregates
 /// (TPUT-style). Phase 1 chunks carry each shard's local top-(4·limit)
 /// by the ranking metric plus an `exhausted` flag; if the unseen mass
 /// (Σ τ over non-exhausted shards) could displace the k-th candidate,
@@ -15,15 +16,15 @@ use super::chunk::{read_kbytes, read_u32, value_repr};
 ///
 /// History (agggate): full-materialization chunks 14-18ms at 8×10k
 /// groups; this path answers from ~4·limit-row chunks.
-pub(super) fn reduce_agg(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn reduce_agg(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> ExtensionReduced {
     let mut out = Vec::new();
     let single = argv[2].eq_ignore_ascii_case(b"GROUP");
     if single {
-        return reduce_agg_single(chunks);
+        return ExtensionReduced::Reply(reduce_agg_single(chunks));
     }
     let Some((by, limit)) = crate::cmd_index_query::parse_groups_args(argv) else {
         encode_error(&mut out, "ERR bad IDX arguments");
-        return out;
+        return ExtensionReduced::Reply(out);
     };
     // ---- phase 1: merge observed partials + collect per-shard τ ----
     let additive = matches!(by, kevy_index::AggBy::Count | kevy_index::AggBy::Sum);
@@ -50,7 +51,7 @@ pub(super) fn reduce_agg(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
         // just multiplies fan-out rounds (measured 51ms).
         let mut argv2: Vec<Vec<u8>> = argv.to_vec();
         set_groups_depth(&mut argv2, if depth == 1 { 4 } else { 0 });
-        return continuation(&argv2);
+        return continuation(argv2);
     }
     // ---- phase 2: exact totals for potential top-k members ----
     let cands = fetch_candidates(&ranked, &taus, theta, by, additive, unseen_bound, limit);
@@ -60,7 +61,7 @@ pub(super) fn reduce_agg(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
         format!("BY={} LIMIT={}", tag_of(by), limit).into_bytes(),
     ];
     argv2.extend(cands);
-    continuation(&argv2)
+    continuation(argv2)
 }
 
 /// GROUP (one group): chunks are exact partials already — merge & emit.
@@ -228,16 +229,10 @@ fn set_groups_depth(argv: &mut Vec<Vec<u8>>, depth: usize) {
     argv.push(format!("DEPTH={depth}").into_bytes());
 }
 
-/// Encode a stateless two-phase continuation (kevy-rt convention: a
-/// reduce reply starting with NUL re-fans the embedded argv).
-fn continuation(argv: &[Vec<u8>]) -> Vec<u8> {
-    let mut cont = vec![0u8];
-    cont.extend_from_slice(&(argv.len() as u32).to_le_bytes());
-    for item in argv {
-        cont.extend_from_slice(&(item.len() as u32).to_le_bytes());
-        cont.extend_from_slice(item);
-    }
-    cont
+/// Stateless two-phase follow-up: hand the runtime the argv to re-fan
+/// out (phase state rides inside the argv itself).
+fn continuation(argv: Vec<Vec<u8>>) -> ExtensionReduced {
+    ExtensionReduced::Continue(argv)
 }
 
 /// Decode `[ST_OK][n][(glen,g,count,sum,mmlen,mm)*]`.

@@ -25,10 +25,11 @@ const HANDSHAKE_MAX_INPUT: usize = 4 * 1024;
 const ACCEPT_BURST_CAP: usize = 64;
 
 /// Cap on the input buffer a streaming replica may accumulate before
-/// being dropped. In v1.18.0 there is no replica→primary ACK protocol
-/// (sent-offset is taken as acked-offset; real acks land in Phase 1.5
-/// with `kevy-elect`), so input is drain-and-discard. The cap protects
-/// against a peer dumping arbitrary bytes hoping to bloat memory.
+/// being dropped. Streaming input is the replica→primary ACK channel
+/// (`REPLCONF ACK` lines parsed by `parse_replica_acks`); anything
+/// unparseable is skipped, so a well-behaved peer never accumulates
+/// much. The cap protects against a peer dumping arbitrary bytes
+/// hoping to bloat memory.
 const STREAMING_INPUT_DISCARD_CAP: usize = 64 * 1024;
 
 impl<C: Commands> Shard<C> {
@@ -44,7 +45,7 @@ impl<C: Commands> Shard<C> {
                 Ok(sock) => {
                     sock.set_nonblocking()?;
                     self.poller.add(sock.raw(), true, false)?;
-                    // T1.28.5: capture the replica's peer addr at
+                    // Capture the replica's peer addr at
                     // accept time so `INFO replication` / `ROLE` can
                     // report it. `peer_addr` errs on a peer that
                     // already vanished — fall back to 0.0.0.0:0,
@@ -70,8 +71,9 @@ impl<C: Commands> Shard<C> {
 
     /// Handle readability on a replica conn. In `HandshakePending`,
     /// pull bytes, advance handshake state, queue `+ACK` on success,
-    /// `close()` on failure. In `Streaming`, drain-and-discard (no
-    /// replica→primary ACK in v1.18). In `AckSent`/`Closed`, ignore.
+    /// `close()` on failure. In `Streaming`, parse `REPLCONF ACK`
+    /// lines (the replica→primary ACK channel). In `AckSent`/`Closed`,
+    /// ignore.
     // LOC-WAIVER: replica-conn read state machine — one read loop over
     // ReplicaState arms (handshake / ACK stream / drain); the loop and
     // state arms are one indivisible protocol unit.
@@ -91,7 +93,10 @@ impl<C: Commands> Shard<C> {
                             return Ok(());
                         }
                         conn.input.extend_from_slice(&scratch[..n]);
-                        if let Err(e) = advance_handshake(conn) {
+                        let feed_gen =
+                            self.replicate.as_ref().map_or(0, |f| f.generation());
+                        let conn = &mut self.replicas[idx];
+                        if let Err(e) = advance_handshake(conn, feed_gen) {
                             eprintln!(
                                 "kevy: replica handshake rejected on fd {}: {e}",
                                 conn.fd,
@@ -107,11 +112,11 @@ impl<C: Commands> Shard<C> {
                         }
                     }
                     ReplicaState::Streaming { .. } => {
-                        // v3.14 D2: the replica→primary direction is
+                        // The replica→primary direction is
                         // the ACK channel — this readable handler is
-                        // its SINGLE reader (v1.18 discarded these
-                        // bytes as unsolicited; a second reader in the
-                        // pump raced this one and lost most ACKs).
+                        // its SINGLE reader (an earlier design had a
+                        // second reader in the pump that raced this
+                        // one and lost most ACKs).
                         let conn = &mut self.replicas[idx];
                         if conn.input.len() + n > STREAMING_INPUT_DISCARD_CAP {
                             eprintln!(
@@ -147,12 +152,15 @@ impl<C: Commands> Shard<C> {
             if conn.write_off >= conn.output.len() {
                 conn.output.clear();
                 conn.write_off = 0;
-                if let ReplicaState::AckSent { replica_id, from_offset } = &conn.state {
+                if let ReplicaState::AckSent { replica_id, from_offset, generation } =
+                    &conn.state
+                {
                     let rid = replica_id.clone();
-                    let off = *from_offset;
+                    let (off, generation) = (*from_offset, *generation);
                     conn.state = ReplicaState::Streaming {
                         replica_id: rid,
                         sent_offset: off,
+                        generation,
                     };
                 }
                 return Ok(());
@@ -172,10 +180,37 @@ impl<C: Commands> Shard<C> {
         }
     }
 
+    /// An I/O error on a replica link kills THAT LINK, never the shard.
+    ///
+    /// A replica that goes away mid-stream makes the primary's next write
+    /// to it fail with `EPIPE` / `ECONNRESET`. Propagating that out of the
+    /// reactor ends the shard — and with it every client connection the
+    /// shard owns, none of which had anything to do with replication.
+    /// That is what `kevy: shard N exited with error: Broken pipe`
+    /// meant: killing a replica took down the primary's shards, and the
+    /// clients saw their connections close with no reply in flight.
+    ///
+    /// Closing the link is also what the streaming-output cap already
+    /// does for the same situation reached a different way; a replica
+    /// reconnects and resumes from the backlog.
+    pub(crate) fn replica_io_failed(&mut self, idx: usize, what: &str, e: &io::Error) {
+        if let Some(conn) = self.replicas.get_mut(idx) {
+            eprintln!(
+                "kevy: shard {} replica fd {} {what} failed: {e} — dropping link \
+                 (reconnect resumes from the backlog)",
+                self.id, conn.fd,
+            );
+            conn.close();
+        }
+    }
+
     /// Remove every replica in [`ReplicaState::Closed`]. Conns whose
-    /// `Closed.replica_id` is `Some` are recorded into
-    /// [`Shard::slots`] (per T1.15) before dropping so a reconnect
-    /// within the window stays correlatable.
+    /// `Closed.replica_id` is `Some` get their slot's `last_seen_ns`
+    /// touched before dropping so a reconnect within the window stays
+    /// correlatable — WITHOUT advancing `acked_offset` (the conn
+    /// knows what it sent, not what the peer confirmed; a sent-as-
+    /// acked write here would let `WAIT` count unconfirmed bytes
+    /// through the reconnect window).
     pub(crate) fn reap_closed_replicas(&mut self) {
         // Fast path: no Closed conns. Avoids the Instant::now() cost
         // on every reactor iteration.
@@ -188,9 +223,9 @@ impl<C: Commands> Shard<C> {
         let mut i = self.replicas.len();
         while i > 0 {
             i -= 1;
-            if let ReplicaState::Closed { replica_id, sent_offset } = &self.replicas[i].state {
+            if let ReplicaState::Closed { replica_id } = &self.replicas[i].state {
                 if let Some(id) = replica_id.as_ref() {
-                    self.slots.insert_or_touch(id, *sent_offset, now_ns);
+                    self.slots.touch_or_insert_unacked(id, now_ns);
                 }
                 let conn = self.replicas.swap_remove(i);
                 let _ = self.poller.delete(conn.fd);

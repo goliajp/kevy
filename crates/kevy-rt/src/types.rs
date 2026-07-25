@@ -73,6 +73,20 @@ impl NotifyClass {
     }
 }
 
+/// Outcome of an extension fan-out reduce ([`Commands::extension_reduce`]).
+///
+/// [`Commands::extension_reduce`]: crate::Commands::extension_reduce
+#[derive(Debug, PartialEq, Eq)]
+pub enum ExtensionReduced {
+    /// The final RESP reply bytes for the client.
+    Reply(Vec<u8>),
+    /// Not final yet: fan `argv` out to every shard as a follow-up
+    /// extension phase and reduce again when its chunks land. Phase
+    /// state rides inside the argv itself, so the runtime holds no
+    /// per-phase bookkeeping.
+    Continue(Vec<Vec<u8>>),
+}
+
 /// Transaction-control classification for a command.
 pub enum TxnKind {
     Multi,
@@ -106,6 +120,10 @@ pub struct LiveRuntimeConfig {
     pub appendfsync: Option<Fsync>,
     /// `auto_aof_rewrite_percentage`. `0` disables the auto-trigger.
     pub auto_aof_rewrite_pct: Option<u32>,
+    /// Absolute-size auto-rewrite trigger in bytes (0 = rule off).
+    pub auto_aof_rewrite_bytes: Option<u64>,
+    /// Time-based auto-rewrite trigger in seconds (0 = rule off).
+    pub auto_aof_rewrite_interval_secs: Option<u64>,
     /// `auto_aof_rewrite_min_size` in bytes.
     pub auto_aof_rewrite_min_size: Option<u64>,
     /// New tick interval in ms (`1000/hz`). `0` disables ticking
@@ -130,7 +148,7 @@ pub struct LiveRuntimeConfig {
     /// `[slowlog].max_len` — ring cap per shard. Shrinking trims the
     /// oldest entries on the next tick application.
     pub slowlog_max_len: Option<u32>,
-    /// v3.16 D2 — monotonic promotion counter. The command layer bumps
+    /// Monotonic promotion counter. The command layer bumps
     /// it every time this process is PROMOTED (replica → primary:
     /// `REPLICAOF NO ONE` on a following replica, or an election win).
     /// Each shard tracks the last value it saw; an increase makes the
@@ -141,3 +159,26 @@ pub struct LiveRuntimeConfig {
     /// default) means "never promoted" and embedders pay nothing.
     pub promotion_epoch: u64,
 }
+
+/// A replica's acknowledged state, published per shard tick via
+/// [`Commands::on_replication_view`]: the offset from its latest
+/// `REPLCONF ACK` plus that ACK's age at publication time. `None` in
+/// the view tuple means the replica has never ACKed.
+///
+/// [`Commands::on_replication_view`]: crate::Commands::on_replication_view
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplicaAck {
+    /// Offset from the latest `REPLCONF ACK` (`0` is a real heartbeat
+    /// ACK from an empty replica, not a placeholder).
+    pub acked_offset: u64,
+    /// Milliseconds since that ACK was received, measured when the
+    /// view was published. Feeds the `min_replicas_max_lag_ms` gate.
+    pub ack_age_ms: u64,
+}
+
+/// One replica conn's row in the per-tick replication view:
+/// `(replica_id, peer_ipv4, peer_port, sent_offset, ack)`. The id is
+/// the identity string the replica presented at handshake — command
+/// layers group per-shard rows by it to render one aggregate entry
+/// per replica process.
+pub type ReplicaViewRow = (String, std::net::Ipv4Addr, u16, u64, Option<ReplicaAck>);

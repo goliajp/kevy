@@ -96,8 +96,9 @@ pub(crate) fn emit_bulk_array(res: Result<Vec<Vec<u8>>, StoreError>, out: &mut V
     }
 }
 
-/// `HSET key field value [field value ...]`. G4 (v1.25): borrowed-pair path —
-/// the per-field+value `Vec<u8>` allocs the pair list used to do are gone.
+/// `HSET key field value [field value ...]`. Borrowed-pair path: the pair
+/// list holds `&[u8]` slices into argv, avoiding a `Vec<u8>` alloc per
+/// field+value.
 pub(crate) fn cmd_hset<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     if args.len() < 4 || !args.len().is_multiple_of(2) {
         return wrong_args(out, "hset");
@@ -106,7 +107,7 @@ pub(crate) fn cmd_hset<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &
         .step_by(2)
         .map(|i| (&args[i], &args[i + 1]))
         .collect();
-    emit_int_result(store.hset_borrowed(&args[1], &pairs).map(|n| n as i64), out);
+    emit_int_result(store.hset(&args[1], &pairs).map(|n| n as i64), out);
 }
 
 /// `ZRANGE key start stop [WITHSCORES]` — by rank.
@@ -131,7 +132,7 @@ pub(crate) fn cmd_zrange<A: ArgvView + ?Sized>(
 
 /// `ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]`.
 ///
-/// v1.27.3: BullMQ uses `LIMIT 0 1` inside its `moveToActive` /
+/// BullMQ uses `LIMIT 0 1` inside its `moveToActive` /
 /// `addJob` scripts; the modifier may appear in either order
 /// relative to `WITHSCORES`. We accept either order to match Redis.
 pub(crate) fn cmd_zrangebyscore<A: ArgvView + ?Sized>(
@@ -307,7 +308,7 @@ pub(crate) fn fmt_score(s: f64) -> Vec<u8> {
 }
 
 
-/// G4 (v1.25): borrowed `args[from..]` as `Vec<&[u8]>` — zero per-member heap
+/// Borrowed `args[from..]` as `Vec<&[u8]>` — zero per-member heap
 /// alloc. Mirrors valkey's `c->argv[j]`-without-copy hand-off (`t_set.c:611`
 /// `setTypeAdd(set, objectGetVal(c->argv[j]))`). Paired with the Store
 /// `*_borrowed` family that takes `&[&[u8]]`; the Store then materialises
@@ -325,16 +326,44 @@ pub(crate) fn arg_i64(b: &[u8]) -> Option<i64> {
     std::str::from_utf8(b).ok()?.parse::<i64>().ok()
 }
 
-/// Extract the `MATCH <pattern>` option from a `SCAN cursor [opts...]` command.
-pub(crate) fn scan_pattern<A: ArgvView + ?Sized>(args: &A) -> Option<Vec<u8>> {
+/// Parse `SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]` into
+/// the runtime's [`kevy_rt::ScanArgs`]. `Err` carries the exact error
+/// message the runtime puts on the wire (Redis wording).
+pub(crate) fn scan_args<A: ArgvView + ?Sized>(
+    args: &A,
+) -> Result<kevy_rt::ScanArgs, &'static str> {
+    let cursor: u64 = std::str::from_utf8(&args[1])
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .ok_or("ERR invalid cursor")?;
+    let mut count = 10usize; // Redis default work bound
+    let mut pattern = None;
+    let mut type_filter = None;
     let mut i = 2;
-    while i + 1 < args.len() {
-        if args[i].eq_ignore_ascii_case(b"MATCH") {
-            return Some(args[i + 1].to_vec());
+    while i < args.len() {
+        let opt = &args[i];
+        let Some(val) = args.get(i + 1) else {
+            return Err("ERR syntax error");
+        };
+        if opt.eq_ignore_ascii_case(b"MATCH") {
+            pattern = Some(val.to_vec());
+        } else if opt.eq_ignore_ascii_case(b"COUNT") {
+            let n: i64 = std::str::from_utf8(val)
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .ok_or("ERR value is not an integer or out of range")?;
+            if n < 1 {
+                return Err("ERR syntax error");
+            }
+            count = n as usize;
+        } else if opt.eq_ignore_ascii_case(b"TYPE") {
+            type_filter = Some(val.to_vec());
+        } else {
+            return Err("ERR syntax error");
         }
         i += 2;
     }
-    None
+    Ok(kevy_rt::ScanArgs { cursor, count, pattern, type_filter })
 }
 
 // `cmd_set` / `cmd_setex` / `cmd_incr` / `cmd_incr_by` / `cmd_expire` /

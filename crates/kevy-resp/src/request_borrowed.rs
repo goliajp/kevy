@@ -5,7 +5,7 @@
 
 use crate::argv_borrowed::ArgvBorrowed;
 use crate::error::ProtocolError;
-use crate::request::{find_crlf, parse_bulk_len, parse_int};
+use crate::request::{MAX_MULTIBULK_LEN, find_crlf, parse_bulk_len, parse_int};
 
 /// Parse one command from the front of `buf`, recording each arg as a
 /// `(start, end)` range into `buf` rather than copying its bytes.
@@ -77,6 +77,14 @@ fn parse_multibulk_borrowed(
         return Ok(Some((ArgvBorrowed::new(buf), hdr_end + 2)));
     }
     let count = count as usize;
+    // Reject an absurd declared count BEFORE it reaches
+    // `with_capacity` — the single-pass borrowed parser reserves the
+    // range table up front, so an unchecked count is a remote,
+    // single-packet alloc-abort (the owned parser is gated the same
+    // way in `parse_multibulk_into`).
+    if count > MAX_MULTIBULK_LEN {
+        return Err(ProtocolError::Malformed("multibulk count exceeds limit"));
+    }
 
     let mut argv = ArgvBorrowed::with_capacity(buf, count);
     let mut p = hdr_end + 2;

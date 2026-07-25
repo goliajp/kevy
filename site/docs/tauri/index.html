@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kevy in a Tauri app — kevy</title>
+<meta name="description" content="A Tauri app's backend is Rust — so kevy embeds directly, no server and no separate process. tauri-plugin-kevy holds one kevy-embedded Store in Tauri's managed state and exposes it ">
+<link rel="stylesheet" href="../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../docs/" aria-current="page">Docs</a>
+      <a href="../../docs/commands/">Commands</a>
+      <a href="../../benchmarks/">Benchmarks</a>
+      <a href="../../play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../docs/search-index.json" data-root="../../">
+        <input type="search" placeholder="Search docs…" aria-label="Search docs…" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../docs/tauri/" aria-current="page">EN</a><a href="../../zh/docs/" class="untranslated" title="not translated yet">中文</a><a href="../../ja/docs/" class="untranslated" title="not translated yet">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell has-toc">
+  <aside class="side"><p class="side-h">Getting started</p><ul><li><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a></li><li><a href="../../docs/cookbook/">The RDS→kevy modeling cookbook</a></li><li><a href="../../docs/persistence/">Persistence</a></li><li><a href="../../docs/tuning/">Tuning kevy</a></li></ul><p class="side-h">Running it</p><ul><li><a href="../../docs/replication/">Replication</a></li><li><a href="../../docs/availability/">Availability</a></li><li><a href="../../docs/cluster/">Cluster</a></li><li><a href="../../docs/tiering/">Transparent tiering ([tiering] / with_tier_budget)</a></li><li><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a></li><li><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a></li><li><a href="../../docs/async/">Async client</a></li></ul><p class="side-h">Working with data</p><ul><li><a href="../../docs/indexes/">Secondary indexes (IDX. / idx_)</a></li><li><a href="../../docs/tables/">Tables (TABLE. / table_)</a></li><li><a href="../../docs/vector-search/">Vector search (KIND ann)</a></li><li><a href="../../docs/text-search/">Full-text search (KIND text)</a></li><li><a href="../../docs/views/">Views (VIEW. / view_)</a></li><li><a href="../../docs/cdc/">CDC — the change feed (FEED. / changes_since)</a></li><li><a href="../../docs/pubsub/">Pub/sub</a></li><li><a href="../../docs/lua/">Lua scripting</a></li></ul><p class="side-h">Embedding it</p><ul><li><a href="../../docs/wasm/">kevy on WebAssembly</a></li><li><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a></li><li><a href="../../docs/iot/">kevy on IoT devices</a></li></ul><p class="side-h">Reference</p><ul><li><a href="../../docs/error-replies/">Error reply catalog</a></li><li><a href="../../docs/rds-workloads/">RDS workloads on kevy</a></li><li><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></li><li><a href="../../docs/UPGRADING/">Upgrading kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../docs/commands/">All 188 commands</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>kevy in a Tauri app</h1></div>
+<p>A <a href="https://tauri.app">Tauri</a> app's backend is Rust — so kevy embeds directly, no server and no separate process. <a href="https://github.com/goliajp/kevy/tree/develop/bindings/tauri"><code>tauri-plugin-kevy</code></a> holds one <a href="../embedded-listener/"><code>kevy-embedded</code></a> <code>Store</code> in Tauri's managed state and exposes it to the webview over <code>invoke</code>. One shared store, reachable from every window and from your Rust code alike.</p>
+<p>Full guide, install steps, and the API table: <b><a href="https://github.com/goliajp/kevy/tree/develop/bindings/tauri">bindings/tauri/README.md</a></b>.</p>
+<h2 id="the-shape">The shape</h2>
+<figure class="code"><pre><code class="lang-rust">// src-tauri/src/lib.rs
+tauri::Builder::default()
+    .plugin(tauri_plugin_kevy::init())              // in-memory
+    // .plugin(tauri_plugin_kevy::Builder::new().path("./data").build())  // persistent
+    .run(tauri::generate_context!())
+    .unwrap();</code></pre></figure>
+<figure class="code"><pre><code class="lang-ts">// webview
+import { kevy } from 'tauri-plugin-kevy-api'
+await kevy.set('k', 'v')
+await kevy.getString('k')                           // "v"
+const sub = await kevy.subscribe({ channels: ['room'] }, (m) =&gt; { /* … */ })
+await kevy.publish('room', 'hi')</code></pre></figure>
+<p>The webview reaches the whole engine: typed <code>get</code>/<code>set</code>/<code>del</code>/<code>incr</code>, pub/sub streamed over a Tauri <code>Channel</code>, and a raw <code>cmd(argv)</code> path for every other verb (<code>HSET</code>, <code>ZADD</code>, <code>IDX.*</code>, …) — the same <a href="../client-contract/">client contract</a> the language clients implement.</p>
+<h2 id="two-doors-backend-store-vs-wasm">Two doors: backend store vs. wasm</h2>
+<p>kevy can also run <a href="../wasm/">entirely in the webview as WASM</a>. Choose by where the data lives:</p>
+<ul><li><b>Backend store</b> (this plugin) — one native store shared across windows and Rust, durable (snapshot + AOF), one IPC hop per call. The app's real data.</li><li><b>wasm in the webview</b> — an isolated, ephemeral store scoped to a single webview, no IPC. Sandboxed scratch space.</li></ul>
+<p>The <a href="https://github.com/goliajp/kevy/tree/develop/bindings/tauri#shared-store-this-plugin-vs-wasm-in-webview">binding README</a> has the full decision table.</p>
+<h2 id="the-0-dep-boundary">The 0-dep boundary</h2>
+<p>kevy's workspace is strictly 0-dependency. A Tauri plugin must depend on the <code>tauri</code> crate, so <code>tauri-plugin-kevy</code> sits <b>outside</b> the workspace (root <code>Cargo.toml</code> <code>exclude</code>), depending on <code>tauri</code> + the 0-dep <code>kevy-embedded</code> and <code>kevy-resp</code>. <code>cargo build</code> at the repo root never sees <code>tauri</code>; the engine stays pure.</p></main>
+  <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#the-shape">The shape</a></li><li class="l2"><a href="#two-doors-backend-store-vs-wasm">Two doors: backend store vs. wasm</a></li><li class="l2"><a href="#the-0-dep-boundary">The 0-dep boundary</a></li></ul></aside>
+</div>
+
+<script src="../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

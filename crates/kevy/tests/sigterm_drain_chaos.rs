@@ -1,4 +1,4 @@
-//! v1.39 SIGTERM graceful drain chaos test (Unix).
+//! SIGTERM graceful drain chaos test (Unix).
 //!
 //! Spawn kevy, hammer it with concurrent writes, send SIGTERM. kevy
 //! must drain: fsync AOF, close listeners, exit 0 (not SIGKILL'd by
@@ -87,8 +87,8 @@ fn sigterm_drains_cleanly_no_lost_writes() {
     );
 
     // Strict: SIGTERM is a GRACEFUL signal — lost-fraction must be
-    // BETTER than the SIGKILL-equivalent in v1.31.2's crash_everysec
-    // (~0.05 % on Mac). Bound at 1 % for headroom across runners.
+    // BETTER than crash_everysec's SIGKILL-equivalent
+    // (~0.05 % measured on Mac). Bound at 1 % for headroom across runners.
     let loss = lost as f64 / (acks.len() as f64).max(1.0);
     assert!(
         loss < 0.01,

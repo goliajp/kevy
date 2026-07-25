@@ -1,4 +1,4 @@
-//! Std-only RESP parser fuzz harness — v1.36 industrial-grade.
+//! Std-only RESP parser fuzz harness.
 //!
 //! Drives randomized byte streams through [`parse_command`] and
 //! asserts that every call terminates in bounded time with one of

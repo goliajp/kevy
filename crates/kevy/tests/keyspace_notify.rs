@@ -70,29 +70,21 @@ impl Server {
         ));
         std::fs::create_dir_all(&dir).unwrap();
 
-        // Install a process-wide config with the flags set. config_global
-        // is process-singleton — tests in this binary inherit each other's
-        // installs. We init once + push the flag through CONFIG SET
-        // after binding (via the live tick path).
         let mut cfg = kevy_config::Config::default();
         cfg.notification.notify_keyspace_events = flags.to_string();
-        // config_global is process-singleton — `init` only takes once;
-        // subsequent tests in this binary use `replace` to push fresh
-        // flags. Either way, the runtime spawned below reads the live
-        // value via `live_runtime_config` on each shard tick.
-        // config_global::init is once-only — first test wins; the rest
-        // use `replace` to push fresh flags. Either way, the runtime
-        // spawned below reads the live value via `live_runtime_config`
-        // on each shard tick.
-        let arc = std::sync::Arc::new(cfg);
-        kevy::config_init(arc.clone());
-        let _ = kevy::config_replace(arc);
+        // Each server owns its state, so the flags are baked in at
+        // construction; the runtime spawned below reads the live value
+        // via `live_runtime_config` on each shard tick.
+        let state = Arc::new(
+            kevy::RuntimeState::new(std::sync::Arc::new(cfg), std::path::PathBuf::new(), nshards)
+                .unwrap(),
+        );
 
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, nshards, kevy::KevyCommands)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::with_state(state)).bind([127, 0, 0, 1], port).shards(nshards)
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });

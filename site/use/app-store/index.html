@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Serving reads without a database — kevy</title>
+<meta name="description" content="Secondary indexes and materialised views in kevy: how a filtered list or a running total stays a lookup instead of becoming a query.">
+<link rel="stylesheet" href="../../assets/kevy.css?v=c5c8b1de">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../docs/">Docs</a>
+      <a href="../../docs/commands/">Commands</a>
+      <a href="../../benchmarks/">Benchmarks</a>
+      <a href="../../play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <nav class="lang" aria-label="Language">
+        <a href="../../use/app-store/" aria-current="page">EN</a>
+        <a href="../../zh/use/app-store/">中文</a>
+        <a href="../../ja/use/app-store/">日本語</a>
+      </nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+<section class="band" style="border-top:0"><div>
+    <p class="eyebrow">Primary store</p>
+    <h1>Keep the read a lookup</h1>
+    <p class="lede">"All orders for this customer, still open." "How many items in this cart." These are the reads an application does a thousand times a second, and in a relational database each one is a query with a planner behind it. <b>kevy can keep the answer ready instead.</b></p>
+    
+  </div></section>
+<section class="band prose"><h2>Why this fits</h2><div class="pcols"><p>A key-value store is usually rejected for application data with a single objection: <i>but I need to look things up by something other than the key</i>. That objection is correct, and it is what secondary indexes are for.</p><p><b>An index is declared, not built.</b> You name the key pattern and the field; the write path keeps it current. A filtered list becomes a lookup again — no planner, no scan, no query.</p><p><b>A view goes further</b> and keeps an aggregate current on write, so a count or a total is read rather than computed. This is what most applications are actually asking their ORM for, and it is why their database is busy.</p><p><b>And a whole table can be declared at once.</b> <code>TABLE.DECLARE</code> takes typed columns, secondary indexes and composite <code>ORDER BY</code> paths and compiles them to named indexes at declare time — <code>kevy-sql</code> does the same from the PG/MySQL schema file you already have. The engine still plans nothing and enforces no schema; joins and runtime SQL stay refused by name.</p></div></section>
+<section class="band">
+  <div class="sec-h"><h2>Look things up by a field, not the key</h2><p class="sec-lede">"All orders for customer 881" stays a lookup: declare an index per field, write normally, read by value.</p></div>
+  <ol class="steps recipe"><li><h3>Your data, written the way you would anyway</h3><pre><code>HSET order:1001 customer 881 status open  total 4400
+HSET order:1002 customer 881 status paid  total 8400
+HSET order:1003 customer 902 status open  total 1200</code></pre></li><li><h3>One index per field you look up by</h3><pre><code>IDX.CREATE idx:cust   ON PREFIX order: FIELD customer TYPE i64 KIND range
+IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range</code></pre></li><li><h3>The read that would have been a query</h3><pre><code>IDX.QUERY idx:cust EQ 881
+-&gt; 1) &quot;0&quot;                       # cursor
+   2) 1) &quot;order:1001&quot;  2) &quot;881&quot;
+      3) &quot;order:1002&quot;  4) &quot;881&quot;</code></pre></li><li><h3>Two conditions at once</h3><pre><code>IDX.QUERY COMPOSE AND idx:cust EQ 881 idx:status EQ open
+-&gt; 1) &quot;0&quot;
+   2) 1) 1) &quot;order:1001&quot;</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">Cost &amp; limits</span><p><b>Indexes are paid for on every write</b>, not on read — the right trade for read-heavy serving, the wrong one for a write-heavy log. <b>There are no joins</b>, and there will not be: an index answers "which keys match these fields", not "join these two collections". If your read genuinely needs a join, keep it in Postgres — <a href="../../docs/rds-workloads/">the RDS workloads page</a> says which ones those are.</p></div>
+</section>
+<section class="band">
+  <div class="sec-h"><h2>Keep a running answer ready</h2><p class="sec-lede">A filtered, ordered list maintained on the write path — the read never recomputes it, because it was never stale.</p></div>
+  <ol class="steps recipe"><li><h3>Declare the view over the same indexes</h3><p>The parens are separate arguments.</p><pre><code>VIEW.CREATE v:open881 QUERY ( AND idx:cust EQ 881 idx:status EQ open )  ORDER BY idx:cust
+-&gt; OK</code></pre></li><li><h3>Read it — nothing is computed here</h3><pre><code>VIEW.QUERY  v:open881
+-&gt; 1) &quot;0&quot;
+   2) 1) &quot;order:1001&quot;  2) &quot;881&quot;</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">Cost &amp; limits</span><p>A view is <b>write-path work forever</b>: every write to a matching key updates it, whether or not anyone reads it today. Declare views for the reads your application actually serves, and drop the ones it stops serving. The indexes a view composes must exist first.</p></div>
+</section>
+<section class="band">
+  <div class="sec-h"><h2>Declare the whole table once</h2><p class="sec-lede">The read path of a relational table — indexed WHERE, residual filter, ORDER BY, pagination, COUNT — compiled onto named indexes by one declaration. Or by your existing schema file.</p></div>
+  <ol class="steps recipe"><li><h3>Columns, indexes and sort paths, in one declaration</h3><p>Rows stay ordinary hashes under the prefix — a missing column is NULL, and kevy-cli sql compile schema.sql emits this line from CREATE TABLE / CREATE INDEX.</p><pre><code>TABLE.DECLARE orders PREFIX order: PK id COLUMN id str COLUMN customer i64 COLUMN status str COLUMN total f64 INDEX status range VALUES total customer ORDERPATH by_customer ON customer THEN total DESC
+-&gt; OK</code></pre></li><li><h3>Filter and count on stored columns — no row is read</h3><pre><code>IDX.QUERY orders.status EQ open FILTER total RANGE 2000 inf LIMIT 20
+-&gt; 1) &quot;0&quot;
+   2) 1) &quot;order:1001&quot;  2) &quot;open&quot;
+
+IDX.COUNT orders.status EQ open
+-&gt; (integer) 2</code></pre></li><li><h3>The ORDER BY customer, total DESC walk</h3><p>One composite index answers it the way a relational composite index does — each customer's orders, largest first, no re-sort.</p><pre><code>IDX.QUERY orders.by_customer WHERE customer EQ 881 LIMIT 20 FIELDS status total</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">Cost &amp; limits</span><p><b>No runtime SQL and no joins.</b> The server refuses <code>SELECT</code> as an unknown command; <code>kevy-cli sql compile</code> turns a PG/MySQL schema file into these declarations at build time and refuses JOIN, subqueries and GROUP BY by name, pointing at the recipe that replaces each. Uniqueness is verify-not-enforce, and constraints are recipes, not engine checks. With <a href="../../docs/tiering/">tiering</a> on, index-only queries answer from RAM even when every row is cold — only the final <code>FIELDS</code> page reads cold rows, one read per row.</p></div>
+</section>
+<section class="band"><div class="sec-h"><h2>Next</h2></div><div class="cards"><a class="card" href="../../docs/tables/">
+      <span class="card-k">Guide</span>
+      <h3>Tables</h3>
+      <p>Declare typed columns and indexes once; query them like a table.</p>
+      <span class="card-go">Read it</span>
+    </a><a class="card" href="../../docs/designing-on-kevy/">
+      <span class="card-k">Guide</span>
+      <h3>Designing on kevy</h3>
+      <p>How to think in keys when you are used to thinking in tables.</p>
+      <span class="card-go">Read it</span>
+    </a><a class="card" href="../../docs/indexes/">
+      <span class="card-k">Guide</span>
+      <h3>Secondary indexes</h3>
+      <p>How they build, what they cost, and how to explain a query plan.</p>
+      <span class="card-go">Read it</span>
+    </a><a class="card" href="../../docs/rds-workloads/">
+      <span class="card-k">Reference</span>
+      <h3>RDS workloads</h3>
+      <p>Every relational pattern, with the honest cost of doing it here.</p>
+      <span class="card-go">Read it</span>
+    </a></div></section>
+</main>
+
+<footer class="foot">
+  <div class="foot-in">
+    <p class="foot-b">kevy 4.0 — the part of an ORM most applications actually use</p>
+    <nav>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+      <a href="https://crates.io/crates/kevy">crates.io</a>
+      <a href="../../llms.txt">llms.txt</a>
+    </nav>
+  </div>
+</footer>
+
+
+
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

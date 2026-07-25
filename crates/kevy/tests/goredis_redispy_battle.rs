@@ -1,7 +1,6 @@
-//! v1.53 — go-redis v9 + redis-py 5.x ecosystem battle test
-//! (Phase E step 2).
+//! go-redis v9 + redis-py 5.x ecosystem battle test.
 //!
-//! Closes Phase E with the two remaining tier-1 Redis client
+//! Covers two tier-1 Redis client
 //! ecosystems:
 //!
 //! - **go-redis v9** — the dominant Go Redis client. Its golden path

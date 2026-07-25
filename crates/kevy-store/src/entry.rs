@@ -4,14 +4,14 @@
 
 use crate::clock::{now_ns, pack_deadline};
 use crate::value::Value;
-use std::num::NonZeroU64;
+use core::num::NonZeroU64;
 
 /// Per-entry weight ceiling — the field is `u32` so accounting saturates
 /// at 4 GiB per entry. Real-world Redis values are well below this; the
 /// ceiling only matters when a single hash / list / zset exceeds 4 GiB,
 /// in which case `MEMORY USAGE` and the maxmemory accounting under-
-/// report that one entry by the overflow amount. Acceptable v1.0 tradeoff
-/// — keeps `Entry` at 48 bytes (vs 56 if we kept `u64`).
+/// report that one entry by the overflow amount. Accepted tradeoff
+/// — keeps `Entry` at 48 bytes (vs 56 with a `u64`).
 pub(crate) const WEIGHT_MAX: u32 = u32::MAX;
 
 /// Per-key entry — packed to 48 bytes (vs 64 in the original
@@ -121,5 +121,5 @@ impl Entry {
 // = 48 bytes. Any padding regression (e.g. someone re-adding a 4-byte field
 // without packing) is caught at compile time.
 const _: () = {
-    assert!(std::mem::size_of::<Entry>() == 48);
+    assert!(core::mem::size_of::<Entry>() == 48);
 };

@@ -1,0 +1,33 @@
+# arena bare face — 2026-07-22 — kevy kevy 4.0.0 vs valkey v=9.1.0
+# protocol: -c 50 -P 16, server cores 0-7, client cores 8-15, median-of-5
+# measured: server-side total_commands_processed over a 3.0s window after a 1.0s ramp (NOT redis-benchmark's rate — see the header)
+server test median stdev
+kevy GET 7162439 109388
+kevy HSET 4018494 163124
+kevy INCR 6601867 636267
+kevy LPUSH 2949870 161555
+kevy SADD 5906988 372968
+kevy SET 6576157 197289
+kevy ZADD 3007008 117131
+valkey GET 3414354 28651
+valkey HSET 1950359 33660
+valkey INCR 2422596 39376
+valkey LPUSH 1895287 24743
+valkey SADD 2402193 52542
+valkey SET 1702592 45083
+valkey ZADD 1833933 19550
+redis8 GET 5576941 191129
+redis8 HSET 3000418 152030
+redis8 INCR 3219942 56656
+redis8 LPUSH 2669970 83698
+redis8 SADD 3409817 77887
+redis8 SET 2445272 90627
+redis8 ZADD 2818995 47982
+dragonfly GET 2142193 279747
+dragonfly HSET 1480616 15902
+dragonfly INCR 1562208 319744
+dragonfly LPUSH 1309027 153073
+dragonfly SADD 1647239 24572
+dragonfly SET 1469138 206458
+dragonfly ZADD 1475871 230740
+# gap rule: |kevy-other| <= max(stdev_kevy, stdev_other) => NOISE

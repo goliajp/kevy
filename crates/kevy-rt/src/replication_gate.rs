@@ -1,5 +1,5 @@
 //! Dispatch-without-emit gate — used by the server-as-replica path
-//! (Phase 1.F, T1.29) to apply frames pulled from an upstream primary
+//! to apply frames pulled from an upstream primary
 //! without immediately re-pushing them into this shard's own
 //! `ReplicationSource`. Without the gate, a server with both an
 //! upstream link AND its own primary listener (chain replication, or
@@ -7,8 +7,8 @@
 //! every applied frame to its own downstream replicas, double-counting
 //! the offset and creating infinite chains.
 //!
-//! v1.18 explicitly forbids chain replication (see Anti-scope in the
-//! v3-cluster plan), so the gate is defensive: it documents intent
+//! Chain replication is explicitly out of scope,
+//! so the gate is defensive: it documents intent
 //! and prevents the misconfig — primary + REPLICAOF together — from
 //! silently corrupting the downstream offset stream.
 //!
@@ -36,7 +36,7 @@ thread_local! {
 }
 
 /// RAII guard that marks the current thread as "applying a replicated
-/// frame" for the guard's lifetime. The replica runner (T1.29(b))
+/// frame" for the guard's lifetime. The replica runner
 /// enters this scope before each `dispatch` call so the apply doesn't
 /// re-push the frame into this shard's own backlog.
 pub struct ReplicatedApplyGuard {

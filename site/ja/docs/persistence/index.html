@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>永続化 — kevy</title>
+<meta name="description" content="kevyが再起動をまたいでデータを保持する仕組みを説明します。AOF、スナップショット、fsyncポリシー、リライト（コンパクション）、クラッシュリカバリ、そしてそれらすべてを観測するためのイントロスペクションを扱います。">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../ja/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../../ja/docs/" aria-current="page">ドキュメント</a>
+      <a href="../../../ja/docs/commands/">コマンド</a>
+      <a href="../../../ja/benchmarks/">ベンチマーク</a>
+      <a href="../../../ja/play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../../ja/docs/search-index.json" data-root="../../../ja/">
+        <input type="search" placeholder="ドキュメントを検索……" aria-label="ドキュメントを検索……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../../docs/persistence/">EN</a><a href="../../../zh/docs/persistence/">中文</a><a href="../../../ja/docs/persistence/" aria-current="page">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell has-toc">
+  <aside class="side"><p class="side-h">はじめに</p><ul><li><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a></li><li><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a></li><li><a href="../../../ja/docs/persistence/" aria-current="page">永続化</a></li><li><a href="../../../ja/docs/tuning/">kevyのチューニング</a></li></ul><p class="side-h">運用</p><ul><li><a href="../../../ja/docs/replication/">レプリケーション</a></li><li><a href="../../../ja/docs/availability/">可用性</a></li><li><a href="../../../ja/docs/cluster/">クラスタ</a></li><li><a href="../../../ja/docs/tiering/">透過的ティアリング（[tiering] / with_tier_budget）</a></li><li><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a></li><li><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a></li><li><a href="../../../ja/docs/async/">非同期クライアント</a></li></ul><p class="side-h">データ</p><ul><li><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX. / idx_）</a></li><li><a href="../../../ja/docs/tables/">テーブル（TABLE. / table_）</a></li><li><a href="../../../ja/docs/vector-search/">ベクトル検索（KIND ann）</a></li><li><a href="../../../ja/docs/text-search/">全文検索（KIND text）</a></li><li><a href="../../../ja/docs/views/">ビュー（VIEW. / view_）</a></li><li><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED. / changes_since）</a></li><li><a href="../../../ja/docs/pubsub/">Pub/sub</a></li><li><a href="../../../ja/docs/lua/">Luaスクリプティング</a></li></ul><p class="side-h">組み込み</p><ul><li><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a></li><li><a href="../../../ja/docs/embedded-listener/">組み込みの読み取り専用RESPリスナー</a></li><li><a href="../../../ja/docs/iot/">IoTデバイス上のkevy</a></li></ul><p class="side-h">リファレンス</p><ul><li><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a></li><li><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a></li><li><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></li><li><a href="../../../ja/docs/UPGRADING/">kevyのアップグレード</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../ja/docs/commands/">188 コマンド全て</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>永続化</h1></div>
+<p>kevyが再起動をまたいでデータを保持する仕組みを説明します。AOF、スナップショット、fsyncポリシー、リライト（コンパクション）、クラッシュリカバリ、そしてそれらすべてを観測するためのイントロスペクションを扱います。</p>
+<h2 id="このドキュメントが必要になるとき">このドキュメントが必要になるとき</h2>
+<p>次のような場面で参照してください。</p>
+<ul><li>本番デプロイの耐久性ポリシー（ゼロロスかスループットか）を選定するとき。</li><li>書き込み中心のワークロードについて、ディスク使用量とリプレイ時間を見積もるとき。</li><li>想定外のオンディスク成果物（quarantineファイル、古い<code>.rewrite</code>一時ファイル、<code>.premigration.*</code>バックアップ）をデバッグするとき。</li><li>ホストアプリケーションに<code>kevy_embedded::Store</code>を組み込んでいて、プロセスクラッシュで何が生き残り、何が失われ、ホストの中からそれをどう観測できるかを知りたいとき。</li><li>再起動をまたぐとTTLの挙動がおかしくなるキーを調べているとき。</li></ul>
+<p>「<code>kill -9</code>で生き残るか？」の手短な答えだけが欲しいなら、答えは「はい。デフォルトポリシーで失われるのは最大1秒分の書き込みだけ」です。</p>
+<h2 id="中心となる考え方">中心となる考え方</h2>
+<p>各シャードは永続化ディレクトリに2つのファイルを所有します。変更コマンドの追記専用ログ（<code>aof-&lt;id&gt;.aof</code>）と、オプションのバイナリスナップショット（<code>dump-&lt;id&gt;.rdb</code>）です。AOFはそれ単独で完全な永続記録であり、スナップショットはリプレイ時間を抑えるためだけに存在します。起動時、kevyはスナップショットがあればロードし、その後AOFをリプレイします。スナップショットが成功するとAOFはリセットされ、2つのファイルを合わせると履歴全体をちょうど一度ずつカバーする状態になります。</p>
+<p>ディレクトリ自体は、存在しなければ起動時に作成されます（v3.17）。作成できないパスは、最初に触れたサブシステムからの裸のENOENTではなく、名前の付いた1つの起動エラーとして報告されます。</p>
+<h2 id="動かしてみる例">動かしてみる例</h2>
+<h3 id="サーバーモード">サーバーモード</h3>
+<p>これを<code>kevy.toml</code>に置き、<code>kevy --config kevy.toml</code>で起動します。</p>
+<figure class="code"><pre><code class="lang-toml"># kevy.toml
+[server]
+data_dir = "/var/lib/kevy"
+port     = 6379
+threads  = 4
+
+[persistence]
+aof = true
+# AOF durability — see the knobs table below for the full set.
+appendfsync                 = "everysec"   # always | everysec | no
+auto_aof_rewrite_percentage = 100          # rewrite when the AOF doubles since the last rewrite
+auto_aof_rewrite_min_size   = "64mb"       # …and is at least this big</code></pre></figure>
+<p>運用は通常のRedisスタイルのコマンドをRESP経由で行えます。</p>
+<figure class="code"><pre><code class="lang-text">$ redis-cli -p 6379 BGSAVE
+Background saving started
+
+$ redis-cli -p 6379 BGREWRITEAOF
+Background append only file rewriting started
+
+$ redis-cli -p 6379 INFO persistence
+aof_enabled:1
+appendfsync:everysec
+aof_rewrite_in_progress:0
+aof_rewrites_total:3</code></pre></figure>
+<p><code>CONFIG SET appendfsync always</code>を使えば、再起動なしにポリシーをライブで変更できます。</p>
+<h3 id="組み込みモード">組み込みモード</h3>
+<p><code>Cargo.toml</code>にクレートを追加します。</p>
+<figure class="code"><pre><code class="lang-toml">[dependencies]
+kevy-embedded = "*"</code></pre></figure>
+<p>そして<code>main.rs</code>に：</p>
+<figure class="code"><pre><code class="lang-rust">use std::time::Duration;
+use kevy_embedded::{AppendFsync, Config, KevyMetric, Store};
+
+fn main() -&gt; kevy_embedded::KevyResult&lt;()&gt; {
+    let cfg = Config::default()
+        .with_persist("/var/lib/myapp/kevy")
+        .with_appendfsync(AppendFsync::EverySec)
+        .with_auto_aof_rewrite(100, 64 * 1024 * 1024)
+        .with_metric_sink(|m| match m {
+            KevyMetric::Replay { commands, bytes, elapsed_ms, dropped_bytes, corrupt } =&gt; {
+                eprintln!("kevy replay: {commands} cmds / {bytes} B in {elapsed_ms} ms");
+                if dropped_bytes &gt; 0 || corrupt {
+                    eprintln!("kevy replay dropped {dropped_bytes} B (corrupt: {corrupt}) — ALERT");
+                }
+            }
+            KevyMetric::Rewrite { keys, before_bytes, after_bytes, elapsed_ms } =&gt; {
+                eprintln!(
+                    "kevy rewrite: {keys} keys, {before_bytes} -&gt; {after_bytes} B in {elapsed_ms} ms"
+                );
+            }
+            _ =&gt; {}
+        });
+
+    let store = Store::open(cfg)?;
+
+    store.set(b"hello", b"world")?;
+    store.expire(b"hello", Duration::from_secs(300))?;
+
+    // ある時点のスナップショット。ファイルがディスクに書き出された後に戻る。
+    // シャードごとのロックはビューの freeze と最後の rename のあいだだけ保持される。
+    store.save_snapshot()?;
+
+    // オンデマンドの AOF コンパクション。ロック規律は save_snapshot と同じ。
+    let _stats = store.rewrite_aof()?;
+
+    // ライブイントロスペクション。
+    let info = store.info();
+    println!("{} keys, {} bytes AOF", info.keys, info.aof_bytes);
+
+    Ok(())
+}</code></pre></figure>
+<p>デフォルト設定で新規に作った組み込みストアはAOFだけを書きます。<code>save_snapshot</code>を呼ぶまでスナップショットファイルは現れません。これは想定どおりの動作で、AOF単独でキー空間を再構築できるためです。</p>
+<h2 id="設定ノブ">設定ノブ</h2>
+<h3 id="耐久性とaofの成長">耐久性とAOFの成長</h3>
+<div class="tbl"><table><thead><tr><th>ノブ</th><th>サーバー（TOML / <code>CONFIG SET</code>）</th><th>組み込み（<code>Config::…</code>）</th><th>デフォルト</th><th>備考</th></tr></thead><tbody><tr><td>AOF fsyncポリシー</td><td><code>appendfsync</code>（<code>always</code> / <code>everysec</code> / <code>no</code>）</td><td><code>with_appendfsync(AppendFsync::…)</code></td><td><code>EverySec</code></td><td>サーバーではライブ変更可能。</td></tr><tr><td>AOF有効化</td><td><code>aof</code>（<code>true</code> / <code>false</code>）</td><td><code>with_persist(...)</code>で暗黙的に</td><td>サーバーは<code>true</code>、組み込みは<code>with_persist</code>までオフ</td><td>無効化するとオンディスク永続化を丸ごとスキップ。</td></tr><tr><td>自動リライトのパーセンテージ</td><td><code>auto_aof_rewrite_percentage</code></td><td><code>with_auto_aof_rewrite(pct, min)</code>の第1引数</td><td><code>100</code></td><td><code>0</code>で自動リライトを無効化。</td></tr><tr><td>自動リライトの最小サイズ</td><td><code>auto_aof_rewrite_min_size</code></td><td><code>with_auto_aof_rewrite(pct, min)</code>の第2引数</td><td><code>67108864</code>（64 MiB）</td><td>両方の閾値を満たしたときだけ成長ルールが発火。</td></tr><tr><td>自動リライトの絶対上限</td><td><code>auto_aof_rewrite_bytes</code></td><td><code>with_auto_rewrite_bytes(n)</code></td><td><code>0</code>（無効）</td><td>独立トリガ：AOFが<code>n</code>バイトを超えたら成長率に関係なくリライト。ライブ調整可（<code>CONFIG SET auto-aof-rewrite-bytes</code>）。</td></tr><tr><td>自動リライトの経過時間</td><td><code>auto_aof_rewrite_interval_secs</code></td><td><code>with_auto_rewrite_interval(d)</code></td><td><code>0</code>（無効）</td><td>独立トリガ：前回リライトからこの時間が経過し、かつログが成長していたらリライト。ライブ調整可。</td></tr><tr><td>resyncリプレイ</td><td><code>replay_resync</code>（<code>[persistence]</code>）</td><td><code>with_replay_resync(true)</code></td><td><code>false</code>（strict）</td><td>起動時のみ。ファイル中央の破損領域で止まらず、その後ろの無事な尾部を復旧する——resyncの節を参照。</td></tr><tr><td>永続化ディレクトリ</td><td><code>data_dir</code> / 環境変数<code>KEVY_DIR</code></td><td><code>with_persist(path)</code></td><td>サーバーは<code>./data</code>、組み込みはなし</td><td>kevyインスタンスごとに1ディレクトリ。</td></tr><tr><td>リアクター/リーパー周期</td><td>reactor tick、約100ms</td><td>バックグラウンドリーパー、または<code>Store::tick</code>の呼び出し</td><td>約100ms</td><td><code>EverySec</code>のflush、自動リライトのチェック、TTLエビクションを駆動。</td></tr></tbody></table></div>
+<h3 id="トリガー一覧">トリガー一覧</h3>
+<div class="tbl"><table><thead><tr><th>動作</th><th>サーバー</th><th>組み込み</th><th>ブロッキングの形</th></tr></thead><tbody><tr><td>同期スナップショット</td><td><code>SAVE</code></td><td><code>Store::save_snapshot()</code></td><td>ファイルがディスクに書き出された後に戻る。ロックはfreezeとrenameのあいだだけ保持。</td></tr><tr><td>バックグラウンドスナップショット</td><td><code>BGSAVE</code></td><td>ワーカースレッドから<code>save_snapshot</code>を呼ぶ</td><td>即座に戻る。コミットはディスク書き出し完了から1 reactor tick以内に確定。</td></tr><tr><td>AOFリライト</td><td><code>BGREWRITEAOF</code></td><td><code>Store::rewrite_aof()</code></td><td>アトミックなrenameの後に戻る。シリアライズはキー空間がライブのまま走る。</td></tr><tr><td>fsyncのライブ変更</td><td><code>CONFIG SET appendfsync everysec</code></td><td><code>Config</code>を再構築</td><td>n/a</td></tr><tr><td>正常終了</td><td>`SHUTDOWN [SAVE\</td><td>NOSAVE]`（またはSIGTERM）</td><td>最後の<code>Store</code>クローンをdrop</td><td>全シャードをドレインする。実行中のpersistジョブが着地し、AOF末尾が強制fsyncされ、その後プロセスが終了する。<code>SAVE</code>はさらにシャードごとに最後のスナップショットを1つ取る。リプライは送られない——クライアントは接続が閉じるのを観測する（Redisの振る舞い）。</td></tr></tbody></table></div>
+<h3 id="fsyncポリシーの意味">fsyncポリシーの意味</h3>
+<div class="tbl"><table><thead><tr><th>ポリシー</th><th>耐久性</th><th>コスト</th></tr></thead><tbody><tr><td><code>Always</code></td><td>ゼロロス。各書き込みを応答前にfsync</td><td>スループット約50%</td></tr><tr><td><code>EverySec</code>（デフォルト）</td><td>クラッシュで最大約1秒分の書き込みを失う可能性</td><td>安い</td></tr><tr><td><code>No</code></td><td>OSのページキャッシュflushに委ねる</td><td>最安</td></tr></tbody></table></div>
+<h2 id="トレードオフと限界">トレードオフと限界</h2>
+<p><b>ポリシー別のスループット対データロス。</b> <code>Always</code>は各応答を<code>fsync</code>でブロックします。<code>kill -9</code>でコマンドロスゼロを保証する唯一のポリシーですが、SET中心のワークロードでは一般的なNVMe上でスループットが約半分になります。<code>EverySec</code>は毎秒バックグラウンドでflushし、クラッシュ時にはその窓の分を失う可能性があります。これがデフォルトなのは、Redisのトレードオフとちょうど一致し、失われる窓が通常は許容範囲だからです。<code>No</code>はカーネルに判断を委ねます。スループットは最大ですが、クラッシュ時にはページキャッシュ内のデータがすべて失われる可能性があり、それは数秒分にもなり得ます。</p>
+<p><b>AOFリプレイコスト対スナップショットロードコスト。</b> スナップショットがない場合、起動時間はAOFのバイト数に対して線形に伸びます。4GiBのAOFはローカルNVMeで数秒、40GiBなら1分以上かかります。スナップショットはこれに上限を与えます。ロードは1回のストリーミング読み出しと、スナップショット後の短いAOF末尾だけです。その代わり、一時的なビューfreeze（<code>O(keys)</code>。コレクション値はrefcount共有なのでキーあたりナノ秒）と、スナップショット中に最初に変更されたコレクションの1回分のコピーがコストになります。書き込み中心のワークロードでは、定期的な<code>BGSAVE</code>を回すよりも、自動リライトに任せてAOFを有界に保つほうを推奨します。リライトなら、管理するファイルを1つに保ったまま同じ起動時間の上限が得られます。</p>
+<p><b>バックグラウンドジョブの並行性。</b> 各シャードが同時に走らせるバックグラウンドのsaveまたはrewriteは最大1つです。ジョブ実行中に届いた重複リクエストはログ行を出してスキップされ、キューに積まれることはありません。</p>
+<p><b>TTLの永続化。</b> TTLは絶対Unixミリ秒のデッドラインとして書かれます（AOFでは<code>PEXPIREAT</code>、スナップショット形式では絶対値フィールド）。何回再起動しても元の期限の瞬間が保たれ、プロセスが停止していた時間も正しく差し引かれます。相対残り時間を記録していた古いAOFも読み込めます（エントリ時点で相対として扱われます）が、新しい書き込みは常に絶対値です。<code>EXPIREAT</code>と<code>PEXPIREAT</code>はクライアントコマンドとして公開されています。</p>
+<p><b>シャードレイアウトの変更はクラッシュに対して冪等。</b> <code>--threads</code> / <code>shards</code>を変更すると、<code>.reshard</code>の一時名で新しいスナップショットを書き、耐久性のある<code>reshard.journal</code>経由でコミットします。中断された移行は次回起動時にロールフォワードされます。元ファイルは<code>.premigration.&lt;unix_ts&gt;</code>バックアップとして残ります。ジャーナルはコミットポイントなので、絶対に手で削除しないでください。</p>
+<p><b>永続化されないもの。</b> pub/subのチャネル、サブスクリプション、未配信メッセージはメモリにしか存在しません。<code>BLPOP</code>やブロッキング<code>XREAD</code>のようなブロッキングコマンドの待機はコネクション状態であってデータではありません。これらはAOFにもスナップショットにも書かれず、リプレイもされません。</p>
+<h2 id="faq">FAQ</h2>
+<h3 id="aofファイルが大きくなっていますどうコンパクションしますか">AOFファイルが大きくなっています。どうコンパクションしますか？</h3>
+<p>サーバーでは<code>BGREWRITEAOF</code>を、組み込みモードでは<code>Store::rewrite_aof()</code>を実行します。リライトは、現在のキー空間を再構築できる最小のコマンド集合としてログを作り直し（キーごとに<code>SET</code> / <code>HSET</code>などを1つ、TTL付きキーには<code>PEXPIREAT</code>）、新しいファイルをアトミックに差し替えます。<code>hot</code>への1万回の上書きは、<code>SET hot &lt;latest&gt;</code>1つに集約されます。</p>
+<p>無人運用なら、自動リライトをデフォルト（前回リライトサイズから100%成長、かつ最低64MiB）のままにしておけば、リアクターが勝手にコンパクションを発火させます。<code>auto_aof_rewrite_percentage = 0</code>にすると無効化され、リライトは完全に手動になります。</p>
+<p>リライトはキー空間にとってノンブロッキングです。シリアライズと<code>fsync</code>は読み書きが流れたまま走り、リライト中に着地した書き込みはdiffバッファにteeされ、コンパクション後のイメージに追記されます。リライトが途中でクラッシュしても元のAOFは無傷で（差し替えはアトミックな<code>rename</code>です）、残った<code>aof-&lt;id&gt;.aof.rewrite</code>一時ファイルは削除しても安全です。</p>
+<h3 id="永続化を完全に無効化できますか">永続化を完全に無効化できますか？</h3>
+<p>はい。2つの方法があります。</p>
+<ul><li><b>サーバー：</b> <code>kevy.toml</code>で<code>appendonly = false</code>（または<code>--dir</code>を省略）。サーバーは純粋なインメモリキャッシュとして動き、<code>aof-*</code>も<code>dump-*</code>も作られません。</li><li><b>組み込み：</b> <code>with_persist(...)</code>を呼ばずに<code>Config</code>を構築します。<code>Store::open</code>はキー空間を完全にメモリ内で運用し、<code>save_snapshot</code>と<code>rewrite_aof</code>はAPI上ではno-opになります（あるいは永続化ディレクトリ未設定を示すエラーが返ります）。</li></ul>
+<p>永続化はしたいがスナップショット間でAOFをまったく成長させたくない、という組み合わせはサポートされていません。kevyの耐久性モデルはAOFファーストで、スナップショットはAOFリプレイに上限を与えるために存在し、AOFを置き換えるためのものではありません。</p>
+<h3 id="高い書き込み負荷中のスナップショットのコストは">高い書き込み負荷中のスナップショットのコストは？</h3>
+<p>ブロックする部分はごくわずかです。シャードごとのキー空間freezeは<code>O(keys)</code>であって<code>O(bytes)</code>ではありません。コレクション値は参照カウントされ、ライブストアと共有されているためです。100万キーのシャードでもfreezeは1桁ミリ秒で済みます。シリアライズ自体はキー空間がライブのまま走り、書き込みは止まりません。</p>
+<p>一時的に払うコストはメモリです。スナップショット書き出し中に変更されたコレクション（list、hash、set、sorted-set）は1度だけクローンされ、ライブストアはfreezeされたビューを乱さずに先へ進めます。普通の文字列キーへの<code>SET</code>中心のワークロードでは追加メモリはほぼ無視できます。少数の巨大コレクションへの<code>HSET</code> / <code>LPUSH</code>中心のワークロードでは、該当コレクションの常駐サイズが一時的に倍になる可能性があります。</p>
+<p>スナップショットが成功するとAOFもリセットされます。ログがそれまで持っていた内容はスナップショットに移り、ログはfreeze後に着地した書き込みだけで再開します。再起動時はsnapshotとlogをロードし、履歴が二重適用されることはありません。</p>
+<h3 id="次回起動時のリカバリはどう進みますか">次回起動時のリカバリはどう進みますか？</h3>
+<p>各シャードについて、次の順で進みます：</p>
+<ol><li><b>スナップショットをロード。</b> <code>dump-&lt;id&gt;.rdb</code>があればキー空間にストリーミングします。ロード中に期限切れになっているTTLは破棄されます。</li><li><b>AOFをリプレイ。</b> <code>aof-&lt;id&gt;.aof</code>を先頭から読み、各フレームを適用します。</li><li><b>末尾を処理。</b> クリーンなファイルはそのまま全適用します。破れた・破損したレコードに当たると、リプレイはその直前の最後の完全なレコードで停止します。openは切り捨てる領域を<code>aof-&lt;id&gt;.aof.corrupt-quarantine.&lt;unix_ts&gt;</code>へコピーし（fsync済み——ファイル中央の破損レコードの後ろは大半が正しいレコードで、このコピーだけが戻る道です）、最初の追記の前に<b>ファイルを最後の完全なレコードまで切り詰めます</b>。新しい書き込みがリプレイ可能な接頭辞の直後に続き、不正バイトの後ろに落ちて次のリプレイで黙って孤児になることを防ぐためです。隔離されたバイトが再適用されることは二度とありません。救出は手で。隔離コピー自体が書けない場合（ディスクフルなど）、openはファイルを無傷のまま失敗します——kevyがあなたのバイトの唯一のコピーを壊すことはありません。<code>replay_resync</code>有効時の挙動はresyncの節を参照。</li><li><b>壁時計時間付きの1行サマリーをログ出力</b>:</li></ol>
+<p>``<code>text kevy: AOF /data/kevy/aof-0.aof replayed 145313 commands from 418261733 bytes in 247 ms (clean) </code>``</p>
+<ol><li><b>中断されたシャードレイアウト移行があれば</b>、<code>reshard.journal</code>をリプレイしてロールフォワードします。</li></ol>
+<p>リプレイ時間の行を監視し、自動リライトでそれを有界に保ってください。リプレイ時間は、リライトされていないAOFのサイズに対して線形に伸びます。</p>
+<h3 id="組み込みホストプロセスの中から永続化を監視するには">組み込みホストプロセスの中から永続化を監視するには？</h3>
+<p>2つの面があります。</p>
+<p><b>ポーリング。</b> <code>store.info()</code>は、<code>keys</code>、<code>used_memory</code>、<code>aof_bytes</code>、<code>expire_pending</code>、<code>evictions</code>、<code>expired_keys</code>を持つ<code>KevyInfo</code>構造体を返します。同じ情報をより細かく扱うヘルパーもあります。</p>
+<figure class="code"><pre><code class="lang-rust">store.dbsize();                 // ライブキー数
+store.ttl(key);                 // Option&lt;Duration&gt;(None = キーなし / TTL なし)
+store.ttl_ms(key);              // Redis PTTL セマンティクス: -2 キーなし、-1 TTL なし、その他 ms
+store.expire_pending_count();   // TTL を持つライブキー数
+store.used_memory();            // 常駐バイトの推定
+store.expired_keys_total();     // 合計期限切れ数(lazy + リーパー)
+store.evictions_total();        // maxmemory による合計 eviction 数</code></pre></figure>
+<p>TTLがあるはずなのに<code>expire_pending_count() == 0</code>が返るなら、それはTTLサブシステムにキーが登録されなかったことを示す古典的な兆候です。</p>
+<p><b>プッシュ。</b> <code>Config::with_metric_sink(...)</code>を登録すると、AOFリプレイ（起動時）と各AOFリライト（コンパクション）のたびに<code>KevyMetric</code>イベントが届きます。シンクは発行スレッド（バックグラウンドリライトならリーパー）上で同期実行されるので、コールバックは速く保ってください。<code>KevyMetric</code>は<code>#[non_exhaustive]</code>です。将来互換のため、常に<code>_</code>アームをマッチさせておきましょう。</p>
+<h3 id="永続化ディレクトリの中の各ファイルは何ですか">永続化ディレクトリの中の各ファイルは何ですか？</h3>
+<div class="tbl"><table><thead><tr><th>パターン</th><th>意味</th></tr></thead><tbody><tr><td><code>aof-&lt;id&gt;.aof</code></td><td>シャード<code>&lt;id&gt;</code>のライブAOF。</td></tr><tr><td><code>dump-&lt;id&gt;.rdb</code></td><td>シャード<code>&lt;id&gt;</code>のバイナリスナップショット。</td></tr><tr><td><code>shards.meta</code></td><td>記録されたシャード数とルーティング方式。</td></tr><tr><td><code>dump-&lt;id&gt;.rdb.tmp</code></td><td>進行中のスナップショット書き込み。古ければ削除して安全。</td></tr><tr><td><code>aof-&lt;id&gt;.aof.rewrite</code></td><td>進行中のAOFリライト/リセット。古ければ削除して安全。</td></tr><tr><td><code>dump-&lt;id&gt;.rdb.reshard</code> + <code>reshard.journal</code></td><td>進行中のシャードレイアウト移行。次回起動でロールフォワード。ジャーナルは絶対に手で消さない。</td></tr><tr><td><code>*.premigration.&lt;unix_ts&gt;</code></td><td>移行前のソースバックアップ。ロールバック用に保持。</td></tr><tr><td><code>aof-&lt;id&gt;.aof.corrupt-quarantine.&lt;unix_ts&gt;</code></td><td>リカバリ中に退避されたリプレイ不能領域（破れた末尾、またはファイル中央の破損レコード以降のすべて）。救出するなら手で調査。kevyが再適用することはない。</td></tr><tr><td><code>elect.meta</code>（+ 一時的な<code>elect.meta.tmp</code>）</td><td>選挙の耐久性（v3.15）。エレクターの<code>(epoch, votedFor)</code>ペアで、どの投票応答もノードを出る*前に*永続化されるため、クラッシュ再起動しても二重投票はあり得ない。tmp + fsync + renameで書かれるため、保存途中のクラッシュが残すのは旧ペアか新ペアのどちらかで、破れたファイルは決して残らない。<code>[cluster]</code>クォーラム構成時のみ存在。</td></tr></tbody></table></div>
+<h2 id="耐久性契約v21">耐久性契約（v2.1）</h2>
+<p><code>appendfsync</code>×書き込みパスの組み合わせごとに、「呼び出しがOKを返した」が何を保証するかを示します。 「durable」=安定ストレージ上にある（<code>fdatasync</code>完了）。「windowed」=OSページキャッシュ内にあり、ウィンドウ内で*マシン*（プロセスだけでなく）が死んだ場合にのみ失われる。</p>
+<div class="tbl"><table><thead><tr><th>書き込みパス</th><th><code>always</code></th><th><code>everysec</code></th><th><code>no</code></th></tr></thead><tbody><tr><td>サーバーコマンド応答</td><td>応答がシャードを出る前にdurable（バッチごとにグループコミット）</td><td>windowed ≤ 1s</td><td>OSペース</td></tr><tr><td>組み込みファサード操作（<code>set</code>、<code>zadd</code>、…）</td><td>リターン時にdurable</td><td>windowed ≤ 1s</td><td>OSペース</td></tr><tr><td>組み込み<code>atomic</code> / <code>atomic_all_shards</code>ブロック</td><td>コミット時にdurable（触れたシャードごとに1 fsync）</td><td>windowed ≤ 1s</td><td>OSペース</td></tr><tr><td>組み込み<code>Pipeline::commit</code></td><td>リターン時にdurable、fsyncはシャードごとにバッチ</td><td>windowed ≤ 1s</td><td>OSペース</td></tr><tr><td>…上記いずれか + <b><code>Store::fsync_aof()</code></b></td><td>無操作</td><td><b>バリアの時点でdurable</b></td><td><b>バリアの時点でdurable</b></td></tr></tbody></table></div>
+<p><code>Store::fsync_aof()</code>は書き込み単位の耐久性エスケープハッチです（Postgresのトランザクション単位<code>synchronous_commit</code>の系統）。デプロイはスループットのために<code>everysec</code>で走らせ、確認された瞬間からマシンクラッシュを生き延びなければならない少数の書き込みの後ろにだけバリアを置く、という使い方をします。コストはダーティなシャードごとに1回の<code>fdatasync</code>です。</p>
+<p>プロセスクラッシュ（SIGKILL）では、<code>always</code>の下では確認済みの書き込みを決して失わず、それ以外では最大でfsyncウィンドウ分を失います。AOF末尾は次のオープンでリプレイされ、破れた最終レコードはオープン時に切り詰められます（切り捨て領域は先に隔離ファイルへコピー）。黙って適用されることはありません（完全な状態機械は下のクラッシュ一貫性契約を参照）。</p>
+<p><b>秩序ある停止</b>（<code>SHUTDOWN</code>またはSIGTERM）は、どのポリシーの下でも何も失いません。ドレインが終了前にAOF末尾を強制fsyncするので、クラッシュなら失い得る<code>everysec</code>のウィンドウは、クリーンなシャットダウンには当てはまりません。</p>
+<h2 id="クラッシュ一貫性契約v4">クラッシュ一貫性契約（v4）</h2>
+<p>オープンパスはシャードごとに固定の状態機械——<b>open → verify → replay → verdict → repair → append</b>——であり、各verdictは硬い損失上界を伴います。<code>crashgate</code>（<code>bench/crashgate.sh</code>）がこの表を実行します：SIGKILLマトリクス（追記中 / リライト中 / スナップショット中 / feed送出中 × fsyncポリシー × シャード数）に加え、破れた末尾 / ファイル中央 / payload損傷の注入。</p>
+<div class="tbl"><table><thead><tr><th>クラッシュが残したもの</th><th>verdict</th><th>リプレイが復旧するもの</th><th>硬い損失上界</th></tr></thead><tbody><tr><td>クリーンなファイル</td><td><code>clean</code></td><td>すべて</td><td>ゼロ</td></tr><tr><td>破れた最終レコード（追記中にkill）</td><td>末尾切り詰め</td><td>完全なレコードすべて</td><td>破れたレコード + 未fsyncウィンドウ（<code>always</code>：破れたレコードのみ）</td></tr><tr><td>ゼロ埋めの末尾（電源断 + 未fsyncページ）</td><td>末尾切り詰め</td><td>完全なレコードすべて</td><td>同上</td></tr><tr><td>ファイル中央の破損レコード</td><td>そのレコードで停止（strict、デフォルト）</td><td>レコード前の接頭辞；切り捨て領域は隔離保存</td><td>レコード以降の領域——<b>または</b><code>replay_resync</code>有効なら破損領域そのものだけ：後ろの無事な尾部は復旧される（resyncの節）</td></tr><tr><td>レコードpayload内のビット反転</td><td>CRC不一致 → 破損レコード（v2ファイル）</td><td>汚染値は一切適用されない——レコードは拒否される</td><td>上の行と同じ；v1時代のファイルはチェックサムを持たず、最初のリライトでv2へ昇格するまでビット反転は黙ってリプレイされる</td></tr></tbody></table></div>
+<p><b>ブラックホール禁止の不変量</b>（3.18インシデントの修正、crashgateが保持）：オープン時の切り詰めは<b>最初の追記の前</b>に行われるため、リプレイ停止点が再起動をまたいで後退することはありません——クラッシュ後の再起動で書いたデータは、必ず次の再起動を生き延びます。</p>
+<p><b>マルチシャードのずれ。</b> 各シャードは独立に<code>aof-&lt;id&gt;.aof</code>を持ち独立に修復するため、クラッシュ後、シャードごとにわずかに異なる時点へ復旧することがあります（それぞれ自分の損失上界の内側）。kevyは独立した書き込みに対してシャード横断のアトミック性を約束しません——<code>atomic</code>/<code>atomic_all_shards</code>ブロックはコミット時に触れたシャードごとにfsyncし、一群の書き込みを一緒に着地させたいときの道具です。</p>
+<p><b>feed（CDC）はメモリのみで、ディスクの先を走ります。</b> feedバックログはオープン時にAOFから再構築されません。再起動を生き延びるのは<code>(generation, offset)</code>カーソルだけです。フレームはapply時点——同じ書き込みを記録するAOFバイトのfsyncより<b>前</b>——に送出されるため、<code>everysec</code>ではクラッシュで巻き戻る最大約1秒分の書き込みをコンシューマが観測しえます（<code>always</code>：ゼロ；<code>no</code>：上界なし）。クラッシュはfeed generationをbumpするので、クラッシュ前のカーソルはすべて<code>-FEEDRESYNC</code> / <code>FeedError::Resync</code>を受け取り、コンシューマは復旧後のストアをスキャンして再構築します。あるフレームをdurableな事実として扱えるのは、それを覆うfsyncウィンドウが閉じた後だけです——未durableフレームに対して取った副作用をresyncは取り消せません。</p>
+<p><b>レプリカは未fsyncフレームにdurableな主張を持ちません。</b> プライマリのuncleanな再起動後、プライマリは未fsyncサフィックス分を巻き戻してfeed generationをbumpします。巻き戻された書き込みを適用済みのレプリカは先行しており、再接続時にその分岐履歴はフルスナップショットresyncで破棄されます。再接続ハンドシェイクはレプリカのgenerationを運び（v4）、generation不一致でのoffset継続をプライマリは拒否します——どれだけ後に再接続しても、新しい履歴の同番offsetを黙って食わされることはありません（<a href="../replication/">replication.md</a>参照）。</p>
+<h2 id="aofレコードフォーマットv2kevyaof2">AOFレコードフォーマット（v2、<code>KEVYAOF2</code>）</h2>
+<p>4.0以降、新しいAOFファイルは<code>KEVYAOF2\n</code> magicで始まり、各コマンドはチェックサム付きレコードとして書かれます：</p>
+<figure class="code"><pre><code class="lang-text">[payload_len: u32 LE][crc32c: u32 LE][payload: RESP multibulkコマンド]</code></pre></figure>
+<p>このエンベロープが買うもの——どれもv1フォーマットには扱えなかったインシデントのクラスです：</p>
+<ul><li><b>完全性。</b> <code>crc32c</code>（Castagnoli、aarch64とSSE4.2 x86-64ではハードウェア命令）がpayloadを覆います。1ビットの反転——媒体の劣化、不良ケーブル、切り詰め後に上書きされたページ——はチェックに失敗し、汚染値をリプレイする代わりにレコードが拒否されます。v1には完全性チェックが一切なく、ビット反転は黙ってリプレイされました。</li><li><b>決定的なレコード境界。</b> 長さ接頭辞がRESPを解析せずにログをフレーミングするため、破れた末尾は算術で（ヘッダの約束よりバイトが足りない）検出されます。パーサが偶然詰まるのを当てにしません。</li><li><b>決定的なresync。</b> 破損領域の後、次のレコード境界を見つけ直して*検証*できます（長さ + CRC + ちょうど1個の整形式コマンド、の三つが一致すること）——下のresyncリプレイの土台です。</li></ul>
+<p><b>互換性契約：</b></p>
+<ul><li>4.0バイナリはv1（<code>KEVYAOF1</code>）ファイルを永久に読めます。3.xのデータディレクトリは移行作業ゼロで開きます。</li><li>ひとつのファイル内でフォーマットが混ざることはありません：既存v1ファイルへの追記はv1のままです。</li><li>新しいファイル、切り詰め、すべてのリライト出力はv2です。したがって最初のリライト（自動または<code>BGREWRITEAOF</code>）がv1ファイルをv2へ昇格させます——それ以降、3.xバイナリはそのファイルを読めません。ダウングレードの窓と運用手順は<a href="../UPGRADING/">UPGRADING.md</a>へ。</li></ul>
+<p>レコードあたりのオーバーヘッドは8バイト。mailrs形状のワークロード（小さめのコマンドの混合）でディスクコストは実測で低い一桁パーセント、CRCは両サーバアーキテクチャでハードウェア命令に乗ります。</p>
+<h3 id="resyncリプレイ無事な尾部の復旧">resyncリプレイ——無事な尾部の復旧</h3>
+<p>デフォルト（strict）のリプレイは最初の破損レコードで停止します：接頭辞は適用され、それ以降——大半は整形式のレコード——は隔離されライブファイルから切り捨てられます。これは誠実なデフォルトです（破損領域があるということは*何かが*起きたということで、推測を拒むのが最も安全）が、小さな損傷ひとつの巨大なログに対しては、無事だと証明できるデータを明け渡すことになります。</p>
+<p><code>replay_resync</code>はそれを取り戻す選択です：</p>
+<figure class="code"><pre><code class="lang-toml">[persistence]
+replay_resync = true</code></pre></figure>
+<p>（組み込みは<code>Config::with_replay_resync(true)</code>、手組みのruntimeは<code>Runtime::with_replay_resync(true)</code>。設定は起動時のみ——リプレイは最初のライブ設定tickより先に走ります。）</p>
+<p>resyncの下では、リプレイは破損領域を跳び越えます：長さ接頭辞・CRC・ちょうど1個の整形式コマンドの解析、の三つが同時に一致する位置まで前方スキャンし（偽の受理には三つ全部を欺く必要があります——候補オフセットあたり約2⁻³²）、そこから適用を再開します。スキップした範囲はすべて報告されます——persist層の<code>ReplayReport::resynced_ranges</code>、<code>Store::open_report()</code>の<code>OpenReport::resynced_bytes</code>——そして<code>corrupt</code>フラグは立ったままです：resyncはデータを復旧しますが、ファイルが健全だと宣言はしません。</p>
+<p>修復のセマンティクスはstrictと異なります：ディスク上のファイルは<b>最後の</b>復旧可能レコードより後だけを切り詰め（末尾は隔離保存）、内部の破損領域はその場に残ります——毎回の起動で跳び越えられ——次のリライトがファイルを圧縮するまで。「無事な尾部の復旧」の保証は実行可能です：<code>crashgate</code>のファイル中央スプライスのセル（mailrsの損傷形状、231 MB級ログの中央から8バイトを切除）は、損傷以降の全レコードの復旧を報告しなければなりません。</p>
+<p>オフのままにすべきとき：ホストが*あらゆる*破損をレプリカへのフェイルオーバーやバックアップからの復元の理由として扱うなら、strictが最も大きく最も早い停止をくれます。オンにすべきとき：AOFが唯一のコピーである単一ノード運用——mailrsの姿勢——で、「8バイトのスプライスに3日分の書き込みを飲まれる」ほうが悪い結末であるとき。</p>
+<h2 id="アトミック性憲章組み込みserving-storev21">アトミック性憲章（組み込みserving-store、v2.1）</h2>
+<ul><li><b><code>Store::atomic(body)</code></b> — 単一シャードのトランザクションです。クロージャの間そのシャードの書き込みロックを取り、内部の読み出しにはクロージャ自身の書き込みが見え、AOF追記は遅延されて<b>コミット時に1 fsync</b>でコミットされます（<code>always</code>下）。触れるすべてのキーは同じシャードにハッシュされなければなりません。したがって書き込みパターンが任意のキーにまたがる場合、serving-storeの推奨構成は<b>1シャード</b>です。完全なアトミック性を保ちながら、クロスシャード調整のコストを払わずに済みます。1シャード構成の上限はシングルコアの書き込みスループットです。実測値は<code>bench/REPORT.md</code>にあります。</li><li><b><code>Store::atomic_all_shards(body)</code></b> — マルチシャードのトランザクションです。<b>すべての</b>シャードの書き込みロックをシャードインデックス順に取得し（決定的な順序=デッドロックなし）、リターン時にシャードごとのAOFバッチをコミットします。コストとして、クロージャの間、ほかのすべての読み手と書き手をブロックします。クロスシャード不変条件のために使うものであり、デフォルトの書き込みパスにしないでください。</li><li><b><code>Store::pipeline()</code></b> — アトミック<b>ではありません</b>。各操作が自分のロックを取り、ほかの書き手が交錯します。fsyncをバッチする（N操作→シャード数以下のfsync）だけで、それ以上のことはしません。</li><li>どちらのアトミック形式も、条件付き操作（<code>ZADD GT</code>、<code>SPOP</code>）の<b>効果</b>を無条件の動詞としてログするため、リプレイとレプリカ適用は構造上決定的です。</li></ul>
+<h2 id="リカバリポイントv23">リカバリポイント（v2.3）</h2>
+<p>変更フィードを有効にすると（<code>[feed] enabled = true</code>、<a href="../cdc/">cdc.md</a>を参照）、すべてのスナップショットが採取時点のフィードカーソルを記録します。カーソルはスナップショットデータ自体と同じ追記禁止ウィンドウ内で凍結されます。これがリカバリポイント契約を与えます：</p>
+<blockquote><p><b>スナップショットS + Sに記録されたカーソル以降のフィードフレーム = それ以降の任意のカーソルにおける正確な状態。</b></p></blockquote>
+<p><code>kevy_persist::read_snapshot_cursor(path)</code>でカーソルを読み戻せます（v2.3以前のスナップショットは<code>None</code>。フォーマットv4以前はカーソルを持ちませんが、引き続き完全にロード可能です）。この契約の実行可能な形が<code>bench/restore-drill.sh</code>で、<code>diskgate</code>の1行として走ります。書き込み→SAVE→さらに書き込み→kill→dumpだけからリストア→キャプチャしたフィードフレームをリプレイ→キーごとのバイト一致検証、という流れです。</p>
+<p>スコープに関する注意：フィードウィンドウはインメモリのバックログです。ウィンドウより古いフレームは消えています。つまりウィンドウの届く範囲より古いスナップショットは、ただのスナップショットリストア（S時点の状態）であって、PITRのベースにはなりません。正確な時点へのリカバリに依存するなら、ウィンドウが一巡する頻度以上でスナップショットを取ってください。</p>
+<h2 id="レプリケーションワイヤ上のスナップショットv315">レプリケーションワイヤ上のスナップショット（v3.15）</h2>
+<p>バックログウィンドウから外れたレプリカへプライマリがインラインで送るのも、この同じスナップショットフォーマットです（<a href="../replication/">replication.md</a>を参照）。知っておくべきセマンティクスが1つあります。送られたスナップショットはレプリカのローカル状態を<b>置き換え</b>ます。マージではなく、レプリカはロード前に自分のキー空間をフラッシュします。これは意図的な設計です。再合流した旧プライマリが分岐サフィックス（一度もレプリケートされなかった書き込み）を抱えているとき、再同期はその分岐を本当に破棄しなければならず、upsertだけのロードの下に残渣として残してはいけないからです。</p>
+<p>ローカルAOFを持つレプリカにとって、この「マージではなく置換」セマンティクスにはひとつの帰結があります：フラッシュ + スナップショットのロードはコミットパスを迂回するため、ロード完了後、レプリカはresync後のキー空間からローカルAOFを同期的にリライトします（4.0）。さもなければローカルログはresync前の履歴を記述したままで、プライマリへ到達できない状態での再起動は、誤った土台から組み上がった状態を提供してしまいます。</p>
+<h2 id="運用ランブック">運用ランブック</h2>
+<p>インシデントの形で並べたチェックリスト。各行の裏にはゲート（<code>crashgate</code>、<code>repligate</code>、<code>diskgate</code>）か本文で名指ししたテストがあります。</p>
+<p><b>kevyの停め方。</b> 秩序ある停止を優先——サーバは<code>SHUTDOWN</code> / SIGTERM、組み込みは最後の<code>Store</code>クローンのdropか<code>Store::shutdown()</code>。ドレインがすべてのAOF末尾を強制fsyncするので、秩序ある停止はどのfsyncポリシーでも何も失いません。feedもクリーン停止マーカーを書き、コンシューマとレプリカはgeneration bumpなしで再開します。<code>kill -9</code>は*生き延びられます*（それがcrashgateのマトリクスそのもの）が、fsyncウィンドウを支払い、feed/レプリカの連続性を断ちます（generation bump → コンシューマ再構築、レプリカはスナップショットresync）。</p>
+<p><b>（再）起動のたびにverdictを読む。</b> 等価な三つの面。少なくともひとつをヘルスチェックに配線してください：</p>
+<ul><li>シャードごとの起動ログ行——<code>kevy: AOF … replayed N commands from M bytes in T ms (clean)</code>。<code>(clean)</code>以外は必ず、切り捨てバイト数と隔離ファイルパスを名指すWARNを伴います。</li><li>サーバの<code>INFO persistence</code>：<code>aof_last_open_dropped_bytes</code>と<code>aof_last_open_corrupt</code>——非ゼロは、この起動がファイルにあった分より少なく復旧したことを意味します。アラートを。3日間の静かな損失インシデントは、この信号がstderrにしか住んでいなかったことそのものでした。</li><li>組み込みの<code>Store::open_report()</code>（C ABIは<code>kevy_open_report</code>）：<code>dropped_bytes</code>、<code>corrupt</code>、<code>quarantine_paths</code>、<code>resynced_bytes</code>がデータとして得られます——悪い起動を、誰も読まないログ行ではなく、拒否されたデプロイに変えてください。</li></ul>
+<p><b>起動が切り捨てを報告したら。</b> 切り捨て領域は<code>aof-&lt;id&gt;.aof.corrupt-quarantine.&lt;unix_ts&gt;</code>にバイト単位でそのまま残っています。この順で判断：（1）レプリカかバックアップにその書き込みがあるなら、そちらから復元。（2）なければ、<code>replay_resync = true</code>で一度起動することを検討——ファイル中央の破損なら無事な尾部を復旧し、スキップ範囲を報告します。（3）隔離ファイルを手でサルベージ（中身は大半が整形式のレコード / RESP）。インシデントが閉じるまで隔離ファイルは保持を。kevyが消すことはありません。</p>
+<p><b>リライトの周期。</b> 自動リライトが起動時間とインシデント半径の上界です：リプレイ時間、隔離の爆発半径、resyncの跳躍コストはどれも未リライトのログサイズに比例します。成長ペア（<code>auto_aof_rewrite_percentage</code> / <code>min_size</code>）がデフォルト。ディスクやリプレイ予算が硬い制約なら絶対上限（<code>auto_aof_rewrite_bytes</code>）を、書き込みがまばらでログは倍にならないのに数週間分の履歴を抱える運用には経過時間トリガ（<code>auto_aof_rewrite_interval_secs</code>）を足してください。三つは独立で、先に発火したものが勝ちます。</p>
+<p><b>ディスクフルと隔離失敗は大きな音で失敗します。</b> オープン時に隔離コピーが書けない場合（ディスクフルなど）、あなたのバイトの唯一のコピーを切り詰める代わりに、AOFを無傷のままオープンが失敗します。空きを作ってから再オープンを。</p></main>
+  <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#このドキュメントが必要になるとき">このドキュメントが必要になるとき</a></li><li class="l2"><a href="#中心となる考え方">中心となる考え方</a></li><li class="l2"><a href="#動かしてみる例">動かしてみる例</a></li><li class="l3"><a href="#サーバーモード">サーバーモード</a></li><li class="l3"><a href="#組み込みモード">組み込みモード</a></li><li class="l2"><a href="#設定ノブ">設定ノブ</a></li><li class="l3"><a href="#耐久性とaofの成長">耐久性とAOFの成長</a></li><li class="l3"><a href="#トリガー一覧">トリガー一覧</a></li><li class="l3"><a href="#fsyncポリシーの意味">fsyncポリシーの意味</a></li><li class="l2"><a href="#トレードオフと限界">トレードオフと限界</a></li><li class="l2"><a href="#faq">FAQ</a></li><li class="l3"><a href="#aofファイルが大きくなっていますどうコンパクションしますか">AOFファイルが大きくなっています。どうコンパクションしますか？</a></li><li class="l3"><a href="#永続化を完全に無効化できますか">永続化を完全に無効化できますか？</a></li><li class="l3"><a href="#高い書き込み負荷中のスナップショットのコストは">高い書き込み負荷中のスナップショットのコストは？</a></li><li class="l3"><a href="#次回起動時のリカバリはどう進みますか">次回起動時のリカバリはどう進みますか？</a></li><li class="l3"><a href="#組み込みホストプロセスの中から永続化を監視するには">組み込みホストプロセスの中から永続化を監視するには？</a></li><li class="l3"><a href="#永続化ディレクトリの中の各ファイルは何ですか">永続化ディレクトリの中の各ファイルは何ですか？</a></li><li class="l2"><a href="#耐久性契約v21">耐久性契約（v2.1）</a></li><li class="l2"><a href="#クラッシュ一貫性契約v4">クラッシュ一貫性契約（v4）</a></li><li class="l2"><a href="#aofレコードフォーマットv2kevyaof2">AOFレコードフォーマット（v2、KEVYAOF2）</a></li><li class="l3"><a href="#resyncリプレイ無事な尾部の復旧">resyncリプレイ——無事な尾部の復旧</a></li><li class="l2"><a href="#アトミック性憲章組み込みserving-storev21">アトミック性憲章（組み込みserving-store、v2.1）</a></li><li class="l2"><a href="#リカバリポイントv23">リカバリポイント（v2.3）</a></li><li class="l2"><a href="#レプリケーションワイヤ上のスナップショットv315">レプリケーションワイヤ上のスナップショット（v3.15）</a></li><li class="l2"><a href="#運用ランブック">運用ランブック</a></li></ul></aside>
+</div>
+
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

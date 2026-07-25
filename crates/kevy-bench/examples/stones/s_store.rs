@@ -15,7 +15,7 @@ fn pairs_1k() -> Vec<(f64, Vec<u8>)> {
         .collect()
 }
 
-fn bench_1k_key(pairs: &[(f64, Vec<u8>)]) {
+fn bench_1k_key(pairs: &[(f64, &[u8])]) {
     let s = bench(20, 1, || {
         let mut st = Store::new();
         for i in 0..pairs.len() {
@@ -44,7 +44,7 @@ fn bench_switch(nkeys: usize, members_per_key: usize, label: &str) {
         let mut st = Store::new();
         for k in &keys {
             for (j, m) in members.iter().take(members_per_key).enumerate() {
-                black_box(st.zadd(k, &[(j as f64, m.to_vec())]).unwrap());
+                black_box(st.zadd(k, &[(j as f64, *m)]).unwrap());
             }
         }
         black_box(&st);
@@ -54,7 +54,9 @@ fn bench_switch(nkeys: usize, members_per_key: usize, label: &str) {
 
 pub fn run() {
     println!("== kevy-store (zset) ==");
-    bench_1k_key(&pairs_1k());
+    let owned = pairs_1k();
+    let pairs: Vec<(f64, &[u8])> = owned.iter().map(|(s, m)| (*s, m.as_slice())).collect();
+    bench_1k_key(&pairs);
     bench_switch(500, 2, "zadd 2 short members/key (stays inline)");
     bench_switch(334, 3, "zadd 3 members/key (inline→tree promote)");
     println!();

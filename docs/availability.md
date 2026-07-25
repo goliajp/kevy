@@ -1,6 +1,6 @@
 # Availability
 
-How a kevy 3.x deployment stays writable and readable through node failures: the topologies, the consistency ladder from "fastest, asynchronous" up to "quorum-fenced", planned and crash failover, and the exact error contract clients see at every step.
+How a kevy deployment stays writable and readable through node failures: the topologies, the consistency ladder from "fastest, asynchronous" up to "quorum-fenced", planned and crash failover, and the exact error contract clients see at every step.
 
 This doc builds on [`docs/replication.md`](https://github.com/goliajp/kevy/blob/develop/docs/replication.md) (the streaming mechanics) — read that first if you have never brought up a primary/replica pair. If you only run one kevy node, the only section that applies to you is the ladder's first rung.
 
@@ -12,7 +12,7 @@ No replication config (`role = "standalone"`, the default). Every write is ackno
 
 ### Primary + replicas
 
-```toml
+```toml,fragment
 # primary                          # each replica
 [replication]                      [replication]
 role = "primary"                   role = "replica"
@@ -52,7 +52,7 @@ Replication is asynchronous by default. Each rung below buys a stronger guarante
 | 1 | `REPL.TOKEN` + `REPL.WAIT` | read-your-writes on a chosen replica | one blocked call on the replica |
 | 2 | `WAIT n timeout` | write is on the primary **and** acked by ≥ n replicas | one blocked call on the primary |
 | 3 | `replica_max_staleness_ms` | a replica never serves reads older than the bound (`-STALE`) | reads fail over to the primary during lag spikes |
-| 4 | `min_replicas_to_write` | primary refuses writes without n live replicas (`-NOREPLICAS`) | write availability coupled to replica health |
+| 4 | `min_replicas_to_write` | primary refuses writes without n fresh replicas (`-NOREPLICAS`) | write availability coupled to replica health |
 | 5 | quorum lease (automatic with elect) | a partitioned primary fences its own writes (`-NOREPLICAS`) | writes pause for the lease window during partitions |
 
 ### Read-your-writes: `REPL.TOKEN` / `REPL.WAIT`
@@ -94,7 +94,7 @@ A replica whose last primary heartbeat is older than the bound refuses reads wit
 min_replicas_to_write = 1           # 0 = off (default)
 ```
 
-A heuristic modeled on Redis: the primary refuses writes with `-NOREPLICAS Not enough good replicas to write.` when fewer than N replicas are healthy (a live replication connection that has ACKed). It closes the "primary writing into the void" window but is **not** a split-brain guarantee — both sides of a partition can each see their own replicas.
+A heuristic modeled on Redis: the primary refuses writes with `-NOREPLICAS Not enough good replicas to write.` when fewer than N replicas are healthy. Healthy means a live replication connection that has ACKed **and** whose latest ACK is younger than `min_replicas_max_lag_ms` (default 10 000 ms) — a stalled replica that stops ACKing ages out of the count even while its TCP connection stays up. This closes the "primary writing into the void" window but is **not** a split-brain guarantee — both sides of a partition can each see their own replicas.
 
 The real fence is the **quorum lease**, automatic in an elect quorum: a primary whose election heartbeats cannot reach a strict majority of peers within the lease window (= `down_after`, 5 s) fences its own writes with `-NOREPLICAS primary lost quorum; writes fenced`, and unfences when the partition heals. Combined with `WAIT` or tokens this squeezes "the minority side silently absorbed writes" down to at most one lease window, and every write inside that window fails *loudly* rather than silently diverging.
 
@@ -145,6 +145,7 @@ The full catalog lives in [`docs/error-replies.md`](https://github.com/goliajp/k
 | `-NOREPLICAS Not enough good replicas to write.` | a primary with `min_replicas_to_write` | fewer than N healthy replicas | back off and retry; page whoever runs the replicas |
 | `-NOREPLICAS primary lost quorum; writes fenced` | a quorum primary on a partition's minority side | quorum lease lost | back off and retry — either the partition heals or the majority elects a new primary your routing client will find |
 | `-STALE replica is stale; read the primary or raise replica_max_staleness_ms` | a replica with a staleness bound | primary heartbeat older than the bound | read the primary until the replica catches up |
+| `-LOADING kevy is loading the dataset in memory` | a replica mid-full-resync | a snapshot ship is replacing the replica's keyspace wholesale | wait and retry — the window is bounded by the ship; `PING` / `INFO` / `HELLO` still answer, so health checks keep passing |
 
 Two rules of thumb: every one of these is **retryable by design** (nothing was applied), and every one names the topology truth a routing client needs to self-heal — none requires a human in the loop.
 
@@ -174,7 +175,7 @@ Both automatic retarget (election) and `FAILOVER` assume the `client port + 1000
 | `replica_read_only` | `true` | reject client writes on a replica (`-READONLY`); `CONFIG SET` is the escape hatch |
 | `replica_max_staleness_ms` | `0` (off) | ladder rung 3: `-STALE` reads past the bound |
 | `min_replicas_to_write` | `0` (off) | ladder rung 4: `-NOREPLICAS` under N healthy replicas |
-| `min_replicas_max_lag_ms` | `10000` | reserved freshness window for rung 4; the current health check counts replicas with a live connection that have ACKed |
+| `min_replicas_max_lag_ms` | `10000` | rung 4's freshness window: a replica counts as healthy only if its latest ACK is younger than this bound — a stalled replica no longer satisfies `min_replicas_to_write` |
 | `single_source` | `false` | one-stream upstream (embedded writer) instead of the per-shard fleet |
 
 `[cluster]` election keys (see [`crates/kevy-config/src/cluster.rs`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-config/src/cluster.rs)): `node_id` (≤ 32 B ASCII, unique), `elect_port_base`, and `peers` (`id@host:elect_port[:client_port],...`). The elector stays dormant unless both `node_id` and `peers` are set.
@@ -196,17 +197,17 @@ Both automatic retarget (election) and `FAILOVER` assume the `client port + 1000
 
 | field | truth source |
 |---|---|
-| `role:master`, `master_repl_offset` | the answering shard's stream tail |
-| `connected_slaves` | live replica connections |
-| `slaveN:ip=…,port=…,state=…,offset=…,sent=…,lag=…` | per replica: `state` is `online` once it has ACKed (`syncing` before), `offset` is its **acked** position, `lag` in frames |
+| `role:master`, `master_repl_offset` | stream tails **summed across all shards** (the same convention the election's offset-best ordering uses) |
+| `connected_slaves` | distinct replica processes with live connections (a replica's per-shard streams fold into one entry) |
+| `slaveN:ip=…,port=…,state=…,offset=…,sent=…,lag=…` | per replica process, identified by its peer address: `state` is `online` once **every** shard stream has ACKed (`syncing` while any hasn't), `offset` is its acked position summed across shards, `lag` in frames |
 
-One caveat: INFO offsets are per-shard samples from whichever shard answers the connection — the cross-process comparables are the replica's own `slave_lag_frames` gauge and the data itself, not "primary INFO offset == replica INFO offset".
+The cross-process comparables are the replica's own `slave_lag_frames` gauge and the data itself — offset arithmetic between two different processes' INFO outputs is only meaningful within one generation.
 
 `ROLE` gives the same truths in Redis's array shape (`master` + offset + per-replica `[ip, port, acked-offset]`, or `slave` + upstream); with an elect quorum configured, the live election role wins over both `REPLICAOF` state and config. Watching lag in practice: poll `slave_lag_frames` on replicas (alert on non-zero sustained past your staleness budget), and `WAIT 1 <small-timeout>` on the primary as a cheap end-to-end "is at least one replica keeping up" probe.
 
 ### The gate
 
-Everything this doc promises is executable: [`bench/availgate.sh`](https://github.com/goliajp/kevy/blob/develop/bench/availgate.sh) runs 12 clamps against real processes — phase 1 (READONLY-while-applying, offset/lag truth, link-down/up detection, per-replica ack truth, min-replicas), phase 2 (3-node crash failover with MTTR bound, restart-role clamp + fork-discard rejoin), phase 3 (WAIT truth, 20/20 read-your-writes rounds + future-token MISDIRECT, `-STALE` on a SIGSTOP'd primary, quorum-lease fence and reopen). If a claim here and the gate ever disagree, the gate wins — file the doc bug.
+Everything this doc promises is executable: [`bench/availgate.sh`](https://github.com/goliajp/kevy/blob/develop/bench/availgate.sh) runs 13 clamps against real processes — phase 1 (READONLY-while-applying, offset/lag truth, link-down/up detection, per-replica ack truth, min-replicas), phase 2 (3-node crash failover with MTTR bound, restart-role clamp + fork-discard rejoin), phase 3 (WAIT truth, 20/20 read-your-writes rounds + future-token MISDIRECT, `-STALE` on a SIGSTOP'd primary, quorum-lease fence and reopen), phase 4 (the `-LOADING` contract across a full-resync ship window, `PING` exempt). If a claim here and the gate ever disagree, the gate wins — file the doc bug.
 
 ## See also
 

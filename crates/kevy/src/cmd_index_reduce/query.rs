@@ -7,23 +7,19 @@ use kevy_resp::{encode_array_len, encode_bulk, encode_error, encode_integer};
 
 use super::chunk::{emit_row, encode_cursor, read_hydration, read_kbytes, read_u32, value_repr};
 use crate::cmd_index_query::{ComposeQuery, Hydrated, Query, decode_value, hex};
-use crate::index_runtime;
+use crate::state::CatalogState;
 
-/// v3.10: IDX.EXPLAIN — pair-array plan summary; per-shard chunks
+/// IDX.EXPLAIN — pair-array plan summary; per-shard chunks
 /// carry [ST_OK][building][entries u64][shape byte].
-pub(super) fn reduce_explain(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn reduce_explain(
+    catalogs: &CatalogState,
+    argv: &[Vec<u8>],
+    chunks: &[Vec<u8>],
+) -> Vec<u8> {
     let mut out = Vec::new();
-    let mut est_rows: u64 = 0;
-    let mut building = false;
-    let mut shape_b = b'?';
-    for c in chunks {
-        if c.len() >= 11 {
-            building |= c[1] != 0;
-            est_rows += u64::from_le_bytes(c[2..10].try_into().expect("8 bytes"));
-            shape_b = c[10];
-        }
-    }
-    let kind = index_runtime::catalog()
+    let (est_rows, building, shape_b) = fold_explain_chunks(chunks);
+    let kind = catalogs
+        .index()
         .and_then(|cat| {
             cat.iter()
                 .map(|(s, _)| s)
@@ -37,6 +33,7 @@ pub(super) fn reduce_explain(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
         b'G' => "groups",
         b'R' => "range",
         b'E' => "eq",
+        b'W' => "where",
         _ => "query",
     };
     let state = if building { "building" } else { "ready" };
@@ -58,6 +55,21 @@ pub(super) fn reduce_explain(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
     out
 }
 
+/// Sum the per-shard EXPLAIN chunks: `(est_rows, building, shape byte)`.
+fn fold_explain_chunks(chunks: &[Vec<u8>]) -> (u64, bool, u8) {
+    let mut est_rows: u64 = 0;
+    let mut building = false;
+    let mut shape_b = b'?';
+    for c in chunks {
+        if c.len() >= 11 {
+            building |= c[1] != 0;
+            est_rows += u64::from_le_bytes(c[2..10].try_into().expect("8 bytes"));
+            shape_b = c[10];
+        }
+    }
+    (est_rows, building, shape_b)
+}
+
 pub(super) fn reduce_count(chunks: &[Vec<u8>]) -> Vec<u8> {
     let mut out = Vec::new();
     let total: u64 = chunks
@@ -69,7 +81,7 @@ pub(super) fn reduce_count(chunks: &[Vec<u8>]) -> Vec<u8> {
     out
 }
 
-/// v2.8 REBUILD: all shards OK → +OK.
+/// REBUILD: all shards OK → +OK.
 pub(super) fn reduce_rebuild(chunks: &[Vec<u8>]) -> Vec<u8> {
     let mut out = Vec::new();
     for c in chunks {
@@ -123,12 +135,17 @@ pub(super) fn reduce_compose(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
 }
 
 /// IDX.QUERY: k-way merge by (value, key), global LIMIT + cursor.
+/// Selection clauses (SORT / DISTINCT / FACET / OFFSET) take the
+/// claused reduce; FILTER alone rides this path unchanged — the shards
+/// already thinned their pages, and the global cursor still works.
 pub(super) fn reduce_query(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
-    let mut out = Vec::new();
     let Some(q) = Query::parse(argv) else {
-        encode_error(&mut out, "ERR bad IDX arguments");
-        return out;
+        return super::claused::bad_args();
     };
+    if q.selects() {
+        return super::claused::reduce_query_claused(&q, chunks);
+    }
+    let mut out = Vec::new();
     let mut all: Vec<(IndexValue, Vec<u8>, Hydrated)> = Vec::new();
     for c in chunks {
         let mut pos = 1usize;
@@ -165,9 +182,9 @@ pub(super) fn reduce_query(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
     out
 }
 
-pub(super) fn reduce_list(chunks: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn reduce_list(catalogs: &CatalogState, chunks: &[Vec<u8>]) -> Vec<u8> {
     let mut out = Vec::new();
-    let Some(cat) = index_runtime::catalog() else {
+    let Some(cat) = catalogs.index() else {
         encode_array_len(&mut out, 0);
         return out;
     };
@@ -212,31 +229,35 @@ pub(super) fn reduce_list(chunks: &[Vec<u8>]) -> Vec<u8> {
     out
 }
 
+/// Six counters per shard, summed. `drift` and `checked` are the two the verb
+/// exists for: `checked` is how many held entries were re-read against the
+/// keyspace, `drift` is how many disagreed. A write-hook-maintained index
+/// should always report `drift 0` — VERIFY is what makes that falsifiable.
+/// It used to report four counters and no drift at all, while the registry
+/// and the docs advertised it.
 pub(super) fn reduce_verify(chunks: &[Vec<u8>]) -> Vec<u8> {
     let mut out = Vec::new();
-    let (mut entries, mut bytes, mut coerce, mut dups) = (0u64, 0u64, 0u64, 0u64);
+    let mut sums = [0u64; 6];
     for c in chunks {
         let mut pos = 1usize;
-        for slot in 0..4 {
+        for slot in &mut sums {
             let Some(w) = c.get(pos..pos + 8) else { break };
-            let v = u64::from_le_bytes(w.try_into().expect("8 bytes"));
-            match slot {
-                0 => entries += v,
-                1 => bytes += v,
-                2 => coerce += v,
-                _ => dups += v,
-            }
+            *slot += u64::from_le_bytes(w.try_into().expect("8 bytes"));
             pos += 8;
         }
     }
-    encode_array_len(&mut out, 8);
-    encode_bulk(&mut out, b"entries");
-    encode_bulk(&mut out, entries.to_string().as_bytes());
-    encode_bulk(&mut out, b"bytes");
-    encode_bulk(&mut out, bytes.to_string().as_bytes());
-    encode_bulk(&mut out, b"coerce_failures");
-    encode_bulk(&mut out, coerce.to_string().as_bytes());
-    encode_bulk(&mut out, b"duplicates");
-    encode_bulk(&mut out, dups.to_string().as_bytes());
+    let labels: [&[u8]; 6] = [
+        b"entries",
+        b"bytes",
+        b"coerce_failures",
+        b"duplicates",
+        b"drift",
+        b"checked",
+    ];
+    encode_array_len(&mut out, 12);
+    for (label, v) in labels.iter().zip(sums.iter()) {
+        encode_bulk(&mut out, label);
+        encode_bulk(&mut out, v.to_string().as_bytes());
+    }
     out
 }

@@ -1,5 +1,5 @@
 //! `BZPOPMIN key [key ...] timeout` — blocking ZPOPMIN, the last
-//! wire-level blocker for BullMQ worker dequeue. v1.27.3-dev.
+//! wire-level blocker for BullMQ worker dequeue.
 //!
 //! Coverage:
 //! - eager pop with the lowest-scored member (single-key)
@@ -108,7 +108,7 @@ impl Server {
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, nshards, kevy::KevyCommands)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards)).bind([127, 0, 0, 1], port).shards(nshards)
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });

@@ -1,0 +1,26 @@
+[package]
+name = "kevy-ranktree"
+description = "Order-statistic B-tree: an ordered set with O(log N) rank/select."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/kevy-ranktree"
+readme = "README.md"
+keywords = ["btree", "order-statistic", "rank", "select", "sorted-set"]
+categories = ["data-structures"]
+
+# `std` (default) keeps the crate exactly as before; `alloc` alone gives
+# the full tree under `no_std` (the tree is Box/Vec based, no OS surface).
+[features]
+default = ["std"]
+std = ["alloc"]
+alloc = []
+
+[lints]
+workspace = true
+
+[dependencies]

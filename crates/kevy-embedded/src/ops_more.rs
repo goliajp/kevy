@@ -6,22 +6,18 @@
 //!
 //! Every method wraps a corresponding `kevy_store::Store` method.
 
-use std::io;
+use crate::{KevyError, KevyResult};
 
 use kevy_store::ScoreBound;
 
-#[cfg(not(target_arch = "wasm32"))]
-use crate::replica_glue::ensure_writable;
+use crate::store::ensure_writable;
 use crate::store::{Store, commit_write, store_err};
-
-#[cfg(target_arch = "wasm32")]
-fn ensure_writable(_s: &Store) -> io::Result<()> { Ok(()) }
 
 impl Store {
     // ---- set extras --------------------------------------------------
 
     /// `SISMEMBER key member` — `true` when `member` is in the set.
-    pub fn sismember(&self, key: &[u8], member: &[u8]) -> io::Result<bool> {
+    pub fn sismember(&self, key: &[u8], member: &[u8]) -> KevyResult<bool> {
         self.wshard(key).store.sismember(key, member).map_err(store_err)
     }
 
@@ -33,7 +29,7 @@ impl Store {
     /// a store whose internal layout differs (replica applying frames
     /// onto snapshot-loaded state) would remove *different* members.
     /// Redis propagates SPOP the same way.
-    pub fn spop(&self, key: &[u8], count: usize) -> io::Result<Vec<Vec<u8>>> {
+    pub fn spop(&self, key: &[u8], count: usize) -> KevyResult<Vec<Vec<u8>>> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let popped = g.store.spop(key, count).map_err(store_err)?;
@@ -49,7 +45,7 @@ impl Store {
 
     /// `SRANDMEMBER key count` — return up to `count` random members
     /// without removing them.
-    pub fn srandmember(&self, key: &[u8], count: usize) -> io::Result<Vec<Vec<u8>>> {
+    pub fn srandmember(&self, key: &[u8], count: usize) -> KevyResult<Vec<Vec<u8>>> {
         self.wshard(key).store.srandmember(key, count).map_err(store_err)
     }
 
@@ -57,13 +53,13 @@ impl Store {
 
     /// `ZRANK key member` — rank (0-based, ascending) of `member`;
     /// `None` if not present.
-    pub fn zrank(&self, key: &[u8], member: &[u8]) -> io::Result<Option<usize>> {
+    pub fn zrank(&self, key: &[u8], member: &[u8]) -> KevyResult<Option<usize>> {
         self.wshard(key).store.zrank(key, member).map_err(store_err)
     }
 
     /// `ZCOUNT key min max` — count members whose score falls in
     /// `[min, max]` (inclusive). Pass `±INFINITY` for open bounds.
-    pub fn zcount(&self, key: &[u8], min: f64, max: f64) -> io::Result<usize> {
+    pub fn zcount(&self, key: &[u8], min: f64, max: f64) -> KevyResult<usize> {
         self.wshard(key)
             .store
             .zcount(
@@ -76,7 +72,7 @@ impl Store {
 
     /// `ZPOPMIN key count` — atomically remove + return up to `count`
     /// members with the lowest scores. Pairs are `(member, score)`.
-    pub fn zpopmin(&self, key: &[u8], count: usize) -> io::Result<Vec<(Vec<u8>, f64)>> {
+    pub fn zpopmin(&self, key: &[u8], count: usize) -> KevyResult<Vec<(Vec<u8>, f64)>> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let popped = g.store.zpopmin(key, count).map_err(store_err)?;
@@ -95,7 +91,7 @@ impl Store {
         key: &[u8],
         start: i64,
         stop: i64,
-    ) -> io::Result<usize> {
+    ) -> KevyResult<usize> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let removed = g.store.zrem_range_by_rank(key, start, stop).map_err(store_err)?;
@@ -114,7 +110,7 @@ impl Store {
         key: &[u8],
         min: f64,
         max: f64,
-    ) -> io::Result<usize> {
+    ) -> KevyResult<usize> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let removed = g
@@ -140,7 +136,7 @@ impl Store {
         key: &[u8],
         max: f64,
         min: f64,
-    ) -> io::Result<Vec<(Vec<u8>, f64)>> {
+    ) -> KevyResult<Vec<(Vec<u8>, f64)>> {
         self.wshard(key)
             .store
             .zrev_range_by_score(
@@ -156,7 +152,7 @@ impl Store {
     /// `LSET key idx value` — set the element at `idx` (negative
     /// indexes count from tail). Errors `NoSuchKey` / `OutOfRange`
     /// matching Redis.
-    pub fn lset(&self, key: &[u8], idx: i64, value: &[u8]) -> io::Result<()> {
+    pub fn lset(&self, key: &[u8], idx: i64, value: &[u8]) -> KevyResult<()> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         g.store.lset(key, idx, value).map_err(store_err)?;
@@ -167,7 +163,7 @@ impl Store {
 
     /// `LTRIM key start stop` — trim list to `[start, stop]`
     /// inclusive (Redis-style negative indexing).
-    pub fn ltrim(&self, key: &[u8], start: i64, stop: i64) -> io::Result<()> {
+    pub fn ltrim(&self, key: &[u8], start: i64, stop: i64) -> KevyResult<()> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         g.store.ltrim(key, start, stop).map_err(store_err)?;
@@ -182,7 +178,7 @@ impl Store {
     /// `RENAME src dst` — atomic rename. Returns `true` when the
     /// rename happened. Errors when `src` doesn't exist (Redis would
     /// reply `-ERR no such key`, here `Err(NoSuchKey)`).
-    pub fn rename(&self, src: &[u8], dst: &[u8]) -> io::Result<bool> {
+    pub fn rename(&self, src: &[u8], dst: &[u8]) -> KevyResult<bool> {
         ensure_writable(self)?;
         // Cross-shard rename is non-trivial; the single-shard
         // embedded default lands src+dst on the same lock.
@@ -194,7 +190,7 @@ impl Store {
                 Ok(true)
             }
             kevy_store::RenameOutcome::NoSuchSrc => {
-                Err(io::Error::other("no such key"))
+                Err(KevyError::Store(kevy_store::StoreError::NoSuchKey))
             }
             kevy_store::RenameOutcome::DstExists => Ok(false),
         }
@@ -202,7 +198,7 @@ impl Store {
 
     /// `RENAMENX src dst` — rename only when `dst` doesn't exist.
     /// Returns `true` when the rename happened.
-    pub fn renamenx(&self, src: &[u8], dst: &[u8]) -> io::Result<bool> {
+    pub fn renamenx(&self, src: &[u8], dst: &[u8]) -> KevyResult<bool> {
         ensure_writable(self)?;
         let mut g = self.wshard(src);
         let outcome = g.store.rename(src, dst, true);
@@ -213,7 +209,7 @@ impl Store {
             }
             kevy_store::RenameOutcome::DstExists => Ok(false),
             kevy_store::RenameOutcome::NoSuchSrc => {
-                Err(io::Error::other("no such key"))
+                Err(KevyError::Store(kevy_store::StoreError::NoSuchKey))
             }
         }
     }

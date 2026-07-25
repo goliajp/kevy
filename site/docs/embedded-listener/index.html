@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Embedded read-only RESP listener — kevy</title>
+<meta name="description" content="An embedded (in-process) kevy store can expose itself to external RESP clients — redis-cli, ops tooling, dashboards — over a read-only listener. The store stays a library inside yo">
+<link rel="stylesheet" href="../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../docs/" aria-current="page">Docs</a>
+      <a href="../../docs/commands/">Commands</a>
+      <a href="../../benchmarks/">Benchmarks</a>
+      <a href="../../play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../docs/search-index.json" data-root="../../">
+        <input type="search" placeholder="Search docs…" aria-label="Search docs…" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../docs/embedded-listener/" aria-current="page">EN</a><a href="../../zh/docs/embedded-listener/">中文</a><a href="../../ja/docs/embedded-listener/">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell has-toc">
+  <aside class="side"><p class="side-h">Getting started</p><ul><li><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a></li><li><a href="../../docs/cookbook/">The RDS→kevy modeling cookbook</a></li><li><a href="../../docs/persistence/">Persistence</a></li><li><a href="../../docs/tuning/">Tuning kevy</a></li></ul><p class="side-h">Running it</p><ul><li><a href="../../docs/replication/">Replication</a></li><li><a href="../../docs/availability/">Availability</a></li><li><a href="../../docs/cluster/">Cluster</a></li><li><a href="../../docs/tiering/">Transparent tiering ([tiering] / with_tier_budget)</a></li><li><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a></li><li><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a></li><li><a href="../../docs/async/">Async client</a></li></ul><p class="side-h">Working with data</p><ul><li><a href="../../docs/indexes/">Secondary indexes (IDX. / idx_)</a></li><li><a href="../../docs/tables/">Tables (TABLE. / table_)</a></li><li><a href="../../docs/vector-search/">Vector search (KIND ann)</a></li><li><a href="../../docs/text-search/">Full-text search (KIND text)</a></li><li><a href="../../docs/views/">Views (VIEW. / view_)</a></li><li><a href="../../docs/cdc/">CDC — the change feed (FEED. / changes_since)</a></li><li><a href="../../docs/pubsub/">Pub/sub</a></li><li><a href="../../docs/lua/">Lua scripting</a></li></ul><p class="side-h">Embedding it</p><ul><li><a href="../../docs/wasm/">kevy on WebAssembly</a></li><li><a href="../../docs/embedded-listener/" aria-current="page">Embedded read-only RESP listener</a></li><li><a href="../../docs/iot/">kevy on IoT devices</a></li></ul><p class="side-h">Reference</p><ul><li><a href="../../docs/error-replies/">Error reply catalog</a></li><li><a href="../../docs/rds-workloads/">RDS workloads on kevy</a></li><li><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></li><li><a href="../../docs/UPGRADING/">Upgrading kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../docs/commands/">All 188 commands</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>Embedded read-only RESP listener</h1></div>
+<p>An embedded (in-process) kevy store can expose itself to external RESP clients — redis-cli, ops tooling, dashboards — over a read-only listener. The store stays a library inside your process; the listener is a window into it, not a second server: writes stay the exclusive right of the owning process.</p>
+<figure class="code"><pre><code class="lang-rust">use kevy_embedded::{Config, Store};
+
+fn main() -&gt; kevy_embedded::KevyResult&lt;()&gt; {
+    let store = Store::open(
+        Config::default()
+            .with_shards(4)
+            .with_resp_listener("127.0.0.1:6009".parse().unwrap()),
+    )?;
+    store.hset(b"row:42", &amp;[
+        (b"state".as_slice(), b"live".as_slice()),
+    ])?;
+    // ... the application keeps running; clients can peek:
+    Ok(())
+}</code></pre></figure>
+<figure class="code"><pre><code>$ redis-cli -p 6009 hgetall row:42
+1) "state"
+2) "live"
+$ redis-cli -p 6009 scan 0 match 'row:*' count 100
+$ kevy-cli -p 6009 DBSIZE</code></pre></figure>
+<p>Any RESP client works — the listener speaks the same protocol as the kevy server, both framed requests and inline commands (the <code>redis-cli</code> PING style).</p>
+<h2 id="turning-it-on">Turning it on</h2>
+<ul><li><code>Config::with_resp_listener(addr)</code> — one <code>SocketAddr</code>. <b>Off by default</b>; when off there is <b>no thread and no socket — zero tax</b> (gated: idle-listener write throughput within 10% of off, <a href="https://github.com/goliajp/kevy/blob/main/bench/topogate.sh"><code>bench/topogate.sh</code></a>).</li><li>The code is behind the <code>listener</code> cargo feature (on by default; not available on wasm32 targets).</li><li>The listener holds only a weak handle: it never keeps the store alive, and connections end when the store drops.</li><li>There is no authentication (deliberate: kevy has no AUTH plane). Bind loopback or a private interface; anything reachable can read everything the whitelist serves.</li></ul>
+<h2 id="surface">Surface</h2>
+<p>Whitelist only — anything else answers <code>-ERR READONLY embedded listener</code>:</p>
+<figure class="code"><pre><code>PING ECHO GET MGET EXISTS TYPE TTL PTTL DBSIZE KEYS SCAN
+HGET HMGET HGETALL HLEN LRANGE LLEN SMEMBERS SCARD SISMEMBER
+ZSCORE ZCARD ZRANGE FEED.READ FEED.TAIL FEED.SHARDS INFO</code></pre></figure>
+<p>That includes every write verb, <code>MULTI</code>, blocking pops, pub/sub, and the extension planes (<code>IDX.*</code> / <code>VIEW.*</code> — query those in-process through the typed API). The <code>FEED.*</code> trio needs the <code>replicate</code> cargo feature (on by default).</p>
+<p><code>INFO</code> answers a small embedded-shaped report — crate version, shard count, key count, and <code>listener:readonly</code> — enough for a dashboard to identify what it is talking to.</p>
+<p>The rejection text is a contract: tooling can probe "is this a real server or an embedded window?" by attempting a write and matching <code>READONLY embedded listener</code>.</p>
+<h3 id="verb-semantics">Verb semantics</h3>
+<p>The whitelisted verbs behave like their server counterparts:</p>
+<ul><li><code>SCAN &lt;cursor&gt; [MATCH pattern] [COUNT n]</code> pages with a numeric cursor (<code>COUNT</code> clamps to 1..=10000, default 100) and the usual SCAN guarantee: keys stable across the traversal are seen exactly once; concurrent inserts/deletes may or may not appear.</li><li><code>KEYS &lt;pattern&gt;</code> walks the whole keyspace in one reply (<code>*</code> matches everything) — spot checks only, prefer <code>SCAN</code> on large stores.</li><li>Type mismatches answer <code>-WRONGTYPE …</code> exactly as the server does; malformed integers answer <code>-ERR value is not an integer</code>.</li></ul>
+<h2 id="consistency">Consistency</h2>
+<p>Reads run under the store's own shard locks — every reply is a committed point-in-time answer, live with the writing process (no replication, no lag, no snapshot staleness). Multi-key reads (<code>MGET</code>, <code>SCAN</code>, <code>KEYS</code>, <code>DBSIZE</code>) merge per shard without a global snapshot — the same SCAN-class envelope as the server.</p>
+<p>One thread per connection: this is an ops-tooling surface, not a serving path (the kevy <i>server</i> is the serving path). Keep the connection count to tooling scale; a dashboard polling every few seconds is the intended shape.</p>
+<h2 id="feeds-and-read-your-writes">Feeds and read-your-writes</h2>
+<p><code>FEED.TAIL</code> returns the current <code>(generation, offset)</code>; <code>FEED.READ &lt;gen&gt; &lt;offset&gt; &lt;limit&gt; [PREFIX p…]</code> delivers change frames — the same at-least-once contract as the embedded <code>changes_since</code> API (a stale generation answers <code>Resync</code>; restart from <code>FEED.TAIL</code>). The embedded write path serializes all shards into one stream, so <code>FEED.SHARDS</code> reports 1 and the feed verbs take no shard argument — the same consumer loop written against the server surface (<a href="../cdc/">cdc.md</a>) works here.</p>
+<p>Cross-process read-your-writes over the feed is a cursor pattern, not a blocking primitive: the writing process notes <code>changes_tail()</code> after its write; the reading process first drains <code>FEED.READ</code> past that cursor, then reads. In-process reads are always read-your-writes (writes commit synchronously). (Server-to-replica replication <i>does</i> have a blocking primitive — <code>REPL.TOKEN</code> / <code>REPL.WAIT</code>, see <a href="../availability/">availability.md</a> — but that is the replication plane, not this feed listener.)</p>
+<h2 id="inspection-without-a-socket">Inspection without a socket</h2>
+<p>The listener's verb table is also a public method:</p>
+<figure class="code"><pre><code class="lang-rust">let mut out = Vec::new();
+store.dispatch_readonly(
+    &amp;[b"HGETALL".to_vec(), b"row:42".to_vec()], &amp;mut out);
+// `out` holds raw RESP bytes — the exact reply the listener
+// would have written to a socket.</code></pre></figure>
+<p><code>Store::dispatch_readonly(argv, out)</code> answers one request against the same whitelist (write verbs get the same <code>-ERR</code>) — the programmatic face of the listener, for tooling embedded in the owning process.</p>
+<p>And for a store you do NOT own: <code>kevy-cli --embed &lt;dir&gt;</code> opens a read-only point-in-time view of an embedded store's data directory — the dump/aof/shards.meta files are <b>copied</b> to a scratch dir and replayed, so the owning process keeps running untouched. REPL and one-shot both work; write verbs answer the listener's <code>-ERR READONLY</code>. That is the offline complement to this listener's live window.</p>
+<h2 id="when-you-want-more-than-a-window">When you want more than a window</h2>
+<p>Escalation path, in order of machinery:</p>
+<ol><li><b>This listener</b> — live reads, zero write cost, one process.</li><li><b>The CDC feed</b> (<a href="../cdc/">cdc.md</a>) — push changes to another process instead of having it poll reads.</li><li><b>Embedded-as-primary replication</b> — <code>with_embed_writer</code> exposes a replication source, and a kevy server with <code>[replication] single_source = true</code> follows the embedded store as a replica: full read fan-out on server hardware, fed by your process. See the <i>Embedded-as-primary</i> section of <a href="../replication/">replication.md</a>.</li></ol>
+<h2 id="performance">Performance</h2>
+<p><a href="https://github.com/goliajp/kevy/blob/main/bench/topogate.sh"><code>bench/topogate.sh</code></a> is the clamp, and it is a TRUE two-process test — a writer binary under continuous HSET load, a separate reader process asserting live data:</p>
+<ul><li>Reader <code>GET</code> p99 &lt; 1ms (median of 6 connections) while the owner writes continuously.</li><li>READONLY enforcement (write verbs rejected with the contract text).</li><li>Zero-tax: the owner's write throughput with the listener enabled but idle within 10% of listener-off.</li></ul>
+<p>The reads-under-shard-locks design means heavy listener traffic CAN contend with the owner's writes on the same shards — that is the trade for zero-lag truth. Tooling-scale read rates (dashboards, spot checks) are unmeasurable in the owner's write throughput; if you need serving-scale reads, use replication (above), not this listener.</p>
+<h2 id="see-also">See also</h2>
+<ul><li><a href="../cdc/">cdc.md</a> — the change feed this listener also serves.</li><li><a href="../replication/">replication.md</a> — embedded-as-primary, when a window stops being enough.</li><li><a href="../availability/">availability.md</a> — the consistency ladder on the replication plane.</li><li><a href="../uds/">uds.md</a> — local-socket transport for the kevy server (the listener itself is TCP-only).</li></ul></main>
+  <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#turning-it-on">Turning it on</a></li><li class="l2"><a href="#surface">Surface</a></li><li class="l3"><a href="#verb-semantics">Verb semantics</a></li><li class="l2"><a href="#consistency">Consistency</a></li><li class="l2"><a href="#feeds-and-read-your-writes">Feeds and read-your-writes</a></li><li class="l2"><a href="#inspection-without-a-socket">Inspection without a socket</a></li><li class="l2"><a href="#when-you-want-more-than-a-window">When you want more than a window</a></li><li class="l2"><a href="#performance">Performance</a></li><li class="l2"><a href="#see-also">See also</a></li></ul></aside>
+</div>
+
+<script src="../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

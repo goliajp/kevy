@@ -28,6 +28,13 @@ range|unique [MAXMEM <bytes>]`
 - **MAXMEM** caps the index's memory: a build that crosses the budget
   fails declaratively (`-INDEXOVERBUDGET` on queries) instead of
   growing unbounded.
+- Up to 64 indexes — a **global budget**, and one worth planning
+  against rather than discovering. The rule that makes 64 generous:
+  parent-child access paths belong in link keys and sorted sets, which
+  cost no index slots. Spend slots only on **global value ranges, text
+  and aggregates**. A 58-table schema converted this way needed roughly
+  19. Read naively, "58 tables vs 64 indexes" looks nearly blocked; it
+  is not, but only if the modelling rule is applied.
 - Up to 64 indexes. The catalog persists in a data-dir sidecar;
   the index CONTENT is derived state — it is never snapshotted or
   AOF-logged, and rebuilds in the background after a restart
@@ -55,11 +62,22 @@ range|unique [MAXMEM <bytes>]`
 ## Uniqueness is a fence, not a lock
 
 A `unique` index **does not block writes** — enforcing global
-uniqueness at write time would serialize cross-shard writes (see the
-design RFC). Instead: duplicates are counted (`duplicates` in
+uniqueness at write time would serialize cross-shard writes. Instead:
+duplicates are counted (`duplicates` in
 VERIFY/LIST) and visible as multi-hit `EQ` reads. If you need hard
 uniqueness, pin the domain to one shard with a `{hashtag}` prefix in
 cluster mode, or check-then-write under `MULTI`/`WATCH`.
+
+**In the embedded API an index cannot be read inside `atomic()` at
+all**, so `KIND unique` cannot participate in the check even
+optimistically. Use a **claim key** instead: `u:<constraint>:<value>`
+holding the owner's id, read with `get` and written with `set` inside
+the transaction. The transaction makes the check-and-claim atomic,
+which is the guarantee a `unique` index deliberately does not provide.
+
+A consumer implemented 22 uniqueness constraints this way and used
+`KIND unique` for none of them; the pattern works, but they arrived at
+it by discovering the omission rather than reading it here.
 
 ## Embedded
 
@@ -68,6 +86,31 @@ idx_count / idx_stats / idx_list` (values as `IndexValue`, cursors as
 `IndexCursor`). No `FIELDS` hydration — you're in-process; read
 fields with `hget`. `idx_create` builds synchronously and returns
 when the index serves.
+
+## The index budget
+
+**64 indexes, globally.** Not per prefix, not per shard — 64 for the
+whole store (`MAX_INDEXES`, `kevy-index/src/catalog.rs`).
+
+Read naively that number blocks any real schema: 58 tables against 64
+indexes looks impossible, and a migration can stall on the arithmetic
+before discovering that the arithmetic is wrong.
+
+**Indexes are a scarce global budget, and most access paths do not spend
+it.** Parent-child navigation belongs in link keys and zsets — a
+`SMEMBERS order:1001:items` costs no index slot, and neither does an
+ordered zset index you maintain yourself
+([cookbook §2](cookbook.md#2-one-to-many-many-to-many)). Spend index
+slots only on what link keys cannot express:
+
+- **global value ranges** — "every invoice over 10k", across all rows
+- **text search** — `KIND text`
+- **aggregates** — `KIND agg`, write-time GROUP BY
+
+A schema that would need 58 indexes read as "one per table" typically
+needs under 20 read as "one per global query shape". If you are
+approaching 64, the question to ask is which of them are really
+parent-child navigation wearing an index costume.
 
 ## Consistency + cost model
 
@@ -89,6 +132,18 @@ IDX.CREATE ord_amt ON PREFIX ord: FIELD amount TYPE i64 KIND agg GROUPBY status
 IDX.QUERY ord_amt GROUP paid                      → [count, sum, min, max, avg]
 IDX.QUERY ord_amt GROUPS BY sum LIMIT 100         → ranked [group, count, sum, min, max]
 ```
+
+**`GROUPBY` takes one field, and the shape of real `GROUP BY` usually
+needs more.** `SUM(amount) GROUP BY month` split by direction, or any
+`SUM(CASE WHEN …)`, is expressed by moving the condition **into the
+group key**: materialise a composite field at write time
+(`ym_dir = "2026-07:in"`), group on it, and split the key in the
+application. Conditional aggregates work the same way — the condition
+becomes part of what you are grouping by, not part of the aggregate.
+
+That idiom is obvious in hindsight and invisible on first contact:
+`KIND agg` looks like it answers `GROUP BY` and then does not answer
+the shape people actually write.
 
 The engine answer to `SELECT g, COUNT(*), SUM(v) … GROUP BY g`:
 aggregates are maintained IN THE WRITE PATH (a declared access path —

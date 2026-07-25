@@ -26,10 +26,10 @@ const PUMP_BYTE_BUDGET_PER_ITER: usize = 256 * 1024;
 
 /// Hard cap on a streaming replica's outbound buffer (bytes appended
 /// but not yet written to the socket). Reached when the replica's TCP
-/// receive window is full + the primary keeps pushing. v1.18.0 policy
+/// receive window is full + the primary keeps pushing. Policy
 /// on hitting the cap: close the link. A reconnect (within the
-/// reconnect window — T1.15 wiring) resumes from the source backlog
-/// or full-snapshots (T1.22+). The alternatives (block, retry, or
+/// reconnect window) resumes from the source backlog
+/// or full-snapshots. The alternatives (block, retry, or
 /// silently drop frames) all corrupt the "every committed write
 /// reaches every replica" invariant; closing surfaces the problem.
 const STREAMING_OUTPUT_CAP: usize = 4 * 1024 * 1024;
@@ -51,13 +51,13 @@ impl<C: Commands> Shard<C> {
         if self.replicas.is_empty() {
             return Ok(());
         }
-        // v3.16 D2: the heartbeat carries (generation, next_offset) —
+        // The heartbeat carries (generation, next_offset) —
         // the replica's REPL.WAIT gen truth.
         let (generation, next) = (feed.generation(), feed.source().next_offset());
         for idx in 0..self.replicas.len() {
             match self.replicas[idx].state {
                 ReplicaState::Streaming { .. } => {
-                    self.fill_streaming_output(idx, next);
+                    self.fill_streaming_output(idx, generation, next);
                     self.maybe_append_heartbeat(idx, generation, next);
                 }
                 ReplicaState::SnapshotShipping { .. } => self.pump_snapshot_chunks(idx),
@@ -67,9 +67,9 @@ impl<C: Commands> Shard<C> {
         self.drain_streaming_outputs()
     }
 
-    /// v3.14 D3 — append the in-stream heartbeat (`+PING <gen> <next>`)
+    /// Append the in-stream heartbeat (`+PING <gen> <next>`)
     /// at a 1s cadence so the replica can compute lag + link liveness
-    /// (and, since v3.16, track the primary's feed generation for
+    /// (and track the primary's feed generation for
     /// REPL.WAIT gen matching). Out of band: occupies no offset space,
     /// rides the same output buffer as frames (ordering with frames is
     /// irrelevant — the payload is the primary's position, not stream
@@ -86,7 +86,7 @@ impl<C: Commands> Shard<C> {
         conn.last_ping = Some(std::time::Instant::now());
     }
 
-    /// v3.14 D2 — parse complete `REPLCONF ACK <offset>` lines off a
+    /// Parse complete `REPLCONF ACK <offset>` lines off a
     /// streaming replica's input buffer and advance its slot. Called
     /// from the readable-event handler (the connection's single
     /// reader). Tolerant: an unknown line skips to the next CRLF so
@@ -124,7 +124,7 @@ impl<C: Commands> Shard<C> {
                 .duration_since(self.replication_epoch)
                 .as_nanos() as u64;
             self.slots.insert_or_touch(&id, offset, now_ns);
-            // v3.16 D1: an advanced slot is the WAIT wake point — a
+            // An advanced slot is the WAIT wake point — a
             // parked WAIT whose need is now met answers here, on the
             // very event that made it true.
             self.check_repl_ack_waiters();
@@ -133,15 +133,52 @@ impl<C: Commands> Shard<C> {
 
     /// Refill one replica's output buffer with backlog frames. Skips
     /// when the conn is not in Streaming, is already caught up, or
-    /// has too much pending output (backpressure). Closes the conn on
-    /// `TooOld` (need snapshot ship — T1.22+) or `Future` (corrupt
-    /// state from a bad peer).
-    // LOC-WAIVER: per-iter replication pump body (backpressure gate +
-    // backlog window walk + resync arms) — one protocol state machine.
-    fn fill_streaming_output(&mut self, idx: usize, primary_next: u64) {
-        let ReplicaState::Streaming { sent_offset, .. } = self.replicas[idx].state else {
+    /// has too much pending output (backpressure). Ships a snapshot
+    /// on a generation mismatch (offsets alias across generations —
+    /// serving would silently diverge the replica) or `TooOld` /
+    /// `Future` offsets.
+    ///
+    /// The generation fence runs BEFORE the caught-up check: after a
+    /// mid-stream bump (FLUSHALL / promotion) the new `next_offset`
+    /// restarts at 0, so a stale `sent_offset` reads as "caught up"
+    /// forever — until the new history grows past it and the pump
+    /// starts serving aliased frames. Both failure shapes die here.
+    // LOC-WAIVER: per-iter replication pump body (gen fence +
+    // backpressure gate + backlog window walk + resync arms) — one
+    // protocol state machine.
+    fn fill_streaming_output(&mut self, idx: usize, feed_gen: u64, primary_next: u64) {
+        let ReplicaState::Streaming { sent_offset, generation, .. } = self.replicas[idx].state
+        else {
             return;
         };
+        if generation != feed_gen {
+            if generation == 0 && sent_offset == 0 {
+                // Fresh replica, no continuity claim, nothing served
+                // yet — adopt the current generation and stream from 0.
+                if let ReplicaState::Streaming { generation, .. } =
+                    &mut self.replicas[idx].state
+                {
+                    *generation = feed_gen;
+                }
+            } else {
+                // Stale-generation resume claim, or the feed bumped
+                // under a live stream. `sent_offset` belongs to a
+                // DIFFERENT offset history — never serve it. Ship.
+                eprintln!(
+                    "kevy: replica fd {} generation {} != feed generation {feed_gen} \
+                     (sent_offset {sent_offset}); shipping snapshot",
+                    self.replicas[idx].fd, generation,
+                );
+                if let Err(e) = self.start_snapshot_ship(idx, feed_gen, primary_next) {
+                    eprintln!(
+                        "kevy: replica fd {} gen-fence ship trigger failed: {e}; dropping link",
+                        self.replicas[idx].fd,
+                    );
+                    self.replicas[idx].close();
+                }
+                return;
+            }
+        }
         if sent_offset >= primary_next {
             return; // caught up
         }
@@ -156,11 +193,11 @@ impl<C: Commands> Shard<C> {
             Ok(it) => it,
             Err(kevy_replicate::source::FromOffset::TooOld) => {
                 // Replica fell behind the backlog window. Trigger a
-                // snapshot ship (T1.23): serialize the local store
+                // snapshot ship: serialize the local store
                 // in-memory now, transition the conn to
                 // SnapshotShipping, the next pump iteration chunks
                 // it out via pump_snapshot_chunks.
-                if let Err(e) = self.start_snapshot_ship(idx, primary_next) {
+                if let Err(e) = self.start_snapshot_ship(idx, feed_gen, primary_next) {
                     eprintln!(
                         "kevy: replica fd {} snapshot ship trigger failed: {e}; dropping link",
                         self.replicas[idx].fd,
@@ -170,7 +207,7 @@ impl<C: Commands> Shard<C> {
                 return;
             }
             Err(kevy_replicate::source::FromOffset::Future) => {
-                // v3.15 D4: a replica AHEAD of this primary is the
+                // A replica AHEAD of this primary is the
                 // rejoining old primary carrying a forked suffix
                 // (writes taken after the failover). The contract:
                 // the fork is DISCARDED — full snapshot resync, same
@@ -182,7 +219,7 @@ impl<C: Commands> Shard<C> {
                      forked history (old primary rejoin); shipping snapshot",
                     self.replicas[idx].fd, sent_offset, primary_next,
                 );
-                if let Err(e) = self.start_snapshot_ship(idx, primary_next) {
+                if let Err(e) = self.start_snapshot_ship(idx, feed_gen, primary_next) {
                     eprintln!(
                         "kevy: replica fd {} fork-resync ship failed: {e}; dropping link",
                         self.replicas[idx].fd,
@@ -234,7 +271,10 @@ impl<C: Commands> Shard<C> {
             if self.replicas[idx].output.len() <= self.replicas[idx].write_off {
                 continue;
             }
-            self.replica_writable(idx)?;
+            if let Err(e) = self.replica_writable(idx) {
+                self.replica_io_failed(idx, "streaming write", &e);
+                continue;
+            }
             let conn = &self.replicas[idx];
             if matches!(conn.state, ReplicaState::Streaming { .. })
                 && conn.output.len() - conn.write_off >= STREAMING_OUTPUT_CAP
@@ -250,19 +290,22 @@ impl<C: Commands> Shard<C> {
         Ok(())
     }
 
-    /// Trigger a snapshot ship (T1.23) for the replica at `idx`:
+    /// Trigger a snapshot ship for the replica at `idx`:
     /// in-memory-serialize the local store via `kevy_persist::
     /// write_snapshot_to`, push `+SNAPSHOT\r\n` to the conn's
     /// output, and transition state to SnapshotShipping. The next
     /// pump iteration chunks the buffer out via
     /// [`Self::pump_snapshot_chunks`].
     ///
-    /// `ack_offset` is the primary's `source.next_offset()` at
-    /// trigger time — encoded into `+SNAPSHOT_END <ack_offset>\r\n`
-    /// when the snapshot ship completes, and becomes the replica's
-    /// new `sent_offset` for live streaming after.
+    /// `generation` is the feed generation at trigger time — the
+    /// shipped data IS that generation, so it becomes the conn's
+    /// streaming generation on completion. `ack_offset` is the
+    /// primary's `source.next_offset()` at trigger time — encoded
+    /// into `+SNAPSHOT_END <ack_offset>\r\n` when the snapshot ship
+    /// completes, and becomes the replica's new `sent_offset` for
+    /// live streaming after.
     ///
-    /// T1.23.5: freeze a COW [`kevy_store::SnapshotView`] on the
+    /// Off-thread serialization: freeze a COW [`kevy_store::SnapshotView`] on the
     /// reactor thread (O(n) shallow clone — ns/entry, much cheaper
     /// than full serialization), hand it to a background worker
     /// that runs `kevy_persist::write_snapshot_to` at leisure, and
@@ -272,7 +315,12 @@ impl<C: Commands> Shard<C> {
     /// tick via `try_recv` and starts emitting chunks once they
     /// arrive. The reactor no longer pauses for the duration of
     /// serialization — only for the shallow collect.
-    fn start_snapshot_ship(&mut self, idx: usize, ack_offset: u64) -> io::Result<()> {
+    fn start_snapshot_ship(
+        &mut self,
+        idx: usize,
+        generation: u64,
+        ack_offset: u64,
+    ) -> io::Result<()> {
         let ReplicaState::Streaming { ref replica_id, .. } = self.replicas[idx].state else {
             // Defensive: only Streaming replicas should reach the
             // TooOld branch in fill_streaming_output.
@@ -298,6 +346,7 @@ impl<C: Commands> Shard<C> {
         conn.state = ReplicaState::SnapshotShipping {
             replica_id,
             ack_offset,
+            generation,
             serializing: Some(rx),
             snapshot_buf: Vec::new(),
             snapshot_off: 0,
@@ -312,7 +361,7 @@ impl<C: Commands> Shard<C> {
     /// (backpressure — drain_streaming_outputs will write what's
     /// queued; next pump retries).
     ///
-    /// T1.23.5: if the background serializer hasn't delivered yet,
+    /// If the background serializer hasn't delivered yet,
     /// `try_recv` returns `Empty`; the pump no-ops this iteration
     /// and retries next tick. If the worker thread died without
     /// sending (`Disconnected`), the conn is closed.
@@ -355,11 +404,12 @@ impl<C: Commands> Shard<C> {
                 }
             }
         }
-        let (ack_offset, chunk_bytes, done) = {
+        let (ack_offset, generation, chunk_bytes, done) = {
             let ReplicaState::SnapshotShipping {
                 ref snapshot_buf,
                 snapshot_off,
                 ack_offset,
+                generation,
                 ..
             } = self.replicas[idx].state
             else {
@@ -367,10 +417,10 @@ impl<C: Commands> Shard<C> {
             };
             let remaining = &snapshot_buf[snapshot_off..];
             if remaining.is_empty() {
-                (ack_offset, Vec::new(), true)
+                (ack_offset, generation, Vec::new(), true)
             } else {
                 let take = remaining.len().min(SNAPSHOT_CHUNK_MAX);
-                (ack_offset, remaining[..take].to_vec(), false)
+                (ack_offset, generation, remaining[..take].to_vec(), false)
             }
         };
         let conn = &mut self.replicas[idx];
@@ -393,6 +443,7 @@ impl<C: Commands> Shard<C> {
                 conn.state = ReplicaState::Streaming {
                     replica_id: rid,
                     sent_offset: ack_offset,
+                    generation,
                 };
             }
         }

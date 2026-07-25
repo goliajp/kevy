@@ -1,0 +1,85 @@
+//! Streams and the geo surface (geo is zset-backed, as in Redis).
+//!
+//! One row per dispatch-reachable verb. `complexity` and `compat` were
+//! derived by reading THIS engine's implementation — never copied from
+//! Redis's documentation, because several of ours genuinely differ (SCAN
+//! sweeps in one batch, SPOP is deterministic, LINDEX is O(1) where
+//! Redis's quicklist is O(N)).
+
+use super::{VerbMeta, v};
+use super::flags::*;
+
+#[rustfmt::skip]
+pub(super) const ROWS: &[VerbMeta] = &[
+    // ---- stream ----------------------------------------------------
+    v("XACK",        "stream", -4, W, "Acknowledge pending entries for a consumer group.", "1.0.0", "XACK key group id [id ...]",
+      "O(A log P)",
+      "full"),
+    v("XADD",        "stream", -5, W, "Append an entry to a stream, with optional trim.", "1.0.0", "XADD key [NOMKSTREAM] [MAXLEN [=|~] threshold | MINID [=|~] id] id|* field value [field value ...]",
+      "O(log N) to insert; O(N*F) whenever a MAXLEN / MINID clause actually evicts, because the trim triggers a full weight recompute",
+      "differs: the approximate-trim '~' is accepted for wire compatibility but always trims exactly, and the LIMIT clause is not parsed"),
+    v("XAUTOCLAIM",  "stream", -6, W, "Scan and claim idle pending entries starting from a cursor.", "1.0.0", "XAUTOCLAIM key group consumer min-idle-time start [COUNT count] [JUSTID]",
+      "O(log P + K + COUNT log N); the idle filter runs before the take, so a PEL of fresh entries is walked in full",
+      "differs: the next-cursor is last-claimed+1 rather than 0-0 when the PEL scan completes, so a client looping until 0-0 needs one extra round trip"),
+    v("XCLAIM",      "stream", -6, W, "Claim specific idle pending entries for a consumer.", "1.0.0", "XCLAIM key group consumer min-idle-time id [id ...] [IDLE ms] [TIME unix-time-milliseconds] [RETRYCOUNT count] [FORCE] [JUSTID]",
+      "O(A * (log P + log N))",
+      "differs: IDLE / TIME / RETRYCOUNT / FORCE / JUSTID are parsed but LASTID is not, and a missing key or group returns 'no such key' instead of NOGROUP"),
+    v("XDEL",        "stream", -3, W, "Delete entries from a stream by ID.", "1.0.0", "XDEL key id [id ...]",
+      "O(D log N + N*F) for D ids — NOT O(1): the trailing weight recompute is linear in the whole stream",
+      "full"),
+    v("XGROUP",      "stream", -2, W, "Manage stream consumer groups.", "1.0.0", "XGROUP CREATE key group id|$ [MKSTREAM] | DESTROY key group | SETID key group id|$ | CREATECONSUMER key group consumer | DELCONSUMER key group consumer",
+      "CREATE / DESTROY: O(1) plus an O(N*F) reweigh. SETID / CREATECONSUMER: O(1). DELCONSUMER: O(P)",
+      "differs: CREATE / SETID / DESTROY / CREATECONSUMER / DELCONSUMER / MKSTREAM are supported, but on a missing key the non-CREATE subcommands return 0 or NOGROUP instead of Redis's error, and XGROUP HELP is absent"),
+    v("XINFO",       "stream", -2, R, "Introspect a stream, its groups, or its consumers.", "1.0.0", "XINFO STREAM key | GROUPS key | CONSUMERS key group | HELP",
+      "STREAM: O(1). GROUPS: O(G*N) — 'lag' is a linear walk of every entry, once per group. CONSUMERS: O(C)",
+      "differs: STREAM / GROUPS / CONSUMERS / HELP only — XINFO STREAM FULL is absent; radix-tree-keys and nodes are synthetic (we have no radix tree), entries-read is approximated, and CONSUMERS omits 'inactive'"),
+    v("XLEN",        "stream", 2,  R, "Return the number of entries in a stream.", "1.0.0", "XLEN key",
+      "O(1)",
+      "full"),
+    v("XPENDING",    "stream", -3, R, "Inspect pending entries of a consumer group (summary or extended form).", "1.0.0", "XPENDING key group [[IDLE min-idle-time] start end count [consumer]]",
+      "summary: O(P*C) — the per-consumer tally is a linear find per PEL row. extended: O(log P + K)",
+      "full"),
+    v("XRANGE",      "stream", -4, R, "Return stream entries within an ID range.", "1.0.0", "XRANGE key start end [COUNT count]",
+      "O(log N + M) — a B-tree range descent, COUNT applied lazily",
+      "full"),
+    v("XREAD",       "stream", -4, RB, "Read new entries from one or more streams, optionally blocking.", "1.0.0", "XREAD [COUNT count] [BLOCK milliseconds] STREAMS key [key ...] id [id ...]",
+      "O(S * (log N + M)) over S streams; '$' is O(1); the park is O(1)",
+      "differs: the '+' last-id form is not parsed — only explicit IDs and '$' are accepted"),
+    v("XREADGROUP",  "stream", -7, WB, "Read stream entries as a consumer-group member, optionally blocking.", "1.0.0", "XREADGROUP GROUP group consumer [COUNT count] [BLOCK milliseconds] [NOACK] STREAMS key [key ...] id [id ...]",
+      "'>' form: O(log N + U + M) — COUNT does NOT bound the scan, the entire undelivered tail is materialised first. Replay form: O(log P + K)",
+      "differs: COUNT is parsed but does not bound the '>' scan"),
+    v("XREVRANGE",   "stream", -4, R, "Return stream entries within an ID range, in reverse order.", "1.0.0", "XREVRANGE key end start [COUNT count]",
+      "O(log N + M)",
+      "full"),
+    v("XSETID",      "stream", -3, W, "Overwrite a stream's last-generated ID and bookkeeping counters.", "1.0.0", "XSETID key last-id [ENTRIESADDED entries-added] [MAXDELETEDID max-deleted-id]",
+      "O(log N)",
+      "full"),
+    v("XTRIM",       "stream", -4, W, "Trim a stream by length or minimum ID.", "1.0.0", "XTRIM key MAXLEN|MINID [=|~] threshold",
+      "O(R log N + N*F) for R evicted entries",
+      "differs: '~' is accepted but trimming is always exact, LIMIT is not parsed, and trailing tokens after the threshold are silently ignored instead of erroring"),
+    // ---- geo -------------------------------------------------------
+    v("GEOADD",      "geo", -5, W, "Add geospatial members (longitude/latitude) to a geo set.", "1.0.0", "GEOADD key [NX|XX] [CH] longitude latitude member [longitude latitude member ...]",
+      "O(M log N); CH adds an O(M^2) term",
+      "full"),
+    v("GEODIST",     "geo", -4, R, "Return the distance between two geo members.", "1.0.0", "GEODIST key member1 member2 [m|km|mi|ft]",
+      "O(1)",
+      "full"),
+    v("GEOHASH",     "geo", -3, R, "Return the base32 geohash string of each member.", "1.0.0", "GEOHASH key member [member ...]",
+      "O(M)",
+      "full"),
+    v("GEOPOS",      "geo", -3, R, "Return the longitude/latitude of each member.", "1.0.0", "GEOPOS key member [member ...]",
+      "O(M)",
+      "full"),
+    v("GEORADIUS",   "geo", -6, W, "Legacy radius search around a coordinate, with optional STORE writes.", "1.0.0", "GEORADIUS key longitude latitude radius m|km|mi|ft [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC] [STORE key] [STOREDIST key]",
+      "O(log N + C) — up to nine neighbour cell ranges, each seeked on the score tree; C = members inside the matched cells. STORE / STOREDIST add O(K log K) to write plus O(D) to clear the destination",
+      "differs: the destination is written on its own shard, so a STORE across shards is not atomic with the search"),
+    v("GEORADIUSBYMEMBER", "geo", -5, W, "Legacy radius search around an existing member, with optional STORE writes.", "1.0.0", "GEORADIUSBYMEMBER key member radius m|km|mi|ft [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC] [STORE key] [STOREDIST key]",
+      "O(log N + C) — the seeked nine-cell fetch, same as GEORADIUS; the anchor lookup is O(1)",
+      "differs: the destination is written on its own shard, so a STORE across shards is not atomic with the search"),
+    v("GEOSEARCH",   "geo", -4, R, "Search members within a radius or box from a member or coordinate.", "1.0.0", "GEOSEARCH key FROMMEMBER member|FROMLONLAT longitude latitude BYRADIUS radius m|km|mi|ft|BYBOX width height m|km|mi|ft [ASC|DESC] [COUNT count [ANY]] [WITHCOORD] [WITHDIST] [WITHHASH]",
+      "O(log N + C) — up to nine neighbour ranges, each a seeked slice of the score tree; C = members inside the matched geohash cells (the block bound now prunes iteration too, not just distance maths)",
+      "differs: STOREDIST is accepted and ignored on the read-only form; COUNT 0 is an error"),
+    v("GEOSEARCHSTORE", "geo", -5, W, "Run GEOSEARCH on source and store the hits into destination.", "1.0.0", "GEOSEARCHSTORE destination source FROMMEMBER member|FROMLONLAT longitude latitude BYRADIUS radius m|km|mi|ft|BYBOX width height m|km|mi|ft [ASC|DESC] [COUNT count [ANY]] [STOREDIST]",
+      "O(log N + C) to search, plus O(D + K log K) to rewrite the destination on its own shard",
+      "differs: STOREDIST stores the distance in the unit the query asked for (Redis does the same); the destination is written on its own shard, so the source and destination may live on different cores and the write is not atomic with the read"),
+];

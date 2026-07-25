@@ -33,8 +33,8 @@
 //! No `unsafe` is added by this file: every memory touch is delegated
 //! to the existing `pub(crate)` helpers in `map.rs` / `map_keyed.rs`.
 
-use std::borrow::Borrow;
-use std::ptr;
+use core::borrow::Borrow;
+use core::ptr;
 
 use kevy_hash::KevyHash;
 

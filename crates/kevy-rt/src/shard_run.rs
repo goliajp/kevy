@@ -6,11 +6,27 @@
 use crate::Commands;
 use crate::shard::Shard;
 use kevy_persist::{load_snapshot, replay_aof};
+use kevy_resp::ArgvView;
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering, fence};
 use std::time::{Duration, Instant};
+
+/// Store-only replay of one logged frame — the body shared by both
+/// reactors' AOF replay and the reshard merge. Replay never re-logs /
+/// re-pushes, so nothing downstream consumes a propagation override; a
+/// legacy AOF can still carry a raw `SPOP` frame whose dispatch sets
+/// one — drop it per frame so it can't leak into the first live
+/// command on the shard.
+pub(crate) fn replay_dispatch<C: Commands, A: ArgvView + ?Sized>(
+    commands: &C,
+    store: &mut kevy_store::Store,
+    args: &A,
+) {
+    commands.dispatch(store, args);
+    crate::propagation::discard_override();
+}
 
 impl<C: Commands> Shard<C> {
     /// Owning shard of `key` under this server's routing scheme.
@@ -30,7 +46,7 @@ impl<C: Commands> Shard<C> {
     }
 
     // Busy-poll reactor main loop — per-iter overhead is the proven
-    // perf-sensitive surface here (perf-vs-foss §8 v1.30: per-iter
+    // perf-sensitive surface here (measured: per-iter
     // amortization moves throughput where per-op µs shaving does not);
     // stage extraction risks codegen change for zero readability win.
     // LOC-WAIVER: busy-poll reactor main loop (per-iter perf-sensitive).
@@ -53,12 +69,28 @@ impl<C: Commands> Shard<C> {
             let aof_path = self.aof_path();
             let commands = &self.commands;
             let store = &mut self.store;
-            replay_aof(&aof_path, |args| {
-                commands.dispatch(store, &args);
-            })?;
+            // In-replay demotion: dispatch already runs the
+            // per-write demote hook, but a K-frame watermark drain
+            // backstops it so a bigger-than-budget log can never
+            // outrun the batch budget while the reactor is not yet up.
+            let mut frames: u64 = 0;
+            let apply = |args: kevy_persist::Argv| {
+                replay_dispatch(commands, store, &args);
+                frames += 1;
+                if frames.is_multiple_of(kevy_persist::REPLAY_DEMOTE_INTERVAL) {
+                    store.demote_to_watermark();
+                }
+            };
+            let report = if self.replay_resync {
+                kevy_persist::replay_aof_resync(&aof_path, apply)?
+            } else {
+                replay_aof(&aof_path, apply)?
+            };
+            self.commands.on_replay_report(report.dropped_bytes, report.corrupt);
         }
+        self.store.demote_to_watermark();
 
-        // v1.30 — off-accept-set shards have no listener (None); skip register.
+        // Off-accept-set shards have no listener (None); skip register.
         let listener_fd = if let Some(l) = &self.listener {
             l.set_nonblocking()?;
             self.poller.add(l.raw(), true, false)?;
@@ -86,6 +118,11 @@ impl<C: Commands> Shard<C> {
         }
         let waker_fd = self.waker.read_fd();
         let me = self.id;
+        // Server-as-replica: let the runner thread's sends interrupt a
+        // parked poll — see replica_inbox.rs's wake contract.
+        if let Some(rx) = &self.replica_inbox {
+            rx.attach_waker(Arc::clone(&self.waker));
+        }
 
         let mut tick_interval = match self.commands.shard_tick_interval_ms() {
             0 => None,
@@ -156,19 +193,24 @@ impl<C: Commands> Shard<C> {
                             self.flush_conn(conn_id)?;
                         }
                     } else if let Some(idx) = self.replica_index_by_fd(ev.fd) {
-                        if ev.readable || ev.hup {
-                            self.replica_readable(idx)?;
+                        let readable = ev.readable || ev.hup;
+                        if readable
+                            && let Err(e) = self.replica_readable(idx)
+                        {
+                            self.replica_io_failed(idx, "read", &e);
                         }
                         // A handshake `+ACK` is small (≤ 30 B) and
                         // usually fits in the first non-blocking write,
                         // so try the drain unconditionally before
                         // requesting write-readiness. If it short-writes,
                         // `replica_writable` is a no-op until the poller
-                        // signals writability (T1.14 wires the
-                        // write-readiness re-arm; v1.18.0 ships with the
-                        // assumption that `+ACK` drains in one syscall —
-                        // which it does on every OS we test).
-                        self.replica_writable(idx)?;
+                        // signals writability (the write-readiness
+                        // re-arm covers the short-write case; in
+                        // practice `+ACK` drains in one syscall on
+                        // every OS we test).
+                        if let Err(e) = self.replica_writable(idx) {
+                            self.replica_io_failed(idx, "write", &e);
+                        }
                     }
                 }
                 self.events = events;
@@ -182,6 +224,13 @@ impl<C: Commands> Shard<C> {
                     self.reap_closed_replicas();
                 }
             }
+
+            // The closing ready-set is an io_uring-reap accelerator;
+            // this backend closes via the dirty-flush path instead,
+            // so the QUIT / CLIENT KILL dispatch sites' pushes would
+            // otherwise accumulate forever (8 bytes per closed conn,
+            // unbounded on a long-running server).
+            self.closing_uring_conns.clear();
 
             // Messages from other cores (forwarded requests + replies to ours).
             if self.drain_inbound()? {
@@ -197,7 +246,7 @@ impl<C: Commands> Shard<C> {
             self.flush_dirty()?;
             // One wakeup per touched (and parked) target this iteration.
             self.flush_wakes();
-            // v1.25 A.2: ship the per-shard bio-drop batch to the bio
+            // Ship the per-shard bio-drop batch to the bio
             // thread BEFORE the AOF fsync window. Same rationale as the
             // io_uring path: don't let a pending fsync stall pin the
             // batch in RSS, and bound the per-iter drop latency
@@ -226,40 +275,38 @@ impl<C: Commands> Shard<C> {
                     // park instead of the next user-level shard tick.
                     self.tick_blocked_timeouts();
                     self.tick_xshard_timeouts();
-                    // v3.16: WAIT / REPL.WAIT deadline sweep — same
+                    // WAIT / REPL.WAIT deadline sweep — same
                     // cadence as the BLOCK timeout reactor above.
                     self.tick_repl_waiters();
                     if now.duration_since(last_tick) >= iv {
                         self.commands.on_shard_tick(&mut self.store);
+                        self.drain_store_notify();
                         self.apply_live_runtime_config(&mut tick_interval);
                         self.tick_persist();
-                        // v3-cluster replication slot expiry (T1.15):
+                        self.tick_conn_gauge();
+                        self.enforce_output_limit();
+                        // Replication slot expiry:
                         // drop slots whose reconnect window has passed.
                         // No-op short-circuits when replication is off or
                         // no slot has been recorded yet.
                         self.tick_replication_slots(now);
-                        // v3-cluster ROLE / INFO replication (T1.28):
+                        // ROLE / INFO replication:
                         // publish master_repl_offset + connected_replicas
                         // count to the embedder. No-op when replication
                         // is off.
                         self.tick_replication_view();
-                        // v3-cluster backlog watermark (T1.22.5): drop
+                        // Backlog watermark: drop
                         // frames every consumer has moved past so the
                         // backlog reclaims space proactively. No-op
                         // when replication is off / no consumers yet.
                         self.tick_replication_watermark();
-                        // v3-cluster server-as-replica (T1.29): drain
-                        // events from the replica runner thread and
-                        // apply them. No-op (one Option check) when
-                        // this shard isn't a replica.
-                        self.drain_replica_inbox();
                         last_tick = now;
                     }
                 }
             }
 
-            // v3-cluster replication producer pump (Issue Ledger I2 +
-            // T1.14). OUTSIDE the did_work block since v3.14: the
+            // Replication producer pump.
+            // OUTSIDE the did_work block: the
             // heartbeat (1s) and the ACK drain must run on idle iters
             // too — a parked-and-woken shard with zero events still
             // owes its replicas a pulse. Cost when replication is off
@@ -267,12 +314,21 @@ impl<C: Commands> Shard<C> {
             if self.replicate.is_some() || !self.replicas.is_empty() {
                 self.pump_replication()?;
             }
+            // Server-as-replica: drain events from the replica runner
+            // thread and apply them. Every iteration, not the interval
+            // tick — at tick cadence the 1024-event budget caps apply
+            // throughput at ~10k frames/s, far under what an upstream
+            // primary emits (the repligate drain regression). Gated at
+            // the call site like the pump above.
+            if self.replica_inbox.is_some() {
+                self.drain_replica_inbox();
+            }
             // A non-empty backlog means a peer ring is full: keep spinning so we
             // re-attempt the flush (and keep draining inbound to unblock peers).
             let has_backlog = self.backlog.iter().any(|b| !b.is_empty());
-            // v3.4: stay-hot-while-inflight, epoll symmetry — the
-            // uring reactor gained this in the v2.2 campaign (commit
-            // 65b7515): with forwarded cross-shard requests
+            // Stay-hot-while-inflight, epoll symmetry — the
+            // uring reactor gained this
+            // first: with forwarded cross-shard requests
             // outstanding, replies land within ~one RTT, so hold the
             // spin rung instead of paying park+wake per reply batch.
             // Bounded: inflight only drains (owner answers) or the
@@ -283,14 +339,13 @@ impl<C: Commands> Shard<C> {
                 idle_spins.saturating_add(1)
             };
         }
-        // v1.25.x SAVE migration: drain any in-flight bg persist job
-        // before exit so a `Op::Save` that returned `+OK` to a client
-        // still lands its `dump-{i}.rdb` rename + AOF reset (the
-        // commit phase otherwise runs on the next tick, which won't
-        // happen after `stop=true`). See
-        // [`Self::drain_persist_on_shutdown`].
-        self.drain_persist_on_shutdown();
-        self.write_feed_shutdown_marker();
+        // Exit sequence: an optional `SHUTDOWN SAVE` snapshot, then
+        // drain any in-flight bg persist job so a `Op::Save` that
+        // returned `+OK` to a client still lands its `dump-{i}.rdb`
+        // rename + AOF reset (the commit phase otherwise runs on the
+        // next tick, which won't happen after `stop=true`), then the
+        // final AOF fsync + feed marker. See [`Self::shutdown_drain`].
+        self.shutdown_drain();
         Ok(())
     }
 

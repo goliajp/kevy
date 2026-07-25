@@ -1,14 +1,16 @@
 //! `Store` SET-family write path: encoding pick (`Int` / `ArcBulk` /
-//! inline `Str`), NX/XX guards, the F1 single-probe `maxmemory == 0`
-//! fast path, and the v1.25 A.3 bio-drop hand-off of displaced values.
+//! inline `Str`), NX/XX guards, the single-probe `maxmemory == 0`
+//! fast path, and the bio-drop hand-off of displaced values.
 //! Split out of `string.rs` (GET family + INCR) to keep both under the
-//! 500-LOC house cap; verbatim from before the move.
+//! 500-LOC house cap.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::value::{BULK_THRESHOLD, SmallBytes, Value};
 use crate::{Entry, Store, deadline_at, now_ns};
 use crate::util::parse_canonical_i64;
-use std::sync::Arc;
-use std::time::Duration;
+use alloc::sync::Arc;
+use core::time::Duration;
 
 
 /// L2 + L1: pick the optimal encoding for `bytes` at SET time:
@@ -34,7 +36,7 @@ pub(crate) fn pick_value_for_set_owned(bytes: Vec<u8>) -> Value {
         return Value::Int(n);
     }
     if bytes.len() > BULK_THRESHOLD {
-        // v1.29 Option A — `Arc::new(box)` is zero-copy when `len ==
+        // `Arc::new(box)` is zero-copy when `len ==
         // capacity` (shrink-to-fit no-ops). See `Value::ArcBulk` doc.
         return Value::ArcBulk(Arc::new(bytes.into_boxed_slice()));
     }
@@ -83,15 +85,15 @@ impl Store {
         nx: bool,
         xx: bool,
     ) -> bool {
-        // F1 (v1.25): single-probe overwrite-SET fast path for default
+        // Single-probe overwrite-SET fast path for default
         // `maxmemory == 0` (the bench and production-common case). Goes
-        // through `kevy_map::RawEntryMut` (B.1, commit 1a9f9af) so the
+        // through `kevy_map::RawEntryMut` so the
         // Occupied arm mutates the entry in place and returns owned
         // (delta, ttl_delta) — no escaping reference, no second probe.
         // Overwrite path drops from 2 probes (live_entry_mut: get+get_mut)
         // to 1 probe. New-key + expired-removed paths still pay the
         // insert_entry probe (same as before).
-        if self.maxmemory == 0 {
+        if !self.clock_on() {
             return self.set_value_no_evict(key, new_value, expire, nx, xx);
         }
         self.set_value_evict(key, new_value, expire, nx, xx)
@@ -142,15 +144,16 @@ impl Store {
         }
         // Phase 2: hand the old value off if heavy. Done last so the
         // critical mutation + bookkeeping commit before any (sub-µs in
-        // steady state) channel send.
+        // steady state) channel send. A cold stub's record dies here.
         if let Some(old) = old_value {
+            self.tier_note_dead(key_heap, &old);
             self.maybe_offload_drop(old);
         }
         true
     }
 
     /// Single-probe overwrite-SET via `kevy_map::RawEntryMut` for the
-    /// `maxmemory == 0` fast path (F1, v1.25). Skips the `live_entry_mut`
+    /// `maxmemory == 0` fast path. Skips the `live_entry_mut`
     /// 2-probe shape: Occupied arm mutates in place + returns owned
     /// (delta, ttl_delta); Expired arm removes via raw-entry handle + falls
     /// through to insert; Vacant arm goes to insert.
@@ -174,6 +177,7 @@ impl Store {
                 if let Some(old) = drop_first {
                     // No insert; the expired `Value` still needs
                     // to drop. Ship via the bio path on its way out.
+                    self.tier_note_dead(key_heap, &old);
                     self.maybe_offload_drop(old);
                 }
                 return false;
@@ -195,8 +199,10 @@ impl Store {
             }
         };
         // Phase 3: ship the displaced Value if any. Last so the keyspace
-        // commit precedes any (sub-µs steady-state) channel send.
+        // commit precedes any (sub-µs steady-state) channel send. A
+        // displaced cold stub credits its vlog record dead first.
         if let Some(old) = old_value {
+            self.tier_note_dead(key_heap, &old);
             self.maybe_offload_drop(old);
         }
         true
@@ -237,9 +243,10 @@ impl Store {
                     if nx {
                         return SetOutcome::Refused { drop_first: None };
                     }
-                    // v1.25 A.3: take the old Value before overwriting
+                    // Take the old Value before overwriting
                     // so phase 2 can hand it to the bio thread instead
-                    // of dropping inline (the Axis I tail amplifier).
+                    // of dropping inline (a large-value latency-tail
+                    // amplifier).
                     let (delta, ttl_delta, old) = overwrite_in_place(
                         occ.get_mut(),
                         value_slot.take().unwrap(),
@@ -288,10 +295,10 @@ enum SetOutcome {
 /// `(weight_delta, ttl_delta, displaced_old_value)`. Shared by the
 /// eviction-path SET ([`Store::set_value`]) and the `maxmemory == 0`
 /// single-probe SET ([`Store::set_probe_no_evict`]) — the displaced
-/// `Value` is returned (v1.25 A.3) so the caller can hand it to the
+/// `Value` is returned so the caller can hand it to the
 /// bio thread AFTER the keyspace borrow is released rather than
 /// dropping inline (the Drop of a `Value::ArcBulk` over the heap-heavy
-/// threshold is the Axis I tail amplifier).
+/// threshold amplifies the large-value SET latency tail).
 #[inline]
 fn overwrite_in_place(
     e: &mut Entry,
@@ -300,7 +307,7 @@ fn overwrite_in_place(
     key_heap: u64,
 ) -> (i64, i64, Value) {
     let had_ttl = e.expire_at_ns.is_some();
-    let old = std::mem::replace(&mut e.value, new_value);
+    let old = core::mem::replace(&mut e.value, new_value);
     e.expire_at_ns = expire_at.and_then(crate::pack_deadline);
     let new_w = key_heap + e.value.weight();
     let delta = new_w as i64 - e.weight() as i64;

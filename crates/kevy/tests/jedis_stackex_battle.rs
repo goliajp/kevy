@@ -1,5 +1,4 @@
-//! v1.52 — Jedis 5.x + StackExchange.Redis ecosystem battle test
-//! (Phase E step 1).
+//! Jedis 5.x + StackExchange.Redis ecosystem battle test.
 //!
 //! Java (Jedis 5.x) and .NET (StackExchange.Redis 2.x) are the two
 //! dominant enterprise Redis client stacks. Their golden-path RESP
@@ -96,11 +95,10 @@ fn jedis_5x_golden_path() {
     eprintln!("jedis: CLIENT GETNAME");
     s.write_all(&build(&[b"CLIENT", b"GETNAME"])).unwrap();
     let getname = read_one_reply(&mut s);
-    // v2.0.16: CLIENT SETNAME now persists per-connection via the
-    // reactor-level intercept in `kevy-rt::exec_client_intercept` —
-    // see CHANGELOG v2.0.16 and `crates/kevy-rt/src/exec_client_intercept.rs`.
-    // Closes v1.52.x finding. The round-trip MUST now return the
-    // name the SETNAME call wrote.
+    // CLIENT SETNAME persists per-connection via the
+    // reactor-level intercept in
+    // `crates/kevy-rt/src/exec_client_intercept.rs`.
+    // The round-trip MUST return the name the SETNAME call wrote.
     assert!(
         getname.contains("jedis-client-1"),
         "CLIENT GETNAME expected round-trip of 'jedis-client-1', got: {getname:?}"

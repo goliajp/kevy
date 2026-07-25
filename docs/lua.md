@@ -117,12 +117,14 @@ Lua return values marshal to RESP using the standard Redis rules: `nil` and `fal
 
 Redis 7.0 Functions metadata (`flags=`, `name=`) on the shebang line is parsed and ignored, so scripts written for the Functions surface load cleanly under `EVAL`.
 
+Deployments that want pure Redis-ecosystem compatibility can pin the accepted dialects in config: `[lua] allow_dialects = ["5.1"]` rejects any script whose shebang asks for a newer VM. The default (empty list) accepts all five.
+
 ## Trade-offs and limits
 
 - **No filesystem, network, or OS access.** `io`, `os`, `package`, `debug`, and `coroutine` are not loaded. Scripts cannot open files, make sockets, spawn processes, or read environment variables.
 - **No bytecode loading.** `load(bytecode)` and `string.dump` are blocked. Only Lua source can enter the VM, which closes the bytecode-verifier escape route that has historically broken Lua sandboxes.
 - **Whitelisted standard library.** `base`, `math`, `string`, `table`, `cjson`, and `cmsgpack` are available. Other standard modules are absent.
-- **Per-script time budget.** Each `EVAL` runs under an instruction budget of roughly 200 M ops (about 5 s of CPU on modern hardware, matching Redis's default `lua-time-limit`). Exceeding it returns a catchable Lua error and aborts the script.
+- **Per-script time budget.** Each `EVAL` runs under an instruction budget derived from `[lua] time_limit_ms` (default 5000 ms ≈ 200 M instructions — the same ceiling as Redis's default `lua-time-limit`; `0` disables the cap). Exceeding it returns a catchable Lua error and aborts the script.
 - **Per-script memory budget.** Each script runs in a fresh interpreter state seeded from a per-dialect VM pool; tables and strings created during the call are reclaimed when it returns. There is no shared mutable Lua state between calls — use kevy keys to persist anything.
 - **No nested `EVAL`.** A script calling `redis.call("EVAL", ...)` returns an error, matching Redis behaviour.
 - **One shard per script.** All `KEYS` must hash to the same slot. Scripts that touch multiple keys across shards get `-CROSSSLOT` at dispatch.

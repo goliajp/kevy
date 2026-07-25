@@ -15,7 +15,7 @@ fn used_memory_grows_on_insert_shrinks_on_delete() {
     assert!(after_one > 0, "set should bump used_memory");
     st.set(b"k2", s("world"), None, false, false);
     assert!(st.used_memory() > after_one, "second set should bump again");
-    st.del(&[s("k"), s("k2")]);
+    st.del(&[b"k".as_slice(), b"k2".as_slice()]);
     assert_eq!(st.used_memory(), 0, "all dels should zero used_memory");
 }
 
@@ -30,11 +30,11 @@ fn used_memory_tracks_collection_growth() {
     let big_field2: Vec<u8> = vec![b'b'; 30];
     let big_val: Vec<u8> = vec![b'v'; 30];
     let mut st = Store::new();
-    st.hset(b"h", &[(big_field1.clone(), big_val.clone())]).unwrap();
+    st.hset(b"h", &[(big_field1.as_slice(), big_val.as_slice())]).unwrap();
     let after_one_field = st.used_memory();
-    st.hset(b"h", &[(big_field2.clone(), big_val.clone())]).unwrap();
+    st.hset(b"h", &[(big_field2.as_slice(), big_val.as_slice())]).unwrap();
     assert!(st.used_memory() > after_one_field);
-    st.hdel(b"h", &[big_field2]).unwrap();
+    st.hdel(b"h", &[big_field2.as_slice()]).unwrap();
     let after_one_remaining = st.used_memory();
     // shrinking by one field should return us close to the after_one_field
     // baseline (allow slack for hashtable rehash slot accounting).

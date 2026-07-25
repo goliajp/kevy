@@ -117,7 +117,7 @@ pub enum Message {
         /// New primary's node id.
         new_primary_id: String,
         /// New primary's `host:port` (the kevy compat port, where
-        /// the v1.18 `REPLICAOF` handshake connects).
+        /// the `REPLICAOF` handshake connects).
         new_primary_addr: String,
     },
 }

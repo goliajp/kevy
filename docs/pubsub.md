@@ -90,14 +90,14 @@ a persistent in-process store; flip the URL and recompile, no
 ```rust
 use kevy_client::{Connection, Subscriber, PubsubEvent};
 
-fn run(url: &str) -> std::io::Result<()> {
+fn run(url: &str) -> kevy_client::KevyResult<()> {
     // Open a subscriber against `news`. The first frame the bus
     // hands back is the subscribe ack; drain it before asserting
     // on bodies.
-    let mut sub = Subscriber::open(url, &[b"news"])?;
+    let mut sub = Subscriber::connect_channels(url, &[b"news"])?;
     let _ack = sub.recv()?;
 
-    let mut conn = Connection::open(url)?;
+    let mut conn = Connection::connect(url)?;
     let received = conn.publish(b"news", b"hello")?;
     assert_eq!(received, 1);
 
@@ -115,7 +115,7 @@ fn run(url: &str) -> std::io::Result<()> {
 run("mem://app")?;
 // Prod: real TCP server.
 run("kevy://prod-cache:6379")?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 Cross-thread is the same code with one `Subscriber` and one
@@ -149,7 +149,7 @@ match sub.recv()? {
     }
     other => panic!("unexpected frame: {other:?}"),
 }
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 `Store::clone` is cheap (it's an `Arc` bump), so the common shape is
@@ -171,7 +171,7 @@ let mut sub = Subscriber::connect("mem://signals")?;
 sub.psubscribe(&[b"news.*"])?;
 let _ack = sub.recv()?;            // PubsubEvent::Psubscribe
 
-let mut conn = Connection::open("mem://signals")?;
+let mut conn = Connection::connect("mem://signals")?;
 conn.publish(b"news.tech", b"breaking")?; // matches
 conn.publish(b"weather",   b"sunny")?;    // does NOT match
 
@@ -183,7 +183,7 @@ match sub.recv()? {
     }
     other => panic!("unexpected frame: {other:?}"),
 }
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 A subscriber that holds both a channel subscription **and** a
@@ -191,6 +191,57 @@ matching pattern subscription receives **two** copies — one
 `Message`, one `Pmessage`. Per-publish dedup only suppresses the
 "same `Subscription` listed twice in the same channel index"
 duplicate, not channel-vs-pattern overlap.
+
+## Keyspace notifications
+
+kevy can announce keyspace changes over pub/sub, Redis-style: a write
+to `user:42` fires `__keyspace@0__:user:42` (payload = the event
+name, e.g. `set`) and/or `__keyevent@0__:set` (payload = the key).
+kevy serves DB 0 only, so the channel names always carry `@0`.
+
+Off by default — with the flag string empty, every write pays one
+atomic load and skips. Enable it in the config file:
+
+```toml
+[notification]
+notify_keyspace_events = "KEA"   # everything, both channels
+```
+
+The flag string follows the Redis convention — channels first, then
+event classes:
+
+| flag | meaning |
+|---|---|
+| `K` | publish on the `__keyspace@0__:<key>` channel |
+| `E` | publish on the `__keyevent@0__:<event>` channel |
+| `g` | generic commands — `DEL`, `EXPIRE`, `PERSIST`, `RENAME`, … |
+| `$` | string commands — `SET`, `INCR`, `APPEND`, `MSET`, … |
+| `l` | list commands |
+| `s` | set commands |
+| `h` | hash commands |
+| `z` | sorted-set commands |
+| `t` | stream commands — `XADD`, `XTRIM`, `XGROUP`, … |
+| `x` | `expired` events — a TTL'd key removed (lazily on access or by the reaper) |
+| `e` | `evicted` events — a key removed by `maxmemory` pressure |
+| `n` | `new` events — a key added to the keyspace |
+| `A` | alias for `g$lshztxe` (every class except `n`, matching Redis) |
+
+At least one of `K`/`E` plus at least one event class must be set for
+anything to fire. An unknown character in the string is a **config
+error at startup** — a typo'd flag string refuses admission instead
+of silently dropping events. Subscribe with an ordinary pattern
+subscription:
+
+```sh
+redis-cli -p 6379 PSUBSCRIBE '__keyevent@0__:*'
+```
+
+Notification delivery rides the same at-most-once pub/sub bus as
+everything else on this page: no subscriber at publish time means the
+event is gone. Consumers that must not miss changes belong on the CDC
+feed ([`docs/cdc.md`](https://github.com/goliajp/kevy/blob/develop/docs/cdc.md)),
+which is cursored and replayable — keyspace notifications are the
+"wake up" signal, not the ledger.
 
 ## URL backend table
 
@@ -204,8 +255,8 @@ duplicate, not channel-vs-pattern overlap.
 | `tcp://host[:port]`                | TCP — raw, no leading `SELECT` | same                                          | **Yes**               |
 
 Anonymous `mem://` cannot receive published messages — nothing else
-can reach the same backing `Store`, so `Subscriber::open` rejects
-it with `ErrorKind::Unsupported`. Use `mem://<some-name>` whenever
+can reach the same backing `Store`, so `Subscriber::connect_channels` rejects
+it with `KevyError::Unsupported`. Use `mem://<some-name>` whenever
 you intend to publish.
 
 `rediss://`, `kevys://`, and `redis://user:pass@…` are rejected for
@@ -306,7 +357,7 @@ matches the redis-cli wire shape.
 **Do I need cluster routing for pub/sub?**  No. Pub/sub fan-out is
 process-level, not slot-routed: publishing on any shard's port
 reaches every subscriber on every shard's port in the same process.
-A plain `Connection::open("kevy://host:port")` against any shard
+A plain `Connection::connect("kevy://host:port")` against any shard
 port works. See
 [`docs/cluster.md`](https://github.com/goliajp/kevy/blob/develop/docs/cluster.md)
 for the slot routing that *keyspace* commands use.

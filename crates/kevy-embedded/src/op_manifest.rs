@@ -1,4 +1,4 @@
-//! ESTORE parity manifest (v2.1): command names the embedded `Store`
+//! ESTORE parity manifest: command names the embedded `Store`
 //! facade implements, scoped to ops present in
 //! `kevy_resp::ops_table::OP_TABLE` (conn/pubsub/admin surfaces like
 //! `publish` / `info` / `ping_ns` are out of the table's scope).
@@ -30,7 +30,7 @@ pub(crate) const ESTORE_OPS: &[&str] = &[
     "ZREMRANGEBYSCORE", "ZREVRANGE", "ZREVRANGEBYSCORE", "ZSCAN",
     "ZSCORE", "ZUNIONSTORE",
     // keyspace
-    "COPY", "DBSIZE", "FEED.READ", "FEED.SHARDS", "FEED.TAIL", "IDX.COUNT", "IDX.CREATE", "IDX.DROP", "IDX.LIST", "IDX.QUERY", "PREFIX.DIGEST", "VIEW.CREATE", "VIEW.DROP", "VIEW.LIST", "VIEW.QUERY", "PREFIX.STATS", "DEL", "EXISTS", "EXPIRE", "EXPIREAT",
+    "COPY", "DBSIZE", "FEED.READ", "FEED.SHARDS", "FEED.TAIL", "IDX.COUNT", "IDX.CREATE", "IDX.DROP", "IDX.LIST", "IDX.QUERY", "PREFIX.DIGEST", "TABLE.DECLARE", "TABLE.DROP", "TABLE.LIST", "TABLE.VERIFY", "VIEW.CREATE", "VIEW.DROP", "VIEW.LIST", "VIEW.QUERY", "PREFIX.STATS", "DEL", "EXISTS", "EXPIRE", "EXPIREAT",
     "FLUSHALL", "KEYS", "PERSIST", "PEXPIRE", "PEXPIREAT", "RANDOMKEY",
     "RENAME", "RENAMENX", "SCAN", "TIME", "TOUCH", "TTL", "TYPE",
     "UNLINK",

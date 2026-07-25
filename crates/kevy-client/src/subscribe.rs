@@ -17,31 +17,32 @@
 //! ```no_run
 //! use kevy_client::{Subscriber, PubsubEvent};
 //!
-//! let mut sub = Subscriber::open("kevy://localhost:6379", &[b"news"])?;
+//! let mut sub = Subscriber::connect_channels("kevy://localhost:6379", &[b"news"])?;
 //! loop {
 //!     if let PubsubEvent::Message { channel, payload } = sub.recv()? {
 //!         println!("{}: {}", String::from_utf8_lossy(&channel),
 //!                            String::from_utf8_lossy(&payload));
 //!     }
 //! }
-//! # Ok::<(), std::io::Error>(())
+//! # Ok::<(), kevy_client::KevyError>(())
 //! ```
 
-use std::io::{self, Read, Write};
+use crate::{KevyError, KevyResult};
+use std::collections::VecDeque;
+use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
 use kevy_embedded::Subscription;
 use kevy_resp::{Reply, encode_command};
+use kevy_resp_client::ReplyReadBuf;
 
-#[cfg(test)]
-use crate::subscribe_io::classify;
-use crate::subscribe_io::{frame_to_event, invalid, recv_remote, send_to, shape};
+use crate::subscribe_io::{await_acks, frame_to_event, invalid, recv_remote, send_to, shape};
 use crate::{Target, parse_url, resolve_store};
 
 /// One subscribed connection. Owns either a TCP socket or an in-process
 /// [`Subscription`]; the variant is chosen by the URL scheme in
-/// [`Subscriber::open`] / [`Subscriber::connect`].
+/// [`Subscriber::connect_channels`] / [`Subscriber::connect`].
 #[derive(Debug)]
 pub struct Subscriber {
     inner: Inner,
@@ -52,7 +53,14 @@ enum Inner {
     /// TCP RESP2 connection, drained one reply at a time.
     Remote {
         stream: TcpStream,
-        buf: Vec<u8>,
+        buf: ReplyReadBuf,
+        /// Events read while waiting for a subscribe ack, held in arrival
+        /// order for [`Subscriber::recv`]. Waiting for the ack means
+        /// reading whatever arrives first, and a message for an
+        /// already-subscribed channel can arrive before the ack for a new
+        /// one — dropping it to get at the ack would trade a race for a
+        /// lost message.
+        pending: VecDeque<PubsubEvent>,
     },
     /// In-process bus subscription. `timeout` mirrors the TCP
     /// `SO_RCVTIMEO` behaviour for [`Subscriber::recv`] / [`Subscriber::set_read_timeout`].
@@ -62,62 +70,9 @@ enum Inner {
     },
 }
 
-/// One pubsub frame received from the bus or the wire.
-///
-/// `Unsubscribe` / `Punsubscribe`'s `channel` / `pattern` is `None` when
-/// the server is acknowledging "unsubscribed from everything" with a nil
-/// bulk — matching the Redis wire shape.
-#[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PubsubEvent {
-    /// `SUBSCRIBE` ack — one per channel the client subscribed to.
-    Subscribe {
-        /// Channel that was just subscribed.
-        channel: Vec<u8>,
-        /// Total number of channels + patterns the connection is now subscribed to.
-        count: i64,
-    },
-    /// `PSUBSCRIBE` ack — one per pattern.
-    Psubscribe {
-        /// Pattern that was just subscribed.
-        pattern: Vec<u8>,
-        /// Total number of channels + patterns the connection is now subscribed to.
-        count: i64,
-    },
-    /// `UNSUBSCRIBE` ack — `channel: None` when the server is reporting
-    /// "no channels were subscribed" (the spec's nil bulk).
-    Unsubscribe {
-        /// Channel that was just unsubscribed (`None` for "all" / "none").
-        channel: Option<Vec<u8>>,
-        /// Total number of channels + patterns still subscribed.
-        count: i64,
-    },
-    /// `PUNSUBSCRIBE` ack — pattern `None` when the server is reporting
-    /// "no patterns were subscribed".
-    Punsubscribe {
-        /// Pattern that was just unsubscribed (`None` for "all" / "none").
-        pattern: Option<Vec<u8>>,
-        /// Total number of channels + patterns still subscribed.
-        count: i64,
-    },
-    /// Plain `PUBLISH` delivery on a subscribed channel.
-    Message {
-        /// Channel the publish was made to.
-        channel: Vec<u8>,
-        /// Raw payload bytes (no encoding assumed).
-        payload: Vec<u8>,
-    },
-    /// Pattern-match delivery: a `PUBLISH` to a channel that matched one
-    /// of this connection's patterns.
-    Pmessage {
-        /// Pattern the channel matched.
-        pattern: Vec<u8>,
-        /// Channel the publish was made to.
-        channel: Vec<u8>,
-        /// Raw payload bytes.
-        payload: Vec<u8>,
-    },
-}
+// The pubsub frame vocabulary is canonical in `kevy_resp_client`,
+// shared with the async client — one enum, no per-crate mirrors.
+pub use kevy_resp_client::PubsubEvent;
 
 impl Subscriber {
     /// Open a fresh connection without subscribing to anything yet. Call
@@ -127,15 +82,12 @@ impl Subscriber {
     /// - `kevy://`, `redis://`, `tcp://` — TCP RESP server
     /// - `mem://<name>`, `file:///path` — in-process shared bus
     /// - `mem://` (anonymous), `rediss://`, `kevys://`, `redis://user:pass@…`
-    ///   are rejected with [`io::ErrorKind::Unsupported`]
-    pub fn connect(url: &str) -> io::Result<Self> {
+    ///   are rejected with [`KevyError::Unsupported`]
+    pub fn connect(url: &str) -> KevyResult<Self> {
         let target = parse_url(url)?;
         let inner = match target {
             Target::EmbedMemoryAnonymous => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "anonymous mem:// has no other producer; use mem://<name> for a shared bus",
-                ));
+                return Err(KevyError::Unsupported("anonymous mem:// has no other producer; use mem://<name> for a shared bus".into()));
             }
             Target::EmbedMemoryNamed(_) | Target::EmbedPersist(_) => Inner::Embedded {
                 subscription: resolve_store(&target)?.subscribe(&[]),
@@ -147,22 +99,20 @@ impl Subscriber {
                 stream.set_nodelay(true).ok();
                 Inner::Remote {
                     stream,
-                    buf: Vec::with_capacity(8192),
+                    buf: ReplyReadBuf::with_capacity(8192),
+                    pending: VecDeque::new(),
                 }
             }
         };
         Ok(Self { inner })
     }
 
-    /// Open and subscribe to one or more channels in one step. Returns
+    /// Connect and subscribe to one or more channels in one step. Returns
     /// `ErrorKind::InvalidInput` if `channels` is empty (use
     /// [`Self::connect`] for an empty start).
-    pub fn open(url: &str, channels: &[&[u8]]) -> io::Result<Self> {
+    pub fn connect_channels(url: &str, channels: &[&[u8]]) -> KevyResult<Self> {
         if channels.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Subscriber::open needs ≥ 1 channel — use Subscriber::connect() for empty start",
-            ));
+            return Err(KevyError::InvalidInput("Subscriber::connect_channels needs ≥ 1 channel — use Subscriber::connect() for empty start".into()));
         }
         let mut s = Self::connect(url)?;
         s.subscribe(channels)?;
@@ -171,15 +121,15 @@ impl Subscriber {
 
     /// `SUBSCRIBE channel [channel ...]`. Per-channel `Subscribe` acks
     /// are delivered via [`Self::recv`].
-    pub fn subscribe(&mut self, channels: &[&[u8]]) -> io::Result<()> {
+    pub fn subscribe(&mut self, channels: &[&[u8]]) -> KevyResult<()> {
         if channels.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "SUBSCRIBE needs ≥ 1 channel",
-            ));
+            return Err(KevyError::InvalidInput("SUBSCRIBE needs ≥ 1 channel".into()));
         }
         match &mut self.inner {
-            Inner::Remote { stream, .. } => send_to(stream, b"SUBSCRIBE", channels),
+            Inner::Remote { stream, buf, pending } => {
+                send_to(stream, b"SUBSCRIBE", channels)?;
+                await_acks(stream, buf, pending, channels.len(), false)
+            }
             Inner::Embedded { subscription, .. } => {
                 subscription.subscribe(channels);
                 Ok(())
@@ -189,15 +139,15 @@ impl Subscriber {
 
     /// `PSUBSCRIBE pattern [pattern ...]`. Patterns use Redis glob syntax
     /// (`*`, `?`, `[…]`).
-    pub fn psubscribe(&mut self, patterns: &[&[u8]]) -> io::Result<()> {
+    pub fn psubscribe(&mut self, patterns: &[&[u8]]) -> KevyResult<()> {
         if patterns.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "PSUBSCRIBE needs ≥ 1 pattern",
-            ));
+            return Err(KevyError::InvalidInput("PSUBSCRIBE needs ≥ 1 pattern".into()));
         }
         match &mut self.inner {
-            Inner::Remote { stream, .. } => send_to(stream, b"PSUBSCRIBE", patterns),
+            Inner::Remote { stream, buf, pending } => {
+                send_to(stream, b"PSUBSCRIBE", patterns)?;
+                await_acks(stream, buf, pending, patterns.len(), true)
+            }
             Inner::Embedded { subscription, .. } => {
                 subscription.psubscribe(patterns);
                 Ok(())
@@ -207,7 +157,7 @@ impl Subscriber {
 
     /// `UNSUBSCRIBE [channel ...]`. Empty `channels` unsubscribes from
     /// every channel (Redis wire semantics).
-    pub fn unsubscribe(&mut self, channels: &[&[u8]]) -> io::Result<()> {
+    pub fn unsubscribe(&mut self, channels: &[&[u8]]) -> KevyResult<()> {
         match &mut self.inner {
             Inner::Remote { stream, .. } => send_to(stream, b"UNSUBSCRIBE", channels),
             Inner::Embedded { subscription, .. } => {
@@ -219,7 +169,7 @@ impl Subscriber {
 
     /// `PUNSUBSCRIBE [pattern ...]`. Empty `patterns` unsubscribes from
     /// every pattern.
-    pub fn punsubscribe(&mut self, patterns: &[&[u8]]) -> io::Result<()> {
+    pub fn punsubscribe(&mut self, patterns: &[&[u8]]) -> KevyResult<()> {
         match &mut self.inner {
             Inner::Remote { stream, .. } => send_to(stream, b"PUNSUBSCRIBE", patterns),
             Inner::Embedded { subscription, .. } => {
@@ -232,9 +182,12 @@ impl Subscriber {
     /// Block until the next pubsub frame arrives. Apply
     /// [`Self::set_read_timeout`] for bounded blocking.
     /// Connection close / bus tear-down yields `ErrorKind::UnexpectedEof`.
-    pub fn recv(&mut self) -> io::Result<PubsubEvent> {
+    pub fn recv(&mut self) -> KevyResult<PubsubEvent> {
         match &mut self.inner {
-            Inner::Remote { stream, buf } => recv_remote(stream, buf),
+            Inner::Remote { stream, buf, pending } => match pending.pop_front() {
+                Some(ev) => Ok(ev),
+                None => recv_remote(stream, buf),
+            },
             Inner::Embedded {
                 subscription,
                 timeout,
@@ -264,18 +217,17 @@ impl Subscriber {
     ///
     /// Errors from [`Self::recv`] (connection close, timeout, etc.)
     /// propagate unchanged.
-    pub fn recv_message(&mut self) -> io::Result<(Vec<u8>, Vec<u8>)> {
+    pub fn recv_message(&mut self) -> KevyResult<(Vec<u8>, Vec<u8>)> {
         loop {
             match self.recv()? {
                 PubsubEvent::Message { channel, payload } => return Ok((channel, payload)),
                 PubsubEvent::Pmessage { channel, payload, .. } => {
                     return Ok((channel, payload));
                 }
-                // Ack frames — keep waiting for the next real message.
-                PubsubEvent::Subscribe { .. }
-                | PubsubEvent::Psubscribe { .. }
-                | PubsubEvent::Unsubscribe { .. }
-                | PubsubEvent::Punsubscribe { .. } => {}
+                // Ack frames (and any frame kind a future protocol
+                // adds — the enum is non-exhaustive) — keep waiting
+                // for the next real message.
+                _ => {}
             }
         }
     }
@@ -290,18 +242,15 @@ impl Subscriber {
     /// Remote-only: the embedded backend has no proto negotiation
     /// concept (frames go through the in-process bus typed). Calling
     /// `hello3` on an embedded [`Subscriber`] returns
-    /// [`io::ErrorKind::Unsupported`].
+    /// [`KevyError::Unsupported`].
     ///
     /// Must be called BEFORE any [`Self::subscribe`] /
     /// [`Self::psubscribe`] — Redis requires `HELLO` be the first
     /// command on a connection that uses it.
-    pub fn hello3(&mut self) -> io::Result<PubsubEvent> {
+    pub fn hello3(&mut self) -> KevyResult<PubsubEvent> {
         match &mut self.inner {
-            Inner::Embedded { .. } => Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "HELLO 3 is a remote/TCP-only operation; embedded backend has no proto switch",
-            )),
-            Inner::Remote { stream, buf } => {
+            Inner::Embedded { .. } => Err(KevyError::Unsupported("HELLO 3 is a remote/TCP-only operation; embedded backend has no proto switch".into())),
+            Inner::Remote { stream, buf, .. } => {
                 let mut frame = Vec::new();
                 encode_command(&mut frame, &[b"HELLO".to_vec(), b"3".to_vec()]);
                 stream.write_all(&frame)?;
@@ -311,38 +260,29 @@ impl Subscriber {
                 // semantic — the body's just server metadata.
                 let mut chunk = [0u8; 4096];
                 loop {
-                    match kevy_resp::parse_reply(buf) {
-                        Ok(Some((reply, used))) => {
-                            buf.drain(..used);
-                            return classify_hello3_reply(reply);
-                        }
+                    match buf.parse_next() {
+                        Ok(Some(reply)) => return classify_hello3_reply(reply),
                         Ok(None) => {}
                         Err(_) => {
-                            return Err(io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                "malformed HELLO 3 reply",
-                            ));
+                            return Err(KevyError::Protocol("malformed HELLO 3 reply".into()));
                         }
                     }
                     let n = stream.read(&mut chunk)?;
                     if n == 0 {
-                        return Err(io::Error::new(
-                            io::ErrorKind::UnexpectedEof,
-                            "server closed connection during HELLO 3",
-                        ));
+                        return Err(KevyError::Closed);
                     }
-                    buf.extend_from_slice(&chunk[..n]);
+                    buf.extend(&chunk[..n]);
                 }
             }
         }
     }
 
     /// Apply (or clear) a read timeout. After setting `Some(dur)`,
-    /// [`Self::recv`] returns an `io::Error` of kind `WouldBlock` /
+    /// [`Self::recv`] returns [`KevyError::Io`] with kind `WouldBlock` /
     /// `TimedOut` when no frame arrives within `dur`.
-    pub fn set_read_timeout(&mut self, dur: Option<Duration>) -> io::Result<()> {
+    pub fn set_read_timeout(&mut self, dur: Option<Duration>) -> KevyResult<()> {
         match &mut self.inner {
-            Inner::Remote { stream, .. } => stream.set_read_timeout(dur),
+            Inner::Remote { stream, .. } => Ok(stream.set_read_timeout(dur)?),
             Inner::Embedded { timeout, .. } => {
                 *timeout = dur;
                 Ok(())
@@ -352,7 +292,7 @@ impl Subscriber {
 
     /// Borrowing iterator over every pubsub frame — ack frames included.
     /// Each `next()` is one blocking [`Self::recv`]. Terminates (`None`)
-    /// when the underlying stream / bus is gone (`ErrorKind::UnexpectedEof`);
+    /// when the underlying stream / bus is gone ([`KevyError::Closed`]);
     /// every other error is surfaced as `Some(Err(_))` so the caller can
     /// decide whether to retry (e.g. a read timeout) or break.
     ///
@@ -381,10 +321,10 @@ pub struct SubscriberEvents<'a> {
 }
 
 impl Iterator for SubscriberEvents<'_> {
-    type Item = io::Result<PubsubEvent>;
+    type Item = KevyResult<PubsubEvent>;
     fn next(&mut self) -> Option<Self::Item> {
         match self.sub.recv() {
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => None,
+            Err(KevyError::Closed) => None,
             other => Some(other),
         }
     }
@@ -399,10 +339,10 @@ pub struct SubscriberMessages<'a> {
 }
 
 impl Iterator for SubscriberMessages<'_> {
-    type Item = io::Result<(Vec<u8>, Vec<u8>)>;
+    type Item = KevyResult<(Vec<u8>, Vec<u8>)>;
     fn next(&mut self) -> Option<Self::Item> {
         match self.sub.recv_message() {
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => None,
+            Err(KevyError::Closed) => None,
             other => Some(other),
         }
     }
@@ -411,15 +351,13 @@ impl Iterator for SubscriberMessages<'_> {
 /// Classify the drained `HELLO 3` ack. Reply::Map / Reply::Array are
 /// both acceptable (a server that rejected V3 would emit an Error
 /// reply — surfaced via the error branch below).
-fn classify_hello3_reply(reply: Reply) -> io::Result<PubsubEvent> {
+fn classify_hello3_reply(reply: Reply) -> KevyResult<PubsubEvent> {
     match reply {
         Reply::Map(_) | Reply::Array(_) => Ok(PubsubEvent::Subscribe {
             channel: b"HELLO".to_vec(),
             count: 3,
         }),
-        Reply::Error(e) => Err(io::Error::other(
-            String::from_utf8_lossy(&e).into_owned(),
-        )),
+        Reply::Error(e) => Err(KevyError::Protocol(String::from_utf8_lossy(&e).into_owned())),
         other => Err(invalid(format!(
             "unexpected HELLO 3 reply shape: {}",
             shape(&other)
@@ -437,28 +375,25 @@ fn classify_hello3_reply(reply: Reply) -> io::Result<PubsubEvent> {
 // is global, not db-scoped — any /N path segment is ignored).
 // ─────────────────────────────────────────────────────────────────────────
 
-fn remote_host_port(url: &str) -> io::Result<(String, u16)> {
+fn remote_host_port(url: &str) -> KevyResult<(String, u16)> {
     let (_scheme, rest) = url.split_once("://").ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "URL missing '://'")
+        KevyError::InvalidInput("URL missing '://'".into())
     })?;
     if rest.contains('@') {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "userinfo (user:pass@host) is unsupported — kevy has no AUTH",
-        ));
+        return Err(KevyError::Unsupported("userinfo (user:pass@host) is unsupported — kevy has no AUTH".into()));
     }
     let authority = rest.split('/').next().unwrap_or("");
     let (host, port) = match authority.rsplit_once(':') {
         Some((h, p)) => {
             let port: u16 = p.parse().map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidInput, format!("bad port: {p}"))
+                KevyError::InvalidInput(format!("bad port: {p}"))
             })?;
             (h.to_string(), port)
         }
         None => (authority.to_string(), 6379),
     };
     if host.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "empty host"));
+        return Err(KevyError::InvalidInput("empty host".into()));
     }
     Ok((host, port))
 }

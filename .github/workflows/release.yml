@@ -57,7 +57,7 @@ jobs:
   #
   # Rate limit: crates.io throttles NEW-crate publishes (burst-5 then
   # 1/~10 min), but version BUMPS on existing crates are not throttled —
-  # all 16 crates are already on crates.io, so a tag-driven mass-republish
+  # all 30 crates are already on crates.io, so a tag-driven mass-republish
   # runs back-to-back with no sleeps.
   publish:
     name: cargo publish to crates.io
@@ -81,17 +81,17 @@ jobs:
         run: |
           set -euo pipefail
           chain=$(printf '%s\n' \
-            kevy-madvise kevy-sys kevy-hash kevy-config kevy-uring \
+            kevy-madvise kevy-sys kevy-vlog kevy-hash kevy-config kevy-uring \
             kevy-bytes kevy-resp kevy-ring kevy-map kevy-geo kevy-scope \
             kevy-resp-client kevy-store \
             kevy-text kevy-vector kevy-index \
             kevy-persist \
             kevy-replicate \
             kevy-elect \
-            kevy-rt kevy-embedded \
+            kevy-rt kevy-embedded kevy-wasm \
             kevy-lua kevy-lua-host \
             kevy kevy-client \
-            kevy-cli kevy-mcp \
+            kevy-sql kevy-cli kevy-mcp \
             kevy-cluster-rw kevy-client-async | sort -u)
           expected=$(cargo metadata --no-deps --format-version 1 \
             | jq -r '.packages | map(select(.publish == null)) | .[].name' \
@@ -124,7 +124,7 @@ jobs:
           # cargo retry attempt counts against the burst window too.
           #
           # New ceiling: 35s sleep after every successful publish, so a
-          # 22-crate chain takes ~13 min wall-clock but stays well under
+          # 30-crate chain takes ~18 min wall-clock but stays well under
           # any per-10-min limit. On 429, sleep 300s × up to 5 retries
           # (max 25 min wait per crate) — enough to outwait even a fully
           # depleted window.
@@ -166,21 +166,54 @@ jobs:
           # dev-dep kevy-client doesn't affect publish — placed at the
           # end alongside kevy-cluster-rw).
           for c in \
-            kevy-madvise kevy-sys kevy-hash kevy-config kevy-uring \
+            kevy-madvise kevy-sys kevy-vlog kevy-hash kevy-config kevy-uring \
             kevy-bytes kevy-resp kevy-ring kevy-map kevy-geo kevy-scope \
             kevy-resp-client kevy-store \
             kevy-text kevy-vector kevy-index \
             kevy-persist \
             kevy-replicate \
             kevy-elect \
-            kevy-rt kevy-embedded \
+            kevy-rt kevy-embedded kevy-wasm \
             kevy-lua kevy-lua-host \
             kevy kevy-client \
-            kevy-cli kevy-mcp \
+            kevy-sql kevy-cli kevy-mcp \
             kevy-cluster-rw kevy-client-async; do
             publish_or_skip "$c"
           done
           echo "all publishable crates handled"
+
+  # ───────────── npm: @goliajp/kevy (wasm + loader) ─────────────
+  npm:
+    name: npm publish @goliajp/kevy
+    runs-on: ubuntu-latest
+    needs: publish
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+      - name: Build the wasm artifact
+        run: |
+          cargo build -p kevy-wasm --target wasm32-unknown-unknown --release
+          cp target/wasm32-unknown-unknown/release/kevy_wasm.wasm crates/kevy-wasm/pkg/kevy.wasm
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Publish (idempotent skip)
+        working-directory: crates/kevy-wasm/pkg
+        run: |
+          V=$(node -p "require('./package.json').version")
+          if npm view @goliajp/kevy@"$V" version >/dev/null 2>&1; then
+            echo "@goliajp/kevy@$V already published — skipping"
+          else
+            npm publish --access public
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   # ───────────── build the kevy server binary for every supported target ─────────────
   # All targets build NATIVELY on their respective GitHub-hosted runner — each
@@ -219,13 +252,16 @@ jobs:
           rustup default stable
           rustup target add ${{ matrix.target }}
 
-      - name: Build kevy server binary
+      - name: Build kevy server + cli binaries
         shell: bash
-        run: cargo build --release --bin kevy --target ${{ matrix.target }}
+        run: |
+          cargo build --release --bin kevy --target ${{ matrix.target }}
+          cargo build --release -p kevy-cli --target ${{ matrix.target }}
 
       # Package layout (same on every target):
       #   kevy-<tag>-<target>/
       #     kevy(.exe)
+      #     kevy-cli
       #     README.md
       #     LICENSE-APACHE
       #     LICENSE-MIT
@@ -243,6 +279,7 @@ jobs:
           stage="kevy-${tag}-${{ matrix.target }}"
           mkdir -p "$stage"
           cp "target/${{ matrix.target }}/release/kevy" "$stage/kevy"
+          cp "target/${{ matrix.target }}/release/kevy-cli" "$stage/kevy-cli"
           cp README.md LICENSE-APACHE LICENSE-MIT "$stage/"
           cp crates/kevy/kevy.toml.example "$stage/kevy.toml.example"
           tar -czf "${stage}.tar.gz" "$stage"

@@ -1,5 +1,5 @@
-//! T4.25 — pipeline example: queue a batch of mixed commands and run
-//! them in a single TCP round-trip.
+//! Pipeline example: queue a batch of mixed commands and run them in
+//! a single TCP round-trip.
 //!
 //! ```text
 //! cargo run -p kevy-client-async --example pipeline --features tokio
@@ -16,9 +16,9 @@ use kevy_resp::Reply;
 use std::env;
 
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
+async fn main() -> kevy_client::KevyResult<()> {
     let url = env::var("KEVY_URL").unwrap_or_else(|_| "tcp://127.0.0.1:6004".into());
-    let mut conn = AsyncConnection::open(&url).await?;
+    let mut conn = AsyncConnection::connect(&url).await?;
 
     // Mixed batch: writes + reads + counter + cleanup.
     let replies = conn

@@ -1,0 +1,27 @@
+{
+  "name": "expo-kevy-example",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios"
+  },
+  "dependencies": {
+    "expo": "~57.0.4",
+    "expo-file-system": "~57.0.0",
+    "expo-kevy": "file:..",
+    "expo-status-bar": "~57.0.0",
+    "mitt": "^3.0.1",
+    "react": "19.2.3",
+    "react-native": "0.86.0",
+    "react-native-kevy-nitro": "file:../../nitro",
+    "react-native-mmkv": "^3.0.0",
+    "react-native-nitro-modules": "0.36.1"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "typescript": "~6.0.3"
+  },
+  "private": true
+}

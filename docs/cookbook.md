@@ -12,7 +12,7 @@ at serving time (`bench/VALIDATION-LEDGER.md` has the measured
 numbers).
 
 Every command block runs as-is against a fresh local kevy
-(`kevy --port 6004`; recipes 11–14 and 16 additionally want
+(`kevy --port 6004`; recipes 11–14, 16 and 20 additionally want
 `[feed] enabled = true` in `kevy.toml` — see docs/cdc.md).
 `bench/cookbook_smoke.sh` executes every `kevy-cli` line below
 against a throwaway server, so the blocks stay honest.
@@ -116,6 +116,14 @@ is **reads inside the atomic block**: the app evaluates the
 invariant, the engine guarantees the decision and the write commit
 together.
 
+Concretely: returning `Err` from the closure rolls back every write it
+made — in memory and in the AOF — so a rejected transaction leaves no
+trace, and you do not have to arrange your closure so that validation
+precedes every write. (That guarantee is real as of 4.0; earlier
+versions left a rejected closure's writes live in memory while
+discarding their AOF frames, so a restart disagreed with the running
+process.)
+
 ```rust
 // embedded — debit that must not overdraw, plus an audit row:
 store.atomic(b"acct:7", |ctx| {
@@ -217,7 +225,11 @@ the moment a path matters, promote it to a field.
 **SQL equivalent:** `FOREIGN KEY … ON DELETE CASCADE` —
 [matrix: constraints and triggers](rds-workloads.md#constraints-and-triggers).
 
-Cascades are app patterns, never engine magic:
+Cascades are app patterns, never engine magic. If you are writing more
+than one of these, read [§21](#21-derived-state-as-a-pure-function-of-the-row)
+first — cascade, uniqueness and drift detection are one pattern, and
+this section is a special case of it.
+
 
 - Synchronous, small blast radius: delete inside one atomic block
   (`ctx.del(row)`, `ctx.srem(parent_link, id)`).
@@ -418,6 +430,340 @@ in both lists.
 
 ---
 
+The last two recipes leave the rack entirely: a kevy on an edge node
+— the same server binary, or `kevy-embedded` compiled down to its
+`core` tier at 655 KB ([docs/iot.md](iot.md)) — speaks the same
+verbs, so the patterns transfer verbatim from datacenter to sensor
+gateway.
+
+## 19. Sensor cache (latest value + liveness lease)
+
+**SQL equivalent:** the `readings_latest` upsert table plus the
+staleness cron —
+[matrix: operational deltas](rds-workloads.md#sizing-and-operational-deltas).
+
+The current value of every sensor is a row; the TTL is the liveness
+contract. A sensor that stops reporting expires out of the cache —
+**absence IS the offline signal**, no reaper job to write:
+
+```console
+kevy-cli -p 6004 HSET sensor:t1 val 21.5 unit C ts 1783200000
+kevy-cli -p 6004 EXPIRE sensor:t1 90
+kevy-cli -p 6004 HSET sensor:t1 val 21.7 unit C ts 1783200030
+kevy-cli -p 6004 EXPIRE sensor:t1 90      # every report renews the lease
+kevy-cli -p 6004 EXISTS sensor:t1         # 1 = reporting, 0 = gone dark
+```
+
+Size the lease to your alarm tolerance (here 90 s = three missed
+30-second reports). To *react* to a sensor going dark instead of
+polling, enable keyspace notifications with the `x` (expired) class
+and subscribe to the expiry events — the push form of the same
+contract (docs/pubsub.md).
+
+The recent window is a stream with a hard cap — `MAXLEN ~` keeps the
+node's memory bounded no matter how long it runs, which on a
+months-uptime edge box is the invariant that matters:
+
+```console
+kevy-cli -p 6004 XADD sensor:t1:log MAXLEN '~' 1000 '*' val 21.5
+kevy-cli -p 6004 XADD sensor:t1:log MAXLEN '~' 1000 '*' val 21.7
+kevy-cli -p 6004 XLEN sensor:t1:log
+kevy-cli -p 6004 XRANGE sensor:t1:log - + COUNT 10
+```
+
+Embedded form: same verbs through the typed API inside your gateway
+process — `store.hset(…)` / `store.expire(…)` / `store.xadd(…)` —
+with no socket at all; the `core` feature tier carries everything
+this recipe uses (docs/iot.md).
+
+## 20. Edge aggregation (write-time GROUP BY + uplink)
+
+**SQL equivalent:** `SELECT zone, COUNT(*), SUM(w) … GROUP BY zone`
+re-run per dashboard refresh —
+[matrix: GROUP BY and aggregates](rds-workloads.md#group-by-and-aggregates).
+
+An edge node summarizes locally and ships summaries — raw readings
+are too many to uplink. Declare the aggregate once; it is maintained
+in the write path, so the "aggregation job" simply stops existing:
+
+```console
+kevy-cli -p 6004 HSET reading:1 zone floor1 w 120
+kevy-cli -p 6004 HSET reading:2 zone floor1 w 180
+kevy-cli -p 6004 HSET reading:3 zone floor2 w 95
+kevy-cli -p 6004 IDX.CREATE zone_w ON PREFIX reading: FIELD w TYPE i64 KIND agg GROUPBY zone
+kevy-cli -p 6004 IDX.QUERY zone_w GROUP floor1            # [count, sum, min, max, avg]
+kevy-cli -p 6004 IDX.QUERY zone_w GROUPS BY sum LIMIT 10  # zones ranked by load
+```
+
+The uplink is recipe 11's outbox wearing overalls: the feed already
+journals every committed write, so the cloud-sync consumer is a
+cursor loop, resumable across links that drop for hours —
+at-least-once, in commit order, prefix-filtered to just what the
+cloud needs:
+
+```console
+# needs [feed] enabled = true in kevy.toml (docs/cdc.md)
+kevy-cli -p 6004 FEED.TAIL 0
+kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 100 PREFIX reading:   # the uplink loop
+```
+
+Pair it with recipe 19's `MAXLEN` cap and TTLs: raw readings stay
+bounded on the node, the aggregate rows stay tiny, and the feed
+cursor survives reboots — the whole edge story with zero moving
+parts beyond kevy itself.
+
+## 21. Derived state as a pure function of the row
+
+**SQL equivalent:** the whole trigger layer at once — `ON DELETE
+CASCADE`, `UNIQUE` constraints, and the reconciliation job you write
+after you stop trusting them —
+[matrix: constraints and triggers](rds-workloads.md#constraints-and-triggers).
+
+This is the pattern the recipes above keep circling: §2's link keys,
+§5's invariants, §10's cascades and §12's audit rows are all the same
+idea applied four times. Stated once, it resolves cascades, uniqueness
+and drift detection together. It comes from a production migration that
+took a day to arrive at it, which is a day worth saving.
+
+**The idea:** write one pure function from a row to every key derived
+from it. Not a procedure that updates keys — a function that *returns*
+what should exist.
+
+```rust
+// Everything user:42 implies, computed from the row alone.
+fn derived(id: &[u8], row: &Row) -> Vec<Vec<u8>> {
+    vec![
+        key(b"email:", &row.email),          // uniqueness claim
+        key(b"dept:", &row.dept, b":users"), // membership
+    ]
+}
+```
+
+Every operation is then a diff, and each falls out rather than being
+designed:
+
+| Operation | What you do | What you get for free |
+|---|---|---|
+| **Insert** | add `derived(new)` | claims and memberships appear together |
+| **Update** | add `derived(new) - derived(old)`, remove `derived(old) - derived(new)` | a renamed email **releases its old claim** — the bug everyone writes by hand |
+| **Delete** | remove `derived(old)` | the cascade is not a separate code path |
+| **Verify** | recompute `derived` for every row, diff against what exists | a drift detector you did not have to design |
+
+The update row is the one that pays for the pattern. Hand-written
+cascade code almost always adds the new claim and forgets to release the
+old one, because release is the case nobody demonstrates in a ticket.
+
+```rust
+store.atomic_all_shards(|ctx| {
+    let old = read_row(ctx, id)?;
+    let (want, had) = (derived(id, &new), derived(id, &old));
+
+    for k in want.iter().filter(|k| !had.contains(k)) {
+        if ctx.exists(&[k]) > 0 { return Err(Taken); }  // uniqueness
+        ctx.set(k, id);
+    }
+    for k in had.iter().filter(|k| !want.contains(k)) {
+        ctx.del(&[k]);                                  // release
+    }
+    write_row(ctx, id, &new)
+})
+```
+
+Returning `Err` rolls the whole thing back (§5), so a rejected write
+leaves neither the row nor a half-applied claim set.
+
+**Claims or an index?** A uniqueness claim is a second source of truth
+that can drift from the rows; a [secondary index](indexes.md) is
+derived by construction and cannot. Inside `atomic_all_shards` you can
+query one directly:
+
+```rust
+if ctx.idx_count(b"email_idx", &want, &want)? > 0 { return Err(Taken); }
+```
+
+Two limits, both deliberate:
+
+- **Only on `atomic_all_shards`.** An index entry lives on the shard of
+  the key it indexes, so "does any row have this email" is a question
+  about every shard. Single-shard `atomic()` holds one lock and could
+  answer only for its own slice — a uniqueness check that consults 1/N
+  of the keyspace would report "unique" nearly always, so it is not
+  offered rather than offered with a footnote.
+- **Index reads do not see the transaction's own writes.** Maintenance
+  runs at commit. A closure inserting two rows must compare them to each
+  other itself.
+
+**Verification.** Because `derived` is a function, the checker *is* the
+function — pass the same one to `reconcile`:
+
+```rust
+let report = store.snapshot().reconcile(
+    b"user:",                    // the rows
+    &[b"email:", b"dept:"],      // where derived keys live
+    |key, row| derived(key, row),
+);
+if !report.is_clean() {
+    warn!("{} missing, {} orphaned", report.missing_count, report.orphaned_count);
+}
+```
+
+It diffs **both** directions, which is the part worth not writing
+yourself. A missing key is lost derived state; an *orphan* — a claim
+whose row is gone — is what a half-applied update leaves behind, and it
+is the failure that silently blocks a later insert. A checker that only
+looks for absences reports "clean" during exactly that failure.
+
+It runs against a snapshot (`store.snapshot()`), frozen under every
+shard lock, so it does not mistake a concurrent write for drift. That
+holds only if the write itself was atomic: a row and its claims must go
+in one `atomic_all_shards` block, or there is a real half-applied state
+to find. Reconciliation and atomic writes are the same guarantee seen
+from two ends.
+
+Run it at boot, or on a schedule, or never once you trust the writes —
+but run it, because it is the only thing that can tell you the invariant
+you believe in is the invariant you have.
+
+## 22. Porting a PG/MySQL schema
+
+**SQL equivalent:** the schema file itself — `CREATE TABLE`,
+`CREATE INDEX`, `CREATE VIEW` — [matrix: secondary index
+DDL](rds-workloads.md#secondary-index-ddl).
+
+Everything recipes 1–8 do by hand, compiled from the SQL you already
+have. `kevy-sql` (and its `kevy-cli sql` face) is a **declaration-time
+compiler**: it reads the schema ONCE, like a migration tool, and emits
+explicit `TABLE.DECLARE` / `VIEW.CREATE` commands plus *query cards* —
+ready-made `IDX.QUERY` templates with `$N` slots. Nothing runs
+per-query inside the server; ad-hoc runtime SQL stays refused by the
+engine itself (Law 3).
+
+The schema — [docs/examples/shop.sql](https://github.com/goliajp/kevy/blob/main/docs/examples/shop.sql), a real
+users/orders/order_items cut-down:
+
+```sql
+CREATE TABLE users (
+  id     bigserial PRIMARY KEY,
+  email  text,
+  name   text,
+  plan   text
+);
+CREATE UNIQUE INDEX ON users (email);
+
+CREATE TABLE orders (
+  id          bigserial PRIMARY KEY,
+  user_id     bigint,
+  status      text,
+  total       numeric(10,2),
+  created_at  bigint       -- epoch seconds, app-encoded
+);
+-- INCLUDE = PG covering columns -> kevy stored VALUES (residual FILTER/SORT).
+CREATE INDEX ON orders (status) INCLUDE (total, created_at);
+-- Multi-column -> a composite ORDERPATH (the (user_id, created_at DESC) walk).
+CREATE INDEX ON orders (user_id, created_at DESC);
+
+CREATE TABLE order_items (
+  id        bigserial PRIMARY KEY,
+  order_id  bigint,
+  sku       text,
+  qty       int
+);
+CREATE INDEX ON order_items (order_id);
+
+CREATE VIEW paid_orders AS
+  SELECT * FROM orders WHERE status = 'paid';
+
+CREATE VIEW recent_orders_by_user AS
+  SELECT id, status, total, created_at FROM orders
+  WHERE user_id = $1
+  ORDER BY created_at DESC
+  LIMIT 20;
+```
+
+Compile it, then apply the declarations to a server:
+
+```console
+kevy-cli sql compile docs/examples/shop.sql
+kevy-cli sql compile docs/examples/shop.sql --apply --url 127.0.0.1:6004
+```
+
+The compiled script (verbatim). Each table folds its indexes into one
+`TABLE.DECLARE`; the constant view becomes an engine view; the
+parameterized view becomes a query card; every coarse type mapping is
+called out honestly in the notes (kevy columns are `i64|f64|str` —
+timestamps are app-encoded, `serial` does not allocate ids for you):
+
+```text
+TABLE.DECLARE users PREFIX users: PK id COLUMN id i64 COLUMN email str COLUMN name str COLUMN plan str INDEX email unique
+TABLE.DECLARE orders PREFIX orders: PK id COLUMN id i64 COLUMN user_id i64 COLUMN status str COLUMN total f64 COLUMN created_at i64 INDEX status range VALUES total created_at ORDERPATH user_id_created_at ON user_id THEN created_at DESC
+TABLE.DECLARE order_items PREFIX order_items: PK id COLUMN id i64 COLUMN order_id i64 COLUMN sku str COLUMN qty i64 INDEX order_id range
+VIEW.CREATE paid_orders QUERY orders.status EQ paid ORDER BY orders.status
+
+# ---- query card: recent_orders_by_user ----
+# runtime template — substitute the $N slots and send as-is:
+#   $1 = user_id (i64)
+#   IDX.QUERY orders.user_id_created_at WHERE user_id EQ $1 LIMIT 20 FIELDS id status total created_at
+
+# notes:
+#   - users.id: bigserial → i64, but ids do NOT auto-increment — allocate them app-side (INCR block, cookbook §3)
+#   - orders.total: numeric → f64 — fixed-point precision becomes binary float; keep money as integer cents if exactness matters
+#   - view paid_orders: read with VIEW.QUERY paid_orders, then hydrate rows with HMGET <key> id user_id status total created_at
+```
+
+Rows are ordinary hashes under the table prefix (recipe 1), and the
+compiled paths serve immediately — the card runs with a real argument
+in the `$1` slot:
+
+```console
+kevy-cli -p 6004 HSET users:1 id 1 email ada@example.com name Ada plan pro
+kevy-cli -p 6004 HSET orders:1 id 1 user_id 1 status paid total 19.5 created_at 1700000100
+kevy-cli -p 6004 HSET orders:2 id 2 user_id 1 status pending total 5 created_at 1700000200
+kevy-cli -p 6004 HSET orders:3 id 3 user_id 2 status paid total 8 created_at 1700000300
+kevy-cli -p 6004 HSET order_items:1 id 1 order_id 1 sku sku-7 qty 2
+kevy-cli -p 6004 IDX.QUERY users.email EQ ada@example.com
+kevy-cli -p 6004 IDX.QUERY orders.user_id_created_at WHERE user_id EQ 1 LIMIT 20 FIELDS id status total created_at
+kevy-cli -p 6004 VIEW.QUERY paid_orders LIMIT 10
+kevy-cli -p 6004 IDX.QUERY orders.status EQ paid FILTER total RANGE 10 inf
+kevy-cli -p 6004 IDX.QUERY order_items.order_id EQ 1 FIELDS sku qty
+kevy-cli -p 6004 TABLE.LIST
+```
+
+- The card query is `SELECT id, status, total, created_at FROM orders
+  WHERE user_id = 1 ORDER BY created_at DESC LIMIT 20` — served by the
+  composite walk, newest first, hydrated in one hop.
+- The `FILTER total RANGE 10 inf` line is a residual predicate over the
+  `INCLUDE`d columns — `WHERE status = 'paid' AND total >= 10` without
+  touching a row.
+- `order_items.order_id EQ 1` is the FK lookup that replaces the JOIN
+  (recipe 2): two queries, no query-time join.
+
+**The refusals teach.** The compiler refuses everything that would need
+query-time evaluation — by name, with line/column, pointing at the
+recipe that models it. A JOIN:
+
+```sql
+CREATE VIEW order_emails AS
+  SELECT id, email FROM orders
+  JOIN users ON users.id = orders.user_id;
+```
+
+```text
+$ kevy-cli sql compile join.sql
+kevy-cli sql: join.sql: line 6, col 3: JOIN is not compilable — kevy
+refuses query-time joins (Law 3); model the lookup with an indexed FK
+column (IDX.QUERY t.fk EQ …) or app-side assembly (cookbook §2)
+```
+
+A view whose WHERE matches no declared access path errors naming the
+exact declaration to add (`… matches no declared access path — add:
+CREATE INDEX ON orders (status, total)`), and ad-hoc SQL at runtime
+never had a door:
+
+```text
+$ kevy-cli -p 6004 SQL SELECT * FROM users
+(error) ERR unknown command 'SQL'
+```
+
 ## Recipe index
 
 Recipe ↔ the SQL construct it replaces ↔ the
@@ -444,3 +790,7 @@ semantics and limits.
 | 16 | Session context with TTL | sessions table + expiry cron | [operational deltas](rds-workloads.md#sizing-and-operational-deltas) |
 | 17 | Episodic memory | time `BETWEEN` + pgvector KNN | [SELECT](rds-workloads.md#select) |
 | 18 | RAG hybrid retrieval | tsvector + pgvector, fused | [SELECT](rds-workloads.md#select) |
+| 19 | Sensor cache | upsert table + staleness cron | [operational deltas](rds-workloads.md#sizing-and-operational-deltas) |
+| 20 | Edge aggregation | `GROUP BY` per refresh + ETL uplink | [GROUP BY and aggregates](rds-workloads.md#group-by-and-aggregates) |
+| 21 | Derived state as a function of the row | the trigger layer entire: cascades, `UNIQUE`, reconciliation | [constraints and triggers](rds-workloads.md#constraints-and-triggers) |
+| 22 | Porting a PG/MySQL schema | `CREATE TABLE` / `CREATE INDEX` / `CREATE VIEW`, compiled | [secondary index DDL](rds-workloads.md#secondary-index-ddl) |

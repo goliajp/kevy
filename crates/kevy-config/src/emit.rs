@@ -5,8 +5,8 @@
 //!
 //! BOTH serializers must cover EVERY schema section — a section missing
 //! here silently drops the user's settings on the next `CONFIG REWRITE`
-//! (fuzz finding 2026-07-10: [cluster]/[replication]/[lua]/[metrics]/
-//! [audit]/[feed] were missing, plus `server.max_clients`). The
+//! (a fuzz run once found [cluster]/[replication]/[lua]/[metrics]/
+//! [audit]/[feed] missing, plus `server.max_clients`). The
 //! whole-config round-trip tests below lock the coverage.
 
 use crate::cluster::{PeerEntry, ScopeEntry};
@@ -15,15 +15,15 @@ use crate::schema::{Config, LogOutput};
 /// The sections emitted from [`canonical_pairs`] rather than the
 /// hand-aligned template below — single source of truth for both the
 /// template and the preserving splice path.
-const SERVICE_SECTIONS: [&str; 6] =
-    ["cluster", "replication", "lua", "metrics", "audit", "feed"];
+const SERVICE_SECTIONS: [&str; 7] =
+    ["cluster", "replication", "lua", "metrics", "audit", "feed", "tiering"];
 
 impl Config {
     /// Render the current config as a standard-template TOML file —
     /// every field, in stable section/key order, with no comments. Used
-    /// by `CONFIG REWRITE`; the loss of any inline comments the user
-    /// had in their hand-edited file is the documented v1.0 trade-off
-    /// (v1.x will preserve them).
+    /// by `CONFIG REWRITE` when the comment-preserving splice in
+    /// [`crate::preserve`] has no original file to work from; only
+    /// then are the user's inline comments lost.
     ///
     /// Round-trips: feeding the output back through [`Self::from_toml_str`]
     /// reconstructs an equivalent `Config` (modulo `source_path`).
@@ -53,6 +53,21 @@ impl Config {
             "data_dir = \"{}\"",
             escape_toml_basic_string(&self.server.data_dir.display().to_string()),
         );
+        self.write_toml_persistence_section(out);
+        let _ = writeln!(out, "[memory]");
+        let _ = writeln!(out, "maxmemory         = {}", self.memory.maxmemory);
+        let _ = writeln!(
+            out,
+            "maxmemory_policy  = \"{}\"",
+            self.memory.maxmemory_policy.as_str(),
+        );
+    }
+
+    /// The `[persistence]` section — split from
+    /// [`Self::write_toml_storage_sections`] when the durability arc's
+    /// new rewrite/resync knobs pushed it past the fn-length rule.
+    fn write_toml_persistence_section(&self, out: &mut String) {
+        use std::fmt::Write;
         let _ = writeln!(out);
         let _ = writeln!(out, "[persistence]");
         let _ = writeln!(out, "aof                          = {}", self.persistence.aof);
@@ -71,14 +86,22 @@ impl Config {
             "auto_aof_rewrite_min_size    = {}",
             self.persistence.auto_aof_rewrite_min_size,
         );
-        let _ = writeln!(out);
-        let _ = writeln!(out, "[memory]");
-        let _ = writeln!(out, "maxmemory         = {}", self.memory.maxmemory);
         let _ = writeln!(
             out,
-            "maxmemory_policy  = \"{}\"",
-            self.memory.maxmemory_policy.as_str(),
+            "auto_aof_rewrite_bytes       = {}",
+            self.persistence.auto_aof_rewrite_bytes,
         );
+        let _ = writeln!(
+            out,
+            "auto_aof_rewrite_interval_secs = {}",
+            self.persistence.auto_aof_rewrite_interval_secs,
+        );
+        let _ = writeln!(
+            out,
+            "replay_resync                = {}",
+            self.persistence.replay_resync,
+        );
+        let _ = writeln!(out);
     }
 
     /// `[expiry]` / `[log]` / `[notification]` / `[advanced]` / `[slowlog]`
@@ -182,6 +205,7 @@ pub(crate) fn canonical_pairs(cfg: &Config) -> Vec<CanonicalPair> {
     push_metrics(&mut v, cfg);
     push_audit(&mut v, cfg);
     push_feed(&mut v, cfg);
+    push_tiering(&mut v, cfg);
     v
 }
 
@@ -214,6 +238,19 @@ fn push_persistence(v: &mut Vec<CanonicalPair>, cfg: &Config) {
         "persistence",
         "auto_aof_rewrite_percentage",
         p.auto_aof_rewrite_percentage.to_string(),
+    );
+    push(
+        v,
+        "persistence",
+        "auto_aof_rewrite_bytes",
+        p.auto_aof_rewrite_bytes.to_string(),
+    );
+    push(v, "persistence", "replay_resync", p.replay_resync.to_string());
+    push(
+        v,
+        "persistence",
+        "auto_aof_rewrite_interval_secs",
+        p.auto_aof_rewrite_interval_secs.to_string(),
     );
     push(
         v,
@@ -277,9 +314,9 @@ fn push_cluster(v: &mut Vec<CanonicalPair>, cfg: &Config) {
     push(v, "cluster", "node_id", toml_string(&cl.node_id));
     push(v, "cluster", "elect_port_base", cl.elect_port_base.to_string());
     let peers: Vec<String> = cl.peers.iter().map(PeerEntry::to_token).collect();
-    push(v, "cluster", "peers", toml_string(&peers.join(",")));
+    push(v, "cluster", "peers", toml_array(&peers));
     let scopes: Vec<String> = cl.scopes.iter().map(ScopeEntry::to_token).collect();
-    push(v, "cluster", "scopes", toml_string(&scopes.join(",")));
+    push(v, "cluster", "scopes", toml_array(&scopes));
 }
 
 fn push_replication(v: &mut Vec<CanonicalPair>, cfg: &Config) {
@@ -320,7 +357,7 @@ fn push_replication(v: &mut Vec<CanonicalPair>, cfg: &Config) {
 
 fn push_lua(v: &mut Vec<CanonicalPair>, cfg: &Config) {
     push(v, "lua", "time_limit_ms", cfg.lua.time_limit_ms.to_string());
-    push(v, "lua", "allow_dialects", toml_string(&cfg.lua.allow_dialects.join(",")));
+    push(v, "lua", "allow_dialects", toml_array(&cfg.lua.allow_dialects));
 }
 
 fn push_metrics(v: &mut Vec<CanonicalPair>, cfg: &Config) {
@@ -341,12 +378,40 @@ fn push_feed(v: &mut Vec<CanonicalPair>, cfg: &Config) {
     push(v, "feed", "feed_buffer_size", cfg.feed.feed_buffer_size.to_string());
 }
 
+/// `[tiering]` — both keys optional: absent = tiering off, and their
+/// absence must round-trip to the off default.
+fn push_tiering(v: &mut Vec<CanonicalPair>, cfg: &Config) {
+    if let Some(budget) = cfg.tiering.budget {
+        push(v, "tiering", "budget", toml_string(&budget.as_config_string()));
+    }
+    if let Some(dir) = &cfg.tiering.spill_dir {
+        push(v, "tiering", "spill_dir", toml_string(&dir.display().to_string()));
+    }
+}
+
 fn push(v: &mut Vec<CanonicalPair>, section: &'static str, key: &'static str, value: String) {
     v.push(CanonicalPair { section, key, value });
 }
 
 fn log_output_str(o: &LogOutput) -> String {
     o.as_str().into_owned()
+}
+
+/// `["a", "b"]` — the canonical TOML form for a list.
+///
+/// Emitting `"a,b"` instead would mean a user who wrote an array got a string
+/// back the first time anything rewrote their config. The parser still reads
+/// both; only one of them is worth writing.
+fn toml_array(items: &[String]) -> String {
+    let mut out = String::from("[");
+    for (i, it) in items.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&toml_string(it));
+    }
+    out.push(']');
+    out
 }
 
 fn toml_string(s: &str) -> String {

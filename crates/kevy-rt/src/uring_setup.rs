@@ -1,13 +1,63 @@
 //! io_uring setup face split from `uring_reactor.rs` (500-LOC rule):
-//! ring capacities, the global availability probe, and the per-shard
-//! ring builder the spawn site uses for the auto-mode epoll fallback.
+//! ring capacities, the global availability probe, the per-shard
+//! ring builder the spawn site uses for the auto-mode epoll fallback,
+//! and the shard's pre-loop preparation.
 
 use std::io;
+use std::sync::Arc;
 
+use kevy_persist::{load_snapshot, replay_aof};
 use kevy_uring::IoUring;
 
-/// SQ/CQ depth per-shard. Paired with `PBUF_ENTRIES` — v1.25 G1/K2 bumped
-/// both to fix the c=10 000 cliff (deco-axis-k-c10000).
+use crate::Commands;
+use crate::shard::Shard;
+
+impl<C: Commands> Shard<C> {
+    /// Everything `run_uring` does before its first loop iteration:
+    /// the embedder's per-shard start hook (Lua / cross-shard registry
+    /// setup lives behind it — dropping it broke EVAL across shards on
+    /// the uring path only), the replica inbox's waker (see
+    /// replica_inbox.rs's wake contract), and the snapshot + AOF
+    /// restore, same as the readiness path.
+    pub(crate) fn prepare_uring_shard(&mut self) -> io::Result<()> {
+        self.commands.on_shard_start(self.id);
+        if let Some(rx) = &self.replica_inbox {
+            rx.attach_waker(Arc::clone(&self.waker));
+        }
+        let snap = self.snapshot_path();
+        if snap.exists()
+            && let Err(e) = load_snapshot(&mut self.store, &snap)
+        {
+            eprintln!("kevy: shard {} failed to load {}: {e}", self.id, snap.display());
+        }
+        if self.aof.is_some() {
+            let aof_path = self.aof_path();
+            let commands = &self.commands;
+            let store = &mut self.store;
+            // In-replay demotion — same K-frame watermark
+            // drain as the readiness path's replay.
+            let mut frames: u64 = 0;
+            let apply = |args: kevy_persist::Argv| {
+                crate::shard_run::replay_dispatch(commands, store, &args);
+                frames += 1;
+                if frames.is_multiple_of(kevy_persist::REPLAY_DEMOTE_INTERVAL) {
+                    store.demote_to_watermark();
+                }
+            };
+            let report = if self.replay_resync {
+                kevy_persist::replay_aof_resync(&aof_path, apply)?
+            } else {
+                replay_aof(&aof_path, apply)?
+            };
+            self.commands.on_replay_report(report.dropped_bytes, report.corrupt);
+        }
+        self.store.demote_to_watermark();
+        Ok(())
+    }
+}
+
+/// SQ/CQ depth per-shard. Paired with `PBUF_ENTRIES` — both were bumped
+/// to fix the c=10 000 cliff (deco-axis-k-c10000).
 pub(crate) const URING_ENTRIES: u32 = 2048;
 // The nap rung was removed (see the idle-ladder comment in `run_uring`).
 // URING_NAP_LIMIT / URING_NAP_MICROS / `uring_nap` are gone; spin →
@@ -36,15 +86,30 @@ pub(crate) fn io_uring_available() -> bool {
 
 /// Build the per-shard ring pair (SQ/CQ ring + provided-buffer ring).
 ///
-/// v2.1.1: split out of [`Shard::run_uring`] so the spawn site can
+/// Split out of [`Shard::run_uring`] so the spawn site can
 /// attempt it BEFORE committing the shard to the io_uring path — a
 /// per-shard setup failure (ENOMEM under memory pressure with many
 /// shards, rlimit exhaustion) in auto mode then falls back to the
 /// epoll reactor for that shard instead of killing its thread. The
 /// global [`io_uring_available`] probe only proves ONE ring can be
 /// built; N shards need N rings.
+///
+/// `KEVY_SQPOLL=1` opts the ring into kernel-side SQ polling
+/// (`IORING_SETUP_SQPOLL`, idle 1000 ms). Measurement-only switch:
+/// SQPOLL spawns one kernel poll thread per shard competing for the
+/// same core set as the shard threads, so it loses badly on a fully
+/// subscribed box — it exists so the A/B stays reproducible whenever
+/// the tradeoff is re-judged (spare-core layouts, kernel changes).
 pub(crate) fn build_uring() -> io::Result<(IoUring, kevy_uring::ProvidedBufRing)> {
-    let ring = IoUring::new(URING_ENTRIES)?;
+    let sqpoll = matches!(
+        std::env::var("KEVY_SQPOLL").ok().as_deref(),
+        Some(v) if !v.is_empty() && v != "0" && v != "off" && v != "no" && v != "false"
+    );
+    let ring = if sqpoll {
+        IoUring::new_sqpoll(URING_ENTRIES, 1000, None)?
+    } else {
+        IoUring::new(URING_ENTRIES)?
+    };
     let pbuf = ring.register_buf_ring(PBUF_ENTRIES, PBUF_SIZE, PBUF_GROUP)?;
     Ok((ring, pbuf))
 }

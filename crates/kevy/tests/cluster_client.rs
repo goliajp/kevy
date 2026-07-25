@@ -58,13 +58,15 @@ impl Server {
         cfg.server.threads = n;
         cfg.cluster.enabled = true;
         cfg.cluster.port_base = cluster_base;
-        kevy::config_init(Arc::new(cfg));
+        let state = Arc::new(
+            kevy::RuntimeState::new(Arc::new(cfg), std::path::PathBuf::new(), n).unwrap(),
+        );
 
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, n, kevy::KevyCommands)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::with_state(state)).bind([127, 0, 0, 1], port).shards(n)
                 .with_data_dir(dir_thread)
                 .with_cluster(cluster_base);
             rt.run(stop_thread).unwrap();

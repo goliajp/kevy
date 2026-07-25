@@ -5,7 +5,7 @@
 //! pub/sub framing, the seq-ring drain, and the shard hash.
 
 use crate::conn::Conn;
-use crate::message::{Agg, Gathered, KeyShape, MultiOp, SmallReply};
+use crate::message::{Agg, Gathered, MultiOp, SmallReply};
 use kevy_hash::KevyHash;
 use kevy_resp::{
     RespVersion, encode_array_len, encode_bulk, encode_error, encode_null_bulk,
@@ -31,13 +31,13 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> SmallReply {
             encode_error(&mut out, "ERR internal error");
             SmallReply::from_vec(out)
         }
-        // `:N` is ≤ 22 bytes — inline, no alloc. MinInt (v3.16 WAIT)
+        // `:N` is ≤ 22 bytes — inline, no alloc. MinInt (WAIT)
         // shares the integer shape; a MIN that stayed at the i64::MAX
         // sentinel means zero shards folded (can't happen — remaining
         // == nshards ≥ 1), clamp to 0 defensively.
         Agg::SumInt(n) => encode_inline_int(n),
         Agg::MinInt(n) => encode_inline_int(if n == i64::MAX { 0 } else { n }),
-        // v3.16 D2 REPL.WAIT barrier: all shards met → +OK, else the
+        // REPL.WAIT barrier: all shards met → +OK, else the
         // command layer's pre-built miss reply (-MISDIRECTED …).
         Agg::ReplBarrier { ok, miss } => {
             if ok {
@@ -46,7 +46,7 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> SmallReply {
                 SmallReply::from_vec(miss)
             }
         }
-        // v3.16 D2 REPL.TOKEN: flat integer array [gen0, off0, gen1,
+        // REPL.TOKEN: flat integer array [gen0, off0, gen1,
         // off1, …] in shard order. A missing slot can't happen (the
         // slot completes only after every shard folded); 0s defend.
         Agg::ReplTokens { slots } => {
@@ -60,6 +60,28 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> SmallReply {
             SmallReply::from_vec(out)
         }
         Agg::AllOk => SmallReply::from_slice(b"+OK\r\n"),
+        Agg::ClientList { text } => {
+            let mut out = Vec::with_capacity(text.len() + 24);
+            match proto {
+                RespVersion::V2 => encode_bulk(&mut out, &text),
+                RespVersion::V3 => kevy_resp::encode_verbatim(&mut out, *b"txt", &text),
+            }
+            SmallReply::from_vec(out)
+        }
+        Agg::ClientKill { killed, oldform } => {
+            if !oldform {
+                return encode_inline_int(killed);
+            }
+            // Legacy `CLIENT KILL addr:port` replies +OK on a hit and
+            // an error when nothing matched (Redis contract).
+            if killed > 0 {
+                SmallReply::from_slice(b"+OK\r\n")
+            } else {
+                let mut out = Vec::new();
+                encode_error(&mut out, "ERR No such client address in the list");
+                SmallReply::from_vec(out)
+            }
+        }
         Agg::PrefixStats { keys, expires } => {
             let mut out = Vec::with_capacity(48);
             out.extend_from_slice(
@@ -68,11 +90,19 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> SmallReply {
             );
             SmallReply::from_vec(out)
         }
-        Agg::Gather { op, keys, got } => {
-            SmallReply::from_vec(finalize_gather(op, keys, got, proto))
+        Agg::Gather { op, limit, keys, got } => {
+            SmallReply::from_vec(finalize_gather(op, limit, keys, got, proto))
         }
         Agg::XReadGather { slots } => SmallReply::from_vec(finalize_xread_gather(slots)),
-        Agg::Keys { shape, acc } => SmallReply::from_vec(finalize_keys(shape, acc)),
+        Agg::Keys { acc } => SmallReply::from_vec(finalize_keys(acc)),
+        Agg::RandomKey { key, .. } => {
+            let mut out = Vec::new();
+            match key {
+                Some(k) => encode_bulk(&mut out, &k),
+                None => encode_null_bulk(&mut out),
+            }
+            SmallReply::from_vec(out)
+        }
         Agg::SlowlogGet { count, entries } => {
             SmallReply::from_vec(crate::exec_slowlog::encode_slowlog_get(count, entries))
         }
@@ -86,8 +116,11 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> SmallReply {
         Agg::WatchCollect { .. }
         | Agg::ExecPrep { .. }
         | Agg::RenameOrchestrator { .. }
+        | Agg::ListMoveOrchestrator { .. }
         | Agg::ZStoreGather { .. }
-        | Agg::ExtensionGather { .. } => {
+        | Agg::GeoStore { .. }
+        | Agg::ExtensionGather { .. }
+        | Agg::ScanPage { .. } => {
             let mut out = Vec::new();
             encode_error(&mut out, "ERR internal: orchestrator agg hit materialize");
             SmallReply::from_vec(out)
@@ -105,29 +138,15 @@ fn encode_inline_int(n: i64) -> SmallReply {
     SmallReply::Inline { len, buf: out }
 }
 
-/// Reduce keys collected from all shards into the final RESP reply.
-fn finalize_keys(shape: KeyShape, acc: Vec<Vec<u8>>) -> Vec<u8> {
+/// KEYS: a flat array of every shard's matches. This used to dispatch on a
+/// KeyShape enum shared with SCAN and RANDOMKEY; both grew their own
+/// aggregators (a paging orchestrator and a weighted reservoir) and the enum
+/// retired with them.
+fn finalize_keys(acc: Vec<Vec<u8>>) -> Vec<u8> {
     let mut out = Vec::new();
-    match shape {
-        KeyShape::Keys => {
-            encode_array_len(&mut out, acc.len() as i64);
-            for k in &acc {
-                encode_bulk(&mut out, k);
-            }
-        }
-        KeyShape::Scan => {
-            // [cursor, [keys]] — cursor "0" (non-incremental: one full pass).
-            encode_array_len(&mut out, 2);
-            encode_bulk(&mut out, b"0");
-            encode_array_len(&mut out, acc.len() as i64);
-            for k in &acc {
-                encode_bulk(&mut out, k);
-            }
-        }
-        KeyShape::Random => match acc.first() {
-            Some(k) => encode_bulk(&mut out, k),
-            None => encode_null_bulk(&mut out),
-        },
+    encode_array_len(&mut out, acc.len() as i64);
+    for k in &acc {
+        encode_bulk(&mut out, k);
     }
     out
 }
@@ -149,7 +168,7 @@ fn finalize_keys(shape: KeyShape, acc: Vec<Vec<u8>>) -> Vec<u8> {
 /// and reclaimable via XAUTOCLAIM — the same place they'd be after a client
 /// crash mid-read. Pre-validating across shards would cost an extra
 /// round-trip on every multi-stream XREADGROUP; the error path is rare and
-/// recoverable, so the trade-off stands (RFC 2026-06-11).
+/// recoverable, so the trade-off stands.
 fn finalize_xread_gather(slots: Vec<Option<Vec<u8>>>) -> Vec<u8> {
     for slot in slots.iter().flatten() {
         if slot.first() == Some(&b'-') {
@@ -176,12 +195,14 @@ fn finalize_xread_gather(slots: Vec<Option<Vec<u8>>>) -> Vec<u8> {
 /// significant, can't be a Set).
 fn finalize_gather(
     op: MultiOp,
+    limit: usize,
     keys: Vec<Vec<u8>>,
     got: HashMap<Vec<u8>, Gathered>,
     proto: RespVersion,
 ) -> Vec<u8> {
     match op {
         MultiOp::Mget => finalize_mget(&keys, &got),
+        MultiOp::ZInterCard => finalize_zintercard(limit, &keys, &got),
         _ => finalize_set_algebra(op, &keys, &got, proto),
     }
 }
@@ -205,10 +226,6 @@ fn finalize_set_algebra(
     proto: RespVersion,
 ) -> Vec<u8> {
     let mut out = Vec::new();
-    // v2.2: ZINTERCARD rides the Scored gather; reduce to `:count`.
-    if let MultiOp::ZInterCard(limit) = op {
-        return finalize_zintercard(limit, keys, got);
-    }
     let mut sets: Vec<Vec<Vec<u8>>> = Vec::with_capacity(keys.len());
     for k in keys {
         match got.get(k) {
@@ -224,11 +241,11 @@ fn finalize_set_algebra(
         MultiOp::SInter => set_intersect(&sets),
         MultiOp::SUnion => set_union(&sets),
         MultiOp::SDiff => set_diff(&sets),
-        // The outer match already routed Mget; reaching this arm would
-        // mean a future refactor's wildcard caught Mget here. Replying
-        // empty is observably wrong but doesn't crash the shard;
-        // `unreachable!()` would crash-loop the whole reactor.
-        MultiOp::Mget | MultiOp::ZInterCard(_) => Vec::new(),
+        // The outer match already routed Mget and ZInterCard; reaching
+        // this arm would mean a future refactor's wildcard caught them
+        // here. Replying empty is observably wrong but doesn't crash
+        // the shard; `unreachable!()` would crash-loop the whole reactor.
+        MultiOp::Mget | MultiOp::ZInterCard => Vec::new(),
     };
     match proto {
         RespVersion::V2 => encode_array_len(&mut out, result.len() as i64),
@@ -283,7 +300,7 @@ pub(crate) fn pubsub_message(channel: &[u8], msg: &[u8], proto: RespVersion) -> 
     out
 }
 
-/// **H2.A (v1.25)**: pubsub `message` frame WITHOUT the body payload —
+/// Pubsub `message` frame WITHOUT the body payload —
 /// emits everything up to (but not including) the message bytes and the
 /// trailing CRLF. The caller writes `<header><body><\r\n>` where the
 /// `<body>` is splice-inserted via `Conn::output_arcs` (zero memcpy of
@@ -414,11 +431,11 @@ pub fn shard_of(key: &[u8], n: usize, slots: bool) -> usize {
     if slots {
         return slot_to_shard(kevy_hash::key_hash_slot(key), n);
     }
-    // v1.27.4: respect `{hashtag}` even in non-cluster mode so EVAL
+    // Respect `{hashtag}` even in non-cluster mode so EVAL
     // scripts can colocate keys via the standard `{tag}:k1` /
     // `{tag}:k2` pattern (matches Redis Cluster semantics). Keys
     // WITHOUT `{...}` hash whole-key — byte-identical to the
-    // pre-v1.27.4 routing, so no migration for existing keyspaces.
+    // pre-hashtag routing, so no migration for existing keyspaces.
     let hash_input = hashtag(key).unwrap_or(key);
     let h = hash_input.kevy_hash();
     if n.is_power_of_two() {

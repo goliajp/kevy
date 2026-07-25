@@ -1,7 +1,7 @@
 //! [`TextSegment`] — one shard's inverted slice of one text index
 //! (index-follows-key, same discipline as kevy-index's `Segment`).
 //! Maintained synchronously with writes; queried with BM25 ranking
-//! over shard-local statistics (RFC D2: per-shard df/avgdl — global
+//! over shard-local statistics (per-shard df/avgdl — global
 //! statistics would need cross-shard write coordination).
 //!
 //! The impact-bucketed posting-list structure lives in
@@ -9,8 +9,10 @@
 
 use std::collections::HashMap;
 
-use crate::bm25::bm25_score;
-use crate::buckets::{BAND_MIN_DL, Buckets};
+use crate::buckets::Buckets;
+use crate::docvalues::DocValues;
+use crate::fields::FieldStats;
+use crate::positions::Positions;
 use crate::token::tokenize;
 
 /// One ranked hit.
@@ -31,19 +33,65 @@ pub struct TextStats {
     pub tokens: u64,
     /// Total postings.
     pub postings: u64,
-    /// Approximate heap bytes (RFC D4 formula's measured side).
+    /// Approximate heap bytes (the measured side of the documented
+    /// memory formula).
     pub approx_bytes: u64,
 }
 
-/// One scoring candidate list: (postings, df, MaxScore upper bound).
-type ScoredList<'s> = (&'s Buckets, f64, f64);
-
-/// Per-query BM25 constants threaded through the walk helpers.
-struct QueryCtx {
-    n_docs: f64,
-    avgdl: f64,
-    limit: usize,
+/// Corpus statistics supplied from outside a segment, for scoring one
+/// shard's documents against the whole corpus rather than its own slice.
+///
+/// A cross-shard text query builds this by summing each shard's local
+/// `n_docs` / `total_len` and, for each query token, its `df`. `df`
+/// need only carry the query's tokens — the values a query actually
+/// scores with — which is why global BM25 does not need a whole-corpus
+/// df table.
+pub struct CorpusStats {
+    /// Total documents across the corpus.
+    pub n_docs: f64,
+    /// Mean document length (unweighted tokens) across the corpus.
+    pub avgdl: f64,
+    /// Global document frequency per query token; a token missing here
+    /// falls back to the segment's local list length.
+    pub df: std::collections::HashMap<Vec<u8>, u32>,
 }
+
+/// What an index declares, in the terms a segment is built from.
+#[derive(Clone, Copy, Default)]
+pub struct SegmentShape {
+    /// Separately scored fields — `IN <field…>` scopes to these. 0 or 1
+    /// keeps no per-field breakdown, because with one field the
+    /// per-field numbers are the merged ones.
+    pub fields: usize,
+    /// Record token positions (`WITH POSITIONS`) for phrase, proximity
+    /// and adjacency-verified highlight.
+    pub positions: bool,
+    /// Value fields stored per document (`VALUES`), for the clauses that
+    /// read a document's own value rather than a term's postings.
+    pub values: usize,
+}
+
+/// A non-scoring predicate over a document's stored values.
+///
+/// The test takes raw bytes because this crate does not know what a
+/// number or a date is; the caller coerces. A document with no value for
+/// the field never passes — absent is not a value.
+#[derive(Clone, Copy)]
+pub struct Filter<'a> {
+    /// Which declared value field the predicate reads.
+    pub field: usize,
+    /// The test applied to that field's bytes.
+    pub test: &'a dyn Fn(&[u8]) -> bool,
+}
+
+/// A field's text and the BM25 weight it was indexed at. Stored per
+/// document so a removal re-derives exactly the term frequencies the
+/// insert produced.
+type IndexedField = (Vec<u8>, f32);
+
+/// One document's stored form: id, unweighted length, and the fields it
+/// was indexed from.
+type DocRecord = (u32, u32, Vec<IndexedField>);
 
 /// One shard's inverted segment.
 ///
@@ -55,57 +103,133 @@ struct QueryCtx {
 #[derive(Debug, Default)]
 pub struct TextSegment {
     postings: HashMap<Vec<u8>, Buckets>,
-    /// key → (doc id, dl, original text).
-    docs: HashMap<Vec<u8>, (u32, u32, Vec<u8>)>,
+    /// key → (doc id, dl, the field texts and the weights they were
+    /// indexed with). The weights are stored rather than re-read from
+    /// the spec so a removal re-derives exactly the term frequencies
+    /// the insert produced.
+    docs: HashMap<Vec<u8>, DocRecord>,
     /// id → key (None = freed slot, id on the free list).
     id_key: Vec<Option<Vec<u8>>>,
     /// id → dl (valid while id_key[id].is_some()).
     id_dl: Vec<u32>,
     free_ids: Vec<u32>,
     total_len: u64,
+    /// Positional side-channel, present only when the index was created
+    /// `WITH POSITIONS` (phrase / proximity / highlight). `None` keeps
+    /// the BM25 path byte-identical to the pre-positions structure —
+    /// the ranking hot path never touches it.
+    positions: Option<Positions>,
+    /// Per-field side-channel, present only on a multi-field index — the
+    /// breakdown `IN <field…>` scopes to. With one field the per-field
+    /// numbers are the merged ones, so a single-field index carries
+    /// nothing; an unscoped query never reads it either way.
+    fields: Option<FieldStats>,
+    /// Stored-value side-channel, present only when the index declared
+    /// value fields (`VALUES`). Answers "what is THIS document's price",
+    /// which the postings cannot — see [`crate::docvalues`].
+    values: Option<DocValues>,
 }
 
 impl TextSegment {
-    /// Empty segment.
+    /// Empty segment (ranking only, no positional postings).
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// (Re-)index one row's text (`None` = row removed / excluded).
-    pub fn apply(&mut self, key: &[u8], text: Option<&[u8]>) {
-        if let Some((old_id, old_len, old_text)) = self.docs.remove(key) {
-            self.total_len -= u64::from(old_len);
-            // Remove exactly this doc's tokens (re-derive tf from the
-            // old text — O(doc), not O(index)).
-            for (t, tf) in tf_of(&tokenize(&old_text)) {
-                if let Some(list) = self.postings.get_mut(&t) {
-                    list.remove(tf, old_len, old_id);
-                    if list.is_empty() {
-                        self.postings.remove(&t);
-                    }
-                }
-            }
-            self.id_key[old_id as usize] = None;
-            self.free_ids.push(old_id);
+    /// Empty segment that records token positions for phrase, proximity
+    /// and highlight queries — the `WITH POSITIONS` form. Every other
+    /// operation behaves identically; only the positional side-channel
+    /// (and its memory cost) is added.
+    pub fn with_positions() -> Self {
+        Self::with_shape(SegmentShape { positions: true, ..SegmentShape::default() })
+    }
+
+    /// Empty segment shaped by what an index declares.
+    ///
+    /// Each optional channel exists only when the declaration calls for
+    /// it, so an index pays for what it asked for and nothing else.
+    pub fn with_shape(shape: SegmentShape) -> Self {
+        Self {
+            positions: shape.positions.then(Positions::default),
+            fields: (shape.fields > 1).then(|| FieldStats::new(shape.fields)),
+            values: (shape.values > 0).then(|| DocValues::new(shape.values)),
+            ..Self::default()
         }
-        let Some(text) = text else { return };
-        let toks = tokenize(text);
-        if toks.is_empty() {
+    }
+
+    /// Whether this segment records token positions.
+    pub fn has_positions(&self) -> bool {
+        self.positions.is_some()
+    }
+
+    /// How many fields this segment scores separately; 1 when it keeps no
+    /// per-field breakdown (a single-field index needs none).
+    pub fn field_arity(&self) -> usize {
+        self.fields.as_ref().map_or(1, FieldStats::arity)
+    }
+
+    /// How many value fields this segment stores per document; 0 when it
+    /// stores none.
+    pub fn value_arity(&self) -> usize {
+        self.values.as_ref().map_or(0, DocValues::arity)
+    }
+
+    /// One row's stored value for a declared value field, as raw bytes.
+    /// `None` when the row is not indexed here, the field was not
+    /// declared, or this document has no value for it.
+    ///
+    /// The cross-shard merge needs each returned hit's sort value, and it
+    /// is cheaper to look it up for the handful of hits a shard returns
+    /// than to carry it through the ranking.
+    pub fn stored_value(&self, key: &[u8], field: usize) -> Option<&[u8]> {
+        let (id, _, _) = self.docs.get(key)?;
+        self.values.as_ref()?.get(*id, field)
+    }
+
+    /// (Re-)index one row's text (`None` = row removed / excluded).
+    ///
+    /// Single-field sugar over [`TextSegment::apply_fields`] at neutral
+    /// weight, so the two paths cannot diverge.
+    pub fn apply(&mut self, key: &[u8], text: Option<&[u8]>) {
+        match text {
+            Some(t) => self.apply_fields(key, Some(&[(t.to_vec(), 1.0)])),
+            None => self.apply_fields(key, None),
+        }
+    }
+
+    /// (Re-)index one row from its declared fields, each with its BM25
+    /// weight. `None` removes the row.
+    ///
+    /// A weight scales that field's term frequencies, so a term in a
+    /// weight-3 title counts as if seen three times. Document length is
+    /// summed **unweighted**: length normalisation measures how much
+    /// text there is to dilute a match, and weighting it would make a
+    /// heavily-weighted field penalise itself.
+    pub fn apply_fields(&mut self, key: &[u8], fields: Option<&[IndexedField]>) {
+        self.apply_doc(key, fields, &[]);
+    }
+
+    /// [`TextSegment::apply_fields`], also storing the row's declared
+    /// value fields (`VALUES`) so `FILTER` and friends can read them back
+    /// per document. `values` is positional against the declaration; a
+    /// short slice leaves the rest absent.
+    pub fn apply_doc(
+        &mut self,
+        key: &[u8],
+        fields: Option<&[IndexedField]>,
+        values: &[Option<&[u8]>],
+    ) {
+        self.withdraw(key);
+        let Some(fields) = fields else { return };
+        let (per_field, lens) = field_tf(fields);
+        let (tf_map, dl) = merge_field_tf(&per_field, &lens);
+        if tf_map.is_empty() {
             return;
         }
-        let dl = toks.len() as u32;
-        let id = if let Some(id) = self.free_ids.pop() {
-            self.id_key[id as usize] = Some(key.to_vec());
-            self.id_dl[id as usize] = dl;
-            id
-        } else {
-            self.id_key.push(Some(key.to_vec()));
-            self.id_dl.push(dl);
-            (self.id_key.len() - 1) as u32
-        };
-        self.docs.insert(key.to_vec(), (id, dl, text.to_vec()));
+        let id = self.take_id(key, dl);
+        self.docs.insert(key.to_vec(), (id, dl, fields.to_vec()));
         self.total_len += u64::from(dl);
-        for (t, tf) in tf_of(&toks) {
+        for (t, tf) in tf_map {
             match self.postings.entry(t) {
                 std::collections::hash_map::Entry::Occupied(mut e) => {
                     e.get_mut().insert(tf, dl, id);
@@ -115,248 +239,144 @@ impl TextSegment {
                 }
             }
         }
+        self.index_side_channels(id, fields, &per_field, &lens);
+        if let Some(dv) = self.values.as_mut() {
+            dv.set(id, values);
+        }
     }
 
-    /// BM25-ranked matches for `query` (tokenized with the same rules;
-    /// OR semantics), best `limit` hits, score-descending.
-    ///
-    /// MaxScore pruning: query tokens process rarest-first; once the
-    /// running top-`limit` threshold exceeds the summed upper bounds
-    /// of the remaining (commoner) tokens, documents seen ONLY in
-    /// those lists can no longer enter — their lists are then probed
-    /// per accumulated doc instead of walked. Selection is a bounded
-    /// heap over borrowed keys (no per-candidate allocation).
-    pub fn matches(&self, query: &[u8], limit: usize) -> Vec<TextMatch> {
-        // Top-0 of anything is empty (same convention as kevy-vector's
-        // `knn` with k = 0). Also keeps the MaxScore floor well-defined:
-        // `kth_of` indexes `limit - 1`.
-        if limit == 0 {
-            return Vec::new();
+    /// Claim a document id for `key`, reusing a freed slot when there is
+    /// one.
+    fn take_id(&mut self, key: &[u8], dl: u32) -> u32 {
+        if let Some(id) = self.free_ids.pop() {
+            self.id_key[id as usize] = Some(key.to_vec());
+            self.id_dl[id as usize] = dl;
+            id
+        } else {
+            self.id_key.push(Some(key.to_vec()));
+            self.id_dl.push(dl);
+            (self.id_key.len() - 1) as u32
         }
-        let mut q_tokens = tokenize(query);
-        q_tokens.sort();
-        q_tokens.dedup();
-        if q_tokens.is_empty() || self.docs.is_empty() {
-            return Vec::new();
-        }
-        let n_docs = self.docs.len() as f64;
-        let avgdl = self.total_len as f64 / n_docs;
-        let lists = self.scored_lists(&q_tokens, n_docs);
-        if lists.is_empty() {
-            return Vec::new();
-        }
-        let tail_ub = tail_bounds(&lists);
-        let ctx = QueryCtx { n_docs, avgdl, limit };
-        let mut scores: HashMap<u32, f64> = HashMap::new();
-        let mut kth_threshold = 0.0_f64;
-        let mut walked = 0usize;
-        for (i, (list, df, _ub)) in lists.iter().enumerate() {
-            // Docs appearing only in the remaining lists can't reach
-            // the current top-limit floor → stop WALKING; the loop
-            // below PROBES these lists for already-seen docs.
-            if i > 0 && scores.len() >= limit && tail_ub[i] < kth_threshold {
-                break;
-            }
-            walked = i + 1;
-            let tail_next = tail_ub.get(i + 1).copied().unwrap_or(0.0);
-            self.walk_list(list, *df, tail_next, lists.len() == 1, &ctx, &mut scores);
-            if scores.len() >= limit && i + 1 < lists.len() {
-                kth_threshold = kth_of(&scores, limit);
-            }
-        }
-        // Probe un-walked lists PER ACCUMULATED DOC — O(candidates)
-        // hash gets, never a walk of the common list (walking here
-        // was the measured 30ms p95: a pruned 500k-posting head list
-        // still cost a full scan).
-        for (list, df, _) in &lists[walked..] {
-            self.probe_list(list, *df, &[], &ctx, &mut scores);
-        }
-        self.select_top(&scores, limit)
     }
 
-    /// The candidate lists for a query, rarest (highest upper bound)
-    /// first. The bound is dl-independent: denom ≥ tf + k1(1-b), so
-    /// score ≤ idf·tf(k1+1)/(tf + k1(1-b)).
-    fn scored_lists<'s>(&'s self, q_tokens: &[Vec<u8>], n_docs: f64) -> Vec<ScoredList<'s>> {
-        let mut lists: Vec<ScoredList<'s>> = Vec::new();
-        for t in q_tokens {
-            let Some(list) = self.postings.get(t) else { continue };
-            let df = list.len() as f64;
-            let max_tf = f64::from(list.max_tf());
-            lists.push((list, df, crate::bm25::bm25_upper(max_tf, df, n_docs)));
-        }
-        lists.sort_by(|a, b| b.2.total_cmp(&a.2));
-        lists
-    }
-
-    /// Walk one list bucket-by-bucket (tf descending), with the
-    /// bucket-level and within-bucket (single-list) early stops.
-    fn walk_list(
-        &self,
-        list: &Buckets,
-        df: f64,
-        tail_next: f64,
-        single: bool,
-        ctx: &QueryCtx,
-        scores: &mut HashMap<u32, f64>,
+    /// Fill the physical side-channels for a freshly indexed document:
+    /// token offsets for phrase / highlight, and the per-field breakdown
+    /// for field-scoped scoring. Both are derived from the same single
+    /// tokenisation the merged postings came from.
+    fn index_side_channels(
+        &mut self,
+        id: u32,
+        fields: &[IndexedField],
+        per_field: &[HashMap<Vec<u8>, u32>],
+        lens: &[u32],
     ) {
-        let QueryCtx { n_docs, limit, .. } = *ctx;
-        let groups = list.tf_groups();
-        for (bi, (tf, bands)) in groups.iter().enumerate() {
-            // Bucket-level early stop: buckets are tf-descending,
-            // so once even the dl-free bound of THIS tf (plus
-            // everything later lists could add) can't reach the
-            // kth floor, no NEW doc from here on can enter. Docs
-            // already accumulated still need this list's
-            // contribution — the remaining buckets are PROBED for
-            // them (a key has exactly one tf per token, so no
-            // double count with earlier buckets).
-            if scores.len() >= limit {
-                let bound = crate::bm25::bm25_upper(f64::from(*tf), df, n_docs);
-                if bound + tail_next < kth_of(scores, limit) {
-                    let walked_tfs: Vec<u32> =
-                        groups[..bi].iter().map(|(t, _)| *t).collect();
-                    self.probe_list(list, df, &walked_tfs, ctx, scores);
-                    break;
+        if let Some(pos) = self.positions.as_mut() {
+            for (t, offsets) in token_offsets(fields) {
+                pos.set(&t, id, &offsets);
+            }
+        }
+        let Some(fs) = self.fields.as_mut() else { return };
+        fs.set_doc_len(id, lens);
+        let arity = fs.arity();
+        let mut by_token: HashMap<&[u8], Vec<u32>> = HashMap::new();
+        for (f, m) in per_field.iter().enumerate() {
+            for (t, v) in m {
+                let row = by_token.entry(t).or_insert_with(|| vec![0; arity]);
+                if let Some(slot) = row.get_mut(f) {
+                    *slot = *v;
                 }
             }
-            self.walk_bucket(*tf, bands, df, single, ctx, scores);
+        }
+        for (t, row) in by_token {
+            fs.set(t, id, &row);
         }
     }
 
-    /// Walk one tf bucket's bands (dl ascending), scoring every id.
-    ///
-    /// v3.5 single-list within-bucket cut: bands are dl-ASCENDING and
-    /// BM25 falls as dl rises, so the band's LOWER dl edge bounds
-    /// every score inside it from above. On a one-list query — each
-    /// doc appears exactly ONCE in the whole list, no later
-    /// contribution to lose — the first band whose bound can't beat
-    /// the kth floor ends the bucket exactly. Scoring stays per-id
-    /// exact via the id_dl table; bands only gate the cut.
-    fn walk_bucket(
-        &self,
-        tf: u32,
-        bands: &crate::buckets::BandsView<'_>,
-        df: f64,
-        single: bool,
-        ctx: &QueryCtx,
-        scores: &mut HashMap<u32, f64>,
-    ) {
-        let QueryCtx { n_docs, avgdl, limit } = *ctx;
-        for (b, band) in bands.iter() {
-            if band.is_empty() {
-                continue;
-            }
-            let bound = bm25_score(
-                f64::from(tf),
-                df,
-                n_docs,
-                f64::from(BAND_MIN_DL[b as usize]),
-                avgdl,
-            );
-            if single && scores.len() >= limit && bound < kth_of(scores, limit) {
-                break;
-            }
-            for &id in band {
-                let dl = f64::from(self.id_dl[id as usize]);
-                *scores.entry(id).or_insert(0.0) +=
-                    bm25_score(f64::from(tf), df, n_docs, dl, avgdl);
-            }
-        }
-    }
-
-    /// Contribute `list` to every ALREADY-ACCUMULATED doc via O(1)
-    /// list-level probes (never a walk). A doc whose tf sits in
-    /// `skip_tfs` already got this list's contribution from a WALKED
-    /// bucket (tf is unique per (token, doc)) and is skipped.
-    fn probe_list(
-        &self,
-        list: &Buckets,
-        df: f64,
-        skip_tfs: &[u32],
-        ctx: &QueryCtx,
-        scores: &mut HashMap<u32, f64>,
-    ) {
-        let ids: Vec<u32> = scores.keys().copied().collect();
-        for &id in &ids {
-            if let Some(tf) = list.get(id)
-                && !skip_tfs.contains(&tf)
-            {
-                let dl = f64::from(self.id_dl[id as usize]);
-                *scores.get_mut(&id).expect("accumulated") +=
-                    bm25_score(f64::from(tf), df, ctx.n_docs, dl, ctx.avgdl);
-            }
-        }
-    }
-
-    /// Bounded selection: only the winners get cloned. Ids resolve
-    /// to keys here — the tiebreak (key ascending) is unchanged.
-    fn select_top(&self, scores: &HashMap<u32, f64>, limit: usize) -> Vec<TextMatch> {
-        let key_of = |id: u32| -> &[u8] {
-            self.id_key[id as usize].as_deref().expect("live posting id")
+    /// Withdraw whatever `key` was last indexed as: strip its postings
+    /// and positions (re-derived from the fields it was stored with,
+    /// O(doc) not O(index)) and free its id. A no-op if `key` is not
+    /// indexed, so it is safe as the first step of every (re-)index.
+    fn withdraw(&mut self, key: &[u8]) {
+        let Some((old_id, old_len, old_fields)) = self.docs.remove(key) else {
+            return;
         };
-        let mut top: Vec<(f64, &[u8])> = Vec::with_capacity(limit + 1);
-        for (id, score) in scores {
-            let cand = (*score, key_of(*id));
-            if top.len() < limit {
-                top.push(cand);
-                if top.len() == limit {
-                    top.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(b.1)));
+        self.total_len -= u64::from(old_len);
+        for (t, tf) in weighted_tf(&old_fields).0 {
+            if let Some(list) = self.postings.get_mut(&t) {
+                list.remove(tf, old_len, old_id);
+                if list.is_empty() {
+                    self.postings.remove(&t);
                 }
-            } else if better(cand, top[limit - 1]) {
-                let pos = top.partition_point(|e| better(*e, cand));
-                top.insert(pos, cand);
-                top.pop();
+            }
+            if let Some(pos) = self.positions.as_mut() {
+                pos.remove(&t, old_id);
+            }
+            if let Some(fs) = self.fields.as_mut() {
+                fs.remove(&t, old_id);
             }
         }
-        if top.len() < limit {
-            top.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(b.1)));
+        if let Some(fs) = self.fields.as_mut() {
+            fs.clear_doc_len(old_id);
         }
-        top.into_iter()
-            .map(|(score, k)| TextMatch { key: k.to_vec(), score })
-            .collect()
-    }
-
-    /// Live counters.
-    pub fn stats(&self) -> TextStats {
-        let postings: u64 = self.postings.values().map(|l| l.len() as u64).sum();
-        // Hapax lists are INLINE (enum One) — no heap beyond their
-        // postings-map slot; only Many lists pay the per-posting
-        // band-vec + index costs.
-        let many_postings: u64 = self
-            .postings
-            .values()
-            .map(|l| match l {
-                Buckets::One { .. } => 0,
-                Buckets::Many(m) => m.index.len() as u64,
-            })
-            .sum();
-        let token_bytes: u64 = self.postings.keys().map(|t| (t.len() + 48) as u64).sum();
-        // docs table + the id→key/id→dl tables (key stored twice).
-        let doc_bytes: u64 = self
-            .docs
-            .iter()
-            .map(|(k, (_, _, text))| (2 * k.len() + text.len() + 110) as u64)
-            .sum();
-        TextStats {
-            docs: self.docs.len() as u64,
-            tokens: self.postings.len() as u64,
-            postings,
-            // per-Many-posting ≈ 4B band-vec slot + ~26B list-index
-            // entry (doc-id postings + log2 dl bands, v3.5); hapax
-            // lists are inline. Docs keep their original text
-            // (update path re-derives tokens).
-            approx_bytes: token_bytes + many_postings * 30 + doc_bytes,
+        if let Some(dv) = self.values.as_mut() {
+            dv.clear(old_id);
         }
-    }
-
-    /// Verify hook: is `key` indexed here?
-    pub fn contains(&self, key: &[u8]) -> bool {
-        self.docs.contains_key(key)
+        self.id_key[old_id as usize] = None;
+        self.free_ids.push(old_id);
     }
 }
 
 /// Aggregate token counts for one document's token stream.
+/// Weighted term frequencies across a document's fields, plus its
+/// unweighted length in tokens.
+///
+/// A weight multiplies the field's raw counts and the result is rounded
+/// up rather than truncated: a term that occurs once in a weight-0.5
+/// field still occurred, and rounding it to zero would delete a match
+/// rather than de-emphasise it.
+fn weighted_tf(fields: &[IndexedField]) -> (HashMap<Vec<u8>, u32>, u32) {
+    let (per_field, lens) = field_tf(fields);
+    merge_field_tf(&per_field, &lens)
+}
+
+/// One document's weighted term frequencies **kept per field**, plus each
+/// field's unweighted length in tokens.
+///
+/// This is the shape the per-field channel stores and the merged postings
+/// are the sum of; deriving both from one call is what guarantees the
+/// scoped and unscoped paths agree on what a field contributed.
+fn field_tf(fields: &[IndexedField]) -> (Vec<HashMap<Vec<u8>, u32>>, Vec<u32>) {
+    let mut per_field = Vec::with_capacity(fields.len());
+    let mut lens = Vec::with_capacity(fields.len());
+    for (text, weight) in fields {
+        let toks = tokenize(text);
+        lens.push(toks.len() as u32);
+        let scaled = tf_of(&toks)
+            .into_iter()
+            .map(|(t, n)| (t, (f64::from(n) * f64::from(*weight)).ceil().max(1.0) as u32))
+            .collect();
+        per_field.push(scaled);
+    }
+    (per_field, lens)
+}
+
+/// Fold a per-field breakdown back into the merged frequencies and length
+/// the ranking postings store.
+fn merge_field_tf(
+    per_field: &[HashMap<Vec<u8>, u32>],
+    lens: &[u32],
+) -> (HashMap<Vec<u8>, u32>, u32) {
+    let mut out: HashMap<Vec<u8>, u32> = HashMap::new();
+    for m in per_field {
+        for (t, v) in m {
+            let slot = out.entry(t.clone()).or_insert(0);
+            *slot = slot.saturating_add(*v);
+        }
+    }
+    let dl = lens.iter().fold(0u32, |a, &b| a.saturating_add(b));
+    (out, dl)
+}
+
 fn tf_of(toks: &[Vec<u8>]) -> HashMap<Vec<u8>, u32> {
     let mut tf = HashMap::new();
     for t in toks {
@@ -365,38 +385,38 @@ fn tf_of(toks: &[Vec<u8>]) -> HashMap<Vec<u8>, u32> {
     tf
 }
 
-/// Strict "ranks ahead of" for (score, key) — higher score first,
-/// key ascending as the tiebreak.
-// float_cmp: exact equality is the tiebreak trigger — an epsilon here would
-// make ranking non-deterministic for genuinely equal BM25 scores.
-#[allow(clippy::float_cmp)]
-fn better(a: (f64, &[u8]), b: (f64, &[u8])) -> bool {
-    a.0 > b.0 || (a.0 == b.0 && a.1 < b.1)
+/// Each token's ascending offsets within the document's concatenated
+/// fields (field order). Positions are **unweighted** physical ordinals
+/// — like `dl`, they describe where the text is, not how it is scored —
+/// so a weight-3 title still advances the offset one per token.
+fn token_offsets(fields: &[IndexedField]) -> HashMap<Vec<u8>, Vec<u32>> {
+    let mut out: HashMap<Vec<u8>, Vec<u32>> = HashMap::new();
+    let mut pos = 0u32;
+    for (text, _weight) in fields {
+        for tok in tokenize(text) {
+            out.entry(tok).or_default().push(pos);
+            pos += 1;
+        }
+    }
+    out
 }
 
-/// The `limit`-th best score currently accumulated (the MaxScore
-/// entry floor). O(n) selection, called only between list walks.
-fn kth_of(scores: &HashMap<u32, f64>, limit: usize) -> f64 {
-    let mut v: Vec<f64> = scores.values().copied().collect();
-    let idx = limit - 1;
-    v.select_nth_unstable_by(idx, |a, b| b.total_cmp(a));
-    v[idx]
-}
+#[path = "segment_opts.rs"]
+mod segment_opts;
+pub use segment_opts::{Bucket, Distinct, Facet, FacetedMatches, QueryOpts, Sort};
 
-/// `tail_ub[i]` = Σ upper bounds of `lists[i..]`.
-fn tail_bounds(lists: &[ScoredList<'_>]) -> Vec<f64> {
-    let mut acc = 0.0;
-    let mut v: Vec<f64> = lists
-        .iter()
-        .rev()
-        .map(|l| {
-            acc += l.2;
-            acc
-        })
-        .collect();
-    v.reverse();
-    v
-}
+#[path = "segment_query.rs"]
+mod segment_query;
+pub use segment_query::sorted_order;
+
+#[path = "segment_stats.rs"]
+mod segment_stats;
+
+#[path = "segment_phrase.rs"]
+mod segment_phrase;
+
+#[path = "segment_scope.rs"]
+mod segment_scope;
 
 #[cfg(test)]
 #[path = "segment_tests.rs"]

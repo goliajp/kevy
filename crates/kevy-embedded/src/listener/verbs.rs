@@ -1,4 +1,4 @@
-//! The read-only whitelist (RFC D3) — each verb maps onto the
+//! The read-only whitelist — each verb maps onto the
 //! existing embedded Store API (which does its own shard locking and
 //! cross-shard merging).
 
@@ -33,7 +33,7 @@ fn parse_i64(b: &[u8]) -> Option<i64> {
     std::str::from_utf8(b).ok()?.trim().parse().ok()
 }
 
-/// Dispatch one whitelisted request (RFC D3 set).
+/// Dispatch one whitelisted request.
 // fn-length exemption: pure data-driven verb match table — one flat
 // arm per whitelisted verb; multi-step verbs live in cmd_* helpers.
 // LOC-WAIVER: data-driven verb dispatch table — one reply-emitter arm per verb.
@@ -148,7 +148,9 @@ pub(crate) fn dispatch(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
             Err(e) => err(out, &format!("WRONGTYPE {e}")),
         },
         b"ZRANGE" if argv.len() >= 4 => cmd_zrange(s, argv, out),
+        #[cfg(feature = "replicate")]
         b"FEED.SHARDS" if argv.len() == 1 => int(out, s.feed_shards() as i64),
+        #[cfg(feature = "replicate")]
         b"FEED.TAIL" if argv.len() == 1 => match s.changes_tail() {
             Ok((g, o)) => {
                 arr(out, 2);
@@ -157,14 +159,41 @@ pub(crate) fn dispatch(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
             }
             Err(e) => err(out, &format!("ERR feed: {e:?}")),
         },
+        #[cfg(feature = "replicate")]
         b"FEED.READ" if argv.len() >= 4 => cmd_feed_read(s, argv, out),
         b"INFO" => {
-            let body = format!(
+            let mut body = format!(
                 "# kevy-embedded\r\nversion:{}\r\nshards:{}\r\nkeys:{}\r\nlistener:readonly\r\n",
                 env!("CARGO_PKG_VERSION"),
                 s.shard_count(),
                 s.dbsize()
             );
+            // `# Tiering`: present only when tiering is on
+            // — an untiered store's INFO body stays byte-identical.
+            if let Some(t) = s.tier_info() {
+                body.push_str(&format!(
+                    "\r\n# Tiering\r\ntiering_enabled:1\r\ntier_budget_bytes:{}\r\n\
+                     tier_effective_target:{}\r\ncold_keys:{}\r\ncold_bytes:{}\r\n\
+                     stub_bytes:{}\r\nindex_reserved_bytes:{}\r\nvlog_size_bytes:{}\r\n\
+                     vlog_live_bytes:{}\r\nvlog_files:{}\r\nvlog_epoch:{}\r\n\
+                     demotions_total:{}\r\npromotions_total:{}\r\n\
+                     peek_preads_total:{}\r\nbatch_submissions_total:{}\r\n",
+                    t.tier_budget_bytes,
+                    t.tier_effective_target,
+                    t.cold_keys,
+                    t.cold_bytes,
+                    t.stub_bytes,
+                    t.index_reserved_bytes,
+                    t.vlog_size_bytes,
+                    t.vlog_live_bytes,
+                    t.vlog_files,
+                    t.vlog_epoch,
+                    t.demotions_total,
+                    t.promotions_total,
+                    t.peek_preads_total,
+                    t.batch_submissions_total,
+                ));
+            }
             bulk(out, body.as_bytes());
         }
         _ => err(out, "ERR READONLY embedded listener"),
@@ -220,6 +249,7 @@ fn cmd_zrange(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     }
 }
 
+#[cfg(feature = "replicate")]
 fn cmd_feed_read(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let (Some(g), Some(o), Some(limit)) = (
         parse_i64(&argv[1]),

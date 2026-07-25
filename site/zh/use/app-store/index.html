@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>不靠数据库扛住读——kevy</title>
+<meta name="description" content="kevy 的二级索引和物化视图：怎样让一个带过滤的列表、一个持续累计的总数，始终是一次查表，而不是变成一次查询。">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../zh/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../../zh/docs/">文档</a>
+      <a href="../../../zh/docs/commands/">命令</a>
+      <a href="../../../zh/benchmarks/">基准</a>
+      <a href="../../../zh/play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <nav class="lang" aria-label="Language">
+        <a href="../../../use/app-store/">EN</a>
+        <a href="../../../zh/use/app-store/" aria-current="page">中文</a>
+        <a href="../../../ja/use/app-store/">日本語</a>
+      </nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+<section class="band" style="border-top:0"><div>
+    <p class="eyebrow">主存储</p>
+    <h1>让读始终是一次查表</h1>
+    <p class="lede">“这个客户名下所有还没关闭的订单。”“这个购物车里有几件东西。”这类读，一个应用一秒钟要做上千次，而在关系型数据库里，每一次都是一条背后跟着查询计划器的查询。<b>kevy 可以直接把答案备好。</b></p>
+    
+  </div></section>
+<section class="band prose"><h2>为什么合适</h2><div class="pcols"><p>键值存储被挡在应用数据之外，通常只因为一句反对：<i>可是我需要按 key 以外的东西去查</i>。这句反对是对的，而二级索引正是为它准备的。</p><p><b>索引是声明出来的，不是建出来的。</b>你写清楚 key 的前缀和字段，写路径会把它维持在最新。一个带过滤的列表于是重新变回一次查表——没有计划器，没有扫描，没有查询。</p><p><b>视图更进一步</b>，在写入时就把聚合维持在最新，于是一个计数、一个合计是读出来的，不是算出来的。这正是大多数应用真正在向 ORM 索要的东西，也正是它们的数据库忙成那样的原因。</p><p><b>而且整张表可以一次声明。</b><code>TABLE.DECLARE</code> 接受类型化列、二级索引和复合 <code>ORDER BY</code> 路径，在声明期把它们编译成具名索引——<code>kevy-sql</code> 用你手上现成的 PG/MySQL schema 文件做同一件事。引擎仍然不做任何规划、不强加任何 schema；join 和运行期 SQL 依旧按名拒绝。</p></div></section>
+<section class="band">
+  <div class="sec-h"><h2>按字段查，而不是按 key 查</h2><p class="sec-lede">“客户 881 的所有订单”始终是一次查表：每个要查的字段声明一个索引，照常写入，按值来读。</p></div>
+  <ol class="steps recipe"><li><h3>你的数据，照你本来的方式写</h3><pre><code>HSET order:1001 customer 881 status open  total 4400
+HSET order:1002 customer 881 status paid  total 8400
+HSET order:1003 customer 902 status open  total 1200</code></pre></li><li><h3>每个要按它查的字段，建一个索引</h3><pre><code>IDX.CREATE idx:cust   ON PREFIX order: FIELD customer TYPE i64 KIND range
+IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range</code></pre></li><li><h3>那次本来会变成查询的读</h3><pre><code>IDX.QUERY idx:cust EQ 881
+-&gt; 1) &quot;0&quot;                       # cursor
+   2) 1) &quot;order:1001&quot;  2) &quot;881&quot;
+      3) &quot;order:1002&quot;  4) &quot;881&quot;</code></pre></li><li><h3>两个条件一起查</h3><pre><code>IDX.QUERY COMPOSE AND idx:cust EQ 881 idx:status EQ open
+-&gt; 1) &quot;0&quot;
+   2) 1) 1) &quot;order:1001&quot;</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">成本与限制</span><p><b>索引的账是每次写的时候付的</b>，不是读的时候——对读多的服务路径这是对的交易，对写多的日志是错的。<b>这里没有 join</b>，以后也不会有：索引回答的是“哪些 key 匹配这些字段”，不是“把这两个集合连起来”。如果你的读确实需要 join，就把它留在 Postgres 里——<a href="../../../zh/docs/rds-workloads/">关系型负载那一页</a>写着哪些读属于这种情况。</p></div>
+</section>
+<section class="band">
+  <div class="sec-h"><h2>把一个持续更新的答案备好</h2><p class="sec-lede">一个带过滤、带排序的列表，由写路径一直维持着——读永远不用重算它，因为它从来没有过期过。</p></div>
+  <ol class="steps recipe"><li><h3>在同样的索引上声明视图</h3><p>括号是各自独立的参数。</p><pre><code>VIEW.CREATE v:open881 QUERY ( AND idx:cust EQ 881 idx:status EQ open )  ORDER BY idx:cust
+-&gt; OK</code></pre></li><li><h3>读它——这里什么都不用算</h3><pre><code>VIEW.QUERY  v:open881
+-&gt; 1) &quot;0&quot;
+   2) 1) &quot;order:1001&quot;  2) &quot;881&quot;</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">成本与限制</span><p>视图是<b>写路径上一直要干的活</b>：每一次对匹配 key 的写都会更新它，不管今天有没有人来读。只为应用真正在对外服务的那些读声明视图，不再服务的就删掉。视图要组合的那些索引，必须先存在。</p></div>
+</section>
+<section class="band">
+  <div class="sec-h"><h2>整张表，一次声明</h2><p class="sec-lede">一张关系型表的读路径——索引化的 WHERE、余下的过滤、ORDER BY、翻页、COUNT——由一条声明编译到具名索引上。或者直接由你现成的 schema 文件编译。</p></div>
+  <ol class="steps recipe"><li><h3>列、索引、排序路径，一条声明写完</h3><p>行仍是前缀下的普通 hash——缺列就是 NULL；kevy-cli sql compile schema.sql 会从 CREATE TABLE / CREATE INDEX 生成这一行。</p><pre><code>TABLE.DECLARE orders PREFIX order: PK id COLUMN id str COLUMN customer i64 COLUMN status str COLUMN total f64 INDEX status range VALUES total customer ORDERPATH by_customer ON customer THEN total DESC
+-&gt; OK</code></pre></li><li><h3>在存储的列上过滤和计数——一行都不用读</h3><pre><code>IDX.QUERY orders.status EQ open FILTER total RANGE 2000 inf LIMIT 20
+-&gt; 1) &quot;0&quot;
+   2) 1) &quot;order:1001&quot;  2) &quot;open&quot;
+
+IDX.COUNT orders.status EQ open
+-&gt; (integer) 2</code></pre></li><li><h3>ORDER BY customer, total DESC 的那次遍历</h3><p>一个复合索引，用关系型复合索引的方式回答它——每个客户的订单，从大到小，不需要重排。</p><pre><code>IDX.QUERY orders.by_customer WHERE customer EQ 881 LIMIT 20 FIELDS status total</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">成本与限制</span><p><b>没有运行期 SQL，也没有 join。</b>服务端把 <code>SELECT</code> 当作未知命令拒绝；<code>kevy-cli sql compile</code> 在构建期把 PG/MySQL schema 文件变成上面这些声明，并按名拒绝 JOIN、子查询和 GROUP BY，同时指向替代它们的配方。唯一性是校验而非强制，约束是配方而非引擎检查。开着<a href="../../../zh/docs/tiering/">分层存储</a>时，index-only 查询即使全部行都是冷的也只读 RAM——只有最后的 <code>FIELDS</code> 页会读冷行，每行一次。</p></div>
+</section>
+<section class="band"><div class="sec-h"><h2>接下来</h2></div><div class="cards"><a class="card" href="../../../zh/docs/tables/">
+      <span class="card-k">指南</span>
+      <h3>表</h3>
+      <p>类型化列和索引声明一次，然后像查表一样查它。</p>
+      <span class="card-go">去读</span>
+    </a><a class="card" href="../../../zh/docs/designing-on-kevy/">
+      <span class="card-k">指南</span>
+      <h3>在 kevy 上做设计</h3>
+      <p>习惯了用表思考的人，怎么改成用 key 思考。</p>
+      <span class="card-go">去读</span>
+    </a><a class="card" href="../../../zh/docs/indexes/">
+      <span class="card-k">指南</span>
+      <h3>二级索引</h3>
+      <p>它们怎么建、代价是什么，以及怎么看懂一次查询的执行计划。</p>
+      <span class="card-go">去读</span>
+    </a><a class="card" href="../../../zh/docs/rds-workloads/">
+      <span class="card-k">参考</span>
+      <h3>关系型负载</h3>
+      <p>每一种关系型模式，以及在这里做它的真实代价。</p>
+      <span class="card-go">去读</span>
+    </a></div></section>
+</main>
+
+<footer class="foot">
+  <div class="foot-in">
+    <p class="foot-b">kevy 4.0 — 大多数应用真正在用 ORM 的那一部分</p>
+    <nav>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+      <a href="https://crates.io/crates/kevy">crates.io</a>
+      <a href="../../../llms.txt">llms.txt</a>
+    </nav>
+  </div>
+</footer>
+
+
+
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

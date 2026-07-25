@@ -8,12 +8,34 @@
 use crate::Commands;
 use crate::shard::Shard;
 use crate::uring_conn::UringConn;
+use crate::uring_reactor::ENOBUFS;
+use kevy_uring::Completion;
 use crate::uring_reactor::{MAX_IOVECS_PER_WRITEV, OP_RECV, OP_WRITE};
 use kevy_map::KevyMap;
 use kevy_uring::IoUring;
 
 impl<C: Commands> Shard<C> {
-    /// **K4 (v1.25 A.9)**: schedule `cid` for the next `arm_conns` visit.
+    /// A terminating recv completion (`res <= 0`): `true` = recoverable
+    /// re-arm, not a close. `-ENOBUFS` and `res == 0` with
+    /// `F_SOCK_NONEMPTY` (socket still holds bytes — NOT EOF) re-arm; a
+    /// per-conn streak counter caps a kernel that re-posts the zero
+    /// completion without draining so the reactor can't livelock.
+    pub(crate) fn recv_terminal_recoverable(
+        &mut self,
+        cid: u64,
+        c: &Completion,
+        io: &mut KevyMap<u64, UringConn>,
+    ) -> bool {
+        const RECV_ZERO_STREAK_CAP: u16 = 256;
+        if c.res != -ENOBUFS && !(c.res == 0 && c.sock_nonempty()) {
+            return false;
+        }
+        let Some(uc) = io.get_mut(&cid) else { return false };
+        uc.recv_zero_streak = uc.recv_zero_streak.saturating_add(1);
+        uc.recv_zero_streak <= RECV_ZERO_STREAK_CAP
+    }
+
+    /// Schedule `cid` for the next `arm_conns` visit.
     /// Idempotent — `UringConn::arm_queued` dedupes pushes so a conn
     /// touched by recv + write + drain in the same iter only lands on
     /// the queue once. Safe to call when the conn was just dropped
@@ -51,8 +73,8 @@ impl<C: Commands> Shard<C> {
         io: &mut KevyMap<u64, UringConn>,
         bgid: u16,
     ) {
-        // A3 (2026-06-20): prefetch UringConn ahead of the loop body.
-        // H7 diagnostic showed L1D-miss stalls = 24.6% of total backend
+        // Prefetch UringConn ahead of the loop body.
+        // A perf diagnostic showed L1D-miss stalls = 24.6% of total backend
         // stalls at -c1; scatter from conn-map and io-map accesses are
         // candidates. The conns map's slot for the upcoming conn is
         // already L1-hot at the call site, but its corresponding
@@ -65,7 +87,7 @@ impl<C: Commands> Shard<C> {
         // (next conn doesn't exist). At higher conn counts the
         // hide-fill benefit grows with iteration depth.
         //
-        // **K4 (v1.25 A.9, 2026-06-22)**: iterate the dirty-set queue
+        // Iterate the dirty-set queue
         // `arm_pending` instead of the dense `active_uring_conns: Vec`.
         // The arm-loop's prior shape walked O(N) conns per iter (e.g.
         // 10k entries at c=10k), bailing on the ~99 % idle ones in
@@ -169,7 +191,7 @@ impl<C: Commands> Shard<C> {
                 std::mem::swap(&mut uc.write_arcs, &mut conn.output_arcs);
                 uc.write_off = 0;
             }
-            // L1 (2026-06-21): if the write carries arc-bulk fragments, use
+            // If the write carries arc-bulk fragments, use
             // `prep_writev` with an iovec list — header bytes from write_buf
             // and value bytes from the pinned Arc<[u8]> sources fuse into ONE
             // syscall and avoid the per-GET memcpy of the value into
@@ -198,7 +220,7 @@ impl<C: Commands> Shard<C> {
                     // from write_off to honour any prior partial-write
                     // resume.
                     //
-                    // **A.4 (v1.25)**: cap iovec count at
+                    // Cap iovec count at
                     // [`MAX_IOVECS_PER_WRITEV`] (Linux `IOV_MAX = 1024`).
                     // A pipelined pub/sub burst (1024 publishes × 50
                     // subs) puts >2000 iovecs onto a single conn; we
@@ -265,7 +287,7 @@ impl<C: Commands> Shard<C> {
                     uc.write_inflight = true;
                 }
             }
-            // v1.29 B2-alt — three SQE submissions for the big-arg
+            // Three SQE submissions for the big-arg
             // cancel / single-shot read / re-arm cycle. Each gated on a
             // per-conn flag set by the state machine.
             if uc.big_arg_cancel_pending {
@@ -331,22 +353,52 @@ impl<C: Commands> Shard<C> {
                 }
             }
             // Re-arm multishot recv:
-            //  (a) v1.25 default — when nothing else is gating it.
-            //  (b) v1.29 B2-alt — after big-arg completion, when
+            //  (a) default — when nothing else is gating it.
+            //  (b) big-arg path — after big-arg completion, when
             //      `big_arg_rearm_recv` is set.
             // Both paths converge on the same `prep_recv_multishot` call.
-            let want_multishot = !uc.recv_armed
-                && !uc.closing
-                && uc.pending_big_arg.is_none();
-            if (want_multishot || uc.big_arg_rearm_recv)
+            //
+            // Only the BareSet cancel/read cycle OWNS recv mode (it
+            // cancels the multishot and reads the body itself). The
+            // `Frame` variant — cross-shard bare-SET, SETEX/APPEND/MSET,
+            // the common path on a multi-shard instance — stitches its
+            // bytes from the ORDINARY multishot, so gating the re-arm on
+            // `pending_big_arg.is_none()` wedged it: when the multishot
+            // ended on its own (ENOBUFS on the buffer ring is routine
+            // under a deep pipeline), nothing re-armed it, the frame
+            // never completed, and with no pending SQE and no output the
+            // conn dropped out of the arm queue for good. Captured:
+            // `big_arg=Frame(3232/4132) recv_armed=false arm_queued=false`.
+            // `uring_on_recv`'s `suppress_rearm` already made exactly
+            // this distinction — the two sites were inconsistent.
+            let big_arg_owns_recv = matches!(
+                uc.pending_big_arg.as_deref(),
+                Some(
+                    crate::uring_conn::BigArgState::BareSetCancelling { .. }
+                        | crate::uring_conn::BigArgState::BareSetReading { .. }
+                )
+            );
+            let want_multishot = !uc.recv_armed && !uc.closing && !big_arg_owns_recv;
+            let recv_arm_wanted = (want_multishot || uc.big_arg_rearm_recv)
                 && !uc.recv_armed
-                && !uc.closing
-                && ring.prep_recv_multishot(conn.sock.raw(), bgid, OP_RECV | cid)
-            {
+                && !uc.closing;
+            let recv_armed_now = recv_arm_wanted
+                && ring.prep_recv_multishot(conn.sock.raw(), bgid, OP_RECV | cid);
+            if recv_armed_now {
                 uc.recv_armed = true;
                 uc.big_arg_rearm_recv = false;
             }
-            // K4: re-queue if more work remains. A chunked writev
+            // A wanted recv-arm the SQ couldn't take THIS iter (ring
+            // momentarily full — a burst of pub/sub fan-out writes or
+            // many conns arming at once) must NOT let the conn drop out
+            // of the queue: with no armed recv SQE and no pending
+            // output to re-trigger it, the connection wedges forever
+            // (client blocked on a reply for a request the server
+            // never reads — observed as a conn stuck at `cmd=NULL
+            // events=r` while the reactor busy-loops). Keep it queued
+            // to retry next iter, once submit drains the SQ.
+            let recv_arm_deferred = recv_arm_wanted && !recv_armed_now;
+            // Re-queue if more work remains. A chunked writev
             // capped the SQE before all arcs/tail bytes were covered;
             // the on_write completion handler will not have anything
             // to do until the next arm_conns iter submits the next
@@ -355,7 +407,20 @@ impl<C: Commands> Shard<C> {
             // (no inflight chunked-writev tail, recv armed, no fresh
             // output) drop out — the completion handlers and the
             // wake-up sites will re-queue them when there's work.
+            // A big-arg cancel / single-shot read the SQ couldn't take
+            // THIS iter is the same trap as `recv_arm_deferred`: the flag
+            // stays set (correct — it retries), but nothing else re-queues
+            // the conn, because the CQE that would is for the SQE we just
+            // failed to submit. Under a deep pipeline of big-arg SETs the
+            // ring fills routinely, so this wedged the conn for good
+            // (captured: big_arg=true recv_armed=false arm_queued=false
+            // in_arm_pending=false, output/write empty). Both flags are
+            // cleared on successful submission or when their state goes
+            // away, so keeping the conn queued always terminates.
+            let big_arg_submit_deferred = uc.big_arg_cancel_pending || uc.big_arg_read_pending;
             let needs_more = uc.closing
+                || recv_arm_deferred
+                || big_arg_submit_deferred
                 || (!uc.write_inflight
                     && (uc.write_off < uc.write_buf.len() || !uc.write_arcs.is_empty()))
                 || (!conn.output.is_empty() || !conn.output_arcs.is_empty());

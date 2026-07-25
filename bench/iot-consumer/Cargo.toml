@@ -1,0 +1,35 @@
+[package]
+name = "kevy-iot-consumer"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Deliberately OUTSIDE the workspace (see the empty [workspace] table).
+#
+# iotgate used to size a workspace `--example`, but building an example
+# pulls the crate's dev-dependencies — and kevy-embedded dev-depends on
+# the `kevy` server crate, which drags the whole server stack into the
+# compile. The resulting binary measured ~60% larger than what a real
+# consumer gets. This fixture IS the real consumer shape: a standalone
+# crate whose only dependency is kevy-embedded at the tier under test.
+[workspace]
+
+[dependencies.kevy-embedded]
+path = "../../crates/kevy-embedded"
+default-features = false
+
+[features]
+core = ["kevy-embedded/core"]
+persist = ["kevy-embedded/core", "kevy-embedded/persist"]
+full = [
+  "kevy-embedded/core", "kevy-embedded/persist", "kevy-embedded/index",
+  "kevy-embedded/text", "kevy-embedded/vector", "kevy-embedded/replicate",
+  "kevy-embedded/listener",
+]
+
+# Mirrors the workspace's [profile.iot] so the number is comparable.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

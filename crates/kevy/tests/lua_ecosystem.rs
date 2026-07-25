@@ -1,15 +1,24 @@
-//! v1.27 P8 — the 5 canonical real-world Redis-Lua scripts from the
-//! ecosystem-survey corpus (`/tmp/lua-ecosystem-survey/`) run
+//! The 5 canonical real-world Redis-Lua scripts from the
+//! ecosystem-survey corpus run
 //! end-to-end through the kevy server's EVAL command.
 //!
-//! These are the same scripts the v1.27 verification report used
-//! (LUNA-FEEDBACK-REPORT.md §3). Running them here closes the loop:
+//! Running them here closes the loop:
 //! every Redis-Lua dependency in the BullMQ / Redlock / rate-limiter
 //! ecosystem that ships canonical scripts should now Just Work
 //! against a kevy server.
 
 use kevy_resp::Argv;
 use kevy_store::Store;
+
+/// In-process dispatcher: one KevyCommands per test thread, so
+/// per-state caches (e.g. the SCRIPT cache) persist across calls
+/// within a test.
+fn dispatch<A: kevy_rt::ArgvView + ?Sized>(store: &mut kevy_store::Store, args: &A) -> Vec<u8> {
+    thread_local! {
+        static KEVY: kevy::KevyCommands = kevy::KevyCommands::new();
+    }
+    KEVY.with(|k| k.dispatch(store, args))
+}
 
 fn argv(parts: &[&[u8]]) -> Argv {
     let mut a = Argv::default();
@@ -52,11 +61,11 @@ return redis.call('INCRBY', KEYS[1], ARGV[2])\n";
 #[test]
 fn redlock_unlock_success_path() {
     let mut store = Store::new();
-    let _ = kevy::dispatch(
+    let _ = dispatch(
         &mut store,
         &argv(&[b"SET", b"lock:order:42", b"client-A-token"]),
     );
-    let reply = kevy::dispatch(
+    let reply = dispatch(
         &mut store,
         &argv(&[
             b"EVAL",
@@ -69,7 +78,7 @@ fn redlock_unlock_success_path() {
     assert_eq!(reply, b":1\r\n");
     // Lock released.
     assert_eq!(
-        kevy::dispatch(&mut store, &argv(&[b"GET", b"lock:order:42"])),
+        dispatch(&mut store, &argv(&[b"GET", b"lock:order:42"])),
         b"$-1\r\n",
     );
 }
@@ -77,11 +86,11 @@ fn redlock_unlock_success_path() {
 #[test]
 fn redlock_unlock_wrong_token_returns_zero_and_preserves_lock() {
     let mut store = Store::new();
-    let _ = kevy::dispatch(
+    let _ = dispatch(
         &mut store,
         &argv(&[b"SET", b"lock:foo", b"someone-elses-token"]),
     );
-    let reply = kevy::dispatch(
+    let reply = dispatch(
         &mut store,
         &argv(&[
             b"EVAL",
@@ -94,7 +103,7 @@ fn redlock_unlock_wrong_token_returns_zero_and_preserves_lock() {
     assert_eq!(reply, b":0\r\n");
     // Lock untouched.
     assert_eq!(
-        kevy::dispatch(&mut store, &argv(&[b"GET", b"lock:foo"])),
+        dispatch(&mut store, &argv(&[b"GET", b"lock:foo"])),
         b"$19\r\nsomeone-elses-token\r\n",
     );
 }
@@ -102,7 +111,7 @@ fn redlock_unlock_wrong_token_returns_zero_and_preserves_lock() {
 #[test]
 fn redlock_unlock_missing_key_returns_zero() {
     let mut store = Store::new();
-    let reply = kevy::dispatch(
+    let reply = dispatch(
         &mut store,
         &argv(&[
             b"EVAL",
@@ -118,8 +127,8 @@ fn redlock_unlock_missing_key_returns_zero() {
 #[test]
 fn redlock_extend_success_path() {
     let mut store = Store::new();
-    let _ = kevy::dispatch(&mut store, &argv(&[b"SET", b"lock:x", b"token-1"]));
-    let reply = kevy::dispatch(
+    let _ = dispatch(&mut store, &argv(&[b"SET", b"lock:x", b"token-1"]));
+    let reply = dispatch(
         &mut store,
         &argv(&[
             b"EVAL",
@@ -137,8 +146,8 @@ fn redlock_extend_success_path() {
 #[test]
 fn redlock_extend_wrong_token_returns_zero() {
     let mut store = Store::new();
-    let _ = kevy::dispatch(&mut store, &argv(&[b"SET", b"lock:y", b"other"]));
-    let reply = kevy::dispatch(
+    let _ = dispatch(&mut store, &argv(&[b"SET", b"lock:y", b"other"]));
+    let reply = dispatch(
         &mut store,
         &argv(&[
             b"EVAL",
@@ -156,7 +165,7 @@ fn redlock_extend_wrong_token_returns_zero() {
 fn atomic_incr_or_init_fresh_key() {
     let mut store = Store::new();
     // KEY missing → SET KEY 100 → no TTL (ARGV[3] = 0) → INCRBY 1 → :101
-    let reply = kevy::dispatch(
+    let reply = dispatch(
         &mut store,
         &argv(&[
             b"EVAL",
@@ -170,7 +179,7 @@ fn atomic_incr_or_init_fresh_key() {
     );
     assert_eq!(reply, b":101\r\n");
     assert_eq!(
-        kevy::dispatch(
+        dispatch(
             &mut store,
             &argv(&[b"GET", b"counter:visits"])
         ),
@@ -181,12 +190,12 @@ fn atomic_incr_or_init_fresh_key() {
 #[test]
 fn atomic_incr_or_init_existing_key_skips_init() {
     let mut store = Store::new();
-    let _ = kevy::dispatch(
+    let _ = dispatch(
         &mut store,
         &argv(&[b"SET", b"counter:hits", b"5"]),
     );
     // KEY exists → skip init → INCRBY 10 → :15
-    let reply = kevy::dispatch(
+    let reply = dispatch(
         &mut store,
         &argv(&[
             b"EVAL",
@@ -204,7 +213,7 @@ fn atomic_incr_or_init_existing_key_skips_init() {
 #[test]
 fn atomic_incr_or_init_with_ttl_sets_expire() {
     let mut store = Store::new();
-    let _ = kevy::dispatch(
+    let _ = dispatch(
         &mut store,
         &argv(&[
             b"EVAL",
@@ -217,7 +226,7 @@ fn atomic_incr_or_init_with_ttl_sets_expire() {
         ]),
     );
     // Now check TTL was set (value > 0).
-    let ttl_reply = kevy::dispatch(&mut store, &argv(&[b"TTL", b"counter:ttl"]));
+    let ttl_reply = dispatch(&mut store, &argv(&[b"TTL", b"counter:ttl"]));
     // Should be a positive integer ≤ 60.
     assert!(ttl_reply.starts_with(b":"));
     let ttl_str = std::str::from_utf8(&ttl_reply[1..ttl_reply.len() - 2]).unwrap();
@@ -225,12 +234,7 @@ fn atomic_incr_or_init_with_ttl_sets_expire() {
     assert!(ttl > 0 && ttl <= 60, "got ttl: {ttl}");
 }
 
-// NOTE: sliding-window log limiter needs `ZREMRANGEBYSCORE` which
-// kevy doesn't implement yet (v1.27 backlog). The script itself
-// parses fine and would run if the command were there. Ignored
-// until the zset surface catches up — not a kevy-lua bridge gap.
 #[test]
-#[ignore]
 fn sliding_window_rate_limiter_first_request_allowed() {
     // Sliding-window log limiter — uses ZREMRANGEBYSCORE / ZCARD /
     // ZADD / PEXPIRE. Returns 1 on allow, 0 on reject.
@@ -249,7 +253,7 @@ if count < limit then\n\
 end\n\
 return 0\n";
     let mut store = Store::new();
-    let reply = kevy::dispatch(
+    let reply = dispatch(
         &mut store,
         &argv(&[
             b"EVAL",
@@ -266,7 +270,6 @@ return 0\n";
 }
 
 #[test]
-#[ignore]
 fn sliding_window_rate_limiter_over_limit_rejected() {
     const SCRIPT: &[u8] = b"\
 local key = KEYS[1]\n\
@@ -284,7 +287,7 @@ end\n\
 return 0\n";
     let mut store = Store::new();
     // Pre-fill the zset to limit=2.
-    let _ = kevy::dispatch(
+    let _ = dispatch(
         &mut store,
         &argv(&[
             b"ZADD",
@@ -295,7 +298,7 @@ return 0\n";
             b"b",
         ]),
     );
-    let reply = kevy::dispatch(
+    let reply = dispatch(
         &mut store,
         &argv(&[
             b"EVAL",

@@ -4,9 +4,9 @@
 //!
 //! Lives in its own module so `lib.rs` stays focused on the `Connection`
 //! enum + open + the generic + string ops. Behaviour and API are
-//! unchanged from the single-file layout in v1.2.0 / v1.3.0.
+//! unchanged from the original single-file layout.
 
-use std::io;
+use crate::{KevyError, KevyResult};
 
 use kevy_resp::Reply;
 use kevy_resp_client::RespClient;
@@ -18,20 +18,20 @@ impl Connection {
 
     /// `HSET key field value [field value ...]`. Returns the number of
     /// fields that were newly added (not overwrites).
-    pub fn hset(&mut self, key: &[u8], pairs: &[(&[u8], &[u8])]) -> io::Result<usize> {
+    pub fn hset(&mut self, key: &[u8], pairs: &[(&[u8], &[u8])]) -> KevyResult<usize> {
         match self {
             Self::Embedded(s) => s.hset(key, pairs),
             Self::Remote(c) => {
-                let mut args = Vec::with_capacity(2 + pairs.len() * 2);
-                args.push(b"HSET".to_vec());
-                args.push(key.to_vec());
-                for (f, v) in pairs {
-                    args.push(f.to_vec());
-                    args.push(v.to_vec());
+                let mut args: Vec<&[u8]> = Vec::with_capacity(2 + pairs.len() * 2);
+                args.push(b"HSET");
+                args.push(key);
+                for &(f, v) in pairs {
+                    args.push(f);
+                    args.push(v);
                 }
-                match c.request(&args)? {
+                match c.request_borrowed(&args)? {
                     Reply::Int(n) if n >= 0 => Ok(n as usize),
-                    Reply::Error(e) => Err(io::Error::other(string(e))),
+                    Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),
                 }
             }
@@ -39,13 +39,13 @@ impl Connection {
     }
 
     /// `HGET key field`. `None` when the key or field is absent.
-    pub fn hget(&mut self, key: &[u8], field: &[u8]) -> io::Result<Option<Vec<u8>>> {
+    pub fn hget(&mut self, key: &[u8], field: &[u8]) -> KevyResult<Option<Vec<u8>>> {
         match self {
             Self::Embedded(s) => s.hget(key, field),
             Self::Remote(c) => match c.request_borrowed(&[b"HGET", key, field])? {
                 Reply::Bulk(v) => Ok(Some(v)),
                 Reply::Nil => Ok(None),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }
@@ -53,17 +53,17 @@ impl Connection {
 
     /// `HDEL key field [field ...]`. Returns the number of fields actually
     /// removed.
-    pub fn hdel(&mut self, key: &[u8], fields: &[&[u8]]) -> io::Result<usize> {
+    pub fn hdel(&mut self, key: &[u8], fields: &[&[u8]]) -> KevyResult<usize> {
         match self {
             Self::Embedded(s) => s.hdel(key, fields),
             Self::Remote(c) => {
-                let mut args = Vec::with_capacity(fields.len() + 2);
-                args.push(b"HDEL".to_vec());
-                args.push(key.to_vec());
-                args.extend(fields.iter().map(|f| f.to_vec()));
-                match c.request(&args)? {
+                let mut args: Vec<&[u8]> = Vec::with_capacity(fields.len() + 2);
+                args.push(b"HDEL");
+                args.push(key);
+                args.extend_from_slice(fields);
+                match c.request_borrowed(&args)? {
                     Reply::Int(n) if n >= 0 => Ok(n as usize),
-                    Reply::Error(e) => Err(io::Error::other(string(e))),
+                    Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),
                 }
             }
@@ -71,12 +71,12 @@ impl Connection {
     }
 
     /// `HLEN key`. Number of fields in the hash (0 if absent).
-    pub fn hlen(&mut self, key: &[u8]) -> io::Result<usize> {
+    pub fn hlen(&mut self, key: &[u8]) -> KevyResult<usize> {
         match self {
             Self::Embedded(s) => s.with(|inner| inner.hlen(key)).map_err(store_err),
             Self::Remote(c) => match c.request_borrowed(&[b"HLEN", key])? {
                 Reply::Int(n) if n >= 0 => Ok(n as usize),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }
@@ -84,36 +84,36 @@ impl Connection {
 
     /// `HGETALL key`. Returns a flat `[f0, v0, f1, v1, ...]` matching the
     /// Redis wire shape; empty when the key is absent.
-    pub fn hgetall(&mut self, key: &[u8]) -> io::Result<Vec<Vec<u8>>> {
+    pub fn hgetall(&mut self, key: &[u8]) -> KevyResult<Vec<Vec<u8>>> {
         match self {
             Self::Embedded(s) => s.with(|inner| inner.hgetall(key)).map_err(store_err),
             Self::Remote(c) => match c.request_borrowed(&[b"HGETALL", key])? {
                 Reply::Array(items) => array_to_bulks(items),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }
     }
 
     /// `HKEYS key`. Returns the hash's field names (empty if absent).
-    pub fn hkeys(&mut self, key: &[u8]) -> io::Result<Vec<Vec<u8>>> {
+    pub fn hkeys(&mut self, key: &[u8]) -> KevyResult<Vec<Vec<u8>>> {
         match self {
             Self::Embedded(s) => s.with(|inner| inner.hkeys(key)).map_err(store_err),
             Self::Remote(c) => match c.request_borrowed(&[b"HKEYS", key])? {
                 Reply::Array(items) => array_to_bulks(items),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }
     }
 
     /// `HVALS key`. Returns the hash's values (empty if absent).
-    pub fn hvals(&mut self, key: &[u8]) -> io::Result<Vec<Vec<u8>>> {
+    pub fn hvals(&mut self, key: &[u8]) -> KevyResult<Vec<Vec<u8>>> {
         match self {
             Self::Embedded(s) => s.with(|inner| inner.hvals(key)).map_err(store_err),
             Self::Remote(c) => match c.request_borrowed(&[b"HVALS", key])? {
                 Reply::Array(items) => array_to_bulks(items),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }
@@ -122,7 +122,7 @@ impl Connection {
     // ===== List =====
 
     /// `LPUSH key value [value ...]`. Returns the new list length.
-    pub fn lpush(&mut self, key: &[u8], values: &[&[u8]]) -> io::Result<usize> {
+    pub fn lpush(&mut self, key: &[u8], values: &[&[u8]]) -> KevyResult<usize> {
         match self {
             Self::Embedded(s) => s.lpush(key, values),
             Self::Remote(c) => list_push(c, b"LPUSH", key, values),
@@ -130,7 +130,7 @@ impl Connection {
     }
 
     /// `RPUSH key value [value ...]`. Returns the new list length.
-    pub fn rpush(&mut self, key: &[u8], values: &[&[u8]]) -> io::Result<usize> {
+    pub fn rpush(&mut self, key: &[u8], values: &[&[u8]]) -> KevyResult<usize> {
         match self {
             Self::Embedded(s) => s.rpush(key, values),
             Self::Remote(c) => list_push(c, b"RPUSH", key, values),
@@ -139,7 +139,7 @@ impl Connection {
 
     /// `LPOP key count`. Returns up to `count` values from the head; empty
     /// when the key is absent or already drained.
-    pub fn lpop(&mut self, key: &[u8], count: usize) -> io::Result<Vec<Vec<u8>>> {
+    pub fn lpop(&mut self, key: &[u8], count: usize) -> KevyResult<Vec<Vec<u8>>> {
         match self {
             Self::Embedded(s) => s.lpop(key, count),
             Self::Remote(c) => list_pop(c, b"LPOP", key, count),
@@ -147,7 +147,7 @@ impl Connection {
     }
 
     /// `RPOP key count`. Symmetric to [`Self::lpop`] from the tail.
-    pub fn rpop(&mut self, key: &[u8], count: usize) -> io::Result<Vec<Vec<u8>>> {
+    pub fn rpop(&mut self, key: &[u8], count: usize) -> KevyResult<Vec<Vec<u8>>> {
         match self {
             Self::Embedded(s) => s.rpop(key, count),
             Self::Remote(c) => list_pop(c, b"RPOP", key, count),
@@ -155,12 +155,12 @@ impl Connection {
     }
 
     /// `LLEN key`. 0 when the key is absent.
-    pub fn llen(&mut self, key: &[u8]) -> io::Result<usize> {
+    pub fn llen(&mut self, key: &[u8]) -> KevyResult<usize> {
         match self {
             Self::Embedded(s) => s.llen(key),
             Self::Remote(c) => match c.request_borrowed(&[b"LLEN", key])? {
                 Reply::Int(n) if n >= 0 => Ok(n as usize),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }
@@ -168,21 +168,17 @@ impl Connection {
 
     /// `LRANGE key start stop`. Redis-style indexing — negative offsets
     /// count from the tail (`-1` = last element).
-    pub fn lrange(&mut self, key: &[u8], start: i64, stop: i64) -> io::Result<Vec<Vec<u8>>> {
+    pub fn lrange(&mut self, key: &[u8], start: i64, stop: i64) -> KevyResult<Vec<Vec<u8>>> {
         match self {
             Self::Embedded(s) => s
                 .with(|inner| inner.lrange(key, start, stop))
                 .map_err(store_err),
             Self::Remote(c) => {
-                let args = vec![
-                    b"LRANGE".to_vec(),
-                    key.to_vec(),
-                    start.to_string().into_bytes(),
-                    stop.to_string().into_bytes(),
-                ];
-                match c.request(&args)? {
+                let start_s = start.to_string();
+                let stop_s = stop.to_string();
+                match c.request_borrowed(&[b"LRANGE", key, start_s.as_bytes(), stop_s.as_bytes()])? {
                     Reply::Array(items) => array_to_bulks(items),
-                    Reply::Error(e) => Err(io::Error::other(string(e))),
+                    Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),
                 }
             }
@@ -192,7 +188,7 @@ impl Connection {
     // ===== Set =====
 
     /// `SADD key member [member ...]`. Returns count of newly added members.
-    pub fn sadd(&mut self, key: &[u8], members: &[&[u8]]) -> io::Result<usize> {
+    pub fn sadd(&mut self, key: &[u8], members: &[&[u8]]) -> KevyResult<usize> {
         match self {
             Self::Embedded(s) => s.sadd(key, members),
             Self::Remote(c) => set_multi(c, b"SADD", key, members),
@@ -200,7 +196,7 @@ impl Connection {
     }
 
     /// `SREM key member [member ...]`. Returns count of removed members.
-    pub fn srem(&mut self, key: &[u8], members: &[&[u8]]) -> io::Result<usize> {
+    pub fn srem(&mut self, key: &[u8], members: &[&[u8]]) -> KevyResult<usize> {
         match self {
             Self::Embedded(s) => s.srem(key, members),
             Self::Remote(c) => set_multi(c, b"SREM", key, members),
@@ -208,31 +204,31 @@ impl Connection {
     }
 
     /// `SMEMBERS key`. Order is implementation-defined; empty if absent.
-    pub fn smembers(&mut self, key: &[u8]) -> io::Result<Vec<Vec<u8>>> {
+    pub fn smembers(&mut self, key: &[u8]) -> KevyResult<Vec<Vec<u8>>> {
         match self {
             Self::Embedded(s) => s.smembers(key),
             Self::Remote(c) => match c.request_borrowed(&[b"SMEMBERS", key])? {
                 Reply::Array(items) => array_to_bulks(items),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }
     }
 
     /// `SCARD key`. 0 when the key is absent.
-    pub fn scard(&mut self, key: &[u8]) -> io::Result<usize> {
+    pub fn scard(&mut self, key: &[u8]) -> KevyResult<usize> {
         match self {
             Self::Embedded(s) => s.scard(key),
             Self::Remote(c) => match c.request_borrowed(&[b"SCARD", key])? {
                 Reply::Int(n) if n >= 0 => Ok(n as usize),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }
     }
 
     /// `SISMEMBER key member`. `false` when key or member absent.
-    pub fn sismember(&mut self, key: &[u8], member: &[u8]) -> io::Result<bool> {
+    pub fn sismember(&mut self, key: &[u8], member: &[u8]) -> KevyResult<bool> {
         match self {
             Self::Embedded(s) => s
                 .with(|inner| inner.sismember(key, member))
@@ -240,14 +236,14 @@ impl Connection {
             Self::Remote(c) => match c.request_borrowed(&[b"SISMEMBER", key, member])? {
                 Reply::Int(1) => Ok(true),
                 Reply::Int(0) => Ok(false),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }
     }
 
     /// `SINTER key [key ...]` — intersection of all sets.
-    pub fn sinter(&mut self, keys: &[&[u8]]) -> io::Result<Vec<Vec<u8>>> {
+    pub fn sinter(&mut self, keys: &[&[u8]]) -> KevyResult<Vec<Vec<u8>>> {
         match self {
             Self::Embedded(s) => embed_set_combine(s, keys, SetOp::Inter),
             Self::Remote(c) => remote_set_combine(c, b"SINTER", keys),
@@ -255,7 +251,7 @@ impl Connection {
     }
 
     /// `SUNION key [key ...]` — union of all sets.
-    pub fn sunion(&mut self, keys: &[&[u8]]) -> io::Result<Vec<Vec<u8>>> {
+    pub fn sunion(&mut self, keys: &[&[u8]]) -> KevyResult<Vec<Vec<u8>>> {
         match self {
             Self::Embedded(s) => embed_set_combine(s, keys, SetOp::Union),
             Self::Remote(c) => remote_set_combine(c, b"SUNION", keys),
@@ -263,7 +259,7 @@ impl Connection {
     }
 
     /// `SDIFF key [key ...]` — members of the first set absent from the rest.
-    pub fn sdiff(&mut self, keys: &[&[u8]]) -> io::Result<Vec<Vec<u8>>> {
+    pub fn sdiff(&mut self, keys: &[&[u8]]) -> KevyResult<Vec<Vec<u8>>> {
         match self {
             Self::Embedded(s) => embed_set_combine(s, keys, SetOp::Diff),
             Self::Remote(c) => remote_set_combine(c, b"SDIFF", keys),
@@ -274,20 +270,22 @@ impl Connection {
 
     /// `ZADD key score member [score member ...]`. Returns count of newly
     /// added members (overwrites don't count).
-    pub fn zadd(&mut self, key: &[u8], pairs: &[(f64, &[u8])]) -> io::Result<usize> {
+    pub fn zadd(&mut self, key: &[u8], pairs: &[(f64, &[u8])]) -> KevyResult<usize> {
         match self {
             Self::Embedded(s) => s.zadd(key, pairs),
             Self::Remote(c) => {
-                let mut args = Vec::with_capacity(2 + pairs.len() * 2);
-                args.push(b"ZADD".to_vec());
-                args.push(key.to_vec());
-                for (score, m) in pairs {
-                    args.push(score.to_string().into_bytes());
-                    args.push(m.to_vec());
+                // Scores are formatted floats — owned in `scores`; members borrow.
+                let scores: Vec<String> = pairs.iter().map(|(s, _)| s.to_string()).collect();
+                let mut args: Vec<&[u8]> = Vec::with_capacity(2 + pairs.len() * 2);
+                args.push(b"ZADD");
+                args.push(key);
+                for (i, &(_, m)) in pairs.iter().enumerate() {
+                    args.push(scores[i].as_bytes());
+                    args.push(m);
                 }
-                match c.request(&args)? {
+                match c.request_borrowed(&args)? {
                     Reply::Int(n) if n >= 0 => Ok(n as usize),
-                    Reply::Error(e) => Err(io::Error::other(string(e))),
+                    Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),
                 }
             }
@@ -295,7 +293,7 @@ impl Connection {
     }
 
     /// `ZREM key member [member ...]`. Returns count of removed members.
-    pub fn zrem(&mut self, key: &[u8], members: &[&[u8]]) -> io::Result<usize> {
+    pub fn zrem(&mut self, key: &[u8], members: &[&[u8]]) -> KevyResult<usize> {
         match self {
             Self::Embedded(s) => s.zrem(key, members),
             Self::Remote(c) => set_multi(c, b"ZREM", key, members),
@@ -303,32 +301,32 @@ impl Connection {
     }
 
     /// `ZSCORE key member`. `None` if absent.
-    pub fn zscore(&mut self, key: &[u8], member: &[u8]) -> io::Result<Option<f64>> {
+    pub fn zscore(&mut self, key: &[u8], member: &[u8]) -> KevyResult<Option<f64>> {
         match self {
             Self::Embedded(s) => s.zscore(key, member),
             Self::Remote(c) => match c.request_borrowed(&[b"ZSCORE", key, member])? {
                 Reply::Bulk(v) => {
                     let s = std::str::from_utf8(&v)
-                        .map_err(|_| io::Error::other("non-utf8 score reply"))?;
+                        .map_err(|_| KevyError::Protocol("non-utf8 score reply".into()))?;
                     let n: f64 = s
                         .parse()
-                        .map_err(|_| io::Error::other(format!("bad score float: {s}")))?;
+                        .map_err(|_| KevyError::Protocol(format!("bad score float: {s}")))?;
                     Ok(Some(n))
                 }
                 Reply::Nil => Ok(None),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }
     }
 
     /// `ZCARD key`. Number of members; 0 if absent.
-    pub fn zcard(&mut self, key: &[u8]) -> io::Result<usize> {
+    pub fn zcard(&mut self, key: &[u8]) -> KevyResult<usize> {
         match self {
             Self::Embedded(s) => s.zcard(key),
             Self::Remote(c) => match c.request_borrowed(&[b"ZCARD", key])? {
                 Reply::Int(n) if n >= 0 => Ok(n as usize),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }
@@ -336,22 +334,18 @@ impl Connection {
 
     /// `ZRANGE key start stop`. Ascending-score order; negative indices
     /// count from the tail.
-    pub fn zrange(&mut self, key: &[u8], start: i64, stop: i64) -> io::Result<Vec<Vec<u8>>> {
+    pub fn zrange(&mut self, key: &[u8], start: i64, stop: i64) -> KevyResult<Vec<Vec<u8>>> {
         match self {
             Self::Embedded(s) => s
                 .with(|inner| inner.zrange(key, start, stop))
                 .map(|pairs| pairs.into_iter().map(|(m, _score)| m).collect())
                 .map_err(store_err),
             Self::Remote(c) => {
-                let args = vec![
-                    b"ZRANGE".to_vec(),
-                    key.to_vec(),
-                    start.to_string().into_bytes(),
-                    stop.to_string().into_bytes(),
-                ];
-                match c.request(&args)? {
+                let start_s = start.to_string();
+                let stop_s = stop.to_string();
+                match c.request_borrowed(&[b"ZRANGE", key, start_s.as_bytes(), stop_s.as_bytes()])? {
                     Reply::Array(items) => array_to_bulks(items),
-                    Reply::Error(e) => Err(io::Error::other(string(e))),
+                    Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),
                 }
             }
@@ -369,14 +363,14 @@ pub(crate) fn list_push(
     verb: &[u8],
     key: &[u8],
     values: &[&[u8]],
-) -> io::Result<usize> {
-    let mut args = Vec::with_capacity(values.len() + 2);
-    args.push(verb.to_vec());
-    args.push(key.to_vec());
-    args.extend(values.iter().map(|v| v.to_vec()));
-    match c.request(&args)? {
+) -> KevyResult<usize> {
+    let mut args: Vec<&[u8]> = Vec::with_capacity(values.len() + 2);
+    args.push(verb);
+    args.push(key);
+    args.extend_from_slice(values);
+    match c.request_borrowed(&args)? {
         Reply::Int(n) if n >= 0 => Ok(n as usize),
-        Reply::Error(e) => Err(io::Error::other(string(e))),
+        Reply::Error(e) => Err(KevyError::Protocol(string(e))),
         other => Err(unexpected(other)),
     }
 }
@@ -386,13 +380,13 @@ pub(crate) fn list_pop(
     verb: &[u8],
     key: &[u8],
     count: usize,
-) -> io::Result<Vec<Vec<u8>>> {
-    let args = vec![verb.to_vec(), key.to_vec(), count.to_string().into_bytes()];
-    match c.request(&args)? {
+) -> KevyResult<Vec<Vec<u8>>> {
+    let count_s = count.to_string();
+    match c.request_borrowed(&[verb, key, count_s.as_bytes()])? {
         Reply::Array(items) => array_to_bulks(items),
         Reply::Bulk(v) => Ok(vec![v]),
         Reply::Nil => Ok(Vec::new()),
-        Reply::Error(e) => Err(io::Error::other(string(e))),
+        Reply::Error(e) => Err(KevyError::Protocol(string(e))),
         other => Err(unexpected(other)),
     }
 }
@@ -402,14 +396,14 @@ pub(crate) fn set_multi(
     verb: &[u8],
     key: &[u8],
     members: &[&[u8]],
-) -> io::Result<usize> {
-    let mut args = Vec::with_capacity(members.len() + 2);
-    args.push(verb.to_vec());
-    args.push(key.to_vec());
-    args.extend(members.iter().map(|m| m.to_vec()));
-    match c.request(&args)? {
+) -> KevyResult<usize> {
+    let mut args: Vec<&[u8]> = Vec::with_capacity(members.len() + 2);
+    args.push(verb);
+    args.push(key);
+    args.extend_from_slice(members);
+    match c.request_borrowed(&args)? {
         Reply::Int(n) if n >= 0 => Ok(n as usize),
-        Reply::Error(e) => Err(io::Error::other(string(e))),
+        Reply::Error(e) => Err(KevyError::Protocol(string(e))),
         other => Err(unexpected(other)),
     }
 }
@@ -428,7 +422,7 @@ fn embed_set_combine(
     s: &kevy_embedded::Store,
     keys: &[&[u8]],
     op: SetOp,
-) -> io::Result<Vec<Vec<u8>>> {
+) -> KevyResult<Vec<Vec<u8>>> {
     use std::collections::HashSet;
     if keys.is_empty() {
         return Ok(Vec::new());
@@ -436,7 +430,7 @@ fn embed_set_combine(
     let snapshots: Vec<Vec<Vec<u8>>> = keys
         .iter()
         .map(|k| s.smembers(k))
-        .collect::<io::Result<_>>()?;
+        .collect::<KevyResult<_>>()?;
     let mut iter = snapshots.into_iter();
     let mut acc: HashSet<Vec<u8>> = iter.next().unwrap_or_default().into_iter().collect();
     for rest in iter {
@@ -454,13 +448,13 @@ pub(crate) fn remote_set_combine(
     c: &mut RespClient,
     verb: &[u8],
     keys: &[&[u8]],
-) -> io::Result<Vec<Vec<u8>>> {
-    let mut args = Vec::with_capacity(keys.len() + 1);
-    args.push(verb.to_vec());
-    args.extend(keys.iter().map(|k| k.to_vec()));
-    match c.request(&args)? {
+) -> KevyResult<Vec<Vec<u8>>> {
+    let mut args: Vec<&[u8]> = Vec::with_capacity(keys.len() + 1);
+    args.push(verb);
+    args.extend_from_slice(keys);
+    match c.request_borrowed(&args)? {
         Reply::Array(items) => array_to_bulks(items),
-        Reply::Error(e) => Err(io::Error::other(string(e))),
+        Reply::Error(e) => Err(KevyError::Protocol(string(e))),
         other => Err(unexpected(other)),
     }
 }

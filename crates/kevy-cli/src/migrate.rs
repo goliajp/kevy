@@ -1,4 +1,4 @@
-//! **v2.10** — migration toolchain: `export` / `import` (RFC D1/D2).
+//! Migration toolchain: `export` / `import`.
 //!
 //! Wire format = a RESP command stream of rebuild frames (SET / HSET /
 //! RPUSH / SADD / ZADD / PEXPIREAT) — bidirectionally compatible with

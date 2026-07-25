@@ -141,7 +141,7 @@ fn duplicate_keys_collapse_onto_one_node() {
 
 #[test]
 fn duplicate_heavy_corpus_stays_connected() {
-    // Fuzz finding (2026-07-10, artifact
+    // Fuzz finding (artifact
     // hnsw_ops/minimized-from-5290acb6…): duplicate-heavy corpora
     // used to disconnect the graph — recall@10 with an EXHAUSTIVE
     // beam (ef = 512 ≥ N) dropped to 0.8. One-node-per-key

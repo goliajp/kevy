@@ -1,9 +1,9 @@
-//! OP_TABLE ↔ kevy-embedded surface parity (v2.1 parity CI).
+//! OP_TABLE ↔ kevy-embedded surface parity CI.
 //!
 //! Each embedded surface exports a manifest of implemented command
 //! names; these tests assert manifest == the table's surface-flag set,
 //! failing with the exact missing/extra names. This is the structural
-//! fix for the v2.0.21 drift class (facade verbs the replay couldn't
+//! fix for the manifest-drift class (facade verbs the replay couldn't
 //! parse = silent data loss).
 
 use std::collections::BTreeSet;

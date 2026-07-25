@@ -11,10 +11,17 @@
 //! - `search.rs` — GEOSEARCH, by far the largest single command in
 //!   this family (radius/box modes, six option flags). Split out so
 //!   each file stays under the project's ≤500-LOC rule.
+//! - `store.rs` — the cross-shard half of the `*STORE` family: which two
+//!   keys a STORE form touches (routing) and the source-shard search the
+//!   runtime calls back for.
 
 mod radius;
 mod search;
+mod store;
 
+pub(crate) use store::{geo_search, geo_store_route};
+
+use kevy_resp::CmdError;
 use kevy_geo::{
     decode_score, encode_base32_geohash, encode_score, haversine_meters,
 };
@@ -72,7 +79,7 @@ fn cmd_geoadd<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u
     }
     let (mode, ch, first_triple) = match parse_geoadd_flags(args) {
         Ok(t) => t,
-        Err(msg) => return encode_error(out, msg),
+        Err(msg) => return encode_error(out, msg.as_wire()),
     };
     if !(args.len() - first_triple).is_multiple_of(3) {
         return encode_error(out, "ERR syntax error");
@@ -115,7 +122,7 @@ enum GeoAddMode {
 /// (matches Redis).
 fn parse_geoadd_flags<A: ArgvView + ?Sized>(
     args: &A,
-) -> Result<(GeoAddMode, bool, usize), &'static str> {
+) -> Result<(GeoAddMode, bool, usize), CmdError> {
     let mut mode = GeoAddMode::Default;
     let mut ch = false;
     let mut i = 2;
@@ -124,14 +131,14 @@ fn parse_geoadd_flags<A: ArgvView + ?Sized>(
         match u.as_slice() {
             b"NX" => {
                 if matches!(mode, GeoAddMode::Xx) {
-                    return Err("ERR XX and NX options at the same time are not compatible");
+                    return Err(CmdError::Wire("ERR XX and NX options at the same time are not compatible"));
                 }
                 mode = GeoAddMode::Nx;
                 i += 1;
             }
             b"XX" => {
                 if matches!(mode, GeoAddMode::Nx) {
-                    return Err("ERR XX and NX options at the same time are not compatible");
+                    return Err(CmdError::Wire("ERR XX and NX options at the same time are not compatible"));
                 }
                 mode = GeoAddMode::Xx;
                 i += 1;
@@ -157,7 +164,7 @@ fn apply_geoadd(
         .iter()
         .map(|(_, m)| store.zscore(key, m).unwrap_or(Some(0.0)))
         .collect();
-    let mut to_write: Vec<(f64, Vec<u8>)> = Vec::with_capacity(pairs.len());
+    let mut to_write: Vec<(f64, &[u8])> = Vec::with_capacity(pairs.len());
     for (i, p) in pairs.iter().enumerate() {
         let exists = existing[i].is_some();
         let allowed = matches!(
@@ -165,7 +172,7 @@ fn apply_geoadd(
             (GeoAddMode::Default, _) | (GeoAddMode::Nx, false) | (GeoAddMode::Xx, true),
         );
         if allowed {
-            to_write.push(p.clone());
+            to_write.push((p.0, p.1.as_slice()));
         }
     }
     if to_write.is_empty() {

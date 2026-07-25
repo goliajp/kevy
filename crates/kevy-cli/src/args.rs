@@ -11,6 +11,7 @@ kevy-cli {v} — redis-cli-style REPL for kevy or any RESP server.
 
 USAGE:
     kevy-cli [-h <host>] [-p <port>] [command [args ...]]
+    kevy-cli <tool> [options]
 
 OPTIONS:
     -h <host>           Server hostname (default: 127.0.0.1)
@@ -20,12 +21,44 @@ OPTIONS:
 
 With a trailing command, runs once and exits non-zero on a RESP error.
 Without a command, opens an interactive REPL (Ctrl-D / `quit` / `exit` to leave).
+"
+    );
+    print_help_tools();
+}
+
+/// The tool-subcommand half of `--help` (split: fn ≤ 50 LOC rule).
+fn print_help_tools() {
+    println!(
+        "\
+SQL COMPILER (declaration-time only — never per-query):
+    sql compile <file.sql>                      compile CREATE TABLE/INDEX/VIEW
+                                                into TABLE.DECLARE / VIEW.CREATE
+                                                commands + IDX.QUERY query cards
+    sql compile <file.sql> --apply --url <h:p>  additionally run the commands
+                                                against a server (exits non-zero
+                                                on any error reply)
+
+MIGRATION TOOLS:
+    export  -p <port> [--prefix <p>] <file>     dump the keyspace to a RESP file
+    import  -p <port> [--strict|--resume] <f>   load one back in
+    digest  -p <port> <prefix>                  hash a prefix, to prove two
+                                                servers agree
+    diff    <hostA:port> <hostB:port> <prefix>… report where they do not
+
+    copy-prefix    -p <port> [--rate n] <from> <to>
+    delete-prefix  -p <port> [--rate n] [--dry-run] <prefix>
+    inspect -p <port> <key>                     type, size and TTL of one key
 
 EXAMPLES:
     kevy-cli                            # REPL against 127.0.0.1:6379
     kevy-cli -p 6004                    # REPL against kevy default port
     kevy-cli -h prod.internal ping      # one-shot PING
     kevy-cli -p 6004 set greet hello    # one-shot SET, exits 0
+
+    # move a keyspace, and prove it arrived
+    kevy-cli export -p 6379 --prefix user: dump.resp
+    kevy-cli import -p 6380 --strict dump.resp
+    kevy-cli digest -p 6379 user: && kevy-cli digest -p 6380 user:
 
 Docs: https://github.com/goliajp/kevy"
     );
@@ -63,7 +96,7 @@ impl Config {
                     // An unrecognized leading flag would otherwise be
                     // sent to the server as a COMMAND — whose 'unknown
                     // command' reply points users at the wrong layer
-                    // (mailrs feedback 2026-07-08). Fail HERE, by name.
+                    // (reported by a downstream user). Fail HERE, by name.
                     eprintln!(
                         "kevy-cli: unknown option '{other}' (options go before the command; see kevy-cli --help)"
                     );

@@ -9,53 +9,27 @@
 //!
 //! Single-machine scope: no failover, no MIGRATE/ASK, no gossip — the
 //! topology is static and fully derived from the config.
+//!
+//! Stub semantics (by design, not an unfinished surface): in
+//! standalone mode the read-only subcommands report the honest
+//! single-node facts (`cluster_enabled:0`, one node owning all 16384
+//! slots, empty SLOTS/SHARDS); mutating subcommands (RESET / SETSLOT
+//! / FORGET / MEET …) answer `+OK` without effect, because there is
+//! no dynamic membership to mutate — kevy's multi-node story is the
+//! replication + scope planes, and membership changes are "push new
+//! config, restart". Clients that probe CLUSTER defensively at
+//! connect time therefore proceed instead of erroring out.
 
 // CLUSTER NODES emits a multi-line description; the `push_str(&format!(...))`
 // shape stays legible vs `write!` boilerplate, and it's not on a hot path.
 #![allow(clippy::format_push_string)]
-
-use std::cell::Cell;
 
 use kevy_config::Config;
 use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_integer, encode_simple_string};
 use kevy_store::Store;
 
 use super::wrong_args;
-
-thread_local! {
-    /// This reactor thread's shard id (thread-per-core: thread == shard).
-    /// Set by `KevyCommands::on_shard_start`; the `usize::MAX` sentinel
-    /// (never a real shard) marks non-reactor contexts (tests, embedded).
-    static CURRENT_SHARD: Cell<usize> = const { Cell::new(usize::MAX) };
-}
-
-/// Record the current thread's shard id (see [`CURRENT_SHARD`]).
-pub(crate) fn set_current_shard(shard: usize) {
-    CURRENT_SHARD.with(|c| c.set(shard));
-}
-
-fn current_shard() -> usize {
-    let s = CURRENT_SHARD.with(std::cell::Cell::get);
-    if s == usize::MAX { 0 } else { s }
-}
-
-/// Pub(crate) wrapper for [`current_shard`] — same logic, exposed
-/// so `elect_integration` can route `on_replication_view` calls
-/// to the correct per-shard offset slot. (Distinct name to make
-/// the intent clear at call sites — every shard's
-/// `Commands::on_replication_view` runs on its own reactor thread,
-/// and this thread-local is how that thread identifies itself.)
-pub(crate) fn current_shard_for_elect() -> usize {
-    current_shard()
-}
-
-/// v1.27.4: same thread-local exposed for `cmd_lua`. The Lua
-/// dispatch closure consults this to validate that every inner
-/// `redis.call` target key lives on the same shard as the EVAL
-/// itself — matches Redis Cluster CROSSSLOT semantics for scripts.
-pub(crate) fn current_shard_for_lua() -> usize {
-    current_shard()
-}
+use crate::state::Ctx;
 
 /// Deterministic 40-hex node id for shard `i` (stable across restarts;
 /// `i + 1` so no id collides with the all-zero "unknown node" sentinel).
@@ -76,11 +50,12 @@ fn advertised_ip(cfg: &Config) -> String {
 
 // LOC-WAIVER: data-driven subcommand dispatch table — one reply-emitter arm per subcommand.
 pub(crate) fn cmd_cluster<A: ArgvView + ?Sized>(
-    cfg: &Config,
+    ctx: &Ctx<'_>,
     store: &mut Store,
     args: &A,
     out: &mut Vec<u8>,
 ) {
+    let cfg = &ctx.state.config();
     let sub = match args.get(1) {
         Some(s) => s.to_ascii_uppercase(),
         None => return wrong_args(out, "cluster"),
@@ -89,7 +64,7 @@ pub(crate) fn cmd_cluster<A: ArgvView + ?Sized>(
     let enabled = cfg.cluster.enabled;
     match sub.as_slice() {
         b"INFO" => {
-            // v1.57 (closes v1.44.x finding): `cluster_known_nodes` is
+            // `cluster_known_nodes` is
             // peer count (self + every entry in `[cluster] peers`),
             // not shard count. `cluster_size` stays = shard count
             // (Redis semantics: number of masters serving slots).
@@ -113,18 +88,18 @@ pub(crate) fn cmd_cluster<A: ArgvView + ?Sized>(
             );
             encode_bulk(out, body.as_bytes());
         }
-        b"NODES" if enabled => encode_bulk(out, nodes_text(cfg, n).as_bytes()),
+        b"NODES" if enabled => {
+            encode_bulk(
+                out,
+                nodes_text(cfg, n, live_role(ctx), ctx.shard.shard_id()).as_bytes(),
+            );
+        }
         b"NODES" => {
-            // Standalone stub. T1.33: the flag reflects live state
-            // (`replica_state::current_upstream` is `Some` for a
-            // replica) — clients that discover topology via NODES
-            // can therefore classify the node correctly without a
-            // separate ROLE roundtrip.
-            let role = if crate::replica_state::current_upstream().is_some() {
-                "slave"
-            } else {
-                "master"
-            };
+            // Standalone stub. The role flag reflects live state
+            // (the upstream slot is `Some` for a replica) — clients
+            // that discover topology via NODES can therefore classify
+            // the node correctly without a separate ROLE roundtrip.
+            let role = live_role(ctx);
             let body = format!(
                 "0000000000000000000000000000000000000000 :0@0 myself,{role} - 0 0 0 connected 0-16383\r\n",
             );
@@ -133,7 +108,7 @@ pub(crate) fn cmd_cluster<A: ArgvView + ?Sized>(
         b"SLOTS" if enabled => encode_slots(cfg, n, out),
         b"SHARDS" if enabled => encode_shards(cfg, n, out),
         b"SLOTS" | b"SHARDS" => encode_array_len(out, 0),
-        b"MYID" if enabled => encode_bulk(out, node_id(current_shard()).as_bytes()),
+        b"MYID" if enabled => encode_bulk(out, node_id(ctx.shard.shard_id()).as_bytes()),
         b"MYID" => encode_bulk(out, b"0000000000000000000000000000000000000000"),
         b"KEYSLOT" => match args.get(2) {
             Some(key) => encode_integer(out, i64::from(kevy_hash::key_hash_slot(key))),
@@ -158,6 +133,11 @@ pub(crate) fn cmd_cluster<A: ArgvView + ?Sized>(
             });
             encode_integer(out, count);
         }
+        // Mutating / gossip subcommands (RESET, SETSLOT, FORGET, MEET,
+        // FAILOVER …): tolerated as no-op `+OK` — see the module doc's
+        // stub-semantics declaration. There is no dynamic membership
+        // to mutate; erroring here would break clients that probe
+        // CLUSTER defensively at connect time.
         _ => encode_simple_string(out, "OK"),
     }
 }
@@ -174,19 +154,21 @@ fn for_each_node(cfg: &Config, n: usize, mut f: impl FnMut(usize, &str, i64, u16
     }
 }
 
-/// `CLUSTER NODES` text: one line per virtual node. The answering shard is
-/// flagged `myself`. No cluster bus — `@cport` mirrors the data port.
-fn nodes_text(cfg: &Config, n: usize) -> String {
-    let me = current_shard();
-    // T1.33: the answering node's role from live replication state
-    // — the OTHER shards within this same process share the same
-    // role (they're sibling shards in one process), so we apply
-    // `role` to every entry.
-    let role = if crate::replica_state::current_upstream().is_some() {
+/// The answering node's role from live replication state — the OTHER
+/// shards within this same process share the same role (they're
+/// sibling shards in one process), so callers apply it to every entry.
+fn live_role(ctx: &Ctx<'_>) -> &'static str {
+    if ctx.state.replication.current_upstream().is_some() {
         "slave"
     } else {
         "master"
-    };
+    }
+}
+
+/// `CLUSTER NODES` text: one line per virtual node. The answering
+/// shard (`me`) is flagged `myself`. No cluster bus — `@cport` mirrors
+/// the data port.
+fn nodes_text(cfg: &Config, n: usize, role: &str, me: usize) -> String {
     let mut body = String::new();
     for_each_node(cfg, n, |i, ip, port, start, end| {
         let flags = if i == me {

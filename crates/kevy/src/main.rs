@@ -19,15 +19,7 @@ fn main() -> ! {
     if !is_loopback(cfg.server.bind) {
         warn_unprotected_bind(cfg.server.bind);
     }
-    let bind = cfg.server.bind;
-    let port = cfg.server.port;
-    let data_dir = cfg.server.data_dir.clone();
-    let aof = cfg.persistence.aof;
-    // Install the resolved Config process-wide so dispatch handlers
-    // (INFO, CONFIG GET) read live values instead of compile-time
-    // defaults. Must happen before the reactor starts so shards see it.
-    kevy::config_init(Arc::new(cfg));
-    kevy::serve(bind, port, threads, data_dir, aof); // never returns
+    kevy::serve(Arc::new(cfg)); // never returns
 }
 
 /// `--help` / `--version` short-circuit BEFORE the config layer
@@ -64,8 +56,8 @@ fn die<E: std::fmt::Display, T>(e: E) -> T {
     std::process::exit(1);
 }
 
-/// v1.30 — `--accept-shards` runtime validation. `None` (default) = every
-/// shard arms accept (v1.29 behavior). `Some(N)` requires `1 <= N <= threads`.
+/// `--accept-shards` runtime validation. `None` (default) = every
+/// shard arms accept. `Some(N)` requires `1 <= N <= threads`.
 fn validate_accept_shards(cfg: &Config, threads: usize) {
     let Some(n) = cfg.server.accept_shards else { return };
     if n == 0 || n > threads {
@@ -118,6 +110,9 @@ OPTIONS:
     --threads <N>       Shard count (default: 0 = available_parallelism())
     --dir <PATH>        Data directory for snapshot + AOF (default: .)
     --no-aof            Disable the AOF (in-memory only / cache-only mode)
+    --tiering-budget <B> Enable transparent tiering with this RAM budget:
+                        \"auto\" (0.70 x detected memory bound), \"70%\"
+                        (percent of the bound), or absolute (\"4gb\")
     --cluster           Single-node cluster mode: slot routing + one extra
                         deterministic port per shard (port+1+i); cluster
                         clients (redis-cli -c, redis-benchmark --cluster)
@@ -126,7 +121,8 @@ OPTIONS:
     -V, --version       Print version and exit
 
 Precedence (top wins): CLI flags > env vars > TOML file > built-in defaults.
-Env vars: KEVY_BIND, KEVY_PORT, KEVY_THREADS, KEVY_DIR, KEVY_AOF, KEVY_CLUSTER.
+Env vars: KEVY_BIND, KEVY_PORT, KEVY_THREADS, KEVY_DIR, KEVY_AOF, KEVY_CLUSTER,
+KEVY_TIER_BUDGET (auto | N% | bytes/size literal).
 
 EXAMPLES:
     kevy                        # 127.0.0.1:6004, all cores, AOF on
@@ -167,6 +163,12 @@ fn parse_cli() -> (Option<PathBuf>, CliOverrides) {
         data_dir: arg_value("--dir").map(PathBuf::from),
         aof,
         cluster,
+        tiering_budget: arg_value("--tiering-budget").map(|s| {
+            kevy_config::TierBudgetSpec::parse(&s).unwrap_or_else(|e| {
+                eprintln!("kevy: --tiering-budget: {e}");
+                std::process::exit(2);
+            })
+        }),
     };
     (config_path, overrides)
 }
@@ -215,11 +217,11 @@ fn is_loopback(bind: [u8; 4]) -> bool {
     bind[0] == 127
 }
 
-/// Valkey/Redis "protected-mode" style advisory. kevy has no auth yet
-/// (deferred to v0.3+); the only safe deployment for a non-loopback bind
-/// is a trust-bounded network (docker-compose internal, kubernetes pod
-/// network, VPC private subnet). For public exposure, front with
-/// stunnel/nginx + IP allowlist until AUTH lands.
+/// Valkey/Redis "protected-mode" style advisory. kevy has no auth
+/// (a deliberate non-goal); the only safe deployment for a non-loopback
+/// bind is a trust-bounded network (docker-compose internal, kubernetes
+/// pod network, VPC private subnet). For public exposure, front with
+/// stunnel/nginx + IP allowlist.
 fn warn_unprotected_bind(bind: [u8; 4]) {
     let [a, b, c, d] = bind;
     eprintln!("kevy WARN: bind={a}.{b}.{c}.{d} is not loopback and kevy has no AUTH/TLS yet.");

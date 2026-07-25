@@ -1,6 +1,6 @@
 # Designing your application on kevy
 
-kevy v3 is a **serving engine**: the primary data store for
+kevy is a **serving engine**: the primary data store for
 applications that would otherwise put their operational model on a
 relational database and cache in front of it. This page is the map —
 what the engine gives you, the laws that bound it, and where each
@@ -19,7 +19,7 @@ through [the cookbook](cookbook.md) recipe by recipe.
 | **P3 — Views & algebra** | Named compositions over indexes (virtual / materialized top-K), zset/set algebra with full Redis semantics. | docs/views.md |
 | **P4 — Flow** | CDC feed with `(generation, offset)` cursors (the built-in outbox), blocking pops, hash-field TTLs, snapshot read views, the embedded read-only RESP listener. | docs/cdc.md, docs/embedded-listener.md |
 | **P5 — Evidence** | Every declared line measured and reconciled; crash-consistency chaos gates; 30M-key mixed-stack soak. | bench/VALIDATION-LEDGER.md |
-| **P6 — Availability** | Replication with acked-offset truth and heartbeats, planned handover (`FAILOVER`) and crash failover (quorum election, election-only write authority, fork discard), and the opt-in consistency ladder: `WAIT`, read-your-writes tokens (`REPL.TOKEN`/`REPL.WAIT`), bounded staleness (`-STALE`), quorum-lease write fencing. 12 executable clamps (availgate) run in CI. | docs/availability.md, docs/replication.md |
+| **P6 — Availability** | Replication with acked-offset truth and heartbeats, planned handover (`FAILOVER`) and crash failover (quorum election, election-only write authority, fork discard), and the opt-in consistency ladder: `WAIT`, read-your-writes tokens (`REPL.TOKEN`/`REPL.WAIT`), bounded staleness (`-STALE`), quorum-lease write fencing. 13 executable clamps (availgate) run in CI. | docs/availability.md, docs/replication.md |
 
 ## The three laws
 
@@ -68,7 +68,7 @@ is the wrong shape:
 Numbers are ratchets — floors only rise. The standing lines
 (measured values in `bench/VALIDATION-LEDGER.md`):
 
-- Redis-parity throughput: 7-angle perfgate, floor = baseline×0.92.
+- Redis-parity throughput: 12-angle perfgate, floor = baseline×0.92.
 - Hydrated row-list page p99 < 1ms; view page < 1ms; write fan-out
   through index+view hooks p99 < 200µs — on one server carrying the
   full stack.

@@ -1,4 +1,4 @@
-//! v1.29 B2-alt — bareset local-shard cancel/single-shot/re-arm
+//! Bareset local-shard cancel/single-shot/re-arm
 //! cycle handlers. Split out of [`crate::uring_bigbulk`] so that file
 //! stays under the 500-LOC house rule; every method here is on the
 //! same `impl<C: Commands> Shard<C>`.
@@ -33,14 +33,14 @@ use crate::uring_conn::{BigArgState, UringConn};
 use kevy_map::KevyMap;
 
 impl<C: Commands> Shard<C> {
-    /// **v1.29 B2-alt** — handler for `OP_BIG_READ` CQE: extend the
+    /// Handler for `OP_BIG_READ` CQE: extend the
     /// body Vec by the kernel-reported byte count (the kernel wrote
     /// directly into `body.as_mut_ptr().add(body.len())` for `res`
     /// bytes). If body still incomplete, mark the conn for another
     /// `prep_read` on the next arm pass; if complete, dispatch + mark
     /// for multishot re-arm.
     // LOC-WAIVER: kernel-direct big-arg read completion state machine
-    // (B2-alt) — body fill / CRLF account / dispatch+re-arm, one unit.
+    // — body fill / CRLF account / dispatch+re-arm, one unit.
     pub(crate) fn uring_on_big_arg_read(
         &mut self,
         cid: u64,
@@ -111,7 +111,7 @@ impl<C: Commands> Shard<C> {
         }
     }
 
-    /// **v1.29 B2-alt** — handler for `OP_BIG_CANCEL` CQE: mark the
+    /// Handler for `OP_BIG_CANCEL` CQE: mark the
     /// cancel side ack'd. If the target ECANCELED has also been seen,
     /// transition to `BareSetReading` + schedule the single-shot read.
     pub(crate) fn uring_on_big_arg_cancel(
@@ -124,6 +124,19 @@ impl<C: Commands> Shard<C> {
         // or -EALREADY (target executing). All three end the cancel
         // side — proceed to transition checks.
         let Some(uc) = io.get_mut(&cid) else { return };
+        // The multishot recv can self-terminate (buffer-ring ENOBUFS /
+        // EOF) in the window between the cancel submission and this ack.
+        // Its terminal CQE is then NOT -ECANCELED, so the
+        // `target_canceled` path never fires and the cancel completes
+        // -ENOENT. `recv_armed == false` is the authoritative "multishot
+        // is gone" signal — `uring_on_recv` clears it on EVERY terminal
+        // (cancel or not), and that terminal always precedes the -ENOENT
+        // ack, so it is already false here. Treat it as the target side
+        // being done: waiting only on `target_canceled` wedged the conn
+        // forever in BareSetCancelling under a deep pipeline of big-arg
+        // SETs (captured: big_arg=true recv_armed=false, target_canceled
+        // never set).
+        let multishot_gone = !uc.recv_armed;
         let Some(state) = uc.pending_big_arg.as_mut() else {
             // The body completed via multishot slabs while the cancel
             // was in flight — request a multishot re-arm so the conn
@@ -141,12 +154,12 @@ impl<C: Commands> Shard<C> {
             return;
         };
         *cancel_acked = true;
-        if *cancel_acked && *target_canceled {
+        if *cancel_acked && (*target_canceled || multishot_gone) {
             self.transition_to_reading(cid, io);
         }
     }
 
-    /// **v1.29 B2-alt** — called by `uring_on_recv` when the multishot
+    /// Called by `uring_on_recv` when the multishot
     /// recv's terminal CQE arrives with `res == -ECANCELED`. Mirrors
     /// [`Self::uring_on_big_arg_cancel`] on the target-side flag.
     pub(crate) fn uring_on_big_arg_target_canceled(
@@ -177,7 +190,7 @@ impl<C: Commands> Shard<C> {
         }
     }
 
-    /// **v1.29 B2-alt** — `BareSetCancelling` → `BareSetReading`
+    /// `BareSetCancelling` → `BareSetReading`
     /// transition: the multishot is fully drained; queue the
     /// single-shot `prep_read` for any remaining body bytes. If the
     /// body completed via in-flight multishot CQEs BEFORE the
@@ -219,7 +232,7 @@ impl<C: Commands> Shard<C> {
         self.mark_arm_pending(cid, io);
     }
 
-    /// **v1.29 B2-alt** — dispatch a bare `SET key <BIG>` command with
+    /// Dispatch a bare `SET key <BIG>` command with
     /// an owned body Vec. Strips the trailing CRLF, runs all post-write
     /// hooks (AOF / replication / keyspace notify / BLOCK wake / WATCH
     /// bump / Lua wake bridge) on a borrowed three-slice argv view,
@@ -245,6 +258,10 @@ impl<C: Commands> Shard<C> {
             key: &key,
             body: &body,
         };
+        // No propagation-override take here (cf. post_write_housekeeping):
+        // this path records a literal `SET` it built itself — deterministic,
+        // never SPOP — and none can be pending anyway: every other dispatch
+        // consumes its own override before this runs.
         if self.aof.is_some() {
             self.log_write(&view);
         }
@@ -269,7 +286,7 @@ impl<C: Commands> Shard<C> {
 }
 
 // =====================================================================
-// v1.29 B2-alt — three-slice borrowed ArgvView for the bareset fast
+// Three-slice borrowed ArgvView for the bareset fast
 // path. Implements `kevy_resp::ArgvView` so AOF / replication /
 // keyspace-notification hooks accept it without materialising an owned
 // `Argv` (which would memcpy the 64 KiB body).

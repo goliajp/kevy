@@ -13,6 +13,7 @@ use super::{eviction_str, wrong_args};
 
 pub(crate) fn cmd_memory<A: ArgvView + ?Sized>(
     cfg: &Config,
+    totals: &crate::state::Totals,
     store: &Store,
     args: &A,
     out: &mut Vec<u8>,
@@ -23,12 +24,12 @@ pub(crate) fn cmd_memory<A: ArgvView + ?Sized>(
     let sub_upper = sub.to_ascii_uppercase();
     match sub_upper.as_slice() {
         b"USAGE" => cmd_memory_usage(store, args, out),
-        b"STATS" => cmd_memory_stats(cfg, store, out),
+        b"STATS" => cmd_memory_stats(cfg, totals, out),
         b"DOCTOR" => {
-            // Redis returns a free-form diagnostic string. v1.0 ships a
+            // Redis returns a free-form diagnostic string. kevy answers a
             // canonical "no issues" body so clients that auto-call DOCTOR on
-            // INFO don't think the server is buggy. Wave 2/3 may surface real
-            // findings (fragmentation, high evict rate, etc.).
+            // INFO don't think the server is buggy; no real findings
+            // (fragmentation, high evict rate, etc.) are surfaced.
             encode_bulk(out, b"Sam, I detected a few issues in this Kevy instance memory implants:\r\n\r\n * No issues detected. Memory looks fine.\r\n");
         }
         b"PURGE" => {
@@ -65,31 +66,26 @@ fn cmd_memory_usage<A: ArgvView + ?Sized>(store: &Store, args: &A, out: &mut Vec
 
 /// `MEMORY STATS` — flat `[k1, v1, k2, v2, ...]` array of the fields valkey
 /// clients actually consult. Strings as bulk, numbers as integers.
-fn cmd_memory_stats(cfg: &Config, store: &Store, out: &mut Vec<u8>) {
+///
+/// The figures are INSTANCE-wide, taken from the same aggregated gauges
+/// `INFO memory` reads. Reading them off the answering shard's own `Store`
+/// would report one core's slice of the keyspace as though it were the
+/// server's — which is what this did before, and it is the kind of number
+/// an operator sizes a box from.
+fn cmd_memory_stats(cfg: &Config, totals: &crate::state::Totals, out: &mut Vec<u8>) {
+    let bytes_per_key = totals.used_memory.checked_div(totals.keys).unwrap_or(0) as i64;
     let pairs: [(&[u8], StatValue<'_>); 8] = [
-        (b"peak.allocated", StatValue::Int(store.used_memory_peak() as i64)),
-        (b"total.allocated", StatValue::Int(store.used_memory() as i64)),
-        (
-            b"keys.count",
-            StatValue::Int(store.dbsize() as i64),
-        ),
-        (
-            b"keys.bytes-per-key",
-            StatValue::Int(avg_bytes_per_key(store)),
-        ),
+        (b"peak.allocated", StatValue::Int(totals.used_memory_peak as i64)),
+        (b"total.allocated", StatValue::Int(totals.used_memory as i64)),
+        (b"keys.count", StatValue::Int(totals.keys as i64)),
+        (b"keys.bytes-per-key", StatValue::Int(bytes_per_key)),
         (b"maxmemory", StatValue::Int(cfg.memory.maxmemory as i64)),
         (
             b"maxmemory.policy",
             StatValue::Bulk(eviction_str(cfg.memory.maxmemory_policy).as_bytes()),
         ),
-        (
-            b"evicted.keys",
-            StatValue::Int(store.evictions_total() as i64),
-        ),
-        (
-            b"entry.overhead",
-            StatValue::Int(ENTRY_OVERHEAD as i64),
-        ),
+        (b"evicted.keys", StatValue::Int(totals.evicted_keys as i64)),
+        (b"entry.overhead", StatValue::Int(ENTRY_OVERHEAD as i64)),
     ];
     encode_array_len(out, (pairs.len() * 2) as i64);
     for (k, v) in &pairs {
@@ -106,13 +102,6 @@ enum StatValue<'a> {
     Bulk(&'a [u8]),
 }
 
-fn avg_bytes_per_key(store: &Store) -> i64 {
-    let n = store.dbsize();
-    if n == 0 {
-        return 0;
-    }
-    (store.used_memory() as i64) / (n as i64)
-}
 
 /// Pretty-print a byte count using IEC suffixes (matches Redis output, e.g.
 /// `used_memory_human:1.50M`). Single decimal place; rounds half-to-even.
@@ -196,38 +185,42 @@ mod tests {
         let store = Store::new();
         // DOCTOR — canonical no-issues body
         let mut out = Vec::new();
-        cmd_memory(&cfg, &store, &argv(&[b"MEMORY", b"DOCTOR"]), &mut out);
+        cmd_memory(&cfg, &crate::state::Totals::default(), &store, &argv(&[b"MEMORY", b"DOCTOR"]), &mut out);
         assert!(
             out.starts_with(b"$") && out.windows(5).any(|w| w == b"issue"),
             "DOCTOR should return a bulk diagnostic; got {out:?}"
         );
         // PURGE — +OK
         out.clear();
-        cmd_memory(&cfg, &store, &argv(&[b"MEMORY", b"PURGE"]), &mut out);
+        cmd_memory(&cfg, &crate::state::Totals::default(), &store, &argv(&[b"MEMORY", b"PURGE"]), &mut out);
         assert_eq!(out, b"+OK\r\n");
         // MALLOC-STATS — bulk note
         out.clear();
-        cmd_memory(&cfg, &store, &argv(&[b"MEMORY", b"MALLOC-STATS"]), &mut out);
+        cmd_memory(&cfg, &crate::state::Totals::default(), &store, &argv(&[b"MEMORY", b"MALLOC-STATS"]), &mut out);
         assert!(out.starts_with(b"$"));
         // missing subcommand
         out.clear();
-        cmd_memory(&cfg, &store, &argv(&[b"MEMORY"]), &mut out);
+        cmd_memory(&cfg, &crate::state::Totals::default(), &store, &argv(&[b"MEMORY"]), &mut out);
         assert!(out.starts_with(b"-ERR wrong number of arguments"));
         // unknown subcommand
         out.clear();
-        cmd_memory(&cfg, &store, &argv(&[b"MEMORY", b"NOPE"]), &mut out);
+        cmd_memory(&cfg, &crate::state::Totals::default(), &store, &argv(&[b"MEMORY", b"NOPE"]), &mut out);
         assert!(out.starts_with(b"-ERR Unknown MEMORY subcommand"));
     }
 
     #[test]
     fn memory_stats_encodes_all_eight_fields() {
         let cfg = Config::default();
-        let mut store = Store::new();
-        store.set(b"k1", b"v1".to_vec(), None, false, false);
-        store.set(b"k2", b"v2".to_vec(), None, false, false);
-
+        // MEMORY STATS reports the INSTANCE, not the answering shard's store —
+        // so the fixture is the aggregated gauge set, not a Store.
+        let totals = crate::state::Totals {
+            used_memory: 4096,
+            used_memory_peak: 8192,
+            keys: 2,
+            ..Default::default()
+        };
         let mut out = Vec::new();
-        cmd_memory_stats(&cfg, &store, &mut out);
+        cmd_memory_stats(&cfg, &totals, &mut out);
         // 8 pairs × 2 → *16
         assert!(out.starts_with(b"*16\r\n"));
         // Spot-check the key labels are present.
@@ -249,20 +242,5 @@ mod tests {
         }
     }
 
-    #[test]
-    fn avg_bytes_per_key_handles_empty_store() {
-        let store = Store::new();
-        assert_eq!(avg_bytes_per_key(&store), 0);
-    }
 
-    #[test]
-    fn avg_bytes_per_key_divides_used_by_dbsize() {
-        let mut store = Store::new();
-        store.set(b"k1", b"v1".to_vec(), None, false, false);
-        store.set(b"k2", b"v2".to_vec(), None, false, false);
-        let avg = avg_bytes_per_key(&store);
-        assert!(avg > 0, "expected avg > 0 with two small keys; got {avg}");
-        // Sanity bound: well under the per-entry overhead × 2 ceiling.
-        assert!(avg < (ENTRY_OVERHEAD as i64) * 10);
-    }
 }

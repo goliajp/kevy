@@ -2,9 +2,13 @@
 //! per-shard locks (for cross-thread access), optional AOF auto-logging, an
 //! optional background TTL reaper, and an in-process pub/sub bus.
 
-use std::io;
-use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use crate::KevyError;
+use crate::KevyResult;
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+use std::sync::Mutex;
 
+#[cfg(feature = "persist")]
 use kevy_persist::Argv;
 use kevy_store::ExpireStats;
 
@@ -14,6 +18,20 @@ use crate::shard::{build_shards, shard_idx};
 pub use crate::store_inner::WeakStore;
 pub(crate) use crate::store_inner::{DropGuard, Inner};
 
+/// The write gate every mutating facade entry crosses: rejects writes after
+/// [`Store::shutdown`] with [`KevyError::Closed`], and every local write on
+/// a replica with `READONLY`. One atomic load — free on the hot path.
+pub(crate) fn ensure_writable(store: &Store) -> Result<(), KevyError> {
+    if store.guard.shutdown.load(std::sync::atomic::Ordering::Acquire) {
+        return Err(KevyError::Closed);
+    }
+    #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+    if store.is_replica() {
+        return Err(KevyError::ReadOnly);
+    }
+    Ok(())
+}
+
 /// The keyspace shards (`hash(key) % n`), each a fully independent
 /// `kevy_store::Store` + AOF behind its own lock. `n == 1` (the default) is a
 /// one-element vec = the original single-lock store.
@@ -21,7 +39,7 @@ pub(crate) type Shards = Arc<Vec<Arc<RwLock<Inner>>>>;
 
 /// The embedded keyspace.
 ///
-/// **`Store` is `Clone`** (since v1.1.0). A clone is a cheap `Arc` bump:
+/// **`Store` is `Clone`**. A clone is a cheap `Arc` bump:
 /// every clone reaches the same underlying shards + AOF + reaper + pub/sub
 /// bus. The reaper thread is joined and each shard's AOF is flushed exactly
 /// once, when the **last** clone is dropped.
@@ -29,7 +47,7 @@ pub(crate) type Shards = Arc<Vec<Arc<RwLock<Inner>>>>;
 /// ```
 /// use kevy_embedded::{Config, Store};
 ///
-/// # fn main() -> std::io::Result<()> {
+/// # fn main() -> kevy_embedded::KevyResult<()> {
 /// let s = Store::open(Config::default().with_ttl_reaper_manual())?;
 /// let s2 = s.clone();
 /// std::thread::spawn(move || {
@@ -50,17 +68,25 @@ pub struct Store {
     /// LAST `Store` clone (or `Subscription`) holding a strong ref drops.
     pub(crate) guard: Arc<DropGuard>,
     pub(crate) config: Config,
-    /// v2.3 CDC feed handle (read API side); shards carry clones for
+    /// CDC feed handle (read API side); shards carry clones for
     /// the write side. `None` = feed off (or wasm).
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
     pub(crate) feed: Option<std::sync::Arc<Mutex<kevy_replicate::feed::FeedSource>>>,
-    /// v2.4 blocking-pop wake channel (always present; writers pay one
+    /// Blocking-pop wake channel (always present; writers pay one
     /// Relaxed load while nobody blocks).
     pub(crate) blocker: Arc<crate::ops_blocking::Blocker>,
-    /// v2.5 index registry (catalog + version).
+    /// Index registry (catalog + version).
+    #[cfg(feature = "index")]
     pub(crate) indexes: Arc<crate::ops_index::IndexReg>,
-    /// v2.6 view registry.
+    /// View registry.
+    #[cfg(feature = "index")]
     pub(crate) views: Arc<crate::ops_view::ViewReg>,
+    /// Table registry (declarations only; runtime state = the
+    /// compiled indexes in `indexes`).
+    #[cfg(feature = "index")]
+    pub(crate) tables: Arc<crate::ops_table::TableReg>,
+    /// What this open's replay restored — and what it could not.
+    pub(crate) open_report: Arc<crate::metric::OpenReport>,
 }
 
 impl Store {
@@ -75,8 +101,17 @@ impl Store {
     ///   background thread that streams replication frames from the
     ///   named primary and applies them to this store; local writes are
     ///   rejected with `READONLY` (see [`Self::open_replica`]).
-    pub fn open(config: Config) -> io::Result<Self> {
+    pub fn open(config: Config) -> KevyResult<Self> {
         Self::open_inner(config)
+    }
+
+    /// What this open's replay restored — and, crucially, what it could
+    /// NOT: `dropped_bytes > 0` or `corrupt` means the store recovered
+    /// less than the files held (the dropped region was quarantined). Turn
+    /// this into a startup health check / alert — the machine-readable
+    /// twin of the boot WARN line.
+    pub fn open_report(&self) -> &crate::metric::OpenReport {
+        &self.open_report
     }
 
     /// Answer one RESP request against this store using the SAME
@@ -85,59 +120,74 @@ impl Store {
     /// as raw RESP bytes; write verbs answer `-ERR` like the listener
     /// does. This is the programmatic face of the listener — tooling
     /// (e.g. `kevy-cli --embed`) inspects a store without a socket.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(feature = "listener", not(target_arch = "wasm32")))]
     pub fn dispatch_readonly(&self, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         crate::listener::verbs_dispatch(self, argv, out);
     }
 
-    fn open_inner(config: Config) -> io::Result<Self> {
-        let shards: Shards = Arc::new(build_shards(&config)?);
+    fn open_inner(config: Config) -> KevyResult<Self> {
+        let (shards, open_report) = build_shards(&config)?;
+        let shards: Shards = Arc::new(shards);
         let (reaper_stop, reaper_join) = crate::reaper::spawn_reaper(&config, &shards)?;
-        #[cfg(not(target_arch = "wasm32"))]
-        let replica_runner = crate::replica_glue::spawn_replica_runner(&config, &shards);
-        #[cfg(not(target_arch = "wasm32"))]
-        let replica_source = spawn_writer_source(&config, &shards)?;
-        #[cfg(not(target_arch = "wasm32"))]
-        let feed = Store::feed_open(&config)?;
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(f) = &feed {
-            for shard in shards.iter() {
-                let mut g = lock_write(shard);
-                g.feed = Some(f.clone());
-            }
-        }
-        let (blocker, indexes, views) = wire_registries(&shards);
-        let guard = Arc::new(DropGuard {
+        #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+        let (replica_runner, replica_source, feed) =
+            crate::store_wire::wire_replication(&config, &shards)?;
+        let blocker = crate::store_wire::wire_blocker(&shards);
+        #[cfg(feature = "index")]
+        let (indexes, views) = crate::store_wire::wire_registries(&shards);
+        let open_report = Arc::new(open_report);
+        // Guard construction (engine-lifetime state incl. the table
+        // registry — WeakStore::upgrade rebuilds from it) lives in
+        // `store_wire::build_guard`, split for the fn-length rule.
+        let guard = crate::store_wire::build_guard(
+            &open_report,
             reaper_stop,
-            reaper_join: Mutex::new(reaper_join),
-            shards_for_flush: shards.clone(),
-            #[cfg(not(target_arch = "wasm32"))]
+            reaper_join,
+            &shards,
+            #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
             replica_runner,
-            #[cfg(not(target_arch = "wasm32"))]
-            feed_close: match (&feed, &config.data_dir) {
-                (Some(f), Some(d)) => Some((f.clone(), d.clone())),
-                _ => None,
-            },
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
             replica_source,
-        });
+            #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+            &feed,
+            &config,
+        );
+        #[cfg(feature = "index")]
+        let tables = guard.tables.clone();
         let store = Store {
             shards,
             guard,
             config,
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
             feed,
             blocker,
+            #[cfg(feature = "index")]
             indexes,
+            #[cfg(feature = "index")]
             views,
+            #[cfg(feature = "index")]
+            tables,
+            open_report,
         };
-        store.idx_boot();
-        store.view_boot();
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(addr) = store.config.resp_listener {
-            crate::listener::spawn(addr, store.downgrade())?;
-        }
+        store.boot_ancillary()?;
         Ok(store)
+    }
+
+    /// Post-construction bring-up: index/view boot scans and the
+    /// optional read-only RESP listener. Split from [`Self::open_inner`]
+    /// for the fn-length rule.
+    fn boot_ancillary(&self) -> KevyResult<()> {
+        #[cfg(feature = "index")]
+        self.idx_boot();
+        #[cfg(feature = "index")]
+        self.view_boot();
+        #[cfg(feature = "index")]
+        self.table_boot();
+        #[cfg(all(feature = "listener", not(target_arch = "wasm32")))]
+        if let Some(addr) = self.config.resp_listener {
+            crate::listener::spawn(addr, self.downgrade())?;
+        }
+        Ok(())
     }
 
     /// Convenience constructor for an embed-as-read-replica store
@@ -163,8 +213,8 @@ impl Store {
     /// snapshot dir, etc.) use [`Self::open`] with
     /// [`Config::with_replica_upstream`] + the related setters
     /// instead.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn open_replica(upstream: impl Into<String>) -> io::Result<Self> {
+    #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+    pub fn open_replica(upstream: impl Into<String>) -> KevyResult<Self> {
         let cfg = Config::default()
             .without_aof()
             .with_replica_id(crate::replica_glue::fresh_replica_id())
@@ -174,8 +224,34 @@ impl Store {
 
     /// `true` when this store was opened against a replication
     /// upstream — local writes are rejected with `READONLY`.
+    #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
     pub fn is_replica(&self) -> bool {
         self.config.replica_upstream.is_some()
+    }
+
+    /// Flush every shard's AOF to disk (a real fsync), write the feed
+    /// continuity marker, then refuse every later write (they fail with
+    /// [`KevyError::Closed`]; reads stay available). Idempotent and
+    /// clone-safe: any clone's `shutdown` gates them all, so a signal
+    /// handler's teardown is two deterministic lines —
+    /// `store.shutdown()?; std::process::exit(0)` — instead of praying
+    /// every task's `Arc<Store>` drops in time. Writes racing the call
+    /// may land after the fsync; writes issued after it returns cannot.
+    pub fn shutdown(&self) -> std::io::Result<()> {
+        use std::sync::atomic::Ordering;
+        self.guard.shutdown.store(true, Ordering::Release);
+        #[cfg(feature = "persist")]
+        for shard in self.shards.iter() {
+            let mut g = lock_write(shard);
+            if let Some(aof) = &mut g.aof {
+                aof.sync_now()?;
+            }
+        }
+        #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+        if let (Some(feed), Some(dir)) = (&self.feed, &self.config.data_dir) {
+            Store::feed_write_close_marker(feed, dir);
+        }
+        Ok(())
     }
 
     /// Retarget this replica at a new primary URL (`host:port`). The
@@ -190,19 +266,13 @@ impl Store {
     /// see [`docs/cluster.md`](https://github.com/goliajp/kevy/blob/develop/docs/cluster.md).
     /// `kevy-embedded` itself stays elect-protocol-agnostic; the
     /// integration glue lives in the application.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn set_replica_upstream(&self, new_upstream: impl Into<String>) -> io::Result<()> {
+    #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+    pub fn set_replica_upstream(&self, new_upstream: impl Into<String>) -> KevyResult<()> {
         if !self.is_replica() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "set_replica_upstream called on a non-replica store",
-            ));
+            return Err(KevyError::InvalidInput("set_replica_upstream called on a non-replica store".into()));
         }
         let Some(runner) = self.guard.replica_runner.as_ref() else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "replica runner is not active (open was racy?)",
-            ));
+            return Err(KevyError::InvalidInput("replica runner is not active (open was racy?)".into()));
         };
         runner.set_upstream(new_upstream.into());
         Ok(())
@@ -275,7 +345,8 @@ impl Store {
 
     /// Append a raw RESP-frame argument list to the shard owning its key's
     /// AOF. No-op when persistence is disabled.
-    pub fn log(&self, parts: &[&[u8]]) -> io::Result<()> {
+    #[cfg(feature = "persist")]
+    pub fn log(&self, parts: &[&[u8]]) -> KevyResult<()> {
         let mut g = match parts.get(1) {
             Some(key) => self.wshard(key),
             None => self.lock(),
@@ -296,20 +367,58 @@ impl Store {
         for shard in self.shards.iter() {
             let stats = {
                 let mut g = lock_write(shard);
+                // Tiering upkeep: budget re-resolution + the index/view
+                // floor feed, then the tick continuation of the
+                // budgeted spill.
+                #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+                crate::shard::tier_tick_upkeep(&mut g, self.config.tier_budget, self.shards.len());
+                let _ = g.store.demote_step();
+                let _ = g.store.tier_compact_tick();
                 g.store.tick_expire(self.config.reaper_samples, self.config.reaper_max_rounds)
             };
             total.sampled += stats.sampled;
             total.expired += stats.expired;
             // Auto-rewrite rides the caller-driven tick in Manual mode; the
             // non-blocking path releases the lock for the disk spill.
+            #[cfg(feature = "persist")]
             crate::reaper::concurrent_auto_rewrite(
                 shard,
-                self.config.auto_aof_rewrite_pct,
-                self.config.auto_aof_rewrite_min_size,
+                kevy_persist::RewritePolicy {
+                    pct: self.config.auto_aof_rewrite_pct,
+                    min_size: self.config.auto_aof_rewrite_min_size,
+                    bytes: self.config.auto_aof_rewrite_bytes,
+                    interval_secs: self.config.auto_aof_rewrite_interval_secs,
+                },
                 self.config.metric_sink.as_ref(),
             );
         }
         total
+    }
+
+    /// The B9 transparency suite's deterministic demotion seam
+    /// (`KEVY_TEST_FORCE_DEMOTE` genre): demote `key` to the cold tier
+    /// NOW, ignoring the watermark — the suite drives cold state
+    /// per-key, never by eviction timing. Returns whether a demotion
+    /// happened (false: tiering off / key absent / not spillable).
+    #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+    #[doc(hidden)]
+    pub fn debug_force_demote(&self, key: &[u8]) -> bool {
+        self.wshard(key).store.debug_force_demote(key)
+    }
+
+    /// Tiering counters summed across shards:
+    /// `(demotions_total, promotions_total)` — the minimal counter pair
+    /// (the full INFO gauge set is `tier_info`). Zeros when tiering is off.
+    #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+    pub fn tier_counters(&self) -> (u64, u64) {
+        let mut d = 0u64;
+        let mut p = 0u64;
+        for shard in self.shards.iter() {
+            let s = lock_read(shard).store.tier_stats();
+            d += s.demotions_total;
+            p += s.promotions_total;
+        }
+        (d, p)
     }
 
     // Durability methods (`rewrite_aof`, `save_snapshot`) live in
@@ -357,11 +466,23 @@ impl Store {
         self.shards.iter().map(|s| f(&mut lock_write(s))).sum()
     }
 
+    /// Read-lock variant of [`Self::sum_shards`]: takes each shard's SHARED
+    /// lock for read-only aggregations (DBSIZE etc.) that never mutate the
+    /// keyspace — the underlying counter methods are all `&self`.
+    pub(crate) fn sum_shards_read<F: Fn(&Inner) -> usize>(&self, f: F) -> usize {
+        self.shards.iter().map(|s| f(&lock_read(s))).sum()
+    }
+
+    /// `u64` read-lock variant of [`Self::sum_shards_read`].
+    pub(crate) fn sum_shards_u64_read<F: Fn(&Inner) -> u64>(&self, f: F) -> u64 {
+        self.shards.iter().map(|s| f(&lock_read(s))).sum()
+    }
+
     /// Run a fallible `f` over every shard (mutating, e.g. FLUSHALL).
-    pub(crate) fn try_for_each_shard<F: FnMut(&mut Inner) -> io::Result<()>>(
+    pub(crate) fn try_for_each_shard<F: FnMut(&mut Inner) -> KevyResult<()>>(
         &self,
         mut f: F,
-    ) -> io::Result<()> {
+    ) -> KevyResult<()> {
         for s in self.shards.iter() {
             f(&mut lock_write(s))?;
         }
@@ -372,99 +493,6 @@ impl Store {
 
 pub(crate) use crate::store_glue::{commit_write, lock_read, lock_write, store_err};
 
-/// Spawn the embed-as-writer replication source (v3.2) when
-/// `Config::embed_writer_listen_addr` is set, wiring the shared source
-/// into every shard's `Inner` so `commit_write` pushes mutations into
-/// the backlog inline (done once at open under the shard's write lock;
-/// reads of `Inner::writer_source` afterwards are uncontended).
-///
-/// The snapshot provider freezes every shard's COW view under the
-/// source lock (so ack_offset and the frozen keyspace are one point in
-/// time — writes between the two would replay twice otherwise), then
-/// serializes outside the locks via the persist writer.
-#[cfg(not(target_arch = "wasm32"))]
-fn spawn_writer_source(
-    config: &Config,
-    shards: &Shards,
-) -> io::Result<Option<crate::replica_source::ReplicaSource>> {
-    let Some(addr) = config.embed_writer_listen_addr.as_ref() else {
-        return Ok(None);
-    };
-    let shards_for_snap: Shards = Arc::clone(shards);
-    let snapshot: crate::replica_source::SnapshotProvider =
-        Arc::new(move || crate::replica_source::freeze_and_serialize(&shards_for_snap));
-    let rs = crate::replica_source::ReplicaSource::spawn(
-        addr,
-        config.embed_writer_backlog_bytes,
-        snapshot,
-    )?;
-    let shared = rs.shared_source();
-    for shard in shards.iter() {
-        let mut g = lock_write(shard);
-        g.writer_source = Some(shared.clone());
-    }
-    Ok(Some(rs))
-}
-
-/// Create the store-level registries (blocking-pop waker, index +
-/// view catalogs) and hand every shard's `Inner` a clone.
-#[allow(clippy::type_complexity)]
-fn wire_registries(
-    shards: &Shards,
-) -> (
-    Arc<crate::ops_blocking::Blocker>,
-    Arc<crate::ops_index::IndexReg>,
-    Arc<crate::ops_view::ViewReg>,
-) {
-    let blocker = Arc::new(crate::ops_blocking::Blocker::new());
-    let indexes = Arc::new(crate::ops_index::IndexReg::default());
-    let views = Arc::new(crate::ops_view::ViewReg::default());
-    for shard in shards.iter() {
-        let mut g = lock_write(shard);
-        g.blocker = Some(blocker.clone());
-        g.idx_reg = Some(indexes.clone());
-        g.view_reg = Some(views.clone());
-    }
-    (blocker, indexes, views)
-}
-
-
 #[cfg(test)]
-#[path = "store_tests.rs"]
-mod tests;
-#[cfg(test)]
-#[path = "store_tests_shard.rs"]
-mod tests_shard;
-#[cfg(test)]
-#[path = "store_tests_p2.rs"]
-mod tests_p2;
-#[cfg(test)]
-#[path = "store_tests_p3.rs"]
-mod tests_p3;
-#[cfg(test)]
-#[path = "store_tests_bitmap.rs"]
-mod tests_bitmap;
-#[cfg(test)]
-#[path = "store_tests_bonus.rs"]
-mod tests_bonus;
-#[cfg(test)]
-#[path = "store_tests_scan.rs"]
-mod tests_scan;
-#[cfg(test)]
-#[path = "store_tests_atomic.rs"]
-mod tests_atomic;
-#[cfg(test)]
-#[path = "store_tests_more.rs"]
-mod tests_more;
-#[cfg(test)]
-#[path = "store_tests_keyspace.rs"]
-mod tests_keyspace;
-#[cfg(test)]
-#[path = "store_tests_atomic_all.rs"]
-mod tests_atomic_all;
-#[cfg(test)]
-#[path = "store_tests_replay_all.rs"]
-mod tests_replay_all;
-#[cfg(test)]
-#[path = "store_tests_op_table.rs"]
-mod tests_op_table;
+#[path = "store_test_suites.rs"]
+mod test_suites;

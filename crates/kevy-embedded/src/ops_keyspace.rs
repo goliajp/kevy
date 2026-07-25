@@ -11,14 +11,10 @@
 //! - `touch` counts existing keys and reads bump LRU/LFU bookkeeping
 //!   as a side effect.
 
-use std::io;
+use crate::KevyResult;
 
-#[cfg(not(target_arch = "wasm32"))]
-use crate::replica_glue::ensure_writable;
+use crate::store::ensure_writable;
 use crate::store::{Store, commit_write};
-
-#[cfg(target_arch = "wasm32")]
-fn ensure_writable(_s: &Store) -> io::Result<()> { Ok(()) }
 
 impl Store {
     /// `COPY src dst [REPLACE]` — copy `src`'s value (and TTL if any)
@@ -28,7 +24,7 @@ impl Store {
     /// - `false` if `src` doesn't exist.
     /// - `false` if `dst` exists and `replace = false`.
     /// - Preserves source TTL on the destination via `pexpireat`.
-    pub fn copy(&self, src: &[u8], dst: &[u8], replace: bool) -> io::Result<bool> {
+    pub fn copy(&self, src: &[u8], dst: &[u8], replace: bool) -> KevyResult<bool> {
         ensure_writable(self)?;
         // Read source under its own shard lock.
         let src_val = match self.get(src)? {
@@ -66,8 +62,8 @@ impl Store {
         }
         // The dst SET is AOF-logged above under dst's shard lock; the
         // TTL re-attach goes through the `pexpireat` facade which logs
-        // its own PEXPIREAT. (v1.15.1: before this, the dst value was
-        // written to memory only and vanished on reopen.)
+        // its own PEXPIREAT. (An earlier regression wrote the dst value
+        // to memory only, so it vanished on reopen.)
         Ok(true)
     }
 
@@ -97,20 +93,20 @@ impl Store {
     /// this is the async (non-blocking) variant; kevy is in-process
     /// so the sync `del` IS the unblocking semantic. Returns count
     /// actually removed.
-    pub fn unlink(&self, keys: &[&[u8]]) -> io::Result<usize> {
+    pub fn unlink(&self, keys: &[&[u8]]) -> KevyResult<usize> {
         self.del(keys)
     }
 
     /// `TOUCH key [key ...]` — count keys that exist. Side effect:
     /// the existence check refreshes LRU/LFU bookkeeping on the
     /// touched shards, matching Redis semantics.
-    pub fn touch(&self, keys: &[&[u8]]) -> io::Result<usize> {
+    pub fn touch(&self, keys: &[&[u8]]) -> KevyResult<usize> {
         self.exists(keys)
     }
 }
 
 impl crate::Store {
-    /// v2.10 — order-insensitive prefix checksum for migration
+    /// Order-insensitive prefix checksum for migration
     /// verification: `(row_count, xor_of_row_digests)`. Matches the
     /// server's `PREFIX.DIGEST` bit for bit (same canonicalization).
     pub fn prefix_digest(&self, prefix: &[u8]) -> (u64, u64) {
@@ -124,59 +120,71 @@ impl crate::Store {
         (keys.len() as u64, xor)
     }
 
+    /// One row's digest under a SINGLE shard write-lock acquisition,
+    /// with the row reads inside the store's bulk-read peek scope
+    /// — a cold row hashes from ONE record read, never promotes
+    /// and never advances the 2nd-touch gate — a full-prefix digest
+    /// must not thrash the hot tier (server twin: `cmd_digest`).
     fn row_digest_embedded(&self, key: &[u8]) -> u64 {
-        let mut h = FNV_OFFSET;
-        fnv(&mut h, key);
-        let ty = self.type_of(key);
-        fnv(&mut h, ty.as_bytes());
-        self.digest_row_body(key, ty, &mut h);
-        h
+        let mut g = self.wshard(key);
+        g.store.peek_scope(|s| {
+            let mut h = FNV_OFFSET;
+            fnv(&mut h, key);
+            let ty = s.type_of(key);
+            fnv(&mut h, ty.as_bytes());
+            digest_row_body(s, key, ty, &mut h);
+            h
+        })
     }
+}
 
-    /// Fold one row's canonicalized value into the FNV state, per type
-    /// (hash fields and set members sort first; zset folds score bits
-    /// then member, rank order).
-    fn digest_row_body(&self, key: &[u8], ty: &str, h: &mut u64) {
-        match ty {
-            "string" => {
-                if let Ok(Some(v)) = self.get(key) {
-                    fnv(h, &v);
-                }
+/// Fold one row's canonicalized value into the FNV state, per type
+/// (hash fields and set members sort first; zset folds score bits
+/// then member, rank order). Reads the store directly — the caller
+/// already holds the shard lock and the peek scope.
+fn digest_row_body(s: &mut kevy_store::Store, key: &[u8], ty: &str, h: &mut u64) {
+    match ty {
+        "string" => {
+            if let Ok(Some(v)) = s.get(key) {
+                let v = v.to_vec();
+                fnv(h, &v);
             }
-            "hash" => {
-                if let Ok(mut pairs) = self.hgetall(key) {
-                    pairs.sort();
-                    for (f, v) in pairs {
-                        fnv(h, &f);
-                        fnv(h, &v);
-                    }
-                }
-            }
-            "list" => {
-                if let Ok(items) = self.lrange(key, 0, -1) {
-                    for i in items {
-                        fnv(h, &i);
-                    }
-                }
-            }
-            "set" => {
-                if let Ok(mut ms) = self.smembers(key) {
-                    ms.sort();
-                    for m in ms {
-                        fnv(h, &m);
-                    }
-                }
-            }
-            "zset" => {
-                if let Ok(items) = self.zrange(key, 0, -1) {
-                    for (member, score) in items {
-                        fnv(h, &score.to_bits().to_le_bytes());
-                        fnv(h, &member);
-                    }
-                }
-            }
-            _ => {}
         }
+        "hash" => {
+            if let Ok(flat) = s.hgetall(key) {
+                let mut pairs: Vec<(&[u8], &[u8])> =
+                    flat.chunks(2).map(|c| (c[0].as_slice(), c[1].as_slice())).collect();
+                pairs.sort();
+                for (f, v) in pairs {
+                    fnv(h, f);
+                    fnv(h, v);
+                }
+            }
+        }
+        "list" => {
+            if let Ok(items) = s.lrange(key, 0, -1) {
+                for i in items {
+                    fnv(h, &i);
+                }
+            }
+        }
+        "set" => {
+            if let Ok(mut ms) = s.smembers(key) {
+                ms.sort();
+                for m in ms {
+                    fnv(h, &m);
+                }
+            }
+        }
+        "zset" => {
+            if let Ok(items) = s.zrange(key, 0, -1) {
+                for (member, score) in items {
+                    fnv(h, &score.to_bits().to_le_bytes());
+                    fnv(h, &member);
+                }
+            }
+        }
+        _ => {}
     }
 }
 

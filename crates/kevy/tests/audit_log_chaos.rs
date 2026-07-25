@@ -1,4 +1,4 @@
-//! v1.42 audit log chaos test.
+//! Audit log chaos test.
 //!
 //! Spawn kevy with `[audit] log_path = <path>`; issue N ADMIN
 //! commands (`CONFIG SET` / `DEBUG`); verify the audit file captures

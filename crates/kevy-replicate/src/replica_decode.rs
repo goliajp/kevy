@@ -22,8 +22,8 @@ impl ReplicaClient {
     ///   ack_offset` (so the next live `Frame` has no gap) and
     ///   clears `in_snapshot`.
     /// - Live `*2\r\n` bytes during a snapshot return
-    ///   [`ReplicaError::UnexpectedInSnapshot`] (v1.18 forbids
-    ///   interleaving — see `docs/snapshot.md`).
+    ///   [`ReplicaError::UnexpectedInSnapshot`] (interleaving is
+    ///   forbidden — see `docs/snapshot.md`).
     pub fn next_event(&mut self) -> Option<Result<ReplicaEvent, ReplicaError>> {
         loop {
             if let Some(result) = self.try_decode_one_event() {

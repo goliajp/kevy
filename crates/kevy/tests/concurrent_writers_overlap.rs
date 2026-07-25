@@ -1,5 +1,4 @@
-//! Concurrent multi-writer chaos test — v1.35 (5/5 of the testing-
-//! standards categories).
+//! Concurrent multi-writer chaos test.
 //!
 //! N writer threads all SET the SAME set of shared keys, each writing
 //! its own unique values. Each ACK'd write is logged with (writer_id,
