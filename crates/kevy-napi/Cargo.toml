@@ -8,6 +8,11 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+# Not a crates.io crate: the native doors ship as prebuilt binaries through
+# npm / CocoaPods / Maven, and nothing published depends on this. Flip to
+# publish = true (and add it to release.yml's chain) if that ever changes.
+publish = false
+
 [lib]
 # cdylib only: this crate IS the loadable kevy addon (.node). The logic it
 # wraps lives (and is tested) in kevy-ffi / kevy-embedded; the Node side is
