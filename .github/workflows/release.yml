@@ -186,7 +186,7 @@ jobs:
 
   # ───────────── npm: @goliajp/kevy (wasm + loader) ─────────────
   npm:
-    name: npm publish @goliajp/kevy
+    name: npm publish the wasm package
     runs-on: ubuntu-latest
     needs: publish
     env:
@@ -208,9 +208,21 @@ jobs:
       - name: Publish (idempotent skip)
         working-directory: crates/kevy-wasm/pkg
         run: |
-          V=$(node -p "require('./package.json').version")
-          if npm view @goliajp/kevy@"$V" version >/dev/null 2>&1; then
-            echo "@goliajp/kevy@$V already published — skipping"
+          # The version comes from the TAG, never from the committed
+          # package.json: that file is checked in and drifted for a whole
+          # release line, so v4.0.0 shipped the v4 wasm build labelled
+          # 3.18.0. The scope comes from package.json rather than a
+          # literal, because the literal here said @goliajp while the
+          # package is @goliapkg — so the "already published" probe always
+          # 404'd and never actually skipped anything.
+          NAME=$(node -p "require('./package.json').name")
+          case "$GITHUB_REF_NAME" in
+            v[0-9]*) V="${GITHUB_REF_NAME#v}" ;;
+            *)       V=$(node -p "require('./package.json').version") ;;
+          esac
+          npm version "$V" --no-git-tag-version --allow-same-version
+          if npm view "$NAME@$V" version >/dev/null 2>&1; then
+            echo "$NAME@$V already published — skipping"
           else
             npm publish --access public
           fi
