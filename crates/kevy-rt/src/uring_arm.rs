@@ -388,8 +388,20 @@ impl<C: Commands> Shard<C> {
             // (no inflight chunked-writev tail, recv armed, no fresh
             // output) drop out — the completion handlers and the
             // wake-up sites will re-queue them when there's work.
+            // A big-arg cancel / single-shot read the SQ couldn't take
+            // THIS iter is the same trap as `recv_arm_deferred`: the flag
+            // stays set (correct — it retries), but nothing else re-queues
+            // the conn, because the CQE that would is for the SQE we just
+            // failed to submit. Under a deep pipeline of big-arg SETs the
+            // ring fills routinely, so this wedged the conn for good
+            // (captured: big_arg=true recv_armed=false arm_queued=false
+            // in_arm_pending=false, output/write empty). Both flags are
+            // cleared on successful submission or when their state goes
+            // away, so keeping the conn queued always terminates.
+            let big_arg_submit_deferred = uc.big_arg_cancel_pending || uc.big_arg_read_pending;
             let needs_more = uc.closing
                 || recv_arm_deferred
+                || big_arg_submit_deferred
                 || (!uc.write_inflight
                     && (uc.write_off < uc.write_buf.len() || !uc.write_arcs.is_empty()))
                 || (!conn.output.is_empty() || !conn.output_arcs.is_empty());
