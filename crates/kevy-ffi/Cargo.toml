@@ -8,6 +8,11 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+# Not a crates.io crate: the native doors ship as prebuilt binaries through
+# npm / CocoaPods / Maven, and nothing published depends on this. Flip to
+# publish = true (and add it to release.yml's chain) if that ever changes.
+publish = false
+
 [lib]
 # cdylib for dynamic loaders (bun:ffi, P/Invoke, dlopen), staticlib for
 # C/C++/Go link-time embedding, rlib so Rust tests can call the ABI directly.
