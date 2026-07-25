@@ -41,6 +41,7 @@ impl ShardViews {
     /// Σ approximate heap bytes of the materialized view sets — the
     /// view half of the tier's `reserved_bytes` feed.
     /// Virtual views hold no set and contribute nothing.
+    #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
     pub(crate) fn reserved_bytes(&self) -> u64 {
         self.views
             .iter()

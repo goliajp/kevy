@@ -58,8 +58,8 @@ kevy-vector = { path = "../kevy-vector", version = "4.0.0", optional = true }
 kevy-persist = { path = "../kevy-persist", version = "4.0.0", optional = true }
 kevy-hash = { path = "../kevy-hash", version = "4.0.0" }
 # The tiering budget's auto-detection probe (cgroup / meminfo /
-# hw.memsize) — the sanctioned OS boundary, tier feature only.
-kevy-sys = { path = "../kevy-sys", version = "4.0.0", optional = true }
+# hw.memsize) rides the target-gated table below — kevy-sys never
+# links on wasm32 (same pattern as kevy-store's kevy-vlog dep).
 # Phase 2 (v1.20+): embed-as-read-replica reuses the server-side
 # replication wire client (kevy-replicate) so the same protocol drives
 # both server replicas and embed replicas. `default-features = false`
@@ -69,6 +69,11 @@ kevy-replicate = { path = "../kevy-replicate", version = "4.0.0", default-featur
 # kevy-resp: needed for `parse_command` (handshake decoding) inside
 # the Phase 3 / v1.21 embed-as-writer replica source listener.
 kevy-resp = { path = "../kevy-resp", version = "4.0.0", optional = true }
+
+# The tier feature's OS probe: declared only off-wasm so `dep:kevy-sys`
+# is a no-op on wasm32 and kevy-sys never enters the wasm graph.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kevy-sys = { path = "../kevy-sys", version = "4.0.0", optional = true }
 
 [dev-dependencies]
 # v2.0.20: the `kevy` dev-dep blocks `cargo publish kevy-embedded`

@@ -4,7 +4,9 @@
 
 use crate::KevyError;
 use crate::KevyResult;
-use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+#[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+use std::sync::Mutex;
 
 #[cfg(feature = "persist")]
 use kevy_persist::Argv;
