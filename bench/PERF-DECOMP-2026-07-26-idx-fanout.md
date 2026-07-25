@@ -1,4 +1,4 @@
-# The IDX.QUERY gap is fan-out, and the engine underneath already beats PG
+# Where IDX.QUERY's time goes: 74 % of it is the shard fan-out
 
 The PostgreSQL comparison ([PGCOMPARE-2026-07-26](PGCOMPARE-2026-07-26.md))
 left one number unexplained: kevy answers a random point read in 71 µs —
@@ -7,8 +7,10 @@ while holding the entire dataset in RAM against PG reading from a 2 GB
 cache over 17 GB of disk. Same engine, same data, same run. That ~320 µs
 is not I/O, not memory, not hardware.
 
-This decomposes it. **74 % of it is the shard fan-out, and with the
-fan-out removed kevy's index path is 2–3× faster than PostgreSQL's.**
+This decomposes it. **74 % of it is the shard fan-out.** With the
+fan-out out of the way the same index path answers in 36 µs — which
+happens to be well under what PostgreSQL managed, though the point of
+the number is what it says about our own structure, not the ranking.
 
 ## The mechanism
 
@@ -57,46 +59,63 @@ twenty rows.
 
 ## What that means for the model
 
-At one shard, `IDX.QUERY` answers in **36 µs p50 / 53 µs p99**. PostgreSQL
-answered the same shape in 126 µs (round one) and 176 µs (round three).
+At one shard, `IDX.QUERY` answers in **36 µs p50 / 53 µs p99** — for
+reference, PostgreSQL answered the same shape in 126 µs and 176 µs, so
+the index machinery is not what is expensive here.
 
-> **kevy's index engine is already 2–3× faster than PostgreSQL's btree
-> path. Every bit of the loss is the scatter-gather around it.**
+> **The index engine is not the limit. The scatter-gather around it is.**
 
-That reframes the problem. It is not "can a KV engine's index ever match
-a relational planner" — it already does, comfortably. It is: **how does
-an index query avoid asking shards that cannot hold a match.**
+So the index machinery itself is not the limit; the routing around it
+is. That is worth knowing before any design work, because it says the
+work belongs at the level of *how an index is partitioned and reached*,
+not at the level of scan algorithms, compression, or paging — none of
+which is the main term in this 320 µs.
 
-## The tension any fix must resolve
+## What this says about our own model
 
-Partitioning the index by *indexed value* turns 16 hops into 1. The bill
-arrives on the other side: writing a row would then have to update index
-entries on a **different** shard, turning a local write into a
-cross-shard one — and the write path is where kevy currently wins 20×.
+Read this as a fact about kevy, not as a gap to a competitor's number.
+The comparison is a health check taken afterwards; it is not the design
+input, and designing to close a specific external figure is how a system
+acquires special cases and stops at whichever local optimum happens to
+match someone else's.
 
-> Can index queries be made to ask only the shard that can answer,
-> without giving up the local write?
+The model-native question the measurement raises is:
 
-Directions, none of them started, all needing a design round:
+> In a share-nothing, thread-per-core engine where **everything else is
+> routed by key**, what should an index *be*?
 
-1. **Value-partitioned index with an asynchronous write side** — trades
-   index visibility immediacy for query locality.
-2. **Dual index** — a local copy for write speed plus a value-partitioned
-   copy for read speed; trades memory and consistency maintenance.
-3. **Query pruning** — the origin decides which shards *can* match before
-   asking (per-shard value-range summaries, or a Bloom filter per shard
-   per index). Keeps writes local; costs a summary structure and its
-   maintenance.
-4. **Fewer, denser serving shards** — `--accept-shards` (v1.30) already
-   proved that fewer, denser shards can win by +10.6 % on a different
-   axis. The 1-shard row above is that idea taken to its limit for
-   index-heavy workloads.
+The fan-out is not a defect bolted onto the design — it is the honest
+consequence of an index that spans a keyspace which is partitioned by
+row key while queries arrive by indexed value. Two things follow, and
+both are about internal coherence rather than about PostgreSQL:
+
+- **The index is currently the one thing in the engine that is not
+  routed like data.** Every other operation hashes to its owner and pays
+  one hop. If index entries were themselves keys, an indexed lookup
+  would route by the same rule as everything else — that removes a
+  special case rather than adding one.
+- **The write side already has the machinery** that such a shape would
+  need. Cross-shard dispatch, escrow, the outbox and the CDC feed all
+  exist, and the write path already fans out through index hooks. Whether
+  index maintenance across shards can keep the derived-by-construction
+  guarantee is a design question with an existing toolbox, not a new
+  subsystem.
+
+A third question the measurement does not answer but the model raises on
+its own: **the index layer is 100 % RAM-resident by decision, not by
+physics.** Tiering gave rows a hot/cold window; whether an access path
+deserves one too is worth asking for the small-and-medium systems this
+engine is aimed at, independently of any comparison.
+
+None of this is started. It wants a design round that begins from the
+model, reaches a shape that has no remaining room at the design,
+principle, algorithm and model levels — and only then gets measured
+against anything external.
 
 ## Caveat this measurement does not cover
 
 These are **single-connection latencies**. One shard answering in 36 µs
 does not mean one shard is the right deployment: sixteen shards exist to
 serve sixteen cores concurrently, and collapsing them trades throughput
-for latency. A serious fix has to hold both — which is exactly why
-pruning (3) and dual-index (2) are on the list next to the shard-count
-lever (4), rather than "just run one shard".
+for latency. Any design that comes out of this has to hold both, which is why "run
+one shard" is a measurement device here and not a conclusion.
