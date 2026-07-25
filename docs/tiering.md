@@ -142,9 +142,9 @@ around, both from the capacity model in the RFC:
   ~30 VALUES bytes) ≈ 1.7 GB ≈ 2.8 GB ≤ 3 GB. At 4 KiB values the
   ratio gate is ≥ 10× data:RAM (5 M × 4 KiB = 20 GB on a 2 GB
   budget; stub floor ≈ 540 MB). Per-key fixed costs dominate narrow
-  rows — the corrected first draft of that envelope (50 M rows on
-  2 GB) violated its own stub floor, which is why the formulas come
-  first.
+  rows: size a deployment from the formulas above — the stub and
+  index floors are hard lower bounds a budget must clear before any
+  value can stay hot.
 
 ## Semantics on cold keys
 

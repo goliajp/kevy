@@ -52,10 +52,8 @@ line "L3 refusals (C3)"        "$L3" "ad-hoc SQL / bad declarations / WHERE-on-n
 L6=$(run_t kevy table_e2e "c6_index_only_queries_touch_zero_cold_rows")
 line "L6 index-only (C6)"      "$L6" "row-read counter == 0 for FILTER/SORT/COUNT on cold rows; FIELDS pays <= 1 read/row"
 
-# L7 (D2): the same e2e asserts the cold-read counter == 0 on
-# index-only queries over a mostly-cold table; the T9 envelope re-runs
-# it at the fully-cold 10x scale on lx64.
-line "L7 cold-index-only (D2)" "$L6" "cold rows (c6 fixture, mostly-cold): cold-read counter == 0 on index-only queries — alias of L6; T9 envelope re-runs it FULLY-cold at scale"
+L7=$(run_t kevy table_e2e "d2_fully_cold_table_index_only_queries_pay_zero_cold_reads")
+line "L7 cold-index-only (D2)" "$L7" "FULLY-cold table (budget crushed to 1): zero cold reads on index-only; FIELDS pays exactly 1 read/row; T9 re-runs at 10M scale"
 
 echo
 if [ "$fail" -ne 0 ]; then
