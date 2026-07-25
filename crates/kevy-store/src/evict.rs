@@ -20,6 +20,13 @@ use crate::{Entry, EvictionPolicy, Store, now_ns, remaining_ms};
 /// `maxmemory-samples` Redis default. Each `evict_one` picks the worst out
 /// of this many randomly-sampled keys.
 const N_SAMPLES: usize = 5;
+/// Bucket-visit bound for the FILTERED (demotion) sampler: the window a
+/// single call may inspect, regardless of eligibility hits. See the
+/// comment at the walk site — unbounded filtered sampling is O(map) on a
+/// mostly-cold table. (Referenced from the tier module, which only
+/// exists off-wasm with std — same gate here.)
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+pub(crate) const DEMOTE_VISIT_WINDOW: usize = 512;
 
 /// Evict until `used_memory ≤ maxmemory * 19/20` (5% headroom). Without
 /// headroom each subsequent write would re-enter eviction; with headroom we
@@ -130,7 +137,7 @@ fn evict_one(store: &mut Store) -> bool {
     let volatile_only = policy.is_volatile();
     let Some(victim) = sample_pick_with(store, policy, |e| {
         !volatile_only || e.expire_at_ns.is_some()
-    }) else {
+    }, usize::MAX) else {
         return false;
     };
     if store.remove_entry(&victim).is_some() {
@@ -155,6 +162,7 @@ pub(crate) fn sample_pick_with<F: Fn(&Entry) -> bool>(
     store: &Store,
     policy: EvictionPolicy,
     eligible: F,
+    visit_bound: usize,
 ) -> Option<Vec<u8>> {
     let cap = store.map.capacity();
     if cap == 0 || store.map.is_empty() {
@@ -168,10 +176,15 @@ pub(crate) fn sample_pick_with<F: Fn(&Entry) -> bool>(
 
     let mut best: Option<(Vec<u8>, i64)> = None;
     let mut taken = 0;
-    // Walk the bucket ring beginning at `start`; cap the linear scan so a
-    // sparsely-populated table doesn't spin forever. `.take(visit_cap)` is
-    // the safety net; the inner `taken >= N_SAMPLES` break is the normal exit.
-    let visit_cap = cap.saturating_mul(2);
+    // Walk the bucket ring beginning at `start`, HARD-bounded: this
+    // sampler's predicate can be almost-always-false (a mostly-cold map
+    // under tiering), and an unbounded filtered walk degenerates to a
+    // full O(map) ring scan on EVERY demote attempt — measured at 10M
+    // rows/94% cold as ~100-300ms stalls on every shard, drowning even
+    // hot queries. A fixed window keeps the steady-state all-cold cost
+    // at microseconds; a shifted start each call still finds scattered
+    // hot candidates across successive ticks.
+    let visit_cap = cap.saturating_mul(2).min(visit_bound);
     let primary = store.map.iter_from_bucket(start);
     let wrap = store.map.iter_from_bucket(0);
     for (k, e) in primary.chain(wrap).take(visit_cap) {
