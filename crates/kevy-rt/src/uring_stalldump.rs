@@ -8,6 +8,35 @@ use crate::shard::Shard;
 use crate::uring_conn::{BigArgState, UringConn};
 use kevy_map::KevyMap;
 
+/// Name the big-arg sub-state: which variant, how far the body got, and
+/// every flag the cycle waits on. `big_arg=true` alone could not tell a
+/// legitimately in-flight read from a wedge — that missing detail cost
+/// three rounds of source-reasoning on the deep-pipeline wedge.
+fn describe_big_arg(uc: &UringConn) -> String {
+    match uc.pending_big_arg.as_deref() {
+        None => String::from("none"),
+        Some(BigArgState::Frame { frame, total }) => format!("Frame({}/{total})", frame.len()),
+        Some(BigArgState::BareSetCancelling {
+            body,
+            body_len,
+            crlf_seen,
+            cancel_acked,
+            target_canceled,
+            ..
+        }) => format!(
+            "Cancelling(body {}/{body_len} crlf={crlf_seen} \
+             cancel_acked={cancel_acked} target_canceled={target_canceled})",
+            body.len()
+        ),
+        Some(BigArgState::BareSetReading {
+            body,
+            body_len,
+            crlf_seen,
+            ..
+        }) => format!("Reading(body {}/{body_len} crlf={crlf_seen})", body.len()),
+    }
+}
+
 impl<C: Commands> Shard<C> {
     /// Print every conn that can no longer make progress on its own —
     /// opt-in via `KEVY_DEBUG_STALL_MS=<ms>`, off (one `Option` check on
@@ -62,51 +91,31 @@ impl<C: Commands> Shard<C> {
             if uc.recv_armed || uc.write_inflight || uc.closing {
                 continue;
             }
-            // Name the big-arg sub-state: which variant, how far the body
-            // got, and every flag the cycle waits on. "big_arg=true" alone
-            // could not tell a legitimately in-flight read from a wedge.
-            let big = match uc.pending_big_arg.as_deref() {
-                None => String::from("none"),
-                Some(BigArgState::Frame { frame, total }) => {
-                    format!("Frame({}/{total})", frame.len())
-                }
-                Some(BigArgState::BareSetCancelling {
-                    body,
-                    body_len,
-                    crlf_seen,
-                    cancel_acked,
-                    target_canceled,
-                    ..
-                }) => format!(
-                    "Cancelling(body {}/{body_len} crlf={crlf_seen} \
-                     cancel_acked={cancel_acked} target_canceled={target_canceled})",
-                    body.len()
-                ),
-                Some(BigArgState::BareSetReading {
-                    body,
-                    body_len,
-                    crlf_seen,
-                    ..
-                }) => format!("Reading(body {}/{body_len} crlf={crlf_seen})", body.len()),
-            };
-            eprintln!(
-                "kevy: STALL shard {} conn {cid}: recv_armed=false arm_queued={} \
-                 in_arm_pending={} big_arg={big} cancel_pending={} read_pending={} \
-                 rearm_recv={} output={} write_pending={} \
-                 pending_slots={} next_seq={} next_emit={}",
-                self.id,
-                uc.arm_queued,
-                self.arm_pending.contains(cid),
-                uc.big_arg_cancel_pending,
-                uc.big_arg_read_pending,
-                uc.big_arg_rearm_recv,
-                !conn.output.is_empty() || !conn.output_arcs.is_empty(),
-                uc.write_off < uc.write_buf.len() || !uc.write_arcs.is_empty(),
-                conn.pending.len(),
-                conn.next_seq,
-                conn.next_emit,
-            );
+            self.dump_stalled_conn(*cid, conn, uc);
         }
+    }
+
+    /// One stalled conn's line: every flag its state machine could be
+    /// waiting on, so the wedge shape is readable without a debugger.
+    fn dump_stalled_conn(&self, cid: u64, conn: &crate::shard::Conn, uc: &UringConn) {
+        eprintln!(
+            "kevy: STALL shard {} conn {cid}: recv_armed=false arm_queued={} \
+             in_arm_pending={} big_arg={} cancel_pending={} read_pending={} \
+             rearm_recv={} output={} write_pending={} \
+             pending_slots={} next_seq={} next_emit={}",
+            self.id,
+            uc.arm_queued,
+            self.arm_pending.contains(&cid),
+            describe_big_arg(uc),
+            uc.big_arg_cancel_pending,
+            uc.big_arg_read_pending,
+            uc.big_arg_rearm_recv,
+            !conn.output.is_empty() || !conn.output_arcs.is_empty(),
+            uc.write_off < uc.write_buf.len() || !uc.write_arcs.is_empty(),
+            conn.pending.len(),
+            conn.next_seq,
+            conn.next_emit,
+        );
     }
 }
 
