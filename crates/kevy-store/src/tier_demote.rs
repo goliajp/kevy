@@ -20,6 +20,10 @@ const WATERMARK_NUM: u64 = 19;
 const WATERMARK_DEN: u64 = 20;
 /// Compact a sealed file once its live ratio falls below this percent.
 const COMPACT_LIVE_PCT: u32 = 50;
+/// Records rewritten per reactor-tick compaction step. Bounds each tick's
+/// compaction cost to keep it off the query-tail path (a whole-file pass
+/// stalled the reactor tens of ms); the backlog drains over ticks.
+const COMPACT_STEP_RECORDS: usize = 256;
 
 /// Is this value in the v1 spillable CLASS (ArcBulk / heap Hash /
 /// inline hash)? Threshold and Cold-skip are the sampler's job.
@@ -64,10 +68,15 @@ impl Store {
         loop {
             let n = self.demote_if_over(usize::MAX);
             if n == 0 {
-                return total;
+                break;
             }
             total += n;
         }
+        // Drain compaction fully: this path is single-threaded (no reactor
+        // to stall), and leaving a backlog would inflate vlog space
+        // amplification (B5) during a bulk ingest.
+        while self.tier_compact_step(usize::MAX) > 0 {}
+        total
     }
 
     /// Shared over-target gate for the two entry points above.
@@ -113,9 +122,10 @@ impl Store {
                 }
             }
         }
-        if demoted > 0 {
-            self.tier_compact();
-        }
+        // Compaction is NOT run inline here: a whole-file vlog rewrite on
+        // the reactor thread stalls every concurrent query for tens of ms
+        // (measured 35-82ms p99 tails at 10M rows). It rides the tick in
+        // bounded steps instead — see `tier_compact_tick`.
         demoted
     }
 
@@ -220,21 +230,32 @@ impl Store {
     /// needs a deterministic pass, not a batch side effect).
     #[cfg(test)]
     pub(crate) fn tier_force_compact_for_tests(&mut self) {
-        self.tier_compact();
+        while self.tier_compact_step(usize::MAX) > 0 {}
     }
 
-    /// Post-batch compaction trigger: retire every sealed vlog file
-    /// whose live ratio fell under [`COMPACT_LIVE_PCT`]. The owner
-    /// resolves liveness through the map (a Cold entry with the exact
-    /// ref), falling back through the rename forward-pointers.
-    fn tier_compact(&mut self) {
-        let Some(t) = self.tier.as_mut() else { return };
+    /// One bounded compaction step: at most `budget` records of vlog
+    /// rewrite, so it never blocks the reactor for a whole-file pass.
+    /// Returns records processed (0 = nothing below the live threshold).
+    fn tier_compact_step(&mut self, budget: usize) -> usize {
+        let Some(t) = self.tier.as_mut() else { return 0 };
         let mut owner = StoreOwner { map: &mut self.map, renames: &mut t.renames };
         // An IO error mid-compaction leaves untouched files untouched;
         // surfaced loudly (per-boot spill file — a failure is a bug).
         t.vlog
-            .compact_below(COMPACT_LIVE_PCT, &mut owner)
-            .expect("tier: vlog compaction failed — per-boot spill file, this is a process bug");
+            .compact_step(COMPACT_LIVE_PCT, &mut owner, budget)
+            .expect("tier: vlog compaction failed — per-boot spill file, this is a process bug")
+    }
+
+    /// Reactor-tick compaction: one bounded step while a sealed file is
+    /// below the live threshold. Cheap no-op (an O(files) scan) when
+    /// there is nothing to compact. Returns records processed.
+    pub fn tier_compact_tick(&mut self) -> usize {
+        match self.tier.as_ref() {
+            Some(t) if t.vlog.compaction_pending(COMPACT_LIVE_PCT) => {
+                self.tier_compact_step(COMPACT_STEP_RECORDS)
+            }
+            _ => 0,
+        }
     }
 }
 

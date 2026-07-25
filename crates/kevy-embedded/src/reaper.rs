@@ -99,6 +99,7 @@ fn reaper_loop(
                 #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
                 crate::shard::tier_tick_upkeep(&mut g, tier, shards.len());
                 let _ = g.store.demote_step();
+                let _ = g.store.tier_compact_tick();
                 // EverySec AOF fsync window check — runs from the same tick.
                 #[cfg(feature = "persist")]
                 if let Some(aof) = &mut g.aof {
