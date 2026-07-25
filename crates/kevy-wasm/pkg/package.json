@@ -1,7 +1,7 @@
 {
   "name": "@goliapkg/kevy",
-  "version": "3.18.0",
-  "description": "kevy in the browser — Redis-compatible KV + TTL + pub/sub compiled to WebAssembly, with OPFS/IndexedDB persistence and cross-tab pub/sub. Zero dependencies.",
+  "version": "4.0.0",
+  "description": "kevy in the browser \u2014 Redis-compatible KV + TTL + pub/sub compiled to WebAssembly, with OPFS/IndexedDB persistence and cross-tab pub/sub. Zero dependencies.",
   "type": "module",
   "main": "kevy.js",
   "types": "kevy.d.ts",
