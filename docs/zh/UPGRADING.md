@@ -14,10 +14,12 @@
 |---|---|---|---|
 | `kevy`（服务器） | 3.18.x | 4.0.0 | 换二进制，在同一个数据目录上重启 |
 | `kevy-embedded` | 3.18.x | 4.0.0 | 升版本 + 照下面的 API 表改 |
-| `kevy-client` | **1.14.x** | **4.0.0** | 升版本——版本线统一（`kevy-embedded` 在 3.0.0 做过同样的动作）+ 那张 API 表 |
-| `kevy-client-async` | **1.1.x** | **4.0.0** | 同上 |
+| `kevy-client` | **1.14.x** | **2.0.0** | 升版本——两个客户端保持自己的版本线，这次破坏性变更对应它们的 2.0.0 + 那张 API 表 |
+| `kevy-client-async` | **1.1.x** | **2.0.0** | 同上 |
 | `kevy-wasm` / `@goliapkg/kevy`（npm） | —— | 4.0.0 | 4.0 新增——见 [wasm.md](wasm.md) |
 | 基础设施 crate（`kevy-store`、`kevy-rt`……） | 3.18.x | 4.0.0 | 跟随工作区版本 |
+
+`kevy-client` 与 `kevy-client-async` **不在**工作区的版本线上：它们发的是 **2.0.0**，不是 4.0.0。`cargo add kevy-client` 解析到 2.x 就是当前版本，不是过期版本。
 
 ## 什么是自动兼容的
 

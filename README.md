@@ -203,7 +203,7 @@ kevy runs in the browser as a real store: the npm package
 [`@goliapkg/kevy`](https://www.npmjs.com/package/@goliapkg/kevy) ships
 the engine compiled to `wasm32-unknown-unknown` behind a hand-written
 ES-module loader — no wasm-bindgen, zero dependencies on either side
-of the boundary; six files, ~165 KB packed.
+of the boundary; six files, 231 KB packed (218 KB gzipped over the wire).
 
 ```sh
 npm install @goliapkg/kevy
@@ -340,8 +340,8 @@ All run unmodified against a default `kevy --port 6379` instance.
 |---|---|
 | [`kevy`](crates/kevy) | The server binary and library entry-point |
 | [`kevy-embedded`](crates/kevy-embedded) | In-process KV with the Redis-shaped Rust API |
-| [`kevy-client`](crates/kevy-client) | Blocking RESP client; URL facade for server or in-process backend |
-| [`kevy-client-async`](crates/kevy-client-async) | Async mirror of `kevy-client` for tokio / smol / async-std |
+| [`kevy-client`](crates/kevy-client) | Blocking RESP client; URL facade for server or in-process backend — **its own version line (2.x), not the workspace's 4.x** |
+| [`kevy-client-async`](crates/kevy-client-async) | Async mirror of `kevy-client` for tokio / smol / async-std — **2.x, same line as `kevy-client`** |
 | [`kevy-cluster-rw`](crates/kevy-cluster-rw) | Primary-write / replica-read client wrapper |
 | [`kevy-cli`](crates/kevy-cli) | Operator CLI: backup, restore, smoke tests |
 | [`kevy-config`](crates/kevy-config) | TOML config schema with CLI/env/file precedence |

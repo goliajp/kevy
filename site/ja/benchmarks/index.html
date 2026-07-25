@@ -54,7 +54,7 @@
 <section class="band prose"><h2>この数字が、教えてくれないこと</h2><div class="pcols"><p><b>ループバックです。</b>ここにネットワークはありませんが、実際の運用で待たされる相手は、たいていネットワークです。GET が 2.6 倍速いエンジンでも、レイテンシの大半が回線なら、p99 が 2.6 倍良くなることはありません。</p><p><b>値が小さいです。</b>1 値あたり 64 KB になると、全体がカーネルの TCP パスに律速され、差は 1 桁台まで縮まります。大きなブロブを保存するなら、この数字は、あなたの話ではありません。</p><p><b>1 台のマシンです。</b>kevy にクラスタモードはありません。1 台では足りないことが問題なら、このページのどの数字も助けになりません。</p></div></section>
 <section class="band">
   <div class="sec-h"><h2>ブラウザ向けビルド</h2><p class="sec-lede">タブに実際に配るもの。</p></div>
-  <div class="tbl"><table><thead><tr><th></th><th>サイズ</th><th></th></tr></thead><tbody><tr><td>kevy.wasm</td><td class="num">416 KB</td><td class="num">エンジン本体、非圧縮</td></tr><tr><td>gzip 後</td><td class="num">151 KB</td><td class="num">回線を流れる量</td></tr><tr><td>コールドスタート</td><td class="num">&lt; 20 ms</td><td class="num">コンパイルとインスタンス化、キャッシュが温まった状態</td></tr></tbody></table></div>
+  <div class="tbl"><table><thead><tr><th></th><th>サイズ</th><th></th></tr></thead><tbody><tr><td>kevy.wasm</td><td class="num">416 KB</td><td class="num">エンジン本体、非圧縮</td></tr><tr><td>gzip 後</td><td class="num">218 KB</td><td class="num">回線を流れる量</td></tr><tr><td>コールドスタート</td><td class="num">&lt; 20 ms</td><td class="num">コンパイルとインスタンス化、キャッシュが温まった状態</td></tr></tbody></table></div>
   <p class="tbl-note"><b>小さな同期の読み取りでは、localStorage が kevy に勝ちます</b>。今後もそうです——あれはページ自身のアドレス空間にあるマップです。kevy が勝つのは、そもそも localStorage を選ぶべきでない理由のほうです。本物の TTL、5 MB の上限がないこと、値が文字列ではなくバイト列であること、書き込みがメインスレッドを止めないこと。</p>
 </section>
 <section class="band">

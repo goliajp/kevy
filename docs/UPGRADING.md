@@ -24,10 +24,14 @@ mechanical migration — every change below has a one-line rule.
 |---|---|---|---|
 | `kevy` (server) | 3.18.x | 4.0.0 | swap the binary, restart on the same data dir |
 | `kevy-embedded` | 3.18.x | 4.0.0 | bump + apply the API table below |
-| `kevy-client` | **1.14.x** | **4.0.0** | bump — version-line unification (same move `kevy-embedded` made at 3.0.0) + the API table |
-| `kevy-client-async` | **1.1.x** | **4.0.0** | same |
+| `kevy-client` | **1.14.x** | **2.0.0** | bump — the clients keep their own version line; 2.0.0 is their major for this break + the API table |
+| `kevy-client-async` | **1.1.x** | **2.0.0** | same |
 | `kevy-wasm` / `@goliapkg/kevy` (npm) | — | 4.0.0 | new in 4.0 — [docs/wasm.md](wasm.md) |
 | Infra crates (`kevy-store`, `kevy-rt`, …) | 3.18.x | 4.0.0 | follow the workspace version |
+
+`kevy-client` and `kevy-client-async` are **not** on the workspace's
+version line: they ship as **2.0.0**, not 4.0.0. `cargo add kevy-client`
+resolves 2.x — that is the current release, not a stale one.
 
 ## What is compatible automatically
 

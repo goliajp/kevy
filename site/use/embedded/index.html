@@ -43,7 +43,7 @@
 <section class="band" style="border-top:0"><div>
     <p class="eyebrow">Ship it inside</p>
     <h1>Put the store<br>inside the thing</h1>
-    <p class="lede">No server, no socket, no network. The engine is a struct you call, a 151 KB WebAssembly module, or a no_std library on a chip with no operating system — <b>and it is the same engine, with the same commands, in all three.</b></p>
+    <p class="lede">No server, no socket, no network. The engine is a struct you call, a 218 KB WebAssembly module, or a no_std library on a chip with no operating system — <b>and it is the same engine, with the same commands, in all three.</b></p>
     
   </div></section>
 <section class="band prose"><h2>Why this fits</h2><div class="pcols"><p>Every application that has to work offline ends up writing a storage layer. A desktop app gets SQLite and a schema nobody wanted. A web app gets localStorage, discovers the 5 MB ceiling and the fact that it is synchronous and string-only, and then gets IndexedDB and an abstraction over it. A device gets a hand-rolled ring buffer in flash.</p><p><b>All three are the same problem, and they can be the same solution.</b> kevy embeds with no process boundary, ships to a browser with real TTLs and pub/sub, and boots on a Cortex-M with a fixed arena and no allocator at all. CI proves the last one on every push.</p></div></section>
@@ -56,7 +56,7 @@ assert_eq!(db.get(b&quot;session:7f3a&quot;)?.is_some(), true);</code></pre></li
   <div class="call loss r-cost"><span class="h">Cost &amp; limits</span><p><b>An embedded store is not shared.</b> One process owns the data directory; if a second process needs the data, that is what the listener above — or <a href="../../docs/embedded-listener/">the full server</a> — is for. The store can also take a RAM budget in-process (<code>with_tier_budget</code>): cold values spill to disk and page back inside your process — with the honest note that an in-process cold read holds the store's lock for the read's duration, which is why the largest spillable value is capped at 256 KiB by default. <a href="../../docs/tiering/">The tiering guide</a> has the details.</p></div>
 </section>
 <section class="band">
-  <div class="sec-h"><h2>In a browser tab</h2><p class="sec-lede">151 KB gzipped. Persists to the browser's own filesystem, survives a reload, and speaks pub/sub across tabs.</p></div>
+  <div class="sec-h"><h2>In a browser tab</h2><p class="sec-lede">218 KB gzipped. Persists to the browser's own filesystem, survives a reload, and speaks pub/sub across tabs.</p></div>
   <ol class="steps recipe"><li><h3>Open it, persistent</h3><pre><code>import { open } from &quot;@goliapkg/kevy&quot;;
 
 const db = await open({ persist: { name: &quot;app&quot; } });</code></pre></li><li><h3>Write with a real TTL, read after a reload</h3><pre><code>db.set(&quot;cart:u881&quot;, JSON.stringify(items), { ttlMs: 86_400_000 });
