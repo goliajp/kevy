@@ -140,7 +140,7 @@ let mut store = Store::new_in(&amp;mut arena);</code></pre><p class="tab-note">�
 <section class="band deep" id="start">
   <div class="sec-h"><h2>两分钟</h2></div>
   <ol class="steps"><li><h3>安装</h3><p>一个二进制。没有运行时，也没有要解析的依赖。</p><pre><code>cargo install kevy
-kevy --port 6379</code></pre></li><li><h3>把你的客户端指过来</h3><p>你今天在用什么，就继续用什么。</p><pre><code>redis-cli -p 6379
+kevy --port 6379</code></pre></li><li><h3>把你的客户端指过来</h3><p>你今天在用什么，就继续用什么——没有 kevy 客户端要装。<b>node-redis</b> / <b>ioredis</b>、<b>go-redis</b>、<b>StackExchange.Redis</b>、<b>redis-py</b>、<b>hiredis</b> 都能原样连上，kevy 自己的动词走同一个客户端的原始命令通道。这六种每次 push 都会在 CI 里对一台真实服务器跑同一套梯子。<a href="/docs/clients/">各语言示例</a>（英文）。</p><pre><code>redis-cli -p 6379
 &gt; SET greeting hello
 OK
 &gt; TTL greeting

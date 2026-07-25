@@ -140,7 +140,7 @@ let mut store = Store::new_in(&amp;mut arena);</code></pre><p class="tab-note">T
 <section class="band deep" id="start">
   <div class="sec-h"><h2>Two minutes</h2></div>
   <ol class="steps"><li><h3>Install</h3><p>One binary. No runtime, no dependencies to resolve.</p><pre><code>cargo install kevy
-kevy --port 6379</code></pre></li><li><h3>Point your client at it</h3><p>Whatever you use today keeps working.</p><pre><code>redis-cli -p 6379
+kevy --port 6379</code></pre></li><li><h3>Point your client at it</h3><p>Whatever you use today keeps working — there is no kevy client to install. <b>node-redis</b> / <b>ioredis</b>, <b>go-redis</b>, <b>StackExchange.Redis</b>, <b>redis-py</b> and <b>hiredis</b> connect unchanged, and kevy's own verbs arrive through the same client's raw-command channel. All six run the identical ladder against a live server in CI on every push. <a href="docs/clients/">Examples per language</a>.</p><pre><code>redis-cli -p 6379
 &gt; SET greeting hello
 OK
 &gt; TTL greeting

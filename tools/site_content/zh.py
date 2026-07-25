@@ -241,7 +241,14 @@ let mut store = Store::new_in(&mut arena);""",
                 },
                 {
                     "title": "把你的客户端指过来",
-                    "body": "你今天在用什么，就继续用什么。",
+                    "body": (
+                        "你今天在用什么，就继续用什么——没有 kevy 客户端要装。"
+                        "<b>node-redis</b> / <b>ioredis</b>、<b>go-redis</b>、"
+                        "<b>StackExchange.Redis</b>、<b>redis-py</b>、<b>hiredis</b> "
+                        "都能原样连上，kevy 自己的动词走同一个客户端的原始命令通道。"
+                        "这六种每次 push 都会在 CI 里对一台真实服务器跑同一套梯子。"
+                        "<a href=\"/docs/clients/\">各语言示例</a>（英文）。"
+                    ),
                     "code": 'redis-cli -p 6379\n> SET greeting hello\nOK\n> TTL greeting\n(integer) -1',
                 },
                 {
