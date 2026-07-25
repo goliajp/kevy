@@ -293,13 +293,16 @@ def run_sweep():
 def run_info():
     c = Client(int(opt("--port")))
     field = opt("--field")
-    t, v = c.req([b"INFO", b"tiering"])
-    if t != "bulk":
-        sys.exit("info: unexpected reply %s" % t)
-    for line in v.decode().splitlines():
-        if line.startswith(field + ":"):
-            print(line.split(":", 1)[1].strip())
-            return
+    # Search tiering AND memory: cold_keys/vlog_* live in `tiering`,
+    # used_memory in `memory` (the logical-bound gauge B8 reads).
+    for section in (b"tiering", b"memory"):
+        t, v = c.req([b"INFO", section])
+        if t != "bulk":
+            continue
+        for line in v.decode().splitlines():
+            if line.startswith(field + ":"):
+                print(line.split(":", 1)[1].strip())
+                return
     print("")  # absent (tiering off) — caller decides
 
 
