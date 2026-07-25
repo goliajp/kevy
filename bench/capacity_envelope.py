@@ -61,7 +61,9 @@ def read_reply(f):
 
 class Client:
     def __init__(self, port):
-        self.sock = socket.create_connection(("127.0.0.1", port), timeout=60)
+        # 600s: a full-scale bulk-load reply can lag behind sustained
+        # spill/compaction; 60s produced a false driver timeout at B6.
+        self.sock = socket.create_connection(("127.0.0.1", port), timeout=600)
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.f = self.sock.makefile("rb")
 
