@@ -2,10 +2,17 @@
 
 The repo had never benchmarked kevy against a relational database. It
 has valkey numbers and embedded-KV numbers; every "faster than an RDS"
-sentence was inference. This is the measurement, and it refutes the
-inference in two of five columns.
+sentence was inference. This is the measurement, in two rounds — a
+dataset that fits in cache and one that does not — and it contradicts
+the inference more often than it confirms it.
 
-**Reproduce:** `bash bench/pgcompare.sh 2000000 400` (harness:
+The short version: **kevy wins writes and random-key reads; PostgreSQL
+wins indexed reads, memory, and writes at matched durability.** Which
+matters depends entirely on the workload, so every column is below
+rather than the flattering subset.
+
+**Reproduce:** `bash bench/pgcompare.sh 2000000 400` for round one,
+`3000000 4000` against a memory-capped PG for round two (harness:
 `bench/pgcompare.py`). Run 2026-07-26 on lx64 — 16 cores, NVMe, the
 bench account, nothing else of ours running.
 
@@ -116,13 +123,93 @@ data. Neither of those is a bug to be fixed later; they follow from
 holding rows in-process, and from an RDS's planner being good at the
 work it was built for.
 
+## Round two — the dataset that does not fit
+
+The first round's obvious objection is that 843 MB sits in page cache on
+a 62 GB box, so PG never touched a disk. Round two removes that: **3M
+rows × 4 KB of incompressible payload = 11.5 GB of CSV, 17 GB on PG's
+disk**, with PostgreSQL held to a **2 GB memory cgroup** (page cache
+included, so misses are real) and kevy given a **1 GB tiering budget**.
+Each engine stays near 2–3 GB resident by its own mechanism, against
+data six times that.
+
+| engine / mode | load MB/s | pk p99 | idx p99 | page p99 | write p99 | disk KB/CSV-MB | RSS KB/CSV-MB |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| postgres 18, 2 GB cap | 58.3 | 184 µs | **131 µs** | **118 µs** | 1684 µs | 1434 | **52** |
+| kevy `everysec`, no budget | **359.5** | **58 µs** | 321 µs | 429 µs | **79 µs** | **1060** | 1516 |
+| kevy `tiered`, 1 GB budget | 288.5 | 78 µs | 266 µs | 360 µs | 258 µs | 2087 | 267 |
+
+**The prediction was half wrong, and the half that failed is instructive.**
+Going in, the expectation was that reads would flip once the data stopped
+fitting. Only the *random-access* shape flipped:
+
+- **`pk` — random primary key across 3M rows.** PG 184 µs, kevy 58 µs
+  untiered and **78 µs tiered** — 2.4–3.2× — and the tiered number is the
+  interesting one, because those rows are *on disk*: a cold read costs
+  one pread and still beats PG's buffer-pool miss.
+- **`idx` and `page` — PG still wins**, 131 µs vs 266–321 µs and 118 µs
+  vs 360–429 µs. Not because the dataset fits, but because **the query
+  shapes have tiny cardinality**: `age` takes 60 values and `dept` takes
+  8, so `LIMIT 20` returns the same handful of rows every time and their
+  heap pages never leave PG's cache no matter how large the table is.
+  That is a flaw in the workload, not a property of the engines — a
+  faithful test of those shapes needs high-cardinality predicates that
+  scatter across the table. **Read those two columns as "both hot", not
+  as "PG survives cache pressure better".**
+
+Tiering, on the other hand, did exactly what it exists for, and the
+gauges are in the row rather than asserted:
+
+| | |
+|---|---|
+| rows demoted to disk | **2,946,397 / 3,000,000 = 98.3 %** |
+| `used_memory` | **541 MB**, inside the 1 GB budget |
+| index layer resident | 613 MB (indexes hot, rows cold — by design) |
+| value log on disk | 11.3 GB |
+| **RSS** | **2.95 GB vs 17.95 GB untiered — 6.1× less** |
+
+So the same 12 GB of data needs 18 GB of RAM without tiering and 3 GB
+with it, at a read cost of 78 µs instead of 58 µs on the random shape.
+PG still holds the memory crown (614 MB), but the gap closes from 29×
+to 5×.
+
+Two more inversions from round one: **kevy now loads 6× faster** (359 vs
+58 MB/s — PG's COPY pays TOAST and WAL on 4 KB rows while kevy's cost
+per MB drops as values grow), and **kevy is now more compact on disk**
+(1060 vs 1434 KB per CSV-MB — no per-row MVCC or page overhead). The
+tiered row pays 2087 because the value log and the AOF both hold the
+data.
+
+### The compression difference, measured separately
+
+The first attempt at round two used a constant pad (`"x" * 4000`).
+Past PG's ~2 KB TOAST threshold that compresses about **25:1** — 12 GB
+of CSV became **488 MB** on PG's disk, which then fit entirely inside
+the 2 GB cap the run existed to overflow. Every column of that run was
+void and it was discarded.
+
+The number itself is real and worth stating on its own: **PostgreSQL
+compresses large repetitive column values; kevy does not** (no value
+compression, a consequence of the zero-dependency rule). For a table of
+JSON or prose, PG's disk footprint can be a small fraction of kevy's.
+The table above uses random hex precisely so that this difference does
+not silently distort the other six columns.
+
 ## Boundaries of this measurement
 
-- **One size, one shape.** 843 MB fits comfortably in page cache on a
-  62 GB box, which favours PG's read path. The comparison that would
-  favour kevy — a dataset far larger than RAM, where PG goes to disk on
-  every miss and kevy answers index-only queries from memory — is not
-  measured here.
+- **Two sizes, one shape.** 843 MB (fits in cache) and 11.5 GB (does
+  not). Both use the same six-column table.
+- **The `idx` / `page` shapes are low-cardinality** and therefore stay
+  hot regardless of table size — see round two. A high-cardinality
+  rerun is the obvious next measurement.
+- **Single connection, sequential.** These are latencies, not
+  throughput under concurrency, where PG's per-connection backend model
+  and kevy's per-core sharding diverge sharply.
+- **Stock PG** (plus a memory cgroup in round two). Tuning
+  `shared_buffers`, `synchronous_commit` or `commit_delay` moves PG's
+  numbers, mostly upward.
+- **No JOINs, no ad-hoc queries** — the shapes kevy refuses by design
+  are absent, so this measures the slice where both can compete.
 - **Single connection, sequential.** These are latencies, not
   throughput under concurrency, where PG's per-connection backend model
   and kevy's per-core sharding diverge sharply.
