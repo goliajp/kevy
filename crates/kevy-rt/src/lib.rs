@@ -138,6 +138,8 @@ mod uring_inbox;
 #[cfg(target_os = "linux")]
 mod uring_io;
 #[cfg(target_os = "linux")]
+mod uring_io_write;
+#[cfg(target_os = "linux")]
 mod uring_ops;
 #[cfg(target_os = "linux")]
 mod uring_park;
