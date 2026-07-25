@@ -97,7 +97,7 @@ impl<C: Commands> Shard<C> {
 
     /// One stalled conn's line: every flag its state machine could be
     /// waiting on, so the wedge shape is readable without a debugger.
-    fn dump_stalled_conn(&self, cid: u64, conn: &crate::shard::Conn, uc: &UringConn) {
+    fn dump_stalled_conn(&self, cid: u64, conn: &crate::conn::Conn, uc: &UringConn) {
         eprintln!(
             "kevy: STALL shard {} conn {cid}: recv_armed=false arm_queued={} \
              in_arm_pending={} big_arg={} cancel_pending={} read_pending={} \
