@@ -76,7 +76,7 @@ touches the cold tier.
 - **The honest v1 limits, named**: strings and hashes spill; lists,
   sets, zsets and streams stay hot. Embedded cold reads hold the
   shard lock for the read's duration (the drop-lock dance is
-  designed, post-v4). Values at or below 64 B never spill — a stub
+  designed, post-v4). Values below 64 B never spill — a stub
   would be no smaller than the value.
 - **The TABLE layer** — `TABLE.DECLARE` compiles a relational
   declaration (prefix, typed columns, PK, secondary indexes with

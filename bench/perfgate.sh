@@ -64,6 +64,10 @@ fail()   { echo "perfgate: FAIL — $1" >&2; exit 1; }
 # the measure loop, --update-baseline, and the gate comparison — three
 # hand-copied lists drifted once already.
 #
+# The tiered_hotset_* metrics (capacity arc A2: hot-set throughput with
+# tiering ON, working set fully resident — must match untiered within
+# tolerance) follow the same skip-with-notice discipline until lx64
+# records them against a tiered instance.
 # The table_* metrics (capacity arc T7: C4 point lookup / C5
 # filter+sort page / C7 write tax) have no measurement body yet — their
 # baselines get recorded on lx64 (kevybench discipline) when the T9
@@ -73,7 +77,8 @@ METRICS="pinned_cluster_get pinned_cluster_set pinned_compat_get pinned_compat_s
 legacy_8sh_get legacy_8sh_set \
 legacy_8sh_incr legacy_8sh_sadd legacy_8sh_hset legacy_8sh_lpush legacy_8sh_zadd \
 zalg_zinterstore \
-table_point_get table_filter_sort_page table_write_tax"
+table_point_get table_filter_sort_page table_write_tax \
+tiered_hotset_get tiered_hotset_set"
 
 # ---------- preflight: never measure on a dirty box ----------
 # A perf comparison of two userland binaries never legitimately needs the

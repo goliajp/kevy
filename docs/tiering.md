@@ -132,7 +132,7 @@ The cold-key formula is gated at ±20 % against measured RSS
 around, both from the capacity model in the RFC:
 
 - **A ~64 B value can never tier profitably** — the stub is about as
-  big as the value. Values at or below the 64-byte spill threshold are
+  big as the value. Values below the 64-byte spill threshold are
   never spilled. The data:RAM ratio grows linearly with value size;
   every capacity gate names its value size for exactly this reason.
 - **Worked example (the D1 envelope, sized from the model, not
@@ -171,7 +171,9 @@ tag**, so the whole metadata surface answers with **zero disk reads**:
 These are not narrative claims: the **transparency suite**
 (`crates/kevy-embedded/tests/tier_transparency.rs`) replays the same
 operation sequence against a tiered and an untiered store and asserts
-byte-identical replies for all semantic commands (memory-reporting
+byte-identical replies for semantic commands — order-free replies
+(`HGETALL`, `KEYS`, `SCAN`, `RANDOMKEY`, whose element order is map
+order by contract) are shape-compared instead — (memory-reporting
 commands are shape-compared — they legitimately differ), with
 demotion points forced deterministically, never timing-dependent.
 

@@ -88,9 +88,9 @@ l8_rss_budget() { # -> "PASS" or "FAIL: why" on stdout
 echo "tiergate — capacity-arc tiering acceptance (RFC §2 B/D groups)"
 echo
 
-line "L1  hot-p99 (B1)"        "PENDING(T3)" "hot GET/SET p99 delta <= noise across cold:hot sweeps"
+line "L1  hot-p99 (B1)"        "PENDING(T9/lx64)" "mechanics landed (T3, unit-tested); the p99 sweep itself runs on lx64 via perfgate + envelope"
 env_line L2 "L2  cold-read-p99 (B2)"  "scalar <=100us/300us, hash-row <=200us/500us on NVMe"
-line "L3  spill-budget (B3)"   "PENDING(T3)" "sustained-ingest RAM plateau; spill stall p99 <= 1ms"
+line "L3  spill-budget (B3)"   "PENDING(T9/lx64)" "batching/hysteresis landed (T3, unit-tested); the stall-p99 measurement runs on lx64"
 line "L4  replay-spill (B4)"   "PENDING(T4)" "replay-with-spill >= 0.70 x plain replay"
 env_line L5 "L5  vlog-amp (B5)"       "vlog_size <= 2.0 x cold_bytes after churn + compaction"
 env_line L6 "L6  capacity-10x (B6)"   "5M x 4KiB = 20GB on 2GB budget, op sweep green + RSS cap"
