@@ -151,10 +151,20 @@ def run_load_b6():
     start = int(opt("--start", "0"))
     val = bytes(random.Random(seed).randrange(0, 256) for _ in range(val_len))
     c = Client(port)
+    # Bound the pipeline by IN-FLIGHT BYTES, not a fixed frame count. A
+    # blind 512-deep pipeline of 4KiB values is a ~2MB single send that
+    # trips a reactor flow-control wedge (the server backpressures its
+    # recv while the client is mid-send, and neither side progresses —
+    # reproducible on a PLAIN non-tiered server at ~16MB, orthogonal to
+    # tiering; see PERF-FINDING-2026-07-25-uring-deep-pipeline-wedge.md).
+    # ~128KB in flight is a realistic bulk-load client and measures the
+    # capacity behaviour B6 is actually about (demotion bounding RSS),
+    # not that unrelated reactor bug.
+    depth = max(1, 131072 // (val_len + 40))
     batch, t0 = [], time.time()
     for i in range(start, start + keys):
         batch.append(enc([b"SET", b"b6:%d" % i, val]))
-        if len(batch) == 512:
+        if len(batch) == depth:
             errs = c.pipeline(batch)
             if errs:
                 sys.exit("load-b6: server error: %s" % errs[0].decode())
