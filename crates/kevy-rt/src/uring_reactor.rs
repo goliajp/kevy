@@ -102,7 +102,7 @@ impl<C: Commands> Shard<C> {
         let mut un_accept_inflight = self.unix_listener.is_none();
         let mut comps: Vec<Completion> = Vec::with_capacity(URING_ENTRIES as usize);
         let mut idle_spins: u32 = 0;
-        let stall_dump_every = crate::uring_arm::stall_dump_interval();
+        let stall_dump_every = crate::uring_stalldump::stall_dump_interval();
         let mut last_stall_dump = Instant::now();
         // Nap rung (restored, batch-gated): size of the last
         // non-empty inbound drain + whether this idle episode already
