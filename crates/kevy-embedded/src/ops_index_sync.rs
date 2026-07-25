@@ -9,7 +9,7 @@ use crate::ops_index::{IndexReg, ShardSegs};
 
 impl ShardSegs {
     /// Σ approximate heap bytes of this shard's index segments, every
-    /// kind — the tier's `reserved_bytes` floor feed (capacity arc T5).
+    /// kind — the tier's `reserved_bytes` floor feed.
     pub(crate) fn reserved_bytes(&self) -> u64 {
         let mut sum: u64 = self.segs.iter().map(|(_, s)| s.stats().approx_bytes).sum();
         sum += self.agg.iter().map(|(_, a)| a.stats().approx_bytes).sum::<u64>();
@@ -25,7 +25,7 @@ impl ShardSegs {
     }
 }
 
-/// Tiering floor refusal (capacity arc T5, RFC §4 row 16 — mirrors the
+/// Tiering floor refusal (mirrors the
 /// server's IDX.CREATE precheck, same wire message): indexes are the
 /// fixed layer demotion can never reclaim; when the existing floor
 /// already exhausts the tier's demotable headroom, a new index is
@@ -173,7 +173,7 @@ fn apply_agg_key(
     a: &mut kevy_index::AggSegment,
     key: &[u8],
 ) {
-    // T6: both fields in ONE row peek (server twin: `apply_row_agg`) —
+    // Both fields in ONE row peek (server twin: `apply_row_agg`) —
     // one record read on a cold row, no promotion, no gate mark; the
     // `Ok(None)`/`Err` arms carry the old `exists()` distinction.
     let group_field = spec.group_by.as_deref().unwrap_or_default();
@@ -199,7 +199,7 @@ fn apply_ann_key(
     g: &mut kevy_vector::Hnsw,
     key: &[u8],
 ) {
-    // T6: the row peek — one record read on cold, no promotion, no
+    // The row peek — one record read on cold, no promotion, no
     // gate mark (server twin: `apply_row`'s ann arm).
     let v = match store.peek_hash_fields(key, &[spec.field()]) {
         Ok(Some(mut vals)) => {
@@ -219,7 +219,7 @@ fn apply_text_key(
 ) {
     // The spec owns what it reads out of a row -- declared fields with
     // their weights, declared stored values -- so this path and the
-    // server's cannot index the same row differently. T6: every
+    // server's cannot index the same row differently. Every
     // declared field + value prefetched with ONE row peek (one record
     // read on a cold row, no promotion, no gate mark); `read_row`
     // resolves from the prefetch, not per-field hgets.
@@ -353,7 +353,7 @@ fn new_scalar(spec: &IndexSpec) -> Segment {
     }
 }
 
-/// T6: the primary field AND every declared VALUES column read with
+/// The primary field AND every declared VALUES column read with
 /// ONE `peek_hash_fields` row peek — a cold row costs one record read
 /// plus one decode (never one per field), promotes nothing and never
 /// advances the 2nd-touch gate (the server twin is

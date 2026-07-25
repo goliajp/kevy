@@ -69,7 +69,7 @@ impl<C: Commands> Shard<C> {
             let aof_path = self.aof_path();
             let commands = &self.commands;
             let store = &mut self.store;
-            // In-replay demotion (T4 / B11): dispatch already runs the
+            // In-replay demotion: dispatch already runs the
             // per-write demote hook, but a K-frame watermark drain
             // backstops it so a bigger-than-budget log can never
             // outrun the batch budget while the reactor is not yet up.

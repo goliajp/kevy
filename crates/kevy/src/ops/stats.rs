@@ -40,7 +40,7 @@ pub(crate) fn publish_gauges(shard: &ShardCtx, store: &Store) {
         s.evicted_keys.store(store.evictions_total(), Relaxed);
         s.commands_processed.store(cmds, Relaxed);
         s.connections_received.store(conns, Relaxed);
-        // Tiering gauges (T5 / B12): one cheap struct read when on,
+        // Tiering gauges: one cheap struct read when on,
         // one branch + a zero-store of `enabled` when off.
         s.tier.enabled.store(u64::from(store.tier_enabled()), Relaxed);
         if store.tier_enabled() {

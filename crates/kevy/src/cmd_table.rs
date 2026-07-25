@@ -1,4 +1,4 @@
-//! TABLE.* command surface (capacity arc T7, RFC §1 D4).
+//! TABLE.* command surface.
 //!
 //! DECLARE/DROP are Local catalog mutations (sidecar-persisted, like
 //! IDX.*/VIEW.*): the parse + compile both live in `kevy_index`

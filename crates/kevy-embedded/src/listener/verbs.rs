@@ -168,7 +168,7 @@ pub(crate) fn dispatch(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
                 s.shard_count(),
                 s.dbsize()
             );
-            // `# Tiering` (T5 / B12): present only when tiering is on
+            // `# Tiering`: present only when tiering is on
             // — an untiered store's INFO body stays byte-identical.
             if let Some(t) = s.tier_info() {
                 body.push_str(&format!(

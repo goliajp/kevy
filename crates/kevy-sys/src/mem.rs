@@ -1,5 +1,4 @@
-//! Memory-bound auto-detection (capacity arc T5, RFC
-//! 2026-07-24-v5-capacity-arc §1 D3): the OS-boundary probe behind the
+//! Memory-bound auto-detection: the OS-boundary probe behind the
 //! tiering budget's `auto` / percent forms.
 //!
 //! - **Linux**: the cgroup v2 limit (`/sys/fs/cgroup/memory.max` — a
@@ -150,7 +149,7 @@ mod tests {
     }
 
     /// The real sysctl on the dev host: `hw.memsize` must answer a
-    /// positive byte count (T5 verify item 1).
+    /// positive byte count.
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     #[test]
     fn real_sysctl_reports_positive_memsize() {

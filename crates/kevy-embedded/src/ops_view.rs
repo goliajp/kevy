@@ -39,7 +39,7 @@ pub(crate) struct ViewState {
 
 impl ShardViews {
     /// Σ approximate heap bytes of the materialized view sets — the
-    /// view half of the tier's `reserved_bytes` feed (capacity arc T5).
+    /// view half of the tier's `reserved_bytes` feed.
     /// Virtual views hold no set and contribute nothing.
     pub(crate) fn reserved_bytes(&self) -> u64 {
         self.views

@@ -60,7 +60,7 @@ pub(crate) fn has_kevy_files(dir: &Path) -> bool {
 /// hand the crash-safe commit to the engine — which also records the new
 /// layout in `shards.meta`.
 ///
-/// Tiering (T4 / B11): under the runtime's tiering budget (the resolved
+/// Tiering: under the runtime's tiering budget (the resolved
 /// builder value, or the minimal `KEVY_TIER_BUDGET` env knob), the temp
 /// store and the redistribution targets tier into scratch vlog dirs so
 /// a merged dataset bigger than the budget migrates without OOM. Cold

@@ -65,7 +65,7 @@ impl Store {
             Value::Stream(st) => self.load_stream_value(k, st, ttl_ms),
             // Unreachable by construction: every producer of a shipped
             // value (take_with_ttl / clone_with_ttl / snapshot_each
-            // consumers post-T4) materializes cold values on ITS side —
+            // consumers) materializes cold values on ITS side —
             // a ColdRef names the source shard's vlog, which this store
             // cannot read. Skip rather than alias a foreign record;
             // loud in debug builds.

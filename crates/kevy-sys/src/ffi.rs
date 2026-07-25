@@ -64,7 +64,7 @@ pub struct Kevent {
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 unsafe extern "C" {
     // sysctlbyname(3) — the memory-bound auto-probe (`hw.memsize`) for
-    // the tiering budget's `auto` form (capacity arc T5). Same
+    // the tiering budget's `auto` form. Same
     // hand-written-binding rule as everything else in this file.
     pub fn sysctlbyname(
         name: *const c_char,

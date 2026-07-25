@@ -122,7 +122,7 @@ impl ZSetData {
 }
 
 /// Type tag a [`ColdRef`] carries so `TYPE` / SCAN's `TYPE` filter / the
-/// WRONGTYPE precheck answer with zero IO (RFC 2026-07-24 §1 D0).
+/// WRONGTYPE precheck answer with zero IO.
 pub const COLD_TAG_STRING: u8 = 1;
 /// Hash tag — see [`COLD_TAG_STRING`].
 pub const COLD_TAG_HASH: u8 = 2;

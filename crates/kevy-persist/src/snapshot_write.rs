@@ -122,7 +122,7 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
         Value::Set(_) | Value::SmallSetInline(_) => OP_SET,
         Value::ZSet(_) | Value::SmallZSetInline(_) => OP_ZSET,
         Value::Stream(_) => OP_STREAM,
-        // T4: every SnapshotSource materializes cold values from the
+        // Every SnapshotSource materializes cold values from the
         // (pinned) vlog before yielding them — a stub here means a
         // producer bypassed the source contract. Fail the snapshot
         // rather than silently dropping the value.

@@ -91,7 +91,7 @@ fn reaper_loop(
                 let mut g = lock_inner(shard);
                 let _ = g.store.tick_expire(samples, rounds);
                 let _ = g.store.tick_hash_ttl(64);
-                // Tiering (T5): budget re-resolution (auto/percent
+                // Tiering upkeep: budget re-resolution (auto/percent
                 // re-probe the memory bound) + the index/view floor
                 // feed, THEN continue any spill the budgeted
                 // write-path batches left unfinished (no-op when

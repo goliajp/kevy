@@ -252,7 +252,7 @@ impl Commands for KevyCommands {
             // logging needed here, same determinism argument as key TTLs.
             let _ = store.tick_hash_ttl(64);
         }
-        // Tiering (T5): budget re-resolution + the index/view floor
+        // Tiering upkeep: budget re-resolution + the index/view floor
         // feed (body in `tier_tick` below — 50-LOC rule), then the
         // tick continuation of the budgeted spill (no-op when tiering
         // is off or under the watermark). Replicas tier too — applied
@@ -457,7 +457,7 @@ impl Commands for KevyCommands {
     }
 }
 
-/// The shard tick's tiering upkeep (T5, RFC §1 D3): re-resolve the
+/// The shard tick's tiering upkeep: re-resolve the
 /// budget spec — auto/percent re-probe the cgroup/meminfo bound so
 /// live limit changes are honored (the maxmemory reapply precedent) —
 /// and feed the index/view memory floor into the unified watermark.

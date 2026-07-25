@@ -1,4 +1,4 @@
-//! Embedded `TABLE.*` capability (capacity arc T7) — the declaration
+//! Embedded `TABLE.*` capability — the declaration
 //! object, the compile call and the verify sweep. The grammar, the
 //! validation and [`kevy_index::compile_table`] all live in
 //! `kevy-index`: ONE implementation shared with the server, so the two

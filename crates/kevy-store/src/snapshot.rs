@@ -23,7 +23,7 @@ pub struct SnapshotView {
     entries: Vec<(SmallBytes, Value, Option<u64>)>,
     /// Hash field TTLs frozen with the view.
     hfttl: Vec<(SmallBytes, SmallBytes, u64)>,
-    /// Tiering (T4 view pinning): every vlog file that existed at
+    /// Tiering view pinning: every vlog file that existed at
     /// collect time. A cold stub cloned into the view can only
     /// reference these, and a pinned file survives compaction until the
     /// last Arc drops — so the view's offsets stay valid for its whole
@@ -65,7 +65,7 @@ impl SnapshotView {
     }
 
     /// Decode a cold stub's record against the view's pinned vlog files
-    /// into a fresh hot [`Value`] — the serializer-thread read path (T4):
+    /// into a fresh hot [`Value`] — the serializer-thread read path:
     /// no store access, no promotion, memory bound = this one value.
     /// `None` when `v` is hot. A stub naming an unpinned file, a failed
     /// read, or a bad decode is a process bug (the vlog is per-boot and
@@ -123,7 +123,7 @@ impl Store {
         SnapshotView {
             entries,
             hfttl,
-            // T4 view pinning: capture ALL current vlog file pins with
+            // View pinning: capture ALL current vlog file pins with
             // the view — the frozen stubs above can only reference
             // files that exist at this instant.
             #[cfg(all(feature = "std", not(target_arch = "wasm32")))]

@@ -8,7 +8,7 @@ use kevy_store::Store;
 /// each as one (or two — for TTL'd keys) RESP frame. Returns the
 /// concatenated wire bytes + the frame count.
 ///
-/// T6: the whole walk runs inside the bulk-read peek scope — a cold
+/// The whole walk runs inside the bulk-read peek scope — a cold
 /// row serializes from ONE record read without promoting or advancing
 /// the 2nd-touch gate (a scope export must not thrash the hot tier).
 pub(super) fn serialize_prefix(store: &mut Store, prefix: &[u8]) -> (Vec<u8>, usize) {

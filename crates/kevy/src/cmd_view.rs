@@ -257,7 +257,7 @@ fn op_hydrate(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
             (store.exists(&[target.as_slice()]) > 0).then_some((row_idx, target.as_slice()))
         })
         .collect();
-    // T6: this shard's target rows hydrate as ONE batched page — cold
+    // This shard's target rows hydrate as ONE batched page — cold
     // rows coalesce into one submission, one decode per row, no
     // promotion, no gate advancement.
     let keys: Vec<&[u8]> = present.iter().map(|(_, t)| *t).collect();
@@ -395,7 +395,7 @@ pub(crate) use crate::cmd_view_reduce::extension_reduce;
 
 #[cfg(test)]
 mod hydrate_tests {
-    //! T6: `op_hydrate` on cold rows — byte-identical to the hot twin,
+    //! `op_hydrate` on cold rows — byte-identical to the hot twin,
     //! zero promotions, one record read per cold row, one batch per
     //! page (the VIEW.QUERY+VIA server harness is disproportionate for
     //! this; the reduce/fan-out layers above are covered by the

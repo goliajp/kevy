@@ -365,7 +365,7 @@ impl Store {
         for shard in self.shards.iter() {
             let stats = {
                 let mut g = lock_write(shard);
-                // Tiering (T5): budget re-resolution + the index/view
+                // Tiering upkeep: budget re-resolution + the index/view
                 // floor feed, then the tick continuation of the
                 // budgeted spill.
                 #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
@@ -404,8 +404,8 @@ impl Store {
     }
 
     /// Tiering counters summed across shards:
-    /// `(demotions_total, promotions_total)` — the B12 surface (INFO
-    /// gauges land in T5). Zeros when tiering is off.
+    /// `(demotions_total, promotions_total)` — the minimal counter pair
+    /// (the full INFO gauge set is `tier_info`). Zeros when tiering is off.
     #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
     pub fn tier_counters(&self) -> (u64, u64) {
         let mut d = 0u64;

@@ -122,7 +122,7 @@ impl crate::Store {
 
     /// One row's digest under a SINGLE shard write-lock acquisition,
     /// with the row reads inside the store's bulk-read peek scope
-    /// (T6): a cold row hashes from ONE record read, never promotes
+    /// — a cold row hashes from ONE record read, never promotes
     /// and never advances the 2nd-touch gate — a full-prefix digest
     /// must not thrash the hot tier (server twin: `cmd_digest`).
     fn row_digest_embedded(&self, key: &[u8]) -> u64 {

@@ -1,8 +1,8 @@
 //! kevy-vlog — the disposable value log under transparent tiering.
 //!
-//! An append-only spill area for cold VALUES (capacity arc, RFC
-//! 2026-07-24-v5-capacity-arc §D1): keys and metadata stay in RAM; a
-//! demoted value's bytes live here and are read back with one `read_at`.
+//! An append-only spill area for cold VALUES: keys and metadata stay
+//! in RAM; a demoted value's bytes live here and are read back with
+//! one `read_at`.
 //! Three properties are load-bearing:
 //!
 //! - **Disposable.** The vlog is NOT durability — the AOF remains the sole

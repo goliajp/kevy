@@ -62,8 +62,8 @@ pub use aof_policy::RewritePolicy;
 pub use record::{AOF2_MAGIC, AofFormat, RecordStep, next_record, write_record_multibulk};
 pub use replay::{ReplayReport, replay_aof, replay_aof_resync};
 
-/// How often bulk-load paths check the tiering demote watermark (T4 /
-/// B11): every this many applied frames/records, the loading store runs
+/// How often bulk-load paths check the tiering demote watermark:
+/// every this many applied frames/records, the loading store runs
 /// `demote_to_watermark`. Replay executes into the hot map, so a boot
 /// whose dataset exceeds the tier budget would OOM before tiering ever
 /// ran without the inline spill. One shared constant so AOF replay
@@ -90,7 +90,7 @@ use kevy_store::Value;
 /// paths) or a frozen [`kevy_store::SnapshotView`] (the COW paths — collect
 /// on the owning thread, serialize on a background one).
 ///
-/// **Tiering contract (capacity arc T4)**: `for_each_entry` never yields a
+/// **Tiering contract**: `for_each_entry` never yields a
 /// `Value::Cold` stub — each source materializes cold values from its vlog
 /// (the store reads its own log; a view reads through the `Arc<VlogFile>`
 /// pins captured at collect time) one value at a time, so serializer

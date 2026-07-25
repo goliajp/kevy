@@ -146,7 +146,7 @@ fn encode_hits_chunk(
 ) -> Vec<u8> {
     let mut chunk = vec![ST_OK];
     chunk.extend_from_slice(&(hits.len() as u32).to_le_bytes());
-    // T6: hydration rows prefetched as ONE batched page (cold rows
+    // Hydration rows prefetched as ONE batched page (cold rows
     // coalesce into one submission), then encoded in hit order.
     let keys: Vec<&[u8]> = hits.iter().map(|(k, _)| k.as_slice()).collect();
     let rows = peek_hydration(store, &keys, fields);
@@ -282,7 +282,7 @@ fn encode_verify_chunk(
     entries: &[(Vec<u8>, IndexValue)],
     stats: &SegmentStats,
 ) -> Vec<u8> {
-    // T6: VERIFY's recheck is a bulk sweep — inside the peek scope a
+    // VERIFY's recheck is a bulk sweep — inside the peek scope a
     // cold row costs one pread and never promotes or marks the gate.
     let drift = store.peek_scope(|s| {
         let mut drift = 0u64;

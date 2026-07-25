@@ -1,4 +1,4 @@
-//! Safe batched positional file reads — the T6 cold-hydration
+//! Safe batched positional file reads — the cold-hydration
 //! primitive: N preads on already-open files submitted as few
 //! `io_uring_enter` calls as the SQ allows, waited synchronously.
 //! Buffers are owned inside the call, so the `unsafe` SQE plumbing is

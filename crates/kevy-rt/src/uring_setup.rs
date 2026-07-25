@@ -34,7 +34,7 @@ impl<C: Commands> Shard<C> {
             let aof_path = self.aof_path();
             let commands = &self.commands;
             let store = &mut self.store;
-            // In-replay demotion (T4 / B11) — same K-frame watermark
+            // In-replay demotion — same K-frame watermark
             // drain as the readiness path's replay.
             let mut frames: u64 = 0;
             let apply = |args: kevy_persist::Argv| {

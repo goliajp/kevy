@@ -1,7 +1,7 @@
-//! The vlog-payload codec for tiered (cold) values — capacity arc T3.
+//! The vlog-payload codec for tiered (cold) values.
 //!
 //! Lives in kevy-store (NOT kevy-persist: the dependency arrow points
-//! store → vlog, and persistence streams FROM the vlog in T4). Two
+//! store → vlog, and persistence streams FROM the vlog). Two
 //! shapes, one per v1-spillable class:
 //!
 //! - **bulk** (`COLD_TAG_STRING`): the raw value bytes, nothing else.

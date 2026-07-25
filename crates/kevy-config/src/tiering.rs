@@ -1,5 +1,5 @@
-//! `[tiering]` section (capacity arc T5, RFC 2026-07-24-v5-capacity-arc
-//! §1 D3 / §7): the transparent-tiering RAM budget in its three forms —
+//! `[tiering]` section: the transparent-tiering RAM budget in its
+//! three forms —
 //! `"auto"` (0.70 × the detected memory bound), `"70%"` (percent of the
 //! bound), `"4gb"` / plain bytes — plus the optional spill-dir override.
 //!
@@ -103,7 +103,7 @@ impl Config {
     }
 
     /// The `KEVY_TIER_BUDGET` env arm — all three forms; plain bytes
-    /// stay back-compat with the T3 minimal knob.
+    /// stay back-compat with the original plain-bytes-only knob.
     pub(crate) fn apply_env_tier_budget(&mut self, value: &str) -> Result<(), ConfigError> {
         self.tiering.budget =
             Some(TierBudgetSpec::parse(value).map_err(|msg| ConfigError::Schema {

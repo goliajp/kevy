@@ -259,7 +259,7 @@ impl<C: Commands> Runtime<C> {
             // (`Arc::clone`); the bio thread is shared across all shards
             // (single global thread, mirrors valkey `bio.c`).
             store.set_bio_drop_sender(bio_send.clone());
-            // Tiering (capacity arc T5): the process budget — resolved
+            // Tiering: the process budget — resolved
             // bytes from the builder (`[tiering]` TOML/CLI/env full
             // surface), or the minimal `KEVY_TIER_BUDGET` plain-bytes
             // env knob — split evenly across shards; per-shard cold

@@ -187,7 +187,7 @@ fn build_spec<A: ArgvView + ?Sized>(
     }
 }
 
-/// Tiering floor refusal (T5, RFC §4 row 16): indexes are the premium
+/// Tiering floor refusal: indexes are the premium
 /// fixed layer demotion can never reclaim — when the existing floor
 /// already exhausts the tier's demotable headroom, a new index is
 /// refused by name (the FailedOverBudget discipline, moved up to

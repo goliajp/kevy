@@ -121,7 +121,7 @@ fn build_info_body(
     if want_section(want, "memory") {
         info_memory(cfg, totals, &mut body);
     }
-    // `# Tiering` (T5 / B12): present ONLY when tiering is on — an
+    // `# Tiering`: present ONLY when tiering is on — an
     // untiered instance's INFO is byte-identical to pre-tiering
     // output (the transparency suite's Shape compare relies on it).
     if totals.tier_enabled && want_section(want, "tiering") {
@@ -206,7 +206,7 @@ fn info_memory(cfg: &Config, totals: &crate::state::Totals, b: &mut String) {
     b.push_str("\r\n");
 }
 
-/// `# Tiering` (capacity arc T5, RFC §1 D3 B12): the unified-budget
+/// `# Tiering`: the unified-budget
 /// gauges summed across shards. Emitted only when tiering is enabled —
 /// see the call site's byte-stability note.
 fn info_tiering(totals: &crate::state::Totals, b: &mut String) {

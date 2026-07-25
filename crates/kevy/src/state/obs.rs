@@ -25,7 +25,7 @@ pub(crate) struct ShardStats {
     /// Live client conns on this shard right now (gauge, published per
     /// tick from the reactor's conn table; cluster-bus links excluded).
     pub clients_connected: AtomicU64,
-    /// This shard's tiering gauges (capacity arc T5, all zero when
+    /// This shard's tiering gauges (all zero when
     /// tiering is off — `tier_enabled` is the section gate).
     pub tier: TierGauges,
 }
@@ -65,7 +65,7 @@ pub(crate) struct Totals {
     pub commands_processed: u64,
     pub connections_received: u64,
     pub clients_connected: u64,
-    /// Tiering totals (T5). `tier_enabled` = any shard tiers (they
+    /// Tiering totals. `tier_enabled` = any shard tiers (they
     /// all do or none does — the config is process-wide).
     pub tier_enabled: bool,
     pub tier: TierTotals,

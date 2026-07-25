@@ -78,7 +78,7 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
 }
 
 /// Σ approximate heap bytes of this shard's materialized view sets —
-/// the view half of the tier's `reserved_bytes` floor feed (T5).
+/// the view half of the tier's `reserved_bytes` floor feed.
 /// Virtual views hold no set, so they contribute nothing.
 pub(crate) fn reserved_bytes(ctx: &Ctx<'_>) -> u64 {
     let mut st = ctx.shard.views.borrow_mut();

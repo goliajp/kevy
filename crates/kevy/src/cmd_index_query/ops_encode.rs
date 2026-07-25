@@ -35,7 +35,7 @@ pub(super) fn encode_hits(
 ) -> Vec<u8> {
     let mut chunk = vec![ST_OK];
     chunk.extend_from_slice(&(hits.len() as u32).to_le_bytes());
-    // T6: hydration rows prefetched as ONE batched page (cold rows
+    // Hydration rows prefetched as ONE batched page (cold rows
     // coalesce into one submission), then encoded in hit order.
     let keys: Vec<&[u8]> = hits.iter().map(|h| h.key.as_slice()).collect();
     let rows = peek_hydration(store, &keys, fields);

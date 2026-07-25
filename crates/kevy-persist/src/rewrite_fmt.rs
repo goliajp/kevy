@@ -150,7 +150,7 @@ fn write_value_as_commands<W: Write>(
     scratch: &mut Vec<u8>,
 ) -> io::Result<()> {
     match value {
-        // T4: every SnapshotSource materializes cold values from the
+        // Every SnapshotSource materializes cold values from the
         // (pinned) vlog before yielding them, so a stub here means a
         // producer bypassed the source contract. Failing the rewrite is
         // the only honest outcome — a skip would silently drop the value

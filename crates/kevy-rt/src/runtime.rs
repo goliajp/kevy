@@ -107,7 +107,7 @@ pub struct Runtime<C: Commands> {
     /// resolved bytes (the server resolves auto/percent forms before
     /// building the runtime). Split evenly across shards at
     /// construction. `None` = check the minimal `KEVY_TIER_BUDGET`
-    /// plain-bytes env knob (T3 back-compat), else tiering off.
+    /// plain-bytes env knob (back-compat), else tiering off.
     pub(crate) tier_budget: Option<u64>,
     /// Cold-tier spill dir override (`[tiering] spill_dir`). `None` =
     /// `<data_dir>/tier/`.
