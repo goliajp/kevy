@@ -415,7 +415,7 @@ D2 事务标记(全有全无,与事务大小无关)/ R2 事务内集合读。
 - [ ] CHANGELOG 4.0.0 补总线各 train(**含 t5.8 capacity arc 头条**);五轴终审(ship 挪到 t6 渠道后,t6 在 t5.8 完成之后)
 
 ### t6 — 渠道真发行 + ship(用户拍板 2026-07-14 放最后;名字勘定同日:brew formula `kevy` 404 可用、npm 裸名 `kevy` 与 `expo-kevy` 可用、nuget `Kevy` 0 hits 可用、apt 自建仓库包名 `kevy`;npm scope 统一 **@goliapkg**(两 scope 均未发布过,零迁移),包机制文件已全部切换)
-- [ ] 拍板后:brew tap 建 repo + formula 发布;apt 仓库上线 t01;npm 平台分包发布(kevy-bin + kevy-node + expo-kevy);NuGet push;kevy-go repo 剥离 + tag;**kevy-vlog + kevy-sql 加入 crates.io publish 集**(t5.8 新增)
-- [ ] 发行后三渠道真装 smoke 重跑(脚本已有)+ site 安装页六语言
-- [ ] README 六语言矩阵 + llms.txt 同步
-- [ ] 五轴终审 → ship **v4.0.0**(tag 前 CI 真绿 + 用户验收)
+- [~] 渠道:**crates.io 34 crates 全部 4.0.0 已发(含 kevy-vlog + kevy-sql,t5.8 新增两 crate 已并入发布链)**;**GitHub Release v4.0.0 三平台二进制 + sha256 已发**;**npm `@goliapkg/kevy` 4.0.1 已发**。**未做**:brew tap 建 repo + formula;apt 仓库上线 t01;npm 平台分包(kevy-bin + kevy-node + expo-kevy);NuGet push;kevy-go repo 剥离 + tag
+- [x] **发行后三渠道真装 smoke 通过(2026-07-26)**:crates.io `cargo install kevy --version 4.0.0` 从发布 crate 编译成功→二进制报 `kevy 4.0.0`、PING/SET/GET 正确;GitHub Release macOS 二进制 sha256 校验 OK + 对话正常;npm `@goliapkg/kevy` 装出 4.0.1(6 文件)、wasm 引擎 set/get/del 往返正确(Node 下默认 `fetch(file://)` 不适用属浏览器向设计,传字节即可)。**site 安装页六语言完成**:三语首页「把客户端指过来」一步具名 node-redis/ioredis·go-redis·StackExchange.Redis·redis-py·hiredis 并说明 raw 通道 + CI 六客户端梯子,已部署 kevy.golia.jp
+- [x] **README 六语言矩阵 + llms.txt 同步(2026-07-26)**:三语 README 的 Install 段改为先讲「连 kevy 不需要装 kevy 包」+ 六语言(Node/Go/.NET/Python/C/Rust)客户端与 raw 通道对照表,并诚实标注各语言原生嵌入绑定尚未进 registry(实查 npm/PyPI/NuGet 得证)。顺带修掉两类真错误:**错 npm scope `@goliajp/` → `@goliapkg/` 共 51 处**(含已发布 npm 包自带 README,已发 4.0.1 修正)、**中文 README 23 处指向不存在的 `docs/zh-CN/`**(12 条死链,三 README 现均为 0)。llms.txt/llms-full.txt 已随站点重生成
+- [x] **v4.0.0 已 ship(2026-07-26,用户拍板「发布吧」)**:tag 打在 develop(惯例;master 停滞不参与)。发布途中排掉三个真阻塞——① 首次 tag 被 verify 门拦下(`serve_counters` 是 `cfg(debug_assertions)` 导出而测试无条件用它 → `cargo test --release` 编译失败;该命令只在发布流水线跑,CI 绿也照样爆;修 = 测试整体 gate 在 debug)② 5 个 v4 新 crate 未入发布链(tmpdir/ranktree 必须发,三个 door crate 标 publish=false)③ npm 包版本从不 bump 且 scope 写错 → 改为版本从 tag 推导、scope 从 package.json 读
