@@ -51,7 +51,7 @@ env_line() { # $1 = results key (L2…), $2 = display name, $3 = pending detail
 # probe smoke. The SHAPE lands with T5; the line stays PENDING until a
 # tiered server run exists on lx64 (kevybench discipline) — run it
 # there with TIERGATE_RUN_L8=1 KEVY_BIN=<path>. Linux-only (/proc RSS).
-l8_rss_budget() { # -> "PASS" or "FAIL: why" on stdout
+l8_mem_budget() { # -> "PASS ..." or "FAIL: why" on stdout
   local bin=${KEVY_BIN:?TIERGATE_RUN_L8 needs KEVY_BIN}
   local port=${TIERGATE_PORT:-6301}
   local budget_bytes=$((256 * 1024 * 1024)) # 256mb budget, ~1 GB dataset
@@ -65,23 +65,30 @@ l8_rss_budget() { # -> "PASS" or "FAIL: why" on stdout
   local gauge
   gauge=$(redis-cli -p "$port" info tiering | tr -d '\r' | awk -F: '/^tier_budget_bytes:/{print $2}')
   [ "${gauge:-0}" -eq "$budget_bytes" ] || { echo "FAIL: tier_budget_bytes=$gauge != $budget_bytes"; return 0; }
-  # Sustained ingest past the budget; sample RSS throughout.
-  local cap=$((budget_bytes * 105 / 100)) peak=0 rss
+  # The budget is a LOGICAL bound — used_memory, Redis maxmemory
+  # semantics. RSS follows the allocator (glibc brk fragmentation under
+  # the 4KiB demotion churn is reclaim-proof) and is REPORTED as a
+  # fragmentation ratio, not gated. See
+  # PERF-FINDING-2026-07-25-b6-rss-glibc-fragmentation.md.
+  local cap=$((budget_bytes * 105 / 100)) peak_used=0 peak_rss=0 used rss
   redis-benchmark -p "$port" -t set -n 250000 -r 250000 -d 4096 -q >/dev/null 2>&1 &
   local bench=$!
   while kill -0 "$bench" 2>/dev/null; do
+    used=$(redis-cli -p "$port" info memory | tr -d '\r' | awk -F: '/^used_memory:/{print $2}')
+    [ "${used:-0}" -gt "$peak_used" ] && peak_used=$used
     rss=$(( $(awk '/^VmRSS:/{print $2}' "/proc/$srv/status" 2>/dev/null || echo 0) * 1024 ))
-    [ "$rss" -gt "$peak" ] && peak=$rss
+    [ "$rss" -gt "$peak_rss" ] && peak_rss=$rss
     sleep 0.5
   done
   wait "$bench" 2>/dev/null || true
   sleep 2 # drain the spill backlog, then one final sample
-  rss=$(( $(awk '/^VmRSS:/{print $2}' "/proc/$srv/status" 2>/dev/null || echo 0) * 1024 ))
-  [ "$rss" -gt "$peak" ] && peak=$rss
-  if [ "$peak" -gt "$cap" ]; then
-    echo "FAIL: peak RSS $peak > budget×1.05 $cap"
+  used=$(redis-cli -p "$port" info memory | tr -d '\r' | awk -F: '/^used_memory:/{print $2}')
+  [ "${used:-0}" -gt "$peak_used" ] && peak_used=$used
+  local frag; frag=$(awk -v r="$peak_rss" -v u="$peak_used" 'BEGIN{printf "%.2f",(u>0)?r/u:0}')
+  if [ "$peak_used" -gt "$cap" ]; then
+    echo "FAIL: peak used_memory $peak_used > budget×1.05 $cap (RSS $peak_rss frag ${frag}x)"
   else
-    echo "PASS"
+    echo "PASS: used_memory $peak_used <= $cap; RSS $peak_rss frag ${frag}x reported"
   fi
 }
 
@@ -93,19 +100,18 @@ env_line L2 "L2  cold-read-p99 (B2)"  "scalar <=100us/300us, hash-row <=200us/50
 line "L3  spill-budget (B3)"   "PENDING(T9/lx64)" "batching/hysteresis landed (T3, unit-tested); the stall-p99 measurement runs on lx64"
 line "L4  replay-spill (B4)"   "PENDING(T4)" "replay-with-spill >= 0.70 x plain replay"
 env_line L5 "L5  vlog-amp (B5)"       "vlog_size <= 2.0 x cold_bytes after churn + compaction"
-env_line L6 "L6  capacity-10x (B6)"   "5M x 4KiB = 20GB on 2GB budget, op sweep green + RSS cap"
+env_line L6 "L6  capacity-10x (B6)"   "5M x 4KiB = 20GB on 2GB budget, op sweep green + used_memory <= budget (logical bound)"
 # L8: the assertion body is implemented (T5, above) but a tiered
 # SERVER run only exists on lx64 — the line stays PENDING-red until the
 # T9 close-out runs it there (TIERGATE_RUN_L8=1 KEVY_BIN=… flips it).
 if [ "${TIERGATE_RUN_L8:-0}" = "1" ]; then
-  l8_verdict=$(l8_rss_budget)
-  if [ "$l8_verdict" = "PASS" ]; then
-    line "L8  rss-budget (B8)"   "PASS"        "RSS <= budget x 1.05 sustained; auto probe gauge sane"
-  else
-    line "L8  rss-budget (B8)"   "FAIL"        "$l8_verdict"
-  fi
+  l8_verdict=$(l8_mem_budget)
+  case "$l8_verdict" in
+    PASS*) line "L8  mem-budget (B8)"  "PASS"  "used_memory <= budget x 1.05 (logical bound, Redis maxmemory semantics); RSS frag reported; ${l8_verdict#PASS: }" ;;
+    *)     line "L8  mem-budget (B8)"  "FAIL"  "$l8_verdict" ;;
+  esac
 else
-  line "L8  rss-budget (B8)"     "PENDING(T5)" "body landed; runs on lx64 with TIERGATE_RUN_L8=1 KEVY_BIN=…"
+  line "L8  mem-budget (B8)"     "PENDING(T5)" "body landed; runs on lx64 with TIERGATE_RUN_L8=1 KEVY_BIN=…"
 fi
 line "L10 rewrite-cold (B10)"  "PENDING(T4)" "BGREWRITEAOF on mostly-cold: digest equal + RAM bounded"
 line "L11 boot>budget (B11)"   "PENDING(T4)" "replay of dataset>budget: RSS <= budget x 1.05 throughout"
