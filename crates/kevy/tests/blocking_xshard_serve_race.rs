@@ -14,6 +14,17 @@
 //! Its own test binary on purpose: the seam is read once per process and
 //! cached, so setting it here cannot leak into the timing of the sibling
 //! suite in `blocking_cross_shard.rs`.
+//!
+//! Debug-only by construction, and the file says so instead of failing to
+//! compile: BOTH things this test stands on are `cfg(debug_assertions)` —
+//! the `KEVY_TEST_XSHARD_SERVE_DELAY_MS` window seam that makes the race
+//! reachable, and the `kevy_rt::serve_counters` probe that proves the
+//! cross-shard path (not the co-located one) actually ran. In a release
+//! build the counter never moves, so every retry would `continue` and the
+//! test would assert nothing while looking green. `cargo test --release`
+//! used to fail to build here, which only the release pipeline runs — so
+//! it surfaced at tag time instead of in CI.
+#![cfg(debug_assertions)]
 
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
