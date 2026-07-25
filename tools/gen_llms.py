@@ -6,8 +6,8 @@ from the engine's verb table, and its links are relative paths into docs/ — th
 right thing for someone reading the repo. Served from kevy.golia.jp those links
 are dead, so the site gets its own copy with absolute URLs.
 
-llms-full.txt is the whole thing inlined: the verb table plus all twenty-four
-documents, in one file. An assistant that can fetch exactly one URL should be
+llms-full.txt is the whole thing inlined: the verb table plus every
+document, in one file. An assistant that can fetch exactly one URL should be
 able to fetch that one and know how to use kevy correctly — including the parts
 where kevy does NOT behave the way Redis's documentation says, which is the
 whole reason a generic "it's Redis-compatible" answer gets people into trouble.
@@ -28,8 +28,8 @@ GH = "https://github.com/goliajp/kevy/blob/main"
 ORDER = [
     "designing-on-kevy", "cookbook", "rds-workloads",
     "persistence", "tuning", "error-replies",
-    "indexes", "vector-search", "text-search", "views", "cdc", "pubsub", "lua",
-    "replication", "availability", "cluster", "accept-shards", "uds", "async",
+    "indexes", "tables", "vector-search", "text-search", "views", "cdc", "pubsub", "lua",
+    "replication", "availability", "cluster", "tiering", "accept-shards", "uds", "async",
     "wasm", "embedded-listener", "iot",
     "migration", "UPGRADING",
 ]

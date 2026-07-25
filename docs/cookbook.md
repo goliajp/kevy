@@ -573,7 +573,7 @@ Returning `Err` rolls the whole thing back (§5), so a rejected write
 leaves neither the row nor a half-applied claim set.
 
 **Claims or an index?** A uniqueness claim is a second source of truth
-that can drift from the rows; a [secondary index](secondary-index.md) is
+that can drift from the rows; a [secondary index](indexes.md) is
 derived by construction and cannot. Inside `atomic_all_shards` you can
 query one directly:
 
@@ -613,7 +613,7 @@ whose row is gone — is what a half-applied update leaves behind, and it
 is the failure that silently blocks a later insert. A checker that only
 looks for absences reports "clean" during exactly that failure.
 
-It runs against a [snapshot](embedded.md#snapshot), frozen under every
+It runs against a snapshot (`store.snapshot()`), frozen under every
 shard lock, so it does not mistake a concurrent write for drift. That
 holds only if the write itself was atomic: a row and its claims must go
 in one `atomic_all_shards` block, or there is a real half-applied state
@@ -638,7 +638,7 @@ ready-made `IDX.QUERY` templates with `$N` slots. Nothing runs
 per-query inside the server; ad-hoc runtime SQL stays refused by the
 engine itself (Law 3).
 
-The schema — [docs/examples/shop.sql](examples/shop.sql), a real
+The schema — [docs/examples/shop.sql](https://github.com/goliajp/kevy/blob/main/docs/examples/shop.sql), a real
 users/orders/order_items cut-down:
 
 ```sql

@@ -46,7 +46,7 @@
     <p class="lede">"All orders for this customer, still open." "How many items in this cart." These are the reads an application does a thousand times a second, and in a relational database each one is a query with a planner behind it. <b>kevy can keep the answer ready instead.</b></p>
     
   </div></section>
-<section class="band prose"><h2>Why this fits</h2><div class="pcols"><p>A key-value store is usually rejected for application data with a single objection: <i>but I need to look things up by something other than the key</i>. That objection is correct, and it is what secondary indexes are for.</p><p><b>An index is declared, not built.</b> You name the key pattern and the field; the write path keeps it current. A filtered list becomes a lookup again — no planner, no scan, no query.</p><p><b>A view goes further</b> and keeps an aggregate current on write, so a count or a total is read rather than computed. This is what most applications are actually asking their ORM for, and it is why their database is busy.</p></div></section>
+<section class="band prose"><h2>Why this fits</h2><div class="pcols"><p>A key-value store is usually rejected for application data with a single objection: <i>but I need to look things up by something other than the key</i>. That objection is correct, and it is what secondary indexes are for.</p><p><b>An index is declared, not built.</b> You name the key pattern and the field; the write path keeps it current. A filtered list becomes a lookup again — no planner, no scan, no query.</p><p><b>A view goes further</b> and keeps an aggregate current on write, so a count or a total is read rather than computed. This is what most applications are actually asking their ORM for, and it is why their database is busy.</p><p><b>And a whole table can be declared at once.</b> <code>TABLE.DECLARE</code> takes typed columns, secondary indexes and composite <code>ORDER BY</code> paths and compiles them to named indexes at declare time — <code>kevy-sql</code> does the same from the PG/MySQL schema file you already have. The engine still plans nothing and enforces no schema; joins and runtime SQL stay refused by name.</p></div></section>
 <section class="band">
   <div class="sec-h"><h2>Look things up by a field, not the key</h2><p class="sec-lede">"All orders for customer 881" stays a lookup: declare an index per field, write normally, read by value.</p></div>
   <ol class="steps recipe"><li><h3>Your data, written the way you would anyway</h3><pre><code>HSET order:1001 customer 881 status open  total 4400
@@ -68,7 +68,23 @@ IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range</code>
    2) 1) &quot;order:1001&quot;  2) &quot;881&quot;</code></pre></li></ol>
   <div class="call loss r-cost"><span class="h">Cost &amp; limits</span><p>A view is <b>write-path work forever</b>: every write to a matching key updates it, whether or not anyone reads it today. Declare views for the reads your application actually serves, and drop the ones it stops serving. The indexes a view composes must exist first.</p></div>
 </section>
-<section class="band"><div class="sec-h"><h2>Next</h2></div><div class="cards"><a class="card" href="../../docs/designing-on-kevy/">
+<section class="band">
+  <div class="sec-h"><h2>Declare the whole table once</h2><p class="sec-lede">The read path of a relational table — indexed WHERE, residual filter, ORDER BY, pagination, COUNT — compiled onto named indexes by one declaration. Or by your existing schema file.</p></div>
+  <ol class="steps recipe"><li><h3>Columns, indexes and sort paths, in one declaration</h3><p>Rows stay ordinary hashes under the prefix — a missing column is NULL, and kevy-cli sql compile schema.sql emits this line from CREATE TABLE / CREATE INDEX.</p><pre><code>TABLE.DECLARE orders PREFIX order: PK id COLUMN id str COLUMN customer i64 COLUMN status str COLUMN total f64 INDEX status range VALUES total customer ORDERPATH by_customer ON customer THEN total DESC
+-&gt; OK</code></pre></li><li><h3>Filter and count on stored columns — no row is read</h3><pre><code>IDX.QUERY orders.status EQ open FILTER total RANGE 2000 inf LIMIT 20
+-&gt; 1) &quot;0&quot;
+   2) 1) &quot;order:1001&quot;  2) &quot;open&quot;
+
+IDX.COUNT orders.status EQ open
+-&gt; (integer) 2</code></pre></li><li><h3>The ORDER BY customer, total DESC walk</h3><p>One composite index answers it the way a relational composite index does — each customer's orders, largest first, no re-sort.</p><pre><code>IDX.QUERY orders.by_customer WHERE customer EQ 881 LIMIT 20 FIELDS status total</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">Cost &amp; limits</span><p><b>No runtime SQL and no joins.</b> The server refuses <code>SELECT</code> as an unknown command; <code>kevy-cli sql compile</code> turns a PG/MySQL schema file into these declarations at build time and refuses JOIN, subqueries and GROUP BY by name, pointing at the recipe that replaces each. Uniqueness is verify-not-enforce, and constraints are recipes, not engine checks. With <a href="../../docs/tiering/">tiering</a> on, index-only queries answer from RAM even when every row is cold — only the final <code>FIELDS</code> page reads cold rows, one read per row.</p></div>
+</section>
+<section class="band"><div class="sec-h"><h2>Next</h2></div><div class="cards"><a class="card" href="../../docs/tables/">
+      <span class="card-k">Guide</span>
+      <h3>Tables</h3>
+      <p>Declare typed columns and indexes once; query them like a table.</p>
+      <span class="card-go">Read it</span>
+    </a><a class="card" href="../../docs/designing-on-kevy/">
       <span class="card-k">Guide</span>
       <h3>Designing on kevy</h3>
       <p>How to think in keys when you are used to thinking in tables.</p>
