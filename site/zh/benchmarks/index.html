@@ -54,7 +54,7 @@
 <section class="band prose"><h2>这组数字没有告诉你的事</h2><div class="pcols"><p><b>这是 loopback。</b>这里没有网络，而在真实部署里，你等的往往正是网络。如果你的延迟大部分花在网络上，那么一个 GET 快 2.6× 的引擎，并不会让你的 p99 也好 2.6×。</p><p><b>value 很小。</b>一个 value 到 64 KB 的时候，整件事的瓶颈会落到内核的 TCP 路径上，差距收窄到个位数百分比。如果你存的是大块数据，这些数字说的不是你。</p><p><b>这是一台机器。</b>kevy 没有集群模式。如果你的问题是一台机器不够用，这一页上没有任何数字帮得上忙。</p></div></section>
 <section class="band">
   <div class="sec-h"><h2>浏览器构建产物</h2><p class="sec-lede">你真正会发到标签页里的东西。</p></div>
-  <div class="tbl"><table><thead><tr><th></th><th>体积</th><th></th></tr></thead><tbody><tr><td>kevy.wasm</td><td class="num">416 KB</td><td class="num">引擎本体，未压缩</td></tr><tr><td>gzip 之后</td><td class="num">151 KB</td><td class="num">真正过网络的量</td></tr><tr><td>冷启动</td><td class="num">&lt; 20 ms</td><td class="num">编译加实例化，缓存已热</td></tr></tbody></table></div>
+  <div class="tbl"><table><thead><tr><th></th><th>体积</th><th></th></tr></thead><tbody><tr><td>kevy.wasm</td><td class="num">416 KB</td><td class="num">引擎本体，未压缩</td></tr><tr><td>gzip 之后</td><td class="num">218 KB</td><td class="num">真正过网络的量</td></tr><tr><td>冷启动</td><td class="num">&lt; 20 ms</td><td class="num">编译加实例化，缓存已热</td></tr></tbody></table></div>
   <p class="tbl-note"><b>做一次小的同步读，localStorage 比 kevy 快</b>，而且永远会更快——它就是页面自己地址空间里的一个 map。kevy 赢的是那些本来就让 localStorage 不该被用的地方：真的 TTL、没有 5 MB 上限、value 是字节而不是字符串、写入不挡主线程。</p>
 </section>
 <section class="band">

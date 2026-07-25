@@ -210,7 +210,7 @@ kevyはブラウザの中で本物のストアとして動きます。npmパッ�
 [`@goliapkg/kevy`](https://www.npmjs.com/package/@goliapkg/kevy)は、
 `wasm32-unknown-unknown`向けにコンパイルしたエンジンを手書きの
 ESモジュールローダーに包んで出荷します——wasm-bindgenなし、境界の
-両側とも依存ゼロ。六ファイル、パックで約165 KBです。
+両側とも依存ゼロ。六ファイル、パックで231 KB（回線上はgzipで218 KB）です。
 
 ```sh
 npm install @goliapkg/kevy
@@ -350,8 +350,8 @@ kevyに対してエンドツーエンドで検証済みのクライアントラ�
 |---|---|
 | [`kevy`](crates/kevy) | サーバーバイナリとライブラリのエントリポイント |
 | [`kevy-embedded`](crates/kevy-embedded) | Redis形状のRust APIを持つプロセス内KV |
-| [`kevy-client`](crates/kevy-client) | ブロッキングRESPクライアント。サーバーまたはプロセス内バックエンドに対するURLファサード |
-| [`kevy-client-async`](crates/kevy-client-async) | tokio / smol / async-std向けの`kevy-client`の非同期版 |
+| [`kevy-client`](crates/kevy-client) | ブロッキングRESPクライアント。サーバーまたはプロセス内バックエンドに対するURLファサード——**独自のバージョン線（2.x）。workspaceの4.xではありません** |
+| [`kevy-client-async`](crates/kevy-client-async) | tokio / smol / async-std向けの`kevy-client`の非同期版——**同じく2.x** |
 | [`kevy-cluster-rw`](crates/kevy-cluster-rw) | プライマリ書き込み・レプリカ読み取りのクライアントラッパー |
 | [`kevy-cli`](crates/kevy-cli) | 運用CLI。バックアップ、リストア、スモークテスト |
 | [`kevy-config`](crates/kevy-config) | CLI/env/fileの優先順位を持つTOML設定スキーマ |

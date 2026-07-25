@@ -43,7 +43,7 @@
 <section class="band" style="border-top:0"><div>
     <p class="eyebrow">装进产品里</p>
     <h1>把存储<br>放进东西本身</h1>
-    <p class="lede">没有服务端，没有 socket，没有网络。这个引擎可以是一个你直接调用的 struct，可以是一个 151 KB 的 WebAssembly 模块，也可以是一颗没有操作系统的芯片上的 no_std 库——<b>而且这三种情况下，它是同一个引擎、同一批命令。</b></p>
+    <p class="lede">没有服务端，没有 socket，没有网络。这个引擎可以是一个你直接调用的 struct，可以是一个 218 KB 的 WebAssembly 模块，也可以是一颗没有操作系统的芯片上的 no_std 库——<b>而且这三种情况下，它是同一个引擎、同一批命令。</b></p>
     
   </div></section>
 <section class="band prose"><h2>为什么合适</h2><div class="pcols"><p>每一个必须离线可用的应用，最后都会自己写一层存储。桌面应用会得到 SQLite，外加一套没人想要的 schema。web 应用会得到 localStorage，然后撞上 5 MB 的上限，再发现它是同步的、而且只能存字符串，于是又得到 IndexedDB 和包在它外面的一层抽象。设备会得到一个手写在 flash 里的环形缓冲区。</p><p><b>这三件事是同一个问题，也可以是同一个解。</b>kevy 嵌进去不带任何进程边界，发到浏览器时带着真的 TTL 和真的发布订阅，也能在一颗 Cortex-M 上用一块固定 arena、完全不用分配器地启动。最后这一条，CI 每次 push 都会验一遍。</p></div></section>
@@ -56,7 +56,7 @@ assert_eq!(db.get(b&quot;session:7f3a&quot;)?.is_some(), true);</code></pre></li
   <div class="call loss r-cost"><span class="h">成本与限制</span><p><b>嵌入式的存储不是共享的。</b>数据目录归一个进程所有，如果第二个进程也要这份数据，那正是上面那个 listener——或者<a href="../../../zh/docs/embedded-listener/">完整的服务端</a>——存在的意义。进程内同样可以给 store 一个 RAM 预算（<code>with_tier_budget</code>）：冷值下沉到磁盘、在你的进程里换回——照实说一句：进程内的一次冷读会在读的时长内持有 store 的锁，所以可下沉的最大值默认封在 256 KiB。细节在<a href="../../../zh/docs/tiering/">分层存储指南</a>里。</p></div>
 </section>
 <section class="band">
-  <div class="sec-h"><h2>在一个浏览器标签页里</h2><p class="sec-lede">gzip 之后 151 KB。落在浏览器自己的文件系统上，刷新之后还在，发布订阅还能跨标签页。</p></div>
+  <div class="sec-h"><h2>在一个浏览器标签页里</h2><p class="sec-lede">gzip 之后 218 KB。落在浏览器自己的文件系统上，刷新之后还在，发布订阅还能跨标签页。</p></div>
   <ol class="steps recipe"><li><h3>打开它，带持久化</h3><pre><code>import { open } from &quot;@goliapkg/kevy&quot;;
 
 const db = await open({ persist: { name: &quot;app&quot; } });</code></pre></li><li><h3>带着真 TTL 写，刷新之后再读</h3><pre><code>db.set(&quot;cart:u881&quot;, JSON.stringify(items), { ttlMs: 86_400_000 });

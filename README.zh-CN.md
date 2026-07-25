@@ -189,7 +189,7 @@ kevy 在浏览器里是一个真正的存储：npm 包
 [`@goliapkg/kevy`](https://www.npmjs.com/package/@goliapkg/kevy) 把
 编译到 `wasm32-unknown-unknown` 的引擎装进一个手写的 ES module
 loader——没有 wasm-bindgen，边界两侧都是零依赖；六个文件，打包约
-165 KB。
+231 KB（过网络时 gzip 后 218 KB）。
 
 ```sh
 npm install @goliapkg/kevy
@@ -315,8 +315,8 @@ recall 对齐（[`bench/PERF-LEDGER.md`](bench/PERF-LEDGER.md)）：
 |---|---|
 | [`kevy`](crates/kevy) | 服务器二进制和库入口 |
 | [`kevy-embedded`](crates/kevy-embedded) | 进程内 KV，提供 Redis 形态的 Rust API |
-| [`kevy-client`](crates/kevy-client) | 阻塞式 RESP 客户端；URL 立面统一服务器和进程内后端 |
-| [`kevy-client-async`](crates/kevy-client-async) | `kevy-client` 的异步镜像，支持 tokio / smol / async-std |
+| [`kevy-client`](crates/kevy-client) | 阻塞式 RESP 客户端；URL 立面统一服务器和进程内后端——**自己的版本线（2.x），不是 workspace 的 4.x** |
+| [`kevy-client-async`](crates/kevy-client-async) | `kevy-client` 的异步镜像，支持 tokio / smol / async-std——**同为 2.x** |
 | [`kevy-cluster-rw`](crates/kevy-cluster-rw) | 主写 / 从读的客户端封装 |
 | [`kevy-cli`](crates/kevy-cli) | 运维 CLI：备份、恢复、冒烟测试 |
 | [`kevy-config`](crates/kevy-config) | TOML 配置 schema，处理 CLI/env/file 的优先级 |
