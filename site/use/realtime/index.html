@@ -65,7 +65,7 @@ SREM online ada            # on clean disconnect</code></pre></li></ol>
 </section>
 <section class="band">
   <div class="sec-h"><h2>The same thing, between two browser tabs</h2><p class="sec-lede">Two tabs of the same origin: publish in one, render in the other. No server, no WebSocket, no connection state.</p></div>
-  <ol class="steps recipe"><li><h3>Open the engine in each tab</h3><pre><code>import { open } from &quot;@goliajp/kevy&quot;;
+  <ol class="steps recipe"><li><h3>Open the engine in each tab</h3><pre><code>import { open } from &quot;@goliapkg/kevy&quot;;
 
 const db = await open({ persist: { name: &quot;app&quot; } });</code></pre></li><li><h3>Tab A subscribes</h3><pre><code>db.subscribe(&quot;room:42&quot;, (payload, channel) =&gt; {
   render(JSON.parse(new TextDecoder().decode(payload)));

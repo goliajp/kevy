@@ -1,17 +1,17 @@
 # kevy 上 WebAssembly
 
-kevy 在浏览器里是一个真正的 store，不是编译期玩具：npm 包 [`@goliajp/kevy`](https://www.npmjs.com/package/@goliajp/kevy) 把引擎（KV + TTL + 计数器 + 扫描 + pub/sub）编译到 `wasm32-unknown-unknown`，配一个手写的 ES module loader，持久化落 OPFS（IndexedDB 兜底），pub/sub 能跨 tab。同一批 crate 也能编译到 `wasm32-wasip1`，所以 Rust API 在 `wasmtime` / `wasmer` 和边缘运行时里同样可用。
+kevy 在浏览器里是一个真正的 store，不是编译期玩具：npm 包 [`@goliapkg/kevy`](https://www.npmjs.com/package/@goliapkg/kevy) 把引擎（KV + TTL + 计数器 + 扫描 + pub/sub）编译到 `wasm32-unknown-unknown`，配一个手写的 ES module loader，持久化落 OPFS（IndexedDB 兜底），pub/sub 能跨 tab。同一批 crate 也能编译到 `wasm32-wasip1`，所以 Rust API 在 `wasmtime` / `wasmer` 和边缘运行时里同样可用。
 
 在线体验：[kevy.golia.jp 的 demo](https://kevy.golia.jp/demo/) 就是跑在这个模块上的浏览器 REPL——命令行、重载不丢的 OPFS 持久化、跨 tab 的 pub/sub，全程没有后端。
 
 ## 快速开始（浏览器）
 
 ```sh
-npm install @goliajp/kevy
+npm install @goliapkg/kevy
 ```
 
 ```js
-import { open } from "@goliajp/kevy";
+import { open } from "@goliapkg/kevy";
 
 const db = await open({ persist: { name: "app" } });
 

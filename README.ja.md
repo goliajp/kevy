@@ -28,7 +28,7 @@ kevyは同一のエンジンから三つの形態で提供されます。
   エンジンです。Rustバイナリに組み込んで`Store`を直接呼び出せます。
   純粋なRust、依存ゼロ。素の`core` KVからインデックス／レプリケー
   ションのフルサーフェスまでfeatureで段階化されており、両極端にも
-  届きます——ブラウザ（npmの[`@goliajp/kevy`](docs/ja/wasm.md)）と
+  届きます——ブラウザ（npmの[`@goliapkg/kevy`](docs/ja/wasm.md)）と
   655 KBのIoTビルド（[docs/iot.md](docs/iot.md)）です。
 - **クライアント** — `kevy-client`（ブロッキング）と`kevy-client-async`
   （ランタイムごとにfeature flag一つ：tokio / smol / async-std）が
@@ -91,6 +91,31 @@ ANN recall ≥ 0.9 — [設計マップ](docs/designing-on-kevy.md)、
 | URL一つで組み込みとサーバーを切り替えられる同一コードが欲しい | `kevy-client` + `kevy-embedded` |
 
 ## インストール
+
+**kevyサーバーに繋ぐのに、kevy製のパッケージは要りません。** RESPを話す
+ので、お使いの言語に既にあるRedisクライアントがそのまま繋がります。kevy
+独自の動詞（`IDX.*`／`VIEW.*`／`TABLE.*`／`FEED.*`）は、そのクライアントの
+raw コマンド経路から届きます。うち6言語は、push のたびにCIで実サーバーへ
+同じ梯子を流しています（**clientgate**）。
+
+| 言語 | 入れるクライアント | kevyの動詞は |
+|---|---|---|
+| Node | `npm i redis` ／ `npm i ioredis` | `sendCommand([...])` ／ `call(...)` |
+| Go | `go get github.com/redis/go-redis/v9` | `client.Do(ctx, ...)` |
+| .NET | `dotnet add package StackExchange.Redis` | `db.Execute(...)` |
+| Python | `pip install redis` | `execute_command(...)` |
+| C | `hiredis`（パッケージマネージャで） | `redisCommand(...)` |
+| Rust | `cargo add kevy-client` | 型付きAPI＋`cmd(...)` |
+
+言語ごとの完全な例は [docs/clients.md](docs/clients.md)（英語）にあります。
+
+ブラウザではエンジン自体がnpmパッケージです——`npm install @goliapkg/kevy`
+（[ブラウザで](#ブラウザで)）。Node／Python／Go／C#／Java／Swift／
+Kotlin／Flutter／React Nativeのプロセス内ネイティブバインディングは
+[`bindings/`](bindings) にあり、現状はソースからのビルドで、各言語の
+レジストリにはまだ載っていません。
+
+Rust側はcrates.ioにあります。
 
 ```sh
 # サーバー
@@ -182,17 +207,17 @@ let v = conn.get(b"k").await?;
 ## ブラウザで
 
 kevyはブラウザの中で本物のストアとして動きます。npmパッケージ
-[`@goliajp/kevy`](https://www.npmjs.com/package/@goliajp/kevy)は、
+[`@goliapkg/kevy`](https://www.npmjs.com/package/@goliapkg/kevy)は、
 `wasm32-unknown-unknown`向けにコンパイルしたエンジンを手書きの
 ESモジュールローダーに包んで出荷します——wasm-bindgenなし、境界の
 両側とも依存ゼロ。六ファイル、パックで約165 KBです。
 
 ```sh
-npm install @goliajp/kevy
+npm install @goliapkg/kevy
 ```
 
 ```js
-import { open } from "@goliajp/kevy";
+import { open } from "@goliapkg/kevy";
 
 const db = await open({ persist: { name: "app" } });
 db.set("session", "abc123", { ttlMs: 60_000 });
@@ -339,7 +364,7 @@ kevyに対してエンドツーエンドで検証済みのクライアントラ�
 | [`kevy-madvise`](crates/kevy-madvise) | Linux `MADV_HUGEPAGE`ラッパー。他環境ではno-op |
 | [`kevy-uring`](crates/kevy-uring) | 純粋Rustのio_uringバインディング。liburingにリンクしない |
 | [`kevy-geo`](crates/kevy-geo) | 地理空間コマンドプリミティブ |
-| [`kevy-wasm`](crates/kevy-wasm) | ブラウザビルド。手書きC ABI + `@goliajp/kevy`ローダー |
+| [`kevy-wasm`](crates/kevy-wasm) | ブラウザビルド。手書きC ABI + `@goliapkg/kevy`ローダー |
 | [`kevy-lua`](crates/kevy-lua) | Luaスクリプトブリッジ（[luna](https://github.com/goliajp/luna)ランタイムによる） |
 
 残りのクレート（`kevy-store`、`kevy-rt`、`kevy-persist`、`kevy-sys`、

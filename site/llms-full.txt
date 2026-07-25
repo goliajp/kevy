@@ -5718,8 +5718,9 @@ from the capacity model:
   ~30 VALUES bytes) ≈ 1.7 GB ≈ 2.8 GB ≤ 3 GB. At 4 KiB values the
   ratio gate is ≥ 10× data:RAM (5 M × 4 KiB = 20 GB on a 2 GB
   budget; stub floor ≈ 540 MB). Per-key fixed costs dominate narrow
-  rows — run the stub and index floors before trusting any budget,
-  which is why the formulas come first.
+  rows: size a deployment from the formulas above — the stub and
+  index floors are hard lower bounds a budget must clear before any
+  value can stay hot.
 
 ## Semantics on cold keys
 
@@ -6275,7 +6276,7 @@ Yes — that is the point. `pipeline().…run(&mut conn).await` serializes the w
 # kevy on WebAssembly
 
 kevy runs in the browser as a real store, not a compile-time curiosity:
-the npm package [`@goliajp/kevy`](https://www.npmjs.com/package/@goliajp/kevy)
+the npm package [`@goliapkg/kevy`](https://www.npmjs.com/package/@goliapkg/kevy)
 ships the engine (KV + TTL + counters + scans + pub/sub) compiled to
 `wasm32-unknown-unknown` behind a hand-written ES-module loader, with
 durable persistence over OPFS (IndexedDB fallback) and pub/sub that
@@ -6289,11 +6290,11 @@ survives reloads, and pub/sub across tabs, with no backend.
 ## Quick start (browser)
 
 ```sh
-npm install @goliajp/kevy
+npm install @goliapkg/kevy
 ```
 
 ```js
-import { open } from "@goliajp/kevy";
+import { open } from "@goliapkg/kevy";
 
 const db = await open({ persist: { name: "app" } });
 
@@ -7369,7 +7370,7 @@ mechanical migration — every change below has a one-line rule.
 | `kevy-embedded` | 3.18.x | 4.0.0 | bump + apply the API table below |
 | `kevy-client` | **1.14.x** | **4.0.0** | bump — version-line unification (same move `kevy-embedded` made at 3.0.0) + the API table |
 | `kevy-client-async` | **1.1.x** | **4.0.0** | same |
-| `kevy-wasm` / `@goliajp/kevy` (npm) | — | 4.0.0 | new in 4.0 — [docs/wasm.md](https://kevy.golia.jp/docs/wasm/) |
+| `kevy-wasm` / `@goliapkg/kevy` (npm) | — | 4.0.0 | new in 4.0 — [docs/wasm.md](https://kevy.golia.jp/docs/wasm/) |
 | Infra crates (`kevy-store`, `kevy-rt`, …) | 3.18.x | 4.0.0 | follow the workspace version |
 
 ## What is compatible automatically
@@ -7659,7 +7660,7 @@ The `core` tier cross-compiles for musl targets and holds an
 enforced budget (≤ 700 KB binary, ≤ 2 MB empty-store RSS); five
 foundation crates additionally build `no_std`. See
 [docs/iot.md](https://kevy.golia.jp/docs/iot/). At the other end of the size spectrum, the
-same embedded core now runs in the browser as `@goliajp/kevy` —
+same embedded core now runs in the browser as `@goliapkg/kevy` —
 see [docs/wasm.md](https://kevy.golia.jp/docs/wasm/).
 
 ## Tiering and the TABLE layer (new in 4.0, all additive)

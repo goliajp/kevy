@@ -57,7 +57,7 @@ assert_eq!(db.get(b&quot;session:7f3a&quot;)?.is_some(), true);</code></pre></li
 </section>
 <section class="band">
   <div class="sec-h"><h2>ブラウザのタブで</h2><p class="sec-lede">gzip 後 151 KB。ブラウザ自身のファイルシステムに永続化され、リロードに耐え、タブをまたいで pub/sub を話します。</p></div>
-  <ol class="steps recipe"><li><h3>永続化つきで開く</h3><pre><code>import { open } from &quot;@goliajp/kevy&quot;;
+  <ol class="steps recipe"><li><h3>永続化つきで開く</h3><pre><code>import { open } from &quot;@goliapkg/kevy&quot;;
 
 const db = await open({ persist: { name: &quot;app&quot; } });</code></pre></li><li><h3>本物の TTL で書き、リロードのあとに読む</h3><pre><code>db.set(&quot;cart:u881&quot;, JSON.stringify(items), { ttlMs: 86_400_000 });
 db.get(&quot;cart:u881&quot;);        // still there after a reload

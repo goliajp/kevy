@@ -935,7 +935,7 @@ SREM online ada            # on clean disconnect""",
             "items": [
                 {
                     "do": "Open the engine in each tab",
-                    "code": """import { open } from "@goliajp/kevy";
+                    "code": """import { open } from "@goliapkg/kevy";
 
 const db = await open({ persist: { name: "app" } });""",
                 },
@@ -1363,7 +1363,7 @@ assert_eq!(db.get(b"session:7f3a")?.is_some(), true);""",
             "items": [
                 {
                     "do": "Open it, persistent",
-                    "code": """import { open } from "@goliajp/kevy";
+                    "code": """import { open } from "@goliapkg/kevy";
 
 const db = await open({ persist: { name: "app" } });""",
                 },

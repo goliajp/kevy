@@ -65,7 +65,7 @@ SREM online ada            # on clean disconnect</code></pre></li></ol>
 </section>
 <section class="band">
   <div class="sec-h"><h2>同一件事，在两个浏览器标签页之间</h2><p class="sec-lede">同源的两个标签页：在一个里发布，在另一个里渲染。没有服务端，没有 WebSocket，也没有连接状态。</p></div>
-  <ol class="steps recipe"><li><h3>在每个标签页里打开引擎</h3><pre><code>import { open } from &quot;@goliajp/kevy&quot;;
+  <ol class="steps recipe"><li><h3>在每个标签页里打开引擎</h3><pre><code>import { open } from &quot;@goliapkg/kevy&quot;;
 
 const db = await open({ persist: { name: &quot;app&quot; } });</code></pre></li><li><h3>标签页 A 订阅</h3><pre><code>db.subscribe(&quot;room:42&quot;, (payload, channel) =&gt; {
   render(JSON.parse(new TextDecoder().decode(payload)));

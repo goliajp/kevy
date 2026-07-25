@@ -1,4 +1,4 @@
-// @goliajp/kevy — hand-written ES-module loader for the kevy WebAssembly
+// @goliapkg/kevy — hand-written ES-module loader for the kevy WebAssembly
 // module. No dependencies, no binding generator: this file owns the
 // TypedArray boundary, UTF-8 codecs, the persistence pump (OPFS worker or
 // IndexedDB), and the cross-tab pub/sub bridge (BroadcastChannel).

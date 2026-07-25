@@ -1,7 +1,7 @@
 # kevy on WebAssembly
 
 kevy runs in the browser as a real store, not a compile-time curiosity:
-the npm package [`@goliajp/kevy`](https://www.npmjs.com/package/@goliajp/kevy)
+the npm package [`@goliapkg/kevy`](https://www.npmjs.com/package/@goliapkg/kevy)
 ships the engine (KV + TTL + counters + scans + pub/sub) compiled to
 `wasm32-unknown-unknown` behind a hand-written ES-module loader, with
 durable persistence over OPFS (IndexedDB fallback) and pub/sub that
@@ -15,11 +15,11 @@ survives reloads, and pub/sub across tabs, with no backend.
 ## Quick start (browser)
 
 ```sh
-npm install @goliajp/kevy
+npm install @goliapkg/kevy
 ```
 
 ```js
-import { open } from "@goliajp/kevy";
+import { open } from "@goliapkg/kevy";
 
 const db = await open({ persist: { name: "app" } });
 

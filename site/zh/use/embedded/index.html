@@ -57,7 +57,7 @@ assert_eq!(db.get(b&quot;session:7f3a&quot;)?.is_some(), true);</code></pre></li
 </section>
 <section class="band">
   <div class="sec-h"><h2>在一个浏览器标签页里</h2><p class="sec-lede">gzip 之后 151 KB。落在浏览器自己的文件系统上，刷新之后还在，发布订阅还能跨标签页。</p></div>
-  <ol class="steps recipe"><li><h3>打开它，带持久化</h3><pre><code>import { open } from &quot;@goliajp/kevy&quot;;
+  <ol class="steps recipe"><li><h3>打开它，带持久化</h3><pre><code>import { open } from &quot;@goliapkg/kevy&quot;;
 
 const db = await open({ persist: { name: &quot;app&quot; } });</code></pre></li><li><h3>带着真 TTL 写，刷新之后再读</h3><pre><code>db.set(&quot;cart:u881&quot;, JSON.stringify(items), { ttlMs: 86_400_000 });
 db.get(&quot;cart:u881&quot;);        // still there after a reload

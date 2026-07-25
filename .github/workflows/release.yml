@@ -184,7 +184,7 @@ jobs:
           done
           echo "all publishable crates handled"
 
-  # ───────────── npm: @goliajp/kevy (wasm + loader) ─────────────
+  # ───────────── npm: @goliapkg/kevy (wasm + loader) ─────────────
   npm:
     name: npm publish the wasm package
     runs-on: ubuntu-latest
