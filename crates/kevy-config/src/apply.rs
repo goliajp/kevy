@@ -28,6 +28,7 @@ impl Config {
             "cluster" => self.apply_cluster(item),
             "replication" => self.apply_replication(item),
             "feed" => self.apply_feed(item),
+            "tiering" => self.apply_tiering(item),
             "lua" => self.apply_lua(item),
             "metrics" => self.apply_metrics(item),
             "audit" => self.apply_audit(item),
@@ -86,6 +87,16 @@ impl Config {
             "auto_aof_rewrite_min_size" => {
                 self.persistence.auto_aof_rewrite_min_size = value_as_size(item)?;
             }
+            "auto_aof_rewrite_bytes" => {
+                self.persistence.auto_aof_rewrite_bytes = value_as_size(item)?;
+            }
+            "auto_aof_rewrite_interval_secs" => {
+                self.persistence.auto_aof_rewrite_interval_secs =
+                    u64::from(value_as_u32(item)?);
+            }
+            "replay_resync" => {
+                self.persistence.replay_resync = value_as_bool(item)?;
+            }
             k => return Err(schema_err(item, format!("unknown [persistence] key: {k}"))),
         }
         Ok(())
@@ -138,7 +149,14 @@ impl Config {
     fn apply_notification(&mut self, item: &Item) -> Result<(), ConfigError> {
         match item.key.as_str() {
             "notify_keyspace_events" => {
-                self.notification.notify_keyspace_events = value_as_string(item)?;
+                let s = value_as_string(item)?;
+                if let Err(c) = crate::parse_notification_flags(&s) {
+                    return Err(schema_err(
+                        item,
+                        format!("unknown notify_keyspace_events flag char {c:?}"),
+                    ));
+                }
+                self.notification.notify_keyspace_events = s;
             }
             k => return Err(schema_err(item, format!("unknown [notification] key: {k}"))),
         }
@@ -175,15 +193,9 @@ impl Config {
                 self.lua.time_limit_ms = n as u64;
             }
             "allow_dialects" => {
-                // Comma-separated dialect list, same shape as cluster
-                // `peers` / `scopes`. Empty string = all allowed.
-                let s = value_as_string(item)?;
-                self.lua.allow_dialects = s
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|p| !p.is_empty())
-                    .map(String::from)
-                    .collect();
+                // `["5.1", "5.4"]` or the legacy `"5.1,5.4"`. Empty = all five
+                // dialects accepted.
+                self.lua.allow_dialects = value_as_list(item)?;
             }
             k => return Err(schema_err(item, format!("unknown [lua] key: {k}"))),
         }
@@ -196,13 +208,17 @@ impl Config {
             "port_base" => self.cluster.port_base = value_as_u16(item)?,
             "node_id" => self.cluster.node_id = value_as_string(item)?,
             "elect_port_base" => self.cluster.elect_port_base = value_as_u16(item)?,
+            // Both accept `["a", "b"]` and the legacy `"a,b"`. Neither a peer
+            // (`id@host:port`) nor a scope (`prefix=writer|fallback`) may itself
+            // contain a comma, so re-joining an array and handing it to the
+            // existing token parser is exact, not a shortcut.
             "peers" => {
-                let raw = value_as_string(item)?;
+                let raw = value_as_list(item)?.join(",");
                 self.cluster.peers = crate::cluster::PeerEntry::parse_list(&raw)
                     .map_err(|tok| schema_err(item, format!("bad peer token: {tok:?}")))?;
             }
             "scopes" => {
-                let raw = value_as_string(item)?;
+                let raw = value_as_list(item)?.join(",");
                 self.cluster.scopes = crate::cluster::ScopeEntry::parse_list(&raw)
                     .map_err(|tok| schema_err(item, format!("bad scope token: {tok:?}")))?;
             }
@@ -298,6 +314,8 @@ impl Config {
                 })?);
             }
             "KEVY_DIR" => self.server.data_dir = PathBuf::from(value),
+            // All three budget forms (auto / percent / bytes); plain bytes stay back-compat.
+            "KEVY_TIER_BUDGET" => self.apply_env_tier_budget(value)?,
             "KEVY_AOF" => {
                 self.persistence.aof = !matches!(value, "0" | "off" | "false" | "no");
             }
@@ -312,7 +330,8 @@ impl Config {
 
 // ───────────── value coercion helpers ─────────────
 
-fn value_as_string(item: &Item) -> Result<String, ConfigError> {
+/// String coercion for sibling modules ([`crate::tiering`]).
+pub(crate) fn value_as_string(item: &Item) -> Result<String, ConfigError> {
     match &item.value {
         Value::Str(s) => Ok(s.clone()),
         other => Err(schema_err(item, format!("expected string, got {other:?}"))),
@@ -354,13 +373,43 @@ fn value_as_size(item: &Item) -> Result<u64, ConfigError> {
         Value::Int(n) => u64::try_from(*n)
             .map_err(|_| schema_err(item, format!("size value {n} must be non-negative"))),
         Value::Str(s) => parse_size(s).map_err(|e| schema_err(item, e)),
-        other @ Value::Bool(_) => {
+        other @ (Value::Bool(_) | Value::Arr(_)) => {
             Err(schema_err(item, format!("expected size literal, got {other:?}")))
         }
     }
 }
 
-fn schema_err(item: &Item, msg: impl Into<String>) -> ConfigError {
+/// A list field: `["a", "b"]` or the legacy `"a,b"`.
+///
+/// The array is the form TOML has, and the form the documentation told people
+/// to write — until it turned out the parser had no arrays and every such file
+/// died at startup with `expected value, got LBracket`. The comma-separated
+/// string keeps working because deployed configs use it; it is not deprecated,
+/// it is just no longer the only thing that parses.
+///
+/// Empty entries are dropped either way, so a trailing comma in the string form
+/// (`"a,b,"`) means the same as it does in the array form.
+fn value_as_list(item: &Item) -> Result<Vec<String>, ConfigError> {
+    match &item.value {
+        Value::Arr(v) => Ok(v
+            .iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()),
+        Value::Str(s) => Ok(s
+            .split(',')
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(String::from)
+            .collect()),
+        other => Err(schema_err(
+            item,
+            format!("expected a list — [\"a\", \"b\"] or \"a,b\" — got {other:?}"),
+        )),
+    }
+}
+
+pub(crate) fn schema_err(item: &Item, msg: impl Into<String>) -> ConfigError {
     let field = match &item.section {
         Some(s) => format!("[{}].{}", s, item.key),
         None => item.key.clone(),

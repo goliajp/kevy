@@ -1,5 +1,5 @@
-//! [`Segment`] — one shard's slice of one index (index-follows-key,
-//! RFC D3). Range = `BTreeSet<(value, key)>`; Unique = the same
+//! [`Segment`] — one shard's slice of one index (index-follows-key).
+//! Range = `BTreeSet<(value, key)>`; Unique = the same
 //! tree (point lookups are a 1-value range) plus a duplicate counter
 //! for the declarative fence.
 //!
@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::ops::Bound;
 
+use crate::rowvalues::RowValues;
 use crate::value::IndexValue;
 
 /// Opaque pagination cursor: the last `(value, key)` served. Encoded
@@ -28,7 +29,8 @@ pub struct Cursor {
 pub struct SegmentStats {
     /// Live entries.
     pub entries: u64,
-    /// Approximate heap bytes (RFC D7 formula's measured side).
+    /// Approximate heap bytes (the measured side of the documented
+    /// memory formula).
     pub approx_bytes: u64,
     /// Rows excluded because the field failed coercion / was missing.
     pub coerce_failures: u64,
@@ -36,7 +38,7 @@ pub struct SegmentStats {
     pub duplicates: u64,
 }
 
-/// Per-entry structural overhead in the memory formula (RFC D7).
+/// Per-entry structural overhead in the memory formula.
 const ENTRY_OVERHEAD: usize = 48;
 
 /// One shard's slice of one index.
@@ -46,12 +48,54 @@ pub struct Segment {
     back: HashMap<Vec<u8>, IndexValue>,
     value_counts: BTreeMap<IndexValue, u32>,
     stats: SegmentStats,
+    /// The stored-value side-channel — `Some` only when the index
+    /// declared `VALUES`. An index without the declaration holds `None`
+    /// and pays nothing: every values touch below is a never-taken
+    /// `if let` (the `Option<Positions>` physical-bypass pattern, A5).
+    values: Option<RowValues>,
 }
 
 impl Segment {
     /// Empty segment.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Empty segment carrying the stored-value side-channel for `n`
+    /// declared `VALUES` fields (`n` = the spec's `values.len()`).
+    pub fn with_values(n: usize) -> Self {
+        Segment { values: Some(RowValues::new(n)), ..Self::default() }
+    }
+
+    /// [`Segment::apply`] plus the row's declared stored values. The
+    /// values follow the entry: an indexed row stores them, an excluded
+    /// or deleted one drops them.
+    pub fn apply_with_values(
+        &mut self,
+        key: &[u8],
+        new: Option<IndexValue>,
+        vals: &[Option<&[u8]>],
+    ) {
+        let indexed = new.is_some();
+        self.apply(key, new);
+        if let Some(rv) = &mut self.values {
+            if indexed {
+                rv.set(key, vals);
+            } else {
+                rv.clear(key);
+            }
+        }
+    }
+
+    /// `key`'s stored value for declared `VALUES` field `field`, or
+    /// `None` when the row has none (or the index declared none).
+    pub fn stored(&self, key: &[u8], field: usize) -> Option<&[u8]> {
+        self.values.as_ref()?.get(key, field)
+    }
+
+    /// The `(value, key)` tree, for the clause-carrying scan.
+    pub(crate) fn tree(&self) -> &BTreeSet<(IndexValue, Vec<u8>)> {
+        &self.tree
     }
 
     /// Synchronous write-path maintenance: the row at `key` now
@@ -84,6 +128,9 @@ impl Segment {
 
     /// Row deleted (no coercion involved — not a coerce failure).
     pub fn remove(&mut self, key: &[u8]) {
+        if let Some(rv) = &mut self.values {
+            rv.clear(key);
+        }
         if let Some(old) = self.back.remove(key) {
             self.tree.remove(&(old.clone(), key.to_vec()));
             self.stats.entries -= 1;
@@ -218,9 +265,14 @@ impl Segment {
         }
     }
 
-    /// Live counters.
+    /// Live counters. The stored-value column's heap joins the memory
+    /// term when (and only when) the index declared `VALUES`.
     pub fn stats(&self) -> SegmentStats {
-        self.stats
+        let mut s = self.stats;
+        if let Some(rv) = &self.values {
+            s.approx_bytes += rv.approx_bytes();
+        }
+        s
     }
 }
 

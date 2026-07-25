@@ -158,7 +158,7 @@ impl ReplicationSource {
 
     /// Drop every buffered frame whose offset is `< watermark` —
     /// i.e. every replica has consumed past it. Used by the per-
-    /// shard tick (T1.22.5) to enforce a retention floor tighter
+    /// shard tick to enforce a retention floor tighter
     /// than the raw byte budget; lets the backlog reclaim space
     /// for live frames once all consumers have advanced.
     ///
@@ -203,19 +203,27 @@ impl ReplicationSource {
         // means every frame ever pushed has been evicted — same TooOld
         // outcome as `from < oldest`. (Without this branch the function
         // returns an empty iterator and the streaming pump silently
-        // stalls — the v1.20 embed-replica restart test caught this.)
+        // stalls — an embed-replica restart test caught this.)
         match self.oldest_offset() {
             Some(oldest) if from < oldest => return Err(FromOffset::TooOld),
             None => return Err(FromOffset::TooOld),
             _ => {}
         }
-        // Locate the start index. Offsets are monotonic so binary search
-        // is correct; the deque slices into two parts so we iterate.
-        let start = self.buf.iter().position(|f| f.offset >= from);
-        Ok(FramesIter {
-            buf: &self.buf,
-            cursor: start.unwrap_or(self.buf.len()),
-        })
+        // Offsets are monotonic, so the start index is a binary search. The
+        // comment here used to say exactly that — and then called
+        // `iter().position(...)`, an O(B) walk of the whole backlog, on a path
+        // that both FEED.READ and the replica stream take on every poll. A
+        // consumer resuming from an old cursor paid for the entire backlog
+        // before it saw its first frame.
+        //
+        // `VecDeque` is two contiguous runs, each individually sorted, so
+        // `partition_point` on each half gives the answer in O(log B).
+        let (a, b) = self.buf.as_slices();
+        let start = match a.partition_point(|f| f.offset < from) {
+            i if i < a.len() => i,
+            _ => a.len() + b.partition_point(|f| f.offset < from),
+        };
+        Ok(FramesIter { buf: &self.buf, cursor: start })
     }
 }
 
@@ -405,7 +413,7 @@ mod tests {
 
     #[test]
     fn drop_up_to_evicts_below_watermark() {
-        // T1.22.5: drop_up_to(w) evicts every frame with offset < w.
+        // drop_up_to(w) evicts every frame with offset < w.
         let mut s = ReplicationSource::new(64 * 1024);
         for i in 0..5 {
             let v = format!("v{i}");

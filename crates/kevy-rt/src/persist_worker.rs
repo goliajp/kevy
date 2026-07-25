@@ -34,7 +34,7 @@ pub(crate) enum PersistJob {
         view: SnapshotView,
         snap_path: PathBuf,
         aof_reset: Option<PathBuf>,
-        /// v2.3: feed cursor at view-freeze — written into the
+        /// Feed cursor at view-freeze — written into the
         /// snapshot header (recovery-point contract).
         cursor: Option<(u64, u64)>,
     },
@@ -184,7 +184,7 @@ impl<C: Commands> Shard<C> {
             },
             None => None,
         };
-        // v2.3 recovery point: the feed cursor at view-freeze time —
+        // Recovery point: the feed cursor at view-freeze time —
         // frozen in the same no-append window as the view itself, so
         // "snapshot + frames from cursor" is exact.
         let cursor = self.replicate.as_ref().map(|f| f.tail());
@@ -258,7 +258,7 @@ impl<C: Commands> Shard<C> {
     /// A `stop=true` between the `start_bg_save` and that tick
     /// would leave the snapshot orphan + the client's `+OK`
     /// dishonored. This drain closes the window.
-    /// v2.3 clean-shutdown half of the feed cursor contract: persist
+    /// Clean-shutdown half of the feed cursor contract: persist
     /// the `(generation, next_offset)` continuity marker. Only written
     /// here — an unclean stop leaves no marker and the next boot bumps
     /// the generation (see `kevy_persist::feed_meta`).
@@ -274,6 +274,29 @@ impl<C: Commands> Shard<C> {
                 eprintln!("kevy: shard {} feed marker write failed: {e}", self.id);
             }
         }
+    }
+
+    /// Shard exit sequence, shared by both reactors: honor a pending
+    /// `SHUTDOWN SAVE` request with one final background save, land any
+    /// in-flight persist job, force-fsync the AOF tail (an EverySec
+    /// window may still hold unsynced appends at loop exit), and write
+    /// the clean-shutdown feed marker.
+    pub(crate) fn shutdown_drain(&mut self) {
+        if self.commands.shutdown_save_requested() {
+            // A BGSAVE / AOF rewrite may already be in flight — land
+            // it first, then take the final snapshot. Calling
+            // `start_bg_save` while the worker is busy would skip the
+            // save with only a stderr line, and the in-flight job's
+            // frozen view misses every write since its collect —
+            // silent data loss for `appendonly no` deployments.
+            self.drain_persist_on_shutdown();
+            self.start_bg_save();
+        }
+        self.drain_persist_on_shutdown();
+        if let Some(aof) = &mut self.aof {
+            let _ = aof.sync_now();
+        }
+        self.write_feed_shutdown_marker();
     }
 
     pub(crate) fn drain_persist_on_shutdown(&mut self) {
@@ -349,7 +372,7 @@ impl<C: Commands> Shard<C> {
     }
 }
 
-/// [`kevy_persist::write_snapshot_tmp`] with the v2.3 cursor header —
+/// [`kevy_persist::write_snapshot_tmp`] with the feed-cursor header —
 /// same durable-tmp discipline (fsync before the caller's rename).
 fn write_snapshot_tmp_with_cursor(
     view: &SnapshotView,

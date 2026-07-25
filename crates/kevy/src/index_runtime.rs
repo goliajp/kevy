@@ -1,30 +1,26 @@
-//! v2.5 — the index engine's runtime half (RFC LOCKED 2026-07-04).
+//! The index engine's runtime half.
 //!
-//! Topology: one process-global [`Catalog`] behind an RwLock +
-//! generation counter; each shard thread keeps a thread-local
-//! [`ShardIndexes`] (its slice of every index — index-follows-key)
-//! refreshed lazily when the generation moves. The write path enters
-//! through [`on_write`] (wired to `Commands::on_write`), whose first
-//! instruction is a process-wide `NONEMPTY` Relaxed load — the RFC D2
-//! zero-tax gate: an empty catalog costs one untaken branch.
+//! Topology: one process-wide [`Catalog`] behind an RwLock +
+//! generation counter, both owned by `RuntimeState.catalogs`;
+//! each shard keeps its [`ShardIndexes`] (its slice of
+//! every index — index-follows-key) in `ShardCtx.indexes`, refreshed
+//! lazily when the generation moves. The write path enters through
+//! [`on_write`] (wired to `Commands::on_write`), which the caller
+//! gates on the `IDX_NONEMPTY` gate bit — the
+//! zero-tax posture: an empty catalog costs one cached-bit branch.
 //!
-//! Backfill (RFC D5, tick-incremental variant): `IDX.CREATE` snapshots
+//! Backfill (tick-incremental variant): `IDX.CREATE` snapshots
 //! the domain's key list per shard; `on_shard_tick` indexes a bounded
 //! batch per tick until exhausted (non-blocking, no extra threads,
 //! shard-affine). Live writes during the build hit the hook first and
 //! win: the backfill only fills keys the segment doesn't hold yet, so
 //! a newer hook-applied value is never clobbered by a stale scan.
 
-use std::cell::RefCell;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
-
-use kevy_index::{Catalog, IndexSpec, IndexValue, Segment};
+use kevy_resp::CmdError;
+use kevy_index::{IndexSpec, Segment};
 use kevy_store::Store;
 
-static NONEMPTY: AtomicBool = AtomicBool::new(false);
-static CATALOG_GEN: AtomicU64 = AtomicU64::new(0);
-static CATALOG: RwLock<Option<Arc<Catalog>>> = RwLock::new(None);
+use crate::state::{CatalogState, Ctx};
 
 /// Per-shard build progress for one index.
 enum BuildState {
@@ -32,7 +28,7 @@ enum BuildState {
     Backfilling { keys: Vec<Vec<u8>>, pos: usize },
     /// Serving.
     Ready,
-    /// Build crossed the spec's MAXMEM budget (RFC D7): declarative
+    /// Build crossed the spec's MAXMEM budget: declarative
     /// failure, queries answer an error, no OOM.
     FailedOverBudget,
 }
@@ -40,234 +36,245 @@ enum BuildState {
 struct ShardIndex {
     spec: IndexSpec,
     seg: Segment,
-    /// v2.7: populated instead of `seg` for KIND text.
+    /// Populated instead of `seg` for KIND text.
     text: Option<kevy_text::TextSegment>,
-    /// v2.8: populated instead of `seg` for KIND ann.
+    /// Populated instead of `seg` for KIND ann.
     ann: Option<kevy_vector::Hnsw>,
-    /// v3.1: populated instead of `seg` for KIND agg.
+    /// Populated instead of `seg` for KIND agg.
     agg: Option<kevy_index::AggSegment>,
     build: BuildState,
 }
 
+/// One shard's slice of every declared index. Owned by
+/// `crate::state::ShardCtx`; every entry point below borrows it
+/// from the caller's shard zone.
 #[derive(Default)]
-struct ShardIndexes {
+pub(crate) struct ShardIndexes {
     generation: u64,
     idx: Vec<ShardIndex>,
 }
 
-thread_local! {
-    static SHARD_INDEXES: RefCell<ShardIndexes> = RefCell::new(ShardIndexes::default());
-}
-
-/// Snapshot the current catalog (None = empty).
-pub(crate) fn catalog() -> Option<Arc<Catalog>> {
-    CATALOG
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
-}
-
-/// Swap in a new catalog version (IDX.CREATE / IDX.DROP). Bumps the
-/// generation; shards refresh lazily.
-pub(crate) fn install_catalog(c: Catalog) {
-    let nonempty = !c.is_empty();
-    *CATALOG
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(c));
-    NONEMPTY.store(nonempty, Ordering::Release);
-    CATALOG_GEN.fetch_add(1, Ordering::Release);
-}
-
-/// The write-path hook body (`Commands::on_write`).
+/// The write-path hook body (`Commands::on_write`). The caller gates
+/// on `IDX_NONEMPTY`, so entering here means at least one index is
+/// declared.
 #[inline]
-pub(crate) fn on_write(store: &mut Store, key: &[u8]) {
-    if !NONEMPTY.load(Ordering::Relaxed) {
-        return;
-    }
-    SHARD_INDEXES.with(|tl| {
-        let mut st = tl.borrow_mut();
-        refresh(&mut st, store);
-        for si in &mut st.idx {
-            if key.starts_with(&si.spec.prefix) {
-                apply_row(store, si, key);
-            }
+pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
+    let mut st = ctx.shard.indexes.borrow_mut();
+    refresh(&ctx.state.catalogs, &mut st, store);
+    for si in &mut st.idx {
+        if key.starts_with(&si.spec.prefix) {
+            apply_row(store, si, key);
         }
-    });
+    }
 }
 
-/// Tick hook: advance backfills a bounded batch per tick.
-pub(crate) fn on_tick(store: &mut Store) {
-    if !NONEMPTY.load(Ordering::Relaxed) {
-        return;
+/// Tick hook: advance backfills a bounded batch per tick. Gated like
+/// [`on_write`].
+pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
+    let mut st = ctx.shard.indexes.borrow_mut();
+    refresh(&ctx.state.catalogs, &mut st, store);
+    for si in &mut st.idx {
+        advance_backfill(store, si, 2048);
     }
-    SHARD_INDEXES.with(|tl| {
-        let mut st = tl.borrow_mut();
-        refresh(&mut st, store);
-        for si in &mut st.idx {
-            advance_backfill(store, si, 2048);
-        }
-    });
+}
+
+/// Σ approximate heap bytes of this shard's index segments, every
+/// kind (scalar / text / ann / agg) — the tier's `reserved_bytes`
+/// floor feed. Called per shard tick, gated on
+/// tiering being enabled; refreshes the shard list first so a
+/// just-declared index counts immediately.
+pub(crate) fn reserved_bytes(ctx: &Ctx<'_>, store: &mut Store) -> u64 {
+    let mut st = ctx.shard.indexes.borrow_mut();
+    refresh(&ctx.state.catalogs, &mut st, store);
+    st.idx
+        .iter()
+        .map(|si| {
+            si.seg.stats().approx_bytes
+                + si.text.as_ref().map_or(0, |t| t.stats().approx_bytes)
+                + si.ann.as_ref().map_or(0, |g| g.stats().approx_bytes)
+                + si.agg.as_ref().map_or(0, |a| a.stats().approx_bytes)
+        })
+        .sum()
 }
 
 /// Query entry: run `f` against this shard's segment for `name`.
-/// `None` = index unknown here (stale TL is refreshed first) or still
-/// backfilling. Wired to IDX.QUERY fan-out in step 2b.
+/// `None` = index unknown here (a stale shard list is refreshed
+/// first) or still backfilling. Wired to IDX.QUERY fan-out in step 2b.
 pub(crate) fn with_ready_segment<R>(
+    ctx: &Ctx<'_>,
     store: &mut Store,
     name: &[u8],
     f: impl FnOnce(&IndexSpec, &Segment) -> R,
-) -> Result<R, &'static str> {
-    SHARD_INDEXES.with(|tl| {
-        let mut st = tl.borrow_mut();
-        refresh(&mut st, store);
-        let si = st
-            .idx
-            .iter()
-            .find(|si| si.spec.name == name)
-            .ok_or("ERR no such index")?;
-        match si.build {
-            BuildState::Ready => Ok(f(&si.spec, &si.seg)),
-            BuildState::Backfilling { .. } => Err("INDEXBUILDING index is still building"),
-            BuildState::FailedOverBudget => {
-                Err("INDEXOVERBUDGET index build exceeded MAXMEM")
-            }
-        }
-    })
+) -> Result<R, CmdError> {
+    let mut st = ctx.shard.indexes.borrow_mut();
+    refresh(&ctx.state.catalogs, &mut st, store);
+    let si = st
+        .idx
+        .iter()
+        .find(|si| si.spec.name == name)
+        .ok_or("ERR no such index")?;
+    match si.build {
+        BuildState::Ready => Ok(f(&si.spec, &si.seg)),
+        BuildState::Backfilling { .. } => Err(CmdError::Wire("INDEXBUILDING index is still building")),
+        BuildState::FailedOverBudget => Err(CmdError::Wire("INDEXOVERBUDGET index build exceeded MAXMEM")),
+    }
 }
 
-/// v3.1: run `f` against a READY aggregate segment.
+/// Run `f` against a READY aggregate segment.
 pub(crate) fn with_ready_agg<R>(
+    ctx: &Ctx<'_>,
     store: &mut Store,
     name: &[u8],
     f: impl FnOnce(&kevy_index::AggSegment) -> R,
-) -> Result<R, &'static str> {
-    SHARD_INDEXES.with(|tl| {
-        let mut st = tl.borrow_mut();
-        refresh(&mut st, store);
-        let si = st
-            .idx
-            .iter()
-            .find(|si| si.spec.name == name)
-            .ok_or("ERR no such index")?;
-        match (&si.build, &si.agg) {
-            (BuildState::Ready, Some(a)) => Ok(f(a)),
-            (BuildState::Backfilling { .. }, _) => Err("INDEXBUILDING index is still building"),
-            (BuildState::FailedOverBudget, _) => Err("INDEXOVERBUDGET index build exceeded MAXMEM"),
-            (_, None) => Err("ERR not an aggregate index"),
-        }
-    })
+) -> Result<R, CmdError> {
+    let mut st = ctx.shard.indexes.borrow_mut();
+    refresh(&ctx.state.catalogs, &mut st, store);
+    let si = st
+        .idx
+        .iter()
+        .find(|si| si.spec.name == name)
+        .ok_or("ERR no such index")?;
+    match (&si.build, &si.agg) {
+        (BuildState::Ready, Some(a)) => Ok(f(a)),
+        (BuildState::Backfilling { .. }, _) => Err(CmdError::Wire("INDEXBUILDING index is still building")),
+        (BuildState::FailedOverBudget, _) => Err(CmdError::Wire("INDEXOVERBUDGET index build exceeded MAXMEM")),
+        (_, None) => Err(CmdError::Wire("ERR not an aggregate index")),
+    }
 }
 
-/// v2.8: run `f` against a READY ANN graph (mutable for REBUILD).
+/// Run `f` against a READY ANN graph (mutable for REBUILD).
 pub(crate) fn with_ready_ann<R>(
+    ctx: &Ctx<'_>,
     store: &mut Store,
     name: &[u8],
     f: impl FnOnce(&mut kevy_vector::Hnsw) -> R,
-) -> Result<R, &'static str> {
-    SHARD_INDEXES.with(|tl| {
-        let mut st = tl.borrow_mut();
-        refresh(&mut st, store);
-        let si = st
-            .idx
-            .iter_mut()
-            .find(|si| si.spec.name == name)
-            .ok_or("ERR no such index")?;
-        match (&si.build, &mut si.ann) {
-            (BuildState::Ready, Some(g)) => Ok(f(g)),
-            (BuildState::Backfilling { .. }, _) => Err("INDEXBUILDING index is still building"),
-            (BuildState::FailedOverBudget, _) => Err("INDEXOVERBUDGET index build exceeded MAXMEM"),
-            (_, None) => Err("ERR not a vector index"),
-        }
-    })
+) -> Result<R, CmdError> {
+    let mut st = ctx.shard.indexes.borrow_mut();
+    refresh(&ctx.state.catalogs, &mut st, store);
+    let si = st
+        .idx
+        .iter_mut()
+        .find(|si| si.spec.name == name)
+        .ok_or("ERR no such index")?;
+    match (&si.build, &mut si.ann) {
+        (BuildState::Ready, Some(g)) => Ok(f(g)),
+        (BuildState::Backfilling { .. }, _) => Err(CmdError::Wire("INDEXBUILDING index is still building")),
+        (BuildState::FailedOverBudget, _) => Err(CmdError::Wire("INDEXOVERBUDGET index build exceeded MAXMEM")),
+        (_, None) => Err(CmdError::Wire("ERR not a vector index")),
+    }
 }
 
-/// v2.7: run `f` against a READY text segment.
+/// Run `f` against a READY text segment.
 pub(crate) fn with_ready_text_segment<R>(
+    ctx: &Ctx<'_>,
     store: &mut Store,
     name: &[u8],
-    f: impl FnOnce(&kevy_text::TextSegment) -> R,
-) -> Result<R, &'static str> {
-    SHARD_INDEXES.with(|tl| {
-        let mut st = tl.borrow_mut();
-        refresh(&mut st, store);
-        let si = st
-            .idx
-            .iter()
-            .find(|si| si.spec.name == name)
-            .ok_or("ERR no such index")?;
-        match (&si.build, &si.text) {
-            (BuildState::Ready, Some(ts)) => Ok(f(ts)),
-            (BuildState::Backfilling { .. }, _) => Err("INDEXBUILDING index is still building"),
-            (BuildState::FailedOverBudget, _) => Err("INDEXOVERBUDGET index build exceeded MAXMEM"),
-            (_, None) => Err("ERR not a text index"),
-        }
-    })
+    f: impl FnOnce(&kevy_text::TextSegment, &kevy_index::IndexSpec) -> R,
+) -> Result<R, CmdError> {
+    let mut st = ctx.shard.indexes.borrow_mut();
+    refresh(&ctx.state.catalogs, &mut st, store);
+    let si = st
+        .idx
+        .iter()
+        .find(|si| si.spec.name == name)
+        .ok_or("ERR no such index")?;
+    match (&si.build, &si.text) {
+        (BuildState::Ready, Some(ts)) => Ok(f(ts, &si.spec)),
+        (BuildState::Backfilling { .. }, _) => Err(CmdError::Wire("INDEXBUILDING index is still building")),
+        (BuildState::FailedOverBudget, _) => Err(CmdError::Wire("INDEXOVERBUDGET index build exceeded MAXMEM")),
+        (_, None) => Err(CmdError::Wire("ERR not a text index")),
+    }
 }
 
-/// v2.6: run `f` with a name→segment resolver over this shard's READY
+/// Run `f` with a name→segment resolver over this shard's READY
 /// segments (views probe several indexes per call). Building/failed
 /// segments resolve to None.
 pub(crate) fn with_segment_resolver<R>(
+    ctx: &Ctx<'_>,
     store: &mut Store,
     f: impl for<'s> FnOnce(&'s dyn Fn(&[u8]) -> Option<&'s Segment>) -> R,
 ) -> R {
-    SHARD_INDEXES.with(|tl| {
-        let mut st = tl.borrow_mut();
-        refresh(&mut st, store);
-        let idx = &st.idx;
-        let resolver = |name: &[u8]| -> Option<&Segment> {
-            idx.iter()
-                .find(|si| si.spec.name == name && matches!(si.build, BuildState::Ready))
-                .map(|si| &si.seg)
-        };
-        f(&resolver)
-    })
+    let mut st = ctx.shard.indexes.borrow_mut();
+    refresh(&ctx.state.catalogs, &mut st, store);
+    let idx = &st.idx;
+    let resolver = |name: &[u8]| -> Option<&Segment> {
+        idx.iter()
+            .find(|si| si.spec.name == name && matches!(si.build, BuildState::Ready))
+            .map(|si| &si.seg)
+    };
+    f(&resolver)
 }
 
 /// Two-segment variant for COMPOSE — one RefCell borrow (nesting
-/// [`with_ready_segment`] would double-borrow the thread-local).
+/// [`with_ready_segment`] would double-borrow the shard's index list).
 pub(crate) fn with_two_ready_segments<R>(
+    ctx: &Ctx<'_>,
     store: &mut Store,
     a: &[u8],
     b: &[u8],
     f: impl FnOnce(&IndexSpec, &Segment, &IndexSpec, &Segment) -> R,
-) -> Result<R, &'static str> {
-    SHARD_INDEXES.with(|tl| {
-        let mut st = tl.borrow_mut();
-        refresh(&mut st, store);
-        let ia = st.idx.iter().position(|si| si.spec.name == a).ok_or("ERR no such index")?;
-        let ib = st.idx.iter().position(|si| si.spec.name == b).ok_or("ERR no such index")?;
-        for i in [ia, ib] {
-            if matches!(st.idx[i].build, BuildState::Backfilling { .. }) {
-                return Err("INDEXBUILDING index is still building");
-            }
+) -> Result<R, CmdError> {
+    let mut st = ctx.shard.indexes.borrow_mut();
+    refresh(&ctx.state.catalogs, &mut st, store);
+    let ia = st.idx.iter().position(|si| si.spec.name == a).ok_or("ERR no such index")?;
+    let ib = st.idx.iter().position(|si| si.spec.name == b).ok_or("ERR no such index")?;
+    for i in [ia, ib] {
+        if matches!(st.idx[i].build, BuildState::Backfilling { .. }) {
+            return Err(CmdError::Wire("INDEXBUILDING index is still building"));
         }
-        let (sa, sb) = (&st.idx[ia], &st.idx[ib]);
-        Ok(f(&sa.spec, &sa.seg, &sb.spec, &sb.seg))
-    })
+    }
+    let (sa, sb) = (&st.idx[ia], &st.idx[ib]);
+    Ok(f(&sa.spec, &sa.seg, &sb.spec, &sb.seg))
 }
 
 /// Whether this shard's slice of `name` is still backfilling.
-pub(crate) fn segment_building(store: &mut Store, name: &[u8]) -> bool {
-    SHARD_INDEXES.with(|tl| {
-        let mut st = tl.borrow_mut();
-        refresh(&mut st, store);
-        st.idx
-            .iter()
-            .find(|si| si.spec.name == name)
-            .is_some_and(|si| matches!(si.build, BuildState::Backfilling { .. }))
+pub(crate) fn segment_building(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> bool {
+    let mut st = ctx.shard.indexes.borrow_mut();
+    refresh(&ctx.state.catalogs, &mut st, store);
+    st.idx
+        .iter()
+        .find(|si| si.spec.name == name)
+        .is_some_and(|si| matches!(si.build, BuildState::Backfilling { .. }))
+}
+
+/// A fresh scalar segment for `spec` — with the stored-value
+/// side-channel iff a scalar kind declared `VALUES` (text keeps its
+/// values in the text segment; without the declaration this is the
+/// plain `Segment::new()`, byte-identical to before — A5).
+fn new_scalar_seg(spec: &IndexSpec) -> Segment {
+    let scalar = matches!(spec.kind, kevy_index::IndexKind::Range | kevy_index::IndexKind::Unique);
+    if scalar && !spec.values.is_empty() {
+        Segment::with_values(spec.values.len())
+    } else {
+        Segment::new()
+    }
+}
+
+
+/// A fresh text segment for `spec` when it is a text index — with the
+/// positional side-channel iff it was created WITH POSITIONS.
+fn new_text_seg(spec: &kevy_index::IndexSpec) -> Option<kevy_text::TextSegment> {
+    (spec.kind == kevy_index::IndexKind::Text).then(|| {
+        // The declared field count decides whether the segment keeps the
+        // per-field breakdown `IN <field…>` scopes to; one field needs
+        // none, because its per-field numbers are the merged ones.
+        kevy_text::TextSegment::with_shape(kevy_text::SegmentShape {
+            fields: spec.fields.len(),
+            positions: spec.with_positions,
+            values: spec.values.len(),
+        })
     })
 }
 
-/// Reconcile the thread-local segment list with the global catalog:
+/// Reconcile this shard's segment list with the shared catalog:
 /// keep segments whose spec is unchanged, start backfills for new
 /// ones, drop removed ones.
-fn refresh(st: &mut ShardIndexes, store: &mut Store) {
-    let generation = CATALOG_GEN.load(Ordering::Acquire);
+fn refresh(catalogs: &CatalogState, st: &mut ShardIndexes, store: &mut Store) {
+    let generation = catalogs.index_gen();
     if st.generation == generation {
         return;
     }
-    let cat = catalog();
+    let cat = catalogs.index();
     let mut next: Vec<ShardIndex> = Vec::new();
     if let Some(cat) = cat {
         for (spec, _state) in cat.iter() {
@@ -282,8 +289,7 @@ fn refresh(st: &mut ShardIndexes, store: &mut Store) {
                     next.push(ShardIndex {
                         agg: (spec.kind == kevy_index::IndexKind::Agg)
                             .then(kevy_index::AggSegment::new),
-                        text: (spec.kind == kevy_index::IndexKind::Text)
-                            .then(kevy_text::TextSegment::new),
+                        text: new_text_seg(spec),
                         ann: spec.ann.as_ref().map(|a| {
                             kevy_vector::Hnsw::new(
                                 a.dim as usize,
@@ -298,8 +304,8 @@ fn refresh(st: &mut ShardIndexes, store: &mut Store) {
                                 },
                             )
                         }),
+                        seg: new_scalar_seg(spec),
                         spec: spec.clone(),
-                        seg: Segment::new(),
                         build: BuildState::Backfilling { keys, pos: 0 },
                     });
                 }
@@ -310,151 +316,9 @@ fn refresh(st: &mut ShardIndexes, store: &mut Store) {
     st.generation = generation;
 }
 
-/// Index one row: read the field from the hash at `key`, coerce,
-/// apply. A missing key / non-hash / missing field clears the row.
-fn apply_row(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
-    // v3.1 agg kind: both fields must resolve — the aggregated value
-    // coerces per the declared type, the group key is raw bytes.
-    if let Some(a) = &mut si.agg {
-        apply_row_agg(store, &si.spec, a, key);
-        return;
-    }
-    // v2.8 ann kind: field bytes parse as an f32 vector (wrong shape
-    // = excluded, same discipline as scalar coerce failure).
-    if let Some(g) = &mut si.ann {
-        let v = match store.hget(key, &si.spec.field) {
-            Ok(Some(raw)) => {
-                let raw = raw.to_vec();
-                kevy_vector::parse_vector(&raw, g.dim())
-            }
-            _ => None,
-        };
-        g.apply(key, v);
-        return;
-    }
-    // v2.7 text kind: raw field bytes tokenize into the inverted
-    // segment (no scalar coercion).
-    if let Some(ts) = &mut si.text {
-        match store.hget(key, &si.spec.field) {
-            Ok(Some(raw)) => {
-                let raw = raw.to_vec();
-                ts.apply(key, Some(&raw));
-            }
-            _ => ts.apply(key, None),
-        }
-        return;
-    }
-    let val = row_value(store, &si.spec, key);
-    match val {
-        RowValue::Value(v) => si.seg.apply(key, Some(v)),
-        RowValue::CoerceFailed => si.seg.apply(key, None),
-        RowValue::Gone => si.seg.remove(key),
-    }
-}
-
-/// [`apply_row`]'s agg half: both fields must resolve — the aggregated
-/// value coerces per the declared type, the group key is raw bytes.
-fn apply_row_agg(
-    store: &mut Store,
-    spec: &IndexSpec,
-    a: &mut kevy_index::AggSegment,
-    key: &[u8],
-) {
-    let group_field = spec.group_by.as_deref().unwrap_or_default();
-    let group = match store.hget(key, group_field) {
-        Ok(Some(g)) => Some(g.to_vec()),
-        _ => None,
-    };
-    let val = match store.hget(key, &spec.field) {
-        Ok(Some(raw)) => {
-            let raw = raw.to_vec();
-            kevy_index::IndexValue::coerce(spec.ty, &raw)
-        }
-        _ => None,
-    };
-    match (group, val) {
-        (Some(g), Some(v)) => a.apply(key, Some((g, v)), false),
-        // Slow path only: distinguish a DELETED row (plain
-        // retract) from an in-domain row missing/failing a field
-        // (excluded, counted). The happy path above never pays
-        // the exists() probe.
-        _ => a.apply(key, None, store.exists(&[key.to_vec()]) > 0),
-    }
-}
-
-enum RowValue {
-    Value(IndexValue),
-    CoerceFailed,
-    Gone,
-}
-
-fn row_value(store: &mut Store, spec: &IndexSpec, key: &[u8]) -> RowValue {
-    match store.hget(key, &spec.field) {
-        Ok(Some(raw)) => {
-            let raw = raw.to_vec();
-            match IndexValue::coerce(spec.ty, &raw) {
-                Some(v) => RowValue::Value(v),
-                None => RowValue::CoerceFailed,
-            }
-        }
-        // `hget` answers None for BOTH a missing key and a missing
-        // field; only the latter is a row excluded by coercion — a
-        // missing key is simply not a row.
-        Ok(None) => {
-            if store.exists(&[key.to_vec()]) == 0 {
-                RowValue::Gone
-            } else {
-                RowValue::CoerceFailed
-            }
-        }
-        Err(_) => RowValue::Gone, // not a hash → not a row
-    }
-}
-
-fn advance_backfill(store: &mut Store, si: &mut ShardIndex, batch: usize) {
-    let BuildState::Backfilling { keys, pos } = &mut si.build else {
-        return;
-    };
-    let end = (*pos + batch).min(keys.len());
-    // Split the borrow: take the key slice out while applying.
-    let slice: Vec<Vec<u8>> = keys[*pos..end].to_vec();
-    *pos = end;
-    let done = *pos >= keys.len();
-    for key in &slice {
-        // Hook-applied entries win: only fill keys not yet indexed.
-        let already = match (&si.text, &si.ann, &si.agg) {
-            (Some(ts), _, _) => ts.contains(key),
-            (_, Some(g), _) => g.contains(key),
-            (_, _, Some(a)) => a.contains(key),
-            _ => si.seg.verify_entry(key).is_some(),
-        };
-        if !already {
-            apply_row_backfill(store, si, key);
-        }
-    }
-    // RFC D7: a MAXMEM budget is enforced at build time —
-    // declarative failure instead of OOM.
-    if si.spec.max_bytes > 0 && si.seg.stats().approx_bytes > si.spec.max_bytes {
-        si.seg = Segment::new();
-        si.build = BuildState::FailedOverBudget;
-        return;
-    }
-    if done {
-        si.build = BuildState::Ready;
-    }
-}
-
-fn apply_row_backfill(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
-    if si.text.is_some() || si.ann.is_some() || si.agg.is_some() {
-        apply_row(store, si, key);
-        return;
-    }
-    match row_value(store, &si.spec, key) {
-        RowValue::Value(v) => si.seg.apply(key, Some(v)),
-        RowValue::CoerceFailed => si.seg.apply(key, None),
-        RowValue::Gone => {} // deleted since snapshot — nothing to do
-    }
-}
+mod row_apply;
+use row_apply::{advance_backfill, apply_row};
+pub(crate) use row_apply::{RowValue, row_value};
 
 #[cfg(test)]
 mod tests;

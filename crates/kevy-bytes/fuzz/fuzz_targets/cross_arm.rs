@@ -1,6 +1,6 @@
 //! Fuzz cross-arm equality + HashMap collision shapes of `SmallBytes`.
 //!
-//! Motivated by the mailrs 2026-06-03 prod incident: `kevy-bytes 1.0.4`
+//! Motivated by a production incident: `kevy-bytes 1.0.4`
 //! crashed at PartialEq's mixed inline/heap arm via a normal hashbrown
 //! hash-collision in a `HashMap<SmallBytes, _>`. The crate-level bench
 //! exercises uniform-size keysets, which never produce a mixed-arm
@@ -29,7 +29,7 @@ fuzz_target!(|data: &[u8]| {
     // Split byte-stream into two values. Using the first byte as the
     // pivot biases toward producing mixed inline/heap pairs (one side
     // ≤22 B → inline, other side >22 B → heap), which is exactly the
-    // shape the mailrs incident reached.
+    // shape the production incident reached.
     let pivot = (data[0] as usize) % (data.len() + 1);
     let (a_bytes, b_bytes) = data.split_at(pivot);
 

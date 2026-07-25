@@ -9,21 +9,66 @@
 //! The kevy server (the embedder) creates one [`ReplicaInbox`] pair
 //! per shard before `Runtime::run`, hands the receivers to the
 //! runtime via `with_replica_inboxes`, and keeps the senders to wire
-//! into the runner threads. v1.18 spawns one runner per shard
+//! into the runner threads. One runner is spawned per shard
 //! (matching the primary's per-shard listener layout), so the
 //! channels are 1:1.
 //!
-//! v1.18 cap: events are unbounded. Each [`ReplicaApply::Frame`]
+//! Known cap: events are unbounded. Each [`ReplicaApply::Frame`]
 //! carries an owned [`Argv`] (snapshot path is `Vec<u8>` chunks); for
 //! a slow shard this can grow. Backpressure / capping is tracked as a
-//! follow-up — the v1.18 model assumes the shard's apply rate matches
-//! the upstream emit rate (single-machine cluster). The unbounded
-//! channel never blocks the runner thread, so a stuck shard never
-//! stalls the runner's TCP read (it just buffers).
+//! follow-up. The unbounded channel never blocks the runner thread, so
+//! a stuck shard never stalls the runner's TCP read (it just buffers).
+//!
+//! Wake contract: a send signals the shard's [`Waker`] so a reactor
+//! parked in `Poller::wait` drains promptly — the flag in
+//! [`InboxSignal`] collapses a burst into one self-pipe write. Without
+//! this, drain only ran when *other* traffic happened to wake the
+//! reactor, and a fast upstream buried a quiet replica in backlog
+//! (found by repligate: ~7s of undrained frames after the primary
+//! froze, unmasked when `frames_from` went O(B) → O(log B) and the
+//! primary started feeding at full speed).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SendError, Sender, channel};
+use std::sync::{Arc, OnceLock};
+
+use kevy_sys::Waker;
 
 use crate::Argv;
+
+/// The cross-thread wake bridge shared by a sender/receiver pair. The
+/// shard installs its own waker at reactor start; `wake_pending`
+/// throttles the self-pipe to one write per drain cycle no matter how
+/// many frames a burst carries.
+pub(crate) struct InboxSignal {
+    pub(crate) waker: OnceLock<Arc<Waker>>,
+    pub(crate) wake_pending: AtomicBool,
+}
+
+/// Opaque completion token riding on [`ReplicaApply::SnapshotEnd`].
+/// The shard drops it only AFTER the snapshot swap has landed in its
+/// `Store`, so the embedder can hang side effects (e.g. lowering a
+/// `-LOADING` read gate) on the token's `Drop` and know they fire
+/// once the new keyspace — not the one about to be replaced — is
+/// what readers will see. Clones share one inner value: in broadcast
+/// (single-source) mode every shard holds a clone and the `Drop`
+/// fires when the LAST shard finishes its load.
+#[derive(Clone)]
+pub struct SnapshotGate(#[allow(dead_code)] Arc<dyn std::any::Any + Send + Sync>);
+
+impl SnapshotGate {
+    /// Wrap the embedder's drop-hook value.
+    #[must_use]
+    pub fn new(inner: Arc<dyn std::any::Any + Send + Sync>) -> Self {
+        Self(inner)
+    }
+}
+
+impl std::fmt::Debug for SnapshotGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SnapshotGate")
+    }
+}
 
 /// One event delivered from a replica runner to its target shard.
 /// Mirrors `kevy_replicate::replica::ReplicaEvent` except `Frame`
@@ -40,10 +85,13 @@ pub enum ReplicaApply {
     /// Upstream finished the snapshot. The shard hands its buffered
     /// bytes to `kevy_persist::load_snapshot_from` (replacing the
     /// `Store` contents) and resumes at `ack_offset` for live frames.
-    /// `routed = true` (v3.2 single-source mode) means the payload is
+    /// `routed = true` (single-source mode) means the payload is
     /// the WHOLE upstream keyspace broadcast to every shard — each
     /// shard loads only its own hash slice.
-    SnapshotEnd { ack_offset: u64, routed: bool },
+    /// `gate`: dropped by the shard after the load lands (see
+    /// [`SnapshotGate`]); `None` when the runner has nothing to hang
+    /// on the completion.
+    SnapshotEnd { ack_offset: u64, routed: bool, gate: Option<SnapshotGate> },
     /// One live mutation frame to be applied via `kevy::dispatch`
     /// (inside a [`crate::ReplicatedApplyGuard`] scope so the apply
     /// doesn't re-push into this shard's downstream
@@ -57,23 +105,41 @@ pub enum ReplicaApply {
 #[derive(Clone)]
 pub struct ReplicaInboxSender {
     inner: Sender<ReplicaApply>,
+    signal: Arc<InboxSignal>,
 }
 
 impl ReplicaInboxSender {
-    /// Send one event to the target shard. Fails only when the shard
-    /// has dropped its receiver (the runtime stopped or the shard
-    /// crashed) — the runner should treat that as "no more apply
-    /// possible" and exit.
+    /// Send one event to the target shard, waking its reactor if it
+    /// may be parked. Fails only when the shard has dropped its
+    /// receiver (the runtime stopped or the shard crashed) — the
+    /// runner should treat that as "no more apply possible" and exit.
     pub fn send(&self, ev: ReplicaApply) -> Result<(), SendError<ReplicaApply>> {
-        self.inner.send(ev)
+        self.inner.send(ev)?;
+        // One self-pipe write per drain cycle, not per frame: the flag
+        // stays raised until the shard's drain lowers it.
+        if !self.signal.wake_pending.swap(true, Ordering::AcqRel)
+            && let Some(w) = self.signal.waker.get()
+        {
+            let _ = w.wake();
+        }
+        Ok(())
     }
 }
 
-/// Receiver end. Lives inside the (private) `Shard`; drained once
-/// per reactor tick. Constructed by [`replica_inbox_pair`] and
+/// Receiver end. Lives inside the (private) `Shard`; drained every
+/// reactor iteration. Constructed by [`replica_inbox_pair`] and
 /// handed to the runtime via `Runtime::with_replica_inboxes`.
 pub struct ReplicaInboxReceiver {
     pub(crate) inner: Receiver<ReplicaApply>,
+    pub(crate) signal: Arc<InboxSignal>,
+}
+
+impl ReplicaInboxReceiver {
+    /// Install the owning shard's waker — called once at reactor
+    /// start, after which sends interrupt a parked `Poller::wait`.
+    pub(crate) fn attach_waker(&self, waker: Arc<Waker>) {
+        let _ = self.signal.waker.set(waker);
+    }
 }
 
 /// Create a matched (sender, receiver) pair for one shard's replica
@@ -82,9 +148,13 @@ pub struct ReplicaInboxReceiver {
 #[must_use]
 pub fn replica_inbox_pair() -> (ReplicaInboxSender, ReplicaInboxReceiver) {
     let (tx, rx) = channel();
+    let signal = Arc::new(InboxSignal {
+        waker: OnceLock::new(),
+        wake_pending: AtomicBool::new(false),
+    });
     (
-        ReplicaInboxSender { inner: tx },
-        ReplicaInboxReceiver { inner: rx },
+        ReplicaInboxSender { inner: tx, signal: Arc::clone(&signal) },
+        ReplicaInboxReceiver { inner: rx, signal },
     )
 }
 

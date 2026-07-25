@@ -4,13 +4,15 @@
 //! `StreamId` types + entry-side ops) so each file stays under the
 //! project's ≤500-LOC rule.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use super::group::{AutoclaimResult, ReadGroupId};
 use super::{
     GroupCreateMode, PendingExtended, PendingSummary, StreamData, StreamId, XAddIdSpec, XClaimOpts,
 };
 use crate::value::{SmallBytes, Value};
 use crate::{Entry, Store, StoreError};
-use std::sync::Arc;
+use alloc::sync::Arc;
 
 /// Cloned-out view of stream entries, the cross-module wire form. Keeps
 /// the same shape Redis sends and lets the callers stay decoupled from

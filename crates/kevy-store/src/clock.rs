@@ -16,8 +16,8 @@
 //!
 //! Split out of `lib.rs` to keep it under the 500-LOC house cap.
 
-use std::num::NonZeroU64;
-use std::time::Duration;
+use core::num::NonZeroU64;
+use core::time::Duration;
 
 /// Encode an absolute deadline (ns since epoch) as a packed `Option`. `None`
 /// only when `deadline_ns == 0` — the niche sentinel, which a real TTL'd key
@@ -42,7 +42,7 @@ pub(crate) fn remaining_ms(deadline: NonZeroU64, now_ns: u64) -> u64 {
     deadline.get().saturating_sub(now_ns) / 1_000_000
 }
 
-#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+#[cfg(not(any(feature = "external-clock", all(target_arch = "wasm32", target_os = "unknown"))))]
 mod source {
     use std::sync::OnceLock;
     use std::time::Instant;
@@ -61,17 +61,89 @@ mod source {
     }
 }
 
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-mod source {
-    use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(any(test, feature = "external-clock", all(target_arch = "wasm32", target_os = "unknown")))]
+pub(crate) mod hostfed {
+    //! One host-fed 64-bit cell, atomic on every target. Where the ISA
+    //! has 64-bit atomics this is a plain `AtomicU64`; on 32-bit-only
+    //! MCUs (ARMv7E-M etc.) it degrades to a single-writer seqlock over
+    //! two `AtomicU32` halves — the host feeds the clock from one
+    //! context, so the reader's retry loop settles immediately.
+    #[cfg(target_has_atomic = "64")]
+    use core::sync::atomic::AtomicU64;
+    use core::sync::atomic::{AtomicU32, Ordering};
 
+    #[cfg(target_has_atomic = "64")]
+    #[cfg_attr(test, allow(dead_code))]
+    pub(super) struct Cell(AtomicU64);
+
+    #[cfg(target_has_atomic = "64")]
+    #[cfg_attr(test, allow(dead_code))]
+    impl Cell {
+        pub(super) const fn new() -> Self {
+            Cell(AtomicU64::new(0))
+        }
+        #[inline]
+        pub(super) fn load(&self) -> u64 {
+            self.0.load(Ordering::Relaxed)
+        }
+        #[inline]
+        pub(super) fn store(&self, v: u64) {
+            self.0.store(v, Ordering::Relaxed);
+        }
+    }
+
+    #[cfg(not(target_has_atomic = "64"))]
+    pub(super) type Cell = SeqCell;
+
+    /// Single-writer seqlock over two `AtomicU32` halves — the Cell
+    /// form for ISAs without 64-bit atomics. Compiled on every target
+    /// so the host test suite can exercise the retry protocol; only
+    /// the `Cell` alias is gated.
+    #[allow(dead_code)]
+    pub(crate) struct SeqCell {
+        seq: AtomicU32,
+        hi: AtomicU32,
+        lo: AtomicU32,
+    }
+
+    #[allow(dead_code)]
+    impl SeqCell {
+        pub(crate) const fn new() -> Self {
+            SeqCell { seq: AtomicU32::new(0), hi: AtomicU32::new(0), lo: AtomicU32::new(0) }
+        }
+        #[inline]
+        pub(crate) fn load(&self) -> u64 {
+            loop {
+                let s1 = self.seq.load(Ordering::Acquire);
+                let hi = self.hi.load(Ordering::Acquire);
+                let lo = self.lo.load(Ordering::Acquire);
+                let s2 = self.seq.load(Ordering::Acquire);
+                if s1 == s2 && s1 & 1 == 0 {
+                    return (u64::from(hi) << 32) | u64::from(lo);
+                }
+            }
+        }
+        #[inline]
+        pub(crate) fn store(&self, v: u64) {
+            let s = self.seq.load(Ordering::Relaxed);
+            self.seq.store(s.wrapping_add(1), Ordering::Release); // odd: write in flight
+            self.hi.store((v >> 32) as u32, Ordering::Release);
+            self.lo.store(v as u32, Ordering::Release);
+            self.seq.store(s.wrapping_add(2), Ordering::Release); // even: settled
+        }
+    }
+}
+
+#[cfg(any(feature = "external-clock", all(target_arch = "wasm32", target_os = "unknown")))]
+mod source {
     /// Host-fed monotonic clock. `wasm32-unknown-unknown` has no `Instant`,
-    /// so the embedding (browser / JS) advances this via [`set_clock_ns`].
-    static MONO_NS: AtomicU64 = AtomicU64::new(0);
+    /// so the embedding (browser / JS / MCU firmware) advances this via
+    /// [`set_clock_ns`].
+    static MONO_NS: super::hostfed::Cell = super::hostfed::Cell::new();
 
     #[inline]
     pub(crate) fn now_ns() -> u64 {
-        MONO_NS.load(Ordering::Relaxed)
+        MONO_NS.load()
     }
 
     /// Feed the monotonic clock: `ns` is nanoseconds since an arbitrary fixed
@@ -81,36 +153,85 @@ mod source {
     /// it monotonic.
     #[inline]
     pub fn set_clock_ns(ns: u64) {
-        MONO_NS.store(ns, Ordering::Relaxed);
+        MONO_NS.store(ns);
     }
 }
 
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(any(feature = "external-clock", all(target_arch = "wasm32", target_os = "unknown")))]
 mod wall {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
     /// Host-fed wall clock (Unix-epoch millis) for `now_unix_ms` —
     /// `SystemTime::now()` also traps on `wasm32-unknown-unknown`. Used by
     /// `XADD` auto-IDs and `EXPIREAT`/`PEXPIREAT`. Reads `0` until fed.
-    static WALL_MS: AtomicU64 = AtomicU64::new(0);
+    static WALL_MS: super::hostfed::Cell = super::hostfed::Cell::new();
 
     #[inline]
     pub(crate) fn now_unix_ms() -> u64 {
-        WALL_MS.load(Ordering::Relaxed)
+        WALL_MS.load()
     }
 
     /// Feed the wall clock (Unix-epoch millis, e.g. `Date.now()`).
     #[inline]
     pub fn set_wall_clock_ms(ms: u64) {
-        WALL_MS.store(ms, Ordering::Relaxed);
+        WALL_MS.store(ms);
     }
 }
 
 pub(crate) use source::now_ns;
 
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(any(feature = "external-clock", all(target_arch = "wasm32", target_os = "unknown")))]
 pub use source::set_clock_ns;
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(any(feature = "external-clock", all(target_arch = "wasm32", target_os = "unknown")))]
 pub(crate) use wall::now_unix_ms as wall_now_unix_ms;
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(any(feature = "external-clock", all(target_arch = "wasm32", target_os = "unknown")))]
 pub use wall::set_wall_clock_ms;
+
+#[cfg(test)]
+mod seqlock_tests {
+    /// The 32-bit fallback cell must never surface a torn value: a
+    /// reader may only ever observe a (hi, lo) pair that some single
+    /// write published together. One writer cycles through values
+    /// whose halves are correlated (hi == !lo), readers assert the
+    /// invariant on every load.
+    #[test]
+    fn hostfed_cell_never_tears_under_a_writer() {
+        use super::hostfed::SeqCell as Cell;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let cell = Arc::new(Cell::new());
+        let stop = Arc::new(AtomicBool::new(false));
+        let writer = {
+            let (cell, stop) = (Arc::clone(&cell), Arc::clone(&stop));
+            std::thread::spawn(move || {
+                let mut i: u32 = 1;
+                while !stop.load(Ordering::Relaxed) {
+                    let v = (u64::from(i) << 32) | u64::from(!i);
+                    cell.store(v);
+                    i = i.wrapping_add(1);
+                }
+            })
+        };
+        let readers: Vec<_> = (0..3)
+            .map(|_| {
+                let (cell, stop) = (Arc::clone(&cell), Arc::clone(&stop));
+                std::thread::spawn(move || {
+                    let mut seen = 0u64;
+                    while !stop.load(Ordering::Relaxed) {
+                        let v = cell.load();
+                        if v != 0 {
+                            let (hi, lo) = ((v >> 32) as u32, v as u32);
+                            assert_eq!(hi, !lo, "torn read: {v:#x}");
+                            seen += 1;
+                        }
+                    }
+                    seen
+                })
+            })
+            .collect();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        stop.store(true, Ordering::Relaxed);
+        writer.join().unwrap();
+        let total: u64 = readers.into_iter().map(|r| r.join().unwrap()).sum();
+        assert!(total > 10_000, "readers barely ran ({total} loads)");
+    }
+}

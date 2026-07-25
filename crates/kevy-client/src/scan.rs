@@ -6,7 +6,7 @@
 //! Use `KEYS` directly if you want the same data; `SCAN` exists so the
 //! same code can also run against a Redis server, where iteration matters.
 
-use std::io;
+use crate::{KevyError, KevyResult};
 
 use kevy_resp::Reply;
 
@@ -15,12 +15,12 @@ use crate::{Connection, array_to_bulks, string, unexpected};
 impl Connection {
     /// `KEYS pattern` — every key matching `pattern` (glob: `*`, `?`,
     /// `[abc]`). Use sparingly: O(N) over the whole keyspace.
-    pub fn keys(&mut self, pattern: &[u8]) -> io::Result<Vec<Vec<u8>>> {
+    pub fn keys(&mut self, pattern: &[u8]) -> KevyResult<Vec<Vec<u8>>> {
         match self {
             Self::Embedded(s) => Ok(s.with(|inner| inner.collect_keys(Some(pattern), None))),
             Self::Remote(c) => match c.request(&[b"KEYS".to_vec(), pattern.to_vec()])? {
                 Reply::Array(items) => array_to_bulks(items),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }
@@ -38,7 +38,7 @@ impl Connection {
         cursor: u64,
         pattern: Option<&[u8]>,
         count: Option<usize>,
-    ) -> io::Result<(u64, Vec<Vec<u8>>)> {
+    ) -> KevyResult<(u64, Vec<Vec<u8>>)> {
         match self {
             Self::Embedded(s) => {
                 // Embed has no real cursor: any non-zero cursor means the caller
@@ -69,7 +69,7 @@ impl Connection {
     ///
     /// Embed returns the lexicographically-first key (deterministic, no
     /// RNG); the server returns a truly random key. Both honour empty.
-    pub fn randomkey(&mut self) -> io::Result<Option<Vec<u8>>> {
+    pub fn randomkey(&mut self) -> KevyResult<Option<Vec<u8>>> {
         match self {
             Self::Embedded(s) => Ok(s.with(|inner| {
                 inner.collect_keys(None, Some(1)).into_iter().next()
@@ -77,7 +77,7 @@ impl Connection {
             Self::Remote(c) => match c.request(&[b"RANDOMKEY".to_vec()])? {
                 Reply::Bulk(v) => Ok(Some(v)),
                 Reply::Nil => Ok(None),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }
@@ -86,7 +86,7 @@ impl Connection {
 
 /// Unwrap the remote `SCAN` reply — a two-element array of
 /// `[next-cursor bulk, keys array]` — into `(next_cursor, keys)`.
-fn parse_scan_reply(reply: Reply) -> io::Result<(u64, Vec<Vec<u8>>)> {
+fn parse_scan_reply(reply: Reply) -> KevyResult<(u64, Vec<Vec<u8>>)> {
     match reply {
         Reply::Array(items) if items.len() == 2 => {
             let mut it = items.into_iter();
@@ -94,9 +94,9 @@ fn parse_scan_reply(reply: Reply) -> io::Result<(u64, Vec<Vec<u8>>)> {
             let keys_arr = it.next().unwrap();
             let next_cursor = match cursor_bulk {
                 Reply::Bulk(b) => std::str::from_utf8(&b)
-                    .map_err(|_| io::Error::other("non-utf8 SCAN cursor"))?
+                    .map_err(|_| KevyError::Protocol("non-utf8 SCAN cursor".into()))?
                     .parse()
-                    .map_err(|_| io::Error::other("bad SCAN cursor"))?,
+                    .map_err(|_| KevyError::Protocol("bad SCAN cursor".into()))?,
                 other => return Err(unexpected(other)),
             };
             let keys = match keys_arr {
@@ -105,7 +105,7 @@ fn parse_scan_reply(reply: Reply) -> io::Result<(u64, Vec<Vec<u8>>)> {
             };
             Ok((next_cursor, keys))
         }
-        Reply::Error(e) => Err(io::Error::other(string(e))),
+        Reply::Error(e) => Err(KevyError::Protocol(string(e))),
         other => Err(unexpected(other)),
     }
 }
@@ -116,7 +116,7 @@ mod tests {
 
     #[test]
     fn embedded_keys_matches_glob() {
-        let mut c = Connection::open("mem://").unwrap();
+        let mut c = Connection::connect("mem://").unwrap();
         c.set(b"user:1", b"a").unwrap();
         c.set(b"user:2", b"b").unwrap();
         c.set(b"other", b"c").unwrap();
@@ -127,7 +127,7 @@ mod tests {
 
     #[test]
     fn embedded_scan_returns_all_in_one_round() {
-        let mut c = Connection::open("mem://").unwrap();
+        let mut c = Connection::connect("mem://").unwrap();
         for i in 0..5 {
             c.set(format!("k{i}").as_bytes(), b"v").unwrap();
         }
@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn embedded_randomkey_empty_and_present() {
-        let mut c = Connection::open("mem://").unwrap();
+        let mut c = Connection::connect("mem://").unwrap();
         assert!(c.randomkey().unwrap().is_none());
         c.set(b"only", b"x").unwrap();
         assert_eq!(c.randomkey().unwrap(), Some(b"only".to_vec()));

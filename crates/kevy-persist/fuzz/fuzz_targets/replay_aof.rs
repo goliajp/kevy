@@ -1,6 +1,6 @@
 //! Fuzz `kevy_persist::replay_aof` on arbitrary byte streams.
 //!
-//! Motivated by the mailrs 2026-06-03 incident: pre-1.1.1, the replay
+//! Motivated by a production incident: pre-1.1.1, the replay
 //! path silently `break`'d on any parse error, so prod restarts after a
 //! poisoned AOF came up with an empty store and no log line. Post-1.1.1
 //! the path emits a loud summary line; this target asserts the post-1.1.1
@@ -11,7 +11,7 @@
 //!   * pure RESP streams
 //!   * pure inline-form streams (the RESP "raw text" fallback)
 //!   * non-kevy bytes accidentally prepended (the original incident shape)
-//!   * v1.2.0 AOF_MAGIC prefix + arbitrary tail
+//!   * AOF_MAGIC prefix + arbitrary tail
 //!   * malformed multibulk length headers
 //!   * arbitrary corruption mid-stream
 

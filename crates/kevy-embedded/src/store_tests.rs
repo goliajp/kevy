@@ -1,4 +1,4 @@
-use super::*;
+use crate::store::*;
 use crate::KevyMetric;
 use crate::config::{AppendFsync, EvictionPolicy};
 use std::path::PathBuf;
@@ -100,7 +100,7 @@ fn manual_tick_runs_active_reaper() {
 fn with_escape_hatch_works() {
     let s = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
     let zsize = s.with(|store| {
-        let _ = store.zadd(b"z", &[(1.0, b"a".to_vec()), (2.0, b"b".to_vec())]);
+        let _ = store.zadd(b"z", &[(1.0, b"a".as_slice()), (2.0, b"b".as_slice())]);
         store.zcard(b"z").unwrap()
     });
     assert_eq!(zsize, 2);
@@ -326,5 +326,90 @@ fn save_snapshot_resets_aof_no_double_replay() {
         3,
         "snapshot + replayed AOF must not double-apply pre-snapshot RPUSHes"
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// open_report(): the machine-readable twin of the boot WARN line. A clean
+// open reports zero drops; an open over a damaged AOF reports the dropped
+// bytes, the corrupt flag, and the quarantine file the repair wrote — the
+// signal a host turns into a startup health check (the 3-day silent-loss
+// incident was this exact signal living only in stderr).
+#[test]
+fn open_report_surfaces_drops_corruption_and_quarantine() {
+    let dir = tmp_dir("open-report");
+    {
+        let s = Store::open(
+            Config::default()
+                .with_persist(&dir)
+                .with_ttl_reaper_manual()
+                .with_appendfsync(AppendFsync::Always),
+        )
+        .unwrap();
+        for i in 0..20 {
+            s.set(format!("k{i}").as_bytes(), b"v").unwrap();
+        }
+        let clean = s.open_report();
+        assert_eq!(clean.dropped_bytes, 0);
+        assert!(!clean.corrupt);
+        assert!(clean.quarantine_paths.is_empty());
+    }
+    // Damage the AOF at a record boundary: a v2 record whose length is
+    // plausible but whose checksum lies (the bit-rot shape), followed by
+    // more bytes that the stop drops — the v2 walk classifies it corrupt
+    // and the open must quarantine everything from there.
+    let aof = dir.join("aof-0.aof");
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().append(true).open(&aof).unwrap();
+        f.write_all(&4u32.to_le_bytes()).unwrap(); // len 4
+        f.write_all(&0u32.to_le_bytes()).unwrap(); // wrong crc
+        f.write_all(b"abcd").unwrap();
+        f.write_all(b"trailing-good-bytes-lost-with-the-bad-record").unwrap();
+    }
+    let s = Store::open(
+        Config::default().with_persist(&dir).with_ttl_reaper_manual(),
+    )
+    .unwrap();
+    let r = s.open_report();
+    assert!(r.dropped_bytes > 0, "damage must be reported: {r:?}");
+    assert!(r.corrupt, "parser-failing damage must set corrupt: {r:?}");
+    assert_eq!(r.quarantine_paths.len(), 1, "repair must quarantine: {r:?}");
+    assert!(r.quarantine_paths[0].exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// shutdown(): the two-line signal-handler contract. After it returns, every
+// pre-shutdown write is on disk (a real fsync, not the EverySec window) and
+// every later write is refused with Closed — while reads stay available and
+// any clone's shutdown gates all clones.
+#[test]
+fn shutdown_fsyncs_refuses_writes_and_survives_reopen() {
+    let dir = tmp_dir("shutdown");
+    {
+        let s = Store::open(
+            Config::default().with_persist(&dir).with_ttl_reaper_manual(),
+        )
+        .unwrap();
+        let clone = s.clone();
+        for i in 0..50 {
+            s.set(format!("k{i}").as_bytes(), b"v").unwrap();
+        }
+        s.shutdown().unwrap();
+        // Writes refused — on the clone too (the flag is shared).
+        assert!(matches!(s.set(b"late", b"x"), Err(crate::KevyError::Closed)));
+        assert!(matches!(clone.set(b"late", b"x"), Err(crate::KevyError::Closed)));
+        assert!(matches!(s.incr_by(b"n", 1), Err(crate::KevyError::Closed)));
+        // Reads stay available.
+        assert_eq!(s.get(b"k0").unwrap(), Some(b"v".to_vec()));
+        // Idempotent.
+        s.shutdown().unwrap();
+    }
+    // Everything written before shutdown survived the (clean) teardown.
+    let s = Store::open(
+        Config::default().with_persist(&dir).with_ttl_reaper_manual(),
+    )
+    .unwrap();
+    assert_eq!(s.get(b"k49").unwrap(), Some(b"v".to_vec()));
+    assert_eq!(s.get(b"late").unwrap(), None, "refused write must not exist");
     let _ = std::fs::remove_dir_all(&dir);
 }

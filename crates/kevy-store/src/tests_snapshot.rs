@@ -27,7 +27,7 @@ fn snapshot_view_is_point_in_time_for_strings() {
 
     let view = s.collect_snapshot();
     s.set(b"a", b"new".to_vec(), None, false, false);
-    s.del(&[b"gone".to_vec()]);
+    s.del(&[b"gone".as_slice()]);
     s.set(b"later", b"y".to_vec(), None, false, false);
 
     assert_eq!(view.len(), 2);
@@ -56,12 +56,12 @@ fn snapshot_view_collections_are_cow() {
     let big_w: Vec<u8> = vec![b'w'; 30];
     let big_f: Vec<u8> = vec![b'f'; 8];
     let big_g: Vec<u8> = vec![b'g'; 8];
-    s.hset(b"h", &[(big_f.clone(), big_v1.clone())]).unwrap();
+    s.hset(b"h", &[(big_f.as_slice(), big_v1.as_slice())]).unwrap();
 
     let view = s.collect_snapshot();
     s.hset(
         b"h",
-        &[(big_f.clone(), big_v2.clone()), (big_g.clone(), big_w.clone())],
+        &[(big_f.as_slice(), big_v2.as_slice()), (big_g.as_slice(), big_w.as_slice())],
     )
     .unwrap();
 
@@ -85,10 +85,10 @@ fn snapshot_view_collections_are_cow() {
 fn snapshot_view_outlives_deletion_of_collections() {
     let mut s = Store::new();
     for i in 0..100u32 {
-        s.hset(b"big", &[(format!("f{i}").into_bytes(), vec![b'x'; 64])]).unwrap();
+        s.hset(b"big", &[(format!("f{i}").into_bytes().as_slice(), vec![b'x'; 64].as_slice())]).unwrap();
     }
     let view = s.collect_snapshot();
-    s.del(&[b"big".to_vec()]);
+    s.del(&[b"big".as_slice()]);
     drop(s);
     match view_get(&view, b"big") {
         Some(Value::Hash(h)) => assert_eq!(h.len(), 100),
@@ -168,7 +168,9 @@ fn collect_pause_is_independent_of_collection_size() {
         let pairs: Vec<(Vec<u8>, Vec<u8>)> = (0..100_000u32)
             .map(|i| (format!("f{i}").into_bytes(), b"valueval".to_vec()))
             .collect();
-        s.hset(format!("big{k}").as_bytes(), &pairs).unwrap();
+        let pair_refs: Vec<(&[u8], &[u8])> =
+            pairs.iter().map(|(f, v)| (f.as_slice(), v.as_slice())).collect();
+        s.hset(format!("big{k}").as_bytes(), &pair_refs).unwrap();
     }
     let t0 = std::time::Instant::now();
     let view = s.collect_snapshot();

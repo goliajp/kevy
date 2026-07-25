@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FAILOVER — kevy 命令参考</title>
+<meta name="description" content="FAILOVER — 有计划的零丢失切换：停写、等目标副本追平、把它提升为主、然后本机改为跟随它。 命令本身 O(1) —— 切换在后台进行，不断轮询目标直到它追平为止。">
+<link rel="stylesheet" href="../../../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../../../assets/docs.css?v=d4b38be8">
+<script src="../../../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../../zh/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../../../zh/docs/">文档</a>
+      <a href="../../../../zh/docs/commands/" aria-current="page">命令</a>
+      <a href="../../../../zh/benchmarks/">基准</a>
+      <a href="../../../../zh/play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../../../zh/docs/search-index.json" data-root="../../../../zh/">
+        <input type="search" placeholder="搜索文档……" aria-label="搜索文档……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language">
+        <a href="../../../../docs/commands/FAILOVER/">EN</a>
+        <a href="../../../../zh/docs/commands/FAILOVER/" aria-current="page">中文</a>
+        <a href="../../../../ja/docs/commands/FAILOVER/">日本語</a>
+      </nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+<main id="main" class="page">
+  <article class="band ref">
+    <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>复制</span> <span>/</span> <b>FAILOVER</b></nav>
+
+    <h1 class="cmd">FAILOVER</h1>
+    <p class="lede">有计划的零丢失切换：停写、等目标副本追平、把它提升为主、然后本机改为跟随它。</p>
+
+    <pre class="syntax"><code>FAILOVER host port [TIMEOUT ms] | ABORT</code></pre>
+
+    <dl class="meta">
+      <div><dt>分组</dt><dd>复制</dd></div>
+      <div><dt>起始版本</dt><dd class="mono">3.0.0</dd></div>
+      <div><dt>参数个数</dt><dd class="mono">至少 3 个</dd></div>
+      <div><dt>标志</dt><dd><code>write</code> <code>admin</code></dd></div>
+    </dl>
+
+    <section>
+      <h2>复杂度</h2>
+      <p class="cx-body"><code>命令本身 O(1) —— 切换在后台进行，不断轮询目标直到它追平为止。</code></p>
+      <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的，不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误，但不是。</p>
+    </section>
+
+    <section>
+      <h2>与 Redis 的兼容性</h2>
+      <div class="call loss">
+        <span class="h">有差异</span>
+        <p>有差异：Redis 的语法是 FAILOVER [TO host port [FORCE]] [ABORT] [TIMEOUT ms]，目标可选；kevy 的是 FAILOVER host port [TIMEOUT ms] | ABORT —— 目标是必填的位置参数，而且这里给的 port 是目标的客户端端口。</p>
+      </div>
+    </section>
+
+    <section class="siblings">
+      <h2>另见</h2>
+      <p class="sees"><a href="../REPL.TOKEN/">REPL.TOKEN</a><a href="../REPL.WAIT/">REPL.WAIT</a><a href="../REPLICAOF/">REPLICAOF</a><a href="../ROLE/">ROLE</a><a href="../SLAVEOF/">SLAVEOF</a><a href="../WAIT/">WAIT</a></p>
+    </section>
+
+    <p class="back"><a href="../">← 返回全部命令</a></p>
+  </article>
+</main>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

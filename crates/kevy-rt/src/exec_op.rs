@@ -47,7 +47,8 @@ impl<C: Commands> Shard<C> {
     pub(crate) fn exec_op(&mut self, op: Op) -> Part {
         match op {
             Op::Del(keys) => {
-                let n = self.store.del(&keys);
+                let key_refs: Vec<&[u8]> = keys.iter().map(Vec::as_slice).collect();
+                let n = self.store.del(&key_refs);
                 if n > 0 {
                     for k in &keys {
                         self.store.bump_if_watched(k);
@@ -62,13 +63,16 @@ impl<C: Commands> Shard<C> {
                 }
                 Part::Int(n as i64)
             }
-            Op::Exists(keys) => Part::Int(self.store.exists(&keys) as i64),
+            Op::Exists(keys) => {
+                let key_refs: Vec<&[u8]> = keys.iter().map(Vec::as_slice).collect();
+                Part::Int(self.store.exists(&key_refs) as i64)
+            }
             Op::Dbsize => Part::Int(self.store.dbsize() as i64),
             Op::Flush => {
                 self.store.flushall();
                 // Every WATCH against this shard is now invalidated.
                 self.store.bump_all_watched();
-                // v2.3 feed contract: FLUSHALL breaks stream continuity
+                // Feed contract: FLUSHALL breaks stream continuity
                 // — bump the generation (offsets restart at 0) and
                 // persist the high-water before serving under it.
                 if let Some(f) = self.replicate.as_mut() {
@@ -146,12 +150,12 @@ impl<C: Commands> Shard<C> {
                 Part::Int(n as i64)
             }
             Op::SetStoreResult { dst, members } => {
-                let del = [dst.clone()];
-                self.store.del(&del);
+                self.store.del(&[dst.as_slice()]);
                 let n = if members.is_empty() {
                     0
                 } else {
-                    self.store.sadd(&dst, &members).unwrap_or(0)
+                    let member_refs: Vec<&[u8]> = members.iter().map(Vec::as_slice).collect();
+                    self.store.sadd(&dst, &member_refs).unwrap_or(0)
                 };
                 self.store.bump_if_watched(&dst);
                 let mut c = Argv::with_capacity(2, 0);
@@ -177,7 +181,12 @@ impl<C: Commands> Shard<C> {
                 let chunk = self.commands.extension_op(&mut self.store, &argv);
                 Part::ExtensionChunk(chunk)
             }
-            // v3.16 D2 REPL.TOKEN: live (generation, next_offset) off
+            // Read-only: the destination write is Op::ZStoreResult on the
+            // destination's own shard, so nothing is logged here.
+            Op::GeoSearch { argv } => {
+                Part::GeoHits(self.commands.geo_search(&mut self.store, &argv))
+            }
+            // REPL.TOKEN: live (generation, next_offset) off
             // this shard's feed. No feed installed (replication + CDC
             // both off) → (0, 0): generation 0 is the "no stream"
             // sentinel (real generations start at 1).
@@ -192,8 +201,24 @@ impl<C: Commands> Shard<C> {
                 let (keys, expires) = self.store.prefix_stats(&prefix);
                 Part::PrefixStats { keys, expires }
             }
+            Op::ClientList => self.exec_client_list(),
+            Op::ClientKill(filter) => self.exec_client_kill(&filter),
             Op::CollectKeys(pat, limit) => {
                 Part::Keys(self.store.collect_keys(pat.as_deref(), limit))
+            }
+            Op::RandomKey => Part::RandomKey {
+                key: self.store.random_key(),
+                live: self.store.dbsize() as u64,
+                draw: self.store.rand_draw(),
+            },
+            Op::ScanStep { cursor, count, pattern, type_filter } => {
+                let (next, keys, visited) = self.store.scan_page(
+                    cursor,
+                    count,
+                    pattern.as_deref(),
+                    type_filter.as_deref(),
+                );
+                Part::ScanPage { next, keys, visited }
             }
             Op::CheckWatch(keys) => {
                 // EXEC's pre-execution fan-out: report whether any of
@@ -241,6 +266,83 @@ impl<C: Commands> Shard<C> {
                     }
                 }
                 Part::Reply(SmallReply::from_vec(reply))
+            }
+            Op::ListMove { src, dst, from_left, to_left } => {
+                // Same-shard atomic move — `start_list_move` only emits this
+                // when one shard owns both keys, which is exactly Redis's
+                // atomicity.
+                let moved = if !from_left && to_left {
+                    self.store.rpoplpush(&src, &dst)
+                } else {
+                    self.store.lmove(&src, &dst, from_left, to_left)
+                };
+                // The same-shard arm answers with the finished reply — the
+                // slot is a plain `Agg::First`, exactly like every other
+                // single-shard write.
+                let mut out = Vec::new();
+                match moved {
+                    Ok(Some(v)) => {
+                        self.after_list_move(&src, &dst, from_left, to_left);
+                        kevy_resp::encode_bulk(&mut out, &v);
+                    }
+                    Ok(None) => out.extend_from_slice(b"$-1\r\n"),
+                    Err(_) => out.extend_from_slice(
+                        b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n",
+                    ),
+                }
+                Part::Reply(SmallReply::from_vec(out))
+            }
+            Op::ListMoveTake { key, from_left } => {
+                // Step 1 of the cross-shard move: pop one element. The
+                // destination is not touched until the element is in hand, so
+                // an empty source costs the destination nothing.
+                let popped = if from_left {
+                    self.store.lpop(&key, 1)
+                } else {
+                    self.store.rpop(&key, 1)
+                };
+                match popped {
+                    Ok(mut v) => {
+                        let element = v.pop();
+                        if element.is_some() {
+                            self.store.bump_if_watched(&key);
+                            self.log_list_pop(&key, from_left);
+                            self.notify_list_event(&key, from_left, true);
+                        }
+                        Part::ListMoveTaken(Ok(element))
+                    }
+                    Err(_) => Part::ListMoveTaken(Err(())),
+                }
+            }
+            Op::ListMovePush { key, value, to_left } => {
+                // Step 2. A destination that exists and is not a list refuses
+                // the element and hands it back — the orchestrator restores it
+                // to the source rather than dropping it.
+                let pushed = if to_left {
+                    self.store.lpush(&key, &[value.as_slice()])
+                } else {
+                    self.store.rpush(&key, &[value.as_slice()])
+                };
+                match pushed {
+                    Ok(_) => {
+                        self.store.bump_if_watched(&key);
+                        self.notify_list_event(&key, to_left, false);
+                        self.log_list_push(&key, &value, to_left);
+                        Part::ListMovePushed { refused: None }
+                    }
+                    Err(_) => Part::ListMovePushed { refused: Some(value) },
+                }
+            }
+            Op::ListMoveRestore { key, value, from_left } => {
+                // Rollback: put the element back on the end it was taken from.
+                let _ = if from_left {
+                    self.store.lpush(&key, &[value.as_slice()])
+                } else {
+                    self.store.rpush(&key, &[value.as_slice()])
+                };
+                self.store.bump_if_watched(&key);
+                self.log_list_push(&key, &value, from_left);
+                Part::Ok
             }
             Op::RenameTake(src) => {
                 // Step 1 of cross-shard RENAME: atomically take the
@@ -294,12 +396,12 @@ impl<C: Commands> Shard<C> {
                 Part::WatchVersions(out)
             }
             Op::Save => {
-                // v1.25.x A.3 follow-up: `SAVE` was previously a synchronous
+                // `SAVE` was previously a synchronous
                 // `save_snapshot(&self.store, &path)` on the shard thread,
                 // holding the reactor for the entire RDB serialize + disk
                 // write — the last shard-blocker on the persistence path
-                // (BGSAVE/BGREWRITEAOF/auto-rewrite migrated to the per-shard
-                // `PersistWorker` in `8cc2bcf` 2026-06-11). It now delegates
+                // (BGSAVE/BGREWRITEAOF/auto-rewrite already run on the
+                // per-shard `PersistWorker`). It now delegates
                 // to [`Self::start_bg_save`]: freeze a COW [`SnapshotView`]
                 // on this thread (O(n) shallow — 8 ns/entry, see
                 // `kevy_store::Store::collect_snapshot`), hand off the

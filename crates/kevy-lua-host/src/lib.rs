@@ -3,7 +3,7 @@
 //!
 //! `kevy-lua`'s dispatch closure type is
 //! `Fn(&[&[u8]], bool) -> Vec<u8> + 'static`. The `'static` bound is
-//! mandatory — luna stores the closure as Vm userdata (`Any + 'static`).
+//! mandatory — luna-core stores the closure as Vm userdata (`Any + 'static`).
 //! That makes it impossible to capture `&mut T` directly. This crate
 //! offers a tiny `LuaHost<T>` wrapper that re-introduces the borrow via
 //! a scoped thread-local pointer set inside `LuaHost::eval` and cleared
@@ -30,8 +30,8 @@
 //!   gives correct isolation without any synchronisation overhead.
 //!
 //! The unsafe footprint is **one** `unsafe { &mut *p }` inside
-//! `with_current` plus the `Cell::set(ptr)` ergonomics. Audited per
-//! every kevy v1.27+ commit touching this file.
+//! `with_current` plus the `Cell::set(ptr)` ergonomics. Audit it on
+//! every commit touching this file.
 
 #![doc(html_no_source)]
 
@@ -71,6 +71,44 @@ fn set_current<T>(ctx: &mut T) -> ResetCurrent {
         p
     });
     ResetCurrent { prev }
+}
+
+thread_local! {
+    /// Per-thread parked host for [`with_thread_host`], type-erased so
+    /// one slot serves any `T`.
+    static THREAD_HOST: std::cell::RefCell<Option<Box<dyn std::any::Any>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` against this thread's lazily-built [`LuaHost<T>`].
+///
+/// A `LuaHost` is `!Send` — luna-core's `Vm` holds `Rc`s and raw GC
+/// pointers — so a thread-per-core server cannot park it inside its
+/// `Send` per-shard command value. This slot keeps one host per shard
+/// *thread* instead: identical isolation (thread == shard), owned by
+/// the crate that knows why the type can't travel.
+///
+/// `build` runs once, on the first call on this thread. Returns
+/// `None` when the slot is already borrowed — a re-entrant eval on
+/// the same thread; callers surface their nested-eval error. A parked
+/// host of a *different* `T` (mixed test harnesses; production uses
+/// one `T` per process) is dropped and rebuilt.
+pub fn with_thread_host<T: 'static, R>(
+    build: impl FnOnce() -> LuaHost<T>,
+    f: impl FnOnce(&mut LuaHost<T>) -> R,
+) -> Option<R> {
+    THREAD_HOST.with(|slot| {
+        let mut g = slot.try_borrow_mut().ok()?;
+        if !g.as_ref().is_some_and(|b| b.is::<LuaHost<T>>()) {
+            *g = Some(Box::new(build()));
+        }
+        let host = g
+            .as_mut()
+            .expect("slot filled above")
+            .downcast_mut::<LuaHost<T>>()
+            .expect("type matched or rebuilt above");
+        Some(f(host))
+    })
 }
 
 /// Run `f` with a mutable borrow of the currently-set host context.
@@ -356,7 +394,7 @@ mod p7e_tests {
             &[],
             &[],
         );
-        // Budget exceeded → luna surfaces an error → bridge wraps in
+        // Budget exceeded → the interpreter surfaces an error → bridge wraps in
         // -ERR. Don't be picky about the exact wording — just confirm
         // it's an error, not an integer result.
         assert!(

@@ -1,4 +1,4 @@
-//! v1.49 — burst/ramp + realistic-data workload chaos (Phase D step 2).
+//! Burst/ramp + realistic-data workload chaos.
 //!
 //! Production traffic isn't uniform; it has steady-state, bursts,
 //! ramps, and cooldowns, and the payload mix spans tiny strings,
@@ -48,7 +48,7 @@ const BURST_RATE: u64 = 2500;
 const COOLDOWN_RATE: u64 = 50;
 const PHASE_DURATION_MS: u64 = 1000;
 
-/// Std-only LCG (matches v1.36 fuzz harness).
+/// Std-only LCG (same constants as the wire-torture fuzz harness).
 struct Lcg(u64);
 impl Lcg {
     fn next_u64(&mut self) -> u64 {

@@ -1,10 +1,10 @@
 use super::*;
-use kevy_rt::{Commands, Route, TxnKind};
+use kevy_rt::{Commands, MultiOp, Route, TxnKind};
 
 /// Dispatch a command (given as argv pieces) against `store`, returning RESP.
 fn d(store: &mut Store, parts: &[&[u8]]) -> Vec<u8> {
     let args = Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>());
-    dispatch(store, &args)
+    KevyCommands::new().dispatch(store, &args)
 }
 
 #[test]
@@ -78,7 +78,8 @@ fn unknown_and_config_and_type() {
     let s_reply = std::str::from_utf8(&reply).unwrap();
     assert!(s_reply.starts_with("*2\r\n"), "got {s_reply:?}");
     assert!(s_reply.contains("maxmemory"));
-    // CONFIG SET is read-only in v1.0; Wave 2 wires up actual mutability.
+    // CONFIG SET rejects unknown parameters with -ERR (the hot-settable
+    // matrix only accepts known keys).
     assert!(d(&mut s, &[b"CONFIG", b"SET", b"x", b"y"]).starts_with(b"-ERR"));
     assert_eq!(d(&mut s, &[b"TYPE", b"missing"]), b"+none\r\n");
     d(&mut s, &[b"SET", b"k", b"v"]);
@@ -102,7 +103,7 @@ fn string_completion() {
 
 #[test]
 fn routing_and_write_classification() {
-    let c = KevyCommands;
+    let c = KevyCommands::new();
     let a = |parts: &[&[u8]]| Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>());
     assert!(matches!(c.route(&a(&[b"GET", b"k"])), Route::Single(1)));
     assert!(matches!(c.route(&a(&[b"PING"])), Route::Local));
@@ -176,7 +177,7 @@ fn argv(parts: &[&[u8]]) -> Argv {
 
 #[test]
 fn route_local_verbs() {
-    let c = KevyCommands;
+    let c = KevyCommands::new();
     for v in [
         "PING", "ECHO", "QUIT", "COMMAND", "CONFIG", "INFO", "CLUSTER",
         "DEBUG", "WAIT", "SHUTDOWN", "CLIENT",
@@ -186,8 +187,8 @@ fn route_local_verbs() {
             "{v}"
         );
     }
-    // HELLO is now Route::Hello (its own conn-level handler — v1.4.0
-    // gained HELLO 3 + per-conn RespVersion negotiation).
+    // HELLO is Route::Hello (its own conn-level handler:
+    // HELLO 3 + per-conn RespVersion negotiation).
     assert!(matches!(c.route(&argv(&[b"HELLO"])), Route::Hello));
     assert!(matches!(c.route(&argv(&[b"HELLO", b"3"])), Route::Hello));
     // Empty args is also Route::Local (server-side error reply).
@@ -196,19 +197,22 @@ fn route_local_verbs() {
 
 #[test]
 fn route_keyspace_verbs() {
-    let c = KevyCommands;
+    let c = KevyCommands::new();
     assert!(matches!(c.route(&argv(&[b"DBSIZE"])), Route::Dbsize));
     assert!(matches!(c.route(&argv(&[b"FLUSHDB"])), Route::Flush));
     assert!(matches!(c.route(&argv(&[b"FLUSHALL"])), Route::Flush));
     assert!(matches!(c.route(&argv(&[b"SAVE"])), Route::Save));
     assert!(matches!(c.route(&argv(&[b"BGSAVE"])), Route::BgSave));
     assert!(matches!(c.route(&argv(&[b"BGREWRITEAOF"])), Route::RewriteAof));
-    assert!(matches!(c.route(&argv(&[b"RANDOMKEY"])), Route::RandomKey));
+    assert!(matches!(
+        c.route(&argv(&[b"RANDOMKEY"])),
+        Route::RandomKey
+    ));
 }
 
 #[test]
 fn route_multikey_and_pubsub_verbs() {
-    let c = KevyCommands;
+    let c = KevyCommands::new();
     // MSET takes pairs: total argv length must be odd (verb + 2N).
     assert!(matches!(
         c.route(&argv(&[b"MSET", b"k1", b"v1", b"k2", b"v2"])),
@@ -216,22 +220,28 @@ fn route_multikey_and_pubsub_verbs() {
     ));
     assert!(matches!(
         c.route(&argv(&[b"MGET", b"k1", b"k2"])),
-        Route::MGet
+        Route::Gather(MultiOp::Mget)
     ));
     assert!(matches!(
         c.route(&argv(&[b"SINTER", b"s1", b"s2"])),
-        Route::SInter
+        Route::Gather(MultiOp::SInter)
     ));
     assert!(matches!(
         c.route(&argv(&[b"SUNION", b"s1", b"s2"])),
-        Route::SUnion
+        Route::Gather(MultiOp::SUnion)
     ));
     assert!(matches!(
         c.route(&argv(&[b"SDIFF", b"s1", b"s2"])),
-        Route::SDiff
+        Route::Gather(MultiOp::SDiff)
     ));
-    assert!(matches!(c.route(&argv(&[b"KEYS", b"*"])), Route::Keys(_)));
-    assert!(matches!(c.route(&argv(&[b"SCAN", b"0"])), Route::Scan(_)));
+    assert!(matches!(
+        c.route(&argv(&[b"KEYS", b"*"])),
+        Route::Keys(Some(_))
+    ));
+    assert!(matches!(
+        c.route(&argv(&[b"SCAN", b"0"])),
+        Route::Scan(_)
+    ));
     assert!(matches!(
         c.route(&argv(&[b"SUBSCRIBE", b"chan"])),
         Route::Subscribe
@@ -245,7 +255,7 @@ fn route_multikey_and_pubsub_verbs() {
 
 #[test]
 fn route_del_exists_arity_branches() {
-    let c = KevyCommands;
+    let c = KevyCommands::new();
     // Single-key DEL / EXISTS hit the fast path Route::Single(1).
     assert!(matches!(c.route(&argv(&[b"DEL", b"k"])), Route::Single(1)));
     assert!(matches!(c.route(&argv(&[b"EXISTS", b"k"])), Route::Single(1)));
@@ -266,7 +276,7 @@ fn route_del_exists_arity_branches() {
 
 #[test]
 fn is_write_and_txn_kind_matrix() {
-    let c = KevyCommands;
+    let c = KevyCommands::new();
     // Write verbs.
     for v in ["SET", "DEL", "HSET", "LPUSH", "SADD", "ZADD", "INCR"] {
         assert!(c.is_write(&argv(&[v.as_bytes()])), "{v} should be write");
@@ -297,7 +307,7 @@ fn resolve_unifies_route_and_txn_kind() {
     // The hot-path `resolve` should agree with the individual accessors for
     // every verb category. Pin a representative each, plus the empty-args
     // sentinel, so the duplicated match table can't drift.
-    let c = KevyCommands;
+    let c = KevyCommands::new();
     let cases: &[(&[&[u8]], TxnKind, bool, bool)] = &[
         (&[b"PING"], TxnKind::Other, false, false),
         (&[b"QUIT"], TxnKind::Other, true, false),
@@ -337,8 +347,8 @@ fn resolve_unifies_route_and_txn_kind() {
         let argv = argv(&parts);
         let resolved = c.resolve(&argv);
         let routed = c.route(&argv);
-        // Compare by discriminant (Route doesn't impl Debug; payload-bearing
-        // arms like Keys / Scan / Single carry data so we only check kind).
+        // Compare by discriminant (payload-bearing arms like Keyspace /
+        // Single carry data so we only check the variant kind here).
         let want_d = std::mem::discriminant(&want);
         assert_eq!(
             std::mem::discriminant(&resolved.route),
@@ -356,11 +366,12 @@ fn resolve_unifies_route_and_txn_kind() {
 #[test]
 fn drain_commands_handles_quit_and_protocol_error() {
     let mut store = Store::new();
+    let kevy = KevyCommands::new();
 
     // Normal command + QUIT returns Close, with both replies appended.
     let mut input = b"*1\r\n$4\r\nPING\r\n*1\r\n$4\r\nQUIT\r\n".to_vec();
     let mut output = Vec::new();
-    let r = drain_commands(&mut store, &mut input, &mut output);
+    let r = drain_commands(&kevy, &mut store, &mut input, &mut output);
     assert!(
         matches!(r, AfterDrain::Close),
         "expected Close after QUIT — input remaining: {:?}, output: {:?}",
@@ -373,7 +384,7 @@ fn drain_commands_handles_quit_and_protocol_error() {
     // Incomplete frame → KeepOpen (no reply, partial bytes left in input).
     let mut input = b"*1\r\n$4\r\nPIN".to_vec(); // truncated mid-bulk
     let mut output = Vec::new();
-    let r = drain_commands(&mut store, &mut input, &mut output);
+    let r = drain_commands(&kevy, &mut store, &mut input, &mut output);
     assert!(matches!(r, AfterDrain::KeepOpen));
     assert!(output.is_empty());
 
@@ -381,7 +392,7 @@ fn drain_commands_handles_quit_and_protocol_error() {
     // *Z is a non-numeric array length — parser rejects with Err.
     let mut input = b"*Z\r\n".to_vec();
     let mut output = Vec::new();
-    let r = drain_commands(&mut store, &mut input, &mut output);
+    let r = drain_commands(&kevy, &mut store, &mut input, &mut output);
     assert!(
         matches!(r, AfterDrain::Close),
         "expected Close on bad RESP — output: {:?}",
@@ -432,7 +443,7 @@ fn shard_tick_interval_falls_back_to_disabled() {
     // With no `config_init` called (the test process default), the global
     // config returns `Config::default()`. With default hz != 0 we get a
     // non-zero interval; we mainly assert the function is callable.
-    let c = KevyCommands;
+    let c = KevyCommands::new();
     let ms = c.shard_tick_interval_ms();
     // Either disabled (hz=0) or capped 1..=10_000.
     assert!(ms == 0 || (1..=10_000).contains(&ms), "got {ms}");

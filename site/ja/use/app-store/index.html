@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>データベースなしで読みを捌く — kevy</title>
+<meta name="description" content="kevy のセカンダリインデックスとマテリアライズドビュー。絞り込んだ一覧や集計を、クエリにせず参照のまま保つ方法。">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../ja/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../../ja/docs/">ドキュメント</a>
+      <a href="../../../ja/docs/commands/">コマンド</a>
+      <a href="../../../ja/benchmarks/">ベンチマーク</a>
+      <a href="../../../ja/play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <nav class="lang" aria-label="Language">
+        <a href="../../../use/app-store/">EN</a>
+        <a href="../../../zh/use/app-store/">中文</a>
+        <a href="../../../ja/use/app-store/" aria-current="page">日本語</a>
+      </nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+<section class="band" style="border-top:0"><div>
+    <p class="eyebrow">主ストア</p>
+    <h1>読み取りを、参照のまま保つ</h1>
+    <p class="lede">「この顧客の、まだ open な注文をすべて」。「このカートに何点入っているか」。これらはアプリケーションが毎秒何千回も行う読み取りであり、リレーショナルデータベースでは、そのひとつひとつが、裏にプランナを抱えたクエリになります。<b>kevy なら、答えを用意しておけます。</b></p>
+    
+  </div></section>
+<section class="band prose"><h2>なぜ向いているのか</h2><div class="pcols"><p>キーバリューストアをアプリケーションのデータに使うことは、たいていひとつの反論で退けられます。<i>キー以外のもので引きたいのだが</i>、と。その反論は正しく、セカンダリインデックスは、まさにそのためにあります。</p><p><b>インデックスは、構築するものではなく宣言するものです。</b>キーのパターンとフィールドを指定すれば、書き込みパスが、それを最新に保ちます。絞り込んだ一覧は、ふたたび参照になります。プランナもスキャンもクエリもありません。</p><p><b>ビューはさらに進んで</b>、書き込み時に集計を最新に保ちます。件数や合計は、計算されるのではなく読まれます。ほとんどのアプリケーションが ORM に実際に求めているのはこれであり、データベースが忙しい理由も、これです。</p><p><b>そして、テーブル全体を一度に宣言できます。</b><code>TABLE.DECLARE</code> は型付きカラム、セカンダリインデックス、複合 <code>ORDER BY</code> パスを受け取り、宣言の時点で名前つきインデックスへコンパイルします——<code>kevy-sql</code> は、手元の PG/MySQL スキーマファイルから同じことをします。エンジンは相変わらず何もプランせず、スキーマを課しません。join とランタイム SQL は、名前つきで拒否されたままです。</p></div></section>
+<section class="band">
+  <div class="sec-h"><h2>キーではなく、フィールドで引く</h2><p class="sec-lede">「顧客 881 の注文をすべて」が、参照のままです。引きたいフィールドごとにインデックスを宣言し、普通に書き、値で読みます。</p></div>
+  <ol class="steps recipe"><li><h3>データは、いままでどおり書く</h3><pre><code>HSET order:1001 customer 881 status open  total 4400
+HSET order:1002 customer 881 status paid  total 8400
+HSET order:1003 customer 902 status open  total 1200</code></pre></li><li><h3>引きたいフィールドごとに、インデックスを 1 つ</h3><pre><code>IDX.CREATE idx:cust   ON PREFIX order: FIELD customer TYPE i64 KIND range
+IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range</code></pre></li><li><h3>クエリになるはずだった読み取り</h3><pre><code>IDX.QUERY idx:cust EQ 881
+-&gt; 1) &quot;0&quot;                       # cursor
+   2) 1) &quot;order:1001&quot;  2) &quot;881&quot;
+      3) &quot;order:1002&quot;  4) &quot;881&quot;</code></pre></li><li><h3>条件を 2 つ、同時に</h3><pre><code>IDX.QUERY COMPOSE AND idx:cust EQ 881 idx:status EQ open
+-&gt; 1) &quot;0&quot;
+   2) 1) 1) &quot;order:1001&quot;</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">コストと制約</span><p><b>インデックスの代金は、読み取りではなく書き込みのたびに支払います</b>——読み取り主体の配信には正しく、書き込み主体のログには間違った取引です。<b>結合はありません</b>し、今後も持ちません。インデックスが答えるのは「どのキーがこれらのフィールドに合致するか」であって、「この 2 つのコレクションを結合せよ」ではありません。読み取りに本当に結合が要るなら、Postgres に置いておいてください——どれがそれに当たるのかは、<a href="../../../ja/docs/rds-workloads/">RDS ワークロードのページ</a>に書いてあります。</p></div>
+</section>
+<section class="band">
+  <div class="sec-h"><h2>更新され続ける答えを、用意しておく</h2><p class="sec-lede">絞り込まれ、順序のついた一覧を、書き込みパスが維持します——古くなることが決してないので、読み取りが計算し直すこともありません。</p></div>
+  <ol class="steps recipe"><li><h3>同じインデックスの上に、ビューを宣言する</h3><p>括弧は、それぞれ独立した引数です。</p><pre><code>VIEW.CREATE v:open881 QUERY ( AND idx:cust EQ 881 idx:status EQ open )  ORDER BY idx:cust
+-&gt; OK</code></pre></li><li><h3>読む——ここでは何も計算されません</h3><pre><code>VIEW.QUERY  v:open881
+-&gt; 1) &quot;0&quot;
+   2) 1) &quot;order:1001&quot;  2) &quot;881&quot;</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">コストと制約</span><p>ビューは<b>書き込みパスの、終わらない仕事</b>です。合致するキーへの書き込みは、今日それを読む人がいるかどうかに関係なく、毎回ビューを更新します。アプリケーションが実際に捌いている読み取りのためにビューを宣言し、捌かなくなったら落としてください。ビューが組み合わせるインデックスは、先に存在している必要があります。</p></div>
+</section>
+<section class="band">
+  <div class="sec-h"><h2>テーブル全体を、一度で宣言する</h2><p class="sec-lede">リレーショナルなテーブルの読み取りパス——インデックスされた WHERE、残りのフィルタ、ORDER BY、ページング、COUNT——を、宣言 1 つで名前つきインデックスへコンパイルします。手元のスキーマファイルからでも。</p></div>
+  <ol class="steps recipe"><li><h3>カラムも、インデックスも、ソートパスも、宣言 1 つで</h3><p>行はプレフィックス配下の普通のハッシュのままです——欠けたカラムは NULL。kevy-cli sql compile schema.sql が、CREATE TABLE / CREATE INDEX からこの行を出力します。</p><pre><code>TABLE.DECLARE orders PREFIX order: PK id COLUMN id str COLUMN customer i64 COLUMN status str COLUMN total f64 INDEX status range VALUES total customer ORDERPATH by_customer ON customer THEN total DESC
+-&gt; OK</code></pre></li><li><h3>保存されたカラムでフィルタと集計——行は 1 つも読みません</h3><pre><code>IDX.QUERY orders.status EQ open FILTER total RANGE 2000 inf LIMIT 20
+-&gt; 1) &quot;0&quot;
+   2) 1) &quot;order:1001&quot;  2) &quot;open&quot;
+
+IDX.COUNT orders.status EQ open
+-&gt; (integer) 2</code></pre></li><li><h3>ORDER BY customer, total DESC の歩き方</h3><p>リレーショナルの複合インデックスと同じやり方で、複合インデックス 1 本が答えます——顧客ごとの注文を、大きい順に、再ソートなしで。</p><pre><code>IDX.QUERY orders.by_customer WHERE customer EQ 881 LIMIT 20 FIELDS status total</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">コストと制約</span><p><b>ランタイム SQL も join もありません。</b>サーバーは <code>SELECT</code> を未知のコマンドとして拒否します。<code>kevy-cli sql compile</code> はビルド時に PG/MySQL のスキーマファイルを上の宣言に変え、JOIN、サブクエリ、GROUP BY を名前つきで拒否して、それぞれを置き換えるレシピを指し示します。一意性は強制ではなく検証で、制約はエンジンのチェックではなくレシピです。<a href="../../../ja/docs/tiering/">ティアリング</a>をオンにすれば、index-only クエリは全行コールドでも RAM だけで答えます——コールドな行を読むのは最後の <code>FIELDS</code> ページだけ、1 行 1 回です。</p></div>
+</section>
+<section class="band"><div class="sec-h"><h2>次に</h2></div><div class="cards"><a class="card" href="../../../ja/docs/tables/">
+      <span class="card-k">ガイド</span>
+      <h3>テーブル</h3>
+      <p>型付きカラムとインデックスを一度宣言すれば、テーブルのように引ける。</p>
+      <span class="card-go">読む</span>
+    </a><a class="card" href="../../../ja/docs/designing-on-kevy/">
+      <span class="card-k">ガイド</span>
+      <h3>kevy での設計</h3>
+      <p>テーブルで考えることに慣れた頭で、キーで考える方法。</p>
+      <span class="card-go">読む</span>
+    </a><a class="card" href="../../../ja/docs/indexes/">
+      <span class="card-k">ガイド</span>
+      <h3>セカンダリインデックス</h3>
+      <p>どう構築され、何を要し、クエリプランをどう説明するのか。</p>
+      <span class="card-go">読む</span>
+    </a><a class="card" href="../../../ja/docs/rds-workloads/">
+      <span class="card-k">リファレンス</span>
+      <h3>RDS ワークロード</h3>
+      <p>リレーショナルな全パターンと、ここでやる場合の正直なコスト。</p>
+      <span class="card-go">読む</span>
+    </a></div></section>
+</main>
+
+<footer class="foot">
+  <div class="foot-in">
+    <p class="foot-b">kevy 4.0 — ほとんどのアプリケーションが、ORM に実際に求めている部分</p>
+    <nav>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+      <a href="https://crates.io/crates/kevy">crates.io</a>
+      <a href="../../../llms.txt">llms.txt</a>
+    </nav>
+  </div>
+</footer>
+
+
+
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

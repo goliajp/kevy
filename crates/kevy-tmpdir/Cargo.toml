@@ -1,0 +1,9 @@
+[package]
+name = "kevy-tmpdir"
+version = "4.0.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A temporary directory that is actually unique, and removes itself."

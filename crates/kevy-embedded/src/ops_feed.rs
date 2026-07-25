@@ -1,5 +1,5 @@
-//! v2.3 CDC consumer surface — embedded half (RFC 2026-07-04, LOCKED,
-//! D7). One stream per store: the embedded write path already
+//! CDC consumer surface — embedded half.
+//! One stream per store: the embedded write path already
 //! serializes every shard's mutations through `commit_write`, so the
 //! feed is a single `(generation, offset)` stream and
 //! [`Store::feed_shards`] reports 1 (server-parity consumer loops work
@@ -12,7 +12,7 @@
 //! open starts a fresh generation-1 stream, which is exactly what the
 //! (empty) restored state implies.
 
-use std::io;
+use crate::KevyResult;
 use std::sync::{Arc, Mutex};
 
 use kevy_replicate::feed::{FeedRead, FeedSource};
@@ -87,7 +87,7 @@ pub struct PrefixInfo {
 }
 
 impl Store {
-    /// v2.3 `info_prefix`: count live keys (and TTL'd keys) under a
+    /// `info_prefix`: count live keys (and TTL'd keys) under a
     /// byte prefix, across all shards. O(keyspace) — an ops/stats
     /// call, not a hot-path primitive.
     pub fn info_prefix(&self, prefix: &[u8]) -> PrefixInfo {
@@ -151,7 +151,7 @@ impl Store {
         Ok(ChangeBatch { changes, next: (g.generation(), next_off) })
     }
 
-    /// v2.3 feed hooks used by `commit_write` / `flushall` / close —
+    /// Feed hooks used by `commit_write` / `flushall` / close —
     /// `None` unless the store was opened with feed enabled.
     pub(crate) fn feed_handle(&self) -> Option<&Arc<Mutex<FeedSource>>> {
         self.feed.as_ref()
@@ -195,7 +195,7 @@ impl Store {
     /// sidecar decision table when persistent, else a fresh gen-1.
     pub(crate) fn feed_open(
         config: &crate::config::Config,
-    ) -> io::Result<Option<Arc<Mutex<FeedSource>>>> {
+    ) -> KevyResult<Option<Arc<Mutex<FeedSource>>>> {
         if !config.feed_enabled {
             return Ok(None);
         }

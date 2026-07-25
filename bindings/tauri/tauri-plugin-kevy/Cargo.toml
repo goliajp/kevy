@@ -1,0 +1,49 @@
+# tauri-plugin-kevy — the Tauri v2 door onto kevy's in-process engine.
+#
+# STANDALONE crate — deliberately NOT a member of the kevy root workspace.
+# kevy's workspace is 0-dependency (only std + kevy-* crates); a Tauri plugin
+# unavoidably depends on the `tauri` crate. Keeping this crate out of the
+# `[workspace] members` list (and in the root `exclude`) preserves that
+# invariant: `cargo build` at the repo root never pulls `tauri` into the
+# 0-dep graph. This is the honest ecosystem boundary — exactly where a real
+# Tauri app sits: the app's `src-tauri` depends on `tauri`, and so does this.
+#
+# It path-depends on two 0-dep workspace crates:
+#   - kevy-embedded : the in-process Store (the real native engine)
+#   - kevy-resp     : the RESP reply parser (decode raw `cmd` replies)
+# Those stay 0-dep; only THIS crate carries `tauri`.
+[package]
+name = "tauri-plugin-kevy"
+version = "4.0.0"
+edition = "2021"
+rust-version = "1.80.0"
+authors = ["GOLIA K.K."]
+license = "Apache-2.0 OR MIT"
+description = "Embed kevy — the pure-Rust, zero-dependency Redis-compatible engine — in a Tauri v2 backend and drive it from the webview."
+repository = "https://github.com/goliajp/kevy"
+homepage = "https://github.com/goliajp/kevy"
+categories = ["database-implementations", "gui"]
+keywords = ["tauri", "tauri-plugin", "kevy", "redis", "embedded"]
+links = "tauri-plugin-kevy"
+
+# Opt this crate OUT of any enclosing workspace: an empty `[workspace]` table
+# makes cargo treat it as its own root even when invoked from inside the kevy
+# tree, so it keeps its own Cargo.lock and never joins the 0-dep workspace.
+[workspace]
+
+[dependencies]
+tauri = "2"
+serde = { version = "1", features = ["derive"] }
+kevy-embedded = { path = "../../../crates/kevy-embedded" }
+kevy-resp = { path = "../../../crates/kevy-resp" }
+
+[build-dependencies]
+# The `build` feature gates the ACL/permission generator (`Builder`); it is not
+# in the crate's default set, so enable it explicitly.
+tauri-plugin = { version = "2", features = ["build"] }
+
+[dev-dependencies]
+# `test` unlocks the headless MockRuntime (mock_builder), so we can assert the
+# plugin registers + opens its store inside a real app without a webview.
+tauri = { version = "2", features = ["test"] }
+serde_json = "1"

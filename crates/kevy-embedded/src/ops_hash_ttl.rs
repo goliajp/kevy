@@ -1,22 +1,16 @@
-//! v2.4 — embedded hash field-TTL facades (Redis 7.4 family).
+//! Embedded hash field-TTL facades (Redis 7.4 family).
 //!
 //! AOF: deadline writes log the canonical absolute `HPEXPIREAT`
 //! frame regardless of which facade set them (relative forms convert
 //! before logging — replay can't re-anchor); `hpersist` logs itself.
 
-use std::io;
+use crate::KevyResult;
 use std::time::Duration;
 
 use kevy_store::{HExpireCode, HExpireCond, now_unix_ms};
 
-#[cfg(not(target_arch = "wasm32"))]
-use crate::replica_glue::ensure_writable;
+use crate::store::ensure_writable;
 use crate::store::{Store, commit_write, store_err};
-
-#[cfg(target_arch = "wasm32")]
-fn ensure_writable(_s: &Store) -> io::Result<()> {
-    Ok(())
-}
 
 impl Store {
     /// `HEXPIRE` — set a relative per-field TTL. One Redis code per
@@ -27,7 +21,7 @@ impl Store {
         fields: &[&[u8]],
         ttl: Duration,
         cond: HExpireCond,
-    ) -> io::Result<Vec<HExpireCode>> {
+    ) -> KevyResult<Vec<HExpireCode>> {
         let deadline = now_unix_ms().saturating_add(ttl.as_millis() as u64);
         self.hpexpire_at(key, fields, deadline, cond)
     }
@@ -40,7 +34,7 @@ impl Store {
         fields: &[&[u8]],
         deadline_ms: u64,
         cond: HExpireCond,
-    ) -> io::Result<Vec<HExpireCode>> {
+    ) -> KevyResult<Vec<HExpireCode>> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let codes = g.store.hexpire_at(key, fields, deadline_ms, cond).map_err(store_err)?;
@@ -60,15 +54,30 @@ impl Store {
         Ok(codes)
     }
 
-    /// `HTTL` — remaining ms per field (`-2` missing, `-1` no TTL).
-    pub fn httl(&self, key: &[u8], fields: &[&[u8]]) -> io::Result<Vec<i64>> {
+    /// `HTTL` — remaining **seconds** per field (`-2` missing, `-1` no TTL).
+    ///
+    /// Rounded to the nearest second, as the wire verb and Redis both do. For
+    /// the unrounded value use [`Db::hpttl`]. Before 4.0 this method carried the
+    /// HTTL name and returned milliseconds, which is a thousand-fold error
+    /// waiting to happen in any caller that trusted the name.
+    pub fn httl(&self, key: &[u8], fields: &[&[u8]]) -> KevyResult<Vec<i64>> {
+        Ok(self
+            .hpttl(key, fields)?
+            .into_iter()
+            .map(|ms| if ms >= 0 { (ms + 500) / 1000 } else { ms })
+            .collect())
+    }
+
+    /// `HPTTL` — remaining **milliseconds** per field (`-2` missing, `-1` no
+    /// TTL).
+    pub fn hpttl(&self, key: &[u8], fields: &[&[u8]]) -> KevyResult<Vec<i64>> {
         let mut g = self.wshard(key);
-        g.store.httl(key, fields).map_err(store_err)
+        g.store.hpttl(key, fields).map_err(store_err)
     }
 
     /// `HPERSIST` — clear per-field TTLs (`-2` missing, `-1` had no
     /// TTL, `1` cleared).
-    pub fn hpersist(&self, key: &[u8], fields: &[&[u8]]) -> io::Result<Vec<HExpireCode>> {
+    pub fn hpersist(&self, key: &[u8], fields: &[&[u8]]) -> KevyResult<Vec<HExpireCode>> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let codes = g.store.hpersist(key, fields).map_err(store_err)?;

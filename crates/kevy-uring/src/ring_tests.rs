@@ -92,7 +92,9 @@ fn reads_a_file() {
     let Some(mut ring) = ring_or_skip(8) else {
         return;
     };
-    let path = std::env::temp_dir().join(format!("kevy-uring-{}", std::process::id()));
+    // unique_dir CREATES a directory — the data file must live inside it,
+    // not at its path (File::create on a directory is IsADirectory).
+    let path = kevy_tmpdir::unique_dir("uring").join("data.bin");
     {
         let mut f = std::fs::File::create(&path).unwrap();
         f.write_all(b"hello io_uring").unwrap();
@@ -343,4 +345,83 @@ fn multishot_recv_with_provided_buffers() {
     client.join().unwrap();
     // SAFETY: `conn_fd` is the accepted fd; wrap so drop closes it.
     let _ = unsafe { OwnedFd::from_raw_fd(conn_fd) };
+}
+
+#[test]
+fn batched_positional_file_reads_round_trip() {
+    // The T6 cold-batch shape: N READ SQEs at distinct offsets on one
+    // file, ONE submit_and_wait for the whole batch, completions
+    // matched back by user_data.
+    let Some(mut ring) = ring_or_skip(8) else {
+        return;
+    };
+    let path = kevy_tmpdir::unique_dir("uring-batch").join("records.bin");
+    let mut content = Vec::new();
+    let records: Vec<(u64, Vec<u8>)> = (0..6u8)
+        .map(|i| {
+            let off = content.len() as u64;
+            let body = vec![b'a' + i; 32 + i as usize];
+            content.extend_from_slice(&body);
+            (off, body)
+        })
+        .collect();
+    std::fs::write(&path, &content).unwrap();
+    let file = std::fs::File::open(&path).unwrap();
+
+    let mut bufs: Vec<Vec<u8>> = records.iter().map(|(_, b)| vec![0u8; b.len()]).collect();
+    for (i, ((off, body), buf)) in records.iter().zip(bufs.iter_mut()).enumerate() {
+        // SAFETY: each buf outlives the wait; all completions reaped below.
+        assert!(unsafe {
+            ring.prep_read_at(file.as_raw_fd(), buf.as_mut_ptr(), body.len() as u32, *off, i as u64)
+        });
+    }
+    assert_eq!(ring.submit_and_wait(records.len() as u32).unwrap(), records.len() as u32);
+    let mut done = 0u32;
+    ring.for_each_completion(|c| {
+        let i = c.user_data as usize;
+        assert_eq!(c.res as usize, records[i].1.len(), "full read at offset {}", records[i].0);
+        done += 1;
+    });
+    assert_eq!(done, records.len() as u32);
+    for ((_, body), buf) in records.iter().zip(&bufs) {
+        assert_eq!(buf, body, "positional read must land at its own offset");
+    }
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn read_file_batch_round_trips_and_chunks_past_the_sq() {
+    // The safe batched-pread primitive (the T6 cold-hydration reader):
+    // within-SQ batch = ONE submission; a batch larger than the SQ
+    // chunks across several, buffers land in input order either way.
+    let entries = 4u32;
+    let Some(mut ring) = ring_or_skip(entries) else {
+        return;
+    };
+    let path = kevy_tmpdir::unique_dir("uring-filebatch").join("data.bin");
+    let n = 10usize; // > entries → at least 3 chunks
+    let content: Vec<u8> = (0..n as u8).flat_map(|i| [i; 16]).collect();
+    std::fs::write(&path, &content).unwrap();
+    let file = std::fs::File::open(&path).unwrap();
+
+    // Small batch (≤ SQ): exactly one submission.
+    let small: Vec<FileRead> = (0..3)
+        .map(|i| FileRead { fd: file.as_raw_fd(), offset: (i * 16) as u64, len: 16 })
+        .collect();
+    let (bufs, subs) = ring.read_file_batch(&small).unwrap();
+    assert_eq!(subs, 1, "3 reads fit a 4-entry SQ in one submission");
+    for (i, buf) in bufs.iter().enumerate() {
+        assert_eq!(buf.as_slice(), &[i as u8; 16], "small-batch read {i}");
+    }
+
+    // Oversized batch: chunks across ≥ 3 submissions, all intact.
+    let big: Vec<FileRead> = (0..n)
+        .map(|i| FileRead { fd: file.as_raw_fd(), offset: (i * 16) as u64, len: 16 })
+        .collect();
+    let (bufs, subs) = ring.read_file_batch(&big).unwrap();
+    assert!(subs >= 3, "10 reads on a 4-entry SQ need >= 3 submits, got {subs}");
+    for (i, buf) in bufs.iter().enumerate() {
+        assert_eq!(buf.as_slice(), &[i as u8; 16], "chunked read {i} must land intact");
+    }
+    let _ = std::fs::remove_file(&path);
 }

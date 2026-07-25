@@ -1,4 +1,4 @@
-//! Snapshot ship wire format (T1.22) — split out of [`crate::wire`]
+//! Snapshot ship wire format — split out of [`crate::wire`]
 //! to keep that file under the 500-LOC project ceiling.
 //!
 //! See `docs/snapshot.md` for the full spec. The primary sends:
@@ -34,15 +34,15 @@ pub enum SnapshotMarker {
     /// `+SNAPSHOT_END <ack_offset>\r\n` — end of snapshot; the next
     /// live frame's offset will equal `ack_offset`.
     End(u64),
-    /// `+PING <generation> <next_offset>\r\n` — v3.14 in-stream
+    /// `+PING <generation> <next_offset>\r\n` — in-stream
     /// heartbeat: the primary's current feed generation + `next_offset`,
     /// sent every ~1s so a replica can compute its own lag (applied vs
     /// primary) and judge link liveness without a request/response
     /// round trip. Out-of-band: occupies no offset space.
     ///
-    /// v3.16 D2 added the generation (REPL.TOKEN / REPL.WAIT compare
+    /// The generation lets REPL.TOKEN / REPL.WAIT compare
     /// token generations against the replica's last-seen upstream
-    /// generation). A legacy one-number `+PING <next_offset>\r\n` line
+    /// generation. A legacy one-number `+PING <next_offset>\r\n` line
     /// still decodes — `generation` reads as `0`, the "unknown" value
     /// no real feed ever serves (feed generations start at 1).
     Ping {
@@ -83,7 +83,7 @@ pub fn encode_snapshot_chunk(bytes: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Encode the in-stream heartbeat (v3.14, gen-carrying since v3.16):
+/// Encode the in-stream heartbeat:
 /// `+PING <generation> <next_offset>\r\n`.
 pub fn encode_ping(generation: u64, next_offset: u64) -> Vec<u8> {
     let mut out = Vec::with_capacity(48);
@@ -95,7 +95,7 @@ pub fn encode_ping(generation: u64, next_offset: u64) -> Vec<u8> {
     out
 }
 
-/// Encode the replica→primary acknowledgment line (v3.14):
+/// Encode the replica→primary acknowledgment line:
 /// `REPLCONF ACK <offset>\r\n` — inline RESP, written back on the
 /// SAME replication connection (the pump drains it non-blocking).
 pub fn encode_replconf_ack(offset: u64) -> Vec<u8> {
@@ -179,8 +179,8 @@ pub fn decode_snapshot_marker(buf: &[u8]) -> Result<Option<(SnapshotMarker, usiz
         return Ok(Some((SnapshotMarker::End(offset), eol + 2)));
     }
     if let Some(rest) = line.strip_prefix(b"PING ") {
-        // Two-number form (v3.16+): `<generation> <next_offset>`.
-        // One-number legacy form (v3.14): `<next_offset>` — decodes
+        // Two-number form: `<generation> <next_offset>`.
+        // One-number legacy form: `<next_offset>` — decodes
         // with generation 0 ("unknown"; real generations start at 1).
         let marker = match rest.iter().position(|&b| b == b' ') {
             Some(sp) => {

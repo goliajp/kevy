@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>给 AI 应用的存储——kevy</title>
+<meta name="description" content="向量检索、全文检索和变更流，就在已经存着你的数据的那个存储里。kevy 能给一个 AI 应用什么，又不给什么。">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../zh/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../../zh/docs/">文档</a>
+      <a href="../../../zh/docs/commands/">命令</a>
+      <a href="../../../zh/benchmarks/">基准</a>
+      <a href="../../../zh/play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <nav class="lang" aria-label="Language">
+        <a href="../../../use/ai/">EN</a>
+        <a href="../../../zh/use/ai/" aria-current="page">中文</a>
+        <a href="../../../ja/use/ai/">日本語</a>
+      </nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+<section class="band" style="border-top:0"><div>
+    <p class="eyebrow">AI 应用</p>
+    <h1>数据，和找到数据的方式，<br>同一个存储</h1>
+    <p class="lede">RAG 和 agent 记忆通常意味着三套系统：一个缓存、一个向量数据库、一个搜索索引——同样的事实存三份，然后慢慢彼此对不上。<b>kevy 把向量 KNN、BM25 全文检索和变更流都放在引擎里</b>，直接建在你已经写进去的那些 key 上。</p>
+    
+  </div></section>
+<section class="band prose"><h2>为什么合适</h2><div class="pcols"><p>RAG 这一套里，贵的不是检索，而是让三份事实保持同步：你写了一篇文档，然后你还得记住去做 embedding、去建索引、去让缓存失效。这里每一步都是一个可能忘掉的地方。</p><p><b>在 kevy 里，索引是一句声明，不是一条流水线。</b>你告诉引擎是哪些 key、哪个字段，写路径就会把索引维持在最新。事后没有东西要跑，也没有东西会落后。</p><p><b>kevy 不做的那件事，是生成 embedding。</b>引擎里没有模型，以后也不会有——推理不该待在存储引擎里，硬塞进去只会把你的向量格式绑死在我们的发版节奏上。向量由你给出；kevy 负责存它、索引它、检索它。</p></div></section>
+<section class="band">
+  <div class="sec-h"><h2>按语义检索你的 key</h2><p class="sec-lede">在你已经在写的那些 key 的某个字段上做 KNN。声明一次，写路径把它维持在最新，没有东西要同步。</p></div>
+  <ol class="steps recipe"><li><h3>把索引声明一次</h3><p>引擎会回填已有的 key，回填期间回答 INDEXBUILDING。</p><pre><code>IDX.CREATE idx:sem ON PREFIX doc: FIELD vec TYPE vector KIND ann  DIM 768 DISTANCE cosine M 16 EF 200
+-&gt; OK</code></pre></li><li><h3>照你原来的方式写文档</h3><pre><code>HSET doc:4410 title &quot;Ada on pipelining&quot; vec &quot;&lt;768 f32, little-endian&gt;&quot;</code></pre></li><li><h3>最近的十个</h3><pre><code>IDX.QUERY idx:sem KNN &quot;&lt;query vector&gt;&quot; LIMIT 10
+-&gt; 1) doc:4410
+   2) doc:9982</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">成本与限制</span><p><b>这个索引是 HNSW，是近似的</b>：召回率是一个可调参数（<code>EF</code>），不是一个保证。第一次构建是对匹配到的 key 做 O(N) 的工作——要提前安排，不要等它自己撞上来。还有，<b>这里没有 embedding 模型</b>：向量由你给出。<a href="../../../zh/docs/vector-search/">向量检索指南</a>里有那些可以调的参数。</p></div>
+</section>
+<section class="band">
+  <div class="sec-h"><h2>全文检索，以及两种排序融合</h2><p class="sec-lede">在同一批 key 上做 BM25，再用一条混合查询，把文本排序和向量排序融合在一条命令里。</p></div>
+  <ol class="steps recipe"><li><h3>在同一批 key 上建文本索引</h3><pre><code>IDX.CREATE idx:ft ON PREFIX doc: FIELD title TYPE str KIND text
+-&gt; OK</code></pre></li><li><h3>匹配，按 BM25 排序</h3><pre><code>IDX.QUERY idx:ft MATCH &quot;pipelining&quot;
+-&gt; 1) 1) &quot;doc:1&quot;
+      2) &quot;0.2877&quot;          # the BM25 score</code></pre></li><li><h3>混合：把两种排序融合（RRF）</h3><pre><code>IDX.QUERY HYBRID idx:ft MATCH &quot;pipelining&quot; idx:sem KNN &quot;&lt;vector&gt;&quot;  LIMIT 20 RRFK 60</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">成本与限制</span><p>索引的账是在<b>每次写</b>匹配到的 key 时付的——对读多的检索这是对的交易，对一个每秒重写几千次的 key 是错的。分词（包括中日韩）和 BM25 到哪里为止，都在<a href="../../../zh/docs/text-search/">全文检索指南</a>里。</p></div>
+</section>
+<section class="band">
+  <div class="sec-h"><h2>让 agent 的记忆跟上数据</h2><p class="sec-lede">从另一个进程持续跟读每一次写——变更时才做 embedding，不靠时刻表，还能从停下的地方续上。</p></div>
+  <ol class="steps recipe"><li><h3>打开变更流</h3><pre><code># kevy.toml
+[feed]
+enabled = true</code></pre></li><li><h3>找到你的游标</h3><pre><code>FEED.SHARDS                 -&gt; (integer) 16
+FEED.TAIL 0                 -&gt; 1) (integer) 1     # generation
+                               2) (integer) 1     # offset</code></pre></li><li><h3>读，处理，续上</h3><pre><code>FEED.READ 0 1 0 COUNT 2     -&gt; the writes themselves, replayable</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">成本与限制</span><p>变更流是按分片记的：<code>FEED.SHARDS</code> 告诉你手里有几个游标，你的消费者按分片各记一个偏移量。它默认是关的——打开 <code>[feed]</code> 才买下写路径上的这份记账。<a href="../../../zh/docs/cdc/">变更流指南</a>讲了怎么跨重启续读。</p></div>
+</section>
+<section class="band">
+  <div class="call note">
+    <span class="h">如果读这些文档的是一个 agent</span>
+    <p><a href="../../../llms-full.txt">llms-full.txt</a> 一次抓取就够：每条命令的真实代价、相对 Redis 的真实偏差，加上每一篇指南的完整正文。它是从引擎自己的命令表生成的，所以不会和服务端的实际行为脱节。</p>
+  </div>
+</section>
+<section class="band"><div class="sec-h"><h2>接下来</h2></div><div class="cards"><a class="card" href="../../../zh/docs/vector-search/">
+      <span class="card-k">指南</span>
+      <h3>向量检索</h3>
+      <p>HNSW、可以调的那些参数，以及近似在这里究竟意味着什么。</p>
+      <span class="card-go">去读</span>
+    </a><a class="card" href="../../../zh/docs/text-search/">
+      <span class="card-k">指南</span>
+      <h3>全文检索</h3>
+      <p>BM25、包含中日韩在内的分词，以及它到哪里为止。</p>
+      <span class="card-go">去读</span>
+    </a><a class="card" href="../../../zh/docs/cdc/">
+      <span class="card-k">指南</span>
+      <h3>变更流</h3>
+      <p>从另一个进程持续跟读每一次写，偏移量可以续上。</p>
+      <span class="card-go">去读</span>
+    </a></div></section>
+</main>
+
+<footer class="foot">
+  <div class="foot-in">
+    <p class="foot-b">kevy 4.0 — 不带 embedding 模型，这是故意的</p>
+    <nav>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+      <a href="https://crates.io/crates/kevy">crates.io</a>
+      <a href="../../../llms.txt">llms.txt</a>
+    </nav>
+  </div>
+</footer>
+
+
+
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

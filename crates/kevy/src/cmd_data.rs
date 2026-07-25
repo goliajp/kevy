@@ -24,16 +24,20 @@ pub(crate) fn cmd_spop_rand<A: ArgvView + ?Sized>(
         return wrong_args(out, name);
     }
     let count_given = args.len() == 3;
-    let count = if count_given {
-        match arg_i64(&args[2]) {
-            Some(c) if c >= 0 => c as usize,
-            _ => return encode_error(out, "ERR value is out of range, must be positive"),
-        }
-    } else {
-        1
+    let raw = match parse_spop_count(args, count_given, remove, out) {
+        Some(c) => c,
+        None => return, // error already encoded
     };
+    let with_repeats = raw < 0;
+    let count = raw.unsigned_abs() as usize;
     let res = if remove {
-        store.spop(&args[1], count)
+        let res = store.spop(&args[1], count);
+        if let Ok(popped) = &res {
+            set_spop_propagation(&args[1], popped);
+        }
+        res
+    } else if with_repeats {
+        store.srandmember_with_repeats(&args[1], count)
     } else {
         store.srandmember(&args[1], count)
     };
@@ -53,6 +57,58 @@ pub(crate) fn cmd_spop_rand<A: ArgvView + ?Sized>(
             }
         }
     }
+}
+
+/// SPOP's random pick must NOT propagate by verb: an AOF replay or a
+/// replica re-running `SPOP key n` draws its own random members and
+/// silently diverges from what this process actually removed. Override
+/// the recorded frame with the effect — `SREM key <popped…>` — exactly
+/// as Redis does (and as `kevy-embedded::Store::spop` already does via
+/// `commit_write`). A pop that removed nothing (missing/empty set)
+/// suppresses the frame entirely: a no-op `SPOP` must never reach the
+/// AOF or a replica. The runtime consumes the override in the same
+/// command's post-write housekeeping (see `kevy_rt::propagation`).
+fn set_spop_propagation(key: &[u8], popped: &[Vec<u8>]) {
+    use kevy_rt::propagation::{Propagate, set_override};
+    if popped.is_empty() {
+        set_override(Propagate::Suppress);
+        return;
+    }
+    let mut frame: Vec<Vec<u8>> = Vec::with_capacity(2 + popped.len());
+    frame.push(b"SREM".to_vec());
+    frame.push(key.to_vec());
+    frame.extend(popped.iter().cloned());
+    set_override(Propagate::Replace(frame));
+}
+
+/// The optional SPOP/SRANDMEMBER count. A NEGATIVE count means
+/// SRANDMEMBER with repetition — |count| members, duplicates allowed
+/// (Redis 2.6 form; the shape a caller reaches for to sample with
+/// replacement). SPOP has no such form: you cannot remove the same
+/// member twice, and Redis errors on it too. `None` = an error reply
+/// was already encoded into `out`.
+fn parse_spop_count<A: ArgvView + ?Sized>(
+    args: &A,
+    count_given: bool,
+    remove: bool,
+    out: &mut Vec<u8>,
+) -> Option<i64> {
+    let raw = if count_given {
+        match arg_i64(&args[2]) {
+            Some(c) => c,
+            None => {
+                encode_error(out, ERR_NOT_INT);
+                return None;
+            }
+        }
+    } else {
+        1
+    };
+    if raw < 0 && remove {
+        encode_error(out, "ERR value is out of range, must be positive");
+        return None;
+    }
+    Some(raw)
 }
 
 /// `BLPOP key timeout` / `BRPOP key timeout` — single-key form only.
@@ -284,11 +340,11 @@ pub(crate) fn cmd_expire<A: ArgvView + ?Sized>(
     let Some(n) = arg_i64(&args[2]) else {
         return encode_error(out, ERR_NOT_INT);
     };
-    if store.exists(&[args[1].to_vec()]) == 0 {
+    if store.exists(&[&args[1]]) == 0 {
         return encode_integer(out, 0);
     }
     if n <= 0 {
-        store.del(&[args[1].to_vec()]);
+        store.del(&[&args[1]]);
         return encode_integer(out, 1);
     }
     let ms = n.saturating_mul(unit_ms) as u64;
@@ -316,7 +372,7 @@ pub(crate) fn cmd_expireat<A: ArgvView + ?Sized>(
     let Some(n) = arg_i64(&args[2]) else {
         return encode_error(out, ERR_NOT_INT);
     };
-    if store.exists(&[args[1].to_vec()]) == 0 {
+    if store.exists(&[&args[1]]) == 0 {
         return encode_integer(out, 0);
     }
     let deadline_ms = n.saturating_mul(unit_ms).max(0) as u64;

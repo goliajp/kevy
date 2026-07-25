@@ -4,7 +4,8 @@
 //! `Connection` → `AsyncConnection` plus `.await` on each call.
 //!
 //! The active transport type is picked at compile-time from whichever
-//! runtime feature is enabled (T4.8 ensures exactly one). The codec
+//! runtime feature is enabled (the crate-level feature gate enforces
+//! exactly one via `compile_error!`). The codec
 //! is generic over `AsyncTransport` so this just type-alises the
 //! runtime-specific TcpStream.
 
@@ -17,8 +18,9 @@ use crate::url::parse_url;
 
 // ─── Runtime-selected default transport ───────────────────────────────
 //
-// T4.8 guarantees exactly one of the three feature blocks below is
-// active, so `DefaultTransport` is unambiguously defined.
+// The crate-level compile_error! gate guarantees exactly one of the
+// three feature blocks below is active, so `DefaultTransport` is
+// unambiguously defined.
 
 #[cfg(feature = "tokio")]
 type DefaultTransport = tokio::net::TcpStream;
@@ -50,12 +52,12 @@ pub struct AsyncConnection {
 }
 
 impl AsyncConnection {
-    /// Open a connection from a URL. Accepts `kevy://`, `redis://`,
+    /// Connect from a URL. Accepts `kevy://`, `redis://`,
     /// `tcp://` — see [`crate::url::parse_url`] for the full grammar.
     ///
     /// If the URL carries a `/N` db index (only `kevy://` and `redis://`),
     /// an initial `SELECT N` round-trip runs before returning.
-    pub async fn open(url: &str) -> io::Result<Self> {
+    pub async fn connect(url: &str) -> io::Result<Self> {
         let parsed = parse_url(url)?;
         let transport = connect_default(&parsed.host, parsed.port).await?;
         let mut codec = AsyncRespCodec::new(transport);
@@ -85,9 +87,8 @@ impl AsyncConnection {
         expect_pong(reply)
     }
 
-    /// Borrow the underlying codec — exposed so pipeline + subscriber
-    /// adapters built in later tasks (T4.11/T4.14) can share the
-    /// connection state machine.
+    /// Borrow the underlying codec — exposed so the pipeline and
+    /// subscriber adapters can share the connection state machine.
     pub fn codec_mut(&mut self) -> &mut AsyncRespCodec<DefaultTransport> {
         &mut self.codec
     }

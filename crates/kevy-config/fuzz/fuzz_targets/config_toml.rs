@@ -1,14 +1,14 @@
 //! Fuzz `kevy_config::Config::from_toml_str` on arbitrary text.
 //!
 //! The config file is a trust boundary — arbitrary bytes on disk reach
-//! this parser at server startup — so this is the security-highest target
-//! of the T5a batch. Invariants asserted:
+//! this parser at server startup — so this is the security-highest
+//! fuzz target in the workspace. Invariants asserted:
 //!
 //!   * the parser never panics on any input (the input is lossy-decoded
 //!     to UTF-8 because `from_toml_str` takes `&str`; the lossy pass also
 //!     exercises replacement-char handling in the lexer)
 //!   * every parse/schema error carries a 1-based position (line ≥ 1,
-//!     and col ≥ 1 for `Parse`) — the RFC's errors-carry-line-numbers
+//!     and col ≥ 1 for `Parse`) — the errors-carry-line-numbers
 //!     contract
 //!   * `from_toml_str` never returns `IoOpen` (it does no file I/O)
 //!   * accepted inputs round-trip: `to_toml_string()` output must reparse
@@ -17,13 +17,13 @@
 //!   * `parse_size` (the other text-facing entry: size literals from TOML
 //!     and `CONFIG SET`) never panics on arbitrary text
 //!
-//! FIXED FINDING #1 (2026-07-10, fuzz-found, minimized to the 1-byte
+//! FIXED FINDING #1 (fuzz-found, minimized to the 1-byte
 //! input `e`): every "unexpected end of input" error used to report
 //! `line: 0, col: 0`. The parser now anchors EOF errors at the lexer's
 //! end-of-input position, so the position assertion below covers the
 //! EOF class too.
 //!
-//! FIXED FINDING #2 (2026-07-10, found while writing this target):
+//! FIXED FINDING #2 (found while writing this target):
 //! `to_toml_string` emitted only 8 of the 14 schema sections —
 //! [cluster]/[replication]/[lua]/[metrics]/[audit]/[feed] (and
 //! `server.max_clients`) were silently dropped by `CONFIG REWRITE`.
@@ -31,10 +31,10 @@
 //! round-trip equality is asserted unconditionally (for ASCII output,
 //! see FINDING #3).
 //!
-//! KNOWN FINDING #3 (2026-07-10, fuzz-found at exec ~139K, verified
+//! KNOWN FINDING #3 (fuzz-found, verified
 //! with the 1-line repro `data_dir = "/é"` → parses as `"/Ã©"`): the
 //! lexer accumulates quoted-string values byte-by-byte with `b as char`
-//! (lex.rs:181, and lex.rs:201 for the unquoted-token path), so every
+//! (in `lex.rs`, both the quoted-string and unquoted-token paths), so every
 //! non-ASCII byte is reinterpreted as its Latin-1 code point — any
 //! UTF-8 path or value is corrupted on the FIRST parse, and each
 //! parse→serialize cycle adds another mojibake layer (the fixpoint
@@ -42,7 +42,7 @@
 //! here; fixpoint and round-trip equality are asserted only for ASCII
 //! serializations until the lexer decodes UTF-8.
 //!
-//! KNOWN FINDING #4 (2026-07-10, fuzz-found, verified with the 1-line
+//! KNOWN FINDING #4 (fuzz-found, verified with the 1-line
 //! repro `data_dir = "a\nb"`): the lexer DECODES the escapes \n \t \r
 //! \" \\ into the value, but `escape_toml_basic_string` re-escapes only
 //! `\` and `"` — so a value holding a control character serializes raw

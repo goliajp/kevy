@@ -9,14 +9,18 @@
 //! one place makes that contract obvious.
 
 use kevy_resp::ArgvView;
-use kevy_rt::{ResolvedCmd, Route, TxnKind, parse_slowlog_sub};
+use kevy_rt::{MultiOp, ResolvedCmd, Route, TxnKind, parse_slowlog_sub};
 
-use crate::cmd::{self, scan_pattern, upper_verb};
+use crate::cmd::{self, scan_args, upper_verb};
 use crate::cmd_block;
+use crate::state::ReplicationState;
 
 /// One-pass verb resolution for [`crate::KevyCommands`]. Single `match upper`
 /// fans out into the per-attribute fields the runtime then consumes.
-pub(crate) fn kevy_resolve<A: ArgvView + ?Sized>(args: &A) -> ResolvedCmd {
+pub(crate) fn kevy_resolve<A: ArgvView + ?Sized>(
+    repl: &ReplicationState,
+    args: &A,
+) -> ResolvedCmd {
     let Some(name) = args.first() else {
         return ResolvedCmd {
             txn_kind: TxnKind::Other,
@@ -49,7 +53,7 @@ pub(crate) fn kevy_resolve<A: ArgvView + ?Sized>(args: &A) -> ResolvedCmd {
         _ => {}
     }
 
-    resolve_general(upper, args)
+    resolve_general(repl, upper, args)
 }
 
 /// The general (non-GET/SET) resolution tail: one lookup per
@@ -58,7 +62,11 @@ pub(crate) fn kevy_resolve<A: ArgvView + ?Sized>(args: &A) -> ResolvedCmd {
 /// pre-split fused body (this is still the per-op path for every
 /// verb outside the tier-1 pair).
 #[inline(always)]
-fn resolve_general<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> ResolvedCmd {
+fn resolve_general<A: ArgvView + ?Sized>(
+    repl: &ReplicationState,
+    upper: &[u8],
+    args: &A,
+) -> ResolvedCmd {
     let txn_kind = match upper {
         b"MULTI" => TxnKind::Multi,
         b"EXEC" => TxnKind::Exec,
@@ -69,7 +77,7 @@ fn resolve_general<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> ResolvedCmd 
 
     let is_quit = upper == b"QUIT";
     let is_write = cmd::is_write_verb(upper);
-    let route = route_for_verb(upper, args);
+    let route = route_for_verb(repl, upper, args);
     let block_hint = cmd_block::block_hint_for_verb(upper, args);
     let wake_idx = cmd_block::wake_idx_for_verb(upper);
 
@@ -83,38 +91,71 @@ fn resolve_general<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> ResolvedCmd 
     }
 }
 
+/// [`crate::KevyCommands::route`]'s body — the same verb table
+/// [`kevy_resolve`] consults, entered from a raw argv. The single
+/// routing table lives in [`route_for_verb`]; a parity test over the
+/// whole verb registry holds `route()` == `resolve().route`.
+pub(crate) fn route<A: ArgvView + ?Sized>(repl: &ReplicationState, args: &A) -> Route {
+    let Some(name) = args.first() else {
+        return Route::Local;
+    };
+    let mut buf = [0u8; 32];
+    route_for_verb(repl, upper_verb(name, &mut buf), args)
+}
+
 /// Map an uppercased verb + its argv to the routing decision the
 /// runtime uses to pick local-fast-path / single-shard / multi-target
 /// / pub/sub / transactional control. Pure data; the cost is one `match
 /// upper` plus the small extractor calls (KEYS pattern, SCAN cursor,
 /// XREAD STREAMS key, SLOWLOG sub-command).
 // LOC-WAIVER: data-driven verb → Route match table — one arm per verb.
-fn route_for_verb<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> Route {
+fn route_for_verb<A: ArgvView + ?Sized>(
+    repl: &ReplicationState,
+    upper: &[u8],
+    args: &A,
+) -> Route {
     match upper {
         b"HELLO" => Route::Hello,
+        // CLIENT: LIST / KILL fan out (the conn tables are per-shard);
+        // the rest answers locally or via the reactor intercept
+        // (SETNAME / GETNAME / ID / INFO).
+        b"CLIENT" => client_route(args),
         b"PING" | b"ECHO" | b"QUIT" | b"COMMAND" | b"CONFIG" | b"INFO" | b"CLUSTER" | b"DEBUG"
-        | b"SHUTDOWN" | b"CLIENT" | b"SELECT" | b"BLPOP" | b"BRPOP" | b"BZPOPMIN" | b"BRPOPLPUSH" => {
+        | b"SHUTDOWN" | b"SELECT" | b"BLPOP" | b"BRPOP" | b"BZPOPMIN" | b"BRPOPLPUSH"
+        // Replication admin: answered from the conn's own shard —
+        // args[1] is a host (REPLICAOF/SLAVEOF) or absent (ROLE),
+        // never a key to route by.
+        | b"ROLE" | b"REPLICAOF" | b"SLAVEOF" => {
             Route::Local
         }
-        // v3.16 D1+D2 — replication barriers. Well-formed happy paths
+        // Replication barriers. Well-formed happy paths
         // route to the runtime's deferred waiters; every immediate
         // answer (arity / role / gen mismatch) falls back to Local and
         // the cmd_repl dispatch handlers emit the precise reply.
-        b"WAIT" => crate::cmd_repl::wait_route(args),
-        b"REPL.TOKEN" => crate::cmd_repl::token_route(args),
-        b"REPL.WAIT" => crate::cmd_repl::repl_wait_route(args),
+        b"WAIT" => crate::cmd_repl::wait_route(repl, args),
+        b"REPL.TOKEN" => crate::cmd_repl::token_route(repl, args),
+        b"REPL.WAIT" => crate::cmd_repl::repl_wait_route(repl, args),
         b"DBSIZE" => Route::Dbsize,
         b"FLUSHDB" | b"FLUSHALL" => Route::Flush,
         b"SAVE" => Route::Save,
         b"BGSAVE" => Route::BgSave,
         b"BGREWRITEAOF" => Route::RewriteAof,
+        // MEMORY USAGE answers about a KEY, so it has to run on that key's
+        // shard. Without this arm it fell through to the default
+        // `Route::Single(1)` and was routed by hashing args[1] — the
+        // subcommand token — so `MEMORY USAGE k` ran on whichever shard owns
+        // the literal string "USAGE" and returned nil for every key that
+        // lives elsewhere. The other subcommands answer from instance-wide
+        // state and can run anywhere.
+        b"MEMORY" if args.len() >= 3 && args[1].eq_ignore_ascii_case(b"USAGE") => Route::Single(2),
+        b"MEMORY" => Route::Local,
         b"MSET" if args.len() >= 3 && !args.len().is_multiple_of(2) => Route::MSet,
-        b"MGET" if args.len() >= 2 => Route::MGet,
-        b"SINTER" if args.len() >= 2 => Route::SInter,
-        b"SUNION" if args.len() >= 2 => Route::SUnion,
-        b"SDIFF" if args.len() >= 2 => Route::SDiff,
+        b"MGET" if args.len() >= 2 => Route::Gather(MultiOp::Mget),
+        b"SINTER" if args.len() >= 2 => Route::Gather(MultiOp::SInter),
+        b"SUNION" if args.len() >= 2 => Route::Gather(MultiOp::SUnion),
+        b"SDIFF" if args.len() >= 2 => Route::Gather(MultiOp::SDiff),
         b"KEYS" if args.len() == 2 => Route::Keys(Some(args[1].to_vec())),
-        b"SCAN" if args.len() >= 2 => Route::Scan(scan_pattern(args)),
+        b"SCAN" if args.len() >= 2 => Route::Scan(scan_args(args)),
         b"RANDOMKEY" if args.len() == 1 => Route::RandomKey,
         b"SUBSCRIBE" if args.len() >= 2 => Route::Subscribe,
         b"UNSUBSCRIBE" => Route::Unsubscribe,
@@ -129,7 +170,17 @@ fn route_for_verb<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> Route {
         b"SINTERSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SInter),
         b"SUNIONSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SUnion),
         b"SDIFFSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SDiff),
-        b"ZINTERCARD" if args.len() >= 3 => Route::ZInterCard,
+        b"ZINTERCARD" if args.len() >= 3 => Route::Gather(MultiOp::ZInterCard),
+        // Geo *STORE: the source and the destination are different keys and
+        // neither family puts them where the catch-all below assumes —
+        // GEOSEARCHSTORE has dst at argv[1], GEORADIUS[BYMEMBER] has src
+        // there with dst buried in the option tail. Route by both (search on
+        // the source's shard, write on the destination's); the query-only
+        // forms fall through to the single-key route.
+        b"GEOSEARCHSTORE" | b"GEORADIUS" | b"GEORADIUSBYMEMBER" => {
+            crate::dispatch_geo::geo_store_route(upper, args)
+                .unwrap_or(if args.len() >= 2 { Route::Single(1) } else { Route::Local })
+        }
         b"IDX.QUERY" if args.len() >= 4 => Route::Extension,
         b"IDX.EXPLAIN" if args.len() >= 2 => Route::Extension,
         b"IDX.REBUILD" if args.len() == 2 => Route::Extension,
@@ -141,11 +192,32 @@ fn route_for_verb<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> Route {
         b"VIEW.VERIFY" if args.len() == 2 => Route::Extension,
         b"VIEW.REBUILD" if args.len() == 2 => Route::Extension,
         b"VIEW.EXPLAIN" if args.len() == 2 => Route::Extension,
+        // TABLE.DECLARE / TABLE.DROP are Local catalog mutations —
+        // they fall through to the default arm like IDX.CREATE.
+        b"TABLE.LIST" if args.len() == 1 => Route::Extension,
+        b"TABLE.VERIFY" if args.len() == 2 => Route::Extension,
         b"PREFIX.STATS" if args.len() == 2 => Route::PrefixStats,
         b"PREFIX.DIGEST" if args.len() == 2 => Route::Extension,
         b"FEED.READ" if args.len() >= 4 => Route::FeedRead,
         b"FEED.TAIL" if args.len() == 2 => Route::FeedTail,
         b"FEED.SHARDS" if args.len() == 1 => Route::FeedShards,
+        // RPOPLPUSH / LMOVE move an element BETWEEN two keys, and
+        // the two keys can live on different shards. Without these arms they
+        // fell through to `Route::Single(1)` — hash args[1], the SOURCE — and
+        // the destination push ran on the source's shard, writing the element
+        // into a keyspace no reader would ever look in. The command still
+        // returned the moved value. 11 of 12 moves lost the element on an
+        // 8-shard server. See `kevy_rt::exec_listmove`.
+        //
+        // BRPOPLPUSH is NOT here: it is a blocking verb, so it stays
+        // `Route::Local` and is served through the park/wake path, which has
+        // its own destination-routing fix (see `cmd_block`).
+        b"RPOPLPUSH" if args.len() == 3 => Route::ListMove { from_left: false, to_left: true },
+        b"LMOVE" if args.len() == 5 => {
+            let from_left = args[3].eq_ignore_ascii_case(b"LEFT");
+            let to_left = args[4].eq_ignore_ascii_case(b"LEFT");
+            Route::ListMove { from_left, to_left }
+        }
         b"RENAME" => Route::Rename { nx: false },
         b"RENAMENX" => Route::Rename { nx: true },
         // (BLPOP / BRPOP fold into the Local-routed verb list above —
@@ -153,7 +225,7 @@ fn route_for_verb<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> Route {
         // cross-shard arbiter fans watch registrations out to each key's
         // owning shard, see kevy_rt::block_xshard. Routing by key would
         // strand the waiter on a shard that doesn't own the connection.)
-        // v1.27.1: EVAL/EVALSHA route by KEYS[1] (at argv[3]) when
+        // EVAL/EVALSHA route by KEYS[1] (at argv[3]) when
         // numkeys ≥ 1, so a multi-shard server lands the script on
         // the shard that owns the keys it'll touch. With numkeys=0
         // the script doesn't touch any specific shard's keyspace, so
@@ -211,5 +283,19 @@ fn route_for_verb<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> Route {
                 Route::Local
             }
         }
+    }
+}
+
+/// CLIENT subcommand routing. `LIST` (bare form) and a well-formed
+/// `KILL` fan out to every shard — the conn tables are per-shard.
+/// Everything else stays local: SETNAME / GETNAME / ID / INFO are
+/// intercepted at the reactor, and malformed KILL / filtered LIST
+/// shapes fall through to the dispatch handler's error replies.
+fn client_route<A: ArgvView + ?Sized>(args: &A) -> Route {
+    let Some(sub) = args.get(1) else { return Route::Local };
+    match sub.to_ascii_uppercase().as_slice() {
+        b"LIST" if args.len() == 2 => Route::ClientList,
+        b"KILL" if kevy_rt::ClientKillFilter::parse(args).is_some() => Route::ClientKill,
+        _ => Route::Local,
     }
 }

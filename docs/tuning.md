@@ -90,6 +90,8 @@ The server dual-binds: TCP stays available for remote clients, UDS handles local
 
 **Bind address warning.** kevy has no AUTH and no TLS today. Binding to a non-loopback address (`--bind 0.0.0.0` or any public interface) prints a startup warning, because anything on the network can then issue commands. Run kevy behind a private network boundary or behind a proxy that terminates auth.
 
+**Connection introspection.** `INFO clients` reports a live `connected_clients` gauge summed across all shards. `CLIENT LIST` / `CLIENT INFO` render one Redis-7.x-shaped row per real client connection — peer address, a globally unique `id`, `name`, subscription counts, MULTI queue depth, input/output buffer sizes (`cmd=NULL`: the last-command name is not tracked). `CLIENT SETNAME` labels the connection for LIST; `CLIENT KILL ID <id> | ADDR <ip:port> | LADDR <ip:port>` (or the legacy positional `CLIENT KILL <ip:port>`) closes every matching connection, including ones parked in blocking commands. Teardown waits for the victim's pending output to drain, so a connection that kills itself still receives its own reply.
+
 ### Replication and availability
 
 Only relevant when running a primary/replica topology ([docs/replication.md](https://github.com/goliajp/kevy/blob/develop/docs/replication.md), [docs/availability.md](https://github.com/goliajp/kevy/blob/develop/docs/availability.md)).

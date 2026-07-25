@@ -1,4 +1,4 @@
-//! v3.10 — `COMMAND` and its subcommands, answered from
+//! `COMMAND` and its subcommands, answered from
 //! [`crate::verb_meta::VERB_META`] (the single source of truth shared
 //! with llms.txt and the MCP schema). An agent that can reach the
 //! server can enumerate every verb, its arity, flags, and full syntax
@@ -62,12 +62,20 @@ fn cmd_command_docs<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     encode_array_len(out, (named.len() * 2) as i64);
     for m in named {
         encode_bulk(out, m.name.as_bytes());
-        encode_array_len(out, 10i64);
+        // 6 string fields + the flags array = 7 pairs = 14 slots.
+        //
+        // `complexity` and `compat` are not Redis DOCS fields, and that is the
+        // point: an agent that can ask the server what a verb COSTS and how it
+        // DIFFERS from Redis does not have to guess either. Both come from the
+        // same registry the reference and llms.txt render, so they cannot drift.
+        encode_array_len(out, 14i64);
         for (k, v) in [
             ("summary", m.summary),
             ("since", m.since),
             ("group", m.group),
             ("syntax", m.syntax),
+            ("complexity", m.complexity),
+            ("compat", m.compat),
         ] {
             encode_bulk(out, k.as_bytes());
             encode_bulk(out, v.as_bytes());

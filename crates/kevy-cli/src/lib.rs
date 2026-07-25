@@ -11,15 +11,15 @@
 
 pub use kevy_resp::Reply;
 
-/// **v1.40** — backup / restore container support. See
+/// Backup / restore container support. See
 /// [`backup::pack`] and [`backup::unpack`].
 pub mod backup;
 
-/// **v2.10** — migration toolchain (`export` / `import`). See
+/// Migration toolchain (`export` / `import`). See
 /// [`migrate::run_export`] and [`migrate::run_import`].
 pub mod migrate;
 
-/// **v2.10** — prefix bulk ops + diagnostics (`copy-prefix` /
+/// Prefix bulk ops + diagnostics (`copy-prefix` /
 /// `delete-prefix` / `digest` / `diff` / `inspect`).
 pub mod bulk;
 

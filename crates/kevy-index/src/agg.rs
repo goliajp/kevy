@@ -1,5 +1,5 @@
-//! [`AggSegment`] — one shard's slice of one aggregate index (RFC
-//! v3.1, KIND agg): per-group count / sum / min / max maintained
+//! [`AggSegment`] — one shard's slice of one aggregate index (KIND
+//! agg): per-group count / sum / min / max maintained
 //! synchronously with writes. min/max stay EXACT under deletion via a
 //! per-group value multiset (BTreeMap value → multiplicity); a
 //! row → (group, value) reverse map supports O(log) updates — the
@@ -77,7 +77,8 @@ pub struct AggStats {
     pub rows: u64,
     /// Rows excluded (coerce failure / missing group field).
     pub excluded: u64,
-    /// Approximate heap bytes (RFC D4 formula's measured side).
+    /// Approximate heap bytes (the measured side of the documented
+    /// memory formula).
     pub approx_bytes: u64,
 }
 
@@ -231,6 +232,14 @@ impl AggSegment {
     /// Membership probe (verify hook).
     pub fn contains(&self, key: &[u8]) -> bool {
         self.rows.contains_key(key)
+    }
+
+    /// This segment's live row count — the one field of [`Self::stats`]
+    /// that is a `len()`. Its own accessor because `stats` also sums every
+    /// group's values, every group key and every row key to estimate bytes,
+    /// and a caller asking "how many rows" should not pay for that.
+    pub fn rows(&self) -> u64 {
+        self.rows.len() as u64
     }
 
     /// Live counters. Byte constants calibrated against measured RSS

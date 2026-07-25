@@ -36,11 +36,11 @@ impl<C: Commands> Shard<C> {
             match (&mut slot.agg, part) {
                 (Agg::First(dst), Part::Reply(b)) => *dst = Some(b),
                 (Agg::SumInt(acc), Part::Int(n)) => *acc += n,
-                // v3.16 D1 WAIT: reply = MIN over per-shard acked counts.
+                // WAIT: reply = MIN over per-shard acked counts.
                 (Agg::MinInt(acc), Part::Int(n)) => *acc = (*acc).min(n),
-                // v3.16 D2 REPL.WAIT: every shard must report 1 (met).
+                // REPL.WAIT: every shard must report 1 (met).
                 (Agg::ReplBarrier { ok, .. }, Part::Int(n)) => *ok &= n > 0,
-                // v3.16 D2 REPL.TOKEN: pairs drop in by shard id.
+                // REPL.TOKEN: pairs drop in by shard id.
                 (
                     Agg::ReplTokens { slots },
                     Part::ReplToken { shard, generation, next_offset },
@@ -53,13 +53,50 @@ impl<C: Commands> Shard<C> {
                 (Agg::ExtensionGather { chunks, .. }, Part::ExtensionChunk(c)) => {
                     chunks.push(c);
                 }
+                (Agg::ClientList { text }, Part::ExtensionChunk(c)) => {
+                    text.extend_from_slice(&c);
+                }
+                (Agg::ClientKill { killed, .. }, Part::Int(n)) => *killed += n,
                 (Agg::Gather { got, .. }, Part::Gathered(items))
                 | (Agg::ZStoreGather { got, .. }, Part::Gathered(items)) => {
                     for (k, g) in items {
                         got.insert(k, g);
                     }
                 }
+                // Geo *STORE step 1: the source shard's search result.
+                (Agg::GeoStore { hits, .. }, Part::GeoHits(h)) => *hits = Some(h),
                 (Agg::Keys { acc, .. }, Part::Keys(ks)) => acc.extend(ks),
+                // Weighted reservoir: candidate i survives with probability
+                // live_i / seen, which makes every key in the whole keyspace
+                // exactly equally likely — a big shard's candidate wins more
+                // often precisely because it stands for more keys. The shard's
+                // own `draw` supplies the coin, so the fold stays a pure
+                // (agg, part) function.
+                // An empty shard's candidate is None — absorbed, weight zero.
+                // It gets its own arm because the mismatch fallthrough below
+                // treats an unpaired (agg, part) as a routing bug.
+                (Agg::RandomKey { .. }, Part::RandomKey { key: None, .. }) => {}
+                (
+                    Agg::RandomKey { key, seen },
+                    Part::RandomKey { key: Some(k), live, draw },
+                ) => {
+                    *seen += live.max(1);
+                    if key.is_none() || kevy_rng_below(draw, *seen) < live.max(1) {
+                        *key = Some(k);
+                    }
+                }
+                // SCAN page: bank the keys, remember the shard's next
+                // cursor, debit the COUNT work budget; the decision
+                // (reply vs chain into the next shard) happens in
+                // `finalize_scan_agg` once the slot completes.
+                (
+                    Agg::ScanPage { keys, next, budget, .. },
+                    Part::ScanPage { next: n, keys: ks, visited },
+                ) => {
+                    keys.extend(ks);
+                    *next = n;
+                    *budget = budget.saturating_sub(visited);
+                }
                 (
                     Agg::PrefixStats { keys, expires },
                     Part::PrefixStats { keys: k, expires: e },
@@ -99,6 +136,16 @@ impl<C: Commands> Shard<C> {
                         *taken = refused;
                     }
                 }
+                // Cross-shard list move: buffer each step's result in the agg
+                // so finalize can decide the next hop.
+                (
+                    Agg::ListMoveOrchestrator { taken, .. },
+                    Part::ListMoveTaken(r),
+                ) => *taken = Some(r),
+                (
+                    Agg::ListMoveOrchestrator { pushed, .. },
+                    Part::ListMovePushed { refused },
+                ) => *pushed = Some(refused.is_none()),
                 // The terminal step-1 miss (RenameNoSuchSrc) leaves
                 // `taken == None`; finalize reads that as "missing src".
                 _ => {}
@@ -112,8 +159,11 @@ impl<C: Commands> Shard<C> {
                     Agg::WatchCollect { .. }
                         | Agg::ExecPrep { .. }
                         | Agg::RenameOrchestrator { .. }
+                        | Agg::ListMoveOrchestrator { .. }
                         | Agg::ZStoreGather { .. }
+                        | Agg::GeoStore { .. }
                         | Agg::ExtensionGather { .. }
+                        | Agg::ScanPage { .. }
                 ) {
                     Some(agg)
                 } else {
@@ -131,31 +181,25 @@ impl<C: Commands> Shard<C> {
                     self.finalize_watch_agg(conn_id, seq, agg);
                 }
                 Agg::RenameOrchestrator { .. } => self.finalize_rename_agg(conn_id, seq, agg),
+                Agg::ListMoveOrchestrator { .. } => self.finalize_list_move_agg(conn_id, seq, agg),
                 Agg::ZStoreGather { .. } => self.finalize_zstore_agg(conn_id, seq, agg),
+                Agg::GeoStore { .. } => self.finalize_geostore_agg(conn_id, seq, agg),
+                Agg::ScanPage { .. } => self.finalize_scan_agg(conn_id, seq, agg),
                 Agg::ExtensionGather { argv, chunks } => {
                     let proto = self
                         .conns
                         .get(&conn_id)
                         .map_or(kevy_resp::RespVersion::V2, |c| c.proto);
-                    let reply = self.commands.extension_reduce_v3(&argv, chunks, proto);
-                    // v2.6: a reply starting with 0x00 is a CONTINUATION —
-                    // the remainder encodes a second fan-out argv
-                    // (length-prefixed items). RESP replies never start
-                    // with NUL, so the convention is unambiguous. Phase
-                    // state rides inside the continuation argv itself
-                    // (stateless two-phase, no new agg variant).
-                    if reply.first() == Some(&0) {
-                        if let Some(argv2) = decode_continuation(&reply[1..]) {
-                            self.start_extension_phase(conn_id, seq, argv2);
-                        } else {
-                            self.fill_extension_slot(
-                                conn_id,
-                                seq,
-                                b"-ERR internal: bad extension continuation\r\n".to_vec(),
-                            );
+                    match self.commands.extension_reduce(&argv, chunks, proto) {
+                        crate::ExtensionReduced::Reply(reply) => {
+                            self.fill_extension_slot(conn_id, seq, reply);
                         }
-                    } else {
-                        self.fill_extension_slot(conn_id, seq, reply);
+                        // Phase state rides inside the follow-up argv
+                        // itself (stateless two-phase, no new agg
+                        // variant).
+                        crate::ExtensionReduced::Continue(argv2) => {
+                            self.start_extension_phase(conn_id, seq, argv2);
+                        }
                     }
                 }
                 // The match above is exhaustive over what fold ever puts
@@ -215,17 +259,11 @@ pub(crate) fn relative_ttl_write<A: ArgvView + ?Sized>(args: &A) -> bool {
     false
 }
 
-/// Decode a continuation payload: `[n: u32 LE][(len: u32 LE, bytes)*]`.
-fn decode_continuation(b: &[u8]) -> Option<Vec<Vec<u8>>> {
-    let mut pos = 0usize;
-    let n = u32::from_le_bytes(b.get(pos..pos + 4)?.try_into().ok()?) as usize;
-    pos += 4;
-    let mut out = Vec::with_capacity(n);
-    for _ in 0..n {
-        let len = u32::from_le_bytes(b.get(pos..pos + 4)?.try_into().ok()?) as usize;
-        pos += 4;
-        out.push(b.get(pos..pos + len)?.to_vec());
-        pos += len;
+/// Uniform in `0..n` from one raw draw (Lemire's multiply-shift, no rejection).
+/// The residual bias is under one part in 2^64/n — invisible at keyspace sizes.
+fn kevy_rng_below(draw: u64, n: u64) -> u64 {
+    if n <= 1 {
+        return 0;
     }
-    Some(out)
+    ((u128::from(draw) * u128::from(n)) >> 64) as u64
 }

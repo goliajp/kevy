@@ -1,7 +1,8 @@
 //! kevy-mcp — kevy's official MCP (Model Context Protocol) server.
 //!
 //! Speaks the MCP stdio transport: newline-delimited JSON-RPC 2.0 on
-//! stdin/stdout (protocol revision 2024-11-05, tools capability only).
+//! stdin/stdout (protocol revision = the `protocolVersion` literal in
+//! the `initialize` reply below; tools capability only).
 //! On startup it connects to a kevy server and bootstraps its verb
 //! catalog from `COMMAND DOCS` — the tool surface is defined by the
 //! live server, never by a table baked into this binary.
@@ -73,7 +74,7 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: &Cli) -> io::Result<()> {
-    let mut client = RespClient::from_url(&cli.url)?;
+    let mut client = RespClient::connect_url(&cli.url)?;
     let docs = client.request(&[b"COMMAND".to_vec(), b"DOCS".to_vec()])?;
     let catalog = Catalog::from_docs_reply(&docs).map_err(io::Error::other)?;
     // stderr is the MCP-sanctioned log channel; stdout carries only frames.

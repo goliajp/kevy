@@ -1,0 +1,21 @@
+[package]
+name = "kevy-napi"
+description = "N-API gate for kevy — hand-written node_api bindings (no napi crate) exporting napi_register_module_v1 over the kevy-ffi engine, for Node.js."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+# cdylib only: this crate IS the loadable kevy addon (.node). The logic it
+# wraps lives (and is tested) in kevy-ffi / kevy-embedded; the Node side is
+# exercised by bindings/node (node --test).
+crate-type = ["cdylib"]
+
+[dependencies]
+kevy-ffi = { path = "../kevy-ffi", version = "4.0.0" }
+
+[lints]
+workspace = true

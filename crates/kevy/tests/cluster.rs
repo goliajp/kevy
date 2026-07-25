@@ -110,11 +110,23 @@ impl Server {
             ))
         });
         std::fs::create_dir_all(&dir).unwrap();
+        // The CLUSTER command surface reads the state's config; build one
+        // matching this server so SLOTS / INFO report the real topology.
+        let mut cfg = kevy_config::Config::default();
+        cfg.server.port = port;
+        cfg.server.threads = nshards;
+        if cluster {
+            cfg.cluster.enabled = true;
+            cfg.cluster.port_base = cluster_base;
+        }
+        let state = Arc::new(
+            kevy::RuntimeState::new(Arc::new(cfg), std::path::PathBuf::new(), nshards).unwrap(),
+        );
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let mut rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, nshards, kevy::KevyCommands)
+            let mut rt = kevy_rt::Runtime::builder(kevy::KevyCommands::with_state(state)).bind([127, 0, 0, 1], port).shards(nshards)
                 .with_data_dir(dir_thread);
             if cluster {
                 rt = rt.with_cluster(cluster_base);
@@ -233,17 +245,8 @@ fn compat_port_keeps_forwarding_in_cluster_mode() {
 fn cluster_slots_topology_is_exact_and_covering() {
     let n = 4;
     let srv = Server::start(n, true, None);
-    // The CLUSTER command surface reads the process-wide config (normally
-    // installed by `serve`); tests drive the Runtime directly, so install
-    // one matching this server. First-init wins — the other tests in this
-    // binary never read it.
-    let mut cfg = kevy_config::Config::default();
-    cfg.server.port = srv.port;
-    cfg.server.threads = n;
-    cfg.cluster.enabled = true;
-    cfg.cluster.port_base = srv.cluster_base;
-    kevy::config_init(std::sync::Arc::new(cfg));
-
+    // `Server::start` bakes a matching config into the runtime state,
+    // so the CLUSTER command surface reports this server's topology.
     let mut c = srv.connect();
     c.write_all(&req(&[b"CLUSTER", b"SLOTS"])).unwrap();
 
@@ -253,7 +256,7 @@ fn cluster_slots_topology_is_exact_and_covering() {
     read_reply(&mut c, want.as_bytes());
 
     // INFO reports cluster_enabled:1. cluster_known_nodes reflects
-    // peer count (v1.57+): without a `peers = ...` config, it's 1
+    // peer count: without a `peers = ...` config, it's 1
     // (this node only). `cluster_size` retains shard count = 4.
     c.write_all(&req(&[b"CLUSTER", b"INFO"])).unwrap();
     let mut buf = [0u8; 512];

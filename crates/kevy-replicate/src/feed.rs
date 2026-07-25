@@ -1,8 +1,8 @@
-//! v2.3 CDC feed layer over [`crate::source::ReplicationSource`] —
+//! CDC feed layer over [`crate::source::ReplicationSource`] —
 //! the `(generation, offset)` cursor semantics the public FEED.* /
 //! `changes_since` surfaces speak.
 //!
-//! Cursor contract (RFC 2026-07-04, LOCKED):
+//! Cursor contract:
 //! - `generation` identifies one unbroken offset history. A given
 //!   `(gen, offset)` pair refers to the same stream prefix forever.
 //! - Clean shutdown + restart preserves both (continuity); FLUSHALL,

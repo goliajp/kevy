@@ -1,4 +1,4 @@
-//! v1.43 single-node cluster topology chaos test.
+//! Single-node cluster topology chaos test.
 //!
 //! Spawn kevy with `[cluster] enabled = true`, drive concurrent
 //! writes via the cluster-style port (each shard listens at
@@ -109,11 +109,10 @@ fn cluster_topology_routing_under_chaos() {
         "shard 0 never returned -MOVED across 32 probe keys — cluster routing not active?"
     );
 
-    // PHASE 3: cross-slot MGET. Observational — kevy currently
-    // returns a multi-bulk of nils for keys not on this shard
-    // (NOT -CROSSSLOT like Redis Cluster); strict invariant is that
-    // kevy never panics or returns a wrong value. CROSSSLOT enforcement
-    // is a known v1.43.x candidate item.
+    // PHASE 3: cross-slot MGET. Observational — the strict invariant
+    // is that kevy never panics and the reply is well-formed RESP
+    // (cluster mode answers `-CROSSSLOT`; the dedicated
+    // cluster_crossslot_mget test asserts that shape strictly).
     drop(s);
     let mut s = TcpStream::connect(format!("127.0.0.1:{cluster_port_base}"))
         .expect("cluster port conn for crossslot");

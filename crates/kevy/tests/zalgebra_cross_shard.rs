@@ -1,4 +1,4 @@
-//! v2.2 zset/set algebra `*STORE` family — end-to-end against a real
+//! Zset/set algebra `*STORE` family — end-to-end against a real
 //! 8-shard reactor, so source keys and `dst` land on different shards
 //! and the gather → combine → store two-hop orchestrator
 //! (`kevy_rt::exec_zalgebra`) actually crosses cores. Single-store
@@ -54,7 +54,7 @@ impl Server {
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, NSHARDS, kevy::KevyCommands)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(NSHARDS)).bind([127, 0, 0, 1], port).shards(NSHARDS)
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });
@@ -188,7 +188,7 @@ fn zalgebra_survives_restart_via_effect_aof() {
 
     let boot = |port: u16, stop: Arc<AtomicBool>, dir: std::path::PathBuf| {
         std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, NSHARDS, kevy::KevyCommands)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(NSHARDS)).bind([127, 0, 0, 1], port).shards(NSHARDS)
                 .with_data_dir(dir);
             rt.run(stop).unwrap();
         })

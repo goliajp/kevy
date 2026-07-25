@@ -24,6 +24,7 @@ jobs:
   coverage:
     name: covgate (line-coverage ratchet)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - name: Install Rust (stable)
@@ -54,6 +55,7 @@ jobs:
   test:
     name: test (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -88,26 +90,95 @@ jobs:
         run: cargo build --workspace --target ${{ matrix.target }}
 
       - name: Test (workspace, --lib --tests)
+        # KEVY_TEST_PATIENCE widens the replication tests' catch-up budgets:
+        # they spawn a full second runtime in-process, and under the parallel
+        # suite that replica is CPU-starved, so the 60s default flakes on a
+        # loaded runner (spop_storm's fence never lands in time). covgate sets
+        # this for the same reason; the plain test job needs it too.
+        env:
+          KEVY_TEST_PATIENCE: "3"
         run: cargo test --workspace --lib --tests --target ${{ matrix.target }}
+      # After the tests, not before: the point is that running them leaves
+      # the repo root clean. See bench/rootgate.sh for why `git status`
+      # cannot be the check.
+      - name: rootgate (repo root is not a data directory)
+        run: bash bench/rootgate.sh
       - name: generated docs parity (llms.txt / verb-reference == VERB_META)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo run -p kevy --bin gen_docs -- . --check
+      - name: command pages parity (site == VERB_META)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python3 tools/gen_command_pages.py --check
+      - name: CJK punctuation (no half-width commas in Chinese/Japanese prose)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python3 tools/check_cjk_punct.py
+      - name: site links (no dead internal link in site/)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python3 tools/check_links.py
+      - name: site commands (every RESP example on the site actually runs)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          cargo build -q -p kevy --bin kevy
+          python3 tools/check_site_commands.py
+      - name: doc configs (every ```toml in docs/ actually loads)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          cargo build -q -p kevy --bin kevy
+          python3 tools/check_doc_toml.py
       - name: locgate (files ≤500 LOC, fns ≤50 or waivered)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: bash bench/locgate.sh
+      # killgate: an unguarded `pkill -f "$X"` matches every process on the
+      # box when $X is empty. That took the lx64 bench host offline three
+      # times in 2026-07 (see bench/INCIDENT-2026-07-perfgate-pkill-massacre.md).
+      # The lesson was written down after an earlier incident and ignored by
+      # a script written later — hence a gate, not a note.
+      - name: killgate (no unguarded pkill -f in bench scripts)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: bash bench/killgate.sh
+      # uringgate: connection-wedge contract. The sq-pressure half needs a
+      # real ring and self-skips where there isn't one; the blocking-tail
+      # half is reactor-agnostic and runs everywhere, which is the half
+      # that caught the seq-retire wedge (8d8f20e9).
+      - name: uringgate (no connection wedges)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          cargo build -q --release -p kevy --bin kevy
+          bash bench/uringgate.sh target/release/kevy
+      # commentgate (no internal vocabulary in comments — vocabulary table
+      # in bench/commentgate-terms.txt): baseline driven to zero by the
+      # T2 sweep; any new hit is a regression.
+      - name: commentgate (comment hygiene)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: bash bench/commentgate.sh
+      # vendorgate (tracked vendored binaries/headers match the current ABI):
+      # gitignored artifacts are absent on a fresh clone and SKIP; the
+      # tracked ones (nitro jniLibs, nitro cpp/kevy.h) must be current.
+      - name: vendorgate (vendored natives current)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: bash bench/vendorgate.sh
 
       - name: Clippy (workspace, all targets, all features)
         run: cargo clippy --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
 
   # ───────────── contract gates: availability / AI / replication ─────────────
-  # The executable behavior contracts (v3.17): availgate's 12 clamps
-  # (replication truth, crash failover, the consistency ladder),
-  # aigate (discovery/self-explaining errors/MCP), repligate
-  # (snapshot ship + live frames + restart resync). Real processes,
-  # release binaries.
+  # The executable behavior contracts: availgate's clamps (replication
+  # truth, crash failover, the consistency ladder), aigate (discovery /
+  # self-explaining errors / MCP wire), mcpgate (MCP protocol e2e),
+  # repligate (snapshot ship + live frames + restart resync). Real
+  # processes, release binaries, one hard gate.
+  #
+  # (Was briefly split with availgate/repligate on continue-on-error over
+  # a phantom "primary never came up" hang — root-caused on lx64 to an
+  # availgate SCRIPT bug, not kevy: a `timeout 15 …`-wrapped CLI var made
+  # the `[ -x ]` check fall back to a debug binary that a release-only
+  # build never produces, so every PING ran a missing command. macOS has
+  # no coreutils `timeout`, so it never wrapped and stayed green — which
+  # is why it looked Linux-only. Fixed; folded back to a hard gate.)
   gates:
     name: contract gates (availgate + aigate + repligate)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - name: Install Rust (stable)
@@ -130,10 +201,12 @@ jobs:
           cargo build --release -p kevy-mcp
           cargo build --release -p kevy-cli
           cargo build --release -p kevy-embedded --example primary_writer
-      - name: availgate (12 clamps, 3 phases)
+      - name: availgate (16 clamps, 4 phases)
         run: bash bench/availgate.sh target/release/kevy
       - name: aigate (wire + MCP)
         run: bash bench/aigate.sh target/release/kevy
+      - name: mcpgate (MCP protocol e2e — full tool matrix + error fidelity)
+        run: bash bench/mcpgate.sh target/release/kevy
       - name: repligate (ship + frames + restart)
         run: bash bench/repligate.sh
 
@@ -146,6 +219,7 @@ jobs:
   release-profile:
     name: test (release profile, Linux)
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     if: startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/hotfix/')
     steps:
       - uses: actions/checkout@v7
@@ -173,6 +247,7 @@ jobs:
   wasm:
     name: cargo check ${{ matrix.target }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -209,12 +284,143 @@ jobs:
           cargo check --target ${{ matrix.target }} -p kevy-persist
           cargo check --target ${{ matrix.target }} -p kevy-resp
           cargo check --target ${{ matrix.target }} -p kevy-embedded
+          cargo check --target ${{ matrix.target }} -p kevy-wasm
+
+  # ───────────── crashgate: the crash-consistency contract, executed ─────────────
+  # SIGKILL matrix + injected torn-tail / mid-file / payload damage against
+  # the loss-bound and no-black-hole invariants (durability-trust arc T1).
+  # REDpending cells (quarantine / integrity / resync) don't fail the build
+  # until their trains land — PENDING_STRICT=1 arms them at arc finish.
+  crashgate:
+    name: crashgate (crash-consistency contract)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        run: rustup toolchain install stable --no-self-update
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-crashgate-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-crashgate-
+
+      - name: Run crashgate
+        # Every cell green as of T6 (resync) — pending mode is over; any
+        # red is now a build failure.
+        run: PENDING_STRICT=1 bash bench/crashgate.sh
+
+  # ───────────── iot: musl cross targets + no_std core + feature archetypes ─────────────
+  # The embedded IoT cut. Three-target check matrix (Tier A
+  # musl pair + the thumbv7em no_std proof) and the six kevy-embedded
+  # feature archetypes. Full test runs under qemu-user are a manual
+  # item (see bench/iotgate.sh header) — this job gates the compile
+  # face; resource budgets (size / RSS) are bench/iotgate.sh's job.
+  iot:
+    name: iot (musl / no_std / feature archetypes)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust + iot targets
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+          rustup target add aarch64-unknown-linux-musl armv7-unknown-linux-musleabihf \
+            arm-unknown-linux-musleabihf x86_64-unknown-linux-musl \
+            riscv64gc-unknown-linux-musl thumbv7em-none-eabihf
+
+      - name: Install the RISC-V linker and a Cortex-M emulator
+        # riscv64-musl's target spec wants libgcc_s, which rust-lld cannot
+        # supply — it needs a real RISC-V cross toolchain. qemu-system-arm
+        # is what actually RUNS the bare-metal MCU probe.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-riscv64-linux-gnu qemu-system-arm
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-iot-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-iot-
+
+      - name: Check kevy-embedded on the Tier A musl targets (full surface)
+        # ARMv6 (arm-unknown-linux-musleabihf) is the Pi Zero / Pi 1 class
+        # and was previously ungated even though the docs name that board.
+        run: |
+          cargo check --target aarch64-unknown-linux-musl -p kevy-embedded
+          cargo check --target armv7-unknown-linux-musleabihf -p kevy-embedded
+          cargo check --target arm-unknown-linux-musleabihf -p kevy-embedded
+
+      - name: Check the no_std core stones (thumbv7em, alloc + external-clock)
+        # kevy-store pulls kevy-hash / -bytes / -map / -madvise with the
+        # same no-default feature set, so one check proves all five;
+        # kevy-madvise is also checked standalone (store only reaches it
+        # through kevy-map).
+        run: |
+          cargo check --target thumbv7em-none-eabihf -p kevy-store --no-default-features --features alloc,external-clock
+          cargo check --target thumbv7em-none-eabihf -p kevy-madvise --no-default-features --features alloc
+
+      - name: Check the six kevy-embedded feature archetypes
+        run: |
+          for f in core core,persist core,index core,index,text,vector core,persist,replicate core,listener; do
+            echo "== features: $f =="
+            cargo check -p kevy-embedded --no-default-features --features "$f"
+          done
+
+      - name: Build the standalone consumer on every shipped IoT target
+        # The real delivery shape: a crate outside the workspace whose only
+        # dependency is kevy-embedded. Building a workspace *example* pulls
+        # dev-dependencies (the `kevy` server crate) and inflated the measured
+        # size by ~60%, so the consumer is what iotgate sizes and what CI
+        # must prove compiles on every board we claim.
+        working-directory: bench/iot-consumer
+        run: |
+          for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl \
+                   armv7-unknown-linux-musleabihf arm-unknown-linux-musleabihf; do
+            echo "== consumer (core) on $t =="
+            cargo build --release --no-default-features --features core --target "$t"
+          done
+          echo "== consumer (core) on riscv64gc-unknown-linux-musl =="
+          CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_MUSL_LINKER=riscv64-linux-gnu-gcc \
+          RUSTFLAGS="-C target-feature=+crt-static" \
+            cargo build --release --no-default-features --features core \
+              --target riscv64gc-unknown-linux-musl
+
+      - name: Run kevy-store on a bare-metal Cortex-M4 (QEMU)
+        # The no_std claim used to rest on `cargo check`. This BOOTS the
+        # stone on an MCU — hand-written vector table, bump allocator,
+        # panic handler, semihosting — and fails the build if the KV or
+        # TTL surface misbehaves there.
+        working-directory: bench/mcu-probe
+        run: |
+          set -o pipefail
+          cargo run --release 2>&1 | tee /tmp/mcu.log
+          # A zero exit code alone does not prove the firmware ran: a lockup or a
+          # QEMU that never reached main can still leave one behind. Demand the
+          # sentinel the firmware only prints after the KV + TTL checks pass.
+          grep -q '^== kevy-store RUNS on a bare-metal MCU ==$' /tmp/mcu.log \
+            || { echo '::error::the MCU probe did not reach its success sentinel'; exit 1; }
 
   # ───────────── miri on the unsafe stones (catches UB in slot mgmt, ─────────────
   # ───────────── SPSC ring atomics, and the zset encoding face)      ─────────────
   miri:
     name: miri (kevy-map + kevy-bytes + kevy-ring + kevy-store zset)
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
 
@@ -262,10 +468,62 @@ jobs:
           MIRIFLAGS: "-Zmiri-disable-isolation"
         run: cargo miri test -p kevy-store --lib zset
 
+  # ───────────── fuzz smoke: 60s per target on every push ─────────────
+  # The twelve libFuzzer targets (v3.18 T5a + the stone fuzz corpus) get a
+  # 60-second smoke each — long enough to replay the checked-in corpus and
+  # shake the shallow states, short enough for the CI budget (the matrix
+  # runs in parallel; each leg is one target's build + 60s). A crash or
+  # sanitizer hit is a hard failure. Deep fuzzing stays on the bench box;
+  # this keeps "never regress on a known input class" in the merge gate.
+  fuzz-smoke:
+    name: fuzz-smoke (${{ matrix.crate }}/${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { crate: kevy-bytes,   target: cross_arm }
+          - { crate: kevy-config,  target: config_toml }
+          - { crate: kevy-hash,    target: key_hash_slot }
+          - { crate: kevy-map,     target: map_ops }
+          - { crate: kevy-persist, target: replay_aof }
+          - { crate: kevy-persist, target: shards_meta }
+          - { crate: kevy-persist, target: snapshot_load }
+          - { crate: kevy-replicate, target: replica_wire }
+          - { crate: kevy-resp,    target: parse_command }
+          - { crate: kevy-resp,    target: parse_reply }
+          - { crate: kevy-ring,    target: ring_spsc }
+          - { crate: kevy-store,   target: store_zset }
+          - { crate: kevy-text,    target: text_index }
+          - { crate: kevy-vector,  target: hnsw_ops }
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust (nightly — cargo-fuzz needs -Z flags)
+        run: |
+          rustup toolchain install nightly --no-self-update
+          rustup default nightly
+      - name: Cache cargo registry + cargo-fuzz + fuzz build
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/bin/cargo-fuzz
+            crates/${{ matrix.crate }}/fuzz/target
+          key: fuzz-${{ matrix.crate }}-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            fuzz-${{ matrix.crate }}-${{ matrix.target }}-
+      - name: Install cargo-fuzz (cached binary short-circuits)
+        run: command -v cargo-fuzz || cargo +nightly install cargo-fuzz --locked
+      - name: fuzz 60s (${{ matrix.target }})
+        working-directory: crates/${{ matrix.crate }}
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=60
+
   # ───────────── compat smoke vs valkey 9.1 ─────────────
   compat:
     name: bench/run.sh (Docker, 5-min smoke)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     # Don't block the main matrix on bench — it's a flake-prone Docker harness.
     continue-on-error: true
     steps:
@@ -283,6 +541,7 @@ jobs:
   compat-differential:
     name: compat3 differential (kevy == valkey 9.1, byte-for-byte)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     # Blocking, unlike the perf smoke above: a divergence is a deterministic
     # correctness bug (byte-diff of replies vs valkey 9.1 + redis 7.4), not
     # an environmental perf artifact. The script exits non-zero if kevy
@@ -291,3 +550,480 @@ jobs:
       - uses: actions/checkout@v7
       - name: 3-way differential vs valkey 9.1 + redis 7.4
         run: bash bench/compat3.sh
+
+  # ── clientgate — bring your redis client, gated ──────────────────────────
+  # kevy speaks RESP; the claim that every ecosystem's mainstream redis
+  # client just works is executable: node-redis, ioredis, go-redis,
+  # StackExchange.Redis, redis-py and hiredis each run the same ladder
+  # (typed ops per family, a pub/sub round trip, an extended verb raw)
+  # against one kevy server.
+  clientgate:
+    name: clientgate (six redis clients, one kevy server)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust (stable)
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: clientgate-${{ hashFiles('Cargo.lock') }}
+      - name: Build server + cli (release)
+        run: cargo build --release -p kevy --bin kevy -p kevy-cli --bin kevy-cli
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 'lts/*'
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+          cache-dependency-path: bench/clientgate/goredis/go.mod
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Install hiredis
+        run: sudo apt-get update -q && sudo apt-get install -y -q libhiredis-dev
+      # Runs with the default io_uring reactor: this gate is what
+      # would have caught the multishot-recv re-arm wedge fixed in the
+      # same change (a dropped recv-arm under SQ pressure stranded a
+      # connection). See bench/PERF-FINDING-2026-07-18-*.md.
+      - run: bash bench/clientgate.sh
+
+  # ── ffigate — every language door opens on every push ────────────────────
+  # One stone (kevy-ffi), many doors: the C, C++, Go, Bun, Node and C#
+  # smokes all run the same contract — commands, a protocol error as data,
+  # a pub/sub round trip, and a close-and-reopen durability check. The
+  # Rust door is the kevy-embedded suite itself.
+  ffigate:
+    name: ffigate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust (stable)
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: ffigate-${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}
+
+      # Before building anything: every door must still cover every row of
+      # the contract. Source-only, so it fails in seconds rather than after
+      # six toolchains have warmed up.
+      - name: ffigate contract table (6 doors x 5 rows)
+        run: bash bench/ffigate-contract.sh
+
+      - name: Build the stone
+        run: cargo build -p kevy-ffi
+
+      - name: C smoke
+        run: |
+          extra=""; [ "$(uname)" = Linux ] && extra="-lpthread -ldl -lm"
+          cc -Icrates/kevy-ffi/include crates/kevy-ffi/examples/c/smoke.c \
+             target/debug/libkevy_ffi.a $extra -o /tmp/kevy-smoke-c
+          /tmp/kevy-smoke-c /tmp/kevy-smoke-c-data
+
+      - name: C++ smoke
+        run: |
+          extra=""; [ "$(uname)" = Linux ] && extra="-lpthread -ldl -lm"
+          c++ -std=c++17 -Icrates/kevy-ffi/include \
+              crates/kevy-ffi/examples/cpp/smoke.cpp \
+              target/debug/libkevy_ffi.a $extra -o /tmp/kevy-smoke-cpp
+          /tmp/kevy-smoke-cpp /tmp/kevy-smoke-cpp-data
+
+      - name: Go smoke
+        uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+          cache-dependency-path: bindings/go/go.mod
+      - run: go test ./...
+        working-directory: bindings/go
+
+      - name: Bun smoke
+        uses: oven-sh/setup-bun@v2
+      - run: bun test bun.test.js
+        working-directory: bindings/node
+
+      - name: Node smoke
+        uses: actions/setup-node@v5
+        with:
+          node-version: 'lts/*'
+      - run: cargo build -p kevy-napi
+      - run: node --test node.test.js
+        working-directory: bindings/node
+
+      # The Electron door reuses the Node door's addon (no separate native
+      # build). Its main-process bridge + preload are dependency-injected, so
+      # the whole surface runs headlessly here — no display / xvfb.
+      - name: Electron door smoke (headless)
+        run: node --test test/*.test.js
+        working-directory: bindings/electron
+
+      - name: C# smoke
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - run: |
+          ext=so; [ "$(uname)" = Darwin ] && ext=dylib
+          KEVY_FFI_LIB="$PWD/target/debug/libkevy_ffi.$ext" \
+            dotnet run --project bindings/csharp/smoke -c Release -- /tmp/kevy-smoke-cs-data
+
+      # The native shells need a host Expo project (and Xcode / the NDK) —
+      # they are exercised by the mobile smokes, not here. This pins the
+      # TS surface, where the whole typed layer of the expo door lives.
+      - name: Expo door typecheck
+        run: npx -y -p typescript@5 tsc --noEmit -p tsconfig.json
+        working-directory: bindings/expo
+
+  # ── npm-install-smoke — the published layout resolves and runs ───────────
+  # ffigate proves the binding works from the checkout; this proves the
+  # PACKAGE works. It stages the platform package, packs both tarballs, and
+  # installs them into a scratch project by file: spec — no registry — then
+  # runs the typed surface on both Node and Bun. Catches the failure ffigate
+  # cannot: a loader that finds target/ in a checkout but not the platform
+  # package a user actually installs. One leg per RID CI can give us;
+  # linux-arm64 (the third published target) has no hosted runner, so it is
+  # covered at release time on the self-hosted box, not here.
+  npm-install-smoke:
+    name: npm-install-smoke (${{ matrix.rid }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, rid: darwin-arm64 }
+          - { os: ubuntu-latest, rid: linux-x64 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - uses: oven-sh/setup-bun@v2
+      - name: Install Rust (stable)
+        run: rustup toolchain install stable --no-self-update && rustup default stable
+      - name: Build the release natives
+        run: cargo build --release -p kevy-ffi -p kevy-napi
+      - name: Offline install smoke (node + bun, installed layout)
+        run: bash packaging/npm/smoke-node.sh
+
+  # ── client-conformance — the seven native kevy clients, full suites ──────
+  # ffigate (above) opens each language door with the embedded FFI *smoke*;
+  # this is the fuller *conformance* proof: every first-party client's whole
+  # test suite, run against BOTH an in-process embedded backend AND a spawned
+  # real `kevy` server (so the extended verbs — IDX./VIEW./FEED., zset
+  # algebra, hash-field TTL, cluster routing — are exercised over the wire).
+  # One matrix leg per door: Go, Python, TypeScript-on-Node, TypeScript-on-Bun,
+  # C#, C++ and Java. The shared boilerplate (checkout / Rust / cache / the
+  # release server build) is written once; only the leaf toolchain + run steps
+  # fan out by language. Each leg runs that port's own known-green command
+  # verbatim — no invented flags.
+  client-conformance:
+    name: client-conformance (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `ffi` = the native lib cargo package a leg needs prebuilt (empty
+          # for Java, whose run-tests.sh builds kevy-jni itself). `lang` keys
+          # every per-language `if:` below.
+          - { name: go,      lang: go,     ffi: kevy-ffi }
+          - { name: python,  lang: python, ffi: kevy-ffi }
+          - { name: ts-node, lang: node,   ffi: kevy-napi }
+          - { name: ts-bun,  lang: bun,    ffi: kevy-ffi }
+          - { name: csharp,  lang: dotnet, ffi: kevy-ffi }
+          - { name: cpp,     lang: cpp,    ffi: kevy-ffi }
+          - { name: java,    lang: java,   ffi: "" }
+          # The long-tail doors. Each was verified by hand and then left
+          # with no gate, which is how a door rots without anyone noticing:
+          # nothing here spawns a device, so all four run on this image.
+          - { name: android,  lang: android,  ffi: "" }
+          - { name: electron, lang: electron, ffi: kevy-napi }
+          - { name: expo,     lang: expo,     ffi: "" }
+          - { name: tauri,    lang: tauri,    ffi: "" }
+          - { name: nitro,    lang: nitro,    ffi: "" }
+          - { name: flutter,  lang: flutter,  ffi: kevy-ffi }
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust (stable)
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: client-conformance-${{ matrix.name }}-${{ hashFiles('Cargo.lock') }}
+
+      # Every leg's remote-backend tests spawn `target/release/kevy` — the same
+      # binary the ports' harnesses locate under target/release first.
+      - name: Build the kevy server (release)
+        run: cargo build --release -p kevy --bin kevy
+
+      # kevy-ffi (Go/C++ staticlib, Python/Bun/C# cdylib) or kevy-napi (Node
+      # addon), debug — where each port's harness looks first (target/debug).
+      - name: Build the door's native lib
+        if: matrix.ffi != ''
+        run: cargo build -p ${{ matrix.ffi }}
+
+      # ── per-language toolchains (exactly one leg fires each) ──────────────
+      - name: Set up Go
+        if: matrix.lang == 'go'
+        uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+          cache-dependency-path: bindings/go/go.mod
+
+      - name: Set up Python
+        if: matrix.lang == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Set up Node
+        if: matrix.lang == 'node'
+        uses: actions/setup-node@v5
+        with:
+          # `node --test` strips TS types natively (the suite is *.test.ts);
+          # that is default-on from Node 23.6, so pin the current LTS (24)
+          # rather than lts/* to stay above that floor deterministically.
+          node-version: '24'
+
+      - name: Set up Bun
+        if: matrix.lang == 'bun'
+        uses: oven-sh/setup-bun@v2
+
+      - name: Set up .NET
+        if: matrix.lang == 'dotnet'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Set up JDK
+        # run-tests.sh SKIPs (exit 0) when javac is absent — installing the
+        # JDK is what makes the Java leg a real gate instead of a silent pass.
+        # (cmake + g++ for the C++ leg are already on the ubuntu-latest image,
+        # so that door needs no setup step.)
+        if: matrix.lang == 'java' || matrix.lang == 'android'
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # jnigate gates the raw JNI surface with javac alone and SKIPs the
+      # Kotlin shell above it when `kotlinc` is absent — which, until now,
+      # was everywhere. Installing it is what turns that half from a
+      # documented skip into a gate.
+      - name: Set up Kotlin (android door's Kotlin shell)
+        if: matrix.lang == 'android'
+        run: |
+          curl -fsSL -o /tmp/kotlin.zip \
+            https://github.com/JetBrains/kotlin/releases/download/v2.1.0/kotlin-compiler-2.1.0.zip
+          unzip -q /tmp/kotlin.zip -d /opt
+          echo "/opt/kotlinc/bin" >> "$GITHUB_PATH"
+
+      - name: Set up Bun (nitro door)
+        if: matrix.lang == 'nitro'
+        uses: oven-sh/setup-bun@v2
+
+      - name: Set up Flutter
+        if: matrix.lang == 'flutter'
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Set up Node (electron door)
+        if: matrix.lang == 'electron'
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      - name: Set up Bun (expo door)
+        if: matrix.lang == 'expo'
+        uses: oven-sh/setup-bun@v2
+
+      # Tauri on Linux links against the system webkit/GTK stack, which the
+      # runner image does not carry. Without these the plugin's own tests
+      # never get to run — `gobject-sys` fails at build-script time, which
+      # is what the first run of this leg found.
+      - name: Install Tauri's Linux system deps
+        if: matrix.lang == 'tauri'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libssl-dev
+
+      # ── each port's own, known-green conformance command (verbatim) ──────
+      - name: Go — go test ./...
+        if: matrix.lang == 'go'
+        working-directory: bindings/go
+        run: go test ./...
+
+      - name: Python — pytest (embedded + spawned server)
+        if: matrix.lang == 'python'
+        working-directory: bindings/python
+        run: |
+          python -m pip install -e '.[test]'
+          python -m pytest -q
+
+      - name: TypeScript on Node — node --test
+        if: matrix.lang == 'node'
+        working-directory: bindings/ts
+        run: npm run test:node
+
+      - name: TypeScript on Bun — bun test
+        if: matrix.lang == 'bun'
+        working-directory: bindings/ts
+        run: bun run test:bun
+
+      - name: C# — dotnet test
+        if: matrix.lang == 'dotnet'
+        working-directory: bindings/csharp
+        # Harness.cs auto-locates the cdylib only by its macOS name (.dylib);
+        # on the Linux runner we hand it the built .so explicitly (KEVY_FFI_LIB
+        # takes precedence in both Harness.cs and the KevyNative resolver) —
+        # the same way ffigate's C# smoke points at the lib.
+        env:
+          KEVY_FFI_LIB: ${{ github.workspace }}/target/debug/libkevy_ffi.so
+        run: dotnet test Kevy.Client.Tests -c Release
+
+      - name: C++ — cmake + ctest
+        if: matrix.lang == 'cpp'
+        run: |
+          cmake -S bindings/cpp -B bindings/cpp/build
+          cmake --build bindings/cpp/build
+          ctest --test-dir bindings/cpp/build --output-on-failure
+
+      - name: Java — run-tests.sh (kevy-jni + JUnit 5, both backends)
+        if: matrix.lang == 'java'
+        run: bash bindings/java/run-tests.sh
+
+      # jnigate builds kevy-jni itself, compiles the raw JNI surface and
+      # runs its smoke on the host JVM. Its own header always said CI needs
+      # only a JDK and cargo; it had simply never been wired in, leaving the
+      # Android door's JNI layer ungated everywhere.
+      - name: Android — jnigate (raw JNI door on the JVM)
+        if: matrix.lang == 'android'
+        run: bash bench/jnigate.sh
+
+      # The main-process bridge and preload API against a REAL in-process
+      # engine behind a fake ipcMain — no display, no BrowserWindow, which
+      # is exactly what the bridge's dependency injection exists for.
+      - name: Electron — node --test (headless bridge + preload)
+        if: matrix.lang == 'electron'
+        working-directory: bindings/electron
+        run: node --test test/*.test.js
+
+      # The expo door's TypeScript surface with expo-modules-core mocked, so
+      # it needs no simulator: it locks the one behaviour every door must
+      # agree on, that GET on a non-string key surfaces a typed WRONGTYPE.
+      - name: Expo — bun test (native mocked) + tsc
+        if: matrix.lang == 'expo'
+        working-directory: bindings/expo
+        run: |
+          bun test src/index.test.ts
+          bunx tsc --noEmit -p tsconfig.json
+
+      # Standalone crate on purpose (it depends on `tauri`, which must stay
+      # out of the 0-dependency workspace), so nothing at the repo root ever
+      # built it.
+      # The nitro door's TypeScript had never been checked by anything in
+      # this repo: no installed deps, no script, no gate. Its NATIVE side
+      # is compiled by the expo iOS device gate (the expo example depends
+      # on this package), but that gate is macOS-only and manual.
+      - name: Nitro — tsc (TypeScript surface)
+        if: matrix.lang == 'nitro'
+        working-directory: bindings/nitro
+        run: |
+          bun install
+          bun run typecheck
+
+      # `flutter test` drives the real engine through dart:ffi, so this is
+      # a behavioural gate and not just an analyze pass.
+      # `flutter test` runs on the HOST, where the package resolves
+      # `libkevy_ffi.so` by bare name through the dynamic loader — so the
+      # freshly built cdylib has to be on the search path. That is what
+      # makes this a behavioural gate rather than an analyze pass.
+      - name: Flutter — analyze + test
+        if: matrix.lang == 'flutter'
+        working-directory: bindings/flutter
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/target/debug
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test
+
+      - name: Tauri — cargo test (standalone plugin crate)
+        if: matrix.lang == 'tauri'
+        working-directory: bindings/tauri/tauri-plugin-kevy
+        run: cargo test
+
+  # The Apple door needs a macOS runner, which is why it sat uncovered
+  # while every other host-runnable door joined the matrix above: this is
+  # a cost decision, not a wiring one. KevyKit links the vendored
+  # xcframework, so `swift test` exercises the real engine through the C
+  # ABI rather than a mock.
+  apple-door:
+    name: apple (KevyKit on macOS)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # vendorgate refuses a stale artifact, and a door tested against
+      # yesterday's engine is the failure this whole audit turned up.
+      - name: Install Rust (stable)
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: apple-door-${{ hashFiles('Cargo.lock') }}
+
+      # The xcframework KevyKit wraps is a build artifact — the package's
+      # own .gitignore keeps Artifacts/ out of the tree — so a fresh
+      # checkout has the directory's shape and none of its binaries, and
+      # SwiftPM says only "does not contain a binary artifact". Build it
+      # first; vendorgate then has something real to check.
+      - name: Build Kevy.xcframework (the binary target)
+        run: |
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin
+          bash packaging/apple/build-xcframework.sh bindings/apple/KevyKit/Artifacts
+
+      - name: vendorgate (the vendored natives match the source)
+        run: bash bench/vendorgate.sh
+
+      - name: KevyKit — swift build + swift test
+        working-directory: bindings/apple/KevyKit
+        run: |
+          swift build
+          swift test
+

@@ -7,7 +7,7 @@
 //! `consistent: bool` knob (`READCONSISTENT` semantics) forces a read
 //! to the primary for callers that need fresh data.
 //!
-//! v1.18 model: the operator supplies the primary address + a list of
+//! Topology model: the operator supplies the primary address + a list of
 //! replica addresses to [`ReadWriteClient::connect`]; the client
 //! holds one `RespClient` per node. Server-side classification is
 //! intentionally not consulted (no implicit `CLUSTER SLOTS` walk);
@@ -36,8 +36,8 @@ pub struct ReadWriteClient {
     replicas: Vec<RespClient>,
     /// Wrap-around counter for read load-balancing across replicas.
     /// Even distribution under steady-state; the rare write-immediately-
-    /// after-write pattern that pins to a single replica is acceptable
-    /// for v1.18 (no fairness guarantee).
+    /// after-write pattern that pins to a single replica is accepted
+    /// (no fairness guarantee).
     rr_counter: usize,
     /// v3-cluster Phase 3 scope cache: `host:port` → live
     /// `RespClient`. Populated on demand when a write returns
@@ -59,8 +59,8 @@ pub struct ReadWriteClient {
 /// Cap for [`ReadWriteClient::scope_key_targets`] before bulk-evict.
 const SCOPE_KEY_CACHE_CAP: usize = 4096;
 
-/// Max retries the client attempts after a `-QUIESCED` reply
-/// (T3.15). Total worst-case wait ≈
+/// Max retries the client attempts after a `-QUIESCED` reply.
+/// Total worst-case wait ≈
 /// `QUIESCE_RETRY_MIN_MS * (2^N - 1)` with N = budget; with
 /// 5 ms / 80 ms / budget = 7 that's ~635 ms ceiling — enough
 /// to ride out a typical KB-sized scope's quiesce window.
@@ -75,9 +75,9 @@ impl ReadWriteClient {
     /// `[replication] role = "primary"` (or `standalone` — both
     /// behave the same from the client's perspective). `replicas`
     /// lists the addresses of kevy nodes running with
-    /// `[replication] role = "replica"`; v1.18 assumes they all
+    /// `[replication] role = "replica"`; the client assumes they all
     /// share the keyspace of the primary (operator-enforced — kevy
-    /// has no automatic discovery in v1.18).
+    /// has no automatic discovery).
     pub fn connect(primary: (&str, u16), replicas: &[(&str, u16)]) -> io::Result<Self> {
         let primary_conn = RespClient::connect(primary.0, primary.1)?;
         let mut replica_conns = Vec::with_capacity(replicas.len());
@@ -100,7 +100,7 @@ impl ReadWriteClient {
 
     /// Route a write command (or any command that must hit the
     /// primary) to the primary connection. If the server replies
-    /// `-MISDIRECTED writer is <host:port>` (Phase 3 / v1.21 scoped
+    /// `-MISDIRECTED writer is <host:port>` (scoped
     /// multi-writer), the client transparently opens a connection
     /// to the named writer (caching it), caches the key→writer
     /// mapping for follow-up writes on the same key, and retries
@@ -117,7 +117,7 @@ impl ReadWriteClient {
         self.request_write_with_quiesce_retry(args)
     }
 
-    /// Send `args` to the primary; on `-QUIESCED` (T3.15), back off
+    /// Send `args` to the primary; on `-QUIESCED`, back off
     /// and retry up to `QUIESCE_RETRY_BUDGET` times against the same
     /// primary. The migration is in-flight; the cluster member that
     /// answered will start returning `-MISDIRECTED` once the
@@ -283,7 +283,7 @@ fn parse_misdirected(reply: &Reply) -> Option<String> {
     Some(addr.to_string())
 }
 
-/// T3.15: detect a `-QUIESCED migrating to <host:port>` reply and
+/// Detect a `-QUIESCED migrating to <host:port>` reply and
 /// extract the target. Same shape rationale as
 /// [`parse_misdirected`]; clients use this to know "back off + retry
 /// against the original writer until the migration commits".
@@ -347,7 +347,7 @@ mod tests {
         assert!(!is_write_verb(&[b'X'; 64]));
     }
 
-    // ---- scope MISDIRECTED parser (T3.9) ----
+    // ---- scope MISDIRECTED parser ----
 
     #[test]
     fn parse_misdirected_basic() {

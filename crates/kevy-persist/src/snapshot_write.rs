@@ -37,7 +37,7 @@ pub fn write_snapshot_to<S: SnapshotSource, W: Write>(src: &S, sink: &mut W) -> 
     write_snapshot_to_with_cursor(src, sink, None)
 }
 
-/// [`write_snapshot_to`] with the v2.3 recovery-point header: when
+/// [`write_snapshot_to`] with the recovery-point header: when
 /// `cursor = Some((generation, offset))` the snapshot records the feed
 /// position it was taken at (format v5); `None` writes the legacy v4
 /// stream unchanged.
@@ -46,7 +46,7 @@ pub fn write_snapshot_to_with_cursor<S: SnapshotSource, W: Write>(
     sink: &mut W,
     cursor: Option<(u64, u64)>,
 ) -> io::Result<()> {
-    // v2.4: field-TTL records force format v6; collect them first so
+    // Field-TTL records force format v6; collect them first so
     // the header version is known before anything is written.
     let mut fttl: Vec<(Vec<u8>, Vec<u8>, u64)> = Vec::new();
     src.for_each_hash_ttl(|k, f, d| fttl.push((k.to_vec(), f.to_vec(), d)));
@@ -122,6 +122,15 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
         Value::Set(_) | Value::SmallSetInline(_) => OP_SET,
         Value::ZSet(_) | Value::SmallZSetInline(_) => OP_ZSET,
         Value::Stream(_) => OP_STREAM,
+        // Every SnapshotSource materializes cold values from the
+        // (pinned) vlog before yielding them — a stub here means a
+        // producer bypassed the source contract. Fail the snapshot
+        // rather than silently dropping the value.
+        Value::Cold(_) => {
+            return Err(io::Error::other(
+                "cold stub reached the snapshot writer — SnapshotSource must materialize (T4)",
+            ));
+        }
     };
     w.write_all(&[op])?;
     write_ttl(w, ttl)?;
@@ -139,6 +148,7 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
         Value::ZSet(z) => snapshot_payload::write_zset_payload(w, z),
         Value::SmallZSetInline(z) => snapshot_payload::write_small_zset_payload(w, z),
         Value::Stream(s) => snapshot_payload::write_stream_payload(w, s),
+        Value::Cold(_) => unreachable!("filtered by the op match above"),
     }
 }
 

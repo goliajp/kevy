@@ -1,0 +1,479 @@
+/* Playground. Four panels that show the engine working, not a terminal that
+ * shows text scrolling.
+ *
+ * The one animation on this page is the TTL bar draining, and it is not a
+ * flourish — it is the engine's clock, redrawn from pttl() at 10 Hz. Everything
+ * else holds still so that when something moves, it means something changed.
+ */
+
+.grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 1px;
+  background: var(--edge);
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  margin: 2.5rem 0 4rem;
+  overflow: hidden;
+}
+.span2 {
+  grid-column: 1 / -1;
+}
+
+.panel {
+  background: var(--void);
+  padding: 1.25rem 1.4rem 1.4rem;
+  min-width: 0;
+}
+.panel-h {
+  margin-bottom: 1rem;
+}
+.panel h2 {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  font-weight: 600;
+  color: var(--text-3);
+  margin: 0 0 0.4rem;
+}
+.hint {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--text-3);
+  max-width: 72ch;
+}
+
+/* ── boot ───────────────────────────────────────────────────────────────── */
+
+.boot {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 3rem 0;
+  color: var(--text-3);
+  font-size: 0.9375rem;
+}
+.spin {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--edge-hi);
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.fail {
+  color: var(--thin);
+  font-weight: 600;
+}
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+}
+
+/* ── keyspace ───────────────────────────────────────────────────────────── */
+
+.ks-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--edge);
+  border-radius: 3px;
+  max-height: 22rem;
+  overflow-y: auto;
+}
+table.ks {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+table.ks th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  text-align: left;
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 600;
+  color: var(--text-3);
+  background: var(--deep);
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--edge);
+}
+table.ks td {
+  padding: 0.5rem 0.8rem;
+  border-bottom: 1px solid var(--edge);
+  vertical-align: middle;
+}
+table.ks tr:last-child td {
+  border-bottom: 0;
+}
+table.ks tbody tr:not(.empty) {
+  cursor: pointer;
+}
+table.ks tbody tr:not(.empty):hover {
+  background: var(--lift);
+}
+td.k {
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  color: var(--text);
+  white-space: nowrap;
+  font-weight: 600;
+}
+td.v {
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  color: var(--text-2);
+  word-break: break-all;
+  min-width: 12rem;
+}
+td.t {
+  width: 11rem;
+}
+tr.empty td {
+  color: var(--text-3);
+  padding: 2rem 0.8rem;
+  text-align: center;
+  font-size: 0.875rem;
+}
+
+/* A key that just appeared, and a key whose value just changed, say so once and
+ * then stop. Without this the table is a wall of text that silently rearranges
+ * itself and the reader misses the thing they pressed a button to see. */
+@keyframes flash-in {
+  from {
+    background: var(--blue-wash);
+  }
+}
+@keyframes flash-ch {
+  from {
+    background: var(--thin-wash);
+  }
+}
+tr.fresh {
+  animation: flash-in 1.1s ease-out;
+}
+tr.changed {
+  animation: flash-ch 1.1s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  tr.fresh,
+  tr.changed {
+    animation: none;
+  }
+}
+
+/* ── the TTL bar ────────────────────────────────────────────────────────── */
+
+.ttl {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.ttl-n {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--text-2);
+  min-width: 3.4rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.ttl-bar {
+  flex: 1;
+  height: 3px;
+  background: var(--edge-hi);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.ttl-bar i {
+  display: block;
+  height: 100%;
+  background: var(--blue);
+  transition: width 0.1s linear;
+}
+.ttl.urgent .ttl-n {
+  color: var(--thin);
+  font-weight: 600;
+}
+.ttl.urgent .ttl-bar i {
+  background: var(--thin);
+}
+.dim {
+  color: var(--text-3);
+  font-size: 0.75rem;
+}
+
+/* ── forms & buttons ────────────────────────────────────────────────────── */
+
+.wform {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.9rem;
+  flex-wrap: wrap;
+}
+.wform input {
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  padding: 0.45rem 0.6rem;
+  background: var(--lift);
+  color: var(--text);
+  border: 1px solid var(--edge-hi);
+  border-radius: 3px;
+  min-width: 0;
+}
+#wk,
+#pm {
+  flex: 1 1 9rem;
+}
+#wv {
+  flex: 2 1 12rem;
+}
+#wt,
+#pc {
+  flex: 0 1 6.5rem;
+}
+.wform input:focus {
+  outline: 2px solid var(--blue);
+  outline-offset: -1px;
+  border-color: var(--blue);
+}
+
+.btn {
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid var(--edge-hi);
+  border-radius: 3px;
+  background: var(--lift);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn:hover:not(:disabled) {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn.primary {
+  background: var(--blue);
+  border-color: var(--blue);
+  color: var(--void);
+}
+.btn.primary:hover {
+  background: var(--blue-dim);
+  border-color: var(--blue-dim);
+  color: var(--void);
+}
+.btn:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+.row {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.9rem;
+  flex-wrap: wrap;
+}
+
+/* ── scenarios ──────────────────────────────────────────────────────────── */
+
+.scen {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+.scen-note {
+  margin: 0.9rem 0 0;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--text-2);
+  min-height: 3.2em;
+}
+
+/* ── stats ──────────────────────────────────────────────────────────────── */
+
+.stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.9rem 1rem;
+  margin: 0 0 1.1rem;
+}
+.stats dt {
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  margin-bottom: 0.2rem;
+}
+.stats dd {
+  margin: 0;
+  font-size: 1.0625rem;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.stats dd.warn {
+  color: var(--thin);
+  font-size: 0.9375rem;
+}
+
+/* ── the log ────────────────────────────────────────────────────────────── */
+
+.aof {
+  margin: 0;
+  padding: 0.9rem 1rem;
+  background: var(--deep);
+  border: 1px solid var(--edge);
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  line-height: 1.7;
+  color: var(--text-2);
+  max-height: 15rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ── pub/sub feed ───────────────────────────────────────────────────────── */
+
+.feed {
+  list-style: none;
+  margin: 1rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--edge);
+  border: 1px solid var(--edge);
+  border-radius: 3px;
+  overflow: hidden;
+  min-height: 4rem;
+}
+.feed li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.55rem 0.8rem;
+  background: var(--void);
+  font-size: 0.8125rem;
+  animation: flash-in 1.1s ease-out;
+}
+.feed li.waiting {
+  color: var(--text-3);
+  animation: none;
+  justify-content: center;
+}
+.feed .ch {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 2px;
+  background: var(--deep);
+  border: 1px solid var(--edge-hi);
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.feed .msg {
+  flex: 1;
+  color: var(--text);
+  word-break: break-word;
+}
+.feed .src {
+  font-size: 0.6875rem;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+/* A message that arrived from the other tab is the whole point of the panel, so
+ * it is the one that gets the accent. */
+.feed li.other .src {
+  color: var(--blue);
+  font-weight: 600;
+}
+.feed li.other .ch {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+@media (prefers-reduced-motion: reduce) {
+  .feed li {
+    animation: none;
+  }
+}
+
+/* ── tablet & phone ─────────────────────────────────────────────────────── */
+
+@media (max-width: 60rem) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 40rem) {
+  .panel {
+    padding: 1rem 1rem 1.2rem;
+  }
+  .wform input,
+  .btn {
+    flex-basis: 100%;
+  }
+  #wt,
+  #pc {
+    flex-basis: calc(50% - 0.25rem);
+  }
+  .scen {
+    grid-template-columns: 1fr;
+  }
+  .stats {
+    grid-template-columns: 1fr 1fr;
+  }
+  td.t {
+    width: 8rem;
+  }
+  .ttl-n {
+    min-width: 2.8rem;
+  }
+  /* The key column stays put while the value scrolls, so a row never loses its
+   * subject on a narrow screen. */
+  td.k {
+    position: sticky;
+    left: 0;
+    background: var(--void);
+    border-right: 1px solid var(--edge);
+  }
+  .feed li {
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+}
+
+/* The CRLF that ends every RESP frame. Spelled out rather than shown as U+240D,
+ * which most monospace faces do not have a glyph for and render as tofu. */
+.aof .crlf {
+  color: var(--text-3);
+  opacity: 0.55;
+  font-style: normal;
+}
+
+/* The feed sizes to its contents. A min-height painted an empty strip of the
+ * container's rule colour under the last message, which read as a broken row. */
+.feed {
+  min-height: 0;
+}
+
+/* The playground's panels sit outside a .band, so they carry the page gutter
+ * themselves — same --gut every other page uses, so the left edge lines up
+ * across the whole site. */
+#boot,
+#app.grid {
+  margin-inline: var(--gut);
+}

@@ -1,4 +1,4 @@
-//! v1.45 kevy-scope MISDIRECTED reply chaos test.
+//! kevy-scope MISDIRECTED reply chaos test.
 //!
 //! Spawn 2 kevy processes with `[cluster] enabled = true` +
 //! `scopes = "app:billing:=A"`. Node A owns the `app:billing:`

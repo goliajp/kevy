@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>迁移——playbook 与工具链 — kevy</title>
+<meta name="description" content="分两半。playbook：如何把一个在线 RDS 负载分阶段搬上 kevy，每个阶段有自己的验证钳位与回滚点。工具链（kevy-cli）：把数据搬进、搬出、在 kevy 服务器之间搬运——并证明搬运是忠实的——的那组命令。建模问题（「我的 JOIN 变成什么？」）在 rds-workloads.md；可跑的模式在 cookbook。">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../zh/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../../zh/docs/" aria-current="page">文档</a>
+      <a href="../../../zh/docs/commands/">命令</a>
+      <a href="../../../zh/benchmarks/">基准</a>
+      <a href="../../../zh/play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../../zh/docs/search-index.json" data-root="../../../zh/">
+        <input type="search" placeholder="搜索文档……" aria-label="搜索文档……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../../docs/migration/">EN</a><a href="../../../zh/docs/migration/" aria-current="page">中文</a><a href="../../../ja/docs/migration/">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell has-toc">
+  <aside class="side"><p class="side-h">上手</p><ul><li><a href="../../../zh/docs/designing-on-kevy/">在 kevy 上设计应用</a></li><li><a href="../../../zh/docs/cookbook/">RDS→kevy 建模 cookbook</a></li><li><a href="../../../zh/docs/persistence/">持久化</a></li><li><a href="../../../zh/docs/tuning/">调优 kevy</a></li></ul><p class="side-h">运行</p><ul><li><a href="../../../zh/docs/replication/">复制</a></li><li><a href="../../../zh/docs/availability/">可用性</a></li><li><a href="../../../zh/docs/cluster/">集群</a></li><li><a href="../../../zh/docs/tiering/">透明分层存储（[tiering] / with_tier_budget）</a></li><li><a href="../../../zh/docs/accept-shards/">--accept-shards N——把稀疏连接收拢到部分 shard 上</a></li><li><a href="../../../zh/docs/uds/">Unix-domain socket（UDS）传输</a></li><li><a href="../../../zh/docs/async/">异步客户端</a></li></ul><p class="side-h">数据</p><ul><li><a href="../../../zh/docs/indexes/">二级索引（IDX. / idx_）</a></li><li><a href="../../../zh/docs/tables/">表（TABLE. / table_）</a></li><li><a href="../../../zh/docs/vector-search/">向量检索（KIND ann）</a></li><li><a href="../../../zh/docs/text-search/">全文检索（KIND text）</a></li><li><a href="../../../zh/docs/views/">视图（VIEW. / view_）</a></li><li><a href="../../../zh/docs/cdc/">CDC——变更流（FEED. / changes_since）</a></li><li><a href="../../../zh/docs/pubsub/">Pub/sub</a></li><li><a href="../../../zh/docs/lua/">Lua 脚本</a></li></ul><p class="side-h">嵌入</p><ul><li><a href="../../../zh/docs/wasm/">kevy 上 WebAssembly</a></li><li><a href="../../../zh/docs/embedded-listener/">Embedded 只读 RESP listener</a></li><li><a href="../../../zh/docs/iot/">kevy 跑在 IoT 设备上</a></li></ul><p class="side-h">参考</p><ul><li><a href="../../../zh/docs/error-replies/">错误回复目录</a></li><li><a href="../../../zh/docs/rds-workloads/">在 kevy 上跑 RDS 负载</a></li><li><a href="../../../zh/docs/migration/" aria-current="page">迁移——playbook 与工具链</a></li><li><a href="../../../zh/docs/UPGRADING/">升级 kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../zh/docs/commands/">全部 188 个命令</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>迁移——playbook 与工具链</h1></div>
+<p>分两半。<b>playbook</b>：如何把一个在线 RDS 负载分阶段搬上 kevy，每个阶段有自己的验证钳位与回滚点。<b>工具链</b>（<code>kevy-cli</code>）：把数据搬进、搬出、在 kevy 服务器之间搬运——并证明搬运是忠实的——的那组命令。建模问题（「我的 <code>JOIN</code> 变成什么？」）在 <a href="../rds-workloads/">rds-workloads.md</a>；可跑的模式在 <a href="../cookbook/">cookbook</a>。</p>
+<h2 id="分阶段-playbook">分阶段 playbook</h2>
+<p>七个阶段。承重性质是：<b>直到写切换之前的每个阶段，RDS 始终是事实源，回滚就是「把应用指回去」</b>——永远不是「反向迁移数据」。不要跳阶段；每个阶段的验证钳位，正是让下一个阶段变得乏味的东西。</p>
+<h3 id="阶段-0盘点">阶段 0——盘点</h3>
+<p>列出负载实际在跑的每张表和每种查询形状（事实源是你 ORM 的查询日志或 <code>pg_stat_statements</code>，不是 schema）。逐条对照 <a href="../rds-workloads/">rds-workloads 矩阵</a>分类：大多数行能机械映射；标出撞上拒绝构造的那些（热路径上的 N 路 join、<code>HAVING</code>、深 <code>OFFSET</code> 分页、临时报表 SQL）。</p>
+<ul><li><b>动作</b>：一张成文的访问路径表：查询 → 矩阵行 → kevy 形状（index / view / agg / verb）。</li><li><b>钳位</b>：<b>在任何数据移动之前</b>，每条热路径查询都已有映射形状。拒绝构造现在就拿到应用侧的重设计决定，而不是拖到切换时。临时分析不上 kevy——改为规划仓库导出（cookbook recipe 14）。</li><li><b>回滚</b>：什么都还没动。</li></ul>
+<h3 id="阶段-1schema-映射">阶段 1——schema 映射</h3>
+<p>把盘点结果变成一份声明脚本：前缀、字段布局、类型，然后是每一行 <code>IDX.CREATE</code> / <code>VIEW.CREATE</code>。现在就应用矩阵里的类型规则——DECIMAL 转最小货币单位整数、DATETIME 转 epoch i64、NULL 转字段缺席——因为这些是写格式决定，回填之后再改代价高昂。</p>
+<ul><li><b>动作</b>：声明脚本，与你的 DDL 历史一起入库。</li><li><b>钳位</b>：拿几百行代表性数据在一次性 kevy 上跑一遍；<code>IDX.VERIFY</code> 必须显示 <code>coerce_failures = 0</code> 且 <code>duplicates</code> 符合预期；<code>VIEW.VERIFY</code> 无排序排除项；分页查询返回与 SQL 相同的结果。</li><li><b>回滚</b>：什么都还没动。</li></ul>
+<h3 id="阶段-2变更捕获双写窗口开启">阶段 2——变更捕获（双写窗口开启）</h3>
+<p>在回填快照<b>之前</b>就开始捕获 RDS 写入，让缝隙里什么都掉不下去。两条路：</p>
+<ul><li><b>应用双写</b>——应用写 RDS（仍是事实源），同时把每笔写镜像到 kevy。简单、无新基础设施；但镜像骑在你的写路径上（做成 fire-and-forget 加失败计数器——丢失的镜像写靠重新回填修复，绝不阻塞 RDS 提交）。</li><li><b>CDC 拉取</b>——binlog/逻辑复制消费者（Debezium 或手搓）把行事件翻译成 kevy 写入。与应用解耦、按行有序、可从 binlog 位置重放；代价是连接器基础设施。改不动每个写入方、或写入方很多时优先选它。</li></ul>
+<p>无论哪条路，kevy 写入必须是<b>幂等重建形状</b>（<code>HSET</code> 整行、集合类 <code>DEL</code> + 重加），这样与回填重叠也无害。</p>
+<ul><li><b>钳位</b>：捕获路径上的新鲜度滞后指标（事件时间戳 → kevy 应用），加上每前缀的行数漂移检查（<code>PREFIX.STATS</code> vs <code>SELECT COUNT(*)</code>）收敛到常数。</li><li><b>回滚</b>：停掉捕获。RDS 毫无察觉。</li></ul>
+<h3 id="阶段-3回填">阶段 3——回填</h3>
+<p>在已知捕获位置对 RDS 做快照，导出为 RESP 命令文件，批量载入：</p>
+<figure class="code"><pre><code># 从你的 RDS 导出生成重建帧（每行一条 HSET）：
+#   HSET user:42 name ada email ada@example.com …
+kevy-cli import -p 6004 --strict rows.resp        # ≥200k cmd/s</code></pre></figure>
+<p><b>先导入，后声明索引</b>（延迟索引规则）：回填以批量速度从既有行构建每个索引——比给每条导入行付一次写钩子便宜几个数量级。然后跑阶段 1 的声明脚本，等 <code>IDX.LIST</code> 报告 <code>state=ready</code>（细节见<a href="#载入带索引的-keyspace">载入带索引的 keyspace</a>）。</p>
+<ul><li><b>钳位</b>：<code>PREFIX.STATS</code> 计数与每张表的 <code>SELECT COUNT(*)</code> 一致；<code>IDX.VERIFY</code> 的强转/重复计数是预期的零；抽样摘要检查——从 RDS 重算几百行、与 <code>HGETALL</code> 逐字节比对——通过。若中途经过一台中转 kevy，用 <code>kevy-cli diff</code> 证明这一跳。</li><li><b>回滚</b>：<code>kevy-cli delete-prefix</code>（或 <code>FLUSHALL</code>）后重来。RDS 仍是事实源。</li></ul>
+<h3 id="阶段-4读切换按端点金丝雀">阶段 4——读切换（按端点金丝雀）</h3>
+<p>逐端点翻转读流量，不搞 big-bang。为每个端点挑它需要的一致性阶梯级别（<a href="../availability/">availability.md</a>）：浏览/列表类端点走第 0 级（异步副本读）；「我刚写的，得读回来」的流程用 <code>REPL.TOKEN</code>/<code>REPL.WAIT</code>（第 1 级）或直接读主节点。单节点 kevy 没有阶梯可想——每次读都是主节点。</p>
+<ul><li><b>动作</b>：先影子读（从 RDS 出答案，同时读 kevy，比对并统计不一致），再逐步调流量比例。</li><li><b>钳位</b>：一个完整流量周期（24h+）内不一致计数为零；服务延迟在你的 SLO 内。</li><li><b>回滚</b>：把读指回 RDS——即时生效，数据不动。</li></ul>
+<h3 id="阶段-5写切换-回滚窗口">阶段 5——写切换 + 回滚窗口</h3>
+<p>把写入方翻到 kevy，并<b>在同一次部署里</b>启动反向镜像：一个 CDC 消费者把 kevy 的 feed 以 SQL 重放回 RDS（<code>FEED.READ</code> → <code>UPDATE</code>/<code>INSERT</code>，cookbook recipe 13）。此时 RDS 成了落后 kevy 几秒的温备；你的回滚方案是「把应用指回去」，不是「反向迁移」。</p>
+<p>翻转之前，把序列 key 播种到 RDS 高水位<b>之上</b>（对新 key <code>INCRBY seq:order &lt;rds_max_id&gt;</code>）——经典的 auto-increment 冲突是阶段 5 最锋利的一条边。</p>
+<ul><li><b>钳位</b>：在 kevy 与镜像 RDS 之间做 <code>kevy-cli diff</code> 式抽样（对前缀做摘要、比对行样本）；再加上你本来就在告警的业务指标。</li><li><b>回滚</b>：镜像窗口内，把应用指回 RDS（接受镜像滞后——你正在测量它）。镜像消费者必须处理 <code>-FEEDRESYNC</code>（kevy 崩溃重启会递增 feed generation）：把受影响前缀重建进 RDS 后继续——at-least-once 加幂等 SQL 让这一步是安全的。</li></ul>
+<h3 id="阶段-6退役">阶段 6——退役</h3>
+<p>信心固化之后（数周干净的 diff、一次演练过的故障切换），停掉反向镜像，给 RDS 做最后一次归档 dump，把运维故事完全搬到 kevy 上：快照 + AOF（+ feed 游标恢复点）照 <a href="../persistence/">persistence.md</a>，副本/故障切换姿态照 <a href="../availability/">availability.md</a>。</p>
+<ul><li><b>钳位</b>：在关掉 RDS <b>之前</b>——绝不是之后——用 kevy 自己的工件（快照 + feed 重放）演练一次恢复。</li></ul>
+<h2 id="常见坑">常见坑</h2>
+<ul><li><b>DECIMAL 走了两条写路径。</b>双写路径存 <code>"10.00"</code>、回填存 <code>"1000"</code>（最小单位）的话，所有摘要检查都会失败，更糟的是读也会不一致。在阶段 1 定死格式，让两条路径共用一个序列化器。</li><li><b>auto-increment 冲突。</b>忘了把 <code>seq:*</code> key 播种到 RDS 最大 id 之上，就会发出已存在的 id。阶段 5 播种，开写之前用一句 <code>GET seq:order</code> 验证。</li><li><b>热 key。</b>一个 kevy key 恰好住在一个 shard 上；那行每个请求都摸的 RDS 行会变成单 shard 串行化点。把热计数器分片（按用户 key、块分配序列），读侧求和交给 <code>KIND agg</code>。</li><li><b>大 value。</b>几百 KB 的行能用，但会让每一跳都变重（导出帧、复制、feed 帧），并把服务成本推到网络路径上。热行保持精瘦；冷 blob 放对象存储、留一个指针字段，或把很少读的列拆进兄弟 key。</li><li><b>TTL 语义。</b><code>EXPIRE</code> 给非正 TTL 会立即删除 key（Redis 契约）。导出的 TTL 以绝对 <code>PEXPIREAT</code> 期限传输，所以慢迁移不会延长寿命。摘要不看 TTL（只看值）——TTL 正确性靠抽样 <code>PTTL</code> 检查，不靠 <code>diff</code>。</li><li><b><code>KEYS</code>/<code>SCAN</code> 的老习惯。</b>过去跑 <code>SELECT COUNT(*)</code> 的运维单行命令应改用 <code>PREFIX.STATS</code> 或 <code>IDX.COUNT</code>——<code>KEYS pattern</code> 是全 keyspace 收集、<code>SCAN MATCH</code> 是全量增量遍历；两者都不是服务路径（在大 keyspace 上连运维路径都勉强）。</li><li><b>索引构建与读竞速。</b>声明之后的一小段时间里，查询会回答 <code>-INDEXBUILDING</code>。切换窗口内的客户端需要轮询重试循环（见下文），或者在没有读者盯着的阶段 3 就把索引声明掉。</li></ul>
+<hr>
+<h1 id="工具链kevy-cli">工具链（<code>kevy-cli</code>）</h1>
+<figure class="code"><pre><code>kevy-cli export  -p 6379 --prefix user: dump.resp
+kevy-cli import  -p 6004 --strict dump.resp        # ≥200k cmd/s
+kevy-cli import  -p 6004 --resume dump.resp        # 中断之后续传
+kevy-cli digest  -p 6004 user:
+kevy-cli diff    hostA:6379 hostB:6004 user: order:
+kevy-cli copy-prefix   -p 6004 --rate 5000 user: staging:user:
+kevy-cli delete-prefix -p 6004 --rate 5000 --dry-run tmp:
+kevy-cli inspect -p 6004 user:</code></pre></figure>
+<h2 id="线格式">线格式</h2>
+<p><code>export</code> 写出一条纯 <b>RESP 命令流</b>的重建帧——<code>DEL</code> + <code>SET</code>/<code>HSET</code>/<code>RPUSH</code>/<code>SADD</code>/<code>ZADD</code>，TTL 用绝对 <code>PEXPIREAT</code>。这让文件与 <code>redis-cli --pipe</code> 双向兼容：kevy 的导出能喂 Redis，任何 RESP 命令文件也能喂 <code>kevy-cli import</code>——包括你自己从 RDS dump 生成的那份（playbook 的阶段 3）。</p>
+<p>每个 key 打头的 <code>DEL</code> 让重放<b>从零重建</b>——对每种类型都真正幂等（否则 RPUSH 这类追加 verb 会在重复导入时把列表内容翻倍）。</p>
+<h2 id="一致性与可续传性">一致性与可续传性</h2>
+<ul><li>导出是 SCAN 遍历下的按 key 时间点（SCAN 级保证；导出期间被写的 key 可能出现在任一状态，消失的 key 被跳过）。没有全局快照——有意为之。</li><li>导入按每批 512 条命令流水线化，每批之后把字节偏移 fsync 到 <code>&lt;file&gt;.progress</code>。<code>--resume</code> 从那里重启；因为帧是重建式的，重叠无害。<code>--strict</code> 在第一个服务器错误处中止；否则错误被计数并报告。</li><li>导入中途 <code>kill -9</code> 是有 gate 的场景：续传收敛到同一个 <code>PREFIX.DIGEST</code>。</li></ul>
+<h2 id="验证">验证</h2>
+<p><code>PREFIX.DIGEST &lt;prefix&gt;</code>（服务器 + embedded 的 <code>prefix_digest</code>）返回 <code>[count, hex64]</code>——对规范化行字节的顺序不敏感校验和（hash 字段与 set 成员排序，zset 按 score 位再按成员，list 按顺序——list 的顺序就是身份）。它对 shard 数与插入顺序不敏感，所以能跨拓扑比较。<code>kevy-cli diff A:port B:port prefix…</code> 在任何不一致时以非零退出。</p>
+<p>TTL 不参与摘要（它们会衰减）；值参与。</p>
+<h2 id="批量操作">批量操作</h2>
+<p><code>copy-prefix</code> 通过读取 + 重建帧把每行搬到新前缀下（服务器有意不提供 COPY verb；TTL 以绝对期限携带）。<code>delete-prefix</code> 走 SCAN + UNLINK。两者都接受 <code>--rate N</code>（令牌桶，从第一个操作起严格限速），删除还支持 <code>--dry-run</code>。</p>
+<h2 id="载入带索引的-keyspace">载入带索引的 keyspace</h2>
+<h3 id="等待索引就绪">等待索引就绪</h3>
+<p><code>IDX.CREATE</code> 立即返回，在后台回填；完成之前查询回答 <code>-INDEXBUILDING</code>。标准等法是轮询 <code>IDX.LIST</code>——它的 <code>state</code> 列从 <code>building</code> 翻到 <code>ready</code>：</p>
+<figure class="code"><pre><code>until kevy-cli -p 6004 IDX.LIST | grep -A1 my_index | grep -q ready; do sleep 1; done</code></pre></figure>
+<p>文本索引的回填速度随文档大小变化：小行约 7s/百万，而多 KB 的正文大约 85s/百万（实测：20 万封邮件大小的正文 17s）。</p>
+<h3 id="一条命令验证整场迁移">一条命令验证整场迁移</h3>
+<p><code>kevy-cli diff</code> 一次调用即可跨两台在线服务器比较任意多个前缀——优先用它，而不是逐前缀的摘要对：</p>
+<figure class="code"><pre><code>kevy-cli diff 127.0.0.1:6004 127.0.0.1:6005 msg: mbox: usr: tag: session:</code></pre></figure>
+<h3 id="大导出">大导出</h3>
+<p>dump 是未压缩的 RESP 文本（快、可 grep）。10GB+ 的 keyspace 用 gzip 管道——格式是流友好的：</p>
+<figure class="code"><pre><code>kevy-cli export -p 6004 /dev/stdout | gzip &gt; dump.kevy.gz
+gunzip -c dump.kevy.gz | kevy-cli import -p 6005 --strict /dev/stdin</code></pre></figure>
+<p>（<code>--resume</code> 需要真实文件来放 .progress 边车——要可续传就先解压到磁盘。）</p>
+<p>索引在批量载入<b>之后</b>创建：索引引擎的回填以批量速度从既有数据构建（实测约 7s/百万行），胜过付一百万次逐写钩子维护。这是操作顺序，不是开关：</p>
+<figure class="code"><pre><code>kevy-cli import -p 6004 dump.resp
+kevy-cli -p 6004 IDX.CREATE users ON PREFIX user: FIELD age TYPE i64 KIND range</code></pre></figure>
+<p>Gate：<code>bench/onrampgate.sh</code>（百万行往返、≥200k cmd/s 导入、kill -9 续传收敛、±20% 限速精度）。</p></main>
+  <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#分阶段-playbook">分阶段 playbook</a></li><li class="l3"><a href="#阶段-0盘点">阶段 0——盘点</a></li><li class="l3"><a href="#阶段-1schema-映射">阶段 1——schema 映射</a></li><li class="l3"><a href="#阶段-2变更捕获双写窗口开启">阶段 2——变更捕获（双写窗口开启）</a></li><li class="l3"><a href="#阶段-3回填">阶段 3——回填</a></li><li class="l3"><a href="#阶段-4读切换按端点金丝雀">阶段 4——读切换（按端点金丝雀）</a></li><li class="l3"><a href="#阶段-5写切换-回滚窗口">阶段 5——写切换 + 回滚窗口</a></li><li class="l3"><a href="#阶段-6退役">阶段 6——退役</a></li><li class="l2"><a href="#常见坑">常见坑</a></li><li class="l2"><a href="#线格式">线格式</a></li><li class="l2"><a href="#一致性与可续传性">一致性与可续传性</a></li><li class="l2"><a href="#验证">验证</a></li><li class="l2"><a href="#批量操作">批量操作</a></li><li class="l2"><a href="#载入带索引的-keyspace">载入带索引的 keyspace</a></li><li class="l3"><a href="#等待索引就绪">等待索引就绪</a></li><li class="l3"><a href="#一条命令验证整场迁移">一条命令验证整场迁移</a></li><li class="l3"><a href="#大导出">大导出</a></li></ul></aside>
+</div>
+
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

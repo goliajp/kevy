@@ -12,7 +12,7 @@ use std::time::Duration;
 
 /// Tiny dispatch helper for AOF-rewrite roundtrip tests: turn the
 /// canonical mutating verbs the rewriter emits back into Store mutations.
-/// Mirrors a subset of `kevy::dispatch` — enough for the verbs
+/// Mirrors a subset of kevy's dispatch — enough for the verbs
 /// `dump_store_to_aof` actually emits.
 pub(crate) fn apply_for_test(store: &mut Store, args: &Argv) {
     let verb = args[0].to_ascii_uppercase();
@@ -21,32 +21,32 @@ pub(crate) fn apply_for_test(store: &mut Store, args: &Argv) {
             store.set(&args[1], args[2].to_vec(), None, false, false);
         }
         b"DEL" => {
-            let keys: Vec<Vec<u8>> = args.iter().skip(1).map(<[u8]>::to_vec).collect();
+            let keys: Vec<&[u8]> = args.iter().skip(1).collect();
             store.del(&keys);
         }
         b"HSET" => {
-            let mut pairs: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+            let mut pairs: Vec<(&[u8], &[u8])> = Vec::new();
             let mut i = 2;
             while i + 1 < args.len() {
-                pairs.push((args[i].to_vec(), args[i + 1].to_vec()));
+                pairs.push((&args[i], &args[i + 1]));
                 i += 2;
             }
             store.hset(&args[1], &pairs).unwrap();
         }
         b"RPUSH" => {
-            let items: Vec<Vec<u8>> = args.iter().skip(2).map(<[u8]>::to_vec).collect();
+            let items: Vec<&[u8]> = args.iter().skip(2).collect();
             store.rpush(&args[1], &items).unwrap();
         }
         b"SADD" => {
-            let members: Vec<Vec<u8>> = args.iter().skip(2).map(<[u8]>::to_vec).collect();
+            let members: Vec<&[u8]> = args.iter().skip(2).collect();
             store.sadd(&args[1], &members).unwrap();
         }
         b"ZADD" => {
-            let mut pairs: Vec<(f64, Vec<u8>)> = Vec::new();
+            let mut pairs: Vec<(f64, &[u8])> = Vec::new();
             let mut i = 2;
             while i + 1 < args.len() {
                 let score: f64 = std::str::from_utf8(&args[i]).unwrap().parse().unwrap();
-                pairs.push((score, args[i + 1].to_vec()));
+                pairs.push((score, &args[i + 1]));
                 i += 2;
             }
             store.zadd(&args[1], &pairs).unwrap();
@@ -56,9 +56,15 @@ pub(crate) fn apply_for_test(store: &mut Store, args: &Argv) {
             store.expire(&args[1], Duration::from_millis(ms));
         }
         b"PEXPIREAT" => {
-            // The rewrite now emits absolute deadlines (INC-2026-06-09 fix).
+            // The rewrite emits absolute deadlines (never relative).
             let deadline: u64 = std::str::from_utf8(&args[2]).unwrap().parse().unwrap();
             store.expire_at_unix_ms(&args[1], deadline);
+        }
+        b"HPEXPIREAT" => {
+            // Fixed rewrite shape: HPEXPIREAT key deadline FIELDS 1 field.
+            assert_eq!(args[3].to_ascii_uppercase(), b"FIELDS");
+            let deadline: u64 = std::str::from_utf8(&args[2]).unwrap().parse().unwrap();
+            store.load_hash_field_ttl(&args[1], &args[5], deadline);
         }
         b"XADD" => {
             // Two rewrite shapes: `XADD key id f v …` and the empty-stream
@@ -139,12 +145,12 @@ fn rewrite_reconstructs_full_keyspace() {
     let mut src = Store::new();
     src.set(b"str", b"hello".to_vec(), None, false, false);
     src.set(b"binary", vec![0u8, 1, 2, 255], None, false, false);
-    src.hset(b"hash", &[(b"f1".to_vec(), b"v1".to_vec()), (b"f2".to_vec(), b"v2".to_vec())])
+    src.hset(b"hash", &[(b"f1".as_slice(), b"v1".as_slice()), (b"f2".as_slice(), b"v2".as_slice())])
         .unwrap();
-    src.rpush(b"list", &[b"i1".to_vec(), b"i2".to_vec(), b"i3".to_vec()])
+    src.rpush(b"list", &[b"i1".as_slice(), b"i2".as_slice(), b"i3".as_slice()])
         .unwrap();
-    src.sadd(b"set", &[b"m1".to_vec(), b"m2".to_vec()]).unwrap();
-    src.zadd(b"zset", &[(1.5, b"a".to_vec()), (2.5, b"b".to_vec())])
+    src.sadd(b"set", &[b"m1".as_slice(), b"m2".as_slice()]).unwrap();
+    src.zadd(b"zset", &[(1.5, b"a".as_slice()), (2.5, b"b".as_slice())])
         .unwrap();
     src.set(
         b"ttl",
@@ -220,7 +226,7 @@ fn rewrite_replaces_old_log_atomically() {
 fn append_bumps_size_estimate() {
     let path = temp_aof("size-est");
     let mut aof = Aof::open(&path, Fsync::No).unwrap();
-    // Fresh AOF carries the 9-byte AOF_MAGIC header (v1.2.0+).
+    // Fresh AOF carries the 9-byte AOF_MAGIC header.
     let base = aof.size_bytes();
     aof.append(&Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]))
         .unwrap();
@@ -298,7 +304,7 @@ fn argv(parts: &[&[u8]]) -> Argv {
     Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>())
 }
 
-// ───────────── stream consumer groups in the rewrite (2026-06-11) ─────────────
+// ───────────── stream consumer groups in the rewrite ─────────────
 
 /// The four stream shapes the rewrite must reconstruct: a live group with
 /// a tombstoned PEL row, a deleted-tail stream (scalars only), a
@@ -347,7 +353,8 @@ fn rewrite_reconstructs_stream_groups() {
     let mut dst = Store::new();
     replay_aof(&path, |args| apply_for_test(&mut dst, &args)).unwrap();
 
-    // st — full group fidelity minus the tombstone (RFC 2026-06-11).
+    // st — full group fidelity minus the tombstone (XCLAIM cannot
+    // recreate a PEL row for a deleted entry; documented trade-off).
     let v = dst.stream_view(b"st").unwrap().unwrap();
     assert_eq!(
         (v.length(), v.last_id(), v.entries_added(), v.max_deleted_id()),

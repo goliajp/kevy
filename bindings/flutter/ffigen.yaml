@@ -1,0 +1,27 @@
+# Run with `dart run ffigen --config ffigen.yaml`.
+# Binds the kevy-ffi C ABI directly (the same kevy.h every other door
+# wraps), not a plugin-local shim — flutter_kevy is a thin dart:ffi
+# layer over the one engine.
+name: FlutterKevyBindings
+description: |
+  Bindings for the kevy-ffi C ABI (crates/kevy-ffi/include/kevy.h).
+
+  Regenerate with `dart run ffigen --config ffigen.yaml`.
+output: 'lib/flutter_kevy_bindings_generated.dart'
+headers:
+  entry-points:
+    - '../../crates/kevy-ffi/include/kevy.h'
+  include-directives:
+    - '../../crates/kevy-ffi/include/kevy.h'
+functions:
+  include:
+    - 'kevy_.*'
+structs:
+  # The opaque C handles get a *Handle suffix so the typed Dart API can
+  # own the plain names (KevyDb / KevySub) without a collision.
+  rename:
+    'KevyDb': 'KevyDbHandle'
+    'KevySub': 'KevySubHandle'
+comments:
+  style: any
+  length: full

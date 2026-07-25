@@ -21,9 +21,9 @@ pub struct ServerSection {
     pub port: u16,
     /// Shard / reactor thread count. `0` = auto (CPU count). Default `0`.
     pub threads: usize,
-    /// **v1.30** — Only shards `0..N` arm accept SQE; rest stay compute-only.
+    /// Only shards `0..N` arm accept SQE; rest stay compute-only.
     pub accept_shards: Option<usize>,
-    /// **v1.37** — Cap on total active client connections. `0` = unlimited.
+    /// Cap on total active client connections. `0` = unlimited.
     /// Default `10000` (matches Redis). New connection past cap is closed
     /// + `rejected_connections` counter increments + INFO clients reports.
     pub max_clients: usize,
@@ -58,6 +58,17 @@ pub struct PersistenceSection {
     /// Never auto-rewrite an AOF smaller than this. Default `64mb` =
     /// `64 * 1024 * 1024`.
     pub auto_aof_rewrite_min_size: u64,
+    /// Absolute-size auto-rewrite trigger: compact whenever the AOF
+    /// reaches this many bytes, regardless of growth ratio. `0` = rule
+    /// off (the default). The growth rule alone lets a large log double
+    /// before compacting — this caps it outright.
+    pub auto_aof_rewrite_bytes: u64,
+    /// Time-based auto-rewrite trigger: compact at least this often (in
+    /// seconds) while the log grows. `0` = rule off (the default).
+    pub auto_aof_rewrite_interval_secs: u64,
+    /// Best-effort boot replay: recover the good records behind a corrupt
+    /// v2 AOF record instead of dropping them. Default `false` (strict).
+    pub replay_resync: bool,
 }
 
 impl Default for PersistenceSection {
@@ -67,6 +78,9 @@ impl Default for PersistenceSection {
             appendfsync: AppendFsync::EverySec,
             auto_aof_rewrite_percentage: 100,
             auto_aof_rewrite_min_size: 64 * 1024 * 1024,
+            auto_aof_rewrite_bytes: 0,
+            auto_aof_rewrite_interval_secs: 0,
+            replay_resync: false,
         }
     }
 }
@@ -89,7 +103,7 @@ impl Default for MemorySection {
     }
 }
 
-/// `[metrics]` section — v1.41. Prometheus-format HTTP exposition.
+/// `[metrics]` section — Prometheus-format HTTP exposition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[derive(Default)]
 pub struct MetricsSection {
@@ -98,7 +112,7 @@ pub struct MetricsSection {
 }
 
 
-/// `[audit]` section — v1.42. Append-only audit log of ADMIN-class
+/// `[audit]` section — append-only audit log of ADMIN-class
 /// commands (`CONFIG SET` / `CONFIG REWRITE` / `DEBUG` / `FLUSHDB` /
 /// `FLUSHALL` / `CLIENT KILL` / `SCRIPT FLUSH` etc.).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,8 +161,8 @@ impl Default for LogSection {
 }
 
 /// `[advanced]` section — reactor-loop tuning knobs that used to be
-/// hardcoded `const`s in `kevy-rt`. Defaults match the values shipped
-/// in workspace v1.3 / earlier so the existing benchmark numbers
+/// hardcoded `const`s in `kevy-rt`. Defaults match the previously
+/// hardcoded values, so the existing benchmark numbers
 /// translate one-to-one. Tune only if you know what you're doing
 /// (`bench/REPORT.md` documents the trade-offs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,11 +170,11 @@ pub struct AdvancedSection {
     /// Iterations the per-core reactor spins on `poll(timeout=0)`
     /// before parking on a blocking wait. Higher = lower wake-up
     /// latency under contention, higher idle CPU; lower = the inverse.
-    /// Default `256` (matches v1.0 const).
+    /// Default `256` (matches the original hardcoded const).
     pub spin_limit: u32,
     /// Bounded blocking wait in ms once the reactor parks. Acts as a
     /// safety backstop for any missed cross-core wake (the per-pair
-    /// SeqCst fence is the primary mechanism since workspace v1.3.0).
+    /// SeqCst fence is the primary mechanism).
     /// Default `50` ms.
     pub park_timeout_ms: u32,
     /// How many reactor loop iterations between wall-clock reads for
@@ -192,9 +206,11 @@ impl Default for AdvancedSection {
 /// `[notification]` section. `notify_keyspace_events` is a string of
 /// flag chars (Redis convention): `K` keyspace channel, `E` keyevent
 /// channel, `g` generic cmds, `$` string cmds, `l` list, `s` set, `h`
-/// hash, `z` zset, `A` alias for `g$lshz` (every event class except
-/// the not-yet-implemented `x`/`e`/`t`/`n`). Default empty = OFF
-/// (Redis default — zero hot-path cost).
+/// hash, `z` zset, `t` stream, `x` expired events, `e` evicted
+/// events, `n` new-key events, `A` alias for `g$lshztxe` (every
+/// event class except `n`, matching Redis's `A`). Default empty =
+/// OFF (Redis default — zero hot-path cost). Any other character is
+/// a config error.
 ///
 /// Example: `notify_keyspace_events = "KEA"` enables every event
 /// class on BOTH channels. `"K$"` enables only string events on the
@@ -233,6 +249,15 @@ pub struct NotificationFlags {
     pub zset: bool,
     /// `t` — XADD / XDEL / XTRIM / XGROUP / XACK / XCLAIM / XREADGROUP …
     pub stream: bool,
+    /// `x` — `expired` events, fired when a TTL'd key is removed
+    /// (lazily on access or by the active reaper).
+    pub expired: bool,
+    /// `e` — `evicted` events, fired when maxmemory pressure removes
+    /// a key.
+    pub evicted: bool,
+    /// `n` — `new` events, fired when a key is added to the keyspace.
+    /// Not part of the `A` alias (Redis convention).
+    pub new_key: bool,
 }
 
 impl NotificationFlags {
@@ -247,7 +272,10 @@ impl NotificationFlags {
                 || self.set
                 || self.hash
                 || self.zset
-                || self.stream)
+                || self.stream
+                || self.expired
+                || self.evicted
+                || self.new_key)
     }
 }
 
@@ -258,15 +286,15 @@ impl NotificationFlags {
 /// ops/s). To enable Redis-style 10 ms tracking, set
 /// `slower_than_micros = 10000` in `[slowlog]` or run
 /// `CONFIG SET slowlog-log-slower-than 10000`.
-/// `[lua]` section — v1.27 Lua scripting limits.
+/// `[lua]` section — Lua scripting limits.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LuaSection {
     /// Hard cap on per-`EVAL` Lua execution time in milliseconds.
     /// Matches Redis's `lua-time-limit`. The bridge translates this
-    /// to a luna instruction budget at VM construction time using a
-    /// conservative 40 000-instr/ms estimate (so 5000 ms ≈ 200 M
-    /// instructions, the same hard-coded default kevy v1.27 P1-P6
-    /// shipped). Set to 0 to disable the cap (unlimited execution).
+    /// to a luna-core instruction budget at VM construction time using
+    /// a conservative 40 000-instr/ms estimate (so 5000 ms ≈ 200 M
+    /// instructions, the same default that used to be hard-coded).
+    /// Set to 0 to disable the cap (unlimited execution).
     /// Default: 5000.
     pub time_limit_ms: u64,
     /// Whitelist of allowed Lua dialects. Empty = all five
@@ -310,10 +338,11 @@ impl Default for SlowlogSection {
 }
 
 /// Parse a Redis-style `notify_keyspace_events` flag string into
-/// [`NotificationFlags`]. Unknown chars are ignored (forward-compat
-/// for `x`/`e`/`t`/`n` not yet implemented — see the section docs).
-/// The `A` alias enables every event-class flag except channels.
-pub fn parse_notification_flags(s: &str) -> NotificationFlags {
+/// [`NotificationFlags`]. The `A` alias enables every event-class
+/// flag except channels and `n` (Redis convention). An unknown char
+/// is an error carrying the offending character — a typo'd flag
+/// string must fail config admission, not silently drop events.
+pub fn parse_notification_flags(s: &str) -> Result<NotificationFlags, char> {
     let mut f = NotificationFlags::default();
     for c in s.chars() {
         match c {
@@ -326,9 +355,12 @@ pub fn parse_notification_flags(s: &str) -> NotificationFlags {
             'h' => f.hash = true,
             'z' => f.zset = true,
             't' => f.stream = true,
+            'x' => f.expired = true,
+            'e' => f.evicted = true,
+            'n' => f.new_key = true,
             'A' => {
-                // Alias for "g$lshzxetd" — every implemented event class.
-                // Per Redis spec `A` includes the stream `t` class.
+                // Alias for "g$lshztxe" — every event class except
+                // `n`, per the Redis contract for `A`.
                 f.generic = true;
                 f.string = true;
                 f.list = true;
@@ -336,11 +368,13 @@ pub fn parse_notification_flags(s: &str) -> NotificationFlags {
                 f.hash = true;
                 f.zset = true;
                 f.stream = true;
+                f.expired = true;
+                f.evicted = true;
             }
-            _ => {} // forward-compat: silently ignore unknown chars
+            other => return Err(other),
         }
     }
-    f
+    Ok(f)
 }
 /// the TOML file + env + CLI.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -351,9 +385,9 @@ pub struct Config {
     pub persistence: PersistenceSection,
     /// `[memory]` settings.
     pub memory: MemorySection,
-    /// `[metrics]` settings (Prometheus /metrics endpoint — v1.41).
+    /// `[metrics]` settings (Prometheus /metrics endpoint).
     pub metrics: MetricsSection,
-    /// `[audit]` settings (append-only ADMIN-command audit — v1.42).
+    /// `[audit]` settings (append-only ADMIN-command audit).
     pub audit: AuditSection,
     /// `[expiry]` settings.
     pub expiry: ExpirySection,
@@ -372,14 +406,17 @@ pub struct Config {
     pub lua: LuaSection,
     /// `[replication]` settings — primary/replica streaming.
     pub replication: crate::replication::ReplicationSection,
-    /// `[feed]` settings — v2.3 CDC consumer surface (FEED.*).
+    /// `[feed]` settings — CDC consumer surface (FEED.*).
     pub feed: FeedSection,
+    /// `[tiering]` settings — the transparent-tiering RAM budget
+    /// (capacity arc). No budget = tiering off.
+    pub tiering: crate::tiering::TieringSection,
     /// Path the config was loaded from (for `CONFIG REWRITE`). `None` =
     /// loaded from defaults only / from in-memory string.
     pub source_path: Option<PathBuf>,
 }
 
-/// `[feed]` — the v2.3 CDC consumer surface. When enabled every shard
+/// `[feed]` — the CDC consumer surface. When enabled every shard
 /// keeps a mutation backlog (even with no replicas) and serves
 /// `FEED.READ` / `FEED.TAIL` under the `(generation, offset)` cursor
 /// contract (docs/cdc.md).

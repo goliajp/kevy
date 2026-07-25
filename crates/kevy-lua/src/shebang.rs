@@ -1,7 +1,7 @@
 //! Lua dialect / flags shebang parser.
 //!
 //! kevy-lua extends Redis 7.0's `#!lua name=...` Functions shebang
-//! with a `version=` key that picks the luna dialect:
+//! with a `version=` key that picks the Lua dialect:
 //!
 //! ```lua
 //! #!lua version=5.3
@@ -11,14 +11,14 @@
 //!
 //! The parser is **only** consulted on the script's first line (up to
 //! the first `\n`). Scripts without a shebang default to Lua 5.1 —
-//! the Redis ecosystem compatibility anchor (see RFC L2).
+//! the Redis ecosystem compatibility anchor.
 //!
 //! ## Grammar (intentionally permissive)
 //!
 //! ```text
 //! shebang := '#!lua' ( whitespace key=val )* end-of-line
 //! key=val := 'version=' (5.1 | 5.2 | 5.3 | 5.4 | 5.5)
-//!          | 'flags='   any-non-whitespace      (parsed, ignored at v1.27)
+//!          | 'flags='   any-non-whitespace      (parsed, ignored)
 //!          | 'name='    any-non-whitespace      (Redis 7.0 Functions; ignored for plain EVAL)
 //! ```
 //!
@@ -62,7 +62,7 @@ impl std::fmt::Display for ShebangError {
 /// Parse the script's first line. Returns:
 ///
 /// - `Ok((Shebang, body))` — shebang found + the script body with
-///   the shebang line stripped (so luna's parser doesn't have to
+///   the shebang line stripped (so the Lua parser doesn't have to
 ///   tolerate `#!lua` itself).
 /// - `Ok((default, src))` — no shebang found; script passed through.
 /// - `Err(ShebangError)` — shebang present but malformed.
@@ -101,7 +101,7 @@ pub(crate) fn parse(src: &[u8]) -> Result<(Shebang, &[u8]), ShebangError> {
             shebang.version = parse_version(rest)?;
         } else if kv.starts_with(b"flags=") || kv.starts_with(b"name=") {
             // Recognized Redis Functions keys, intentionally ignored
-            // for plain EVAL at v1.27. FUNCTION LOAD comes in v1.28+.
+            // for plain EVAL (FUNCTION LOAD is not implemented).
             continue;
         } else {
             // Unknown key — tolerate (forward compat). The Redis 7.0
@@ -187,8 +187,8 @@ mod tests {
     #[test]
     fn shebang_without_lua_marker_passes_through() {
         // `#!/usr/bin/env something` — not ours. Treat the whole
-        // script as 5.1 default; luna will parse the `#!` as a
-        // comment-ish or error out.
+        // script as 5.1 default; the Lua parser will treat the `#!`
+        // as a comment-ish or error out.
         let (s, body) = parse(b"#!/foo\nreturn 1").unwrap();
         assert_eq!(s.version, LuaVersion::Lua51);
         assert_eq!(body, b"#!/foo\nreturn 1");

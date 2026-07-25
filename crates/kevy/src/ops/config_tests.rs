@@ -8,9 +8,8 @@ fn run(verb: &[u8], rest: &[&[u8]]) -> Vec<u8> {
         a.push(r);
     }
     let mut out = Vec::new();
-    let cfg = Config::default();
-    cmd_config(&cfg, &a, &mut out, RespVersion::V2);
-    let _ = verb;
+    let c = crate::KevyCommands::new();
+    cmd_config(&c.ctx(), &a, &mut out, RespVersion::V2);
     out
 }
 
@@ -65,11 +64,11 @@ fn config_get_multiple_patterns() {
 // ────────────────────────── CONFIG SET ──────────────────────────
 //
 // These tests exercise the validation paths (good value + bad value
-// + read-only + unknown). The actual `config_global::replace` swap
-// is covered by the integration test `crates/kevy/tests/persistence
-// .rs::config_set_*` once the runtime is in the picture; here we
+// + read-only + unknown). The live `RuntimeState::config_replace`
+// swap is covered by the integration test `crates/kevy/tests/
+// config_set.rs` once the runtime is in the picture; here we
 // exercise it via `apply_hot_set` directly so the unit suite stays
-// independent of global state.
+// focused on the parsing matrix.
 
 fn try_set(key: &str, value: &str) -> Result<Config, SetError> {
     let mut cfg = Config::default();
@@ -169,19 +168,12 @@ fn apply_hot_set_unknown_field_returns_unknown() {
     }
 }
 
-// The dispatch wrapper produces the right RESP shape: the
-// `cmd_config_set` test runs through `cmd_config` (top-level
-// dispatcher) and reads back the wire reply. config_global is
-// uninitialised in this test process, so the swap will Err — which
-// is itself the right shape to surface.
+// The dispatch wrapper produces the right RESP shape: these tests
+// run through `cmd_config` (the top-level dispatcher) against a
+// fresh default state and read back the wire reply.
 
 #[test]
-fn config_set_with_uninitialised_global_returns_error() {
-    // No `config_global::init` has run in this binary's test path;
-    // `replace` returns Err, which the handler maps to a -ERR.
-    // Even so, a bad-value case still short-circuits with the
-    // value-error before reaching `replace`, so we test both.
-
+fn config_set_bad_value_returns_error_reply() {
     let bad = run(b"CONFIG", &[b"SET", b"maxmemory", b"not-a-size"]);
     let s = String::from_utf8(bad).unwrap();
     assert!(s.starts_with("-ERR"), "got: {s:?}");
@@ -224,8 +216,8 @@ fn config_set_wrong_arity_errors() {
 
 #[test]
 fn config_rewrite_without_source_returns_no_config_file_error() {
-    // `config_global::get()` falls back to Config::default() in tests,
-    // which has source_path = None.
+    // A default state holds Config::default(), whose source_path is
+    // None — REWRITE has no file to write back to.
     let out = run(b"CONFIG", &[b"REWRITE"]);
     let s = String::from_utf8(out).unwrap();
     assert!(s.starts_with("-ERR"));
@@ -238,7 +230,7 @@ fn config_rewrite_without_source_returns_no_config_file_error() {
 #[test]
 fn config_rewrite_writes_atomic_round_trip_file() {
     // Direct test of `atomic_write` + `to_toml_string` since the
-    // handler short-circuits in the test binary (no config_global).
+    // handler short-circuits in the test binary (no source file).
     let dir = std::env::temp_dir().join(format!(
         "kevy-config-rewrite-{}",
         std::time::SystemTime::now()

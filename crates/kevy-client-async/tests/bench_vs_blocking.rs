@@ -1,4 +1,4 @@
-//! T4.23 benchmark — async (tokio) vs blocking on the same workload.
+//! Benchmark — async (tokio) vs blocking on the same workload.
 //!
 //! `#[ignore]` so it doesn't run in `cargo test`. Invoke explicitly:
 //!
@@ -13,7 +13,7 @@
 //! cargo run -p kevy --bin kevy -- --port 6004
 //! ```
 //!
-//! Pass-criterion from RFC F5 / plan T4.23:
+//! Pass-criterion:
 //! - single-conn async ≥ 80 % blocking throughput
 //! - high-concurrency async ≥ blocking throughput
 //!
@@ -37,7 +37,7 @@ fn url() -> String {
 #[tokio::test(flavor = "current_thread")]
 #[ignore]
 async fn async_sequential() {
-    let mut c = AsyncConnection::open(&url())
+    let mut c = AsyncConnection::connect(&url())
         .await
         .expect("kevy server reachable; set KEVY_URL or start `cargo run -p kevy`");
     // Warm.
@@ -58,7 +58,7 @@ async fn async_sequential() {
 #[tokio::test(flavor = "current_thread")]
 #[ignore]
 async fn async_pipelined() {
-    let mut c = AsyncConnection::open(&url()).await.expect("kevy reachable");
+    let mut c = AsyncConnection::connect(&url()).await.expect("kevy reachable");
     c.ping().await.unwrap();
     let t = Instant::now();
     let mut written = 0;
@@ -86,7 +86,7 @@ async fn async_pipelined() {
 #[test]
 #[ignore]
 fn blocking_sequential() {
-    let mut c = kevy_client::Connection::open(&url())
+    let mut c = kevy_client::Connection::connect(&url())
         .expect("kevy server reachable; set KEVY_URL or start `cargo run -p kevy`");
     c.ping().unwrap();
     let t = Instant::now();

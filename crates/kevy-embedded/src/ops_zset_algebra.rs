@@ -13,30 +13,24 @@
 //! the result), never the combination — deterministic on replay and
 //! replica-apply regardless of source state.
 
-use std::io;
+use crate::KevyResult;
 
 use kevy_store::{ZAggregate, zdiff, zinter, zintercard, zunion};
 
 /// One source key's scored members (sets contribute score 1.0).
 type ScoredInput = Vec<(Vec<u8>, f64)>;
 
-#[cfg(not(target_arch = "wasm32"))]
-use crate::replica_glue::ensure_writable;
+use crate::store::ensure_writable;
 use crate::store::{Store, commit_write, store_err};
 
-#[cfg(target_arch = "wasm32")]
-fn ensure_writable(_s: &Store) -> io::Result<()> {
-    Ok(())
-}
-
 impl Store {
-    fn gather_scored(&self, keys: &[&[u8]]) -> io::Result<Vec<ScoredInput>> {
+    fn gather_scored(&self, keys: &[&[u8]]) -> KevyResult<Vec<ScoredInput>> {
         keys.iter()
             .map(|k| self.wshard(k).store.zset_or_set_members(k).map_err(store_err))
             .collect()
     }
 
-    fn store_zset_result(&self, dst: &[u8], pairs: &[(Vec<u8>, f64)]) -> io::Result<usize> {
+    fn store_zset_result(&self, dst: &[u8], pairs: &[(Vec<u8>, f64)]) -> KevyResult<usize> {
         ensure_writable(self)?;
         let mut g = self.wshard(dst);
         let n = g.store.zstore_result(dst, pairs);
@@ -64,7 +58,7 @@ impl Store {
         keys: &[&[u8]],
         weights: Option<&[f64]>,
         aggregate: ZAggregate,
-    ) -> io::Result<usize> {
+    ) -> KevyResult<usize> {
         let inputs = self.gather_scored(keys)?;
         self.store_zset_result(dst, &zinter(&inputs, weights, aggregate))
     }
@@ -76,52 +70,51 @@ impl Store {
         keys: &[&[u8]],
         weights: Option<&[f64]>,
         aggregate: ZAggregate,
-    ) -> io::Result<usize> {
+    ) -> KevyResult<usize> {
         let inputs = self.gather_scored(keys)?;
         self.store_zset_result(dst, &zunion(&inputs, weights, aggregate))
     }
 
     /// `ZDIFFSTORE dst keys…` (no weights/aggregate — Redis 6.2).
-    pub fn zdiffstore(&self, dst: &[u8], keys: &[&[u8]]) -> io::Result<usize> {
+    pub fn zdiffstore(&self, dst: &[u8], keys: &[&[u8]]) -> KevyResult<usize> {
         let inputs = self.gather_scored(keys)?;
         self.store_zset_result(dst, &zdiff(&inputs))
     }
 
     /// `ZINTERCARD keys… [LIMIT n]` — `limit = 0` means unlimited.
-    pub fn zintercard(&self, keys: &[&[u8]], limit: usize) -> io::Result<usize> {
+    pub fn zintercard(&self, keys: &[&[u8]], limit: usize) -> KevyResult<usize> {
         let inputs = self.gather_scored(keys)?;
         Ok(zintercard(&inputs, limit))
     }
 
     /// `SINTERSTORE dst keys…` — set-algebra store form (members only).
-    pub fn sinterstore(&self, dst: &[u8], keys: &[&[u8]]) -> io::Result<usize> {
+    pub fn sinterstore(&self, dst: &[u8], keys: &[&[u8]]) -> KevyResult<usize> {
         let members = self.sinter(keys)?;
         self.store_set_result(dst, &members)
     }
 
     /// `SUNIONSTORE dst keys…`.
-    pub fn sunionstore(&self, dst: &[u8], keys: &[&[u8]]) -> io::Result<usize> {
+    pub fn sunionstore(&self, dst: &[u8], keys: &[&[u8]]) -> KevyResult<usize> {
         let members = self.sunion(keys)?;
         self.store_set_result(dst, &members)
     }
 
     /// `SDIFFSTORE dst keys…`.
-    pub fn sdiffstore(&self, dst: &[u8], keys: &[&[u8]]) -> io::Result<usize> {
+    pub fn sdiffstore(&self, dst: &[u8], keys: &[&[u8]]) -> KevyResult<usize> {
         let members = self.sdiff(keys)?;
         self.store_set_result(dst, &members)
     }
 
-    fn store_set_result(&self, dst: &[u8], members: &[Vec<u8>]) -> io::Result<usize> {
+    fn store_set_result(&self, dst: &[u8], members: &[Vec<u8>]) -> KevyResult<usize> {
         ensure_writable(self)?;
         let mut g = self.wshard(dst);
-        let del = [dst.to_vec()];
-        g.store.del(&del);
+        g.store.del(&[dst]);
         commit_write(&mut g, &[b"DEL", dst])?;
         if members.is_empty() {
             return Ok(0);
         }
-        let owned: Vec<Vec<u8>> = members.to_vec();
-        let n = g.store.sadd(dst, &owned).map_err(store_err)?;
+        let member_refs: Vec<&[u8]> = members.iter().map(Vec::as_slice).collect();
+        let n = g.store.sadd(dst, &member_refs).map_err(store_err)?;
         let mut argv: Vec<&[u8]> = Vec::with_capacity(2 + members.len());
         argv.push(b"SADD");
         argv.push(dst);

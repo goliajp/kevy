@@ -3,26 +3,26 @@
 //!
 //! # Status
 //!
-//! Phase-4 first cut (T4.x). Surface is intentionally a near-1:1 mirror
-//! of the blocking [`kevy_client::Connection`], plus the pipeline-first
-//! sugar locked by RFC 2026-06-18-v3-cluster Q4 part b. See
-//! `docs/async.md` (added T4.26) for the full guide.
+//! Surface is intentionally a near-1:1 mirror of the blocking
+//! [`kevy_client::Connection`], plus pipeline-first sugar (batching is
+//! where async actually pays off). See `docs/async.md` for the full
+//! guide.
 //!
 //! # Runtime selection
 //!
 //! Exactly one of the following Cargo features must be enabled:
 //!
-//! | feature     | transport                            |
-//! |-------------|--------------------------------------|
-//! | `tokio`     | `tokio::net::TcpStream` (T4.5)       |
-//! | `smol`      | `smol::net::TcpStream` (T4.6)        |
-//! | `async-std` | `async_std::net::TcpStream` (T4.7)   |
+//! | feature     | transport                      |
+//! |-------------|--------------------------------|
+//! | `tokio`     | `tokio::net::TcpStream`        |
+//! | `smol`      | `smol::net::TcpStream`         |
+//! | `async-std` | `async_std::net::TcpStream`    |
 //!
 //! `default = ["tokio"]` is a dev convenience so `cargo test
 //! --workspace` builds without flags; **lib consumers should set
 //! `default-features = false`** and pick their runtime explicitly so
 //! the wrong one is never silently inherited. Enabling zero or more
-//! than one triggers a `compile_error!` from this crate (T4.8).
+//! than one triggers a `compile_error!` from this crate.
 //!
 //! # Dep-rule exemption
 //!
@@ -31,8 +31,7 @@
 //! std-only viable substrate. The exemption is per-crate and per-dep:
 //! `kevy-client-async` may dep tokio / smol / async-std (and only those
 //! three) with `default-features = false` + minimum-surface features
-//! and an inline `# EXEMPTION` Cargo.toml comment. See RFC F5 and
-//! memory `feedback-pure-rust-no-c-principle.md`.
+//! and an inline `# EXEMPTION` Cargo.toml comment.
 //!
 //! # Error compatibility
 //!
@@ -87,7 +86,7 @@ pub use codec::AsyncRespCodec;
 pub use conn::AsyncConnection;
 pub use transport::{AsyncRead, AsyncTransport, AsyncWrite, read, write_all};
 
-// T4.8 — compile-time runtime selection gate. We enforce
+// Compile-time runtime selection gate. We enforce
 // **exactly-one**: zero enabled = no IO substrate (silent shell);
 // more than one enabled = ambiguous transport pick + bloats the build
 // with unused runtimes. Either fails the build with a clear message.

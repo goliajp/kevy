@@ -26,21 +26,31 @@
 #    `luna-core` as exemption #2 (via path-dep on kevy-lua). Same
 #    verification: `cargo tree -p kevy-lua-host` must show luna-core
 #    as the only third-party crate.
+# 4. `crates/kevy-ring` + `crates/kevy-rt` may depend on `loom` under
+#    `[target.'cfg(loom)'.dependencies]` — a concurrency-model checker
+#    pulled in ONLY under `RUSTFLAGS="--cfg loom"` for the loom test
+#    suites. A normal build / test / publish never sees it (same
+#    posture as the `fuzz/` dirs' libfuzzer-sys). Verify it stays out
+#    of the default graph: `cargo tree -p kevy-rt | grep loom` is empty
+#    without the cfg.
 #
-# Both exemptions are per-crate. The default server, blocking-client,
+# These exemptions are per-crate. The default server, blocking-client,
 # embedded, and persistence stacks remain 0 third-party deps.
 [workspace]
 resolver = "3"
 members = [
+    "crates/kevy-tmpdir",
     "crates/kevy-sys",
     "crates/kevy-uring",
     "crates/kevy-madvise",
     "crates/kevy-resp",
     "crates/kevy-ring",
     "crates/kevy-store",
+    "crates/kevy-vlog",
     "crates/kevy-rt",
     "crates/kevy-persist",
     "crates/kevy",
+    "crates/kevy-sql",
     "crates/kevy-cli",
     "crates/kevy-pubsub-bench",
     "crates/kevy-bench",
@@ -50,6 +60,7 @@ members = [
     "crates/kevy-vector",
     "crates/kevy-bytes",
     "crates/kevy-map",
+    "crates/kevy-ranktree",
     "crates/kevy-resp-client",
     "crates/kevy-config",
     "crates/kevy-embedded",
@@ -64,10 +75,25 @@ members = [
     "crates/kevy-lua-host",
     "crates/kevy-chaos",
     "crates/kevy-mcp",
+    "crates/kevy-ffi",
+    "crates/kevy-jni",
+    "crates/kevy-napi",
+    "crates/kevy-wasm",
+]
+
+# STANDALONE, deliberately-excluded crates. These depend on the `tauri` crate
+# (an unavoidable ecosystem dependency for a Tauri plugin / app) and therefore
+# must NOT join the 0-dependency workspace — keeping `tauri` out of the root
+# build graph preserves the pure-Rust, 0-dep charter. Each also carries its own
+# empty `[workspace]` table so it roots its own build when invoked directly.
+# See bindings/tauri/README.md for the full boundary note.
+exclude = [
+    "bindings/tauri/tauri-plugin-kevy",
+    "bindings/tauri/example/src-tauri",
 ]
 
 [workspace.package]
-version = "3.18.0"
+version = "4.0.0"
 edition = "2024"
 rust-version = "1.97.0"
 authors = ["GOLIA K.K."]
@@ -116,12 +142,35 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
+# Release codegen, but readable under a profiler. `strip = true` above is
+# right for what ships and wrong for what you measure: a perf record of the
+# release binary resolves nothing but libc, so every frame of our own code
+# comes back a bare address. Three phrase-query profiles were spent finding
+# that out. Same opt-level/lto/codegen-units as release — the thing being
+# measured has to be the thing that ships — plus the symbols to attribute it.
+# Build with `cargo build --profile profiling`.
+[profile.profiling]
+inherits = "release"
+strip = false
+debug = 1
+
 # Size-optimized profile: opt-level "z" + same hardening. Used to measure
 # the size/perf trade-off of opt-level "z" vs the default release profile.
 # Invoke with `cargo build --profile release-min`.
 [profile.release-min]
 inherits = "release"
 opt-level = "s"
+
+# IoT profile: smallest-binary settings for the embedded /
+# edge builds bench/iotgate.sh budgets. opt-level "z" trades speed for
+# size; fat LTO + 1 cgu let the linker drop every unused subsystem;
+# strip removes symbols. Invoke with `cargo build --profile iot`.
+[profile.iot]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
 
 # Perf-profile profile: same codegen as `release` (LTO + 1 cgu + abort) plus
 # line-table debug info and forced frame pointers so `perf record` /

@@ -1,5 +1,5 @@
 //! Matrix-style coverage test for every Redis verb kevy handles in
-//! [`kevy::dispatch`]. Each verb is exercised on at least one of:
+//! [`kevy::KevyCommands::dispatch`]. Each verb is exercised on at least one of:
 //!   * a happy path,
 //!   * an arity error (`wrong number of arguments`),
 //!   * a wrong-type error (where the verb is type-checked),
@@ -7,17 +7,27 @@
 //!
 //! The aim is to push `crates/kevy/src/cmd.rs` and `crates/kevy/src/dispatch.rs`
 //! over the 80% line-coverage bar. The test calls
-//! [`kevy::dispatch`] in-process against a single `KeyspaceStore` — no sockets,
+//! [`kevy::KevyCommands::dispatch`] in-process against a single `KeyspaceStore` — no sockets,
 //! no runtime — so it's order-independent within each #[test] but lets us
 //! sequence happy → error in one body.
 //!
 //! Reproducer: `cargo test -p kevy --test cmd_matrix`.
 
-use kevy::{Argv, KeyspaceStore, dispatch};
+use kevy::{Argv, KeyspaceStore};
 
 /// Build an `Argv` from `&[&[u8]]` argv pieces.
 fn argv(parts: &[&[u8]]) -> Argv {
     Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>())
+}
+
+/// In-process dispatcher: one KevyCommands per test thread, so
+/// per-state caches (e.g. the SCRIPT cache) persist across calls
+/// within a test.
+fn dispatch<A: kevy_rt::ArgvView + ?Sized>(store: &mut KeyspaceStore, args: &A) -> Vec<u8> {
+    thread_local! {
+        static KEVY: kevy::KevyCommands = kevy::KevyCommands::new();
+    }
+    KEVY.with(|k| k.dispatch(store, args))
 }
 
 /// Convenience: run one command against `store` and return the reply bytes.
@@ -71,7 +81,7 @@ fn conn_and_introspection() {
     assert_starts(&run(&mut s, &[b"ECHO"]), b"-ERR", "ECHO/0");
 
     // COMMAND
-    // v3.10: COMMAND answers from the verb metadata table (185+ rows)
+    // COMMAND answers from the verb metadata table (185+ rows)
     let cmd_reply = run(&mut s, &[b"COMMAND"]);
     assert!(
         cmd_reply.starts_with(b"*1") && cmd_reply.len() > 1000,
@@ -83,10 +93,9 @@ fn conn_and_introspection() {
     // HELLO (multi-line map reply — just check it's nonempty)
     assert!(!run(&mut s, &[b"HELLO"]).is_empty(), "HELLO");
 
-    // CONFIG GET / SET: Wave 1 replaced the prior tolerant stubs with the
-    // real Config-backed handler. GET against an unknown key still returns
-    // an empty array; SET is read-only in v1.0 (errors with a v1.x Wave 2
-    // pointer).
+    // CONFIG GET / SET: the real Config-backed handler. GET against an
+    // unknown key returns an empty array; SET against an unknown key
+    // answers -ERR (only hot-settable keys are accepted).
     assert_eq_reply(
         &run(&mut s, &[b"CONFIG", b"GET", b"nonexistent-setting"]),
         b"*0\r\n",

@@ -15,7 +15,7 @@ impl<C: Commands> Shard<C> {
     /// loop flushes it). The message handling itself is
     /// [`Shard::drain_inbound_core_slow`], shared with the epoll reactor.
     ///
-    /// **E15 (2026-06-20)** fast-path split: post-v1.24-chain perf
+    /// Fast-path split: a perf
     /// diagnostic showed this at 3.59 % self — almost all from the per-iter
     /// fn call overhead despite the cheap Acquire load inside. Now the
     /// Acquire load lives here in a tiny `#[inline]` wrapper that LLVM
@@ -34,18 +34,19 @@ impl<C: Commands> Shard<C> {
     /// Close connections that are done: EOF/QUIT seen, all output flushed, no
     /// SQE in flight. Dropping the `Conn` closes the fd.
     ///
-    /// E18 attempted a two-`any()`-scan fast-path bail (skip the Vec
-    /// collect when no conn carries a closing flag) and reverted —
+    /// An earlier attempt tried a two-`any()`-scan fast-path bail (skip
+    /// the Vec collect when no conn carries a closing flag) and reverted —
     /// at c100 the 2×N pre-scan added more cost than the avoided alloc
-    /// saved (lx64 c100 SET -2.9 %), and the only sound way to use a
+    /// saved (measured -2.9 % on the bench box's c100 SET shape), and
+    /// the only sound way to use a
     /// single scan is to keep io.closing + conn.closing in sync (which
     /// requires plumbing the io map down into the dispatch QUIT path).
     /// Left for a future iteration that's willing to take that plumb.
-    // LOC-WAIVER: K5 ready-set reap state machine (classify / requeue /
+    // LOC-WAIVER: closing ready-set reap state machine (classify / requeue /
     // shared teardown) — io_uring-only path, unverifiable on darwin;
     // waived rather than split without a runnable test surface.
     pub(crate) fn uring_reap_closed(&mut self, io: &mut KevyMap<u64, UringConn>) {
-        // K5 (v1.25 A.4 redo): drain the closing ready-set instead of
+        // Drain the closing ready-set instead of
         // walking the whole io map. perf-record-dwarf at c=10 000 -P 1
         // SET sustained showed the prior `io.iter().filter(...).map(
         // |(cid, _)| (cid, self.conns.get(cid))).collect::<Vec<u64>>()`
@@ -94,7 +95,7 @@ impl<C: Commands> Shard<C> {
             // never registered the fd with the readiness poller).
             self.close_conn(cid);
             io.remove(&cid);
-            // K4 (v1.25 A.9): no per-conn list to maintain. A stale
+            // No per-conn list to maintain. A stale
             // entry in `arm_pending` for `cid` is a no-op next iter
             // (the arm loop bails when both `conns.get_mut(&cid)` and
             // `io.get_mut(&cid)` return None).

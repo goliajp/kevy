@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Migration — the playbook and the toolchain — kevy</title>
+<meta name="description" content="Two halves. The playbook: how to move a live RDS workload onto kevy in phases, each with its own verification clamp and rollback point. The toolchain (kevy-cli): the commands that ">
+<link rel="stylesheet" href="../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../docs/" aria-current="page">Docs</a>
+      <a href="../../docs/commands/">Commands</a>
+      <a href="../../benchmarks/">Benchmarks</a>
+      <a href="../../play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../docs/search-index.json" data-root="../../">
+        <input type="search" placeholder="Search docs…" aria-label="Search docs…" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../docs/migration/" aria-current="page">EN</a><a href="../../zh/docs/migration/">中文</a><a href="../../ja/docs/migration/">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell has-toc">
+  <aside class="side"><p class="side-h">Getting started</p><ul><li><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a></li><li><a href="../../docs/cookbook/">The RDS→kevy modeling cookbook</a></li><li><a href="../../docs/persistence/">Persistence</a></li><li><a href="../../docs/tuning/">Tuning kevy</a></li></ul><p class="side-h">Running it</p><ul><li><a href="../../docs/replication/">Replication</a></li><li><a href="../../docs/availability/">Availability</a></li><li><a href="../../docs/cluster/">Cluster</a></li><li><a href="../../docs/tiering/">Transparent tiering ([tiering] / with_tier_budget)</a></li><li><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a></li><li><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a></li><li><a href="../../docs/async/">Async client</a></li></ul><p class="side-h">Working with data</p><ul><li><a href="../../docs/indexes/">Secondary indexes (IDX. / idx_)</a></li><li><a href="../../docs/tables/">Tables (TABLE. / table_)</a></li><li><a href="../../docs/vector-search/">Vector search (KIND ann)</a></li><li><a href="../../docs/text-search/">Full-text search (KIND text)</a></li><li><a href="../../docs/views/">Views (VIEW. / view_)</a></li><li><a href="../../docs/cdc/">CDC — the change feed (FEED. / changes_since)</a></li><li><a href="../../docs/pubsub/">Pub/sub</a></li><li><a href="../../docs/lua/">Lua scripting</a></li></ul><p class="side-h">Embedding it</p><ul><li><a href="../../docs/wasm/">kevy on WebAssembly</a></li><li><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a></li><li><a href="../../docs/iot/">kevy on IoT devices</a></li></ul><p class="side-h">Reference</p><ul><li><a href="../../docs/error-replies/">Error reply catalog</a></li><li><a href="../../docs/rds-workloads/">RDS workloads on kevy</a></li><li><a href="../../docs/migration/" aria-current="page">Migration — the playbook and the toolchain</a></li><li><a href="../../docs/UPGRADING/">Upgrading kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../docs/commands/">All 188 commands</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>Migration — the playbook and the toolchain</h1></div>
+<p>Two halves. The <b>playbook</b>: how to move a live RDS workload onto kevy in phases, each with its own verification clamp and rollback point. The <b>toolchain</b> (<code>kevy-cli</code>): the commands that move data into, out of, and between kevy servers — and prove the move was faithful. Modeling questions ("what does my <code>JOIN</code> become?") live in <a href="../rds-workloads/">rds-workloads.md</a>; runnable patterns in the <a href="../cookbook/">cookbook</a>.</p>
+<h2 id="the-phased-playbook">The phased playbook</h2>
+<p>Seven phases. The load-bearing property: <b>at every phase up to write cutover, the RDS is still the source of truth and rollback is "repoint the app"</b> — never "reverse-migrate data". Don't skip phases; each one's verification clamp is what makes the next one boring.</p>
+<h3 id="phase-0-inventory">Phase 0 — Inventory</h3>
+<p>List every table and every query shape the workload actually runs (your ORM's query log or <code>pg_stat_statements</code> is the ground truth, not the schema). Classify each against the <a href="../rds-workloads/">rds-workloads matrix</a>: most rows map mechanically; flag the ones that hit a refused construct (N-way joins in a hot path, <code>HAVING</code>, deep <code>OFFSET</code> pagination, ad-hoc reporting SQL).</p>
+<ul><li><b>Action:</b> a written access-path table: query → matrix row → kevy shape (index / view / agg / verb).</li><li><b>Clamp:</b> every hot-path query has a mapped shape <b>before any data moves</b>. Refused constructs get an app-side redesign decision now, not at cutover. Ad-hoc analytics stays off kevy — plan the warehouse export (cookbook recipe 14) instead.</li><li><b>Rollback:</b> nothing has moved.</li></ul>
+<h3 id="phase-1-schema-mapping">Phase 1 — Schema mapping</h3>
+<p>Turn the inventory into a declaration script: prefixes, field layouts, types, then every <code>IDX.CREATE</code> / <code>VIEW.CREATE</code> line. Apply the type rules from the matrix now — DECIMAL to integer minor units, DATETIME to epoch i64, NULL to absent-field — because they are write-format decisions you cannot cheaply revisit after backfill.</p>
+<ul><li><b>Action:</b> the declaration script, checked into the repo next to your DDL history.</li><li><b>Clamp:</b> run it against a throwaway kevy with a few hundred representative rows; <code>IDX.VERIFY</code> must show <code>coerce_failures = 0</code> and expected <code>duplicates</code>; <code>VIEW.VERIFY</code> no order-exclusions; paged queries return what the SQL returned.</li><li><b>Rollback:</b> nothing has moved.</li></ul>
+<h3 id="phase-2-change-capture-dual-write-window-opens">Phase 2 — Change capture (dual-write window opens)</h3>
+<p>Start capturing RDS writes <b>before</b> the backfill snapshot, so nothing falls in the gap. Two routes:</p>
+<ul><li><b>App dual-write</b> — the app writes to the RDS (still the truth) and mirrors each write to kevy. Simple, no new infra; but the mirror rides your write path (make it fire-and-forget with a failure counter — a lost mirror write is repaired by re-backfill, never by blocking the RDS commit).</li><li><b>CDC pull</b> — a binlog/logical-replication consumer (Debezium or hand-rolled) translates row events into kevy writes. Decoupled from the app, ordered per row, replayable from a binlog position; costs connector infrastructure. Prefer it when you can't touch every writer, or when writers are many.</li></ul>
+<p>Either way the kevy writes must be <b>idempotent rebuild shapes</b> (<code>HSET</code> full row, <code>DEL</code> + re-add for collections) so overlap with the backfill is harmless.</p>
+<ul><li><b>Clamp:</b> freshness lag metric on the capture path (event timestamp → kevy apply), plus a row-count drift check per prefix (<code>PREFIX.STATS</code> vs <code>SELECT COUNT(*)</code>) that trends to a constant.</li><li><b>Rollback:</b> stop the capture. The RDS never noticed.</li></ul>
+<h3 id="phase-3-backfill">Phase 3 — Backfill</h3>
+<p>Snapshot the RDS at a known capture position, export to a RESP command file, and bulk load:</p>
+<figure class="code"><pre><code># generate rebuild frames from your RDS export (one HSET per row):
+#   HSET user:42 name ada email ada@example.com …
+kevy-cli import -p 6004 --strict rows.resp        # ≥200k cmd/s</code></pre></figure>
+<p><b>Import first, declare indexes after</b> (the deferred-index rule): backfill builds each index from existing rows at bulk speed — orders of magnitude cheaper than paying the write hook per imported row. Then run the phase-1 declaration script and wait for <code>IDX.LIST</code> to report <code>state=ready</code> (details under <a href="#loading-into-an-indexed-keyspace">Loading into an indexed keyspace</a>).</p>
+<ul><li><b>Clamp:</b> <code>PREFIX.STATS</code> counts match <code>SELECT COUNT(*)</code> per table; <code>IDX.VERIFY</code> coercion/duplicate counts are the expected zeros; a sampled digest check — recompute a few hundred rows from the RDS and byte-compare against <code>HGETALL</code> — passes. If you stage through an intermediate kevy, <code>kevy-cli diff</code> proves the hop.</li><li><b>Rollback:</b> <code>kevy-cli delete-prefix</code> (or <code>FLUSHALL</code>) and redo. The RDS is still the truth.</li></ul>
+<h3 id="phase-4-read-cutover-canary-per-endpoint">Phase 4 — Read cutover (canary, per endpoint)</h3>
+<p>Flip reads endpoint by endpoint, not big-bang. For each endpoint, pick the consistency rung it needs (<a href="../availability/">availability.md</a>): browse/list endpoints ride rung 0 (async replica reads); "I just wrote this, show it back" flows use <code>REPL.TOKEN</code>/<code>REPL.WAIT</code> (rung 1) or read the primary. A single-node kevy has no ladder to think about — every read is primary.</p>
+<ul><li><b>Action:</b> shadow-read first (serve from the RDS, also read kevy, compare and count mismatches), then shift traffic percentage.</li><li><b>Clamp:</b> mismatch counter at zero over a full traffic cycle (24h+); serving latency inside your SLO.</li><li><b>Rollback:</b> repoint reads at the RDS — instant, data untouched.</li></ul>
+<h3 id="phase-5-write-cutover-the-rollback-window">Phase 5 — Write cutover + the rollback window</h3>
+<p>Flip writers to kevy, and <b>in the same deploy</b> start the reverse mirror: a CDC consumer replaying kevy's feed back to the RDS as SQL (<code>FEED.READ</code> → <code>UPDATE</code>/<code>INSERT</code>, cookbook recipe 13). The RDS is now a warm standby that trails kevy by seconds; your rollback plan is "repoint the app back", not "reverse-migrate".</p>
+<p>Before the flip, seed sequence keys <b>above</b> the RDS high-water mark (<code>INCRBY seq:order &lt;rds_max_id&gt;</code> on a fresh key) — the classic auto-increment collision is phase 5's sharpest edge.</p>
+<ul><li><b>Clamp:</b> <code>kevy-cli diff</code>-style sampling between kevy and the mirrored RDS (digest a prefix, compare row samples); the business metrics you already alert on.</li><li><b>Rollback:</b> within the mirror window, repoint the app at the RDS (accepting the mirror lag, which you are measuring). The mirror consumer must handle <code>-FEEDRESYNC</code> (a kevy crash-restart bumps the feed generation): rebuild the affected prefix into the RDS, then resume — at-least-once + idempotent SQL makes this safe.</li></ul>
+<h3 id="phase-6-decommission">Phase 6 — Decommission</h3>
+<p>When confidence hardens (weeks of clean diffs, one exercised failover), stop the reverse mirror, take a final RDS dump for the archive, and move the operational story fully onto kevy: snapshots + AOF (+ feed-cursor recovery points) per <a href="../persistence/">persistence.md</a>, replica/failover posture per <a href="../availability/">availability.md</a>.</p>
+<ul><li><b>Clamp:</b> a restore drill from kevy's own artifacts (snapshot + feed replay) before the RDS is turned off — never after.</li></ul>
+<h2 id="common-pitfalls">Common pitfalls</h2>
+<ul><li><b>DECIMAL through two write paths.</b> If the dual-write path stores <code>"10.00"</code> and the backfill stores <code>"1000"</code> (minor units), every digest check fails and — worse — reads disagree. Fix the format in phase 1 and make both paths share one serializer.</li><li><b>Auto-increment collision.</b> Forgetting to seed <code>seq:*</code> keys above the RDS max id hands out ids that already exist. Seed in phase 5, verify with one <code>GET seq:order</code> before opening writes.</li><li><b>Hot keys.</b> A kevy key lives on exactly one shard; the RDS row every request touched becomes a single-shard serialization point. Shard hot counters (per-user keys, block-allocated sequences) and let <code>KIND agg</code> do the read-side summing.</li><li><b>Large values.</b> Multi-hundred-KB rows work but make every hop heavier (export frames, replication, feed frames) and shift serving cost to the network path. Keep hot rows lean; store cold blobs in object storage with a pointer field, or split rarely-read columns into a sibling key.</li><li><b>TTL semantics.</b> <code>EXPIRE</code> with a non-positive TTL deletes the key immediately (Redis contract). Exported TTLs travel as absolute <code>PEXPIREAT</code> deadlines, so a slow migration doesn't extend lifetimes. Digests ignore TTLs (values only) — TTL correctness is checked by sampling <code>PTTL</code>, not by <code>diff</code>.</li><li><b><code>KEYS</code>/<code>SCAN</code> habits.</b> Ops one-liners that did <code>SELECT COUNT(*)</code> should use <code>PREFIX.STATS</code> or <code>IDX.COUNT</code> — <code>KEYS pattern</code> is a full-keyspace gather and <code>SCAN MATCH</code> a full NON-incremental sweep — every SCAN call walks the entire keyspace on every shard and returns all matches with cursor 0, so the usual SCAN loop terminates after one round trip; neither is a serving path (and on a big keyspace, barely an ops path).</li><li><b>Index build racing reads.</b> Right after declarations, queries answer <code>-INDEXBUILDING</code>. Clients in the cutover window need the poll-and-retry loop (below), or declare in phase 3 where no reader is looking yet.</li></ul>
+<hr>
+<h1 id="the-toolchain-kevy-cli">The toolchain (<code>kevy-cli</code>)</h1>
+<figure class="code"><pre><code>kevy-cli export  -p 6379 --prefix user: dump.resp
+kevy-cli import  -p 6004 --strict dump.resp        # ≥200k cmd/s
+kevy-cli import  -p 6004 --resume dump.resp        # after interruption
+kevy-cli digest  -p 6004 user:
+kevy-cli diff    hostA:6379 hostB:6004 user: order:
+kevy-cli copy-prefix   -p 6004 --rate 5000 user: staging:user:
+kevy-cli delete-prefix -p 6004 --rate 5000 --dry-run tmp:
+kevy-cli inspect -p 6004 user:</code></pre></figure>
+<h2 id="wire-format">Wire format</h2>
+<p><code>export</code> writes a plain <b>RESP command stream</b> of rebuild frames — <code>DEL</code> + <code>SET</code>/<code>HSET</code>/<code>RPUSH</code>/<code>SADD</code>/<code>ZADD</code>, plus absolute <code>PEXPIREAT</code> for TTLs. That makes the file bidirectionally compatible with <code>redis-cli --pipe</code>: kevy exports feed a Redis, and any RESP command file feeds <code>kevy-cli import</code> — including one you generate yourself from an RDS dump (the playbook's phase 3).</p>
+<p>The leading <code>DEL</code> per key makes replay <b>rebuild from scratch</b> — genuinely idempotent for every type (an append verb like RPUSH would otherwise double list content on re-import).</p>
+<h2 id="consistency-and-resumability">Consistency and resumability</h2>
+<ul><li>Export is per-key point-in-time under a SCAN walk (SCAN-class guarantees; keys written during export may appear in either state, vanished keys are skipped). No global snapshot — by design.</li><li>Import pipelines 512 commands per batch and fsyncs a byte offset to <code>&lt;file&gt;.progress</code> after every batch. <code>--resume</code> restarts there; because frames rebuild, overlap is harmless. <code>--strict</code> aborts on the first server error; otherwise errors are counted and reported.</li><li><code>kill -9</code> mid-import is a gated scenario: resume converges to the same <code>PREFIX.DIGEST</code>.</li></ul>
+<h2 id="verification">Verification</h2>
+<p><code>PREFIX.DIGEST &lt;prefix&gt;</code> (server + embedded <code>prefix_digest</code>) returns <code>[count, hex64]</code> — an order-insensitive checksum over canonical row bytes (hash fields and set members sorted, zset by score bits then member, list in order — list order IS identity). It is insensitive to shard count and insert order, so it compares across topologies. <code>kevy-cli diff A:port B:port prefix…</code> exits non-zero on any mismatch.</p>
+<p>TTLs do not participate in the digest (they decay); values do.</p>
+<h2 id="bulk-operations">Bulk operations</h2>
+<p><code>copy-prefix</code> re-keys every row under a new prefix via read + rebuild frames (the server intentionally has no COPY verb; TTLs carried as absolute deadlines). <code>delete-prefix</code> SCANs + UNLINKs. Both take <code>--rate N</code> (token bucket, strict pacing from the first op) and delete supports <code>--dry-run</code>.</p>
+<h2 id="loading-into-an-indexed-keyspace">Loading into an indexed keyspace</h2>
+<h3 id="waiting-for-index-readiness">Waiting for index readiness</h3>
+<p><code>IDX.CREATE</code> returns immediately and backfills in the background; queries answer <code>-INDEXBUILDING</code> until done. The standard wait is polling <code>IDX.LIST</code> — its <code>state</code> column flips from <code>building</code> to <code>ready</code>:</p>
+<figure class="code"><pre><code>until kevy-cli -p 6004 IDX.LIST | grep -A1 my_index | grep -q ready; do sleep 1; done</code></pre></figure>
+<p>Backfill speed scales with DOCUMENT SIZE for text indexes: ~7s per million small rows, but multi-KB bodies index at roughly 85s per million (measured: 200k mail-sized bodies in 17s).</p>
+<h3 id="verifying-a-whole-migration-in-one-command">Verifying a whole migration in one command</h3>
+<p><code>kevy-cli diff</code> compares any number of prefixes across two live servers in one call — prefer it over per-prefix digest pairs:</p>
+<figure class="code"><pre><code>kevy-cli diff 127.0.0.1:6004 127.0.0.1:6005 msg: mbox: usr: tag: session:</code></pre></figure>
+<h3 id="large-exports">Large exports</h3>
+<p>The dump is uncompressed RESP text (fast, greppable). For 10GB+ keyspaces pipe through gzip — the format is stream-friendly:</p>
+<figure class="code"><pre><code>kevy-cli export -p 6004 /dev/stdout | gzip &gt; dump.kevy.gz
+gunzip -c dump.kevy.gz | kevy-cli import -p 6005 --strict /dev/stdin</code></pre></figure>
+<p>(<code>--resume</code> needs a real file for its .progress sidecar — decompress to disk first if you want resumability.)</p>
+<p>Create indexes <b>after</b> the bulk load: the index engine's backfill builds from existing data at bulk speed (~7s per million rows measured), which beats paying per-write hook maintenance a million times. Order of operations, not a switch:</p>
+<figure class="code"><pre><code>kevy-cli import -p 6004 dump.resp
+kevy-cli -p 6004 IDX.CREATE users ON PREFIX user: FIELD age TYPE i64 KIND range</code></pre></figure>
+<p>Gate: <code>bench/onrampgate.sh</code> (1M-row round trip, ≥200k cmd/s import, kill -9 resume convergence, ±20% rate accuracy).</p></main>
+  <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#the-phased-playbook">The phased playbook</a></li><li class="l3"><a href="#phase-0-inventory">Phase 0 — Inventory</a></li><li class="l3"><a href="#phase-1-schema-mapping">Phase 1 — Schema mapping</a></li><li class="l3"><a href="#phase-2-change-capture-dual-write-window-opens">Phase 2 — Change capture (dual-write window opens)</a></li><li class="l3"><a href="#phase-3-backfill">Phase 3 — Backfill</a></li><li class="l3"><a href="#phase-4-read-cutover-canary-per-endpoint">Phase 4 — Read cutover (canary, per endpoint)</a></li><li class="l3"><a href="#phase-5-write-cutover-the-rollback-window">Phase 5 — Write cutover + the rollback window</a></li><li class="l3"><a href="#phase-6-decommission">Phase 6 — Decommission</a></li><li class="l2"><a href="#common-pitfalls">Common pitfalls</a></li><li class="l2"><a href="#wire-format">Wire format</a></li><li class="l2"><a href="#consistency-and-resumability">Consistency and resumability</a></li><li class="l2"><a href="#verification">Verification</a></li><li class="l2"><a href="#bulk-operations">Bulk operations</a></li><li class="l2"><a href="#loading-into-an-indexed-keyspace">Loading into an indexed keyspace</a></li><li class="l3"><a href="#waiting-for-index-readiness">Waiting for index readiness</a></li><li class="l3"><a href="#verifying-a-whole-migration-in-one-command">Verifying a whole migration in one command</a></li><li class="l3"><a href="#large-exports">Large exports</a></li></ul></aside>
+</div>
+
+<script src="../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ビュー（VIEW. / view_） — kevy</title>
+<meta name="description" content="ビューとは、宣言済みインデックスの名前付き合成です。インデックスの形（shape）からなるAND/OR/DIFFの木に、順序づけ用のインデックスを添えたものを、1つの単位としてクエリできます。評価はクエリごとに行う（virtual）か、書き込みのたびに増分維持する（materialized、任意でtop-K有界）かを選べます。ビューは「ホットリスト」クエリ—">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../ja/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../../ja/docs/" aria-current="page">ドキュメント</a>
+      <a href="../../../ja/docs/commands/">コマンド</a>
+      <a href="../../../ja/benchmarks/">ベンチマーク</a>
+      <a href="../../../ja/play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../../ja/docs/search-index.json" data-root="../../../ja/">
+        <input type="search" placeholder="ドキュメントを検索……" aria-label="ドキュメントを検索……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../../docs/views/">EN</a><a href="../../../zh/docs/views/">中文</a><a href="../../../ja/docs/views/" aria-current="page">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell has-toc">
+  <aside class="side"><p class="side-h">はじめに</p><ul><li><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a></li><li><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a></li><li><a href="../../../ja/docs/persistence/">永続化</a></li><li><a href="../../../ja/docs/tuning/">kevyのチューニング</a></li></ul><p class="side-h">運用</p><ul><li><a href="../../../ja/docs/replication/">レプリケーション</a></li><li><a href="../../../ja/docs/availability/">可用性</a></li><li><a href="../../../ja/docs/cluster/">クラスタ</a></li><li><a href="../../../ja/docs/tiering/">透過的ティアリング（[tiering] / with_tier_budget）</a></li><li><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a></li><li><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a></li><li><a href="../../../ja/docs/async/">非同期クライアント</a></li></ul><p class="side-h">データ</p><ul><li><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX. / idx_）</a></li><li><a href="../../../ja/docs/tables/">テーブル（TABLE. / table_）</a></li><li><a href="../../../ja/docs/vector-search/">ベクトル検索（KIND ann）</a></li><li><a href="../../../ja/docs/text-search/">全文検索（KIND text）</a></li><li><a href="../../../ja/docs/views/" aria-current="page">ビュー（VIEW. / view_）</a></li><li><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED. / changes_since）</a></li><li><a href="../../../ja/docs/pubsub/">Pub/sub</a></li><li><a href="../../../ja/docs/lua/">Luaスクリプティング</a></li></ul><p class="side-h">組み込み</p><ul><li><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a></li><li><a href="../../../ja/docs/embedded-listener/">組み込みの読み取り専用RESPリスナー</a></li><li><a href="../../../ja/docs/iot/">IoTデバイス上のkevy</a></li></ul><p class="side-h">リファレンス</p><ul><li><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a></li><li><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a></li><li><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></li><li><a href="../../../ja/docs/UPGRADING/">kevyのアップグレード</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../ja/docs/commands/">188 コマンド全て</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>ビュー（<code>VIEW.*</code> / <code>view_*</code>）</h1></div>
+<p>ビューとは、<b>宣言済みインデックスの名前付き合成</b>です。インデックスの形（shape）からなるAND/OR/DIFFの木に、順序づけ用のインデックスを添えたものを、1つの単位としてクエリできます。評価はクエリごとに行う（<b>virtual</b>）か、書き込みのたびに増分維持する（<b>materialized</b>、任意でtop-K有界）かを選べます。ビューは「ホットリスト」クエリ——<code>WHERE state = 'ready' AND pri BETWEEN 0 AND 100 ORDER BY pri DESC LIMIT 10</code>——に対するエンジンの答えであり、クエリ時のスキャンではなく、宣言されたアクセスパスとして提供されます。</p>
+<figure class="code"><pre><code>IDX.CREATE j_pri  ON PREFIX job: FIELD pri  TYPE i64 KIND range
+IDX.CREATE j_state ON PREFIX job: FIELD state TYPE str KIND range
+
+VIEW.CREATE ready_jobs
+    QUERY ( AND j_pri RANGE 0 100 j_state EQ ready )
+    ORDER BY j_pri DESC
+    MODE materialized TOPK 100
+VIEW.QUERY ready_jobs LIMIT 10</code></pre></figure>
+<h2 id="クイックスタートサーバー">クイックスタート（サーバー）</h2>
+<p>ビューが合成するものは、すべて先に存在していなければなりません。葉もORDER BY用インデックスも、同じプレフィックスドメイン上で宣言された<code>IDX.*</code>インデックスです（<a href="../indexes/">indexes.md</a>）。</p>
+<figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 IDX.CREATE j_pri ON PREFIX job: FIELD pri TYPE i64 KIND range
+kevy-cli -p 6004 IDX.CREATE j_state ON PREFIX job: FIELD state TYPE str KIND range
+kevy-cli -p 6004 VIEW.CREATE ready_jobs QUERY ( AND j_pri RANGE 0 100 j_state EQ ready ) ORDER BY j_pri DESC MODE materialized TOPK 100
+kevy-cli -p 6004 HSET job:1 pri 10 state ready
+kevy-cli -p 6004 HSET job:2 pri 99 state blocked
+kevy-cli -p 6004 VIEW.QUERY ready_jobs LIMIT 10</code></pre></figure>
+<p>応答は<code>key, order-value</code>の組を、ビューの順序で、再開用の<code>CURSOR</code>とともにページングします。木の文法は次のとおりです（1行、括弧つき）。</p>
+<figure class="code"><pre><code>tree     = '(' AND|OR|DIFF sub sub ')' | leaf
+leaf     = &lt;index&gt; RANGE &lt;min&gt; &lt;max&gt; | &lt;index&gt; EQ &lt;value&gt;</code></pre></figure>
+<p>補助verb：<code>VIEW.LIST</code>（カタログ + モード + 形）、<code>VIEW.EXPLAIN name</code>（葉ごとのカーディナリティつきの木）、<code>VIEW.VERIFY name</code>（members / bytes / order-exclusions——<b>bytesとorder-exclusionsはmaterializedのときだけ</b>です。virtualなビューは何も保存しないので両方0を報告し、しかもそれをVERIFYすると新規の<code>eval_tree</code>をまるごと1回支払います。virtualなビューが高くつく唯一の場所がここです）、<code>VIEW.REBUILD name</code>（materializedの再構築を強制する——答えは保存されます）、<code>VIEW.DROP name</code>。</p>
+<h2 id="構造上の3つのルール">構造上の3つのルール</h2>
+<ol><li><b>構成要素は名前付きインデックスである。</b> 葉は形（<code>RANGE min max</code> | <code>EQ v</code>。CREATE時に参照先インデックスの型へ強制されます）を持ちます。ビュー層は自前の述語を一切持ちません。木は深さ3以下、葉は4つ以下です。<code>AND</code>/<code>OR</code>はエンジンが並べ替えることがあり、<code>DIFF</code>は左マイナス右で固定です。</li><li><b>ビューが保存するのはメンバーシップと順序だけ</b>であり、フィールドの値は決して保存しません。<code>ORDER BY &lt;index&gt;</code>がソートキーを供給します。順序インデックスに存在しない行は除外されます（数えられ、<code>VIEW.VERIFY</code>で可視になります）。</li><li><b>hydrationは参照解決であって、クエリではない。</b> <code>VIA &lt;template&gt;</code>（たとえば<code>user:{key.1}</code>。<code>{key}</code>はメンバーキー、<code>{key.N}</code>はその<code>:</code>区切りN番目のセグメント）が各メンバーをターゲットキーへ写像します。<code>VIEW.QUERY … FIELDS f…</code>は、2回目の内部ファンアウトで、それらのターゲットを所有するシャード上でフィールドを読みます。ターゲットが存在しなければ行のフィールドはnilになります。ターゲットに述語を付けることはできません。</li></ol>
+<h2 id="モードとコストモデル">モードとコストモデル</h2>
+<ul><li><b>Virtual</b> — クエリ時に評価されます。ORDERインデックスを順に流し、候補ごとに木のメンバーシップを判定します。LIMIT 100のページは、O(members)ではなくO(limit / 選択率)回のプローブで済みます。常に最新であり、書き込みコストはゼロです。破綻の形は、大きなORDERドメインの下にある高選択率の木です（1行を出すために多くの候補をプローブすることになります）。その形はmaterializeすべきです。</li><li><b>Materialized</b> — シャードごとの順序つきメンバー集合であり、インデックスを維持するのと同じ書き込みフックの中で更新されます（書き込みごと、参照インデックスごとにプローブ1回。全ビューで共有されます）。<code>TOPK k</code>は集合を<code>k + k/4</code>に有界化し、ビューの最悪端から追い出します。現在の最悪より悪い非メンバーは、比較1回で棄却されます。<a href="https://github.com/goliajp/kevy/blob/main/bench/viewgate.sh"><code>bench/viewgate.sh</code></a>が計測した定常状態の書き込み税は、3インデックス + 4つのtop-Kビューでおよそ2%です（ゲートは15%未満にclampしています）。<code>k</code>を下回るまで縮むと、シャードローカルな再構築がスケジュールされます（次のtick）。有界でないmaterializedビューは、影響を受ける書き込みごとにO(log members)を支払います。</li><li><code>VIEW.CREATE</code>の直後には、短い落ち着き期間があると考えてください（新しいtop-K集合に対する最初の書き込みバーストは、追い出しの閾値が安定するまで遅くなります）。</li></ul>
+<p>選び方。書き込みの多いドメイン上のダッシュボードtop-100なら<code>MODE materialized TOPK 100</code>です（メモリが有界、非候補をO(1)で棄却）。ほどほどのドメイン上でときどきページングされるレポートなら<code>MODE virtual</code>です（書き込み税ゼロ、常に最新）。<code>VIEW.EXPLAIN</code>は葉ごとのカーディナリティを見せます——この判断のための選択率データです。</p>
+<h3 id="diff宣言されたanti-join">DIFF：宣言されたanti-join</h3>
+<p><code>DIFF</code>は左マイナス右であり、可換では<b>ありません</b>。エンジンが子を決して並べ替えない、唯一の木ノードです。定番の用途は「資格はあるが、除外されていないもの」です。</p>
+<figure class="code"><pre><code>VIEW.CREATE assignable
+    QUERY ( DIFF j_pri RANGE 0 100 j_state EQ quarantined )
+    ORDER BY j_pri DESC
+    MODE virtual</code></pre></figure>
+<p>——稼働中の優先度帯にあるジョブすべてから、隔離されたものを引いたもの、ということです。</p>
+<p>SQLで言えばこれは<code>WHERE … AND NOT EXISTS (…)</code>の形にあたります。ただしクエリごとのサブクエリではなく、宣言されたアクセスパスとして提供されます（この語彙の残りは<a href="../rds-workloads/">rds-workloads.md</a>が写像します）。</p>
+<h2 id="整合性">整合性</h2>
+<p>インデックスと同じ包絡線です（<a href="../indexes/">indexes.md</a>）。トリガーとなった書き込みとシャード単位でアトミックであり、シャードをまたぐ場合はグローバルスナップショットなしにマージされます（SCANクラス）。</p>
+<ul><li>参照しているインデックスのいずれかがまだバックフィル中のあいだ、クエリは<code>-INDEXBUILDING</code>を返します（部分的なインデックスは、メンバーシップを黙って誤報告してしまうからです）。リトライの作法はインデックスクエリと同じです。</li><li><code>VIEW.REBUILD</code>は答えを保存します（e2eスイートで表明されています）。<code>VIEW.VERIFY</code>はドリフトを反証可能にします（members / bytes / order-exclusions）。</li><li>ビューのカタログはデータディレクトリのサイドカーに永続化されます。materializedの<b>内容</b>は派生状態です——再起動後に再構築され、スナップショットには決して入りません。</li></ul>
+<h2 id="組み込み">組み込み</h2>
+<p><code>index</code> cargoフィーチャ（デフォルトで有効）の背後にある型付きAPIです。木は値として渡すので、プロセス内にテキスト文法は登場しません。そしてすべての呼び出しが<code>KevyResult</code>を返します（4.0の単一エラー通貨）。</p>
+<figure class="code"><pre><code class="lang-rust">use kevy_embedded::{
+    Config, IndexKind, IndexValType, IndexValue, Store, ViewLeaf,
+    ViewMode, ViewTree,
+};
+
+fn main() -&gt; kevy_embedded::KevyResult&lt;()&gt; {
+    let store = Store::open(Config::default())?;
+    store.idx_create(b"j_pri", b"job:", b"pri", IndexValType::I64,
+                     IndexKind::Range)?;
+    store.idx_create(b"j_state", b"job:", b"state", IndexValType::Str,
+                     IndexKind::Range)?;
+
+    let tree = ViewTree::And(
+        Box::new(ViewTree::Leaf(ViewLeaf {
+            index: b"j_pri".to_vec(),
+            min: IndexValue::I64(0),
+            max: IndexValue::I64(100),
+        })),
+        Box::new(ViewTree::Leaf(ViewLeaf {
+            index: b"j_state".to_vec(),
+            min: IndexValue::Str(b"ready".to_vec()),
+            max: IndexValue::Str(b"ready".to_vec()),   // EQ = same min/max
+        })),
+    );
+    store.view_create(b"ready_jobs", tree, b"j_pri", /*desc*/ true,
+                      ViewMode::Materialized { top_k: 100 })?;
+
+    store.hset(b"job:1", &amp;[
+        (b"pri".as_slice(), b"10".as_slice()),
+        (b"state".as_slice(), b"ready".as_slice()),
+    ])?;
+
+    // One page: (Vec&lt;(key, order_value)&gt;, Option&lt;resume_cursor&gt;).
+    let (rows, _next) = store.view_query(b"ready_jobs", None, 10)?;
+    for (key, val) in &amp;rows {
+        println!("{} {val:?}", String::from_utf8_lossy(key));
+    }
+    Ok(())
+}</code></pre></figure>
+<ul><li><code>view_create(name, tree, order_by, desc, mode)</code>は同期的にビルドします。参照されるインデックス（葉とORDER BY）はすべて、あらかじめ宣言されていなければなりません（そうでなければ<code>KevyError::InvalidInput</code>です）。</li><li><code>view_query(name, after, limit)</code>は<code>(key, order_value)</code>の行をページングします。返されるカーソルは排他的に再開します（DESCのビューは大きい側からページングします）。<code>view_count</code> / <code>view_list</code> / <code>view_drop</code>が面を完成させます。</li><li><code>VIA</code>も<code>FIELDS</code>もありません——プロセス内の呼び出し側は、自分で参照解決して<code>hget</code>でフィールドを読んでください。</li></ul>
+<h2 id="パフォーマンス">パフォーマンス</h2>
+<p>計測された包絡線です。clampは<a href="https://github.com/goliajp/kevy/blob/main/bench/viewgate.sh"><code>bench/viewgate.sh</code></a>にあり、100万行の実サーバーに対して走ります。</p>
+<ul><li>Virtualな<code>VIEW.QUERY</code> p99 &lt; 3ms（2要素の木）。</li><li>Materializedな<code>VIEW.QUERY</code> p99 &lt; 2ms（インデックス読み出しのライン——materializedのページとは、順序つき集合の読み出しそのものです）。</li><li>3インデックス + 4つのmaterialized top-Kビューでの書き込み税は、インデックスのみの同一ワークロード比で15%未満（定常状態の実測はおよそ2%）。</li><li>メンバーあたりのメモリは、下の式の±20%以内。</li></ul>
+<p>メンバーあたりのメモリは概算で<code>order_value_width + key_len + 48</code>バイトで、<code>VIEW.VERIFY</code>がライブで報告します。</p>
+<h2 id="関連項目">関連項目</h2>
+<ul><li><a href="../indexes/">indexes.md</a> — ビューが合成するインデックス（宣言、バックフィル、ビューが継承する整合性の包絡線）。</li><li><a href="../rds-workloads/">rds-workloads.md</a> — SQLからkevyへの写像の中で、ビューが座る位置。</li><li><a href="../commands/">verb-reference.md</a> — すべての<code>VIEW.*</code>形式の、生成された文法。</li><li><a href="../cookbook/">cookbook.md</a> — 文脈の中のビューのレシピ。</li></ul></main>
+  <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#クイックスタートサーバー">クイックスタート（サーバー）</a></li><li class="l2"><a href="#構造上の3つのルール">構造上の3つのルール</a></li><li class="l2"><a href="#モードとコストモデル">モードとコストモデル</a></li><li class="l3"><a href="#diff宣言されたanti-join">DIFF：宣言されたanti-join</a></li><li class="l2"><a href="#整合性">整合性</a></li><li class="l2"><a href="#組み込み">組み込み</a></li><li class="l2"><a href="#パフォーマンス">パフォーマンス</a></li><li class="l2"><a href="#関連項目">関連項目</a></li></ul></aside>
+</div>
+
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

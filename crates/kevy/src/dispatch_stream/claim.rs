@@ -1,6 +1,7 @@
 //! `XCLAIM` / `XAUTOCLAIM` dispatchers — split from `group.rs` so
 //! both files stay under the project's ≤500-LOC rule.
 
+use kevy_resp::CmdError;
 use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error};
 use kevy_store::{
     EntryBatch, Store, StreamId, XClaimOpts, now_unix_ms, parse_explicit_id, parse_range_start,
@@ -24,7 +25,7 @@ pub(super) fn cmd_xclaim<A: ArgvView + ?Sized>(
     };
     let (ids, opts, justid) = match parse_xclaim_tail(args, 5, min_idle) {
         Ok(p) => p,
-        Err(msg) => return encode_error(out, msg),
+        Err(msg) => return encode_error(out, msg.as_wire()),
     };
     let claimed = match store.xclaim(&args[1], &args[2], &args[3], &ids, &opts, now_unix_ms()) {
         Ok(c) => c,
@@ -53,7 +54,7 @@ pub(super) fn cmd_xautoclaim<A: ArgvView + ?Sized>(
     };
     let (count, justid) = match parse_autoclaim_tail(args, 6) {
         Ok(p) => p,
-        Err(msg) => return encode_error(out, msg),
+        Err(msg) => return encode_error(out, msg.as_wire()),
     };
     let (cursor, payloads, deleted) = match store.xautoclaim(
         &args[1],
@@ -75,7 +76,7 @@ fn parse_xclaim_tail<A: ArgvView + ?Sized>(
     args: &A,
     start: usize,
     min_idle: u64,
-) -> Result<(Vec<StreamId>, XClaimOpts, bool), &'static str> {
+) -> Result<(Vec<StreamId>, XClaimOpts, bool), CmdError> {
     let (ids, opt_start) = parse_xclaim_ids(args, start)?;
     let opts = parse_xclaim_opts(args, opt_start, min_idle)?;
     let justid = opts.justid;
@@ -85,7 +86,7 @@ fn parse_xclaim_tail<A: ArgvView + ?Sized>(
 fn parse_xclaim_ids<A: ArgvView + ?Sized>(
     args: &A,
     start: usize,
-) -> Result<(Vec<StreamId>, usize), &'static str> {
+) -> Result<(Vec<StreamId>, usize), CmdError> {
     let mut ids = Vec::new();
     let mut i = start;
     while i < args.len() {
@@ -108,7 +109,7 @@ fn parse_xclaim_opts<A: ArgvView + ?Sized>(
     args: &A,
     start: usize,
     min_idle: u64,
-) -> Result<XClaimOpts, &'static str> {
+) -> Result<XClaimOpts, CmdError> {
     let mut opts = XClaimOpts {
         min_idle_ms: min_idle,
         idle_override_ms: None,
@@ -141,7 +142,7 @@ fn parse_xclaim_opts<A: ArgvView + ?Sized>(
                 opts.justid = true;
                 i += 1;
             }
-            _ => return Err("ERR syntax error"),
+            _ => return Err(CmdError::Wire("ERR syntax error")),
         }
     }
     Ok(opts)
@@ -150,7 +151,7 @@ fn parse_xclaim_opts<A: ArgvView + ?Sized>(
 fn parse_autoclaim_tail<A: ArgvView + ?Sized>(
     args: &A,
     start: usize,
-) -> Result<(usize, bool), &'static str> {
+) -> Result<(usize, bool), CmdError> {
     let mut count: usize = 100;
     let mut justid = false;
     let mut i = start;
@@ -165,18 +166,18 @@ fn parse_autoclaim_tail<A: ArgvView + ?Sized>(
                 justid = true;
                 i += 1;
             }
-            _ => return Err("ERR syntax error"),
+            _ => return Err(CmdError::Wire("ERR syntax error")),
         }
     }
     Ok((count, justid))
 }
 
-pub(super) fn parse_u64(arg: Option<&[u8]>) -> Result<u64, &'static str> {
+pub(super) fn parse_u64(arg: Option<&[u8]>) -> Result<u64, CmdError> {
     let v = arg.ok_or("ERR syntax error")?;
     std::str::from_utf8(v)
         .ok()
         .and_then(|s| s.parse().ok())
-        .ok_or("ERR value is not an integer or out of range")
+        .ok_or(CmdError::Wire("ERR value is not an integer or out of range"))
 }
 
 fn emit_claim_reply(out: &mut Vec<u8>, claimed: &EntryBatch, justid: bool) {

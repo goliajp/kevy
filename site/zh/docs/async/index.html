@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>异步客户端 — kevy</title>
+<meta name="description" content="kevy-client-async 是阻塞版 kevy-client 的异步镜像——接口面和 URL 门面完全相同，只是每个调用都带 .await。">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../zh/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../../zh/docs/" aria-current="page">文档</a>
+      <a href="../../../zh/docs/commands/">命令</a>
+      <a href="../../../zh/benchmarks/">基准</a>
+      <a href="../../../zh/play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../../zh/docs/search-index.json" data-root="../../../zh/">
+        <input type="search" placeholder="搜索文档……" aria-label="搜索文档……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../../docs/async/">EN</a><a href="../../../zh/docs/async/" aria-current="page">中文</a><a href="../../../ja/docs/async/">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell has-toc">
+  <aside class="side"><p class="side-h">上手</p><ul><li><a href="../../../zh/docs/designing-on-kevy/">在 kevy 上设计应用</a></li><li><a href="../../../zh/docs/cookbook/">RDS→kevy 建模 cookbook</a></li><li><a href="../../../zh/docs/persistence/">持久化</a></li><li><a href="../../../zh/docs/tuning/">调优 kevy</a></li></ul><p class="side-h">运行</p><ul><li><a href="../../../zh/docs/replication/">复制</a></li><li><a href="../../../zh/docs/availability/">可用性</a></li><li><a href="../../../zh/docs/cluster/">集群</a></li><li><a href="../../../zh/docs/tiering/">透明分层存储（[tiering] / with_tier_budget）</a></li><li><a href="../../../zh/docs/accept-shards/">--accept-shards N——把稀疏连接收拢到部分 shard 上</a></li><li><a href="../../../zh/docs/uds/">Unix-domain socket（UDS）传输</a></li><li><a href="../../../zh/docs/async/" aria-current="page">异步客户端</a></li></ul><p class="side-h">数据</p><ul><li><a href="../../../zh/docs/indexes/">二级索引（IDX. / idx_）</a></li><li><a href="../../../zh/docs/tables/">表（TABLE. / table_）</a></li><li><a href="../../../zh/docs/vector-search/">向量检索（KIND ann）</a></li><li><a href="../../../zh/docs/text-search/">全文检索（KIND text）</a></li><li><a href="../../../zh/docs/views/">视图（VIEW. / view_）</a></li><li><a href="../../../zh/docs/cdc/">CDC——变更流（FEED. / changes_since）</a></li><li><a href="../../../zh/docs/pubsub/">Pub/sub</a></li><li><a href="../../../zh/docs/lua/">Lua 脚本</a></li></ul><p class="side-h">嵌入</p><ul><li><a href="../../../zh/docs/wasm/">kevy 上 WebAssembly</a></li><li><a href="../../../zh/docs/embedded-listener/">Embedded 只读 RESP listener</a></li><li><a href="../../../zh/docs/iot/">kevy 跑在 IoT 设备上</a></li></ul><p class="side-h">参考</p><ul><li><a href="../../../zh/docs/error-replies/">错误回复目录</a></li><li><a href="../../../zh/docs/rds-workloads/">在 kevy 上跑 RDS 负载</a></li><li><a href="../../../zh/docs/migration/">迁移——playbook 与工具链</a></li><li><a href="../../../zh/docs/UPGRADING/">升级 kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../zh/docs/commands/">全部 188 个命令</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>异步客户端</h1></div>
+<p><code>kevy-client-async</code> 是阻塞版 <a href="https://github.com/goliajp/kevy/tree/develop/crates/kevy-client"><code>kevy-client</code></a> 的异步镜像——接口面和 URL 门面完全相同，只是每个调用都带 <code>.await</code>。</p>
+<h2 id="什么时候需要它">什么时候需要它</h2>
+<p>如果应用本身已经跑在 <code>tokio</code>、<code>smol</code> 或 <code>async-std</code> 运行时上，想要端到端的 <code>await</code> 流，就选异步客户端：不用跳阻塞线程池、不用包一层 <code>spawn_blocking</code>、也不用每个连接开一个线程。反过来，如果代码路径就是普通线程上的请求-响应，阻塞客户端更简单、延迟也更低——同步代码没有理由白付一份异步税。</p>
+<h2 id="核心思路">核心思路</h2>
+<p>通过 Cargo feature（<code>tokio</code>、<code>smol</code> 或 <code>async-std</code>）选定一个且只能选定一个运行时；整个 crate 编译出来就只有那个运行时的 <code>TcpStream</code> 适配器，再无其他。公开接口与阻塞客户端 1:1 对应——<code>AsyncConnection::connect(url).await?</code>、<code>conn.set(k, v).await?</code>、<code>conn.get(k).await?</code>——所以从阻塞版迁移过来，只需把 <code>Connection</code> 换成 <code>AsyncConnection</code>，再给每个调用加一个 <code>.await</code>。延迟敏感时还有 pipeline 构建器，可以把 N 条命令合并成一次 TCP 往返。</p>
+<h2 id="实例">实例</h2>
+<h3 id="tokio">Tokio</h3>
+<figure class="code"><pre><code class="lang-toml">[dependencies]
+kevy-client-async = { version = "1", features = ["tokio"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }</code></pre></figure>
+<figure class="code"><pre><code class="lang-rust">use kevy_client_async::AsyncConnection;
+
+#[tokio::main]
+async fn main() -&gt; std::io::Result&lt;()&gt; {
+    let mut conn = AsyncConnection::connect("tcp://127.0.0.1:6004").await?;
+    conn.set(b"k", b"v").await?;
+    let v = conn.get(b"k").await?;
+    assert_eq!(v.as_deref(), Some(&amp;b"v"[..]));
+    Ok(())
+}</code></pre></figure>
+<h3 id="smol">Smol</h3>
+<p>代码不变，只换运行时 feature。</p>
+<figure class="code"><pre><code class="lang-toml">[dependencies]
+kevy-client-async = { version = "1", features = ["smol"] }
+smol = "2"</code></pre></figure>
+<figure class="code"><pre><code class="lang-rust">use kevy_client_async::AsyncConnection;
+
+fn main() -&gt; std::io::Result&lt;()&gt; {
+    smol::block_on(async {
+        let mut conn = AsyncConnection::connect("tcp://127.0.0.1:6004").await?;
+        conn.set(b"k", b"v").await?;
+        let v = conn.get(b"k").await?;
+        assert_eq!(v.as_deref(), Some(&amp;b"v"[..]));
+        Ok(())
+    })
+}</code></pre></figure>
+<h3 id="pipeline-构建器">Pipeline 构建器</h3>
+<p>整批命令只走一次往返。回复按入队顺序返回；单条命令失败会以 <code>Reply::Error(_)</code> 的形式留在 <code>Vec</code> 里，不会连累整批。</p>
+<figure class="code"><pre><code class="lang-rust">use kevy_client_async::AsyncConnection;
+
+let mut conn = AsyncConnection::connect("tcp://127.0.0.1:6004").await?;
+let replies = conn
+    .pipeline()
+    .set(b"a", b"1")
+    .get(b"a")
+    .incr(b"hits")
+    .run(&amp;mut conn)
+    .await?;
+// replies.len() == 3; one Reply per queued command, in order.</code></pre></figure>
+<h2 id="运行时-feature">运行时 feature</h2>
+<p>下列 feature 必须启用且只能启用一个：一个都不开，或者同时开两个以上，都是编译错误——没有隐式默认值。</p>
+<div class="tbl"><table><thead><tr><th>feature</th><th>传输适配器</th><th>拉入的运行时 crate</th></tr></thead><tbody><tr><td><code>tokio</code></td><td><code>tokio::net::TcpStream</code></td><td><code>tokio</code></td></tr><tr><td><code>smol</code></td><td><code>smol::net::TcpStream</code></td><td><code>smol</code></td></tr><tr><td><code>async-std</code></td><td><code>async_std::net::TcpStream</code></td><td><code>async-std</code></td></tr></tbody></table></div>
+<p>每个运行时 crate 都以 <code>default-features = false</code> 引入，只带适配器需要的最小 surface。它们是 kevy 工作区里仅有的 crates.io 依赖——“纯 Rust、零依赖”原则下特批的唯一例外，因为 Rust 异步生态没有只靠 std 就能用的底座。</p>
+<h2 id="url-后端">URL 后端</h2>
+<p><code>AsyncConnection::connect</code> 接受与阻塞客户端相同的 URL 门面。TCP 形态的 scheme 走运行时的异步 socket；进程内 scheme 则直接拒绝（对它们来说阻塞客户端严格更快，绕道执行器没有意义）。</p>
+<div class="tbl"><table><thead><tr><th>scheme</th><th>目标</th><th>异步客户端支持</th></tr></thead><tbody><tr><td><code>tcp://</code></td><td>kevy 或 Redis 兼容服务器</td><td>是</td></tr><tr><td><code>kevy://</code></td><td>kevy 服务器（<code>tcp://</code> 的别名）</td><td>是</td></tr><tr><td><code>redis://</code></td><td>Redis 或 Redis 兼容服务器</td><td>是</td></tr><tr><td><code>mem://</code></td><td>进程内嵌入式 store</td><td>否——用阻塞客户端</td></tr><tr><td><code>file:///</code></td><td>磁盘上的嵌入式 store</td><td>否——用阻塞客户端</td></tr></tbody></table></div>
+<p>对 <code>AsyncConnection::connect</code> 传 <code>mem://</code> 或 <code>file:///</code> 会返回 <code>ErrorKind::Unsupported</code>。</p>
+<h2 id="取舍">取舍</h2>
+<p>阻塞客户端是默认选择，而且会一直是默认，原因有三：</p>
+<ul><li><b>同步代码路径</b>：如果手上还没有运行时，不必为了客户端专门架一个。<code>kevy-client</code> 纯 Rust、零依赖，每条命令也不用付执行器的调度开销。</li><li><b>嵌入式后端</b>：<code>mem://</code> 和 <code>file:///</code> 是同步的进程内 store。阻塞客户端直接跟它们对话；异步客户端做不到。</li><li><b>单发命令</b>：在普通多线程执行器上，每条命令一次 <code>.await</code>，相比直接 syscall 的开销是可以测出来的。异步的收益出现在并发（多个任务各有 in-flight 命令）或批量（pipeline 合并往返）场景。</li></ul>
+<p>应用本身已是异步时，用异步客户端；有一批相互独立的命令、往返延迟是瓶颈时，用 pipeline 构建器；其余情况留在阻塞客户端。</p>
+<h2 id="faq">FAQ</h2>
+<p><b>为什么必须选定且只能选定一个运行时？</b> 这个 crate 只编译一个 <code>TcpStream</code> 适配器。一个二进制里塞两个适配器，要么每次 IO 都走一层运行时无关的间接调用（开销），要么维护一个没人维护得动的巨型 cfg 矩阵；零适配器则公开类型没有实现。对 feature 数量做编译期检查，能让配置错误在编译期就大声报出来。</p>
+<p><b>同步和异步 kevy 客户端能在一个进程里混用吗？</b> 能。<code>kevy-client</code>（阻塞）和 <code>kevy-client-async</code> 是相互独立的 crate，可以随意共存——比如同一个二进制里，用阻塞客户端对接嵌入式 <code>file:///</code> store，用异步客户端对接网络上的 shard。两者不共享连接。</p>
+<p><b>pub/sub 怎么办？</b> <code>AsyncSubscriber</code> 对应阻塞版的 <code>Subscriber</code>。已订阅的 RESP 连接不能再发普通命令，所以它是独立于 <code>AsyncConnection</code> 的类型。逐消息超时用你所在运行时自己的原语（<code>tokio::time::timeout</code>、<code>async_io::Timer</code> 等），而不是 socket 级读超时。</p>
+<p><b>pipeline 构建器会在发送侧强制缓冲吗？</b> 会——这正是它存在的意义。<code>pipeline().…run(&amp;mut conn).await</code> 把整批命令序列化成一次写入，再按顺序读回 N 条回复。如果需要逐条命令的反压，就直接调 <code>set</code> / <code>get</code>，不要走 pipeline。</p>
+<h2 id="仓库内示例">仓库内示例</h2>
+<ul><li><a href="https://github.com/goliajp/kevy/blob/develop/crates/kevy-client-async/examples/tokio_hello.rs"><code>tokio_hello</code></a>——open、ping、set/get、del。</li><li><a href="https://github.com/goliajp/kevy/blob/develop/crates/kevy-client-async/examples/pipeline.rs"><code>pipeline</code></a>——混合批次一次往返。</li></ul></main>
+  <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#什么时候需要它">什么时候需要它</a></li><li class="l2"><a href="#核心思路">核心思路</a></li><li class="l2"><a href="#实例">实例</a></li><li class="l3"><a href="#tokio">Tokio</a></li><li class="l3"><a href="#smol">Smol</a></li><li class="l3"><a href="#pipeline-构建器">Pipeline 构建器</a></li><li class="l2"><a href="#运行时-feature">运行时 feature</a></li><li class="l2"><a href="#url-后端">URL 后端</a></li><li class="l2"><a href="#取舍">取舍</a></li><li class="l2"><a href="#faq">FAQ</a></li><li class="l2"><a href="#仓库内示例">仓库内示例</a></li></ul></aside>
+</div>
+
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

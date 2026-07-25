@@ -417,7 +417,7 @@ mod tests {
         assert_eq!(a.role(), Role::Replica);
     }
 
-    // ─────────── v3.15 D1 — epoch/votedFor persistence ───────────
+    // ─────────── epoch/votedFor persistence ───────────
 
     #[test]
     fn restart_with_persisted_vote_rejects_same_epoch_offer() {

@@ -16,6 +16,14 @@ pub(crate) enum Value {
     Int(i64),
     /// `true` / `false`.
     Bool(bool),
+    /// `["a", "b"]` — an array of strings.
+    ///
+    /// This is what a TOML list looks like, and it is what anyone who knows
+    /// TOML will type. The comma-separated-string form (`peers = "a,b"`) still
+    /// parses, because configs in the wild use it — but a file that says
+    /// `allow_dialects = ["5.1"]` is no longer a startup error, which is what it
+    /// was while the documentation told people to write exactly that.
+    Arr(Vec<String>),
 }
 
 /// One parsed `(section, key, value)` triple from the TOML source.
@@ -119,22 +127,7 @@ impl Parser {
             Some(s) => return Err(unexpected(s, "expected '='".into())),
             None => return Err(self.eof("expected '='")),
         }
-        let value_span = self
-            .tokens
-            .get(self.pos)
-            .cloned()
-            .ok_or_else(|| self.eof("expected value"))?;
-        let value = match value_span.tok {
-            Token::Str(s) => Value::Str(s),
-            Token::Int(n) => Value::Int(n),
-            Token::Bool(b) => Value::Bool(b),
-            ref other => {
-                return Err(unexpected(
-                    &value_span,
-                    format!("expected value, got {other:?}"),
-                ));
-            }
-        };
+        let value = self.parse_value()?;
         self.pos += 1;
         self.expect_eol("after value")?;
         self.items.push(Item {
@@ -149,6 +142,68 @@ impl Parser {
     /// Expect either a `Newline` or EOF. Anything else (a second token on
     /// the same line) is rejected — we don't support multiple assignments
     /// per line.
+    /// One value token — scalar or array. Leaves `self.pos` ON the value's
+    /// last token (the scalar itself, or the array's `]`); the caller does the
+    /// shared `self.pos += 1`.
+    fn parse_value(&mut self) -> Result<Value, ConfigError> {
+        let value_span = self
+            .tokens
+            .get(self.pos)
+            .cloned()
+            .ok_or_else(|| self.eof("expected value"))?;
+        match value_span.tok {
+            Token::Str(s) => Ok(Value::Str(s)),
+            Token::Int(n) => Ok(Value::Int(n)),
+            Token::Bool(b) => Ok(Value::Bool(b)),
+            Token::LBracket => {
+                self.pos += 1;
+                self.parse_array().map(Value::Arr)
+            }
+            ref other => Err(unexpected(
+                &value_span,
+                format!("expected value, got {other:?}"),
+            )),
+        }
+    }
+
+    /// `[ "a", "b", ]` — entered with `self.pos` just past the `[`, and left on
+    /// the `]`. Newlines inside the brackets are skipped, so the multi-line form
+    /// TOML users write for a long list works too. A trailing comma is allowed,
+    /// as TOML allows it.
+    fn parse_array(&mut self) -> Result<Vec<String>, ConfigError> {
+        let mut out = Vec::new();
+        let mut want_value = true;
+        loop {
+            let Some(sp) = self.tokens.get(self.pos).cloned() else {
+                return Err(self.eof("expected ']' to close the array"));
+            };
+            match sp.tok {
+                Token::Newline => self.pos += 1,
+                Token::RBracket => return Ok(out),
+                Token::Str(ref s) if want_value => {
+                    out.push(s.clone());
+                    want_value = false;
+                    self.pos += 1;
+                }
+                Token::Int(n) if want_value => {
+                    // A list of ports reads more naturally unquoted. The schema
+                    // takes strings, so keep the text and let it coerce.
+                    out.push(n.to_string());
+                    want_value = false;
+                    self.pos += 1;
+                }
+                Token::Comma if !want_value => {
+                    want_value = true;
+                    self.pos += 1;
+                }
+                ref other => {
+                    let what = if want_value { "a value" } else { "',' or ']'" };
+                    return Err(unexpected(&sp, format!("expected {what}, got {other:?}")));
+                }
+            }
+        }
+    }
+
     fn expect_eol(&mut self, ctx: &str) -> Result<(), ConfigError> {
         match self.tokens.get(self.pos) {
             None => Ok(()),
@@ -164,7 +219,7 @@ impl Parser {
     }
 
     /// "Unexpected end of input" anchored at the end-of-input position
-    /// (fuzz finding 2026-07-10: this class used to report 0:0).
+    /// (fuzz-found: this class used to report 0:0).
     fn eof(&self, msg: &str) -> ConfigError {
         ConfigError::Parse {
             line: self.eof_pos.0,
@@ -257,7 +312,7 @@ mod tests {
 
     #[test]
     fn eof_errors_carry_end_position() {
-        // Fuzz finding (2026-07-10): every "unexpected end of input"
+        // Fuzz finding: every "unexpected end of input"
         // error used to report line 0, col 0. Contract: EOF errors
         // point at the end of the input (1-based, just past the last
         // token).
@@ -291,5 +346,55 @@ mod tests {
     fn bare_section_header_is_ok() {
         let items = parse_ok("[empty]\n");
         assert!(items.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod array_tests {
+    use super::*;
+
+    fn vals(src: &str) -> Vec<Value> {
+        parse(src).expect("parses").into_iter().map(|i| i.value).collect()
+    }
+
+    /// The exact line docs/lua.md told people to write. It was a startup error.
+    #[test]
+    fn the_config_the_docs_documented() {
+        let items = parse("[lua]\nallow_dialects = [\"5.1\"]\n").expect("parses");
+        assert_eq!(items[0].value, Value::Arr(vec!["5.1".into()]));
+    }
+
+    #[test]
+    fn multi_line_with_a_trailing_comma() {
+        let v = vals("[cluster]\npeers = [\n  \"1@a:1\",\n  \"2@b:2\",\n]\n");
+        assert_eq!(v[0], Value::Arr(vec!["1@a:1".into(), "2@b:2".into()]));
+    }
+
+    #[test]
+    fn empty_array() {
+        assert_eq!(vals("[lua]\nallow_dialects = []\n")[0], Value::Arr(vec![]));
+    }
+
+    /// Unquoted integers read naturally in a list of ports; the schema coerces.
+    #[test]
+    fn integers_keep_their_text() {
+        assert_eq!(vals("[x]\nk = [1, 2]\n")[0], Value::Arr(vec!["1".into(), "2".into()]));
+    }
+
+    #[test]
+    fn a_missing_comma_is_an_error() {
+        let e = parse("[lua]\nallow_dialects = [\"a\" \"b\"]\n").unwrap_err();
+        assert!(format!("{e}").contains("','"), "{e}");
+    }
+
+    #[test]
+    fn an_unclosed_array_is_an_error() {
+        assert!(parse("[lua]\nallow_dialects = [\"a\",\n").is_err());
+    }
+
+    /// The old form has not been deprecated — configs in the wild use it.
+    #[test]
+    fn the_comma_separated_string_still_parses() {
+        assert_eq!(vals("[lua]\nallow_dialects = \"5.1,5.4\"\n")[0], Value::Str("5.1,5.4".into()));
     }
 }

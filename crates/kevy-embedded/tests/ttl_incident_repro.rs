@@ -1,10 +1,10 @@
-//! Repro for INC-2026-06-09 (mailrs): kevy_embedded set_with_ttl TTL not honored.
+//! Repro for a production incident: kevy_embedded set_with_ttl TTL not honored.
 //! Manual reaper everywhere (no background thread) + lazy reap on get.
 
 use kevy_embedded::{Config, Store};
 use std::time::Duration;
 
-/// T1: in-memory TTL via set_with_ttl honors after sleep past expiry.
+/// In-memory TTL via set_with_ttl honors after sleep past expiry.
 #[test]
 fn t1_ttl_in_memory_expires() {
     let s = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
@@ -14,7 +14,7 @@ fn t1_ttl_in_memory_expires() {
     assert_eq!(s.get(b"k").unwrap(), None, "T1: TTL not honored");
 }
 
-/// T3: TTL survives an AOF restart and STILL expires at the *original* deadline.
+/// TTL survives an AOF restart and STILL expires at the *original* deadline.
 #[test]
 fn t3_ttl_survives_restart_and_still_expires() {
     // Use a per-run unique dir so re-running the test on a CI machine

@@ -12,14 +12,15 @@ the primary chooses one of two flows based on whether the backlog can
 serve from `from_offset`:
 
 - **Resume path** (the happy case): `source.frames_from(from_offset)`
-  returns `Ok(iter)`. Primary replies `+ACK <next_offset>\r\n` and
+  returns `Ok(iter)` and the generations match. Primary replies
+  `+ACK <generation> <next_offset>\r\n` and
   starts streaming wire-frames (`*2\r\n:<offset>\r\n<argv>` — see
   `wire.md`). The replica's `ReplicaClient` decodes each via
   `decode_frame` and applies through the user's dispatcher.
 - **Snapshot path**: `source.frames_from(from_offset)` returns
   `Err(TooOld)` (replica missed the backlog window) OR `from_offset == 0`
   with a non-empty store (fresh replica needs the keyspace). Primary
-  replies `+ACK <ack_offset>\r\n` (still — the ack offset on this
+  replies `+ACK <generation> <ack_offset>\r\n` (still — the ack offset on this
   path equals the snapshot's "as-of" offset, see [Offset semantics]
   below), then a snapshot stream, then live frames.
 
@@ -72,7 +73,7 @@ buffer-and-back-patch).
 `ack_offset` carries through the whole exchange so the replica never
 has to compute it:
 
-- After `+ACK <ack_offset>\r\n`, the replica records `ack_offset` as
+- After `+ACK <generation> <ack_offset>\r\n`, the replica records `ack_offset` as
   `primary_offset_at_handshake` (see `ReplicaClient`).
 - If primary takes the **resume path**, the next frame's offset is
   `ack_offset`. The replica's `expected_offset` was initialised to

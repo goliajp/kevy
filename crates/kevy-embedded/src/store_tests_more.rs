@@ -155,13 +155,13 @@ fn renamenx_succeeds_when_dst_absent() {
     assert_eq!(s.get(b"dst").unwrap(), Some(b"val".to_vec()));
 }
 
-// ---- v2.2: zset algebra facades ------------------------------------------
+// ---- zset algebra facades ------------------------------------------------
 
 #[test]
 fn zset_algebra_store_forms_and_reopen() {
     use crate::ZAggregate;
     use crate::config::AppendFsync;
-    let dir = crate::store::tests::tmp_dir("zalg-reopen");
+    let dir = crate::store::test_suites::tests::tmp_dir("zalg-reopen");
     {
         let s = Store::open(
             Config::default()
@@ -216,7 +216,7 @@ fn zset_algebra_store_forms_and_reopen() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ---- v2.3: CDC feed (changes_since / changes_tail) ------------------------
+// ---- CDC feed (changes_since / changes_tail) ------------------------------
 
 #[test]
 fn feed_consume_loop_and_prefix() {
@@ -267,7 +267,7 @@ fn feed_flushall_bumps_generation() {
 
 #[test]
 fn feed_clean_reopen_continues_crash_bumps() {
-    let dir = crate::store::tests::tmp_dir("feed-reopen");
+    let dir = crate::store::test_suites::tests::tmp_dir("feed-reopen");
     {
         let s = Store::open(
             Config::default().with_persist(&dir).with_ttl_reaper_manual().with_feed(0),
@@ -316,11 +316,11 @@ fn info_prefix_counts() {
     assert_eq!(s.info_prefix(b"none:").keys, 0);
 }
 
-// ---- v2.4: zpopmin_below ---------------------------------------------------
+// ---- zpopmin_below ---------------------------------------------------------
 
 #[test]
 fn zpopmin_below_pops_due_jobs_and_replays() {
-    let dir = crate::store::tests::tmp_dir("zpb-reopen");
+    let dir = crate::store::test_suites::tests::tmp_dir("zpb-reopen");
     {
         let s = Store::open(
             Config::default().with_persist(&dir).with_ttl_reaper_manual(),
@@ -347,7 +347,7 @@ fn zpopmin_below_pops_due_jobs_and_replays() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ---- v2.4: blocking pops ---------------------------------------------------
+// ---- blocking pops ---------------------------------------------------------
 
 #[test]
 fn blpop_wakes_on_push_and_times_out() {
@@ -392,7 +392,7 @@ fn bzpopmin_and_brpop_block_variants() {
     assert_eq!(got, Some((b"br".to_vec(), b"b".to_vec()))); // tail end
 }
 
-// ---- v2.4: public snapshot view --------------------------------------------
+// ---- public snapshot view --------------------------------------------------
 
 #[test]
 fn snapshot_view_is_point_in_time_and_prefix_scoped() {
@@ -429,13 +429,13 @@ fn snapshot_view_is_point_in_time_and_prefix_scoped() {
     assert_eq!(string_count, 10);
 }
 
-// ---- v2.4: hash field TTLs (embedded matrix) --------------------------------
+// ---- hash field TTLs (embedded matrix) --------------------------------------
 
 #[test]
 fn hash_field_ttl_full_matrix_with_reopen() {
     use crate::HExpireCond;
     use crate::config::AppendFsync;
-    let dir = crate::store::tests::tmp_dir("hfttl-reopen");
+    let dir = crate::store::test_suites::tests::tmp_dir("hfttl-reopen");
     let far = kevy_store::now_unix_ms() + 200_000;
     {
         let s = Store::open(
@@ -458,7 +458,7 @@ fn hash_field_ttl_full_matrix_with_reopen() {
         );
         assert!(!s.hexists(b"h", b"soon").unwrap());
         // httl visible
-        let ttls = s.httl(b"h", &[b"ttl", b"keep"]).unwrap();
+        let ttls = s.hpttl(b"h", &[b"ttl", b"keep"]).unwrap();
         assert!(ttls[0] > 100_000);
         assert_eq!(ttls[1], -1);
         // persist round-trip for another field then re-set ttl
@@ -468,7 +468,7 @@ fn hash_field_ttl_full_matrix_with_reopen() {
     // AOF replay: ttl field still carries its deadline, keep does not
     {
         let s2 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
-        let ttls = s2.httl(b"h", &[b"ttl", b"keep"]).unwrap();
+        let ttls = s2.hpttl(b"h", &[b"ttl", b"keep"]).unwrap();
         assert!(ttls[0] > 0, "deadline survived replay: {ttls:?}");
         assert_eq!(ttls[1], -1, "persisted field stays persisted");
         // snapshot path: SAVE then reopen from the dump
@@ -476,19 +476,19 @@ fn hash_field_ttl_full_matrix_with_reopen() {
     }
     {
         let s3 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
-        let ttls = s3.httl(b"h", &[b"ttl"]).unwrap();
+        let ttls = s3.hpttl(b"h", &[b"ttl"]).unwrap();
         assert!(ttls[0] > 0, "deadline survived snapshot round-trip: {ttls:?}");
         drop(s3);
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ---- v2.5: embedded secondary indexes ---------------------------------------
+// ---- embedded secondary indexes ----------------------------------------------
 
 #[test]
 fn idx_create_query_maintain_reopen() {
     use crate::{IndexKind, IndexValue, IndexValType};
-    let dir = crate::store::tests::tmp_dir("idx-reopen");
+    let dir = crate::store::test_suites::tests::tmp_dir("idx-reopen");
     {
         let s = Store::open(
             Config::default().with_persist(&dir).with_ttl_reaper_manual(),
@@ -562,12 +562,12 @@ fn idx_create_query_maintain_reopen() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ---- v2.6: embedded views ---------------------------------------------------
+// ---- embedded views ----------------------------------------------------------
 
 #[test]
 fn view_create_query_maintain_reopen() {
     use crate::{IndexKind, IndexValType, IndexValue, ViewLeaf, ViewMode, ViewTree};
-    let dir = crate::store::tests::tmp_dir("view-reopen");
+    let dir = crate::store::test_suites::tests::tmp_dir("view-reopen");
     let leaf = |idx: &str, lo: i64, hi: i64| {
         ViewTree::Leaf(ViewLeaf {
             index: idx.into(),
@@ -651,6 +651,31 @@ fn text_index_match_embedded() {
     assert!(s.idx_match(b"n_body", b"kevy", 10).unwrap().is_empty());
     // unknown index errors
     assert!(s.idx_match(b"nope", b"x", 10).is_err());
+}
+
+#[test]
+fn text_index_highlight_embedded() {
+    use crate::{IndexKind, IndexValType};
+    let s = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
+    s.hset(b"n:1", &[(b"body", b"the quick brown fox")]).unwrap();
+    s.idx_create(b"hb", b"n:", b"body", IndexValType::Str, IndexKind::Text).unwrap();
+    // No highlight requested → the hit carries no spans.
+    let plain = s.idx_match_with(b"hb", b"quick", 10, crate::MatchOpts::default()).unwrap();
+    assert_eq!(plain.len(), 1);
+    assert!(plain[0].2.is_empty(), "no spans without a highlight request");
+    // Highlight the term: "quick" is bytes 4..9 of field "body".
+    let hl = s.idx_match_with(b"hb", b"quick", 10, crate::MatchOpts { highlight: Some(&[]), ..Default::default() }).unwrap();
+    assert_eq!(hl.len(), 1);
+    assert_eq!(hl[0].0, b"n:1".to_vec());
+    assert_eq!(hl[0].2, vec![(b"body".to_vec(), vec![(4u32, 9u32)])]);
+    // A field filter that names no indexed field yields no spans.
+    let none = s.idx_match_with(
+        b"hb",
+        b"quick",
+        10,
+        crate::MatchOpts { highlight: Some(&[b"title".to_vec()]), ..Default::default() },
+    ).unwrap();
+    assert!(none[0].2.is_empty(), "the 'body' spans are filtered out");
 }
 
 #[test]
@@ -740,4 +765,278 @@ fn agg_index_group_by_embedded() {
     // rejections
     assert!(s.idx_create_agg(b"bad", b"m:", b"val", IndexValType::Str, b"grp").is_err());
     assert!(s.idx_group(b"nope", b"a").is_err());
+}
+
+/// Global-BM25 (step 4b): a document's rank must not depend on which
+/// shard it landed on. Two runs of the same corpus over different shard
+/// counts must produce the same ranking and the same scores, which
+/// shard-local statistics could not guarantee.
+#[test]
+#[cfg(feature = "text")]
+fn text_match_is_shard_count_invariant() {
+    use crate::{Config, IndexKind, IndexValType};
+    let corpus: &[(&str, &str)] = &[
+        ("d:1", "rust systems programming rust"),
+        ("d:2", "kevy is a pure rust key value store"),
+        ("d:3", "the quick brown fox"),
+        ("d:4", "rust memory safety story"),
+        ("d:5", "nothing relevant to the query here at all"),
+        ("d:6", "rust rust rust everywhere in this doc"),
+    ];
+    let ranked = |shards: usize| -> Vec<(Vec<u8>, f64)> {
+        let s = Store::open(Config::default().with_shards(shards).with_ttl_reaper_manual()).unwrap();
+        for (k, body) in corpus {
+            s.hset(k.as_bytes(), &[(b"body", body.as_bytes())]).unwrap();
+        }
+        s.idx_create(b"b", b"d:", b"body", IndexValType::Str, IndexKind::Text).unwrap();
+        s.idx_match(b"b", b"rust", 10).unwrap()
+    };
+    let one = ranked(1);
+    let eight = ranked(8);
+    assert_eq!(one.len(), eight.len(), "same documents match regardless of sharding");
+    for (a, b) in one.iter().zip(&eight) {
+        assert_eq!(a.0, b.0, "same ranking order across shard counts");
+        assert!((a.1 - b.1).abs() < 1e-9, "same score for {:?}: {} vs {}", a.0, a.1, b.1);
+    }
+    // And the ranking is a real BM25: d:1 tops, not d:6. d:1
+    // ("rust systems programming rust", tf=2, 4 tokens) beats d:6
+    // ("rust rust rust everywhere in this doc", tf=3, 7 tokens) because
+    // BM25 normalises by document length — the shorter doc's higher term
+    // density wins over the longer doc's raw count. (d:5 has no "rust" at
+    // all and must be absent.)
+    assert_eq!(eight[0].0, b"d:1".to_vec());
+    assert!(!eight.iter().any(|(k, _)| k == b"d:5"));
+}
+
+/// `IN <field…>` scores within the named fields — a field-scoped BM25,
+/// not a filter over whole-document scores — and refuses a field the
+/// index does not declare rather than returning a plausible empty result.
+#[test]
+fn text_index_field_scope_embedded() {
+    let s = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
+    s.hset(b"n:1", &[(b"title", b"rust engine"), (b"body", b"a long body about gardening")])
+        .unwrap();
+    s.hset(
+        b"n:2",
+        &[(b"title", b"gardening weekly"), (b"body", b"this body mentions rust once or twice")],
+    )
+    .unwrap();
+    s.idx_create_text(b"ft", b"n:", &[(b"title", 1.0), (b"body", 1.0)], true, &[]).unwrap();
+
+    fn scope(f: &[Vec<u8>]) -> crate::MatchOpts<'_> {
+        crate::MatchOpts { scope: f, ..Default::default() }
+    }
+    let one = |f: &str| vec![f.as_bytes().to_vec()];
+    // Unscoped, both documents mention rust.
+    assert_eq!(s.idx_match(b"ft", b"rust", 10).unwrap().len(), 2);
+    // Scoped, each field has exactly one.
+    let title = s.idx_match_with(b"ft", b"rust", 10, scope(&one("title"))).unwrap();
+    assert_eq!(title.len(), 1);
+    assert_eq!(title[0].0, b"n:1".to_vec());
+    let body = s.idx_match_with(b"ft", b"rust", 10, scope(&one("body"))).unwrap();
+    assert_eq!(body.len(), 1);
+    assert_eq!(body[0].0, b"n:2".to_vec());
+
+    // Naming both fields is the unscoped query again.
+    let both = vec![b"title".to_vec(), b"body".to_vec()];
+    let all = s
+        .idx_match_with(b"ft", b"rust", 10, crate::MatchOpts { scope: &both, ..Default::default() })
+        .unwrap();
+    assert_eq!(all.len(), 2);
+
+    // A field the index does not declare is an error naming what it does.
+    let err = s
+        .idx_match_with(b"ft", b"rust", 10, scope(&one("titel")))
+        .expect_err("an undeclared field must not look like an empty corpus");
+    let msg = format!("{err}");
+    assert!(msg.contains("titel"), "names the offending field: {msg}");
+    assert!(msg.contains("title") && msg.contains("body"), "lists the declared ones: {msg}");
+}
+
+
+///  in-process matches the wire: predicates decide eligibility,
+/// not score, and they reach documents ranked below the unfiltered
+/// leaders. Typed by the declaration, so a numeric range compares as a
+/// number.
+#[test]
+fn text_index_filter_embedded() {
+    use crate::IndexValType;
+    let s = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
+    for i in 0..10u32 {
+        let body = format!("rust {}", "rust ".repeat((10 - i) as usize));
+        let price = format!("{}", (10 - i) * 10);
+        s.hset(
+            format!("p:{i}").as_bytes(),
+            &[(b"body" as &[u8], body.as_bytes()), (b"price", price.as_bytes())],
+        )
+        .unwrap();
+    }
+    s.idx_create_text(b"pf", b"p:", &[(b"body", 1.0)], false, &[(b"price", IndexValType::I64)])
+        .unwrap();
+
+    // Unfiltered, the priciest rank first.
+    let plain = s.idx_match(b"pf", b"rust", 3).unwrap();
+    assert_eq!(plain[0].0, b"p:0".to_vec());
+
+    // Filtered to the cheap half, the page fills from further down.
+    let cheap = [crate::ValueFilter::Range { field: b"price", min: b"10", max: b"50" }];
+    let hits = s
+        .idx_match_with(b"pf", b"rust", 3, crate::MatchOpts { filters: &cheap, ..Default::default() })
+        .unwrap();
+    assert_eq!(hits.len(), 3, "not an empty page");
+    assert!(hits.iter().all(|h| h.0 != b"p:0".to_vec()), "the leader is filtered out");
+
+    // Numeric, not lexicographic: 10..20 is two documents.
+    let narrow = [crate::ValueFilter::Range { field: b"price", min: b"10", max: b"20" }];
+    let hits = s
+        .idx_match_with(b"pf", b"rust", 10, crate::MatchOpts { filters: &narrow, ..Default::default() })
+        .unwrap();
+    assert_eq!(hits.len(), 2, "9 must not sort above 10");
+
+    // An unstored field and a bad bound both error rather than paging empty.
+    let unstored = [crate::ValueFilter::Eq { field: b"colour", value: b"red" }];
+    let e = s
+        .idx_match_with(b"pf", b"rust", 10, crate::MatchOpts { filters: &unstored, ..Default::default() })
+        .expect_err("unstored field");
+    assert!(format!("{e}").contains("price"), "names what it does store: {e}");
+    let badbound = [crate::ValueFilter::Range { field: b"price", min: b"cheap", max: b"50" }];
+    let e = s
+        .idx_match_with(b"pf", b"rust", 10, crate::MatchOpts { filters: &badbound, ..Default::default() })
+        .expect_err("bad bound");
+    assert!(format!("{e}").contains("i64"), "names the declared type: {e}");
+}
+
+
+/// SORT in-process matches the wire: the page is selected BY the key, so
+/// it holds documents the score would never have reached, and unknowns
+/// land last in both directions.
+#[test]
+fn text_index_sort_embedded() {
+    use crate::IndexValType;
+    let s = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
+    for i in 0..10u32 {
+        let body = format!("rust {}", "rust ".repeat((10 - i) as usize));
+        let price = format!("{}", (10 - i) * 10);
+        s.hset(
+            format!("s:{i}").as_bytes(),
+            &[(b"body" as &[u8], body.as_bytes()), (b"price", price.as_bytes())],
+        )
+        .unwrap();
+    }
+    s.hset(b"s:x", &[(b"body" as &[u8], b"rust" as &[u8])]).unwrap();
+    s.idx_create_text(b"sf", b"s:", &[(b"body", 1.0)], false, &[(b"price", IndexValType::I64)])
+        .unwrap();
+
+    let opts = |desc| crate::MatchOpts { sort: Some((b"price" as &[u8], desc)), ..Default::default() };
+    let asc: Vec<Vec<u8>> =
+        s.idx_match_with(b"sf", b"rust", 3, opts(false)).unwrap().into_iter().map(|h| h.0).collect();
+    assert_eq!(asc, vec![b"s:9".to_vec(), b"s:8".to_vec(), b"s:7".to_vec()], "cheapest, numerically");
+    let desc: Vec<Vec<u8>> =
+        s.idx_match_with(b"sf", b"rust", 3, opts(true)).unwrap().into_iter().map(|h| h.0).collect();
+    assert_eq!(desc, vec![b"s:0".to_vec(), b"s:1".to_vec(), b"s:2".to_vec()], "priciest");
+
+    for d in [false, true] {
+        let all: Vec<Vec<u8>> =
+            s.idx_match_with(b"sf", b"rust", 11, opts(d)).unwrap().into_iter().map(|h| h.0).collect();
+        assert_eq!(all.last(), Some(&b"s:x".to_vec()), "the priceless row is last (desc={d})");
+    }
+
+    let e = s
+        .idx_match_with(b"sf", b"rust", 3, crate::MatchOpts { sort: Some((b"colour", false)), ..Default::default() })
+        .expect_err("unstored sort field");
+    assert!(format!("{e}").contains("price"), "names what it stores: {e}");
+}
+
+
+/// DISTINCT in-process matches the wire: one hit per value, each its
+/// group's best, and the page is still filled.
+#[test]
+fn text_index_distinct_embedded() {
+    use crate::IndexValType;
+    let s = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
+    for (k, reps, price) in [
+        ("a1", 9, "10"), ("a2", 8, "10"),
+        ("b1", 7, "20"), ("b2", 6, "20"),
+        ("c1", 5, "30"), ("c2", 4, "30"),
+    ] {
+        let body = format!("rust {}", "rust ".repeat(reps));
+        s.hset(
+            format!("g:{k}").as_bytes(),
+            &[(b"body" as &[u8], body.as_bytes()), (b"price", price.as_bytes())],
+        )
+        .unwrap();
+    }
+    s.idx_create_text(b"gf", b"g:", &[(b"body", 1.0)], false, &[(b"price", IndexValType::I64)])
+        .unwrap();
+
+    let plain: Vec<Vec<u8>> =
+        s.idx_match(b"gf", b"rust", 3).unwrap().into_iter().map(|h| h.0).collect();
+    assert_eq!(plain, vec![b"g:a1".to_vec(), b"g:a2".to_vec(), b"g:b1".to_vec()]);
+
+    let opts = crate::MatchOpts { distinct: Some(b"price"), ..Default::default() };
+    let d: Vec<Vec<u8>> =
+        s.idx_match_with(b"gf", b"rust", 3, opts).unwrap().into_iter().map(|h| h.0).collect();
+    assert_eq!(
+        d,
+        vec![b"g:a1".to_vec(), b"g:b1".to_vec(), b"g:c1".to_vec()],
+        "one per price, each its group best, page still full"
+    );
+
+    let e = s
+        .idx_match_with(b"gf", b"rust", 3, crate::MatchOpts { distinct: Some(b"colour"), ..Default::default() })
+        .expect_err("unstored distinct field");
+    assert!(format!("{e}").contains("price"), "names what it stores: {e}");
+}
+
+
+/// FACET in-process matches the wire: counts come from the match set, so
+/// a LIMIT-1 page still reports every bucket.
+#[test]
+fn text_index_facet_embedded() {
+    use crate::IndexValType;
+    let s = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
+    for (k, reps, price) in [
+        ("a1", 9, "10"), ("a2", 8, "10"),
+        ("b1", 7, "20"), ("b2", 6, "20"),
+        ("c1", 5, "30"), ("c2", 4, "30"),
+    ] {
+        let body = format!("rust {}", "rust ".repeat(reps));
+        s.hset(
+            format!("f2:{k}").as_bytes(),
+            &[(b"body" as &[u8], body.as_bytes()), (b"price", price.as_bytes())],
+        )
+        .unwrap();
+    }
+    s.idx_create_text(b"ff", b"f2:", &[(b"body", 1.0)], false, &[(b"price", IndexValType::I64)])
+        .unwrap();
+
+    let names = vec![b"price".to_vec()];
+    let page = s
+        .idx_match_faceted(b"ff", b"rust", 1, crate::MatchOpts { facets: &names, ..Default::default() })
+        .unwrap();
+    assert_eq!(page.hits.len(), 1, "the page is one document");
+    let mut got: Vec<(Vec<u8>, u64)> = page.facets[0].clone();
+    got.sort();
+    assert_eq!(
+        got,
+        vec![(b"10".to_vec(), 2), (b"20".to_vec(), 2), (b"30".to_vec(), 2)],
+        "every match counted, not just the page"
+    );
+
+    // DISTINCT shrinks the page but not the counts.
+    let page = s
+        .idx_match_faceted(
+            b"ff",
+            b"rust",
+            10,
+            crate::MatchOpts { facets: &names, distinct: Some(b"price"), ..Default::default() },
+        )
+        .unwrap();
+    assert_eq!(page.hits.len(), 3);
+    assert_eq!(page.facets[0].iter().map(|(_, n)| n).sum::<u64>(), 6);
+
+    let e = s
+        .idx_match_faceted(b"ff", b"rust", 3, crate::MatchOpts { facets: &[b"colour".to_vec()], ..Default::default() })
+        .expect_err("unstored facet field");
+    assert!(format!("{e}").contains("price"), "names what it stores: {e}");
 }

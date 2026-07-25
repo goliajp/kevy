@@ -1,15 +1,14 @@
 //! kevy-scope — scoped multi-writer ownership table.
 //!
-//! Phase 3 of the v3-cluster RFC: a key prefix (`app:billing:`) is
+//! A key prefix (`app:billing:`) is
 //! declared to belong to one writer node; writes landing on any
 //! other node answer `-MISDIRECTED writer is <host:port>`. This crate
-//! is the pure-data "stone" layer — config-driven ownership table,
+//! is the pure-data layer — config-driven ownership table,
 //! longest-prefix routing, MOVE-SCOPE quiesce-window state machine —
-//! without any I/O. The kevy server's cement layer plugs it in.
+//! without any I/O. The kevy server plugs it in.
 //!
-//! See `.claude/rfcs/2026-06-18-v3-cluster.md` `## Q3 resolution`
-//! for the locked design (MOVE-SCOPE = option (a) quiesce-window;
-//! no write-shadowing, no 2PC, no per-key MIGRATE/ASK).
+//! Design: MOVE-SCOPE is a quiesce-window handoff —
+//! no write-shadowing, no 2PC, no per-key MIGRATE/ASK.
 //!
 //! Anti-scope (don't add):
 //! - Cross-scope transactions (a single MULTI/EXEC may not touch keys

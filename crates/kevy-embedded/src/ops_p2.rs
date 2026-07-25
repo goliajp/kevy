@@ -5,23 +5,19 @@
 //! `kevy_store::Store` method, with `commit_write` AOF logging on the
 //! write paths.
 
-use std::io;
+use crate::KevyResult;
 
 use kevy_store::ScoreBound;
 
-#[cfg(not(target_arch = "wasm32"))]
-use crate::replica_glue::ensure_writable;
+use crate::store::ensure_writable;
 use crate::store::{Store, commit_write, store_err};
-
-#[cfg(target_arch = "wasm32")]
-fn ensure_writable(_s: &Store) -> io::Result<()> { Ok(()) }
 
 impl Store {
     // ---- hash mass-getters --------------------------------------------
 
     /// `HGETALL key` — every `(field, value)` pair in `key`'s hash, in
     /// arbitrary order. Empty when `key` is absent. Errors on wrong type.
-    pub fn hgetall(&self, key: &[u8]) -> io::Result<Vec<(Vec<u8>, Vec<u8>)>> {
+    pub fn hgetall(&self, key: &[u8]) -> KevyResult<Vec<(Vec<u8>, Vec<u8>)>> {
         let flat = self.wshard(key).store.hgetall(key).map_err(store_err)?;
         // kevy-store returns [f0, v0, f1, v1, ...] — pair them up.
         let mut out = Vec::with_capacity(flat.len() / 2);
@@ -33,35 +29,34 @@ impl Store {
     }
 
     /// `HEXISTS key field` — `true` when `field` is present.
-    pub fn hexists(&self, key: &[u8], field: &[u8]) -> io::Result<bool> {
+    pub fn hexists(&self, key: &[u8], field: &[u8]) -> KevyResult<bool> {
         self.wshard(key).store.hexists(key, field).map_err(store_err)
     }
 
     /// `HLEN key` — number of fields; 0 when absent.
-    pub fn hlen(&self, key: &[u8]) -> io::Result<usize> {
+    pub fn hlen(&self, key: &[u8]) -> KevyResult<usize> {
         self.wshard(key).store.hlen(key).map_err(store_err)
     }
 
     /// `HKEYS key` — every field name in `key`'s hash.
-    pub fn hkeys(&self, key: &[u8]) -> io::Result<Vec<Vec<u8>>> {
+    pub fn hkeys(&self, key: &[u8]) -> KevyResult<Vec<Vec<u8>>> {
         self.wshard(key).store.hkeys(key).map_err(store_err)
     }
 
     /// `HVALS key` — every value in `key`'s hash.
-    pub fn hvals(&self, key: &[u8]) -> io::Result<Vec<Vec<u8>>> {
+    pub fn hvals(&self, key: &[u8]) -> KevyResult<Vec<Vec<u8>>> {
         self.wshard(key).store.hvals(key).map_err(store_err)
     }
 
     /// `HMGET key field [field ...]` — read multiple fields in one
     /// call. `None` per requested field that is absent.
-    pub fn hmget(&self, key: &[u8], fields: &[&[u8]]) -> io::Result<Vec<Option<Vec<u8>>>> {
-        let owned: Vec<Vec<u8>> = fields.iter().map(|f| f.to_vec()).collect();
-        self.wshard(key).store.hmget(key, &owned).map_err(store_err)
+    pub fn hmget(&self, key: &[u8], fields: &[&[u8]]) -> KevyResult<Vec<Option<Vec<u8>>>> {
+        self.wshard(key).store.hmget(key, fields).map_err(store_err)
     }
 
     /// `HINCRBY key field delta` — atomic integer increment of a hash
     /// field. Returns the post-increment value.
-    pub fn hincrby(&self, key: &[u8], field: &[u8], delta: i64) -> io::Result<i64> {
+    pub fn hincrby(&self, key: &[u8], field: &[u8], delta: i64) -> KevyResult<i64> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let new_val = g.store.hincrby(key, field, delta).map_err(store_err)?;
@@ -76,7 +71,7 @@ impl Store {
     /// order between rank `start..=stop` (Redis-style inclusive
     /// indexing; negatives count from the tail). Returns `(member,
     /// score)` pairs.
-    pub fn zrange(&self, key: &[u8], start: i64, stop: i64) -> io::Result<Vec<(Vec<u8>, f64)>> {
+    pub fn zrange(&self, key: &[u8], start: i64, stop: i64) -> KevyResult<Vec<(Vec<u8>, f64)>> {
         self.wshard(key).store.zrange(key, start, stop).map_err(store_err)
     }
 
@@ -88,7 +83,7 @@ impl Store {
         key: &[u8],
         start: i64,
         stop: i64,
-    ) -> io::Result<Vec<(Vec<u8>, f64)>> {
+    ) -> KevyResult<Vec<(Vec<u8>, f64)>> {
         let mut all = self
             .wshard(key)
             .store
@@ -121,7 +116,7 @@ impl Store {
         key: &[u8],
         min: f64,
         max: f64,
-    ) -> io::Result<Vec<(Vec<u8>, f64)>> {
+    ) -> KevyResult<Vec<(Vec<u8>, f64)>> {
         self.wshard(key)
             .store
             .zrange_by_score(
@@ -140,7 +135,7 @@ impl Store {
         key: &[u8],
         min: ScoreBound,
         max: ScoreBound,
-    ) -> io::Result<Vec<(Vec<u8>, f64)>> {
+    ) -> KevyResult<Vec<(Vec<u8>, f64)>> {
         self.wshard(key)
             .store
             .zrange_by_score(key, min, max)
@@ -148,7 +143,7 @@ impl Store {
     }
 
     /// `ZRANGEBYSCORE key min max LIMIT offset count` — score-range
-    /// read with pagination (v2.2; closes the embedded LIMIT gap —
+    /// read with pagination (closes the embedded LIMIT gap —
     /// the server parser always had it).
     pub fn zrange_by_score_limit(
         &self,
@@ -157,7 +152,7 @@ impl Store {
         max: f64,
         offset: usize,
         count: usize,
-    ) -> io::Result<Vec<(Vec<u8>, f64)>> {
+    ) -> KevyResult<Vec<(Vec<u8>, f64)>> {
         let all = self.zrange_by_score(key, min, max)?;
         Ok(all.into_iter().skip(offset).take(count).collect())
     }
@@ -171,13 +166,13 @@ impl Store {
         min: f64,
         offset: usize,
         count: usize,
-    ) -> io::Result<Vec<(Vec<u8>, f64)>> {
+    ) -> KevyResult<Vec<(Vec<u8>, f64)>> {
         let mut all = self.zrange_by_score(key, min, max)?;
         all.reverse();
         Ok(all.into_iter().skip(offset).take(count).collect())
     }
 
-    /// v2.4 `zpopmin_below` — pop up to `count` lowest members with
+    /// `zpopmin_below` — pop up to `count` lowest members with
     /// score strictly `< below` (delayed-job "pop what's due").
     /// AOF logs the effect (`ZREM` of the popped members).
     pub fn zpopmin_below(
@@ -185,7 +180,7 @@ impl Store {
         key: &[u8],
         below: f64,
         count: usize,
-    ) -> io::Result<Vec<(Vec<u8>, f64)>> {
+    ) -> KevyResult<Vec<(Vec<u8>, f64)>> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let items = g.store.zpopmin_below(key, below, count).map_err(store_err)?;
@@ -201,7 +196,7 @@ impl Store {
 
     /// `ZINCRBY key delta member` — atomic float increment of a member's
     /// score. Returns the post-increment score.
-    pub fn zincrby(&self, key: &[u8], delta: f64, member: &[u8]) -> io::Result<f64> {
+    pub fn zincrby(&self, key: &[u8], delta: f64, member: &[u8]) -> KevyResult<f64> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let new_score = g.store.zincrby(key, delta, member).map_err(store_err)?;
@@ -214,19 +209,19 @@ impl Store {
 
     /// `LRANGE key start stop` — list slice. Negative indices count
     /// from the tail. Empty when absent.
-    pub fn lrange(&self, key: &[u8], start: i64, stop: i64) -> io::Result<Vec<Vec<u8>>> {
+    pub fn lrange(&self, key: &[u8], start: i64, stop: i64) -> KevyResult<Vec<Vec<u8>>> {
         self.wshard(key).store.lrange(key, start, stop).map_err(store_err)
     }
 
     /// `LINDEX key idx` — element at index `idx`; `None` out of range.
-    pub fn lindex(&self, key: &[u8], idx: i64) -> io::Result<Option<Vec<u8>>> {
+    pub fn lindex(&self, key: &[u8], idx: i64) -> KevyResult<Option<Vec<u8>>> {
         self.wshard(key).store.lindex(key, idx).map_err(store_err)
     }
 
     /// `LREM key count value` — remove up to `|count|` occurrences of
     /// `value`. `count > 0` from head, `count < 0` from tail,
     /// `count == 0` all. Returns the count actually removed.
-    pub fn lrem(&self, key: &[u8], count: i64, value: &[u8]) -> io::Result<usize> {
+    pub fn lrem(&self, key: &[u8], count: i64, value: &[u8]) -> KevyResult<usize> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let removed = g.store.lrem(key, count, value).map_err(store_err)?;
@@ -241,7 +236,7 @@ impl Store {
 
     /// `GETSET key new` — set `key` to `new`, return the previous
     /// value (or `None` when `key` was absent).
-    pub fn getset(&self, key: &[u8], new: &[u8]) -> io::Result<Option<Vec<u8>>> {
+    pub fn getset(&self, key: &[u8], new: &[u8]) -> KevyResult<Option<Vec<u8>>> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let prev = g.store.getset(key, new.to_vec()).map_err(store_err)?;
@@ -251,7 +246,7 @@ impl Store {
 
     /// `GETDEL key` — delete `key`, return the previous value
     /// (`None` when `key` was absent).
-    pub fn getdel(&self, key: &[u8]) -> io::Result<Option<Vec<u8>>> {
+    pub fn getdel(&self, key: &[u8]) -> KevyResult<Option<Vec<u8>>> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let prev = g.store.getdel(key).map_err(store_err)?;

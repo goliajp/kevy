@@ -13,10 +13,10 @@ URL string.
 ```rust
 use kevy_client::Connection;
 
-let mut conn = Connection::open("tcp://127.0.0.1:6379")?;
+let mut conn = Connection::connect("tcp://127.0.0.1:6379")?;
 conn.set(b"hello", b"world")?;
 assert_eq!(conn.get(b"hello")?, Some(b"world".to_vec()));
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 ## Install
@@ -47,7 +47,7 @@ sidecar and an authentication proxy if you need them.
 ```rust
 use kevy_client::Connection;
 
-fn cache_smoke(c: &mut Connection) -> std::io::Result<()> {
+fn cache_smoke(c: &mut Connection) -> kevy_client::KevyResult<()> {
     c.set(b"hot", b"cached")?;
     assert_eq!(c.get(b"hot")?, Some(b"cached".to_vec()));
     Ok(())
@@ -55,8 +55,8 @@ fn cache_smoke(c: &mut Connection) -> std::io::Result<()> {
 
 let url = std::env::var("KEVY_URL")
     .unwrap_or_else(|_| "mem://app".into());
-cache_smoke(&mut Connection::open(&url)?)?;
-# Ok::<(), std::io::Error>(())
+cache_smoke(&mut Connection::connect(&url)?)?;
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 Set `KEVY_URL=mem://app` for dev, `KEVY_URL=kevy://prod:6379` for
@@ -67,8 +67,8 @@ production. No code change.
 ```rust
 use kevy_client::Connection;
 
-# fn run() -> std::io::Result<()> {
-let mut conn = Connection::open("tcp://127.0.0.1:6379")?;
+# fn run() -> kevy_client::KevyResult<()> {
+let mut conn = Connection::connect("tcp://127.0.0.1:6379")?;
 
 let mut txn = conn.multi()?;
 txn.set(b"a", b"1")?
@@ -88,8 +88,8 @@ For optimistic concurrency, watch a key before the transaction:
 ```rust
 use kevy_client::Connection;
 
-# fn run() -> std::io::Result<()> {
-let mut conn = Connection::open("tcp://127.0.0.1:6379")?;
+# fn run() -> kevy_client::KevyResult<()> {
+let mut conn = Connection::connect("tcp://127.0.0.1:6379")?;
 
 conn.watch(&[&b"counter"[..]])?;
 let mut txn = conn.multi()?;
@@ -111,12 +111,12 @@ Transactions on the in-process backends return `ErrorKind::Unsupported`
 ```rust
 use kevy_client::{Connection, Subscriber, PubsubEvent};
 
-# fn run() -> std::io::Result<()> {
+# fn run() -> kevy_client::KevyResult<()> {
 let url = std::env::var("KEVY_URL")
     .unwrap_or_else(|_| "mem://news".into());
 
-let mut sub = Subscriber::open(&url, &[&b"updates"[..]])?;
-let mut pubconn = Connection::open(&url)?;
+let mut sub = Subscriber::connect_channels(&url, &[&b"updates"[..]])?;
+let mut pubconn = Connection::connect(&url)?;
 
 let _ack = sub.recv()?;                       // drain the SUBSCRIBE ack
 pubconn.publish(b"updates", b"hello")?;
@@ -140,7 +140,7 @@ directly. Both iterators terminate on `UnexpectedEof`; transient
 errors surface as `Some(Err(_))` so callers decide whether to keep
 going.
 
-Anonymous `mem://` (no name) is rejected by `Subscriber::open` —
+Anonymous `mem://` (no name) is rejected by `Subscriber::connect_channels` —
 no other producer can reach it. Use `mem://<some-name>` for a shared
 bus.
 
@@ -157,7 +157,7 @@ let mut cc = ClusterClient::connect("127.0.0.1", 6380)?;  // any shard port as s
 cc.set(b"user:42", b"alice")?;                             // routed by CRC16
 let v = cc.get(b"user:42")?;
 let removed = cc.del(&[&b"a"[..], &b"b"[..], &b"c"[..]])?; // multi-key may span shards
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 Full cluster-mode guide: [`docs/cluster.md`](https://github.com/goliajp/kevy/blob/develop/docs/cluster.md).
@@ -167,7 +167,7 @@ Full cluster-mode guide: [`docs/cluster.md`](https://github.com/goliajp/kevy/blo
 ```rust
 use kevy_client::Connection;
 
-# fn handle(conn: &mut Connection) -> std::io::Result<()> {
+# fn handle(conn: &mut Connection) -> kevy_client::KevyResult<()> {
 match conn {
     Connection::Embedded(s) => {
         // call any kevy_embedded::Store method
@@ -180,7 +180,7 @@ match conn {
 # }
 ```
 
-## Wrap coverage matrix (kevy server 3.17 × kevy-client 1.14)
+## Wrap coverage matrix (kevy server 4.x × kevy-client 2.0.0)
 
 Status legend — **wrapped**: typed `Connection` methods; **partial**:
 the listed subset is wrapped, the rest is raw-only; **raw-only**: no
@@ -202,17 +202,17 @@ of scope for this client.
 | script (EVAL/EVALSHA…) | raw-only | |
 | string (SET/GET/INCR/MSET/bitmaps…) | partial | `set`/`set_with_ttl`/`get`/`incr`/`incr_by`/`mget`/`mset`; APPEND/GETRANGE/SETNX/bitmaps raw-only |
 | hash (HSET/HGET/HGETALL…) | partial | `hset`/`hget`/`hdel`/`hlen`/`hgetall`/`hkeys`/`hvals`; HINCRBY/HSETNX/HSCAN… raw-only |
-| hash field-TTL (HEXPIRE/HPEXPIRE/HPERSIST/HTTL) | wrapped | v1.14: per-field codes in request order; `HPEXPIREAT` raw-only |
+| hash field-TTL (HEXPIRE/HPEXPIRE/HPERSIST/HTTL) | wrapped | v2.0.0: per-field codes in request order; `HPEXPIREAT` raw-only |
 | list (LPUSH/LRANGE/LREM…) | partial | `lpush`/`rpush`/`lpop`/`rpop`/`llen`/`lrange`; LINSERT/LSET/LTRIM… raw-only |
-| blocking (BLPOP/BRPOP/BZPOPMIN/BRPOPLPUSH) | partial | v1.14: `blpop`/`brpop`/`bzpopmin` (both backends really block); `BRPOPLPUSH` raw-only |
+| blocking (BLPOP/BRPOP/BZPOPMIN/BRPOPLPUSH) | partial | v2.0.0: `blpop`/`brpop`/`bzpopmin` (both backends really block); `BRPOPLPUSH` raw-only |
 | set (SADD/SMEMBERS/SINTER…) | partial | `sadd`/`srem`/`smembers`/`scard`/`sismember`/`sinter`/`sunion`/`sdiff`; SPOP/SRANDMEMBER/S\*STORE raw-only |
 | zset (ZADD/ZRANGE/ZSCORE…) | partial | `zadd`/`zrem`/`zscore`/`zcard`/`zrange`; ZCOUNT/ZRANK/ZINCRBY/ZSCAN… raw-only |
-| zset algebra (Z\*STORE/ZINTERCARD) | partial | v1.14: `zinterstore`/`zunionstore` (+`_with` WEIGHTS/AGGREGATE)/`zintercard`; `ZDIFFSTORE` raw-only |
+| zset algebra (Z\*STORE/ZINTERCARD) | partial | v2.0.0: `zinterstore`/`zunionstore` (+`_with` WEIGHTS/AGGREGATE)/`zintercard`; `ZDIFFSTORE` raw-only |
 | stream (XADD/XREAD/XREADGROUP…) | raw-only | |
 | geo (GEOADD/GEOSEARCH…) | raw-only | |
-| index (IDX.CREATE/QUERY/DROP/LIST…) | partial | v1.14, remote-only: `idx_create_range`/`idx_create_raw`, `idx_query_range`/`_eq`/`_match`/`_knn`/`_raw`, `idx_drop`, `idx_list`; COUNT/VERIFY/EXPLAIN/REBUILD via `idx_query_raw`-style passthrough |
+| index (IDX.CREATE/QUERY/DROP/LIST…) | partial | v2.0.0, remote-only: `idx_create_range`/`idx_create_raw`, `idx_query_range`/`_eq`/`_match`/`_knn`/`_raw`, `idx_drop`, `idx_list`; COUNT/VERIFY/EXPLAIN/REBUILD via `idx_query_raw`-style passthrough |
 | view (VIEW.*) | raw-only | |
-| feed / CDC (FEED.SHARDS/TAIL/READ) | wrapped | v1.14: `feed_shards`/`feed_tail`/`feed_read` — the network face of embedded `changes_since`; same `FEEDRESYNC` error text on both backends |
+| feed / CDC (FEED.SHARDS/TAIL/READ) | wrapped | v2.0.0: `feed_shards`/`feed_tail`/`feed_read` — the network face of embedded `changes_since`; same `FEEDRESYNC` error text on both backends |
 | migration (RESTORE/MIGRATE…) | raw-only | |
 | cluster (CLUSTER SLOTS routing) | wrapped | `ClusterClient` (separate type, CRC16 slot routing) |
 
@@ -239,30 +239,30 @@ remote-only rows (tx, pipeline, index); for those it answers
 
 **Multi-key**: `mget`, `mset`, `sinter`, `sunion`, `sdiff`.
 
-**Blocking pops** (v1.14): `blpop`, `brpop`, `bzpopmin` — real
+**Blocking pops** (v2.0.0): `blpop`, `brpop`, `bzpopmin` — real
 blocking on both backends; `timeout: Option<Duration>` (`None` =
 forever; the remote socket has no read timeout, so a blocking pop
 never races a client-side deadline).
 
-**Hash field-TTL** (v1.14): `hexpire`, `hpexpire`, `hpersist`,
+**Hash field-TTL** (v2.0.0): `hexpire`, `hpexpire`, `hpersist`,
 `httl` — per-field result codes (`HExpireCode`) in request order,
 with the `NX|XX|GT|LT` condition as `HExpireCond`.
 
-**Zset algebra** (v1.14): `zinterstore`, `zunionstore` (plus `_with`
+**Zset algebra** (v2.0.0): `zinterstore`, `zunionstore` (plus `_with`
 variants exposing `WEIGHTS` + `AGGREGATE SUM|MIN|MAX`), `zintercard`
 with optional `LIMIT`.
 
-**Declarative indexes** (v1.14, remote-only): `idx_create_range`,
+**Declarative indexes** (v2.0.0, remote-only): `idx_create_range`,
 `idx_create_raw`, `idx_query_range` / `idx_query_eq` (paged
 `IdxPage`), `idx_query_match` / `idx_query_knn` (ranked `(key,
 score)`), `idx_query_raw`, `idx_drop`, `idx_list` (`IdxInfo`).
 
-**Change feed / CDC** (v1.14): `feed_shards`, `feed_tail`,
+**Change feed / CDC** (v2.0.0): `feed_shards`, `feed_tail`,
 `feed_read` (`FeedBatch` of offset-tagged argv frames, prefix
 filtering, `FEEDRESYNC` cursor-rebuild contract shared with the
 embedded `changes_since`).
 
-**Pipelining** (v1.14, remote-only): `pipeline(|p| p.cmd(...))` —
+**Pipelining** (v2.0.0, remote-only): `pipeline(|p| p.cmd(...))` —
 one write, in-order replies, non-atomic.
 
 **Keyspace iteration**: `keys(pattern)`,

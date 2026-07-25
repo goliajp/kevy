@@ -1,4 +1,4 @@
-//! HNSW graph (RFC D2/D5): hierarchical layers, greedy descent +
+//! HNSW graph: hierarchical layers, greedy descent +
 //! beam search on layer 0, tombstone deletes filtered at search
 //! time, bounded full rebuild by re-inserting the living.
 
@@ -6,7 +6,7 @@ use std::collections::{BinaryHeap, HashMap};
 
 use crate::dist::Distance;
 
-/// Construction/search parameters (immutable once built — RFC D2).
+/// Construction/search parameters (immutable once built).
 #[derive(Debug, Clone, Copy)]
 pub struct HnswParams {
     /// Max bidirectional links per node per layer (layer 0 gets 2M).
@@ -23,7 +23,7 @@ impl Default for HnswParams {
     }
 }
 
-/// Sizing counters (RFC D6).
+/// Sizing counters.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct VectorStats {
     /// Living vectors.
@@ -41,7 +41,7 @@ pub struct VectorStats {
 struct Node {
     /// Every LIVING key whose vector is exactly this one (duplicate
     /// vectors under different keys collapse onto ONE graph node —
-    /// fuzz finding 2026-07-10: one-node-per-key duplicate clusters
+    /// fuzz-found rationale: one-node-per-key duplicate clusters
     /// larger than the link cap disconnect from the graph because
     /// every co-located edge ties in the diversity prune).
     keys: Vec<Vec<u8>>,
@@ -110,8 +110,8 @@ impl Hnsw {
     }
 
     /// Insert or replace `key`'s vector (`None` = remove). Replace =
-    /// detach old key (tombstone the node once keyless) + insert new
-    /// (RFC D5). Keys sharing one exact vector share one graph node.
+    /// detach old key (tombstone the node once keyless) + insert new.
+    /// Keys sharing one exact vector share one graph node.
     pub fn apply(&mut self, key: &[u8], vector: Option<Vec<f32>>) {
         if let Some(id) = self.by_key.remove(key) {
             let node = &mut self.nodes[id as usize];
@@ -304,7 +304,7 @@ impl Hnsw {
     /// in-graph node keeps its back-edge — plain closest-K pruning
     /// disconnects it).
     ///
-    /// Duplicate handling (fuzz finding 2026-07-10, recall@10 = 0.8
+    /// Duplicate handling (fuzz-found: recall@10 = 0.8
     /// under an exhaustive beam — duplicate vectors under different
     /// keys are legal in production):
     ///
@@ -437,7 +437,14 @@ impl Hnsw {
         self.by_key.contains_key(key)
     }
 
-    /// Counters (RFC D6).
+    /// Live (non-tombstoned) vectors — already tracked, so `O(1)`.
+    /// [`Self::stats`] walks every node and every link to estimate bytes;
+    /// a caller that only wants the count should not trigger that walk.
+    pub fn vectors(&self) -> u64 {
+        self.live
+    }
+
+    /// Counters.
     pub fn stats(&self) -> VectorStats {
         let links: u64 = self.nodes.iter().map(|n| n.links.iter().map(Vec::len).sum::<usize>() as u64).sum();
         let tombstones = self.nodes.iter().filter(|n| n.dead).count() as u64;
@@ -455,7 +462,7 @@ impl Hnsw {
     }
 
     /// Bounded rebuild: re-insert every living (key, vector) pair into
-    /// a fresh graph (drops tombstones and their edges) — RFC D5.
+    /// a fresh graph (drops tombstones and their edges).
     /// Vectors are already prepared; `add_key` re-collapses duplicates.
     pub fn rebuild(&mut self) {
         let mut fresh = Hnsw::new(self.dim, self.params);

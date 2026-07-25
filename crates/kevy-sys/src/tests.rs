@@ -2,6 +2,40 @@ use super::*;
 use std::io::{Read, Write};
 
 #[test]
+fn peer_gone_tracks_the_kernel_not_the_reader() {
+    // The whole point of peer_gone is that it asks the kernel, so it sees a
+    // dropped peer even when nothing has read the socket. Accept a conn, do
+    // not read it, and check both states.
+    let listener = tcp_listen([127, 0, 0, 1], 0, 16).unwrap();
+    let port = listener.local_port().unwrap();
+
+    let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let server = listener.accept().unwrap();
+
+    // Peer connected, nothing sent → open, nothing pending → not gone.
+    assert!(!server.peer_gone(), "a live peer with no pending data is not gone");
+
+    // Peer sends a byte → data queued → still not gone, AND MSG_PEEK must
+    // not consume it (a following read still sees the byte). This is also
+    // the primitive's one blind spot: unread data ahead of a FIN hides the
+    // FIN, so peer_gone only reports gone once the buffer is drained — which
+    // is exactly the case at a block serve, where the client sent its BLPOP
+    // and nothing more.
+    client.write_all(b"x").unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert!(!server.peer_gone(), "a peer with unread data is not gone");
+    let mut got = [0u8; 1];
+    assert_eq!(server.read(&mut got).unwrap(), 1, "peek did not consume the byte");
+    assert_eq!(&got, b"x");
+
+    // Peer drops with the buffer drained → FIN reaches the kernel → gone,
+    // even though this side issued no read after the FIN.
+    drop(client);
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert!(server.peer_gone(), "a peer that sent FIN is gone");
+}
+
+#[test]
 fn listen_accept_roundtrip() {
     let listener = tcp_listen([127, 0, 0, 1], 0, 16).unwrap();
     let port = listener.local_port().unwrap();

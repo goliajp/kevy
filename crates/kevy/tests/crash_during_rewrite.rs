@@ -1,6 +1,6 @@
 //! Crash safety test — abrupt SIGKILL during a concurrent AOF rewrite.
 //!
-//! v1.33 chaos test. Forces frequent AOF rewrites by setting
+//! Forces frequent AOF rewrites by setting
 //! `auto_aof_rewrite_min_size` very low, drives concurrent writes that
 //! cross the threshold multiple times, then SIGKILLs at a random
 //! point. Restart MUST recover every ACK'd write — the rewrite swap

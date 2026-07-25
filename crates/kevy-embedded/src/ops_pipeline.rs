@@ -10,7 +10,7 @@
 //! states. For transactional semantics use
 //! [`Store::atomic`](crate::Store::atomic).
 
-use std::io;
+use crate::KevyResult;
 
 use crate::store::Store;
 
@@ -124,7 +124,7 @@ impl<'a> Pipeline<'a> {
         self
     }
 
-    /// Flags-aware `ZADD` (v2.1) — e.g. the `GT` monotonic-heal form.
+    /// Flags-aware `ZADD` — e.g. the `GT` monotonic-heal form.
     pub fn zadd_flags(
         mut self,
         key: &[u8],
@@ -198,7 +198,7 @@ impl<'a> Pipeline<'a> {
     /// per-shard write lock — other writers see intermediate states
     /// between ops; for transactional semantics use [`Store::atomic`]
     /// instead. AOF appends batch into one fsync per shard.
-    pub fn commit(mut self) -> io::Result<()> {
+    pub fn commit(mut self) -> KevyResult<()> {
         let ops = std::mem::take(&mut self.ops);
         for op in ops {
             self.apply_one(op)?;
@@ -209,7 +209,7 @@ impl<'a> Pipeline<'a> {
     // fn-length exemption: pure data-driven op match table — one flat
     // arm per PendingOp variant, only arg plumbing + one store call.
     // LOC-WAIVER: data-driven op dispatch table — one store-call arm per PendingOp variant.
-    fn apply_one(&self, op: PendingOp) -> io::Result<()> {
+    fn apply_one(&self, op: PendingOp) -> KevyResult<()> {
         match op {
             PendingOp::Set { key, value } => {
                 self.store.set(&key, &value)?;
@@ -282,7 +282,7 @@ impl Store {
     }
 }
 
-/// Parity manifest (v2.1): command names `Pipeline` implements.
+/// Parity manifest: command names `Pipeline` implements.
 /// Cross-checked against `kevy_resp::ops_table` in
 /// `store_tests_op_table.rs` — update BOTH when adding an op.
 #[cfg_attr(not(test), allow(dead_code))]

@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kevy — AI システムのためのデータレイヤ</title>
+<meta name="description" content="AI システムのための Redis 互換データレイヤ。プロトコルは同じまま、スループットは上。そしてベクトル検索、全文検索、インデックス、ビュー、変更フィードがひとつのエンジンに。実際に触ってみてください——このページのターミナルは本物のエンジンで、あなたのタブの中で動いています。">
+<link rel="stylesheet" href="../assets/kevy.css?v=c5c8b1de">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../ja/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../ja/docs/">ドキュメント</a>
+      <a href="../ja/docs/commands/">コマンド</a>
+      <a href="../ja/benchmarks/">ベンチマーク</a>
+      <a href="../ja/play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <nav class="lang" aria-label="Language">
+        <a href="../">EN</a>
+        <a href="../zh/">中文</a>
+        <a href="../ja/" aria-current="page">日本語</a>
+      </nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+<section class="band" style="border-top:0"><div class="split"><div>
+    <p class="eyebrow">kevy 4.0</p>
+    <h1>AI システムのための<br>データレイヤ。</h1>
+    <p class="lede">Redis 互換——クライアントは、そのままつながります。どの操作でも、より高速です。そしてベクトル検索、全文検索、インデックス、ビュー、変更フィードは、周りに並べた 4 つのサービスではなく、<b>エンジンの中に</b>あります。<b>このターミナルは本物です</b>。同じエンジンを WebAssembly にコンパイルしたものが、このタブの中で動いています。</p>
+    <div class="ctas"><a class="cta primary" href="../#start">cargo install kevy</a><a class="cta" href="../#code">何ができるのか</a><a class="cta" href="../ja/play/">playground を開く</a></div>
+  </div><div id="hero-term" data-pkg="../demo/pkg">
+    <div class="ht-bar"><span class="ht-dot"></span><span class="ht-title">kevy — wasm</span><span class="ht-status">booting…</span></div>
+    <div class="ht-out"></div>
+    <div class="ht-chips"><button class="ht-chip" type="button" data-cmd="SET session:7f3a &#x27;{&quot;user&quot;:&quot;ada&quot;}&#x27; EX 30">SET</button><button class="ht-chip" type="button" data-cmd="GET session:7f3a">GET</button><button class="ht-chip" type="button" data-cmd="TTL session:7f3a">TTL</button><button class="ht-chip" type="button" data-cmd="INCR hits">INCR</button><button class="ht-chip" type="button" data-cmd="KEYS *">KEYS</button><button class="ht-chip" type="button" data-cmd="SUBSCRIBE news">SUBSCRIBE</button><button class="ht-chip" type="button" data-cmd="PUBLISH news deployed">PUBLISH</button></div>
+    <input class="ht-in" spellcheck="false" autocomplete="off" placeholder="コマンドを入力——SET、GET、TTL、INCR、KEYS、SUBSCRIBE、PUBLISH…">
+  </div></div></section>
+<section class="band deep" id="code">
+  <div class="sec-h">
+    <p class="eyebrow">他に何ができるのか</p>
+    <h2>ひとつのエンジン。AI システムに必要なスタックのすべて。</h2>
+    <p class="sec-lede">以下のコマンドはすべて、このページを出す前に、CI が実際のサーバーに対して実行しています。タブを切り替えてみてください——kevy を使うとは、こういうことです。</p>
+  </div>
+  <div class="tabs"><div class="tab-heads"><button class="tab on" type="button" data-tab="0">ベクトル</button><button class="tab" type="button" data-tab="1">全文検索</button><button class="tab" type="button" data-tab="2">インデックス</button><button class="tab" type="button" data-tab="3">ビュー</button><button class="tab" type="button" data-tab="4">テーブル</button><button class="tab" type="button" data-tab="5">RAM を超える</button><button class="tab" type="button" data-tab="6">変更フィード</button><button class="tab" type="button" data-tab="7">どこでも</button></div><div class="tab-panel on" data-panel="0"><pre><code># an HNSW index over your keys — declared once,
+# kept current by the write path
+IDX.CREATE idx:sem ON PREFIX doc: FIELD vec TYPE vector KIND ann DIM 768 DISTANCE cosine M 16 EF 200
+
+HSET doc:4410 title &quot;Ada on pipelining&quot; vec &quot;&lt;768 f32, little-endian&gt;&quot;
+
+# nearest ten. no separate vector database, no sync job.
+IDX.QUERY idx:sem KNN &quot;&lt;query vector&gt;&quot; LIMIT 10
+-&gt; 1) &quot;doc:4410&quot;
+   2) &quot;doc:9982&quot;
+</code></pre><p class="tab-note">埋め込みはあなたが持ち込み、kevy がそれを保存し、索引を張り、検索します。エンジンにモデルはありません。それは意図した選択です。</p><a class="tab-more" href="../ja/use/ai/">エージェントの記憶と RAG</a></div><div class="tab-panel" data-panel="1"><pre><code>IDX.CREATE idx:ft ON PREFIX doc: FIELD title TYPE str KIND text
+
+IDX.QUERY idx:ft MATCH &quot;pipelining&quot;
+-&gt; 1) 1) &quot;doc:1&quot;
+      2) &quot;0.2877&quot;          # BM25 score
+
+# hybrid: fuse the text ranking with the vector ranking
+IDX.QUERY HYBRID idx:ft MATCH &quot;pipelining&quot; idx:sem KNN &quot;&lt;vector&gt;&quot; LIMIT 20 RRFK 60</code></pre><p class="tab-note">CJK のトークン化を備えた BM25。ベクトルが索引している、同じキーの上で。</p><a class="tab-more" href="../ja/use/ai/">検索の仕組み</a></div><div class="tab-panel" data-panel="2"><pre><code>HSET order:1001 customer 881 status open  total 4400
+HSET order:1002 customer 881 status paid  total 8400
+
+IDX.CREATE idx:cust   ON PREFIX order: FIELD customer TYPE i64 KIND range
+IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range
+
+# the read that would have been a SQL query
+IDX.QUERY COMPOSE AND idx:cust EQ 881 idx:status EQ open
+-&gt; 1) &quot;0&quot;
+   2) 1) 1) &quot;order:1001&quot;
+</code></pre><p class="tab-note">絞り込んだ読み取りは、参照のままです。クエリプランナも、スキャンもありません。</p><a class="tab-more" href="../ja/use/app-store/">データベースなしで読みを捌く</a></div><div class="tab-panel" data-panel="3"><pre><code># the answer, kept current by the WRITE path
+VIEW.CREATE v:open881 QUERY ( AND idx:cust EQ 881 idx:status EQ open ) ORDER BY idx:cust
+
+VIEW.QUERY v:open881
+-&gt; 1) &quot;0&quot;
+   2) 1) &quot;order:1001&quot;  2) &quot;881&quot;
+
+# reads never recompute it; writes keep it fresh</code></pre><p class="tab-note">ほとんどのアプリケーションが ORM に本当に求めているもの。</p><a class="tab-more" href="../ja/use/app-store/">マテリアライズドビュー</a></div><div class="tab-panel" data-panel="4"><pre><code># a table is a declaration — compiled to named indexes, once
+TABLE.DECLARE user PREFIX u: PK id COLUMN id str COLUMN name str COLUMN age i64 COLUMN dept str INDEX age range VALUES dept name ORDERPATH by_dept_age ON dept THEN age DESC
+
+HSET u:1 id 1 name ada age 34 dept eng
+
+# the ORDER BY dept, age DESC walk — one composite index, no planner
+IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name age</code></pre><p class="tab-note">型付きカラム、セカンダリインデックス、複合 ORDER BY パス——kevy-cli sql compile なら PG/MySQL のスキーマファイルまでコンパイルできます。ランタイム SQL も join もありません。それは Postgres の仕事です。</p><a class="tab-more" href="../ja/use/app-store/">単一テーブルの配信</a></div><div class="tab-panel" data-panel="5"><pre><code># kevy.toml — a RAM budget for the whole store
+[tiering]
+budget = &quot;70%&quot;               # or &quot;4gb&quot;, or &quot;auto&quot;
+
+# past the budget, the coldest values spill to a disk log
+# and page back on access. a cold key is an ordinary key:
+GET archive:2019:q3          # pays one disk read, same reply
+TTL archive:2019:q3          # metadata answers from RAM
+SCAN 0 MATCH archive:*       # sees cold keys — one key table</code></pre><p class="tab-note">RAM がキー数の上限を、ディスクがデータ量の上限を決めます。AOF の永続化コントラクトは無変更です。v1 で退避するのは文字列とハッシュ——リスト、セット、ストリームはホットのままです。</p><a class="tab-more" href="../ja/docs/tiering/">ティアリングの仕組み</a></div><div class="tab-panel" data-panel="6"><pre><code># tail every write from another process — or an agent.
+# [feed] enabled = true in kevy.toml
+FEED.SHARDS                 -&gt; (integer) 16
+FEED.TAIL 0                 -&gt; 1) (integer) 1     # generation
+                               2) (integer) 1     # offset
+FEED.READ 0 1 0 COUNT 2     -&gt; the writes themselves, replayable</code></pre><p class="tab-note">再開可能なオフセット。ポーリングするものも、取りこぼすものもありません。</p><a class="tab-more" href="../ja/use/ai/">変更フィード</a></div><div class="tab-panel" data-panel="7"><pre><code># a 16-core server
+cargo install kevy &amp;&amp; kevy --port 6379
+
+# inside your binary — no socket, no process
+let db = Db::open(&quot;data/&quot;)?;
+db.set(b&quot;k&quot;, b&quot;v&quot;, None)?;
+
+# a browser tab — 151 KB, persists to OPFS
+const db = await open({ persist: { name: &quot;app&quot; } });
+
+# a microcontroller — no OS, no allocator
+let mut store = Store::new_in(&amp;mut arena);</code></pre><p class="tab-note">4 つの場所すべてで、同じエンジン、同じコマンドです。</p><a class="tab-more" href="../ja/use/embedded/">kevy を組み込む</a></div></div>
+</section>
+<section class="band" id="swap">
+  <div class="sec-h">
+    <p class="eyebrow">なぜ Redis を置き換えられるのか</p>
+    <h2>プロトコルは同じ。スループットは上。</h2>
+    <p class="sec-lede">RESP2 と RESP3、188 個のコマンド——redis-cli も、クライアントライブラリも、そのままつながります。1 台のマシン、16 コア、ループバック、5 回実行した中央値です。</p>
+  </div>
+  <div class="bars"><div class="bar-row"><div class="bar-k">GET</div><div class="bar-track"><div class="bar us" style="width:100.0%"></div><div class="bar them" style="width:71.8%"></div></div><div class="bar-n">1.39×</div></div><div class="bar-row"><div class="bar-k">SET</div><div class="bar-track"><div class="bar us" style="width:88.7%"></div><div class="bar them" style="width:33.0%"></div></div><div class="bar-n">2.69×</div></div><div class="bar-row"><div class="bar-k">INCR</div><div class="bar-track"><div class="bar us" style="width:78.6%"></div><div class="bar them" style="width:44.3%"></div></div><div class="bar-n">1.77×</div></div><div class="bar-row"><div class="bar-k">SADD</div><div class="bar-track"><div class="bar us" style="width:71.8%"></div><div class="bar them" style="width:47.3%"></div></div><div class="bar-n">1.52×</div></div><div class="bar-row"><div class="bar-k">HSET</div><div class="bar-track"><div class="bar us" style="width:55.0%"></div><div class="bar them" style="width:38.7%"></div></div><div class="bar-n">1.42×</div></div><div class="bar-row"><div class="bar-k">LPUSH</div><div class="bar-track"><div class="bar us narrow" style="width:41.2%"></div><div class="bar them" style="width:36.7%"></div></div><div class="bar-n narrow">1.12×</div></div><div class="bar-row"><div class="bar-k">ZADD</div><div class="bar-track"><div class="bar us narrow" style="width:39.1%"></div><div class="bar them" style="width:35.6%"></div></div><div class="bar-n narrow">1.10×</div></div></div>
+  <div class="bars-legend">
+    <span><i style="background:var(--blue)"></i>kevy 4.0</span>
+    <span><i style="background:var(--edge-hi)"></i>Redis 8</span>
+    <span><i style="background:var(--thin)"></i>15% 未満——決めるのはエンジンではなく、あなたのワークロードです</span>
+  </div>
+  <p class="tbl-note"><b>LPUSH と ZADD は、12% と 10% しか上回っていません。</b>リストやソート済みセットがホットパスなら、速さは乗り換える理由になりません。<a href="../ja/benchmarks/">valkey や Dragonfly も含めた、完全な表はこちら。</a>移行はコマンド 3 つ——<a href="../ja/migrate/">export、import、digest</a>——で、どちらの向きにも動きます。</p>
+</section>
+<section class="band deep" id="start">
+  <div class="sec-h"><h2>2 分</h2></div>
+  <ol class="steps"><li><h3>インストール</h3><p>バイナリ 1 つです。ランタイムも、解決を待つ依存もありません。</p><pre><code>cargo install kevy
+kevy --port 6379</code></pre></li><li><h3>クライアントを向ける</h3><p>いま使っているものが、そのまま動きます。</p><pre><code>redis-cli -p 6379
+&gt; SET greeting hello
+OK
+&gt; TTL greeting
+(integer) -1</code></pre></li><li><h3>Redis にできないことをする</h3><p>インデックスを宣言すれば、書き込みの側が最新に保ちます。</p><pre><code>IDX.CREATE idx:city ON PREFIX user: FIELD city TYPE str KIND range
+IDX.QUERY  idx:city EQ osaka</code></pre></li></ol>
+</section>
+<section class="band">
+  <div class="call loss">
+    <span class="h">kevy がやらないこと</span>
+    <p><b>クラスタではありません。</b>レプリケーションとフェイルオーバーはありますが、マシンをまたぐシャーディングはなく、今後もありません。<b>AUTH も TLS もありません</b>——プライベートなネットワークで動かすか、それらを正しく処理するものの後ろに置いてください。<b>複数キーの書き込みは shard 単位でのみ原子的で、全体では原子的ではありません</b>——shard をまたぐ <code>RENAME</code> や <code>MSET</code> は、1 つの原子的な操作にはなりません。<a href="../ja/docs/commands/">差異はすべて、コマンドごとに文書化してあります</a>。<a href="../ja/choose/">そして、そもそも使うべきでない場合はこちら。</a></p>
+  </div>
+</section>
+</main>
+
+<footer class="foot">
+  <div class="foot-in">
+    <p class="foot-b">kevy 4.0 — GOLIA</p>
+    <nav>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+      <a href="https://crates.io/crates/kevy">crates.io</a>
+      <a href="../llms.txt">llms.txt</a>
+    </nav>
+  </div>
+</footer>
+
+<script type="module" src="../assets/hero-term.js?v=f6a75993"></script>
+<script src="../assets/tabs.js?v=67f23fa5" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

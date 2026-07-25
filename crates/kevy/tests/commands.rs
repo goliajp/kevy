@@ -1,4 +1,4 @@
-//! v0.2 detection: the core string/key command surface over real RESP, against
+//! Detection suite: the core string/key command surface over real RESP, against
 //! a live keyspace shared across the commands of one connection.
 
 use std::io::{Read, Write};
@@ -12,7 +12,7 @@ fn exchange(steps: &[(&[u8], &[u8])]) {
     let server = std::thread::spawn(move || {
         let conn = listener.accept().unwrap();
         let mut store = kevy::KeyspaceStore::new();
-        kevy::handle_conn(&conn, &mut store).unwrap();
+        kevy::handle_conn(&kevy::KevyCommands::new(), &conn, &mut store).unwrap();
     });
 
     let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();

@@ -1,0 +1,22 @@
+[package]
+name = "kevy-mcu-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Outside the workspace: a bare-metal binary has no std, no test harness,
+# and its own linker script — it must not inherit workspace lints/profiles.
+[workspace]
+
+# The no_std stone under test. `external-clock` because a Cortex-M has no
+# OS clock: the firmware feeds time in.
+[dependencies.kevy-store]
+path = "../../crates/kevy-store"
+default-features = false
+features = ["alloc", "external-clock"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"

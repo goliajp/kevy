@@ -5,52 +5,218 @@ use kevy_index::{IndexValue, ValType};
 use kevy_store::Store;
 
 use super::args::{ComposeQuery, HybridArgs, KnnArgs, MatchArgs, Shape};
-use super::wire::{encode_agg_chunk, encode_hydration};
+use super::wire::{
+    decode_gstats_arg, encode_agg_chunk, encode_hydration_row, encode_stats_chunk, peek_hydration,
+};
 use super::{ST_BADARGS, ST_BUILDING, ST_NOINDEX, ST_OK, ST_OVERBUDGET};
 use crate::index_runtime;
+use crate::state::Ctx;
 
-/// v2.7 text MATCH per-shard: BM25-ranked hits + owning-shard
-/// hydration. Chunk: `[ST_OK][n][(klen,key,score f64,fcount,fields)*]`.
-pub(super) fn op_match(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
-    let Some(q) = MatchArgs::parse(argv) else {
-        return vec![ST_BADARGS];
+/// Text MATCH pass 1 (per-shard): report this shard's corpus counters
+/// so the reduce can build one global [`kevy_text::CorpusStats`] and a
+/// hit's BM25 rank stops depending on which shard it landed on (global
+/// BM25, step 4b-server; the embedded twin is `idx_match`). Chunk:
+/// `[ST_OK][n_docs u64][total_len u64][ntok u32][(tlen,token,df u32)*]`.
+///
+/// The terminal-surface validation runs HERE (pass 1) so a NOTYET/BADARGS
+/// answer is returned before any second fan-out — the syntax verdict must
+/// not wait on a scoring round.
+#[path = "ops_encode.rs"]
+mod encode;
+use encode::encode_hits;
+
+use super::ops_clauses::{boxed_preds, distinct_field, facet_fields, scope_positions, sort_field};
+
+pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+    let q = match MatchArgs::parse_terminal(argv) {
+        crate::cmd_index_query::args::MatchParse::Ok(q) => q,
+        crate::cmd_index_query::args::MatchParse::BadArgs => return vec![ST_BADARGS],
+        crate::cmd_index_query::args::MatchParse::NotYet(clause) => {
+            let mut chunk = vec![crate::cmd_index_query::ST_NOTYET];
+            chunk.extend_from_slice(clause);
+            return chunk;
+        }
     };
-    let res = index_runtime::with_ready_text_segment(store, &q.name, |ts| {
-        ts.matches(&q.text, q.limit)
+    let res = index_runtime::with_ready_text_segment(ctx, store, &q.name, |ts, spec| {
+        let want = scope_positions(spec, &q.scope)?;
+        // `query_df_in` expands `word*` prefixes against this shard's
+        // dictionary, so the reported df covers the prefix's expansion
+        // terms too — the reduce unions them across shards — and counts
+        // over the query's field scope, so a scoped query's global
+        // statistics describe those fields rather than whole documents.
+        let opts = kevy_text::QueryOpts {
+            stats: None,
+            typo: q.typo,
+            fields: &want,
+            filter: &[],
+            sort: None,
+            distinct: None,
+        };
+        Ok((ts.docs(), ts.total_len_in(&want), ts.query_df_in(&q.text, opts)))
     });
     match res {
-        Ok(hits) => {
-            let mut chunk = vec![ST_OK];
-            chunk.extend_from_slice(&(hits.len() as u32).to_le_bytes());
-            for h in &hits {
-                chunk.extend_from_slice(&(h.key.len() as u32).to_le_bytes());
-                chunk.extend_from_slice(&h.key);
-                chunk.extend_from_slice(&h.score.to_le_bytes());
-                encode_hydration(store, &mut chunk, &h.key, &q.fields);
-            }
+        Ok(Ok((n_docs, total_len, tokdf))) => {
+            let mut chunk = Vec::new();
+            encode_stats_chunk(&mut chunk, n_docs, total_len, &tokdf);
             chunk
         }
-        Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
-        Err(e) if e.starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
+        Ok(Err(chunk)) => chunk,
+        Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
         Err(_) => vec![ST_NOINDEX],
     }
 }
 
-/// v3.1 agg per-shard. Chunk (both shapes):
+/// Text MATCH pass 2 (internal `MATCH.SCORE`): score this shard against
+/// the injected global stats and emit ranked hits + owning-shard
+/// hydration, and (when HIGHLIGHT was asked) each hit's match spans.
+/// Chunk `[ST_OK][n][(klen,key,score f64,hydration,highlight?)*]` — the
+/// highlight block is present iff the argv carried a HIGHLIGHT clause, a
+/// fact the reduce recovers from the same argv, so the two never drift.
+///
+/// argv: `[MATCH.SCORE, name, text, LIMIT=<n>, <gstats>, (FIELDS f…)? (HIGHLIGHT h…)?]`.
+pub(super) fn op_match_score(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+    let Some(q) = super::args::parse_match_score(argv) else {
+        return vec![ST_BADARGS];
+    };
+    let Some(stats) = argv.get(4).and_then(|b| decode_gstats_arg(b)) else {
+        return vec![ST_BADARGS];
+    };
+    let res = index_runtime::with_ready_text_segment(ctx, store, &q.name, |ts, spec| {
+        // `matches_query_with` parses quoted phrases out of the raw query
+        // text; with none it is the ordinary term query.
+        // Fetch deep enough for the origin to skip OFFSET and still fill
+        // LIMIT: a shard cannot know which of its hits survive the merge.
+        let (hits, sort_field, distinct_field, facets) = scored_hits(ts, spec, &q, &stats)?;
+        let spans = q.highlight.as_ref().map(|want| {
+            hits.iter().map(|h| hit_highlight(ts, spec, &h.key, &q.text, want)).collect::<Vec<_>>()
+        });
+        // The origin merges the shards' pages and must order the union
+        // exactly as each shard ordered its own, so every hit carries its
+        // sort key back. Only the shard knows the field's declared type,
+        // so it sends the comparable encoding, not the raw value.
+        let hit_keys = |f: usize| {
+            hits.iter()
+                .map(|h| {
+                    ts.stored_value(&h.key, f)
+                        .and_then(|raw| kevy_index::order_key(spec.values[f].ty, raw))
+                })
+                .collect::<Vec<_>>()
+        };
+        let okeys = sort_field.map(hit_keys);
+        // The origin collapses the union too, and needs the same identity
+        // the shard grouped by.
+        let dkeys = distinct_field.map(hit_keys);
+        Ok((hits, spans, okeys, dkeys, facets))
+    });
+    match res {
+        Ok(Err(chunk)) => chunk,
+        Ok(Ok((hits, spans, okeys, dkeys, facets))) => {
+            encode_hits(store, &hits, &spans, &okeys, &dkeys, &facets, &q.fields)
+        }
+        Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
+        Err(_) => vec![ST_NOINDEX],
+    }
+}
+
+
+/// One shard's pass-2 answer: its hits, and which stored-value fields
+/// the origin will need each hit's key for (the sort field, the distinct
+/// field).
+type ShardPage =
+    (Vec<kevy_text::TextMatch>, Option<usize>, Option<usize>, Vec<Vec<kevy_text::Bucket>>);
+
+/// This shard's hits for a pass-2 MATCH, scored against the injected
+/// global statistics with every clause the query carried.
+///
+/// Fetches deep enough for the origin to skip OFFSET and still fill
+/// LIMIT: a shard cannot know which of its hits survive the merge.
+fn scored_hits(
+    ts: &kevy_text::TextSegment,
+    spec: &kevy_index::IndexSpec,
+    q: &super::args::MatchArgs,
+    stats: &kevy_text::CorpusStats,
+) -> Result<ShardPage, Vec<u8>> {
+    // `matches_query_with` parses quoted phrases out of the raw query
+    // text; with none it is the ordinary term query.
+    let scope = scope_positions(spec, &q.scope)?;
+    let tests = boxed_preds(spec, &q.filters)?;
+    let filter: Vec<kevy_text::Filter> = tests
+        .iter()
+        .map(|(field, test)| kevy_text::Filter { field: *field, test: test.as_ref() })
+        .collect();
+    let sorted = sort_field(spec, &q.sort)?;
+    let grouped = distinct_field(spec, &q.distinct)?;
+    let dkey = grouped.map(|(_, ty)| move |raw: &[u8]| kevy_index::order_key(ty, raw));
+    let distinct = grouped
+        .zip(dkey.as_ref())
+        .map(|((field, _), k)| kevy_text::Distinct { field, key: k });
+    let key = sorted.map(|(_, _, ty)| move |raw: &[u8]| kevy_index::order_key(ty, raw));
+    let sort = sorted.zip(key.as_ref()).map(|((field, desc, _), k)| kevy_text::Sort {
+        field,
+        desc,
+        key: k,
+    });
+    let opts = kevy_text::QueryOpts {
+        stats: Some(stats),
+        typo: q.typo,
+        fields: &scope,
+        filter: &filter,
+        sort,
+        distinct,
+    };
+    let counted = facet_fields(spec, &q.facets)?;
+    let fkeys: Vec<_> =
+        counted.iter().map(|(_, ty)| { let ty = *ty; move |raw: &[u8]| kevy_index::order_key(ty, raw) }).collect();
+    let facets: Vec<kevy_text::Facet> = counted
+        .iter()
+        .zip(&fkeys)
+        .map(|((field, _), k)| kevy_text::Facet { field: *field, key: k })
+        .collect();
+    let r = ts.matches_query_faceted(&q.text, q.limit + q.offset, opts, &facets);
+    Ok((r.hits, sorted.map(|(field, _, _)| field), grouped.map(|(field, _)| field), r.facets))
+}
+
+/// One hit's highlight spans as `(field name, [(start, end)])`, filtered
+/// to the requested fields (`want` empty = every field with a match).
+/// Field names come from the spec, positionally aligned with the
+/// segment's stored field order.
+fn hit_highlight(
+    ts: &kevy_text::TextSegment,
+    spec: &kevy_index::IndexSpec,
+    key: &[u8],
+    text: &[u8],
+    want: &[Vec<u8>],
+) -> super::HitSpans {
+    ts.highlight_spans(key, text)
+        .into_iter()
+        .filter_map(|(fi, spans)| {
+            let name = spec.fields.get(fi)?.name.clone();
+            if !want.is_empty() && !want.contains(&name) {
+                return None;
+            }
+            let ranges = spans.into_iter().map(|(s, e)| (s as u32, e as u32)).collect();
+            Some((name, ranges))
+        })
+        .collect()
+}
+
+/// Agg per-shard. Chunk (both shapes):
 /// `[ST_OK][n][(glen,group,count u64,sum f64,minflag+min,maxflag+max)*]`
 /// — GROUP sends the one requested group; GROUPS sends every local
 /// group (the reduce needs full partials to merge exactly).
-pub(super) fn op_agg(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn op_agg(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let single = argv[2].eq_ignore_ascii_case(b"GROUP");
     if single {
-        let res = index_runtime::with_ready_agg(store, &argv[1], |a| {
+        let res = index_runtime::with_ready_agg(ctx, store, &argv[1], |a| {
             argv.get(3).map(|g| vec![(g.clone(), a.group(g))])
         });
         return match res {
             Ok(None) => vec![ST_BADARGS],
             Ok(Some(rows)) => encode_agg_chunk(&rows),
-            Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
-            Err(e) if e.starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
+            Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+            Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
             Err(_) => vec![ST_NOINDEX],
         };
     }
@@ -67,7 +233,7 @@ pub(super) fn op_agg(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
         .iter()
         .find_map(|a| std::str::from_utf8(a).ok()?.strip_prefix("DEPTH=")?.parse().ok())
         .unwrap_or(1);
-    let res = index_runtime::with_ready_agg(store, &argv[1], |a| {
+    let res = index_runtime::with_ready_agg(ctx, store, &argv[1], |a| {
         if depth == 0 {
             // fallback sentinel: full local materialization (uniform
             // near-tie data is unprunable — see reduce_agg)
@@ -84,45 +250,45 @@ pub(super) fn op_agg(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
             chunk.push(u8::from(exhausted));
             chunk
         }
-        Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
-        Err(e) if e.starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
+        Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
         Err(_) => vec![ST_NOINDEX],
     }
 }
 
-/// v3.1 phase 2 (internal): `AGG.FETCH <name> <g…>` — exact partials
+/// Phase 2 of GROUPS (internal): `AGG.FETCH <name> <g…>` — exact partials
 /// for the candidate groups that survived phase-1 ranking.
-pub(super) fn op_agg_fetch(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
-    let res = index_runtime::with_ready_agg(store, &argv[1], |a| {
+pub(super) fn op_agg_fetch(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+    let res = index_runtime::with_ready_agg(ctx, store, &argv[1], |a| {
         argv[2..].iter().map(|g| (g.clone(), a.group(g))).collect::<Vec<_>>()
     });
     match res {
         Ok(rows) => encode_agg_chunk(&rows),
-        Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
         Err(_) => vec![ST_NOINDEX],
     }
 }
 
-/// v2.8: `IDX.REBUILD <name>` (ANN tombstone compaction).
-pub(super) fn op_rebuild(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+/// `IDX.REBUILD <name>` (ANN tombstone compaction).
+pub(super) fn op_rebuild(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let Some(name) = argv.get(1) else {
         return vec![ST_BADARGS];
     };
-    match index_runtime::with_ready_ann(store, name, |g| g.rebuild()) {
+    match index_runtime::with_ready_ann(ctx, store, name, |g| g.rebuild()) {
         Ok(()) => vec![ST_OK],
-        Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
         Err(_) => vec![ST_NOINDEX],
     }
 }
 
-/// v2.8 KNN per-shard: distance-ranked hits + hydration. Chunk:
+/// KNN per-shard: distance-ranked hits + hydration. Chunk:
 /// `[ST_OK][n][(klen,key,dist f64,fcount,fields)*]` — same layout as
 /// MATCH chunks, so the reduce shares the decoder.
-pub(super) fn op_knn(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn op_knn(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let Some(q) = KnnArgs::parse(argv) else {
         return vec![ST_BADARGS];
     };
-    let res = index_runtime::with_ready_ann(store, &q.name, |g| {
+    let res = index_runtime::with_ready_ann(ctx, store, &q.name, |g| {
         kevy_vector::parse_vector(&q.vec, g.dim()).map(|v| g.knn(&v, q.limit, q.ef))
     });
     match res {
@@ -130,16 +296,18 @@ pub(super) fn op_knn(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
         Ok(Some(hits)) => {
             let mut chunk = vec![ST_OK];
             chunk.extend_from_slice(&(hits.len() as u32).to_le_bytes());
-            for (key, dist) in &hits {
+            let keys: Vec<&[u8]> = hits.iter().map(|(k, _)| k.as_slice()).collect();
+            let rows = peek_hydration(store, &keys, &q.fields);
+            for (i, (key, dist)) in hits.iter().enumerate() {
                 chunk.extend_from_slice(&(key.len() as u32).to_le_bytes());
                 chunk.extend_from_slice(key);
                 chunk.extend_from_slice(&f64::from(*dist).to_le_bytes());
-                encode_hydration(store, &mut chunk, key, &q.fields);
+                encode_hydration_row(&mut chunk, q.fields.len(), &rows[i]);
             }
             chunk
         }
-        Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
-        Err(e) if e.starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
+        Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
         Err(_) => vec![ST_NOINDEX],
     }
 }
@@ -148,42 +316,49 @@ pub(super) fn op_knn(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
 /// fusion needs deeper lists than the final cut — same 4× posture as
 /// the agg TPUT phase-1), emit two ranked segments back to back.
 /// Chunk: `[ST_OK][match n][(key,f64,hydration)*][knn n][(…)*]`.
-pub(super) fn op_hybrid(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn op_hybrid(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let Some(q) = HybridArgs::parse(argv) else {
         return vec![ST_BADARGS];
     };
     let depth = q.limit * 4;
-    let m = index_runtime::with_ready_text_segment(store, &q.text_idx, |ts| {
+    let m = index_runtime::with_ready_text_segment(ctx, store, &q.text_idx, |ts, _| {
         ts.matches(&q.text, depth)
     });
-    let k = index_runtime::with_ready_ann(store, &q.ann_idx, |g| {
+    let k = index_runtime::with_ready_ann(ctx, store, &q.ann_idx, |g| {
         kevy_vector::parse_vector(&q.vec, g.dim()).map(|v| g.knn(&v, depth, q.ef))
     });
     let (m, k) = match (m, k) {
         (Ok(m), Ok(Some(k))) => (m, k),
         (_, Ok(None)) => return vec![ST_BADARGS],
-        (Err(e), _) | (_, Err(e)) if e.starts_with("INDEXBUILDING") => {
+        (Err(e), _) | (_, Err(e)) if e.as_wire().starts_with("INDEXBUILDING") => {
             return vec![ST_BUILDING];
         }
-        (Err(e), _) | (_, Err(e)) if e.starts_with("INDEXOVERBUDGET") => {
+        (Err(e), _) | (_, Err(e)) if e.as_wire().starts_with("INDEXOVERBUDGET") => {
             return vec![ST_OVERBUDGET];
         }
         _ => return vec![ST_NOINDEX],
     };
     let mut chunk = vec![ST_OK];
     chunk.extend_from_slice(&(m.len() as u32).to_le_bytes());
-    for h in &m {
+    // ONE batched hydration page covers both ranked segments.
+    let keys: Vec<&[u8]> = m
+        .iter()
+        .map(|h| h.key.as_slice())
+        .chain(k.iter().map(|(key, _)| key.as_slice()))
+        .collect();
+    let rows = peek_hydration(store, &keys, &q.fields);
+    for (i, h) in m.iter().enumerate() {
         chunk.extend_from_slice(&(h.key.len() as u32).to_le_bytes());
         chunk.extend_from_slice(&h.key);
         chunk.extend_from_slice(&h.score.to_le_bytes());
-        encode_hydration(store, &mut chunk, &h.key, &q.fields);
+        encode_hydration_row(&mut chunk, q.fields.len(), &rows[i]);
     }
     chunk.extend_from_slice(&(k.len() as u32).to_le_bytes());
-    for (key, dist) in &k {
+    for (i, (key, dist)) in k.iter().enumerate() {
         chunk.extend_from_slice(&(key.len() as u32).to_le_bytes());
         chunk.extend_from_slice(key);
         chunk.extend_from_slice(&f64::from(*dist).to_le_bytes());
-        encode_hydration(store, &mut chunk, key, &q.fields);
+        encode_hydration_row(&mut chunk, q.fields.len(), &rows[m.len() + i]);
     }
     chunk
 }
@@ -191,11 +366,12 @@ pub(super) fn op_hybrid(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
 /// Per-shard COMPOSE: both sub-queries run against THIS shard's
 /// segments (a key lives on exactly one shard, so per-shard set
 /// algebra composes globally). Key-ordered; cursor = key point.
-pub(super) fn op_compose(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn op_compose(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let Some(cq) = ComposeQuery::parse(argv) else {
         return vec![ST_BADARGS];
     };
     let res = index_runtime::with_two_ready_segments(
+        ctx,
         store,
         &cq.a.name,
         &cq.b.name,
@@ -205,16 +381,18 @@ pub(super) fn op_compose(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
         Ok(Some(keys)) => {
             let mut chunk = vec![ST_OK];
             chunk.extend_from_slice(&(keys.len() as u32).to_le_bytes());
-            for k in &keys {
+            let krefs: Vec<&[u8]> = keys.iter().map(Vec::as_slice).collect();
+            let rows = peek_hydration(store, &krefs, &cq.fields);
+            for (i, k) in keys.iter().enumerate() {
                 chunk.extend_from_slice(&(k.len() as u32).to_le_bytes());
                 chunk.extend_from_slice(k);
-                encode_hydration(store, &mut chunk, k, &cq.fields);
+                encode_hydration_row(&mut chunk, cq.fields.len(), &rows[i]);
             }
             chunk
         }
         Ok(None) => vec![ST_BADARGS],
-        Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
-        Err(e) if e.starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
+        Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
         Err(_) => vec![ST_NOINDEX],
     }
 }
@@ -222,6 +400,18 @@ pub(super) fn op_compose(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
 /// The COMPOSE set algebra over two READY segments: AND filters the
 /// A-hits through B's held entries; OR unions both ranges. Key-sorted,
 /// cursor-trimmed, truncated to the limit.
+/// `LIMIT` does NOT bound the work here, and cannot.
+///
+/// Every other shape in this surface is cursor-paged and limit-bounded. This
+/// one is not, and the reason is structural rather than an oversight: a
+/// segment is a `BTreeSet<(value, key)>` — ordered by VALUE — while COMPOSE's
+/// result and its cursor are ordered by KEY. Producing one key-ordered page
+/// therefore requires the whole match set, so a `COMPOSE OR` over two broad
+/// ranges pays for both ranges plus a sort on every page even at `LIMIT 10`.
+///
+/// This is a cost model, not a bug, and the command reference states it. The
+/// only way to bound it would be to page in value order of the driving leaf,
+/// which is a different (and less useful) contract.
 fn compose_keys(
     cq: &ComposeQuery,
     ty_a: ValType,
@@ -231,6 +421,8 @@ fn compose_keys(
 ) -> Option<Vec<Vec<u8>>> {
     let (min_a, max_a) = sub_bounds(&cq.a.shape, ty_a)?;
     let (min_b, max_b) = sub_bounds(&cq.b.shape, ty_b)?;
+    // usize::MAX is deliberate — see the note above: a key-ordered page needs
+    // the full match set out of a value-ordered index.
     let (a_hits, _) = seg_a.range(&min_a, &max_a, None, usize::MAX);
     let mut keys: Vec<Vec<u8>> = if cq.and {
         a_hits
@@ -268,6 +460,9 @@ fn sub_bounds(shape: &Shape, ty: ValType) -> Option<(IndexValue, IndexValue)> {
             let v = IndexValue::parse_literal(ty, value)?;
             Some((v.clone(), v))
         }
-        Shape::Verify => None,
+        // COMPOSE legs take RANGE/EQ only (parse_sub never builds the
+        // other shapes) — unreachable by construction, refused if a
+        // future parse change lets one through.
+        Shape::Where(_) | Shape::Verify => None,
     }
 }

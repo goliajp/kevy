@@ -1,5 +1,5 @@
 //! Durable `(epoch, voted_for)` storage — Raft's persistence rule
-//! applied to the kevy election (v3.15 D1).
+//! applied to the kevy election.
 //!
 //! Why this exists: a node that votes ACCEPT in epoch `e`, crashes,
 //! and restarts with a zeroed memory could vote *again* in epoch `e`

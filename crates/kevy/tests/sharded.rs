@@ -1,4 +1,4 @@
-//! v0.4 detection: the thread-per-core runtime must behave as ONE keyspace even
+//! Detection suite: the thread-per-core runtime must behave as ONE keyspace even
 //! though keys are sharded across cores and connections land on arbitrary cores
 //! (via SO_REUSEPORT). A value SET through one connection must be visible through
 //! another connection that may be served by a different core — proving cross-core
@@ -68,7 +68,7 @@ impl Server {
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, nshards, kevy::KevyCommands)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards)).bind([127, 0, 0, 1], port).shards(nshards)
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });
@@ -330,16 +330,27 @@ fn keys_scan_randomkey_across_cores() {
     c.write_all(&req(&[b"KEYS", b"*"])).unwrap();
     assert_eq!(read_array_sorted(&mut c).len(), 7);
 
-    // SCAN replies [cursor "0", [keys]].
-    c.write_all(&req(&[b"SCAN", b"0", b"MATCH", b"u:*"]))
-        .unwrap();
-    assert_eq!(read_len(&mut c, b'*'), 2);
-    let curlen = read_len(&mut c, b'$') as usize;
-    let mut cur = vec![0u8; curlen];
-    c.read_exact(&mut cur).unwrap();
-    c.read_exact(&mut [0u8; 2]).unwrap();
-    assert_eq!(cur, b"0");
-    assert_eq!(read_array_sorted(&mut c).len(), 6);
+    // SCAN replies [cursor, [keys]] — v4: a real cursor iterator, so
+    // follow the cursor until it returns to "0" and check set coverage.
+    let mut cursor = b"0".to_vec();
+    let mut scanned: Vec<Vec<u8>> = Vec::new();
+    for _ in 0..64 {
+        c.write_all(&req(&[b"SCAN", &cursor, b"MATCH", b"u:*"]))
+            .unwrap();
+        assert_eq!(read_len(&mut c, b'*'), 2);
+        let curlen = read_len(&mut c, b'$') as usize;
+        let mut cur = vec![0u8; curlen];
+        c.read_exact(&mut cur).unwrap();
+        c.read_exact(&mut [0u8; 2]).unwrap();
+        scanned.extend(read_array_sorted(&mut c));
+        if cur == b"0" {
+            break;
+        }
+        cursor = cur;
+    }
+    scanned.sort();
+    scanned.dedup();
+    assert_eq!(scanned.len(), 6);
 
     // RANDOMKEY returns some existing key.
     c.write_all(&req(&[b"RANDOMKEY"])).unwrap();
@@ -529,8 +540,8 @@ fn info_field(body: &str, field: &str) -> u64 {
 
 /// INFO is answered on one shard but must report the WHOLE process: memory,
 /// keyspace, and stat counters are summed across every shard's slot — the same
-/// single-shard-view trap DBSIZE avoids. Regression for the 2026-06-14 dogfood
-/// report (used_memory ≈ 1/Nth, empty Keyspace, zero Stats).
+/// single-shard-view trap DBSIZE avoids. Regression for a dogfood
+/// finding (used_memory ≈ 1/Nth, empty Keyspace, zero Stats).
 #[test]
 fn info_aggregates_across_shards() {
     const N: u32 = 400; // plain keys
@@ -560,8 +571,8 @@ fn info_aggregates_across_shards() {
     // Gauges (incl. the other shards' slices) publish on the reactor tick.
     // Poll until the keyspace key count reaches the full cross-shard total
     // rather than sleeping a fixed window — virtualized CI runners' monotonic
-    // clock lags wall-clock, so a fixed sleep races the tick (see the
-    // 2026-06-09 CI-flake lesson). `db0:` line is `keys=N,expires=M,avg_ttl=0`.
+    // clock lags wall-clock, so a fixed sleep races the tick (learned from
+    // an earlier CI flake). `db0:` line is `keys=N,expires=M,avg_ttl=0`.
     let db0_field = |body: &str, k: &str| -> Option<u64> {
         body.lines()
             .find_map(|l| l.strip_prefix("db0:"))

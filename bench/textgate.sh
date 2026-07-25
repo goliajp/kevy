@@ -9,25 +9,70 @@
 #      the ratio of formula-to-RSS-delta instead: formula must
 #      explain ≥ half and ≤ 1.5× of the real growth).
 #
-# Usage: bash bench/textgate.sh <kevy-binary>
+# POSITIONS=1 runs the step-5 variant: the index is created WITH
+# POSITIONS and clamp 1 measures phrase-query p95 (its own threshold,
+# adjacency is heavier than a term walk) while clamp 2's formula now
+# includes the positional side-channel's bytes — the memory/latency half
+# of the positions step, re-baselined here rather than after the fact.
+#
+# Usage: bash bench/textgate.sh <kevy-binary>          # term baseline
+#        POSITIONS=1 bash bench/textgate.sh <kevy-binary>  # phrase / positions
+#        FIELDS=1    bash bench/textgate.sh <kevy-binary>  # multi-field / IN
+#        VALUES=1    bash bench/textgate.sh <kevy-binary>  # stored values / FILTER
+#        ORDER=1     bash bench/textgate.sh <kevy-binary>  # SORT / DISTINCT
+#        TYPO=1      bash bench/textgate.sh <kevy-binary>  # edit-distance expansion
 set -u
 BIN=${1:?usage: textgate.sh <kevy-binary>}
 PORT=7052
 DIR=$(mktemp -d /tmp/kevy-textgate-XXXXXX)
+# The rule the repo already has (.claude/rule/hygiene.md): a gate script
+# traps its own cleanup. Without this an interrupted run leaks both the
+# server and $DIR.
+trap 'kill $SRV 2>/dev/null; wait $SRV 2>/dev/null; rm -rf "$DIR"' EXIT INT TERM
 
 PIN=""
 command -v taskset >/dev/null 2>&1 && PIN="taskset -c 0-7"
 CLIENT_PIN=""
 command -v taskset >/dev/null 2>&1 && CLIENT_PIN="taskset -c 8-15"
+# The port is fixed, so back-to-back runs race: the previous server can
+# still hold it when the next one starts, and the new server dies on bind
+# while the client talks to a corpse. Seen as a run that reports no p95 at
+# all. Wait for the port to come free instead of assuming it is.
+for _ in $(seq 1 60); do
+    # A successful connect means someone still holds it; the subshell drops
+    # the descriptor either way.
+    (exec 3<>/dev/tcp/127.0.0.1/$PORT) 2>/dev/null || break
+    sleep 0.5
+done
 env KEVY_BIND=127.0.0.1 $PIN "$BIN" --threads 8 --port $PORT --dir "$DIR" --no-aof >/dev/null 2>&1 &
 SRV=$!
 sleep 1.2
 
-$CLIENT_PIN python3 - "$PORT" "$SRV" <<'PYEOF'
+$CLIENT_PIN python3 - "$PORT" "$SRV" "${POSITIONS:-0}" "${PREFIX:-0}" "${FIELDS:-0}" "${VALUES:-0}" "${ORDER:-0}" "${TYPO:-0}" <<'PYEOF'
 import socket, sys, time
 
 port = int(sys.argv[1])
 srv_pid = int(sys.argv[2])
+# POSITIONS=1 creates the index WITH POSITIONS and measures phrase-query
+# p95 instead of term p95 — the positional side-channel's memory (its
+# term in the IDX.VERIFY formula) and phrase latency are step 5's lx64
+# half. PREFIX=1 measures `word*` prefix-query p95 — the dictionary scan
+# cost that decides whether an ordered structure / FST is needed
+# (step 6). FIELDS=1 indexes a title beside the body and runs `IN title`
+# — the per-field channel's memory term and the scoped walk's latency
+# (step 7). VALUES=1 stores a price per document and runs `FILTER price
+# RANGE …` — the stored column's memory term and the filtered walk's
+# latency (step 8). ORDER=1 reuses that corpus for `SORT price ASC` and
+# `DISTINCT price`: both select by a stored value rather than by score, so
+# neither can use the impact buckets' ordering, and the cost of that is
+# measured rather than assumed. The default is the pre-positions gate,
+# byte-unchanged.
+with_pos = len(sys.argv) > 3 and sys.argv[3] == "1"
+with_prefix = len(sys.argv) > 4 and sys.argv[4] == "1"
+with_fields = len(sys.argv) > 5 and sys.argv[5] == "1"
+with_values = len(sys.argv) > 6 and sys.argv[6] == "1"
+with_order = len(sys.argv) > 7 and sys.argv[7] == "1"
+with_typo = len(sys.argv) > 8 and sys.argv[8] == "1"
 
 def connect():
     s = socket.create_connection(("127.0.0.1", port))
@@ -45,7 +90,10 @@ def enc(*parts):
 def read_reply(sock, buf):
     def line():
         while b"\r\n" not in buf[0]:
-            buf[0] += sock.recv(1 << 20)
+            _chunk = sock.recv(1 << 20)
+            if not _chunk:
+                raise AssertionError('server closed the connection mid-reply')
+            buf[0] += _chunk
         l, _, rest = buf[0].partition(b"\r\n")
         buf[0] = rest
         return l
@@ -58,7 +106,10 @@ def read_reply(sock, buf):
         if n < 0:
             return None
         while len(buf[0]) < n + 2:
-            buf[0] += sock.recv(1 << 20)
+            _chunk = sock.recv(1 << 20)
+            if not _chunk:
+                raise AssertionError('server closed the connection mid-reply')
+            buf[0] += _chunk
         out, buf[0] = buf[0][:n], buf[0][n + 2:]
         return out
     if t == b"*":
@@ -102,7 +153,17 @@ for i in range(N):
     w = " ".join(pick() for _ in range(10))
     cj = "".join(pick_cjk() for _ in range(3))
     body = f"{w} {cj} doc{i}"
-    batch.append(enc("HSET", f"a:{i}", "body", body))
+    if with_fields:
+        # A short title beside the body: the shape `IN` exists for, and
+        # the one that makes a field-scoped length normalisation differ
+        # from a whole-document one.
+        batch.append(enc("HSET", f"a:{i}", "title", f"{pick()} doc{i}", "body", body))
+    elif with_values or with_order:
+        # A price per document, so the stored column has a full corpus in
+        # it and a filter has a spread to select from.
+        batch.append(enc("HSET", f"a:{i}", "body", body, "price", str(i % 1000)))
+    else:
+        batch.append(enc("HSET", f"a:{i}", "body", body))
     if len(batch) == 2000:
         s.sendall(b"".join(batch))
         for _ in range(len(batch)):
@@ -115,7 +176,17 @@ if batch:
 print(f"textgate: loaded {N} docs in {time.time()-t0:.1f}s")
 
 rss_before = rss_kb()
-r = cmd(s, buf, "IDX.CREATE", "a_body", "ON", "PREFIX", "a:", "FIELD", "body", "TYPE", "str", "KIND", "text")
+if with_fields:
+    create_args = ["IDX.CREATE", "a_body", "ON", "PREFIX", "a:", "FIELDS", "title", "body",
+                   "TYPE", "str", "KIND", "text"]
+elif with_values or with_order:
+    create_args = ["IDX.CREATE", "a_body", "ON", "PREFIX", "a:", "FIELD", "body",
+                   "TYPE", "str", "KIND", "text", "VALUES", "price", "TYPES", "i64"]
+else:
+    create_args = ["IDX.CREATE", "a_body", "ON", "PREFIX", "a:", "FIELD", "body", "TYPE", "str", "KIND", "text"]
+if with_pos:
+    create_args += ["WITH", "POSITIONS"]
+r = cmd(s, buf, *create_args)
 assert r == b"+OK", r
 t0 = time.time()
 while True:
@@ -127,11 +198,63 @@ while True:
     time.sleep(0.5)
 print(f"textgate: text index built in {time.time()-t0:.1f}s")
 
-# ---- clamp 1: MATCH p95 median-conn < 20ms ----
-# query mix: head terms (w0/w1 ~ in most docs), mid, tail, CJK
-# (CJK words drawn from the same Zipf vocab: head + mid + tail)
-queries = [("w0 w1 w512",), (CJK_VOCAB[0] + CJK_VOCAB[70],), ("w3 w800 w4000",),
-           (CJK_VOCAB[2] + " " + CJK_VOCAB[900],), ("w0 w9000",)]
+# ---- clamp 1: MATCH p95 median-conn ----
+# term mode: head (w0/w1 ~ in most docs), mid, tail, CJK.
+# positions mode: quoted phrases instead — a phrase anchors on its rarest
+# token's candidate set, then verifies adjacency, so a head+tail phrase
+# ("w0 w9000") is the light case and a head+head one ("w0 w1") the heavy
+# one. Phrase latency is inherently above term latency (adjacency walk),
+# so it carries its own threshold.
+#
+# These thresholds are PROVISIONAL ceilings measured on a shared box
+# (background services inflate p95): they catch a gross regression, they
+# are not a tight SLA. A dedicated bench box — the perfgate discipline —
+# would set both lower; until then they are regression guards, not
+# promises. Retuned 2026-07-23 after the pass-1 `stats()` fix cut every
+# mode (term 27.6->3.2, phrase 87.4->23.4, scoped 124->57, ordered ->30.3,
+# filtered ->24.2, prefix 98->73): the old ceilings sat 6-13x above the
+# measured medians, which guards nothing. Each is now ~2.2x its median,
+# three rounds, spread under 1%.
+if with_order:
+    # SORT and DISTINCT both walk every candidate: the impact buckets are
+    # ordered by score, which is not what either selects by.
+    queries = [("w0 w1",), ("w512",), ("w3 w800",), ("w9000",), ("w0 w9000",)]
+    p95_limit = 70.0
+elif with_values:
+    # A filtered query gives up MaxScore pruning by design (the buckets
+    # are ordered by an unfiltered score), so it walks every candidate.
+    # That is the cost being measured, and it carries its own threshold.
+    queries = [("w0 w1",), ("w512",), ("w3 w800",), ("w9000",), ("w0 w9000",)]
+    p95_limit = 55.0
+elif with_fields:
+    # Scoped queries walk the per-field channel document by document
+    # (no impact-bucket pruning — the scoped frequency is not the one the
+    # buckets are ordered by), so their latency sits above a term query's.
+    queries = [("w0 w1",), ("w512",), ("w3 w800",), ("w9000",), ("w0 w9000",)]
+    p95_limit = 120.0
+elif with_typo:
+    # TYPO expands each bare term against the dictionary by edit distance,
+    # which is the same O(dictionary) walk a prefix does — with a DP per
+    # surviving candidate instead of a byte compare. Deliberately measured
+    # on the same 1M-term dictionary: this is the most expensive query
+    # shape the engine offers, and it shipped without a ceiling.
+    queries = [("w123",), ("w4567",), ("w89",), ("w2345",), ("w678",)]
+    p95_limit = 150.0
+elif with_prefix:
+    # `word*` prefixes of varying breadth; the scan is O(dictionary)
+    # regardless, which is exactly the cost being weighed against an
+    # ordered structure. The doc-marker tokens make this a ~1M-term
+    # dictionary — a deliberate stress.
+    queries = [("w1*",), ("w50*",), ("w9*",), ("w123*",), ("w7*",)]
+    p95_limit = 130.0
+elif with_pos:
+    queries = [('"w0 w1"',), ('"w2 w300"',), ('"w0 w9000"',),
+               ('"w100 w4000"',), ('"w5 w50"',)]
+    p95_limit = 50.0
+else:
+    queries = [("w0 w1 w512",), (CJK_VOCAB[0] + CJK_VOCAB[70],), ("w3 w800 w4000",),
+               (CJK_VOCAB[2] + " " + CJK_VOCAB[900],), ("w0 w9000",)]
+    p95_limit = 8.0
 p95s = []
 for _ in range(6):
     c = connect(); cb = [b""]
@@ -139,16 +262,37 @@ for _ in range(6):
     for i in range(100):
         q = queries[i % len(queries)][0]
         t = time.time()
-        r = cmd(c, cb, "IDX.QUERY", "a_body", "MATCH", q, "LIMIT", "10")
+        args = ["IDX.QUERY", "a_body", "MATCH", q, "LIMIT", "10"]
+        if with_values:
+            # Half the corpus qualifies: selective enough to exercise the
+            # predicate, broad enough that the page still fills.
+            args += ["FILTER", "price", "RANGE", "0", "499"]
+        if with_order:
+            # Alternate the two clauses so one run covers both walks.
+            args += ["SORT", "price", "ASC"] if i % 2 == 0 else ["DISTINCT", "price"]
+        if with_typo:
+            args += ["TYPO", "1"]
+        if with_fields:
+            # Scoped to the title: the per-field walk, which has no
+            # MaxScore pruning, so it carries its own threshold.
+            args += ["IN", "title"]
+        r = cmd(c, cb, *args)
         lat.append(time.time() - t)
-        assert isinstance(r, list) and len(r) > 0, r
+        # A phrase may legitimately match no document (adjacency is rare
+        # in a shuffled corpus); a term query must return hits.
+        assert isinstance(r, list) and (with_pos or len(r) > 0), r
     lat.sort()
     p95s.append(lat[94] * 1000)
     c.close()
 p95s.sort()
-print(f"textgate: MATCH p95 per-conn median={p95s[3]:.2f}ms worst={p95s[5]:.2f}ms")
-if p95s[3] >= 20.0:
-    print(f"textgate: FAIL — MATCH median-conn p95 {p95s[3]:.2f}ms >= 20ms"); sys.exit(1)
+kind = "typo" if with_typo else ("phrase" if with_pos else (
+    "scoped MATCH"
+    if with_fields
+    else ("ordered MATCH" if with_order else ("filtered MATCH" if with_values else "MATCH"))
+))
+print(f"textgate: {kind} p95 per-conn median={p95s[3]:.2f}ms worst={p95s[5]:.2f}ms")
+if p95s[3] >= p95_limit:
+    print(f"textgate: FAIL — {kind} median-conn p95 {p95s[3]:.2f}ms >= {p95_limit}ms"); sys.exit(1)
 
 # ---- clamp 2: memory formula vs RSS growth ----
 r = cmd(s, buf, "IDX.VERIFY", "a_body")
@@ -165,6 +309,6 @@ if not (0.5 <= ratio <= 1.5):
 print("textgate: PASS")
 PYEOF
 RC=$?
-kill $SRV 2>/dev/null
-rm -rf "$DIR"
+# Teardown is the trap's job now, including the `wait` that keeps the next
+# run from racing this server for the port.
 exit $RC

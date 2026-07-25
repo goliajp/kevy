@@ -16,7 +16,7 @@
 //!    the input; n is kept small (≤ ~2K) so each exec stays fast while
 //!    small capacities still force many full/empty transitions.
 //!
-//! INFRA NOTE (2026-07-10): the two-thread phase is capped at a global
+//! INFRA NOTE: the two-thread phase is capped at a global
 //! 100K executions per process. ASAN keeps a ThreadContext (~250 B)
 //! for every thread ever created and never recycles it, so unbounded
 //! thread-per-exec churn OOMs libFuzzer's default 2 GB rss_limit

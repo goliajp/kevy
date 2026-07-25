@@ -10,6 +10,9 @@ fuzz/coverage/
 dump-*.rdb
 aof-*.aof
 shards.meta
+feed-*.gen
+feed-*.meta
+index-catalog.meta
 .premigration/
 
 # Claude Code workspace — kept entirely local, not part of the public repo.
@@ -26,6 +29,13 @@ node_modules/
 package.json
 package-lock.json
 yarn.lock
+bun.lock
+# …but the packages we SHIP are real: their manifests are exempt
+# (bindings/expo/package.json was silently swallowed by the rule
+# above once — the npm package landed on origin with no manifest).
+!bindings/**/package.json
+!packaging/npm/**/package.json
+!crates/kevy-wasm/pkg/package.json
 pnpm-lock.yaml
 
 # Python virtualenvs — same reasoning as node_modules.
@@ -40,3 +50,13 @@ vendor/bundle/
 .bundle/
 view-catalog.meta
 index-catalog.meta
+bench/iot-consumer/target/
+bench/mcu-probe/target/
+bench/iot-consumer/riscv-out
+
+# perfgate builds the reference binary from the baseline commit and caches it here.
+bench/.perfgate-ref/
+# capacity-envelope.sh writes its per-run verdicts here (tiergate consumes them).
+bench/.capacity-envelope-results
+aof-*.aof.premigration.*
+dump-*.rdb.premigration.*

@@ -1,4 +1,4 @@
-//! v2.9 — optional READ-ONLY RESP listener (RFC D2/D3): expose a
+//! Optional READ-ONLY RESP listener: expose a
 //! live embedded store to external RESP clients (redis-cli, ops
 //! tooling) over a whitelist of read ops. One thread per connection
 //! (ops-tooling cardinality); zero tax when not enabled — no thread,
@@ -10,7 +10,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 
 use crate::store::WeakStore;
 
-mod verbs;
+pub(crate) mod verbs;
 
 /// crate-internal re-export for [`crate::Store::dispatch_readonly`].
 pub(crate) use verbs::dispatch as verbs_dispatch;

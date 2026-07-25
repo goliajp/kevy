@@ -85,7 +85,7 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
             | b"XCLAIM"
             | b"XAUTOCLAIM"
             | b"MSET"
-            // v1.27.3: EVAL/EVALSHA writes so Lua wake-bridge drains.
+            // EVAL/EVALSHA count as writes so the Lua wake-bridge drains.
             | b"EVAL" | b"EVALSHA"
     )
 }

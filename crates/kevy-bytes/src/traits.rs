@@ -3,9 +3,10 @@
 //! in `lib.rs` next to the union definition because they reach into
 //! `self.inline` / `self.heap` directly for the same-variant fast paths.
 
-use std::cmp::Ordering;
-use std::fmt;
-use std::hash::{Hash, Hasher};
+use alloc::vec::Vec;
+use core::cmp::Ordering;
+use core::fmt;
+use core::hash::{Hash, Hasher};
 
 use crate::SmallBytes;
 
@@ -40,7 +41,7 @@ impl AsRef<[u8]> for SmallBytes {
     }
 }
 
-impl std::borrow::Borrow<[u8]> for SmallBytes {
+impl core::borrow::Borrow<[u8]> for SmallBytes {
     fn borrow(&self) -> &[u8] {
         self.as_slice()
     }

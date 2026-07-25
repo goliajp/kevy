@@ -1,6 +1,7 @@
-//! v1.55 — verify the v1.45.x finding fix: `-MISDIRECTED writer is
-//! <host:client_port>` when the peer entry uses the extended
-//! `id@host:elect_port:client_port` syntax.
+//! `-MISDIRECTED writer is <host:client_port>` when the peer entry
+//! uses the extended `id@host:elect_port:client_port` syntax — added
+//! after finding MISDIRECTED replies used the elect port instead of
+//! the client port.
 //!
 //! Strict asserts:
 //! - Both nodes start cleanly with the extended peer syntax.
@@ -36,7 +37,7 @@ fn scope_misdirected_reply_uses_client_port() {
         })
         .collect();
 
-    // v1.55 EXTENDED peer syntax: `id@host:elect_port:client_port`.
+    // EXTENDED peer syntax: `id@host:elect_port:client_port`.
     // This is what changes — client_port goes in the MISDIRECTED reply.
     let peers_string = node_ports
         .iter()

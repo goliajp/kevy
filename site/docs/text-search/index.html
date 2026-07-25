@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Full-text search (KIND text) — kevy</title>
+<meta name="description" content="Text is the index engine's third kind: declare it like any index and the field's raw bytes tokenize into a per-shard inverted segment, maintained synchronously with every write (ze">
+<link rel="stylesheet" href="../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../docs/" aria-current="page">Docs</a>
+      <a href="../../docs/commands/">Commands</a>
+      <a href="../../benchmarks/">Benchmarks</a>
+      <a href="../../play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../docs/search-index.json" data-root="../../">
+        <input type="search" placeholder="Search docs…" aria-label="Search docs…" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../docs/text-search/" aria-current="page">EN</a><a href="../../zh/docs/text-search/">中文</a><a href="../../ja/docs/text-search/">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell has-toc">
+  <aside class="side"><p class="side-h">Getting started</p><ul><li><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a></li><li><a href="../../docs/cookbook/">The RDS→kevy modeling cookbook</a></li><li><a href="../../docs/persistence/">Persistence</a></li><li><a href="../../docs/tuning/">Tuning kevy</a></li></ul><p class="side-h">Running it</p><ul><li><a href="../../docs/replication/">Replication</a></li><li><a href="../../docs/availability/">Availability</a></li><li><a href="../../docs/cluster/">Cluster</a></li><li><a href="../../docs/tiering/">Transparent tiering ([tiering] / with_tier_budget)</a></li><li><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a></li><li><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a></li><li><a href="../../docs/async/">Async client</a></li></ul><p class="side-h">Working with data</p><ul><li><a href="../../docs/indexes/">Secondary indexes (IDX. / idx_)</a></li><li><a href="../../docs/tables/">Tables (TABLE. / table_)</a></li><li><a href="../../docs/vector-search/">Vector search (KIND ann)</a></li><li><a href="../../docs/text-search/" aria-current="page">Full-text search (KIND text)</a></li><li><a href="../../docs/views/">Views (VIEW. / view_)</a></li><li><a href="../../docs/cdc/">CDC — the change feed (FEED. / changes_since)</a></li><li><a href="../../docs/pubsub/">Pub/sub</a></li><li><a href="../../docs/lua/">Lua scripting</a></li></ul><p class="side-h">Embedding it</p><ul><li><a href="../../docs/wasm/">kevy on WebAssembly</a></li><li><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a></li><li><a href="../../docs/iot/">kevy on IoT devices</a></li></ul><p class="side-h">Reference</p><ul><li><a href="../../docs/error-replies/">Error reply catalog</a></li><li><a href="../../docs/rds-workloads/">RDS workloads on kevy</a></li><li><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></li><li><a href="../../docs/UPGRADING/">Upgrading kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../docs/commands/">All 188 commands</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>Full-text search (<code>KIND text</code>)</h1></div>
+<p>Text is the index engine's third kind: declare it like any index and the field's raw bytes tokenize into a per-shard inverted segment, maintained synchronously with every write (zero drift, same derived-by-construction discipline as <code>range</code>/<code>unique</code>). There is no separate search server, no ingestion pipeline, and no analyzer configuration — one verb declares the index, and every subsequent write keeps it exact.</p>
+<figure class="code"><pre><code>IDX.CREATE posts ON PREFIX post: FIELD body TYPE str KIND text
+IDX.QUERY posts MATCH "rust 全文检索" LIMIT 10 [FIELDS title body]</code></pre></figure>
+<h2 id="quick-start-server">Quick start (server)</h2>
+<p>Rows are hash keys under the declared prefix. A text index reads one field or several — several fields score into <b>one</b> corpus, each with a weight, so a title hit can outrank a body hit and the scores stay comparable. (Every other kind reads exactly one field, as in <a href="../indexes/">indexes.md</a>; a multi-field declaration on a <code>range</code> or <code>unique</code> index is refused rather than half-honoured.)</p>
+<figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 IDX.CREATE posts ON PREFIX post: FIELD body TYPE str KIND text
+# several weighted fields into one corpus (KIND text only):
+kevy-cli -p 6004 IDX.CREATE posts ON PREFIX post: FIELDS title body WEIGHTS 5 1 TYPE str KIND text
+kevy-cli -p 6004 HSET post:1 title "intro" body "kevy is a pure-Rust key-value store"
+kevy-cli -p 6004 HSET post:2 title "search" body "dictionary-free CJK full-text search"
+kevy-cli -p 6004 IDX.QUERY posts MATCH "full-text rust" LIMIT 10</code></pre></figure>
+<p>The reply is a flat array of <code>key, score</code> pairs, best first. Add <code>FIELDS</code> to hydrate named hash fields on each hit's owning shard in the same call (no second round-trip):</p>
+<figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 IDX.QUERY posts MATCH "search" LIMIT 10 FIELDS title</code></pre></figure>
+<p>Supporting verbs work on text indexes like on every other kind:</p>
+<ul><li><code>IDX.EXPLAIN posts MATCH "full-text rust"</code> — the parse without the execution: kind, build state, estimated rows, and the plan line.</li><li><code>IDX.VERIFY posts</code> / <code>IDX.LIST</code> — entries / bytes / postings / token statistics, live.</li><li><code>IDX.DROP posts</code> — drop the declaration (catalog mutation, sidecar-persisted).</li></ul>
+<p><code>MATCH</code> accepts <code>LIMIT</code> (≤ 1000) and <code>FIELDS</code>; there is no <code>CURSOR</code> form (see "Matching and ranking" for why).</p>
+<h2 id="quick-start-embedded">Quick start (embedded)</h2>
+<p>Same engine in-process. The text kind is behind the <code>text</code> cargo feature (on by default; <code>idx_create</code> with <code>IndexKind::Text</code> answers <code>KevyError::Unsupported</code> when compiled out):</p>
+<figure class="code"><pre><code class="lang-rust">use kevy_embedded::{Config, IndexKind, IndexValType, Store};
+
+fn main() -&gt; kevy_embedded::KevyResult&lt;()&gt; {
+    let store = Store::open(Config::default())?;
+
+    store.idx_create(b"posts", b"post:", b"body", IndexValType::Str,
+                     IndexKind::Text)?;   // builds synchronously
+    store.hset(b"post:1", &amp;[
+        (b"title".as_slice(), b"intro".as_slice()),
+        (b"body".as_slice(),
+         b"kevy is a pure-Rust key-value store".as_slice()),
+    ])?;
+
+    // BM25-ranked hits, best first: Vec&lt;(key, score)&gt;.
+    let hits = store.idx_match(b"posts", b"rust store", 10)?;
+    for (key, score) in &amp;hits {
+        println!("{} {score}", String::from_utf8_lossy(key));
+    }
+    Ok(())
+}</code></pre></figure>
+<p><code>idx_match</code> returns <code>KevyResult&lt;Vec&lt;(Vec&lt;u8&gt;, f64)&gt;&gt;</code>; <code>KevyError::NotFound</code> names a missing index. There is no <code>FIELDS</code> hydration embedded — you are in-process, read fields with <code>hget</code>. Embedded builds are synchronous: <code>idx_create</code> returns when the index serves (no <code>-INDEXBUILDING</code> phase to poll).</p>
+<h2 id="tokenization-dictionary-free">Tokenization (dictionary-free)</h2>
+<ul><li>Latin/alphanumeric runs → lowercased word tokens (length ≥ 2).</li><li>CJK (unified ideographs, kana, hangul) → <b>adjacent bigrams</b> — 「全文检索」 indexes as 全文/文检/检索, so any two-character substring query matches without a dictionary. A lone CJK character emits itself.</li><li>Tokens never cross a script boundary; queries tokenize with the same rules.</li></ul>
+<p>The bigram scheme is the whole CJK story: no dictionary to ship, no dictionary to go stale, and mixed-script documents (<code>"Rust 入门"</code>) index both halves under their own rules. The cost is recall noise on one-character CJK queries (they match only lone-character emissions) — query with two or more characters.</p>
+<h2 id="matching-and-ranking">Matching and ranking</h2>
+<p><code>MATCH</code> is <b>OR semantics over query tokens, BM25-ranked</b> (k1=1.2, b=0.75, non-negative idf variant). Documents matching more (and rarer) query terms rank higher; term frequency saturates; long documents are normalized down.</p>
+<p><b>Scores are global, not per shard.</b> <code>df</code>, <code>n_docs</code> and <code>avgdl</code> are the whole corpus's, gathered at query time: pass 1 asks each shard for its counts of the query's own terms, the origin sums them, pass 2 scores every shard against that total. So a query returns the same ranking AND the same scores on one shard as on eight — there is a test that asserts exactly that, and it runs in CI.</p>
+<p>Query time, not a periodic snapshot: nothing is cached, so there is no staleness window to document, and nothing is coordinated on the write path. The second round costs 0.06 ms of a 28 ms p95 over a million documents (measured — <a href="https://github.com/goliajp/kevy/blob/main/bench/PERF-LEDGER.md">PERF-LEDGER.md</a>), because pass 1 moves only <code>(term, df)</code> pairs for the terms actually queried.</p>
+<p>One declared approximation remains:</p>
+<ul><li><b>No cursor.</b> BM25 deep pagination is an anti-pattern (page N requires re-scoring everything above it); <code>LIMIT</code> caps at 1000, and <code>OFFSET</code> pages within that cap.</li></ul>
+<p>Every clause of that surface now executes:</p>
+<div class="tbl"><table><thead><tr><th>clause</th><th>what it does</th></tr></thead><tbody><tr><td><code>IN &lt;field…&gt;</code></td><td>score within those fields only — a field-scoped BM25 (own frequencies, own lengths), not a filter over whole-document scores</td></tr><tr><td>`FILTER &lt;field&gt; RANGE\</td><td>EQ …`</td><td>a non-scoring predicate over a stored value; applied before the top-K, so a qualifying document ranked 40th still reaches a <code>LIMIT 10</code> page</td></tr><tr><td>`SORT &lt;field&gt; ASC\</td><td>DESC`</td><td>select by a stored value instead of by score; documents with no value sort last in both directions</td></tr><tr><td><code>DISTINCT &lt;field&gt;</code></td><td>at most one hit per value, the best of its group, collapsed during selection so the page still holds <code>LIMIT</code> rows</td></tr><tr><td><code>FACET &lt;field…&gt;</code></td><td>value counts over the <b>whole</b> match set, not the page; <code>FILTER</code> narrows them, <code>DISTINCT</code> does not</td></tr><tr><td><code>HIGHLIGHT [field…]</code></td><td>byte spans of the matched terms, per field</td></tr><tr><td>`TYPO 0\</td><td>1\</td><td>2`</td><td>edit-distance tolerance on bare terms (phrases and prefixes stay exact)</td></tr><tr><td><code>LIMIT n</code> / <code>OFFSET m</code> / <code>FIELDS f…</code></td><td>page size, page offset, hydration</td></tr></tbody></table></div>
+<p><code>"quoted phrases"</code> and <code>word*</code> prefixes go in the <code>MATCH</code> text itself. <code>FILTER</code>, <code>SORT</code>, <code>DISTINCT</code> and <code>FACET</code> read fields the index stored at <code>VALUES</code> declaration time; naming a field it did not store is an error that names the fields it did.</p>
+<p>An accepted-but-ignored clause would be worse than an error: a dropped <code>FILTER</code> returns unfiltered rows, which is a wrong answer wearing a successful reply. That is why the keywords were frozen — and rejected by name — before any of them worked.</p>
+<p>(This reverses an earlier boundary. Previous versions of this page said phrase and boolean queries were deliberately out of scope — "if you need those, you are describing a search engine". That was right for a text kind that stops at ranked lookup, and the goal changed.)</p>
+<h2 id="hybrid-retrieval-bm25-knn">Hybrid retrieval (BM25 + KNN)</h2>
+<p>A text index and an ANN index over the same corpus fuse server-side with reciprocal-rank fusion:</p>
+<figure class="code"><pre><code>IDX.QUERY HYBRID posts MATCH "rust storage" embs KNN &lt;f32-le-blob&gt;
+    [LIMIT n] [RRFK k] [EF ef] [FIELDS f…]</code></pre></figure>
+<p>Each hit's fused score is <code>Σ 1/(k + rank_i)</code> over the two result lists (<code>RRFK</code> default 60 — the standard fusion constant; rank positions, not raw scores, so BM25 and distance need no calibration against each other). See <a href="../vector-search/">vector-search.md</a> for the KNN half. Hybrid is a server verb; embedded callers run <code>idx_match</code> + <code>idx_knn</code> and fuse in-process.</p>
+<h2 id="lifecycle-and-consistency">Lifecycle and consistency</h2>
+<p>Same envelope as every index kind (<a href="../indexes/">indexes.md</a>):</p>
+<ul><li>A write and its segment update are <b>atomic within the owning shard</b> (single reactor thread / shard lock). An update removes exactly the old document's tokens and inserts the new ones — documents keep their original text for this, so there is no tombstone drift.</li><li>A row whose declared field is missing simply contributes no tokens; there is no coercion failure for <code>TYPE str</code> text fields.</li><li>Cross-shard queries gather their corpus statistics per query rather than from a snapshot, so the ranking is global without anything being cached or coordinated on the write path.</li><li><b>Server backfill is asynchronous</b>: after <code>IDX.CREATE</code> on a live keyspace, or after a restart, queries answer <code>-INDEXBUILDING</code> until the rebuild completes (data availability never waits for index builds; poll or retry — see <a href="../indexes/">indexes.md</a>). Embedded builds are synchronous.</li><li>Inverted segments are <b>derived state</b> — never snapshotted or AOF-logged, rebuilt from data after restart.</li><li><code>MAXMEM</code> (on <code>IDX.CREATE</code>) caps the segment's memory; a build that crosses the budget fails declaratively (<code>-INDEXOVERBUDGET</code> on queries) instead of growing unbounded.</li></ul>
+<h2 id="performance">Performance</h2>
+<p>Top-K evaluation uses MaxScore pruning (rarest terms first; commoner lists are probed per candidate once they can't lift new documents into the top K). Postings are doc-id inverted lists impact-ordered two ways: tf buckets descending, sparse log2 dl bands ascending inside each bucket — a single-term query (no second list to prune against) stops exactly at the first band whose lower edge can't beat the kth floor, so even the most common term answers in ~0.1ms at 200k docs (was ~6ms as a full postings scan). One-posting tokens (the Zipf long tail) stay inline and cost no heap.</p>
+<p>Measured envelope (receipts in the bench tree):</p>
+<ul><li><a href="https://github.com/goliajp/kevy/blob/main/bench/textgate.sh"><code>bench/textgate.sh</code></a> gates <code>MATCH</code> p95 &lt; 20ms at 1M mixed-script documents (~100 bytes each) against a real server, plus the memory formula against real RSS growth. It runs in CI-adjacent release checks — the numbers are clamps, not aspirations.</li><li><a href="https://github.com/goliajp/kevy/blob/main/bench/PERF-LEDGER.md"><code>bench/PERF-LEDGER.md</code></a> records the comparative shootout: BM25 top-10 at +21% qps with a p95 tie against RediSearch's <code>FT.SEARCH</code> on the same corpus.</li></ul>
+<p>The write side is the standard index tax: one hash-field read plus one segment update per matching index per write; an empty catalog costs one untaken branch per write.</p>
+<h2 id="sizing">Sizing</h2>
+<p><code>bytes ≈ Σ_token (token_len + 48) + postings × 64 + Σ_doc (key_len + Σ_field(field_len + 4) + 72)</code> — docs keep each declared field's text (and the weight it was indexed with) so an update removes exactly the tokens it inserted, at the weight it inserted them. A single-field index is the one-element case and its sizing is unchanged. Reported live by <code>IDX.VERIFY</code> / <code>IDX.LIST</code> (entries/bytes/postings/tokens for text kinds). <code>bench/textgate.sh</code> gates the formula against real RSS growth.</p>
+<p>Rebuild rides the standard backfill skeleton (tick-incremental on the server, synchronous embedded).</p>
+<h2 id="see-also">See also</h2>
+<ul><li><a href="../indexes/">indexes.md</a> — the index engine this kind plugs into (declaration grammar, cursor contract, consistency envelope).</li><li><a href="../vector-search/">vector-search.md</a> — the ANN kind and the other half of <code>HYBRID</code>.</li><li><a href="../commands/">verb-reference.md</a> — generated grammar for every <code>IDX.*</code> form.</li><li><a href="../cookbook/">cookbook.md</a> — full-text recipes in context.</li></ul></main>
+  <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#quick-start-server">Quick start (server)</a></li><li class="l2"><a href="#quick-start-embedded">Quick start (embedded)</a></li><li class="l2"><a href="#tokenization-dictionary-free">Tokenization (dictionary-free)</a></li><li class="l2"><a href="#matching-and-ranking">Matching and ranking</a></li><li class="l2"><a href="#hybrid-retrieval-bm25-knn">Hybrid retrieval (BM25 + KNN)</a></li><li class="l2"><a href="#lifecycle-and-consistency">Lifecycle and consistency</a></li><li class="l2"><a href="#performance">Performance</a></li><li class="l2"><a href="#sizing">Sizing</a></li><li class="l2"><a href="#see-also">See also</a></li></ul></aside>
+</div>
+
+<script src="../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

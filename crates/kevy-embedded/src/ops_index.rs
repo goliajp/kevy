@@ -1,4 +1,4 @@
-//! v2.5 — embedded secondary-index API (RFC LOCKED; server parity
+//! Embedded secondary-index API (server parity
 //! minus FIELDS hydration, which exists to save wire round-trips the
 //! embedded caller doesn't have — read fields with `hget` directly).
 //!
@@ -15,6 +15,7 @@
 //! no race window per shard). No `Building` state embedded — create
 //! returns when the index serves.
 
+use crate::{KevyError, KevyResult};
 use std::io;
 use std::sync::RwLock;
 
@@ -26,6 +27,47 @@ pub(crate) use crate::ops_index_sync::{each_written_key_pub, on_commit, sync_seg
 
 /// One page of index hits plus the cursor to resume from.
 pub type IndexPage = (Vec<(Vec<u8>, IndexValue)>, Option<Cursor>);
+
+/// One field's highlight: its name and the `(start, end)` match spans.
+#[cfg(feature = "text")]
+pub type FieldSpans = (Vec<u8>, Vec<(u32, u32)>);
+/// A highlighted MATCH hit: key, score, and per-field [`FieldSpans`].
+#[cfg(feature = "text")]
+pub type HighlightedHit = (Vec<u8>, f64, Vec<FieldSpans>);
+
+// `idx_match_with`, its clause options and the span-mapping helper live
+// in a child module to keep this file under the 500-LOC ceiling; the
+// text-index specifics — declaring a multi-field one, and gathering the
+// corpus statistics a global BM25 scores against — live in another.
+#[cfg(feature = "text")]
+#[path = "ops_index_highlight.rs"]
+pub(crate) mod highlight;
+
+// The clause-carrying scalar query (capacity arc G1) and the
+// [`ValueFilter`] predicate shape it shares with MATCH — independent of
+// the `text` feature: a range index filters fine without a tokenizer.
+#[path = "ops_index_claused.rs"]
+pub(crate) mod claused;
+
+#[cfg(feature = "text")]
+#[path = "ops_index_text.rs"]
+mod text;
+
+/// Sort merged `(value, key)` hits, cut to `limit`, and derive the
+/// resume cursor. Shared by `Store::idx_query` and the transaction twin
+/// on `AtomicAllShards`, which differ only in where the segments come
+/// from — the pagination has to agree exactly or a cursor taken inside
+/// a transaction would not resume outside one.
+pub(crate) fn merge_page(mut all: Vec<(IndexValue, Vec<u8>)>, limit: usize) -> IndexPage {
+    all.sort();
+    all.truncate(limit);
+    let next = if all.len() == limit {
+        all.last().map(|(v, k)| Cursor { value: v.clone(), key: k.clone() })
+    } else {
+        None
+    };
+    (all.into_iter().map(|(v, k)| (k, v)).collect(), next)
+}
 
 /// Store-level index state: catalog + a version stamp the per-shard
 /// segment lists sync against.
@@ -40,15 +82,18 @@ pub(crate) struct IndexReg {
 pub(crate) struct ShardSegs {
     pub(crate) version: u64,
     pub(crate) segs: Vec<(IndexSpec, Segment)>,
-    /// v2.7: inverted segments for KIND text specs (parallel list —
+    /// Inverted segments for KIND text specs (parallel list —
     /// a spec appears in exactly one of the lists).
+    #[cfg(feature = "text")]
     pub(crate) text: Vec<(IndexSpec, kevy_text::TextSegment)>,
-    /// v2.8: HNSW graphs for KIND ann specs.
+    /// HNSW graphs for KIND ann specs.
+    #[cfg(feature = "vector")]
     pub(crate) ann: Vec<(IndexSpec, kevy_vector::Hnsw)>,
-    /// v3.1: aggregate segments for KIND agg specs.
+    /// Aggregate segments for KIND agg specs.
     pub(crate) agg: Vec<(IndexSpec, kevy_index::AggSegment)>,
 }
 
+#[cfg(feature = "persist")]
 const SIDECAR: &str = "index-catalog.meta";
 
 impl Store {
@@ -61,24 +106,39 @@ impl Store {
         field: &[u8],
         ty: ValType,
         kind: IndexKind,
-    ) -> io::Result<()> {
+    ) -> KevyResult<()> {
         if prefix.is_empty() {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "empty prefix"));
+            return Err(KevyError::InvalidInput("empty prefix".into()));
+        }
+        #[cfg(not(feature = "text"))]
+        if kind == IndexKind::Text {
+            return Err(KevyError::Unsupported("text indexes need the `text` feature".into()));
+        }
+        #[cfg(not(feature = "vector"))]
+        if kind == IndexKind::Ann {
+            return Err(KevyError::Unsupported("vector indexes need the `vector` feature".into()));
         }
         let spec = IndexSpec {
             name: name.to_vec(),
             prefix: prefix.to_vec(),
-            field: field.to_vec(),
+            fields: vec![kevy_index::FieldSpec::new(field.to_vec())],
             ty,
             kind,
             max_bytes: 0,
             ann: None,
             group_by: None,
+            with_positions: false,
+            values: Vec::new(),
+            composite: None,
         };
         self.register_spec(spec)
     }
 
-    fn register_spec(&self, spec: IndexSpec) -> io::Result<()> {
+    pub(crate) fn register_spec(&self, spec: IndexSpec) -> KevyResult<()> {
+        // Tiering floor refusal: body in
+        // `ops_index_sync::tier_floor_check` (500-LOC rule).
+        #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+        crate::ops_index_sync::tier_floor_check(&self.shards)?;
         {
             let mut g = self
                 .indexes
@@ -100,22 +160,23 @@ impl Store {
         Ok(())
     }
 
-    /// v2.8: declare an ANN index (KIND ann, TYPE vector). `params.m`
+    /// Declare an ANN index (KIND ann, TYPE vector). `params.m`
     /// / `params.ef` of 0 select the defaults (16 / 200).
+    #[cfg(feature = "vector")]
     pub fn idx_create_ann(
         &self,
         name: &[u8],
         prefix: &[u8],
         field: &[u8],
         params: kevy_index::AnnSpec,
-    ) -> io::Result<()> {
+    ) -> KevyResult<()> {
         if params.dim == 0 || params.distance > 2 {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "bad ann parameters"));
+            return Err(KevyError::InvalidInput("bad ann parameters".into()));
         }
         let spec = IndexSpec {
             name: name.to_vec(),
             prefix: prefix.to_vec(),
-            field: field.to_vec(),
+            fields: vec![kevy_index::FieldSpec::new(field.to_vec())],
             ty: ValType::Vector,
             kind: IndexKind::Ann,
             max_bytes: 0,
@@ -125,6 +186,9 @@ impl Store {
                 ..params
             }),
             group_by: None,
+            with_positions: false,
+            values: Vec::new(),
+            composite: None,
         };
         self.register_spec(spec)
     }
@@ -161,25 +225,18 @@ impl Store {
         max: &IndexValue,
         cursor: Option<&Cursor>,
         limit: usize,
-    ) -> io::Result<IndexPage> {
+    ) -> KevyResult<IndexPage> {
         let limit = limit.clamp(1, 100_000);
         let mut all: Vec<(IndexValue, Vec<u8>)> = Vec::new();
         self.for_each_segment(name, |seg| {
             let (hits, _) = seg.range(min, max, cursor, limit);
             all.extend(hits.into_iter().map(|(k, v)| (v, k)));
         })?;
-        all.sort();
-        all.truncate(limit);
-        let next = if all.len() == limit {
-            all.last().map(|(v, k)| Cursor { value: v.clone(), key: k.clone() })
-        } else {
-            None
-        };
-        Ok((all.into_iter().map(|(v, k)| (k, v)).collect(), next))
+        Ok(merge_page(all, limit))
     }
 
     /// Count without materializing keys.
-    pub fn idx_count(&self, name: &[u8], min: &IndexValue, max: &IndexValue) -> io::Result<u64> {
+    pub fn idx_count(&self, name: &[u8], min: &IndexValue, max: &IndexValue) -> KevyResult<u64> {
         let mut total = 0u64;
         self.for_each_segment(name, |seg| total += seg.count(min, max))?;
         Ok(total)
@@ -187,7 +244,7 @@ impl Store {
 
     /// Summed segment stats (entries / bytes / coerce failures /
     /// unique-fence duplicates).
-    pub fn idx_stats(&self, name: &[u8]) -> io::Result<SegmentStats> {
+    pub fn idx_stats(&self, name: &[u8]) -> KevyResult<SegmentStats> {
         let mut sum = SegmentStats::default();
         self.for_each_segment(name, |seg| {
             let s = seg.stats();
@@ -211,35 +268,30 @@ impl Store {
             .collect()
     }
 
-    /// v2.7 `MATCH` — BM25-ranked hits merged across shards
-    /// (shard-local statistics; see docs/text-search.md).
+    /// `MATCH` — BM25-ranked hits merged across shards, scored against
+    /// **global** corpus statistics so a hit's rank does not depend on
+    /// which shard it landed on (see docs/text-search.md).
+    ///
+    /// Two query-time passes: the first sums each shard's `n_docs`,
+    /// `total_len` and per-query-token `df` into one [`CorpusStats`]; the
+    /// second scores every shard against it. Only the query's tokens'
+    /// df is aggregated, not a whole-corpus table — the query narrows it.
+    #[cfg(feature = "text")]
     pub fn idx_match(
         &self,
         name: &[u8],
         query: &[u8],
         limit: usize,
-    ) -> io::Result<Vec<(Vec<u8>, f64)>> {
-        let limit = limit.clamp(1, 1000);
-        let mut all: Vec<kevy_text::TextMatch> = Vec::new();
-        let mut found = false;
-        for shard in self.shards.iter() {
-            let mut g = lock_write(shard);
-            let inner = &mut *g;
-            sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
-            if let Some((_, ts)) = inner.idx_segs.text.iter().find(|(s, _)| s.name == name) {
-                found = true;
-                all.extend(ts.matches(query, limit));
-            }
-        }
-        if !found {
-            return Err(io::Error::new(io::ErrorKind::NotFound, "no such text index"));
-        }
-        all.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.key.cmp(&b.key)));
-        all.truncate(limit);
-        Ok(all.into_iter().map(|m| (m.key, m.score)).collect())
+    ) -> KevyResult<Vec<(Vec<u8>, f64)>> {
+        Ok(self
+            .idx_match_with(name, query, limit, crate::MatchOpts::default())?
+            .into_iter()
+            .map(|(key, score, _)| (key, score))
+            .collect())
     }
 
-    /// v3.1: declare an aggregate index (KIND agg — write-time GROUP
+
+    /// Declare an aggregate index (KIND agg — write-time GROUP
     /// BY). `ty` must be numeric.
     pub fn idx_create_agg(
         &self,
@@ -248,25 +300,28 @@ impl Store {
         field: &[u8],
         ty: ValType,
         group_by: &[u8],
-    ) -> io::Result<()> {
+    ) -> KevyResult<()> {
         if !matches!(ty, ValType::I64 | ValType::F64) || group_by.is_empty() {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "agg requires numeric type + group field"));
+            return Err(KevyError::InvalidInput("agg requires numeric type + group field".into()));
         }
         let spec = IndexSpec {
             name: name.to_vec(),
             prefix: prefix.to_vec(),
-            field: field.to_vec(),
+            fields: vec![kevy_index::FieldSpec::new(field.to_vec())],
             ty,
             kind: IndexKind::Agg,
             max_bytes: 0,
             ann: None,
             group_by: Some(group_by.to_vec()),
+            with_positions: false,
+            values: Vec::new(),
+            composite: None,
         };
         self.register_spec(spec)
     }
 
-    /// v3.1: one group's merged stats across shards.
-    pub fn idx_group(&self, name: &[u8], group: &[u8]) -> io::Result<kevy_index::GroupStats> {
+    /// One group's merged stats across shards.
+    pub fn idx_group(&self, name: &[u8], group: &[u8]) -> KevyResult<kevy_index::GroupStats> {
         let mut merged = kevy_index::GroupStats { count: 0, sum: 0.0, min: None, max: None };
         let mut found = false;
         for shard in self.shards.iter() {
@@ -279,18 +334,18 @@ impl Store {
             }
         }
         if !found {
-            return Err(io::Error::new(io::ErrorKind::NotFound, "no such aggregate index"));
+            return Err(KevyError::NotFound("no such aggregate index".into()));
         }
         Ok(merged)
     }
 
-    /// v3.1: top groups merged + ranked across shards.
+    /// Top groups merged + ranked across shards.
     pub fn idx_groups(
         &self,
         name: &[u8],
         by: kevy_index::AggBy,
         limit: usize,
-    ) -> io::Result<Vec<(Vec<u8>, kevy_index::GroupStats)>> {
+    ) -> KevyResult<Vec<(Vec<u8>, kevy_index::GroupStats)>> {
         let limit = limit.clamp(1, 1000);
         // HashMap merge (same O(rows×groups) trap the server reduce
         // had — hashing keeps it linear).
@@ -314,7 +369,7 @@ impl Store {
             }
         }
         if !found {
-            return Err(io::Error::new(io::ErrorKind::NotFound, "no such aggregate index"));
+            return Err(KevyError::NotFound("no such aggregate index".into()));
         }
         let mut ranked: Vec<(Vec<u8>, kevy_index::GroupStats)> = merged.into_iter().collect();
         kevy_index::sort_groups(&mut ranked, by);
@@ -322,15 +377,16 @@ impl Store {
         Ok(ranked)
     }
 
-    /// v2.8 `KNN` — nearest neighbors merged ascending across shards.
+    /// `KNN` — nearest neighbors merged ascending across shards.
     /// `ef` = query beam width (0 = engine default; recall knob).
+    #[cfg(feature = "vector")]
     pub fn idx_knn(
         &self,
         name: &[u8],
         query: &[f32],
         k: usize,
         ef: usize,
-    ) -> io::Result<Vec<(Vec<u8>, f32)>> {
+    ) -> KevyResult<Vec<(Vec<u8>, f32)>> {
         let k = k.clamp(1, 1000);
         let mut all: Vec<(Vec<u8>, f32)> = Vec::new();
         let mut found = false;
@@ -344,18 +400,26 @@ impl Store {
             }
         }
         if !found {
-            return Err(io::Error::new(io::ErrorKind::NotFound, "no such vector index"));
+            return Err(KevyError::NotFound("no such vector index".into()));
         }
         all.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
         all.truncate(k);
         Ok(all)
     }
 
+    /// Without `persist` there is no data dir — the catalog lives only
+    /// in memory, so the sidecar halves are no-ops.
+    #[cfg(not(feature = "persist"))]
+    fn persist_index_sidecar(&self) {}
+
+    #[cfg(not(feature = "persist"))]
+    pub(crate) fn idx_boot(&self) {}
+
     fn for_each_segment(
         &self,
         name: &[u8],
         mut f: impl FnMut(&Segment),
-    ) -> io::Result<()> {
+    ) -> KevyResult<()> {
         let mut found = false;
         for shard in self.shards.iter() {
             let mut g = lock_write(shard);
@@ -369,10 +433,11 @@ impl Store {
         if found {
             Ok(())
         } else {
-            Err(io::Error::new(io::ErrorKind::NotFound, "no such index"))
+            Err(KevyError::NotFound("no such index".into()))
         }
     }
 
+    #[cfg(feature = "persist")]
     fn persist_index_sidecar(&self) {
         let Some(dir) = &self.config.data_dir else { return };
         let g = self
@@ -388,6 +453,7 @@ impl Store {
 
     /// Boot half — load a persisted catalog (indexes rebuild lazily on
     /// first touch via `sync_segs`).
+    #[cfg(feature = "persist")]
     pub(crate) fn idx_boot(&self) {
         let Some(dir) = &self.config.data_dir else { return };
         if let Ok(text) = std::fs::read_to_string(dir.join(SIDECAR))

@@ -7,23 +7,23 @@ use std::io::{self, Read, Write};
 
 /// File magic + format version. Bump `VERSION` on any layout change.
 ///
-/// v2 stored each entry's TTL as **remaining millis** (relative), so a load
-/// re-anchored the deadline to load-time — a restart reset every key to a
-/// fresh full TTL (INC-2026-06-09). v3 stores the **absolute** Unix-ms
+/// Format v2 stored each entry's TTL as **remaining millis** (relative), so a
+/// load re-anchored the deadline to load-time — a restart reset every key to a
+/// fresh full TTL (a production incident class). v3 stores the **absolute** Unix-ms
 /// deadline, so a load reconstructs the original instant. v4 appends a
 /// consumer-group section to each `OP_STREAM` payload (groups + consumers
 /// plus PEL) — before that, SAVE/reshard silently dropped group state. The
 /// loader still accepts v2 (relative TTL) and v3 (no group section).
 pub(crate) const MAGIC: &[u8; 8] = b"KEVYSNAP";
 pub(crate) const VERSION: u8 = 4;
-/// v2.3: version 5 carries a 16-byte feed cursor (`gen u64 LE` +
+/// Format version 5 carries a 16-byte feed cursor (`gen u64 LE` +
 /// `offset u64 LE`) right after the version byte — the snapshot half
 /// of the recovery-point contract (docs/cdc.md): snapshot S + feed
 /// frames from S's cursor = exact restore. Writers emit v5 only when
 /// a cursor is supplied; cursor-less writes stay at v4 so every
 /// existing path is byte-identical.
 pub(crate) const VERSION_FEED_CURSOR: u8 = 5;
-/// v2.4: version 6 additionally carries `OP_HFTTL` hash field-TTL
+/// Format version 6 additionally carries `OP_HFTTL` hash field-TTL
 /// records after the entry stream. Written only when field TTLs
 /// exist; the header still carries the (possibly zero) feed cursor.
 pub(crate) const VERSION_HASH_TTL: u8 = 6;
@@ -39,7 +39,7 @@ pub(crate) const OP_LIST: u8 = 3;
 pub(crate) const OP_SET: u8 = 4;
 pub(crate) const OP_ZSET: u8 = 5;
 pub(crate) const OP_STREAM: u8 = 6;
-/// v2.4 hash field TTL record: `[key][field][deadline_ms: u64 LE]`.
+/// Hash field TTL record: `[key][field][deadline_ms: u64 LE]`.
 /// Appears only in format v6+ snapshots, after the entry stream's
 /// records (before OP_EOF).
 pub(crate) const OP_HFTTL: u8 = 7;
@@ -73,10 +73,37 @@ pub(crate) fn write_bytes<W: Write>(w: &mut W, b: &[u8]) -> io::Result<()> {
     w.write_all(b)
 }
 
+/// Cap on how much a single untrusted length/count field may cause
+/// the loader to reserve BEFORE the bytes behind it actually arrive.
+/// A corrupt or hostile snapshot can declare up to `u32::MAX` for any
+/// length; reserving that eagerly (`vec![0; len]` / `with_capacity`)
+/// is a remote alloc-abort. We reserve at most this and grow as real
+/// bytes land, so a lie costs one step, not gigabytes. Applies to
+/// both byte lengths and element counts (see [`capped_capacity`]).
+pub(crate) const SNAP_RESERVE_CAP: usize = 64 * 1024;
+
+/// Initial reservation for an untrusted element count — clamped so a
+/// forged count can't drive an unbounded `with_capacity`. The vec
+/// still grows to the true count as elements are pushed; each push is
+/// preceded by a read that fails cleanly (`io::Error`) once the
+/// stream is exhausted, so a lie is caught within one step.
+pub(crate) fn capped_capacity(n: usize) -> usize {
+    n.min(SNAP_RESERVE_CAP)
+}
+
 pub(crate) fn read_bytes<R: Read>(r: &mut R) -> io::Result<Vec<u8>> {
     let len = read_u32(r)? as usize;
-    let mut buf = vec![0u8; len];
-    r.read_exact(&mut buf)?;
+    // Grow in bounded steps instead of `vec![0u8; len]`: a declared
+    // 4 GiB length with an empty stream fails at `read_exact` after
+    // at most one step's growth, not after a 4 GiB zeroed alloc.
+    let mut buf = Vec::with_capacity(capped_capacity(len));
+    let mut done = 0;
+    while done < len {
+        let step = (len - done).min(SNAP_RESERVE_CAP);
+        buf.resize(done + step, 0);
+        r.read_exact(&mut buf[done..])?;
+        done += step;
+    }
     Ok(buf)
 }
 

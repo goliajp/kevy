@@ -1,4 +1,4 @@
-//! v2.4 hash field TTLs — real-server e2e: the relative `HEXPIRE`
+//! Hash field TTLs — real-server e2e: the relative `HEXPIRE`
 //! must survive an AOF replay WITHOUT re-anchoring (the
 //! `HPEXPIREAT` follow-up frame `Shard::log_write` appends), and the
 //! reaper must sweep due fields.
@@ -33,7 +33,7 @@ fn free_port() -> u16 {
 
 fn boot(port: u16, dir: std::path::PathBuf, stop: Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
-        let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, 4, kevy::KevyCommands)
+        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(4)).bind([127, 0, 0, 1], port).shards(4)
             .with_data_dir(dir)
             .with_aof(true);
         rt.run(stop).unwrap();
@@ -71,10 +71,18 @@ fn hexpire_survives_replay_without_reanchor() {
         // relative form: 100s
         let r = cmd(&mut c, &[b"HEXPIRE", b"eh", b"100", b"FIELDS", b"1", b"f"]);
         assert_eq!(r, b"*1\r\n:1\r\n");
-        let r = cmd(&mut c, &[b"HTTL", b"eh", b"FIELDS", b"1", b"f"]);
+        // HPTTL for the millisecond precision this test needs. HTTL is the
+        // SECONDS verb — asserting ~100_000 out of it is what let the unit bug
+        // hide here in the first place.
+        let r = cmd(&mut c, &[b"HPTTL", b"eh", b"FIELDS", b"1", b"f"]);
         let s = String::from_utf8_lossy(&r);
         observed_ms = s.trim_start_matches("*1\r\n:").trim_end().parse().unwrap();
         assert!(observed_ms > 90_000 && observed_ms <= 100_000, "{observed_ms}");
+        // and the same deadline, read in seconds, is ~100 — not ~100000.
+        let r = cmd(&mut c, &[b"HTTL", b"eh", b"FIELDS", b"1", b"f"]);
+        let s = String::from_utf8_lossy(&r);
+        let secs: i64 = s.trim_start_matches("*1\r\n:").trim_end().parse().unwrap();
+        assert!((90..=100).contains(&secs), "HTTL must reply seconds, got {secs}");
     }
     // sleep a beat so a re-anchored replay would visibly RESET to ~100s
     std::thread::sleep(std::time::Duration::from_millis(1200));
@@ -89,7 +97,10 @@ fn hexpire_survives_replay_without_reanchor() {
     {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", port2)).unwrap();
         c.set_read_timeout(Some(std::time::Duration::from_secs(8))).unwrap();
-        let r = cmd(&mut c, &[b"HTTL", b"eh", b"FIELDS", b"2", b"f", b"plain"]);
+        // HPTTL again: this compares against observed_ms, so it must be the
+        // same unit. Reading it in seconds would make `f_ttl < observed_ms
+        // - 1000` trivially true and quietly retire the assertion.
+        let r = cmd(&mut c, &[b"HPTTL", b"eh", b"FIELDS", b"2", b"f", b"plain"]);
         let s = String::from_utf8_lossy(&r);
         let mut nums = s.lines().filter(|l| l.starts_with(':')).map(|l| l[1..].parse::<i64>().unwrap());
         let f_ttl = nums.next().unwrap();

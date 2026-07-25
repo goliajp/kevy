@@ -16,14 +16,18 @@ pub(crate) const TCP_NODELAY: c_int = 1;
 pub(crate) const F_GETFL: c_int = 3;
 pub(crate) const F_SETFL: c_int = 4;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) const SOL_SOCKET: c_int = 1;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) const SO_REUSEADDR: c_int = 2;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) const SO_REUSEPORT: c_int = 15;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) const O_NONBLOCK: c_int = 0x800;
+// MSG_PEEK is 2 on every Unix; MSG_DONTWAIT differs by platform.
+pub(crate) const MSG_PEEK: c_int = 2;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub(crate) const MSG_DONTWAIT: c_int = 0x40;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) const SOL_SOCKET: c_int = 0xffff;
@@ -33,13 +37,15 @@ pub(crate) const SO_REUSEADDR: c_int = 0x0004;
 pub(crate) const SO_REUSEPORT: c_int = 0x0200;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) const O_NONBLOCK: c_int = 0x0004;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub(crate) const MSG_DONTWAIT: c_int = 0x80;
 
 // ---- sockaddr_in -----------------------------------------------------------
 
 // struct_field_names: the `sin_` prefix mirrors the C ABI struct verbatim —
 // dropping it would obscure the 1:1 layout correspondence.
 #[allow(clippy::struct_field_names)]
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 #[repr(C)]
 pub(crate) struct SockaddrIn {
     pub(crate) sin_family: u16,
@@ -63,7 +69,7 @@ pub(crate) struct SockaddrIn {
 
 impl SockaddrIn {
     pub(crate) fn new(ip: [u8; 4], port: u16) -> Self {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         return SockaddrIn {
             sin_family: AF_INET as u16,
             sin_port: port.to_be(),
@@ -93,11 +99,11 @@ impl SockaddrIn {
 #[allow(clippy::struct_field_names)]
 #[repr(C)]
 pub(crate) struct SockaddrUn {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     pub(crate) sun_family: u16,
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     pub(crate) sun_len: u8,
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     pub(crate) sun_family: u8,
     pub(crate) sun_path: [u8; 108],
 }
@@ -115,11 +121,11 @@ impl SockaddrUn {
         // The actual length passed to bind() is offset_of(sun_path) + strlen(path) + 1
         // (for the NUL); using full struct size also works on Linux + BSD.
         let sa = SockaddrUn {
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "android"))]
             sun_family: AF_UNIX as u16,
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(not(any(target_os = "linux", target_os = "android")))]
             sun_len: size_of::<SockaddrUn>() as u8,
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(not(any(target_os = "linux", target_os = "android")))]
             sun_family: AF_UNIX as u8,
             sun_path,
         };

@@ -5,14 +5,13 @@
 //! pub/sub work end-to-end: the publisher's `Connection` and the
 //! consumer's `Subscriber`, opened with the same URL, find the same bus.
 //! Anonymous `mem://` (no name) skips the registry and stays per-call
-//! isolated, preserving the v1.0/v1.1/v1.2 behaviour.
+//! isolated, preserving the original documented behaviour.
 
 use std::collections::HashMap;
-use std::io;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
-use kevy_embedded::{Config, Store, WeakStore};
+use kevy_embedded::{Config, KevyError, Store, WeakStore};
 
 /// What [`parse_url`] resolves an input to.
 #[derive(Debug, Clone)]
@@ -28,10 +27,10 @@ pub(crate) enum Target {
     Remote(String),
 }
 
-pub(crate) fn parse_url(url: &str) -> io::Result<Target> {
+pub(crate) fn parse_url(url: &str) -> Result<Target, KevyError> {
     let (scheme, rest) = url
         .split_once("://")
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "URL missing '://'"))?;
+        .ok_or_else(|| KevyError::InvalidInput("URL missing '://'".into()))?;
     match scheme {
         "mem" => Ok(if rest.is_empty() {
             Target::EmbedMemoryAnonymous
@@ -40,22 +39,17 @@ pub(crate) fn parse_url(url: &str) -> io::Result<Target> {
         }),
         "file" => {
             if rest.is_empty() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "file:// URL must include a path (e.g. `file:///var/lib/myapp`)",
+                return Err(KevyError::InvalidInput(
+                    "file:// URL must include a path (e.g. `file:///var/lib/myapp`)".into(),
                 ));
             }
             Ok(Target::EmbedPersist(PathBuf::from(rest)))
         }
         "kevy" | "redis" | "tcp" => Ok(Target::Remote(url.to_string())),
-        "rediss" | "kevys" => Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "TLS schemes (rediss://, kevys://) are unsupported — kevy has no TLS",
+        "rediss" | "kevys" => Err(KevyError::Unsupported(
+            "TLS schemes (rediss://, kevys://) are unsupported — kevy has no TLS".into(),
         )),
-        other => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("unknown URL scheme '{other}://'"),
-        )),
+        other => Err(KevyError::InvalidInput(format!("unknown URL scheme '{other}://'"))),
     }
 }
 
@@ -77,7 +71,7 @@ fn registry_key(target: &Target) -> Option<String> {
 
 /// Resolve `target` to a `Store`. Anonymous `mem://` always gets a fresh
 /// Store; named / persist targets return the cached one when present.
-pub(crate) fn resolve_store(target: &Target) -> io::Result<Store> {
+pub(crate) fn resolve_store(target: &Target) -> Result<Store, KevyError> {
     let key = registry_key(target);
     if let Some(k) = &key
         && let Ok(mut r) = embed_registry().lock()
@@ -93,9 +87,8 @@ pub(crate) fn resolve_store(target: &Target) -> io::Result<Store> {
         }
         Target::EmbedPersist(path) => Store::open(Config::default().with_persist(path)),
         Target::Remote(_) => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "resolve_store called on a Remote target",
+            return Err(KevyError::InvalidInput(
+                "resolve_store called on a Remote target".into(),
             ));
         }
     }?;
@@ -148,17 +141,17 @@ mod tests {
 
     #[test]
     fn parse_tls_rejected() {
-        assert_eq!(
-            parse_url("rediss://h:6379").unwrap_err().kind(),
-            io::ErrorKind::Unsupported
-        );
+        assert!(matches!(
+            parse_url("rediss://h:6379").unwrap_err(),
+            KevyError::Unsupported(_)
+        ));
     }
 
     #[test]
     fn parse_unknown_scheme_rejected() {
-        assert_eq!(
-            parse_url("memcached://h:11211").unwrap_err().kind(),
-            io::ErrorKind::InvalidInput
-        );
+        assert!(matches!(
+            parse_url("memcached://h:11211").unwrap_err(),
+            KevyError::InvalidInput(_)
+        ));
     }
 }

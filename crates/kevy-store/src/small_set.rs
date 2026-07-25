@@ -1,6 +1,6 @@
 //! `SmallSetData` — valkey-style inline-listpack encoding for tiny sets.
 //!
-//! v1.25 A.7 O5: mirror valkey's `OBJ_ENCODING_LISTPACK` for sets of size
+//! Mirrors valkey's `OBJ_ENCODING_LISTPACK` for sets of size
 //! 1–N (`t_set.c::setTypeMaybeConvert`). valkey starts a fresh set as a
 //! 1-entry listpack inside one cache line; once cardinality grows past
 //! `set-max-listpack-entries` (128 default) OR a single member exceeds the
@@ -246,7 +246,7 @@ mod tests {
     #[test]
     fn size_is_24_bytes() {
         // Mirrors SmallBytes' 24 B body so size_of::<Value>() <= 32 holds.
-        assert_eq!(std::mem::size_of::<SmallSetData>(), 24);
+        assert_eq!(core::mem::size_of::<SmallSetData>(), 24);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! v1.50 — long-running soak chaos (Phase D step 3).
+//! Long-running soak chaos.
 //!
 //! Memory leaks, file-descriptor leaks, lock starvation, and slow
 //! background-thread regressions only surface after sustained load.

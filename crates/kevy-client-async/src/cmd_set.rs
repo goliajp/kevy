@@ -6,7 +6,7 @@ use kevy_resp::Reply;
 
 use crate::codec::AsyncRespCodec;
 use crate::conn::AsyncConnection;
-use crate::reply::{array_to_bulks, string, unexpected, vec2, vec3};
+use crate::reply::{array_to_bulks, string, unexpected};
 use crate::transport::AsyncTransport;
 
 impl AsyncConnection {
@@ -22,7 +22,7 @@ impl AsyncConnection {
 
     /// `SMEMBERS key`. Implementation-defined order; empty if absent.
     pub async fn smembers(&mut self, key: &[u8]) -> io::Result<Vec<Vec<u8>>> {
-        match self.codec_mut().request(&vec2(b"SMEMBERS", key)).await? {
+        match self.codec_mut().request_borrowed(&[b"SMEMBERS", key]).await? {
             Reply::Array(items) => array_to_bulks(items),
             Reply::Error(e) => Err(io::Error::other(string(e))),
             other => Err(unexpected(other)),
@@ -31,7 +31,7 @@ impl AsyncConnection {
 
     /// `SCARD key`. 0 if absent.
     pub async fn scard(&mut self, key: &[u8]) -> io::Result<usize> {
-        match self.codec_mut().request(&vec2(b"SCARD", key)).await? {
+        match self.codec_mut().request_borrowed(&[b"SCARD", key]).await? {
             Reply::Int(n) if n >= 0 => Ok(n as usize),
             Reply::Error(e) => Err(io::Error::other(string(e))),
             other => Err(unexpected(other)),
@@ -42,7 +42,7 @@ impl AsyncConnection {
     pub async fn sismember(&mut self, key: &[u8], member: &[u8]) -> io::Result<bool> {
         match self
             .codec_mut()
-            .request(&vec3(b"SISMEMBER", key, member))
+            .request_borrowed(&[b"SISMEMBER", key, member])
             .await?
         {
             Reply::Int(1) => Ok(true),
@@ -74,11 +74,11 @@ pub(crate) async fn set_multi<T: AsyncTransport>(
     key: &[u8],
     members: &[&[u8]],
 ) -> io::Result<usize> {
-    let mut args = Vec::with_capacity(members.len() + 2);
-    args.push(verb.to_vec());
-    args.push(key.to_vec());
-    args.extend(members.iter().map(|m| m.to_vec()));
-    match c.request(&args).await? {
+    let mut args: Vec<&[u8]> = Vec::with_capacity(members.len() + 2);
+    args.push(verb);
+    args.push(key);
+    args.extend_from_slice(members);
+    match c.request_borrowed(&args).await? {
         Reply::Int(n) if n >= 0 => Ok(n as usize),
         Reply::Error(e) => Err(io::Error::other(string(e))),
         other => Err(unexpected(other)),
@@ -90,10 +90,10 @@ async fn set_combine<T: AsyncTransport>(
     verb: &[u8],
     keys: &[&[u8]],
 ) -> io::Result<Vec<Vec<u8>>> {
-    let mut args = Vec::with_capacity(keys.len() + 1);
-    args.push(verb.to_vec());
-    args.extend(keys.iter().map(|k| k.to_vec()));
-    match c.request(&args).await? {
+    let mut args: Vec<&[u8]> = Vec::with_capacity(keys.len() + 1);
+    args.push(verb);
+    args.extend_from_slice(keys);
+    match c.request_borrowed(&args).await? {
         Reply::Array(items) => array_to_bulks(items),
         Reply::Error(e) => Err(io::Error::other(string(e))),
         other => Err(unexpected(other)),

@@ -1,4 +1,4 @@
-//! v1.38 fd-exhaustion chaos test (Unix only).
+//! Fd-exhaustion chaos test (Unix only).
 //!
 //! Spawn kevy with `RLIMIT_NOFILE = small` (256). kevy uses its own
 //! fds at startup (listeners + AOF + snapshot file + waker + ring fds

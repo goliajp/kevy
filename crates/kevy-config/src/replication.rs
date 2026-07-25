@@ -33,24 +33,24 @@ pub struct ReplicationSection {
     /// dropping it (and forcing a full snapshot on reconnect). Default
     /// `60_000` (60 s).
     pub reconnect_window_ms: u32,
-    /// v3.14 D5 — primary refuses writes when fewer than this many
+    /// Primary refuses writes when fewer than this many
     /// replicas have a live ACK within `min_replicas_max_lag_ms`.
     /// `0` (default) disables the check. A lag heuristic, not a
-    /// quorum guarantee — the quorum lease (v3.16) is the real
+    /// quorum guarantee — the quorum lease is the real
     /// split-brain fence.
     pub min_replicas_to_write: u32,
     /// Freshness window for `min_replicas_to_write` (ms).
     pub min_replicas_max_lag_ms: u32,
-    /// v3.16 D3 — bounded staleness: a replica whose last primary
+    /// Bounded staleness: a replica whose last primary
     /// heartbeat is older than this refuses reads with `-STALE`
     /// (client falls back to the primary). `0` = off (default:
     /// reads always answer, whatever the lag).
     pub replica_max_staleness_ms: u32,
-    /// v3.14 — reject client writes while in the replica role
+    /// Reject client writes while in the replica role
     /// (`-READONLY`). Default `true`, Redis-compatible; the
     /// replication apply path and admin verbs bypass the gate.
     pub replica_read_only: bool,
-    /// v3.2 — the upstream is a SINGLE stream on one port (an embedded
+    /// The upstream is a SINGLE stream on one port (an embedded
     /// writer's `embed_writer_listen_addr` source) rather than a
     /// per-shard port fleet: one routing runner fans frames into local
     /// shards by key hash. Only meaningful when `role = "replica"`.

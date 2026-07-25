@@ -1,6 +1,6 @@
 //! Multi-threaded in-process throughput for `kevy_embedded::Store` — measures
-//! how the embedded keyspace scales across cores. An embed consumer (mailrs is
-//! a multi-threaded web server) shares one `Store` across request threads;
+//! how the embedded keyspace scales across cores. An embed consumer (e.g. a
+//! multi-threaded web server) shares one `Store` across request threads;
 //! this bench clones the `Store` (cheap Arc bump → same inner) into T threads
 //! all hammering GET / SET, and reports aggregate ops/s at T = 1..N.
 //!

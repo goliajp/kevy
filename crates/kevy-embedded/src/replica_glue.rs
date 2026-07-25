@@ -4,11 +4,10 @@
 //! API in `ops.rs` calls. Extracted from `store.rs` to keep that file
 //! under the 500-LOC ceiling.
 
-use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::config::Config;
-use crate::store::{Shards, Store};
+use crate::store::Shards;
 
 /// Construct + spawn the replica runner when configured. Returns
 /// `None` when the upstream is unset (normal primary store). The
@@ -43,16 +42,15 @@ pub(crate) fn fresh_replica_id() -> String {
     format!("kevy-embedded-{}-{}", std::process::id(), n)
 }
 
-/// Read-only enforcement for replica stores. Returns `READONLY ...`
-/// on a replica; `Ok(())` on a primary. Called at the top of every
-/// mutating public API in `ops.rs`. The error message intentionally
-/// mirrors the server-side wire string (`-READONLY ...`) so
-/// applications can pattern-match the same way on both backends.
-pub(crate) fn ensure_writable(store: &Store) -> io::Result<()> {
-    if store.is_replica() {
-        return Err(io::Error::other(
-            "READONLY You can't write against a kevy-embedded replica",
-        ));
+impl crate::Store {
+    /// The embed-writer replication listener's actually-bound address,
+    /// when this store was opened with
+    /// [`Config::with_embed_writer`](crate::Config::with_embed_writer).
+    /// Open with port `0` to let the OS pick a free port and read the
+    /// real one back here — the race-free way to run an ephemeral
+    /// writer (tests, sidecars, one process per scope).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn writer_addr(&self) -> Option<std::net::SocketAddr> {
+        self.guard.replica_source.as_ref().map(|s| s.local_addr())
     }
-    Ok(())
 }

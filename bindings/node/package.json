@@ -1,0 +1,24 @@
+{
+  "name": "@goliapkg/kevy-node",
+  "version": "4.0.0",
+  "description": "kevy embedded in Bun and Node — the real native engine behind one cmd() entry. Bun loads the dylib via bun:ffi; Node loads the hand-written N-API addon.",
+  "license": "(Apache-2.0 OR MIT)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/goliajp/kevy.git"
+  },
+  "homepage": "https://kevy.golia.jp",
+  "type": "module",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "resp.js",
+    "bun.js",
+    "node.js"
+  ],
+  "optionalDependencies": {
+    "@goliapkg/kevy-node-darwin-arm64": "4.0.0",
+    "@goliapkg/kevy-node-linux-x64": "4.0.0",
+    "@goliapkg/kevy-node-linux-arm64": "4.0.0"
+  }
+}

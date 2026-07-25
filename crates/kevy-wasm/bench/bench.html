@@ -1,0 +1,366 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>kevy-wasm bench</title>
+<body>
+<pre id="log">kevy-wasm browser bench…</pre>
+<script type="module">
+// Browser storage bench: kevy-wasm vs bare Map vs localStorage vs
+// IndexedDB. Axes: point read, point write, batch load, full scan,
+// durable-write throughput, restart load, cross-tab message RTT.
+// The headless driver awaits `window.__kevyResult`; run manually over
+// http:// (a `?role=echo` tab enables the cross-tab axis; COOP/COEP
+// headers give performance.now() 5 µs resolution).
+import { open } from "../pkg/kevy.js";
+
+const WASM = "/target/wasm32-unknown-unknown/release/kevy_wasm.wasm";
+const q = new URLSearchParams(location.search);
+const td = new TextDecoder();
+const logEl = document.getElementById("log");
+const log = (s) => {
+  logEl.textContent += "\n" + s;
+  console.log(s);
+};
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const SIZES = (q.get("sizes") ?? "1000,100000").split(",").map(Number);
+const POINT_OPS = 20_000; // sync contenders
+const IDB_POINT_OPS = 2_000; // per-op transactions are the honest IndexedDB point shape
+const RTT_N = 300;
+const VALUE = "v".padEnd(16, "x"); // 16-byte values keep 100k keys inside localStorage quota
+const key = (i) => "u" + String(i).padStart(6, "0");
+
+// Deterministic access pattern shared by every contender.
+function indices(count, n) {
+  let s = 0x9e3779b9 >>> 0;
+  const out = new Uint32Array(count);
+  for (let i = 0; i < count; i++) {
+    s ^= s << 13; s >>>= 0;
+    s ^= s >> 17;
+    s ^= s << 5; s >>>= 0;
+    out[i] = s % n;
+  }
+  return out;
+}
+
+const ms = (t0) => performance.now() - t0;
+const opsPerSec = (n, elapsed) => Math.round((n / elapsed) * 1000);
+function pct(sorted, p) {
+  return sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))];
+}
+
+// ---- contenders ---------------------------------------------------------
+
+async function benchKevyMemory(n, idx) {
+  const db = await open({ wasm: WASM, broadcast: false, tickMs: 0 });
+  const r = {};
+  let t0 = performance.now();
+  for (let i = 0; i < n; i++) db.set(key(i), VALUE);
+  r.batchLoadMs = ms(t0);
+  t0 = performance.now();
+  for (let i = 0; i < POINT_OPS; i++) db.set(key(idx[i]), VALUE);
+  r.pointWriteOps = opsPerSec(POINT_OPS, ms(t0));
+  t0 = performance.now();
+  let hits = 0;
+  for (let i = 0; i < POINT_OPS; i++) if (db.get(key(idx[i])) !== undefined) hits++;
+  r.pointReadOps = opsPerSec(POINT_OPS, ms(t0));
+  if (hits !== POINT_OPS) throw new Error("kevy read miss");
+  t0 = performance.now();
+  r.scanMatches = db.keys("u*7").length;
+  r.scanMs = ms(t0);
+  await db.close();
+  return r;
+}
+
+function benchMap(n, idx) {
+  const m = new Map();
+  const r = {};
+  let t0 = performance.now();
+  for (let i = 0; i < n; i++) m.set(key(i), VALUE);
+  r.batchLoadMs = ms(t0);
+  t0 = performance.now();
+  for (let i = 0; i < POINT_OPS; i++) m.set(key(idx[i]), VALUE);
+  r.pointWriteOps = opsPerSec(POINT_OPS, ms(t0));
+  t0 = performance.now();
+  let hits = 0;
+  for (let i = 0; i < POINT_OPS; i++) if (m.get(key(idx[i])) !== undefined) hits++;
+  r.pointReadOps = opsPerSec(POINT_OPS, ms(t0));
+  if (hits !== POINT_OPS) throw new Error("map read miss");
+  t0 = performance.now();
+  let matches = 0;
+  for (const k of m.keys()) if (k.endsWith("7")) matches++;
+  r.scanMatches = matches;
+  r.scanMs = ms(t0);
+  m.clear();
+  return r;
+}
+
+function benchLocalStorage(n, idx) {
+  localStorage.clear();
+  const r = {};
+  let t0 = performance.now();
+  for (let i = 0; i < n; i++) localStorage.setItem(key(i), VALUE);
+  r.batchLoadMs = ms(t0);
+  t0 = performance.now();
+  for (let i = 0; i < POINT_OPS; i++) localStorage.setItem(key(idx[i]), VALUE);
+  r.pointWriteOps = opsPerSec(POINT_OPS, ms(t0));
+  t0 = performance.now();
+  let hits = 0;
+  for (let i = 0; i < POINT_OPS; i++)
+    if (localStorage.getItem(key(idx[i])) !== null) hits++;
+  r.pointReadOps = opsPerSec(POINT_OPS, ms(t0));
+  if (hits !== POINT_OPS) throw new Error("localStorage read miss");
+  t0 = performance.now();
+  let matches = 0;
+  for (let i = 0; i < localStorage.length; i++)
+    if (localStorage.key(i).endsWith("7")) matches++;
+  r.scanMatches = matches;
+  r.scanMs = ms(t0);
+  // Restart-load equivalent: pull everything into memory to be usable.
+  t0 = performance.now();
+  const m = new Map();
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    m.set(k, localStorage.getItem(k));
+  }
+  r.restartLoadMs = ms(t0);
+  r.durableWriteOps = r.pointWriteOps; // setItem is its own durability model
+  localStorage.clear();
+  return r;
+}
+
+// Raw IndexedDB helpers.
+const idb = {
+  open: (name) =>
+    new Promise((res, rej) => {
+      const req = indexedDB.open(name, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore("kv");
+      req.onsuccess = () => res(req.result);
+      req.onerror = () => rej(req.error);
+    }),
+  tx: (db, mode, run) =>
+    new Promise((res, rej) => {
+      const tx = db.transaction("kv", mode);
+      const out = run(tx.objectStore("kv"));
+      tx.oncomplete = () => res(out);
+      tx.onerror = () => rej(tx.error);
+    }),
+  req: (r) =>
+    new Promise((res, rej) => {
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    }),
+};
+
+async function benchIndexedDB(n, idx) {
+  await new Promise((res) => {
+    const del = indexedDB.deleteDatabase("kevy-bench-raw");
+    del.onsuccess = del.onerror = del.onblocked = () => res();
+  });
+  const db = await idb.open("kevy-bench-raw");
+  const r = {};
+  // Batch load: chunked readwrite transactions (5k puts each).
+  let t0 = performance.now();
+  for (let off = 0; off < n; off += 5000) {
+    const end = Math.min(off + 5000, n);
+    await idb.tx(db, "readwrite", (s) => {
+      for (let i = off; i < end; i++) s.put(VALUE, key(i));
+    });
+  }
+  r.batchLoadMs = ms(t0);
+  r.durableWriteOps = opsPerSec(n, r.batchLoadMs);
+  // Point ops: one transaction per op — the point-access shape.
+  t0 = performance.now();
+  for (let i = 0; i < IDB_POINT_OPS; i++) {
+    await idb.tx(db, "readwrite", (s) => s.put(VALUE, key(idx[i])));
+  }
+  r.pointWriteOps = opsPerSec(IDB_POINT_OPS, ms(t0));
+  t0 = performance.now();
+  let hits = 0;
+  for (let i = 0; i < IDB_POINT_OPS; i++) {
+    const tx = db.transaction("kv", "readonly");
+    if ((await idb.req(tx.objectStore("kv").get(key(idx[i])))) !== undefined) hits++;
+  }
+  r.pointReadOps = opsPerSec(IDB_POINT_OPS, ms(t0));
+  if (hits !== IDB_POINT_OPS) throw new Error("IndexedDB read miss");
+  // Scan: cursor over everything, filter.
+  t0 = performance.now();
+  let matches = 0;
+  await new Promise((res, rej) => {
+    const cur = db.transaction("kv", "readonly").objectStore("kv").openKeyCursor();
+    cur.onsuccess = () => {
+      const c = cur.result;
+      if (!c) return res();
+      if (c.key.endsWith("7")) matches++;
+      c.continue();
+    };
+    cur.onerror = () => rej(cur.error);
+  });
+  r.scanMatches = matches;
+  r.scanMs = ms(t0);
+  // Restart load: read the whole store back into a Map (cold usable state).
+  t0 = performance.now();
+  const m = new Map();
+  await new Promise((res, rej) => {
+    const cur = db.transaction("kv", "readonly").objectStore("kv").openCursor();
+    cur.onsuccess = () => {
+      const c = cur.result;
+      if (!c) return res();
+      m.set(c.key, c.value);
+      c.continue();
+    };
+    cur.onerror = () => rej(cur.error);
+  });
+  r.restartLoadMs = ms(t0);
+  if (m.size !== n) throw new Error("IndexedDB restart size " + m.size);
+  db.close();
+  return r;
+}
+
+// kevy with the persistence pump on: durable-write throughput + restart load.
+async function benchKevyPersist(n, backend) {
+  const name = "bench-" + backend + "-" + n;
+  let db = await open({ wasm: WASM, broadcast: false, tickMs: 0, persist: { name, backend } });
+  db.flushall();
+  await db.flush();
+  const r = {};
+  let t0 = performance.now();
+  for (let i = 0; i < n; i++) db.set(key(i), VALUE);
+  await db.flush(); // durability barrier: bytes are in storage
+  r.durableWriteOps = opsPerSec(n, ms(t0));
+  await db.close();
+  t0 = performance.now();
+  db = await open({ wasm: WASM, broadcast: false, tickMs: 0, persist: { name, backend } });
+  r.restartLoadMs = ms(t0);
+  if (db.dbsize() !== n) throw new Error(backend + " restart dbsize " + db.dbsize());
+  await db.close();
+  return r;
+}
+
+// ---- cross-tab RTT ------------------------------------------------------
+
+async function echoRole() {
+  const db = await open({ wasm: WASM, name: "bench-bus" });
+  db.subscribe("bench:ping", (payload) => db.publish("bench:pong", payload));
+  addEventListener("storage", (ev) => {
+    if (ev.key === "ls:ping" && ev.newValue !== null) {
+      localStorage.setItem("ls:pong", ev.newValue);
+    }
+  });
+  log("echo ready");
+  return { role: "echo", ready: true };
+}
+
+const RTT_PAYLOAD_BYTES = [64, 1024, 65536];
+
+function summarize(samples) {
+  samples.sort((a, b) => a - b);
+  return { n: samples.length, p50: pct(samples, 50), p95: pct(samples, 95) };
+}
+
+// Sequential request/response RTTs at several payload sizes. `rtt(msg,
+// timeout)` resolves the round-trip ms or null on timeout; the first
+// tier starts with a handshake loop so a slow-starting echo tab never
+// counts against the samples.
+async function measureRtt(rtt) {
+  let up = false;
+  for (let i = 0; i < 100 && !up; i++) up = (await rtt("hs" + i, 200)) !== null;
+  if (!up) throw new Error("echo tab did not answer");
+  const out = {};
+  for (const size of RTT_PAYLOAD_BYTES) {
+    const samples = [];
+    for (let i = 0; i < RTT_N; i++) {
+      const dt = await rtt(("m" + i).padEnd(size, "x"), 2000);
+      if (dt !== null) samples.push(dt);
+    }
+    out[size] = summarize(samples);
+  }
+  return out;
+}
+
+async function crosstabKevy() {
+  const db = await open({ wasm: WASM, name: "bench-bus" });
+  let resolver = null;
+  db.subscribe("bench:pong", (payload) => resolver?.(td.decode(payload)));
+  const result = await measureRtt(async (msg, timeoutMs) => {
+    const t0 = performance.now();
+    const got = new Promise((res) => (resolver = res));
+    db.publish("bench:ping", msg);
+    const back = await Promise.race([got, sleep(timeoutMs).then(() => null)]);
+    return back === msg ? performance.now() - t0 : null;
+  });
+  await db.close();
+  return result;
+}
+
+async function crosstabStorageEvent() {
+  let resolver = null;
+  addEventListener("storage", (ev) => {
+    if (ev.key === "ls:pong" && ev.newValue !== null) resolver?.(ev.newValue);
+  });
+  return measureRtt(async (msg, timeoutMs) => {
+    const t0 = performance.now();
+    const got = new Promise((res) => (resolver = res));
+    localStorage.setItem("ls:ping", msg);
+    const back = await Promise.race([got, sleep(timeoutMs).then(() => null)]);
+    return back === msg ? performance.now() - t0 : null;
+  });
+}
+
+// ---- main ---------------------------------------------------------------
+
+async function main() {
+  const result = {
+    pass: true,
+    meta: {
+      ua: navigator.userAgent,
+      crossOriginIsolated: globalThis.crossOriginIsolated === true,
+      pointOps: POINT_OPS,
+      idbPointOps: IDB_POINT_OPS,
+      valueBytes: VALUE.length,
+    },
+    sizes: {},
+  };
+  for (const n of SIZES) {
+    const idx = indices(POINT_OPS, n);
+    log(`--- n=${n}: kevy (memory)`);
+    const kevy = await benchKevyMemory(n, idx);
+    log(`--- n=${n}: Map`);
+    const map = benchMap(n, idx);
+    log(`--- n=${n}: localStorage`);
+    const ls = benchLocalStorage(n, idx);
+    log(`--- n=${n}: IndexedDB`);
+    const raw = await benchIndexedDB(n, idx);
+    log(`--- n=${n}: kevy (persist opfs)`);
+    const kevyOpfs = await benchKevyPersist(n, "opfs");
+    log(`--- n=${n}: kevy (persist idb)`);
+    const kevyIdb = await benchKevyPersist(n, "idb");
+    result.sizes[n] = {
+      kevy,
+      map,
+      localStorage: ls,
+      indexedDB: raw,
+      kevyPersistOpfs: kevyOpfs,
+      kevyPersistIdb: kevyIdb,
+    };
+    log(JSON.stringify(result.sizes[n], null, 1));
+    await sleep(50);
+  }
+  if (q.get("crosstab") !== "0") {
+    log("--- cross-tab RTT: kevy BroadcastChannel bridge");
+    const kevyRtt = await crosstabKevy();
+    log("--- cross-tab RTT: storage-event");
+    const lsRtt = await crosstabStorageEvent();
+    result.crosstab = { kevy: kevyRtt, storageEvent: lsRtt };
+    log(JSON.stringify(result.crosstab));
+  }
+  log("BENCH DONE");
+  return result;
+}
+
+window.__kevyResult = (q.get("role") === "echo" ? echoRole() : main()).catch(
+  (e) => {
+    log(String(e && (e.stack || e)));
+    return { pass: false, error: String(e && (e.stack || e)) };
+  },
+);
+</script>

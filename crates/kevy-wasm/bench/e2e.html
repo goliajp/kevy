@@ -1,0 +1,138 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>kevy-wasm e2e</title>
+<body>
+<pre id="log">kevy-wasm browser e2e…</pre>
+<script type="module">
+// End-to-end acceptance for the kevy-wasm loader stack. The headless
+// driver awaits `window.__kevyResult`; open this page over http:// for a
+// manual run (`?role=echo` in a second tab enables the cross-tab check,
+// `?dualtab=0` skips it).
+import { open } from "../pkg/kevy.js";
+
+const WASM = "/target/wasm32-unknown-unknown/release/kevy_wasm.wasm";
+const q = new URLSearchParams(location.search);
+const td = new TextDecoder();
+const logEl = document.getElementById("log");
+const log = (s) => (logEl.textContent += "\n" + s);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const assert = (cond, what) => {
+  if (!cond) throw new Error("FAIL: " + what);
+  log("ok: " + what);
+};
+const withTimeout = (p, ms, what) =>
+  Promise.race([
+    p,
+    sleep(ms).then(() => {
+      throw new Error("timeout: " + what);
+    }),
+  ]);
+
+// Echo role: answer cross-tab pings for the main tab.
+async function echo() {
+  const db = await open({ wasm: WASM, name: "e2e-bus" });
+  db.subscribe("e2e:ping", (payload) => db.publish("e2e:pong", payload));
+  log("echo ready");
+  return { role: "echo", ready: true };
+}
+
+async function memoryFace() {
+  const db = await open({ wasm: WASM, broadcast: false });
+  db.set("k", "v");
+  assert(db.getText("k") === "v", "set/get text");
+  db.set("bin", new Uint8Array([0, 1, 2, 255]));
+  const bin = db.get("bin");
+  assert(bin.length === 4 && bin[3] === 255, "binary value roundtrip");
+  assert(db.incrby("n", 5) === 5 && db.incrby("n", -2) === 3, "incrby");
+  assert(db.exists("k") && !db.exists("nope"), "exists");
+  db.set("user:1", "a");
+  db.set("user:2", "b");
+  assert(db.keys("user:*").length === 2, "keys glob");
+  db.set("flash", "x", { ttlMs: 150 });
+  assert(db.pttl("flash") > 0, "pttl positive");
+  await sleep(450);
+  assert(db.get("flash") === undefined, "ttl expiry");
+  assert(db.del("k") === true && db.get("k") === undefined, "del");
+  let err = null;
+  try {
+    db.incrby("bin", 1);
+  } catch (e) {
+    err = e;
+  }
+  assert(err instanceof Error, "engine error surfaces as Error");
+  await db.close();
+}
+
+async function persistReload(backend) {
+  const name = "e2e-" + backend;
+  let db = await open({ wasm: WASM, broadcast: false, persist: { name, backend } });
+  db.flushall();
+  for (let i = 0; i < 100; i++) db.set("key" + i, "value" + i);
+  db.set("ttl-live", "x", { ttlMs: 60_000 });
+  db.incrby("counter", 7);
+  await db.close();
+
+  db = await open({ wasm: WASM, broadcast: false, persist: { name, backend } });
+  assert(db.dbsize() === 102, backend + ": reload dbsize (" + db.dbsize() + ")");
+  assert(db.getText("key42") === "value42", backend + ": reload value");
+  assert(db.getText("counter") === "7", backend + ": reload counter");
+  assert(db.pttl("ttl-live") > 0, backend + ": ttl survives reload");
+  await db.compact();
+  await db.close();
+
+  db = await open({ wasm: WASM, broadcast: false, persist: { name, backend } });
+  assert(db.dbsize() === 102, backend + ": reload after compact");
+  await db.close();
+}
+
+async function localPubsub() {
+  const db = await open({ wasm: WASM, broadcast: false });
+  const got = new Promise((r) =>
+    db.subscribe("ch", (p, c) => r(td.decode(p) + "@" + c)),
+  );
+  const pgot = new Promise((r) =>
+    db.psubscribe("c*", (p, c, pat) => r(pat + ">" + c)),
+  );
+  db.publish("ch", "m1");
+  assert((await withTimeout(got, 2000, "local message")) === "m1@ch", "local pubsub");
+  assert((await withTimeout(pgot, 2000, "pattern message")) === "c*>ch", "pattern pubsub");
+  await db.close();
+}
+
+async function crossTab() {
+  const db = await open({ wasm: WASM, name: "e2e-bus" });
+  const pong = new Promise((r) => db.subscribe("e2e:pong", (p) => r(p)));
+  // At-most-once, no backlog: retry until the echo tab is up.
+  const timer = setInterval(() => db.publish("e2e:ping", "hello-tab"), 100);
+  let payload;
+  try {
+    payload = await withTimeout(pong, 15_000, "cross-tab pong");
+  } finally {
+    clearInterval(timer);
+  }
+  assert(td.decode(payload) === "hello-tab", "cross-tab payload roundtrip");
+  await db.close();
+}
+
+async function main() {
+  const tests = [];
+  const run = async (name, f) => {
+    await f();
+    tests.push(name);
+  };
+  await run("memory", memoryFace);
+  await run("persist-opfs", () => persistReload("opfs"));
+  await run("persist-idb", () => persistReload("idb"));
+  await run("pubsub-local", localPubsub);
+  if (q.get("dualtab") !== "0") await run("pubsub-crosstab", crossTab);
+  log("ALL PASS");
+  return { role: "main", pass: true, tests };
+}
+
+window.__kevyResult = (q.get("role") === "echo" ? echo() : main()).catch(
+  (e) => {
+    log(String(e && (e.stack || e)));
+    return { pass: false, error: String(e && (e.stack || e)) };
+  },
+);
+</script>

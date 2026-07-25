@@ -1,15 +1,15 @@
-//! v3.16 D1+D2 — the consistency-ladder verbs:
+//! The consistency-ladder verbs:
 //!
-//! - `WAIT numreplicas timeout` (D1, Redis-compatible): block until
+//! - `WAIT numreplicas timeout` (Redis-compatible): block until
 //!   every shard's `master_repl_offset` is acked by ≥ numreplicas
 //!   replicas (all-shard barrier — a kevy write may land on any
 //!   shard), reply the MIN achieved count. `timeout 0` is Redis's
 //!   "wait forever" — kevy hard-caps it at 60 s (documented).
-//! - `REPL.TOKEN` (D2, extension): mint a read-your-writes token —
+//! - `REPL.TOKEN` (extension): mint a read-your-writes token —
 //!   on a primary, every shard's live `(feed generation, next_offset)`
 //!   pair; on a replica, its per-runner `(upstream generation,
 //!   applied offset)` view.
-//! - `REPL.WAIT g0 off0 [g1 off1 …] [TIMEOUT ms]` (D2, extension):
+//! - `REPL.WAIT g0 off0 [g1 off1 …] [TIMEOUT ms]` (extension):
 //!   on a replica, block until every shard has APPLIED the token
 //!   (reply `+OK` — a subsequent read is read-your-writes); on
 //!   timeout or generation mismatch reply
@@ -29,7 +29,7 @@ use kevy_resp::{ArgvView, encode_array_len, encode_error, encode_integer, encode
 use kevy_rt::Route;
 
 use crate::ops::wrong_args;
-use crate::replica_state;
+use crate::state::ReplicationState;
 
 /// Default `REPL.WAIT` deadline when no `TIMEOUT ms` clause is given.
 const REPL_WAIT_DEFAULT_TIMEOUT_MS: u64 = 1_000;
@@ -39,8 +39,8 @@ const REPL_WAIT_DEFAULT_TIMEOUT_MS: u64 = 1_000;
 /// `WAIT` route: well-formed on a primary/standalone → the runtime's
 /// all-shard ack barrier; anything else answers locally (replica →
 /// error, malformed → error, both emitted by [`cmd_wait`]).
-pub(crate) fn wait_route<A: ArgvView + ?Sized>(args: &A) -> Route {
-    if replica_state::is_replica() {
+pub(crate) fn wait_route<A: ArgvView + ?Sized>(repl: &ReplicationState, args: &A) -> Route {
+    if repl.is_replica() {
         return Route::Local;
     }
     match parse_wait_args(args) {
@@ -52,8 +52,8 @@ pub(crate) fn wait_route<A: ArgvView + ?Sized>(args: &A) -> Route {
 /// `REPL.TOKEN` route: a primary/standalone fans out for live
 /// per-shard pairs; a replica (or malformed arity) answers locally
 /// from the runner registries.
-pub(crate) fn token_route<A: ArgvView + ?Sized>(args: &A) -> Route {
-    if args.len() == 1 && !replica_state::is_replica() {
+pub(crate) fn token_route<A: ArgvView + ?Sized>(repl: &ReplicationState, args: &A) -> Route {
+    if args.len() == 1 && !repl.is_replica() {
         return Route::ReplToken;
     }
     Route::Local
@@ -63,20 +63,20 @@ pub(crate) fn token_route<A: ArgvView + ?Sized>(args: &A) -> Route {
 /// the token routes to the runtime's applied barrier; every immediate
 /// answer (primary +OK, gen mismatch, arity) is `Local` →
 /// [`cmd_repl_wait`].
-pub(crate) fn repl_wait_route<A: ArgvView + ?Sized>(args: &A) -> Route {
-    if !replica_state::is_replica() {
+pub(crate) fn repl_wait_route<A: ArgvView + ?Sized>(repl: &ReplicationState, args: &A) -> Route {
+    if !repl.is_replica() {
         return Route::Local;
     }
     let Some(tok) = parse_repl_wait(args) else {
         return Route::Local;
     };
-    if !gens_match(&tok) {
+    if !gens_match(repl, &tok) {
         return Route::Local; // dispatch emits -MISDIRECTED / arity error
     }
     Route::ReplBarrier {
         offsets: tok.pairs.iter().map(|(_, off)| *off).collect(),
         timeout_ms: tok.timeout_ms,
-        miss: misdirected_reply(),
+        miss: misdirected_reply(repl),
     }
 }
 
@@ -85,11 +85,15 @@ pub(crate) fn repl_wait_route<A: ArgvView + ?Sized>(args: &A) -> Route {
 /// `WAIT` reached dispatch: replica → the Redis error; malformed →
 /// parse errors; otherwise this is a runtime-less context (embedded
 /// direct dispatch — no shards, no replicas) → `:0`.
-pub(crate) fn cmd_wait<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
+pub(crate) fn cmd_wait<A: ArgvView + ?Sized>(
+    repl: &ReplicationState,
+    args: &A,
+    out: &mut Vec<u8>,
+) {
     if args.len() != 3 {
         return wrong_args(out, "wait");
     }
-    if replica_state::is_replica() {
+    if repl.is_replica() {
         return encode_error(out, "ERR WAIT cannot be used with replica instances");
     }
     if parse_wait_args(args).is_none() {
@@ -103,15 +107,19 @@ pub(crate) fn cmd_wait<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
 /// `REPL.TOKEN` reached dispatch: a replica answers its per-runner
 /// `(upstream generation, applied offset)` view; a primary here means
 /// a runtime-less context (the runtime path fans out per shard).
-pub(crate) fn cmd_repl_token<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
+pub(crate) fn cmd_repl_token<A: ArgvView + ?Sized>(
+    repl: &ReplicationState,
+    args: &A,
+    out: &mut Vec<u8>,
+) {
     if args.len() != 1 {
         return wrong_args(out, "repl.token");
     }
-    if !replica_state::is_replica() {
+    if !repl.is_replica() {
         return encode_error(out, "ERR REPL.TOKEN needs the kevy server runtime on a primary");
     }
-    let gens = replica_state::upstream_gens();
-    let offs = replica_state::applied_runner_offsets();
+    let gens = repl.upstream_gens();
+    let offs = repl.applied_runner_offsets();
     encode_array_len(out, (gens.len() * 2) as i64);
     for (g, off) in gens.iter().zip(offs.iter()) {
         encode_integer(out, *g as i64);
@@ -123,18 +131,22 @@ pub(crate) fn cmd_repl_token<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) 
 /// standalone → `+OK` (you are already talking to the writer); a
 /// replica here means the token failed the gen gate (or arity) —
 /// `-MISDIRECTED` / a self-explaining error.
-pub(crate) fn cmd_repl_wait<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
+pub(crate) fn cmd_repl_wait<A: ArgvView + ?Sized>(
+    repl: &ReplicationState,
+    args: &A,
+    out: &mut Vec<u8>,
+) {
     let Some(tok) = parse_repl_wait(args) else {
         return encode_error(
             out,
             "ERR REPL.WAIT g0 off0 [g1 off1 ...] [TIMEOUT ms] — pass a token from REPL.TOKEN",
         );
     };
-    if !replica_state::is_replica() {
+    if !repl.is_replica() {
         // The writer itself: everything it wrote is trivially visible.
         return encode_simple_string(out, "OK");
     }
-    let gens = replica_state::upstream_gens();
+    let gens = repl.upstream_gens();
     if gens.len() != tok.pairs.len() {
         return encode_error(
             out,
@@ -148,7 +160,7 @@ pub(crate) fn cmd_repl_wait<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     }
     // Generation mismatch (or a not-yet-learned generation): the
     // token's offset space is not the stream this replica follows.
-    out.extend_from_slice(&misdirected_reply());
+    out.extend_from_slice(&misdirected_reply(repl));
 }
 
 // ───────────────────────── parsing ─────────────────────────
@@ -199,8 +211,8 @@ pub(crate) fn parse_repl_wait<A: ArgvView + ?Sized>(args: &A) -> Option<ReplWait
 /// Do the token's generations match this replica's last-seen upstream
 /// generations, slot for slot? A never-seen generation (0) fails —
 /// the conservative answer is "go read the primary".
-fn gens_match(tok: &ReplWaitToken) -> bool {
-    let gens = replica_state::upstream_gens();
+fn gens_match(repl: &ReplicationState, tok: &ReplWaitToken) -> bool {
+    let gens = repl.upstream_gens();
     gens.len() == tok.pairs.len()
         && tok
             .pairs
@@ -210,11 +222,11 @@ fn gens_match(tok: &ReplWaitToken) -> bool {
 }
 
 /// The `-MISDIRECTED writer is <addr>` reply. The address is the live
-/// upstream from `replica_state` (the `REPLICAOF` target — kevy's
-/// upstream addressing is the replication port base); "unknown" when
-/// no upstream is installed.
-fn misdirected_reply() -> Vec<u8> {
-    match replica_state::current_upstream() {
+/// upstream (the `REPLICAOF` target — kevy's upstream addressing is
+/// the replication port base); "unknown" when no upstream is
+/// installed.
+fn misdirected_reply(repl: &ReplicationState) -> Vec<u8> {
+    match repl.current_upstream() {
         Some((host, port)) => format!("-MISDIRECTED writer is {host}:{port}\r\n").into_bytes(),
         None => b"-MISDIRECTED writer is unknown\r\n".to_vec(),
     }
@@ -279,68 +291,59 @@ mod tests {
         assert!(parse_repl_wait(&argv(&["REPL.WAIT", "1", "10", "TIMEOUT", "x"])).is_none());
     }
 
+    fn primary() -> ReplicationState {
+        ReplicationState::new(1, false, 0)
+    }
+
     #[test]
     fn wait_route_shapes() {
-        let _g = crate::replica_state::TEST_STATE_GUARD
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        crate::replica_state::stop_runners();
+        let repl = primary();
         assert!(matches!(
-            wait_route(&argv(&["WAIT", "1", "500"])),
+            wait_route(&repl, &argv(&["WAIT", "1", "500"])),
             Route::ReplWait { numreplicas: 1, timeout_ms: 500 }
         ));
         // Malformed → Local (dispatch emits the precise error).
-        assert!(matches!(wait_route(&argv(&["WAIT", "x", "500"])), Route::Local));
-        assert!(matches!(wait_route(&argv(&["WAIT"])), Route::Local));
+        assert!(matches!(wait_route(&repl, &argv(&["WAIT", "x", "500"])), Route::Local));
+        assert!(matches!(wait_route(&repl, &argv(&["WAIT"])), Route::Local));
     }
 
     #[test]
     fn repl_token_route_is_fanout_on_primary_and_local_on_arity_error() {
-        let _g = crate::replica_state::TEST_STATE_GUARD
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        crate::replica_state::stop_runners();
-        assert!(matches!(token_route(&argv(&["REPL.TOKEN"])), Route::ReplToken));
-        assert!(matches!(token_route(&argv(&["REPL.TOKEN", "x"])), Route::Local));
+        let repl = primary();
+        assert!(matches!(token_route(&repl, &argv(&["REPL.TOKEN"])), Route::ReplToken));
+        assert!(matches!(token_route(&repl, &argv(&["REPL.TOKEN", "x"])), Route::Local));
     }
 
     #[test]
     fn repl_wait_on_primary_replies_ok_immediately() {
-        let _g = crate::replica_state::TEST_STATE_GUARD
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        crate::replica_state::stop_runners();
+        let repl = primary();
         assert!(matches!(
-            repl_wait_route(&argv(&["REPL.WAIT", "1", "10"])),
+            repl_wait_route(&repl, &argv(&["REPL.WAIT", "1", "10"])),
             Route::Local
         ));
         let mut out = Vec::new();
-        cmd_repl_wait(&argv(&["REPL.WAIT", "1", "10"]), &mut out);
+        cmd_repl_wait(&repl, &argv(&["REPL.WAIT", "1", "10"]), &mut out);
         assert_eq!(out, b"+OK\r\n");
     }
 
     #[test]
     fn repl_wait_malformed_token_errors() {
         let mut out = Vec::new();
-        cmd_repl_wait(&argv(&["REPL.WAIT", "nope"]), &mut out);
+        cmd_repl_wait(&primary(), &argv(&["REPL.WAIT", "nope"]), &mut out);
         assert!(out.starts_with(b"-ERR REPL.WAIT"), "{}", String::from_utf8_lossy(&out));
     }
 
     #[test]
     fn wait_on_replica_is_rejected() {
-        let _g = crate::replica_state::TEST_STATE_GUARD
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        crate::replica_state::stop_runners();
-        crate::replica_state::force_replica_flag();
-        assert!(matches!(wait_route(&argv(&["WAIT", "1", "500"])), Route::Local));
+        let repl = primary();
+        repl.force_replica_flag();
+        assert!(matches!(wait_route(&repl, &argv(&["WAIT", "1", "500"])), Route::Local));
         let mut out = Vec::new();
-        cmd_wait(&argv(&["WAIT", "1", "500"]), &mut out);
+        cmd_wait(&repl, &argv(&["WAIT", "1", "500"]), &mut out);
         assert!(
             out.starts_with(b"-ERR WAIT cannot be used with replica"),
             "{}",
             String::from_utf8_lossy(&out)
         );
-        crate::replica_state::stop_runners(); // clear the flag for siblings
     }
 }

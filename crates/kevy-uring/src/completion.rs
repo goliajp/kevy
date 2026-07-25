@@ -1,6 +1,9 @@
 //! A reaped completion event.
 
-use crate::ffi::{IORING_CQE_BUFFER_SHIFT, IORING_CQE_F_BUFFER, IORING_CQE_F_MORE};
+use crate::ffi::{
+    IORING_CQE_BUFFER_SHIFT, IORING_CQE_F_BUFFER, IORING_CQE_F_MORE,
+    IORING_CQE_F_SOCK_NONEMPTY,
+};
 
 /// One reaped completion (`struct io_uring_cqe`): the `user_data` you tagged
 /// the submission with, and `res` (bytes transferred / accepted fd when ≥ 0,
@@ -30,5 +33,15 @@ impl Completion {
     /// to come). When `false`, the op terminated and must be re-submitted.
     pub fn has_more(&self) -> bool {
         self.flags & IORING_CQE_F_MORE != 0
+    }
+
+    /// Whether the socket still holds unread data after this completion
+    /// (`IORING_CQE_F_SOCK_NONEMPTY`). On a multishot recv that
+    /// terminated with `res == 0`, this bit is the difference between a
+    /// real EOF (bit clear — the peer closed) and a spurious
+    /// termination with bytes still queued (bit set — re-arm to drain
+    /// them, do not close).
+    pub fn sock_nonempty(&self) -> bool {
+        self.flags & IORING_CQE_F_SOCK_NONEMPTY != 0
     }
 }

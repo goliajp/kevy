@@ -1,3 +1,4 @@
+use crate::KevyError;
 use super::*;
 use crate::{Config, Store};
 
@@ -9,6 +10,22 @@ fn store() -> Store {
 fn publish_to_no_subscribers_returns_zero() {
     let s = store();
     assert_eq!(s.publish(b"chan", b"hi"), 0);
+}
+
+#[test]
+fn into_payload_yields_bytes_for_delivery_frames_only() {
+    // Delivery frames surrender their payload (moved out, no copy).
+    let m = PubsubFrame::Message { channel: b"c".to_vec(), payload: b"p".to_vec() };
+    assert_eq!(m.into_payload(), Some(b"p".to_vec()));
+    let pm = PubsubFrame::Pmessage {
+        pattern: b"c*".to_vec(),
+        channel: b"c".to_vec(),
+        payload: b"q".to_vec(),
+    };
+    assert_eq!(pm.into_payload(), Some(b"q".to_vec()));
+    // Control/ack frames carry no payload.
+    assert_eq!(PubsubFrame::Subscribe { channel: b"c".to_vec(), count: 1 }.into_payload(), None);
+    assert_eq!(PubsubFrame::Unsubscribe { channel: None, count: 0 }.into_payload(), None);
 }
 
 #[test]
@@ -159,16 +176,15 @@ fn recv_timeout_returns_timeout_when_empty() {
     let err = sub
         .recv_timeout(Duration::from_millis(50))
         .unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    assert!(matches!(err, KevyError::TimedOut));
 }
 
 #[test]
 fn subscription_is_send_and_sync() {
     // Static-assert via trait bounds: this won't compile if Subscription
-    // stops being Send + Sync. Closes the gap mailrs hit on first prod
-    // adoption (`Arc<Subscription>` failed because the `mpsc::Receiver`
-    // field was !Sync). See type-level doc for the trade-off + memory
-    // entry feedback-mailrs-prod-vet-lessons.
+    // stops being Send + Sync. Closes a gap an embed consumer hit in
+    // production (`Arc<Subscription>` failed because the `mpsc::Receiver`
+    // field was !Sync). See type-level doc for the trade-off.
     fn require_send_sync<T: Send + Sync>() {}
     require_send_sync::<Subscription>();
 }

@@ -25,6 +25,8 @@ on:
       - 'crates/kevy-text/**'
       - 'crates/kevy-store/**'
       - 'crates/kevy-vector/**'
+      - 'crates/kevy-vlog/**'
+      - 'crates/kevy-sql/**'
       - '.github/workflows/fuzz.yml'
   pull_request:
     paths:
@@ -38,6 +40,8 @@ on:
       - 'crates/kevy-text/**'
       - 'crates/kevy-store/**'
       - 'crates/kevy-vector/**'
+      - 'crates/kevy-vlog/**'
+      - 'crates/kevy-sql/**'
   schedule:
     # Daily at 08:00 UTC. Catches drift on develop even without a code push.
     - cron: '0 8 * * *'
@@ -68,6 +72,8 @@ jobs:
           - { crate: kevy-config,  target: config_toml }
           - { crate: kevy-text,    target: text_index }
           - { crate: kevy-store,   target: store_zset }
+          - { crate: kevy-vlog,    target: vlog_churn }
+          - { crate: kevy-sql,     target: sql_compile }
           - { crate: kevy-vector,  target: hnsw_ops }
     env:
       # Honour workflow_dispatch input; default to 300 s (5 min) per target.

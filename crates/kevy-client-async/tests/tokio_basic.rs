@@ -1,4 +1,4 @@
-//! Integration test (T4.20): end-to-end wire round-trip for the tokio
+//! Integration test: end-to-end wire round-trip for the tokio
 //! runtime feature. Spawns a minimum RESP "server" inside the test
 //! process, runs the async client against it, and checks both sides
 //! of the byte stream.
@@ -52,7 +52,7 @@ async fn ping_round_trip() {
         .await
         .unwrap();
     let url = format!("tcp://127.0.0.1:{port}");
-    let mut conn = AsyncConnection::open(&url).await.unwrap();
+    let mut conn = AsyncConnection::connect(&url).await.unwrap();
     conn.ping().await.unwrap();
 }
 
@@ -73,7 +73,7 @@ async fn set_then_get() {
     .await
     .unwrap();
     let url = format!("tcp://127.0.0.1:{port}");
-    let mut conn = AsyncConnection::open(&url).await.unwrap();
+    let mut conn = AsyncConnection::connect(&url).await.unwrap();
     conn.set(b"k", b"v").await.unwrap();
     let v = conn.get(b"k").await.unwrap();
     assert_eq!(v.as_deref(), Some(&b"v"[..]));
@@ -92,7 +92,7 @@ async fn pipeline_one_round_trip() {
     .await
     .unwrap();
     let url = format!("tcp://127.0.0.1:{port}");
-    let mut conn = AsyncConnection::open(&url).await.unwrap();
+    let mut conn = AsyncConnection::connect(&url).await.unwrap();
     let replies = conn
         .pipeline()
         .set(b"k", b"v")
@@ -119,7 +119,7 @@ async fn server_close_yields_unexpected_eof() {
         // Drop = close.
     });
     let url = format!("tcp://127.0.0.1:{port}");
-    let mut conn = AsyncConnection::open(&url).await.unwrap();
+    let mut conn = AsyncConnection::connect(&url).await.unwrap();
     let err = conn.ping().await.unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
 }

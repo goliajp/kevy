@@ -1,5 +1,5 @@
-//! Cache-line-padded wrapper for cross-shard atomics. Introduced by the
-//! A2 attack (2026-06-20) after the H1 `perf c2c` diagnostic showed
+//! Cache-line-padded wrapper for cross-shard atomics. Introduced after
+//! a `perf c2c` diagnostic showed
 //! `Arc<AtomicU64>` allocations in `inbound_dirty` landing on adjacent
 //! cache lines — cross-shard `fetch_or` from the sender and `swap` from
 //! the owner bounced the line between cores. Padding each atomic to a

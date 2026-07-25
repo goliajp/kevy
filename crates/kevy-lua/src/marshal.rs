@@ -1,5 +1,5 @@
 //! Lua → RESP value marshaling. Composes the pure `resp` encoders
-//! with luna-specific knowledge of `Value` and `Table` shapes.
+//! with luna-core-specific knowledge of `Value` and `Table` shapes.
 
 use crate::resp;
 use luna_core::runtime::Table;
@@ -7,7 +7,7 @@ use luna_core::runtime::heap::Gc;
 use luna_core::runtime::value::Value;
 use luna_core::vm::exec::Vm;
 
-/// Marshal a luna `Value` into a RESP reply per the Redis EVAL rules:
+/// Marshal a Lua `Value` into a RESP reply per the Redis EVAL rules:
 ///
 /// | Lua                       | RESP                            |
 /// |---------------------------|---------------------------------|
@@ -28,7 +28,7 @@ use luna_core::vm::exec::Vm;
 /// Closure / native fn / coroutine / userdata / lightuserdata cannot
 /// be returned from a script to the wire and become nil-bulk replies.
 ///
-/// Recursive on nested tables. luna's `Vm::with_instr_budget` caps
+/// Recursive on nested tables. luna-core's `Vm::with_instr_budget` caps
 /// the recursion depth — no separate guard needed here.
 pub(crate) fn value(vm: &mut Vm, v: Value) -> Vec<u8> {
     match v {

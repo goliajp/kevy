@@ -8,6 +8,22 @@
 use crate::argv::{Argv, Command};
 use crate::error::ProtocolError;
 
+/// Upper bound on a multi-bulk element count, matching Redis's
+/// `PROTO_MAX_MULTIBULK_LEN`. A request declaring more elements than
+/// this is rejected before any capacity is reserved — without the
+/// cap a ~20-byte `*9999999999\r\n` frame would drive a
+/// multi-gigabyte `Vec::with_capacity` and abort the process
+/// (`handle_alloc_error`). Untrusted, so this is a hard protocol
+/// limit, not a tunable.
+pub const MAX_MULTIBULK_LEN: usize = 1024 * 1024;
+
+/// Upper bound on a single bulk-string length, matching Redis's
+/// 512 MiB `proto-max-bulk-len` default. A header declaring a longer
+/// string is rejected at parse time, so neither the parser's
+/// capacity reservation nor the connection's input buffer can be
+/// driven unbounded by a declared-but-never-sent length.
+pub const MAX_BULK_LEN: usize = 512 * 1024 * 1024;
+
 /// Attempt to parse one command from the front of `buf`.
 ///
 /// - `Ok(Some((cmd, consumed)))` — a full command; `consumed` bytes may be dropped.
@@ -91,6 +107,9 @@ pub(crate) fn validate_multibulk_frame(
             return Err(ProtocolError::Malformed("negative bulk length in request"));
         }
         let len = len as usize;
+        if len > MAX_BULK_LEN {
+            return Err(ProtocolError::Malformed("bulk length exceeds proto-max-bulk-len"));
+        }
         let data_end = len_end + 2 + len;
         if buf.len() < data_end + 2 {
             return Ok(None);
@@ -128,6 +147,9 @@ fn parse_multibulk_into(buf: &[u8], dst: &mut Argv) -> Result<Option<usize>, Pro
         return Ok(Some(hdr_end + 2));
     }
     let count = count as usize;
+    if count > MAX_MULTIBULK_LEN {
+        return Err(ProtocolError::Malformed("multibulk count exceeds limit"));
+    }
     let start = hdr_end + 2;
 
     let Some((end_pos, total)) = validate_multibulk_frame(buf, start, count)? else {
@@ -196,14 +218,18 @@ pub(crate) fn parse_bulk_len(
     if neg {
         return Err(ProtocolError::Malformed("negative bulk length in request"));
     }
-    Ok(Some((acc as usize, q + 2)))
+    let len = acc as usize;
+    if len > MAX_BULK_LEN {
+        return Err(ProtocolError::Malformed("bulk length exceeds proto-max-bulk-len"));
+    }
+    Ok(Some((len, q + 2)))
 }
 
 /// Find the index of `\r\n` at or after `start`, returning the index of `\r`.
 ///
-/// A6 + A7 (2026-06-20): delegates to `kevy_bytes::find_crlf`, which picks
+/// Delegates to `kevy_bytes::find_crlf`, which picks
 /// AVX2 (x86_64 runtime-detected) / NEON (aarch64 baseline) / u64 SWAR
-/// fallback. The previous in-crate SWAR loop is now the fallback tier
+/// fallback. An earlier in-crate SWAR loop is now the fallback tier
 /// of that dispatch. Pulling the SIMD path into kevy-bytes keeps this
 /// crate under #![forbid(unsafe_code)] — kevy-bytes already wraps
 /// SmallBytes' unsafe union work so it's the right home for arch
@@ -241,6 +267,36 @@ pub(crate) fn parse_int(bytes: &[u8]) -> Option<i64> {
 mod tests {
     use super::*;
     use crate::encode_command;
+    use crate::parse_command_borrowed;
+
+    // A tiny frame declaring a huge multibulk count must be rejected —
+    // NOT drive a multi-gigabyte capacity reservation (remote
+    // alloc-abort). Owned and borrowed parsers gate identically.
+    #[test]
+    fn absurd_multibulk_count_rejected_not_preallocated() {
+        let frame = b"*9999999999\r\n";
+        assert!(parse_command(frame).is_err(), "owned parser must reject");
+        assert!(parse_command_borrowed(frame).is_err(), "borrowed parser must reject");
+        // Exactly at the limit + 1 is still rejected; the limit itself
+        // is a legal (if large) count that simply needs more bytes.
+        let over = format!("*{}\r\n", MAX_MULTIBULK_LEN + 1);
+        assert!(parse_command(over.as_bytes()).is_err());
+        let at = format!("*{}\r\n", MAX_MULTIBULK_LEN);
+        assert!(matches!(parse_command(at.as_bytes()), Ok(None)));
+    }
+
+    // A bulk header declaring more than proto-max-bulk-len is rejected
+    // at parse time, so a declared-but-never-sent length can't grow
+    // the connection input buffer without bound.
+    #[test]
+    fn oversized_bulk_length_rejected() {
+        let over = format!("*1\r\n${}\r\n", MAX_BULK_LEN + 1);
+        assert!(parse_command(over.as_bytes()).is_err());
+        assert!(parse_command_borrowed(over.as_bytes()).is_err());
+        // A legal-size header just needs its bytes.
+        let ok = b"*1\r\n$5\r\n";
+        assert!(matches!(parse_command(ok), Ok(None)));
+    }
 
     // SWAR find_crlf fuzz: planted CRLFs at every offset 0..40, lone-CR
     // distractors, no-CRLF inputs, near-end boundaries. The SWAR window is

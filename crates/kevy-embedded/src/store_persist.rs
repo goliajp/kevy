@@ -4,17 +4,18 @@
 //! pre-split layout; this module hosts long-running disk paths
 //! separately from the hot lock/dispatch surface in `store.rs`.
 
+use crate::KevyResult;
 use std::io;
 use std::sync::RwLock;
 use std::time::Instant;
 
-use kevy_persist::RewriteStats;
+use kevy_persist::{Argv, RewriteStats};
 
 use crate::metric::KevyMetric;
 use crate::store::{Inner, Store, lock_write};
 
 impl Store {
-    /// Durability barrier (v2.1): flush + `fdatasync` every shard's
+    /// Durability barrier: flush + `fdatasync` every shard's
     /// AOF now, regardless of the configured `appendfsync` policy. On
     /// `Ok(())`, every write acknowledged before this call is on
     /// stable storage. The `EverySec` serving-store idiom:
@@ -26,7 +27,7 @@ impl Store {
     ///
     /// Cost: one `fdatasync` per dirty shard; a no-op on clean shards.
     /// Under `appendfsync = always` it is a no-op (already durable).
-    pub fn fsync_aof(&self) -> io::Result<()> {
+    pub fn fsync_aof(&self) -> KevyResult<()> {
         for shard in self.shards.iter() {
             let mut g = lock_write(shard);
             if let Some(aof) = &mut g.aof {
@@ -40,7 +41,7 @@ impl Store {
     /// Synchronous (despite the RESP name). Returns the summed stats
     /// (`None` if persistence is off / no shard rewrote). Shards mid
     /// rewrite are skipped. Emits [`KevyMetric::Rewrite`] per shard.
-    pub fn rewrite_aof(&self) -> io::Result<Option<RewriteStats>> {
+    pub fn rewrite_aof(&self) -> KevyResult<Option<RewriteStats>> {
         let mut agg: Option<RewriteStats> = None;
         for shard in self.shards.iter() {
             if let Some(stats) = self.rewrite_one_shard(shard)? {
@@ -54,7 +55,7 @@ impl Store {
 
     /// One shard's synchronous three-phase rewrite. `Ok(None)` =
     /// skipped (persistence off / already mid-rewrite).
-    fn rewrite_one_shard(&self, shard: &RwLock<Inner>) -> io::Result<Option<RewriteStats>> {
+    fn rewrite_one_shard(&self, shard: &RwLock<Inner>) -> KevyResult<Option<RewriteStats>> {
         let start = Instant::now();
         // Phase 1 (locked): freeze the COW view + start the tee —
         // O(n)-shallow, no serialization under the lock.
@@ -78,7 +79,7 @@ impl Store {
                     aof.abort_concurrent_rewrite();
                 }
                 let _ = std::fs::remove_file(&tmp);
-                return Err(e);
+                return Err(e.into());
             }
         };
         // Phase 3 (locked): append the tee'd diff and swap.
@@ -89,7 +90,7 @@ impl Store {
             Err(e) => {
                 aof.abort_concurrent_rewrite();
                 let _ = std::fs::remove_file(&tmp);
-                return Err(e);
+                return Err(e.into());
             }
         };
         if let Some(sink) = &self.config.metric_sink {
@@ -103,20 +104,68 @@ impl Store {
         Ok(Some(stats))
     }
 
-    /// Snapshot every shard to its `dump-{i}.rdb` (single shard: the configured
-    /// name), atomically. `Ok(false)` when persistence is disabled.
-    pub fn save_snapshot(&self) -> io::Result<bool> {
+    /// Apply one AOF-format command frame directly to the keyspace — the
+    /// programmatic face of AOF replay, for hosts that store the log
+    /// themselves (targets without a filesystem, where the embedding
+    /// host reads the log back and feeds it in frame by frame on open).
+    ///
+    /// Speaks the same verb set `Store::open` replays from an on-disk
+    /// AOF; unknown verbs are skipped (forward compatibility with logs
+    /// written by a newer kevy). Keyed verbs route to the owning shard;
+    /// `FLUSHALL`/`FLUSHDB` reach every shard. The frame is **not**
+    /// re-appended to any AOF — this is the read-back half of the pump,
+    /// so re-logging would double-apply on the next replay.
+    pub fn apply_frame(&self, args: &Argv) {
+        let Some(verb) = args.first() else { return };
+        if verb.eq_ignore_ascii_case(b"FLUSHALL") || verb.eq_ignore_ascii_case(b"FLUSHDB") {
+            for shard in self.shards.iter() {
+                crate::replay::apply(&mut lock_write(shard).store, args);
+            }
+            return;
+        }
+        if let Some(key) = args.get(1) {
+            crate::replay::apply(&mut self.wshard(key).store, args);
+        }
+    }
+
+    /// Serialize the whole keyspace into an in-memory compacted AOF image
+    /// (magic header + one command stream per key — the same bytes an
+    /// AOF rewrite puts on disk). The write half of host-mediated
+    /// persistence: hosts without a filesystem hand this buffer to their
+    /// own storage, replacing the accumulated append log, and feed it
+    /// back through [`Self::apply_frame`] on the next open.
+    ///
+    /// Each shard is frozen copy-on-write and serialized off-lock, so
+    /// concurrent readers and writers on other shards are not blocked
+    /// for the duration of the dump.
+    pub fn dump_aof_buf(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        for (i, shard) in self.shards.iter().enumerate() {
+            let view = lock_write(shard).store.collect_snapshot();
+            // V2, like every other rewrite output: the wasm door's
+            // host-mediated pump replays both formats, and its dump is
+            // the log's upgrade point (mirroring the native
+            // first-rewrite upgrade).
+            let (buf, _keys) =
+                kevy_persist::dump_store_to_buf(&view, kevy_persist::AofFormat::V2);
+            if i == 0 {
+                out = buf;
+            } else {
+                // One magic header per image, not per shard.
+                out.extend_from_slice(&buf[kevy_persist::AOF2_MAGIC.len()..]);
+            }
+        }
+        out
+    }
+
+    /// Snapshot every shard to its `dump-{i}.rdb`, atomically. `Ok(false)`
+    /// when persistence is disabled.
+    pub fn save_snapshot(&self) -> KevyResult<bool> {
         let Some(dir) = self.config.data_dir.as_ref() else {
             return Ok(false);
         };
-        let n = self.shards.len();
         for (i, shard) in self.shards.iter().enumerate() {
-            let name = if n == 1 {
-                self.config.snapshot_filename.clone()
-            } else {
-                kevy_persist::layout::snapshot_file(i)
-            };
-            save_shard_snapshot(shard, &dir.join(name))?;
+            save_shard_snapshot(shard, &kevy_persist::layout::snapshot_path(dir, i))?;
         }
         Ok(true)
     }
@@ -135,7 +184,7 @@ impl Store {
 pub(crate) fn save_shard_snapshot(
     shard: &RwLock<Inner>,
     path: &std::path::Path,
-) -> io::Result<()> {
+) -> KevyResult<()> {
     let (view, reset_tmp) = freeze_for_save(shard)?;
     let tmp = match kevy_persist::write_snapshot_tmp(&view, path) {
         Ok(t) => t,
@@ -145,7 +194,7 @@ pub(crate) fn save_shard_snapshot(
             {
                 aof.abort_concurrent_rewrite();
             }
-            return Err(e);
+            return Err(e.into());
         }
     };
     let mut g = lock_write(shard);
@@ -156,7 +205,7 @@ pub(crate) fn save_shard_snapshot(
         if let Err(e) = swap {
             aof.abort_concurrent_rewrite();
             let _ = std::fs::remove_file(&reset);
-            return Err(e);
+            return Err(e.into());
         }
     }
     Ok(())
@@ -169,7 +218,7 @@ pub(crate) fn save_shard_snapshot(
 /// apply on replay.
 fn freeze_for_save(
     shard: &RwLock<Inner>,
-) -> io::Result<(kevy_store::SnapshotView, Option<std::path::PathBuf>)> {
+) -> KevyResult<(kevy_store::SnapshotView, Option<std::path::PathBuf>)> {
     for _ in 0..2000 {
         {
             let mut g = lock_write(shard);
@@ -188,5 +237,6 @@ fn freeze_for_save(
     Err(io::Error::new(
         io::ErrorKind::TimedOut,
         "kevy-embedded: AOF rewrite still in flight after 10s; snapshot aborted",
-    ))
+    )
+    .into())
 }

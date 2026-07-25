@@ -1,4 +1,4 @@
-//! Tests for the Phase 2 mailrs-feedback ops in `ops_p2.rs`.
+//! Tests for the consumer-feedback ops in `ops_p2.rs`.
 
 use crate::Config;
 use crate::store::Store;

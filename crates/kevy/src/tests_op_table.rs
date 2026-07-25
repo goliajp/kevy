@@ -1,4 +1,4 @@
-//! OP_TABLE ↔ server cross-checks (v2.1 parity CI).
+//! OP_TABLE ↔ server cross-checks (parity CI).
 //!
 //! The server's semantic classification lists used to be five
 //! hand-maintained `match` tables with no cross-checks; these tests

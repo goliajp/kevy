@@ -5,144 +5,31 @@
 //! lives here.
 
 use kevy_rt::{
-    ArgvView, BlockKind, Commands, NotifyClass, ResolvedCmd, RespVersion, Route, TxnKind,
-    parse_slowlog_sub,
+    ArgvView, BlockKind, Commands, ExtensionReduced, NotifyClass, ResolvedCmd, RespVersion, Route,
+    TxnKind,
 };
 use kevy_store::Store;
 
-use crate::cmd::{self, scan_pattern, upper_verb};
+use crate::cmd::{self, upper_verb};
 use crate::{
-    Argv, KevyCommands, cmd_block, cmd_block_serve, cmd_hello, cmd_resolve, config_global,
-    dispatch, map_appendfsync, map_eviction_policy, ops,
+    Argv, KevyCommands, cmd_block, cmd_block_serve, cmd_hello, cmd_resolve, dispatch,
+    map_appendfsync, map_eviction_policy, ops,
 };
 
 impl Commands for KevyCommands {
-    // LOC-WAIVER: data-driven verb → Route match table — one arm per verb.
     fn route<A: ArgvView + ?Sized>(&self, args: &A) -> Route {
-        let Some(name) = args.first() else {
-            return Route::Local;
-        };
-        let mut buf = [0u8; 32];
-        match upper_verb(name, &mut buf) {
-            b"HELLO" => Route::Hello,
-            b"PING" | b"ECHO" | b"QUIT" | b"COMMAND" | b"CONFIG"
-            | b"INFO" | b"CLUSTER" | b"DEBUG" | b"SHUTDOWN"
-            | b"CLIENT" | b"SELECT" | b"ROLE"
-            | b"REPLICAOF" | b"SLAVEOF" => Route::Local,
-            // v3.16 — kept in sync with cmd_resolve::route_for_verb.
-            b"WAIT" => crate::cmd_repl::wait_route(args),
-            b"REPL.TOKEN" => crate::cmd_repl::token_route(args),
-            b"REPL.WAIT" => crate::cmd_repl::repl_wait_route(args),
-            b"DBSIZE" => Route::Dbsize,
-            b"FLUSHDB" | b"FLUSHALL" => Route::Flush,
-            b"SAVE" => Route::Save,
-            b"BGSAVE" => Route::BgSave,
-            b"BGREWRITEAOF" => Route::RewriteAof,
-            // Cross-shard multi-key (malformed arity falls back to Local so the
-            // dispatch stub returns the arity error).
-            b"MSET" if args.len() >= 3 && !args.len().is_multiple_of(2) => Route::MSet,
-            b"MGET" if args.len() >= 2 => Route::MGet,
-            b"ZINTERSTORE" if args.len() >= 4 => Route::ZAlgebraStore(kevy_rt::ZCombine::ZInter),
-            b"ZUNIONSTORE" if args.len() >= 4 => Route::ZAlgebraStore(kevy_rt::ZCombine::ZUnion),
-            b"ZDIFFSTORE" if args.len() >= 4 => Route::ZAlgebraStore(kevy_rt::ZCombine::ZDiff),
-            b"SINTERSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SInter),
-            b"SUNIONSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SUnion),
-            b"SDIFFSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SDiff),
-            b"ZINTERCARD" if args.len() >= 3 => Route::ZInterCard,
-            b"IDX.QUERY" if args.len() >= 4 => Route::Extension,
-            b"IDX.EXPLAIN" if args.len() >= 2 => Route::Extension,
-            b"IDX.REBUILD" if args.len() == 2 => Route::Extension,
-            b"IDX.COUNT" if args.len() >= 4 => Route::Extension,
-            b"IDX.VERIFY" if args.len() == 2 => Route::Extension,
-            b"IDX.LIST" if args.len() == 1 => Route::Extension,
-            b"VIEW.QUERY" if args.len() >= 2 => Route::Extension,
-            b"VIEW.LIST" if args.len() == 1 => Route::Extension,
-            b"VIEW.VERIFY" if args.len() == 2 => Route::Extension,
-            b"VIEW.REBUILD" if args.len() == 2 => Route::Extension,
-            b"VIEW.EXPLAIN" if args.len() == 2 => Route::Extension,
-            b"PREFIX.STATS" if args.len() == 2 => Route::PrefixStats,
-            b"PREFIX.DIGEST" if args.len() == 2 => Route::Extension,
-            b"FEED.READ" if args.len() >= 4 => Route::FeedRead,
-            b"FEED.TAIL" if args.len() == 2 => Route::FeedTail,
-            b"FEED.SHARDS" if args.len() == 1 => Route::FeedShards,
-            b"SINTER" if args.len() >= 2 => Route::SInter,
-            b"SUNION" if args.len() >= 2 => Route::SUnion,
-            b"SDIFF" if args.len() >= 2 => Route::SDiff,
-            b"KEYS" if args.len() == 2 => Route::Keys(Some(args[1].to_vec())),
-            b"SCAN" if args.len() >= 2 => Route::Scan(scan_pattern(args)),
-            b"RANDOMKEY" if args.len() == 1 => Route::RandomKey,
-            b"SUBSCRIBE" if args.len() >= 2 => Route::Subscribe,
-            b"UNSUBSCRIBE" => Route::Unsubscribe, // no args = unsubscribe all
-            b"PSUBSCRIBE" if args.len() >= 2 => Route::Psubscribe,
-            b"PUNSUBSCRIBE" => Route::Punsubscribe, // no args = punsubscribe all
-            b"PUBLISH" if args.len() == 3 => Route::Publish,
-            b"WATCH" if args.len() >= 2 => Route::Watch,
-            b"UNWATCH" => Route::Unwatch,
-            b"RENAME" => Route::Rename { nx: false },
-            b"RENAMENX" => Route::Rename { nx: true },
-            // v1.27.1: keep in sync with cmd_resolve::route_for_verb —
-            // the runtime hot path goes through `resolve()` →
-            // `route_for_verb`, but tests + future direct callers of
-            // `route()` need the same answer.
-            b"EVAL" | b"EVALSHA" | b"EVAL_RO" | b"EVALSHA_RO" => {
-                if args.len() >= 4 {
-                    let nk = std::str::from_utf8(&args[2])
-                        .ok()
-                        .and_then(|s| s.parse::<i64>().ok())
-                        .unwrap_or(0);
-                    if nk >= 1 && (args.len() as i64) >= 3 + nk {
-                        Route::Single(3)
-                    } else {
-                        Route::Local
-                    }
-                } else {
-                    Route::Local
-                }
-            }
-            b"SCRIPT" => Route::Local,
-            b"XREAD" => cmd_block::xread_route(args),
-            b"XREADGROUP" => cmd_block::xreadgroup_route(args),
-            // XGROUP / XINFO key is at args[2] (after the subcommand).
-            b"XGROUP" | b"XINFO" if args.len() >= 3 => Route::Single(2),
-            b"SLOWLOG" => Route::Slowlog(parse_slowlog_sub(args)),
-            // DEL/EXISTS are single-key (fast path) unless given multiple keys.
-            b"DEL" | b"UNLINK" => {
-                if args.len() == 2 {
-                    Route::Single(1)
-                } else {
-                    Route::DelKeys
-                }
-            }
-            b"EXISTS" => {
-                if args.len() == 2 {
-                    Route::Single(1)
-                } else {
-                    Route::ExistsKeys
-                }
-            }
-            // All remaining commands act on a single key at args[1].
-            _ => {
-                if args.len() >= 2 {
-                    Route::Single(1)
-                } else {
-                    Route::Local // malformed; dispatch will return the error
-                }
-            }
-        }
+        // One routing table for the whole crate: `cmd_resolve` owns it
+        // (the hot path reads it through `resolve()`); this standalone
+        // accessor delegates so the two faces can never drift.
+        cmd_resolve::route(&self.state().replication, args)
     }
 
     fn dispatch<A: ArgvView + ?Sized>(&self, store: &mut Store, args: &A) -> Vec<u8> {
-        dispatch::dispatch(store, args)
+        dispatch::dispatch(&self.ctx(), store, args)
     }
 
     fn dispatch_into<A: ArgvView + ?Sized>(&self, store: &mut Store, args: &A, out: &mut Vec<u8>) {
-        dispatch::dispatch_into(store, args, out);
-    }
-
-    fn dispatch_resp3<A: ArgvView + ?Sized>(&self, store: &mut Store, args: &A) -> Vec<u8> {
-        let mut out = Vec::with_capacity(64);
-        dispatch::dispatch_into_resp3(store, args, &mut out);
-        out
+        dispatch::dispatch_into(&self.ctx(), store, args, out);
     }
 
     fn dispatch_into_resp3<A: ArgvView + ?Sized>(
@@ -151,7 +38,7 @@ impl Commands for KevyCommands {
         args: &A,
         out: &mut Vec<u8>,
     ) {
-        dispatch::dispatch_into_resp3(store, args, out);
+        dispatch::dispatch_into_resp3(&self.ctx(), store, args, out);
     }
 
     fn is_quit<A: ArgvView + ?Sized>(&self, args: &A) -> bool {
@@ -160,11 +47,11 @@ impl Commands for KevyCommands {
     }
 
     fn on_shard_init(&self, store: &mut Store) {
-        // Snapshot the process-wide config and apply its `[memory]` section
-        // to this shard. Reading `config_global::get()` returns
-        // `Config::default()` (maxmemory=0) when running outside `serve` —
-        // e.g. tests / embedded — so the call is harmlessly a no-op there.
-        let cfg = config_global::get();
+        // Snapshot the shared config and apply its `[memory]` section to
+        // this shard. Outside `serve` (tests / embedded) the state holds
+        // `Config::default()` (maxmemory=0), so the call is harmlessly a
+        // no-op there.
+        let cfg = self.state().config();
         store.set_max_memory(
             cfg.memory.maxmemory,
             map_eviction_policy(cfg.memory.maxmemory_policy),
@@ -172,51 +59,65 @@ impl Commands for KevyCommands {
     }
 
     fn on_shard_start(&self, shard: usize) {
-        // Thread-per-core: the reactor thread *is* the shard, so a
-        // thread-local carries per-shard identity into dispatch handlers
-        // (CLUSTER MYID / the `myself` flag in CLUSTER NODES).
-        ops::cluster::set_current_shard(shard);
-        // Cache this shard's INFO-stats slot for lock-free publish + counter
-        // bumps (see `ops::stats`).
-        ops::stats::register_shard(shard);
+        // Thread-per-core: the reactor thread *is* the shard. The shard id
+        // and this shard's INFO-stats slot (lock-free publish + counter
+        // bumps, see `ops::stats`) land in this clone's ShardCtx.
+        self.shard_ctx().set_shard_id(shard);
+        self.shard_ctx().set_stats_slot(self.state().obs.slot(shard));
     }
 
     fn on_persist_stats(&self, in_flight: bool, aof_rewrites_total: u64) {
-        // Same thread-local pattern as `on_shard_start`: `INFO persistence`
-        // answers with the answering shard's view (the COUNTKEYSINSLOT
-        // precedent), refreshed by the reactor tick.
-        ops::set_persist_stats(in_flight, aof_rewrites_total);
+        // `INFO persistence` answers with the answering shard's view
+        // (the COUNTKEYSINSLOT precedent), refreshed by the reactor tick.
+        self.shard_ctx().set_persist_stats(in_flight, aof_rewrites_total);
     }
 
-    fn on_replication_view(
-        &self,
-        master_repl_offset: u64,
-        replicas: Vec<(std::net::Ipv4Addr, u16, u64, Option<u64>)>,
-    ) {
-        // Same thread-local pattern as `on_persist_stats`: `ROLE` /
-        // `INFO replication` read the answering shard's most-recent
-        // view. T1.28.5 added the per-replica list — `connected_slaves`
-        // is derived from `replicas.len()` at read time.
-        ops::replication::set_replication_view(master_repl_offset, replicas);
+    fn on_replay_report(&self, dropped_bytes: u64, corrupt: bool) {
+        // Boot-replay verdict for `INFO persistence` — non-zero drops are
+        // the operator's alert signal (the store holds less than the AOF
+        // did; the dropped region was quarantined on disk).
+        self.shard_ctx().set_replay_report(dropped_bytes, corrupt);
+    }
+
+    fn on_replication_view(&self, master_repl_offset: u64, replicas: Vec<kevy_rt::ReplicaViewRow>) {
+        // Publish to the shared per-shard slot FIRST — `ROLE` / `INFO
+        // replication` answer on one shard but fold every shard's slot
+        // into an instance-wide view (offset sum + per-replica union).
+        self.state().obs.publish_repl_view(
+            self.shard_ctx().shard_id(),
+            crate::state::ReplShardView {
+                offset: master_repl_offset,
+                replicas: replicas.clone(),
+            },
+        );
+        // The shard zone keeps its own copy for per-shard consumers
+        // (the min-replicas health gate reads the answering shard's
+        // rows — write gating is per shard-stream by design).
+        self.shard_ctx()
+            .set_replication_view(ops::replication::ReplicationView { replicas });
         // v3-cluster Phase 1.5: feed the offset into kevy-elect so
         // the next heartbeat carries the up-to-date `repl_offset`.
         // No-op when the elector isn't running.
-        crate::elect_integration::set_view_offset(master_repl_offset);
+        self.state().election.set_view_offset(
+            &self.state().replication,
+            self.shard_ctx().shard_id(),
+            master_repl_offset,
+        );
     }
 
     fn on_command(&self) {
-        ops::stats::add_command();
+        self.shard_ctx().add_command();
     }
 
     fn on_connection(&self) {
-        ops::stats::add_connection();
+        self.shard_ctx().add_connection();
     }
 
     fn shard_tick_interval_ms(&self) -> u64 {
         // hz=0 disables the active reaper (lazy expiry still runs); else
         // every `1000/hz` ms — capped at 10 s so a misconfig can't park the
         // reactor's tick check loop forever.
-        let cfg = config_global::get();
+        let cfg = self.state().config();
         let hz = cfg.expiry.hz;
         if hz == 0 {
             0
@@ -226,9 +127,21 @@ impl Commands for KevyCommands {
     }
 
     fn on_write(&self, store: &mut Store, key: &[u8]) {
-        crate::index_runtime::on_write(store, key);
-        // Views probe the segments the line above just refreshed.
-        crate::view_runtime::on_write(store, key);
+        // Zero-tax gate: with no index/view declared, a write costs
+        // one cached-bit branch here instead of the two global flag
+        // loads the runtimes used to pay.
+        let bits = self.gate_bits();
+        if bits & crate::state::IDX_NONEMPTY != 0 {
+            crate::index_runtime::on_write(&self.ctx(), store, key);
+        }
+        if bits & crate::state::VIEW_NONEMPTY != 0 {
+            // Views probe the segments the line above just refreshed.
+            crate::view_runtime::on_write(&self.ctx(), store, key);
+        }
+    }
+
+    fn geo_search(&self, store: &mut Store, argv: &[Vec<u8>]) -> kevy_rt::GeoHits {
+        crate::dispatch_geo::geo_search(store, argv)
     }
 
     fn extension_op(&self, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
@@ -236,62 +149,118 @@ impl Commands for KevyCommands {
             return crate::cmd_digest::extension_op(store, argv);
         }
         if argv.first().is_some_and(|v| v.len() > 5 && v[..5].eq_ignore_ascii_case(b"VIEW.")) {
-            return crate::cmd_view::extension_op(store, argv);
+            return crate::cmd_view::extension_op(&self.ctx(), store, argv);
         }
-        crate::cmd_index_query::extension_op(store, argv)
-    }
-
-    fn extension_reduce(&self, argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8> {
-        if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"PREFIX.DIGEST")) {
-            return crate::cmd_digest::extension_reduce(chunks);
+        if argv.first().is_some_and(|v| v.len() > 6 && v[..6].eq_ignore_ascii_case(b"TABLE.")) {
+            return crate::cmd_table::extension_op(&self.ctx(), store, argv);
         }
-        if argv.first().is_some_and(|v| v.len() > 5 && v[..5].eq_ignore_ascii_case(b"VIEW.")) {
-            return crate::cmd_view::extension_reduce(argv, chunks);
-        }
-        crate::cmd_index_reduce::extension_reduce(argv, chunks)
+        crate::cmd_index_query::extension_op(&self.ctx(), store, argv)
     }
 
-    fn write_denied(&self) -> Option<Vec<u8>> {
-        crate::replica_state::write_denied_reply()
-    }
-
-    fn read_denied(&self) -> Option<Vec<u8>> {
-        crate::replica_state::read_denied_reply()
-    }
-
-    fn extension_reduce_v3(
+    fn extension_reduce(
         &self,
         argv: &[Vec<u8>],
         chunks: Vec<Vec<u8>>,
         proto: kevy_resp::RespVersion,
-    ) -> Vec<u8> {
-        let reply = self.extension_reduce(argv, chunks);
-        if proto == kevy_resp::RespVersion::V3 {
-            return crate::cmd_index_reduce::resp3_upgrade(argv, reply);
+    ) -> ExtensionReduced {
+        let catalogs = &self.state().catalogs;
+        let reduced = if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"PREFIX.DIGEST")) {
+            ExtensionReduced::Reply(crate::cmd_digest::extension_reduce(chunks))
+        } else if argv.first().is_some_and(|v| v.len() > 5 && v[..5].eq_ignore_ascii_case(b"VIEW."))
+        {
+            crate::cmd_view::extension_reduce(catalogs, argv, chunks)
+        } else if argv
+            .first()
+            .is_some_and(|v| v.len() > 6 && v[..6].eq_ignore_ascii_case(b"TABLE."))
+        {
+            crate::cmd_table::extension_reduce(catalogs, argv, chunks)
+        } else {
+            crate::cmd_index_reduce::extension_reduce(catalogs, argv, chunks)
+        };
+        match reduced {
+            ExtensionReduced::Reply(reply) if proto == kevy_resp::RespVersion::V3 => {
+                ExtensionReduced::Reply(crate::cmd_index_reduce::resp3_upgrade(argv, reply))
+            }
+            other => other,
         }
-        reply
+    }
+
+    fn write_denied(&self) -> Option<Vec<u8>> {
+        // Two-tier verdict: the cached bit answers "certainly
+        // allowed" with a single epoch load; only a raised gate walks
+        // the precise fence-ordering judge (which may lock the quiesce
+        // slot / count replicas to render the exact error).
+        if self.gate_bits() & crate::state::WRITE_GATED == 0 {
+            return None;
+        }
+        self.state().replication.write_denied_reply(|| {
+            let max_lag_ms = self.state().config().replication.min_replicas_max_lag_ms;
+            self.shard_ctx().healthy_replica_count(max_lag_ms)
+        })
+    }
+
+    fn read_denied<A: ArgvView + ?Sized>(&self, args: &A) -> Option<Vec<u8>> {
+        // READ_GATED = bounded-staleness replica or a replica inside a
+        // full-resync snapshot load. The staleness deadline is a time
+        // condition and the loading flag flips mid-window, so the slow
+        // path re-loads the live values on every gated read.
+        if self.gate_bits() & crate::state::READ_GATED == 0 {
+            return None;
+        }
+        // PING / INFO / HELLO stay answerable while gated — health
+        // checks and monitoring must keep working during a snapshot
+        // load (and a stale replica still proves liveness). CLIENT /
+        // CONFIG / SHUTDOWN stay answerable too: an operator must be
+        // able to inspect connections, kill a misbehaving one, or
+        // stop the node while a load is in flight. Matches the verbs
+        // Redis flags loading-exempt.
+        if args.get(0).is_some_and(|v| {
+            v.eq_ignore_ascii_case(b"PING")
+                || v.eq_ignore_ascii_case(b"INFO")
+                || v.eq_ignore_ascii_case(b"HELLO")
+                || v.eq_ignore_ascii_case(b"CLIENT")
+                || v.eq_ignore_ascii_case(b"CONFIG")
+                || v.eq_ignore_ascii_case(b"SHUTDOWN")
+        }) {
+            return None;
+        }
+        self.state().replication.read_denied_reply()
     }
 
     fn on_shard_tick(&self, store: &mut Store) {
-        crate::index_runtime::on_tick(store);
-        crate::view_runtime::on_tick(store);
+        let bits = self.gate_bits();
+        if bits & crate::state::IDX_NONEMPTY != 0 {
+            crate::index_runtime::on_tick(&self.ctx(), store);
+        }
+        if bits & crate::state::VIEW_NONEMPTY != 0 {
+            crate::view_runtime::on_tick(&self.ctx(), store);
+        }
         // Run Redis's `activeExpireCycle` per shard. `sample` controls the
         // batch size; up to 16 rounds per tick is well below Redis's 25 %
         // CPU budget at the default 10 Hz cadence. Cheap when no TTL'd
         // keys exist (a single map-emptiness check + bucket walk).
-        let cfg = config_global::get();
-        // v3.14 A0: a replica does NOT actively expire — the primary
+        let cfg = self.state().config();
+        // A replica does NOT actively expire — the primary
         // owns TTL truth and ships DEL/expiry effects through the
         // replication feed (Redis semantics; diverging reapers would
         // fork the keyspaces). Lazy-expiry reads stay local either way.
-        if !crate::replica_state::is_replica() {
+        if !self.state().replication.is_replica() {
             let samples = cfg.expiry.sample as usize;
             store.tick_expire(samples, 16);
-            // v2.4: sweep due hash field TTLs. Deadlines live in the AOF
+            // Sweep due hash field TTLs. Deadlines live in the AOF
             // (HPEXPIREAT frames), so replay purges identically — no
             // logging needed here, same determinism argument as key TTLs.
             let _ = store.tick_hash_ttl(64);
         }
+        // Tiering upkeep: budget re-resolution + the index/view floor
+        // feed (body in `tier_tick` below — 50-LOC rule), then the
+        // tick continuation of the budgeted spill (no-op when tiering
+        // is off or under the watermark). Replicas tier too — applied
+        // frames grow their keyspace like any write.
+        tier_tick(self, store, bits, &cfg);
+        store.demote_step();
+        store.tier_compact_tick(); // bounded vlog compaction — off the query-tail path
+
         // Re-apply maxmemory + eviction policy in case `CONFIG SET` has
         // swapped the global since the previous tick. `store.set_max_memory`
         // is idempotent and cheap (compares + assigns two scalars + may
@@ -303,29 +272,40 @@ impl Commands for KevyCommands {
         );
         // Publish this shard's gauges (used_memory, key/expire counts, …) so
         // `INFO`, answered on any one shard, can sum the process-wide view.
-        ops::stats::publish_gauges(store);
+        ops::stats::publish_gauges(self.shard_ctx(), store);
         // The lead shard advances the process-wide ops-per-sec sampler.
-        ops::stats::sample_ops_if_lead();
+        ops::stats::sample_ops_if_lead(self.shard_ctx(), &self.state().obs);
+    }
+
+    fn shutdown_save_requested(&self) -> bool {
+        self.state().shutdown_save_requested()
+    }
+
+    fn on_conn_gauge(&self, live: u64) {
+        self.shard_ctx().with_stats_slot(|s| {
+            s.clients_connected
+                .store(live, std::sync::atomic::Ordering::Relaxed);
+        });
     }
 
     fn live_runtime_config(&self) -> kevy_rt::LiveRuntimeConfig {
-        // Per-tick (every 100 ms by default) re-read of the process-wide
-        // config. When the embedder hasn't called `config_init` (tests,
-        // hand-rolled `Runtime`s in examples), return all-None so the
-        // builder's explicit `with_appendfsync` / `with_auto_aof_rewrite`
-        // choices aren't silently clobbered by `Config::default()` values.
-        // Once `config_init` has run, every field is wrapped in `Some` so
-        // the shard re-applies CONFIG SET changes within one tick.
-        if !config_global::is_initialised() {
-            // v3.16: the promotion counter still flows — it doesn't
+        // Per-tick (every 100 ms by default) re-read of the shared config.
+        // When no explicit config was ever installed (tests, hand-rolled
+        // `Runtime`s in examples), return all-None so the builder's
+        // explicit `with_appendfsync` / `with_auto_aof_rewrite` choices
+        // aren't silently clobbered by `Config::default()` values. Once an
+        // explicit config exists, every field is wrapped in `Some` so the
+        // shard re-applies CONFIG SET changes within one tick.
+        if !self.state().config_is_explicit() {
+            // The promotion counter still flows — it doesn't
             // clobber any builder choice, and an embedded promotion
             // must fence feed generations too.
             return kevy_rt::LiveRuntimeConfig {
-                promotion_epoch: crate::replica_state::promotion_epoch(),
+                promotion_epoch: self.state().replication.promotion_epoch(),
                 ..kevy_rt::LiveRuntimeConfig::default()
             };
         }
-        let cfg = config_global::get();
+        let cfg = self.state().config();
         let hz = cfg.expiry.hz;
         let tick_ms = if hz == 0 {
             Some(0)
@@ -336,13 +316,22 @@ impl Commands for KevyCommands {
             appendfsync: Some(map_appendfsync(cfg.persistence.appendfsync)),
             auto_aof_rewrite_pct: Some(cfg.persistence.auto_aof_rewrite_percentage),
             auto_aof_rewrite_min_size: Some(cfg.persistence.auto_aof_rewrite_min_size),
+            auto_aof_rewrite_bytes: Some(cfg.persistence.auto_aof_rewrite_bytes),
+            auto_aof_rewrite_interval_secs: Some(cfg.persistence.auto_aof_rewrite_interval_secs),
             tick_interval_ms: tick_ms,
-            notify_flags: Some(kevy_config::parse_notification_flags(
-                &cfg.notification.notify_keyspace_events,
-            )),
+            // A flag string with an unknown char can't be installed —
+            // config admission validates it — so the fallback default
+            // (notifications OFF) is unreachable in practice and safe
+            // if a foreign path ever slips one through.
+            notify_flags: Some(
+                kevy_config::parse_notification_flags(
+                    &cfg.notification.notify_keyspace_events,
+                )
+                .unwrap_or_default(),
+            ),
             slowlog_slower_than_micros: Some(cfg.slowlog.slower_than_micros),
             slowlog_max_len: Some(cfg.slowlog.max_len),
-            promotion_epoch: crate::replica_state::promotion_epoch(),
+            promotion_epoch: self.state().replication.promotion_epoch(),
         }
     }
 
@@ -382,6 +371,40 @@ impl Commands for KevyCommands {
         }
     }
 
+    /// Queue-time validation for `MULTI`: reject a command that can
+    /// never queue so `EXEC` aborts with `-EXECABORT` (Redis
+    /// `CLIENT_DIRTY_EXEC`). Two unambiguous cases:
+    ///   * unknown verb — no [`crate::verb_meta`] row;
+    ///   * too few args — below the verb's minimum arity (Redis
+    ///     convention: positive `n` needs exactly `n` argv elements
+    ///     verb-included, negative `n` needs at least `|n|`; either way
+    ///     the minimum is `|n|`, and no handler accepts fewer).
+    ///
+    /// The "too many args for an exact-arity verb" case is deliberately
+    /// NOT rejected here: `VERB_META.arity` is parity-checked for
+    /// coverage, not verified exact against every handler's real argv
+    /// acceptance, so an over-strict exact check could abort a
+    /// variadic command that would in fact execute. Those still surface
+    /// their own arity error at `EXEC` time — an error inside the
+    /// transaction, not a false abort of it.
+    fn queue_error<A: ArgvView + ?Sized>(&self, args: &A) -> Option<Vec<u8>> {
+        let name = args.first()?;
+        let mut buf = [0u8; 32];
+        let upper = upper_verb(name, &mut buf);
+        let shown = String::from_utf8_lossy(name);
+        let known = std::str::from_utf8(upper)
+            .ok()
+            .and_then(crate::verb_meta::verb_meta);
+        let Some(meta) = known else {
+            return Some(format!("-ERR unknown command '{shown}'\r\n").into_bytes());
+        };
+        let min_args = i64::from(meta.arity.unsigned_abs());
+        (( args.len() as i64) < min_args).then(|| {
+            format!("-ERR wrong number of arguments for '{}' command\r\n", meta.name.to_lowercase())
+                .into_bytes()
+        })
+    }
+
     /// Freeze `$` IDs in an `XREAD BLOCK` argv at park time. Default
     /// would leave `$` literal in the parked argv; the wake retry would
     /// then re-resolve `$` to the *post-XADD* `last_id`, miss the new
@@ -409,19 +432,22 @@ impl Commands for KevyCommands {
         cmd_block_serve::block_serve_argv(args, kind, key)
     }
 
+    fn block_restore_argv(
+        &self,
+        store: &mut Store,
+        kind: BlockKind,
+        key: &[u8],
+    ) -> Option<Argv> {
+        cmd_block_serve::block_restore_argv(store, kind, key)
+    }
+
     fn block_ready<A: ArgvView + ?Sized>(
         &self,
         store: &mut Store,
         serve_argv: &A,
         kind: BlockKind,
     ) -> bool {
-        cmd_block_serve::block_ready(store, serve_argv, kind)
-    }
-
-    fn wake_idx<A: ArgvView + ?Sized>(&self, args: &A) -> Option<u8> {
-        let name = args.first()?;
-        let mut buf = [0u8; 32];
-        cmd_block::wake_idx_for_verb(upper_verb(name, &mut buf))
+        cmd_block_serve::block_ready(&self.ctx(), store, serve_argv, kind)
     }
 
     /// One-pass verb resolution — the reactor calls this once per cmd and
@@ -429,6 +455,29 @@ impl Commands for KevyCommands {
     /// the verb. This is `kevy-rt`'s primary hot-path optimization: every
     /// match arm uses the same `upper` buffer. Body in `cmd_resolve`.
     fn resolve<A: ArgvView + ?Sized>(&self, args: &A) -> ResolvedCmd {
-        cmd_resolve::kevy_resolve(args)
+        cmd_resolve::kevy_resolve(&self.state().replication, args)
     }
+}
+
+/// The shard tick's tiering upkeep: re-resolve the
+/// budget spec — auto/percent re-probe the cgroup/meminfo bound so
+/// live limit changes are honored (the maxmemory reapply precedent) —
+/// and feed the index/view memory floor into the unified watermark.
+/// Gated on tiering being on: an untiered tick pays one branch.
+fn tier_tick(c: &KevyCommands, store: &mut Store, bits: u32, cfg: &kevy_config::Config) {
+    if !store.tier_enabled() {
+        return;
+    }
+    if let Ok(Some(total)) = crate::resolve_tier_budget(cfg) {
+        let n = c.state().nshards().max(1) as u64;
+        store.set_tier_budget((total / n).max(1));
+    }
+    let mut reserved = 0u64;
+    if bits & crate::state::IDX_NONEMPTY != 0 {
+        reserved += crate::index_runtime::reserved_bytes(&c.ctx(), store);
+    }
+    if bits & crate::state::VIEW_NONEMPTY != 0 {
+        reserved += crate::view_runtime::reserved_bytes(&c.ctx());
+    }
+    store.set_tier_reserved(reserved);
 }

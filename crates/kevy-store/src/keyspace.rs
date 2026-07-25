@@ -5,8 +5,10 @@
 //!
 //! Split out of [`crate`] for file-size hygiene.
 
-use std::sync::Arc;
-use std::time::Duration;
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
+use alloc::sync::Arc;
+use core::time::Duration;
 
 use crate::value::{HashData, SetData, Value, ZSetData};
 use crate::{
@@ -17,21 +19,8 @@ use crate::{
 impl Store {
     // ---- generic key ops (type-agnostic) -------------------------------
 
-    pub fn del(&mut self, keys: &[Vec<u8>]) -> usize {
-        let now = now_ns();
-        let mut removed = 0;
-        for k in keys {
-            if self.reap(k, now) && self.remove_entry(k.as_slice()).is_some() {
-                removed += 1;
-            }
-        }
-        removed
-    }
-
-    /// G4 (v1.25): borrowed-slice `DEL` — kills the per-key `Vec<u8>` alloc
-    /// the dispatch layer used to do via `rest(args, 1)`. Behaviour identical
-    /// to [`Self::del`].
-    pub fn del_borrowed(&mut self, keys: &[&[u8]]) -> usize {
+    /// `DEL` — returns the count of keys actually removed.
+    pub fn del(&mut self, keys: &[&[u8]]) -> usize {
         let now = now_ns();
         let mut removed = 0;
         for k in keys {
@@ -42,12 +31,8 @@ impl Store {
         removed
     }
 
-    pub fn exists(&mut self, keys: &[Vec<u8>]) -> usize {
-        keys.iter().filter(|k| self.live_entry(k).is_some()).count()
-    }
-
-    /// G4 (v1.25): borrowed-slice `EXISTS` — see [`Self::del_borrowed`].
-    pub fn exists_borrowed(&mut self, keys: &[&[u8]]) -> usize {
+    /// `EXISTS` — count of live keys (duplicates count per occurrence).
+    pub fn exists(&mut self, keys: &[&[u8]]) -> usize {
         keys.iter().filter(|k| self.live_entry(k).is_some()).count()
     }
 
@@ -107,9 +92,39 @@ impl Store {
         if !self.reap(key, now) {
             return None;
         }
+        // A cold stub cannot leave this shard (its ColdRef names THIS
+        // shard's vlog) — materialize before shipping. `remove_entry`
+        // then credits nothing (the value is hot after promotion).
+        if matches!(self.map.get(key).map(|e| &e.value), Some(Value::Cold(_))) {
+            self.promote_in_place(key);
+        }
         let entry = self.remove_entry(key)?;
         let ttl_ms = entry.expire_at_ns.map(|ns| remaining_ms(ns, now));
         Some((entry.value, ttl_ms))
+    }
+
+    /// Clone `key`'s whole entry — value plus remaining TTL — without
+    /// removing it. The read half of a transaction snapshot: pair it
+    /// with [`Self::put_with_ttl`] to restore, or with a delete when
+    /// this returns `None` (the key did not exist).
+    ///
+    /// Unlike [`Self::take_with_ttl`] this leaves the entry in place,
+    /// so a transaction can record the prior state on first touch and
+    /// still let the closure read its own writes afterwards.
+    pub fn clone_with_ttl(&mut self, key: &[u8]) -> Option<(Value, Option<u64>)> {
+        let now = now_ns();
+        if !self.reap(key, now) {
+            return None;
+        }
+        let entry = self.map.get(key)?;
+        let ttl_ms = entry.expire_at_ns.map(|ns| remaining_ms(ns, now));
+        // Cloning a cold stub would alias its vlog record (two stubs,
+        // one dead-note each — double credit). COPY-class callers get a
+        // freshly materialized value instead; the original stays cold.
+        if let Some(fresh) = self.tier_peek_value(&entry.value) {
+            return Some((fresh, ttl_ms));
+        }
+        Some((entry.value.clone(), ttl_ms))
     }
 
     /// Cross-shard RENAME step 2: write `value` at `key` on this
@@ -164,15 +179,21 @@ impl Store {
                 return RenameOutcome::DstExists;
             }
         }
-        // Take src's entry out. `remove_entry` returns the full Entry
-        // (value + TTL) — preserves TTL across rename, matching Redis.
-        let Some(entry) = self.remove_entry(src) else {
+        // Take src's entry out — keepalive form: the entry (and any
+        // cold stub inside it) is re-homed intact, so RENAME moves a
+        // cold key WITHOUT reading its value and without crediting its
+        // record dead. Preserves TTL across rename, matching Redis.
+        let Some(entry) = self.take_entry_keepalive(src) else {
             return RenameOutcome::NoSuchSrc;
         };
         // Drop any pre-existing dst (overwrite semantics). reap above
         // already handled TTL-expired dst, but the live-dst case still
         // needs removal.
         self.remove_entry(dst);
+        // The record's embedded key is stale now — register the
+        // forward pointer compaction resolves through (and re-account
+        // the stub cost for dst's key heap bytes).
+        self.tier_note_renamed(&entry.value, src, dst);
         self.insert_entry(SmallBytes::from_vec(dst.to_vec()), entry);
         RenameOutcome::Renamed
     }
@@ -219,6 +240,33 @@ impl Store {
         self.map.len()
     }
 
+    /// One arbitrary live key, drawn by probing a random slot and walking
+    /// forward (wrapping once) to the first occupied, unexpired one.
+    ///
+    /// This used to be `collect_keys(None, Some(1))` — the first key in
+    /// hash-bucket order, i.e. the same key every call until it was deleted.
+    /// O(1) expected, same slight run-length bias as Redis's
+    /// `dictGetRandomKey`, and the contract is "arbitrary", not "uniform".
+    pub fn random_key(&mut self) -> Option<Vec<u8>> {
+        let now = now_ns();
+        let start = self.rng.next_u64() as usize;
+        let cap = self.map.capacity();
+        let start = if cap == 0 { 0 } else { start % cap };
+        self.map
+            .iter_from_bucket(start)
+            .chain(self.map.iter().take(start))
+            .find(|(_, e)| !e.is_expired_at(now))
+            .map(|(k, _)| k.to_vec())
+    }
+
+    /// One raw draw from the store's random stream, for callers that need
+    /// randomness OUTSIDE the store — the RANDOMKEY reducer's weighted
+    /// reservoir runs on the origin shard, which must not have to invent its
+    /// own entropy source to pick between candidates.
+    pub fn rand_draw(&mut self) -> u64 {
+        self.rng.next_u64()
+    }
+
     /// Wipe every key in this shard's keyspace (the `FLUSHALL`/`FLUSHDB`
     /// primitive). Resets `used_memory`; `used_memory_peak` is
     /// lifetime-cumulative and intentionally not reset.
@@ -230,17 +278,9 @@ impl Store {
         self.map.clear();
         self.used_memory = 0;
         self.expires = 0;
+        // Every cold stub died with the map — the whole vlog is dead.
+        self.tier_on_flushall();
         // peak is lifetime-cumulative; intentionally not reset.
-    }
-
-    /// Deprecated alias for [`Self::flushall`]. The old name read like
-    /// `Write::flush` (sync-to-disk) but actually WIPES the keyspace.
-    #[deprecated(
-        since = "1.17.0",
-        note = "renamed to `flushall`: `flush` collides with Write::flush (sync-to-disk); this WIPES the keyspace"
-    )]
-    pub fn flush(&mut self) {
-        self.flushall();
     }
 
     /// Count live (non-expired) keys that carry a TTL — the size of the
@@ -269,13 +309,22 @@ impl Store {
         }
     }
 
-    fn insert_loaded(&mut self, key: Vec<u8>, value: Value, ttl_ms: Option<u64>) {
+    pub(crate) fn insert_loaded(&mut self, key: Vec<u8>, value: Value, ttl_ms: Option<u64>) {
         let expire_at = ttl_ms.map(|ms| deadline_at(now_ns(), Duration::from_millis(ms)));
         self.insert_entry(SmallBytes::from_vec(key), Entry::new(value, expire_at));
     }
 
     pub fn load_str(&mut self, key: Vec<u8>, value: Vec<u8>, ttl_ms: Option<u64>) {
-        self.insert_loaded(key, Value::Str(SmallBytes::from_vec(value)), ttl_ms);
+        // Re-materialize through the SET encoding rules so a loaded
+        // value lands on the exact variant a live SET of these bytes
+        // would: canonical integers back to `Int` (the L2 shape the
+        // snapshot serialized them from), > BULK_THRESHOLD bytes back
+        // to `ArcBulk` — restoring GET's writev path AND the tiering
+        // spillable class (a snapshot-loaded bulk value must be
+        // demotable; the old unconditional `Value::Str` made every
+        // loaded string permanently unspillable).
+        let value = crate::string_set::pick_value_for_set_owned(value);
+        self.insert_loaded(key, value, ttl_ms);
     }
 
     pub fn load_hash(
@@ -301,11 +350,8 @@ impl Store {
         self.insert_loaded(key, Value::Set(Arc::new(set_data)), ttl_ms);
     }
 
-    /// Collect live keys (optionally matching a glob `pattern`, up to `limit`).
-    /// Used by KEYS/SCAN/RANDOMKEY. Treats expired keys as absent (no removal).
-    /// v2.3 `info_prefix` walk: count live keys under a byte prefix and
-    /// how many of them carry a TTL. O(keyspace) — a stats/ops call,
-    /// not a hot-path primitive.
+    /// Count live keys under a byte prefix and how many of them carry
+    /// a TTL. O(keyspace) — a stats/ops call, not a hot-path primitive.
     pub fn prefix_stats(&self, prefix: &[u8]) -> (u64, u64) {
         let now = now_ns();
         let mut keys = 0u64;
@@ -322,6 +368,8 @@ impl Store {
         (keys, expires)
     }
 
+    /// Collect live keys (optionally matching a glob `pattern`, up to `limit`).
+    /// Used by KEYS/SCAN/RANDOMKEY. Treats expired keys as absent (no removal).
     pub fn collect_keys(&self, pattern: Option<&[u8]>, limit: Option<usize>) -> Vec<Vec<u8>> {
         let now = now_ns();
         let mut out = Vec::new();
@@ -348,118 +396,5 @@ impl Store {
             z.insert(&m, score);
         }
         self.insert_loaded(key, Value::ZSet(Arc::new(z)), ttl_ms);
-    }
-
-    /// Insert one already-typed `(key, value, ttl)` triple, e.g. straight out
-    /// of another store's [`Self::snapshot_each`] — the redistribution step
-    /// both reshard paths (embedded `shards` bring-up, server routing
-    /// migration) use to re-home keys after a layout change.
-    pub fn load_value(&mut self, key: &[u8], value: &Value, ttl_ms: Option<u64>) {
-        let k = key.to_vec();
-        match value {
-            Value::Str(v) => self.load_str(k, v.to_vec(), ttl_ms),
-            // L2: snapshot/replication load keeps the encoding — store as
-            // Int directly to preserve the in-memory shape (and avoid the
-            // SET-detect parse on the load path).
-            Value::Int(n) => self.insert_loaded(k, Value::Int(*n), ttl_ms),
-            // L1: preserve the Arc-backed encoding on snapshot/replication
-            // load. Arc::clone is cheap; avoids re-copying the bytes.
-            Value::ArcBulk(a) => self.insert_loaded(k, Value::ArcBulk(a.clone()), ttl_ms),
-            Value::Hash(h) => {
-                self.load_hash(k, h.iter().map(|(f, v)| (f.to_vec(), v.clone())).collect(), ttl_ms)
-            }
-            // A.8: same shape as A.7 — re-materialise to the heap-backed
-            // variant on snapshot/replication load. First mutation that
-            // targets the key will go through the encoding-switch path
-            // and (if size still fits) re-promote to the inline variant.
-            Value::SmallHashInline(h) => {
-                self.load_hash(k, h.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect(), ttl_ms)
-            }
-            Value::List(l) => self.load_list(k, l.iter().cloned().collect(), ttl_ms),
-            Value::SmallListInline(l) => {
-                self.load_list(k, l.iter().map(<[u8]>::to_vec).collect(), ttl_ms)
-            }
-            Value::Set(s) => {
-                self.load_set(k, s.iter().map(kevy_bytes::SmallBytes::to_vec).collect(), ttl_ms)
-            }
-            // A.7 O5: snapshot/replication load — re-materialise the
-            // inline-encoded set as a `Value::Set`-backed `KevySet`. We
-            // don't preserve the SmallSetInline encoding on reload
-            // because (a) the upgrade path will naturally rebuild it on
-            // the first SADD that targets the key, and (b) the snapshot
-            // wire format already uses the OP_SET length-prefixed
-            // payload — losing the inline encoding bit costs nothing
-            // beyond one re-promotion on the first mutation.
-            Value::SmallSetInline(s) => {
-                self.load_set(k, s.iter_slices().map(<[u8]>::to_vec).collect(), ttl_ms)
-            }
-            Value::ZSet(z) => {
-                self.load_zset(k, z.ordered().map(|(m, sc)| (m.to_vec(), sc)).collect(), ttl_ms)
-            }
-            Value::SmallZSetInline(z) => {
-                self.load_zset(k, z.iter().map(|(m, sc)| (m.to_vec(), sc)).collect(), ttl_ms)
-            }
-            Value::Stream(st) => self.load_stream_value(k, st, ttl_ms),
-        }
-    }
-
-    /// [`Self::load_value`]'s stream arm: decode the live `StreamData`
-    /// into the primitive tuples [`Self::load_stream`] takes.
-    fn load_stream_value(&mut self, k: Vec<u8>, st: &crate::StreamData, ttl_ms: Option<u64>) {
-        let entries: Vec<crate::stream::LoadedStreamEntry> = st
-            .iter_entries()
-            .map(|(id, fv)| {
-                let fvv = fv
-                    .iter()
-                    .map(|(f, v)| (f.as_slice().to_vec(), v.as_slice().to_vec()))
-                    .collect();
-                (id.ms, id.seq, fvv)
-            })
-            .collect();
-        let last = st.last_id();
-        let mxd = st.max_deleted_id();
-        self.load_stream(
-            k,
-            entries,
-            (last.ms, last.seq),
-            (mxd.ms, mxd.seq),
-            st.entries_added(),
-            st.export_groups(),
-            ttl_ms,
-        );
-    }
-
-    /// Snapshot-load a stream: every entry plus the per-stream scalar
-    /// state (last_id, max_deleted_id, entries_added) and the consumer
-    /// groups are restored verbatim. Caller passes already-decoded
-    /// primitive tuples; this fn does the [`SmallBytes`] /
-    /// [`crate::StreamData`] conversion.
-    #[allow(clippy::too_many_arguments)]
-    pub fn load_stream(
-        &mut self,
-        key: Vec<u8>,
-        entries: Vec<crate::stream::LoadedStreamEntry>,
-        last_id: (u64, u64),
-        max_deleted_id: (u64, u64),
-        entries_added: u64,
-        groups: Vec<crate::stream::LoadedGroup>,
-        ttl_ms: Option<u64>,
-    ) {
-        let mut s = crate::stream::StreamData::default();
-        for (ms, seq, fv) in entries {
-            let id = crate::stream::StreamId { ms, seq };
-            let fv_small: Vec<(SmallBytes, SmallBytes)> = fv
-                .into_iter()
-                .map(|(f, v)| (SmallBytes::from_vec(f), SmallBytes::from_vec(v)))
-                .collect();
-            s.load_entry(id, fv_small);
-        }
-        s.set_loaded_state(
-            crate::stream::StreamId { ms: last_id.0, seq: last_id.1 },
-            crate::stream::StreamId { ms: max_deleted_id.0, seq: max_deleted_id.1 },
-            entries_added,
-        );
-        s.import_groups(groups);
-        self.insert_loaded(key, Value::Stream(Arc::new(s)), ttl_ms);
     }
 }

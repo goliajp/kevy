@@ -1,4 +1,4 @@
-//! v1.36 wire-protocol torture chaos test.
+//! Wire-protocol torture chaos test.
 //!
 //! Two parts:
 //!

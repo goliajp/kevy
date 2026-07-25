@@ -1,12 +1,14 @@
-//! `Store` list ops introduced in v1.27.3 for BullMQ end-to-end:
+//! `Store` list ops needed for BullMQ end-to-end:
 //! `RPOPLPUSH`, `LMOVE`, `LPOS`. Kept in a sibling module to keep
 //! `list.rs` under the 500-LOC house rule.
 //!
-//! All three are local-shard-only for v1.27.3 — the cross-shard
+//! All three are local-shard-only — the cross-shard
 //! Take→Put orchestrator (mirroring `RENAME`'s `exec_rename`) is a
 //! later runtime concern; the dispatch layer routes by source key and
 //! these helpers operate on whatever the local `Store` holds for `dst`.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::value::Value;
 use crate::{Store, StoreError};
 
@@ -37,9 +39,9 @@ impl Store {
         let Some(v) = popped.pop() else {
             return Ok(None);
         };
-        // Push to the head of dst. `lpush_borrowed` returns the new
+        // Push to the head of dst. `lpush` returns the new
         // length; we want the popped value back to the caller.
-        self.lpush_borrowed(dst, &[v.as_slice()])?;
+        self.lpush(dst, &[v.as_slice()])?;
         Ok(Some(v))
     }
 
@@ -69,9 +71,9 @@ impl Store {
             return Ok(None);
         };
         if to_left {
-            self.lpush_borrowed(dst, &[v.as_slice()])?;
+            self.lpush(dst, &[v.as_slice()])?;
         } else {
-            self.rpush_borrowed(dst, &[v.as_slice()])?;
+            self.rpush(dst, &[v.as_slice()])?;
         }
         Ok(Some(v))
     }

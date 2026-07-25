@@ -1,4 +1,4 @@
-//! v1.40 — `kevy-cli backup` / `kevy-cli restore` subcommands.
+//! `kevy-cli backup` / `kevy-cli restore` subcommands.
 //!
 //! Backups bundle a kevy `data_dir` (snapshot + AOF) into a single
 //! `.kevybkp` file using a tiny custom container format (std-only,
@@ -206,21 +206,25 @@ pub fn run_restore(in_path: PathBuf, target_dir: PathBuf) -> io::Result<()> {
 mod tests {
     use super::*;
 
+    /// A fresh, empty, uniquely-named directory.
     fn tmp(name: &str) -> PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("kevy-cli-test-{name}-{nanos}"))
+        kevy_tmpdir::unique_dir(&format!("cli-backup-{name}"))
+    }
+
+    /// A unique path for a FILE that must not exist yet — pack's output. The
+    /// old helper returned an uncreated path and let the call site decide what
+    /// it was; that ambiguity is how the same function ended up naming both
+    /// directories and files.
+    fn tmp_file(name: &str) -> PathBuf {
+        tmp("files").join(name)
     }
 
     #[test]
     fn pack_unpack_round_trip() {
         let src = tmp("src");
-        std::fs::create_dir_all(&src).unwrap();
         std::fs::write(src.join("aof-0.aof"), b"AOF body 1").unwrap();
         std::fs::write(src.join("snap-0.rdb"), b"snapshot body").unwrap();
-        let out = tmp("backup.kevybkp");
+        let out = tmp_file("backup.kevybkp");
         pack(&src, &out).unwrap();
 
         let target = tmp("restored");
@@ -237,7 +241,7 @@ mod tests {
     fn unpack_refuses_path_traversal() {
         let src = tmp("src2");
         std::fs::create_dir_all(&src).unwrap();
-        let out_path = tmp("bad.kevybkp");
+        let out_path = tmp_file("bad.kevybkp");
         // Hand-craft a bad container with "../etc/passwd" name.
         let mut f = File::create(&out_path).unwrap();
         f.write_all(MAGIC).unwrap();
@@ -262,7 +266,7 @@ mod tests {
         let target = tmp("non-empty");
         std::fs::create_dir_all(&target).unwrap();
         std::fs::write(target.join("existing.txt"), b"data").unwrap();
-        let out_path = tmp("good.kevybkp");
+        let out_path = tmp_file("good.kevybkp");
         let mut f = File::create(&out_path).unwrap();
         f.write_all(MAGIC).unwrap();
         f.write_all(&0u16.to_be_bytes()).unwrap();

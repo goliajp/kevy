@@ -18,6 +18,11 @@ cargo build --release -p kevy --bin kevy -p kevy-cli --bin kevy-cli 2>&1 | tail 
 cargo build --release -p kevy-embedded --example primary_writer 2>&1 | tail -1
 KEVY=target/release/kevy
 CLI=target/release/kevy-cli
+# Every CLI call bounded: a server wedged into accept-but-never-reply
+# turns a gate into a silent multi-hour hang on CI (seen twice on the
+# contract job). With coreutils timeout the call fails loudly at the
+# exact clamp instead; macOS dev boxes (no timeout) run unbounded.
+command -v timeout >/dev/null 2>&1 && CLI="timeout 15 $CLI"
 WRITER=target/release/examples/primary_writer
 # port+10000 replication ranges span nshards consecutive ports —
 # keep the two servers >= nshards apart (v3.15: replicas listen too).
@@ -67,15 +72,27 @@ echo "repligate: snapshot ship + live frames landed (dbsize=$N)"
 
 # clamp 1: pause the writer (SIGSTOP), let the replica drain, compare digests
 kill -STOP $WPID
-sleep 2
 # primary digest via its embedded data? The writer has no listener — use
-# the REPLICA's own digest twice 1s apart to prove it drained (stable),
-# then a value spot-check against the writer's deterministic final state.
-D1=$($CLI digest -p $REPPORT p:)
+# the REPLICA's own digest, polled until stable. The clamp is "with input
+# stopped, the replica CONVERGES and STAYS stable" — a bounded wait tests
+# exactly that; the old fixed 2s was a razor edge (v3.18 drained in
+# exactly 2s on an idle box) that turned load-sensitive on slow runners.
+D1=""; D2=""
+for _ in $(seq 30); do
+    D2=$($CLI digest -p $REPPORT p:)
+    [ -n "$D1" ] && [ "$D1" = "$D2" ] && break
+    D1="$D2"
+    sleep 1
+done
+if [ "$D1" != "$D2" ] || [ -z "$D1" ]; then
+    echo "repligate: FAIL — replica still churning while primary is stopped ($D1 vs $D2)"
+    exit 1
+fi
+# and it must STAY stable — one more read a second later.
 sleep 1
 D2=$($CLI digest -p $REPPORT p:)
 if [ "$D1" != "$D2" ]; then
-    echo "repligate: FAIL — replica still churning while primary is stopped ($D1 vs $D2)"
+    echo "repligate: FAIL — replica digest moved after convergence ($D1 vs $D2)"
     exit 1
 fi
 echo "repligate: quiesced digest stable: $D1"
@@ -95,12 +112,18 @@ for _ in $(seq 120); do
 done
 [ $CONVERGED = 1 ] || { echo "repligate: FAIL — post-restart replica never re-synced"; exit 1; }
 kill -STOP $WPID
-sleep 2
-D3=$($CLI digest -p $REPPORT p:)
+# same bounded convergence as clamp 1.
+D3=""; D4=""
+for _ in $(seq 30); do
+    D4=$($CLI digest -p $REPPORT p:)
+    [ -n "$D3" ] && [ "$D3" = "$D4" ] && break
+    D3="$D4"
+    sleep 1
+done
 sleep 1
-D4=$($CLI digest -p $REPPORT p:)
-if [ "$D3" != "$D4" ] || [ "$N" -lt 50003 ]; then
-    echo "repligate: FAIL — post-restart digest unstable ($D3 vs $D4)"
+D4B=$($CLI digest -p $REPPORT p:)
+if [ "$D3" != "$D4" ] || [ "$D4" != "$D4B" ] || [ "$N" -lt 50003 ]; then
+    echo "repligate: FAIL — post-restart digest unstable ($D3 vs $D4 vs $D4B)"
     exit 1
 fi
 echo "repligate: restart re-synced + stable: $D3"
@@ -116,4 +139,43 @@ for _ in $(seq 60); do
 done
 [ $OK = 1 ] || { echo "repligate: FAIL — replica-local index never answered"; exit 1; }
 echo "repligate: replica-local IDX.QUERY answers over replicated data"
+
+# clamp 5 (T8 generation fence): SIGKILL the writer, restart it on the
+# same port. The new boot mints a NEW feed generation and restarts
+# offsets at 0; the replica runner reconnects presenting its OLD
+# data-generation, so the fence must answer with a snapshot ship and
+# the replica must converge on the NEW boot's keyspace — never stall
+# on a stale cursor or accept aliased frames.
+kill -CONT $WPID 2>/dev/null
+kill -9 $WPID 2>/dev/null
+wait $WPID 2>/dev/null
+$WRITER $SRCPORT 50000 > "$DIR/writer2.log" 2>&1 &
+WPID=$!
+for _ in $(seq 100); do
+    grep -q READY "$DIR/writer2.log" 2>/dev/null && break
+    sleep 0.2
+done
+grep -q READY "$DIR/writer2.log" || { echo "repligate: FAIL — restarted writer never READY"; exit 1; }
+CONVERGED=0
+for _ in $(seq 120); do
+    N=$($CLI -p $REPPORT DBSIZE 2>/dev/null | grep -oE "[0-9]+" || echo 0)
+    if [ "${N:-0}" -ge 50003 ]; then CONVERGED=1; break; fi
+    sleep 0.5
+done
+[ $CONVERGED = 1 ] || { echo "repligate: FAIL — replica never re-synced after writer SIGKILL restart (dbsize=$N)"; tail -3 "$DIR/replica.log"; exit 1; }
+kill -STOP $WPID
+D5=""; D6=""
+for _ in $(seq 30); do
+    D6=$($CLI digest -p $REPPORT p:)
+    [ -n "$D5" ] && [ "$D5" = "$D6" ] && break
+    D5="$D6"
+    sleep 1
+done
+sleep 1
+D6B=$($CLI digest -p $REPPORT p:)
+if [ "$D5" != "$D6" ] || [ "$D6" != "$D6B" ] || [ -z "$D5" ]; then
+    echo "repligate: FAIL — post-SIGKILL-restart digest unstable ($D5 vs $D6 vs $D6B)"
+    exit 1
+fi
+echo "repligate: writer SIGKILL restart re-synced across generations + stable: $D5"
 echo "repligate: PASS"

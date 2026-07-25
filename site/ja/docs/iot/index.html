@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IoTデバイス上のkevy — kevy</title>
+<meta name="description" content="kevy-embeddedは、サーバーがスケールアップするのと同じだけ意図的にスケールダウンします。フィーチャで階層化されたビルドは、およそ411 KBのインメモリKVコアから、インデックスとレプリケーションを含む全面までを覆います。Linux級のIoTボード（Pi Zero 2、OpenWrtルーター、産業用ARM）向けにはmuslのクロスビルドがあり、n">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../ja/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../../ja/docs/" aria-current="page">ドキュメント</a>
+      <a href="../../../ja/docs/commands/">コマンド</a>
+      <a href="../../../ja/benchmarks/">ベンチマーク</a>
+      <a href="../../../ja/play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../../ja/docs/search-index.json" data-root="../../../ja/">
+        <input type="search" placeholder="ドキュメントを検索……" aria-label="ドキュメントを検索……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../../docs/iot/">EN</a><a href="../../../zh/docs/iot/">中文</a><a href="../../../ja/docs/iot/" aria-current="page">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell has-toc">
+  <aside class="side"><p class="side-h">はじめに</p><ul><li><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a></li><li><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a></li><li><a href="../../../ja/docs/persistence/">永続化</a></li><li><a href="../../../ja/docs/tuning/">kevyのチューニング</a></li></ul><p class="side-h">運用</p><ul><li><a href="../../../ja/docs/replication/">レプリケーション</a></li><li><a href="../../../ja/docs/availability/">可用性</a></li><li><a href="../../../ja/docs/cluster/">クラスタ</a></li><li><a href="../../../ja/docs/tiering/">透過的ティアリング（[tiering] / with_tier_budget）</a></li><li><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a></li><li><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a></li><li><a href="../../../ja/docs/async/">非同期クライアント</a></li></ul><p class="side-h">データ</p><ul><li><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX. / idx_）</a></li><li><a href="../../../ja/docs/tables/">テーブル（TABLE. / table_）</a></li><li><a href="../../../ja/docs/vector-search/">ベクトル検索（KIND ann）</a></li><li><a href="../../../ja/docs/text-search/">全文検索（KIND text）</a></li><li><a href="../../../ja/docs/views/">ビュー（VIEW. / view_）</a></li><li><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED. / changes_since）</a></li><li><a href="../../../ja/docs/pubsub/">Pub/sub</a></li><li><a href="../../../ja/docs/lua/">Luaスクリプティング</a></li></ul><p class="side-h">組み込み</p><ul><li><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a></li><li><a href="../../../ja/docs/embedded-listener/">組み込みの読み取り専用RESPリスナー</a></li><li><a href="../../../ja/docs/iot/" aria-current="page">IoTデバイス上のkevy</a></li></ul><p class="side-h">リファレンス</p><ul><li><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a></li><li><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a></li><li><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></li><li><a href="../../../ja/docs/UPGRADING/">kevyのアップグレード</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../ja/docs/commands/">188 コマンド全て</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>IoTデバイス上のkevy</h1></div>
+<p><code>kevy-embedded</code>は、サーバーがスケールアップするのと同じだけ意図的にスケールダウンします。フィーチャで階層化されたビルドは、およそ411 KBのインメモリKVコアから、インデックスとレプリケーションを含む全面までを覆います。Linux級のIoTボード（Pi Zero 2、OpenWrtルーター、産業用ARM）向けにはmuslのクロスビルドがあり、<code>no_std</code>コアはベアメタルのCortex-Mターゲット上で——コンパイルが通ることを確認しただけでなく——実際にブートし、動かされています。リソース予算はREADMEの約束ではなく、ゲートによって強制されます。</p>
+<h2 id="フィーチャの階層">フィーチャの階層</h2>
+<p><code>kevy-embedded</code>はサブシステムごとにCargoフィーチャを1つ公開します。デフォルトは全部入りです。IoT向けのビルドは<code>core</code>から始めて、デバイスが実際にやることだけを足していきます。</p>
+<div class="tbl"><table><thead><tr><th>フィーチャ</th><th>何が加わるか</th><th>引き込むもの</th></tr></thead><tbody><tr><td><code>core</code></td><td>KV + TTL + カウンタ + pub/sub + atomic/pipelineのファサード</td><td>（基底の面。実務上は常にオン。最小のアーキタイプを綴れるように名前が付いている）</td></tr><tr><td><code>persist</code></td><td>スナップショット + AOFの耐久性。<code>Config::with_persist</code>、<code>save_snapshot</code>、<code>rewrite_aof</code>、open時のAOFリプレイ</td><td><code>kevy-persist</code></td></tr><tr><td><code>index</code></td><td>宣言型のセカンダリインデックス + materializedビュー</td><td><code>kevy-index</code></td></tr><tr><td><code>text</code></td><td>全文（BM25）インデックスのセグメント</td><td><code>index</code> + <code>kevy-text</code></td></tr><tr><td><code>vector</code></td><td>ANN / HNSWのベクトルインデックスセグメント</td><td><code>index</code> + <code>kevy-vector</code></td></tr><tr><td><code>replicate</code></td><td>組み込みをレプリカにする、組み込みをライターにする、そしてCDCフィード</td><td><code>persist</code> + <code>kevy-replicate</code> + <code>kevy-resp</code></td></tr><tr><td><code>listener</code></td><td>読み取り専用のRESPリスナー（<a href="../embedded-listener/">docs/embedded-listener.md</a>）</td><td>—</td></tr></tbody></table></div>
+<p>階層間の依存関係はフィーチャ自身に符号化されています。<code>text</code>と<code>vector</code>は<code>index</code>を含意し、<code>replicate</code>は<code>persist</code>を含意します（レプリケートされたフレームはAOFのverbテーブルを通ってリプレイされるためです）。外したものは、リンカが落とす死んだコードになるのではありません——その背後にあるcrateは、そもそもビルドグラフに一切入りません。</p>
+<p>6つのアーキタイプが、pushのたびにCIでコンパイルゲートされます。ワークスペースが動いても、それぞれの組み合わせがビルドされ続けるようにするためです。</p>
+<figure class="code"><pre><code class="lang-text">core                        # sensor cache: RAM-only KV + TTL
+core,persist                # + survives power cycles
+core,index                  # + declared indexes / views
+core,index,text,vector      # + search (BM25, HNSW)
+core,persist,replicate      # + edge node feeding a hub
+core,listener               # + redis-cli-able diagnostics port</code></pre></figure>
+<p><code>Cargo.toml</code>ではこう書きます。</p>
+<figure class="code"><pre><code class="lang-toml">[dependencies]
+kevy-embedded = { version = "4", default-features = false, features = ["core"] }</code></pre></figure>
+<p>APIの顔はどの階層でも同じです。<code>Store::open(Config)</code>、<code>KevyResult</code> / <code>KevyError</code>のエラー、書き込みメソッドの借用スライスargv。<code>core</code>に対して書いたコードは、デバイスがのちに<code>persist</code>を得ても、そのまま再コンパイルできます。</p>
+<h2 id="リソース予算願望ではなくゲート済み">リソース予算（願望ではなく、ゲート済み）</h2>
+<p>予算のラインは2本あり、<a href="https://github.com/goliajp/kevy/blob/main/bench/iotgate.sh"><code>bench/iotgate.sh</code></a>がラチェットとして強制します。どちらの数値も、引き上げるには文書化された裁定が必要です。</p>
+<div class="tbl"><table><thead><tr><th>予算</th><th>ライン</th><th>実測</th></tr></thead><tbody><tr><td>バイナリサイズ（<code>core</code>のコンシューマ、静的musl）</td><td>600 KB以下</td><td><b>454 KB</b>（x86_64）・<b>411 KB</b>（aarch64）・<b>383 KB</b>（armv7）</td></tr><tr><td><code>open</code>直後の空ストアのRSS（Linux）</td><td>2 MB以下</td><td><b>336 KB</b>（aarch64）</td></tr></tbody></table></div>
+<blockquote><p>これらは<code>bench/iot-consumer</code>上で計測しています——ワークスペースの<b>外側</b>に意図的に置いた、唯一の依存が<code>kevy-embedded</code>であるcrateです。それこそが、あなたが出荷する形です。このゲートの以前のバージョンはワークスペースの<code>--example</code>を測っていました。exampleのビルドはdev-dependencies（<code>kevy</code>サーバーcrate）を引き込むため、報告されるサイズがおよそ60%も水増しされていました。</p></blockquote>
+<p><code>iot</code> cargoプロファイルはワークスペースのルートで定義されています——<code>release</code>のcodegenに、サイズを最優先させたものです。</p>
+<figure class="code"><pre><code class="lang-toml">[profile.iot]
+inherits = "release"
+opt-level = "z"     # size over speed
+lto = true          # fat LTO: the linker drops unused subsystems
+codegen-units = 1
+strip = true</code></pre></figure>
+<p>サイズの数値を再現するには、こうします。</p>
+<figure class="code"><pre><code class="lang-sh">cargo build --profile iot -p kevy-embedded --example iot_core \
+  --no-default-features --features core
+ls -l target/iot/examples/iot_core</code></pre></figure>
+<h2 id="センサーキャッシュの全体像">センサーキャッシュの全体像</h2>
+<p><code>iot_core</code>のexampleは、たいていのデバイスが必要とする形です。TTL付きのインメモリKVと、手動で駆動する期限切れのsweepからなります（頼まない限り、バックグラウンドスレッドは存在しません）。</p>
+<figure class="code"><pre><code class="lang-rust">use kevy_embedded::{Config, Store};
+
+fn main() -&gt; kevy_embedded::KevyResult&lt;()&gt; {
+    // Manual reaper: no thread is spawned; the device's own loop
+    // drives expiry at whatever cadence it already runs.
+    let s = Store::open(Config::default().with_ttl_reaper_manual())?;
+
+    s.set(b"sensor:1", b"22.5")?;
+    s.set(b"sensor:2", b"3.3")?;
+    s.expire(b"sensor:2", core::time::Duration::from_secs(60))?;
+
+    // Call from the main loop / timer ISR bottom half:
+    let _expired = s.tick();
+    Ok(())
+}</code></pre></figure>
+<p>スレッドが安く済むボードでは、リーパーはデフォルト（バックグラウンドスレッド）のままにしてください。ループを自分で持っているなら<code>with_ttl_reaper_manual()</code> + <code>tick()</code>を取ってください。TTLの精度はtickの刻みに追随します。</p>
+<h2 id="クロスコンパイルmuslとciマトリクス">クロスコンパイル：muslとCIマトリクス</h2>
+<p>静的muslのバイナリは、Linux級IoTにおけるデプロイの通貨です。ファイル1つ、glibcとの結合なし、<code>scp</code>して走らせるだけ。</p>
+<h3 id="プラットフォームのカバレッジ実際に走らせたもの">プラットフォームのカバレッジ——実際に走らせたもの</h3>
+<p>以下の行はどれも、コンパイルを確認しただけではなく、ビルドし、そして<b>実行</b>しました。<code>core</code>階層のコンシューマを、そのアーキテクチャの実カーネル上で走らせています。サイズは静的muslの成果物のものです。</p>
+<div class="tbl"><table><thead><tr><th>ターゲット</th><th>ボードの分類</th><th>サイズ</th><th>状態</th></tr></thead><tbody><tr><td><code>x86_64-unknown-linux-musl</code></td><td>産業用x86、ゲートウェイ</td><td>454 KB</td><td><b>実行済み</b></td></tr><tr><td><code>aarch64-unknown-linux-musl</code></td><td>Pi Zero 2 / Pi 4-5 / 多くのARM64 SBC</td><td>411 KB</td><td><b>実行済み——ネイティブに</b>。空ストアRSS 336 KB、2.86Mストアops/s</td></tr><tr><td><code>armv7-unknown-linux-musleabihf</code></td><td>Pi 2-3、旧来の32ビットARM</td><td>383 KB</td><td><b>実行済み</b>（エミュレート）</td></tr><tr><td><code>arm-unknown-linux-musleabihf</code></td><td>Pi Zero / Pi 1（ARMv6）</td><td>411 KB</td><td><b>実行済み</b>（エミュレート）</td></tr><tr><td><code>riscv64gc-unknown-linux-musl</code></td><td>RISC-V SBC</td><td>420 KB</td><td><b>実行済み</b>（エミュレート）——リンカとしてRISC-Vのクロスgccが必要（ターゲット仕様が<code>libgcc_s</code>を要求し、<code>rust-lld</code>はそれを供給できない）。加えて<code>crt-static</code>も要る</td></tr><tr><td><code>thumbv7em-none-eabihf</code></td><td>Cortex-M4/M7 MCU</td><td>ファームウェア145 KB</td><td><b>ベアメタル上で実行済み</b>——<code>kevy-store</code>のみ。<code>kevy-embedded</code>の全面ではない（そちらは<code>std</code>を要します）。後述。</td></tr></tbody></table></div>
+<p>信頼できる性能値はaarch64の行です。この行はARM64上でネイティブに走りました。armv7/ARMv6の行は、コードが32ビットARM上で正しいことを証明していますが、その時間とRSSはエミュレータのオーバーヘッドを含んでおり、デバイスの数値として読むべきではありません。</p>
+<p>出荷対象のターゲットはすべてCIでコンパイルゲートされ（pushのたびに、単独のコンシューマが各ターゲット向けにビルドされます）、Tier Aのターゲットについては<b>フル</b>のデフォルト面も検査されます。</p>
+<figure class="code"><pre><code class="lang-sh">rustup target add aarch64-unknown-linux-musl
+cargo build --profile iot --target aarch64-unknown-linux-musl -p kevy-embedded
+
+rustup target add armv7-unknown-linux-musleabihf
+cargo build --profile iot --target armv7-unknown-linux-musleabihf -p kevy-embedded</code></pre></figure>
+<p>kevyのゼロ依存の法が、ここで報われます。クロスコンパイルすべきCライブラリはなく、<code>-sys</code> crateの動物園もありません——OSの境界はkevy自身の<code>kevy-sys</code>だけであり、<code>core</code>より下の組み込みクロージャは、それすら含みません。</p>
+<p>コンパイルの証明より先を見たいときは、エミュレーション下でテストスイートを走らせるのも1行です。</p>
+<figure class="code"><pre><code class="lang-sh">CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUNNER=qemu-aarch64 \
+  cargo test -p kevy-embedded --target aarch64-unknown-linux-musl</code></pre></figure>
+<h2 id="no-stdコア"><code>no_std</code>コア</h2>
+<p>Linuxよりさらに下では、ストレージの石が<code>std</code>なしでビルドされます。5つのcrateが、<code>std</code>というデフォルトフィーチャの背後に<code>#![no_std]</code>のコアを抱えています——<code>kevy-store</code>、<code>kevy-hash</code>、<code>kevy-bytes</code>、<code>kevy-map</code>、<code>kevy-madvise</code>です。</p>
+<p>CIは、それらをCortex-M向けにコンパイルするだけではありません。<b>その上でブートさせます</b>。<code>bench/mcu-probe</code>はベアメタルのファームウェアであり——手書きのベクタテーブル、bumpアロケータ、パニックハンドラ、semihostingのI/Oを備えています。kevyは依存を取らないので、<code>cortex-m-rt</code>や<code>embedded-alloc</code>に手を伸ばせないからです——これがQEMU（<code>mps2-an386</code>、Cortex-M4）上で本物の<code>Store</code>を立ち上げ、KVとTTLの面を動かします。pushのたびに走ります。MCU上でストアが誤動作すれば、ビルドが落ちます。</p>
+<figure class="code"><pre><code class="lang-sh">cd bench/mcu-probe &amp;&amp; cargo run --release</code></pre></figure>
+<p>そのMCU上で、64 KiBのヒープで計測した値です。</p>
+<div class="tbl"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td>ファームウェアイメージ</td><td>145 KB</td></tr><tr><td>空の<code>Store</code>のヒープ</td><td><b>0 B</b> ——書き込むまで、ストアは何も確保しません</td></tr><tr><td>センサーキー64個分のヒープ</td><td>17.8 KB</td></tr><tr><td>TTL</td><td>ファームウェアが自分の時計を進めれば、正しく期限切れになります</td></tr></tbody></table></div>
+<p><b>MCU上で走るのは<code>kevy-store</code>であって、<code>kevy-embedded</code>ではありません。</b> 組み込みのファサード（<code>Config</code>、バックグラウンドのリーパー、永続化、リスナー）は<code>std</code>を必要とします。MCUが手にするのは、その下にあるストレージエンジンを、直接駆動したものです。</p>
+<p><code>no_std</code>カットが実務上意味するのは、次のことです。</p>
+<ul><li><b><code>alloc</code>は必須です。</b> ストアはヒープ上のデータ構造です。<code>#[global_allocator]</code>はあなたが用意します。<code>alloc</code>なしの階層は存在しません。</li><li><b><code>external-clock</code>がOSの時計を置き換えます。</b> ホストが<code>set_clock_ns</code>（モノトニック）と<code>set_wall_clock_ms</code>（wall）を通じて時刻を供給します。ブラウザ向けビルドが使うのと同じ、ホスト供給の時計の契約です（<a href="../wasm/">docs/wasm.md</a>）。</li><li><b>スレッドなし、ファイルなし、ソケットなし。</b> 永続化、レプリケーション、リスナーは、性質上<code>std</code>階層のフィーチャです。<code>no_std</code>のコアはインメモリのエンジンです。</li></ul>
+<p>1つだけ、知っておく価値のある細部があります。ほかの場所なら黙って壊れる類のものだからです。ホスト供給の時計は64ビットのセル1つであり、アトミックに読めなければなりません。64ビットアトミックを持つISAでは、これはただの<code>AtomicU64</code>です。32ビットしかないMCU（ARMv7E-Mに64ビットアトミックはありません）では、<b>2つの<code>AtomicU32</code>の半分にまたがる、単一ライターのseqlock</b>に退化します——読み手はちぎれた読み出しを検出するとリトライし、ホストが1つのコンテキストから時計を供給する限り、リトライループは即座に落ち着きます。複数のコンテキストから並行して時計を供給することは、契約の外です。</p>
+<h2 id="サイジングの指針">サイジングの指針</h2>
+<ul><li>上の数値は<code>core</code>階層のもの——典型値ではなく、床です。各能力が実際にいくらかかるかを、<code>iot</code>プロファイルのaarch64-muslで計測した値がこれです（その階層のAPIを本当に*呼ぶ*コンシューマでの計測です。使いもしないフィーチャフラグはLTOが消し去るので、コストはかかりません）。</li></ul>
+<div class="tbl"><table><thead><tr><th>使うもの</th><th>バイナリ</th><th>差分</th></tr></thead><tbody><tr><td>KV + TTL（<code>core</code>）</td><td>392 KB</td><td>—</td></tr><tr><td>+ 耐久性（スナップショット + AOF）</td><td>601 KB</td><td><b>+209 KB</b></td></tr><tr><td>+ RESPリスナー</td><td>629 KB</td><td>+28 KB</td></tr><tr><td>+ セカンダリインデックス</td><td>667 KB</td><td>+66 KB</td></tr><tr><td>+ 全文検索（BM25）</td><td>691 KB</td><td>+24 KB</td></tr><tr><td>+ ベクトルANN（HNSW）</td><td>696 KB</td><td>+29 KB</td></tr></tbody></table></div>
+<p>耐久性が、単独で群を抜いて最大の項目です。残りはその上に載る小さな増分にすぎません。空ストアのRSSも同じように動きます。<code>core</code>で336 KB、全フィーチャをコンパイルすると656 KBなので、選んだ階層は、ディスク上のバイト数以上に、常駐メモリに姿を現します。</p>
+<ul><li>メモリはキー空間に比例して増えます。空ストアのRSS予算が存在するのは、まさに「kevyを*持っている*こと」の基礎コストを、あなたのデータの隣で取るに足らないものに保つためです。</li><li>デバイスに診断ポートが必要なら、<code>listener</code>が<code>redis-cli</code>と話せる読み取り専用のRESPエンドポイントを与えてくれます（<a href="../embedded-listener/">docs/embedded-listener.md</a>）。代償はスレッド1本とソケット1つ、そして書き込みは構造的に拒否されます。</li><li>フラッシュ上での耐久性。<code>persist</code>はサーバーと同じAOF/スナップショット形式を書くので（<a href="../persistence/">docs/persistence.md</a>）、デバイス上で書いたデータは、フリート内のどこででも読み戻せます。SDカード級のストレージ上でのAOF fsyncは、<code>Always</code>ではなく<code>EverySec</code>（デフォルト）を求めます。</li></ul>
+<h2 id="これは何ではないか">これは何ではないか</h2>
+<p>*サーバー*を小さくしようという試みは一切ありません。<code>kevy</code>（バイナリ）、<code>kevy-rt</code>、<code>kevy-uring</code>とその仲間たちは本物のカーネルを前提としており、IoTのカットではスコープ外です。ここでの製品は組み込みライブラリのほうです——あなたのファームウェアこそが、サーバーなのです。</p></main>
+  <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#フィーチャの階層">フィーチャの階層</a></li><li class="l2"><a href="#リソース予算願望ではなくゲート済み">リソース予算（願望ではなく、ゲート済み）</a></li><li class="l2"><a href="#センサーキャッシュの全体像">センサーキャッシュの全体像</a></li><li class="l2"><a href="#クロスコンパイルmuslとciマトリクス">クロスコンパイル：muslとCIマトリクス</a></li><li class="l3"><a href="#プラットフォームのカバレッジ実際に走らせたもの">プラットフォームのカバレッジ——実際に走らせたもの</a></li><li class="l2"><a href="#no-stdコア">no_stdコア</a></li><li class="l2"><a href="#サイジングの指針">サイジングの指針</a></li><li class="l2"><a href="#これは何ではないか">これは何ではないか</a></li></ul></aside>
+</div>
+
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

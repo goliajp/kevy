@@ -12,8 +12,8 @@
 //! then `send()` — so a slow receiver can't stall publishes on unrelated
 //! channels.
 
+use crate::{KevyError, KevyResult};
 use std::collections::HashSet;
-use std::io;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError, channel};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
@@ -68,6 +68,27 @@ pub enum PubsubFrame {
         /// Raw payload bytes.
         payload: Vec<u8>,
     },
+}
+
+impl PubsubFrame {
+    /// The raw message payload, moved out of the frame.
+    ///
+    /// `Some(payload)` for the two delivery frames ([`Message`](Self::Message)
+    /// and [`Pmessage`](Self::Pmessage)); `None` for every control/ack frame
+    /// (subscribe / unsubscribe / …), which carries no payload. Consuming
+    /// `self` lets a scalar drain hand a push subscriber just the bytes with
+    /// no extra copy — the pub/sub analog of the KV scalar door. The channel
+    /// and the message-vs-pmessage distinction are dropped; a caller that
+    /// needs either keeps matching on the frame.
+    #[must_use]
+    pub fn into_payload(self) -> Option<Vec<u8>> {
+        match self {
+            PubsubFrame::Message { payload, .. } | PubsubFrame::Pmessage { payload, .. } => {
+                Some(payload)
+            }
+            _ => None,
+        }
+    }
 }
 
 // `BusEntry` + `PubsubBus` live in [`crate::pubsub_bus`] — split out so
@@ -272,41 +293,36 @@ impl Subscription {
     /// `recv`/`recv_timeout` callers serialise behind this one. Concurrent
     /// `try_recv` calls return `Ok(None)` while a `recv` is blocked (no
     /// wait on the lock); see the type-level doc for the trade-off.
-    pub fn recv(&self) -> io::Result<PubsubFrame> {
+    pub fn recv(&self) -> KevyResult<PubsubFrame> {
         let g = self.receiver.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        g.recv()
-            .map_err(|_| io::Error::new(io::ErrorKind::UnexpectedEof, "bus closed"))
+        g.recv().map_err(|_| KevyError::Closed)
     }
 
-    /// Bounded blocking recv. `Err(io::ErrorKind::TimedOut)` when `dur`
-    /// elapses; `Err(io::ErrorKind::UnexpectedEof)` when the bus is gone.
-    pub fn recv_timeout(&self, dur: Duration) -> io::Result<PubsubFrame> {
+    /// Bounded blocking recv. `Err(KevyError::TimedOut)` when `dur`
+    /// elapses; `Err(KevyError::Closed)` when the bus is gone.
+    pub fn recv_timeout(&self, dur: Duration) -> KevyResult<PubsubFrame> {
         let g = self.receiver.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         g.recv_timeout(dur).map_err(|e| match e {
-            RecvTimeoutError::Timeout => io::Error::from(io::ErrorKind::TimedOut),
-            RecvTimeoutError::Disconnected => {
-                io::Error::new(io::ErrorKind::UnexpectedEof, "bus closed")
-            }
+            RecvTimeoutError::Timeout => KevyError::TimedOut,
+            RecvTimeoutError::Disconnected => KevyError::Closed,
         })
     }
 
     /// Non-blocking recv. `Ok(None)` if the queue is empty;
-    /// `Err(UnexpectedEof)` when the bus is gone.
+    /// `Err(KevyError::Closed)` when the bus is gone.
     ///
     /// Uses `try_lock` so a concurrent blocking `recv` doesn't make
     /// `try_recv` itself block — lock contention is reported as `Ok(None)`
     /// (semantically: "no frame available right now"). Same shape callers
     /// already handle for an empty queue.
-    pub fn try_recv(&self) -> io::Result<Option<PubsubFrame>> {
+    pub fn try_recv(&self) -> KevyResult<Option<PubsubFrame>> {
         let Ok(g) = self.receiver.try_lock() else {
             return Ok(None);
         };
         match g.try_recv() {
             Ok(f) => Ok(Some(f)),
             Err(TryRecvError::Empty) => Ok(None),
-            Err(TryRecvError::Disconnected) => {
-                Err(io::Error::new(io::ErrorKind::UnexpectedEof, "bus closed"))
-            }
+            Err(TryRecvError::Disconnected) => Err(KevyError::Closed),
         }
     }
 }

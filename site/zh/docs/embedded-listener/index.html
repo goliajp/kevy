@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Embedded 只读 RESP listener — kevy</title>
+<meta name="description" content="一个 embedded（进程内）的 kevy store，可以通过一个只读 listener 把自己暴露给外部 RESP 客户端——redis-cli、运维工具、看板。store 依然是你进程里的一个库；listener 是望进去的一扇窗，不是第二台服务器：写入仍然是持有进程的专属权力。">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../zh/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../../zh/docs/" aria-current="page">文档</a>
+      <a href="../../../zh/docs/commands/">命令</a>
+      <a href="../../../zh/benchmarks/">基准</a>
+      <a href="../../../zh/play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../../zh/docs/search-index.json" data-root="../../../zh/">
+        <input type="search" placeholder="搜索文档……" aria-label="搜索文档……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../../docs/embedded-listener/">EN</a><a href="../../../zh/docs/embedded-listener/" aria-current="page">中文</a><a href="../../../ja/docs/embedded-listener/">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell has-toc">
+  <aside class="side"><p class="side-h">上手</p><ul><li><a href="../../../zh/docs/designing-on-kevy/">在 kevy 上设计应用</a></li><li><a href="../../../zh/docs/cookbook/">RDS→kevy 建模 cookbook</a></li><li><a href="../../../zh/docs/persistence/">持久化</a></li><li><a href="../../../zh/docs/tuning/">调优 kevy</a></li></ul><p class="side-h">运行</p><ul><li><a href="../../../zh/docs/replication/">复制</a></li><li><a href="../../../zh/docs/availability/">可用性</a></li><li><a href="../../../zh/docs/cluster/">集群</a></li><li><a href="../../../zh/docs/tiering/">透明分层存储（[tiering] / with_tier_budget）</a></li><li><a href="../../../zh/docs/accept-shards/">--accept-shards N——把稀疏连接收拢到部分 shard 上</a></li><li><a href="../../../zh/docs/uds/">Unix-domain socket（UDS）传输</a></li><li><a href="../../../zh/docs/async/">异步客户端</a></li></ul><p class="side-h">数据</p><ul><li><a href="../../../zh/docs/indexes/">二级索引（IDX. / idx_）</a></li><li><a href="../../../zh/docs/tables/">表（TABLE. / table_）</a></li><li><a href="../../../zh/docs/vector-search/">向量检索（KIND ann）</a></li><li><a href="../../../zh/docs/text-search/">全文检索（KIND text）</a></li><li><a href="../../../zh/docs/views/">视图（VIEW. / view_）</a></li><li><a href="../../../zh/docs/cdc/">CDC——变更流（FEED. / changes_since）</a></li><li><a href="../../../zh/docs/pubsub/">Pub/sub</a></li><li><a href="../../../zh/docs/lua/">Lua 脚本</a></li></ul><p class="side-h">嵌入</p><ul><li><a href="../../../zh/docs/wasm/">kevy 上 WebAssembly</a></li><li><a href="../../../zh/docs/embedded-listener/" aria-current="page">Embedded 只读 RESP listener</a></li><li><a href="../../../zh/docs/iot/">kevy 跑在 IoT 设备上</a></li></ul><p class="side-h">参考</p><ul><li><a href="../../../zh/docs/error-replies/">错误回复目录</a></li><li><a href="../../../zh/docs/rds-workloads/">在 kevy 上跑 RDS 负载</a></li><li><a href="../../../zh/docs/migration/">迁移——playbook 与工具链</a></li><li><a href="../../../zh/docs/UPGRADING/">升级 kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../zh/docs/commands/">全部 188 个命令</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>Embedded 只读 RESP listener</h1></div>
+<p>一个 embedded（进程内）的 kevy store，可以通过一个只读 listener 把自己暴露给外部 RESP 客户端——redis-cli、运维工具、看板。store 依然是你进程里的一个库；listener 是望进去的一扇窗，不是第二台服务器：写入仍然是持有进程的专属权力。</p>
+<figure class="code"><pre><code class="lang-rust">use kevy_embedded::{Config, Store};
+
+fn main() -&gt; kevy_embedded::KevyResult&lt;()&gt; {
+    let store = Store::open(
+        Config::default()
+            .with_shards(4)
+            .with_resp_listener("127.0.0.1:6009".parse().unwrap()),
+    )?;
+    store.hset(b"row:42", &amp;[
+        (b"state".as_slice(), b"live".as_slice()),
+    ])?;
+    // ... the application keeps running; clients can peek:
+    Ok(())
+}</code></pre></figure>
+<figure class="code"><pre><code>$ redis-cli -p 6009 hgetall row:42
+1) "state"
+2) "live"
+$ redis-cli -p 6009 scan 0 match 'row:*' count 100
+$ kevy-cli -p 6009 DBSIZE</code></pre></figure>
+<p>任何 RESP 客户端都能用——listener 讲的协议和 kevy 服务器一样，既接受成帧的请求，也接受 inline 命令（<code>redis-cli</code> 那种 PING 风格）。</p>
+<h2 id="打开它">打开它</h2>
+<ul><li><code>Config::with_resp_listener(addr)</code>——一个 <code>SocketAddr</code>。<b>默认关闭</b>；关闭时<b>没有线程、也没有 socket——零税</b>（有 gate：listener 开着但空闲时，写吞吐与关闭时相差在 10% 以内，见 <a href="https://github.com/goliajp/kevy/blob/develop/bench/topogate.sh"><code>bench/topogate.sh</code></a>）。</li><li>代码在 <code>listener</code> 这个 cargo feature 后面（默认开启；wasm32 目标上不可用）。</li><li>listener 只持有一个弱句柄：它永远不会把 store 续命，store 一旦 drop，连接随之结束。</li><li>没有认证（这是刻意的：kevy 没有 AUTH 平面）。绑回环或私网接口；任何能连上来的人，都能读到白名单所服务的一切。</li></ul>
+<h2 id="接口面">接口面</h2>
+<p>只有白名单——其余一律回答 <code>-ERR READONLY embedded listener</code>：</p>
+<figure class="code"><pre><code>PING ECHO GET MGET EXISTS TYPE TTL PTTL DBSIZE KEYS SCAN
+HGET HMGET HGETALL HLEN LRANGE LLEN SMEMBERS SCARD SISMEMBER
+ZSCORE ZCARD ZRANGE FEED.READ FEED.TAIL FEED.SHARDS INFO</code></pre></figure>
+<p>被挡在外面的包括每一个写 verb、<code>MULTI</code>、阻塞 pop、pub/sub，以及各个扩展平面（<code>IDX.*</code> / <code>VIEW.*</code>——那些请在进程内通过类型化 API 查询）。<code>FEED.*</code> 这三个需要 <code>replicate</code> cargo feature（默认开启）。</p>
+<p><code>INFO</code> 回答一份 embedded 形态的小报告——crate 版本、shard 数、键数，以及 <code>listener:readonly</code>——足够让看板认出自己在跟什么说话。</p>
+<p>那句拒绝文本是一份契约：工具可以靠“试写一次、匹配 <code>READONLY embedded listener</code>”来探测“这是一台真服务器，还是一扇 embedded 的窗”。</p>
+<h3 id="verb-语义">Verb 语义</h3>
+<p>白名单里的 verb，行为与它们在服务器上的同名兄弟一致：</p>
+<ul><li><code>SCAN &lt;cursor&gt; [MATCH pattern] [COUNT n]</code> 以数字游标分页（<code>COUNT</code> 夹到 1..=10000，默认 100），并给出通常的 SCAN 保证：整趟遍历期间稳定存在的键恰好被看到一次；并发的插入 / 删除可能出现，也可能不出现。</li><li><code>KEYS &lt;pattern&gt;</code> 一次回复里走完整个键空间（<code>*</code> 匹配一切）——只适合抽查，大 store 上请用 <code>SCAN</code>。</li><li>类型不匹配回答 <code>-WRONGTYPE …</code>，与服务器一模一样；整数格式非法回答 <code>-ERR value is not an integer</code>。</li></ul>
+<h2 id="一致性">一致性</h2>
+<p>读取跑在 store 自己的 shard 锁下——每一条回复都是一个已提交的时间点答案，与正在写的那个进程实时同源（没有复制、没有滞后、没有快照陈旧）。多键读取（<code>MGET</code>、<code>SCAN</code>、<code>KEYS</code>、<code>DBSIZE</code>）逐 shard 归并，没有全局快照——与服务器同属 SCAN 类信封。</p>
+<p>每条连接一个线程：这是一个运维工具接口面，不是服务路径（kevy <b>服务器</b>才是服务路径）。把连接数控制在工具的量级上；一个每几秒轮询一次的看板，就是它预期的形状。</p>
+<h2 id="feed-与读己之写">Feed 与读己之写</h2>
+<p><code>FEED.TAIL</code> 返回当前的 <code>(generation, offset)</code>；<code>FEED.READ &lt;gen&gt; &lt;offset&gt; &lt;limit&gt; [PREFIX p…]</code> 投递变更帧——契约与 embedded 的 <code>changes_since</code> API 一样是 at-least-once（陈旧的 generation 回答 <code>Resync</code>，从 <code>FEED.TAIL</code> 重启）。embedded 的写路径把所有 shard 串成一条流，所以 <code>FEED.SHARDS</code> 恒报 1，feed 三个 verb 不带 shard 参数——照着服务器接口面写的那份消费者循环（<a href="../cdc/">cdc.md</a>）在这里照样跑。</p>
+<p>跨进程的读己之写，在 feed 上是一个<b>游标模式</b>，不是阻塞原语：写进程在写完后记下 <code>changes_tail()</code>；读进程先把 <code>FEED.READ</code> drain 过那个游标，再去读。进程内的读永远是读己之写（写入是同步提交的）。（服务器到副本的复制<b>确实</b>有阻塞原语——<code>REPL.TOKEN</code> / <code>REPL.WAIT</code>，见 <a href="../availability/">availability.md</a>——但那是复制平面，不是这个 feed listener。）</p>
+<h2 id="不开-socket-也能内省">不开 socket 也能内省</h2>
+<p>listener 的 verb 表同时也是一个公开方法：</p>
+<figure class="code"><pre><code class="lang-rust">let mut out = Vec::new();
+store.dispatch_readonly(
+    &amp;[b"HGETALL".to_vec(), b"row:42".to_vec()], &amp;mut out);
+// `out` holds raw RESP bytes — the exact reply the listener
+// would have written to a socket.</code></pre></figure>
+<p><code>Store::dispatch_readonly(argv, out)</code> 对着同一份白名单回答一次请求（写 verb 拿到同样的 <code>-ERR</code>）——这是 listener 的编程接口面，给嵌在持有进程内部的工具用。</p>
+<p>至于一个<b>不归你所有</b>的 store：<code>kevy-cli --embed &lt;dir&gt;</code> 打开该 embedded store 数据目录的一个只读时间点视图——dump / aof / shards.meta 这些文件会被<b>复制</b>到一个临时目录再重放，所以持有它的进程照跑不误、毫发无损。REPL 和一次性调用都能用；写 verb 回答 listener 那句 <code>-ERR READONLY</code>。那是这扇实时窗口的离线补集。</p>
+<h2 id="当一扇窗不够用时">当一扇窗不够用时</h2>
+<p>按机械复杂度排序的升级路径：</p>
+<ol><li><b>这个 listener</b>——实时读，零写入成本，单进程。</li><li><b>CDC feed</b>（<a href="../cdc/">cdc.md</a>）——把变更推给另一个进程，而不是让它来轮询读。</li><li><b>Embedded 作为主节点的复制</b>——<code>with_embed_writer</code> 暴露一个复制源，配了 <code>[replication] single_source = true</code> 的 kevy 服务器以副本身份跟随这个 embedded store：读扇出跑在服务器硬件上，喂料的是你的进程。见 <a href="../replication/">replication.md</a> 的 <i>Embedded 作为主节点</i> 一节。</li></ol>
+<h2 id="性能">性能</h2>
+<p><a href="https://github.com/goliajp/kevy/blob/develop/bench/topogate.sh"><code>bench/topogate.sh</code></a> 是那道钳制，而且它是一个<b>真正的双进程</b>测试——一个写进程二进制持续跑 HSET 负载，另一个独立的读进程断言数据是实时的：</p>
+<ul><li>在持有者持续写入的同时，读进程 <code>GET</code> p99 &lt; 1ms（6 条连接的中位数）。</li><li>READONLY 强制生效（写 verb 被那句契约文本拒绝）。</li><li>零税：listener 开着但空闲时，持有者的写吞吐与 listener 关闭时相差在 10% 以内。</li></ul>
+<p>“读跑在 shard 锁下”这个设计意味着：大流量的 listener 读取<b>确实会</b>和持有者的写入在同一批 shard 上争锁——这是换取零滞后真值所付的代价。工具量级的读速率（看板、抽查）在持有者的写吞吐里量不出来；如果你需要的是服务量级的读，请用复制（见上），而不是这个 listener。</p>
+<h2 id="另见">另见</h2>
+<ul><li><a href="../cdc/">cdc.md</a>——这个 listener 同样服务的变更流。</li><li><a href="../replication/">replication.md</a>——embedded 作为主节点，当一扇窗不再够用时。</li><li><a href="../availability/">availability.md</a>——复制平面上的一致性阶梯。</li><li><a href="../uds/">uds.md</a>——kevy 服务器的本地 socket 传输（listener 本身只讲 TCP）。</li></ul></main>
+  <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#打开它">打开它</a></li><li class="l2"><a href="#接口面">接口面</a></li><li class="l3"><a href="#verb-语义">Verb 语义</a></li><li class="l2"><a href="#一致性">一致性</a></li><li class="l2"><a href="#feed-与读己之写">Feed 与读己之写</a></li><li class="l2"><a href="#不开-socket-也能内省">不开 socket 也能内省</a></li><li class="l2"><a href="#当一扇窗不够用时">当一扇窗不够用时</a></li><li class="l2"><a href="#性能">性能</a></li><li class="l2"><a href="#另见">另见</a></li></ul></aside>
+</div>
+
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

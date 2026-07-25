@@ -1,4 +1,5 @@
 use super::*;
+use crate::snapshot_fmt::VERSION;
 use std::time::Duration;
 use std::borrow::Cow;
 
@@ -47,7 +48,7 @@ fn snapshot_round_trip() {
     let _ = std::fs::remove_file(&path);
 }
 
-/// INC-2026-06-09 regression: a snapshot stores the **absolute** deadline, so
+/// TTL re-anchoring regression: a snapshot stores the **absolute** deadline, so
 /// time elapsed between save and load is subtracted from the restored TTL.
 /// The pre-fix v2 format stored remaining-ms and re-anchored on load, so the
 /// TTL would read back ~unchanged regardless of the gap.
@@ -112,8 +113,8 @@ fn hash_snapshot_round_trip() {
     src.hset(
         b"h",
         &[
-            (b"a".to_vec(), b"1".to_vec()),
-            (b"b".to_vec(), b"two".to_vec()),
+            (b"a".as_slice(), b"1".as_slice()),
+            (b"b".as_slice(), b"two".as_slice()),
         ],
     )
     .unwrap();
@@ -134,7 +135,7 @@ fn hash_snapshot_round_trip() {
 fn list_snapshot_round_trip() {
     let path = temp_file("listrt");
     let mut src = Store::new();
-    src.rpush(b"l", &[b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]).unwrap();
+    src.rpush(b"l", &[b"a".as_slice(), b"b".as_slice(), b"c".as_slice()]).unwrap();
     save_snapshot(&src, &path).unwrap();
 
     let mut dst = Store::new();
@@ -151,7 +152,7 @@ fn list_snapshot_round_trip() {
 fn set_snapshot_round_trip() {
     let path = temp_file("setrt");
     let mut src = Store::new();
-    src.sadd(b"s", &[b"x".to_vec(), b"y".to_vec(), b"z".to_vec()]).unwrap();
+    src.sadd(b"s", &[b"x".as_slice(), b"y".as_slice(), b"z".as_slice()]).unwrap();
     save_snapshot(&src, &path).unwrap();
 
     let mut dst = Store::new();
@@ -168,7 +169,7 @@ fn set_snapshot_round_trip() {
 fn zset_snapshot_round_trip() {
     let path = temp_file("zsetrt");
     let mut src = Store::new();
-    src.zadd(b"z", &[(1.0, b"a".to_vec()), (2.0, b"b".to_vec()), (0.5, b"c".to_vec())]).unwrap();
+    src.zadd(b"z", &[(1.0, b"a".as_slice()), (2.0, b"b".as_slice()), (0.5, b"c".as_slice())]).unwrap();
     save_snapshot(&src, &path).unwrap();
 
     let mut dst = Store::new();
@@ -190,10 +191,10 @@ fn all_types_snapshot_round_trip() {
     let path = temp_file("allrt");
     let mut src = Store::new();
     src.set(b"str", b"hello".to_vec(), None, false, false);
-    src.hset(b"hash", &[(b"f".to_vec(), b"v".to_vec())]).unwrap();
-    src.rpush(b"list", &[b"i".to_vec()]).unwrap();
-    src.sadd(b"set", &[b"m".to_vec()]).unwrap();
-    src.zadd(b"zset", &[(1.0, b"k".to_vec())]).unwrap();
+    src.hset(b"hash", &[(b"f".as_slice(), b"v".as_slice())]).unwrap();
+    src.rpush(b"list", &[b"i".as_slice()]).unwrap();
+    src.sadd(b"set", &[b"m".as_slice()]).unwrap();
+    src.zadd(b"zset", &[(1.0, b"k".as_slice())]).unwrap();
     save_snapshot(&src, &path).unwrap();
 
     let mut dst = Store::new();
@@ -207,7 +208,7 @@ fn all_types_snapshot_round_trip() {
     let _ = std::fs::remove_file(&path);
 }
 
-// ───────────── stream consumer groups (snapshot v4, 2026-06-11) ─────────────
+// ───────────── stream consumer groups (snapshot v4) ─────────────
 
 use kevy_store::{GroupCreateMode, ReadGroupId, StreamId, XAddIdSpec};
 
@@ -306,16 +307,51 @@ fn v3_snapshot_without_groups_still_loads() {
     let _ = std::fs::remove_file(&path);
 }
 
+// A corrupt/hostile snapshot declaring a huge element count with no
+// bytes behind it must fail with a plain `io::Error` (truncated
+// stream) — NOT drive a multi-gigabyte `with_capacity` / `vec![0;n]`
+// that aborts the process. This is the malicious-primary path
+// (`replication_apply` feeds primary bytes straight into the loader).
+#[test]
+fn forged_count_fails_cleanly_not_alloc_abort() {
+    // OP_SET (a set) declaring ~4.29 billion members, then EOF.
+    let mut b: Vec<u8> = Vec::new();
+    b.extend_from_slice(b"KEVYSNAP");
+    b.push(VERSION);
+    b.push(4); // OP_SET
+    b.push(0); // no TTL
+    b.extend_from_slice(&2u32.to_le_bytes()); // key len
+    b.extend_from_slice(b"sk");
+    b.extend_from_slice(&u32::MAX.to_le_bytes()); // member count: forged
+    // ...no members follow. The loader must hit end-of-stream, not OOM.
+    let mut dst = Store::new();
+    let err = load_snapshot_from(&mut dst, std::io::Cursor::new(b)).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
+
+    // Same for a forged single bulk length.
+    let mut b2: Vec<u8> = Vec::new();
+    b2.extend_from_slice(b"KEVYSNAP");
+    b2.push(VERSION);
+    b2.push(1); // OP_STRING
+    b2.push(0); // no TTL
+    b2.extend_from_slice(&2u32.to_le_bytes());
+    b2.extend_from_slice(b"sk");
+    b2.extend_from_slice(&u32::MAX.to_le_bytes()); // value len: forged
+    let mut dst2 = Store::new();
+    let err2 = load_snapshot_from(&mut dst2, std::io::Cursor::new(b2)).unwrap_err();
+    assert_eq!(err2.kind(), std::io::ErrorKind::UnexpectedEof);
+}
+
 // ─────────────── SnapshotView serialization (COW E-3) ───────────────
 
 fn populated_store() -> Store {
     let mut s = Store::new();
     s.set(b"s1", b"plain".to_vec(), None, false, false);
     s.set(b"s2", vec![b'x'; 100], None, false, false); // heap str
-    s.hset(b"h", &[(b"f".to_vec(), b"v".to_vec())]).unwrap();
-    s.rpush(b"l", &[b"a".to_vec(), b"b".to_vec()]).unwrap();
-    s.sadd(b"set", &[b"m1".to_vec(), b"m2".to_vec()]).unwrap();
-    s.zadd(b"z", &[(1.5, b"one".to_vec())]).unwrap();
+    s.hset(b"h", &[(b"f".as_slice(), b"v".as_slice())]).unwrap();
+    s.rpush(b"l", &[b"a".as_slice(), b"b".as_slice()]).unwrap();
+    s.sadd(b"set", &[b"m1".as_slice(), b"m2".as_slice()]).unwrap();
+    s.zadd(b"z", &[(1.5, b"one".as_slice())]).unwrap();
     s
 }
 
@@ -344,9 +380,10 @@ fn view_aof_round_trips_at_the_collect_instant() {
     let view = s.collect_snapshot();
     // Post-collect mutations must not appear in the dump.
     s.set(b"s1", b"mutated".to_vec(), None, false, false);
-    s.hset(b"h", &[(b"f2".to_vec(), b"late".to_vec())]).unwrap();
+    s.hset(b"h", &[(b"f2".as_slice(), b"late".as_slice())]).unwrap();
 
-    let p = std::env::temp_dir().join(format!("kevy-e3-aof-{}.aof", std::process::id()));
+    // dump_aof writes a FILE at this path — the unique dir is its parent.
+    let p = kevy_tmpdir::unique_dir("persist").join("view.aof");
     let (keys, bytes) = dump_aof(&p, &view).unwrap();
     assert_eq!(keys, 6);
     assert!(bytes > 0);

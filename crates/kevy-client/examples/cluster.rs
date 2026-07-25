@@ -15,7 +15,7 @@
 
 use kevy_client::ClusterClient;
 
-fn main() -> std::io::Result<()> {
+fn main() -> kevy_client::KevyResult<()> {
     let seed: u16 = std::env::args()
         .nth(1)
         .and_then(|s| s.parse().ok())

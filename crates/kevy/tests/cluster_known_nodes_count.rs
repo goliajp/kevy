@@ -1,5 +1,5 @@
-//! v1.57 — verify v1.44.x finding fix: `CLUSTER INFO
-//! cluster_known_nodes` reports peer count, not shard count.
+//! `CLUSTER INFO cluster_known_nodes` reports peer count, not shard
+//! count (regression cover for an earlier finding).
 //!
 //! Strict asserts:
 //! - Single-node cluster (no `peers = ...`) reports

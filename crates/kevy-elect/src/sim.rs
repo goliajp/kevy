@@ -1,9 +1,9 @@
 //! In-process N-node simulator for [`crate::Elector`]. Drives every
 //! node's tick + routes their outbound messages between peers via
 //! in-memory queues, with **partition** and **node-kill** chaos
-//! primitives. Lets T1.5.12-17 exhaustively test the v3-cluster
-//! Phase 1.5 election algorithm before the real TCP transport
-//! lands — every quorum / split-brain / dueling / rejoin scenario
+//! primitives. Lets the scenario suite below exhaustively test the
+//! election algorithm without the real TCP transport
+//! — every quorum / split-brain / dueling / rejoin scenario
 //! becomes a deterministic unit test.
 //!
 //! No threads, no sockets, no wall clocks: tests advance a virtual
@@ -224,7 +224,7 @@ mod tests {
         ElectJitter::Fixed(Duration::from_millis(0))
     }
 
-    /// T1.5.12 — 3-node primary kill. Quorum (2/3) promotes a
+    /// Scenario: 3-node primary kill. Quorum (2/3) promotes a
     /// replica within `down_after + election_timeout`.
     #[test]
     fn three_node_primary_kill_promotes_replica() {
@@ -268,7 +268,7 @@ mod tests {
         assert_eq!(sim.current_primary(loser), Some(winner));
     }
 
-    /// T1.5.13 — 5-node: kill primary + one replica; remaining 3
+    /// Scenario: 5-node — kill primary + one replica; remaining 3
     /// (quorum) still promote.
     #[test]
     fn five_node_kill_primary_and_one_replica_still_promotes() {
@@ -301,7 +301,7 @@ mod tests {
         assert_eq!(promoted, 1, "exactly one promotion expected");
     }
 
-    /// T1.5.14 — 3-node split-brain: partition primary from 2
+    /// Scenario: 3-node split-brain — partition primary from 2
     /// replicas. Minority (primary alone) cannot promote (no
     /// quorum — primary stays primary by inertia, but the *new*
     /// would-be primary on the majority side promotes).
@@ -348,7 +348,7 @@ mod tests {
         );
     }
 
-    /// T1.5.15 — dueling promotion: tie offsets, deterministic by
+    /// Scenario: dueling promotion — tie offsets, deterministic by
     /// lowest node-id. With two simultaneous candidates a + b at
     /// the same offset, a (a < b lexicographic) wins.
     #[test]
@@ -378,7 +378,7 @@ mod tests {
         assert_eq!(sim.current_primary("c"), Some("b"));
     }
 
-    /// T1.5.16 — old primary rejoin: partition + heal. The old
+    /// Scenario: old primary rejoin — partition + heal. The old
     /// primary (a) sees a higher epoch on rejoin and demotes
     /// cleanly. No double-write because a doesn't receive ACCEPTs
     /// from the majority while partitioned.
@@ -419,7 +419,7 @@ mod tests {
         assert_eq!(sim.current_primary("a"), Some(new_primary.as_str()));
     }
 
-    /// T1.5.17 — N=2 degenerate: quorum = 2; either node down =
+    /// Scenario: N=2 degenerate — quorum = 2; either node down =
     /// locked. The test confirms: kill the primary in N=2, the
     /// survivor candidate cannot reach quorum (needs ACCEPT from
     /// the dead peer) → stays Replica indefinitely.

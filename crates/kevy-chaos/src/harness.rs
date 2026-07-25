@@ -37,20 +37,20 @@ pub struct HarnessConfig {
     /// Optional: percentage growth-since-last-rewrite that triggers an
     /// auto-rewrite. `None` keeps the kevy default (100 = 2× growth).
     pub aof_rewrite_pct: Option<u32>,
-    /// **v1.33** — Free-form TOML appended to the spawned kevy's
+    /// Free-form TOML appended to the spawned kevy's
     /// `kevy.toml`. Empty by default. Use to set `[replication]`
     /// sections for primary/replica chaos tests, or any other section
     /// not yet covered by typed fields above. NOTE: appended after
     /// `[persistence]`; lines without a section header attach to
     /// persistence. Use `[server]\n` etc. prefix if needed.
     pub extra_toml: String,
-    /// **v1.37** — `[server] max_clients = N`. `0` keeps the kevy
+    /// `[server] max_clients = N`. `0` keeps the kevy
     /// default (10 000). Set explicitly for the maxclients chaos test.
     pub max_clients: usize,
-    /// **v1.38** — `RLIMIT_NOFILE` for the spawned kevy. `0` = inherit
+    /// `RLIMIT_NOFILE` for the spawned kevy. `0` = inherit
     /// from parent. Use to test fd-exhaustion behavior.
     pub rlimit_nofile: u64,
-    /// **v1.38** — `RLIMIT_FSIZE` for the spawned kevy. `0` = inherit.
+    /// `RLIMIT_FSIZE` for the spawned kevy. `0` = inherit.
     /// Use to test disk-full / quota-exhaustion behavior. kevy writes
     /// past this limit get `SIGXFSZ` from the kernel; kevy must
     /// catch / report cleanly without panicking.
@@ -143,7 +143,7 @@ impl Harness {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::from(stderr_file));
-        // v1.38 — apply RLIMIT_NOFILE / RLIMIT_FSIZE on Unix via
+        // Apply RLIMIT_NOFILE / RLIMIT_FSIZE on Unix via
         // pre_exec. Run BEFORE exec so kevy starts with the cap.
         #[cfg(unix)]
         {
@@ -246,6 +246,26 @@ impl Harness {
         }
         let _ = child.wait();
         Ok(())
+    }
+
+    /// Wait for kevy to exit on its own (e.g. after a `SHUTDOWN`
+    /// command) up to `timeout`. Returns `Some(exit_code)` once the
+    /// process is gone, `None` on timeout (the child stays owned so a
+    /// follow-up `kill` can reap it). A signal-terminated child
+    /// reports code `-1`.
+    pub fn wait_exit(&mut self, timeout: std::time::Duration) -> io::Result<Option<i32>> {
+        let Some(child) = self.child.as_mut() else { return Ok(Some(0)) };
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if let Some(status) = child.try_wait()? {
+                self.child = None;
+                return Ok(Some(status.code().unwrap_or(-1)));
+            }
+            if std::time::Instant::now() >= deadline {
+                return Ok(None);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 
     /// Restart kevy on the same data dir.

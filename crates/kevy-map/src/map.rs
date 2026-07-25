@@ -17,11 +17,11 @@
 //! the previous two-`Box<[…]>` layout, and keeps metadata + slots in
 //! adjacent pages (warmer TLB, contiguous OS-prefetch).
 
-use std::alloc::Layout;
-use std::fmt;
-use std::marker::PhantomData;
-use std::mem::MaybeUninit;
-use std::ptr::{self, NonNull};
+use core::alloc::Layout;
+use core::fmt;
+use core::marker::PhantomData;
+use core::mem::MaybeUninit;
+use core::ptr::{self, NonNull};
 
 use kevy_hash::KevyHash;
 
@@ -238,7 +238,7 @@ impl<K, V> KevyMap<K, V> {
         if self.cap == 0 {
             return;
         }
-        if std::mem::needs_drop::<(K, V)>() {
+        if core::mem::needs_drop::<(K, V)>() {
             for i in 0..self.cap {
                 // SAFETY: i < cap ⇒ metadata pointer in-bounds.
                 let meta = unsafe { *self.metadata_ptr.as_ptr().add(i) };
@@ -305,8 +305,8 @@ impl<K, V> KevyMap<K, V> {
         // outlives the returned slices.
         unsafe {
             (
-                std::slice::from_raw_parts(self.metadata_ptr.as_ptr(), self.cap),
-                std::slice::from_raw_parts(self.slots_ptr.as_ptr(), self.cap),
+                core::slice::from_raw_parts(self.metadata_ptr.as_ptr(), self.cap),
+                core::slice::from_raw_parts(self.slots_ptr.as_ptr(), self.cap),
             )
         }
     }
@@ -323,8 +323,8 @@ impl<K, V> KevyMap<K, V> {
         // exclusive access for the lifetime of the returned slices.
         unsafe {
             (
-                std::slice::from_raw_parts(self.metadata_ptr.as_ptr(), self.cap),
-                std::slice::from_raw_parts_mut(self.slots_ptr.as_ptr(), self.cap),
+                core::slice::from_raw_parts(self.metadata_ptr.as_ptr(), self.cap),
+                core::slice::from_raw_parts_mut(self.slots_ptr.as_ptr(), self.cap),
             )
         }
     }
@@ -370,9 +370,9 @@ impl<K, V> Default for KevyMap<K, V> {
 }
 
 /// `m[&q]` panics on missing key (matches `std::HashMap::Index` semantics).
-impl<K, Q, V> std::ops::Index<&Q> for KevyMap<K, V>
+impl<K, Q, V> core::ops::Index<&Q> for KevyMap<K, V>
 where
-    K: std::borrow::Borrow<Q>,
+    K: core::borrow::Borrow<Q>,
     Q: KevyHash + Eq + ?Sized,
 {
     type Output = V;

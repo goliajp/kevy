@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kevy"
+version = "4.0.0"
+description = "First-party Python client for kevy — the pure-Rust Redis-compatible engine (embedded + remote, blocking + asyncio)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT OR Apache-2.0" }
+authors = [{ name = "GOLIA K.K." }]
+keywords = ["kevy", "redis", "resp", "key-value", "database", "asyncio"]
+
+# Zero runtime dependencies: the embedded door is ctypes (stdlib), the
+# remote door is socket/asyncio (stdlib). The wire is bytes throughout.
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=7", "pytest-asyncio>=0.21", "pytest-timeout>=2"]
+
+[tool.setuptools]
+packages = ["kevy"]
+
+[tool.pytest.ini_options]
+# Per-test wall clamp. Several tests here block by design (pub/sub recv,
+# blocking pops, reconnect), so a server that stops answering hangs the
+# test rather than failing it: this suite sat for 3h46m on a CI runner and
+# had to be cancelled, and all the log could say was that the first 72
+# tests had passed. A timeout makes the hung test name itself.
+timeout = 60
+asyncio_mode = "auto"
+testpaths = ["tests"]

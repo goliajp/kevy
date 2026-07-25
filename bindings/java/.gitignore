@@ -1,0 +1,7 @@
+# Build output
+target/
+build/
+out/
+
+# Vendored test runner jar (fetched by run-tests.sh; not source)
+lib/junit-platform-console-standalone-*.jar

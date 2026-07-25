@@ -328,7 +328,7 @@ fn make_stub_dispatch() -> (StubStore, impl Fn(&[&[u8]], bool) -> Vec<u8> + 'sta
     let store_in = Rc::clone(&store);
     // Minimal writes-list for the read-only check. In production
     // kevy-rt's command-flag table is the source of truth; this is
-    // enough for the v1.27 P6 round-trip tests.
+    // enough for these round-trip tests.
     fn is_write_command(cmd: &[u8]) -> bool {
         matches!(
             cmd,
@@ -483,8 +483,8 @@ fn eval_redis_pcall_unknown_command_returns_err_table() {
     assert!(reply.starts_with(b"-ERR "));
 }
 
-/// The canonical Redlock unlock script — byte-for-byte from the kevy
-/// v1.27 ecosystem-survey corpus.
+/// The canonical Redlock unlock script — byte-for-byte from the
+/// ecosystem-survey corpus.
 const REDLOCK_UNLOCK: &[u8] = b"\
 if redis.call('GET', KEYS[1]) == ARGV[1] then\n\
     return redis.call('DEL', KEYS[1])\n\

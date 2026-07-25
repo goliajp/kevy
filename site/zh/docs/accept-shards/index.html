@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>--accept-shards N——把稀疏连接收拢到部分 shard 上 — kevy</title>
+<meta name="description" content="--accept-shards N 告诉 kevy：只在 shard 0..N 上绑定 listener 并挂 accept，其余 shard 退化成纯计算 worker，但仍然服务跨 shard 的读写。">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../zh/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../../zh/docs/" aria-current="page">文档</a>
+      <a href="../../../zh/docs/commands/">命令</a>
+      <a href="../../../zh/benchmarks/">基准</a>
+      <a href="../../../zh/play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../../zh/docs/search-index.json" data-root="../../../zh/">
+        <input type="search" placeholder="搜索文档……" aria-label="搜索文档……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../../docs/accept-shards/">EN</a><a href="../../../zh/docs/accept-shards/" aria-current="page">中文</a><a href="../../../ja/docs/accept-shards/">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell has-toc">
+  <aside class="side"><p class="side-h">上手</p><ul><li><a href="../../../zh/docs/designing-on-kevy/">在 kevy 上设计应用</a></li><li><a href="../../../zh/docs/cookbook/">RDS→kevy 建模 cookbook</a></li><li><a href="../../../zh/docs/persistence/">持久化</a></li><li><a href="../../../zh/docs/tuning/">调优 kevy</a></li></ul><p class="side-h">运行</p><ul><li><a href="../../../zh/docs/replication/">复制</a></li><li><a href="../../../zh/docs/availability/">可用性</a></li><li><a href="../../../zh/docs/cluster/">集群</a></li><li><a href="../../../zh/docs/tiering/">透明分层存储（[tiering] / with_tier_budget）</a></li><li><a href="../../../zh/docs/accept-shards/" aria-current="page">--accept-shards N——把稀疏连接收拢到部分 shard 上</a></li><li><a href="../../../zh/docs/uds/">Unix-domain socket（UDS）传输</a></li><li><a href="../../../zh/docs/async/">异步客户端</a></li></ul><p class="side-h">数据</p><ul><li><a href="../../../zh/docs/indexes/">二级索引（IDX. / idx_）</a></li><li><a href="../../../zh/docs/tables/">表（TABLE. / table_）</a></li><li><a href="../../../zh/docs/vector-search/">向量检索（KIND ann）</a></li><li><a href="../../../zh/docs/text-search/">全文检索（KIND text）</a></li><li><a href="../../../zh/docs/views/">视图（VIEW. / view_）</a></li><li><a href="../../../zh/docs/cdc/">CDC——变更流（FEED. / changes_since）</a></li><li><a href="../../../zh/docs/pubsub/">Pub/sub</a></li><li><a href="../../../zh/docs/lua/">Lua 脚本</a></li></ul><p class="side-h">嵌入</p><ul><li><a href="../../../zh/docs/wasm/">kevy 上 WebAssembly</a></li><li><a href="../../../zh/docs/embedded-listener/">Embedded 只读 RESP listener</a></li><li><a href="../../../zh/docs/iot/">kevy 跑在 IoT 设备上</a></li></ul><p class="side-h">参考</p><ul><li><a href="../../../zh/docs/error-replies/">错误回复目录</a></li><li><a href="../../../zh/docs/rds-workloads/">在 kevy 上跑 RDS 负载</a></li><li><a href="../../../zh/docs/migration/">迁移——playbook 与工具链</a></li><li><a href="../../../zh/docs/UPGRADING/">升级 kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../zh/docs/commands/">全部 188 个命令</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1><code>--accept-shards N</code>——把稀疏连接收拢到部分 shard 上</h1></div>
+<p><code>--accept-shards N</code> 告诉 kevy：只在 shard <code>0..N</code> 上绑定 listener 并挂 <code>accept</code>，其余 shard 退化成纯计算 worker，但仍然服务跨 shard 的读写。</p>
+<h2 id="什么时候需要它">什么时候需要它</h2>
+<p>每个 kevy shard 各跑一个 reactor，主体是一个 busy-poll 循环。只有当每一轮迭代都能看到足够多的有效事件时，这个循环才摊得平它的逐轮开销（drain waker、查 inbox、挂 accept）。一旦 <code>concurrent_conns / threads</code> 掉到 1 以下，每个 shard 的大部分迭代都在空转，总吞吐会低于同一台机器上 1 到 2 个线程的服务器所能达到的水平。</p>
+<p>以下场景该考虑 <code>--accept-shards N</code>：</p>
+<ul><li>客户端数量少而且已知（典型的应用服务器、复制 follower、内部服务）。</li><li>你仍然想让 <code>--threads</code> 跟核数对齐，好让跨 shard 一跳时键空间是并行的。</li><li>基准显示：加 shard 反而让吞吐变差。</li></ul>
+<p>连接数高（平均每 shard ≥ 1 条）、不可预测，或者来自会惊群的客户端连接池时，别设它——默认的“每个 shard 都 accept”才是那里的正确答案。</p>
+<h2 id="核心思路">核心思路</h2>
+<p>accept 集合在启动时静态声明。集合内的 shard 绑定 listener fd 并挂一个 <code>accept</code> SQE；集合外的 shard 两件都不做，于是内核的 <code>SO_REUSEPORT</code> 组永远不会把 SYN 路由给它们。集合外的 shard 依然持有自己那片键空间，也依然会 drain 跨 shard inbox：哈希落到它那片的写入会被分派过去执行，回复再经由持有该连接的 shard 送回。无状态 shard 模型完好无损——每个 shard 跑的是同一条代码路径，只不过有些恰好持有零个连接。</p>
+<figure class="code"><pre><code>                      clients (SO_REUSEPORT group)
+                                 |
+                  +--------------+--------------+
+                  |              |              |
+              shard 0        shard 1        shard 2          &lt;-- accept-set (--accept-shards 3)
+              listen + accept + own conns + own keyspace slice
+                  |              |              |
+                  +------ cross-shard dispatch -------+
+                  |       |       |       |       |       |
+              shard 3  shard 4  shard 5  shard 6  shard 7  shard 8  shard 9   &lt;-- compute-only
+              no listener, no accept; execute dispatched cmds, own keyspace slice</code></pre></figure>
+<h2 id="实例">实例</h2>
+<p>10 个线程、3 个 accept shard，监听标准 Redis 端口：</p>
+<figure class="code"><pre><code class="lang-sh">kevy --threads 10 --accept-shards 3 --port 6379</code></pre></figure>
+<p>等价的环境变量形态：</p>
+<figure class="code"><pre><code class="lang-sh">KEVY_THREADS=10 KEVY_ACCEPT_SHARDS=3 kevy --port 6379</code></pre></figure>
+<p>等价的 TOML（<code>kevy.toml</code>）：</p>
+<figure class="code"><pre><code class="lang-toml">[server]
+threads = 10
+accept_shards = 3
+port = 6379</code></pre></figure>
+<p>优先级是 CLI &gt; env &gt; TOML &gt; 默认值。<code>accept_shards</code> 必须满足 <code>1 &lt;= accept_shards &lt;= threads</code>；越界就在启动时快速失败，退出码 2。默认是不设置，也就是每个 shard 都 accept，此时二进制的行为与一个没有这个标志的构建逐字节一致。</p>
+<h2 id="定容经验法则">定容经验法则</h2>
+<p>拇指规则：<code>accept_shards ≈ ceil(conns / 20)</code>。实测的甜点是一片平台区，每个 accept shard 大约持有 15–25 条连接——密到足以让 busy-poll 循环摊平开销，又稀到不会让跨 shard 分派把 inbox 通道打满。</p>
+<div class="tbl"><table><thead><tr><th style="text-align:right">并发连接数</th><th style="text-align:right">threads</th><th style="text-align:right">推荐 <code>--accept-shards</code></th><th style="text-align:right">每 accept shard 的连接数</th></tr></thead><tbody><tr><td style="text-align:right">10</td><td style="text-align:right">10</td><td style="text-align:right">1</td><td style="text-align:right">10</td></tr><tr><td style="text-align:right">20</td><td style="text-align:right">10</td><td style="text-align:right">1</td><td style="text-align:right">20</td></tr><tr><td style="text-align:right">50</td><td style="text-align:right">10</td><td style="text-align:right">2 或 3</td><td style="text-align:right">25 或 17</td></tr><tr><td style="text-align:right">100</td><td style="text-align:right">10</td><td style="text-align:right">5</td><td style="text-align:right">20</td></tr><tr><td style="text-align:right">200</td><td style="text-align:right">10</td><td style="text-align:right">10（默认，不设）</td><td style="text-align:right">20</td></tr><tr><td style="text-align:right">50</td><td style="text-align:right">16</td><td style="text-align:right">2 或 3</td><td style="text-align:right">25 或 17</td></tr><tr><td style="text-align:right">100</td><td style="text-align:right">16</td><td style="text-align:right">5 或 6</td><td style="text-align:right">20 或 17</td></tr><tr><td style="text-align:right">500</td><td style="text-align:right">16</td><td style="text-align:right">16（默认，不设）</td><td style="text-align:right">31</td></tr></tbody></table></div>
+<p>在标准的 <code>--threads 10 -c 50 -d 65536 SET</code> 负载上，<code>--accept-shards 3</code> 把 50 条连接从约 5 条/shard 收拢到约 17 条/shard，吞吐比默认高 +10.6%。<code>--accept-shards 2</code>（25 条/shard）落在同一片平台区上。</p>
+<h2 id="取舍">取舍</h2>
+<div class="tbl"><table><thead><tr><th>维度</th><th>accept 集合内的 shard</th><th>纯计算 shard</th></tr></thead><tbody><tr><td>busy-poll 摊销</td><td>高（自己持有的连接扇入驱动每轮的活）</td><td>取决于跨 shard inbox 的速率</td></tr><tr><td>逐连接的读 / 写成本</td><td>本地，无跳</td><td>不适用（不持有连接）</td></tr><tr><td>跨 shard 分派成本</td><td>每跳一次 channel send</td><td>一次 channel recv + 执行 + 回复 send</td></tr><tr><td>键空间归属</td><td>持有自己那片</td><td>持有自己那片</td></tr><tr><td>空闲时的 CPU 下限</td><td>挂着 accept，阻塞在 <code>io_uring_enter</code></td><td>自旋到 <code>URING_SPIN_LIMIT</code> 后阻塞</td></tr><tr><td>对尾延迟的影响</td><td>accept SQE 给热循环加活</td><td>热循环更干净；跨 shard 一跳多一个 channel</td></tr></tbody></table></div>
+<p>具体地说：<code>N</code> 选得越小，每条连接从“热的 accept shard”里得到的收益越大，但要走跨 shard 一跳的写入占比也越高（全部键里的 <code>(threads - N) / threads</code>）。每 shard 15–25 连接这片平台区，正是 busy-poll 的收益付得起额外跳数的地方；明显低于它，分派成本占了上风；明显高于它，你又退回到不设置的默认状态了。</p>
+<h2 id="faq">FAQ</h2>
+<p><b>是不是总该设 <code>--accept-shards</code>？</b> 不是。如果平均下来 <code>concurrent_conns / threads &gt;= 1</code>，默认（每个 shard 都 accept）已经是最优——busy-poll 循环不用人帮就能摊平。<code>--accept-shards</code> 是给稀疏连接这个区间用的，那里加 shard 反而伤吞吐。</p>
+<p><b>怎么给我的负载挑 <code>N</code>？</b> 从拇指规则 <code>ceil(conns / 20)</code> 起步。在 perfgate 里把 <code>N</code> 在 <code>{ceil(conns/25), ceil(conns/20), ceil(conns/15)}</code> 之间扫一遍，在你的目标尾延迟预算下挑吞吐最高的那个。落在 15–25 连接/shard 这片平台区上的任何取值，都是安全的生产设置。</p>
+<p><b>它会不会破坏复制、AOF 或持久化？</b> 不会。集合外的 shard 跑的是同一条 reactor 循环、同一个 TTL reaper、同一个 AOF writer、同样的复制 tick。它们唯一跳过的，就是绑定 listener 和挂 <code>accept</code>。复制 follower 以及快照 / AOF 恢复的行为，与 <code>N</code> 取什么值无关。</p>
+<p><b>集合外的 shard 怎么还能服务写入？</b> 它们持有自己那片键空间。当 accept 集合内某条客户端连接发来一笔写入，而键哈希落到某个纯计算 shard 上时，accept shard 会把一个 <code>Inbound::RequestBatch</code> 推进那个持有者 shard 的 inbox；持有者 shard 对自己那片键空间执行命令，再把回复经由发起 shard 的回复通道送回。从客户端看，这一跳是隐形的——它在一条连接上看到一条回复，顺序不变。</p>
+<p><b>万一数字选错了？</b> <code>N</code> 选得太小，代价是跨 shard inbox 被打满、尾延迟变差；<code>N</code> 选得太大，代价是回到最初那个稀疏连接的反转。两者都可以换个值重启就恢复——这个选择不绑定任何磁盘上的状态。</p></main>
+  <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#什么时候需要它">什么时候需要它</a></li><li class="l2"><a href="#核心思路">核心思路</a></li><li class="l2"><a href="#实例">实例</a></li><li class="l2"><a href="#定容经验法则">定容经验法则</a></li><li class="l2"><a href="#取舍">取舍</a></li><li class="l2"><a href="#faq">FAQ</a></li></ul></aside>
+</div>
+
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

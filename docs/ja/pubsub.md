@@ -70,13 +70,13 @@ $ redis-cli -p 6379 PUBLISH news "hello"
 ```rust
 use kevy_client::{Connection, Subscriber, PubsubEvent};
 
-fn run(url: &str) -> std::io::Result<()> {
+fn run(url: &str) -> kevy_client::KevyResult<()> {
     // `news` に対する購読者を開く。バスが最初に返すフレームは subscribe ack なので、
     // ボディをアサートする前にドレインする。
-    let mut sub = Subscriber::open(url, &[b"news"])?;
+    let mut sub = Subscriber::connect_channels(url, &[b"news"])?;
     let _ack = sub.recv()?;
 
-    let mut conn = Connection::open(url)?;
+    let mut conn = Connection::connect(url)?;
     let received = conn.publish(b"news", b"hello")?;
     assert_eq!(received, 1);
 
@@ -94,7 +94,7 @@ fn run(url: &str) -> std::io::Result<()> {
 run("mem://app")?;
 // 本番: 実際の TCP サーバー。
 run("kevy://prod-cache:6379")?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 スレッドをまたぐ場合もコードは同じです。別々のスレッドから同じURLに対して`Subscriber`と`Connection`を1つずつ開くだけです。`mem://<name>`のレジストリが両端に同じバッキングバスを渡すので、プロデューサスレッドが`Connection::publish`し、コンシューマスレッドが`sub.recv()`でブロックします。
@@ -123,7 +123,7 @@ match sub.recv()? {
     }
     other => panic!("unexpected frame: {other:?}"),
 }
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 `Store::clone`は安価（`Arc`のカウントを増やすだけ）なので、典型的な形は「各スレッドに`store.clone()`を渡し、必要になったときに`publish`や`subscribe`をさせる」というものです。購読者のdropはアトミックに登録解除されるため、コンシューマスレッドがパニックしてもインデックスにゾンビエントリは残りません。
@@ -139,7 +139,7 @@ let mut sub = Subscriber::connect("mem://signals")?;
 sub.psubscribe(&[b"news.*"])?;
 let _ack = sub.recv()?;            // PubsubEvent::Psubscribe
 
-let mut conn = Connection::open("mem://signals")?;
+let mut conn = Connection::connect("mem://signals")?;
 conn.publish(b"news.tech", b"breaking")?; // マッチ
 conn.publish(b"weather",   b"sunny")?;    // マッチしない
 
@@ -151,10 +151,47 @@ match sub.recv()? {
     }
     other => panic!("unexpected frame: {other:?}"),
 }
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 チャネル購読と、それにマッチするパターン購読の**両方**を持つ購読者は、コピーを**2つ**受け取ります（`Message`が1つと`Pmessage`が1つ）。publishごとの重複排除が抑止するのは「同じ`Subscription`が同じチャネルインデックスに2回並んでいる」タイプの重複だけで、チャネルとパターンの重なりは抑止しません。
+
+## Keyspace notifications（キー空間通知）
+
+kevyはキー空間の変更をRedis流にpub/subで告知できます。`user:42`への書き込みは`__keyspace@0__:user:42`（ペイロード＝イベント名、例：`set`）と`__keyevent@0__:set`（ペイロード＝キー）の片方または両方を発火します。kevyはDB 0だけを提供するので、チャネル名は常に`@0`を持ちます。
+
+デフォルトはオフです——フラグ文字列が空なら、書き込みが払うのはアトミックロード1回とスキップだけです。設定ファイルで有効化します。
+
+```toml
+[notification]
+notify_keyspace_events = "KEA"   # everything, both channels
+```
+
+フラグ文字列はRedisの慣例に従います——チャネルが先、イベントクラスが後です。
+
+| フラグ | 意味 |
+|---|---|
+| `K` | `__keyspace@0__:<key>`チャネルへpublish |
+| `E` | `__keyevent@0__:<event>`チャネルへpublish |
+| `g` | 汎用コマンド——`DEL`、`EXPIRE`、`PERSIST`、`RENAME`など |
+| `$` | 文字列コマンド——`SET`、`INCR`、`APPEND`、`MSET`など |
+| `l` | リストコマンド |
+| `s` | セットコマンド |
+| `h` | ハッシュコマンド |
+| `z` | ソート済みセットコマンド |
+| `t` | ストリームコマンド——`XADD`、`XTRIM`、`XGROUP`など |
+| `x` | `expired`イベント——TTL付きキーの除去（アクセス時の遅延削除、またはリーパーによる） |
+| `e` | `evicted`イベント——`maxmemory`圧による除去 |
+| `n` | `new`イベント——キー空間へのキー追加 |
+| `A` | `g$lshztxe`のエイリアス（Redisに合わせ、`n`以外の全クラス） |
+
+何かを発火させるには、`K`／`E`の少なくとも一方＋少なくとも1つのイベントクラスが必要です。文字列中の未知の文字は**起動時のconfigエラー**です——タイポしたフラグ文字列は、イベントを黙って落とす代わりに入場を拒否されます。購読は普通のパターン購読で行います。
+
+```sh
+redis-cli -p 6379 PSUBSCRIBE '__keyevent@0__:*'
+```
+
+通知の配送は、このページの他のすべてと同じat-most-onceのpub/subバスに乗ります。publish時点で購読者がいなければ、イベントは消えます。変更を取りこぼしてはいけないコンシューマはCDCフィード（[`docs/cdc.md`](https://github.com/goliajp/kevy/blob/develop/docs/cdc.md)）に乗せてください。あちらはカーソル付きでリプレイ可能です——キー空間通知は「起きろ」の合図であって、台帳ではありません。
 
 ## URLバックエンド表
 
@@ -167,7 +204,7 @@ match sub.recv()? {
 | `redis://host[:port][/db]`         | TCP — `kevy://`のエイリアス   | 同上                                              | **はい**               |
 | `tcp://host[:port]`                | TCP — 生。先頭の`SELECT`なし | 同上                                          | **はい**               |
 
-匿名の`mem://`は発行されたメッセージを受け取れません。同じバッキング`Store`にほかの誰も到達できないため、`Subscriber::open`は`ErrorKind::Unsupported`で拒否します。publishするつもりがあるなら、常に`mem://<some-name>`を使ってください。
+匿名の`mem://`は発行されたメッセージを受け取れません。同じバッキング`Store`にほかの誰も到達できないため、`Subscriber::connect_channels`は`KevyError::Unsupported`で拒否します。publishするつもりがあるなら、常に`mem://<some-name>`を使ってください。
 
 `rediss://`、`kevys://`、`redis://user:pass@…`も同じ理由で拒否されます。kevyはTLSも`AUTH`もなしで出荷されるからです。どちらかが必要なら、ネットワーク境界でstunnelとIP許可リストを前段に置いてください。
 
@@ -218,4 +255,4 @@ $ redis-cli -p 6379 PUBSUB NUMPAT
 
 **なぜテストではメッセージより先にsubscribe ackが見えるのですか？**  バスは順序付きですが、各`SUBSCRIBE`/`PSUBSCRIBE`は、そのチャネルの最初のボディフレームより*先に*ackフレームをキューに積みます。ペイロードをアサートする前に、`sub.recv()?`を1回呼んでackをドレインしてください。これはredis-cliのワイヤ上の挙動とも一致します。
 
-**pub/subにクラスタルーティングは必要ですか？**  いいえ。pub/subのファンアウトはプロセスレベルで、スロットルーティングされません。どのシャードのポートでpublishしても、同じプロセス内の全シャードのポートの全購読者に届きます。任意のシャードポートへの`Connection::open("kevy://host:port")`で十分です。*キー空間*コマンドが使うスロットルーティングについては[`docs/cluster.md`](cluster.md)を参照してください。
+**pub/subにクラスタルーティングは必要ですか？**  いいえ。pub/subのファンアウトはプロセスレベルで、スロットルーティングされません。どのシャードのポートでpublishしても、同じプロセス内の全シャードのポートの全購読者に届きます。任意のシャードポートへの`Connection::connect("kevy://host:port")`で十分です。*キー空間*コマンドが使うスロットルーティングについては[`docs/cluster.md`](cluster.md)を参照してください。

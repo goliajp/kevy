@@ -13,14 +13,29 @@
 #      offset == master_repl_offset when quiesced
 #   6. min-replicas-to-write: primary with min=1 and no replica
 #      refuses writes (-NOREPLICAS); write opens when replica ACKs
+# Phase 2 adds crash-failover clamps 7-8, phase 3 the consistency
+# ladder (9-12), phase 4 the -LOADING full-resync clamp (13).
 #
 # Usage: bash bench/availgate.sh <kevy-binary>
 set -u
 KBIN=${1:?usage: availgate.sh <kevy-binary>}
 KBIN=$(cd "$(dirname "$KBIN")" && pwd)/$(basename "$KBIN")
 cd "$(dirname "$0")/.."
+# Resolve the CLI binary FIRST, then wrap it. Order matters and got it
+# wrong once with a multi-day cost: wrapping `timeout 15 …` onto CLI
+# before the `[ -x "$CLI" ]` check made that check test the whole string
+# as a path — it failed, fell back to the debug binary, and on a
+# release-only build (every Linux CI run) that binary does not exist, so
+# every PING ran a missing command and the gate reported "primary never
+# came up" while the server was perfectly healthy. macOS has no
+# coreutils `timeout`, so it never wrapped, never fell back, and stayed
+# green — which is exactly why the phantom looked Linux-only.
 CLI=target/release/kevy-cli
 [ -x "$CLI" ] || CLI=target/debug/kevy-cli
+# Every CLI call bounded: a server wedged into accept-but-never-reply
+# turns a gate into a silent multi-hour hang on CI. With coreutils
+# timeout the call fails loudly at the exact clamp; macOS runs unbounded.
+command -v timeout >/dev/null 2>&1 && CLI="timeout 15 $CLI"
 # Replication listens at port+10000 for NSHARDS consecutive ports —
 # keep client ports ≥ nshards apart or the two servers' replication
 # ranges collide (v3.15: replicas bind a listener too).
@@ -31,17 +46,69 @@ PPID_=""
 RPID_=""
 trap 'kill $PPID_ $RPID_ 2>/dev/null; rm -rf "$DIR"' EXIT
 
-fail() { echo "availgate: FAIL — $1"; exit 1; }
+fail() {
+    echo "availgate: FAIL — $1"
+    # The crime scene, not just the verdict: a server that died at
+    # startup says why on its own stderr, which a mute "never came up"
+    # used to discard (one port-squatter and one Linux-only startup
+    # failure each cost a blind debugging round).
+    for f in "$DIR"/pri.out "$DIR"/rep.out "$DIR"/*.out; do
+        [ -f "$f" ] || continue
+        echo "--- $(basename "$f") (tail)"
+        tail -6 "$f"
+    done 2>/dev/null | head -40
+    # The io_uring bring-up hang is SILENT (two startup lines, then
+    # nothing) and races too rarely to catch outside CI's x86 runners
+    # (25 clean container rounds on arm64) — so when a server is still
+    # alive but mute, the only witness is where each of its threads
+    # sleeps in the kernel. Linux-only (/proc), which is exactly where
+    # the hang lives.
+    for pid in $PPID_ $RPID_; do
+        [ -n "$pid" ] && [ -d "/proc/$pid" ] || continue
+        echo "--- pid $pid thread kernel sleep points:"
+        for t in /proc/$pid/task/*; do
+            echo "  tid $(basename "$t") wchan=$(cat "$t/wchan" 2>/dev/null) stat=$(awk '{print $3}' "$t/stat" 2>/dev/null)"
+        done
+    done
+    # The threads park in a normal-looking run state (main in join's
+    # futex, shards in the reactor's poll), yet the client PING never
+    # answers — so the question is the socket layer, not the threads.
+    # ss shows whether the listeners are actually LISTENing and whether
+    # their accept queue (Recv-Q on a LISTEN socket) is filling — i.e.
+    # SYNs land but no accept() drains them. Linux-only, on point.
+    if command -v ss >/dev/null 2>&1; then
+        echo "--- listener + accept-queue state (Recv-Q = unaccepted conns):"
+        ss -tlnp 2>/dev/null | grep -E "Recv-Q|:$PPORT|:$RPORT|:1$PPORT|:1$RPORT" | head -20
+    fi
+    exit 1
+}
 note() { echo "availgate: ok — $1"; }
 
 wait_ports_free() {
     # A just-killed server's sockets can linger a beat; binding into
     # that window aborts the new process (fail-fast is the right
-    # PRODUCT behavior — the gate simply waits it out).
+    # PRODUCT behavior — the gate simply waits it out). The whole
+    # per-shard span is checked, client and replication both: a
+    # foreign listener anywhere in it kills the server at bind, and an
+    # unnamed squatter cost a debugging session once (a Kotlin compile
+    # daemon's random RMI port landed on 17393 and availgate said only
+    # "replica never came up") — so a persistent squatter fails HERE,
+    # by name.
+    local spec=""
+    for base in $PPORT $RPORT 1$PPORT 1$RPORT; do
+        for off in 0 1 2 3; do # --threads 4
+            spec="$spec -i :$((base + off))"
+        done
+    done
     for _ in $(seq 50); do
-        lsof -nP -i :$PPORT -i :$RPORT -i :1$PPORT -i :1$RPORT >/dev/null 2>&1 || return 0
+        # shellcheck disable=SC2086
+        lsof -nP $spec >/dev/null 2>&1 || return 0
         sleep 0.2
     done
+    echo "availgate: FAIL — a gate port is held by another process:"
+    # shellcheck disable=SC2086
+    lsof -nP $spec 2>/dev/null | head -5
+    exit 1
 }
 
 start_primary() {
@@ -102,7 +169,10 @@ echo "$V" | grep -q '"v"' || fail "data plane not converged (k200=$V)"
 note "lag 0 + data plane converged"
 
 # ---- clamp 5: primary-side slave0 truth — acked catches up to sent
-# within a bounded window (ACKs ride 1s heartbeats when idle).
+# within a bounded window (ACKs ride 1s heartbeats when idle). The
+# line is instance-wide: one entry per replica process, offsets summed
+# across every shard stream, port = the replica's advertised client
+# port (not a per-conn ephemeral source port).
 S0OK=0
 for _ in $(seq 20); do
     S0=$($CLI -p $PPORT INFO replication | grep "^slave0:" || true)
@@ -112,7 +182,16 @@ for _ in $(seq 20); do
     sleep 0.5
 done
 [ $S0OK = 1 ] || fail "slave0 never converged: $S0"
-note "slave0 acked truth ($S0)"
+echo "$S0" | grep -q "port=$RPORT" || fail "slave0 port is not the advertised client port: $S0"
+$CLI -p $PPORT INFO replication | grep -q "^connected_slaves:1" \
+    || fail "connected_slaves != 1 with one replica process"
+ROLEP=$($CLI -p $PPORT ROLE)
+echo "$ROLEP" | grep -q "master" || fail "primary ROLE not master: $ROLEP"
+echo "$ROLEP" | grep -q "$RPORT" || fail "primary ROLE lacks the replica's advertised port: $ROLEP"
+ROLER=$($CLI -p $RPORT ROLE)
+echo "$ROLER" | grep -q "slave" || fail "replica ROLE not slave: $ROLER"
+echo "$ROLER" | grep -qE "connected" || fail "replica ROLE link state not live: $ROLER"
+note "slave0 acked truth, advertised port + ROLE truth both sides ($S0)"
 
 # ---- clamp 4: link truth on kill + restart
 kill -9 $PPID_ 2>/dev/null; wait $PPID_ 2>/dev/null
@@ -357,4 +436,146 @@ done
 [ $REOPEN = 1 ] || fail "writes never reopened after quorum healed"
 note "quorum lease: writes reopen on heal"
 
-echo "availgate: PASS (phase 1 + 2 + 3)"
+# ============ phase 4: -LOADING during full-resync ship ==============
+# clamp 13: a replica that reconnects outside the primary's backlog
+#           receives a full snapshot ship; reads answered inside that
+#           window return -LOADING while PING stays +PONG and INFO
+#           reports loading:1. Window technique: a tiny primary
+#           backlog (64kb) + an 80MB keyspace makes the ship
+#           unavoidable and wide; the probe SIGSTOPs the primary the
+#           moment it observes the first -LOADING, freezing the
+#           window open for the deterministic asserts, then CONTs and
+#           checks recovery.
+for p in ${PIDS[@]:-}; do kill $p 2>/dev/null; done
+kill $PPID_ $RPID_ 2>/dev/null; wait 2>/dev/null
+rm -rf "$DIR/p" "$DIR/r"; mkdir -p "$DIR/p" "$DIR/r"
+wait_ports_free
+printf '[replication]\nrole = "primary"\nreplication_buffer_size = 65536\n' > "$DIR/pri4.toml"
+env KEVY_BIND=127.0.0.1 "$KBIN" --threads 4 --port $PPORT --dir "$DIR/p" --no-aof \
+    --config "$DIR/pri4.toml" > "$DIR/pri.out" 2>&1 &
+PPID_=$!
+for _ in $(seq 100); do $CLI -p $PPORT PING >/dev/null 2>&1 && break; sleep 0.2; done
+# The readiness PING proves SOMETHING answers on this port — not that it is
+# the server we just started. A previous phase's primary that has not
+# finished dying answers it happily while our own process exits on a failed
+# bind, and the next connection then gets EOF with zero replies. Check the
+# PID we actually spawned.
+kill -0 $PPID_ 2>/dev/null || fail "phase-4 primary exited during startup: $(tail -5 "$DIR/pri.out")"
+printf '[replication]\nrole = "replica"\nupstream = "127.0.0.1:%s"\n' "1$PPORT" > "$DIR/rep4.toml"
+env KEVY_BIND=127.0.0.1 "$KBIN" --threads 4 --port $RPORT --dir "$DIR/r" --no-aof \
+    --config "$DIR/rep4.toml" > "$DIR/rep.out" 2>&1 &
+RPID_=$!
+for _ in $(seq 100); do $CLI -p $RPORT PING >/dev/null 2>&1 && break; sleep 0.2; done
+sleep 2
+# Cut the replica, roll the primary far past its 64kb backlog, restart.
+kill $RPID_ 2>/dev/null; wait $RPID_ 2>/dev/null
+kill -0 $PPID_ 2>/dev/null || fail "phase-4 primary died before the seed: $(tail -5 "$DIR/pri.out")"
+python3 - "$PPORT" <<'PYEOF'
+import socket, sys
+port = int(sys.argv[1])
+s = socket.create_connection(("127.0.0.1", port)); s.settimeout(30)
+val = b"x" * 1024
+def enc(*parts):
+    buf = b"*%d\r\n" % len(parts)
+    for p in parts:
+        buf += b"$%d\r\n%s\r\n" % (len(p), p)
+    return buf
+batch = b""
+outstanding = 0
+acked = 0
+def drain(n):
+    got = 0
+    buf = b""
+    while got < n:
+        _chunk = s.recv(1 << 20)
+        if not _chunk:
+            # Report what the server said LAST, not just that it left. A
+            # protocol error, an -ERR, or a clean close after N acks are
+            # three different bugs and the bare "closed" reads the same
+            # for all of them.
+            tail = buf[-200:].replace(b"+OK\r\n", b"")
+            raise AssertionError(
+                f"server closed mid-reply after {acked + got} acked SETs; "
+                f"last non-OK bytes on the wire: {tail!r}"
+            )
+        buf += _chunk
+        got = buf.count(b"+OK\r\n")
+for i in range(80_000):
+    batch += enc(b"SET", b"big:%d" % i, val)
+    outstanding += 1
+    if outstanding == 500:
+        s.sendall(batch); drain(outstanding); acked += outstanding
+        batch = b""; outstanding = 0
+if outstanding:
+    s.sendall(batch); drain(outstanding)
+print("availgate: seeded 80k x 1KB past the 64kb backlog", flush=True)
+PYEOF
+# The seeder's exit status was unchecked, so a failed seed fell through to
+# the -LOADING probe, which then failed with "never observed -LOADING" — a
+# true statement about a keyspace that was never written, and a misleading
+# one about what actually broke.
+[ $? -eq 0 ] || fail "phase-4 seed did not complete (traceback above)"
+env KEVY_BIND=127.0.0.1 "$KBIN" --threads 4 --port $RPORT --dir "$DIR/r" --no-aof \
+    --config "$DIR/rep4.toml" > "$DIR/rep.out" 2>&1 &
+RPID_=$!
+python3 - "$RPORT" "$PPID_" <<'PYEOF' || fail "-LOADING clamp"
+import os, signal, socket, sys, time
+rport, ppid = int(sys.argv[1]), int(sys.argv[2])
+def enc(*parts):
+    buf = b"*%d\r\n" % len(parts)
+    for p in parts:
+        buf += b"$%d\r\n%s\r\n" % (len(p), p)
+    return buf
+def one(sock, *parts):
+    sock.sendall(enc(*parts))
+    time.sleep(0.002)
+    return sock.recv(1 << 16)
+deadline = time.time() + 30
+saw_loading = False
+while time.time() < deadline and not saw_loading:
+    try:
+        s = socket.create_connection(("127.0.0.1", rport), timeout=2)
+        s.settimeout(2)
+    except OSError:
+        time.sleep(0.05)
+        continue
+    try:
+        while time.time() < deadline:
+            r = one(s, b"GET", b"big:0")
+            if r.startswith(b"-LOADING"):
+                saw_loading = True
+                break
+            time.sleep(0.001)
+    except OSError:
+        continue
+assert saw_loading, "never observed -LOADING during the snapshot ship"
+# Freeze the window open: primary paused mid-ship, replica keeps the
+# loading flag until SnapshotEnd arrives.
+os.kill(ppid, signal.SIGSTOP)
+try:
+    r = one(s, b"GET", b"big:0")
+    assert r.startswith(b"-LOADING"), f"window not stable: {r!r}"
+    r = one(s, b"PING")
+    assert r == b"+PONG\r\n", f"PING gated during loading: {r!r}"
+    r = one(s, b"INFO", b"persistence")
+    assert b"loading:1" in r, f"INFO loading gauge not raised: {r[:120]!r}"
+finally:
+    os.kill(ppid, signal.SIGCONT)
+print("availgate: ok — -LOADING held, PING exempt, INFO loading:1", flush=True)
+deadline = time.time() + 60
+while time.time() < deadline:
+    try:
+        r = one(s, b"GET", b"big:0")
+    except OSError:
+        s = socket.create_connection(("127.0.0.1", rport), timeout=2)
+        s.settimeout(2)
+        continue
+    if r.startswith(b"$1024"):
+        print("availgate: ok — reads recovered after the ship completed", flush=True)
+        sys.exit(0)
+    time.sleep(0.1)
+raise SystemExit("reads never recovered after SIGCONT")
+PYEOF
+note "-LOADING contract holds across the full-resync window"
+
+echo "availgate: PASS (phase 1 + 2 + 3 + 4)"

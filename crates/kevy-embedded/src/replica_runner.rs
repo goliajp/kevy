@@ -14,7 +14,7 @@
 //! double-apply (the next handshake resumes from the last applied
 //! offset, and on a gap the primary ships a snapshot).
 //!
-//! v1.20 scope: single-URL upstream = single primary shard. Multi-shard
+//! Scope: single-URL upstream = single primary shard. Multi-shard
 //! mirroring (N URLs, one runner per shard) is a follow-up.
 
 use std::net::{Shutdown, TcpStream};
@@ -54,8 +54,8 @@ pub(crate) struct ReplicaRunner {
     join: Mutex<Option<JoinHandle<()>>>,
     /// Last applied frame offset + 1 (== expected next offset). Read
     /// by `INFO replication` / `kevy_metric::ReplicationLag` follow-ups.
-    /// Allow-dead-code until T2.8 e2e wires the reader through the
-    /// public `Store` API.
+    /// Allow-dead-code until an e2e consumer wires the reader through
+    /// the public `Store` API.
     #[allow(dead_code)]
     pub(crate) applied_offset: Arc<AtomicU64>,
     /// `true` while the runner is connected + post-handshake. Drops to
@@ -194,32 +194,25 @@ fn run_loop(
     backoff_max: Duration,
 ) {
     let mut backoff = backoff_min;
+    // Feed generation the locally-applied data reflects (0 = nothing
+    // applied yet). Presented in the handshake so the primary's
+    // generation fence can tell a safe offset resume from an aliasing
+    // one. Deliberately NOT reset by `set_upstream`: the local
+    // keyspace still holds the old history, and saying so makes the
+    // new primary ship a snapshot instead of trusting the offset.
+    let mut data_gen: u64 = 0;
     while !stop.load(Ordering::Relaxed) {
         // A `set_upstream` arriving between connect attempts triggers
         // an immediate try with the new URL; clear the flag here so a
         // failed connect re-arms the backoff normally.
         force_reconnect.store(false, Ordering::Relaxed);
-        let from_offset = applied_offset.load(Ordering::Relaxed);
-        let target = upstream
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        match ReplicaClient::connect(&target, &replica_id, from_offset) {
+        match dial(&upstream, &replica_id, data_gen, &applied_offset) {
             Ok(mut client) => {
-                if let Ok(s) = client.socket_handle() {
-                    *sock_clone
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(s);
-                }
-                link_up.store(true, Ordering::Relaxed);
                 backoff = backoff_min;
-
-                drain_session(&shards, &mut client, &stop, &applied_offset);
-
-                link_up.store(false, Ordering::Relaxed);
-                *sock_clone
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+                run_session(
+                    &shards, &mut client, &stop, &sock_clone, &link_up,
+                    &applied_offset, &mut data_gen,
+                );
             }
             Err(_) => {
                 // Sleep in small slices so a shutdown signal is acted
@@ -232,6 +225,47 @@ fn run_loop(
     }
 }
 
+/// One reconnect attempt: read the live upstream + resume cursor and
+/// handshake with the data's generation.
+fn dial(
+    upstream: &Arc<Mutex<String>>,
+    replica_id: &str,
+    data_gen: u64,
+    applied_offset: &Arc<AtomicU64>,
+) -> Result<ReplicaClient, kevy_replicate::replica::ReplicaError> {
+    let from_offset = applied_offset.load(Ordering::Relaxed);
+    let target = upstream
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    ReplicaClient::connect_at(&target, replica_id, data_gen, from_offset, Duration::from_secs(5))
+}
+
+/// One connected session: publish the socket clone + link-up flag,
+/// drain to disconnect, clear both.
+#[allow(clippy::too_many_arguments)]
+fn run_session(
+    shards: &Shards,
+    client: &mut ReplicaClient,
+    stop: &Arc<AtomicBool>,
+    sock_clone: &Arc<Mutex<Option<TcpStream>>>,
+    link_up: &Arc<AtomicBool>,
+    applied_offset: &Arc<AtomicU64>,
+    data_gen: &mut u64,
+) {
+    if let Ok(s) = client.socket_handle() {
+        *sock_clone
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(s);
+    }
+    link_up.store(true, Ordering::Relaxed);
+    drain_session(shards, client, stop, applied_offset, data_gen);
+    link_up.store(false, Ordering::Relaxed);
+    *sock_clone
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+}
+
 /// Pump one connected session's events until stop / disconnect.
 ///
 /// `snap` is the snapshot ingest accumulator: `None` outside a
@@ -239,21 +273,35 @@ fn run_loop(
 /// Snapshot ship is rare (only when the primary's backlog has rolled
 /// past the replica's `from_offset`), so we don't try to stream the
 /// chunks into the store as they arrive — collect into memory then
-/// `load_snapshot_from` once at the end. v1.20 MVP sizes
-/// (mailrs-class) make this trivially affordable.
+/// `load_snapshot_from` once at the end. Typical embed-replica
+/// keyspace sizes make this trivially affordable.
 fn drain_session(
     shards: &Shards,
     client: &mut ReplicaClient,
     stop: &Arc<AtomicBool>,
     applied_offset: &Arc<AtomicU64>,
+    data_gen: &mut u64,
 ) {
     let mut snap: Option<Vec<u8>> = None;
+    // Everything this session delivers belongs to the generation the
+    // primary advertised at handshake. Adopt it when a whole history
+    // lands: at SnapshotEnd, or immediately when the session started
+    // from offset 0 (nothing local to contradict).
+    let ack_gen = client.primary_gen_at_handshake();
+    if client.expected_offset() == 0 {
+        *data_gen = ack_gen;
+    }
     while !stop.load(Ordering::Relaxed) {
         match client.next_event() {
-            // v3.14 heartbeat: ack immediately (keeps the primary's
+            // Heartbeat: ack immediately (keeps the primary's
             // slot fresh); embedded lag view rides a later train.
-            Some(Ok(ReplicaEvent::Ping { .. })) => {
+            Some(Ok(ReplicaEvent::Ping { generation, .. })) => {
                 let _ = client.send_ack(client.expected_offset());
+                if generation != 0 && generation != ack_gen {
+                    // The primary broke continuity under us (FLUSHALL /
+                    // promotion). Re-handshake so its fence re-decides.
+                    break;
+                }
             }
             Some(Ok(ReplicaEvent::Frame(frame))) => {
                 if snap.is_some() {
@@ -267,22 +315,46 @@ fn drain_session(
                 apply_frame(shards, &frame.argv);
                 applied_offset.store(client.expected_offset(), Ordering::Relaxed);
             }
-            Some(Ok(ReplicaEvent::SnapshotBegin)) => snap = Some(begin_snapshot(shards)),
-            Some(Ok(ReplicaEvent::SnapshotChunk(bytes))) => {
-                if let Some(buf) = snap.as_mut() {
-                    buf.extend_from_slice(&bytes);
-                }
-            }
-            Some(Ok(ReplicaEvent::SnapshotEnd { ack_offset })) => {
-                if let Some(buf) = snap.take()
-                    && !finish_snapshot(shards, &buf, ack_offset, applied_offset)
-                {
+            Some(Ok(ev)) => {
+                if !snapshot_event(shards, ev, &mut snap, applied_offset, data_gen, ack_gen) {
                     break;
                 }
             }
             Some(Err(_)) | None => break,
         }
     }
+}
+
+/// The snapshot arms of [`drain_session`]. `false` = a decode error —
+/// drop the link (reconnect either resumes from the backlog or
+/// triggers another ship).
+fn snapshot_event(
+    shards: &Shards,
+    ev: ReplicaEvent,
+    snap: &mut Option<Vec<u8>>,
+    applied_offset: &Arc<AtomicU64>,
+    data_gen: &mut u64,
+    ack_gen: u64,
+) -> bool {
+    match ev {
+        ReplicaEvent::SnapshotBegin => *snap = Some(begin_snapshot(shards)),
+        ReplicaEvent::SnapshotChunk(bytes) => {
+            if let Some(buf) = snap.as_mut() {
+                buf.extend_from_slice(&bytes);
+            }
+        }
+        ReplicaEvent::SnapshotEnd { ack_offset } => {
+            if let Some(buf) = snap.take() {
+                if !finish_snapshot(shards, &buf, ack_offset, applied_offset) {
+                    return false;
+                }
+                *data_gen = ack_gen;
+            }
+        }
+        // Ping / Frame are handled by the caller's arms.
+        ReplicaEvent::Ping { .. } | ReplicaEvent::Frame(_) => {}
+    }
+    true
 }
 
 /// SnapshotBegin: the snapshot is the new ground truth — flush stale
@@ -323,7 +395,7 @@ fn apply_frame(shards: &Shards, argv: &Argv) {
     // `Store::open_replica`.
 }
 
-/// Decode an accumulated snapshot payload into shard 0. v1.20 MVP:
+/// Decode an accumulated snapshot payload into shard 0:
 /// single-URL upstream = single primary shard mirror, so the snapshot
 /// always loads into shard 0; the multi-shard upstream surface is a
 /// follow-up and will route each upstream shard's snapshot to its

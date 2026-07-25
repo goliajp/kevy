@@ -28,9 +28,16 @@
 //! ```
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+#![cfg_attr(not(feature = "std"), no_std)]
 
+#[cfg(feature = "alloc")]
+extern crate alloc;
+
+#[cfg(feature = "alloc")]
+use alloc::vec::Vec;
+#[cfg(feature = "std")]
 use std::collections::{HashMap, HashSet};
-use std::hash::{BuildHasherDefault, Hasher};
+use core::hash::{BuildHasherDefault, Hasher};
 
 mod crc16;
 pub use crc16::{crc16, key_hash_slot};
@@ -230,6 +237,7 @@ impl KevyHash for [u8] {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl KevyHash for Vec<u8> {
     #[inline]
     fn kevy_hash(&self) -> u64 {
@@ -268,9 +276,11 @@ impl KevyHash for usize {
 }
 
 /// A [`HashMap`] using [`FxHasher`] instead of SipHash.
+#[cfg(feature = "std")]
 pub type FxHashMap<K, V> = HashMap<K, V, FxBuildHasher>;
 
 /// A [`HashSet`] using [`FxHasher`] instead of SipHash.
+#[cfg(feature = "std")]
 pub type FxHashSet<T> = HashSet<T, FxBuildHasher>;
 
 #[cfg(test)]

@@ -1,5 +1,4 @@
-//! kevy-index — declarative secondary indexes over prefix domains
-//! (RFC 2026-07-04, LOCKED).
+//! kevy-index — declarative secondary indexes over prefix domains.
 //!
 //! Pure logic crate: [`Catalog`] holds the index declarations and a
 //! compiled prefix matcher; [`Segment`] holds one shard's slice of one
@@ -17,15 +16,35 @@
 
 mod agg;
 mod catalog;
+mod catalog_sidecar;
+mod composite;
+mod rowvalues;
 mod segment;
+mod segment_claused;
+mod table;
+mod table_wire;
 mod value;
 mod view;
 mod view_sidecar;
 
 pub use agg::{AggBy, AggSegment, AggStats, GroupStats, merge_group, sort_groups};
-pub use catalog::{AnnSpec, Catalog, IndexKind, IndexSpec, IndexState, ValType};
+pub use catalog::{
+    AnnSpec, Catalog, FieldSpec, IndexKind, IndexSpec, IndexState, RowInputs, ValType, ValueSpec,
+};
+pub use composite::{
+    CompositeCol, MAX_COMPOSITE_COLS, MAX_STR_COMPONENT, WHERE_NOT_COMPOSITE, WhereClause,
+    composite_bounds, composite_encode, parse_where,
+};
 pub use segment::{Cursor, Segment, SegmentStats};
-pub use value::IndexValue;
+pub use segment_claused::{
+    ClausedPage, FacetBucket, ScalarClauses, ScalarHit, fold_facets, merge_claused,
+    scalar_sorted_order, sort_facets,
+};
+pub use table::{
+    MAX_TABLES, OrderPath, TableCatalog, TableIndex, TableSpec, compile_table,
+};
+pub use table_wire::{TABLE_DECLARE_USAGE, parse_table_declare};
+pub use value::{IndexValue, ValueTest, order_key};
 pub use view::{
     Leaf, MAX_TREE_DEPTH, MAX_TREE_LEAVES, MAX_VIEWS, MaterializedSet, Tree, ViewCatalog,
     ViewMode, ViewSpec, eval_tree, key_in_tree, key_in_tree_vals,

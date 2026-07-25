@@ -57,12 +57,13 @@ fn slowlog_len(c: &mut std::net::TcpStream) -> i64 {
 
 #[test]
 fn hot_reload_takes_effect_within_one_tick() {
-    // Install config_global with slowlog OFF (slower_than = -1).
+    // Build the runtime state with slowlog OFF (slower_than = -1).
     let mut cfg = kevy_config::Config::default();
     cfg.slowlog.slower_than_micros = -1;
     cfg.slowlog.max_len = 128;
-    kevy::config_init(Arc::new(cfg.clone()));
-    let _ = kevy::config_replace(Arc::new(cfg));
+    let state = Arc::new(
+        kevy::RuntimeState::new(Arc::new(cfg), std::path::PathBuf::new(), 1).unwrap(),
+    );
 
     let port = free_port();
     let dir = std::env::temp_dir().join(format!(
@@ -76,12 +77,13 @@ fn hot_reload_takes_effect_within_one_tick() {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_thread = stop.clone();
     let dir_thread = dir.clone();
+    let state_thread = Arc::clone(&state);
     let handle = std::thread::spawn(move || {
         // Runtime builder gets a "default" 10_000-µs threshold, but the
         // live_runtime_config tick path overrides it on the first tick
-        // with whatever config_global currently holds — we set it to
+        // with whatever the shared state currently holds — we set it to
         // -1 above, so the runtime ends up OFF.
-        let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, 1, kevy::KevyCommands)
+        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::with_state(state_thread)).bind([127, 0, 0, 1], port).shards(1)
             .with_data_dir(dir_thread)
             .with_aof(false);
         rt.run(stop_thread).unwrap();
@@ -110,7 +112,7 @@ fn hot_reload_takes_effect_within_one_tick() {
     let mut cfg2 = kevy_config::Config::default();
     cfg2.slowlog.slower_than_micros = 0;
     cfg2.slowlog.max_len = 128;
-    kevy::config_replace(Arc::new(cfg2)).expect("replace");
+    state.config_replace(Arc::new(cfg2));
     // Wait long enough for `apply_live_runtime_config` to pick up the
     // new threshold (≥ one tick interval = 100 ms; 500 ms is the same
     // safety margin keyspace_notify.rs uses).

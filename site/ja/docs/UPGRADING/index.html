@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kevyのアップグレード — kevy</title>
+<meta name="description" content="章は2つ、新しいものから。3.x → 4.0（APIの定義に関するメジャー。クライアントワイヤはそのまま、ディスクは無変更で開いて最初のリライトでフォーマットが昇格し、Rustの顔は一度だけ変わって、以後は凍結されます）と、2.x → 3.x（能力のメジャー。すべてが引き継がれました）です。各章は、何が自動でアップグレードされ、何にコード変更が要り、そしてど">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../ja/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../../ja/docs/" aria-current="page">ドキュメント</a>
+      <a href="../../../ja/docs/commands/">コマンド</a>
+      <a href="../../../ja/benchmarks/">ベンチマーク</a>
+      <a href="../../../ja/play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../../ja/docs/search-index.json" data-root="../../../ja/">
+        <input type="search" placeholder="ドキュメントを検索……" aria-label="ドキュメントを検索……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../../docs/UPGRADING/">EN</a><a href="../../../zh/docs/UPGRADING/">中文</a><a href="../../../ja/docs/UPGRADING/" aria-current="page">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell has-toc">
+  <aside class="side"><p class="side-h">はじめに</p><ul><li><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a></li><li><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a></li><li><a href="../../../ja/docs/persistence/">永続化</a></li><li><a href="../../../ja/docs/tuning/">kevyのチューニング</a></li></ul><p class="side-h">運用</p><ul><li><a href="../../../ja/docs/replication/">レプリケーション</a></li><li><a href="../../../ja/docs/availability/">可用性</a></li><li><a href="../../../ja/docs/cluster/">クラスタ</a></li><li><a href="../../../ja/docs/tiering/">透過的ティアリング（[tiering] / with_tier_budget）</a></li><li><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a></li><li><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a></li><li><a href="../../../ja/docs/async/">非同期クライアント</a></li></ul><p class="side-h">データ</p><ul><li><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX. / idx_）</a></li><li><a href="../../../ja/docs/tables/">テーブル（TABLE. / table_）</a></li><li><a href="../../../ja/docs/vector-search/">ベクトル検索（KIND ann）</a></li><li><a href="../../../ja/docs/text-search/">全文検索（KIND text）</a></li><li><a href="../../../ja/docs/views/">ビュー（VIEW. / view_）</a></li><li><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED. / changes_since）</a></li><li><a href="../../../ja/docs/pubsub/">Pub/sub</a></li><li><a href="../../../ja/docs/lua/">Luaスクリプティング</a></li></ul><p class="side-h">組み込み</p><ul><li><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a></li><li><a href="../../../ja/docs/embedded-listener/">組み込みの読み取り専用RESPリスナー</a></li><li><a href="../../../ja/docs/iot/">IoTデバイス上のkevy</a></li></ul><p class="side-h">リファレンス</p><ul><li><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a></li><li><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a></li><li><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></li><li><a href="../../../ja/docs/UPGRADING/" aria-current="page">kevyのアップグレード</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../ja/docs/commands/">188 コマンド全て</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>kevyのアップグレード</h1></div>
+<p>章は2つ、新しいものから。<b>3.x → 4.0</b>（APIの定義に関するメジャー。クライアントワイヤはそのまま、ディスクは無変更で開いて最初のリライトでフォーマットが昇格し、Rustの顔は一度だけ変わって、以後は凍結されます）と、<b>2.x → 3.x</b>（能力のメジャー。すべてが引き継がれました）です。各章は、何が自動でアップグレードされ、何にコード変更が要り、そしてどう戻すのかを明示します。</p>
+<hr>
+<h1 id="3x-40">3.x → 4.0</h1>
+<p>4.0は「産業運用に耐える」という宣言です。semverのメジャーは意図的に使いました——長年たまってきた公開APIの負債をすべて払うための、1回きりの破壊の窓です。そしてこれ以降、各面は<b>凍結されます</b>。以後の4.xリリースは追加のみです。ワイヤ越しにkevyと話しているなら、4.0はバイナリの差し替えです。kevyのcrateをリンクしているなら、短く機械的な移行を見込んでください——以下の変更にはどれも、1行のルールがあります。</p>
+<h2 id="tldr-バージョンの一覧">TL;DR —— バージョンの一覧</h2>
+<div class="tbl"><table><thead><tr><th>コンポーネント</th><th>3.x時代</th><th>4.0</th><th>やること</th></tr></thead><tbody><tr><td><code>kevy</code>（サーバー）</td><td>3.18.x</td><td>4.0.0</td><td>バイナリを差し替え、同じデータディレクトリで再起動する</td></tr><tr><td><code>kevy-embedded</code></td><td>3.18.x</td><td>4.0.0</td><td>バージョンを上げ、下のAPI表を適用する</td></tr><tr><td><code>kevy-client</code></td><td><b>1.14.x</b></td><td><b>4.0.0</b></td><td>バージョンを上げる —— バージョンラインの統一（<code>kevy-embedded</code>が3.0.0でやったのと同じ動き）+ API表</td></tr><tr><td><code>kevy-client-async</code></td><td><b>1.1.x</b></td><td><b>4.0.0</b></td><td>同上</td></tr><tr><td><code>kevy-wasm</code> / <code>@goliajp/kevy</code>（npm）</td><td>—</td><td>4.0.0</td><td>4.0での新顔 —— <a href="../wasm/">docs/wasm.md</a></td></tr><tr><td>インフラcrate（<code>kevy-store</code>、<code>kevy-rt</code>、…）</td><td>3.18.x</td><td>4.0.0</td><td>ワークスペースのバージョンに追従する</td></tr></tbody></table></div>
+<h2 id="自動で互換なもの">自動で互換なもの</h2>
+<p><b>ワイヤプロトコル。</b> RESPは変わっておらず、verbのエイリアス（<code>SLAVEOF</code>、<code>HMSET</code>、…）もすべて保たれています。Redisのクライアント、スクリプト、<code>redis-cli</code>のセッションは以前どおり動きます。valkey 9.1に対する応答パリティのスイートは、今もCIのゲートです。</p>
+<p><b>レプリケーションワイヤ（kevy ↔ kevy）——ひとつのクリーンな断絶。</b> 内部のレプリケーションハンドシェイクはfeed generationを運ぶようになりました（<code>REPLICATE FROM &lt;gen&gt; &lt;offset&gt; ID &lt;id&gt;</code> / <code>+ACK &lt;gen&gt; &lt;offset&gt;</code>）——プライマリのuncleanな再起動をまたいでもoffset再開要求を安全にする、あのフェンスです。4.0のレプリカは3.xのプライマリとハンドシェイクできず、逆も同様です。レプリケーションペアの両端は同じ窓で揃えて上げてください（レプリカが先、プライマリが後、がダウンタイム最小の順——新しいプライマリが上がるとレプリカは再接続してフル同期します）。これはkevyの内部プロトコルだけの話で、Redisクライアントに面するものは何も変わっていません。</p>
+<p><b>スナップショットとAOF。</b> 4.0のバイナリは、3.x（および2.x）のスナップショット形式をすべて読み、3.xのAOFを変更なしにリプレイします——3.xのデータディレクトリは移行作業ゼロで開きます。4.0で新しいのはAOFの*レコードフォーマット*（<code>KEVYAOF2</code>：長さ接頭辞 + CRC32Cチェックサム付きレコード——<a href="../persistence/">persistence.md</a>参照）で、昇格はファイル単位で遅延的、かつ一方向です：</p>
+<ul><li>既存の3.x（<code>KEVYAOF1</code>）ファイルへの追記はv1のまま——バイナリを替えた初日、ファイルは3.18とバイト互換で、ダウングレードはまだバイナリを戻すだけです。</li><li>新しいファイルと、<b>最初のリライト</b>（自動リライトまたは<code>BGREWRITEAOF</code>）の出力はv2——3.xには読めません。最初のリライト以降、同じデータディレクトリで3.18へ戻る道はありません（クライアント経由でキー空間をリプレイし直す以外には）。</li></ul>
+<p>カナリア期間中に3.18への退路を残したいなら：期間中は自動リライトを止め（<code>auto_aof_rewrite_percentage = 0</code>）、先にスナップショットのバックアップを取ってください。カナリアが定着したら戻すこと——CRCの保護はファイルがv2になって初めて効き始めるので、この状態をカナリアに必要な時間より長く続けないでください。</p>
+<p><b>Config。</b> 3.xのconfigキーはすべて受け入れられ、意味も同じです。2つのキーだけ、*より厳格に、あるいはより誠実に*なりました——下の「振る舞いの変更」を参照してください（<code>notify_keyspace_events</code>の未知フラグの拒否、<code>min_replicas_max_lag_ms</code>の強制）。</p>
+<p><b>削除されたノブが1つ。</b> スナップショット/AOFの*ファイル名*のカスタマイズはなくなりました（<code>kevy-embedded</code>の<code>Config::with_snapshot_filename</code> / <code>with_aof_filename</code>ビルダー）。オンディスクのレイアウトは、シャードごとに<code>dump-{i}.rdb</code> / <code>aof-{i}.aof</code>で固定になりました。デフォルト名で書かれていたディレクトリは——レガシーな単一ファイルのディレクトリも含めて——そのままロードされます。*カスタム*名で書かれたディレクトリだけ、4.0で最初に開く前に、固定の名前へ一度<code>mv</code>する必要があります。</p>
+<h2 id="apiの破壊一覧">APIの破壊一覧</h2>
+<p>この節にあるものはすべて、コンパイル時の破壊であり、機械的な修正があります。明示した箇所を除いて、実行時のセマンティクスは変わりません。</p>
+<h3 id="1-flushのshimを削除">1. <code>flush()</code>のshimを削除</h3>
+<p>非推奨だったエイリアスはなくなりました。生き残った名前は、自分がやること（ストアを<b>消し飛ばす</b>こと）を名乗ります。</p>
+<div class="tbl"><table><thead><tr><th>Crate</th><th>削除</th><th>代わりに呼ぶもの</th></tr></thead><tbody><tr><td><code>kevy-embedded</code></td><td><code>Store::flush()</code></td><td><code>Store::flushall()</code></td></tr><tr><td><code>kevy-client</code></td><td><code>Connection::flush()</code></td><td><code>Connection::flushall()</code></td></tr><tr><td><code>kevy-store</code></td><td><code>Store::flush()</code></td><td><code>Store::flushall()</code></td></tr></tbody></table></div>
+<h3 id="2-エラーの通貨を1つにkevyerror">2. エラーの通貨を1つに：<code>KevyError</code></h3>
+<p><code>kevy-embedded</code>と<code>kevy-client</code>の、失敗しうる公開の面はすべて、<code>io::Result&lt;T&gt;</code>ではなく<code>KevyResult&lt;T&gt;</code>（<code>Result&lt;T, KevyError&gt;</code>）を返すようになりました。この型は<code>kevy-store</code>に住み、両方のcrateが再エクスポートしています。</p>
+<figure class="code"><pre><code class="lang-rust">pub enum KevyError {
+    Store(StoreError),      // structured engine errors, no longer
+                            // flattened into io::Error strings
+    Io(std::io::Error),     // real I/O, preserved via From
+    Protocol(String),       // server error replies, wire text intact
+    ReadOnly,               // replica write rejection
+    InvalidInput(String),   // e.g. URL parse errors
+    NotFound(String),
+    Unsupported(String),    // e.g. remote-only calls on embedded
+    TimedOut,               // e.g. Subscription::recv_timeout
+    Closed,                 // stream/bus gone; also terminates
+                            // subscriber iterators
+}</code></pre></figure>
+<p>移行はたいてい、戻り値型の注釈を書き換えるだけです——<code>From&lt;io::Error&gt;</code>と<code>From&lt;StoreError&gt;</code>があるので、<code>?</code>はそのまま動き続けます。</p>
+<figure class="code"><pre><code class="lang-rust">// 3.x
+fn warm(conn: &amp;mut Connection) -&gt; std::io::Result&lt;()&gt; {
+    conn.set(b"greeting", b"hello")?;
+    Ok(())
+}
+
+// 4.0
+use kevy_client::{Connection, KevyResult};
+
+fn warm(conn: &amp;mut Connection) -&gt; KevyResult&lt;()&gt; {
+    conn.set(b"greeting", b"hello")?;
+    Ok(())
+}</code></pre></figure>
+<p>エラーを*検査していた*コードは、厳密に得をします——文字列をパースするのではなく、バリアントにマッチさせてください。</p>
+<div class="tbl"><table><thead><tr><th>3.xでのシグナル</th><th>4.0</th></tr></thead><tbody><tr><td><code>io::Error::other("kevy-store: …")</code>のラッパーテキスト</td><td><code>KevyError::Store(e)</code> —— 構造化された<code>StoreError</code></td></tr><tr><td>レプリカの書き込み拒否：<code>io::Error::other("READONLY …")</code></td><td><code>KevyError::ReadOnly</code>（その<code>Display</code>は今も<code>READONLY</code>で始まります）</td></tr><tr><td>サーバーの<code>-ERR …</code>応答が、不透明な<code>io::Error</code>として</td><td><code>KevyError::Protocol(text)</code> —— ワイヤのテキストは保存されます</td></tr><tr><td><code>Subscription::recv_timeout</code>からの<code>ErrorKind::TimedOut</code></td><td><code>KevyError::TimedOut</code></td></tr><tr><td>購読ストリームの消失シグナルとしての<code>ErrorKind::UnexpectedEof</code></td><td><code>KevyError::Closed</code>。<code>SubscriberEvents</code> / <code>SubscriberMessages</code>のイテレータは<code>KevyResult&lt;_&gt;</code>を返し、これで終端します</td></tr><tr><td>リモート専用機能に対する<code>ErrorKind::Unsupported</code></td><td><code>KevyError::Unsupported(msg)</code></td></tr></tbody></table></div>
+<p><code>From&lt;KevyError&gt; for io::Error</code>は意図的に<b>存在しません</b>。その逆向きの辺は、この変更が取り除いた損失つきのダウングレードを復活させてしまうからです。本当に<code>io::Error</code>が必要な境界では、明示的に変換して、その損失を自分で引き受けてください。</p>
+<p>（<code>kevy-resp-client</code>は意図的に<code>io::Result</code>の顔を保っています——純粋なトランスポートの石であり、<code>io::Error</code>こそがその誠実な通貨だからです。）</p>
+<h3 id="3-コンストラクタの命名リソースはopenネットワークはconnect">3. コンストラクタの命名：リソースは<code>open</code>、ネットワークは<code>connect</code></h3>
+<p>種類ごとに1つのverbを、どこでも。ローカルの、ファイルに裏打ちされたものは<code>open</code>。ピアを持つものは<code>connect</code>。純粋にメモリ上の値は<code>new</code>。改名は次のとおりです。</p>
+<div class="tbl"><table><thead><tr><th>Crate</th><th>3.x</th><th>4.0</th></tr></thead><tbody><tr><td><code>kevy-client</code></td><td><code>Connection::open(url)</code></td><td><code>Connection::connect(url)</code></td></tr><tr><td><code>kevy-client</code></td><td><code>Subscriber::open(url, channels)</code></td><td><code>Subscriber::connect_channels(url, channels)</code></td></tr><tr><td><code>kevy-client-async</code></td><td><code>AsyncConnection::open(url)</code></td><td><code>AsyncConnection::connect(url)</code></td></tr><tr><td><code>kevy-client-async</code></td><td><code>AsyncSubscriber::open(url, channels)</code></td><td><code>AsyncSubscriber::connect_channels(url, channels)</code></td></tr><tr><td><code>kevy-resp-client</code></td><td><code>RespClient::from_url(url)</code></td><td><code>RespClient::connect_url(url)</code></td></tr></tbody></table></div>
+<p>すでに準拠していて変更がないもの：<code>kevy_embedded::Store::open</code>、<code>kevy_persist::Aof::open</code>、<code>kevy_store::Store::new</code>、<code>ClusterClient::connect</code>、<code>RwClient::connect</code>、<code>Subscriber::connect(url)</code>、<code>RespClient::connect(host, port)</code>。</p>
+<h3 id="4-kevy-rtruntimeは位置引数ではなくビルダーで組む">4. <code>kevy_rt::Runtime</code>は、位置引数ではなくビルダーで組む</h3>
+<p>位置引数のコンストラクタはなくなりました。<code>Runtime</code>は自分自身のビルダーです。</p>
+<figure class="code"><pre><code class="lang-rust">// 3.x
+let rt = Runtime::new([127, 0, 0, 1], 6004, 4, commands);
+
+// 4.0
+let rt = Runtime::builder(commands)
+    .bind([127, 0, 0, 1], 6004)
+    .shards(4);</code></pre></figure>
+<p><code>builder(commands)</code>のデフォルトは、bindが<code>127.0.0.1:6004</code>、シャード1つ、AOFはオン（<code>EverySec</code>）、データディレクトリは<code>"."</code>です。<code>bind</code> / <code>shards</code>は、既存の<code>with_*</code>チェーンと同じく<code>#[must_use]</code>のセッターです。これは4.0のインスタンス化作業の、目に見える顔でもあります。<code>Runtime</code>はもうグローバル状態に触れないため、1つのプロセスで複数の独立したkevyインスタンスを走らせられます。</p>
+<h3 id="5-kevy-storeの書き込みは借用したargvを取る">5. <code>kevy-store</code>の書き込みは、借用したargvを取る</h3>
+<p>所有権を渡す形式は削除され、借用する形式（以前の<code>_borrowed</code>の双子）が正規の名前を引き継ぎました。</p>
+<div class="tbl"><table><thead><tr><th>3.x（所有）</th><th>4.0（借用、同じ名前）</th></tr></thead><tbody><tr><td><code>del(&amp;[Vec&lt;u8&gt;])</code> / <code>exists(&amp;[Vec&lt;u8&gt;])</code></td><td><code>del(&amp;[&amp;[u8]])</code> / <code>exists(&amp;[&amp;[u8]])</code></td></tr><tr><td><code>hset(&amp;[(Vec&lt;u8&gt;, Vec&lt;u8&gt;)])</code> / <code>hdel(&amp;[Vec&lt;u8&gt;])</code> / <code>hmget(&amp;[Vec&lt;u8&gt;])</code></td><td><code>hset(&amp;[(&amp;[u8], &amp;[u8])])</code> / <code>hdel(&amp;[&amp;[u8]])</code> / <code>hmget(&amp;[&amp;[u8]])</code></td></tr><tr><td><code>sadd</code> / <code>srem</code> / <code>lpush</code> / <code>rpush</code> / <code>zrem</code> <code>(&amp;[Vec&lt;u8&gt;])</code></td><td>名前は同じで、<code>(&amp;[&amp;[u8]])</code></td></tr><tr><td><code>zadd(&amp;[(f64, Vec&lt;u8&gt;)])</code></td><td><code>zadd(&amp;[(f64, &amp;[u8])])</code></td></tr><tr><td><code>zadd_flags_borrowed(…)</code></td><td><code>zadd_flags(…)</code>に改名</td></tr></tbody></table></div>
+<figure class="code"><pre><code class="lang-rust">// 3.x
+store.del(&amp;[b"k1".to_vec(), b"k2".to_vec()]);
+
+// 4.0 — pass slices; no allocation
+store.del(&amp;[b"k1".as_slice(), b"k2".as_slice()]);</code></pre></figure>
+<p>これはAPI変更の衣を着た性能修正です。<code>kevy-embedded</code>のファサードは借用したargvをそのまま素通しするようになり、組み込みのすべての書き込みパスにあった、呼び出しごとの<code>to_vec()</code>コピーが消えました。</p>
+<h3 id="6-commandsトレイト-route独自コマンドセットを持つ組み込み側">6. <code>Commands</code>トレイト + <code>Route</code>（独自コマンドセットを持つ組み込み側）</h3>
+<p>自分で<code>impl kevy_rt::Commands</code>を書いている場合にだけ関係します。</p>
+<ul><li><code>dispatch_resp3</code>（Vecを返す形式）を削除 —— <code>dispatch_into_resp3</code>をオーバーライドしてください。</li><li><code>wake_idx</code>メソッドを削除 —— 自分の<code>resolve()</code>の中で<code>ResolvedCmd::wake_idx</code>を埋めてください。フィールド自体は変わっていません。</li><li><code>extension_reduce_v3</code>と、古い2引数の<code>extension_reduce</code>を<code>extension_reduce(argv, chunks, proto) -&gt; ExtensionReduced</code>に統合。<code>ExtensionReduced::Reply(bytes)</code>を返すか、古いNUL接頭のin-band継続フレームの代わりに<code>ExtensionReduced::Continue(argv2)</code>を返してください。</li><li><code>Route::{MGet, SInter, SUnion, SDiff, ZInterCard}</code>を<code>Route::Gather(MultiOp)</code>に、<code>Route::{Keys, Scan, RandomKey}</code>を<code>Route::Keyspace(KeyShape, Option&lt;Vec&lt;u8&gt;&gt;)</code>に畳み込み。<code>MultiOp</code>と<code>KeyShape</code>は新たにpublicになりました。</li><li><code>Commands::on_replication_view</code>のreplicasエントリが<code>(String, Ipv4Addr, u16, u64, Option&lt;ReplicaAck&gt;)</code>になりました —— 先頭にレプリカidの<code>String</code>、続いてピアの<code>(Ipv4Addr, u16)</code>、送信済みオフセット、そして<code>ReplicaAck { acked_offset, ack_age_ms }</code>（素のackされたオフセットを置き換えます）です。分解して受けてください。</li></ul>
+<h2 id="振る舞いの変更コード変更は不要運用からは見える">振る舞いの変更（コード変更は不要、運用からは見える）</h2>
+<ul><li><b><code>-LOADING</code>が本物になりました。</b> レプリカがフル再同期のスナップショットを飲み込んでいるあいだ、読み出しは、半分だけ置き換わったデータセットを返すのではなく<code>-LOADING</code>を返します。<code>PING</code>、<code>INFO</code>、<code>HELLO</code>は答えられるままです（ヘルスチェックは動き続けます）。Redisが免除しているverbと一致します。Redis向けに書かれた「<code>-LOADING</code>ならリトライ」のループは、そのまま正しく動きます。</li><li><b><code>notify_keyspace_events</code>が未知のフラグ文字を拒否します。</b> 黙って無視するのではなく、configのパース時に拒否するようになりました——そしてフラグ集合には、本物の<code>x</code>（expired）、<code>e</code>（evicted）、<code>n</code>（new-key）イベントが加わりました。これまでタイポを紛れ込ませていたconfigは、これからは大きな音を立てて失敗します。フラグ文字列を直してください。</li><li><b><code>min-replicas-to-write</code>は、生きたACKだけを数えます。</b> <code>min_replicas_max_lag_ms</code>というキーは3.xにも存在しましたが、いまや強制されます。最後のACKが窓より古いレプリカは、書き込みゲートを満たさなくなりました。*停滞した*レプリカに頼って書き込みを流し続けていたデプロイには<code>-NOREPLICAS</code>が見えるようになります——それこそが、このキーがずっと約束していたセマンティクスです。</li><li><b><code>CLIENT</code>の面が真実を語ります。</b> <code>CLIENT LIST</code>は本物のコネクションテーブルであり（getpeernameに裏打ちされたアドレス、グローバルに一意なid）、<code>CLIENT KILL</code>は本当にkillし（ブロック中のコネクションも含めて）、<code>CLIENT SETNAME</code>は定着し、<code>INFO</code>の<code>connected_clients</code>は生きたゲージです。</li><li><b><code>SHUTDOWN</code>は行儀よくdrainします。</b> 処理中の応答を出し切り、終了前にAOFが最後のfsyncを受けます。素のSIGTERMがsyncされないまま残していた、everysecのテール窓が閉じます。</li><li><b><code>ROLE</code> / <code>INFO replication</code>がシャードをまたいで集約します。</b> レプリカごとの識別情報つきです（<code>ip:port</code>と、レプリカごとの真のオフセット）。サーバーごとに要約行が1つ、と仮定していたパーサはそのまま動きます。レプリカごとの行が、より豊かになります。</li></ul>
+<h2 id="フィーチャシステム40での新顔">フィーチャシステム（4.0での新顔）</h2>
+<p><code>kevy-embedded</code>はフィーチャで階層化され、小さなターゲットが使う分だけを支払うようになりました。デフォルトは今までどおり全部入りです。</p>
+<div class="tbl"><table><thead><tr><th>フィーチャ</th><th>何が加わるか</th><th>引き込むもの</th></tr></thead><tbody><tr><td><code>core</code></td><td>KV + TTL + pubsub + atomic/pipeline</td><td>（なし）</td></tr><tr><td><code>persist</code></td><td>スナップショット + AOF</td><td><code>kevy-persist</code></td></tr><tr><td><code>index</code></td><td>宣言型インデックス + ビュー</td><td><code>kevy-index</code></td></tr><tr><td><code>text</code></td><td>全文（BM25）のセグメント</td><td><code>index</code>、<code>kevy-text</code></td></tr><tr><td><code>vector</code></td><td>HNSWのANNセグメント</td><td><code>index</code>、<code>kevy-vector</code></td></tr><tr><td><code>replicate</code></td><td>レプリケーション + CDCフィード</td><td><code>persist</code>、<code>kevy-replicate</code></td></tr><tr><td><code>listener</code></td><td>読み取り専用のRESPリスナー</td><td>（なし）</td></tr></tbody></table></div>
+<p><code>core</code>階層はmuslターゲット向けにクロスコンパイルでき、強制された予算を持ちます（バイナリ700 KB以下、空ストアのRSS 2 MB以下）。加えて、5つの基盤crateは<code>no_std</code>でもビルドされます。<a href="../iot/">docs/iot.md</a>を参照してください。サイズのスペクトルの反対側では、その同じ組み込みコアが<code>@goliajp/kevy</code>としてブラウザ上でも走ります——<a href="../wasm/">docs/wasm.md</a>を参照してください。</p>
+<h2 id="40-318のダウングレード">4.0 → 3.18のダウングレード</h2>
+<p>バイナリを戻すだけです。スナップショットとAOFの形式は共有されています。唯一の縁は、新しい通知フラグ（<code>x</code>/<code>e</code>/<code>n</code>）を使っているconfigファイルです。3.18でもパースは通りますが、そこでイベントが発火することはありません。</p>
+<hr>
+<h1 id="2x-3x">2.x → 3.x</h1>
+<p>kevy 3.xは2.xのスーパーセットです。2.xのワークロードはすべてそのまま動き、アップグレードはサーバーならバイナリの差し替え、組み込みユーザーなら依存のバージョン上げです。この章は、何が自動で引き継がれ、何が名前や数字を変え、そしてどの方向にだけ注意が要るのか（2.xへのダウングレード）を明示します。</p>
+<h2 id="tldr-バージョンの一覧">TL;DR —— バージョンの一覧</h2>
+<div class="tbl"><table><thead><tr><th>コンポーネント</th><th>2.x時代</th><th>3.x（最終：3.18.x）</th><th>やること</th></tr></thead><tbody><tr><td><code>kevy</code>（サーバー）</td><td>2.0.x</td><td>3.18.x</td><td>バイナリを差し替え、同じデータディレクトリで再起動する</td></tr><tr><td><code>kevy-embedded</code></td><td><b>1.x</b>（1.4〜1.16）</td><td><b>3.x</b></td><td>依存を上げる —— ワークスペース全体が1つのバージョンに統一されたv3.0.0で、1.xのラインは終わりました</td></tr><tr><td><code>kevy-client</code></td><td>1.12.x</td><td>1.13〜1.14</td><td>上げるだけ。APIは不変</td></tr><tr><td><code>kevy-client-async</code></td><td>1.0.x</td><td>1.1.x</td><td>上げるだけ。APIは不変</td></tr><tr><td><code>kevy-cli</code></td><td>未公開</td><td>3.x</td><td><code>cargo install kevy-cli</code> —— 移行ツールチェーン一式を運ぶようになりました</td></tr><tr><td>インフラcrate（<code>kevy-store</code>、<code>kevy-rt</code>、…）</td><td>2.0.x</td><td>3.x</td><td>ワークスペースのバージョンに追従する</td></tr></tbody></table></div>
+<p><code>kevy-embedded</code>の1.xから3.xへの跳躍は、<b>バージョンラインの統一であって、APIの書き直しではありません</b>。1.16の面は3.xに含まれています。<code>Cargo.toml</code>に<code>kevy-embedded = "1"</code>と書いてあるなら<code>"3"</code>に変えて再ビルドしてください——あるいは、上の章とともに一気に<code>"4"</code>へ進んでください。</p>
+<h2 id="自動で互換なもの">自動で互換なもの</h2>
+<p><b>ワイヤプロトコル。</b> RESPは変わっていません。3.xも、CIでvalkey 9.1に対してバイト単位の応答チェックを受け続けています（98コマンド）。既存のRedisクライアント、スクリプト、<code>redis-cli</code>のセッションは以前どおり動きます。</p>
+<p><b>スナップショット。</b> 3.xのローダは、2.xのスナップショット形式をすべて読みます（<code>KEVYSNAP</code>のバージョン2〜5：相対TTLのv2ファイル、絶対TTLのv3、ストリームグループのv4、フィードカーソルのv5）。3.xのサーバーを2.xのデータディレクトリに向ければ、ロードされます。</p>
+<p><b>AOF。</b> AOFはverbのログであり、3.xのverb集合は2.xのスーパーセットです——リプレイはそのまま動きます。<code>appendfsync</code>のセマンティクスも変わりません。</p>
+<p><b>Config。</b> 2.xのconfigキーはすべて受け入れられます。新しいセクション（<code>[replication] single_source</code>、<code>--accept-shards</code>、…）は追加的であり、デフォルトは2.xの振る舞いを再現します。</p>
+<h2 id="アップグレードの手順">アップグレードの手順</h2>
+<h3 id="サーバーのデプロイ">サーバーのデプロイ</h3>
+<ol><li>稼働中の2.xサーバーでスナップショットを取り（<code>SAVE</code>または通常のバックアップ）、そのコピーを保管してください——理由は下の「ダウングレード」を参照。</li><li>2.xを止め、同じフラグとデータディレクトリで3.xのバイナリを起動します。</li><li>検証：<code>DBSIZE</code>が一致すること。暗号強度の保証が欲しければ、前後で<code>kevy-cli digest -p &lt;port&gt; &lt;prefix&gt;</code>を走らせてください——ダイジェストが等しければ、キー空間は同一です。</li></ol>
+<p>レプリカのペアをローリングで上げる場合：先にレプリカをアップグレードし、再同期させ、トラフィックをそちらへフェイルオーバーしてから、元プライマリをアップグレードします。（2.xに管理されたフェイルオーバーはないので、2.xからだとこれは通常の手動の入れ替えになります。3.15以降に乗れば、そのフェイルオーバーの手順自体が1つのverbになります——<code>FAILOVER host port</code>、<a href="../availability/">docs/availability.md</a>を参照。）</p>
+<h3 id="組み込みアプリケーション">組み込みアプリケーション</h3>
+<ol><li><code>Cargo.toml</code>に<code>kevy-embedded = "3"</code>。</li><li>リビルドします。1.16のAPIはそのまま存在します。新しい能力の面（index/view/text/vector/feed/replication）は、追加のメソッドと<code>Config</code>のオプションです。</li><li>トレイトについて1点。独自の<code>impl kevy_rt::Commands</code>を書いていて、かつ<code>ResolvedCmd</code>をリテラルで構築している場合に限りますが、v2のアークの途中で2つのフィールドが増えました（<code>block_hint</code>、<code>wake_idx</code>）。デフォルトの<code>resolve()</code>はそれらを埋めます。リテラルのコンストラクタには、2つのフィールドを足してください。</li><li>組み込み1.xのアプリが書いたオンディスクのデータは、そのままロードされます（サーバーと同じスナップショット形式です）。</li></ol>
+<h3 id="クライアント">クライアント</h3>
+<p><code>kevy-client 1.13+</code> / <code>kevy-client-async 1.1</code>はドロップインです。マイナーの上げは、内部のcrateを3.xのワークスペースに固定し直しただけです。汎用のRedisクライアントライブラリは、どちらにせよ影響を受けません。</p>
+<h2 id="3xで加わるものアップグレードする理由">3.xで加わるもの（アップグレードする理由）</h2>
+<p>hydration付きの宣言型インデックス（<code>IDX.*</code>）、名前付きビュー（<code>VIEW.*</code>）、書き込み時の集約（GROUP BY / 分散top-K）、辞書不要のCJK全文検索とBM25、HNSWによるベクトルKNN（さらにBM25+KNNのハイブリッド融合）、recovery-point契約を持つCDCフィード（<code>FEED.*</code>）、組み込みをプライマリにするレプリケーション、機械可読な契約（<code>COMMAND DOCS</code>、生成されるリファレンス、<code>kevy-mcp</code> MCPサーバー）、可用性のアーク（レプリケーションのラグの真実、<code>FAILOVER</code>、クォーラムのクラッシュ選挙、<code>WAIT</code> / <code>REPL.TOKEN</code> / <code>REPL.WAIT</code>の整合性ラダー——<a href="../availability/">docs/availability.md</a>）、そして移行ツールチェーン（<code>kevy-cli import/export/--verify/diff/inspect/digest</code>）です。<a href="../designing-on-kevy/">docs/designing-on-kevy.md</a>と<a href="../cookbook/">docs/cookbook.md</a>から始めてください。性能の領収書は<a href="https://github.com/goliajp/kevy/blob/main/bench/PERF-LEDGER.md">bench/PERF-LEDGER.md</a>にあります。</p>
+<p>これらのどれも、暗黙に有効化されることはありません。2.xのワークロードを載せた3.xサーバーは空のカタログを持ち、空のカタログに対するインデックスフックはperfgateのラチェットに載っています（2.x比でリグレッションなし）。</p>
+<h2 id="ダウングレード唯一注意が要る方向">ダウングレード（唯一、注意が要る方向）</h2>
+<p>3.xのサーバーはスナップショット形式v4を<b>書きます</b>。CDCフィードのカーソルが存在すればv5です。2.xのバイナリはv4までしか読めません。</p>
+<ul><li>フィードを一度も有効にしていないなら、3.xのスナップショットは2.xでロードされます。</li><li>フィードが有効だった（v5）なら、2.xはそのファイルを拒否します。ダウングレードの道筋：3.xで<code>kevy-cli export</code> → まっさらな2.xへ<code>kevy-cli import</code>。あるいは、手順1で取ったアップグレード前のバックアップを戻し、その間の差分を受け入れてください。</li></ul>
+<p>3.xで導入されたverb（<code>IDX.*</code>、<code>VIEW.*</code>、<code>FEED.*</code>、…）は、当然ながら2.xのバイナリではリプレイされません——それらを使っていたなら、正しいダウングレードはAOFのリプレイではなく、export/importの道です。</p>
+<h2 id="バージョン履歴各1行">バージョン履歴、各1行</h2>
+<ul><li><b>3.0.0</b> —— サービングエンジンの宣言（インデックス、ビュー、FTS、ANN、CDC、オンランプ。ゲートされた11本の列車）。</li><li><b>3.8.0</b> —— 性能のアーク（valkey 9.1とRediSearchに対する実測。素の面で1.6〜3.3倍、ANNは再現率1.000で1.64倍の先行、FTSの単一の一般的な語で93倍。組み込みをプライマリにするレプリケーション）。3.0.0と3.8.0のあいだにリリースは切られていません。3.8.0はv3.1〜v3.8の列車を含みます。</li><li><b>3.17.0</b> —— 可用性のリリース。AIネイティブなサービングの面（機械可読なverb契約、生成されるドキュメント、<code>kevy-mcp</code>、ハイブリッド検索）と、可用性のアーク（レプリケーションのハートビート/ACKの真実、<code>FAILOVER</code> + クォーラムのクラッシュ選挙、整合性ラダー、CIの契約ゲート）。v3.9〜v3.17の列車を含みます。あいだにリリースは切られていません。</li><li><b>3.17.1〜3.17.4</b> —— メンテナンス。<code>luna-core</code> Luaランタイムのバージョン上げ、ドキュメント/移行の波、初期採用者のフィードバック（<code>kevy-cli --embed</code>）、そしてドキュメント/i18nの磨き上げの波。</li><li><b>3.18.0</b> —— 構造のリリース。LOCの負債をゼロにし、その上限をCIで強制。さらに6つの石をfuzz（初日の収穫：実バグ4件を修正）。miri/pedantic/missing-docsの一掃、Rust 1.97.0。</li></ul></main>
+  <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#tldr-バージョンの一覧">TL;DR —— バージョンの一覧</a></li><li class="l2"><a href="#自動で互換なもの">自動で互換なもの</a></li><li class="l2"><a href="#apiの破壊一覧">APIの破壊一覧</a></li><li class="l3"><a href="#1-flushのshimを削除">1. flush()のshimを削除</a></li><li class="l3"><a href="#2-エラーの通貨を1つにkevyerror">2. エラーの通貨を1つに：KevyError</a></li><li class="l3"><a href="#3-コンストラクタの命名リソースはopenネットワークはconnect">3. コンストラクタの命名：リソースはopen、ネットワークはconnect</a></li><li class="l3"><a href="#4-kevy-rtruntimeは位置引数ではなくビルダーで組む">4. kevy_rt::Runtimeは、位置引数ではなくビルダーで組む</a></li><li class="l3"><a href="#5-kevy-storeの書き込みは借用したargvを取る">5. kevy-storeの書き込みは、借用したargvを取る</a></li><li class="l3"><a href="#6-commandsトレイト-route独自コマンドセットを持つ組み込み側">6. Commandsトレイト + Route（独自コマンドセットを持つ組み込み側）</a></li><li class="l2"><a href="#振る舞いの変更コード変更は不要運用からは見える">振る舞いの変更（コード変更は不要、運用からは見える）</a></li><li class="l2"><a href="#フィーチャシステム40での新顔">フィーチャシステム（4.0での新顔）</a></li><li class="l2"><a href="#40-318のダウングレード">4.0 → 3.18のダウングレード</a></li><li class="l2"><a href="#tldr-バージョンの一覧">TL;DR —— バージョンの一覧</a></li><li class="l2"><a href="#自動で互換なもの">自動で互換なもの</a></li><li class="l2"><a href="#アップグレードの手順">アップグレードの手順</a></li><li class="l3"><a href="#サーバーのデプロイ">サーバーのデプロイ</a></li><li class="l3"><a href="#組み込みアプリケーション">組み込みアプリケーション</a></li><li class="l3"><a href="#クライアント">クライアント</a></li><li class="l2"><a href="#3xで加わるものアップグレードする理由">3.xで加わるもの（アップグレードする理由）</a></li><li class="l2"><a href="#ダウングレード唯一注意が要る方向">ダウングレード（唯一、注意が要る方向）</a></li><li class="l2"><a href="#バージョン履歴各1行">バージョン履歴、各1行</a></li></ul></aside>
+</div>
+
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

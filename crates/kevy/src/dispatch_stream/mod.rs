@@ -14,6 +14,7 @@ mod group;
 mod info;
 mod setid;
 
+use kevy_resp::CmdError;
 use kevy_resp::{
     ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
 };
@@ -67,7 +68,7 @@ fn cmd_xadd<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>
     }
     let parsed = match parse_xadd_argv(args) {
         Ok(p) => p,
-        Err(msg) => return encode_error(out, msg),
+        Err(msg) => return encode_error(out, msg.as_wire()),
     };
     let id = match store.xadd(
         &args[1],
@@ -104,7 +105,7 @@ enum TrimSpec {
     MinId(StreamId),
 }
 
-fn parse_xadd_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XAddParsed, &'static str> {
+fn parse_xadd_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XAddParsed, CmdError> {
     let mut i = 2;
     let mut nomkstream = false;
     let mut trim: Option<TrimSpec> = None;
@@ -129,7 +130,7 @@ fn parse_xadd_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XAddParsed, &'stati
         }
     }
     if i + 2 >= args.len() {
-        return Err("ERR wrong number of arguments for 'xadd' command");
+        return Err(CmdError::Wire("ERR wrong number of arguments for 'xadd' command"));
     }
     let id = parse_xadd_id(&args[i]).map_err(|_| {
         "ERR Invalid stream ID specified as stream command argument"
@@ -137,7 +138,7 @@ fn parse_xadd_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XAddParsed, &'stati
     i += 1;
     let rest = args.len() - i;
     if !rest.is_multiple_of(2) || rest == 0 {
-        return Err("ERR wrong number of arguments for 'xadd' command");
+        return Err(CmdError::Wire("ERR wrong number of arguments for 'xadd' command"));
     }
     let mut fields = Vec::with_capacity(rest / 2);
     while i < args.len() {
@@ -155,7 +156,7 @@ fn parse_trim_arg<A: ArgvView + ?Sized>(
     args: &A,
     start: usize,
     maxlen: bool,
-) -> Result<(TrimSpec, usize), &'static str> {
+) -> Result<(TrimSpec, usize), CmdError> {
     let mut used = 0usize;
     let mut idx = start;
     if let Some(t) = args.get(idx)
@@ -229,7 +230,7 @@ fn cmd_range<A: ArgvView + ?Sized>(
     };
     let count = match parse_optional_count(args, 4) {
         Ok(c) => c,
-        Err(msg) => return encode_error(out, msg),
+        Err(msg) => return encode_error(out, msg.as_wire()),
     };
     let entries = match (rev, store.xrange(&args[1], start, end, count)) {
         (false, Ok(es)) => es,
@@ -248,12 +249,12 @@ fn cmd_range<A: ArgvView + ?Sized>(
 fn parse_optional_count<A: ArgvView + ?Sized>(
     args: &A,
     start: usize,
-) -> Result<Option<usize>, &'static str> {
+) -> Result<Option<usize>, CmdError> {
     if start >= args.len() {
         return Ok(None);
     }
     if !args[start].eq_ignore_ascii_case(b"COUNT") {
-        return Err("ERR syntax error");
+        return Err(CmdError::Wire("ERR syntax error"));
     }
     let n = args.get(start + 1).ok_or("ERR syntax error")?;
     let n: usize = std::str::from_utf8(n)
@@ -295,11 +296,11 @@ fn cmd_xtrim<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8
     let spec = match mode.as_slice() {
         b"MAXLEN" => match parse_trim_arg(args, 3, /*maxlen=*/ true) {
             Ok((s, _)) => s,
-            Err(msg) => return encode_error(out, msg),
+            Err(msg) => return encode_error(out, msg.as_wire()),
         },
         b"MINID" => match parse_trim_arg(args, 3, /*maxlen=*/ false) {
             Ok((s, _)) => s,
-            Err(msg) => return encode_error(out, msg),
+            Err(msg) => return encode_error(out, msg.as_wire()),
         },
         _ => return encode_error(out, "ERR syntax error"),
     };
@@ -335,7 +336,7 @@ fn cmd_xtrim<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8
 fn cmd_xread<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     let parsed = match parse_xread_argv(args) {
         Ok(p) => p,
-        Err(msg) => return encode_error(out, msg),
+        Err(msg) => return encode_error(out, msg.as_wire()),
     };
     let blocking = parsed.block_ms.is_some();
     let mut reply: Vec<StreamReply> = Vec::new();
@@ -383,7 +384,7 @@ struct XReadParsed {
     streams: Vec<(Vec<u8>, Vec<u8>)>, // (key, last-seen-arg)
 }
 
-fn parse_xread_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XReadParsed, &'static str> {
+fn parse_xread_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XReadParsed, CmdError> {
     let mut count: Option<usize> = None;
     let mut block_ms: Option<u64> = None;
     let mut i = 1;
@@ -414,34 +415,34 @@ fn parse_xread_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XReadParsed, &'sta
                     streams,
                 });
             }
-            _ => return Err("ERR syntax error"),
+            _ => return Err(CmdError::Wire("ERR syntax error")),
         }
     }
-    Err("ERR syntax error")
+    Err(CmdError::Wire("ERR syntax error"))
 }
 
 fn xread_parse_kv_usize<A: ArgvView + ?Sized>(
     args: &A,
     idx: usize,
     bad: &'static str,
-) -> Result<usize, &'static str> {
+) -> Result<usize, CmdError> {
     let n = args.get(idx).ok_or("ERR syntax error")?;
     std::str::from_utf8(n)
         .ok()
         .and_then(|s| s.parse().ok())
-        .ok_or(bad)
+        .ok_or(CmdError::Wire(bad))
 }
 
 fn xread_parse_kv_u64<A: ArgvView + ?Sized>(
     args: &A,
     idx: usize,
     bad: &'static str,
-) -> Result<u64, &'static str> {
+) -> Result<u64, CmdError> {
     let n = args.get(idx).ok_or("ERR syntax error")?;
     std::str::from_utf8(n)
         .ok()
         .and_then(|s| s.parse().ok())
-        .ok_or(bad)
+        .ok_or(CmdError::Wire(bad))
 }
 
 /// `(key, last-seen-arg)` pairs as parsed from the `STREAMS …` tail.
@@ -450,11 +451,11 @@ type StreamKeyLastSeen = (Vec<u8>, Vec<u8>);
 fn xread_parse_streams<A: ArgvView + ?Sized>(
     args: &A,
     start: usize,
-) -> Result<Vec<StreamKeyLastSeen>, &'static str> {
+) -> Result<Vec<StreamKeyLastSeen>, CmdError> {
     let rest = args.len() - start;
     if rest == 0 || !rest.is_multiple_of(2) {
         return Err(
-            "ERR Unbalanced XREAD list of streams: for each stream key an ID or '$' must be specified.",
+            CmdError::Wire("ERR Unbalanced XREAD list of streams: for each stream key an ID or '$' must be specified."),
         );
     }
     let n = rest / 2;

@@ -1,0 +1,27 @@
+# Example Tauri v2 app embedding kevy via tauri-plugin-kevy.
+#
+# STANDALONE — like the plugin, this app depends on `tauri` and so is excluded
+# from the kevy root workspace (see the root Cargo.toml `exclude`). The empty
+# `[workspace]` table below re-roots it when built directly.
+[package]
+name = "kevy-tauri-example"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80.0"
+authors = ["GOLIA K.K."]
+license = "Apache-2.0 OR MIT"
+description = "Minimal Tauri v2 app demonstrating the embedded kevy engine (set/get + live pub/sub)."
+
+[workspace]
+
+[lib]
+name = "kevy_tauri_example_lib"
+# `cdylib` for mobile, `rlib` for the desktop bin + tests.
+crate-type = ["lib", "cdylib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-kevy = { path = "../../tauri-plugin-kevy" }

@@ -19,10 +19,10 @@ use std::time::Duration;
 /// LPUSH, LPOP, RPOP, HDEL, SREM, ZREM, LSET, LREM, LTRIM, SPOP) that
 /// the server's `KevyCommands::is_write` set logs as-is.
 ///
-/// Invariant (v1.15.1): every verb any `kevy-embedded` facade method
+/// Invariant: every verb any `kevy-embedded` facade method
 /// passes to `commit_write` MUST have an arm here — a missing arm is
 /// silent data loss on reopen (`store_tests_replay_all.rs` is the
-/// guard). The v2.1 OP_TABLE makes this cross-check structural.
+/// guard). The OP_TABLE makes this cross-check structural.
 // fn-length exemption: pure data-driven verb match table — one flat
 // arm per replayed verb, no control flow beyond per-arm arg plumbing.
 // LOC-WAIVER: data-driven AOF verb replay table — one store-call arm per verb.
@@ -32,7 +32,7 @@ pub(crate) fn apply(store: &mut Store, args: &Argv) {
     match verb.as_slice() {
         b"SET" => apply_set(store, args),
         b"DEL" => {
-            let keys: Vec<Vec<u8>> = args.iter().skip(1).map(<[u8]>::to_vec).collect();
+            let keys: Vec<&[u8]> = args.iter().skip(1).collect();
             store.del(&keys);
         }
         b"INCR" => {
@@ -94,7 +94,7 @@ pub(crate) fn apply(store: &mut Store, args: &Argv) {
         }
         b"FLUSHDB" | b"FLUSHALL" => store.flushall(),
         b"HSET" => apply_hset(store, args),
-        // v2.4 hash field TTLs: HPEXPIREAT is the canonical logged
+        // Hash field TTLs: HPEXPIREAT is the canonical logged
         // form; HPERSIST logs itself.
         b"HPEXPIREAT" => apply_hpexpireat(store, args),
         b"HPERSIST" => apply_hpersist(store, args),
@@ -232,7 +232,7 @@ pub(crate) fn apply(store: &mut Store, args: &Argv) {
 
 fn apply_set(store: &mut Store, args: &Argv) {
     if let (Some(k), Some(v)) = (args.get(1), args.get(2)) {
-        // v1.0 AOF dump emits plain SET key value (no NX/EX/PX trailing);
+        // The AOF dump emits plain SET key value (no NX/EX/PX trailing);
         // server append also logs the raw arg list. Either way, the keyspace
         // semantics are "overwrite with no TTL" — which is what we replay.
         store.set(k, v.to_vec(), None, false, false);
@@ -268,7 +268,7 @@ fn apply_expireat(store: &mut Store, args: &Argv, unit_ms: u64) {
 }
 
 
-/// `HPEXPIREAT key unix-ms FIELDS n f…` (v2.4 canonical field-TTL frame).
+/// `HPEXPIREAT key unix-ms FIELDS n f…` (the canonical field-TTL frame).
 fn apply_hpexpireat(store: &mut kevy_store::Store, args: &Argv) {
     if args.len() < 6 {
         return;
@@ -291,10 +291,10 @@ fn apply_hpersist(store: &mut kevy_store::Store, args: &Argv) {
 
 fn apply_hset(store: &mut Store, args: &Argv) {
     let Some(k) = args.get(1) else { return };
-    let mut pairs: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    let mut pairs: Vec<(&[u8], &[u8])> = Vec::new();
     let mut i = 2;
     while i + 1 < args.len() {
-        pairs.push((args[i].to_vec(), args[i + 1].to_vec()));
+        pairs.push((&args[i], &args[i + 1]));
         i += 2;
     }
     if !pairs.is_empty() {
@@ -346,16 +346,16 @@ fn parse_zadd_flags(args: &Argv) -> (kevy_store::ZaddFlags, bool, usize) {
 
 fn apply_zadd(store: &mut Store, args: &Argv) {
     let Some(k) = args.get(1) else { return };
-    // v2.1: a primary's frame stream may carry the Redis 6.2 flag
+    // A primary's frame stream may carry the Redis 6.2 flag
     // tokens (`ZADD key [NX|XX] [GT|LT] [CH] score member …`). Apply
     // them — misparsing a flag as a score would shift every following
     // pair. (Embedded's own AOF never contains flags: the facades log
     // the applied effect as plain ZADD.)
     let (flags, incr, mut i) = parse_zadd_flags(args);
-    let mut pairs: Vec<(f64, Vec<u8>)> = Vec::new();
+    let mut pairs: Vec<(f64, &[u8])> = Vec::new();
     while i + 1 < args.len() {
         if let Some(score) = parse_f64(&args[i]) {
-            pairs.push((score, args[i + 1].to_vec()));
+            pairs.push((score, &args[i + 1]));
         }
         i += 2;
     }
@@ -366,24 +366,22 @@ fn apply_zadd(store: &mut Store, args: &Argv) {
         // `ZADD … INCR delta member` is an increment, NOT an absolute
         // score — applying it as one would silently diverge.
         if pairs.len() == 1 {
-            let _ = store.zadd_incr(k, pairs[0].0, &pairs[0].1, flags);
+            let _ = store.zadd_incr(k, pairs[0].0, pairs[0].1, flags);
         }
     } else if flags == kevy_store::ZaddFlags::default() {
         let _ = store.zadd(k, &pairs);
     } else {
-        let borrowed: Vec<(f64, &[u8])> =
-            pairs.iter().map(|(s, m)| (*s, m.as_slice())).collect();
-        let _ = store.zadd_flags_borrowed(k, &borrowed, flags);
+        let _ = store.zadd_flags(k, &pairs, flags);
     }
 }
 
 /// Common shape: `VERB key item1 item2 ...` → call `f(store, key, &items)`.
 fn apply_pairs_strip<F>(store: &mut Store, args: &Argv, f: F)
 where
-    F: FnOnce(&mut Store, &[u8], &[Vec<u8>]),
+    F: FnOnce(&mut Store, &[u8], &[&[u8]]),
 {
     let Some(k) = args.get(1) else { return };
-    let rest: Vec<Vec<u8>> = args.iter().skip(2).map(<[u8]>::to_vec).collect();
+    let rest: Vec<&[u8]> = args.iter().skip(2).collect();
     if !rest.is_empty() {
         f(store, k, &rest);
     }
@@ -409,8 +407,8 @@ fn parse_f64(b: &[u8]) -> Option<f64> {
 #[path = "replay_tests.rs"]
 mod tests;
 
-/// Parity manifest (v2.1): every verb `apply` has an arm for. The
-/// v2.0.21 invariant lives in the ops_table cross-check: any verb an
+/// Parity manifest: every verb `apply` has an arm for. The
+/// invariant lives in the ops_table cross-check: any verb an
 /// embedded facade logs MUST appear here.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const REPLAY_VERBS: &[&str] = &[

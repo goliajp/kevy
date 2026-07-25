@@ -22,7 +22,6 @@ use crate::conn::Conn;
 use crate::shard::Shard;
 pub(crate) use crate::uring_conn::UringConn;
 use crate::uring_conn::ParkState;
-use kevy_persist::{load_snapshot, replay_aof};
 use kevy_sys::Socket;
 use kevy_uring::{Completion, IoUring};
 pub(crate) use crate::uring_setup::{URING_ENTRIES, build_uring, io_uring_available};
@@ -32,12 +31,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-// SQPOLL is NOT wired into the shard reactor — it would spawn one kernel
+// SQPOLL is OFF by default in the shard reactor — it spawns one kernel
 // poll thread per shard, each spinning at ~100% on the same core set as
-// the shard threads, halving effective CPU. See `bench/PERF-ATTACK-LOG-2026-06-20.md`
-// (attack D5) for the 2-15× regression measurement and the architectural
-// reasoning. The wire-level support stays in `kevy_uring::IoUring::new_sqpoll`
-// for callers with single-threaded reactors and spare cores.
+// the shard threads, halving effective CPU (see the SQPOLL entries in
+// bench/PERF-ATTACK-LOG for the measured regressions). The
+// `KEVY_SQPOLL=1` env switch (see `uring_setup::build_uring`) opts in
+// for A/B measurement on layouts with spare cores; the wire-level
+// support lives in `kevy_uring::IoUring::new_sqpoll`.
 /// Busy-poll iterations after the last work before yielding the core (mirrors
 /// the epoll reactor's `SPIN_LIMIT`). Keeps -c1 latency low without spinning a
 /// quiet shard at 100% forever.
@@ -67,7 +67,7 @@ impl<C: Commands> Shard<C> {
     /// The ring pair comes from [`build_uring`] at the spawn site (see the
     /// fallback rationale there).
     // Busy-poll reactor main loop — per-iter overhead is the proven
-    // perf-sensitive surface here (perf-vs-foss §8 v1.30: per-iter
+    // perf-sensitive surface here (measured: per-iter
     // amortization moves throughput where per-op µs shaving does not);
     // stage extraction risks codegen change for zero readability win.
     // LOC-WAIVER: busy-poll reactor main loop (per-iter perf-sensitive).
@@ -76,34 +76,19 @@ impl<C: Commands> Shard<C> {
         ring_pair: (IoUring, kevy_uring::ProvidedBufRing),
         stop: Arc<AtomicBool>,
     ) -> io::Result<()> {
-        self.commands.on_shard_start(self.id);
-        // Restore: snapshot then AOF replay (same as the readiness path).
-        let snap = self.snapshot_path();
-        if snap.exists()
-            && let Err(e) = load_snapshot(&mut self.store, &snap)
-        {
-            eprintln!("kevy: shard {} failed to load {}: {e}", self.id, snap.display());
-        }
-        if self.aof.is_some() {
-            let aof_path = self.aof_path();
-            let commands = &self.commands;
-            let store = &mut self.store;
-            replay_aof(&aof_path, |args| {
-                commands.dispatch(store, &args);
-            })?;
-        }
+        self.prepare_uring_shard()?;
 
         // One provided-buffer ring per shard feeds every conn's multishot recv
         // (needs Linux 5.19+; the epoll reactor is the fallback for older
         // kernels AND for per-shard setup failure — see `build_uring`).
         let (mut ring, mut pbuf) = ring_pair;
-        // v2.0.15: replication listener accept must NOT block the reactor.
+        // Replication listener accept must NOT block the reactor.
         // The epoll path sets this in `shard::run` via `poller.add`-side
-        // setup; the io_uring path didn't. `accept_ready_replication`
+        // setup; the io_uring path originally didn't. `accept_ready_replication`
         // (called per-tick) loops until `WouldBlock` — which never fires
         // on a blocking socket, so the first `accept()` call stalls the
-        // entire shard until a replica connects. Closes v1.33.x finding:
-        // primary kevy with `[replication] role = "primary"` was
+        // entire shard until a replica connects. Root cause of an earlier
+        // finding: primary kevy with `[replication] role = "primary"` was
         // unresponsive to client PING under the io_uring reactor.
         if let Some(rl) = &self.replication_listener {
             rl.set_nonblocking()?;
@@ -113,11 +98,13 @@ impl<C: Commands> Shard<C> {
         // Starts "in flight" when cluster mode is off, so the arm loop never
         // preps an accept on a listener that doesn't exist.
         let mut cl_accept_inflight = self.cluster_listener.is_none();
-        // v1.25 UDS: only shard 0 may hold a unix listener.
+        // UDS: only shard 0 may hold a unix listener.
         let mut un_accept_inflight = self.unix_listener.is_none();
         let mut comps: Vec<Completion> = Vec::with_capacity(URING_ENTRIES as usize);
         let mut idle_spins: u32 = 0;
-        // v2.2-perf (nap rung restored, batch-gated): size of the last
+        let stall_dump_every = crate::uring_stalldump::stall_dump_interval();
+        let mut last_stall_dump = Instant::now();
+        // Nap rung (restored, batch-gated): size of the last
         // non-empty inbound drain + whether this idle episode already
         // napped. See the idle-ladder comment below.
         let mut last_inbound_batch: usize = 0;
@@ -139,7 +126,7 @@ impl<C: Commands> Shard<C> {
         let mut reap_counter: u32 = 0;
 
         while !stop.load(Ordering::Relaxed) {
-            // B4 (2026-06-20): one multishot accept SQE per listener stays
+            // One multishot accept SQE per listener stays
             // armed across many connections. The kernel re-fires it per
             // incoming conn, each CQE carrying the new fd in `res` and
             // `IORING_CQE_F_MORE` set while still armed. We only re-submit
@@ -147,7 +134,7 @@ impl<C: Commands> Shard<C> {
             // close, ENOBUFS, etc.). Zero -c1 cost (one persistent conn
             // takes one accept ever); cuts the per-accept SQE under
             // high-conn-churn workloads.
-            // v1.30 — `arms_accept = false` shards skip every accept arm so
+            // `arms_accept = false` shards skip every accept arm so
             // the kernel SO_REUSEPORT layer routes new conns only to the
             // armed subset. Off-accept-set shards still receive cross-shard
             // dispatched work via drain_inbound below.
@@ -210,7 +197,7 @@ impl<C: Commands> Shard<C> {
                     OP_WRITE => {
                         io_work = true;
                         self.uring_on_write(cid, c.res, &mut io);
-                        // K4: a write CQE — even a fully-drained one —
+                        // A write CQE — even a fully-drained one —
                         // wants an arm visit so a chunked-writev tail
                         // (pub/sub burst > IOV_MAX) gets its next
                         // chunk out. Cheap when nothing remains: the
@@ -222,7 +209,7 @@ impl<C: Commands> Shard<C> {
                         cold_path_hint();
                         let cluster = op == OP_ACCEPT_CL;
                         let is_unix = op == OP_ACCEPT_UN;
-                        // B4: only clear the in-flight flag when the
+                        // Only clear the in-flight flag when the
                         // multishot terminates (F_MORE clear). While
                         // F_MORE is set the kernel still has the SQE
                         // armed and will re-fire on the next conn — no
@@ -241,7 +228,7 @@ impl<C: Commands> Shard<C> {
                         if c.res >= 0 {
                             // SAFETY: a freshly accepted fd we now own.
                             let sock = unsafe { Socket::from_raw_fd(c.res) };
-                            // v1.37 — refuse client conns past max_clients_per_shard
+                            // Refuse client conns past max_clients_per_shard
                             // (cluster-bus links exempt as infrastructure).
                             if !cluster
                                 && self.max_clients_per_shard > 0
@@ -257,12 +244,12 @@ impl<C: Commands> Shard<C> {
                                 let _ = sock.set_nodelay();
                             }
                             let ncid = self.next_conn_id;
-                            self.next_conn_id += 1;
+                            self.next_conn_id += self.conn_id_step;
                             let mut conn = Conn::new(sock);
                             conn.cluster = cluster;
                             self.conns.insert(ncid, conn);
                             let mut uc = UringConn::new();
-                            // K4: new conn needs an arm visit so its
+                            // New conn needs an arm visit so its
                             // multishot recv gets queued.
                             uc.arm_queued = true;
                             io.insert(ncid, uc);
@@ -302,7 +289,7 @@ impl<C: Commands> Shard<C> {
             // Cross-core: forwarded requests + replies (output accumulates; the
             // io_uring write path below flushes it).
             let did_inbound = self.uring_drain_inbound();
-            // K4 (v1.25 A.9): `self.dirty` is no longer cleared here —
+            // `self.dirty` is no longer cleared here —
             // pub/sub deliver paths push into it and `uring_arm_conns`
             // drains it into `arm_pending` on the next iter. The prior
             // shape relied on arm_conns scanning every conn each iter
@@ -313,7 +300,7 @@ impl<C: Commands> Shard<C> {
             self.flush_requests();
             self.flush_publish();
             self.flush_wakes();
-            // v1.25 A.2: ship the per-shard bio-drop batch to the bio
+            // Ship the per-shard bio-drop batch to the bio
             // thread BEFORE the AOF fsync window. Two reasons:
             // (1) a pending fsync stall (EverySec / Always) would
             //     otherwise pin a batch's worth of `Box<Value>` heap
@@ -349,49 +336,45 @@ impl<C: Commands> Shard<C> {
                     // either reactor.
                     self.tick_blocked_timeouts();
                     self.tick_xshard_timeouts();
-                    // v3.16: WAIT / REPL.WAIT deadline sweep — same
+                    self.uring_maybe_dump_stalled(stall_dump_every, &mut last_stall_dump, now, &io);
+                    // WAIT / REPL.WAIT deadline sweep — same
                     // cadence as the BLOCK timeout reactor above.
                     self.tick_repl_waiters();
                     if now.duration_since(last_tick) >= iv {
                         self.commands.on_shard_tick(&mut self.store);
+                        self.drain_store_notify();
                         self.apply_live_runtime_config(&mut tick_interval);
                         self.tick_persist();
-                        // v3-cluster replication housekeeping (T1.12.5):
-                        // the io_uring path can't watch the replication
-                        // listener / replica fds via epoll, so poll them
-                        // here once per tick (10 Hz). New replica accepts
-                        // see ≤ 100 ms wait; replica handshake bytes ditto.
-                        // The streaming pump path stays per-iter via
-                        // `pump_replication` (below) — that's where the
-                        // throughput-sensitive write side lives.
+                        self.tick_conn_gauge();
+                        self.uring_enforce_output_limit(&mut io);
+                        // Replication housekeeping: the io_uring path
+                        // can't watch the replication listener / replica
+                        // fds via epoll, so poll them here once per tick
+                        // (10 Hz). New replica accepts see ≤ 100 ms wait;
+                        // replica handshake bytes ditto. The streaming
+                        // pump stays per-iter via `pump_replication`
+                        // (below) — the throughput-sensitive write side.
                         if let Err(e) = self.accept_ready_replication() {
                             eprintln!("kevy: shard {} accept_ready_replication: {e}", self.id);
                         }
                         for idx in 0..self.replicas.len() {
                             if let Err(e) = self.replica_readable(idx) {
-                                eprintln!(
-                                    "kevy: shard {} replica_readable[{idx}]: {e}",
-                                    self.id,
-                                );
+                                self.replica_io_failed(idx, "read", &e);
                             }
                             if let Err(e) = self.replica_writable(idx) {
-                                eprintln!(
-                                    "kevy: shard {} replica_writable[{idx}]: {e}",
-                                    self.id,
-                                );
+                                self.replica_io_failed(idx, "write", &e);
                             }
                         }
                         self.tick_replication_slots(now);
                         self.tick_replication_view();
                         self.tick_replication_watermark();
-                        self.drain_replica_inbox();
                         last_tick = now;
                     }
                 }
             }
 
-            // Per-iter replication pump (T1.12.5): writes streaming
-            // frames + drives snapshot ship chunks. E9: hoist the
+            // Per-iter replication pump: writes streaming
+            // frames + drives snapshot ship chunks. Hoist the
             // "is this shard actually doing replication" predicate to
             // the call site so the steady-state standalone workload
             // pays one branch instead of two function-call frames
@@ -402,6 +385,15 @@ impl<C: Commands> Shard<C> {
             if self.replicate.is_some() || !self.replicas.is_empty() {
                 self.pump_replication()?;
                 self.reap_closed_replicas();
+            }
+            // Server-as-replica: drain events from the replica runner
+            // thread and apply them. Every iteration, not the interval
+            // tick — at tick cadence the 1024-event budget caps apply
+            // throughput at ~10k frames/s, far under what an upstream
+            // primary emits (the repligate drain regression). Gated at
+            // the call site like the pump above.
+            if self.replica_inbox.is_some() {
+                self.drain_replica_inbox();
             }
 
             // Idle ladder — spin, then a BATCH-GATED deaf nap, then park:
@@ -417,24 +409,23 @@ impl<C: Commands> Shard<C> {
             //      CQE, the waker pipe, or the bounding timeout. A truly
             //      idle shard costs ~zero CPU.
             //
-            // History (the whole point of the batch gate): the original
-            // v1.16-era nap was UNCONDITIONAL `thread::sleep(200 µs)` —
+            // Why the batch gate exists: the original
+            // nap was UNCONDITIONAL `thread::sleep(200 µs)` —
             // great for the 8-shard cross-shard shape (aggregation), but
             // wake-deaf, so a sequential -c1 Rust client paid the full
             // 200 µs per request (~4 k ops/s, 15× slower than valkey).
-            // 4fa4631 (v1.23 sprint) removed the rung entirely, fixing -c1
-            // but silently costing the foreseen −18~21 % on the 8-shard
-            // shape (`legacy_8sh_set` 9.98M → 7.6M single-commit step,
-            // measured 2026-07-04 — the "v1.22.x follow-up if a workload
-            // re-surfaces it" that never happened). The batch gate keeps
+            // A later change removed the rung entirely, fixing -c1
+            // but silently costing a measured −18~21 % on the 8-shard
+            // shape (`legacy_8sh_set` 9.98M → 7.6M across that single
+            // change). The batch gate keeps
             // both: -c1 traffic drains batches of 1 (< NAP_BATCH_MIN) and
             // goes straight to the wake-aware park — its 15 µs steady
             // state is untouched; the cross-shard owner sees large drains
             // and earns the aggregation nap. Worst-case added latency for
             // a lone request that lands right after a burst: one NAP_US,
             // once (the `napped` flag forces park next).
-            // Full evidence chain:
-            // bench/PERF-DECOMP-2026-07-04-legacy8sh-owner-starvation.md.
+            // Full evidence chain: the legacy8sh owner-starvation
+            // PERF-DECOMP note in bench/.
             //
             // A non-empty backlog means a peer ring is full — keep
             // spinning to re-attempt the flush (nothing would wake us
@@ -442,7 +433,7 @@ impl<C: Commands> Shard<C> {
             woke_from_park = false;
             let has_backlog = self.backlog.iter().any(|b| !b.is_empty());
             if !io_work && did_inbound == 0 && !has_backlog {
-                // v2.2-perf: forwarded requests outstanding ⇒ replies land
+                // Forwarded requests outstanding ⇒ replies land
                 // within ~one cross-shard RTT — stay in the spin rung
                 // rather than paying a kernel sleep + wake per reply
                 // batch. Bounded: inflight can only drain (the owner
@@ -480,11 +471,11 @@ impl<C: Commands> Shard<C> {
                 }
             }
         }
-        // v1.25.x SAVE migration: drain bg persist completions before
-        // exit so a `+OK` SAVE reply isn't followed by a torn snapshot
-        // (see [`Shard::drain_persist_on_shutdown`]).
-        self.drain_persist_on_shutdown();
-        self.write_feed_shutdown_marker();
+        // Exit sequence: optional `SHUTDOWN SAVE` snapshot, drain bg
+        // persist completions (so a `+OK` SAVE reply isn't followed by
+        // a torn snapshot), final AOF fsync, feed marker — see
+        // [`Shard::shutdown_drain`].
+        self.shutdown_drain();
         Ok(())
     }
 

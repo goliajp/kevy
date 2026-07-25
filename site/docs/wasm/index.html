@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kevy on WebAssembly — kevy</title>
+<meta name="description" content="kevy runs in the browser as a real store, not a compile-time curiosity: the npm package @goliajp/kevy ships the engine (KV + TTL + counters + scans + pub/sub) compiled to wasm32-un">
+<link rel="stylesheet" href="../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../docs/" aria-current="page">Docs</a>
+      <a href="../../docs/commands/">Commands</a>
+      <a href="../../benchmarks/">Benchmarks</a>
+      <a href="../../play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../docs/search-index.json" data-root="../../">
+        <input type="search" placeholder="Search docs…" aria-label="Search docs…" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../docs/wasm/" aria-current="page">EN</a><a href="../../zh/docs/wasm/">中文</a><a href="../../ja/docs/wasm/">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell has-toc">
+  <aside class="side"><p class="side-h">Getting started</p><ul><li><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a></li><li><a href="../../docs/cookbook/">The RDS→kevy modeling cookbook</a></li><li><a href="../../docs/persistence/">Persistence</a></li><li><a href="../../docs/tuning/">Tuning kevy</a></li></ul><p class="side-h">Running it</p><ul><li><a href="../../docs/replication/">Replication</a></li><li><a href="../../docs/availability/">Availability</a></li><li><a href="../../docs/cluster/">Cluster</a></li><li><a href="../../docs/tiering/">Transparent tiering ([tiering] / with_tier_budget)</a></li><li><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a></li><li><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a></li><li><a href="../../docs/async/">Async client</a></li></ul><p class="side-h">Working with data</p><ul><li><a href="../../docs/indexes/">Secondary indexes (IDX. / idx_)</a></li><li><a href="../../docs/tables/">Tables (TABLE. / table_)</a></li><li><a href="../../docs/vector-search/">Vector search (KIND ann)</a></li><li><a href="../../docs/text-search/">Full-text search (KIND text)</a></li><li><a href="../../docs/views/">Views (VIEW. / view_)</a></li><li><a href="../../docs/cdc/">CDC — the change feed (FEED. / changes_since)</a></li><li><a href="../../docs/pubsub/">Pub/sub</a></li><li><a href="../../docs/lua/">Lua scripting</a></li></ul><p class="side-h">Embedding it</p><ul><li><a href="../../docs/wasm/" aria-current="page">kevy on WebAssembly</a></li><li><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a></li><li><a href="../../docs/iot/">kevy on IoT devices</a></li></ul><p class="side-h">Reference</p><ul><li><a href="../../docs/error-replies/">Error reply catalog</a></li><li><a href="../../docs/rds-workloads/">RDS workloads on kevy</a></li><li><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></li><li><a href="../../docs/UPGRADING/">Upgrading kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../docs/commands/">All 188 commands</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>kevy on WebAssembly</h1></div>
+<p>kevy runs in the browser as a real store, not a compile-time curiosity: the npm package <a href="https://www.npmjs.com/package/@goliajp/kevy"><code>@goliajp/kevy</code></a> ships the engine (KV + TTL + counters + scans + pub/sub) compiled to <code>wasm32-unknown-unknown</code> behind a hand-written ES-module loader, with durable persistence over OPFS (IndexedDB fallback) and pub/sub that crosses tabs. The same crates also build for <code>wasm32-wasip1</code>, so the Rust API works under <code>wasmtime</code> / <code>wasmer</code> and in edge runtimes.</p>
+<p>Try it live: the <a href="https://kevy.golia.jp/demo/">kevy.golia.jp demo</a> is a browser REPL over exactly this module — commands, OPFS persistence that survives reloads, and pub/sub across tabs, with no backend.</p>
+<h2 id="quick-start-browser">Quick start (browser)</h2>
+<figure class="code"><pre><code class="lang-sh">npm install @goliajp/kevy</code></pre></figure>
+<figure class="code"><pre><code class="lang-js">import { open } from "@goliajp/kevy";
+
+const db = await open({ persist: { name: "app" } });
+
+db.set("greeting", "hello");
+db.set("session", "abc123", { ttlMs: 60_000 });
+db.getText("greeting");            // "hello"
+db.incrby("visits");               // 1, 2, 3, ...
+db.keys("user:*");
+
+// Pub/sub — including other tabs of the same origin:
+const off = db.subscribe("events", (payload, channel) =&gt; {
+  console.log(channel, new TextDecoder().decode(payload));
+});
+db.publish("events", "hi from this or any other tab");
+
+await db.flush();                  // durability barrier</code></pre></figure>
+<p>Writes stream to storage as a kevy append-only log and replay on the next <code>open()</code> with the same <code>persist.name</code>. Since 4.0 the log speaks the checksummed v2 record format (<code>KEVYAOF2</code> — see <a href="../persistence/">persistence.md</a>): bit-rot in stored bytes is refused at replay instead of silently applied. A log stored by a pre-4.0 tab replays unchanged (v1, read forever) and upgrades to v2 at its first compaction; a log pumped out of a browser tab still replays in a native kevy unchanged, and vice versa. The package is six files (~165 KB packed): the wasm module, the loader, the OPFS worker, hand-written TypeScript typings, and the usual README + manifest. Zero dependencies on both sides of the boundary.</p>
+<h2 id="the-loader-api">The loader API</h2>
+<p><code>open(options)</code> instantiates the module, replays the stored log (when persistence is on), and starts the tick timer and the cross-tab bridge. Options:</p>
+<div class="tbl"><table><thead><tr><th>Option</th><th>Default</th><th>Meaning</th></tr></thead><tbody><tr><td><code>wasm</code></td><td><code>kevy.wasm</code> next to the loader</td><td>Module source: URL, <code>ArrayBuffer</code>, <code>Uint8Array</code>, <code>Response</code>, or a compiled <code>WebAssembly.Module</code></td></tr><tr><td><code>persist</code></td><td><code>false</code> (in-memory)</td><td><code>{ name, backend }</code>: one log per <code>name</code>; <code>backend</code> = <code>"auto"</code> (OPFS, IndexedDB fallback), <code>"opfs"</code>, or <code>"idb"</code></td></tr><tr><td><code>broadcast</code></td><td><code>true</code></td><td>Cross-tab pub/sub bridge over <code>BroadcastChannel</code></td></tr><tr><td><code>name</code></td><td><code>persist.name</code> or <code>"kevy"</code></td><td>Instance name; scopes both the storage file and the broadcast channel</td></tr><tr><td><code>tickMs</code></td><td><code>100</code></td><td>TTL sweep + event poll cadence; <code>0</code> disables the timer — call <code>tick()</code> yourself</td></tr></tbody></table></div>
+<p>The returned <code>Kevy</code> handle (full signatures in <code>kevy.d.ts</code>):</p>
+<div class="tbl"><table><thead><tr><th>Method</th><th>Semantics</th></tr></thead><tbody><tr><td><code>set(key, value, { ttlMs? })</code></td><td>SET, optionally with an expiry</td></tr><tr><td><code>get(key)</code> / <code>getText(key)</code></td><td>GET as <code>Uint8Array</code> / as UTF-8 text; <code>undefined</code> when absent or expired</td></tr><tr><td><code>del(key)</code> / <code>exists(key)</code></td><td>DEL / EXISTS</td></tr><tr><td><code>expire(key, ttlMs)</code> / <code>persist(key)</code> / <code>pttl(key)</code></td><td>PEXPIRE / PERSIST / PTTL (<code>-1</code> no TTL, <code>-2</code> no key)</td></tr><tr><td><code>incrby(key, delta?)</code></td><td>INCRBY, returns the new value</td></tr><tr><td><code>dbsize()</code> / <code>flushall()</code></td><td>DBSIZE / FLUSHALL</td></tr><tr><td><code>keys(pattern?, limit?)</code></td><td>KEYS with a Redis glob, optionally capped</td></tr><tr><td><code>tick()</code></td><td>One manual TTL sweep + event poll; returns the expired-key count</td></tr><tr><td><code>subscribe(channel, cb)</code> / <code>psubscribe(pattern, cb)</code></td><td>SUBSCRIBE / PSUBSCRIBE; both return an unsubscribe function</td></tr><tr><td><code>publish(channel, payload)</code></td><td>PUBLISH to local subscribers and (bridge on) other same-origin tabs; returns the local receiver count</td></tr><tr><td><code>flush()</code></td><td>Durability barrier: pending write frames are flushed to storage</td></tr><tr><td><code>compact()</code></td><td>Rewrite storage as a compacted image of the live keyspace</td></tr><tr><td><code>close()</code></td><td>Flush, tear down bridge/timer/storage, free the instance</td></tr></tbody></table></div>
+<p>Keys and values are <code>string | Uint8Array | ArrayBuffer</code> everywhere: strings are UTF-8 encoded at the boundary, byte views pass through — values are genuinely binary, not strings.</p>
+<h2 id="how-the-binding-works-no-wasm-bindgen">How the binding works (no wasm-bindgen)</h2>
+<p>kevy's zero-dependency law extends to the toolchain: there is no binding generator on either side. The <a href="https://docs.rs/kevy-wasm"><code>kevy-wasm</code></a> crate exports a flat, hand-written C ABI — 30 <code>extern "C"</code> symbols — and <code>pkg/kevy.js</code> is a hand-written loader that owns the TypedArray boundary, the UTF-8 codecs, the persistence pump, and the cross-tab bridge. The conventions:</p>
+<ul><li><b>Instances</b> are <code>u32</code> handles from <code>kevy_open</code>; every other call takes the handle first. <code>0</code> is never a valid handle.</li><li><b>Bytes in</b> cross as <code>(ptr, len)</code> pairs pointing into linear memory obtained from <code>kevy_alloc</code> / returned with <code>kevy_free</code>.</li><li><b>Bytes out</b> land in a per-instance result buffer read via <code>kevy_out_ptr</code> / <code>kevy_out_len</code>, valid until the next call on the same handle — callers copy out immediately.</li><li><b>Status codes</b>: <code>&gt;= 0</code> is success, <code>-1</code> an operation error (UTF-8 message in the result buffer), <code>-2</code> an invalid handle.</li><li><b>Numbers</b> cross as <code>f64</code> (clocks, TTLs, counts — all inside the 2^53 exact-integer range).</li><li><code>kevy_abi_version()</code> reports the ABI contract version, so a loader can refuse a mismatched module.</li></ul>
+<p>The export surface groups into core (open/close/alloc/free/clock/ tick/result buffer), KV (<code>kevy_set</code>, <code>kevy_get</code>, <code>kevy_del</code>, <code>kevy_exists</code>, <code>kevy_expire</code>, <code>kevy_persist</code>, <code>kevy_pttl</code>, <code>kevy_incrby</code>, <code>kevy_dbsize</code>, <code>kevy_flushall</code>, <code>kevy_keys</code>, …), pub/sub (<code>kevy_subscribe</code>, <code>kevy_psubscribe</code>, <code>kevy_unsubscribe</code>, <code>kevy_publish</code>, <code>kevy_poll_events</code>), and the AOF pump (<code>kevy_aof_frames_out</code>, <code>kevy_aof_frame_in</code>, <code>kevy_aof_dump</code>). If the shipped loader doesn't fit your host, the ABI is the supported integration point — the crate docs specify every symbol and packed byte format.</p>
+<h2 id="persistence-a-real-log-byte-compatible-with-native-kevy">Persistence: a real log, byte-compatible with native kevy</h2>
+<p>The browser has no filesystem, so durability is host-mediated: with persistence on, every write also encodes the same RESP multi-bulk frame a kevy AOF stores on disk (the <code>kevy-persist</code> format — <a href="../persistence/">docs/persistence.md</a>). The loader pumps pending frames to storage once per microtask, so a synchronous burst of writes costs one storage append. <code>await db.flush()</code> is the durability barrier; a resolved <code>flush()</code> means the backend has flushed to disk.</p>
+<p><b>The log a browser tab writes replays in a native kevy unchanged</b> — same magic header, same frames. Copy the <code>.aof</code> out of OPFS and point a native embedded store (or the server) at it, and the keyspace comes back. The reverse holds too: the inbound pump accepts a native-written log. Corrupt tails follow the native replay contract — the intact prefix is applied, the tail is dropped, and the next compaction rewrites storage from live state.</p>
+<p>Two backends, picked automatically under <code>backend: "auto"</code>:</p>
+<ul><li><b>OPFS</b> (primary): a <code>FileSystemSyncAccessHandle</code> owned by a small dedicated worker — sync handles are worker-only. Every append flushes before acknowledging.</li><li><b>IndexedDB</b> (fallback): the same pump against an object store, for contexts without OPFS sync handles (notably older Safari).</li></ul>
+<p>Compaction is automatic: once the appended log outgrows <code>max(512 KB, 4× the last image)</code>, the loader rewrites storage as a compacted image of the live keyspace (the browser-side equivalent of an AOF rewrite). <code>compact()</code> forces one before a snapshot or export.</p>
+<p><b>localStorage is deliberately not a backend</b>: a ~5 MB quota, a synchronous API that blocks the main thread on every write, and UTF-16 string-only storage disqualify it as a write log.</p>
+<h2 id="cross-tab-pubsub">Cross-tab pub/sub</h2>
+<p><code>publish()</code> delivers to subscribers in the same tab through the engine, and (bridge on) broadcasts the frame over a per-instance <code>BroadcastChannel</code> to every other same-origin tab, where each tab's local subscribers receive it. Delivery is <b>at-most-once with no backlog</b> — only currently-open tabs receive a message, and nothing is replayed to a tab that opens later. That is the same contract as kevy server pub/sub (<a href="../pubsub/">docs/pubsub.md</a>), so code written against one face behaves on the other.</p>
+<h2 id="clocks-ticks-and-ttls">Clocks, ticks, and TTLs</h2>
+<p><code>wasm32-unknown-unknown</code> has no threads and no OS clock, so the engine runs with the manual TTL reaper and a host-fed clock: the loader feeds <code>Date.now()</code> through the ABI before each entry point and runs <code>tick()</code> on a timer (default 100 ms). Consequences:</p>
+<ul><li>TTL precision tracks the tick cadence: a key with a 500 ms TTL expires on the first tick after its deadline. Set <code>tickMs</code> tighter if it matters, or <code>tickMs: 0</code> to own the cadence entirely.</li><li>No background work happens between your calls — no hidden costs, but a forgotten <code>tick()</code> (with <code>tickMs: 0</code>) leaves expired keys live and event queues undrained.</li></ul>
+<h2 id="performance">Performance</h2>
+<p>Full methodology, environment, and raw numbers: <a href="https://github.com/goliajp/kevy/blob/main/bench/WASM-BENCH.md">bench/WASM-BENCH.md</a> (headless-Chrome harness, median of 3 runs, 16-byte values at 1k and 100k keys). Against the storage a web app actually has:</p>
+<div class="tbl"><table><thead><tr><th>Axis (n=100k)</th><th style="text-align:right">kevy-wasm</th><th style="text-align:right">vs IndexedDB</th><th style="text-align:right">vs localStorage</th></tr></thead><tbody><tr><td>point read (ops/s)</td><td style="text-align:right">1.67 M</td><td style="text-align:right"><b>77×</b></td><td style="text-align:right">0.48×</td></tr><tr><td>point write (ops/s)</td><td style="text-align:right">1.79 M</td><td style="text-align:right"><b>189×</b></td><td style="text-align:right">4.9×</td></tr><tr><td>batch load (ms)</td><td style="text-align:right">60.8</td><td style="text-align:right"><b>36× faster</b></td><td style="text-align:right">4.5× faster</td></tr><tr><td>scan, ~10% match (ms)</td><td style="text-align:right">5.6</td><td style="text-align:right"><b>46× faster</b></td><td style="text-align:right">5.7× faster</td></tr><tr><td>durable write (ops/s)</td><td style="text-align:right">785 k (OPFS)</td><td style="text-align:right"><b>12.6–17.4×</b></td><td style="text-align:right">~2×</td></tr><tr><td>restart to usable (ms)</td><td style="text-align:right">129</td><td style="text-align:right"><b>2.7× faster</b></td><td style="text-align:right">slower (see below)</td></tr></tbody></table></div>
+<p>Headlines and the honest caveats:</p>
+<ul><li><b>Order of magnitude over IndexedDB on every axis</b> — 77–86× point read, 166–189× point write across dataset sizes.</li><li><b>Durable writes 12.6–17.4× raw IndexedDB</b>: the pump batches write frames per microtask, so a write burst costs one storage append. It also beats localStorage's fire-and-forget <code>setItem</code> ~2× while being an actual append log.</li><li><b>localStorage point reads are the one column kevy does not win</b> (0.42–0.48×), and the bench documents why no wasm-hosted store can: Chrome's localStorage read is a renderer-memory hash lookup (its measured 3.5–5 M ops/s is in bare-<code>Map</code> class, not storage class), while every wasm store pays a UTF-8 encode + boundary crossing + copy out of linear memory per call — a ~2–3 M ops/s ceiling that kevy sits near (1.7–2.1 M) after the loader's staging optimizations (persistent scratch buffer, <code>encodeInto</code>, cached memory view — a 2.2× gain over the naive loader). What kevy wins is everything localStorage cannot do at any speed: binary values, TTLs, counters, scans, &gt;5 MB datasets, pub/sub, and non-blocking persistence.</li><li><b>Cross-tab RTT</b> beats the storage-event hack at 64 KB payloads (p50 0.295 ms vs 0.335 ms) and ties on the ~0.105 ms task-hop floor below 1 KB — while the storage-event hack drops frames under a slow consumer, is string-only, and writes every ping to disk quota.</li></ul>
+<h2 id="the-rust-face-wasi-edge-runtimes-direct-embedding">The Rust face: WASI, edge runtimes, direct embedding</h2>
+<p>The engine itself — <code>kevy-embedded</code> and its dependency closure (<code>kevy-store</code>, <code>kevy-persist</code>, <code>kevy-hash</code>, <code>kevy-bytes</code>, <code>kevy-map</code>, <code>kevy-resp</code>) — builds for both wasm targets; CI gates the whole list plus <code>kevy-wasm</code> on every push. The network reactor crates (<code>kevy-rt</code>, <code>kevy-sys</code>, <code>kevy-uring</code>) are deliberately outside the closure, so the wasm build stays clean.</p>
+<div class="tbl"><table><thead><tr><th>Target</th><th>Command</th><th>Notes</th></tr></thead><tbody><tr><td><code>wasm32-unknown-unknown</code></td><td><code>cargo build -p kevy-wasm --target wasm32-unknown-unknown --release</code></td><td>The browser artifact (<code>kevy_wasm.wasm</code>); the npm loader instantiates it. For your own host, drive the C ABI directly.</td></tr><tr><td><code>wasm32-unknown-unknown</code> (Rust API)</td><td><code>cargo build -p kevy-embedded --target wasm32-unknown-unknown</code></td><td>No threads, no OS clock: open with <code>Config::with_ttl_reaper_manual()</code>, feed <code>set_clock_ns</code> / <code>set_wall_clock_ms</code>, call <code>Store::tick()</code> from the host loop.</td></tr><tr><td><code>wasm32-wasip1</code></td><td><code>cargo build -p kevy-embedded --target wasm32-wasip1</code></td><td><code>Instant</code> / <code>SystemTime</code> work — no clock feeding. <code>std::fs</code> works against preopened dirs, so <code>Config::with_persist("/data")</code> + <code>wasmtime --dir=/data</code> gives real AOF durability. Threads still absent: keep the manual reaper.</td></tr></tbody></table></div>
+<p>Direct embedding on <code>wasm32-unknown-unknown</code> in Rust:</p>
+<figure class="code"><pre><code class="lang-rust">use kevy_embedded::{Config, Store, set_clock_ns, set_wall_clock_ms};
+
+let store = Store::open(Config::default().with_ttl_reaper_manual())?;
+
+// Host feeds the clock before time-sensitive work…
+set_clock_ns(now_ms_from_host().saturating_mul(1_000_000));
+set_wall_clock_ms(now_ms_from_host());
+
+store.set(b"hello", b"world")?;
+let v = store.get(b"hello")?;   // Some(b"world".to_vec())
+
+// …and drives expiry at its own cadence:
+let _stats = store.tick();</code></pre></figure>
+<p>Errors are <code>KevyResult</code> / <code>KevyError</code> and argv-style write methods take borrowed slices, exactly as on native — see the <a href="https://docs.rs/kevy-embedded"><code>kevy-embedded</code></a> docs.</p>
+<p>Cloudflare Workers and similar edge isolates follow the browser recipe: one instance per isolate, <code>Date.now()</code> as the clock source, <code>tick()</code> lazily or from a scheduled handler. For durability across isolate restarts, mirror writes to the platform's durable store from your handler (the AOF pump gives you the frames); inside the isolate kevy is the hot in-memory tier.</p>
+<h2 id="faq">FAQ</h2>
+<p><b>Does the full command surface work in the browser?</b> The npm package exposes the KV + TTL + counter + scan + pub/sub cut — the surface a browser store needs, kept small on purpose (the wasm module is 416 KB uncompressed). The Rust API on wasm targets exposes the full <code>kevy-embedded</code> feature set of whichever features you compile in.</p>
+<p><b>Is the persisted data portable?</b> Yes — it is a standard kevy AOF. Browser → native and native → browser both replay. See <a href="../persistence/">docs/persistence.md</a> for the format contract.</p>
+<p><b>What about shared-memory threads (<code>+atomics</code>)?</b> The shipped module is single-threaded, which matches every browser-style target. The engine is thread-safe where the host provides threads, but the manual <code>tick()</code> model remains the supported path.</p>
+<p><b>SharedWorker instead of BroadcastChannel?</b> A single-owner SharedWorker topology is cleaner in theory but its availability is narrower (notably absent on Android Chrome); the BroadcastChannel bridge won on compatibility with the same measured latency class.</p>
+<p><b>Why not wasm-bindgen?</b> kevy ships zero third-party dependencies — server, embedded, and browser alike. A binding generator would be a build-time dependency and would own the boundary layout; the hand-written ABI keeps the contract explicit, versioned, and auditable.</p>
+<h2 id="in-a-tauri-app">In a Tauri app</h2>
+<p>Running kevy in a desktop/mobile app? A Tauri backend is Rust, so kevy can embed <b>natively</b> in the backend (one shared store, durable, cross-window) instead of in the webview as wasm. See <a href="../tauri/">docs/tauri.md</a> for the backend-store-vs-wasm decision.</p></main>
+  <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#quick-start-browser">Quick start (browser)</a></li><li class="l2"><a href="#the-loader-api">The loader API</a></li><li class="l2"><a href="#how-the-binding-works-no-wasm-bindgen">How the binding works (no wasm-bindgen)</a></li><li class="l2"><a href="#persistence-a-real-log-byte-compatible-with-native-kevy">Persistence: a real log, byte-compatible with native kevy</a></li><li class="l2"><a href="#cross-tab-pubsub">Cross-tab pub/sub</a></li><li class="l2"><a href="#clocks-ticks-and-ttls">Clocks, ticks, and TTLs</a></li><li class="l2"><a href="#performance">Performance</a></li><li class="l2"><a href="#the-rust-face-wasi-edge-runtimes-direct-embedding">The Rust face: WASI, edge runtimes, direct embedding</a></li><li class="l2"><a href="#faq">FAQ</a></li><li class="l2"><a href="#in-a-tauri-app">In a Tauri app</a></li></ul></aside>
+</div>
+
+<script src="../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

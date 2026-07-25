@@ -1,4 +1,4 @@
-//! End-to-end v0.1 detection: a client speaking real RESP over a TCP socket
+//! End-to-end detection: a client speaking real RESP over a TCP socket
 //! gets correct PING/ECHO replies through our own socket layer. Hermetic — no
 //! external redis-cli required.
 
@@ -12,7 +12,7 @@ fn with_server<F: FnOnce(&mut std::net::TcpStream)>(body: F) {
     let server = std::thread::spawn(move || {
         let conn = listener.accept().unwrap();
         let mut store = kevy::KeyspaceStore::new();
-        kevy::handle_conn(&conn, &mut store).unwrap();
+        kevy::handle_conn(&kevy::KevyCommands::new(), &conn, &mut store).unwrap();
     });
 
     let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();

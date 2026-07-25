@@ -74,7 +74,7 @@ Start it on a second host:
 kevy --config /etc/kevy/replica.toml --port 6004
 ```
 
-Each local shard opens a runner thread, connects to `(upstream_host, upstream_port_base + shard_index)`, handshakes with `REPLICATE FROM <offset> ID <replica_id>`, reads `+ACK <offset>`, then streams frames into the shard's apply path inside a guard that suppresses local re-emission.
+Each local shard opens a runner thread, connects to `(upstream_host, upstream_port_base + shard_index)`, handshakes with `REPLICATE FROM <generation> <offset> ID <replica_id>`, reads `+ACK <generation> <offset>`, then streams frames into the shard's apply path inside a guard that suppresses local re-emission.
 
 ### 3. Retarget the replica at runtime
 
@@ -123,7 +123,7 @@ redis-cli -p 6004 INFO replication          # on the replica
 # slave_lag_frames:0
 ```
 
-Both sides report heartbeat/ACK truth (v3.14): on the primary, a `slave0` line's `state` flips `syncing → online` on the replica's first `REPLCONF ACK`, `offset` is its **acked** position, and `lag` is in frames; on the replica, `master_link_status` is `up` while a heartbeat landed within 3 s, and `slave_lag_frames:0` means caught up. Field-by-field semantics are in the *Observability* section of [`docs/availability.md`](https://github.com/goliajp/kevy/blob/develop/docs/availability.md).
+Both sides report heartbeat/ACK truth (v3.14): on the primary, a `slave0` line's `state` flips `syncing → online` once every shard stream has a real `REPLCONF ACK`, `offset` is its **acked** position, and `lag` is in frames; on the replica, `master_link_status` is `up` while a heartbeat landed within 3 s, and `slave_lag_frames:0` means caught up. `ROLE` and `INFO replication` aggregate across shards: offsets are summed over the shard streams, and each replica process appears as exactly one `slaveN` entry regardless of shard count. Field-by-field semantics are in the *Observability* section of [`docs/availability.md`](https://github.com/goliajp/kevy/blob/develop/docs/availability.md).
 
 Live runtime state from `REPLICAOF` always wins over the static config in the reply — and with an elect quorum configured, the live election role wins over both.
 
@@ -162,7 +162,7 @@ Server-side TOML keys under `[replication]`:
 | `replica_read_only` | `true` | Reject client writes on a replica with `-READONLY`; the replication apply path and admin verbs bypass the gate. |
 | `replica_max_staleness_ms` | `0` (off) | Bounded staleness: a replica whose last primary heartbeat is older than the bound refuses reads with `-STALE`. Ladder rung 3 in [`docs/availability.md`](https://github.com/goliajp/kevy/blob/develop/docs/availability.md). |
 | `min_replicas_to_write` | `0` (off) | The primary refuses writes with `-NOREPLICAS` when fewer than N replicas are healthy (live connection that has ACKed). Ladder rung 4. |
-| `min_replicas_max_lag_ms` | `10000` | Reserved freshness window for `min_replicas_to_write`. |
+| `min_replicas_max_lag_ms` | `10000` | Freshness window for `min_replicas_to_write`: a replica counts as healthy only if its latest ACK is younger than this bound, so a stalled replica ages out of the count even while its connection stays up. |
 | `single_source` | `false` | The upstream is ONE stream on one port (an embedded writer) instead of the per-shard fleet — see *Embedded-as-primary* below. |
 
 Because both roles bind the replication range, co-hosting several instances on one machine requires client ports at least `nshards` apart — otherwise their default replication ranges (`client port + 10000 … + 10000 + nshards − 1`) collide.
@@ -202,7 +202,7 @@ Replication is **asynchronous by default**. The primary commits and replies befo
 |---|---|
 | Write durability | Acknowledged by the primary as soon as it lands in the local store and the backlog ring. Replicas catch up afterwards; `WAIT n timeout` blocks until ≥ n have acknowledged (a replica ack is not an fsync — see availability.md). |
 | Read consistency | Replicas may lag. Send `request_read(…, consistent = true)` through `kevy-cluster-rw` to force a read at the primary, or use `REPL.TOKEN` + `REPL.WAIT` for read-your-writes on the replica itself. |
-| Replica falls behind | If the reconnect needs an offset that has aged out of the ring, the primary in-line-ships a snapshot of that shard and resumes live frames at the snapshot's end offset — no gap, no operator action. |
+| Replica falls behind | If the reconnect needs an offset that has aged out of the ring, the primary in-line-ships a snapshot of that shard and resumes live frames at the snapshot's end offset — no gap, no operator action. While the ship is replacing the replica's keyspace, client reads on the replica answer `-LOADING` (`PING` / `INFO` / `HELLO` stay answerable, so health checks keep passing). |
 | Sizing the backlog | `replication_buffer_size ≈ peak_writes_per_sec × avg_argv_bytes × reconnect_window_seconds`. Oversize is harmless; undersize falls back to snapshot ship. |
 | What fails over | Writes to the new primary, automatically when `kevy-elect` is configured, by hand otherwise. Existing `kevy-cluster-rw` clients re-route writes once they learn the new primary; in-flight writes during the gap fail loudly. |
 | What does not fail over | Cross-DC traffic, gossip-discovered peers, online resharding, AUTH/TLS — kevy does not ship any of these. Single-DC only. |
@@ -226,7 +226,7 @@ The interval between "primary acks the client" and "every replica has applied th
 Yes — that is the main reason to add one. Use [`kevy-cluster-rw::ReadWriteClient`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-cluster-rw) and it will send writes to the primary and round-robin reads across the replica seeds you pass in. When a read must observe the latest write, use the consistent-read path on the same client to force that read through the primary.
 
 **A replica fell too far behind — how do I recover it?**
-Do nothing. The primary detects that the replica's requested offset is no longer in the backlog ring, returns `TooOld`, in-line-ships a snapshot of the shard's keyspace via the same RESP wire connection, then resumes live frames at the snapshot's end offset. The replica swaps in the snapshot, applies the live tail, and is caught up. If you would rather rebuild from empty, stop the replica, delete its data directory, and restart — the runner will connect with `from_offset = 0` and snapshot-ship the whole keyspace.
+Do nothing. The primary detects that the replica's requested offset is no longer in the backlog ring, returns `TooOld`, in-line-ships a snapshot of the shard's keyspace via the same RESP wire connection, then resumes live frames at the snapshot's end offset. The replica swaps in the snapshot, applies the live tail, and is caught up. During the ship window the replica refuses client reads with `-LOADING` (the visible keyspace is about to be replaced wholesale); `PING`, `INFO`, and `HELLO` are exempt, and `INFO replication` reports `loading:1` so monitoring can watch the window close. If you would rather rebuild from empty, stop the replica, delete its data directory, and restart — the runner will connect with `from_offset = 0` and snapshot-ship the whole keyspace.
 
 ## See also
 

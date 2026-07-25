@@ -1,6 +1,6 @@
 //! Async IO traits — runtime-agnostic core.
 //!
-//! Per RFC F5 (locked) the core of `kevy-client-async` depends only on
+//! The core of `kevy-client-async` depends only on
 //! `core::future` / `core::task` / `std::io`. We do NOT pull `futures-io`,
 //! `tokio::io::AsyncRead`, nor any other crate's IO traits — the
 //! ecosystem's three runtimes each define their own near-identical
@@ -9,14 +9,14 @@
 //!
 //! Instead this module defines the traits ourselves in the
 //! `futures-io` shape (poll-based, `&mut [u8]` buffers, returns
-//! `Poll<io::Result<usize>>`). The runtime feature modules T4.5/T4.6/
-//! T4.7 each ship a tiny adapter that implements these traits on top
-//! of `<runtime>::net::TcpStream`.
+//! `Poll<io::Result<usize>>`). The per-runtime feature modules
+//! (`rt_tokio` / `rt_smol` / `rt_async_std`) each ship a tiny adapter
+//! that implements these traits on top of `<runtime>::net::TcpStream`.
 //!
-//! `AsyncTransport` is the bound the RESP3 codec (T4.4) and connection
-//! type (T4.9) actually require: a single `AsyncRead + AsyncWrite +
-//! Send + Unpin` thing. Blanket-impl'd for any qualifying type so
-//! callers can hand in any compatible transport.
+//! `AsyncTransport` is the bound the RESP3 codec and connection type
+//! actually require: a single `AsyncRead + AsyncWrite + Send + Unpin`
+//! thing. Blanket-impl'd for any qualifying type so callers can hand
+//! in any compatible transport.
 
 use core::future::Future;
 use core::pin::Pin;
@@ -56,8 +56,8 @@ pub trait AsyncWrite {
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>>;
 }
 
-/// Bound used everywhere downstream: codec (T4.4), `AsyncConnection`
-/// (T4.9), pipeline runner (T4.16). Blanket-impl'd so any
+/// Bound used everywhere downstream: codec, `AsyncConnection`,
+/// pipeline runner. Blanket-impl'd so any
 /// `AsyncRead + AsyncWrite + Send + Unpin` value satisfies it.
 pub trait AsyncTransport: AsyncRead + AsyncWrite + Send + Unpin {}
 

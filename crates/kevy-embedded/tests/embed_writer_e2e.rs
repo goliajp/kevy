@@ -1,23 +1,23 @@
-//! Phase 3 / T3.10 e2e: an embed-as-writer's replication source
+//! E2e: an embed-as-writer's replication source
 //! listener serves real `kevy_replicate::ReplicaClient` subscribers,
 //! and every commit on the embed shows up on the wire in offset
 //! order.
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::net::TcpListener;
 use std::time::{Duration, Instant};
 
 use kevy_embedded::{Config, Store};
 use kevy_replicate::replica::{ReplicaClient, ReplicaEvent};
 
-/// Reserve one free port + return its address. Single-port flavour
-/// of the existing test harness — the embed writer doesn't need a
-/// block of consecutive ports the way the server replication tests
-/// do.
-fn free_port() -> u16 {
-    let l = TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port()
+/// Open an embed writer on an OS-assigned ephemeral port and read the
+/// real address back — race-free, unlike the old bind-probe-release
+/// `free_port()` (whose window let a parallel test steal the port:
+/// AddrInUse flakes under covgate's instrumented, slowed runs).
+fn open_writer(cfg: Config) -> (Store, String) {
+    let store = Store::open(cfg.with_embed_writer("127.0.0.1:0")).unwrap();
+    let addr = store.writer_addr().expect("writer listener bound").to_string();
+    (store, addr)
 }
 
 fn wait_for<F: FnMut() -> bool>(timeout: Duration, mut predicate: F) -> bool {
@@ -33,12 +33,9 @@ fn wait_for<F: FnMut() -> bool>(timeout: Duration, mut predicate: F) -> bool {
 
 #[test]
 fn embed_writer_streams_committed_argvs_to_replica_client() {
-    let port = free_port();
-    let addr = format!("127.0.0.1:{port}");
-    let cfg = Config::default().with_embed_writer(&addr);
-    let writer = Store::open(cfg).unwrap();
+    let (writer, addr) = open_writer(Config::default());
 
-    // Apply two writes BEFORE the subscriber connects. v3.2
+    // Apply two writes BEFORE the subscriber connects. Snapshot
     // semantics (snapshot.md): offset 0 against non-empty history =
     // SNAPSHOT ship (keyspace + as-of offset), then live frames —
     // NOT a frame replay from 0.
@@ -65,13 +62,10 @@ fn embed_writer_streams_committed_argvs_to_replica_client() {
 
 #[test]
 fn embed_writer_serves_multiple_subscribers_independently() {
-    let port = free_port();
-    let addr = format!("127.0.0.1:{port}");
-    let cfg = Config::default().with_embed_writer(&addr);
-    let writer = Store::open(cfg).unwrap();
+    let (writer, addr) = open_writer(Config::default());
     writer.set(b"shared", b"v").unwrap();
 
-    // v3.2: offset 0 vs history → each subscriber gets its own
+    // Offset 0 vs history → each subscriber gets its own
     // snapshot ship, then live frames.
     let mut a = ReplicaClient::connect(addr.as_str(), "sub-a", 0).unwrap();
     let mut b = ReplicaClient::connect(addr.as_str(), "sub-b", 0).unwrap();
@@ -94,16 +88,14 @@ fn embed_writer_serves_multiple_subscribers_independently() {
 
 #[test]
 fn two_embed_writers_distinct_scopes_both_visible_to_subscribers() {
-    // T3.16 e2e — two embed-as-writer stores own disjoint key
+    // E2e — two embed-as-writer stores own disjoint key
     // prefixes; two subscribers (one per writer) each see their
     // own writer's keyspace. Validates that two replication
     // source listeners in one process don't interfere with each
     // other (separate `ReplicaSource` instances + separate
     // accept loops).
-    let port_a = free_port();
-    let port_b = free_port();
-    let writer_a = Store::open(Config::default().with_embed_writer(format!("127.0.0.1:{port_a}"))).unwrap();
-    let writer_b = Store::open(Config::default().with_embed_writer(format!("127.0.0.1:{port_b}"))).unwrap();
+    let (writer_a, addr_a) = open_writer(Config::default());
+    let (writer_b, addr_b) = open_writer(Config::default());
 
     // Pre-fill disjoint scopes.
     writer_a.set(b"app:billing:1", b"a-bill-1").unwrap();
@@ -111,18 +103,10 @@ fn two_embed_writers_distinct_scopes_both_visible_to_subscribers() {
     writer_b.set(b"app:auth:1", b"b-auth-1").unwrap();
 
     // Each subscriber connects to ONE writer.
-    let mut sub_a = ReplicaClient::connect(
-        format!("127.0.0.1:{port_a}").as_str(),
-        "sub-of-a",
-        0,
-    ).unwrap();
-    let mut sub_b = ReplicaClient::connect(
-        format!("127.0.0.1:{port_b}").as_str(),
-        "sub-of-b",
-        0,
-    ).unwrap();
+    let mut sub_a = ReplicaClient::connect(addr_a.as_str(), "sub-of-a", 0).unwrap();
+    let mut sub_b = ReplicaClient::connect(addr_b.as_str(), "sub-of-b", 0).unwrap();
 
-    // v3.2: each subscriber receives its own writer's snapshot
+    // Each subscriber receives its own writer's snapshot
     // (pre-fill rides the ship, not frames).
     let (_, ack_a) = drain_snapshot(&mut sub_a);
     let (_, ack_b) = drain_snapshot(&mut sub_b);
@@ -147,9 +131,7 @@ fn two_embed_writers_distinct_scopes_both_visible_to_subscribers() {
 fn embed_writer_local_writes_are_not_readonly() {
     // Sanity: the writer is NOT in replica mode, so local writes
     // succeed (READONLY enforcement is Phase-2 / open_replica only).
-    let port = free_port();
-    let addr = format!("127.0.0.1:{port}");
-    let writer = Store::open(Config::default().with_embed_writer(&addr)).unwrap();
+    let (writer, _addr) = open_writer(Config::default());
     assert!(!writer.is_replica());
     writer.set(b"k", b"v").unwrap();
     assert_eq!(writer.get(b"k").unwrap().as_deref(), Some(b"v".as_slice()));
@@ -195,4 +177,60 @@ fn argv_to_vecvec(argv: &kevy_persist::Argv) -> Vec<Vec<u8>> {
         }
     }
     v
+}
+
+/// The T8 offset-aliasing fence: a subscriber resuming with a cursor
+/// from a PREVIOUS writer boot must get a snapshot ship, never
+/// frame continuity — the restarted writer's in-memory backlog
+/// restarted offsets at 0, so "offset 3" now names different data.
+/// Pre-fence, a new history that had grown past the old cursor
+/// served frames from it silently (missing everything the new boot
+/// wrote before that offset).
+#[test]
+fn writer_restart_generation_fence_ships_instead_of_aliasing() {
+    // Boot A: three writes → next_offset 3.
+    let (writer_a, addr_a) = open_writer(Config::default());
+    for i in 0..3u8 {
+        writer_a.set(format!("a:{i}").as_bytes(), b"old").unwrap();
+    }
+    let mut sub = ReplicaClient::connect(addr_a.as_str(), "sub-restart", 0).unwrap();
+    let gen_a = sub.primary_gen_at_handshake();
+    assert_ne!(gen_a, 0, "writer must advertise a real generation");
+    let (_payload, ack_a) = drain_snapshot(&mut sub);
+    assert_eq!(ack_a, 3, "boot A as-of offset");
+    drop(sub);
+    drop(writer_a);
+
+    // Boot B ("restarted writer"): a fresh source, offsets restart at
+    // 0, and its history RACES PAST the old cursor (6 > 3) — the
+    // exact shape where pre-fence code would serve aliased frames
+    // 3..6 and silently skip b:0..b:2.
+    let (writer_b, addr_b) = open_writer(Config::default());
+    for i in 0..6u8 {
+        writer_b.set(format!("b:{i}").as_bytes(), b"new").unwrap();
+    }
+
+    // Resume claim from boot A's history: (gen_a, offset 3).
+    let mut sub = ReplicaClient::connect_at(
+        addr_b.as_str(),
+        "sub-restart",
+        gen_a,
+        3,
+        Duration::from_secs(5),
+    )
+    .unwrap();
+    let gen_b = sub.primary_gen_at_handshake();
+    assert_ne!(gen_b, gen_a, "each boot mints its own generation");
+    // The fence must answer with a FULL snapshot of boot B's
+    // keyspace — drain_snapshot panics if a live frame arrives
+    // instead (the aliasing failure mode).
+    let (payload, ack_b) = drain_snapshot(&mut sub);
+    assert_eq!(ack_b, 6, "snapshot covers all of boot B's history");
+    let text = String::from_utf8_lossy(&payload).into_owned();
+    for i in 0..6u8 {
+        assert!(
+            text.contains(&format!("b:{i}")),
+            "snapshot must carry b:{i} (got no aliased frame gap)"
+        );
+    }
 }

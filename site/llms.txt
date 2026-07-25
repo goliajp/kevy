@@ -1,0 +1,665 @@
+# kevy
+
+> Pure-Rust, zero-dependency, Redis-compatible serving engine: the primary
+> store for applications (declared indexes, views, write-time aggregates,
+> CJK full-text search, vector KNN, CDC feeds, replication) speaking RESP.
+
+Machine notes: wire protocol is RESP2 (RESP3 via HELLO 3). Every verb below
+is discoverable live via `COMMAND DOCS <verb>`, which answers with the same
+`complexity` and `compat` fields printed here; errors are self-explaining and
+their prefixes are a stable contract (docs/error-replies.md). This file is
+GENERATED from the server's verb metadata table — do not edit by hand.
+The full text of every document below is inlined at https://kevy.golia.jp/llms-full.txt,
+which is one fetch and needs no crawling.
+
+Read `compat` before you assume a verb behaves the way Redis's docs say. kevy
+is wire-compatible, not behaviour-identical, and the differences that matter
+are stated per verb rather than buried in a migration guide. Three that catch
+people: SCAN is not a cursor iterator (one call sweeps the whole keyspace and
+returns cursor 0); RANDOMKEY, SPOP and SRANDMEMBER are NOT random (they return
+the same members every time); and multi-key writes are atomic only within one
+shard — co-locate keys with a {hashtag} when you need them to move together.
+
+Read `complexity` before you assume a cost. It was derived from THIS engine's
+code, not copied from Redis — several genuinely differ in both directions:
+LINDEX and LSET are O(1) on our ring buffer where Redis's quicklist is O(N),
+while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
+
+## Docs
+
+- [Verb reference](https://kevy.golia.jp/docs/commands/): every verb, arity, flags, syntax
+- [Designing on kevy](https://kevy.golia.jp/docs/designing-on-kevy/): the serving-engine model
+- [Cookbook](https://kevy.golia.jp/docs/cookbook/): RDS-to-kevy modeling recipes
+- [RDS workloads](https://kevy.golia.jp/docs/rds-workloads/): SQL-to-kevy reference matrix (types, SELECT, JOIN, transactions, DDL)
+- [Indexes](https://kevy.golia.jp/docs/indexes/) · [Views](https://kevy.golia.jp/docs/views/) · [Text search](https://kevy.golia.jp/docs/text-search/) · [Vector search](https://kevy.golia.jp/docs/vector-search/)
+- [CDC feeds](https://kevy.golia.jp/docs/cdc/) · [Replication](https://kevy.golia.jp/docs/replication/) · [Availability & failover](https://kevy.golia.jp/docs/availability/) · [Persistence](https://kevy.golia.jp/docs/persistence/)
+- [Migration](https://kevy.golia.jp/docs/migration/) · [Upgrading between majors](https://kevy.golia.jp/docs/UPGRADING/)
+- [WASM / browser](https://kevy.golia.jp/docs/wasm/) · [Electron apps](https://kevy.golia.jp/docs/electron/) · [Tauri apps](https://kevy.golia.jp/docs/tauri/) · [IoT / embedded tiers](https://kevy.golia.jp/docs/iot/)
+- [Error contract](https://kevy.golia.jp/docs/error-replies/) · [Tuning](https://kevy.golia.jp/docs/tuning/)
+
+## Verbs (188 total)
+
+### scan
+
+- `KEYS pattern` [readonly] — Return every key matching the glob pattern (cross-shard gather).
+  - complexity: O(N) keys in the whole keyspace — every shard walks its entire map, plus an O(P*K) glob match per key
+  - compat: full
+- `RANDOMKEY` [readonly] — Return a random key from the keyspace.
+  - complexity: O(1) expected — each shard probes a random slot, and the origin folds the candidates through a reservoir weighted by shard key counts, so every key is equally likely
+  - compat: full
+- `SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]` [readonly] — Iterate the keyspace incrementally: each call walks ~COUNT buckets of one shard and returns the next cursor.
+  - complexity: O(COUNT) buckets per call, amortised O(N) for a full sweep — reverse-binary cursor, rehash-tolerant (a key present for the whole sweep is returned at least once even across table growth)
+  - compat: differs: cursors encode (shard, position), so a cursor is only valid on the server and shard count that issued it — the same per-node property Redis Cluster cursors have. MATCH and TYPE filter after collection; COUNT bounds the buckets visited, not the keys returned
+
+### generic
+
+- `DEL key [key ...]` [write] — Delete one or more keys.
+  - complexity: O(N) keys, plus O(M) per key holding a collection of M elements (the drop walks the container)
+  - compat: differs: the multi-key form is split by shard and summed with no barrier, so it is not atomic across shards; the single-key form is
+- `EXISTS key [key ...]` [readonly] — Count how many of the given keys exist.
+  - complexity: O(N) keys, one O(1) probe each
+  - compat: differs: the multi-key form is gathered per shard, so the count is not a point-in-time snapshot across shards
+- `EXPIRE key seconds` [write] — Set a key's TTL in seconds (non-positive TTL deletes the key).
+  - complexity: O(1)
+  - compat: differs: the NX / XX / GT / LT condition flags are not parsed — arity is fixed at 3, so EXPIRE key seconds NX is a wrong-arity error
+- `EXPIREAT key unix-time-seconds` [write] — Set a key's expiry as an absolute Unix timestamp in seconds.
+  - complexity: O(1)
+  - compat: differs: the NX / XX / GT / LT condition flags are not parsed — arity is fixed at 3
+- `PERSIST key` [write] — Remove a key's TTL.
+  - complexity: O(1)
+  - compat: full
+- `PEXPIRE key milliseconds` [write] — Set a key's TTL in milliseconds.
+  - complexity: O(1)
+  - compat: differs: the NX / XX / GT / LT condition flags are not parsed — arity is fixed at 3
+- `PEXPIREAT key unix-time-milliseconds` [write] — Set a key's expiry as an absolute Unix timestamp in milliseconds.
+  - complexity: O(1)
+  - compat: differs: the NX / XX / GT / LT condition flags are not parsed — arity is fixed at 3
+- `PTTL key` [readonly] — Return a key's remaining TTL in milliseconds (-1 no TTL, -2 missing).
+  - complexity: O(1)
+  - compat: full
+- `RENAME key newkey` [write] — Rename a key, overwriting the destination (write routed at the runtime Op level).
+  - complexity: O(1) for a string value; O(M) for a collection of M elements (the entry's weight is re-derived by walking the value)
+  - compat: differs: a cross-shard rename is a non-atomic Take then Put — there is a window in which neither key is visible; co-locate the two keys with a {hashtag} for the atomic path
+- `RENAMENX key newkey` [write] — Rename a key only if the destination does not exist (write routed at the runtime Op level).
+  - complexity: O(1) for a string value; O(M) for a collection of M elements
+  - compat: differs: cross-shard RENAMENX is a non-atomic Take, Put, restore-on-refusal sequence — there is a window in which the source is absent from the keyspace
+- `TTL key` [readonly] — Return a key's remaining TTL in seconds (-1 no TTL, -2 missing).
+  - complexity: O(1)
+  - compat: full
+- `TYPE key` [readonly] — Return the type of the value stored at key.
+  - complexity: O(1)
+  - compat: full
+- `UNLINK key [key ...]` [write] — Delete one or more keys (alias of DEL in kevy's shard model).
+  - complexity: O(N) keys, plus O(M) per collection-typed key — identical to DEL
+  - compat: differs: UNLINK is an alias of DEL — the value is freed inline on the owning shard's reactor thread, not by a background thread, so it gives no latency benefit
+
+### string
+
+- `APPEND key value` [write] — Append bytes to a string value; returns the new length.
+  - complexity: O(1) amortised while the value is <= 64 B; O(N) per call once it exceeds that (the Arc payload is copied out and re-boxed on every append), so building a large string by repeated APPEND is O(N^2)
+  - compat: full
+- `DECR key` [write] — Decrement the integer value of a key by one.
+  - complexity: O(1)
+  - compat: full
+- `DECRBY key decrement` [write] — Decrement the integer value of a key by the given amount.
+  - complexity: O(1)
+  - compat: full
+- `GET key` [readonly] — Return the string value of a key.
+  - complexity: O(1)
+  - compat: full
+- `GETDEL key` [write] — Return the string value of a key and delete it.
+  - complexity: O(1)
+  - compat: full
+- `GETSET key value` [write] — Set a key's string value and return its previous value.
+  - complexity: O(1)
+  - compat: full
+- `INCR key` [write] — Increment the integer value of a key by one.
+  - complexity: O(1)
+  - compat: full
+- `INCRBY key increment` [write] — Increment the integer value of a key by the given amount.
+  - complexity: O(1)
+  - compat: full
+- `INCRBYFLOAT key increment` [write] — Increment the float value of a key by the given amount.
+  - complexity: O(1)
+  - compat: differs: arithmetic is f64 and the reply uses Rust's shortest-round-trip float printer, not a long double accumulator, so trailing digits can diverge from Redis
+- `MGET key [key ...]` [readonly] — Return the values of multiple keys (cross-shard gather).
+  - complexity: O(N) keys, one O(1) probe each on the owning shard
+  - compat: differs: keys are grouped by shard and each shard is probed independently, so the reply is not a point-in-time snapshot across shards
+- `MSET key value [key value ...]` [write] — Set multiple key/value pairs atomically per shard.
+  - complexity: O(N) pairs, one O(1) SET each
+  - compat: differs: atomic only per shard — pairs are split by key and applied shard-by-shard with no cross-shard barrier, so a reader can observe some pairs written and others not; Redis MSET is globally atomic
+- `PSETEX key milliseconds value` [write] — Set a key's value with a TTL in milliseconds.
+  - complexity: O(1)
+  - compat: full
+- `SET key value [EX seconds|PX milliseconds] [NX|XX]` [write] — Set a key's string value with optional TTL and existence conditions.
+  - complexity: O(1)
+  - compat: differs: only NX / XX / EX / PX are parsed — KEEPTTL, EXAT, PXAT, GET and the IFEQ family are a syntax error; a repeated expire option is silently accepted last-one-wins instead of erroring
+- `SETEX key seconds value` [write] — Set a key's value with a TTL in seconds.
+  - complexity: O(1)
+  - compat: full
+- `SETNX key value` [write] — Set a key's value only if it does not exist.
+  - complexity: O(1)
+  - compat: full
+- `STRLEN key` [readonly] — Return the length of a key's string value.
+  - complexity: O(1)
+  - compat: full
+
+### hash
+
+- `HDEL key field [field ...]` [write] — Delete one or more hash fields.
+  - complexity: O(M) fields
+  - compat: full
+- `HEXISTS key field` [readonly] — Check whether a hash field exists.
+  - complexity: O(1)
+  - compat: full
+- `HEXPIRE key seconds [NX|XX|GT|LT] FIELDS numfields field [field ...]` [write] — Set per-field TTLs on a hash, in seconds.
+  - complexity: O(F) fields in the FIELDS clause
+  - compat: differs: the FIELDS parse error reads 'Mandatory keyword FIELDS is missing' where Redis says 'Mandatory argument FIELDS'
+- `HGET key field` [readonly] — Return the value of a hash field.
+  - complexity: O(1)
+  - compat: full
+- `HGETALL key` [readonly] — Return all fields and values of a hash.
+  - complexity: O(N) fields, with a full copy of every name and value
+  - compat: full
+- `HINCRBY key field increment` [write] — Increment the integer value of a hash field.
+  - complexity: O(1)
+  - compat: full
+- `HKEYS key` [readonly] — Return all field names of a hash.
+  - complexity: O(N) fields
+  - compat: full
+- `HLEN key` [readonly] — Return the number of fields in a hash.
+  - complexity: O(1)
+  - compat: full
+- `HMGET key field [field ...]` [readonly] — Return the values of multiple hash fields.
+  - complexity: O(M) fields requested
+  - compat: full
+- `HMSET key field value [field value ...]` [write] — Deprecated alias of HSET that replies OK.
+  - complexity: O(M) pairs
+  - compat: full
+- `HPERSIST key FIELDS numfields field [field ...]` [write] — Remove per-field TTLs from a hash.
+  - complexity: O(F) fields
+  - compat: differs: silently accepts a stray NX|XX|GT|LT token before FIELDS (it shares HEXPIRE's parser) where Redis rejects it
+- `HPEXPIRE key milliseconds [NX|XX|GT|LT] FIELDS numfields field [field ...]` [write] — Set per-field TTLs on a hash, in milliseconds.
+  - complexity: O(F) fields
+  - compat: differs: same FIELDS error-text deviation as HEXPIRE
+- `HPEXPIREAT key unix-time-milliseconds [NX|XX|GT|LT] FIELDS numfields field [field ...]` [write] — Set per-field expiries as absolute Unix-millisecond deadlines.
+  - complexity: O(F) fields
+  - compat: differs: same FIELDS error-text deviation as HEXPIRE
+- `HSCAN key cursor [MATCH pattern] [COUNT count]` [readonly] — Iterate a hash's fields and values (single-batch cursor).
+  - complexity: O(N) — the whole hash is copied and returned in one batch
+  - compat: differs: not a cursor iterator — the cursor is always 0 and the entire hash comes back in a single reply; NOVALUES is not parsed and COUNT is validated then ignored
+- `HSET key field value [field value ...]` [write] — Set one or more hash fields; returns the number of new fields.
+  - complexity: O(M) pairs
+  - compat: full
+- `HSETNX key field value` [write] — Set a hash field only if it does not exist.
+  - complexity: O(1)
+  - compat: full
+- `HPTTL key FIELDS numfields field [field ...]` [readonly] — Return per-field remaining TTLs in milliseconds (-1 no TTL, -2 missing).
+  - complexity: O(F) fields
+  - compat: differs: silently accepts a stray NX|XX|GT|LT token before FIELDS where Redis rejects it
+- `HTTL key FIELDS numfields field [field ...]` [readonly] — Return per-field remaining TTLs in seconds (-1 no TTL, -2 missing).
+  - complexity: O(F) fields
+  - compat: differs: silently accepts a stray NX|XX|GT|LT token before FIELDS where Redis rejects it
+- `HVALS key` [readonly] — Return all values of a hash.
+  - complexity: O(N) fields
+  - compat: full
+
+### list
+
+- `BLPOP key [key ...] timeout` [write,blocking] — Blocking left pop across one or more lists (effect logged as LPOP).
+  - complexity: O(1) to serve; the park is O(1) and waiters are woken FIFO per key
+  - compat: differs: on a multi-shard server the multi-key form does not honour Redis's left-to-right key priority — keys on the connection's own shard are served before remote ones
+- `BRPOP key [key ...] timeout` [write,blocking] — Blocking right pop across one or more lists (effect logged as RPOP).
+  - complexity: O(1) to serve; FIFO park
+  - compat: differs: same multi-key priority deviation as BLPOP
+- `BRPOPLPUSH source destination timeout` [write,blocking] — Blocking RPOPLPUSH: pop the source tail and push it onto the destination head.
+  - complexity: O(1) to serve
+  - compat: differs: a cross-shard move is not atomic — the element is popped on the source's shard and pushed on the destination's, and between those two steps it is in neither list. Co-locate the keys with a {hashtag} to get Redis's atomic path
+- `LINDEX key index` [readonly] — Return the element at the given list index.
+  - complexity: O(1) — the list is a VecDeque, so an index is a direct offset (Redis's quicklist is O(N))
+  - compat: full
+- `LLEN key` [readonly] — Return the length of a list.
+  - complexity: O(1)
+  - compat: full
+- `LMOVE source destination LEFT|RIGHT LEFT|RIGHT` [write] — Atomically move an element between two lists.
+  - complexity: O(1)
+  - compat: differs: a cross-shard move is not atomic — see BRPOPLPUSH
+- `LPOP key [count]` [write] — Pop one or more elements from the head of a list.
+  - complexity: O(C) elements popped
+  - compat: differs: LPOP key 0 on an existing key replies a nil array where Redis replies an empty array
+- `LPOS key element [RANK rank] [COUNT num-matches] [MAXLEN len]` [readonly] — Return the index of matching elements in a list.
+  - complexity: O(N) always — the whole list is copied before RANK / COUNT / MAXLEN are applied, so MAXLEN bounds the comparisons but not the copy
+  - compat: full
+- `LPUSH key element [element ...]` [write] — Prepend one or more elements to a list.
+  - complexity: O(M) values, O(1) amortised each
+  - compat: full
+- `LRANGE key start stop` [readonly] — Return a range of list elements.
+  - complexity: O(M) elements returned — the start offset is skipped in O(1) (Redis is O(S+M))
+  - compat: full
+- `LREM key count element` [write] — Remove elements equal to the given value from a list.
+  - complexity: O(N*R) worst case — the scan is O(N) but each removal shifts up to half the deque (Redis is O(N+R))
+  - compat: full
+- `LSET key index element` [write] — Set the list element at the given index.
+  - complexity: O(1) — a direct index write (Redis is O(N) for a mid-list index)
+  - compat: full
+- `LTRIM key start stop` [write] — Trim a list to the given range.
+  - complexity: O(R) elements removed
+  - compat: full
+- `RPOP key [count]` [write] — Pop one or more elements from the tail of a list.
+  - complexity: O(C) elements popped
+  - compat: differs: RPOP key 0 on an existing key replies a nil array where Redis replies an empty array
+- `RPOPLPUSH source destination` [write] — Pop the source tail and push it onto the destination head.
+  - complexity: O(1)
+  - compat: differs: a cross-shard move is not atomic — see BRPOPLPUSH
+- `RPUSH key element [element ...]` [write] — Append one or more elements to a list.
+  - complexity: O(M) values, O(1) amortised each
+  - compat: full
+
+### set
+
+- `SADD key member [member ...]` [write] — Add one or more members to a set.
+  - complexity: O(M) members
+  - compat: full
+- `SCARD key` [readonly] — Return the number of members in a set.
+  - complexity: O(1)
+  - compat: full
+- `SDIFF key [key ...]` [readonly] — Return the difference of the given sets (cross-shard gather).
+  - complexity: O(sum of the source cardinalities)
+  - compat: full
+- `SDIFFSTORE destination key [key ...]` [write] — Store the difference of the given sets into destination.
+  - complexity: O(sum of the source cardinalities) + O(result) to write the destination on its own shard
+  - compat: full
+- `SINTER key [key ...]` [readonly] — Return the intersection of the given sets (cross-shard gather).
+  - complexity: O(sum of the source cardinalities) — there is NO smallest-set-first ordering, so SINTER huge tiny costs O(huge) where Redis costs O(tiny * k)
+  - compat: full
+- `SINTERSTORE destination key [key ...]` [write] — Store the intersection of the given sets into destination.
+  - complexity: O(sum of the source cardinalities) + O(result); same no-smallest-first algorithm
+  - compat: full
+- `SISMEMBER key member` [readonly] — Check whether a value is a member of a set.
+  - complexity: O(1)
+  - compat: full
+- `SMEMBERS key` [readonly] — Return all members of a set.
+  - complexity: O(N) members
+  - compat: full
+- `SPOP key [count]` [write] — Remove and return one or more random members of a set.
+  - complexity: O(count) expected — each member is drawn by probing a random slot and taking the first occupied one
+  - compat: full
+- `SRANDMEMBER key [count]` [readonly] — Return one or more random members of a set without removing them. A negative count allows repeats.
+  - complexity: O(count) expected when count is a small fraction of the set (random-slot probing); O(N) once count exceeds a quarter of it, where copying and shuffling beats rejection sampling
+  - compat: full
+- `SREM key member [member ...]` [write] — Remove one or more members from a set.
+  - complexity: O(M) members
+  - compat: full
+- `SSCAN key cursor [MATCH pattern] [COUNT count]` [readonly] — Iterate a set's members (single-batch cursor).
+  - complexity: O(N) — the whole set is copied and returned in one batch
+  - compat: differs: not a cursor iterator — the cursor is always 0 and the entire set comes back in one reply; COUNT is validated then ignored
+- `SUNION key [key ...]` [readonly] — Return the union of the given sets (cross-shard gather).
+  - complexity: O(sum of the source cardinalities)
+  - compat: full
+- `SUNIONSTORE destination key [key ...]` [write] — Store the union of the given sets into destination.
+  - complexity: O(sum of the source cardinalities) + O(result)
+  - compat: full
+
+### zset
+
+- `BZPOPMIN key [key ...] timeout` [write,blocking] — Blocking pop of the lowest-scored member across one or more sorted sets.
+  - complexity: O(log N) per pop; the park is O(1)
+  - compat: full
+- `ZADD key [NX|XX] [GT|LT] [CH] [INCR] score member [score member ...]` [write] — Add members with scores to a sorted set, with conditional flags.
+  - complexity: O(M log N) — O(1) hash insert plus O(log N) tree insert per member
+  - compat: full
+- `ZCARD key` [readonly] — Return the number of members in a sorted set.
+  - complexity: O(1)
+  - compat: full
+- `ZCOUNT key min max` [readonly] — Count members with scores within the given bounds.
+  - complexity: O(log N) — two rank descents on the order-statistic tree bracket the score range; nothing is scanned
+  - compat: full
+- `ZDIFFSTORE destination numkeys key [key ...]` [write] — Store the difference of the given sorted sets into destination.
+  - complexity: O(sum of the source cardinalities + R log R); each source is extracted whole on its own shard
+  - compat: full
+- `ZINCRBY key increment member` [write] — Increment a member's score in a sorted set.
+  - complexity: O(log N)
+  - compat: full
+- `ZINTERCARD numkeys key [key ...] [LIMIT limit]` [readonly] — Return the cardinality of the intersection of the given sorted sets.
+  - complexity: O(sum of the source cardinalities) — LIMIT does not short-circuit the gather, only the combine
+  - compat: full
+- `ZINTERSTORE destination numkeys key [key ...] [WEIGHTS weight [weight ...]] [AGGREGATE SUM|MIN|MAX]` [write] — Store the intersection of the given sorted sets into destination.
+  - complexity: O(sum of the source cardinalities + R log R)
+  - compat: full
+- `ZPOPMIN key [count]` [write] — Pop up to count members with the lowest scores.
+  - complexity: O(M log N)
+  - compat: full
+- `ZPOPMIN.BELOW key below [count]` [write,extension] — kevy extension: pop up to count lowest members with score strictly below the threshold (delayed-job primitive).
+  - complexity: O(M log N) — take_while stops at the first score at or above the threshold, so it never walks past the due prefix
+  - compat: kevy-only: a delayed-job primitive (score = due time); no Redis analogue
+- `ZRANGE key start stop [WITHSCORES]` [readonly] — Return members by rank range.
+  - complexity: O(log N + M) — one rank descent seeks to start, then the M requested members are walked
+  - compat: differs: only the legacy 'key start stop [WITHSCORES]' form is accepted — the Redis 6.2 BYSCORE / BYLEX / REV / LIMIT arguments are a syntax error
+- `ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]` [readonly] — Return members with scores within the given bounds.
+  - complexity: O(log N + M) — a rank descent seeks to the score bound, then only the M in-range members are walked; LIMIT is still applied after the match set is materialised, so it bounds the reply, not the walk
+  - compat: full
+- `ZRANK key member` [readonly] — Return a member's rank, ordered from the lowest score.
+  - complexity: O(log N) — a hash lookup for the score, then one descent of the rank-augmented (score, member) tree
+  - compat: differs: the Redis 7.2 WITHSCORE option is not supported
+- `ZREM key member [member ...]` [write] — Remove one or more members from a sorted set.
+  - complexity: O(M log N)
+  - compat: full
+- `ZREMRANGEBYRANK key start stop` [write] — Remove members within the given rank range.
+  - complexity: O(log N + M log N) — a rank descent seeks to start, then M member deletes
+  - compat: full
+- `ZREMRANGEBYSCORE key min max` [write] — Remove members with scores within the given bounds.
+  - complexity: O(log N + M log N) — a seek finds the hit set, then M deletes
+  - compat: full
+- `ZREVRANGEBYSCORE key max min [WITHSCORES] [LIMIT offset count]` [readonly] — Return members with scores within the given bounds, highest first.
+  - complexity: O(log N + M) — a seeked forward walk of the M matches, then the result is reversed
+  - compat: full
+- `ZSCAN key cursor [MATCH pattern] [COUNT count]` [readonly] — Iterate a sorted set's members and scores (single-batch cursor).
+  - complexity: O(N) — the whole set is materialised
+  - compat: differs: not a cursor iterator — every call returns the whole set with cursor 0, and COUNT is parsed then ignored
+- `ZSCORE key member` [readonly] — Return a member's score.
+  - complexity: O(1) — a hash lookup
+  - compat: full
+- `ZUNIONSTORE destination numkeys key [key ...] [WEIGHTS weight [weight ...]] [AGGREGATE SUM|MIN|MAX]` [write] — Store the union of the given sorted sets into destination.
+  - complexity: O(sum of the source cardinalities + R log R)
+  - compat: full
+
+### stream
+
+- `XACK key group id [id ...]` [write] — Acknowledge pending entries for a consumer group.
+  - complexity: O(A log P)
+  - compat: full
+- `XADD key [NOMKSTREAM] [MAXLEN [=|~] threshold | MINID [=|~] id] id|* field value [field value ...]` [write] — Append an entry to a stream, with optional trim.
+  - complexity: O(log N) to insert; O(N*F) whenever a MAXLEN / MINID clause actually evicts, because the trim triggers a full weight recompute
+  - compat: differs: the approximate-trim '~' is accepted for wire compatibility but always trims exactly, and the LIMIT clause is not parsed
+- `XAUTOCLAIM key group consumer min-idle-time start [COUNT count] [JUSTID]` [write] — Scan and claim idle pending entries starting from a cursor.
+  - complexity: O(log P + K + COUNT log N); the idle filter runs before the take, so a PEL of fresh entries is walked in full
+  - compat: differs: the next-cursor is last-claimed+1 rather than 0-0 when the PEL scan completes, so a client looping until 0-0 needs one extra round trip
+- `XCLAIM key group consumer min-idle-time id [id ...] [IDLE ms] [TIME unix-time-milliseconds] [RETRYCOUNT count] [FORCE] [JUSTID]` [write] — Claim specific idle pending entries for a consumer.
+  - complexity: O(A * (log P + log N))
+  - compat: differs: IDLE / TIME / RETRYCOUNT / FORCE / JUSTID are parsed but LASTID is not, and a missing key or group returns 'no such key' instead of NOGROUP
+- `XDEL key id [id ...]` [write] — Delete entries from a stream by ID.
+  - complexity: O(D log N + N*F) for D ids — NOT O(1): the trailing weight recompute is linear in the whole stream
+  - compat: full
+- `XGROUP CREATE key group id|$ [MKSTREAM] | DESTROY key group | SETID key group id|$ | CREATECONSUMER key group consumer | DELCONSUMER key group consumer` [write] — Manage stream consumer groups.
+  - complexity: CREATE / DESTROY: O(1) plus an O(N*F) reweigh. SETID / CREATECONSUMER: O(1). DELCONSUMER: O(P)
+  - compat: differs: CREATE / SETID / DESTROY / CREATECONSUMER / DELCONSUMER / MKSTREAM are supported, but on a missing key the non-CREATE subcommands return 0 or NOGROUP instead of Redis's error, and XGROUP HELP is absent
+- `XINFO STREAM key | GROUPS key | CONSUMERS key group | HELP` [readonly] — Introspect a stream, its groups, or its consumers.
+  - complexity: STREAM: O(1). GROUPS: O(G*N) — 'lag' is a linear walk of every entry, once per group. CONSUMERS: O(C)
+  - compat: differs: STREAM / GROUPS / CONSUMERS / HELP only — XINFO STREAM FULL is absent; radix-tree-keys and nodes are synthetic (we have no radix tree), entries-read is approximated, and CONSUMERS omits 'inactive'
+- `XLEN key` [readonly] — Return the number of entries in a stream.
+  - complexity: O(1)
+  - compat: full
+- `XPENDING key group [[IDLE min-idle-time] start end count [consumer]]` [readonly] — Inspect pending entries of a consumer group (summary or extended form).
+  - complexity: summary: O(P*C) — the per-consumer tally is a linear find per PEL row. extended: O(log P + K)
+  - compat: full
+- `XRANGE key start end [COUNT count]` [readonly] — Return stream entries within an ID range.
+  - complexity: O(log N + M) — a B-tree range descent, COUNT applied lazily
+  - compat: full
+- `XREAD [COUNT count] [BLOCK milliseconds] STREAMS key [key ...] id [id ...]` [readonly,blocking] — Read new entries from one or more streams, optionally blocking.
+  - complexity: O(S * (log N + M)) over S streams; '$' is O(1); the park is O(1)
+  - compat: differs: the '+' last-id form is not parsed — only explicit IDs and '$' are accepted
+- `XREADGROUP GROUP group consumer [COUNT count] [BLOCK milliseconds] [NOACK] STREAMS key [key ...] id [id ...]` [write,blocking] — Read stream entries as a consumer-group member, optionally blocking.
+  - complexity: '>' form: O(log N + U + M) — COUNT does NOT bound the scan, the entire undelivered tail is materialised first. Replay form: O(log P + K)
+  - compat: differs: COUNT is parsed but does not bound the '>' scan
+- `XREVRANGE key end start [COUNT count]` [readonly] — Return stream entries within an ID range, in reverse order.
+  - complexity: O(log N + M)
+  - compat: full
+- `XSETID key last-id [ENTRIESADDED entries-added] [MAXDELETEDID max-deleted-id]` [write] — Overwrite a stream's last-generated ID and bookkeeping counters.
+  - complexity: O(log N)
+  - compat: full
+- `XTRIM key MAXLEN|MINID [=|~] threshold` [write] — Trim a stream by length or minimum ID.
+  - complexity: O(R log N + N*F) for R evicted entries
+  - compat: differs: '~' is accepted but trimming is always exact, LIMIT is not parsed, and trailing tokens after the threshold are silently ignored instead of erroring
+
+### geo
+
+- `GEOADD key [NX|XX] [CH] longitude latitude member [longitude latitude member ...]` [write] — Add geospatial members (longitude/latitude) to a geo set.
+  - complexity: O(M log N); CH adds an O(M^2) term
+  - compat: full
+- `GEODIST key member1 member2 [m|km|mi|ft]` [readonly] — Return the distance between two geo members.
+  - complexity: O(1)
+  - compat: full
+- `GEOHASH key member [member ...]` [readonly] — Return the base32 geohash string of each member.
+  - complexity: O(M)
+  - compat: full
+- `GEOPOS key member [member ...]` [readonly] — Return the longitude/latitude of each member.
+  - complexity: O(M)
+  - compat: full
+- `GEORADIUS key longitude latitude radius m|km|mi|ft [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC] [STORE key] [STOREDIST key]` [write] — Legacy radius search around a coordinate, with optional STORE writes.
+  - complexity: O(log N + C) — up to nine neighbour cell ranges, each seeked on the score tree; C = members inside the matched cells. STORE / STOREDIST add O(K log K) to write plus O(D) to clear the destination
+  - compat: differs: the destination is written on its own shard, so a STORE across shards is not atomic with the search
+- `GEORADIUSBYMEMBER key member radius m|km|mi|ft [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC] [STORE key] [STOREDIST key]` [write] — Legacy radius search around an existing member, with optional STORE writes.
+  - complexity: O(log N + C) — the seeked nine-cell fetch, same as GEORADIUS; the anchor lookup is O(1)
+  - compat: differs: the destination is written on its own shard, so a STORE across shards is not atomic with the search
+- `GEOSEARCH key FROMMEMBER member|FROMLONLAT longitude latitude BYRADIUS radius m|km|mi|ft|BYBOX width height m|km|mi|ft [ASC|DESC] [COUNT count [ANY]] [WITHCOORD] [WITHDIST] [WITHHASH]` [readonly] — Search members within a radius or box from a member or coordinate.
+  - complexity: O(log N + C) — up to nine neighbour ranges, each a seeked slice of the score tree; C = members inside the matched geohash cells (the block bound now prunes iteration too, not just distance maths)
+  - compat: differs: STOREDIST is accepted and ignored on the read-only form; COUNT 0 is an error
+- `GEOSEARCHSTORE destination source FROMMEMBER member|FROMLONLAT longitude latitude BYRADIUS radius m|km|mi|ft|BYBOX width height m|km|mi|ft [ASC|DESC] [COUNT count [ANY]] [STOREDIST]` [write] — Run GEOSEARCH on source and store the hits into destination.
+  - complexity: O(log N + C) to search, plus O(D + K log K) to rewrite the destination on its own shard
+  - compat: differs: STOREDIST stores the distance in the unit the query asked for (Redis does the same); the destination is written on its own shard, so the source and destination may live on different cores and the write is not atomic with the read
+
+### connection
+
+- `ECHO message` [readonly] — Return the given message.
+  - complexity: O(1)
+  - compat: full
+- `HELLO [protover]` [readonly] — Handshake: report server info and switch RESP protocol version (2 or 3).
+  - complexity: O(1)
+  - compat: differs: only HELLO [2|3] is honoured — the AUTH and SETNAME tails are parsed off and ignored, because kevy has no AUTH and this form does not set the connection name
+- `PING [message]` [readonly] — Ping the server; returns PONG or echoes the optional message.
+  - complexity: O(1)
+  - compat: differs: kevy has no RESP2 subscriber mode, so PING while subscribed does not switch to the array form and non-pubsub commands stay legal on a subscribed connection
+- `QUIT` [readonly] — Close the connection after replying OK.
+  - complexity: O(1)
+  - compat: full
+- `SELECT index` [readonly] — Select the logical database; kevy is single-DB and only accepts index 0.
+  - complexity: O(1)
+  - compat: differs: kevy is single-DB — SELECT 0 replies OK and any other index is an error
+
+### server
+
+- `BGREWRITEAOF` [write,admin] — Start an append-only-file rewrite in the background.
+  - complexity: O(S) fan-out; each shard freezes a copy-on-write view and hands serialise plus fsync to its own worker
+  - compat: differs: replies +OK rather than Redis's status line, rewrites one AOF per shard, and replies +OK even when AOF is disabled
+- `BGSAVE` [write,admin] — Start a snapshot save in the background.
+  - complexity: O(S) fan-out; O(N/S) copy-on-write freeze per shard on the reactor, then serialise off-thread
+  - compat: differs: replies +OK rather than Redis's status line, and writes one dump per shard
+- `COMMAND [COUNT | LIST | INFO command [command ...] | DOCS [command [command ...]]]` [readonly] — Introspect the command table (COUNT, LIST, INFO, DOCS subcommands).
+  - complexity: bare / LIST / DOCS: O(V) verbs. COUNT: O(1). INFO / DOCS with k names: O(k*V) — the lookup is a linear scan
+  - compat: differs: COUNT / LIST / INFO / DOCS only — GETKEYS and GETKEYSANDFLAGS are absent, and the info rows hard-code first/last/step and leave ACL categories, tips and key-specs empty
+- `CONFIG GET parameter | SET parameter value | REWRITE | RESETSTAT` [write,admin] — Read or change server configuration parameters.
+  - complexity: GET: O(patterns * 16). SET: O(1) plus one config swap that shards pick up on their next tick. REWRITE: O(config file size)
+  - compat: differs: 16 Redis-named parameters exist; only maxmemory, maxmemory-policy, appendfsync, the auto-rewrite pair, hz, maxmemory-samples, loglevel and logfile are hot-settable — bind, port, io-threads, dir and appendonly error at runtime; RESETSTAT is a no-op
+- `CLIENT ID | GETNAME | SETNAME name | LIST | KILL filter | INFO | NO-EVICT ON|OFF` [readonly,admin] — Connection introspection and control subcommands.
+  - complexity: ID / GETNAME / SETNAME / INFO: O(1). LIST: O(S) fan-out + O(C) rows. KILL: O(S) + O(C) scan
+  - compat: differs: ID / GETNAME / SETNAME / INFO / LIST (bare) / KILL (ID, ADDR) / NO-EVICT only; CLIENT LIST with a filter is a syntax error and every other subcommand (PAUSE, REPLY, TRACKING, UNBLOCK, NO-TOUCH) is unknown
+- `CLUSTER INFO | NODES | SLOTS | SHARDS | KEYSLOT key | COUNTKEYSINSLOT slot` [readonly,admin] — Cluster topology introspection (virtual-node model over shards).
+  - complexity: INFO / NODES / SLOTS / SHARDS / MYID: O(S). KEYSLOT: O(len(key)). COUNTKEYSINSLOT: O(N/S)
+  - compat: differs: a read-only virtual-node topology derived from config (one virtual master per shard) — no gossip, no MEET / FORGET / SETSLOT effect (they reply OK as no-ops), no MIGRATE / ASK, no failover; COUNTKEYSINSLOT counts only the answering shard's keys
+- `DBSIZE` [readonly] — Return the number of keys across all shards.
+  - complexity: O(S) — one message per shard, each answering O(1) from its map length; NOT O(N)
+  - compat: full
+- `DEBUG SLEEP seconds | subcommand [args ...]` [readonly,admin] — Debug subcommands; SLEEP blocks the shard, other subcommands are tolerated as OK.
+  - complexity: SLEEP: parks the ANSWERING shard's reactor thread for the duration (other shards keep serving). Everything else: O(1)
+  - compat: differs: SLEEP is the only subcommand with an effect and it blocks one shard, not the server; every other subcommand is accepted and answered OK without doing anything
+- `FLUSHALL` [write] — Delete every key on every shard.
+  - complexity: O(S) fan-out; per shard O(N/S) clear plus WATCH invalidation plus a feed-generation bump
+  - compat: differs: ASYNC / SYNC are accepted and ignored (the flush is always synchronous per shard), and it bumps the CDC feed generation, so live FEED cursors get a resync error
+- `FLUSHDB` [write] — Delete every key of the current database (kevy is single-DB: same as FLUSHALL).
+  - complexity: O(N + S) — identical to FLUSHALL
+  - compat: differs: kevy is single-DB, so FLUSHDB is an alias of FLUSHALL; ASYNC / SYNC are ignored
+- `INFO [section]` [readonly] — Report server statistics and status sections as text.
+  - complexity: O(1) in the keyspace — it never walks it; O(S) to sum the per-shard gauges
+  - compat: differs: 8 sections only (server, clients, memory, persistence, stats, replication, cluster, keyspace) — no commandstats / latencystats / errorstats / cpu; reports redis_version 7.4.0 for client sniffing plus a kevy_version line, and the values are up to one tick stale
+- `MEMORY USAGE key [SAMPLES count] | STATS | DOCTOR | PURGE | MALLOC-STATS` [readonly] — Memory introspection subcommands.
+  - complexity: USAGE: O(1) — the accounting is exact, not sampled. STATS: O(1) from the instance-wide gauges
+  - compat: differs: USAGE's SAMPLES count is parsed and ignored (our accounting is exact); PURGE is a no-op (system allocator, no arena); DOCTOR and MALLOC-STATS return canned strings; STATS is a trimmed 8-field set
+- `SAVE` [write,admin] — Synchronously snapshot the dataset to disk.
+  - complexity: O(S) fan-out; O(N/S) copy-on-write freeze per shard
+  - compat: differs: SAVE is no longer synchronous-until-durable — it freezes a copy-on-write view and replies OK immediately, so 'SAVE returned, therefore the dump is safe to copy' no longer holds
+- `SHUTDOWN [NOSAVE|SAVE]` [write,admin] — Stop the server process (connection drops without a reply).
+  - complexity: O(1) to trip the stop flag; the drain that follows is O(N)
+  - compat: differs: only SHUTDOWN [NOSAVE|SAVE] parses — NOW, FORCE and ABORT are a syntax error
+- `SLOWLOG GET [count] | LEN | RESET | HELP` [readonly,admin] — Inspect or reset the slow-command log.
+  - complexity: GET: O(S) fan-out plus O(L log L) to merge. LEN: O(S). RESET: O(S)
+  - compat: differs: the log is per-shard and GET merges across shards by timestamp, so ids are not globally monotonic; every entry's client-addr and client-name are empty strings
+
+### replication
+
+- `FAILOVER host port [TIMEOUT ms] | ABORT` [write,admin] — Planned zero-loss handover: quiesce writes, wait for the target replica to drain, promote it, and follow it.
+  - complexity: O(1) at the command — the handover runs in the background, polling the target until it is caught up
+  - compat: differs: Redis's syntax is FAILOVER [TO host port [FORCE]] [ABORT] [TIMEOUT ms] with an optional target; kevy's is FAILOVER host port [TIMEOUT ms] | ABORT — the target is mandatory and positional, and the port given is the target's client port
+- `REPL.TOKEN` [readonly,extension] — kevy extension: mint a read-your-writes token — per-shard [generation, offset] pairs (a primary reports its live feed tail; a replica its applied positions).
+  - complexity: O(S) — one (generation, offset) pair per shard
+  - compat: kevy-only: the read-your-writes token; the nearest Redis concept is master_repl_offset, which is not a resumable per-shard cursor
+- `REPL.WAIT gen offset [gen offset ...] [TIMEOUT milliseconds]` [readonly,blocking,extension] — kevy extension: on a replica, block until every shard has applied the given REPL.TOKEN (then reads are read-your-writes); +OK on success, -MISDIRECTED writer is <primary> on timeout or generation mismatch. Default TIMEOUT 1000 ms, hard cap 60 s. On a primary: immediate +OK.
+  - complexity: O(S) — a barrier, not a keyspace op; the wall-clock cost is the replication lag, bounded by TIMEOUT (default 1s, hard-capped at 60s)
+  - compat: kevy-only: waits until a (generation, offset) token has been applied, which is what makes read-your-writes possible across a failover
+- `REPLICAOF host port | NO ONE` [write,admin] — Make this server a replica of another, or promote it with NO ONE.
+  - complexity: O(1) at the command; the full resync that follows is O(N) in the background
+  - compat: differs: the port argument is the primary's REPLICATION port base, not its client port (the default base is client port + 10000); chain replication is rejected
+- `ROLE` [readonly] — Report the replication role and state of this server.
+  - complexity: O(1) on a replica; O(R) on a primary
+  - compat: full
+- `SLAVEOF host port | NO ONE` [write,admin] — Legacy alias of REPLICAOF.
+  - complexity: O(1) plus a background resync
+  - compat: differs: a deprecated alias of REPLICAOF, including the replication-port-base argument
+- `WAIT numreplicas timeout` [readonly,blocking] — Block until every shard's master_repl_offset is acknowledged by at least numreplicas replicas (or timeout ms pass); returns the minimum acked-replica count across shards. timeout 0 = wait forever, hard-capped at 60 s. NOTE: a replica ACK is not fsync durability.
+  - complexity: O(S) — an all-shard barrier returning the MINIMUM acked-replica count; the wall-clock cost is the replication round trip
+  - compat: differs: it is an all-shard barrier returning the minimum across shards (Redis has one offset to wait on); timeout 0 is capped at 60s rather than blocking forever, and an ACK means the frame reached the replica's apply pipeline, not fsync durability
+
+### tx
+
+- `DISCARD` [readonly,transaction] — Abort the open MULTI transaction.
+  - complexity: O(1) — drops the queued commands and the WATCH set
+  - compat: full
+- `EXEC` [readonly,transaction] — Execute every command queued since MULTI.
+  - complexity: O(sum of the queued commands' costs); with W watched keys, one extra O(W) pre-check fanned into O(min(W,S)) messages
+  - compat: differs: a MULTI batch spanning several shards is per-shard-atomic, not globally isolated (there is no cross-shard snapshot); a queue-time error aborts the whole batch with EXECABORT, but a runtime error inside EXEC leaves the other commands applied, as in Redis
+- `MULTI` [readonly,transaction] — Start a transaction; subsequent commands are queued until EXEC.
+  - complexity: O(1)
+  - compat: full
+- `UNWATCH` [readonly,transaction] — Forget all watched keys.
+  - complexity: O(1)
+  - compat: full
+- `WATCH key [key ...]` [readonly,transaction] — Watch keys for optimistic locking of the next EXEC.
+  - complexity: O(W) keys, grouped into O(min(W,S)) cross-shard messages
+  - compat: full
+
+### pubsub
+
+- `PSUBSCRIBE pattern [pattern ...]` [readonly,pubsub] — Subscribe to channels matching the given glob patterns.
+  - complexity: O(p * P) — each pattern costs a linear scan of the shared pattern registry
+  - compat: full
+- `PUBLISH channel message` [readonly,pubsub] — Post a message to a channel; returns the receiver count.
+  - complexity: O(1) channel lookup + O(P) — a linear walk of the registered patterns with one glob match each, even when none match. Delivery fans out only to the shards holding a subscriber
+  - compat: full
+- `PUNSUBSCRIBE [pattern [pattern ...]]` [readonly,pubsub] — Unsubscribe from patterns (all patterns when none given).
+  - complexity: O(p * P)
+  - compat: full
+- `SUBSCRIBE channel [channel ...]` [readonly,pubsub] — Subscribe to the given channels.
+  - complexity: O(c) channels; never fans out to other shards
+  - compat: differs: kevy has no RESP2 subscriber mode — after SUBSCRIBE the connection may still issue any command, where Redis restricts it to the pubsub verbs plus PING / QUIT / RESET
+- `UNSUBSCRIBE [channel [channel ...]]` [readonly,pubsub] — Unsubscribe from channels (all channels when none given).
+  - complexity: O(c) channels
+  - compat: full
+
+### script
+
+- `EVAL script numkeys [key [key ...]] [arg [arg ...]]` [write] — Run a Lua script server-side; routed to KEYS[1]'s shard when numkeys >= 1.
+  - complexity: O(compile + the script's own work). The whole script is one atomic unit on KEYS[1]'s shard and blocks that shard for its duration. The runaway guard is an INSTRUCTION budget (lua time_limit_ms x 40000 instructions), not a wall clock
+  - compat: differs: there is no -BUSY state and no SCRIPT KILL — an over-budget script is aborted in place and answered with an ordinary error; nested EVAL is rejected, a redis.call touching another shard's key returns CROSSSLOT, and EVAL auto-caches its source by SHA1 so EVALSHA works without SCRIPT LOAD. Scripts replicate by SOURCE, not by effects: a script calling SPOP draws its own random members on a replica or an AOF replay — keep nondeterministic verbs out of scripts you replicate (plain SPOP outside EVAL propagates its effect and is safe)
+- `EVALSHA sha1 numkeys [key [key ...]] [arg [arg ...]]` [write] — Run a cached Lua script by its SHA1 digest.
+  - complexity: O(1) cache lookup, then identical to EVAL
+  - compat: differs: same instruction-budget model as EVAL (no -BUSY, no SCRIPT KILL); the cache is process-wide and EVAL populates it
+- `SCRIPT LOAD script | EXISTS sha1 [sha1 ...] | FLUSH [ASYNC|SYNC]` [readonly] — Manage the process-wide Lua script cache.
+  - complexity: LOAD: O(len(script)). EXISTS: O(k). FLUSH: O(cached scripts)
+  - compat: differs: LOAD / EXISTS / FLUSH only — SCRIPT KILL does not exist, by design: there is no -BUSY state to interrupt because an over-budget script self-aborts
+
+### index
+
+- `IDX.COUNT name RANGE min max | EQ value` [readonly,extension] — Count index entries matching a range or equality predicate.
+  - complexity: O(log N + matched) per shard — NOT an O(1) counter and not a B-tree rank query; it counts the matched range
+  - compat: kevy-only: nearest is FT.SEARCH with LIMIT 0 0
+- `IDX.CREATE name ON PREFIX prefix FIELD field TYPE i64|f64|str|vector KIND range|unique|text|ann|agg [MAXMEM bytes] [DIM dim] [DISTANCE cosine|l2|ip] [M m] [EF ef] [GROUPBY field]` [write,extension] — Declare a secondary index over a key prefix (catalog mutation, sidecar-persisted).
+  - complexity: O(1) at the call; the build is asynchronous — each shard snapshots its matching keys (O(keys on that shard)) then backfills 2048 rows per tick. Per-row build cost: range/unique O(log N), text O(tokens), vector O(ef_construction * M * dim)
+  - compat: kevy-only: nearest is RediSearch FT.CREATE — comparable declarative index-on-prefix, but RediSearch is a separate module with its own index server; kevy's catalog is in-process and the index is maintained in the write hook
+- `IDX.DROP name` [write,extension] — Drop a declared index (catalog mutation, sidecar-persisted).
+  - complexity: O(catalog size)
+  - compat: kevy-only: nearest is FT.DROPINDEX
+- `IDX.LIST` [readonly,extension] — List declared indexes with per-index build state and stats.
+  - complexity: Not O(1) — per shard, per index it computes live stats: range/unique O(1), text O(distinct tokens + docs), vector O(nodes + links), agg O(groups + rows)
+  - compat: kevy-only: nearest is FT._LIST plus FT.INFO combined
+- `IDX.EXPLAIN name RANGE min max|EQ value|MATCH text|KNN vector|GROUPS [args ...]` [readonly,extension] — The IDX.QUERY parse without the execution: kind, state, est_rows, and the plan line.
+  - complexity: The plan is parse-only, but est_rows costs the same live stats walk as IDX.LIST
+  - compat: kevy-only: nearest is FT.EXPLAIN, which returns a parsed query tree; ours returns kind, build state, estimated rows and a one-line plan
+- `IDX.QUERY name RANGE min max|EQ value [LIMIT n] [CURSOR c] [FILTER field RANGE min max|EQ value ...] [SORT field ASC|DESC] [DISTINCT field] [FACET field ...] [OFFSET n] [FIELDS field ...] | name MATCH text [LIMIT n] [FIELDS field ...] | name KNN vector [LIMIT k] [EF ef] [FIELDS field ...] | name GROUP group | name GROUPS [BY count|sum|min|max] [LIMIT n] | HYBRID text_idx MATCH text ann_idx KNN vector [LIMIT n] [RRFK k] [EF ef] [FIELDS field ...] | COMPOSE AND|OR nameA RANGE min max|EQ value nameB RANGE min max|EQ value [LIMIT n] [CURSOR c] [FIELDS field ...]` [readonly,extension] — Query an index: range/equality, text MATCH, vector KNN, aggregation groups, or a two-index COMPOSE.
+  - complexity: Depends on the index kind. range: O(log N + limit). unique: O(log N + hits). full-text: O(sum of the posting lists), MaxScore-pruned. vector ANN: O(dim * (M log N + ef * M)) distance evaluations (HNSW). agg GROUPS: a bounded top-K with 1 to 3 fan-out rounds. HYBRID: both sub-queries at 4x depth, fused by RRF at the origin. COMPOSE: NOT limit-bounded — both leaves are materialised in full, because the result is key-ordered while a segment is value-ordered
+  - compat: kevy-only: nearest is RediSearch FT.SEARCH — genuinely comparable on two axes (our text index is BM25 over inverted segments, our vector index is HNSW, and RediSearch offers both). Differences: no separate module or index server; our BM25 statistics are per-shard, not global; and our query surface is a fixed grammar, not a DSL — no field boosting, no phrase or proximity search, no stemming, no aggregation pipeline
+- `IDX.REBUILD name` [write,extension] — Rebuild an ANN index (tombstone compaction).
+  - complexity: Vector indexes only (tombstone compaction). O(V_live * ef_construction * M * dim) distance evaluations, on every shard, synchronously — the most expensive verb in the extension surface
+  - compat: kevy-only: no Redis analogue — RediSearch handles HNSW deletes internally and exposes no rebuild verb
+- `IDX.VERIFY name` [readonly,extension] — Verify an index: re-read every held entry against its row and report entries/bytes/coerce_failures/duplicates/drift/checked.
+  - complexity: O(N) per shard — every held entry is re-read against its row and re-coerced, which is the point: it makes index drift falsifiable rather than merely asserted
+  - compat: kevy-only: no Redis analogue — RediSearch's index is asynchronously maintained and offers no consistency-verify verb
+
+### table
+
+- `TABLE.DECLARE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX col range|unique [VALUES col ...]] [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...]` [write,extension] — Declare a relational table that compiles at declare time into named indexes (catalog mutation, sidecar-persisted).
+  - complexity: O(declaration size) at the call; each compiled index then backfills like IDX.CREATE (2048 rows per tick per shard). The engine gains no query planner: queries name the compiled paths (`<table>.<col>`, `<table>.<orderpath>`) explicitly
+  - compat: kevy-only: nearest is CREATE TABLE in an RDBMS — but this is a declaration compiler, not a schema enforcer: a row with a missing column is a row with an absent field (NULL semantics), never an error, and no SQL executes at query time
+- `TABLE.DROP name` [write,extension] — Drop a declared table and its compiled indexes (catalog mutation, sidecar-persisted).
+  - complexity: O(catalog size + compiled indexes)
+  - compat: kevy-only
+- `TABLE.LIST` [readonly,extension] — List declared tables with their prefix, PK and declaration counts.
+  - complexity: O(tables) at the origin — the catalog is process-global
+  - compat: kevy-only
+- `TABLE.VERIFY name` [readonly,extension] — Verify a table: each compiled index's full drift recheck plus a bounded column-type spot check over sampled rows.
+  - complexity: O(sum of compiled index entries) per shard for the drift recheck (the IDX.VERIFY discipline, composites re-derive their byte encoding) plus a bounded 64-row-per-shard column spot check through the no-promote peek
+  - compat: kevy-only: nearest is a relational fsck; verify-not-enforce is the declarative fence
+
+### view
+
+- `VIEW.CREATE name QUERY tree ORDER BY index [DESC] [MODE virtual|materialized] [TOPK k] [VIA template] (tree = '( AND|OR|DIFF sub sub )' | 'index RANGE min max' | 'index EQ value')` [write,extension] — Declare a composed view over indexes with an ORDER BY (catalog mutation, sidecar-persisted).
+  - complexity: O(tree size) at the call. A materialized view builds lazily on the next tick (a full eval_tree plus an O(M log M) sort); a virtual view builds nothing, ever
+  - compat: kevy-only: no Redis analogue. A view is neither a stored query nor a join — it is a named composition tree over declared indexes that stores membership and order only, never field values
+- `VIEW.DROP name` [write,extension] — Drop a declared view (catalog mutation, sidecar-persisted).
+  - complexity: O(catalog size)
+  - compat: kevy-only
+- `VIEW.EXPLAIN name` [readonly,extension] — Explain a view's composition tree with per-leaf cardinalities.
+  - complexity: O(sum over leaves of (log N + matched)) — each leaf's cardinality is a real count, so EXPLAIN on a broad leaf costs as much as counting it
+  - compat: kevy-only: nearest is FT.EXPLAIN, which returns a query tree rather than per-leaf cardinalities
+- `VIEW.LIST` [readonly,extension] — List declared views with their mode and shape.
+  - complexity: O(views) at the origin — the catalog is process-global
+  - compat: kevy-only
+- `VIEW.QUERY name [LIMIT n] [CURSOR c] [FIELDS field ...]` [readonly,extension] — Page through a view's ordered members, optionally hydrating fields via the VIA template.
+  - complexity: virtual: O(log N_order + candidates * leaves) — it streams the ORDER index and probes membership per candidate, stopping at the limit, so it never materialises the member set. materialized: O(log M + limit). Adding FIELDS with VIA costs a SECOND fan-out to hydrate the rows
+  - compat: kevy-only: no Redis analogue. Absent by construction: no joins, no predicates at the view layer, no projection from the view itself, no HAVING, no aggregation
+- `VIEW.REBUILD name` [write,extension] — Force a rebuild of a materialized view.
+  - complexity: Materialized only. A full eval_tree over the whole tree plus an O(M log M) sort and re-insert, on every shard, now (not deferred to a tick)
+  - compat: kevy-only
+- `VIEW.VERIFY name` [readonly,extension] — Verify a view and report member/byte statistics.
+  - complexity: materialized: O(M). virtual: O(sum over leaves of (log N + leaf range) + M) — a full fresh evaluation just to report cardinality, which is the one place a virtual view is the expensive one
+  - compat: kevy-only
+
+### feed
+
+- `FEED.READ shard generation offset [COUNT n] [PREFIX prefix ...]` [readonly,extension] — Read change-feed frames from one shard past a generation/offset cursor.
+  - complexity: A single shard (the shard is an argument, not a fan-out). O(log B) to locate the start offset in the backlog plus O(count * frame size) to decode and re-encode. COUNT defaults to 256 and is hard-capped at 4096
+  - compat: kevy-only: no clean Redis analogue. Keyspace notifications are fire-and-forget with no cursor and no replay; Redis Streams have cursors but are a stream you must dual-write to, not a feed over your existing keyspace; the replication backlog is what this is built on, but Redis exposes it only to replicas. kevy is deliberately not a broker: no consumer groups, no server-side positions, no global cross-shard order
+- `FEED.SHARDS` [readonly,extension] — Return the number of change-feed shards.
+  - complexity: O(1), answered locally
+  - compat: kevy-only: Redis has no shard-partitioned change feed to enumerate
+- `FEED.TAIL shard` [readonly,extension] — Return a shard's current feed generation and next offset.
+  - complexity: O(1) on a single shard
+  - compat: kevy-only: nearest is INFO replication's master_repl_offset, which is not a resumable per-shard CDC cursor
+
+### migration
+
+- `PREFIX.STATS prefix` [readonly,extension] — Report key-count and byte statistics for a key prefix.
+  - complexity: O(keys on the shard) — a full keyspace walk on every shard; the prefix cannot be precomputed
+  - compat: kevy-only: nearest is INFO keyspace's db0:keys=N,expires=M — the same two counters, but whole-DB and O(1) off a counter, where ours is per-prefix and therefore O(keyspace)
+- `PREFIX.DIGEST prefix` [readonly,extension] — Order-insensitive checksum of a prefix's rows for migration verification.
+  - complexity: O(keys on the shard) to walk plus O(sum of row sizes) to digest, on every shard. Per-row digests XOR together, so the result is order-insensitive and safe across shard counts
+  - compat: kevy-only: nearest is DEBUG DIGEST — comparable in kind (Redis also XORs per-key digests), but Redis's is whole-DB and lives behind DEBUG, while ours is per-prefix (the unit a migration actually cares about) and is a supported verb
+

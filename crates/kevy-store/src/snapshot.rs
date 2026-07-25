@@ -13,14 +13,23 @@
 //! is a consistent instant: an entry that expires *after* the collect still
 //! appears with the remaining TTL it had at that instant.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::value::Value;
 use crate::{SmallBytes, Store, now_ns, remaining_ms};
 
 /// A frozen, `Send` view of one store's live entries at a single instant.
 pub struct SnapshotView {
     entries: Vec<(SmallBytes, Value, Option<u64>)>,
-    /// v2.4: hash field TTLs frozen with the view.
+    /// Hash field TTLs frozen with the view.
     hfttl: Vec<(SmallBytes, SmallBytes, u64)>,
+    /// Tiering view pinning: every vlog file that existed at
+    /// collect time. A cold stub cloned into the view can only
+    /// reference these, and a pinned file survives compaction until the
+    /// last Arc drops — so the view's offsets stay valid for its whole
+    /// life, however long the serializer thread takes.
+    #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+    pins: Vec<std::sync::Arc<kevy_vlog::VlogFile>>,
 }
 
 // Compile-time guarantee that a view can cross to a serializer thread.
@@ -38,7 +47,7 @@ impl SnapshotView {
         }
     }
 
-    /// v2.4: visit the frozen hash field TTLs.
+    /// Visit the frozen hash field TTLs.
     pub fn each_hash_ttl<F: FnMut(&[u8], &[u8], u64)>(&self, mut f: F) {
         for (k, field, d) in &self.hfttl {
             f(k.as_slice(), field.as_slice(), *d);
@@ -53,6 +62,36 @@ impl SnapshotView {
     /// Whether the view holds zero entries.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Decode a cold stub's record against the view's pinned vlog files
+    /// into a fresh hot [`Value`] — the serializer-thread read path:
+    /// no store access, no promotion, memory bound = this one value.
+    /// `None` when `v` is hot. A stub naming an unpinned file, a failed
+    /// read, or a bad decode is a process bug (the vlog is per-boot and
+    /// this process pinned every file at collect time) — surfaced
+    /// loudly, never healed silently.
+    #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+    pub fn materialize_cold(&self, v: &Value) -> Option<Value> {
+        let Value::Cold(c) = v else { return None };
+        let file = self
+            .pins
+            .iter()
+            .find(|f| f.id() == c.file_id)
+            .expect("tier: view stub references a file pinned at collect time");
+        let (_key, payload) = file
+            .read(c.vref())
+            .expect("tier: pinned vlog read failed — per-boot spill file, this is a process bug");
+        Some(
+            crate::tier_codec::decode(c.type_tag, payload)
+                .expect("tier: cold record decode failed — process bug"),
+        )
+    }
+
+    /// No tier backend on this target — `Value::Cold` cannot exist.
+    #[cfg(not(all(feature = "std", not(target_arch = "wasm32"))))]
+    pub fn materialize_cold(&self, _v: &Value) -> Option<Value> {
+        None
     }
 }
 
@@ -81,6 +120,14 @@ impl Store {
                 d,
             ));
         });
-        SnapshotView { entries, hfttl }
+        SnapshotView {
+            entries,
+            hfttl,
+            // View pinning: capture ALL current vlog file pins with
+            // the view — the frozen stubs above can only reference
+            // files that exist at this instant.
+            #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+            pins: self.tier_pins(),
+        }
     }
 }

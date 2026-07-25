@@ -1,4 +1,4 @@
-//! Script-aware, dictionary-free tokenization (RFC D1).
+//! Script-aware, dictionary-free tokenization.
 //!
 //! - Latin/ASCII alphanumeric runs → lowercased word tokens (length
 //!   ≥ 2; single characters are noise).
@@ -7,7 +7,7 @@
 //!   texts remain findable.
 //! - Tokens never cross a script boundary.
 
-/// Pluggable tokenizer (v2.7 ships only [`tokenize`], the default).
+/// Pluggable tokenizer ([`tokenize`] is the only shipped impl).
 pub trait Tokenizer {
     /// Produce tokens for `text` (UTF-8; invalid bytes are skipped).
     fn tokens(&self, text: &[u8]) -> Vec<Vec<u8>>;
@@ -84,6 +84,65 @@ pub fn tokenize(text: &[u8]) -> Vec<Vec<u8>> {
     out
 }
 
+/// Tokens with the byte span each came from in the ORIGINAL `text`:
+/// `(token, start, end)` where `start..end` indexes `text` (a CJK bigram
+/// spans both its characters, a lowercased word its source range). This
+/// is what highlighting re-analyses a winning document's field with to
+/// point `<em>` spans at the source.
+///
+/// Requires valid UTF-8 — invalid input yields no spans rather than
+/// offsets that would be wrong once `from_utf8_lossy` shifted them. The
+/// tokens themselves match [`tokenize`] on valid input (a test pins it).
+pub fn tokenize_spans(text: &[u8]) -> Vec<(Vec<u8>, usize, usize)> {
+    let Ok(s) = core::str::from_utf8(text) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut word = String::new();
+    let mut word_start = 0usize;
+    let mut prev_cjk: Option<(char, usize)> = None;
+    let mut cjk_run = 0usize;
+    let flush = |w: &mut String, ws: usize, we: usize, out: &mut Vec<(Vec<u8>, usize, usize)>| {
+        if w.chars().count() >= 2 {
+            out.push((w.to_lowercase().into_bytes(), ws, we));
+        }
+        w.clear();
+    };
+    for (idx, c) in s.char_indices() {
+        if is_cjk(c) {
+            flush(&mut word, word_start, idx, &mut out);
+            if let Some((p, ps)) = prev_cjk {
+                out.push((format!("{p}{c}").into_bytes(), ps, idx + c.len_utf8()));
+            }
+            prev_cjk = Some((c, idx));
+            cjk_run += 1;
+        } else {
+            if cjk_run == 1
+                && let Some((p, ps)) = prev_cjk
+            {
+                out.push((p.to_string().into_bytes(), ps, ps + p.len_utf8()));
+            }
+            prev_cjk = None;
+            cjk_run = 0;
+            if c.is_alphanumeric() {
+                if word.is_empty() {
+                    word_start = idx;
+                }
+                word.push(c);
+            } else {
+                flush(&mut word, word_start, idx, &mut out);
+            }
+        }
+    }
+    if cjk_run == 1
+        && let Some((p, ps)) = prev_cjk
+    {
+        out.push((p.to_string().into_bytes(), ps, ps + p.len_utf8()));
+    }
+    flush(&mut word, word_start, s.len(), &mut out);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,5 +184,47 @@ mod tests {
         assert!(toks("!!! ...").is_empty());
         let bad = tokenize(&[0xFF, 0xFE, b'o', b'k', b'a', b'y']);
         assert_eq!(bad, vec![b"okay".to_vec()]);
+    }
+
+    // ---- tokenize_spans (highlighting) ------------------------------
+
+    /// Spans must slice the ORIGINAL text back to the source of each
+    /// token — a word to its (un-lowercased) source, a CJK bigram to both
+    /// characters.
+    #[test]
+    fn spans_point_at_the_source() {
+        let text = "a Quick brown 全文 fox";
+        let spans = tokenize_spans(text.as_bytes());
+        let got: Vec<(&str, &str)> = spans
+            .iter()
+            .map(|(t, s, e)| (std::str::from_utf8(t).unwrap(), &text[*s..*e]))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("quick", "Quick"),   // token lowercased, span is the source
+                ("brown", "brown"),
+                ("全文", "全文"),      // a two-char run is one bigram, no unigram
+                ("fox", "fox"),
+            ],
+            "single-char 'a' dropped; every span slices its source"
+        );
+    }
+
+    /// On valid UTF-8 the tokens must match `tokenize` exactly — the span
+    /// variant is a superset, never a different tokenizer.
+    #[test]
+    fn spans_tokens_match_tokenize() {
+        for s in ["rust full text search", "全文检索引擎 rust 実装", "Rust搜索engine引擎x", "a I v2.7-alpha"] {
+            let plain = tokenize(s.as_bytes());
+            let with_spans: Vec<Vec<u8>> =
+                tokenize_spans(s.as_bytes()).into_iter().map(|(t, _, _)| t).collect();
+            assert_eq!(plain, with_spans, "token stream diverged for {s:?}");
+        }
+    }
+
+    #[test]
+    fn spans_invalid_utf8_is_empty() {
+        assert!(tokenize_spans(&[0xFF, 0xFE, b'o', b'k']).is_empty());
     }
 }

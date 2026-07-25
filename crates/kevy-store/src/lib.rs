@@ -33,19 +33,60 @@
 //! s.set(b"greeting", b"hello".to_vec(), None, false, false);
 //! assert_eq!(s.get(b"greeting").unwrap(), Some(Cow::Borrowed(&b"hello"[..])));
 //!
-//! s.hset(b"user:1", &[(b"name".to_vec(), b"alice".to_vec())]).unwrap();
+//! s.hset(b"user:1", &[(b"name".as_slice(), b"alice".as_slice())]).unwrap();
 //! assert_eq!(s.hget(b"user:1", b"name").unwrap(), Some(&b"alice"[..]));
 //!
 //! // A string command on a hash key is a type error, as in Redis.
 //! assert_eq!(s.get(b"user:1"), Err(kevy_store::StoreError::WrongType));
 //! ```
 #![forbid(unsafe_code)]
+#![cfg_attr(not(feature = "std"), no_std)]
+
+#[cfg(all(not(feature = "std"), not(feature = "external-clock")))]
+compile_error!(
+    "kevy-store without `std` needs the `external-clock` feature: the TTL \
+     clock must be host-fed when std::time is unavailable"
+);
+
+extern crate alloc;
+
+/// The alloc-crate slice of the std prelude, for `no_std` builds — glob-
+/// imported per file so the std build stays byte-for-byte untouched.
+#[cfg(not(feature = "std"))]
+pub(crate) mod nostd_prelude {
+    pub(crate) use alloc::boxed::Box;
+    pub(crate) use alloc::format;
+    pub(crate) use alloc::string::{String, ToString};
+    pub(crate) use alloc::vec::Vec;
+}
+#[cfg(not(feature = "std"))]
+use nostd_prelude::*;
+
+/// The two side maps (`hfttl`, `watch_versions`) ride std's table on std
+/// and the self-hosted `KevyMap` without it.
+#[cfg(feature = "std")]
+pub(crate) type SideMap<K, V> = std::collections::HashMap<K, V>;
+#[cfg(not(feature = "std"))]
+pub(crate) type SideMap<K, V> = kevy_map::KevyMap<K, V>;
 
 mod accounting;
+#[cfg(feature = "std")]
 mod bio_drop;
+
+/// Without `std` there is no bio thread (`bio_drop` module is compiled
+/// out) — displaced heavy values drop inline on the caller.
+#[cfg(not(feature = "std"))]
+impl Store {
+    #[inline]
+    pub(crate) fn maybe_offload_drop(&mut self, old: Value) {
+        drop(old);
+    }
+}
 mod bitmap;
 mod clock;
 mod entry;
+mod error;
+pub use error::{KevyError, KevyResult};
 pub mod evict;
 pub mod expire;
 pub use expire::ExpireStats;
@@ -54,7 +95,12 @@ mod hash;
 mod hash_ttl;
 pub use hash_ttl::{HExpireCode, HExpireCond};
 mod keyspace;
+mod keyspace_load;
 mod list;
+mod notify;
+mod rng;
+mod scan;
+pub use notify::KeyspaceEvent;
 mod list_ops;
 mod set;
 mod small_set;
@@ -71,6 +117,15 @@ mod stream;
 mod string;
 mod string_rmw;
 mod string_set;
+mod tier;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+mod tier_codec;
+mod tier_demote;
+mod tier_serve;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+pub use tier::TierStats;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+pub use tier_serve::{ColdBatchReader, ColdRead, PeekRow, SyncColdRead};
 mod types;
 pub use types::{EvictionPolicy, RenameOutcome, StoreError};
 mod util;
@@ -88,24 +143,23 @@ pub use stream::{
     XAddIdSpec, XClaimOpts, now_unix_ms, parse_explicit_id, parse_range_end,
     parse_range_start, parse_xadd_id,
 };
-pub use string::GetReply;
+pub use string::{GetReply, GetShared};
 pub use util::glob_match;
 pub use value::*;
 
 pub(crate) use clock::{deadline_at, now_ns, pack_deadline, remaining_ms};
 use kevy_map::KevyMap;
-
 /// Feed kevy's monotonic clock on `wasm32-unknown-unknown`, which has no
 /// `Instant`. The embedding host advances time (ns since an arbitrary fixed
 /// epoch, e.g. `Date.now() * 1e6`) before TTL-sensitive ops and once per
 /// reaper tick. No-op concept on native targets, where the OS clock is the
 /// source — hence wasm-only.
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(any(feature = "external-clock", all(target_arch = "wasm32", target_os = "unknown")))]
 pub use clock::set_clock_ns;
 /// Feed kevy's wall clock (Unix-epoch millis, e.g. `Date.now()`) on
 /// `wasm32-unknown-unknown`, where `SystemTime::now()` traps. Used by `XADD`
 /// auto-IDs and `EXPIREAT`/`PEXPIREAT`.
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(any(feature = "external-clock", all(target_arch = "wasm32", target_os = "unknown")))]
 pub use clock::set_wall_clock_ms;
 
 
@@ -120,10 +174,14 @@ pub use clock::set_wall_clock_ms;
 #[derive(Default)]
 pub struct Store {
     pub(crate) map: KevyMap<SmallBytes, Entry>,
-    /// v2.4 per-field hash TTLs: key → (field → absolute unix-ms
+    /// The random source. SPOP and SRANDMEMBER promise an ARBITRARY member;
+    /// before this they returned the first one in hash-bucket order, which for
+    /// a given set is the same member every time.
+    pub(crate) rng: rng::Rng,
+    /// Per-field hash TTLs: key → (field → absolute unix-ms
     /// deadline). Holds ONLY keys with live field TTLs — one
     /// `is_empty()` branch per hash access when the feature is unused.
-    pub(crate) hfttl: std::collections::HashMap<SmallBytes, KevyMap<SmallBytes, u64>>,
+    pub(crate) hfttl: SideMap<SmallBytes, KevyMap<SmallBytes, u64>>,
     /// Coarse cached monotonic clock (ns since [`epoch`]), refreshed by the
     /// reactor loop / reaper tick via [`Self::refresh_clock`]. Lazy expiry on
     /// the read path (`live_entry`) compares deadlines against this instead of
@@ -160,6 +218,13 @@ pub struct Store {
     /// [`Self::tick_expire`]). Surfaced via `INFO keyspace` / `MEMORY STATS`
     /// once those fields land.
     pub(crate) expired_keys_total: u64,
+    /// Which store-origin keyspace events to capture (see
+    /// [`crate::notify`]). All-off default = every hook is one byte
+    /// test.
+    pub(crate) notify_capture: u8,
+    /// Captured events awaiting the serving layer's drain
+    /// ([`Self::take_notify_events`]), in capture order.
+    pub(crate) notify_events: Vec<(notify::KeyspaceEvent, Vec<u8>)>,
     /// Count of live keys carrying a TTL — the size of Redis's "expire set"
     /// (`INFO keyspace`'s `expires=`). Maintained in O(1) at every TTL
     /// transition (`insert_entry` / `remove_entry` deltas + the in-place
@@ -179,16 +244,17 @@ pub struct Store {
     /// workloads this can become a memory item; v1.x acceptable since
     /// the entry is `Vec<u8>` + `u64` (~ 30 B + key length) and only
     /// touched on writes / WATCH calls.
-    pub(crate) watch_versions: std::collections::HashMap<Vec<u8>, u64>,
-    /// Optional handle to the runtime's bio thread (v1.25 A.3). Set by
+    pub(crate) watch_versions: SideMap<Vec<u8>, u64>,
+    /// Optional handle to the runtime's bio thread. Set by
     /// `kevy-rt::Runtime::run` via [`Self::set_bio_drop_sender`] before
     /// the shard reactor loop starts. `None` = inline drop (bare-Store
     /// embedders, snapshots-loader programs, the test harness — anything
     /// without a kevy-rt runtime around it). Reads on the hot path are
     /// one `Option::as_ref` branch; the steady-state inline-drop path
     /// pays nothing beyond that branch.
+    #[cfg(feature = "std")]
     pub(crate) bio_drop_sender: Option<value::BioDropSender>,
-    /// v1.25 A.2 batch-send buffer. Heavy `Value`s displaced by SET
+    /// Batch-send buffer. Heavy `Value`s displaced by SET
     /// overwrites accumulate here instead of paying one mpsc send per
     /// drop; flushed in one `mpsc::Sender::send` at the end of every
     /// reactor iteration (via [`Self::flush_pending_drops`], invoked
@@ -211,7 +277,23 @@ pub struct Store {
     /// pathological "thousand SETs in one iter never flush" cases
     /// (would otherwise hold thousands of Box<Value>s in RAM until
     /// the iter ends).
+    #[cfg(feature = "std")]
     pub(crate) pending_drops: Vec<Value>,
+    /// Transparent-tiering state. `None` = off —
+    /// today's paths byte-identical ([`Store::enable_tiering`]).
+    #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+    pub(crate) tier: Option<tier::TierState>,
+    /// The promotion gate's first-touch serve scratch (`tier_serve`):
+    /// a cold value decoded for ONE read, never installed in the map.
+    #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+    pub(crate) tier_scratch: Option<Entry>,
+    /// Bulk-read (no-promote peek) mode, scoped by
+    /// [`Store::peek_scope`]: while set, a cold materializing read serves
+    /// via pread WITHOUT setting the probation mark and WITHOUT
+    /// promoting — digest / scope-move / export reads are not access
+    /// signals.
+    #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+    pub(crate) tier_peek: bool,
 }
 
 
@@ -307,10 +389,21 @@ impl Store {
     /// write after a `WATCH` bumps to 1, which is what makes the "dirty"
     /// comparison work (stored 0 ≠ current 1 ⇒ abort EXEC).
     pub fn record_watch(&mut self, key: &[u8]) -> u64 {
-        *self
-            .watch_versions
-            .entry(key.to_vec())
-            .or_insert(0)
+        #[cfg(feature = "std")]
+        {
+            *self
+                .watch_versions
+                .entry(key.to_vec())
+                .or_insert(0)
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            // KevyMap has no entry API — insert-if-absent, then read.
+            if self.watch_versions.get(key).is_none() {
+                self.watch_versions.insert(key.to_vec(), 0);
+            }
+            self.watch_versions.get(key).copied().unwrap_or(0)
+        }
     }
 
     /// Read-only version lookup used by `EXEC`'s pre-execution check.
@@ -340,7 +433,12 @@ impl Store {
     /// / `FLUSHALL` execution paths — every WATCH against this shard
     /// must invalidate so a pending `EXEC` aborts.
     pub fn bump_all_watched(&mut self) {
+        #[cfg(feature = "std")]
         for v in self.watch_versions.values_mut() {
+            *v = v.wrapping_add(1);
+        }
+        #[cfg(not(feature = "std"))]
+        for (_, v) in self.watch_versions.iter_mut() {
             *v = v.wrapping_add(1);
         }
     }
@@ -381,24 +479,10 @@ impl Store {
 
 }
 
-/// Apply a signed delta to a `u64` (saturating both directions). Used by
-/// `Store::account_delta` / `reweigh_entry` so the in-place mutators don't
-/// have to repeat the same overflow-guarded match.
-#[inline]
-pub(crate) fn apply_delta(v: &mut u64, delta: i64) {
-    if delta >= 0 {
-        *v = v.saturating_add(delta as u64);
-    } else {
-        *v = v.saturating_sub((-delta) as u64);
-    }
-}
-
-/// Heap bytes a `SmallBytes`-encoded key would own (`&[u8]` mirror of
-/// `SmallBytes::heap_bytes`; 22-byte inline boundary per `kevy-bytes`).
-#[inline]
-pub(crate) fn key_heap_bytes_for(key: &[u8]) -> u64 {
-    if key.len() <= 22 { 0 } else { key.len() as u64 }
-}
+// Accounting micro-helpers live in `util` (500-LOC split); re-exported
+// so the crate-wide `crate::apply_delta` / `crate::key_heap_bytes_for`
+// paths keep working.
+pub(crate) use util::{apply_delta, key_heap_bytes_for};
 
 #[cfg(test)]
 mod tests;
@@ -408,3 +492,7 @@ mod tests_memory;
 mod tests_snapshot;
 #[cfg(test)]
 mod tests_string_encoding;
+#[cfg(all(test, feature = "std", not(target_arch = "wasm32")))]
+mod tests_tier;
+#[cfg(all(test, feature = "std", not(target_arch = "wasm32")))]
+mod tests_tier_peek;

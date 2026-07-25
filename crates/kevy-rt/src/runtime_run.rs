@@ -69,8 +69,8 @@ impl Shared {
             n <= 64,
             "kevy-rt: shard count {n} exceeds 64 — inbound_dirty bitmap holds one bit per peer in a u64. Reduce --threads or extend to a multi-word bitmap.",
         );
-        // A2 (2026-06-20): pad each Arc<AtomicU64> to a full 64-byte cache
-        // line. H1 c2c diagnostic showed cross-shard fetch_or vs. owner
+        // Pad each Arc<AtomicU64> to a full 64-byte cache
+        // line. A `perf c2c` diagnostic showed cross-shard fetch_or vs. owner
         // swap on adjacent atomics bounced cache lines between cores.
         let inbound_dirty: Vec<Arc<CachePadded<AtomicU64>>> = (0..n)
             .map(|_| Arc::new(CachePadded::new(AtomicU64::new(0))))
@@ -91,7 +91,7 @@ impl<C: Commands> Runtime<C> {
     /// Spawn one thread per shard and run until `stop` is set.
     pub fn run(mut self, stop: Arc<AtomicBool>) -> io::Result<()> {
         let n = self.nshards;
-        // v1.25 A.3 (B2: single global bio thread). Spawn BEFORE shards so
+        // Single global bio thread. Spawn BEFORE shards so
         // every shard's first overwrite already has a live consumer. The
         // held `bio_send` is cloned into every Store below; shutdown
         // ordering (shards join → Stores drop their Senders → this fn's
@@ -125,7 +125,7 @@ impl<C: Commands> Runtime<C> {
         for h in handles {
             let _ = h.join();
         }
-        // v1.25 A.3 shutdown: see the bio-spawn comment above.
+        // Bio shutdown: see the bio-spawn comment above.
         drop(bio_send);
         let _ = bio_handle.join();
         Ok(())
@@ -180,7 +180,14 @@ impl<C: Commands> Runtime<C> {
             } else {
                 kevy_persist::Routing::KevyHash
             };
-            crate::reshard::ensure_layout(&self.data_dir, n, routing, &self.commands)?;
+            crate::reshard::ensure_layout(
+                &self.data_dir,
+                n,
+                routing,
+                &self.commands,
+                self.resolved_tier_budget(),
+                &self.tier_root(),
+            )?;
         }
         Ok(())
     }
@@ -211,7 +218,7 @@ impl<C: Commands> Runtime<C> {
         let mut shards = Vec::with_capacity(n);
         for id in 0..n {
             let arms_accept = self.accept_shards.is_none_or(|k| id < k);
-            // v1.30 — off-accept-set shards skip the SO_REUSEPORT bind so
+            // Off-accept-set shards skip the SO_REUSEPORT bind so
             // the kernel routes new conns only to the armed subset.
             let listener = if arms_accept {
                 Some(tcp_listen_reuseport(self.ip, self.port, 1024)?)
@@ -233,9 +240,10 @@ impl<C: Commands> Runtime<C> {
                 None => None,
             };
             let aof = if self.enable_aof {
-                Some(Aof::open(
+                Some(Aof::open_with_repair(
                     &kevy_persist::layout::aof_path(&self.data_dir, id),
                     self.appendfsync,
+                    self.replay_resync,
                 )?)
             } else {
                 None
@@ -245,12 +253,23 @@ impl<C: Commands> Runtime<C> {
             // lazy expiry can trust the cached clock (skip per-command
             // `Instant::now()`).
             store.set_cached_clock(true);
-            // v1.25 A.3: hand the bio-drop channel sender to the store so
+            // Hand the bio-drop channel sender to the store so
             // SET overwrites of heavy values (Arc<[u8]> ≥ 256 B, non-empty
             // collections) get freed off-reactor. Sender clone is cheap
             // (`Arc::clone`); the bio thread is shared across all shards
-            // (B2 single-global, mirrors valkey `bio.c`).
+            // (single global thread, mirrors valkey `bio.c`).
             store.set_bio_drop_sender(bio_send.clone());
+            // Tiering: the process budget — resolved
+            // bytes from the builder (`[tiering]` TOML/CLI/env full
+            // surface), or the minimal `KEVY_TIER_BUDGET` plain-bytes
+            // env knob — split evenly across shards; per-shard cold
+            // tier under `<tier root>/<id>`.
+            if let Some(total) = self.resolved_tier_budget() {
+                store.enable_tiering(
+                    &self.tier_root().join(id.to_string()),
+                    Self::per_shard_tier_budget(total, n),
+                )?;
+            }
             self.commands.on_shard_init(&mut store);
             shards.push(Shard {
                 xshard_inflight: 0,
@@ -273,7 +292,12 @@ impl<C: Commands> Runtime<C> {
                 arm_pending: Vec::new(),
                 closing_uring_conns: Vec::new(),
                 fd_to_conn: KevyMap::new(),
-                next_conn_id: 1,
+                // Conn ids stride by shard count from a per-shard
+                // start, so every id is unique across the whole
+                // instance (CLIENT ID / CLIENT KILL ID contract) and
+                // still allocation-free per accept.
+                next_conn_id: id as u64 + 1,
+                conn_id_step: n as u64,
                 events: Vec::with_capacity(1024),
                 read_buf: vec![0u8; 64 * 1024],
                 pending_wakes: 0,
@@ -311,6 +335,9 @@ impl<C: Commands> Runtime<C> {
                 seen_promotion_epoch: None,
                 persist: crate::persist_worker::PersistWorker::new(),
                 auto_aof_rewrite_pct: self.auto_aof_rewrite_pct,
+                auto_aof_rewrite_bytes: self.auto_aof_rewrite_bytes,
+                auto_aof_rewrite_interval_secs: self.auto_aof_rewrite_interval_secs,
+                replay_resync: self.replay_resync,
                 auto_aof_rewrite_min_size: self.auto_aof_rewrite_min_size,
                 dirty: Vec::new(),
                 pubsub: shared.pubsub.clone(),
@@ -349,6 +376,7 @@ impl<C: Commands> Runtime<C> {
                 blocked: crate::blocked::BlockedClients::new(),
                 origin_blocks: std::collections::HashMap::new(),
                 xwaiters: crate::block_xshard::XShardWaiters::default(),
+                serve_confirm: std::collections::HashMap::new(),
                 reply_scratch: Vec::with_capacity(4096),
                 argv_pool: kevy_resp::ArgvPool::new(),
             });
@@ -391,7 +419,7 @@ fn reactor_choice() -> (bool, bool) {
 
 /// One shard thread's body: pick the reactor and run it to completion.
 ///
-/// v2.1.1: per-shard ring setup is attempted BEFORE committing to the
+/// Per-shard ring setup is attempted BEFORE committing to the
 /// io_uring path. The global probe proves one ring builds; N shards
 /// need N rings, and a late failure (ENOMEM under pressure) used to
 /// kill the shard thread and leave a half-dead server (found via

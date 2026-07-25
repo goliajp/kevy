@@ -50,6 +50,7 @@ kevyのクラスタ機能には独立した2つのレイヤがあります。**�
 
 ```toml
 # kevy.toml
+[server]
 port = 6004
 
 [cluster]
@@ -86,7 +87,7 @@ let n = cc.incr(b"counter")?;
 
 // マルチキーの DEL/EXISTS — キーごとにルーティングして合算。
 let removed = cc.del(&[b"a", b"b", b"c"])?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 実行可能なシード例は[`crates/kevy-client/examples/cluster.rs`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-client/examples/cluster.rs)に、ベンチマークは[`crates/kevy-client/examples/cluster_bench.rs`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-client/examples/cluster_bench.rs)にあります。
@@ -97,7 +98,7 @@ let removed = cc.del(&[b"a", b"b", b"c"])?;
 2. **ルーティング。** すべてのシングルキー・コマンドは`key_hash_slot(key)`（`{hashtag}`があればその部分の、なければキー全体のCRC16-XMODEM）を計算し、そのスロット所有者へのコネクションに直接送ります。
 3. **必要なところだけファンアウト。** `dbsize`や`flushall`などクラスタ全体のコマンドはサーバー側で処理されます。クライアントは1回呼ぶだけです。
 
-16コアのlx64マシン上、並行数64のGETでクロスシャードホップを消したところ、実測スループットは333k ops/sから533k ops/s（1.6倍）に上がり、p99は3858µsから260µs（約15分の1のテール）に下がりました。`cargo run -p kevy-client --release --example cluster_bench`で再現できます。
+16コアのLinuxマシン上、並行数64のGETでクロスシャードホップを消したところ、実測スループットは333k ops/sから533k ops/s（1.6倍）に上がり、p99は3858µsから260µs（約15分の1のテール）に下がりました。`cargo run -p kevy-client --release --example cluster_bench`で再現できます。
 
 > ホップのコストが見えるのは、クリーンなマシンに負荷を掛けたときだけです。小さな同居型クラウドVMでは、差はスケジューリングノイズに埋もれて見えません。
 
@@ -126,7 +127,7 @@ Redis Clusterと違い、kevyはシングルノードクラスタでマルチキ
 let reply = cc.request_keyed(b"mykey", &[b"STRLEN".to_vec(), b"mykey".to_vec()])?;
 // キーなしコマンドは任意のシャードへ。
 let reply = cc.request_unkeyed(&[b"PING".to_vec()])?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 `ClusterClient`は、文字列、ハッシュ、リスト、セット、ソート済みセット、pub/sub、マルチキーの`DEL`/`EXISTS`の共通verbをラップします。pub/subはプロセス全体に届きます。どのポートの`Subscriber`も、どのシャードが`PUBLISH`を受けたかに関係なく、発行されたすべてのメッセージを見ます。
@@ -141,6 +142,7 @@ kevyサーバーは、自分の書き込みログをストリーミングする�
 
 ```toml
 # primary.toml
+[server]
 port = 6004
 
 [replication]
@@ -150,6 +152,7 @@ listen_port_base = 16004    # 任意。デフォルトは port + 10000
 
 ```toml
 # replica.toml
+[server]
 port = 6004
 
 [replication]
@@ -157,7 +160,7 @@ role     = "replica"
 upstream = "primary.local:16004"
 ```
 
-サーバー側の完全なセマンティクス（バックログのサイジング、スナップショットの取り込み、ハートビートとACK）は[`docs/replication.md`](replication.md)に、フェイルオーバー（計画的な`FAILOVER`とクラッシュ選挙）と整合性ラダーは[`docs/availability.md`](../availability.md)にあります。本書にとって重要な事実は、同じワイヤプロトコルがクラスタモードのレプリケーションも運ぶことです。`[cluster] enabled = true`で動くプライマリはNシャード分の書き込みをストリーミングし、同じシャード数で動くレプリカがシャード対シャードで適用します。
+サーバー側の完全なセマンティクス（バックログのサイジング、スナップショットの取り込み、ハートビートとACK）は[`docs/replication.md`](replication.md)に、フェイルオーバー（計画的な`FAILOVER`とクラッシュ選挙）と整合性ラダーは[`docs/availability.md`](availability.md)にあります。本書にとって重要な事実は、同じワイヤプロトコルがクラスタモードのレプリケーションも運ぶことです。`[cluster] enabled = true`で動くプライマリはNシャード分の書き込みをストリーミングし、同じシャード数で動くレプリカがシャード対シャードで適用します。
 
 ## レプリカとして組み込む
 
@@ -170,8 +173,8 @@ use kevy_embedded::Store;
 let replica = Store::open_replica("primary.local:16004")?;
 
 let v = replica.get(b"hello")?;
-assert!(replica.set(b"k", b"v").is_err());      // READONLY
-# Ok::<(), std::io::Error>(())
+assert!(replica.set(b"k", b"v").is_err());      // KevyError::ReadOnly
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 チューニングする場合：
@@ -185,10 +188,10 @@ let cfg = Config::default()
     .with_replica_id("backup-svc-region-a")
     .with_replica_reconnect(Duration::from_millis(50), Duration::from_secs(10));
 let replica = Store::open(cfg)?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
-ハンドシェイクは`REPLICATE FROM <last-applied-offset> ID <replica_id>`を送ります。プライマリはオフセットをackし、フレームをストリーミングします。最後の`Store`クローンがdropされるとランナースレッドはjoinされ、プライマリはクリーンなFINを観測してスロットを解放します。組み込み側での`PUBLISH`はローカルに許可されます（pub/subはプロセスローカルです）が、キー空間自体は読み取り専用のままです。
+ハンドシェイクは`REPLICATE FROM <generation> <last-applied-offset> ID <replica_id>`を送ります。プライマリは世代とオフセットをackし、フレームをストリーミングします。最後の`Store`クローンがdropされるとランナースレッドはjoinされ、プライマリはクリーンなFINを観測してスロットを解放します。組み込み側での`PUBLISH`はローカルに許可されます（pub/subはプロセスローカルです）が、キー空間自体は読み取り専用のままです。
 
 ## スコープ付きマルチライター
 
@@ -223,7 +226,7 @@ let writer = Store::open(
 // ローカル書き込みは組み込みのレプリケーションソースのバックログに流れる;
 // リーダーは kevy_replicate::ReplicaClient で 0.0.0.0:6105 に接続する。
 writer.set(b"app:billing:invoice:42", b"...")?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 組み込み側は、`with_embed_writer`に渡したアドレスでレプリケーションリスナーを公開します。ほかのノードは、サーバープライマリから引くのとまったく同じ方法でそこからログを引きます。
@@ -234,7 +237,7 @@ writer.set(b"app:billing:invoice:42", b"...")?;
 
 これが2つのフェイルオーバー面を駆動します。
 
-**レプリケーションプライマリの選挙（v3.15）。** 現プライマリがDOWNのとき、資格のあるレプリカ（生存ピアの中で適用済みレプリケーションオフセットが最大のもの。同点は最小の`node_id`が破る）が立候補し、`election_timeout`以内にクォーラム（`N/2 + 1`）のACCEPTを集める必要があります。エポックと投票は、どの応答もノードを出る*前に*`<data_dir>/elect.meta`へ永続化されるため、クラッシュ再起動しても二重投票はあり得ません。勝者は書き込みを開き、敗者は自動でレプリケーションのupstreamを再ターゲットします。これを3つのクランプが支えます。既知のプライマリがない**コールドスタート**は、`down_after`の猶予窓を1回待ってから選挙します。**再起動**したクォーラムメンバーは、選挙が落ち着くまで書き込みを保留します（configの`role = "primary"`は希望にすぎません）。厳密な過半数が見えないプライマリは、1リースウィンドウ以内に**自分の書き込みをフェンス**します（`-NOREPLICAS primary lost quorum; writes fenced`）。運用のウォークスルーは[`docs/availability.md`](../availability.md)にあります。
+**レプリケーションプライマリの選挙（v3.15）。** 現プライマリがDOWNのとき、資格のあるレプリカ（生存ピアの中で適用済みレプリケーションオフセットが最大のもの。同点は最小の`node_id`が破る）が立候補し、`election_timeout`以内にクォーラム（`N/2 + 1`）のACCEPTを集める必要があります。エポックと投票は、どの応答もノードを出る*前に*`<data_dir>/elect.meta`へ永続化されるため、クラッシュ再起動しても二重投票はあり得ません。勝者は書き込みを開き、敗者は自動でレプリケーションのupstreamを再ターゲットします。これを3つのクランプが支えます。既知のプライマリがない**コールドスタート**は、`down_after`の猶予窓を1回待ってから選挙します。**再起動**したクォーラムメンバーは、選挙が落ち着くまで書き込みを保留します（configの`role = "primary"`は希望にすぎません）。厳密な過半数が見えないプライマリは、1リースウィンドウ以内に**自分の書き込みをフェンス**します（`-NOREPLICAS primary lost quorum; writes fenced`）。運用のウォークスルーは[`docs/availability.md`](availability.md)にあります。
 
 **スコープフォールバック。** スコープの宣言済みフォールバックは、書き込みを受けるたびにDOWN集合を参照します。ライターがDOWNなら、フォールバックは自分をアクティブな所有者として扱って書き込みを受領し、以降ほかのノードへの書き込みはフォールバックへMISDIRECTされます。元ライターのハートビートが戻るとDOWN集合を抜け、次回の判断でフォールバックは暗黙に退きます。
 
@@ -261,7 +264,7 @@ MOVE-SCOPE <prefix> from <from-node-id> to <to-node-id>
 手順は次のとおりです：
 
 1. 現ライターは`<prefix>`のローカル状態をMIGRATINGに切り替えます。以降、そのプレフィックス配下のキーへの書き込みは`-QUIESCED migrating to <to-host:port>`を返します。クライアントは少し待って再試行します。
-2. ライターはプレフィックスのキー空間スライスをシリアライズし、`MOVE-SCOPE-INGEST <prefix> <bulk>`でターゲットのデータポートへ送ります。
+2. ライターはプレフィックスのキー空間スライスをシリアライズし、`MOVE-SCOPE-INGEST <prefix> <bulk>`でターゲットのデータポートへ送ります。あらゆる値型が完全な忠実度で移動します——ストリームも含めてです。エントリ、`last_id`の帳簿、コンシューマグループ、コンシューマ、生きているpending（PEL）行が移動をまたいで運ばれます（削除済みエントリのtombstone PEL行だけは落とされます。あれを再現できるRESP verbは存在しないからです）。
 3. ターゲットから`+OK`を受け取ると、ライターは移行をローカルにコミットします。以降、ソース側でのそのプレフィックスへの書き込みは`-MISDIRECTED writer is <to-host:port>`を返します。
 4. ほかのクラスタメンバーは、オペレータが新しいconfigをpushして再起動するまで、静的な`scopes`どおりにルーティングを続けます。
 
@@ -285,7 +288,7 @@ MOVE-SCOPE <prefix> from <from-node-id> to <to-node-id>
 | TOML | CLI | 環境変数 | デフォルト | 意味 |
 |------|-----|-----|---------|---------|
 | `[cluster] enabled` | `--cluster` | `KEVY_CLUSTER=1` | `false` | 各シャードをシャード別ポートで公開する。 |
-| `[cluster] port_base` | `--cluster-port-base` | `KEVY_CLUSTER_PORT_BASE` | `port`の値 | シャード`i`は`port_base + 1 + i`をbindする。 |
+| `[cluster] port_base` | — | — | `port`の値 | シャード`i`は`port_base + 1 + i`をbindする。TOMLのみ。 |
 
 ## レプリケーション
 
@@ -348,7 +351,7 @@ TOMLのみです。レプリケーションのCLIフラグや環境変数はあ�
 成功します。kevyはクロススロットの`MGET`、`MSET`、`SUNION`、トランザクション、ブロッキングファンアウトを、`-CROSSSLOT`を返さずにサーバー側で実行します。アトミック性が重要なケースでは`{hashtag}`による同居は依然として有用ですが、もはや正しさのための要件ではありません。
 
 **オペレータなしでライターのクラッシュを乗り切るには？**
-レプリケーションプライマリの場合：全ノードに`[cluster]`ブロック（`node_id`、`elect_port_base`、`peers`）を構成します。死んだプライマリは`down_after`（5秒）後に検出され、最も進んだレプリカがその座に選出されます。再合流した旧プライマリは自動で降格して再同期します（[`docs/availability.md`](../availability.md)を参照）。スコープライターの場合：フォールバックを宣言します（`prefix=writer|fallback`）。ライターのハートビートが`down_after`を超えて途切れると、フォールバックがそのプレフィックスの書き込みを受け始めます。クライアントは`-MISDIRECTED writer is <fallback>`を受けて追従し、元ライターが復帰したら手動のrejoinリカバリを実行します。
+レプリケーションプライマリの場合：全ノードに`[cluster]`ブロック（`node_id`、`elect_port_base`、`peers`）を構成します。死んだプライマリは`down_after`（5秒）後に検出され、最も進んだレプリカがその座に選出されます。再合流した旧プライマリは自動で降格して再同期します（[`docs/availability.md`](availability.md)を参照）。スコープライターの場合：フォールバックを宣言します（`prefix=writer|fallback`）。ライターのハートビートが`down_after`を超えて途切れると、フォールバックがそのプレフィックスの書き込みを受け始めます。クライアントは`-MISDIRECTED writer is <fallback>`を受けて追従し、元ライターが復帰したら手動のrejoinリカバリを実行します。
 
 **なぜゴシップ/Raftは恒久的にスコープ外なのですか？**
 全書き込みの下にコンセンサスログを置くコストは、kevyを選ぶ理由になっているスループットとテール遅延の優位を打ち消してしまいます。静的config+クォーラムハートビートの設計なら、ホットパス上でステートマシンレプリケーションの代金を払うことなく、フェイルオーバーの分岐が手に入ります。本当にコンセンサスバックのkey-valueストアが必要なワークロードには、kevyは適さない道具です。

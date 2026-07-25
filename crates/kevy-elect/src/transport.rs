@@ -1,5 +1,5 @@
 //! TCP control-plane transport for [`crate::Elector`] — the network
-//! half of T1.5.6. Drives the elector by reading inbound frames off
+//! half. Drives the elector by reading inbound frames off
 //! one accept-side listener + writing outbound frames over one
 //! persistent connection per peer.
 //!
@@ -68,7 +68,7 @@ pub(crate) struct Shared {
         Mutex<std::collections::HashMap<String, std::collections::VecDeque<Message>>>,
 }
 
-/// v3.15 D2 / v3.16 D4 — topology-change callback:
+/// Topology-change callback:
 /// `(new_local_role, Some(primary_id) when known, has_quorum)`.
 /// Address mapping is the CALLER's job (the static member table
 /// lives in the host's config — membership is static, roles are
@@ -122,7 +122,7 @@ impl Transport {
         Self::spawn_with_callback(elector, hb_interval, listen_addr, peers, Box::new(|_, _, _| {}))
     }
 
-    /// v3.15 D2 — like [`Self::spawn`], with a topology-change
+    /// Like [`Self::spawn`], with a topology-change
     /// callback: fired from the orchestrator thread whenever
     /// `(role, current_primary)` changes after a message or tick.
     /// Arguments: the new local role, and `Some((primary_id,
@@ -178,8 +178,8 @@ impl Transport {
     pub fn state_snapshot(&self) -> ElectorSnapshot {
         let e = self.state_view.elector.lock().expect("elector lock");
         let now = std::time::Instant::now();
-        // T3.11 / F4: include the list of peers this node considers
-        // DOWN at snapshot time. kevy-scope's F4 fallback path reads
+        // Include the list of peers this node considers
+        // DOWN at snapshot time. kevy-scope's fallback path reads
         // this to decide "writer DOWN → fallback takes over"; the
         // computation here is cheap (one pass over peer_ids).
         let down_peers: Vec<String> = e
