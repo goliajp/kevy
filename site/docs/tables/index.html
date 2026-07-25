@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tables (TABLE. / table_) — kevy</title>
+<meta name="description" content="A table is a named, verifiable declaration that compiles — at declare time — into the index and view primitives kevy already has. TABLE.DECLARE takes a prefix, typed columns, secon">
+<link rel="stylesheet" href="../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../docs/" aria-current="page">Docs</a>
+      <a href="../../docs/commands/">Commands</a>
+      <a href="../../benchmarks/">Benchmarks</a>
+      <a href="../../play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../docs/search-index.json" data-root="../../">
+        <input type="search" placeholder="Search docs…" aria-label="Search docs…" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../docs/tables/" aria-current="page">EN</a><a href="../../zh/docs/tables/">中文</a><a href="../../ja/docs/tables/">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell has-toc">
+  <aside class="side"><p class="side-h">Getting started</p><ul><li><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a></li><li><a href="../../docs/cookbook/">The RDS→kevy modeling cookbook</a></li><li><a href="../../docs/persistence/">Persistence</a></li><li><a href="../../docs/tuning/">Tuning kevy</a></li></ul><p class="side-h">Running it</p><ul><li><a href="../../docs/replication/">Replication</a></li><li><a href="../../docs/availability/">Availability</a></li><li><a href="../../docs/cluster/">Cluster</a></li><li><a href="../../docs/tiering/">Transparent tiering ([tiering] / with_tier_budget)</a></li><li><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a></li><li><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a></li><li><a href="../../docs/async/">Async client</a></li></ul><p class="side-h">Working with data</p><ul><li><a href="../../docs/indexes/">Secondary indexes (IDX. / idx_)</a></li><li><a href="../../docs/tables/" aria-current="page">Tables (TABLE. / table_)</a></li><li><a href="../../docs/vector-search/">Vector search (KIND ann)</a></li><li><a href="../../docs/text-search/">Full-text search (KIND text)</a></li><li><a href="../../docs/views/">Views (VIEW. / view_)</a></li><li><a href="../../docs/cdc/">CDC — the change feed (FEED. / changes_since)</a></li><li><a href="../../docs/pubsub/">Pub/sub</a></li><li><a href="../../docs/lua/">Lua scripting</a></li></ul><p class="side-h">Embedding it</p><ul><li><a href="../../docs/wasm/">kevy on WebAssembly</a></li><li><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a></li><li><a href="../../docs/iot/">kevy on IoT devices</a></li></ul><p class="side-h">Reference</p><ul><li><a href="../../docs/error-replies/">Error reply catalog</a></li><li><a href="../../docs/rds-workloads/">RDS workloads on kevy</a></li><li><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></li><li><a href="../../docs/UPGRADING/">Upgrading kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../docs/commands/">All 188 commands</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>Tables (<code>TABLE.*</code> / <code>table_*</code>)</h1></div>
+<p>A table is a <b>named, verifiable declaration</b> that compiles — at declare time — into the index and view primitives kevy already has. <code>TABLE.DECLARE</code> takes a prefix, typed columns, secondary indexes and composite sort paths, and emits ordinary named indexes; nothing new runs at query time. This is the engine's standing rule (Law 3) in user terms: <b>kevy never plans a query — you name your access paths</b>, and a table is the ergonomic way to name a whole family of them at once.</p>
+<figure class="code"><pre><code>TABLE.DECLARE user PREFIX u: PK id
+    COLUMN id str COLUMN name str COLUMN age i64
+    COLUMN dept str COLUMN email str
+    INDEX age range VALUES dept name
+    INDEX email unique
+    ORDERPATH by_dept_age ON dept THEN age DESC
+
+IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20</code></pre></figure>
+<p>Rows are hash keys under the prefix, exactly as before — declaring a table changes nothing about how you write (<code>HSET u:1 name alice age 30 …</code>) and imposes <b>no schema</b>: a row missing a declared column is a row where that column is NULL (the absent-field semantics every index already has). The declaration buys you compiled access paths, a <code>VERIFY</code> surface, and one-verb lifecycle for all of them.</p>
+<h2 id="the-declaration-model">The declaration model</h2>
+<p><code>TABLE.DECLARE</code> compiles each clause into a named index:</p>
+<div class="tbl"><table><thead><tr><th>clause</th><th>compiles to</th></tr></thead><tbody><tr><td>`INDEX &lt;col&gt; range\</td><td>unique [VALUES &lt;col&gt;…]`</td><td>a scalar index named <code>&lt;table&gt;.&lt;col&gt;</code> over the prefix, with the <code>VALUES</code> columns stored per row (typed from the column declarations)</td></tr><tr><td><code>ORDERPATH &lt;name&gt; ON &lt;col&gt; [DESC] [THEN &lt;col&gt; [DESC]]…</code></td><td>a composite range index named <code>&lt;table&gt;.&lt;orderpath&gt;</code> — one order-preserving byte key per row</td></tr></tbody></table></div>
+<p>The compiled names share one namespace — <code>&lt;table&gt;.&lt;col&gt;</code> vs <code>&lt;table&gt;.&lt;orderpath&gt;</code> — so an ORDERPATH named like an indexed column is refused at declare time, by name. The compilation is a single implementation shared by the server and the embedded store (the dispatch oracle byte-compares the two faces in CI), and it is <b>atomic</b>: on any error nothing installs — no half-declared table.</p>
+<p>Everything a compiled index does is what a hand-declared <code>IDX.CREATE</code> does: same backfill behavior, same <code>-INDEXBUILDING</code> discipline, same sidecar persistence, same budget refusal (<a href="../indexes/">indexes.md</a>). <code>TABLE.DROP</code> drops the table and every index it compiled.</p>
+<h2 id="grammar">Grammar</h2>
+<figure class="code"><pre><code>TABLE.DECLARE name PREFIX p PK col
+    COLUMN name i64|f64|str [COLUMN ...]
+    [INDEX col range|unique [VALUES col ...]] ...
+    [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] ...
+TABLE.DROP name        # drops the table + its compiled indexes; 1|0
+TABLE.LIST             # name/prefix/pk + column/index/orderpath counts
+TABLE.VERIFY name      # component fsck + a bounded column spot check</code></pre></figure>
+<ul><li>Column types are <code>i64 | f64 | str</code> — the scalar index types. Everything else (timestamps, booleans, enums) is app-encoded into one of the three, and the coarse mapping is stated rather than hidden (kevy-sql prints a note per coerced column).</li><li><code>PK</code> names a declared column; it is documentation plus a <code>VERIFY</code> surface — rows are addressed by their key, exactly as today. <code>serial</code>-style id allocation is a recipe (<a href="../cookbook/#3-sequences">the sequences recipe</a>), not an engine feature.</li><li>Up to 64 tables; every structural refusal is named (duplicate column, unknown <code>VALUES</code> column, name collisions, …), never silent.</li></ul>
+<p><code>TABLE.VERIFY</code> re-runs every compiled index's drift recheck (the <code>IDX.VERIFY</code> counters: entries / bytes / coerce_failures / duplicates / drift / checked, per index) plus a bounded spot check — up to 64 sampled rows per shard, asserting every <i>present</i> declared column coerces to its declared type (absent is NULL, never an error). It answers <code>-INDEXBUILDING</code> while any component index is still backfilling.</p>
+<h2 id="composite-orderpath-semantics">Composite ORDERPATH semantics</h2>
+<p>An ORDERPATH mechanizes <a href="../cookbook/#8-composite-ordering-order-by-a-b">the composite-ordering recipe</a> — the <code>ORDER BY a, b DESC</code> walk — into a real composite index: one order-preserving byte string per row, so a single B-tree answers the query the way a relational composite index does. The rules:</p>
+<ul><li><b><code>WHERE</code> takes a leading prefix.</b> <code>WHERE a EQ x [b EQ y …] [RANGE c min max]</code> must name the composite's columns in declared order from the front: an equality prefix, then at most one range on the <i>next</i> column; everything after is unconstrained (classic composite-B-tree semantics). Naming a non-prefix column is a named error — never a scan.</li><li><code>RANGE</code> is terminal within <code>WHERE</code> — nothing may follow it, because nothing after a range is representable as one contiguous walk.</li><li><b><code>DESC</code> per component</b> is honored in the stored order, so <code>ON dept THEN age DESC</code> pages each department's rows from the oldest-largest end with no re-sort.</li><li><b>A row missing any component column is excluded</b> from the composite index (same for a coerce failure) — it remains fully visible through every other access path. A <code>str</code> component longer than <b>255 bytes</b> also excludes the row: the same class of cap a relational B-tree puts on index-row size, and what keeps range bounds exact. Up to 8 components.</li><li><code>WHERE</code> works on <code>IDX.COUNT</code> too, and on an index that declares no composite columns it is refused by name.</li></ul>
+<figure class="code"><pre><code>IDX.QUERY user.by_dept_age WHERE dept EQ eng                  # all eng, age DESC
+IDX.QUERY user.by_dept_age WHERE dept EQ eng RANGE age 31 46  # eng, 31&lt;=age&lt;=46</code></pre></figure>
+<h2 id="querying-tables">Querying tables</h2>
+<p>Queries stay <code>IDX.QUERY</code> against the compiled names — a table adds no query verb, because the engine evaluates nothing at query time:</p>
+<figure class="code"><pre><code>IDX.QUERY user.age RANGE 25 45                          # driving range
+IDX.QUERY user.email EQ d@x                             # unique point lookup
+IDX.QUERY user.age RANGE 0 100
+    FILTER dept EQ eng SORT name ASC LIMIT 20 OFFSET 20 # clauses on VALUES
+IDX.QUERY user.age RANGE 0 100 FACET dept
+IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name email</code></pre></figure>
+<p><code>FILTER</code> / <code>SORT</code> / <code>DISTINCT</code> / <code>FACET</code> / <code>OFFSET</code> read the columns the index <b>stored at <code>VALUES</code> declaration time</b> — the same clause grammar and the same exact-across-shards semantics as their text originals (<a href="../text-search/">text-search.md</a>): <code>FILTER</code> applies before the page so a qualifying row ranked deep still reaches <code>LIMIT</code>, <code>FACET</code> counts the whole match set, missing values sort last both ways. Naming a field the index did not store is an error that names the fields it did. The driving predicate is always the indexed range/EQ/WHERE — there is no <code>WHERE</code>-without-an-index.</p>
+<p><b>Index-only queries touch zero rows.</b> A FILTER/SORT/COUNT query answers entirely from the RAM-resident index — the row-read counter is asserted <code>== 0</code> in the gate suite (<code>bench/tablegate.sh</code>). This is the tiering synergy the two features were designed around: with <a href="../tiering/">transparent tiering</a> on, a fully-cold table serves index-only queries with <b>zero disk reads</b>, and only the final hydration page (<code>FIELDS …</code>) pays cold reads — one per row, batched. An index without <code>VALUES</code> columns is byte-identical in memory and query path to one on a store that never declares them (the zero-cost-when-undeclared gate).</p>
+<h2 id="null-uniqueness-and-what-is-enforced">NULL, uniqueness, and what is enforced</h2>
+<ul><li><b>NULL = absent field.</b> No column is required; a row missing an indexed column is simply not in that index. There are no engine <code>CHECK</code>s, defaults, or NOT NULL — constraints are recipes (<a href="../cookbook/#5-check-constraints-and-multi-key-invariants">the constraints recipe</a>, atomic blocks).</li><li><b>Uniqueness is verify-not-enforce</b> at the table layer: a <code>unique</code> index is the same fence <code>IDX.CREATE KIND unique</code> builds (<a href="../indexes/#uniqueness-is-a-fence-not-a-lock">indexes.md</a> — the reservation pattern makes it race-free), and <code>TABLE.VERIFY</code> reports <code>duplicates</code> instead of the engine rejecting your write after the fact.</li></ul>
+<h2 id="what-it-is-not">What it is NOT</h2>
+<p>Stated as refusals, because the engine refuses them by name rather than approximating: <b>no runtime SQL</b> (send <code>TABLE.DECLARE</code>, not <code>CREATE TABLE</code>, to the server), <b>no query-time joins</b> beyond a view's <code>VIA</code> dereference (<a href="../views/">views.md</a>), <b>no HAVING / subqueries / expressions</b>, <b>no engine-enforced constraints</b>. The SQL-to-kevy mapping for each of those lives in <a href="../rds-workloads/">rds-workloads.md</a>, the working recipes in <a href="../cookbook/">cookbook.md</a>, and the schema-compilation path below.</p>
+<h2 id="kevy-sql-compile-a-schema-dont-send-one">kevy-sql: compile a schema, don't send one</h2>
+<p><code>kevy-sql</code> (and its <code>kevy-cli sql</code> face) is a <b>declaration-time compiler</b> — it reads a PG/MySQL-dialect schema file once, like a migration tool, and emits the explicit declarations:</p>
+<figure class="code"><pre><code class="lang-console">kevy-cli sql compile schema.sql                          # print the plan
+kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004</code></pre></figure>
+<ul><li><code>CREATE TABLE</code> → <code>TABLE.DECLARE</code> (types coarsely mapped to <code>i64|f64|str</code>, each mapping noted honestly).</li><li><code>CREATE [UNIQUE] INDEX</code> → <code>INDEX</code> clauses; PG <code>INCLUDE</code> covering columns → stored <code>VALUES</code>; multi-column indexes → an <code>ORDERPATH</code>.</li><li>Constant single-table <code>CREATE VIEW … AS SELECT</code> → an engine view; a parameterized one → a <b>query card</b>: a ready-made <code>IDX.QUERY</code> template with <code>$N</code> slots your app fills in.</li><li>The compiler does not plan either: it matches your view against the access paths you declared, and when none fits it tells you which declaration to add (<code>add: CREATE INDEX ON t (dept, age)</code>) instead of inventing a scan. Ad-hoc SQL, joins, subqueries, <code>OR</code>, <code>GROUP BY</code> and friends are refused with <code>line:col</code> and a pointer to the recipe that replaces them.</li></ul>
+<p>The end-to-end walkthrough — a real users/orders/order_items schema compiled, applied and queried — is <a href="../cookbook/#22-porting-a-pgmysql-schema">the schema-porting recipe</a>.</p>
+<h2 id="embedded">Embedded</h2>
+<p>Typed API, same compilation, no text grammar required in-process (the declaration types — <code>TableSpec</code>, <code>TableIndex</code>, <code>OrderPath</code> — live in <code>kevy-index</code>, the crate that owns the single compiler):</p>
+<figure class="code"><pre><code class="lang-rust">use kevy_index::TableSpec;
+
+store.table_declare(spec)?;          // TableSpec, validated + compiled,
+                                     // indexes built synchronously
+let tables = store.table_list();
+let report = store.table_verify(b"user")?;   // per-index counters + spot check
+store.table_drop(b"user");</code></pre></figure>
+<p>The wire form (<code>db.cmd("TABLE.DECLARE", …)</code>) works too and parses with the identical shared grammar — server/embedded byte parity is pinned in CI by the dispatch oracle.</p>
+<h2 id="performance">Performance</h2>
+<p>The gate clamps, and their measurement status stated plainly: the conformance/parity/refusal/index-only assertions run green in this tree (<code>bench/tablegate.sh</code>). The <b>throughput clamps</b> — indexed point lookup p99 ≤ 1 ms @ 10 M rows, FILTER+SORT+LIMIT-20 page p95 ≤ 5 ms @ 10 M rows, write tax with 3 indexes + declared VALUES ≤ 15 % vs bare <code>HSET</code> — are perfgate metric lines whose baselines are <b>pending the dedicated bench box</b> (<code>bench/capacity-envelope.sh</code> records them). Until recorded there, they are targets, not measurements — this page will not quote them as results.</p>
+<p>Write cost is the standard index tax: one field read plus one segment update per compiled index per matching write; an empty catalog costs one untaken branch.</p>
+<h2 id="see-also">See also</h2>
+<ul><li><a href="../indexes/">indexes.md</a> — the index engine tables compile into.</li><li><a href="../tiering/">tiering.md</a> — the companion feature: indexes hot, rows cold.</li><li><a href="../rds-workloads/">rds-workloads.md</a> — the full SQL-vocabulary mapping (what compiles, what is a recipe, what is refused).</li><li><a href="../cookbook/">cookbook.md</a> — the composite-ordering and schema-porting recipes.</li><li><a href="../views/">views.md</a> — named compositions over the same indexes.</li></ul></main>
+  <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#the-declaration-model">The declaration model</a></li><li class="l2"><a href="#grammar">Grammar</a></li><li class="l2"><a href="#composite-orderpath-semantics">Composite ORDERPATH semantics</a></li><li class="l2"><a href="#querying-tables">Querying tables</a></li><li class="l2"><a href="#null-uniqueness-and-what-is-enforced">NULL, uniqueness, and what is enforced</a></li><li class="l2"><a href="#what-it-is-not">What it is NOT</a></li><li class="l2"><a href="#kevy-sql-compile-a-schema-dont-send-one">kevy-sql: compile a schema, don't send one</a></li><li class="l2"><a href="#embedded">Embedded</a></li><li class="l2"><a href="#performance">Performance</a></li><li class="l2"><a href="#see-also">See also</a></li></ul></aside>
+</div>
+
+<script src="../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

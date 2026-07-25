@@ -1,0 +1,26 @@
+[package]
+name = "kevy-sql"
+description = "Declaration-time SQL compiler for kevy: CREATE TABLE/INDEX/VIEW compile ONCE into explicit TABLE.DECLARE / VIEW.CREATE commands and query cards — never a query engine."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/kevy-sql"
+readme = "README.md"
+keywords = ["sql", "schema", "compiler", "migration", "kevy"]
+categories = ["database", "command-line-utilities"]
+
+[lints]
+workspace = true
+
+# Runtime closure: pure std, zero dependencies (charter). kevy-index is a
+# DEV-dependency only — the round-trip test feeds every compiled
+# TABLE.DECLARE argv back through the engine's own wire parser, so the
+# compiler and the engine cannot drift on the grammar.
+[dependencies]
+
+[dev-dependencies]
+kevy-index = { path = "../kevy-index" }

@@ -72,10 +72,20 @@ pub fn load_snapshot_filtered<R: Read>(
     let absolute_ttl = version >= VERSION_ABSOLUTE_TTL;
     let now = kevy_store::now_unix_ms();
 
+    // In-load demotion: the loader drives entries straight
+    // into the hot map, so a snapshot bigger than the tier budget must
+    // spill inline — check the watermark every K records and drain once
+    // more at EOF. A cheap no-op branch when tiering is off.
+    let mut records: u64 = 0;
     loop {
         let op = read_u8(&mut r)?;
         if op == OP_EOF {
+            store.demote_to_watermark();
             return Ok(());
+        }
+        records += 1;
+        if records.is_multiple_of(crate::REPLAY_DEMOTE_INTERVAL) {
+            store.demote_to_watermark();
         }
         // Field-TTL records: no ttl/value framing of their own.
         if op == OP_HFTTL {

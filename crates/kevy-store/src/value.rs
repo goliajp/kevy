@@ -121,6 +121,49 @@ impl ZSetData {
     }
 }
 
+/// Type tag a [`ColdRef`] carries so `TYPE` / SCAN's `TYPE` filter / the
+/// WRONGTYPE precheck answer with zero IO.
+pub const COLD_TAG_STRING: u8 = 1;
+/// Hash tag — see [`COLD_TAG_STRING`].
+pub const COLD_TAG_HASH: u8 = 2;
+
+/// The in-map stub a demoted (cold) value leaves behind: its vlog
+/// record's address + enough metadata to answer stage-1 questions
+/// (existence, TYPE, weight) with zero IO. Byte math: offset u64 (8) +
+/// file_id/len/weight u32 (12) + type_tag/touched u8 (2) = 22, padded
+/// to 24 by u64 alignment — fits `Value`'s 24 B payload (≤32 B assert).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ColdRef {
+    /// Byte offset of the record header inside its vlog file.
+    pub(crate) offset: u64,
+    /// The vlog file id.
+    pub(crate) file_id: u32,
+    /// Record body length (mirrors `kevy_vlog::VlogRef::len`).
+    pub(crate) len: u32,
+    /// The ORIGINAL value weight (heap bytes) at demotion time —
+    /// promotion re-accounting sanity + spill-policy input. The live
+    /// `Entry::weight` is re-stamped to the stub's actual footprint so
+    /// `MEMORY USAGE` (and Σ ≈ used_memory) stay stub-actual.
+    pub(crate) weight: u32,
+    /// [`COLD_TAG_STRING`] / [`COLD_TAG_HASH`].
+    pub(crate) type_tag: u8,
+    /// Promotion-gate probation mark: the first materializing access
+    /// serves bytes via pread WITHOUT installing and sets this; the
+    /// second access promotes. Bulk/shared-lane reads never set it.
+    pub(crate) touched: u8,
+}
+
+impl ColdRef {
+    /// The tag's Redis type name (the `TYPE` command on a cold key —
+    /// answered from RAM, never a pread).
+    pub(crate) fn type_name(self) -> &'static str {
+        match self.type_tag {
+            COLD_TAG_HASH => "hash",
+            _ => "string",
+        }
+    }
+}
+
 /// A stored value. One variant per Redis type.
 ///
 /// The collection variants live behind a **shared pointer** (`Arc`) so the
@@ -206,6 +249,14 @@ pub enum Value {
     /// Tiny sorted sets inline encoding; promoted to
     /// `Value::ZSet(Arc<ZSetData>)` on overflow.
     SmallZSetInline(crate::small_zset::SmallZSetData),
+    /// A demoted (tiered-to-disk) value's in-map stub. The two-stage
+    /// funnel (`tier` module) resolves this before any typed match sees
+    /// it: stage 1 answers existence/TYPE/TTL from the stub with zero
+    /// IO; stage 2 materializes (serve or promote) only on a type
+    /// match. Cloning a `Cold` clones the STUB, not the record — paths
+    /// that duplicate values (COPY, cross-shard ship) materialize
+    /// first so two stubs never alias one vlog record.
+    Cold(ColdRef),
 }
 
 /// Threshold (bytes) above which a SET stores its value as
@@ -280,6 +331,9 @@ impl Value {
             Value::Set(_) | Value::SmallSetInline(_) => "set",
             Value::ZSet(_) | Value::SmallZSetInline(_) => "zset",
             Value::Stream(_) => "stream",
+            // Stage-1 funnel: TYPE (and SCAN's TYPE filter) answer from
+            // the tag — a cold key never pays a pread for its type.
+            Value::Cold(c) => c.type_name(),
         }
     }
 
@@ -313,6 +367,10 @@ impl Value {
             | Value::SmallHashInline(_)
             | Value::SmallListInline(_)
             | Value::SmallZSetInline(_) => 0,
+            // The stub owns no heap — its 24 bytes live inline in the
+            // Entry. The reclaimed value bytes are exactly the point:
+            // a cold key weighs key-heap + ENTRY_OVERHEAD only (B7).
+            Value::Cold(_) => 0,
             // Each member's bytes live twice when they spill to heap (>22 B):
             // once as the `by_member` key, once inside the rank tree's
             // `(Score, SmallBytes)` key — hence the ×2 on `heap_bytes`.
@@ -344,6 +402,8 @@ impl Value {
             | Value::SmallHashInline(_)
             | Value::SmallListInline(_)
             | Value::SmallZSetInline(_) => false,
+            // 24 inline bytes; dropping a stub frees nothing.
+            Value::Cold(_) => false,
             // Lazy-drop's primary case: the large-value SET tail culprit.
             Value::ArcBulk(a) => a.len() >= HEAP_HEAVY_BYTES,
             // Collection drops walk every element + the bucket array;

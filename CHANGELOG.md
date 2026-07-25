@@ -43,6 +43,83 @@ the replication handshake now carries the feed generation).
 - Three cross-shard writes went to the wrong shard; one of them
   lost data. All three fixed, with the routing pinned by tests.
 
+### The capacity arc: transparent tiering × the TABLE layer
+
+Two features designed as one arc, because the RDS workload's natural
+shape on a tiered store is *indexes hot, rows cold*: queries answer
+from RAM-resident index columns, and only the final result page
+touches the cold tier.
+
+- **Transparent tiering** — a RAM budget (`[tiering] budget = "auto"
+  | "70%" | "4gb"`; embedded `with_tier_budget*`; off by default,
+  and the off-cost is gated as byte-identical). Past the watermark,
+  cold values spill to a value log on disk and their memory is
+  reclaimed against the budget — a logical bound, like Redis
+  `maxmemory` (RSS follows the allocator; the process's resident set
+  can run above the budget under heavy write churn, reported as a
+  fragmentation ratio). A cold key costs ~96 B plus its key bytes while
+  the
+  key, TTL, type and LRU history stay resident. Every command keeps
+  its exact semantics on a cold key: SCAN/KEYS/TYPE/TTL/RENAME/DEL
+  never read disk, a WRONGTYPE refusal never pays a read, and the
+  transparency suite replays one op sequence against a tiered and an
+  untiered store asserting byte-identical replies. Promotion is
+  deliberate (second materializing access; bulk paths — hydration,
+  backfill, digest, export, rewrite — never promote), demotion emits
+  zero keyspace events, and hydration over cold rows batches to one
+  read per row, never per field.
+- **The disposable-vlog durability story**: the value log is a
+  per-boot spill area — deleted at open, rebuilt during replay,
+  never part of the durability contract, so tiering adds zero new
+  crash-safety surface by construction. The AOF stays the sole
+  durable truth; snapshot/rewrite/full-sync stream cold values from
+  the pinned log without promoting anything (peak extra RAM: one
+  value, pinned across compaction), and boot with dataset > budget
+  spills inline during replay instead of OOMing before tiering ever
+  runs — both pinned by the tiered persistence suite.
+- **The honest v1 limits, named**: strings and hashes spill; lists,
+  sets, zsets and streams stay hot. Embedded cold reads hold the
+  shard lock for the read's duration (the drop-lock dance is
+  designed, post-v4). Values below 64 B never spill — a stub
+  would be no smaller than the value.
+- **The TABLE layer** — `TABLE.DECLARE` compiles a relational
+  declaration (prefix, typed columns, PK, secondary indexes with
+  stored VALUES, composite ORDERPATH sort paths) into ordinary named
+  indexes at declare time; `VERIFY`/`LIST`/`DROP` complete the
+  lifecycle. The engine still plans nothing, enforces no schema
+  (absent field = NULL), and refuses ad-hoc SQL by name — Law 3
+  unamended. Composite indexes are real order-preserving byte
+  encodings (equality-prefix + range `WHERE`, per-component DESC,
+  brute-force-checked against tuple comparison), shared
+  single-implementation between server and embedded with the
+  dispatch oracle pinning byte parity.
+- **Scalar VALUES clauses**: FILTER / SORT / DISTINCT / FACET /
+  OFFSET — previously text-only — now run on range/unique indexes,
+  with the same exact-across-shards semantics; an index without
+  VALUES stays byte-identical in memory and query path (gated). This
+  is what makes index-only queries touch zero rows — asserted by a
+  row-read counter, and on a fully-cold tiered table that means zero
+  disk reads.
+- **`kevy-sql`** — an out-of-engine, declaration-time compiler:
+  CREATE TABLE / CREATE INDEX / single-table CREATE VIEW compile to
+  TABLE.DECLARE / views / parameterized query cards
+  (`kevy-cli sql compile [--apply]`); everything else is refused
+  with line:col and a pointer to the replacing recipe. Plus
+  `kevy-vlog`, the cold-log stone (CRC per record, pin/epoch
+  compaction safety, fuzzed).
+- **The new gates**: `tiergate` + `tablegate` + the transparency
+  suite gate every mechanism claim above; memgate gates the cold-key
+  formula at ±20 %. The
+  **measured envelope is pending the dedicated bench box**, stated
+  plainly: cold-read p99, the ≥10× data:RAM capacity gate at 4 KiB
+  values, vlog space amplification, the 10 M-row fused envelope and
+  mixed-workload isolation run there via
+  `bench/capacity-envelope.sh` (which flips the pending tiergate
+  lines); the perfgate table_* baselines are recorded there too.
+  Until those runs land, the numbers are targets and the gates stay
+  red — docs/tiering.md and docs/tables.md quote them as exactly
+  that.
+
 ### One stone, many doors (the v4 entrypoints arc)
 
 - **kevy-ffi**, the C ABI stone: one generic `kevy_cmd` entry (argv

@@ -20,9 +20,10 @@ pub(crate) enum FilterShape {
 }
 
 /// Parse one `FILTER <field> RANGE <min> <max>` / `FILTER <field> EQ <v>`
-/// and return the next clause index. Several FILTER clauses AND together,
-/// which is why each appends rather than replaces.
-pub(crate) fn apply_filter(argv: &[Vec<u8>], i: usize, a: &mut MatchArgs) -> Option<usize> {
+/// starting at the `FILTER` keyword; returns the clause and the next
+/// index. Shared by the MATCH and the scalar grammars, so the two
+/// surfaces cannot drift on what a predicate looks like.
+pub(crate) fn parse_filter(argv: &[Vec<u8>], i: usize) -> Option<(FilterArg, usize)> {
     let field = argv.get(i + 1)?.clone();
     let mode = argv.get(i + 2)?;
     if mode.eq_ignore_ascii_case(b"RANGE") {
@@ -30,15 +31,34 @@ pub(crate) fn apply_filter(argv: &[Vec<u8>], i: usize, a: &mut MatchArgs) -> Opt
             min: argv.get(i + 3)?.clone(),
             max: argv.get(i + 4)?.clone(),
         };
-        a.filters.push(FilterArg { field, shape });
-        Some(i + 5)
+        Some((FilterArg { field, shape }, i + 5))
     } else if mode.eq_ignore_ascii_case(b"EQ") {
         let shape = FilterShape::Eq { value: argv.get(i + 3)?.clone() };
-        a.filters.push(FilterArg { field, shape });
-        Some(i + 4)
+        Some((FilterArg { field, shape }, i + 4))
     } else {
         None
     }
+}
+
+/// `ASC` = false, `DESC` = true. The direction is required: a default
+/// would have to be one of them, and guessing which is a ranking
+/// decision.
+pub(crate) fn parse_sort_dir(dir: &[u8]) -> Option<bool> {
+    if dir.eq_ignore_ascii_case(b"DESC") {
+        Some(true)
+    } else if dir.eq_ignore_ascii_case(b"ASC") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// [`parse_filter`] into a MATCH's clause list. Several FILTER clauses
+/// AND together, which is why each appends rather than replaces.
+pub(crate) fn apply_filter(argv: &[Vec<u8>], i: usize, a: &mut MatchArgs) -> Option<usize> {
+    let (f, next) = parse_filter(argv, i)?;
+    a.filters.push(f);
+    Some(next)
 }
 
 
@@ -67,18 +87,10 @@ pub(crate) fn apply_value_clause(
     }
 }
 
-/// `SORT <field> ASC|DESC`. The direction is required: a default would
-/// have to be one of them, and guessing which is a ranking decision.
+/// `SORT <field> ASC|DESC`.
 fn apply_sort(argv: &[Vec<u8>], i: usize, a: &mut MatchArgs) -> Option<usize> {
     let field = argv.get(i + 1)?.clone();
-    let dir = argv.get(i + 2)?;
-    let desc = if dir.eq_ignore_ascii_case(b"DESC") {
-        true
-    } else if dir.eq_ignore_ascii_case(b"ASC") {
-        false
-    } else {
-        return None;
-    };
+    let desc = parse_sort_dir(argv.get(i + 2)?)?;
     a.sort = Some((field, desc));
     Some(i + 3)
 }

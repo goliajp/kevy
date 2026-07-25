@@ -37,6 +37,19 @@ pub(crate) struct ViewState {
     needs_rebuild: bool,
 }
 
+impl ShardViews {
+    /// Σ approximate heap bytes of the materialized view sets — the
+    /// view half of the tier's `reserved_bytes` feed.
+    /// Virtual views hold no set and contribute nothing.
+    #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+    pub(crate) fn reserved_bytes(&self) -> u64 {
+        self.views
+            .iter()
+            .map(|v| v.mat.as_ref().map_or(0, MaterializedSet::approx_bytes))
+            .sum()
+    }
+}
+
 /// One page of view members plus the resume cursor.
 pub type ViewPage = (Vec<(Vec<u8>, IndexValue)>, Option<(IndexValue, Vec<u8>)>);
 

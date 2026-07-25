@@ -23,8 +23,9 @@ impl Store {
         // A wholesale value replacement (type change / RESTORE)
         // discards any per-field hash TTLs; a fresh create is a no-op.
         self.clear_hash_key_ttls(key.as_slice());
-        entry.set_weight(key.heap_bytes() as u64 + entry.value.weight());
-        if self.maxmemory > 0 {
+        let key_heap = key.heap_bytes() as u64;
+        entry.set_weight(key_heap + entry.value.weight());
+        if self.clock_on() {
             self.tick_clock();
             entry.set_lru_clock(self.clock_counter as u32);
         }
@@ -33,6 +34,8 @@ impl Store {
         let prev = self.map.insert(key, entry);
         match &prev {
             Some(old) => {
+                // A displaced cold stub's vlog record dies with it.
+                self.tier_note_dead(key_heap, &old.value);
                 self.used_memory = self
                     .used_memory
                     .saturating_sub(old.weight())
@@ -54,8 +57,20 @@ impl Store {
     }
 
     /// Remove a key, returning the displaced entry (`None` if absent).
-    /// Frees the entry's cached weight + [`ENTRY_OVERHEAD`].
+    /// Frees the entry's cached weight + [`ENTRY_OVERHEAD`]. This is the
+    /// DISCARD form: a cold stub's vlog record is credited dead. A
+    /// caller re-homing the entry intact (RENAME) uses
+    /// [`Self::take_entry_keepalive`] instead.
     pub(crate) fn remove_entry(&mut self, key: &[u8]) -> Option<Entry> {
+        let old = self.take_entry_keepalive(key)?;
+        self.tier_note_dead(key_heap_bytes_for(key), &old.value);
+        Some(old)
+    }
+
+    /// [`Self::remove_entry`] minus the cold-record dead-credit — for
+    /// moves that keep the entry (and any [`crate::value::ColdRef`] in
+    /// it) alive under another key. Same accounting/hfttl behaviour.
+    pub(crate) fn take_entry_keepalive(&mut self, key: &[u8]) -> Option<Entry> {
         self.clear_hash_key_ttls(key);
         let old = self.map.remove(key)?;
         self.used_memory = self
@@ -186,11 +201,12 @@ impl Store {
                 return None;
             }
         }
-        if self.maxmemory > 0 {
+        if self.clock_on() {
             self.tick_clock();
             let c = self.clock_counter as u32;
+            let policy = self.touch_policy();
             let e = self.map.get_mut(key)?;
-            evict::touch_on_access(e, self.eviction_policy, c);
+            evict::touch_on_access(e, policy, c);
             return Some(&*e);
         }
         self.map.get(key)
@@ -214,11 +230,12 @@ impl Store {
                 return None;
             }
         }
-        if self.maxmemory > 0 {
+        if self.clock_on() {
             self.tick_clock();
             let c = self.clock_counter as u32;
+            let policy = self.touch_policy();
             let e = self.map.get_mut(key)?;
-            evict::touch_on_access(e, self.eviction_policy, c);
+            evict::touch_on_access(e, policy, c);
             return Some(e);
         }
         self.map.get_mut(key)

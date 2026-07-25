@@ -235,7 +235,19 @@ fn apply_hot_set(cfg: &mut Config, key: &[u8], value: &[u8]) -> Result<(), SetEr
         }
         "hz" | "maxmemory-samples" => set_expiry(cfg, key_str, value_str),
         "loglevel" | "logfile" => set_log(cfg, key_str, value_str),
-        "bind" | "port" | "io-threads" | "dir" | "appendonly" => {
+        // Hot-settable ONLY as a budget change: the shard tick
+        // re-resolves + re-applies it (the maxmemory precedent).
+        // Turning tiering on/off needs the vlog lifecycle — a restart;
+        // the spill dir likewise.
+        "tiering-budget" => {
+            cfg.tiering.budget = Some(
+                kevy_config::TierBudgetSpec::parse(value_str).map_err(|reason| {
+                    SetError::BadValue { key: key_str.to_string(), reason }
+                })?,
+            );
+            Ok(())
+        }
+        "bind" | "port" | "io-threads" | "dir" | "appendonly" | "tiering-spill-dir" => {
             Err(SetError::ReadOnly(key_str.to_string()))
         }
         other => Err(SetError::Unknown(other.to_string())),
@@ -387,7 +399,28 @@ fn config_pairs(cfg: &Config) -> Vec<(&'static str, String)> {
         "cluster-port-base",
         crate::cluster_port_base(cfg).to_string(),
     ));
+    push_tiering_pairs(&mut v, cfg);
     v
+}
+
+/// Tiering: the budget in its configured form (`auto` / `N%` /
+/// bytes); empty string = tiering off (the `save`-style "off" value).
+fn push_tiering_pairs(v: &mut Vec<(&'static str, String)>, cfg: &Config) {
+    v.push((
+        "tiering-budget",
+        cfg.tiering
+            .budget
+            .map(kevy_config::TierBudgetSpec::as_config_string)
+            .unwrap_or_default(),
+    ));
+    v.push((
+        "tiering-spill-dir",
+        cfg.tiering
+            .spill_dir
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default(),
+    ));
 }
 
 /// Minimal glob matcher — `*` matches any run of bytes; everything else

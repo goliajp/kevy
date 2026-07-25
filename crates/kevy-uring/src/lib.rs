@@ -32,6 +32,7 @@
 
 mod completion;
 mod ffi;
+mod file_batch;
 mod layout;
 mod pbr;
 mod prep;
@@ -43,6 +44,7 @@ mod ring_tests;
 
 pub use completion::Completion;
 pub use ffi::Iovec;
+pub use file_batch::FileRead;
 pub use layout::KernelTimespec;
 pub use pbr::ProvidedBufRing;
 pub use ring::IoUring;

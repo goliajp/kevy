@@ -152,42 +152,8 @@ impl ValueSpec {
     }
 }
 
-/// A comparison over a stored value's raw bytes, built once from the
-/// type the field was declared as.
-///
-/// `EQ` is the degenerate range `[v, v]`: stored values are totally
-/// ordered, so equality needs no second code path — and one path cannot
-/// disagree with itself about what a bound means.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ValueTest {
-    ty: ValType,
-    lo: IndexValue,
-    hi: IndexValue,
-}
-
-impl ValueTest {
-    /// `RANGE min max` on a field declared as `ty`. `None` when a bound
-    /// is not of that type — a bound the index cannot interpret is an
-    /// error, not an empty result.
-    pub fn range(ty: ValType, min: &[u8], max: &[u8]) -> Option<ValueTest> {
-        Some(ValueTest { ty, lo: IndexValue::coerce(ty, min)?, hi: IndexValue::coerce(ty, max)? })
-    }
-
-    /// `EQ v` on a field declared as `ty`.
-    pub fn eq(ty: ValType, v: &[u8]) -> Option<ValueTest> {
-        let v = IndexValue::coerce(ty, v)?;
-        Some(ValueTest { ty, lo: v.clone(), hi: v })
-    }
-
-    /// Whether a stored value's bytes satisfy the test.
-    ///
-    /// A value that does not coerce fails: text sitting in a field
-    /// declared numeric is not inside any numeric range, and passing it
-    /// would be the accept-and-ignore shape this surface keeps refusing.
-    pub fn passes(&self, raw: &[u8]) -> bool {
-        IndexValue::coerce(self.ty, raw).is_some_and(|v| v >= self.lo && v <= self.hi)
-    }
-}
+// `ValueTest` (the stored-value comparison) lives in `value.rs` with
+// the rest of the coercion/order logic; re-exported unchanged.
 
 /// One declared index.
 #[derive(Debug, Clone, PartialEq)]
@@ -223,6 +189,12 @@ pub struct IndexSpec {
     /// Empty by default: an index that never filters does not pay for
     /// the stored column.
     pub values: Vec<ValueSpec>,
+    /// Composite columns (`Some` = an ORDERPATH-compiled index): the
+    /// index value is the order-preserving concatenation of these
+    /// columns' encodings (see [`crate::composite`]). Legal ONLY on
+    /// `KIND range` with `TYPE str`; `None` = every existing index,
+    /// byte-identical in memory and on the sidecar (A5).
+    pub composite: Option<Vec<crate::composite::CompositeCol>>,
 }
 
 /// HNSW declaration (immutable once created).
@@ -302,6 +274,7 @@ impl IndexSpec {
             group_by: None,
             with_positions: false,
             values: Vec::new(),
+            composite: None,
         }
     }
 }
@@ -337,12 +310,19 @@ impl Catalog {
         if spec.with_positions && spec.kind != IndexKind::Text {
             return Err("ERR WITH POSITIONS requires KIND text");
         }
-        // Same contract for VALUES: only a text segment carries the
-        // stored-value column, so accepting the declaration on any other
-        // kind would store nothing and filter on nothing.
-        if !spec.values.is_empty() && spec.kind != IndexKind::Text {
-            return Err("ERR VALUES requires KIND text");
+        // VALUES rides the kinds that carry a stored-value column: the
+        // text segment and the scalar segments (range / unique — the
+        // capacity arc's G1 generalization). Ann and agg carry none, so
+        // accepting the declaration there would store nothing and
+        // filter on nothing.
+        if !spec.values.is_empty()
+            && !matches!(spec.kind, IndexKind::Text | IndexKind::Range | IndexKind::Unique)
+        {
+            return Err("ERR VALUES requires KIND text|range|unique");
         }
+        // Composite (ORDERPATH-compiled) combos: named refusals, body
+        // in `composite.rs` beside the encoding it protects.
+        crate::composite::composite_guard(&spec)?;
         self.specs.push((spec, IndexState::Building));
         Ok(())
     }
@@ -418,6 +398,7 @@ mod tests {
             group_by: None,
             with_positions: false,
             values: Vec::new(),
+            composite: None,
         }
     }
 

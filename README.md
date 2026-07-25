@@ -58,6 +58,18 @@ one error type (`KevyError`), one builder, borrowed write faces
 the runtime is instance-scoped, so one process can run several
 independent kevys; and the same engine now ships to the browser and
 to the edge (the two sections below).
+4.0 also raises the capacity ceiling: your dataset no longer has to
+fit in RAM. **Transparent tiering** gives the store a RAM budget —
+cold values spill to a disposable on-disk value log and page back on
+access, every command keeps its exact semantics on a cold key, and
+the AOF durability contract is untouched, so RAM bounds your keys
+and disk bounds your data. The **TABLE layer** compiles relational
+declarations — typed columns, secondary indexes, composite `ORDER BY`
+paths, even a PG/MySQL schema file via `kevy-sql` — into named
+indexes at declare time, so the single-table read path stays a
+lookup and index-only queries answer from RAM even when every row is
+cold. See [docs/tiering.md](docs/tiering.md) and
+[docs/tables.md](docs/tables.md).
 Every headline number is gated and re-measured on every train:
 hydrated row-list pages p99 < 1ms, write fan-out p99 < 200µs, ANN
 recall ≥ 0.9 — see [the design map](docs/designing-on-kevy.md),

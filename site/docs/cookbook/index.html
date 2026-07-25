@@ -42,7 +42,7 @@
 </header>
 
 <div class="doc-shell has-toc">
-  <aside class="side"><p class="side-h">Getting started</p><ul><li><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a></li><li><a href="../../docs/cookbook/" aria-current="page">The RDS→kevy modeling cookbook</a></li><li><a href="../../docs/persistence/">Persistence</a></li><li><a href="../../docs/tuning/">Tuning kevy</a></li></ul><p class="side-h">Running it</p><ul><li><a href="../../docs/replication/">Replication</a></li><li><a href="../../docs/availability/">Availability</a></li><li><a href="../../docs/cluster/">Cluster</a></li><li><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a></li><li><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a></li><li><a href="../../docs/async/">Async client</a></li></ul><p class="side-h">Working with data</p><ul><li><a href="../../docs/indexes/">Secondary indexes (IDX. / idx_)</a></li><li><a href="../../docs/vector-search/">Vector search (KIND ann)</a></li><li><a href="../../docs/text-search/">Full-text search (KIND text)</a></li><li><a href="../../docs/views/">Views (VIEW. / view_)</a></li><li><a href="../../docs/cdc/">CDC — the change feed (FEED. / changes_since)</a></li><li><a href="../../docs/pubsub/">Pub/sub</a></li><li><a href="../../docs/lua/">Lua scripting</a></li></ul><p class="side-h">Embedding it</p><ul><li><a href="../../docs/wasm/">kevy on WebAssembly</a></li><li><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a></li><li><a href="../../docs/iot/">kevy on IoT devices</a></li></ul><p class="side-h">Reference</p><ul><li><a href="../../docs/error-replies/">Error reply catalog</a></li><li><a href="../../docs/rds-workloads/">RDS workloads on kevy</a></li><li><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></li><li><a href="../../docs/UPGRADING/">Upgrading kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../docs/commands/">All 184 commands</a></li></ul></aside>
+  <aside class="side"><p class="side-h">Getting started</p><ul><li><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a></li><li><a href="../../docs/cookbook/" aria-current="page">The RDS→kevy modeling cookbook</a></li><li><a href="../../docs/persistence/">Persistence</a></li><li><a href="../../docs/tuning/">Tuning kevy</a></li></ul><p class="side-h">Running it</p><ul><li><a href="../../docs/replication/">Replication</a></li><li><a href="../../docs/availability/">Availability</a></li><li><a href="../../docs/cluster/">Cluster</a></li><li><a href="../../docs/tiering/">Transparent tiering ([tiering] / with_tier_budget)</a></li><li><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a></li><li><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a></li><li><a href="../../docs/async/">Async client</a></li></ul><p class="side-h">Working with data</p><ul><li><a href="../../docs/indexes/">Secondary indexes (IDX. / idx_)</a></li><li><a href="../../docs/tables/">Tables (TABLE. / table_)</a></li><li><a href="../../docs/vector-search/">Vector search (KIND ann)</a></li><li><a href="../../docs/text-search/">Full-text search (KIND text)</a></li><li><a href="../../docs/views/">Views (VIEW. / view_)</a></li><li><a href="../../docs/cdc/">CDC — the change feed (FEED. / changes_since)</a></li><li><a href="../../docs/pubsub/">Pub/sub</a></li><li><a href="../../docs/lua/">Lua scripting</a></li></ul><p class="side-h">Embedding it</p><ul><li><a href="../../docs/wasm/">kevy on WebAssembly</a></li><li><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a></li><li><a href="../../docs/iot/">kevy on IoT devices</a></li></ul><p class="side-h">Reference</p><ul><li><a href="../../docs/error-replies/">Error reply catalog</a></li><li><a href="../../docs/rds-workloads/">RDS workloads on kevy</a></li><li><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></li><li><a href="../../docs/UPGRADING/">Upgrading kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../docs/commands/">All 188 commands</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>The RDS→kevy modeling cookbook</h1></div>
 <p>You are moving a relational data model onto kevy. Every recipe below uses shipped primitives — no roadmap features, no "coming soon". Each one names the RDS concept it replaces and the kevy pattern that carries it.</p>
 <p>The design stance behind all of them: <b>model the access paths, not the schema</b>. An RDS lets you defer that decision to a query planner; kevy makes you state it — and pays you back with microsecond pages at serving time (<code>bench/VALIDATION-LEDGER.md</code> has the measured numbers).</p>
@@ -88,6 +88,7 @@ TXN</code></pre></figure>
 <h2 id="5-check-constraints-and-multi-key-invariants">5. CHECK constraints and multi-key invariants</h2>
 <p><b>SQL equivalent:</b> <code>CHECK (balance &gt;= 0)</code> + a trigger-maintained audit row — <a href="../rds-workloads/#constraints-and-triggers">matrix: constraints and triggers</a>.</p>
 <p>The RDS runs <code>CHECK (balance &gt;= 0)</code> in the engine. kevy's replacement is <b>reads inside the atomic block</b>: the app evaluates the invariant, the engine guarantees the decision and the write commit together.</p>
+<p>Concretely: returning <code>Err</code> from the closure rolls back every write it made — in memory and in the AOF — so a rejected transaction leaves no trace, and you do not have to arrange your closure so that validation precedes every write. (That guarantee is real as of 4.0; earlier versions left a rejected closure's writes live in memory while discarding their AOF frames, so a restart disagreed with the running process.)</p>
 <figure class="code"><pre><code class="lang-rust">// embedded — debit that must not overdraw, plus an audit row:
 store.atomic(b"acct:7", |ctx| {
     let bal: i64 = parse(ctx.hget(b"acct:7", b"balance")?);
@@ -133,7 +134,7 @@ kevy-cli -p 6004 HEXPIRE user:7 3600 FIELDS 1 profile.plan   # per-field TTL sur
 <p>A deeply nested blob nobody indexes can stay one serialized field; the moment a path matters, promote it to a field.</p>
 <h2 id="10-cascade-delete-foreign-keys">10. Cascade delete / foreign keys</h2>
 <p><b>SQL equivalent:</b> <code>FOREIGN KEY … ON DELETE CASCADE</code> — <a href="../rds-workloads/#constraints-and-triggers">matrix: constraints and triggers</a>.</p>
-<p>Cascades are app patterns, never engine magic:</p>
+<p>Cascades are app patterns, never engine magic. If you are writing more than one of these, read <a href="#21-derived-state-as-a-pure-function-of-the-row">§21</a> first — cascade, uniqueness and drift detection are one pattern, and this section is a special case of it.</p>
 <ul><li>Synchronous, small blast radius: delete inside one atomic block (<code>ctx.del(row)</code>, <code>ctx.srem(parent_link, id)</code>).</li><li>Bulk / prefix-shaped: <code>delete-prefix</code> — rate-limited, resumable.</li><li>Asynchronous: a CDC consumer (<code>FEED.READ</code> with <code>PREFIX</code>) reacts to parent deletes and cleans children — the trigger replacement, after commit, decoupled, replayable.</li></ul>
 <figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 HSET order:1001 user_id 42
 kevy-cli -p 6004 RPUSH order:1001:items sku-7 sku-9
@@ -245,10 +246,136 @@ kevy-cli -p 6004 IDX.QUERY zone_w GROUPS BY sum LIMIT 10  # zones ranked by load
 kevy-cli -p 6004 FEED.TAIL 0
 kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 100 PREFIX reading:   # the uplink loop</code></pre></figure>
 <p>Pair it with recipe 19's <code>MAXLEN</code> cap and TTLs: raw readings stay bounded on the node, the aggregate rows stay tiny, and the feed cursor survives reboots — the whole edge story with zero moving parts beyond kevy itself.</p>
+<h2 id="21-derived-state-as-a-pure-function-of-the-row">21. Derived state as a pure function of the row</h2>
+<p><b>SQL equivalent:</b> the whole trigger layer at once — <code>ON DELETE CASCADE</code>, <code>UNIQUE</code> constraints, and the reconciliation job you write after you stop trusting them — <a href="../rds-workloads/#constraints-and-triggers">matrix: constraints and triggers</a>.</p>
+<p>This is the pattern the recipes above keep circling: §2's link keys, §5's invariants, §10's cascades and §12's audit rows are all the same idea applied four times. Stated once, it resolves cascades, uniqueness and drift detection together. It comes from a production migration that took a day to arrive at it, which is a day worth saving.</p>
+<p><b>The idea:</b> write one pure function from a row to every key derived from it. Not a procedure that updates keys — a function that <i>returns</i> what should exist.</p>
+<figure class="code"><pre><code class="lang-rust">// Everything user:42 implies, computed from the row alone.
+fn derived(id: &amp;[u8], row: &amp;Row) -&gt; Vec&lt;Vec&lt;u8&gt;&gt; {
+    vec![
+        key(b"email:", &amp;row.email),          // uniqueness claim
+        key(b"dept:", &amp;row.dept, b":users"), // membership
+    ]
+}</code></pre></figure>
+<p>Every operation is then a diff, and each falls out rather than being designed:</p>
+<div class="tbl"><table><thead><tr><th>Operation</th><th>What you do</th><th>What you get for free</th></tr></thead><tbody><tr><td><b>Insert</b></td><td>add <code>derived(new)</code></td><td>claims and memberships appear together</td></tr><tr><td><b>Update</b></td><td>add <code>derived(new) - derived(old)</code>, remove <code>derived(old) - derived(new)</code></td><td>a renamed email <b>releases its old claim</b> — the bug everyone writes by hand</td></tr><tr><td><b>Delete</b></td><td>remove <code>derived(old)</code></td><td>the cascade is not a separate code path</td></tr><tr><td><b>Verify</b></td><td>recompute <code>derived</code> for every row, diff against what exists</td><td>a drift detector you did not have to design</td></tr></tbody></table></div>
+<p>The update row is the one that pays for the pattern. Hand-written cascade code almost always adds the new claim and forgets to release the old one, because release is the case nobody demonstrates in a ticket.</p>
+<figure class="code"><pre><code class="lang-rust">store.atomic_all_shards(|ctx| {
+    let old = read_row(ctx, id)?;
+    let (want, had) = (derived(id, &amp;new), derived(id, &amp;old));
+
+    for k in want.iter().filter(|k| !had.contains(k)) {
+        if ctx.exists(&amp;[k]) &gt; 0 { return Err(Taken); }  // uniqueness
+        ctx.set(k, id);
+    }
+    for k in had.iter().filter(|k| !want.contains(k)) {
+        ctx.del(&amp;[k]);                                  // release
+    }
+    write_row(ctx, id, &amp;new)
+})</code></pre></figure>
+<p>Returning <code>Err</code> rolls the whole thing back (§5), so a rejected write leaves neither the row nor a half-applied claim set.</p>
+<p><b>Claims or an index?</b> A uniqueness claim is a second source of truth that can drift from the rows; a <a href="../indexes/">secondary index</a> is derived by construction and cannot. Inside <code>atomic_all_shards</code> you can query one directly:</p>
+<figure class="code"><pre><code class="lang-rust">if ctx.idx_count(b"email_idx", &amp;want, &amp;want)? &gt; 0 { return Err(Taken); }</code></pre></figure>
+<p>Two limits, both deliberate:</p>
+<ul><li><b>Only on <code>atomic_all_shards</code>.</b> An index entry lives on the shard of the key it indexes, so "does any row have this email" is a question about every shard. Single-shard <code>atomic()</code> holds one lock and could answer only for its own slice — a uniqueness check that consults 1/N of the keyspace would report "unique" nearly always, so it is not offered rather than offered with a footnote.</li><li><b>Index reads do not see the transaction's own writes.</b> Maintenance runs at commit. A closure inserting two rows must compare them to each other itself.</li></ul>
+<p><b>Verification.</b> Because <code>derived</code> is a function, the checker <i>is</i> the function — pass the same one to <code>reconcile</code>:</p>
+<figure class="code"><pre><code class="lang-rust">let report = store.snapshot().reconcile(
+    b"user:",                    // the rows
+    &amp;[b"email:", b"dept:"],      // where derived keys live
+    |key, row| derived(key, row),
+);
+if !report.is_clean() {
+    warn!("{} missing, {} orphaned", report.missing_count, report.orphaned_count);
+}</code></pre></figure>
+<p>It diffs <b>both</b> directions, which is the part worth not writing yourself. A missing key is lost derived state; an <i>orphan</i> — a claim whose row is gone — is what a half-applied update leaves behind, and it is the failure that silently blocks a later insert. A checker that only looks for absences reports "clean" during exactly that failure.</p>
+<p>It runs against a snapshot (<code>store.snapshot()</code>), frozen under every shard lock, so it does not mistake a concurrent write for drift. That holds only if the write itself was atomic: a row and its claims must go in one <code>atomic_all_shards</code> block, or there is a real half-applied state to find. Reconciliation and atomic writes are the same guarantee seen from two ends.</p>
+<p>Run it at boot, or on a schedule, or never once you trust the writes — but run it, because it is the only thing that can tell you the invariant you believe in is the invariant you have.</p>
+<h2 id="22-porting-a-pgmysql-schema">22. Porting a PG/MySQL schema</h2>
+<p><b>SQL equivalent:</b> the schema file itself — <code>CREATE TABLE</code>, <code>CREATE INDEX</code>, <code>CREATE VIEW</code> — <a href="../rds-workloads/#secondary-index-ddl">matrix: secondary index DDL</a>.</p>
+<p>Everything recipes 1–8 do by hand, compiled from the SQL you already have. <code>kevy-sql</code> (and its <code>kevy-cli sql</code> face) is a <b>declaration-time compiler</b>: it reads the schema ONCE, like a migration tool, and emits explicit <code>TABLE.DECLARE</code> / <code>VIEW.CREATE</code> commands plus <i>query cards</i> — ready-made <code>IDX.QUERY</code> templates with <code>$N</code> slots. Nothing runs per-query inside the server; ad-hoc runtime SQL stays refused by the engine itself (Law 3).</p>
+<p>The schema — <a href="https://github.com/goliajp/kevy/blob/main/docs/examples/shop.sql">docs/examples/shop.sql</a>, a real users/orders/order_items cut-down:</p>
+<figure class="code"><pre><code class="lang-sql">CREATE TABLE users (
+  id     bigserial PRIMARY KEY,
+  email  text,
+  name   text,
+  plan   text
+);
+CREATE UNIQUE INDEX ON users (email);
+
+CREATE TABLE orders (
+  id          bigserial PRIMARY KEY,
+  user_id     bigint,
+  status      text,
+  total       numeric(10,2),
+  created_at  bigint       -- epoch seconds, app-encoded
+);
+-- INCLUDE = PG covering columns -&gt; kevy stored VALUES (residual FILTER/SORT).
+CREATE INDEX ON orders (status) INCLUDE (total, created_at);
+-- Multi-column -&gt; a composite ORDERPATH (the (user_id, created_at DESC) walk).
+CREATE INDEX ON orders (user_id, created_at DESC);
+
+CREATE TABLE order_items (
+  id        bigserial PRIMARY KEY,
+  order_id  bigint,
+  sku       text,
+  qty       int
+);
+CREATE INDEX ON order_items (order_id);
+
+CREATE VIEW paid_orders AS
+  SELECT * FROM orders WHERE status = 'paid';
+
+CREATE VIEW recent_orders_by_user AS
+  SELECT id, status, total, created_at FROM orders
+  WHERE user_id = $1
+  ORDER BY created_at DESC
+  LIMIT 20;</code></pre></figure>
+<p>Compile it, then apply the declarations to a server:</p>
+<figure class="code"><pre><code class="lang-console">kevy-cli sql compile docs/examples/shop.sql
+kevy-cli sql compile docs/examples/shop.sql --apply --url 127.0.0.1:6004</code></pre></figure>
+<p>The compiled script (verbatim). Each table folds its indexes into one <code>TABLE.DECLARE</code>; the constant view becomes an engine view; the parameterized view becomes a query card; every coarse type mapping is called out honestly in the notes (kevy columns are <code>i64|f64|str</code> — timestamps are app-encoded, <code>serial</code> does not allocate ids for you):</p>
+<figure class="code"><pre><code class="lang-text">TABLE.DECLARE users PREFIX users: PK id COLUMN id i64 COLUMN email str COLUMN name str COLUMN plan str INDEX email unique
+TABLE.DECLARE orders PREFIX orders: PK id COLUMN id i64 COLUMN user_id i64 COLUMN status str COLUMN total f64 COLUMN created_at i64 INDEX status range VALUES total created_at ORDERPATH user_id_created_at ON user_id THEN created_at DESC
+TABLE.DECLARE order_items PREFIX order_items: PK id COLUMN id i64 COLUMN order_id i64 COLUMN sku str COLUMN qty i64 INDEX order_id range
+VIEW.CREATE paid_orders QUERY orders.status EQ paid ORDER BY orders.status
+
+# ---- query card: recent_orders_by_user ----
+# runtime template — substitute the $N slots and send as-is:
+#   $1 = user_id (i64)
+#   IDX.QUERY orders.user_id_created_at WHERE user_id EQ $1 LIMIT 20 FIELDS id status total created_at
+
+# notes:
+#   - users.id: bigserial → i64, but ids do NOT auto-increment — allocate them app-side (INCR block, cookbook §3)
+#   - orders.total: numeric → f64 — fixed-point precision becomes binary float; keep money as integer cents if exactness matters
+#   - view paid_orders: read with VIEW.QUERY paid_orders, then hydrate rows with HMGET &lt;key&gt; id user_id status total created_at</code></pre></figure>
+<p>Rows are ordinary hashes under the table prefix (recipe 1), and the compiled paths serve immediately — the card runs with a real argument in the <code>$1</code> slot:</p>
+<figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 HSET users:1 id 1 email ada@example.com name Ada plan pro
+kevy-cli -p 6004 HSET orders:1 id 1 user_id 1 status paid total 19.5 created_at 1700000100
+kevy-cli -p 6004 HSET orders:2 id 2 user_id 1 status pending total 5 created_at 1700000200
+kevy-cli -p 6004 HSET orders:3 id 3 user_id 2 status paid total 8 created_at 1700000300
+kevy-cli -p 6004 HSET order_items:1 id 1 order_id 1 sku sku-7 qty 2
+kevy-cli -p 6004 IDX.QUERY users.email EQ ada@example.com
+kevy-cli -p 6004 IDX.QUERY orders.user_id_created_at WHERE user_id EQ 1 LIMIT 20 FIELDS id status total created_at
+kevy-cli -p 6004 VIEW.QUERY paid_orders LIMIT 10
+kevy-cli -p 6004 IDX.QUERY orders.status EQ paid FILTER total RANGE 10 inf
+kevy-cli -p 6004 IDX.QUERY order_items.order_id EQ 1 FIELDS sku qty
+kevy-cli -p 6004 TABLE.LIST</code></pre></figure>
+<ul><li>The card query is <code>SELECT id, status, total, created_at FROM orders WHERE user_id = 1 ORDER BY created_at DESC LIMIT 20</code> — served by the composite walk, newest first, hydrated in one hop.</li><li>The <code>FILTER total RANGE 10 inf</code> line is a residual predicate over the <code>INCLUDE</code>d columns — <code>WHERE status = 'paid' AND total &gt;= 10</code> without touching a row.</li><li><code>order_items.order_id EQ 1</code> is the FK lookup that replaces the JOIN (recipe 2): two queries, no query-time join.</li></ul>
+<p><b>The refusals teach.</b> The compiler refuses everything that would need query-time evaluation — by name, with line/column, pointing at the recipe that models it. A JOIN:</p>
+<figure class="code"><pre><code class="lang-sql">CREATE VIEW order_emails AS
+  SELECT id, email FROM orders
+  JOIN users ON users.id = orders.user_id;</code></pre></figure>
+<figure class="code"><pre><code class="lang-text">$ kevy-cli sql compile join.sql
+kevy-cli sql: join.sql: line 6, col 3: JOIN is not compilable — kevy
+refuses query-time joins (Law 3); model the lookup with an indexed FK
+column (IDX.QUERY t.fk EQ …) or app-side assembly (cookbook §2)</code></pre></figure>
+<p>A view whose WHERE matches no declared access path errors naming the exact declaration to add (<code>… matches no declared access path — add: CREATE INDEX ON orders (status, total)</code>), and ad-hoc SQL at runtime never had a door:</p>
+<figure class="code"><pre><code class="lang-text">$ kevy-cli -p 6004 SQL SELECT * FROM users
+(error) ERR unknown command 'SQL'</code></pre></figure>
 <h2 id="recipe-index">Recipe index</h2>
 <p>Recipe ↔ the SQL construct it replaces ↔ the <a href="../rds-workloads/">rds-workloads.md</a> matrix row that states the semantics and limits.</p>
-<div class="tbl"><table><thead><tr><th>#</th><th>Recipe</th><th>SQL construct</th><th>Matrix row</th></tr></thead><tbody><tr><td>1</td><td>Tables and rows</td><td><code>CREATE TABLE</code>, point <code>SELECT</code></td><td><a href="../rds-workloads/#tables-rows-columns">tables, rows, columns</a></td></tr><tr><td>2</td><td>One-to-many, many-to-many</td><td>FK columns, junction tables, <code>WHERE fk = ?</code></td><td><a href="../rds-workloads/#join">JOIN</a></td></tr><tr><td>3</td><td>Sequences</td><td><code>AUTO_INCREMENT</code> / <code>nextval()</code></td><td><a href="../rds-workloads/#primary-key-unique-auto_increment">PK, UNIQUE, AUTO_INCREMENT</a></td></tr><tr><td>4</td><td>Optimistic locking</td><td>version-column CAS <code>UPDATE</code></td><td><a href="../rds-workloads/#transactions">transactions</a></td></tr><tr><td>5</td><td>CHECK constraints</td><td><code>CHECK (…)</code> + audit trigger</td><td><a href="../rds-workloads/#constraints-and-triggers">constraints and triggers</a></td></tr><tr><td>6</td><td>Idempotency keys</td><td><code>UNIQUE INDEX</code> + <code>ON CONFLICT DO NOTHING</code></td><td><a href="../rds-workloads/#primary-key-unique-auto_increment">PK, UNIQUE, AUTO_INCREMENT</a></td></tr><tr><td>7</td><td>Soft delete</td><td>flag column + filtered view</td><td><a href="../rds-workloads/#view">VIEW</a></td></tr><tr><td>8</td><td>Composite ordering</td><td><code>ORDER BY a, b</code></td><td><a href="../rds-workloads/#order-by--limit--offset">ORDER BY / LIMIT / OFFSET</a></td></tr><tr><td>9</td><td>JSONB</td><td>JSON column + generated-column indexes</td><td><a href="../rds-workloads/#type-system">type system</a></td></tr><tr><td>10</td><td>Cascade delete / FKs</td><td><code>ON DELETE CASCADE</code></td><td><a href="../rds-workloads/#constraints-and-triggers">constraints and triggers</a></td></tr><tr><td>11</td><td>The outbox you don't need</td><td>transactional-outbox table</td><td><a href="../rds-workloads/#cdc">CDC</a></td></tr><tr><td>12</td><td>Audit history</td><td>audit table / binlog archaeology</td><td><a href="../rds-workloads/#cdc">CDC</a></td></tr><tr><td>13</td><td>The rollback window</td><td>reverse replication at cutover</td><td><a href="../migration/#phase-5--write-cutover--the-rollback-window">migration playbook</a></td></tr><tr><td>14</td><td>Analytics export</td><td>ETL / binlog tap to warehouse</td><td><a href="../rds-workloads/#cdc">CDC</a></td></tr><tr><td>15</td><td>Loading order</td><td>bulk <code>LOAD DATA</code>, index after</td><td><a href="../rds-workloads/#secondary-index-ddl">secondary index DDL</a></td></tr><tr><td>16</td><td>Session context with TTL</td><td>sessions table + expiry cron</td><td><a href="../rds-workloads/#sizing-and-operational-deltas">operational deltas</a></td></tr><tr><td>17</td><td>Episodic memory</td><td>time <code>BETWEEN</code> + pgvector KNN</td><td><a href="../rds-workloads/#select">SELECT</a></td></tr><tr><td>18</td><td>RAG hybrid retrieval</td><td>tsvector + pgvector, fused</td><td><a href="../rds-workloads/#select">SELECT</a></td></tr><tr><td>19</td><td>Sensor cache</td><td>upsert table + staleness cron</td><td><a href="../rds-workloads/#sizing-and-operational-deltas">operational deltas</a></td></tr><tr><td>20</td><td>Edge aggregation</td><td><code>GROUP BY</code> per refresh + ETL uplink</td><td><a href="../rds-workloads/#group-by-and-aggregates">GROUP BY and aggregates</a></td></tr></tbody></table></div></main>
-  <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#1-tables-and-rows">1. Tables and rows</a></li><li class="l2"><a href="#2-one-to-many-many-to-many">2. One-to-many, many-to-many</a></li><li class="l2"><a href="#3-sequences">3. Sequences</a></li><li class="l2"><a href="#4-optimistic-locking-row-versions">4. Optimistic locking (row versions)</a></li><li class="l2"><a href="#5-check-constraints-and-multi-key-invariants">5. CHECK constraints and multi-key invariants</a></li><li class="l2"><a href="#6-idempotency-keys">6. Idempotency keys</a></li><li class="l2"><a href="#7-soft-delete">7. Soft delete</a></li><li class="l2"><a href="#8-composite-ordering-order-by-a-b">8. Composite ordering (ORDER BY a, b)</a></li><li class="l2"><a href="#9-jsonb">9. JSONB</a></li><li class="l2"><a href="#10-cascade-delete-foreign-keys">10. Cascade delete / foreign keys</a></li><li class="l2"><a href="#11-the-outbox-you-dont-need">11. The outbox you don't need</a></li><li class="l2"><a href="#12-audit-history">12. Audit history</a></li><li class="l2"><a href="#13-the-rollback-window-reverse-mirror">13. The rollback window (reverse mirror)</a></li><li class="l2"><a href="#14-analytics-export">14. Analytics export</a></li><li class="l2"><a href="#15-loading-order-the-deferred-index-rule">15. Loading order (the deferred-index rule)</a></li><li class="l2"><a href="#16-session-context-with-ttl">16. Session context with TTL</a></li><li class="l2"><a href="#17-episodic-memory-time-semantic">17. Episodic memory (time × semantic)</a></li><li class="l2"><a href="#18-rag-chunks-with-hybrid-retrieval">18. RAG chunks with hybrid retrieval</a></li><li class="l2"><a href="#19-sensor-cache-latest-value-liveness-lease">19. Sensor cache (latest value + liveness lease)</a></li><li class="l2"><a href="#20-edge-aggregation-write-time-group-by-uplink">20. Edge aggregation (write-time GROUP BY + uplink)</a></li><li class="l2"><a href="#recipe-index">Recipe index</a></li></ul></aside>
+<div class="tbl"><table><thead><tr><th>#</th><th>Recipe</th><th>SQL construct</th><th>Matrix row</th></tr></thead><tbody><tr><td>1</td><td>Tables and rows</td><td><code>CREATE TABLE</code>, point <code>SELECT</code></td><td><a href="../rds-workloads/#tables-rows-columns">tables, rows, columns</a></td></tr><tr><td>2</td><td>One-to-many, many-to-many</td><td>FK columns, junction tables, <code>WHERE fk = ?</code></td><td><a href="../rds-workloads/#join">JOIN</a></td></tr><tr><td>3</td><td>Sequences</td><td><code>AUTO_INCREMENT</code> / <code>nextval()</code></td><td><a href="../rds-workloads/#primary-key-unique-auto_increment">PK, UNIQUE, AUTO_INCREMENT</a></td></tr><tr><td>4</td><td>Optimistic locking</td><td>version-column CAS <code>UPDATE</code></td><td><a href="../rds-workloads/#transactions">transactions</a></td></tr><tr><td>5</td><td>CHECK constraints</td><td><code>CHECK (…)</code> + audit trigger</td><td><a href="../rds-workloads/#constraints-and-triggers">constraints and triggers</a></td></tr><tr><td>6</td><td>Idempotency keys</td><td><code>UNIQUE INDEX</code> + <code>ON CONFLICT DO NOTHING</code></td><td><a href="../rds-workloads/#primary-key-unique-auto_increment">PK, UNIQUE, AUTO_INCREMENT</a></td></tr><tr><td>7</td><td>Soft delete</td><td>flag column + filtered view</td><td><a href="../rds-workloads/#view">VIEW</a></td></tr><tr><td>8</td><td>Composite ordering</td><td><code>ORDER BY a, b</code></td><td><a href="../rds-workloads/#order-by--limit--offset">ORDER BY / LIMIT / OFFSET</a></td></tr><tr><td>9</td><td>JSONB</td><td>JSON column + generated-column indexes</td><td><a href="../rds-workloads/#type-system">type system</a></td></tr><tr><td>10</td><td>Cascade delete / FKs</td><td><code>ON DELETE CASCADE</code></td><td><a href="../rds-workloads/#constraints-and-triggers">constraints and triggers</a></td></tr><tr><td>11</td><td>The outbox you don't need</td><td>transactional-outbox table</td><td><a href="../rds-workloads/#cdc">CDC</a></td></tr><tr><td>12</td><td>Audit history</td><td>audit table / binlog archaeology</td><td><a href="../rds-workloads/#cdc">CDC</a></td></tr><tr><td>13</td><td>The rollback window</td><td>reverse replication at cutover</td><td><a href="../migration/#phase-5--write-cutover--the-rollback-window">migration playbook</a></td></tr><tr><td>14</td><td>Analytics export</td><td>ETL / binlog tap to warehouse</td><td><a href="../rds-workloads/#cdc">CDC</a></td></tr><tr><td>15</td><td>Loading order</td><td>bulk <code>LOAD DATA</code>, index after</td><td><a href="../rds-workloads/#secondary-index-ddl">secondary index DDL</a></td></tr><tr><td>16</td><td>Session context with TTL</td><td>sessions table + expiry cron</td><td><a href="../rds-workloads/#sizing-and-operational-deltas">operational deltas</a></td></tr><tr><td>17</td><td>Episodic memory</td><td>time <code>BETWEEN</code> + pgvector KNN</td><td><a href="../rds-workloads/#select">SELECT</a></td></tr><tr><td>18</td><td>RAG hybrid retrieval</td><td>tsvector + pgvector, fused</td><td><a href="../rds-workloads/#select">SELECT</a></td></tr><tr><td>19</td><td>Sensor cache</td><td>upsert table + staleness cron</td><td><a href="../rds-workloads/#sizing-and-operational-deltas">operational deltas</a></td></tr><tr><td>20</td><td>Edge aggregation</td><td><code>GROUP BY</code> per refresh + ETL uplink</td><td><a href="../rds-workloads/#group-by-and-aggregates">GROUP BY and aggregates</a></td></tr><tr><td>21</td><td>Derived state as a function of the row</td><td>the trigger layer entire: cascades, <code>UNIQUE</code>, reconciliation</td><td><a href="../rds-workloads/#constraints-and-triggers">constraints and triggers</a></td></tr><tr><td>22</td><td>Porting a PG/MySQL schema</td><td><code>CREATE TABLE</code> / <code>CREATE INDEX</code> / <code>CREATE VIEW</code>, compiled</td><td><a href="../rds-workloads/#secondary-index-ddl">secondary index DDL</a></td></tr></tbody></table></div></main>
+  <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#1-tables-and-rows">1. Tables and rows</a></li><li class="l2"><a href="#2-one-to-many-many-to-many">2. One-to-many, many-to-many</a></li><li class="l2"><a href="#3-sequences">3. Sequences</a></li><li class="l2"><a href="#4-optimistic-locking-row-versions">4. Optimistic locking (row versions)</a></li><li class="l2"><a href="#5-check-constraints-and-multi-key-invariants">5. CHECK constraints and multi-key invariants</a></li><li class="l2"><a href="#6-idempotency-keys">6. Idempotency keys</a></li><li class="l2"><a href="#7-soft-delete">7. Soft delete</a></li><li class="l2"><a href="#8-composite-ordering-order-by-a-b">8. Composite ordering (ORDER BY a, b)</a></li><li class="l2"><a href="#9-jsonb">9. JSONB</a></li><li class="l2"><a href="#10-cascade-delete-foreign-keys">10. Cascade delete / foreign keys</a></li><li class="l2"><a href="#11-the-outbox-you-dont-need">11. The outbox you don't need</a></li><li class="l2"><a href="#12-audit-history">12. Audit history</a></li><li class="l2"><a href="#13-the-rollback-window-reverse-mirror">13. The rollback window (reverse mirror)</a></li><li class="l2"><a href="#14-analytics-export">14. Analytics export</a></li><li class="l2"><a href="#15-loading-order-the-deferred-index-rule">15. Loading order (the deferred-index rule)</a></li><li class="l2"><a href="#16-session-context-with-ttl">16. Session context with TTL</a></li><li class="l2"><a href="#17-episodic-memory-time-semantic">17. Episodic memory (time × semantic)</a></li><li class="l2"><a href="#18-rag-chunks-with-hybrid-retrieval">18. RAG chunks with hybrid retrieval</a></li><li class="l2"><a href="#19-sensor-cache-latest-value-liveness-lease">19. Sensor cache (latest value + liveness lease)</a></li><li class="l2"><a href="#20-edge-aggregation-write-time-group-by-uplink">20. Edge aggregation (write-time GROUP BY + uplink)</a></li><li class="l2"><a href="#21-derived-state-as-a-pure-function-of-the-row">21. Derived state as a pure function of the row</a></li><li class="l2"><a href="#22-porting-a-pgmysql-schema">22. Porting a PG/MySQL schema</a></li><li class="l2"><a href="#recipe-index">Recipe index</a></li></ul></aside>
 </div>
 
 <script src="../../assets/docsearch.js?v=8c03463d" defer></script>

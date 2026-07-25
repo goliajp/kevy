@@ -139,6 +139,34 @@ VIEW.QUERY v:open881
                     "href": "use/app-store/",
                 },
                 {
+                    "label": "表",
+                    "code": """# a table is a declaration — compiled to named indexes, once
+TABLE.DECLARE user PREFIX u: PK id COLUMN id str COLUMN name str COLUMN age i64 COLUMN dept str INDEX age range VALUES dept name ORDERPATH by_dept_age ON dept THEN age DESC
+
+HSET u:1 id 1 name ada age 34 dept eng
+
+# the ORDER BY dept, age DESC walk — one composite index, no planner
+IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name age""",
+                    "note": "类型化列、二级索引、复合 ORDER BY 路径——连你的 PG/MySQL schema 文件也能编译（kevy-cli sql compile）。没有运行期 SQL，没有 join：那些留在 Postgres。",
+                    "go": "单表服务型读",
+                    "href": "use/app-store/",
+                },
+                {
+                    "label": "大过 RAM",
+                    "code": """# kevy.toml — a RAM budget for the whole store
+[tiering]
+budget = "70%"               # or "4gb", or "auto"
+
+# past the budget, the coldest values spill to a disk log
+# and page back on access. a cold key is an ordinary key:
+GET archive:2019:q3          # pays one disk read, same reply
+TTL archive:2019:q3          # metadata answers from RAM
+SCAN 0 MATCH archive:*       # sees cold keys — one key table""",
+                    "note": "RAM 决定键的上限，磁盘决定数据的上限；AOF 持久化契约不动。v1 下沉字符串和 hash——list、set、stream 留在热层。",
+                    "go": "分层存储怎么工作",
+                    "href": "docs/tiering/",
+                },
+                {
                     "label": "变更流",
                     "code": """# tail every write from another process — or an agent.
 # [feed] enabled = true in kevy.toml
@@ -176,7 +204,7 @@ let mut store = Store::new_in(&mut arena);""",
             "eyebrow": "为什么可以直接替换 Redis",
             "h2": "同样的协议。更高的吞吐。",
             "intro": (
-                "RESP2 和 RESP3，184 条命令——redis-cli 和你的客户端库不用改就能连。"
+                "RESP2 和 RESP3，188 条命令——redis-cli 和你的客户端库不用改就能连。"
                 "一台机器，16 核，loopback，五次取中位数。"
             ),
             "rows": [
@@ -262,10 +290,10 @@ PAGES["migrate"] = {
             "t": "prose",
             "h2": "从 Redis 过来",
             "body": [
-                "<b>你的客户端不用改。</b>kevy 说 RESP2 和 RESP3，实现了 184 条命令。"
+                "<b>你的客户端不用改。</b>kevy 说 RESP2 和 RESP3，实现了 188 条命令。"
                 "把你现有的库指过来就行，代码不动，redis-cli 不换。没有新的 SDK 要接，"
                 "也没有新协议要学。",
-                "<b>所以真正要问的只有一句：你能换到什么。</b>只有三样。如果这三样对你都没有"
+                "<b>所以真正要问的只有一句：你能换到什么。</b>只有四样。如果这四样对你都没有"
                 "价值，那就留在 Redis——它是一件极好的软件，为换而换，只是白白搭进去一个星期。",
             ],
         },
@@ -294,6 +322,11 @@ PAGES["migrate"] = {
                 {
                     "title": "你现在跑的那些操作，它更快",
                     "body": "同一台机器上对 Redis 8：GET 快 1.4×，SET 快 2.7×，INCR 快 1.8×。不过在你把这个当成理由之前，先把整张表看完——LPUSH 和 ZADD 只领先 12% 和 10%，如果 list 或者 sorted set 是你的热路径，那这就不是你该搬的理由。",
+                },
+                {
+                    "title": "数据集不必再装进 RAM",
+                    "body": "给 store 一个 RAM 预算，最冷的值就下沉到磁盘上一份可丢弃的 value log，访问时换回——冷键上每条命令不变，append-only 日志的持久化契约不动。RAM 决定你能放多少个键，磁盘决定你能放多少数据。这替掉的是「Redis 加一个单独的磁盘存储」的拆分——大 value、长尾负载不用再分家。诚实的边界：它默认关闭，v1 只下沉字符串和 hash（list、set、stream 留在热层），64 字节以下的值从不下沉——stub 会和值一样大。",
+                    "code": "# kevy.toml\n[tiering]\nbudget = \"70%\"      # or \"4gb\", or \"auto\"",
                 },
             ],
         },
@@ -343,9 +376,13 @@ kevy-cli import -p 6380 --resume dump.resp""",
                 "key 你早就知道了。",
                 "<b>Postgres 最擅长的那些事，留给 Postgres</b>——join、临时查询、分析，"
                 "以及跨无关行的真隔离事务。kevy 接走对外服务的那条路径，让数据库喘口气。",
-                "<b>而且有一部分提问式的读也能搬。</b>二级索引和物化视图意味着，"
-                "一个带过滤条件的列表、一个持续累计的总数，不必变成一次查询——写入路径已经把"
-                "答案备好了。这正是大多数应用真正在用 ORM 的那一部分。",
+                "<b>而且单表的服务型读也能搬。</b>用 <code>TABLE.DECLARE</code> 把类型化列、"
+                "二级索引和复合 <code>ORDER BY</code> 路径声明一次——或者用 "
+                "<code>kevy-sql</code> 直接编译你手上现成的 PG/MySQL schema 文件——"
+                "单张表的读路径（索引化的 WHERE、余下的过滤、ORDER BY、翻页、COUNT）"
+                "就编译到 kevy 索引上，查询期没有任何计划器。kevy-sql 是构建期的编译器，"
+                "不是 SQL 引擎：join 和临时 SQL 被按名拒绝，它们留在 Postgres。"
+                "这正是大多数应用真正在用 ORM 的那一部分。",
             ],
         },
         {
@@ -358,7 +395,7 @@ kevy-cli import -p 6380 --resume dump.resp""",
                 ["限流、计数器", "*搬", "带过期的 INCR 是原子的，而且 O(1)。在 SQL 里，这是压在你最热那一行上的行锁。"],
                 ["任务队列", "*搬", "list 和 stream，带消费组和逐条确认。所谓队列表，不过是一套加了额外步骤的加锁约定。"],
                 ["功能开关、配置", "*搬", "一直在读，很少写，从来不 join。"],
-                ["带过滤的列表（按状态、按归属）", "*多数该搬", "二级索引不需要查询计划器就能回答。见<a href=\"~/use/app-store/\">用索引扛住读</a>。"],
+                ["单表读（过滤、排序、翻页）", "*搬", "把表的访问路径声明一次——或者用 <code>kevy-sql</code> 编译你的 schema 文件——索引化的 WHERE + ORDER BY + LIMIT 这类读始终是一次查表。见<a href=\"~/use/app-store/\">用索引扛住读</a>。"],
                 ["聚合（计数、合计）", "*多数该搬", "物化视图在写入路径上就把它更新好，不必每次读都重算一遍。"],
                 ["跨多张表的 join", "!不要搬", "kevy 没有 join，以后也不会长出 join。这正是 Postgres 存在的意义。"],
                 ["分析、临时查询", "!不要搬", "这里没有查询计划器，也没有优化器。不要尝试。"],
@@ -414,14 +451,18 @@ PAGES["choose"] = {
             "body": [
                 "<b>当你已经知道 key 的时候，用 kevy。</b>一个会话 id、一个用户 id、"
                 "一个队列的名字、一个缓存 key。读是查表，不是提问。这覆盖的应用面比大多数人"
-                "以为的要大——而且二级索引和物化视图，还能把一部分提问也变成查表。",
+                "以为的要大——而且二级索引和物化视图，还能把一部分提问也变成查表。"
+                "TABLE 层更进一步：把类型化列和索引声明一次（或者用 <code>kevy-sql</code> "
+                "编译一份 PG/MySQL schema 文件），单张表的读路径——索引化的 WHERE、"
+                "余下的过滤、ORDER BY、翻页——就始终是一次查表。",
                 "<b>当你的读确实是查询的时候，不要用 kevy。</b>跨五张表的 join、"
                 "临时的分析查询、跨无关行且要求真隔离的事务——那是 PostgreSQL 的活，"
                 "也应该留给 PostgreSQL。我们把<a href=\"~/docs/rds-workloads/\">每一种关系型"
                 "负载在这里的代价</a>都写下来了，包括那些答案就是别搬的。",
                 "<b>如果一台机器不够用，不要用 kevy。</b>它没有集群模式，以后也不会有。"
-                "单个 kevy 每秒能做几百万次操作，这个余量比大多数产品一辈子用到的都多——"
-                "但越过它之后，你需要的是一个会分片的东西，那不是这里。",
+                "单个 kevy 每秒能做几百万次操作，而且带上 RAM 预算之后，数据集可以大过 "
+                "RAM（冷值下沉到磁盘——RAM 决定键的上限，磁盘决定数据的上限）——"
+                "但越过一台机器的吞吐之后，你需要的是一个会分片的东西，那不是这里。",
             ],
         },
         {
@@ -453,7 +494,11 @@ PAGES["choose"] = {
             "items": [
                 {
                     "q": "它真的能直接替换 Redis 吗？",
-                    "a": "在协议层面，是的——RESP2 和 RESP3，184 条命令，你的客户端库不会察觉。在行为层面，大体上是，而例外恰恰是重点。跨 shard 的 <code>RENAME</code> 不是原子的——多键写只在单个 shard 内原子。另外 SCAN 的游标只在签发它的服务器上有效，与 Redis Cluster 的按节点性质相同。<a href=\"~/docs/commands/\">全部 184 条命令都标着真实的偏差和真实的代价</a>，这些是从实现里读出来的，不是从 Redis 的文档里抄来的。",
+                    "a": "在协议层面，是的——RESP2 和 RESP3，188 条命令，你的客户端库不会察觉。在行为层面，大体上是，而例外恰恰是重点。跨 shard 的 <code>RENAME</code> 不是原子的——多键写只在单个 shard 内原子。另外 SCAN 的游标只在签发它的服务器上有效，与 Redis Cluster 的按节点性质相同。<a href=\"~/docs/commands/\">全部 188 条命令都标着真实的偏差和真实的代价</a>，这些是从实现里读出来的，不是从 Redis 的文档里抄来的。",
+                },
+                {
+                    "q": "数据集必须装进 RAM 吗？",
+                    "a": "不再必须。打开分层存储，给 store 一个 RAM 预算：最冷的值下沉到磁盘上一份可丢弃的 value log，访问时换回。冷键上每条命令语义精确不变，append-only 日志的持久化契约不动——RAM 决定你能放多少个键，磁盘决定你能放多少数据。诚实的边界：默认关闭，v1 只下沉字符串和 hash（list、set、sorted set、stream 留在热层），64 字节以下的值从不下沉。<a href=\"~/docs/tiering/\">分层存储指南</a>写明了哪些数字是实测、哪些还是等基准机跑完的目标。",
                 },
                 {
                     "q": "机器挂了会怎么样？",
@@ -515,6 +560,11 @@ PAGES["use/cache"] = {
                 "而 bug 就住在清理任务里。在这里，时间一到引擎就把 key 丢掉，"
                 "不管有没有人来问它。下面是四个任务——每一个都可以原样粘进 "
                 "<code>redis-cli</code>，对着一个跑起来的 kevy 直接执行。",
+                "<b>而且长尾可以大过 RAM。</b>开着 RAM 预算（<code>[tiering]</code>）时，"
+                "最冷的值会下沉到一份可丢弃的磁盘日志、访问时换回——冷键上每条命令不变，"
+                "持久化不动——于是很少被读的会话和归档不再占 RAM，也不用再养第二个存储。"
+                "默认关闭；v1 只下沉字符串和 hash。<a href=\"~/docs/tiering/\">分层存储"
+                "指南</a>写着诚实的边界。",
             ],
         },
         {
@@ -643,7 +693,7 @@ HGETALL flags""",
             "items": [
                 {"kicker": "指南", "title": "食谱", "body": "会话、限流、排行榜、信息流的可用配方。", "go": "去读", "href": "docs/cookbook/"},
                 {"kicker": "指南", "title": "持久化", "body": "kill -9 之后什么还在，以及 fsync 策略要你付出什么。", "go": "去读", "href": "docs/persistence/"},
-                {"kicker": "参考", "title": "全部命令", "body": "184 条命令，每一条都标着真实代价和相对 Redis 的偏差。", "go": "去查", "href": "docs/commands/"},
+                {"kicker": "参考", "title": "全部命令", "body": "188 条命令，每一条都标着真实代价和相对 Redis 的偏差。", "go": "去查", "href": "docs/commands/"},
             ],
         },
     ],
@@ -1015,7 +1065,7 @@ FEED.TAIL 0                 -> 1) (integer) 1     # generation
             "title": "如果读这些文档的是一个 agent",
             "body": (
                 "<a href=\"~/llms-full.txt\">llms-full.txt</a> 一次抓取就够：每条命令的"
-                "真实代价、相对 Redis 的真实偏差，加上全部二十四篇指南的完整正文。"
+                "真实代价、相对 Redis 的真实偏差，加上每一篇指南的完整正文。"
                 "它是从引擎自己的命令表生成的，所以不会和服务端的实际行为脱节。"
             ),
         },
@@ -1061,6 +1111,10 @@ PAGES["use/app-store"] = {
                 "<b>视图更进一步</b>，在写入时就把聚合维持在最新，于是一个计数、一个合计是"
                 "读出来的，不是算出来的。这正是大多数应用真正在向 ORM 索要的东西，"
                 "也正是它们的数据库忙成那样的原因。",
+                "<b>而且整张表可以一次声明。</b><code>TABLE.DECLARE</code> 接受类型化列、"
+                "二级索引和复合 <code>ORDER BY</code> 路径，在声明期把它们编译成具名索引——"
+                "<code>kevy-sql</code> 用你手上现成的 PG/MySQL schema 文件做同一件事。"
+                "引擎仍然不做任何规划、不强加任何 schema；join 和运行期 SQL 依旧按名拒绝。",
             ],
         },
         {
@@ -1129,10 +1183,48 @@ IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range""",
             ),
         },
         {
+            "t": "recipe",
+            "h2": "整张表，一次声明",
+            "goal": "一张关系型表的读路径——索引化的 WHERE、余下的过滤、ORDER BY、翻页、COUNT——由一条声明编译到具名索引上。或者直接由你现成的 schema 文件编译。",
+            "cost_t": "成本与限制",
+            "items": [
+                {
+                    "do": "列、索引、排序路径，一条声明写完",
+                    "note": "行仍是前缀下的普通 hash——缺列就是 NULL；kevy-cli sql compile schema.sql 会从 CREATE TABLE / CREATE INDEX 生成这一行。",
+                    "code": """TABLE.DECLARE orders PREFIX order: PK id COLUMN id str COLUMN customer i64 COLUMN status str COLUMN total f64 INDEX status range VALUES total customer ORDERPATH by_customer ON customer THEN total DESC
+-> OK""",
+                },
+                {
+                    "do": "在存储的列上过滤和计数——一行都不用读",
+                    "code": """IDX.QUERY orders.status EQ open FILTER total RANGE 2000 inf LIMIT 20
+-> 1) "0"
+   2) 1) "order:1001"  2) "open"
+
+IDX.COUNT orders.status EQ open
+-> (integer) 2""",
+                },
+                {
+                    "do": "ORDER BY customer, total DESC 的那次遍历",
+                    "note": "一个复合索引，用关系型复合索引的方式回答它——每个客户的订单，从大到小，不需要重排。",
+                    "code": """IDX.QUERY orders.by_customer WHERE customer EQ 881 LIMIT 20 FIELDS status total""",
+                },
+            ],
+            "cost": (
+                "<b>没有运行期 SQL，也没有 join。</b>服务端把 <code>SELECT</code> 当作"
+                "未知命令拒绝；<code>kevy-cli sql compile</code> 在构建期把 PG/MySQL "
+                "schema 文件变成上面这些声明，并按名拒绝 JOIN、子查询和 GROUP BY，"
+                "同时指向替代它们的配方。唯一性是校验而非强制，约束是配方而非引擎检查。"
+                "开着<a href=\"~/docs/tiering/\">分层存储</a>时，index-only 查询即使"
+                "全部行都是冷的也只读 RAM——只有最后的 <code>FIELDS</code> 页会读冷行，"
+                "每行一次。"
+            ),
+        },
+        {
             "t": "cards",
             "h2": "接下来",
             "intro": "",
             "items": [
+                {"kicker": "指南", "title": "表", "body": "类型化列和索引声明一次，然后像查表一样查它。", "go": "去读", "href": "docs/tables/"},
                 {"kicker": "指南", "title": "在 kevy 上做设计", "body": "习惯了用表思考的人，怎么改成用 key 思考。", "go": "去读", "href": "docs/designing-on-kevy/"},
                 {"kicker": "指南", "title": "二级索引", "body": "它们怎么建、代价是什么，以及怎么看懂一次查询的执行计划。", "go": "去读", "href": "docs/indexes/"},
                 {"kicker": "参考", "title": "关系型负载", "body": "每一种关系型模式，以及在这里做它的真实代价。", "go": "去读", "href": "docs/rds-workloads/"},
@@ -1198,6 +1290,10 @@ assert_eq!(db.get(b"session:7f3a")?.is_some(), true);""",
                 "<b>嵌入式的存储不是共享的。</b>数据目录归一个进程所有，如果第二个进程"
                 "也要这份数据，那正是上面那个 listener——或者"
                 "<a href=\"~/docs/embedded-listener/\">完整的服务端</a>——存在的意义。"
+                "进程内同样可以给 store 一个 RAM 预算（<code>with_tier_budget</code>）："
+                "冷值下沉到磁盘、在你的进程里换回——照实说一句：进程内的一次冷读会在读的"
+                "时长内持有 store 的锁，所以可下沉的最大值默认封在 256 KiB。"
+                "细节在<a href=\"~/docs/tiering/\">分层存储指南</a>里。"
             ),
         },
         {

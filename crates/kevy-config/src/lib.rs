@@ -35,9 +35,11 @@ mod preserve;
 mod replication;
 mod schema;
 mod size;
+mod tiering;
 
 pub use cluster::{ClusterSection, PeerEntry, ScopeEntry};
 pub use replication::{ReplicationRole, ReplicationSection};
+pub use tiering::{TierBudgetSpec, TieringSection};
 pub use schema::{
     AdvancedSection, AppendFsync, Config, ConfigError, EvictionPolicy,
     ExpirySection, LogLevel, LogOutput, LogSection, LuaSection, MemorySection,
@@ -144,6 +146,9 @@ impl Config {
         if let Some(cluster) = cli.cluster {
             self.cluster.enabled = cluster;
         }
+        if let Some(budget) = cli.tiering_budget {
+            self.tiering.budget = Some(budget);
+        }
         Ok(())
     }
 
@@ -175,6 +180,9 @@ pub struct CliOverrides {
     pub aof: Option<bool>,
     /// Override `cluster.enabled` (`--cluster` → `Some(true)`).
     pub cluster: Option<bool>,
+    /// Override `tiering.budget` (`--tiering-budget auto|70%|4gb`).
+    /// `Some(_)` turns tiering on with that budget.
+    pub tiering_budget: Option<TierBudgetSpec>,
 }
 
 fn read_required(p: &Path) -> Result<String, ConfigError> {

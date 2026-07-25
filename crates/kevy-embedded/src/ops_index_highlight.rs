@@ -4,6 +4,7 @@
 
 use kevy_index::IndexSpec;
 
+use super::claused::{ValueFilter, unknown_field, value_test};
 use super::{FieldSpans, HighlightedHit, sync_segs};
 use crate::store::{Store, lock_write};
 use crate::{KevyError, KevyResult};
@@ -42,40 +43,6 @@ pub struct MatchOpts<'a> {
     /// `FACET <field…>`: count each field's values over the whole match
     /// set. Reported alongside the page rather than shaping it.
     pub facets: &'a [Vec<u8>],
-}
-
-/// One `FILTER` predicate: which stored value field it reads, and the
-/// test on it — the wire's `RANGE` / `EQ` shapes, in-process.
-///
-/// The bounds are raw bytes and are coerced with the type the field was
-/// DECLARED as, so a numeric range compares numerically rather than
-/// lexicographically.
-#[derive(Clone, Copy)]
-pub enum ValueFilter<'a> {
-    /// `field` between `min` and `max`, both inclusive.
-    Range {
-        /// The declared value field to read.
-        field: &'a [u8],
-        /// Lower bound, inclusive.
-        min: &'a [u8],
-        /// Upper bound, inclusive.
-        max: &'a [u8],
-    },
-    /// `field` exactly `value`.
-    Eq {
-        /// The declared value field to read.
-        field: &'a [u8],
-        /// The value to match.
-        value: &'a [u8],
-    },
-}
-
-impl ValueFilter<'_> {
-    fn field(&self) -> &[u8] {
-        match self {
-            ValueFilter::Range { field, .. } | ValueFilter::Eq { field, .. } => field,
-        }
-    }
 }
 
 impl Store {
@@ -206,33 +173,6 @@ fn box_tests(tests: Vec<(usize, kevy_index::ValueTest)>) -> Vec<(usize, ValuePre
         .collect()
 }
 
-/// One `FILTER` predicate resolved against the spec: the stored-value
-/// position it reads, and the test built with that field's DECLARED type.
-fn value_test(
-    spec: &IndexSpec,
-    f: &ValueFilter<'_>,
-) -> KevyResult<(usize, kevy_index::ValueTest)> {
-    let stored: Vec<&[u8]> = spec.values.iter().map(|v| v.name.as_slice()).collect();
-    let pos = spec
-        .values
-        .iter()
-        .position(|v| v.name == f.field())
-        .ok_or_else(|| unknown_field("FILTER", f.field(), "store", &stored))?;
-    let ty = spec.values[pos].ty;
-    let (test, raw) = match f {
-        ValueFilter::Range { min, max, .. } => (kevy_index::ValueTest::range(ty, min, max), *min),
-        ValueFilter::Eq { value, .. } => (kevy_index::ValueTest::eq(ty, value), *value),
-    };
-    let test = test.ok_or_else(|| {
-        KevyError::InvalidInput(format!(
-            "FILTER bound '{}' is not a valid {}, which is how this index declares '{}'",
-            String::from_utf8_lossy(raw),
-            ty.tag(),
-            String::from_utf8_lossy(f.field()),
-        ))
-    })?;
-    Ok((pos, test))
-}
 
 impl Store {
     /// Every shard's page for this query, unmerged, with the facet
@@ -442,16 +382,6 @@ fn finish_buckets(buckets: Vec<Vec<RawBucket>>) -> Vec<FacetCounts> {
         .collect()
 }
 
-/// A clause naming a field the index does not offer, saying what it does.
-fn unknown_field(clause: &str, bad: &[u8], verb: &str, offered: &[&[u8]]) -> KevyError {
-    let names: Vec<String> =
-        offered.iter().map(|n| String::from_utf8_lossy(n).into_owned()).collect();
-    KevyError::InvalidInput(format!(
-        "{clause} names field '{}', which this index does not {verb} — it {verb}es: {}",
-        String::from_utf8_lossy(bad),
-        names.join(", ")
-    ))
-}
 
 /// One hit's highlight spans as `(field name, [(start, end)])`, filtered
 /// to the requested fields (`want` empty = every field with a match).

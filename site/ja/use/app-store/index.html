@@ -46,7 +46,7 @@
     <p class="lede">「この顧客の、まだ open な注文をすべて」。「このカートに何点入っているか」。これらはアプリケーションが毎秒何千回も行う読み取りであり、リレーショナルデータベースでは、そのひとつひとつが、裏にプランナを抱えたクエリになります。<b>kevy なら、答えを用意しておけます。</b></p>
     
   </div></section>
-<section class="band prose"><h2>なぜ向いているのか</h2><div class="pcols"><p>キーバリューストアをアプリケーションのデータに使うことは、たいていひとつの反論で退けられます。<i>キー以外のもので引きたいのだが</i>、と。その反論は正しく、セカンダリインデックスは、まさにそのためにあります。</p><p><b>インデックスは、構築するものではなく宣言するものです。</b>キーのパターンとフィールドを指定すれば、書き込みパスが、それを最新に保ちます。絞り込んだ一覧は、ふたたび参照になります。プランナもスキャンもクエリもありません。</p><p><b>ビューはさらに進んで</b>、書き込み時に集計を最新に保ちます。件数や合計は、計算されるのではなく読まれます。ほとんどのアプリケーションが ORM に実際に求めているのはこれであり、データベースが忙しい理由も、これです。</p></div></section>
+<section class="band prose"><h2>なぜ向いているのか</h2><div class="pcols"><p>キーバリューストアをアプリケーションのデータに使うことは、たいていひとつの反論で退けられます。<i>キー以外のもので引きたいのだが</i>、と。その反論は正しく、セカンダリインデックスは、まさにそのためにあります。</p><p><b>インデックスは、構築するものではなく宣言するものです。</b>キーのパターンとフィールドを指定すれば、書き込みパスが、それを最新に保ちます。絞り込んだ一覧は、ふたたび参照になります。プランナもスキャンもクエリもありません。</p><p><b>ビューはさらに進んで</b>、書き込み時に集計を最新に保ちます。件数や合計は、計算されるのではなく読まれます。ほとんどのアプリケーションが ORM に実際に求めているのはこれであり、データベースが忙しい理由も、これです。</p><p><b>そして、テーブル全体を一度に宣言できます。</b><code>TABLE.DECLARE</code> は型付きカラム、セカンダリインデックス、複合 <code>ORDER BY</code> パスを受け取り、宣言の時点で名前つきインデックスへコンパイルします——<code>kevy-sql</code> は、手元の PG/MySQL スキーマファイルから同じことをします。エンジンは相変わらず何もプランせず、スキーマを課しません。join とランタイム SQL は、名前つきで拒否されたままです。</p></div></section>
 <section class="band">
   <div class="sec-h"><h2>キーではなく、フィールドで引く</h2><p class="sec-lede">「顧客 881 の注文をすべて」が、参照のままです。引きたいフィールドごとにインデックスを宣言し、普通に書き、値で読みます。</p></div>
   <ol class="steps recipe"><li><h3>データは、いままでどおり書く</h3><pre><code>HSET order:1001 customer 881 status open  total 4400
@@ -68,7 +68,23 @@ IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range</code>
    2) 1) &quot;order:1001&quot;  2) &quot;881&quot;</code></pre></li></ol>
   <div class="call loss r-cost"><span class="h">コストと制約</span><p>ビューは<b>書き込みパスの、終わらない仕事</b>です。合致するキーへの書き込みは、今日それを読む人がいるかどうかに関係なく、毎回ビューを更新します。アプリケーションが実際に捌いている読み取りのためにビューを宣言し、捌かなくなったら落としてください。ビューが組み合わせるインデックスは、先に存在している必要があります。</p></div>
 </section>
-<section class="band"><div class="sec-h"><h2>次に</h2></div><div class="cards"><a class="card" href="../../../ja/docs/designing-on-kevy/">
+<section class="band">
+  <div class="sec-h"><h2>テーブル全体を、一度で宣言する</h2><p class="sec-lede">リレーショナルなテーブルの読み取りパス——インデックスされた WHERE、残りのフィルタ、ORDER BY、ページング、COUNT——を、宣言 1 つで名前つきインデックスへコンパイルします。手元のスキーマファイルからでも。</p></div>
+  <ol class="steps recipe"><li><h3>カラムも、インデックスも、ソートパスも、宣言 1 つで</h3><p>行はプレフィックス配下の普通のハッシュのままです——欠けたカラムは NULL。kevy-cli sql compile schema.sql が、CREATE TABLE / CREATE INDEX からこの行を出力します。</p><pre><code>TABLE.DECLARE orders PREFIX order: PK id COLUMN id str COLUMN customer i64 COLUMN status str COLUMN total f64 INDEX status range VALUES total customer ORDERPATH by_customer ON customer THEN total DESC
+-&gt; OK</code></pre></li><li><h3>保存されたカラムでフィルタと集計——行は 1 つも読みません</h3><pre><code>IDX.QUERY orders.status EQ open FILTER total RANGE 2000 inf LIMIT 20
+-&gt; 1) &quot;0&quot;
+   2) 1) &quot;order:1001&quot;  2) &quot;open&quot;
+
+IDX.COUNT orders.status EQ open
+-&gt; (integer) 2</code></pre></li><li><h3>ORDER BY customer, total DESC の歩き方</h3><p>リレーショナルの複合インデックスと同じやり方で、複合インデックス 1 本が答えます——顧客ごとの注文を、大きい順に、再ソートなしで。</p><pre><code>IDX.QUERY orders.by_customer WHERE customer EQ 881 LIMIT 20 FIELDS status total</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">コストと制約</span><p><b>ランタイム SQL も join もありません。</b>サーバーは <code>SELECT</code> を未知のコマンドとして拒否します。<code>kevy-cli sql compile</code> はビルド時に PG/MySQL のスキーマファイルを上の宣言に変え、JOIN、サブクエリ、GROUP BY を名前つきで拒否して、それぞれを置き換えるレシピを指し示します。一意性は強制ではなく検証で、制約はエンジンのチェックではなくレシピです。<a href="../../../ja/docs/tiering/">ティアリング</a>をオンにすれば、index-only クエリは全行コールドでも RAM だけで答えます——コールドな行を読むのは最後の <code>FIELDS</code> ページだけ、1 行 1 回です。</p></div>
+</section>
+<section class="band"><div class="sec-h"><h2>次に</h2></div><div class="cards"><a class="card" href="../../../ja/docs/tables/">
+      <span class="card-k">ガイド</span>
+      <h3>テーブル</h3>
+      <p>型付きカラムとインデックスを一度宣言すれば、テーブルのように引ける。</p>
+      <span class="card-go">読む</span>
+    </a><a class="card" href="../../../ja/docs/designing-on-kevy/">
       <span class="card-k">ガイド</span>
       <h3>kevy での設計</h3>
       <p>テーブルで考えることに慣れた頭で、キーで考える方法。</p>

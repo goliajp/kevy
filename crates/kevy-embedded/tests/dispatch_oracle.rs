@@ -377,9 +377,61 @@ fn cases() -> Vec<(Vec<&'static [u8]>, Cmp)> {
         c(&[b"IDX.DROP"], Exact),
         c(&[b"IDX.CREATE", b"bad"], Exact),
         c(&[b"IDX.LIST"], Exact),
+        // scalar VALUES surface (capacity arc G1) — the create-time and
+        // grammar-time verdicts, deterministic on both engines.
+        c(&[b"IDX.CREATE", b"vagg", b"ON", b"PREFIX", b"g:", b"FIELD", b"n", b"TYPE", b"i64",
+            b"KIND", b"agg", b"GROUPBY", b"c", b"VALUES", b"c"], Exact),
+        c(&[b"IDX.CREATE", b"vbad", b"ON", b"PREFIX", b"g:", b"FIELD", b"n", b"TYPE", b"i64",
+            b"KIND", b"range", b"VALUES", b"a", b"b", b"TYPES", b"i64"], Exact),
+        c(&[b"IDX.CREATE", b"vbad", b"ON", b"PREFIX", b"g:", b"FIELD", b"n", b"TYPE", b"i64",
+            b"KIND", b"range", b"VALUES", b"a", b"TYPES", b"bogus"], Exact),
+        c(&[b"IDX.QUERY", b"noidx", b"RANGE", b"0", b"9", b"FILTER", b"f", b"EQ", b"1"], Exact),
+        c(&[b"IDX.QUERY", b"noidx", b"RANGE", b"0", b"9", b"SORT", b"f", b"ASC"], Exact),
+        c(&[b"IDX.QUERY", b"noidx", b"RANGE", b"0", b"9", b"SORT", b"f"], Exact),
+        c(&[b"IDX.QUERY", b"noidx", b"RANGE", b"0", b"9", b"SORT", b"f", b"SIDEWAYS"], Exact),
+        c(&[b"IDX.QUERY", b"noidx", b"RANGE", b"0", b"9", b"CURSOR", b"0", b"SORT", b"f", b"ASC"], Exact),
+        c(&[b"IDX.QUERY", b"noidx", b"RANGE", b"0", b"9", b"CURSOR", b"0", b"OFFSET", b"5"], Exact),
+        c(&[b"IDX.QUERY", b"noidx", b"RANGE", b"0", b"9", b"FACET"], Exact),
+        c(&[b"IDX.COUNT", b"noidx", b"RANGE", b"0", b"9", b"FILTER", b"f", b"EQ", b"1"], Exact),
         c(&[b"VIEW.DROP", b"noview"], Exact),
         c(&[b"VIEW.QUERY", b"noview"], Exact),
         c(&[b"VIEW.LIST"], Exact),
+        // TABLE.* declaration surface (capacity arc T7) — grammar and
+        // refusal parity; the success/query surface (which needs the
+        // server's tick-driven backfill) lives in its own polled test.
+        c(&[b"TABLE.DECLARE", b"bad"], Exact),
+        c(&[b"TABLE.DECLARE", b"t1", b"PREFIX", b"tt:", b"PK", b"id", b"COLUMN", b"id", b"uuid"], Exact),
+        c(&[b"TABLE.DECLARE", b"t1", b"PREFIX", b"tt:", b"PK", b"nope", b"COLUMN", b"id", b"str"], Exact),
+        c(&[b"TABLE.DECLARE", b"t1", b"PREFIX", b"tt:", b"PK", b"id", b"COLUMN", b"id", b"str",
+            b"COLUMN", b"id", b"i64"], Exact),
+        c(&[b"TABLE.DECLARE", b"t1", b"PREFIX", b"tt:", b"PK", b"id", b"COLUMN", b"id", b"str",
+            b"INDEX", b"ghost", b"RANGE"], Exact),
+        c(&[b"TABLE.DECLARE", b"t1", b"PREFIX", b"tt:", b"PK", b"id", b"COLUMN", b"id", b"str",
+            b"INDEX", b"id", b"agg"], Exact),
+        c(&[b"TABLE.DECLARE", b"t1", b"PREFIX", b"tt:", b"PK", b"id", b"COLUMN", b"id", b"str",
+            b"INDEX", b"id", b"RANGE", b"VALUES", b"ghost"], Exact),
+        c(&[b"TABLE.DECLARE", b"t1", b"PREFIX", b"tt:", b"PK", b"id", b"COLUMN", b"id", b"str",
+            b"ORDERPATH", b"op", b"ON", b"ghost"], Exact),
+        c(&[b"TABLE.DECLARE", b"t1", b"PREFIX", b"tt:", b"PK", b"id", b"COLUMN", b"id", b"str",
+            b"ORDERPATH", b"op", b"BY", b"id"], Exact),
+        c(&[b"TABLE.DECLARE", b"t1", b"PREFIX", b"tt:", b"PK", b"id", b"COLUMN", b"id", b"str",
+            b"COLUMN", b"n", b"i64",
+            b"INDEX", b"n", b"RANGE",
+            b"ORDERPATH", b"byn", b"ON", b"id", b"THEN", b"n", b"DESC"], Exact),
+        c(&[b"TABLE.DECLARE", b"t1", b"PREFIX", b"tt:", b"PK", b"id", b"COLUMN", b"id", b"str"], Exact),
+        c(&[b"TABLE.LIST"], Exact),
+        c(&[b"TABLE.LIST", b"extra"], Exact),
+        c(&[b"TABLE.VERIFY"], Exact),
+        c(&[b"TABLE.VERIFY", b"nope"], Exact),
+        c(&[b"TABLE.DROP"], Exact),
+        c(&[b"TABLE.DROP", b"missing"], Exact),
+        c(&[b"TABLE.DROP", b"t1"], Exact),
+        c(&[b"TABLE.LIST"], Exact),
+        // WHERE grammar refusals (index-independent shapes).
+        c(&[b"IDX.QUERY", b"noidx", b"WHERE", b"a", b"EQ", b"1"], Exact),
+        c(&[b"IDX.QUERY", b"noidx", b"WHERE", b"LIMIT", b"5"], Exact),
+        c(&[b"IDX.QUERY", b"noidx", b"WHERE", b"a", b"NEQ", b"1"], Exact),
+        c(&[b"IDX.COUNT", b"noidx", b"WHERE", b"a", b"EQ", b"1"], Exact),
         // unknown verb
         c(&[b"NoSuchVerbX"], Exact),
         c(&[b"NoSuchVerbX", b"arg"], Exact),
@@ -387,6 +439,189 @@ fn cases() -> Vec<(Vec<&'static [u8]>, Cmp)> {
         c(&[b"FLUSHALL"], Exact),
         c(&[b"DBSIZE"], Exact),
     ]
+}
+
+/// The scalar VALUES / FILTER / SORT / DISTINCT / FACET / OFFSET
+/// success surface, byte-compared on a READY index. Runs on its own
+/// server (the index is created over an EMPTY domain so the server's
+/// tick-driven backfill finishes immediately; the poll below waits for
+/// it, then every row arrives through the write hook on both engines
+/// and the claused replies must match byte-for-byte).
+#[test]
+fn scalar_values_clauses_match_the_real_server() {
+    const PORT2: u16 = 6098;
+    let server_dir = kevy_tmpdir::TmpDir::new("dispatch-oracle-values");
+    let child = Command::new(server_binary())
+        .args(["--port", &PORT2.to_string(), "--dir"])
+        .arg(server_dir.path())
+        .current_dir(server_dir.path())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn kevy server");
+    let _guard = ServerGuard(child);
+    let mut sock = {
+        let mut s = None;
+        for _ in 0..100 {
+            if let Ok(c) = TcpStream::connect(("127.0.0.1", PORT2)) {
+                c.set_read_timeout(Some(Duration::from_secs(5))).expect("read timeout");
+                s = Some(c);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        s.expect("server accepts")
+    };
+    let mut buf = Vec::new();
+    let store =
+        Store::open(Config::default().with_ttl_reaper_manual()).expect("open embedded store");
+
+    let create: Vec<&[u8]> = vec![
+        b"IDX.CREATE", b"vals", b"ON", b"PREFIX", b"v:", b"FIELD", b"age", b"TYPE", b"i64",
+        b"KIND", b"range", b"VALUES", b"city", b"price", b"TYPES", b"str", b"i64",
+    ];
+    let srv = server_reply(&mut sock, &mut buf, &create);
+    let emb = embedded_reply(&store, &create);
+    assert_eq!(srv, b"+OK\r\n");
+    assert_eq!(emb, b"+OK\r\n");
+    // Wait out the server's tick-driven backfill (empty domain — one
+    // tick per shard); the embedded build is synchronous.
+    for _ in 0..200 {
+        let r = server_reply(&mut sock, &mut buf, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"0"]);
+        if !r.starts_with(b"-INDEXBUILDING") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    // LOC-WAIVER: pure data table — one row per oracle command.
+    let cases: Vec<Vec<&'static [u8]>> = vec![
+        vec![b"HSET", b"v:1", b"age", b"10", b"city", b"tokyo", b"price", b"5"],
+        vec![b"HSET", b"v:2", b"age", b"20", b"city", b"osaka", b"price", b"3"],
+        vec![b"HSET", b"v:3", b"age", b"30", b"price", b"8"],
+        vec![b"HSET", b"v:4", b"age", b"40", b"city", b"tokyo"],
+        vec![b"HSET", b"v:5", b"age", b"50", b"city", b"kyoto", b"price", b"3"],
+        vec![b"HSET", b"v:6", b"age", b"60", b"city", b"osaka", b"price", b"x"],
+        vec![b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100"],
+        vec![b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo"],
+        vec![b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"price", b"RANGE", b"0", b"6"],
+        vec![b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"SORT", b"city", b"ASC"],
+        vec![b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"SORT", b"city", b"DESC"],
+        vec![b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"SORT", b"price", b"ASC"],
+        vec![b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"DISTINCT", b"city"],
+        vec![b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FACET", b"city", b"LIMIT", b"2"],
+        vec![b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"price", b"RANGE", b"0", b"6", b"FACET", b"city", b"price"],
+        vec![b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"DISTINCT", b"city", b"FACET", b"city"],
+        vec![b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"OFFSET", b"2", b"LIMIT", b"2"],
+        vec![b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"OFFSET", b"100"],
+        vec![b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"SORT", b"price", b"DESC", b"DISTINCT", b"city", b"FILTER", b"city", b"RANGE", b"a", b"z"],
+        vec![b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FIELDS", b"city", b"price"],
+        vec![b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"SORT", b"city", b"ASC", b"FIELDS", b"price"],
+        vec![b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"CURSOR", b"0", b"SORT", b"city", b"ASC"],
+        vec![b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"nope", b"EQ", b"1"],
+        vec![b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"price", b"EQ", b"abc"],
+        vec![b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"SORT", b"nope", b"ASC"],
+        vec![b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"DISTINCT", b"nope"],
+        vec![b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FACET", b"nope"],
+        vec![b"IDX.COUNT", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo"],
+    ];
+    for argv in &cases {
+        let srv = server_reply(&mut sock, &mut buf, argv);
+        let emb = embedded_reply(&store, argv);
+        assert_match(argv, &Cmp::Exact, &srv, &emb);
+    }
+}
+
+/// The TABLE.* success surface + composite WHERE queries, byte-compared
+/// on a READY table (own server; the poll waits out the tick-driven
+/// backfill of the compiled indexes; ≤ 40 rows so the bounded VERIFY
+/// spot check samples every row on both engines and the counters agree
+/// exactly).
+#[test]
+fn table_surface_matches_the_real_server() {
+    const PORT3: u16 = 6099;
+    let server_dir = kevy_tmpdir::TmpDir::new("dispatch-oracle-table");
+    let child = Command::new(server_binary())
+        .args(["--port", &PORT3.to_string(), "--dir"])
+        .arg(server_dir.path())
+        .current_dir(server_dir.path())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn kevy server");
+    let _guard = ServerGuard(child);
+    let mut sock = {
+        let mut s = None;
+        for _ in 0..100 {
+            if let Ok(c) = TcpStream::connect(("127.0.0.1", PORT3)) {
+                c.set_read_timeout(Some(Duration::from_secs(5))).expect("read timeout");
+                s = Some(c);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        s.expect("server accepts")
+    };
+    let mut buf = Vec::new();
+    let store =
+        Store::open(Config::default().with_ttl_reaper_manual()).expect("open embedded store");
+
+    let declare: Vec<&[u8]> = vec![
+        b"TABLE.DECLARE", b"user", b"PREFIX", b"u:", b"PK", b"id",
+        b"COLUMN", b"id", b"str", b"COLUMN", b"dept", b"str", b"COLUMN", b"age", b"i64",
+        b"INDEX", b"age", b"RANGE", b"VALUES", b"dept",
+        b"ORDERPATH", b"by_dept_age", b"ON", b"dept", b"THEN", b"age", b"DESC",
+    ];
+    assert_eq!(server_reply(&mut sock, &mut buf, &declare), b"+OK\r\n");
+    assert_eq!(embedded_reply(&store, &declare), b"+OK\r\n");
+    // Wait out the server's tick-driven backfill (empty domain).
+    for _ in 0..200 {
+        let r = server_reply(&mut sock, &mut buf, &[b"IDX.QUERY", b"user.age", b"RANGE", b"0", b"0"]);
+        let r2 = server_reply(
+            &mut sock, &mut buf,
+            &[b"IDX.QUERY", b"user.by_dept_age", b"WHERE", b"dept", b"EQ", b"x"],
+        );
+        if !r.starts_with(b"-INDEXBUILDING") && !r2.starts_with(b"-INDEXBUILDING") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    // LOC-WAIVER: pure data table — one row per oracle command.
+    let cases: Vec<Vec<&'static [u8]>> = vec![
+        vec![b"HSET", b"u:1", b"id", b"1", b"dept", b"eng", b"age", b"30"],
+        vec![b"HSET", b"u:2", b"id", b"2", b"dept", b"eng", b"age", b"45"],
+        vec![b"HSET", b"u:3", b"id", b"3", b"dept", b"ops", b"age", b"25"],
+        vec![b"HSET", b"u:4", b"id", b"4", b"dept", b"eng", b"age", b"38"],
+        vec![b"HSET", b"u:5", b"id", b"5", b"dept", b"ops", b"age", b"52"],
+        vec![b"HSET", b"u:6", b"id", b"6", b"age", b"99"], // dept missing → excluded from the composite
+        vec![b"TABLE.LIST"],
+        vec![b"TABLE.VERIFY", b"user"],
+        // compiled single-column paths
+        vec![b"IDX.QUERY", b"user.age", b"RANGE", b"30", b"50"],
+        vec![b"IDX.QUERY", b"user.age", b"RANGE", b"0", b"100", b"FILTER", b"dept", b"EQ", b"eng"],
+        // composite WHERE: equality, equality+range, DESC ordering
+        vec![b"IDX.QUERY", b"user.by_dept_age", b"WHERE", b"dept", b"EQ", b"eng"],
+        vec![b"IDX.QUERY", b"user.by_dept_age", b"WHERE", b"dept", b"EQ", b"eng", b"RANGE", b"age", b"31", b"46"],
+        vec![b"IDX.QUERY", b"user.by_dept_age", b"WHERE", b"dept", b"EQ", b"ops", b"LIMIT", b"1"],
+        vec![b"IDX.QUERY", b"user.by_dept_age", b"WHERE", b"dept", b"EQ", b"eng", b"FIELDS", b"age", b"dept"],
+        vec![b"IDX.COUNT", b"user.by_dept_age", b"WHERE", b"dept", b"EQ", b"eng"],
+        // WHERE refusal surface on a live catalog
+        vec![b"IDX.QUERY", b"user.age", b"WHERE", b"dept", b"EQ", b"eng"],
+        vec![b"IDX.QUERY", b"user.by_dept_age", b"WHERE", b"ghost", b"EQ", b"1"],
+        vec![b"IDX.QUERY", b"user.by_dept_age", b"WHERE", b"age", b"EQ", b"30"],
+        vec![b"IDX.QUERY", b"user.by_dept_age", b"WHERE", b"dept", b"EQ", b"eng", b"RANGE", b"age", b"x", b"46"],
+        // drop cascades to the compiled indexes
+        vec![b"TABLE.DROP", b"user"],
+        vec![b"TABLE.LIST"],
+        vec![b"IDX.QUERY", b"user.age", b"EQ", b"30"],
+        vec![b"IDX.QUERY", b"user.by_dept_age", b"WHERE", b"dept", b"EQ", b"eng"],
+    ];
+    for argv in &cases {
+        let srv = server_reply(&mut sock, &mut buf, argv);
+        let emb = embedded_reply(&store, argv);
+        assert_match(argv, &Cmp::Exact, &srv, &emb);
+    }
 }
 
 #[test]

@@ -53,7 +53,7 @@
 kevy-embedded = &quot;4.0&quot;</code></pre></li><li><h3>打开，写，读</h3><pre><code>let db = Db::open(&quot;data/&quot;)?;
 db.set(b&quot;session:7f3a&quot;, b&quot;{\&quot;user\&quot;:\&quot;ada\&quot;}&quot;, Some(Duration::from_secs(3600)))?;
 assert_eq!(db.get(b&quot;session:7f3a&quot;)?.is_some(), true);</code></pre></li><li><h3>以后想用 redis-cli？把 listener 打开</h3><p>其他进程通过 RESP 访问同一份存储，上面的代码一行都不用改。</p><pre><code>db.listen(&quot;127.0.0.1:6379&quot;)?;</code></pre></li></ol>
-  <div class="call loss r-cost"><span class="h">成本与限制</span><p><b>嵌入式的存储不是共享的。</b>数据目录归一个进程所有，如果第二个进程也要这份数据，那正是上面那个 listener——或者<a href="../../../zh/docs/embedded-listener/">完整的服务端</a>——存在的意义。</p></div>
+  <div class="call loss r-cost"><span class="h">成本与限制</span><p><b>嵌入式的存储不是共享的。</b>数据目录归一个进程所有，如果第二个进程也要这份数据，那正是上面那个 listener——或者<a href="../../../zh/docs/embedded-listener/">完整的服务端</a>——存在的意义。进程内同样可以给 store 一个 RAM 预算（<code>with_tier_budget</code>）：冷值下沉到磁盘、在你的进程里换回——照实说一句：进程内的一次冷读会在读的时长内持有 store 的锁，所以可下沉的最大值默认封在 256 KiB。细节在<a href="../../../zh/docs/tiering/">分层存储指南</a>里。</p></div>
 </section>
 <section class="band">
   <div class="sec-h"><h2>在一个浏览器标签页里</h2><p class="sec-lede">gzip 之后 151 KB。落在浏览器自己的文件系统上，刷新之后还在，发布订阅还能跨标签页。</p></div>

@@ -94,3 +94,54 @@ fn listener_reads_live_store_rejects_writes() {
     let n = c.read(&mut buf).unwrap();
     assert_eq!(&buf[..n], b"+PONG\r\n");
 }
+
+/// The listener's `INFO # Tiering` must carry the SAME field set as the
+/// server's section — docs/tiering.md promises "identical on server and
+/// embedded listener". The honesty audit (2026-07-25) found the listener
+/// silently dropping the two T6 counters; this pins all 15 fields on the
+/// listener wire so the section can never drift shorter again.
+#[test]
+fn listener_info_tiering_carries_every_documented_field() {
+    let dir = kevy_tmpdir::TmpDir::new("listener-tier-info");
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let addr: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+    let store = Store::open(
+        Config::default()
+            .with_persist(dir.path())
+            .with_ttl_reaper_manual()
+            .with_tier_budget(1 << 20)
+            .with_resp_listener(addr),
+    )
+    .unwrap();
+    store.set(b"k", b"v").unwrap();
+
+    for _ in 0..50 {
+        if std::net::TcpStream::connect(addr).is_ok() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let mut c = std::net::TcpStream::connect(addr).unwrap();
+    c.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+    let reply = cmd(&mut c, &[b"INFO", b"tiering"]);
+    let body = String::from_utf8_lossy(&reply);
+    for field in [
+        "tiering_enabled",
+        "tier_budget_bytes",
+        "tier_effective_target",
+        "cold_keys",
+        "cold_bytes",
+        "stub_bytes",
+        "index_reserved_bytes",
+        "vlog_size_bytes",
+        "vlog_live_bytes",
+        "vlog_files",
+        "vlog_epoch",
+        "demotions_total",
+        "promotions_total",
+        "peek_preads_total",
+        "batch_submissions_total",
+    ] {
+        assert!(body.contains(&format!("{field}:")), "listener INFO missing `{field}`:\n{body}");
+    }
+}

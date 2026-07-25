@@ -4,7 +4,7 @@
 
 use kevy_store::Store;
 
-use super::super::wire::{encode_highlight, encode_hydration};
+use super::super::wire::{encode_highlight, encode_hydration_row, peek_hydration};
 use crate::cmd_index_query::ST_OK;
 
 /// One hit's sort key on the wire: a present flag, then the bytes.
@@ -35,11 +35,15 @@ pub(super) fn encode_hits(
 ) -> Vec<u8> {
     let mut chunk = vec![ST_OK];
     chunk.extend_from_slice(&(hits.len() as u32).to_le_bytes());
+    // Hydration rows prefetched as ONE batched page (cold rows
+    // coalesce into one submission), then encoded in hit order.
+    let keys: Vec<&[u8]> = hits.iter().map(|h| h.key.as_slice()).collect();
+    let rows = peek_hydration(store, &keys, fields);
     for (i, h) in hits.iter().enumerate() {
         chunk.extend_from_slice(&(h.key.len() as u32).to_le_bytes());
         chunk.extend_from_slice(&h.key);
         chunk.extend_from_slice(&h.score.to_le_bytes());
-        encode_hydration(store, &mut chunk, &h.key, fields);
+        encode_hydration_row(&mut chunk, fields.len(), &rows[i]);
         if let Some(spans) = &spans {
             encode_highlight(&mut chunk, &spans[i]);
         }

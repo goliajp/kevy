@@ -110,6 +110,9 @@ OPTIONS:
     --threads <N>       Shard count (default: 0 = available_parallelism())
     --dir <PATH>        Data directory for snapshot + AOF (default: .)
     --no-aof            Disable the AOF (in-memory only / cache-only mode)
+    --tiering-budget <B> Enable transparent tiering with this RAM budget:
+                        \"auto\" (0.70 x detected memory bound), \"70%\"
+                        (percent of the bound), or absolute (\"4gb\")
     --cluster           Single-node cluster mode: slot routing + one extra
                         deterministic port per shard (port+1+i); cluster
                         clients (redis-cli -c, redis-benchmark --cluster)
@@ -118,7 +121,8 @@ OPTIONS:
     -V, --version       Print version and exit
 
 Precedence (top wins): CLI flags > env vars > TOML file > built-in defaults.
-Env vars: KEVY_BIND, KEVY_PORT, KEVY_THREADS, KEVY_DIR, KEVY_AOF, KEVY_CLUSTER.
+Env vars: KEVY_BIND, KEVY_PORT, KEVY_THREADS, KEVY_DIR, KEVY_AOF, KEVY_CLUSTER,
+KEVY_TIER_BUDGET (auto | N% | bytes/size literal).
 
 EXAMPLES:
     kevy                        # 127.0.0.1:6004, all cores, AOF on
@@ -159,6 +163,12 @@ fn parse_cli() -> (Option<PathBuf>, CliOverrides) {
         data_dir: arg_value("--dir").map(PathBuf::from),
         aof,
         cluster,
+        tiering_budget: arg_value("--tiering-budget").map(|s| {
+            kevy_config::TierBudgetSpec::parse(&s).unwrap_or_else(|e| {
+                eprintln!("kevy: --tiering-budget: {e}");
+                std::process::exit(2);
+            })
+        }),
     };
     (config_path, overrides)
 }

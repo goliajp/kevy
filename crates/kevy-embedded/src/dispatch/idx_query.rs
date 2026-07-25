@@ -7,8 +7,11 @@ use crate::KevyError;
 
 use kevy_index::{IndexValue, ValType};
 
-use super::idx::{badargs, decode_cursor, encode_cursor, no_such_index, spec_of, value_repr};
-use super::util::{arr, bulk, err, int, kevy_err, nil};
+use super::idx::{badargs, decode_cursor, encode_cursor, no_such_index, value_repr};
+// spec_of's only use here is the KNN handler, which is vector-gated.
+#[cfg(feature = "vector")]
+use super::idx::spec_of;
+use super::util::{arr, bulk, err, kevy_err, nil};
 
 /// One IDX query request; `false` = verb not in this group.
 pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
@@ -77,6 +80,14 @@ pub(super) fn emit_row(
 mod tail;
 use tail::parse_tail;
 
+#[path = "idx_query_claused.rs"]
+mod claused;
+use claused::claused_query;
+
+#[path = "idx_query_where.rs"]
+mod where_head;
+use where_head::{cmd_idx_count, driving_bounds, parse_scalar_head};
+
 fn cmd_idx_query(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let Some(name) = argv.get(1) else {
         return badargs(out, "IDX.QUERY", b"");
@@ -102,16 +113,36 @@ fn cmd_idx_query(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     scalar_query(s, argv, out);
 }
 
-/// `IDX.QUERY name RANGE min max | EQ v [LIMIT n] [CURSOR c] [FIELDS f…]`.
+/// `IDX.QUERY name RANGE min max | EQ v | WHERE col EQ v … [LIMIT n]
+/// [CURSOR c] [FILTER …]… [SORT f ASC|DESC] [DISTINCT f] [FACET f…]
+/// [OFFSET n] [FIELDS f…]`.
 fn scalar_query(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let name = &argv[1];
-    let Some(spec) = spec_of(s, name) else {
-        return no_such_index(out, name);
-    };
-    let parsed = parse_bounds(spec.ty, &argv[2], argv, 3)
-        .and_then(|(min, max, i)| Some((min, max, parse_tail(argv, i, 100, 10_000, false)?)));
-    let Some((min, max, tail)) = parsed else {
+    // Structure first (arg presence — needs no spec), then the pure
+    // CURSOR × selection grammar refusal, then the catalog, then bound
+    // coercion — the server's exact error ORDER, so the oracle can pin
+    // any of these cases byte-for-byte.
+    let Some((where_clause, tail_at)) = parse_scalar_head(argv) else {
         return badargs(out, "IDX.QUERY", name);
+    };
+    let Some(tail) = parse_tail(argv, tail_at, 100, 10_000, tail::TailMode::Scalar) else {
+        return badargs(out, "IDX.QUERY", name);
+    };
+    // A selection clause re-shapes the page, so a resume point in the
+    // driving order has nothing to resume — the server's exact wording.
+    let selects = tail.sort.is_some()
+        || tail.distinct.is_some()
+        || !tail.facets.is_empty()
+        || tail.offset > 0;
+    if tail.cursor_raw.is_some() && selects {
+        let n = String::from_utf8_lossy(name);
+        return err(
+            out,
+            &format!("ERR IDX.QUERY '{n}': CURSOR cannot combine with SORT|DISTINCT|FACET|OFFSET"),
+        );
+    }
+    let Some((min, max)) = driving_bounds(s, &where_clause, argv, "IDX.QUERY", name, out) else {
+        return;
     };
     let cursor = match tail.cursor_raw.as_deref() {
         None | Some(b"0") => None,
@@ -120,49 +151,41 @@ fn scalar_query(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
             None => return badargs(out, "IDX.QUERY", name),
         },
     };
+    if selects || !tail.filters.is_empty() {
+        return claused_query(s, name, &min, &max, cursor.as_ref(), &tail, out);
+    }
     match s.idx_query(name, &min, &max, cursor.as_ref(), tail.limit) {
         Err(e) => idx_err(out, name, &e),
-        Ok((rows, next)) => {
-            arr(out, 2);
-            match next {
-                Some(c) => bulk(out, &encode_cursor(&c.value, &c.key)),
-                None => bulk(out, b"0"),
-            }
-            if tail.fields.is_empty() {
-                // legacy flat shape: *2N of key/value
-                arr(out, rows.len() * 2);
-                for (k, v) in &rows {
-                    bulk(out, k);
-                    bulk(out, &value_repr(v));
-                }
-            } else {
-                arr(out, rows.len());
-                for (k, v) in &rows {
-                    emit_row(s, out, k, Some(v), &tail.fields);
-                }
-            }
-        }
+        Ok((rows, next)) => emit_scalar_page(s, out, &rows, next.as_ref(), &tail.fields),
     }
 }
 
-/// `IDX.COUNT name RANGE min max | EQ v`.
-fn cmd_idx_count(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
-    let Some(name) = argv.get(1) else {
-        return badargs(out, "IDX.COUNT", b"");
-    };
-    let Some(spec) = spec_of(s, name) else {
-        return no_such_index(out, name);
-    };
-    let bounds = argv.get(2).and_then(|shape| parse_bounds(spec.ty, shape, argv, 3));
-    let Some((min, max, end)) = bounds else {
-        return badargs(out, "IDX.COUNT", name);
-    };
-    if end != argv.len() {
-        return badargs(out, "IDX.COUNT", name);
+/// The plain `[cursor, rows]` scalar envelope (flat key/value pairs
+/// without FIELDS, hydrated row arrays with).
+fn emit_scalar_page(
+    s: &Store,
+    out: &mut Vec<u8>,
+    rows: &[(Vec<u8>, IndexValue)],
+    next: Option<&kevy_index::Cursor>,
+    fields: &[Vec<u8>],
+) {
+    arr(out, 2);
+    match next {
+        Some(c) => bulk(out, &encode_cursor(&c.value, &c.key)),
+        None => bulk(out, b"0"),
     }
-    match s.idx_count(name, &min, &max) {
-        Ok(n) => int(out, n as i64),
-        Err(e) => idx_err(out, name, &e),
+    if fields.is_empty() {
+        // legacy flat shape: *2N of key/value
+        arr(out, rows.len() * 2);
+        for (k, v) in rows {
+            bulk(out, k);
+            bulk(out, &value_repr(v));
+        }
+    } else {
+        arr(out, rows.len());
+        for (k, v) in rows {
+            emit_row(s, out, k, Some(v), fields);
+        }
     }
 }
 
@@ -174,7 +197,7 @@ fn text_match(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         let Some(text) = argv.get(3) else {
             return badargs(out, "IDX.QUERY", name);
         };
-        let Some(tail) = parse_tail(argv, 4, 10, 1000, true) else {
+        let Some(tail) = parse_tail(argv, 4, 10, 1000, tail::TailMode::Match) else {
             return badargs(out, "IDX.QUERY", name);
         };
         let want = tail.highlight.as_deref();
@@ -339,13 +362,9 @@ fn parse_knn_tail(argv: &[Vec<u8>]) -> Option<(tail::Tail, usize)> {
             typo: 0,
             offset: 0,
             scope: Vec::new(),
-            #[cfg(feature = "text")]
             filters: Vec::new(),
-            #[cfg(feature = "text")]
             sort: None,
-            #[cfg(feature = "text")]
             distinct: None,
-            #[cfg(feature = "text")]
             facets: Vec::new(),
         };
     let mut ef = 0usize;

@@ -43,6 +43,12 @@ pub type HighlightedHit = (Vec<u8>, f64, Vec<FieldSpans>);
 #[path = "ops_index_highlight.rs"]
 pub(crate) mod highlight;
 
+// The clause-carrying scalar query (capacity arc G1) and the
+// [`ValueFilter`] predicate shape it shares with MATCH — independent of
+// the `text` feature: a range index filters fine without a tokenizer.
+#[path = "ops_index_claused.rs"]
+pub(crate) mod claused;
+
 #[cfg(feature = "text")]
 #[path = "ops_index_text.rs"]
 mod text;
@@ -123,11 +129,16 @@ impl Store {
             group_by: None,
             with_positions: false,
             values: Vec::new(),
+            composite: None,
         };
         self.register_spec(spec)
     }
 
-    fn register_spec(&self, spec: IndexSpec) -> KevyResult<()> {
+    pub(crate) fn register_spec(&self, spec: IndexSpec) -> KevyResult<()> {
+        // Tiering floor refusal: body in
+        // `ops_index_sync::tier_floor_check` (500-LOC rule).
+        #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+        crate::ops_index_sync::tier_floor_check(&self.shards)?;
         {
             let mut g = self
                 .indexes
@@ -177,6 +188,7 @@ impl Store {
             group_by: None,
             with_positions: false,
             values: Vec::new(),
+            composite: None,
         };
         self.register_spec(spec)
     }
@@ -303,6 +315,7 @@ impl Store {
             group_by: Some(group_by.to_vec()),
             with_positions: false,
             values: Vec::new(),
+            composite: None,
         };
         self.register_spec(spec)
     }

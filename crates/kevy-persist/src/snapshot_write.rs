@@ -122,6 +122,15 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
         Value::Set(_) | Value::SmallSetInline(_) => OP_SET,
         Value::ZSet(_) | Value::SmallZSetInline(_) => OP_ZSET,
         Value::Stream(_) => OP_STREAM,
+        // Every SnapshotSource materializes cold values from the
+        // (pinned) vlog before yielding them — a stub here means a
+        // producer bypassed the source contract. Fail the snapshot
+        // rather than silently dropping the value.
+        Value::Cold(_) => {
+            return Err(io::Error::other(
+                "cold stub reached the snapshot writer — SnapshotSource must materialize (T4)",
+            ));
+        }
     };
     w.write_all(&[op])?;
     write_ttl(w, ttl)?;
@@ -139,6 +148,7 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
         Value::ZSet(z) => snapshot_payload::write_zset_payload(w, z),
         Value::SmallZSetInline(z) => snapshot_payload::write_small_zset_payload(w, z),
         Value::Stream(s) => snapshot_payload::write_stream_payload(w, s),
+        Value::Cold(_) => unreachable!("filtered by the op match above"),
     }
 }
 

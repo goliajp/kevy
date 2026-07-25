@@ -3,9 +3,52 @@
 //! `ops_index.rs` to keep it under the 500-LOC project ceiling;
 //! behaviour unchanged).
 
-use kevy_index::{IndexKind, IndexSpec, IndexValue, Segment};
+use kevy_index::{IndexKind, IndexSpec, Segment};
 
 use crate::ops_index::{IndexReg, ShardSegs};
+
+impl ShardSegs {
+    /// Σ approximate heap bytes of this shard's index segments, every
+    /// kind — the tier's `reserved_bytes` floor feed.
+    #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+    pub(crate) fn reserved_bytes(&self) -> u64 {
+        let mut sum: u64 = self.segs.iter().map(|(_, s)| s.stats().approx_bytes).sum();
+        sum += self.agg.iter().map(|(_, a)| a.stats().approx_bytes).sum::<u64>();
+        #[cfg(feature = "text")]
+        {
+            sum += self.text.iter().map(|(_, t)| t.stats().approx_bytes).sum::<u64>();
+        }
+        #[cfg(feature = "vector")]
+        {
+            sum += self.ann.iter().map(|(_, g)| g.stats().approx_bytes).sum::<u64>();
+        }
+        sum
+    }
+}
+
+/// Tiering floor refusal (mirrors the
+/// server's IDX.CREATE precheck, same wire message): indexes are the
+/// fixed layer demotion can never reclaim; when the existing floor
+/// already exhausts the tier's demotable headroom, a new index is
+/// refused by name. The floor is refreshed from the live segments
+/// first so the check never trails the reaper tick.
+#[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+pub(crate) fn tier_floor_check(shards: &crate::store::Shards) -> crate::KevyResult<()> {
+    for shard in shards.iter() {
+        let mut g = crate::store::lock_write(shard);
+        if !g.store.tier_enabled() {
+            break;
+        }
+        let reserved = g.idx_segs.reserved_bytes() + g.view_segs.reserved_bytes();
+        g.store.set_tier_reserved(reserved);
+        if g.store.tier_index_floor_blocked(0) {
+            return Err(crate::KevyError::InvalidInput(
+                "index memory floor exceeds the tiering budget".into(),
+            ));
+        }
+    }
+    Ok(())
+}
 
 /// A fresh text segment shaped by the spec: as many separately scored
 /// fields as it declares (the breakdown `IN <field…>` scopes to), and a
@@ -87,7 +130,7 @@ fn rebuild_seg_lists(
                 .push(take_or_backfill(&mut segs.text, spec, st, || new_text(spec), apply_text_key)),
             #[cfg(not(feature = "text"))]
             IndexKind::Text => {}
-            _ => next.push(take_or_backfill(&mut segs.segs, spec, st, Segment::new, apply_key)),
+            _ => next.push(take_or_backfill(&mut segs.segs, spec, st, || new_scalar(spec), apply_key)),
         }
     }
     shard_segs.segs = next;
@@ -131,21 +174,22 @@ fn apply_agg_key(
     a: &mut kevy_index::AggSegment,
     key: &[u8],
 ) {
+    // Both fields in ONE row peek (server twin: `apply_row_agg`) —
+    // one record read on a cold row, no promotion, no gate mark; the
+    // `Ok(None)`/`Err` arms carry the old `exists()` distinction.
     let group_field = spec.group_by.as_deref().unwrap_or_default();
-    let group = match store.hget(key, group_field) {
-        Ok(Some(g)) => Some(g.to_vec()),
-        _ => None,
-    };
-    let val = match store.hget(key, spec.field()) {
-        Ok(Some(raw)) => {
-            let raw = raw.to_vec();
-            kevy_index::IndexValue::coerce(spec.ty, &raw)
+    match store.peek_hash_fields(key, &[group_field, spec.field()]) {
+        Ok(Some(mut vals)) => {
+            let group = vals[0].take();
+            let val =
+                vals[1].take().and_then(|raw| kevy_index::IndexValue::coerce(spec.ty, &raw));
+            match (group, val) {
+                (Some(g), Some(v)) => a.apply(key, Some((g, v)), false),
+                _ => a.apply(key, None, true),
+            }
         }
-        _ => None,
-    };
-    match (group, val) {
-        (Some(g), Some(v)) => a.apply(key, Some((g, v)), false),
-        _ => a.apply(key, None, store.exists(&[key]) > 0),
+        Ok(None) => a.apply(key, None, false),
+        Err(_) => a.apply(key, None, true),
     }
 }
 
@@ -156,10 +200,11 @@ fn apply_ann_key(
     g: &mut kevy_vector::Hnsw,
     key: &[u8],
 ) {
-    let v = match store.hget(key, spec.field()) {
-        Ok(Some(raw)) => {
-            let raw = raw.to_vec();
-            kevy_vector::parse_vector(&raw, g.dim())
+    // The row peek — one record read on cold, no promotion, no
+    // gate mark (server twin: `apply_row`'s ann arm).
+    let v = match store.peek_hash_fields(key, &[spec.field()]) {
+        Ok(Some(mut vals)) => {
+            vals[0].take().and_then(|raw| kevy_vector::parse_vector(&raw, g.dim()))
         }
         _ => None,
     };
@@ -175,8 +220,21 @@ fn apply_text_key(
 ) {
     // The spec owns what it reads out of a row -- declared fields with
     // their weights, declared stored values -- so this path and the
-    // server's cannot index the same row differently.
-    let (fields, values) = spec.read_row(|f| store.hget(key, f).ok().flatten().map(|v| v.to_vec()));
+    // server's cannot index the same row differently. Every
+    // declared field + value prefetched with ONE row peek (one record
+    // read on a cold row, no promotion, no gate mark); `read_row`
+    // resolves from the prefetch, not per-field hgets.
+    let names: Vec<&[u8]> = spec
+        .fields
+        .iter()
+        .map(|f| f.name.as_slice())
+        .chain(spec.values.iter().map(|v| v.name.as_slice()))
+        .collect();
+    let fetched = store.peek_hash_fields(key, &names).ok().flatten();
+    let (fields, values) = spec.read_row(|f| {
+        let vals = fetched.as_ref()?;
+        names.iter().position(|n| *n == f).and_then(|i| vals[i].clone())
+    });
     let vals: Vec<Option<&[u8]>> = values.iter().map(|v| v.as_deref()).collect();
     if fields.is_empty() {
         ts.apply_doc(key, None, &vals);
@@ -285,22 +343,44 @@ fn each_written_key(verb: &[u8], parts: &[&[u8]], mut f: impl FnMut(&[u8])) {
     }
 }
 
+/// A fresh scalar segment shaped by the spec — with the stored-value
+/// side-channel iff it declared `VALUES` (undeclared = the plain
+/// `Segment::new()`, byte-identical to before; A5).
+fn new_scalar(spec: &IndexSpec) -> Segment {
+    if spec.values.is_empty() {
+        Segment::new()
+    } else {
+        Segment::with_values(spec.values.len())
+    }
+}
+
+/// The primary field AND every declared VALUES column read with
+/// ONE `peek_hash_fields` row peek — a cold row costs one record read
+/// plus one decode (never one per field), promotes nothing and never
+/// advances the 2nd-touch gate (the server twin is
+/// `index_runtime::apply_scalar_row`). The peek's `Ok(None)`/`Err`
+/// arms replace the old `exists()` disambiguation probe exactly.
 fn apply_key(store: &mut kevy_store::Store, spec: &IndexSpec, seg: &mut Segment, key: &[u8]) {
-    match store.hget(key, spec.field()) {
-        Ok(Some(raw)) => {
-            let raw = raw.to_vec();
-            match IndexValue::coerce(spec.ty, &raw) {
-                Some(v) => seg.apply(key, Some(v)),
-                None => seg.apply(key, None),
+    // The driving columns (composite or single FIELD) + VALUES in one
+    // row peek; the derivation is the spec's own
+    // ([`IndexSpec::derive_scalar`]) — the single implementation the
+    // server's `apply_scalar_row` applies too, so the two engines
+    // cannot index one row differently.
+    let names = spec.scalar_read_names();
+    let w = spec.primary_width();
+    match store.peek_hash_fields(key, &names) {
+        Ok(None) | Err(_) => seg.remove(key),
+        Ok(Some(vals)) => {
+            let primary = spec.derive_scalar(&vals[..w]);
+            match primary {
+                None => seg.apply_with_values(key, None, &[]),
+                Some(v) if spec.values.is_empty() => seg.apply(key, Some(v)),
+                Some(v) => {
+                    let refs: Vec<Option<&[u8]>> =
+                        vals[w..].iter().map(|o| o.as_deref()).collect();
+                    seg.apply_with_values(key, Some(v), &refs);
+                }
             }
         }
-        Ok(None) => {
-            if store.exists(&[key]) == 0 {
-                seg.remove(key);
-            } else {
-                seg.apply(key, None);
-            }
-        }
-        Err(_) => seg.remove(key),
     }
 }

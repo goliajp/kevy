@@ -125,6 +125,9 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
             } else {
                 cmd_set(store, args, out);
             }
+            // Tiering's demotion twin: internally gated on
+            // `tier.is_some()` — one not-taken branch when off.
+            store.try_demote_after_write();
             return;
         }
         _ => {}
@@ -138,7 +141,7 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
     }
     let handled = (proto_v3
         && crate::dispatch_resp3::try_resp3_overrides(ctx, cmd, store, args, out))
-        || dispatch_conn(ctx, cmd, args, out)
+        || dispatch_conn(ctx, cmd, store, args, out)
         || crate::ops::dispatch_ops(ctx, cmd, store, args, out)
         || dispatch_string(cmd, store, args, out)
         || crate::dispatch_collections::dispatch_hash(cmd, store, args, out)
@@ -162,6 +165,11 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
     if is_grow && store.maxmemory() > 0 {
         store.try_evict_after_write();
     }
+    // Tiering: one budgeted spill batch after a growing write (cheap
+    // not-taken branch when tiering is off).
+    if is_grow {
+        store.try_demote_after_write();
+    }
 }
 
 // `try_resp3_overrides` + the `emit_*_resp3` helpers live in
@@ -169,12 +177,15 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
 // 500-LOC house rule. Same dispatch fan-out, same call shape; the
 // V3 arm in `dispatch_with_proto` calls into the sibling module.
 
-/// Connection / introspection commands (no keyspace access). Takes
-/// `ctx` for the catalog-mutation verbs (IDX.* / VIEW.*), whose
-/// sidecar persistence roots at `state.sidecar_dir()`.
+/// Connection / introspection commands (no keyspace access — except
+/// IDX.CREATE's tiering-floor precheck, which reads the answering
+/// shard's tier gauges). Takes `ctx` for the catalog-mutation verbs
+/// (IDX.* / VIEW.*), whose sidecar persistence roots at
+/// `state.sidecar_dir()`.
 fn dispatch_conn<A: ArgvView + ?Sized>(
     ctx: &Ctx<'_>,
     cmd: &[u8],
+    store: &Store,
     args: &A,
     out: &mut Vec<u8>,
 ) -> bool {
@@ -184,10 +195,16 @@ fn dispatch_conn<A: ArgvView + ?Sized>(
             2 => encode_bulk(out, &args[1]),
             _ => wrong_args(out, "ping"),
         },
-        b"IDX.CREATE" => crate::cmd_index::cmd_idx_create(ctx, args, out),
+        b"IDX.CREATE" => crate::cmd_index::cmd_idx_create(ctx, store, args, out),
         b"VIEW.CREATE" => crate::cmd_view::cmd_view_create(ctx, args, out),
         b"VIEW.DROP" => crate::cmd_view::cmd_view_drop(ctx, args, out),
         b"IDX.DROP" => crate::cmd_index::cmd_idx_drop(ctx, args, out),
+        b"TABLE.DECLARE" => crate::cmd_table::cmd_table_declare(ctx, store, args, out),
+        b"TABLE.DROP" => crate::cmd_table::cmd_table_drop(ctx, args, out),
+        // Well-formed LIST/VERIFY ride the extension fan-out; only a
+        // malformed arity falls through to these usage arms.
+        b"TABLE.LIST" => encode_error(out, "ERR usage: TABLE.LIST"),
+        b"TABLE.VERIFY" => encode_error(out, "ERR usage: TABLE.VERIFY name"),
         b"ECHO" => {
             if args.len() == 2 {
                 encode_bulk(out, &args[1]);

@@ -15,8 +15,8 @@ use crate::schema::{Config, LogOutput};
 /// The sections emitted from [`canonical_pairs`] rather than the
 /// hand-aligned template below — single source of truth for both the
 /// template and the preserving splice path.
-const SERVICE_SECTIONS: [&str; 6] =
-    ["cluster", "replication", "lua", "metrics", "audit", "feed"];
+const SERVICE_SECTIONS: [&str; 7] =
+    ["cluster", "replication", "lua", "metrics", "audit", "feed", "tiering"];
 
 impl Config {
     /// Render the current config as a standard-template TOML file —
@@ -205,6 +205,7 @@ pub(crate) fn canonical_pairs(cfg: &Config) -> Vec<CanonicalPair> {
     push_metrics(&mut v, cfg);
     push_audit(&mut v, cfg);
     push_feed(&mut v, cfg);
+    push_tiering(&mut v, cfg);
     v
 }
 
@@ -375,6 +376,17 @@ fn push_audit(v: &mut Vec<CanonicalPair>, cfg: &Config) {
 fn push_feed(v: &mut Vec<CanonicalPair>, cfg: &Config) {
     push(v, "feed", "enabled", cfg.feed.enabled.to_string());
     push(v, "feed", "feed_buffer_size", cfg.feed.feed_buffer_size.to_string());
+}
+
+/// `[tiering]` — both keys optional: absent = tiering off, and their
+/// absence must round-trip to the off default.
+fn push_tiering(v: &mut Vec<CanonicalPair>, cfg: &Config) {
+    if let Some(budget) = cfg.tiering.budget {
+        push(v, "tiering", "budget", toml_string(&budget.as_config_string()));
+    }
+    if let Some(dir) = &cfg.tiering.spill_dir {
+        push(v, "tiering", "spill_dir", toml_string(&dir.display().to_string()));
+    }
 }
 
 fn push(v: &mut Vec<CanonicalPair>, section: &'static str, key: &'static str, value: String) {

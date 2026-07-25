@@ -6,7 +6,7 @@ use kevy_store::Store;
 
 use super::args::{ComposeQuery, HybridArgs, KnnArgs, MatchArgs, Shape};
 use super::wire::{
-    decode_gstats_arg, encode_agg_chunk, encode_hydration, encode_stats_chunk,
+    decode_gstats_arg, encode_agg_chunk, encode_hydration_row, encode_stats_chunk, peek_hydration,
 };
 use super::{ST_BADARGS, ST_BUILDING, ST_NOINDEX, ST_OK, ST_OVERBUDGET};
 use crate::index_runtime;
@@ -25,9 +25,7 @@ use crate::state::Ctx;
 mod encode;
 use encode::encode_hits;
 
-#[path = "ops_clauses.rs"]
-mod clauses;
-use clauses::{boxed_preds, distinct_field, facet_fields, scope_positions, sort_field};
+use super::ops_clauses::{boxed_preds, distinct_field, facet_fields, scope_positions, sort_field};
 
 pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let q = match MatchArgs::parse_terminal(argv) {
@@ -298,11 +296,13 @@ pub(super) fn op_knn(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<
         Ok(Some(hits)) => {
             let mut chunk = vec![ST_OK];
             chunk.extend_from_slice(&(hits.len() as u32).to_le_bytes());
-            for (key, dist) in &hits {
+            let keys: Vec<&[u8]> = hits.iter().map(|(k, _)| k.as_slice()).collect();
+            let rows = peek_hydration(store, &keys, &q.fields);
+            for (i, (key, dist)) in hits.iter().enumerate() {
                 chunk.extend_from_slice(&(key.len() as u32).to_le_bytes());
                 chunk.extend_from_slice(key);
                 chunk.extend_from_slice(&f64::from(*dist).to_le_bytes());
-                encode_hydration(store, &mut chunk, key, &q.fields);
+                encode_hydration_row(&mut chunk, q.fields.len(), &rows[i]);
             }
             chunk
         }
@@ -340,18 +340,25 @@ pub(super) fn op_hybrid(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> V
     };
     let mut chunk = vec![ST_OK];
     chunk.extend_from_slice(&(m.len() as u32).to_le_bytes());
-    for h in &m {
+    // ONE batched hydration page covers both ranked segments.
+    let keys: Vec<&[u8]> = m
+        .iter()
+        .map(|h| h.key.as_slice())
+        .chain(k.iter().map(|(key, _)| key.as_slice()))
+        .collect();
+    let rows = peek_hydration(store, &keys, &q.fields);
+    for (i, h) in m.iter().enumerate() {
         chunk.extend_from_slice(&(h.key.len() as u32).to_le_bytes());
         chunk.extend_from_slice(&h.key);
         chunk.extend_from_slice(&h.score.to_le_bytes());
-        encode_hydration(store, &mut chunk, &h.key, &q.fields);
+        encode_hydration_row(&mut chunk, q.fields.len(), &rows[i]);
     }
     chunk.extend_from_slice(&(k.len() as u32).to_le_bytes());
-    for (key, dist) in &k {
+    for (i, (key, dist)) in k.iter().enumerate() {
         chunk.extend_from_slice(&(key.len() as u32).to_le_bytes());
         chunk.extend_from_slice(key);
         chunk.extend_from_slice(&f64::from(*dist).to_le_bytes());
-        encode_hydration(store, &mut chunk, key, &q.fields);
+        encode_hydration_row(&mut chunk, q.fields.len(), &rows[m.len() + i]);
     }
     chunk
 }
@@ -374,10 +381,12 @@ pub(super) fn op_compose(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> 
         Ok(Some(keys)) => {
             let mut chunk = vec![ST_OK];
             chunk.extend_from_slice(&(keys.len() as u32).to_le_bytes());
-            for k in &keys {
+            let krefs: Vec<&[u8]> = keys.iter().map(Vec::as_slice).collect();
+            let rows = peek_hydration(store, &krefs, &cq.fields);
+            for (i, k) in keys.iter().enumerate() {
                 chunk.extend_from_slice(&(k.len() as u32).to_le_bytes());
                 chunk.extend_from_slice(k);
-                encode_hydration(store, &mut chunk, k, &cq.fields);
+                encode_hydration_row(&mut chunk, cq.fields.len(), &rows[i]);
             }
             chunk
         }
@@ -451,6 +460,9 @@ fn sub_bounds(shape: &Shape, ty: ValType) -> Option<(IndexValue, IndexValue)> {
             let v = IndexValue::parse_literal(ty, value)?;
             Some((v.clone(), v))
         }
-        Shape::Verify => None,
+        // COMPOSE legs take RANGE/EQ only (parse_sub never builds the
+        // other shapes) — unreachable by construction, refused if a
+        // future parse change lets one through.
+        Shape::Where(_) | Shape::Verify => None,
     }
 }

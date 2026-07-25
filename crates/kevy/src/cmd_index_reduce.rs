@@ -6,6 +6,7 @@
 
 mod agg;
 mod chunk;
+mod claused;
 mod query;
 mod ranked;
 

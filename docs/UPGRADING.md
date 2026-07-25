@@ -310,6 +310,7 @@ what they use. The default remains everything-on:
 | `vector` | HNSW ANN segments | `index`, `kevy-vector` |
 | `replicate` | replication + CDC feed | `persist`, `kevy-replicate` |
 | `listener` | read-only RESP listener | (nothing) |
+| `tier` | transparent tiering (RAM budget + cold value log) | `persist`, `kevy-sys` |
 
 The `core` tier cross-compiles for musl targets and holds an
 enforced budget (≤ 700 KB binary, ≤ 2 MB empty-store RSS); five
@@ -317,6 +318,42 @@ foundation crates additionally build `no_std`. See
 [docs/iot.md](iot.md). At the other end of the size spectrum, the
 same embedded core now runs in the browser as `@goliajp/kevy` —
 see [docs/wasm.md](wasm.md).
+
+## Tiering and the TABLE layer (new in 4.0, all additive)
+
+4.0 also ships transparent tiering ([tiering.md](tiering.md)) and
+the `TABLE.*` layer ([tables.md](tables.md)). Nothing in either
+activates on upgrade; this section exists so you know what changed
+underneath you and what did not.
+
+- **Tiering is opt-in — zero action if unused.** No `[tiering]`
+  section (and no `with_tier_budget*` call) means today's paths,
+  byte-identical; that off-cost is itself a gated claim. Enabling it
+  does not change the durability contract: the AOF stays the sole
+  durable truth, and the cold value log under `<data>/tier/` is
+  per-boot disposable (deleted at every open, never backed up).
+- **`INFO` grows a `# Tiering` section — only when tiering is
+  enabled.** An untiered 4.0 server's `INFO` output is unchanged, so
+  parsers that enumerate sections see nothing new until you opt in.
+- **New verbs, all additive**: `TABLE.DECLARE` / `TABLE.DROP` /
+  `TABLE.LIST` / `TABLE.VERIFY`; the `WHERE` form on `IDX.QUERY` /
+  `IDX.COUNT` (composite leading-prefix lookups); and the scalar
+  clause set — `VALUES` at `IDX.CREATE`, `FILTER` / `SORT` /
+  `DISTINCT` / `FACET` / `OFFSET` at query — previously text-only,
+  now on `range`/`unique` kinds too. No existing verb changed shape.
+- **Two new crates** join the workspace: `kevy-vlog` (the cold value
+  log stone) and `kevy-sql` (the out-of-engine declaration-time SQL
+  compiler, with a `kevy-cli sql` face). Embedded gains the `tier`
+  cargo feature (in the default set — see the table above).
+- **Sidecar catalog versions v5/v6.** The index-catalog sidecar
+  gains v5 (scalar-kind stored `VALUES`) and v6 (composite ORDERPATH
+  indexes), plus a new `table-catalog.meta` sidecar. Every older
+  sidecar version still loads — v1 files from the first index
+  release included. The writer emits **the oldest header that can
+  represent the data**: a catalog using none of the new capabilities
+  keeps writing its old version byte-identically, so its files stay
+  readable by earlier 4.0-line binaries; the version moves forward
+  only when you actually declare the new things.
 
 ## Downgrading 4.0 → 3.18
 

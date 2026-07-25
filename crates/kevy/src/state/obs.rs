@@ -25,6 +25,32 @@ pub(crate) struct ShardStats {
     /// Live client conns on this shard right now (gauge, published per
     /// tick from the reactor's conn table; cluster-bus links excluded).
     pub clients_connected: AtomicU64,
+    /// This shard's tiering gauges (all zero when
+    /// tiering is off — `tier_enabled` is the section gate).
+    pub tier: TierGauges,
+}
+
+/// One shard's `INFO # Tiering` slot — mirrors
+/// `kevy_store::TierStats`, published per tick alongside the memory
+/// gauges. All `Relaxed` (statistics, like everything else here).
+#[derive(Default)]
+pub(crate) struct TierGauges {
+    /// 1 when this shard's store has tiering enabled.
+    pub enabled: AtomicU64,
+    pub budget: AtomicU64,
+    pub effective_target: AtomicU64,
+    pub reserved_bytes: AtomicU64,
+    pub stub_bytes: AtomicU64,
+    pub cold_keys: AtomicU64,
+    pub cold_bytes: AtomicU64,
+    pub demotions_total: AtomicU64,
+    pub promotions_total: AtomicU64,
+    pub peek_preads_total: AtomicU64,
+    pub batch_submissions_total: AtomicU64,
+    pub vlog_files: AtomicU64,
+    pub vlog_bytes: AtomicU64,
+    pub vlog_live_bytes: AtomicU64,
+    pub vlog_epoch: AtomicU64,
 }
 
 /// Process-wide totals, summed across every shard slot.
@@ -39,6 +65,30 @@ pub(crate) struct Totals {
     pub commands_processed: u64,
     pub connections_received: u64,
     pub clients_connected: u64,
+    /// Tiering totals. `tier_enabled` = any shard tiers (they
+    /// all do or none does — the config is process-wide).
+    pub tier_enabled: bool,
+    pub tier: TierTotals,
+}
+
+/// The summed `# Tiering` gauges (budgets, floors and vlog gauges are
+/// per-shard slices; their sums are the process-level view INFO shows).
+#[derive(Default)]
+pub(crate) struct TierTotals {
+    pub budget: u64,
+    pub effective_target: u64,
+    pub reserved_bytes: u64,
+    pub stub_bytes: u64,
+    pub cold_keys: u64,
+    pub cold_bytes: u64,
+    pub demotions_total: u64,
+    pub promotions_total: u64,
+    pub peek_preads_total: u64,
+    pub batch_submissions_total: u64,
+    pub vlog_files: u64,
+    pub vlog_bytes: u64,
+    pub vlog_live_bytes: u64,
+    pub vlog_epoch: u64,
 }
 
 /// Retained ops-per-sec samples — 16 × 100 ms default tick ≈ a 1.6 s window.
@@ -123,6 +173,21 @@ impl ObsState {
             t.commands_processed += s.commands_processed.load(Relaxed);
             t.connections_received += s.connections_received.load(Relaxed);
             t.clients_connected += s.clients_connected.load(Relaxed);
+            t.tier_enabled |= s.tier.enabled.load(Relaxed) != 0;
+            t.tier.budget += s.tier.budget.load(Relaxed);
+            t.tier.effective_target += s.tier.effective_target.load(Relaxed);
+            t.tier.reserved_bytes += s.tier.reserved_bytes.load(Relaxed);
+            t.tier.stub_bytes += s.tier.stub_bytes.load(Relaxed);
+            t.tier.cold_keys += s.tier.cold_keys.load(Relaxed);
+            t.tier.cold_bytes += s.tier.cold_bytes.load(Relaxed);
+            t.tier.demotions_total += s.tier.demotions_total.load(Relaxed);
+            t.tier.promotions_total += s.tier.promotions_total.load(Relaxed);
+            t.tier.peek_preads_total += s.tier.peek_preads_total.load(Relaxed);
+            t.tier.batch_submissions_total += s.tier.batch_submissions_total.load(Relaxed);
+            t.tier.vlog_files += s.tier.vlog_files.load(Relaxed);
+            t.tier.vlog_bytes += s.tier.vlog_bytes.load(Relaxed);
+            t.tier.vlog_live_bytes += s.tier.vlog_live_bytes.load(Relaxed);
+            t.tier.vlog_epoch += s.tier.vlog_epoch.load(Relaxed);
         }
         t
     }
