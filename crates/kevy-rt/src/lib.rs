@@ -147,6 +147,8 @@ mod uring_park;
 mod uring_reactor;
 #[cfg(target_os = "linux")]
 mod uring_setup;
+#[cfg(target_os = "linux")]
+mod uring_stalldump;
 #[cfg(any(target_os = "linux", test))] // `test` too: pure, tested everywhere
 mod uring_write_linearize;
 
