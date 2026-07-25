@@ -156,7 +156,15 @@ PAGES[""] = {
                 },
                 {
                     "title": 'クライアントを向ける',
-                    "body": 'いま使っているものが、そのまま動きます。',
+                    "body": (
+                        "いま使っているものが、そのまま動きます——kevy製のクライアントを"
+                        "入れる必要はありません。<b>node-redis</b>／<b>ioredis</b>、"
+                        "<b>go-redis</b>、<b>StackExchange.Redis</b>、<b>redis-py</b>、"
+                        "<b>hiredis</b>がそのまま繋がり、kevy独自の動詞は同じクライアントの"
+                        "rawコマンド経路から届きます。この6つは、pushのたびにCIで実サーバーへ"
+                        "同一の梯子を流しています。"
+                        "<a href=\"/docs/clients/\">言語ごとの例（英語）</a>。"
+                    ),
                     "code": 'redis-cli -p 6379\n> SET greeting hello\nOK\n> TTL greeting\n(integer) -1',
                 },
                 {

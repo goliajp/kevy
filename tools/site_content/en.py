@@ -231,7 +231,15 @@ let mut store = Store::new_in(&mut arena);""",
                 },
                 {
                     "title": "Point your client at it",
-                    "body": "Whatever you use today keeps working.",
+                    "body": (
+                        "Whatever you use today keeps working — there is no kevy client "
+                        "to install. <b>node-redis</b> / <b>ioredis</b>, <b>go-redis</b>, "
+                        "<b>StackExchange.Redis</b>, <b>redis-py</b> and <b>hiredis</b> "
+                        "connect unchanged, and kevy's own verbs arrive through the same "
+                        "client's raw-command channel. All six run the identical ladder "
+                        "against a live server in CI on every push. "
+                        "<a href=\"~/docs/clients/\">Examples per language</a>."
+                    ),
                     "code": 'redis-cli -p 6379\n> SET greeting hello\nOK\n> TTL greeting\n(integer) -1',
                 },
                 {
