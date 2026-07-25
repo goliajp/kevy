@@ -23,8 +23,7 @@ let store = Store::open(Config::default()
 
 Tiering is **off by default**. With no `[tiering]` section (and no
 `with_tier_budget*` call) the engine's paths are byte-identical to an
-untiered build — that is a gated claim (A1 in the capacity-arc RFC),
-not a hope.
+untiered build — that is a gated claim, not a hope.
 
 ## What it is — and what it is not
 
@@ -40,8 +39,8 @@ not a hope.
   can lose. Your crash guarantees are exactly
   [persistence.md](persistence.md)'s; the tiered persistence suite
   additionally pins the two paths where tiering and persistence
-  meet (rewrite/snapshot on a mostly-cold store, boot past the
-  budget — the B10/B11 gates).
+  meet (rewrite/snapshot on a mostly-cold store, and boot past the
+  budget).
 - **It is not eviction.** A demoted key is still present — `EXISTS`
   says 1, `SCAN` returns it, `TTL` counts down, `GET` answers. The
   eight `maxmemory` delete-eviction policies keep their exact
@@ -128,15 +127,15 @@ cold key ≈ 96 B (entry overhead) + key heap bytes     # value fully reclaimed
 ```
 
 The cold-key formula is gated at ±20 % against measured RSS
-(`bench/memgate.sh`, the B7 line). Two consequences worth planning
-around, both from the capacity model in the RFC:
+(`bench/memgate.sh`). Two consequences worth planning around, both
+from the capacity model:
 
 - **A ~64 B value can never tier profitably** — the stub is about as
   big as the value. Values below the 64-byte spill threshold are
   never spilled. The data:RAM ratio grows linearly with value size;
   every capacity gate names its value size for exactly this reason.
-- **Worked example (the D1 envelope, sized from the model, not
-  measured into it)**: 10 M rows × ~1 KiB (≈10 GB of data) with 2
+- **Worked example (sized from the model, not measured into it)**:
+  10 M rows × ~1 KiB (≈10 GB of data) with 2
   secondary indexes + stored VALUES columns fits a **3 GB** budget:
   stub floor 10 M × ~108 B ≈ 1.1 GB, index floor 10 M × (68 + 68 +
   ~30 VALUES bytes) ≈ 1.7 GB ≈ 2.8 GB ≤ 3 GB. At 4 KiB values the
@@ -168,9 +167,8 @@ tag**, so the whole metadata surface answers with **zero disk reads**:
 - `WATCH` is not bumped by a demotion or promotion — tier movement is
   not a write.
 
-These are not narrative claims: the **transparency suite**
-(`crates/kevy-embedded/tests/tier_transparency.rs`) replays the same
-operation sequence against a tiered and an untiered store and asserts
+These are not narrative claims: the **transparency suite** replays the
+same operation sequence against a tiered and an untiered store and asserts
 byte-identical replies for semantic commands — order-free replies
 (`HGETALL`, `KEYS`, `SCAN`, `RANDOMKEY`, whose element order is map
 order by contract) are shape-compared instead — (memory-reporting
@@ -208,8 +206,8 @@ bytes.
 ## `INFO` — the `# Tiering` section
 
 Present only when tiering is enabled (an untiered server's `INFO` is
-byte-identical to 4.0-without-the-arc); identical on server and
-embedded listener.
+byte-identical to a build without tiering at all); identical on
+server and embedded listener.
 
 | field | meaning |
 |---|---|
@@ -230,8 +228,8 @@ embedded listener.
 | `batch_submissions_total` | batched cold-read submissions (hydration pages) |
 
 `vlog_size_bytes / cold_bytes` is the space-amplification ratio the
-B5 gate clamps at ≤ 2.0×; `peek_preads_total` is how you verify a
-hydration page paid one read per row, not per field.
+acceptance gate clamps at ≤ 2.0×; `peek_preads_total` is how you
+verify a hydration page paid one read per row, not per field.
 
 ## Performance expectations
 
@@ -242,16 +240,15 @@ Stated honestly, with the measured/pending status of each number:
   but off, perfgate's 12 metrics gate at the existing tolerance, and
   with tiering on and the working set fully hot, the new
   `tiered_hotset_*` lines gate the same way. **Baselines pending on
-  the bench box** (lx64) — the gate lines exist and skip with a
-  notice until then.
+  the bench box** — the gate lines exist and skip with a notice
+  until then.
 - **Cold point read = one positional read** plus a CRC check and a
   decode. The `kevy-vlog` microbench measures `read_at` at 0.64–14 µs
   across record sizes (dev-box NVMe). The end-to-end SLAs the
   gate clamps — scalar p99 ≤ 100 µs embedded / ≤ 300 µs server,
   whole-hash-row materialization ≤ 200 µs / ≤ 500 µs — are
-  **pending the lx64 envelope run** (`bench/capacity-envelope.sh`
-  flips tiergate's L2 line); until that runs they are targets, not
-  measurements.
+  **pending the bench-box envelope run** (`bench/capacity-envelope.sh`);
+  until that runs they are targets, not measurements.
 - **Embedded holds the shard lock during a cold read.** In-process
   there is no reactor to hand the read to: a cold materialization
   preads under the shard's write lock (the 1-shard default = the
@@ -277,7 +274,7 @@ Stated honestly, with the measured/pending status of each number:
   [tables.md](tables.md).
 - **Spill never stalls the reactor unboundedly**: demotion is
   budgeted per call with tick continuation; the stall clamp
-  (spill-induced p99 ≤ 1 ms) is the B3 gate line, also pending its
+  (spill-induced p99 ≤ 1 ms) is its own gate line, also pending its
   bench-box measurement.
 
 ## Operational notes
@@ -294,37 +291,36 @@ Stated honestly, with the measured/pending status of each number:
   at read, not served.
 - **Boot with dataset > budget works**: replay checks the watermark
   as it goes and spills inline, so RSS stays ≤ budget × 1.05
-  throughout boot (gated, B11) instead of OOMing before tiering ever
+  throughout boot (gated) instead of OOMing before tiering ever
   runs. The same inline demotion rides reshard and replica
   snapshot-load.
 - Snapshot / `BGREWRITEAOF` / replication full-sync on a mostly-cold
   store stream cold values from the pinned log **without promoting
   anything** — peak extra RAM is one value, and zero cold values are
-  lost from a rewrite (gated, B10).
-- RSS ≤ budget × 1.05 sustained is its own gate line (B8), including
+  lost from a rewrite (gated).
+- RSS ≤ budget × 1.05 sustained is its own gate line, including
   the auto-probe answering correctly in a cgroup container and on
   bare metal.
 
 ## Gate status (honesty ledger)
 
 Everything above that is a mechanism claim is covered by tests and
-gates that run in this tree (`tier_transparency.rs`, the tiered
-persistence suite behind B10/B11, `memgate` B7, `tiergate` L8's
-assertion body). The
-**measured envelope numbers** — cold-read p99 (B2), vlog space
-amplification under churn (B5), the 10× capacity ratio (B6), the D1
-10M-row fused envelope with hydration p95 (D1/L12), hydration
-batching at scale (D3/L13), and mixed-workload isolation (D4/L14) —
-are **pending the dedicated bench box** (lx64, the kevybench
-discipline): `bench/capacity-envelope.sh` is the turnkey runner, and
+gates that run in this tree (the transparency suite, the tiered
+persistence suite, `bench/memgate.sh`, `bench/tiergate.sh`). The
+**measured envelope numbers** — cold-read p99, vlog space
+amplification under churn, the 10× capacity ratio, the
+10M-row fused envelope with hydration p95, hydration
+batching at scale, and mixed-workload isolation —
+are **pending the dedicated bench box**:
+`bench/capacity-envelope.sh` is the turnkey runner, and
 `bench/tiergate.sh` stays red on those lines until it has run. This
 page states targets as targets and will not quote an envelope number
 before the gate records it.
 
 ## See also
 
-- [tables.md](tables.md) — the TABLE.* layer this arc fused with:
-  indexes hot, rows cold, index-only queries touching zero rows.
+- [tables.md](tables.md) — the TABLE.* layer tiering was designed
+  with: indexes hot, rows cold, index-only queries touching zero rows.
 - [persistence.md](persistence.md) — the durability contract that is
   deliberately untouched by tiering.
 - [tuning.md](tuning.md) — memory knobs (`maxmemory` and friends)

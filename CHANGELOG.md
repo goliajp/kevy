@@ -104,12 +104,12 @@ touches the cold tier.
   `kevy-vlog`, the cold-log stone (CRC per record, pin/epoch
   compaction safety, fuzzed).
 - **The new gates**: `tiergate` + `tablegate` + the transparency
-  suite were built red-first, before the feature (the crashgate
-  precedent); memgate gates the cold-key formula at ±20 %. The
+  suite gate every mechanism claim above; memgate gates the cold-key
+  formula at ±20 %. The
   **measured envelope is pending the dedicated bench box**, stated
   plainly: cold-read p99, the ≥10× data:RAM capacity gate at 4 KiB
   values, vlog space amplification, the 10 M-row fused envelope and
-  mixed-workload isolation run on lx64 via
+  mixed-workload isolation run there via
   `bench/capacity-envelope.sh` (which flips the pending tiergate
   lines); the perfgate table_* baselines are recorded there too.
   Until those runs land, the numbers are targets and the gates stay

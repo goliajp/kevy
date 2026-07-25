@@ -319,13 +319,12 @@ foundation crates additionally build `no_std`. See
 same embedded core now runs in the browser as `@goliajp/kevy` —
 see [docs/wasm.md](wasm.md).
 
-## The capacity arc (new in 4.0, all additive)
+## Tiering and the TABLE layer (new in 4.0, all additive)
 
-4.0 also ships the capacity arc — transparent tiering
-([tiering.md](tiering.md)) and the `TABLE.*` layer
-([tables.md](tables.md)). Nothing in it activates on upgrade; this
-section exists so you know what changed underneath you and what did
-not.
+4.0 also ships transparent tiering ([tiering.md](tiering.md)) and
+the `TABLE.*` layer ([tables.md](tables.md)). Nothing in either
+activates on upgrade; this section exists so you know what changed
+underneath you and what did not.
 
 - **Tiering is opt-in — zero action if unused.** No `[tiering]`
   section (and no `with_tier_budget*` call) means today's paths,
