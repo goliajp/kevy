@@ -7,7 +7,10 @@ use crate::KevyError;
 
 use kevy_index::{IndexValue, ValType};
 
-use super::idx::{badargs, decode_cursor, encode_cursor, no_such_index, spec_of, value_repr};
+use super::idx::{badargs, decode_cursor, encode_cursor, no_such_index, value_repr};
+// spec_of's only use here is the KNN handler, which is vector-gated.
+#[cfg(feature = "vector")]
+use super::idx::spec_of;
 use super::util::{arr, bulk, err, kevy_err, nil};
 
 /// One IDX query request; `false` = verb not in this group.
