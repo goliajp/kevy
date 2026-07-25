@@ -38,11 +38,7 @@ impl Store {
     /// [`Store::demote_step`] on the tick). Returns keys demoted.
     #[inline]
     pub fn try_demote_after_write(&mut self) -> usize {
-        match &self.tier {
-            None => 0,
-            Some(t) if self.used_memory <= effective_target(t) => 0,
-            Some(_) => self.demote_batch(),
-        }
+        self.demote_if_over(crate::evict::DEMOTE_VISIT_WINDOW)
     }
 
     /// Tick continuation of [`Store::try_demote_after_write`]: one more
@@ -56,12 +52,17 @@ impl Store {
     /// store is back under the watermark or candidates run dry. Replay /
     /// snapshot-load / reshard call this every K applied frames — those
     /// paths are single-threaded, so draining more than one write-path
-    /// batch per check is safe (there is no reactor to stall). Returns
-    /// total keys demoted.
+    /// batch per check is safe (there is no reactor to stall). The
+    /// sampler runs UNBOUNDED here: a fixed visit window keeps a stale
+    /// start position between calls (the access clock does not advance
+    /// mid-drain), so a window that has gone all-cold would end the
+    /// drain while still over the watermark — ending under the
+    /// watermark is this path's hard contract. Returns total keys
+    /// demoted.
     pub fn demote_to_watermark(&mut self) -> usize {
         let mut total = 0usize;
         loop {
-            let n = self.try_demote_after_write();
+            let n = self.demote_if_over(usize::MAX);
             if n == 0 {
                 return total;
             }
@@ -69,11 +70,21 @@ impl Store {
         }
     }
 
+    /// Shared over-target gate for the two entry points above.
+    #[inline]
+    fn demote_if_over(&mut self, visit_bound: usize) -> usize {
+        match &self.tier {
+            None => 0,
+            Some(t) if self.used_memory <= effective_target(t) => 0,
+            Some(_) => self.demote_batch(visit_bound),
+        }
+    }
+
     /// One budgeted demotion batch: sample → demote, ≤ [`SPILL_BATCH`]
     /// records, stop at the unified target or when sampling runs dry.
     /// The target is re-read per iteration — every demotion grows
     /// `stub_bytes`, which lowers it. Ends with the compaction trigger.
-    fn demote_batch(&mut self) -> usize {
+    fn demote_batch(&mut self, visit_bound: usize) -> usize {
         let policy = self.tier.as_ref().expect("gated by caller").policy;
         let mut demoted = 0usize;
         let mut misses = 0u32;
@@ -87,7 +98,7 @@ impl Store {
                 spillable_class(&e.value)
                     && e.weight() >= MIN_SPILL_BYTES
                     && (cap == 0 || e.weight() <= cap)
-            });
+            }, visit_bound);
             match victim {
                 None => break,
                 Some(k) if self.demote_in_place(&k) => {
