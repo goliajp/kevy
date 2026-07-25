@@ -1600,9 +1600,34 @@ explicit:
 - What you get: predictable serving latency (hydrated page p99 < 1ms,
   write fan-out through index+view hooks p99 < 200µs on one server
   carrying the full stack — the gated lines in
-  [designing-on-kevy](https://kevy.golia.jp/docs/designing-on-kevy/)), and raw Redis-parity
-  throughput far above what a B-tree-on-disk engine serves
+  [designing-on-kevy](https://kevy.golia.jp/docs/designing-on-kevy/)), and write absorption an
+  RDS cannot match at the same durability setting
   (see [Sizing](#sizing-and-operational-deltas)).
+
+### Measured against PostgreSQL 18
+
+Not asserted — [run](https://github.com/goliajp/kevy/blob/main/bench/pgcompare.sh) and
+[recorded](https://github.com/goliajp/kevy/blob/main/bench/PGCOMPARE-2026-07-26.md). 2M rows / 843 MB of CSV,
+one harness driving both, PG stock:
+
+| | kevy (`everysec`) | PG 18 stock |
+|---|---|---|
+| single-row update p99 | **62 µs** | 1689 µs |
+| single-row update p99, *matched* durability (fsync per write) | 3097 µs | **1689 µs** |
+| secondary-index lookup p99 | 212 µs | **126 µs** |
+| list page p99 (filter + range + order + limit) | 248 µs | **131 µs** |
+| memory per MB of CSV | 6153 KB | **625 KB** |
+
+Read that as three separate findings, because they point different
+ways. kevy absorbs writes **27× faster** if one second of loss is
+acceptable — that is the pressure that puts a cache in front of an RDS
+in the first place. At matched per-write durability **PostgreSQL is
+1.8× faster**: it group-commits its WAL, kevy fsyncs per command. And
+on the read shapes this page is about, **PostgreSQL stock is the faster
+engine** — 1.5–1.8× — while using about a tenth of the memory. Rows
+held in-process cost RAM; a planner over a B-tree is good at its job.
+The comparison that would favour kevy — a dataset far larger than RAM —
+is not measured yet.
 
 The boundary is a charter, not a backlog: no query language, no
 planner, no joins, no server-side validation DSL, no triggers
