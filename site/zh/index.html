@@ -57,7 +57,7 @@
     <h2>一个引擎。AI 系统需要的整个栈。</h2>
     <p class="sec-lede">下面每一条命令，在这一页发布之前，都在 CI 里对着一台真实的服务器跑过。逐个点开——用 kevy 就是这个样子。</p>
   </div>
-  <div class="tabs"><div class="tab-heads"><button class="tab on" type="button" data-tab="0">向量</button><button class="tab" type="button" data-tab="1">全文</button><button class="tab" type="button" data-tab="2">索引</button><button class="tab" type="button" data-tab="3">视图</button><button class="tab" type="button" data-tab="4">变更流</button><button class="tab" type="button" data-tab="5">哪里都能放</button></div><div class="tab-panel on" data-panel="0"><pre><code># an HNSW index over your keys — declared once,
+  <div class="tabs"><div class="tab-heads"><button class="tab on" type="button" data-tab="0">向量</button><button class="tab" type="button" data-tab="1">全文</button><button class="tab" type="button" data-tab="2">索引</button><button class="tab" type="button" data-tab="3">视图</button><button class="tab" type="button" data-tab="4">表</button><button class="tab" type="button" data-tab="5">大过 RAM</button><button class="tab" type="button" data-tab="6">变更流</button><button class="tab" type="button" data-tab="7">哪里都能放</button></div><div class="tab-panel on" data-panel="0"><pre><code># an HNSW index over your keys — declared once,
 # kept current by the write path
 IDX.CREATE idx:sem ON PREFIX doc: FIELD vec TYPE vector KIND ann DIM 768 DISTANCE cosine M 16 EF 200
 
@@ -91,12 +91,26 @@ VIEW.QUERY v:open881
 -&gt; 1) &quot;0&quot;
    2) 1) &quot;order:1001&quot;  2) &quot;881&quot;
 
-# reads never recompute it; writes keep it fresh</code></pre><p class="tab-note">大多数应用向 ORM 真正索要的，就是这个。</p><a class="tab-more" href="../zh/use/app-store/">物化视图</a></div><div class="tab-panel" data-panel="4"><pre><code># tail every write from another process — or an agent.
+# reads never recompute it; writes keep it fresh</code></pre><p class="tab-note">大多数应用向 ORM 真正索要的，就是这个。</p><a class="tab-more" href="../zh/use/app-store/">物化视图</a></div><div class="tab-panel" data-panel="4"><pre><code># a table is a declaration — compiled to named indexes, once
+TABLE.DECLARE user PREFIX u: PK id COLUMN id str COLUMN name str COLUMN age i64 COLUMN dept str INDEX age range VALUES dept name ORDERPATH by_dept_age ON dept THEN age DESC
+
+HSET u:1 id 1 name ada age 34 dept eng
+
+# the ORDER BY dept, age DESC walk — one composite index, no planner
+IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name age</code></pre><p class="tab-note">类型化列、二级索引、复合 ORDER BY 路径——连你的 PG/MySQL schema 文件也能编译（kevy-cli sql compile）。没有运行期 SQL，没有 join：那些留在 Postgres。</p><a class="tab-more" href="../zh/use/app-store/">单表服务型读</a></div><div class="tab-panel" data-panel="5"><pre><code># kevy.toml — a RAM budget for the whole store
+[tiering]
+budget = &quot;70%&quot;               # or &quot;4gb&quot;, or &quot;auto&quot;
+
+# past the budget, the coldest values spill to a disk log
+# and page back on access. a cold key is an ordinary key:
+GET archive:2019:q3          # pays one disk read, same reply
+TTL archive:2019:q3          # metadata answers from RAM
+SCAN 0 MATCH archive:*       # sees cold keys — one key table</code></pre><p class="tab-note">RAM 决定键的上限，磁盘决定数据的上限；AOF 持久化契约不动。v1 下沉字符串和 hash——list、set、stream 留在热层。</p><a class="tab-more" href="../zh/docs/tiering/">分层存储怎么工作</a></div><div class="tab-panel" data-panel="6"><pre><code># tail every write from another process — or an agent.
 # [feed] enabled = true in kevy.toml
 FEED.SHARDS                 -&gt; (integer) 16
 FEED.TAIL 0                 -&gt; 1) (integer) 1     # generation
                                2) (integer) 1     # offset
-FEED.READ 0 1 0 COUNT 2     -&gt; the writes themselves, replayable</code></pre><p class="tab-note">偏移量可以续上。不用轮询，也不会漏。</p><a class="tab-more" href="../zh/use/ai/">变更流</a></div><div class="tab-panel" data-panel="5"><pre><code># a 16-core server
+FEED.READ 0 1 0 COUNT 2     -&gt; the writes themselves, replayable</code></pre><p class="tab-note">偏移量可以续上。不用轮询，也不会漏。</p><a class="tab-more" href="../zh/use/ai/">变更流</a></div><div class="tab-panel" data-panel="7"><pre><code># a 16-core server
 cargo install kevy &amp;&amp; kevy --port 6379
 
 # inside your binary — no socket, no process
@@ -113,7 +127,7 @@ let mut store = Store::new_in(&amp;mut arena);</code></pre><p class="tab-note">�
   <div class="sec-h">
     <p class="eyebrow">为什么可以直接替换 Redis</p>
     <h2>同样的协议。更高的吞吐。</h2>
-    <p class="sec-lede">RESP2 和 RESP3，184 条命令——redis-cli 和你的客户端库不用改就能连。一台机器，16 核，loopback，五次取中位数。</p>
+    <p class="sec-lede">RESP2 和 RESP3，188 条命令——redis-cli 和你的客户端库不用改就能连。一台机器，16 核，loopback，五次取中位数。</p>
   </div>
   <div class="bars"><div class="bar-row"><div class="bar-k">GET</div><div class="bar-track"><div class="bar us" style="width:100.0%"></div><div class="bar them" style="width:71.8%"></div></div><div class="bar-n">1.39×</div></div><div class="bar-row"><div class="bar-k">SET</div><div class="bar-track"><div class="bar us" style="width:88.7%"></div><div class="bar them" style="width:33.0%"></div></div><div class="bar-n">2.69×</div></div><div class="bar-row"><div class="bar-k">INCR</div><div class="bar-track"><div class="bar us" style="width:78.6%"></div><div class="bar them" style="width:44.3%"></div></div><div class="bar-n">1.77×</div></div><div class="bar-row"><div class="bar-k">SADD</div><div class="bar-track"><div class="bar us" style="width:71.8%"></div><div class="bar them" style="width:47.3%"></div></div><div class="bar-n">1.52×</div></div><div class="bar-row"><div class="bar-k">HSET</div><div class="bar-track"><div class="bar us" style="width:55.0%"></div><div class="bar them" style="width:38.7%"></div></div><div class="bar-n">1.42×</div></div><div class="bar-row"><div class="bar-k">LPUSH</div><div class="bar-track"><div class="bar us narrow" style="width:41.2%"></div><div class="bar them" style="width:36.7%"></div></div><div class="bar-n narrow">1.12×</div></div><div class="bar-row"><div class="bar-k">ZADD</div><div class="bar-track"><div class="bar us narrow" style="width:39.1%"></div><div class="bar them" style="width:35.6%"></div></div><div class="bar-n narrow">1.10×</div></div></div>
   <div class="bars-legend">

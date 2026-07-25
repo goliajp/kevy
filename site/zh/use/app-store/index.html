@@ -46,7 +46,7 @@
     <p class="lede">“这个客户名下所有还没关闭的订单。”“这个购物车里有几件东西。”这类读，一个应用一秒钟要做上千次，而在关系型数据库里，每一次都是一条背后跟着查询计划器的查询。<b>kevy 可以直接把答案备好。</b></p>
     
   </div></section>
-<section class="band prose"><h2>为什么合适</h2><div class="pcols"><p>键值存储被挡在应用数据之外，通常只因为一句反对：<i>可是我需要按 key 以外的东西去查</i>。这句反对是对的，而二级索引正是为它准备的。</p><p><b>索引是声明出来的，不是建出来的。</b>你写清楚 key 的前缀和字段，写路径会把它维持在最新。一个带过滤的列表于是重新变回一次查表——没有计划器，没有扫描，没有查询。</p><p><b>视图更进一步</b>，在写入时就把聚合维持在最新，于是一个计数、一个合计是读出来的，不是算出来的。这正是大多数应用真正在向 ORM 索要的东西，也正是它们的数据库忙成那样的原因。</p></div></section>
+<section class="band prose"><h2>为什么合适</h2><div class="pcols"><p>键值存储被挡在应用数据之外，通常只因为一句反对：<i>可是我需要按 key 以外的东西去查</i>。这句反对是对的，而二级索引正是为它准备的。</p><p><b>索引是声明出来的，不是建出来的。</b>你写清楚 key 的前缀和字段，写路径会把它维持在最新。一个带过滤的列表于是重新变回一次查表——没有计划器，没有扫描，没有查询。</p><p><b>视图更进一步</b>，在写入时就把聚合维持在最新，于是一个计数、一个合计是读出来的，不是算出来的。这正是大多数应用真正在向 ORM 索要的东西，也正是它们的数据库忙成那样的原因。</p><p><b>而且整张表可以一次声明。</b><code>TABLE.DECLARE</code> 接受类型化列、二级索引和复合 <code>ORDER BY</code> 路径，在声明期把它们编译成具名索引——<code>kevy-sql</code> 用你手上现成的 PG/MySQL schema 文件做同一件事。引擎仍然不做任何规划、不强加任何 schema；join 和运行期 SQL 依旧按名拒绝。</p></div></section>
 <section class="band">
   <div class="sec-h"><h2>按字段查，而不是按 key 查</h2><p class="sec-lede">“客户 881 的所有订单”始终是一次查表：每个要查的字段声明一个索引，照常写入，按值来读。</p></div>
   <ol class="steps recipe"><li><h3>你的数据，照你本来的方式写</h3><pre><code>HSET order:1001 customer 881 status open  total 4400
@@ -68,7 +68,23 @@ IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range</code>
    2) 1) &quot;order:1001&quot;  2) &quot;881&quot;</code></pre></li></ol>
   <div class="call loss r-cost"><span class="h">成本与限制</span><p>视图是<b>写路径上一直要干的活</b>：每一次对匹配 key 的写都会更新它，不管今天有没有人来读。只为应用真正在对外服务的那些读声明视图，不再服务的就删掉。视图要组合的那些索引，必须先存在。</p></div>
 </section>
-<section class="band"><div class="sec-h"><h2>接下来</h2></div><div class="cards"><a class="card" href="../../../zh/docs/designing-on-kevy/">
+<section class="band">
+  <div class="sec-h"><h2>整张表，一次声明</h2><p class="sec-lede">一张关系型表的读路径——索引化的 WHERE、余下的过滤、ORDER BY、翻页、COUNT——由一条声明编译到具名索引上。或者直接由你现成的 schema 文件编译。</p></div>
+  <ol class="steps recipe"><li><h3>列、索引、排序路径，一条声明写完</h3><p>行仍是前缀下的普通 hash——缺列就是 NULL；kevy-cli sql compile schema.sql 会从 CREATE TABLE / CREATE INDEX 生成这一行。</p><pre><code>TABLE.DECLARE orders PREFIX order: PK id COLUMN id str COLUMN customer i64 COLUMN status str COLUMN total f64 INDEX status range VALUES total customer ORDERPATH by_customer ON customer THEN total DESC
+-&gt; OK</code></pre></li><li><h3>在存储的列上过滤和计数——一行都不用读</h3><pre><code>IDX.QUERY orders.status EQ open FILTER total RANGE 2000 inf LIMIT 20
+-&gt; 1) &quot;0&quot;
+   2) 1) &quot;order:1001&quot;  2) &quot;open&quot;
+
+IDX.COUNT orders.status EQ open
+-&gt; (integer) 2</code></pre></li><li><h3>ORDER BY customer, total DESC 的那次遍历</h3><p>一个复合索引，用关系型复合索引的方式回答它——每个客户的订单，从大到小，不需要重排。</p><pre><code>IDX.QUERY orders.by_customer WHERE customer EQ 881 LIMIT 20 FIELDS status total</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">成本与限制</span><p><b>没有运行期 SQL，也没有 join。</b>服务端把 <code>SELECT</code> 当作未知命令拒绝；<code>kevy-cli sql compile</code> 在构建期把 PG/MySQL schema 文件变成上面这些声明，并按名拒绝 JOIN、子查询和 GROUP BY，同时指向替代它们的配方。唯一性是校验而非强制，约束是配方而非引擎检查。开着<a href="../../../zh/docs/tiering/">分层存储</a>时，index-only 查询即使全部行都是冷的也只读 RAM——只有最后的 <code>FIELDS</code> 页会读冷行，每行一次。</p></div>
+</section>
+<section class="band"><div class="sec-h"><h2>接下来</h2></div><div class="cards"><a class="card" href="../../../zh/docs/tables/">
+      <span class="card-k">指南</span>
+      <h3>表</h3>
+      <p>类型化列和索引声明一次，然后像查表一样查它。</p>
+      <span class="card-go">去读</span>
+    </a><a class="card" href="../../../zh/docs/designing-on-kevy/">
       <span class="card-k">指南</span>
       <h3>在 kevy 上做设计</h3>
       <p>习惯了用表思考的人，怎么改成用 key 思考。</p>

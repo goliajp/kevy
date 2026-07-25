@@ -6,7 +6,7 @@ The markdown files stay the canonical source: they are what GitHub shows, what
 without asking anyone to maintain a second copy.
 
 The grouping below is the one thing written by hand, because it is the one thing
-a machine cannot infer: which of these twenty-four documents a person needs
+a machine cannot infer: which of these twenty-six documents a person needs
 first, and which they will only ever reach through a search box.
 
 Run: python3 tools/gen_docs_site.py [--check]
@@ -28,17 +28,25 @@ DIRS = {"en": "", "zh": "zh/", "ja": "ja/"}
 HTML_LANG = {"en": "en", "zh": "zh-Hans", "ja": "ja"}
 
 # Not rendered: verb-reference is superseded by the command pages (same table,
-# better shape), and UPGRADING belongs next to the code.
-EXCLUDE = {"verb-reference"}
+# better shape), and UPGRADING belongs next to the code. The dated REPORT /
+# DEFECT / SUPPORT-LINE files are engineering correspondence — they live in the
+# repository for the people who go looking, not on the site.
+EXCLUDE = {
+    "verb-reference",
+    "DEFECT-REPORT-2026-07-20-ATOMIC-ERROR-PATH-RESPONSE",
+    "REPORT-FROM-GOLIAJP-2026-07-20-EMBEDDED-AS-PRIMARY-STORE",
+    "REPORT-RESPONSE-2026-07-20-EMBEDDED-AS-PRIMARY-STORE",
+    "SUPPORT-LINE-3X-VS-4X-2026-07-20",
+}
 
 # The IA. Ordered by what a reader needs first, not alphabetically.
 SECTIONS = [
     ("start", {"en": "Getting started", "zh": "上手", "ja": "はじめに"},
      ["designing-on-kevy", "cookbook", "persistence", "tuning"]),
     ("deploy", {"en": "Running it", "zh": "运行", "ja": "運用"},
-     ["replication", "availability", "cluster", "accept-shards", "uds", "async"]),
+     ["replication", "availability", "cluster", "tiering", "accept-shards", "uds", "async"]),
     ("data", {"en": "Working with data", "zh": "数据", "ja": "データ"},
-     ["indexes", "vector-search", "text-search", "views", "cdc", "pubsub", "lua"]),
+     ["indexes", "tables", "vector-search", "text-search", "views", "cdc", "pubsub", "lua"]),
     ("embed", {"en": "Embedding it", "zh": "嵌入", "ja": "組み込み"},
      ["wasm", "embedded-listener", "iot"]),
     ("ref", {"en": "Reference", "zh": "参考", "ja": "リファレンス"},
@@ -56,10 +64,12 @@ BLURB = {
         "replication": "One primary, N replicas, and the offset that tells you the truth.",
         "availability": "Failover, epochs, and the writes we will not promise to keep.",
         "cluster": "Why there is no cluster, and what to do instead.",
+        "tiering": "A RAM budget for a store bigger than RAM — cold values spill to disk, every command unchanged.",
         "accept-shards": "The flag that bought 10.6% by giving fewer cores the listener.",
         "uds": "Unix sockets: no TCP, no loopback, no kernel copy.",
         "async": "Pipelining, and why the engine has no async runtime.",
         "indexes": "Secondary indexes: how they build, and what they cost.",
+        "tables": "Declare typed columns and indexes once; query them like a table, at kevy speed.",
         "vector-search": "KNN over your keyspace. No embedding model included.",
         "text-search": "BM25 full-text, and where it stops.",
         "views": "Materialised views, kept fresh by the write path.",
@@ -82,10 +92,12 @@ BLURB = {
         "replication": "一主 N 从，还有那个不会骗人的 offset。",
         "availability": "failover、epoch，以及我们不承诺保住的那些写。",
         "cluster": "为什么没有 cluster，以及该怎么办。",
+        "tiering": "给 store 一个 RAM 预算，数据大过 RAM——冷值下沉到磁盘，每条命令不变。",
         "accept-shards": "一个开关，把 listener 交给更少的核，换来 10.6%。",
         "uds": "Unix socket：没有 TCP、没有回环、没有内核拷贝。",
         "async": "pipelining，以及这个引擎为什么没有 async runtime。",
         "indexes": "二级索引：怎么建起来的，代价是多少。",
+        "tables": "类型化列和索引声明一次，然后像查表一样查——kevy 的速度。",
         "vector-search": "在你的键空间上做 KNN。不含 embedding 模型。",
         "text-search": "BM25 全文检索，以及它到哪儿为止。",
         "views": "物化视图，由写路径顺手保持新鲜。",
@@ -108,10 +120,12 @@ BLURB = {
         "replication": "一つの primary と N 個の replica、そして嘘をつかない offset。",
         "availability": "failover、epoch、そして我々が守ると約束しない書き込み。",
         "cluster": "cluster が無い理由と、代わりに何をするか。",
+        "tiering": "RAM より大きなストアに RAM 予算を——コールドな値はディスクへ、コマンドはそのまま。",
         "accept-shards": "listener を持つ core を減らして 10.6% を買ったフラグ。",
         "uds": "Unix ドメインソケット —— TCP も loopback も kernel コピーも無い。",
         "async": "pipelining と、このエンジンに async runtime が無い理由。",
         "indexes": "セカンダリインデックス —— どう構築され、何を払うのか。",
+        "tables": "型付きカラムとインデックスを一度宣言すれば、テーブルのように引ける —— kevy の速度で。",
         "vector-search": "キー空間の上での KNN。embedding モデルは含まない。",
         "text-search": "BM25 全文検索と、その限界。",
         "views": "マテリアライズドビュー。書き込みパスが鮮度を保つ。",
@@ -266,7 +280,7 @@ def build(lang, present, titles, have, search_out):
                 for s in live
             )
             out.append(f'<p class="side-h">{names[lang]}</p><ul>{items}</ul>')
-        cmds = {"en": "All 184 commands", "zh": "全部 184 个命令", "ja": "184 コマンド全て"}[lang]
+        cmds = {"en": "All 188 commands", "zh": "全部 188 个命令", "ja": "188 コマンド全て"}[lang]
         out.append(f'<p class="side-h">&nbsp;</p><ul><li><a href="{up}{d}docs/commands/">{cmds}</a></li></ul>')
         return "".join(out)
 
@@ -275,9 +289,9 @@ def build(lang, present, titles, have, search_out):
     up = "../" * depth
     hub_h1 = {"en": "Documentation", "zh": "文档", "ja": "ドキュメント"}[lang]
     hub_lede = {
-        "en": "Twenty-four documents, ordered by what you need first. The command reference is generated from the engine's own verb table and lives <a href=\"commands/\">here</a>.",
-        "zh": "二十四篇文档，按你先需要什么排序。命令参考是从引擎自己的动词表生成的，在<a href=\"commands/\">这里</a>。",
-        "ja": "二十四本のドキュメントを、先に必要になる順に並べてある。コマンドリファレンスはエンジン自身の動詞テーブルから生成しており、<a href=\"commands/\">こちら</a>にある。",
+        "en": "Twenty-six documents, ordered by what you need first. The command reference is generated from the engine's own verb table and lives <a href=\"commands/\">here</a>.",
+        "zh": "二十六篇文档，按你先需要什么排序。命令参考是从引擎自己的动词表生成的，在<a href=\"commands/\">这里</a>。",
+        "ja": "二十六本のドキュメントを、先に必要になる順に並べてある。コマンドリファレンスはエンジン自身の動詞テーブルから生成しており、<a href=\"commands/\">こちら</a>にある。",
     }[lang]
 
     secs = []

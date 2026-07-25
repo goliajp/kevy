@@ -37,7 +37,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - [WASM / browser](https://kevy.golia.jp/docs/wasm/) · [Electron apps](https://kevy.golia.jp/docs/electron/) · [Tauri apps](https://kevy.golia.jp/docs/tauri/) · [IoT / embedded tiers](https://kevy.golia.jp/docs/iot/)
 - [Error contract](https://kevy.golia.jp/docs/error-replies/) · [Tuning](https://kevy.golia.jp/docs/tuning/)
 
-## Verbs (184 total)
+## Verbs (188 total)
 
 ### scan
 
@@ -593,7 +593,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `IDX.EXPLAIN name RANGE min max|EQ value|MATCH text|KNN vector|GROUPS [args ...]` [readonly,extension] — The IDX.QUERY parse without the execution: kind, state, est_rows, and the plan line.
   - complexity: The plan is parse-only, but est_rows costs the same live stats walk as IDX.LIST
   - compat: kevy-only: nearest is FT.EXPLAIN, which returns a parsed query tree; ours returns kind, build state, estimated rows and a one-line plan
-- `IDX.QUERY name RANGE min max [LIMIT n] [CURSOR c] [FIELDS field ...] | name EQ value [LIMIT n] [CURSOR c] [FIELDS field ...] | name MATCH text [LIMIT n] [FIELDS field ...] | name KNN vector [LIMIT k] [EF ef] [FIELDS field ...] | name GROUP group | name GROUPS [BY count|sum|min|max] [LIMIT n] | HYBRID text_idx MATCH text ann_idx KNN vector [LIMIT n] [RRFK k] [EF ef] [FIELDS field ...] | COMPOSE AND|OR nameA RANGE min max|EQ value nameB RANGE min max|EQ value [LIMIT n] [CURSOR c] [FIELDS field ...]` [readonly,extension] — Query an index: range/equality, text MATCH, vector KNN, aggregation groups, or a two-index COMPOSE.
+- `IDX.QUERY name RANGE min max|EQ value [LIMIT n] [CURSOR c] [FILTER field RANGE min max|EQ value ...] [SORT field ASC|DESC] [DISTINCT field] [FACET field ...] [OFFSET n] [FIELDS field ...] | name MATCH text [LIMIT n] [FIELDS field ...] | name KNN vector [LIMIT k] [EF ef] [FIELDS field ...] | name GROUP group | name GROUPS [BY count|sum|min|max] [LIMIT n] | HYBRID text_idx MATCH text ann_idx KNN vector [LIMIT n] [RRFK k] [EF ef] [FIELDS field ...] | COMPOSE AND|OR nameA RANGE min max|EQ value nameB RANGE min max|EQ value [LIMIT n] [CURSOR c] [FIELDS field ...]` [readonly,extension] — Query an index: range/equality, text MATCH, vector KNN, aggregation groups, or a two-index COMPOSE.
   - complexity: Depends on the index kind. range: O(log N + limit). unique: O(log N + hits). full-text: O(sum of the posting lists), MaxScore-pruned. vector ANN: O(dim * (M log N + ef * M)) distance evaluations (HNSW). agg GROUPS: a bounded top-K with 1 to 3 fan-out rounds. HYBRID: both sub-queries at 4x depth, fused by RRF at the origin. COMPOSE: NOT limit-bounded — both leaves are materialised in full, because the result is key-ordered while a segment is value-ordered
   - compat: kevy-only: nearest is RediSearch FT.SEARCH — genuinely comparable on two axes (our text index is BM25 over inverted segments, our vector index is HNSW, and RediSearch offers both). Differences: no separate module or index server; our BM25 statistics are per-shard, not global; and our query surface is a fixed grammar, not a DSL — no field boosting, no phrase or proximity search, no stemming, no aggregation pipeline
 - `IDX.REBUILD name` [write,extension] — Rebuild an ANN index (tombstone compaction).
@@ -602,6 +602,21 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `IDX.VERIFY name` [readonly,extension] — Verify an index: re-read every held entry against its row and report entries/bytes/coerce_failures/duplicates/drift/checked.
   - complexity: O(N) per shard — every held entry is re-read against its row and re-coerced, which is the point: it makes index drift falsifiable rather than merely asserted
   - compat: kevy-only: no Redis analogue — RediSearch's index is asynchronously maintained and offers no consistency-verify verb
+
+### table
+
+- `TABLE.DECLARE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX col range|unique [VALUES col ...]] [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...]` [write,extension] — Declare a relational table that compiles at declare time into named indexes (catalog mutation, sidecar-persisted).
+  - complexity: O(declaration size) at the call; each compiled index then backfills like IDX.CREATE (2048 rows per tick per shard). The engine gains no query planner: queries name the compiled paths (`<table>.<col>`, `<table>.<orderpath>`) explicitly
+  - compat: kevy-only: nearest is CREATE TABLE in an RDBMS — but this is a declaration compiler, not a schema enforcer: a row with a missing column is a row with an absent field (NULL semantics), never an error, and no SQL executes at query time
+- `TABLE.DROP name` [write,extension] — Drop a declared table and its compiled indexes (catalog mutation, sidecar-persisted).
+  - complexity: O(catalog size + compiled indexes)
+  - compat: kevy-only
+- `TABLE.LIST` [readonly,extension] — List declared tables with their prefix, PK and declaration counts.
+  - complexity: O(tables) at the origin — the catalog is process-global
+  - compat: kevy-only
+- `TABLE.VERIFY name` [readonly,extension] — Verify a table: each compiled index's full drift recheck plus a bounded column-type spot check over sampled rows.
+  - complexity: O(sum of compiled index entries) per shard for the drift recheck (the IDX.VERIFY discipline, composites re-derive their byte encoding) plus a bounded 64-row-per-shard column spot check through the no-promote peek
+  - compat: kevy-only: nearest is a relational fsck; verify-not-enforce is the declarative fence
 
 ### view
 
@@ -875,6 +890,14 @@ is **reads inside the atomic block**: the app evaluates the
 invariant, the engine guarantees the decision and the write commit
 together.
 
+Concretely: returning `Err` from the closure rolls back every write it
+made — in memory and in the AOF — so a rejected transaction leaves no
+trace, and you do not have to arrange your closure so that validation
+precedes every write. (That guarantee is real as of 4.0; earlier
+versions left a rejected closure's writes live in memory while
+discarding their AOF frames, so a restart disagreed with the running
+process.)
+
 ```rust
 // embedded — debit that must not overdraw, plus an audit row:
 store.atomic(b"acct:7", |ctx| {
@@ -976,7 +999,11 @@ the moment a path matters, promote it to a field.
 **SQL equivalent:** `FOREIGN KEY … ON DELETE CASCADE` —
 [matrix: constraints and triggers](https://kevy.golia.jp/docs/rds-workloads/#constraints-and-triggers).
 
-Cascades are app patterns, never engine magic:
+Cascades are app patterns, never engine magic. If you are writing more
+than one of these, read [§21](#21-derived-state-as-a-pure-function-of-the-row)
+first — cascade, uniqueness and drift detection are one pattern, and
+this section is a special case of it.
+
 
 - Synchronous, small blast radius: delete inside one atomic block
   (`ctx.del(row)`, `ctx.srem(parent_link, id)`).
@@ -1259,6 +1286,258 @@ bounded on the node, the aggregate rows stay tiny, and the feed
 cursor survives reboots — the whole edge story with zero moving
 parts beyond kevy itself.
 
+## 21. Derived state as a pure function of the row
+
+**SQL equivalent:** the whole trigger layer at once — `ON DELETE
+CASCADE`, `UNIQUE` constraints, and the reconciliation job you write
+after you stop trusting them —
+[matrix: constraints and triggers](https://kevy.golia.jp/docs/rds-workloads/#constraints-and-triggers).
+
+This is the pattern the recipes above keep circling: §2's link keys,
+§5's invariants, §10's cascades and §12's audit rows are all the same
+idea applied four times. Stated once, it resolves cascades, uniqueness
+and drift detection together. It comes from a production migration that
+took a day to arrive at it, which is a day worth saving.
+
+**The idea:** write one pure function from a row to every key derived
+from it. Not a procedure that updates keys — a function that *returns*
+what should exist.
+
+```rust
+// Everything user:42 implies, computed from the row alone.
+fn derived(id: &[u8], row: &Row) -> Vec<Vec<u8>> {
+    vec![
+        key(b"email:", &row.email),          // uniqueness claim
+        key(b"dept:", &row.dept, b":users"), // membership
+    ]
+}
+```
+
+Every operation is then a diff, and each falls out rather than being
+designed:
+
+| Operation | What you do | What you get for free |
+|---|---|---|
+| **Insert** | add `derived(new)` | claims and memberships appear together |
+| **Update** | add `derived(new) - derived(old)`, remove `derived(old) - derived(new)` | a renamed email **releases its old claim** — the bug everyone writes by hand |
+| **Delete** | remove `derived(old)` | the cascade is not a separate code path |
+| **Verify** | recompute `derived` for every row, diff against what exists | a drift detector you did not have to design |
+
+The update row is the one that pays for the pattern. Hand-written
+cascade code almost always adds the new claim and forgets to release the
+old one, because release is the case nobody demonstrates in a ticket.
+
+```rust
+store.atomic_all_shards(|ctx| {
+    let old = read_row(ctx, id)?;
+    let (want, had) = (derived(id, &new), derived(id, &old));
+
+    for k in want.iter().filter(|k| !had.contains(k)) {
+        if ctx.exists(&[k]) > 0 { return Err(Taken); }  // uniqueness
+        ctx.set(k, id);
+    }
+    for k in had.iter().filter(|k| !want.contains(k)) {
+        ctx.del(&[k]);                                  // release
+    }
+    write_row(ctx, id, &new)
+})
+```
+
+Returning `Err` rolls the whole thing back (§5), so a rejected write
+leaves neither the row nor a half-applied claim set.
+
+**Claims or an index?** A uniqueness claim is a second source of truth
+that can drift from the rows; a [secondary index](https://kevy.golia.jp/docs/indexes/) is
+derived by construction and cannot. Inside `atomic_all_shards` you can
+query one directly:
+
+```rust
+if ctx.idx_count(b"email_idx", &want, &want)? > 0 { return Err(Taken); }
+```
+
+Two limits, both deliberate:
+
+- **Only on `atomic_all_shards`.** An index entry lives on the shard of
+  the key it indexes, so "does any row have this email" is a question
+  about every shard. Single-shard `atomic()` holds one lock and could
+  answer only for its own slice — a uniqueness check that consults 1/N
+  of the keyspace would report "unique" nearly always, so it is not
+  offered rather than offered with a footnote.
+- **Index reads do not see the transaction's own writes.** Maintenance
+  runs at commit. A closure inserting two rows must compare them to each
+  other itself.
+
+**Verification.** Because `derived` is a function, the checker *is* the
+function — pass the same one to `reconcile`:
+
+```rust
+let report = store.snapshot().reconcile(
+    b"user:",                    // the rows
+    &[b"email:", b"dept:"],      // where derived keys live
+    |key, row| derived(key, row),
+);
+if !report.is_clean() {
+    warn!("{} missing, {} orphaned", report.missing_count, report.orphaned_count);
+}
+```
+
+It diffs **both** directions, which is the part worth not writing
+yourself. A missing key is lost derived state; an *orphan* — a claim
+whose row is gone — is what a half-applied update leaves behind, and it
+is the failure that silently blocks a later insert. A checker that only
+looks for absences reports "clean" during exactly that failure.
+
+It runs against a snapshot (`store.snapshot()`), frozen under every
+shard lock, so it does not mistake a concurrent write for drift. That
+holds only if the write itself was atomic: a row and its claims must go
+in one `atomic_all_shards` block, or there is a real half-applied state
+to find. Reconciliation and atomic writes are the same guarantee seen
+from two ends.
+
+Run it at boot, or on a schedule, or never once you trust the writes —
+but run it, because it is the only thing that can tell you the invariant
+you believe in is the invariant you have.
+
+## 22. Porting a PG/MySQL schema
+
+**SQL equivalent:** the schema file itself — `CREATE TABLE`,
+`CREATE INDEX`, `CREATE VIEW` — [matrix: secondary index
+DDL](https://kevy.golia.jp/docs/rds-workloads/#secondary-index-ddl).
+
+Everything recipes 1–8 do by hand, compiled from the SQL you already
+have. `kevy-sql` (and its `kevy-cli sql` face) is a **declaration-time
+compiler**: it reads the schema ONCE, like a migration tool, and emits
+explicit `TABLE.DECLARE` / `VIEW.CREATE` commands plus *query cards* —
+ready-made `IDX.QUERY` templates with `$N` slots. Nothing runs
+per-query inside the server; ad-hoc runtime SQL stays refused by the
+engine itself (Law 3).
+
+The schema — [docs/examples/shop.sql](https://github.com/goliajp/kevy/blob/main/docs/examples/shop.sql), a real
+users/orders/order_items cut-down:
+
+```sql
+CREATE TABLE users (
+  id     bigserial PRIMARY KEY,
+  email  text,
+  name   text,
+  plan   text
+);
+CREATE UNIQUE INDEX ON users (email);
+
+CREATE TABLE orders (
+  id          bigserial PRIMARY KEY,
+  user_id     bigint,
+  status      text,
+  total       numeric(10,2),
+  created_at  bigint       -- epoch seconds, app-encoded
+);
+-- INCLUDE = PG covering columns -> kevy stored VALUES (residual FILTER/SORT).
+CREATE INDEX ON orders (status) INCLUDE (total, created_at);
+-- Multi-column -> a composite ORDERPATH (the (user_id, created_at DESC) walk).
+CREATE INDEX ON orders (user_id, created_at DESC);
+
+CREATE TABLE order_items (
+  id        bigserial PRIMARY KEY,
+  order_id  bigint,
+  sku       text,
+  qty       int
+);
+CREATE INDEX ON order_items (order_id);
+
+CREATE VIEW paid_orders AS
+  SELECT * FROM orders WHERE status = 'paid';
+
+CREATE VIEW recent_orders_by_user AS
+  SELECT id, status, total, created_at FROM orders
+  WHERE user_id = $1
+  ORDER BY created_at DESC
+  LIMIT 20;
+```
+
+Compile it, then apply the declarations to a server:
+
+```console
+kevy-cli sql compile docs/examples/shop.sql
+kevy-cli sql compile docs/examples/shop.sql --apply --url 127.0.0.1:6004
+```
+
+The compiled script (verbatim). Each table folds its indexes into one
+`TABLE.DECLARE`; the constant view becomes an engine view; the
+parameterized view becomes a query card; every coarse type mapping is
+called out honestly in the notes (kevy columns are `i64|f64|str` —
+timestamps are app-encoded, `serial` does not allocate ids for you):
+
+```text
+TABLE.DECLARE users PREFIX users: PK id COLUMN id i64 COLUMN email str COLUMN name str COLUMN plan str INDEX email unique
+TABLE.DECLARE orders PREFIX orders: PK id COLUMN id i64 COLUMN user_id i64 COLUMN status str COLUMN total f64 COLUMN created_at i64 INDEX status range VALUES total created_at ORDERPATH user_id_created_at ON user_id THEN created_at DESC
+TABLE.DECLARE order_items PREFIX order_items: PK id COLUMN id i64 COLUMN order_id i64 COLUMN sku str COLUMN qty i64 INDEX order_id range
+VIEW.CREATE paid_orders QUERY orders.status EQ paid ORDER BY orders.status
+
+# ---- query card: recent_orders_by_user ----
+# runtime template — substitute the $N slots and send as-is:
+#   $1 = user_id (i64)
+#   IDX.QUERY orders.user_id_created_at WHERE user_id EQ $1 LIMIT 20 FIELDS id status total created_at
+
+# notes:
+#   - users.id: bigserial → i64, but ids do NOT auto-increment — allocate them app-side (INCR block, cookbook §3)
+#   - orders.total: numeric → f64 — fixed-point precision becomes binary float; keep money as integer cents if exactness matters
+#   - view paid_orders: read with VIEW.QUERY paid_orders, then hydrate rows with HMGET <key> id user_id status total created_at
+```
+
+Rows are ordinary hashes under the table prefix (recipe 1), and the
+compiled paths serve immediately — the card runs with a real argument
+in the `$1` slot:
+
+```console
+kevy-cli -p 6004 HSET users:1 id 1 email ada@example.com name Ada plan pro
+kevy-cli -p 6004 HSET orders:1 id 1 user_id 1 status paid total 19.5 created_at 1700000100
+kevy-cli -p 6004 HSET orders:2 id 2 user_id 1 status pending total 5 created_at 1700000200
+kevy-cli -p 6004 HSET orders:3 id 3 user_id 2 status paid total 8 created_at 1700000300
+kevy-cli -p 6004 HSET order_items:1 id 1 order_id 1 sku sku-7 qty 2
+kevy-cli -p 6004 IDX.QUERY users.email EQ ada@example.com
+kevy-cli -p 6004 IDX.QUERY orders.user_id_created_at WHERE user_id EQ 1 LIMIT 20 FIELDS id status total created_at
+kevy-cli -p 6004 VIEW.QUERY paid_orders LIMIT 10
+kevy-cli -p 6004 IDX.QUERY orders.status EQ paid FILTER total RANGE 10 inf
+kevy-cli -p 6004 IDX.QUERY order_items.order_id EQ 1 FIELDS sku qty
+kevy-cli -p 6004 TABLE.LIST
+```
+
+- The card query is `SELECT id, status, total, created_at FROM orders
+  WHERE user_id = 1 ORDER BY created_at DESC LIMIT 20` — served by the
+  composite walk, newest first, hydrated in one hop.
+- The `FILTER total RANGE 10 inf` line is a residual predicate over the
+  `INCLUDE`d columns — `WHERE status = 'paid' AND total >= 10` without
+  touching a row.
+- `order_items.order_id EQ 1` is the FK lookup that replaces the JOIN
+  (recipe 2): two queries, no query-time join.
+
+**The refusals teach.** The compiler refuses everything that would need
+query-time evaluation — by name, with line/column, pointing at the
+recipe that models it. A JOIN:
+
+```sql
+CREATE VIEW order_emails AS
+  SELECT id, email FROM orders
+  JOIN users ON users.id = orders.user_id;
+```
+
+```text
+$ kevy-cli sql compile join.sql
+kevy-cli sql: join.sql: line 6, col 3: JOIN is not compilable — kevy
+refuses query-time joins (Law 3); model the lookup with an indexed FK
+column (IDX.QUERY t.fk EQ …) or app-side assembly (cookbook §2)
+```
+
+A view whose WHERE matches no declared access path errors naming the
+exact declaration to add (`… matches no declared access path — add:
+CREATE INDEX ON orders (status, total)`), and ad-hoc SQL at runtime
+never had a door:
+
+```text
+$ kevy-cli -p 6004 SQL SELECT * FROM users
+(error) ERR unknown command 'SQL'
+```
+
 ## Recipe index
 
 Recipe ↔ the SQL construct it replaces ↔ the
@@ -1287,6 +1566,8 @@ semantics and limits.
 | 18 | RAG hybrid retrieval | tsvector + pgvector, fused | [SELECT](https://kevy.golia.jp/docs/rds-workloads/#select) |
 | 19 | Sensor cache | upsert table + staleness cron | [operational deltas](https://kevy.golia.jp/docs/rds-workloads/#sizing-and-operational-deltas) |
 | 20 | Edge aggregation | `GROUP BY` per refresh + ETL uplink | [GROUP BY and aggregates](https://kevy.golia.jp/docs/rds-workloads/#group-by-and-aggregates) |
+| 21 | Derived state as a function of the row | the trigger layer entire: cascades, `UNIQUE`, reconciliation | [constraints and triggers](https://kevy.golia.jp/docs/rds-workloads/#constraints-and-triggers) |
+| 22 | Porting a PG/MySQL schema | `CREATE TABLE` / `CREATE INDEX` / `CREATE VIEW`, compiled | [secondary index DDL](https://kevy.golia.jp/docs/rds-workloads/#secondary-index-ddl) |
 
 ==============================================================================
 # rds-workloads
@@ -1876,6 +2157,35 @@ A fresh embedded store with the default config writes only the AOF — no snapsh
 
 ### Durability and AOF growth
 
+**Transactions replay all-or-nothing, at any size.** An embedded
+`atomic()` / `atomic_all_shards()` block is bracketed in the AOF by a
+begin and a commit marker. Replay holds every frame after a begin and
+applies the batch only when it reaches the matching commit; a log that
+ends mid-transaction discards it. Rejecting the block (returning `Err`)
+appends nothing at all.
+
+The markers are what make this size-independent, and the distinction
+matters. Group commit alone only defers the *fsync* — the AOF writes
+through a 256 KiB buffer, so a longer transaction still hands whole,
+valid frames to the kernel as that buffer fills, and `kill -9` leaves
+them there. Measured before the markers existed: a 20,000-mutation
+block killed mid-commit replayed 6,393 of them. **No `appendfsync`
+setting fixes that**, because the partial state comes from the shape of
+the commit loop, not from when it syncs.
+
+`appendfsync` governs something different: the power-loss window for
+data already written. It is orthogonal to whether a transaction is
+all-or-nothing.
+
+Both are true as of 4.0. Earlier versions documented group commit but
+never enabled it, so every mutation in a transaction was synced
+separately AND replayed independently.
+
+v1-format logs have no record envelope and cannot express a transaction
+boundary; they keep the old behaviour until their first rewrite
+promotes them to v2.
+
+
 | Knob | Server (TOML / `CONFIG SET`) | Embedded (`Config::…`) | Default | Notes |
 |---|---|---|---|---|
 | AOF fsync policy | `appendfsync` (`always` / `everysec` / `no`) | `with_appendfsync(AppendFsync::…)` | `EverySec` | Live-tunable on the server. |
@@ -1909,6 +2219,20 @@ A fresh embedded store with the default config writes only the AOF — no snapsh
 ## Trade-offs and limits
 
 **Per-policy throughput vs data loss.** `Always` blocks each reply on `fsync`; it is the only policy that survives `kill -9` with zero command loss, and it cuts SET-heavy throughput roughly in half on typical NVMe. `EverySec` runs a background flush every second and loses up to that window on a crash — the default precisely because it matches the Redis trade and the lost window is usually tolerable. `No` lets the kernel decide; throughput is highest but a crash can lose anything still in pagecache, potentially many seconds.
+
+**What `AppendFsync` does and does not govern.** It sets the power-loss
+window for individual commands. It has never had anything to do with
+whether an `atomic` block is all-or-nothing — that is transaction
+markers in the log (see [crash-consistency](#crash-consistency-contract-v4)),
+and it holds under every fsync policy as of 4.0.
+
+This is worth saying plainly because the names invite the opposite
+reading. A consumer storing financial data selected `Always` on first
+contact, reasoning that acknowledged writes must not be lost, and got a
+setting that costs the most and — before 4.0 — bought nothing at all for
+the block atomicity they actually needed. Pick `Always` when you cannot
+lose a single acknowledged command; pick `EverySec` when a one-second
+window is tolerable. Neither choice affects transactions.
 
 **AOF replay cost vs snapshot load cost.** Without a snapshot, boot time grows linearly with the AOF byte count: a 4 GiB AOF replays in a few seconds on local NVMe, a 40 GiB one in a minute or more. A snapshot caps that — load is one streaming read plus a short tail of post-snapshot AOF — but costs a transient view freeze (O(keys), nanoseconds per key, because collection values are refcount-shared) plus a one-time copy of any collection first mutated while the snapshot is in flight. For write-heavy workloads, prefer leaning on auto-rewrite to keep the AOF bounded rather than running periodic `BGSAVE`s: rewrite gives you the same boot-time bound with no second file to manage.
 
@@ -2653,6 +2977,13 @@ range|unique [MAXMEM <bytes>]`
 - **MAXMEM** caps the index's memory: a build that crosses the budget
   fails declaratively (`-INDEXOVERBUDGET` on queries) instead of
   growing unbounded.
+- Up to 64 indexes — a **global budget**, and one worth planning
+  against rather than discovering. The rule that makes 64 generous:
+  parent-child access paths belong in link keys and sorted sets, which
+  cost no index slots. Spend slots only on **global value ranges, text
+  and aggregates**. A 58-table schema converted this way needed roughly
+  19. Read naively, "58 tables vs 64 indexes" looks nearly blocked; it
+  is not, but only if the modelling rule is applied.
 - Up to 64 indexes. The catalog persists in a data-dir sidecar;
   the index CONTENT is derived state — it is never snapshotted or
   AOF-logged, and rebuilds in the background after a restart
@@ -2686,6 +3017,17 @@ VERIFY/LIST) and visible as multi-hit `EQ` reads. If you need hard
 uniqueness, pin the domain to one shard with a `{hashtag}` prefix in
 cluster mode, or check-then-write under `MULTI`/`WATCH`.
 
+**In the embedded API an index cannot be read inside `atomic()` at
+all**, so `KIND unique` cannot participate in the check even
+optimistically. Use a **claim key** instead: `u:<constraint>:<value>`
+holding the owner's id, read with `get` and written with `set` inside
+the transaction. The transaction makes the check-and-claim atomic,
+which is the guarantee a `unique` index deliberately does not provide.
+
+A consumer implemented 22 uniqueness constraints this way and used
+`KIND unique` for none of them; the pattern works, but they arrived at
+it by discovering the omission rather than reading it here.
+
 ## Embedded
 
 Same engine, typed API: `idx_create / idx_drop / idx_query /
@@ -2693,6 +3035,31 @@ idx_count / idx_stats / idx_list` (values as `IndexValue`, cursors as
 `IndexCursor`). No `FIELDS` hydration — you're in-process; read
 fields with `hget`. `idx_create` builds synchronously and returns
 when the index serves.
+
+## The index budget
+
+**64 indexes, globally.** Not per prefix, not per shard — 64 for the
+whole store (`MAX_INDEXES`, `kevy-index/src/catalog.rs`).
+
+Read naively that number blocks any real schema: 58 tables against 64
+indexes looks impossible, and a migration can stall on the arithmetic
+before discovering that the arithmetic is wrong.
+
+**Indexes are a scarce global budget, and most access paths do not spend
+it.** Parent-child navigation belongs in link keys and zsets — a
+`SMEMBERS order:1001:items` costs no index slot, and neither does an
+ordered zset index you maintain yourself
+([cookbook §2](https://kevy.golia.jp/docs/cookbook/#2-one-to-many-many-to-many)). Spend index
+slots only on what link keys cannot express:
+
+- **global value ranges** — "every invoice over 10k", across all rows
+- **text search** — `KIND text`
+- **aggregates** — `KIND agg`, write-time GROUP BY
+
+A schema that would need 58 indexes read as "one per table" typically
+needs under 20 read as "one per global query shape". If you are
+approaching 64, the question to ask is which of them are really
+parent-child navigation wearing an index costume.
 
 ## Consistency + cost model
 
@@ -2715,6 +3082,18 @@ IDX.QUERY ord_amt GROUP paid                      → [count, sum, min, max, avg
 IDX.QUERY ord_amt GROUPS BY sum LIMIT 100         → ranked [group, count, sum, min, max]
 ```
 
+**`GROUPBY` takes one field, and the shape of real `GROUP BY` usually
+needs more.** `SUM(amount) GROUP BY month` split by direction, or any
+`SUM(CASE WHEN …)`, is expressed by moving the condition **into the
+group key**: materialise a composite field at write time
+(`ym_dir = "2026-07:in"`), group on it, and split the key in the
+application. Conditional aggregates work the same way — the condition
+becomes part of what you are grouping by, not part of the aggregate.
+
+That idiom is obvious in hindsight and invisible on first contact:
+`KIND agg` looks like it answers `GROUP BY` and then does not answer
+the shape people actually write.
+
 The engine answer to `SELECT g, COUNT(*), SUM(v) … GROUP BY g`:
 aggregates are maintained IN THE WRITE PATH (a declared access path —
 never a query-time row scan). min/max stay exact under deletion via a
@@ -2733,6 +3112,263 @@ Embedded: `idx_create_agg(name, prefix, field, ty, group_by)` /
 Memory ≈ `groups × (gkey+64) + distinct_values × 18 + rows ×
 (key+10)` (constants calibrated against measured RSS); gated vs real RSS by `bench/agggate.sh` along with GROUP
 p99 < 1ms @ 1M×10k groups, GROUPS top-100 < 5ms, and write tax < 10%.
+
+==============================================================================
+# tables
+==============================================================================
+
+# Tables (`TABLE.*` / `table_*`)
+
+A table is a **named, verifiable declaration** that compiles — at
+declare time — into the index and view primitives kevy already has.
+`TABLE.DECLARE` takes a prefix, typed columns, secondary indexes and
+composite sort paths, and emits ordinary named indexes; nothing new
+runs at query time. This is the engine's standing rule (Law 3) in
+user terms: **kevy never plans a query — you name your access paths**,
+and a table is the ergonomic way to name a whole family of them at
+once.
+
+```
+TABLE.DECLARE user PREFIX u: PK id
+    COLUMN id str COLUMN name str COLUMN age i64
+    COLUMN dept str COLUMN email str
+    INDEX age range VALUES dept name
+    INDEX email unique
+    ORDERPATH by_dept_age ON dept THEN age DESC
+
+IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20
+```
+
+Rows are hash keys under the prefix, exactly as before — declaring a
+table changes nothing about how you write (`HSET u:1 name alice age
+30 …`) and imposes **no schema**: a row missing a declared column is
+a row where that column is NULL (the absent-field semantics every
+index already has). The declaration buys you compiled access paths, a
+`VERIFY` surface, and one-verb lifecycle for all of them.
+
+## The declaration model
+
+`TABLE.DECLARE` compiles each clause into a named index:
+
+| clause | compiles to |
+|---|---|
+| `INDEX <col> range\|unique [VALUES <col>…]` | a scalar index named `<table>.<col>` over the prefix, with the `VALUES` columns stored per row (typed from the column declarations) |
+| `ORDERPATH <name> ON <col> [DESC] [THEN <col> [DESC]]…` | a composite range index named `<table>.<orderpath>` — one order-preserving byte key per row |
+
+The compiled names share one namespace — `<table>.<col>` vs
+`<table>.<orderpath>` — so an ORDERPATH named like an indexed column
+is refused at declare time, by name. The compilation is a single
+implementation shared by the server and the embedded store (the
+dispatch oracle byte-compares the two faces in CI), and it is
+**atomic**: on any error nothing installs — no half-declared table.
+
+Everything a compiled index does is what a hand-declared `IDX.CREATE`
+does: same backfill behavior, same `-INDEXBUILDING` discipline, same
+sidecar persistence, same budget refusal
+([indexes.md](https://kevy.golia.jp/docs/indexes/)). `TABLE.DROP` drops the table and every
+index it compiled.
+
+## Grammar
+
+```
+TABLE.DECLARE name PREFIX p PK col
+    COLUMN name i64|f64|str [COLUMN ...]
+    [INDEX col range|unique [VALUES col ...]] ...
+    [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] ...
+TABLE.DROP name        # drops the table + its compiled indexes; 1|0
+TABLE.LIST             # name/prefix/pk + column/index/orderpath counts
+TABLE.VERIFY name      # component fsck + a bounded column spot check
+```
+
+- Column types are `i64 | f64 | str` — the scalar index types.
+  Everything else (timestamps, booleans, enums) is app-encoded into
+  one of the three, and the coarse mapping is stated rather than
+  hidden (kevy-sql prints a note per coerced column).
+- `PK` names a declared column; it is documentation plus a `VERIFY`
+  surface — rows are addressed by their key, exactly as today.
+  `serial`-style id allocation is a recipe
+  ([the sequences recipe](https://kevy.golia.jp/docs/cookbook/#3-sequences)), not an engine
+  feature.
+- Up to 64 tables; every structural refusal is named (duplicate
+  column, unknown `VALUES` column, name collisions, …), never
+  silent.
+
+`TABLE.VERIFY` re-runs every compiled index's drift recheck (the
+`IDX.VERIFY` counters: entries / bytes / coerce_failures /
+duplicates / drift / checked, per index) plus a bounded spot check —
+up to 64 sampled rows per shard, asserting every *present* declared
+column coerces to its declared type (absent is NULL, never an
+error). It answers `-INDEXBUILDING` while any component index is
+still backfilling.
+
+## Composite ORDERPATH semantics
+
+An ORDERPATH mechanizes [the composite-ordering recipe](https://kevy.golia.jp/docs/cookbook/#8-composite-ordering-order-by-a-b)
+— the `ORDER BY a, b DESC` walk — into a real composite index: one
+order-preserving byte string per row, so a single B-tree answers the
+query the way a relational composite index does. The rules:
+
+- **`WHERE` takes a leading prefix.** `WHERE a EQ x [b EQ y …]
+  [RANGE c min max]` must name the composite's columns in declared
+  order from the front: an equality prefix, then at most one range on
+  the *next* column; everything after is unconstrained (classic
+  composite-B-tree semantics). Naming a non-prefix column is a named
+  error — never a scan.
+- `RANGE` is terminal within `WHERE` — nothing may follow it, because
+  nothing after a range is representable as one contiguous walk.
+- **`DESC` per component** is honored in the stored order, so
+  `ON dept THEN age DESC` pages each department's rows from the
+  oldest-largest end with no re-sort.
+- **A row missing any component column is excluded** from the
+  composite index (same for a coerce failure) — it remains fully
+  visible through every other access path. A `str` component longer
+  than **255 bytes** also excludes the row: the same class of cap a
+  relational B-tree puts on index-row size, and what keeps range
+  bounds exact. Up to 8 components.
+- `WHERE` works on `IDX.COUNT` too, and on an index that declares no
+  composite columns it is refused by name.
+
+```
+IDX.QUERY user.by_dept_age WHERE dept EQ eng                  # all eng, age DESC
+IDX.QUERY user.by_dept_age WHERE dept EQ eng RANGE age 31 46  # eng, 31<=age<=46
+```
+
+## Querying tables
+
+Queries stay `IDX.QUERY` against the compiled names — a table adds no
+query verb, because the engine evaluates nothing at query time:
+
+```
+IDX.QUERY user.age RANGE 25 45                          # driving range
+IDX.QUERY user.email EQ d@x                             # unique point lookup
+IDX.QUERY user.age RANGE 0 100
+    FILTER dept EQ eng SORT name ASC LIMIT 20 OFFSET 20 # clauses on VALUES
+IDX.QUERY user.age RANGE 0 100 FACET dept
+IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name email
+```
+
+`FILTER` / `SORT` / `DISTINCT` / `FACET` / `OFFSET` read the columns
+the index **stored at `VALUES` declaration time** — the same clause
+grammar and the same exact-across-shards semantics as their text
+originals ([text-search.md](https://kevy.golia.jp/docs/text-search/)): `FILTER` applies before
+the page so a qualifying row ranked deep still reaches `LIMIT`,
+`FACET` counts the whole match set, missing values sort last both
+ways. Naming a field the index did not store is an error that names
+the fields it did. The driving predicate is always the indexed
+range/EQ/WHERE — there is no `WHERE`-without-an-index.
+
+**Index-only queries touch zero rows.** A FILTER/SORT/COUNT query
+answers entirely from the RAM-resident index — the row-read counter
+is asserted `== 0` in the gate suite (`bench/tablegate.sh`). This is
+the tiering synergy the two features were designed around: with
+[transparent tiering](https://kevy.golia.jp/docs/tiering/) on, a fully-cold table serves
+index-only queries with **zero disk reads**, and only the final
+hydration page (`FIELDS …`) pays cold reads — one per row, batched.
+An index without `VALUES` columns is byte-identical in memory and
+query path to one on a store that never declares them (the
+zero-cost-when-undeclared gate).
+
+## NULL, uniqueness, and what is enforced
+
+- **NULL = absent field.** No column is required; a row missing an
+  indexed column is simply not in that index. There are no engine
+  `CHECK`s, defaults, or NOT NULL — constraints are recipes
+  ([the constraints recipe](https://kevy.golia.jp/docs/cookbook/#5-check-constraints-and-multi-key-invariants),
+  atomic blocks).
+- **Uniqueness is verify-not-enforce** at the table layer: a `unique`
+  index is the same fence `IDX.CREATE KIND unique` builds
+  ([indexes.md](https://kevy.golia.jp/docs/indexes/#uniqueness-is-a-fence-not-a-lock) — the
+  reservation pattern makes it race-free), and `TABLE.VERIFY` reports
+  `duplicates` instead of the engine rejecting your write after the
+  fact.
+
+## What it is NOT
+
+Stated as refusals, because the engine refuses them by name rather
+than approximating: **no runtime SQL** (send `TABLE.DECLARE`, not
+`CREATE TABLE`, to the server), **no query-time joins** beyond a
+view's `VIA` dereference ([views.md](https://kevy.golia.jp/docs/views/)), **no HAVING /
+subqueries / expressions**, **no engine-enforced constraints**. The
+SQL-to-kevy mapping for each of those lives in
+[rds-workloads.md](https://kevy.golia.jp/docs/rds-workloads/), the working recipes in
+[cookbook.md](https://kevy.golia.jp/docs/cookbook/), and the schema-compilation path below.
+
+## kevy-sql: compile a schema, don't send one
+
+`kevy-sql` (and its `kevy-cli sql` face) is a **declaration-time
+compiler** — it reads a PG/MySQL-dialect schema file once, like a
+migration tool, and emits the explicit declarations:
+
+```console
+kevy-cli sql compile schema.sql                          # print the plan
+kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004
+```
+
+- `CREATE TABLE` → `TABLE.DECLARE` (types coarsely mapped to
+  `i64|f64|str`, each mapping noted honestly).
+- `CREATE [UNIQUE] INDEX` → `INDEX` clauses; PG `INCLUDE` covering
+  columns → stored `VALUES`; multi-column indexes → an `ORDERPATH`.
+- Constant single-table `CREATE VIEW … AS SELECT` → an engine view;
+  a parameterized one → a **query card**: a ready-made `IDX.QUERY`
+  template with `$N` slots your app fills in.
+- The compiler does not plan either: it matches your view against
+  the access paths you declared, and when none fits it tells you
+  which declaration to add (`add: CREATE INDEX ON t (dept, age)`)
+  instead of inventing a scan. Ad-hoc SQL, joins, subqueries, `OR`,
+  `GROUP BY` and friends are refused with `line:col` and a pointer
+  to the recipe that replaces them.
+
+The end-to-end walkthrough — a real users/orders/order_items schema
+compiled, applied and queried — is
+[the schema-porting recipe](https://kevy.golia.jp/docs/cookbook/#22-porting-a-pgmysql-schema).
+
+## Embedded
+
+Typed API, same compilation, no text grammar required in-process (the
+declaration types — `TableSpec`, `TableIndex`, `OrderPath` — live in
+`kevy-index`, the crate that owns the single compiler):
+
+```rust
+use kevy_index::TableSpec;
+
+store.table_declare(spec)?;          // TableSpec, validated + compiled,
+                                     // indexes built synchronously
+let tables = store.table_list();
+let report = store.table_verify(b"user")?;   // per-index counters + spot check
+store.table_drop(b"user");
+```
+
+The wire form (`db.cmd("TABLE.DECLARE", …)`) works too and parses
+with the identical shared grammar — server/embedded byte parity is
+pinned in CI by the dispatch oracle.
+
+## Performance
+
+The gate clamps, and their measurement status stated plainly: the
+conformance/parity/refusal/index-only assertions run green in this
+tree (`bench/tablegate.sh`). The **throughput clamps** — indexed
+point lookup p99 ≤ 1 ms @ 10 M rows, FILTER+SORT+LIMIT-20 page
+p95 ≤ 5 ms @ 10 M rows, write tax with 3 indexes + declared
+VALUES ≤ 15 % vs bare `HSET` — are perfgate metric lines whose
+baselines are **pending the dedicated bench box**
+(`bench/capacity-envelope.sh` records them). Until
+recorded there, they are targets, not measurements — this page will
+not quote them as results.
+
+Write cost is the standard index tax: one field read plus one segment
+update per compiled index per matching write; an empty catalog costs
+one untaken branch.
+
+## See also
+
+- [indexes.md](https://kevy.golia.jp/docs/indexes/) — the index engine tables compile into.
+- [tiering.md](https://kevy.golia.jp/docs/tiering/) — the companion feature: indexes hot,
+  rows cold.
+- [rds-workloads.md](https://kevy.golia.jp/docs/rds-workloads/) — the full SQL-vocabulary
+  mapping (what compiles, what is a recipe, what is refused).
+- [cookbook.md](https://kevy.golia.jp/docs/cookbook/) — the composite-ordering and
+  schema-porting recipes.
+- [views.md](https://kevy.golia.jp/docs/views/) — named compositions over the same indexes.
 
 ==============================================================================
 # vector-search
@@ -2964,12 +3600,17 @@ IDX.QUERY posts MATCH "rust 全文检索" LIMIT 10 [FIELDS title body]
 
 ## Quick start (server)
 
-Rows are hash keys under the declared prefix; the indexed value is
-one declared field, exactly as with `range` indexes
-([indexes.md](https://kevy.golia.jp/docs/indexes/)):
+Rows are hash keys under the declared prefix. A text index reads one
+field or several — several fields score into **one** corpus, each with a
+weight, so a title hit can outrank a body hit and the scores stay
+comparable. (Every other kind reads exactly one field, as in
+[indexes.md](https://kevy.golia.jp/docs/indexes/); a multi-field declaration on a `range` or
+`unique` index is refused rather than half-honoured.)
 
 ```console
 kevy-cli -p 6004 IDX.CREATE posts ON PREFIX post: FIELD body TYPE str KIND text
+# several weighted fields into one corpus (KIND text only):
+kevy-cli -p 6004 IDX.CREATE posts ON PREFIX post: FIELDS title body WEIGHTS 5 1 TYPE str KIND text
 kevy-cli -p 6004 HSET post:1 title "intro" body "kevy is a pure-Rust key-value store"
 kevy-cli -p 6004 HSET post:2 title "search" body "dictionary-free CJK full-text search"
 kevy-cli -p 6004 IDX.QUERY posts MATCH "full-text rust" LIMIT 10
@@ -3053,21 +3694,53 @@ b=0.75, non-negative idf variant). Documents matching more (and
 rarer) query terms rank higher; term frequency saturates; long
 documents are normalized down.
 
-Two declared approximations:
+**Scores are global, not per shard.** `df`, `n_docs` and `avgdl` are
+the whole corpus's, gathered at query time: pass 1 asks each shard for
+its counts of the query's own terms, the origin sums them, pass 2 scores
+every shard against that total. So a query returns the same ranking AND
+the same scores on one shard as on eight — there is a test that asserts
+exactly that, and it runs in CI.
 
-- **Scores are shard-local.** df/avgdl come from each shard's own
-  corpus (global statistics would require cross-shard write
-  coordination). With hash-sharded keys the statistics converge
-  across shards and the merged ranking is stable; scores from
-  different shards are comparable, not identical to a single-corpus
-  run.
+Query time, not a periodic snapshot: nothing is cached, so there is no
+staleness window to document, and nothing is coordinated on the write
+path. The second round costs 0.06 ms of a 28 ms p95 over a million
+documents (measured — [PERF-LEDGER.md](https://github.com/goliajp/kevy/blob/main/bench/PERF-LEDGER.md)),
+because pass 1 moves only `(term, df)` pairs for the terms actually
+queried.
+
+One declared approximation remains:
+
 - **No cursor.** BM25 deep pagination is an anti-pattern (page N
-  requires re-scoring everything above it); `LIMIT` caps at 1000.
+  requires re-scoring everything above it); `LIMIT` caps at 1000, and
+  `OFFSET` pages within that cap.
 
-No phrase queries, no boolean syntax, no highlighting — that's the
-query-engine slope (deliberately out of scope). If you need those,
-you are describing a search engine; kevy's text kind stops at
-"ranked lookup over declared fields".
+Every clause of that surface now executes:
+
+| clause | what it does |
+|---|---|
+| `IN <field…>` | score within those fields only — a field-scoped BM25 (own frequencies, own lengths), not a filter over whole-document scores |
+| `FILTER <field> RANGE\|EQ …` | a non-scoring predicate over a stored value; applied before the top-K, so a qualifying document ranked 40th still reaches a `LIMIT 10` page |
+| `SORT <field> ASC\|DESC` | select by a stored value instead of by score; documents with no value sort last in both directions |
+| `DISTINCT <field>` | at most one hit per value, the best of its group, collapsed during selection so the page still holds `LIMIT` rows |
+| `FACET <field…>` | value counts over the **whole** match set, not the page; `FILTER` narrows them, `DISTINCT` does not |
+| `HIGHLIGHT [field…]` | byte spans of the matched terms, per field |
+| `TYPO 0\|1\|2` | edit-distance tolerance on bare terms (phrases and prefixes stay exact) |
+| `LIMIT n` / `OFFSET m` / `FIELDS f…` | page size, page offset, hydration |
+
+`"quoted phrases"` and `word*` prefixes go in the `MATCH` text itself.
+`FILTER`, `SORT`, `DISTINCT` and `FACET` read fields the index stored at
+`VALUES` declaration time; naming a field it did not store is an error
+that names the fields it did.
+
+An accepted-but-ignored clause would be worse than an error: a dropped
+`FILTER` returns unfiltered rows, which is a wrong answer wearing a
+successful reply. That is why the keywords were frozen — and rejected by
+name — before any of them worked.
+
+(This reverses an earlier boundary. Previous versions of this page said
+phrase and boolean queries were deliberately out of scope — "if you need
+those, you are describing a search engine". That was right for a text
+kind that stops at ranked lookup, and the goal changed.)
 
 ## Hybrid retrieval (BM25 + KNN)
 
@@ -3097,8 +3770,9 @@ Same envelope as every index kind ([indexes.md](https://kevy.golia.jp/docs/index
   tombstone drift.
 - A row whose declared field is missing simply contributes no
   tokens; there is no coercion failure for `TYPE str` text fields.
-- Cross-shard queries merge per-shard top-K without a global
-  snapshot (SCAN-class, same as `DBSIZE`).
+- Cross-shard queries gather their corpus statistics per query rather
+  than from a snapshot, so the ranking is global without anything being
+  cached or coordinated on the write path.
 - **Server backfill is asynchronous**: after `IDX.CREATE` on a live
   keyspace, or after a restart, queries answer `-INDEXBUILDING`
   until the rebuild completes (data availability never waits for
@@ -3140,8 +3814,11 @@ costs one untaken branch per write.
 ## Sizing
 
 `bytes ≈ Σ_token (token_len + 48) + postings × 64 + Σ_doc (key_len +
-text_len + 72)` (docs keep their original text so updates remove
-exactly their own tokens), reported live by `IDX.VERIFY` /
+Σ_field(field_len + 4) + 72)` — docs keep each declared field's text
+(and the weight it was indexed with) so an update removes exactly the
+tokens it inserted, at the weight it inserted them. A single-field index
+is the one-element case and its sizing is unchanged. Reported live by
+`IDX.VERIFY` /
 `IDX.LIST` (entries/bytes/postings/tokens for text kinds).
 `bench/textgate.sh` gates the formula against real RSS growth.
 
@@ -4895,6 +5572,341 @@ For the replication primary: configure the `[cluster]` block (`node_id`, `elect_
 The cost of a consensus log under every write would erase the throughput and tail-latency advantages that make kevy worth choosing. The static-config + quorum-heartbeat design gives you the failover branch without paying for state-machine replication on the hot path. If your workload genuinely needs a consensus-backed key-value store, kevy is the wrong tool.
 
 ==============================================================================
+# tiering
+==============================================================================
+
+# Transparent tiering (`[tiering]` / `with_tier_budget*`)
+
+Tiering gives kevy a **RAM budget**: when the keyspace grows past it,
+the coldest values spill to a per-boot value log on disk and page back
+in on access. Keys and metadata stay in RAM — so **RAM bounds how many
+keys you can hold, disk bounds how much data** — and every command
+keeps its exact semantics on a cold key. There is no second API, no
+"cold namespace", and no cache-miss error to handle: a cold key is an
+ordinary key that costs one positional disk read the first time you
+materialize it.
+
+```toml
+# kevy.toml
+[tiering]
+budget = "auto"        # or "70%" or "4gb"
+```
+
+```rust
+let store = Store::open(Config::default()
+    .with_dir("/var/lib/kevy")
+    .with_tier_budget(3 << 30))?;   // 3 GB RAM budget, embedded
+```
+
+Tiering is **off by default**. With no `[tiering]` section (and no
+`with_tier_budget*` call) the engine's paths are byte-identical to an
+untiered build — that is a gated claim, not a hope.
+
+## What it is — and what it is not
+
+- **It is a RAM budget.** Values past the budget's demote watermark
+  move to a value log (`<data>/tier/`), leaving a stub inside the
+  entry's existing value slot — no extra heap. The value's RAM is
+  fully reclaimed; the key, its TTL, its type, and its LRU history
+  stay resident.
+- **It is not durability.** The AOF remains the sole durable truth,
+  and tiering adds **zero new crash-safety surface by construction**:
+  the value log is a **per-boot spill area** — deleted when the store
+  opens, rebuilt during replay — so it is never part of what a crash
+  can lose. Your crash guarantees are exactly
+  [persistence.md](https://kevy.golia.jp/docs/persistence/)'s; the tiered persistence suite
+  additionally pins the two paths where tiering and persistence
+  meet (rewrite/snapshot on a mostly-cold store, and boot past the
+  budget).
+- **It is not eviction.** A demoted key is still present — `EXISTS`
+  says 1, `SCAN` returns it, `TTL` counts down, `GET` answers. The
+  eight `maxmemory` delete-eviction policies keep their exact
+  semantics; if you set `maxmemory` too, it stays the hard
+  delete-eviction backstop above the tier budget. Demotion emits
+  **zero** keyspace events (it is not a write and not an eviction —
+  clients treat `evicted` as key removal); it counts in a separate
+  `demotions_total` gauge, never in `evicted_keys`.
+
+## Enabling it
+
+Server — any of the config surfaces, same key:
+
+```toml
+[tiering]
+budget = "auto"              # 0.70 x the detected memory bound
+# budget = "70%"             # percent of the detected bound
+# budget = "4gb"             # absolute
+# spill_dir = "/fast/nvme"   # optional; default <data_dir>/tier/
+```
+
+```console
+kevy --tiering-budget 4gb          # CLI
+KEVY_TIER_BUDGET=4gb kevy          # env
+kevy-cli CONFIG SET tiering-budget 6gb   # live: budget CHANGES only
+```
+
+`CONFIG SET tiering-budget` re-resolves on the next shard tick (the
+`maxmemory` precedent). Turning tiering on or off, and moving the
+spill dir, need a restart — the value-log lifecycle is boot-scoped.
+
+Embedded — behind the `tier` cargo feature (in the default set;
+requires `persist`, since the spill area needs a data dir):
+
+```rust
+Config::default().with_tier_budget(bytes)      // absolute
+Config::default().with_tier_budget_auto()      // 0.70 x detected bound
+Config::default().with_tier_budget_percent(50) // percent of the bound
+```
+
+A memory-only store (`mem://`, or a `Config` without a data dir) and
+the wasm build **reject** the tiering config with a named error at
+open — there is no disk to spill to, and a silently-ignored budget
+would be a wrong answer wearing a successful boot.
+
+`auto` = 0.70 × the detected memory bound: on Linux,
+`min(cgroup v2 memory.max, /proc/meminfo MemAvailable)`; on macOS,
+`hw.memsize` (a hand-bound `sysctl` in `kevy-sys`, the workspace's one
+sanctioned OS boundary). The bound is **re-probed on the shard tick**,
+so a container whose limit is resized adjusts live. A host where no
+bound is detectable refuses `auto`/percent at boot, by name — use an
+absolute budget.
+
+## The budget model
+
+One budget for the whole process, split evenly across shards. Each
+shard demotes toward a unified watermark:
+
+```
+demote target = budget·19/20 − index_reserved_bytes − stub_bytes
+```
+
+- **Indexes and views are the premium fixed layer** — they are never
+  spilled (they are the access paths that make cold rows cheap to
+  find), so their bytes are subtracted off the top. If the index floor
+  alone exceeds the budget, `IDX.CREATE` / `TABLE.DECLARE` **refuse**
+  with a named error rather than admitting an index the budget cannot
+  hold.
+- **Stub bytes are subtracted too**: the stubs of already-cold keys
+  are RAM the budget must carry, so the watermark tightens as the cold
+  tier grows. When the fixed floors exceed the 19/20 line the
+  effective target saturates to 0 — visible in `INFO`, not hidden.
+- The 19/20 factor is the hysteresis band: demotion starts above it
+  and stops below it, so the store does not oscillate on the line.
+- Spilling is **budgeted**: at most 32 records per demotion call, with
+  continuation on the shard tick — a single `SET` never funds an
+  unbounded synchronous spill storm.
+
+### RAM per key, hot vs cold
+
+```
+hot  key ≈ today's cost (entry + key + value)
+cold key ≈ 96 B (entry overhead) + key heap bytes     # value fully reclaimed
+```
+
+The cold-key formula is gated at ±20 % against measured RSS
+(`bench/memgate.sh`). Two consequences worth planning around, both
+from the capacity model:
+
+- **A ~64 B value can never tier profitably** — the stub is about as
+  big as the value. Values below the 64-byte spill threshold are
+  never spilled. The data:RAM ratio grows linearly with value size;
+  every capacity gate names its value size for exactly this reason.
+- **Worked example (sized from the model, not measured into it)**:
+  10 M rows × ~1 KiB (≈10 GB of data) with 2
+  secondary indexes + stored VALUES columns fits a **3 GB** budget:
+  stub floor 10 M × ~108 B ≈ 1.1 GB, index floor 10 M × (68 + 68 +
+  ~30 VALUES bytes) ≈ 1.7 GB ≈ 2.8 GB ≤ 3 GB. At 4 KiB values the
+  ratio gate is ≥ 10× data:RAM (5 M × 4 KiB = 20 GB on a 2 GB
+  budget; stub floor ≈ 540 MB). Per-key fixed costs dominate narrow
+  rows — run the stub and index floors before trusting any budget,
+  which is why the formulas come first.
+
+## Semantics on cold keys
+
+Every command is transparent. The stub carries the value's **type
+tag**, so the whole metadata surface answers with **zero disk reads**:
+
+- `SCAN` / `KEYS` / `RANDOMKEY` / `DBSIZE` see cold keys — there is
+  one key table, so SCAN's guarantee is unchanged. `SCAN … TYPE t`
+  filters from the tag without touching disk.
+- `TYPE`, `EXISTS`, `TTL`/`EXPIRE`-family, `RENAME`, `DEL`,
+  `PERSIST` never read the value. `DEL`/overwrite on a cold key
+  credits the value log's dead-bytes and frees the stub — no read.
+- **A `WRONGTYPE` refusal never pays a disk read**: type checks
+  resolve from the stub before any I/O (`LPUSH` on a cold string is
+  refused as cheaply as on a hot one).
+- `SET`-family `NX`/`XX` read existence from the stub;
+  `FLUSHALL` clears the map and resets the value log.
+- Hash **field TTLs stay RAM-resident** for cold hashes and survive a
+  demote/promote round trip; fields that expired while cold are purged
+  at promotion.
+- `WATCH` is not bumped by a demotion or promotion — tier movement is
+  not a write.
+
+These are not narrative claims: the **transparency suite** replays the
+same operation sequence against a tiered and an untiered store and asserts
+byte-identical replies for semantic commands — order-free replies
+(`HGETALL`, `KEYS`, `SCAN`, `RANDOMKEY`, whose element order is map
+order by contract) are shape-compared instead — (memory-reporting
+commands are shape-compared — they legitimately differ), with
+demotion points forced deterministically, never timing-dependent.
+
+### Promotion policy
+
+- A cold value **promotes on its second materializing access**. The
+  first cold read serves the bytes straight from the log without
+  installing them (a probation mark is stamped); the second installs.
+  One stray read of an archival key does not churn the hot tier.
+- **Bulk paths never promote**: hydration (`FIELDS`, `VIEW.HYDRATE`),
+  index backfill, `PREFIX.DIGEST`, scope moves, exports, and
+  snapshot/AOF-rewrite serialization all read cold values through a
+  no-promote peek. An `IDX.CREATE` backfill over a fully-cold table
+  reads one record per row and installs none of them.
+- The zero-copy shared lane (`kevy_get_shared` over the C ABI) reads a
+  cold value per call and never promotes — shared-lane readers pay the
+  read until a normal access path promotes the key.
+- `MEMORY USAGE` on a cold key reports the **stub's** RAM footprint
+  (what the key actually costs you now); the original value size rides
+  inside the stub for re-accounting at promotion.
+
+## What spills (v1)
+
+Strings (above the 64-byte threshold) and **hashes** — a hash spills
+as one record carrying all its fields, which is what makes a cold
+table row cost one read, not one per field. Lists, sets, sorted sets
+and streams **stay hot** in v1 — a named limitation (collection spill
+is on the post-v4 list), not an error: they simply are not demotion
+candidates, and the budget arithmetic treats them as permanent hot
+bytes.
+
+## `INFO` — the `# Tiering` section
+
+Present only when tiering is enabled (an untiered server's `INFO` is
+byte-identical to a build without tiering at all); identical on
+server and embedded listener.
+
+| field | meaning |
+|---|---|
+| `tiering_enabled` | `1` (the section is absent when off) |
+| `tier_budget_bytes` | the resolved budget (auto/percent → bytes, live) |
+| `tier_effective_target` | `budget·19/20 − reserved − stubs`, saturating at 0 — 0 means the fixed floors alone exceed the watermark |
+| `cold_keys` | keys currently demoted |
+| `cold_bytes` | original (pre-demotion) bytes of those values |
+| `stub_bytes` | RAM the stubs of cold keys occupy |
+| `index_reserved_bytes` | the index/view floor subtracted from the watermark |
+| `vlog_size_bytes` | value log size on disk |
+| `vlog_live_bytes` | bytes still referenced (the rest is compactable) |
+| `vlog_files` | value-log segment files |
+| `vlog_epoch` | compaction epoch (retired-file counter) |
+| `demotions_total` | values spilled since boot |
+| `promotions_total` | values paged back in since boot |
+| `peek_preads_total` | no-promote cold reads (one per cold **row**) |
+| `batch_submissions_total` | batched cold-read submissions (hydration pages) |
+
+`vlog_size_bytes / cold_bytes` is the space-amplification ratio the
+acceptance gate clamps at ≤ 2.0×; `peek_preads_total` is how you
+verify a hydration page paid one read per row, not per field.
+
+## Performance expectations
+
+Stated honestly, with the measured/pending status of each number:
+
+- **Hot path: structurally unchanged.** The hot-value read/write path
+  gains exactly one never-taken match arm; with tiering compiled in
+  but off, perfgate's 12 metrics gate at the existing tolerance, and
+  with tiering on and the working set fully hot, the new
+  `tiered_hotset_*` lines gate the same way. **Baselines pending on
+  the bench box** — the gate lines exist and skip with a notice
+  until then.
+- **Cold point read = one positional read** plus a CRC check and a
+  decode. The `kevy-vlog` microbench measures `read_at` at 0.64–14 µs
+  across record sizes (dev-box NVMe). The end-to-end SLAs the
+  gate clamps — scalar p99 ≤ 100 µs embedded / ≤ 300 µs server,
+  whole-hash-row materialization ≤ 200 µs / ≤ 500 µs — are
+  **pending the bench-box envelope run** (`bench/capacity-envelope.sh`);
+  until that runs they are targets, not measurements.
+- **Embedded holds the shard lock during a cold read.** In-process
+  there is no reactor to hand the read to: a cold materialization
+  preads under the shard's write lock (the 1-shard default = the
+  whole store), stalling that shard's readers for the read's duration
+  — ~µs-class on NVMe, potentially ms-class on cloud block storage,
+  and proportionally longer for large values. The embedded config
+  caps the largest spillable value at **256 KiB by default**
+  (`max_spill_value`; `with_max_spill_value(bytes)`, 0 = unlimited) so
+  that window is bounded — an over-cap value simply stays hot. The
+  server leaves the cap unlimited (thread-per-core shards don't share
+  a lock). The drop-lock/pread/relock dance that removes the window
+  entirely is designed and explicitly post-v4.
+- **Batched hydration: one read per row.** A `FIELDS` hydration page
+  or `VIEW.HYDRATE` over cold rows coalesces its reads by log
+  position and submits them as one batch (io_uring: linked reads on a
+  secondary ring; poller/embedded: an ordered positional-read loop).
+  One read decodes **all** requested fields of a row — counters
+  assert `preads == cold rows`, never `rows × fields`.
+- **Index-only queries touch zero rows** — FILTER/SORT/COUNT answer
+  from RAM-resident index columns, so on a fully-cold table they
+  perform zero disk reads (counter-asserted). This is the reason to
+  declare `VALUES` columns on a tiered table: see
+  [tables.md](https://kevy.golia.jp/docs/tables/).
+- **Spill never stalls the reactor unboundedly**: demotion is
+  budgeted per call with tick continuation; the stall clamp
+  (spill-induced p99 ≤ 1 ms) is its own gate line, also pending its
+  bench-box measurement.
+
+## Operational notes
+
+- The value log lives under `<data>/tier/` (or `[tiering] spill_dir`),
+  is **deleted at every open**, and is rebuilt as replay spills past
+  the watermark. Do not back it up; do not point two stores at one
+  spill dir.
+- Segments rotate at 256 MiB; a sealed segment compacts when its live
+  ratio falls below 50 % (space amplification ≤ 2.0× live cold bytes,
+  gated). Compaction respects pins — a snapshot or AOF rewrite in
+  flight keeps its segment files readable until it finishes.
+- Every record carries a CRC32C; bit rot in the spill area is refused
+  at read, not served.
+- **Boot with dataset > budget works**: replay checks the watermark
+  as it goes and spills inline, so RSS stays ≤ budget × 1.05
+  throughout boot (gated) instead of OOMing before tiering ever
+  runs. The same inline demotion rides reshard and replica
+  snapshot-load.
+- Snapshot / `BGREWRITEAOF` / replication full-sync on a mostly-cold
+  store stream cold values from the pinned log **without promoting
+  anything** — peak extra RAM is one value, and zero cold values are
+  lost from a rewrite (gated).
+- RSS ≤ budget × 1.05 sustained is its own gate line, including
+  the auto-probe answering correctly in a cgroup container and on
+  bare metal.
+
+## Gate status (honesty ledger)
+
+Everything above that is a mechanism claim is covered by tests and
+gates that run in this tree (the transparency suite, the tiered
+persistence suite, `bench/memgate.sh`, `bench/tiergate.sh`). The
+**measured envelope numbers** — cold-read p99, vlog space
+amplification under churn, the 10× capacity ratio, the
+10M-row fused envelope with hydration p95, hydration
+batching at scale, and mixed-workload isolation —
+are **pending the dedicated bench box**:
+`bench/capacity-envelope.sh` is the turnkey runner, and
+`bench/tiergate.sh` stays red on those lines until it has run. This
+page states targets as targets and will not quote an envelope number
+before the gate records it.
+
+## See also
+
+- [tables.md](https://kevy.golia.jp/docs/tables/) — the TABLE.* layer tiering was designed
+  with: indexes hot, rows cold, index-only queries touching zero rows.
+- [persistence.md](https://kevy.golia.jp/docs/persistence/) — the durability contract that is
+  deliberately untouched by tiering.
+- [tuning.md](https://kevy.golia.jp/docs/tuning/) — memory knobs (`maxmemory` and friends)
+  that coexist with the tier budget.
+- [`bench/tiergate.sh`](https://github.com/goliajp/kevy/blob/main/bench/tiergate.sh) /
+  [`bench/capacity-envelope.sh`](https://github.com/goliajp/kevy/blob/main/bench/capacity-envelope.sh) — the
+  acceptance gate and the envelope runner behind every number quoted
+  or pended on this page.
+
+==============================================================================
 # accept-shards
 ==============================================================================
 
@@ -6641,6 +7653,7 @@ what they use. The default remains everything-on:
 | `vector` | HNSW ANN segments | `index`, `kevy-vector` |
 | `replicate` | replication + CDC feed | `persist`, `kevy-replicate` |
 | `listener` | read-only RESP listener | (nothing) |
+| `tier` | transparent tiering (RAM budget + cold value log) | `persist`, `kevy-sys` |
 
 The `core` tier cross-compiles for musl targets and holds an
 enforced budget (≤ 700 KB binary, ≤ 2 MB empty-store RSS); five
@@ -6648,6 +7661,42 @@ foundation crates additionally build `no_std`. See
 [docs/iot.md](https://kevy.golia.jp/docs/iot/). At the other end of the size spectrum, the
 same embedded core now runs in the browser as `@goliajp/kevy` —
 see [docs/wasm.md](https://kevy.golia.jp/docs/wasm/).
+
+## Tiering and the TABLE layer (new in 4.0, all additive)
+
+4.0 also ships transparent tiering ([tiering.md](https://kevy.golia.jp/docs/tiering/)) and
+the `TABLE.*` layer ([tables.md](https://kevy.golia.jp/docs/tables/)). Nothing in either
+activates on upgrade; this section exists so you know what changed
+underneath you and what did not.
+
+- **Tiering is opt-in — zero action if unused.** No `[tiering]`
+  section (and no `with_tier_budget*` call) means today's paths,
+  byte-identical; that off-cost is itself a gated claim. Enabling it
+  does not change the durability contract: the AOF stays the sole
+  durable truth, and the cold value log under `<data>/tier/` is
+  per-boot disposable (deleted at every open, never backed up).
+- **`INFO` grows a `# Tiering` section — only when tiering is
+  enabled.** An untiered 4.0 server's `INFO` output is unchanged, so
+  parsers that enumerate sections see nothing new until you opt in.
+- **New verbs, all additive**: `TABLE.DECLARE` / `TABLE.DROP` /
+  `TABLE.LIST` / `TABLE.VERIFY`; the `WHERE` form on `IDX.QUERY` /
+  `IDX.COUNT` (composite leading-prefix lookups); and the scalar
+  clause set — `VALUES` at `IDX.CREATE`, `FILTER` / `SORT` /
+  `DISTINCT` / `FACET` / `OFFSET` at query — previously text-only,
+  now on `range`/`unique` kinds too. No existing verb changed shape.
+- **Two new crates** join the workspace: `kevy-vlog` (the cold value
+  log stone) and `kevy-sql` (the out-of-engine declaration-time SQL
+  compiler, with a `kevy-cli sql` face). Embedded gains the `tier`
+  cargo feature (in the default set — see the table above).
+- **Sidecar catalog versions v5/v6.** The index-catalog sidecar
+  gains v5 (scalar-kind stored `VALUES`) and v6 (composite ORDERPATH
+  indexes), plus a new `table-catalog.meta` sidecar. Every older
+  sidecar version still loads — v1 files from the first index
+  release included. The writer emits **the oldest header that can
+  represent the data**: a catalog using none of the new capabilities
+  keeps writing its old version byte-identically, so its files stay
+  readable by earlier 4.0-line binaries; the version moves forward
+  only when you actually declare the new things.
 
 ## Downgrading 4.0 → 3.18
 
