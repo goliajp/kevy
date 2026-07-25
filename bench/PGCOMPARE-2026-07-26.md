@@ -6,10 +6,13 @@ sentence was inference. This is the measurement, in two rounds — a
 dataset that fits in cache and one that does not — and it contradicts
 the inference more often than it confirms it.
 
-The short version: **kevy wins writes and random-key reads; PostgreSQL
-wins indexed reads, memory, and writes at matched durability.** Which
+The short version, after three rounds: **kevy wins writes, random-key
+reads, bulk load and disk footprint; PostgreSQL wins indexed lookups,
+list pages, memory, and writes at matched durability.** Which of those
 matters depends entirely on the workload, so every column is below
-rather than the flattering subset.
+rather than the flattering subset — including the round that was run
+specifically to check whether a PG win was an artifact, and confirmed it
+was not.
 
 **Reproduce:** `bash bench/pgcompare.sh 2000000 400` for round one,
 `3000000 4000` against a memory-capped PG for round two (harness:
@@ -148,14 +151,11 @@ fitting. Only the *random-access* shape flipped:
   interesting one, because those rows are *on disk*: a cold read costs
   one pread and still beats PG's buffer-pool miss.
 - **`idx` and `page` — PG still wins**, 131 µs vs 266–321 µs and 118 µs
-  vs 360–429 µs. Not because the dataset fits, but because **the query
-  shapes have tiny cardinality**: `age` takes 60 values and `dept` takes
-  8, so `LIMIT 20` returns the same handful of rows every time and their
-  heap pages never leave PG's cache no matter how large the table is.
-  That is a flaw in the workload, not a property of the engines — a
-  faithful test of those shapes needs high-cardinality predicates that
-  scatter across the table. **Read those two columns as "both hot", not
-  as "PG survives cache pressure better".**
+  vs 360–429 µs. The obvious suspicion was that this was an artifact:
+  `age` takes 60 values and `dept` takes 8, so `LIMIT 20` returns the
+  same handful of rows every time and their heap pages never leave PG's
+  cache however large the table is. Round three tested that suspicion
+  and **it was wrong** — see below.
 
 Tiering, on the other hand, did exactly what it exists for, and the
 gauges are in the row rather than asserted:
@@ -180,6 +180,44 @@ per MB drops as values grow), and **kevy is now more compact on disk**
 tiered row pays 2087 because the value log and the AOF both hold the
 data.
 
+## Round three — the same test with predicates that actually scatter
+
+Round two hedged: PG's win on the indexed shapes might have been the
+low-cardinality predicates keeping a tiny working set hot. The hedge
+favoured kevy, so it had to be tested rather than left standing.
+
+The workload gained a `sku` column — one value per ~20 rows, placed at
+random — and the list page became a **random time window anywhere in the
+table** instead of a fixed low-cardinality slice. Both engines index it
+the same way. Everything else is round two: 11.6 GB of incompressible
+CSV, 17 GB on PG's disk, PG capped at 2 GB, kevy at a 1 GB budget.
+
+| engine / mode | load MB/s | pk p99 | idx p99 | page p99 | write p99 | disk KB/CSV-MB | RSS KB/CSV-MB |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| postgres 18, 2 GB cap | 56.4 | 201 µs | **176 µs** | **127 µs** | 1731 µs | 1440 | **60** |
+| kevy `everysec`, no budget | **363.9** | **71 µs** | 393 µs | 237 µs | **87 µs** | **1063** | 1540 |
+| kevy `tiered`, 1 GB budget | 290.7 | **71 µs** | 385 µs | 278 µs | 223 µs | 2093 | 285 |
+
+**The hedge does not survive.** With predicates that genuinely scatter
+across 3M rows and a cache holding an eighth of the data, PostgreSQL
+wins the indexed lookup by **2.2×** (176 µs vs 385–393 µs) and the list
+page by **1.9–2.2×** (127 µs vs 237–278 µs) — a wider margin than when
+the working set was hot, not a narrower one. kevy keeps the random-key
+read at **2.8×** (71 µs vs 201 µs), unchanged.
+
+And the interesting part is that this is **not an I/O story**: the
+untiered kevy run holds all 12 GB in RAM and still answers the indexed
+lookup in 393 µs against PG's 176 µs from a 2 GB cache over 17 GB of
+disk. The cost is in the query path — index scan, assembling twenty
+rows, encoding the reply — not in fetching the data. That is a concrete
+optimisation target with a number attached, which is worth more than the
+hedge was.
+
+One thing the round does confirm: `tiered` and `everysec` post the same
+indexed-lookup latency (385 vs 393 µs) although 98.3 % of rows are on
+disk in the tiered run. The `VALUES` columns answer that query from the
+index without touching a row, exactly as the index-only claim says.
+
 ### The compression difference, measured separately
 
 The first attempt at round two used a constant pad (`"x" * 4000`).
@@ -197,11 +235,12 @@ not silently distort the other six columns.
 
 ## Boundaries of this measurement
 
-- **Two sizes, one shape.** 843 MB (fits in cache) and 11.5 GB (does
-  not). Both use the same six-column table.
-- **The `idx` / `page` shapes are low-cardinality** and therefore stay
-  hot regardless of table size — see round two. A high-cardinality
-  rerun is the obvious next measurement.
+- **Two sizes, three rounds.** 843 MB (fits in cache) and 11.6 GB
+  (does not), the latter with both low- and high-cardinality
+  predicates.
+- **Round three closed the cardinality question**; rounds one and two
+  used low-cardinality predicates and their `idx` / `page` columns
+  should be read through round three's numbers.
 - **Single connection, sequential.** These are latencies, not
   throughput under concurrency, where PG's per-connection backend model
   and kevy's per-core sharding diverge sharply.
