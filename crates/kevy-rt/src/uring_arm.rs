@@ -357,9 +357,28 @@ impl<C: Commands> Shard<C> {
             //  (b) big-arg path — after big-arg completion, when
             //      `big_arg_rearm_recv` is set.
             // Both paths converge on the same `prep_recv_multishot` call.
-            let want_multishot = !uc.recv_armed
-                && !uc.closing
-                && uc.pending_big_arg.is_none();
+            //
+            // Only the BareSet cancel/read cycle OWNS recv mode (it
+            // cancels the multishot and reads the body itself). The
+            // `Frame` variant — cross-shard bare-SET, SETEX/APPEND/MSET,
+            // the common path on a multi-shard instance — stitches its
+            // bytes from the ORDINARY multishot, so gating the re-arm on
+            // `pending_big_arg.is_none()` wedged it: when the multishot
+            // ended on its own (ENOBUFS on the buffer ring is routine
+            // under a deep pipeline), nothing re-armed it, the frame
+            // never completed, and with no pending SQE and no output the
+            // conn dropped out of the arm queue for good. Captured:
+            // `big_arg=Frame(3232/4132) recv_armed=false arm_queued=false`.
+            // `uring_on_recv`'s `suppress_rearm` already made exactly
+            // this distinction — the two sites were inconsistent.
+            let big_arg_owns_recv = matches!(
+                uc.pending_big_arg.as_deref(),
+                Some(
+                    crate::uring_conn::BigArgState::BareSetCancelling { .. }
+                        | crate::uring_conn::BigArgState::BareSetReading { .. }
+                )
+            );
+            let want_multishot = !uc.recv_armed && !uc.closing && !big_arg_owns_recv;
             let recv_arm_wanted = (want_multishot || uc.big_arg_rearm_recv)
                 && !uc.recv_armed
                 && !uc.closing;
