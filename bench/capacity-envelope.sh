@@ -76,6 +76,18 @@ bench account (lx64: kevybench, checkout ~/kevy)"
 command -v python3 >/dev/null || refuse "python3 not installed"
 [ -f "$PY" ] || refuse "driver $PY missing"
 case "$SCALE" in full|tiny) ;; *) refuse "CAPACITY_SCALE must be full|tiny" ;; esac
+# Tiering must spill cold values to REAL DISK. On a RAM-backed fs
+# (tmpfs, the usual /tmp) the vlog lives in RAM, so "demotion" frees
+# nothing — RSS is unbounded and the capacity gate is meaningless (and
+# the vlog fills the tmpfs and the server aborts StorageFull). Refuse
+# it; point at a real-disk TMPDIR (the RFC's NVMe requirement).
+DATA_BASE="${TMPDIR:-/tmp}"
+mkdir -p "$DATA_BASE" 2>/dev/null || true
+DATA_FSTYPE=$(stat -f -c %T "$DATA_BASE" 2>/dev/null || echo unknown)
+case "$DATA_FSTYPE" in
+  tmpfs|ramfs) refuse "data dir $DATA_BASE is $DATA_FSTYPE (RAM) — tiering needs \
+real disk. Set TMPDIR to an NVMe/SSD path, e.g. TMPDIR=\$HOME/captmp" ;;
+esac
 # Leftover servers / load generators pollute every number. The pattern
 # matches kevy-as-a-command (".../kevy --port" or bare "kevy"), not
 # paths that merely contain the repo name.
