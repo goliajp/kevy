@@ -16,4 +16,10 @@ categories = ["memory-management", "no-std"]
 [lints]
 workspace = true
 
+[features]
+# Off by default: registering a global allocator is the binary's
+# decision, and a library must never make it for its dependents.
+default = []
+global = []
+
 [dependencies]

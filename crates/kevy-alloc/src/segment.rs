@@ -100,14 +100,22 @@ pub struct Segment {
     /// stack of slot addresses. See [`push_foreign`] for why this is
     /// push-only.
     pub foreign: AtomicPtr<u8>,
-    /// Bytes parked on `foreign`, so the accounting can price the list
-    /// without walking it. Bytes rather than a count: one list carries
-    /// slots of several classes, so a count cannot be converted back.
+    /// Slot bytes parked on `foreign`, so the accounting can price the
+    /// list without walking it. Bytes rather than a count: one list
+    /// carries slots of several classes, so a count cannot be converted
+    /// back.
     ///
     /// `AtomicUsize` rather than `AtomicU64` because 32-bit targets
     /// (Cortex-M among them) have no 64-bit atomic, and a pending
     /// foreign-free list cannot exceed the address space anyway.
     pub foreign_bytes: core::sync::atomic::AtomicUsize,
+    /// Of those, the bytes callers actually asked for.
+    ///
+    /// The owner's `live`/`rounding` counters still include everything on
+    /// this list, because the thread that freed it cannot touch another
+    /// thread's counters. Snapshots move the amount across so it is
+    /// counted once — see `Heap::snapshot`.
+    pub foreign_live: core::sync::atomic::AtomicUsize,
     /// Per-span bookkeeping, indexed by span number. Index 0 describes
     /// the header span itself and is never assigned a class.
     pub spans: [SpanMeta; SPANS_PER_SEGMENT],
@@ -130,6 +138,7 @@ impl Segment {
                 owner,
                 foreign: AtomicPtr::new(core::ptr::null_mut()),
                 foreign_bytes: core::sync::atomic::AtomicUsize::new(0),
+                foreign_live: core::sync::atomic::AtomicUsize::new(0),
                 spans: [SpanMeta::new(); SPANS_PER_SEGMENT],
             });
         }
@@ -201,14 +210,36 @@ pub fn slot_index_of(ptr: NonNull<u8>, class: usize) -> u32 {
 /// is mimalloc's thread-free design, and it is strictly simpler than
 /// tagged pointers or hazard pointers would have been.
 ///
+/// The slot carries the requested size as well as the link, because the
+/// owner needs it at drain time and nothing else remembers it: the
+/// freeing thread knows it from the `Layout`, the owner does not, and
+/// there is no per-allocation header to consult. A free slot's own bytes
+/// are the natural place to put it — the smallest class is 16 bytes and
+/// this needs a pointer plus four.
+///
 /// # Safety
 /// `slot` must be a live slot address belonging to `seg`, no longer
-/// referenced by anyone, and `slot_size` must be its class's slot size.
-pub unsafe fn push_foreign(seg: &Segment, slot: NonNull<u8>, slot_size: usize) {
+/// referenced by anyone; `slot_size` must be its class's slot size and
+/// `requested` the size it was allocated with.
+pub unsafe fn push_foreign(
+    seg: &Segment,
+    slot: NonNull<u8>,
+    slot_size: usize,
+    requested: usize,
+) {
+    // SAFETY: the slot is ours and unreferenced, and every class is at
+    // least 16 bytes — room for the link and the size beside it.
+    unsafe {
+        slot.as_ptr()
+            .add(FOREIGN_SIZE_OFFSET)
+            .cast::<u32>()
+            .write(requested as u32);
+    }
+    seg.foreign_live.fetch_add(requested, Ordering::Relaxed);
     let mut head = seg.foreign.load(Ordering::Relaxed);
     loop {
-        // SAFETY: the slot is ours and unreferenced; its first bytes are
-        // free to hold the link.
+        // SAFETY: same slot, still unreferenced; the first bytes hold
+        // the link.
         unsafe { slot.as_ptr().cast::<*mut u8>().write(head) };
         match seg.foreign.compare_exchange_weak(
             head,
@@ -229,7 +260,24 @@ pub unsafe fn push_foreign(seg: &Segment, slot: NonNull<u8>, slot_size: usize) {
 #[must_use]
 pub fn take_foreign(seg: &Segment) -> *mut u8 {
     seg.foreign_bytes.store(0, Ordering::Relaxed);
+    seg.foreign_live.store(0, Ordering::Relaxed);
     seg.foreign.swap(core::ptr::null_mut(), Ordering::Acquire)
+}
+
+/// Where [`push_foreign`] stores the requested size inside a free slot,
+/// clear of the link that occupies the first word.
+pub const FOREIGN_SIZE_OFFSET: usize = core::mem::size_of::<*mut u8>();
+
+/// Read back the requested size a foreign free recorded.
+///
+/// # Safety
+/// `slot` must still be on a foreign list, untouched since
+/// [`push_foreign`] wrote it.
+#[must_use]
+pub unsafe fn foreign_requested(slot: NonNull<u8>) -> usize {
+    // SAFETY: written by `push_foreign`, and nothing hands out a slot
+    // while it is queued.
+    unsafe { slot.as_ptr().add(FOREIGN_SIZE_OFFSET).cast::<u32>().read() as usize }
 }
 
 #[cfg(test)]

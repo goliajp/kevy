@@ -8,7 +8,7 @@
 //! that says it did not run.
 
 use crate::class;
-use crate::heap::{Heap, PER_CLASS_CAP};
+use crate::heap::Heap;
 use crate::os;
 use crate::class::SPAN_BYTES;
 
@@ -123,27 +123,37 @@ fn large_requests_bypass_the_classes() {
     require_mapping!();
     let mut heap = Heap::new(0);
     let size = class::MAX_SMALL + 1;
+    // Direct mappings are counted for the process, not the heap: a large
+    // block has no segment and so no owner to route a foreign free to.
+    let before = crate::large_stats();
     let p = heap.alloc(size, 8).expect("the direct-mapping path serves this");
-    let st = heap.snapshot();
-    assert_eq!(st.large_count, 1);
-    assert_eq!(st.live, size as u64);
-    assert!(st.balanced(), "{st:?}");
+    let during = crate::large_stats();
+    assert_eq!(during.large_count, before.large_count + 1);
+    assert_eq!(during.live, before.live + size as u64);
+    assert!(during.balanced(), "{during:?}");
+    // The heap's own snapshot covers the small path only, and balances
+    // on its own — as does the large figure, so their sum does too.
+    assert!(heap.snapshot().balanced());
     // SAFETY: ours, this size.
     unsafe { heap.dealloc(p, size, 8) };
-    let st = heap.snapshot();
-    assert_eq!(st.large_count, 0);
-    assert_eq!(st.live, 0);
+    let after = crate::large_stats();
+    assert_eq!(after.large_count, before.large_count);
+    assert_eq!(after.live, before.live);
 }
 
 #[test]
 fn m6_an_exhausted_class_refuses_instead_of_handing_back_a_wild_pointer() {
     require_mapping!();
-    let mut heap = Heap::new(0);
-    // Fill one class past its cap. The class is chosen large so the
-    // number of allocations stays small: 8192-byte slots give 8 per span.
+    // The default cap is a runaway guard set past any real workload, so
+    // a tighter one is used here to reach the refusal at all — see
+    // `PER_CLASS_CAP` for why the inherited value was wrong.
+    const CAP: u16 = 3;
+    let mut heap = Heap::with_class_cap(0, CAP);
+    // The class is chosen large so the number of allocations stays
+    // small: 8192-byte slots give 8 per span.
     let c = class::index_of(class::MAX_SMALL, 8).unwrap();
     let per_span = class::slots_per_span(c);
-    let capacity = per_span * PER_CLASS_CAP as usize;
+    let capacity = per_span * CAP as usize;
     let mut given = Vec::new();
     for _ in 0..capacity {
         match heap.alloc(class::MAX_SMALL, 8) {
@@ -335,4 +345,58 @@ fn spans_with_room_are_reused_before_new_ones_are_claimed() {
     }
     // SAFETY: ours, this size and alignment.
     unsafe { heap.dealloc(straggler, size, 8) };
+}
+
+#[test]
+fn a_foreign_free_leaves_the_owner_balanced_before_and_after_draining() {
+    require_mapping!();
+    // Two heaps in one thread stand in for two shards: the second has a
+    // different identity, so a free through it takes the foreign path
+    // exactly as a cross-thread free would — without the timing.
+    //
+    // This is the regression test for the defect the standard library
+    // found the first time it ran on this allocator: the freeing side
+    // was subtracting from *its own* counters bytes that had been
+    // counted on the owner's, so its totals went negative. Single-thread
+    // tests could not reach it, and the byte identity is what catches
+    // it, so the assertion is on the identity rather than on a symptom.
+    let mut owner = Heap::new(1);
+    let mut other = Heap::new(2);
+
+    let size = 400;
+    let held: Vec<_> = (0..1_000)
+        .map(|_| owner.alloc(size, 8).expect("owner serves these"))
+        .collect();
+    let full = owner.snapshot();
+    assert_eq!(full.live, 1_000 * size as u64);
+    assert!(full.balanced(), "{full:?}");
+
+    // Hand every one of them back through the wrong heap.
+    for p in held {
+        // SAFETY: allocated with this size and alignment; `dealloc`
+        // routes a foreign slot to its owning segment itself.
+        unsafe { other.dealloc(p, size, 8) };
+    }
+
+    // The other heap allocated nothing, so nothing may have moved on it.
+    let intruder = other.snapshot();
+    assert_eq!(intruder.live, 0, "the freeing heap counted bytes it never handed out");
+    assert!(intruder.balanced(), "{intruder:?}");
+
+    // On the owner the slots are in flight: still inside its own
+    // counters, now attributed to `cache` so nothing is counted twice.
+    let parked = owner.snapshot();
+    // Whole slots are parked, so `cache` is in slot bytes — the class
+    // serving 400 is 416, and the 16 bytes of rounding travel with it.
+    let slot = class::size_of(class::index_of(size, 8).unwrap()) as u64;
+    assert_eq!(parked.cache, 1_000 * slot, "slot bytes should be parked");
+    assert_eq!(parked.live, 0, "the owner should no longer count them as live");
+    assert!(parked.balanced(), "{parked:?}");
+
+    owner.drain_foreign();
+    let settled = owner.snapshot();
+    assert_eq!(settled.cache, 0, "the list should be empty after draining");
+    assert_eq!(settled.live, 0);
+    assert_eq!(settled.rounding, 0);
+    assert!(settled.balanced(), "{settled:?}");
 }

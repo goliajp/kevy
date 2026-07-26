@@ -22,7 +22,16 @@ path = "src/lib.rs"
 name = "kevy"
 path = "src/main.rs"
 
+[features]
+default = []
+# Route the whole process through kevy-alloc (v5 experiment). Off by
+# default: the allocator is under every path with no way to disable it
+# at run time, so turning it on is a deliberate act and the A/B that
+# justifies it is bench/allocgate.sh's M1 and M2.
+kevy-alloc = ["dep:kevy-alloc"]
+
 [dependencies]
+kevy-alloc = { path = "../kevy-alloc", version = "4.1.1", features = ["global"], optional = true }
 kevy-sys = { path = "../kevy-sys", version = "4.1.1" }
 kevy-seg = { path = "../kevy-seg", version = "4.1.1" }
 kevy-window = { path = "../kevy-window", version = "4.1.1" }
