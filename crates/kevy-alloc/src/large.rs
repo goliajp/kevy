@@ -23,77 +23,114 @@ use core::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use crate::os;
 use crate::stats::Stats;
 
-/// Mappings a heap may retain for reuse instead of unmapping. Sixteen
-/// bounds idle retention to a few MB per shard; the reclaim tick drains
-/// the pool, so retention beyond a tick needs sustained traffic — which
-/// is exactly when it is earning its keep.
-pub(crate) const POOL_SLOTS: usize = 16;
+/// Mappings retained for reuse instead of unmapping, process-wide.
+/// Thirty-two bounds idle retention to a few MB total; every shard's
+/// reclaim tick drains it, so retention beyond a tick needs sustained
+/// traffic — which is exactly when it is earning its keep.
+pub(crate) const POOL_SLOTS: usize = 32;
 
 /// Bytes currently parked in retention pools, process-wide — reported
 /// inside the `hysteresis` term ("retained rather than released", the
 /// same policy the empty-span rule applies at span scale).
 static POOLED: AtomicU64 = AtomicU64::new(0);
 
-/// A per-heap pool of recently released direct mappings, keyed by exact
-/// mapped length.
+/// The retention pool, keyed by exact mapped length — and process-wide,
+/// which the syscall counter decided, not taste.
 ///
-/// The syscall counter forced this: after the class table reached its
-/// 64 KiB-span ceiling, the legacy shape still ran ~17k direct
-/// allocations a second — dispatch and reply buffers growing through a
-/// 36 KB–300 KB ladder — and each paid an mmap on birth and a munmap on
-/// death while glibc paid zero syscalls
-/// (finding `2026-07-27-mmap-lock-was-the-killer.md`, follow-up).
-/// Growth ladders repeat the same page-rounded lengths deterministically,
-/// so exact-length matching is both trivial and sufficient; a miss just
-/// maps, and anything unusual falls straight through.
-pub(crate) struct LargePool {
+/// Its existence: after the class table reached its 64 KiB-span
+/// ceiling, the legacy shape still ran ~17k direct allocations a second
+/// — dispatch and reply buffers growing through a 36 KB–300 KB ladder —
+/// each paying an mmap on birth and a munmap on death while glibc paid
+/// zero syscalls (finding `2026-07-27-mmap-lock-was-the-killer.md`,
+/// follow-up).
+///
+/// Its scope: the first version was per-heap and moved the count by
+/// **nothing**, because these buffers are born on one shard and die on
+/// another — the freeing side's pool filled once and stayed useless
+/// while the allocating side's stayed empty. A large mapping has no
+/// segment, so no owner is recoverable from its address and no route
+/// home exists; the pool must be shared. One spinlock guards it: at
+/// ~17k operations a second against 8.5M ops served this is a cold
+/// path, and an uncontended spinlock costs two orders of magnitude less
+/// than the syscall it replaces.
+///
+/// Growth ladders repeat the same page-rounded lengths
+/// deterministically, so exact-length matching is both trivial and
+/// sufficient; a miss just maps, and anything unusual falls through.
+struct PoolInner {
     entries: [(usize, usize); POOL_SLOTS], // (addr, mapped_len)
     len: u8,
 }
 
-impl LargePool {
-    pub(crate) const fn new() -> Self {
-        Self { entries: [(0, 0); POOL_SLOTS], len: 0 }
-    }
+static POOL_LOCK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static mut POOL: PoolInner = PoolInner { entries: [(0, 0); POOL_SLOTS], len: 0 };
 
-    /// Take a parked mapping of exactly `mapped` bytes.
-    fn take(&mut self, mapped: usize) -> Option<NonNull<u8>> {
-        for i in 0..self.len as usize {
-            if self.entries[i].1 == mapped {
-                let (addr, _) = self.entries[i];
-                self.len -= 1;
-                self.entries[i] = self.entries[self.len as usize];
+/// Run `f` holding the pool lock.
+fn with_pool<R>(f: impl FnOnce(&mut PoolInner) -> R) -> R {
+    use core::sync::atomic::Ordering;
+    while POOL_LOCK
+        .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        core::hint::spin_loop();
+    }
+    // SAFETY: the spinlock gives exclusive access for `f`'s duration,
+    // and `f` cannot re-enter — nothing inside it allocates.
+    let out = f(unsafe { &mut *core::ptr::addr_of_mut!(POOL) });
+    POOL_LOCK.store(false, Ordering::Release);
+    out
+}
+
+/// Take a parked mapping of exactly `mapped` bytes.
+fn pool_take(mapped: usize) -> Option<NonNull<u8>> {
+    with_pool(|p| {
+        for i in 0..p.len as usize {
+            if p.entries[i].1 == mapped {
+                let (addr, _) = p.entries[i];
+                p.len -= 1;
+                p.entries[i] = p.entries[p.len as usize];
                 POOLED.fetch_sub(mapped as u64, Relaxed);
                 return NonNull::new(addr as *mut u8);
             }
         }
         None
-    }
+    })
+}
 
-    /// Park a mapping; refuses when full (caller unmaps).
-    fn park(&mut self, ptr: NonNull<u8>, mapped: usize) -> bool {
-        if self.len as usize == POOL_SLOTS {
+/// Park a mapping; refuses when full (the caller unmaps).
+fn pool_park(ptr: NonNull<u8>, mapped: usize) -> bool {
+    with_pool(|p| {
+        if p.len as usize == POOL_SLOTS {
             return false;
         }
-        self.entries[self.len as usize] = (ptr.as_ptr() as usize, mapped);
-        self.len += 1;
+        p.entries[p.len as usize] = (ptr.as_ptr() as usize, mapped);
+        p.len += 1;
         POOLED.fetch_add(mapped as u64, Relaxed);
         true
-    }
+    })
+}
 
-    /// Unmap everything parked (the reclaim tick's job).
-    pub(crate) fn drain(&mut self) {
-        for i in 0..self.len as usize {
-            let (addr, mapped) = self.entries[i];
-            POOLED.fetch_sub(mapped as u64, Relaxed);
-            counters::sub_mapped_only(mapped as u64);
-            // SAFETY: parked mappings are live, exactly `mapped` bytes,
-            // and referenced by nobody once off the pool.
-            unsafe {
-                os::unmap(NonNull::new_unchecked(addr as *mut u8), mapped);
-            }
+/// Unmap everything parked. Any shard's reclaim tick calls this, so
+/// retention beyond a tick has to be re-earned by sustained traffic.
+pub(crate) fn pool_drain() {
+    // Collected under the lock, unmapped outside it: munmap takes the
+    // process mmap_lock, and holding a spinlock across that invites
+    // exactly the convoy this pool exists to prevent.
+    let mut held: [(usize, usize); POOL_SLOTS] = [(0, 0); POOL_SLOTS];
+    let n = with_pool(|p| {
+        let n = p.len as usize;
+        held[..n].copy_from_slice(&p.entries[..n]);
+        p.len = 0;
+        n
+    });
+    for &(addr, mapped) in &held[..n] {
+        POOLED.fetch_sub(mapped as u64, Relaxed);
+        counters::sub_mapped_only(mapped as u64);
+        // SAFETY: parked mappings are live, exactly `mapped` bytes, and
+        // referenced by nobody once off the pool.
+        unsafe {
+            os::unmap(NonNull::new_unchecked(addr as *mut u8), mapped);
         }
-        self.len = 0;
     }
 }
 
@@ -145,6 +182,10 @@ pub fn large_stats() -> Stats {
         mapped: counters::MAPPED.load(Relaxed),
         live: counters::LIVE.load(Relaxed),
         rounding: counters::ROUNDING.load(Relaxed),
+        // Parked mappings: retained-rather-than-released, the same
+        // policy the empty-span rule applies at span scale, so the same
+        // term prices them (contract §1, widened with this reason).
+        hysteresis: POOLED.load(Relaxed),
         large_count: counters::COUNT.load(Relaxed),
         ..Stats::default()
     }
@@ -153,12 +194,12 @@ pub fn large_stats() -> Stats {
 /// Map `size` bytes directly, reusing a parked mapping when one of
 /// exactly the right length is waiting. `None` when the OS refuses or
 /// the alignment is stricter than a fresh mapping provides.
-pub(crate) fn alloc(pool: &mut LargePool, size: usize, align: usize) -> Option<NonNull<u8>> {
+pub(crate) fn alloc(size: usize, align: usize) -> Option<NonNull<u8>> {
     if align > os::PAGE {
         return None;
     }
     let mapped = os::round_up(size, os::PAGE);
-    if let Some(p) = pool.take(mapped) {
+    if let Some(p) = pool_take(mapped) {
         counters::add_live_only(mapped as u64, size as u64);
         return Some(p);
     }
@@ -169,10 +210,10 @@ pub(crate) fn alloc(pool: &mut LargePool, size: usize, align: usize) -> Option<N
 
 /// # Safety
 /// `ptr`/`size` must come from [`alloc`] and not be used afterwards.
-pub(crate) unsafe fn dealloc(pool: &mut LargePool, ptr: NonNull<u8>, size: usize) {
+pub(crate) unsafe fn dealloc(ptr: NonNull<u8>, size: usize) {
     let mapped = os::round_up(size, os::PAGE);
     counters::sub_live_only(mapped as u64, size as u64);
-    if pool.park(ptr, mapped) {
+    if pool_park(ptr, mapped) {
         return;
     }
     counters::sub_mapped_only(mapped as u64);
