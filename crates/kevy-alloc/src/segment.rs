@@ -21,6 +21,7 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicPtr, Ordering};
 
 use crate::class::{self, SPAN_BYTES};
+pub use crate::pagemap::{NO_CLASS, SpanMeta};
 
 /// Bytes per segment. Power of two: the mask is the lookup.
 pub const SEGMENT_BYTES: usize = 4 * 1024 * 1024;
@@ -35,56 +36,6 @@ pub const FIRST_DATA_SPAN: usize = 1;
 /// without this word is not ours, and that is a bug in the caller
 /// rather than something to paper over.
 const MAGIC: u64 = 0x6b65_7679_616c_6c63; // "kevyallc"
-
-/// No class assigned — the span is free for any class to take.
-pub const NO_CLASS: u8 = 0xFF;
-
-/// Per-span bookkeeping. Slot references are indices, not pointers, so
-/// this stays small: 64 spans of metadata sit in one cache-friendly
-/// block instead of scattering the header across pages.
-#[derive(Clone, Copy)]
-pub struct SpanMeta {
-    /// Size class this span serves, or [`NO_CLASS`].
-    pub class: u8,
-    /// Pages have been returned to the OS; the span is addressable but
-    /// its contents are gone and `bump`/`free_head` are reset.
-    pub discarded: bool,
-    /// Head of the inline free list: slot index + 1, or 0 for empty.
-    pub free_head: u32,
-    /// Slots handed out and not yet freed.
-    pub live: u32,
-    /// Next slot never yet handed out. Everything at or above this is
-    /// virgin: mapped, but never touched, so not resident.
-    pub bump: u32,
-}
-
-impl SpanMeta {
-    const fn new() -> Self {
-        Self { class: NO_CLASS, discarded: false, free_head: 0, live: 0, bump: 0 }
-    }
-
-    /// Slots this span can hold, given its class.
-    #[must_use]
-    pub fn capacity(&self) -> u32 {
-        if self.class == NO_CLASS {
-            return 0;
-        }
-        class::slots_per_span(self.class as usize) as u32
-    }
-
-    /// Free slots that have been handed out before and returned — the
-    /// touched part of the slack, which *is* resident.
-    #[must_use]
-    pub fn touched_free(&self) -> u32 {
-        self.bump - self.live
-    }
-
-    /// Slots never handed out — mapped but not resident.
-    #[must_use]
-    pub fn virgin(&self) -> u32 {
-        self.capacity() - self.bump
-    }
-}
 
 /// The header at the base of every segment.
 #[repr(C)]
@@ -301,9 +252,11 @@ mod tests {
     }
 
     #[test]
-    fn span_meta_stays_small() {
-        // 64 of these live in every header; if this grows past a few
-        // cache lines the masking win starts paying for itself twice.
-        assert!(core::mem::size_of::<SpanMeta>() <= 16);
+    fn the_bitmap_header_still_fits_its_span() {
+        // v2 made SpanMeta deliberately large — the bitmap is the price
+        // of page-granular reclaim, and the header span exists to be
+        // spent on exactly this. The bound that matters is the span.
+        assert!(core::mem::size_of::<SpanMeta>() >= crate::pagemap::BITMAP_WORDS * 8);
+        assert!(core::mem::size_of::<Segment>() <= SPAN_BYTES);
     }
 }

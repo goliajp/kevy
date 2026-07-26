@@ -35,8 +35,12 @@ span    = (ptr & (4 MiB - 1)) / 64 KiB
 class    = segment.spans[span].class
 ```
 
-Memory comes from `mmap` and empty spans are handed back with
-`madvise(MADV_DONTNEED)` — the property the whole exercise is about.
+Memory comes from `mmap`. Occupancy is a **bitmap in the segment
+header** — data pages hold zero metadata, so reclaim works at **page
+granularity**: any 4 KiB page no live slot overlaps goes back with
+`madvise(MADV_DONTNEED)` while its neighbours stay live. Allocation is
+lowest-first, which densifies — live slots pack low, churn migrates free
+space upward into whole returnable pages.
 
 ## Accounting
 

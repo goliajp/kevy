@@ -400,3 +400,160 @@ fn a_foreign_free_leaves_the_owner_balanced_before_and_after_draining() {
     assert_eq!(settled.rounding, 0);
     assert!(settled.balanced(), "{settled:?}");
 }
+
+#[test]
+fn v2_pages_return_while_the_span_still_lives() {
+    require_mapping!();
+    // The measurement that forced v2: a span of the 416-byte class holds
+    // 157 slots, and under the whole-span rule all 157 had to die before
+    // one page came back. Here the span keeps survivors — only the
+    // slots overlapping its LAST page stay live — and the pages below
+    // them must come back anyway.
+    let mut heap = Heap::new(0);
+    let size = 400;
+    let slot = class::size_of(class::index_of(size, 8).unwrap());
+    let per_span = class::slots_per_span(class::index_of(size, 8).unwrap());
+    let given: Vec<_> = (0..per_span)
+        .map(|_| heap.alloc(size, 8).expect("filling one span"))
+        .collect();
+    // Keep everything whose slot touches the last page; free the rest.
+    let last_page_start = (crate::pagemap::PAGES_PER_SPAN - 1) * os::PAGE;
+    let mut survivors = Vec::new();
+    for (i, p) in given.into_iter().enumerate() {
+        if (i + 1) * slot > last_page_start {
+            survivors.push(p);
+        } else {
+            // SAFETY: ours, this size and alignment.
+            unsafe { heap.dealloc(p, size, 8) };
+        }
+    }
+    assert!(!survivors.is_empty(), "the last page must hold live slots");
+    let before = heap.snapshot();
+    assert_eq!(before.returned, 0, "nothing returned before the sweep");
+    heap.reclaim();
+    let after = heap.snapshot();
+    assert!(after.balanced(), "{after:?}");
+    assert!(
+        after.returned > 0,
+        "a span with survivors returned nothing — the v1 failure, back: {after:?}"
+    );
+    // Almost all of the span's free bytes should be returned: only the
+    // pages pinned by survivors (and slot-straddling edges) stay.
+    assert!(
+        after.returned > (crate::pagemap::PAGES_PER_SPAN as u64 / 2) * os::PAGE as u64,
+        "returned only {} bytes of a {}-byte span",
+        after.returned,
+        class::SPAN_BYTES
+    );
+    assert!(
+        after.predicted_resident() < before.predicted_resident(),
+        "prediction did not fall: {} -> {}",
+        before.predicted_resident(),
+        after.predicted_resident()
+    );
+    for p in survivors {
+        // SAFETY: still live, ours.
+        unsafe { heap.dealloc(p, size, 8) };
+    }
+}
+
+#[test]
+fn v2_densification_migrates_free_space_into_whole_pages() {
+    require_mapping!();
+    // Lowest-first allocation is a claim about CHURN, not about one
+    // round: any single kill-pattern can leave a survivor pinning every
+    // page (the first version of this test did exactly that, freeing
+    // alternate slots — the untouched alternates pinned everything).
+    // What densification promises is that as churn continues, deaths
+    // eventually visit the high slots and their replacements all land
+    // low, so free space migrates upward into whole pages. A LIFO free
+    // list refills wherever death last struck and promises nothing.
+    let mut heap = Heap::new(0);
+    let size = 400;
+    let c = class::index_of(size, 8).unwrap();
+    let per_span = class::slots_per_span(c);
+    let mut live: Vec<_> = (0..per_span * 4)
+        .map(|_| heap.alloc(size, 8).expect("fill"))
+        .collect();
+    // Rounds of "half die, a quarter arrive": net shrinkage under a
+    // death order that decorrelates from slot position as reallocated
+    // (low) slots mix into the vec.
+    for _ in 0..8 {
+        let mut i = 0usize;
+        let mut freed = 0usize;
+        live.retain(|p| {
+            i += 1;
+            if i.is_multiple_of(2) {
+                // SAFETY: ours, this size and alignment.
+                unsafe { heap.dealloc(*p, size, 8) };
+                freed += 1;
+                false
+            } else {
+                true
+            }
+        });
+        for _ in 0..freed / 4 {
+            live.push(heap.alloc(size, 8).expect("refill"));
+        }
+    }
+    heap.reclaim();
+    let st = heap.snapshot();
+    assert!(st.balanced(), "{st:?}");
+    assert!(
+        st.returned > 0,
+        "an interleaved churn produced no returnable page — densification is not happening: {st:?}"
+    );
+    for p in live {
+        // SAFETY: ours.
+        unsafe { heap.dealloc(p, size, 8) };
+    }
+}
+
+/// The kernel's own verdict on v2, Linux only (macOS MADV_FREE gives no
+/// prompt guarantee — same reasoning as the whole-span M4 test).
+#[cfg(target_os = "linux")]
+#[test]
+fn v2_the_kernel_reclaims_pages_from_spans_with_survivors() {
+    require_mapping!();
+    let mut heap = Heap::new(0);
+    let size = 400;
+    let c = class::index_of(size, 8).unwrap();
+    let slot = class::size_of(c);
+    let per_span = class::slots_per_span(c);
+    let spans = 200;
+    let mut given = Vec::with_capacity(per_span * spans);
+    for _ in 0..per_span * spans {
+        let p = heap.alloc(size, 8).expect("fill");
+        // Touch, so the pages are resident and their leaving is visible.
+        // SAFETY: live slot of at least `size` bytes.
+        unsafe { core::ptr::write_bytes(p.as_ptr(), 0x5A, size) };
+        given.push(p);
+    }
+    let peak = rss_bytes();
+    // Free all but each span's last-page slots — every span keeps
+    // survivors, so the v1 whole-span rule would return NOTHING here.
+    let last_page_start = (crate::pagemap::PAGES_PER_SPAN - 1) * os::PAGE;
+    let mut survivors = Vec::new();
+    for (n, p) in given.into_iter().enumerate() {
+        let in_span = n % per_span;
+        if (in_span + 1) * slot > last_page_start {
+            survivors.push(p);
+        } else {
+            // SAFETY: ours, this size and alignment.
+            unsafe { heap.dealloc(p, size, 8) };
+        }
+    }
+    heap.reclaim();
+    let after = rss_bytes();
+    let st = heap.snapshot();
+    assert!(st.balanced(), "{st:?}");
+    assert!(
+        after + st.returned / 2 < peak,
+        "kernel RSS barely moved with survivors pinning every span: {peak} -> {after} (returned={})",
+        st.returned
+    );
+    for p in survivors {
+        // SAFETY: ours.
+        unsafe { heap.dealloc(p, size, 8) };
+    }
+}
