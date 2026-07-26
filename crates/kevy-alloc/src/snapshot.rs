@@ -22,7 +22,17 @@ impl Heap {
     /// not per operation.
     #[must_use]
     pub fn snapshot(&self) -> Stats {
-        let mut st = Stats { live: self.live_bytes, rounding: self.rounding_bytes, ..Stats::default() };
+        let mut st = Stats {
+            live: self.live_bytes,
+            rounding: self.rounding_bytes,
+            // Slots parked in the hot cache: freed by their callers,
+            // bits still set, pages still pinned — priced here so the
+            // per-span walk (which sees them as live) double-counts
+            // nothing: their slot bytes come off live+rounding on the
+            // free, and land in cache.
+            cache: self.cached_bytes,
+            ..Stats::default()
+        };
         let mut seg = self.segments;
         while !seg.is_null() {
             // SAFETY: live header from our own list.
