@@ -1,9 +1,33 @@
 # Consumer report — kevy-embedded 3.18 as a primary store
 
+> **RESOLVED in 4.0.0 (verified 2026-07-26).** Every defect and the two
+> highest-priority requests below were fixed in the published 4.0.0 crate, and
+> we re-ran our harness against it to confirm:
+>
+> - **D1 (rejected atomic left writes live)** → fixed. `atomic()` now rolls
+>   back on `Err` (`ops_atomic.rs` `rollback(&mut g, undo)`). Measured: after a
+>   rejected closure the key reads `100` in memory **and** `100` after restart
+>   (3.18 gave `999` in memory, `100` after replay).
+> - **D2 (not crash-atomic under any fsync policy)** → fixed. Commit is one
+>   bracketed AOF group (`commit_group` / `begin_group`). Measured: `kill -9`
+>   inside a 50-mutation block under `Fsync::Always` yields only `0` or `50`,
+>   never an intermediate count (3.18 produced every value `1..50`).
+> - **D3 (doc comment described behaviour the crate lacked)** → moot with D2 fixed.
+> - **R2 / F1 (no collection reads inside `atomic`)** → fixed. `AtomicCtx`
+>   gained `SMEMBERS SISMEMBER LRANGE LLEN SCARD ZRANGEBYSCORE`; verified
+>   `smembers`/`sismember` work inside a transaction.
+> - **R1 (make `atomic` all-or-nothing)** → this is exactly D1+D2 above.
+>
+> The remaining items (R3 index-reads-in-atomic, R4 boot reconciliation hook,
+> R6 the one-row-many-derived-keys recipe) are enhancements, not defects, and
+> are not blocking us. Thank you — the turnaround was fast and the fixes match
+> what the report asked for. goliajp is now on 4.0.0. The original report is
+> kept verbatim below as the record.
+
 **From:** goliajp (GOLIA K.K. internal business system — payroll, social
 insurance, secondment billing, IM, wiki, git hosting)
 **Against:** `kevy-embedded = "3.18"` from crates.io, and `feature/v4` where noted
-**Date:** 2026-07-20
+**Date:** 2026-07-20 (resolution note appended 2026-07-26)
 **Nature:** consumer findings. **No kevy code was modified.** Everything below
 is either measured on this machine or cited to a line in the published crate.
 
