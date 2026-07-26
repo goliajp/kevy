@@ -1,7 +1,7 @@
-# STONE-BENCH — six-stone microbench baseline
+# STONE-BENCH — stone microbench baseline
 
-Per-crate microbenchmarks over the public API of the six high-blast-radius
-stone crates (v3.18 T5c). This table is the comparison surface for future
+Per-crate microbenchmarks over the public API of the high-blast-radius
+stone crates (v3.18 T5c; kevy-alloc added by the v5 experiment). This table is the comparison surface for future
 stone polish work: re-run, diff against the row, judge the delta against the
 recorded stdev band.
 
@@ -12,7 +12,7 @@ cargo run -p kevy-bench --release --example stones            # all six
 cargo run -p kevy-bench --release --example stones -- map     # one stone
 ```
 
-Filters: `map` `ring` `config` `text` `store` `vector`.
+Filters: `map` `ring` `config` `text` `store` `vector` `alloc`.
 Runner source: `crates/kevy-bench/examples/stones/`.
 
 ## Method
@@ -90,9 +90,38 @@ Runner source: `crates/kevy-bench/examples/stones/`.
 | insert 10k × 128d | 283.2 ± 16.9 µs | 318.1 | 274.4 | 5 | 425.4 ± 5.0 µs | one `apply` insert (per insert, fresh graph per sample; incl. 512 B vec clone) |
 | knn@10, ef default | 76.9 ± 5.4 µs | 83.6 | 65.9 | 30 | 125.9 ± 0.9 µs | one `knn(q, 10, 0)` on the 10k graph (ef=0 → max(4k, 100)) |
 
+### kevy-alloc (v5 experiment; per-shard heap, 400 B is the PG-comparison value size)
+
+Two columns because the question here is not "how fast" in the abstract:
+an allocator has no off switch, so a fast path slower than the system
+one would show up on every SET, GET and published message. The system
+allocator is the thing being replaced, so it is measured beside us on
+identical shapes.
+
+| row | darwin median ± stdev | p95 | min | N | lx64 median ± stdev | per-op basis |
+|---|---:|---:|---:|---:|---:|---|
+| alloc+free 64 B (kevy-alloc) | 5.0 ± 0.0 ns | 5.0 | 5.0 | 30 | pending | one alloc + one dealloc |
+| alloc+free 64 B (system) | 10.0 ± 2.0 ns | 15.0 | 8.0 | 30 | pending | same |
+| alloc+free 400 B (kevy-alloc) | 5.0 ± 0.0 ns | 5.0 | 5.0 | 30 | pending | same |
+| alloc+free 400 B (system) | 18.0 ± 2.0 ns | 24.0 | 16.0 | 30 | pending | same |
+| alloc+free 4096 B (kevy-alloc) | 5.0 ± 1.0 ns | 7.0 | 4.0 | 30 | pending | same |
+| alloc+free 4096 B (system) | 16.0 ± 2.0 ns | 21.0 | 13.0 | 30 | pending | same |
+| churn 4096×400 B interleaved free (kevy-alloc) | 3.8 ± 0.1 ns | 4.1 | 3.5 | 10 | pending | one alloc+free of the 4096; every other slot freed first |
+| churn 4096×400 B interleaved free (system) | 19.5 ± 2.4 ns | 24.7 | 18.3 | 10 | pending | same |
+| the same **plus returning the pages** (kevy-alloc) | 29.3 ± 2.9 ns | 32.3 | 23.0 | 10 | pending | churn + `reclaim()` |
+| reclaim sweep, nothing to return | 18.0 ± 2.0 ns | 25.0 | 18.0 | 20 | pending | one `reclaim()` call on an already-swept heap |
+
+The page-return row has no system column deliberately: there is nothing
+to compare it against, because that is the operation glibc cannot perform
+at any price (`bench/PERF-FINDING-2026-07-25-b6-rss-glibc-fragmentation.md`).
+Folding it into the churn row instead — which the first draft of this
+bench did — timed our reclaim against their nothing and read as a 1.5×
+loss that was really a missing column.
+
 ## History
 
 | date | machine | change |
 |---|---|---|
 | 2026-07-11 | darwin arm64 (M4 Max) | first cut (v3.18 T5c); lx64 pending |
 | 2026-07-11 | lx64 (i7-10700K) | canonical Linux column lands (v4 T4 K-403); pending marker retired |
+| 2026-07-26 | darwin arm64 (M4 Max) | kevy-alloc joins (v5 T1), measured beside the system allocator; lx64 column pending |

@@ -487,13 +487,18 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - [x] **M8 当场变成真断言(T0 唯一绿灯)**:反例验证过(给 `kevy-hash` 加一个 `unsafe fn` → FAIL,还原 → PASS)。**顺带抓到 RFC 一句不实陈述** —— 我写"unsafe 只在 kevy-sys/kevy-uring/kevy-madvise 少数几个 crate",实录是 **14 个**(FFI 门 / wasm ABI / raw-entry map / uring reactor 本来就该有)。RFC 已更正;M8 改为对 `bench/.unsafe-crates-baseline` 的 **ratchet**(不看数量看不许悄悄增长,`kevy-alloc` 预批)
 - [x] **计划外偏离(已论证)**:原写"perfgate 新增 allocator-ON 对照线",实施时改放 allocgate。理由 = 两者问的不是同一个问题:**perfgate 是对历史基线的 ratchet;分配器问的是同源两构建、同盒、交错的 A/B**。perfgate 待 T2 末分配器默认 ON 后,其既有线自然就在测它,**无需新增 metric**
 
-### T1 — `kevy-alloc` 石头(不接线)【RFC 已批】
-- [ ] size class 分级表(tcmalloc 式,最坏舍入 ~12.5%)+ span(mmap via `kevy-madvise`,一 span 一 class,空槽内联 freelist)+ span registry
-- [ ] 每分片 TLAB(非原子快路径)+ 外分片 free 队列(snmalloc 式消息传递;torajs `central.rs` 的 ABA 条款**重新论证不许继承**——kevy 真有 N 核并发 free)
-- [ ] `PER_CLASS_CAP` + 诚实 OOM(torajs `c2970b6d` 的学费:无上限 = SIGSEGV 不是泄漏)
-- [ ] 归还策略(jemalloc decay 式滞后)+ **M4 直测:分配 N span → 释放 → 断言 RSS 真回落**
-- [ ] 四项记账导出(T0 契约)· unit + fuzz(§1 那个 churn 形状)+ 对 system allocator 的 bench
-- [ ] **无 header 契约**:只服务 sized dealloc,断言任何 size class 路径不写每块 header
+### T1 — `kevy-alloc` 石头(不接线)✅ 完(2026-07-26,`feature/v5-memory`)
+- [x] **几何**:segment 4 MiB(按 4 MiB 对齐 map)× 64 span × 64 KiB,span 0 放头。**指针掩码即查表** —— `ptr & !(4MiB-1)` 得 segment、偏移得 span、span meta 得 class,于是**每块零 header**(mimalloc segment/page + Go mheap arena 索引)
+- [x] **size class 63 档**(每八度 8 等分,最坏相对舍入 11.1%)+ 空槽内联 freelist + 按 class 的 span 归属
+- [x] **外分片 free = push-only + swap-drain**(mimalloc thread-free 式)。**ABA 不是被接受而是被消除**:torajs `central.rs` 记录并接受了 Treiber pop 的 ABA(理由是它单线程),kevy 真有 N 核并发 free,**继承那条注释就是继承一个 bug**。改成只有属主移除、且一次 `swap` 取走整条链 —— 消费侧没有 CAS,ABA 无窗口可开
+- [x] `PER_CLASS_CAP = 64` span/类 + 耗尽答 `None`(torajs `c2970b6d` 的学费)· jemalloc decay 式 `EMPTY_SPAN_HYSTERESIS`
+- [x] **记账七项**(T0 契约 §1)+ `Stats::balanced()` 恒等式无容差;`snapshot()` 走 segment 计算,热路径只维护 live/rounding 两个计数器
+- [x] 验证:**21 单测全绿**(darwin;Linux/wasm/thumbv7em 交叉 check 净)· **fuzz `heap_churn` 431,413 runs 零 crash**(已进 fuzz.yml)· clippy/locgate 绿 · release.yml 发布链已登记
+- [x] **bench 入 STONE-BENCH**(与 system allocator 并排):alloc+free 400B **5ns vs 18ns**;churn 4096×400B **3.8 vs 19.5 ns/op**;**含归还页 29.3 ns/op —— 该行没有对手列,因为那是 glibc 出多少钱都做不到的操作**
+- [x] **allocgate 四行翻绿**:M3-identity / M4-reclaim / M6-class-cap / M8-unsafe-ratchet(其余五行归 T2)
+- **三处与参照系分岔(铁律②要求写清)**:① **不放 TLAB** —— tcmalloc/mimalloc 的线程缓存是为了挡在共享堆前面,kevy 每核一分片,堆本身就是线程本地的,快路径已无原子,再加一层是缓存前面套缓存;② **span 统一 64 KiB 而非按 class 变长** —— 初稿按 class 变长以压 slack,被两点推翻:掩码需要统一几何(变长要在 free 路径上加查找结构),且 span 尾部是 bump 之上的 **virgin**(已映射但从未触碰 = 不常驻),担心本身错位;③ **OS 边界自建而非复用 `kevy-madvise`** —— 后者 Linux-only 且契约就是大页建议,而分配器要 macOS 也能跑、且要能**归还**页
+- **两处自测抓到的真错**:① `MIN_ALIGN=16` 是假的 —— 步长 8 的类(24/40/…)只有 8 对齐,已改为 class 选择满足对齐(`index_of(size, align)`);② "8 字节步长不额外花钱"是假的 —— 16→24 相对浪费 29%,已改成两段式声明(≥128 相对界 <12.5%,以下**绝对界 ≤7B**,那是 8 字节粒度的地板不是选择)
+- **一处 bench 自欺已修**:首版把 `reclaim()` 计进 churn 行,读出来是"慢 1.5×" —— 实为**拿我们的归还去比对手的什么都不做**。已拆成独立行,并注明该行没有对手列
 
 ### T2 — `kevy-alloc` 接线 + M1/M2/M3 实测(lx64)
 - [ ] `#[global_allocator]` 挂在 `kevy` 二进制,feature 门控默认 OFF;`kevy_alloc::KevyAlloc` 导出给嵌入方自行选用(库不许替调用方决定)

@@ -168,20 +168,40 @@ A stone crate `kevy-alloc`, which necessarily carries `unsafe`.
 > deliberate addition. It runs today and is the one line green at T0.
 
 ```
-alloc(layout):
-  class = size_class(layout.size())         // small path
-    → shard TLAB pop                        // no atomics
-    → on miss: drain foreign-free queue into TLAB
-    → on miss: carve from this shard's partial span
-    → on miss: new span via kevy-madvise mmap  (respect PER_CLASS_CAP)
+alloc(size, align):
+  class = class_for(size, align)            // small path
+    → pop from this class's current span    // no atomics, no header
+    → on miss: drain the foreign-free lists home
+    → on miss: adopt another span of this class that still has room
+    → on miss: claim a free span            (respect PER_CLASS_CAP)
+    → on miss: map a new 4 MiB segment
   large (> class max) → direct mmap, page-aligned
 
-dealloc(ptr, layout):
-  owning shard?  → TLAB push (cap → spill to span freelist)
-  foreign shard? → Treiber push onto the owner's foreign-free queue
-  span fully free + pool above low-water → munmap   ← the reclaim property
+dealloc(ptr, size, align):
+  segment = ptr & !(SEGMENT_BYTES - 1)      // the address answers
+  owning shard?  → push onto that span's own free list
+  foreign shard? → push-only onto the segment's foreign list
+  reclaim(): empty spans past the retained few → MADV_DONTNEED
   large → munmap
 ```
+
+> **Revised at T1, and the revision is the interesting part.** The draft
+> above had a per-shard TLAB in front of the spans, inherited from
+> tcmalloc and torajs. Building it made clear there is nothing for it to
+> sit in front of: a thread cache exists to avoid touching a *shared*
+> heap, and this heap is already owned by one shard. The fast path pops
+> from a span's free list with no atomics either way, so a TLAB would be
+> a cache in front of a cache — and it would break reclaim, because
+> slots parked in a cache belong to spans that then cannot be seen as
+> empty. Removed, and the reason recorded rather than the structure kept
+> for the sake of the reference it came from (ROADMAP rule ⑤).
+>
+> `adopt_partial` is the step the draft was missing outright: slots freed
+> into a span that is not the current one land on *that* span's list, so
+> without it allocation walks past reusable spans until the class cap
+> refuses — indistinguishable from a leak, and invisible to the byte
+> accounting, which balances either way. It is caught by an exported
+> `spans_assigned` count instead.
 
 Two properties are load-bearing and both must be gated, not assumed:
 
