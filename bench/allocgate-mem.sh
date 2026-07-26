@@ -51,8 +51,12 @@ run_one() { # $1 = binary, $2 = label
   local bin=$1 label=$2 dir srv used_peak=0 rss_peak=0 u r
   dir=$(mktemp -d "${TMPDIR:-/tmp}/agmem-XXXXXX")
   CLEAN+=("$dir")
+  # No AOF: this measures memory, and an append log only adds buffers to
+  # the RSS being compared. It also keeps shutdown quick — the first
+  # version waited on a clean SIGTERM shutdown that spends minutes
+  # flushing two million keys, which looked exactly like a hang.
   env KEVY_TIER_BUDGET="$((BUDGET_MB * 1024 * 1024))" KEVY_BIND=127.0.0.1 \
-    "$bin" --port "$PORT" --dir "$dir" --threads 1 >"$dir/server.log" 2>&1 &
+    "$bin" --port "$PORT" --dir "$dir" --threads 1 --no-aof >"$dir/server.log" 2>&1 &
   srv=$!
   for _ in $(seq 1 100); do
     python3 "$PY" info --port "$PORT" >/dev/null 2>&1 && break
@@ -79,7 +83,9 @@ run_one() { # $1 = binary, $2 = label
   rss_peak=$(( ${r:-0} * 1024 ))
   local cold
   cold=$(python3 "$PY" info --port "$PORT" 2>/dev/null | sed -n 's/^cold_keys:\([0-9]*\).*/\1/p' | head -1)
-  kill "$srv" 2>/dev/null || true
+  # SIGKILL, not SIGTERM: the numbers are already taken, and a clean
+  # shutdown here only buys a wait.
+  kill -9 "$srv" 2>/dev/null || true
   wait "$srv" 2>/dev/null || true
   awk -v l="$label" -v u="$used_peak" -v r="$rss_peak" -v c="${cold:-0}" 'BEGIN {
     printf "%-4s used_memory %8.1f MB   RSS %8.1f MB   frag %5.2fx   cold_keys %s\n",
