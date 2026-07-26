@@ -38,9 +38,13 @@ rss_kb() {
   else ps -o rss= -p "$1" 2>/dev/null | tr -d ' '; fi
 }
 
+# Cleanup is deliberately NOT an EXIT trap. A trap is inherited by
+# background subshells, so killing a background sampler fires it and the
+# directory the main script is still reading disappears underneath it —
+# which is exactly what happened on the first run here: the RSS samples
+# vanished and every ratio came back zero.
 CLEAN=()
 cleanup() { for d in "${CLEAN[@]:-}"; do [ -n "$d" ] && rm -rf "$d"; done; }
-trap cleanup EXIT
 
 # One run: boot, ingest, drain, report peak used_memory and peak RSS.
 run_one() { # $1 = binary, $2 = label
@@ -54,18 +58,22 @@ run_one() { # $1 = binary, $2 = label
     python3 "$PY" info --port "$PORT" >/dev/null 2>&1 && break
     sleep 0.2
   done
-  # Sample while loading: the peak is what an operator's cgroup sees, and
-  # it is not the steady state.
-  ( while kill -0 "$srv" 2>/dev/null; do rss_kb "$srv"; sleep 0.5; done ) >"$dir/rss" &
-  local samp=$!
-  python3 "$PY" load-b6 --port "$PORT" --keys "$KEYS" --val "$VAL" --seed 2 >/dev/null \
-    || { echo "$label: load failed (see $dir/server.log)" >&2; }
-  sleep "$DRAIN"
-  u=$(python3 "$PY" info --port "$PORT" 2>/dev/null | sed -n 's/^used_memory:\([0-9]*\).*/\1/p' | head -1)
-  used_peak=${u:-0}
-  kill "$samp" 2>/dev/null || true
-  rss_peak=$(sort -n "$dir/rss" | tail -1)
-  rss_peak=$(( ${rss_peak:-0} * 1024 ))
+  # Load in the background and sample in the foreground: the peak is what
+  # an operator's cgroup sees, and it is not the steady state. This way
+  # round there is no background subshell to kill, and nothing to inherit
+  # a trap.
+  python3 "$PY" load-b6 --port "$PORT" --keys "$KEYS" --val "$VAL" --seed 2 >"$dir/load.log" 2>&1 &
+  local loader=$!
+  local deadline=$(( SECONDS + DRAIN ))
+  while kill -0 "$loader" 2>/dev/null || [ "$SECONDS" -lt "$deadline" ]; do
+    r=$(rss_kb "$srv"); [ -n "$r" ] && [ "$r" -gt "$rss_peak" ] 2>/dev/null && rss_peak=$r
+    u=$(python3 "$PY" info --port "$PORT" 2>/dev/null | sed -n 's/^used_memory:\([0-9]*\).*/\1/p' | head -1)
+    [ -n "$u" ] && [ "$u" -gt "$used_peak" ] 2>/dev/null && used_peak=$u
+    kill -0 "$loader" 2>/dev/null && deadline=$(( SECONDS + DRAIN ))
+    sleep 1
+  done
+  wait "$loader" 2>/dev/null || echo "$label: load reported an error (see $dir/load.log)" >&2
+  rss_peak=$(( rss_peak * 1024 ))
   local cold
   cold=$(python3 "$PY" info --port "$PORT" 2>/dev/null | sed -n 's/^cold_keys:\([0-9]*\).*/\1/p' | head -1)
   kill "$srv" 2>/dev/null || true
@@ -89,3 +97,5 @@ for round in 1 2; do
     run_one "$BIN_ON" "ON"; run_one "$BIN_OFF" "OFF"
   fi
 done
+
+cleanup
