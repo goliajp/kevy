@@ -510,7 +510,12 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - [ ] **一次失败的 round + 一次被跳过的门(自记)**:先实现了 in-place `realloc`(0.852→0.843,没动针)。profile 里 libc realloc 只占 **2.32%**,而方法论的 **Pre-Phase-B 门要求攻击目标 ≥ 双位数 pp** —— 门会拒掉这次改动,而我没跑门。realloc 本身值得留(没有它每次扩容都拷贝),但它不是这个问题的答案
 - [ ] 下一步(未决,需你拍):把当前 span 的 free-list 头缓存进 heap(mimalloc 的位置)/ 小类把元数据放回数据旁(等于认输)/ 接受这条形状上的损失换内存(**但 M3 内存数还没测,没人能称这笔账**)
 - [ ] M1 仍未测:perfgate 拒绝在盒子有其它负载时跑
-- [ ] **M3**:capacity-envelope B6 + 新增 400B 变体,七项加总解释实测差值,且只有舍入项随数据量增长 —— **这是称"值不值"那笔账的前提**
+- [x] **M3 内存那半已测,结果为负(2026-07-27,用户指令"先测 M3 内存那半,拿到数再决定")**。lx64,2M×400B/512MB 预算,同 commit 两二进制:**OFF 341.2MB 逻辑 / 818.1MB 常驻 = 2.40×;ON(reclaim 未接)2.39×;ON(reclaim 接上 shard tick)790.5MB = 2.32×**。对上 pubsub 的 0.84 → **拿 16% 吞吐换 3% 内存**。
+  - **中间那行的意义**:`Heap::reclaim` 写了、测了、导出了,**没人调用** —— 分配器没有自己的 tick。空 span 既留映射又留常驻,等于把 glibc 的失败模式用"漏接"复现一遍。接上 tick 后机制确实工作,只是**找不到多少可还的**
+  - **真正的前提之死**:**span 只有全空才能还,而 416B 类的 64KiB span 有 157 个槽** —— 157 个值全死才还得回一页;glibc 的单位是 4KiB 页,约 10 个值。**我们的回收粒度比要打败的对象粗约 16 倍。** mmap-backed 是必要不充分:决定回收的是**能交还的粒度**,而 slab 分配器的天然粒度就是 slab
+  - 真答案是**在 span 内按页归还**(jemalloc/mimalloc 都做),那是另一种结构不是旋钮:span meta 要按页记占用,free 路径要察觉某页最后一个槽走了。**不是答案的两条**(记下来免得被当答案试):更小的 span(把问题换成另一项)/ 更频繁地 reclaim(扫描已每 tick 跑,限制在于可还的量)
+  - finding:`bench/PERF-FINDING-2026-07-27-m3-the-memory-half-does-not-pay.md`。**决定权在你**:改回收结构 / 改目标(承认赢面在别处:微基准 3-4×、小值零 header 占用)/ 停
+- [ ] M3 七项在 envelope 尺度的分解导出(INFO `# Allocator` 段)—— 头条比值已够做决定,但项级导出仍欠
 - [ ] 大页作**旋钮**对着 M1/M3 实测(`MADV_HUGEPAGE`,非 `MAP_HUGETLB`;span 仍是细粒度回收单位)
 - [ ] 全绿后才谈默认 ON;M7 既有门全绿(crashgate/availgate/tiergate/tablegate/textgate/oracle)
 
