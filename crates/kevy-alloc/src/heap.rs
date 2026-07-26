@@ -28,15 +28,30 @@ use crate::segment::{
 };
 use crate::stats::Stats;
 
-/// Spans one class may hold at once, per heap. 64 spans × 64 KiB caps a
-/// class at 4 MiB.
+/// Spans one class may hold at once, per heap — a runaway guard, not a
+/// policy. At 64 KiB a span, this bounds one class at roughly 4 GiB per
+/// shard, which no correct program reaches by accident.
 ///
-/// torajs-mmalloc shipped without this and paid for it (`c2970b6d`): a
-/// legal program exhausted a class, the allocator returned `None`, and
-/// the null propagated into a write — a SIGSEGV on correct code. A cap
-/// does not prevent exhaustion; it makes exhaustion arrive as a null
-/// from `alloc`, which Rust turns into a clean abort.
-pub const PER_CLASS_CAP: u16 = 64;
+/// torajs-mmalloc shipped without any cap and paid for it (`c2970b6d`):
+/// a legal program exhausted a class, the allocator returned `None`, and
+/// the null propagated into a write — a SIGSEGV on correct code. What
+/// actually protects a Rust program is that a null from `alloc` becomes
+/// `handle_alloc_error` and a clean abort; the cap only makes runaway
+/// growth arrive there sooner.
+///
+/// **The inherited value was 64 spans — 4 MiB a class — and it was wrong
+/// by three orders of magnitude for this engine.** The standard library
+/// found it on the first run that put real work through the allocator: a
+/// test holding tens of thousands of buffers of one size hit the ceiling
+/// and aborted with "memory allocation of 6152 bytes failed" while the
+/// machine had gigabytes free. A number that is right for a JavaScript
+/// runtime's object churn is not right for a data engine, and copying it
+/// across was the mistake.
+///
+/// [`Heap::with_class_cap`] takes a tighter bound where one is wanted —
+/// which is how the exhaustion path stays testable now that the default
+/// is out of reach.
+pub const PER_CLASS_CAP: u16 = 65_535;
 
 /// Empty spans a heap keeps mapped-but-discarded before releasing the
 /// whole segment. Decay-style hysteresis, after jemalloc: releasing
@@ -53,8 +68,7 @@ pub struct Heap {
     spans_in_class: [u16; NCLASSES],
     live_bytes: u64,
     rounding_bytes: u64,
-    large_mapped: u64,
-    large_count: u64,
+    class_cap: u16,
 }
 
 impl Heap {
@@ -62,6 +76,16 @@ impl Heap {
     /// segment headers.
     #[must_use]
     pub const fn new(id: usize) -> Self {
+        Self::with_class_cap(id, PER_CLASS_CAP)
+    }
+
+    /// A heap with a tighter per-class ceiling than [`PER_CLASS_CAP`].
+    ///
+    /// The default is a runaway guard set beyond any real workload,
+    /// which leaves the refusal path unreachable in a test. This makes
+    /// it reachable without pretending the default is smaller than it is.
+    #[must_use]
+    pub const fn with_class_cap(id: usize, class_cap: u16) -> Self {
         Self {
             id,
             segments: core::ptr::null_mut(),
@@ -69,8 +93,20 @@ impl Heap {
             spans_in_class: [0; NCLASSES],
             live_bytes: 0,
             rounding_bytes: 0,
-            large_mapped: 0,
-            large_count: 0,
+            class_cap,
+        }
+    }
+
+    /// Adopt this heap's address as its identity, once.
+    ///
+    /// Segments record their owner so a free arriving on the wrong
+    /// thread can be routed home. The address of the heap itself is a
+    /// ready-made unique identifier — no counter, no registry, and it
+    /// cannot collide while the heap is alive. `0` means "not yet set",
+    /// which is why [`Heap::new`] can stay `const`.
+    pub fn ensure_identity(&mut self) {
+        if self.id == 0 {
+            self.id = core::ptr::from_mut(self) as usize;
         }
     }
 
@@ -179,7 +215,7 @@ impl Heap {
     /// segment if no free span exists. `None` means the cap or the OS
     /// refused.
     fn claim_span(&mut self, c: usize) -> Option<()> {
-        if self.spans_in_class[c] >= PER_CLASS_CAP {
+        if self.spans_in_class[c] >= self.class_cap {
             return None;
         }
         let (seg, ix) = self.find_free_span().or_else(|| {
@@ -236,40 +272,37 @@ impl Heap {
         // SAFETY: the mask lands on a live header for our own pointers.
         let seg_ref = unsafe { seg.as_ref() };
         debug_assert!(seg_ref.is_valid(), "pointer did not come from kevy-alloc");
-        self.live_bytes -= size as u64;
-        self.rounding_bytes -= (class::size_of(c) - size) as u64;
         if seg_ref.owner == self.id {
+            self.live_bytes -= size as u64;
+            self.rounding_bytes -= (class::size_of(c) - size) as u64;
             // SAFETY: our own segment; exclusive access.
             unsafe { free_local(seg, ptr, c) };
         } else {
+            // Not ours to decrement. The bytes were counted on the
+            // allocating thread's heap, and a non-atomic counter over
+            // there is exactly what this design refuses to reach across
+            // for. The owner settles up when it drains — until then the
+            // segment's atomics record what is in flight so a snapshot
+            // still counts every byte once.
+            //
+            // Doing the subtraction here is the bug this comment exists
+            // to prevent: it made the freeing thread's counters go
+            // negative, which single-threaded tests could never reach
+            // and the standard library found on its first run.
             // SAFETY: the slot is unreferenced from here on.
-            unsafe { segment::push_foreign(seg_ref, ptr, class::size_of(c)) };
+            unsafe { segment::push_foreign(seg_ref, ptr, class::size_of(c), size) };
         }
     }
 
     fn alloc_large(&mut self, size: usize, align: usize) -> Option<NonNull<u8>> {
-        if align > os::PAGE {
-            return None;
-        }
-        let mapped = os::round_up(size, os::PAGE);
-        let p = os::map_aligned(mapped, os::PAGE)?;
-        self.large_mapped += mapped as u64;
-        self.large_count += 1;
-        self.live_bytes += size as u64;
-        self.rounding_bytes += (mapped - size) as u64;
-        Some(p)
+        crate::large::alloc(size, align)
     }
 
     /// # Safety
     /// See [`Self::dealloc`].
     unsafe fn dealloc_large(&mut self, ptr: NonNull<u8>, size: usize) {
-        let mapped = os::round_up(size, os::PAGE);
-        self.large_mapped -= mapped as u64;
-        self.large_count -= 1;
-        self.live_bytes -= size as u64;
-        self.rounding_bytes -= (mapped - size) as u64;
         // SAFETY: delegated to the caller's contract.
-        unsafe { os::unmap(ptr, mapped) };
+        unsafe { crate::large::dealloc(ptr, size) };
     }
 
     /// Move every slot other shards freed back onto its own span's list.
@@ -285,12 +318,18 @@ impl Heap {
                 let next = unsafe { node.cast::<*mut u8>().read() };
                 // SAFETY: non-null in this branch.
                 let p = unsafe { NonNull::new_unchecked(node) };
+                // SAFETY: still queued and untouched, so the size the
+                // freeing thread recorded is still there.
+                let requested = unsafe { segment::foreign_requested(p) };
                 let ix = segment::span_index_of(p);
                 // SAFETY: the span index came from the address itself.
                 let cls = unsafe { (*seg).spans[ix].class };
                 if cls != NO_CLASS {
+                    let c = cls as usize;
+                    self.live_bytes -= requested as u64;
+                    self.rounding_bytes -= (class::size_of(c) - requested) as u64;
                     // SAFETY: our segment, exclusive access here.
-                    unsafe { free_local(NonNull::new_unchecked(seg), p, cls as usize) };
+                    unsafe { free_local(NonNull::new_unchecked(seg), p, c) };
                 }
                 node = next;
             }
@@ -352,20 +391,22 @@ impl Heap {
     /// not per operation.
     #[must_use]
     pub fn snapshot(&self) -> Stats {
-        let mut st = Stats {
-            live: self.live_bytes,
-            rounding: self.rounding_bytes,
-            mapped: self.large_mapped,
-            large_count: self.large_count,
-            ..Stats::default()
-        };
+        let mut st = Stats { live: self.live_bytes, rounding: self.rounding_bytes, ..Stats::default() };
         let mut seg = self.segments;
         while !seg.is_null() {
             // SAFETY: live header from our own list.
             let s = unsafe { &*seg };
             st.mapped += SEGMENT_BYTES as u64;
             st.segment_overhead += SPAN_BYTES as u64;
-            st.cache += s.foreign_bytes.load(core::sync::atomic::Ordering::Relaxed) as u64;
+            // Slots freed by another thread are still inside this
+            // heap's `live`/`rounding` totals, because that thread could
+            // not reach across to adjust them. Move the amount over here
+            // so every byte is counted exactly once.
+            let parked = s.foreign_bytes.load(core::sync::atomic::Ordering::Relaxed) as u64;
+            let parked_live = s.foreign_live.load(core::sync::atomic::Ordering::Relaxed) as u64;
+            st.cache += parked;
+            st.live -= parked_live;
+            st.rounding -= parked - parked_live;
             for ix in FIRST_DATA_SPAN..SPANS_PER_SEGMENT {
                 add_span(&mut st, &s.spans[ix]);
                 if s.spans[ix].class != NO_CLASS {

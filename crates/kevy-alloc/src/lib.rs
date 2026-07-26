@@ -63,17 +63,25 @@
 //! assert!(stats.balanced(), "every mapped byte must be accounted for");
 //! ```
 
-#![cfg_attr(not(test), no_std)]
+// The `global` feature needs thread-local storage, which is a `std`
+// facility; the core allocator itself is `core`-only.
+#![cfg_attr(all(not(test), not(feature = "global")), no_std)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 
 pub mod class;
+#[cfg(feature = "global")]
+pub mod global;
 pub mod heap;
+pub mod large;
 pub mod os;
 pub mod segment;
 pub mod stats;
 
+#[cfg(feature = "global")]
+pub use global::{KevyAlloc, thread_reclaim, thread_stats};
 pub use heap::{EMPTY_SPAN_HYSTERESIS, Heap, PER_CLASS_CAP};
+pub use large::large_stats;
 pub use stats::Stats;
 
 #[cfg(test)]

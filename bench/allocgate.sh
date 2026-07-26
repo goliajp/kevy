@@ -47,24 +47,110 @@ if [ ! -d "$ROOT/crates/kevy-alloc" ]; then
   echo
 fi
 
-# ── M1/M2: the A/B. Needs two binaries built from the same source with
-# the allocator feature off and on. Refuses to guess which is which.
-ab_ready=0
-if [ -n "${ALLOCGATE_BIN_OFF:-}" ] && [ -n "${ALLOCGATE_BIN_ON:-}" ]; then
-  ab_ready=1
-fi
-ab_line() { # $1 = display name, $2 = what it will assert
-  if [ "$ab_ready" = 1 ]; then
-    line "$1" "PENDING(T2)" "$2 [binaries provided; assertion body lands with T2]"
-  else
-    line "$1" "PENDING(T2)" "$2 [needs ALLOCGATE_BIN_OFF + ALLOCGATE_BIN_ON, interleaved, on lx64]"
+# ── M1/M2: the A/B. Two binaries built from the same source, one with
+# the allocator feature and one without. The gate refuses to guess which
+# is which, and refuses to invent a verdict without both.
+BIN_OFF=${ALLOCGATE_BIN_OFF:-}
+BIN_ON=${ALLOCGATE_BIN_ON:-}
+AB_TOLERANCE=${ALLOCGATE_TOLERANCE:-0.92}
+AB_ROUNDS=${ALLOCGATE_ROUNDS:-4}
+AB_PORT=${ALLOCGATE_PORT:-7311}
+
+ab_missing() { [ -z "$BIN_OFF" ] || [ -z "$BIN_ON" ] || [ ! -x "$BIN_OFF" ] || [ ! -x "$BIN_ON" ]; }
+
+# ── M1 delegates to perfgate rather than re-implementing a measurement
+# loop. perfgate already interleaves the two binaries and flips their
+# order every instance, because this box slows monotonically across a
+# long run and a fixed order silently favours whichever went first —
+# that confound once manufactured an entire regression that did not
+# exist. Reading its steady-state numbers off the server's own counters
+# rather than the benchmark client's reported rate is the same
+# discipline. Copying 500 lines to get all that again would only give it
+# somewhere new to rot.
+m1() {
+  if ab_missing; then
+    echo "PENDING(T2) needs ALLOCGATE_BIN_OFF + ALLOCGATE_BIN_ON (same commit, feature off/on), on lx64"
+    return
   fi
+  local out rc why
+  # perfgate takes the candidate as a positional argument and the
+  # reference through PERFGATE_REF_BIN.
+  out=$(PERFGATE_REF_BIN="$BIN_OFF" bash "$ROOT/bench/perfgate.sh" "$BIN_ON" 2>&1) && rc=0 || rc=$?
+  # Pass perfgate's own words through. A gate that swallows the reason
+  # and prints "did not pass" makes the next person re-run it by hand to
+  # learn anything.
+  why=$(printf '%s' "$out" | grep -m1 -E 'perfgate: (FAIL|REFUSED)' \
+        || printf '%s' "$out" | tail -1)
+  case "$rc" in
+    0) echo "PASS KV lines within tolerance with the allocator ON" ;;
+    # perfgate exits 2 when it refuses to measure — a missing tool or a
+    # dirty box. That is this machine failing to be a measuring
+    # instrument, not the allocator losing, and calling it FAIL would
+    # teach the next reader to ignore a red line. It still may not PASS:
+    # an unmeasured angle stops the gate.
+    2) echo "PENDING(T2) ${why:-perfgate refused}" ;;
+    *) echo "FAIL ${why:-perfgate exited $rc with no output}" ;;
+  esac
 }
 
-ab_line "M1-kv-ab" \
-  "GET/SET/pipeline within perfgate tolerance with the allocator ON (not merely OFF)"
-ab_line "M2-pubsub-ab" \
-  "publish/deliver within tolerance with the allocator ON"
+# ── M2: the same interleaving for pub/sub, which perfgate does not
+# cover. Order flips every round for the same reason.
+PUBSUB_BIN=${ALLOCGATE_PUBSUB_BIN:-$ROOT/target/release/kevy-pubsub-bench}
+
+pubsub_once() { # $1 = server binary -> delivered msg/s, or empty
+  local bin=$1 dir srv rate
+  dir=$(mktemp -d "${TMPDIR:-/tmp}/allocgate-XXXXXX")
+  KEVY_BIND=127.0.0.1 "$bin" --port "$AB_PORT" --dir "$dir" --threads 1 \
+    >"$dir/server.log" 2>&1 &
+  srv=$!
+  # Ready when it answers, not after a fixed sleep: a slow cold start
+  # would otherwise be measured as slow serving.
+  for _ in $(seq 1 50); do
+    "$ROOT/target/debug/kevy-cli" -p "$AB_PORT" PING >/dev/null 2>&1 && break
+    sleep 0.2
+  done
+  rate=$("$PUBSUB_BIN" --port "$AB_PORT" --subs 50 --msgs 20000 --size 64 2>/dev/null \
+    | sed -n 's/.*delivered=\([0-9]*\) msg\/s.*/\1/p')
+  kill "$srv" 2>/dev/null
+  wait "$srv" 2>/dev/null
+  rm -rf "$dir"
+  printf '%s' "$rate"
+}
+
+m2() {
+  if ab_missing; then
+    echo "PENDING(T2) needs ALLOCGATE_BIN_OFF + ALLOCGATE_BIN_ON (same commit, feature off/on), on lx64"
+    return
+  fi
+  [ -x "$PUBSUB_BIN" ] || { echo "PENDING(T2) kevy-pubsub-bench not built (cargo build --release -p kevy-pubsub-bench)"; return; }
+  local offs="" ons="" i r
+  for i in $(seq 1 "$AB_ROUNDS"); do
+    if [ $((i % 2)) -eq 1 ]; then
+      r=$(pubsub_once "$BIN_OFF"); offs="$offs $r"
+      r=$(pubsub_once "$BIN_ON");  ons="$ons $r"
+    else
+      r=$(pubsub_once "$BIN_ON");  ons="$ons $r"
+      r=$(pubsub_once "$BIN_OFF"); offs="$offs $r"
+    fi
+  done
+  local med_off med_on
+  med_off=$(printf '%s\n' $offs | sort -n | awk '{a[NR]=$1} END {print a[int((NR+1)/2)]}')
+  med_on=$(printf '%s\n' $ons | sort -n | awk '{a[NR]=$1} END {print a[int((NR+1)/2)]}')
+  if [ -z "$med_off" ] || [ -z "$med_on" ] || [ "$med_off" -eq 0 ] 2>/dev/null; then
+    echo "FAIL pubsub produced no rate — an unmeasured angle must stop the gate, never pass quietly"
+    return
+  fi
+  awk -v on="$med_on" -v off="$med_off" -v tol="$AB_TOLERANCE" \
+    'BEGIN { r = on / off;
+             printf "%s allocator ON %.0f vs OFF %.0f msg/s (ratio %.3f, floor %.2f)\n",
+                    (r >= tol ? "PASS" : "FAIL"), on, off, r, tol }'
+}
+
+m1_out=$(m1)
+line "M1-kv-ab" "${m1_out%% *}" \
+  "GET/SET/pipeline with the allocator ON, not merely OFF — ${m1_out#* }"
+m2_out=$(m2)
+line "M2-pubsub-ab" "${m2_out%% *}" "${m2_out#* }"
 
 # ── T1 lines run the crate's own tests. A gate that only ever reports
 # PENDING teaches nothing; once the assertions exist, it runs them.
@@ -74,7 +160,7 @@ run_t1() { # $1 = test name filter -> "PASS ..." / "FAIL ..." / "SKIP ..."
     return
   fi
   local out n
-  if out=$(cd "$ROOT" && cargo test -p kevy-alloc --lib "$1" 2>&1); then
+  if out=$(cd "$ROOT" && cargo test -p kevy-alloc --features global --lib "$1" 2>&1); then
     n=$(printf '%s' "$out" | sed -n 's/.*test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' | head -1)
     if [ "${n:-0}" -eq 0 ]; then
       # A filter matching nothing is the failure mode that makes a gate
@@ -105,8 +191,29 @@ line "M4-reclaim" "${m4_out%% *}" \
 # ── M5: kevy genuinely frees across shards (Arc<Box<[u8]>> on the shared
 # read lane), so torajs's documented-and-accepted ABA note may not be
 # inherited — it has to be re-argued or designed out.
-line "M5-foreign-free" "PENDING(T2)" \
-  "N-core concurrent alloc/free stress: no lost slots, no double-hand-out, no ABA-by-inheritance"
+# The integration test installs KevyAlloc as this test binary's own
+# allocator, so the standard library is the caller — which is how the
+# cross-thread accounting defect was found in the first place.
+run_m5() {
+  if [ ! -d "$ROOT/crates/kevy-alloc" ]; then
+    echo "SKIP crate does not exist yet"
+    return
+  fi
+  local out n
+  if out=$(cd "$ROOT" && cargo test -p kevy-alloc --features global --test global_alloc 2>&1); then
+    n=$(printf '%s' "$out" | sed -n 's/.*test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' | head -1)
+    if [ "${n:-0}" -eq 0 ]; then
+      echo "FAIL the global-allocator suite asserted nothing"
+    else
+      echo "PASS $n assertion(s) green under KevyAlloc as the process allocator"
+    fi
+  else
+    echo "FAIL $(printf '%s' "$out" | grep -m1 -E 'panicked at|allocation of' || echo 'the global-allocator suite failed')"
+  fi
+}
+m5_out=$(run_m5)
+line "M5-foreign-free" "${m5_out%% *}" \
+  "cross-thread frees + threads exiting while their memory is held — ${m5_out#* }"
 
 # ── M6: torajs c2970b6d's tuition — an uncapped span pool is a SIGSEGV,
 # not a leak (alloc returned None, the null propagated into a write).
@@ -116,7 +223,7 @@ line "M6-class-cap" "${m6_out%% *}" \
 
 # ── M7: the allocator is under everything, so everything must still pass.
 line "M7-existing-gates" "PENDING(T2)" \
-  "crashgate/availgate/tiergate/tablegate/textgate/oracle all green with the allocator ON"
+  "crashgate/availgate/tiergate/tablegate/textgate/oracle green with KEVY_BIN=\$ALLOCGATE_BIN_ON [runner: each gate on lx64 against the allocator-on build]"
 
 # ── M8: unsafe containment, as a ratchet on a recorded set.
 #
