@@ -260,6 +260,13 @@ impl Commands for KevyCommands {
         tier_tick(self, store, bits, &cfg);
         store.demote_step();
         store.tier_compact_tick(); // bounded vlog compaction — off the query-tail path
+        // Hand back spans this shard has emptied. Returning pages is the
+        // one thing kevy-alloc does that glibc's brk arena cannot, and
+        // it does nothing until something asks: an allocator has no tick
+        // of its own. Measured with it unwired, the resident ratio was
+        // 2.39x against glibc's 2.40x — the design's whole point, absent.
+        #[cfg(feature = "kevy-alloc")]
+        kevy_alloc::thread_reclaim();
 
         // Re-apply maxmemory + eviction policy in case `CONFIG SET` has
         // swapped the global since the previous tick. `store.set_max_memory`
