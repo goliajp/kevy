@@ -82,29 +82,11 @@ impl Heap {
     fn flush_hot(&mut self) {
         for c in 0..crate::class::NCLASSES {
             let slot_bytes = class::size_of(c) as u64;
-            // Local slots go back to their bitmaps so their pages can
-            // return. Absorbed foreign slots STAY parked: they are this
-            // heap's warm recycling supply, the owner's pending deltas
-            // already price them, and they are bounded by the cache
-            // depth — flushing them home would just re-starve the cache
-            // the moment cross-shard flow resumes.
-            let mut keep = [0usize; crate::heap::CACHE_DEPTH];
-            let mut kept = 0;
-            while let Some((p, foreign)) = self.hot_pop(c) {
-                if foreign {
-                    keep[kept] = p.as_ptr() as usize;
-                    kept += 1;
-                } else {
-                    self.cached_bytes -= slot_bytes;
-                    // SAFETY: a local cached slot came from this heap's
-                    // own segments with this class; nobody else holds it.
-                    unsafe { crate::heap::free_cached(p, c) };
-                }
-            }
-            for &addr in &keep[..kept] {
-                // SAFETY: just popped, non-null by construction.
-                let p = unsafe { NonNull::new_unchecked(addr as *mut u8) };
-                self.hot_push_foreign(c, p);
+            while let Some(p) = self.hot_pop(c) {
+                self.cached_bytes -= slot_bytes;
+                // SAFETY: a cached slot came from this heap's own
+                // segments with this class, and nobody else holds it.
+                unsafe { crate::heap::free_cached(p, c) };
             }
         }
     }

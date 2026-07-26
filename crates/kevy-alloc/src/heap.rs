@@ -22,8 +22,6 @@
 use core::ptr::NonNull;
 
 use crate::class::{self, NCLASSES};
-use crate::hotcache::SlotCache;
-pub(crate) use crate::hotcache::CACHE_DEPTH;
 use crate::os;
 use crate::outbound::Outbound;
 use crate::segment::{
@@ -59,6 +57,50 @@ pub const PER_CLASS_CAP: u16 = 65_535;
 /// whole segment. Decay-style hysteresis, after jemalloc: releasing
 /// eagerly turns a churny workload into an mmap/munmap storm.
 pub const EMPTY_SPAN_HYSTERESIS: u16 = 4;
+
+/// Slots a class keeps in the heap-local hot cache. Sixteen bounds the
+/// pages the cache can pin to a few hundred KB across all classes, and
+/// the reclaim tick flushes it anyway.
+const CACHE_DEPTH: usize = 16;
+
+/// A per-class stack of recently freed slots, held in the heap itself.
+///
+/// This is the locality half of a thread cache, added because the
+/// header-free finding measured the cost of not having it: every alloc
+/// and free touched span metadata 64 KiB–4 MiB away from the data, IPC
+/// fell 1.53 → 1.29, and pub/sub paid 16 %. glibc's tcache keeps the
+/// hot free list in thread-local memory that stays warm; so does this.
+/// A cache hit — the steady state of any alloc/free churn, which is
+/// exactly the pub/sub shape — touches no segment line at all.
+///
+/// The lock-avoidance half of a thread cache is still absent, and still
+/// correctly so: this heap has no shared structure to avoid.
+#[derive(Clone, Copy)]
+struct SlotCache {
+    ptrs: [*mut u8; CACHE_DEPTH],
+    len: u8,
+}
+
+impl SlotCache {
+    const EMPTY: Self = Self { ptrs: [core::ptr::null_mut(); CACHE_DEPTH], len: 0 };
+
+    fn pop(&mut self) -> Option<NonNull<u8>> {
+        if self.len == 0 {
+            return None;
+        }
+        self.len -= 1;
+        NonNull::new(self.ptrs[self.len as usize])
+    }
+
+    fn push(&mut self, p: NonNull<u8>) -> bool {
+        if self.len as usize == CACHE_DEPTH {
+            return false;
+        }
+        self.ptrs[self.len as usize] = p.as_ptr();
+        self.len += 1;
+        true
+    }
+}
 
 /// One shard's heap. Not `Sync`: exactly one thread owns it, which is
 /// what removes the atomics from the fast path.
@@ -114,14 +156,8 @@ impl Heap {
     }
 
     /// Pop one slot from class `c`'s hot cache (reclaim's flush path).
-    pub(crate) fn hot_pop(&mut self, c: usize) -> Option<(NonNull<u8>, bool)> {
+    pub(crate) fn hot_pop(&mut self, c: usize) -> Option<NonNull<u8>> {
         self.hot[c].pop()
-    }
-
-    /// Re-park an absorbed foreign slot (reclaim keeps them cached).
-    pub(crate) fn hot_push_foreign(&mut self, c: usize, p: NonNull<u8>) {
-        let ok = self.hot[c].push(p, true);
-        debug_assert!(ok, "re-parking cannot overflow a cache we just drained");
     }
 
     /// Adopt this heap's address as its identity, once.
@@ -213,30 +249,13 @@ impl Heap {
 
     fn alloc_small(&mut self, c: usize, size: usize) -> Option<NonNull<u8>> {
         // Hot path: a recently freed slot of this class, straight from
-        // the heap. For a local slot no segment line is touched at all.
-        // For an absorbed foreign slot — the memory this heap itself
-        // just finished reading, the warm lines glibc's tcache reuses
-        // and home-routing was throwing away — custody returns to a
-        // caller, so the owner (the slot's permanent accountant) is
-        // told: this heap's counters never cover foreign bytes.
-        if let Some((p, foreign)) = self.hot[c].pop() {
-            let s = class::size_of(c) as u64;
-            if foreign {
-                // SAFETY: an absorbed slot lies inside a live segment.
-                let seg = unsafe { segment::segment_of(p) };
-                // SAFETY: mask of a slot we hold lands on its header.
-                let seg_ref = unsafe { seg.as_ref() };
-                use core::sync::atomic::Ordering::Relaxed;
-                seg_ref.pend_live.fetch_add(size as i64, Relaxed);
-                seg_ref.pend_rounding.fetch_add(s as i64 - size as i64, Relaxed);
-            } else {
-                self.cached_bytes -= s;
-                self.live_bytes += size as u64;
-                self.rounding_bytes += s - size as u64;
-            }
-            return Some(p);
-        }
-        let slot = self.pop_slot(c).or_else(|| self.slow_path(c))?;
+        // the heap — no segment line touched.
+        let slot = if let Some(p) = self.hot[c].pop() {
+            self.cached_bytes -= class::size_of(c) as u64;
+            p
+        } else {
+            self.pop_slot(c).or_else(|| self.slow_path(c))?
+        };
         self.live_bytes += size as u64;
         self.rounding_bytes += (class::size_of(c) - size) as u64;
         Some(slot)
@@ -370,30 +389,22 @@ impl Heap {
             // Hot path: park the slot in the heap-local cache — again no
             // segment line touched. The bitmap bit stays set, which is
             // honest: the page IS still pinned until the flush.
-            if self.hot[c].push(ptr, false) {
+            if self.hot[c].push(ptr) {
                 self.cached_bytes += class::size_of(c) as u64;
                 return;
             }
             // SAFETY: our own segment; exclusive access.
             unsafe { free_local(seg, ptr, c) };
         } else {
-            // Absorb the slot into this heap's own hot cache (v4): in a
-            // steady cross-shard flow, this heap's frees are ALL foreign
-            // — under home-routing its hot cache starves and every
-            // allocation marched into cold memory, which is where the
-            // cross-shard 18–39 % actually lived (v3 removed the atomics
-            // and moved nothing). The bytes stay on the owner's books:
-            // two relaxed deltas tell the permanent accountant that
-            // r + rounding moved out of live into parked.
-            let s = class::size_of(c);
-            if self.hot[c].push(ptr, true) {
-                use core::sync::atomic::Ordering::Relaxed;
-                seg_ref.pend_live.fetch_add(-(size as i64), Relaxed);
-                seg_ref.pend_rounding.fetch_add(-((s - size) as i64), Relaxed);
-                return;
-            }
-            // Cache full: the batched home-shipping route (v3), plain
-            // un-settled entries the owner's drain reads as ever.
+            // Not ours to decrement. The bytes were counted on the
+            // allocating thread's heap, and a non-atomic counter over
+            // there is exactly what this design refuses to reach across
+            // for — the owner settles when it drains.
+            //
+            // Nor ours to touch the owner's segment per-op: M1 measured
+            // that bill at 18–39 % of cross-shard KV. The free lands in
+            // the local outbound ring — two plain stores — and crosses
+            // cores only when a whole batch ships.
             if !self.outbound.push(ptr, size, c) {
                 self.outbound.flush();
                 let ok = self.outbound.push(ptr, size, c);
