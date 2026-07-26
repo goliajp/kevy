@@ -515,7 +515,12 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
   - **真正的前提之死**:**span 只有全空才能还,而 416B 类的 64KiB span 有 157 个槽** —— 157 个值全死才还得回一页;glibc 的单位是 4KiB 页,约 10 个值。**我们的回收粒度比要打败的对象粗约 16 倍。** mmap-backed 是必要不充分:决定回收的是**能交还的粒度**,而 slab 分配器的天然粒度就是 slab
   - 真答案是**在 span 内按页归还**(jemalloc/mimalloc 都做),那是另一种结构不是旋钮:span meta 要按页记占用,free 路径要察觉某页最后一个槽走了。**不是答案的两条**(记下来免得被当答案试):更小的 span(把问题换成另一项)/ 更频繁地 reclaim(扫描已每 tick 跑,限制在于可还的量)
   - finding:`bench/PERF-FINDING-2026-07-27-m3-the-memory-half-does-not-pay.md`。**决定权在你**:改回收结构 / 改目标(承认赢面在别处:微基准 3-4×、小值零 header 占用)/ 停
-- [ ] M3 七项在 envelope 尺度的分解导出(INFO `# Allocator` 段)—— 头条比值已够做决定,但项级导出仍欠
+- [x] **v2 结构落地(2026-07-27,用户拍板"完整这个设计,ceiling-first + clean")**:free list 换 **segment 头内位图**(数据页零元数据 → **页粒度归还**,回收单位 64KiB→4KiB)+ **最低位优先分配 = 主动致密化**(churn 把空闲空间往上挤成整页,无拷贝的类压缩,LIFO free list 表达不了)+ 记账新增 `returned` 项(映射未常驻)。31 单测(Linux 含两条内核 RSS 直证)+ 218k/99k fuzz + clippy/locgate 绿
+- [x] **M3 内存半:2.40× → 1.98×,双向复测稳定**(818→676MB @ 341MB 逻辑;v1 只 -3%,v2 **-17%**)。非天花板:剩 335MB 未归因,待七项导出
+- [x] **M2 吞吐半:三个机制假设全被测量淘汰**(in-place realloc 0.852→0.843 / 位图重构元数据 0.826 / 热缓存消除 churn 路径全部 segment 触碰 0.844)。**缺口按 payload 分形**:16B 0.92 / 64B 0.84 / 4096B ~1.0;**perf 挂上时缩到噪声甚至反转** —— 是时序/布局效应不是热符号,三次符号级修复无效与此自洽。剩余假设空间 = 布局形(着色/预取/TLB),**需要专门的分解轮,不许第四次盲修**。finding:`PERF-FINDING-2026-07-27-v2-memory-delivered-throughput-gap-unexplained.md`
+- [ ] M3 七项在 envelope 尺度的分解导出(INFO `# Allocator` 段)—— 剩余 335MB 的归因需要它
+- [ ] M2 布局形分解轮(硬件计数器选型 + 判别实验;是否投入待拍板)
+- [ ] M1 KV 线仍未测(perfgate 拒绝在盒子有其它负载时跑)
 - [ ] 大页作**旋钮**对着 M1/M3 实测(`MADV_HUGEPAGE`,非 `MAP_HUGETLB`;span 仍是细粒度回收单位)
 - [ ] 全绿后才谈默认 ON;M7 既有门全绿(crashgate/availgate/tiergate/tablegate/textgate/oracle)
 
