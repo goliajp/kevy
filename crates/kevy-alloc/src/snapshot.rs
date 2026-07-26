@@ -59,8 +59,23 @@ fn add_span(st: &mut Stats, meta: &crate::segment::SpanMeta) {
     let slot = class::size_of(meta.class as usize) as u64;
     // live + rounding are already counted from the requested sizes; the
     // slots themselves are exactly live * slot, so only the free parts
-    // are added here.
-    st.span_free += u64::from(meta.touched_free()) * slot;
-    st.virgin += SPAN_BYTES as u64 - u64::from(meta.bump) * slot;
+    // are classified here. A free slot below the high-water mark is
+    // `returned` when every page it overlaps has been discarded
+    // (mapped, not resident) and `span_free` otherwise (touched,
+    // resident). Everything at or above the mark — including the tail
+    // no slot covers — was never touched: `virgin`.
+    for i in 0..u32::from(meta.high_water) {
+        if meta.is_live(i) {
+            continue;
+        }
+        let (pa, pb) = crate::pagemap::pages_of_slot(i, slot as usize);
+        let all_gone = (pa..=pb).all(|p| meta.discarded & (1u16 << p) != 0);
+        if all_gone {
+            st.returned += slot;
+        } else {
+            st.span_free += slot;
+        }
+    }
+    st.virgin += SPAN_BYTES as u64 - u64::from(meta.high_water) * slot;
 }
 

@@ -66,8 +66,13 @@ fuzz_target!(|data: &[u8]| {
             _ => heap.reclaim(),
         }
 
-        let st = heap.snapshot();
+        // Small allocations are the heap's; direct mappings are counted
+        // for the process (T2: a large block has no segment, so no owner
+        // to route a foreign free to). Each figure balances alone, and
+        // the fuzz process is single-threaded, so their sum is exact.
+        let mut st = heap.snapshot();
         assert!(st.balanced(), "identity broken: {st:?}");
+        st.merge(&kevy_alloc::large_stats());
         let expect: u64 = live.iter().map(|(_, s, _, _)| *s as u64).sum();
         assert_eq!(st.live, expect, "live bytes drifted");
         for (p, size, _, m) in &live {
@@ -81,8 +86,9 @@ fuzz_target!(|data: &[u8]| {
         // SAFETY: still live, allocated here with this size and alignment.
         unsafe { heap.dealloc(p, size, align) };
     }
-    let st = heap.snapshot();
-    assert_eq!(st.live, 0);
+    let mut st = heap.snapshot();
     assert!(st.balanced(), "identity broken after drain: {st:?}");
+    st.merge(&kevy_alloc::large_stats());
+    assert_eq!(st.live, 0);
     let _ = class::MAX_SMALL;
 });

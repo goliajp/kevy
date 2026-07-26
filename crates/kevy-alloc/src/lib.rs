@@ -75,6 +75,8 @@ pub mod global;
 pub mod heap;
 pub mod large;
 pub mod os;
+pub mod pagemap;
+mod reclaim;
 pub mod segment;
 mod snapshot;
 pub mod stats;

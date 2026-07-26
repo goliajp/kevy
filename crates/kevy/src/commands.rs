@@ -249,10 +249,9 @@ impl Commands for KevyCommands {
         if bits & crate::state::VIEW_NONEMPTY != 0 {
             crate::view_runtime::on_tick(&self.ctx(), store);
         }
-        // Run Redis's `activeExpireCycle` per shard. `sample` controls the
-        // batch size; up to 16 rounds per tick is well below Redis's 25 %
-        // CPU budget at the default 10 Hz cadence. Cheap when no TTL'd
-        // keys exist (a single map-emptiness check + bucket walk).
+        // Redis's `activeExpireCycle` per shard: `sample` sets the batch,
+        // ≤16 rounds/tick is far under Redis's 25 % CPU budget at 10 Hz,
+        // and it is cheap when no TTL'd keys exist.
         let cfg = self.state().config();
         // A replica does NOT actively expire — the primary
         // owns TTL truth and ships DEL/expiry effects through the
@@ -273,14 +272,8 @@ impl Commands for KevyCommands {
         // frames grow their keyspace like any write.
         tier_tick(self, store, bits, &cfg);
         store.demote_step();
-        store.tier_compact_tick(); // bounded vlog compaction — off the query-tail path
-        // Hand back spans this shard has emptied. Returning pages is the
-        // one thing kevy-alloc does that glibc's brk arena cannot, and
-        // it does nothing until something asks: an allocator has no tick
-        // of its own. Measured with it unwired, the resident ratio was
-        // 2.39x against glibc's 2.40x — the design's whole point, absent.
-        #[cfg(feature = "kevy-alloc")]
-        kevy_alloc::thread_reclaim();
+        store.tier_compact_tick(); // vlog compaction + page return, off the query tail
+        alloc_reclaim_tick();
 
         // Re-apply maxmemory + eviction policy in case `CONFIG SET` has
         // swapped the global since the previous tick. `store.set_max_memory`
@@ -485,6 +478,17 @@ impl Commands for KevyCommands {
 /// live limit changes are honored (the maxmemory reapply precedent) —
 /// and feed the index/view memory floor into the unified watermark.
 /// Gated on tiering being on: an untiered tick pays one branch.
+/// Hand back free pages this shard's allocator holds. Returning pages
+/// is the one thing kevy-alloc does that glibc's brk arena cannot, and
+/// it does nothing until something asks: an allocator has no tick of its
+/// own. Measured with it unwired, the resident ratio was 2.39x against
+/// glibc's 2.40x — the design's whole point, absent.
+#[inline]
+fn alloc_reclaim_tick() {
+    #[cfg(feature = "kevy-alloc")]
+    kevy_alloc::thread_reclaim();
+}
+
 fn tier_tick(c: &KevyCommands, store: &mut Store, bits: u32, cfg: &kevy_config::Config) {
     if !store.tier_enabled() {
         return;
