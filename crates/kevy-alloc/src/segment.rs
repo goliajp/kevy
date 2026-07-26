@@ -67,6 +67,29 @@ pub struct Segment {
     /// thread's counters. Snapshots move the amount across so it is
     /// counted once — see `Heap::snapshot`.
     pub foreign_live: core::sync::atomic::AtomicUsize,
+    /// Signed pending deltas to this segment's owner's `live` and
+    /// `rounding`, posted by foreign heaps that absorb this segment's
+    /// slots into their own hot caches and reuse them (v4).
+    ///
+    /// The segment's owner is the slot's **permanent accountant**: a
+    /// third shard freeing a slot that a second shard re-handed-out can
+    /// recover nothing but the owner from the address, so every custody
+    /// change posts a delta here and the owner's snapshot folds them in
+    /// read-only. Both sums are bounded by what foreign caches can hold
+    /// (a few dozen slots per heap), never folded into stored counters,
+    /// and the pending cache coverage is their negated sum by
+    /// construction — absorb posts (−r, −(s−r)), reuse posts the exact
+    /// inverse, so `−(live+rounding)` is always the slot bytes currently
+    /// parked in foreign caches.
+    ///
+    /// Two relaxed `fetch_add`s per foreign-slot custody change. v3's
+    /// null result is the licence: batching removed ~99 % of the foreign
+    /// path's atomics and moved the KV number by nothing, so atomics
+    /// were never the cost — cold memory was, and this buys the hot
+    /// kind back.
+    pub pend_live: core::sync::atomic::AtomicI64,
+    /// The rounding half of the same settlement; see [`Self::pend_live`].
+    pub pend_rounding: core::sync::atomic::AtomicI64,
     /// Per-span bookkeeping, indexed by span number. Index 0 describes
     /// the header span itself and is never assigned a class.
     pub spans: [SpanMeta; SPANS_PER_SEGMENT],
@@ -90,6 +113,8 @@ impl Segment {
                 foreign: AtomicPtr::new(core::ptr::null_mut()),
                 foreign_bytes: core::sync::atomic::AtomicUsize::new(0),
                 foreign_live: core::sync::atomic::AtomicUsize::new(0),
+                pend_live: core::sync::atomic::AtomicI64::new(0),
+                pend_rounding: core::sync::atomic::AtomicI64::new(0),
                 spans: [SpanMeta::new(); SPANS_PER_SEGMENT],
             });
         }

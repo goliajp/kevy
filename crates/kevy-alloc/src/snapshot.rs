@@ -48,6 +48,18 @@ impl Heap {
             st.cache += parked;
             st.live -= parked_live;
             st.rounding -= parked - parked_live;
+            // v4 settlement: signed deltas posted by foreign heaps that
+            // absorbed (and possibly re-handed-out) this segment's
+            // slots. The owner is the permanent accountant, so they
+            // apply here — and the parked coverage is their negated sum
+            // by construction (absorb and reuse post exact inverses).
+            let pl = s.pend_live.load(core::sync::atomic::Ordering::Relaxed);
+            let pr = s.pend_rounding.load(core::sync::atomic::Ordering::Relaxed);
+            st.live = st.live.checked_add_signed(pl).expect("pend_live underflow");
+            st.rounding = st.rounding.checked_add_signed(pr).expect("pend_rounding underflow");
+            let parked_foreign = -(pl + pr);
+            debug_assert!(parked_foreign >= 0, "pendings must net to parked bytes");
+            st.cache = st.cache.checked_add_signed(parked_foreign).expect("cache underflow");
             for ix in FIRST_DATA_SPAN..SPANS_PER_SEGMENT {
                 add_span(&mut st, &s.spans[ix]);
                 if s.spans[ix].class != NO_CLASS {
