@@ -73,6 +73,7 @@ pub mod class;
 #[cfg(feature = "global")]
 pub mod global;
 pub mod heap;
+mod hotcache;
 pub mod large;
 pub mod os;
 mod outbound;

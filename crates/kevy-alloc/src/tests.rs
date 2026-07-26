@@ -403,7 +403,9 @@ fn a_foreign_free_leaves_the_owner_balanced_before_and_after_draining() {
     assert_eq!(mid.rounding, pending * (slot - size as u64), "pending rounding rides with pending live");
 
     // The freeing side's tick flushes the ring; now everything is
-    // parked on the owner.
+    // parked on the owner — shipped slots on the foreign list, absorbed
+    // slots (one cache depth) in the freeing heap's hot cache under the
+    // v4 settlement.
     other.reclaim();
     let parked = owner.snapshot();
     assert_eq!(parked.cache, 1_000 * slot, "slot bytes should be parked");
@@ -412,7 +414,11 @@ fn a_foreign_free_leaves_the_owner_balanced_before_and_after_draining() {
 
     owner.drain_foreign();
     let settled = owner.snapshot();
-    assert_eq!(settled.cache, 0, "the list should be empty after draining");
+    // The absorbed slots do NOT come home: they are the freeing heap's
+    // warm recycling supply, bounded by its cache depth, and the
+    // pending deltas keep pricing them as parked on the owner's books.
+    let absorbed = crate::heap::CACHE_DEPTH as u64 * slot;
+    assert_eq!(settled.cache, absorbed, "only the absorbed remainder stays parked");
     assert_eq!(settled.live, 0);
     assert_eq!(settled.rounding, 0);
     assert!(settled.balanced(), "{settled:?}");
@@ -609,11 +615,14 @@ fn spliced_chains_from_two_freeing_heaps_arrive_complete() {
     owner.drain_foreign();
     let settled = owner.snapshot();
     assert_eq!(settled.live, 0);
-    assert_eq!(settled.cache, 0);
+    // Each freeing heap keeps one cache depth absorbed as its warm
+    // supply (v4); everything else came home through the splices.
+    let absorbed = 2 * crate::heap::CACHE_DEPTH as u64 * slot;
+    assert_eq!(settled.cache, absorbed, "{settled:?}");
     assert!(settled.balanced(), "{settled:?}");
     // And the memory is genuinely reusable: refill without new segments.
     let before_spans = settled.spans_assigned;
-    let again: Vec<_> = (0..n * 2)
+    let again: Vec<_> = (0..n * 2 - 2 * crate::heap::CACHE_DEPTH)
         .map(|_| owner.alloc(size, 8).expect("drained slots serve again"))
         .collect();
     assert_eq!(
@@ -625,4 +634,52 @@ fn spliced_chains_from_two_freeing_heaps_arrive_complete() {
         // SAFETY: ours.
         unsafe { owner.dealloc(p, size, 8) };
     }
+}
+
+#[test]
+fn v4_custody_cycle_three_heaps_stay_exact() {
+    require_mapping!();
+    // The scenario that killed the naive tcache design: A owns the
+    // segment, B absorbs a freed slot and re-hands it out, and then C —
+    // who has never heard of B — frees it. The address only reveals A,
+    // so A must be the permanent accountant, and the signed pendings
+    // must net every step out exactly.
+    let mut a = Heap::new(1);
+    let mut b = Heap::new(2);
+    let mut c = Heap::new(3);
+    let size = 400;
+    let slot = class::size_of(class::index_of(size, 8).unwrap()) as u64;
+
+    let p = a.alloc(size, 8).expect("A serves the slot");
+    // B frees it: absorbed into B's hot cache, settled to A.
+    // SAFETY: ours, this size and alignment.
+    unsafe { b.dealloc(p, size, 8) };
+    let st = a.snapshot();
+    assert_eq!(st.live, 0, "A no longer covers it as live: {st:?}");
+    assert_eq!(st.cache, slot, "A prices it as parked: {st:?}");
+    assert!(st.balanced(), "{st:?}");
+
+    // B reuses it for a differently sized request of the same class
+    // (410 rounds to the same 416 class as 400 — a different class
+    // would be a different cache and prove nothing).
+    let size2 = 410;
+    let q = b.alloc(size2, 8).expect("B recycles the absorbed slot");
+    assert_eq!(q, p, "the absorbed slot is the one recycled");
+    let st = a.snapshot();
+    assert_eq!(st.live, size2 as u64, "A covers the reuse: {st:?}");
+    assert_eq!(st.cache, 0);
+    assert!(st.balanced(), "{st:?}");
+    let stb = b.snapshot();
+    assert_eq!(stb.live, 0, "B's own books never cover foreign bytes: {stb:?}");
+    assert!(stb.balanced(), "{stb:?}");
+
+    // C frees it, knowing only the address.
+    // SAFETY: live allocation, exactly this size and alignment.
+    unsafe { c.dealloc(q, size2, 8) };
+    let st = a.snapshot();
+    assert_eq!(st.live, 0, "A's coverage nets out through C's free: {st:?}");
+    assert_eq!(st.cache, slot, "parked again, now in C's cache: {st:?}");
+    assert!(st.balanced(), "{st:?}");
+    assert!(c.snapshot().balanced());
+    assert_eq!(c.snapshot().live, 0);
 }
