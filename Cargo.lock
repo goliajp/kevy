@@ -416,6 +416,7 @@ dependencies = [
 name = "kevy"
 version = "4.0.0"
 dependencies = [
+ "kevy-alloc",
  "kevy-bench",
  "kevy-chaos",
  "kevy-cli",
