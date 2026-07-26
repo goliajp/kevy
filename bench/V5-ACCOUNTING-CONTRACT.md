@@ -36,18 +36,30 @@ transport is INFO (a `# Allocator` section, following the capacity arc's
 | `cache` | bytes parked on foreign-free lists, waiting to be drained home |
 | `span_free` | free slots in spans that were handed out before and returned — **touched, therefore resident** |
 | `virgin` | span bytes at or above the bump cursor — mapped, never touched, **not resident** |
+| `returned` | free slots whose pages went back to the OS while their span stays live — mapped, **not resident** (the v2 term) |
 | `hysteresis` | whole spans with nothing live, retained rather than released |
 | `segment_overhead` | segment headers (one span per segment) |
 
 ### The identity M3 asserts
 
 ```
-mapped == live + rounding + cache + span_free + virgin
+mapped == live + rounding + cache + span_free + returned + virgin
         + hysteresis + segment_overhead
 ```
 
 Exact, not approximate: every mapped byte is in exactly one of those states by
 construction. A tolerance here would be a place for a leak to hide.
+
+### Revised again at T2-v2 — `returned` added
+
+M3 killed the whole-span reclaim rule (a span of the 416 B class returns
+nothing until all 157 slots die together; measured yield: 3 %). v2 returns
+**pages inside live spans**, which creates a state the v1 partition had no
+name for: a free slot whose pages are mapped but no longer resident. That is
+`returned`. `predicted_resident` subtracts it. A free slot counts as returned
+iff **every** page it overlaps has been discarded — deterministic, so the
+identity stays exact; slots straddling a discarded/resident page boundary
+count as `span_free` (the conservative side).
 
 ### Revised at T1 — two terms added, one removed
 

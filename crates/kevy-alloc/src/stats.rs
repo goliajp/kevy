@@ -46,9 +46,14 @@ pub struct Stats {
     pub rounding: u64,
     /// Bytes parked on foreign-free lists, waiting to be drained home.
     pub cache: u64,
-    /// Free slots in spans that were handed out before and returned:
-    /// touched, therefore resident.
+    /// Free slots in spans that were handed out before and returned to
+    /// the free pool: touched, therefore resident.
     pub span_free: u64,
+    /// Free slots whose pages have been handed back to the OS while
+    /// their span stays live — mapped, not resident. The v2 term: this
+    /// is what page-granular reclaim produces, and it did not exist
+    /// while the reclaim unit was the whole span.
+    pub returned: u64,
     /// Span bytes at or above the bump cursor — mapped, never touched,
     /// not resident.
     pub virgin: u64,
@@ -73,6 +78,7 @@ impl Stats {
             + self.rounding
             + self.cache
             + self.span_free
+            + self.returned
             + self.virgin
             + self.hysteresis
             + self.segment_overhead
@@ -92,7 +98,7 @@ impl Stats {
     /// by the gate rather than substituted for it.
     #[must_use]
     pub fn predicted_resident(&self) -> u64 {
-        self.mapped - self.virgin - self.hysteresis
+        self.mapped - self.virgin - self.hysteresis - self.returned
     }
 
     /// Add another heap's snapshot. Shards report separately; a process
@@ -103,6 +109,7 @@ impl Stats {
         self.rounding += other.rounding;
         self.cache += other.cache;
         self.span_free += other.span_free;
+        self.returned += other.returned;
         self.virgin += other.virgin;
         self.hysteresis += other.hysteresis;
         self.segment_overhead += other.segment_overhead;

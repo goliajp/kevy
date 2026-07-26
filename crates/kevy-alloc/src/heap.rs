@@ -21,7 +21,7 @@
 
 use core::ptr::NonNull;
 
-use crate::class::{self, NCLASSES, SPAN_BYTES};
+use crate::class::{self, NCLASSES};
 use crate::os;
 use crate::segment::{
     self, FIRST_DATA_SPAN, NO_CLASS, SEGMENT_BYTES, SPANS_PER_SEGMENT, Segment,
@@ -63,8 +63,8 @@ pub struct Heap {
     id: usize,
     pub(crate) segments: *mut Segment,
     /// Current span per class, as (segment, span index).
-    partial: [Option<(NonNull<Segment>, u8)>; NCLASSES],
-    spans_in_class: [u16; NCLASSES],
+    pub(crate) partial: [Option<(NonNull<Segment>, u8)>; NCLASSES],
+    pub(crate) spans_in_class: [u16; NCLASSES],
     pub(crate) live_bytes: u64,
     pub(crate) rounding_bytes: u64,
     class_cap: u16,
@@ -217,7 +217,7 @@ impl Heap {
             let s = unsafe { &*seg };
             for ix in FIRST_DATA_SPAN..SPANS_PER_SEGMENT {
                 let m = &s.spans[ix];
-                if m.class as usize == c && (m.free_head != 0 || m.bump < m.capacity()) {
+                if m.class as usize == c && u32::from(m.live) < m.capacity() {
                     // SAFETY: `seg` is non-null in this branch.
                     self.partial[c] = Some((unsafe { NonNull::new_unchecked(seg) }, ix as u8));
                     return true;
@@ -228,7 +228,10 @@ impl Heap {
         false
     }
 
-    /// Take one slot from the class's current span, without falling back.
+    /// Take the lowest free slot from the class's current span, without
+    /// falling back. Lowest-first is the densification property: live
+    /// slots pack toward a span's low pages, so churn migrates free
+    /// space upward into whole pages the reclaim sweep can return.
     fn pop_slot(&mut self, c: usize) -> Option<NonNull<u8>> {
         let (seg, span_ix) = self.partial[c]?;
         // SAFETY: partial entries are spans this heap assigned and has
@@ -237,23 +240,21 @@ impl Heap {
         let base = seg_ref.span_base(span_ix as usize);
         // SAFETY: same — the metadata slot exists for every span index.
         let meta = unsafe { &mut (*seg.as_ptr()).spans[span_ix as usize] };
-        let slot_size = class::size_of(c);
-        let out = if meta.free_head != 0 {
-            let ix = (meta.free_head - 1) as usize;
-            let addr = base.wrapping_add(ix * slot_size);
-            // SAFETY: a free slot's first bytes hold the next index.
-            meta.free_head = unsafe { addr.cast::<u32>().read() };
-            addr
-        } else if meta.bump < meta.capacity() {
-            let addr = base.wrapping_add(meta.bump as usize * slot_size);
-            meta.bump += 1;
-            addr
-        } else {
+        let Some(i) = meta.alloc_slot() else {
             self.partial[c] = None;
             return None;
         };
-        meta.live += 1;
-        NonNull::new(out)
+        let slot_size = class::size_of(c);
+        // Landing in a returned page revives it: the kernel hands back a
+        // zero page on touch, and a fresh allocation owes nothing to its
+        // contents. Only the bookkeeping needs to notice.
+        if meta.discarded != 0 {
+            let (pa, pb) = crate::pagemap::pages_of_slot(i, slot_size);
+            for p in pa..=pb {
+                meta.discarded &= !(1u16 << p);
+            }
+        }
+        NonNull::new(base.wrapping_add(i as usize * slot_size))
     }
 
     /// Assign a span to class `c` and make it current, mapping a new
@@ -269,13 +270,7 @@ impl Heap {
         })?;
         // SAFETY: `find_free_span` returns a span of a live segment.
         let meta = unsafe { &mut (*seg.as_ptr()).spans[ix] };
-        // Pages may have been returned; the region reads as zeroes now,
-        // so the cursors start over rather than trusting stale ones.
-        meta.discarded = false;
-        meta.class = c as u8;
-        meta.free_head = 0;
-        meta.live = 0;
-        meta.bump = 0;
+        meta.reset(c as u8);
         self.spans_in_class[c] += 1;
         self.partial[c] = Some((seg, ix as u8));
         Some(())
@@ -381,56 +376,10 @@ impl Heap {
             seg = s.next;
         }
     }
-
-    /// Return the pages of spans with nothing live, beyond the retained
-    /// few. This is the property the whole experiment rests on: glibc's
-    /// brk arena provably cannot do it (see the B6 finding).
-    ///
-    /// The retained count is per sweep rather than cumulative. A running
-    /// counter looked equivalent and was not: it only ever grew, so the
-    /// second sweep found it already past the threshold and returned
-    /// everything, which made the hysteresis vanish after one call.
-    pub fn reclaim(&mut self) {
-        let mut kept: u16 = 0;
-        let mut seg = self.segments;
-        while !seg.is_null() {
-            // SAFETY: live header from our own list.
-            let s = unsafe { &mut *seg };
-            for ix in FIRST_DATA_SPAN..SPANS_PER_SEGMENT {
-                let meta = s.spans[ix];
-                if meta.class == NO_CLASS || meta.live != 0 || meta.discarded {
-                    continue;
-                }
-                if kept < EMPTY_SPAN_HYSTERESIS {
-                    kept += 1;
-                    continue;
-                }
-                let c = meta.class as usize;
-                if self.partial[c] == Some((unsafe { NonNull::new_unchecked(seg) }, ix as u8)) {
-                    self.partial[c] = None;
-                }
-                self.spans_in_class[c] -= 1;
-                s.spans[ix] = crate::segment::SpanMeta {
-                    class: NO_CLASS,
-                    discarded: true,
-                    free_head: 0,
-                    live: 0,
-                    bump: 0,
-                };
-                let base = s.span_base(ix);
-                // SAFETY: nothing is live in this span, and the range is
-                // page-aligned and inside a live mapping.
-                unsafe {
-                    os::discard(NonNull::new_unchecked(base), SPAN_BYTES);
-                }
-            }
-            seg = s.next;
-        }
-    }
-
 }
 
-/// Push a slot onto its own span's free list.
+/// Mark a slot free in its span's bitmap. Nothing is written into the
+/// slot itself — that absence is what makes its pages returnable.
 ///
 /// # Safety
 /// `seg` must own `ptr`, and the caller must have exclusive access.
@@ -439,11 +388,7 @@ unsafe fn free_local(seg: NonNull<Segment>, ptr: NonNull<u8>, c: usize) {
     let slot = segment::slot_index_of(ptr, c);
     // SAFETY: caller holds exclusive access to this segment.
     let meta = unsafe { &mut (*seg.as_ptr()).spans[ix] };
-    // SAFETY: the slot is unreferenced, so its first word can hold the
-    // link to the previous head.
-    unsafe { ptr.as_ptr().cast::<u32>().write(meta.free_head) };
-    meta.free_head = slot + 1;
-    meta.live -= 1;
+    meta.free_slot(slot);
 }
 
 impl Drop for Heap {
