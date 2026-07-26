@@ -221,34 +221,34 @@ later then changes one argument, not the design.
 
 ### 7.2 Seed from the previous file — not from the declaration
 
-Applying ceiling-first and architectural clarity to the seeding question
-changes the answer rather than settling it.
+First, dispose of the wrong reason. "Seeding from a declaration would couple
+the stone to the declaration layer" is **not** an argument against the
+capability — layering settles it. The codec takes an optional caller-supplied
+seed corpus (`&[u8]`); whoever assembles a vlog file passes whatever bytes it
+likes, including field names rendered from a declaration, from a layer that
+knows about declarations. **The seed is a parameter; it is never a
+dependency.** kevy-compress goes on knowing only bytes, and the capability is
+available whenever it is wanted. Fear of coupling must never cost a capability;
+it only decides which layer the capability lives in.
 
-**Ceiling-first says a declaration is the weaker seed.** Declared field names
-are a *subset* of what a sample finds: sampling catches the schema *and* the
-repeated values — enum members, URL prefixes, shared timestamp prefixes, the
+The real question is therefore purely ceiling-first, and there the answer
+changes: **a declaration is the weaker seed.** Declared field names are a
+*subset* of what a sample finds — sampling catches the schema *and* the
+repeated values: enum members, URL prefixes, shared timestamp prefixes, the
 long tail of whatever this keyspace actually contains. A declaration cannot
 know any of that. On any file large enough to matter, sampling strictly
-dominates; the declaration only helps in the cold-start window before training
-has run.
+dominates; a declaration only helps inside the cold-start window before
+training has run.
 
-**Architectural clarity says the coupling is worse than the problem.**
-`kevy-compress` is a stone — no business coupling, independently fuzzed,
-semver-able. Depending on the declaration layer would end that, and it would do
-so to solve a cold-start window.
+And that window has a better answer hiding behind the question: **on rotation,
+seed the new file's dictionary from the outgoing file's.** Same keyspace, same
+population, already trained on real bytes. Cold start disappears by
+construction, it costs nothing, and it works for undeclared keyspaces too —
+strictly more general than anything a declaration could have offered.
 
-Both criteria then point at a better seed that was hiding behind the question:
-**on rotation, seed the new file's dictionary from the outgoing file's.** Same
-keyspace, same population, already trained on real bytes. Cold start is solved
-by construction, it costs nothing, and it works for undeclared keyspaces too —
-strictly more general than declaration-seeding.
-
-What survives of the original idea survives as an *interface*, not a
-dependency: the codec accepts an optional caller-supplied seed corpus
-(`&[u8]`). Whoever builds a vlog file may pass whatever bytes it likes —
-including field names rendered from a declaration, later, by the layer that
-owns declarations. **The seed is a parameter; it is never a dependency.**
-kevy-compress continues to know only bytes.
+So v1 trains from samples and seeds across rotation. The declaration-derived
+seed remains reachable through the same parameter the moment it earns its
+place.
 
 ## 8. Not in this RFC
 
