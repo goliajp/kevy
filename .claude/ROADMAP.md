@@ -419,3 +419,103 @@ D2 事务标记(全有全无,与事务大小无关)/ R2 事务内集合读。
 - [x] **发行后三渠道真装 smoke 通过(2026-07-26)**:crates.io `cargo install kevy --version 4.0.0` 从发布 crate 编译成功→二进制报 `kevy 4.0.0`、PING/SET/GET 正确;GitHub Release macOS 二进制 sha256 校验 OK + 对话正常;npm `@goliapkg/kevy` 装出 4.0.1(6 文件)、wasm 引擎 set/get/del 往返正确(Node 下默认 `fetch(file://)` 不适用属浏览器向设计,传字节即可)。**site 安装页六语言完成**:三语首页「把客户端指过来」一步具名 node-redis/ioredis·go-redis·StackExchange.Redis·redis-py·hiredis 并说明 raw 通道 + CI 六客户端梯子,已部署 kevy.golia.jp
 - [x] **README 六语言矩阵 + llms.txt 同步(2026-07-26)**:三语 README 的 Install 段改为先讲「连 kevy 不需要装 kevy 包」+ 六语言(Node/Go/.NET/Python/C/Rust)客户端与 raw 通道对照表,并诚实标注各语言原生嵌入绑定尚未进 registry(实查 npm/PyPI/NuGet 得证)。顺带修掉两类真错误:**错 npm scope `@goliajp/` → `@goliapkg/` 共 51 处**(含已发布 npm 包自带 README,已发 4.0.1 修正)、**中文 README 23 处指向不存在的 `docs/zh-CN/`**(12 条死链,三 README 现均为 0)。llms.txt/llms-full.txt 已随站点重生成
 - [x] **v4.0.0 已 ship(2026-07-26,用户拍板「发布吧」)**:tag 打在 develop(惯例;master 停滞不参与)。发布途中排掉三个真阻塞——① 首次 tag 被 verify 门拦下(`serve_counters` 是 `cfg(debug_assertions)` 导出而测试无条件用它 → `cargo test --release` 编译失败;该命令只在发布流水线跑,CI 绿也照样爆;修 = 测试整体 gate 在 debug)② 5 个 v4 新 crate 未入发布链(tmpdir/ranktree 必须发,三个 door crate 标 publish=false)③ npm 包版本从不 bump 且 scope 写错 → 改为版本从 tag 推导、scope 从 package.json 读
+
+---
+
+# v5 arc — 中小企业的 datasolution(愿景拍板 2026-07-26;**最终版本号目标 v5.0.0**)
+
+**愿景**:kevy 做**中小型企业(SME)的 datasolution**,在中小型 RDS 业务上全面超越 PG。
+**"中小型"指企业规模,不是数据规模** —— SME 可以有几千万行、几十 GB;稀缺的是运维人力、
+专家与硬件预算。
+
+**主设计**:`.claude/plans/2026-07-26-v5-arc-design-input.md`(SME 判据 S1-S5 / 模型固有 I1-I5 /
+四项约束拍板 / 核心张力)· `.claude/rfcs/2026-07-26-v5-kevy-alloc.md` ·
+`.claude/rfcs/2026-07-26-v5-kevy-compress.md`。
+体检单(**不是设计输入**):`bench/PGCOMPARE-2026-07-26.md` + `bench/PERF-DECOMP-2026-07-26-idx-fanout.md`。
+
+## v5 arc 专有铁律(在总则之上追加)
+
+**① 不是改善,是设计**(用户 2026-07-26)。验收线写**结构性陈述** ——
+"这个设计之后还剩哪几项开销、各自怎么 scale",数字是推论不是目标。
+**禁止**把"比 PG / 比 glibc 好 X%"当验收线。对比在打磨之后做,不作设计输入。
+
+**② 站在巨人肩上,但自研**(用户 2026-07-26)。零依赖铁律保持;RFC 必须**具名列参照系
+并写清各自贡献什么**(不是"参考了业界做法")。
+
+**③ 怕耦合就分层,不要纠结**(用户 2026-07-26)。ceiling-first 与"石头不许有业务耦合"
+**不是二选一** —— cement/steel 包 stone 即可:石头只认字节/纯结构,业务知识放在包着它的那层。
+**禁止**因为"会耦合"而砍掉能力;正确动作是把能力放到正确的层。
+(已用例:kevy-compress 的字典种子是**参数**不是依赖 —— 石头不知道"声明"是什么,
+由包着它的那层把声明渲染成字节传进去。)
+
+**④ KV / pubsub 不得退化**(C4 拍板)。分配器**没有"关掉"这一说**,所以验收是
+"**打开时**不退化",不是"关掉时字节不变"。
+
+**v4 遗留**(不阻塞 v5 起步,但不许静默消失):t5 的 lx64 arena 复测 → README 基准表解冻;
+t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 剥离)。
+
+## 线性 checklist(v5,从上往下,不跳序)
+
+> 每 train:开工第一动 = feature 分支;标【RFC】的 RFC 批准前零实现代码;finish 前五轴收口全绿。
+
+### T0 — 门先行(先红)
+- [ ] `bench/allocgate.sh` 骨架:alloc RFC §8 的 M1-M8 逐条落成断言(先红,标 train 归属)
+- [ ] `bench/compressgate.sh` 骨架:compress RFC §6 的 K1-K7 同上(先红)
+- [ ] **四项记账契约**先定死:分配器导出 rounding / span slack / cache retention / hysteresis 四项(alloc RFC §8.1),压缩导出 incompressible / dictionary / frame / match-miss 四项(compress RFC §6.1)—— gate 断言"四项之和 == 实测差值"(不许有解释不了的部分)
+- [ ] perfgate 新增 KV+pubsub 的 **allocator-ON** 对照线(铁律④ 的承载)
+
+### T1 — `kevy-alloc` 石头(不接线)【RFC 已批】
+- [ ] size class 分级表(tcmalloc 式,最坏舍入 ~12.5%)+ span(mmap via `kevy-madvise`,一 span 一 class,空槽内联 freelist)+ span registry
+- [ ] 每分片 TLAB(非原子快路径)+ 外分片 free 队列(snmalloc 式消息传递;torajs `central.rs` 的 ABA 条款**重新论证不许继承**——kevy 真有 N 核并发 free)
+- [ ] `PER_CLASS_CAP` + 诚实 OOM(torajs `c2970b6d` 的学费:无上限 = SIGSEGV 不是泄漏)
+- [ ] 归还策略(jemalloc decay 式滞后)+ **M4 直测:分配 N span → 释放 → 断言 RSS 真回落**
+- [ ] 四项记账导出(T0 契约)· unit + fuzz(§1 那个 churn 形状)+ 对 system allocator 的 bench
+- [ ] **无 header 契约**:只服务 sized dealloc,断言任何 size class 路径不写每块 header
+
+### T2 — `kevy-alloc` 接线 + M1/M2/M3 实测(lx64)
+- [ ] `#[global_allocator]` 挂在 `kevy` 二进制,feature 门控默认 OFF;`kevy_alloc::KevyAlloc` 导出给嵌入方自行选用(库不许替调用方决定)
+- [ ] perfgate 双跑(ON/OFF):**M1 KV 线 + M2 pubsub 线在既有容差内(ON 时)** —— 红则回设计,不许调容差
+- [ ] **M3**:capacity-envelope B6 + 新增 400B 变体,四项加总解释实测差值,且只有舍入项随数据量增长
+- [ ] 大页作**旋钮**对着 M1/M3 实测(`MADV_HUGEPAGE`,非 `MAP_HUGETLB`;span 仍是细粒度回收单位)
+- [ ] 全绿后默认 ON;M7 既有门全绿(crashgate/availgate/tiergate/tablegate/textgate/oracle)
+
+### T3 — `kevy-compress` 石头(不接线)【RFC 已批】
+- [ ] frame 格式(`[tag][orig_len][payload]`)+ 快速 LZ 级:哈希表单探 match finder / 64 KiB 窗口 / token nibble + 续字节变长 / 8 字节 wildcopy 解码
+- [ ] 字典:采样训练 + **可选调用方种子语料 `&[u8]`(参数不是依赖,铁律③)**
+- [ ] **K2 永不膨胀**(incompressible 早退,Snappy 式)· **K3** round-trip fuzz + 截断/损坏帧必须拒收而非误解码
+- [ ] **K4 结构性断言**:同一 segment 内 N 个相同的 400B 值 → O(字典) + N×小;per-datum 基线**证明性地过不了**
+- [ ] 四项记账导出(T0 契约)+ 对 spg lzss 的 bench 对照(编码/解码/比率三轴)
+
+### T4 — `kevy-compress` 接线(降温 + 压实 + 冷读)
+- [ ] 降温批路径编码 → `Vlog::append` 收已编码 body(**磁盘 framing 不动**,tag 在 body 内,CRC 覆盖面不变)
+- [ ] `compact_below` 解码-重编码(§3 两级结构现在就建,v1 两级同参)
+- [ ] 冷读 `read_at` → 解码;**K1 冷读 p99 仍在 B2 预算内**(145µs hash / 105µs scalar)
+- [ ] 字典生命周期:随文件生灭(可弃性继承 AOF 唯一真相)+ **轮转时用前一个文件的字典播种**(冷启动按构造消失)+ pin 语义不变
+- [ ] **K6 静态断言:`SET` 路径上不存在任何 encode 调用**(按检查证明,不只靠跑分)· K5 vlog 放大对 1.27× 改善且压实仍终止 · K7 tier_persistence B10/B11 不变
+
+### T5 — 索引层冷热窗口【RFC】
+- [ ] 前提陈述:索引 100% 常驻 RAM 是**设计决定不是物理必然**(capacity arc 原文);I4 推广到访问路径
+- [ ] RFC:哪些索引结构可下沉、下沉后查询延迟的结构性陈述、与 IDX.CREATE floor 拒绝的关系
+- [ ] 五轴 + 既有 tiergate/idxgate 不回归
+
+### T6 — 自动声明闭环【RFC,本 arc 模型价值最高】
+- [ ] 核心张力(设计输入 §3):Law 3 让"不必调优"但"要求前瞻";**引擎观察真实查询、自动完成声明**
+- [ ] 与 planner 的分界写死在 RFC:**决定在声明期(一次),不在查询期(每次)** —— 延迟仍无执行计划意外,derived-by-construction 不破
+- [ ] 分层(铁律③):观察层是 steel,包着 kevy-index 石头与声明层;石头不认识"查询历史"
+- [ ] `kevy-sql` 已做了一半(声明期编译 + 缺哪个索引的具名报错)—— 差自动闭环
+- [ ] 拒绝面不许缩水:ad-hoc SQL / PG wire 仿真仍拒(C2 的松动是**自主设计**,不是把 Law 3 作废)
+
+### T7 — 索引即键(消 I2 特例)【RFC】
+- [ ] 模型最干净的一条:索引项本身就是键、按同一条路由规则分片 —— **消特例而非加特例**
+- [ ] **诚实前提**:按 SME 的 4-8 核重读,索引查询 kevy 本来就赢 1.9-2.8×(扇出是 16 核放大的问题)⇒ 本 train 的理由是**模型内在一致性**,不是补性能短板
+- [ ] 写侧跨分片维护复用既有 xshard/escrow/outbox;单连接延迟与并发吞吐两头都要守
+
+### T8 — 部署配方(C3 的答案,小,可并行)
+- [ ] `docs/deploy-behind-a-proxy.md`:反代 + TLS 终端 + 只暴露必要端口,**照抄即可、不需要 SRE**;三语 + 站点
+- [ ] 引擎侧 AUTH/TLS 仍 OUT(`feedback-kevy-auth-tls-never` 不变;愿景变了也不解锁)
+
+### T9 — v5 终账
+- [ ] allocgate + compressgate 全绿 + capacity envelope 复跑(alloc/compress ON)
+- [ ] **然后**才做对比(纪律①):PG 复测同一套 `bench/pgcompare.sh`,数字如实入账,输的轴列明
+- [ ] SME 口径的产品陈述:一台 32 GB 机器能装多少业务(由内存比值决定),写进 README 三语 + 站点
+- [ ] 五轴终审 + CHANGELOG 5.0.0 + tag/publish(用户拍板)
