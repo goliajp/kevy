@@ -32,6 +32,10 @@ impl Heap {
     /// second sweep found it already past the threshold and returned
     /// everything, which made the hysteresis vanish after one call.
     pub fn reclaim(&mut self) {
+        // Retained large mappings go back each tick: retention beyond a
+        // tick requires sustained traffic to re-earn, and idle memory
+        // stays bounded by the tick length rather than the pool size.
+        self.large_pool.drain();
         // Ship pending foreign frees home before sweeping: they pin
         // pages on OTHER heaps' segments, and the tick is the latency
         // bound on how long a batch may sit.
