@@ -24,6 +24,7 @@ use core::ptr::NonNull;
 use crate::class::{self, NCLASSES};
 use crate::os;
 use crate::outbound::Outbound;
+use crate::large::LargePool;
 use crate::partials::PartialRing;
 use crate::segment::{
     self, FIRST_DATA_SPAN, NO_CLASS, SEGMENT_BYTES, SPANS_PER_SEGMENT, Segment,
@@ -87,6 +88,7 @@ pub struct Heap {
     /// may go stale (a span can be reassigned after its entry is
     /// pushed) — the pop validates and simply discards liars.
     partials: [PartialRing; NCLASSES],
+    pub(crate) large_pool: LargePool,
     class_cap: u16,
 }
 
@@ -114,6 +116,7 @@ impl Heap {
             rounding_bytes: 0,
             outbound: Outbound::new(),
             partials: [PartialRing::EMPTY; NCLASSES],
+            large_pool: LargePool::new(),
             class_cap,
         }
     }
@@ -384,14 +387,14 @@ impl Heap {
     }
 
     fn alloc_large(&mut self, size: usize, align: usize) -> Option<NonNull<u8>> {
-        crate::large::alloc(size, align)
+        crate::large::alloc(&mut self.large_pool, size, align)
     }
 
     /// # Safety
     /// See [`Self::dealloc`].
     unsafe fn dealloc_large(&mut self, ptr: NonNull<u8>, size: usize) {
         // SAFETY: delegated to the caller's contract.
-        unsafe { crate::large::dealloc(ptr, size) };
+        unsafe { crate::large::dealloc(&mut self.large_pool, ptr, size) };
     }
 
     /// Move every slot other shards freed back onto its own span's list.
@@ -450,6 +453,10 @@ impl Heap {
 
 impl Drop for Heap {
     fn drop(&mut self) {
+        // Parked large mappings are not inside any segment — forgetting
+        // them here leaked a mapping per heap, which the fuzzer found
+        // as monotonic RSS growth within minutes of the pool existing.
+        self.large_pool.drain();
         let mut seg = self.segments;
         while !seg.is_null() {
             // SAFETY: live header from our own list; read `next` before
