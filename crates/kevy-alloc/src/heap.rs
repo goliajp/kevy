@@ -23,6 +23,7 @@ use core::ptr::NonNull;
 
 use crate::class::{self, NCLASSES};
 use crate::os;
+use crate::outbound::Outbound;
 use crate::segment::{
     self, FIRST_DATA_SPAN, NO_CLASS, SEGMENT_BYTES, SPANS_PER_SEGMENT, Segment,
 };
@@ -117,6 +118,11 @@ pub struct Heap {
     /// `live` — the same move the foreign list makes.
     pub(crate) cached_bytes: u64,
     hot: [SlotCache; NCLASSES],
+    /// Foreign frees awaiting batched shipment home. The free fast path
+    /// only ever appends here — the cross-core traffic all lives in the
+    /// flush. See `outbound.rs` for why this shape and not tcache-style
+    /// local reuse.
+    pub(crate) outbound: Outbound,
     class_cap: u16,
 }
 
@@ -144,6 +150,7 @@ impl Heap {
             rounding_bytes: 0,
             cached_bytes: 0,
             hot: [SlotCache::EMPTY; NCLASSES],
+            outbound: Outbound::new(),
             class_cap,
         }
     }
@@ -392,16 +399,17 @@ impl Heap {
             // Not ours to decrement. The bytes were counted on the
             // allocating thread's heap, and a non-atomic counter over
             // there is exactly what this design refuses to reach across
-            // for. The owner settles up when it drains — until then the
-            // segment's atomics record what is in flight so a snapshot
-            // still counts every byte once.
+            // for — the owner settles when it drains.
             //
-            // Doing the subtraction here is the bug this comment exists
-            // to prevent: it made the freeing thread's counters go
-            // negative, which single-threaded tests could never reach
-            // and the standard library found on its first run.
-            // SAFETY: the slot is unreferenced from here on.
-            unsafe { segment::push_foreign(seg_ref, ptr, class::size_of(c), size) };
+            // Nor ours to touch the owner's segment per-op: M1 measured
+            // that bill at 18–39 % of cross-shard KV. The free lands in
+            // the local outbound ring — two plain stores — and crosses
+            // cores only when a whole batch ships.
+            if !self.outbound.push(ptr, size, c) {
+                self.outbound.flush();
+                let ok = self.outbound.push(ptr, size, c);
+                debug_assert!(ok, "a freshly flushed ring cannot be full");
+            }
         }
     }
 

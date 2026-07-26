@@ -33,6 +33,12 @@ impl Heap {
     /// everything, which made the hysteresis vanish after one call.
     pub fn reclaim(&mut self) {
         self.flush_hot();
+        // Ship pending foreign frees home before sweeping: they pin
+        // pages on OTHER heaps' segments, and the tick is the latency
+        // bound on how long a batch may sit.
+        if !self.outbound.is_empty() {
+            self.outbound.flush();
+        }
         self.drain_foreign();
         let mut kept: u16 = 0;
         let mut seg = self.segments;
