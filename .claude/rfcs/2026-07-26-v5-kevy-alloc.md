@@ -160,9 +160,21 @@ This is where "better" has to come from, so it should be stated precisely.
 
 ## 5. Design sketch
 
-A stone crate `kevy-alloc`, joining `kevy-sys` / `kevy-uring` / `kevy-madvise`
-as one of the few crates permitted `unsafe` (most kevy crates carry
-`#![forbid(unsafe_code)]`, and that stays true of every crate that *uses* it).
+A stone crate `kevy-alloc`, which necessarily carries `unsafe`.
+
+> **Corrected at T0.** This section first said unsafe lived in
+> "`kevy-sys` / `kevy-uring` / `kevy-madvise` — a few crates". Recording the
+> set for allocgate's M8 showed **fourteen** crates actually contain
+> `unsafe {`/`fn`/`impl`/`extern`/`trait` outside tests: the three above plus
+> `kevy-bytes`, `kevy-chaos`, `kevy-ffi`, `kevy-jni`, `kevy-lua-host`,
+> `kevy-map`, `kevy-napi`, `kevy-ring`, `kevy-rt`, `kevy-vector`, `kevy-wasm`.
+> That is what an engine with FFI doors, a wasm ABI, a raw-entry map and a
+> uring reactor looks like, and the claim was simply wrong.
+>
+> What is worth gating is therefore not a small number but that the number does
+> not quietly grow. M8 became a **ratchet** on the recorded set
+> (`bench/.unsafe-crates-baseline`), with `kevy-alloc` pre-approved as a
+> deliberate addition. It runs today and is the one line green at T0.
 
 ```
 alloc(layout):
@@ -244,7 +256,7 @@ server binary decides for itself.
 | **M5** | foreign-shard free correctness under N-core churn | fuzz + a multi-shard stress test |
 | **M6** | per-class cap honoured; exhaustion is an honest OOM, never a null deref | unit test (torajs `c2970b6d`'s lesson) |
 | **M7** | every existing gate green (crashgate/availgate/tiergate/tablegate/textgate/oracle) | existing |
-| **M8** | no new `unsafe` outside `kevy-alloc`; all consumers keep `forbid(unsafe_code)` | locgate/clippy |
+| **M8** | `unsafe` appears in no crate outside the T0-recorded set (`kevy-alloc` pre-approved) — a ratchet, not a count | allocgate (**green at T0**) |
 
 M3 is the reason the arc exists; **M1 and M2 are the reason it could be
 rejected.** Both must be measured on lx64, not on a laptop.
