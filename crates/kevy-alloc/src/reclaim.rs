@@ -86,7 +86,7 @@ impl Heap {
                 self.cached_bytes -= slot_bytes;
                 // SAFETY: a cached slot came from this heap's own
                 // segments with this class, and nobody else holds it.
-                unsafe { crate::heap::free_cached(p, c) };
+                unsafe { self.free_cached(p, c) };
             }
         }
     }
