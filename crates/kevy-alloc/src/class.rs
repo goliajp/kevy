@@ -40,9 +40,18 @@
 
 
 /// The largest allocation served by a size class. Above this, requests
-/// are mapped directly and returned with `unmap` (no pooling, and no
-/// span slack — a direct mapping is exactly as big as it needs to be).
-pub const MAX_SMALL: usize = 8192;
+/// are mapped directly and returned with `unmap`.
+///
+/// Raised 8 KiB → 32 KiB by the M1 decomposition. The old cap assumed
+/// large allocations were infrequent — and under a cross-shard load the
+/// dispatch and reply buffers sit just past 8 KiB, so every one paid an
+/// mmap on birth and a munmap on death, eight shards serialised on the
+/// process-wide mmap_lock: **40 % of server self time** was
+/// `__x64_sys_munmap` + `vm_mmap_pgoff` (finding
+/// `2026-07-27-m1-mmap-lock-is-the-killer.md`). glibc recycles those
+/// buffers from its arena with zero syscalls, which is the entire
+/// cross-shard gap. A 64 KiB span still holds 2–8 slots at these sizes.
+pub const MAX_SMALL: usize = 32_768;
 
 /// Alignment every class satisfies natively, because every class is a
 /// multiple of it and spans are aligned far beyond it.
@@ -67,9 +76,9 @@ pub const SPAN_BYTES: usize = 64 * 1024;
 ///
 /// Written out rather than generated so it can be read and checked. A
 /// stone's most important property is that a reviewer can see what it
-/// does; 63 numbers are cheaper to audit than the loop that would emit
+/// does; 79 numbers are cheaper to audit than the loop that would emit
 /// them.
-pub const CLASSES: [u32; 63] = [
+pub const CLASSES: [u32; 79] = [
     // 16..=128 step 8 — finer than the octave rule, and free.
     16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128,
     // 128..=256 step 16
@@ -84,6 +93,10 @@ pub const CLASSES: [u32; 63] = [
     2304, 2560, 2816, 3072, 3328, 3584, 3840, 4096,
     // 4096..=8192 step 512
     4608, 5120, 5632, 6144, 6656, 7168, 7680, 8192,
+    // 8192..=16384 step 1024
+    9216, 10240, 11264, 12288, 13312, 14336, 15360, 16384,
+    // 16384..=32768 step 2048
+    18432, 20480, 22528, 24576, 26624, 28672, 30720, 32768,
 ];
 
 /// Number of size classes.
@@ -226,8 +239,11 @@ mod tests {
     fn every_span_holds_at_least_a_few_slots() {
         for i in 0..NCLASSES {
             let slots = slots_per_span(i);
+            // The 16-32 KiB classes get 2-4 slots per span — few, but a
+            // span with two slots still reclaims page-granularly, and
+            // the alternative was an mmap/munmap pair per buffer.
             assert!(
-                slots >= 8,
+                slots >= 2,
                 "class {} gets only {slots} slots per span",
                 size_of(i)
             );
