@@ -2,9 +2,16 @@
 
 > v5 arc, first train. **Status: DESIGN — not approved, no code.**
 > Design input: `.claude/plans/2026-07-26-v5-arc-design-input.md`.
-> Constraint ruling (owner, 2026-07-26): zero-dep stays a hard rule —
-> *"build it ourselves, learn from the good open source projects, and only do
-> it better."* So the allocator is ours to write, not to depend on.
+>
+> **Framing (owner, 2026-07-26):** *this is not an improvement, it is a design*
+> — a new model coming out of the lab and being turned into a product. So the
+> target is not "some percentage better than glibc"; it is **the ceiling the
+> model actually permits**, with the structure that makes that ceiling
+> reachable. Every criterion below is written that way.
+>
+> Constraint ruling, same day: zero-dep stays a hard rule — *"build it
+> ourselves, learn from the good open source projects, and only do it better."*
+> So the allocator is ours to write, not to depend on.
 
 ## 1. The measured problem
 
@@ -215,7 +222,7 @@ server binary decides for itself.
 |---|---|---|
 | **M1** | perfgate KV lines (GET/SET/pipeline) within existing tolerance **with the allocator enabled** | perfgate |
 | **M2** | pubsub lines likewise | perfgate / pubsub bench |
-| **M3** | the §1 workload: RSS/`used_memory` ratio materially below 2.24×, target ≤ 1.2× | capacity-envelope B6 + a new 400 B variant |
+| **M3** | RSS − `used_memory` is fully accounted for by the four terms in §8.1, each measured separately, and **only the rounding term scales with the dataset** | capacity-envelope B6 + a new 400 B variant + an allocator-internal accounting export |
 | **M4** | reclaim proven directly: allocate N spans, free them, assert RSS returns | kevy-alloc integration test |
 | **M5** | foreign-shard free correctness under N-core churn | fuzz + a multi-shard stress test |
 | **M6** | per-class cap honoured; exhaustion is an honest OOM, never a null deref | unit test (torajs `c2970b6d`'s lesson) |
@@ -225,22 +232,62 @@ server binary decides for itself.
 M3 is the reason the arc exists; **M1 and M2 are the reason it could be
 rejected.** Both must be measured on lx64, not on a laptop.
 
-## 9. Open questions for the owner
+### 8.1 What the ceiling actually is
 
-1. **Port or rewrite?** torajs-mmalloc is a working, in-production
-   architecture, but it is single-threaded-by-design (`static mut` globals,
-   `central.rs` scaffolded-not-integrated) and targets a no-libc metal binary.
-   kevy needs per-shard heaps and real concurrent frees. The honest options are
-   *(a)* port the crate and rework its ownership model, or *(b)* write
-   kevy-alloc fresh with torajs-mmalloc as the reference implementation
-   alongside mimalloc/tcmalloc. **I lean (b)** — the parts that transfer are
-   the design decisions, and the parts that do not are precisely the
-   concurrency model kevy needs to get right. But this duplicates ~2900 LOC of
-   your own prior work, so it is your call.
-2. **Huge pages.** `kevy-madvise` can back spans with 2 MB pages. Fewer TLB
-   misses, coarser reclaim granularity. Fitting for a data engine; in or out?
-3. **How far does M3 have to go** to justify the arc — is ≤ 1.2× the bar, or
-   is any material improvement worth shipping?
+"Materially better than 2.24×" is an improvement target, and this is not an
+improvement project. The right statement is structural: after this design,
+`RSS − used_memory` consists of exactly four terms, and three of them do not
+grow with the dataset.
+
+| term | what it is | scaling |
+|---|---|---|
+| **rounding** | a 400 B value in a 512 B class wastes 112 B | **O(live bytes)** — the only scaling term |
+| **span slack** | pages in a partially-filled span whose slots are not handed out | O(classes × shards) — bounded, ~single-digit MiB |
+| **cache retention** | free slots held in a shard's TLAB | O(classes × shards × depth) — bounded |
+| **hysteresis** | empty spans deliberately kept to avoid mmap/munmap thrash | O(low-water policy) — an explicit, bounded knob |
+
+Everything glibc adds beyond these — per-chunk headers, brk pages that cannot
+return, interspersed metadata — is **eliminated by construction**, not reduced.
+That is the design claim, and it is what makes the number fall out rather than
+being chased.
+
+So the ceiling is set by size-class rounding alone. Power-of-two classes waste
+~25 % on average; tcmalloc-style graded classes hold worst-case waste near
+12.5 %. And because §4 lets a shard **observe its own value size
+distribution**, the class table is fittable rather than fixed — which is where
+"better than a general-purpose allocator" stops being rhetoric.
+
+**M3 therefore asserts the decomposition, not a ratio.** The allocator exports
+all four terms; the gate requires that they sum to the observed gap (so nothing
+is unexplained) and that only the first grows with data. A headline ratio falls
+out of that and goes in the docs — it is a consequence, not the target.
+
+## 9. Decisions (owner, 2026-07-26)
+
+**Rewrite, standing on the shoulders — not port.** torajs-mmalloc is
+single-threaded by construction (`static mut` globals, `central.rs`
+scaffolded-not-integrated) and aimed at a no-libc metal binary; kevy needs
+per-shard heaps and genuinely concurrent frees. What transfers is the design
+judgement, and §3.2's two lessons are worth more than the LOC. The reference
+list is explicit, and each entry names what it is here for:
+
+| source | what we take |
+|---|---|
+| **mimalloc** (Leijen et al.) | free-list sharding per page; the local/thread-free split that keeps the fast path atomic-free |
+| **tcmalloc** | graded size classes bounding worst-case rounding near 12.5 % — the term that sets our ceiling (§8.1) |
+| **Go runtime** `mheap`/`mcache` | span-per-size-class ownership, and heap accounting as a first-class exported thing |
+| **snmalloc** | message-passing for cross-thread frees — the closest published fit to share-nothing shards |
+| **jemalloc** | decay-based page return; the hysteresis policy that keeps reclaim from thrashing |
+| **torajs-mmalloc** | a working mmap-backed realisation of the above, plus §3.2's two paid-for lessons |
+
+**Huge pages: a hint, not a structure.** Ceiling-first cuts both ways here —
+2 MB pages cut TLB misses, but a partially-used huge page is *fully resident*,
+which inflates the exact metric §8.1 gates. Architectural clarity resolves it:
+**the span is the unit of ownership and of reclaim, and it must stay
+fine-grained.** `MADV_HUGEPAGE` is advisory (the kernel splits on partial
+unmap), so it can be applied per region without changing that structure. It is
+therefore a measured knob evaluated against M1 and M3 — **not** a design
+commitment, and explicitly not `MAP_HUGETLB`.
 
 ## 10. Not in this RFC
 
