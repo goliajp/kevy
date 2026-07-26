@@ -371,10 +371,13 @@ fn a_foreign_free_leaves_the_owner_balanced_before_and_after_draining() {
     assert_eq!(full.live, 1_000 * size as u64);
     assert!(full.balanced(), "{full:?}");
 
-    // Hand every one of them back through the wrong heap.
+    // Hand every one of them back through the wrong heap. Foreign frees
+    // land in the freeing heap's outbound ring and cross to the owner's
+    // segment only in batches — that amortisation is the whole point
+    // (M1: the per-op version cost cross-shard KV 18–39 %).
     for p in held {
         // SAFETY: allocated with this size and alignment; `dealloc`
-        // routes a foreign slot to its owning segment itself.
+        // ships a foreign slot home in batches.
         unsafe { other.dealloc(p, size, 8) };
     }
 
@@ -383,12 +386,26 @@ fn a_foreign_free_leaves_the_owner_balanced_before_and_after_draining() {
     assert_eq!(intruder.live, 0, "the freeing heap counted bytes it never handed out");
     assert!(intruder.balanced(), "{intruder:?}");
 
-    // On the owner the slots are in flight: still inside its own
-    // counters, now attributed to `cache` so nothing is counted twice.
-    let parked = owner.snapshot();
-    // Whole slots are parked, so `cache` is in slot bytes — the class
-    // serving 400 is 416, and the 16 bytes of rounding travel with it.
+    // Before the freeing side flushes, a partial batch may still sit in
+    // its ring. Those slots are still counted by the owner as live —
+    // the documented staleness window — and the identity holds exactly
+    // through it on both sides.
     let slot = class::size_of(class::index_of(size, 8).unwrap()) as u64;
+    let mid = owner.snapshot();
+    assert!(mid.balanced(), "{mid:?}");
+    let shipped = mid.cache / slot;
+    let pending = mid.live / size as u64;
+    assert_eq!(
+        shipped + pending,
+        1_000,
+        "every slot is either parked (shipped) or still covered as live (pending): {mid:?}"
+    );
+    assert_eq!(mid.rounding, pending * (slot - size as u64), "pending rounding rides with pending live");
+
+    // The freeing side's tick flushes the ring; now everything is
+    // parked on the owner.
+    other.reclaim();
+    let parked = owner.snapshot();
     assert_eq!(parked.cache, 1_000 * slot, "slot bytes should be parked");
     assert_eq!(parked.live, 0, "the owner should no longer count them as live");
     assert!(parked.balanced(), "{parked:?}");
@@ -555,5 +572,57 @@ fn v2_the_kernel_reclaims_pages_from_spans_with_survivors() {
     for p in survivors {
         // SAFETY: ours.
         unsafe { heap.dealloc(p, size, 8) };
+    }
+}
+
+#[test]
+fn spliced_chains_from_two_freeing_heaps_arrive_complete() {
+    require_mapping!();
+    // Two foreign heaps free into the same owner concurrently-ish: their
+    // batches splice onto one segment list. Nothing may be lost, and
+    // after the owner drains, every slot must be reusable again.
+    let mut owner = Heap::new(1);
+    let mut b = Heap::new(2);
+    let mut c = Heap::new(3);
+    let size = 400;
+    let n = 600; // several batches' worth from each side
+    let held: Vec<_> = (0..n * 2)
+        .map(|_| owner.alloc(size, 8).expect("owner serves these"))
+        .collect();
+    for (i, p) in held.into_iter().enumerate() {
+        // SAFETY: ours, this size and alignment; alternating freers.
+        unsafe {
+            if i.is_multiple_of(2) {
+                b.dealloc(p, size, 8);
+            } else {
+                c.dealloc(p, size, 8);
+            }
+        }
+    }
+    b.reclaim();
+    c.reclaim();
+    let parked = owner.snapshot();
+    let slot = class::size_of(class::index_of(size, 8).unwrap()) as u64;
+    assert_eq!(parked.cache, (n * 2) as u64 * slot, "a spliced batch went missing: {parked:?}");
+    assert!(parked.balanced(), "{parked:?}");
+
+    owner.drain_foreign();
+    let settled = owner.snapshot();
+    assert_eq!(settled.live, 0);
+    assert_eq!(settled.cache, 0);
+    assert!(settled.balanced(), "{settled:?}");
+    // And the memory is genuinely reusable: refill without new segments.
+    let before_spans = settled.spans_assigned;
+    let again: Vec<_> = (0..n * 2)
+        .map(|_| owner.alloc(size, 8).expect("drained slots serve again"))
+        .collect();
+    assert_eq!(
+        owner.snapshot().spans_assigned,
+        before_spans,
+        "drained slots were not reused"
+    );
+    for p in again {
+        // SAFETY: ours.
+        unsafe { owner.dealloc(p, size, 8) };
     }
 }
