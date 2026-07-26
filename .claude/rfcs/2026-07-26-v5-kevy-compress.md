@@ -1,6 +1,12 @@
 # kevy-compress — a corpus, not a datum
 
-> v5 arc, second train. **Status: DESIGN — not approved, no code.**
+> v5 **experiment** arc, second train. **Status: DESIGN — not approved, no code.**
+>
+> **This is an attempt at v5, not v5** (owner, 2026-07-26). Every claim below is
+> a hypothesis under test, revisable down to its premises — including §2's
+> corpus-versus-datum argument, which is the one worth killing early if it is
+> wrong. §4 names references without promising to reproduce them.
+>
 > Design input: `.claude/plans/2026-07-26-v5-arc-design-input.md`.
 > Companion: [`2026-07-26-v5-kevy-alloc.md`](2026-07-26-v5-kevy-alloc.md).
 >
