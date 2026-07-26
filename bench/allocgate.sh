@@ -142,10 +142,19 @@ m2() {
     echo "FAIL pubsub produced no rate — an unmeasured angle must stop the gate, never pass quietly"
     return
   fi
+  # Print every sample, not just the medians. A single ratio cannot be
+  # told apart from noise, and reporting one as if it could is the
+  # anti-pattern the perf methodology names outright — a gap smaller
+  # than the baseline's own spread is not a gap.
+  local spread
+  spread=$(printf '%s\n' $offs | awk '{s+=$1; a[NR]=$1} END {
+      m=s/NR; for(i=1;i<=NR;i++) v+=(a[i]-m)^2;
+      printf "%.1f%%", NR>1 ? 100*sqrt(v/(NR-1))/m : 0 }')
   awk -v on="$med_on" -v off="$med_off" -v tol="$AB_TOLERANCE" \
+      -v sam_on="$ons" -v sam_off="$offs" -v sd="$spread" \
     'BEGIN { r = on / off;
-             printf "%s allocator ON %.0f vs OFF %.0f msg/s (ratio %.3f, floor %.2f)\n",
-                    (r >= tol ? "PASS" : "FAIL"), on, off, r, tol }'
+             printf "%s allocator ON %.2fM vs OFF %.2fM msg/s (ratio %.3f, floor %.2f; OFF spread %s) ON=[%s] OFF=[%s]\n",
+                    (r >= tol ? "PASS" : "FAIL"), on/1e6, off/1e6, r, tol, sd, sam_on, sam_off }'
 }
 
 m1_out=$(m1)
