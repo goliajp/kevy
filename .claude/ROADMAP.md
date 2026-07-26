@@ -624,8 +624,15 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
   - **v3 批量回家**:free 快路径 = 本地环两次 store;flush 按 segment 分组、槽内穿链、**整批一记 CAS 拼接 + 两记 fetch_add**(跨核流量摊薄 ~百倍);drain 端格式不变;所有权照旧精确。**A/B 裁决:纹丝不动**(compat_get −40.1% vs −38.5%)—— **机制候选①③(原子流量/drain 走查)死**
   - **判别实验**:同一 compat 拓扑 `--threads 1`(跨分片不可能存在)→ **1.006 / 1.023 全净** ⇒ 触发器确是跨分片形状,但成本不是流量,**是内存冷热**
   - **v4 吸收复用**:稳态跨分片流里 B 的 free 全外来、B 的分配全死在别处 ⇒ home-routing 让热缓存**结构性饿死**,每次分配摸冷 span(唯一能事后解释 v2 热缓存无效的机制,计数器签名全吻合)。tcache 式吸收复用,三方记账问题用"**segment 属主 = 永久会计人**"解:吸收记 (−r,−(s−r))、复用记精确逆,负和恒等于外方缓存停驻字节,第三分片只需地址;每 custody 变更两记 relaxed fetch_add(**执照 = v3 证明原子不是成本**)。custody-cycle 三方逐步恒等式测试;被吸收槽故意不随 tick 回家(暖供给)。31+5 测试 + 110k fuzz 绿
-- [ ] **v4 A/B 裁决进行中**(lx64 perfgate);PASS → M2/M3 复核 + 剩余 M 线;FAIL → 第五个死机制,按方法论转真 Phase-A 分解(PEBS/mem-loads 找 miss 落点)或停
-- [ ] M2 pubsub 布局谜团(独立;v4 不改单线程行为)
+- [x] **v4 裁决:跨分片纹丝不动 + 打崩同分片 SET(−50.3%)→ REVERT**。custody 洞:A-拥有/B-复用/**A-亲自释放**走 local 分支双重记账(测试只走了 C-释放)。第五个死机制
+- [x] **布局 probe:零**(全函数 64B 对齐归一,比值同带)—— 第六个;副产品 = 证明缺口在 compat harness 上**经得起剖析器**
+- [x] **差分剖析终于点名(2026-07-27)**:`osq_lock` 15.9% + rwsem 自旋 + `__x64_sys_munmap` 27.6% + `vm_mmap_pgoff` 12% = **40% 服务器时间在 mmap/munmap 两个 syscall,8 分片串行在进程 `mmap_lock`**。凶手是大块路径那行注释:"no pooling; large allocs are assumed infrequent"。全部异象归位(threads=1 净/cluster 净 compat 输/五轮小路径零/微基准快/对齐零/IPC 低)
+- [x] **v5 类表扩 32 KiB**:compat −40 → −9.1
+- [x] **v6 partial rings**:无效于吞吐(留作 v8 的正确结构);**v7 删热缓存:M3 从 2.38× 复原 1.98×** —— LIFO 复用破坏致密化,137MB 静默蒸发了四轮(教训:**为轴 A 的改动若可能触碰轴 B 的机制,必须复测轴 B**)
+- [x] **v8 进程级映射池**:syscall 计数抓到还剩 105k mmap/6s(36–300KB 增长阶梯);每堆池**零效果**(缓冲跨分片生死,池在错侧)→ 进程级 + 自旋锁(锁下收集、锁外 munmap)→ **mmap −97%**。fuzzer 几分钟抓到 `Heap::drop` 忘排池的真泄漏
+- [x] **v8 终裁:12 角 7 过**(compat_get −2.8 / legacy_get **+2.1** / zalg **+7.5 反超**;compat_set 差 0.035% = 噪声距离);**M3 保持 1.98×**。residual = 4 条集合写线 −10.6~−18.6,**已剖面孤立**:hset 上分配器 17.3% vs glibc 10.1% 自身时间 = 最初的元数据远线故事;天真修法(热缓存)已知破坏 M3。finding:`PERF-FINDING-2026-07-27-v8-closing-ledger.md`
+- [ ] **residual 设计轮(待拍板)**:既回收热槽又保持位置感知(候选:仅持最低 span 槽的有界缓存 / per-word 位批发 / 或接受集合写 −10~−19% 换 −17% 内存 —— SME 取舍归属主)
+- [ ] M2 pubsub 0.858(同 residual 类;池不覆盖它)
 - [x] **M1 已测(2026-07-27,盒 98% idle 时 perfgate 全套 A/B 真跑):判别子干净** —— **同分片 KV ±1% 全净**(pinned_cluster get/set +0.3%/-0.9%,conn=属主),**跨分片 KV -18~-39%**(compat -38.5%/-39.2%,legacy 七线 -17.6~-28.4%,zalg -24.6%)。**快路径无罪,外分片 free 路径定罪**;pubsub 是 --threads 1(无外分片 free),两个回归就此分开。机制候选(待分解轮判):①每次外分片 free 一记跨核 CAS(七个分片捶同一 segment 原子,RFO ping-pong;compat_get 基线 ~52ns/op,一记争用 CAS 足以解释)②glibc tcache 把外来 chunk 推进**释放线程自己的**缓存并**本地复用**——我们的设计每个外来槽都要绕道回家;③`drain_foreign` O(全 segment)。finding:`PERF-FINDING-2026-07-27-m1-foreign-frees-are-the-kv-killer.md`
 - **三轴账目(T2 完整测量后)**:内存 **-17%** / 同分片 KV **±1%** / 跨分片 KV **-18~-39%(C4 直接不过)** / pubsub 小包 -8~-16%。**现状不可默认 ON**;外分片路径需要重设计轮(tcache 式本地复用 + 相应的所有权记账)才能重新称账
 - [ ] 大页作**旋钮**对着 M1/M3 实测(`MADV_HUGEPAGE`,非 `MAP_HUGETLB`;span 仍是细粒度回收单位)
