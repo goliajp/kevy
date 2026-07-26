@@ -479,11 +479,13 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 
 > 每 train:开工第一动 = feature 分支;标【RFC】的 RFC 批准前零实现代码;finish 前五轴收口全绿。
 
-### T0 — 门先行(先红)
-- [ ] `bench/allocgate.sh` 骨架:alloc RFC §8 的 M1-M8 逐条落成断言(先红,标 train 归属)
-- [ ] `bench/compressgate.sh` 骨架:compress RFC §6 的 K1-K7 同上(先红)
-- [ ] **四项记账契约**先定死:分配器导出 rounding / span slack / cache retention / hysteresis 四项(alloc RFC §8.1),压缩导出 incompressible / dictionary / frame / match-miss 四项(compress RFC §6.1)—— gate 断言"四项之和 == 实测差值"(不许有解释不了的部分)
-- [ ] perfgate 新增 KV+pubsub 的 **allocator-ON** 对照线(铁律④ 的承载)
+### T0 — 门先行(先红)✅ 完(2026-07-26,`feature/v5-memory`)
+- [x] `bench/allocgate.sh`:M1-M8 逐条落成(9 行,标 train 归属);**RED exit 1 如设计**
+- [x] `bench/compressgate.sh`:K1-K7 同上(8 行);**RED exit 1 如设计**
+- [x] **记账契约定死** = `bench/V5-ACCOUNTING-CONTRACT.md`(两 crate 要导出的字段名 + 恒等式 + 拒绝条款)。**恒等式不设容差** —— 未被解释的字节正是 glibc 那 2.24× 藏身之处;"加一项去凑平"明令禁止
+  - **诚实降级**:compress RFC §6.1 的四项里 **incompressible residual 与 match-finder miss 靠记账不可分**(要知道漏了多少冗余,就得先知道有多少 —— 那就是压缩问题本身)。契约不假装:合成一项 `cmp_payload_bytes`,拆分改为**带外**用 spg lzss 的**暴力穷举 matcher 当 oracle** 实测(T3 出 finding doc),不进每轮 gate
+- [x] **M8 当场变成真断言(T0 唯一绿灯)**:反例验证过(给 `kevy-hash` 加一个 `unsafe fn` → FAIL,还原 → PASS)。**顺带抓到 RFC 一句不实陈述** —— 我写"unsafe 只在 kevy-sys/kevy-uring/kevy-madvise 少数几个 crate",实录是 **14 个**(FFI 门 / wasm ABI / raw-entry map / uring reactor 本来就该有)。RFC 已更正;M8 改为对 `bench/.unsafe-crates-baseline` 的 **ratchet**(不看数量看不许悄悄增长,`kevy-alloc` 预批)
+- [x] **计划外偏离(已论证)**:原写"perfgate 新增 allocator-ON 对照线",实施时改放 allocgate。理由 = 两者问的不是同一个问题:**perfgate 是对历史基线的 ratchet;分配器问的是同源两构建、同盒、交错的 A/B**。perfgate 待 T2 末分配器默认 ON 后,其既有线自然就在测它,**无需新增 metric**
 
 ### T1 — `kevy-alloc` 石头(不接线)【RFC 已批】
 - [ ] size class 分级表(tcmalloc 式,最坏舍入 ~12.5%)+ span(mmap via `kevy-madvise`,一 span 一 class,空槽内联 freelist)+ span registry
