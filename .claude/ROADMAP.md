@@ -621,7 +621,8 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - [x] **M2 吞吐半:三个机制假设全被测量淘汰**(in-place realloc 0.852→0.843 / 位图重构元数据 0.826 / 热缓存消除 churn 路径全部 segment 触碰 0.844)。**缺口按 payload 分形**:16B 0.92 / 64B 0.84 / 4096B ~1.0;**perf 挂上时缩到噪声甚至反转** —— 是时序/布局效应不是热符号,三次符号级修复无效与此自洽。剩余假设空间 = 布局形(着色/预取/TLB),**需要专门的分解轮,不许第四次盲修**。finding:`PERF-FINDING-2026-07-27-v2-memory-delivered-throughput-gap-unexplained.md`
 - [ ] M3 七项在 envelope 尺度的分解导出(INFO `# Allocator` 段)—— 剩余 335MB 的归因需要它
 - [ ] M2 布局形分解轮(硬件计数器选型 + 判别实验;是否投入待拍板)
-- [ ] M1 KV 线仍未测(perfgate 拒绝在盒子有其它负载时跑)
+- [x] **M1 已测(2026-07-27,盒 98% idle 时 perfgate 全套 A/B 真跑):判别子干净** —— **同分片 KV ±1% 全净**(pinned_cluster get/set +0.3%/-0.9%,conn=属主),**跨分片 KV -18~-39%**(compat -38.5%/-39.2%,legacy 七线 -17.6~-28.4%,zalg -24.6%)。**快路径无罪,外分片 free 路径定罪**;pubsub 是 --threads 1(无外分片 free),两个回归就此分开。机制候选(待分解轮判):①每次外分片 free 一记跨核 CAS(七个分片捶同一 segment 原子,RFO ping-pong;compat_get 基线 ~52ns/op,一记争用 CAS 足以解释)②glibc tcache 把外来 chunk 推进**释放线程自己的**缓存并**本地复用**——我们的设计每个外来槽都要绕道回家;③`drain_foreign` O(全 segment)。finding:`PERF-FINDING-2026-07-27-m1-foreign-frees-are-the-kv-killer.md`
+- **三轴账目(T2 完整测量后)**:内存 **-17%** / 同分片 KV **±1%** / 跨分片 KV **-18~-39%(C4 直接不过)** / pubsub 小包 -8~-16%。**现状不可默认 ON**;外分片路径需要重设计轮(tcache 式本地复用 + 相应的所有权记账)才能重新称账
 - [ ] 大页作**旋钮**对着 M1/M3 实测(`MADV_HUGEPAGE`,非 `MAP_HUGETLB`;span 仍是细粒度回收单位)
 - [ ] 全绿后才谈默认 ON;M7 既有门全绿(crashgate/availgate/tiergate/tablegate/textgate/oracle)
 
