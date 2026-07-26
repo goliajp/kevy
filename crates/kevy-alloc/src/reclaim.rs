@@ -32,7 +32,6 @@ impl Heap {
     /// second sweep found it already past the threshold and returned
     /// everything, which made the hysteresis vanish after one call.
     pub fn reclaim(&mut self) {
-        self.flush_hot();
         // Ship pending foreign frees home before sweeping: they pin
         // pages on OTHER heaps' segments, and the tick is the latency
         // bound on how long a batch may sit.
@@ -71,23 +70,6 @@ impl Heap {
                 }
             }
             seg = s.next;
-        }
-    }
-
-    /// Empty the heap-local hot cache back into the spans' bitmaps.
-    ///
-    /// Cached slots keep their bits set — their pages are genuinely
-    /// pinned — so a sweep that did not flush first would under-return
-    /// for no reason, exactly as an undrained foreign list would.
-    fn flush_hot(&mut self) {
-        for c in 0..crate::class::NCLASSES {
-            let slot_bytes = class::size_of(c) as u64;
-            while let Some(p) = self.hot_pop(c) {
-                self.cached_bytes -= slot_bytes;
-                // SAFETY: a cached slot came from this heap's own
-                // segments with this class, and nobody else holds it.
-                unsafe { self.free_cached(p, c) };
-            }
         }
     }
 

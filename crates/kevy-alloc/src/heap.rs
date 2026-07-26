@@ -24,7 +24,7 @@ use core::ptr::NonNull;
 use crate::class::{self, NCLASSES};
 use crate::os;
 use crate::outbound::Outbound;
-use crate::partials::{PartialRing, SlotCache};
+use crate::partials::PartialRing;
 use crate::segment::{
     self, FIRST_DATA_SPAN, NO_CLASS, SEGMENT_BYTES, SPANS_PER_SEGMENT, Segment,
 };
@@ -69,12 +69,6 @@ pub struct Heap {
     pub(crate) spans_in_class: [u16; NCLASSES],
     pub(crate) live_bytes: u64,
     pub(crate) rounding_bytes: u64,
-    /// Slot bytes parked in `hot`, priced for the accounting: a cached
-    /// slot's bit stays set in its span (the page is genuinely pinned),
-    /// but the caller has freed it, so it belongs to `cache`, not
-    /// `live` — the same move the foreign list makes.
-    pub(crate) cached_bytes: u64,
-    hot: [SlotCache; NCLASSES],
     /// Foreign frees awaiting batched shipment home. The free fast path
     /// only ever appends here — the cross-core traffic all lives in the
     /// flush. See `outbound.rs` for why this shape and not tcache-style
@@ -118,17 +112,10 @@ impl Heap {
             spans_in_class: [0; NCLASSES],
             live_bytes: 0,
             rounding_bytes: 0,
-            cached_bytes: 0,
-            hot: [SlotCache::EMPTY; NCLASSES],
             outbound: Outbound::new(),
             partials: [PartialRing::EMPTY; NCLASSES],
             class_cap,
         }
-    }
-
-    /// Pop one slot from class `c`'s hot cache (reclaim's flush path).
-    pub(crate) fn hot_pop(&mut self, c: usize) -> Option<NonNull<u8>> {
-        self.hot[c].pop()
     }
 
     /// Adopt this heap's address as its identity, once.
@@ -218,15 +205,20 @@ impl Heap {
         }
     }
 
+    /// Every allocation goes through the bitmap, lowest-first — there
+    /// is deliberately no free-slot cache in front of it.
+    ///
+    /// One existed. Its premise (keeping the hot free list in
+    /// heap-local memory) died with the locality hypothesis, it never
+    /// won a measurable point of throughput anywhere (0.826 → 0.844,
+    /// inside the band), and the M3 re-measurement convicted it of
+    /// costing 137 MB of the memory result: LIFO reuse hands back the
+    /// most recently freed slot regardless of position, which undoes
+    /// the lowest-first densification that page-granular reclaim feeds
+    /// on — resident went 1.98× → 2.38× with the cache in place. The
+    /// allocator's reason to exist outranks a cache that pays nothing.
     fn alloc_small(&mut self, c: usize, size: usize) -> Option<NonNull<u8>> {
-        // Hot path: a recently freed slot of this class, straight from
-        // the heap — no segment line touched.
-        let slot = if let Some(p) = self.hot[c].pop() {
-            self.cached_bytes -= class::size_of(c) as u64;
-            p
-        } else {
-            self.pop_slot(c).or_else(|| self.slow_path(c))?
-        };
+        let slot = self.pop_slot(c).or_else(|| self.slow_path(c))?;
         self.live_bytes += size as u64;
         self.rounding_bytes += (class::size_of(c) - size) as u64;
         Some(slot)
@@ -371,13 +363,6 @@ impl Heap {
         if seg_ref.owner == self.id {
             self.live_bytes -= size as u64;
             self.rounding_bytes -= (class::size_of(c) - size) as u64;
-            // Hot path: park the slot in the heap-local cache — again no
-            // segment line touched. The bitmap bit stays set, which is
-            // honest: the page IS still pinned until the flush.
-            if self.hot[c].push(ptr) {
-                self.cached_bytes += class::size_of(c) as u64;
-                return;
-            }
             // SAFETY: our own segment; exclusive access.
             unsafe { self.free_local(seg, ptr, c) };
         } else {
@@ -443,19 +428,6 @@ impl Heap {
 }
 
 impl Heap {
-    /// Free a slot that was parked in the hot cache: recover its
-    /// segment from the address and clear its bit.
-    ///
-    /// # Safety
-    /// `ptr` must be a slot of class `c` from this heap's own segments,
-    /// held only by the cache it was just popped from.
-    pub(crate) unsafe fn free_cached(&mut self, ptr: NonNull<u8>, c: usize) {
-        // SAFETY: a cached slot always lies inside one of our segments.
-        let seg = unsafe { segment::segment_of(ptr) };
-        // SAFETY: exclusive — the owning thread is running this.
-        unsafe { self.free_local(seg, ptr, c) };
-    }
-
     /// Mark a slot free in its span's bitmap. Nothing is written into
     /// the slot itself — that absence is what makes its pages
     /// returnable. A span going full → partial is registered in the
