@@ -20,7 +20,8 @@ use kevy_alloc::{Heap, class};
 
 /// Sizes that straddle class boundaries, the small/large cut-off, and
 /// the alignment-driven class skip.
-const SIZES: [usize; 12] = [1, 8, 16, 17, 48, 129, 400, 1023, 4096, 8192, 8193, 40000];
+const SIZES: [usize; 16] =
+    [1, 8, 16, 17, 48, 129, 400, 1023, 4096, 8192, 8193, 16384, 20000, 32768, 32769, 70000];
 
 fuzz_target!(|data: &[u8]| {
     if !kevy_alloc::os::available() {
