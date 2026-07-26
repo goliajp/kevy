@@ -93,6 +93,40 @@ unsafe impl GlobalAlloc for KevyAlloc {
         }
     }
 
+    /// Grow or shrink without moving where the size class allows it.
+    ///
+    /// `GlobalAlloc`'s default implementation always allocates, copies
+    /// and frees. That is what a pub/sub profile caught: the system
+    /// allocator's `realloc` was visible and cheap, extending buffers
+    /// where they lay, while ours copied every time a buffer grew. Since
+    /// a class spans a range of sizes, most growth steps land back in
+    /// the same class and need no work at all.
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        if let Some(p) = NonNull::new(ptr)
+            && !is_over_aligned(layout)
+            && new_size <= class::MAX_SMALL
+            && with_heap(|h| {
+                // SAFETY: `ptr` is live and was made with this layout.
+                unsafe { h.try_resize_in_place(p, layout.size(), new_size, layout.align()) }
+            }) == Some(true)
+        {
+            return ptr;
+        }
+        // SAFETY: the default dance — allocate, copy the smaller of the
+        // two lengths, release the old block.
+        unsafe {
+            let Ok(new_layout) = Layout::from_size_align(new_size, layout.align()) else {
+                return core::ptr::null_mut();
+            };
+            let fresh = self.alloc(new_layout);
+            if !fresh.is_null() {
+                core::ptr::copy_nonoverlapping(ptr, fresh, layout.size().min(new_size));
+                self.dealloc(ptr, layout);
+            }
+            fresh
+        }
+    }
+
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         let Some(p) = NonNull::new(ptr) else { return };
         if is_over_aligned(layout) {

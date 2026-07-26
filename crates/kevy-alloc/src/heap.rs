@@ -26,7 +26,6 @@ use crate::os;
 use crate::segment::{
     self, FIRST_DATA_SPAN, NO_CLASS, SEGMENT_BYTES, SPANS_PER_SEGMENT, Segment,
 };
-use crate::stats::Stats;
 
 /// Spans one class may hold at once, per heap — a runaway guard, not a
 /// policy. At 64 KiB a span, this bounds one class at roughly 4 GiB per
@@ -62,12 +61,12 @@ pub const EMPTY_SPAN_HYSTERESIS: u16 = 4;
 /// what removes the atomics from the fast path.
 pub struct Heap {
     id: usize,
-    segments: *mut Segment,
+    pub(crate) segments: *mut Segment,
     /// Current span per class, as (segment, span index).
     partial: [Option<(NonNull<Segment>, u8)>; NCLASSES],
     spans_in_class: [u16; NCLASSES],
-    live_bytes: u64,
-    rounding_bytes: u64,
+    pub(crate) live_bytes: u64,
+    pub(crate) rounding_bytes: u64,
     class_cap: u16,
 }
 
@@ -122,6 +121,52 @@ impl Heap {
             Some(c) => self.alloc_small(c, size),
             None => self.alloc_large(size, align),
         }
+    }
+
+    /// Grow or shrink in place when the block's size class does not
+    /// change, reporting whether it worked.
+    ///
+    /// This is the capability a general-purpose allocator gets from its
+    /// chunk headers: glibc can often extend a block where it lies
+    /// instead of moving it. Without it, `GlobalAlloc`'s default
+    /// `realloc` allocates, copies and frees on every growth — and a
+    /// profile of pub/sub showed exactly that, with `libc realloc`
+    /// visible and cheap on the system side and nothing corresponding
+    /// on ours.
+    ///
+    /// Refuses when the block belongs to another thread. Adjusting the
+    /// owner's counters from here is precisely what this design does not
+    /// do, and the caller falls back to allocate-copy-free, which routes
+    /// the release home correctly.
+    ///
+    /// # Safety
+    /// `ptr` must be a live allocation from this allocator made with
+    /// `old_size` and `align`.
+    pub unsafe fn try_resize_in_place(
+        &mut self,
+        ptr: NonNull<u8>,
+        old_size: usize,
+        new_size: usize,
+        align: usize,
+    ) -> bool {
+        let (Some(a), Some(b)) = (class::index_of(old_size, align), class::index_of(new_size, align))
+        else {
+            return false;
+        };
+        if a != b {
+            return false;
+        }
+        // SAFETY: a small allocation always lies inside a segment.
+        let seg = unsafe { segment::segment_of(ptr) };
+        // SAFETY: the mask lands on a live header for our own pointers.
+        if unsafe { seg.as_ref() }.owner != self.id {
+            return false;
+        }
+        let slot = class::size_of(a) as u64;
+        self.live_bytes = self.live_bytes - old_size as u64 + new_size as u64;
+        self.rounding_bytes = self.rounding_bytes - (slot - old_size as u64)
+            + (slot - new_size as u64);
+        true
     }
 
     /// Return an allocation. `size` must be the one it was made with —
@@ -383,54 +428,6 @@ impl Heap {
         }
     }
 
-    /// Where every mapped byte is (`bench/V5-ACCOUNTING-CONTRACT.md` §1).
-    ///
-    /// Walks the segments rather than maintaining seven counters on the
-    /// hot path: only `live` and `rounding` depend on the requested size
-    /// and must be tracked as allocations happen. Stats are read on INFO,
-    /// not per operation.
-    #[must_use]
-    pub fn snapshot(&self) -> Stats {
-        let mut st = Stats { live: self.live_bytes, rounding: self.rounding_bytes, ..Stats::default() };
-        let mut seg = self.segments;
-        while !seg.is_null() {
-            // SAFETY: live header from our own list.
-            let s = unsafe { &*seg };
-            st.mapped += SEGMENT_BYTES as u64;
-            st.segment_overhead += SPAN_BYTES as u64;
-            // Slots freed by another thread are still inside this
-            // heap's `live`/`rounding` totals, because that thread could
-            // not reach across to adjust them. Move the amount over here
-            // so every byte is counted exactly once.
-            let parked = s.foreign_bytes.load(core::sync::atomic::Ordering::Relaxed) as u64;
-            let parked_live = s.foreign_live.load(core::sync::atomic::Ordering::Relaxed) as u64;
-            st.cache += parked;
-            st.live -= parked_live;
-            st.rounding -= parked - parked_live;
-            for ix in FIRST_DATA_SPAN..SPANS_PER_SEGMENT {
-                add_span(&mut st, &s.spans[ix]);
-                if s.spans[ix].class != NO_CLASS {
-                    st.spans_assigned += 1;
-                }
-            }
-            seg = s.next;
-        }
-        st
-    }
-}
-
-/// Fold one span's bytes into a snapshot.
-fn add_span(st: &mut Stats, meta: &crate::segment::SpanMeta) {
-    if meta.class == NO_CLASS {
-        st.hysteresis += SPAN_BYTES as u64;
-        return;
-    }
-    let slot = class::size_of(meta.class as usize) as u64;
-    // live + rounding are already counted from the requested sizes; the
-    // slots themselves are exactly live * slot, so only the free parts
-    // are added here.
-    st.span_free += u64::from(meta.touched_free()) * slot;
-    st.virgin += SPAN_BYTES as u64 - u64::from(meta.bump) * slot;
 }
 
 /// Push a slot onto its own span's free list.

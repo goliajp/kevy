@@ -76,6 +76,7 @@ pub mod heap;
 pub mod large;
 pub mod os;
 pub mod segment;
+mod snapshot;
 pub mod stats;
 
 #[cfg(feature = "global")]
