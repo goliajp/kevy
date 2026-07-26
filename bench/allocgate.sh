@@ -105,8 +105,10 @@ pubsub_once() { # $1 = server binary -> delivered msg/s, or empty
   srv=$!
   # Ready when it answers, not after a fixed sleep: a slow cold start
   # would otherwise be measured as slow serving.
+  local cli
+  cli=${ALLOCGATE_CLI:-$(command -v redis-cli || echo "$ROOT/target/release/kevy-cli")}
   for _ in $(seq 1 50); do
-    "$ROOT/target/debug/kevy-cli" -p "$AB_PORT" PING >/dev/null 2>&1 && break
+    "$cli" -p "$AB_PORT" PING >/dev/null 2>&1 && break
     sleep 0.2
   done
   rate=$("$PUBSUB_BIN" --port "$AB_PORT" --subs 50 --msgs 20000 --size 64 2>/dev/null \
