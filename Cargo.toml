@@ -56,6 +56,7 @@ members = [
     "crates/kevy-sql",
     "crates/kevy-cli",
     "crates/kevy-pubsub-bench",
+    "crates/kevy-alloc",
     "crates/kevy-bench",
     "crates/kevy-hash",
     "crates/kevy-index",

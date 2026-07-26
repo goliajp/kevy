@@ -1,13 +1,14 @@
 //! Six-stone microbench baseline runner.
 //!
-//! Exercises the public API of the six high-blast-radius stone crates
+//! Exercises the public API of the high-blast-radius stone crates
 //! (kevy-map / kevy-ring / kevy-config / kevy-text / kevy-store /
-//! kevy-vector) with fixed-seed data and reports median ± stdev per
-//! operation. Numbers feed `bench/STONE-BENCH.md`.
+//! kevy-vector, plus kevy-alloc from the v5 experiment) with fixed-seed
+//! data and reports median ± stdev per operation. Numbers feed
+//! `bench/STONE-BENCH.md`.
 //!
 //! ```text
 //! cargo run -p kevy-bench --release --example stones            # all six
-//! cargo run -p kevy-bench --release --example stones -- map vector
+//! cargo run -p kevy-bench --release --example stones -- map vector alloc
 //! ```
 //!
 //! Discipline (matches the harness doc): every figure is a median over
@@ -16,6 +17,7 @@
 //! load — treat cross-machine numbers as separate baselines.
 
 mod rng;
+mod s_alloc;
 mod s_config;
 mod s_map;
 mod s_ring;
@@ -45,7 +47,7 @@ fn main() {
     let want = |name: &str| args.is_empty() || args.iter().any(|a| a == name);
 
     println!(
-        "six-stone microbench baseline — {} {} (medians are per-op; ± is sample stdev)\n",
+        "stone microbench baseline — {} {} (medians are per-op; ± is sample stdev)\n",
         std::env::consts::OS,
         std::env::consts::ARCH,
     );
@@ -67,5 +69,8 @@ fn main() {
     }
     if want("vector") {
         s_vector::run();
+    }
+    if want("alloc") {
+        s_alloc::run();
     }
 }
