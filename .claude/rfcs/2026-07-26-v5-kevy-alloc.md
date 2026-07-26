@@ -251,38 +251,6 @@ and it is not already discarded. Allocating a slot that overlaps a
 discarded page un-marks those pages; the memory legally reads as zeros,
 and a fresh allocation owes nothing to its contents.
 
-### 5.2 v3 — the foreign path, redesigned around the M1 verdict
-
-M1's discriminator (finding `2026-07-27-m1-foreign-frees-are-the-kv-killer.md`)
-convicted the per-op foreign path: same-shard KV ±1 %, cross-shard KV
-−18…−39 %, and the per-free bill was three atomic RMWs on the owning
-segment's header line with up to seven shards hammering it.
-
-**The tcache route is deliberately rejected.** glibc lets the freeing
-thread keep and *reuse* a foreign chunk locally — zero cross-core
-traffic. But once a slot can be re-handed-out by a non-owner, a third
-shard freeing it later cannot recover who currently accounts for it (the
-address only reveals the segment's owner), and keeping the identity
-exact then requires an atomic on **every** foreign alloc *and* free.
-Same bill, different counter — not a ceiling.
-
-**The ceiling that keeps ownership exact is amortisation** (`outbound.rs`):
-a foreign free appends to a heap-local ring — two plain stores, nothing
-crosses a core — and the flush (ring full, or the reclaim tick) ships a
-whole batch home: entries grouped by owning segment, each group threaded
-into a chain through the slots themselves, **one CAS splice + two
-`fetch_add`s per group** for the lot. The owner's drain reads the exact
-per-op format it always did. Cross-core traffic per foreign free drops
-from ~3 RMWs to ~1/100th of a CAS.
-
-The accounting contract survives untouched: a pending slot's bit is
-still set and the owner's counters still cover its bytes — the same
-staleness window the un-drained list always had, entered one flush
-later. `balanced()` holds exactly at every instant on both sides, and
-the foreign-free test asserts the mid-flight split explicitly. A thread
-exiting without a flush strands at most one ring (128 slots) beside the
-heap it already leaks by design.
-
 Two properties are load-bearing and both must be gated, not assumed:
 
 - **Reclaim**: an empty span is returned to the OS. This is what §1 needs; it
