@@ -161,48 +161,45 @@ pub fn slot_index_of(ptr: NonNull<u8>, class: usize) -> u32 {
 /// is mimalloc's thread-free design, and it is strictly simpler than
 /// tagged pointers or hazard pointers would have been.
 ///
-/// The slot carries the requested size as well as the link, because the
-/// owner needs it at drain time and nothing else remembers it: the
-/// freeing thread knows it from the `Layout`, the owner does not, and
-/// there is no per-allocation header to consult. A free slot's own bytes
-/// are the natural place to put it — the smallest class is 16 bytes and
-/// this needs a pointer plus four.
+/// Splice a pre-linked chain of freed slots onto a segment's foreign
+/// list, and post the batch's byte sums. One CAS and two `fetch_add`s
+/// for the whole chain — this is the amortisation M1 forced: the per-op
+/// version of this function was three atomic RMWs on this same line for
+/// every single foreign free, and cross-shard KV paid 18–39 % for it.
+///
+/// The chain format is unchanged from the per-op era: each slot's first
+/// word links to the next, with the requested size at
+/// [`FOREIGN_SIZE_OFFSET`] — the owner's drain cannot tell a spliced
+/// batch from a thousand individual pushes.
 ///
 /// # Safety
-/// `slot` must be a live slot address belonging to `seg`, no longer
-/// referenced by anyone; `slot_size` must be its class's slot size and
-/// `requested` the size it was allocated with.
-pub unsafe fn push_foreign(
+/// `head..tail` must be a chain of live slot addresses belonging to
+/// `seg`, linked through their first words, referenced by nobody else;
+/// `live_sum`/`bytes_sum` must be the chain's requested/slot-byte sums.
+pub unsafe fn splice_foreign(
     seg: &Segment,
-    slot: NonNull<u8>,
-    slot_size: usize,
-    requested: usize,
+    head: *mut u8,
+    tail: *mut u8,
+    live_sum: usize,
+    bytes_sum: usize,
 ) {
-    // SAFETY: the slot is ours and unreferenced, and every class is at
-    // least 16 bytes — room for the link and the size beside it.
-    unsafe {
-        slot.as_ptr()
-            .add(FOREIGN_SIZE_OFFSET)
-            .cast::<u32>()
-            .write(requested as u32);
-    }
-    seg.foreign_live.fetch_add(requested, Ordering::Relaxed);
-    let mut head = seg.foreign.load(Ordering::Relaxed);
+    seg.foreign_live.fetch_add(live_sum, Ordering::Relaxed);
+    seg.foreign_bytes.fetch_add(bytes_sum, Ordering::Relaxed);
+    let mut old = seg.foreign.load(Ordering::Relaxed);
     loop {
-        // SAFETY: same slot, still unreferenced; the first bytes hold
-        // the link.
-        unsafe { slot.as_ptr().cast::<*mut u8>().write(head) };
+        // SAFETY: the tail is ours until the CAS below publishes the
+        // chain; its link word is free to point at the current head.
+        unsafe { tail.cast::<*mut u8>().write(old) };
         match seg.foreign.compare_exchange_weak(
+            old,
             head,
-            slot.as_ptr(),
             Ordering::Release,
             Ordering::Relaxed,
         ) {
             Ok(_) => break,
-            Err(actual) => head = actual,
+            Err(actual) => old = actual,
         }
     }
-    seg.foreign_bytes.fetch_add(slot_size, Ordering::Relaxed);
 }
 
 /// Take the whole foreign-free list, leaving it empty. Only the owning
