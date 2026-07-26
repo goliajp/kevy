@@ -37,7 +37,7 @@ transport is INFO (a `# Allocator` section, following the capacity arc's
 | `span_free` | free slots in spans that were handed out before and returned — **touched, therefore resident** |
 | `virgin` | span bytes at or above the bump cursor — mapped, never touched, **not resident** |
 | `returned` | free slots whose pages went back to the OS while their span stays live — mapped, **not resident** (the v2 term) |
-| `hysteresis` | whole spans with nothing live, retained rather than released |
+| `hysteresis` | retained rather than released: whole empty spans, and (T2-v8) parked large mappings in the process-wide retention pool — same policy, two scales |
 | `segment_overhead` | segment headers (one span per segment) |
 
 ### The identity M3 asserts
