@@ -58,22 +58,25 @@ run_one() { # $1 = binary, $2 = label
     python3 "$PY" info --port "$PORT" >/dev/null 2>&1 && break
     sleep 0.2
   done
-  # Load in the background and sample in the foreground: the peak is what
-  # an operator's cgroup sees, and it is not the steady state. This way
-  # round there is no background subshell to kill, and nothing to inherit
-  # a trap.
-  python3 "$PY" load-b6 --port "$PORT" --keys "$KEYS" --val "$VAL" --seed 2 >"$dir/load.log" 2>&1 &
-  local loader=$!
-  local deadline=$(( SECONDS + DRAIN ))
-  while kill -0 "$loader" 2>/dev/null || [ "$SECONDS" -lt "$deadline" ]; do
-    r=$(rss_kb "$srv"); [ -n "$r" ] && [ "$r" -gt "$rss_peak" ] 2>/dev/null && rss_peak=$r
-    u=$(python3 "$PY" info --port "$PORT" 2>/dev/null | sed -n 's/^used_memory:\([0-9]*\).*/\1/p' | head -1)
-    [ -n "$u" ] && [ "$u" -gt "$used_peak" ] 2>/dev/null && used_peak=$u
-    kill -0 "$loader" 2>/dev/null && deadline=$(( SECONDS + DRAIN ))
-    sleep 1
-  done
-  wait "$loader" 2>/dev/null || echo "$label: load reported an error (see $dir/load.log)" >&2
-  rss_peak=$(( rss_peak * 1024 ))
+  # Sample in the background, load in the foreground. The peak is what an
+  # operator's cgroup sees and it is not the steady state, so it has to be
+  # watched rather than read at the end.
+  #
+  # The first attempt had it the other way round and hung: a finished
+  # background job stays a zombie until it is waited on, and `kill -0`
+  # succeeds on a zombie, so the loop never saw the loader finish. There
+  # is no EXIT trap in this script precisely so that killing the sampler
+  # below is harmless — see the note above `cleanup`.
+  ( while :; do rss_kb "$srv"; sleep 0.5; done ) >"$dir/rss" 2>/dev/null &
+  local samp=$!
+  python3 "$PY" load-b6 --port "$PORT" --keys "$KEYS" --val "$VAL" --seed 2 >"$dir/load.log" 2>&1 \
+    || echo "$label: load reported an error (see $dir/load.log)" >&2
+  sleep "$DRAIN"
+  kill "$samp" 2>/dev/null || true
+  u=$(python3 "$PY" info --port "$PORT" 2>/dev/null | sed -n 's/^used_memory:\([0-9]*\).*/\1/p' | head -1)
+  used_peak=${u:-0}
+  r=$(sort -n "$dir/rss" 2>/dev/null | tail -1)
+  rss_peak=$(( ${r:-0} * 1024 ))
   local cold
   cold=$(python3 "$PY" info --port "$PORT" 2>/dev/null | sed -n 's/^cold_keys:\([0-9]*\).*/\1/p' | head -1)
   kill "$srv" 2>/dev/null || true
