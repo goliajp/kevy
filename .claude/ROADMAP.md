@@ -500,12 +500,19 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - **两处自测抓到的真错**:① `MIN_ALIGN=16` 是假的 —— 步长 8 的类(24/40/…)只有 8 对齐,已改为 class 选择满足对齐(`index_of(size, align)`);② "8 字节步长不额外花钱"是假的 —— 16→24 相对浪费 29%,已改成两段式声明(≥128 相对界 <12.5%,以下**绝对界 ≤7B**,那是 8 字节粒度的地板不是选择)
 - **一处 bench 自欺已修**:首版把 `reclaim()` 计进 churn 行,读出来是"慢 1.5×" —— 实为**拿我们的归还去比对手的什么都不做**。已拆成独立行,并注明该行没有对手列
 
-### T2 — `kevy-alloc` 接线 + M1/M2/M3 实测(lx64)
-- [ ] `#[global_allocator]` 挂在 `kevy` 二进制,feature 门控默认 OFF;`kevy_alloc::KevyAlloc` 导出给嵌入方自行选用(库不许替调用方决定)
-- [ ] perfgate 双跑(ON/OFF):**M1 KV 线 + M2 pubsub 线在既有容差内(ON 时)** —— 红则回设计,不许调容差
-- [ ] **M3**:capacity-envelope B6 + 新增 400B 变体,四项加总解释实测差值,且只有舍入项随数据量增长
+### T2 — `kevy-alloc` 接线 + M1/M2/M3 实测(lx64)—— **进行中,已出一条推翻前提的 finding**
+- [x] `#[global_allocator]` 挂 `kevy` 二进制(feature `kevy-alloc`,默认 OFF)+ `KevyAlloc` 导出给嵌入方;TLS 堆用 `ManuallyDrop`(线程退出**泄漏地址空间而非 unmap 活内存** —— 值跨分片共享,segment 可能比分配它的线程活得久)
+- [x] **把分配器装进测试二进制,让标准库当调用方** —— 当场抓到两个单线程测试够不到的缺陷:①跨线程 free 扣了**释放方**的计数器(那些字节记在属主堆上)→ 改为释放方把请求尺寸写进空槽 + segment 原子记在途量,属主 drain 时结账;②大块路径同病但无处结账(直接映射无 segment 无属主)→ 计数器改进程级,`Heap::snapshot` 不含,免得按分片求和时重复计
+- [x] **`PER_CLASS_CAP` 继承值错了三个数量级**:64 span = 4 MiB/类,合法程序当场爆 "memory allocation of 6152 bytes failed"(机器还有几十 GB)。改为真正的失控护栏 + `with_class_cap` 保住可测性
+- [x] M1 委托 perfgate(**不重写测量循环** —— 它已有交错 + 每实例翻序,抵消盒况漂移);perfgate `refuse`(缺工具/盒子脏)报 PENDING 不报 FAIL,但**仍不许 PASS**
+- [x] M5 绿(5 条,KevyAlloc 作进程分配器);M4 在 Linux 上**两条都绿**(内核 RSS 真回落)
+- [ ] **M2 在 lx64 FAIL:0.84,地板 0.92 —— 六轮两个分布完全不重叠**。`perf stat` 说我们**指令少 6%、缺页 1415→61,却多花 12% 周期**(IPC 1.53→1.29,cache-references +17%)。根因 = **无 header 不是白拿的:它把元数据搬离了数据**。glibc 的 chunk header 和 payload 同 cache line;我们的 span meta 在 64KiB–4MiB 外的 segment 头,每次 alloc/free 多碰一条线。**推翻 RFC 两处**:①"零 header 是纯赚"是**取舍**不是赢;②"不要线程缓存"的论证不完整 —— 线程缓存**也是局部性装置**,不只是避锁。finding:`bench/PERF-FINDING-2026-07-26-header-free-costs-a-cache-line.md`
+- [ ] **一次失败的 round + 一次被跳过的门(自记)**:先实现了 in-place `realloc`(0.852→0.843,没动针)。profile 里 libc realloc 只占 **2.32%**,而方法论的 **Pre-Phase-B 门要求攻击目标 ≥ 双位数 pp** —— 门会拒掉这次改动,而我没跑门。realloc 本身值得留(没有它每次扩容都拷贝),但它不是这个问题的答案
+- [ ] 下一步(未决,需你拍):把当前 span 的 free-list 头缓存进 heap(mimalloc 的位置)/ 小类把元数据放回数据旁(等于认输)/ 接受这条形状上的损失换内存(**但 M3 内存数还没测,没人能称这笔账**)
+- [ ] M1 仍未测:perfgate 拒绝在盒子有其它负载时跑
+- [ ] **M3**:capacity-envelope B6 + 新增 400B 变体,七项加总解释实测差值,且只有舍入项随数据量增长 —— **这是称"值不值"那笔账的前提**
 - [ ] 大页作**旋钮**对着 M1/M3 实测(`MADV_HUGEPAGE`,非 `MAP_HUGETLB`;span 仍是细粒度回收单位)
-- [ ] 全绿后默认 ON;M7 既有门全绿(crashgate/availgate/tiergate/tablegate/textgate/oracle)
+- [ ] 全绿后才谈默认 ON;M7 既有门全绿(crashgate/availgate/tiergate/tablegate/textgate/oracle)
 
 ### T3 — `kevy-compress` 石头(不接线)【RFC 已批】
 - [ ] frame 格式(`[tag][orig_len][payload]`)+ 快速 LZ 级:哈希表单探 match finder / 64 KiB 窗口 / token nibble + 续字节变长 / 8 字节 wildcopy 解码
