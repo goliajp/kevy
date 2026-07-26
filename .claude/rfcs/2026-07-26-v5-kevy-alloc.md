@@ -1,6 +1,14 @@
 # kevy-alloc — a per-shard allocator, because the fragmentation is not tunable
 
-> v5 arc, first train. **Status: DESIGN — not approved, no code.**
+> v5 **experiment** arc, first train. **Status: DESIGN — not approved, no code.**
+>
+> **This is an attempt at v5, not v5** (owner, 2026-07-26). Everything below is
+> a hypothesis under test, revisable down to its premises. If measurement kills
+> a premise, the premise changes — the design is not patched around it, and the
+> negative result is written up as a result. Being listed here does not make
+> any of it settled, and §4 names references without promising to reproduce
+> them: where our model points somewhere else, we go there and say why.
+>
 > Design input: `.claude/plans/2026-07-26-v5-arc-design-input.md`.
 >
 > **Framing (owner, 2026-07-26):** *this is not an improvement, it is a design*
