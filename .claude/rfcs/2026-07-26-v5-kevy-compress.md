@@ -51,9 +51,10 @@ compressor structurally cannot have:
 2. **The values PG will not even try on are the ones we win.** Below 2 KB, PG
    does nothing; a dictionary makes small values the *best* case, not the
    worst. That is a category difference, not a percentage.
-3. **`TABLE.*` declares the schema.** Where a table is declared, the field
-   names are known before a single row is written — the dictionary can be
-   *seeded from the declaration* rather than only trained from a sample.
+3. **A file inherits its predecessor's model.** Vlog files rotate within one
+   keyspace, so the outgoing file's dictionary is already a trained model of
+   the incoming file's population — the corpus is continuous across the
+   rotation boundary even though the files are not (§7.2).
 
 That is the ceiling-first claim: **on small structured values our ceiling is
 structurally above PG's**, and it comes from the tiering model we already have
@@ -150,8 +151,9 @@ Consequences to design against, not around:
   different dictionary means decode-then-re-encode — which §3 already does
   deliberately, so the cases coincide rather than conflict.
 - **Training cost.** Sample-based training runs once per file (256 MiB
-  rotation), amortised over thousands of records. A declared `TABLE` seeds
-  instead of trains (§2.3).
+  rotation), amortised over thousands of records — and a new file starts from
+  its predecessor's dictionary (§7.2), so there is no cold-start window in
+  which records are encoded against an empty model.
 - **A file must be self-describing.** The dictionary is stored in the file it
   serves, so a pinned `Arc<VlogFile>` still reads correctly during compaction —
   the pin semantics from the capacity arc carry over unchanged.
@@ -202,17 +204,51 @@ third is bounded and tiny; the fourth is the only one a better encoder moves.
 A headline ratio on real corpora falls out and goes in the docs — as a
 consequence, not a goal.
 
-## 7. Open for the owner
+## 7. Decisions (owner, 2026-07-26)
 
-1. **Entropy coding in v1, or LZ-only first?** §3's two levels are the clean
-   architecture, but the compaction level (FSE/Huffman) is roughly the same
-   work again as the fast level. Shipping LZ-only first still gets §2's
-   dictionary win — the category difference — and defers the ratio tail.
-   **I lean LZ-only-plus-dictionary for v1**, with the compaction level as a
-   named follow-up, because K4 does not depend on entropy coding.
-2. **Is the seeded-from-`TABLE`-declaration path in scope for v1?** It is where
-   the model is most distinctive, but it couples `kevy-compress` to the
-   declaration layer.
+### 7.1 v1 is LZ-only plus dictionary; entropy coding is a named follow-up
+
+§3's two levels remain the target architecture, but the compaction level
+(FSE/Huffman) is roughly the same work again as the fast level, and **K4 — the
+criterion that says whether this design was worth doing — does not depend on
+it.** The category difference in §2 comes from the dictionary, not from entropy
+coding. So v1 ships the fast level with dictionaries, and the compaction level
+lands afterwards against the same K-criteria.
+
+The two-stage structure in §3 is still built in v1: `compact_below` re-encodes,
+it simply re-encodes at the same level for now. Adding the high-ratio level
+later then changes one argument, not the design.
+
+### 7.2 Seed from the previous file — not from the declaration
+
+Applying ceiling-first and architectural clarity to the seeding question
+changes the answer rather than settling it.
+
+**Ceiling-first says a declaration is the weaker seed.** Declared field names
+are a *subset* of what a sample finds: sampling catches the schema *and* the
+repeated values — enum members, URL prefixes, shared timestamp prefixes, the
+long tail of whatever this keyspace actually contains. A declaration cannot
+know any of that. On any file large enough to matter, sampling strictly
+dominates; the declaration only helps in the cold-start window before training
+has run.
+
+**Architectural clarity says the coupling is worse than the problem.**
+`kevy-compress` is a stone — no business coupling, independently fuzzed,
+semver-able. Depending on the declaration layer would end that, and it would do
+so to solve a cold-start window.
+
+Both criteria then point at a better seed that was hiding behind the question:
+**on rotation, seed the new file's dictionary from the outgoing file's.** Same
+keyspace, same population, already trained on real bytes. Cold start is solved
+by construction, it costs nothing, and it works for undeclared keyspaces too —
+strictly more general than declaration-seeding.
+
+What survives of the original idea survives as an *interface*, not a
+dependency: the codec accepts an optional caller-supplied seed corpus
+(`&[u8]`). Whoever builds a vlog file may pass whatever bytes it likes —
+including field names rendered from a declaration, later, by the layer that
+owns declarations. **The seed is a parameter; it is never a dependency.**
+kevy-compress continues to know only bytes.
 
 ## 8. Not in this RFC
 
