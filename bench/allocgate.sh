@@ -66,17 +66,41 @@ ab_line "M1-kv-ab" \
 ab_line "M2-pubsub-ab" \
   "publish/deliver within tolerance with the allocator ON"
 
+# ── T1 lines run the crate's own tests. A gate that only ever reports
+# PENDING teaches nothing; once the assertions exist, it runs them.
+run_t1() { # $1 = test name filter -> "PASS ..." / "FAIL ..." / "SKIP ..."
+  if [ ! -d "$ROOT/crates/kevy-alloc" ]; then
+    echo "SKIP crate does not exist yet"
+    return
+  fi
+  local out n
+  if out=$(cd "$ROOT" && cargo test -p kevy-alloc --lib "$1" 2>&1); then
+    n=$(printf '%s' "$out" | sed -n 's/.*test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' | head -1)
+    if [ "${n:-0}" -eq 0 ]; then
+      # A filter matching nothing is the failure mode that makes a gate
+      # lie: green because it asserted nothing.
+      echo "FAIL filter '$1' matched no test"
+    else
+      echo "PASS $n assertion(s) green"
+    fi
+  else
+    echo "FAIL $(printf '%s' "$out" | grep -m1 'panicked at' || echo 'cargo test failed')"
+  fi
+}
+
 # ── M3: the identity and the scaling claim (contract §1).
-line "M3-identity" "PENDING(T1)" \
-  "mapped == live + rounding + span_slack + cache + hysteresis, EXACT (no tolerance)"
+m3_out=$(run_t1 identity)
+line "M3-identity" "${m3_out%% *}" \
+  "mapped == live+rounding+cache+span_free+virgin+hysteresis+overhead, EXACT — ${m3_out#* }"
 line "M3-scaling" "PENDING(T2)" \
   "across two dataset sizes only rounding may grow; slack/cache/hysteresis flat [capacity-envelope B6 + a 400B variant]"
 line "M3-rss-residual" "PENDING(T2)" \
   "RSS - mapped reported by name and flat in dataset size (a growing residual = an allocation path we missed)"
 
 # ── M4: the property the whole experiment rests on.
-line "M4-reclaim" "PENDING(T1)" \
-  "allocate N spans, free them all, assert RSS actually falls back (glibc brk provably cannot: see PERF-FINDING-2026-07-25-b6-rss-glibc-fragmentation.md)"
+m4_out=$(run_t1 m4_)
+line "M4-reclaim" "${m4_out%% *}" \
+  "emptied spans give their pages back — ${m4_out#* } (2 on Linux, 1 elsewhere: the kernel-RSS half needs MADV_DONTNEED, and macOS MADV_FREE would make it meaningless)"
 
 # ── M5: kevy genuinely frees across shards (Arc<Box<[u8]>> on the shared
 # read lane), so torajs's documented-and-accepted ABA note may not be
@@ -86,8 +110,9 @@ line "M5-foreign-free" "PENDING(T2)" \
 
 # ── M6: torajs c2970b6d's tuition — an uncapped span pool is a SIGSEGV,
 # not a leak (alloc returned None, the null propagated into a write).
-line "M6-class-cap" "PENDING(T1)" \
-  "PER_CLASS_CAP honoured; exhaustion is an honest OOM and never a null hand-back"
+m6_out=$(run_t1 m6_)
+line "M6-class-cap" "${m6_out%% *}" \
+  "PER_CLASS_CAP honoured; exhaustion answers None, never a wild pointer — ${m6_out#* }"
 
 # ── M7: the allocator is under everything, so everything must still pass.
 line "M7-existing-gates" "PENDING(T2)" \

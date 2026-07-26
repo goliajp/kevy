@@ -30,42 +30,69 @@ transport is INFO (a `# Allocator` section, following the capacity arc's
 
 | field | definition |
 |---|---|
-| `alloc_mapped_bytes` | total bytes currently mapped from the OS. **The anchor** |
-| `alloc_live_bytes` | Σ `Layout::size()` over live allocations — what callers actually asked for, unrounded |
-| `alloc_rounding_bytes` | Σ (`class_size` − `Layout::size()`) over live allocations |
-| `alloc_span_slack_bytes` | mapped bytes in partial spans that are neither live nor on a free list (never yet handed out) |
-| `alloc_cache_bytes` | bytes held in per-shard TLABs and foreign-free queues |
-| `alloc_hysteresis_bytes` | bytes in fully-empty spans deliberately retained by the return policy |
-| `alloc_large_bytes` | bytes in direct-mmap allocations above the largest size class (page-rounded; its rounding lands in `alloc_rounding_bytes`) |
+| `mapped` | total bytes currently mapped from the OS. **The anchor** |
+| `live` | Σ `Layout::size()` over live allocations — what callers actually asked for, unrounded |
+| `rounding` | Σ (`slot size` − `Layout::size()`) over live allocations |
+| `cache` | bytes parked on foreign-free lists, waiting to be drained home |
+| `span_free` | free slots in spans that were handed out before and returned — **touched, therefore resident** |
+| `virgin` | span bytes at or above the bump cursor — mapped, never touched, **not resident** |
+| `hysteresis` | whole spans with nothing live, retained rather than released |
+| `segment_overhead` | segment headers (one span per segment) |
 
 ### The identity M3 asserts
 
 ```
-alloc_mapped_bytes
-  == alloc_live_bytes
-   + alloc_rounding_bytes
-   + alloc_span_slack_bytes
-   + alloc_cache_bytes
-   + alloc_hysteresis_bytes
+mapped == live + rounding + cache + span_free + virgin
+        + hysteresis + segment_overhead
 ```
 
 Exact, not approximate: every mapped byte is in exactly one of those states by
 construction. A tolerance here would be a place for a leak to hide.
 
+### Revised at T1 — two terms added, one removed
+
+The T0 table had five terms and `alloc_span_slack_bytes`. Building the geometry
+showed it was not a partition, so it changed. Recorded here with the reason,
+which is what this contract asks for; **silently widening** is what is banned,
+not changing:
+
+- **`span_slack` split into `span_free` and `virgin`.** Spans hand out slots by
+  bumping a cursor, so the region above it is mapped but never touched, and
+  therefore not resident. One term would have made address space look like
+  memory — the split is the difference between a number that predicts RSS and
+  one that does not.
+- **`segment_overhead` added.** One span per segment holds the header: 1.6 % of
+  every segment, structural and knowable, so it is named rather than folded
+  into a neighbour.
+- **`cache` no longer includes a thread cache**, because there is none — see
+  the RFC's §5 revision. It now covers only foreign-free lists.
+
+### Not a byte count, but exported anyway
+
+`spans_assigned` — spans currently attached to a size class. It is here because
+one real defect is **invisible to every byte term**: if allocation claims fresh
+spans while emptied ones sit reusable, the identity balances perfectly and the
+heap grows anyway. Found at T1 exactly this way.
+
 ### The scaling claim M3 asserts
 
-Across the B6 workload at two dataset sizes, **only `alloc_rounding_bytes` may
-grow with the data.** `span_slack` and `cache` are O(classes × shards);
-`hysteresis` is O(the return policy's low-water mark). If one of the three
-grows with the dataset, the design is wrong — that is the finding, and it is
-worth more than a passing gate.
+Across the B6 workload at two dataset sizes, **only `rounding` may grow with
+the data.** `span_free` and `cache` are O(classes × shards); `virgin` and
+`segment_overhead` are O(spans mapped, which is bounded by the class caps);
+`hysteresis` is O(the return policy's low-water mark). If one of those grows
+with the dataset, the design is wrong — that is the finding, and it is worth
+more than a passing gate.
 
 ### Relating to RSS
 
-`alloc_mapped_bytes` is what the allocator controls. RSS additionally contains
-the binary, thread stacks, page tables, and anything still allocated through
-paths kevy-alloc does not serve. The gate therefore reports
-`RSS − alloc_mapped_bytes` as a separate, named residual and requires it to be
+`mapped` is what the allocator controls, and it is *virtual*: `virgin` and
+`hysteresis` bytes are mapped without being resident. `Stats::predicted_resident()`
+is therefore `mapped − virgin − hysteresis`, and it is named a prediction
+because the kernel decides residency, not us.
+
+RSS additionally contains the binary, thread stacks, page tables, and anything
+still allocated through paths kevy-alloc does not serve. The gate reports
+`RSS − predicted_resident` as a separate, named residual and requires it to be
 **flat in the dataset size** — a residual that grows is an allocation path we
 failed to notice, which is a finding rather than a tolerance.
 

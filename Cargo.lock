@@ -445,9 +445,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kevy-alloc"
+version = "4.0.0"
+
+[[package]]
 name = "kevy-bench"
 version = "4.1.1"
 dependencies = [
+ "kevy-alloc",
  "kevy-config",
  "kevy-map",
  "kevy-ring",
