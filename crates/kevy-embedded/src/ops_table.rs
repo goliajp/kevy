@@ -7,7 +7,7 @@
 
 use std::sync::RwLock;
 
-use kevy_index::{IndexVerify, TableCatalog, TableSpec, TableVerify, compile_table};
+use kevy_index::{IndexVerify, TableCatalog, TableEnsure, TableSpec, TableVerify, compile_table};
 
 use crate::store::{Store, lock_write};
 use crate::{KevyError, KevyResult};
@@ -88,6 +88,50 @@ impl Store {
             self.register_spec(ispec)?;
         }
         Ok(())
+    }
+
+    /// `TABLE.ENSURE` equivalent — the boot verb.
+    ///
+    /// The dogfood report's F8.2: declaring at boot is the steady
+    /// state, and plain `table_declare` punishes it — a re-declare is
+    /// an error, so the obvious code (declare, log the error at debug)
+    /// keeps running against whatever shape the *first* boot declared,
+    /// forever, silently. `ensure` gives the boot path its true verb:
+    /// an identical spec is a no-op success, a changed spec is a named
+    /// refusal carrying what changed — never a silent rebuild, because
+    /// a rebuild is a full backfill and must be asked for by name
+    /// ([`Self::table_replace`]).
+    pub fn table_ensure(&self, spec: TableSpec) -> KevyResult<TableEnsure> {
+        let existing = {
+            let g = self
+                .tables
+                .catalog
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            g.get(&spec.name).cloned()
+        };
+        match existing {
+            None => {
+                self.table_declare(spec)?;
+                Ok(TableEnsure::Created)
+            }
+            Some(cur) if cur == spec => Ok(TableEnsure::Unchanged),
+            Some(cur) => Err(KevyError::InvalidInput(
+                kevy_index::spec_diff(&cur, &spec),
+            )),
+        }
+    }
+
+    /// `TABLE.REPLACE` equivalent — drop and redeclare, rebuilding
+    /// every compiled index from the rows. Explicitly named because it
+    /// is a full backfill: the cost is asked for, not implied. The new
+    /// spec is compiled (and therefore validated) *before* the old
+    /// table is dropped, so a bad replacement leaves the old one
+    /// standing.
+    pub fn table_replace(&self, spec: TableSpec) -> KevyResult<()> {
+        compile_table(&spec).map_err(KevyError::InvalidInput)?;
+        self.table_drop(&spec.name);
+        self.table_declare(spec)
     }
 
     /// `TABLE.DROP` equivalent — drops the table AND its compiled

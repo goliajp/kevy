@@ -23,6 +23,7 @@ fn main() {
     kv_and_hash();
     tables_end_to_end();
     bad_specs_are_refusals_not_panics();
+    ensure_is_the_boot_verb();
     let _ = client_surface_compiles;
     println!("facadegate: PASS");
 }
@@ -123,6 +124,37 @@ fn bad_specs_are_refusals_not_panics() {
     let msg = format!("{err}");
     assert!(msg.contains("unknown column") || msg.contains("not declared"), "unhelpful refusal: {msg}");
     assert!(store.table_list().is_empty(), "a refused declare must install nothing");
+}
+
+/// The boot pattern (dogfood F8.2): declaring at boot is the steady
+/// state, and `ensure` is its verb — identical spec is a no-op success,
+/// a changed spec is a named refusal (never a silent rebuild), and
+/// `replace` is the explicit rebuild.
+fn ensure_is_the_boot_verb() {
+    use kevy_embedded::TableEnsure;
+    let store = Store::open(Config::default()).expect("mem store opens");
+    let spec = || TableSpec {
+        name: b"t".to_vec(),
+        prefix: b"row:".to_vec(),
+        pk: b"user".to_vec(),
+        columns: vec![(b"user".to_vec(), IndexValType::Str)],
+        indexes: vec![TableIndex {
+            column: b"user".to_vec(),
+            kind: IndexKind::Range,
+            values: vec![],
+        }],
+        orderpaths: vec![],
+    };
+    assert_eq!(store.table_ensure(spec()).expect("first boot"), TableEnsure::Created);
+    assert_eq!(store.table_ensure(spec()).expect("every later boot"), TableEnsure::Unchanged);
+
+    let mut changed = spec();
+    changed.columns.push((b"extra".to_vec(), IndexValType::I64));
+    let err = store.table_ensure(changed.clone()).expect_err("a changed spec must refuse");
+    assert!(format!("{err}").contains("COLUMNS"), "the refusal names what changed: {err}");
+
+    store.table_replace(changed).expect("the explicit rebuild verb");
+    assert_eq!(store.table_list()[0].columns.len(), 2, "replace installed the new shape");
 }
 
 /// The network client's public surface, compile-checked from consumer

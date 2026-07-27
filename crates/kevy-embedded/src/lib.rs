@@ -198,7 +198,7 @@ pub use kevy_index::{Cursor as IndexCursor, IndexKind, IndexValue, SegmentStats 
 // directly. The consumer gate (tools/facadegate) now builds against
 // these from outside the workspace, which is what would have caught it.
 #[cfg(feature = "index")]
-pub use kevy_index::{IndexVerify, OrderPath, TableIndex, TableSpec, TableVerify};
+pub use kevy_index::{IndexVerify, OrderPath, TableEnsure, TableIndex, TableSpec, TableVerify};
 // `each_prefix` hands the callback a `kevy_store::Value` — same class of
 // gap: a public signature whose type the facade could not name.
 pub use kevy_store::Value;

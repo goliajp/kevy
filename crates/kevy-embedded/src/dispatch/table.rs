@@ -13,6 +13,8 @@ use crate::store::Store;
 pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
     match up {
         b"TABLE.DECLARE" => cmd_declare(s, argv, out),
+        b"TABLE.ENSURE" => cmd_ensure(s, argv, out),
+        b"TABLE.REPLACE" => cmd_replace(s, argv, out),
         b"TABLE.DROP" => {
             if argv.len() != 2 {
                 err(out, "ERR usage: TABLE.DROP name");
@@ -46,6 +48,33 @@ fn cmd_declare(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     match kevy_index::parse_table_declare(&refs) {
         Err(e) => err(out, &e),
         Ok(spec) => match s.table_declare(spec) {
+            Ok(()) => out.extend_from_slice(b"+OK\r\n"),
+            Err(e) => kevy_err(out, &e),
+        },
+    }
+}
+
+/// `TABLE.ENSURE …` — the boot verb: identical spec answers
+/// `+UNCHANGED`, a different one refuses by name (server parity).
+fn cmd_ensure(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
+    let refs: Vec<&[u8]> = argv.iter().map(Vec::as_slice).collect();
+    match kevy_index::parse_table_declare(&refs) {
+        Err(e) => err(out, &e),
+        Ok(spec) => match s.table_ensure(spec) {
+            Ok(kevy_index::TableEnsure::Created) => out.extend_from_slice(b"+OK\r\n"),
+            Ok(kevy_index::TableEnsure::Unchanged) => out.extend_from_slice(b"+UNCHANGED\r\n"),
+            Err(e) => kevy_err(out, &e),
+        },
+    }
+}
+
+/// `TABLE.REPLACE …` — drop + redeclare; a bad spec refuses before the
+/// old table drops (server parity).
+fn cmd_replace(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
+    let refs: Vec<&[u8]> = argv.iter().map(Vec::as_slice).collect();
+    match kevy_index::parse_table_declare(&refs) {
+        Err(e) => err(out, &e),
+        Ok(spec) => match s.table_replace(spec) {
             Ok(()) => out.extend_from_slice(b"+OK\r\n"),
             Err(e) => kevy_err(out, &e),
         },

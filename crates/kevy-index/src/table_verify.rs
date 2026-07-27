@@ -45,3 +45,37 @@ pub struct TableVerify {
     /// column type.
     pub spot_type_mismatches: u64,
 }
+
+/// What `table_ensure` found (the boot verb — see the embedded docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TableEnsure {
+    /// The table did not exist; it was declared and its indexes built.
+    Created,
+    /// An identical declaration already exists; nothing was touched.
+    Unchanged,
+}
+
+/// Name the first difference between an admitted spec and a proposed
+/// one — the message `table_ensure` refuses with. Specific enough to
+/// act on, short enough for a boot log.
+#[must_use]
+pub fn spec_diff(cur: &crate::TableSpec, new: &crate::TableSpec) -> String {
+    let part = if cur.prefix != new.prefix {
+        "PREFIX"
+    } else if cur.pk != new.pk {
+        "PK"
+    } else if cur.columns != new.columns {
+        "COLUMNS"
+    } else if cur.indexes != new.indexes {
+        "INDEXES"
+    } else if cur.orderpaths != new.orderpaths {
+        "ORDERPATHS"
+    } else {
+        "SPEC"
+    };
+    format!(
+        "ERR table '{}' exists with a different spec ({part} differ); \
+         TABLE.REPLACE rebuilds, TABLE.DROP + DECLARE is the manual form",
+        String::from_utf8_lossy(&cur.name)
+    )
+}
