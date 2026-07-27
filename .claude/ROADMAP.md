@@ -446,9 +446,9 @@ CI 无消费者位置链接);**D2** 准入分裂在两张脸(只有 wire 调 val
 ### V3 — declare 生命周期(F8.2)✅(`f57954c4`;双面 + e2e;顺带自抓 python 补丁把 \r\n 展开成真字节、Rust 词法 CRLF 归一的坑)
 - [x] `table_ensure` {Created,Unchanged} + `spec_diff` 具名差异 + `table_replace`(坏 spec 在旧表 drop **前**拒);RESP 双面四注册面 + e2e(+UNCHANGED 逐字节/坏 REPLACE 留旧表);docs boot 章归 V8 文档趟
 
-### V4 — VERIFY 单一时间框(D4)
-- [ ] 报表全字段**每次现算**:coerce_failures(名字承诺的)/ drift / duplicates + **新增 `excluded`**(composite 超长掉行计数 —— 把 mailrs 的两行悬案变成一个具名数字);lifetime 计数留在 INFO/seg stats
-- [ ] docs:duplicates ≠ 0 ⇒ 非全序 ⇒ 分页跳/重;tie-break 用**有界**列(数值或哈希;裸 Message-ID 是现成反例)
+### V4 — VERIFY 单一时间框(D4)✅(`451a552e`;设计中途升级为**双向 walk**)
+- [x] 报表全字段每次现算,且发现 4.0 的 lifetime `coerce_failures` 把 absent 也吞了(F10 的 30152"失败"全是 absence)→ `RowDerivation {Indexed,Absent,CoerceFailed,Oversize}` 单一分类同时驱动写路径与 verify;新增 row→index 方向四计数:`excluded` / `absent` / `rows` / **`missing`**(drift walk 结构上看不见的"忘了写的 writer"类,F13/F14 的可见化);两面镜像 22 元素 labeled row(新标签追加在尾,4.0 按标签读的消费者不破),oracle 逐字节;facadegate 每 cause 种一行断言各归各名;lifetime 留 seg stats
+- [x] docs:VERIFY 章改写为双向 + `entries = rows − excluded − absent − coerce_failures` 对账;duplicates ≠ 0 ⇒ 非全序 ⇒ 分页跳/重;tie-break 用**有界**列(裸 Message-ID 反例)
 
 ### V5 — tiering 收敛:idle 必须近零(D3)
 - [ ] **stats 不再走**:reserved_bytes 走 per-shard 缓存 + 索引写代数失效(idle 店零重算);写压下再加 text/ann/agg approx_bytes 增量计数器(rowvalues `91c89e7b` 同款,先修实测元凶 DocBlobs::Many / fields / docvalues / positions)
