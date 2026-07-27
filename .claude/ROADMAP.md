@@ -422,6 +422,57 @@ D2 事务标记(全有全无,与事务大小无关)/ R2 事务内集合读。
 
 ---
 
+# v4.1 — dogfood 体系修复 arc(mailrs 反馈,用户拍板 2026-07-27:看体系不看单点,no defer)
+
+**输入**:`mailrs/.claude/notes/kevy-v4-dogfood-feedback-2026-07-26.md`(17 findings,两次 prod 事故)。
+**设计**:`.claude/rfcs/2026-07-27-v4.1-dogfood-systemic.md`(五个体系诊断 D1-D5 → 八个 train V1-V8;
+**自查已在代码坐实,三处比报告更糟**:embedded VERIFY 是匿名数组元组 / typed 门面从不 validate 直通
+compile 的 expect / tick 固定 CPU 的主项是每 tick 全量走文本索引 stats 而非 key 扫描)。
+
+五个诊断一句话:**D1** typed 门面是没人测的双胞胎(RESP 面有全套 gate,embedded 面缺类型、跳准入、匿名元组,
+CI 无消费者位置链接);**D2** 准入分裂在两张脸(只有 wire 调 validate → 下游 expect = 别人 boot 路径的 panic);
+**D3** 周期任务无 idle 态(幂等≠收敛,300–500× 空转 CPU 让旗舰功能被关);**D4** 报表混时间语义 +
+缺解释意外的计数器;**D5** 迁移知识只在 mailrs 笔记里(八课 + "可验证性"这个最强卖点都不在 docs)。
+
+## 线性 checklist(V1-V8;TABLE 线 V1→V4、tiering 线 V5→V6、paper 线 V7→V8 三线独立,线内有序)
+
+### V1 — 门面平权 + facadegate(D1)
+- [ ] re-export TableSpec/TableIndex/OrderPath(+ 扫签名找同类缺口);VERIFY 匿名元组 → 具名 struct(逐字段注时间语义;旧 alias 留 deprecated shim 保 semver)
+- [ ] **facadegate**:工作区外消费者 crate(独立 lockfile,只 path-dep 两个门面),纯门面 import 走全公开功能族(KV/pubsub/durability/index/view/text/table 全链/tiering 配置);CI job。F7 从结构上不可再犯
+
+### V2 — 单一准入权威,声明路径 panic-free(D2)
+- [ ] `compile_table` 改返回 `Result` 并**自己调 validate**(invariant 不可绕过;wire 面二次 validate 微秒级)
+- [ ] 扫 kevy-index 声明→编译路径全部 expect/unwrap → 具名拒绝;新 fuzz target `table_spec`(任意字节 → parse→validate→compile **永不 panic**)
+- [ ] docs 写死保证:table_declare 只返回错误,不 panic
+
+### V3 — declare 生命周期(F8.2)
+- [ ] `table_ensure(spec) -> {Created,Unchanged}`(同 spec no-op;**异 spec 具名错带 diff,绝不静默重建**)+ `table_replace(spec)` 显式重建;RESP `TABLE.ENSURE`/`TABLE.REPLACE` + oracle 双面
+- [ ] docs boot 模式章围绕 ensure 写
+
+### V4 — VERIFY 单一时间框(D4)
+- [ ] 报表全字段**每次现算**:coerce_failures(名字承诺的)/ drift / duplicates + **新增 `excluded`**(composite 超长掉行计数 —— 把 mailrs 的两行悬案变成一个具名数字);lifetime 计数留在 INFO/seg stats
+- [ ] docs:duplicates ≠ 0 ⇒ 非全序 ⇒ 分页跳/重;tie-break 用**有界**列(数值或哈希;裸 Message-ID 是现成反例)
+
+### V5 — tiering 收敛:idle 必须近零(D3)
+- [ ] **stats 不再走**:reserved_bytes 走 per-shard 缓存 + 索引写代数失效(idle 店零重算);写压下再加 text/ann/agg approx_bytes 增量计数器(rowvalues `91c89e7b` 同款,先修实测元凶 DocBlobs::Many / fields / docvalues / positions)
+- [ ] **采样退避**:零迁移 tick 指数跳(顶 ~6s),任何降温或水位上穿即重置;`effective_target==0` 直接进 idle(今天它保证永远扫)
+- [ ] **gate**:tiergate 复刻 mailrs 三行测量 —— 收敛后 idle 30s,ON CPU 必须在 OFF 的小倍数内,不是 300×
+- [ ] docs/tiering.md:索引地板不可下沉,预算低于地板 effective_target=0 —— 写在旋钮**前面**
+
+### V6 — INFO 给容器运维要的数(F16.2)
+- [ ] `# Memory` 加 `process_rss_bytes`(/proc/self/statm / task_info)+ docs:容器按 RSS 定容,used_memory 是店不是进程
+
+### V7 — 错误互操作 + UPGRADING 纠偏(F1/F2/F4)
+- [ ] `From<KevyError> for io::Error` 三 crate(kind 映射 + **source 保留** —— 严格好于它替掉的 280 个 `io::Error::other`)
+- [ ] UPGRADING:kevy-client 版本行改 2.0.0;补"迁移实际由什么构成"段(含 `--message-format=json` 技法);`with_auto_aof_rewrite_disabled()` 具名 builder
+
+### V8 — 迁移专章(D5)
+- [ ] `docs/table-migration.md`:八课按需要顺序(单值维度问题→membership 行 / 派生行每个 writer 都承重 / backfill 取并集 / shadow read 比内容**和顺序** / 删旧先枚举 reader 后 writer / 缺谓词加 ORDERPATH 不加重复列 / boot 用 ensure / **开篇放可验证性论证 + 实测三类漂移 89%/76%/序漂**)
+
+**明确不在本 arc(记录非静默 defer)**:F13 行新鲜度信号(真特性,独立 RFC);F16 可下沉索引层(= v5 试验 T5,已在那边 roadmap)。
+
+---
+
 # v5 试验 arc — 中小企业 datasolution 的**一种尝试**(2026-07-26)
 
 > **这不是 v5,是 v5 的一次尝试**(用户拍板 2026-07-26)。
