@@ -46,7 +46,9 @@ impl Store {
         // installs nothing.
         #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
         crate::ops_index_sync::tier_floor_check(&self.shards)?;
-        let compiled = compile_table(&spec);
+        // compile_table validates for itself — a bad spec is a named
+        // refusal here, never a panic downstream (dogfood F9).
+        let compiled = compile_table(&spec).map_err(KevyError::InvalidInput)?;
         {
             let g = self
                 .tables
@@ -98,7 +100,11 @@ impl Store {
                 .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             g.get(name)
-                .map(|s| compile_table(s).into_iter().map(|i| i.name).collect())
+                .map(|s| {
+                    compile_table(s)
+                        .map(|c| c.into_iter().map(|i| i.name).collect())
+                        .unwrap_or_default() // catalog entries were admitted validated
+                })
                 .unwrap_or_default()
         };
         let hit = {
@@ -159,7 +165,7 @@ impl Store {
             g.get(name).cloned()
         }
         .ok_or_else(|| KevyError::NotFound("no such table".into()))?;
-        let compiled = compile_table(&spec);
+        let compiled = compile_table(&spec).map_err(KevyError::InvalidInput)?;
         let mut per_index: Vec<(Vec<u8>, [u64; 6])> =
             compiled.iter().map(|i| (i.name.clone(), [0u64; 6])).collect();
         let mut spot = [0u64; 2];

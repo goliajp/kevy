@@ -27,6 +27,13 @@ a row where that column is NULL (the absent-field semantics every
 index already has). The declaration buys you compiled access paths, a
 `VERIFY` surface, and one-verb lifecycle for all of them.
 
+> **Declaration never panics.** `TABLE.DECLARE` / `Store::table_declare`
+> answer every invalid spec — unknown columns, colliding names, missing
+> PK, anything — with a named error, and a refused declare installs
+> nothing. This is a hard guarantee, enforced by `compile_table`
+> validating for itself and fuzzed continuously (`table_spec`): a bad
+> spec on your boot path is a log line, not a restart loop.
+
 ## The declaration model
 
 `TABLE.DECLARE` compiles each clause into a named index:

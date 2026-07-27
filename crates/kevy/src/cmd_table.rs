@@ -74,7 +74,11 @@ pub(crate) fn cmd_table_declare<A: ArgvView + ?Sized>(
     }
     let mut icat: Catalog =
         ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
-    for ispec in compile_table(&spec) {
+    let compiled = match compile_table(&spec) {
+        Ok(c) => c,
+        Err(e) => return encode_error(out, &e),
+    };
+    for ispec in compiled {
         if let Err(e) = icat.create(ispec) {
             return encode_error(out, e);
         }
@@ -94,7 +98,11 @@ pub(crate) fn cmd_table_drop<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out:
     let mut tcat = ctx.state.catalogs.table().map(|c| (*c).clone()).unwrap_or_default();
     let compiled: Vec<Vec<u8>> = tcat
         .get(&args[1])
-        .map(|s| compile_table(s).into_iter().map(|i| i.name).collect())
+        .map(|s| {
+            compile_table(s)
+                .map(|c| c.into_iter().map(|i| i.name).collect())
+                .unwrap_or_default() // catalog entries were admitted validated
+        })
         .unwrap_or_default();
     let hit = tcat.drop_table(&args[1]);
     if hit {
@@ -137,7 +145,11 @@ fn op_verify(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     else {
         return vec![ST_NOINDEX];
     };
-    let compiled = compile_table(&spec);
+    let Ok(compiled) = compile_table(&spec) else {
+        // Catalog entries were admitted validated; an Err here means
+        // the sidecar was hand-edited — refuse rather than panic.
+        return vec![ST_NOINDEX];
+    };
     let mut chunk = vec![ST_OK];
     chunk.extend_from_slice(&(compiled.len() as u32).to_le_bytes());
     for ispec in &compiled {
@@ -275,7 +287,7 @@ fn reduce_verify(catalogs: &CatalogState, argv: &[Vec<u8>], chunks: &[Vec<u8>]) 
         encode_error(&mut out, &format!("ERR no such table '{name_s}' (TABLE.LIST enumerates them)"));
         return out;
     };
-    let n = compile_table(&spec).len();
+    let n = compile_table(&spec).map(|c| c.len()).unwrap_or_default();
     for c in chunks {
         match c.first().copied() {
             Some(x) if x == ST_OK => {}
@@ -325,7 +337,7 @@ fn render_verify(out: &mut Vec<u8>, spec: &TableSpec, sums: &[[u64; 6]], spot: [
     const LABELS: [&[u8]; 6] =
         [b"entries", b"bytes", b"coerce_failures", b"duplicates", b"drift", b"checked"];
     encode_array_len(out, (sums.len() + 1) as i64);
-    for (ispec, s) in compile_table(spec).iter().zip(sums) {
+    for (ispec, s) in compile_table(spec).unwrap_or_default().iter().zip(sums) {
         encode_array_len(out, 14);
         encode_bulk(out, b"index");
         encode_bulk(out, &ispec.name);

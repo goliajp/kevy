@@ -22,6 +22,7 @@ use kevy_embedded::{
 fn main() {
     kv_and_hash();
     tables_end_to_end();
+    bad_specs_are_refusals_not_panics();
     let _ = client_surface_compiles;
     println!("facadegate: PASS");
 }
@@ -96,6 +97,32 @@ fn tables_end_to_end() {
 
     assert_eq!(store.table_list().len(), 1);
     assert!(store.table_drop(b"threads"));
+}
+
+/// The exact spec that took a consumer's production down (dogfood F9):
+/// an ORDERPATH naming a column that was never declared. In 4.0 the
+/// typed path skipped validation and this panicked inside
+/// `compile_table` — on the consumer's boot path, which restart-looped
+/// their container. The guarantee now: a bad spec is a named `Err` from
+/// `table_declare`, whatever is wrong with it.
+fn bad_specs_are_refusals_not_panics() {
+    let store = Store::open(Config::default()).expect("mem store opens");
+    let bad = TableSpec {
+        name: b"t".to_vec(),
+        prefix: b"row:".to_vec(),
+        pk: b"user".to_vec(),
+        columns: vec![(b"user".to_vec(), IndexValType::Str)],
+        indexes: vec![],
+        orderpaths: vec![OrderPath {
+            name: b"by_ord".to_vec(),
+            // `ord` is not in `columns` — the F9 spec, byte for byte.
+            on: vec![(b"user".to_vec(), false), (b"ord".to_vec(), true)],
+        }],
+    };
+    let err = store.table_declare(bad).expect_err("undeclared ORDERPATH column must refuse");
+    let msg = format!("{err}");
+    assert!(msg.contains("unknown column") || msg.contains("not declared"), "unhelpful refusal: {msg}");
+    assert!(store.table_list().is_empty(), "a refused declare must install nothing");
 }
 
 /// The network client's public surface, compile-checked from consumer
