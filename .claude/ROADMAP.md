@@ -436,18 +436,15 @@ CI 无消费者位置链接);**D2** 准入分裂在两张脸(只有 wire 调 val
 
 ## 线性 checklist(V1-V8;TABLE 线 V1→V4、tiering 线 V5→V6、paper 线 V7→V8 三线独立,线内有序)
 
-### V1 — 门面平权 + facadegate(D1)
-- [ ] re-export TableSpec/TableIndex/OrderPath(+ 扫签名找同类缺口);VERIFY 匿名元组 → 具名 struct(逐字段注时间语义;旧 alias 留 deprecated shim 保 semver)
-- [ ] **facadegate**:工作区外消费者 crate(独立 lockfile,只 path-dep 两个门面),纯门面 import 走全公开功能族(KV/pubsub/durability/index/view/text/table 全链/tiering 配置);CI job。F7 从结构上不可再犯
+### V1 — 门面平权 + facadegate(D1)✅(`8d510fea`)
+- [x] re-export TableSpec/TableIndex/OrderPath + `Value`(第二例同类缺口);VERIFY 匿名元组 → 具名 struct;旧 alias deprecated shim
+- [x] **facadegate**:工作区外消费者 crate(独立 lockfile,只 path-dep 两个门面),纯门面 import 走全公开功能族(KV/pubsub/durability/index/view/text/table 全链/tiering 配置);CI job。F7 从结构上不可再犯
 
-### V2 — 单一准入权威,声明路径 panic-free(D2)
-- [ ] `compile_table` 改返回 `Result` 并**自己调 validate**(invariant 不可绕过;wire 面二次 validate 微秒级)
-- [ ] 扫 kevy-index 声明→编译路径全部 expect/unwrap → 具名拒绝;新 fuzz target `table_spec`(任意字节 → parse→validate→compile **永不 panic**)
-- [ ] docs 写死保证:table_declare 只返回错误,不 panic
+### V2 — 单一准入权威,声明路径 panic-free(D2)✅(`8f8cc248`;fuzz 21.3M 轮零 panic)
+- [x] `compile_table` 改返回 `Result` 并**自己调 validate**;三处 expect → 可达具名拒绝;fuzz `table_spec` 双路 21.3M 零 panic 进 CI;docs 保证已写;facadegate 逐字节复刻 F9 事故 spec 断言 Err+零安装
 
-### V3 — declare 生命周期(F8.2)
-- [ ] `table_ensure(spec) -> {Created,Unchanged}`(同 spec no-op;**异 spec 具名错带 diff,绝不静默重建**)+ `table_replace(spec)` 显式重建;RESP `TABLE.ENSURE`/`TABLE.REPLACE` + oracle 双面
-- [ ] docs boot 模式章围绕 ensure 写
+### V3 — declare 生命周期(F8.2)✅(`f57954c4`;双面 + e2e;顺带自抓 python 补丁把 \r\n 展开成真字节、Rust 词法 CRLF 归一的坑)
+- [x] `table_ensure` {Created,Unchanged} + `spec_diff` 具名差异 + `table_replace`(坏 spec 在旧表 drop **前**拒);RESP 双面四注册面 + e2e(+UNCHANGED 逐字节/坏 REPLACE 留旧表);docs boot 章归 V8 文档趟
 
 ### V4 — VERIFY 单一时间框(D4)
 - [ ] 报表全字段**每次现算**:coerce_failures(名字承诺的)/ drift / duplicates + **新增 `excluded`**(composite 超长掉行计数 —— 把 mailrs 的两行悬案变成一个具名数字);lifetime 计数留在 INFO/seg stats
@@ -459,8 +456,9 @@ CI 无消费者位置链接);**D2** 准入分裂在两张脸(只有 wire 调 val
 - [ ] **gate**:tiergate 复刻 mailrs 三行测量 —— 收敛后 idle 30s,ON CPU 必须在 OFF 的小倍数内,不是 300×
 - [ ] docs/tiering.md:索引地板不可下沉,预算低于地板 effective_target=0 —— 写在旋钮**前面**
 
-### V6 — INFO 给容器运维要的数(F16.2)
-- [ ] `# Memory` 加 `process_rss_bytes`(/proc/self/statm / task_info)+ docs:容器按 RSS 定容,used_memory 是店不是进程
+### V6 — 运行状态可读(F16.2 + smix 反馈)
+- [x] **smix 项已落**(`fe63f9e4`,第二份 dogfood 输入 `/tmp/kevy-feedback-2026-07-26.md`):`Aof::format()` 公开 + `Store::downgradeable_to_v3() -> Option<bool>`;e2e 伪造 3.x 文件走完 开窗→追加保持→rewrite 关窗 全程
+- [ ] `# Memory` 加 `process_rss_bytes`(/proc/self/statm / task_info)+ docs:容器按 RSS 定容;`# Persistence` 加 `aof_format`(server 面的同一个问题)
 
 ### V7 — 错误互操作 + UPGRADING 纠偏(F1/F2/F4)
 - [ ] `From<KevyError> for io::Error` 三 crate(kind 映射 + **source 保留** —— 严格好于它替掉的 280 个 `io::Error::other`)
