@@ -34,7 +34,7 @@ pub use catalog::{
 };
 pub use composite::{
     CompositeCol, MAX_COMPOSITE_COLS, MAX_STR_COMPONENT, WHERE_NOT_COMPOSITE, WhereClause,
-    composite_bounds, composite_encode, parse_where,
+    RowDerivation, composite_bounds, composite_encode, parse_where,
 };
 pub use segment::{Cursor, Segment, SegmentStats};
 pub use segment_claused::{

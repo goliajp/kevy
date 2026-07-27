@@ -86,15 +86,41 @@ fn tables_end_to_end() {
         .expect("typed query on the compiled index");
     assert_eq!(hits.len(), 10, "five users, fifty rows");
 
-    // The named verify report — counters with names and stated
-    // time semantics, replacing the 4.0 tuple of anonymous arrays.
+    // Plant one row per exclusion cause (v4.1-V4): the fresh
+    // two-directional VERIFY names each of them instead of leaving an
+    // unexplained entries-vs-rows diff.
+    store
+        .hset(b"row:absent", &[(&b"user"[..], &b"u9"[..])])
+        .expect("row missing `activity` — NULL by design");
+    store
+        .hset(b"row:coerce", &[(&b"user"[..], &b"u9"[..]), (&b"activity"[..], &b"NaN"[..])])
+        .expect("row whose `activity` fails i64 coercion");
+    let long = vec![b'x'; 300]; // over MAX_STR_COMPONENT (255)
+    store
+        .hset(b"row:oversize", &[(&b"user"[..], &long[..]), (&b"activity"[..], &b"1"[..])])
+        .expect("row whose composite str component is oversize");
+
+    // The named verify report — every counter fresh, both directions,
+    // replacing the 4.0 tuple of anonymous arrays (whose
+    // coerce_failures was a lifetime tally that also counted absences).
     let report = store.table_verify_report(b"threads").expect("verify");
     assert_eq!(report.per_index.len(), 2, "one index + one orderpath");
     for ix in &report.per_index {
         assert_eq!(ix.drift, 0, "fresh rows cannot drift: {:?}", ix.name);
-        assert_eq!(ix.entries, 50, "{:?}", ix.name);
+        assert_eq!(ix.rows, 53, "every prefix row is walked: {:?}", ix.name);
+        assert_eq!(ix.missing, 0, "no forgotten writer here: {:?}", ix.name);
     }
-    assert_eq!(report.spot_type_mismatches, 0);
+    let by_user = &report.per_index[0]; // single column `user`
+    assert_eq!(by_user.entries, 53, "all 53 rows carry `user` — a str single coerces anything");
+    let composite = &report.per_index[1]; // by_user_activity
+    assert_eq!(composite.entries, 50, "the three planted rows are all excluded from the composite");
+    assert_eq!(composite.absent, 1, "row:absent — missing component is NULL, not an error");
+    assert_eq!(composite.coerce_failures, 1, "row:coerce — present but not an i64");
+    assert_eq!(composite.excluded, 1, "row:oversize — the 255-byte cap, named at last");
+    assert_eq!(
+        report.spot_type_mismatches, 1,
+        "the spot check flags row:coerce too — same fact, second witness"
+    );
 
     assert_eq!(store.table_list().len(), 1);
     assert!(store.table_drop(b"threads"));
