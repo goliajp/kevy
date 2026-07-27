@@ -22,6 +22,7 @@ mod rowvalues;
 mod segment;
 mod segment_claused;
 mod table;
+mod table_verify;
 mod table_wire;
 mod value;
 mod view;
@@ -43,6 +44,7 @@ pub use segment_claused::{
 pub use table::{
     MAX_TABLES, OrderPath, TableCatalog, TableIndex, TableSpec, compile_table,
 };
+pub use table_verify::{IndexVerify, TableVerify};
 pub use table_wire::{TABLE_DECLARE_USAGE, parse_table_declare};
 pub use value::{IndexValue, ValueTest, order_key};
 pub use view::{

@@ -1,0 +1,15 @@
+[package]
+name = "facadegate"
+description = "Consumer-position gate: builds against the published facades from OUTSIDE the workspace, using only facade imports."
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Deliberately its own workspace: the whole point is to stand where an
+# outside consumer stands. Inside the workspace, internal paths resolve
+# and missing re-exports are invisible — which is exactly how F7 shipped.
+[workspace]
+
+[dependencies]
+kevy-embedded = { path = "../../crates/kevy-embedded", features = ["index", "text"] }
+kevy-client = { path = "../../crates/kevy-client" }
