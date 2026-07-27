@@ -13,7 +13,7 @@
 
 use std::path::Path;
 
-use kevy_index::{Catalog, TableCatalog, TableSpec, compile_table, parse_table_declare};
+use kevy_index::{Catalog, TableCatalog, TableSpec, compile_table, parse_table_declare, spec_diff};
 use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer};
 use kevy_rt::ExtensionReduced;
 use kevy_store::Store;
@@ -87,6 +87,82 @@ pub(crate) fn cmd_table_declare<A: ArgvView + ?Sized>(
     crate::cmd_index::persist_sidecar(ctx.state.sidecar_dir(), &icat);
     ctx.state.install_index_catalog(icat);
     ctx.state.install_table_catalog(tcat);
+    out.extend_from_slice(b"+OK\r\n");
+}
+
+/// `TABLE.ENSURE …` — `TABLE.DECLARE`'s boot form (dogfood F8.2): the
+/// same grammar, but an identical existing declaration is `+UNCHANGED`
+/// instead of an error, and a *different* one is a named refusal
+/// carrying which part differs. Never a silent rebuild — that cost has
+/// its own verb ([`cmd_table_replace`]).
+pub(crate) fn cmd_table_ensure<A: ArgvView + ?Sized>(
+    ctx: &Ctx<'_>,
+    store: &kevy_store::Store,
+    args: &A,
+    out: &mut Vec<u8>,
+) {
+    let argv: Vec<&[u8]> = (0..args.len()).map(|i| &args[i] as &[u8]).collect();
+    let spec = match parse_table_declare(&argv) {
+        Ok(s) => s,
+        Err(e) => return encode_error(out, &e),
+    };
+    let existing = ctx.state.catalogs.table().and_then(|c| c.get(&spec.name).cloned());
+    match existing {
+        None => cmd_table_declare(ctx, store, args, out),
+        Some(cur) if cur == spec => out.extend_from_slice(b"+UNCHANGED\r\n"),
+        Some(cur) => encode_error(out, &spec_diff(&cur, &spec)),
+    }
+}
+
+/// `TABLE.REPLACE …` — drop and redeclare, rebuilding every compiled
+/// index from the rows. Named for its cost: a full backfill, asked for
+/// explicitly. The new spec is validated *before* the old table drops,
+/// so a bad replacement leaves the old one standing.
+pub(crate) fn cmd_table_replace<A: ArgvView + ?Sized>(
+    ctx: &Ctx<'_>,
+    store: &kevy_store::Store,
+    args: &A,
+    out: &mut Vec<u8>,
+) {
+    let argv: Vec<&[u8]> = (0..args.len()).map(|i| &args[i] as &[u8]).collect();
+    let spec = match parse_table_declare(&argv) {
+        Ok(s) => s,
+        Err(e) => return encode_error(out, &e),
+    };
+    if let Err(e) = compile_table(&spec) {
+        return encode_error(out, &e);
+    }
+    let exists =
+        ctx.state.catalogs.table().and_then(|c| c.get(&spec.name).cloned()).is_some();
+    if exists {
+        let mut scratch = Vec::new();
+        cmd_table_drop_by_name(ctx, &spec.name, &mut scratch);
+    }
+    cmd_table_declare(ctx, store, args, out);
+}
+
+/// The drop body, callable with a bare name (REPLACE's first half).
+fn cmd_table_drop_by_name(ctx: &Ctx<'_>, name: &[u8], out: &mut Vec<u8>) {
+    let mut tcat = ctx.state.catalogs.table().map(|c| (*c).clone()).unwrap_or_default();
+    let compiled: Vec<Vec<u8>> = tcat
+        .get(name)
+        .map(|s| {
+            compile_table(s)
+                .map(|c| c.into_iter().map(|i| i.name).collect())
+                .unwrap_or_default() // catalog entries were admitted validated
+        })
+        .unwrap_or_default();
+    if tcat.drop_table(name) {
+        let mut icat: Catalog =
+            ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
+        for cname in &compiled {
+            icat.drop_index(cname);
+        }
+        persist_sidecar(ctx.state.sidecar_dir(), &tcat);
+        crate::cmd_index::persist_sidecar(ctx.state.sidecar_dir(), &icat);
+        ctx.state.install_index_catalog(icat);
+        ctx.state.install_table_catalog(tcat);
+    }
     out.extend_from_slice(b"+OK\r\n");
 }
 
