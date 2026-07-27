@@ -436,6 +436,20 @@ fn c2_table_verify_clean_after_declare_and_writes() {
     assert!(cmd(&mut c, &[b"HSET", b"u:9", b"id", b"9", b"age", b"not-a-number"]).starts_with(b":"));
     let verify = bulks(&cmd(&mut c, &[b"TABLE.VERIFY", b"user"]));
     assert_eq!(labeled(&verify, b"spotcheck_type_mismatches"), vec![b"1".to_vec()]);
+    // v4.1-V4: the row→index direction classifies the poisoned row by
+    // cause, fresh at every call — absence is NULL, never a failure.
+    assert_eq!(labeled(&verify, b"rows"), vec![b"7".to_vec(); 4], "every prefix row walked");
+    assert_eq!(
+        labeled(&verify, b"coerce_failures"),
+        vec![b"1".to_vec(), b"0".to_vec(), b"0".to_vec(), b"0".to_vec()],
+        "u:9's age is present-but-not-i64 — on the age index only"
+    );
+    assert_eq!(
+        labeled(&verify, b"absent"),
+        vec![b"0".to_vec(), b"2".to_vec(), b"1".to_vec(), b"2".to_vec()],
+        "u:6 and u:9 lack dept, u:9 lacks email — counted as NULL, not coercion"
+    );
+    assert_eq!(labeled(&verify, b"missing"), vec![b"0".to_vec(); 4], "no forgotten writer");
 }
 
 #[test]

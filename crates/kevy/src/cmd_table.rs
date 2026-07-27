@@ -211,8 +211,9 @@ pub(crate) fn extension_op(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -
     vec![ST_NOINDEX]
 }
 
-/// VERIFY chunk: `[ST_OK][n u32]` then per compiled index six u64
-/// (entries, bytes, coerce_failures, duplicates, drift, checked), then
+/// VERIFY chunk: `[ST_OK][n u32]` then per compiled index ten u64
+/// (entries, bytes, coerce_failures, duplicates, drift, checked,
+/// excluded, absent, rows, missing — every one fresh, v4.1-V4), then
 /// two u64 (spotcheck rows, type mismatches).
 fn op_verify(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let Some(spec) = argv
@@ -245,21 +246,65 @@ fn op_verify(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     chunk
 }
 
-/// One compiled index's per-shard verify counters — the exact
-/// IDX.VERIFY recheck (entries snapshot + row re-derivation through
-/// the no-promote peek; composites recompute the byte encoding).
+/// One compiled index's per-shard verify counters — both directions
+/// (v4.1-V4; the embedded face's `shard_index_counts` is the byte-parity
+/// twin, and the oracle holds them together).
+///
+/// index→row: the IDX.VERIFY drift recheck. row→index: every prefix row
+/// classifies against the spec with the cause kept — fresh
+/// `coerce_failures` (present-but-wrong-type only; the 4.0 lifetime
+/// counter also swallowed absences), `excluded` (composite oversize),
+/// `absent` (NULL by design), and `missing` (derives a value, has no
+/// entry — the class a drift walk cannot see).
+/// The row→index half of the walk, under the no-promote peek: every
+/// prefix row classified by cause.
+/// Returns `[coerce_fresh, excluded, absent, rows, missing]`.
+fn classify_prefix_rows(
+    s: &mut Store,
+    spec: &kevy_index::IndexSpec,
+    row_keys: &[Vec<u8>],
+    indexed: &std::collections::HashSet<&[u8]>,
+) -> [u64; 5] {
+    let names = spec.scalar_read_names();
+    let w = spec.primary_width();
+    let mut f = [0u64; 5];
+    for key in row_keys {
+        f[3] += 1;
+        let cls = match s.peek_hash_fields(key, &names[..w]) {
+            Ok(Some(vals)) => spec.classify_scalar(&vals),
+            _ => kevy_index::RowDerivation::Absent,
+        };
+        match cls {
+            kevy_index::RowDerivation::Indexed(_) => {
+                if !indexed.contains(key.as_slice()) {
+                    f[4] += 1;
+                }
+            }
+            kevy_index::RowDerivation::CoerceFailed => f[0] += 1,
+            kevy_index::RowDerivation::Oversize => f[1] += 1,
+            kevy_index::RowDerivation::Absent => f[2] += 1,
+        }
+    }
+    f
+}
+
 fn index_verify_counts(
     ctx: &Ctx<'_>,
     store: &mut Store,
     name: &[u8],
-) -> Result<[u64; 6], kevy_resp::CmdError> {
+) -> Result<[u64; 10], kevy_resp::CmdError> {
     let (spec, entries, stats) =
         index_runtime::with_ready_segment(ctx, store, name, |spec, seg| {
             let mut entries: Vec<(Vec<u8>, kevy_index::IndexValue)> = Vec::new();
             seg.each_entry(|k, v| entries.push((k.to_vec(), v.clone())));
             (spec.clone(), entries, seg.stats())
         })?;
-    let drift = store.peek_scope(|s| {
+    let indexed: std::collections::HashSet<&[u8]> =
+        entries.iter().map(|(k, _)| k.as_slice()).collect();
+    let mut pat = spec.prefix.clone();
+    pat.push(b'*');
+    let row_keys = store.collect_keys(Some(&pat), None);
+    let (drift, fresh) = store.peek_scope(|s| {
         let mut drift = 0u64;
         for (key, held) in &entries {
             match index_runtime::row_value(s, &spec, key) {
@@ -267,15 +312,19 @@ fn index_verify_counts(
                 _ => drift += 1,
             }
         }
-        drift
+        (drift, classify_prefix_rows(s, &spec, &row_keys, &indexed))
     });
     Ok([
         stats.entries,
         stats.approx_bytes,
-        stats.coerce_failures,
+        fresh[0],
         stats.duplicates,
         drift,
         entries.len() as u64,
+        fresh[1],
+        fresh[2],
+        fresh[3],
+        fresh[4],
     ])
 }
 
@@ -384,9 +433,10 @@ fn reduce_verify(catalogs: &CatalogState, argv: &[Vec<u8>], chunks: &[Vec<u8>]) 
     out
 }
 
-/// Sum per-index sextets + the trailing spot-check pair across shards.
-fn fold_verify_chunks(n: usize, chunks: &[Vec<u8>]) -> (Vec<[u64; 6]>, [u64; 2]) {
-    let mut sums = vec![[0u64; 6]; n];
+/// Sum per-index counter rows + the trailing spot-check pair across
+/// shards.
+fn fold_verify_chunks(n: usize, chunks: &[Vec<u8>]) -> (Vec<[u64; 10]>, [u64; 2]) {
+    let mut sums = vec![[0u64; 10]; n];
     let mut spot = [0u64; 2];
     for c in chunks {
         let mut pos = 5usize; // status + n u32
@@ -406,15 +456,18 @@ fn fold_verify_chunks(n: usize, chunks: &[Vec<u8>]) -> (Vec<[u64; 6]>, [u64; 2])
     (sums, spot)
 }
 
-/// The reply body: per compiled index a 14-element label/value row
-/// (mirroring IDX.VERIFY's six counters, led by the index name), then
-/// one 4-element spot-check row.
-fn render_verify(out: &mut Vec<u8>, spec: &TableSpec, sums: &[[u64; 6]], spot: [u64; 2]) {
-    const LABELS: [&[u8]; 6] =
-        [b"entries", b"bytes", b"coerce_failures", b"duplicates", b"drift", b"checked"];
+/// The reply body: per compiled index a 22-element label/value row
+/// (ten fresh counters, led by the index name — the four v4.1
+/// additions ride at the end so a label-reading 4.0 consumer keeps
+/// working), then one 4-element spot-check row.
+fn render_verify(out: &mut Vec<u8>, spec: &TableSpec, sums: &[[u64; 10]], spot: [u64; 2]) {
+    const LABELS: [&[u8]; 10] = [
+        b"entries", b"bytes", b"coerce_failures", b"duplicates", b"drift", b"checked",
+        b"excluded", b"absent", b"rows", b"missing",
+    ];
     encode_array_len(out, (sums.len() + 1) as i64);
     for (ispec, s) in compile_table(spec).unwrap_or_default().iter().zip(sums) {
-        encode_array_len(out, 14);
+        encode_array_len(out, 22);
         encode_bulk(out, b"index");
         encode_bulk(out, &ispec.name);
         for (label, v) in LABELS.iter().zip(s.iter()) {

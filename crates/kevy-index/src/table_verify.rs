@@ -17,12 +17,27 @@ pub struct IndexVerify {
     pub entries: u64,
     /// Approximate resident bytes of the index structure.
     pub approx_bytes: u64,
-    /// Rows whose declared-typed column failed to coerce.
-    ///
-    /// **Lifetime counter in v4.0/v4.1-V1** (never resets, so a fixed
-    /// problem keeps reading as one); recomputed fresh per call from
-    /// v4.1-V4 — the semantics this name promises.
+    /// Rows whose driving column is **present but fails to coerce** to
+    /// the declared type. Recomputed fresh on every call (v4.1-V4) —
+    /// the 4.0 counter of this name was a lifetime tally that also
+    /// swallowed absent-column rows, which is how a healthy migration
+    /// once read as 30 152 live failures.
     pub coerce_failures: u64,
+    /// Rows excluded because a string component exceeded the composite
+    /// bound (`MAX_STR_COMPONENT`). Fresh. The counter that turns a
+    /// silent two-row entries gap into a named number.
+    pub excluded: u64,
+    /// Rows whose driving column is absent — NULL semantics, excluded
+    /// by design and *not* a failure. Fresh; named so absence can never
+    /// again masquerade as coercion failure.
+    pub absent: u64,
+    /// Prefix rows this verify walked for the row→index direction.
+    pub rows: u64,
+    /// Rows that derive a value yet have **no entry** in the index —
+    /// the "writer forgot this path" class a drift walk structurally
+    /// cannot see, because it iterates entries and a missing entry is
+    /// not there to iterate. Fresh.
+    pub missing: u64,
     /// Distinct sort keys held by more than one row. Non-zero means the
     /// sort is not a total order — a paged reader can skip or repeat
     /// rows at page boundaries. Add a bounded tie-break column.

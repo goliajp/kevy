@@ -81,13 +81,27 @@ TABLE.VERIFY name      # component fsck + a bounded column spot check
   column, unknown `VALUES` column, name collisions, …), never
   silent.
 
-`TABLE.VERIFY` re-runs every compiled index's drift recheck (the
-`IDX.VERIFY` counters: entries / bytes / coerce_failures /
-duplicates / drift / checked, per index) plus a bounded spot check —
-up to 64 sampled rows per shard, asserting every *present* declared
-column coerces to its declared type (absent is NULL, never an
-error). It answers `-INDEXBUILDING` while any component index is
-still backfilling.
+`TABLE.VERIFY` recomputes **every counter fresh, at the moment of the
+call, in both directions** (4.1 — before, `coerce_failures` was a
+lifetime tally that also swallowed absent columns, so it could not be
+read against the fresh `drift` beside it):
+
+- **index→row**: `entries` / `bytes` / `duplicates` / `drift` /
+  `checked` — every held entry re-derived from its row.
+- **row→index**: every prefix row classified by cause — `rows`
+  walked, `coerce_failures` (present but fails to coerce), `excluded`
+  (a composite `str` component over 255 bytes), `absent` (a missing
+  component column: NULL by design, not an error), and **`missing`**
+  (the row derives a value yet has no entry — the writer that forgot
+  this table exists, the one class a drift walk structurally cannot
+  see).
+
+`entries` = `rows − excluded − absent − coerce_failures` when nothing
+is wrong; each exclusion cause now has its own name instead of
+surfacing as an unexplained entries diff. A bounded spot check (up to
+64 sampled rows per shard) additionally asserts every *present*
+declared column coerces to its declared type. It answers
+`-INDEXBUILDING` while any component index is still backfilling.
 
 ## Composite ORDERPATH semantics
 
@@ -115,6 +129,13 @@ query the way a relational composite index does. The rules:
   bounds exact. Up to 8 components.
 - `WHERE` works on `IDX.COUNT` too, and on an index that declares no
   composite columns it is refused by name.
+- **A non-zero `duplicates` in `TABLE.VERIFY` means the ORDERPATH is
+  not a total order** — rows tying on every component collapse to one
+  entry, and cursor pagination will skip or repeat at the tie
+  boundary. End the composite with a **bounded** tie-break column
+  (numeric id, or a fixed-width hash of the natural key) — not a raw
+  unbounded string like a Message-ID, which walks into the 255-byte
+  exclusion cap instead of breaking the tie.
 
 ```
 IDX.QUERY user.by_dept_age WHERE dept EQ eng                  # all eng, age DESC

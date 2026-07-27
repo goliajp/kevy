@@ -210,8 +210,8 @@ impl Store {
         }
         .ok_or_else(|| KevyError::NotFound("no such table".into()))?;
         let compiled = compile_table(&spec).map_err(KevyError::InvalidInput)?;
-        let mut per_index: Vec<(Vec<u8>, [u64; 6])> =
-            compiled.iter().map(|i| (i.name.clone(), [0u64; 6])).collect();
+        let mut per_index: Vec<(Vec<u8>, [u64; 10])> =
+            compiled.iter().map(|i| (i.name.clone(), [0u64; 10])).collect();
         let mut spot = [0u64; 2];
         for shard in self.shards.iter() {
             let mut g = lock_write(shard);
@@ -235,6 +235,10 @@ impl Store {
                     duplicates: s[3],
                     drift: s[4],
                     checked: s[5],
+                    excluded: s[6],
+                    absent: s[7],
+                    rows: s[8],
+                    missing: s[9],
                 })
                 .collect(),
             spot_rows: spot[0],
@@ -285,11 +289,25 @@ fn strip_err(e: &str) -> &str {
     e.strip_prefix("ERR ").unwrap_or(e)
 }
 
-/// One shard's contribution to one compiled index's verify counters.
+/// One shard's contribution to one compiled index's verify counters —
+/// both directions.
+///
+/// index→row (`drift`): every held entry re-derives from its row.
+/// row→index (v4.1-V4): every prefix row classifies against the spec,
+/// with the cause kept — `absent` (NULL, by design), `coerce_failures`
+/// (present-but-wrong-type, fresh: the 4.0 lifetime counter of this
+/// name also swallowed absences), `excluded` (composite oversize, the
+/// silent two-row gap of dogfood F8/F9, now a named number), and
+/// `missing` (derives a value, has no entry — the class a drift walk
+/// structurally cannot see, and the one behind F13/F14's forgotten
+/// writers).
+///
+/// Layout: [entries, bytes, coerce_fresh, duplicates, drift, checked,
+///          excluded, absent, rows, missing].
 fn shard_index_counts(
     inner: &mut crate::store_inner::Inner,
     ispec: &kevy_index::IndexSpec,
-    sums: &mut [u64; 6],
+    sums: &mut [u64; 10],
 ) {
     let Some((spec, seg)) = inner.idx_segs.segs.iter().find(|(s, _)| s.name == ispec.name)
     else {
@@ -298,9 +316,14 @@ fn shard_index_counts(
     let stats = seg.stats();
     let mut entries: Vec<(Vec<u8>, kevy_index::IndexValue)> = Vec::new();
     seg.each_entry(|k, v| entries.push((k.to_vec(), v.clone())));
+    let indexed: std::collections::HashSet<&[u8]> =
+        entries.iter().map(|(k, _)| k.as_slice()).collect();
     let spec = spec.clone();
+    let mut pat = spec.prefix.clone();
+    pat.push(b'*');
+    let row_keys = inner.store.collect_keys(Some(&pat), None);
     let store = &mut inner.store;
-    let drift = store.peek_scope(|s| {
+    let (drift, fresh) = store.peek_scope(|s| {
         let names = spec.scalar_read_names();
         let w = spec.primary_width();
         let mut drift = 0u64;
@@ -313,14 +336,38 @@ fn shard_index_counts(
                 drift += 1;
             }
         }
-        drift
+        // [coerce_fresh, excluded, absent, rows, missing]
+        let mut f = [0u64; 5];
+        for key in &row_keys {
+            f[3] += 1;
+            let cls = match s.peek_hash_fields(key, &names[..w]) {
+                Ok(Some(vals)) => spec.classify_scalar(&vals),
+                // A non-hash or vanished row has no columns: NULL row.
+                _ => kevy_index::RowDerivation::Absent,
+            };
+            match cls {
+                kevy_index::RowDerivation::Indexed(_) => {
+                    if !indexed.contains(key.as_slice()) {
+                        f[4] += 1;
+                    }
+                }
+                kevy_index::RowDerivation::CoerceFailed => f[0] += 1,
+                kevy_index::RowDerivation::Oversize => f[1] += 1,
+                kevy_index::RowDerivation::Absent => f[2] += 1,
+            }
+        }
+        (drift, f)
     });
     sums[0] += stats.entries;
     sums[1] += stats.approx_bytes;
-    sums[2] += stats.coerce_failures;
+    sums[2] += fresh[0];
     sums[3] += stats.duplicates;
     sums[4] += drift;
     sums[5] += entries.len() as u64;
+    sums[6] += fresh[1];
+    sums[7] += fresh[2];
+    sums[8] += fresh[3];
+    sums[9] += fresh[4];
 }
 
 /// Sample up to [`SPOTCHECK_ROWS`] rows on one shard: every PRESENT
