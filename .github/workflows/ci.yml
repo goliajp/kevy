@@ -128,6 +128,13 @@ jobs:
       - name: locgate (files ≤500 LOC, fns ≤50 or waivered)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: bash bench/locgate.sh
+      # consumergate: tools/facadegate builds and runs from OUTSIDE the
+      # workspace with facade imports only. 4.0 shipped the TABLE face
+      # uncallable (dogfood F7) because nothing ever stood where an
+      # outside consumer stands; this does, on every push.
+      - name: consumergate (facade parity from consumer position)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: bash bench/consumergate.sh
       # killgate: an unguarded `pkill -f "$X"` matches every process on the
       # box when $X is empty. That took the lx64 bench host offline three
       # times in 2026-07 (see bench/INCIDENT-2026-07-perfgate-pkill-massacre.md).

@@ -7,7 +7,7 @@
 
 use std::sync::RwLock;
 
-use kevy_index::{TableCatalog, TableSpec, compile_table};
+use kevy_index::{IndexVerify, TableCatalog, TableSpec, TableVerify, compile_table};
 
 use crate::store::{Store, lock_write};
 use crate::{KevyError, KevyResult};
@@ -28,6 +28,11 @@ const SIDECAR: &str = "table-catalog.meta";
 /// One `TABLE.VERIFY` result: per compiled index its name + six
 /// counters (entries, bytes, coerce_failures, duplicates, drift,
 /// checked), plus the `(rows, type_mismatches)` spot-check pair.
+/// The v4.0 verify shape: six unnamed counters per index and two for
+/// the spot check. Kept for semver; superseded by [`TableVerify`],
+/// whose fields carry the names and time semantics these arrays never
+/// could (dogfood F10).
+#[deprecated(since = "4.1.0", note = "use `table_verify_report`, whose fields are named")]
 pub type TableVerifyReport = (Vec<(Vec<u8>, [u64; 6])>, [u64; 2]);
 
 impl Store {
@@ -127,7 +132,24 @@ impl Store {
     /// recheck (the IDX.VERIFY discipline — composites re-derive their
     /// byte encoding) plus a bounded column-type spot check, both
     /// through the no-promote peek.
+    #[deprecated(since = "4.1.0", note = "use `table_verify_report`, whose fields are named")]
+    #[allow(deprecated)]
     pub fn table_verify(&self, name: &[u8]) -> KevyResult<TableVerifyReport> {
+        let r = self.table_verify_report(name)?;
+        Ok((
+            r.per_index
+                .into_iter()
+                .map(|i| {
+                    (i.name, [i.entries, i.approx_bytes, i.coerce_failures, i.duplicates, i.drift, i.checked])
+                })
+                .collect(),
+            [r.spot_rows, r.spot_type_mismatches],
+        ))
+    }
+
+    /// `TABLE.VERIFY`, with every counter named and its time semantics
+    /// documented on the field (see [`IndexVerify`]).
+    pub fn table_verify_report(&self, name: &[u8]) -> KevyResult<TableVerify> {
         let spec = {
             let g = self
                 .tables
@@ -152,7 +174,22 @@ impl Store {
             spot[0] += r;
             spot[1] += m;
         }
-        Ok((per_index, spot))
+        Ok(TableVerify {
+            per_index: per_index
+                .into_iter()
+                .map(|(name, s)| IndexVerify {
+                    name,
+                    entries: s[0],
+                    approx_bytes: s[1],
+                    coerce_failures: s[2],
+                    duplicates: s[3],
+                    drift: s[4],
+                    checked: s[5],
+                })
+                .collect(),
+            spot_rows: spot[0],
+            spot_type_mismatches: spot[1],
+        })
     }
 
     #[cfg(feature = "persist")]
