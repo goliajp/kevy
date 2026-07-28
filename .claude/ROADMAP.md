@@ -461,12 +461,12 @@ CI 无消费者位置链接);**D2** 准入分裂在两张脸(只有 wire 调 val
 - [x] **smix 项已落**(`fe63f9e4`,第二份 dogfood 输入 `/tmp/kevy-feedback-2026-07-26.md`):`Aof::format()` 公开 + `Store::downgradeable_to_v3() -> Option<bool>`;e2e 伪造 3.x 文件走完 开窗→追加保持→rewrite 关窗 全程
 - [x] `# Memory` 加 `process_rss_bytes`(kevy-sys OS 边界:/proc status VmRSS + mach task_info 手写绑定)+ docs/tuning.md 容器按 RSS 定容;`# Persistence` 加 `aof_format`(off/v1/v2,新 defaulted `on_aof_format` 钩子;e2e 断言真 AOF server 报 v2)
 
-### V7 — 错误互操作 + UPGRADING 纠偏(F1/F2/F4)
-- [ ] `From<KevyError> for io::Error` 三 crate(kind 映射 + **source 保留** —— 严格好于它替掉的 280 个 `io::Error::other`)
-- [ ] UPGRADING:kevy-client 版本行改 2.0.0;补"迁移实际由什么构成"段(含 `--message-format=json` 技法);`with_auto_aof_rewrite_disabled()` 具名 builder
+### V7 — 错误互操作 + UPGRADING 纠偏(F1/F2/F4)✅(`612041d8`)
+- [x] `From<KevyError> for io::Error`:类型单点在 kevy-store,一个 impl 三面全覆盖(kind 映射 + source 保留 + Io 变体直通不双包);**这是对 4.0 "deliberately no back-edge" 设计决定的有据推翻**(280 个 io::Error::other 就是它错了的实证),UPGRADING 原段落改写为反转记录;单测钉死每个映射 + downcast;facadegate 消费者位 `?` 断言 + kevy-client-async 进 gate
+- [x] UPGRADING:kevy-client 2.0.0 行核对(已正确,F1 早已解);"迁移实际由什么构成"段 + `--message-format=json` worklist 技法;`with_auto_aof_rewrite_disabled()`(F4,一次清三个自动 rewrite 触发旋钮;config.rs 超限顺带拆 config_tier_builders.rs)+ canary 段接 观测面(downgradeable_to_v3 / INFO aof_format)
 
-### V8 — 迁移专章(D5)
-- [ ] `docs/table-migration.md`:八课按需要顺序(单值维度问题→membership 行 / 派生行每个 writer 都承重 / backfill 取并集 / shadow read 比内容**和顺序** / 删旧先枚举 reader 后 writer / 缺谓词加 ORDERPATH 不加重复列 / boot 用 ensure / **开篇放可验证性论证 + 实测三类漂移 89%/76%/序漂**)
+### V8 — 迁移专章(D5)✅(`b85821ca`)
+- [x] `docs/table-migration.md`:八课按需要顺序全落 + 开篇可验证性论证 + 实测三类漂移(89% never-written / 76% never-removed / 序漂);tables.md 加 boot-pattern 章(ENSURE/REPLACE 语义,V3 归档的文档趟)+ 显眼指路
 
 **明确不在本 arc(记录非静默 defer)**:F13 行新鲜度信号(真特性,独立 RFC);F16 可下沉索引层(= v5 试验 T5,已在那边 roadmap)。
 
