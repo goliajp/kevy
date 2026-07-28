@@ -450,15 +450,16 @@ CI 无消费者位置链接);**D2** 准入分裂在两张脸(只有 wire 调 val
 - [x] 报表全字段每次现算,且发现 4.0 的 lifetime `coerce_failures` 把 absent 也吞了(F10 的 30152"失败"全是 absence)→ `RowDerivation {Indexed,Absent,CoerceFailed,Oversize}` 单一分类同时驱动写路径与 verify;新增 row→index 方向四计数:`excluded` / `absent` / `rows` / **`missing`**(drift walk 结构上看不见的"忘了写的 writer"类,F13/F14 的可见化);两面镜像 22 元素 labeled row(新标签追加在尾,4.0 按标签读的消费者不破),oracle 逐字节;facadegate 每 cause 种一行断言各归各名;lifetime 留 seg stats
 - [x] docs:VERIFY 章改写为双向 + `entries = rows − excluded − absent − coerce_failures` 对账;duplicates ≠ 0 ⇒ 非全序 ⇒ 分页跳/重;tie-break 用**有界**列(裸 Message-ID 反例)
 
-### V5 — tiering 收敛:idle 必须近零(D3)
-- [ ] **stats 不再走**:reserved_bytes 走 per-shard 缓存 + 索引写代数失效(idle 店零重算);写压下再加 text/ann/agg approx_bytes 增量计数器(rowvalues `91c89e7b` 同款,先修实测元凶 DocBlobs::Many / fields / docvalues / positions)
-- [ ] **采样退避**:零迁移 tick 指数跳(顶 ~6s),任何降温或水位上穿即重置;`effective_target==0` 直接进 idle(今天它保证永远扫)
-- [ ] **gate**:tiergate 复刻 mailrs 三行测量 —— 收敛后 idle 30s,ON CPU 必须在 OFF 的小倍数内,不是 300×
-- [ ] docs/tiering.md:索引地板不可下沉,预算低于地板 effective_target=0 —— 写在旋钮**前面**
+### V5 — tiering 收敛:idle 必须近零(D3)✅(`94c23162`;lx64 实测 1.6× vs mailrs 的 300-500×)
+- [x] **stats 不再走**:四面 generation cache(embedded ShardSegs/ShardViews + server ShardIndexes/ShardViews,每个 mutation 咽喉点置 dirty)+ **全部 walking stats() 增量化**:kevy-text(postings/tokens/docs/Many-slots + positions/fields 走新 `Channel` + docvalues heap 和)、kevy-vector(links_total/tombstones)、kevy-index agg(distinct/gkey/rowkey);走查器留作 #[cfg(test)] 参照,四个 drift-invariant 测试逐步核
+- [x] **采样退避**:tick 零迁移指数跳(顶 64 tick ≈6.4s),任何降温重置;写路径永远立即采样(既有测试锁定),`effective_target==0` 同路收敛;3 个新 kevy-store 单测
+- [x] **gate**:tiergate 新 L15 行,lx64 实测 PASS(idle 30s off=7 / on=11 ticks)
+- [x] docs/tiering.md:索引地板写在旋钮前面 + idle 收敛契约成文
+- [x] **顺带真 bug**:server 面 FLUSHALL 不 reset segments/views,IDX.QUERY 继续吐已删 key(embedded 面会 reset,两面分歧 = D1 类洞)→ 新 `Commands::on_flush` 钩子双路径(client + replica-apply)+ 回归 e2e
 
-### V6 — 运行状态可读(F16.2 + smix 反馈)
+### V6 — 运行状态可读(F16.2 + smix 反馈)✅(smix 项 `fe63f9e4`;server 双 gauge `ae2f6552`)
 - [x] **smix 项已落**(`fe63f9e4`,第二份 dogfood 输入 `/tmp/kevy-feedback-2026-07-26.md`):`Aof::format()` 公开 + `Store::downgradeable_to_v3() -> Option<bool>`;e2e 伪造 3.x 文件走完 开窗→追加保持→rewrite 关窗 全程
-- [ ] `# Memory` 加 `process_rss_bytes`(/proc/self/statm / task_info)+ docs:容器按 RSS 定容;`# Persistence` 加 `aof_format`(server 面的同一个问题)
+- [x] `# Memory` 加 `process_rss_bytes`(kevy-sys OS 边界:/proc status VmRSS + mach task_info 手写绑定)+ docs/tuning.md 容器按 RSS 定容;`# Persistence` 加 `aof_format`(off/v1/v2,新 defaulted `on_aof_format` 钩子;e2e 断言真 AOF server 报 v2)
 
 ### V7 — 错误互操作 + UPGRADING 纠偏(F1/F2/F4)
 - [ ] `From<KevyError> for io::Error` 三 crate(kind 映射 + **source 保留** —— 严格好于它替掉的 280 个 `io::Error::other`)
