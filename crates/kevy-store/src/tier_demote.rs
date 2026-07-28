@@ -13,7 +13,7 @@ use crate::{Entry, SmallBytes, Store, key_heap_bytes_for, tier_codec};
 
 /// RFC §7: 32 records per demotion call, continuation on the shard tick.
 const SPILL_BATCH: usize = 32;
-/// v4.1-V5 backoff ceiling: a dry sampler doubles its skip up to this
+/// Backoff ceiling: a dry sampler doubles its skip up to this
 /// many ticks (~6.4 s at the default 10 Hz tick) — the idle cost of
 /// "over target with nothing left to spill" converges to one bounded
 /// sample walk every few seconds instead of one per tick.
@@ -61,7 +61,7 @@ impl Store {
 
     /// Tick continuation of [`Store::try_demote_after_write`]: one more
     /// budgeted batch per shard tick while over the watermark — with
-    /// backoff (v4.1-V5). A tick whose batch moves nothing while over
+    /// backoff. A tick whose batch moves nothing while over
     /// target (every spillable value already cold, or the floor alone
     /// exceeds the budget so `effective_target == 0`) doubles the
     /// tick's skip up to [`BACKOFF_CEILING_TICKS`]; any demotion — here

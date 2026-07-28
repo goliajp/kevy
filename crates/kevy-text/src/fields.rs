@@ -136,7 +136,7 @@ impl FieldStats {
     }
 
     /// Approximate heap bytes — the per-field term of the memory formula.
-    /// O(1) — the channel term is maintained incrementally (v4.1-V5)
+    /// O(1) — the channel term is maintained incrementally
     /// and the flat tables charge by capacity.
     pub(crate) fn approx_bytes(&self) -> u64 {
         self.tf.bytes()

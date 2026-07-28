@@ -164,10 +164,10 @@ fn many_table_bytes(n: u64) -> u64 {
 }
 
 /// A token → [`DocBlobs`] channel whose heap-byte term is maintained
-/// **incrementally** (v4.1-V5): every mutation applies an O(1) delta,
+/// **incrementally**: every mutation applies an O(1) delta,
 /// so reading the channel's share of the memory formula never walks
 /// the map. The per-tick walk over these maps was the measured
-/// write-load term behind mailrs's tiering idle-CPU report (F16a).
+/// write-load term behind a consumer's tiering idle-CPU report.
 #[derive(Debug, Default)]
 pub(crate) struct Channel {
     map: HashMap<Vec<u8>, DocBlobs>,

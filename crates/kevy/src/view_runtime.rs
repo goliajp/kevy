@@ -25,7 +25,7 @@ struct ViewState {
 pub(crate) struct ShardViews {
     generation: u64,
     views: Vec<ViewState>,
-    /// v4.1-V5 `reserved_bytes` generation cache — see
+    /// `reserved_bytes` generation cache — see
     /// `ShardIndexes::stats_dirty`; same contract, view half.
     stats_dirty: bool,
     reserved_cache: u64,
@@ -88,7 +88,7 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
 /// the view half of the tier's `reserved_bytes` floor feed.
 /// Virtual views hold no set, so they contribute nothing.
 /// FLUSHALL/FLUSHDB emptied the keyspace: every materialized set
-/// clears with it (v4.1-V5, twin of `index_runtime::on_flush`).
+/// clears with it (twin of `index_runtime::on_flush`).
 pub(crate) fn on_flush(ctx: &Ctx<'_>) {
     let mut st = ctx.shard.views.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st);
@@ -102,7 +102,7 @@ pub(crate) fn on_flush(ctx: &Ctx<'_>) {
     }
 }
 
-/// Served from the generation cache (v4.1-V5).
+/// Served from the generation cache.
 pub(crate) fn reserved_bytes(ctx: &Ctx<'_>) -> u64 {
     let mut st = ctx.shard.views.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st);

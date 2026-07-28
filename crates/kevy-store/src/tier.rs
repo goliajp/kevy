@@ -45,7 +45,7 @@ mod enabled {
         /// Demotion victim scoring (RFC §7: tiered-lru default).
         pub(crate) policy: EvictionPolicy,
         pub(crate) demotions_total: u64,
-        /// Demote-sampler backoff (v4.1-V5): ticks left to skip before
+        /// Demote-sampler backoff: ticks left to skip before
         /// the next over-target sample walk. "Idempotent is not
         /// convergent" — a store that is over target with nothing left
         /// to spill (every spillable value already cold, or the floor

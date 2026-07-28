@@ -213,7 +213,7 @@ pub(crate) fn extension_op(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -
 
 /// VERIFY chunk: `[ST_OK][n u32]` then per compiled index ten u64
 /// (entries, bytes, coerce_failures, duplicates, drift, checked,
-/// excluded, absent, rows, missing — every one fresh, v4.1-V4), then
+/// excluded, absent, rows, missing — every one fresh), then
 /// two u64 (spotcheck rows, type mismatches).
 fn op_verify(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let Some(spec) = argv
@@ -247,7 +247,7 @@ fn op_verify(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
 }
 
 /// One compiled index's per-shard verify counters — both directions
-/// (v4.1-V4; the embedded face's `shard_index_counts` is the byte-parity
+/// (the embedded face's `shard_index_counts` is the byte-parity
 /// twin, and the oracle holds them together).
 ///
 /// index→row: the IDX.VERIFY drift recheck. row→index: every prefix row
@@ -457,7 +457,7 @@ fn fold_verify_chunks(n: usize, chunks: &[Vec<u8>]) -> (Vec<[u64; 10]>, [u64; 2]
 }
 
 /// The reply body: per compiled index a 22-element label/value row
-/// (ten fresh counters, led by the index name — the four v4.1
+/// (ten fresh counters, led by the index name — the four newer
 /// additions ride at the end so a label-reading 4.0 consumer keeps
 /// working), then one 4-element spot-check row.
 fn render_verify(out: &mut Vec<u8>, spec: &TableSpec, sums: &[[u64; 10]], spot: [u64; 2]) {

@@ -93,7 +93,7 @@ impl From<io::Error> for KevyError {
     }
 }
 
-/// The interop a consumer inside an `io::Result` world needs (v4.1-V7,
+/// The interop a consumer inside an `io::Result` world needs (
 /// dogfood F2): kevy provides the conversion — the orphan rule means
 /// nobody else can — so `?` works without 280 hand-rolled
 /// `io::Error::other` wrappers. Kind-mapped, and **source-preserving**:
@@ -129,7 +129,7 @@ impl From<KevyError> for io::Error {
 mod io_interop_tests {
     use super::*;
 
-    /// v4.1-V7 (F2): the kind survives the boundary and the typed
+    /// The kind survives the boundary and the typed
     /// error rides as source — strictly better than the
     /// `io::Error::other` wrapping it replaces.
     #[test]

@@ -65,7 +65,7 @@ pub struct Hnsw {
     entry: Option<u32>,
     /// Living KEYS (≥ living nodes when duplicates are collapsed).
     live: u64,
-    /// Running Σ of every node's link-slot count (v4.1-V5) —
+    /// Running Σ of every node's link-slot count —
     /// maintained at the link push / shrink sites so `stats()` never
     /// walks the graph.
     links_total: u64,

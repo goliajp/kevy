@@ -52,11 +52,11 @@ struct ShardIndex {
 pub(crate) struct ShardIndexes {
     generation: u64,
     idx: Vec<ShardIndex>,
-    /// v4.1-V5 `reserved_bytes` generation cache: set by every
+    /// `reserved_bytes` generation cache: set by every
     /// segment-mutating chokepoint (write applies, backfill batches,
     /// catalog refresh); an idle tick reads the cached sum instead of
     /// walking every segment's stats — the walk behind the sum was
-    /// mailrs's measured 300-500× idle-CPU term (F16a).
+    /// a consumer's measured 300-500× idle-CPU term (F16a).
     stats_dirty: bool,
     reserved_cache: u64,
 }
@@ -97,7 +97,7 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
 /// tiering being enabled; refreshes the shard list first so a
 /// just-declared index counts immediately.
 /// FLUSHALL/FLUSHDB emptied this shard's store: every segment resets
-/// to its declared-empty shape (found stale during v4.1-V5 — the
+/// to its declared-empty shape (found stale by an audit — the
 /// embedded face's `on_commit` reset on FLUSH; this face kept serving
 /// deleted keys out of IDX.QUERY). A mid-backfill index goes straight
 /// to Ready: its snapshot's keys no longer exist.
@@ -116,7 +116,7 @@ pub(crate) fn on_flush(ctx: &Ctx<'_>, store: &mut Store) {
 }
 
 /// Served from the generation cache: an idle store recomputes
-/// nothing (v4.1-V5).
+/// nothing.
 pub(crate) fn reserved_bytes(ctx: &Ctx<'_>, store: &mut Store) -> u64 {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st, store);

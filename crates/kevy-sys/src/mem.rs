@@ -61,7 +61,7 @@ pub fn detected_memory_bound() -> Option<u64> {
 }
 
 /// This process's resident set size in bytes, or 0 where no probe
-/// exists (v4.1-V6 — the F16.2 ask: size containers from RSS;
+/// exists (size containers from RSS;
 /// `used_memory` is the store, not the process).
 ///
 /// - **Linux**: `/proc/self/status` `VmRSS:` (kB — page-size-free,

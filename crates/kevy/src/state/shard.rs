@@ -107,7 +107,7 @@ pub(crate) struct ShardCtx {
     /// most one tick interval. `(in_flight, aof_rewrites_total)`.
     persist_stats: Cell<(bool, u64)>,
     /// This shard's AOF on-disk format (0 off / 1 v1 / 2 v2), fed per
-    /// tick beside `persist_stats` (v4.1-V6).
+    /// tick beside `persist_stats`.
     aof_format: Cell<u8>,
     /// One-shot boot-replay verdict (dropped bytes, corrupt) published via
     /// `Commands::on_replay_report`; static after boot.

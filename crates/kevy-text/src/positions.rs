@@ -110,7 +110,7 @@ impl Positions {
 
     /// Approximate heap bytes — the positions term of the memory formula
     /// (the memory gate calibrates it against real RSS growth).
-    /// O(1) — maintained incrementally by the channel (v4.1-V5).
+    /// O(1) — maintained incrementally by the channel.
     pub(crate) fn approx_bytes(&self) -> u64 {
         self.chan.bytes()
     }
