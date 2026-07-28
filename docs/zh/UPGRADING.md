@@ -32,7 +32,7 @@
 - 向既有 3.x（`KEVYAOF1`）文件的追加保持 v1——换二进制的第一天，你的文件和 3.18 逐字节兼容，退回去仍然只是换回二进制。
 - 新文件、以及**首次重写**（自动重写或 `BGREWRITEAOF`）的输出是 v2——3.x 读不了它。首次重写之后，同一数据目录上不再存在退回 3.18 的路（除非经客户端把键空间重放出去）。
 
-如果想在灰度窗口里保留一条 3.18 退路：窗口期间关掉自动重写（`auto_aof_rewrite_percentage = 0`）并先做一份快照备份；灰度站稳后再开回来——CRC 保护要等文件升到 v2 才生效，所以别让这个状态超出灰度所需的时长。
+如果想在灰度窗口里保留一条 3.18 退路：窗口期间关掉自动重写——服务端 `auto_aof_rewrite_percentage = 0`，嵌入式 `Config::with_auto_aof_rewrite_disabled()`（4.1，一次调用清掉全部三个触发旋钮）——并先做一份快照备份；灰度站稳后再开回来。CRC 保护要等文件升到 v2 才生效，所以别让这个状态超出灰度所需的时长。从 4.1 起这扇窗**可观测**而非靠推断：嵌入式 `Store::downgradeable_to_v3()`，服务端 `INFO persistence` 的 `aof_format:`。
 
 **配置。** 每一个 3.x 配置键都被接受，含义不变。有两个键的语义变得**更严或更真**——见下面的“行为变更”（`notify_keyspace_events` 拒绝未知 flag、`min_replicas_max_lag_ms` 真正生效）。
 
@@ -101,7 +101,9 @@ fn warm(conn: &mut Connection) -> KevyResult<()> {
 | 用 `ErrorKind::UnexpectedEof` 表示订阅流已断 | `KevyError::Closed`；`SubscriberEvents` / `SubscriberMessages` 迭代器产出 `KevyResult<_>` 并在此结束 |
 | 远端专有特性用的 `ErrorKind::Unsupported` | `KevyError::Unsupported(msg)` |
 
-刻意**没有** `From<KevyError> for io::Error`：那条回边会把这次改动所消除的有损降级重新装回来。真的需要 `io::Error` 的边界上，请显式转换，并自己承担那份信息损失。
+**从 4.1 起，`From<KevyError> for io::Error` 存在了**——按 kind 映射（`TimedOut → ErrorKind::TimedOut`、`Closed → ConnectionAborted`、OOM → `OutOfMemory`……），并且**保留 source**：类型化的 `KevyError` 作为 `io::Error` 的 source 随行，可以 downcast 取回，边界上什么都不丢。4.0 刻意不出这条回边，理由是它会复活有损降级；随后第一次生产迁移把这个转换手写了约 280 次 `io::Error::other(e)`——那才是有损降级，而且还没有 kind 映射。orphan 规则决定了只有 kevy 能提供这个 impl，所以 kevy 提供。困在 `io::Result` 世界里的函数现在直接 `?` 就行。
+
+**迁移实际由什么构成——来自大规模做过这件事的消费者**：破坏点只有错误类型——`Store::open`、`Config` 和各方法形态都没变。机械配方：你拥有的可失败签名改成 `KevyResult`（通常只改注解，如上例）；你不拥有的地方，让新的 `From` 把 `?` 带进 `io::Result`。别一页一页追编译错误，把编译器当查询跑——`cargo check --message-format=json` 配 jq 得到的去重清单就是你的工单，它的长度就是你的估算。还有一条那位消费者绕了弯才学到的：错误数**不单调**——二进制 crate 要等它依赖的库编译过了才暴露自己的转换错误，所以循环要跑到不动点（一轮不再有变化），不是跑到某个计数。
 
 有一个例外留在明处：CDC feed 的 embedded 接口面（`changes_tail` / `changes_since`）保留它自己的 `FeedError`——`Resync` 与 `Future` 是这条流独有的控制信号，不是通用错误。
 

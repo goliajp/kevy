@@ -264,17 +264,21 @@ compiled, applied and queried — is
 
 ## Embedded
 
-Typed API, same compilation, no text grammar required in-process (the
-declaration types — `TableSpec`, `TableIndex`, `OrderPath` — live in
-`kevy-index`, the crate that owns the single compiler):
+Typed API, same compilation, no text grammar required in-process. The
+declaration types — `TableSpec`, `TableIndex`, `OrderPath` — are
+re-exported by the facade (4.1): import everything from
+`kevy_embedded`, never from an internal crate.
 
 ```rust
-use kevy_index::TableSpec;
+use kevy_embedded::{TableEnsure, TableSpec};
 
-store.table_declare(spec)?;          // TableSpec, validated + compiled,
-                                     // indexes built synchronously
+match store.table_ensure(spec)? {    // the boot verb: validated,
+    TableEnsure::Created => {}       //   compiled, built synchronously
+    TableEnsure::Unchanged => {}     //   — or a no-op on a same-spec boot
+}
 let tables = store.table_list();
-let report = store.table_verify(b"user")?;   // per-index counters + spot check
+let report = store.table_verify_report(b"user")?;  // named fresh counters
+assert_eq!(report.per_index[0].missing, 0);        //   + spot check
 store.table_drop(b"user");
 ```
 

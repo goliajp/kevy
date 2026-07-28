@@ -21,6 +21,7 @@ let store = Store::open(Config::default()
 - **它是一个 RAM 预算。**越过预算 demote 水位线的值会移入 value log（`<data>/tier/`），在条目原有的 value 槽位里留下一个 stub——不占额外的堆。值的 RAM 被完整回收；键、它的 TTL、类型和 LRU 历史都留在内存里。
 - **它不是持久化。**AOF 仍然是唯一的持久事实，而分层存储**从构造上就不增加任何新的崩溃安全面**：value log 是一块**按启动周期存在的下沉区**——store 打开时删除、重放期间重建——所以它从来不属于崩溃可能丢失的东西。你的崩溃保证就是 [persistence.md](persistence.md) 的保证；分层持久化测试套件还额外钉死了分层与持久化交汇的两条路径（在大部分数据已冷的 store 上做 rewrite / 快照，以及数据超过预算时的启动）。
 - **它不是淘汰（eviction）。**被 demote 的键仍然存在——`EXISTS` 回答 1，`SCAN` 返回它，`TTL` 继续倒数，`GET` 照常回答。八种 `maxmemory` 删除式淘汰策略保持精确不变的语义；如果你同时设了 `maxmemory`，它仍然是 tier 预算之上那道硬性的删除式淘汰兜底。demote **不发出任何** keyspace 事件（它不是写入也不是淘汰——客户端把 `evicted` 理解为键被删除）；它计入独立的 `demotions_total` 计量，从不混进 `evicted_keys`。
+- **索引地板不可下沉——挑预算之前先知道它。**索引、视图和保存的 `VALUES` 列常驻内存（它们正是让冷行查得便宜的东西）。对索引很重的 store，可触达的 RAM 节省被那块地板**之外**的部分所限：预算低于地板会把 demote 目标压到 0——tier 把能下沉的都下沉一遍之后就再也无事可做——在 `INFO` 里表现为 `tier_effective_target:0`，且新的索引声明会被按名拒绝。预算要从下面预算模型里的地板公式来定，不要从原始数据量来定。
 
 ## 启用它
 
@@ -137,6 +138,9 @@ cold key ≈ 96 B (entry overhead) + key heap bytes     # value fully reclaimed
 - **批量 hydration：每行一次读。**一页 `FIELDS` hydration 或对冷行的 `VIEW.HYDRATE` 会按 log 位置合并读请求、作为一批提交（io_uring：副环上的链式读；poller / 嵌入式：有序定位读循环）。一次读解码一行**全部**被请求的字段——计数器断言 `preads == cold rows`，从不是 `rows × fields`。
 - **index-only 查询零行触达**——FILTER / SORT / COUNT 从常驻 RAM 的索引列作答，所以在一张全冷的表上它们做零次磁盘读（计数器断言）。这正是在分层表上声明 `VALUES` 列的理由：见 [tables.md](tables.md)。
 - **下沉从不无界地停住 reactor**：demote 每次调用限额、tick 上续跑；停顿钳制（下沉引发的 p99 ≤ 1 ms）是一条独立门禁行，同样待基准机实测。
+- **空闲成本收敛到近乎为零**（4.1）。两个机制，缺一不可——"幂等不等于收敛"，这是一位消费者实测分层打开后空闲 CPU 高出 300–500 倍、进而把功能关掉换来的教训：
+  - 每 tick 的索引 / 视图地板馈送由**世代缓存**供给：空闲的 store 什么都不重算；写压之下，每个 segment 统计也都是 O(1) 的运行计数器，而不再走查索引结构。
+  - **demote 采样器指数退避**——当一个超目标却搬不动任何东西的 tick 出现时（包括此前保证每 tick 全量采样走查的 `effective_target = 0` 状态）。任何一次 demote 都重置退避；写路径自身永远立即采样，所以新出现的可下沉值不会等完窗口（上限 ~6 秒）。实测：空闲 30 秒 CPU 为关闭时的 **1.6 倍**（取代此前的 300–500 倍）。
 
 ## 运维须知
 
