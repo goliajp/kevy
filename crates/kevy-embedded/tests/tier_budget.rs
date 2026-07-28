@@ -189,3 +189,46 @@ fn idx_create_refused_when_the_floor_exceeds_the_budget() {
     );
     assert_eq!(wire, b"-ERR index memory floor exceeds the tiering budget\r\n".to_vec());
 }
+
+/// v4.1-V5: `reserved_bytes` is generation-cached — an idle tick reads
+/// a number instead of walking every segment's stats. The cache's one
+/// failure mode is staleness (a frozen floor silently corrupts the
+/// demote target), so every mutating chokepoint is walked here and the
+/// fed floor must track each one.
+#[test]
+fn the_reserved_floor_cache_never_serves_stale_floors() {
+    let dir = kevy_tmpdir::TmpDir::new("tier-t5-cache");
+    let s = Store::open(tiered_bytes(dir.path(), 10_000_000)).unwrap();
+    let reserved = |s: &Store| s.info().tiering.unwrap().index_reserved_bytes;
+    for i in 0..50u32 {
+        s.hset(format!("row:{i}").as_bytes(), &[(b"score".as_slice(), format!("{i}").as_bytes())])
+            .unwrap();
+    }
+    // Declare (rebuild chokepoint) — the floor appears.
+    s.idx_create(b"by_score", b"row:", b"score", kevy_embedded::IndexValType::I64, kevy_embedded::IndexKind::Range)
+        .unwrap();
+    s.tick();
+    let after_create = reserved(&s);
+    assert!(after_create > 0, "declare grows the floor");
+    // Pure idle — same number, now served from the cache.
+    s.tick();
+    assert_eq!(reserved(&s), after_create, "idle ticks change nothing");
+    // Write applies (the on_commit chokepoint) — the floor grows.
+    for i in 50..300u32 {
+        s.hset(format!("row:{i}").as_bytes(), &[(b"score".as_slice(), format!("{i}").as_bytes())])
+            .unwrap();
+    }
+    s.tick();
+    let after_writes = reserved(&s);
+    assert!(after_writes > after_create, "row writes grow the indexed floor");
+    // FLUSHALL (the reset chokepoint) — the floor collapses.
+    let out = dispatch(&s, &[b"FLUSHALL"]);
+    assert_eq!(out, b"+OK\r\n".to_vec());
+    s.tick();
+    let after_flush = reserved(&s);
+    assert!(after_flush < after_writes, "FLUSHALL resets the segments and the cache sees it");
+    // Drop (catalog chokepoint) — back to zero.
+    assert!(s.idx_drop(b"by_score"));
+    s.tick();
+    assert_eq!(reserved(&s), 0, "no index, no floor");
+}

@@ -422,6 +422,56 @@ D2 事务标记(全有全无,与事务大小无关)/ R2 事务内集合读。
 
 ---
 
+# v4.1 — dogfood 体系修复 arc(mailrs 反馈,用户拍板 2026-07-27:看体系不看单点,no defer)
+
+**输入**:`mailrs/.claude/notes/kevy-v4-dogfood-feedback-2026-07-26.md`(17 findings,两次 prod 事故)。
+**设计**:`.claude/rfcs/2026-07-27-v4.1-dogfood-systemic.md`(五个体系诊断 D1-D5 → 八个 train V1-V8;
+**自查已在代码坐实,三处比报告更糟**:embedded VERIFY 是匿名数组元组 / typed 门面从不 validate 直通
+compile 的 expect / tick 固定 CPU 的主项是每 tick 全量走文本索引 stats 而非 key 扫描)。
+
+五个诊断一句话:**D1** typed 门面是没人测的双胞胎(RESP 面有全套 gate,embedded 面缺类型、跳准入、匿名元组,
+CI 无消费者位置链接);**D2** 准入分裂在两张脸(只有 wire 调 validate → 下游 expect = 别人 boot 路径的 panic);
+**D3** 周期任务无 idle 态(幂等≠收敛,300–500× 空转 CPU 让旗舰功能被关);**D4** 报表混时间语义 +
+缺解释意外的计数器;**D5** 迁移知识只在 mailrs 笔记里(八课 + "可验证性"这个最强卖点都不在 docs)。
+
+## 线性 checklist(V1-V8;TABLE 线 V1→V4、tiering 线 V5→V6、paper 线 V7→V8 三线独立,线内有序)
+
+### V1 — 门面平权 + facadegate(D1)✅(`8d510fea`)
+- [x] re-export TableSpec/TableIndex/OrderPath + `Value`(第二例同类缺口);VERIFY 匿名元组 → 具名 struct;旧 alias deprecated shim
+- [x] **facadegate**:工作区外消费者 crate(独立 lockfile,只 path-dep 两个门面),纯门面 import 走全公开功能族(KV/pubsub/durability/index/view/text/table 全链/tiering 配置);CI job。F7 从结构上不可再犯
+
+### V2 — 单一准入权威,声明路径 panic-free(D2)✅(`8f8cc248`;fuzz 21.3M 轮零 panic)
+- [x] `compile_table` 改返回 `Result` 并**自己调 validate**;三处 expect → 可达具名拒绝;fuzz `table_spec` 双路 21.3M 零 panic 进 CI;docs 保证已写;facadegate 逐字节复刻 F9 事故 spec 断言 Err+零安装
+
+### V3 — declare 生命周期(F8.2)✅(`f57954c4`;双面 + e2e;顺带自抓 python 补丁把 \r\n 展开成真字节、Rust 词法 CRLF 归一的坑)
+- [x] `table_ensure` {Created,Unchanged} + `spec_diff` 具名差异 + `table_replace`(坏 spec 在旧表 drop **前**拒);RESP 双面四注册面 + e2e(+UNCHANGED 逐字节/坏 REPLACE 留旧表);docs boot 章归 V8 文档趟
+
+### V4 — VERIFY 单一时间框(D4)✅(`451a552e`;设计中途升级为**双向 walk**)
+- [x] 报表全字段每次现算,且发现 4.0 的 lifetime `coerce_failures` 把 absent 也吞了(F10 的 30152"失败"全是 absence)→ `RowDerivation {Indexed,Absent,CoerceFailed,Oversize}` 单一分类同时驱动写路径与 verify;新增 row→index 方向四计数:`excluded` / `absent` / `rows` / **`missing`**(drift walk 结构上看不见的"忘了写的 writer"类,F13/F14 的可见化);两面镜像 22 元素 labeled row(新标签追加在尾,4.0 按标签读的消费者不破),oracle 逐字节;facadegate 每 cause 种一行断言各归各名;lifetime 留 seg stats
+- [x] docs:VERIFY 章改写为双向 + `entries = rows − excluded − absent − coerce_failures` 对账;duplicates ≠ 0 ⇒ 非全序 ⇒ 分页跳/重;tie-break 用**有界**列(裸 Message-ID 反例)
+
+### V5 — tiering 收敛:idle 必须近零(D3)✅(`94c23162`;lx64 实测 1.6× vs mailrs 的 300-500×)
+- [x] **stats 不再走**:四面 generation cache(embedded ShardSegs/ShardViews + server ShardIndexes/ShardViews,每个 mutation 咽喉点置 dirty)+ **全部 walking stats() 增量化**:kevy-text(postings/tokens/docs/Many-slots + positions/fields 走新 `Channel` + docvalues heap 和)、kevy-vector(links_total/tombstones)、kevy-index agg(distinct/gkey/rowkey);走查器留作 #[cfg(test)] 参照,四个 drift-invariant 测试逐步核
+- [x] **采样退避**:tick 零迁移指数跳(顶 64 tick ≈6.4s),任何降温重置;写路径永远立即采样(既有测试锁定),`effective_target==0` 同路收敛;3 个新 kevy-store 单测
+- [x] **gate**:tiergate 新 L15 行,lx64 实测 PASS(idle 30s off=7 / on=11 ticks)
+- [x] docs/tiering.md:索引地板写在旋钮前面 + idle 收敛契约成文
+- [x] **顺带真 bug**:server 面 FLUSHALL 不 reset segments/views,IDX.QUERY 继续吐已删 key(embedded 面会 reset,两面分歧 = D1 类洞)→ 新 `Commands::on_flush` 钩子双路径(client + replica-apply)+ 回归 e2e
+
+### V6 — 运行状态可读(F16.2 + smix 反馈)✅(smix 项 `fe63f9e4`;server 双 gauge `ae2f6552`)
+- [x] **smix 项已落**(`fe63f9e4`,第二份 dogfood 输入 `/tmp/kevy-feedback-2026-07-26.md`):`Aof::format()` 公开 + `Store::downgradeable_to_v3() -> Option<bool>`;e2e 伪造 3.x 文件走完 开窗→追加保持→rewrite 关窗 全程
+- [x] `# Memory` 加 `process_rss_bytes`(kevy-sys OS 边界:/proc status VmRSS + mach task_info 手写绑定)+ docs/tuning.md 容器按 RSS 定容;`# Persistence` 加 `aof_format`(off/v1/v2,新 defaulted `on_aof_format` 钩子;e2e 断言真 AOF server 报 v2)
+
+### V7 — 错误互操作 + UPGRADING 纠偏(F1/F2/F4)✅(`612041d8`)
+- [x] `From<KevyError> for io::Error`:类型单点在 kevy-store,一个 impl 三面全覆盖(kind 映射 + source 保留 + Io 变体直通不双包);**这是对 4.0 "deliberately no back-edge" 设计决定的有据推翻**(280 个 io::Error::other 就是它错了的实证),UPGRADING 原段落改写为反转记录;单测钉死每个映射 + downcast;facadegate 消费者位 `?` 断言 + kevy-client-async 进 gate
+- [x] UPGRADING:kevy-client 2.0.0 行核对(已正确,F1 早已解);"迁移实际由什么构成"段 + `--message-format=json` worklist 技法;`with_auto_aof_rewrite_disabled()`(F4,一次清三个自动 rewrite 触发旋钮;config.rs 超限顺带拆 config_tier_builders.rs)+ canary 段接 观测面(downgradeable_to_v3 / INFO aof_format)
+
+### V8 — 迁移专章(D5)✅(`b85821ca`)
+- [x] `docs/table-migration.md`:八课按需要顺序全落 + 开篇可验证性论证 + 实测三类漂移(89% never-written / 76% never-removed / 序漂);tables.md 加 boot-pattern 章(ENSURE/REPLACE 语义,V3 归档的文档趟)+ 显眼指路
+
+**明确不在本 arc(记录非静默 defer)**:F13 行新鲜度信号(真特性,独立 RFC);F16 可下沉索引层(= v5 试验 T5,已在那边 roadmap)。
+
+---
+
 # v5 试验 arc — 中小企业 datasolution 的**一种尝试**(2026-07-26)
 
 > **这不是 v5,是 v5 的一次尝试**(用户拍板 2026-07-26)。

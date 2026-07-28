@@ -77,6 +77,8 @@ Eviction policies mirror Redis: `noeviction`, `allkeys-lru`, `allkeys-lfu`, `all
 
 `maxmemory-samples` is a quality-vs-cost dial for the approximate policies — sampling more keys produces a closer approximation to true LRU/LFU at a per-eviction CPU cost. The default of 5 is sufficient for most cache workloads; raise to 10 if you can see eviction picking poor victims in your access pattern, lower to 3 only if eviction itself is showing up in profiles.
 
+**Size containers from `process_rss_bytes`, not `used_memory`.** `INFO memory` reports both: `used_memory` is the store's keyspace accounting — what `maxmemory` and the tiering budget act on — while `process_rss_bytes` is what the OS actually holds resident for the process, which additionally carries indexes and views, connection and replication buffers, and allocator overhead/fragmentation. A container memory limit set from `used_memory` will OOM-kill a healthy process; set limits against observed RSS with headroom.
+
 ### Network
 
 The default transport is TCP. When the client lives on the same host, switch to a Unix-domain socket and skip the loopback TCP stack entirely:

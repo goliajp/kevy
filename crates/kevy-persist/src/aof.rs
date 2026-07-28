@@ -131,6 +131,19 @@ pub struct RewriteStats {
 
 
 impl Aof {
+    /// The on-disk record format this file currently speaks.
+    ///
+    /// A `V1` answer means a 3.x binary can still open this file — the
+    /// downgrade window `UPGRADING.md` describes is a *state*, and this
+    /// is where an embedder reads it instead of telling their users
+    /// "assume it closed" (smix dogfood, 2026-07-26: their `doctor`
+    /// command wanted to say "you can still swap the binary back" and
+    /// could not, because this was `pub(crate)`).
+    #[must_use]
+    pub fn format(&self) -> crate::AofFormat {
+        self.format
+    }
+
     /// Open (creating if needed) `path` for appending. New files get the
     /// 9-byte `AOF_MAGIC` header so replays can identify the file as
     /// kevy-managed. Pre-existing files (legacy bare-RESP or already-

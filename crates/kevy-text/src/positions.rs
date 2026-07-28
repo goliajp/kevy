@@ -12,8 +12,7 @@
 //! lockstep. Delta+varint keeps a high-frequency term from paying 4
 //! bytes per occurrence — the standard Lucene positions layout.
 
-use crate::docblobs::{DocBlobs, channel_bytes, get_varints, put_varint};
-use std::collections::HashMap;
+use crate::docblobs::{Channel, DocBlobs, get_varints, put_varint};
 
 /// Encode ascending `offsets` as a delta+varint blob. Offsets are
 /// strictly ascending (distinct ordinals), so every delta after the
@@ -65,29 +64,19 @@ fn decode(blob: &[u8]) -> Vec<u32> {
 /// Present only on a `WITH POSITIONS` segment.
 #[derive(Debug, Default)]
 pub(crate) struct Positions {
-    map: HashMap<Vec<u8>, DocBlobs>,
+    chan: Channel,
 }
 
 impl Positions {
     /// Store `id`'s ascending offsets for `token`.
     pub(crate) fn set(&mut self, token: &[u8], id: u32, offsets: &[u32]) {
-        let blob = encode(offsets);
-        match self.map.get_mut(token) {
-            Some(db) => db.set(id, blob),
-            None => {
-                self.map.insert(token.to_vec(), DocBlobs::One { id, blob });
-            }
-        }
+        self.chan.set(token, id, encode(offsets));
     }
 
     /// Drop `id` from `token`'s postings, removing the token entirely
     /// once its last document is gone.
     pub(crate) fn remove(&mut self, token: &[u8], id: u32) {
-        if let Some(db) = self.map.get_mut(token)
-            && db.remove(id)
-        {
-            self.map.remove(token);
-        }
+        self.chan.remove(token, id);
     }
 
     /// `id`'s raw position blob for `token`, undecoded.
@@ -104,25 +93,32 @@ impl Positions {
     /// allocations described here are real and removing them helped; the
     /// 87% was measuring something else entirely.
     pub(crate) fn blob(&self, token: &[u8], id: u32) -> Option<&[u8]> {
-        self.map.get(token)?.get(id)
+        self.chan.get(token)?.get(id)
     }
 
     /// `id`'s decoded ascending offsets for `token`, or `None` when the
     /// document does not contain it.
     pub(crate) fn get(&self, token: &[u8], id: u32) -> Option<Vec<u32>> {
-        self.map.get(token)?.get(id).map(decode)
+        self.chan.get(token)?.get(id).map(decode)
     }
 
     /// Documents containing `token`, as ids — the phrase-query candidate
     /// set for that token.
     pub(crate) fn ids(&self, token: &[u8]) -> Vec<u32> {
-        self.map.get(token).map(DocBlobs::ids).unwrap_or_default()
+        self.chan.get(token).map(DocBlobs::ids).unwrap_or_default()
     }
 
     /// Approximate heap bytes — the positions term of the memory formula
     /// (the memory gate calibrates it against real RSS growth).
+    /// O(1) — maintained incrementally by the channel (v4.1-V5).
     pub(crate) fn approx_bytes(&self) -> u64 {
-        channel_bytes(&self.map)
+        self.chan.bytes()
+    }
+
+    /// The walking reference for the invariant test.
+    #[cfg(test)]
+    pub(crate) fn recompute_bytes(&self) -> u64 {
+        self.chan.recompute()
     }
 }
 

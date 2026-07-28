@@ -1287,3 +1287,36 @@ fn scalar_values_filter_sort_distinct_facet_offset() {
     let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo"]);
     assert_eq!(r, flat_reply(&[("v:3", "30"), ("v:4", "40")]));
 }
+
+/// FLUSHALL must empty the index segments on THIS face too — the
+/// embedded on_commit hook resets every segment on FLUSH; a server
+/// that leaves them populated would serve deleted keys out of
+/// IDX.QUERY (probe written during v4.1-V5; asserts the two faces
+/// agree on flush semantics).
+#[test]
+fn flushall_empties_the_index_segments() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    for i in 0..20u32 {
+        let key = format!("u:{i}");
+        assert!(
+            cmd(&mut c, &[b"HSET", key.as_bytes(), b"score", format!("{i}").as_bytes()])
+                .starts_with(b":")
+        );
+    }
+    assert!(cmd(&mut c, &[
+        b"IDX.CREATE", b"by_score", b"ON", b"PREFIX", b"u:", b"FIELD", b"score",
+        b"TYPE", b"i64", b"KIND", b"range",
+    ]).starts_with(b"+OK"));
+    let full = query_ready(&mut c, &[b"IDX.QUERY", b"by_score", b"RANGE", b"0", b"100"]);
+    assert!(full.starts_with(b"*"), "{}", String::from_utf8_lossy(&full));
+    assert_ne!(full, b"*0\r\n".to_vec(), "populated before the flush");
+
+    assert!(cmd(&mut c, &[b"FLUSHALL"]).starts_with(b"+OK"));
+    let after = query_ready(&mut c, &[b"IDX.QUERY", b"by_score", b"RANGE", b"0", b"100"]);
+    assert_eq!(
+        after,
+        b"*2\r\n$1\r\n0\r\n*0\r\n".to_vec(), // [cursor 0, empty page]
+        "a flushed keyspace must not answer from stale index entries"
+    );
+}

@@ -67,10 +67,15 @@ one-way per file:
   (short of replaying the keyspace out through a client).
 
 If you want to keep a 3.18 escape hatch during a canary window,
-disable auto-rewrite for the window (`auto_aof_rewrite_percentage =
-0`) and take a snapshot backup first; flip it back when the canary
-sticks — the CRC protection only starts once files are v2, so do not
-run that way longer than the canary needs.
+disable auto-rewrite for the window — server:
+`auto_aof_rewrite_percentage = 0`; embedded:
+`Config::with_auto_aof_rewrite_disabled()` (4.1, one call for all
+three trigger knobs) — and take a snapshot backup first; flip it back
+when the canary sticks. The CRC protection only starts once files are
+v2, so do not run that way longer than the canary needs. Since 4.1
+the window is also **observable** instead of inferred:
+`Store::downgradeable_to_v3()` embedded, `aof_format:` in
+`INFO persistence` on the server.
 
 **One AOF caveat: legacy `SPOP` frames.** 4.0 makes SPOP genuinely
 random, and therefore logs (and replicates) its *effect* — `SREM key
@@ -174,10 +179,33 @@ variant instead of parsing strings:
 | `ErrorKind::UnexpectedEof` as the subscriber-stream-gone signal | `KevyError::Closed`; `SubscriberEvents` / `SubscriberMessages` iterators yield `KevyResult<_>` and end on it |
 | `ErrorKind::Unsupported` for remote-only features | `KevyError::Unsupported(msg)` |
 
-There is deliberately **no** `From<KevyError> for io::Error`: that
-back-edge would reinstate the lossy downgrade this change removes. At
-a boundary that truly needs `io::Error`, convert explicitly and own
-the loss.
+**Since 4.1, `From<KevyError> for io::Error` exists** — kind-mapped
+(`TimedOut → ErrorKind::TimedOut`, `Closed → ConnectionAborted`,
+OOM → `OutOfMemory`, …) and **source-preserving**: the typed
+`KevyError` rides as the `io::Error`'s source, downcastable back out,
+so nothing is lost at the boundary. 4.0 shipped without this
+back-edge on the theory that it would reinstate a lossy downgrade;
+the first production migration then hand-wrote the conversion ~280
+times as `io::Error::other(e)` — which *is* the lossy downgrade,
+minus the kind mapping. The orphan rule means only kevy can provide
+this impl, so kevy does. A function stuck in an `io::Result` world
+now just uses `?`.
+
+**What the migration actually consisted of, from the consumer that
+did it at scale**: the error type is the whole break — `Store::open`,
+`Config`, and every method shape were unchanged. The mechanical
+recipe: change your fallible signatures to `KevyResult` where you own
+them (usually just the annotation, as above), and where you don't,
+let the new `From` carry `?` into `io::Result`. To enumerate every
+site instead of chasing compile errors one page at a time, run the
+compiler as a query —
+`cargo check --message-format=json 2>/dev/null | jq -r 'select(.reason=="compiler-message") | .message.spans[]? | select(.is_primary) | "\(.file_name):\(.line_start)"' | sort -u`
+— the deduplicated list is your worklist, and its length is your
+estimate. One more thing that consumer learned the slow way: the
+error count is **not monotonic** — binary crates only surface their
+conversion errors after the libraries they depend on compile, so run
+the loop to a fixed point (a pass that changes nothing), not down to
+a count.
 
 (`kevy-resp-client` keeps its `io::Result` face on purpose — it is a
 pure transport stone and `io::Error` is its honest currency.)

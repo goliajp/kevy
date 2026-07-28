@@ -43,7 +43,7 @@ fn assert_roundtrips(sql: &str, expect_tables: usize) {
             .unwrap_or_else(|e| panic!("engine refused compiled declare: {e}\nargv: {argv:?}"));
         // The compiled access paths derive without panicking and carry
         // the dotted `<table>.<suffix>` names.
-        let specs = kevy_index::compile_table(&spec);
+        let specs = kevy_index::compile_table(&spec).expect("valid spec compiles");
         assert_eq!(specs.len(), spec.indexes.len() + spec.orderpaths.len());
         for s in &specs {
             let name = String::from_utf8(s.name.clone()).unwrap();
@@ -76,7 +76,7 @@ fn compiled_composite_matches_engine_where_bounds() {
     .unwrap();
     let raw: Vec<&[u8]> = c.commands[0].iter().map(|s| s.as_bytes()).collect();
     let spec = kevy_index::parse_table_declare(&raw).unwrap();
-    let specs = kevy_index::compile_table(&spec);
+    let specs = kevy_index::compile_table(&spec).expect("valid spec compiles");
     let comp = specs.iter().find(|s| s.name == b"t.p").expect("orderpath spec");
     let cols = comp.composite.as_ref().expect("composite");
     let w = kevy_index::WhereClause { eqs: vec![(b"a".to_vec(), b"x".to_vec())], range: None };

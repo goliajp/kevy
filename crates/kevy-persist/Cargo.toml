@@ -15,11 +15,11 @@ categories = ["database-implementations", "filesystem"]
 workspace = true
 
 [dependencies]
-kevy-store = { path = "../kevy-store", version = "4.0.0" }
-kevy-resp = { path = "../kevy-resp", version = "4.0.0" }
+kevy-store = { path = "../kevy-store", version = "4.1.0" }
+kevy-resp = { path = "../kevy-resp", version = "4.1.0" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kevy-sys = { path = "../kevy-sys", version = "4.0.0" }
+kevy-sys = { path = "../kevy-sys", version = "4.1.0" }
 
 [dev-dependencies]
-kevy-tmpdir = { path = "../kevy-tmpdir", version = "4.0.0" }
+kevy-tmpdir = { path = "../kevy-tmpdir", version = "4.1.0" }

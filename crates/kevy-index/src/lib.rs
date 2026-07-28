@@ -22,6 +22,7 @@ mod rowvalues;
 mod segment;
 mod segment_claused;
 mod table;
+mod table_verify;
 mod table_wire;
 mod value;
 mod view;
@@ -33,7 +34,7 @@ pub use catalog::{
 };
 pub use composite::{
     CompositeCol, MAX_COMPOSITE_COLS, MAX_STR_COMPONENT, WHERE_NOT_COMPOSITE, WhereClause,
-    composite_bounds, composite_encode, parse_where,
+    RowDerivation, composite_bounds, composite_encode, parse_where,
 };
 pub use segment::{Cursor, Segment, SegmentStats};
 pub use segment_claused::{
@@ -43,6 +44,7 @@ pub use segment_claused::{
 pub use table::{
     MAX_TABLES, OrderPath, TableCatalog, TableIndex, TableSpec, compile_table,
 };
+pub use table_verify::{IndexVerify, TableEnsure, TableVerify, spec_diff};
 pub use table_wire::{TABLE_DECLARE_USAGE, parse_table_declare};
 pub use value::{IndexValue, ValueTest, order_key};
 pub use view::{

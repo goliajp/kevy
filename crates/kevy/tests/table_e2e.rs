@@ -436,6 +436,20 @@ fn c2_table_verify_clean_after_declare_and_writes() {
     assert!(cmd(&mut c, &[b"HSET", b"u:9", b"id", b"9", b"age", b"not-a-number"]).starts_with(b":"));
     let verify = bulks(&cmd(&mut c, &[b"TABLE.VERIFY", b"user"]));
     assert_eq!(labeled(&verify, b"spotcheck_type_mismatches"), vec![b"1".to_vec()]);
+    // v4.1-V4: the row→index direction classifies the poisoned row by
+    // cause, fresh at every call — absence is NULL, never a failure.
+    assert_eq!(labeled(&verify, b"rows"), vec![b"7".to_vec(); 4], "every prefix row walked");
+    assert_eq!(
+        labeled(&verify, b"coerce_failures"),
+        vec![b"1".to_vec(), b"0".to_vec(), b"0".to_vec(), b"0".to_vec()],
+        "u:9's age is present-but-not-i64 — on the age index only"
+    );
+    assert_eq!(
+        labeled(&verify, b"absent"),
+        vec![b"0".to_vec(), b"2".to_vec(), b"1".to_vec(), b"2".to_vec()],
+        "u:6 and u:9 lack dept, u:9 lacks email — counted as NULL, not coercion"
+    );
+    assert_eq!(labeled(&verify, b"missing"), vec![b"0".to_vec(); 4], "no forgotten writer");
 }
 
 #[test]
@@ -623,4 +637,51 @@ fn d2_fully_cold_table_index_only_queries_pay_zero_cold_reads() {
         "fully-cold: exactly one read per returned row"
     );
     assert_eq!(info_gauge(&mut c, "promotions_total") - pre_promo, 0);
+}
+
+/// R12+ — the boot verbs (v4.1-V3, dogfood F8.2): ENSURE answers
+/// +OK on first declare, +UNCHANGED on the identical re-declare (the
+/// steady state of a declare-at-boot caller), and refuses a changed
+/// spec by naming which part differs. REPLACE is the explicit rebuild,
+/// and a bad replacement refuses before the old table drops.
+#[test]
+fn ensure_and_replace_are_the_boot_verbs() {
+    let srv = Server::start(None);
+    let mut c = srv.connect();
+    let ensure_user: Vec<&[u8]> = {
+        let mut v = DECLARE_USER.to_vec();
+        v[0] = b"TABLE.ENSURE";
+        v
+    };
+    assert_eq!(cmd(&mut c, &ensure_user), b"+OK\r\n", "first boot declares");
+    assert_eq!(cmd(&mut c, &ensure_user), b"+UNCHANGED\r\n", "every later boot is a no-op");
+
+    // A changed spec refuses and names the differing part.
+    let mut changed = DECLARE_USER.to_vec();
+    changed[0] = b"TABLE.ENSURE";
+    changed.extend_from_slice(&[b"COLUMN", b"extra", b"i64"]);
+    let r = cmd(&mut c, &changed);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.starts_with("-ERR"), "changed spec must refuse: {s}");
+    assert!(s.contains("COLUMNS"), "the refusal names what changed: {s}");
+
+    // A bad REPLACE refuses before the old table drops.
+    let bad: &[&[u8]] = &[
+        b"TABLE.REPLACE", b"user", b"PREFIX", b"u:", b"PK", b"id",
+        b"COLUMN", b"id", b"str",
+        b"ORDERPATH", b"by_ghost", b"ON", b"ghost",
+    ];
+    let r = cmd(&mut c, bad);
+    assert!(r.starts_with(b"-ERR"), "bad replacement refuses");
+    let list = cmd(&mut c, &[b"TABLE.LIST"]);
+    assert!(
+        String::from_utf8_lossy(&list).contains("user"),
+        "the old table must still stand after a refused REPLACE"
+    );
+
+    // A good REPLACE installs the new shape.
+    let mut good = DECLARE_USER.to_vec();
+    good[0] = b"TABLE.REPLACE";
+    good.extend_from_slice(&[b"COLUMN", b"extra", b"i64"]);
+    assert_eq!(cmd(&mut c, &good), b"+OK\r\n", "explicit rebuild");
 }

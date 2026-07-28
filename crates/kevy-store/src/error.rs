@@ -92,3 +92,72 @@ impl From<io::Error> for KevyError {
         Self::Io(e)
     }
 }
+
+/// The interop a consumer inside an `io::Result` world needs (v4.1-V7,
+/// dogfood F2): kevy provides the conversion — the orphan rule means
+/// nobody else can — so `?` works without 280 hand-rolled
+/// `io::Error::other` wrappers. Kind-mapped, and **source-preserving**:
+/// except for the `Io` passthrough, the original [`KevyError`] rides as
+/// the error's source, so a caller that later cares can downcast it
+/// back out instead of losing the type at the boundary.
+#[cfg(feature = "std")]
+impl From<KevyError> for io::Error {
+    fn from(e: KevyError) -> Self {
+        use io::ErrorKind as K;
+        match e {
+            KevyError::Io(inner) => inner,
+            other => {
+                let kind = match &other {
+                    KevyError::Io(_) => unreachable!("moved out above"),
+                    KevyError::TimedOut => K::TimedOut,
+                    KevyError::Closed => K::ConnectionAborted,
+                    KevyError::InvalidInput(_) => K::InvalidInput,
+                    KevyError::NotFound(_) => K::NotFound,
+                    KevyError::Unsupported(_) => K::Unsupported,
+                    KevyError::ReadOnly => K::PermissionDenied,
+                    KevyError::Protocol(_) => K::InvalidData,
+                    KevyError::Store(StoreError::OutOfMemory) => K::OutOfMemory,
+                    KevyError::Store(_) => K::InvalidData,
+                };
+                io::Error::new(kind, other)
+            }
+        }
+    }
+}
+
+#[cfg(all(test, feature = "std"))]
+mod io_interop_tests {
+    use super::*;
+
+    /// v4.1-V7 (F2): the kind survives the boundary and the typed
+    /// error rides as source — strictly better than the
+    /// `io::Error::other` wrapping it replaces.
+    #[test]
+    fn kinds_map_and_the_source_is_the_typed_error() {
+        let cases: [(KevyError, io::ErrorKind); 6] = [
+            (KevyError::TimedOut, io::ErrorKind::TimedOut),
+            (KevyError::Closed, io::ErrorKind::ConnectionAborted),
+            (KevyError::InvalidInput("x".into()), io::ErrorKind::InvalidInput),
+            (KevyError::NotFound("idx".into()), io::ErrorKind::NotFound),
+            (KevyError::Store(StoreError::WrongType), io::ErrorKind::InvalidData),
+            (KevyError::Store(StoreError::OutOfMemory), io::ErrorKind::OutOfMemory),
+        ];
+        for (kevy, kind) in cases {
+            let msg = kevy.to_string();
+            let io: io::Error = kevy.into();
+            assert_eq!(io.kind(), kind, "{msg}");
+            let src = io.get_ref().expect("source preserved");
+            assert!(src.is::<KevyError>(), "downcastable back to KevyError");
+            assert_eq!(src.to_string(), msg, "message survives");
+        }
+    }
+
+    /// An `Io` variant passes through untouched — no double wrap.
+    #[test]
+    fn io_passes_through_without_wrapping() {
+        let inner = io::Error::new(io::ErrorKind::BrokenPipe, "pipe");
+        let io: io::Error = KevyError::Io(inner).into();
+        assert_eq!(io.kind(), io::ErrorKind::BrokenPipe);
+        assert!(io.get_ref().is_some_and(|s| !s.is::<KevyError>()), "not re-wrapped");
+    }
+}

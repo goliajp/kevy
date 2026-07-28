@@ -1290,3 +1290,63 @@ fn buckets_are_the_coerced_value_and_absence_is_not_one() {
     assert!(label == b"1" || label == b"1.0", "the label is a spelling that occurs: {label:?}");
     assert_eq!(r.hits.len(), 3, "the document with no value still matched");
 }
+
+/// v4.1-V5: `stats()` reads running counters instead of walking the
+/// index. The counters' single failure mode is drift, so a mixed
+/// workload — inserts, updates that shrink and grow, hapax→Many
+/// transitions, removals back to empty — holds them to the walking
+/// reference after every step.
+#[test]
+fn running_stats_never_drift_from_the_walking_reference() {
+    let mut st = TextSegment::with_shape(SegmentShape { fields: 2, positions: true, values: 2 });
+    let check = |st: &TextSegment, at: &str| {
+        assert_eq!(st.stats(), st.recompute_stats(), "counter drift after {at}");
+    };
+    // A tiny deterministic LCG drives the shapes.
+    let mut seed = 0x2545F491u64;
+    let mut next = move || {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (seed >> 33) as u32
+    };
+    let words = ["rust", "kevy", "text", "engine", "shard", "bm25", "zipf", "hapax"];
+    for round in 0..200u32 {
+        let k = format!("doc:{}", next() % 40);
+        match next() % 5 {
+            // Removal (including of never-indexed keys — a no-op).
+            0 => st.apply_fields(k.as_bytes(), None),
+            // Re-index with fresh shapes: variable text per field, a
+            // weight, and value columns that flip between inline,
+            // heap-spilled and absent.
+            _ => {
+                let mut title = String::new();
+                for _ in 0..(next() % 6) {
+                    title.push_str(words[(next() % 8) as usize]);
+                    title.push(' ');
+                }
+                let mut body = String::new();
+                for _ in 0..(next() % 30) {
+                    body.push_str(words[(next() % 8) as usize]);
+                    body.push(' ');
+                }
+                let long = "x".repeat(5 + (next() % 40) as usize);
+                let vals: [Option<&[u8]>; 2] = [
+                    (next() % 3 != 0).then_some(long.as_bytes()),
+                    (next() % 2 == 0).then_some(b"inline".as_slice()),
+                ];
+                st.apply_doc(
+                    k.as_bytes(),
+                    Some(&[(title.into_bytes(), 3.0), (body.into_bytes(), 1.0)]),
+                    &vals,
+                );
+            }
+        }
+        check(&st, &format!("round {round}"));
+    }
+    // Drain everything — the counters must return to the empty shape.
+    for i in 0..40u32 {
+        st.apply_fields(format!("doc:{i}").as_bytes(), None);
+    }
+    check(&st, "full drain");
+    let end = st.stats();
+    assert_eq!((end.docs, end.tokens, end.postings), (0, 0, 0));
+}

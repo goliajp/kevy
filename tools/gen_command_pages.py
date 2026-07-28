@@ -258,7 +258,7 @@ def mast(lang, depth, here):
     return f"""<a class="skip" href="#main">Skip to content</a>
 <header class="mast">
   <div class="mast-in">
-    <a class="brand" href="{up}{L['dir']}">kevy<span class="v">4.0</span></a>
+    <a class="brand" href="{up}{L['dir']}">kevy<span class="v">4.1</span></a>
     <nav class="nav">
       <a href="{up}{L['dir']}docs/">{esc(L['nav_docs'])}</a>
       <a href="{up}{L['dir']}docs/commands/" aria-current="page">{esc(L['commands'])}</a>

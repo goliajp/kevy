@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>基准测试——kevy</title>
-<meta name="description" content="kevy 4.0 在一台机器上对打 Redis 8、valkey 9.1 和 Dragonfly——也包括 kevy 只是勉强领先的那几条命令。">
+<meta name="description" content="kevy 4.1 在一台机器上对打 Redis 8、valkey 9.1 和 Dragonfly——也包括 kevy 只是勉强领先的那几条命令。">
 <link rel="stylesheet" href="../../assets/kevy.css?v=c5c8b1de">
 <script>
   try {
@@ -17,7 +17,7 @@
 <a class="skip" href="#main">Skip to content</a>
 <header class="mast">
   <div class="mast-in">
-    <a class="brand" href="../../zh/">kevy<span class="v">4.0</span></a>
+    <a class="brand" href="../../zh/">kevy<span class="v">4.1</span></a>
     <nav class="nav">
       <a href="../../zh/docs/">文档</a>
       <a href="../../zh/docs/commands/">命令</a>
@@ -48,7 +48,7 @@
   </div></section>
 <section class="band">
   <div class="sec-h"><h2>四个引擎，一台机器</h2><p class="sec-lede">50 条连接，小 value。五次运行取中位数，数字取自每个服务端自己的命令计数器，统计的是三秒稳态窗口内的增量，而不是压测客户端报出来的速率。</p></div>
-  <div class="tbl"><table><thead><tr><th></th><th>kevy 4.0</th><th>Redis 8</th><th>valkey 9.1</th><th>Dragonfly</th><th>vs Redis 8</th></tr></thead><tbody><tr><td>GET</td><td class="num">7,800,299</td><td class="num">5,597,865</td><td class="num">3,014,687</td><td class="num">2,132,210</td><td class="win">1.39×</td></tr><tr><td>SET</td><td class="num">6,918,058</td><td class="num">2,573,396</td><td class="num">1,749,976</td><td class="num">1,511,377</td><td class="win">2.69×</td></tr><tr><td>INCR</td><td class="num">6,133,940</td><td class="num">3,459,395</td><td class="num">2,484,273</td><td class="num">1,387,568</td><td class="win">1.77×</td></tr><tr><td>SADD</td><td class="num">5,600,597</td><td class="num">3,690,483</td><td class="num">2,385,857</td><td class="num">1,678,098</td><td class="win">1.52×</td></tr><tr><td>HSET</td><td class="num">4,287,217</td><td class="num">3,021,325</td><td class="num">1,970,791</td><td class="num">1,515,763</td><td class="win">1.42×</td></tr><tr><td>LPUSH</td><td class="num">3,213,470</td><td class="num">2,862,374</td><td class="num">1,943,222</td><td class="num">1,320,497</td><td class="loss">1.12×</td></tr><tr><td>ZADD</td><td class="num">3,053,101</td><td class="num">2,773,929</td><td class="num">1,802,759</td><td class="num">1,455,126</td><td class="loss">1.10×</td></tr></tbody></table></div>
+  <div class="tbl"><table><thead><tr><th></th><th>kevy 4.1</th><th>Redis 8</th><th>valkey 9.1</th><th>Dragonfly</th><th>vs Redis 8</th></tr></thead><tbody><tr><td>GET</td><td class="num">7,800,299</td><td class="num">5,597,865</td><td class="num">3,014,687</td><td class="num">2,132,210</td><td class="win">1.39×</td></tr><tr><td>SET</td><td class="num">6,918,058</td><td class="num">2,573,396</td><td class="num">1,749,976</td><td class="num">1,511,377</td><td class="win">2.69×</td></tr><tr><td>INCR</td><td class="num">6,133,940</td><td class="num">3,459,395</td><td class="num">2,484,273</td><td class="num">1,387,568</td><td class="win">1.77×</td></tr><tr><td>SADD</td><td class="num">5,600,597</td><td class="num">3,690,483</td><td class="num">2,385,857</td><td class="num">1,678,098</td><td class="win">1.52×</td></tr><tr><td>HSET</td><td class="num">4,287,217</td><td class="num">3,021,325</td><td class="num">1,970,791</td><td class="num">1,515,763</td><td class="win">1.42×</td></tr><tr><td>LPUSH</td><td class="num">3,213,470</td><td class="num">2,862,374</td><td class="num">1,943,222</td><td class="num">1,320,497</td><td class="loss">1.12×</td></tr><tr><td>ZADD</td><td class="num">3,053,101</td><td class="num">2,773,929</td><td class="num">1,802,759</td><td class="num">1,455,126</td><td class="loss">1.10×</td></tr></tbody></table></div>
   <p class="tbl-note"><b>LPUSH 比 Redis 8 快 12%，ZADD 快 10%。</b>差距只有这么大的时候，决定胜负的是你的 value 大小和 key 分布，而不是引擎——所以如果 list 或者 sorted set 是你的热路径，请拿你自己的负载去测，不要为了性能而换。这两行的颜色是故意标成这样的。</p>
 </section>
 <section class="band prose"><h2>这组数字没有告诉你的事</h2><div class="pcols"><p><b>这是 loopback。</b>这里没有网络，而在真实部署里，你等的往往正是网络。如果你的延迟大部分花在网络上，那么一个 GET 快 2.6× 的引擎，并不会让你的 p99 也好 2.6×。</p><p><b>value 很小。</b>一个 value 到 64 KB 的时候，整件事的瓶颈会落到内核的 TCP 路径上，差距收窄到个位数百分比。如果你存的是大块数据，这些数字说的不是你。</p><p><b>这是一台机器。</b>kevy 没有集群模式。如果你的问题是一台机器不够用，这一页上没有任何数字帮得上忙。</p></div></section>
@@ -71,7 +71,7 @@ bash bench/perfgate.sh</code></pre></figure>
 
 <footer class="foot">
   <div class="foot-in">
-    <p class="foot-b">kevy 4.0 — 可以用仓库里的 bench/ 复现</p>
+    <p class="foot-b">kevy 4.1 — 可以用仓库里的 bench/ 复现</p>
     <nav>
       <a href="https://github.com/goliajp/kevy">GitHub</a>
       <a href="https://crates.io/crates/kevy">crates.io</a>

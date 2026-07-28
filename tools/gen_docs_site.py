@@ -46,7 +46,7 @@ SECTIONS = [
     ("deploy", {"en": "Running it", "zh": "运行", "ja": "運用"},
      ["replication", "availability", "cluster", "tiering", "accept-shards", "uds", "async"]),
     ("data", {"en": "Working with data", "zh": "数据", "ja": "データ"},
-     ["indexes", "tables", "vector-search", "text-search", "views", "cdc", "pubsub", "lua"]),
+     ["indexes", "tables", "table-migration", "vector-search", "text-search", "views", "cdc", "pubsub", "lua"]),
     ("embed", {"en": "Embedding it", "zh": "嵌入", "ja": "組み込み"},
      ["wasm", "embedded-listener", "iot"]),
     ("ref", {"en": "Reference", "zh": "参考", "ja": "リファレンス"},
@@ -70,6 +70,7 @@ BLURB = {
         "async": "Pipelining, and why the engine has no async runtime.",
         "indexes": "Secondary indexes: how they build, and what they cost.",
         "tables": "Declare typed columns and indexes once; query them like a table, at kevy speed.",
+        "table-migration": "Eight production-paid lessons from replacing hand-maintained indexes.",
         "vector-search": "KNN over your keyspace. No embedding model included.",
         "text-search": "BM25 full-text, and where it stops.",
         "views": "Materialised views, kept fresh by the write path.",
@@ -82,7 +83,7 @@ BLURB = {
         "error-replies": "Every error string, and the contract it is part of.",
         "rds-workloads": "What a relational workload costs here, honestly.",
         "migration": "Moving in from Redis, and back out again.",
-        "UPGRADING": "3.x to 4.0: what breaks, and why.",
+        "UPGRADING": "3.x to 4.x: what breaks, and why.",
     },
     "zh": {
         "designing-on-kevy": "习惯了想表，现在要学着想键。",
@@ -98,6 +99,7 @@ BLURB = {
         "async": "pipelining，以及这个引擎为什么没有 async runtime。",
         "indexes": "二级索引：怎么建起来的，代价是多少。",
         "tables": "类型化列和索引声明一次，然后像查表一样查——kevy 的速度。",
+        "table-migration": "从手工索引迁过来的八课——每一课都在生产上付过学费。",
         "vector-search": "在你的键空间上做 KNN。不含 embedding 模型。",
         "text-search": "BM25 全文检索，以及它到哪儿为止。",
         "views": "物化视图，由写路径顺手保持新鲜。",
@@ -110,7 +112,7 @@ BLURB = {
         "error-replies": "每一条错误字符串，以及它属于哪份契约。",
         "rds-workloads": "关系型负载在这里到底要付多少钱 —— 照实说。",
         "migration": "从 Redis 搬进来，以及再搬出去。",
-        "UPGRADING": "3.x 到 4.0：什么会坏，为什么。",
+        "UPGRADING": "3.x 到 4.x：什么会坏，为什么。",
     },
     "ja": {
         "designing-on-kevy": "テーブルで考えることに慣れた頭で、キーで考え直す。",
@@ -126,6 +128,7 @@ BLURB = {
         "async": "pipelining と、このエンジンに async runtime が無い理由。",
         "indexes": "セカンダリインデックス —— どう構築され、何を払うのか。",
         "tables": "型付きカラムとインデックスを一度宣言すれば、テーブルのように引ける —— kevy の速度で。",
+        "table-migration": "手書きインデックスを置き換えた 8 つの教訓 —— どれも本番で対価を払った。",
         "vector-search": "キー空間の上での KNN。embedding モデルは含まない。",
         "text-search": "BM25 全文検索と、その限界。",
         "views": "マテリアライズドビュー。書き込みパスが鮮度を保つ。",
@@ -138,7 +141,7 @@ BLURB = {
         "error-replies": "すべてのエラー文字列と、それが属する契約。",
         "rds-workloads": "リレーショナルなワークロードがここで払う代価を、正直に。",
         "migration": "Redis から移ってくる道と、出ていく道。",
-        "UPGRADING": "3.x から 4.0 へ —— 何が壊れ、なぜ壊れるのか。",
+        "UPGRADING": "3.x から 4.x へ —— 何が壊れ、なぜ壊れるのか。",
     },
 }
 
@@ -213,7 +216,7 @@ def shell(lang, slug, title, desc, body, toc, nav, depth, have=None):
 <a class="skip" href="#main">Skip to content</a>
 <header class="mast">
   <div class="mast-in">
-    <a class="brand" href="{up}{d}">kevy<span class="v">4.0</span></a>
+    <a class="brand" href="{up}{d}">kevy<span class="v">4.1</span></a>
     <nav class="nav">
       <a href="{up}{d}docs/" aria-current="page">{nav_l[0]}</a>
       <a href="{up}{d}docs/commands/">{nav_l[1]}</a>

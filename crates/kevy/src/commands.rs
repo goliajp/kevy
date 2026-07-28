@@ -72,6 +72,10 @@ impl Commands for KevyCommands {
         self.shard_ctx().set_persist_stats(in_flight, aof_rewrites_total);
     }
 
+    fn on_aof_format(&self, format: u8) {
+        self.shard_ctx().set_aof_format(format);
+    }
+
     fn on_replay_report(&self, dropped_bytes: u64, corrupt: bool) {
         // Boot-replay verdict for `INFO persistence` — non-zero drops are
         // the operator's alert signal (the store holds less than the AOF
@@ -137,6 +141,16 @@ impl Commands for KevyCommands {
         if bits & crate::state::VIEW_NONEMPTY != 0 {
             // Views probe the segments the line above just refreshed.
             crate::view_runtime::on_write(&self.ctx(), store, key);
+        }
+    }
+
+    fn on_flush(&self, store: &mut Store) {
+        let bits = self.gate_bits();
+        if bits & crate::state::IDX_NONEMPTY != 0 {
+            crate::index_runtime::on_flush(&self.ctx(), store);
+        }
+        if bits & crate::state::VIEW_NONEMPTY != 0 {
+            crate::view_runtime::on_flush(&self.ctx());
         }
     }
 

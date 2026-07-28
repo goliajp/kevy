@@ -37,7 +37,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - [WASM / browser](https://kevy.golia.jp/docs/wasm/) · [Electron apps](https://kevy.golia.jp/docs/electron/) · [Tauri apps](https://kevy.golia.jp/docs/tauri/) · [IoT / embedded tiers](https://kevy.golia.jp/docs/iot/)
 - [Error contract](https://kevy.golia.jp/docs/error-replies/) · [Tuning](https://kevy.golia.jp/docs/tuning/)
 
-## Verbs (188 total)
+## Verbs (190 total)
 
 ### scan
 
@@ -608,6 +608,12 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `TABLE.DECLARE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX col range|unique [VALUES col ...]] [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...]` [write,extension] — Declare a relational table that compiles at declare time into named indexes (catalog mutation, sidecar-persisted).
   - complexity: O(declaration size) at the call; each compiled index then backfills like IDX.CREATE (2048 rows per tick per shard). The engine gains no query planner: queries name the compiled paths (`<table>.<col>`, `<table>.<orderpath>`) explicitly
   - compat: kevy-only: nearest is CREATE TABLE in an RDBMS — but this is a declaration compiler, not a schema enforcer: a row with a missing column is a row with an absent field (NULL semantics), never an error, and no SQL executes at query time
+- `TABLE.ENSURE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX ...] [ORDERPATH ...]` [write,extension] — TABLE.DECLARE's boot form: identical existing declaration answers +UNCHANGED, a different one is a named refusal saying which part differs — never a silent rebuild.
+  - complexity: declare-at-boot is the steady state; plain DECLARE errors on re-declare, which quiet boot code then ignores forever (dogfood F8.2)
+  - compat: kevy-only: nearest is CREATE TABLE IF NOT EXISTS — plus the spec comparison IF NOT EXISTS does not do
+- `TABLE.REPLACE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX ...] [ORDERPATH ...]` [write,extension] — Drop and redeclare in one verb, rebuilding every compiled index from the rows. Named for its cost: a full backfill, asked for explicitly. A bad spec refuses BEFORE the old table drops.
+  - complexity: the migration verb: spec changed, rebuild wanted
+  - compat: kevy-only: nearest is DROP TABLE + CREATE TABLE, atomic against a bad new spec
 - `TABLE.DROP name` [write,extension] — Drop a declared table and its compiled indexes (catalog mutation, sidecar-persisted).
   - complexity: O(catalog size + compiled indexes)
   - compat: kevy-only
@@ -2737,6 +2743,8 @@ Eviction policies mirror Redis: `noeviction`, `allkeys-lru`, `allkeys-lfu`, `all
 
 `maxmemory-samples` is a quality-vs-cost dial for the approximate policies — sampling more keys produces a closer approximation to true LRU/LFU at a per-eviction CPU cost. The default of 5 is sufficient for most cache workloads; raise to 10 if you can see eviction picking poor victims in your access pattern, lower to 3 only if eviction itself is showing up in profiles.
 
+**Size containers from `process_rss_bytes`, not `used_memory`.** `INFO memory` reports both: `used_memory` is the store's keyspace accounting — what `maxmemory` and the tiering budget act on — while `process_rss_bytes` is what the OS actually holds resident for the process, which additionally carries indexes and views, connection and replication buffers, and allocator overhead/fragmentation. A container memory limit set from `used_memory` will OOM-kill a healthy process; set limits against observed RSS with headroom.
+
 ### Network
 
 The default transport is TCP. When the client lives on the same host, switch to a Unix-domain socket and skip the loopback TCP stack entirely:
@@ -3181,6 +3189,19 @@ a row where that column is NULL (the absent-field semantics every
 index already has). The declaration buys you compiled access paths, a
 `VERIFY` surface, and one-verb lifecycle for all of them.
 
+> **Migrating from hand-maintained indexes?** Read
+> [table-migration.md](https://kevy.golia.jp/docs/table-migration/) first — eight
+> production-paid lessons, and the measured drift numbers (89 %
+> never-written, 76 % never-removed) that are the reason tables
+> exist.
+
+> **Declaration never panics.** `TABLE.DECLARE` / `Store::table_declare`
+> answer every invalid spec — unknown columns, colliding names, missing
+> PK, anything — with a named error, and a refused declare installs
+> nothing. This is a hard guarantee, enforced by `compile_table`
+> validating for itself and fuzzed continuously (`table_spec`): a bad
+> spec on your boot path is a log line, not a restart loop.
+
 ## The declaration model
 
 `TABLE.DECLARE` compiles each clause into a named index:
@@ -3210,10 +3231,35 @@ TABLE.DECLARE name PREFIX p PK col
     COLUMN name i64|f64|str [COLUMN ...]
     [INDEX col range|unique [VALUES col ...]] ...
     [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] ...
+TABLE.ENSURE ...       # TABLE.DECLARE's boot form — see below
+TABLE.REPLACE ...      # explicit drop + declare + rebuild
 TABLE.DROP name        # drops the table + its compiled indexes; 1|0
 TABLE.LIST             # name/prefix/pk + column/index/orderpath counts
 TABLE.VERIFY name      # component fsck + a bounded column spot check
 ```
+
+## The boot pattern: `ensure`
+
+Declaring at boot is the steady state — the schema lives in your
+code, and every process start states it. `TABLE.ENSURE` (embedded:
+`Store::table_ensure`, returning `TableEnsure::{Created, Unchanged}`)
+takes the same grammar as `TABLE.DECLARE` and is its idempotent form:
+
+- **No such table** → declared and built: `Created`.
+- **Identical spec** → a no-op success: `Unchanged` (`+UNCHANGED` on
+  the wire). Every later boot takes this path.
+- **A different spec** → a **named refusal that says what changed**
+  (`COLUMNS`, `INDEXES`, `ORDERPATHS`, `PREFIX`, `PK`) — never a
+  silent rebuild. A rebuild is a full backfill over the prefix
+  domain; something that expensive must be asked for by name:
+  `TABLE.REPLACE` (embedded: `table_replace`) is that ask — explicit
+  drop + declare + rebuild, validating the new spec **before**
+  dropping the old table, so a bad replacement leaves the old table
+  serving.
+
+Plain `TABLE.DECLARE` remains the strict form: re-declaring an
+existing name is an error. Use `ensure` at boot, `replace` in
+migrations, `declare` when a duplicate name means a bug.
 
 - Column types are `i64 | f64 | str` — the scalar index types.
   Everything else (timestamps, booleans, enums) is app-encoded into
@@ -3228,13 +3274,27 @@ TABLE.VERIFY name      # component fsck + a bounded column spot check
   column, unknown `VALUES` column, name collisions, …), never
   silent.
 
-`TABLE.VERIFY` re-runs every compiled index's drift recheck (the
-`IDX.VERIFY` counters: entries / bytes / coerce_failures /
-duplicates / drift / checked, per index) plus a bounded spot check —
-up to 64 sampled rows per shard, asserting every *present* declared
-column coerces to its declared type (absent is NULL, never an
-error). It answers `-INDEXBUILDING` while any component index is
-still backfilling.
+`TABLE.VERIFY` recomputes **every counter fresh, at the moment of the
+call, in both directions** (4.1 — before, `coerce_failures` was a
+lifetime tally that also swallowed absent columns, so it could not be
+read against the fresh `drift` beside it):
+
+- **index→row**: `entries` / `bytes` / `duplicates` / `drift` /
+  `checked` — every held entry re-derived from its row.
+- **row→index**: every prefix row classified by cause — `rows`
+  walked, `coerce_failures` (present but fails to coerce), `excluded`
+  (a composite `str` component over 255 bytes), `absent` (a missing
+  component column: NULL by design, not an error), and **`missing`**
+  (the row derives a value yet has no entry — the writer that forgot
+  this table exists, the one class a drift walk structurally cannot
+  see).
+
+`entries` = `rows − excluded − absent − coerce_failures` when nothing
+is wrong; each exclusion cause now has its own name instead of
+surfacing as an unexplained entries diff. A bounded spot check (up to
+64 sampled rows per shard) additionally asserts every *present*
+declared column coerces to its declared type. It answers
+`-INDEXBUILDING` while any component index is still backfilling.
 
 ## Composite ORDERPATH semantics
 
@@ -3262,6 +3322,13 @@ query the way a relational composite index does. The rules:
   bounds exact. Up to 8 components.
 - `WHERE` works on `IDX.COUNT` too, and on an index that declares no
   composite columns it is refused by name.
+- **A non-zero `duplicates` in `TABLE.VERIFY` means the ORDERPATH is
+  not a total order** — rows tying on every component collapse to one
+  entry, and cursor pagination will skip or repeat at the tie
+  boundary. End the composite with a **bounded** tie-break column
+  (numeric id, or a fixed-width hash of the natural key) — not a raw
+  unbounded string like a Message-ID, which walks into the 255-byte
+  exclusion cap instead of breaking the tie.
 
 ```
 IDX.QUERY user.by_dept_age WHERE dept EQ eng                  # all eng, age DESC
@@ -3359,17 +3426,21 @@ compiled, applied and queried — is
 
 ## Embedded
 
-Typed API, same compilation, no text grammar required in-process (the
-declaration types — `TableSpec`, `TableIndex`, `OrderPath` — live in
-`kevy-index`, the crate that owns the single compiler):
+Typed API, same compilation, no text grammar required in-process. The
+declaration types — `TableSpec`, `TableIndex`, `OrderPath` — are
+re-exported by the facade (4.1): import everything from
+`kevy_embedded`, never from an internal crate.
 
 ```rust
-use kevy_index::TableSpec;
+use kevy_embedded::{TableEnsure, TableSpec};
 
-store.table_declare(spec)?;          // TableSpec, validated + compiled,
-                                     // indexes built synchronously
+match store.table_ensure(spec)? {    // the boot verb: validated,
+    TableEnsure::Created => {}       //   compiled, built synchronously
+    TableEnsure::Unchanged => {}     //   — or a no-op on a same-spec boot
+}
 let tables = store.table_list();
-let report = store.table_verify(b"user")?;   // per-index counters + spot check
+let report = store.table_verify_report(b"user")?;  // named fresh counters
+assert_eq!(report.per_index[0].missing, 0);        //   + spot check
 store.table_drop(b"user");
 ```
 
@@ -5661,6 +5732,16 @@ untiered build — that is a gated claim, not a hope.
   **zero** keyspace events (it is not a write and not an eviction —
   clients treat `evicted` as key removal); it counts in a separate
   `demotions_total` gauge, never in `evicted_keys`.
+- **The index floor is not spillable — know it before picking a
+  budget.** Indexes, views and stored `VALUES` columns stay resident
+  (they are what makes cold rows cheap to find), so for an index-heavy
+  store the reachable RAM saving is bounded by everything **except**
+  that floor. A budget below the floor drives the demote target to 0:
+  the tier spills everything spillable once and can then do nothing
+  more — visible as `tier_effective_target:0` in `INFO`, and new
+  index declarations are refused by name. Size the budget from the
+  floor formulas in the budget model below, not from the raw data
+  size.
 
 ## Enabling it
 
@@ -5888,6 +5969,21 @@ Stated honestly, with the measured/pending status of each number:
   budgeted per call with tick continuation; the stall clamp
   (spill-induced p99 ≤ 1 ms) is its own gate line, also pending its
   bench-box measurement.
+- **Idle costs converge to nearly nothing** (v4.1). Two mechanisms,
+  both required — "idempotent is not convergent" was the lesson of a
+  consumer measuring 300–500× idle CPU with tiering on and turning
+  the feature off:
+  - The per-tick index/view floor feed is served from a
+    **generation cache**: an idle store recomputes nothing, and under
+    write load every segment statistic is a running counter (O(1))
+    rather than a walk over the index structures.
+  - The demote sampler **backs off exponentially** when a tick's
+    batch moves nothing while over target — including the
+    `effective_target = 0` state, which previously guaranteed one
+    full sample walk per tick forever. Any demotion (tick or write
+    path) resets the backoff; the write path itself always samples
+    immediately, so a fresh spillable value never waits out the
+    window (bounded at ~6 s).
 
 ## Operational notes
 
@@ -7446,10 +7542,15 @@ one-way per file:
   (short of replaying the keyspace out through a client).
 
 If you want to keep a 3.18 escape hatch during a canary window,
-disable auto-rewrite for the window (`auto_aof_rewrite_percentage =
-0`) and take a snapshot backup first; flip it back when the canary
-sticks — the CRC protection only starts once files are v2, so do not
-run that way longer than the canary needs.
+disable auto-rewrite for the window — server:
+`auto_aof_rewrite_percentage = 0`; embedded:
+`Config::with_auto_aof_rewrite_disabled()` (4.1, one call for all
+three trigger knobs) — and take a snapshot backup first; flip it back
+when the canary sticks. The CRC protection only starts once files are
+v2, so do not run that way longer than the canary needs. Since 4.1
+the window is also **observable** instead of inferred:
+`Store::downgradeable_to_v3()` embedded, `aof_format:` in
+`INFO persistence` on the server.
 
 **One AOF caveat: legacy `SPOP` frames.** 4.0 makes SPOP genuinely
 random, and therefore logs (and replicates) its *effect* — `SREM key
@@ -7553,10 +7654,33 @@ variant instead of parsing strings:
 | `ErrorKind::UnexpectedEof` as the subscriber-stream-gone signal | `KevyError::Closed`; `SubscriberEvents` / `SubscriberMessages` iterators yield `KevyResult<_>` and end on it |
 | `ErrorKind::Unsupported` for remote-only features | `KevyError::Unsupported(msg)` |
 
-There is deliberately **no** `From<KevyError> for io::Error`: that
-back-edge would reinstate the lossy downgrade this change removes. At
-a boundary that truly needs `io::Error`, convert explicitly and own
-the loss.
+**Since 4.1, `From<KevyError> for io::Error` exists** — kind-mapped
+(`TimedOut → ErrorKind::TimedOut`, `Closed → ConnectionAborted`,
+OOM → `OutOfMemory`, …) and **source-preserving**: the typed
+`KevyError` rides as the `io::Error`'s source, downcastable back out,
+so nothing is lost at the boundary. 4.0 shipped without this
+back-edge on the theory that it would reinstate a lossy downgrade;
+the first production migration then hand-wrote the conversion ~280
+times as `io::Error::other(e)` — which *is* the lossy downgrade,
+minus the kind mapping. The orphan rule means only kevy can provide
+this impl, so kevy does. A function stuck in an `io::Result` world
+now just uses `?`.
+
+**What the migration actually consisted of, from the consumer that
+did it at scale**: the error type is the whole break — `Store::open`,
+`Config`, and every method shape were unchanged. The mechanical
+recipe: change your fallible signatures to `KevyResult` where you own
+them (usually just the annotation, as above), and where you don't,
+let the new `From` carry `?` into `io::Result`. To enumerate every
+site instead of chasing compile errors one page at a time, run the
+compiler as a query —
+`cargo check --message-format=json 2>/dev/null | jq -r 'select(.reason=="compiler-message") | .message.spans[]? | select(.is_primary) | "\(.file_name):\(.line_start)"' | sort -u`
+— the deduplicated list is your worklist, and its length is your
+estimate. One more thing that consumer learned the slow way: the
+error count is **not monotonic** — binary crates only surface their
+conversion errors after the libraries they depend on compile, so run
+the loop to a fixed point (a pass that changes nothing), not down to
+a count.
 
 (`kevy-resp-client` keeps its `io::Result` face on purpose — it is a
 pure transport stone and `io::Error` is its honest currency.)

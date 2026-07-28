@@ -185,7 +185,7 @@ TPL = """<!doctype html>
 <a class="skip" href="#main">Skip to content</a>
 <header class="mast">
   <div class="mast-in">
-    <a class="brand" href="{up}{dir}">kevy<span class="v">4.0</span></a>
+    <a class="brand" href="{up}{dir}">kevy<span class="v">4.1</span></a>
     <nav class="nav">
       <a href="{up}{dir}docs/">{nav_docs}</a>
       <a href="{up}{dir}docs/commands/">{nav_cmds}</a>
