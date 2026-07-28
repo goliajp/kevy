@@ -11,5 +11,6 @@ publish = false
 [workspace]
 
 [dependencies]
-kevy-embedded = { path = "../../crates/kevy-embedded", features = ["index", "text"] }
+kevy-embedded = { path = "../../crates/kevy-embedded", features = ["index", "text", "persist"] }
 kevy-client = { path = "../../crates/kevy-client" }
+kevy-client-async = { path = "../../crates/kevy-client-async" }
