@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ベンチマーク — kevy</title>
-<meta name="description" content="1 台のマシンでの kevy 4.0 と Redis 8、valkey 9.1、Dragonfly の比較——kevy がかろうじて上回っているだけのコマンドも含めて。">
+<meta name="description" content="1 台のマシンでの kevy 4.1 と Redis 8、valkey 9.1、Dragonfly の比較——kevy がかろうじて上回っているだけのコマンドも含めて。">
 <link rel="stylesheet" href="../../assets/kevy.css?v=c5c8b1de">
 <script>
   try {
@@ -17,7 +17,7 @@
 <a class="skip" href="#main">Skip to content</a>
 <header class="mast">
   <div class="mast-in">
-    <a class="brand" href="../../ja/">kevy<span class="v">4.0</span></a>
+    <a class="brand" href="../../ja/">kevy<span class="v">4.1</span></a>
     <nav class="nav">
       <a href="../../ja/docs/">ドキュメント</a>
       <a href="../../ja/docs/commands/">コマンド</a>
@@ -48,7 +48,7 @@
   </div></section>
 <section class="band">
   <div class="sec-h"><h2>4 つのエンジン、1 台のマシン</h2><p class="sec-lede">コネクション 50、小さな値。5 回実行した中央値です。ベンチマーククライアントが報告する速度ではなく、各サーバー自身のコマンドカウンタを、3 秒間の定常状態で数えました。</p></div>
-  <div class="tbl"><table><thead><tr><th></th><th>kevy 4.0</th><th>Redis 8</th><th>valkey 9.1</th><th>Dragonfly</th><th>Redis 8 比</th></tr></thead><tbody><tr><td>GET</td><td class="num">7,800,299</td><td class="num">5,597,865</td><td class="num">3,014,687</td><td class="num">2,132,210</td><td class="win">1.39×</td></tr><tr><td>SET</td><td class="num">6,918,058</td><td class="num">2,573,396</td><td class="num">1,749,976</td><td class="num">1,511,377</td><td class="win">2.69×</td></tr><tr><td>INCR</td><td class="num">6,133,940</td><td class="num">3,459,395</td><td class="num">2,484,273</td><td class="num">1,387,568</td><td class="win">1.77×</td></tr><tr><td>SADD</td><td class="num">5,600,597</td><td class="num">3,690,483</td><td class="num">2,385,857</td><td class="num">1,678,098</td><td class="win">1.52×</td></tr><tr><td>HSET</td><td class="num">4,287,217</td><td class="num">3,021,325</td><td class="num">1,970,791</td><td class="num">1,515,763</td><td class="win">1.42×</td></tr><tr><td>LPUSH</td><td class="num">3,213,470</td><td class="num">2,862,374</td><td class="num">1,943,222</td><td class="num">1,320,497</td><td class="loss">1.12×</td></tr><tr><td>ZADD</td><td class="num">3,053,101</td><td class="num">2,773,929</td><td class="num">1,802,759</td><td class="num">1,455,126</td><td class="loss">1.10×</td></tr></tbody></table></div>
+  <div class="tbl"><table><thead><tr><th></th><th>kevy 4.1</th><th>Redis 8</th><th>valkey 9.1</th><th>Dragonfly</th><th>Redis 8 比</th></tr></thead><tbody><tr><td>GET</td><td class="num">7,800,299</td><td class="num">5,597,865</td><td class="num">3,014,687</td><td class="num">2,132,210</td><td class="win">1.39×</td></tr><tr><td>SET</td><td class="num">6,918,058</td><td class="num">2,573,396</td><td class="num">1,749,976</td><td class="num">1,511,377</td><td class="win">2.69×</td></tr><tr><td>INCR</td><td class="num">6,133,940</td><td class="num">3,459,395</td><td class="num">2,484,273</td><td class="num">1,387,568</td><td class="win">1.77×</td></tr><tr><td>SADD</td><td class="num">5,600,597</td><td class="num">3,690,483</td><td class="num">2,385,857</td><td class="num">1,678,098</td><td class="win">1.52×</td></tr><tr><td>HSET</td><td class="num">4,287,217</td><td class="num">3,021,325</td><td class="num">1,970,791</td><td class="num">1,515,763</td><td class="win">1.42×</td></tr><tr><td>LPUSH</td><td class="num">3,213,470</td><td class="num">2,862,374</td><td class="num">1,943,222</td><td class="num">1,320,497</td><td class="loss">1.12×</td></tr><tr><td>ZADD</td><td class="num">3,053,101</td><td class="num">2,773,929</td><td class="num">1,802,759</td><td class="num">1,455,126</td><td class="loss">1.10×</td></tr></tbody></table></div>
   <p class="tbl-note"><b>LPUSH は Redis 8 より 12%、ZADD は 10% 速いだけです。</b>この差では、勝敗を決めるのはエンジンではなく、値のサイズとキーの分布です。リストやソート済みセットがホットパスなら、自分のワークロードで測ってください。速さを理由に乗り換えてはいけません。この 2 行の色は、そのために付けてあります。</p>
 </section>
 <section class="band prose"><h2>この数字が、教えてくれないこと</h2><div class="pcols"><p><b>ループバックです。</b>ここにネットワークはありませんが、実際の運用で待たされる相手は、たいていネットワークです。GET が 2.6 倍速いエンジンでも、レイテンシの大半が回線なら、p99 が 2.6 倍良くなることはありません。</p><p><b>値が小さいです。</b>1 値あたり 64 KB になると、全体がカーネルの TCP パスに律速され、差は 1 桁台まで縮まります。大きなブロブを保存するなら、この数字は、あなたの話ではありません。</p><p><b>1 台のマシンです。</b>kevy にクラスタモードはありません。1 台では足りないことが問題なら、このページのどの数字も助けになりません。</p></div></section>
@@ -71,7 +71,7 @@ bash bench/perfgate.sh</code></pre></figure>
 
 <footer class="foot">
   <div class="foot-in">
-    <p class="foot-b">kevy 4.0 — リポジトリの bench/ から再現できます</p>
+    <p class="foot-b">kevy 4.1 — リポジトリの bench/ から再現できます</p>
     <nav>
       <a href="https://github.com/goliajp/kevy">GitHub</a>
       <a href="https://crates.io/crates/kevy">crates.io</a>
