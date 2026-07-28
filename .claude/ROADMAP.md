@@ -470,6 +470,14 @@ CI 无消费者位置链接);**D2** 准入分裂在两张脸(只有 wire 调 val
 
 **明确不在本 arc(记录非静默 defer)**:F13 行新鲜度信号(真特性,独立 RFC);F16 可下沉索引层(= v5 试验 T5,已在那边 roadmap)。
 
+### SHIP ✅ v4.1.0(2026-07-28,tag `v4.1.0` @ `e4b819bf`)
+- [x] CHANGELOG + workspace 4.1.0 / client 2.1.0(88+2 pin)+ 双 lockfile + release 预跑
+- [x] 文档三语 delta(tables/tiering/tuning/UPGRADING)+ table-migration 三语;顺带修掉 en/ja/zh 嵌入示例仍在教 `use kevy_index::TableSpec` 的 F7 反模式残留
+- [x] 站点:700+ 页 4.1、table-migration 三语上站、TABLE.ENSURE/REPLACE 命令页(190 verbs ×3)、llms 快照、4.1 wasm;rsync t01 并线上 200 验证
+- [x] CI 五连修后真绿:oracle build-if-absent 陈旧缓存 binary(改永远构建)/ wasm dead-code(cache 字段 cfg + mark_stats_dirty)/ killgate(pgcompare 无守卫 pkill,07-26 起的遗留红)/ locgate 四个 fn>50 拆分 / commentgate 46 处出处注释清零 / **uring EINTR 真 bug**(availgate SIGSTOP clamp 暴露:io_uring_enter EINTR 未重试 → shard 退出;全树唯一缺口,已补重试)
+- [x] release.yml success:crates.io 34 crates(kevy/kevy-embedded 4.1.0、client/async 2.1.0 已线上验证)+ npm @goliapkg/kevy 4.1.0 + GH release(6 assets)
+- [x] 装后 smoke:crates.io 拉 4.1.0,消费者位 facade import + `?` io 互操作 + ensure + fresh verify 一次通过
+
 ---
 
 # v5 试验 arc — 中小企业 datasolution 的**一种尝试**(2026-07-26)
