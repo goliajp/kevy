@@ -854,6 +854,10 @@ fn info_persistence_reports_rewrite_completion() {
             let s = info(&mut c);
             s.contains("aof_rewrites_total:1") && s.contains("aof_rewrite_in_progress:0")
         });
+        // v4.1-V6 (smix): the on-disk format is a readable state — an
+        // AOF-enabled 4.x store writes v2 (and after a rewrite it
+        // could not be anything else).
+        wait_for("INFO to report the AOF format", || info(&mut c).contains("aof_format:v2"));
     });
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -89,6 +89,12 @@ pub trait Commands: Clone + Send + 'static {
     /// Default: no-op.
     fn on_persist_stats(&self, _in_flight: bool, _aof_rewrites_total: u64) {}
 
+    /// Per-tick AOF on-disk format gauge (v4.1-V6, the smix ask's
+    /// server twin): 0 = AOF off, 1 = a pre-4.0 v1 file still being
+    /// appended (a 3.x binary swap-back still works), 2 = v2. Follows
+    /// [`Self::on_persist_stats`]'s shard-gauge pattern.
+    fn on_aof_format(&self, _format: u8) {}
+
 
     /// One-shot boot-replay verdict for this shard: bytes dropped past
     /// the last replayable AOF frame (quarantined + truncated by the
