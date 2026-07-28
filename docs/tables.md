@@ -27,6 +27,12 @@ a row where that column is NULL (the absent-field semantics every
 index already has). The declaration buys you compiled access paths, a
 `VERIFY` surface, and one-verb lifecycle for all of them.
 
+> **Migrating from hand-maintained indexes?** Read
+> [table-migration.md](table-migration.md) first — eight
+> production-paid lessons, and the measured drift numbers (89 %
+> never-written, 76 % never-removed) that are the reason tables
+> exist.
+
 > **Declaration never panics.** `TABLE.DECLARE` / `Store::table_declare`
 > answer every invalid spec — unknown columns, colliding names, missing
 > PK, anything — with a named error, and a refused declare installs
@@ -63,10 +69,35 @@ TABLE.DECLARE name PREFIX p PK col
     COLUMN name i64|f64|str [COLUMN ...]
     [INDEX col range|unique [VALUES col ...]] ...
     [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] ...
+TABLE.ENSURE ...       # TABLE.DECLARE's boot form — see below
+TABLE.REPLACE ...      # explicit drop + declare + rebuild
 TABLE.DROP name        # drops the table + its compiled indexes; 1|0
 TABLE.LIST             # name/prefix/pk + column/index/orderpath counts
 TABLE.VERIFY name      # component fsck + a bounded column spot check
 ```
+
+## The boot pattern: `ensure`
+
+Declaring at boot is the steady state — the schema lives in your
+code, and every process start states it. `TABLE.ENSURE` (embedded:
+`Store::table_ensure`, returning `TableEnsure::{Created, Unchanged}`)
+takes the same grammar as `TABLE.DECLARE` and is its idempotent form:
+
+- **No such table** → declared and built: `Created`.
+- **Identical spec** → a no-op success: `Unchanged` (`+UNCHANGED` on
+  the wire). Every later boot takes this path.
+- **A different spec** → a **named refusal that says what changed**
+  (`COLUMNS`, `INDEXES`, `ORDERPATHS`, `PREFIX`, `PK`) — never a
+  silent rebuild. A rebuild is a full backfill over the prefix
+  domain; something that expensive must be asked for by name:
+  `TABLE.REPLACE` (embedded: `table_replace`) is that ask — explicit
+  drop + declare + rebuild, validating the new spec **before**
+  dropping the old table, so a bad replacement leaves the old table
+  serving.
+
+Plain `TABLE.DECLARE` remains the strict form: re-declaring an
+existing name is an error. Use `ensure` at boot, `replace` in
+migrations, `declare` when a duplicate name means a bug.
 
 - Column types are `i64 | f64 | str` — the scalar index types.
   Everything else (timestamps, booleans, enums) is app-encoded into
