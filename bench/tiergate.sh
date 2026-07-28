@@ -92,6 +92,51 @@ l8_mem_budget() { # -> "PASS ..." or "FAIL: why" on stdout
   fi
 }
 
+# ── L15 assertion body (v4.1-V5): idle CPU with tiering ON must sit
+# within a small multiple of OFF — the mailrs dogfood measurement
+# (300-500× before the generation cache + sampler backoff; they turned
+# the feature off). Linux-only (/proc stat ticks); run on lx64 with
+# TIERGATE_RUN_IDLE=1 KEVY_BIN=<path>.
+l15_idle_cpu() { # -> "PASS ..." or "FAIL: why" on stdout
+  local bin=${KEVY_BIN:?TIERGATE_RUN_IDLE needs KEVY_BIN}
+  local port=${TIERGATE_PORT:-6302}
+  local window=${TIERGATE_IDLE_SECS:-30}
+  measure_idle() { # $1 = tier budget ("" = tiering off) -> cpu ticks over the window
+    local dir; dir=$(mktemp -d)
+    if [ -n "$1" ]; then
+      KEVY_TIER_BUDGET="$1" "$bin" --port "$port" --threads 2 --dir "$dir" &>/dev/null &
+    else
+      "$bin" --port "$port" --threads 2 --dir "$dir" &>/dev/null &
+    fi
+    local srv=$!
+    sleep 1
+    # A text index over real rows — the stat-walk shape the old
+    # per-tick reserved_bytes feed paid for (F16a).
+    redis-cli -p "$port" IDX.CREATE ig ON PREFIX "m:" FIELD body TYPE text KIND text >/dev/null
+    for i in $(seq 1 5000); do
+      echo "HSET m:$i body \"alpha beta gamma delta epsilon zeta eta theta msg $i\""
+    done | redis-cli -p "$port" >/dev/null
+    sleep 3 # converge: backfill + first demote sweep settle
+    local t0 t1
+    t0=$(awk '{print $14+$15}' "/proc/$srv/stat")
+    sleep "$window"
+    t1=$(awk '{print $14+$15}' "/proc/$srv/stat")
+    kill "$srv" 2>/dev/null; sleep 0.2; kill -9 "$srv" 2>/dev/null; wait "$srv" 2>/dev/null
+    rm -rf "$dir"
+    echo $((t1 - t0))
+  }
+  local off on
+  off=$(measure_idle "")
+  on=$(measure_idle "64mb") # floor-dominated: the worst idle shape
+  # Small multiple: ≤ 3× plus 20 ticks of absolute slack (timer noise
+  # on a near-zero baseline). mailrs measured 300-500× before v4.1-V5.
+  if [ "$on" -le $((off * 3 + 20)) ]; then
+    echo "PASS: idle ${window}s cpu ticks off=$off on=$on (<= 3x + slack; was 300-500x)"
+  else
+    echo "FAIL: idle ${window}s cpu ticks off=$off on=$on exceeds 3x + 20 slack"
+  fi
+}
+
 echo "tiergate — capacity-arc tiering acceptance (RFC §2 B/D groups)"
 echo
 
@@ -115,6 +160,15 @@ else
 fi
 line "L10 rewrite-cold (B10)"  "PENDING(T4)" "BGREWRITEAOF on mostly-cold: digest equal + RAM bounded"
 line "L11 boot>budget (B11)"   "PENDING(T4)" "replay of dataset>budget: RSS <= budget x 1.05 throughout"
+if [ "${TIERGATE_RUN_IDLE:-0}" = "1" ]; then
+  l15_verdict=$(l15_idle_cpu)
+  case "$l15_verdict" in
+    PASS*) line "L15 idle-cpu (v4.1-V5)"  "PASS"  "${l15_verdict#PASS: }" ;;
+    *)     line "L15 idle-cpu (v4.1-V5)"  "FAIL"  "$l15_verdict" ;;
+  esac
+else
+  line "L15 idle-cpu (v4.1-V5)"  "PENDING(lx64)" "idle 30s ON <= 3x OFF (mailrs measured 300-500x); body landed, run with TIERGATE_RUN_IDLE=1 KEVY_BIN=…"
+fi
 env_line L12 "L12 D1-envelope"         "10M x 1KiB on 3GB + 2 idx: C4/C5 hold, hydration p95<=10ms"
 env_line L13 "L13 hydration-batch (D3)" "one batched submission per page; preads == rows"
 env_line L14 "L14 mixed-isolation (D4)" "hot p99 unchanged under cold scan + backfill"

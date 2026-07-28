@@ -49,6 +49,16 @@ untiered build — that is a gated claim, not a hope.
   **zero** keyspace events (it is not a write and not an eviction —
   clients treat `evicted` as key removal); it counts in a separate
   `demotions_total` gauge, never in `evicted_keys`.
+- **The index floor is not spillable — know it before picking a
+  budget.** Indexes, views and stored `VALUES` columns stay resident
+  (they are what makes cold rows cheap to find), so for an index-heavy
+  store the reachable RAM saving is bounded by everything **except**
+  that floor. A budget below the floor drives the demote target to 0:
+  the tier spills everything spillable once and can then do nothing
+  more — visible as `tier_effective_target:0` in `INFO`, and new
+  index declarations are refused by name. Size the budget from the
+  floor formulas in the budget model below, not from the raw data
+  size.
 
 ## Enabling it
 
@@ -276,6 +286,21 @@ Stated honestly, with the measured/pending status of each number:
   budgeted per call with tick continuation; the stall clamp
   (spill-induced p99 ≤ 1 ms) is its own gate line, also pending its
   bench-box measurement.
+- **Idle costs converge to nearly nothing** (v4.1). Two mechanisms,
+  both required — "idempotent is not convergent" was the lesson of a
+  consumer measuring 300–500× idle CPU with tiering on and turning
+  the feature off:
+  - The per-tick index/view floor feed is served from a
+    **generation cache**: an idle store recomputes nothing, and under
+    write load every segment statistic is a running counter (O(1))
+    rather than a walk over the index structures.
+  - The demote sampler **backs off exponentially** when a tick's
+    batch moves nothing while over target — including the
+    `effective_target = 0` state, which previously guaranteed one
+    full sample walk per tick forever. Any demotion (tick or write
+    path) resets the backoff; the write path itself always samples
+    immediately, so a fresh spillable value never waits out the
+    window (bounded at ~6 s).
 
 ## Operational notes
 

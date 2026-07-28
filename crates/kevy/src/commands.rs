@@ -140,6 +140,16 @@ impl Commands for KevyCommands {
         }
     }
 
+    fn on_flush(&self, store: &mut Store) {
+        let bits = self.gate_bits();
+        if bits & crate::state::IDX_NONEMPTY != 0 {
+            crate::index_runtime::on_flush(&self.ctx(), store);
+        }
+        if bits & crate::state::VIEW_NONEMPTY != 0 {
+            crate::view_runtime::on_flush(&self.ctx());
+        }
+    }
+
     fn geo_search(&self, store: &mut Store, argv: &[Vec<u8>]) -> kevy_rt::GeoHits {
         crate::dispatch_geo::geo_search(store, argv)
     }

@@ -9,9 +9,15 @@ use crate::ops_index::{IndexReg, ShardSegs};
 
 impl ShardSegs {
     /// Σ approximate heap bytes of this shard's index segments, every
-    /// kind — the tier's `reserved_bytes` floor feed.
+    /// kind — the tier's `reserved_bytes` floor feed. Served from the
+    /// generation cache: an idle store recomputes nothing (v4.1-V5 —
+    /// the walk behind this sum was mailrs's measured 300-500× idle
+    /// CPU term).
     #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
-    pub(crate) fn reserved_bytes(&self) -> u64 {
+    pub(crate) fn reserved_bytes(&mut self) -> u64 {
+        if !self.stats_dirty {
+            return self.reserved_cache;
+        }
         let mut sum: u64 = self.segs.iter().map(|(_, s)| s.stats().approx_bytes).sum();
         sum += self.agg.iter().map(|(_, a)| a.stats().approx_bytes).sum::<u64>();
         #[cfg(feature = "text")]
@@ -22,6 +28,8 @@ impl ShardSegs {
         {
             sum += self.ann.iter().map(|(_, g)| g.stats().approx_bytes).sum::<u64>();
         }
+        self.reserved_cache = sum;
+        self.stats_dirty = false;
         sum
     }
 }
@@ -144,6 +152,7 @@ fn rebuild_seg_lists(
     }
     shard_segs.agg = next_agg;
     shard_segs.version = ver;
+    shard_segs.stats_dirty = true;
 }
 
 /// Keep `spec`'s existing segment from `have` (position move), or
@@ -266,29 +275,40 @@ pub(crate) fn on_commit(
     let verb = parts.first().copied().unwrap_or(b"");
     if verb.eq_ignore_ascii_case(b"FLUSHALL") || verb.eq_ignore_ascii_case(b"FLUSHDB") {
         reset_all_segs(shard_segs);
+        shard_segs.stats_dirty = true;
         return;
     }
+    let dirty = &mut shard_segs.stats_dirty;
+    let (segs, agg) = (&mut shard_segs.segs, &mut shard_segs.agg);
+    #[cfg(feature = "text")]
+    let text = &mut shard_segs.text;
+    #[cfg(feature = "vector")]
+    let ann = &mut shard_segs.ann;
     each_written_key(verb, parts, |key| {
-        for (spec, seg) in &mut shard_segs.segs {
+        for (spec, seg) in &mut *segs {
             if key.starts_with(&spec.prefix) {
                 apply_key(store, spec, seg, key);
+                *dirty = true;
             }
         }
         #[cfg(feature = "text")]
-        for (spec, ts) in &mut shard_segs.text {
+        for (spec, ts) in &mut *text {
             if key.starts_with(&spec.prefix) {
                 apply_text_key(store, spec, ts, key);
+                *dirty = true;
             }
         }
         #[cfg(feature = "vector")]
-        for (spec, g) in &mut shard_segs.ann {
+        for (spec, g) in &mut *ann {
             if key.starts_with(&spec.prefix) {
                 apply_ann_key(store, spec, g, key);
+                *dirty = true;
             }
         }
-        for (spec, a) in &mut shard_segs.agg {
+        for (spec, a) in &mut *agg {
             if key.starts_with(&spec.prefix) {
                 apply_agg_key(store, spec, a, key);
+                *dirty = true;
             }
         }
     });
