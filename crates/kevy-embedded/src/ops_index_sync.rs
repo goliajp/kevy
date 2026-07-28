@@ -10,8 +10,8 @@ use crate::ops_index::{IndexReg, ShardSegs};
 impl ShardSegs {
     /// Σ approximate heap bytes of this shard's index segments, every
     /// kind — the tier's `reserved_bytes` floor feed. Served from the
-    /// generation cache: an idle store recomputes nothing (v4.1-V5 —
-    /// the walk behind this sum was mailrs's measured 300-500× idle
+    /// generation cache: an idle store recomputes nothing (—
+    /// the walk behind this sum was a consumer's measured 300-500× idle
     /// CPU term).
     #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
     pub(crate) fn reserved_bytes(&mut self) -> u64 {

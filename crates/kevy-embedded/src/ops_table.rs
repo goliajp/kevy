@@ -28,7 +28,7 @@ const SIDECAR: &str = "table-catalog.meta";
 /// One `TABLE.VERIFY` result: per compiled index its name + six
 /// counters (entries, bytes, coerce_failures, duplicates, drift,
 /// checked), plus the `(rows, type_mismatches)` spot-check pair.
-/// The v4.0 verify shape: six unnamed counters per index and two for
+/// The legacy verify shape: six unnamed counters per index and two for
 /// the spot check. Kept for semver; superseded by [`TableVerify`],
 /// whose fields carry the names and time semantics these arrays never
 /// could (dogfood F10).
@@ -293,7 +293,7 @@ fn strip_err(e: &str) -> &str {
 /// both directions.
 ///
 /// index→row (`drift`): every held entry re-derives from its row.
-/// row→index (v4.1-V4): every prefix row classifies against the spec,
+/// row→index: every prefix row classifies against the spec,
 /// with the cause kept — `absent` (NULL, by design), `coerce_failures`
 /// (present-but-wrong-type, fresh: the 4.0 lifetime counter of this
 /// name also swallowed absences), `excluded` (composite oversize, the

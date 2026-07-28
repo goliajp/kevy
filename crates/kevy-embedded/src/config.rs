@@ -305,7 +305,7 @@ impl Config {
     }
 
     /// Disable every automatic rewrite trigger — growth, absolute size
-    /// and interval — in one named call (v4.1-V7, dogfood F4). This is
+    /// and interval — in one named call This is
     /// the canary-window switch: the first rewrite is the documented
     /// one-way step that upgrades a 3.x-era AOF to v2
     /// ([`crate::Store::downgradeable_to_v3`] reads the window), so an

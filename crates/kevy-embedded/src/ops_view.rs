@@ -29,7 +29,7 @@ pub(crate) struct ViewReg {
 pub(crate) struct ShardViews {
     pub(crate) version: u64,
     pub(crate) views: Vec<ViewState>,
-    /// v4.1-V5 `reserved_bytes` generation cache — see
+    /// `reserved_bytes` generation cache — see
     /// `ShardSegs::stats_dirty`; same contract, view half. Tier-only,
     /// like its twin.
     #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]

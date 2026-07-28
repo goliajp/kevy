@@ -136,7 +136,7 @@ impl Aof {
     /// A `V1` answer means a 3.x binary can still open this file — the
     /// downgrade window `UPGRADING.md` describes is a *state*, and this
     /// is where an embedder reads it instead of telling their users
-    /// "assume it closed" (smix dogfood, 2026-07-26: their `doctor`
+    /// "assume it closed" (an embedder's dogfood ask: their `doctor`
     /// command wanted to say "you can still swap the binary back" and
     /// could not, because this was `pub(crate)`).
     #[must_use]

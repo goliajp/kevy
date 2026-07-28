@@ -154,7 +154,7 @@ impl Buckets {
 
     /// The `Many` index-map entry count (`One` keeps none) — the
     /// per-posting structure term of the memory formula, exposed so
-    /// the segment can maintain it by delta (v4.1-V5).
+    /// the segment can maintain it by delta.
     pub(crate) fn index_len(&self) -> u64 {
         match self {
             Buckets::One { .. } => 0,

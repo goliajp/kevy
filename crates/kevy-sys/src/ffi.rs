@@ -64,7 +64,7 @@ pub struct Kevent {
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 unsafe extern "C" {
     // task_info(2) on the calling task — the process-RSS probe
-    // (`INFO process_rss_bytes`, v4.1-V6). `mach_task_self_` is the
+    // (`INFO process_rss_bytes`). `mach_task_self_` is the
     // kernel-provided static the mach_task_self() macro reads.
     pub static mach_task_self_: u32;
     pub fn task_info(

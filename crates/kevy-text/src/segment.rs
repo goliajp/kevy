@@ -128,7 +128,7 @@ pub struct TextSegment {
     /// value fields (`VALUES`). Answers "what is THIS document's price",
     /// which the postings cannot — see [`crate::docvalues`].
     values: Option<DocValues>,
-    /// v4.1-V5 running counters, so `stats()` never walks the index.
+    /// Running counters, so `stats()` never walks the index.
     /// Each mirrors one walking term of the memory formula in
     /// `segment_stats.rs` (the walker survives there as the invariant
     /// the tests hold these to). `postings_total` is the postings

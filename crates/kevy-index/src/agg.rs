@@ -89,7 +89,7 @@ pub struct AggSegment {
     /// row key → (group, value) for O(log) update/remove.
     rows: HashMap<Vec<u8>, (Vec<u8>, IndexValue)>,
     excluded: u64,
-    /// v4.1-V5 running counters, so `stats()` never walks the maps
+    /// Running counters, so `stats()` never walks the maps
     /// (the walk ran on every tiering tick). Each mirrors one walking
     /// term of the byte formula; `recompute_stats` is the reference
     /// the tests hold them to.
@@ -272,7 +272,7 @@ impl AggSegment {
         self.rows.len() as u64
     }
 
-    /// Live counters — O(1) since v4.1-V5: every term is a running
+    /// Live counters — O(1): every term is a running
     /// counter maintained at the mutation sites. Byte constants
     /// calibrated against measured RSS growth at 1M rows / 10k Zipf
     /// groups (the first-cut 40/24 constants overestimated 2× —
@@ -444,7 +444,7 @@ mod tests {
         assert!(st.approx_bytes > 0);
     }
 
-    /// v4.1-V5: `stats()` reads running counters instead of walking the
+    /// `stats()` reads running counters instead of walking the
     /// maps. A mixed workload — inserts, the same-group fast path,
     /// group moves, removals down to empty — holds them to the walking
     /// reference after every step.

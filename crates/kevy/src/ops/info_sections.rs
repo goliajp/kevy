@@ -59,7 +59,7 @@ pub(super) fn info_memory(cfg: &Config, totals: &crate::state::Totals, b: &mut S
         eviction_str(cfg.memory.maxmemory_policy)
     ));
     b.push_str(&format!("evicted_keys:{}\r\n", totals.evicted_keys));
-    // The process, not the store (v4.1-V6, F16.2): size containers
+    // The process, not the store size containers
     // from RSS — indexes, buffers and allocator overhead live outside
     // `used_memory`. 0 on platforms without a probe.
     b.push_str(&format!(
@@ -122,7 +122,7 @@ pub(super) fn info_persistence(ctx: &Ctx<'_>, cfg: &Config, b: &mut String) {
         i32::from(in_flight)
     ));
     b.push_str(&format!("aof_rewrites_total:{rewrites}\r\n"));
-    // The on-disk format this shard's AOF speaks (v4.1-V6, the smix
+    // The on-disk format this shard's AOF speaks (the smix
     // ask's server twin): v1 = a pre-4.0 file still being appended, so
     // a 3.x binary swap-back still works; v2 closes that window.
     b.push_str(&format!(

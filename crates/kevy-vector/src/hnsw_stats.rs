@@ -13,7 +13,7 @@ impl Hnsw {
         self.live
     }
 
-    /// Counters — O(1) since v4.1-V5: `links_total` and `tombstones`
+    /// Counters — O(1): `links_total` and `tombstones`
     /// are maintained at the three mutation sites (link push, shrink,
     /// tombstoning) instead of walking every node per call (this ran
     /// on every tiering tick). [`Self::recompute_stats`] is the

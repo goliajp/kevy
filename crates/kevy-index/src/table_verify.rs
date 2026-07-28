@@ -18,7 +18,7 @@ pub struct IndexVerify {
     /// Approximate resident bytes of the index structure.
     pub approx_bytes: u64,
     /// Rows whose driving column is **present but fails to coerce** to
-    /// the declared type. Recomputed fresh on every call (v4.1-V4) —
+    /// the declared type. Recomputed fresh on every call —
     /// the 4.0 counter of this name was a lifetime tally that also
     /// swallowed absent-column rows, which is how a healthy migration
     /// once read as 30 152 live failures.

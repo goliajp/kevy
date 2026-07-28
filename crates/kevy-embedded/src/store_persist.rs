@@ -25,7 +25,7 @@ impl Store {
     /// keyspace export through a client. `None`: no AOF is configured —
     /// the question has no meaning for a memory-only store.
     ///
-    /// From the smix dogfood report (2026-07-26): their `doctor`
+    /// From an embedder's dogfood report: their `doctor`
     /// command exists to tell users "where you are and what to do
     /// next", and this state was `pub(crate)` — so their CHANGELOG had
     /// to declare the window closed unconditionally when it was open,

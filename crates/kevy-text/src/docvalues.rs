@@ -73,7 +73,7 @@ pub(crate) struct DocValues {
     /// allocation of its own and a lookup is one index.
     vals: Vec<Val>,
     /// Running Σ of every slot's spill heap — maintained per slot
-    /// write (v4.1-V5), so the memory formula never walks the column.
+    /// write, so the memory formula never walks the column.
     heap_bytes: u64,
 }
 
@@ -121,7 +121,7 @@ impl DocValues {
 
     /// Approximate heap bytes — the stored-value term of the memory
     /// formula. O(1): the slot table charges by capacity and the spill
-    /// heap is a running counter (v4.1-V5).
+    /// heap is a running counter.
     pub(crate) fn approx_bytes(&self) -> u64 {
         self.vals.capacity() as u64 * std::mem::size_of::<Val>() as u64 + self.heap_bytes
     }

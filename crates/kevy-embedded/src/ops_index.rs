@@ -91,7 +91,7 @@ pub(crate) struct ShardSegs {
     pub(crate) ann: Vec<(IndexSpec, kevy_vector::Hnsw)>,
     /// Aggregate segments for KIND agg specs.
     pub(crate) agg: Vec<(IndexSpec, kevy_index::AggSegment)>,
-    /// v4.1-V5 `reserved_bytes` generation cache: set by every
+    /// `reserved_bytes` generation cache: set by every
     /// segment-mutating chokepoint (`on_commit` applies, list
     /// rebuilds, FLUSH resets) via [`ShardSegs::mark_stats_dirty`];
     /// an idle tick reads the cached sum instead of walking every
