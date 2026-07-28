@@ -72,6 +72,10 @@ impl Commands for KevyCommands {
         self.shard_ctx().set_persist_stats(in_flight, aof_rewrites_total);
     }
 
+    fn on_aof_format(&self, format: u8) {
+        self.shard_ctx().set_aof_format(format);
+    }
+
     fn on_replay_report(&self, dropped_bytes: u64, corrupt: bool) {
         // Boot-replay verdict for `INFO persistence` — non-zero drops are
         // the operator's alert signal (the store holds less than the AOF

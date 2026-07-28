@@ -142,6 +142,11 @@ impl<C: Commands> Shard<C> {
             self.persist.busy() || self.aof.as_ref().is_some_and(kevy_persist::Aof::is_rewriting);
         let rewrites = self.aof.as_ref().map_or(0, kevy_persist::Aof::rewrites_total);
         self.commands.on_persist_stats(in_flight, rewrites);
+        self.commands.on_aof_format(match self.aof.as_ref().map(kevy_persist::Aof::format) {
+            None => 0,
+            Some(kevy_persist::AofFormat::V1) => 1,
+            Some(kevy_persist::AofFormat::V2) => 2,
+        });
     }
 
     /// Publish this shard's live client-conn count (cluster-bus links
