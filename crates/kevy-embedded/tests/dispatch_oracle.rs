@@ -33,16 +33,18 @@ fn workspace_root() -> PathBuf {
 /// `target/debug/kevy`, building it first if absent.
 fn server_binary() -> PathBuf {
     let root = workspace_root();
-    let bin = root.join("target/debug/kevy");
-    if !bin.exists() {
-        let status = Command::new("cargo")
-            .args(["build", "-p", "kevy"])
-            .current_dir(&root)
-            .status()
-            .expect("spawn cargo build -p kevy");
-        assert!(status.success(), "cargo build -p kevy failed");
-    }
-    bin
+    // ALWAYS run the build — cargo is incremental, so a fresh binary
+    // costs nothing and a stale one costs an afternoon: build-if-absent
+    // served a cached pre-4.1 binary on CI (restored target/ cache) and
+    // twice on a dev box, each time as a baffling oracle mismatch
+    // against a server that "couldn't" be emitting that reply.
+    let status = Command::new("cargo")
+        .args(["build", "-p", "kevy"])
+        .current_dir(&root)
+        .status()
+        .expect("spawn cargo build -p kevy");
+    assert!(status.success(), "cargo build -p kevy failed");
+    root.join("target/debug/kevy")
 }
 
 fn spawn_server(dir: &std::path::Path) -> ServerGuard {

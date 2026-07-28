@@ -93,10 +93,27 @@ pub(crate) struct ShardSegs {
     pub(crate) agg: Vec<(IndexSpec, kevy_index::AggSegment)>,
     /// v4.1-V5 `reserved_bytes` generation cache: set by every
     /// segment-mutating chokepoint (`on_commit` applies, list
-    /// rebuilds, FLUSH resets); an idle tick reads the cached sum
-    /// instead of walking every segment's stats.
+    /// rebuilds, FLUSH resets) via [`ShardSegs::mark_stats_dirty`];
+    /// an idle tick reads the cached sum instead of walking every
+    /// segment's stats. Compiled with the tier backend only — on
+    /// targets without it (wasm) nothing reads the cache.
+    #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
     pub(crate) stats_dirty: bool,
+    #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
     pub(crate) reserved_cache: u64,
+}
+
+impl ShardSegs {
+    /// Invalidate the `reserved_bytes` cache — a no-op on targets
+    /// without the tier backend, so mutation chokepoints call it
+    /// unconditionally.
+    #[inline]
+    pub(crate) fn mark_stats_dirty(&mut self) {
+        #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+        {
+            self.stats_dirty = true;
+        }
+    }
 }
 
 #[cfg(feature = "persist")]

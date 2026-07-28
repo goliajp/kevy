@@ -46,7 +46,11 @@ refuse() { echo "pgcompare: REFUSED — $1" >&2; exit 2; }
 mkdir -p "$WORK"; : >"$OUT"
 CSV="$WORK/data.csv"
 
-cleanup() { pkill -f "kevy --port $KPORT" 2>/dev/null; }
+cleanup() {
+  # killgate: an empty KPORT would make this pattern match everything.
+  [ -n "${KPORT}" ] || return 0
+  pkill -f "kevy --port $KPORT" 2>/dev/null
+}
 trap cleanup EXIT
 
 echo "== dataset =="
@@ -129,7 +133,7 @@ PY
   esac
   "$VENV" "$PY" kevy --csv "$CSV" --port "$KPORT" --mode "$MODE" \
     --datadir "$DIR" --samples "${PGCMP_SAMPLES:-5000}" | tee -a "$OUT"
-  pkill -f "kevy --port $KPORT" 2>/dev/null; sleep 1
+  [ -n "${KPORT}" ] && pkill -f "kevy --port $KPORT" 2>/dev/null; sleep 1
 done
 
 echo
