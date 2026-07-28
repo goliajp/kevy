@@ -21,8 +21,7 @@
 //! nothing. Like [`crate::positions`], it hangs off the hot path — an
 //! unscoped query never touches it.
 
-use crate::docblobs::{DocBlobs, channel_bytes, get_varints, put_varint};
-use std::collections::HashMap;
+use crate::docblobs::{Channel, get_varints, put_varint};
 
 /// The per-field side-channel of a multi-field segment.
 #[derive(Debug)]
@@ -32,7 +31,7 @@ pub(crate) struct FieldStats {
     n: usize,
     /// token → (doc id → varint blob of weighted per-field tf, in field
     /// order).
-    tf: HashMap<Vec<u8>, DocBlobs>,
+    tf: Channel,
     /// Per-field corpus token totals, for a field-scoped average length.
     total_len: Vec<u64>,
     /// id → per-field token counts, flat with stride `n` so a document
@@ -42,7 +41,7 @@ pub(crate) struct FieldStats {
 
 impl FieldStats {
     pub(crate) fn new(n: usize) -> Self {
-        Self { n, tf: HashMap::new(), total_len: vec![0; n], doc_len: Vec::new() }
+        Self { n, tf: Channel::default(), total_len: vec![0; n], doc_len: Vec::new() }
     }
 
     /// Record `id`'s weighted per-field frequencies for `token`.
@@ -51,22 +50,13 @@ impl FieldStats {
         for &v in per_field {
             put_varint(&mut blob, v);
         }
-        match self.tf.get_mut(token) {
-            Some(db) => db.set(id, blob),
-            None => {
-                self.tf.insert(token.to_vec(), DocBlobs::One { id, blob });
-            }
-        }
+        self.tf.set(token, id, blob);
     }
 
     /// Drop `id` from `token`, removing the token once its last document
     /// is gone.
     pub(crate) fn remove(&mut self, token: &[u8], id: u32) {
-        if let Some(db) = self.tf.get_mut(token)
-            && db.remove(id)
-        {
-            self.tf.remove(token);
-        }
+        self.tf.remove(token, id);
     }
 
     /// Record `id`'s per-field token counts, growing the flat table as
@@ -146,8 +136,18 @@ impl FieldStats {
     }
 
     /// Approximate heap bytes — the per-field term of the memory formula.
+    /// O(1) — the channel term is maintained incrementally (v4.1-V5)
+    /// and the flat tables charge by capacity.
     pub(crate) fn approx_bytes(&self) -> u64 {
-        channel_bytes(&self.tf)
+        self.tf.bytes()
+            + (self.doc_len.capacity() as u64) * 4
+            + (self.total_len.capacity() as u64) * 8
+    }
+
+    /// The walking reference for the invariant test.
+    #[cfg(test)]
+    pub(crate) fn recompute_bytes(&self) -> u64 {
+        self.tf.recompute()
             + (self.doc_len.capacity() as u64) * 4
             + (self.total_len.capacity() as u64) * 8
     }
@@ -202,6 +202,6 @@ mod tests {
         assert_eq!(fs.docs_in(b"a", &[0, 1]), vec![(2, 1)]);
         fs.remove(b"a", 2);
         assert!(fs.docs_in(b"a", &[0, 1]).is_empty());
-        assert!(!fs.tf.contains_key(b"a".as_slice()), "empty token dropped");
+        assert!(fs.tf.get(b"a").is_none(), "empty token dropped");
     }
 }

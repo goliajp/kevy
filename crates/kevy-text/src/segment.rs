@@ -128,6 +128,15 @@ pub struct TextSegment {
     /// value fields (`VALUES`). Answers "what is THIS document's price",
     /// which the postings cannot — see [`crate::docvalues`].
     values: Option<DocValues>,
+    /// v4.1-V5 running counters, so `stats()` never walks the index.
+    /// Each mirrors one walking term of the memory formula in
+    /// `segment_stats.rs` (the walker survives there as the invariant
+    /// the tests hold these to). `postings_total` is the postings
+    /// gauge; the other three are the segment-owned byte terms.
+    postings_total: u64,
+    token_bytes: u64,
+    many_slots: u64,
+    doc_bytes: u64,
 }
 
 impl TextSegment {
@@ -227,14 +236,19 @@ impl TextSegment {
             return;
         }
         let id = self.take_id(key, dl);
+        self.doc_bytes += doc_record_bytes(key, fields);
         self.docs.insert(key.to_vec(), (id, dl, fields.to_vec()));
         self.total_len += u64::from(dl);
         for (t, tf) in tf_map {
+            self.postings_total += 1;
             match self.postings.entry(t) {
                 std::collections::hash_map::Entry::Occupied(mut e) => {
+                    let before = e.get().index_len();
                     e.get_mut().insert(tf, dl, id);
+                    self.many_slots += e.get().index_len() - before;
                 }
                 std::collections::hash_map::Entry::Vacant(v) => {
+                    self.token_bytes += v.key().len() as u64 + 48;
                     v.insert(Buckets::new_one(tf, dl, id));
                 }
             }
@@ -300,12 +314,17 @@ impl TextSegment {
         let Some((old_id, old_len, old_fields)) = self.docs.remove(key) else {
             return;
         };
+        self.doc_bytes -= doc_record_bytes(key, &old_fields);
         self.total_len -= u64::from(old_len);
         for (t, tf) in weighted_tf(&old_fields).0 {
             if let Some(list) = self.postings.get_mut(&t) {
+                let before = list.index_len();
                 list.remove(tf, old_len, old_id);
+                self.many_slots -= before - list.index_len();
+                self.postings_total -= 1;
                 if list.is_empty() {
                     self.postings.remove(&t);
+                    self.token_bytes -= t.len() as u64 + 48;
                 }
             }
             if let Some(pos) = self.positions.as_mut() {
@@ -324,6 +343,14 @@ impl TextSegment {
         self.id_key[old_id as usize] = None;
         self.free_ids.push(old_id);
     }
+}
+
+/// One document's term of the docs-table byte formula: key stored
+/// twice, each field's text + a small header, and the record fixed
+/// cost — the exact per-entry term `recompute_stats` walks.
+fn doc_record_bytes(key: &[u8], fields: &[IndexedField]) -> u64 {
+    let text: usize = fields.iter().map(|(t, _)| t.len() + 4).sum();
+    (2 * key.len() + text + 110) as u64
 }
 
 /// Aggregate token counts for one document's token stream.

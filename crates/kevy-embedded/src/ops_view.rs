@@ -29,6 +29,10 @@ pub(crate) struct ViewReg {
 pub(crate) struct ShardViews {
     pub(crate) version: u64,
     pub(crate) views: Vec<ViewState>,
+    /// v4.1-V5 `reserved_bytes` generation cache — see
+    /// `ShardSegs::stats_dirty`; same contract, view half.
+    pub(crate) stats_dirty: bool,
+    pub(crate) reserved_cache: u64,
 }
 
 pub(crate) struct ViewState {
@@ -42,11 +46,18 @@ impl ShardViews {
     /// view half of the tier's `reserved_bytes` feed.
     /// Virtual views hold no set and contribute nothing.
     #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
-    pub(crate) fn reserved_bytes(&self) -> u64 {
-        self.views
+    pub(crate) fn reserved_bytes(&mut self) -> u64 {
+        if !self.stats_dirty {
+            return self.reserved_cache;
+        }
+        let sum = self
+            .views
             .iter()
             .map(|v| v.mat.as_ref().map_or(0, MaterializedSet::approx_bytes))
-            .sum()
+            .sum();
+        self.reserved_cache = sum;
+        self.stats_dirty = false;
+        sum
     }
 }
 
@@ -160,6 +171,7 @@ impl Store {
             desc = vs.spec.desc;
             if vs.needs_rebuild {
                 rebuild(vs, &inner.idx_segs);
+                inner.view_segs.stats_dirty = true;
             }
             match &vs.mat {
                 Some(m) => all.extend(m.page(after, limit, vs.spec.desc)),
@@ -307,6 +319,7 @@ pub(crate) fn sync_views(reg: &ViewReg, sv: &mut ShardViews, segs: &ShardSegs) {
     if sv.version == *ver {
         return;
     }
+    sv.stats_dirty = true;
     let mut next = Vec::new();
     for spec in cat.iter() {
         match sv.views.iter().position(|v| v.spec == *spec) {
@@ -352,12 +365,16 @@ pub(crate) fn on_commit(
                 m.clear();
             }
         }
+        sv.stats_dirty = true;
         return;
     }
     // Same exact written-key walk as the index hook.
+    let dirty = &mut sv.stats_dirty;
+    let views = &mut sv.views;
     crate::ops_index::each_written_key_pub(verb, parts, |key| {
-        for vs in &mut sv.views {
+        for vs in &mut *views {
             let Some(mat) = &mut vs.mat else { continue };
+            *dirty = true;
             let r = resolver(segs);
             let member = key_in_tree(&vs.spec.tree, key, &&r);
             let order = r(&vs.spec.order_by).and_then(|s| s.verify_entry(key)).cloned();

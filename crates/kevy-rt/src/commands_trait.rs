@@ -89,6 +89,7 @@ pub trait Commands: Clone + Send + 'static {
     /// Default: no-op.
     fn on_persist_stats(&self, _in_flight: bool, _aof_rewrites_total: u64) {}
 
+
     /// One-shot boot-replay verdict for this shard: bytes dropped past
     /// the last replayable AOF frame (quarantined + truncated by the
     /// repair) and whether the stop was a corrupt frame. Fires once,
@@ -198,6 +199,13 @@ pub trait Commands: Clone + Send + 'static {
     /// construction). Runs on the shard thread with store access —
     /// implementations must be cheap when their feature is off.
     fn on_write(&self, _store: &mut Store, _key: &[u8]) {}
+
+    /// Keyspace-wide invalidation hook: called after FLUSHALL/FLUSHDB
+    /// has emptied this shard's store (both the client path and the
+    /// replica apply path execute the same op). Synchronous index
+    /// maintenance resets its derived structures here — a flushed
+    /// keyspace must not keep answering from stale index entries.
+    fn on_flush(&self, _store: &mut Store) {}
 
     /// Called once per client command at dispatch entry (before routing /
     /// fan-out, so a multi-key command counts once). kevy uses it for

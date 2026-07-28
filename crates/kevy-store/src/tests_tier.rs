@@ -532,3 +532,61 @@ fn max_spill_caps_the_largest_demotable_value() {
     assert!(s.debug_force_demote(b"big"));
     assert!(is_cold(&s, b"big"));
 }
+
+/// v4.1-V5: a tick whose batch moves nothing while over target backs
+/// off exponentially — "idempotent is not convergent"; the old
+/// behavior re-walked the sample window every tick forever (mailrs
+/// measured it as 300-500× idle CPU with tiering on).
+#[test]
+fn a_dry_tick_backs_off_exponentially_to_the_ceiling() {
+    let (mut s, _d) = tiered("tier-backoff", 1); // budget 1 ⇒ always over
+    s.set(b"int", b"42".to_vec(), None, false, false); // nothing spillable
+    let skip = |s: &Store| {
+        let t = s.tier.as_ref().unwrap();
+        (t.tick_skip, t.tick_wait)
+    };
+    assert_eq!(s.demote_step(), 0, "dry batch");
+    assert_eq!(skip(&s), (1, 1), "first dry tick arms a 1-tick skip");
+    assert_eq!(s.demote_step(), 0, "skipped tick: decrement only");
+    assert_eq!(skip(&s), (1, 0));
+    assert_eq!(s.demote_step(), 0, "dry again");
+    assert_eq!(skip(&s), (2, 2), "the skip doubles");
+    for _ in 0..2000 {
+        let _ = s.demote_step();
+    }
+    assert_eq!(
+        skip(&s).0,
+        crate::tier_demote::BACKOFF_CEILING_TICKS,
+        "the skip is capped, never unbounded"
+    );
+}
+
+/// The write path never waits out a backoff window — it samples on
+/// every over-target commit, and its progress wakes the tick sampler.
+#[test]
+fn a_write_path_demotion_wakes_the_backed_off_tick() {
+    let (mut s, _d) = tiered("tier-backoff-reset", 1);
+    s.set(b"int", b"42".to_vec(), None, false, false);
+    for _ in 0..10 {
+        let _ = s.demote_step();
+    }
+    assert!(s.tier.as_ref().unwrap().tick_skip >= 2, "backed off");
+    s.set(b"bulk", vec![b'b'; 4096], None, false, false);
+    assert_eq!(s.try_demote_after_write(), 1, "write path samples during the window");
+    let t = s.tier.as_ref().unwrap();
+    assert_eq!((t.tick_skip, t.tick_wait), (0, 0), "progress resets the tick backoff");
+}
+
+/// `effective_target == 0` (the index floor alone exceeds the budget)
+/// enters the same idle path: the tick can never make progress there,
+/// and before v4.1-V5 it was guaranteed one full sample walk per tick
+/// forever.
+#[test]
+fn a_zero_effective_target_backs_off_like_any_dry_tick() {
+    let (mut s, _d) = tiered("tier-backoff-floor", 1 << 20);
+    s.set_tier_reserved(1 << 30); // floor >> budget ⇒ effective_target 0
+    s.set(b"bulk", vec![b'b'; 4096], None, false, false);
+    assert_eq!(s.demote_step(), 1, "the one spillable value still demotes");
+    assert_eq!(s.demote_step(), 0, "then the tick runs dry");
+    assert_eq!(s.tier.as_ref().unwrap().tick_skip, 1, "and backs off");
+}

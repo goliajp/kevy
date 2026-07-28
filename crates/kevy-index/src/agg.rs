@@ -89,6 +89,13 @@ pub struct AggSegment {
     /// row key → (group, value) for O(log) update/remove.
     rows: HashMap<Vec<u8>, (Vec<u8>, IndexValue)>,
     excluded: u64,
+    /// v4.1-V5 running counters, so `stats()` never walks the maps
+    /// (the walk ran on every tiering tick). Each mirrors one walking
+    /// term of the byte formula; `recompute_stats` is the reference
+    /// the tests hold them to.
+    distinct_total: u64,
+    gkey_bytes: u64,
+    row_key_bytes: u64,
 }
 
 impl AggSegment {
@@ -122,9 +129,14 @@ impl AggSegment {
                 Some(m) if *m > 1 => *m -= 1,
                 _ => {
                     g.values.remove(old_val);
+                    self.distinct_total -= 1;
                 }
             }
-            *g.values.entry(val.clone()).or_insert(0) += 1;
+            let slot = g.values.entry(val.clone()).or_insert(0);
+            *slot += 1;
+            if *slot == 1 {
+                self.distinct_total += 1;
+            }
             *old_val = val.clone();
             return;
         }
@@ -136,9 +148,17 @@ impl AggSegment {
                     sum: 0.0,
                     values: BTreeMap::new(),
                 });
+                if g.count == 0 {
+                    self.gkey_bytes += group.len() as u64;
+                }
                 g.count += 1;
                 g.sum += val.as_f64();
-                *g.values.entry(val.clone()).or_insert(0) += 1;
+                let slot = g.values.entry(val.clone()).or_insert(0);
+                *slot += 1;
+                if *slot == 1 {
+                    self.distinct_total += 1;
+                }
+                self.row_key_bytes += key.len() as u64 + 10;
                 self.rows.insert(key.to_vec(), (group, val));
             }
             None if excluded_row => self.excluded += 1,
@@ -150,6 +170,7 @@ impl AggSegment {
     /// key); drops the group when its last row leaves.
     fn retract_row(&mut self, key: &[u8]) {
         if let Some((old_group, old_val)) = self.rows.remove(key) {
+            self.row_key_bytes -= key.len() as u64 + 10;
             let empty = {
                 let g = self.groups.get_mut(&old_group).expect("group of live row");
                 g.count -= 1;
@@ -158,12 +179,14 @@ impl AggSegment {
                     Some(m) if *m > 1 => *m -= 1,
                     _ => {
                         g.values.remove(&old_val);
+                        self.distinct_total -= 1;
                     }
                 }
                 g.count == 0
             };
             if empty {
                 self.groups.remove(&old_group);
+                self.gkey_bytes -= old_group.len() as u64;
             }
         }
     }
@@ -242,11 +265,28 @@ impl AggSegment {
         self.rows.len() as u64
     }
 
-    /// Live counters. Byte constants calibrated against measured RSS
-    /// growth at 1M rows / 10k Zipf groups (the first-cut 40/24
-    /// constants overestimated 2× — BTreeMap packs ~11 entries per
-    /// node and the reverse map's vecs are small-alloc pooled).
+    /// Live counters — O(1) since v4.1-V5: every term is a running
+    /// counter maintained at the mutation sites. Byte constants
+    /// calibrated against measured RSS growth at 1M rows / 10k Zipf
+    /// groups (the first-cut 40/24 constants overestimated 2× —
+    /// BTreeMap packs ~11 entries per node and the reverse map's vecs
+    /// are small-alloc pooled).
     pub fn stats(&self) -> AggStats {
+        AggStats {
+            groups: self.groups.len() as u64,
+            rows: self.rows.len() as u64,
+            excluded: self.excluded,
+            approx_bytes: self.gkey_bytes
+                + self.groups.len() as u64 * 64
+                + self.distinct_total * 18
+                + self.row_key_bytes,
+        }
+    }
+
+    /// The walking reference — recomputes every byte term from the
+    /// live maps. Test-only: production reads the running counters.
+    #[cfg(test)]
+    pub(crate) fn recompute_stats(&self) -> AggStats {
         let distinct: u64 = self.groups.values().map(|g| g.values.len() as u64).sum();
         let gkey: u64 = self.groups.keys().map(|k| k.len() as u64).sum();
         let rowbytes: u64 = self.rows.keys().map(|k| (k.len() + 10) as u64).sum();
@@ -395,5 +435,43 @@ mod tests {
         let st = s.stats();
         assert_eq!((st.groups, st.rows), (2, 5));
         assert!(st.approx_bytes > 0);
+    }
+
+    /// v4.1-V5: `stats()` reads running counters instead of walking the
+    /// maps. A mixed workload — inserts, the same-group fast path,
+    /// group moves, removals down to empty — holds them to the walking
+    /// reference after every step.
+    #[test]
+    fn running_stats_never_drift_from_the_walking_reference() {
+        let mut s = AggSegment::new();
+        let check = |s: &AggSegment, at: &str| {
+            assert_eq!(s.stats(), s.recompute_stats(), "counter drift after {at}");
+        };
+        let mut x = 0x2545F491u64;
+        let mut next = move || {
+            x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (x >> 33) as u32
+        };
+        let groups = [b"eng".as_slice(), b"sales", b"ops"];
+        for round in 0..300u32 {
+            let key = format!("r:{}", next() % 30);
+            match next() % 6 {
+                0 => s.apply(key.as_bytes(), None, false),
+                1 => s.apply(key.as_bytes(), None, true), // excluded
+                _ => {
+                    let g = groups[(next() % 3) as usize].to_vec();
+                    // Small value domain forces shared distinct entries.
+                    let v = IndexValue::I64(i64::from(next() % 7));
+                    s.apply(key.as_bytes(), Some((g, v)), false);
+                }
+            }
+            check(&s, &format!("round {round}"));
+        }
+        for i in 0..30u32 {
+            s.apply(format!("r:{i}").as_bytes(), None, false);
+        }
+        check(&s, "full drain");
+        let end = s.stats();
+        assert_eq!((end.groups, end.rows), (0, 0));
     }
 }
