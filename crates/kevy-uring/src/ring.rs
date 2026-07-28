@@ -416,21 +416,33 @@ impl IoUring {
             None => (c_long::from(self.ring_fd), 0),
         };
         enter_flags |= extra_flags;
-        // SAFETY: kernel-validated args; no Rust memory is read/written.
-        let ret = unsafe {
-            ffi::syscall(
-                SYS_IO_URING_ENTER,
-                syscall_fd,
-                ffi::arg(to_submit),
-                ffi::arg(wait_nr),
-                ffi::arg(enter_flags),
-                ptr::null::<c_void>(),
-                0usize,
-            )
+        // Retried on EINTR like every other syscall loop in the tree
+        // (the pollers, the socket reads, the accept loop): a signal
+        // landing mid-enter — SIGSTOP/SIGCONT included — must not kill
+        // the shard. Re-entering with the same arguments is safe: the
+        // kernel derives the submit count from the shared SQ cursors,
+        // so nothing double-submits.
+        let ret = loop {
+            // SAFETY: kernel-validated args; no Rust memory is read/written.
+            let r = unsafe {
+                ffi::syscall(
+                    SYS_IO_URING_ENTER,
+                    syscall_fd,
+                    ffi::arg(to_submit),
+                    ffi::arg(wait_nr),
+                    ffi::arg(enter_flags),
+                    ptr::null::<c_void>(),
+                    0usize,
+                )
+            };
+            if r >= 0 {
+                break r;
+            }
+            let e = io::Error::last_os_error();
+            if e.kind() != io::ErrorKind::Interrupted {
+                return Err(e);
+            }
         };
-        if ret < 0 {
-            return Err(io::Error::last_os_error());
-        }
         // Real enter happened — the skip counter resets.
         self.iters_since_enter = 0;
         Ok(ret as u32)
