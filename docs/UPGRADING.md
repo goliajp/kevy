@@ -201,7 +201,11 @@ site instead of chasing compile errors one page at a time, run the
 compiler as a query —
 `cargo check --message-format=json 2>/dev/null | jq -r 'select(.reason=="compiler-message") | .message.spans[]? | select(.is_primary) | "\(.file_name):\(.line_start)"' | sort -u`
 — the deduplicated list is your worklist, and its length is your
-estimate.
+estimate. One more thing that consumer learned the slow way: the
+error count is **not monotonic** — binary crates only surface their
+conversion errors after the libraries they depend on compile, so run
+the loop to a fixed point (a pass that changes nothing), not down to
+a count.
 
 (`kevy-resp-client` keeps its `io::Result` face on purpose — it is a
 pure transport stone and `io::Error` is its honest currency.)
