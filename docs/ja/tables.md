@@ -15,6 +15,8 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20
 
 行はこれまでどおり、プレフィックス配下のハッシュキーです——テーブルを宣言しても書き方は何ひとつ変わらず（`HSET u:1 name alice age 30 …`）、**スキーマも課されません**。宣言済みカラムを欠いた行は、そのカラムが NULL の行です（すべてのインデックスがもともと持つ、フィールド欠落の意味論）。宣言が買ってくれるのは、コンパイル済みのアクセスパスと、`VERIFY` の面と、その全体をひとつの動詞で扱うライフサイクルです。
 
+> **手書きインデックスからの移行なら**、まず [table-migration.md](table-migration.md) を読んでください——本番で対価を払って得た 8 つの教訓と、テーブルが存在する理由そのものである実測ドリフト（89 % が書かれず、76 % が消されず）が載っています。
+
 ## 宣言モデル
 
 `TABLE.DECLARE` は各句を名前つきインデックスへコンパイルします。
@@ -35,16 +37,33 @@ TABLE.DECLARE name PREFIX p PK col
     COLUMN name i64|f64|str [COLUMN ...]
     [INDEX col range|unique [VALUES col ...]] ...
     [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] ...
+TABLE.ENSURE ...       # TABLE.DECLARE の起動時イディオム——下記参照
+TABLE.REPLACE ...      # 明示の drop + declare + 再構築
 TABLE.DROP name        # drops the table + its compiled indexes; 1|0
 TABLE.LIST             # name/prefix/pk + column/index/orderpath counts
 TABLE.VERIFY name      # component fsck + a bounded column spot check
 ```
 
+## 起動パターン：`ensure`
+
+起動時の宣言こそが定常状態です——スキーマはコードに住み、プロセスが立ち上がるたびにそれを表明します。`TABLE.ENSURE`（組み込みでは `Store::table_ensure`、返り値は `TableEnsure::{Created, Unchanged}`）は `TABLE.DECLARE` と同じ文法を取る冪等形です。
+
+- **テーブルがない** → 宣言して構築：`Created`。
+- **同一の spec** → 何もしない成功：`Unchanged`（ワイヤ上は `+UNCHANGED`）。2 回目以降の起動はすべてこの経路です。
+- **異なる spec** → **どこが変わったかを名指しする拒否**（`COLUMNS` / `INDEXES` / `ORDERPATHS` / `PREFIX` / `PK`）——黙った再構築は決して起きません。再構築はプレフィックス領域全体の埋め戻しであり、それほど高価なものは名前で要求されるべきです。その要求が `TABLE.REPLACE`（組み込みでは `table_replace`）です——明示の drop + declare + 再構築で、旧テーブルを落とす**前に**新しい spec を検証するので、壊れた置き換えは旧テーブルを生かしたままにします。
+
+素の `TABLE.DECLARE` は厳格形のままです。既存名の再宣言はエラーです。起動時は `ensure`、マイグレーションでは `replace`、名前の重複がバグを意味する場面では `declare` を使ってください。
+
 - カラム型は `i64 | f64 | str`——スカラーインデックスの型そのものです。それ以外（タイムスタンプ、ブール、列挙）はアプリ側でこの 3 つのどれかにエンコードし、粗い対応づけは隠さずに明言されます（kevy-sql は型変換されたカラムごとに注記を出力します）。
 - `PK` は宣言済みカラムを指します。これはドキュメントであり、`VERIFY` の面です——行はこれまでどおりキーで指されます。`serial` 式の id 割り当てはレシピ（[シーケンスのレシピ](cookbook.md#3-sequences)）であって、エンジンの機能ではありません。
 - テーブルは最大 64 個。構造上の拒否はすべて名前つきです（重複カラム、未知の `VALUES` カラム、名前衝突、……）。黙って通ることはありません。
 
-`TABLE.VERIFY` は、コンパイルされた各インデックスのドリフト再チェック（`IDX.VERIFY` のカウンタ——entries / bytes / coerce_failures / duplicates / drift / checked、インデックスごと）に加え、有界の抜き取り検査を走らせます——shard ごとに最大 64 行をサンプルし、*存在する*宣言済みカラムのすべてが宣言どおりの型に変換できることを表明します（欠落は NULL であって、エラーではありません）。構成インデックスのどれかがまだ埋め戻し中なら、`-INDEXBUILDING` を答えます。
+`TABLE.VERIFY` は**すべてのカウンタを、呼び出しの瞬間に、双方向で**再計算します（4.1——以前の `coerce_failures` は累積値で、しかも欠落カラムまで呑み込んでいたため、隣の新鮮な `drift` と読み合わせられませんでした）。
+
+- **index→row**：`entries` / `bytes` / `duplicates` / `drift` / `checked`——保持している全エントリを行から再導出。
+- **row→index**：プレフィックス配下の全行を原因つきで分類——歩いた `rows`、`coerce_failures`（存在するのに型変換に失敗）、`excluded`（複合の `str` 成分が 255 バイト超）、`absent`（成分カラムの欠落：設計上の NULL であってエラーではない）、そして **`missing`**（値を導出できるのにエントリがない行——このテーブルの存在を忘れた writer。ドリフト走査には構造的に見えない唯一のクラス）。
+
+何も壊れていなければ `entries = rows − excluded − absent − coerce_failures` が成り立ち、除外の各原因は「説明のつかない entries の差」ではなく、それぞれの名前を持ちます。加えて有界の抜き取り検査（shard ごとに最大 64 行）が、*存在する*宣言済みカラムの型変換可能性を表明します。構成インデックスのどれかがまだ埋め戻し中なら、`-INDEXBUILDING` を答えます。
 
 ## 複合 ORDERPATH の意味論
 
@@ -55,6 +74,7 @@ ORDERPATH は[複合順序のレシピ](cookbook.md#8-composite-ordering-order-b
 - **成分ごとの `DESC`** は保存順に反映されるので、`ON dept THEN age DESC` は各部門の行を、再ソートなしで最も古く大きい端からページングします。
 - **成分カラムをひとつでも欠く行は、複合インデックスから除外されます**（型変換の失敗も同様）——他のすべてのアクセスパスからは完全に見えたままです。**255 バイト**を超える `str` 成分も行を除外します。リレーショナルの B-tree がインデックス行サイズに課すのと同種の上限で、range の境界を厳密に保つものです。成分は最大 8 つです。
 - `WHERE` は `IDX.COUNT` にも効き、複合カラムを宣言していないインデックスの上では名前つきで拒否されます。
+- **`TABLE.VERIFY` の `duplicates` が非ゼロなら、その ORDERPATH は全順序ではありません**——全成分でタイになった行は 1 エントリに畳まれ、カーソルのページングはタイの境界で行を飛ばすか重複させます。複合の最後に**有界の**タイブレークカラムを置いてください（数値 id、または自然キーの固定幅ハッシュ）——生の Message-ID のような非有界文字列は、タイを解く代わりに 255 バイトの除外上限を踏みます。
 
 ```
 IDX.QUERY user.by_dept_age WHERE dept EQ eng                  # all eng, age DESC
@@ -105,15 +125,18 @@ kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004
 
 ## 組み込み
 
-型付き API、同じコンパイル。プロセス内ではテキスト文法は不要です（宣言型——`TableSpec`、`TableIndex`、`OrderPath`——は、唯一のコンパイラを持つ crate である `kevy-index` にあります）。
+型付き API、同じコンパイル。プロセス内ではテキスト文法は不要です。宣言型——`TableSpec`、`TableIndex`、`OrderPath`——はファサードが再エクスポートしています（4.1）。すべて `kevy_embedded` から import してください——内部 crate からは決して。
 
 ```rust
-use kevy_index::TableSpec;
+use kevy_embedded::{TableEnsure, TableSpec};
 
-store.table_declare(spec)?;          // TableSpec, validated + compiled,
-                                     // indexes built synchronously
+match store.table_ensure(spec)? {    // 起動の動詞：検証・コンパイル・同期構築
+    TableEnsure::Created => {}
+    TableEnsure::Unchanged => {}     // 同一 spec の再起動では何もしない
+}
 let tables = store.table_list();
-let report = store.table_verify(b"user")?;   // per-index counters + spot check
+let report = store.table_verify_report(b"user")?;  // 名前つきの新鮮なカウンタ
+assert_eq!(report.per_index[0].missing, 0);        //   + 抜き取り検査
 store.table_drop(b"user");
 ```
 
@@ -132,3 +155,4 @@ store.table_drop(b"user");
 - [rds-workloads.md](rds-workloads.md)——SQL 語彙の完全な対応表(何がコンパイルでき、何がレシピで、何が拒否されるか)。
 - [cookbook.md](cookbook.md)——複合順序とスキーマ移植のレシピ。
 - [views.md](views.md)——同じインデックスの上の、名前つきの合成。
+- [table-migration.md](table-migration.md)——手書きインデックスからの移行、8 つの教訓。
