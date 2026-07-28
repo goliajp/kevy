@@ -112,32 +112,9 @@ impl AggSegment {
     // an internal rows↔groups invariant, never reachable from caller input.
     #[allow(clippy::missing_panics_doc)]
     pub fn apply(&mut self, key: &[u8], entry: Option<(Vec<u8>, IndexValue)>, excluded_row: bool) {
-        // Fast path: same-group value update (the dominant serving
-        // write shape — measured 16.8% write tax on a Zipf corpus
-        // with the retract+register path; hot groups make every
-        // full retract pay two map round-trips and two clones).
         if let Some((group, val)) = &entry
-            && let Some((old_group, old_val)) = self.rows.get_mut(key)
-            && old_group == group
+            && self.fast_path_same_group(key, group, val)
         {
-            if old_val == val {
-                return; // nothing changed
-            }
-            let g = self.groups.get_mut(group).expect("group of live row");
-            g.sum += val.as_f64() - old_val.as_f64();
-            match g.values.get_mut(old_val) {
-                Some(m) if *m > 1 => *m -= 1,
-                _ => {
-                    g.values.remove(old_val);
-                    self.distinct_total -= 1;
-                }
-            }
-            let slot = g.values.entry(val.clone()).or_insert(0);
-            *slot += 1;
-            if *slot == 1 {
-                self.distinct_total += 1;
-            }
-            *old_val = val.clone();
             return;
         }
         self.retract_row(key);
@@ -164,6 +141,36 @@ impl AggSegment {
             None if excluded_row => self.excluded += 1,
             None => {}
         }
+    }
+
+    /// Fast path: same-group value update (the dominant serving write
+    /// shape — measured 16.8% write tax on a Zipf corpus with the
+    /// retract+register path; hot groups make every full retract pay
+    /// two map round-trips and two clones). `true` = handled.
+    fn fast_path_same_group(&mut self, key: &[u8], group: &[u8], val: &IndexValue) -> bool {
+        let Some((old_group, old_val)) = self.rows.get_mut(key) else { return false };
+        if old_group != group {
+            return false;
+        }
+        if old_val == val {
+            return true; // nothing changed
+        }
+        let g = self.groups.get_mut(group).expect("group of live row");
+        g.sum += val.as_f64() - old_val.as_f64();
+        match g.values.get_mut(old_val) {
+            Some(m) if *m > 1 => *m -= 1,
+            _ => {
+                g.values.remove(old_val);
+                self.distinct_total -= 1;
+            }
+        }
+        let slot = g.values.entry(val.clone()).or_insert(0);
+        *slot += 1;
+        if *slot == 1 {
+            self.distinct_total += 1;
+        }
+        *old_val = val.clone();
+        true
     }
 
     /// Retract one row's current contribution (no-op for an unknown

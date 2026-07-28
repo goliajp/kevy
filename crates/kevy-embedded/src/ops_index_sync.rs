@@ -279,42 +279,46 @@ pub(crate) fn on_commit(
         return;
     }
     let mut touched = false;
-    let (segs, agg) = (&mut shard_segs.segs, &mut shard_segs.agg);
-    #[cfg(feature = "text")]
-    let text = &mut shard_segs.text;
-    #[cfg(feature = "vector")]
-    let ann = &mut shard_segs.ann;
     each_written_key(verb, parts, |key| {
-        for (spec, seg) in &mut *segs {
-            if key.starts_with(&spec.prefix) {
-                apply_key(store, spec, seg, key);
-                touched = true;
-            }
-        }
-        #[cfg(feature = "text")]
-        for (spec, ts) in &mut *text {
-            if key.starts_with(&spec.prefix) {
-                apply_text_key(store, spec, ts, key);
-                touched = true;
-            }
-        }
-        #[cfg(feature = "vector")]
-        for (spec, g) in &mut *ann {
-            if key.starts_with(&spec.prefix) {
-                apply_ann_key(store, spec, g, key);
-                touched = true;
-            }
-        }
-        for (spec, a) in &mut *agg {
-            if key.starts_with(&spec.prefix) {
-                apply_agg_key(store, spec, a, key);
-                touched = true;
-            }
-        }
+        touched |= apply_one_key(shard_segs, store, key);
     });
     if touched {
         shard_segs.mark_stats_dirty();
     }
+}
+
+/// Apply one written key to every matching segment of every kind.
+/// Returns whether any segment was touched (the cache-invalidation
+/// signal).
+fn apply_one_key(shard_segs: &mut ShardSegs, store: &mut kevy_store::Store, key: &[u8]) -> bool {
+    let mut touched = false;
+    for (spec, seg) in &mut shard_segs.segs {
+        if key.starts_with(&spec.prefix) {
+            apply_key(store, spec, seg, key);
+            touched = true;
+        }
+    }
+    #[cfg(feature = "text")]
+    for (spec, ts) in &mut shard_segs.text {
+        if key.starts_with(&spec.prefix) {
+            apply_text_key(store, spec, ts, key);
+            touched = true;
+        }
+    }
+    #[cfg(feature = "vector")]
+    for (spec, g) in &mut shard_segs.ann {
+        if key.starts_with(&spec.prefix) {
+            apply_ann_key(store, spec, g, key);
+            touched = true;
+        }
+    }
+    for (spec, a) in &mut shard_segs.agg {
+        if key.starts_with(&spec.prefix) {
+            apply_agg_key(store, spec, a, key);
+            touched = true;
+        }
+    }
+    touched
 }
 
 /// FLUSHALL / FLUSHDB: every segment resets to empty.

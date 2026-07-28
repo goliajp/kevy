@@ -304,6 +304,40 @@ fn strip_err(e: &str) -> &str {
 ///
 /// Layout: [entries, bytes, coerce_fresh, duplicates, drift, checked,
 ///          excluded, absent, rows, missing].
+/// The row→index half of the walk, under the no-promote peek: every
+/// prefix row classified by cause (the server's `classify_prefix_rows`
+/// is the byte-parity twin).
+/// Returns `[coerce_fresh, excluded, absent, rows, missing]`.
+fn classify_prefix_rows(
+    s: &mut kevy_store::Store,
+    spec: &kevy_index::IndexSpec,
+    row_keys: &[Vec<u8>],
+    indexed: &std::collections::HashSet<&[u8]>,
+) -> [u64; 5] {
+    let names = spec.scalar_read_names();
+    let w = spec.primary_width();
+    let mut f = [0u64; 5];
+    for key in row_keys {
+        f[3] += 1;
+        let cls = match s.peek_hash_fields(key, &names[..w]) {
+            Ok(Some(vals)) => spec.classify_scalar(&vals),
+            // A non-hash or vanished row has no columns: NULL row.
+            _ => kevy_index::RowDerivation::Absent,
+        };
+        match cls {
+            kevy_index::RowDerivation::Indexed(_) => {
+                if !indexed.contains(key.as_slice()) {
+                    f[4] += 1;
+                }
+            }
+            kevy_index::RowDerivation::CoerceFailed => f[0] += 1,
+            kevy_index::RowDerivation::Oversize => f[1] += 1,
+            kevy_index::RowDerivation::Absent => f[2] += 1,
+        }
+    }
+    f
+}
+
 fn shard_index_counts(
     inner: &mut crate::store_inner::Inner,
     ispec: &kevy_index::IndexSpec,
@@ -336,27 +370,7 @@ fn shard_index_counts(
                 drift += 1;
             }
         }
-        // [coerce_fresh, excluded, absent, rows, missing]
-        let mut f = [0u64; 5];
-        for key in &row_keys {
-            f[3] += 1;
-            let cls = match s.peek_hash_fields(key, &names[..w]) {
-                Ok(Some(vals)) => spec.classify_scalar(&vals),
-                // A non-hash or vanished row has no columns: NULL row.
-                _ => kevy_index::RowDerivation::Absent,
-            };
-            match cls {
-                kevy_index::RowDerivation::Indexed(_) => {
-                    if !indexed.contains(key.as_slice()) {
-                        f[4] += 1;
-                    }
-                }
-                kevy_index::RowDerivation::CoerceFailed => f[0] += 1,
-                kevy_index::RowDerivation::Oversize => f[1] += 1,
-                kevy_index::RowDerivation::Absent => f[2] += 1,
-            }
-        }
-        (drift, f)
+        (drift, classify_prefix_rows(s, &spec, &row_keys, &indexed))
     });
     sums[0] += stats.entries;
     sums[1] += stats.approx_bytes;
