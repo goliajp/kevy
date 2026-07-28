@@ -35,7 +35,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - [WASM / browser](docs/wasm.md) · [Electron apps](docs/electron.md) · [Tauri apps](docs/tauri.md) · [IoT / embedded tiers](docs/iot.md)
 - [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)
 
-## Verbs (188 total)
+## Verbs (190 total)
 
 ### scan
 
@@ -606,6 +606,12 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `TABLE.DECLARE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX col range|unique [VALUES col ...]] [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...]` [write,extension] — Declare a relational table that compiles at declare time into named indexes (catalog mutation, sidecar-persisted).
   - complexity: O(declaration size) at the call; each compiled index then backfills like IDX.CREATE (2048 rows per tick per shard). The engine gains no query planner: queries name the compiled paths (`<table>.<col>`, `<table>.<orderpath>`) explicitly
   - compat: kevy-only: nearest is CREATE TABLE in an RDBMS — but this is a declaration compiler, not a schema enforcer: a row with a missing column is a row with an absent field (NULL semantics), never an error, and no SQL executes at query time
+- `TABLE.ENSURE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX ...] [ORDERPATH ...]` [write,extension] — TABLE.DECLARE's boot form: identical existing declaration answers +UNCHANGED, a different one is a named refusal saying which part differs — never a silent rebuild.
+  - complexity: declare-at-boot is the steady state; plain DECLARE errors on re-declare, which quiet boot code then ignores forever (dogfood F8.2)
+  - compat: kevy-only: nearest is CREATE TABLE IF NOT EXISTS — plus the spec comparison IF NOT EXISTS does not do
+- `TABLE.REPLACE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX ...] [ORDERPATH ...]` [write,extension] — Drop and redeclare in one verb, rebuilding every compiled index from the rows. Named for its cost: a full backfill, asked for explicitly. A bad spec refuses BEFORE the old table drops.
+  - complexity: the migration verb: spec changed, rebuild wanted
+  - compat: kevy-only: nearest is DROP TABLE + CREATE TABLE, atomic against a bad new spec
 - `TABLE.DROP name` [write,extension] — Drop a declared table and its compiled indexes (catalog mutation, sidecar-persisted).
   - complexity: O(catalog size + compiled indexes)
   - compat: kevy-only

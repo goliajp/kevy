@@ -152,7 +152,7 @@ fn rebuild_seg_lists(
     }
     shard_segs.agg = next_agg;
     shard_segs.version = ver;
-    shard_segs.stats_dirty = true;
+    shard_segs.mark_stats_dirty();
 }
 
 /// Keep `spec`'s existing segment from `have` (position move), or
@@ -275,10 +275,10 @@ pub(crate) fn on_commit(
     let verb = parts.first().copied().unwrap_or(b"");
     if verb.eq_ignore_ascii_case(b"FLUSHALL") || verb.eq_ignore_ascii_case(b"FLUSHDB") {
         reset_all_segs(shard_segs);
-        shard_segs.stats_dirty = true;
+        shard_segs.mark_stats_dirty();
         return;
     }
-    let dirty = &mut shard_segs.stats_dirty;
+    let mut touched = false;
     let (segs, agg) = (&mut shard_segs.segs, &mut shard_segs.agg);
     #[cfg(feature = "text")]
     let text = &mut shard_segs.text;
@@ -288,30 +288,33 @@ pub(crate) fn on_commit(
         for (spec, seg) in &mut *segs {
             if key.starts_with(&spec.prefix) {
                 apply_key(store, spec, seg, key);
-                *dirty = true;
+                touched = true;
             }
         }
         #[cfg(feature = "text")]
         for (spec, ts) in &mut *text {
             if key.starts_with(&spec.prefix) {
                 apply_text_key(store, spec, ts, key);
-                *dirty = true;
+                touched = true;
             }
         }
         #[cfg(feature = "vector")]
         for (spec, g) in &mut *ann {
             if key.starts_with(&spec.prefix) {
                 apply_ann_key(store, spec, g, key);
-                *dirty = true;
+                touched = true;
             }
         }
         for (spec, a) in &mut *agg {
             if key.starts_with(&spec.prefix) {
                 apply_agg_key(store, spec, a, key);
-                *dirty = true;
+                touched = true;
             }
         }
     });
+    if touched {
+        shard_segs.mark_stats_dirty();
+    }
 }
 
 /// FLUSHALL / FLUSHDB: every segment resets to empty.
