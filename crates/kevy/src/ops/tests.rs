@@ -41,6 +41,34 @@ fn run(verb: &[u8], rest: &[&[u8]]) -> Vec<u8> {
         assert!(!s.contains("# Server"));
     }
 
+    /// v4.1-V6 (F16.2): the process gauge beside the store gauge — a
+    /// running test process is resident, so the probe answers > 0 on
+    /// every platform kevy ships on.
+    #[test]
+    fn info_memory_reports_process_rss() {
+        let out = run(b"INFO", &[b"memory"]);
+        let s = String::from_utf8(out).unwrap();
+        let rss: u64 = s
+            .lines()
+            .find_map(|l| l.strip_prefix("process_rss_bytes:"))
+            .expect("process_rss_bytes line present")
+            .trim()
+            .parse()
+            .expect("a byte count");
+        assert!(rss > 0, "the probe must answer on dev platforms, got {rss}");
+    }
+
+    /// v4.1-V6 (the smix ask's server twin): the AOF on-disk format is
+    /// a readable state. This harness runs no reactor tick, so the
+    /// gauge holds its default — `off` — which is also the truthful
+    /// answer for a store with no AOF.
+    #[test]
+    fn info_persistence_reports_aof_format() {
+        let out = run(b"INFO", &[b"persistence"]);
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("aof_format:off"), "{s}");
+    }
+
     #[test]
     fn info_replication_master_default_shape() {
         // Default standalone — `current_upstream()` is None → master

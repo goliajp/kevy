@@ -15,6 +15,8 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20
 
 行仍是前缀下的 hash 键，与从前完全一样——声明一张表不改变你写入的任何方式（`HSET u:1 name alice age 30 …`），也**不施加 schema**：缺少某个已声明列的行，就是该列为 NULL 的行（每个索引本来就有的缺字段语义）。这份声明为你买到的是编译好的访问路径、一个 `VERIFY` 面，以及对它们全体的单动词生命周期管理。
 
+> **正在从手工维护的索引迁移？**先读 [table-migration.md](table-migration.md)——八条在生产上付过学费的经验，以及"表为什么存在"的实测漂移数字（89% 从未写入、76% 从未移除）。
+
 ## 声明模型
 
 `TABLE.DECLARE` 把每个子句编译成一个具名索引：
@@ -35,16 +37,33 @@ TABLE.DECLARE name PREFIX p PK col
     COLUMN name i64|f64|str [COLUMN ...]
     [INDEX col range|unique [VALUES col ...]] ...
     [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] ...
+TABLE.ENSURE ...       # TABLE.DECLARE 的开机形态——见下文
+TABLE.REPLACE ...      # 显式的 drop + declare + 重建
 TABLE.DROP name        # drops the table + its compiled indexes; 1|0
 TABLE.LIST             # name/prefix/pk + column/index/orderpath counts
 TABLE.VERIFY name      # component fsck + a bounded column spot check
 ```
 
+## 开机模式：`ensure`
+
+开机时声明才是常态——schema 住在你的代码里，每次进程启动都陈述一遍。`TABLE.ENSURE`（嵌入面：`Store::table_ensure`，返回 `TableEnsure::{Created, Unchanged}`）接受与 `TABLE.DECLARE` 相同的文法，是它的幂等形态：
+
+- **表不存在** → 声明并构建：`Created`。
+- **spec 完全相同** → 无操作的成功：`Unchanged`（线上回 `+UNCHANGED`）。此后每次开机都走这条路。
+- **spec 不同** → **点名哪里变了的具名拒绝**（`COLUMNS` / `INDEXES` / `ORDERPATHS` / `PREFIX` / `PK`）——绝不静默重建。重建是对整个前缀域的全量回填，这么昂贵的事必须被点名要求：`TABLE.REPLACE`（嵌入面：`table_replace`）就是那个要求——显式 drop + declare + 重建，并在丢弃旧表**之前**先验证新 spec，坏的替换会让旧表继续服务。
+
+裸的 `TABLE.DECLARE` 保持严格形态：重声明既有名字是错误。开机用 `ensure`，迁移用 `replace`，重名即 bug 的场合用 `declare`。
+
 - 列类型是 `i64 | f64 | str`——即标量索引的类型。其余一切（时间戳、布尔、枚举）由应用编码进这三种之一，粗粒度映射被明说而不是被藏起来（kevy-sql 会对每个被转换的列打印一条说明）。
 - `PK` 指向一个已声明的列；它是文档加一个 `VERIFY` 面——行仍按键寻址，和今天完全一样。`serial` 式的 id 分配是一份配方（[序列配方](cookbook.md#3-sequences)），不是引擎特性。
 - 最多 64 张表；每一种结构性拒绝都有名字（重复列、未知的 `VALUES` 列、名字冲突……），从不静默。
 
-`TABLE.VERIFY` 重跑每个编译出的索引的漂移复查（`IDX.VERIFY` 计数器：entries / bytes / coerce_failures / duplicates / drift / checked，逐索引），再加一次有界抽查——每 shard 最多采样 64 行，断言每个*出现了的*已声明列都能转换为其声明类型（缺失是 NULL，从不是错误）。任何组成索引仍在回填时，它回答 `-INDEXBUILDING`。
+`TABLE.VERIFY` **在调用那一刻、双向地现算每一个计数器**（4.1——此前 `coerce_failures` 是生命周期累计值，还把缺失列也吞了进去，没法和旁边现算的 `drift` 对读）：
+
+- **index→row**：`entries` / `bytes` / `duplicates` / `drift` / `checked`——每条持有的 entry 都从它的行重新推导。
+- **row→index**：前缀下的每一行按 cause 分类——走过的 `rows`、`coerce_failures`（存在但转换失败）、`excluded`（复合的 `str` 分量超 255 字节）、`absent`（分量列缺失：设计上的 NULL，不是错误），以及 **`missing`**（能推导出值却没有 entry 的行——忘了这张表存在的那个 writer，漂移走查在结构上看不见的唯一一类）。
+
+一切正常时 `entries = rows − excluded − absent − coerce_failures` 成立；每种排除原因都有了自己的名字，而不是一个解释不了的 entries 差值。另有有界抽查（每 shard 最多 64 行）断言*出现了的*已声明列可转换。任何组成索引仍在回填时，回答 `-INDEXBUILDING`。
 
 ## 复合 ORDERPATH 语义
 
@@ -55,6 +74,7 @@ ORDERPATH 把[复合排序配方](cookbook.md#8-composite-ordering-order-by-a-b)
 - **每个分量的 `DESC`** 体现在存储顺序里，所以 `ON dept THEN age DESC` 让每个部门的行从最老最大的那一端翻页，不需要重排。
 - **缺少任一分量列的行被排除**在复合索引之外（转换失败同理）——它在其他所有访问路径上完全可见。长于 **255 字节**的 `str` 分量同样使该行被排除：这与关系型 B-tree 对索引行大小的同类上限一致，也是让 range 边界保持精确的前提。最多 8 个分量。
 - `WHERE` 同样作用于 `IDX.COUNT`；在一个没有声明复合列的索引上使用它会被按名拒绝。
+- **`TABLE.VERIFY` 的 `duplicates` 非零意味着这个 ORDERPATH 不是全序**——在所有分量上打平的行会塌缩成一条 entry，游标翻页会在平局边界跳行或重复。给复合的末尾加一个**有界的**决胜列（数值 id，或自然键的定宽哈希）——像裸 Message-ID 这样的无界字符串不会决胜，只会踩中 255 字节的排除上限。
 
 ```
 IDX.QUERY user.by_dept_age WHERE dept EQ eng                  # all eng, age DESC
@@ -105,15 +125,18 @@ kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004
 
 ## 嵌入式
 
-类型化 API，同一套编译，进程内不需要文本语法（声明类型——`TableSpec`、`TableIndex`、`OrderPath`——住在 `kevy-index`，即持有唯一编译器的那个 crate）：
+类型化 API，同一套编译，进程内不需要文本语法。声明类型——`TableSpec`、`TableIndex`、`OrderPath`——由门面重导出（4.1）：一切从 `kevy_embedded` import，永远不要依赖内部 crate。
 
 ```rust
-use kevy_index::TableSpec;
+use kevy_embedded::{TableEnsure, TableSpec};
 
-store.table_declare(spec)?;          // TableSpec, validated + compiled,
-                                     // indexes built synchronously
+match store.table_ensure(spec)? {    // 开机动词：验证、编译、同步构建
+    TableEnsure::Created => {}
+    TableEnsure::Unchanged => {}     // 同 spec 重启时无操作
+}
 let tables = store.table_list();
-let report = store.table_verify(b"user")?;   // per-index counters + spot check
+let report = store.table_verify_report(b"user")?;  // 具名的 fresh 计数
+assert_eq!(report.per_index[0].missing, 0);        //   + 抽查
 store.table_drop(b"user");
 ```
 
@@ -131,4 +154,5 @@ wire 形式（`db.cmd("TABLE.DECLARE", …)`）同样可用，用完全相同的
 - [tiering.md](tiering.md)——与表一起设计的另一半：索引热、行冷。
 - [rds-workloads.md](rds-workloads.md)——完整的 SQL 词汇映射（什么可编译、什么是配方、什么被拒绝）。
 - [cookbook.md](cookbook.md)——复合排序与 schema 迁移配方。
+- [table-migration.md](table-migration.md)——从手工维护的索引迁移过来，八课。
 - [views.md](views.md)——同一批索引上的具名组合。

@@ -192,6 +192,16 @@ pub use ops_view::ViewPage;
 pub use kevy_index::{AggBy, AnnSpec, GroupStats, Leaf as ViewLeaf, Tree as ViewTree, ViewMode};
 #[cfg(feature = "index")]
 pub use kevy_index::{Cursor as IndexCursor, IndexKind, IndexValue, SegmentStats as IndexStats, ValType as IndexValType};
+// The TABLE face — the dogfood report's F7: `Store::table_declare` takes
+// a `TableSpec` the facade did not export, so the typed face of a
+// flagship v4 feature was uncallable without depending on kevy-index
+// directly. The consumer gate (tools/facadegate) now builds against
+// these from outside the workspace, which is what would have caught it.
+#[cfg(feature = "index")]
+pub use kevy_index::{IndexVerify, OrderPath, TableEnsure, TableIndex, TableSpec, TableVerify};
+// `each_prefix` hands the callback a `kevy_store::Value` — same class of
+// gap: a public signature whose type the facade could not name.
+pub use kevy_store::Value;
 pub use pubsub::{PubsubFrame, Subscription};
 pub use store::{Store, WeakStore};
 

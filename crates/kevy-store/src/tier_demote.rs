@@ -13,6 +13,11 @@ use crate::{Entry, SmallBytes, Store, key_heap_bytes_for, tier_codec};
 
 /// RFC §7: 32 records per demotion call, continuation on the shard tick.
 const SPILL_BATCH: usize = 32;
+/// v4.1-V5 backoff ceiling: a dry sampler doubles its skip up to this
+/// many ticks (~6.4 s at the default 10 Hz tick) — the idle cost of
+/// "over target with nothing left to spill" converges to one bounded
+/// sample walk every few seconds instead of one per tick.
+pub(crate) const BACKOFF_CEILING_TICKS: u32 = 64;
 /// RFC §7: values at or below inline size never spill.
 const MIN_SPILL_BYTES: u64 = 64;
 /// Demote watermark headroom (same 19/20 shape as eviction).
@@ -42,14 +47,45 @@ impl Store {
     /// [`Store::demote_step`] on the tick). Returns keys demoted.
     #[inline]
     pub fn try_demote_after_write(&mut self) -> usize {
-        self.demote_if_over(crate::evict::DEMOTE_VISIT_WINDOW)
+        let n = self.demote_if_over(crate::evict::DEMOTE_VISIT_WINDOW);
+        if n > 0
+            && let Some(t) = self.tier.as_mut()
+        {
+            // Progress on the write path means candidates exist again —
+            // wake the tick sampler out of its backoff.
+            t.tick_wait = 0;
+            t.tick_skip = 0;
+        }
+        n
     }
 
     /// Tick continuation of [`Store::try_demote_after_write`]: one more
-    /// budgeted batch per shard tick while over the watermark.
+    /// budgeted batch per shard tick while over the watermark — with
+    /// backoff (v4.1-V5). A tick whose batch moves nothing while over
+    /// target (every spillable value already cold, or the floor alone
+    /// exceeds the budget so `effective_target == 0`) doubles the
+    /// tick's skip up to [`BACKOFF_CEILING_TICKS`]; any demotion — here
+    /// or on the write path — resets it. During a backoff window this
+    /// is one decrement: the sampler does not run. "Idempotent is not
+    /// convergent": before this, an over-target store with nothing left
+    /// to spill re-walked the sample window every tick forever.
     #[inline]
     pub fn demote_step(&mut self) -> usize {
-        self.try_demote_after_write()
+        let Some(t) = self.tier.as_mut() else { return 0 };
+        if t.tick_wait > 0 {
+            t.tick_wait -= 1;
+            return 0;
+        }
+        let over = self.used_memory > effective_target(self.tier.as_ref().expect("probed above"));
+        let n = self.demote_if_over(crate::evict::DEMOTE_VISIT_WINDOW);
+        let t = self.tier.as_mut().expect("still enabled");
+        if n == 0 && over {
+            t.tick_skip = (t.tick_skip * 2).clamp(1, BACKOFF_CEILING_TICKS);
+            t.tick_wait = t.tick_skip;
+        } else if n > 0 {
+            t.tick_skip = 0;
+        }
+        n
     }
 
     /// Bulk-load drain: demote batch after batch until the

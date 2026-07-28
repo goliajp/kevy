@@ -52,6 +52,13 @@ struct ShardIndex {
 pub(crate) struct ShardIndexes {
     generation: u64,
     idx: Vec<ShardIndex>,
+    /// v4.1-V5 `reserved_bytes` generation cache: set by every
+    /// segment-mutating chokepoint (write applies, backfill batches,
+    /// catalog refresh); an idle tick reads the cached sum instead of
+    /// walking every segment's stats — the walk behind the sum was
+    /// mailrs's measured 300-500× idle-CPU term (F16a).
+    stats_dirty: bool,
+    reserved_cache: u64,
 }
 
 /// The write-path hook body (`Commands::on_write`). The caller gates
@@ -61,9 +68,11 @@ pub(crate) struct ShardIndexes {
 pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st, store);
+    let st = &mut *st;
     for si in &mut st.idx {
         if key.starts_with(&si.spec.prefix) {
             apply_row(store, si, key);
+            st.stats_dirty = true;
         }
     }
 }
@@ -73,7 +82,11 @@ pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
 pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st, store);
+    let st = &mut *st;
     for si in &mut st.idx {
+        if matches!(si.build, BuildState::Backfilling { .. }) {
+            st.stats_dirty = true;
+        }
         advance_backfill(store, si, 2048);
     }
 }
@@ -83,10 +96,35 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
 /// floor feed. Called per shard tick, gated on
 /// tiering being enabled; refreshes the shard list first so a
 /// just-declared index counts immediately.
+/// FLUSHALL/FLUSHDB emptied this shard's store: every segment resets
+/// to its declared-empty shape (found stale during v4.1-V5 — the
+/// embedded face's `on_commit` reset on FLUSH; this face kept serving
+/// deleted keys out of IDX.QUERY). A mid-backfill index goes straight
+/// to Ready: its snapshot's keys no longer exist.
+pub(crate) fn on_flush(ctx: &Ctx<'_>, store: &mut Store) {
+    let mut st = ctx.shard.indexes.borrow_mut();
+    refresh(&ctx.state.catalogs, &mut st, store);
+    let st = &mut *st;
+    for si in &mut st.idx {
+        si.seg = new_scalar_seg(&si.spec);
+        si.text = new_text_seg(&si.spec);
+        si.ann = new_ann_seg(&si.spec);
+        si.agg = (si.spec.kind == kevy_index::IndexKind::Agg).then(kevy_index::AggSegment::new);
+        si.build = BuildState::Ready;
+        st.stats_dirty = true;
+    }
+}
+
+/// Served from the generation cache: an idle store recomputes
+/// nothing (v4.1-V5).
 pub(crate) fn reserved_bytes(ctx: &Ctx<'_>, store: &mut Store) -> u64 {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st, store);
-    st.idx
+    if !st.stats_dirty {
+        return st.reserved_cache;
+    }
+    let sum = st
+        .idx
         .iter()
         .map(|si| {
             si.seg.stats().approx_bytes
@@ -94,7 +132,10 @@ pub(crate) fn reserved_bytes(ctx: &Ctx<'_>, store: &mut Store) -> u64 {
                 + si.ann.as_ref().map_or(0, |g| g.stats().approx_bytes)
                 + si.agg.as_ref().map_or(0, |a| a.stats().approx_bytes)
         })
-        .sum()
+        .sum();
+    st.reserved_cache = sum;
+    st.stats_dirty = false;
+    sum
 }
 
 /// Query entry: run `f` against this shard's segment for `name`.
@@ -253,6 +294,25 @@ fn new_scalar_seg(spec: &IndexSpec) -> Segment {
 
 /// A fresh text segment for `spec` when it is a text index — with the
 /// positional side-channel iff it was created WITH POSITIONS.
+/// A fresh HNSW graph shaped by the spec (None for non-ann kinds) —
+/// shared by the catalog refresh and the FLUSH reset.
+fn new_ann_seg(spec: &kevy_index::IndexSpec) -> Option<kevy_vector::Hnsw> {
+    spec.ann.as_ref().map(|a| {
+        kevy_vector::Hnsw::new(
+            a.dim as usize,
+            kevy_vector::HnswParams {
+                m: a.m as usize,
+                ef_construction: a.ef as usize,
+                distance: match a.distance {
+                    1 => kevy_vector::Distance::L2,
+                    2 => kevy_vector::Distance::Ip,
+                    _ => kevy_vector::Distance::Cosine,
+                },
+            },
+        )
+    })
+}
+
 fn new_text_seg(spec: &kevy_index::IndexSpec) -> Option<kevy_text::TextSegment> {
     (spec.kind == kevy_index::IndexKind::Text).then(|| {
         // The declared field count decides whether the segment keeps the
@@ -274,6 +334,7 @@ fn refresh(catalogs: &CatalogState, st: &mut ShardIndexes, store: &mut Store) {
     if st.generation == generation {
         return;
     }
+    st.stats_dirty = true;
     let cat = catalogs.index();
     let mut next: Vec<ShardIndex> = Vec::new();
     if let Some(cat) = cat {
@@ -290,20 +351,7 @@ fn refresh(catalogs: &CatalogState, st: &mut ShardIndexes, store: &mut Store) {
                         agg: (spec.kind == kevy_index::IndexKind::Agg)
                             .then(kevy_index::AggSegment::new),
                         text: new_text_seg(spec),
-                        ann: spec.ann.as_ref().map(|a| {
-                            kevy_vector::Hnsw::new(
-                                a.dim as usize,
-                                kevy_vector::HnswParams {
-                                    m: a.m as usize,
-                                    ef_construction: a.ef as usize,
-                                    distance: match a.distance {
-                                        1 => kevy_vector::Distance::L2,
-                                        2 => kevy_vector::Distance::Ip,
-                                        _ => kevy_vector::Distance::Cosine,
-                                    },
-                                },
-                            )
-                        }),
+                        ann: new_ann_seg(spec),
                         seg: new_scalar_seg(spec),
                         spec: spec.clone(),
                         build: BuildState::Backfilling { keys, pos: 0 },

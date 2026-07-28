@@ -168,16 +168,33 @@ fn dotted(table: &[u8], suffix: &[u8]) -> Vec<u8> {
     n
 }
 
-/// Compile a validated table into its access paths: each `INDEX col
-/// KIND` becomes an IndexSpec named `<table>.<col>` on the table's
-/// prefix (FIELD col, TYPE from the column decl, VALUES typed from the
-/// column decls); each `ORDERPATH` becomes a composite Range IndexSpec
-/// named `<table>.<orderpath>`. Pure — the SINGLE compilation both the
-/// server and the embedded store install.
-pub fn compile_table(t: &TableSpec) -> Vec<IndexSpec> {
+/// Compile a table into its access paths: each `INDEX col KIND` becomes
+/// an IndexSpec named `<table>.<col>` on the table's prefix (FIELD col,
+/// TYPE from the column decl, VALUES typed from the column decls); each
+/// `ORDERPATH` becomes a composite Range IndexSpec named
+/// `<table>.<orderpath>`. Pure — the SINGLE compilation both the server
+/// and the embedded store install.
+///
+/// **Validates first, itself.** The 4.0 shape took "a validated table"
+/// on trust and cashed that trust as `expect("validated")` — and the
+/// typed embedded face never called `validate()` at all, so a spec
+/// whose ORDERPATH named an undeclared column panicked in here, on a
+/// consumer's boot path, and restart-looped their container (dogfood
+/// F9). An invariant a function needs is one it establishes: admission
+/// has exactly one authority now, and it is this signature. The wire
+/// path's second validation costs microseconds.
+pub fn compile_table(t: &TableSpec) -> Result<Vec<IndexSpec>, String> {
+    t.validate()?;
+    let col_ty = |col: &[u8]| {
+        // Post-validate this is total; the Err arm is the honest form
+        // of what `expect` asserted, kept reachable so a validate()
+        // gap can never again become a panic.
+        t.column_type(col)
+            .ok_or_else(|| format!("ERR column '{}' is not declared", show(col)))
+    };
     let mut out = Vec::with_capacity(t.indexes.len() + t.orderpaths.len());
     for ix in &t.indexes {
-        let ty = t.column_type(&ix.column).expect("validated");
+        let ty = col_ty(&ix.column)?;
         let mut spec = IndexSpec::single_field(
             dotted(&t.name, &ix.column),
             t.prefix.clone(),
@@ -188,8 +205,8 @@ pub fn compile_table(t: &TableSpec) -> Vec<IndexSpec> {
         spec.values = ix
             .values
             .iter()
-            .map(|c| ValueSpec { name: c.clone(), ty: t.column_type(c).expect("validated") })
-            .collect();
+            .map(|c| Ok(ValueSpec { name: c.clone(), ty: col_ty(c)? }))
+            .collect::<Result<_, String>>()?;
         out.push(spec);
     }
     for op in &t.orderpaths {
@@ -203,16 +220,14 @@ pub fn compile_table(t: &TableSpec) -> Vec<IndexSpec> {
         spec.composite = Some(
             op.on
                 .iter()
-                .map(|(col, desc)| CompositeCol {
-                    name: col.clone(),
-                    ty: t.column_type(col).expect("validated"),
-                    desc: *desc,
+                .map(|(col, desc)| {
+                    Ok(CompositeCol { name: col.clone(), ty: col_ty(col)?, desc: *desc })
                 })
-                .collect(),
+                .collect::<Result<_, String>>()?,
         );
         out.push(spec);
     }
-    out
+    Ok(out)
 }
 
 /// The table registry (mirrors [`crate::Catalog`]): named specs +

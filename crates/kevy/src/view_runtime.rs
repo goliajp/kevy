@@ -25,6 +25,10 @@ struct ViewState {
 pub(crate) struct ShardViews {
     generation: u64,
     views: Vec<ViewState>,
+    /// v4.1-V5 `reserved_bytes` generation cache — see
+    /// `ShardIndexes::stats_dirty`; same contract, view half.
+    stats_dirty: bool,
+    reserved_cache: u64,
     /// Union of every view-referenced index name (order + leaves) —
     /// the write hook probes each exactly once per key.
     referenced: Vec<Vec<u8>>,
@@ -57,6 +61,7 @@ pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
         };
         for vs in &mut st.views {
             let Some(mat) = &mut vs.mat else { continue };
+            st.stats_dirty = true;
             let member = kevy_index::key_in_tree_vals(&vs.spec.tree, &lookup);
             let order = lookup(&vs.spec.order_by);
             if mat.apply(key, member, order) {
@@ -70,9 +75,11 @@ pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
 pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
     let mut st = ctx.shard.views.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st);
+    let st = &mut *st;
     for vs in &mut st.views {
         if vs.needs_rebuild {
             rebuild_local(ctx, store, vs);
+            st.stats_dirty = true;
         }
     }
 }
@@ -80,13 +87,36 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
 /// Σ approximate heap bytes of this shard's materialized view sets —
 /// the view half of the tier's `reserved_bytes` floor feed.
 /// Virtual views hold no set, so they contribute nothing.
+/// FLUSHALL/FLUSHDB emptied the keyspace: every materialized set
+/// clears with it (v4.1-V5, twin of `index_runtime::on_flush`).
+pub(crate) fn on_flush(ctx: &Ctx<'_>) {
+    let mut st = ctx.shard.views.borrow_mut();
+    refresh(&ctx.state.catalogs, &mut st);
+    let st = &mut *st;
+    for vs in &mut st.views {
+        if let Some(m) = &mut vs.mat {
+            m.clear();
+            vs.needs_rebuild = false;
+            st.stats_dirty = true;
+        }
+    }
+}
+
+/// Served from the generation cache (v4.1-V5).
 pub(crate) fn reserved_bytes(ctx: &Ctx<'_>) -> u64 {
     let mut st = ctx.shard.views.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st);
-    st.views
+    if !st.stats_dirty {
+        return st.reserved_cache;
+    }
+    let sum = st
+        .views
         .iter()
         .map(|vs| vs.mat.as_ref().map_or(0, kevy_index::MaterializedSet::approx_bytes))
-        .sum()
+        .sum();
+    st.reserved_cache = sum;
+    st.stats_dirty = false;
+    sum
 }
 
 /// Query access to one view's per-shard answer. For virtual views the
@@ -101,6 +131,7 @@ pub(crate) fn shard_page(
 ) -> Result<Vec<(IndexValue, Vec<u8>)>, CmdError> {
     let mut st = ctx.shard.views.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st);
+    let st = &mut *st;
     let vs = st
         .views
         .iter_mut()
@@ -111,6 +142,7 @@ pub(crate) fn shard_page(
     }
     if vs.needs_rebuild {
         rebuild_local(ctx, store, vs);
+        st.stats_dirty = true;
     }
     let desc = vs.spec.desc;
     match &vs.mat {
@@ -136,6 +168,7 @@ pub(crate) fn shard_stats(
 ) -> Result<(u64, u64, u64, bool), CmdError> {
     let mut st = ctx.shard.views.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st);
+    let st = &mut *st;
     let vs = st
         .views
         .iter_mut()
@@ -166,6 +199,7 @@ fn refresh(catalogs: &CatalogState, st: &mut ShardViews) {
     if st.generation == generation {
         return;
     }
+    st.stats_dirty = true;
     let cat = catalogs.view();
     let mut next = Vec::new();
     if let Some(cat) = cat {

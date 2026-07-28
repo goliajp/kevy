@@ -106,6 +106,9 @@ pub(crate) struct ShardCtx {
     /// the reactor tick via `Commands::on_persist_stats`. Stale by at
     /// most one tick interval. `(in_flight, aof_rewrites_total)`.
     persist_stats: Cell<(bool, u64)>,
+    /// This shard's AOF on-disk format (0 off / 1 v1 / 2 v2), fed per
+    /// tick beside `persist_stats` (v4.1-V6).
+    aof_format: Cell<u8>,
     /// One-shot boot-replay verdict (dropped bytes, corrupt) published via
     /// `Commands::on_replay_report`; static after boot.
     replay_report: Cell<(u64, bool)>,
@@ -199,6 +202,14 @@ impl ShardCtx {
 
     pub(crate) fn set_persist_stats(&self, in_flight: bool, aof_rewrites_total: u64) {
         self.persist_stats.set((in_flight, aof_rewrites_total));
+    }
+
+    pub(crate) fn set_aof_format(&self, format: u8) {
+        self.aof_format.set(format);
+    }
+
+    pub(crate) fn aof_format(&self) -> u8 {
+        self.aof_format.get()
     }
 
     /// `(in_flight, aof_rewrites_total)` — see the field doc.

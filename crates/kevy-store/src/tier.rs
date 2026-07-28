@@ -45,6 +45,19 @@ mod enabled {
         /// Demotion victim scoring (RFC §7: tiered-lru default).
         pub(crate) policy: EvictionPolicy,
         pub(crate) demotions_total: u64,
+        /// Demote-sampler backoff (v4.1-V5): ticks left to skip before
+        /// the next over-target sample walk. "Idempotent is not
+        /// convergent" — a store that is over target with nothing left
+        /// to spill (every spillable value already cold, or the floor
+        /// alone exceeds the budget so `effective_target == 0`) used to
+        /// re-walk the sample window every tick forever.
+        pub(crate) tick_wait: u32,
+        /// Current backoff width: doubles on every dry tick batch up
+        /// to [`crate::tier_demote::BACKOFF_CEILING_TICKS`], resets to
+        /// 0 on any demotion (tick or write path — the write path
+        /// always samples immediately, so a fresh spillable value
+        /// never waits out the window).
+        pub(crate) tick_skip: u32,
         pub(crate) promotions_total: u64,
         /// Every vlog record read (serve, promote, peek) — the
         /// WRONGTYPE-without-read proof counter.
@@ -141,6 +154,8 @@ mod enabled {
                 budget,
                 policy: EvictionPolicy::AllKeysLru,
                 demotions_total: 0,
+                tick_wait: 0,
+                tick_skip: 0,
                 promotions_total: 0,
                 preads_total: 0,
                 peek_preads_total: 0,

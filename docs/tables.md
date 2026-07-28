@@ -27,6 +27,19 @@ a row where that column is NULL (the absent-field semantics every
 index already has). The declaration buys you compiled access paths, a
 `VERIFY` surface, and one-verb lifecycle for all of them.
 
+> **Migrating from hand-maintained indexes?** Read
+> [table-migration.md](table-migration.md) first — eight
+> production-paid lessons, and the measured drift numbers (89 %
+> never-written, 76 % never-removed) that are the reason tables
+> exist.
+
+> **Declaration never panics.** `TABLE.DECLARE` / `Store::table_declare`
+> answer every invalid spec — unknown columns, colliding names, missing
+> PK, anything — with a named error, and a refused declare installs
+> nothing. This is a hard guarantee, enforced by `compile_table`
+> validating for itself and fuzzed continuously (`table_spec`): a bad
+> spec on your boot path is a log line, not a restart loop.
+
 ## The declaration model
 
 `TABLE.DECLARE` compiles each clause into a named index:
@@ -56,10 +69,35 @@ TABLE.DECLARE name PREFIX p PK col
     COLUMN name i64|f64|str [COLUMN ...]
     [INDEX col range|unique [VALUES col ...]] ...
     [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] ...
+TABLE.ENSURE ...       # TABLE.DECLARE's boot form — see below
+TABLE.REPLACE ...      # explicit drop + declare + rebuild
 TABLE.DROP name        # drops the table + its compiled indexes; 1|0
 TABLE.LIST             # name/prefix/pk + column/index/orderpath counts
 TABLE.VERIFY name      # component fsck + a bounded column spot check
 ```
+
+## The boot pattern: `ensure`
+
+Declaring at boot is the steady state — the schema lives in your
+code, and every process start states it. `TABLE.ENSURE` (embedded:
+`Store::table_ensure`, returning `TableEnsure::{Created, Unchanged}`)
+takes the same grammar as `TABLE.DECLARE` and is its idempotent form:
+
+- **No such table** → declared and built: `Created`.
+- **Identical spec** → a no-op success: `Unchanged` (`+UNCHANGED` on
+  the wire). Every later boot takes this path.
+- **A different spec** → a **named refusal that says what changed**
+  (`COLUMNS`, `INDEXES`, `ORDERPATHS`, `PREFIX`, `PK`) — never a
+  silent rebuild. A rebuild is a full backfill over the prefix
+  domain; something that expensive must be asked for by name:
+  `TABLE.REPLACE` (embedded: `table_replace`) is that ask — explicit
+  drop + declare + rebuild, validating the new spec **before**
+  dropping the old table, so a bad replacement leaves the old table
+  serving.
+
+Plain `TABLE.DECLARE` remains the strict form: re-declaring an
+existing name is an error. Use `ensure` at boot, `replace` in
+migrations, `declare` when a duplicate name means a bug.
 
 - Column types are `i64 | f64 | str` — the scalar index types.
   Everything else (timestamps, booleans, enums) is app-encoded into
@@ -74,13 +112,27 @@ TABLE.VERIFY name      # component fsck + a bounded column spot check
   column, unknown `VALUES` column, name collisions, …), never
   silent.
 
-`TABLE.VERIFY` re-runs every compiled index's drift recheck (the
-`IDX.VERIFY` counters: entries / bytes / coerce_failures /
-duplicates / drift / checked, per index) plus a bounded spot check —
-up to 64 sampled rows per shard, asserting every *present* declared
-column coerces to its declared type (absent is NULL, never an
-error). It answers `-INDEXBUILDING` while any component index is
-still backfilling.
+`TABLE.VERIFY` recomputes **every counter fresh, at the moment of the
+call, in both directions** (4.1 — before, `coerce_failures` was a
+lifetime tally that also swallowed absent columns, so it could not be
+read against the fresh `drift` beside it):
+
+- **index→row**: `entries` / `bytes` / `duplicates` / `drift` /
+  `checked` — every held entry re-derived from its row.
+- **row→index**: every prefix row classified by cause — `rows`
+  walked, `coerce_failures` (present but fails to coerce), `excluded`
+  (a composite `str` component over 255 bytes), `absent` (a missing
+  component column: NULL by design, not an error), and **`missing`**
+  (the row derives a value yet has no entry — the writer that forgot
+  this table exists, the one class a drift walk structurally cannot
+  see).
+
+`entries` = `rows − excluded − absent − coerce_failures` when nothing
+is wrong; each exclusion cause now has its own name instead of
+surfacing as an unexplained entries diff. A bounded spot check (up to
+64 sampled rows per shard) additionally asserts every *present*
+declared column coerces to its declared type. It answers
+`-INDEXBUILDING` while any component index is still backfilling.
 
 ## Composite ORDERPATH semantics
 
@@ -108,6 +160,13 @@ query the way a relational composite index does. The rules:
   bounds exact. Up to 8 components.
 - `WHERE` works on `IDX.COUNT` too, and on an index that declares no
   composite columns it is refused by name.
+- **A non-zero `duplicates` in `TABLE.VERIFY` means the ORDERPATH is
+  not a total order** — rows tying on every component collapse to one
+  entry, and cursor pagination will skip or repeat at the tie
+  boundary. End the composite with a **bounded** tie-break column
+  (numeric id, or a fixed-width hash of the natural key) — not a raw
+  unbounded string like a Message-ID, which walks into the 255-byte
+  exclusion cap instead of breaking the tie.
 
 ```
 IDX.QUERY user.by_dept_age WHERE dept EQ eng                  # all eng, age DESC
@@ -205,17 +264,21 @@ compiled, applied and queried — is
 
 ## Embedded
 
-Typed API, same compilation, no text grammar required in-process (the
-declaration types — `TableSpec`, `TableIndex`, `OrderPath` — live in
-`kevy-index`, the crate that owns the single compiler):
+Typed API, same compilation, no text grammar required in-process. The
+declaration types — `TableSpec`, `TableIndex`, `OrderPath` — are
+re-exported by the facade (4.1): import everything from
+`kevy_embedded`, never from an internal crate.
 
 ```rust
-use kevy_index::TableSpec;
+use kevy_embedded::{TableEnsure, TableSpec};
 
-store.table_declare(spec)?;          // TableSpec, validated + compiled,
-                                     // indexes built synchronously
+match store.table_ensure(spec)? {    // the boot verb: validated,
+    TableEnsure::Created => {}       //   compiled, built synchronously
+    TableEnsure::Unchanged => {}     //   — or a no-op on a same-spec boot
+}
 let tables = store.table_list();
-let report = store.table_verify(b"user")?;   // per-index counters + spot check
+let report = store.table_verify_report(b"user")?;  // named fresh counters
+assert_eq!(report.per_index[0].missing, 0);        //   + spot check
 store.table_drop(b"user");
 ```
 

@@ -24,7 +24,7 @@ fn full_declare_parses_and_compiles() {
     assert_eq!(spec.columns.len(), 4);
     assert_eq!(spec.indexes.len(), 2);
     assert_eq!(spec.orderpaths.len(), 1);
-    let compiled = compile_table(&spec);
+    let compiled = compile_table(&spec).expect("valid spec compiles");
     assert_eq!(compiled.len(), 3);
     assert_eq!(compiled[0].name, b"user.age".to_vec());
     assert_eq!(compiled[0].ty, ValType::I64);
