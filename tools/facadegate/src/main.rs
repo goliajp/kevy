@@ -24,6 +24,7 @@ fn main() {
     tables_end_to_end();
     bad_specs_are_refusals_not_panics();
     ensure_is_the_boot_verb();
+    io_result_world_uses_question_mark().expect("io interop");
     let _ = client_surface_compiles;
     println!("facadegate: PASS");
 }
@@ -183,6 +184,30 @@ fn ensure_is_the_boot_verb() {
     assert_eq!(store.table_list()[0].columns.len(), 2, "replace installed the new shape");
 }
 
+/// The io::Result interop, from consumer position (v4.1-V7, dogfood
+/// F2): a function stuck in an `io::Result` world uses `?` on kevy
+/// calls directly — the conversion kevy must provide (orphan rule),
+/// and which one consumer hand-wrote ~280 times as `io::Error::other`
+/// on 4.0. Kind-mapped and source-preserving: the typed error is
+/// still there behind the boundary.
+fn io_result_world_uses_question_mark() -> std::io::Result<()> {
+    let store = Store::open(Config::default().with_auto_aof_rewrite_disabled())?;
+    store.set(b"k", b"v")?;
+    assert_eq!(
+        store.downgradeable_to_v3(),
+        None,
+        "memory-only: the downgrade question has no meaning"
+    );
+    let err: std::io::Error =
+        kevy_embedded::KevyError::TimedOut.into();
+    assert_eq!(err.kind(), std::io::ErrorKind::TimedOut, "kind survives the boundary");
+    assert!(
+        err.get_ref().is_some_and(|s| s.is::<kevy_embedded::KevyError>()),
+        "the typed error rides as source, downcastable back out"
+    );
+    Ok(())
+}
+
 /// The network client's public surface, compile-checked from consumer
 /// position. Never called — running needs a server — but every type a
 /// caller would name has to resolve through the facade for this to
@@ -192,5 +217,16 @@ fn client_surface_compiles() -> kevy_client::KevyResult<()> {
     let mut conn = kevy_client::Connection::connect("127.0.0.1:6399")?;
     conn.set(b"k", b"v")?;
     let _v: Option<Vec<u8>> = conn.get(b"k")?;
+    Ok(())
+}
+
+/// The async twin, including the io::Result interop both client
+/// crates inherit from the shared error type (v4.1-V7). Never called
+/// — running needs a server; compiling needs the facade to be whole.
+#[allow(dead_code)]
+async fn async_client_surface_compiles() -> std::io::Result<()> {
+    let mut conn = kevy_client_async::AsyncConnection::connect("127.0.0.1:6399").await?;
+    conn.set(b"k", b"v").await?;
+    let _v: Option<Vec<u8>> = conn.get(b"k").await?;
     Ok(())
 }
