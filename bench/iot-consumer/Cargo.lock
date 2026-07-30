@@ -4,14 +4,14 @@ version = 4
 
 [[package]]
 name = "kevy-bytes"
-version = "4.0.0"
+version = "4.1.0"
 dependencies = [
  "kevy-hash",
 ]
 
 [[package]]
 name = "kevy-embedded"
-version = "4.0.0"
+version = "4.1.0"
 dependencies = [
  "kevy-hash",
  "kevy-index",
@@ -25,11 +25,11 @@ dependencies = [
 
 [[package]]
 name = "kevy-hash"
-version = "4.0.0"
+version = "4.1.0"
 
 [[package]]
 name = "kevy-index"
-version = "4.0.0"
+version = "4.1.0"
 
 [[package]]
 name = "kevy-iot-consumer"
@@ -40,11 +40,11 @@ dependencies = [
 
 [[package]]
 name = "kevy-madvise"
-version = "4.0.0"
+version = "4.1.0"
 
 [[package]]
 name = "kevy-map"
-version = "4.0.0"
+version = "4.1.0"
 dependencies = [
  "kevy-hash",
  "kevy-madvise",
@@ -52,7 +52,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-persist"
-version = "4.0.0"
+version = "4.1.0"
 dependencies = [
  "kevy-resp",
  "kevy-store",
@@ -61,25 +61,25 @@ dependencies = [
 
 [[package]]
 name = "kevy-ranktree"
-version = "4.0.0"
+version = "4.1.0"
 
 [[package]]
 name = "kevy-replicate"
-version = "4.0.0"
+version = "4.1.0"
 dependencies = [
  "kevy-resp",
 ]
 
 [[package]]
 name = "kevy-resp"
-version = "4.0.0"
+version = "4.1.0"
 dependencies = [
  "kevy-bytes",
 ]
 
 [[package]]
 name = "kevy-store"
-version = "4.0.0"
+version = "4.1.0"
 dependencies = [
  "kevy-bytes",
  "kevy-hash",
@@ -90,19 +90,19 @@ dependencies = [
 
 [[package]]
 name = "kevy-sys"
-version = "4.0.0"
+version = "4.1.0"
 
 [[package]]
 name = "kevy-text"
-version = "4.0.0"
+version = "4.1.0"
 
 [[package]]
 name = "kevy-vector"
-version = "4.0.0"
+version = "4.1.0"
 
 [[package]]
 name = "kevy-vlog"
-version = "4.0.0"
+version = "4.1.0"
 dependencies = [
  "kevy-sys",
 ]

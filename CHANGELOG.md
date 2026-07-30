@@ -1,5 +1,28 @@
 # Changelog
 
+## 4.1.1 — the TTL frame that re-anchored
+
+A consumer's gate caught a TTL reading back *larger* after an AOF
+replay and asked the right question: if inflation is possible, is
+deflation? The inflation itself turned out to be a property, not a
+defect — the persisted deadline is absolute wall-clock time, so a
+system clock step (NTP) between write and replay moves the read-back
+remainder by exactly the step, in either direction; live TTLs run on
+the monotonic clock and are immune, only the restart boundary
+converts through wall time. That contract is now stated in
+`docs/persistence.md`.
+
+Auditing every TTL write surface against the report found one that
+was not sound: **embedded `Store::getex` logged a relative `PEXPIRE`**
+— the last relative TTL frame in the tree — so a replay re-anchored
+it and every restart handed the key its full TTL back (measured:
+99999 ms remaining of an original 100000 ms after 1.5 s down). For an
+embedder using GETEX for cache-touch renewal that is "keys never
+expire across restarts". Fixed to the absolute `PEXPIREAT` form the
+other surfaces already use; a new `ttl_reanchor` suite pins all three
+embedded TTL-writing surfaces and the server's SETEX txn-companion
+path.
+
 ## 4.1.0 — the dogfood answer
 
 Two production consumers ran full migrations on 4.0 and reported back
