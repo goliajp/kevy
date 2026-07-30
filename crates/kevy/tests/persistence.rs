@@ -999,3 +999,44 @@ fn save_at_shutdown_drains_to_disk() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Probe written while auditing a consumer's TTL-inflation report: a
+/// RELATIVE ttl frame (SETEX) must not re-anchor on replay — the AOF
+/// carries whatever the write path logged, and if that is the verb
+/// itself, every restart hands the key its full TTL back. The rewrite
+/// path already normalizes to absolute PEXPIREAT; this pins the
+/// pre-rewrite window.
+#[test]
+fn relative_ttl_frames_do_not_reanchor_on_replay() {
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-ttl-reanchor-{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let port = free_port();
+    with_runtime(port, &dir, 1, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.write_all(&req(&[b"SETEX", b"grey", b"100", b"v"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        c.write_all(&req(&[b"EXPIRE", b"grey2", b"100"])).unwrap(); // no such key: 0
+        let mut buf = [0u8; 64];
+        let _ = c.read(&mut buf).unwrap();
+    });
+    std::thread::sleep(std::time::Duration::from_millis(2500));
+    let port = free_port();
+    with_runtime(port, &dir, 1, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.write_all(&req(&[b"PTTL", b"grey"])).unwrap();
+        let mut buf = [0u8; 64];
+        let n = c.read(&mut buf).unwrap();
+        let s = String::from_utf8_lossy(&buf[..n]);
+        let ttl: i64 = s.trim_start_matches(':').trim().parse().expect("integer PTTL");
+        assert!(ttl > 0, "key survived the restart: {s}");
+        assert!(
+            ttl <= 100_000 - 2_000,
+            "TTL re-anchored on replay: read {ttl}ms of an original 100000ms \
+             after >=2.5s elapsed — the AOF frame must carry an absolute deadline"
+        );
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+}
