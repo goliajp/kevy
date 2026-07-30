@@ -63,16 +63,19 @@ impl Store {
 
     /// `GETEX key TTL` — get the value and update the TTL atomically
     /// (single lock cycle on the owning shard). Returns the value;
-    /// `None` when absent. AOF-logged as `PEXPIRE`.
+    /// `None` when absent. AOF-logged as an absolute `PEXPIREAT` — a
+    /// relative frame re-anchors on every replay, handing the key its
+    /// full TTL back at each restart (the incident class the absolute
+    /// form exists to prevent; this was its last relative holdout).
     pub fn getex(&self, key: &[u8], ttl: Duration) -> KevyResult<Option<Vec<u8>>> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let val = g.store.get(key).map_err(store_err)?.as_deref().map(<[u8]>::to_vec);
         if val.is_some() {
             g.store.expire(key, ttl);
-            let ttl_ms = ttl.as_millis().min(i64::MAX as u128) as i64;
-            let ttl_str = format!("{ttl_ms}");
-            commit_write(&mut g, &[b"PEXPIRE", key, ttl_str.as_bytes()])?;
+            let ms = ttl.as_millis().min(u128::from(u64::MAX)) as u64;
+            let deadline = kevy_store::now_unix_ms().saturating_add(ms);
+            commit_write(&mut g, &[b"PEXPIREAT", key, deadline.to_string().as_bytes()])?;
         }
         Ok(val)
     }
