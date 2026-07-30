@@ -93,7 +93,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "4.1.0"
+version = "4.1.1"
 edition = "2024"
 rust-version = "1.97.0"
 authors = ["GOLIA K.K."]
