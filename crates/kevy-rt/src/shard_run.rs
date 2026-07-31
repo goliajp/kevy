@@ -67,6 +67,7 @@ impl<C: Commands> Shard<C> {
         }
         if self.aof.is_some() {
             let aof_path = self.aof_path();
+            let segs_dir = kevy_persist::layout::segs_dir(&self.data_dir, self.id);
             let commands = &self.commands;
             let store = &mut self.store;
             // In-replay demotion: dispatch already runs the
@@ -74,7 +75,18 @@ impl<C: Commands> Shard<C> {
             // backstops it so a bigger-than-budget log can never
             // outrun the batch budget while the reactor is not yet up.
             let mut frames: u64 = 0;
+            let mut torn: Option<String> = None;
             let apply = |args: kevy_persist::Argv| {
+                if let Some(f) = kevy_persist::segmented_frame(&args) {
+                    // The stitch frame re-does a hot-layer eviction; a
+                    // manifest that does not hold the segment means the
+                    // truth set was damaged — finish the walk, then
+                    // refuse startup by name instead of dropping rows.
+                    if let Err(e) = kevy_store::apply_segmented(store, &segs_dir, f) {
+                        torn.get_or_insert(e);
+                    }
+                    return;
+                }
                 replay_dispatch(commands, store, &args);
                 frames += 1;
                 if frames.is_multiple_of(kevy_persist::REPLAY_DEMOTE_INTERVAL) {
@@ -86,6 +98,9 @@ impl<C: Commands> Shard<C> {
             } else {
                 replay_aof(&aof_path, apply)?
             };
+            if let Some(e) = torn {
+                return Err(io::Error::other(format!("shard {}: {e}", self.id)));
+            }
             self.commands.on_replay_report(report.dropped_bytes, report.corrupt);
         }
         self.store.demote_to_watermark();

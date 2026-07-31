@@ -88,6 +88,8 @@ kevy = { path = "../kevy" }
 kevy-rt = { path = "../kevy-rt", version = "4.1.1" }
 # tests/dispatch_oracle.rs: throwaway data dir for the oracle server.
 kevy-tmpdir = { path = "../kevy-tmpdir", version = "4.1.1" }
+kevy-seg = { path = "../kevy-seg", version = "4.1.1" }
+kevy-sys = { path = "../kevy-sys", version = "4.1.1" }
 # Used by examples/embed_vs_server.rs to give the Rust caller a single
 # unified blocking-client surface so the embed-vs-server bench compares
 # the same Rust code against different backends (kevy embed vs kevy
