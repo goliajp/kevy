@@ -137,3 +137,111 @@ fn single_record_segment_works() {
     assert_eq!(s.get(b"only").unwrap().as_deref(), Some(b"one".as_slice()));
     assert_eq!(s.count_range(b"a", b"z").unwrap(), 1);
 }
+
+mod manifest {
+    use crate::{Manifest, ManifestEntry};
+
+    fn entry(file: &str, n: u64) -> ManifestEntry {
+        ManifestEntry {
+            file: file.to_string(),
+            meta: b"table:9/bucket:20260801".to_vec(),
+            min_key: b"a".to_vec(),
+            max_key: b"z".to_vec(),
+            records: n,
+        }
+    }
+
+    #[test]
+    fn ledger_round_trips_across_reopen() {
+        let d = kevy_tmpdir::TmpDir::new("man-rt");
+        let mut m = Manifest::open(d.path()).expect("open fresh");
+        assert_eq!(m.live().count(), 0);
+        m.add(entry("s1.seg", 10)).unwrap();
+        m.add(entry("s2.seg", 20)).unwrap();
+        m.drop_seg("s1.seg").unwrap();
+        drop(m);
+
+        let m = Manifest::open(d.path()).expect("reopen");
+        let live: Vec<_> = m.live().collect();
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0], &entry("s2.seg", 20));
+    }
+
+    #[test]
+    fn duplicate_add_and_unknown_drop_are_refused() {
+        let d = kevy_tmpdir::TmpDir::new("man-dup");
+        let mut m = Manifest::open(d.path()).unwrap();
+        m.add(entry("s1.seg", 1)).unwrap();
+        assert!(m.add(entry("s1.seg", 2)).is_err(), "a name never means two things");
+        assert!(m.drop_seg("ghost.seg").is_err());
+        // The refusals must not have dirtied the ledger.
+        drop(m);
+        let m = Manifest::open(d.path()).unwrap();
+        assert_eq!(m.live().count(), 1);
+    }
+
+    #[test]
+    fn torn_tail_is_truncated_but_mid_file_rot_refuses() {
+        let d = kevy_tmpdir::TmpDir::new("man-torn");
+        let mut m = Manifest::open(d.path()).unwrap();
+        m.add(entry("s1.seg", 1)).unwrap();
+        m.add(entry("s2.seg", 2)).unwrap();
+        drop(m);
+        let path = d.path().join("segs.manifest");
+        let bytes = std::fs::read(&path).unwrap();
+
+        // Crash mid-append: half a record at the tail is dropped.
+        let mut torn = bytes.clone();
+        torn.extend_from_slice(&[7, 0, 0, 0, 1, 2, 3]); // len says 7, body absent
+        std::fs::write(&path, &torn).unwrap();
+        let m = Manifest::open(d.path()).expect("torn tail tolerated");
+        assert_eq!(m.live().count(), 2);
+        drop(m);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes, "tail physically truncated");
+
+        // Bit rot BEFORE the tail is a named refusal, not a truncation.
+        let mut rotted = bytes.clone();
+        rotted[10] ^= 0xFF;
+        std::fs::write(&path, &rotted).unwrap();
+        assert!(Manifest::open(d.path()).is_err(), "mid-file rot must refuse");
+    }
+
+    #[test]
+    fn sweep_deletes_only_unregistered_segments() {
+        let d = kevy_tmpdir::TmpDir::new("man-sweep");
+        let mut m = Manifest::open(d.path()).unwrap();
+        std::fs::write(d.path().join("real.seg"), b"sealed").unwrap();
+        std::fs::write(d.path().join("orphan.seg"), b"crash leftover").unwrap();
+        std::fs::write(d.path().join("unrelated.txt"), b"not ours").unwrap();
+        m.add(entry("real.seg", 5)).unwrap();
+
+        let mut swept = m.sweep(d.path()).unwrap();
+        swept.sort();
+        assert_eq!(swept, vec!["orphan.seg".to_string()]);
+        assert!(d.path().join("real.seg").exists());
+        assert!(d.path().join("unrelated.txt").exists());
+        assert!(!d.path().join("orphan.seg").exists());
+    }
+
+    #[test]
+    fn compact_rewrites_to_the_live_set_and_stays_appendable() {
+        let d = kevy_tmpdir::TmpDir::new("man-compact");
+        let mut m = Manifest::open(d.path()).unwrap();
+        for i in 0..20 {
+            m.add(entry(&format!("s{i}.seg"), i)).unwrap();
+        }
+        for i in 0..15 {
+            m.drop_seg(&format!("s{i}.seg")).unwrap();
+        }
+        let before = std::fs::metadata(d.path().join("segs.manifest")).unwrap().len();
+        m.compact().unwrap();
+        let after = std::fs::metadata(d.path().join("segs.manifest")).unwrap().len();
+        assert!(after < before, "dead records gone ({after} !< {before})");
+        // Still appendable after the rename swap.
+        m.add(entry("post.seg", 99)).unwrap();
+        drop(m);
+        let m = Manifest::open(d.path()).unwrap();
+        assert_eq!(m.live().count(), 6);
+        assert!(m.live().any(|e| e.file == "post.seg"));
+    }
+}

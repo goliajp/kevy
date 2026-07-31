@@ -35,9 +35,11 @@
 
 mod builder;
 mod layout;
+mod manifest;
 mod reader;
 
 pub use builder::SegBuilder;
+pub use manifest::{Manifest, ManifestEntry};
 pub use reader::{RangeIter, Seg};
 
 /// Sealed-segment summary, from the footer.

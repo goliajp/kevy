@@ -25,3 +25,9 @@ test = false
 doc = false
 
 [workspace]
+
+[[bin]]
+name = "manifest_open"
+path = "fuzz_targets/manifest_open.rs"
+test = false
+doc = false
