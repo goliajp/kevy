@@ -434,6 +434,7 @@ dependencies = [
  "kevy-resp-client",
  "kevy-rt",
  "kevy-scope",
+ "kevy-seg",
  "kevy-store",
  "kevy-sys",
  "kevy-text",
@@ -537,6 +538,7 @@ dependencies = [
  "kevy-replicate",
  "kevy-resp",
  "kevy-rt",
+ "kevy-seg",
  "kevy-store",
  "kevy-sys",
  "kevy-text",
@@ -709,6 +711,7 @@ dependencies = [
  "kevy-hash",
  "kevy-map",
  "kevy-ranktree",
+ "kevy-seg",
  "kevy-tmpdir",
  "kevy-vlog",
 ]

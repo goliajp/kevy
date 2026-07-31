@@ -72,6 +72,7 @@ kevy-client = { path = "../kevy-client" }
 # v1.31: chaos test harness — spawns kevy as a child for crash safety
 # tests. Test-only; never reaches the production server.
 kevy-chaos = { path = "../kevy-chaos" }
+kevy-seg = { path = "../kevy-seg", version = "4.1.1" }
 # v1.40: backup/restore container API — only the chaos test that
 # verifies the round-trip references this.
 kevy-cli = { path = "../kevy-cli" }

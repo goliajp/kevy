@@ -43,6 +43,7 @@ pub mod feed_meta;
 pub mod layout;
 mod replay;
 mod replay_txn;
+mod segmented;
 mod aof_policy;
 mod aof_util;
 mod crc32c;
@@ -61,6 +62,7 @@ pub use aof_util::write_aof_base;
 pub use aof_policy::RewritePolicy;
 pub use record::{AOF2_MAGIC, AofFormat, RecordStep, next_record, write_record_multibulk};
 pub use replay::{ReplayReport, replay_aof, replay_aof_resync};
+pub use segmented::{SEGMENTED, segmented_argv, segmented_frame};
 
 /// How often bulk-load paths check the tiering demote watermark:
 /// every this many applied frames/records, the loading store runs

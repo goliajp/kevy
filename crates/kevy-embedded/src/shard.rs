@@ -304,7 +304,21 @@ fn load_in_place(
             // per-write demote hook) — check the watermark every K
             // frames and drain once more after the log ends.
             let mut frames: u64 = 0;
+            #[cfg(not(target_arch = "wasm32"))]
+            let segs_dir = layout::segs_dir(dir, i);
+            #[cfg(not(target_arch = "wasm32"))]
+            let mut torn: Option<String> = None;
             let apply = |args: kevy_persist::Argv| {
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(f) = kevy_persist::segmented_frame(&args) {
+                    // The SEGMENTED stitch: re-do the hot-layer
+                    // eviction; a manifest miss is a named refusal
+                    // after the walk (rows' durable copy unreachable).
+                    if let Err(e) = kevy_store::apply_segmented(store, &segs_dir, f) {
+                        torn.get_or_insert(e);
+                    }
+                    return;
+                }
                 crate::replay::apply(store, &args);
                 frames += 1;
                 if frames.is_multiple_of(kevy_persist::REPLAY_DEMOTE_INTERVAL) {
@@ -316,6 +330,10 @@ fn load_in_place(
             } else {
                 replay_aof(&aof, apply)?
             };
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(e) = torn {
+                return Err(io::Error::other(format!("shard {i}: {e}")));
+            }
             report.replayed_commands += r.commands;
             report.replayed_bytes += r.replayed_bytes;
             report.dropped_bytes += r.dropped_bytes;

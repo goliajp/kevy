@@ -36,6 +36,13 @@ pub fn shards_meta_path(dir: &Path) -> PathBuf {
     dir.join("shards.meta")
 }
 
+/// Shard `i`'s cold-segment directory under `dir` — the segment files
+/// plus the manifest that makes them real. Per shard, like the AOF it
+/// stitches into: replay threads never share a manifest.
+pub fn segs_dir(dir: &Path, i: usize) -> PathBuf {
+    dir.join(format!("segs-{i}"))
+}
+
 /// Highest `dump-{i}.rdb` / `aof-{i}.aof` index + 1 found in `dir`, or 0
 /// for no per-shard files. The shard count of a meta-less legacy dir.
 pub fn infer_files_n(dir: &Path) -> usize {

@@ -21,7 +21,7 @@ default = ["std"]
 # `dep:kevy-vlog` rides the target-gated table below: the tier backend
 # (capacity arc) exists only off-wasm — on wasm32 the activation is a
 # no-op and the tier module compiles out.
-std = ["alloc", "kevy-hash/std", "kevy-bytes/std", "kevy-map/std", "kevy-ranktree/std", "dep:kevy-vlog"]
+std = ["alloc", "kevy-hash/std", "kevy-bytes/std", "kevy-map/std", "kevy-ranktree/std", "dep:kevy-vlog", "dep:kevy-seg"]
 alloc = ["kevy-hash/alloc", "kevy-bytes/alloc", "kevy-map/alloc", "kevy-ranktree/alloc"]
 # Feed the clocks from the embedding host (`set_clock_ns` /
 # `set_wall_clock_ms`) instead of the OS — mandatory without `std`.
@@ -40,6 +40,7 @@ kevy-ranktree = { path = "../kevy-ranktree", version = "4.1.1", default-features
 # on wasm32. Optional: activated by the `std` feature off-wasm only.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kevy-vlog = { path = "../kevy-vlog", version = "4.1.1", optional = true }
+kevy-seg = { path = "../kevy-seg", version = "4.1.1", optional = true }
 
 [dev-dependencies]
 kevy-bench = { path = "../kevy-bench" }
