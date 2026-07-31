@@ -34,6 +34,28 @@ pub(super) fn clause_chunk(msg: &str) -> Vec<u8> {
 
 /// Run a clause-carrying scalar query against this shard's segment and
 /// encode the chunk. The caller has already refused CURSOR × selection.
+/// `IDX.COUNT … FILTER …`: the per-shard claused count, in the plain
+/// COUNT chunk shape (`[ST_OK][u64]`) so `reduce_count` sums it
+/// unchanged.
+pub(super) fn run_claused_count(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> Vec<u8> {
+    let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg| {
+        let (min, max) = q.bounds_for(spec)?;
+        let filters: Vec<(usize, ValueTest)> = filter_tests(spec, &q.filters)?;
+        Ok(seg.count_claused(&min, &max, &filters))
+    });
+    match res {
+        Ok(Err(chunk)) => chunk,
+        Ok(Ok(n)) => {
+            let mut chunk = vec![ST_OK];
+            chunk.extend_from_slice(&n.to_le_bytes());
+            chunk
+        }
+        Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
+        Err(_) => vec![ST_NOINDEX],
+    }
+}
+
 pub(super) fn run_claused_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> Vec<u8> {
     let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg| {
         let (min, max) = q.bounds_for(spec)?;

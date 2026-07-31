@@ -265,6 +265,30 @@ impl Store {
         })
     }
 
+    /// [`Store::idx_count`] with `FILTER` applied — the total a
+    /// claused query's pages would reach, materializing nothing. The
+    /// consumer shape this closes: counting a filtered axis used to
+    /// mean fetching every page and taking its length.
+    pub fn idx_count_claused(
+        &self,
+        name: &[u8],
+        min: &IndexValue,
+        max: &IndexValue,
+        filters: &[ValueFilter<'_>],
+    ) -> KevyResult<u64> {
+        let spec = {
+            let g = self.indexes.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+            g.1.get(name)
+                .map(|(s, _)| s.clone())
+                .ok_or_else(|| KevyError::NotFound("no such index".into()))?
+        };
+        let opts = ScalarQueryOpts { filters, ..ScalarQueryOpts::default() };
+        let r = resolve(&spec, &opts)?;
+        let mut total = 0u64;
+        self.for_each_segment(name, |seg| total += seg.count_claused(min, max, &r.filters))?;
+        Ok(total)
+    }
+
     /// Every shard's claused page, unmerged, with the facet buckets
     /// folded by identity as the shards report them.
     fn gather_claused(

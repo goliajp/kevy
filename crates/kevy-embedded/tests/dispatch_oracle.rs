@@ -526,6 +526,12 @@ fn scalar_values_clauses_match_the_real_server() {
         vec![b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"DISTINCT", b"nope"],
         vec![b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FACET", b"nope"],
         vec![b"IDX.COUNT", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo"],
+        vec![b"IDX.COUNT", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"price", b"RANGE", b"0", b"6"],
+        vec![b"IDX.COUNT", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo", b"FILTER", b"price", b"RANGE", b"0", b"6"],
+        vec![b"IDX.COUNT", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"nope", b"EQ", b"1"],
+        vec![b"IDX.COUNT", b"vals", b"RANGE", b"0", b"100", b"SORT", b"city", b"ASC"],
+        vec![b"IDX.COUNT", b"vals", b"RANGE", b"0", b"100", b"OFFSET", b"2"],
+        vec![b"IDX.COUNT", b"vals", b"EQ", b"10", b"FILTER", b"city", b"EQ", b"tokyo"],
     ];
     for argv in &cases {
         let srv = server_reply(&mut sock, &mut buf, argv);
