@@ -626,3 +626,57 @@ fn spliced_chains_from_two_freeing_heaps_arrive_complete() {
         unsafe { owner.dealloc(p, size, 8) };
     }
 }
+
+/// The collection-write shape the claimed word exists for: short-lived
+/// small allocations recycling inside one word, heap-locally. The
+/// observable contract: pointers stay lowest-word-stable (position
+/// awareness), the accounting identity balances mid-claim, and a
+/// retire hands unused bits back so densification sees them.
+#[test]
+fn claimed_word_recycles_locally_and_retires_honestly() {
+    let mut h = Heap::new(1);
+    // Churn one size class hard: alloc/free pairs like a hash-node
+    // path. Every pointer must come from the same low word while the
+    // claim holds (position-aware recycling, not LIFO wander).
+    let mut last = None;
+    for _ in 0..1000 {
+        let p = h.alloc(48, 8).unwrap();
+        if let Some(prev) = last {
+            assert_eq!(p, prev, "short-lived churn must reuse the same lowest slot");
+        }
+        last = Some(p);
+        unsafe { h.dealloc(p, 48, 8) };
+    }
+    // Identity balances with a claim in flight (no flush).
+    let st = h.snapshot();
+    assert_eq!(st.live, 0, "everything was freed");
+    assert!(st.balanced(), "{st:?}");
+    // After a flush the span sees the truth and reclaim can sweep.
+    h.flush_claims();
+    let st = h.snapshot();
+    assert!(st.balanced(), "{st:?}");
+    h.reclaim();
+    let st = h.snapshot();
+    assert!(st.balanced(), "{st:?}");
+}
+
+/// Filling past one word forces claim → refill → claim on the next
+/// word; freeing everything then reclaiming must return the pages —
+/// the claim must never strand occupancy.
+#[test]
+fn claims_span_words_and_never_strand_occupancy() {
+    let mut h = Heap::new(1);
+    let mut ptrs = Vec::new();
+    for _ in 0..200 {
+        ptrs.push(h.alloc(64, 8).unwrap()); // > 64 slots ⇒ multiple words
+    }
+    for p in ptrs.drain(..) {
+        unsafe { h.dealloc(p, 64, 8) };
+    }
+    h.flush_claims();
+    let st = h.snapshot();
+    assert_eq!(st.live, 0);
+    assert!(st.balanced(), "{st:?}");
+    h.reclaim();
+    assert!(h.snapshot().balanced());
+}
