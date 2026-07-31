@@ -129,6 +129,22 @@ impl Segment {
         self.stored(key, field).and_then(|raw| order_key(ty, raw))
     }
 
+    /// The clause-carrying count of `[min, max]`: the full walk with
+    /// the FILTER predicates applied, materializing nothing — the
+    /// total a claused query would reach, without building pages. The
+    /// consumer shape this closes: counting a filtered axis used to
+    /// mean fetching every page and taking `len`.
+    pub fn count_claused(
+        &self,
+        min: &IndexValue,
+        max: &IndexValue,
+        filters: &[(usize, ValueTest)],
+    ) -> u64 {
+        self.range_iter(min, max, None)
+            .filter(|(_, k)| self.passes(k, filters))
+            .count() as u64
+    }
+
     /// The clause-carrying scan of `[min, max]`. FILTER-only queries
     /// stream in driving order and stay cursor-paged; any selection
     /// clause walks deeper (the whole range for `SORT` / `FACET`) and

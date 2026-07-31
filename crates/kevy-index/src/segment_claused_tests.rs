@@ -287,3 +287,31 @@ fn scalar_sorted_order_agrees_with_the_text_contract() {
     assert_eq!(o((Some(b"a"), b"k1"), (Some(b"a"), b"k2"), true), Ordering::Less);
     assert_eq!(o((None, b"k1"), (None, b"k2"), true), Ordering::Less);
 }
+
+/// count_claused = the length of the claused query's full result,
+/// without pages — pinned against the query itself.
+#[test]
+fn count_claused_matches_the_query_total() {
+    let mut seg = Segment::with_values(1);
+    for i in 0..500u32 {
+        let key = format!("k{i:04}").into_bytes();
+        let dept: &[u8] = if i % 3 == 0 { b"eng" } else { b"ops" };
+        seg.apply_with_values(&key, Some(IndexValue::I64(i64::from(i))), &[Some(dept)]);
+    }
+    let eng = ValueTest::eq(ValType::Str, b"eng").unwrap();
+    let filters = [(0usize, eng)];
+    let n = seg.count_claused(&IndexValue::I64(0), &IndexValue::I64(499), &filters);
+    let page = seg.query_claused(
+        &IndexValue::I64(0),
+        &IndexValue::I64(499),
+        None,
+        &ScalarClauses { filters: &filters, sort: None, distinct: None, facets: &[], fetch: 10_000 },
+    );
+    assert_eq!(n, page.hits.len() as u64);
+    assert_eq!(n, 167, "0,3,...,498");
+    // Unfiltered count_claused equals the plain count.
+    assert_eq!(
+        seg.count_claused(&IndexValue::I64(100), &IndexValue::I64(199), &[]),
+        seg.count(&IndexValue::I64(100), &IndexValue::I64(199)),
+    );
+}

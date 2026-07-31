@@ -30,10 +30,19 @@ pub(super) fn op_query(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>], verb:
     let Some(q) = Query::parse(argv) else {
         return vec![ST_BADARGS];
     };
-    // IDX.COUNT counts the driving range and nothing else; accepting a
-    // clause it will not apply would be the accept-and-ignore shape.
-    if verb.eq_ignore_ascii_case(b"IDX.COUNT") && q.has_clauses() {
-        return vec![ST_BADARGS];
+    // IDX.COUNT applies FILTER (the claused count — the total a
+    // claused query's pages would reach, materializing nothing) and
+    // refuses every clause it would not apply: SORT/DISTINCT/OFFSET
+    // cannot change a count, FACET/FIELDS have nowhere to go, and
+    // accepting-then-ignoring any of them would be worse than the
+    // refusal.
+    if verb.eq_ignore_ascii_case(b"IDX.COUNT") {
+        if q.selects() || !q.fields.is_empty() || q.cursor_raw.is_some() {
+            return vec![ST_BADARGS];
+        }
+        if !q.filters.is_empty() {
+            return super::query_claused::run_claused_count(ctx, store, &q);
+        }
     }
     // Pure grammar, refused before the segment is consulted: the
     // selection clauses re-shape the page, so a resume point in the

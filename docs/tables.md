@@ -158,6 +158,9 @@ query the way a relational composite index does. The rules:
   than **255 bytes** also excludes the row: the same class of cap a
   relational B-tree puts on index-row size, and what keeps range
   bounds exact. Up to 8 components.
+- `IDX.COUNT` applies `FILTER` on stored `VALUES` columns — counting
+  a filtered axis (the badge/tab number) is one call, not a paged
+  fetch-and-len.
 - `WHERE` works on `IDX.COUNT` too, and on an index that declares no
   composite columns it is refused by name.
 - **A non-zero `duplicates` in `TABLE.VERIFY` means the ORDERPATH is

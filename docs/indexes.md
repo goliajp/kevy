@@ -51,7 +51,11 @@ range|unique [MAXMEM <bytes>]`
   composition, **key-ordered** (the two value domains differ), same
   LIMIT/CURSOR/FIELDS tail. AND/OR run per shard (a key lives on
   exactly one shard, so per-shard set algebra composes globally).
-- `IDX.COUNT <name> RANGE|EQ …` — count without materializing keys.
+- `IDX.COUNT <name> RANGE|EQ|WHERE … [FILTER …]…` — count without
+  materializing keys. `FILTER` predicates over stored `VALUES` columns
+  are applied (the claused count: the total a claused query's pages
+  would reach); every clause a count would not apply —
+  SORT/DISTINCT/FACET/OFFSET/FIELDS/CURSOR — is refused by name.
 - `IDX.VERIFY <name>` — summed stats: entries, bytes,
   coerce_failures, duplicates.
 - `IDX.LIST` — catalog + per-index state/entries/bytes.

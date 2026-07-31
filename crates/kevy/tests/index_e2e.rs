@@ -1320,3 +1320,39 @@ fn flushall_empties_the_index_segments() {
         "a flushed keyspace must not answer from stale index entries"
     );
 }
+
+/// The claused count: IDX.COUNT applies FILTER, totalling what a
+/// claused query's pages would reach without materializing them — the
+/// consumer shape it closes counted a filtered axis by fetching every
+/// page and taking its length.
+#[test]
+fn idx_count_applies_filter() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    for i in 0..30u32 {
+        let key = format!("u:{i}");
+        let dept: &[u8] = if i % 3 == 0 { b"eng" } else { b"ops" };
+        assert!(cmd(&mut c, &[
+            b"HSET", key.as_bytes(), b"score", format!("{i}").as_bytes(), b"dept", dept,
+        ]).starts_with(b":"));
+    }
+    assert!(cmd(&mut c, &[
+        b"IDX.CREATE", b"by_score", b"ON", b"PREFIX", b"u:", b"FIELD", b"score",
+        b"TYPE", b"i64", b"KIND", b"range", b"VALUES", b"dept",
+    ]).starts_with(b"+OK"));
+    let _ = query_ready(&mut c, &[b"IDX.QUERY", b"by_score", b"RANGE", b"0", b"100"]);
+
+    assert_eq!(cmd(&mut c, &[b"IDX.COUNT", b"by_score", b"RANGE", b"0", b"100"]), b":30\r\n".to_vec());
+    assert_eq!(
+        cmd(&mut c, &[b"IDX.COUNT", b"by_score", b"RANGE", b"0", b"100", b"FILTER", b"dept", b"EQ", b"eng"]),
+        b":10\r\n".to_vec(),
+        "0,3,...,27"
+    );
+    assert_eq!(
+        cmd(&mut c, &[b"IDX.COUNT", b"by_score", b"RANGE", b"10", b"20", b"FILTER", b"dept", b"EQ", b"eng"]),
+        b":3\r\n".to_vec(),
+        "eng within 10..=20 is 12, 15, 18"
+    );
+    // A clause the count would not apply is a refusal, not silence.
+    assert!(cmd(&mut c, &[b"IDX.COUNT", b"by_score", b"RANGE", b"0", b"100", b"SORT", b"dept", b"ASC"]).starts_with(b"-ERR"));
+}
