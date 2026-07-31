@@ -1,0 +1,27 @@
+[package]
+name = "kevy-seg-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+kevy-seg = { path = ".." }
+
+[[bin]]
+name = "seg_roundtrip"
+path = "fuzz_targets/seg_roundtrip.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "seg_open"
+path = "fuzz_targets/seg_open.rs"
+test = false
+doc = false
+
+[workspace]

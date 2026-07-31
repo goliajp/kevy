@@ -686,6 +686,14 @@ name = "kevy-scope"
 version = "4.1.1"
 
 [[package]]
+name = "kevy-seg"
+version = "4.1.1"
+dependencies = [
+ "kevy-sys",
+ "kevy-tmpdir",
+]
+
+[[package]]
 name = "kevy-sql"
 version = "4.1.1"
 dependencies = [
