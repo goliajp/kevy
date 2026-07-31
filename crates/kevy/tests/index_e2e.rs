@@ -1275,8 +1275,11 @@ fn scalar_values_filter_sort_distinct_facet_offset() {
     let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"price", b"EQ", b"abc"]);
     assert!(String::from_utf8_lossy(&r).contains("is not a valid i64"), "{:?}", String::from_utf8_lossy(&r));
 
-    // IDX.COUNT takes no clauses — refused, not ignored.
+    // IDX.COUNT applies FILTER (4.2: the claused count); clauses it
+    // would not apply stay refusals, not silence.
     let r = cmd(&mut c, &[b"IDX.COUNT", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo"]);
+    assert_eq!(r, b":2\r\n".to_vec(), "v:1 and v:4 are tokyo");
+    let r = cmd(&mut c, &[b"IDX.COUNT", b"vals", b"RANGE", b"0", b"100", b"SORT", b"city", b"ASC"]);
     assert!(r.starts_with(b"-ERR"), "{:?}", String::from_utf8_lossy(&r));
 
     // A live update moves the stored value with the row.
