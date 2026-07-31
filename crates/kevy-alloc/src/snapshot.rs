@@ -46,6 +46,11 @@ impl Heap {
             }
             seg = s.next;
         }
+        // Claimed-word bits the heap holds locally: span-side they
+        // count as live (they pin pages exactly as live slots do), but
+        // no caller holds them — they are resident, allocatable bytes,
+        // which is the definition of `span_free`.
+        st.span_free += self.claims_unused_bytes();
         st
     }
 }
