@@ -369,7 +369,7 @@ pub(crate) fn extension_reduce(
     ExtensionReduced::Reply(reduce_verify(catalogs, argv, &chunks))
 }
 
-/// `TABLE.LIST` — 12-field rows, catalog order (the catalog is
+/// `TABLE.LIST` — 14-field rows, catalog order (the catalog is
 /// process-global; shards contribute nothing).
 fn render_table_list(catalogs: &CatalogState) -> Vec<u8> {
     let mut out = Vec::new();
@@ -379,7 +379,7 @@ fn render_table_list(catalogs: &CatalogState) -> Vec<u8> {
     };
     encode_array_len(&mut out, cat.len() as i64);
     for s in cat.iter() {
-        encode_array_len(&mut out, 12);
+        encode_array_len(&mut out, 14);
         encode_bulk(&mut out, b"name");
         encode_bulk(&mut out, &s.name);
         encode_bulk(&mut out, b"prefix");
@@ -392,8 +392,22 @@ fn render_table_list(catalogs: &CatalogState) -> Vec<u8> {
         encode_bulk(&mut out, s.indexes.len().to_string().as_bytes());
         encode_bulk(&mut out, b"orderpaths");
         encode_bulk(&mut out, s.orderpaths.len().to_string().as_bytes());
+        encode_bulk(&mut out, b"window");
+        encode_bulk(&mut out, &window_field(s));
     }
     out
+}
+
+/// The LIST row's window cell: `<col>:<span>:<bucket>` or `-`.
+fn window_field(s: &kevy_index::TableSpec) -> Vec<u8> {
+    match &s.window {
+        None => b"-".to_vec(),
+        Some(w) => {
+            let mut f = w.column.clone();
+            f.extend_from_slice(format!(":{}:{}", w.span, w.bucket).as_bytes());
+            f
+        }
+    }
 }
 
 /// `TABLE.VERIFY` reduce: sum the per-shard counters, render one

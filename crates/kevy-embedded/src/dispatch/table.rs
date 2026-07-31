@@ -81,12 +81,12 @@ fn cmd_replace(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     }
 }
 
-/// `TABLE.LIST` — 12-field rows matching the server's reduce.
+/// `TABLE.LIST` — 14-field rows matching the server's reduce.
 fn cmd_list(s: &Store, out: &mut Vec<u8>) {
     let tables = s.table_list();
     arr(out, tables.len());
     for t in &tables {
-        arr(out, 12);
+        arr(out, 14);
         bulk(out, b"name");
         bulk(out, &t.name);
         bulk(out, b"prefix");
@@ -99,6 +99,15 @@ fn cmd_list(s: &Store, out: &mut Vec<u8>) {
         bulk(out, t.indexes.len().to_string().as_bytes());
         bulk(out, b"orderpaths");
         bulk(out, t.orderpaths.len().to_string().as_bytes());
+        bulk(out, b"window");
+        match &t.window {
+            None => bulk(out, b"-"),
+            Some(w) => {
+                let mut f = w.column.clone();
+                f.extend_from_slice(format!(":{}:{}", w.span, w.bucket).as_bytes());
+                bulk(out, &f);
+            }
+        }
     }
 }
 

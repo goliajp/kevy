@@ -153,3 +153,69 @@ fn sidecar_round_trips_with_hostile_names() {
         "a malformed line refuses the whole load"
     );
 }
+
+mod window {
+    use super::super::*;
+    use crate::table_wire::parse_table_declare;
+
+    fn declare(extra: &str) -> Result<TableSpec, String> {
+        let base = "TABLE.DECLARE ev PREFIX ev: PK id COLUMN id str COLUMN at i64 COLUMN note str";
+        let full = format!("{base} {extra}");
+        let argv: Vec<&[u8]> = full.split(' ').map(str::as_bytes).collect();
+        parse_table_declare(&argv)
+    }
+
+    #[test]
+    fn window_parses_with_an_index_access_path() {
+        let spec = declare("INDEX at range WINDOW at SPAN 90 BUCKET 1").expect("valid");
+        let w = spec.window.expect("window kept");
+        assert_eq!((w.column.as_slice(), w.span, w.bucket), (b"at".as_slice(), 90, 1));
+    }
+
+    #[test]
+    fn window_accepts_a_leading_ascending_orderpath() {
+        let spec = declare("ORDERPATH recent ON at THEN id WINDOW at SPAN 90 BUCKET 30");
+        assert!(spec.is_ok(), "{spec:?}");
+    }
+
+    #[test]
+    fn window_refusals_are_named() {
+        for (extra, needle) in [
+            ("WINDOW at SPAN 90 BUCKET 1", "needs an access path"),
+            ("INDEX at range WINDOW ghost SPAN 9 BUCKET 1", "unknown column"),
+            ("INDEX note range WINDOW note SPAN 9 BUCKET 1", "must be i64"),
+            ("INDEX at range WINDOW at SPAN 0 BUCKET 1", "must be positive"),
+            ("INDEX at range WINDOW at SPAN 9 BUCKET -1", "must be positive"),
+            ("INDEX at range WINDOW at SPAN 9 BUCKET 10", "must not exceed SPAN"),
+            ("INDEX at range WINDOW at SPAN x BUCKET 1", "must be an integer"),
+            (
+                "ORDERPATH recent ON at DESC WINDOW at SPAN 9 BUCKET 1",
+                "needs an access path",
+            ),
+            (
+                "INDEX at range WINDOW at SPAN 9 BUCKET 1 WINDOW at SPAN 9 BUCKET 1",
+                "duplicate WINDOW",
+            ),
+        ] {
+            let err = declare(extra).expect_err(extra);
+            assert!(err.contains(needle), "{extra}: {err}");
+        }
+    }
+
+    #[test]
+    fn sidecar_round_trips_the_window_and_stays_bytewise_stable_without_one() {
+        let mut cat = TableCatalog::new();
+        cat.create(declare("INDEX at range WINDOW at SPAN 90 BUCKET 1").unwrap()).unwrap();
+        cat.create(declare("INDEX at range").map(|mut s| { s.name = b"plain".to_vec(); s }).unwrap())
+            .unwrap();
+        let text = cat.to_sidecar();
+        let back = TableCatalog::from_sidecar(&text).expect("parses");
+        assert_eq!(back.get(b"ev").unwrap().window, cat.get(b"ev").unwrap().window);
+        assert_eq!(back.get(b"plain").unwrap().window, None);
+        // The windowless line keeps the six-field shape older readers know.
+        let plain_line = text.lines().find(|l| l.starts_with("plain")).unwrap();
+        assert_eq!(plain_line.split('\t').count(), 6);
+        let ev_line = text.lines().find(|l| l.starts_with("ev")).unwrap();
+        assert_eq!(ev_line.split('\t').count(), 7);
+    }
+}

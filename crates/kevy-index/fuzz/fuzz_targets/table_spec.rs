@@ -17,7 +17,7 @@
 
 use libfuzzer_sys::fuzz_target;
 
-use kevy_index::{IndexKind, OrderPath, TableIndex, TableSpec, ValType, compile_table};
+use kevy_index::{IndexKind, OrderPath, TableIndex, TableSpec, ValType, WindowSpec, compile_table};
 
 fuzz_target!(|data: &[u8]| {
     // Route 1: wire bytes, split on 0xFF into argv-ish chunks.
@@ -52,6 +52,11 @@ fuzz_target!(|data: &[u8]| {
             name: next(),
             on: vec![(next(), true), (next(), false)],
         }],
+        window: (data.len() % 3 == 0).then(|| WindowSpec {
+            column: next(),
+            span: data.len() as i64 - 8,
+            bucket: data.first().copied().unwrap_or(0) as i64 - 4,
+        }),
     };
     let _ = compile_table(&spec);
 });

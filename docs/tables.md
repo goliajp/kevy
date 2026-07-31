@@ -69,12 +69,37 @@ TABLE.DECLARE name PREFIX p PK col
     COLUMN name i64|f64|str [COLUMN ...]
     [INDEX col range|unique [VALUES col ...]] ...
     [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] ...
+    [WINDOW col SPAN n BUCKET n]
 TABLE.ENSURE ...       # TABLE.DECLARE's boot form — see below
 TABLE.REPLACE ...      # explicit drop + declare + rebuild
 TABLE.DROP name        # drops the table + its compiled indexes; 1|0
-TABLE.LIST             # name/prefix/pk + column/index/orderpath counts
+TABLE.LIST             # name/prefix/pk + counts + the window (or -)
 TABLE.VERIFY name      # component fsck + a bounded column spot check
 ```
+
+## The sliding window (declaration only, today)
+
+`WINDOW <col> SPAN <n> BUCKET <n>` declares a sliding hot window over
+an `i64` column. `SPAN` and `BUCKET` are plain integers **in the
+column's own units** — the engine never assumes a time base, so the
+column can be epoch seconds, epoch millis, a sequence number, anything
+monotone with data age. The boundary will advance in whole buckets;
+an evicted bucket becomes one cold segment.
+
+Two declare-time refusals, both named:
+
+- the window column must be a declared `i64` column;
+- it must have an access path whose tree tail answers `max(col)` for
+  free — a single-column `INDEX <col>` on it, or an `ORDERPATH` whose
+  *first* column is it, ascending. Without one the declaration is
+  refused (`WINDOW needs an access path on '<col>'`) — which also
+  guarantees every windowed table can serve cross-window range queries
+  through that same path.
+
+Declaring a window changes nothing about reads or writes today: rows
+are ordinary hashes, addressed by key, exactly as without one. The
+clause records intent; the sliding eviction machinery arrives with the
+cold segment tier.
 
 ## The boot pattern: `ensure`
 
