@@ -32,6 +32,9 @@ impl Heap {
     /// second sweep found it already past the threshold and returned
     /// everything, which made the hysteresis vanish after one call.
     pub fn reclaim(&mut self) {
+        // Claimed-word bits pin their pages exactly as live slots do;
+        // write them back first so the sweep sees true occupancy.
+        self.flush_claims();
         // Retained large mappings go back each tick: retention beyond a
         // tick requires sustained traffic to re-earn, and idle memory
         // stays bounded by the tick length rather than the pool size.

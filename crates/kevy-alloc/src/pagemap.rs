@@ -111,6 +111,61 @@ impl SpanMeta {
         None
     }
 
+    /// Claim every free bit of the lowest holed word for local
+    /// handout: the bits are marked live in the bitmap (a claimed bit
+    /// pins its pages exactly as a live slot does, which is what makes
+    /// the claim invisible to reclaim), and the caller hands them out
+    /// from its own copy without touching this header again. Returns
+    /// `(word_index, claimed_mask)`, or `None` when the span is full.
+    ///
+    /// The far-line arithmetic this exists for: one header round-trip
+    /// claims up to 64 slots, so the per-allocation touch that
+    /// profiled at 17.3% of collection-write self time amortizes
+    /// 64:1. Position-awareness coarsens from bit to word — the claim
+    /// still takes the LOWEST holed word, so densification's
+    /// lowest-first semantics survive at word granularity.
+    pub fn claim_word(&mut self) -> Option<(u8, u64)> {
+        let n = self.capacity();
+        let words = (n as usize).div_ceil(64);
+        for w in (self.hint as usize)..words {
+            let valid = if (w + 1) * 64 <= n as usize {
+                !0u64
+            } else {
+                (1u64 << (n as usize - w * 64)) - 1
+            };
+            let holes = !self.bitmap[w] & valid;
+            if holes == 0 {
+                continue;
+            }
+            self.bitmap[w] |= holes;
+            self.live += holes.count_ones() as u16;
+            let hi = (w as u32) * 64 + (63 - holes.leading_zeros());
+            if hi as u16 >= self.high_water {
+                self.high_water = hi as u16 + 1;
+            }
+            self.hint = w as u8;
+            return Some((w as u8, holes));
+        }
+        None
+    }
+
+    /// Return the bits of a claimed word that were never handed out
+    /// (or were handed out and locally freed). The exact inverse of
+    /// the claim's marking; the hint walks back so lowest-first
+    /// allocation sees the holes again.
+    pub fn retire_word(&mut self, w: u8, unused: u64) {
+        debug_assert_eq!(
+            self.bitmap[w as usize] & unused,
+            unused,
+            "retiring bits that were not claimed"
+        );
+        self.bitmap[w as usize] &= !unused;
+        self.live -= unused.count_ones() as u16;
+        if w < self.hint {
+            self.hint = w;
+        }
+    }
+
     /// Mark slot `i` free.
     pub fn free_slot(&mut self, i: u32) {
         let w = (i / 64) as usize;
@@ -214,6 +269,38 @@ mod tests {
         assert!(m.range_has_live(130, 130));
         assert!(!m.range_has_live(0, 129));
         assert!(!m.range_has_live(131, 300));
+    }
+
+    #[test]
+    fn claim_takes_the_lowest_holed_word_and_retire_reverses_it() {
+        let mut m = meta_for(400); // 157 slots -> 3 words, last partial
+        for _ in 0..64 {
+            m.alloc_slot(); // word 0 full
+        }
+        let (w, mask) = m.claim_word().expect("word 1 has holes");
+        assert_eq!(w, 1, "lowest holed word");
+        assert_eq!(mask, !0u64, "all 64 bits were free");
+        assert_eq!(m.live, 128);
+        // The span-side view: word 1 is now full, allocation skips it.
+        assert_eq!(m.alloc_slot(), Some(128), "next span alloc lands in word 2");
+        m.free_slot(128);
+        // Retire half the claim; those bits become allocatable again.
+        m.retire_word(w, 0xFFFF_FFFF);
+        assert_eq!(m.live, 96);
+        assert_eq!(m.alloc_slot(), Some(64), "retired bit is the lowest hole");
+    }
+
+    #[test]
+    fn claim_respects_the_capacity_edge() {
+        let mut m = meta_for(400); // 157 slots: word 2 has 29 valid bits
+        for _ in 0..128 {
+            m.alloc_slot();
+        }
+        let (w, mask) = m.claim_word().expect("partial last word");
+        assert_eq!(w, 2);
+        assert_eq!(mask.count_ones(), 157 - 128, "only valid bits claimed");
+        assert_eq!(m.claim_word(), None, "span exhausted");
+        assert_eq!(m.live as u32, m.capacity());
     }
 
     #[test]

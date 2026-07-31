@@ -87,6 +87,13 @@ pub struct Heap {
     /// may go stale (a span can be reassigned after its entry is
     /// pushed) — the pop validates and simply discards liars.
     partials: [PartialRing; NCLASSES],
+    /// Per-class claimed bitmap word (the far-line amortizer): up to 64
+    /// slots of the current span's lowest holed word, handed out and
+    /// locally recycled without touching the segment header. One header
+    /// round-trip per 64 slots instead of per slot — the collection-write
+    /// residual this shape exists for. `claimed & !taken` are the bits
+    /// owed back to the span on retire.
+    claims: [Option<Claim>; NCLASSES],
     class_cap: u16,
 }
 
@@ -114,6 +121,7 @@ impl Heap {
             rounding_bytes: 0,
             outbound: Outbound::new(),
             partials: [PartialRing::EMPTY; NCLASSES],
+            claims: [None; NCLASSES],
             class_cap,
         }
     }
@@ -280,29 +288,16 @@ impl Heap {
     /// falling back. Lowest-first is the densification property: live
     /// slots pack toward a span's low pages, so churn migrates free
     /// space upward into whole pages the reclaim sweep can return.
+    ///
+    /// The handout comes from the class's claimed word; only when it
+    /// runs dry does the span header get touched again (one claim per
+    /// 64 slots — the far-line amortizer).
     fn pop_slot(&mut self, c: usize) -> Option<NonNull<u8>> {
-        let (seg, span_ix) = self.partial[c]?;
-        // SAFETY: partial entries are spans this heap assigned and has
-        // not released; the segment header outlives them.
-        let seg_ref = unsafe { seg.as_ref() };
-        let base = seg_ref.span_base(span_ix as usize);
-        // SAFETY: same — the metadata slot exists for every span index.
-        let meta = unsafe { &mut (*seg.as_ptr()).spans[span_ix as usize] };
-        let Some(i) = meta.alloc_slot() else {
-            self.partial[c] = None;
-            return None;
-        };
-        let slot_size = class::size_of(c);
-        // Landing in a returned page revives it: the kernel hands back a
-        // zero page on touch, and a fresh allocation owes nothing to its
-        // contents. Only the bookkeeping needs to notice.
-        if meta.discarded != 0 {
-            let (pa, pb) = crate::pagemap::pages_of_slot(i, slot_size);
-            for p in pa..=pb {
-                meta.discarded &= !(1u16 << p);
-            }
+        if let Some(p) = self.pop_claimed(c) {
+            return Some(p);
         }
-        NonNull::new(base.wrapping_add(i as usize * slot_size))
+        self.refill_claim(c)?;
+        self.pop_claimed(c)
     }
 
     /// Assign a span to class `c` and make it current, mapping a new
@@ -438,6 +433,21 @@ impl Heap {
     pub(crate) unsafe fn free_local(&mut self, seg: NonNull<Segment>, ptr: NonNull<u8>, c: usize) {
         let ix = segment::span_index_of(ptr);
         let slot = segment::slot_index_of(ptr, c);
+        // A free landing inside the class's claimed word recycles the
+        // bit heap-locally — no header touch at all. Collection writes
+        // are exactly this shape (several short-lived small allocations
+        // per op), which is where the far-line residual lived.
+        if let Some(cl) = &mut self.claims[c]
+            && cl.seg == seg
+            && usize::from(cl.span_ix) == ix
+            && slot / 64 == u32::from(cl.word)
+        {
+            let bit = 1u64 << (slot % 64);
+            if cl.taken & bit != 0 {
+                cl.taken &= !bit;
+                return;
+            }
+        }
         // SAFETY: caller holds exclusive access to this segment.
         let meta = unsafe { &mut (*seg.as_ptr()).spans[ix] };
         let was_full = u32::from(meta.live) == meta.capacity();
@@ -450,6 +460,11 @@ impl Heap {
 
 impl Drop for Heap {
     fn drop(&mut self) {
+        // Claims hold no memory of their own — the segments they point
+        // into are unmapped below — but retiring them keeps the
+        // debug-assert bookkeeping (live counts) honest for any
+        // instrumented teardown that walks spans first.
+        self.flush_claims();
         // The retention pool is process-wide and bounded, so a heap's
         // death owes it nothing — but the fuzzer's tight RSS limit
         // watches every iteration, and draining here keeps single-heap
@@ -469,3 +484,7 @@ impl Drop for Heap {
         }
     }
 }
+
+#[path = "heap_claims.rs"]
+mod heap_claims;
+pub(crate) use heap_claims::Claim;
