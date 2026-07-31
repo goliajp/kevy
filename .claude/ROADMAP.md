@@ -491,6 +491,11 @@ CI 无消费者位置链接);**D2** 准入分裂在两张脸(只有 wire 调 val
 **"中小型"指企业规模,不是数据规模** —— SME 可以有几千万行、几十 GB;稀缺的是运维人力、
 专家与硬件预算。愿景是拍过板的;**下面所有通往它的路线都是可推翻的。**
 
+**研究总案(2026-07-31,主轴拍板:滑动窗口热区的 KV → 虚拟 SQL support)**:
+`.claude/plans/2026-07-31-v5-research-master-plan.md` —— 七个研究单元 R1-R7 与合成路径;
+各单元开工前仍需自己的 RFC。开工顺序建议:R2a+R2d 窗口模型设计轮 → R1 residual 设计轮 →
+R4a 覆盖度清单(可并行)。
+
 **主设计**:`.claude/plans/2026-07-26-v5-arc-design-input.md`(SME 判据 S1-S5 / 模型固有 I1-I5 /
 四项约束拍板 / 核心张力)· `.claude/rfcs/2026-07-26-v5-kevy-alloc.md` ·
 `.claude/rfcs/2026-07-26-v5-kevy-compress.md`。
