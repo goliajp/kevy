@@ -55,6 +55,13 @@ impl<C: Commands> Shard<C> {
         // Restore: snapshot (state as of last SAVE) then replay the AOF (writes
         // since that SAVE). The AOF is truncated at each SAVE, so this never
         // double-applies. Replay goes straight to the store (no re-logging).
+        // Row segments are truth: load the registered set FIRST — a
+        // v7 snapshot's stub records and the AOF's SEGMENTED frames
+        // both resolve against it.
+        let segs_dir = kevy_persist::layout::segs_dir(&self.data_dir, self.id);
+        if let Err(e) = self.store.enable_seg_rows(&segs_dir) {
+            return Err(io::Error::other(format!("shard {}: {e}", self.id)));
+        }
         let snap = self.snapshot_path();
         if snap.exists()
             && let Err(e) = load_snapshot(&mut self.store, &snap)
@@ -67,12 +74,6 @@ impl<C: Commands> Shard<C> {
         }
         if self.aof.is_some() {
             let aof_path = self.aof_path();
-            let segs_dir = kevy_persist::layout::segs_dir(&self.data_dir, self.id);
-            // Row segments are truth: load the registered set before
-            // replay so SEGMENTED frames can stitch against it.
-            if let Err(e) = self.store.enable_seg_rows(&segs_dir) {
-                return Err(io::Error::other(format!("shard {}: {e}", self.id)));
-            }
             let commands = &self.commands;
             let store = &mut self.store;
             // In-replay demotion: dispatch already runs the
@@ -107,10 +108,10 @@ impl<C: Commands> Shard<C> {
                 return Err(io::Error::other(format!("shard {}: {e}", self.id)));
             }
             self.commands.on_replay_report(report.dropped_bytes, report.corrupt);
-            // Segments nothing references after replay are orphans (a
-            // crash between sealing and the frame): sweep them.
-            self.store.sweep_orphan_row_segs();
         }
+        // Segments nothing references after restore are orphans (a
+        // crash between sealing and the frame): sweep them.
+        self.store.sweep_orphan_row_segs();
         self.store.demote_to_watermark();
 
         // Off-accept-set shards have no listener (None); skip register.

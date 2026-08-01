@@ -27,6 +27,12 @@ pub(crate) const VERSION_FEED_CURSOR: u8 = 5;
 /// records after the entry stream. Written only when field TTLs
 /// exist; the header still carries the (possibly zero) feed cursor.
 pub(crate) const VERSION_HASH_TTL: u8 = 6;
+/// Format version 7 additionally allows `OP_SEGSTUB` records: a
+/// row-segment stub (`[seq u32][value_weight u32]`) whose data lives
+/// in the segment directory beside the snapshot. Written only when
+/// row segments exist; windowless stores stay at their prior version
+/// byte-identically.
+pub(crate) const VERSION_SEG_STUB: u8 = 7;
 pub(crate) const VERSION_RELATIVE_TTL: u8 = 2;
 pub(crate) const VERSION_ABSOLUTE_TTL: u8 = 3;
 
@@ -43,6 +49,9 @@ pub(crate) const OP_STREAM: u8 = 6;
 /// Appears only in format v6+ snapshots, after the entry stream's
 /// records (before OP_EOF).
 pub(crate) const OP_HFTTL: u8 = 7;
+/// Row-segment stub record: `[key][seq u32 LE][value_weight u32 LE]`.
+/// v7+ only.
+pub(crate) const OP_SEGSTUB: u8 = 8;
 
 /// BufWriter capacity for bulk snapshot / AOF-rewrite writes. The 8 KiB
 /// default made SAVE ~12 % of disk bandwidth (tens of thousands of small

@@ -128,6 +128,7 @@ mod tier_demote;
 mod tier_serve;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub use segrows::SealedRows;
+
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub use segwindow::apply_segmented;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
@@ -312,6 +313,20 @@ pub struct Store {
 
 
 mod store_admin;
+
+/// No row-segment backend on this target.
+#[cfg(not(all(feature = "std", not(target_arch = "wasm32"))))]
+impl Store {
+    /// Cfg twin of the segrows accessor: always empty.
+    pub fn row_seg_files(&self) -> Vec<(u32, alloc::string::String)> {
+        Vec::new()
+    }
+
+    /// A v7 snapshot cannot load where the segment backend is absent.
+    pub fn load_row_stub(&mut self, _key: Vec<u8>, _seq: u32, _weight: u32) {
+        panic!("row-segment snapshot record on a target without the segment backend");
+    }
+}
 
 // Accounting micro-helpers live in `util` (500-LOC split); re-exported
 // so the crate-wide `crate::apply_delta` / `crate::key_heap_bytes_for`

@@ -202,3 +202,59 @@ fn scan_all(s: &Store) -> Vec<Vec<u8>> {
         }
     }
 }
+
+/// The persistence payoff: a rewrite drops cold-row data from the AOF
+/// (trailing SEGMENTED frames re-establish the stubs), and a snapshot
+/// carries stub records so a SAVE'd store restarts cold without the
+/// AOF's history. Both reopened stores stay command-equivalent to a
+/// hot control.
+#[test]
+fn rewrite_and_snapshot_stop_carrying_cold_rows() {
+    let d = kevy_tmpdir::TmpDir::new("emb-winpersist");
+    let s = Store::open(
+        Config::default()
+            .with_persist(d.path())
+            .with_reaper_interval(Duration::from_millis(25)),
+    )
+    .expect("open");
+    s.table_declare(table(b"ev", true)).expect("declare ev");
+    seed(&s);
+    wait_for_row_segment(d.path());
+
+    let dc = kevy_tmpdir::TmpDir::new("emb-winpersist-ctl");
+    let c = Store::open(Config::default().with_persist(dc.path())).expect("open ctl");
+    c.table_declare(table(b"ev", false)).expect("declare ctl");
+    seed(&c);
+
+    // Rewrite: the log sheds the cold rows' data and gains the frames.
+    s.fsync_aof().expect("fsync");
+    let before = std::fs::metadata(d.path().join("aof-0.aof")).unwrap().len();
+    s.rewrite_aof().expect("rewrite").expect("stats");
+    let aof = std::fs::read(d.path().join("aof-0.aof")).unwrap();
+    assert!(aof.len() < before as usize, "rewrite did not shrink: {} -> {}", before, aof.len());
+    let text = String::from_utf8_lossy(&aof).into_owned();
+    assert!(!text.contains("row number 10"), "cold row data re-entered the rewritten log");
+    assert!(text.contains("KEVYSEGMENTED"), "rewritten log carries no stitch frame");
+    assert!(text.contains("row number 25"), "hot row data missing from the rewritten log");
+
+    drop(s);
+    let s = Store::open(
+        Config::default()
+            .with_persist(d.path())
+            .with_reaper_interval(Duration::from_millis(25)),
+    )
+    .expect("reopen after rewrite");
+    compare_stores(&s, &c, "after rewrite restart");
+    let all = String::from_utf8_lossy(&run(&s, &[b"HGETALL", b"ev:10"])).into_owned();
+    assert!(all.contains("row number 10"), "cold row unreadable after rewrite: {all}");
+
+    // Snapshot: SAVE writes stub records; a snapshot-only boot (AOF
+    // deleted by hand) still restores every row, cold ones as stubs.
+    assert!(s.save_snapshot().expect("save"));
+    drop(s);
+    std::fs::remove_file(d.path().join("aof-0.aof")).ok();
+    let s = Store::open(Config::default().with_persist(d.path())).expect("snapshot-only boot");
+    compare_stores(&s, &c, "snapshot-only restart");
+    let all = String::from_utf8_lossy(&run(&s, &[b"HGETALL", b"ev:10"])).into_owned();
+    assert!(all.contains("row number 10"), "cold row unreadable from snapshot: {all}");
+}

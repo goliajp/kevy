@@ -4,8 +4,8 @@
 //! keep it under the 500-LOC house cap.
 
 use crate::snapshot_fmt::{
-    MAGIC, OP_EOF, OP_HASH, OP_HFTTL, OP_LIST, OP_SET, OP_STR, OP_STREAM, OP_ZSET,
-    VERSION, VERSION_ABSOLUTE_TTL, VERSION_FEED_CURSOR, VERSION_HASH_TTL, VERSION_RELATIVE_TTL,
+    MAGIC, OP_EOF, OP_HASH, OP_HFTTL, OP_LIST, OP_SEGSTUB, OP_SET, OP_STR, OP_STREAM, OP_ZSET, VERSION_SEG_STUB,
+    VERSION, VERSION_ABSOLUTE_TTL, VERSION_FEED_CURSOR, VERSION_RELATIVE_TTL,
     capped_capacity, read_bytes, read_ttl, read_u8, read_u32, read_u64,
 };
 use kevy_store::Store;
@@ -116,7 +116,7 @@ fn read_snapshot_header<R: Read>(r: &mut R) -> io::Result<u8> {
         ));
     }
     let version = read_u8(r)?;
-    if !(VERSION_RELATIVE_TTL..=VERSION_HASH_TTL).contains(&version) {
+    if !(VERSION_RELATIVE_TTL..=VERSION_SEG_STUB).contains(&version) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "kevy snapshot: bad version",
@@ -127,6 +127,24 @@ fn read_snapshot_header<R: Read>(r: &mut R) -> io::Result<u8> {
         r.read_exact(&mut cur)?;
     }
     Ok(version)
+}
+
+/// One `OP_SEGSTUB` record: `[seq u32 LE][value_weight u32 LE]` — the
+/// row re-enters the map as a seg-backed stub.
+fn load_segstub_record<R: Read>(
+    store: &mut Store,
+    r: &mut R,
+    key: Vec<u8>,
+    keep: &impl Fn(&[u8]) -> bool,
+) -> io::Result<()> {
+    let mut seq = [0u8; 4];
+    r.read_exact(&mut seq)?;
+    let mut weight = [0u8; 4];
+    r.read_exact(&mut weight)?;
+    if keep(&key) {
+        store.load_row_stub(key, u32::from_le_bytes(seq), u32::from_le_bytes(weight));
+    }
+    Ok(())
 }
 
 /// One `OP_HFTTL` record: `[key][field][deadline_ms: u64 LE]`.
@@ -147,6 +165,8 @@ fn load_hfttl_record<R: Read>(
 
 /// Parse one value record's payload and insert it (when `keep(key)`).
 /// Skipped records are still fully parsed to stay in frame.
+// LOC-WAIVER: pure data-driven snapshot opcode dispatch — one
+// load-call arm per opcode, no control flow beyond per-arm framing.
 fn load_record<R: Read>(
     store: &mut Store,
     r: &mut R,
@@ -188,6 +208,7 @@ fn load_record<R: Read>(
             }
         }
         OP_STREAM => load_stream_record(store, r, version, key, ttl, keep)?,
+        OP_SEGSTUB => load_segstub_record(store, r, key, keep)?,
         other => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,

@@ -50,8 +50,20 @@ pub fn dump_aof<S: crate::SnapshotSource>(path: &Path, src: &S) -> io::Result<(u
     w.write_all(crate::record::AOF2_MAGIC)?;
     let mut keys = 0u64;
     let mut err: Option<io::Error> = None;
+    let mut cold_seqs: Vec<u32> = Vec::new();
     src.for_each_entry(|key, value, ttl_ms| {
         if err.is_some() {
+            return;
+        }
+        // Seg-backed stub: the row's data does NOT re-enter the log —
+        // its segment's trailing SEGMENTED frame re-establishes the
+        // stub at replay (demote-or-insert).
+        if let kevy_store::Value::Cold(c) = value
+            && let Some((seq, _)) = c.seg_parts()
+        {
+            if !cold_seqs.contains(&seq) {
+                cold_seqs.push(seq);
+            }
             return;
         }
         if let Err(e) =
@@ -66,6 +78,7 @@ pub fn dump_aof<S: crate::SnapshotSource>(path: &Path, src: &S) -> io::Result<(u
         return Err(e);
     }
     write_hash_ttl_frames(&mut w, src, crate::AofFormat::V2, &mut scratch)?;
+    crate::segmented::write_segmented_frames(&mut w, src, &cold_seqs, &mut scratch)?;
     w.flush()?;
     let inner = w
         .into_inner()

@@ -42,3 +42,51 @@ pub fn segmented_frame<A: ArgvView + ?Sized>(args: &A) -> Option<&[u8]> {
 pub fn segmented_argv(seg_file: &[u8]) -> [&[u8]; 2] {
     [SEGMENTED, seg_file]
 }
+
+use std::io::{self, Write};
+
+/// The rewrite's trailing SEGMENTED frames: one per segment the
+/// frozen entries reference. Replay rebuilds the hot stream first,
+/// then each frame re-establishes its rows' stubs — rows the stream
+/// never carried are inserted straight from the segment.
+pub(crate) fn write_segmented_frames<W: Write, S: crate::SnapshotSource>(
+    w: &mut W,
+    src: &S,
+    cold_seqs: &[u32],
+    scratch: &mut Vec<u8>,
+) -> io::Result<()> {
+    if cold_seqs.is_empty() {
+        return Ok(());
+    }
+    let files = src.row_seg_files();
+    for seq in cold_seqs {
+        let file = files
+            .iter()
+            .find(|(q, _)| q == seq)
+            .map(|(_, f)| f.clone())
+            .ok_or_else(|| {
+                io::Error::other(format!("rewrite: stub references unknown segment seq {seq}"))
+            })?;
+        let argv = segmented_argv(file.as_bytes());
+        crate::record::write_record_multibulk(w, &Frame2(argv), scratch)?;
+    }
+    Ok(())
+}
+
+/// Two borrowed parts as an ArgvView (the SEGMENTED frame's shape).
+struct Frame2<'a>([&'a [u8]; 2]);
+impl core::ops::Index<usize> for Frame2<'_> {
+    type Output = [u8];
+    fn index(&self, i: usize) -> &[u8] {
+        self.0[i]
+    }
+}
+impl kevy_resp::ArgvView for Frame2<'_> {
+    fn len(&self) -> usize {
+        2
+    }
+    fn get(&self, i: usize) -> Option<&[u8]> {
+        self.0.get(i).copied()
+    }
+}
+

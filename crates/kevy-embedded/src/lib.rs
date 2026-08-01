@@ -148,6 +148,8 @@ pub use ops_pipeline::Pipeline;
 mod pubsub;
 mod reaper;
 mod shard;
+#[cfg(feature = "persist")]
+mod shard_restore;
 mod pubsub_bus;
 #[cfg(feature = "persist")]
 mod replay;
