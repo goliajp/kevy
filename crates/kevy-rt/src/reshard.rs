@@ -126,7 +126,7 @@ fn redistribute(temp: &Store, target: ShardsMeta, stores: &mut [Store]) {
     let slots = target.routing == Routing::Slots;
     temp.snapshot_each(|key, value, ttl_ms| {
         let hot;
-        let value = match temp.materialize_cold(value) {
+        let value = match temp.materialize_cold(key, value) {
             Some(v) => {
                 hot = v;
                 &hot

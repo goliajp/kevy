@@ -118,6 +118,8 @@ mod string;
 mod string_rmw;
 mod string_set;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+mod segrows;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 mod segwindow;
 mod tier;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
@@ -134,6 +136,7 @@ mod types;
 pub use types::{EvictionPolicy, RenameOutcome, StoreError};
 mod util;
 mod value;
+mod value_cold;
 mod zset;
 mod zset_algebra;
 mod zset_range;
@@ -287,6 +290,11 @@ pub struct Store {
     /// today's paths byte-identical ([`Store::enable_tiering`]).
     #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
     pub(crate) tier: Option<tier::TierState>,
+    /// Row-segment directory — the persistent second backing behind
+    /// `Value::Cold` ([`segrows`]). `None` = off, today's paths
+    /// byte-identical.
+    #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+    pub(crate) segrows: Option<segrows::SegRows>,
     /// The promotion gate's first-touch serve scratch (`tier_serve`):
     /// a cold value decoded for ONE read, never installed in the map.
     #[cfg(all(feature = "std", not(target_arch = "wasm32")))]

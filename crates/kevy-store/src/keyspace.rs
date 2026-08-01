@@ -121,7 +121,7 @@ impl Store {
         // Cloning a cold stub would alias its vlog record (two stubs,
         // one dead-note each — double credit). COPY-class callers get a
         // freshly materialized value instead; the original stays cold.
-        if let Some(fresh) = self.tier_peek_value(&entry.value) {
+        if let Some(fresh) = self.tier_peek_value(key, &entry.value) {
             return Some((fresh, ttl_ms));
         }
         Some((entry.value.clone(), ttl_ms))
@@ -160,6 +160,15 @@ impl Store {
         let now = now_ns();
         if !self.reap(src, now) {
             return RenameOutcome::NoSuchSrc;
+        }
+        // A seg-backed stub is keyed by its row key inside the segment
+        // — the vlog's rename forward-pointer cannot express it.
+        // Materialize first; the segment record strands.
+        #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+        if let Some(e) = self.map.get(src)
+            && matches!(&e.value, Value::Cold(c) if c.is_seg())
+        {
+            self.promote_in_place(src);
         }
         if src == dst {
             // Redis 6+ semantics: same-key rename is a no-op `+OK`.
@@ -278,8 +287,11 @@ impl Store {
         self.map.clear();
         self.used_memory = 0;
         self.expires = 0;
-        // Every cold stub died with the map — the whole vlog is dead.
+        // Every cold stub died with the map — the whole vlog is dead,
+        // and every row segment is garbage.
         self.tier_on_flushall();
+        #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+        self.segrows_flush();
         // peak is lifetime-cumulative; intentionally not reset.
     }
 

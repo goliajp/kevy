@@ -88,7 +88,7 @@ impl Store {
                 // no `&mut`). Documented: shared-lane reads pay a pread
                 // until a `&mut`-path access promotes the key.
                 Value::Cold(c) if c.type_tag == crate::value::COLD_TAG_STRING => {
-                    match self.tier_peek_value(&e.value).expect("cold peek") {
+                    match self.tier_peek_value(key, &e.value).expect("cold peek") {
                         Value::ArcBulk(a) => Ok(Some(GetShared::Arc(a))),
                         v => Ok(Some(GetShared::Bytes(cold_string_bytes(&v)))),
                     }
@@ -188,7 +188,7 @@ impl Store {
                 }
                 // Cold, `&self` shared lane — see `get_shared_owned`.
                 Value::Cold(c) if c.type_tag == crate::value::COLD_TAG_STRING => {
-                    let v = self.tier_peek_value(&e.value).expect("cold peek");
+                    let v = self.tier_peek_value(key, &e.value).expect("cold peek");
                     Ok(Some(Cow::Owned(cold_string_bytes(&v))))
                 }
                 _ => Err(StoreError::WrongType),

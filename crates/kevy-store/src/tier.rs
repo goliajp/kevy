@@ -288,8 +288,8 @@ mod enabled {
         /// record into a fresh owned hot value WITHOUT installing,
         /// promoting, or setting the probation mark — persistence is a
         /// bulk path and never promotes. `None` when `v` is hot.
-        pub fn materialize_cold(&self, v: &Value) -> Option<Value> {
-            self.tier_peek_value(v)
+        pub fn materialize_cold(&self, key: &[u8], v: &Value) -> Option<Value> {
+            self.tier_peek_value(key, v)
         }
 
         /// A cold stub is being discarded (DEL / overwrite / expiry /
@@ -302,6 +302,10 @@ mod enabled {
         /// No-op for hot values.
         pub(crate) fn tier_note_dead(&mut self, key_heap: u64, v: &Value) {
             let Value::Cold(c) = v else { return };
+            if c.is_seg() {
+                self.segrow_note_dead(*c);
+                return;
+            }
             if let Some(t) = &mut self.tier {
                 t.vlog.note_dead(c.vref());
                 t.cold_keys = t.cold_keys.saturating_sub(1);

@@ -446,7 +446,7 @@ fn merge_into_temp(dir: &Path, config: &Config, src_n: usize) -> io::Result<(Key
 fn redistribute(temp: &Keyspace, n: usize, stores: &mut [Keyspace]) {
     temp.snapshot_each(|key, value, ttl_ms| {
         let hot;
-        let value = match temp.materialize_cold(value) {
+        let value = match temp.materialize_cold(key, value) {
             Some(v) => {
                 hot = v;
                 &hot

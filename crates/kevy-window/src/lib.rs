@@ -117,6 +117,21 @@ impl WindowRt {
         Ok(out)
     }
 
+    /// The row keys that would evict if the boundary advanced now —
+    /// the row-eviction half reads this BEFORE [`Self::slide`] cuts
+    /// the index, so a failed row eviction leaves both layers hot and
+    /// the next tick retries the whole batch. No state changes.
+    pub fn pending_rows(&self, seg: &kevy_index::Segment) -> Option<Vec<Vec<u8>>> {
+        let Some(&IndexValue::I64(max)) = seg.max_value() else { return None };
+        let target = bucket_floor(max.saturating_sub(self.spec.span), self.spec.bucket);
+        if target <= self.w {
+            return None;
+        }
+        let bound = IndexValue::I64(target);
+        let rows: Vec<Vec<u8>> = seg.iter_below(&bound).map(|(_, k)| k.to_vec()).collect();
+        (!rows.is_empty()).then_some(rows)
+    }
+
     /// Advance the boundary and evict the out-of-window tree prefix
     /// into a segment. One comparison when there is nothing to do.
     /// Build-then-cut: an I/O failure leaves the tree untouched and

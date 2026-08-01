@@ -315,16 +315,16 @@ fn materialize_cold_returns_hot_twin_without_promotion() {
 
     let bulk = s.map.get(b"bulk".as_slice()).map(|e| e.value.clone()).unwrap();
     let row = s.map.get(b"row".as_slice()).map(|e| e.value.clone()).unwrap();
-    match s.materialize_cold(&bulk).expect("cold materializes") {
+    match s.materialize_cold(b"bulk", &bulk).expect("cold materializes") {
         Value::ArcBulk(a) => assert_eq!(&a[..], &[b'm'; 3000][..]),
         other => panic!("unexpected variant {:?}", other.type_name()),
     }
-    match s.materialize_cold(&row).expect("cold materializes") {
+    match s.materialize_cold(b"row", &row).expect("cold materializes") {
         Value::Hash(h) => assert_eq!(h.get(b"f".as_slice()).unwrap().as_slice(), b"v"),
         other => panic!("unexpected variant {:?}", other.type_name()),
     }
     // A hot value passes through as None (caller uses it verbatim).
-    assert!(s.materialize_cold(&Value::Int(7)).is_none());
+    assert!(s.materialize_cold(b"i", &Value::Int(7)).is_none());
     // Peek only: nothing promoted, both stubs still cold.
     assert_eq!(s.tier_stats().promotions_total, 0);
     assert!(is_cold(&s, b"bulk") && is_cold(&s, b"row"));
@@ -364,7 +364,7 @@ fn snapshot_view_pins_survive_file_retirement() {
     view.each(|k, v, _| {
         if k == b"pinned" {
             assert!(matches!(v, Value::Cold(_)), "the view froze the stub");
-            match view.materialize_cold(v).expect("stub materializes via pins") {
+            match view.materialize_cold(k, v).expect("stub materializes via pins") {
                 Value::ArcBulk(a) => assert_eq!(&a[..], frozen.as_slice()),
                 other => panic!("unexpected variant {:?}", other.type_name()),
             }
