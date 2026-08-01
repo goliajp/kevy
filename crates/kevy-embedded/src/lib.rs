@@ -127,7 +127,7 @@ mod ops_index;
 mod ops_index_sync;
 #[cfg(feature = "index")]
 mod ops_index_cold;
-#[cfg(all(feature = "index", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "index", feature = "persist", not(target_arch = "wasm32")))]
 mod ops_index_window;
 #[cfg(feature = "index")]
 mod ops_table;
