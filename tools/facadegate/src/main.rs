@@ -61,6 +61,7 @@ fn tables_end_to_end() {
             name: b"by_user_activity".to_vec(),
             on: vec![(b"user".to_vec(), false), (b"activity".to_vec(), true)],
         }],
+        window: None,
     };
     store.table_declare(spec).expect("declare through the facade");
 
@@ -146,6 +147,7 @@ fn bad_specs_are_refusals_not_panics() {
             // `ord` is not in `columns` — the F9 spec, byte for byte.
             on: vec![(b"user".to_vec(), false), (b"ord".to_vec(), true)],
         }],
+        window: None,
     };
     let err = store.table_declare(bad).expect_err("undeclared ORDERPATH column must refuse");
     let msg = format!("{err}");
@@ -171,6 +173,7 @@ fn ensure_is_the_boot_verb() {
             values: vec![],
         }],
         orderpaths: vec![],
+        window: None,
     };
     assert_eq!(store.table_ensure(spec()).expect("first boot"), TableEnsure::Created);
     assert_eq!(store.table_ensure(spec()).expect("every later boot"), TableEnsure::Unchanged);
