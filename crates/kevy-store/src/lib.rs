@@ -126,6 +126,7 @@ mod tier_demote;
 mod tier_serve;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub use segwindow::apply_segmented;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub use tier::TierStats;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub use tier_serve::{ColdBatchReader, ColdRead, PeekRow, SyncColdRead};
