@@ -24,6 +24,7 @@ path = "src/main.rs"
 
 [dependencies]
 kevy-sys = { path = "../kevy-sys", version = "4.1.1" }
+kevy-seg = { path = "../kevy-seg", version = "4.1.1" }
 kevy-resp = { path = "../kevy-resp", version = "4.1.1" }
 kevy-resp-client = { path = "../kevy-resp-client", version = "4.1.1" }
 kevy-store = { path = "../kevy-store", version = "4.1.1" }
@@ -72,7 +73,6 @@ kevy-client = { path = "../kevy-client" }
 # v1.31: chaos test harness — spawns kevy as a child for crash safety
 # tests. Test-only; never reaches the production server.
 kevy-chaos = { path = "../kevy-chaos" }
-kevy-seg = { path = "../kevy-seg", version = "4.1.1" }
 # v1.40: backup/restore container API — only the chaos test that
 # verifies the round-trip references this.
 kevy-cli = { path = "../kevy-cli" }

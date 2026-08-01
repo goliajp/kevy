@@ -25,6 +25,13 @@ use crate::state::Ctx;
 pub(super) const CURSOR_CLAUSE_CONFLICT: &str =
     "CURSOR cannot combine with SORT|DISTINCT|FACET|OFFSET";
 
+/// Clauses walk the hot tree only; an index with cold segments would
+/// silently miss evicted rows, and silence is the one answer this
+/// surface never gives. The claused cold path is its own train.
+pub(super) const COLD_CLAUSE: &str =
+    "clauses on a windowed index with cold segments are not built yet — \
+     use a plain range/COUNT, or query inside the hot window";
+
 /// A ready-made ST_CLAUSE chunk for `msg`.
 pub(super) fn clause_chunk(msg: &str) -> Vec<u8> {
     let mut chunk = vec![ST_CLAUSE];
@@ -38,7 +45,10 @@ pub(super) fn clause_chunk(msg: &str) -> Vec<u8> {
 /// COUNT chunk shape (`[ST_OK][u64]`) so `reduce_count` sums it
 /// unchanged.
 pub(super) fn run_claused_count(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> Vec<u8> {
-    let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg| {
+    let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg, win| {
+        if win.is_some_and(|w| w.has_cold()) {
+            return Err(clause_chunk(COLD_CLAUSE));
+        }
         let (min, max) = q.bounds_for(spec)?;
         let filters: Vec<(usize, ValueTest)> = filter_tests(spec, &q.filters)?;
         Ok(seg.count_claused(&min, &max, &filters))
@@ -57,7 +67,10 @@ pub(super) fn run_claused_count(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> 
 }
 
 pub(super) fn run_claused_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> Vec<u8> {
-    let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg| {
+    let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg, win| {
+        if win.is_some_and(|w| w.has_cold()) {
+            return Err(clause_chunk(COLD_CLAUSE));
+        }
         let (min, max) = q.bounds_for(spec)?;
         let filters: Vec<(usize, ValueTest)> = filter_tests(spec, &q.filters)?;
         let sort = sort_field(spec, &q.sort)?;

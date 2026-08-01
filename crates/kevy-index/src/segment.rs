@@ -126,6 +126,23 @@ impl Segment {
         }
     }
 
+    /// The largest value present, if any — the window boundary's
+    /// tree-tail read.
+    pub fn max_value(&self) -> Option<&IndexValue> {
+        self.tree.last().map(|(v, _)| v)
+    }
+
+    /// Entries strictly below `bound`, tree order — the read-only
+    /// preview of [`Self::split_off_below`]'s batch (the slide builds
+    /// its segment from this BEFORE cutting, so an I/O failure leaves
+    /// the tree untouched).
+    pub fn iter_below(&self, bound: &IndexValue) -> impl Iterator<Item = (&IndexValue, &[u8])> {
+        let end = (bound.clone(), Vec::new());
+        self.tree
+            .range((core::ops::Bound::Unbounded, core::ops::Bound::Excluded(end)))
+            .map(|(v, k)| (v, k.as_slice()))
+    }
+
     /// Detach every entry whose value sorts below `bound`, in tree
     /// order — the window-eviction cut. The detached batch leaves all
     /// of the segment's books (tree, reverse map, value counts, stored

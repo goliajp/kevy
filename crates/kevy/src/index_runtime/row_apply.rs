@@ -80,6 +80,14 @@ pub(super) fn apply_row(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
         return;
     }
     apply_scalar_row(store, &si.spec, &mut si.seg, key);
+    // Windowed index: this row's change may shadow a cold entry
+    // (rewrite, delete, revival) — the bloom decides if it earns a
+    // tombstone. AFTER the scalar apply: a revival needs its hot entry
+    // in the tree and its stale cold entry shadowed, and this order
+    // gives both.
+    if let Some(win) = &mut si.window {
+        win.on_row_write(key);
+    }
 }
 
 /// [`apply_row`]'s text half. What the spec reads out of the row —
@@ -233,4 +241,12 @@ fn apply_row_backfill(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
     // A key deleted since the snapshot resolves to `Gone` → `remove`,
     // which is a no-op on a segment that never held it.
     apply_scalar_row(store, &si.spec, &mut si.seg, key);
+    // Windowed index: this row's change may shadow a cold entry
+    // (rewrite, delete, revival) — the bloom decides if it earns a
+    // tombstone. AFTER the scalar apply: a revival needs its hot entry
+    // in the tree and its stale cold entry shadowed, and this order
+    // gives both.
+    if let Some(win) = &mut si.window {
+        win.on_row_write(key);
+    }
 }

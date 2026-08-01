@@ -104,20 +104,15 @@ fn verify_kind_stats(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> Option<Ve
 
 /// Range / Eq / scalar-Verify against this shard's segment.
 fn run_scalar_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8]) -> Vec<u8> {
-    let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg| match q.shape {
+    let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg, win| match q
+        .shape
+    {
         Shape::Range { .. } | Shape::Eq { .. } | Shape::Where(_) => {
             let (min, max) = match q.bounds_for(spec) {
                 Ok(b) => b,
                 Err(chunk) => return HitsOrChunk::Chunk(chunk),
             };
-            if verb.eq_ignore_ascii_case(b"IDX.COUNT") {
-                let mut chunk = vec![ST_OK];
-                chunk.extend_from_slice(&seg.count(&min, &max).to_le_bytes());
-                return HitsOrChunk::Chunk(chunk);
-            }
-            let cursor = q.cursor(spec.ty);
-            let (hits, _) = seg.range(&min, &max, cursor.as_ref(), q.limit);
-            HitsOrChunk::Hits(hits)
+            scalar_range_or_count(q, verb, spec, seg, win, &min, &max)
         }
         // VERIFY answers "does the index still agree with the keyspace?".
         // The segment cannot be walked and the store re-read at the same time
@@ -144,6 +139,69 @@ fn run_scalar_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8]) ->
         Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
         Err(_) => vec![ST_NOINDEX],
     }
+}
+
+/// The range/count body: hot tree plus — on a windowed index that has
+/// evicted — the cold segments' half. A corrupt cold segment answers
+/// ST_NOINDEX, never a partial number.
+fn scalar_range_or_count(
+    q: &Query,
+    verb: &[u8],
+    spec: &kevy_index::IndexSpec,
+    seg: &kevy_index::Segment,
+    win: Option<&index_runtime::WindowRt>,
+    min: &IndexValue,
+    max: &IndexValue,
+) -> HitsOrChunk {
+    let cold = win.filter(|w| w.has_cold());
+    if verb.eq_ignore_ascii_case(b"IDX.COUNT") {
+        let cold_n = match cold.map(|w| w.cold_count(spec.ty, min, max)).transpose() {
+            Ok(n) => n.unwrap_or(0),
+            Err(_) => return HitsOrChunk::Chunk(vec![ST_NOINDEX]),
+        };
+        let mut chunk = vec![ST_OK];
+        chunk.extend_from_slice(&(seg.count(min, max) + cold_n).to_le_bytes());
+        return HitsOrChunk::Chunk(chunk);
+    }
+    let cursor = q.cursor(spec.ty);
+    let (hits, _) = seg.range(min, max, cursor.as_ref(), q.limit);
+    match cold.map(|w| w.cold_hits(spec.ty, min, max, q.limit)).transpose() {
+        Ok(None) => HitsOrChunk::Hits(hits),
+        Ok(Some(cold_hits)) => HitsOrChunk::Hits(merge_cold(hits, cold_hits, &cursor, q.limit)),
+        Err(_) => HitsOrChunk::Chunk(vec![ST_NOINDEX]),
+    }
+}
+
+/// Merge the hot page with the cold hits: both ascend by
+/// `(value, key)`, the cold side additionally drops everything at or
+/// before the cursor (the hot side already did), and the page truncates
+/// to `limit`.
+fn merge_cold(
+    hot: Vec<(Vec<u8>, IndexValue)>,
+    cold: Vec<(Vec<u8>, IndexValue)>,
+    cursor: &Option<kevy_index::Cursor>,
+    limit: usize,
+) -> Vec<(Vec<u8>, IndexValue)> {
+    let after_cursor = |k: &[u8], v: &IndexValue| match cursor {
+        None => true,
+        Some(c) => (v, k) > (&c.value, c.key.as_slice()),
+    };
+    let mut out = Vec::with_capacity(hot.len() + cold.len());
+    let (mut h, mut c) = (hot.into_iter().peekable(), cold.into_iter().peekable());
+    while out.len() < limit {
+        let take_cold = match (h.peek(), c.peek()) {
+            (None, None) => break,
+            (Some(_), None) => false,
+            (None, Some(_)) => true,
+            (Some((hk, hv)), Some((ck, cv))) => (cv, ck) < (hv, hk),
+        };
+        let (k, v) = if take_cold { c.next() } else { h.next() }.expect("peeked");
+        if take_cold && !after_cursor(&k, &v) {
+            continue;
+        }
+        out.push((k, v));
+    }
+    out
 }
 
 /// Hydration happens OUTSIDE the segment borrow: the hits' rows live
@@ -222,7 +280,7 @@ fn kind_entries(ctx: &Ctx<'_>, store: &mut Store, kind: kevy_index::IndexKind, n
             index_runtime::with_ready_text_segment(ctx, store, name, |t, _| t.docs())
                 .unwrap_or_default()
         }
-        _ => index_runtime::with_ready_segment(ctx, store, name, |_, s| s.stats().entries)
+        _ => index_runtime::with_ready_segment(ctx, store, name, |_, s, _| s.stats().entries)
             .unwrap_or_default(),
     }
 }
@@ -256,7 +314,7 @@ pub(super) fn op_list(ctx: &Ctx<'_>, store: &mut Store) -> Vec<u8> {
             })
             .unwrap_or_default()
         } else {
-            index_runtime::with_ready_segment(ctx, store, &spec.name, |_, seg| {
+            index_runtime::with_ready_segment(ctx, store, &spec.name, |_, seg, _| {
                 let st = seg.stats();
                 (st.entries, st.approx_bytes, st.coerce_failures, st.duplicates)
             })

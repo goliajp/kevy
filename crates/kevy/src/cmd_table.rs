@@ -294,7 +294,7 @@ fn index_verify_counts(
     name: &[u8],
 ) -> Result<[u64; 10], kevy_resp::CmdError> {
     let (spec, entries, stats) =
-        index_runtime::with_ready_segment(ctx, store, name, |spec, seg| {
+        index_runtime::with_ready_segment(ctx, store, name, |spec, seg, _| {
             let mut entries: Vec<(Vec<u8>, kevy_index::IndexValue)> = Vec::new();
             seg.each_entry(|k, v| entries.push((k.to_vec(), v.clone())));
             (spec.clone(), entries, seg.stats())

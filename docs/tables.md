@@ -77,7 +77,7 @@ TABLE.LIST             # name/prefix/pk + counts + the window (or -)
 TABLE.VERIFY name      # component fsck + a bounded column spot check
 ```
 
-## The sliding window (declaration only, today)
+## The sliding window
 
 `WINDOW <col> SPAN <n> BUCKET <n>` declares a sliding hot window over
 an `i64` column. `SPAN` and `BUCKET` are plain integers **in the
@@ -96,10 +96,22 @@ Two declare-time refusals, both named:
   guarantees every windowed table can serve cross-window range queries
   through that same path.
 
-Declaring a window changes nothing about reads or writes today: rows
-are ordinary hashes, addressed by key, exactly as without one. The
-clause records intent; the sliding eviction machinery arrives with the
-cold segment tier.
+What slides today: the **single-column INDEX on the window column**.
+As the boundary advances (whole buckets), the index tree's
+out-of-window prefix moves into immutable cold segment files under
+`segs-<shard>/` — index memory shrinks while plain `RANGE` / `COUNT`
+queries keep answering over hot + cold **byte-identically** to an
+unwindowed index (rewrites, deletes and revivals of cold rows
+included; the semantic-equivalence e2e pins this). Cold index segments
+are derived spill, not truth: rows stay ordinary hashes in the hot
+keyspace, and a restart simply rebuilds and re-slides.
+
+Two edges, both explicit: clause-carrying queries (`FILTER` / `SORT` /
+`DISTINCT` / `FACET`) on an index that has cold segments refuse by
+name until the claused cold path lands — never a silently incomplete
+answer; and an `ORDERPATH` led by the window column satisfies the
+declaration but does not slide yet. Memory-only deployments (no data
+dir) accept the declaration and simply stay all-hot.
 
 ## The boot pattern: `ensure`
 
