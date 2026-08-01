@@ -144,7 +144,10 @@ impl Server {
         }
         for p in ports {
             let mut ready = false;
-            for _ in 0..400 {
+            // Generous by design: under llvm-cov instrumentation (the
+            // covgate job) startup runs several times slower than a
+            // plain debug build, and 2s was measured to flake there.
+            for _ in 0..2000 {
                 if std::net::TcpStream::connect(("127.0.0.1", p)).is_ok() {
                     ready = true;
                     break;
