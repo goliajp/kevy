@@ -76,6 +76,13 @@ pub(crate) struct IndexReg {
     pub(crate) catalog: RwLock<(u64, Catalog)>,
 }
 
+/// A shard's window runtime beside its segment — `()` stand-in on
+/// wasm, where the cold tier compiles out.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type WinRef<'a> = Option<&'a kevy_window::WindowRt>;
+#[cfg(target_arch = "wasm32")]
+pub(crate) type WinRef<'a> = Option<&'a core::convert::Infallible>;
+
 /// Per-shard segment list, kept inside `Inner` (guarded by the shard
 /// lock).
 #[derive(Default)]
@@ -91,6 +98,11 @@ pub(crate) struct ShardSegs {
     pub(crate) ann: Vec<(IndexSpec, kevy_vector::Hnsw)>,
     /// Aggregate segments for KIND agg specs.
     pub(crate) agg: Vec<(IndexSpec, kevy_index::AggSegment)>,
+    /// Sliding-window runtimes, name-keyed — reconciled and slid by
+    /// the reaper's window tick; empty under a manual reaper (nothing
+    /// slides, everything stays hot, queries need no cold half).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) windows: Vec<(Vec<u8>, kevy_window::WindowRt)>,
     /// `reserved_bytes` generation cache: set by every
     /// segment-mutating chokepoint (`on_commit` applies, list
     /// rebuilds, FLUSH resets) via [`ShardSegs::mark_stats_dirty`];
@@ -236,33 +248,6 @@ impl Store {
             self.persist_index_sidecar();
         }
         hit
-    }
-
-    /// Range / EQ query with cursor pagination: merged across shards
-    /// in `(value, key)` order. `cursor = None` starts; the returned
-    /// cursor resumes exclusively.
-    pub fn idx_query(
-        &self,
-        name: &[u8],
-        min: &IndexValue,
-        max: &IndexValue,
-        cursor: Option<&Cursor>,
-        limit: usize,
-    ) -> KevyResult<IndexPage> {
-        let limit = limit.clamp(1, 100_000);
-        let mut all: Vec<(IndexValue, Vec<u8>)> = Vec::new();
-        self.for_each_segment(name, |seg| {
-            let (hits, _) = seg.range(min, max, cursor, limit);
-            all.extend(hits.into_iter().map(|(k, v)| (v, k)));
-        })?;
-        Ok(merge_page(all, limit))
-    }
-
-    /// Count without materializing keys.
-    pub fn idx_count(&self, name: &[u8], min: &IndexValue, max: &IndexValue) -> KevyResult<u64> {
-        let mut total = 0u64;
-        self.for_each_segment(name, |seg| total += seg.count(min, max))?;
-        Ok(total)
     }
 
     /// Summed segment stats (entries / bytes / coerce failures /

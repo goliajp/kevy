@@ -25,6 +25,7 @@ path = "src/main.rs"
 [dependencies]
 kevy-sys = { path = "../kevy-sys", version = "4.1.1" }
 kevy-seg = { path = "../kevy-seg", version = "4.1.1" }
+kevy-window = { path = "../kevy-window", version = "4.1.1" }
 kevy-resp = { path = "../kevy-resp", version = "4.1.1" }
 kevy-resp-client = { path = "../kevy-resp-client", version = "4.1.1" }
 kevy-store = { path = "../kevy-store", version = "4.1.1" }

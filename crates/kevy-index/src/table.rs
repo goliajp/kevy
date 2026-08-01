@@ -212,6 +212,20 @@ impl TableSpec {
 
 pub(crate) use crate::table_sidecar::{spec_from_line, spec_to_line};
 
+/// The WINDOW clause a compiled index named `index_name` serves, if
+/// any: a windowed table's single-column INDEX on the window column.
+/// (An ORDERPATH led by the window column satisfies declaration-time
+/// validation but does not slide yet — its composite keys need a
+/// prefix decode that lands with the claused train.) Shared by both
+/// engine faces so the mapping cannot drift.
+pub fn window_for(cat: &TableCatalog, index_name: &[u8]) -> Option<WindowSpec> {
+    let dot = index_name.iter().position(|&b| b == b'.')?;
+    let (tname, suffix) = (&index_name[..dot], &index_name[dot + 1..]);
+    let t = cat.get(tname)?;
+    let w = t.window.clone()?;
+    (suffix == w.column).then_some(w)
+}
+
 fn show(b: &[u8]) -> String {
     String::from_utf8_lossy(b).into_owned()
 }

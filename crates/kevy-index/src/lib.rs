@@ -44,7 +44,7 @@ pub use segment_claused::{
     scalar_sorted_order, sort_facets,
 };
 pub use table::{
-    MAX_TABLES, OrderPath, TableCatalog, TableIndex, TableSpec, WindowSpec, compile_table,
+    MAX_TABLES, OrderPath, TableCatalog, TableIndex, TableSpec, WindowSpec, compile_table, window_for,
 };
 pub use segcold::{ColdBloom, decode_seg_key, seg_bounds, seg_key, value_order_bytes};
 pub use table_verify::{IndexVerify, TableEnsure, TableVerify, spec_diff};

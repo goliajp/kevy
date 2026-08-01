@@ -7,8 +7,42 @@
 
 use std::sync::Arc;
 
+use crate::KevyResult;
 use crate::store::Shards;
 use crate::store_glue::lock_write;
+
+/// The engine backbone [`crate::store::Store::open`] stands on: the
+/// shards, the boot report, the table registry, and the reaper.
+/// Split from `open_inner` for the fn-length rule.
+pub(crate) struct Backbone {
+    pub(crate) shards: Shards,
+    pub(crate) open_report: crate::metric::OpenReport,
+    #[cfg(feature = "index")]
+    pub(crate) tables: Arc<crate::ops_table::TableReg>,
+    pub(crate) reaper_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
+    pub(crate) reaper_join: Option<std::thread::JoinHandle<()>>,
+}
+
+pub(crate) fn boot_backbone(config: &crate::config::Config) -> KevyResult<Backbone> {
+    let (shards, open_report) = crate::shard::build_shards(config)?;
+    let shards: Shards = Arc::new(shards);
+    #[cfg(feature = "index")]
+    let tables = Arc::new(crate::ops_table::TableReg::default());
+    let (reaper_stop, reaper_join) = crate::reaper::spawn_reaper(
+        config,
+        &shards,
+        #[cfg(feature = "index")]
+        &tables,
+    )?;
+    Ok(Backbone {
+        shards,
+        open_report,
+        #[cfg(feature = "index")]
+        tables,
+        reaper_stop,
+        reaper_join,
+    })
+}
 
 /// Replication bring-up half of `open_inner`: the replica runner
 /// (embed-as-replica), the writer source (embed-as-writer) and the CDC
@@ -112,6 +146,7 @@ pub(crate) fn build_guard(
     #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
     feed: &Option<Arc<std::sync::Mutex<kevy_replicate::feed::FeedSource>>>,
     config: &crate::config::Config,
+    #[cfg(feature = "index")] tables: &Arc<crate::ops_table::TableReg>,
 ) -> Arc<crate::store_inner::DropGuard> {
     #[cfg(any(target_arch = "wasm32", not(feature = "replicate")))]
     let _ = config;
@@ -119,7 +154,7 @@ pub(crate) fn build_guard(
         shutdown: std::sync::atomic::AtomicBool::new(false),
         open_report: open_report.clone(),
         #[cfg(feature = "index")]
-        tables: Arc::new(crate::ops_table::TableReg::default()),
+        tables: tables.clone(),
         reaper_stop,
         reaper_join: std::sync::Mutex::new(reaper_join),
         shards_for_flush: shards.clone(),

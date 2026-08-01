@@ -1,0 +1,19 @@
+[package]
+name = "kevy-window"
+description = "Sliding-window runtime for scalar indexes: boundary maintenance, the eviction slide into cold segments, and the cold half of range/count."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+kevy-index = { path = "../kevy-index", version = "4.1.1" }
+kevy-seg = { path = "../kevy-seg", version = "4.1.1" }
+
+[dev-dependencies]
+kevy-tmpdir = { path = "../kevy-tmpdir", version = "4.1.1" }
+
+[lints]
+workspace = true
