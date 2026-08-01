@@ -179,7 +179,12 @@ fn shard_upkeep(
     #[cfg(all(feature = "index", feature = "persist", not(target_arch = "wasm32")))]
     if let Some((tables, segs_dir)) = win {
         let inner = &mut *g;
-        crate::ops_index_window::window_tick(&mut inner.idx_segs, tables, &segs_dir);
+        crate::ops_index_window::window_tick(
+            &mut inner.idx_segs,
+            &mut inner.store,
+            tables,
+            &segs_dir,
+        );
     }
     // Tiering upkeep: budget re-resolution (auto/percent re-probe the
     // memory bound) + the index/view floor feed, THEN continue any

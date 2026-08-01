@@ -109,7 +109,7 @@ pub trait SnapshotSource {
 
 impl SnapshotSource for Store {
     fn for_each_entry(&self, mut f: impl FnMut(&[u8], &Value, Option<u64>)) {
-        self.snapshot_each(|k, v, ttl| match self.materialize_cold(v) {
+        self.snapshot_each(|k, v, ttl| match self.materialize_cold(k, v) {
             // Cold stub: decode the vlog record into a transient hot
             // value (dropped after the callback — memory bound = one
             // value) and emit exactly what the hot value would have.
@@ -124,7 +124,7 @@ impl SnapshotSource for Store {
 
 impl SnapshotSource for kevy_store::SnapshotView {
     fn for_each_entry(&self, mut f: impl FnMut(&[u8], &Value, Option<u64>)) {
-        self.each(|k, v, ttl| match self.materialize_cold(v) {
+        self.each(|k, v, ttl| match self.materialize_cold(k, v) {
             // Cold stub: resolve against the view's pinned files — the
             // serializer thread never touches the store (no promotion).
             Some(hot) => f(k, &hot, ttl),

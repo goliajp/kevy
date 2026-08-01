@@ -229,7 +229,7 @@ impl Store {
             Some(Value::Cold(c)) => *c,
             _ => return false,
         };
-        let value = self.tier_read_record(cref);
+        let value = self.tier_read_record(key, cref);
         let key_heap = key_heap_bytes_for(key);
         let new_w = key_heap + value.weight();
         let e = self.map.get_mut(key).expect("probed above");
@@ -237,6 +237,12 @@ impl Store {
         let delta = new_w as i64 - e.weight() as i64;
         e.set_weight(new_w);
         crate::apply_delta(&mut self.used_memory, delta);
+        if cref.is_seg() {
+            // The segment record is stranded now; the vlog's books
+            // were never involved.
+            self.segrow_note_dead(cref);
+            return true;
+        }
         let t = self.tier.as_mut().expect("cold value ⇒ tiering on");
         t.vlog.note_dead(cref.vref());
         t.renames.remove(&(cref.file_id, cref.offset));

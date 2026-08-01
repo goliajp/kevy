@@ -93,6 +93,25 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
         }
         advance_backfill(store, si, 2048);
         if let (Some(win), Some(dir), BuildState::Ready) = (&mut si.window, &segs_dir, &si.build) {
+            // Rows first, index second: a failed row eviction skips
+            // the index cut too, so the whole batch retries next tick
+            // (the index's < W prefix is the batch's only discovery).
+            if let Some(rows) = win.pending_rows(&si.seg) {
+                let table = table_of(&si.spec.name);
+                let ok = store
+                    .enable_seg_rows(dir)
+                    .and_then(|()| store.evict_rows_to_seg(table, &rows));
+                match ok {
+                    Ok(_) => {}
+                    Err(e) => {
+                        eprintln!(
+                            "kevy: row eviction '{}': {e}",
+                            String::from_utf8_lossy(&si.spec.name)
+                        );
+                        continue;
+                    }
+                }
+            }
             match win.slide(&si.spec.name, &mut si.seg, dir) {
                 Ok(true) => st.stats_dirty = true,
                 Ok(false) => {}
@@ -387,6 +406,12 @@ fn refresh(catalogs: &CatalogState, st: &mut ShardIndexes, store: &mut Store) {
     }
     st.idx = next;
     st.generation = generation;
+}
+
+/// The table half of a compiled index name (`<table>.<col>`).
+fn table_of(index_name: &[u8]) -> &[u8] {
+    let dot = index_name.iter().position(|&b| b == b'.').unwrap_or(index_name.len());
+    &index_name[..dot]
 }
 
 /// [`kevy_index::window_for`] against the shared catalog state.
