@@ -13,7 +13,7 @@ use kevy_persist::Argv;
 use kevy_store::ExpireStats;
 
 use crate::config::Config;
-use crate::shard::{build_shards, shard_idx};
+use crate::shard::shard_idx;
 
 pub use crate::store_inner::WeakStore;
 pub(crate) use crate::store_inner::{DropGuard, Inner};
@@ -126,9 +126,11 @@ impl Store {
     }
 
     fn open_inner(config: Config) -> KevyResult<Self> {
-        let (shards, open_report) = build_shards(&config)?;
-        let shards: Shards = Arc::new(shards);
-        let (reaper_stop, reaper_join) = crate::reaper::spawn_reaper(&config, &shards)?;
+        let bb = crate::store_wire::boot_backbone(&config)?;
+        let (shards, open_report) = (bb.shards, bb.open_report);
+        #[cfg(feature = "index")]
+        let tables = bb.tables;
+        let (reaper_stop, reaper_join) = (bb.reaper_stop, bb.reaper_join);
         #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
         let (replica_runner, replica_source, feed) =
             crate::store_wire::wire_replication(&config, &shards)?;
@@ -151,9 +153,9 @@ impl Store {
             #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
             &feed,
             &config,
+            #[cfg(feature = "index")]
+            &tables,
         );
-        #[cfg(feature = "index")]
-        let tables = guard.tables.clone();
         let store = Store {
             shards,
             guard,

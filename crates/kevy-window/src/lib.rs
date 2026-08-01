@@ -1,5 +1,7 @@
-//! The sliding-window runtime for scalar indexes: boundary
-//! maintenance, the eviction slide, and the cold half of range/count.
+//! The sliding-window runtime for scalar indexes — shared by the
+//! server and the embedded store (one implementation, so the two
+//! faces cannot drift): boundary maintenance, the eviction slide,
+//! and the cold half of range/count.
 //!
 //! Cold segments are derived spill, not truth (the rows stay hot; the
 //! index is rebuilt from them on boot) — so a failed slide simply
@@ -7,13 +9,13 @@
 //! and a restart drops the segment set and re-slides.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use kevy_index::{ColdBloom, IndexValue, ValType, WindowSpec, decode_seg_key, seg_bounds, seg_key};
 
 /// One index's window state on one shard.
-pub(crate) struct WindowRt {
-    pub(crate) spec: WindowSpec,
+pub struct WindowRt {
+    pub spec: WindowSpec,
     /// Current boundary (bucket-aligned): entries with value < w are
     /// cold. `i64::MIN` = nothing evicted yet.
     w: i64,
@@ -29,7 +31,7 @@ pub(crate) struct WindowRt {
     tombs: HashSet<Vec<u8>>,
     /// Ticks that cost exactly one comparison (the idle-convergence
     /// gate counter).
-    pub(crate) idle_ticks: u64,
+    pub idle_ticks: u64,
     /// Whether this boot's stale derived segments (a previous run's
     /// spill for this index) were dropped yet. Done lazily on the
     /// first slide: they are unreachable (the boundary restarts at
@@ -39,7 +41,7 @@ pub(crate) struct WindowRt {
 }
 
 impl WindowRt {
-    pub(crate) fn new(spec: WindowSpec) -> Self {
+    pub fn new(spec: WindowSpec) -> Self {
         Self {
             spec,
             w: i64::MIN,
@@ -52,13 +54,13 @@ impl WindowRt {
         }
     }
 
-    pub(crate) fn has_cold(&self) -> bool {
+    pub fn has_cold(&self) -> bool {
         !self.cold.is_empty()
     }
 
     /// The write path saw `row_key` change: shadow any cold entry it
     /// may have. A bloom false positive spends one stray set entry.
-    pub(crate) fn on_row_write(&mut self, row_key: &[u8]) {
+    pub fn on_row_write(&mut self, row_key: &[u8]) {
         if self.bloom.contains(row_key) {
             self.tombs.insert(row_key.to_vec());
         }
@@ -68,7 +70,7 @@ impl WindowRt {
     /// arithmetic while no tombstones exist (the common state), a
     /// decode walk once any do. `Err` = a segment refused (corrupt
     /// derived spill) — the query reports it, never a partial number.
-    pub(crate) fn cold_count(
+    pub fn cold_count(
         &self,
         ty: ValType,
         min: &IndexValue,
@@ -90,7 +92,7 @@ impl WindowRt {
     /// (each slide covers `[old_w, new_w)`), so chaining them in
     /// creation order IS value order. `Err` on a corrupt segment —
     /// never a silent partial page.
-    pub(crate) fn cold_hits(
+    pub fn cold_hits(
         &self,
         ty: ValType,
         min: &IndexValue,
@@ -119,7 +121,7 @@ impl WindowRt {
     /// into a segment. One comparison when there is nothing to do.
     /// Build-then-cut: an I/O failure leaves the tree untouched and
     /// the boundary unmoved — the next tick retries.
-    pub(crate) fn slide(
+    pub fn slide(
         &mut self,
         index_name: &[u8],
         seg: &mut kevy_index::Segment,
@@ -218,11 +220,4 @@ fn bucket_floor(v: i64, bucket: i64) -> i64 {
 /// stem. Hex is unambiguous and the manifest carries the real name.
 fn hex_stem(name: &[u8]) -> String {
     name.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// The per-shard segment directory, when persistence is on. No data
-/// dir = memory-only deployment = nothing slides (declaring a window
-/// is allowed; it simply stays all-hot).
-pub(crate) fn shard_segs_dir(state: &crate::state::RuntimeState, shard_id: usize) -> Option<PathBuf> {
-    state.sidecar_dir().map(|d| kevy_persist::layout::segs_dir(d, shard_id))
 }

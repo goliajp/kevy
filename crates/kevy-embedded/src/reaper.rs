@@ -22,42 +22,88 @@ use crate::store::{Inner, Shards};
 pub(crate) fn spawn_reaper(
     config: &Config,
     shards: &Shards,
+    #[cfg(feature = "index")] tables: &Arc<crate::ops_table::TableReg>,
 ) -> io::Result<(Option<Arc<AtomicBool>>, Option<JoinHandle<()>>)> {
     match config.ttl_reaper {
         TtlReaperMode::Manual => Ok((None, None)),
         TtlReaperMode::Background => {
             let stop = Arc::new(AtomicBool::new(false));
-            let stop_t = stop.clone();
-            let shards_t = shards.clone();
-            let interval = config.reaper_interval;
-            let samples = config.reaper_samples;
-            let rounds = config.reaper_max_rounds;
-            #[cfg(feature = "persist")]
-            let policy = kevy_persist::RewritePolicy {
-                pct: config.auto_aof_rewrite_pct,
-                min_size: config.auto_aof_rewrite_min_size,
-                bytes: config.auto_aof_rewrite_bytes,
-                interval_secs: config.auto_aof_rewrite_interval_secs,
-            };
-            #[cfg(feature = "persist")]
-            let sink = config.metric_sink.clone();
-            #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
-            let tier_spec = config.tier_budget;
-            let handle = std::thread::Builder::new()
-                .name(String::from("kevy-embedded-reaper"))
-                .spawn(move || {
-                    #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
-                    let tier = tier_spec;
-                    #[cfg(not(all(feature = "tier", not(target_arch = "wasm32"))))]
-                    let tier = ();
-                    #[cfg(feature = "persist")]
-                    reaper_loop(shards_t, stop_t, interval, samples, rounds, tier, policy, sink);
-                    #[cfg(not(feature = "persist"))]
-                    reaper_loop(shards_t, stop_t, interval, samples, rounds, tier);
-                })?;
+            let handle = spawn_loop(
+                config,
+                shards,
+                stop.clone(),
+                #[cfg(feature = "index")]
+                tables,
+            )?;
             Ok((Some(stop), Some(handle)))
         }
     }
+}
+
+/// The background half of [`spawn_reaper`]: capture the loop's config
+/// and start the thread.
+fn spawn_loop(
+    config: &Config,
+    shards: &Shards,
+    stop_t: Arc<AtomicBool>,
+    #[cfg(feature = "index")] tables: &Arc<crate::ops_table::TableReg>,
+) -> io::Result<JoinHandle<()>> {
+    let shards_t = shards.clone();
+    #[cfg(all(feature = "index", feature = "persist", not(target_arch = "wasm32")))]
+    let win = config.data_dir.clone().map(|d| (tables.clone(), d));
+    #[cfg(not(all(feature = "index", feature = "persist", not(target_arch = "wasm32"))))]
+    #[cfg(feature = "index")]
+    let _ = tables;
+    let (interval, samples, rounds) =
+        (config.reaper_interval, config.reaper_samples, config.reaper_max_rounds);
+    #[cfg(feature = "persist")]
+    let (policy, sink) = rewrite_slot(config);
+    #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+    let tier: TierSpecOpt = config.tier_budget;
+    #[cfg(not(all(feature = "tier", not(target_arch = "wasm32"))))]
+    let tier: TierSpecOpt = ();
+    std::thread::Builder::new()
+        .name(String::from("kevy-embedded-reaper"))
+        .spawn(move || {
+            #[cfg(feature = "persist")]
+            reaper_loop(
+                shards_t,
+                stop_t,
+                interval,
+                samples,
+                rounds,
+                tier,
+                #[cfg(all(feature = "index", feature = "persist", not(target_arch = "wasm32")))]
+                win,
+                policy,
+                sink,
+            );
+            #[cfg(not(feature = "persist"))]
+            reaper_loop(
+                shards_t,
+                stop_t,
+                interval,
+                samples,
+                rounds,
+                tier,
+                #[cfg(all(feature = "index", feature = "persist", not(target_arch = "wasm32")))]
+                win,
+            );
+        })
+}
+
+/// The auto-rewrite policy + metric sink, captured from config.
+#[cfg(feature = "persist")]
+fn rewrite_slot(config: &Config) -> (kevy_persist::RewritePolicy, Option<MetricSink>) {
+    (
+        kevy_persist::RewritePolicy {
+            pct: config.auto_aof_rewrite_pct,
+            min_size: config.auto_aof_rewrite_min_size,
+            bytes: config.auto_aof_rewrite_bytes,
+            interval_secs: config.auto_aof_rewrite_interval_secs,
+        },
+        config.metric_sink.clone(),
+    )
 }
 
 /// The reaper's tiering-config slot: the budget spec when the tier
@@ -76,6 +122,10 @@ fn reaper_loop(
     samples: usize,
     rounds: u32,
     tier: TierSpecOpt,
+    #[cfg(all(feature = "index", feature = "persist", not(target_arch = "wasm32")))] win: Option<(
+        Arc<crate::ops_table::TableReg>,
+        std::path::PathBuf,
+    )>,
     #[cfg(feature = "persist")] policy: kevy_persist::RewritePolicy,
     #[cfg(feature = "persist")] sink: Option<MetricSink>,
 ) {
@@ -86,30 +136,63 @@ fn reaper_loop(
         if stop.load(Ordering::Relaxed) {
             break;
         }
-        for shard in shards.iter() {
-            {
-                let mut g = lock_inner(shard);
-                let _ = g.store.tick_expire(samples, rounds);
-                let _ = g.store.tick_hash_ttl(64);
-                // Tiering upkeep: budget re-resolution (auto/percent
-                // re-probe the memory bound) + the index/view floor
-                // feed, THEN continue any spill the budgeted
-                // write-path batches left unfinished (no-op when
-                // off/under budget).
-                #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
-                crate::shard::tier_tick_upkeep(&mut g, tier, shards.len());
-                let _ = g.store.demote_step();
-                let _ = g.store.tier_compact_tick();
-                // EverySec AOF fsync window check — runs from the same tick.
-                #[cfg(feature = "persist")]
-                if let Some(aof) = &mut g.aof {
-                    let _ = aof.maybe_sync();
-                }
-            }
+        for (shard_i, shard) in shards.iter().enumerate() {
+            #[cfg(not(all(feature = "index", feature = "persist", not(target_arch = "wasm32"))))]
+            let _ = shard_i;
+            shard_upkeep(
+                shard,
+                samples,
+                rounds,
+                tier,
+                shards.len(),
+                #[cfg(all(feature = "index", feature = "persist", not(target_arch = "wasm32")))]
+                win.as_ref().map(|(t, d)| (t, kevy_persist::layout::segs_dir(d, shard_i))),
+            );
             // Non-blocking: holds the lock only for begin/finish, not the spill.
             #[cfg(feature = "persist")]
             concurrent_auto_rewrite(shard, policy, sink.as_ref());
         }
+    }
+}
+
+/// One shard's locked tick body: TTL sweeps, the window tick, tiering
+/// upkeep, and the everysec AOF window check.
+fn shard_upkeep(
+    shard: &Arc<RwLock<Inner>>,
+    samples: usize,
+    rounds: u32,
+    tier: TierSpecOpt,
+    nshards: usize,
+    #[cfg(all(feature = "index", feature = "persist", not(target_arch = "wasm32")))] win: Option<(
+        &Arc<crate::ops_table::TableReg>,
+        std::path::PathBuf,
+    )>,
+) {
+    #[cfg(not(all(feature = "tier", not(target_arch = "wasm32"))))]
+    let _ = (tier, nshards);
+    let mut g = lock_inner(shard);
+    let _ = g.store.tick_expire(samples, rounds);
+    let _ = g.store.tick_hash_ttl(64);
+    // The window tick: reconcile per-index window runtimes against the
+    // table catalog and slide any whose boundary moved. Persistent
+    // stores only — memory-only deployments stay all-hot.
+    #[cfg(all(feature = "index", feature = "persist", not(target_arch = "wasm32")))]
+    if let Some((tables, segs_dir)) = win {
+        let inner = &mut *g;
+        crate::ops_index_window::window_tick(&mut inner.idx_segs, tables, &segs_dir);
+    }
+    // Tiering upkeep: budget re-resolution (auto/percent re-probe the
+    // memory bound) + the index/view floor feed, THEN continue any
+    // spill the budgeted write-path batches left unfinished (no-op
+    // when off/under budget).
+    #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+    crate::shard::tier_tick_upkeep(&mut g, tier, nshards);
+    let _ = g.store.demote_step();
+    let _ = g.store.tier_compact_tick();
+    // EverySec AOF fsync window check — runs from the same tick.
+    #[cfg(feature = "persist")]
+    if let Some(aof) = &mut g.aof {
+        let _ = aof.maybe_sync();
     }
 }
 

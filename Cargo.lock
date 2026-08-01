@@ -441,6 +441,7 @@ dependencies = [
  "kevy-tmpdir",
  "kevy-uring",
  "kevy-vector",
+ "kevy-window",
 ]
 
 [[package]]
@@ -544,6 +545,7 @@ dependencies = [
  "kevy-text",
  "kevy-tmpdir",
  "kevy-vector",
+ "kevy-window",
 ]
 
 [[package]]
@@ -755,6 +757,15 @@ dependencies = [
  "kevy-persist",
  "kevy-resp",
  "kevy-store",
+]
+
+[[package]]
+name = "kevy-window"
+version = "4.1.1"
+dependencies = [
+ "kevy-index",
+ "kevy-seg",
+ "kevy-tmpdir",
 ]
 
 [[package]]

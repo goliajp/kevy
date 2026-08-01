@@ -298,6 +298,17 @@ fn apply_one_key(shard_segs: &mut ShardSegs, store: &mut kevy_store::Store, key:
             touched = true;
         }
     }
+    // Windowed indexes: this write may shadow a cold entry (rewrite /
+    // delete / revival) — the bloom decides if it earns a tombstone.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let ShardSegs { segs, windows, .. } = &mut *shard_segs;
+        for (name, win) in windows.iter_mut() {
+            if segs.iter().any(|(s, _)| &s.name == name && key.starts_with(&s.prefix)) {
+                win.on_row_write(key);
+            }
+        }
+    }
     #[cfg(feature = "text")]
     for (spec, ts) in &mut shard_segs.text {
         if key.starts_with(&spec.prefix) {
