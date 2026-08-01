@@ -37,6 +37,12 @@ checkout/快照(合计 >10G)、现役 checkout 内 1993 个未跟踪数据文件
 - **CI 结论当门禁时,唯一姿势是 `gh run watch <id> --exit-status`**
   (失败时 exit 非零)。`gh run view -q .conclusion` 是**查询**不是
   **门禁**,它永远 exit 0。
+- **watch 的 `<id>` 必须先锁定再使用**:用
+  `gh run list --workflow=ci.yml --branch <b> --limit 1 --json databaseId,headSha`
+  取 id,**并核对 headSha == 刚 push 的 commit**。裸
+  `gh run list --limit 1` 会抓到别的 workflow 或上一个 commit 的 run,
+  watch 它得到的绿是**假绿**(2026-08-01 实证:WINDOW commit 的 CI 红
+  被上一 commit 另一 workflow 的绿 run 掩盖了一整轮)。
 - tag 推送 = publish 触发器,**tag 之前 CI 必须真绿**(不是"应该绿")。
 - 误发补救顺序:`git push origin :refs/tags/vX.Y.Z`(撤 tag)→
   `gh run cancel <release-run>`(拦 publish)→ 修根因 → CI 真绿 →
