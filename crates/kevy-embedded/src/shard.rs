@@ -23,8 +23,8 @@ use kevy_hash::KevyHash;
 use kevy_persist::reshard::{ShardLayout, commit_reshard, merge_sources, recover_journal};
 #[cfg(feature = "persist")]
 use kevy_persist::{
-    Aof, Routing, ShardsMeta, layout, layout::infer_files_n, load_snapshot, read_shards_meta,
-    replay_aof, write_shards_meta,
+    Aof, Routing, ShardsMeta, layout, layout::infer_files_n, read_shards_meta,
+    write_shards_meta,
 };
 use kevy_store::Store as Keyspace;
 
@@ -293,83 +293,11 @@ fn load_in_place(
     let mut report = OpenReport::default();
     let start = Instant::now();
     for (i, store) in stores.iter_mut().enumerate() {
-        let snap = layout::snapshot_path(dir, i);
-        if snap.exists() {
-            load_snapshot(store, &snap)?;
-        }
-        let aof = layout::aof_path(dir, i);
-        if aof.exists() {
-            replay_shard_aof(dir, config, i, store, &aof, &mut report)?;
-        }
-        store.demote_to_watermark();
+        crate::shard_restore::restore_one_shard(dir, config, i, store, &mut report)?;
     }
     report.elapsed_ms = start.elapsed().as_millis() as u64;
     emit_replay(config, &report);
     Ok(report)
-}
-
-/// Replay one shard's AOF into its store, folding the outcome into
-/// `report`. In-replay demotion: the embedded replay applies straight
-/// to the bare store (no dispatch glue, so no per-write demote hook) —
-/// check the watermark every K frames; the caller drains once more
-/// after the log ends.
-#[cfg(feature = "persist")]
-fn replay_shard_aof(
-    dir: &Path,
-    config: &Config,
-    i: usize,
-    store: &mut Keyspace,
-    aof: &Path,
-    report: &mut OpenReport,
-) -> io::Result<()> {
-    let _ = (dir, i);
-    let mut frames = 0u64;
-    #[cfg(not(target_arch = "wasm32"))]
-    let segs_dir = layout::segs_dir(dir, i);
-    #[cfg(not(target_arch = "wasm32"))]
-    store.enable_seg_rows(&segs_dir).map_err(io::Error::other)?;
-    #[cfg(not(target_arch = "wasm32"))]
-    let mut torn: Option<String> = None;
-    let apply = |args: kevy_persist::Argv| {
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(f) = kevy_persist::segmented_frame(&args) {
-            // The SEGMENTED stitch: re-do the hot-layer eviction; a
-            // manifest miss is a named refusal after the walk (the
-            // rows' durable copy is unreachable).
-            if let Err(e) = kevy_store::apply_segmented(store, &segs_dir, f) {
-                torn.get_or_insert(e);
-            }
-            return;
-        }
-        crate::replay::apply(store, &args);
-        frames += 1;
-        if frames.is_multiple_of(kevy_persist::REPLAY_DEMOTE_INTERVAL) {
-            store.demote_to_watermark();
-        }
-    };
-    let r = if config.replay_resync {
-        kevy_persist::replay_aof_resync(aof, apply)?
-    } else {
-        replay_aof(aof, apply)?
-    };
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Some(e) = torn {
-        return Err(io::Error::other(format!("shard {i}: {e}")));
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    store.sweep_orphan_row_segs();
-    fold_replay_report(report, &r);
-    Ok(())
-}
-
-/// Fold one shard's replay outcome into the open report.
-#[cfg(feature = "persist")]
-fn fold_replay_report(report: &mut OpenReport, r: &kevy_persist::ReplayReport) {
-    report.replayed_commands += r.commands;
-    report.replayed_bytes += r.replayed_bytes;
-    report.dropped_bytes += r.dropped_bytes;
-    report.corrupt |= r.corrupt;
-    report.resynced_bytes += r.resynced_ranges.iter().map(|(a, b)| b - a).sum::<u64>();
 }
 
 /// Re-shard: load every source file into one temp keyspace, redistribute

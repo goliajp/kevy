@@ -35,7 +35,32 @@ pub struct ColdRef {
     pub(crate) touched: u8,
 }
 
+/// High bit of `ColdRef::file_id`: the stub's backing store is a row
+/// SEGMENT (persistent, keyed by the row key) rather than the per-boot
+/// vlog. Segment stubs reuse the same 24-byte shape — `offset` holds
+/// the segment's stable seq, `len` is unused.
+pub(crate) const SEG_BACKING: u32 = 1 << 31;
+
 impl ColdRef {
+    /// `(seq, value_weight)` when this stub's backing is a row
+    /// segment; `None` for a vlog stub. Public for the persistence
+    /// layer: the snapshot's stub record carries exactly these.
+    pub fn seg_parts(self) -> Option<(u32, u32)> {
+        (self.file_id & SEG_BACKING != 0).then_some((self.offset as u32, self.weight))
+    }
+
+    /// Rebuild a row-segment stub from its snapshot record.
+    pub fn from_seg_parts(seq: u32, value_weight: u32) -> Self {
+        ColdRef {
+            offset: u64::from(seq),
+            file_id: SEG_BACKING,
+            len: 0,
+            weight: value_weight,
+            type_tag: COLD_TAG_HASH,
+            touched: 0,
+        }
+    }
+
     /// The tag's Redis type name (the `TYPE` command on a cold key —
     /// answered from RAM, never a pread).
     pub(crate) fn type_name(self) -> &'static str {

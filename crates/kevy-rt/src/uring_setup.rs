@@ -24,6 +24,8 @@ impl<C: Commands> Shard<C> {
         if let Some(rx) = &self.replica_inbox {
             rx.attach_waker(Arc::clone(&self.waker));
         }
+        let segs_dir = kevy_persist::layout::segs_dir(&self.data_dir, self.id);
+        self.store.enable_seg_rows(&segs_dir).map_err(std::io::Error::other)?;
         let snap = self.snapshot_path();
         if snap.exists()
             && let Err(e) = load_snapshot(&mut self.store, &snap)
@@ -32,8 +34,6 @@ impl<C: Commands> Shard<C> {
         }
         if self.aof.is_some() {
             let aof_path = self.aof_path();
-            let segs_dir = kevy_persist::layout::segs_dir(&self.data_dir, self.id);
-            self.store.enable_seg_rows(&segs_dir).map_err(std::io::Error::other)?;
             let commands = &self.commands;
             let store = &mut self.store;
             // In-replay demotion — same K-frame watermark
@@ -64,8 +64,8 @@ impl<C: Commands> Shard<C> {
                 return Err(std::io::Error::other(format!("shard {}: {e}", self.id)));
             }
             self.commands.on_replay_report(report.dropped_bytes, report.corrupt);
-            self.store.sweep_orphan_row_segs();
         }
+        self.store.sweep_orphan_row_segs();
         self.store.demote_to_watermark();
         Ok(())
     }

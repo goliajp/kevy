@@ -34,6 +34,8 @@ pub struct SnapshotView {
     /// read path, same doctrine as the vlog pins.
     #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
     seg_pins: Vec<(u32, std::sync::Arc<kevy_seg::Seg>)>,
+    #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+    seg_files: Vec<(u32, String)>,
 }
 
 // Compile-time guarantee that a view can cross to a serializer thread.
@@ -112,6 +114,16 @@ impl SnapshotView {
     pub fn materialize_cold(&self, _key: &[u8], _v: &Value) -> Option<Value> {
         None
     }
+
+    /// The frozen row segments' `(seq, file)` identities.
+    #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+    pub fn row_seg_files(&self) -> Vec<(u32, String)> {
+        self.seg_files.clone()
+    }
+    #[cfg(not(all(feature = "std", not(target_arch = "wasm32"))))]
+    pub fn row_seg_files(&self) -> Vec<(u32, String)> {
+        Vec::new()
+    }
 }
 
 impl Store {
@@ -149,6 +161,8 @@ impl Store {
             pins: self.tier_pins(),
             #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
             seg_pins: self.segrow_pins(),
+            #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+            seg_files: self.row_seg_files(),
         }
     }
 }

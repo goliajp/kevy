@@ -66,32 +66,18 @@ pub struct SealedRows {
 /// The manifest meta tag row segments register under.
 const ROW_TAG: &[u8] = b"rowcold:";
 
-/// High bit of `ColdRef::file_id`: the stub's backing store is a row
-/// SEGMENT (persistent, keyed by the row key) rather than the per-boot
-/// vlog. Segment stubs reuse the same 24-byte shape — `offset` holds
-/// the segment-directory index, `len` is unused — so every match site
-/// that answers stage-1 questions from the stub works unchanged.
-pub(crate) const SEG_BACKING: u32 = 1 << 31;
-
 impl ColdRef {
     /// A stub pointing into the row-segment directory.
-    pub(crate) fn seg(seg_ix: u32, weight: u32, type_tag: u8) -> Self {
-        ColdRef {
-            offset: u64::from(seg_ix),
-            file_id: SEG_BACKING,
-            len: 0,
-            weight,
-            type_tag,
-            touched: 0,
-        }
+    pub(crate) fn seg(seq: u32, weight: u32, _type_tag: u8) -> Self {
+        ColdRef::from_seg_parts(seq, weight)
     }
 
     /// Whether this stub's backing is a row segment (vs the vlog).
     pub(crate) fn is_seg(self) -> bool {
-        self.file_id & SEG_BACKING != 0
+        self.seg_parts().is_some()
     }
 
-    /// The segment-directory index (seg backing only).
+    /// The segment's stable seq (seg backing only).
     pub(crate) fn seg_ix(self) -> u32 {
         self.offset as u32
     }
@@ -173,6 +159,9 @@ impl Store {
             let _ = std::fs::remove_file(sr.dir.join(&slot.file));
             false
         });
+        // Files the ledger never learned about (a crash mid-build)
+        // are plain garbage — the manifest sweep reclaims them.
+        let _ = m.sweep(&sr.dir);
     }
 
     /// The two-phase producer face: seal the batch (durable half) and
@@ -331,6 +320,13 @@ impl Store {
         self.map.insert(crate::SmallBytes::from_slice(key), e);
     }
 
+    /// Load one snapshot stub record: the row's identity re-enters the
+    /// map as a seg-backed stub (the segment directory, loaded before
+    /// the snapshot, holds its data). TTL-free by the eviction filter.
+    pub fn load_row_stub(&mut self, key: Vec<u8>, seq: u32, value_weight: u32) {
+        self.insert_row_stub(&key, seq, u64::from(value_weight));
+    }
+
     /// Fold a replay stitch's count into the segment's live tally.
     pub(crate) fn note_stitched(&mut self, seq: u32, n: u64) {
         if let Some(sr) = self.segrows.as_mut()
@@ -359,6 +355,15 @@ impl Store {
             slot.dead += 1;
             slot.live = slot.live.saturating_sub(1);
         }
+    }
+
+    /// The live row segments' `(seq, file)` identities — the rewrite's
+    /// trailing SEGMENTED frames name these.
+    pub fn row_seg_files(&self) -> Vec<(u32, String)> {
+        self.segrows
+            .as_ref()
+            .map(|sr| sr.segs.iter().map(|(q, s)| (*q, s.file.clone())).collect())
+            .unwrap_or_default()
     }
 
     /// The open segment handles, for a snapshot view's pins.
