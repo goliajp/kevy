@@ -126,6 +126,31 @@ impl Segment {
         }
     }
 
+    /// Detach every entry whose value sorts below `bound`, in tree
+    /// order — the window-eviction cut. The detached batch leaves all
+    /// of the segment's books (tree, reverse map, value counts, stored
+    /// values, stats) exactly as if each entry had been removed one by
+    /// one; the empty-key sentinel keeps every entry AT `bound` in the
+    /// hot tree, so the cut is strictly `< bound`.
+    pub fn split_off_below(&mut self, bound: &IndexValue) -> Vec<(IndexValue, Vec<u8>)> {
+        let kept = self.tree.split_off(&(bound.clone(), Vec::new()));
+        let evicted: Vec<(IndexValue, Vec<u8>)> =
+            core::mem::replace(&mut self.tree, kept).into_iter().collect();
+        for (v, k) in &evicted {
+            self.back.remove(k);
+            self.stats.entries -= 1;
+            self.stats.approx_bytes = self
+                .stats
+                .approx_bytes
+                .saturating_sub((v.approx_bytes() + k.len() + ENTRY_OVERHEAD) as u64);
+            self.dec_count(v);
+            if let Some(rv) = &mut self.values {
+                rv.clear(k);
+            }
+        }
+        evicted
+    }
+
     /// Row deleted (no coercion involved — not a coerce failure).
     pub fn remove(&mut self, key: &[u8]) {
         if let Some(rv) = &mut self.values {

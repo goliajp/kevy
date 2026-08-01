@@ -23,6 +23,7 @@ mod segment;
 mod segment_claused;
 mod table;
 mod table_verify;
+mod segcold;
 mod table_sidecar;
 mod table_wire;
 mod value;
@@ -45,6 +46,7 @@ pub use segment_claused::{
 pub use table::{
     MAX_TABLES, OrderPath, TableCatalog, TableIndex, TableSpec, WindowSpec, compile_table,
 };
+pub use segcold::{ColdBloom, decode_seg_key, seg_key, value_order_bytes};
 pub use table_verify::{IndexVerify, TableEnsure, TableVerify, spec_diff};
 pub use table_wire::{TABLE_DECLARE_USAGE, parse_table_declare};
 pub use value::{IndexValue, ValueTest, order_key};
