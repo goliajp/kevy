@@ -63,6 +63,22 @@ pub fn decode_seg_key(ty: ValType, key: &[u8]) -> Option<(IndexValue, Vec<u8>)> 
     Some((value, row))
 }
 
+/// Inclusive byte bounds covering exactly the cold keys whose value
+/// lies in `[min, max]`. The upper bound is the max value's frame with
+/// its final terminator byte flipped to 0x01: every `frame(max) ‖
+/// frame(row)` key sorts below it (the shared prefix ends 0x00 0x00 <
+/// 0x00 0x01), and no larger value's frame can reach it (in the
+/// escaped alphabet 0x00 is always followed by 0xFF, so the flipped
+/// terminator is nobody's prefix).
+pub fn seg_bounds(min: &IndexValue, max: &IndexValue) -> (Vec<u8>, Vec<u8>) {
+    let mut lo = Vec::new();
+    frame_into(&mut lo, &value_order_bytes(min));
+    let mut hi = Vec::new();
+    frame_into(&mut hi, &value_order_bytes(max));
+    *hi.last_mut().expect("frame is never empty") = 0x01;
+    (lo, hi)
+}
+
 /// Escape-and-terminate one component into `out`.
 fn frame_into(out: &mut Vec<u8>, b: &[u8]) {
     for &c in b {

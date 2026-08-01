@@ -47,7 +47,7 @@ fn hook_backfill_and_query_lifecycle() {
     // Live write during Building: hook double-writes.
     on_write(&ctx, &mut store, b"user:3");
     assert!(segment_building(&ctx, &mut store, b"t_age"));
-    assert!(with_ready_segment(&ctx, &mut store, b"t_age", |_, _| ()).is_err());
+    assert!(with_ready_segment(&ctx, &mut store, b"t_age", |_, _, _| ()).is_err());
 
     // user:3 has no hash yet — create it and write again (HSET path).
     store.hset(b"user:3", &[(b"age".as_slice(), b"40".as_slice())]).unwrap();
@@ -55,7 +55,7 @@ fn hook_backfill_and_query_lifecycle() {
 
     // Tick drains the backfill.
     on_tick(&ctx, &mut store);
-    let (hits, stats) = with_ready_segment(&ctx, &mut store, b"t_age", |spec, seg| {
+    let (hits, stats) = with_ready_segment(&ctx, &mut store, b"t_age", |spec, seg, _| {
         let min = IndexValue::parse_literal(spec.ty, b"0").unwrap();
         let max = IndexValue::parse_literal(spec.ty, b"100").unwrap();
         (seg.range(&min, &max, None, 10).0, seg.stats())
@@ -70,7 +70,7 @@ fn hook_backfill_and_query_lifecycle() {
     on_write(&ctx, &mut store, b"user:1");
     store.del(&[b"user:2".as_slice()]);
     on_write(&ctx, &mut store, b"user:2");
-    let hits = with_ready_segment(&ctx, &mut store, b"t_age", |spec, seg| {
+    let hits = with_ready_segment(&ctx, &mut store, b"t_age", |spec, seg, _| {
         let min = IndexValue::parse_literal(spec.ty, b"0").unwrap();
         let max = IndexValue::parse_literal(spec.ty, b"100").unwrap();
         seg.range(&min, &max, None, 10).0

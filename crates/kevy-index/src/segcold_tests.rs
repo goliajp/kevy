@@ -121,3 +121,23 @@ fn split_off_below_cuts_strictly_and_balances_the_books() {
     assert_eq!(s.stats().entries, 0);
     assert_eq!(s.count(&v(0), &v(999)), 0);
 }
+
+#[test]
+fn seg_bounds_cover_exactly_the_value_interval() {
+    // Keys for values -1..=5 with assorted row keys, including a row
+    // key starting 0xFF (the case a naive suffix bound misses).
+    let mut keys = Vec::new();
+    for i in -1..=5i64 {
+        for rk in [b"".to_vec(), b"\xffz".to_vec(), b"row:1".to_vec(), b"\x00".to_vec()] {
+            keys.push((i, rk.clone(), seg_key(&v(i), &rk)));
+        }
+    }
+    let (lo, hi) = seg_bounds(&v(0), &v(3));
+    let hits: Vec<i64> = keys
+        .iter()
+        .filter(|(_, _, k)| k.as_slice() >= lo.as_slice() && k.as_slice() <= hi.as_slice())
+        .map(|(i, _, _)| *i)
+        .collect();
+    assert_eq!(hits.len(), 16, "4 values x 4 row keys: {hits:?}");
+    assert!(hits.iter().all(|i| (0..=3).contains(i)));
+}

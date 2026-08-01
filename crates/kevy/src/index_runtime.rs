@@ -36,6 +36,9 @@ enum BuildState {
 struct ShardIndex {
     spec: IndexSpec,
     seg: Segment,
+    /// The sliding-window runtime — `Some` only when this index is a
+    /// windowed table's single-column window access path.
+    window: Option<window::WindowRt>,
     /// Populated instead of `seg` for KIND text.
     text: Option<kevy_text::TextSegment>,
     /// Populated instead of `seg` for KIND ann.
@@ -77,17 +80,27 @@ pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
     }
 }
 
-/// Tick hook: advance backfills a bounded batch per tick. Gated like
-/// [`on_write`].
+/// Tick hook: advance backfills a bounded batch per tick, then slide
+/// any windowed index whose boundary moved. Gated like [`on_write`].
 pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st, store);
     let st = &mut *st;
+    let segs_dir = window::shard_segs_dir(&ctx.state, ctx.shard.shard_id());
     for si in &mut st.idx {
         if matches!(si.build, BuildState::Backfilling { .. }) {
             st.stats_dirty = true;
         }
         advance_backfill(store, si, 2048);
+        if let (Some(win), Some(dir), BuildState::Ready) = (&mut si.window, &segs_dir, &si.build) {
+            match win.slide(&si.spec.name, &mut si.seg, dir) {
+                Ok(true) => st.stats_dirty = true,
+                Ok(false) => {}
+                // The tree is untouched on a failed slide (build
+                // precedes the cut); log once per tick and retry.
+                Err(e) => eprintln!("kevy: window slide '{}': {e}", String::from_utf8_lossy(&si.spec.name)),
+            }
+        }
     }
 }
 
@@ -145,7 +158,7 @@ pub(crate) fn with_ready_segment<R>(
     ctx: &Ctx<'_>,
     store: &mut Store,
     name: &[u8],
-    f: impl FnOnce(&IndexSpec, &Segment) -> R,
+    f: impl FnOnce(&IndexSpec, &Segment, Option<&window::WindowRt>) -> R,
 ) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st, store);
@@ -155,7 +168,7 @@ pub(crate) fn with_ready_segment<R>(
         .find(|si| si.spec.name == name)
         .ok_or("ERR no such index")?;
     match si.build {
-        BuildState::Ready => Ok(f(&si.spec, &si.seg)),
+        BuildState::Ready => Ok(f(&si.spec, &si.seg, si.window.as_ref())),
         BuildState::Backfilling { .. } => Err(CmdError::Wire("INDEXBUILDING index is still building")),
         BuildState::FailedOverBudget => Err(CmdError::Wire("INDEXOVERBUDGET index build exceeded MAXMEM")),
     }
@@ -340,7 +353,18 @@ fn refresh(catalogs: &CatalogState, st: &mut ShardIndexes, store: &mut Store) {
     if let Some(cat) = cat {
         for (spec, _state) in cat.iter() {
             match st.idx.iter().position(|si| si.spec == *spec) {
-                Some(i) => next.push(st.idx.swap_remove(i)),
+                Some(i) => {
+                    let mut si = st.idx.swap_remove(i);
+                    // The index spec survived, but the table's WINDOW
+                    // clause may have changed (REPLACE): reconcile.
+                    // A changed window resets the runtime — the old
+                    // spill is unreachable and swept on first slide.
+                    let want = window_for(catalogs, &si.spec);
+                    if si.window.as_ref().map(|w| &w.spec) != want.as_ref() {
+                        si.window = want.map(window::WindowRt::new);
+                    }
+                    next.push(si);
+                }
                 None => {
                     // Snapshot the domain's keys on THIS shard; live
                     // writes from now on hit the hook first and win.
@@ -353,6 +377,7 @@ fn refresh(catalogs: &CatalogState, st: &mut ShardIndexes, store: &mut Store) {
                         text: new_text_seg(spec),
                         ann: new_ann_seg(spec),
                         seg: new_scalar_seg(spec),
+                        window: window_for(catalogs, spec).map(window::WindowRt::new),
                         spec: spec.clone(),
                         build: BuildState::Backfilling { keys, pos: 0 },
                     });
@@ -364,6 +389,25 @@ fn refresh(catalogs: &CatalogState, st: &mut ShardIndexes, store: &mut Store) {
     st.generation = generation;
 }
 
+/// The WINDOW clause this compiled index serves, if any: a windowed
+/// table's single-column INDEX on the window column. (An ORDERPATH led
+/// by the window column satisfies declaration-time validation but does
+/// not slide yet — its composite keys need a prefix decode that lands
+/// with the claused train.)
+fn window_for(
+    catalogs: &CatalogState,
+    spec: &IndexSpec,
+) -> Option<kevy_index::WindowSpec> {
+    let dot = spec.name.iter().position(|&b| b == b'.')?;
+    let (tname, suffix) = (&spec.name[..dot], &spec.name[dot + 1..]);
+    let cat = catalogs.table()?;
+    let t = cat.get(tname)?;
+    let w = t.window.clone()?;
+    (suffix == w.column).then_some(w)
+}
+
+mod window;
+pub(crate) use window::WindowRt;
 mod row_apply;
 use row_apply::{advance_backfill, apply_row};
 pub(crate) use row_apply::{RowValue, row_value};
