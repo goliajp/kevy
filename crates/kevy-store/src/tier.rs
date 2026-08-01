@@ -372,7 +372,7 @@ mod disabled {
 
         /// No tier backend on this target — `Value::Cold` cannot exist.
         #[inline]
-        pub fn materialize_cold(&self, _v: &Value) -> Option<Value> {
+        pub fn materialize_cold(&self, _key: &[u8], _v: &Value) -> Option<Value> {
             None
         }
 
