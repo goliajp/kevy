@@ -418,3 +418,9 @@ mod tests;
 mod tests_op_table;
 #[cfg(test)]
 mod tests_verb_meta;
+
+/// Queue a SEGMENTED frame for the reactor to log after this tick.
+pub(crate) fn kevy_rt_push_tick_frame(seg_file: &str) {
+    let argv = kevy_persist::segmented_argv(seg_file.as_bytes());
+    kevy_rt::propagation::push_tick_frame(argv.iter().map(|a| a.to_vec()).collect());
+}

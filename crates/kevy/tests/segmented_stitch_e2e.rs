@@ -65,20 +65,35 @@ fn cmd(args: &[&[u8]]) -> Vec<u8> {
     out
 }
 
-fn seal_segment(data_dir: &Path, file: &str, keys: &[&[u8]]) {
+/// One row to seal: its key and its hash fields.
+type RowSpec<'a> = (&'a [u8], &'a [(&'a [u8], &'a [u8])]);
+
+/// tier-codec hash body: [nfields u32] then [flen][f][vlen][v] each.
+fn hash_body(fields: &[(&[u8], &[u8])]) -> Vec<u8> {
+    let mut out = (fields.len() as u32).to_le_bytes().to_vec();
+    for (f, v) in fields {
+        out.extend_from_slice(&(f.len() as u32).to_le_bytes());
+        out.extend_from_slice(f);
+        out.extend_from_slice(&(v.len() as u32).to_le_bytes());
+        out.extend_from_slice(v);
+    }
+    out
+}
+
+fn seal_segment(data_dir: &Path, file: &str, rows: &[RowSpec<'_>]) {
     let segs = data_dir.join("segs-0");
     std::fs::create_dir_all(&segs).unwrap();
     let mut b = kevy_seg::SegBuilder::create(&segs.join(file)).unwrap();
-    let mut sorted: Vec<&[u8]> = keys.to_vec();
-    sorted.sort();
-    for k in &sorted {
-        b.push(k, b"cold-copy").unwrap();
+    let mut sorted: Vec<_> = rows.to_vec();
+    sorted.sort_by(|a, b| a.0.cmp(b.0));
+    for (k, fields) in &sorted {
+        b.push(k, &hash_body(fields)).unwrap();
     }
     let meta = b.finish().unwrap();
     let mut m = kevy_seg::Manifest::open(&segs).unwrap();
     m.add(kevy_seg::ManifestEntry {
         file: file.to_string(),
-        meta: Vec::new(),
+        meta: b"rowcold:74".to_vec(),
         min_key: meta.min_key,
         max_key: meta.max_key,
         records: meta.records,
@@ -111,30 +126,38 @@ fn stitch_evicts_revives_and_refuses_through_the_server() {
     let mut h = Harness::spawn(cfg).expect("spawn kevy");
 
     let mut c = connect(port);
-    for (k, v) in [(b"row:1", b"v1"), (b"row:2", b"v2"), (b"row:3", b"v3")] {
-        let r = send(&mut c, &cmd(&[b"SET", k.as_slice(), v.as_slice()]));
-        assert!(r.starts_with("+OK"), "SET got: {r:?}");
+    for k in [b"row:1".as_slice(), b"row:2", b"row:3"] {
+        let r = send(&mut c, &cmd(&[b"HSET", k, b"id", k, b"note", b"hot"]));
+        assert!(r.starts_with(":"), "HSET got: {r:?}");
     }
     drop(c);
     h.kill(KillSignal::Sigkill).expect("kill");
 
     // The eviction's durable half, done by hand: segment + manifest,
     // then the stitch frame, then a revival write for row:1.
-    seal_segment(&tmp, "b1.seg", &[b"row:1", b"row:2"]);
-    append_frame(&tmp, &[kevy_persist::SEGMENTED, b"b1.seg"]);
-    append_frame(&tmp, &[b"SET", b"row:1", b"revived"]);
+    seal_segment(&tmp, "row-74-0.seg", &[
+        (b"row:1", &[(b"id", b"row:1"), (b"note", b"hot")]),
+        (b"row:2", &[(b"id", b"row:2"), (b"note", b"hot")]),
+    ]);
+    append_frame(&tmp, &[kevy_persist::SEGMENTED, b"row-74-0.seg"]);
+    append_frame(&tmp, &[b"HSET", b"row:1", b"note", b"revived"]);
 
     h.restart().expect("restart");
     let mut c = connect(port);
-    assert_eq!(send(&mut c, &cmd(&[b"GET", b"row:1"])), "$7\r\nrevived\r\n", "revival lost");
-    assert_eq!(send(&mut c, &cmd(&[b"GET", b"row:2"])), "$-1\r\n", "evicted row came back");
-    assert_eq!(send(&mut c, &cmd(&[b"GET", b"row:3"])), "$2\r\nv3\r\n", "unsegmented row lost");
+    let r1 = send(&mut c, &cmd(&[b"HGET", b"row:1", b"note"]));
+    assert_eq!(r1, "$7\r\nrevived\r\n", "revival lost");
+    // The stitched row phase-changed to a stub — and still answers,
+    // served from the segment.
+    let r2 = send(&mut c, &cmd(&[b"HGET", b"row:2", b"note"]));
+    assert_eq!(r2, "$3\r\nhot\r\n", "stitched row unreadable");
+    let r3 = send(&mut c, &cmd(&[b"HGET", b"row:3", b"note"]));
+    assert_eq!(r3, "$3\r\nhot\r\n", "unsegmented row lost");
     drop(c);
     h.kill(KillSignal::Sigkill).expect("kill 2");
 
     // Damage the truth set: a frame naming a segment the manifest does
     // not hold. Startup must refuse — the port never comes up.
-    append_frame(&tmp, &[kevy_persist::SEGMENTED, b"ghost.seg"]);
+    append_frame(&tmp, &[kevy_persist::SEGMENTED, b"row-74-9.seg"]);
     let refused = h.restart().is_err()
         || TcpStream::connect(("127.0.0.1", port)).is_err() && {
             std::thread::sleep(Duration::from_millis(1500));

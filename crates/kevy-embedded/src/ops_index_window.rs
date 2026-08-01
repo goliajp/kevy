@@ -20,30 +20,55 @@ fn evict_and_slide(
     spec: &kevy_index::IndexSpec,
     seg: &mut kevy_index::Segment,
     store: &mut kevy_store::Store,
+    aof: &mut Option<kevy_persist::Aof>,
     segs_dir: &Path,
 ) -> bool {
     if let Some(rows) = win.pending_rows(seg) {
-        let ok = store
+        let sealed = store
             .enable_seg_rows(segs_dir)
-            .and_then(|()| store.evict_rows_to_seg(table_of(&spec.name), &rows));
-        if let Err(e) = ok {
-            eprintln!(
-                "kevy-embedded: row eviction '{}': {e}",
-                String::from_utf8_lossy(&spec.name)
-            );
-            return false;
+            .and_then(|()| store.seal_rows_to_seg(table_of(&spec.name), &rows));
+        match sealed {
+            Ok(None) => {}
+            Ok(Some(batch)) => {
+                // Frame after the durable copy, before the phase
+                // change (R2c ordering). AOF only — replication
+                // replicas seal their own segments.
+                if let Some(a) = aof {
+                    let argv = kevy_persist::segmented_argv(batch.file.as_bytes());
+                    let owned: Vec<Vec<u8>> = argv.iter().map(|x| x.to_vec()).collect();
+                    if let Err(e) = a.append(&owned_argv(&owned)) {
+                        eprintln!(
+                            "kevy-embedded: SEGMENTED frame '{}': {e}",
+                            String::from_utf8_lossy(&spec.name)
+                        );
+                        return false;
+                    }
+                }
+                store.commit_row_eviction(&batch);
+            }
+            Err(e) => {
+                eprintln!(
+                    "kevy-embedded: row eviction '{}': {e}",
+                    String::from_utf8_lossy(&spec.name)
+                );
+                return false;
+            }
         }
     }
-    match win.slide(&spec.name, seg, segs_dir) {
-        Ok(moved) => moved,
-        Err(e) => {
-            eprintln!(
-                "kevy-embedded: window slide '{}': {e}",
-                String::from_utf8_lossy(&spec.name)
-            );
-            false
-        }
+    win.slide(&spec.name, seg, segs_dir).unwrap_or_else(|e| {
+        eprintln!("kevy-embedded: window slide '{}': {e}", String::from_utf8_lossy(&spec.name));
+        false
+    })
+}
+
+/// An owned argv as the AOF's ArgvView.
+fn owned_argv(parts: &[Vec<u8>]) -> kevy_persist::Argv {
+    let total: usize = parts.iter().map(Vec::len).sum();
+    let mut argv = kevy_persist::Argv::with_capacity(parts.len(), total);
+    for p in parts {
+        argv.push(p);
     }
+    argv
 }
 
 /// The table half of a compiled index name (`<table>.<col>`).
@@ -58,6 +83,7 @@ fn table_of(index_name: &[u8]) -> &[u8] {
 pub(crate) fn window_tick(
     segs: &mut ShardSegs,
     store: &mut kevy_store::Store,
+    aof: &mut Option<kevy_persist::Aof>,
     tables: &TableReg,
     segs_dir: &Path,
 ) {
@@ -84,7 +110,7 @@ pub(crate) fn window_tick(
             else {
                 continue;
             };
-            moved |= evict_and_slide(win, spec, seg, store, segs_dir);
+            moved |= evict_and_slide(win, spec, seg, store, aof, segs_dir);
         }
         // An index dropped from the catalog drops its window with it.
         let names: Vec<Vec<u8>> = seg_list.iter().map(|(s, _)| s.name.clone()).collect();

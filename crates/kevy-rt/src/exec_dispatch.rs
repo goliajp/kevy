@@ -467,4 +467,17 @@ impl<C: Commands> Shard<C> {
             self.target_wake_xshard(key);
         }
     }
+    /// Log the internal frames a shard tick queued (the SEGMENTED
+    /// stitch). AOF only — a replica seals its own segments, so the
+    /// frames never enter the replication stream.
+    pub(crate) fn drain_tick_frames(&mut self) {
+        for frame in crate::propagation::take_tick_frames() {
+            let total: usize = frame.iter().map(Vec::len).sum();
+            let mut argv = kevy_resp::Argv::with_capacity(frame.len(), total);
+            for part in &frame {
+                argv.push(part);
+            }
+            self.log(&argv);
+        }
+    }
 }

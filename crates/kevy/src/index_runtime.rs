@@ -98,11 +98,19 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
             // (the index's < W prefix is the batch's only discovery).
             if let Some(rows) = win.pending_rows(&si.seg) {
                 let table = table_of(&si.spec.name);
-                let ok = store
+                let sealed = store
                     .enable_seg_rows(dir)
-                    .and_then(|()| store.evict_rows_to_seg(table, &rows));
-                match ok {
-                    Ok(_) => {}
+                    .and_then(|()| store.seal_rows_to_seg(table, &rows));
+                match sealed {
+                    Ok(None) => {}
+                    Ok(Some(batch)) => {
+                        // The R2c ordering: the frame lands in the AOF
+                        // after the durable copy exists and before the
+                        // hot rows phase-change (the reactor drains
+                        // the queue right after this tick).
+                        crate::kevy_rt_push_tick_frame(&batch.file);
+                        store.commit_row_eviction(&batch);
+                    }
                     Err(e) => {
                         eprintln!(
                             "kevy: row eviction '{}': {e}",

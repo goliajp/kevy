@@ -103,3 +103,25 @@ mod tests {
         assert!(matches!(take_override(), Propagate::Replace(_)));
     }
 }
+
+use core::cell::RefCell;
+
+thread_local! {
+    /// Internal frames produced inside a shard tick (the SEGMENTED
+    /// stitch): queued here because the tick runs in the commands
+    /// layer, which has no AOF handle. The reactor drains the queue
+    /// right after the tick and logs each frame — to the AOF only,
+    /// never the replication stream: a replica runs its own window
+    /// tick over its own data dir and seals its own segments.
+    static TICK_FRAMES: RefCell<Vec<Vec<Vec<u8>>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Queue one internal frame for the reactor to log after this tick.
+pub fn push_tick_frame(argv: Vec<Vec<u8>>) {
+    TICK_FRAMES.with(|q| q.borrow_mut().push(argv));
+}
+
+/// Drain the tick's queued frames (reactor side).
+pub(crate) fn take_tick_frames() -> Vec<Vec<Vec<u8>>> {
+    TICK_FRAMES.with(|q| core::mem::take(&mut *q.borrow_mut()))
+}

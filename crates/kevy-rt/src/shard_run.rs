@@ -68,6 +68,11 @@ impl<C: Commands> Shard<C> {
         if self.aof.is_some() {
             let aof_path = self.aof_path();
             let segs_dir = kevy_persist::layout::segs_dir(&self.data_dir, self.id);
+            // Row segments are truth: load the registered set before
+            // replay so SEGMENTED frames can stitch against it.
+            if let Err(e) = self.store.enable_seg_rows(&segs_dir) {
+                return Err(io::Error::other(format!("shard {}: {e}", self.id)));
+            }
             let commands = &self.commands;
             let store = &mut self.store;
             // In-replay demotion: dispatch already runs the
@@ -102,6 +107,9 @@ impl<C: Commands> Shard<C> {
                 return Err(io::Error::other(format!("shard {}: {e}", self.id)));
             }
             self.commands.on_replay_report(report.dropped_bytes, report.corrupt);
+            // Segments nothing references after replay are orphans (a
+            // crash between sealing and the frame): sweep them.
+            self.store.sweep_orphan_row_segs();
         }
         self.store.demote_to_watermark();
 
@@ -295,6 +303,7 @@ impl<C: Commands> Shard<C> {
                     self.tick_repl_waiters();
                     if now.duration_since(last_tick) >= iv {
                         self.commands.on_shard_tick(&mut self.store);
+                        self.drain_tick_frames();
                         self.drain_store_notify();
                         self.apply_live_runtime_config(&mut tick_interval);
                         self.tick_persist();
