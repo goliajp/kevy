@@ -116,6 +116,15 @@ pub(crate) struct ShardSegs {
 }
 
 impl ShardSegs {
+    /// The window runtime for `name`, if that index is a windowed
+    /// table's window access path AND a tick has reconciled it (only
+    /// the reaper's window tick populates the list, so a manual-reaper
+    /// or memory-only store always answers `None` — nothing slid).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn window_of(&self, name: &[u8]) -> Option<&kevy_window::WindowRt> {
+        self.windows.iter().find(|(n, _)| n == name).map(|(_, w)| w)
+    }
+
     /// Invalidate the `reserved_bytes` cache — a no-op on targets
     /// without the tier backend, so mutation chokepoints call it
     /// unconditionally.

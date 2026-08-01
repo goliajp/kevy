@@ -12,14 +12,6 @@ use kevy_window::WindowRt;
 use crate::ops_index::ShardSegs;
 use crate::ops_table::TableReg;
 
-impl ShardSegs {
-    /// The window runtime for `name`, if that index is a windowed
-    /// table's window access path AND a tick has reconciled it.
-    pub(crate) fn window_of(&self, name: &[u8]) -> Option<&WindowRt> {
-        self.windows.iter().find(|(n, _)| n == name).map(|(_, w)| w)
-    }
-}
-
 /// One reaper tick's window work for one shard: reconcile the window
 /// set against the table catalog (declare/replace/drop all converge),
 /// then slide every windowed index whose boundary moved.
