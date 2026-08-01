@@ -86,7 +86,7 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st, store);
     let st = &mut *st;
-    let segs_dir = window::shard_segs_dir(&ctx.state, ctx.shard.shard_id());
+    let segs_dir = window::shard_segs_dir(ctx.state, ctx.shard.shard_id());
     for si in &mut st.idx {
         if matches!(si.build, BuildState::Backfilling { .. }) {
             st.stats_dirty = true;
