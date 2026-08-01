@@ -139,8 +139,8 @@ fn cold_rows_answer_every_kv_command_like_hot_ones() {
         vec![vec![b"DEL", b"ev:6"]],
     ] {
         for cmd in &cmds {
-            let cs: Vec<&[u8]> = cmd.iter().map(|c| c.as_ref() as &[u8]).collect();
-            assert_eq!(run(&s, &cs), run(&c, &cs), "write: {}", String::from_utf8_lossy(&cmd[0]));
+            let cs: Vec<&[u8]> = cmd.to_vec();
+            assert_eq!(run(&s, &cs), run(&c, &cs), "write: {}", String::from_utf8_lossy(cmd[0]));
         }
     }
     compare("after revival churn");
