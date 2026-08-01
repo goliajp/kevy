@@ -50,48 +50,59 @@ pub(crate) fn spec_to_line(s: &TableSpec) -> String {
         .map(|(n, t)| format!("{}:{}", tesc(n), t.tag()))
         .collect::<Vec<_>>()
         .join(",");
-    let idxs = if s.indexes.is_empty() {
-        "-".into()
-    } else {
-        s.indexes
-            .iter()
-            .map(|ix| {
-                let mut e = format!("{}:{}", tesc(&ix.column), ix.kind.tag());
-                for v in &ix.values {
-                    e.push(':');
-                    e.push_str(&tesc(v));
-                }
-                e
-            })
-            .collect::<Vec<_>>()
-            .join(",")
-    };
-    let ops = if s.orderpaths.is_empty() {
-        "-".into()
-    } else {
-        s.orderpaths
-            .iter()
-            .map(|op| {
-                let mut e = tesc(&op.name);
-                for (col, desc) in &op.on {
-                    e.push(':');
-                    e.push_str(&tesc(col));
-                    e.push(':');
-                    e.push(if *desc { 'd' } else { 'a' });
-                }
-                e
-            })
-            .collect::<Vec<_>>()
-            .join(",")
-    };
-    let mut line =
-        format!("{}\t{}\t{}\t{}\t{}\t{}", tesc(&s.name), tesc(&s.prefix), tesc(&s.pk), cols, idxs, ops);
+    let mut line = format!(
+        "{}\t{}\t{}\t{}\t{}\t{}",
+        tesc(&s.name),
+        tesc(&s.prefix),
+        tesc(&s.pk),
+        cols,
+        indexes_field(s),
+        orderpaths_field(s)
+    );
     // The window rides as an optional seventh field so a windowless
     // catalog stays byte-identical to the shape older readers know.
     if let Some(w) = &s.window {
         line.push_str(&format!("\t{}:{}:{}", tesc(&w.column), w.span, w.bucket));
     }
     line
+}
+
+fn indexes_field(s: &TableSpec) -> String {
+    if s.indexes.is_empty() {
+        return "-".into();
+    }
+    s.indexes
+        .iter()
+        .map(|ix| {
+            let mut e = format!("{}:{}", tesc(&ix.column), ix.kind.tag());
+            for v in &ix.values {
+                e.push(':');
+                e.push_str(&tesc(v));
+            }
+            e
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn orderpaths_field(s: &TableSpec) -> String {
+    if s.orderpaths.is_empty() {
+        return "-".into();
+    }
+    s.orderpaths
+        .iter()
+        .map(|op| {
+            let mut e = tesc(&op.name);
+            for (col, desc) in &op.on {
+                e.push(':');
+                e.push_str(&tesc(col));
+                e.push(':');
+                e.push(if *desc { 'd' } else { 'a' });
+            }
+            e
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 pub(crate) fn spec_from_line(line: &str) -> Option<TableSpec> {

@@ -299,52 +299,68 @@ fn load_in_place(
         }
         let aof = layout::aof_path(dir, i);
         if aof.exists() {
-            // In-replay demotion: the embedded replay applies
-            // straight to the bare store (no dispatch glue, so no
-            // per-write demote hook) — check the watermark every K
-            // frames and drain once more after the log ends.
-            let mut frames: u64 = 0;
-            #[cfg(not(target_arch = "wasm32"))]
-            let segs_dir = layout::segs_dir(dir, i);
-            #[cfg(not(target_arch = "wasm32"))]
-            let mut torn: Option<String> = None;
-            let apply = |args: kevy_persist::Argv| {
-                #[cfg(not(target_arch = "wasm32"))]
-                if let Some(f) = kevy_persist::segmented_frame(&args) {
-                    // The SEGMENTED stitch: re-do the hot-layer
-                    // eviction; a manifest miss is a named refusal
-                    // after the walk (rows' durable copy unreachable).
-                    if let Err(e) = kevy_store::apply_segmented(store, &segs_dir, f) {
-                        torn.get_or_insert(e);
-                    }
-                    return;
-                }
-                crate::replay::apply(store, &args);
-                frames += 1;
-                if frames.is_multiple_of(kevy_persist::REPLAY_DEMOTE_INTERVAL) {
-                    store.demote_to_watermark();
-                }
-            };
-            let r = if config.replay_resync {
-                kevy_persist::replay_aof_resync(&aof, apply)?
-            } else {
-                replay_aof(&aof, apply)?
-            };
-            #[cfg(not(target_arch = "wasm32"))]
-            if let Some(e) = torn {
-                return Err(io::Error::other(format!("shard {i}: {e}")));
-            }
-            report.replayed_commands += r.commands;
-            report.replayed_bytes += r.replayed_bytes;
-            report.dropped_bytes += r.dropped_bytes;
-            report.corrupt |= r.corrupt;
-            report.resynced_bytes += r.resynced_ranges.iter().map(|(a, b)| b - a).sum::<u64>();
+            replay_shard_aof(dir, config, i, store, &aof, &mut report)?;
         }
         store.demote_to_watermark();
     }
     report.elapsed_ms = start.elapsed().as_millis() as u64;
     emit_replay(config, &report);
     Ok(report)
+}
+
+/// Replay one shard's AOF into its store, folding the outcome into
+/// `report`. In-replay demotion: the embedded replay applies straight
+/// to the bare store (no dispatch glue, so no per-write demote hook) —
+/// check the watermark every K frames; the caller drains once more
+/// after the log ends.
+#[cfg(feature = "persist")]
+fn replay_shard_aof(
+    dir: &Path,
+    config: &Config,
+    i: usize,
+    store: &mut Keyspace,
+    aof: &Path,
+    report: &mut OpenReport,
+) -> io::Result<()> {
+    let _ = dir;
+    let mut frames: u64 = 0;
+    #[cfg(not(target_arch = "wasm32"))]
+    let segs_dir = layout::segs_dir(dir, i);
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut torn: Option<String> = None;
+    let apply = |args: kevy_persist::Argv| {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(f) = kevy_persist::segmented_frame(&args) {
+            // The SEGMENTED stitch: re-do the hot-layer eviction; a
+            // manifest miss is a named refusal after the walk (the
+            // rows' durable copy is unreachable).
+            if let Err(e) = kevy_store::apply_segmented(store, &segs_dir, f) {
+                torn.get_or_insert(e);
+            }
+            return;
+        }
+        crate::replay::apply(store, &args);
+        frames += 1;
+        if frames.is_multiple_of(kevy_persist::REPLAY_DEMOTE_INTERVAL) {
+            store.demote_to_watermark();
+        }
+    };
+    let r = if config.replay_resync {
+        kevy_persist::replay_aof_resync(aof, apply)?
+    } else {
+        replay_aof(aof, apply)?
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(e) = torn {
+        return Err(io::Error::other(format!("shard {i}: {e}")));
+    }
+    let _ = i;
+    report.replayed_commands += r.commands;
+    report.replayed_bytes += r.replayed_bytes;
+    report.dropped_bytes += r.dropped_bytes;
+    report.corrupt |= r.corrupt;
+    report.resynced_bytes += r.resynced_ranges.iter().map(|(a, b)| b - a).sum::<u64>();
+    Ok(())
 }
 
 /// Re-shard: load every source file into one temp keyspace, redistribute
