@@ -33,7 +33,7 @@ pub struct SnapshotView {
     /// Row-segment pins — the seg-backed stubs' serializer-thread
     /// read path, same doctrine as the vlog pins.
     #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
-    seg_pins: Vec<std::sync::Arc<kevy_seg::Seg>>,
+    seg_pins: Vec<(u32, std::sync::Arc<kevy_seg::Seg>)>,
 }
 
 // Compile-time guarantee that a view can cross to a serializer thread.
@@ -79,7 +79,12 @@ impl SnapshotView {
     pub fn materialize_cold(&self, key: &[u8], v: &Value) -> Option<Value> {
         let Value::Cold(c) = v else { return None };
         if c.is_seg() {
-            let payload = self.seg_pins[c.seg_ix() as usize]
+            let payload = self
+                .seg_pins
+                .iter()
+                .find(|(q, _)| *q == c.seg_ix())
+                .expect("segrows: view stub references a segment pinned at collect time")
+                .1
                 .get(key)
                 .expect("segrows: pinned segment read failed — refused, not healed")
                 .expect("segrows: stub points at a record the segment does not hold");

@@ -323,9 +323,11 @@ fn replay_shard_aof(
     report: &mut OpenReport,
 ) -> io::Result<()> {
     let _ = dir;
-    let mut frames: u64 = 0;
+    let mut frames = 0u64;
     #[cfg(not(target_arch = "wasm32"))]
     let segs_dir = layout::segs_dir(dir, i);
+    #[cfg(not(target_arch = "wasm32"))]
+    store.enable_seg_rows(&segs_dir).map_err(io::Error::other)?;
     #[cfg(not(target_arch = "wasm32"))]
     let mut torn: Option<String> = None;
     let apply = |args: kevy_persist::Argv| {
@@ -354,13 +356,20 @@ fn replay_shard_aof(
     if let Some(e) = torn {
         return Err(io::Error::other(format!("shard {i}: {e}")));
     }
-    let _ = i;
+    #[cfg(not(target_arch = "wasm32"))]
+    store.sweep_orphan_row_segs();
+    fold_replay_report(report, &r);
+    Ok(())
+}
+
+/// Fold one shard's replay outcome into the open report.
+#[cfg(feature = "persist")]
+fn fold_replay_report(report: &mut OpenReport, r: &kevy_persist::ReplayReport) {
     report.replayed_commands += r.commands;
     report.replayed_bytes += r.replayed_bytes;
     report.dropped_bytes += r.dropped_bytes;
     report.corrupt |= r.corrupt;
     report.resynced_bytes += r.resynced_ranges.iter().map(|(a, b)| b - a).sum::<u64>();
-    Ok(())
 }
 
 /// Re-shard: load every source file into one temp keyspace, redistribute

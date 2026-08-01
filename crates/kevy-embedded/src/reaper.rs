@@ -182,6 +182,7 @@ fn shard_upkeep(
         crate::ops_index_window::window_tick(
             &mut inner.idx_segs,
             &mut inner.store,
+            &mut inner.aof,
             tables,
             &segs_dir,
         );

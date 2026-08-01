@@ -88,39 +88,7 @@ fn cold_rows_answer_every_kv_command_like_hot_ones() {
     c.table_declare(table(b"ev", false)).expect("declare ctl");
     seed(&c);
 
-    let compare = |tag: &str| {
-        // Read family, on a cold row (ev:2, at=20 < W=190) and a hot one.
-        for key in [b"ev:2".as_slice(), b"ev:25", b"ev:ttl", b"ev:none"] {
-            for cmd in [
-                vec![b"HGETALL".as_slice(), key],
-                vec![b"HGET", key, b"note"],
-                vec![b"HGET", key, b"ghost"],
-                vec![b"HMGET", key, b"id", b"ghost", b"at"],
-                vec![b"HLEN", key],
-                vec![b"HKEYS", key],
-                vec![b"HEXISTS", key, b"at"],
-                vec![b"EXISTS", key],
-                vec![b"TYPE", key],
-                vec![b"TTL", key],
-                vec![b"HSCAN", key, b"0"],
-            ] {
-                let name = String::from_utf8_lossy(cmd[0]).into_owned();
-                assert_eq!(
-                    run(&s, &cmd),
-                    run(&c, &cmd),
-                    "{tag}: {name} {}",
-                    String::from_utf8_lossy(key)
-                );
-            }
-        }
-        assert_eq!(run(&s, &[b"DBSIZE"]), run(&c, &[b"DBSIZE"]), "{tag}: DBSIZE");
-        // SCAN: full sweep, order-insensitive key-set equality.
-        let mut all_s = scan_all(&s);
-        let mut all_c = scan_all(&c);
-        all_s.sort();
-        all_c.sort();
-        assert_eq!(all_s, all_c, "{tag}: SCAN key set");
-    };
+    let compare = |tag: &str| compare_stores(&s, &c, tag);
     compare("after eviction");
 
     // The TTL row must NOT have evicted: its value is still hot.
@@ -150,6 +118,61 @@ fn cold_rows_answer_every_kv_command_like_hot_ones() {
     for want in ["id", "at", "note", "extra", "row number 2"] {
         assert!(all.contains(want), "revived row lost '{want}': {all}");
     }
+
+    // Restart: the live producer logged real SEGMENTED frames, so the
+    // reopened store must stitch every surviving cold row back to a
+    // stub (segments retained, not orphan-swept) and stay equivalent.
+    drop(s);
+    let s = Store::open(
+        Config::default()
+            .with_persist(d.path())
+            .with_reaper_interval(Duration::from_millis(25)),
+    )
+    .expect("reopen");
+    let segs = d.path().join("segs-0");
+    let rows_kept = std::fs::read_dir(&segs)
+        .unwrap()
+        .filter_map(Result::ok)
+        .any(|e| e.file_name().to_string_lossy().starts_with("row-"));
+    assert!(rows_kept, "referenced row segments must survive restart");
+    compare_stores(&s, &c, "after restart");
+    let all = String::from_utf8_lossy(&run(&s, &[b"HGETALL", b"ev:10"])).into_owned();
+    assert!(all.contains("row number 10"), "cold row unreadable after restart: {all}");
+}
+
+/// Every read/enumeration surface must answer identically on the two
+/// stores — the windowed one and the never-windowed control.
+fn compare_stores(s: &Store, c: &Store, tag: &str) {
+    for key in [b"ev:2".as_slice(), b"ev:25", b"ev:ttl", b"ev:none"] {
+        for cmd in [
+            vec![b"HGETALL".as_slice(), key],
+            vec![b"HGET", key, b"note"],
+            vec![b"HGET", key, b"ghost"],
+            vec![b"HMGET", key, b"id", b"ghost", b"at"],
+            vec![b"HLEN", key],
+            vec![b"HKEYS", key],
+            vec![b"HEXISTS", key, b"at"],
+            vec![b"EXISTS", key],
+            vec![b"TYPE", key],
+            vec![b"TTL", key],
+            vec![b"HSCAN", key, b"0"],
+        ] {
+            let name = String::from_utf8_lossy(cmd[0]).into_owned();
+            assert_eq!(
+                run(s, &cmd),
+                run(c, &cmd),
+                "{tag}: {name} {}",
+                String::from_utf8_lossy(key)
+            );
+        }
+    }
+    assert_eq!(run(s, &[b"DBSIZE"]), run(c, &[b"DBSIZE"]), "{tag}: DBSIZE");
+    // SCAN: full sweep, order-insensitive key-set equality.
+    let mut all_s = scan_all(s);
+    let mut all_c = scan_all(c);
+    all_s.sort();
+    all_c.sort();
+    assert_eq!(all_s, all_c, "{tag}: SCAN key set");
 }
 
 fn scan_all(s: &Store) -> Vec<Vec<u8>> {
