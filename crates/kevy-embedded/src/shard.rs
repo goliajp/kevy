@@ -322,7 +322,7 @@ fn replay_shard_aof(
     aof: &Path,
     report: &mut OpenReport,
 ) -> io::Result<()> {
-    let _ = dir;
+    let _ = (dir, i);
     let mut frames = 0u64;
     #[cfg(not(target_arch = "wasm32"))]
     let segs_dir = layout::segs_dir(dir, i);
