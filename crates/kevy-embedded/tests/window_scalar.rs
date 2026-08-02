@@ -149,6 +149,21 @@ fn embedded_window_slides_and_stays_semantically_equivalent() {
             .idx_count_claused(b"ctl.at", &v(0), &v(280), &filter_prio)
             .expect("claused count ctl");
         assert_eq!(cc_ev, cc_ctl, "{tag}: claused COUNT");
+        // Plain-range pagination: the cursor goes INTO the cold walk;
+        // page 2+ must keep serving cold rows (the starvation catch).
+        let (mut ev_cur, mut ctl_cur) = (None, None);
+        for page in 0..20 {
+            let p_ev = s.idx_query(b"ev.at", &v(0), &v(280), ev_cur.as_ref(), 4).expect("page ev");
+            let p_ctl =
+                s.idx_query(b"ctl.at", &v(0), &v(280), ctl_cur.as_ref(), 4).expect("page ctl");
+            assert_eq!(p_ev.0, p_ctl.0, "{tag}: plain page {page}");
+            (ev_cur, ctl_cur) = (p_ev.1, p_ctl.1);
+            if ev_cur.is_none() {
+                break;
+            }
+            assert!(page < 19, "{tag}: plain paging never terminated");
+        }
+        assert!(ev_cur.is_none() && ctl_cur.is_none(), "{tag}: plain paging ended cleanly");
     };
     compare("after slide");
     assert_eq!(s.idx_count(b"ev.at", &v(-1000), &v(1000)).unwrap(), 30);

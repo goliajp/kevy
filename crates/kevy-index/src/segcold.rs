@@ -79,6 +79,48 @@ pub fn seg_bounds(min: &IndexValue, max: &IndexValue) -> (Vec<u8>, Vec<u8>) {
     (lo, hi)
 }
 
+/// Which shape of tree a window boundary lives in: a plain i64
+/// window-column index, or a composite index the window column LEADS
+/// (ascending — its first component is the column's `order_key` 8B,
+/// so the tree prefix below a boundary is exactly the out-of-window
+/// batch, the property the slide rides).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowShape {
+    /// `INDEX <wcol> range` — the tree's values ARE the window column.
+    PlainI64,
+    /// `ORDERPATH` led by the window column ascending — the values
+    /// are composite byte strings whose first 8 bytes encode it.
+    CompositeLed,
+}
+
+/// The window-column value a tree entry carries, under `shape`.
+/// `None` = the entry cannot carry one (wrong variant / short bytes) —
+/// the caller treats the tree as having no boundary to advance.
+pub fn window_value_of(v: &IndexValue, shape: WindowShape) -> Option<i64> {
+    match (shape, v) {
+        (WindowShape::PlainI64, IndexValue::I64(i)) => Some(*i),
+        (WindowShape::CompositeLed, IndexValue::Str(b)) => {
+            let raw = u64::from_be_bytes(b.get(..8)?.try_into().ok()?);
+            Some((raw ^ (1 << 63)) as i64)
+        }
+        _ => None,
+    }
+}
+
+/// The below-boundary bound for `iter_below` / `split_off_below`,
+/// under `shape`. For the composite shape the bound is the target's
+/// bare 8-byte first component: any key whose first component sorts
+/// below it is below the bound, and a key EQUAL in those 8 bytes is
+/// longer and therefore above it — "first column < target", exactly.
+pub fn window_bound(target: i64, shape: WindowShape) -> IndexValue {
+    match shape {
+        WindowShape::PlainI64 => IndexValue::I64(target),
+        WindowShape::CompositeLed => {
+            IndexValue::Str(((target as u64) ^ (1 << 63)).to_be_bytes().to_vec())
+        }
+    }
+}
+
 /// Encode a row's stored `VALUES` into a cold entry's payload:
 /// `[n u32][per value: 0 | 1‖len u32‖bytes]`, little-endian. An index
 /// that declared no values encodes the EMPTY payload — byte-identical

@@ -213,17 +213,46 @@ impl TableSpec {
 pub(crate) use crate::table_sidecar::{spec_from_line, spec_to_line};
 
 /// The WINDOW clause a compiled index named `index_name` serves, if
-/// any: a windowed table's single-column INDEX on the window column.
-/// (An ORDERPATH led by the window column satisfies declaration-time
-/// validation but does not slide yet — its composite keys need a
-/// prefix decode that lands with the claused train.) Shared by both
-/// engine faces so the mapping cannot drift.
-pub fn window_for(cat: &TableCatalog, index_name: &[u8]) -> Option<WindowSpec> {
+/// any, with the shape its tree slides in: a windowed table's
+/// single-column INDEX on the window column, or an ORDERPATH the
+/// window column leads ascending (a DESC lead has no tree-prefix
+/// property and never slides). Shared by both engine faces so the
+/// mapping cannot drift.
+pub fn window_for(
+    cat: &TableCatalog,
+    index_name: &[u8],
+) -> Option<(WindowSpec, crate::WindowShape)> {
     let dot = index_name.iter().position(|&b| b == b'.')?;
     let (tname, suffix) = (&index_name[..dot], &index_name[dot + 1..]);
     let t = cat.get(tname)?;
     let w = t.window.clone()?;
-    (suffix == w.column).then_some(w)
+    if suffix == w.column {
+        return Some((w, crate::WindowShape::PlainI64));
+    }
+    let leads = t.orderpaths.iter().any(|op| {
+        op.name == suffix && op.on.first().is_some_and(|(c, desc)| c == &w.column && !desc)
+    });
+    leads.then_some((w, crate::WindowShape::CompositeLed))
+}
+
+/// Whether `index_name` is its table's row-eviction DRIVER: the one
+/// windowed access path per table that discovers the eviction batch
+/// and seals the rows (every other windowed path only slides its own
+/// tree — two drivers would seal the same batch twice). The
+/// window-column INDEX drives when declared; otherwise the first
+/// ascending-led ORDERPATH does.
+pub fn window_driver(cat: &TableCatalog, index_name: &[u8]) -> bool {
+    let Some(dot) = index_name.iter().position(|&b| b == b'.') else { return false };
+    let (tname, suffix) = (&index_name[..dot], &index_name[dot + 1..]);
+    let Some(t) = cat.get(tname) else { return false };
+    let Some(w) = &t.window else { return false };
+    if t.indexes.iter().any(|ix| ix.column == w.column) {
+        return suffix == w.column;
+    }
+    t.orderpaths
+        .iter()
+        .find(|op| op.on.first().is_some_and(|(c, desc)| c == &w.column && !desc))
+        .is_some_and(|op| op.name == suffix)
 }
 
 fn show(b: &[u8]) -> String {

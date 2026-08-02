@@ -13,13 +13,16 @@ use std::path::Path;
 
 use kevy_index::{
     ColdBloom, ColdEntryRow, FacetBucket, IndexValue, ScalarClauses, ScalarHit, ValType,
-    WindowSpec, claused_over, decode_seg_key, decode_seg_values, encode_seg_values, seg_bounds,
-    seg_key, values_pass,
+    WindowShape, WindowSpec, claused_over, decode_seg_key, decode_seg_values, encode_seg_values,
+    seg_bounds, seg_key, values_pass, window_bound, window_value_of,
 };
 
 /// One index's window state on one shard.
 pub struct WindowRt {
     pub spec: WindowSpec,
+    /// Which tree shape the boundary lives in — a plain i64 index or
+    /// a composite the window column leads (see [`WindowShape`]).
+    pub shape: WindowShape,
     /// Current boundary (bucket-aligned): entries with value < w are
     /// cold. `i64::MIN` = nothing evicted yet.
     w: i64,
@@ -45,9 +48,10 @@ pub struct WindowRt {
 }
 
 impl WindowRt {
-    pub fn new(spec: WindowSpec) -> Self {
+    pub fn new(spec: WindowSpec, shape: WindowShape) -> Self {
         Self {
             spec,
+            shape,
             w: i64::MIN,
             seq: 0,
             cold: Vec::new(),
@@ -88,19 +92,24 @@ impl WindowRt {
             }
             return Ok(n);
         }
-        Ok(self.cold_hits(ty, min, max, usize::MAX)?.len() as u64)
+        Ok(self.cold_hits(ty, min, max, None, usize::MAX)?.len() as u64)
     }
 
-    /// Cold hits of `[min, max]` in value order, tombstones skipped,
-    /// at most `limit`. Segments hold disjoint ascending value ranges
-    /// (each slide covers `[old_w, new_w)`), so chaining them in
-    /// creation order IS value order. `Err` on a corrupt segment —
-    /// never a silent partial page.
+    /// Cold hits of `[min, max]` in value order, tombstones skipped
+    /// and — when a page resumes — everything at or before `cursor`
+    /// skipped BEFORE the limit counts, at most `limit`. (Counting
+    /// first and filtering at the merge starves the cold side on any
+    /// page after the first: the limit fills with pre-cursor entries
+    /// that are then all dropped.) Segments hold disjoint ascending
+    /// value ranges (each slide covers `[old_w, new_w)`), so chaining
+    /// them in creation order IS value order. `Err` on a corrupt
+    /// segment — never a silent partial page.
     pub fn cold_hits(
         &self,
         ty: ValType,
         min: &IndexValue,
         max: &IndexValue,
+        cursor: Option<&kevy_index::Cursor>,
         limit: usize,
     ) -> Result<Vec<(Vec<u8>, IndexValue)>, String> {
         let (lo, hi) = seg_bounds(min, max);
@@ -110,6 +119,9 @@ impl WindowRt {
                 let (k, _) = r.map_err(|e| e.to_string())?;
                 let Some((v, row)) = decode_seg_key(ty, &k) else { continue };
                 if self.tombs.contains(&row) {
+                    continue;
+                }
+                if cursor.is_some_and(|c| (&v, row.as_slice()) <= (&c.value, c.key.as_slice())) {
                     continue;
                 }
                 out.push((row, v));
@@ -192,12 +204,12 @@ impl WindowRt {
     /// the index, so a failed row eviction leaves both layers hot and
     /// the next tick retries the whole batch. No state changes.
     pub fn pending_rows(&self, seg: &kevy_index::Segment) -> Option<Vec<Vec<u8>>> {
-        let Some(&IndexValue::I64(max)) = seg.max_value() else { return None };
+        let max = window_value_of(seg.max_value()?, self.shape)?;
         let target = bucket_floor(max.saturating_sub(self.spec.span), self.spec.bucket);
         if target <= self.w {
             return None;
         }
-        let bound = IndexValue::I64(target);
+        let bound = window_bound(target, self.shape);
         let rows: Vec<Vec<u8>> = seg.iter_below(&bound).map(|(_, k)| k.to_vec()).collect();
         (!rows.is_empty()).then_some(rows)
     }
@@ -212,7 +224,7 @@ impl WindowRt {
         seg: &mut kevy_index::Segment,
         segs_dir: &Path,
     ) -> Result<bool, String> {
-        let Some(&IndexValue::I64(max)) = seg.max_value() else {
+        let Some(max) = seg.max_value().and_then(|v| window_value_of(v, self.shape)) else {
             self.idle_ticks += 1;
             return Ok(false);
         };
@@ -221,7 +233,7 @@ impl WindowRt {
             self.idle_ticks += 1;
             return Ok(false);
         }
-        let bound = IndexValue::I64(target);
+        let bound = window_bound(target, self.shape);
         if seg.iter_below(&bound).next().is_none() {
             self.w = target;
             return Ok(false);

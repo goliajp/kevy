@@ -39,15 +39,18 @@ pub(super) fn freeze_text_batches(st: &mut ShardIndexes, table: &[u8], keys: &[V
 /// failed row eviction skips the cut so the whole batch retries next
 /// tick), with a post-slide malloc_trim: a slide bulk-frees a whole
 /// bucket's values and glibc keeps the arena unless told. Returns
-/// whether the index tree changed.
+/// whether the index tree changed. `drives_rows` is the per-table
+/// row-eviction mandate ([`kevy_index::window_driver`]): a non-driver
+/// windowed path slides its own tree and touches no rows.
 pub(super) fn evict_and_slide(
     win: &mut kevy_window::WindowRt,
     name: &[u8],
     seg: &mut Segment,
     store: &mut Store,
     dir: &std::path::Path,
+    drives_rows: bool,
 ) -> bool {
-    if let Some(rows) = win.pending_rows(seg) {
+    if drives_rows && let Some(rows) = win.pending_rows(seg) {
         let sealed = store
             .enable_seg_rows(dir)
             .and_then(|()| store.seal_rows_to_seg(table_of(name), &rows));
@@ -86,8 +89,13 @@ pub(super) fn table_of(index_name: &[u8]) -> &[u8] {
 pub(super) fn window_for(
     catalogs: &CatalogState,
     spec: &IndexSpec,
-) -> Option<kevy_index::WindowSpec> {
+) -> Option<(kevy_index::WindowSpec, kevy_index::WindowShape)> {
     kevy_index::window_for(catalogs.table()?.as_ref(), &spec.name)
+}
+
+/// [`kevy_index::window_driver`] against the shared catalog state.
+pub(super) fn window_driver(catalogs: &CatalogState, index_name: &[u8]) -> bool {
+    catalogs.table().is_some_and(|t| kevy_index::window_driver(t.as_ref(), index_name))
 }
 
 /// Whether this compiled index is a windowed table's TEXT index —

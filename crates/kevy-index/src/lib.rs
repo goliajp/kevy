@@ -45,11 +45,12 @@ pub use segment_claused::{
     scalar_sorted_order, sort_facets,
 };
 pub use table::{
-    MAX_TABLES, OrderPath, TableCatalog, TableIndex, TableSpec, WindowSpec, compile_table, window_for,
+    MAX_TABLES, OrderPath, TableCatalog, TableIndex, TableSpec, WindowSpec, compile_table,
+    window_driver, window_for,
 };
 pub use segcold::{
-    ColdBloom, decode_seg_key, decode_seg_values, encode_seg_values, seg_bounds, seg_key,
-    value_order_bytes,
+    ColdBloom, WindowShape, decode_seg_key, decode_seg_values, encode_seg_values, seg_bounds,
+    seg_key, value_order_bytes, window_bound, window_value_of,
 };
 pub use table_verify::{IndexVerify, TableEnsure, TableVerify, spec_diff};
 pub use table_wire::{TABLE_DECLARE_USAGE, parse_table_declare};

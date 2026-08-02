@@ -165,27 +165,22 @@ fn scalar_range_or_count(
     }
     let cursor = q.cursor(spec.ty);
     let (hits, _) = seg.range(min, max, cursor.as_ref(), q.limit);
-    match cold.map(|w| w.cold_hits(spec.ty, min, max, q.limit)).transpose() {
+    match cold.map(|w| w.cold_hits(spec.ty, min, max, cursor.as_ref(), q.limit)).transpose() {
         Ok(None) => HitsOrChunk::Hits(hits),
-        Ok(Some(cold_hits)) => HitsOrChunk::Hits(merge_cold(hits, cold_hits, &cursor, q.limit)),
+        Ok(Some(cold_hits)) => HitsOrChunk::Hits(merge_cold(hits, cold_hits, q.limit)),
         Err(_) => HitsOrChunk::Chunk(vec![ST_NOINDEX]),
     }
 }
 
 /// Merge the hot page with the cold hits: both ascend by
-/// `(value, key)`, the cold side additionally drops everything at or
-/// before the cursor (the hot side already did), and the page truncates
-/// to `limit`.
+/// `(value, key)` and both already resumed past any cursor (each
+/// source's own walk skips it), so the merge is a plain two-way
+/// ascending zip cut to `limit`.
 fn merge_cold(
     hot: Vec<(Vec<u8>, IndexValue)>,
     cold: Vec<(Vec<u8>, IndexValue)>,
-    cursor: &Option<kevy_index::Cursor>,
     limit: usize,
 ) -> Vec<(Vec<u8>, IndexValue)> {
-    let after_cursor = |k: &[u8], v: &IndexValue| match cursor {
-        None => true,
-        Some(c) => (v, k) > (&c.value, c.key.as_slice()),
-    };
     let mut out = Vec::with_capacity(hot.len() + cold.len());
     let (mut h, mut c) = (hot.into_iter().peekable(), cold.into_iter().peekable());
     while out.len() < limit {
@@ -196,9 +191,6 @@ fn merge_cold(
             (Some((hk, hv)), Some((ck, cv))) => (cv, ck) < (hv, hk),
         };
         let (k, v) = if take_cold { c.next() } else { h.next() }.expect("peeked");
-        if take_cold && !after_cursor(&k, &v) {
-            continue;
-        }
         out.push((k, v));
     }
     out
