@@ -53,6 +53,11 @@ pub(crate) mod claused;
 #[path = "ops_index_text.rs"]
 mod text;
 
+// The embedded MATCH's cold seams (windowed tables' frozen buckets).
+#[cfg(feature = "text")]
+#[path = "ops_index_text_cold.rs"]
+pub(crate) mod text_cold;
+
 /// Sort merged `(value, key)` hits, cut to `limit`, and derive the
 /// resume cursor. Shared by `Store::idx_query` and the transaction twin
 /// on `AtomicAllShards`, which differ only in where the segments come
@@ -103,6 +108,11 @@ pub(crate) struct ShardSegs {
     /// slides, everything stays hot, queries need no cold half).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) windows: Vec<(Vec<u8>, kevy_window::WindowRt)>,
+    /// A windowed table's text indexes' cold directories, name-keyed —
+    /// reconciled and fed by the same window tick (the driver's
+    /// eviction batch freezes out of every same-table text index).
+    #[cfg(all(feature = "text", not(target_arch = "wasm32")))]
+    pub(crate) cold_text: Vec<(Vec<u8>, kevy_window::TextColdDir)>,
     /// `reserved_bytes` generation cache: set by every
     /// segment-mutating chokepoint (`on_commit` applies, list
     /// rebuilds, FLUSH resets) via [`ShardSegs::mark_stats_dirty`];
@@ -124,6 +134,7 @@ impl ShardSegs {
     pub(crate) fn window_of(&self, name: &[u8]) -> Option<&kevy_window::WindowRt> {
         self.windows.iter().find(|(n, _)| n == name).map(|(_, w)| w)
     }
+
 
     /// Invalidate the `reserved_bytes` cache — a no-op on targets
     /// without the tier backend, so mutation chokepoints call it

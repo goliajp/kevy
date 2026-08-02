@@ -38,11 +38,11 @@ pub(super) struct ColdSeg {
     pub(super) total_len: u64,
 }
 
-#[path = "window_text_query.rs"]
+#[path = "text_query.rs"]
 mod query;
-pub(crate) use query::{ColdHit, ColdPageQuery};
+pub use query::{ColdHit, ColdPage, ColdPageQuery};
 
-pub(crate) struct TextColdDir {
+pub struct TextColdDir {
     pub(super) segs: Vec<ColdSeg>,
     seq: u32,
     cleaned: bool,
@@ -54,8 +54,14 @@ pub(crate) struct TextColdDir {
     pub(super) df_dead: HashMap<Vec<u8>, u32>,
 }
 
+impl Default for TextColdDir {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TextColdDir {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             segs: Vec::new(),
             seq: 0,
@@ -66,14 +72,14 @@ impl TextColdDir {
         }
     }
 
-    pub(crate) fn has_cold(&self) -> bool {
+    pub fn has_cold(&self) -> bool {
         !self.segs.is_empty()
     }
 
     /// The write path saw this row change: shadow its frozen entries
     /// and withdraw its statistics, exactly, in every segment that
     /// holds it (its forward record says which, and what to subtract).
-    pub(crate) fn on_row_write(&mut self, row_key: &[u8]) {
+    pub fn on_row_write(&mut self, row_key: &[u8]) {
         if !self.bloom.contains(row_key) {
             return;
         }
@@ -99,7 +105,7 @@ impl TextColdDir {
     /// bucket segment. Failure leaves the hot segment SHRUNK but the
     /// batch unfrozen on disk — acceptable for derived spill (the
     /// entries are rebuildable from rows), reported to the caller.
-    pub(crate) fn freeze_batch(
+    pub fn freeze_batch(
         &mut self,
         ts: &mut TextSegment,
         index_name: &[u8],

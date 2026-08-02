@@ -103,12 +103,7 @@ pub(super) fn window_driver(catalogs: &CatalogState, index_name: &[u8]) -> bool 
 /// slides. (The batch discovery lives on the window column's scalar
 /// index; this index only needs a cold directory.)
 pub(super) fn text_window_for(catalogs: &CatalogState, spec: &IndexSpec) -> bool {
-    if spec.kind != kevy_index::IndexKind::Text {
-        return false;
-    }
-    let Some(dot) = spec.name.iter().position(|&b| b == b'.') else { return false };
-    let Some(cat) = catalogs.table() else { return false };
-    cat.get(&spec.name[..dot]).is_some_and(|t| t.window.is_some())
+    catalogs.table().is_some_and(|t| kevy_index::window_text_for(t.as_ref(), spec))
 }
 
 /// The per-shard segment directory, when persistence is on. No data

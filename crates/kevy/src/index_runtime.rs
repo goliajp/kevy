@@ -41,7 +41,7 @@ struct ShardIndex {
     window: Option<kevy_window::WindowRt>,
     /// The text index's cold half — `Some` only when this is a
     /// windowed table's TEXT index.
-    cold_text: Option<window_text::TextColdDir>,
+    cold_text: Option<TextColdDir>,
     /// Populated instead of `seg` for KIND text.
     text: Option<kevy_text::TextSegment>,
     /// Populated instead of `seg` for KIND ann.
@@ -242,7 +242,7 @@ pub(crate) fn with_ready_text_segment<R>(
         &mut Store,
         &kevy_text::TextSegment,
         &kevy_index::IndexSpec,
-        Option<&window_text::TextColdDir>,
+        Option<&TextColdDir>,
     ) -> R,
 ) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
@@ -386,7 +386,7 @@ fn refresh(catalogs: &CatalogState, st: &mut ShardIndexes, store: &mut Store) {
                     }
                     let want_text = text_window_for(catalogs, &si.spec);
                     if si.cold_text.is_some() != want_text {
-                        si.cold_text = want_text.then(window_text::TextColdDir::new);
+                        si.cold_text = want_text.then(TextColdDir::new);
                     }
                     next.push(si);
                 }
@@ -411,20 +411,18 @@ fn fresh_shard_index(catalogs: &CatalogState, spec: &IndexSpec, store: &mut Stor
         ann: new_ann_seg(spec),
         seg: new_scalar_seg(spec),
         window: window_for(catalogs, spec).map(|(w, sh)| kevy_window::WindowRt::new(w, sh)),
-        cold_text: text_window_for(catalogs, spec).then(window_text::TextColdDir::new),
+        cold_text: text_window_for(catalogs, spec).then(TextColdDir::new),
         spec: spec.clone(),
         build: BuildState::Backfilling { keys, pos: 0 },
     }
 }
 
-pub(crate) use kevy_window::WindowRt;
+pub(crate) use kevy_window::{ColdHit, ColdPageQuery, TextColdDir, WindowRt};
 mod window_slide;
 use window_slide::{
     evict_and_slide, freeze_text_batches, shard_segs_dir, table_of, text_window_for, window_driver,
     window_for,
 };
-mod window_text;
-pub(crate) use window_text::{ColdHit, ColdPageQuery, TextColdDir};
 mod row_apply;
 use row_apply::{advance_backfill, apply_row};
 pub(crate) use row_apply::{RowValue, row_value};

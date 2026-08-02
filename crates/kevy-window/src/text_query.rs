@@ -18,43 +18,43 @@ use kevy_text::{CorpusStats, sorted_order};
 use super::TextColdDir;
 
 /// Everything pass 2 asks of the cold directory.
-pub(crate) struct ColdPageQuery<'a> {
+pub struct ColdPageQuery<'a> {
     /// Bare terms, sorted and deduplicated (the hot engine's rule).
-    pub(crate) bare: Vec<Vec<u8>>,
+    pub bare: Vec<Vec<u8>>,
     /// Each phrase's token sequence.
-    pub(crate) phrases: Vec<Vec<Vec<u8>>>,
+    pub phrases: Vec<Vec<Vec<u8>>>,
     /// The injected global statistics both passes score with.
-    pub(crate) stats: &'a CorpusStats,
+    pub stats: &'a CorpusStats,
     /// `FILTER` predicates, ANDed, over the frozen stored values.
-    pub(crate) filter: &'a [kevy_text::Filter<'a>],
+    pub filter: &'a [kevy_text::Filter<'a>],
     /// `SORT`: the page order is the sort key's, not the score's.
-    pub(crate) sort: Option<&'a kevy_text::Sort<'a>>,
+    pub sort: Option<&'a kevy_text::Sort<'a>>,
     /// `DISTINCT`: collapse to the best hit per value identity.
-    pub(crate) distinct: Option<&'a kevy_text::Distinct<'a>>,
+    pub distinct: Option<&'a kevy_text::Distinct<'a>>,
     /// `FACET` fields to count over the (filtered) match set.
-    pub(crate) facets: &'a [kevy_text::Facet<'a>],
+    pub facets: &'a [kevy_text::Facet<'a>],
     /// How deep a page the merge needs (LIMIT + OFFSET).
-    pub(crate) fetch: usize,
+    pub fetch: usize,
 }
 
 /// One cold hit: its page-order ingredients, ready to merge.
-pub(crate) struct ColdHit {
-    pub(crate) key: Vec<u8>,
-    pub(crate) score: f64,
+pub struct ColdHit {
+    pub key: Vec<u8>,
+    pub score: f64,
     /// The sort key, when the query sorts by a stored value.
-    pub(crate) okey: Option<Vec<u8>>,
+    pub okey: Option<Vec<u8>>,
 }
 
 /// The cold half of one shard's pass-2 answer.
-pub(crate) struct ColdPage {
+pub struct ColdPage {
     /// Best `fetch` cold hits in the page's order.
-    pub(crate) hits: Vec<ColdHit>,
+    pub hits: Vec<ColdHit>,
     /// The returned hits' frozen stored values — what the merge reads
     /// for sort/distinct identities and the origin's okeys/dkeys.
-    pub(crate) values: HashMap<Vec<u8>, Vec<Option<Vec<u8>>>>,
+    pub values: HashMap<Vec<u8>, Vec<Option<Vec<u8>>>>,
     /// Per requested facet field, (identity, label, count) over the
     /// filtered cold match set.
-    pub(crate) facets: Vec<Vec<kevy_text::Bucket>>,
+    pub facets: Vec<Vec<kevy_text::Bucket>>,
 }
 
 impl TextColdDir {
@@ -62,7 +62,7 @@ impl TextColdDir {
     /// live df across every cold segment (one fence descent per token
     /// per segment; the doc/length halves are in-memory numbers, no
     /// I/O at all).
-    pub(crate) fn cold_stats(&self, tokens: &[Vec<u8>]) -> (u64, u64, Vec<(Vec<u8>, u32)>) {
+    pub fn cold_stats(&self, tokens: &[Vec<u8>]) -> (u64, u64, Vec<(Vec<u8>, u32)>) {
         let n_docs: u64 = self.segs.iter().map(|c| c.n_docs).sum();
         let total_len: u64 = self.segs.iter().map(|c| c.total_len).sum();
         let df = tokens
@@ -83,7 +83,7 @@ impl TextColdDir {
 
     /// Pass-2 contribution: the clause-faithful cold page (see the
     /// module doc for what each clause does here).
-    pub(crate) fn cold_page(&self, q: &ColdPageQuery) -> ColdPage {
+    pub fn cold_page(&self, q: &ColdPageQuery) -> ColdPage {
         let acc = self.accumulate(q);
         let need_values = !q.filter.is_empty()
             || q.sort.is_some()

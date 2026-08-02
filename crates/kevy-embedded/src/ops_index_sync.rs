@@ -287,6 +287,35 @@ pub(crate) fn on_commit(
     }
 }
 
+/// The text half of one written key: re-derive its inverted entries,
+/// then — on a windowed table — shadow any frozen entries this write
+/// stales (rewrite / delete / revival; the statistics withdraw
+/// exactly — server twin: `apply_row`'s text arm).
+#[cfg(feature = "text")]
+fn apply_text_arm(
+    shard_segs: &mut ShardSegs,
+    store: &mut kevy_store::Store,
+    key: &[u8],
+) -> bool {
+    let mut touched = false;
+    for (spec, ts) in &mut shard_segs.text {
+        if key.starts_with(&spec.prefix) {
+            apply_text_key(store, spec, ts, key);
+            touched = true;
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let ShardSegs { text, cold_text, .. } = &mut *shard_segs;
+        for (name, dir) in cold_text.iter_mut() {
+            if text.iter().any(|(s, _)| &s.name == name && key.starts_with(&s.prefix)) {
+                dir.on_row_write(key);
+            }
+        }
+    }
+    touched
+}
+
 /// Apply one written key to every matching segment of every kind.
 /// Returns whether any segment was touched (the cache-invalidation
 /// signal).
@@ -310,11 +339,8 @@ fn apply_one_key(shard_segs: &mut ShardSegs, store: &mut kevy_store::Store, key:
         }
     }
     #[cfg(feature = "text")]
-    for (spec, ts) in &mut shard_segs.text {
-        if key.starts_with(&spec.prefix) {
-            apply_text_key(store, spec, ts, key);
-            touched = true;
-        }
+    {
+        touched |= apply_text_arm(shard_segs, store, key);
     }
     #[cfg(feature = "vector")]
     for (spec, g) in &mut shard_segs.ann {
