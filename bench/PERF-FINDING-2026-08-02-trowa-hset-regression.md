@@ -45,3 +45,41 @@ codegen/layout-level effect confined to the T-row-a change set.
   the counter-window method (perfgate's) resolves it cleanly at N=3.
 - perf attach trap: pgrep -f matches the bash wrapper's cmdline; use
   pgrep -x kevy.
+
+## RESOLUTION (same day, rounds 4-5)
+
+Root cause, nailed by symbolized profiles: `KevyMap::find_by_borrow`
+(the keydir probe) ran at 3.79% self-time on both the "fixed" HEAD and
+the unfixed T-row-a store against 2.61% on the clean base — per-op
+that is the whole regression, and it proved **the cold_backing gate
+was permanently open**. T-row-b2 moved `enable_seg_rows` to the front
+of every startup path (segments load before the snapshot), and that
+function set `cold_backing = true` unconditionally — every server with
+a data dir paid the extra keydir probe on every read AND write funnel,
+windowed or not.
+
+The real fix (`2e3543ae`): the gate opens on cold VALUES, not on the
+directory — loaded segments at enable, the first sealed segment, a
+loaded snapshot stub, or the vlog tier. Empty directory = original
+funnel cost.
+
+Ladder closed (counter-window median-of-3): base 5.32M → T-row-a
+4.41M → gate-fix **5.68M**. perfgate round 4: every stable signal
+(hset -1.8%, incr -1.1%, get -1.9%) back inside the noise band; the
+single ✗ (sadd -8.7%, floor by 0.7pp) is the known noise swinger
+(-11.8✗ / +8.6✓ / -0.1✓ / -8.7✗ across rounds; candidate median 6.5M
+vs ref median 6.8M = -4.5%, inside the floor). Round 5 pending as the
+formal verdict.
+
+### Crate-isolation probe that found the room
+exp-c (`571dafb1`, branch perf-exp-c): clean base + T-row-a's
+kevy-store only → 4.52M. The regression traveled entirely in
+kevy-store, which shrank the search to the funnels and made the
+symbolized-profile diff decisive.
+
+### Lessons
+- A gate is only a fix when the gate's PREDICATE is right — verify the
+  fix moved the metric, not just that the code shipped (round 3 caught
+  exactly this).
+- Symbolized per-op normalization (pct/throughput) turns two
+  same-shape profiles into a pointing finger.
