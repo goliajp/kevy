@@ -230,3 +230,26 @@ mod tests {
         assert!(rss > 0, "rss probe answered {rss}");
     }
 }
+
+/// Ask glibc's allocator to return freed arena memory to the OS —
+/// the explicit half of the RSS contract after a bulk free (a window
+/// slide releases tens of thousands of hash values at once; glibc
+/// keeps the arena unless told). `true` when memory was released.
+///
+/// glibc-only by declaration: `malloc_trim` is a glibc extension, so
+/// the binding exists only on `linux/gnu`; musl and every other
+/// platform are a `false` no-op — the caller treats trimming as
+/// best-effort, never as accounting.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+pub fn malloc_trim_now() -> bool {
+    unsafe extern "C" {
+        fn malloc_trim(pad: usize) -> core::ffi::c_int;
+    }
+    unsafe { malloc_trim(0) == 1 }
+}
+
+/// No glibc on this target — nothing to trim.
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+pub fn malloc_trim_now() -> bool {
+    false
+}
