@@ -20,6 +20,10 @@ use crate::segment::TextSegment;
 pub struct FrozenBucket {
     /// term → [`encode_posting`] payload, ascending by term.
     pub terms: BTreeMap<Vec<u8>, Vec<u8>>,
+    /// row key → [`encode_fwd`] payload, ascending by key — the
+    /// forward records a later tombstone reads back to withdraw this
+    /// document's statistics contribution exactly.
+    pub fwd: BTreeMap<Vec<u8>, Vec<u8>>,
     /// Documents frozen.
     pub n_docs: u64,
     /// Their summed (unweighted) token length.
@@ -58,6 +62,34 @@ pub fn encode_posting(docs: &[ColdEntry]) -> Vec<u8> {
 /// The document frequency a payload carries — its header, no walk.
 pub fn posting_df(payload: &[u8]) -> Option<u32> {
     read_varint(payload, &mut 0)
+}
+
+/// Encode one document's forward record: `[dl][n terms][klen‖term…]`.
+/// A tombstone reads this back to subtract the document from the
+/// segment's corpus statistics — same numbers, exact withdrawal.
+pub fn encode_fwd(dl: u32, terms: &[&[u8]]) -> Vec<u8> {
+    let mut out = Vec::new();
+    put_varint(&mut out, dl);
+    put_varint(&mut out, terms.len() as u32);
+    for t in terms {
+        put_varint(&mut out, t.len() as u32);
+        out.extend_from_slice(t);
+    }
+    out
+}
+
+/// Decode a forward record. `None` on any malformed frame.
+pub fn decode_fwd(payload: &[u8]) -> Option<(u32, Vec<Vec<u8>>)> {
+    let mut at = 0usize;
+    let dl = read_varint(payload, &mut at)?;
+    let n = read_varint(payload, &mut at)? as usize;
+    let mut terms = Vec::with_capacity(n);
+    for _ in 0..n {
+        let klen = read_varint(payload, &mut at)? as usize;
+        terms.push(payload.get(at..at + klen)?.to_vec());
+        at += klen;
+    }
+    (at == payload.len()).then_some((dl, terms))
 }
 
 /// Decode a payload back to its entries. `None` on any malformed
@@ -130,17 +162,21 @@ impl TextSegment {
     /// nothing froze.
     pub fn freeze_docs(&mut self, keys: &[Vec<u8>]) -> Option<FrozenBucket> {
         let mut terms: BTreeMap<Vec<u8>, Vec<ColdEntry>> = BTreeMap::new();
+        let mut fwd: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
         let mut n_docs = 0u64;
         let mut total_len = 0u64;
         for key in keys {
             let Some((id, dl, tf_map)) = self.doc_terms(key) else { continue };
             n_docs += 1;
             total_len += u64::from(dl);
-            for (t, tf) in tf_map {
-                let positions = self.positions_blob(&t, id).map(<[u8]>::to_vec).unwrap_or_default();
-                terms.entry(t).or_default().push(ColdEntry {
+            let mut doc_terms: Vec<&[u8]> = tf_map.keys().map(Vec::as_slice).collect();
+            doc_terms.sort_unstable();
+            fwd.insert(key.clone(), encode_fwd(dl, &doc_terms));
+            for (t, tf) in &tf_map {
+                let positions = self.positions_blob(t, id).map(<[u8]>::to_vec).unwrap_or_default();
+                terms.entry(t.clone()).or_default().push(ColdEntry {
                     key: key.clone(),
-                    tf,
+                    tf: *tf,
                     dl,
                     positions,
                 });
@@ -160,7 +196,7 @@ impl TextSegment {
                 (t, payload)
             })
             .collect();
-        Some(FrozenBucket { terms, n_docs, total_len })
+        Some(FrozenBucket { terms, fwd, n_docs, total_len })
     }
 }
 
@@ -257,6 +293,25 @@ mod tests {
         let mut sorted = ts_keys.clone();
         sorted.sort();
         assert_eq!(ts_keys, sorted);
+    }
+
+    #[test]
+    fn fwd_codec_round_trips_and_freeze_carries_exact_withdrawals() {
+        let payload = encode_fwd(7, &[b"alpha".as_slice(), b"beta"]);
+        assert_eq!(decode_fwd(&payload), Some((7, vec![b"alpha".to_vec(), b"beta".to_vec()])));
+        assert!(decode_fwd(&payload[..payload.len() - 1]).is_none(), "truncated");
+
+        let mut ts = seg_with_docs();
+        let bucket = ts.freeze_docs(&[b"ev:1".to_vec(), b"ev:4".to_vec()]).expect("froze");
+        // ev:1 "rust engine fast" (dl 3), ev:4 "rust rust rust everywhere" (dl 4).
+        let (dl1, mut t1) = decode_fwd(bucket.fwd.get(b"ev:1".as_slice()).expect("fwd")).unwrap();
+        t1.sort();
+        assert_eq!((dl1, t1), (3, vec![b"engine".to_vec(), b"fast".to_vec(), b"rust".to_vec()]));
+        let (dl4, t4) = decode_fwd(bucket.fwd.get(b"ev:4".as_slice()).expect("fwd")).unwrap();
+        assert_eq!((dl4, t4), (4, vec![b"everywhere".to_vec(), b"rust".to_vec()]));
+        // Withdrawing both restores an empty contribution exactly.
+        assert_eq!(bucket.n_docs - 2, 0);
+        assert_eq!(bucket.total_len - u64::from(dl1) - u64::from(dl4), 0);
     }
 
     #[test]

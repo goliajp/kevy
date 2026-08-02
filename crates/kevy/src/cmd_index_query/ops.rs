@@ -27,6 +27,10 @@ use encode::encode_hits;
 
 use super::ops_clauses::{boxed_preds, distinct_field, facet_fields, scope_positions, sort_field};
 
+#[path = "ops_cold.rs"]
+mod cold_seam;
+use cold_seam::{cold_refusal, merge_cold_hits, merge_cold_stats};
+
 pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let q = match MatchArgs::parse_terminal(argv) {
         crate::cmd_index_query::args::MatchParse::Ok(q) => q,
@@ -37,7 +41,10 @@ pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Ve
             return chunk;
         }
     };
-    let res = index_runtime::with_ready_text_segment(ctx, store, &q.name, |ts, spec| {
+    let res = index_runtime::with_ready_text_segment(ctx, store, &q.name, |ts, spec, cold| {
+        if let Some(chunk) = cold_refusal(&q, cold) {
+            return Err(chunk);
+        }
         let want = scope_positions(spec, &q.scope)?;
         // `query_df_in` expands `word*` prefixes against this shard's
         // dictionary, so the reported df covers the prefix's expansion
@@ -52,7 +59,10 @@ pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Ve
             sort: None,
             distinct: None,
         };
-        Ok((ts.docs(), ts.total_len_in(&want), ts.query_df_in(&q.text, opts)))
+        let (mut n_docs, mut total_len, mut tokdf) =
+            (ts.docs(), ts.total_len_in(&want), ts.query_df_in(&q.text, opts));
+        merge_cold_stats(cold, &mut n_docs, &mut total_len, &mut tokdf);
+        Ok((n_docs, total_len, tokdf))
     });
     match res {
         Ok(Ok((n_docs, total_len, tokdf))) => {
@@ -82,12 +92,16 @@ pub(super) fn op_match_score(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>])
     let Some(stats) = argv.get(4).and_then(|b| decode_gstats_arg(b)) else {
         return vec![ST_BADARGS];
     };
-    let res = index_runtime::with_ready_text_segment(ctx, store, &q.name, |ts, spec| {
+    let res = index_runtime::with_ready_text_segment(ctx, store, &q.name, |ts, spec, cold| {
+        if let Some(chunk) = cold_refusal(&q, cold) {
+            return Err(chunk);
+        }
         // `matches_query_with` parses quoted phrases out of the raw query
         // text; with none it is the ordinary term query.
         // Fetch deep enough for the origin to skip OFFSET and still fill
         // LIMIT: a shard cannot know which of its hits survive the merge.
-        let (hits, sort_field, distinct_field, facets) = scored_hits(ts, spec, &q, &stats)?;
+        let (mut hits, sort_field, distinct_field, facets) = scored_hits(ts, spec, &q, &stats)?;
+        merge_cold_hits(cold, &mut hits, &q.text, &stats, q.limit + q.offset);
         let spans = q.highlight.as_ref().map(|want| {
             hits.iter().map(|h| hit_highlight(ts, spec, &h.key, &q.text, want)).collect::<Vec<_>>()
         });
@@ -321,7 +335,7 @@ pub(super) fn op_hybrid(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> V
         return vec![ST_BADARGS];
     };
     let depth = q.limit * 4;
-    let m = index_runtime::with_ready_text_segment(ctx, store, &q.text_idx, |ts, _| {
+    let m = index_runtime::with_ready_text_segment(ctx, store, &q.text_idx, |ts, _, _| {
         ts.matches(&q.text, depth)
     });
     let k = index_runtime::with_ready_ann(ctx, store, &q.ann_idx, |g| {

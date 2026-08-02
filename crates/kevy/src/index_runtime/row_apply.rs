@@ -74,9 +74,13 @@ pub(super) fn apply_row(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
         return;
     }
     // Text kind: raw field bytes tokenize into the inverted
-    // segment (no scalar coercion).
+    // segment (no scalar coercion). A windowed table's text index
+    // additionally shadows any frozen entries this write stales.
     if let Some(ts) = &mut si.text {
         apply_row_text(store, &si.spec, ts, key);
+        if let Some(cold) = &mut si.cold_text {
+            cold.on_row_write(key);
+        }
         return;
     }
     apply_scalar_row(store, &si.spec, &mut si.seg, key);
