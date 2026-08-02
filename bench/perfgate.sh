@@ -181,8 +181,24 @@ run_pinned() { # $1 = get|set, $2 = cluster|compat -> echoes total rps
 # unbounded read here parks the whole gate behind it — which is exactly how
 # the first run of this harness hung for an hour.
 srv_cmds() {
-  timeout 5 redis-cli -p 7001 INFO stats 2>/dev/null | tr -d '\r' \
-    | awk -F: '/^total_commands_processed:/ {print $2}'
+  # Up to 3 probes: a heavy pipelined angle (zalg's ZINTERSTORE at
+  # -P 16) can starve a fresh INFO connection past one 5s timeout —
+  # observed twice (2026-08-02), both times only on that angle. The
+  # counter window stays sound under retries because the caller takes
+  # its timestamp AFTER the read returns; a retried probe is printed
+  # so the starvation stays visible instead of vanishing into a pass.
+  local n try
+  for try in 1 2 3; do
+    n=$(timeout 5 redis-cli -p 7001 INFO stats 2>/dev/null | tr -d '\r' \
+      | awk -F: '/^total_commands_processed:/ {print $2}')
+    if [ -n "$n" ]; then
+      [ "$try" -gt 1 ] \
+        && echo "perfgate: INFO answered on probe $try — heavy-angle starvation" >&2
+      echo "$n"
+      return 0
+    fi
+  done
+  return 0
 }
 
 # Drive the load, then read the server counter across a window we time
