@@ -23,48 +23,57 @@ fn evict_and_slide(
     aof: &mut Option<kevy_persist::Aof>,
     segs_dir: &Path,
 ) -> bool {
-    if let Some(rows) = win.pending_rows(seg) {
-        let sealed = store
-            .enable_seg_rows(segs_dir)
-            .and_then(|()| store.seal_rows_to_seg(table_of(&spec.name), &rows));
-        match sealed {
-            Ok(None) => {}
-            Ok(Some(batch)) => {
-                // Frame after the durable copy, before the phase
-                // change (R2c ordering). AOF only — replication
-                // replicas seal their own segments.
-                if let Some(a) = aof {
-                    let argv = kevy_persist::segmented_argv(batch.file.as_bytes());
-                    let owned: Vec<Vec<u8>> = argv.iter().map(|x| x.to_vec()).collect();
-                    if let Err(e) = a.append(&owned_argv(&owned)) {
-                        eprintln!(
-                            "kevy-embedded: SEGMENTED frame '{}': {e}",
-                            String::from_utf8_lossy(&spec.name)
-                        );
-                        return false;
-                    }
-                }
-                store.commit_row_eviction(&batch);
-            }
-            Err(e) => {
-                eprintln!(
-                    "kevy-embedded: row eviction '{}': {e}",
-                    String::from_utf8_lossy(&spec.name)
-                );
-                return false;
-            }
-        }
+    if let Some(rows) = win.pending_rows(seg)
+        && !evict_rows(&spec.name, &rows, store, aof, segs_dir)
+    {
+        return false;
     }
     let moved = win.slide(&spec.name, seg, segs_dir).unwrap_or_else(|e| {
         eprintln!("kevy-embedded: window slide '{}': {e}", String::from_utf8_lossy(&spec.name));
         false
     });
+    // Same bulk-free contract as the server tick: ask glibc to return
+    // the slid bucket's arena to the OS.
     if moved {
-        // Same bulk-free contract as the server tick: ask glibc to
-        // return the slid bucket's arena to the OS.
         kevy_sys::malloc_trim_now();
     }
     moved
+}
+
+/// The row half of one eviction: seal, frame (R2c ordering — after
+/// the durable copy, before the phase change; AOF only, replicas seal
+/// their own segments), commit. `false` = retry whole next tick.
+fn evict_rows(
+    name: &[u8],
+    rows: &[Vec<u8>],
+    store: &mut kevy_store::Store,
+    aof: &mut Option<kevy_persist::Aof>,
+    segs_dir: &Path,
+) -> bool {
+    let sealed =
+        store.enable_seg_rows(segs_dir).and_then(|()| store.seal_rows_to_seg(table_of(name), rows));
+    match sealed {
+        Ok(None) => true,
+        Ok(Some(batch)) => {
+            if let Some(a) = aof {
+                let argv = kevy_persist::segmented_argv(batch.file.as_bytes());
+                let owned: Vec<Vec<u8>> = argv.iter().map(|x| x.to_vec()).collect();
+                if let Err(e) = a.append(&owned_argv(&owned)) {
+                    eprintln!(
+                        "kevy-embedded: SEGMENTED frame '{}': {e}",
+                        String::from_utf8_lossy(name)
+                    );
+                    return false;
+                }
+            }
+            store.commit_row_eviction(&batch);
+            true
+        }
+        Err(e) => {
+            eprintln!("kevy-embedded: row eviction '{}': {e}", String::from_utf8_lossy(name));
+            false
+        }
+    }
 }
 
 /// An owned argv as the AOF's ArgvView.

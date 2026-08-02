@@ -93,46 +93,7 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
         }
         advance_backfill(store, si, 2048);
         if let (Some(win), Some(dir), BuildState::Ready) = (&mut si.window, &segs_dir, &si.build) {
-            // Rows first, index second: a failed row eviction skips
-            // the index cut too, so the whole batch retries next tick
-            // (the index's < W prefix is the batch's only discovery).
-            if let Some(rows) = win.pending_rows(&si.seg) {
-                let table = table_of(&si.spec.name);
-                let sealed = store
-                    .enable_seg_rows(dir)
-                    .and_then(|()| store.seal_rows_to_seg(table, &rows));
-                match sealed {
-                    Ok(None) => {}
-                    Ok(Some(batch)) => {
-                        // The R2c ordering: the frame lands in the AOF
-                        // after the durable copy exists and before the
-                        // hot rows phase-change (the reactor drains
-                        // the queue right after this tick).
-                        crate::kevy_rt_push_tick_frame(&batch.file);
-                        store.commit_row_eviction(&batch);
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "kevy: row eviction '{}': {e}",
-                            String::from_utf8_lossy(&si.spec.name)
-                        );
-                        continue;
-                    }
-                }
-            }
-            match win.slide(&si.spec.name, &mut si.seg, dir) {
-                Ok(true) => {
-                    st.stats_dirty = true;
-                    // A slide bulk-frees an entire bucket's values;
-                    // glibc keeps the arena unless told. Best-effort,
-                    // slide-frequency (per bucket, not per op).
-                    kevy_sys::malloc_trim_now();
-                }
-                Ok(false) => {}
-                // The tree is untouched on a failed slide (build
-                // precedes the cut); log once per tick and retry.
-                Err(e) => eprintln!("kevy: window slide '{}': {e}", String::from_utf8_lossy(&si.spec.name)),
-            }
+            st.stats_dirty |= evict_and_slide(win, &si.spec.name, &mut si.seg, store, dir);
         }
     }
 }
@@ -420,6 +381,47 @@ fn refresh(catalogs: &CatalogState, st: &mut ShardIndexes, store: &mut Store) {
     }
     st.idx = next;
     st.generation = generation;
+}
+
+/// One windowed index's eviction step — rows first, index second (a
+/// failed row eviction skips the cut so the whole batch retries next
+/// tick), with a post-slide malloc_trim: a slide bulk-frees a whole
+/// bucket's values and glibc keeps the arena unless told. Returns
+/// whether the index tree changed.
+fn evict_and_slide(
+    win: &mut kevy_window::WindowRt,
+    name: &[u8],
+    seg: &mut Segment,
+    store: &mut Store,
+    dir: &std::path::Path,
+) -> bool {
+    if let Some(rows) = win.pending_rows(seg) {
+        let sealed = store
+            .enable_seg_rows(dir)
+            .and_then(|()| store.seal_rows_to_seg(table_of(name), &rows));
+        match sealed {
+            Ok(None) => {}
+            Ok(Some(batch)) => {
+                crate::kevy_rt_push_tick_frame(&batch.file);
+                store.commit_row_eviction(&batch);
+            }
+            Err(e) => {
+                eprintln!("kevy: row eviction '{}': {e}", String::from_utf8_lossy(name));
+                return false;
+            }
+        }
+    }
+    match win.slide(name, seg, dir) {
+        Ok(true) => {
+            kevy_sys::malloc_trim_now();
+            true
+        }
+        Ok(false) => false,
+        Err(e) => {
+            eprintln!("kevy: window slide '{}': {e}", String::from_utf8_lossy(name));
+            false
+        }
+    }
 }
 
 /// The table half of a compiled index name (`<table>.<col>`).
