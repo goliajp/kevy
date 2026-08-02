@@ -356,7 +356,7 @@ impl TextSegment {
 /// Highlight spans within one field's tokens: every bare-term token, every
 /// token matching a query prefix, plus the tokens of each phrase
 /// occurrence (a consecutive, in-order match).
-fn field_spans(
+pub(crate) fn field_spans(
     toks: &[(Vec<u8>, usize, usize)],
     terms: &HashSet<&[u8]>,
     phrases: &[Vec<Vec<u8>>],
@@ -383,7 +383,7 @@ fn field_spans(
 
 /// The phrase's distinct tokens (dedup for scoring — a repeated word
 /// must not be counted twice in the BM25 sum).
-fn distinct_tokens(toks: &[Vec<u8>]) -> Vec<Vec<u8>> {
+pub(crate) fn distinct_tokens(toks: &[Vec<u8>]) -> Vec<Vec<u8>> {
     let mut d = toks.to_vec();
     d.sort();
     d.dedup();
@@ -443,14 +443,14 @@ fn phrase_starts(pos: &Positions, toks: &[Vec<u8>], id: u32) -> HashSet<u32> {
 
 /// Parsed query clauses: bare terms, phrases (each a token sequence) and
 /// prefix stems.
-type Clauses = (Vec<Vec<u8>>, Vec<Vec<Vec<u8>>>, Vec<Vec<u8>>);
+pub type Clauses = (Vec<Vec<u8>>, Vec<Vec<Vec<u8>>>, Vec<Vec<u8>>);
 
 /// Split a query into bare terms, quoted phrases, and `word*` prefixes.
 /// A `"…"` group of two or more tokens is a phrase (a shorter group joins
 /// the bare terms — a one-word "phrase" is just that word); an unquoted
 /// word ending in `*` is a prefix. An unterminated quote is lenient: the
 /// remainder is read as plain text rather than rejected.
-fn parse_clauses(text: &[u8]) -> Clauses {
+pub fn parse_clauses(text: &[u8]) -> Clauses {
     let mut bare: Vec<Vec<u8>> = Vec::new();
     let mut phrases: Vec<Vec<Vec<u8>>> = Vec::new();
     let mut prefixes: Vec<Vec<u8>> = Vec::new();

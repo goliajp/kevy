@@ -18,6 +18,7 @@ mod token;
 
 pub use bm25::{BM25_B, BM25_K1};
 pub use segment::sorted_order;
+pub use segment::{Clauses, parse_clauses};
 pub use segment::{
     Bucket, CorpusStats, Distinct, Facet, FacetedMatches, Filter, QueryOpts, SegmentShape, Sort, TextMatch, TextSegment, TextStats,
 };
