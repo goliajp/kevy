@@ -22,8 +22,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use kevy_index::ColdBloom;
-use kevy_text::cold::{decode_fwd, posting_df, score_cold};
-use kevy_text::{CorpusStats, TextMatch, TextSegment};
+use kevy_text::TextSegment;
+use kevy_text::cold::decode_fwd;
 
 /// The manifest meta tag prefix cold text segments register under:
 /// `txtcold:<index-name>:<n_docs>:<total_len>`.
@@ -31,23 +31,27 @@ const TXT_TAG: &[u8] = b"txtcold:";
 
 /// One open cold segment with its LIVE corpus contribution — the
 /// frozen numbers minus every tombstoned document's exact share.
-struct ColdSeg {
-    seg: kevy_seg::Seg,
-    seq: u32,
-    n_docs: u64,
-    total_len: u64,
+pub(super) struct ColdSeg {
+    pub(super) seg: kevy_seg::Seg,
+    pub(super) seq: u32,
+    pub(super) n_docs: u64,
+    pub(super) total_len: u64,
 }
 
+#[path = "window_text_query.rs"]
+mod query;
+pub(crate) use query::{ColdHit, ColdPageQuery};
+
 pub(crate) struct TextColdDir {
-    segs: Vec<ColdSeg>,
+    pub(super) segs: Vec<ColdSeg>,
     seq: u32,
     cleaned: bool,
     bloom: ColdBloom,
     /// row key → segment seqs whose frozen entries for it are dead.
-    tombs: HashMap<Vec<u8>, HashSet<u32>>,
+    pub(super) tombs: HashMap<Vec<u8>, HashSet<u32>>,
     /// term → tombstoned document count, summed across segments; the
     /// pass-1 df correction (header df is freeze-time truth).
-    df_dead: HashMap<Vec<u8>, u32>,
+    pub(super) df_dead: HashMap<Vec<u8>, u32>,
 }
 
 impl TextColdDir {
@@ -81,10 +85,10 @@ impl TextColdDir {
                 continue;
             }
             let Ok(Some(payload)) = cs.seg.get(&fwd_key) else { continue };
-            let Some((dl, terms)) = decode_fwd(&payload) else { continue };
+            let Some(rec) = decode_fwd(&payload) else { continue };
             cs.n_docs = cs.n_docs.saturating_sub(1);
-            cs.total_len = cs.total_len.saturating_sub(u64::from(dl));
-            for t in terms {
+            cs.total_len = cs.total_len.saturating_sub(u64::from(rec.dl));
+            for t in rec.terms {
                 *self.df_dead.entry(t).or_insert(0) += 1;
             }
             self.tombs.entry(row_key.to_vec()).or_default().insert(cs.seq);
@@ -135,55 +139,6 @@ impl TextColdDir {
         Ok(true)
     }
 
-    /// Pass-1 contribution: summed LIVE docs/length plus per-token
-    /// live df across every cold segment (one fence descent per token
-    /// per segment; the doc/length halves are in-memory numbers, no
-    /// I/O at all).
-    pub(crate) fn cold_stats(&self, tokens: &[Vec<u8>]) -> (u64, u64, Vec<(Vec<u8>, u32)>) {
-        let n_docs: u64 = self.segs.iter().map(|c| c.n_docs).sum();
-        let total_len: u64 = self.segs.iter().map(|c| c.total_len).sum();
-        let df = tokens
-            .iter()
-            .map(|t| {
-                let frozen: u32 = self
-                    .segs
-                    .iter()
-                    .filter_map(|c| c.seg.get(t).ok().flatten())
-                    .filter_map(|p| posting_df(&p))
-                    .sum();
-                let dead = self.df_dead.get(t).copied().unwrap_or(0);
-                (t.clone(), frozen.saturating_sub(dead))
-            })
-            .collect();
-        (n_docs, total_len, df)
-    }
-
-    /// Pass-2 contribution: every cold document's accumulated score
-    /// for `tokens` under the injected stats, tombstones skipped,
-    /// best `fetch` in score order.
-    pub(crate) fn cold_hits(
-        &self,
-        tokens: &[Vec<u8>],
-        stats: &CorpusStats,
-        fetch: usize,
-    ) -> Vec<TextMatch> {
-        let mut acc = std::collections::HashMap::new();
-        for cs in &self.segs {
-            let dead = |k: &[u8]| self.tombs.get(k).is_some_and(|s| s.contains(&cs.seq));
-            for t in tokens {
-                if let Ok(Some(payload)) = cs.seg.get(t) {
-                    let _ = score_cold(&payload, t, stats, &dead, &mut acc);
-                }
-            }
-        }
-        let mut hits: Vec<TextMatch> =
-            acc.into_iter().map(|(key, score)| TextMatch { key, score }).collect();
-        hits.sort_by(|a, b| {
-            b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then(a.key.cmp(&b.key))
-        });
-        hits.truncate(fetch);
-        hits
-    }
 }
 
 /// Write one bucket to disk: forward records first (`\0`-prefixed row

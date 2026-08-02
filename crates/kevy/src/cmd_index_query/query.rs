@@ -82,7 +82,7 @@ fn verify_kind_stats(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> Option<Ve
             ]
         }),
         kevy_index::IndexKind::Text => {
-            index_runtime::with_ready_text_segment(ctx, store, name, |ts, _, _| {
+            index_runtime::with_ready_text_segment(ctx, store, name, |_, ts, _, _| {
                 let st = ts.stats();
                 [st.docs, st.approx_bytes, st.postings, st.tokens]
             })
@@ -277,7 +277,7 @@ fn kind_entries(ctx: &Ctx<'_>, store: &mut Store, kind: kevy_index::IndexKind, n
             index_runtime::with_ready_ann(ctx, store, name, |g| g.vectors()).unwrap_or_default()
         }
         kevy_index::IndexKind::Text => {
-            index_runtime::with_ready_text_segment(ctx, store, name, |t, _, _| t.docs())
+            index_runtime::with_ready_text_segment(ctx, store, name, |_, t, _, _| t.docs())
                 .unwrap_or_default()
         }
         _ => index_runtime::with_ready_segment(ctx, store, name, |_, s, _| s.stats().entries)
@@ -308,7 +308,7 @@ pub(super) fn op_list(ctx: &Ctx<'_>, store: &mut Store) -> Vec<u8> {
             })
             .unwrap_or_default()
         } else if spec.kind == kevy_index::IndexKind::Text {
-            index_runtime::with_ready_text_segment(ctx, store, &spec.name, |ts, _, _| {
+            index_runtime::with_ready_text_segment(ctx, store, &spec.name, |_, ts, _, _| {
                 let st = ts.stats();
                 (st.docs, st.approx_bytes, st.postings, st.tokens)
             })
