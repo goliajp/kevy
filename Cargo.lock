@@ -765,6 +765,7 @@ version = "4.1.1"
 dependencies = [
  "kevy-index",
  "kevy-seg",
+ "kevy-text",
  "kevy-tmpdir",
 ]
 
