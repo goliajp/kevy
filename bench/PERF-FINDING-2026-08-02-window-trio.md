@@ -18,9 +18,13 @@ Readings:
 - The headline three are the T-row-b2 contract, now numbers: cold rows
   leave the rewrite (trailing SEGMENTED frames only), don't replay on
   boot (stub records + stitch), and load as stubs.
-- The weak one is honest: RUNNING RSS only drops 9% after the slide —
-  freed hash memory is not returned to the OS by the allocator (RSS
-  stickiness). That is kevy-alloc / madvise territory (R1), not a
-  window defect; the restart number shows the true footprint.
+- The weak one was honest and is now fixed: RUNNING RSS only dropped
+  9% at first — freed hash memory was not returned to the OS by glibc.
+  A hand-written malloc_trim binding (kevy-sys, linux/gnu only,
+  best-effort no-op elsewhere) called at slide frequency closed it:
+  **running RSS 838.9 MB (ctrl) vs 446.1 MB (windowed) = -47% with no
+  restart** (was 774 MB / -9%). The remaining gap to the 256 MB
+  restart figure is segment page cache + index + residual arena —
+  kevy-alloc's territory (R1) when it becomes the global allocator.
 - `--pipe` reported errors: 1 on both variants identically; DBSIZE and
   probes are exact. Not chased; recorded.
