@@ -127,6 +127,7 @@ impl Store {
             }
         }
         self.segrows = Some(SegRows { dir: dir.to_path_buf(), segs, seq });
+        self.cold_backing = true;
         Ok(())
     }
 

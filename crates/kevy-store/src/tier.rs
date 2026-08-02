@@ -149,6 +149,7 @@ mod enabled {
         pub fn enable_tiering(&mut self, dir: &Path, budget: u64) -> io::Result<()> {
             let dir: PathBuf = dir.to_path_buf();
             let vlog = Vlog::open(&dir, kevy_vlog::DEFAULT_ROTATE_BYTES)?;
+            self.cold_backing = true;
             self.tier = Some(TierState {
                 vlog,
                 budget,
