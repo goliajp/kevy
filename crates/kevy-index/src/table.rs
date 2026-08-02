@@ -235,6 +235,18 @@ pub fn window_for(
     leads.then_some((w, crate::WindowShape::CompositeLed))
 }
 
+/// Whether a compiled TEXT index belongs to a windowed table — its
+/// documents freeze into cold bucket segments as the window slides.
+/// (The batch discovery lives on the table's window driver; the text
+/// index only needs a cold directory.) Shared by both engine faces.
+pub fn window_text_for(cat: &TableCatalog, spec: &IndexSpec) -> bool {
+    if spec.kind != crate::IndexKind::Text {
+        return false;
+    }
+    let Some(dot) = spec.name.iter().position(|&b| b == b'.') else { return false };
+    cat.get(&spec.name[..dot]).is_some_and(|t| t.window.is_some())
+}
+
 /// Whether `index_name` is its table's row-eviction DRIVER: the one
 /// windowed access path per table that discovers the eviction batch
 /// and seals the rows (every other windowed path only slides its own

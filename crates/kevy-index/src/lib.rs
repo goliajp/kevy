@@ -46,7 +46,7 @@ pub use segment_claused::{
 };
 pub use table::{
     MAX_TABLES, OrderPath, TableCatalog, TableIndex, TableSpec, WindowSpec, compile_table,
-    window_driver, window_for,
+    window_driver, window_for, window_text_for,
 };
 pub use segcold::{
     ColdBloom, WindowShape, decode_seg_key, decode_seg_values, encode_seg_values, seg_bounds,
