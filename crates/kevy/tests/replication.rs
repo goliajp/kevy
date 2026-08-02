@@ -1335,13 +1335,33 @@ fn server_as_replica_applies_upstream_writes() {
         for (k, _v) in pairs {
             send_resp(&mut reader, &[b"GET", k]);
             let line = read_line(&mut reader);
-            if line.starts_with(b"$-1") || line.starts_with(b"$0") {
+            if line.starts_with(b"$-1") {
                 got_all = false;
                 break;
             }
             if line.starts_with(b"$") {
-                // bulk header — consume the payload line + crlf
+                // bulk header — consume the payload line + crlf BEFORE
+                // deciding anything: an empty bulk ($0) still carries its
+                // terminating CRLF, and breaking with it unread desyncs
+                // every later response by one — the verify loop then reads
+                // a stale header for the wrong key (the $4-for-alpha CI
+                // failure, 2026-08-02).
                 let _ = read_line(&mut reader);
+                if line.starts_with(b"$0\r") {
+                    // An EMPTY value is not "caught up" — and it should be
+                    // impossible (the inbox applies on the serving shard
+                    // thread). Log loudly so a recurrence carries evidence.
+                    eprintln!(
+                        "replica returned $0 (empty bulk) for {:?} mid-catch-up",
+                        String::from_utf8_lossy(k)
+                    );
+                    got_all = false;
+                    break;
+                }
+            } else {
+                // -ERR / unexpected: single-line reply, not caught up.
+                got_all = false;
+                break;
             }
         }
         if got_all {
