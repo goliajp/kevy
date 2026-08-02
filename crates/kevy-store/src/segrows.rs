@@ -126,8 +126,11 @@ impl Store {
                 segs.push((q, SegSlot { seg: Arc::new(seg), file: e.file.clone(), live: 0, dead: 0 }));
             }
         }
+        // The gate opens only when cold values can actually exist:
+        // enabling the DIRECTORY costs nothing on the funnels; loaded
+        // segments (or the first sealed one, or a loaded stub) do.
+        self.cold_backing |= !segs.is_empty();
         self.segrows = Some(SegRows { dir: dir.to_path_buf(), segs, seq });
-        self.cold_backing = true;
         Ok(())
     }
 
@@ -267,6 +270,7 @@ impl Store {
         .map_err(|e| e.to_string())?;
         let seg = kevy_seg::Seg::open(&path).map_err(|e| format!("reopen {file}: {e}"))?;
         sr.segs.push((seq, SegSlot { seg: Arc::new(seg), file, live: 0, dead: 0 }));
+        self.cold_backing = true;
         Ok(seq)
     }
 
@@ -325,6 +329,7 @@ impl Store {
     /// map as a seg-backed stub (the segment directory, loaded before
     /// the snapshot, holds its data). TTL-free by the eviction filter.
     pub fn load_row_stub(&mut self, key: Vec<u8>, seq: u32, value_weight: u32) {
+        self.cold_backing = true;
         self.insert_row_stub(&key, seq, u64::from(value_weight));
     }
 
