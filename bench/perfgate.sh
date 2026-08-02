@@ -131,8 +131,14 @@ server_stop() {
 }
 server_start() { # $1 = extra flags
   server_stop
+  # Fresh data dir per instance, never the invoker's cwd: a server
+  # started with dir=. in the repo root loads the PREVIOUS instance's
+  # snapshot, pays a re-shard migration, and litters dump/premigration
+  # files there forever (2336 of them by 2026-08-02). Instances are
+  # meant to be fresh — the angles prepopulate everything they measure.
+  rm -rf "$RUNDIR/data" && mkdir -p "$RUNDIR/data"
   env KEVY_IO_URING=1 KEVY_BIND=127.0.0.1 taskset -c 0-7 \
-    "$BIN" --threads 8 --port 7001 $1 --no-aof >"$RUNDIR/srv.log" 2>&1 &
+    "$BIN" --threads 8 --port 7001 $1 --no-aof --dir "$RUNDIR/data" >"$RUNDIR/srv.log" 2>&1 &
   SRV=$!
   for _ in $(seq 1 100); do
     timeout 2 redis-benchmark -p 7001 -t ping -n 1 -c 1 -q >/dev/null 2>&1 && return 0
