@@ -73,11 +73,11 @@ impl Store {
         limit: usize,
         opts: MatchOpts<'_>,
     ) -> KevyResult<MatchPage> {
-        let limit = limit.clamp(1, 1000);
-        let offset = opts.offset.min(10_000);
+        let (limit, offset) = (limit.clamp(1, 1000), opts.offset.min(10_000));
         // Fetch deep enough to skip OFFSET and still fill LIMIT after the
         // cross-shard merge.
         let fetch = limit + offset;
+        super::text_cold::cold_refusal(self.text_has_cold(name), query, opts.typo, opts.scope)?;
         let (scope, tests) = self.resolve_clauses(name, opts.scope, opts.filters)?;
         let sorted = self.sort_field(name, opts.sort)?;
         let fkeys = self.facet_keys(name, opts.facets)?;
@@ -106,10 +106,10 @@ impl Store {
             sort,
             distinct,
         };
-        let (mut all, facets) =
-            self.gather_hits(name, query, fetch, q, opts.highlight, &fac);
-        self.order_page(name, &mut all, sorted);
-        self.collapse_union(name, &mut all, grouped);
+        let (mut all, facets, cold_vals) =
+            self.gather_hits(name, query, fetch, q, &stats, opts.highlight, &fac);
+        self.order_page(name, &mut all, sorted, &cold_vals);
+        self.collapse_union(name, &mut all, grouped, &cold_vals);
         if offset > 0 {
             all.drain(..offset.min(all.len()));
         }
@@ -177,17 +177,21 @@ fn box_tests(tests: Vec<(usize, kevy_index::ValueTest)>) -> Vec<(usize, ValuePre
 impl Store {
     /// Every shard's page for this query, unmerged, with the facet
     /// buckets summed by identity as the shards report them.
+    #[allow(clippy::too_many_arguments)]
     fn gather_hits(
         &self,
         name: &[u8],
         query: &[u8],
         fetch: usize,
         q: kevy_text::QueryOpts<'_>,
+        stats: &kevy_text::CorpusStats,
         highlight: Option<&[Vec<u8>]>,
         facets: &[kevy_text::Facet],
-    ) -> (Vec<HighlightedHit>, Vec<FacetCounts>) {
+    ) -> (Vec<HighlightedHit>, Vec<FacetCounts>, super::text_cold::ColdVals) {
         let mut all = Vec::new();
         let mut buckets: Vec<Vec<RawBucket>> = vec![Vec::new(); facets.len()];
+        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+        let mut cold_vals = super::text_cold::ColdVals::new();
         for shard in self.shards.iter() {
             let mut g = lock_write(shard);
             let inner = &mut *g;
@@ -202,16 +206,21 @@ impl Store {
                     all.push((m.key, m.score, hl));
                 }
                 for (into, from) in buckets.iter_mut().zip(r.facets) {
-                    for (key, label, n) in from {
-                        match into.iter_mut().find(|(k, _, _)| *k == key) {
-                            Some(e) => e.2 += n,
-                            None => into.push((key, label, n)),
-                        }
-                    }
+                    fold_raw(into, from);
                 }
             }
+            // The shard's frozen buckets join the union like one more
+            // ranked contributor — the origin merge below re-orders,
+            // re-collapses and truncates the lot.
+            #[cfg(not(target_arch = "wasm32"))]
+            gather_cold(
+                inner, name, query, fetch, stats, &q, facets, highlight, &mut all,
+                &mut buckets, &mut cold_vals,
+            );
+            #[cfg(target_arch = "wasm32")]
+            let _ = stats;
         }
-        (all, finish_buckets(buckets))
+        (all, finish_buckets(buckets), cold_vals)
     }
 
     /// Put the merged hits in the page's order: by the sort key when the
@@ -222,6 +231,7 @@ impl Store {
         name: &[u8],
         all: &mut Vec<HighlightedHit>,
         sorted: Option<(usize, bool, kevy_index::ValType)>,
+        cold_vals: &super::text_cold::ColdVals,
     ) {
         let Some((field, desc, ty)) = sorted else {
             all.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
@@ -229,7 +239,7 @@ impl Store {
         };
         let mut keyed: Vec<(Option<Vec<u8>>, HighlightedHit)> = std::mem::take(all)
             .into_iter()
-            .map(|h| (self.stored_order_key(name, &h.0, field, ty), h))
+            .map(|h| (self.stored_order_key(name, &h.0, field, ty, cold_vals), h))
             .collect();
         keyed.sort_by(|a, b| {
             kevy_text::sorted_order((a.0.as_deref(), &a.1.0), (b.0.as_deref(), &b.1.0), desc)
@@ -249,10 +259,11 @@ impl Store {
         name: &[u8],
         all: &mut Vec<HighlightedHit>,
         grouped: Option<(usize, kevy_index::ValType)>,
+        cold_vals: &super::text_cold::ColdVals,
     ) {
         let Some((field, ty)) = grouped else { return };
         let mut seen: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
-        all.retain(|h| match self.stored_order_key(name, &h.0, field, ty) {
+        all.retain(|h| match self.stored_order_key(name, &h.0, field, ty, cold_vals) {
             Some(k) => seen.insert(k),
             None => true,
         });
@@ -330,12 +341,15 @@ impl Store {
 
     /// One row's sort key: its stored value, in the order-preserving
     /// encoding of that field's declared type.
+    /// One row's sort key: its stored value from a hot segment, or —
+    /// for a cold hit — from its frozen doc record.
     fn stored_order_key(
         &self,
         name: &[u8],
         key: &[u8],
         field: usize,
         ty: kevy_index::ValType,
+        cold_vals: &super::text_cold::ColdVals,
     ) -> Option<Vec<u8>> {
         for shard in self.shards.iter() {
             let g = lock_write(shard);
@@ -345,7 +359,74 @@ impl Store {
                 return kevy_index::order_key(ty, raw);
             }
         }
-        None
+        let raw = cold_vals.get(key)?.get(field)?.as_deref()?;
+        kevy_index::order_key(ty, raw)
+    }
+}
+
+/// One shard's cold contribution to the union: page hits (each with
+/// its row-read highlight when asked), facet buckets folded by
+/// identity, and the frozen values the union's sort/distinct keys
+/// will need.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
+fn gather_cold(
+    inner: &mut crate::store_inner::Inner,
+    name: &[u8],
+    query: &[u8],
+    fetch: usize,
+    stats: &kevy_text::CorpusStats,
+    q: &kevy_text::QueryOpts<'_>,
+    facets: &[kevy_text::Facet],
+    highlight: Option<&[Vec<u8>]>,
+    all: &mut Vec<HighlightedHit>,
+    buckets: &mut [Vec<RawBucket>],
+    cold_vals: &mut super::text_cold::ColdVals,
+) {
+    let Some(dir) = inner.idx_segs.cold_text_of(name).filter(|d| d.has_cold()) else {
+        return;
+    };
+    let (mut bare, phrases, _prefixes) = kevy_text::parse_clauses(query);
+    bare.sort();
+    bare.dedup();
+    let page = dir.cold_page(&kevy_window::ColdPageQuery {
+        bare,
+        phrases,
+        stats,
+        filter: q.filter,
+        sort: q.sort.as_ref(),
+        distinct: q.distinct.as_ref(),
+        facets,
+        fetch,
+    });
+    let spec = inner
+        .idx_segs
+        .text
+        .iter()
+        .find(|(s, _)| s.name == name)
+        .map(|(s, _)| s.clone());
+    for h in page.hits {
+        let hl = highlight.map_or_else(Vec::new, |w| {
+            spec.as_ref().map_or_else(Vec::new, |sp| {
+                super::text_cold::cold_hit_highlight(&mut inner.store, sp, &h.key, query, w)
+            })
+        });
+        all.push((h.key, h.score, hl));
+    }
+    for (into, from) in buckets.iter_mut().zip(page.facets) {
+        fold_raw(into, from);
+    }
+    cold_vals.extend(page.values);
+}
+
+/// Fold one contributor's facet buckets into the running totals by
+/// identity (two spellings of one value sum; the first label wins).
+fn fold_raw(into: &mut Vec<RawBucket>, from: Vec<RawBucket>) {
+    for (key, label, n) in from {
+        match into.iter_mut().find(|(k, _, _)| *k == key) {
+            Some(e) => e.2 += n,
+            None => into.push((key, label, n)),
+        }
     }
 }
 

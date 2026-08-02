@@ -71,13 +71,12 @@ impl Store {
         typo: u32,
         scope: &[usize],
     ) -> KevyResult<kevy_text::CorpusStats> {
-        let (mut n_docs, mut total_len) = (0f64, 0u64);
+        let (mut n_docs, mut total_len, mut found) = (0f64, 0u64, false);
         // Accumulated per shard from `query_df_in`, which expands `word*`
         // prefixes against that shard's dictionary — so the df map ends up
         // keyed by the union of every shard's query terms and prefix
         // expansions, each summed to a global df.
         let mut df: std::collections::HashMap<Vec<u8>, u32> = std::collections::HashMap::new();
-        let mut found = false;
         for shard in self.shards.iter() {
             let mut g = lock_write(shard);
             let inner = &mut *g;
@@ -86,15 +85,20 @@ impl Store {
                 found = true;
                 n_docs += ts.docs() as f64;
                 total_len += ts.total_len_in(scope);
-                let opts = kevy_text::QueryOpts {
-                    stats: None,
-                    typo,
-                    fields: scope,
-                    filter: &[],
-                    sort: None,
-                    distinct: None,
-                };
-                for (t, d) in ts.query_df_in(text, opts) {
+                let opts =
+                    kevy_text::QueryOpts { typo, fields: scope, ..kevy_text::QueryOpts::default() };
+                let tokdf = ts.query_df_in(text, opts);
+                // The shard's frozen buckets are pass-1 contributors
+                // like any other shard — the server seam's mirror.
+                #[cfg(not(target_arch = "wasm32"))]
+                super::text_cold::fold_cold_stats(
+                    inner.idx_segs.cold_text_of(name),
+                    &tokdf,
+                    &mut n_docs,
+                    &mut total_len,
+                    &mut df,
+                );
+                for (t, d) in tokdf {
                     *df.entry(t).or_insert(0) += d;
                 }
             }

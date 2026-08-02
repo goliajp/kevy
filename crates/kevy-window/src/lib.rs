@@ -11,6 +11,10 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+#[path = "text.rs"]
+mod text;
+pub use text::{ColdHit, ColdPage, ColdPageQuery, TextColdDir};
+
 use kevy_index::{
     ColdBloom, ColdEntryRow, FacetBucket, IndexValue, ScalarClauses, ScalarHit, ValType,
     WindowShape, WindowSpec, claused_over, decode_seg_key, decode_seg_values, encode_seg_values,

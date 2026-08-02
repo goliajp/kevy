@@ -110,39 +110,117 @@ pub(crate) fn window_tick(
 ) {
     let cat = tables.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut moved = false;
+    // The driver's eviction batches, kept so the second pass can
+    // freeze the SAME rows out of each table's text indexes (the
+    // server tick's exact two-pass shape).
+    #[cfg(feature = "text")]
+    let mut batches: Vec<(Vec<u8>, Vec<Vec<u8>>)> = Vec::new();
     {
         // Disjoint borrows: the seg list walks, the window list edits.
         let seg_list = &mut segs.segs;
         let windows = &mut segs.windows;
         for (spec, seg) in seg_list.iter_mut() {
-            let want = kevy_index::window_for(&cat, &spec.name);
-            let at = windows.iter().position(|(n, _)| n == &spec.name);
-            match (at, want) {
-                (Some(i), None) => {
-                    windows.swap_remove(i);
-                }
-                (None, Some((w, sh))) => {
-                    windows.push((spec.name.clone(), WindowRt::new(w, sh)));
-                }
-                (Some(i), Some((w, sh)))
-                    if windows[i].1.spec != w || windows[i].1.shape != sh =>
-                {
-                    windows[i].1 = WindowRt::new(w, sh);
-                }
-                _ => {}
-            }
+            reconcile_window(windows, &cat, &spec.name);
             let Some(win) = windows.iter_mut().find(|(n, _)| n == &spec.name).map(|(_, w)| w)
             else {
                 continue;
             };
             let drives = kevy_index::window_driver(&cat, &spec.name);
+            #[cfg(feature = "text")]
+            if drives && let Some(rows) = win.pending_rows(seg) {
+                batches.push((table_of(&spec.name).to_vec(), rows));
+            }
             moved |= evict_and_slide(win, spec, seg, store, aof, segs_dir, drives);
         }
         // An index dropped from the catalog drops its window with it.
         let names: Vec<Vec<u8>> = seg_list.iter().map(|(s, _)| s.name.clone()).collect();
         windows.retain(|(n, _)| names.contains(n));
     }
+    #[cfg(feature = "text")]
+    {
+        reconcile_cold_text(segs, &cat);
+        moved |= freeze_text_batches(segs, &batches, segs_dir);
+    }
     if moved {
         segs.mark_stats_dirty();
     }
+}
+
+/// Keep one index's window runtime in lockstep with the catalog:
+/// declare/replace/drop (and a changed shape) all converge here.
+fn reconcile_window(
+    windows: &mut Vec<(Vec<u8>, WindowRt)>,
+    cat: &kevy_index::TableCatalog,
+    name: &[u8],
+) {
+    let want = kevy_index::window_for(cat, name);
+    let at = windows.iter().position(|(n, _)| n == name);
+    match (at, want) {
+        (Some(i), None) => {
+            windows.swap_remove(i);
+        }
+        (None, Some((w, sh))) => {
+            windows.push((name.to_vec(), WindowRt::new(w, sh)));
+        }
+        (Some(i), Some((w, sh))) if windows[i].1.spec != w || windows[i].1.shape != sh => {
+            windows[i].1 = WindowRt::new(w, sh);
+        }
+        _ => {}
+    }
+}
+
+/// Keep the cold-text directory list in lockstep with the catalog: a
+/// windowed table's text indexes each get one, everything else loses
+/// its entry (declare/replace/drop all converge here).
+#[cfg(feature = "text")]
+fn reconcile_cold_text(segs: &mut ShardSegs, cat: &kevy_index::TableCatalog) {
+    let want: Vec<(Vec<u8>, bool)> = segs
+        .text
+        .iter()
+        .map(|(spec, _)| (spec.name.clone(), kevy_index::window_text_for(cat, spec)))
+        .collect();
+    for (name, wanted) in &want {
+        let at = segs.cold_text.iter().position(|(n, _)| n == name);
+        match (at, wanted) {
+            (Some(i), false) => {
+                segs.cold_text.swap_remove(i);
+            }
+            (None, true) => {
+                segs.cold_text.push((name.clone(), kevy_window::TextColdDir::new()));
+            }
+            _ => {}
+        }
+    }
+    segs.cold_text.retain(|(n, _)| want.iter().any(|(nn, _)| nn == n));
+}
+
+/// Freeze each eviction batch out of every text index of its table.
+/// Failure leaves the entries hot — derived spill, semantics intact.
+#[cfg(feature = "text")]
+fn freeze_text_batches(
+    segs: &mut ShardSegs,
+    batches: &[(Vec<u8>, Vec<Vec<u8>>)],
+    segs_dir: &Path,
+) -> bool {
+    let mut changed = false;
+    for (table, keys) in batches {
+        for (spec, ts) in segs.text.iter_mut() {
+            if table_of(&spec.name) != table {
+                continue;
+            }
+            let Some((_, dir)) = segs.cold_text.iter_mut().find(|(n, _)| n == &spec.name)
+            else {
+                continue;
+            };
+            match dir.freeze_batch(ts, &spec.name, keys, segs_dir) {
+                Ok(true) => changed = true,
+                Ok(false) => {}
+                Err(e) => eprintln!(
+                    "kevy-embedded: text freeze '{}': {e}",
+                    String::from_utf8_lossy(&spec.name)
+                ),
+            }
+        }
+    }
+    changed
 }
