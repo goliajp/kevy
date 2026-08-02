@@ -6,6 +6,7 @@
 #![warn(missing_docs)]
 
 mod bm25;
+pub mod cold;
 mod buckets;
 mod docblobs;
 mod docvalues;
