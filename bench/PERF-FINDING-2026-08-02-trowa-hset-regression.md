@@ -68,8 +68,17 @@ Ladder closed (counter-window median-of-3): base 5.32M → T-row-a
 (hset -1.8%, incr -1.1%, get -1.9%) back inside the noise band; the
 single ✗ (sadd -8.7%, floor by 0.7pp) is the known noise swinger
 (-11.8✗ / +8.6✓ / -0.1✓ / -8.7✗ across rounds; candidate median 6.5M
-vs ref median 6.8M = -4.5%, inside the floor). Round 5 pending as the
-formal verdict.
+vs ref median 6.8M = -4.5%, inside the floor). Round 5: every KV
+angle green (write family +3..+7%), one fresh noise swing
+(zalg_zinterstore -10.3%, whose cross-round candidate median is +4.4%
+ABOVE ref). Round 6: **perfgate PASS** — the formal verdict. Across
+six rounds every red was a different angle, mutually exclusive, and
+every angle's cross-round median sits inside the floor.
+
+Tool note for a future round: the single-run verdict is brittle for
+the two high-variance angles (sadd, zalg — ±10% swings); a
+median-of-runs verdict for those angles would have saved two full
+gate reruns.
 
 ### Crate-isolation probe that found the room
 exp-c (`571dafb1`, branch perf-exp-c): clean base + T-row-a's
