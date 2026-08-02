@@ -1,8 +1,11 @@
 //! The text window's semantic-equivalence gate: a windowed table's
 //! TEXT index freezes its out-of-window documents into cold bucket
-//! segments, and bare-term MATCH answers — scores included — must be
-//! byte-identical to a never-windowed control over the same rows.
-//! Clause-carrying queries refuse by name while cold buckets exist.
+//! segments, and MATCH answers — scores, sort keys, facet counts and
+//! highlight spans included — must be byte-identical to a
+//! never-windowed control over the same rows, for every clause with a
+//! cold path: terms, phrases, FILTER, SORT, DISTINCT, FACET and
+//! HIGHLIGHT. The dictionary-shaped clauses (prefix, TYPO, IN) refuse
+//! by name while cold buckets exist.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -123,20 +126,33 @@ fn cold_text_answers_byte_identically_to_the_control() {
     assert!(send(&mut c, declare_ctl).starts_with("+OK"), "declare ctl");
     for name in [b"ev.note".as_slice(), b"ctl.note"] {
         let r = send(&mut c, &[b"IDX.CREATE", name, b"ON", b"PREFIX", b"ev:",
-            b"FIELD", b"note", b"TYPE", b"str", b"KIND", b"text"]);
+            b"FIELD", b"note", b"TYPE", b"str", b"KIND", b"text",
+            b"WITH", b"POSITIONS",
+            b"VALUES", b"prio", b"tag", b"TYPES", b"i64", b"str"]);
         assert!(r.starts_with("+OK"), "IDX.CREATE {}: {r}", String::from_utf8_lossy(name));
     }
 
-    // 30 rows, at = i*10; notes cycle a small vocabulary so terms span
-    // hot and cold. W = 190 → rows below at=190 freeze.
+    // 30 rows, at = i*10; notes cycle a small vocabulary so terms AND
+    // the "rust engine" phrase span hot and cold. W = 190 → rows below
+    // at=190 freeze. prio cycles for SORT/FILTER ties, tag for
+    // DISTINCT/FACET groups — and every 7th row has NO tag, so the
+    // absent-value rules (never filters, sorts last, own group) are
+    // exercised on both faces.
     let vocab = ["rust engine warm", "storage engine warm", "python glue warm",
                  "rust storage cold path", "engine of record warm"];
+    let tags = ["alpha", "beta", "gamma"];
     for i in 0..30i64 {
         let key = format!("ev:{i}");
         let at = (i * 10).to_string();
         let note = vocab[(i % 5) as usize];
-        let r = send(&mut c, &[b"HSET", key.as_bytes(), b"id", key.as_bytes(),
-            b"at", at.as_bytes(), b"note", note.as_bytes()]);
+        let prio = ((i % 4) * 10).to_string();
+        let mut argv: Vec<&[u8]> = vec![b"HSET", key.as_bytes(), b"id", key.as_bytes(),
+            b"at", at.as_bytes(), b"note", note.as_bytes(), b"prio", prio.as_bytes()];
+        let tag = tags[(i % 3) as usize];
+        if i % 7 != 0 {
+            argv.extend_from_slice(&[b"tag", tag.as_bytes()]);
+        }
+        let r = send(&mut c, &argv);
         assert!(r.starts_with(":"), "HSET {key}: {r}");
     }
     wait_ready(&mut c);
@@ -156,28 +172,73 @@ fn cold_text_answers_byte_identically_to_the_control() {
         std::thread::sleep(Duration::from_millis(50));
     }
 
+    // Every clause with a cold path, byte-for-byte against the
+    // control: terms, phrases (adjacency verified through the frozen
+    // positions blobs), FILTER, SORT (both directions), DISTINCT,
+    // FACET, HIGHLIGHT, and their combinations.
+    let shapes: &[&[&[u8]]] = &[
+        &[b"MATCH", b"rust", b"LIMIT", b"30"],
+        &[b"MATCH", b"engine", b"LIMIT", b"30"],
+        &[b"MATCH", b"rust storage", b"LIMIT", b"30"],
+        &[b"MATCH", b"warm engine", b"LIMIT", b"30"],
+        &[b"MATCH", b"absent", b"LIMIT", b"30"],
+        &[b"MATCH", b"\"rust engine\"", b"LIMIT", b"30"],
+        &[b"MATCH", b"\"storage engine\"", b"LIMIT", b"30"],
+        &[b"MATCH", b"warm \"rust storage\"", b"LIMIT", b"30"],
+        &[b"MATCH", b"rust", b"LIMIT", b"30", b"FILTER", b"prio", b"RANGE", b"10", b"20"],
+        &[b"MATCH", b"engine", b"LIMIT", b"30", b"FILTER", b"tag", b"EQ", b"alpha"],
+        &[b"MATCH", b"rust", b"LIMIT", b"30", b"SORT", b"prio", b"ASC"],
+        &[b"MATCH", b"rust", b"LIMIT", b"30", b"SORT", b"prio", b"DESC"],
+        &[b"MATCH", b"engine", b"LIMIT", b"30", b"SORT", b"tag", b"ASC"],
+        &[b"MATCH", b"engine", b"LIMIT", b"30", b"DISTINCT", b"tag"],
+        &[b"MATCH", b"rust", b"LIMIT", b"30", b"DISTINCT", b"prio", b"SORT", b"prio", b"DESC"],
+        &[b"MATCH", b"rust", b"LIMIT", b"1", b"FACET", b"tag"],
+        &[b"MATCH", b"engine", b"LIMIT", b"1", b"FACET", b"prio",
+          b"FILTER", b"tag", b"EQ", b"beta"],
+        &[b"MATCH", b"rust", b"LIMIT", b"30", b"HIGHLIGHT"],
+        &[b"MATCH", b"\"rust engine\"", b"LIMIT", b"30", b"HIGHLIGHT"],
+        &[b"MATCH", b"rust", b"LIMIT", b"30", b"FILTER", b"prio", b"RANGE", b"0", b"20",
+          b"SORT", b"prio", b"ASC", b"HIGHLIGHT"],
+    ];
     let compare = |c: &mut TcpStream, tag: &str| {
-        for query in [b"rust".as_slice(), b"engine", b"rust storage", b"warm engine", b"absent"] {
-            let ev = send(c, &[b"IDX.QUERY", b"ev.note", b"MATCH", query, b"LIMIT", b"30"]);
-            let ctl = send(c, &[b"IDX.QUERY", b"ctl.note", b"MATCH", query, b"LIMIT", b"30"]);
-            assert_eq!(ev, ctl, "{tag}: MATCH {:?}", String::from_utf8_lossy(query));
+        for shape in shapes {
+            let mut ev: Vec<&[u8]> = vec![b"IDX.QUERY", b"ev.note"];
+            ev.extend_from_slice(shape);
+            let mut ctl: Vec<&[u8]> = vec![b"IDX.QUERY", b"ctl.note"];
+            ctl.extend_from_slice(shape);
+            let ev = send(c, &ev);
+            let ctl = send(c, &ctl);
+            assert_eq!(ev, ctl, "{tag}: {:?}", String::from_utf8_lossy(shape[1]));
         }
     };
     compare(&mut c, "after freeze");
 
-    // Churn: rewrite a cold row's note (revives hot + tombstones the
-    // frozen entries), delete another cold row.
+    // Churn: rewrite a cold row's note AND values (revives hot +
+    // tombstones the frozen entries, statistics withdrawn exactly),
+    // delete another cold row.
     assert!(send(&mut c, &[b"HSET", b"ev:3", b"id", b"ev:3", b"at", b"30",
-        b"note", b"rust replaced text"]).starts_with(":"));
+        b"note", b"rust replaced text", b"prio", b"5", b"tag", b"beta"]).starts_with(":"));
     assert_eq!(send(&mut c, &[b"DEL", b"ev:7"]), ":1\r\n");
     std::thread::sleep(Duration::from_millis(200));
     compare(&mut c, "after churn");
 
-    // Clauses refuse on the cold index, serve on the control.
-    let f_ev = send(&mut c, &[b"IDX.QUERY", b"ev.note", b"MATCH", b"\"rust engine\"", b"LIMIT", b"5"]);
-    assert!(f_ev.contains("not built yet"), "phrase must refuse on cold: {f_ev}");
-    let f_ctl = send(&mut c, &[b"IDX.QUERY", b"ctl.note", b"MATCH", b"\"rust engine\"", b"LIMIT", b"5"]);
-    assert!(f_ctl.starts_with("*"), "control phrase must serve: {f_ctl}");
-    let h_ev = send(&mut c, &[b"IDX.QUERY", b"ev.note", b"MATCH", b"rust", b"LIMIT", b"5", b"HIGHLIGHT"]);
-    assert!(h_ev.contains("not built yet"), "highlight must refuse on cold: {h_ev}");
+    // The dictionary-shaped clauses refuse on the cold index by name,
+    // and serve on the control.
+    let refusals: &[&[&[u8]]] = &[
+        &[b"MATCH", b"rus*", b"LIMIT", b"5"],
+        &[b"MATCH", b"rusk", b"LIMIT", b"5", b"TYPO", b"1"],
+        &[b"MATCH", b"rust", b"LIMIT", b"5", b"IN", b"note"],
+    ];
+    for shape in refusals {
+        let mut ev: Vec<&[u8]> = vec![b"IDX.QUERY", b"ev.note"];
+        ev.extend_from_slice(shape);
+        let mut ctl: Vec<&[u8]> = vec![b"IDX.QUERY", b"ctl.note"];
+        ctl.extend_from_slice(shape);
+        let ev = send(&mut c, &ev);
+        assert!(ev.contains("not built yet"),
+            "must refuse on cold: {:?} -> {ev}", String::from_utf8_lossy(shape[1]));
+        let ctl = send(&mut c, &ctl);
+        assert!(ctl.starts_with("*"),
+            "control must serve: {:?} -> {ctl}", String::from_utf8_lossy(shape[1]));
+    }
 }

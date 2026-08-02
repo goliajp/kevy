@@ -236,6 +236,7 @@ pub(crate) fn with_ready_text_segment<R>(
     store: &mut Store,
     name: &[u8],
     f: impl FnOnce(
+        &mut Store,
         &kevy_text::TextSegment,
         &kevy_index::IndexSpec,
         Option<&window_text::TextColdDir>,
@@ -249,7 +250,7 @@ pub(crate) fn with_ready_text_segment<R>(
         .find(|si| si.spec.name == name)
         .ok_or("ERR no such index")?;
     match (&si.build, &si.text) {
-        (BuildState::Ready, Some(ts)) => Ok(f(ts, &si.spec, si.cold_text.as_ref())),
+        (BuildState::Ready, Some(ts)) => Ok(f(store, ts, &si.spec, si.cold_text.as_ref())),
         (BuildState::Backfilling { .. }, _) => Err(CmdError::Wire("INDEXBUILDING index is still building")),
         (BuildState::FailedOverBudget, _) => Err(CmdError::Wire("INDEXOVERBUDGET index build exceeded MAXMEM")),
         (_, None) => Err(CmdError::Wire("ERR not a text index")),
@@ -416,7 +417,7 @@ pub(crate) use kevy_window::WindowRt;
 mod window_slide;
 use window_slide::{evict_and_slide, freeze_text_batches, shard_segs_dir, table_of, text_window_for, window_for};
 mod window_text;
-pub(crate) use window_text::TextColdDir;
+pub(crate) use window_text::{ColdHit, ColdPageQuery, TextColdDir};
 mod row_apply;
 use row_apply::{advance_backfill, apply_row};
 pub(crate) use row_apply::{RowValue, row_value};
