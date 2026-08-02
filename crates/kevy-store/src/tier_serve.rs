@@ -101,6 +101,9 @@ mod enabled {
         /// matches `want` is promoted in place; a mismatch is WRONGTYPE
         /// with zero preads. Hot values / absent keys pass through.
         pub(crate) fn tier_resolve(&mut self, key: &[u8], want: u8) -> Result<(), StoreError> {
+            if !self.cold_backing {
+                return Ok(());
+            }
             let tag = match self.live_entry(key) {
                 Some(Entry { value: Value::Cold(c), .. }) => c.type_tag,
                 _ => return Ok(()),
@@ -120,6 +123,9 @@ mod enabled {
         /// `live_entry` verbatim. Inside [`Store::peek_scope`] the gate
         /// is bypassed: serve via scratch, mark untouched, no promote.
         pub(crate) fn tier_serve(&mut self, key: &[u8], want: u8) -> Result<Option<&Entry>, StoreError> {
+            if !self.cold_backing {
+                return Ok(self.live_entry(key));
+            }
             let cold = match self.live_entry(key) {
                 None => return Ok(None),
                 Some(e) => match &e.value {

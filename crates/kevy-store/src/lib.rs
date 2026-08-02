@@ -298,6 +298,13 @@ pub struct Store {
     /// byte-identical.
     #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
     pub(crate) segrows: Option<segrows::SegRows>,
+    /// Hot gate for the stub funnels: true iff EITHER cold backing
+    /// (vlog tier / row segments) is enabled. One predictable branch
+    /// keeps tier_serve/tier_resolve at their no-backing cost on
+    /// deployments that never demote — the measured shape of the
+    /// write-path funnels (perfgate legacy angles).
+    #[cfg_attr(any(not(feature = "std"), target_arch = "wasm32"), allow(dead_code))]
+    pub(crate) cold_backing: bool,
     /// The promotion gate's first-touch serve scratch (`tier_serve`):
     /// a cold value decoded for ONE read, never installed in the map.
     #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
