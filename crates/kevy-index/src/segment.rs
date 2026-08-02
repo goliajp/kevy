@@ -93,6 +93,17 @@ impl Segment {
         self.values.as_ref()?.get(key, field)
     }
 
+    /// Every stored value of one row, aligned with the declared
+    /// `VALUES` order — what an eviction carries into a cold entry's
+    /// payload so the clause-carrying cold path never re-reads the
+    /// row. Empty when the index declared no values.
+    pub fn stored_row(&self, key: &[u8]) -> Vec<Option<&[u8]>> {
+        match self.values.as_ref() {
+            Some(rv) => (0..rv.arity()).map(|f| rv.get(key, f)).collect(),
+            None => Vec::new(),
+        }
+    }
+
     /// The `(value, key)` tree, for the clause-carrying scan.
     pub(crate) fn tree(&self) -> &BTreeSet<(IndexValue, Vec<u8>)> {
         &self.tree

@@ -79,6 +79,57 @@ pub fn seg_bounds(min: &IndexValue, max: &IndexValue) -> (Vec<u8>, Vec<u8>) {
     (lo, hi)
 }
 
+/// Encode a row's stored `VALUES` into a cold entry's payload:
+/// `[n u32][per value: 0 | 1‖len u32‖bytes]`, little-endian. An index
+/// that declared no values encodes the EMPTY payload — byte-identical
+/// to the a-train's segments, which carried none.
+pub fn encode_seg_values(values: &[Option<&[u8]>]) -> Vec<u8> {
+    if values.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    out.extend_from_slice(&(values.len() as u32).to_le_bytes());
+    for v in values {
+        match v {
+            None => out.push(0),
+            Some(b) => {
+                out.push(1);
+                out.extend_from_slice(&(b.len() as u32).to_le_bytes());
+                out.extend_from_slice(b);
+            }
+        }
+    }
+    out
+}
+
+/// Decode a cold entry's payload back to its stored values. The empty
+/// payload is the no-values shape; `None` on any malformed frame — a
+/// corrupt payload is a refusal upstream, never a guessed row.
+pub fn decode_seg_values(payload: &[u8]) -> Option<Vec<Option<Vec<u8>>>> {
+    if payload.is_empty() {
+        return Some(Vec::new());
+    }
+    let n = u32::from_le_bytes(payload.get(..4)?.try_into().ok()?) as usize;
+    let mut at = 4usize;
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        match payload.get(at)? {
+            0 => {
+                out.push(None);
+                at += 1;
+            }
+            1 => {
+                let len =
+                    u32::from_le_bytes(payload.get(at + 1..at + 5)?.try_into().ok()?) as usize;
+                out.push(Some(payload.get(at + 5..at + 5 + len)?.to_vec()));
+                at += 5 + len;
+            }
+            _ => return None,
+        }
+    }
+    (at == payload.len()).then_some(out)
+}
+
 /// Escape-and-terminate one component into `out`.
 fn frame_into(out: &mut Vec<u8>, b: &[u8]) {
     for &c in b {

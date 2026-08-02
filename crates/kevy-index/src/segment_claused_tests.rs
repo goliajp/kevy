@@ -315,3 +315,47 @@ fn count_claused_matches_the_query_total() {
         seg.count(&IndexValue::I64(100), &IndexValue::I64(199)),
     );
 }
+
+/// The decoded-stream walk answers exactly what the hot walk answers
+/// for the same entries — the cold path's clause engine pin. Every
+/// clause at once: FILTER thins, SORT orders (a valueless row last),
+/// DISTINCT collapses to the group's best, FACET counts the filtered
+/// set, the page truncates.
+#[test]
+fn claused_over_matches_the_hot_walk_for_the_same_entries() {
+    let seg = seeded();
+    let filters = [(0usize, ValueTest::eq(ValType::Str, b"tokyo").unwrap())];
+    let shapes: &[ScalarClauses] = &[
+        ScalarClauses { filters: &filters, ..clauses() },
+        ScalarClauses { sort: Some((0, true, ValType::Str)), ..clauses() },
+        ScalarClauses { distinct: Some((0, ValType::Str)), ..clauses() },
+        ScalarClauses { facets: &[(0, ValType::Str)], ..clauses() },
+        ScalarClauses {
+            filters: &filters,
+            sort: Some((0, false, ValType::Str)),
+            distinct: Some((0, ValType::Str)),
+            facets: &[(0, ValType::Str)],
+            fetch: 2,
+        },
+    ];
+    for (n, c) in shapes.iter().enumerate() {
+        let hot = seg.query_claused(&i(0), &i(100), None, c);
+        let items: Vec<ColdEntryRow> = [
+            (10i64, &b"u1"[..]),
+            (20, b"u2"),
+            (30, b"u3"),
+            (40, b"u4"),
+            (50, b"u5"),
+        ]
+        .iter()
+        .map(|&(v, k)| {
+            (i(v), k.to_vec(), seg.stored_row(k).iter().map(|o| o.map(<[u8]>::to_vec)).collect())
+        })
+        .collect();
+        let (hits, facets) = claused_over(items.into_iter(), c);
+        let pair =
+            |hs: &[ScalarHit]| hs.iter().map(|h| (h.key.clone(), h.okey.clone(), h.dkey.clone())).collect::<Vec<_>>();
+        assert_eq!(pair(&hot.hits), pair(&hits), "shape {n}: hits drifted");
+        assert_eq!(hot.facets, facets, "shape {n}: facets drifted");
+    }
+}

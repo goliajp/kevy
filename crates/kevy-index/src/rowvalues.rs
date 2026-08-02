@@ -112,6 +112,11 @@ impl RowValues {
     }
 
     /// `key`'s value for `field`, or `None` when the row has none.
+    /// How many value fields each row stores.
+    pub(crate) fn arity(&self) -> usize {
+        self.n
+    }
+
     pub(crate) fn get(&self, key: &[u8], field: usize) -> Option<&[u8]> {
         self.rows.get(key)?.get(field)?.bytes()
     }

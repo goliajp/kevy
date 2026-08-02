@@ -25,13 +25,6 @@ use crate::state::Ctx;
 pub(super) const CURSOR_CLAUSE_CONFLICT: &str =
     "CURSOR cannot combine with SORT|DISTINCT|FACET|OFFSET";
 
-/// Clauses walk the hot tree only; an index with cold segments would
-/// silently miss evicted rows, and silence is the one answer this
-/// surface never gives. The claused cold path is its own train.
-pub(super) const COLD_CLAUSE: &str =
-    "clauses on a windowed index with cold segments are not built yet — \
-     use a plain range/COUNT, or query inside the hot window";
-
 /// A ready-made ST_CLAUSE chunk for `msg`.
 pub(super) fn clause_chunk(msg: &str) -> Vec<u8> {
     let mut chunk = vec![ST_CLAUSE];
@@ -46,12 +39,20 @@ pub(super) fn clause_chunk(msg: &str) -> Vec<u8> {
 /// unchanged.
 pub(super) fn run_claused_count(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> Vec<u8> {
     let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg, win| {
-        if win.is_some_and(|w| w.has_cold()) {
-            return Err(clause_chunk(COLD_CLAUSE));
-        }
         let (min, max) = q.bounds_for(spec)?;
         let filters: Vec<(usize, ValueTest)> = filter_tests(spec, &q.filters)?;
-        Ok(seg.count_claused(&min, &max, &filters))
+        // A windowed index's evicted half counts from the cold
+        // payloads — same predicates, frozen values. A corrupt
+        // segment refuses; never a partial number.
+        let cold = match win
+            .filter(|w| w.has_cold())
+            .map(|w| w.cold_claused_count(spec.ty, &min, &max, &filters))
+            .transpose()
+        {
+            Ok(n) => n.unwrap_or(0),
+            Err(_) => return Err(vec![super::ST_NOINDEX]),
+        };
+        Ok(seg.count_claused(&min, &max, &filters) + cold)
     });
     match res {
         Ok(Err(chunk)) => chunk,
@@ -68,9 +69,6 @@ pub(super) fn run_claused_count(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> 
 
 pub(super) fn run_claused_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> Vec<u8> {
     let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg, win| {
-        if win.is_some_and(|w| w.has_cold()) {
-            return Err(clause_chunk(COLD_CLAUSE));
-        }
         let (min, max) = q.bounds_for(spec)?;
         let filters: Vec<(usize, ValueTest)> = filter_tests(spec, &q.filters)?;
         let sort = sort_field(spec, &q.sort)?;
@@ -87,7 +85,14 @@ pub(super) fn run_claused_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> 
             fetch: q.limit + q.offset,
         };
         let cursor = q.cursor(spec.ty);
-        Ok(seg.query_claused(&min, &max, cursor.as_ref(), &clauses))
+        let mut page = seg.query_claused(&min, &max, cursor.as_ref(), &clauses);
+        if let Some(w) = win.filter(|w| w.has_cold()) {
+            match w.cold_claused(spec.ty, &min, &max, cursor.as_ref(), &clauses) {
+                Ok((chits, cfacets)) => merge_cold_claused(&mut page, chits, cfacets, &clauses),
+                Err(_) => return Err(vec![super::ST_NOINDEX]),
+            }
+        }
+        Ok(page)
     });
     match res {
         Ok(Err(chunk)) => chunk,
@@ -96,6 +101,35 @@ pub(super) fn run_claused_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> 
         Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
         Err(_) => vec![ST_NOINDEX],
     }
+}
+
+/// Merge the cold page into the hot one at the shard level: the
+/// union re-orders by the page's own rule (`merge_claused` with
+/// offset 0 — the origin drains the real offset after ITS merge),
+/// re-collapses under DISTINCT, and re-truncates to the fetch window.
+/// Facets fold by identity (the hot label wins) and re-sort. The
+/// FILTER-with-CURSOR resume recomputes over the merged page — the
+/// hot-only cursor would skip cold rows sorting after it.
+fn merge_cold_claused(
+    page: &mut kevy_index::ClausedPage,
+    chits: Vec<kevy_index::ScalarHit>,
+    cfacets: Vec<Vec<kevy_index::FacetBucket>>,
+    c: &ScalarClauses<'_>,
+) {
+    let all: Vec<(kevy_index::ScalarHit, ())> =
+        page.hits.drain(..).chain(chits).map(|h| (h, ())).collect();
+    let merged =
+        kevy_index::merge_claused(all, c.sort.map(|(_, d, _)| d), c.distinct.is_some(), 0, c.fetch);
+    page.hits = merged.into_iter().map(|(h, ())| h).collect();
+    kevy_index::fold_facets(&mut page.facets, cfacets);
+    kevy_index::sort_facets(&mut page.facets);
+    page.cursor = match c.selects() || page.hits.len() < c.fetch {
+        true => None,
+        false => page.hits.last().map(|h| kevy_index::Cursor {
+            value: h.value.clone(),
+            key: h.key.clone(),
+        }),
+    };
 }
 
 /// Hit block (+ per-hit clause keys when the query carried the clause),
