@@ -183,6 +183,16 @@ impl TextSegment {
         self.values.as_ref().map_or(0, DocValues::arity)
     }
 
+    /// Every stored value of one document by id, aligned with the
+    /// declared VALUES order — what a freeze carries into a cold doc
+    /// record so the value-reading clauses can serve cold hits.
+    pub(crate) fn doc_values_of(&self, id: u32) -> Vec<Option<&[u8]>> {
+        match self.values.as_ref() {
+            Some(dv) => (0..dv.arity()).map(|f| dv.get(id, f)).collect(),
+            None => Vec::new(),
+        }
+    }
+
     /// One row's stored value for a declared value field, as raw bytes.
     /// `None` when the row is not indexed here, the field was not
     /// declared, or this document has no value for it.
@@ -458,6 +468,8 @@ mod segment_stats;
 
 #[path = "segment_phrase.rs"]
 mod segment_phrase;
+pub use segment_phrase::{Clauses, parse_clauses};
+pub(crate) use segment_phrase::{distinct_tokens, field_spans};
 
 #[path = "segment_scope.rs"]
 mod segment_scope;
