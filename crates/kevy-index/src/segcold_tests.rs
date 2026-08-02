@@ -141,3 +141,25 @@ fn seg_bounds_cover_exactly_the_value_interval() {
     assert_eq!(hits.len(), 16, "4 values x 4 row keys: {hits:?}");
     assert!(hits.iter().all(|i| (0..=3).contains(i)));
 }
+
+#[test]
+fn seg_values_payload_round_trips_and_refuses_garbage() {
+    let cases: &[&[Option<&[u8]>]] = &[
+        &[],
+        &[None],
+        &[Some(b"42"), None, Some(b"")],
+        &[Some(b"a-longer-value-with-bytes\x00inside"), Some(b"x")],
+    ];
+    for vals in cases {
+        let payload = encode_seg_values(vals);
+        let back = decode_seg_values(&payload).expect("decodes");
+        let want: Vec<Option<Vec<u8>>> = vals.iter().map(|o| o.map(<[u8]>::to_vec)).collect();
+        assert_eq!(back, want);
+    }
+    // The empty payload IS the no-values shape (a-train segments).
+    assert!(encode_seg_values(&[]).is_empty());
+    // Truncation and a bad tag both refuse.
+    let p = encode_seg_values(&[Some(b"hello"), None]);
+    assert!(decode_seg_values(&p[..p.len() - 1]).is_none(), "truncated");
+    assert!(decode_seg_values(&[9, 0, 0, 0]).is_none(), "bad shape");
+}

@@ -40,13 +40,17 @@ pub use composite::{
 };
 pub use segment::{Cursor, Segment, SegmentStats};
 pub use segment_claused::{
-    ClausedPage, FacetBucket, ScalarClauses, ScalarHit, fold_facets, merge_claused,
+    ClausedPage, ColdEntryRow, FacetBucket, ScalarClauses, ScalarHit, claused_over, fold_facets,
+    merge_claused, values_pass,
     scalar_sorted_order, sort_facets,
 };
 pub use table::{
     MAX_TABLES, OrderPath, TableCatalog, TableIndex, TableSpec, WindowSpec, compile_table, window_for,
 };
-pub use segcold::{ColdBloom, decode_seg_key, seg_bounds, seg_key, value_order_bytes};
+pub use segcold::{
+    ColdBloom, decode_seg_key, decode_seg_values, encode_seg_values, seg_bounds, seg_key,
+    value_order_bytes,
+};
 pub use table_verify::{IndexVerify, TableEnsure, TableVerify, spec_diff};
 pub use table_wire::{TABLE_DECLARE_USAGE, parse_table_declare};
 pub use value::{IndexValue, ValueTest, order_key};

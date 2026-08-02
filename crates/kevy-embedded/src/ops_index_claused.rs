@@ -13,23 +13,6 @@ use super::sync_segs;
 use crate::store::{Store, lock_write};
 use crate::{KevyError, KevyResult};
 
-/// Clauses walk the hot tree only; an index with cold segments would
-/// silently miss evicted rows, and silence is the one answer this
-/// surface never gives. The claused cold path is its own train.
-fn refuse_cold_clauses(win: crate::ops_index::WinRef<'_>) -> KevyResult<()> {
-    #[cfg(not(target_arch = "wasm32"))]
-    if win.is_some_and(|w| w.has_cold()) {
-        return Err(KevyError::InvalidInput(
-            "clauses on a windowed index with cold segments are not built yet — \
-             use a plain range/COUNT, or query inside the hot window"
-                .into(),
-        ));
-    }
-    #[cfg(target_arch = "wasm32")]
-    let _ = win;
-    Ok(())
-}
-
 /// One `FILTER` predicate: which stored value field it reads, and the
 /// test on it — the wire's `RANGE` / `EQ` shapes, in-process.
 ///
@@ -302,9 +285,18 @@ impl Store {
         let opts = ScalarQueryOpts { filters, ..ScalarQueryOpts::default() };
         let r = resolve(&spec, &opts)?;
         let mut total = 0u64;
-        self.for_each_segment_windowed(name, |_, seg, win| {
-            refuse_cold_clauses(win)?;
+        self.for_each_segment_windowed(name, |spec, seg, win| {
             total += seg.count_claused(min, max, &r.filters);
+            // The evicted half counts from the cold payloads — same
+            // predicates, frozen values; a corrupt segment refuses.
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(w) = win.filter(|w| w.has_cold()) {
+                total += w
+                    .cold_claused_count(spec.ty, min, max, &r.filters)
+                    .map_err(|e| KevyError::Io(std::io::Error::other(e)))?;
+            }
+            #[cfg(target_arch = "wasm32")]
+            let _ = (spec, win);
             Ok(())
         })?;
         Ok(total)
@@ -327,13 +319,23 @@ impl Store {
             let mut g = lock_write(shard);
             let inner = &mut *g;
             sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
-            if let Some((_, seg)) = inner.idx_segs.segs.iter().find(|(s, _)| s.name == name) {
+            if let Some((_spec, seg)) = inner.idx_segs.segs.iter().find(|(s, _)| s.name == name) {
                 found = true;
-                #[cfg(not(target_arch = "wasm32"))]
-                refuse_cold_clauses(inner.idx_segs.window_of(name))?;
                 let page = seg.query_claused(min, max, cursor, clauses);
                 all.extend(page.hits.into_iter().map(|h| (h, ())));
                 fold_facets(&mut facets, page.facets);
+                // The shard's evicted half joins the union — the
+                // origin merge below re-orders, re-collapses and
+                // truncates the lot, so cold hits need no shard-level
+                // pre-merge here.
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(w) = inner.idx_segs.window_of(name).filter(|w| w.has_cold()) {
+                    let (chits, cfacets) = w
+                        .cold_claused(_spec.ty, min, max, cursor, clauses)
+                        .map_err(|e| KevyError::Io(std::io::Error::other(e)))?;
+                    all.extend(chits.into_iter().map(|h| (h, ())));
+                    fold_facets(&mut facets, cfacets);
+                }
             }
         }
         if !found {

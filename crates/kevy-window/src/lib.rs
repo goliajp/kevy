@@ -11,7 +11,11 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use kevy_index::{ColdBloom, IndexValue, ValType, WindowSpec, decode_seg_key, seg_bounds, seg_key};
+use kevy_index::{
+    ColdBloom, ColdEntryRow, FacetBucket, IndexValue, ScalarClauses, ScalarHit, ValType,
+    WindowSpec, claused_over, decode_seg_key, decode_seg_values, encode_seg_values, seg_bounds,
+    seg_key, values_pass,
+};
 
 /// One index's window state on one shard.
 pub struct WindowRt {
@@ -117,6 +121,72 @@ impl WindowRt {
         Ok(out)
     }
 
+    /// The clause-carrying cold count: the FILTER predicates applied
+    /// to each live cold entry's payload values. `Err` on a corrupt
+    /// segment — the query reports it, never a partial number.
+    pub fn cold_claused_count(
+        &self,
+        ty: ValType,
+        min: &IndexValue,
+        max: &IndexValue,
+        filters: &[(usize, kevy_index::ValueTest)],
+    ) -> Result<u64, String> {
+        let mut n = 0u64;
+        for (_, _, vals) in self.decode_range(ty, min, max, None)? {
+            if values_pass(&vals, filters) {
+                n += 1;
+            }
+        }
+        Ok(n)
+    }
+
+    /// The clause-carrying cold page: every live cold entry in
+    /// `[min, max]` (past `cursor` when one rides), decoded and fed to
+    /// the shared clause walk — the same FILTER / SORT / DISTINCT /
+    /// FACET semantics the hot tree runs, over the frozen payloads.
+    pub fn cold_claused(
+        &self,
+        ty: ValType,
+        min: &IndexValue,
+        max: &IndexValue,
+        cursor: Option<&kevy_index::Cursor>,
+        c: &ScalarClauses<'_>,
+    ) -> Result<(Vec<ScalarHit>, Vec<Vec<FacetBucket>>), String> {
+        let items = self.decode_range(ty, min, max, cursor)?;
+        Ok(claused_over(items.into_iter(), c))
+    }
+
+    /// Every live cold entry of `[min, max]` past `cursor`, decoded to
+    /// `(value, row_key, payload values)` in value order. `Err` on any
+    /// malformed key or payload — corrupt derived spill refuses.
+    fn decode_range(
+        &self,
+        ty: ValType,
+        min: &IndexValue,
+        max: &IndexValue,
+        cursor: Option<&kevy_index::Cursor>,
+    ) -> Result<Vec<ColdEntryRow>, String> {
+        let (lo, hi) = seg_bounds(min, max);
+        let mut out = Vec::new();
+        for seg in &self.cold {
+            for r in seg.range(&lo, &hi) {
+                let (k, payload) = r.map_err(|e| e.to_string())?;
+                let (v, row) =
+                    decode_seg_key(ty, &k).ok_or_else(|| "corrupt cold key".to_string())?;
+                if self.tombs.contains(&row) {
+                    continue;
+                }
+                if cursor.is_some_and(|c| (&v, row.as_slice()) <= (&c.value, c.key.as_slice())) {
+                    continue;
+                }
+                let vals = decode_seg_values(&payload)
+                    .ok_or_else(|| "corrupt cold payload".to_string())?;
+                out.push((v, row, vals));
+            }
+        }
+        Ok(out)
+    }
+
     /// The row keys that would evict if the boundary advanced now —
     /// the row-eviction half reads this BEFORE [`Self::slide`] cuts
     /// the index, so a failed row eviction leaves both layers hot and
@@ -188,7 +258,12 @@ impl WindowRt {
         let build = || -> Result<kevy_seg::SegMeta, String> {
             let mut b = kevy_seg::SegBuilder::create(&path).map_err(|e| e.to_string())?;
             for (v, k) in seg.iter_below(bound) {
-                b.push(&seg_key(v, k), &[]).map_err(|e| e.to_string())?;
+                // The payload carries the row's stored VALUES so the
+                // clause-carrying cold path never re-reads the row
+                // (which may itself have gone cold). No declared
+                // values = the empty payload, the a-train shape.
+                let vals = seg.stored_row(k);
+                b.push(&seg_key(v, k), &encode_seg_values(&vals)).map_err(|e| e.to_string())?;
             }
             b.finish().map_err(|e| e.to_string())
         };
