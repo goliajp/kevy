@@ -223,6 +223,29 @@ fn windowed_index_answers_byte_identically_to_the_control() {
             assert!(page < 19, "{tag}: paged FILTER never terminated");
         }
         assert_eq!(cursor, "0", "{tag}: paged FILTER ended cleanly");
+        // …and the PLAIN range pages the same way (the cursor goes
+        // into the cold walk — a post-filter starves the cold side on
+        // page 2+, the orderpath e2e's catch).
+        let mut cursor = String::new();
+        for page in 0..20 {
+            let mut ev: Vec<&[u8]> = vec![b"IDX.QUERY", b"ev.at",
+                b"RANGE", b"0", b"280", b"LIMIT", b"4"];
+            let mut ctl: Vec<&[u8]> = vec![b"IDX.QUERY", b"ctl.at",
+                b"RANGE", b"0", b"280", b"LIMIT", b"4"];
+            if !cursor.is_empty() {
+                ev.extend_from_slice(&[b"CURSOR", cursor.as_bytes()]);
+                ctl.extend_from_slice(&[b"CURSOR", cursor.as_bytes()]);
+            }
+            let ev = send(c, &ev);
+            let ctl = send(c, &ctl);
+            assert_eq!(ev, ctl, "{tag}: plain page {page}");
+            cursor = ev.lines().nth(2).unwrap_or("0").to_string();
+            if cursor == "0" {
+                break;
+            }
+            assert!(page < 19, "{tag}: plain paging never terminated");
+        }
+        assert_eq!(cursor, "0", "{tag}: plain paging ended cleanly");
     };
     compare(&mut c, "after slide");
     // Ground truth, not just agreement: the whole domain counts 30.

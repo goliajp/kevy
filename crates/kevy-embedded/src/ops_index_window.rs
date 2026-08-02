@@ -15,6 +15,7 @@ use crate::ops_table::TableReg;
 /// One index's eviction step: rows first, index second — a failed row
 /// eviction skips the index cut so the whole batch retries next tick.
 /// Returns whether the index tree changed.
+#[allow(clippy::too_many_arguments)]
 fn evict_and_slide(
     win: &mut WindowRt,
     spec: &kevy_index::IndexSpec,
@@ -22,8 +23,13 @@ fn evict_and_slide(
     store: &mut kevy_store::Store,
     aof: &mut Option<kevy_persist::Aof>,
     segs_dir: &Path,
+    drives_rows: bool,
 ) -> bool {
-    if let Some(rows) = win.pending_rows(seg)
+    // Exactly ONE windowed access path per table drives row eviction
+    // (kevy_index::window_driver); every other one slides only its
+    // own tree.
+    if drives_rows
+        && let Some(rows) = win.pending_rows(seg)
         && !evict_rows(&spec.name, &rows, store, aof, segs_dir)
     {
         return false;
@@ -115,9 +121,13 @@ pub(crate) fn window_tick(
                 (Some(i), None) => {
                     windows.swap_remove(i);
                 }
-                (None, Some(w)) => windows.push((spec.name.clone(), WindowRt::new(w))),
-                (Some(i), Some(w)) if windows[i].1.spec != w => {
-                    windows[i].1 = WindowRt::new(w);
+                (None, Some((w, sh))) => {
+                    windows.push((spec.name.clone(), WindowRt::new(w, sh)));
+                }
+                (Some(i), Some((w, sh)))
+                    if windows[i].1.spec != w || windows[i].1.shape != sh =>
+                {
+                    windows[i].1 = WindowRt::new(w, sh);
                 }
                 _ => {}
             }
@@ -125,7 +135,8 @@ pub(crate) fn window_tick(
             else {
                 continue;
             };
-            moved |= evict_and_slide(win, spec, seg, store, aof, segs_dir);
+            let drives = kevy_index::window_driver(&cat, &spec.name);
+            moved |= evict_and_slide(win, spec, seg, store, aof, segs_dir, drives);
         }
         // An index dropped from the catalog drops its window with it.
         let names: Vec<Vec<u8>> = seg_list.iter().map(|(s, _)| s.name.clone()).collect();

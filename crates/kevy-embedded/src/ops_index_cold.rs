@@ -29,14 +29,15 @@ impl Store {
             all.extend(hits.into_iter().map(|(k, v)| (v, k)));
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(w) = win.filter(|w| w.has_cold()) {
+                // The cursor goes INTO the cold walk so the limit
+                // counts post-cursor entries — filtering afterwards
+                // starves the cold side on any page after the first
+                // (its limit fills with pre-cursor entries that all
+                // drop).
                 let cold = w
-                    .cold_hits(spec.ty, min, max, limit)
+                    .cold_hits(spec.ty, min, max, cursor, limit)
                     .map_err(|e| KevyError::Io(std::io::Error::other(e)))?;
-                let after = |k: &[u8], v: &IndexValue| match cursor {
-                    None => true,
-                    Some(c) => (v, k) > (&c.value, c.key.as_slice()),
-                };
-                all.extend(cold.into_iter().filter(|(k, v)| after(k, v)).map(|(k, v)| (v, k)));
+                all.extend(cold.into_iter().map(|(k, v)| (v, k)));
             }
             #[cfg(target_arch = "wasm32")]
             let _ = (spec, win);

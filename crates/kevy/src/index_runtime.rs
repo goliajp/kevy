@@ -101,11 +101,14 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
         }
         advance_backfill(store, si, 2048);
         if let (Some(win), Some(dir), BuildState::Ready) = (&mut si.window, &segs_dir, &si.build) {
-            let rows = win.pending_rows(&si.seg);
-            if let Some(rows) = &rows {
-                batches.push((table_of(&si.spec.name).to_vec(), rows.clone()));
+            // Exactly ONE windowed access path per table drives row
+            // eviction (two drivers would seal the same batch twice);
+            // every other windowed path only slides its own tree.
+            let drives = window_driver(&ctx.state.catalogs, &si.spec.name);
+            if drives && let Some(rows) = win.pending_rows(&si.seg) {
+                batches.push((table_of(&si.spec.name).to_vec(), rows));
             }
-            st.stats_dirty |= evict_and_slide(win, &si.spec.name, &mut si.seg, store, dir);
+            st.stats_dirty |= evict_and_slide(win, &si.spec.name, &mut si.seg, store, dir, drives);
         }
     }
     // Pass 2: freeze each batch out of its table's text index.
@@ -377,8 +380,9 @@ fn refresh(catalogs: &CatalogState, st: &mut ShardIndexes, store: &mut Store) {
                     // A changed window resets the runtime — the old
                     // spill is unreachable and swept on first slide.
                     let want = window_for(catalogs, &si.spec);
-                    if si.window.as_ref().map(|w| &w.spec) != want.as_ref() {
-                        si.window = want.map(kevy_window::WindowRt::new);
+                    let have = si.window.as_ref().map(|w| (w.spec.clone(), w.shape));
+                    if have != want {
+                        si.window = want.map(|(w, sh)| kevy_window::WindowRt::new(w, sh));
                     }
                     let want_text = text_window_for(catalogs, &si.spec);
                     if si.cold_text.is_some() != want_text {
@@ -406,7 +410,7 @@ fn fresh_shard_index(catalogs: &CatalogState, spec: &IndexSpec, store: &mut Stor
         text: new_text_seg(spec),
         ann: new_ann_seg(spec),
         seg: new_scalar_seg(spec),
-        window: window_for(catalogs, spec).map(kevy_window::WindowRt::new),
+        window: window_for(catalogs, spec).map(|(w, sh)| kevy_window::WindowRt::new(w, sh)),
         cold_text: text_window_for(catalogs, spec).then(window_text::TextColdDir::new),
         spec: spec.clone(),
         build: BuildState::Backfilling { keys, pos: 0 },
@@ -415,7 +419,10 @@ fn fresh_shard_index(catalogs: &CatalogState, spec: &IndexSpec, store: &mut Stor
 
 pub(crate) use kevy_window::WindowRt;
 mod window_slide;
-use window_slide::{evict_and_slide, freeze_text_batches, shard_segs_dir, table_of, text_window_for, window_for};
+use window_slide::{
+    evict_and_slide, freeze_text_batches, shard_segs_dir, table_of, text_window_for, window_driver,
+    window_for,
+};
 mod window_text;
 pub(crate) use window_text::{ColdHit, ColdPageQuery, TextColdDir};
 mod row_apply;
