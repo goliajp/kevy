@@ -55,7 +55,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-index"
-version = "4.0.0"
+version = "4.1.1"
 
 [[package]]
 name = "kevy-index-fuzz"

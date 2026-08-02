@@ -57,6 +57,7 @@ dependencies = [
  "kevy-sys",
  "kevy-text",
  "kevy-vector",
+ "kevy-window",
 ]
 
 [[package]]
@@ -114,6 +115,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kevy-seg"
+version = "4.1.1"
+dependencies = [
+ "kevy-sys",
+]
+
+[[package]]
 name = "kevy-store"
 version = "4.1.1"
 dependencies = [
@@ -121,6 +129,7 @@ dependencies = [
  "kevy-hash",
  "kevy-map",
  "kevy-ranktree",
+ "kevy-seg",
  "kevy-vlog",
 ]
 
@@ -141,6 +150,14 @@ name = "kevy-vlog"
 version = "4.1.1"
 dependencies = [
  "kevy-sys",
+]
+
+[[package]]
+name = "kevy-window"
+version = "4.1.1"
+dependencies = [
+ "kevy-index",
+ "kevy-seg",
 ]
 
 [[package]]

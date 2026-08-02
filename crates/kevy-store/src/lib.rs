@@ -320,3 +320,11 @@ mod tests_string_encoding;
 mod tests_tier;
 #[cfg(all(test, feature = "std", not(target_arch = "wasm32")))]
 mod tests_tier_peek;
+
+/// Probe: force the kevy-seg dependency edge to link exactly as the
+/// row-segment train does, with zero behavior — the single-variable
+/// codegen-effect experiment.
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+pub fn _probe_seg_edge(p: &std::path::Path) -> bool {
+    kevy_seg::Seg::open(p).is_ok()
+}
