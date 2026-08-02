@@ -55,10 +55,16 @@ fn evict_and_slide(
             }
         }
     }
-    win.slide(&spec.name, seg, segs_dir).unwrap_or_else(|e| {
+    let moved = win.slide(&spec.name, seg, segs_dir).unwrap_or_else(|e| {
         eprintln!("kevy-embedded: window slide '{}': {e}", String::from_utf8_lossy(&spec.name));
         false
-    })
+    });
+    if moved {
+        // Same bulk-free contract as the server tick: ask glibc to
+        // return the slid bucket's arena to the OS.
+        kevy_sys::malloc_trim_now();
+    }
+    moved
 }
 
 /// An owned argv as the AOF's ArgvView.

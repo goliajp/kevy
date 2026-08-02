@@ -121,7 +121,13 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
                 }
             }
             match win.slide(&si.spec.name, &mut si.seg, dir) {
-                Ok(true) => st.stats_dirty = true,
+                Ok(true) => {
+                    st.stats_dirty = true;
+                    // A slide bulk-frees an entire bucket's values;
+                    // glibc keeps the arena unless told. Best-effort,
+                    // slide-frequency (per bucket, not per op).
+                    kevy_sys::malloc_trim_now();
+                }
                 Ok(false) => {}
                 // The tree is untouched on a failed slide (build
                 // precedes the cut); log once per tick and retry.

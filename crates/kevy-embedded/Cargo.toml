@@ -32,7 +32,7 @@ default = ["core", "persist", "index", "text", "vector", "replicate", "listener"
 core = []
 # Snapshot + AOF durability (kevy-persist): `with_persist`, `save_snapshot`,
 # `rewrite_aof`, AOF replay on open.
-persist = ["dep:kevy-persist"]
+persist = ["dep:kevy-persist", "dep:kevy-sys"]
 # Secondary indexes + materialized views (kevy-index).
 index = ["dep:kevy-index", "dep:kevy-window"]
 # Full-text index segments (needs `index` for the segment plumbing).
