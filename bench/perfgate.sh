@@ -54,6 +54,10 @@ N_ZALG=${N_ZALG:-200000}
 RAMP=${RAMP:-1.0}                # skip the connect/ramp transient
 WINDOW=${WINDOW:-3.0}            # the measured steady-state window
 INSTANCES=${INSTANCES:-3}
+# Optional angle filter (space-separated metric names): measure ONLY
+# these angles — the bisect driver's handle. Unmeasured metrics take
+# the skip-with-notice path; empty = everything.
+ANGLES=${PERFGATE_ANGLES:-}
 # Hashtags pinning shard 0..7 under the contiguous slot split (CRC16).
 TAGS=(t3 t43 t2 t42 t1 t41 t0 t40)
 
@@ -104,7 +108,13 @@ trap on_exit EXIT
 command -v redis-benchmark >/dev/null || refuse "redis-benchmark not installed"
 command -v redis-cli >/dev/null || refuse "redis-cli not installed (the --threads angles read the server's counter through it)"
 [ -x "$BIN" ] || refuse "$BIN is not executable"
-LEFTOVER=$(pgrep -af "kevy|redis-benchmark" | grep -v perfgate | grep -v claude || true)
+# The sweep pattern "kevy" also matches the bench ACCOUNT NAME inside
+# a driver's `sudo -u kevybench …` cmdline — a wrapper script that
+# never touched a server would be refused as a leftover. Exclude the
+# sudo wrapper line itself; real leftover servers/benchmarks are
+# direct processes, not sudo shells.
+LEFTOVER=$(pgrep -af "kevy|redis-benchmark" | grep -v perfgate | grep -v claude \
+  | grep -v "sudo -u kevybench" || true)
 [ -n "$LEFTOVER" ] && refuse "leftover bench processes (sweep first):
 $LEFTOVER"
 # Instantaneous idle%, not 1-min loadavg: loadavg measures the past, so a
@@ -338,24 +348,36 @@ angle_run() { # $1 = metric name -> ops/s on stdout
   esac
 }
 
+# Whether the filter admits this metric (no filter = everything).
+want_angle() { [ -z "$ANGLES" ] || [[ " $ANGLES " == *" $1 "* ]]; }
+group_wanted() { local m; for m in $2; do want_angle "$m" && return 0; done; return 1; }
+
 measure_all() { # $1 = cand|ref, $2 = binary
   local who=$1 m
   BIN=$2
-  server_start "--cluster"
-  warm_cluster
-  for m in pinned_cluster_get pinned_cluster_set pinned_compat_get pinned_compat_set; do
-    sample "$who" "$m" "$(angle_run "$m")"
-  done
-  server_start ""   # legacy angle: cluster off (the historical configuration)
-  warm_legacy
-  # get/set plus the five arena cells, gated here instead of living as
-  # per-release ledger footnotes (LPUSH and ZADD are the noisiest).
-  for m in legacy_8sh_get legacy_8sh_set legacy_8sh_incr legacy_8sh_sadd \
-           legacy_8sh_hset legacy_8sh_lpush legacy_8sh_zadd; do
-    sample "$who" "$m" "$(angle_run "$m")"
-  done
-  warm_zalg
-  sample "$who" zalg_zinterstore "$(run_zalg)"
+  local pinned="pinned_cluster_get pinned_cluster_set pinned_compat_get pinned_compat_set"
+  local legacy="legacy_8sh_get legacy_8sh_set legacy_8sh_incr legacy_8sh_sadd \
+legacy_8sh_hset legacy_8sh_lpush legacy_8sh_zadd"
+  if group_wanted x "$pinned"; then
+    server_start "--cluster"
+    warm_cluster
+    for m in $pinned; do
+      want_angle "$m" && sample "$who" "$m" "$(angle_run "$m")"
+    done
+  fi
+  if group_wanted x "$legacy" || want_angle zalg_zinterstore; then
+    server_start ""   # legacy angle: cluster off (the historical configuration)
+    warm_legacy
+    # get/set plus the five arena cells, gated here instead of living
+    # as per-release ledger footnotes (LPUSH and ZADD are the noisiest).
+    for m in $legacy; do
+      want_angle "$m" && sample "$who" "$m" "$(angle_run "$m")"
+    done
+    if want_angle zalg_zinterstore; then
+      warm_zalg
+      sample "$who" zalg_zinterstore "$(run_zalg)"
+    fi
+  fi
   server_stop
 }
 
