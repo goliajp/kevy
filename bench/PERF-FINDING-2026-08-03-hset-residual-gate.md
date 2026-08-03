@@ -32,9 +32,20 @@ per-word claim 把它消掉了)。M1 上 hset 吞吐差 -12.1%:**1.1pp 的
    (与死掉的 LIFO 热缓存的区别:按 span 内地址序而非时间序,保
    致密化)/ size-class 内 bump 指针回退策略。**任何尝试必须与 M3
    同轴复测**(热缓存 -137MB 蒸发四轮的教训)。
-4. 验证路径(先于任何实现):cache-miss 计数对测(perf stat
-   L1-dcache-load-misses / LLC-misses,ON vs OFF,hset 角度)——
-   若 miss 差与吞吐差同量级,改性成立;不同量级则重新 decompose。
+4. ~~验证路径~~ **已验证成立(同日,3 轮交错 perf stat)**:
+
+   | 每 op | ON (kevy-alloc) | OFF (glibc) | 差 |
+   |---|---|---|---|
+   | instructions | 11,636 | 11,629 | **+0.06%(相同)** |
+   | L1-dcache miss | **81.1** | **26.5** | **×3.06** |
+   | IPC | 1.60 | 1.81 | -11% |
+   | 吞吐(本轮) | 29.4M/6s | 32.5M/6s | -9.5% |
+
+   同样的指令数、三倍的 L1 miss、IPC 降幅 ≈ 吞吐降幅 —— residual
+   是**纯数据局部性税**,量级自洽(+54.6 miss/op × ~4.5cyc ≈ 250cyc,
+   实测 cycles/op 差 784,余为更深层级与流水线次生)。设计轮的靶
+   即分配地址布局的 L1 行为;LLC 差绝对量小(0.068 vs 0.045/op),
+   税几乎全在 L1→L2。
 
 ## 环境记档
 
