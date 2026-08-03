@@ -147,6 +147,7 @@ class Conn:
         self.s = socket.create_connection(("127.0.0.1", port), 5)
         self.s.settimeout(deadline)
         self.buf = b""
+        CONNS[tag] = self
 
     def send(self, *parts):
         self.s.sendall(enc(*parts))
@@ -192,6 +193,8 @@ class Conn:
             pass
 
 STEP = ["(none)"]
+# tag -> live Conn, so a wedge's triage can inspect the exact socket.
+CONNS = {}
 
 def step(name):
     """Where we are, so a deadline miss names the exact operation that
@@ -328,12 +331,37 @@ except (AssertionError, socket.timeout, OSError) as e:
             probe.close()
         except Exception as pe:
             print(f"uringgate: triage — fresh conn ALSO hung ({pe!r})"
-                  f" => the reactor loop is stuck, not just the conn")
+                  f" => the reactor loop is stuck, not just the conn)")
+        # The wedged socket's kernel view while the wedge is live:
+        # queued-but-unread bytes on either side distinguish "server
+        # never wrote" from "server wrote, reactor never re-armed the
+        # read" — the exact fork the CI-only reproductions leave
+        # undecided (2026-08-03 case: 2/~1800 rounds on 2-vCPU
+        # runners, zero in 2400 local rounds at any core count).
+        try:
+            import subprocess
+            prefix = STEP[0].split(":")[0]
+            wedged = next(
+                (c for t, c in reversed(list(CONNS.items())) if t.startswith(prefix)),
+                None,
+            )
+            lp = wedged.s.getsockname()[1] if wedged else 0
+            out = subprocess.run(["ss", "-tin", "sport", f"= :{lp}"],
+                                 capture_output=True, text=True, timeout=5).stdout
+            print(f"uringgate: triage — wedged socket kernel state (local port {lp}):")
+            print(out.strip() or "  (ss produced nothing)")
+        except Exception as se:
+            print(f"uringgate: triage — ss unavailable ({se!r})")
     sys.exit(1)
 
 scen = "sq-pressure + big-arg-pipeline + blocking-tail" if uring else "blocking-tail"
 print(f"uringgate: {rounds} rounds x ({scen}) in {time.time()-t0:.1f}s")
 PY
 rc=$?
-[ $rc -eq 0 ] || { echo "uringgate: FAIL"; exit 1; }
+[ $rc -eq 0 ] || {
+    echo "uringgate: FAIL"
+    echo "uringgate: server log tail (the wedge's other side):"
+    tail -25 "$DIR/srv.log" | sed "s/^/    /"
+    exit 1
+}
 echo "uringgate: PASS — no connection wedged under SQ pressure, a deep big-arg pipeline, or after a blocking timeout"
