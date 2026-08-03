@@ -154,7 +154,6 @@ fn compare_stores(s: &Store, c: &Store, tag: &str) {
             vec![b"HEXISTS", key, b"at"],
             vec![b"EXISTS", key],
             vec![b"TYPE", key],
-            vec![b"TTL", key],
             vec![b"HSCAN", key, b"0"],
         ] {
             let name = String::from_utf8_lossy(cmd[0]).into_owned();
@@ -165,6 +164,20 @@ fn compare_stores(s: &Store, c: &Store, tag: &str) {
                 String::from_utf8_lossy(key)
             );
         }
+        // TTL is wall-clock-relative: the two reads happen a real
+        // instant apart, so a second boundary can sit between them
+        // (999 vs 1000 on a slow runner). Equal-liveness ±1s is the
+        // invariant; exact equality is a race.
+        let ttl_of = |st: &Store| -> i64 {
+            let r = run(st, &[b"TTL", key]);
+            String::from_utf8_lossy(&r).trim_start_matches(':').trim().parse().unwrap()
+        };
+        let (a, b) = (ttl_of(s), ttl_of(c));
+        assert!(
+            (a - b).abs() <= 1 && (a > 0) == (b > 0),
+            "{tag}: TTL {} diverged ({a} vs {b})",
+            String::from_utf8_lossy(key)
+        );
     }
     assert_eq!(run(s, &[b"DBSIZE"]), run(c, &[b"DBSIZE"]), "{tag}: DBSIZE");
     // SCAN: full sweep, order-insensitive key-set equality.
