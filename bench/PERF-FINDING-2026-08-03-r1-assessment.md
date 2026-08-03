@@ -62,5 +62,8 @@ SME 取舍归属主"。评估者按 A 最符合 v4 以来的 feature 门控惯�
   收窄。诚实记:OFF 侧仅 2 样本、spread ~10%,0.974 的精度有限,
   但方向明确好于 0.85 时代;若 merge 决策需要更细,加样即可。
 - allocgate-mem runner 时序修(欠,分支账内)。
-- hset 剩余税 perf-record 复判(Pre-Phase-B gate)= residual 设计轮
-  的第一步,不论 A/B/C 都值得。
+- hset 剩余税 perf-record 复判 **已做**(2026-08-03,
+  `PERF-FINDING-2026-08-03-hset-residual-gate.md`):分配器自身时间
+  ON 11.1% vs OFF 10.1%,差 1.1pp —— **gate SAYS NO**,kevy-alloc
+  代码已无 polish 靶;residual 改性为"分配对象布局/局部性税",
+  下一步 = cache-miss 对测验证改性,再谈设计。
