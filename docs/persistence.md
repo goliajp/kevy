@@ -203,6 +203,8 @@ window is tolerable. Neither choice affects transactions.
 
 **TTL persistence.** TTLs are written as absolute Unix-millisecond deadlines (`PEXPIREAT` in the AOF, an absolute field in the snapshot format), so a key keeps its original expiry instant across any number of restarts and the time the process spent down is subtracted correctly. Older AOFs that recorded relative remaining time still load (treated as relative on entry); new writes are always absolute. `EXPIREAT` and `PEXPIREAT` are exposed as client commands.
 
+One consequence worth knowing, reported from a consumer's gate: because the persisted deadline is **wall-clock** time, a system clock step (NTP correction) between the write and a later replay moves the remaining TTL by exactly the step, in either direction — a backwards step reads back a *longer* remainder, a forwards step a *shorter* one. This is inherent to absolute wall deadlines (Redis has the same property, in-memory too); kevy's live TTLs run on the monotonic clock and are immune — only the restart boundary converts through wall time. For short rate-limiter TTLs, treat the remainder as accurate to within your host's clock discipline across a restart.
+
 **Shard-layout changes are crash-idempotent.** Changing `--threads` / `shards` writes new snapshots under `.reshard` temp names, commits via a durable `reshard.journal`, and rolls an interrupted migration forward on the next start. Source files survive as `.premigration.<unix_ts>` backups; the journal is the commit point and must never be deleted by hand.
 
 **What is not persisted.** Pub/sub channels, subscriptions, and undelivered messages live only in memory. Blocking-command waiters such as `BLPOP` and blocking `XREAD` are connection state, not data. Neither is written to the AOF or snapshot, and neither is replayed.
@@ -413,6 +415,40 @@ The per-record overhead is 8 bytes; for the mailrs-shaped workload
 (mixed small commands) the disk cost measures in the low single-digit
 percent, and the CRC rides the hardware instruction on both server
 architectures.
+
+### Internal frames — and what "the truth set" means
+
+Two kinds of record carry a NUL-prefixed name no client-typed RESP
+verb can collide with:
+
+- **Transaction brackets** (`\0KEVYTXNBEGIN` / `\0KEVYTXNCOMMIT`) —
+  make a group of appends replay all-or-nothing.
+- **The segment stitch** (`\0KEVYSEGMENTED <file>`) — records that a
+  batch of rows was evicted from the hot layer into a cold segment
+  file under `segs-<shard>/`. Replay re-does that eviction: the rows'
+  write frames precede the stitch in the log, replay brings them in
+  and the stitch asks them back out. A write frame *after* the stitch
+  is a revival and simply stays (hot-first reads shadow the segment
+  copy).
+
+Once a data dir contains `segs-<shard>/` directories, **the AOF alone
+is no longer the complete truth**. The truth set is: the snapshots
+(`dump-*.rdb`) + the AOFs (`aof-*.aof`) + the segment directories
+(`segs-*/`, each holding its segment files and the `segs.manifest`
+ledger that makes them real). A backup must copy all three; segments
+are immutable once sealed, so incremental backup is "copy the new
+segment files and the manifest".
+
+The manifest — not the stitch frame — is the segment set's source of
+truth (it is fsynced *before* the frame is logged). Two consequences:
+a stitch frame naming a segment the manifest does not hold means the
+segment directory was damaged after the fact, and startup **refuses
+by name** rather than silently dropping the rows whose only durable
+copy is unreachable; conversely a stitch frame lost to a snapshot
+truncation or an AOF rewrite is harmless — by then the hot layer no
+longer holds those rows, or (if a rewrite view froze mid-eviction)
+the rows survive in both tiers and hot-first reads shadow the
+segment copy.
 
 ### Resync replay — recovering the good tail
 

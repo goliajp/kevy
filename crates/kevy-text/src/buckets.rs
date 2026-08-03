@@ -152,6 +152,16 @@ impl Buckets {
         self.len() == 0
     }
 
+    /// The `Many` index-map entry count (`One` keeps none) — the
+    /// per-posting structure term of the memory formula, exposed so
+    /// the segment can maintain it by delta.
+    pub(crate) fn index_len(&self) -> u64 {
+        match self {
+            Buckets::One { .. } => 0,
+            Buckets::Many(m) => m.index.len() as u64,
+        }
+    }
+
     /// O(1): buckets are tf-descending.
     pub(crate) fn max_tf(&self) -> u32 {
         match self {

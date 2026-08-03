@@ -17,7 +17,7 @@ description = "Unified client for kevy — switch between in-process embedded an
 # 1.14.0 closes the wrap-parity gap vs the kevy 3.17 server surface:
 # blocking pops, hash field-TTL, zset algebra, IDX.*, FEED.*, and
 # non-atomic pipeline batching (see README's op-family matrix).
-version = "2.0.0"
+version = "2.1.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -33,10 +33,10 @@ categories = ["database", "caching", "api-bindings"]
 workspace = true
 
 [dependencies]
-kevy-embedded = { path = "../kevy-embedded", version = "4.0.0" }
-kevy-resp = { path = "../kevy-resp", version = "4.0.0" }
-kevy-resp-client = { path = "../kevy-resp-client", version = "4.0.0" }
-kevy-hash = { path = "../kevy-hash", version = "4.0.0" }
+kevy-embedded = { path = "../kevy-embedded", version = "4.1.1" }
+kevy-resp = { path = "../kevy-resp", version = "4.1.1" }
+kevy-resp-client = { path = "../kevy-resp-client", version = "4.1.1" }
+kevy-hash = { path = "../kevy-hash", version = "4.1.1" }
 
 [dev-dependencies]
 # tests/wrap_parity.rs boots an in-process kevy-rt reactor with the

@@ -72,11 +72,14 @@ pub(crate) struct DocValues {
     /// id → its values, flat with stride `n`, so a document costs no
     /// allocation of its own and a lookup is one index.
     vals: Vec<Val>,
+    /// Running Σ of every slot's spill heap — maintained per slot
+    /// write, so the memory formula never walks the column.
+    heap_bytes: u64,
 }
 
 impl DocValues {
     pub(crate) fn new(n: usize) -> Self {
-        Self { n, vals: Vec::new() }
+        Self { n, vals: Vec::new(), heap_bytes: 0 }
     }
 
     /// Store `id`'s values, growing the flat table as ids are handed out.
@@ -87,10 +90,13 @@ impl DocValues {
             self.vals.resize(base + self.n, Val::Absent);
         }
         for f in 0..self.n {
-            self.vals[base + f] = match values.get(f).copied().flatten() {
+            let new = match values.get(f).copied().flatten() {
                 Some(v) => Val::store(v),
                 None => Val::Absent,
             };
+            self.heap_bytes += new.heap();
+            self.heap_bytes -= self.vals[base + f].heap();
+            self.vals[base + f] = new;
         }
     }
 
@@ -114,8 +120,15 @@ impl DocValues {
     }
 
     /// Approximate heap bytes — the stored-value term of the memory
-    /// formula.
+    /// formula. O(1): the slot table charges by capacity and the spill
+    /// heap is a running counter.
     pub(crate) fn approx_bytes(&self) -> u64 {
+        self.vals.capacity() as u64 * std::mem::size_of::<Val>() as u64 + self.heap_bytes
+    }
+
+    /// The walking reference for the invariant test.
+    #[cfg(test)]
+    pub(crate) fn recompute_bytes(&self) -> u64 {
         self.vals.capacity() as u64 * std::mem::size_of::<Val>() as u64
             + self.vals.iter().map(Val::heap).sum::<u64>()
     }

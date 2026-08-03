@@ -55,6 +55,13 @@ impl<C: Commands> Shard<C> {
         // Restore: snapshot (state as of last SAVE) then replay the AOF (writes
         // since that SAVE). The AOF is truncated at each SAVE, so this never
         // double-applies. Replay goes straight to the store (no re-logging).
+        // Row segments are truth: load the registered set FIRST — a
+        // v7 snapshot's stub records and the AOF's SEGMENTED frames
+        // both resolve against it.
+        let segs_dir = kevy_persist::layout::segs_dir(&self.data_dir, self.id);
+        if let Err(e) = self.store.enable_seg_rows(&segs_dir) {
+            return Err(io::Error::other(format!("shard {}: {e}", self.id)));
+        }
         let snap = self.snapshot_path();
         if snap.exists()
             && let Err(e) = load_snapshot(&mut self.store, &snap)
@@ -74,7 +81,18 @@ impl<C: Commands> Shard<C> {
             // backstops it so a bigger-than-budget log can never
             // outrun the batch budget while the reactor is not yet up.
             let mut frames: u64 = 0;
+            let mut torn: Option<String> = None;
             let apply = |args: kevy_persist::Argv| {
+                if let Some(f) = kevy_persist::segmented_frame(&args) {
+                    // The stitch frame re-does a hot-layer eviction; a
+                    // manifest that does not hold the segment means the
+                    // truth set was damaged — finish the walk, then
+                    // refuse startup by name instead of dropping rows.
+                    if let Err(e) = kevy_store::apply_segmented(store, &segs_dir, f) {
+                        torn.get_or_insert(e);
+                    }
+                    return;
+                }
                 replay_dispatch(commands, store, &args);
                 frames += 1;
                 if frames.is_multiple_of(kevy_persist::REPLAY_DEMOTE_INTERVAL) {
@@ -86,8 +104,14 @@ impl<C: Commands> Shard<C> {
             } else {
                 replay_aof(&aof_path, apply)?
             };
+            if let Some(e) = torn {
+                return Err(io::Error::other(format!("shard {}: {e}", self.id)));
+            }
             self.commands.on_replay_report(report.dropped_bytes, report.corrupt);
         }
+        // Segments nothing references after restore are orphans (a
+        // crash between sealing and the frame): sweep them.
+        self.store.sweep_orphan_row_segs();
         self.store.demote_to_watermark();
 
         // Off-accept-set shards have no listener (None); skip register.
@@ -280,6 +304,7 @@ impl<C: Commands> Shard<C> {
                     self.tick_repl_waiters();
                     if now.duration_since(last_tick) >= iv {
                         self.commands.on_shard_tick(&mut self.store);
+                        self.drain_tick_frames();
                         self.drain_store_notify();
                         self.apply_live_runtime_config(&mut tick_interval);
                         self.tick_persist();

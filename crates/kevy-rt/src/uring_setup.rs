@@ -24,6 +24,8 @@ impl<C: Commands> Shard<C> {
         if let Some(rx) = &self.replica_inbox {
             rx.attach_waker(Arc::clone(&self.waker));
         }
+        let segs_dir = kevy_persist::layout::segs_dir(&self.data_dir, self.id);
+        self.store.enable_seg_rows(&segs_dir).map_err(std::io::Error::other)?;
         let snap = self.snapshot_path();
         if snap.exists()
             && let Err(e) = load_snapshot(&mut self.store, &snap)
@@ -37,7 +39,16 @@ impl<C: Commands> Shard<C> {
             // In-replay demotion — same K-frame watermark
             // drain as the readiness path's replay.
             let mut frames: u64 = 0;
+            let mut torn: Option<String> = None;
             let apply = |args: kevy_persist::Argv| {
+                if let Some(f) = kevy_persist::segmented_frame(&args) {
+                    // Same stitch handling as the readiness path: a
+                    // missing manifest entry is a named startup refusal.
+                    if let Err(e) = kevy_store::apply_segmented(store, &segs_dir, f) {
+                        torn.get_or_insert(e);
+                    }
+                    return;
+                }
                 crate::shard_run::replay_dispatch(commands, store, &args);
                 frames += 1;
                 if frames.is_multiple_of(kevy_persist::REPLAY_DEMOTE_INTERVAL) {
@@ -49,8 +60,12 @@ impl<C: Commands> Shard<C> {
             } else {
                 replay_aof(&aof_path, apply)?
             };
+            if let Some(e) = torn {
+                return Err(std::io::Error::other(format!("shard {}: {e}", self.id)));
+            }
             self.commands.on_replay_report(report.dropped_bytes, report.corrupt);
         }
+        self.store.sweep_orphan_row_segs();
         self.store.demote_to_watermark();
         Ok(())
     }

@@ -43,6 +43,7 @@ pub mod feed_meta;
 pub mod layout;
 mod replay;
 mod replay_txn;
+mod segmented;
 mod aof_policy;
 mod aof_util;
 mod crc32c;
@@ -61,6 +62,7 @@ pub use aof_util::write_aof_base;
 pub use aof_policy::RewritePolicy;
 pub use record::{AOF2_MAGIC, AofFormat, RecordStep, next_record, write_record_multibulk};
 pub use replay::{ReplayReport, replay_aof, replay_aof_resync};
+pub use segmented::{SEGMENTED, segmented_argv, segmented_frame};
 
 /// How often bulk-load paths check the tiering demote watermark:
 /// every this many applied frames/records, the loading store runs
@@ -90,11 +92,13 @@ use kevy_store::Value;
 /// paths) or a frozen [`kevy_store::SnapshotView`] (the COW paths — collect
 /// on the owning thread, serialize on a background one).
 ///
-/// **Tiering contract**: `for_each_entry` never yields a
-/// `Value::Cold` stub — each source materializes cold values from its vlog
-/// (the store reads its own log; a view reads through the `Arc<VlogFile>`
-/// pins captured at collect time) one value at a time, so serializer
-/// memory stays bounded and nothing is ever promoted into the hot map.
+/// **Tiering contract**: `for_each_entry` yields VLOG-backed
+/// `Value::Cold` stubs materialized (the store reads its own log; a
+/// view reads through the `Arc<VlogFile>` pins captured at collect
+/// time) one value at a time, so serializer memory stays bounded and
+/// nothing is ever promoted into the hot map. SEG-backed stubs pass
+/// through AS STUBS: their data is truth in the segment directory, and
+/// the consumers persist the reference, not the payload.
 pub trait SnapshotSource {
     /// Visit every live entry as `(key, &value, remaining_ttl_ms)`.
     fn for_each_entry(&self, f: impl FnMut(&[u8], &Value, Option<u64>));
@@ -103,31 +107,60 @@ pub trait SnapshotSource {
     /// absolute_unix_ms)`. Default = none (sources without the
     /// feature).
     fn for_each_hash_ttl(&self, _f: impl FnMut(&[u8], &[u8], u64)) {}
+
+    /// The live row segments' `(seq, file)` identities — the AOF
+    /// rewrite's trailing SEGMENTED frames and the snapshot writer's
+    /// version choice read these. Default = none.
+    fn row_seg_files(&self) -> Vec<(u32, String)> {
+        Vec::new()
+    }
+}
+
+/// Whether `v` is a row-segment stub (persisted as a reference).
+pub(crate) fn is_seg_stub(v: &Value) -> bool {
+    matches!(v, Value::Cold(c) if c.seg_parts().is_some())
 }
 
 impl SnapshotSource for Store {
     fn for_each_entry(&self, mut f: impl FnMut(&[u8], &Value, Option<u64>)) {
-        self.snapshot_each(|k, v, ttl| match self.materialize_cold(v) {
-            // Cold stub: decode the vlog record into a transient hot
-            // value (dropped after the callback — memory bound = one
-            // value) and emit exactly what the hot value would have.
-            Some(hot) => f(k, &hot, ttl),
-            None => f(k, v, ttl),
+        self.snapshot_each(|k, v, ttl| {
+            if is_seg_stub(v) {
+                return f(k, v, ttl);
+            }
+            match self.materialize_cold(k, v) {
+                // Vlog stub: decode the record into a transient hot
+                // value (dropped after the callback — memory bound =
+                // one value) and emit exactly what the hot value
+                // would have.
+                Some(hot) => f(k, &hot, ttl),
+                None => f(k, v, ttl),
+            }
         });
     }
     fn for_each_hash_ttl(&self, f: impl FnMut(&[u8], &[u8], u64)) {
         self.hash_ttl_each(f);
     }
+    fn row_seg_files(&self) -> Vec<(u32, String)> {
+        self.row_seg_files()
+    }
 }
 
 impl SnapshotSource for kevy_store::SnapshotView {
     fn for_each_entry(&self, mut f: impl FnMut(&[u8], &Value, Option<u64>)) {
-        self.each(|k, v, ttl| match self.materialize_cold(v) {
-            // Cold stub: resolve against the view's pinned files — the
-            // serializer thread never touches the store (no promotion).
-            Some(hot) => f(k, &hot, ttl),
-            None => f(k, v, ttl),
+        self.each(|k, v, ttl| {
+            if is_seg_stub(v) {
+                return f(k, v, ttl);
+            }
+            match self.materialize_cold(k, v) {
+                // Vlog stub: resolve against the view's pinned files —
+                // the serializer thread never touches the store.
+                Some(hot) => f(k, &hot, ttl),
+                None => f(k, v, ttl),
+            }
         });
+    }
+    fn row_seg_files(&self) -> Vec<(u32, String)> {
+        kevy_store::SnapshotView::row_seg_files(self)
     }
     fn for_each_hash_ttl(&self, f: impl FnMut(&[u8], &[u8], u64)) {
         self.each_hash_ttl(f);

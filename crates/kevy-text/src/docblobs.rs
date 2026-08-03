@@ -103,6 +103,9 @@ impl DocBlobs {
 
     /// Remove `id`; `true` when no document is left, so the caller drops
     /// the token. Like `Buckets`, a shrinking `Many` is not demoted.
+    /// (Production removals go through [`Channel::remove`], which
+    /// maintains the byte counter; this stays for the unit tests.)
+    #[cfg(test)]
     pub(crate) fn remove(&mut self, id: u32) -> bool {
         match self {
             DocBlobs::One { id: id0, .. } => *id0 == id,
@@ -115,6 +118,9 @@ impl DocBlobs {
 
     /// Heap bytes for this token's blobs: `One` pays only its blob's
     /// allocation, `Many` the power-of-two RawTable plus each blob's.
+    /// (The walking half of the reference formula — see
+    /// [`channel_bytes`].)
+    #[cfg(test)]
     pub(crate) fn approx_bytes(&self) -> u64 {
         match self {
             DocBlobs::One { blob, .. } => blob_alloc(blob),
@@ -134,15 +140,114 @@ pub(crate) fn blob_alloc(b: &[u8]) -> u64 {
     (b.len().max(1) as u64).next_multiple_of(16) + 16
 }
 
-/// Approximate heap bytes for a whole token → blobs channel.
+/// Approximate heap bytes for a whole token → blobs channel — the
+/// walking reference formula. Production reads go through
+/// [`Channel::bytes`], which maintains the same sum incrementally;
+/// this walker remains as the invariant the tests hold the counter to.
 ///
 /// Each outer entry pays its token-key Vec plus the [`DocBlobs`] enum
 /// stored inline (its Vec / HashMap struct); the token's blob heap —
 /// and, for a `Many` token, its RawTable — is added per variant.
+#[cfg(test)]
 pub(crate) fn channel_bytes(map: &HashMap<Vec<u8>, DocBlobs>) -> u64 {
     map.iter()
         .map(|(t, db)| t.len() as u64 + 24 + 56 + db.approx_bytes())
         .sum()
+}
+
+/// The `Many` variant's RawTable term for `n` entries (the cap model
+/// [`DocBlobs::approx_bytes`] uses, factored so the incremental
+/// deltas and the walker cannot disagree).
+fn many_table_bytes(n: u64) -> u64 {
+    let cap = (n * 8 / 7 + 1).next_power_of_two().max(4);
+    cap * 33
+}
+
+/// A token → [`DocBlobs`] channel whose heap-byte term is maintained
+/// **incrementally**: every mutation applies an O(1) delta,
+/// so reading the channel's share of the memory formula never walks
+/// the map. The per-tick walk over these maps was the measured
+/// write-load term behind a consumer's tiering idle-CPU report.
+#[derive(Debug, Default)]
+pub(crate) struct Channel {
+    map: HashMap<Vec<u8>, DocBlobs>,
+    bytes: u64,
+}
+
+impl Channel {
+    pub(crate) fn get(&self, token: &[u8]) -> Option<&DocBlobs> {
+        self.map.get(token)
+    }
+
+    /// Running Σ of [`channel_bytes`]'s per-token terms — O(1).
+    pub(crate) fn bytes(&self) -> u64 {
+        self.bytes
+    }
+
+    /// Store `id`'s blob for `token`, replacing any prior blob.
+    pub(crate) fn set(&mut self, token: &[u8], id: u32, blob: Vec<u8>) {
+        match self.map.get_mut(token) {
+            None => {
+                self.bytes += token.len() as u64 + 24 + 56 + blob_alloc(&blob);
+                self.map.insert(token.to_vec(), DocBlobs::One { id, blob });
+            }
+            Some(db) => {
+                match db {
+                    DocBlobs::One { id: id0, blob: b0 } if *id0 == id => {
+                        self.bytes += blob_alloc(&blob);
+                        self.bytes -= blob_alloc(b0);
+                    }
+                    // One → Many: the RawTable term appears.
+                    DocBlobs::One { .. } => {
+                        self.bytes += many_table_bytes(2) + blob_alloc(&blob);
+                    }
+                    DocBlobs::Many(m) => {
+                        match m.get(&id) {
+                            Some(old) => self.bytes -= blob_alloc(old),
+                            None => {
+                                let n = m.len() as u64;
+                                self.bytes += many_table_bytes(n + 1) - many_table_bytes(n);
+                            }
+                        }
+                        self.bytes += blob_alloc(&blob);
+                    }
+                }
+                db.set(id, blob);
+            }
+        }
+    }
+
+    /// Drop `id` from `token`, removing the token entirely once its
+    /// last document is gone.
+    pub(crate) fn remove(&mut self, token: &[u8], id: u32) {
+        let Some(db) = self.map.get_mut(token) else { return };
+        match db {
+            DocBlobs::One { id: id0, blob } => {
+                if *id0 == id {
+                    self.bytes -= token.len() as u64 + 24 + 56 + blob_alloc(blob);
+                    self.map.remove(token);
+                }
+            }
+            DocBlobs::Many(m) => {
+                let Some(old) = m.remove(&id) else { return };
+                self.bytes -= blob_alloc(&old);
+                let n = m.len() as u64;
+                if n == 0 {
+                    self.bytes -= token.len() as u64 + 24 + 56 + many_table_bytes(1);
+                    self.map.remove(token);
+                } else {
+                    self.bytes -= many_table_bytes(n + 1) - many_table_bytes(n);
+                }
+            }
+        }
+    }
+
+    /// The walking reference sum — what [`Channel::bytes`] must always
+    /// equal (the invariant the segment tests hold).
+    #[cfg(test)]
+    pub(crate) fn recompute(&self) -> u64 {
+        channel_bytes(&self.map)
+    }
 }
 
 #[cfg(test)]

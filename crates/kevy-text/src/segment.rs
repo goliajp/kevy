@@ -128,6 +128,15 @@ pub struct TextSegment {
     /// value fields (`VALUES`). Answers "what is THIS document's price",
     /// which the postings cannot — see [`crate::docvalues`].
     values: Option<DocValues>,
+    /// Running counters, so `stats()` never walks the index.
+    /// Each mirrors one walking term of the memory formula in
+    /// `segment_stats.rs` (the walker survives there as the invariant
+    /// the tests hold these to). `postings_total` is the postings
+    /// gauge; the other three are the segment-owned byte terms.
+    postings_total: u64,
+    token_bytes: u64,
+    many_slots: u64,
+    doc_bytes: u64,
 }
 
 impl TextSegment {
@@ -172,6 +181,16 @@ impl TextSegment {
     /// stores none.
     pub fn value_arity(&self) -> usize {
         self.values.as_ref().map_or(0, DocValues::arity)
+    }
+
+    /// Every stored value of one document by id, aligned with the
+    /// declared VALUES order — what a freeze carries into a cold doc
+    /// record so the value-reading clauses can serve cold hits.
+    pub(crate) fn doc_values_of(&self, id: u32) -> Vec<Option<&[u8]>> {
+        match self.values.as_ref() {
+            Some(dv) => (0..dv.arity()).map(|f| dv.get(id, f)).collect(),
+            None => Vec::new(),
+        }
     }
 
     /// One row's stored value for a declared value field, as raw bytes.
@@ -227,14 +246,19 @@ impl TextSegment {
             return;
         }
         let id = self.take_id(key, dl);
+        self.doc_bytes += doc_record_bytes(key, fields);
         self.docs.insert(key.to_vec(), (id, dl, fields.to_vec()));
         self.total_len += u64::from(dl);
         for (t, tf) in tf_map {
+            self.postings_total += 1;
             match self.postings.entry(t) {
                 std::collections::hash_map::Entry::Occupied(mut e) => {
+                    let before = e.get().index_len();
                     e.get_mut().insert(tf, dl, id);
+                    self.many_slots += e.get().index_len() - before;
                 }
                 std::collections::hash_map::Entry::Vacant(v) => {
+                    self.token_bytes += v.key().len() as u64 + 48;
                     v.insert(Buckets::new_one(tf, dl, id));
                 }
             }
@@ -243,6 +267,23 @@ impl TextSegment {
         if let Some(dv) = self.values.as_mut() {
             dv.set(id, values);
         }
+    }
+
+    /// One indexed document's `(id, dl, weighted term→tf)` — the
+    /// freeze's read half, taken BEFORE withdraw consumes the stored
+    /// fields it is derived from.
+    pub(crate) fn doc_terms(
+        &self,
+        key: &[u8],
+    ) -> Option<(u32, u32, HashMap<Vec<u8>, u32>)> {
+        let (id, dl, fields) = self.docs.get(key)?;
+        Some((*id, *dl, weighted_tf(fields).0))
+    }
+
+    /// The undecoded positions blob for `(term, id)`, if positions are
+    /// declared and present.
+    pub(crate) fn positions_blob(&self, term: &[u8], id: u32) -> Option<&[u8]> {
+        self.positions.as_ref()?.blob(term, id)
     }
 
     /// Claim a document id for `key`, reusing a freed slot when there is
@@ -300,12 +341,17 @@ impl TextSegment {
         let Some((old_id, old_len, old_fields)) = self.docs.remove(key) else {
             return;
         };
+        self.doc_bytes -= doc_record_bytes(key, &old_fields);
         self.total_len -= u64::from(old_len);
         for (t, tf) in weighted_tf(&old_fields).0 {
             if let Some(list) = self.postings.get_mut(&t) {
+                let before = list.index_len();
                 list.remove(tf, old_len, old_id);
+                self.many_slots -= before - list.index_len();
+                self.postings_total -= 1;
                 if list.is_empty() {
                     self.postings.remove(&t);
+                    self.token_bytes -= t.len() as u64 + 48;
                 }
             }
             if let Some(pos) = self.positions.as_mut() {
@@ -324,6 +370,14 @@ impl TextSegment {
         self.id_key[old_id as usize] = None;
         self.free_ids.push(old_id);
     }
+}
+
+/// One document's term of the docs-table byte formula: key stored
+/// twice, each field's text + a small header, and the record fixed
+/// cost — the exact per-entry term `recompute_stats` walks.
+fn doc_record_bytes(key: &[u8], fields: &[IndexedField]) -> u64 {
+    let text: usize = fields.iter().map(|(t, _)| t.len() + 4).sum();
+    (2 * key.len() + text + 110) as u64
 }
 
 /// Aggregate token counts for one document's token stream.
@@ -414,6 +468,8 @@ mod segment_stats;
 
 #[path = "segment_phrase.rs"]
 mod segment_phrase;
+pub use segment_phrase::{Clauses, parse_clauses};
+pub(crate) use segment_phrase::{distinct_tokens, field_spans};
 
 #[path = "segment_scope.rs"]
 mod segment_scope;

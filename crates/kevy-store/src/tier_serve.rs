@@ -101,7 +101,7 @@ mod enabled {
         /// matches `want` is promoted in place; a mismatch is WRONGTYPE
         /// with zero preads. Hot values / absent keys pass through.
         pub(crate) fn tier_resolve(&mut self, key: &[u8], want: u8) -> Result<(), StoreError> {
-            if self.tier.is_none() {
+            if !self.cold_backing {
                 return Ok(());
             }
             let tag = match self.live_entry(key) {
@@ -123,7 +123,7 @@ mod enabled {
         /// `live_entry` verbatim. Inside [`Store::peek_scope`] the gate
         /// is bypassed: serve via scratch, mark untouched, no promote.
         pub(crate) fn tier_serve(&mut self, key: &[u8], want: u8) -> Result<Option<&Entry>, StoreError> {
-            if self.tier.is_none() {
+            if !self.cold_backing {
                 return Ok(self.live_entry(key));
             }
             let cold = match self.live_entry(key) {
@@ -160,9 +160,12 @@ mod enabled {
                 }
                 (*c, e.expire_at_ns)
             };
-            let value = self.tier_read_record(cref);
-            if peek {
-                self.tier.as_mut().expect("tier enabled").peek_preads_total += 1;
+            let value = self.tier_read_record(key, cref);
+            if peek
+                && !cref.is_seg()
+                && let Some(t) = self.tier.as_mut()
+            {
+                t.peek_preads_total += 1;
             }
             let mut entry = Entry::new(value, None);
             entry.expire_at_ns = expire;
@@ -174,7 +177,10 @@ mod enabled {
         /// Read + decode one cold record (bumps the pread counter). A
         /// vlog read/decode failure is a process bug by the vlog's
         /// per-boot doctrine — surfaced loudly, never healed silently.
-        pub(crate) fn tier_read_record(&mut self, cref: ColdRef) -> Value {
+        pub(crate) fn tier_read_record(&mut self, key: &[u8], cref: ColdRef) -> Value {
+            if cref.is_seg() {
+                return self.segrow_read(cref, key);
+            }
             let t = self.tier.as_mut().expect("tier enabled");
             t.preads_total += 1;
             let (_key, payload) = t
@@ -192,8 +198,11 @@ mod enabled {
         /// promotes). `None` when the value is not Cold. (Counter-free:
         /// the shared lane is `&self`; the `&mut` peeks carry the
         /// counters the gates assert on.)
-        pub(crate) fn tier_peek_value(&self, v: &Value) -> Option<Value> {
+        pub(crate) fn tier_peek_value(&self, key: &[u8], v: &Value) -> Option<Value> {
             let Value::Cold(c) = v else { return None };
+            if c.is_seg() {
+                return Some(self.segrow_read(*c, key));
+            }
             let t = self.tier.as_ref().expect("cold value ⇒ tiering on");
             let (_key, payload) = t
                 .vlog
@@ -238,14 +247,43 @@ mod enabled {
                     Ok(Some(hot_hash_fields(e, fields)?))
                 }
                 Probe::ColdHash(cref) => {
-                    let value = self.tier_read_record(cref);
-                    self.tier.as_mut().expect("tier enabled").peek_preads_total += 1;
+                    let value = self.tier_read_record(key, cref);
+                    if !cref.is_seg()
+                        && let Some(t) = self.tier.as_mut()
+                    {
+                        t.peek_preads_total += 1;
+                    }
                     let Value::Hash(h) = &value else {
                         unreachable!("hash-tagged record decodes to a hash")
                     };
                     Ok(Some(fields.iter().map(|f| h.get(*f).cloned()).collect()))
                 }
             }
+        }
+
+        /// The seg-backed half of a cold plan, served synchronously
+        /// (one fence descent each — batching belongs to the vlog's
+        /// pread model). Returns the vlog-backed remainder.
+        fn serve_seg_rows(
+            &mut self,
+            out: &mut [PeekRow],
+            plan: Vec<(usize, ColdRef)>,
+            fields: &[&[u8]],
+            keys: &[&[u8]],
+        ) -> Vec<(usize, ColdRef)> {
+            let mut kept = Vec::with_capacity(plan.len());
+            for (row, c) in plan {
+                if !c.is_seg() {
+                    kept.push((row, c));
+                    continue;
+                }
+                let value = self.segrow_read(c, keys[row]);
+                let Value::Hash(h) = &value else {
+                    unreachable!("hash-tagged record decodes to a hash")
+                };
+                out[row] = Ok(Some(fields.iter().map(|f| h.get(*f).cloned()).collect()));
+            }
+            kept
         }
 
         /// Stage-1 classification for the peeks — the same
@@ -293,7 +331,7 @@ mod enabled {
                 }
             }
             if !plan.is_empty() {
-                self.peek_cold_batch(&mut out, plan, fields, reader);
+                self.peek_cold_batch(&mut out, plan, fields, reader, keys);
             }
             out
         }
@@ -304,10 +342,15 @@ mod enabled {
         fn peek_cold_batch(
             &mut self,
             out: &mut [PeekRow],
-            mut plan: Vec<(usize, ColdRef)>,
+            plan: Vec<(usize, ColdRef)>,
             fields: &[&[u8]],
             reader: &mut dyn ColdBatchReader,
+            keys: &[&[u8]],
         ) {
+            let mut plan = self.serve_seg_rows(out, plan, fields, keys);
+            if plan.is_empty() {
+                return;
+            }
             plan.sort_by_key(|(_, c)| (c.file_id, c.offset));
             let t = self.tier.as_mut().expect("cold value ⇒ tiering on");
             let reads: Vec<ColdRead> = plan
@@ -363,7 +406,7 @@ mod disabled {
         }
 
         #[inline]
-        pub(crate) fn tier_peek_value(&self, _v: &Value) -> Option<Value> {
+        pub(crate) fn tier_peek_value(&self, _key: &[u8], _v: &Value) -> Option<Value> {
             None
         }
 

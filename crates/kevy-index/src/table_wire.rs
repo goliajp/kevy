@@ -3,10 +3,10 @@
 //! faces cannot drift; the dispatch oracle byte-compares them anyway).
 
 use crate::catalog::{IndexKind, ValType};
-use crate::table::{OrderPath, TableIndex, TableSpec};
+use crate::table::{OrderPath, TableIndex, TableSpec, WindowSpec};
 
 /// The usage line every malformed `TABLE.DECLARE` answers with.
-pub const TABLE_DECLARE_USAGE: &str = "ERR usage: TABLE.DECLARE name PREFIX p PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX col range|unique [VALUES col ...]] [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...]";
+pub const TABLE_DECLARE_USAGE: &str = "ERR usage: TABLE.DECLARE name PREFIX p PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX col range|unique [VALUES col ...]] [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] [WINDOW col SPAN n BUCKET n]";
 
 /// A table-declaration clause keyword — the boundary variadic lists
 /// (`VALUES`, the `ORDERPATH` column chain) collect up to.
@@ -14,6 +14,7 @@ fn is_table_kw(a: &[u8]) -> bool {
     a.eq_ignore_ascii_case(b"COLUMN")
         || a.eq_ignore_ascii_case(b"INDEX")
         || a.eq_ignore_ascii_case(b"ORDERPATH")
+        || a.eq_ignore_ascii_case(b"WINDOW")
 }
 
 /// Parse a full `TABLE.DECLARE` argv into a validated [`TableSpec`].
@@ -35,6 +36,7 @@ pub fn parse_table_declare(argv: &[&[u8]]) -> Result<TableSpec, String> {
         columns: Vec::new(),
         indexes: Vec::new(),
         orderpaths: Vec::new(),
+        window: None,
     };
     let mut i = 6;
     while i < argv.len() {
@@ -45,6 +47,8 @@ pub fn parse_table_declare(argv: &[&[u8]]) -> Result<TableSpec, String> {
             i = parse_index(argv, i + 1, &mut spec)?;
         } else if kw.eq_ignore_ascii_case(b"ORDERPATH") {
             i = parse_orderpath(argv, i + 1, &mut spec)?;
+        } else if kw.eq_ignore_ascii_case(b"WINDOW") {
+            i = parse_window(argv, i + 1, &mut spec)?;
         } else {
             return Err(TABLE_DECLARE_USAGE.into());
         }
@@ -124,4 +128,36 @@ fn parse_orderpath(argv: &[&[u8]], at: usize, spec: &mut TableSpec) -> Result<us
     }
     spec.orderpaths.push(OrderPath { name: name.to_vec(), on });
     Ok(i)
+}
+
+/// `WINDOW <col> SPAN <n> BUCKET <n>` — plain integers in the window
+/// column's own units; the engine never assumes a time base.
+fn parse_window(argv: &[&[u8]], at: usize, spec: &mut TableSpec) -> Result<usize, String> {
+    if spec.window.is_some() {
+        return Err("ERR duplicate WINDOW clause".into());
+    }
+    let (Some(col), Some(span_kw), Some(span_raw), Some(bucket_kw), Some(bucket_raw)) = (
+        argv.get(at),
+        argv.get(at + 1),
+        argv.get(at + 2),
+        argv.get(at + 3),
+        argv.get(at + 4),
+    ) else {
+        return Err(TABLE_DECLARE_USAGE.into());
+    };
+    if !span_kw.eq_ignore_ascii_case(b"SPAN") || !bucket_kw.eq_ignore_ascii_case(b"BUCKET") {
+        return Err(TABLE_DECLARE_USAGE.into());
+    }
+    let int = |raw: &[u8], what: &str| -> Result<i64, String> {
+        str::from_utf8(raw)
+            .ok()
+            .and_then(|t| t.parse().ok())
+            .ok_or_else(|| format!("ERR WINDOW {what} must be an integer"))
+    };
+    spec.window = Some(WindowSpec {
+        column: col.to_vec(),
+        span: int(span_raw, "SPAN")?,
+        bucket: int(bucket_raw, "BUCKET")?,
+    });
+    Ok(at + 5)
 }

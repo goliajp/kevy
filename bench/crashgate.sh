@@ -25,9 +25,12 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 STRICT=${PENDING_STRICT:-0}
 
-cargo build -q -p kevy-embedded --example crash_writer --example crash_check || exit 1
+cargo build -q -p kevy-embedded --example crash_writer --example crash_check \
+    --example crash_window_writer --example crash_window_check || exit 1
 WRITER="$HERE/target/debug/examples/crash_writer"
 CHECK="$HERE/target/debug/examples/crash_check"
+WWRITER="$HERE/target/debug/examples/crash_window_writer"
+WCHECK="$HERE/target/debug/examples/crash_window_check"
 
 WORK=$(mktemp -d /tmp/crashgate.XXXXXX)
 WPID=""
@@ -79,6 +82,40 @@ cell() {
         || verdict 1 "$name/no-blackhole" "restart#2 sees ${rec2:-0} < marked ${marked:-?} — restarts are rolling back"
 }
 
+# One windowed kill cycle: a fast-reaper store slides continuously
+# (seal, manifest, SEGMENTED frame, phase change, index cut, text
+# freeze), the kill lands in whichever gap it lands in, and the reopen
+# must hold the R2c contract: loss bound across BOTH truth homes (hot
+# + row segments), index/row agreement, a serving text index — then a
+# second reopen must not roll any of it back.
+window_cell() { # $1 = cell name, rest = writer flags
+    local name=$1; shift
+    local flags=("$@") dir="$WORK/$name" log="$WORK/$name.log"
+    mkdir -p "$dir"
+    "$WWRITER" "$dir" ${flags[@]+"${flags[@]}"} > "$log" 2>/dev/null &
+    WPID=$!
+    for _ in $(seq 100); do grep -q "SYNCED" "$log" 2>/dev/null && break; sleep 0.1; done
+    sleep 1.5
+    kill -9 "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null; WPID=""
+    local synced
+    synced=$(grep SYNCED "$log" | tail -1 | awk '{print $2}')
+    [ -n "$synced" ] || { verdict 1 "$name/setup" "writer never reached a SYNCED barrier"; return; }
+    local checkflags=() fl=" ${flags[*]+${flags[*]}} "
+    [[ "$fl" == *" --shards "* ]] && checkflags+=(--shards "$(echo "$fl" | sed 's/.*--shards \([0-9]*\).*/\1/')")
+    local out1 rc count1
+    out1=$("$WCHECK" "$dir" "$synced" ${checkflags[@]+"${checkflags[@]}"} 2>/dev/null); rc=$?
+    count1=$(echo "$out1" | awk -F'count=' '/^OK/{print $2}' | awk '{print $1}')
+    [ "$rc" -eq 0 ] && verdict 0 "$name/contract" "$out1" \
+        || verdict 1 "$name/contract" "reopen violated the window contract (synced $synced)"
+    # Reopen #2: nothing may roll back (segments re-swept, not re-lost).
+    local count2
+    count2=$("$WCHECK" "$dir" "$synced" ${checkflags[@]+"${checkflags[@]}"} 2>/dev/null \
+        | awk -F'count=' '/^OK/{print $2}' | awk '{print $1}')
+    [ -n "$count2" ] && [ "${count2:-0}" -ge "${count1:-1}" ] \
+        && verdict 0 "$name/no-blackhole" "restart#2 counts $count2 >= $count1" \
+        || verdict 1 "$name/no-blackhole" "restart#2 counts ${count2:-none} < ${count1:-?}"
+}
+
 echo "== crashgate: SIGKILL matrix =="
 cell append-everysec
 cell append-always --always
@@ -86,6 +123,12 @@ cell append-4shard --shards 4
 cell rewrite-everysec --rewrite
 cell snapshot-everysec --snapshot
 cell feed-everysec --feed
+
+echo "== crashgate: windowed SIGKILL cells (R2c) =="
+window_cell window-everysec-a
+window_cell window-everysec-b
+window_cell window-always --always
+window_cell window-2shard --shards 2
 
 # ── deterministic damage cells ─────────────────────────────────────────────
 # The kill cells rarely tear a frame on a journaled local fs (page-cache

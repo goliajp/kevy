@@ -23,8 +23,8 @@ use kevy_hash::KevyHash;
 use kevy_persist::reshard::{ShardLayout, commit_reshard, merge_sources, recover_journal};
 #[cfg(feature = "persist")]
 use kevy_persist::{
-    Aof, Routing, ShardsMeta, layout, layout::infer_files_n, load_snapshot, read_shards_meta,
-    replay_aof, write_shards_meta,
+    Aof, Routing, ShardsMeta, layout, layout::infer_files_n, read_shards_meta,
+    write_shards_meta,
 };
 use kevy_store::Store as Keyspace;
 
@@ -293,36 +293,7 @@ fn load_in_place(
     let mut report = OpenReport::default();
     let start = Instant::now();
     for (i, store) in stores.iter_mut().enumerate() {
-        let snap = layout::snapshot_path(dir, i);
-        if snap.exists() {
-            load_snapshot(store, &snap)?;
-        }
-        let aof = layout::aof_path(dir, i);
-        if aof.exists() {
-            // In-replay demotion: the embedded replay applies
-            // straight to the bare store (no dispatch glue, so no
-            // per-write demote hook) — check the watermark every K
-            // frames and drain once more after the log ends.
-            let mut frames: u64 = 0;
-            let apply = |args: kevy_persist::Argv| {
-                crate::replay::apply(store, &args);
-                frames += 1;
-                if frames.is_multiple_of(kevy_persist::REPLAY_DEMOTE_INTERVAL) {
-                    store.demote_to_watermark();
-                }
-            };
-            let r = if config.replay_resync {
-                kevy_persist::replay_aof_resync(&aof, apply)?
-            } else {
-                replay_aof(&aof, apply)?
-            };
-            report.replayed_commands += r.commands;
-            report.replayed_bytes += r.replayed_bytes;
-            report.dropped_bytes += r.dropped_bytes;
-            report.corrupt |= r.corrupt;
-            report.resynced_bytes += r.resynced_ranges.iter().map(|(a, b)| b - a).sum::<u64>();
-        }
-        store.demote_to_watermark();
+        crate::shard_restore::restore_one_shard(dir, config, i, store, &mut report)?;
     }
     report.elapsed_ms = start.elapsed().as_millis() as u64;
     emit_replay(config, &report);
@@ -412,7 +383,7 @@ fn merge_into_temp(dir: &Path, config: &Config, src_n: usize) -> io::Result<(Key
 fn redistribute(temp: &Keyspace, n: usize, stores: &mut [Keyspace]) {
     temp.snapshot_each(|key, value, ttl_ms| {
         let hot;
-        let value = match temp.materialize_cold(value) {
+        let value = match temp.materialize_cold(key, value) {
             Some(v) => {
                 hot = v;
                 &hot

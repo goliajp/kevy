@@ -129,6 +129,22 @@ impl Segment {
         self.stored(key, field).and_then(|raw| order_key(ty, raw))
     }
 
+    /// The clause-carrying count of `[min, max]`: the full walk with
+    /// the FILTER predicates applied, materializing nothing — the
+    /// total a claused query would reach, without building pages. The
+    /// consumer shape this closes: counting a filtered axis used to
+    /// mean fetching every page and taking `len`.
+    pub fn count_claused(
+        &self,
+        min: &IndexValue,
+        max: &IndexValue,
+        filters: &[(usize, ValueTest)],
+    ) -> u64 {
+        self.range_iter(min, max, None)
+            .filter(|(_, k)| self.passes(k, filters))
+            .count() as u64
+    }
+
     /// The clause-carrying scan of `[min, max]`. FILTER-only queries
     /// stream in driving order and stay cursor-paged; any selection
     /// clause walks deeper (the whole range for `SORT` / `FACET`) and
@@ -265,6 +281,97 @@ fn finish_facets(facets: Vec<FacetCounts>) -> Vec<Vec<FacetBucket>> {
             out
         })
         .collect()
+}
+
+/// One decoded cold entry: the driving value, the row key, and the
+/// stored values that rode in its payload.
+pub type ColdEntryRow = (IndexValue, Vec<u8>, Vec<Option<Vec<u8>>>);
+
+/// The clause-carrying walk over a DECODED stream — the cold twin of
+/// [`Segment::query_claused`], one clause engine for entries whose
+/// values ride beside them (a cold segment's payload) instead of in
+/// the hot `RowValues` map. Same loop, same order: FILTER, facet
+/// counts, the early page break, DISTINCT collapse during selection,
+/// the SORT re-order, the fetch truncation. The caller owns I/O,
+/// decoding, tombstones and cursors — this walk never sees them.
+pub fn claused_over(
+    items: impl Iterator<Item = ColdEntryRow>,
+    c: &ScalarClauses<'_>,
+) -> (Vec<ScalarHit>, Vec<Vec<FacetBucket>>) {
+    let mut facets: Vec<FacetCounts> = vec![HashMap::new(); c.facets.len()];
+    let mut hits: Vec<ScalarHit> = Vec::new();
+    let mut groups: HashMap<Vec<u8>, usize> = HashMap::new();
+    let full_walk = c.sort.is_some() || !c.facets.is_empty();
+    for (v, k, vals) in items {
+        if !values_pass(&vals, c.filters) {
+            continue;
+        }
+        for ((f, ty), counts) in c.facets.iter().zip(facets.iter_mut()) {
+            let Some(raw) = vals.get(*f).and_then(Option::as_deref) else { continue };
+            let Some(id) = order_key(*ty, raw) else { continue };
+            counts.entry(id).or_insert_with(|| (raw.to_vec(), 0)).1 += 1;
+        }
+        if !full_walk && hits.len() == c.fetch {
+            break;
+        }
+        select_values_hit(v, k, &vals, c, &mut hits, &mut groups);
+    }
+    if let Some((_, desc, _)) = c.sort {
+        hits.sort_by(|a, b| {
+            scalar_sorted_order((a.okey.as_deref(), &a.key), (b.okey.as_deref(), &b.key), desc)
+        });
+    }
+    hits.truncate(c.fetch);
+    (hits, finish_facets(facets))
+}
+
+/// Whether decoded values satisfy every predicate — the exact rule of
+/// [`Segment::passes`]: absent is not a value.
+pub fn values_pass(values: &[Option<Vec<u8>>], filters: &[(usize, ValueTest)]) -> bool {
+    filters
+        .iter()
+        .all(|(f, t)| values.get(*f).and_then(Option::as_deref).is_some_and(|raw| t.passes(raw)))
+}
+
+/// A decoded value's coerced clause key — [`Segment::clause_key`]'s
+/// rule over a payload row.
+fn values_clause_key(values: &[Option<Vec<u8>>], field: usize, ty: ValType) -> Option<Vec<u8>> {
+    values.get(field).and_then(Option::as_deref).and_then(|raw| order_key(ty, raw))
+}
+
+/// [`Segment::select_hit`] over a decoded entry — one selection rule,
+/// re-stated for values that arrived beside the key.
+fn select_values_hit(
+    v: IndexValue,
+    k: Vec<u8>,
+    vals: &[Option<Vec<u8>>],
+    c: &ScalarClauses<'_>,
+    hits: &mut Vec<ScalarHit>,
+    groups: &mut HashMap<Vec<u8>, usize>,
+) {
+    let okey = c.sort.and_then(|(f, _, ty)| values_clause_key(vals, f, ty));
+    let dkey = c.distinct.and_then(|(f, ty)| values_clause_key(vals, f, ty));
+    if let Some(id) = &dkey {
+        match groups.entry(id.clone()) {
+            std::collections::hash_map::Entry::Occupied(e) => {
+                let Some((_, desc, _)) = c.sort else { return };
+                let prev = &mut hits[*e.get()];
+                if scalar_sorted_order(
+                    (okey.as_deref(), &k),
+                    (prev.okey.as_deref(), &prev.key),
+                    desc,
+                ) == std::cmp::Ordering::Less
+                {
+                    *prev = ScalarHit { key: k, value: v, okey, dkey };
+                }
+                return;
+            }
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(hits.len());
+            }
+        }
+    }
+    hits.push(ScalarHit { key: k, value: v, okey, dkey });
 }
 
 /// The origin-side merge: order the union of the shards' pages exactly

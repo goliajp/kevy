@@ -316,7 +316,7 @@ def page(spec, lang, slug):
 <a class="skip" href="#main">Skip to content</a>
 <header class="mast">
   <div class="mast-in">
-    <a class="brand" href="{up}{DIRS[lang]}">kevy<span class="v">4.0</span></a>
+    <a class="brand" href="{up}{DIRS[lang]}">kevy<span class="v">4.1</span></a>
     <nav class="nav">
       <a href="{up}{DIRS[lang]}docs/">{n["docs"]}</a>
       <a href="{up}{DIRS[lang]}docs/commands/">{n["cmds"]}</a>

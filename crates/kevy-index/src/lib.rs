@@ -22,6 +22,9 @@ mod rowvalues;
 mod segment;
 mod segment_claused;
 mod table;
+mod table_verify;
+mod segcold;
+mod table_sidecar;
 mod table_wire;
 mod value;
 mod view;
@@ -33,18 +36,25 @@ pub use catalog::{
 };
 pub use composite::{
     CompositeCol, MAX_COMPOSITE_COLS, MAX_STR_COMPONENT, WHERE_NOT_COMPOSITE, WhereClause,
-    composite_bounds, composite_encode, parse_where,
+    RowDerivation, composite_bounds, composite_encode, parse_where,
 };
 pub use segment::{Cursor, Segment, SegmentStats};
 pub use segment_claused::{
-    ClausedPage, FacetBucket, ScalarClauses, ScalarHit, fold_facets, merge_claused,
+    ClausedPage, ColdEntryRow, FacetBucket, ScalarClauses, ScalarHit, claused_over, fold_facets,
+    merge_claused, values_pass,
     scalar_sorted_order, sort_facets,
 };
 pub use table::{
-    MAX_TABLES, OrderPath, TableCatalog, TableIndex, TableSpec, compile_table,
+    MAX_TABLES, OrderPath, TableCatalog, TableIndex, TableSpec, WindowSpec, compile_table,
+    window_driver, window_for, window_text_for,
 };
+pub use segcold::{
+    ColdBloom, WindowShape, decode_seg_key, decode_seg_values, encode_seg_values, seg_bounds,
+    seg_key, value_order_bytes, window_bound, window_value_of,
+};
+pub use table_verify::{IndexVerify, TableEnsure, TableVerify, spec_diff};
 pub use table_wire::{TABLE_DECLARE_USAGE, parse_table_declare};
-pub use value::{IndexValue, ValueTest, order_key};
+pub use value::{IndexValue, ValueTest, order_key, coerce_bound, parse_literal_bound};
 pub use view::{
     Leaf, MAX_TREE_DEPTH, MAX_TREE_LEAVES, MAX_VIEWS, MaterializedSet, Tree, ViewCatalog,
     ViewMode, ViewSpec, eval_tree, key_in_tree, key_in_tree_vals,

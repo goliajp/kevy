@@ -1,5 +1,142 @@
 # Changelog
 
+## 4.1.1 — the TTL frame that re-anchored
+
+A consumer's gate caught a TTL reading back *larger* after an AOF
+replay and asked the right question: if inflation is possible, is
+deflation? The inflation itself turned out to be a property, not a
+defect — the persisted deadline is absolute wall-clock time, so a
+system clock step (NTP) between write and replay moves the read-back
+remainder by exactly the step, in either direction; live TTLs run on
+the monotonic clock and are immune, only the restart boundary
+converts through wall time. That contract is now stated in
+`docs/persistence.md`.
+
+Auditing every TTL write surface against the report found one that
+was not sound: **embedded `Store::getex` logged a relative `PEXPIRE`**
+— the last relative TTL frame in the tree — so a replay re-anchored
+it and every restart handed the key its full TTL back (measured:
+99999 ms remaining of an original 100000 ms after 1.5 s down). For an
+embedder using GETEX for cache-touch renewal that is "keys never
+expire across restarts". Fixed to the absolute `PEXPIREAT` form the
+other surfaces already use; a new `ttl_reanchor` suite pins all three
+embedded TTL-writing surfaces and the server's SETEX txn-companion
+path.
+
+## 4.1.0 — the dogfood answer
+
+Two production consumers ran full migrations on 4.0 and reported back
+— a mail system that adopted the TABLE layer for all fourteen of its
+query axes (17 findings, two incidents), and a second embedder whose
+upgrade touched one file. 4.1 is the systemic answer to those
+reports: not point fixes, but the five defect classes behind them,
+each closed with the gate that keeps it closed. Everything is
+additive — the 4.x freeze holds.
+
+### The TABLE face, hardened end to end
+
+- **facadegate** — a consumer crate outside the workspace, building
+  against the published facades with only facade imports, now runs in
+  CI. The 4.0 gap it exists for: `Store::table_declare` shipped
+  taking a `TableSpec` the facade never exported, so the typed face
+  of a flagship feature was uncallable — and every in-workspace test
+  resolved the type anyway. Missing re-exports are now a compile
+  failure (`TableSpec` / `TableIndex` / `OrderPath` / `Value` are
+  exported).
+- **Declaration never panics.** `compile_table` validates for itself
+  and returns `Result` — the invariant is established by the function
+  that needs it and cannot be bypassed by either face. (4.0 could
+  panic on an ORDERPATH naming an undeclared column — on one
+  consumer's boot path, which restart-looped their container.) A
+  `table_spec` fuzz target (wire bytes AND typed specs) ran 21.3M
+  iterations clean and runs in CI.
+- **`TABLE.ENSURE` / `TABLE.REPLACE`** — the boot pattern gets its
+  verbs: identical spec is a no-op success (`+UNCHANGED`), a changed
+  spec is a named refusal carrying the first differing part, and
+  `REPLACE` is the explicit rebuild (validating before it drops).
+  Embedded: `table_ensure` → `TableEnsure::{Created, Unchanged}`,
+  `table_replace`.
+- **VERIFY tells the truth in one time frame, both directions.**
+  Every counter is recomputed fresh per call; the 4.0 report mixed a
+  fresh `drift` with a lifetime `coerce_failures` that also counted
+  absent columns (30 000 "failures" that were NULLs by design). A
+  single cause-aware classification (`RowDerivation`) now drives the
+  write path and the verify path, and the report carries four new
+  counters: `excluded` (composite str component over the 255-byte
+  cap), `absent` (NULL by design), `rows` (prefix rows walked), and
+  `missing` — a row that derives a value but has no entry, the
+  forgotten-writer class a drift walk structurally cannot see. New
+  labels ride at the end of the row, so label-reading 4.0 consumers
+  keep working. The named `TableVerify` report replaces the anonymous
+  tuple (which stays as a deprecated shim).
+- **`docs/table-migration.md`** — the eight production-paid lessons
+  from the first full migration off hand-maintained indexes, led by
+  the measured argument for the feature: 89 % never-written / 76 %
+  never-removed drift in indexes that had nothing to check them.
+
+### Tiering converges — idle is nearly free
+
+The consumer measured tiering at 300–500× idle CPU and turned it
+off. Two fixes, both landed:
+
+- **Stats stop being walked.** The per-tick index/view floor feed is
+  generation-cached on both faces, and every walking `stats()` in
+  kevy-text / kevy-vector / kevy-index-agg became running counters
+  maintained at the mutation sites (each old walker survives as the
+  test-only reference, with drift-invariant tests holding them
+  equal).
+- **The demote sampler backs off** exponentially when a tick moves
+  nothing while over target (including `effective_target == 0`,
+  which used to guarantee a full sample walk per tick forever); any
+  demotion resets it, and the write path always samples immediately.
+
+Measured on the bench box: idle 30 s CPU, tiering off = 7 ticks vs
+on = 11 — **1.6×, replacing 300–500×**. The docs now state the index
+floor before the knobs: it is not spillable, and a budget below it
+drives the demote target to 0.
+
+- Found while enumerating mutation chokepoints, and fixed:
+  **FLUSHALL/FLUSHDB now reset the server's index segments and
+  materialized views** (they kept serving deleted keys; the embedded
+  face already reset — the faces had diverged).
+
+### Operational state is readable
+
+- `INFO memory` gains **`process_rss_bytes`** (Linux `VmRSS`, macOS
+  `task_info` via a hand-written mach binding): size containers from
+  RSS — `used_memory` is the store, not the process.
+- `INFO persistence` gains **`aof_format`** (`off` / `v1` / `v2`),
+  and embedded gains `Aof::format()` +
+  `Store::downgradeable_to_v3()` — the documented 3.x downgrade
+  window is now an observable state instead of an inference (the
+  second consumer's `doctor` command had to declare it closed
+  unconditionally because it could not ask).
+
+### Error interop — a 4.0 decision reversed on evidence
+
+4.0 deliberately shipped **without** `From<KevyError> for io::Error`,
+reasoning that the back-edge would reinstate a lossy downgrade. The
+first production migration then hand-wrote the conversion ~280 times
+as `io::Error::other(e)` — which *is* the lossy downgrade, minus the
+kind mapping. The orphan rule means only kevy can provide the impl,
+so 4.1 does: kind-mapped, **source-preserving** (the typed error
+rides as the `io::Error`'s source, downcastable back out), `Io`
+passthrough never double-wraps. `?` now flows from any kevy call
+into an `io::Result` world.
+
+- `Config::with_auto_aof_rewrite_disabled()` — one named call for
+  the canary window, replacing `with_auto_aof_rewrite(0, u64::MAX)`.
+- `docs/UPGRADING.md`: the reversal recorded where the old decision
+  was; a new section on what the 3.x→4.x migration actually consists
+  of, including the consumer-derived `--message-format=json`
+  worklist technique.
+
+### Versions
+
+Workspace crates → **4.1.0**; `kevy-client` and `kevy-client-async`
+→ **2.1.0** (their own line, additive — the io::Error interop and
+the widened facade ride the shared crates).
+
 ## 4.0.0 — the instance era
 
 The API break 3.x kept postponing, taken once and set in stone — plus

@@ -205,3 +205,36 @@ fn empty_and_dim_mismatch() {
     assert!(!h.contains(b"bad"));
     assert!(h.knn(&[1.0], 5, 0).is_empty(), "query dim mismatch");
 }
+
+/// v4.1-V5: `stats()` reads running link/tombstone counters instead of
+/// walking every node per call. Inserts (with shrink churn), replaces,
+/// removals and a rebuild hold them to the walking reference.
+#[test]
+fn running_stats_never_drift_from_the_walking_reference() {
+    let mut g = Hnsw::new(4, HnswParams { m: 4, ef_construction: 32, distance: Distance::L2 });
+    let check = |g: &Hnsw, at: &str| {
+        assert_eq!(g.stats(), g.recompute_stats(), "counter drift after {at}");
+    };
+    // Enough inserts that layer-0 caps force shrink pruning.
+    for i in 0..120u32 {
+        let v: Vec<f32> = (0..4).map(|d| ((i * 31 + d * 7) % 97) as f32).collect();
+        g.apply(format!("k{i}").as_bytes(), Some(v));
+        if i % 17 == 0 {
+            check(&g, &format!("insert {i}"));
+        }
+    }
+    check(&g, "all inserts");
+    // Replacements (detach + reinsert) and removals (tombstones).
+    for i in (0..120u32).step_by(3) {
+        g.apply(format!("k{i}").as_bytes(), None);
+    }
+    check(&g, "removals");
+    for i in (1..60u32).step_by(3) {
+        let v: Vec<f32> = (0..4).map(|d| ((i * 13 + d) % 89) as f32 + 0.5).collect();
+        g.apply(format!("k{i}").as_bytes(), Some(v));
+    }
+    check(&g, "replacements");
+    g.rebuild();
+    check(&g, "rebuild");
+    assert_eq!(g.stats().tombstones, 0, "rebuild drops tombstones");
+}

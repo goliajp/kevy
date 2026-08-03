@@ -15,6 +15,37 @@ use crate::metric::KevyMetric;
 use crate::store::{Inner, Store, lock_write};
 
 impl Store {
+    /// Whether a 3.x binary could still open this data directory —
+    /// the downgrade window `UPGRADING.md` describes, as a readable
+    /// state instead of an assumption.
+    ///
+    /// `Some(true)`: every shard's AOF still speaks `KEVYAOF1`, so
+    /// downgrading is a binary swap back. `Some(false)`: at least one
+    /// shard has upgraded to v2 (a rewrite ran), so a downgrade needs a
+    /// keyspace export through a client. `None`: no AOF is configured —
+    /// the question has no meaning for a memory-only store.
+    ///
+    /// From an embedder's dogfood report: their `doctor`
+    /// command exists to tell users "where you are and what to do
+    /// next", and this state was `pub(crate)` — so their CHANGELOG had
+    /// to declare the window closed unconditionally when it was open,
+    /// observable, and per-directory.
+    #[cfg(all(feature = "persist", not(target_arch = "wasm32")))]
+    pub fn downgradeable_to_v3(&self) -> Option<bool> {
+        let mut any = false;
+        let mut all_v1 = true;
+        for shard in self.shards.iter() {
+            let g = crate::store::lock_write(shard);
+            if let Some(aof) = g.aof.as_ref() {
+                any = true;
+                if aof.format() != kevy_persist::AofFormat::V1 {
+                    all_v1 = false;
+                }
+            }
+        }
+        any.then_some(all_v1)
+    }
+
     /// Durability barrier: flush + `fdatasync` every shard's
     /// AOF now, regardless of the configured `appendfsync` policy. On
     /// `Ok(())`, every write acknowledged before this call is on

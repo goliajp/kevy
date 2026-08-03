@@ -74,12 +74,24 @@ pub(super) fn apply_row(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
         return;
     }
     // Text kind: raw field bytes tokenize into the inverted
-    // segment (no scalar coercion).
+    // segment (no scalar coercion). A windowed table's text index
+    // additionally shadows any frozen entries this write stales.
     if let Some(ts) = &mut si.text {
         apply_row_text(store, &si.spec, ts, key);
+        if let Some(cold) = &mut si.cold_text {
+            cold.on_row_write(key);
+        }
         return;
     }
     apply_scalar_row(store, &si.spec, &mut si.seg, key);
+    // Windowed index: this row's change may shadow a cold entry
+    // (rewrite, delete, revival) — the bloom decides if it earns a
+    // tombstone. AFTER the scalar apply: a revival needs its hot entry
+    // in the tree and its stale cold entry shadowed, and this order
+    // gives both.
+    if let Some(win) = &mut si.window {
+        win.on_row_write(key);
+    }
 }
 
 /// [`apply_row`]'s text half. What the spec reads out of the row —
@@ -233,4 +245,12 @@ fn apply_row_backfill(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
     // A key deleted since the snapshot resolves to `Gone` → `remove`,
     // which is a no-op on a segment that never held it.
     apply_scalar_row(store, &si.spec, &mut si.seg, key);
+    // Windowed index: this row's change may shadow a cold entry
+    // (rewrite, delete, revival) — the bloom decides if it earns a
+    // tombstone. AFTER the scalar apply: a revival needs its hot entry
+    // in the tree and its stale cold entry shadowed, and this order
+    // gives both.
+    if let Some(win) = &mut si.window {
+        win.on_row_write(key);
+    }
 }

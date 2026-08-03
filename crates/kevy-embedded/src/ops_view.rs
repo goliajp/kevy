@@ -29,6 +29,13 @@ pub(crate) struct ViewReg {
 pub(crate) struct ShardViews {
     pub(crate) version: u64,
     pub(crate) views: Vec<ViewState>,
+    /// `reserved_bytes` generation cache — see
+    /// `ShardSegs::stats_dirty`; same contract, view half. Tier-only,
+    /// like its twin.
+    #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+    pub(crate) stats_dirty: bool,
+    #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+    pub(crate) reserved_cache: u64,
 }
 
 pub(crate) struct ViewState {
@@ -38,15 +45,32 @@ pub(crate) struct ViewState {
 }
 
 impl ShardViews {
+    /// Invalidate the cache — no-op without the tier backend; see
+    /// `ShardSegs::mark_stats_dirty`.
+    #[inline]
+    pub(crate) fn mark_stats_dirty(&mut self) {
+        #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+        {
+            self.stats_dirty = true;
+        }
+    }
+
     /// Σ approximate heap bytes of the materialized view sets — the
     /// view half of the tier's `reserved_bytes` feed.
     /// Virtual views hold no set and contribute nothing.
     #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
-    pub(crate) fn reserved_bytes(&self) -> u64 {
-        self.views
+    pub(crate) fn reserved_bytes(&mut self) -> u64 {
+        if !self.stats_dirty {
+            return self.reserved_cache;
+        }
+        let sum = self
+            .views
             .iter()
             .map(|v| v.mat.as_ref().map_or(0, MaterializedSet::approx_bytes))
-            .sum()
+            .sum();
+        self.reserved_cache = sum;
+        self.stats_dirty = false;
+        sum
     }
 }
 
@@ -153,14 +177,17 @@ impl Store {
             let inner = &mut *g;
             crate::ops_index::sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
             sync_views(&self.views, &mut inner.view_segs, &inner.idx_segs);
-            let Some(vs) = inner.view_segs.views.iter_mut().find(|v| v.spec.name == name) else {
+            let Some(i) = inner.view_segs.views.iter().position(|v| v.spec.name == name)
+            else {
                 continue;
             };
             found = true;
-            desc = vs.spec.desc;
-            if vs.needs_rebuild {
-                rebuild(vs, &inner.idx_segs);
+            if inner.view_segs.views[i].needs_rebuild {
+                inner.view_segs.mark_stats_dirty();
+                rebuild(&mut inner.view_segs.views[i], &inner.idx_segs);
             }
+            let vs = &inner.view_segs.views[i];
+            desc = vs.spec.desc;
             match &vs.mat {
                 Some(m) => all.extend(m.page(after, limit, vs.spec.desc)),
                 None => stream_virtual(&vs.spec, &inner.idx_segs, after, limit, &mut all),
@@ -307,6 +334,7 @@ pub(crate) fn sync_views(reg: &ViewReg, sv: &mut ShardViews, segs: &ShardSegs) {
     if sv.version == *ver {
         return;
     }
+    sv.mark_stats_dirty();
     let mut next = Vec::new();
     for spec in cat.iter() {
         match sv.views.iter().position(|v| v.spec == *spec) {
@@ -352,12 +380,16 @@ pub(crate) fn on_commit(
                 m.clear();
             }
         }
+        sv.mark_stats_dirty();
         return;
     }
     // Same exact written-key walk as the index hook.
+    let mut touched = false;
+    let views = &mut sv.views;
     crate::ops_index::each_written_key_pub(verb, parts, |key| {
-        for vs in &mut sv.views {
+        for vs in &mut *views {
             let Some(mat) = &mut vs.mat else { continue };
+            touched = true;
             let r = resolver(segs);
             let member = key_in_tree(&vs.spec.tree, key, &&r);
             let order = r(&vs.spec.order_by).and_then(|s| s.verify_entry(key)).cloned();
@@ -366,4 +398,7 @@ pub(crate) fn on_commit(
             }
         }
     });
+    if touched {
+        sv.mark_stats_dirty();
+    }
 }

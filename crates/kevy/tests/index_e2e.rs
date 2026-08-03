@@ -1275,8 +1275,11 @@ fn scalar_values_filter_sort_distinct_facet_offset() {
     let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"price", b"EQ", b"abc"]);
     assert!(String::from_utf8_lossy(&r).contains("is not a valid i64"), "{:?}", String::from_utf8_lossy(&r));
 
-    // IDX.COUNT takes no clauses — refused, not ignored.
+    // IDX.COUNT applies FILTER (4.2: the claused count); clauses it
+    // would not apply stay refusals, not silence.
     let r = cmd(&mut c, &[b"IDX.COUNT", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo"]);
+    assert_eq!(r, b":2\r\n".to_vec(), "v:1 and v:4 are tokyo");
+    let r = cmd(&mut c, &[b"IDX.COUNT", b"vals", b"RANGE", b"0", b"100", b"SORT", b"city", b"ASC"]);
     assert!(r.starts_with(b"-ERR"), "{:?}", String::from_utf8_lossy(&r));
 
     // A live update moves the stored value with the row.
@@ -1286,4 +1289,73 @@ fn scalar_values_filter_sort_distinct_facet_offset() {
     cmd(&mut c, &[b"DEL", b"v:1"]);
     let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo"]);
     assert_eq!(r, flat_reply(&[("v:3", "30"), ("v:4", "40")]));
+}
+
+/// FLUSHALL must empty the index segments on THIS face too — the
+/// embedded on_commit hook resets every segment on FLUSH; a server
+/// that leaves them populated would serve deleted keys out of
+/// IDX.QUERY (probe written during v4.1-V5; asserts the two faces
+/// agree on flush semantics).
+#[test]
+fn flushall_empties_the_index_segments() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    for i in 0..20u32 {
+        let key = format!("u:{i}");
+        assert!(
+            cmd(&mut c, &[b"HSET", key.as_bytes(), b"score", format!("{i}").as_bytes()])
+                .starts_with(b":")
+        );
+    }
+    assert!(cmd(&mut c, &[
+        b"IDX.CREATE", b"by_score", b"ON", b"PREFIX", b"u:", b"FIELD", b"score",
+        b"TYPE", b"i64", b"KIND", b"range",
+    ]).starts_with(b"+OK"));
+    let full = query_ready(&mut c, &[b"IDX.QUERY", b"by_score", b"RANGE", b"0", b"100"]);
+    assert!(full.starts_with(b"*"), "{}", String::from_utf8_lossy(&full));
+    assert_ne!(full, b"*0\r\n".to_vec(), "populated before the flush");
+
+    assert!(cmd(&mut c, &[b"FLUSHALL"]).starts_with(b"+OK"));
+    let after = query_ready(&mut c, &[b"IDX.QUERY", b"by_score", b"RANGE", b"0", b"100"]);
+    assert_eq!(
+        after,
+        b"*2\r\n$1\r\n0\r\n*0\r\n".to_vec(), // [cursor 0, empty page]
+        "a flushed keyspace must not answer from stale index entries"
+    );
+}
+
+/// The claused count: IDX.COUNT applies FILTER, totalling what a
+/// claused query's pages would reach without materializing them — the
+/// consumer shape it closes counted a filtered axis by fetching every
+/// page and taking its length.
+#[test]
+fn idx_count_applies_filter() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    for i in 0..30u32 {
+        let key = format!("u:{i}");
+        let dept: &[u8] = if i % 3 == 0 { b"eng" } else { b"ops" };
+        assert!(cmd(&mut c, &[
+            b"HSET", key.as_bytes(), b"score", format!("{i}").as_bytes(), b"dept", dept,
+        ]).starts_with(b":"));
+    }
+    assert!(cmd(&mut c, &[
+        b"IDX.CREATE", b"by_score", b"ON", b"PREFIX", b"u:", b"FIELD", b"score",
+        b"TYPE", b"i64", b"KIND", b"range", b"VALUES", b"dept",
+    ]).starts_with(b"+OK"));
+    let _ = query_ready(&mut c, &[b"IDX.QUERY", b"by_score", b"RANGE", b"0", b"100"]);
+
+    assert_eq!(cmd(&mut c, &[b"IDX.COUNT", b"by_score", b"RANGE", b"0", b"100"]), b":30\r\n".to_vec());
+    assert_eq!(
+        cmd(&mut c, &[b"IDX.COUNT", b"by_score", b"RANGE", b"0", b"100", b"FILTER", b"dept", b"EQ", b"eng"]),
+        b":10\r\n".to_vec(),
+        "0,3,...,27"
+    );
+    assert_eq!(
+        cmd(&mut c, &[b"IDX.COUNT", b"by_score", b"RANGE", b"10", b"20", b"FILTER", b"dept", b"EQ", b"eng"]),
+        b":3\r\n".to_vec(),
+        "eng within 10..=20 is 12, 15, 18"
+    );
+    // A clause the count would not apply is a refusal, not silence.
+    assert!(cmd(&mut c, &[b"IDX.COUNT", b"by_score", b"RANGE", b"0", b"100", b"SORT", b"dept", b"ASC"]).starts_with(b"-ERR"));
 }

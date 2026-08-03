@@ -14,21 +14,43 @@ use crate::fields::FieldStats;
 use crate::positions::Positions;
 
 impl TextSegment {
-    /// Live counters.
+    /// Live counters — O(1): every term is a running
+    /// counter maintained at the mutation sites (the per-tick stat
+    /// walk of these structures was a consumer's measured tiering
+    /// idle/write-load CPU term, F16a). [`Self::recompute_stats`] is
+    /// the walking reference the tests hold these to.
     pub fn stats(&self) -> TextStats {
+        TextStats {
+            docs: self.docs.len() as u64,
+            tokens: self.postings.len() as u64,
+            postings: self.postings_total,
+            approx_bytes: self.token_bytes
+                + self.many_slots * 30
+                + self.doc_bytes
+                + self.positions.as_ref().map_or(0, Positions::approx_bytes)
+                + self.fields.as_ref().map_or(0, FieldStats::approx_bytes)
+                + self.values.as_ref().map_or(0, DocValues::approx_bytes),
+        }
+    }
+
+    /// The walking reference — recomputes every counter from the live
+    /// structures. Test-only: production reads the running counters.
+    #[cfg(test)]
+    pub(crate) fn recompute_stats(&self) -> TextStats {
         let postings: u64 = self.postings.values().map(|l| l.len() as u64).sum();
         TextStats {
             docs: self.docs.len() as u64,
             tokens: self.postings.len() as u64,
             postings,
-            approx_bytes: self.approx_bytes(),
+            approx_bytes: self.recompute_approx_bytes(),
         }
     }
 
     /// The measured heap estimate: token keys + per-`Many`-posting
     /// structure + the docs/id tables. Hapax (`One`) lists are inline,
     /// so only `Many` lists pay the band-vec + index cost.
-    fn approx_bytes(&self) -> u64 {
+    #[cfg(test)]
+    fn recompute_approx_bytes(&self) -> u64 {
         let many_postings: u64 = self
             .postings
             .values()
@@ -54,9 +76,9 @@ impl TextSegment {
         // and the declared stored values); absent, each contributes
         // nothing, so a plain single-field segment's formula is
         // byte-identical.
-        let position_bytes = self.positions.as_ref().map_or(0, Positions::approx_bytes);
-        let field_bytes = self.fields.as_ref().map_or(0, FieldStats::approx_bytes);
-        let value_bytes = self.values.as_ref().map_or(0, DocValues::approx_bytes);
+        let position_bytes = self.positions.as_ref().map_or(0, Positions::recompute_bytes);
+        let field_bytes = self.fields.as_ref().map_or(0, FieldStats::recompute_bytes);
+        let value_bytes = self.values.as_ref().map_or(0, DocValues::recompute_bytes);
         token_bytes + many_postings * 30 + doc_bytes + position_bytes + field_bytes + value_bytes
     }
 

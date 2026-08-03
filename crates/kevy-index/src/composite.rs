@@ -93,11 +93,70 @@ fn encode_component(col: &CompositeCol, raw: &[u8]) -> Option<Vec<u8>> {
 /// declared columns. `None` = the row is excluded (a missing column, a
 /// coerce failure, or an over-long `str` component).
 pub fn composite_encode(cols: &[CompositeCol], vals: &[Option<&[u8]>]) -> Option<Vec<u8>> {
+    composite_classify(cols, vals).into_value()
+}
+
+/// Why a row is not in an index — or the encoded value when it is.
+///
+/// `derive_scalar` collapsed three different exclusions into one `None`,
+/// and the write path then counted every one of them as a "coerce
+/// failure" — which is how a consumer's VERIFY read 30 152 coerce
+/// failures that were actually rows briefly missing a column (dogfood
+/// F10), and how two rows silently absent for *oversize* components
+/// cost a production hunt (F8/F9). One classification now drives both
+/// the write path and VERIFY, so the causes cannot drift apart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RowDerivation {
+    /// The row belongs in the index, under this value.
+    Indexed(Vec<u8>),
+    /// A driving column is absent from the row — NULL semantics, the
+    /// row is excluded *by design* (Law 3: absence is never an error).
+    Absent,
+    /// A present value failed to coerce to the declared type.
+    CoerceFailed,
+    /// A string component exceeded [`MAX_STR_COMPONENT`]; the row is
+    /// excluded from this composite (documented bound — hash or bound
+    /// the column if every row must index).
+    Oversize,
+}
+
+impl RowDerivation {
+    fn into_value(self) -> Option<Vec<u8>> {
+        match self {
+            Self::Indexed(v) => Some(v),
+            _ => None,
+        }
+    }
+}
+
+/// [`composite_encode`] with the exclusion cause kept. First failing
+/// component decides, in column order — deterministic, so VERIFY's
+/// tallies are stable.
+pub fn composite_classify(cols: &[CompositeCol], vals: &[Option<&[u8]>]) -> RowDerivation {
     let mut out = Vec::new();
     for (col, raw) in cols.iter().zip(vals) {
-        out.extend_from_slice(&encode_component(col, (*raw)?)?);
+        let Some(raw) = raw else { return RowDerivation::Absent };
+        match classify_component(col, raw) {
+            RowDerivation::Indexed(bytes) => out.extend_from_slice(&bytes),
+            other => return other,
+        }
     }
-    Some(out)
+    RowDerivation::Indexed(out)
+}
+
+/// [`encode_component`]'s cause-aware form; the encoder delegates here
+/// so the two can never disagree.
+fn classify_component(col: &CompositeCol, raw: &[u8]) -> RowDerivation {
+    if col.ty == ValType::Str && raw.len() > MAX_STR_COMPONENT {
+        return RowDerivation::Oversize;
+    }
+    match encode_component(col, raw) {
+        Some(bytes) => RowDerivation::Indexed(bytes),
+        // Str oversize was handled above; what remains is a numeric
+        // component that did not parse (or a Vector column, which never
+        // composites) — a coercion failure either way.
+        None => RowDerivation::CoerceFailed,
+    }
 }
 
 /// One parsed `WHERE` clause: an equality prefix plus an optional range
@@ -155,7 +214,30 @@ fn declared_list(cols: &[CompositeCol]) -> String {
 }
 
 /// Encode one WHERE bound value for `col`, or the named error.
-fn bound_component(col: &CompositeCol, raw: &[u8]) -> Result<Vec<u8>, String> {
+fn bound_component(col: &CompositeCol, raw: &[u8], now: i64) -> Result<Vec<u8>, String> {
+    // Resolve `@` time expressions BEFORE the shared encoder: row
+    // derivation (`classify_component`) shares `encode_component` and
+    // must never interpret data — a row whose i64 field holds "@now"
+    // is a coerce failure, not an expression. Only a QUERY bound
+    // comes through here.
+    let resolved;
+    let raw = if col.ty == ValType::I64 && raw.first() == Some(&b'@') {
+        match kevy_time::eval(raw, now) {
+            Some(i) => {
+                resolved = i.to_string().into_bytes();
+                resolved.as_slice()
+            }
+            None => {
+                return Err(format!(
+                    "WHERE bound '{}' is not a valid time expression for '{}'",
+                    String::from_utf8_lossy(raw),
+                    String::from_utf8_lossy(&col.name),
+                ));
+            }
+        }
+    } else {
+        raw
+    };
     encode_component(col, raw).ok_or_else(|| {
         format!(
             "WHERE bound '{}' is not a valid {}, which is how this composite declares '{}'",
@@ -196,21 +278,22 @@ fn component_max(col: &CompositeCol) -> Vec<u8> {
 pub fn composite_bounds(
     cols: &[CompositeCol],
     w: &WhereClause,
+    now: i64,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
     let mut lo = Vec::new();
     let mut hi = Vec::new();
     let mut at = 0usize;
     for (name, value) in &w.eqs {
         let col = resolve_col(cols, at, name)?;
-        let enc = bound_component(col, value)?;
+        let enc = bound_component(col, value, now)?;
         lo.extend_from_slice(&enc);
         hi.extend_from_slice(&enc);
         at += 1;
     }
     if let Some((name, min, max)) = &w.range {
         let col = resolve_col(cols, at, name)?;
-        let a = bound_component(col, min)?;
-        let b = bound_component(col, max)?;
+        let a = bound_component(col, min, now)?;
+        let b = bound_component(col, max, now)?;
         // A DESC component reverses the encoded order, so the encoded
         // interval endpoints swap; byte-wise min/max keeps both
         // directions on one path.
@@ -314,11 +397,34 @@ impl IndexSpec {
     /// recomputes, so composite drift is falsifiable too.
     pub fn derive_scalar(&self, prim: &[Option<Vec<u8>>]) -> Option<IndexValue> {
         match &self.composite {
+            // Composites carry their order-preserving byte encoding.
+            Some(_) => match self.classify_scalar(prim) {
+                RowDerivation::Indexed(v) => Some(IndexValue::Str(v)),
+                _ => None,
+            },
+            // Singles carry the typed value — the classification's raw
+            // bytes re-coerce through the same function it used, so the
+            // two answers cannot part.
+            None => IndexValue::coerce(self.ty, prim.first()?.as_deref()?),
+        }
+    }
+
+    /// [`Self::derive_scalar`] with the exclusion cause kept — VERIFY's
+    /// row→index direction reads this, the write path reads
+    /// `derive_scalar`, and both stand on the same classification.
+    pub fn classify_scalar(&self, prim: &[Option<Vec<u8>>]) -> RowDerivation {
+        match &self.composite {
             Some(cols) => {
                 let refs: Vec<Option<&[u8]>> = prim.iter().map(|o| o.as_deref()).collect();
-                composite_encode(cols, &refs).map(IndexValue::Str)
+                composite_classify(cols, &refs)
             }
-            None => IndexValue::coerce(self.ty, prim.first()?.as_deref()?),
+            None => match prim.first().and_then(|o| o.as_deref()) {
+                None => RowDerivation::Absent,
+                Some(raw) => match IndexValue::coerce(self.ty, raw) {
+                    Some(_) => RowDerivation::Indexed(raw.to_vec()),
+                    None => RowDerivation::CoerceFailed,
+                },
+            },
         }
     }
 }

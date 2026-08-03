@@ -6,7 +6,8 @@
 use crate::SnapshotSource;
 use crate::snapshot_fmt::{
     OP_EOF, OP_HASH, OP_HFTTL, OP_LIST, OP_SET, OP_STR, OP_STREAM, OP_ZSET, SNAPSHOT_BUF_CAP,
-    MAGIC, VERSION, VERSION_FEED_CURSOR, VERSION_HASH_TTL, write_bytes, write_ttl,
+    MAGIC, OP_SEGSTUB, VERSION, VERSION_FEED_CURSOR, VERSION_HASH_TTL, VERSION_SEG_STUB,
+    write_bytes, write_ttl,
 };
 use crate::snapshot_payload;
 use kevy_store::Value;
@@ -52,13 +53,7 @@ pub fn write_snapshot_to_with_cursor<S: SnapshotSource, W: Write>(
     src.for_each_hash_ttl(|k, f, d| fttl.push((k.to_vec(), f.to_vec(), d)));
     let mut w = BufWriter::with_capacity(SNAPSHOT_BUF_CAP, sink);
     w.write_all(MAGIC)?;
-    let version = if !fttl.is_empty() {
-        VERSION_HASH_TTL
-    } else if cursor.is_some() {
-        VERSION_FEED_CURSOR
-    } else {
-        VERSION
-    };
+    let version = snapshot_version(src, !fttl.is_empty(), cursor.is_some());
     w.write_all(&[version])?;
     if version >= VERSION_FEED_CURSOR {
         let (generation, offset) = cursor.unwrap_or((0, 0));
@@ -92,6 +87,20 @@ pub fn write_snapshot_to_with_cursor<S: SnapshotSource, W: Write>(
     Ok(())
 }
 
+/// The highest format feature the stream needs — lower versions stay
+/// byte-identical for stores that never used the newer features.
+fn snapshot_version<S: SnapshotSource>(src: &S, has_fttl: bool, has_cursor: bool) -> u8 {
+    if !src.row_seg_files().is_empty() {
+        VERSION_SEG_STUB
+    } else if has_fttl {
+        VERSION_HASH_TTL
+    } else if has_cursor {
+        VERSION_FEED_CURSOR
+    } else {
+        VERSION
+    }
+}
+
 /// The write half of [`save_snapshot`]: produce the durable (fsynced)
 /// `<path>.tmp` and return its path **without** the final rename. For the
 /// COW background-save flow: the serializer thread writes the temp file at
@@ -122,13 +131,15 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
         Value::Set(_) | Value::SmallSetInline(_) => OP_SET,
         Value::ZSet(_) | Value::SmallZSetInline(_) => OP_ZSET,
         Value::Stream(_) => OP_STREAM,
-        // Every SnapshotSource materializes cold values from the
-        // (pinned) vlog before yielding them — a stub here means a
-        // producer bypassed the source contract. Fail the snapshot
-        // rather than silently dropping the value.
+        // Seg-backed stub: persist the REFERENCE — the row's data is
+        // truth in the segment directory beside this snapshot.
+        Value::Cold(c) if c.seg_parts().is_some() => OP_SEGSTUB,
+        // Every SnapshotSource materializes VLOG stubs before yielding
+        // them — one here means a producer bypassed the contract. Fail
+        // the snapshot rather than silently dropping the value.
         Value::Cold(_) => {
             return Err(io::Error::other(
-                "cold stub reached the snapshot writer — SnapshotSource must materialize (T4)",
+                "vlog stub reached the snapshot writer — SnapshotSource must materialize (T4)",
             ));
         }
     };
@@ -148,7 +159,11 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
         Value::ZSet(z) => snapshot_payload::write_zset_payload(w, z),
         Value::SmallZSetInline(z) => snapshot_payload::write_small_zset_payload(w, z),
         Value::Stream(s) => snapshot_payload::write_stream_payload(w, s),
-        Value::Cold(_) => unreachable!("filtered by the op match above"),
+        Value::Cold(c) => {
+            let (seq, weight) = c.seg_parts().expect("vlog stubs error in the op match");
+            w.write_all(&seq.to_le_bytes())?;
+            w.write_all(&weight.to_le_bytes())
+        }
     }
 }
 

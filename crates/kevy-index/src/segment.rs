@@ -93,6 +93,17 @@ impl Segment {
         self.values.as_ref()?.get(key, field)
     }
 
+    /// Every stored value of one row, aligned with the declared
+    /// `VALUES` order — what an eviction carries into a cold entry's
+    /// payload so the clause-carrying cold path never re-reads the
+    /// row. Empty when the index declared no values.
+    pub fn stored_row(&self, key: &[u8]) -> Vec<Option<&[u8]>> {
+        match self.values.as_ref() {
+            Some(rv) => (0..rv.arity()).map(|f| rv.get(key, f)).collect(),
+            None => Vec::new(),
+        }
+    }
+
     /// The `(value, key)` tree, for the clause-carrying scan.
     pub(crate) fn tree(&self) -> &BTreeSet<(IndexValue, Vec<u8>)> {
         &self.tree
@@ -124,6 +135,48 @@ impl Segment {
                 self.stats.coerce_failures += 1;
             }
         }
+    }
+
+    /// The largest value present, if any — the window boundary's
+    /// tree-tail read.
+    pub fn max_value(&self) -> Option<&IndexValue> {
+        self.tree.last().map(|(v, _)| v)
+    }
+
+    /// Entries strictly below `bound`, tree order — the read-only
+    /// preview of [`Self::split_off_below`]'s batch (the slide builds
+    /// its segment from this BEFORE cutting, so an I/O failure leaves
+    /// the tree untouched).
+    pub fn iter_below(&self, bound: &IndexValue) -> impl Iterator<Item = (&IndexValue, &[u8])> {
+        let end = (bound.clone(), Vec::new());
+        self.tree
+            .range((core::ops::Bound::Unbounded, core::ops::Bound::Excluded(end)))
+            .map(|(v, k)| (v, k.as_slice()))
+    }
+
+    /// Detach every entry whose value sorts below `bound`, in tree
+    /// order — the window-eviction cut. The detached batch leaves all
+    /// of the segment's books (tree, reverse map, value counts, stored
+    /// values, stats) exactly as if each entry had been removed one by
+    /// one; the empty-key sentinel keeps every entry AT `bound` in the
+    /// hot tree, so the cut is strictly `< bound`.
+    pub fn split_off_below(&mut self, bound: &IndexValue) -> Vec<(IndexValue, Vec<u8>)> {
+        let kept = self.tree.split_off(&(bound.clone(), Vec::new()));
+        let evicted: Vec<(IndexValue, Vec<u8>)> =
+            core::mem::replace(&mut self.tree, kept).into_iter().collect();
+        for (v, k) in &evicted {
+            self.back.remove(k);
+            self.stats.entries -= 1;
+            self.stats.approx_bytes = self
+                .stats
+                .approx_bytes
+                .saturating_sub((v.approx_bytes() + k.len() + ENTRY_OVERHEAD) as u64);
+            self.dec_count(v);
+            if let Some(rv) = &mut self.values {
+                rv.clear(k);
+            }
+        }
+        evicted
     }
 
     /// Row deleted (no coercion involved — not a coerce failure).

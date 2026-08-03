@@ -261,6 +261,8 @@ pub const OP_TABLE: &[OpSpec] = &[
     // to IDX specs at declare time; catalog ops are sidecar-persisted,
     // not data writes — same reasoning as IDX.*.
     op("TABLE.DECLARE", RD, NG,  None,            None,    SERVER | ESTORE),
+    op("TABLE.ENSURE", RD, NG,   None,            None,    SERVER | ESTORE),
+    op("TABLE.REPLACE", RD, NG,  None,            None,    SERVER | ESTORE),
     op("TABLE.DROP",   RD, NG,   None,            None,    SERVER | ESTORE),
     op("TABLE.LIST",   RD, NG,   None,            None,    SERVER | ESTORE),
     op("TABLE.VERIFY", RD, NG,   None,            None,    SERVER | ESTORE),

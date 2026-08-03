@@ -33,16 +33,18 @@ fn workspace_root() -> PathBuf {
 /// `target/debug/kevy`, building it first if absent.
 fn server_binary() -> PathBuf {
     let root = workspace_root();
-    let bin = root.join("target/debug/kevy");
-    if !bin.exists() {
-        let status = Command::new("cargo")
-            .args(["build", "-p", "kevy"])
-            .current_dir(&root)
-            .status()
-            .expect("spawn cargo build -p kevy");
-        assert!(status.success(), "cargo build -p kevy failed");
-    }
-    bin
+    // ALWAYS run the build — cargo is incremental, so a fresh binary
+    // costs nothing and a stale one costs an afternoon: build-if-absent
+    // served a cached pre-4.1 binary on CI (restored target/ cache) and
+    // twice on a dev box, each time as a baffling oracle mismatch
+    // against a server that "couldn't" be emitting that reply.
+    let status = Command::new("cargo")
+        .args(["build", "-p", "kevy"])
+        .current_dir(&root)
+        .status()
+        .expect("spawn cargo build -p kevy");
+    assert!(status.success(), "cargo build -p kevy failed");
+    root.join("target/debug/kevy")
 }
 
 fn spawn_server(dir: &std::path::Path) -> ServerGuard {
@@ -418,6 +420,22 @@ fn cases() -> Vec<(Vec<&'static [u8]>, Cmp)> {
             b"COLUMN", b"n", b"i64",
             b"INDEX", b"n", b"RANGE",
             b"ORDERPATH", b"byn", b"ON", b"id", b"THEN", b"n", b"DESC"], Exact),
+        // WINDOW clause — refusal and success parity, and the LIST
+        // row's window cell on both faces.
+        c(&[b"TABLE.DECLARE", b"tw", b"PREFIX", b"tw:", b"PK", b"id", b"COLUMN", b"id", b"str",
+            b"COLUMN", b"at", b"i64",
+            b"WINDOW", b"at", b"SPAN", b"90", b"BUCKET", b"1"], Exact),
+        c(&[b"TABLE.DECLARE", b"tw", b"PREFIX", b"tw:", b"PK", b"id", b"COLUMN", b"id", b"str",
+            b"WINDOW", b"id", b"SPAN", b"90", b"BUCKET", b"1"], Exact),
+        c(&[b"TABLE.DECLARE", b"tw", b"PREFIX", b"tw:", b"PK", b"id", b"COLUMN", b"id", b"str",
+            b"COLUMN", b"at", b"i64", b"INDEX", b"at", b"RANGE",
+            b"WINDOW", b"at", b"SPAN", b"0", b"BUCKET", b"1"], Exact),
+        c(&[b"TABLE.DECLARE", b"tw", b"PREFIX", b"tw:", b"PK", b"id", b"COLUMN", b"id", b"str",
+            b"COLUMN", b"at", b"i64", b"INDEX", b"at", b"RANGE",
+            b"WINDOW", b"at", b"SPAN", b"90"], Exact),
+        c(&[b"TABLE.DECLARE", b"tw", b"PREFIX", b"tw:", b"PK", b"id", b"COLUMN", b"id", b"str",
+            b"COLUMN", b"at", b"i64", b"INDEX", b"at", b"RANGE",
+            b"WINDOW", b"at", b"SPAN", b"90", b"BUCKET", b"7"], Exact),
         c(&[b"TABLE.DECLARE", b"t1", b"PREFIX", b"tt:", b"PK", b"id", b"COLUMN", b"id", b"str"], Exact),
         c(&[b"TABLE.LIST"], Exact),
         c(&[b"TABLE.LIST", b"extra"], Exact),
@@ -524,6 +542,12 @@ fn scalar_values_clauses_match_the_real_server() {
         vec![b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"DISTINCT", b"nope"],
         vec![b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FACET", b"nope"],
         vec![b"IDX.COUNT", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo"],
+        vec![b"IDX.COUNT", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"price", b"RANGE", b"0", b"6"],
+        vec![b"IDX.COUNT", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo", b"FILTER", b"price", b"RANGE", b"0", b"6"],
+        vec![b"IDX.COUNT", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"nope", b"EQ", b"1"],
+        vec![b"IDX.COUNT", b"vals", b"RANGE", b"0", b"100", b"SORT", b"city", b"ASC"],
+        vec![b"IDX.COUNT", b"vals", b"RANGE", b"0", b"100", b"OFFSET", b"2"],
+        vec![b"IDX.COUNT", b"vals", b"EQ", b"10", b"FILTER", b"city", b"EQ", b"tokyo"],
     ];
     for argv in &cases {
         let srv = server_reply(&mut sock, &mut buf, argv);

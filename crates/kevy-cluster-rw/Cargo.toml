@@ -17,12 +17,12 @@ categories = ["database", "api-bindings"]
 workspace = true
 
 [dependencies]
-kevy-resp = { path = "../kevy-resp", version = "4.0.0" }
-kevy-resp-client = { path = "../kevy-resp-client", version = "4.0.0" }
+kevy-resp = { path = "../kevy-resp", version = "4.1.1" }
+kevy-resp-client = { path = "../kevy-resp-client", version = "4.1.1" }
 
 [dev-dependencies]
 # Integration tests spin up real kevy primary + replica Runtimes to
 # verify routing end-to-end.
 kevy = { path = "../kevy" }
-kevy-rt = { path = "../kevy-rt", version = "4.0.0" }
-kevy-replicate = { path = "../kevy-replicate", version = "4.0.0" }
+kevy-rt = { path = "../kevy-rt", version = "4.1.1" }
+kevy-replicate = { path = "../kevy-replicate", version = "4.1.1" }

@@ -19,7 +19,7 @@
 <a class="skip" href="#main">Skip to content</a>
 <header class="mast">
   <div class="mast-in">
-    <a class="brand" href="../../../ja/">kevy<span class="v">4.0</span></a>
+    <a class="brand" href="../../../ja/">kevy<span class="v">4.1</span></a>
     <nav class="nav">
       <a href="../../../ja/docs/">ドキュメント</a>
       <a href="../../../ja/docs/commands/" aria-current="page">コマンド</a>
@@ -48,7 +48,7 @@
 <main id="main" class="page">
   <div class="band">
     <p class="eyebrow">コマンド</p>
-    <h1>188 コマンド</h1>
+    <h1>190 コマンド</h1>
     <p class="lede">サーバーが応答するすべての動詞を、サーバー自身のレジストリから直接 —— <code>COMMAND DOCS</code> が読むのと同じテーブルである。Redis のリファレンスには無い列が二つある。このエンジンでの<b>実際のコスト</b>と、<b>Redis との差異</b>である。</p>
 
     <div class="filters">
@@ -247,7 +247,9 @@
 <tr data-name="idx.verify" data-group="index" data-compat="only"><td class="k"><a href="IDX.VERIFY/">IDX.VERIFY</a></td><td class="g">インデックス</td><td class="cx mono">shard あたり O(N)</td><td><span class="badge only">kevy 固有</span></td><td class="sum">インデックスを検証し、entries / bytes / coerce_failures / duplicates / drift / checked を報告する。</td></tr>
 <tr data-name="table.declare" data-group="table" data-compat="only"><td class="k"><a href="TABLE.DECLARE/">TABLE.DECLARE</a></td><td class="g">テーブル</td><td class="cx mono">O(declaration size) at the call</td><td><span class="badge only">kevy 固有</span></td><td class="sum">Declare a relational table that compiles at declare time into named indexes (catalog mutation, sidecar-persisted).</td></tr>
 <tr data-name="table.drop" data-group="table" data-compat="only"><td class="k"><a href="TABLE.DROP/">TABLE.DROP</a></td><td class="g">テーブル</td><td class="cx mono">O(catalog size + compiled indexes)</td><td><span class="badge only">kevy 固有</span></td><td class="sum">Drop a declared table and its compiled indexes (catalog mutation, sidecar-persisted).</td></tr>
+<tr data-name="table.ensure" data-group="table" data-compat="only"><td class="k"><a href="TABLE.ENSURE/">TABLE.ENSURE</a></td><td class="g">テーブル</td><td class="cx mono">declare-at-boot is the steady state</td><td><span class="badge only">kevy 固有</span></td><td class="sum">TABLE.DECLARE's boot form: identical existing declaration answers +UNCHANGED, a different one is a named refusal saying which part differs — never a silent rebuild.</td></tr>
 <tr data-name="table.list" data-group="table" data-compat="only"><td class="k"><a href="TABLE.LIST/">TABLE.LIST</a></td><td class="g">テーブル</td><td class="cx mono">O(tables) at the origin</td><td><span class="badge only">kevy 固有</span></td><td class="sum">List declared tables with their prefix, PK and declaration counts.</td></tr>
+<tr data-name="table.replace" data-group="table" data-compat="only"><td class="k"><a href="TABLE.REPLACE/">TABLE.REPLACE</a></td><td class="g">テーブル</td><td class="cx mono">the migration verb: spec changed, rebu…</td><td><span class="badge only">kevy 固有</span></td><td class="sum">Drop and redeclare in one verb, rebuilding every compiled index from the rows. Named for its cost: a full backfill, asked for explicitly. A bad spec refuses BEFORE the old table drops.</td></tr>
 <tr data-name="table.verify" data-group="table" data-compat="only"><td class="k"><a href="TABLE.VERIFY/">TABLE.VERIFY</a></td><td class="g">テーブル</td><td class="cx mono">O(sum of compiled index entries) per s…</td><td><span class="badge only">kevy 固有</span></td><td class="sum">Verify a table: each compiled index's full drift recheck plus a bounded column-type spot check over sampled rows.</td></tr>
 <tr data-name="view.create" data-group="view" data-compat="only"><td class="k"><a href="VIEW.CREATE/">VIEW.CREATE</a></td><td class="g">ビュー</td><td class="cx mono">呼び出し自体は O(tree size)</td><td><span class="badge only">kevy 固有</span></td><td class="sum">複数のインデックスを合成した view を、ORDER BY つきで宣言する(カタログの変更であり、サイドカーへ永続化される)。</td></tr>
 <tr data-name="view.drop" data-group="view" data-compat="only"><td class="k"><a href="VIEW.DROP/">VIEW.DROP</a></td><td class="g">ビュー</td><td class="cx mono">O(catalog size)</td><td><span class="badge only">kevy 固有</span></td><td class="sum">宣言済みの view を削除する(カタログの変更であり、サイドカーへ永続化される)。</td></tr>

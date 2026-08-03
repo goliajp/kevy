@@ -30,6 +30,12 @@ pub struct SnapshotView {
     /// life, however long the serializer thread takes.
     #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
     pins: Vec<std::sync::Arc<kevy_vlog::VlogFile>>,
+    /// Row-segment pins — the seg-backed stubs' serializer-thread
+    /// read path, same doctrine as the vlog pins.
+    #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+    seg_pins: Vec<(u32, std::sync::Arc<kevy_seg::Seg>)>,
+    #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+    seg_files: Vec<(u32, String)>,
 }
 
 // Compile-time guarantee that a view can cross to a serializer thread.
@@ -72,8 +78,23 @@ impl SnapshotView {
     /// this process pinned every file at collect time) — surfaced
     /// loudly, never healed silently.
     #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
-    pub fn materialize_cold(&self, v: &Value) -> Option<Value> {
+    pub fn materialize_cold(&self, key: &[u8], v: &Value) -> Option<Value> {
         let Value::Cold(c) = v else { return None };
+        if c.is_seg() {
+            let payload = self
+                .seg_pins
+                .iter()
+                .find(|(q, _)| *q == c.seg_ix())
+                .expect("segrows: view stub references a segment pinned at collect time")
+                .1
+                .get(key)
+                .expect("segrows: pinned segment read failed — refused, not healed")
+                .expect("segrows: stub points at a record the segment does not hold");
+            return Some(
+                crate::tier_codec::decode(c.type_tag, payload)
+                    .expect("segrows: cold row decode failed — process bug"),
+            );
+        }
         let file = self
             .pins
             .iter()
@@ -90,8 +111,18 @@ impl SnapshotView {
 
     /// No tier backend on this target — `Value::Cold` cannot exist.
     #[cfg(not(all(feature = "std", not(target_arch = "wasm32"))))]
-    pub fn materialize_cold(&self, _v: &Value) -> Option<Value> {
+    pub fn materialize_cold(&self, _key: &[u8], _v: &Value) -> Option<Value> {
         None
+    }
+
+    /// The frozen row segments' `(seq, file)` identities.
+    #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+    pub fn row_seg_files(&self) -> Vec<(u32, String)> {
+        self.seg_files.clone()
+    }
+    #[cfg(not(all(feature = "std", not(target_arch = "wasm32"))))]
+    pub fn row_seg_files(&self) -> Vec<(u32, String)> {
+        Vec::new()
     }
 }
 
@@ -128,6 +159,10 @@ impl Store {
             // files that exist at this instant.
             #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
             pins: self.tier_pins(),
+            #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+            seg_pins: self.segrow_pins(),
+            #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+            seg_files: self.row_seg_files(),
         }
     }
 }

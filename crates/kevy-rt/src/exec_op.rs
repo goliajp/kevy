@@ -70,6 +70,9 @@ impl<C: Commands> Shard<C> {
             Op::Dbsize => Part::Int(self.store.dbsize() as i64),
             Op::Flush => {
                 self.store.flushall();
+                // Derived structures (indexes, views) reset with the
+                // keyspace — same hook on the replica apply path.
+                self.commands.on_flush(&mut self.store);
                 // Every WATCH against this shard is now invalidated.
                 self.store.bump_all_watched();
                 // Feed contract: FLUSHALL breaks stream continuity

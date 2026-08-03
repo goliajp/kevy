@@ -53,6 +53,11 @@ pub(crate) mod claused;
 #[path = "ops_index_text.rs"]
 mod text;
 
+// The embedded MATCH's cold seams (windowed tables' frozen buckets).
+#[cfg(feature = "text")]
+#[path = "ops_index_text_cold.rs"]
+pub(crate) mod text_cold;
+
 /// Sort merged `(value, key)` hits, cut to `limit`, and derive the
 /// resume cursor. Shared by `Store::idx_query` and the transaction twin
 /// on `AtomicAllShards`, which differ only in where the segments come
@@ -76,6 +81,13 @@ pub(crate) struct IndexReg {
     pub(crate) catalog: RwLock<(u64, Catalog)>,
 }
 
+/// A shard's window runtime beside its segment — `()` stand-in on
+/// wasm, where the cold tier compiles out.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type WinRef<'a> = Option<&'a kevy_window::WindowRt>;
+#[cfg(target_arch = "wasm32")]
+pub(crate) type WinRef<'a> = Option<&'a core::convert::Infallible>;
+
 /// Per-shard segment list, kept inside `Inner` (guarded by the shard
 /// lock).
 #[derive(Default)]
@@ -91,6 +103,49 @@ pub(crate) struct ShardSegs {
     pub(crate) ann: Vec<(IndexSpec, kevy_vector::Hnsw)>,
     /// Aggregate segments for KIND agg specs.
     pub(crate) agg: Vec<(IndexSpec, kevy_index::AggSegment)>,
+    /// Sliding-window runtimes, name-keyed — reconciled and slid by
+    /// the reaper's window tick; empty under a manual reaper (nothing
+    /// slides, everything stays hot, queries need no cold half).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) windows: Vec<(Vec<u8>, kevy_window::WindowRt)>,
+    /// A windowed table's text indexes' cold directories, name-keyed —
+    /// reconciled and fed by the same window tick (the driver's
+    /// eviction batch freezes out of every same-table text index).
+    #[cfg(all(feature = "text", not(target_arch = "wasm32")))]
+    pub(crate) cold_text: Vec<(Vec<u8>, kevy_window::TextColdDir)>,
+    /// `reserved_bytes` generation cache: set by every
+    /// segment-mutating chokepoint (`on_commit` applies, list
+    /// rebuilds, FLUSH resets) via [`ShardSegs::mark_stats_dirty`];
+    /// an idle tick reads the cached sum instead of walking every
+    /// segment's stats. Compiled with the tier backend only — on
+    /// targets without it (wasm) nothing reads the cache.
+    #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+    pub(crate) stats_dirty: bool,
+    #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+    pub(crate) reserved_cache: u64,
+}
+
+impl ShardSegs {
+    /// The window runtime for `name`, if that index is a windowed
+    /// table's window access path AND a tick has reconciled it (only
+    /// the reaper's window tick populates the list, so a manual-reaper
+    /// or memory-only store always answers `None` — nothing slid).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn window_of(&self, name: &[u8]) -> Option<&kevy_window::WindowRt> {
+        self.windows.iter().find(|(n, _)| n == name).map(|(_, w)| w)
+    }
+
+
+    /// Invalidate the `reserved_bytes` cache — a no-op on targets
+    /// without the tier backend, so mutation chokepoints call it
+    /// unconditionally.
+    #[inline]
+    pub(crate) fn mark_stats_dirty(&mut self) {
+        #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+        {
+            self.stats_dirty = true;
+        }
+    }
 }
 
 #[cfg(feature = "persist")]
@@ -213,33 +268,6 @@ impl Store {
             self.persist_index_sidecar();
         }
         hit
-    }
-
-    /// Range / EQ query with cursor pagination: merged across shards
-    /// in `(value, key)` order. `cursor = None` starts; the returned
-    /// cursor resumes exclusively.
-    pub fn idx_query(
-        &self,
-        name: &[u8],
-        min: &IndexValue,
-        max: &IndexValue,
-        cursor: Option<&Cursor>,
-        limit: usize,
-    ) -> KevyResult<IndexPage> {
-        let limit = limit.clamp(1, 100_000);
-        let mut all: Vec<(IndexValue, Vec<u8>)> = Vec::new();
-        self.for_each_segment(name, |seg| {
-            let (hits, _) = seg.range(min, max, cursor, limit);
-            all.extend(hits.into_iter().map(|(k, v)| (v, k)));
-        })?;
-        Ok(merge_page(all, limit))
-    }
-
-    /// Count without materializing keys.
-    pub fn idx_count(&self, name: &[u8], min: &IndexValue, max: &IndexValue) -> KevyResult<u64> {
-        let mut total = 0u64;
-        self.for_each_segment(name, |seg| total += seg.count(min, max))?;
-        Ok(total)
     }
 
     /// Summed segment stats (entries / bytes / coerce failures /

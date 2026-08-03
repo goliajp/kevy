@@ -9,9 +9,15 @@ use crate::ops_index::{IndexReg, ShardSegs};
 
 impl ShardSegs {
     /// Σ approximate heap bytes of this shard's index segments, every
-    /// kind — the tier's `reserved_bytes` floor feed.
+    /// kind — the tier's `reserved_bytes` floor feed. Served from the
+    /// generation cache: an idle store recomputes nothing (—
+    /// the walk behind this sum was a consumer's measured 300-500× idle
+    /// CPU term).
     #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
-    pub(crate) fn reserved_bytes(&self) -> u64 {
+    pub(crate) fn reserved_bytes(&mut self) -> u64 {
+        if !self.stats_dirty {
+            return self.reserved_cache;
+        }
         let mut sum: u64 = self.segs.iter().map(|(_, s)| s.stats().approx_bytes).sum();
         sum += self.agg.iter().map(|(_, a)| a.stats().approx_bytes).sum::<u64>();
         #[cfg(feature = "text")]
@@ -22,6 +28,8 @@ impl ShardSegs {
         {
             sum += self.ann.iter().map(|(_, g)| g.stats().approx_bytes).sum::<u64>();
         }
+        self.reserved_cache = sum;
+        self.stats_dirty = false;
         sum
     }
 }
@@ -144,6 +152,7 @@ fn rebuild_seg_lists(
     }
     shard_segs.agg = next_agg;
     shard_segs.version = ver;
+    shard_segs.mark_stats_dirty();
 }
 
 /// Keep `spec`'s existing segment from `have` (position move), or
@@ -266,32 +275,87 @@ pub(crate) fn on_commit(
     let verb = parts.first().copied().unwrap_or(b"");
     if verb.eq_ignore_ascii_case(b"FLUSHALL") || verb.eq_ignore_ascii_case(b"FLUSHDB") {
         reset_all_segs(shard_segs);
+        shard_segs.mark_stats_dirty();
         return;
     }
+    let mut touched = false;
     each_written_key(verb, parts, |key| {
-        for (spec, seg) in &mut shard_segs.segs {
-            if key.starts_with(&spec.prefix) {
-                apply_key(store, spec, seg, key);
-            }
-        }
-        #[cfg(feature = "text")]
-        for (spec, ts) in &mut shard_segs.text {
-            if key.starts_with(&spec.prefix) {
-                apply_text_key(store, spec, ts, key);
-            }
-        }
-        #[cfg(feature = "vector")]
-        for (spec, g) in &mut shard_segs.ann {
-            if key.starts_with(&spec.prefix) {
-                apply_ann_key(store, spec, g, key);
-            }
-        }
-        for (spec, a) in &mut shard_segs.agg {
-            if key.starts_with(&spec.prefix) {
-                apply_agg_key(store, spec, a, key);
-            }
-        }
+        touched |= apply_one_key(shard_segs, store, key);
     });
+    if touched {
+        shard_segs.mark_stats_dirty();
+    }
+}
+
+/// The text half of one written key: re-derive its inverted entries,
+/// then — on a windowed table — shadow any frozen entries this write
+/// stales (rewrite / delete / revival; the statistics withdraw
+/// exactly — server twin: `apply_row`'s text arm).
+#[cfg(feature = "text")]
+fn apply_text_arm(
+    shard_segs: &mut ShardSegs,
+    store: &mut kevy_store::Store,
+    key: &[u8],
+) -> bool {
+    let mut touched = false;
+    for (spec, ts) in &mut shard_segs.text {
+        if key.starts_with(&spec.prefix) {
+            apply_text_key(store, spec, ts, key);
+            touched = true;
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let ShardSegs { text, cold_text, .. } = &mut *shard_segs;
+        for (name, dir) in cold_text.iter_mut() {
+            if text.iter().any(|(s, _)| &s.name == name && key.starts_with(&s.prefix)) {
+                dir.on_row_write(key);
+            }
+        }
+    }
+    touched
+}
+
+/// Apply one written key to every matching segment of every kind.
+/// Returns whether any segment was touched (the cache-invalidation
+/// signal).
+fn apply_one_key(shard_segs: &mut ShardSegs, store: &mut kevy_store::Store, key: &[u8]) -> bool {
+    let mut touched = false;
+    for (spec, seg) in &mut shard_segs.segs {
+        if key.starts_with(&spec.prefix) {
+            apply_key(store, spec, seg, key);
+            touched = true;
+        }
+    }
+    // Windowed indexes: this write may shadow a cold entry (rewrite /
+    // delete / revival) — the bloom decides if it earns a tombstone.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let ShardSegs { segs, windows, .. } = &mut *shard_segs;
+        for (name, win) in windows.iter_mut() {
+            if segs.iter().any(|(s, _)| &s.name == name && key.starts_with(&s.prefix)) {
+                win.on_row_write(key);
+            }
+        }
+    }
+    #[cfg(feature = "text")]
+    {
+        touched |= apply_text_arm(shard_segs, store, key);
+    }
+    #[cfg(feature = "vector")]
+    for (spec, g) in &mut shard_segs.ann {
+        if key.starts_with(&spec.prefix) {
+            apply_ann_key(store, spec, g, key);
+            touched = true;
+        }
+    }
+    for (spec, a) in &mut shard_segs.agg {
+        if key.starts_with(&spec.prefix) {
+            apply_agg_key(store, spec, a, key);
+            touched = true;
+        }
+    }
+    touched
 }
 
 /// FLUSHALL / FLUSHDB: every segment resets to empty.

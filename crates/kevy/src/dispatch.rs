@@ -200,6 +200,8 @@ fn dispatch_conn<A: ArgvView + ?Sized>(
         b"VIEW.DROP" => crate::cmd_view::cmd_view_drop(ctx, args, out),
         b"IDX.DROP" => crate::cmd_index::cmd_idx_drop(ctx, args, out),
         b"TABLE.DECLARE" => crate::cmd_table::cmd_table_declare(ctx, store, args, out),
+        b"TABLE.ENSURE" => crate::cmd_table::cmd_table_ensure(ctx, store, args, out),
+        b"TABLE.REPLACE" => crate::cmd_table::cmd_table_replace(ctx, store, args, out),
         b"TABLE.DROP" => crate::cmd_table::cmd_table_drop(ctx, args, out),
         // Well-formed LIST/VERIFY ride the extension fan-out; only a
         // malformed arity falls through to these usage arms.

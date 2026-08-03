@@ -45,6 +45,19 @@ mod enabled {
         /// Demotion victim scoring (RFC §7: tiered-lru default).
         pub(crate) policy: EvictionPolicy,
         pub(crate) demotions_total: u64,
+        /// Demote-sampler backoff: ticks left to skip before
+        /// the next over-target sample walk. "Idempotent is not
+        /// convergent" — a store that is over target with nothing left
+        /// to spill (every spillable value already cold, or the floor
+        /// alone exceeds the budget so `effective_target == 0`) used to
+        /// re-walk the sample window every tick forever.
+        pub(crate) tick_wait: u32,
+        /// Current backoff width: doubles on every dry tick batch up
+        /// to [`crate::tier_demote::BACKOFF_CEILING_TICKS`], resets to
+        /// 0 on any demotion (tick or write path — the write path
+        /// always samples immediately, so a fresh spillable value
+        /// never waits out the window).
+        pub(crate) tick_skip: u32,
         pub(crate) promotions_total: u64,
         /// Every vlog record read (serve, promote, peek) — the
         /// WRONGTYPE-without-read proof counter.
@@ -136,11 +149,14 @@ mod enabled {
         pub fn enable_tiering(&mut self, dir: &Path, budget: u64) -> io::Result<()> {
             let dir: PathBuf = dir.to_path_buf();
             let vlog = Vlog::open(&dir, kevy_vlog::DEFAULT_ROTATE_BYTES)?;
+            self.cold_backing = true;
             self.tier = Some(TierState {
                 vlog,
                 budget,
                 policy: EvictionPolicy::AllKeysLru,
                 demotions_total: 0,
+                tick_wait: 0,
+                tick_skip: 0,
                 promotions_total: 0,
                 preads_total: 0,
                 peek_preads_total: 0,
@@ -273,8 +289,8 @@ mod enabled {
         /// record into a fresh owned hot value WITHOUT installing,
         /// promoting, or setting the probation mark — persistence is a
         /// bulk path and never promotes. `None` when `v` is hot.
-        pub fn materialize_cold(&self, v: &Value) -> Option<Value> {
-            self.tier_peek_value(v)
+        pub fn materialize_cold(&self, key: &[u8], v: &Value) -> Option<Value> {
+            self.tier_peek_value(key, v)
         }
 
         /// A cold stub is being discarded (DEL / overwrite / expiry /
@@ -287,6 +303,10 @@ mod enabled {
         /// No-op for hot values.
         pub(crate) fn tier_note_dead(&mut self, key_heap: u64, v: &Value) {
             let Value::Cold(c) = v else { return };
+            if c.is_seg() {
+                self.segrow_note_dead(*c);
+                return;
+            }
             if let Some(t) = &mut self.tier {
                 t.vlog.note_dead(c.vref());
                 t.cold_keys = t.cold_keys.saturating_sub(1);
@@ -353,7 +373,7 @@ mod disabled {
 
         /// No tier backend on this target — `Value::Cold` cannot exist.
         #[inline]
-        pub fn materialize_cold(&self, _v: &Value) -> Option<Value> {
+        pub fn materialize_cold(&self, _key: &[u8], _v: &Value) -> Option<Value> {
             None
         }
 

@@ -17,3 +17,4 @@ categories = ["data-structures", "database-implementations"]
 workspace = true
 
 [dependencies]
+kevy-time = { path = "../kevy-time", version = "4.1.1" }

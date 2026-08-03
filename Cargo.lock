@@ -414,7 +414,7 @@ dependencies = [
 
 [[package]]
 name = "kevy"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy-alloc",
  "kevy-bench",
@@ -435,12 +435,14 @@ dependencies = [
  "kevy-resp-client",
  "kevy-rt",
  "kevy-scope",
+ "kevy-seg",
  "kevy-store",
  "kevy-sys",
  "kevy-text",
  "kevy-tmpdir",
  "kevy-uring",
  "kevy-vector",
+ "kevy-window",
 ]
 
 [[package]]
@@ -449,7 +451,7 @@ version = "4.0.0"
 
 [[package]]
 name = "kevy-bench"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy-alloc",
  "kevy-config",
@@ -462,7 +464,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-bytes"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy-bench",
  "kevy-hash",
@@ -470,11 +472,11 @@ dependencies = [
 
 [[package]]
 name = "kevy-chaos"
-version = "4.0.0"
+version = "4.1.1"
 
 [[package]]
 name = "kevy-cli"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy-embedded",
  "kevy-persist",
@@ -486,7 +488,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-client"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "kevy",
  "kevy-embedded",
@@ -498,7 +500,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-client-async"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "async-std",
  "kevy-client",
@@ -511,7 +513,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-cluster-rw"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy",
  "kevy-replicate",
@@ -522,18 +524,18 @@ dependencies = [
 
 [[package]]
 name = "kevy-config"
-version = "4.0.0"
+version = "4.1.1"
 
 [[package]]
 name = "kevy-elect"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy-resp",
 ]
 
 [[package]]
 name = "kevy-embedded"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy",
  "kevy-client",
@@ -543,45 +545,50 @@ dependencies = [
  "kevy-replicate",
  "kevy-resp",
  "kevy-rt",
+ "kevy-seg",
  "kevy-store",
  "kevy-sys",
  "kevy-text",
  "kevy-tmpdir",
  "kevy-vector",
+ "kevy-window",
 ]
 
 [[package]]
 name = "kevy-ffi"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy-embedded",
 ]
 
 [[package]]
 name = "kevy-geo"
-version = "4.0.0"
+version = "4.1.1"
 
 [[package]]
 name = "kevy-hash"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy-bench",
 ]
 
 [[package]]
 name = "kevy-index"
-version = "4.0.0"
+version = "4.1.1"
+dependencies = [
+ "kevy-time",
+]
 
 [[package]]
 name = "kevy-jni"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy-ffi",
 ]
 
 [[package]]
 name = "kevy-lua"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy-bench",
  "luna-core",
@@ -589,18 +596,18 @@ dependencies = [
 
 [[package]]
 name = "kevy-lua-host"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy-lua",
 ]
 
 [[package]]
 name = "kevy-madvise"
-version = "4.0.0"
+version = "4.1.1"
 
 [[package]]
 name = "kevy-map"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy-bench",
  "kevy-hash",
@@ -609,7 +616,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-mcp"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy-resp",
  "kevy-resp-client",
@@ -617,14 +624,14 @@ dependencies = [
 
 [[package]]
 name = "kevy-napi"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy-ffi",
 ]
 
 [[package]]
 name = "kevy-persist"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy-resp",
  "kevy-store",
@@ -634,22 +641,22 @@ dependencies = [
 
 [[package]]
 name = "kevy-pubsub-bench"
-version = "4.0.0"
+version = "4.1.1"
 
 [[package]]
 name = "kevy-ranktree"
-version = "4.0.0"
+version = "4.1.1"
 
 [[package]]
 name = "kevy-replicate"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy-resp",
 ]
 
 [[package]]
 name = "kevy-resp"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy-bench",
  "kevy-bytes",
@@ -657,14 +664,14 @@ dependencies = [
 
 [[package]]
 name = "kevy-resp-client"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy-resp",
 ]
 
 [[package]]
 name = "kevy-ring"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy-bench",
  "loom",
@@ -672,7 +679,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-rt"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy-config",
  "kevy-hash",
@@ -689,54 +696,67 @@ dependencies = [
 
 [[package]]
 name = "kevy-scope"
-version = "4.0.0"
+version = "4.1.1"
+
+[[package]]
+name = "kevy-seg"
+version = "4.1.1"
+dependencies = [
+ "kevy-sys",
+ "kevy-tmpdir",
+]
 
 [[package]]
 name = "kevy-sql"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy-index",
 ]
 
 [[package]]
 name = "kevy-store"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy-bench",
  "kevy-bytes",
  "kevy-hash",
  "kevy-map",
  "kevy-ranktree",
+ "kevy-seg",
  "kevy-tmpdir",
  "kevy-vlog",
 ]
 
 [[package]]
 name = "kevy-sys"
-version = "4.0.0"
+version = "4.1.1"
 
 [[package]]
 name = "kevy-text"
-version = "4.0.0"
+version = "4.1.1"
+
+[[package]]
+name = "kevy-time"
+version = "4.1.1"
 
 [[package]]
 name = "kevy-tmpdir"
-version = "4.0.0"
+version = "4.1.1"
 
 [[package]]
 name = "kevy-uring"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy-tmpdir",
 ]
 
 [[package]]
 name = "kevy-vector"
-version = "4.0.0"
+version = "4.1.1"
 
 [[package]]
 name = "kevy-vlog"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy-sys",
  "kevy-tmpdir",
@@ -744,12 +764,22 @@ dependencies = [
 
 [[package]]
 name = "kevy-wasm"
-version = "4.0.0"
+version = "4.1.1"
 dependencies = [
  "kevy-embedded",
  "kevy-persist",
  "kevy-resp",
  "kevy-store",
+]
+
+[[package]]
+name = "kevy-window"
+version = "4.1.1"
+dependencies = [
+ "kevy-index",
+ "kevy-seg",
+ "kevy-text",
+ "kevy-tmpdir",
 ]
 
 [[package]]

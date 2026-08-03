@@ -422,6 +422,64 @@ D2 事务标记(全有全无,与事务大小无关)/ R2 事务内集合读。
 
 ---
 
+# v4.1 — dogfood 体系修复 arc(mailrs 反馈,用户拍板 2026-07-27:看体系不看单点,no defer)
+
+**输入**:`mailrs/.claude/notes/kevy-v4-dogfood-feedback-2026-07-26.md`(17 findings,两次 prod 事故)。
+**设计**:`.claude/rfcs/2026-07-27-v4.1-dogfood-systemic.md`(五个体系诊断 D1-D5 → 八个 train V1-V8;
+**自查已在代码坐实,三处比报告更糟**:embedded VERIFY 是匿名数组元组 / typed 门面从不 validate 直通
+compile 的 expect / tick 固定 CPU 的主项是每 tick 全量走文本索引 stats 而非 key 扫描)。
+
+五个诊断一句话:**D1** typed 门面是没人测的双胞胎(RESP 面有全套 gate,embedded 面缺类型、跳准入、匿名元组,
+CI 无消费者位置链接);**D2** 准入分裂在两张脸(只有 wire 调 validate → 下游 expect = 别人 boot 路径的 panic);
+**D3** 周期任务无 idle 态(幂等≠收敛,300–500× 空转 CPU 让旗舰功能被关);**D4** 报表混时间语义 +
+缺解释意外的计数器;**D5** 迁移知识只在 mailrs 笔记里(八课 + "可验证性"这个最强卖点都不在 docs)。
+
+## 线性 checklist(V1-V8;TABLE 线 V1→V4、tiering 线 V5→V6、paper 线 V7→V8 三线独立,线内有序)
+
+### V1 — 门面平权 + facadegate(D1)✅(`8d510fea`)
+- [x] re-export TableSpec/TableIndex/OrderPath + `Value`(第二例同类缺口);VERIFY 匿名元组 → 具名 struct;旧 alias deprecated shim
+- [x] **facadegate**:工作区外消费者 crate(独立 lockfile,只 path-dep 两个门面),纯门面 import 走全公开功能族(KV/pubsub/durability/index/view/text/table 全链/tiering 配置);CI job。F7 从结构上不可再犯
+
+### V2 — 单一准入权威,声明路径 panic-free(D2)✅(`8f8cc248`;fuzz 21.3M 轮零 panic)
+- [x] `compile_table` 改返回 `Result` 并**自己调 validate**;三处 expect → 可达具名拒绝;fuzz `table_spec` 双路 21.3M 零 panic 进 CI;docs 保证已写;facadegate 逐字节复刻 F9 事故 spec 断言 Err+零安装
+
+### V3 — declare 生命周期(F8.2)✅(`f57954c4`;双面 + e2e;顺带自抓 python 补丁把 \r\n 展开成真字节、Rust 词法 CRLF 归一的坑)
+- [x] `table_ensure` {Created,Unchanged} + `spec_diff` 具名差异 + `table_replace`(坏 spec 在旧表 drop **前**拒);RESP 双面四注册面 + e2e(+UNCHANGED 逐字节/坏 REPLACE 留旧表);docs boot 章归 V8 文档趟
+
+### V4 — VERIFY 单一时间框(D4)✅(`451a552e`;设计中途升级为**双向 walk**)
+- [x] 报表全字段每次现算,且发现 4.0 的 lifetime `coerce_failures` 把 absent 也吞了(F10 的 30152"失败"全是 absence)→ `RowDerivation {Indexed,Absent,CoerceFailed,Oversize}` 单一分类同时驱动写路径与 verify;新增 row→index 方向四计数:`excluded` / `absent` / `rows` / **`missing`**(drift walk 结构上看不见的"忘了写的 writer"类,F13/F14 的可见化);两面镜像 22 元素 labeled row(新标签追加在尾,4.0 按标签读的消费者不破),oracle 逐字节;facadegate 每 cause 种一行断言各归各名;lifetime 留 seg stats
+- [x] docs:VERIFY 章改写为双向 + `entries = rows − excluded − absent − coerce_failures` 对账;duplicates ≠ 0 ⇒ 非全序 ⇒ 分页跳/重;tie-break 用**有界**列(裸 Message-ID 反例)
+
+### V5 — tiering 收敛:idle 必须近零(D3)✅(`94c23162`;lx64 实测 1.6× vs mailrs 的 300-500×)
+- [x] **stats 不再走**:四面 generation cache(embedded ShardSegs/ShardViews + server ShardIndexes/ShardViews,每个 mutation 咽喉点置 dirty)+ **全部 walking stats() 增量化**:kevy-text(postings/tokens/docs/Many-slots + positions/fields 走新 `Channel` + docvalues heap 和)、kevy-vector(links_total/tombstones)、kevy-index agg(distinct/gkey/rowkey);走查器留作 #[cfg(test)] 参照,四个 drift-invariant 测试逐步核
+- [x] **采样退避**:tick 零迁移指数跳(顶 64 tick ≈6.4s),任何降温重置;写路径永远立即采样(既有测试锁定),`effective_target==0` 同路收敛;3 个新 kevy-store 单测
+- [x] **gate**:tiergate 新 L15 行,lx64 实测 PASS(idle 30s off=7 / on=11 ticks)
+- [x] docs/tiering.md:索引地板写在旋钮前面 + idle 收敛契约成文
+- [x] **顺带真 bug**:server 面 FLUSHALL 不 reset segments/views,IDX.QUERY 继续吐已删 key(embedded 面会 reset,两面分歧 = D1 类洞)→ 新 `Commands::on_flush` 钩子双路径(client + replica-apply)+ 回归 e2e
+
+### V6 — 运行状态可读(F16.2 + smix 反馈)✅(smix 项 `fe63f9e4`;server 双 gauge `ae2f6552`)
+- [x] **smix 项已落**(`fe63f9e4`,第二份 dogfood 输入 `/tmp/kevy-feedback-2026-07-26.md`):`Aof::format()` 公开 + `Store::downgradeable_to_v3() -> Option<bool>`;e2e 伪造 3.x 文件走完 开窗→追加保持→rewrite 关窗 全程
+- [x] `# Memory` 加 `process_rss_bytes`(kevy-sys OS 边界:/proc status VmRSS + mach task_info 手写绑定)+ docs/tuning.md 容器按 RSS 定容;`# Persistence` 加 `aof_format`(off/v1/v2,新 defaulted `on_aof_format` 钩子;e2e 断言真 AOF server 报 v2)
+
+### V7 — 错误互操作 + UPGRADING 纠偏(F1/F2/F4)✅(`612041d8`)
+- [x] `From<KevyError> for io::Error`:类型单点在 kevy-store,一个 impl 三面全覆盖(kind 映射 + source 保留 + Io 变体直通不双包);**这是对 4.0 "deliberately no back-edge" 设计决定的有据推翻**(280 个 io::Error::other 就是它错了的实证),UPGRADING 原段落改写为反转记录;单测钉死每个映射 + downcast;facadegate 消费者位 `?` 断言 + kevy-client-async 进 gate
+- [x] UPGRADING:kevy-client 2.0.0 行核对(已正确,F1 早已解);"迁移实际由什么构成"段 + `--message-format=json` worklist 技法;`with_auto_aof_rewrite_disabled()`(F4,一次清三个自动 rewrite 触发旋钮;config.rs 超限顺带拆 config_tier_builders.rs)+ canary 段接 观测面(downgradeable_to_v3 / INFO aof_format)
+
+### V8 — 迁移专章(D5)✅(`b85821ca`)
+- [x] `docs/table-migration.md`:八课按需要顺序全落 + 开篇可验证性论证 + 实测三类漂移(89% never-written / 76% never-removed / 序漂);tables.md 加 boot-pattern 章(ENSURE/REPLACE 语义,V3 归档的文档趟)+ 显眼指路
+
+**明确不在本 arc(记录非静默 defer)**:F13 行新鲜度信号(真特性,独立 RFC);F16 可下沉索引层(= v5 试验 T5,已在那边 roadmap)。
+
+### SHIP ✅ v4.1.0(2026-07-28,tag `v4.1.0` @ `e4b819bf`)
+- [x] CHANGELOG + workspace 4.1.0 / client 2.1.0(88+2 pin)+ 双 lockfile + release 预跑
+- [x] 文档三语 delta(tables/tiering/tuning/UPGRADING)+ table-migration 三语;顺带修掉 en/ja/zh 嵌入示例仍在教 `use kevy_index::TableSpec` 的 F7 反模式残留
+- [x] 站点:700+ 页 4.1、table-migration 三语上站、TABLE.ENSURE/REPLACE 命令页(190 verbs ×3)、llms 快照、4.1 wasm;rsync t01 并线上 200 验证
+- [x] CI 五连修后真绿:oracle build-if-absent 陈旧缓存 binary(改永远构建)/ wasm dead-code(cache 字段 cfg + mark_stats_dirty)/ killgate(pgcompare 无守卫 pkill,07-26 起的遗留红)/ locgate 四个 fn>50 拆分 / commentgate 46 处出处注释清零 / **uring EINTR 真 bug**(availgate SIGSTOP clamp 暴露:io_uring_enter EINTR 未重试 → shard 退出;全树唯一缺口,已补重试)
+- [x] release.yml success:crates.io 34 crates(kevy/kevy-embedded 4.1.0、client/async 2.1.0 已线上验证)+ npm @goliapkg/kevy 4.1.0 + GH release(6 assets)
+- [x] 装后 smoke:crates.io 拉 4.1.0,消费者位 facade import + `?` io 互操作 + ensure + fresh verify 一次通过
+
+---
+
 # v5 试验 arc — 中小企业 datasolution 的**一种尝试**(2026-07-26)
 
 > **这不是 v5,是 v5 的一次尝试**(用户拍板 2026-07-26)。
@@ -432,6 +490,11 @@ D2 事务标记(全有全无,与事务大小无关)/ R2 事务内集合读。
 **愿景(拍板)**:kevy 做**中小型企业(SME)的 datasolution**,在中小型 RDS 业务上全面超越 PG。
 **"中小型"指企业规模,不是数据规模** —— SME 可以有几千万行、几十 GB;稀缺的是运维人力、
 专家与硬件预算。愿景是拍过板的;**下面所有通往它的路线都是可推翻的。**
+
+**研究总案(2026-07-31,主轴拍板:滑动窗口热区的 KV → 虚拟 SQL support)**:
+`.claude/plans/2026-07-31-v5-research-master-plan.md` —— 七个研究单元 R1-R7 与合成路径;
+各单元开工前仍需自己的 RFC。开工顺序建议:R2a+R2d 窗口模型设计轮 → R1 residual 设计轮 →
+R4a 覆盖度清单(可并行)。
 
 **主设计**:`.claude/plans/2026-07-26-v5-arc-design-input.md`(SME 判据 S1-S5 / 模型固有 I1-I5 /
 四项约束拍板 / 核心张力)· `.claude/rfcs/2026-07-26-v5-kevy-alloc.md` ·

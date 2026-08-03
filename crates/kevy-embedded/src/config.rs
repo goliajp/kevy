@@ -304,6 +304,24 @@ impl Config {
         self
     }
 
+    /// Disable every automatic rewrite trigger — growth, absolute size
+    /// and interval — in one named call This is
+    /// the canary-window switch: the first rewrite is the documented
+    /// one-way step that upgrades a 3.x-era AOF to v2
+    /// ([`crate::Store::downgradeable_to_v3`] reads the window), so an
+    /// embedder keeping a binary-swap escape hatch open turns the
+    /// automatics off rather than remembering which of three knobs
+    /// zeroes which rule. Explicit [`crate::Store::rewrite_aof`] calls
+    /// still work — and still close the window.
+    #[cfg(feature = "persist")]
+    #[must_use]
+    pub fn with_auto_aof_rewrite_disabled(mut self) -> Self {
+        self.auto_aof_rewrite_pct = 0;
+        self.auto_aof_rewrite_bytes = 0;
+        self.auto_aof_rewrite_interval_secs = 0;
+        self
+    }
+
     /// Shard the keyspace into `n` shared-nothing partitions (`hash(key) % n`),
     /// each with its own lock + keyspace + AOF, so concurrent access scales
     /// across cores. `n` clamps to ≥ 1; `1` (default) is the original
@@ -329,47 +347,6 @@ impl Config {
         sink: impl Fn(crate::KevyMetric) + Send + Sync + 'static,
     ) -> Self {
         self.metric_sink = Some(crate::metric::MetricSink::new(sink));
-        self
-    }
-
-    /// Enable transparent tiering with a RAM budget of `bytes`: values
-    /// past the demote watermark spill to the cold tier on disk
-    /// (`<data_dir>/tier/`) and page back in on access — every command
-    /// keeps its exact semantics. Requires [`Self::with_persist`]; a
-    /// memory-only store fails at open with a named error.
-    #[cfg(feature = "tier")]
-    #[must_use]
-    pub fn with_tier_budget(mut self, bytes: u64) -> Self {
-        self.tier_budget = Some(TierBudgetSpec::Bytes(bytes));
-        self
-    }
-
-    /// Enable transparent tiering with the `auto` budget: 0.70 × the
-    /// detected memory bound (cgroup v2 limit / `MemAvailable` on
-    /// Linux, `hw.memsize` on macOS), re-probed on every reaper tick.
-    /// Open fails with a named error when no bound is detectable.
-    #[cfg(feature = "tier")]
-    #[must_use]
-    pub fn with_tier_budget_auto(mut self) -> Self {
-        self.tier_budget = Some(TierBudgetSpec::Auto);
-        self
-    }
-
-    /// Cap the largest spillable value (bytes; 0 = unlimited). Bounds
-    /// the embedded cold-read lock-hold time; default 256 KiB.
-    #[must_use]
-    pub fn with_max_spill_value(mut self, bytes: u64) -> Self {
-        self.max_spill_value = bytes;
-        self
-    }
-
-    /// Enable transparent tiering with a percent-of-detected-bound
-    /// budget (`p` in 1..=100 — validated at open with a named error,
-    /// like every other config refusal).
-    #[cfg(feature = "tier")]
-    #[must_use]
-    pub fn with_tier_budget_percent(mut self, p: u8) -> Self {
-        self.tier_budget = Some(TierBudgetSpec::Percent(p));
         self
     }
 
@@ -488,3 +465,6 @@ mod tests {
         assert!(!c.aof);
     }
 }
+
+#[path = "config_tier_builders.rs"]
+mod config_tier_builders;

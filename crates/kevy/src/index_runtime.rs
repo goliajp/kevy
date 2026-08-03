@@ -36,6 +36,12 @@ enum BuildState {
 struct ShardIndex {
     spec: IndexSpec,
     seg: Segment,
+    /// The sliding-window runtime — `Some` only when this index is a
+    /// windowed table's single-column window access path.
+    window: Option<kevy_window::WindowRt>,
+    /// The text index's cold half — `Some` only when this is a
+    /// windowed table's TEXT index.
+    cold_text: Option<TextColdDir>,
     /// Populated instead of `seg` for KIND text.
     text: Option<kevy_text::TextSegment>,
     /// Populated instead of `seg` for KIND ann.
@@ -52,6 +58,13 @@ struct ShardIndex {
 pub(crate) struct ShardIndexes {
     generation: u64,
     idx: Vec<ShardIndex>,
+    /// `reserved_bytes` generation cache: set by every
+    /// segment-mutating chokepoint (write applies, backfill batches,
+    /// catalog refresh); an idle tick reads the cached sum instead of
+    /// walking every segment's stats — the walk behind the sum was
+    /// a consumer's measured 300-500× idle-CPU term (F16a).
+    stats_dirty: bool,
+    reserved_cache: u64,
 }
 
 /// The write-path hook body (`Commands::on_write`). The caller gates
@@ -61,20 +74,48 @@ pub(crate) struct ShardIndexes {
 pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st, store);
+    let st = &mut *st;
     for si in &mut st.idx {
         if key.starts_with(&si.spec.prefix) {
             apply_row(store, si, key);
+            st.stats_dirty = true;
         }
     }
 }
 
-/// Tick hook: advance backfills a bounded batch per tick. Gated like
-/// [`on_write`].
+/// Tick hook: advance backfills a bounded batch per tick, then slide
+/// any windowed index whose boundary moved. Gated like [`on_write`].
 pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st, store);
+    let st = &mut *st;
+    let segs_dir = shard_segs_dir(ctx.state, ctx.shard.shard_id());
+    // Pass 1: backfills, then the scalar slide. The eviction batch's
+    // keys (discovered on the window column's index) are kept so the
+    // second pass can freeze the SAME batch out of the table's text
+    // index — a different ShardIndex entry, hence the two passes.
+    let mut batches: Vec<(Vec<u8>, Vec<Vec<u8>>)> = Vec::new();
     for si in &mut st.idx {
+        if matches!(si.build, BuildState::Backfilling { .. }) {
+            st.stats_dirty = true;
+        }
         advance_backfill(store, si, 2048);
+        if let (Some(win), Some(dir), BuildState::Ready) = (&mut si.window, &segs_dir, &si.build) {
+            // Exactly ONE windowed access path per table drives row
+            // eviction (two drivers would seal the same batch twice);
+            // every other windowed path only slides its own tree.
+            let drives = window_driver(&ctx.state.catalogs, &si.spec.name);
+            if drives && let Some(rows) = win.pending_rows(&si.seg) {
+                batches.push((table_of(&si.spec.name).to_vec(), rows));
+            }
+            st.stats_dirty |= evict_and_slide(win, &si.spec.name, &mut si.seg, store, dir, drives);
+        }
+    }
+    // Pass 2: freeze each batch out of its table's text index.
+    if let Some(dir) = &segs_dir {
+        for (table, keys) in &batches {
+            freeze_text_batches(st, table, keys, dir);
+        }
     }
 }
 
@@ -83,10 +124,35 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
 /// floor feed. Called per shard tick, gated on
 /// tiering being enabled; refreshes the shard list first so a
 /// just-declared index counts immediately.
+/// FLUSHALL/FLUSHDB emptied this shard's store: every segment resets
+/// to its declared-empty shape (found stale by an audit — the
+/// embedded face's `on_commit` reset on FLUSH; this face kept serving
+/// deleted keys out of IDX.QUERY). A mid-backfill index goes straight
+/// to Ready: its snapshot's keys no longer exist.
+pub(crate) fn on_flush(ctx: &Ctx<'_>, store: &mut Store) {
+    let mut st = ctx.shard.indexes.borrow_mut();
+    refresh(&ctx.state.catalogs, &mut st, store);
+    let st = &mut *st;
+    for si in &mut st.idx {
+        si.seg = new_scalar_seg(&si.spec);
+        si.text = new_text_seg(&si.spec);
+        si.ann = new_ann_seg(&si.spec);
+        si.agg = (si.spec.kind == kevy_index::IndexKind::Agg).then(kevy_index::AggSegment::new);
+        si.build = BuildState::Ready;
+        st.stats_dirty = true;
+    }
+}
+
+/// Served from the generation cache: an idle store recomputes
+/// nothing.
 pub(crate) fn reserved_bytes(ctx: &Ctx<'_>, store: &mut Store) -> u64 {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st, store);
-    st.idx
+    if !st.stats_dirty {
+        return st.reserved_cache;
+    }
+    let sum = st
+        .idx
         .iter()
         .map(|si| {
             si.seg.stats().approx_bytes
@@ -94,7 +160,10 @@ pub(crate) fn reserved_bytes(ctx: &Ctx<'_>, store: &mut Store) -> u64 {
                 + si.ann.as_ref().map_or(0, |g| g.stats().approx_bytes)
                 + si.agg.as_ref().map_or(0, |a| a.stats().approx_bytes)
         })
-        .sum()
+        .sum();
+    st.reserved_cache = sum;
+    st.stats_dirty = false;
+    sum
 }
 
 /// Query entry: run `f` against this shard's segment for `name`.
@@ -104,7 +173,7 @@ pub(crate) fn with_ready_segment<R>(
     ctx: &Ctx<'_>,
     store: &mut Store,
     name: &[u8],
-    f: impl FnOnce(&IndexSpec, &Segment) -> R,
+    f: impl FnOnce(&IndexSpec, &Segment, Option<&kevy_window::WindowRt>) -> R,
 ) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st, store);
@@ -114,7 +183,7 @@ pub(crate) fn with_ready_segment<R>(
         .find(|si| si.spec.name == name)
         .ok_or("ERR no such index")?;
     match si.build {
-        BuildState::Ready => Ok(f(&si.spec, &si.seg)),
+        BuildState::Ready => Ok(f(&si.spec, &si.seg, si.window.as_ref())),
         BuildState::Backfilling { .. } => Err(CmdError::Wire("INDEXBUILDING index is still building")),
         BuildState::FailedOverBudget => Err(CmdError::Wire("INDEXOVERBUDGET index build exceeded MAXMEM")),
     }
@@ -169,7 +238,12 @@ pub(crate) fn with_ready_text_segment<R>(
     ctx: &Ctx<'_>,
     store: &mut Store,
     name: &[u8],
-    f: impl FnOnce(&kevy_text::TextSegment, &kevy_index::IndexSpec) -> R,
+    f: impl FnOnce(
+        &mut Store,
+        &kevy_text::TextSegment,
+        &kevy_index::IndexSpec,
+        Option<&TextColdDir>,
+    ) -> R,
 ) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st, store);
@@ -179,7 +253,7 @@ pub(crate) fn with_ready_text_segment<R>(
         .find(|si| si.spec.name == name)
         .ok_or("ERR no such index")?;
     match (&si.build, &si.text) {
-        (BuildState::Ready, Some(ts)) => Ok(f(ts, &si.spec)),
+        (BuildState::Ready, Some(ts)) => Ok(f(store, ts, &si.spec, si.cold_text.as_ref())),
         (BuildState::Backfilling { .. }, _) => Err(CmdError::Wire("INDEXBUILDING index is still building")),
         (BuildState::FailedOverBudget, _) => Err(CmdError::Wire("INDEXOVERBUDGET index build exceeded MAXMEM")),
         (_, None) => Err(CmdError::Wire("ERR not a text index")),
@@ -253,6 +327,25 @@ fn new_scalar_seg(spec: &IndexSpec) -> Segment {
 
 /// A fresh text segment for `spec` when it is a text index — with the
 /// positional side-channel iff it was created WITH POSITIONS.
+/// A fresh HNSW graph shaped by the spec (None for non-ann kinds) —
+/// shared by the catalog refresh and the FLUSH reset.
+fn new_ann_seg(spec: &kevy_index::IndexSpec) -> Option<kevy_vector::Hnsw> {
+    spec.ann.as_ref().map(|a| {
+        kevy_vector::Hnsw::new(
+            a.dim as usize,
+            kevy_vector::HnswParams {
+                m: a.m as usize,
+                ef_construction: a.ef as usize,
+                distance: match a.distance {
+                    1 => kevy_vector::Distance::L2,
+                    2 => kevy_vector::Distance::Ip,
+                    _ => kevy_vector::Distance::Cosine,
+                },
+            },
+        )
+    })
+}
+
 fn new_text_seg(spec: &kevy_index::IndexSpec) -> Option<kevy_text::TextSegment> {
     (spec.kind == kevy_index::IndexKind::Text).then(|| {
         // The declared field count decides whether the segment keeps the
@@ -274,41 +367,30 @@ fn refresh(catalogs: &CatalogState, st: &mut ShardIndexes, store: &mut Store) {
     if st.generation == generation {
         return;
     }
+    st.stats_dirty = true;
     let cat = catalogs.index();
     let mut next: Vec<ShardIndex> = Vec::new();
     if let Some(cat) = cat {
         for (spec, _state) in cat.iter() {
             match st.idx.iter().position(|si| si.spec == *spec) {
-                Some(i) => next.push(st.idx.swap_remove(i)),
-                None => {
-                    // Snapshot the domain's keys on THIS shard; live
-                    // writes from now on hit the hook first and win.
-                    let mut pat = spec.prefix.clone();
-                    pat.push(b'*');
-                    let keys = store.collect_keys(Some(&pat), None);
-                    next.push(ShardIndex {
-                        agg: (spec.kind == kevy_index::IndexKind::Agg)
-                            .then(kevy_index::AggSegment::new),
-                        text: new_text_seg(spec),
-                        ann: spec.ann.as_ref().map(|a| {
-                            kevy_vector::Hnsw::new(
-                                a.dim as usize,
-                                kevy_vector::HnswParams {
-                                    m: a.m as usize,
-                                    ef_construction: a.ef as usize,
-                                    distance: match a.distance {
-                                        1 => kevy_vector::Distance::L2,
-                                        2 => kevy_vector::Distance::Ip,
-                                        _ => kevy_vector::Distance::Cosine,
-                                    },
-                                },
-                            )
-                        }),
-                        seg: new_scalar_seg(spec),
-                        spec: spec.clone(),
-                        build: BuildState::Backfilling { keys, pos: 0 },
-                    });
+                Some(i) => {
+                    let mut si = st.idx.swap_remove(i);
+                    // The index spec survived, but the table's WINDOW
+                    // clause may have changed (REPLACE): reconcile.
+                    // A changed window resets the runtime — the old
+                    // spill is unreachable and swept on first slide.
+                    let want = window_for(catalogs, &si.spec);
+                    let have = si.window.as_ref().map(|w| (w.spec.clone(), w.shape));
+                    if have != want {
+                        si.window = want.map(|(w, sh)| kevy_window::WindowRt::new(w, sh));
+                    }
+                    let want_text = text_window_for(catalogs, &si.spec);
+                    if si.cold_text.is_some() != want_text {
+                        si.cold_text = want_text.then(TextColdDir::new);
+                    }
+                    next.push(si);
                 }
+                None => next.push(fresh_shard_index(catalogs, spec, store)),
             }
         }
     }
@@ -316,6 +398,31 @@ fn refresh(catalogs: &CatalogState, st: &mut ShardIndexes, store: &mut Store) {
     st.generation = generation;
 }
 
+/// A just-declared index's runtime entry. Snapshots the domain's keys
+/// on THIS shard for the backfill; live writes from now on hit the
+/// hook first and win.
+fn fresh_shard_index(catalogs: &CatalogState, spec: &IndexSpec, store: &mut Store) -> ShardIndex {
+    let mut pat = spec.prefix.clone();
+    pat.push(b'*');
+    let keys = store.collect_keys(Some(&pat), None);
+    ShardIndex {
+        agg: (spec.kind == kevy_index::IndexKind::Agg).then(kevy_index::AggSegment::new),
+        text: new_text_seg(spec),
+        ann: new_ann_seg(spec),
+        seg: new_scalar_seg(spec),
+        window: window_for(catalogs, spec).map(|(w, sh)| kevy_window::WindowRt::new(w, sh)),
+        cold_text: text_window_for(catalogs, spec).then(TextColdDir::new),
+        spec: spec.clone(),
+        build: BuildState::Backfilling { keys, pos: 0 },
+    }
+}
+
+pub(crate) use kevy_window::{ColdHit, ColdPageQuery, TextColdDir, WindowRt};
+mod window_slide;
+use window_slide::{
+    evict_and_slide, freeze_text_batches, shard_segs_dir, table_of, text_window_for, window_driver,
+    window_for,
+};
 mod row_apply;
 use row_apply::{advance_backfill, apply_row};
 pub(crate) use row_apply::{RowValue, row_value};

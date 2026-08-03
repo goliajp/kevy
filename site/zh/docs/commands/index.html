@@ -19,7 +19,7 @@
 <a class="skip" href="#main">Skip to content</a>
 <header class="mast">
   <div class="mast-in">
-    <a class="brand" href="../../../zh/">kevy<span class="v">4.0</span></a>
+    <a class="brand" href="../../../zh/">kevy<span class="v">4.1</span></a>
     <nav class="nav">
       <a href="../../../zh/docs/">文档</a>
       <a href="../../../zh/docs/commands/" aria-current="page">命令</a>
@@ -48,7 +48,7 @@
 <main id="main" class="page">
   <div class="band">
     <p class="eyebrow">命令</p>
-    <h1>188 个命令</h1>
+    <h1>190 个命令</h1>
     <p class="lede">服务器会应答的每一个动词，直接来自它自己的注册表 —— 也就是 <code>COMMAND DOCS</code> 读的同一张表。有两栏是 Redis 的参考文档里没有的：这个命令在<b>本引擎里的真实代价</b>，以及它<b>与 Redis 的差异</b>。</p>
 
     <div class="filters">
@@ -247,7 +247,9 @@
 <tr data-name="idx.verify" data-group="index" data-compat="only"><td class="k"><a href="IDX.VERIFY/">IDX.VERIFY</a></td><td class="g">索引</td><td class="cx mono">每个 shard 上 O(N)</td><td><span class="badge only">kevy 独有</span></td><td class="sum">校验索引：把每一条索引项都拿回它对应的行重读一遍，报告 entries / bytes / coerce_failures / duplicates / drift / checked。</td></tr>
 <tr data-name="table.declare" data-group="table" data-compat="only"><td class="k"><a href="TABLE.DECLARE/">TABLE.DECLARE</a></td><td class="g">表</td><td class="cx mono">O(declaration size) at the call</td><td><span class="badge only">kevy 独有</span></td><td class="sum">Declare a relational table that compiles at declare time into named indexes (catalog mutation, sidecar-persisted).</td></tr>
 <tr data-name="table.drop" data-group="table" data-compat="only"><td class="k"><a href="TABLE.DROP/">TABLE.DROP</a></td><td class="g">表</td><td class="cx mono">O(catalog size + compiled indexes)</td><td><span class="badge only">kevy 独有</span></td><td class="sum">Drop a declared table and its compiled indexes (catalog mutation, sidecar-persisted).</td></tr>
+<tr data-name="table.ensure" data-group="table" data-compat="only"><td class="k"><a href="TABLE.ENSURE/">TABLE.ENSURE</a></td><td class="g">表</td><td class="cx mono">declare-at-boot is the steady state</td><td><span class="badge only">kevy 独有</span></td><td class="sum">TABLE.DECLARE's boot form: identical existing declaration answers +UNCHANGED, a different one is a named refusal saying which part differs — never a silent rebuild.</td></tr>
 <tr data-name="table.list" data-group="table" data-compat="only"><td class="k"><a href="TABLE.LIST/">TABLE.LIST</a></td><td class="g">表</td><td class="cx mono">O(tables) at the origin</td><td><span class="badge only">kevy 独有</span></td><td class="sum">List declared tables with their prefix, PK and declaration counts.</td></tr>
+<tr data-name="table.replace" data-group="table" data-compat="only"><td class="k"><a href="TABLE.REPLACE/">TABLE.REPLACE</a></td><td class="g">表</td><td class="cx mono">the migration verb: spec changed, rebu…</td><td><span class="badge only">kevy 独有</span></td><td class="sum">Drop and redeclare in one verb, rebuilding every compiled index from the rows. Named for its cost: a full backfill, asked for explicitly. A bad spec refuses BEFORE the old table drops.</td></tr>
 <tr data-name="table.verify" data-group="table" data-compat="only"><td class="k"><a href="TABLE.VERIFY/">TABLE.VERIFY</a></td><td class="g">表</td><td class="cx mono">O(sum of compiled index entries) per s…</td><td><span class="badge only">kevy 独有</span></td><td class="sum">Verify a table: each compiled index's full drift recheck plus a bounded column-type spot check over sampled rows.</td></tr>
 <tr data-name="view.create" data-group="view" data-compat="only"><td class="k"><a href="VIEW.CREATE/">VIEW.CREATE</a></td><td class="g">视图</td><td class="cx mono">调用本身 O(树的大小)</td><td><span class="badge only">kevy 独有</span></td><td class="sum">在若干索引之上声明一个组合视图，并指定 ORDER BY(catalog 变更，由 sidecar 持久化)。</td></tr>
 <tr data-name="view.drop" data-group="view" data-compat="only"><td class="k"><a href="VIEW.DROP/">VIEW.DROP</a></td><td class="g">视图</td><td class="cx mono">O(catalog 大小)</td><td><span class="badge only">kevy 独有</span></td><td class="sum">删除一个已声明的视图（catalog 变更，由 sidecar 持久化）。</td></tr>

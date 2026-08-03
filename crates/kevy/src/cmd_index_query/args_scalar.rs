@@ -168,14 +168,18 @@ impl Query {
         self.selects() || !self.filters.is_empty()
     }
 
-    pub(in crate::cmd_index_query) fn bounds(&self, ty: ValType) -> Option<(IndexValue, IndexValue)> {
+    pub(in crate::cmd_index_query) fn bounds(
+        &self,
+        ty: ValType,
+        now: i64,
+    ) -> Option<(IndexValue, IndexValue)> {
         match &self.shape {
             Shape::Range { min, max } => Some((
-                IndexValue::parse_literal(ty, min)?,
-                IndexValue::parse_literal(ty, max)?,
+                kevy_index::parse_literal_bound(ty, min, now)?,
+                kevy_index::parse_literal_bound(ty, max, now)?,
             )),
             Shape::Eq { value } => {
-                let v = IndexValue::parse_literal(ty, value)?;
+                let v = kevy_index::parse_literal_bound(ty, value, now)?;
                 Some((v.clone(), v))
             }
             Shape::Where(_) | Shape::Verify => None,
@@ -191,6 +195,7 @@ impl Query {
     pub(in crate::cmd_index_query) fn bounds_for(
         &self,
         spec: &kevy_index::IndexSpec,
+        now: i64,
     ) -> Result<(IndexValue, IndexValue), Vec<u8>> {
         if let Shape::Where(w) = &self.shape {
             let Some(cols) = &spec.composite else {
@@ -198,11 +203,11 @@ impl Query {
                     kevy_index::WHERE_NOT_COMPOSITE,
                 ));
             };
-            let (lo, hi) = kevy_index::composite_bounds(cols, w)
+            let (lo, hi) = kevy_index::composite_bounds(cols, w, now)
                 .map_err(|e| crate::cmd_index_query::query_claused::clause_chunk(&e))?;
             return Ok((IndexValue::Str(lo), IndexValue::Str(hi)));
         }
-        self.bounds(spec.ty).ok_or_else(|| vec![crate::cmd_index_query::ST_BADARGS])
+        self.bounds(spec.ty, now).ok_or_else(|| vec![crate::cmd_index_query::ST_BADARGS])
     }
 
     pub(in crate::cmd_index_query) fn cursor(&self, _ty: ValType) -> Option<Cursor> {

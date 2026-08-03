@@ -34,10 +34,45 @@ pub(super) fn clause_chunk(msg: &str) -> Vec<u8> {
 
 /// Run a clause-carrying scalar query against this shard's segment and
 /// encode the chunk. The caller has already refused CURSOR × selection.
+/// `IDX.COUNT … FILTER …`: the per-shard claused count, in the plain
+/// COUNT chunk shape (`[ST_OK][u64]`) so `reduce_count` sums it
+/// unchanged.
+pub(super) fn run_claused_count(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> Vec<u8> {
+    let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg, win| {
+        let now = (kevy_store::now_unix_ms() / 1000) as i64;
+        let (min, max) = q.bounds_for(spec, now)?;
+        let filters: Vec<(usize, ValueTest)> = filter_tests(spec, &q.filters, now)?;
+        // A windowed index's evicted half counts from the cold
+        // payloads — same predicates, frozen values. A corrupt
+        // segment refuses; never a partial number.
+        let cold = match win
+            .filter(|w| w.has_cold())
+            .map(|w| w.cold_claused_count(spec.ty, &min, &max, &filters))
+            .transpose()
+        {
+            Ok(n) => n.unwrap_or(0),
+            Err(_) => return Err(vec![super::ST_NOINDEX]),
+        };
+        Ok(seg.count_claused(&min, &max, &filters) + cold)
+    });
+    match res {
+        Ok(Err(chunk)) => chunk,
+        Ok(Ok(n)) => {
+            let mut chunk = vec![ST_OK];
+            chunk.extend_from_slice(&n.to_le_bytes());
+            chunk
+        }
+        Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
+        Err(_) => vec![ST_NOINDEX],
+    }
+}
+
 pub(super) fn run_claused_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> Vec<u8> {
-    let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg| {
-        let (min, max) = q.bounds_for(spec)?;
-        let filters: Vec<(usize, ValueTest)> = filter_tests(spec, &q.filters)?;
+    let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg, win| {
+        let now = (kevy_store::now_unix_ms() / 1000) as i64;
+        let (min, max) = q.bounds_for(spec, now)?;
+        let filters: Vec<(usize, ValueTest)> = filter_tests(spec, &q.filters, now)?;
         let sort = sort_field(spec, &q.sort)?;
         let distinct = distinct_field(spec, &q.distinct)?;
         let facets = facet_fields(spec, &q.facets)?;
@@ -52,7 +87,14 @@ pub(super) fn run_claused_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> 
             fetch: q.limit + q.offset,
         };
         let cursor = q.cursor(spec.ty);
-        Ok(seg.query_claused(&min, &max, cursor.as_ref(), &clauses))
+        let mut page = seg.query_claused(&min, &max, cursor.as_ref(), &clauses);
+        if let Some(w) = win.filter(|w| w.has_cold()) {
+            match w.cold_claused(spec.ty, &min, &max, cursor.as_ref(), &clauses) {
+                Ok((chits, cfacets)) => merge_cold_claused(&mut page, chits, cfacets, &clauses),
+                Err(_) => return Err(vec![super::ST_NOINDEX]),
+            }
+        }
+        Ok(page)
     });
     match res {
         Ok(Err(chunk)) => chunk,
@@ -61,6 +103,35 @@ pub(super) fn run_claused_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> 
         Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
         Err(_) => vec![ST_NOINDEX],
     }
+}
+
+/// Merge the cold page into the hot one at the shard level: the
+/// union re-orders by the page's own rule (`merge_claused` with
+/// offset 0 — the origin drains the real offset after ITS merge),
+/// re-collapses under DISTINCT, and re-truncates to the fetch window.
+/// Facets fold by identity (the hot label wins) and re-sort. The
+/// FILTER-with-CURSOR resume recomputes over the merged page — the
+/// hot-only cursor would skip cold rows sorting after it.
+fn merge_cold_claused(
+    page: &mut kevy_index::ClausedPage,
+    chits: Vec<kevy_index::ScalarHit>,
+    cfacets: Vec<Vec<kevy_index::FacetBucket>>,
+    c: &ScalarClauses<'_>,
+) {
+    let all: Vec<(kevy_index::ScalarHit, ())> =
+        page.hits.drain(..).chain(chits).map(|h| (h, ())).collect();
+    let merged =
+        kevy_index::merge_claused(all, c.sort.map(|(_, d, _)| d), c.distinct.is_some(), 0, c.fetch);
+    page.hits = merged.into_iter().map(|(h, ())| h).collect();
+    kevy_index::fold_facets(&mut page.facets, cfacets);
+    kevy_index::sort_facets(&mut page.facets);
+    page.cursor = match c.selects() || page.hits.len() < c.fetch {
+        true => None,
+        false => page.hits.last().map(|h| kevy_index::Cursor {
+            value: h.value.clone(),
+            key: h.key.clone(),
+        }),
+    };
 }
 
 /// Hit block (+ per-hit clause keys when the query carried the clause),

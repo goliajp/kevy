@@ -60,9 +60,13 @@ pub(crate) fn value_test(
         .position(|v| v.name == f.field())
         .ok_or_else(|| unknown_field("FILTER", f.field(), "store", &stored))?;
     let ty = spec.values[pos].ty;
+    // FILTER bounds speak the `@` time expressions on i64 fields —
+    // one grammar across both faces (and, through this shared
+    // resolver, the embedded Rust API too).
+    let now = (kevy_store::now_unix_ms() / 1000) as i64;
     let (test, raw) = match f {
-        ValueFilter::Range { min, max, .. } => (ValueTest::range(ty, min, max), *min),
-        ValueFilter::Eq { value, .. } => (ValueTest::eq(ty, value), *value),
+        ValueFilter::Range { min, max, .. } => (ValueTest::range_at(ty, min, max, now), *min),
+        ValueFilter::Eq { value, .. } => (ValueTest::eq_at(ty, value, now), *value),
     };
     let test = test.ok_or_else(|| {
         KevyError::InvalidInput(format!(
@@ -265,6 +269,43 @@ impl Store {
         })
     }
 
+    /// [`Store::idx_count`] with `FILTER` applied — the total a
+    /// claused query's pages would reach, materializing nothing. The
+    /// consumer shape this closes: counting a filtered axis used to
+    /// mean fetching every page and taking its length.
+    pub fn idx_count_claused(
+        &self,
+        name: &[u8],
+        min: &IndexValue,
+        max: &IndexValue,
+        filters: &[ValueFilter<'_>],
+    ) -> KevyResult<u64> {
+        let spec = {
+            let g = self.indexes.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+            g.1.get(name)
+                .map(|(s, _)| s.clone())
+                .ok_or_else(|| KevyError::NotFound("no such index".into()))?
+        };
+        let opts = ScalarQueryOpts { filters, ..ScalarQueryOpts::default() };
+        let r = resolve(&spec, &opts)?;
+        let mut total = 0u64;
+        self.for_each_segment_windowed(name, |spec, seg, win| {
+            total += seg.count_claused(min, max, &r.filters);
+            // The evicted half counts from the cold payloads — same
+            // predicates, frozen values; a corrupt segment refuses.
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(w) = win.filter(|w| w.has_cold()) {
+                total += w
+                    .cold_claused_count(spec.ty, min, max, &r.filters)
+                    .map_err(|e| KevyError::Io(std::io::Error::other(e)))?;
+            }
+            #[cfg(target_arch = "wasm32")]
+            let _ = (spec, win);
+            Ok(())
+        })?;
+        Ok(total)
+    }
+
     /// Every shard's claused page, unmerged, with the facet buckets
     /// folded by identity as the shards report them.
     fn gather_claused(
@@ -282,11 +323,23 @@ impl Store {
             let mut g = lock_write(shard);
             let inner = &mut *g;
             sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
-            if let Some((_, seg)) = inner.idx_segs.segs.iter().find(|(s, _)| s.name == name) {
+            if let Some((_spec, seg)) = inner.idx_segs.segs.iter().find(|(s, _)| s.name == name) {
                 found = true;
                 let page = seg.query_claused(min, max, cursor, clauses);
                 all.extend(page.hits.into_iter().map(|h| (h, ())));
                 fold_facets(&mut facets, page.facets);
+                // The shard's evicted half joins the union — the
+                // origin merge below re-orders, re-collapses and
+                // truncates the lot, so cold hits need no shard-level
+                // pre-merge here.
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(w) = inner.idx_segs.window_of(name).filter(|w| w.has_cold()) {
+                    let (chits, cfacets) = w
+                        .cold_claused(_spec.ty, min, max, cursor, clauses)
+                        .map_err(|e| KevyError::Io(std::io::Error::other(e)))?;
+                    all.extend(chits.into_iter().map(|h| (h, ())));
+                    fold_facets(&mut facets, cfacets);
+                }
             }
         }
         if !found {

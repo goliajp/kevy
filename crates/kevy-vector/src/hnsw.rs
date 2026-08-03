@@ -65,6 +65,13 @@ pub struct Hnsw {
     entry: Option<u32>,
     /// Living KEYS (≥ living nodes when duplicates are collapsed).
     live: u64,
+    /// Running Σ of every node's link-slot count —
+    /// maintained at the link push / shrink sites so `stats()` never
+    /// walks the graph.
+    links_total: u64,
+    /// Running tombstone count — dead nodes never revive outside
+    /// `rebuild`, which starts from a fresh graph.
+    tombstones: u64,
     /// Deterministic level generator (splitmix — no wall clock).
     seed: u64,
 }
@@ -100,6 +107,8 @@ impl Hnsw {
             by_vec: HashMap::new(),
             entry: None,
             live: 0,
+            links_total: 0,
+            tombstones: 0,
             seed: 0x9E37_79B9_7F4A_7C15,
         }
     }
@@ -119,6 +128,7 @@ impl Hnsw {
             self.live -= 1;
             if node.keys.is_empty() {
                 node.dead = true;
+                self.tombstones += 1;
                 self.by_vec.remove(&vec_bits(&node.vec));
                 if self.entry == Some(id) {
                     self.entry = self.pick_entry();
@@ -195,6 +205,7 @@ impl Hnsw {
             for &n in &chosen {
                 self.nodes[id as usize].links[layer].push(n);
                 self.nodes[n as usize].links[layer].push(id);
+                self.links_total += 2;
                 self.shrink(n, layer, cap);
             }
             if let Some(&(_, first)) = found.first() {
@@ -370,6 +381,8 @@ impl Hnsw {
         scored.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
         scored.dedup_by_key(|e| e.1);
         let kept = self.select_diverse(&scored, cap, &self.nodes[node as usize].vec);
+        let dropped = self.nodes[node as usize].links[layer].len() - kept.len();
+        self.links_total -= dropped as u64;
         self.nodes[node as usize].links[layer] = kept;
     }
 
@@ -437,30 +450,6 @@ impl Hnsw {
         self.by_key.contains_key(key)
     }
 
-    /// Live (non-tombstoned) vectors — already tracked, so `O(1)`.
-    /// [`Self::stats`] walks every node and every link to estimate bytes;
-    /// a caller that only wants the count should not trigger that walk.
-    pub fn vectors(&self) -> u64 {
-        self.live
-    }
-
-    /// Counters.
-    pub fn stats(&self) -> VectorStats {
-        let links: u64 = self.nodes.iter().map(|n| n.links.iter().map(Vec::len).sum::<usize>() as u64).sum();
-        let tombstones = self.nodes.iter().filter(|n| n.dead).count() as u64;
-        let bytes_vec = (self.dim * 4) as u64;
-        let approx_bytes: u64 = self.nodes.len() as u64 * (bytes_vec + 40)
-            + links * 8
-            + self.live * 32;
-        VectorStats {
-            vectors: self.live,
-            tombstones,
-            links,
-            approx_bytes,
-            rebuild_recommended: !self.nodes.is_empty() && tombstones * 10 > self.nodes.len() as u64 * 3,
-        }
-    }
-
     /// Bounded rebuild: re-insert every living (key, vector) pair into
     /// a fresh graph (drops tombstones and their edges).
     /// Vectors are already prepared; `add_key` re-collapses duplicates.
@@ -481,3 +470,6 @@ impl Hnsw {
 #[cfg(test)]
 #[path = "hnsw_tests.rs"]
 mod tests;
+
+#[path = "hnsw_stats.rs"]
+mod hnsw_stats;

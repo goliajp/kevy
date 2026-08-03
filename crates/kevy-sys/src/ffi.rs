@@ -63,6 +63,16 @@ pub struct Kevent {
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 unsafe extern "C" {
+    // task_info(2) on the calling task — the process-RSS probe
+    // (`INFO process_rss_bytes`). `mach_task_self_` is the
+    // kernel-provided static the mach_task_self() macro reads.
+    pub static mach_task_self_: u32;
+    pub fn task_info(
+        target_task: u32,
+        flavor: u32,
+        task_info_out: *mut c_void,
+        task_info_out_count: *mut u32,
+    ) -> c_int;
     // sysctlbyname(3) — the memory-bound auto-probe (`hw.memsize`) for
     // the tiering budget's `auto` form. Same
     // hand-written-binding rule as everything else in this file.
