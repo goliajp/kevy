@@ -680,3 +680,74 @@ fn claims_span_words_and_never_strand_occupancy() {
     h.reclaim();
     assert!(h.snapshot().balanced());
 }
+
+/// The locality layer's contract: a just-freed slot of the current
+/// span comes back on the very next allocation (the hot line), the
+/// hit counter proves the path, and the accounting identity holds
+/// with slots parked in the stack.
+#[test]
+fn hot_stack_returns_the_just_freed_slot() {
+    // The hot layer serves frees that land in the current SPAN but
+    // outside the current claimed WORD — the old-object-replacement
+    // shape the L1 measurement convicted. A free inside the claimed
+    // word is already recycled bit-locally by the per-word layer, so
+    // the test first marches the word well past the victims.
+    let mut h = Heap::new(1);
+    let early: Vec<_> = (0..80).map(|_| h.alloc(64, 8).expect("alloc")).collect();
+    let hits0 = h.hot_stats.hits;
+    let (a, b) = (early[0], early[1]);
+    unsafe { h.dealloc(a, 64, 8) };
+    unsafe { h.dealloc(b, 64, 8) };
+    let c = h.alloc(64, 8).expect("alloc");
+    let d = h.alloc(64, 8).expect("alloc");
+    assert_eq!(c, b, "the most recently freed slot returns first");
+    assert_eq!(d, a, "then the one before it");
+    assert_eq!(h.hot_stats.hits, hits0 + 2, "both came off the hot stack");
+    unsafe { h.dealloc(c, 64, 8) };
+    unsafe { h.dealloc(d, 64, 8) };
+    for p in early.into_iter().skip(2) {
+        unsafe { h.dealloc(p, 64, 8) };
+    }
+}
+
+/// Slots parked in the hot stack stay inside the accounting identity:
+/// the snapshot folds them into span_free, so mapped still equals the
+/// sum of its parts with the stack full, and after a flush.
+#[test]
+fn hot_stack_keeps_the_identity() {
+    let mut h = Heap::new(1);
+    let ptrs: Vec<_> = (0..8).map(|_| h.alloc(128, 8).expect("alloc")).collect();
+    for p in &ptrs {
+        unsafe { h.dealloc(*p, 128, 8) };
+    }
+    let st = h.snapshot();
+    assert!(st.balanced(), "identity broke with hot slots parked: {st:?}");
+    h.flush_hot();
+    let st2 = h.snapshot();
+    assert!(st2.balanced(), "identity broke after hot flush: {st2:?}");
+    // After the flush the slots are ordinary span holes again and the
+    // next allocation still succeeds.
+    let again = h.alloc(128, 8).expect("alloc after flush");
+    unsafe { h.dealloc(again, 128, 8) };
+}
+
+/// The space bound: a slot freed while a DIFFERENT span is current
+/// takes the bitmap path (no cross-span reuse — the wound the LIFO
+/// cache died of stays closed).
+#[test]
+fn hot_stack_refuses_non_current_spans() {
+    // A tiny class cap forces span turnover quickly: fill one span of
+    // the 8 KiB class (8 slots per 64 KiB span), overflow to the
+    // next, then free into the OLD span.
+    let mut h = Heap::new(1);
+    let first: Vec<_> = (0..8).map(|_| h.alloc(8192, 8).expect("alloc")).collect();
+    let _second = h.alloc(8192, 8).expect("next span");
+    let hits0 = h.hot_stats.hits;
+    // These frees land in the old (non-current) span: bitmap path.
+    for p in &first {
+        unsafe { h.dealloc(*p, 8192, 8) };
+    }
+    let st = h.snapshot();
+    assert!(st.balanced(), "identity broke with hot slots parked: {st:?}");
+    assert_eq!(h.hot_stats.hits, hits0, "no hot traffic for a non-current span");
+}
