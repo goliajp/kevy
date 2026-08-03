@@ -32,6 +32,9 @@ version = "4.1.1"
 [[package]]
 name = "kevy-index"
 version = "4.1.1"
+dependencies = [
+ "kevy-time",
+]
 
 [[package]]
 name = "kevy-iot-consumer"
@@ -104,6 +107,10 @@ version = "4.1.1"
 
 [[package]]
 name = "kevy-text"
+version = "4.1.1"
+
+[[package]]
+name = "kevy-time"
 version = "4.1.1"
 
 [[package]]

@@ -60,8 +60,9 @@ type BoxedPred = (usize, ValuePred);
 pub(super) fn boxed_preds(
     spec: &kevy_index::IndexSpec,
     filters: &[super::args::FilterArg],
+    now: i64,
 ) -> Result<Vec<BoxedPred>, Vec<u8>> {
-    Ok(filter_tests(spec, filters)?
+    Ok(filter_tests(spec, filters, now)?
         .into_iter()
         .map(|(field, t)| {
             let f: ValuePred = Box::new(move |v: &[u8]| t.passes(v));
@@ -79,6 +80,7 @@ pub(super) fn boxed_preds(
 pub(super) fn filter_tests(
     spec: &kevy_index::IndexSpec,
     filters: &[super::args::FilterArg],
+    now: i64,
 ) -> Result<Vec<(usize, kevy_index::ValueTest)>, Vec<u8>> {
     use super::args::FilterShape;
     let mut out = Vec::with_capacity(filters.len());
@@ -89,8 +91,10 @@ pub(super) fn filter_tests(
         };
         let ty = spec.values[pos].ty;
         let (test, raw) = match &f.shape {
-            FilterShape::Range { min, max } => (kevy_index::ValueTest::range(ty, min, max), min),
-            FilterShape::Eq { value } => (kevy_index::ValueTest::eq(ty, value), value),
+            FilterShape::Range { min, max } => {
+                (kevy_index::ValueTest::range_at(ty, min, max, now), min)
+            }
+            FilterShape::Eq { value } => (kevy_index::ValueTest::eq_at(ty, value, now), value),
         };
         let Some(test) = test else {
             let mut chunk = vec![crate::cmd_index_query::ST_CLAUSE];

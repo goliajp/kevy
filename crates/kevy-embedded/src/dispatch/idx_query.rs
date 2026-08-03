@@ -39,12 +39,16 @@ pub(super) fn parse_bounds(
     argv: &[Vec<u8>],
     at: usize,
 ) -> Option<(IndexValue, IndexValue, usize)> {
+    // Bounds speak the `@` time expressions on i64 (the server RESP
+    // face's exact grammar); `now` is read once per parse so both
+    // ends of a RANGE agree on it.
+    let now = (kevy_store::now_unix_ms() / 1000) as i64;
     if shape.eq_ignore_ascii_case(b"RANGE") {
-        let min = IndexValue::parse_literal(ty, argv.get(at)?)?;
-        let max = IndexValue::parse_literal(ty, argv.get(at + 1)?)?;
+        let min = kevy_index::parse_literal_bound(ty, argv.get(at)?, now)?;
+        let max = kevy_index::parse_literal_bound(ty, argv.get(at + 1)?, now)?;
         Some((min, max, at + 2))
     } else if shape.eq_ignore_ascii_case(b"EQ") {
-        let v = IndexValue::parse_literal(ty, argv.get(at)?)?;
+        let v = kevy_index::parse_literal_bound(ty, argv.get(at)?, now)?;
         Some((v.clone(), v, at + 1))
     } else {
         None

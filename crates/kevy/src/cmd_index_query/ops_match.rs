@@ -30,6 +30,7 @@ pub(super) type ColdVals = std::collections::HashMap<Vec<u8>, Vec<Option<Vec<u8>
 fn with_clauses<R>(
     spec: &kevy_index::IndexSpec,
     q: &MatchArgs,
+    now: i64,
     f: impl FnOnce(
         &[kevy_text::Filter],
         Option<kevy_text::Sort>,
@@ -37,7 +38,7 @@ fn with_clauses<R>(
         &[kevy_text::Facet],
     ) -> R,
 ) -> Result<R, Vec<u8>> {
-    let tests = boxed_preds(spec, &q.filters)?;
+    let tests = boxed_preds(spec, &q.filters, now)?;
     let filter: Vec<kevy_text::Filter> = tests
         .iter()
         .map(|(field, test)| kevy_text::Filter { field: *field, test: test.as_ref() })
@@ -84,7 +85,8 @@ pub(super) fn scored_hits(
     let scope = scope_positions(spec, &q.scope)?;
     let sorted = sort_field(spec, &q.sort)?;
     let grouped = distinct_field(spec, &q.distinct)?;
-    with_clauses(spec, q, |filter, sort, distinct, facets| {
+    let now = (kevy_store::now_unix_ms() / 1000) as i64;
+    with_clauses(spec, q, now, |filter, sort, distinct, facets| {
         let opts = kevy_text::QueryOpts {
             stats: Some(stats),
             typo: q.typo,

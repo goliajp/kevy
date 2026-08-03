@@ -80,5 +80,5 @@ fn compiled_composite_matches_engine_where_bounds() {
     let comp = specs.iter().find(|s| s.name == b"t.p").expect("orderpath spec");
     let cols = comp.composite.as_ref().expect("composite");
     let w = kevy_index::WhereClause { eqs: vec![(b"a".to_vec(), b"x".to_vec())], range: None };
-    kevy_index::composite_bounds(cols, &w).expect("engine accepts the compiled prefix");
+    kevy_index::composite_bounds(cols, &w, 0).expect("engine accepts the compiled prefix");
 }
