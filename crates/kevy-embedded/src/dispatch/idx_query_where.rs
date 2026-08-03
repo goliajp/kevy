@@ -59,7 +59,8 @@ pub(super) fn driving_bounds(
             err(out, &format!("ERR {verb} '{n}': {}", kevy_index::WHERE_NOT_COMPOSITE));
             return None;
         };
-        return match kevy_index::composite_bounds(cols, w) {
+        let now = (kevy_store::now_unix_ms() / 1000) as i64;
+        return match kevy_index::composite_bounds(cols, w, now) {
             Ok((lo, hi)) => Some((IndexValue::Str(lo), IndexValue::Str(hi))),
             Err(e) => {
                 err(out, &format!("ERR {verb} '{n}': {e}"));

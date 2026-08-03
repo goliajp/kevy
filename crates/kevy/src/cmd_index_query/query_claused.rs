@@ -39,8 +39,9 @@ pub(super) fn clause_chunk(msg: &str) -> Vec<u8> {
 /// unchanged.
 pub(super) fn run_claused_count(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> Vec<u8> {
     let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg, win| {
-        let (min, max) = q.bounds_for(spec)?;
-        let filters: Vec<(usize, ValueTest)> = filter_tests(spec, &q.filters)?;
+        let now = (kevy_store::now_unix_ms() / 1000) as i64;
+        let (min, max) = q.bounds_for(spec, now)?;
+        let filters: Vec<(usize, ValueTest)> = filter_tests(spec, &q.filters, now)?;
         // A windowed index's evicted half counts from the cold
         // payloads — same predicates, frozen values. A corrupt
         // segment refuses; never a partial number.
@@ -69,8 +70,9 @@ pub(super) fn run_claused_count(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> 
 
 pub(super) fn run_claused_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> Vec<u8> {
     let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg, win| {
-        let (min, max) = q.bounds_for(spec)?;
-        let filters: Vec<(usize, ValueTest)> = filter_tests(spec, &q.filters)?;
+        let now = (kevy_store::now_unix_ms() / 1000) as i64;
+        let (min, max) = q.bounds_for(spec, now)?;
+        let filters: Vec<(usize, ValueTest)> = filter_tests(spec, &q.filters, now)?;
         let sort = sort_field(spec, &q.sort)?;
         let distinct = distinct_field(spec, &q.distinct)?;
         let facets = facet_fields(spec, &q.facets)?;

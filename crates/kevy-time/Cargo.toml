@@ -1,0 +1,12 @@
+[package]
+name = "kevy-time"
+description = "Pure calendar arithmetic on epoch seconds: civil conversion, month-clamped addition, and the @-expression evaluator query bounds use."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true

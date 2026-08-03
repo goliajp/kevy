@@ -40,6 +40,7 @@
 resolver = "3"
 members = [
     "crates/kevy-tmpdir",
+    "crates/kevy-time",
     "crates/kevy-sys",
     "crates/kevy-seg",
     "crates/kevy-window",

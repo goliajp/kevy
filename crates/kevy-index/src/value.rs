@@ -108,6 +108,28 @@ pub struct ValueTest {
     hi: IndexValue,
 }
 
+/// One query BOUND's value: [`IndexValue::parse_literal`] plus the
+/// `@` time expressions on i64 fields (`@now`, `@now-7d`,
+/// a calendar literal, per [`kevy_time::eval`]) — only ever called on
+/// bound bytes, never on row data (a row whose field holds "@now" is
+/// data, not an expression, and the write path never comes here).
+/// Non-i64 fields pass through untouched, so a str field matching a
+/// literal "@…" value stays unambiguous.
+pub fn parse_literal_bound(ty: ValType, raw: &[u8], now: i64) -> Option<IndexValue> {
+    if ty == ValType::I64 && raw.first() == Some(&b'@') {
+        return kevy_time::eval(raw, now).map(IndexValue::I64);
+    }
+    IndexValue::parse_literal(ty, raw)
+}
+
+/// [`parse_literal_bound`]'s coercing sibling for FILTER bounds.
+pub fn coerce_bound(ty: ValType, raw: &[u8], now: i64) -> Option<IndexValue> {
+    if ty == ValType::I64 && raw.first() == Some(&b'@') {
+        return kevy_time::eval(raw, now).map(IndexValue::I64);
+    }
+    IndexValue::coerce(ty, raw)
+}
+
 impl ValueTest {
     /// `RANGE min max` on a field declared as `ty`. `None` when a bound
     /// is not of that type — a bound the index cannot interpret is an
@@ -116,9 +138,22 @@ impl ValueTest {
         Some(ValueTest { ty, lo: IndexValue::coerce(ty, min)?, hi: IndexValue::coerce(ty, max)? })
     }
 
+    /// [`ValueTest::range`] for query bounds: `@` time expressions
+    /// resolve against `now` on i64 fields.
+    pub fn range_at(ty: ValType, min: &[u8], max: &[u8], now: i64) -> Option<ValueTest> {
+        Some(ValueTest { ty, lo: coerce_bound(ty, min, now)?, hi: coerce_bound(ty, max, now)? })
+    }
+
     /// `EQ v` on a field declared as `ty`.
     pub fn eq(ty: ValType, v: &[u8]) -> Option<ValueTest> {
         let v = IndexValue::coerce(ty, v)?;
+        Some(ValueTest { ty, lo: v.clone(), hi: v })
+    }
+
+    /// [`ValueTest::eq`] for query bounds: `@` time expressions
+    /// resolve against `now` on i64 fields.
+    pub fn eq_at(ty: ValType, v: &[u8], now: i64) -> Option<ValueTest> {
+        let v = coerce_bound(ty, v, now)?;
         Some(ValueTest { ty, lo: v.clone(), hi: v })
     }
 

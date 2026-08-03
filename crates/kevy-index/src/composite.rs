@@ -214,7 +214,30 @@ fn declared_list(cols: &[CompositeCol]) -> String {
 }
 
 /// Encode one WHERE bound value for `col`, or the named error.
-fn bound_component(col: &CompositeCol, raw: &[u8]) -> Result<Vec<u8>, String> {
+fn bound_component(col: &CompositeCol, raw: &[u8], now: i64) -> Result<Vec<u8>, String> {
+    // Resolve `@` time expressions BEFORE the shared encoder: row
+    // derivation (`classify_component`) shares `encode_component` and
+    // must never interpret data — a row whose i64 field holds "@now"
+    // is a coerce failure, not an expression. Only a QUERY bound
+    // comes through here.
+    let resolved;
+    let raw = if col.ty == ValType::I64 && raw.first() == Some(&b'@') {
+        match kevy_time::eval(raw, now) {
+            Some(i) => {
+                resolved = i.to_string().into_bytes();
+                resolved.as_slice()
+            }
+            None => {
+                return Err(format!(
+                    "WHERE bound '{}' is not a valid time expression for '{}'",
+                    String::from_utf8_lossy(raw),
+                    String::from_utf8_lossy(&col.name),
+                ));
+            }
+        }
+    } else {
+        raw
+    };
     encode_component(col, raw).ok_or_else(|| {
         format!(
             "WHERE bound '{}' is not a valid {}, which is how this composite declares '{}'",
@@ -255,21 +278,22 @@ fn component_max(col: &CompositeCol) -> Vec<u8> {
 pub fn composite_bounds(
     cols: &[CompositeCol],
     w: &WhereClause,
+    now: i64,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
     let mut lo = Vec::new();
     let mut hi = Vec::new();
     let mut at = 0usize;
     for (name, value) in &w.eqs {
         let col = resolve_col(cols, at, name)?;
-        let enc = bound_component(col, value)?;
+        let enc = bound_component(col, value, now)?;
         lo.extend_from_slice(&enc);
         hi.extend_from_slice(&enc);
         at += 1;
     }
     if let Some((name, min, max)) = &w.range {
         let col = resolve_col(cols, at, name)?;
-        let a = bound_component(col, min)?;
-        let b = bound_component(col, max)?;
+        let a = bound_component(col, min, now)?;
+        let b = bound_component(col, max, now)?;
         // A DESC component reverses the encoded order, so the encoded
         // interval endpoints swap; byte-wise min/max keeps both
         // directions on one path.

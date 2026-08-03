@@ -91,7 +91,7 @@ SME 分量依据写在括号里。
 | 向量 / ANN | S4 pgvector corpus 是 **P0 100% 目标**(corpus README 表);S3 配方 §17/18(episodic memory、RAG hybrid) | 已有(`KIND ann`) | 中(业务实证只有 spg 的兼容优先级作旁证) |
 | JSONB / 文档字段 | S4 corpus `34_jsonb_path_query.test`、`61_json_build.test`;S2 值全是 JSON blob 但**整存整取**从不服务器侧查 | 拒绝 json-path→替代(拍平成 hash 字段,配方 §9) | 中 |
 | DECIMAL / money | S4 corpus `68_pg_money.test`;S3 rds-workloads 类型表 | 拒绝→替代(整数最小单位) | 中 |
-| 日期时间函数/算术 | S4 corpus 8 条探针(06-13:date_time/date_functions/now_and_date_arith/interval/timestamptz…);S1' `NOW()`、`snoozed_until > NOW()` | 引擎缺(epoch i64 range 覆盖 BETWEEN;日历算术 app 侧) | 中-高(兼容面大头之一) |
+| 日期时间函数/算术 | S4 corpus 8 条探针(06-13:date_time/date_functions/now_and_date_arith/interval/timestamptz…);S1' `NOW()`、`snoozed_until > NOW()` | **已有(2026-08-03 R4a-time)**:查询 bound `@` 表达式(`@now±<n>s/m/h/d/w/mo/y`、`@YYYY-MM-DD[Thh:mm:ss]`,kevy-time 石头,RANGE/EQ/WHERE/FILTER 全 bound 面双面);timestamptz/时区 app 侧(具名拒);date_trunc 分桶 = RFC 发散区 | 中-高(兼容面大头之一) |
 | 标量函数面(字符串/数学) | S4 pg_regress 89 条里约 40 条是纯标量函数(concat/trim/replace/split_part/lpad/strpos/left_right/translate/floor/ceil/round/mod/power/sqrt/nullif/greatest/least/uuid/format/regexp…);S1' COALESCE/LOWER/LEFT/CAST 满地 | 引擎缺(全 app 侧) | 见反直觉 #5——按兼容工作量计**高**,按 kevy 模式计不适用 |
 | 备份 / PITR | S3 rds-workloads §Backup(snapshot+AOF+recovery-point);S4 README backup/restore/retention 命令行 | 已有 | 中(运维必备,非查询形状) |
 | 集合成员(tags) | S2 `Set::add/remove/members` lib.rs:584-628("which sims are capturing right now") | 已有(SADD/SREM/SMEMBERS) | 中 |

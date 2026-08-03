@@ -126,7 +126,7 @@ fn prefix_bounds_select_exactly_the_predicate_set() {
             eqs: (0..depth).map(|i| (cols[i].name.clone(), probe[i].clone())).collect(),
             range: None,
         };
-        let (lo, hi) = composite_bounds(&cols, &w).expect("bounds");
+        let (lo, hi) = composite_bounds(&cols, &w, 0).expect("bounds");
         for (t, e) in tuples.iter().zip(&encoded) {
             let want = (0..depth).all(|i| {
                 IndexValue::coerce(cols[i].ty, &t[i]) == IndexValue::coerce(cols[i].ty, &probe[i])
@@ -149,7 +149,7 @@ fn equality_prefix_plus_range_bounds() {
         eqs: vec![(b"a".to_vec(), probe[0].clone())],
         range: Some((b"b".to_vec(), b"-7".to_vec(), b"1000000".to_vec())),
     };
-    let (lo, hi) = composite_bounds(&cols, &w).expect("bounds");
+    let (lo, hi) = composite_bounds(&cols, &w, 0).expect("bounds");
     for (t, e) in tuples.iter().zip(&encoded) {
         let same_a =
             IndexValue::coerce(ValType::Str, &t[0]) == IndexValue::coerce(ValType::Str, &probe[0]);
@@ -206,18 +206,18 @@ fn where_grammar_parses_and_refuses() {
 fn bounds_errors_are_named() {
     let cols = schema();
     let unknown = WhereClause { eqs: vec![(b"nope".to_vec(), b"1".to_vec())], range: None };
-    let e = composite_bounds(&cols, &unknown).unwrap_err();
+    let e = composite_bounds(&cols, &unknown, 0).unwrap_err();
     assert!(e.contains("'nope'") && e.contains("does not declare"), "{e}");
     // declared but out of order (b before a) — the prefix rule.
     let out_of_order = WhereClause { eqs: vec![(b"b".to_vec(), b"1".to_vec())], range: None };
-    let e = composite_bounds(&cols, &out_of_order).unwrap_err();
+    let e = composite_bounds(&cols, &out_of_order, 0).unwrap_err();
     assert!(e.contains("leading prefix"), "{e}");
     // a bound that does not coerce.
     let bad = WhereClause {
         eqs: vec![(b"a".to_vec(), b"x".to_vec())],
         range: Some((b"b".to_vec(), b"cheap".to_vec(), b"9".to_vec())),
     };
-    let e = composite_bounds(&cols, &bad).unwrap_err();
+    let e = composite_bounds(&cols, &bad, 0).unwrap_err();
     assert!(e.contains("not a valid i64"), "{e}");
 }
 

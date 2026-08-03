@@ -54,7 +54,7 @@ pub use segcold::{
 };
 pub use table_verify::{IndexVerify, TableEnsure, TableVerify, spec_diff};
 pub use table_wire::{TABLE_DECLARE_USAGE, parse_table_declare};
-pub use value::{IndexValue, ValueTest, order_key};
+pub use value::{IndexValue, ValueTest, order_key, coerce_bound, parse_literal_bound};
 pub use view::{
     Leaf, MAX_TREE_DEPTH, MAX_TREE_LEAVES, MAX_VIEWS, MaterializedSet, Tree, ViewCatalog,
     ViewMode, ViewSpec, eval_tree, key_in_tree, key_in_tree_vals,

@@ -108,7 +108,8 @@ fn run_scalar_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8]) ->
         .shape
     {
         Shape::Range { .. } | Shape::Eq { .. } | Shape::Where(_) => {
-            let (min, max) = match q.bounds_for(spec) {
+            let now = (kevy_store::now_unix_ms() / 1000) as i64;
+            let (min, max) = match q.bounds_for(spec, now) {
                 Ok(b) => b,
                 Err(chunk) => return HitsOrChunk::Chunk(chunk),
             };

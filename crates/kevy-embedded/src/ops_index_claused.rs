@@ -60,9 +60,13 @@ pub(crate) fn value_test(
         .position(|v| v.name == f.field())
         .ok_or_else(|| unknown_field("FILTER", f.field(), "store", &stored))?;
     let ty = spec.values[pos].ty;
+    // FILTER bounds speak the `@` time expressions on i64 fields —
+    // one grammar across both faces (and, through this shared
+    // resolver, the embedded Rust API too).
+    let now = (kevy_store::now_unix_ms() / 1000) as i64;
     let (test, raw) = match f {
-        ValueFilter::Range { min, max, .. } => (ValueTest::range(ty, min, max), *min),
-        ValueFilter::Eq { value, .. } => (ValueTest::eq(ty, value), *value),
+        ValueFilter::Range { min, max, .. } => (ValueTest::range_at(ty, min, max, now), *min),
+        ValueFilter::Eq { value, .. } => (ValueTest::eq_at(ty, value, now), *value),
     };
     let test = test.ok_or_else(|| {
         KevyError::InvalidInput(format!(
