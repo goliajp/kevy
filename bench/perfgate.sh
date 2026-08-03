@@ -291,43 +291,86 @@ sample() { # $1 = cand|ref, $2 = metric, $3 = value
   SAMPLES["$1:$2"]="${SAMPLES["$1:$2"]:-}$3 "
 }
 
-measure_all() { # $1 = cand|ref, $2 = binary
-  local who=$1 i j args
-  BIN=$2
-  server_start "--cluster"
-  # Warm each shard's keyspace (1M random keys per tag at P64).
-  # NB: wait MUST name the pids — a bare `wait` also waits on the $SRV
-  # background job, which never exits (this exact hang has bitten twice).
+# Warm each shard's keyspace (1M random keys per tag at P64).
+# NB: wait MUST name the pids — a bare `wait` also waits on the $SRV
+# background job, which never exits (this exact hang has bitten twice).
+warm_cluster() {
+  local i
   WPIDS=()
   for i in $(seq 0 7); do
     taskset -c 8-15 redis-benchmark -p $((7002 + i)) -n 1000000 -r 1000000 \
       -P 64 -q SET "{${TAGS[$i]}}:__rand_int__" v >/dev/null 2>&1 &
     WPIDS+=($!)
   done; wait "${WPIDS[@]}"
-  sample "$who" pinned_cluster_get "$(run_pinned get cluster)"
-  sample "$who" pinned_cluster_set "$(run_pinned set cluster)"
-  sample "$who" pinned_compat_get  "$(run_pinned get compat)"
-  sample "$who" pinned_compat_set  "$(run_pinned set compat)"
+}
 
-  server_start ""   # legacy angle: cluster off (the historical configuration)
+warm_legacy() {
   taskset -c 8-15 redis-benchmark -p 7001 -t set -n 300000 -P 64 -q >/dev/null 2>&1
-  sample "$who" legacy_8sh_get   "$(run_legacy get)"
-  sample "$who" legacy_8sh_set   "$(run_legacy set)"
-  # The five arena cells, gated here instead of living as per-release ledger
-  # footnotes (LPUSH and ZADD are the historically noisiest of them).
-  sample "$who" legacy_8sh_incr  "$(run_legacy incr)"
-  sample "$who" legacy_8sh_sadd  "$(run_legacy sadd)"
-  sample "$who" legacy_8sh_hset  "$(run_legacy hset)"
-  sample "$who" legacy_8sh_lpush "$(run_legacy lpush)"
-  sample "$who" legacy_8sh_zadd  "$(run_legacy zadd)"
-  # zalgebra angle: two 1k-member source zsets, then pipelined ZINTERSTORE.
+}
+
+# zalgebra sources: two 1k-member zsets for the pipelined ZINTERSTORE.
+warm_zalg() {
+  local i j args
   for i in $(seq 0 9); do
     args=""
     for j in $(seq 0 99); do args="$args $((i*100+j)) m$((i*100+j))"; done
     redis-cli -p 7001 ZADD zalg:a $args >/dev/null 2>&1
     redis-cli -p 7001 ZADD zalg:b $args >/dev/null 2>&1
   done
+}
+
+# One angle's measurement body, against the server the caller booted.
+angle_run() { # $1 = metric name -> ops/s on stdout
+  case $1 in
+    pinned_cluster_get) run_pinned get cluster ;;
+    pinned_cluster_set) run_pinned set cluster ;;
+    pinned_compat_get)  run_pinned get compat ;;
+    pinned_compat_set)  run_pinned set compat ;;
+    legacy_8sh_get)     run_legacy get ;;
+    legacy_8sh_set)     run_legacy set ;;
+    legacy_8sh_incr)    run_legacy incr ;;
+    legacy_8sh_sadd)    run_legacy sadd ;;
+    legacy_8sh_hset)    run_legacy hset ;;
+    legacy_8sh_lpush)   run_legacy lpush ;;
+    legacy_8sh_zadd)    run_legacy zadd ;;
+    zalg_zinterstore)   run_zalg ;;
+    *) printf "0" ;;
+  esac
+}
+
+measure_all() { # $1 = cand|ref, $2 = binary
+  local who=$1 m
+  BIN=$2
+  server_start "--cluster"
+  warm_cluster
+  for m in pinned_cluster_get pinned_cluster_set pinned_compat_get pinned_compat_set; do
+    sample "$who" "$m" "$(angle_run "$m")"
+  done
+  server_start ""   # legacy angle: cluster off (the historical configuration)
+  warm_legacy
+  # get/set plus the five arena cells, gated here instead of living as
+  # per-release ledger footnotes (LPUSH and ZADD are the noisiest).
+  for m in legacy_8sh_get legacy_8sh_set legacy_8sh_incr legacy_8sh_sadd \
+           legacy_8sh_hset legacy_8sh_lpush legacy_8sh_zadd; do
+    sample "$who" "$m" "$(angle_run "$m")"
+  done
+  warm_zalg
   sample "$who" zalg_zinterstore "$(run_zalg)"
+  server_stop
+}
+
+# Boot + warm + measure ONE angle — the targeted-retest path. Same
+# server configuration and warm the full pass gave that angle, so the
+# extra samples are commensurable with the originals.
+measure_single() { # $1 = cand|ref, $2 = binary, $3 = metric
+  local who=$1 m=$3
+  BIN=$2
+  case $m in
+    pinned_*) server_start "--cluster"; warm_cluster ;;
+    zalg_*)   server_start "";          warm_legacy; warm_zalg ;;
+    *)        server_start "";          warm_legacy ;;
+  esac
+  sample "$who" "$m" "$(angle_run "$m")"
   server_stop
 }
 
@@ -411,6 +454,45 @@ if [ "$MODE" = "--update-baseline" ]; then
 fi
 
 TOL=$(python3 -c "import json;print(json.load(open('$BASELINE'))['tolerance'])")
+
+# Whether one metric's current medians clear the floor. Prints nothing.
+below_floor() { # $1 = metric -> 0 iff below
+  local got=${MED[$1]} ref=${REF_MED[$1]:-}
+  { [ -z "$ref" ] || [ "$ref" -eq 0 ]; } 2>/dev/null && return 1
+  [ "$got" -lt "$(awk -v b="$ref" -v t="$TOL" 'BEGIN{printf "%.0f", b*t}')" ]
+}
+
+# ---------- targeted retest ----------
+# A first-pass red on a high-variance angle (sadd and zalg have run at
+# ±10%) is as often a bad draw as a regression: 3 samples/side is a
+# thin median. Instead of failing on the draw — or rerunning the whole
+# gate, which resamples nothing WHERE it matters — each red angle gets
+# RETEST more interleaved sample pairs of exactly its own
+# configuration, the medians recompute over the widened set, and the
+# verdict stands on that. A real regression stays red; a draw drowns.
+RETEST=${RETEST:-2}
+FAILED_ANGLES=""
+for k in $METRICS; do
+  [ -n "${SKIPPED[$k]:-}" ] && continue
+  below_floor "$k" && FAILED_ANGLES="$FAILED_ANGLES $k"
+done
+if [ -n "$FAILED_ANGLES" ]; then
+  echo "perfgate: first pass red on:$FAILED_ANGLES — retesting each with $RETEST more interleaved pairs"
+  for k in $FAILED_ANGLES; do
+    for r in $(seq 1 "$RETEST"); do
+      if [ $((r % 2)) -eq 1 ]; then
+        measure_single ref "$REF_BIN" "$k"; measure_single cand "$CAND_BIN" "$k"
+      else
+        measure_single cand "$CAND_BIN" "$k"; measure_single ref "$REF_BIN" "$k"
+      fi
+    done
+    # shellcheck disable=SC2086
+    MED[$k]=$(median_of ${SAMPLES["cand:$k"]})
+    # shellcheck disable=SC2086
+    REF_MED[$k]=$(median_of ${SAMPLES["ref:$k"]})
+  done
+fi
+
 STATUS=0
 echo "perfgate: gate — candidate vs reference ${REF_SHA:0:12}, both measured just now (floor = reference x $TOL)"
 for k in $METRICS; do
@@ -420,6 +502,8 @@ for k in $METRICS; do
   fi
   GOT=${MED[$k]}
   REF=${REF_MED[$k]:-}
+  RETESTED=""
+  [[ " $FAILED_ANGLES " == *" $k "* ]] && RETESTED=" [retested, n=$((INSTANCES + RETEST))/side]"
   if [ -z "$REF" ] || [ "$REF" -eq 0 ] 2>/dev/null; then
     echo "  ~ $k: $GOT (reference produced no sample — angle is new to the reference commit)"
     continue
@@ -427,9 +511,9 @@ for k in $METRICS; do
   FLOOR=$(awk -v b="$REF" -v t="$TOL" 'BEGIN{printf "%.0f", b*t}')
   RATIO=$(awk -v g="$GOT" -v b="$REF" 'BEGIN{printf "%+.1f%%", (g/b - 1) * 100}')
   if [ "$GOT" -lt "$FLOOR" ]; then
-    echo "  ✗ $k: $GOT vs ref $REF ($RATIO) — below floor $FLOOR"; STATUS=1
+    echo "  ✗ $k: $GOT vs ref $REF ($RATIO) — below floor $FLOOR$RETESTED"; STATUS=1
   else
-    echo "  ✓ $k: $GOT vs ref $REF ($RATIO)"
+    echo "  ✓ $k: $GOT vs ref $REF ($RATIO)$RETESTED"
   fi
 done
 
