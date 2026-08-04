@@ -303,6 +303,7 @@ impl Store {
         let opts = ScalarQueryOpts { filters, ..ScalarQueryOpts::default() };
         let r = self.claused_resolve(name, &spec, &opts)?;
         let mut total = 0u64;
+        #[cfg(not(target_arch = "wasm32"))]
         let probe = self.usage_cell(name);
         self.for_each_segment_windowed(name, |spec, seg, win| {
             total += seg.count_claused(min, max, &r.filters);
@@ -367,6 +368,7 @@ impl Store {
         let mut all: Vec<(ScalarHit, ())> = Vec::new();
         let mut facets: Vec<Vec<FacetBucket>> = vec![Vec::new(); clauses.facets.len()];
         let mut found = false;
+        #[cfg(not(target_arch = "wasm32"))]
         let probe = self.usage_cell(name);
         for shard in self.shards.iter() {
             let mut g = lock_write(shard);

@@ -40,6 +40,7 @@ impl Store {
     ) -> KevyResult<IndexPage> {
         let limit = limit.clamp(1, 100_000);
         let mut all: Vec<(IndexValue, Vec<u8>)> = Vec::new();
+        #[cfg(not(target_arch = "wasm32"))]
         let probe = self.usage_cell(name);
         self.for_each_segment_windowed(name, |spec, seg, win| {
             let (hits, _) = seg.range(min, max, cursor, limit);
@@ -79,6 +80,7 @@ impl Store {
 
     fn idx_count_gather(&self, name: &[u8], min: &IndexValue, max: &IndexValue) -> KevyResult<u64> {
         let mut total = 0u64;
+        #[cfg(not(target_arch = "wasm32"))]
         let probe = self.usage_cell(name);
         self.for_each_segment_windowed(name, |spec, seg, win| {
             total += seg.count(min, max);
