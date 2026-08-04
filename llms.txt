@@ -35,7 +35,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - [WASM / browser](docs/wasm.md) · [Electron apps](docs/electron.md) · [Tauri apps](docs/tauri.md) · [IoT / embedded tiers](docs/iot.md)
 - [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)
 
-## Verbs (190 total)
+## Verbs (191 total)
 
 ### scan
 
@@ -576,6 +576,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 
 ### index
 
+- `IDX.ADVISE` [readonly,extension] — The declarations refused queries have been asking for, most-refused first — each rendered as the command that would serve it.
+  - complexity: O(observed families); the refusal log is bounded (128 families, least-refused evicted) and cleared on every catalog install
+  - compat: kevy-only: no Redis analogue — the refusal log turns 'no such index' into the declaration that would have served the query
 - `IDX.COUNT name RANGE min max | EQ value` [readonly,extension] — Count index entries matching a range or equality predicate.
   - complexity: O(log N + matched) per shard — NOT an O(1) counter and not a B-tree rank query; it counts the matched range
   - compat: kevy-only: nearest is FT.SEARCH with LIMIT 0 0

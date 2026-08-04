@@ -48,7 +48,7 @@
 <main id="main" class="page">
   <div class="band">
     <p class="eyebrow">Commands</p>
-    <h1>190 commands</h1>
+    <h1>191 commands</h1>
     <p class="lede">Every verb the server will answer, straight from its own registry — the same table <code>COMMAND DOCS</code> reads. Two columns you will not find in Redis's reference: what the command <b>costs in this engine</b>, and <b>how it differs from Redis</b>.</p>
 
     <div class="filters">
@@ -237,6 +237,7 @@
 <tr data-name="role" data-group="replication" data-compat="full"><td class="k"><a href="ROLE/">ROLE</a></td><td class="g">Replication</td><td class="cx mono">O(1) on a replica</td><td><span class="badge full">Compatible</span></td><td class="sum">Report the replication role and state of this server.</td></tr>
 <tr data-name="slaveof" data-group="replication" data-compat="differs"><td class="k"><a href="SLAVEOF/">SLAVEOF</a></td><td class="g">Replication</td><td class="cx mono">O(1) plus a background resync</td><td><span class="badge differs">Differs</span></td><td class="sum">Legacy alias of REPLICAOF.</td></tr>
 <tr data-name="wait" data-group="replication" data-compat="differs"><td class="k"><a href="WAIT/">WAIT</a></td><td class="g">Replication</td><td class="cx mono">O(S)</td><td><span class="badge differs">Differs</span></td><td class="sum">Block until every shard's master_repl_offset is acknowledged by at least numreplicas replicas (or timeout ms pass); returns the minimum acked-replica count across shards. timeout 0 = wait forever, hard-capped at 60 s. NOTE: a replica ACK is not fsync durability.</td></tr>
+<tr data-name="idx.advise" data-group="index" data-compat="only"><td class="k"><a href="IDX.ADVISE/">IDX.ADVISE</a></td><td class="g">Indexes</td><td class="cx mono">O(observed families)</td><td><span class="badge only">kevy only</span></td><td class="sum">The declarations refused queries have been asking for, most-refused first — each rendered as the command that would serve it.</td></tr>
 <tr data-name="idx.count" data-group="index" data-compat="only"><td class="k"><a href="IDX.COUNT/">IDX.COUNT</a></td><td class="g">Indexes</td><td class="cx mono">O(log N + matched) per shard</td><td><span class="badge only">kevy only</span></td><td class="sum">Count index entries matching a range or equality predicate.</td></tr>
 <tr data-name="idx.create" data-group="index" data-compat="only"><td class="k"><a href="IDX.CREATE/">IDX.CREATE</a></td><td class="g">Indexes</td><td class="cx mono">O(1) at the call</td><td><span class="badge only">kevy only</span></td><td class="sum">Declare a secondary index over a key prefix (catalog mutation, sidecar-persisted).</td></tr>
 <tr data-name="idx.drop" data-group="index" data-compat="only"><td class="k"><a href="IDX.DROP/">IDX.DROP</a></td><td class="g">Indexes</td><td class="cx mono">O(catalog size)</td><td><span class="badge only">kevy only</span></td><td class="sum">Drop a declared index (catalog mutation, sidecar-persisted).</td></tr>
