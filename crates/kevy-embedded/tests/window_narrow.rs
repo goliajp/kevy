@@ -48,6 +48,33 @@ fn wait_for_row_segment(dir: &std::path::Path) {
     }
 }
 
+/// A Manual-mode store's windowed table slides on the caller-driven
+/// tick — the cadence the background reaper would otherwise supply.
+/// Deterministic: no sleeps, just ticks.
+#[test]
+fn manual_tick_drives_the_window_slide() {
+    let d = kevy_tmpdir::TmpDir::new("emb-winmanual");
+    let s = Store::open(Config::default().with_persist(d.path()).with_ttl_reaper_manual())
+        .expect("open");
+    s.table_declare(windowed_table()).expect("declare");
+    for i in 0..30i64 {
+        let key = format!("ev:{i}");
+        let at = (i * 10).to_string();
+        run(&s, &[b"HSET", key.as_bytes(), b"id", key.as_bytes(), b"at", at.as_bytes()]);
+    }
+    let segs = d.path().join("segs-0");
+    let slid = (0..200).any(|_| {
+        s.tick();
+        segs.exists() && std::fs::read_dir(&segs).is_ok_and(|r| r.count() > 0)
+    });
+    assert!(slid, "a Manual-mode windowed table must slide on tick, not stay all-hot");
+    // And the evicted half still answers through the cold merge.
+    let n = s
+        .idx_count(b"ev.at", &IndexValue::I64(0), &IndexValue::I64(300))
+        .expect("count across the window");
+    assert_eq!(n, 30, "hot + cold together still hold every row");
+}
+
 #[test]
 fn near_boundary_queries_earn_a_span_suggestion_deep_ones_erase_it() {
     let d = kevy_tmpdir::TmpDir::new("emb-winnarrow");
