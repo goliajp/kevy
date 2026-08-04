@@ -342,13 +342,16 @@ impl<C: Commands> Shard<C> {
                         refused: Some((value, ttl_ms)),
                     };
                 }
+                self.log_value_placed(&dst, &value, ttl_ms);
                 self.store.put_with_ttl(dst.clone(), value, ttl_ms);
                 self.note_key_mutated(&dst);
-                // AOF / cross-shard RENAME durability is deferred —
-                // a faithful AOF replay would need to serialise the
-                // value through MIGRATE/RESTORE-style binary frames.
-                // For v2-3b, document the gap: cross-shard RENAME
-                // works in-memory but is not replayed through AOF.
+                // The gap this used to document ("cross-shard RENAME
+                // works in-memory but is not replayed through AOF") is
+                // closed by the line above: no MIGRATE/RESTORE binary
+                // frame was needed, because the rewrite serializer
+                // already renders any value as replayable commands. The
+                // source's `DEL` is recorded separately, once this put
+                // has committed — see `log_rename_source_committed`.
                 Part::RenamePutDone { refused: None }
             }
             Op::CollectWatchVersions(keys) => {

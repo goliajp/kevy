@@ -1092,3 +1092,84 @@ fn mset_and_rename_survive_a_restart() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A cross-shard `RENAME` must survive a restart — every value type,
+/// its TTL, and the refusal branch.
+///
+/// The two halves land on different shards, and neither used to write a
+/// record at all: `Op::RenameTake` removed the source and `Op::RenamePut`
+/// placed the value, both silently, so a restart reverted the whole
+/// rename (source alive again, destination missing). The destination now
+/// records the value through the rewrite serializer, and the source
+/// records its delete **after** the put commits — never at take time,
+/// because a refused `RENAMENX` rolls the value back and an early
+/// delete would outlive that rollback as a lie.
+#[test]
+fn cross_shard_rename_survives_a_restart() {
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-persist-xrename-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let nshards = 4;
+
+    // Pick pairs that genuinely straddle two shards — a same-shard pair
+    // would exercise the atomic op and prove nothing about this path.
+    let cross = |a: &[u8], b: &[u8]| {
+        kevy_rt::shard_of_key(a, nshards, false) != kevy_rt::shard_of_key(b, nshards, false)
+    };
+    assert!(cross(b"src", b"dst"), "test fixture must be cross-shard");
+    assert!(cross(b"h:src", b"h:dst"), "hash fixture must be cross-shard");
+    assert!(cross(b"keep", b"taken"), "refusal fixture must be cross-shard");
+
+    with_runtime(free_port(), &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.write_all(&req(&[b"CONFIG", b"SET", b"appendfsync", b"always"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        c.write_all(&req(&[b"SET", b"src", b"v"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        c.write_all(&req(&[b"EXPIRE", b"src", b"1000"])).unwrap();
+        read_reply(&mut c, b":1\r\n");
+        c.write_all(&req(&[b"HSET", b"h:src", b"f", b"1"])).unwrap();
+        read_reply(&mut c, b":1\r\n");
+        c.write_all(&req(&[b"RENAME", b"src", b"dst"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        c.write_all(&req(&[b"RENAME", b"h:src", b"h:dst"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        // The refusal branch: dst exists, so the value goes home.
+        c.write_all(&req(&[b"SET", b"keep", b"mine"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        c.write_all(&req(&[b"SET", b"taken", b"theirs"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        c.write_all(&req(&[b"RENAMENX", b"keep", b"taken"])).unwrap();
+        read_reply(&mut c, b":0\r\n");
+    });
+
+    with_runtime(free_port(), &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.write_all(&req(&[b"GET", b"dst"])).unwrap();
+        read_reply(&mut c, b"$1\r\nv\r\n");
+        c.write_all(&req(&[b"GET", b"src"])).unwrap();
+        read_reply(&mut c, b"$-1\r\n");
+        // The TTL rode along rather than being dropped or reset.
+        c.write_all(&req(&[b"TTL", b"dst"])).unwrap();
+        let mut buf = [0u8; 32];
+        let n = c.read(&mut buf).unwrap();
+        let ttl: i64 = String::from_utf8_lossy(&buf[1..n - 2]).parse().unwrap();
+        assert!((900..=1000).contains(&ttl), "TTL must survive the move: {ttl}");
+        c.write_all(&req(&[b"HGET", b"h:dst", b"f"])).unwrap();
+        read_reply(&mut c, b"$1\r\n1\r\n");
+        c.write_all(&req(&[b"EXISTS", b"h:src"])).unwrap();
+        read_reply(&mut c, b":0\r\n");
+        // Refused rename: both keys exactly as they were.
+        c.write_all(&req(&[b"GET", b"keep"])).unwrap();
+        read_reply(&mut c, b"$4\r\nmine\r\n");
+        c.write_all(&req(&[b"GET", b"taken"])).unwrap();
+        read_reply(&mut c, b"$6\r\ntheirs\r\n");
+    });
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
