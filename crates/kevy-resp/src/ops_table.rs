@@ -247,6 +247,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("IDX.CREATE",   RD, NG,   None,            None,    SERVER | ESTORE),
     op("IDX.DROP",     RD, NG,   None,            None,    SERVER | ESTORE),
     op("IDX.LIST",     RD, NG,   None,            None,    SERVER | ESTORE),
+    op("IDX.ADVISE",   RD, NG,   None,            None,    SERVER | ESTORE),
     op("IDX.QUERY",    RD, NG,   None,            None,    SERVER | ESTORE),
     op("IDX.COUNT",    RD, NG,   None,            None,    SERVER | ESTORE),
     // IDX.VERIFY: server-only (embedded exposes idx_stats instead).

@@ -58,6 +58,28 @@ fn noindex_shape(argv: &[Vec<u8>]) -> Option<AdviseShape> {
     None
 }
 
+/// The observation's dual — count one SERVED query against its
+/// path's usage cell. Same convergence point as [`observe_refusal`]
+/// (the origin, once per query); only the queries a human aims at a
+/// named path count, not the internal second-phase verbs.
+pub(super) fn observe_hit(catalogs: &CatalogState, argv: &[Vec<u8>]) {
+    let verb = argv.first().map(Vec::as_slice).unwrap_or(b"");
+    if !verb.eq_ignore_ascii_case(b"IDX.QUERY") && !verb.eq_ignore_ascii_case(b"IDX.COUNT") {
+        return;
+    }
+    let now_s = (kevy_store::now_unix_ms() / 1000) as i64;
+    // HYBRID serves through both of its named indexes.
+    let names: &[usize] =
+        if argv.get(1).is_some_and(|a| a.eq_ignore_ascii_case(b"HYBRID")) { &[2, 4] } else { &[1] };
+    for &i in names {
+        if let Some(name) = argv.get(i)
+            && let Some(cell) = catalogs.usage_cell(name)
+        {
+            cell.hit(now_s);
+        }
+    }
+}
+
 /// The columns a WHERE clause names, in clause order: `col EQ v`
 /// groups, then an optional `RANGE col min max` tail — the same walk
 /// the parser does.

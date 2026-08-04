@@ -155,8 +155,13 @@ fn refusals_become_declarations_that_serve() {
     write_rows(&mut c);
     wait_ready(&mut c, &[b"IDX.QUERY", b"user.age", b"EQ", b"0"]);
 
-    // A fresh catalog install leaves the advise log empty.
+    // The wait_ready probe served user.age, so the fresh-path drop
+    // suggestion has already retired and the refusal log is empty.
     assert_eq!(cmd(&mut c, &[b"IDX.ADVISE"]), b"*0\r\n", "ADVISE after install");
+
+    // IDX.LIST carries the usage dual (hits / last_hit labels).
+    let list = bulks(&cmd(&mut c, &[b"IDX.LIST"]));
+    assert!(list.iter().any(|b| b == b"hits"), "{list:?}");
 
     // Four refusal shapes; the Range family twice, so it ranks first.
     let refused: &[&[&[u8]]] = &[
@@ -204,12 +209,26 @@ fn refusals_become_declarations_that_serve() {
         "IDX.CREATE user.bio"
     );
 
-    // Installing a catalog clears the slate.
-    assert_eq!(cmd(&mut c, &[b"IDX.ADVISE"]), b"*0\r\n", "ADVISE after declarations");
+    // Installing a catalog clears the refusal slate; the four fresh
+    // paths surface as never-hit drop suggestions (count 0, name
+    // order) until queries retire them.
+    let after = bulks(&cmd(&mut c, &[b"IDX.ADVISE"]));
+    let names: Vec<&[u8]> = after.iter().step_by(2).map(Vec::as_slice).collect();
+    assert_eq!(
+        names,
+        vec![&b"user.age"[..], b"user.bio", b"user.by_city", b"user.city"],
+        "{after:?}"
+    );
+    assert!(
+        after.iter().skip(1).step_by(2).all(|a| a.starts_with(b"IDX.DROP ")),
+        "{after:?}"
+    );
 
-    // Every refused query now serves.
+    // Every refused query now serves — which retires every drop
+    // suggestion too.
     for q in refused {
         let reply = wait_ready(&mut c, q);
         assert!(!reply.starts_with(b"-"), "{q:?}: {}", String::from_utf8_lossy(&reply));
     }
+    assert_eq!(cmd(&mut c, &[b"IDX.ADVISE"]), b"*0\r\n", "all paths serve, nothing to advise");
 }

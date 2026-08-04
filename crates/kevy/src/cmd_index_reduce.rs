@@ -34,6 +34,7 @@ pub(crate) fn extension_reduce(
         advise::observe_refusal(catalogs, argv, &chunks);
         return ExtensionReduced::Reply(err);
     }
+    advise::observe_hit(catalogs, argv);
     if let Some(reply) = reduce_admin(catalogs, argv, &chunks) {
         return ExtensionReduced::Reply(reply);
     }

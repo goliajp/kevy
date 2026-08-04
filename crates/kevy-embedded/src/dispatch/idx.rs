@@ -22,9 +22,30 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
             }
         }
         b"IDX.LIST" => cmd_idx_list(s, out),
+        b"IDX.ADVISE" => {
+            if argv.len() != 1 {
+                err(out, "ERR usage: IDX.ADVISE");
+            } else {
+                cmd_idx_advise(s, out);
+            }
+        }
         _ => return false,
     }
     true
+}
+
+/// `IDX.ADVISE` — `[count, name, advice]` rows matching the server's
+/// Local handler: refusal families most-refused first, then the
+/// never-hit drop suggestions.
+fn cmd_idx_advise(s: &Store, out: &mut Vec<u8>) {
+    let rows = s.idx_advise();
+    arr(out, rows.len());
+    for r in rows {
+        arr(out, 3);
+        int(out, r.count as i64);
+        bulk(out, &r.name);
+        bulk(out, r.advice.as_bytes());
+    }
 }
 
 // ---- shared codecs (server `cmd_index_query::wire` shapes) -----------
@@ -132,9 +153,10 @@ pub(super) fn badargs(out: &mut Vec<u8>, verb: &str, name: &[u8]) {
     err(out, &format!("ERR {verb} '{n}': bad arguments — run COMMAND DOCS {verb} for the syntax"));
 }
 
-/// `IDX.LIST` — 12-field rows matching the server's reduce. Embedded
+/// `IDX.LIST` — 16-field rows matching the server's reduce. Embedded
 /// builds are synchronous, so `state` is always `ready`; entry/byte
-/// stats are the scalar-segment sums (kind-specific stats stay 0).
+/// stats are the scalar-segment sums (kind-specific stats stay 0);
+/// hits/last_hit read the usage dual.
 fn cmd_idx_list(s: &Store, out: &mut Vec<u8>) {
     let specs: Vec<IndexSpec> = {
         let g = s.indexes.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -143,7 +165,8 @@ fn cmd_idx_list(s: &Store, out: &mut Vec<u8>) {
     arr(out, specs.len());
     for spec in &specs {
         let stats = s.idx_stats(&spec.name).unwrap_or_default();
-        arr(out, 12);
+        let (hits, last, _) = s.idx_usage(&spec.name).unwrap_or((0, 0, 0));
+        arr(out, 16);
         bulk(out, b"name");
         bulk(out, &spec.name);
         bulk(out, b"prefix");
@@ -156,5 +179,9 @@ fn cmd_idx_list(s: &Store, out: &mut Vec<u8>) {
         bulk(out, stats.entries.to_string().as_bytes());
         bulk(out, b"bytes");
         bulk(out, stats.approx_bytes.to_string().as_bytes());
+        bulk(out, b"hits");
+        bulk(out, hits.to_string().as_bytes());
+        bulk(out, b"last_hit");
+        bulk(out, last.to_string().as_bytes());
     }
 }

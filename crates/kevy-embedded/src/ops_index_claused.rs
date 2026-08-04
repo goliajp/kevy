@@ -277,6 +277,7 @@ impl Store {
         let next = (!opts.selects() && all.len() == limit)
             .then(|| all.last().map(|(h, ())| Cursor { value: h.value.clone(), key: h.key.clone() }))
             .flatten();
+        self.observe_hit(name);
         Ok(ScalarPage {
             rows: all.into_iter().map(|(h, ())| (h.key, h.value)).collect(),
             facets: facets
@@ -316,6 +317,7 @@ impl Store {
             let _ = (spec, win);
             Ok(())
         })?;
+        self.observe_hit(name);
         Ok(total)
     }
 

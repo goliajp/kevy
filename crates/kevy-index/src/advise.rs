@@ -117,6 +117,46 @@ impl AdviseLog {
     }
 }
 
+/// One declared path's usage counters — the refusal log's dual: that
+/// log says what is missing, this says what goes unused (the reclaim
+/// face's raw material). Plain relaxed atomics — the served-query
+/// path pays two uncontended stores, never a lock.
+#[derive(Debug, Default)]
+pub struct UsageCell {
+    /// Queries served through this path.
+    pub hits: std::sync::atomic::AtomicU64,
+    /// Unix seconds of the most recent hit (0 = never).
+    pub last_hit_s: std::sync::atomic::AtomicI64,
+    /// Unix seconds the path was first seen declared — "never hit"
+    /// is only meaningful with an age next to it (a path declared
+    /// five seconds ago is not reclaim material).
+    pub declared_s: std::sync::atomic::AtomicI64,
+}
+
+impl UsageCell {
+    /// A fresh cell for a path first seen declared at `now_s`.
+    #[must_use]
+    pub fn declared_at(now_s: i64) -> Self {
+        let c = Self::default();
+        c.declared_s.store(now_s, std::sync::atomic::Ordering::Relaxed);
+        c
+    }
+
+    /// Count one served query at `now_s` (unix seconds).
+    pub fn hit(&self, now_s: i64) {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.hits.fetch_add(1, Relaxed);
+        self.last_hit_s.store(now_s, Relaxed);
+    }
+
+    /// `(hits, last_hit_s, declared_s)` snapshot.
+    #[must_use]
+    pub fn read(&self) -> (u64, i64, i64) {
+        use std::sync::atomic::Ordering::Relaxed;
+        (self.hits.load(Relaxed), self.last_hit_s.load(Relaxed), self.declared_s.load(Relaxed))
+    }
+}
+
 /// Render one observed family as the declaration command that would
 /// have served it — executable verbatim, or `None` when the catalog
 /// cannot ground it (unknown table / column: the query itself was

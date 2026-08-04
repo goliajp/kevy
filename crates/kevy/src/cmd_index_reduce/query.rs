@@ -189,7 +189,35 @@ pub(super) fn reduce_list(catalogs: &CatalogState, chunks: &[Vec<u8>]) -> Vec<u8
         return out;
     };
     let n = cat.len();
-    // Sum per-index stats across shard chunks.
+    let sums = list_sums(chunks, n);
+    encode_array_len(&mut out, n as i64);
+    for ((spec, _), s) in cat.iter().zip(&sums) {
+        let (hits, last, _) =
+            catalogs.usage_cell(&spec.name).map(|c| c.read()).unwrap_or((0, 0, 0));
+        encode_array_len(&mut out, 16);
+        encode_bulk(&mut out, b"name");
+        encode_bulk(&mut out, &spec.name);
+        encode_bulk(&mut out, b"prefix");
+        encode_bulk(&mut out, &spec.prefix);
+        encode_bulk(&mut out, b"kind");
+        encode_bulk(&mut out, spec.kind.tag().as_bytes());
+        encode_bulk(&mut out, b"state");
+        encode_bulk(&mut out, if s.0 { b"building" } else { b"ready" });
+        encode_bulk(&mut out, b"entries");
+        encode_bulk(&mut out, s.1.to_string().as_bytes());
+        encode_bulk(&mut out, b"bytes");
+        encode_bulk(&mut out, s.2.to_string().as_bytes());
+        encode_bulk(&mut out, b"hits");
+        encode_bulk(&mut out, hits.to_string().as_bytes());
+        encode_bulk(&mut out, b"last_hit");
+        encode_bulk(&mut out, last.to_string().as_bytes());
+    }
+    out
+}
+
+/// Per-index `(building, entries, bytes, extra1, extra2)` summed
+/// across the shard chunks — [`reduce_list`]'s parse half.
+fn list_sums(chunks: &[Vec<u8>], n: usize) -> Vec<(bool, u64, u64, u64, u64)> {
     let mut sums = vec![(false, 0u64, 0u64, 0u64, 0u64); n];
     for c in chunks {
         let mut pos = 1usize;
@@ -210,23 +238,7 @@ pub(super) fn reduce_list(catalogs: &CatalogState, chunks: &[Vec<u8>]) -> Vec<u8
             }
         }
     }
-    encode_array_len(&mut out, n as i64);
-    for ((spec, _), s) in cat.iter().zip(&sums) {
-        encode_array_len(&mut out, 12);
-        encode_bulk(&mut out, b"name");
-        encode_bulk(&mut out, &spec.name);
-        encode_bulk(&mut out, b"prefix");
-        encode_bulk(&mut out, &spec.prefix);
-        encode_bulk(&mut out, b"kind");
-        encode_bulk(&mut out, spec.kind.tag().as_bytes());
-        encode_bulk(&mut out, b"state");
-        encode_bulk(&mut out, if s.0 { b"building" } else { b"ready" });
-        encode_bulk(&mut out, b"entries");
-        encode_bulk(&mut out, s.1.to_string().as_bytes());
-        encode_bulk(&mut out, b"bytes");
-        encode_bulk(&mut out, s.2.to_string().as_bytes());
-    }
-    out
+    sums
 }
 
 /// Six counters per shard, summed. `drift` and `checked` are the two the verb

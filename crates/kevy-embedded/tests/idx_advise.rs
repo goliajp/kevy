@@ -36,10 +36,19 @@ fn lean_table() -> TableSpec {
 fn refusals_render_and_catalog_mutations_clear() {
     let s = Store::open(Config::default().with_ttl_reaper_manual()).expect("open");
     s.table_declare(lean_table()).expect("declare");
-    assert!(s.idx_advise().is_empty(), "fresh install starts clean");
+
+    // A fresh path is "never hit" — the reclaim face lists it with
+    // its age until the first served query retires the suggestion.
+    let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(100));
+    let fresh = s.idx_advise();
+    assert_eq!(fresh.len(), 1, "{fresh:?}");
+    assert!(fresh[0].advice.starts_with("IDX.DROP ev.at"), "{}", fresh[0].advice);
+    s.idx_count(b"ev.at", &lo, &hi).expect("served");
+    assert!(s.idx_advise().is_empty(), "a served path needs no advice");
+    let (hits, _, _) = s.idx_usage(b"ev.at").expect("declared");
+    assert_eq!(hits, 1, "the served query counted");
 
     // A Range family, twice — it ranks first.
-    let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(100));
     assert!(s.idx_count(b"ev.age", &lo, &hi).is_err());
     assert!(s.idx_query(b"ev.age", &lo, &hi, None, 10).is_err());
 
