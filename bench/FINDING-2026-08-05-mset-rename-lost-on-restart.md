@@ -139,6 +139,16 @@ cross-shard `RENAMENX` leaves both keys untouched. The regression test
 asserts its fixtures really straddle two shards, so a same-shard pair
 cannot quietly make it pass.
 
+## What was run against the finished branch
+
+* `cargo test -p kevy` — 92 suites, 0 failed.
+* **`crashgate`** — the SIGKILL matrix these changes sit under: 6 kill
+  cells (append/rewrite/snapshot/feed × everysec/always/4-shard), 4
+  windowed cells, 5 injected-damage cells. **All PASS.** Worth running
+  because this work changed *what gets written*, which is exactly the
+  surface that gate audits.
+* **`perfgate`** — 12 angles, all above floor.
+
 ## The lesson worth keeping
 
 Both bugs, and both index bugs found the same day, were invisible to
