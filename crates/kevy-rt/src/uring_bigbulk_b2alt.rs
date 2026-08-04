@@ -273,7 +273,7 @@ impl<C: Commands> Shard<C> {
         self.maybe_notify_dispatch(&view);
         self.wake_key(&key);
         let _ok = self.store.set(&key, body, None, false, false);
-        self.store.bump_if_watched(&key);
+        self.note_key_mutated(&key);
         let lua_wakes = crate::lua_wake_bridge::drain_lua_wake_buffer();
         for k in lua_wakes {
             self.wake_key(&k);

@@ -86,6 +86,7 @@ mod exec_client_intercept;
 mod exec_crossslot;
 mod exec_dispatch;
 mod exec_fold;
+mod exec_mutated;
 mod exec_notify;
 mod exec_op;
 mod exec_pubsub;

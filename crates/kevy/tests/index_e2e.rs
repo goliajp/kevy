@@ -1359,3 +1359,70 @@ fn idx_count_applies_filter() {
     // A clause the count would not apply is a refusal, not silence.
     assert!(cmd(&mut c, &[b"IDX.COUNT", b"by_score", b"RANGE", b"0", b"100", b"SORT", b"dept", b"ASC"]).starts_with(b"-ERR"));
 }
+
+/// A key deleted by a MULTI-key verb must leave the index with it.
+///
+/// The index is maintained by `Commands::on_write`, which the dispatch
+/// path calls only when the resolver produced a single `key_idx`.
+/// Multi-key `DEL`/`UNLINK`, and the cross-shard `RENAME` two-step,
+/// route by key without one and used to execute their op on the owning
+/// shard without ever telling the index: `IDX.QUERY` kept answering
+/// with rows that no longer existed (hydration nil, sort value intact),
+/// `IDX.COUNT` kept counting them, and nothing repaired it — only
+/// `IDX.VERIFY` could see the drift. That breaks the
+/// derived-by-construction invariant the whole IDX surface rests on.
+#[test]
+fn multi_key_delete_and_rename_keep_the_index_honest() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+
+    for i in 0..24 {
+        cmd(
+            &mut c,
+            &[b"HSET", format!("row:{i}").as_bytes(), b"age", format!("{}", 20 + i).as_bytes()],
+        );
+    }
+    assert_eq!(
+        cmd(
+            &mut c,
+            &[b"IDX.CREATE", b"byage", b"ON", b"PREFIX", b"row:", b"FIELD", b"age", b"TYPE", b"i64", b"KIND", b"range"],
+        ),
+        b"+OK\r\n"
+    );
+    let indexed = |c: &mut std::net::TcpStream| -> String {
+        String::from_utf8_lossy(&query_ready(
+            c,
+            &[b"IDX.QUERY", b"byage", b"RANGE", b"0", b"999", b"LIMIT", b"200"],
+        ))
+        .into_owned()
+    };
+    let before = indexed(&mut c);
+    for i in 0..24 {
+        assert!(before.contains(&format!("row:{i}\r\n")), "row:{i} must be indexed first");
+    }
+
+    // Two keys per verb, so each call is genuinely multi-key and spans
+    // shards (24 rows over 8 shards).
+    cmd(&mut c, &[b"DEL", b"row:7", b"row:11"]);
+    cmd(&mut c, &[b"UNLINK", b"row:5", b"row:6"]);
+    cmd(&mut c, &[b"RENAME", b"row:12", b"moved:12"]);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    let after = indexed(&mut c);
+    for gone in ["row:7", "row:11", "row:5", "row:6", "row:12"] {
+        assert!(!after.contains(&format!("{gone}\r\n")), "{gone} still answers IDX.QUERY");
+    }
+    for kept in ["row:8", "row:23", "row:0"] {
+        assert!(after.contains(&format!("{kept}\r\n")), "{kept} must survive");
+    }
+
+    // The engine's own auditor agrees, and a later write still indexes.
+    let v = cmd(&mut c, &[b"IDX.VERIFY", b"byage"]);
+    let v = String::from_utf8_lossy(&v);
+    assert!(v.contains("drift"), "VERIFY shape changed: {v}");
+    let drift = v.split("drift\r\n$").nth(1).and_then(|s| s.split("\r\n").nth(1));
+    assert_eq!(drift, Some("0"), "VERIFY still reports drift: {v}");
+    cmd(&mut c, &[b"HSET", b"row:99", b"age", b"77"]);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(indexed(&mut c).contains("row:99\r\n"), "a fresh write must still index");
+}

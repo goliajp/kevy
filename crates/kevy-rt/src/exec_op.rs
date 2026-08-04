@@ -51,7 +51,7 @@ impl<C: Commands> Shard<C> {
                 let n = self.store.del(&key_refs);
                 if n > 0 {
                     for k in &keys {
-                        self.store.bump_if_watched(k);
+                        self.note_key_mutated(k);
                     }
                     let mut c = Argv::with_capacity(keys.len() + 1, 0);
                     c.push(b"DEL");
@@ -96,7 +96,7 @@ impl<C: Commands> Shard<C> {
             Op::MSet(pairs) => {
                 for (k, v) in &pairs {
                     self.store.set(k, v.clone(), None, false, false);
-                    self.store.bump_if_watched(k);
+                    self.note_key_mutated(k);
                 }
                 if !pairs.is_empty() {
                     let mut c = Argv::with_capacity(pairs.len() * 2 + 1, 0);
@@ -132,7 +132,7 @@ impl<C: Commands> Shard<C> {
             }
             Op::ZStoreResult { dst, pairs } => {
                 let n = self.store.zstore_result(&dst, &pairs);
-                self.store.bump_if_watched(&dst);
+                self.note_key_mutated(&dst);
                 // Propagate the EFFECT: DEL + plain ZADD (deterministic
                 // on replay/replica regardless of source state — the
                 // campaign's effect-not-condition rule).
@@ -160,7 +160,7 @@ impl<C: Commands> Shard<C> {
                     let member_refs: Vec<&[u8]> = members.iter().map(Vec::as_slice).collect();
                     self.store.sadd(&dst, &member_refs).unwrap_or(0)
                 };
-                self.store.bump_if_watched(&dst);
+                self.note_key_mutated(&dst);
                 let mut c = Argv::with_capacity(2, 0);
                 c.push(b"DEL");
                 c.push(&dst);
@@ -251,8 +251,8 @@ impl<C: Commands> Shard<C> {
                 };
                 if renamed {
                     // AOF + WATCH bump for both src (deleted) and dst (created).
-                    self.store.bump_if_watched(&src);
-                    self.store.bump_if_watched(&dst);
+                    self.note_key_mutated(&src);
+                    self.note_key_mutated(&dst);
                     if self.aof.is_some() {
                         let mut c = Argv::with_capacity(3, 0);
                         c.push(if nx { b"RENAMENX" } else { b"RENAME" });
@@ -308,7 +308,7 @@ impl<C: Commands> Shard<C> {
                     Ok(mut v) => {
                         let element = v.pop();
                         if element.is_some() {
-                            self.store.bump_if_watched(&key);
+                            self.note_key_mutated(&key);
                             self.log_list_pop(&key, from_left);
                             self.notify_list_event(&key, from_left, true);
                         }
@@ -328,7 +328,7 @@ impl<C: Commands> Shard<C> {
                 };
                 match pushed {
                     Ok(_) => {
-                        self.store.bump_if_watched(&key);
+                        self.note_key_mutated(&key);
                         self.notify_list_event(&key, to_left, false);
                         self.log_list_push(&key, &value, to_left);
                         Part::ListMovePushed { refused: None }
@@ -343,7 +343,7 @@ impl<C: Commands> Shard<C> {
                 } else {
                     self.store.rpush(&key, &[value.as_slice()])
                 };
-                self.store.bump_if_watched(&key);
+                self.note_key_mutated(&key);
                 self.log_list_push(&key, &value, from_left);
                 Part::Ok
             }
@@ -354,7 +354,7 @@ impl<C: Commands> Shard<C> {
                 // `Op::RenamePut` on the destination shard.
                 match self.store.take_with_ttl(&src) {
                     Some((value, ttl_ms)) => {
-                        self.store.bump_if_watched(&src);
+                        self.note_key_mutated(&src);
                         Part::RenameTaken { value, ttl_ms }
                     }
                     None => Part::RenameNoSuchSrc,
@@ -378,7 +378,7 @@ impl<C: Commands> Shard<C> {
                     };
                 }
                 self.store.put_with_ttl(dst.clone(), value, ttl_ms);
-                self.store.bump_if_watched(&dst);
+                self.note_key_mutated(&dst);
                 // AOF / cross-shard RENAME durability is deferred —
                 // a faithful AOF replay would need to serialise the
                 // value through MIGRATE/RESTORE-style binary frames.
