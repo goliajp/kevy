@@ -1416,12 +1416,15 @@ fn multi_key_delete_and_rename_keep_the_index_honest() {
         assert!(after.contains(&format!("{kept}\r\n")), "{kept} must survive");
     }
 
-    // The engine's own auditor agrees, and a later write still indexes.
+    // The engine's own auditor agrees on BOTH directions, and a later
+    // write still indexes.
     let v = cmd(&mut c, &[b"IDX.VERIFY", b"byage"]);
     let v = String::from_utf8_lossy(&v);
-    assert!(v.contains("drift"), "VERIFY shape changed: {v}");
-    let drift = v.split("drift\r\n$").nth(1).and_then(|s| s.split("\r\n").nth(1));
-    assert_eq!(drift, Some("0"), "VERIFY still reports drift: {v}");
+    for counter in ["drift", "missing"] {
+        assert!(v.contains(counter), "VERIFY shape changed: {v}");
+        let got = v.split(&format!("{counter}\r\n$")).nth(1).and_then(|s| s.split("\r\n").nth(1));
+        assert_eq!(got, Some("0"), "VERIFY reports {counter}: {v}");
+    }
     cmd(&mut c, &[b"HSET", b"row:99", b"age", b"77"]);
     std::thread::sleep(std::time::Duration::from_millis(300));
     assert!(indexed(&mut c).contains("row:99\r\n"), "a fresh write must still index");

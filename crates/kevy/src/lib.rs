@@ -54,6 +54,7 @@ mod cmd_index;
 mod cmd_index_advise;
 mod cmd_digest;
 mod cmd_table;
+mod cmd_table_verify;
 mod cmd_view;
 mod cmd_view_reduce;
 mod cmd_index_query;
