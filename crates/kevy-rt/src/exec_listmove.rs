@@ -269,8 +269,8 @@ impl<C: Commands> Shard<C> {
     /// cross-shard path's — a replay does not have to know which shard layout
     /// produced it.
     pub(crate) fn after_list_move(&mut self, src: &[u8], dst: &[u8], from_left: bool, to_left: bool) {
-        self.store.bump_if_watched(src);
-        self.store.bump_if_watched(dst);
+        self.note_key_mutated(src);
+        self.note_key_mutated(dst);
         self.log_list_pop(src, from_left);
         self.notify_list_event(src, from_left, true);
         self.notify_list_event(dst, to_left, false);
