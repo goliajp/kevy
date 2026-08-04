@@ -54,6 +54,40 @@
    判据实验(零人工声明 → N 分钟全命中)。
 3. R4b-c 窗口收窄 advise(R2 合成)—— bound 分布采样,独立小轮。
 
+## 二b、R4b-a 实施记录(完轮)
+
+石头段:kevy-index `advise.rs`(AdviseLog 有界最弱驱逐 + advice_of
+四形渲染,ungrounded 渲染 None)+ 单测。接线段(server 面):
+
+- 观察点收敛在 origin reduce 的 triage 拒绝处(每查询一次,天然不随
+  shard 数重复);shape 从 argv 派生(MATCH / RANGE|EQ / WHERE 列走
+  与 parser 相同的 token 步进),HYBRID 双名不可归因 → 不观察。
+- FILTER/SORT/DISTINCT/FACET 缺字段家族改走新状态字节 ST_NOFIELD
+  (status + u8 字段长 + 字段 + 原解释文本):reduce 结构化取字段喂
+  log,不做散文解析;错误文案不变。
+- 观察表 = CatalogState 的 `Mutex<AdviseLog>`,catalog install
+  (index/table)即 clear —— 已服务家族停止被拒,未服务家族下次拒绝
+  立刻重挣席位。
+- `IDX.ADVISE` 走 Local dispatch(纯 origin 状态读,不值一次
+  fan-out),回 `[count, name, advice]` 行,最多拒优先。
+- e2e `idx_advise_e2e.rs`:欠声明表 + 五次拒绝(四家族)→ ADVISE 恰
+  为四条声明(次序=次数降序、同次数按名)→ ungrounded 名不出现 →
+  执行声明 → ADVISE 清空 → 全部原拒绝查询命中。
+
+embedded 镜像:观察表在 `TableReg`(结构本体同一 kevy-index 实现),
+入口包裹 idx_query / idx_count / idx_query_claused / idx_count_claused
+/ idx_match 族;claused 的 resolve 失败按 spec 反查 unstored 字段结构
+化归因;`Store::idx_advise()` 返回 `IdxAdvice` 行;register_spec /
+idx_drop / table_declare / table_drop 即 clear;集成测试
+`tests/idx_advise.rs` 镜像 e2e 判据。
+
+**边界(归 slice b,不是缩水)**:text MATCH 的 clause 面(scope /
+FILTER / SORT / DISTINCT / FACET 缺字段)在 embedded 未喂 log ——
+其 advice 需要 text 声明形(IDX.CREATE … VALUES)渲染器尚不存在;
+advice 的 Range/Where 形含 `…` 占位(补全既有声明是 TABLE.REPLACE
+全文渲染,slice b 一并考虑)。AtomicAllShards 快照面的 idx_query 不
+观察(快照语义,不值为它加状态)。
+
 ## 三、发散区
 
 - 阈值/上限数字(16 次、128 项、每表 n)全部实测调,不预辩。

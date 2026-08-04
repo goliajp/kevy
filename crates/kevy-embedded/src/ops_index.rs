@@ -49,6 +49,14 @@ pub(crate) mod highlight;
 #[path = "ops_index_claused.rs"]
 pub(crate) mod claused;
 
+// The auto-declaration loop's observation face (refusal log + advice).
+#[path = "ops_index_advise.rs"]
+pub(crate) mod advise;
+
+// The read-only admin surface (stats, enumeration).
+#[path = "ops_index_admin.rs"]
+mod admin;
+
 #[cfg(feature = "text")]
 #[path = "ops_index_text.rs"]
 mod text;
@@ -206,6 +214,7 @@ impl Store {
             *ver += 1;
         }
         self.persist_index_sidecar();
+        self.advise_clear();
         // Build every shard's slice now (each under its own lock).
         for shard in self.shards.iter() {
             let mut g = lock_write(shard);
@@ -266,34 +275,9 @@ impl Store {
         };
         if hit {
             self.persist_index_sidecar();
+            self.advise_clear();
         }
         hit
-    }
-
-    /// Summed segment stats (entries / bytes / coerce failures /
-    /// unique-fence duplicates).
-    pub fn idx_stats(&self, name: &[u8]) -> KevyResult<SegmentStats> {
-        let mut sum = SegmentStats::default();
-        self.for_each_segment(name, |seg| {
-            let s = seg.stats();
-            sum.entries += s.entries;
-            sum.approx_bytes += s.approx_bytes;
-            sum.coerce_failures += s.coerce_failures;
-            sum.duplicates += s.duplicates;
-        })?;
-        Ok(sum)
-    }
-
-    /// Declared indexes (name, prefix, kind), declaration order.
-    pub fn idx_list(&self) -> Vec<(Vec<u8>, Vec<u8>, IndexKind)> {
-        let g = self
-            .indexes
-            .catalog
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        g.1.iter()
-            .map(|(s, _)| (s.name.clone(), s.prefix.clone(), s.kind))
-            .collect()
     }
 
     /// `MATCH` — BM25-ranked hits merged across shards, scored against

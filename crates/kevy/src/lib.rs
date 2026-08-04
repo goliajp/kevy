@@ -51,6 +51,7 @@ mod cmd_block_serve;
 mod cmd_data;
 mod cmd_hash_ttl;
 mod cmd_index;
+mod cmd_index_advise;
 mod cmd_digest;
 mod cmd_table;
 mod cmd_view;

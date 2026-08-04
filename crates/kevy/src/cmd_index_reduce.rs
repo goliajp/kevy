@@ -4,6 +4,7 @@
 //! [`query`] scalar/admin reduces, [`agg`] TPUT top-K, [`ranked`]
 //! MATCH/KNN/HYBRID).
 
+mod advise;
 mod agg;
 mod chunk;
 mod claused;
@@ -18,7 +19,7 @@ use kevy_resp::encode_error;
 use kevy_rt::ExtensionReduced;
 
 use crate::cmd_index_query::{
-    ST_BADARGS, ST_BUILDING, ST_CLAUSE, ST_NOINDEX, ST_NOTYET, ST_OVERBUDGET,
+    ST_BADARGS, ST_BUILDING, ST_CLAUSE, ST_NOFIELD, ST_NOINDEX, ST_NOTYET, ST_OVERBUDGET,
 };
 use crate::state::CatalogState;
 
@@ -30,6 +31,7 @@ pub(crate) fn extension_reduce(
     chunks: Vec<Vec<u8>>,
 ) -> ExtensionReduced {
     if let Some(err) = triage_status(argv, &chunks) {
+        advise::observe_refusal(catalogs, argv, &chunks);
         return ExtensionReduced::Reply(err);
     }
     if let Some(reply) = reduce_admin(catalogs, argv, &chunks) {
@@ -133,6 +135,11 @@ fn status_error(c: &[u8], verb_s: &str, name_s: &str) -> Option<String> {
             "ERR {verb_s} '{name_s}': {}",
             String::from_utf8_lossy(&c[1..])
         )),
+        Some(ST_NOFIELD) => {
+            let flen = c.get(1).copied().unwrap_or(0) as usize;
+            let msg = c.get(2 + flen..).unwrap_or(b"");
+            Some(format!("ERR {verb_s} '{name_s}': {}", String::from_utf8_lossy(msg)))
+        }
         Some(ST_NOINDEX) => {
             Some(format!("ERR no such index '{name_s}' (IDX.LIST enumerates them)"))
         }

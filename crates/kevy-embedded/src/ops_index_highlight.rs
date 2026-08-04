@@ -73,9 +73,20 @@ impl Store {
         limit: usize,
         opts: MatchOpts<'_>,
     ) -> KevyResult<MatchPage> {
+        let r = self.match_faceted_run(name, query, limit, opts);
+        self.observe_noindex(name, kevy_index::AdviseShape::Match, &r);
+        r
+    }
+
+    fn match_faceted_run(
+        &self,
+        name: &[u8],
+        query: &[u8],
+        limit: usize,
+        opts: MatchOpts<'_>,
+    ) -> KevyResult<MatchPage> {
         let (limit, offset) = (limit.clamp(1, 1000), opts.offset.min(10_000));
-        // Fetch deep enough to skip OFFSET and still fill LIMIT after the
-        // cross-shard merge.
+        // Deep enough to skip OFFSET and still fill LIMIT post-merge.
         let fetch = limit + offset;
         super::text_cold::cold_refusal(self.text_has_cold(name), query, opts.typo, opts.scope)?;
         let (scope, tests) = self.resolve_clauses(name, opts.scope, opts.filters)?;

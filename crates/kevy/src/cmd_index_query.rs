@@ -50,6 +50,13 @@ pub(crate) const ST_NOTYET: u8 = 5;
 /// declared, and "bad arguments" would send the caller hunting for a
 /// typo in correct syntax.
 pub(crate) const ST_CLAUSE: u8 = 6;
+/// A clause naming a field this index does not STORE (`FILTER` /
+/// `SORT` / `DISTINCT` / `FACET`). Split from ST_CLAUSE because this
+/// refusal is a complete declaration spec — the origin reduce feeds
+/// the field to the advise log before rendering the same explanation
+/// ST_CLAUSE would have carried. Chunk layout: status byte, u8 field
+/// length, the field, then the explanation text.
+pub(crate) const ST_NOFIELD: u8 = 7;
 
 /// Per-shard half: parse the IDX.* argv, run against this shard's
 /// segment, emit a status-tagged chunk.
