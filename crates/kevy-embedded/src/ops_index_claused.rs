@@ -303,8 +303,13 @@ impl Store {
         let opts = ScalarQueryOpts { filters, ..ScalarQueryOpts::default() };
         let r = self.claused_resolve(name, &spec, &opts)?;
         let mut total = 0u64;
+        let probe = self.usage_cell(name);
         self.for_each_segment_windowed(name, |spec, seg, win| {
             total += seg.count_claused(min, max, &r.filters);
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(w) = win {
+                crate::ops_index::advise::probe_window(&probe, w, min);
+            }
             // The evicted half counts from the cold payloads — same
             // predicates, frozen values; a corrupt segment refuses.
             #[cfg(not(target_arch = "wasm32"))]
@@ -362,12 +367,17 @@ impl Store {
         let mut all: Vec<(ScalarHit, ())> = Vec::new();
         let mut facets: Vec<Vec<FacetBucket>> = vec![Vec::new(); clauses.facets.len()];
         let mut found = false;
+        let probe = self.usage_cell(name);
         for shard in self.shards.iter() {
             let mut g = lock_write(shard);
             let inner = &mut *g;
             sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
             if let Some((_spec, seg)) = inner.idx_segs.segs.iter().find(|(s, _)| s.name == name) {
                 found = true;
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(w) = inner.idx_segs.window_of(name) {
+                    crate::ops_index::advise::probe_window(&probe, w, min);
+                }
                 let page = seg.query_claused(min, max, cursor, clauses);
                 all.extend(page.hits.into_iter().map(|h| (h, ())));
                 fold_facets(&mut facets, page.facets);

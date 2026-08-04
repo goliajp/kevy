@@ -58,6 +58,27 @@ pub(crate) const ST_CLAUSE: u8 = 6;
 /// length, the field, then the explanation text.
 pub(crate) const ST_NOFIELD: u8 = 7;
 
+/// Window-narrowing observation: record this query's probe depth
+/// (`lower - boundary`) against the path's usage cell. Once per
+/// shard per query — a repeat just re-records the same minimum.
+/// Skipped until the boundary exists.
+pub(crate) fn probe_window(
+    ctx: &Ctx<'_>,
+    name: &[u8],
+    win: Option<&kevy_window::WindowRt>,
+    lower: &kevy_index::IndexValue,
+) {
+    let Some(w) = win else { return };
+    if w.boundary() == i64::MIN {
+        return;
+    }
+    if let Some(cell) = ctx.state.catalogs.usage_cell(name)
+        && let Some(v) = kevy_index::window_value_of(lower, w.shape)
+    {
+        cell.probe(v.saturating_sub(w.boundary()));
+    }
+}
+
 /// Per-shard half: parse the IDX.* argv, run against this shard's
 /// segment, emit a status-tagged chunk.
 pub(crate) fn extension_op(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {

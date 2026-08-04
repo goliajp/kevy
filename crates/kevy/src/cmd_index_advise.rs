@@ -29,31 +29,51 @@ pub(crate) fn cmd_idx_advise<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out:
             }
         }
     }
-    let now_s = (kevy_store::now_unix_ms() / 1000) as i64;
-    let mut unused: Vec<(Vec<u8>, String)> = ctx
-        .state
-        .catalogs
-        .usage_snapshot()
-        .into_iter()
-        .filter(|(_, hits, _, _)| *hits == 0)
-        .map(|(name, _, _, declared)| {
-            let n = String::from_utf8_lossy(&name).into_owned();
-            let age = (now_s - declared).max(0);
-            (name, format!("IDX.DROP {n}  (never hit in the {age}s since declare)"))
-        })
-        .collect();
-    unused.sort();
-    encode_array_len(out, (rows.len() + unused.len()) as i64);
+    let reclaim = reclaim_rows(ctx, table.as_deref());
+    encode_array_len(out, (rows.len() + reclaim.len()) as i64);
     for (count, name, advice) in rows {
         encode_array_len(out, 3);
         encode_integer(out, count as i64);
         encode_bulk(out, &name);
         encode_bulk(out, advice.as_bytes());
     }
-    for (name, advice) in unused {
+    for (name, advice) in reclaim {
         encode_array_len(out, 3);
         encode_integer(out, 0);
         encode_bulk(out, &name);
         encode_bulk(out, advice.as_bytes());
     }
+}
+
+/// The window-narrowing face, then the reclaim face: a windowed path
+/// whose every observed probe left more than a bucket of margin
+/// advises a smaller SPAN; a declared path no query has ever hit
+/// advises its own drop, with its age. Both stay human acts.
+fn reclaim_rows(
+    ctx: &Ctx<'_>,
+    table: Option<&kevy_index::TableCatalog>,
+) -> Vec<(Vec<u8>, String)> {
+    let now_s = (kevy_store::now_unix_ms() / 1000) as i64;
+    let usage = ctx.state.catalogs.usage_snapshot();
+    let mut narrow: Vec<(Vec<u8>, String)> = usage
+        .iter()
+        .filter_map(|(name, _, _, _, margin)| {
+            let dot = name.iter().position(|&b| b == b'.')?;
+            let spec = table?.get(&name[..dot])?;
+            kevy_index::narrow_advice(spec, *margin).map(|a| (name.clone(), a))
+        })
+        .collect();
+    narrow.sort();
+    let mut unused: Vec<(Vec<u8>, String)> = usage
+        .into_iter()
+        .filter(|(_, hits, _, _, _)| *hits == 0)
+        .map(|(name, _, _, declared, _)| {
+            let n = String::from_utf8_lossy(&name).into_owned();
+            let age = (now_s - declared).max(0);
+            (name, format!("IDX.DROP {n}  (never hit in the {age}s since declare)"))
+        })
+        .collect();
+    unused.sort();
+    narrow.extend(unused);
+    narrow
 }

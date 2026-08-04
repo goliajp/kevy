@@ -42,7 +42,7 @@ pub use composite::{
 pub use segment::{Cursor, Segment, SegmentStats};
 pub use advise::{
     ADVISE_CAP, AUTODECLARE_AFTER, AdviseEntry, AdviseLog, AdviseShape, UsageCell, advice_of,
-    apply_auto,
+    apply_auto, narrow_advice,
 };
 pub use segment_claused::{
     ClausedPage, ColdEntryRow, FacetBucket, ScalarClauses, ScalarHit, claused_over, fold_facets,
