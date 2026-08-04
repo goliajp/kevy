@@ -189,7 +189,7 @@ impl Commands for KevyCommands {
         {
             crate::cmd_table::extension_reduce(catalogs, argv, chunks)
         } else {
-            crate::cmd_index_reduce::extension_reduce(catalogs, argv, chunks)
+            crate::cmd_index_reduce::extension_reduce(self.state(), argv, chunks)
         };
         match reduced {
             ExtensionReduced::Reply(reply) if proto == kevy_resp::RespVersion::V3 => {

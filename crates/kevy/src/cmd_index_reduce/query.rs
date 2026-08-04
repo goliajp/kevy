@@ -194,7 +194,7 @@ pub(super) fn reduce_list(catalogs: &CatalogState, chunks: &[Vec<u8>]) -> Vec<u8
     for ((spec, _), s) in cat.iter().zip(&sums) {
         let (hits, last, _) =
             catalogs.usage_cell(&spec.name).map(|c| c.read()).unwrap_or((0, 0, 0));
-        encode_array_len(&mut out, 16);
+        encode_array_len(&mut out, 18);
         encode_bulk(&mut out, b"name");
         encode_bulk(&mut out, &spec.name);
         encode_bulk(&mut out, b"prefix");
@@ -211,6 +211,8 @@ pub(super) fn reduce_list(catalogs: &CatalogState, chunks: &[Vec<u8>]) -> Vec<u8
         encode_bulk(&mut out, hits.to_string().as_bytes());
         encode_bulk(&mut out, b"last_hit");
         encode_bulk(&mut out, last.to_string().as_bytes());
+        encode_bulk(&mut out, b"auto");
+        encode_bulk(&mut out, if catalogs.is_auto_path(&spec.name) { b"1" } else { b"0" });
     }
     out
 }

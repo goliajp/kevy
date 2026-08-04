@@ -96,12 +96,19 @@ impl CatalogState {
         }
     }
 
-    /// Record one refused declaration family.
-    pub(crate) fn advise_observe(&self, name: &[u8], shape: AdviseShape, argv: &[Vec<u8>]) {
+    /// Record one refused declaration family; returns its count
+    /// after this observation (the auto loop's threshold input).
+    pub(crate) fn advise_observe(&self, name: &[u8], shape: AdviseShape, argv: &[Vec<u8>]) -> u64 {
         self.advise
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .observe(name, shape, argv);
+            .observe(name, shape, argv)
+    }
+
+    /// Is `name` a path the auto loop declared (any table's ledger)?
+    pub(crate) fn is_auto_path(&self, name: &[u8]) -> bool {
+        self.table()
+            .is_some_and(|c| c.iter().any(|s| s.auto_added.iter().any(|e| e == name)))
     }
 
     /// Snapshot the observed refusal families, most-refused first.

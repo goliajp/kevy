@@ -147,6 +147,63 @@ fn write_rows(s: &mut std::net::TcpStream) {
     }
 }
 
+/// The autodeclare criterion (the research plan's experiment): a
+/// never-seen workload against a table with ZERO human paths — only
+/// the opt-in budget — ends with every in-budget query family served
+/// by an engine-declared path, no human declaration ever issued.
+#[test]
+fn autodeclare_serves_a_zero_declaration_workload() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    assert_eq!(
+        cmd(&mut c, &[
+            b"TABLE.DECLARE", b"auto", b"PREFIX", b"a:", b"PK", b"id",
+            b"COLUMN", b"id", b"str", b"COLUMN", b"age", b"i64", b"COLUMN", b"city", b"str",
+            b"AUTODECLARE", b"2",
+        ]),
+        b"+OK\r\n",
+        "opt-in declare"
+    );
+    for (key, age, city) in [("a:1", "30", "tokyo"), ("a:2", "45", "osaka")] {
+        let r = cmd(&mut c, &[
+            b"HSET", key.as_bytes(), b"id", &key.as_bytes()[2..],
+            b"age", age.as_bytes(), b"city", city.as_bytes(),
+        ]);
+        assert!(r.starts_with(b":"), "{}", String::from_utf8_lossy(&r));
+    }
+
+    // Two query families hammer undeclared paths; each crosses the
+    // threshold and gets its path declared by the engine. The
+    // crossing query itself still errors — the action is
+    // declare-period, serving starts with the build.
+    for q in [
+        &[b"IDX.QUERY" as &[u8], b"auto.age", b"RANGE", b"0", b"100"] as &[&[u8]],
+        &[b"IDX.QUERY", b"auto.city", b"EQ", b"tokyo"],
+    ] {
+        for _ in 0..16 {
+            let r = cmd(&mut c, q);
+            assert!(r.starts_with(b"-ERR"), "{}", String::from_utf8_lossy(&r));
+        }
+        let served = wait_ready(&mut c, q);
+        assert!(!served.starts_with(b"-"), "{}", String::from_utf8_lossy(&served));
+    }
+
+    // Both engine-declared paths carry the auto marker.
+    let list = String::from_utf8_lossy(&cmd(&mut c, &[b"IDX.LIST"])).into_owned();
+    assert_eq!(list.matches("auto\r\n$1\r\n1").count(), 2, "{list}");
+
+    // A third family finds the budget spent: refused forever, and
+    // IDX.ADVISE keeps advising it to a human.
+    let third: &[&[u8]] =
+        &[b"IDX.QUERY", b"auto.by_city", b"WHERE", b"city", b"EQ", b"x", b"RANGE", b"age", b"0", b"9"];
+    for _ in 0..17 {
+        let r = cmd(&mut c, third);
+        assert!(r.starts_with(b"-ERR"), "{}", String::from_utf8_lossy(&r));
+    }
+    let adv = bulks(&cmd(&mut c, &[b"IDX.ADVISE"]));
+    assert!(adv.iter().any(|b| b == b"auto.by_city"), "{adv:?}");
+}
+
 #[test]
 fn refusals_become_declarations_that_serve() {
     let srv = Server::start();
