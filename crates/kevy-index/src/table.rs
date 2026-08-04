@@ -73,6 +73,17 @@ pub struct TableSpec {
     pub orderpaths: Vec<OrderPath>,
     /// Optional sliding hot window (`WINDOW <col> SPAN <n> BUCKET <n>`).
     pub window: Option<WindowSpec>,
+    /// `AUTODECLARE <n>`: how many paths the engine may declare for
+    /// this table from observed refusals (0 = the loop is off, the
+    /// default). Building is addition-safe — the worst case is
+    /// bounded wasted memory; dropping stays a human act.
+    pub autodeclare: usize,
+    /// The paths the auto loop has declared, in declaration order —
+    /// its spent budget, and the `auto` marker IDX.LIST shows.
+    /// Runtime provenance, not declaration intent: equality checks
+    /// that answer "is this the same declaration?" must ignore it
+    /// (see [`Self::sans_auto`]).
+    pub auto_added: Vec<Vec<u8>>,
 }
 
 /// Hard cap on declared tables.
@@ -82,6 +93,37 @@ impl TableSpec {
     /// The declared type of `col`, if declared.
     pub fn column_type(&self, col: &[u8]) -> Option<ValType> {
         self.columns.iter().find(|(n, _)| n == col).map(|(_, t)| *t)
+    }
+
+    /// This declaration with the auto loop's runtime additions
+    /// removed — what the human actually declared. `ENSURE`-style
+    /// "is this the same declaration?" comparisons go through here,
+    /// so paths the engine added never read as drift. Entries are
+    /// path names (a whole auto index/orderpath) or `path#field` (an
+    /// auto VALUES column on a human-declared index).
+    #[must_use]
+    pub fn sans_auto(&self) -> TableSpec {
+        let mut s = self.clone();
+        let auto = std::mem::take(&mut s.auto_added);
+        let suffix_of = |entry: &[u8]| -> Option<Vec<u8>> {
+            let e = entry.split(|&b| b == b'#').next()?;
+            let dot = e.iter().position(|&b| b == b'.')?;
+            Some(e[dot + 1..].to_vec())
+        };
+        for entry in &auto {
+            if let Some(pos) = entry.iter().position(|&b| b == b'#') {
+                let field = &entry[pos + 1..];
+                if let Some(sfx) = suffix_of(entry)
+                    && let Some(ix) = s.indexes.iter_mut().find(|ix| ix.column == sfx)
+                {
+                    ix.values.retain(|v| v != field);
+                }
+            } else if let Some(sfx) = suffix_of(entry) {
+                s.indexes.retain(|ix| ix.column != sfx);
+                s.orderpaths.retain(|op| op.name != sfx);
+            }
+        }
+        s
     }
 
     /// Structural validation — every refusal named. Runs at parse time

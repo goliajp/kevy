@@ -57,6 +57,8 @@ fuzz_target!(|data: &[u8]| {
             span: data.len() as i64 - 8,
             bucket: data.first().copied().unwrap_or(0) as i64 - 4,
         }),
+        autodeclare: 0,
+        auto_added: vec![],
     };
     let _ = compile_table(&spec);
 });

@@ -109,8 +109,8 @@ pub(crate) fn cmd_table_ensure<A: ArgvView + ?Sized>(
     let existing = ctx.state.catalogs.table().and_then(|c| c.get(&spec.name).cloned());
     match existing {
         None => cmd_table_declare(ctx, store, args, out),
-        Some(cur) if cur == spec => out.extend_from_slice(b"+UNCHANGED\r\n"),
-        Some(cur) => encode_error(out, &spec_diff(&cur, &spec)),
+        Some(cur) if cur.sans_auto() == spec => out.extend_from_slice(b"+UNCHANGED\r\n"),
+        Some(cur) => encode_error(out, &spec_diff(&cur.sans_auto(), &spec)),
     }
 }
 

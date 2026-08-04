@@ -23,6 +23,8 @@ fn cat() -> TableCatalog {
         }],
         orderpaths: vec![],
         window: None,
+        autodeclare: 0,
+        auto_added: vec![],
     })
     .expect("declare");
     c
@@ -59,6 +61,41 @@ fn a_full_log_evicts_its_least_refused_family() {
     // An EXISTING family never needs a seat — it just counts.
     log.observe(b"a.x", AdviseShape::Range, &argv);
     assert_eq!(log.entries()[0].count, 3);
+}
+
+#[test]
+fn apply_auto_declares_each_shape_within_budget() {
+    let mut spec = cat().get(b"ev").expect("declared").clone();
+    spec.autodeclare = 3;
+    let argv: Vec<Vec<u8>> = vec![b"q".to_vec()];
+    let mut log = AdviseLog::new();
+    log.observe(b"ev.note", AdviseShape::Range, &argv);
+    log.observe(b"ev.recent", AdviseShape::Where(vec![b"at".to_vec(), b"note".to_vec()]), &argv);
+    log.observe(b"ev.at", AdviseShape::Filter(b"note".to_vec()), &argv);
+    log.observe(b"ev.note", AdviseShape::Match, &argv); // advise-only
+    log.observe(b"ghost.x", AdviseShape::Range, &argv); // other table
+    log.observe(b"ev.nosuch", AdviseShape::Range, &argv); // ungrounded
+    let human = spec.sans_auto();
+    let applied: Vec<Vec<u8>> =
+        log.entries().iter().filter_map(|e| apply_auto(&mut spec, e)).collect();
+    assert_eq!(applied.len(), 3, "{applied:?}");
+    assert!(spec.indexes.iter().any(|ix| ix.column == b"note"), "Range declared");
+    assert!(spec.orderpaths.iter().any(|op| op.name == b"recent"), "Where declared");
+    let at = spec.indexes.iter().find(|ix| ix.column == b"at").expect("at");
+    assert_eq!(at.values, vec![b"note".to_vec()], "Filter VALUES added");
+    assert_eq!(spec.auto_added.len(), 3);
+    // The budget is spent — a fourth family is refused.
+    let mut extra = AdviseLog::new();
+    extra.observe(b"ev.id", AdviseShape::Range, &argv);
+    assert!(apply_auto(&mut spec, extra.entries()[0]).is_none(), "budget spent");
+    // The human declaration is recoverable exactly.
+    assert_eq!(spec.sans_auto(), human, "sans_auto strips every auto addition");
+    // And validate + the sidecar round-trip both hold with auto state.
+    spec.validate().expect("auto-grown spec validates");
+    let mut c = TableCatalog::new();
+    c.create(spec.clone()).expect("declare grown");
+    let back = TableCatalog::from_sidecar(&c.to_sidecar()).expect("parse");
+    assert_eq!(back.get(b"ev"), Some(&spec), "sidecar round-trips auto state");
 }
 
 #[test]

@@ -53,6 +53,8 @@ fn main() {
         }],
         orderpaths: vec![],
         window: Some(WindowSpec { column: b"at".to_vec(), span: 50, bucket: 10 }),
+        autodeclare: 0,
+        auto_added: vec![],
     };
     store.table_declare(spec).expect("declare");
     store

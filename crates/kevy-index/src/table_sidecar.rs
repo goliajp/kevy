@@ -4,11 +4,12 @@
 use crate::catalog::{IndexKind, ValType};
 use crate::table::{OrderPath, TableIndex, TableSpec, WindowSpec};
 
-// `name<TAB>prefix<TAB>pk<TAB>columns<TAB>indexes<TAB>orderpaths`;
-// columns = `n:ty,…`; indexes = `col:kind[:vcol]*,…` or `-`;
-// orderpaths = `name:col:a|d[:col:a|d]*,…` or `-`. Names %-escape
-// tab/newline/comma/colon/percent/non-print, so the separators can
-// never split a name.
+// `name<TAB>prefix<TAB>pk<TAB>columns<TAB>indexes<TAB>orderpaths
+// [<TAB>window][<TAB>auto]`; columns = `n:ty,…`; indexes =
+// `col:kind[:vcol]*,…` or `-`; orderpaths = `name:col:a|d[:col:a|d]*,…`
+// or `-`; window = `col:span:bucket` (`-` when only auto follows);
+// auto = `n[:entry]*`. Names %-escape tab/newline/comma/colon/
+// percent/non-print, so the separators can never split a name.
 
 fn tesc(b: &[u8]) -> String {
     use core::fmt::Write as _;
@@ -61,8 +62,21 @@ pub(crate) fn spec_to_line(s: &TableSpec) -> String {
     );
     // The window rides as an optional seventh field so a windowless
     // catalog stays byte-identical to the shape older readers know.
-    if let Some(w) = &s.window {
-        line.push_str(&format!("\t{}:{}:{}", tesc(&w.column), w.span, w.bucket));
+    // AUTODECLARE rides as an optional eighth (`n[:entry]*`, entries
+    // = the auto loop's spent budget); a table needing the eighth but
+    // not the seventh writes `-` for the window.
+    if s.window.is_some() || s.autodeclare != 0 {
+        match &s.window {
+            Some(w) => line.push_str(&format!("\t{}:{}:{}", tesc(&w.column), w.span, w.bucket)),
+            None => line.push_str("\t-"),
+        }
+    }
+    if s.autodeclare != 0 {
+        line.push_str(&format!("\t{}", s.autodeclare));
+        for e in &s.auto_added {
+            line.push(':');
+            line.push_str(&tesc(e));
+        }
     }
     line
 }
@@ -107,23 +121,11 @@ fn orderpaths_field(s: &TableSpec) -> String {
 
 pub(crate) fn spec_from_line(line: &str) -> Option<TableSpec> {
     let parts: Vec<&str> = line.split('\t').collect();
-    if parts.len() != 6 && parts.len() != 7 {
+    if !(6..=8).contains(&parts.len()) {
         return None;
     }
-    let window = match parts.get(6) {
-        None => None,
-        Some(f) => {
-            let segs: Vec<&str> = f.split(':').collect();
-            if segs.len() != 3 {
-                return None;
-            }
-            Some(WindowSpec {
-                column: tunesc(segs[0])?,
-                span: segs[1].parse().ok()?,
-                bucket: segs[2].parse().ok()?,
-            })
-        }
-    };
+    let window = window_from_field(parts.get(6).copied())?;
+    let (autodeclare, auto_added) = auto_from_field(parts.get(7).copied())?;
     let columns = parts[3]
         .split(',')
         .map(|e| {
@@ -149,7 +151,39 @@ pub(crate) fn spec_from_line(line: &str) -> Option<TableSpec> {
         indexes,
         orderpaths,
         window,
+        autodeclare,
+        auto_added,
     })
+}
+
+/// The optional seventh field: absent or `-` = no window. The outer
+/// `Option` is the parse verdict, the inner the window itself.
+fn window_from_field(f: Option<&str>) -> Option<Option<WindowSpec>> {
+    let f = match f {
+        None | Some("-") => return Some(None),
+        Some(f) => f,
+    };
+    let segs: Vec<&str> = f.split(':').collect();
+    if segs.len() != 3 {
+        return None;
+    }
+    Some(Some(WindowSpec {
+        column: tunesc(segs[0])?,
+        span: segs[1].parse().ok()?,
+        bucket: segs[2].parse().ok()?,
+    }))
+}
+
+/// The optional eighth field: `n[:entry]*` — the AUTODECLARE budget
+/// and its spent ledger.
+fn auto_from_field(f: Option<&str>) -> Option<(usize, Vec<Vec<u8>>)> {
+    let Some(f) = f else { return Some((0, Vec::new())) };
+    let mut segs = f.split(':');
+    let n: usize = segs.next()?.parse().ok()?;
+    if n == 0 {
+        return None;
+    }
+    Some((n, segs.map(tunesc).collect::<Option<Vec<_>>>()?))
 }
 
 fn index_from_entry(e: &str) -> Option<TableIndex> {

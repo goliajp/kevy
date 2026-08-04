@@ -10,7 +10,7 @@
 //! crate stays synchronization-free like the rest of kevy-index.
 
 use crate::catalog::ValType;
-use crate::table::TableCatalog;
+use crate::table::{TableCatalog, TableSpec};
 
 /// What shape of query was refused — the kind half of the derived
 /// declaration.
@@ -62,6 +62,82 @@ impl Default for AdviseLog {
 
 /// How many refusal families the default log retains.
 pub const ADVISE_CAP: usize = 128;
+
+/// Refusals a family must accumulate before the auto loop declares
+/// for it (tables that opted in via `AUTODECLARE <n>`). Empirical
+/// knob, not a derivation.
+pub const AUTODECLARE_AFTER: u64 = 16;
+
+/// Apply one refused family to the table's declaration — the auto
+/// half of the loop, shared by both faces so they cannot derive
+/// different declarations. Returns the ledger entry recorded in
+/// `auto_added` (`path` or `path#field`); `None` when the budget is
+/// spent, the shape is not one a table declaration serves (`MATCH`
+/// stays advise-only — a text index carries knobs the loop must not
+/// pick), the name does not ground, or it is already declared.
+pub fn apply_auto(spec: &mut TableSpec, e: &AdviseEntry) -> Option<Vec<u8>> {
+    if spec.auto_added.len() >= spec.autodeclare {
+        return None;
+    }
+    let dot = e.name.iter().position(|&b| b == b'.')?;
+    let (table, suffix) = (&e.name[..dot], &e.name[dot + 1..]);
+    if table != spec.name {
+        return None;
+    }
+    let entry = auto_entry(spec, &e.name, suffix, &e.shape)?;
+    spec.auto_added.push(entry.clone());
+    Some(entry)
+}
+
+/// [`apply_auto`]'s shape half: mutate the declaration and return the
+/// ledger entry, or `None` when the shape does not ground.
+fn auto_entry(
+    spec: &mut TableSpec,
+    name: &[u8],
+    suffix: &[u8],
+    shape: &AdviseShape,
+) -> Option<Vec<u8>> {
+    match shape {
+        AdviseShape::Range => {
+            spec.column_type(suffix)?;
+            if spec.indexes.iter().any(|ix| ix.column == suffix) {
+                return None;
+            }
+            spec.indexes.push(crate::table::TableIndex {
+                column: suffix.to_vec(),
+                kind: crate::IndexKind::Range,
+                values: Vec::new(),
+            });
+            Some(name.to_vec())
+        }
+        AdviseShape::Where(cols) => {
+            for c in cols {
+                spec.column_type(c)?;
+            }
+            if cols.is_empty() || spec.orderpaths.iter().any(|op| op.name == suffix) {
+                return None;
+            }
+            spec.orderpaths.push(crate::table::OrderPath {
+                name: suffix.to_vec(),
+                on: cols.iter().map(|c| (c.clone(), false)).collect(),
+            });
+            Some(name.to_vec())
+        }
+        AdviseShape::Filter(field) => {
+            spec.column_type(field)?;
+            let ix = spec.indexes.iter_mut().find(|ix| ix.column == suffix)?;
+            if ix.values.iter().any(|v| v == field) {
+                return None;
+            }
+            ix.values.push(field.clone());
+            let mut entry = name.to_vec();
+            entry.push(b'#');
+            entry.extend_from_slice(field);
+            Some(entry)
+        }
+        AdviseShape::Match => None,
+    }
+}
 
 impl AdviseLog {
     /// An empty log with the default capacity.

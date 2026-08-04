@@ -29,6 +29,8 @@ fn lean_table() -> TableSpec {
         }],
         orderpaths: vec![],
         window: None,
+        autodeclare: 0,
+        auto_added: vec![],
     }
 }
 
