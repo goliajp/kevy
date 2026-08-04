@@ -69,18 +69,24 @@ the write path.
 Every emitted frame is `<VERB> <key> …` by construction
 (`ops/scope_move_emit.rs`), so the key is `argv[1]`.
 
-## Open — a third path, suspected but NOT verified
+## The third path, now measured — and it was a bigger bug
 
-The replica apply path (`kevy-rt/src/replication_apply.rs`) dispatches
-each replicated frame and then runs the same `post_write_housekeeping`,
-whose `key_idx` is `Some` only for `Route::Single`. A primary propagates
-a multi-key `DEL a b` verbatim, so by that reading a replica would take
-bug 1 through a path the `exec_op` fix does not cover. **This is a code
-reading, not a measurement** — an attempt to reproduce it stalled
-because the replica never completed its initial sync in the ad-hoc
-two-process setup, and the proper harness (`tests/replication.rs`) was
-not brought to bear. It stays here as a suspicion with its reasoning,
-not as a finding.
+The suspicion recorded here was that a replica takes bug 1 through the
+apply path. Measured with the proper harness, it is **wrong in its
+premise and worse in its consequence**:
+
+* A replica carries **no secondary index at all** — `IDX.CREATE` is not
+  propagated, so every `IDX.QUERY` there answers `-ERR no such index`.
+  There is no index on a replica to drift.
+* The probe built to settle that found the replica had never received
+  the delete either. Pulling that thread: **`exec_op` never pushed
+  anything to replication**, and `MSET` / `RENAME` did not survive a
+  plain restart — the AOF record was written in a verb the replay
+  dispatcher could not execute.
+
+Full account and fixes: `FINDING-2026-08-05-mset-rename-lost-on-restart.md`.
+The lesson the suspicion got right is the one that matters: a hook or a
+record that is exercised on only one path is only correct on that path.
 
 ## What was checked and found healthy
 
