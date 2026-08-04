@@ -92,11 +92,14 @@ The data was gone at the next start.
 
 * ~~Cross-shard `RENAME` writes no record at all.~~ **Closed** — see
   "The third hole, closed" below.
-* **A replica carries no secondary indexes.** `IDX.CREATE` is a catalog
-  mutation that is not propagated, so a replica answers
-  `-ERR no such index` for every `IDX.QUERY`. Whether that is intended
-  (read replicas serve KV only) or a gap is a design question for the
-  owner, not a bug to fix quietly.
+* ~~A replica carries no secondary indexes.~~ **Not a gap — the
+  documented contract**, checked rather than assumed:
+  `docs/replication.md` says a replica *"declares its own
+  indexes/views/aggregates over the replicated data"*, and
+  `bench/repligate.sh:133` runs `IDX.CREATE` + `IDX.QUERY` **on the
+  replica** as a gate case. The catalog is deliberately not propagated;
+  a replica that never declared an index answering `-ERR no such index`
+  is the design working. Nothing to do.
 
 ## The third hole, closed
 
