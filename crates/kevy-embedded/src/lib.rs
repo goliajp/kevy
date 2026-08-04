@@ -191,6 +191,7 @@ pub use ops_index::IndexPage;
 #[cfg(feature = "text")]
 pub use ops_index::highlight::{FacetCounts, MatchOpts, MatchPage};
 #[cfg(feature = "index")]
+pub use ops_index::advise::IdxAdvice;
 pub use ops_index::claused::{ScalarPage, ScalarQueryOpts, ValueFilter};
 #[cfg(feature = "index")]
 pub use ops_view::ViewPage;

@@ -30,7 +30,8 @@ fn cat() -> TableCatalog {
 
 #[test]
 fn families_deduplicate_and_count() {
-    let mut log = AdviseLog::new();
+    // Default = new(): a zero-cap log would panic on first observe.
+    let mut log = AdviseLog::default();
     let argv = vec![b"IDX.QUERY".to_vec(), b"ev.at".to_vec()];
     for _ in 0..5 {
         log.observe(b"ev.at", AdviseShape::Range, &argv);

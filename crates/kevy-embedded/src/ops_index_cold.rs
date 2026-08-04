@@ -22,6 +22,19 @@ impl Store {
         cursor: Option<&Cursor>,
         limit: usize,
     ) -> KevyResult<IndexPage> {
+        let r = self.idx_query_gather(name, min, max, cursor, limit);
+        self.observe_noindex(name, kevy_index::AdviseShape::Range, &r);
+        r
+    }
+
+    fn idx_query_gather(
+        &self,
+        name: &[u8],
+        min: &IndexValue,
+        max: &IndexValue,
+        cursor: Option<&Cursor>,
+        limit: usize,
+    ) -> KevyResult<IndexPage> {
         let limit = limit.clamp(1, 100_000);
         let mut all: Vec<(IndexValue, Vec<u8>)> = Vec::new();
         self.for_each_segment_windowed(name, |spec, seg, win| {
@@ -48,6 +61,12 @@ impl Store {
 
     /// Count without materializing keys — hot tree plus cold segments.
     pub fn idx_count(&self, name: &[u8], min: &IndexValue, max: &IndexValue) -> KevyResult<u64> {
+        let r = self.idx_count_gather(name, min, max);
+        self.observe_noindex(name, kevy_index::AdviseShape::Range, &r);
+        r
+    }
+
+    fn idx_count_gather(&self, name: &[u8], min: &IndexValue, max: &IndexValue) -> KevyResult<u64> {
         let mut total = 0u64;
         self.for_each_segment_windowed(name, |spec, seg, win| {
             total += seg.count(min, max);

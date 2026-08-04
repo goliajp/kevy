@@ -29,7 +29,9 @@ pub enum AdviseShape {
 
 /// One observed refusal family: a (name, shape) pair, how often it
 /// was refused, and the first argv seen (the human-readable sample).
-#[derive(Debug)]
+/// `Clone` so a caller holding the log under a lock can snapshot
+/// entries out and render them lock-free.
+#[derive(Debug, Clone)]
 pub struct AdviseEntry {
     /// The access-path name the query asked for (`<table>.<suffix>`).
     pub name: Vec<u8>,
@@ -44,10 +46,18 @@ pub struct AdviseEntry {
 /// The bounded refusal log. Insertion-ordered; when full, the entry
 /// with the SMALLEST count makes room (a family that keeps being
 /// refused defends its seat).
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct AdviseLog {
     entries: Vec<AdviseEntry>,
     cap: usize,
+}
+
+/// [`AdviseLog::new`] — NOT an all-zeroes log: a derived default
+/// would set `cap = 0`, which `with_cap` clamps away for a reason.
+impl Default for AdviseLog {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// How many refusal families the default log retains.

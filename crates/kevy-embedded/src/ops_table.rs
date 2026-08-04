@@ -5,9 +5,11 @@
 //! engines cannot compile a table differently (the IDX.CREATE parity
 //! lesson; the dispatch oracle byte-compares the wire faces anyway).
 
-use std::sync::RwLock;
+use std::sync::{Mutex, RwLock};
 
-use kevy_index::{IndexVerify, TableCatalog, TableEnsure, TableSpec, TableVerify, compile_table};
+use kevy_index::{
+    AdviseLog, IndexVerify, TableCatalog, TableEnsure, TableSpec, TableVerify, compile_table,
+};
 
 use crate::store::{Store, lock_write};
 use crate::{KevyError, KevyResult};
@@ -17,6 +19,10 @@ use crate::{KevyError, KevyResult};
 #[derive(Default)]
 pub(crate) struct TableReg {
     pub(crate) catalog: RwLock<TableCatalog>,
+    /// The refusal log (the auto-declaration loop's observation
+    /// face) — fed by the typed query API's refusals, rendered by
+    /// [`Store::idx_advise`], cleared on every catalog mutation.
+    pub(crate) advise: Mutex<AdviseLog>,
 }
 
 /// Rows the per-shard column spot check samples (mirrors the server).
@@ -87,6 +93,7 @@ impl Store {
         for ispec in compiled {
             self.register_spec(ispec)?;
         }
+        self.advise_clear();
         Ok(())
     }
 
@@ -164,6 +171,7 @@ impl Store {
                 self.idx_drop(iname);
             }
             self.persist_table_sidecar();
+            self.advise_clear();
         }
         hit
     }

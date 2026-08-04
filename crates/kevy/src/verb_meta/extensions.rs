@@ -12,6 +12,9 @@ use super::flags::*;
 #[rustfmt::skip]
 pub(super) const ROWS: &[VerbMeta] = &[
     // ---- index -----------------------------------------------------
+    v("IDX.ADVISE",  "index", 1,  RX, "The declarations refused queries have been asking for, most-refused first — each rendered as the command that would serve it.", "4.2.0", "IDX.ADVISE",
+      "O(observed families); the refusal log is bounded (128 families, least-refused evicted) and cleared on every catalog install",
+      "kevy-only: no Redis analogue — the refusal log turns 'no such index' into the declaration that would have served the query"),
     v("IDX.COUNT",   "index", -4, RX, "Count index entries matching a range or equality predicate.", "3.0.0", "IDX.COUNT name RANGE min max | EQ value",
       "O(log N + matched) per shard — NOT an O(1) counter and not a B-tree rank query; it counts the matched range",
       "kevy-only: nearest is FT.SEARCH with LIMIT 0 0"),

@@ -199,6 +199,7 @@ fn dispatch_conn<A: ArgvView + ?Sized>(
         b"VIEW.CREATE" => crate::cmd_view::cmd_view_create(ctx, args, out),
         b"VIEW.DROP" => crate::cmd_view::cmd_view_drop(ctx, args, out),
         b"IDX.DROP" => crate::cmd_index::cmd_idx_drop(ctx, args, out),
+        b"IDX.ADVISE" => crate::cmd_index_advise::cmd_idx_advise(ctx, args, out),
         b"TABLE.DECLARE" => crate::cmd_table::cmd_table_declare(ctx, store, args, out),
         b"TABLE.ENSURE" => crate::cmd_table::cmd_table_ensure(ctx, store, args, out),
         b"TABLE.REPLACE" => crate::cmd_table::cmd_table_replace(ctx, store, args, out),

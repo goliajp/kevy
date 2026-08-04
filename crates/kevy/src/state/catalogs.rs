@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
-use kevy_index::{Catalog, TableCatalog, ViewCatalog};
+use kevy_index::{AdviseEntry, AdviseLog, AdviseShape, Catalog, TableCatalog, ViewCatalog};
 
 use super::RuntimeState;
 
@@ -34,6 +34,13 @@ pub(crate) struct CatalogState {
     /// Declarations only — its compiled indexes live in `index`, so
     /// shards need no per-table state and no generation.
     table: RwLock<Option<Arc<TableCatalog>>>,
+    /// The refusal log (the auto-declaration loop's observation
+    /// face): written at the origin reduce when a query is refused
+    /// for a missing declaration, read by `IDX.ADVISE`. Cleared on
+    /// every catalog install — a family the new catalog serves stops
+    /// being refused, and one it doesn't re-earns its seat on the
+    /// next refusal. Cold path only (refusals and an admin verb).
+    advise: Mutex<AdviseLog>,
 }
 
 impl CatalogState {
@@ -45,7 +52,32 @@ impl CatalogState {
             view: RwLock::new(None),
             view_gen: AtomicU64::new(0),
             table: RwLock::new(None),
+            advise: Mutex::new(AdviseLog::new()),
         }
+    }
+
+    /// Record one refused declaration family.
+    pub(crate) fn advise_observe(&self, name: &[u8], shape: AdviseShape, argv: &[Vec<u8>]) {
+        self.advise
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .observe(name, shape, argv);
+    }
+
+    /// Snapshot the observed refusal families, most-refused first.
+    pub(crate) fn advise_entries(&self) -> Vec<AdviseEntry> {
+        self.advise
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entries()
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Forget every observed refusal (a catalog just installed).
+    fn advise_clear(&self) {
+        self.advise.lock().unwrap_or_else(PoisonError::into_inner).clear();
     }
 
     /// Snapshot the current index catalog (None = empty).
@@ -119,6 +151,7 @@ impl RuntimeState {
             .unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(c));
         self.catalogs.index_gen.fetch_add(1, Ordering::Release);
         self.bump_control_epoch();
+        self.catalogs.advise_clear();
     }
 
     /// Swap in a new view catalog — same protocol as
@@ -143,5 +176,6 @@ impl RuntimeState {
             .table
             .write()
             .unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(c));
+        self.catalogs.advise_clear();
     }
 }

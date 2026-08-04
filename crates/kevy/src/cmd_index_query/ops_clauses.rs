@@ -39,15 +39,28 @@ pub(super) fn scope_positions(
 /// that, which is why the explanation is built here and carried whole.
 fn clause_error(clause: &str, bad: &[u8], verb: &str, offered: &[&[u8]]) -> Vec<u8> {
     let mut chunk = vec![crate::cmd_index_query::ST_CLAUSE];
-    chunk.extend_from_slice(
-        format!(
-            "{clause} names field '{}', which this index does not {verb} — it {verb}es: {}",
-            String::from_utf8_lossy(bad),
-            String::from_utf8_lossy(&offered.join(&b", "[..])),
-        )
-        .as_bytes(),
-    );
+    chunk.extend_from_slice(clause_text(clause, bad, verb, offered).as_bytes());
     chunk
+}
+
+/// [`clause_error`]'s field-not-STORED sibling: same explanation, but
+/// tagged ST_NOFIELD with the field carried structurally, so the
+/// origin reduce can feed the advise log without parsing prose.
+fn nofield_error(clause: &str, bad: &[u8], offered: &[&[u8]]) -> Vec<u8> {
+    let mut chunk = vec![crate::cmd_index_query::ST_NOFIELD];
+    let f = &bad[..bad.len().min(255)];
+    chunk.push(f.len() as u8);
+    chunk.extend_from_slice(f);
+    chunk.extend_from_slice(clause_text(clause, bad, "store", offered).as_bytes());
+    chunk
+}
+
+fn clause_text(clause: &str, bad: &[u8], verb: &str, offered: &[&[u8]]) -> String {
+    format!(
+        "{clause} names field '{}', which this index does not {verb} — it {verb}es: {}",
+        String::from_utf8_lossy(bad),
+        String::from_utf8_lossy(&offered.join(&b", "[..])),
+    )
 }
 
 
@@ -87,7 +100,7 @@ pub(super) fn filter_tests(
     for f in filters {
         let Some(pos) = spec.values.iter().position(|v| v.name == f.field) else {
             let stored: Vec<&[u8]> = spec.values.iter().map(|v| v.name.as_slice()).collect();
-            return Err(clause_error("FILTER", &f.field, "store", &stored));
+            return Err(nofield_error("FILTER", &f.field, &stored));
         };
         let ty = spec.values[pos].ty;
         let (test, raw) = match &f.shape {
@@ -130,7 +143,7 @@ pub(super) fn distinct_field(
     let Some(field) = distinct else { return Ok(None) };
     let Some(pos) = spec.values.iter().position(|v| v.name == *field) else {
         let stored: Vec<&[u8]> = spec.values.iter().map(|v| v.name.as_slice()).collect();
-        return Err(clause_error("DISTINCT", field, "store", &stored));
+        return Err(nofield_error("DISTINCT", field, &stored));
     };
     Ok(Some((pos, spec.values[pos].ty)))
 }
@@ -146,7 +159,7 @@ pub(super) fn facet_fields(
     for field in facets {
         let Some(pos) = spec.values.iter().position(|v| v.name == *field) else {
             let stored: Vec<&[u8]> = spec.values.iter().map(|v| v.name.as_slice()).collect();
-            return Err(clause_error("FACET", field, "store", &stored));
+            return Err(nofield_error("FACET", field, &stored));
         };
         out.push((pos, spec.values[pos].ty));
     }
@@ -160,7 +173,7 @@ pub(super) fn sort_field(
     let Some((field, desc)) = sort else { return Ok(None) };
     let Some(pos) = spec.values.iter().position(|v| v.name == *field) else {
         let stored: Vec<&[u8]> = spec.values.iter().map(|v| v.name.as_slice()).collect();
-        return Err(clause_error("SORT", field, "store", &stored));
+        return Err(nofield_error("SORT", field, &stored));
     };
     Ok(Some((pos, *desc, spec.values[pos].ty)))
 }

@@ -79,6 +79,29 @@ pub(crate) fn value_test(
     Ok((pos, test))
 }
 
+/// The first clause field the spec does not store — the advise-log
+/// derivation for a refused [`resolve`]. Checked in the clause order
+/// [`resolve`] resolves in, so it names the same field the error does.
+fn unstored_field(spec: &IndexSpec, opts: &ScalarQueryOpts<'_>) -> Option<Vec<u8>> {
+    let stored = |f: &[u8]| spec.values.iter().any(|v| v.name == f);
+    for f in opts.filters {
+        if !stored(f.field()) {
+            return Some(f.field().to_vec());
+        }
+    }
+    if let Some((f, _)) = opts.sort
+        && !stored(f)
+    {
+        return Some(f.to_vec());
+    }
+    if let Some(f) = opts.distinct
+        && !stored(f)
+    {
+        return Some(f.to_vec());
+    }
+    opts.facets.iter().find(|f| !stored(f)).cloned()
+}
+
 /// A clause naming a field the index does not offer, saying what it does.
 pub(crate) fn unknown_field(clause: &str, bad: &[u8], verb: &str, offered: &[&[u8]]) -> KevyError {
     let names: Vec<String> =
@@ -238,13 +261,8 @@ impl Store {
     ) -> KevyResult<ScalarPage> {
         let limit = limit.clamp(1, 100_000);
         let offset = opts.offset.min(10_000);
-        let spec = {
-            let g = self.indexes.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
-            g.1.get(name)
-                .map(|(s, _)| s.clone())
-                .ok_or_else(|| KevyError::NotFound("no such index".into()))?
-        };
-        let r = resolve(&spec, &opts)?;
+        let spec = self.claused_spec(name)?;
+        let r = self.claused_resolve(name, &spec, &opts)?;
         let clauses = ScalarClauses {
             filters: &r.filters,
             sort: r.sort,
@@ -280,14 +298,9 @@ impl Store {
         max: &IndexValue,
         filters: &[ValueFilter<'_>],
     ) -> KevyResult<u64> {
-        let spec = {
-            let g = self.indexes.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
-            g.1.get(name)
-                .map(|(s, _)| s.clone())
-                .ok_or_else(|| KevyError::NotFound("no such index".into()))?
-        };
+        let spec = self.claused_spec(name)?;
         let opts = ScalarQueryOpts { filters, ..ScalarQueryOpts::default() };
-        let r = resolve(&spec, &opts)?;
+        let r = self.claused_resolve(name, &spec, &opts)?;
         let mut total = 0u64;
         self.for_each_segment_windowed(name, |spec, seg, win| {
             total += seg.count_claused(min, max, &r.filters);
@@ -304,6 +317,34 @@ impl Store {
             Ok(())
         })?;
         Ok(total)
+    }
+
+    /// The named index's spec, feeding the advise log (a Range
+    /// family) when the name is not declared.
+    fn claused_spec(&self, name: &[u8]) -> KevyResult<IndexSpec> {
+        let spec = {
+            let g = self.indexes.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+            g.1.get(name).map(|(s, _)| s.clone())
+        };
+        spec.ok_or_else(|| {
+            self.observe_refused(name, kevy_index::AdviseShape::Range);
+            KevyError::NotFound("no such index".into())
+        })
+    }
+
+    /// [`resolve`], feeding the advise log when a clause named a
+    /// field the index does not store.
+    fn claused_resolve(
+        &self,
+        name: &[u8],
+        spec: &IndexSpec,
+        opts: &ScalarQueryOpts<'_>,
+    ) -> KevyResult<Resolved> {
+        resolve(spec, opts).inspect_err(|_| {
+            if let Some(f) = unstored_field(spec, opts) {
+                self.observe_refused(name, kevy_index::AdviseShape::Filter(f));
+            }
+        })
     }
 
     /// Every shard's claused page, unmerged, with the facet buckets
