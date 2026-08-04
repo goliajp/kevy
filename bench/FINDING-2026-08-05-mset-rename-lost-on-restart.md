@@ -74,6 +74,14 @@ The data was gone at the next start.
   replica re-emitting what it just applied is how a chain loops).
 * The list-move loggers build their record whenever there is anywhere
   for it to go (AOF **or** replication), not only for the AOF.
+* **`FLUSHALL` is the family's one exception, and the suite said so.**
+  The first cut pushed it like the rest; `feed_cdc`'s
+  `flushall_bumps_generation_and_old_cursor_resyncs` failed because a
+  flush already has a channel — it bumps the feed generation so every
+  stale cursor gets `-FEEDRESYNC <gen> 0`, and an extra record lands at
+  the offset that bump just reset to zero. It appends to the AOF only.
+  Worth keeping as a shape: when a fix unifies a family, check for the
+  member that already had its own way.
 * `MSET` / `RENAME` / `RENAMENX` execute in the local dispatcher
   (`dispatch_replay`), which makes existing AOFs replayable — the fix
   recovers data already on disk, not just future writes. A malformed
