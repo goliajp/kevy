@@ -90,43 +90,46 @@ The data was gone at the next start.
 
 ## Still open — measured, not fixed
 
-* **Cross-shard `RENAME` writes no record at all.** `Op::RenameTake` and
-  `Op::RenamePut` have no logging, so with `src` and `dst` on different
-  shards the rename still reverts on restart.
-
-  It was scoped and deliberately **not** attempted here, because it is a
-  protocol change rather than a missing call:
-
-  - The **serializer already exists and should not be rewritten**:
-    `kevy_persist::rewrite_fmt::write_value_as_commands` is what
-    `BGREWRITEAOF` trusts to turn any `Value` + TTL into replayable
-    frames (streams included, via `write_stream_as_commands`). It is
-    private today; making it `pub` and round-tripping its V1 output
-    through `kevy_resp::parse_command_into` gives kevy-rt the frames
-    with **zero** duplicated per-type logic. That part is small.
-  - **Where to log is the hard part.** The cross-shard path is a
-    three-step protocol — `RenameTake` on the source, `RenamePut` on the
-    destination, and a `Restore` back to the source when a `RENAMENX`
-    is refused (`exec_rename.rs`, `RenameStep::Restore`). Logging
-    `DEL src` at take time is *wrong*: on the refusal branch the AOF
-    would say the source key is gone while it is alive. The delete can
-    only be recorded once the put has committed, which means the source
-    shard needs a message telling it so — the ack already flows
-    (`Part::RenamePutDone`), but nothing carries a "now log it" today.
-  - **And the commit is not atomic across two AOFs.** Put logged on
-    shard B, crash before shard A logs its delete, and the key exists
-    under both names after restart. That is a contract to state and test
-    (duplicate-on-crash beats lose-on-crash), not something to leave to
-    whichever order the code happens to take.
-
-  Rushing this in would risk turning a lost-on-restart bug into a
-  says-deleted-but-alive bug, which is the same class this whole finding
-  is about. It wants its own round.
+* ~~Cross-shard `RENAME` writes no record at all.~~ **Closed** — see
+  "The third hole, closed" below.
 * **A replica carries no secondary indexes.** `IDX.CREATE` is a catalog
   mutation that is not propagated, so a replica answers
   `-ERR no such index` for every `IDX.QUERY`. Whether that is intended
   (read replicas serve KV only) or a gap is a design question for the
   owner, not a bug to fix quietly.
+
+## The third hole, closed
+
+Cross-shard `RENAME` wrote nothing at all: `RenameTake` removed the
+source, `RenamePut` placed the value, both silently, so a restart
+reverted the whole thing. The code said so out loud — *"cross-shard
+RENAME works in-memory but is not replayed through AOF"* — deferred
+because a faithful value record was assumed to need MIGRATE/RESTORE
+binary frames. **It did not.** `BGREWRITEAOF` already renders any value
++ TTL as replayable commands, streams included; that serializer is now
+reachable (`kevy_persist::value_as_v1_frames`) and the destination
+records its put through it. One implementation of the per-type mapping —
+the one that already has to be right.
+
+The delete was the part that needed thought, and it is why this was
+worth a round of its own rather than a quick patch:
+
+* **Not at take time.** A refused `RENAMENX` rolls the value back; a
+  delete already in the log would outlive the rollback as a lie.
+* **Not blindly at commit time either.** A client can recreate the
+  source between the take and the commit. Its `SET src …` is already in
+  the log, so appending a delete *after* it would replay away a value
+  that is really there. The commit checks the key is still absent.
+* **The two halves are not atomic** — they live in two shards' AOFs. A
+  crash between them replays the key under both names. That is the
+  chosen direction, written down rather than left to luck: a duplicate
+  is recoverable by hand, a vanished key is not.
+
+Measured across a restart, `appendfsync always`: string (TTL carried),
+hash, list, set, zset all arrive with the source gone; a refused
+cross-shard `RENAMENX` leaves both keys untouched. The regression test
+asserts its fixtures really straddle two shards, so a same-shard pair
+cannot quietly make it pass.
 
 ## The lesson worth keeping
 
