@@ -222,6 +222,9 @@ impl Store {
     }
 
     /// The usage cell for a declared path (None = not declared).
+    /// Only the probe wraps read it, and the window tier compiles
+    /// out on wasm.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn usage_cell(&self, name: &[u8]) -> Option<std::sync::Arc<kevy_index::UsageCell>> {
         self.indexes.usage.read().unwrap_or_else(PoisonError::into_inner).get(name).cloned()
     }
