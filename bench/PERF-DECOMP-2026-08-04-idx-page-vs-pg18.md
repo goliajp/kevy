@@ -552,3 +552,44 @@ decomp must be redone; (2) `perf record` (dwarf) on the origin shard during
 the idx phase — A2's target (`write()` syscall path under
 `flush_wakes_slow`) must show ≥ double-digit pp of origin self-time during
 the fan-out window, per the "memcpys are the gap" lesson (§8).
+
+## Addendum — the zero-code --threads sweep (same day, decisive)
+
+The cheapest RUNTIME-VERIFY probe ran on lx64 (same box, same
+harness, kevy `none`, 5 000 samples per shape per config):
+
+| threads | pk p50/p99 | idx p50/p99 | page p50/p99 |
+|---|---|---|---|
+| 1 | 15/35 | **36/54** | **43/67** |
+| 4 | 19/56 | 58/72 | 71/111 |
+| 8 | 21/36 | 63/80 | 100/111 |
+| 16 | 24/76 | 104/**371** | 156/201 |
+
+Three verdicts:
+
+1. **The tail hypothesis is confirmed and sharpened.** The
+   pathological idx tail exists ONLY at 16 shards (p99/p50: 1.5 /
+   1.24 / 1.27 / **3.6**); the 8→16 step adds +291 µs of p99 out of
+   nowhere. Whatever arms it (O1 nap is still the leading candidate,
+   O2 wakeup scheduling second) engages between 8 and 16 peers —
+   the `naps_entered` counter remains the discriminating probe.
+2. **The p50 delta is pure fan-out width.** idx p50 walks 36 → 58 →
+   63 → 104 µs as width grows 1 → 16; the single-shard path — parse,
+   tree walk, encode, reduce of one chunk — beats PG's 126 µs by
+   ~3×. There is no per-stage "slow path" to polish at width 1; the
+   entire loss versus PG is the price of fanning one ~100 µs query
+   across 16 shards and reassembling it.
+3. **On the charter's home ground (SME 4–8 cores) kevy already
+   wins these shapes**: idx p99 72–80 µs vs PG's 164, page 111 vs
+   147 — matching the master plan's earlier cell-level observation.
+   The 16-core loss the benchmark reports is real but is a fan-out
+   GOVERNANCE problem (the plan's I2 "index-as-key, single-hop"
+   direction, plus A1/A2 from the attack table), not a query-path
+   speed problem.
+
+Phase B, when gate 2 opens, therefore aims at fan-out governance
+first: A1 (nap mis-arming) directly targets the 16-shard cliff; the
+structural alternative — routing an indexed lookup to fewer shards
+than "all of them" — is the larger prize and needs its own design
+round. Nothing here changes the ±20 % stage budgets, which were
+built at width 16 and remain the width-16 account.
