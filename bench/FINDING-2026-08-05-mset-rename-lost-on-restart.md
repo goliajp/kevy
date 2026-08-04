@@ -149,6 +149,20 @@ cannot quietly make it pass.
   surface that gate audits.
 * **`perfgate`** — 12 angles, all above floor.
 
+## The same lens, pointed at the sibling — and it came back clean
+
+The AOF is one writer of the data; the **snapshot** is the other, with
+its own format and its own loader. Having found three holes in one pair,
+the honest move was to ask the same question of the other rather than
+assume it was fine.
+
+Measured: string + TTL, hash, list, set, zset, hash-field TTL and stream
+all round-trip through `SAVE` → restart with the AOF off. **No bug.**
+A negative result is still a result, and it is now a test
+(`every_value_type_round_trips_through_a_snapshot`) that asserts a dump
+exists and no AOF does — so it cannot pass on a path it is not testing.
+Prior coverage was strings and stream groups only.
+
 ## The lesson worth keeping
 
 Both bugs, and both index bugs found the same day, were invisible to
