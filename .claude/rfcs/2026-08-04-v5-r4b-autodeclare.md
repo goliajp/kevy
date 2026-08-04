@@ -88,6 +88,33 @@ advice 的 Range/Where 形含 `…` 占位(补全既有声明是 TABLE.REPLACE
 全文渲染,slice b 一并考虑)。AtomicAllShards 快照面的 idx_query 不
 观察(快照语义,不值为它加状态)。
 
+## 二c、R4b-b 实施记录(完轮)
+
+结构半(`6a8953b1`):TableSpec + `autodeclare`(预算,0=off 默认)+
+`auto_added`(账本:`path` 整路径 / `path#field` 人声明索引上的 auto
+VALUES 列;既是已花预算又是 auto 打标来源);`sans_auto()` 还原人的
+声明本体,ENSURE/diff 两面走它 —— 引擎加的路径永不读作 drift;
+`apply_auto` 单一共享规则(Range→INDEX / Where→ORDERPATH 升序子句序
+/ Filter→VALUES 列;MATCH 永远只 advise —— text 声明的旋钮不归
+loop 拍);`AUTODECLARE_AFTER = 16`(经验旋钮);wire 语法
+`AUTODECLARE n`(单 parser 两面);sidecar 第八字段
+`n[:entry]*`(window 第七缺席时写 `-`,旧 catalog 原样可读)。
+
+接线半(`a3331ded`):observe 返回观察后计数;过阈 + 表 opt-in +
+预算未满 → 声明期动作在观察的同一冷汇聚点执行(server=origin
+reduce,签名升为 &RuntimeState;embedded=observe_refused 内):
+apply_auto → compile delta 安装(新路径 register;`#` 变更路径
+drop+create rebuild 让 VALUES 回填)→ 双 sidecar persist → install
+(顺带 advise clear + usage rekey)。压过阈值的那次查询仍拿错误 ——
+动作是声明期的,服务从 build 开始。失败即放弃、原状不动(courtesy,
+非正确性面);embedded 侧 tier floor 先探再动旧路径。IDX.LIST 两面
+18 字段(+auto 0|1)。预算花尽后家族持续拒绝且 ADVISE 继续给人。
+
+判据实验(总案原文的形态)两面各一测:零人工声明表(仅
+AUTODECLARE 预算)+ 未见过的查询负载 → 预算内家族全部由引擎声明的
+auto 打标路径服务,预算外家族保持被拒并被 advise。修尾
+(`0ebc0eb5`/`35d68f85`):consumergate 消费者位字面量与 lockfile。
+
 ## 三、发散区
 
 - 阈值/上限数字(16 次、128 项、每表 n)全部实测调,不预辩。
