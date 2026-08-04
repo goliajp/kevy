@@ -57,7 +57,12 @@ range|unique [MAXMEM <bytes>]`
   would reach); every clause a count would not apply —
   SORT/DISTINCT/FACET/OFFSET/FIELDS/CURSOR — is refused by name.
 - `IDX.VERIFY <name>` — summed stats: entries, bytes,
-  coerce_failures, duplicates.
+  coerce_failures, duplicates, plus both directions of the audit:
+  `drift` (entries whose row is gone, no longer coerces, or coerces to
+  a different value) over `checked` entries, and `missing` (rows under
+  the prefix that derive a value and have no entry). Both should be
+  zero on a healthy index; `missing` is the direction a walk over the
+  index's own entries cannot see.
 - `IDX.LIST` — catalog + per-index state/entries/bytes.
 - Cursor contract is SCAN-class: rows stable across the whole
   traversal are seen exactly once; concurrent insertions/deletions

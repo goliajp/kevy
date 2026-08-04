@@ -316,11 +316,17 @@ fn strip_err(e: &str) -> &str {
 /// prefix row classified by cause (the server's `classify_prefix_rows`
 /// is the byte-parity twin).
 /// Returns `[coerce_fresh, excluded, absent, rows, missing]`.
+/// `hot_floor` is `(boundary, shape)` for a windowed path — the twin of
+/// the server's `cmd_table_verify::classify_prefix_rows`, including its
+/// reason: a row that slid to a cold segment is absent from the hot
+/// entries by design, and counting it as a hole would make every
+/// windowed table report its own sliding as corruption.
 fn classify_prefix_rows(
     s: &mut kevy_store::Store,
     spec: &kevy_index::IndexSpec,
     row_keys: &[Vec<u8>],
     indexed: &std::collections::HashSet<&[u8]>,
+    hot_floor: Option<(i64, kevy_index::WindowShape)>,
 ) -> [u64; 5] {
     let names = spec.scalar_read_names();
     let w = spec.primary_width();
@@ -334,7 +340,15 @@ fn classify_prefix_rows(
         };
         match cls {
             kevy_index::RowDerivation::Indexed(_) => {
-                if !indexed.contains(key.as_slice()) {
+                let slid = hot_floor.is_some_and(|(boundary, shape)| {
+                    let v = match s.peek_hash_fields(key, &names[..w]) {
+                        Ok(Some(vals)) => spec.derive_scalar(&vals),
+                        _ => None,
+                    };
+                    v.and_then(|v| kevy_index::window_value_of(&v, shape))
+                        .is_some_and(|wv| wv < boundary)
+                });
+                if !slid && !indexed.contains(key.as_slice()) {
                     f[4] += 1;
                 }
             }
@@ -364,6 +378,16 @@ fn shard_index_counts(
     let mut pat = spec.prefix.clone();
     pat.push(b'*');
     let row_keys = inner.store.collect_keys(Some(&pat), None);
+    #[cfg(not(target_arch = "wasm32"))]
+    let hot_floor = inner
+        .idx_segs
+        .windows
+        .iter()
+        .find(|(n, _)| *n == spec.name)
+        .map(|(_, w)| (w.boundary(), w.shape))
+        .filter(|(b, _)| *b != i64::MIN);
+    #[cfg(target_arch = "wasm32")]
+    let hot_floor = None;
     let store = &mut inner.store;
     let (drift, fresh) = store.peek_scope(|s| {
         let names = spec.scalar_read_names();
@@ -378,7 +402,7 @@ fn shard_index_counts(
                 drift += 1;
             }
         }
-        (drift, classify_prefix_rows(s, &spec, &row_keys, &indexed))
+        (drift, classify_prefix_rows(s, &spec, &row_keys, &indexed, hot_floor))
     });
     sums[0] += stats.entries;
     sums[1] += stats.approx_bytes;

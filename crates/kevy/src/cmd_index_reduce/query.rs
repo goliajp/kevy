@@ -251,7 +251,7 @@ fn list_sums(chunks: &[Vec<u8>], n: usize) -> Vec<(bool, u64, u64, u64, u64)> {
 /// and the docs advertised it.
 pub(super) fn reduce_verify(chunks: &[Vec<u8>]) -> Vec<u8> {
     let mut out = Vec::new();
-    let mut sums = [0u64; 6];
+    let mut sums = [0u64; 7];
     for c in chunks {
         let mut pos = 1usize;
         for slot in &mut sums {
@@ -260,15 +260,19 @@ pub(super) fn reduce_verify(chunks: &[Vec<u8>]) -> Vec<u8> {
             pos += 8;
         }
     }
-    let labels: [&[u8]; 6] = [
+    let labels: [&[u8]; 7] = [
         b"entries",
         b"bytes",
         b"coerce_failures",
         b"duplicates",
+        // Entries whose row disagrees with them…
         b"drift",
         b"checked",
+        // …and rows the index owes an entry and does not hold. An audit
+        // that walks only its own entries can never see this direction.
+        b"missing",
     ];
-    encode_array_len(&mut out, 12);
+    encode_array_len(&mut out, 14);
     for (label, v) in labels.iter().zip(sums.iter()) {
         encode_bulk(&mut out, label);
         encode_bulk(&mut out, v.to_string().as_bytes());

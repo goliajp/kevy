@@ -20,6 +20,11 @@ enum HitsOrChunk {
         spec: Box<IndexSpec>,
         entries: Vec<(Vec<u8>, IndexValue)>,
         stats: SegmentStats,
+        /// `(boundary, shape)` when the path is windowed: rows whose
+        /// window value sits below the boundary have legitimately slid
+        /// to a cold segment and are absent from the hot entries by
+        /// design, so the missing-row sweep must not count them.
+        hot_floor: Option<(i64, kevy_index::WindowShape)>,
     },
 }
 
@@ -128,14 +133,22 @@ fn run_scalar_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8]) ->
         Shape::Verify => {
             let mut entries: Vec<(Vec<u8>, IndexValue)> = Vec::new();
             seg.each_entry(|k, v| entries.push((k.to_vec(), v.clone())));
-            HitsOrChunk::Verify { spec: Box::new(spec.clone()), entries, stats: seg.stats() }
+            let hot_floor = win
+                .filter(|w| w.boundary() != i64::MIN)
+                .map(|w| (w.boundary(), w.shape));
+            HitsOrChunk::Verify {
+                spec: Box::new(spec.clone()),
+                entries,
+                stats: seg.stats(),
+                hot_floor,
+            }
         }
     });
     match res {
         Ok(HitsOrChunk::Chunk(chunk)) => chunk,
         Ok(HitsOrChunk::Hits(hits)) => encode_hits_chunk(store, &hits, &q.fields),
-        Ok(HitsOrChunk::Verify { spec, entries, stats }) => {
-            encode_verify_chunk(store, &spec, &entries, &stats)
+        Ok(HitsOrChunk::Verify { spec, entries, stats, hot_floor }) => {
+            encode_verify_chunk(store, &spec, &entries, &stats, hot_floor)
         }
         Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
         Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
@@ -342,10 +355,16 @@ fn encode_verify_chunk(
     spec: &IndexSpec,
     entries: &[(Vec<u8>, IndexValue)],
     stats: &SegmentStats,
+    hot_floor: Option<(i64, kevy_index::WindowShape)>,
 ) -> Vec<u8> {
     // VERIFY's recheck is a bulk sweep — inside the peek scope a
     // cold row costs one pread and never promotes or marks the gate.
-    let drift = store.peek_scope(|s| {
+    let mut pattern = spec.prefix.clone();
+    pattern.push(b'*');
+    let row_keys = store.collect_keys(Some(&pattern), None);
+    let indexed: std::collections::HashSet<&[u8]> =
+        entries.iter().map(|(k, _)| k.as_slice()).collect();
+    let (drift, missing) = store.peek_scope(|s| {
         let mut drift = 0u64;
         for (key, held) in entries {
             match index_runtime::row_value(s, spec, key) {
@@ -353,7 +372,12 @@ fn encode_verify_chunk(
                 _ => drift += 1,
             }
         }
-        drift
+        // The other direction, from the same classifier TABLE.VERIFY
+        // uses — one implementation, so the two faces cannot disagree
+        // about what a hole is.
+        let cls =
+            crate::cmd_table_verify::classify_prefix_rows(s, spec, &row_keys, &indexed, hot_floor);
+        (drift, cls[4])
     });
     let mut chunk = vec![ST_OK];
     chunk.extend_from_slice(&stats.entries.to_le_bytes());
@@ -362,87 +386,10 @@ fn encode_verify_chunk(
     chunk.extend_from_slice(&stats.duplicates.to_le_bytes());
     chunk.extend_from_slice(&drift.to_le_bytes());
     chunk.extend_from_slice(&(entries.len() as u64).to_le_bytes());
+    chunk.extend_from_slice(&missing.to_le_bytes());
     chunk
 }
 
 #[cfg(test)]
-mod verify_tests {
-    use super::*;
-    use kevy_index::{IndexKind, ValType};
-
-    fn spec() -> IndexSpec {
-        IndexSpec {
-            name: b"byage".to_vec(),
-            prefix: b"u:".to_vec(),
-            fields: vec![kevy_index::FieldSpec::new(b"age".to_vec())],
-            ty: ValType::I64,
-            kind: IndexKind::Range,
-            max_bytes: 0,
-            ann: None,
-            group_by: None,
-            with_positions: false,
-            values: Vec::new(),
-            composite: None,
-        }
-    }
-
-    fn stats() -> SegmentStats {
-        SegmentStats { entries: 3, approx_bytes: 0, coerce_failures: 0, duplicates: 0 }
-    }
-
-    /// Read `drift` and `checked` back out of the wire chunk.
-    fn drift_and_checked(chunk: &[u8]) -> (u64, u64) {
-        let at = |i: usize| {
-            u64::from_le_bytes(chunk[1 + i * 8..1 + (i + 1) * 8].try_into().expect("8 bytes"))
-        };
-        (at(4), at(5))
-    }
-
-    /// A drift counter that can only ever report zero is the dead code it
-    /// replaced. Diverge the store from the index behind the write hook's back
-    /// and prove all three shapes of disagreement are caught.
-    #[test]
-    fn drift_counts_every_way_an_entry_can_disagree_with_its_row() {
-        let mut store = Store::new();
-        // agrees
-        store.hset(b"u:1", &[(b"age".as_slice(), b"30".as_slice())]).unwrap();
-        // disagrees — the row says 41, the index holds 40
-        store.hset(b"u:2", &[(b"age".as_slice(), b"41".as_slice())]).unwrap();
-        // gone — no row at all, but the index still holds the key
-        // (u:3 deliberately not written)
-
-        let entries = vec![
-            (b"u:1".to_vec(), IndexValue::I64(30)),
-            (b"u:2".to_vec(), IndexValue::I64(40)),
-            (b"u:3".to_vec(), IndexValue::I64(50)),
-        ];
-        let chunk = encode_verify_chunk(&mut store, &spec(), &entries, &stats());
-        let (drift, checked) = drift_and_checked(&chunk);
-        assert_eq!(checked, 3, "every held entry must be re-read");
-        assert_eq!(drift, 2, "the changed row and the missing row must both count");
-    }
-
-    #[test]
-    fn a_healthy_index_reports_zero_drift() {
-        let mut store = Store::new();
-        store.hset(b"u:1", &[(b"age".as_slice(), b"30".as_slice())]).unwrap();
-        store.hset(b"u:2", &[(b"age".as_slice(), b"40".as_slice())]).unwrap();
-        let entries = vec![
-            (b"u:1".to_vec(), IndexValue::I64(30)),
-            (b"u:2".to_vec(), IndexValue::I64(40)),
-        ];
-        let chunk = encode_verify_chunk(&mut store, &spec(), &entries, &stats());
-        assert_eq!(drift_and_checked(&chunk), (0, 2));
-    }
-
-    /// A row whose field stopped coercing (someone wrote a string into an i64
-    /// index's field) is drift, not silence.
-    #[test]
-    fn a_row_that_no_longer_coerces_counts_as_drift() {
-        let mut store = Store::new();
-        store.hset(b"u:1", &[(b"age".as_slice(), b"not-a-number".as_slice())]).unwrap();
-        let entries = vec![(b"u:1".to_vec(), IndexValue::I64(30))];
-        let chunk = encode_verify_chunk(&mut store, &spec(), &entries, &stats());
-        assert_eq!(drift_and_checked(&chunk), (1, 1));
-    }
-}
+#[path = "query_verify_tests.rs"]
+mod verify_tests;
