@@ -51,6 +51,7 @@ mod record;
 mod replay_resync;
 pub mod reshard;
 mod rewrite_fmt;
+mod rewrite_frames;
 mod shards_meta;
 mod snapshot_fmt;
 mod snapshot_payload;
@@ -75,6 +76,7 @@ pub const REPLAY_DEMOTE_INTERVAL: u64 = 1024;
 pub use shards_meta::{Routing, ShardsMeta, read_shards_meta, write_shards_meta};
 pub use kevy_resp::{Argv, ArgvView};
 pub use rewrite_fmt::{dump_aof, dump_store_to_buf, write_multibulk, write_stream_as_commands};
+pub use rewrite_frames::value_as_v1_frames;
 pub use snapshot_read::{
     load_snapshot, load_snapshot_filtered, load_snapshot_from, read_snapshot_cursor,
 };

@@ -408,6 +408,11 @@ pub(crate) enum Inbound {
     /// origin → target: the serve landed on a live client — release the
     /// undo the target is holding for `(origin, conn)`.
     BlockServeAck { origin: usize, conn: u64 },
+    /// origin → src's shard: a cross-shard RENAME's put committed on the
+    /// destination, so the source may now record its half (the delete).
+    /// Sent only after the put succeeded — see
+    /// `Shard::log_rename_source_committed` for why not before.
+    RenameCommitted { src: Vec<u8> },
     /// origin → target: the serve could NOT be delivered (the client
     /// disconnected while it was in flight) — apply the held undo, so
     /// the popped element goes back instead of vanishing.
