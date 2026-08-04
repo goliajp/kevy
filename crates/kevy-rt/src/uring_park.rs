@@ -29,7 +29,7 @@ impl<C: Commands> Shard<C> {
         let me = self.id;
         self.parked[me].store(true, Ordering::SeqCst);
         fence(Ordering::SeqCst);
-        if self.uring_drain_inbound() > 0 {
+        if self.uring_drain_inbound().0 > 0 {
             // A push landed in the race window — process it, don't block.
             self.parked[me].store(false, Ordering::SeqCst);
             return Ok(());

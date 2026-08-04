@@ -178,7 +178,7 @@ impl<C: Commands> Shard<C> {
         if self.inbound_dirty[me].load(Ordering::Acquire) == 0 {
             return Ok(false);
         }
-        Ok(self.drain_inbound_core_slow::<true>()? > 0)
+        Ok(self.drain_inbound_core_slow::<true>()?.0 > 0)
     }
 
     /// Outlined-cold drain body — only called once the fast-path Acquire
@@ -195,7 +195,7 @@ impl<C: Commands> Shard<C> {
     // per cross-core message variant, inside the peer-ring bit-walk.
     pub(crate) fn drain_inbound_core_slow<const DIRECT_FLUSH: bool>(
         &mut self,
-    ) -> io::Result<usize> {
+    ) -> io::Result<(usize, usize)> {
         // Callers already paid the Acquire load. We do the
         // `lock xchg` swap unconditionally here. AcqRel-on-swap
         // synchronises with the Release `fetch_or` in `send_to`; bits
@@ -207,12 +207,17 @@ impl<C: Commands> Shard<C> {
             // A peer raced — caller observed bit, but a concurrent
             // drainer already cleared it. Defensive (single-drainer per
             // shard today, so this branch is dead).
-            return Ok(0);
+            return Ok((0, 0));
         }
-        // Count of messages processed — the reactor's nap rung uses the
-        // batch size as its aggregation signal (a RequestBatch counts
-        // its inner requests: that is the unit being aggregated).
+        // Two counts, two consumers. `did` = every message processed —
+        // the "was there work" answer. `aggr` = inbound WORK only
+        // (Request / RequestBatch inner requests), the reactor's nap
+        // aggregation signal: an origin draining its own fan-out's
+        // Responses is finishing work, not receiving an aggregated
+        // batch, and must not arm a deaf nap in front of the client's
+        // next query.
         let mut did: usize = 0;
+        let mut aggr: usize = 0;
         let mut mask = dirty;
         while mask != 0 {
             let src = mask.trailing_zeros() as usize;
@@ -229,6 +234,7 @@ impl<C: Commands> Shard<C> {
                         seq,
                         op,
                     } => {
+                        aggr += 1;
                         let part = self.exec_op(op);
                         self.send_to(origin, Inbound::Response { conn, seq, part });
                     }
@@ -253,6 +259,7 @@ impl<C: Commands> Shard<C> {
                     Inbound::RequestBatch { origin, reqs } => {
                         // Aggregation unit = inner requests, not envelopes.
                         did += reqs.len().saturating_sub(1);
+                        aggr += reqs.len();
                         let mut resps = Vec::with_capacity(reqs.len());
                         self.aof_begin_group();
                         for (conn, seq, argv, proto, meta) in reqs {
@@ -355,7 +362,7 @@ impl<C: Commands> Shard<C> {
                 }
             }
         }
-        Ok(did)
+        Ok((did, aggr))
     }
 
     /// Signal that `cid` just had output appended

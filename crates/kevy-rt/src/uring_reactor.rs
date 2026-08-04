@@ -288,7 +288,7 @@ impl<C: Commands> Shard<C> {
 
             // Cross-core: forwarded requests + replies (output accumulates; the
             // io_uring write path below flushes it).
-            let did_inbound = self.uring_drain_inbound();
+            let (did_inbound, aggr_inbound) = self.uring_drain_inbound();
             // `self.dirty` is no longer cleared here —
             // pub/sub deliver paths push into it and `uring_arm_conns`
             // drains it into `arm_pending` on the next iter. The prior
@@ -467,7 +467,11 @@ impl<C: Commands> Shard<C> {
             } else {
                 idle_spins = 0;
                 if did_inbound > 0 {
-                    last_inbound_batch = did_inbound;
+                    // The nap arms on inbound WORK only: an origin that
+                    // just drained its own fan-out's responses sets 0
+                    // here and parks instead of going deaf for NAP_US
+                    // in front of the client's next query.
+                    last_inbound_batch = aggr_inbound;
                     napped = false;
                 }
             }
