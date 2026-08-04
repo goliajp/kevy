@@ -52,7 +52,7 @@
     <h1 class="cmd">TABLE.DECLARE</h1>
     <p class="lede">Declare a relational table that compiles at declare time into named indexes (catalog mutation, sidecar-persisted).</p>
 
-    <pre class="syntax"><code>TABLE.DECLARE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX col range|unique [VALUES col ...]] [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...]</code></pre>
+    <pre class="syntax"><code>TABLE.DECLARE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX col range|unique [VALUES col ...]] [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] [WINDOW col SPAN n BUCKET n] [AUTODECLARE n]</code></pre>
 
     <dl class="meta">
       <div><dt>グループ</dt><dd>テーブル</dd></div>

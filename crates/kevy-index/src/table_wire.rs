@@ -6,7 +6,7 @@ use crate::catalog::{IndexKind, ValType};
 use crate::table::{OrderPath, TableIndex, TableSpec, WindowSpec};
 
 /// The usage line every malformed `TABLE.DECLARE` answers with.
-pub const TABLE_DECLARE_USAGE: &str = "ERR usage: TABLE.DECLARE name PREFIX p PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX col range|unique [VALUES col ...]] [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] [WINDOW col SPAN n BUCKET n]";
+pub const TABLE_DECLARE_USAGE: &str = "ERR usage: TABLE.DECLARE name PREFIX p PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX col range|unique [VALUES col ...]] [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] [WINDOW col SPAN n BUCKET n] [AUTODECLARE n]";
 
 /// A table-declaration clause keyword — the boundary variadic lists
 /// (`VALUES`, the `ORDERPATH` column chain) collect up to.
@@ -15,6 +15,7 @@ fn is_table_kw(a: &[u8]) -> bool {
         || a.eq_ignore_ascii_case(b"INDEX")
         || a.eq_ignore_ascii_case(b"ORDERPATH")
         || a.eq_ignore_ascii_case(b"WINDOW")
+        || a.eq_ignore_ascii_case(b"AUTODECLARE")
 }
 
 /// Parse a full `TABLE.DECLARE` argv into a validated [`TableSpec`].
@@ -37,6 +38,8 @@ pub fn parse_table_declare(argv: &[&[u8]]) -> Result<TableSpec, String> {
         indexes: Vec::new(),
         orderpaths: Vec::new(),
         window: None,
+        autodeclare: 0,
+        auto_added: Vec::new(),
     };
     let mut i = 6;
     while i < argv.len() {
@@ -49,6 +52,8 @@ pub fn parse_table_declare(argv: &[&[u8]]) -> Result<TableSpec, String> {
             i = parse_orderpath(argv, i + 1, &mut spec)?;
         } else if kw.eq_ignore_ascii_case(b"WINDOW") {
             i = parse_window(argv, i + 1, &mut spec)?;
+        } else if kw.eq_ignore_ascii_case(b"AUTODECLARE") {
+            i = parse_autodeclare(argv, i + 1, &mut spec)?;
         } else {
             return Err(TABLE_DECLARE_USAGE.into());
         }
@@ -128,6 +133,24 @@ fn parse_orderpath(argv: &[&[u8]], at: usize, spec: &mut TableSpec) -> Result<us
     }
     spec.orderpaths.push(OrderPath { name: name.to_vec(), on });
     Ok(i)
+}
+
+/// `AUTODECLARE <n>` — the engine may declare at most `n` paths for
+/// this table from observed refusals.
+fn parse_autodeclare(argv: &[&[u8]], at: usize, spec: &mut TableSpec) -> Result<usize, String> {
+    if spec.autodeclare != 0 {
+        return Err("ERR duplicate AUTODECLARE clause".into());
+    }
+    let n: usize = argv
+        .get(at)
+        .and_then(|raw| str::from_utf8(raw).ok())
+        .and_then(|t| t.parse().ok())
+        .ok_or("ERR AUTODECLARE needs a positive integer")?;
+    if n == 0 {
+        return Err("ERR AUTODECLARE needs a positive integer".into());
+    }
+    spec.autodeclare = n;
+    Ok(at + 1)
 }
 
 /// `WINDOW <col> SPAN <n> BUCKET <n>` — plain integers in the window

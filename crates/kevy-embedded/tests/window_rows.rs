@@ -36,6 +36,8 @@ fn table(name: &[u8], windowed: bool) -> TableSpec {
             span: 100,
             bucket: 10,
         }),
+        autodeclare: 0,
+        auto_added: vec![],
     }
 }
 

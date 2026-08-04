@@ -122,9 +122,9 @@ impl Store {
                 self.table_declare(spec)?;
                 Ok(TableEnsure::Created)
             }
-            Some(cur) if cur == spec => Ok(TableEnsure::Unchanged),
+            Some(cur) if cur.sans_auto() == spec => Ok(TableEnsure::Unchanged),
             Some(cur) => Err(KevyError::InvalidInput(
-                kevy_index::spec_diff(&cur, &spec),
+                kevy_index::spec_diff(&cur.sans_auto(), &spec),
             )),
         }
     }
