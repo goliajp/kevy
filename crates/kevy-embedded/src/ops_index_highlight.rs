@@ -63,22 +63,9 @@ impl Store {
         self.idx_match_faceted(name, query, limit, opts).map(|p| p.hits)
     }
 
-    /// [`Self::idx_match_with`], additionally counting the values of the
-    /// `FACET` fields over the whole match set — not just the page, which
-    /// is why the counts cannot be derived from the hits.
-    pub fn idx_match_faceted(
-        &self,
-        name: &[u8],
-        query: &[u8],
-        limit: usize,
-        opts: MatchOpts<'_>,
-    ) -> KevyResult<MatchPage> {
-        let r = self.match_faceted_run(name, query, limit, opts);
-        self.observe_noindex(name, kevy_index::AdviseShape::Match, &r);
-        r
-    }
-
-    fn match_faceted_run(
+    // The public entry is [`Store::idx_match_faceted`] in the advise
+    // module, which wraps this run with the refusal/usage observation.
+    pub(crate) fn match_faceted_run(
         &self,
         name: &[u8],
         query: &[u8],

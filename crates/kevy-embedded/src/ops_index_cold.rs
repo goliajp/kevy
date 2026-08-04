@@ -24,6 +24,9 @@ impl Store {
     ) -> KevyResult<IndexPage> {
         let r = self.idx_query_gather(name, min, max, cursor, limit);
         self.observe_noindex(name, kevy_index::AdviseShape::Range, &r);
+        if r.is_ok() {
+            self.observe_hit(name);
+        }
         r
     }
 
@@ -63,6 +66,9 @@ impl Store {
     pub fn idx_count(&self, name: &[u8], min: &IndexValue, max: &IndexValue) -> KevyResult<u64> {
         let r = self.idx_count_gather(name, min, max);
         self.observe_noindex(name, kevy_index::AdviseShape::Range, &r);
+        if r.is_ok() {
+            self.observe_hit(name);
+        }
         r
     }
 

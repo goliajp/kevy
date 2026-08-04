@@ -43,17 +43,42 @@ impl Store {
             let g = self.tables.advise.lock().unwrap_or_else(PoisonError::into_inner);
             g.entries().into_iter().cloned().collect()
         };
-        let cat = self.tables.catalog.read().unwrap_or_else(PoisonError::into_inner);
-        entries
-            .iter()
-            .filter_map(|e| {
-                advice_of(e, &cat).map(|advice| IdxAdvice {
-                    count: e.count,
-                    name: e.name.clone(),
-                    advice,
+        let mut rows: Vec<IdxAdvice> = {
+            let cat = self.tables.catalog.read().unwrap_or_else(PoisonError::into_inner);
+            entries
+                .iter()
+                .filter_map(|e| {
+                    advice_of(e, &cat).map(|advice| IdxAdvice {
+                        count: e.count,
+                        name: e.name.clone(),
+                        advice,
+                    })
                 })
+                .collect()
+        };
+        // The reclaim face: declared paths no query has ever hit,
+        // each with its age — dropping stays a human act.
+        let now_s = (kevy_store::now_unix_ms() / 1000) as i64;
+        let mut unused: Vec<IdxAdvice> = self
+            .indexes
+            .usage
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|(_, c)| c.read().0 == 0)
+            .map(|(name, c)| {
+                let n = String::from_utf8_lossy(name).into_owned();
+                let age = (now_s - c.read().2).max(0);
+                IdxAdvice {
+                    count: 0,
+                    name: name.clone(),
+                    advice: format!("IDX.DROP {n}  (never hit in the {age}s since declare)"),
+                }
             })
-            .collect()
+            .collect();
+        unused.sort_by(|a, b| a.name.cmp(&b.name));
+        rows.append(&mut unused);
+        rows
     }
 
     /// Record one refused declaration family.
@@ -79,5 +104,66 @@ impl Store {
     /// Forget every observed refusal (a catalog just changed).
     pub(crate) fn advise_clear(&self) {
         self.tables.advise.lock().unwrap_or_else(PoisonError::into_inner).clear();
+    }
+
+    /// [`Self::idx_match_with`], additionally counting the values of
+    /// the `FACET` fields over the whole match set — not just the
+    /// page, which is why the counts cannot be derived from the hits.
+    /// Lives here so the observation wrap sits with its family.
+    #[cfg(feature = "text")]
+    pub fn idx_match_faceted(
+        &self,
+        name: &[u8],
+        query: &[u8],
+        limit: usize,
+        opts: crate::MatchOpts<'_>,
+    ) -> KevyResult<crate::MatchPage> {
+        let r = self.match_faceted_run(name, query, limit, opts);
+        self.observe_noindex(name, AdviseShape::Match, &r);
+        if r.is_ok() {
+            self.observe_hit(name);
+        }
+        r
+    }
+
+    /// Count one served query against a declared path — the
+    /// observation's dual, called by the same entry-point wraps.
+    pub(crate) fn observe_hit(&self, name: &[u8]) {
+        let cell =
+            self.indexes.usage.read().unwrap_or_else(PoisonError::into_inner).get(name).cloned();
+        if let Some(c) = cell {
+            c.hit((kevy_store::now_unix_ms() / 1000) as i64);
+        }
+    }
+
+    /// `(hits, last_hit_s, declared_s)` for a declared path.
+    #[must_use]
+    pub fn idx_usage(&self, name: &[u8]) -> Option<(u64, i64, i64)> {
+        self.indexes
+            .usage
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .map(|c| c.read())
+    }
+
+    /// Re-key the usage table to the current catalog, keeping
+    /// same-name cells — counters survive unrelated installs,
+    /// dropped paths drop, new paths date from now.
+    pub(crate) fn usage_rekey(&self) {
+        let names: Vec<Vec<u8>> = {
+            let g = self.indexes.catalog.read().unwrap_or_else(PoisonError::into_inner);
+            g.1.iter().map(|(s, _)| s.name.clone()).collect()
+        };
+        let now_s = (kevy_store::now_unix_ms() / 1000) as i64;
+        let mut g = self.indexes.usage.write().unwrap_or_else(PoisonError::into_inner);
+        let old = std::mem::take(&mut *g);
+        for n in names {
+            let cell = old
+                .get(&n)
+                .cloned()
+                .unwrap_or_else(|| std::sync::Arc::new(kevy_index::UsageCell::declared_at(now_s)));
+            g.insert(n, cell);
+        }
     }
 }

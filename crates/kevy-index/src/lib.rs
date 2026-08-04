@@ -40,7 +40,7 @@ pub use composite::{
     RowDerivation, composite_bounds, composite_encode, parse_where,
 };
 pub use segment::{Cursor, Segment, SegmentStats};
-pub use advise::{ADVISE_CAP, AdviseEntry, AdviseLog, AdviseShape, advice_of};
+pub use advise::{ADVISE_CAP, AdviseEntry, AdviseLog, AdviseShape, UsageCell, advice_of};
 pub use segment_claused::{
     ClausedPage, ColdEntryRow, FacetBucket, ScalarClauses, ScalarHit, claused_over, fold_facets,
     merge_claused, values_pass,

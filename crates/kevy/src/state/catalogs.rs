@@ -6,7 +6,9 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
-use kevy_index::{AdviseEntry, AdviseLog, AdviseShape, Catalog, TableCatalog, ViewCatalog};
+use kevy_index::{
+    AdviseEntry, AdviseLog, AdviseShape, Catalog, TableCatalog, UsageCell, ViewCatalog,
+};
 
 use super::RuntimeState;
 
@@ -41,6 +43,12 @@ pub(crate) struct CatalogState {
     /// being refused, and one it doesn't re-earns its seat on the
     /// next refusal. Cold path only (refusals and an admin verb).
     advise: Mutex<AdviseLog>,
+    /// The refusal log's dual: per declared path, how often it
+    /// serves (the reclaim face's raw material). Rebuilt on install,
+    /// KEEPING same-name cells — "unused since declare" must survive
+    /// unrelated catalog changes. The served-query path pays one
+    /// uncontended read-lock and two relaxed stores.
+    usage: RwLock<HashMap<Vec<u8>, Arc<UsageCell>>>,
 }
 
 impl CatalogState {
@@ -53,6 +61,38 @@ impl CatalogState {
             view_gen: AtomicU64::new(0),
             table: RwLock::new(None),
             advise: Mutex::new(AdviseLog::new()),
+            usage: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// The usage cell for a declared path (None = not declared).
+    pub(crate) fn usage_cell(&self, name: &[u8]) -> Option<Arc<UsageCell>> {
+        self.usage.read().unwrap_or_else(PoisonError::into_inner).get(name).cloned()
+    }
+
+    /// Every declared path's `(name, hits, last_hit_s, declared_s)`.
+    pub(crate) fn usage_snapshot(&self) -> Vec<(Vec<u8>, u64, i64, i64)> {
+        self.usage
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|(n, c)| {
+                let (hits, last, declared) = c.read();
+                (n.clone(), hits, last, declared)
+            })
+            .collect()
+    }
+
+    /// Re-key the usage table to `names`, keeping same-name cells —
+    /// counters survive unrelated installs, dropped paths drop, new
+    /// paths date from `now_s`.
+    fn usage_rekey(&self, names: Vec<Vec<u8>>, now_s: i64) {
+        let mut g = self.usage.write().unwrap_or_else(PoisonError::into_inner);
+        let old = std::mem::take(&mut *g);
+        for n in names {
+            let cell =
+                old.get(&n).cloned().unwrap_or_else(|| Arc::new(UsageCell::declared_at(now_s)));
+            g.insert(n, cell);
         }
     }
 
@@ -144,6 +184,7 @@ impl RuntimeState {
     /// — every shard's gate bits re-derive `IDX_NONEMPTY` on their
     /// next command).
     pub(crate) fn install_index_catalog(&self, c: Catalog) {
+        let names: Vec<Vec<u8>> = c.iter().map(|(s, _)| s.name.clone()).collect();
         *self
             .catalogs
             .index
@@ -152,6 +193,7 @@ impl RuntimeState {
         self.catalogs.index_gen.fetch_add(1, Ordering::Release);
         self.bump_control_epoch();
         self.catalogs.advise_clear();
+        self.catalogs.usage_rekey(names, (kevy_store::now_unix_ms() / 1000) as i64);
     }
 
     /// Swap in a new view catalog — same protocol as

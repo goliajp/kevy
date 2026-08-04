@@ -159,7 +159,7 @@ pub(crate) const DISPATCH_VERBS: &[&str] = &[
     // feed + digests
     "FEED.READ", "FEED.SHARDS", "FEED.TAIL", "PREFIX.DIGEST", "PREFIX.STATS",
     // index + views + tables
-    "IDX.COUNT", "IDX.CREATE", "IDX.DROP", "IDX.LIST", "IDX.QUERY", "VIEW.CREATE", "VIEW.DROP",
+    "IDX.ADVISE", "IDX.COUNT", "IDX.CREATE", "IDX.DROP", "IDX.LIST", "IDX.QUERY", "VIEW.CREATE", "VIEW.DROP",
     "VIEW.LIST", "VIEW.QUERY", "TABLE.DECLARE", "TABLE.ENSURE", "TABLE.REPLACE", "TABLE.DROP", "TABLE.LIST", "TABLE.VERIFY",
     // conn face
     "ECHO", "PING", "PUBLISH",

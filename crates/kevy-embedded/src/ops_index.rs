@@ -83,10 +83,13 @@ pub(crate) fn merge_page(mut all: Vec<(IndexValue, Vec<u8>)>, limit: usize) -> I
 }
 
 /// Store-level index state: catalog + a version stamp the per-shard
-/// segment lists sync against.
+/// segment lists sync against, and each declared path's usage cell
+/// (the refusal log's dual — reclaim-face raw material).
 #[derive(Default)]
 pub(crate) struct IndexReg {
     pub(crate) catalog: RwLock<(u64, Catalog)>,
+    pub(crate) usage:
+        RwLock<std::collections::HashMap<Vec<u8>, std::sync::Arc<kevy_index::UsageCell>>>,
 }
 
 /// A shard's window runtime beside its segment — `()` stand-in on
@@ -215,6 +218,7 @@ impl Store {
         }
         self.persist_index_sidecar();
         self.advise_clear();
+        self.usage_rekey();
         // Build every shard's slice now (each under its own lock).
         for shard in self.shards.iter() {
             let mut g = lock_write(shard);
@@ -276,6 +280,7 @@ impl Store {
         if hit {
             self.persist_index_sidecar();
             self.advise_clear();
+            self.usage_rekey();
         }
         hit
     }
