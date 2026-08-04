@@ -448,3 +448,64 @@ fn shard_tick_interval_falls_back_to_disabled() {
     // Either disabled (hz=0) or capped 1..=10_000.
     assert!(ms == 0 || (1..=10_000).contains(&ms), "got {ms}");
 }
+
+/// Every verb the engine records into its own AOF must be executable by
+/// the dispatcher that replays it.
+///
+/// This is the check that would have caught two data-loss bugs on its
+/// own. `MSET` and `RENAME` are served to clients by the routing layer,
+/// and the op recorded its effect using the same verb — but replay and
+/// replica-apply both run the LOCAL dispatcher, where `MSET` answered an
+/// arity error and `RENAME` was unknown. The record went to disk in a
+/// language its only reader did not speak, so the write was
+/// acknowledged, readable, and gone at the next start.
+///
+/// The list below is "what the engine can write", gathered from the op
+/// effect frames (`exec_op`, `exec_listmove`) and the rewrite serializer
+/// (`kevy_persist::rewrite_fmt`). A verb added to either without a
+/// dispatch arm fails here rather than in someone's data.
+#[test]
+fn every_verb_the_engine_logs_can_be_replayed() {
+    // Well-formed minimal calls — the point is "the dispatcher executes
+    // this", not "this particular effect is right".
+    let recorded: &[&[&[u8]]] = &[
+        &[b"SET", b"k", b"v"],
+        &[b"DEL", b"k1", b"k2"],
+        &[b"MSET", b"a", b"1", b"b", b"2"],
+        &[b"RENAME", b"r1", b"r2"],
+        &[b"RENAMENX", b"r3", b"r4"],
+        &[b"HSET", b"h", b"f", b"v"],
+        &[b"RPUSH", b"l", b"x"],
+        &[b"LPUSH", b"l", b"x"],
+        &[b"LPOP", b"l"],
+        &[b"RPOP", b"l"],
+        &[b"SADD", b"s", b"m"],
+        &[b"ZADD", b"z", b"1", b"m"],
+        &[b"PEXPIREAT", b"k", b"99999999999999"],
+        &[b"HPEXPIREAT", b"h", b"99999999999999", b"FIELDS", b"1", b"f"],
+        &[b"XADD", b"st", b"*", b"f", b"v"],
+        &[b"XSETID", b"st", b"5-5"],
+        &[b"XGROUP", b"CREATE", b"st", b"g", b"0"],
+        &[b"FLUSHALL"],
+    ];
+    for parts in recorded {
+        let mut s = Store::new();
+        // Give the verbs that need a live key something to work on.
+        let _ = d(&mut s, &[b"SET", b"r1", b"v"]);
+        let _ = d(&mut s, &[b"SET", b"r3", b"v"]);
+        let _ = d(&mut s, &[b"RPUSH", b"l", b"seed"]);
+        let _ = d(&mut s, &[b"HSET", b"h", b"f", b"v"]);
+        let _ = d(&mut s, &[b"XADD", b"st", b"1-1", b"f", b"v"]);
+        let reply = d(&mut s, parts);
+        let text = String::from_utf8_lossy(&reply);
+        let verb = String::from_utf8_lossy(parts[0]).into_owned();
+        assert!(
+            !text.starts_with("-ERR unknown command"),
+            "{verb} is recorded into the AOF but the replay dispatcher does not know it: {text}",
+        );
+        assert!(
+            !text.contains("wrong number of arguments"),
+            "{verb} is recorded into the AOF but the replay dispatcher refuses it: {text}",
+        );
+    }
+}
