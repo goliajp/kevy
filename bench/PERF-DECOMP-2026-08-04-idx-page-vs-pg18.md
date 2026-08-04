@@ -622,3 +622,41 @@ single-connection idx workload (~8 k q/s, driver at 250 k queries):
 
 Gate 2 verdict: **open for A2 and A3; A1 rides the counter probe;
 Phase B remains owner-gated.**
+
+## Addendum 3 — Phase B round 1: A1 lands NEGATIIVE, O3 lands the tail
+
+**A1 (nap aggregation-signal fix, branch `feature/r3-a1-nap-aggr`,
+a9b56146): NEUTRAL.** Three rounds at width 16: idx p99 390/377/392
+vs baseline 384/386/384 — the predicted −100..150 µs did not happen.
+Per the methodology, no post-hoc rationalization: **O1 is refuted as
+the tail source.** The branch stays parked unmerged (the semantic
+correction — responses should never have armed the nap — is real but
+motion-free; merging is the owner's call).
+
+**O3 (oversubscription) is the tail, confirmed by a zero-code
+sweep** on develop:
+
+| threads | idx p50/p99 | page p50/p99 |
+|---|---|---|
+| 12 | 80/157 | 143/176 |
+| 14 | 83/**98** | 151/273 |
+| 15 | 90/239 | 154/186 |
+| 16 | 131/**380** | 155/205 |
+
+Dropping from 16 to 14 shards — nothing else — collapses the idx p99
+from 380 µs to 98 µs and the p50 from 131 to 83. The cliff sits
+exactly at the core boundary: 16 shards + the main thread + the
+reaper (+ the driver process) exceed the box's 16 cores, and the
+"tail" is run-queue latency, not engine work. At 14 shards kevy's
+idx p99 (98 µs) already beats PG18's (164 µs) on the very benchmark
+that motivated R3.
+
+**The R3 story, complete:** the query path is not slow (width-1 wins
+3×); the p50 gap is fan-out width tax (A2/A3 remain the real
+candidates, both past gate 2); the p99 cliff was a deployment shape
+— shard count must leave cores for the reaper and the peer processes,
+the same fewer-but-denser lesson the v1.30 accept-shards round
+taught. Deployer guidance: `--threads ≤ cores − 2` on a box that
+also hosts the client. The pgcompare harness's default (all cores)
+now overstates kevy's tail on any box where the client is co-located
+— worth a harness note when the comparison is next rerun.
