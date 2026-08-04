@@ -69,6 +69,19 @@ the write path.
 Every emitted frame is `<VERB> <key> …` by construction
 (`ops/scope_move_emit.rs`), so the key is `argv[1]`.
 
+## Open — a third path, suspected but NOT verified
+
+The replica apply path (`kevy-rt/src/replication_apply.rs`) dispatches
+each replicated frame and then runs the same `post_write_housekeeping`,
+whose `key_idx` is `Some` only for `Route::Single`. A primary propagates
+a multi-key `DEL a b` verbatim, so by that reading a replica would take
+bug 1 through a path the `exec_op` fix does not cover. **This is a code
+reading, not a measurement** — an attempt to reproduce it stalled
+because the replica never completed its initial sync in the ad-hoc
+two-process setup, and the proper harness (`tests/replication.rs`) was
+not brought to bear. It stays here as a suspicion with its reasoning,
+not as a finding.
+
 ## What was checked and found healthy
 
 * **Lua** (`EVAL` calling `DEL` / `HSET`, including creating a new row) —
@@ -83,10 +96,20 @@ Every emitted frame is `<VERB> <key> …` by construction
    "the write path" turned out to mean one of several paths that write.
    Pairing the maintenance with WATCH invalidation makes the coupling
    structural instead of remembered.
-2. **`IDX.VERIFY` has a blind direction.** It cannot detect rows missing
-   from the index. Making it bidirectional (audit a prefix's store rows
-   against the index) is not part of this fix and is worth its own
-   round — without it, bug 2's whole class stays undetectable.
+2. **`IDX.VERIFY` had a blind direction — now closed.** It could not
+   detect rows missing from the index, which is bug 2's whole class.
+   `TABLE.VERIFY` already computed exactly that (`missing`: "derives a
+   value, has no entry — the class a drift walk cannot see"), so
+   `IDX.VERIFY` now reports it *from the same classifier* rather than a
+   second implementation.
+
+   Closing it turned up a latent false-alarm in the existing one: a
+   windowed path slides old rows into cold segments on purpose, and
+   neither face excluded them, so a slid row counted as a hole. Both
+   faces now skip rows whose window value sits below the boundary. The
+   counter was harmless while only `TABLE.VERIFY` carried it and no test
+   exercised a slid windowed table; it would have started crying wolf
+   the moment it reached the IDX face.
 3. **The I2 design round has to inherit this.** A global secondary index
    (index partitioned by value, read single-hop) multiplies the number
    of write paths that must announce themselves — it turns one local
