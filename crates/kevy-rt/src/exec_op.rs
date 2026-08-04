@@ -89,7 +89,15 @@ impl<C: Commands> Shard<C> {
                 }
                 let mut c = Argv::with_capacity(1, 8);
                 c.push(b"FLUSHALL");
-                self.log_effect(&c);
+                // AOF only — deliberately NOT `log_effect`. A flush
+                // reaches replicas through the generation bump above:
+                // their cursors fall behind the new generation and get
+                // `-FEEDRESYNC <gen> 0`. Pushing a FLUSHALL record too
+                // would put a frame at the offset the bump just reset to
+                // zero, which is the contract `feed_cdc`'s
+                // `flushall_bumps_generation_and_old_cursor_resyncs`
+                // pins.
+                self.log(&c);
                 self.maybe_notify_flush();
                 Part::Ok
             }
