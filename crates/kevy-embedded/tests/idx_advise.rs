@@ -34,6 +34,33 @@ fn lean_table() -> TableSpec {
     }
 }
 
+/// The embedded criterion run: zero human paths, only the opt-in
+/// budget — the engine declares within budget, marks its work, and
+/// refuses past it.
+#[test]
+fn autodeclare_serves_within_budget_and_marks_its_work() {
+    let s = Store::open(Config::default().with_ttl_reaper_manual()).expect("open");
+    let mut spec = lean_table();
+    spec.indexes.clear();
+    spec.autodeclare = 1;
+    s.table_declare(spec).expect("declare");
+    let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(100));
+    // 15 refusals observe; the 16th declares (and still errors — the
+    // action is declare-period; embedded builds are synchronous, so
+    // the very next query serves).
+    for _ in 0..16 {
+        assert!(s.idx_count(b"ev.age", &lo, &hi).is_err());
+    }
+    assert_eq!(s.idx_count(b"ev.age", &lo, &hi).expect("engine-declared path serves"), 0);
+    assert!(s.idx_usage(b"ev.age").is_some(), "usage cell re-keyed in");
+    // The budget is spent: a second family stays refused and advised.
+    for _ in 0..17 {
+        assert!(s.idx_count(b"ev.at", &lo, &hi).is_err());
+    }
+    let adv = s.idx_advise();
+    assert!(adv.iter().any(|a| a.name == b"ev.at" && a.count > 0), "{adv:?}");
+}
+
 #[test]
 fn refusals_render_and_catalog_mutations_clear() {
     let s = Store::open(Config::default().with_ttl_reaper_manual()).expect("open");

@@ -5,39 +5,99 @@
 //! parser would, minus the value coercion — a mis-derived family
 //! costs one log seat, never a wrong answer.
 
-use kevy_index::AdviseShape;
+use kevy_index::{AUTODECLARE_AFTER, AdviseEntry, AdviseShape, apply_auto, compile_table};
 
 use crate::cmd_index_query::{ST_NOFIELD, ST_NOINDEX};
-use crate::state::CatalogState;
+use crate::state::{CatalogState, RuntimeState};
+
+/// The whole refusal side: observe the family, then let the auto
+/// loop act on the fresh count. One call from the reduce.
+pub(super) fn on_refused(state: &RuntimeState, argv: &[Vec<u8>], chunks: &[Vec<u8>]) {
+    if let Some((shape, count)) = observe_refusal(&state.catalogs, argv, chunks)
+        && let Some(name) = argv.get(1)
+    {
+        maybe_autodeclare(state, name, shape, count);
+    }
+}
 
 /// Feed one refusal into the advise log, when its shape is one the
 /// declaration surface can serve. Called once per refused query at
 /// the origin — never per shard, so the reduce is the natural dedup.
-pub(super) fn observe_refusal(catalogs: &CatalogState, argv: &[Vec<u8>], chunks: &[Vec<u8>]) {
+/// Returns the observed family and its count, the auto loop's input.
+fn observe_refusal(
+    catalogs: &CatalogState,
+    argv: &[Vec<u8>],
+    chunks: &[Vec<u8>],
+) -> Option<(AdviseShape, u64)> {
     // HYBRID names two indexes and the chunk does not say which one
     // is missing, so it stays unadvised.
     if argv.get(1).is_some_and(|a| a.eq_ignore_ascii_case(b"HYBRID")) {
-        return;
+        return None;
     }
-    let Some(name) = argv.get(1) else { return };
+    let name = argv.get(1)?;
     for c in chunks {
         match c.first().copied() {
             Some(ST_NOINDEX) => {
-                if let Some(shape) = noindex_shape(argv) {
-                    catalogs.advise_observe(name, shape, argv);
-                }
-                return;
+                let shape = noindex_shape(argv)?;
+                let count = catalogs.advise_observe(name, shape.clone(), argv);
+                return Some((shape, count));
             }
             Some(ST_NOFIELD) => {
                 let flen = c.get(1).copied().unwrap_or(0) as usize;
-                if let Some(field) = c.get(2..2 + flen) {
-                    catalogs.advise_observe(name, AdviseShape::Filter(field.to_vec()), argv);
-                }
-                return;
+                let field = c.get(2..2 + flen)?;
+                let shape = AdviseShape::Filter(field.to_vec());
+                let count = catalogs.advise_observe(name, shape.clone(), argv);
+                return Some((shape, count));
             }
             _ => {}
         }
     }
+    None
+}
+
+/// The declare-period action: when the just-observed family crossed
+/// the threshold and its table opted in with spare budget, apply the
+/// declaration NOW. The refusal path is cold — the query that pushed
+/// the count over still gets its error, and the next one finds the
+/// path building. Failures leave everything unchanged: this is an
+/// engine courtesy, never a correctness surface.
+fn maybe_autodeclare(state: &RuntimeState, name: &[u8], shape: AdviseShape, count: u64) {
+    if count < AUTODECLARE_AFTER {
+        return;
+    }
+    let dot = match name.iter().position(|&b| b == b'.') {
+        Some(d) => d,
+        None => return,
+    };
+    let Some(tcat) = state.catalogs.table() else { return };
+    let Some(mut spec) = tcat.get(&name[..dot]).cloned() else { return };
+    if spec.autodeclare == 0 {
+        return;
+    }
+    let entry = AdviseEntry { name: name.to_vec(), shape, count, sample: Vec::new() };
+    let Some(ledger) = apply_auto(&mut spec, &entry) else { return };
+    let Ok(compiled) = compile_table(&spec) else { return };
+    let mut new_tcat = (*tcat).clone();
+    new_tcat.drop_table(&spec.name);
+    if new_tcat.create(spec).is_err() {
+        return;
+    }
+    let mut icat = state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
+    // `path` = a whole new compiled index; `path#field` = a changed
+    // one, rebuilt (drop + create) so the VALUES payloads backfill.
+    let path = match ledger.iter().position(|&b| b == b'#') {
+        Some(p) => &ledger[..p],
+        None => &ledger[..],
+    };
+    let Some(ispec) = compiled.into_iter().find(|s| s.name == path) else { return };
+    icat.drop_index(path);
+    if icat.create(ispec).is_err() {
+        return;
+    }
+    crate::cmd_table::persist_sidecar(state.sidecar_dir(), &new_tcat);
+    crate::cmd_index::persist_sidecar(state.sidecar_dir(), &icat);
+    state.install_index_catalog(icat);
+    state.install_table_catalog(new_tcat);
 }
 
 /// The declaration family a NOINDEX refusal asked for, read from the

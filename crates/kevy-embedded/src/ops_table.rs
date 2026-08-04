@@ -274,7 +274,7 @@ impl Store {
     pub(crate) fn table_boot(&self) {}
 
     #[cfg(feature = "persist")]
-    fn persist_table_sidecar(&self) {
+    pub(crate) fn persist_table_sidecar(&self) {
         let Some(dir) = &self.config.data_dir else { return };
         let g = self
             .tables
@@ -288,7 +288,7 @@ impl Store {
     }
 
     #[cfg(not(feature = "persist"))]
-    fn persist_table_sidecar(&self) {}
+    pub(crate) fn persist_table_sidecar(&self) {}
 }
 
 /// Catalog errors carry a leading `ERR ` for the wire; the typed

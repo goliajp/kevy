@@ -153,7 +153,7 @@ pub(super) fn badargs(out: &mut Vec<u8>, verb: &str, name: &[u8]) {
     err(out, &format!("ERR {verb} '{n}': bad arguments — run COMMAND DOCS {verb} for the syntax"));
 }
 
-/// `IDX.LIST` — 16-field rows matching the server's reduce. Embedded
+/// `IDX.LIST` — 18-field rows matching the server's reduce. Embedded
 /// builds are synchronous, so `state` is always `ready`; entry/byte
 /// stats are the scalar-segment sums (kind-specific stats stay 0);
 /// hits/last_hit read the usage dual.
@@ -166,7 +166,7 @@ fn cmd_idx_list(s: &Store, out: &mut Vec<u8>) {
     for spec in &specs {
         let stats = s.idx_stats(&spec.name).unwrap_or_default();
         let (hits, last, _) = s.idx_usage(&spec.name).unwrap_or((0, 0, 0));
-        arr(out, 16);
+        arr(out, 18);
         bulk(out, b"name");
         bulk(out, &spec.name);
         bulk(out, b"prefix");
@@ -183,5 +183,7 @@ fn cmd_idx_list(s: &Store, out: &mut Vec<u8>) {
         bulk(out, hits.to_string().as_bytes());
         bulk(out, b"last_hit");
         bulk(out, last.to_string().as_bytes());
+        bulk(out, b"auto");
+        bulk(out, if s.is_auto_path(&spec.name) { b"1" } else { b"0" });
     }
 }

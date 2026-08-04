@@ -152,15 +152,17 @@ impl AdviseLog {
         Self { entries: Vec::new(), cap: cap.max(1) }
     }
 
-    /// Record one refusal. Families deduplicate on (name, shape); a
-    /// full log evicts its least-refused family for a NEW one (an
-    /// existing family always just counts).
-    pub fn observe(&mut self, name: &[u8], shape: AdviseShape, argv: &[Vec<u8>]) {
+    /// Record one refusal, returning the family's count AFTER this
+    /// observation — the auto loop's threshold input. Families
+    /// deduplicate on (name, shape); a full log evicts its
+    /// least-refused family for a NEW one (an existing family always
+    /// just counts).
+    pub fn observe(&mut self, name: &[u8], shape: AdviseShape, argv: &[Vec<u8>]) -> u64 {
         if let Some(e) =
             self.entries.iter_mut().find(|e| e.name == name && e.shape == shape)
         {
             e.count += 1;
-            return;
+            return e.count;
         }
         if self.entries.len() >= self.cap {
             let (weakest, _) = self
@@ -177,6 +179,7 @@ impl AdviseLog {
             count: 1,
             sample: argv.to_vec(),
         });
+        1
     }
 
     /// The observed families, most-refused first.

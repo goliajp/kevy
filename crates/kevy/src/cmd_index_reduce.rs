@@ -21,17 +21,18 @@ use kevy_rt::ExtensionReduced;
 use crate::cmd_index_query::{
     ST_BADARGS, ST_BUILDING, ST_CLAUSE, ST_NOFIELD, ST_NOINDEX, ST_NOTYET, ST_OVERBUDGET,
 };
-use crate::state::CatalogState;
+use crate::state::{CatalogState, RuntimeState};
 
 /// Origin half: merge chunks → RESP (or a follow-up fan-out — the
 /// GROUPS top-K and its AGG.FETCH phase are the two-phase shapes).
 pub(crate) fn extension_reduce(
-    catalogs: &CatalogState,
+    state: &RuntimeState,
     argv: &[Vec<u8>],
     chunks: Vec<Vec<u8>>,
 ) -> ExtensionReduced {
+    let catalogs = &state.catalogs;
     if let Some(err) = triage_status(argv, &chunks) {
-        advise::observe_refusal(catalogs, argv, &chunks);
+        advise::on_refused(state, argv, &chunks);
         return ExtensionReduced::Reply(err);
     }
     advise::observe_hit(catalogs, argv);

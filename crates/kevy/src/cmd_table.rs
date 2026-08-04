@@ -40,7 +40,7 @@ pub(crate) fn boot(state: &RuntimeState) {
     }
 }
 
-fn persist_sidecar(dir: Option<&Path>, cat: &TableCatalog) {
+pub(crate) fn persist_sidecar(dir: Option<&Path>, cat: &TableCatalog) {
     let Some(dir) = dir else { return };
     let tmp = dir.join("table-catalog.meta.tmp");
     if std::fs::write(&tmp, cat.to_sidecar()).is_ok() {

@@ -81,13 +81,63 @@ impl Store {
         rows
     }
 
-    /// Record one refused declaration family.
+    /// Record one refused declaration family; past the threshold, on
+    /// an opted-in table, the declare-period action runs right here —
+    /// the refusal path is cold, and the query that pushed the count
+    /// over still gets its error.
     pub(crate) fn observe_refused(&self, name: &[u8], shape: AdviseShape) {
-        self.tables
+        let count = self
+            .tables
             .advise
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .observe(name, shape, &[]);
+            .observe(name, shape.clone(), &[]);
+        if count >= kevy_index::AUTODECLARE_AFTER {
+            self.auto_declare(name, shape, count);
+        }
+    }
+
+    /// The embedded declare-period action — same shared rule
+    /// ([`kevy_index::apply_auto`]), same delta discipline as the
+    /// server: a whole new path registers, a changed one (auto
+    /// VALUES) rebuilds. Failures leave everything unchanged.
+    fn auto_declare(&self, name: &[u8], shape: AdviseShape, count: u64) {
+        let Some(dot) = name.iter().position(|&b| b == b'.') else { return };
+        let mut spec = {
+            let g = self.tables.catalog.read().unwrap_or_else(PoisonError::into_inner);
+            match g.get(&name[..dot]) {
+                Some(s) if s.autodeclare != 0 => s.clone(),
+                _ => return,
+            }
+        };
+        let entry =
+            kevy_index::AdviseEntry { name: name.to_vec(), shape, count, sample: Vec::new() };
+        let Some(ledger) = kevy_index::apply_auto(&mut spec, &entry) else { return };
+        let Ok(compiled) = kevy_index::compile_table(&spec) else { return };
+        let path = match ledger.iter().position(|&b| b == b'#') {
+            Some(p) => ledger[..p].to_vec(),
+            None => ledger,
+        };
+        let Some(ispec) = compiled.into_iter().find(|s| s.name == path) else { return };
+        // Registry first, catalog second: once the name is free the
+        // only register refusal is the tier floor, probed up front so
+        // a refusal leaves the old path standing.
+        #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+        if crate::ops_index_sync::tier_floor_check(&self.shards).is_err() {
+            return;
+        }
+        self.idx_drop(&path);
+        if self.register_spec(ispec).is_err() {
+            return;
+        }
+        {
+            let mut g = self.tables.catalog.write().unwrap_or_else(PoisonError::into_inner);
+            g.drop_table(&spec.name);
+            if g.create(spec).is_err() {
+                return;
+            }
+        }
+        self.persist_table_sidecar();
     }
 
     /// [`Self::observe_refused`] when `r` is a no-such-index refusal
@@ -134,6 +184,12 @@ impl Store {
         if let Some(c) = cell {
             c.hit((kevy_store::now_unix_ms() / 1000) as i64);
         }
+    }
+
+    /// Is `name` a path the auto loop declared (any table's ledger)?
+    pub(crate) fn is_auto_path(&self, name: &[u8]) -> bool {
+        let g = self.tables.catalog.read().unwrap_or_else(PoisonError::into_inner);
+        g.iter().any(|s| s.auto_added.iter().any(|e| e == name))
     }
 
     /// `(hits, last_hit_s, declared_s)` for a declared path.
