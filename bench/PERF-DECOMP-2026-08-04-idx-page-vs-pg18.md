@@ -593,3 +593,32 @@ structural alternative — routing an indexed lookup to fewer shards
 than "all of them" — is the larger prize and needs its own design
 round. Nothing here changes the ±20 % stage budgets, which were
 built at width 16 and remain the width-16 account.
+
+## Addendum 2 — gate 2 (perf + strace under steady idx load, width 16)
+
+30 s perf (997 Hz, 424 K samples) and 10 s strace -c over a saturated
+single-connection idx workload (~8 k q/s, driver at 250 k queries):
+
+- **Syscall machinery ≈ 20 pp self-time** — the audit chain alone
+  (audit_reset_context 2.8 + syscall_entry/exit audit 4.1) plus the
+  entry/exit trampolines (~8 pp), io_uring_enter 2.3, RCU 3.5.
+  strace agrees: 3.09 M io_uring_enter per 10 s (~39/query at this
+  rate). **A2 (wakeup batching / fewer ring submissions) passes the
+  ≥10 pp gate.**
+- **Allocator ≈ 12 pp** — malloc 7.6 + cfree 2.8 + kernel kfree 1.5.
+  **A3 (zero-alloc reduce merge, and the allocation family broadly)
+  passes.**
+- **A1 (the nap cliff) is a LATENCY face** — self-time cannot see a
+  sleep; its discriminator remains the `naps_entered` counter (a
+  Phase B instrumentation step) riding on the --threads cliff already
+  measured. clock_nanosleep in strace is the reaper cadence
+  (98 calls × ~76 ms/10 s), not the nap.
+- Residual: the single hottest user symbol (10.78 %) resisted
+  symbolization twice — the CARGO_PROFILE_RELEASE_STRIP=none env
+  override did not take effect on this box (same address, same
+  share); resolve it via a Cargo.toml profile edit when Phase B
+  opens. It does not change the A2/A3 verdicts; it is a third
+  candidate face waiting for a name.
+
+Gate 2 verdict: **open for A2 and A3; A1 rides the counter probe;
+Phase B remains owner-gated.**
