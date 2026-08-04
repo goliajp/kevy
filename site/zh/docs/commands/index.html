@@ -48,7 +48,7 @@
 <main id="main" class="page">
   <div class="band">
     <p class="eyebrow">命令</p>
-    <h1>190 个命令</h1>
+    <h1>191 个命令</h1>
     <p class="lede">服务器会应答的每一个动词，直接来自它自己的注册表 —— 也就是 <code>COMMAND DOCS</code> 读的同一张表。有两栏是 Redis 的参考文档里没有的：这个命令在<b>本引擎里的真实代价</b>，以及它<b>与 Redis 的差异</b>。</p>
 
     <div class="filters">
@@ -237,6 +237,7 @@
 <tr data-name="role" data-group="replication" data-compat="full"><td class="k"><a href="ROLE/">ROLE</a></td><td class="g">复制</td><td class="cx mono">副本上 O(1)；主库上 O(R)</td><td><span class="badge full">兼容</span></td><td class="sum">报告本机的复制角色与状态。</td></tr>
 <tr data-name="slaveof" data-group="replication" data-compat="differs"><td class="k"><a href="SLAVEOF/">SLAVEOF</a></td><td class="g">复制</td><td class="cx mono">O(1)，外加一次后台重同步</td><td><span class="badge differs">有差异</span></td><td class="sum">REPLICAOF 的旧式别名。</td></tr>
 <tr data-name="wait" data-group="replication" data-compat="differs"><td class="k"><a href="WAIT/">WAIT</a></td><td class="g">复制</td><td class="cx mono">O(S)</td><td><span class="badge differs">有差异</span></td><td class="sum">阻塞直到每个 shard 的 master_repl_offset 都被至少 numreplicas 个副本确认（或者超过 timeout 毫秒）；返回各 shard 中最小的已确认副本数。timeout 0 表示一直等，硬上限 60 s。注意：副本的 ACK 不等于 fsync 落盘。</td></tr>
+<tr data-name="idx.advise" data-group="index" data-compat="only"><td class="k"><a href="IDX.ADVISE/">IDX.ADVISE</a></td><td class="g">索引</td><td class="cx mono">O(observed families)</td><td><span class="badge only">kevy 独有</span></td><td class="sum">The declarations refused queries have been asking for, most-refused first — each rendered as the command that would serve it.</td></tr>
 <tr data-name="idx.count" data-group="index" data-compat="only"><td class="k"><a href="IDX.COUNT/">IDX.COUNT</a></td><td class="g">索引</td><td class="cx mono">每个 shard 上 O(log N + matched)</td><td><span class="badge only">kevy 独有</span></td><td class="sum">统计匹配区间谓词或等值谓词的索引条目数。</td></tr>
 <tr data-name="idx.create" data-group="index" data-compat="only"><td class="k"><a href="IDX.CREATE/">IDX.CREATE</a></td><td class="g">索引</td><td class="cx mono">调用本身 O(1)；构建是异步的</td><td><span class="badge only">kevy 独有</span></td><td class="sum">在某个 key 前缀上声明一个二级索引（catalog 变更，由 sidecar 持久化）。</td></tr>
 <tr data-name="idx.drop" data-group="index" data-compat="only"><td class="k"><a href="IDX.DROP/">IDX.DROP</a></td><td class="g">索引</td><td class="cx mono">O(catalog 大小)</td><td><span class="badge only">kevy 独有</span></td><td class="sum">删除一个已声明的索引（catalog 变更，由 sidecar 持久化）。</td></tr>

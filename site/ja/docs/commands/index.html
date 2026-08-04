@@ -48,7 +48,7 @@
 <main id="main" class="page">
   <div class="band">
     <p class="eyebrow">コマンド</p>
-    <h1>190 コマンド</h1>
+    <h1>191 コマンド</h1>
     <p class="lede">サーバーが応答するすべての動詞を、サーバー自身のレジストリから直接 —— <code>COMMAND DOCS</code> が読むのと同じテーブルである。Redis のリファレンスには無い列が二つある。このエンジンでの<b>実際のコスト</b>と、<b>Redis との差異</b>である。</p>
 
     <div class="filters">
@@ -237,6 +237,7 @@
 <tr data-name="role" data-group="replication" data-compat="full"><td class="k"><a href="ROLE/">ROLE</a></td><td class="g">レプリケーション</td><td class="cx mono">replica では O(1)</td><td><span class="badge full">互換</span></td><td class="sum">このサーバのレプリケーション役割と状態を返す。</td></tr>
 <tr data-name="slaveof" data-group="replication" data-compat="differs"><td class="k"><a href="SLAVEOF/">SLAVEOF</a></td><td class="g">レプリケーション</td><td class="cx mono">O(1) と</td><td><span class="badge differs">差異あり</span></td><td class="sum">REPLICAOF の旧名エイリアス。</td></tr>
 <tr data-name="wait" data-group="replication" data-compat="differs"><td class="k"><a href="WAIT/">WAIT</a></td><td class="g">レプリケーション</td><td class="cx mono">O(S)</td><td><span class="badge differs">差異あり</span></td><td class="sum">全 shard の master_repl_offset が numreplicas 台以上の replica に ack されるまで(または timeout ミリ秒が経過するまで)ブロックし、shard 横断での ack 済み replica 数の最小値を返す。timeout 0 は無期限待ちだが、上限は 60 s。注意：replica の ACK は fsync による永続化を意味しない。</td></tr>
+<tr data-name="idx.advise" data-group="index" data-compat="only"><td class="k"><a href="IDX.ADVISE/">IDX.ADVISE</a></td><td class="g">インデックス</td><td class="cx mono">O(observed families)</td><td><span class="badge only">kevy 固有</span></td><td class="sum">The declarations refused queries have been asking for, most-refused first — each rendered as the command that would serve it.</td></tr>
 <tr data-name="idx.count" data-group="index" data-compat="only"><td class="k"><a href="IDX.COUNT/">IDX.COUNT</a></td><td class="g">インデックス</td><td class="cx mono">shard あたり O(log N + matched)</td><td><span class="badge only">kevy 固有</span></td><td class="sum">範囲述語または等値述語に一致するインデックスエントリの件数を数える。</td></tr>
 <tr data-name="idx.create" data-group="index" data-compat="only"><td class="k"><a href="IDX.CREATE/">IDX.CREATE</a></td><td class="g">インデックス</td><td class="cx mono">呼び出し自体は O(1)</td><td><span class="badge only">kevy 固有</span></td><td class="sum">key の prefix に対する二次インデックスを宣言する(カタログの変更であり、サイドカーへ永続化される)。</td></tr>
 <tr data-name="idx.drop" data-group="index" data-compat="only"><td class="k"><a href="IDX.DROP/">IDX.DROP</a></td><td class="g">インデックス</td><td class="cx mono">O(catalog size)</td><td><span class="badge only">kevy 固有</span></td><td class="sum">宣言済みのインデックスを削除する(カタログの変更であり、サイドカーへ永続化される)。</td></tr>
