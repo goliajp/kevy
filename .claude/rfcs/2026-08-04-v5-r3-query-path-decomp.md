@@ -29,6 +29,24 @@ median-of-3 + sample stdev。判定:
 - 两侧 stdev ≪ gap(gap ~80-120µs)→ 轴成立,Phase A 开工;
 - 任一轴 variance ≥ gap → 该轴除名,回总案重定靶。
 
+## 一b、Gate 1 结果(2026-08-04,lx64 三轮,PASS)
+
+原始输出:`bench/R3-GATE1-2026-08-04.log`。kevy `none` 与 PG 三轮
+全齐(round 2/3 的 everysec 段被 harness 自拒 —— appendfsync 读空,
+残留问题另查,不影响判定;none/everysec 在 round 1 里同轴相差 <5%)。
+
+| 轴 | PG18 p99 ×3 | kevy none p99 ×3 | gap vs stdev |
+|---|---|---|---|
+| idx | 162/164/180(med 164)| 384/386/384(med 384,stdev ~1)| 220µs ≫ ~10 |
+| page | 147/167/147(med 147)| 231/214/239(med 231)| 84µs ≫ ~13 |
+
+**两轴成立,Phase A 开工。** 额外发现改写 decomp 重心:p50 面
+idx 几乎打平(kevy 128-138 vs PG 118-126),page 1.4×;差距集中在
+**尾部** —— kevy idx 的 p99/p50 = 2.9×(384/134),PG 只 1.3×
+(164/126)。18 段拆解必须并行回答"p50 的 1.0-1.4× 路径差"与
+"p99 的尾部来源"两问(尾部候选:shard 锁上的 tick/维护竞争、
+fan-out 唤醒、分配尖峰 —— 靠 counter/分位实测归因,不猜)。
+
 ## 二、Phase A decomp(gate 1 过后)
 
 **形态**:read-only agent(Read/Bash/Grep,无 edit),产物

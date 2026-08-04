@@ -1,0 +1,57 @@
+=== ROUND 1 Tue Aug  4 03:59:32 AM PDT 2026 ===
+== dataset ==
+{"rows": 2000000, "bytes": 895417485, "mb": 853.9, "seconds": 43.7}
+== postgres 18 (stock config) ==
+{"engine": "postgres18", "mode": "stock", "rows": 2000000, "csv_mb": 853.9, "load_seconds": 10.61, "load_rows_per_s": 188587, "load_mb_per_s": 80.5, "disk_bytes": 1150787584, "disk_per_csv_mb_kb": 1316.0, "rss_bytes": 565854208, "rss_per_csv_mb_kb": 647.1, "db_bytes": 1158690495, "db_per_csv_mb_kb": 1325.1, "pk_p50_us": 66, "pk_p99_us": 115, "pk_mean_us": 70, "idx_p50_us": 118, "idx_p99_us": 162, "idx_mean_us": 117, "page_p50_us": 109, "page_p99_us": 147, "page_mean_us": 109, "write_p50_us": 727, "write_p99_us": 1457, "write_mean_us": 878}
+== kevy 4 (aof=none) ==
+{"engine": "kevy4", "mode": "none", "rows": 2000000, "csv_mb": 853.9, "load_seconds": 13.3, "load_rows_per_s": 150386, "load_mb_per_s": 64.2, "disk_bytes": 404, "disk_per_csv_mb_kb": 0.0, "rss_bytes": 5198327808, "rss_per_csv_mb_kb": 5944.8, "pk_p50_us": 23, "pk_p99_us": 67, "pk_mean_us": 25, "idx_p50_us": 134, "idx_p99_us": 384, "idx_mean_us": 162, "page_p50_us": 159, "page_p99_us": 231, "page_mean_us": 165, "write_p50_us": 29, "write_p99_us": 40, "write_mean_us": 29}
+== kevy 4 (aof=everysec) ==
+  appendfsync=everysec (confirmed by CONFIG GET)
+{"engine": "kevy4", "mode": "everysec", "rows": 2000000, "csv_mb": 853.9, "load_seconds": 14.02, "load_rows_per_s": 142656, "load_mb_per_s": 60.9, "disk_bytes": 1181097948, "disk_per_csv_mb_kb": 1350.7, "rss_bytes": 5509459968, "rss_per_csv_mb_kb": 6300.6, "pk_p50_us": 23, "pk_p99_us": 64, "pk_mean_us": 25, "idx_p50_us": 96, "idx_p99_us": 369, "idx_mean_us": 109, "page_p50_us": 158, "page_p99_us": 216, "page_mean_us": 161, "write_p50_us": 29, "write_p99_us": 68, "write_mean_us": 36}
+== kevy 4 (aof=always) ==
+  appendfsync=always (confirmed by CONFIG GET)
+{"engine": "kevy4", "mode": "always", "rows": 2000000, "csv_mb": 853.9, "load_seconds": 246.7, "load_rows_per_s": 8107, "load_mb_per_s": 3.5, "disk_bytes": 1181750835, "disk_per_csv_mb_kb": 1351.5, "rss_bytes": 5534842880, "rss_per_csv_mb_kb": 6329.6, "pk_p50_us": 23, "pk_p99_us": 59, "pk_mean_us": 24, "idx_p50_us": 141, "idx_p99_us": 384, "idx_mean_us": 168, "page_p50_us": 159, "page_p99_us": 203, "page_mean_us": 160, "write_p50_us": 2643, "write_p99_us": 3174, "write_mean_us": 2589}
+== kevy 4 (aof=tiered) ==
+  tiering budget=134217728 bytes, appendfsync=everysec
+{"engine": "kevy4", "mode": "tiered", "rows": 2000000, "csv_mb": 853.9, "load_seconds": 14.18, "load_rows_per_s": 141051, "load_mb_per_s": 60.2, "disk_bytes": 1533618333, "disk_per_csv_mb_kb": 1753.8, "rss_bytes": 4835667968, "rss_per_csv_mb_kb": 5530.1, "tier_budget_bytes": 2147483648, "tier_effective_target": 1616420242, "cold_keys": 627839, "cold_bytes": 725400253, "stub_bytes": 60272544, "index_reserved_bytes": 363416670, "vlog_size_bytes": 341281648, "demotions_total": 629064, "promotions_total": 1225, "used_memory": 1777767332, "pk_p50_us": 24, "pk_p99_us": 75, "pk_mean_us": 27, "idx_p50_us": 124, "idx_p99_us": 373, "idx_mean_us": 147, "page_p50_us": 164, "page_p99_us": 222, "page_mean_us": 166, "write_p50_us": 115, "write_p99_us": 153, "write_mean_us": 115}
+
+== results (/home/kevybench/pgcmp/results.jsonl) ==
+    engine/mode |     load MB/s |        pk p99 |       idx p99 |      page p99 |     write p99 | disk KB/csvMB |  rss KB/csvMB
+  postgres18/stock |          80.5 |         115us |         162us |         147us |        1457us |        1316.0 |         647.1
+     kevy4/none |          64.2 |          67us |         384us |         231us |          40us |           0.0 |        5944.8
+  kevy4/everysec |          60.9 |          64us |         369us |         216us |          68us |        1350.7 |        6300.6
+   kevy4/always |           3.5 |          59us |         384us |         203us |        3174us |        1351.5 |        6329.6
+   kevy4/tiered |          60.2 |          75us |         373us |         222us |         153us |        1753.8 |        5530.1
+=== ROUND 2 Tue Aug  4 04:06:50 AM PDT 2026 ===
+== dataset ==
+{"rows": 2000000, "bytes": 895417485, "mb": 853.9, "seconds": 43.8}
+== postgres 18 (stock config) ==
+{"engine": "postgres18", "mode": "stock", "rows": 2000000, "csv_mb": 853.9, "load_seconds": 9.29, "load_rows_per_s": 215188, "load_mb_per_s": 91.9, "disk_bytes": 1150787584, "disk_per_csv_mb_kb": 1316.0, "rss_bytes": 693563392, "rss_per_csv_mb_kb": 793.2, "db_bytes": 1158731455, "db_per_csv_mb_kb": 1325.1, "pk_p50_us": 67, "pk_p99_us": 106, "pk_mean_us": 71, "idx_p50_us": 126, "idx_p99_us": 164, "idx_mean_us": 126, "page_p50_us": 119, "page_p99_us": 167, "page_mean_us": 119, "write_p50_us": 819, "write_p99_us": 1646, "write_mean_us": 953}
+== kevy 4 (aof=none) ==
+{"engine": "kevy4", "mode": "none", "rows": 2000000, "csv_mb": 853.9, "load_seconds": 13.15, "load_rows_per_s": 152048, "load_mb_per_s": 64.9, "disk_bytes": 404, "disk_per_csv_mb_kb": 0.0, "rss_bytes": 5196238848, "rss_per_csv_mb_kb": 5942.4, "pk_p50_us": 23, "pk_p99_us": 76, "pk_mean_us": 26, "idx_p50_us": 138, "idx_p99_us": 386, "idx_mean_us": 164, "page_p50_us": 159, "page_p99_us": 214, "page_mean_us": 163, "write_p50_us": 29, "write_p99_us": 42, "write_mean_us": 29}
+== kevy 4 (aof=everysec) ==
+pgcompare: REFUSED — appendfsync is '', asked for 'everysec' — the run would be mislabelled
+=== ROUND 3 Tue Aug  4 04:08:23 AM PDT 2026 ===
+== dataset ==
+{"rows": 2000000, "bytes": 895417485, "mb": 853.9, "seconds": 44.1}
+== postgres 18 (stock config) ==
+{"engine": "postgres18", "mode": "stock", "rows": 2000000, "csv_mb": 853.9, "load_seconds": 9.29, "load_rows_per_s": 215265, "load_mb_per_s": 91.9, "disk_bytes": 1150787584, "disk_per_csv_mb_kb": 1316.0, "rss_bytes": 715890688, "rss_per_csv_mb_kb": 818.7, "db_bytes": 1158780607, "db_per_csv_mb_kb": 1325.2, "pk_p50_us": 68, "pk_p99_us": 99, "pk_mean_us": 71, "idx_p50_us": 124, "idx_p99_us": 180, "idx_mean_us": 125, "page_p50_us": 112, "page_p99_us": 147, "page_mean_us": 112, "write_p50_us": 746, "write_p99_us": 1587, "write_mean_us": 906}
+== kevy 4 (aof=none) ==
+{"engine": "kevy4", "mode": "none", "rows": 2000000, "csv_mb": 853.9, "load_seconds": 13.2, "load_rows_per_s": 151551, "load_mb_per_s": 64.7, "disk_bytes": 404, "disk_per_csv_mb_kb": 0.0, "rss_bytes": 5198389248, "rss_per_csv_mb_kb": 5944.9, "pk_p50_us": 22, "pk_p99_us": 64, "pk_mean_us": 24, "idx_p50_us": 128, "idx_p99_us": 384, "idx_mean_us": 150, "page_p50_us": 158, "page_p99_us": 239, "page_mean_us": 164, "write_p50_us": 29, "write_p99_us": 40, "write_mean_us": 29}
+== kevy 4 (aof=everysec) ==
+  appendfsync=everysec (confirmed by CONFIG GET)
+{"engine": "kevy4", "mode": "everysec", "rows": 2000000, "csv_mb": 853.9, "load_seconds": 14.22, "load_rows_per_s": 140673, "load_mb_per_s": 60.1, "disk_bytes": 1181288528, "disk_per_csv_mb_kb": 1350.9, "rss_bytes": 5509439488, "rss_per_csv_mb_kb": 6300.6, "pk_p50_us": 23, "pk_p99_us": 76, "pk_mean_us": 26, "idx_p50_us": 98, "idx_p99_us": 376, "idx_mean_us": 123, "page_p50_us": 159, "page_p99_us": 221, "page_mean_us": 163, "write_p50_us": 30, "write_p99_us": 86, "write_mean_us": 38}
+== kevy 4 (aof=always) ==
+  appendfsync=always (confirmed by CONFIG GET)
+{"engine": "kevy4", "mode": "always", "rows": 2000000, "csv_mb": 853.9, "load_seconds": 247.8, "load_rows_per_s": 8071, "load_mb_per_s": 3.4, "disk_bytes": 1181767865, "disk_per_csv_mb_kb": 1351.5, "rss_bytes": 5522821120, "rss_per_csv_mb_kb": 6315.9, "pk_p50_us": 23, "pk_p99_us": 73, "pk_mean_us": 26, "idx_p50_us": 146, "idx_p99_us": 389, "idx_mean_us": 170, "page_p50_us": 157, "page_p99_us": 206, "page_mean_us": 158, "write_p50_us": 2620, "write_p99_us": 3149, "write_mean_us": 2554}
+== kevy 4 (aof=tiered) ==
+  tiering budget=134217728 bytes, appendfsync=everysec
+{"engine": "kevy4", "mode": "tiered", "rows": 2000000, "csv_mb": 853.9, "load_seconds": 14.22, "load_rows_per_s": 140687, "load_mb_per_s": 60.1, "disk_bytes": 1533910101, "disk_per_csv_mb_kb": 1754.2, "rss_bytes": 4814848000, "rss_per_csv_mb_kb": 5506.3, "tier_budget_bytes": 2147483648, "tier_effective_target": 1616228818, "cold_keys": 629833, "cold_bytes": 727706235, "stub_bytes": 60463968, "index_reserved_bytes": 363416670, "vlog_size_bytes": 342362141, "demotions_total": 631050, "promotions_total": 1217, "used_memory": 1775462982, "pk_p50_us": 23, "pk_p99_us": 69, "pk_mean_us": 25, "idx_p50_us": 101, "idx_p99_us": 370, "idx_mean_us": 120, "page_p50_us": 167, "page_p99_us": 221, "page_mean_us": 169, "write_p50_us": 119, "write_p99_us": 161, "write_mean_us": 118}
+
+== results (/home/kevybench/pgcmp/results.jsonl) ==
+    engine/mode |     load MB/s |        pk p99 |       idx p99 |      page p99 |     write p99 | disk KB/csvMB |  rss KB/csvMB
+  postgres18/stock |          91.9 |          99us |         180us |         147us |        1587us |        1316.0 |         818.7
+     kevy4/none |          64.7 |          64us |         384us |         239us |          40us |           0.0 |        5944.9
+  kevy4/everysec |          60.1 |          76us |         376us |         221us |          86us |        1350.9 |        6300.6
+   kevy4/always |           3.4 |          73us |         389us |         206us |        3149us |        1351.5 |        6315.9
+   kevy4/tiered |          60.1 |          69us |         370us |         221us |         161us |        1754.2 |        5506.3
