@@ -1426,3 +1426,50 @@ fn multi_key_delete_and_rename_keep_the_index_honest() {
     std::thread::sleep(std::time::Duration::from_millis(300));
     assert!(indexed(&mut c).contains("row:99\r\n"), "a fresh write must still index");
 }
+
+/// A row that arrives by scope migration must be indexed like any other.
+///
+/// `MOVE-SCOPE-INGEST` replays the emitted frames straight into the
+/// store (`ops::scope_move`), which is not the write path, so the
+/// derived structures never heard about the rows: they existed in the
+/// keyspace and were invisible to every `IDX.QUERY`. Worse than the
+/// stale-entry direction, `IDX.VERIFY` cannot see this one either — it
+/// audits index entries against the store, not store rows against the
+/// index — so a migrated-into node under-answered silently.
+#[test]
+fn scope_ingested_rows_enter_the_index() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+
+    for i in 0..8 {
+        cmd(&mut c, &[b"HSET", format!("row:{i}").as_bytes(), b"age", format!("{}", 20 + i).as_bytes()]);
+    }
+    assert_eq!(
+        cmd(
+            &mut c,
+            &[b"IDX.CREATE", b"byage", b"ON", b"PREFIX", b"row:", b"FIELD", b"age", b"TYPE", b"i64", b"KIND", b"range"],
+        ),
+        b"+OK\r\n"
+    );
+    let indexed = |c: &mut std::net::TcpStream| -> String {
+        String::from_utf8_lossy(&query_ready(
+            c,
+            &[b"IDX.QUERY", b"byage", b"RANGE", b"0", b"999", b"LIMIT", b"200"],
+        ))
+        .into_owned()
+    };
+    assert!(indexed(&mut c).contains("row:0\r\n"));
+
+    // Exactly what a migration source ships: `<VERB> <key> …` frames.
+    let bulk: &[u8] = b"*4\r\n$4\r\nHSET\r\n$6\r\nrow:50\r\n$3\r\nage\r\n$2\r\n60\r\n\
+*4\r\n$4\r\nHSET\r\n$6\r\nrow:51\r\n$3\r\nage\r\n$2\r\n61\r\n";
+    let r = cmd(&mut c, &[b"MOVE-SCOPE-INGEST", b"row:", bulk]);
+    assert!(r.starts_with(b"+OK 2"), "ingest failed: {}", String::from_utf8_lossy(&r));
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    let after = indexed(&mut c);
+    for row in ["row:50", "row:51"] {
+        assert!(after.contains(&format!("{row}\r\n")), "{row} arrived but never indexed");
+    }
+    assert_eq!(cmd(&mut c, &[b"IDX.COUNT", b"byage", b"RANGE", b"0", b"999"]), b":10\r\n");
+}
