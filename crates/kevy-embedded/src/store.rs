@@ -10,7 +10,6 @@ use std::sync::Mutex;
 
 #[cfg(feature = "persist")]
 use kevy_persist::Argv;
-use kevy_store::ExpireStats;
 
 use crate::config::Config;
 use crate::shard::shard_idx;
@@ -360,42 +359,7 @@ impl Store {
         Ok(())
     }
 
-    // ---- maintenance ----------------------------------------------------
-
-    /// Run one TTL-reaper tick across every shard. Required call cadence in
-    /// `Manual` mode (~10×/s to match Redis `hz=10`). Returns the summed stats.
-    pub fn tick(&self) -> ExpireStats {
-        let mut total = ExpireStats::default();
-        for shard in self.shards.iter() {
-            let stats = {
-                let mut g = lock_write(shard);
-                // Tiering upkeep: budget re-resolution + the index/view
-                // floor feed, then the tick continuation of the
-                // budgeted spill.
-                #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
-                crate::shard::tier_tick_upkeep(&mut g, self.config.tier_budget, self.shards.len());
-                let _ = g.store.demote_step();
-                let _ = g.store.tier_compact_tick();
-                g.store.tick_expire(self.config.reaper_samples, self.config.reaper_max_rounds)
-            };
-            total.sampled += stats.sampled;
-            total.expired += stats.expired;
-            // Auto-rewrite rides the caller-driven tick in Manual mode; the
-            // non-blocking path releases the lock for the disk spill.
-            #[cfg(feature = "persist")]
-            crate::reaper::concurrent_auto_rewrite(
-                shard,
-                kevy_persist::RewritePolicy {
-                    pct: self.config.auto_aof_rewrite_pct,
-                    min_size: self.config.auto_aof_rewrite_min_size,
-                    bytes: self.config.auto_aof_rewrite_bytes,
-                    interval_secs: self.config.auto_aof_rewrite_interval_secs,
-                },
-                self.config.metric_sink.as_ref(),
-            );
-        }
-        total
-    }
+    // ---- maintenance (Store::tick lives in store_tick.rs) ---------------
 
     /// The B9 transparency suite's deterministic demotion seam
     /// (`KEVY_TEST_FORCE_DEMOTE` genre): demote `key` to the cold tier

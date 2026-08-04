@@ -160,6 +160,7 @@ mod replica_runner;
 #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
 mod replica_source;
 mod store;
+mod store_tick;
 mod store_inner;
 mod store_wire;
 #[cfg(feature = "persist")]
