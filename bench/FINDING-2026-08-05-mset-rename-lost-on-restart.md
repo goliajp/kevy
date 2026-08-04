@@ -125,8 +125,13 @@ worth a round of its own rather than a quick patch:
   that is really there. The commit checks the key is still absent.
 * **The two halves are not atomic** — they live in two shards' AOFs. A
   crash between them replays the key under both names. That is the
-  chosen direction, written down rather than left to luck: a duplicate
-  is recoverable by hand, a vanished key is not.
+  chosen direction: a duplicate is recoverable by hand, a vanished key
+  is not.
+
+  **And it is measured, not asserted.** Suppressing the source's record
+  (the exact window a crash opens) and restarting gives `src` and `dst`
+  both holding the value, DBSIZE 2 — the contract does what it says. A
+  crash contract nobody has executed is a wish; this one was run.
 
 Measured across a restart, `appendfsync always`: string (TTL carried),
 hash, list, set, zset all arrive with the source gone; a refused
