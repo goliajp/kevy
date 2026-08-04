@@ -153,7 +153,7 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
         // EVAL / EVALSHA / EVAL_RO / EVALSHA_RO / SCRIPT.
         || crate::cmd_lua::dispatch_lua(ctx, cmd, store, args, out)
         || dispatch_generic(cmd, store, args, out)
-        || dispatch_multikey_stub(cmd, out);
+        || crate::dispatch_replay::dispatch_multikey_stub(cmd, store, args, out);
     if !handled {
         let shown = String::from_utf8_lossy(name);
         encode_error(out, &format!("ERR unknown command '{shown}'"));
@@ -472,22 +472,3 @@ fn dispatch_generic<A: ArgvView + ?Sized>(
     true
 }
 
-/// Multi-key & pub/sub verbs are served by the runtime's cross-shard gather;
-/// they only reach `dispatch` when malformed (route fell back to `Local`), so
-/// here they just emit the arity error.
-fn dispatch_multikey_stub(cmd: &[u8], out: &mut Vec<u8>) -> bool {
-    match cmd {
-        b"MSET" => wrong_args(out, "mset"),
-        b"MGET" => wrong_args(out, "mget"),
-        b"SINTER" => wrong_args(out, "sinter"),
-        b"SUNION" => wrong_args(out, "sunion"),
-        b"SDIFF" => wrong_args(out, "sdiff"),
-        b"KEYS" => wrong_args(out, "keys"),
-        b"SCAN" => wrong_args(out, "scan"),
-        b"RANDOMKEY" => wrong_args(out, "randomkey"),
-        b"SUBSCRIBE" => wrong_args(out, "subscribe"),
-        b"PUBLISH" => wrong_args(out, "publish"),
-        _ => return false,
-    }
-    true
-}

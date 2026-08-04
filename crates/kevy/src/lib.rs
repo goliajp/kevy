@@ -72,6 +72,7 @@ mod dispatch_collections;
 mod dispatch_collections_v127;
 mod dispatch_resp3;
 mod dispatch_geo;
+mod dispatch_replay;
 mod dispatch_stream;
 mod elect_persist;
 mod ops;

@@ -1040,3 +1040,55 @@ fn relative_ttl_frames_do_not_reanchor_on_replay() {
     });
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `MSET` and a same-shard `RENAME` must survive a restart.
+///
+/// Both are served to clients by the routing layer, and the op records
+/// its effect into the AOF **using the same verb** — but replay goes
+/// through the local dispatcher, where `MSET` answered an arity error
+/// and `RENAME` was not implemented at all. The record was written and
+/// could not be replayed, so the write was acknowledged, readable, and
+/// gone after the next start. Measured before the fix, with
+/// `appendfsync always`: all four `MSET` keys absent, and `RENAME`
+/// *reverted* — the source key alive again, the destination missing.
+#[test]
+fn mset_and_rename_survive_a_restart() {
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-persist-replayverbs-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    // One shard, so RENAME takes the same-shard atomic op (the
+    // cross-shard two-step is a separate record path).
+    let nshards = 1;
+
+    with_runtime(free_port(), &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.write_all(&req(&[b"CONFIG", b"SET", b"appendfsync", b"always"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        c.write_all(&req(&[b"MSET", b"m:1", b"a", b"m:2", b"b"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        c.write_all(&req(&[b"SET", b"src", b"v"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        c.write_all(&req(&[b"RENAME", b"src", b"dst"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+    });
+
+    with_runtime(free_port(), &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.write_all(&req(&[b"GET", b"m:1"])).unwrap();
+        read_reply(&mut c, b"$1\r\na\r\n");
+        c.write_all(&req(&[b"GET", b"m:2"])).unwrap();
+        read_reply(&mut c, b"$1\r\nb\r\n");
+        c.write_all(&req(&[b"GET", b"dst"])).unwrap();
+        read_reply(&mut c, b"$1\r\nv\r\n");
+        // …and the rename really moved it rather than copying.
+        c.write_all(&req(&[b"GET", b"src"])).unwrap();
+        read_reply(&mut c, b"$-1\r\n");
+    });
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
