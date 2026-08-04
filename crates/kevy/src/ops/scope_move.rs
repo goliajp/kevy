@@ -252,6 +252,18 @@ pub(crate) fn cmd_move_scope_ingest<A: ArgvView + ?Sized>(
             Ok(Some((argv, consumed))) => {
                 scratch.clear();
                 crate::dispatch::dispatch_into(ctx, store, &argv, &mut scratch);
+                // The rows land by replaying frames straight into the
+                // store, which bypasses the write path's derived-
+                // structure hook — an ingested row used to exist in the
+                // keyspace and be invisible to every IDX.QUERY, with
+                // IDX.VERIFY unable to see it either (it audits index
+                // entries against the store, not store rows against the
+                // index). Every emitted frame is `<VERB> <key> …` by
+                // construction (`scope_move_emit`), so the key is
+                // argv[1].
+                if let Some(key) = argv.get(1) {
+                    note_ingested_key(ctx, store, key);
+                }
                 buf.drain(..consumed);
                 applied += 1;
             }
@@ -265,6 +277,17 @@ pub(crate) fn cmd_move_scope_ingest<A: ArgvView + ?Sized>(
     out.extend_from_slice(reply.as_bytes());
 }
 
+
+/// Refresh the derived structures for one ingested key — the
+/// `Commands::on_write` body, reachable from the ops layer.
+fn note_ingested_key(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
+    if ctx.state.catalogs.index_nonempty() {
+        crate::index_runtime::on_write(ctx, store, key);
+    }
+    if ctx.state.catalogs.view_nonempty() {
+        crate::view_runtime::on_write(ctx, store, key);
+    }
+}
 
 #[cfg(test)]
 mod tests {
