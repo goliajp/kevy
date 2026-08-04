@@ -96,11 +96,12 @@ impl<C: Commands> Shard<C> {
     /// away a value that is really there. If the key is back, the
     /// client's own record is the truth and this one is not needed.
     ///
-    /// Crash contract: the two halves land in two different shards' AOFs
-    /// and are not atomic. A crash after the put's record and before this
-    /// one replays the key under BOTH names. That is the deliberate
-    /// direction — a duplicate is recoverable by hand, a vanished key is
-    /// not.
+    /// Crash contract, measured rather than assumed: the two halves land
+    /// in two different shards' AOFs and are not atomic. Dropping this
+    /// record (the window a crash would open) and restarting replays the
+    /// key under BOTH names — `src` and `dst` both present, DBSIZE 2.
+    /// That is the deliberate direction: a duplicate is recoverable by
+    /// hand, a vanished key is not.
     pub(crate) fn log_rename_source_committed(&mut self, src: &[u8]) {
         if self.store.key_exists(src) {
             return;
