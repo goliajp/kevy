@@ -20,6 +20,7 @@ mod catalog_sidecar;
 mod composite;
 mod rowvalues;
 mod segment;
+mod advise;
 mod segment_claused;
 mod table;
 mod table_verify;
@@ -39,6 +40,7 @@ pub use composite::{
     RowDerivation, composite_bounds, composite_encode, parse_where,
 };
 pub use segment::{Cursor, Segment, SegmentStats};
+pub use advise::{ADVISE_CAP, AdviseEntry, AdviseLog, AdviseShape, advice_of};
 pub use segment_claused::{
     ClausedPage, ColdEntryRow, FacetBucket, ScalarClauses, ScalarHit, claused_over, fold_facets,
     merge_claused, values_pass,
