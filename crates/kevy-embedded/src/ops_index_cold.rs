@@ -40,9 +40,14 @@ impl Store {
     ) -> KevyResult<IndexPage> {
         let limit = limit.clamp(1, 100_000);
         let mut all: Vec<(IndexValue, Vec<u8>)> = Vec::new();
+        let probe = self.usage_cell(name);
         self.for_each_segment_windowed(name, |spec, seg, win| {
             let (hits, _) = seg.range(min, max, cursor, limit);
             all.extend(hits.into_iter().map(|(k, v)| (v, k)));
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(w) = win {
+                crate::ops_index::advise::probe_window(&probe, w, min);
+            }
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(w) = win.filter(|w| w.has_cold()) {
                 // The cursor goes INTO the cold walk so the limit
@@ -74,8 +79,13 @@ impl Store {
 
     fn idx_count_gather(&self, name: &[u8], min: &IndexValue, max: &IndexValue) -> KevyResult<u64> {
         let mut total = 0u64;
+        let probe = self.usage_cell(name);
         self.for_each_segment_windowed(name, |spec, seg, win| {
             total += seg.count(min, max);
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(w) = win {
+                crate::ops_index::advise::probe_window(&probe, w, min);
+            }
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(w) = win.filter(|w| w.has_cold()) {
                 total += w

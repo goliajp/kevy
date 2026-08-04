@@ -70,15 +70,17 @@ impl CatalogState {
         self.usage.read().unwrap_or_else(PoisonError::into_inner).get(name).cloned()
     }
 
-    /// Every declared path's `(name, hits, last_hit_s, declared_s)`.
-    pub(crate) fn usage_snapshot(&self) -> Vec<(Vec<u8>, u64, i64, i64)> {
+    /// Every declared path's `(name, hits, last_hit_s, declared_s,
+    /// min_margin)`.
+    pub(crate) fn usage_snapshot(&self) -> Vec<(Vec<u8>, u64, i64, i64, i64)> {
         self.usage
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .iter()
             .map(|(n, c)| {
                 let (hits, last, declared) = c.read();
-                (n.clone(), hits, last, declared)
+                let margin = c.min_margin.load(std::sync::atomic::Ordering::Relaxed);
+                (n.clone(), hits, last, declared, margin)
             })
             .collect()
     }

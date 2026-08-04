@@ -99,6 +99,26 @@ fn apply_auto_declares_each_shape_within_budget() {
 }
 
 #[test]
+fn narrow_advice_needs_a_window_an_observation_and_a_bucket_of_margin() {
+    let mut spec = cat().get(b"ev").expect("declared").clone();
+    assert_eq!(narrow_advice(&spec, 100), None, "windowless table never advises");
+    spec.window =
+        Some(crate::WindowSpec { column: b"at".to_vec(), span: 100, bucket: 10 });
+    assert_eq!(narrow_advice(&spec, i64::MAX), None, "unobserved path stays quiet");
+    assert_eq!(narrow_advice(&spec, 0), None, "a query touched the boundary");
+    assert_eq!(narrow_advice(&spec, -5), None, "a query probed the cold side");
+    assert_eq!(narrow_advice(&spec, 7), None, "margin under one bucket");
+    let a = narrow_advice(&spec, 37).expect("bucket-aligned narrowing");
+    assert_eq!(
+        a,
+        "WINDOW at SPAN 100 — every observed query kept a margin of 37; SPAN 70 still serves them"
+    );
+    // A margin at (or past) the whole span still leaves one bucket.
+    let a = narrow_advice(&spec, 100).expect("floor at one bucket");
+    assert!(a.ends_with("SPAN 10 still serves them"), "{a}");
+}
+
+#[test]
 fn advice_renders_each_shape_and_refuses_ungrounded_names() {
     let cat = cat();
     let argv: Vec<Vec<u8>> = vec![b"q".to_vec()];

@@ -113,6 +113,7 @@ fn run_scalar_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8]) ->
                 Ok(b) => b,
                 Err(chunk) => return HitsOrChunk::Chunk(chunk),
             };
+            super::probe_window(ctx, &q.name, win, &min);
             scalar_range_or_count(q, verb, spec, seg, win, &min, &max)
         }
         // VERIFY answers "does the index still agree with the keyspace?".

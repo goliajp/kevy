@@ -70,6 +70,14 @@ impl WindowRt {
         !self.cold.is_empty()
     }
 
+    /// The current eviction boundary: entries with window value below
+    /// this are cold. `i64::MIN` = nothing has evicted yet. Read by
+    /// the window-narrowing observation (a query's `lower - boundary`
+    /// margin), never interpreted beyond ordering.
+    pub fn boundary(&self) -> i64 {
+        self.w
+    }
+
     /// The write path saw `row_key` change: shadow any cold entry it
     /// may have. A bloom false positive spends one stray set entry.
     pub fn on_row_write(&mut self, row_key: &[u8]) {

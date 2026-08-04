@@ -20,6 +20,25 @@ use kevy_index::{AdviseShape, advice_of};
 use crate::store::Store;
 use crate::{KevyError, KevyResult};
 
+/// Feed one windowed query's probe depth (`lower - boundary`) into
+/// the path's cell — the window-narrowing observation. Skipped until
+/// the boundary exists and for bounds outside the window shape; a
+/// per-shard repeat just re-records the same minimum.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn probe_window(
+    cell: &Option<std::sync::Arc<kevy_index::UsageCell>>,
+    win: &kevy_window::WindowRt,
+    lower: &kevy_index::IndexValue,
+) {
+    let Some(c) = cell else { return };
+    if win.boundary() == i64::MIN {
+        return;
+    }
+    if let Some(v) = kevy_index::window_value_of(lower, win.shape) {
+        c.probe(v.saturating_sub(win.boundary()));
+    }
+}
+
 /// One [`Store::idx_advise`] row: how often the family was refused,
 /// the access path it asked for, and the declaration that serves it.
 #[derive(Debug, Clone)]
@@ -56,29 +75,45 @@ impl Store {
                 })
                 .collect()
         };
-        // The reclaim face: declared paths no query has ever hit,
-        // each with its age — dropping stays a human act.
+        rows.extend(self.reclaim_rows());
+        rows
+    }
+
+    /// The window-narrowing face, then the reclaim face: a windowed
+    /// path whose every observed probe left more than a bucket of
+    /// margin advises a smaller SPAN; a declared path no query has
+    /// ever hit advises its own drop, with its age. Dropping and
+    /// narrowing both stay human acts.
+    fn reclaim_rows(&self) -> Vec<IdxAdvice> {
         let now_s = (kevy_store::now_unix_ms() / 1000) as i64;
-        let mut unused: Vec<IdxAdvice> = self
-            .indexes
-            .usage
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .iter()
-            .filter(|(_, c)| c.read().0 == 0)
-            .map(|(name, c)| {
+        let mut narrow: Vec<IdxAdvice> = Vec::new();
+        let mut unused: Vec<IdxAdvice> = Vec::new();
+        let tables = self.tables.catalog.read().unwrap_or_else(PoisonError::into_inner);
+        for (name, c) in
+            self.indexes.usage.read().unwrap_or_else(PoisonError::into_inner).iter()
+        {
+            let margin = c.min_margin.load(std::sync::atomic::Ordering::Relaxed);
+            if let Some(dot) = name.iter().position(|&b| b == b'.')
+                && let Some(spec) = tables.get(&name[..dot])
+                && let Some(advice) = kevy_index::narrow_advice(spec, margin)
+            {
+                narrow.push(IdxAdvice { count: 0, name: name.clone(), advice });
+            }
+            let (hits, _, declared) = c.read();
+            if hits == 0 {
                 let n = String::from_utf8_lossy(name).into_owned();
-                let age = (now_s - c.read().2).max(0);
-                IdxAdvice {
+                let age = (now_s - declared).max(0);
+                unused.push(IdxAdvice {
                     count: 0,
                     name: name.clone(),
                     advice: format!("IDX.DROP {n}  (never hit in the {age}s since declare)"),
-                }
-            })
-            .collect();
+                });
+            }
+        }
+        narrow.sort_by(|a, b| a.name.cmp(&b.name));
         unused.sort_by(|a, b| a.name.cmp(&b.name));
-        rows.append(&mut unused);
-        rows
+        narrow.extend(unused);
+        narrow
     }
 
     /// Record one refused declaration family; past the threshold, on
@@ -184,6 +219,11 @@ impl Store {
         if let Some(c) = cell {
             c.hit((kevy_store::now_unix_ms() / 1000) as i64);
         }
+    }
+
+    /// The usage cell for a declared path (None = not declared).
+    pub(crate) fn usage_cell(&self, name: &[u8]) -> Option<std::sync::Arc<kevy_index::UsageCell>> {
+        self.indexes.usage.read().unwrap_or_else(PoisonError::into_inner).get(name).cloned()
     }
 
     /// Is `name` a path the auto loop declared (any table's ledger)?

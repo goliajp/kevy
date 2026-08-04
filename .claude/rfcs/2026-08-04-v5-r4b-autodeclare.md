@@ -115,6 +115,27 @@ AUTODECLARE 预算)+ 未见过的查询负载 → 预算内家族全部由引擎
 auto 打标路径服务,预算外家族保持被拒并被 advise。修尾
 (`0ebc0eb5`/`35d68f85`):consumergate 消费者位字面量与 lockfile。
 
+## 二d、R4b-c 实施记录(完轮 —— R4b 单元整段闭)
+
+窗口收窄 advise 的关键化简:**margin = min(lower_bound −
+boundary),无需跟踪窗口 max**(boundary ≈ max − span,bucket 误差
+内;margin 恒正 = 查询从不触冷 → SPAN 可收窄 bucket 对齐的
+margin)。UsageCell 加 `min_margin`(i64::MAX = 未观察;手写
+Default,derive 全零会误读"观察过 margin 0");WindowRt 暴露
+`boundary()`;观察点 = 两面窗口查询的 win 分支(server:
+run_scalar_query / run_claused_query / run_claused_count 的 bounds
+后;embedded:cold/claused 四入口),`window_value_of` 让 Plain 与
+CompositeLed 两形通吃,boundary 未立(i64::MIN)不观察。渲染 =
+kevy-index `narrow_advice`(单一共享规则:窗口存在 + 有观察 +
+margin > bucket → "WINDOW col SPAN n — margin m; SPAN n−m' still
+serves them",新 span 保底一个 bucket);ADVISE 行序 = refusal
+(count 降序)→ narrow(count 0)→ unused(count 0)。只 advise
+永不 auto。测试:stone 规则 6 断言;embedded 集成走全环(slide →
+近端查询出建议 → 深查询抹除)。**测试边界(显式)**:server 面
+narrow 渲染分支(usage 快照 5 元组 + 12 行渲染差异)未单独 e2e ——
+机制本体(probe/规则/抹除)由共享 stone + embedded 集成覆盖;若属
+主要求,window_scalar_e2e harness 现成可补。
+
 ## 三、发散区
 
 - 阈值/上限数字(16 次、128 项、每表 n)全部实测调,不预辩。
