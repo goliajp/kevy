@@ -81,8 +81,9 @@ memory it could not demote:
 > 18.7 bytes per entry, resident, non-demotable.
 
 **⚠ That reading was wrong, and the decomposition says why.** The real
-per-entry cost is a flat ~104 B (96 B of it the tier stub, a constant
-`bench/memgate.sh` already gates). Below saturation each new stub is
+per-entry cost is a flat ~104 B (96 B of it the **keyspace entry**
+every key pays tiered or not — a constant `bench/memgate.sh` already
+gates). Below saturation each new stub is
 offset by a 4 KiB value being demoted, so `used_memory` sits pinned at
 the budget and the *observed* marginal reads far too low. 18.7 B/entry
 was the residual of a rising floor against a falling ceiling, not a
@@ -121,8 +122,9 @@ Two multipliers, two different owners:
 * **Per-entry resident cost** is the *tiering* account, and it is what
   sets the true ratio ceiling. It means the claim must be stated per
   value size — and the direction is the opposite of what this sentence
-  originally guessed: the binding cost is the ~96 B stub, which is the
-  *same* at every value size, so **small values are worse, not better**
+  originally guessed: the binding cost is the ~96 B **keyspace entry**
+  (the stub itself is 24 B inline and free of heap), identical at every
+  value size, so **small values are worse, not better**
   (2.65× at 256 B against 39.2× at 4 KiB).
 * **The RSS multiplier** is the *allocator* account. The v5 vision
   already names a self-built `kevy-alloc` as first priority against a
@@ -180,7 +182,8 @@ more; it spent the extra on resident memory and broke the budget.
 * ~~Why the per-entry cost accelerates~~ — **answered**, and the answer
   is that it never accelerated:
   `FINDING-2026-08-05-capacity-per-entry-decomposition.md`. The cost is
-  a flat ~104 B/entry throughout (96 B of it the tier stub); below
+  a flat ~104 B/entry throughout (96 B of it the keyspace entry, which
+  tiering cannot reclaim); below
   saturation each new stub was offset by a 4 KiB value being demoted,
   so `used_memory` stayed pinned at the budget and the slope read low.
   The ceiling is where a non-demotable floor meets the budget, which
