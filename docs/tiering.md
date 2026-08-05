@@ -353,7 +353,11 @@ Stated honestly, with the measured/pending status of each number:
 - Snapshot / `BGREWRITEAOF` / replication full-sync on a mostly-cold
   store stream cold values from the pinned log **without promoting
   anything** — peak extra RAM is one value, and zero cold values are
-  lost from a rewrite (gated).
+  lost from a rewrite. **Measured 2026-08-05, not gated:** 60 000 keys
+  with 54 912 of them cold, `BGREWRITEAOF`, restart — all 60 000 back,
+  every spot-checked key across the range its full length, AOF clean.
+  `tiergate`'s L10 line for this is still `PENDING`, so the claim rests
+  on that measurement rather than on CI.
 - **`used_memory` ≤ budget × 1.05 sustained** is its own gate line
   (`tiergate` L8), including the auto-probe answering correctly in a
   cgroup container and on bare metal. It is the *logical* bound — the
