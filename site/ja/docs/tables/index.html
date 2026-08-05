@@ -65,6 +65,8 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20</code></pre></figure>
     COLUMN name i64|f64|str [COLUMN ...]
     [INDEX col range|unique [VALUES col ...]] ...
     [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] ...
+    [WINDOW col SPAN n BUCKET n]   # スライディング窓（本ページは未訳、英語版参照）
+    [AUTODECLARE n]    # エンジンに最大 n 本の経路を足させる——下記参照
 TABLE.ENSURE ...       # TABLE.DECLARE の起動時イディオム——下記参照
 TABLE.REPLACE ...      # 明示の drop + declare + 再構築
 TABLE.DROP name        # drops the table + its compiled indexes; 1|0
@@ -93,6 +95,12 @@ IDX.QUERY user.age RANGE 0 100 FACET dept
 IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name email</code></pre></figure>
 <p><code>FILTER</code> / <code>SORT</code> / <code>DISTINCT</code> / <code>FACET</code> / <code>OFFSET</code> が読むのは、インデックスが <b><code>VALUES</code> 宣言の時点で保存した</b>カラムです——全文検索の原型と同じ句の文法、同じ「shard をまたいで厳密」の意味論です（<a href="../text-search/">text-search.md</a>）。<code>FILTER</code> はページより前に適用されるので、深い順位の適格行も <code>LIMIT</code> に届きます。<code>FACET</code> はマッチ集合全体を数え、欠けた値はどちらの向きでも最後に並びます。インデックスが保存していないフィールドの指名はエラーで、保存しているフィールドの名前を挙げて答えます。駆動する述語は常に、インデックスされた range / EQ / WHERE です——インデックスなしの <code>WHERE</code> は存在しません。</p>
 <p><b>index-only クエリは行にゼロ回しか触れません。</b>FILTER / SORT / COUNT のクエリは RAM 常駐のインデックスだけで答えます——行読み取りカウンタはゲートスイートで <code>== 0</code> と表明されています（<code>bench/tablegate.sh</code>）。これが、この 2 つの機能を一緒に設計した狙いのティアリング相乗効果です。<a href="../tiering/">透過的ティアリング</a>をオンにすれば、全行コールドなテーブルが index-only クエリを<b>ディスク読み取りゼロ</b>で捌き、最後の hydration ページ（<code>FIELDS …</code>）だけがコールド読み取りを払います——1 行 1 回、バッチで。<code>VALUES</code> カラムのないインデックスは、メモリとクエリパスにおいて、それを一度も宣言しないストアのインデックスとバイト単位で同一です（宣言しなければゼロコストのゲート）。</p>
+<h2 id="autodeclareあなたが書かなかった経路"><code>AUTODECLARE</code>：あなたが書かなかった経路</h2>
+<p>インデックスを張っていない列へのクエリは、名前つきで拒否されます。その拒否はあなたのワークロードについての事実でもあり、<code>IDX.ADVISE</code> は繰り返し当たっている形を見せてくれます。<code>AUTODECLARE n</code> はこう言うことです——<b>同じ形が十分な回数拒否され、しかもそれが宣言済みの列の上に着地するなら、その経路は私の代わりに宣言してよい。最大 n 本まで。</b></p>
+<p>すべてが意図的に有界です：</p>
+<ul><li><b>頼まなければ動きません。</b> 句がなければループもありません。既定値ではありません。</li><li><b>上限はあなたが書いた数です。</b> 予算を使い切れば、そのクエリは拒否され続け、形は <code>IDX.ADVISE</code> に残ってあなたが読むのを待ちます——エンジンが自分の上限を黙って上げることはありません。</li><li><b>宣言済みの列の上だけ。</b> テーブルが宣言していない列を指す形は決して着地しません。<code>IDX.ADVISE</code> はそれでも報告するので、答えはあなたのものです。</li><li><b>追加のみ。</b> インデックスを落とすのは人の仕事です。読み違いの最悪でも有界のメモリ浪費であって、経路の消失ではありません。</li><li><b>見えます。</b> こうして作られたインデックスは <code>IDX.LIST</code> で <code>auto</code> 印を持ち、テーブルの spec にも台帳が残ります——どれを自分が書き、どれをエンジンが足したのか、いつでも読み返せます。</li><li><b>クエリの答えの中では起きません。</b> 閾値を越えたそのクエリはエラーを受け取り、次のクエリが経路の構築中を見つけます。</li></ul>
+<p><b>「十分な回数」は同じ形が 16 回拒否されることです。</b> この数は定数であって、つまみではありません：テーブルごとの閾値は、まさにこのエンジンが不要だと主張しているワークロードごとのチューニングそのものですし、形がゆっくり現れるワークロードはどのみち 16 回の拒否を先に払います。ここに書いてあるのは、<code>IDX.ADVISE</code> を眺めて「なぜまだ何も起きないのか」と思っている運用者がこの数を知る資格があるからで、設定できるからではありません。</p>
+<p>これはクエリプランナではありません。そしてその違いこそが要点です：エンジンは<b>どの経路を走るか</b>を選びません——あなたのクエリが自分で名指しします。<code>AUTODECLARE</code> は、あなたの招きで、あなたの予算の中で、あなたに見える場所で、宣言を広げるだけです。クエリ時は法則のままです：宣言された経路を走り、それ以外は名前つきで拒否する。</p>
 <h2 id="null一意性そして何が強制されるか">NULL、一意性、そして何が強制されるか</h2>
 <ul><li><b>NULL = 欠けたフィールド。</b>必須のカラムはありません。インデックス対象カラムを欠く行は、単にそのインデックスにいないだけです。エンジンの <code>CHECK</code> も、既定値も、NOT NULL もありません——制約はレシピです（<a href="../cookbook/#5-check制約と複数キー不変条件">制約のレシピ</a>、アトミックブロック）。</li><li>テーブル層の<b>一意性は、強制ではなく検証です</b>。<code>unique</code> インデックスは <code>IDX.CREATE KIND unique</code> が築くのと同じフェンスで（<a href="../indexes/#一意性はフェンスであってロックではない">indexes.md</a>——予約パターンで競合なしにできます）、<code>TABLE.VERIFY</code> は <code>duplicates</code> を報告します。エンジンが後から書き込みを拒否するのではありません。</li></ul>
 <h2 id="それがではないもの">それが「ではない」もの</h2>
@@ -121,7 +129,7 @@ store.table_drop(b"user");</code></pre></figure>
 <p>書き込みコストは標準的なインデックス税です。コンパイルされたインデックス 1 本につき、合致する書き込みごとにフィールド読み取り 1 回とセグメント更新 1 回。空のカタログのコストは、取られない分岐 1 つです。</p>
 <h2 id="参照">参照</h2>
 <ul><li><a href="../indexes/">indexes.md</a>——テーブルのコンパイル先であるインデックスエンジン。</li><li><a href="../tiering/">tiering.md</a>——一緒に設計されたもう半分。インデックスはホット、行はコールド。</li><li><a href="../rds-workloads/">rds-workloads.md</a>——SQL 語彙の完全な対応表(何がコンパイルでき、何がレシピで、何が拒否されるか)。</li><li><a href="../cookbook/">cookbook.md</a>——複合順序とスキーマ移植のレシピ。</li><li><a href="../views/">views.md</a>——同じインデックスの上の、名前つきの合成。</li><li><a href="../table-migration/">table-migration.md</a>——手書きインデックスからの移行、8 つの教訓。</li></ul></main>
-  <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#宣言モデル">宣言モデル</a></li><li class="l2"><a href="#文法">文法</a></li><li class="l2"><a href="#起動パターンensure">起動パターン：ensure</a></li><li class="l2"><a href="#複合-orderpath-の意味論">複合 ORDERPATH の意味論</a></li><li class="l2"><a href="#テーブルをクエリする">テーブルをクエリする</a></li><li class="l2"><a href="#null一意性そして何が強制されるか">NULL、一意性、そして何が強制されるか</a></li><li class="l2"><a href="#それがではないもの">それが「ではない」もの</a></li><li class="l2"><a href="#kevy-sqlスキーマは送るのではなくコンパイルする">kevy-sql——スキーマは送るのではなく、コンパイルする</a></li><li class="l2"><a href="#組み込み">組み込み</a></li><li class="l2"><a href="#性能">性能</a></li><li class="l2"><a href="#参照">参照</a></li></ul></aside>
+  <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#宣言モデル">宣言モデル</a></li><li class="l2"><a href="#文法">文法</a></li><li class="l2"><a href="#起動パターンensure">起動パターン：ensure</a></li><li class="l2"><a href="#複合-orderpath-の意味論">複合 ORDERPATH の意味論</a></li><li class="l2"><a href="#テーブルをクエリする">テーブルをクエリする</a></li><li class="l2"><a href="#autodeclareあなたが書かなかった経路">AUTODECLARE：あなたが書かなかった経路</a></li><li class="l2"><a href="#null一意性そして何が強制されるか">NULL、一意性、そして何が強制されるか</a></li><li class="l2"><a href="#それがではないもの">それが「ではない」もの</a></li><li class="l2"><a href="#kevy-sqlスキーマは送るのではなくコンパイルする">kevy-sql——スキーマは送るのではなく、コンパイルする</a></li><li class="l2"><a href="#組み込み">組み込み</a></li><li class="l2"><a href="#性能">性能</a></li><li class="l2"><a href="#参照">参照</a></li></ul></aside>
 </div>
 
 <script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
