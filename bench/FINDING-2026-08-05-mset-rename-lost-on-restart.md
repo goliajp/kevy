@@ -141,7 +141,11 @@ cannot quietly make it pass.
 
 ## What was run against the finished branch
 
-* `cargo test -p kevy` — 92 suites, 0 failed.
+* **`cargo test --workspace`** — the project's documented test command,
+  and the one I had been substituting a single crate for: **223 suites,
+  2 345 tests, 0 failed.** It is the run that covers `kevy-embedded`
+  (whose `classify_prefix_rows` twin this work edited), `kevy-cli`,
+  `kevy-client` and the rest — none of which `-p kevy` touches.
 * **`crashgate`** — the SIGKILL matrix these changes sit under: 6 kill
   cells (append/rewrite/snapshot/feed × everysec/always/4-shard), 4
   windowed cells, 5 injected-damage cells. **All PASS.** Worth running
