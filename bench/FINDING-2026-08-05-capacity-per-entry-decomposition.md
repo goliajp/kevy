@@ -92,17 +92,43 @@ Checked against the lx64 sweep, which knew nothing about this model:
 Within 9 %, and the residual is exactly what the model leaves out (the
 hot values and index still resident alongside the stubs).
 
+### Then tested where it actually matters, rather than trusting it
+
+A formula derived from one workload and extrapolated is exactly what
+this round has already been wrong about twice (a "plateau" that was a
+staircase, a ceiling estimate off by 14 %). So the small-value end — the
+one that changes the product claim — was measured, not asserted. Same
+16 MB budget, same keys, only the value size varied:
+
+| value size | predicted | **measured** |
+|---:|---:|---:|
+| 256 B | 2.67× | **2.65×** |
+| 1 KiB | 10.7× | **10.43×** |
+| 4 KiB | 42.7× | **39.2×** (lx64, full scale) |
+
+The model holds across a 16× span of value sizes. The 4 KiB point sits
+slightly under prediction because at full scale more than stubs is
+resident; the two small-value points land within 3 %.
+
+**And at 256 B the budget is not merely approached, it is abandoned.**
+`used_memory` passes the 16 MB budget by 200 000 entries and then climbs
+linearly — 77 MB at 800 000, nearly 5× the budget — because demoting a
+256 B value frees less than the 96 B stub it leaves behind plus the
+accounting it takes to get there. There is no configuration of this
+workload where the tier holds its bound.
+
 ## What this means for the capacity claim
 
 The claim now has a shape rather than a single number, and the shape is
 uncomfortable in a useful way:
 
-| value size | key | ceiling |
-|---:|---:|---:|
-| 256 B | 9 B | **2.7×** |
-| 4 KiB | 9 B | 42.7× |
-| 4 KiB | 48 B | 30.3× |
-| 64 KiB | 9 B | 682.7× |
+| value size | key | ceiling | source |
+|---:|---:|---:|---|
+| 256 B | 9 B | **2.65×** | measured |
+| 1 KiB | 9 B | **10.43×** | measured |
+| 4 KiB | 9 B | **39.2×** | measured (lx64) |
+| 4 KiB | 48 B | 30.3× | model |
+| 64 KiB | 9 B | 682.7× | model |
 
 **A tiering ratio is a statement about value size, and at small values
 there is barely a ratio at all.** "This 8 GB machine holds 200 GB" is
