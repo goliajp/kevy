@@ -1,4 +1,4 @@
-# The capacity envelope: 25× holds, and the RSS multiplier plateaus
+# The capacity envelope: 25× holds, 40× holds, and the cost per entry is 18.7 B
 
 Blocker 1 of the v5 RDS ledger — *"the capacity claim has no number"*.
 It has one now, and it is better than the claim.
@@ -36,6 +36,7 @@ budget, cold segments on NVMe:
 | 10× | 5.24 M | 20 GB | 2.039 GB | **10.5×** | 79 µs | 1.27× | 2.74 GB | 1.34× |
 | 20× | 10.5 M | 40 GB | 2.039 GB | **21.1×** | 157 µs | 1.11× | 3.36 GB | 1.65× |
 | 25× | 13.1 M | 50 GB | 2.039 GB | **26.3×** | 144 µs | 1.14× | 3.36 GB | 1.65× |
+| 40× | 21.0 M | 80 GB | **2.186 GB** | **39.3×** | 148 µs | 1.03× | 4.71 GB | **2.16×** |
 
 Every rung passed every assertion — ratio, cold-read p99, vlog
 amplification, the 14-check cold op sweep. The 10× rung reproduces
@@ -49,45 +50,81 @@ drifted.
 2 GB budget: 26.3×. The vision sentence is not aspirational — it is
 under-stated by the sweep, and the ceiling is above the last rung.
 
-**The logical envelope is exact.** `used_memory` peaks at 2.039 GB
-against a 2 GB budget at *every* rung — 2.5× the dataset moved it by
-0.8 MB. Capacity really is decoupled from data volume; the budget is the
-budget.
+**The logical envelope is exact — until it is not, and the point where
+it bends is the finding.** `used_memory` peaks at 2.039 GB through 10×,
+20× and 25×: a 2.5× larger dataset moved it by 0.8 MB. Capacity really is
+decoupled from data *volume*.
 
-**Cold-read latency is not the constraint.** 79 → 157 → 144 µs against a
-300 µs budget. It rises from 10× to 20× and then stops rising: the fence
-+ bloom structure is doing its job, and reads are not what will give
-first.
+It is not decoupled from *entry count*. At 40× the peak rose to
+2.186 GB — **1.8 % above the budget itself**, held inside the contract
+only by its 5 % tolerance, with 69 MB of that tolerance left. Between
+25× and 40× the store gained 7.9 M entries and 147 MB of resident
+memory it could not demote:
 
-**The RSS multiplier rises and then plateaus.** frag 1.34× → 1.65× →
-1.65×; the RSS peaks at 20× and 25× differ by 0.005 % (3 361 005 568 vs
-3 360 829 440 bytes). This is the glibc brk-arena behaviour documented in
-`PERF-FINDING-2026-07-25-b6-rss-glibc-fragmentation.md` —
-reclaim-proof there (`malloc_trim` a no-op, `MALLOC_ARENA_MAX` a no-op).
-What the sweep adds is that it is **bounded, not cumulative**: it is a
-high-water mark set by the demotion churn's allocation pattern, not a
-leak that grows with entry count. I expected the opposite and was wrong.
+> **18.7 bytes per entry, resident, non-demotable.**
+
+That is the real capacity model, and it is a number the design docs do
+not have. The window model's own estimate is ~1 B/entry — true for
+*small* values, where many rows share a 4 KiB page and one fence
+amortises across all of them. At 4 KiB values every row is its own page,
+so every row pays its own fence, and the per-entry cost is ~19×
+what the formula suggests. **The capacity claim is a function of value
+size, and the sweep is at the pessimal end of it.**
+
+**Cold-read latency is not the constraint.** 79 → 157 → 144 → 148 µs
+against a 300 µs budget: it rises once and then flattens across four
+rungs and an 4× dataset. The fence + bloom structure is doing its job;
+reads are not what gives first.
+
+**The RSS multiplier steps rather than plateaus.** frag 1.34× → 1.65× →
+1.65× → **2.16×**. Between 20× and 25× the RSS peaks differ by 0.005 %,
+which looked like a plateau and which I wrote up as one; 40× refuted
+that — it is a staircase, not a ceiling. This is the glibc brk-arena
+behaviour documented in
+`PERF-FINDING-2026-07-25-b6-rss-glibc-fragmentation.md` and reclaim-proof
+there (`malloc_trim` a no-op, `MALLOC_ARENA_MAX` a no-op). At 40× an
+operator needs **4.7 GB of real RAM for a 2 GB budget**.
 
 ## What this means for the RDS thesis
 
 The capacity claim can be stated, with one honest addition:
 
-> A 2 GB budget served 50 GB of live data — 26× — with cold reads at
-> 144 µs p99 and the accounting bound held exactly. Provision **~1.65×
-> the budget in real RAM**: an 8 GB budget wants a 13 GB machine.
+> A 2 GB budget served 80 GB of live data — 39× — with cold reads at
+> 148 µs p99. Resident cost is **~19 bytes per entry** at 4 KiB values,
+> and RSS runs **1.6–2.2× the budget** on this (pessimal) allocation
+> pattern.
 
-That multiplier is the only gap between the claim and the hardware, and
-it is an **allocator** number, not a tiering one. The v5 vision already
-names a self-built `kevy-alloc` as first priority against a 2.24×
-fragmentation figure; this sweep says the same thing from the capacity
-side, and bounds the prize: closing it turns a 13 GB machine back into
-an 8 GB one.
+Two multipliers, two different owners:
+
+* **Per-entry resident cost** is the *tiering* account, and it is what
+  sets the true ratio ceiling. It also means the claim must be stated
+  per value size — at 4 KiB the fence cannot amortise, at 256 B it can.
+* **The RSS multiplier** is the *allocator* account. The v5 vision
+  already names a self-built `kevy-alloc` as first priority against a
+  2.24× fragmentation figure; this sweep independently reaches the same
+  number from the capacity side (2.16× at 40×) and bounds the prize:
+  closing it turns a 4.7 GB machine back into a 2.2 GB one.
+
+## A prediction, written before the answer
+
+The 60× rung (31.5 M entries, 120 GB) was launched before this section
+was written, and the model above says it should **fail**: 10.5 M more
+entries × 18.7 B ≈ 196 MB more resident, putting the peak near 2.38 GB
+against a 2.255 GB cap. Extrapolating to where the peak meets the cap:
+
+> **the ceiling on this workload is ≈ 47× (≈ 24.6 M entries at 4 KiB on
+> a 2 GB budget)**.
+
+If 60× passes, the linear per-entry model is wrong and this finding
+needs redoing rather than extending — which is the point of writing the
+prediction down first.
 
 ## Left open
 
-* **The ceiling is still above the sweep.** 40× and 60× are running.
-  Every rung so far held the logical bound exactly, so what gives first
-  is genuinely unknown.
+* **What gives first is now known: the non-demotable per-entry
+  residency.** Not reads (flat across 4× of dataset), not the vlog
+  (amplification *improved* with scale — 1.27× → 1.03×), not the cold
+  op sweep (14/14 at every rung).
 * **One workload shape.** Bulk ingest of uniform 4 KiB values plus a
   25 % overwrite churn — which the earlier finding calls close to the
   worst case for fragmentation (*"mixed / slower real workloads fragment
