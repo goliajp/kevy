@@ -73,15 +73,37 @@ size-class rounding.
 with the note that keys under the 22-byte inline boundary carry zero
 key heap, so the formula is *exactly 96*. The 9-byte-key measurement
 above reproduces that to the decimal; the 48-byte measurement adds the
-key heap the formula predicts. `docs/tiering.md`'s worked example
-budgets ~108 B/entry of stub floor for the same reason.
+key heap the formula predicts.
 
-So the stub cost was known, written down, and enforced. **What was
-missing is what it implies.** The floor was documented as a floor — a
-number to subtract from a budget when sizing — and never turned into
-the ceiling it dictates. Everything below is that step, and it is why
-the sweep's own numbers looked like an acceleration to whoever read
-them (me) without it.
+### And the name on it is wrong, which changes where the lever is
+
+`ENTRY_OVERHEAD` is **not the stub's cost**. Reading its definition:
+
+> Per-entry overhead in the top-level keyspace map: the inline 24-byte
+> `SmallBytes` key cell + the 64-byte `Entry` + metadata.
+
+The stub itself is free of heap and 24 bytes **inline in that same
+`Entry`** (`Value::Cold(_) => 0`, with the comment *"a cold key weighs
+key-heap + ENTRY_OVERHEAD only"*). So the 96 B is what **every key in
+kevy costs whether it is tiered or not**; tiering reclaims the value
+and cannot reclaim the entry that names it.
+
+That reframes the ceiling and, more usefully, moves the lever:
+
+* It is not "the stub is expensive". It is **"tiering can return the
+  value, never the key"** — an unavoidable consequence of the keyspace
+  being in memory, not a tiering inefficiency.
+* So the number to attack, if the small-value ratio matters, is the
+  **keyspace entry** (24 B key cell + 64 B `Entry`), which is a
+  store-wide change touching every key in every workload — not a knob
+  inside the tier. Anything that shrinks it improves untiered memory
+  too, and anything that breaks it breaks everything.
+
+**What was missing is what the number implies.** The floor was
+documented as a floor — a quantity to subtract from a budget when
+sizing — and never turned into the ceiling it dictates. Everything
+below is that step, and it is why the sweep's own numbers looked like
+an acceleration to whoever read them (me) without it.
 
 The window model's separate **~1 B/entry** figure (≈200 B per segment
 plus one `(28 B + key)` fence per 4 KiB page) is about the cold
@@ -94,8 +116,9 @@ budget, then:
 
 > **max data:RAM ≈ value_size / (96 B + key heap)**
 >
-> — the same 96 B `memgate` already gates, with key heap 0 for keys
-> under the 22-byte inline boundary.
+> — the same 96 B `memgate` already gates: the cost of the **keyspace
+> entry**, which tiering cannot reclaim, with key heap 0 for keys under
+> the 22-byte inline boundary.
 
 Checked against the lx64 sweep, which knew nothing about this model:
 
@@ -154,12 +177,19 @@ most likely to have.
 
 ## Left open — and now it is a design question, not a measurement one
 
-The stub is 96 B of fixed overhead for what is conceptually a file id,
-an offset and a length. That is the number to attack if the ratio at
-small values matters, and it is a **`kevy-alloc` / layout** question,
-not a tiering-policy one — which is the third independent line this
-round that arrives at the allocator (the others being RSS fragmentation
-at 1.34→2.22× and the v5 vision's own first priority).
+The binding cost is the **keyspace entry**, not the stub: 24 B of key
+cell plus a 64 B `Entry`, paid by every key whether tiered or not. That
+is the number to attack if the ratio at small values matters, and it is
+a **store-layout** question — wider and riskier than a tiering knob,
+because it changes what every key costs in every workload, tiered or
+not. It is also the third independent line this round arriving at
+memory layout (the others: RSS fragmentation 1.34→2.22×, and the v5
+vision's own first priority).
+
+**And it bounds what any tiering work could ever buy.** No policy
+change inside the tier moves this number, because the tier already
+returns everything it can: the value. A 256 B workload is at 2.65×
+because 256 B of value sits against 96 B of key that cannot leave.
 
 Whether small-value tiering is a workload kevy wants to claim at all is
 a scope call, not mine. But it should be made knowing that today the

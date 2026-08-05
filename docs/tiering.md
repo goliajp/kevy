@@ -154,10 +154,18 @@ from the capacity model:
   | 1 KiB | **10.43×** |
   | 4 KiB | **39.2×** (full scale, 2 GB budget, 80 GB of data) |
 
-  The floor is ~96 B of stub per entry at a 9-byte key (~143 B at a
-  48-byte key), flat across every scale tested, which makes the ceiling
-  predictable: **max data:RAM ≈ value_size / (90 B + key length)**.
-  That predicts 2.67× / 10.7× / 42.7× for the three rows above.
+  The floor is ~96 B per entry at a 9-byte key (~143 B at a 48-byte
+  key), flat across every scale tested, which makes the ceiling
+  predictable: **max data:RAM ≈ value_size / (96 B + key heap)**. That
+  predicts 2.67× / 10.7× / 42.7× for the three rows above.
+
+  **What that 96 B is matters for where the lever is.** It is the
+  keyspace entry (`ENTRY_OVERHEAD`: the inline key cell plus the
+  `Entry`), which **every** key pays whether it is tiered or not — the
+  cold stub itself is 24 B inline and owns no heap. Tiering returns the
+  value and can never return the key that names it, so no tiering knob
+  moves this number; only the store's entry layout does, and that
+  changes what every key costs in every workload.
 
   **At 256 B the budget is not merely tight, it is unholdable**:
   `used_memory` crosses a 16 MB budget by 200 000 entries and reaches
