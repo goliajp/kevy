@@ -93,6 +93,78 @@ l8_mem_budget() { # -> "PASS ..." or "FAIL: why" on stdout
   fi
 }
 
+# ── L4 assertion body (T4): replaying an AOF while spilling inline must
+# not cost more than a factor the operator would notice — the RFC's
+# floor is 0.70 × the untiered replay rate.
+#
+# NOTE: that floor names no shape, and the cost is almost entirely a
+# function of shape — measured 0.53× at 8× over budget, 0.74× at 2×,
+# 1.04× when nothing spills. So the default here is the HARSH end and
+# the line reads red until the RFC sentence gets a workload attached.
+# See FINDING-2026-08-06-l4-replay-spill-needs-a-shape.md; picking the
+# shape is the design's call, not the gate's.
+#
+# The comparison is made ON ONE AOF, replayed twice: the data directory
+# is written once with tiering off, copied, and each copy replayed under
+# one config. Writing the dataset twice would compare two different byte
+# streams and call the difference tiering. Rate comes from the server's
+# own replay line (commands and milliseconds), so it measures replay and
+# not process startup. Run with TIERGATE_RUN_L4=1 KEVY_BIN=<path>.
+l4_replay_spill() { # -> "PASS ..." or "FAIL: why" on stdout
+  local bin=${KEVY_BIN:?TIERGATE_RUN_L4 needs KEVY_BIN}
+  local port=${TIERGATE_PORT:-6305}
+  local rows=${TIERGATE_L4_ROWS:-200000}
+  # The cost of spilling during replay scales with how much of the
+  # dataset has to spill, so the budget is the knob this line is really
+  # sensitive to. Default is the harsh end (most of the data spills).
+  local budget=${TIERGATE_L4_BUDGET:-64mb}
+  local base; base=$(mktemp -d)
+  # shellcheck disable=SC2064
+  trap "rm -rf '$base'" RETURN
+  # One write pass, untiered, so the AOF has no spill history in it.
+  "$bin" --port "$port" --threads 2 --dir "$base/src" &>/dev/null &
+  local srv=$!
+  sleep 1
+  redis-benchmark -p "$port" -t set -n "$rows" -r "$rows" -d 4096 -q >/dev/null 2>&1
+  local wrote; wrote=$(redis-cli -p "$port" dbsize)
+  kill "$srv" 2>/dev/null; sleep 0.3; kill -9 "$srv" 2>/dev/null; wait "$srv" 2>/dev/null
+  replay_ms() { # $1 = copy name, $2 = tier budget ("" = off) -> total ms
+    cp -r "$base/src" "$base/$1"
+    local log="$base/$1.log"
+    if [ -n "$2" ]; then
+      KEVY_TIER_BUDGET="$2" "$bin" --port "$port" --threads 2 --dir "$base/$1" &>"$log" &
+    else
+      "$bin" --port "$port" --threads 2 --dir "$base/$1" &>"$log" &
+    fi
+    local s2=$!
+    local n=""
+    for _ in $(seq 1 600); do
+      n=$(redis-cli -p "$port" dbsize 2>/dev/null) && [ -n "$n" ] && break
+      sleep 0.25
+    done
+    kill "$s2" 2>/dev/null; sleep 0.2; kill -9 "$s2" 2>/dev/null; wait "$s2" 2>/dev/null
+    # Shards replay in parallel, so the wall cost is the slowest of them.
+    awk '/replayed .* in [0-9]+ ms/{for(i=1;i<=NF;i++) if($i=="in") {v=$(i+1)+0; if(v>m) m=v}} END{print m+0}' "$log"
+    echo "$n" >&2
+  }
+  local plain_ms tiered_ms plain_n tiered_n
+  plain_ms=$(replay_ms plain "" 2>"$base/plain.n"); plain_n=$(cat "$base/plain.n")
+  tiered_ms=$(replay_ms tiered "$budget" 2>"$base/tiered.n"); tiered_n=$(cat "$base/tiered.n")
+  if [ "${plain_ms:-0}" -le 0 ] || [ "${tiered_ms:-0}" -le 0 ]; then
+    echo "FAIL: no replay timing parsed (plain=${plain_ms:-} tiered=${tiered_ms:-})"; return 0
+  fi
+  if [ "$plain_n" != "$wrote" ] || [ "$tiered_n" != "$wrote" ]; then
+    echo "FAIL: replay lost keys — wrote $wrote, plain $plain_n, tiered $tiered_n"; return 0
+  fi
+  # rate ratio = plain_ms / tiered_ms (same command count both sides).
+  local ratio; ratio=$(awk -v p="$plain_ms" -v t="$tiered_ms" 'BEGIN{printf "%.2f",p/t}')
+  if awk -v r="$ratio" 'BEGIN{exit !(r < 0.70)}'; then
+    echo "FAIL: tiered replay ${ratio}x of plain (floor 0.70) at budget ${budget} — plain ${plain_ms}ms, tiered ${tiered_ms}ms, $wrote keys (the floor names no shape: 0.74x at 2x over budget — see FINDING-2026-08-06-l4-replay-spill-needs-a-shape.md)"
+  else
+    echo "PASS: tiered replay ${ratio}x of plain rate (floor 0.70) at budget ${budget} — plain ${plain_ms}ms, tiered ${tiered_ms}ms, $wrote keys both sides"
+  fi
+}
+
 # ── L10 assertion body (T4): BGREWRITEAOF on a mostly-cold store keeps
 # every cold value and stays inside the budget while it runs. The
 # rewrite streams cold values from the pinned log without promoting, so
@@ -260,7 +332,15 @@ echo
 line "L1  hot-p99 (B1)"        "PENDING(T9/lx64)" "mechanics landed (T3, unit-tested); the p99 sweep itself runs on lx64 via perfgate + envelope"
 env_line L2 "L2  cold-read-p99 (B2)"  "scalar <=100us/300us, hash-row <=200us/500us on NVMe"
 line "L3  spill-budget (B3)"   "PENDING(T9/lx64)" "batching/hysteresis landed (T3, unit-tested); the stall-p99 measurement runs on lx64"
-line "L4  replay-spill (B4)"   "PENDING(T4)" "replay-with-spill >= 0.70 x plain replay"
+if [ "${TIERGATE_RUN_L4:-0}" = "1" ]; then
+  l4_verdict=$(l4_replay_spill)
+  case "$l4_verdict" in
+    PASS*) line "L4  replay-spill (B4)" "PASS" "${l4_verdict#PASS: }" ;;
+    *)     line "L4  replay-spill (B4)" "FAIL" "$l4_verdict" ;;
+  esac
+else
+  line "L4  replay-spill (B4)"   "PENDING(T4)" "replay-with-spill >= 0.70 x plain replay [body landed; run with TIERGATE_RUN_L4=1 KEVY_BIN=…]"
+fi
 env_line L5 "L5  vlog-amp (B5)"       "vlog_size <= 2.0 x cold_bytes after churn + compaction"
 env_line L6 "L6  capacity-10x (B6)"   "5M x 4KiB = 20GB on 2GB budget, op sweep green + used_memory <= budget (logical bound)"
 # L8: the assertion body is implemented (T5, above) but a tiered
