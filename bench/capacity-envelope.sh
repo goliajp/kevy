@@ -99,8 +99,17 @@ esac
 # Leftover servers / load generators pollute every number. The pattern
 # matches kevy-as-a-command (".../kevy --port" or bare "kevy"), not
 # paths that merely contain the repo name.
+#
+# Exclude this script's own PID ancestry rather than excluding by name:
+# a wrapper (capacity-ceiling-sweep.sh) passing KEVY_BIN=/…/kevy has that
+# path on its command line, so a name filter matched the caller and
+# refused the run it was asked to make. Ancestry is exact — it cannot
+# accidentally cover an unrelated process, and it cannot miss a wrapper
+# nobody thought to name.
+SELF_CHAIN=$(p=$$; while [ "${p:-0}" -gt 1 ]; do echo "$p"; p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' '); done | paste -sd'|' -)
 LEFTOVER=$(ps ax -o pid=,command= | grep -E "(^|/)kevy( |$)|redis-benchmark" \
-  | grep -v grep | grep -v capacity-envelope || true)
+  | grep -v grep \
+  | awk -v self="$SELF_CHAIN" 'BEGIN{n=split(self,a,"|"); for(i=1;i<=n;i++) s[a[i]]=1} !($1 in s)' || true)
 [ -n "$LEFTOVER" ] && refuse "leftover bench processes (sweep first):
 $LEFTOVER"
 if [ "$SCALE" = full ]; then

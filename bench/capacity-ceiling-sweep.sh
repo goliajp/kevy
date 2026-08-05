@@ -50,6 +50,9 @@ for R in $RUNGS; do
   DATA_GB=$((R * BUDGET_GB))
   echo
   echo "══ rung ${R}x — $KEYS keys x ${VAL}B = ${DATA_GB}GB on ${BUDGET_GB}GB ══"
+  # Delete last rung's results first: a rung that dies before writing
+  # would otherwise have the previous run's numbers read back as its own.
+  rm -f "$HERE/.capacity-envelope-results-only-B6"
   env CAPACITY_ONLY=B6 \
       B6_KEYS_OVERRIDE="$KEYS" \
       B6_VAL_OVERRIDE="$VAL" \
