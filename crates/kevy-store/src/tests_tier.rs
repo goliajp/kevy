@@ -590,3 +590,44 @@ fn a_zero_effective_target_backs_off_like_any_dry_tick() {
     assert_eq!(s.demote_step(), 0, "then the tick runs dry");
     assert_eq!(s.tier.as_ref().unwrap().tick_skip, 1, "and backs off");
 }
+
+/// `ENTRY_OVERHEAD` is charged per key and is the denominator of every
+/// capacity ratio the tier can claim — a 256 B workload reaches 2.65x
+/// because 256 B of value sits against this — so what it stands for is
+/// worth pinning, not just that it is "conservative".
+///
+/// It is NOT padding over the struct sizes. The keyspace is an
+/// open-addressing table that grows by doubling at a 7/8 max load, so a
+/// live entry's real cost is its slot divided by wherever the table
+/// currently sits in that cycle: cheapest just before a growth, nearly
+/// 2x that just after one. 96 sits inside that band, low-ish — which is
+/// the right direction for a bound that must not flatter the engine on
+/// a freshly grown table.
+///
+/// If someone shrinks `Entry` or the key cell, this test says by how
+/// much the constant may follow.
+#[test]
+fn entry_overhead_stands_for_a_slot_in_a_growing_table() {
+    let entry = std::mem::size_of::<crate::entry::Entry>();
+    let key = std::mem::size_of::<kevy_bytes::SmallBytes>();
+    let slot = key + entry + 1; // + one control byte per slot
+    // Occupancy runs from 7/16 (just after doubling) to 7/8 (at the
+    // growth threshold), so amortised cost per LIVE entry is slot/load.
+    let at_full = slot as f64 / (7.0 / 8.0);
+    let at_fresh = slot as f64 / (7.0 / 16.0);
+    let charged = crate::value::ENTRY_OVERHEAD as f64;
+    eprintln!(
+        "Entry={entry}B key-cell={key}B slot={slot}B -> amortised \
+         {at_full:.0}B (full) .. {at_fresh:.0}B (just grown); charged {charged:.0}B"
+    );
+    assert!(
+        charged >= at_full,
+        "ENTRY_OVERHEAD {charged} under-states even a full table ({at_full:.0}B) — \
+         used_memory would stop being a bound"
+    );
+    assert!(
+        charged <= at_fresh,
+        "ENTRY_OVERHEAD {charged} exceeds the worst case ({at_fresh:.0}B) — \
+         the budget would be spent on accounting that no table pays"
+    );
+}
