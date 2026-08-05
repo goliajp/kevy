@@ -95,6 +95,7 @@ kevy-cli inspect -p 6004 user:</code></pre></figure>
 rebuilds that type, so they are NOT in this file
 exported 4006 keys -&gt; dump.resp</code></pre></figure>
 <p>Until 4.1 the skip was silent: the key was counted as one that vanished mid-walk, and a store with streams exported clean and short. If your migration includes streams, move them separately — and check that line before you trust the file.</p>
+<p><b><code>copy-prefix</code> reads through the same rebuild set</b> and reports the same way, for the same reason: a copy that leaves a type behind while printing <code>copied N keys</code> is the same silence wearing a different verb.</p>
 <h2 id="consistency-and-resumability">Consistency and resumability</h2>
 <ul><li>Export is per-key point-in-time under a SCAN walk (SCAN-class guarantees; keys written during export may appear in either state, vanished keys are skipped). No global snapshot — by design.</li><li>Import pipelines 512 commands per batch and fsyncs a byte offset to <code>&lt;file&gt;.progress</code> after every batch. <code>--resume</code> restarts there; because frames rebuild, overlap is harmless. <code>--strict</code> aborts on the first server error; otherwise errors are counted and reported.</li><li><code>kill -9</code> mid-import is a gated scenario: resume converges to the same <code>PREFIX.DIGEST</code>.</li></ul>
 <h2 id="verification">Verification</h2>

@@ -126,8 +126,9 @@ fn bulk_ops_and_diff() {
     c.request_borrowed(&[b"PEXPIRE", b"bk:ttl", b"60000"]).unwrap();
 
     // copy-prefix carries values + TTL (COPY REPLACE)
-    let n = kevy_cli::bulk::run_copy_prefix(&mut c, b"bk:", b"ck:", 0).unwrap();
-    assert_eq!(n, 201);
+    let copied = kevy_cli::bulk::run_copy_prefix(&mut c, b"bk:", b"ck:", 0).unwrap();
+    assert_eq!(copied.keys, 201);
+    assert!(copied.skipped.is_empty(), "nothing here is outside the rebuild set");
     let (na, da) = kevy_cli::bulk::run_digest(&mut c, b"bk:").unwrap();
     let (nb, _db) = kevy_cli::bulk::run_digest(&mut c, b"ck:").unwrap();
     assert_eq!((na, nb), (201, 201));
@@ -217,6 +218,17 @@ fn every_type_is_either_exported_or_reported() {
         Some(1),
         "the stream must be named in the report, not merely absent: {:?}",
         out.skipped.keys().map(|k| String::from_utf8_lossy(k).into_owned()).collect::<Vec<_>>()
+    );
+
+    // copy-prefix reads through the same rebuild set, so it drops the
+    // same type and must be as loud about it. It was not: the sibling
+    // command kept its silence when export lost its.
+    let copied = kevy_cli::bulk::run_copy_prefix(&mut cs, b"t:", b"c:", 0).unwrap();
+    assert_eq!(copied.keys + copied.skipped.values().sum::<u64>(), 6);
+    assert_eq!(
+        copied.skipped.get(b"stream".as_slice()).copied(),
+        Some(1),
+        "copy-prefix must name what it left behind too"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

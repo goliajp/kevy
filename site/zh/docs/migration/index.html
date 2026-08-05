@@ -95,6 +95,7 @@ kevy-cli inspect -p 6004 user:</code></pre></figure>
 rebuilds that type, so they are NOT in this file
 exported 4006 keys -&gt; dump.resp</code></pre></figure>
 <p>4.1 之前这个跳过是<b>静默的</b>：那个 key 被当成"遍历途中消失了"，于是带流的 store 导出得又干净又短。如果你的迁移里有流，请单独搬它们——并且在信任那个文件之前先看这行。</p>
+<p><b><code>copy-prefix</code> 走的是同一个重建集</b>，报告方式也一样，理由相同：一个把某种类型留在原地、却打印 <code>copied N keys</code> 的拷贝，是同一种沉默换了个动词。</p>
 <h2 id="一致性与可续传性">一致性与可续传性</h2>
 <ul><li>导出是 SCAN 遍历下的按 key 时间点（SCAN 级保证；导出期间被写的 key 可能出现在任一状态，消失的 key 被跳过）。没有全局快照——有意为之。</li><li>导入按每批 512 条命令流水线化，每批之后把字节偏移 fsync 到 <code>&lt;file&gt;.progress</code>。<code>--resume</code> 从那里重启；因为帧是重建式的，重叠无害。<code>--strict</code> 在第一个服务器错误处中止；否则错误被计数并报告。</li><li>导入中途 <code>kill -9</code> 是有 gate 的场景：续传收敛到同一个 <code>PREFIX.DIGEST</code>。</li></ul>
 <h2 id="验证">验证</h2>
