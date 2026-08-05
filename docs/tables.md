@@ -237,6 +237,16 @@ ways. Naming a field the index did not store is an error that names
 the fields it did. The driving predicate is always the indexed
 range/EQ/WHERE — there is no `WHERE`-without-an-index.
 
+`OFFSET` is the one clause here that costs more the bigger it gets, and
+**the only surface in this engine that gets slower as you add shards**:
+every shard fetches `limit + offset` hits, because no shard can know
+which of its own hits survive the global merge, so the origin
+materialises `(limit + offset) × shards` to hand back `limit`. Measured
+on 30 000 in-range rows returning `LIMIT 20`, `OFFSET 1000` costs
+1.53 ms on one shard and 6.90 ms on eight. Page with the returned
+cursor — constant per page, and position-stable
+([rds-workloads.md](rds-workloads.md#order-by--limit--offset)).
+
 **Index-only queries touch zero rows.** A FILTER/SORT/COUNT query
 answers entirely from the RAM-resident index — the row-read counter
 is asserted `== 0` in the gate suite (`bench/tablegate.sh`). This is
