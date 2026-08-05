@@ -34,6 +34,10 @@ pub mod bulk;
 /// report where they disagree, in membership AND in order.
 pub mod shadow;
 
+/// `doctor` — every table's VERIFY counters, turned into an exit code
+/// a cron can act on.
+pub mod doctor;
+
 /// Pretty-print a reply roughly the way `redis-cli` does. Arrays are
 /// numbered + indented; bulk strings are quoted; nil shows as `(nil)`.
 pub fn format_reply(reply: &Reply, indent: usize) -> String {

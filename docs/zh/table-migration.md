@@ -62,6 +62,20 @@ shadow: 50 samples, 50 diverged (first at sample 0)
 
 这些计数每次调用都是新鲜的，便宜到可以挂在 cron 或 doctor 命令里：`drift` 和 `missing` 应当永远为零；`absent` / `excluded` / `coerce_failures` 点名每种排除原因夺走的行（精确语义见 [tables.md](tables.md)，包括 ORDERPATH 的 `duplicates` 非零意味着分页需要一个有界决胜列）。整个迁移的意义就在于这些数字*存在*。去读它们。
 
+**`kevy-cli doctor` 就是那个 cron。** 它对每张已声明的表跑 `VERIFY`，用退出码回答：
+
+```console
+$ kevy-cli doctor -p 6004
+  OK       user  (rows 59999 · entries 59999 · absent 0 · excluded 0 · coerce_failures 0)
+  WARN     ev    duplicates 1 — paging this path needs a bounded tie-break or pages repeat rows
+  BUILDING new   — an index is still backfilling, not a verdict
+doctor: 3 table(s) — 0 drifted, 1 warned, 1 still building
+```
+
+这套映射是本课自己的话，不是新的主张：`drift` 与 `missing` 非零**失败**；`duplicates` **警告**；`absent` / `excluded` / `coerce_failures` **只报告、永不失败**——每一种都是合法状态，一个会因为某列有 NULL 就报红的 doctor 会一直红下去。
+
+两个刻意的选择。警告默认**不**导致失败——会因信息而失败的 cron 很快就没人读了——所以想要更严契约的人有 `--warn-is-failure`。而索引还在回填的表回的是 `-INDEXBUILDING`，那是**它自己的结局，不是失败**：把它当失败，就会在每次声明索引时叫醒某个人。
+
 ## 参见
 
 - [tables.md](tables.md)——声明面、VERIFY 语义、复合 ORDERPATH 规则。
