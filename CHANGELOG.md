@@ -52,9 +52,24 @@ the keyspace.
   reported the index clean because it audits only its own entries.
 - **`IDX.VERIFY` gains `missing`** — the direction it could not see
   (rows that derive a value and have no entry), computed by the same
-  classifier `TABLE.VERIFY` already used. Both faces now exclude rows
-  that slid out of a declared window, which would otherwise have made
-  every windowed table report its own sliding as corruption.
+  classifier `TABLE.VERIFY` already used.
+- **A windowed index lost rows to a stale tombstone.** On a table that
+  had slid, a handful of rows became unreachable through their own
+  index while still sitting in the keyspace — 19 to 21 out of 20 000
+  written, and permanent. A tombstone shadows a row's cold entry when
+  the row changes, and the set that held them was flat: a bloom false
+  positive could shadow a row that had no cold entry *yet*, and the
+  shadow then hid the entry the row was given when it first slid. The
+  same flat set hid the *new* entry of any row that was rewritten and
+  slid again. A tombstone now records how far back it reaches, so it
+  can only hide what existed when it was spent.
+- **A windowed table's `missing` count is reconciled, not assumed.**
+  Rows below the window boundary are supposed to be in a cold segment;
+  they are now counted and checked against the live cold entries
+  instead of being excused for their position — which is what surfaced
+  the tombstone loss above. Excusing them by position reported zero on
+  a table that was losing rows; not excusing them at all reported
+  17 500 holes on a healthy one.
 
 ### Kept honest
 
