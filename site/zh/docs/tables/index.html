@@ -107,8 +107,30 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name email</code></
 <p>按拒绝来陈述，因为引擎是按名拒绝而不是勉强近似：<b>没有运行期 SQL</b>（对服务端发 <code>TABLE.DECLARE</code>，不是 <code>CREATE TABLE</code>），<b>没有查询期 join</b>（视图的 <code>VIA</code> 解引用除外，<a href="../views/">views.md</a>），<b>没有 HAVING / 子查询 / 表达式</b>，<b>没有引擎强制的约束</b>。上述每一项的 SQL 到 kevy 映射在 <a href="../rds-workloads/">rds-workloads.md</a>，可用的配方在 <a href="../cookbook/">cookbook.md</a>，schema 编译路径见下。</p>
 <h2 id="kevy-sql编译-schema而不是发送-schema">kevy-sql：编译 schema，而不是发送 schema</h2>
 <p><code>kevy-sql</code>（及其 <code>kevy-cli sql</code> 面）是一个<b>声明期编译器</b>——像迁移工具一样，把一份 PG/MySQL 方言的 schema 文件读一次，产出显式声明：</p>
-<figure class="code"><pre><code class="lang-console">kevy-cli sql compile schema.sql                          # print the plan
-kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004</code></pre></figure>
+<figure class="code"><pre><code class="lang-console">kevy-cli sql compile schema.sql                          # print the declarations
+kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004
+kevy-cli sql plan schema.sql                             # 每条查询会变成什么</code></pre></figure>
+<p><code>compile</code> 与 <code>plan</code> 读同一份文件，回答的却是两个问题。<code>compile</code> 是构建期：它产出的是要执行的命令，所以遇到一条服务不了的视图就是错误、就停在那里。<code>plan</code> 是迁移那天——它报告<b>每一条</b>查询的去向，因为*"你这 40 条里 34 条能跑，另外 6 条各缺什么"*才是一个拿着 schema 来的人真正在问的：</p>
+<figure class="code"><pre><code class="lang-console">$ kevy-cli sql plan shop.sql
+2 table(s) to declare:
+  users
+  orders
+
+5 quer(ies) — 3 served, 2 not
+
+  served:
+    paid_orders              orders.status
+    recent_by_user           orders.user_id_created_at
+    by_email                 users.email
+
+  not served:
+    line 25    by_total
+      view 'by_total': WHERE (total EQ) matches no declared access path — add: CREATE INDEX ON orders (total)
+    line 28    everything
+      view 'everything': a view with no WHERE would scan the table — kevy has no scans; add a driving predicate, or page an index directly (IDX.QUERY orders.&lt;col&gt; RANGE …)
+
+plan: 2 of 5 quer(ies) need a declaration change before this schema moves</code></pre></figure>
+<p>只要有查询服务不了，它就以非零退出。那不是警告：一条没有声明路径的查询<b>根本跑不了</b>，所以它在 schema 改掉之前一直挡着这次迁移。而 <i>DDL</i> 本身解析不了仍然是普通错误——对一份不成立的 schema 没有计划可言。</p>
 <ul><li><code>CREATE TABLE</code> → <code>TABLE.DECLARE</code>（类型粗粒度映射到 <code>i64|f64|str</code>，每个映射都如实标注）。</li><li><code>CREATE [UNIQUE] INDEX</code> → <code>INDEX</code> 子句；PG 的 <code>INCLUDE</code> 覆盖列 → 存储的 <code>VALUES</code>；多列索引 → 一个 <code>ORDERPATH</code>。</li><li>常量的单表 <code>CREATE VIEW … AS SELECT</code> → 一个引擎视图；带参数的 → 一张<b>查询卡</b>：一条现成的 <code>IDX.QUERY</code> 模板，<code>$N</code> 槽位由你的应用运行时填入。</li><li>编译器同样不做规划：它把你的视图与你声明过的访问路径做匹配，匹配不上时告诉你该补哪条声明（<code>add: CREATE INDEX ON t (dept, age)</code>），而不是发明一次扫描。临时 SQL、join、子查询、<code>OR</code>、<code>GROUP BY</code> 等一律带 <code>line:col</code> 拒绝，并指向替代它的配方。</li></ul>
 <p>端到端的完整演练——一份真实的 users/orders/order_items schema 被编译、应用、查询——见<a href="../cookbook/#22-porting-a-pgmysql-schema">schema 迁移配方</a>。</p>
 <h2 id="嵌入式">嵌入式</h2>

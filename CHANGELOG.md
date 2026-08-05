@@ -71,6 +71,44 @@ the keyspace.
   a table that was losing rows; not excusing them at all reported
   17 500 holes on a healthy one.
 
+### Migration day, as tools instead of prose
+
+The migration playbook's eight lessons were a well-written requirements
+document that existed only in the reader's head. Three of them are now
+things you can run. None of them invents an opinion: each carries the
+lesson's own words, and the exit code is the verdict so a script can
+gate on it.
+
+- **`kevy-cli sql plan <file.sql>`** — the first mile. It reads the
+  schema you already have and reports what becomes of *every* query:
+  which declared path serves each one, and for the rest, the exact
+  `CREATE INDEX` that would. `sql compile` stops at the first view it
+  cannot serve, which is right when the output is commands to apply and
+  wrong when the question is "can this move at all". A schema whose DDL
+  does not parse is still an error — there is no plan to give against a
+  schema that does not exist. Exits non-zero when any query is
+  unserved, because a query with no declared path cannot run at all.
+- **`kevy-cli shadow`** — lesson 4. Reads the old path and the new one
+  side by side and compares **membership and order**, reporting the
+  first divergence with *both* sides' sort keys. It also catches lesson
+  2 early: a writer nobody updated shows up as `MISSING` before the
+  cutover rather than after.
+- **`kevy-cli doctor`** — lesson 8. Runs `TABLE.VERIFY` on every
+  declared table and turns the counters into an exit code: `drift` and
+  `missing` fail, `duplicates` warns (pagination needs a bounded
+  tie-break), and the exclusion causes are reported but never failed on
+  — each is a legitimate state, and a doctor that went red on a NULL
+  column would be red forever. A warning does not fail by default;
+  information that fails a cron stops being read. A table whose index
+  is still backfilling reports `BUILDING`, which is its own outcome,
+  not a failure.
+
+Lessons 2 and 5 deliberately have no tool. Lesson 2 is a code audit —
+storage does not record who writes a table. Lesson 5 needs to know when
+a structure has no readers left, which the engine does not track; a
+probe that guessed would give false confidence, and that lesson's
+failure mode is already *silently, correctly, reading nothing*.
+
 ### Kept honest
 
 - A test asserts that **every verb the engine writes into its own AOF

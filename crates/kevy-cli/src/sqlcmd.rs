@@ -1,5 +1,11 @@
 //! `kevy-cli sql` — the kevy-sql declaration compiler as a subcommand.
 //!
+//! Two shapes over the same file. `sql compile` is build-time: it
+//! produces commands, so one unservable view is an error. `sql plan` is
+//! migration day: it reports what becomes of **every** query, because
+//! "34 of your 40 work, here is what the other 6 need" is the answer
+//! someone arriving with a schema is actually looking for.
+//!
 //! `sql compile <file.sql>` prints the compiled script;
 //! `sql compile <file.sql> --apply --url <host:port>` additionally runs
 //! the declaration commands against a server, printing each reply, and
@@ -10,7 +16,14 @@ use kevy_cli::{Reply, format_reply};
 use kevy_resp_client::RespClient;
 use std::process::ExitCode;
 
+#[derive(PartialEq, Eq)]
+enum Sub {
+    Compile,
+    Plan,
+}
+
 struct SqlArgs {
+    sub: Sub,
     file: String,
     apply: bool,
     host: String,
@@ -19,12 +32,14 @@ struct SqlArgs {
 
 fn parse_sql_args(args: &[String]) -> Result<SqlArgs, String> {
     let mut it = args.iter();
-    match it.next().map(String::as_str) {
-        Some("compile") => {}
+    let sub = match it.next().map(String::as_str) {
+        Some("compile") => Sub::Compile,
+        Some("plan") => Sub::Plan,
         Some(other) => return Err(format!("unknown sql subcommand '{other}'")),
         None => return Err("missing subcommand".into()),
-    }
+    };
     let mut out = SqlArgs {
+        sub,
         file: String::new(),
         apply: false,
         host: crate::DEFAULT_HOST.to_string(),
@@ -49,6 +64,9 @@ fn parse_sql_args(args: &[String]) -> Result<SqlArgs, String> {
     if out.file.is_empty() {
         return Err("missing <file.sql>".into());
     }
+    if out.apply && out.sub == Sub::Plan {
+        return Err("plan never applies anything — it reads the file and reports".into());
+    }
     Ok(out)
 }
 
@@ -59,6 +77,7 @@ pub(crate) fn run_sql_cli(args: &[String]) -> ExitCode {
         Err(msg) => {
             eprintln!("kevy-cli sql: {msg}");
             eprintln!("usage: kevy-cli sql compile <file.sql> [--apply --url <host:port>]");
+            eprintln!("       kevy-cli sql plan <file.sql>");
             return ExitCode::FAILURE;
         }
     };
@@ -69,6 +88,9 @@ pub(crate) fn run_sql_cli(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if a.sub == Sub::Plan {
+        return run_plan(&a.file, &src);
+    }
     let comp = match kevy_sql::compile(&src) {
         Ok(c) => c,
         Err(e) => {
@@ -118,4 +140,63 @@ fn apply(a: &SqlArgs, comp: &kevy_sql::Compilation) -> ExitCode {
         );
     }
     ExitCode::SUCCESS
+}
+
+/// `sql plan <file.sql>` — every query's fate, then the count.
+///
+/// Exits non-zero when any query is unserved. Unlike a `doctor`
+/// warning, this is not information: a query with no declared path
+/// cannot run at all, so it blocks the move until the schema changes.
+fn run_plan(file: &str, src: &str) -> ExitCode {
+    let plan = match kevy_sql::plan(src) {
+        Ok(p) => p,
+        Err(e) => {
+            // A schema that does not parse has no plan — that failure
+            // stays an error, and keeps its file:line.
+            eprintln!("kevy-cli sql plan: {file}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!("{} table(s) to declare:", plan.declares.len());
+    for d in &plan.declares {
+        println!("  {}", d[1]);
+    }
+    let served = plan.queries.len() - plan.unserved();
+    println!("\n{} quer(ies) — {} served, {} not", plan.queries.len(), served, plan.unserved());
+    print_entries(&plan);
+    for n in &plan.notes {
+        println!("note: {n}");
+    }
+    if plan.unserved() == 0 {
+        println!("\nplan: every query is served by a declared path");
+        return ExitCode::SUCCESS;
+    }
+    println!(
+        "\nplan: {} of {} quer(ies) need a declaration change before this schema moves",
+        plan.unserved(),
+        plan.queries.len()
+    );
+    ExitCode::FAILURE
+}
+
+/// Served queries name the paths they ride; unserved ones carry the
+/// compiler's own refusal, which already teaches the fix.
+fn print_entries(plan: &kevy_sql::Plan) {
+    let (served, unserved): (Vec<_>, Vec<_>) =
+        plan.queries.iter().partition(|q| q.served.is_served());
+    if !served.is_empty() {
+        println!("\n  served:");
+        for q in served {
+            let kevy_sql::Served::Yes { paths, .. } = &q.served else { continue };
+            println!("    {:<24} {}", q.name, paths.join(" + "));
+        }
+    }
+    if !unserved.is_empty() {
+        println!("\n  not served:");
+        for q in unserved {
+            let kevy_sql::Served::No { reason } = &q.served else { continue };
+            println!("    line {:<5} {}", q.line, q.name);
+            println!("      {reason}");
+        }
+    }
 }

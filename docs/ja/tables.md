@@ -131,9 +131,36 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name email
 `kevy-sql`（とその `kevy-cli sql` の顔）は**宣言時コンパイラ**です——マイグレーションツールのように、PG/MySQL 方言のスキーマファイルを一度だけ読み、明示的な宣言を出力します。
 
 ```console
-kevy-cli sql compile schema.sql                          # print the plan
+kevy-cli sql compile schema.sql                          # print the declarations
 kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004
+kevy-cli sql plan schema.sql                             # 各クエリがどうなるか
 ```
+
+`compile` と `plan` は同じファイルを読み、別の問いに答えます。`compile` はビルド時——実行するコマンドを生み出すので、供給できないビューが一つあればそれはエラーで、そこで止まります。`plan` は移行の当日です。**すべての**クエリの行き先を報告します。*「40 本のうち 34 本は動く、残り 6 本には何が要る」*こそ、スキーマを携えて来た人が実際に訊いていることだからです：
+
+```console
+$ kevy-cli sql plan shop.sql
+2 table(s) to declare:
+  users
+  orders
+
+5 quer(ies) — 3 served, 2 not
+
+  served:
+    paid_orders              orders.status
+    recent_by_user           orders.user_id_created_at
+    by_email                 users.email
+
+  not served:
+    line 25    by_total
+      view 'by_total': WHERE (total EQ) matches no declared access path — add: CREATE INDEX ON orders (total)
+    line 28    everything
+      view 'everything': a view with no WHERE would scan the table — kevy has no scans; add a driving predicate, or page an index directly (IDX.QUERY orders.<col> RANGE …)
+
+plan: 2 of 5 quer(ies) need a declaration change before this schema moves
+```
+
+供給できないクエリが一つでもあれば非ゼロで終了します。これは警告ではありません。宣言された経路を持たないクエリはそもそも動かないので、スキーマが変わるまで移行を塞ぎます。*DDL* 自体が解析できない場合は従来どおり普通のエラーです——成立していないスキーマに対して渡せる計画はありません。
 
 - `CREATE TABLE` → `TABLE.DECLARE`（型は `i64|f64|str` へ粗く対応づけ、対応づけごとに正直に注記されます）。
 - `CREATE [UNIQUE] INDEX` → `INDEX` 句。PG の `INCLUDE` カバリングカラム → 保存された `VALUES`。複数カラムのインデックス → `ORDERPATH`。
