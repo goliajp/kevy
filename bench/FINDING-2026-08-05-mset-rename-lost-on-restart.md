@@ -148,6 +148,15 @@ cannot quietly make it pass.
   because this work changed *what gets written*, which is exactly the
   surface that gate audits.
 * **`perfgate`** — 12 angles, all above floor.
+* **`repligate`** — the gate for the surface this work changed most and
+  the one I had skipped: snapshot ship to a fresh replica, quiesced
+  digest convergence (50 003 keys), restart re-sync, replica-local
+  `IDX.CREATE`/`IDX.QUERY`, and a writer SIGKILL re-synced across
+  generations. **PASS.** Changing what gets replicated without running
+  the replication gate was a gap in my own verification, not a
+  judgement call.
+* **`idxgate`** — the index surface: 1 M-row build, `IDX.QUERY` p99
+  median 0.41 ms, bytes/row 63.9 vs formula 63.5 (ratio 1.01). **PASS.**
 
 ## The same lens, pointed at the sibling — and it came back clean
 
