@@ -1,0 +1,32 @@
+# capacity-ceiling-sweep raw results — lx64, kevybench, 8 shards,
+# 4 KiB values, fixed 2 GB tiering budget, cold segments on NVMe.
+# Binary: release build of fix/idx-drift-on-multikey-writes.
+# ratio = cold_bytes / used_peak (the data:RAM actually ACHIEVED).
+# Read with bench/FINDING-2026-08-05-capacity-ceiling-sweep.md.
+
+# capacity-ceiling-sweep 2026-08-05T05:47:33Z
+# fixed budget 2GB, value 4096B, growing dataset
+RUNG=10x rc=0 keys=5242880 data_gb=20 budget_gb=2
+  L6=PASS ratio=10.5x/10x used_peak=2039181088 cap=2254857830 rss_peak=2740297728 frag=1.34x sweep=ok keys=5242880 val=4096 budget=2147483648
+  L2=PASS scalar_p99us=79/300 hash_row_p99us=notrun/500
+  L5=PASS vlog=25922603724 cold_bytes=20416573440 amp=1.27x/2.0x
+RUNG=20x rc=0 keys=10485760 data_gb=40 budget_gb=2
+  L6=PASS ratio=21.1x/10x used_peak=2038675584 cap=2254857830 rss_peak=3361005568 frag=1.65x sweep=ok keys=10485760 val=4096 budget=2147483648
+  L2=PASS scalar_p99us=157/300 hash_row_p99us=notrun/500
+  L5=PASS vlog=47444435668 cold_bytes=42862108672 amp=1.11x/2.0x
+RUNG=25x rc=0 keys=13107200 data_gb=50 budget_gb=2
+  L6=PASS ratio=26.3x/10x used_peak=2039444192 cap=2254857830 rss_peak=3360829440 frag=1.65x sweep=ok keys=13107200 val=4096 budget=2147483648
+  L2=PASS scalar_p99us=144/300 hash_row_p99us=notrun/500
+  L5=PASS vlog=60920111316 cold_bytes=53578870784 amp=1.14x/2.0x
+=== 高档 ===
+# capacity-ceiling-sweep 2026-08-05T05:58:21Z
+# fixed budget 2GB, value 4096B, growing dataset
+RUNG=40x rc=0 keys=20971520 data_gb=80 budget_gb=2
+  L6=PASS ratio=39.3x/10x used_peak=2186248192 cap=2254857830 rss_peak=4712488960 frag=2.16x sweep=ok keys=20971520 val=4096 budget=2147483648
+  L2=PASS scalar_p99us=148/300 hash_row_p99us=notrun/500
+  L5=PASS vlog=88457470686 cold_bytes=85724327936 amp=1.03x/2.0x
+RUNG=60x rc=1 keys=31457280 data_gb=120 budget_gb=2
+  L6=FAIL ratio=39.3x/10x used_peak=3279544320 cap=2254857830 rss_peak=7268700160 frag=2.22x sweep=ok keys=31457280 val=4096 budget=2147483648
+  L2=PASS scalar_p99us=171/300 hash_row_p99us=notrun/500
+  L5=PASS vlog=135912039775 cold_bytes=128585502720 amp=1.06x/2.0x
+sweep: rung 60x FAILED — that is the envelope's end, not an error.
