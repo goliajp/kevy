@@ -327,7 +327,16 @@ fn run_migrate_cli(args: &[String]) -> ExitCode {
     };
     let res = if verb == "export" {
         kevy_cli::migrate::run_export(&mut client, prefix.as_deref(), std::path::Path::new(&file))
-            .map(|n| println!("exported {n} keys -> {file}"))
+            .map(|e| {
+                for (ty, count) in &e.skipped {
+                    eprintln!(
+                        "kevy-cli export: SKIPPED {count} key(s) of type '{}' — nothing here \
+                         rebuilds that type, so they are NOT in this file",
+                        String::from_utf8_lossy(ty)
+                    );
+                }
+                println!("exported {} keys -> {file}", e.keys);
+            })
     } else {
         kevy_cli::migrate::run_import(&mut client, std::path::Path::new(&file), resume, strict)
             .map(|r| {
