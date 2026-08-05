@@ -43,6 +43,12 @@ checkout/快照(合计 >10G)、现役 checkout 内 1993 个未跟踪数据文件
   `gh run list --limit 1` 会抓到别的 workflow 或上一个 commit 的 run,
   watch 它得到的绿是**假绿**(2026-08-01 实证:WINDOW commit 的 CI 红
   被上一 commit 另一 workflow 的绿 run 掩盖了一整轮)。
+- **本地门禁读到 verdict 行为止,不是读到 tail 为止。** `locgate` /
+  `commentgate` 这类脚本把**判决写在开头或中间**,细节列在后面;
+  `... | tail -1` 会把 `FAIL` 那行漏掉,只留下一句像是说明的尾巴。
+  **同一个动作在 2026-08-06 连撞两次**:给 `pack()` 加一段注释 →
+  只看 tail → 提交 → locgate 其实红了(fn 55 行);修完再犯一次 →
+  commentgate 红了(注释里带日期)。**判决行没进眼睛就等于没跑门禁。**
 - tag 推送 = publish 触发器,**tag 之前 CI 必须真绿**(不是"应该绿")。
 - 误发补救顺序:`git push origin :refs/tags/vX.Y.Z`(撤 tag)→
   `gh run cancel <release-run>`(拦 publish)→ 修根因 → CI 真绿 →
