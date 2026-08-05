@@ -267,6 +267,14 @@ shapes that keep hitting it. `AUTODECLARE n` says: *when a shape has
 been refused often enough and it grounds on a column I declared, go
 ahead and declare the path for me — up to `n` of them.*
 
+**"Often enough" is 16 refusals of the same shape.** The number is a
+constant, not a knob: a per-table threshold would be exactly the
+per-workload tuning this engine claims not to need, and a workload
+whose shape arrives slowly pays 16 refusals before relief either way.
+It is written here because an operator reading `IDX.ADVISE` and
+wondering why nothing has happened yet deserves the number, not
+because it is something to set.
+
 Everything about it is bounded on purpose:
 
 * **Off unless you ask.** No clause, no loop. This is not a default.

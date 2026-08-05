@@ -37,6 +37,8 @@ TABLE.DECLARE name PREFIX p PK col
     COLUMN name i64|f64|str [COLUMN ...]
     [INDEX col range|unique [VALUES col ...]] ...
     [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] ...
+    [WINDOW col SPAN n BUCKET n]   # 滑动热窗（本页尚未译，见英文版）
+    [AUTODECLARE n]    # 允许引擎替你补最多 n 条路径——见下文
 TABLE.ENSURE ...       # TABLE.DECLARE 的开机形态——见下文
 TABLE.REPLACE ...      # 显式的 drop + declare + 重建
 TABLE.DROP name        # drops the table + its compiled indexes; 1|0
@@ -97,6 +99,23 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name email
 `FILTER` / `SORT` / `DISTINCT` / `FACET` / `OFFSET` 读的是索引**在 `VALUES` 声明时存下的列**——与它们的全文检索原型相同的子句语法、相同的跨 shard 精确语义（[text-search.md](text-search.md)）：`FILTER` 在翻页之前生效，所以一条排得很深的合格行仍能进入 `LIMIT`；`FACET` 统计整个匹配集；缺失值在两个方向都排在最后。点名一个索引没有存储的字段是一个错误，错误里列出它存了哪些。驱动谓词永远是被索引的 range / EQ / WHERE——不存在没有索引的 `WHERE`。
 
 **index-only 查询零行触达。**一条 FILTER / SORT / COUNT 查询完全从常驻 RAM 的索引作答——行读计数器在门禁套件里被断言 `== 0`（`bench/tablegate.sh`）。这正是这两个特性一起设计时瞄准的分层协同：开着[透明分层存储](tiering.md)时，一张全冷的表以**零磁盘读**服务 index-only 查询，只有最后的 hydration 页（`FIELDS …`）付冷读——每行一次、批量提交。不带 `VALUES` 列的索引在内存与查询路径上，与从未声明过这些列的 store 上的索引逐字节相同（零成本-未声明门禁）。
+
+## `AUTODECLARE`：你没写的那些路径
+
+查询一个你从未建索引的列会被按名字拒绝。那次拒绝同时也是一条关于你负载的事实，`IDX.ADVISE` 会把反复撞上它的形状列出来。`AUTODECLARE n` 的意思是：**当某个形状被拒得足够多、并且它落在我已声明的列上时，就替我把这条路径声明掉——最多 n 条。**
+
+它的每一处都是刻意有界的：
+
+* **不问就不开。** 没有这个子句就没有这个循环。这不是默认行为。
+* **上限就是你写的那个数。** 预算用完之后查询照样被拒，形状留在 `IDX.ADVISE` 里等你读——引擎不会悄悄抬高自己的上限。
+* **只在已声明的列上。** 形状若指向表没有声明的列，就永远无法落地；`IDX.ADVISE` 仍会报告它，答案还是你的。
+* **只增不删。** 删索引是人的动作。猜错的最坏后果是有界的内存浪费，绝不会是丢掉一条路径。
+* **看得见。** 这样建出的索引在 `IDX.LIST` 里带 `auto` 标记，表的 spec 里也留着账本——你随时能回读哪些是你写的、哪些是引擎补的。
+* **不在查询答案里发生。** 越过阈值的那次查询照样拿到它的错误，下一次才会发现路径正在建。
+
+**"足够多"是同一形状被拒 16 次。** 这个数是常量，不是旋钮：每表可调的阈值恰恰就是本引擎声称不需要的那种逐负载调优，而形状到得慢的负载无论如何都要先付 16 次拒绝。之所以写在这里，是因为一个盯着 `IDX.ADVISE` 纳闷"怎么还没动静"的运维应该拿到这个数——而不是因为它可以设。
+
+这不是查询计划器，这个区别就是全部要点：引擎从不替你选**走哪条路径**——你的查询自己点名。`AUTODECLARE` 只是在你的邀请下、在你的预算内、在你看得见的地方**扩展声明**。查询期仍是一条铁律：跑已声明的路径，其余按名字拒绝。
 
 ## NULL、唯一性，以及什么被强制
 
