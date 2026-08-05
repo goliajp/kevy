@@ -335,18 +335,32 @@ Stated honestly, with the measured/pending status of each number:
   flight keeps its segment files readable until it finishes.
 - Every record carries a CRC32C; bit rot in the spill area is refused
   at read, not served.
-- **Boot with dataset > budget works**: replay checks the watermark
-  as it goes and spills inline, so RSS stays ≤ budget × 1.05
-  throughout boot (gated) instead of OOMing before tiering ever
-  runs. The same inline demotion rides reshard and replica
-  snapshot-load.
+- **Boot with dataset > budget works**: replay checks the watermark as
+  it goes and spills inline instead of OOMing before tiering ever runs.
+  The same inline demotion rides reshard and replica snapshot-load.
+  Measured 2026-08-05 — a 2.3 GB AOF against a 64 MB budget (36×)
+  replays clean, all 300 000 rows present, `used_memory` settling at
+  35 MB, comfortably inside the bound.
+
+  **RSS is another matter, and this page used to overstate it.** It
+  claimed RSS stays ≤ budget × 1.05 throughout boot and called that
+  gated; neither was true. Measured peak RSS during that replay was
+  **137 MB — 2.15× the budget** — the same allocator overhead the
+  capacity sweep measures in steady state, and `tiergate`'s L11 line
+  has no measurement body yet (it reads `PENDING`). What holds through
+  boot is the **logical** bound, which is what the tier accounts for;
+  size the machine from RSS, not from the budget.
 - Snapshot / `BGREWRITEAOF` / replication full-sync on a mostly-cold
   store stream cold values from the pinned log **without promoting
   anything** — peak extra RAM is one value, and zero cold values are
   lost from a rewrite (gated).
-- RSS ≤ budget × 1.05 sustained is its own gate line, including
-  the auto-probe answering correctly in a cgroup container and on
-  bare metal.
+- **`used_memory` ≤ budget × 1.05 sustained** is its own gate line
+  (`tiergate` L8), including the auto-probe answering correctly in a
+  cgroup container and on bare metal. It is the *logical* bound — the
+  gate reports RSS beside it rather than clamping it. Measured
+  2026-08-05: `used_memory` 253 MB against a 281 MB cap, with RSS
+  488 MB (1.93× the budget) reported. Reading that line as an RSS
+  guarantee is the mistake this page made two bullets up.
 
 ## Gate status (honesty ledger)
 
