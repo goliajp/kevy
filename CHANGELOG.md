@@ -1,5 +1,73 @@
 # Changelog
 
+## Unreleased — the writes that were acknowledged and gone
+
+A probe built to settle a question about replicas answered a different
+one: the replica had not received a multi-key `DEL` at all. Pulling
+that thread found three data-loss bugs on the 4.1.1 surface, all the
+same shape — **the path that writes was not the path that reads it
+back** — plus two ways a secondary index could quietly disagree with
+the keyspace.
+
+### Data loss (fixed)
+
+- **`MSET` did not survive a restart.** It answered `+OK`, read back
+  correctly, and every key was gone at the next start — even with
+  `appendfsync always`. The op recorded its effect into the AOF using
+  the verb `MSET`, but replay runs the *local* dispatcher, where `MSET`
+  answered an arity error: the record went to disk in a language its
+  only reader did not speak. `MSET`/`RENAME`/`RENAMENX` now execute
+  there, which also makes **AOFs already on disk replayable** — the fix
+  recovers data that was written before it.
+- **`RENAME` did not survive a restart** — it came back *reverted*,
+  source alive and destination missing. Same cause for the same-shard
+  form; the cross-shard form wrote no record at all (a deferral the
+  code documented, on the assumption that a faithful value record
+  needed MIGRATE/RESTORE binary frames — it did not: the rewrite
+  serializer already renders any value and TTL as replayable commands).
+  The source's delete is recorded only after the destination's put
+  commits, and only if the key is still absent, so a refused
+  `RENAMENX` or a client that recreated the key cannot be replayed
+  away. The two halves live in two shards' AOFs and are not atomic: a
+  crash between them replays the key under **both** names — the
+  deliberate direction, and measured rather than assumed.
+- **Nothing the runtime routes as a cross-shard op reached a replica.**
+  Multi-key `DEL`/`UNLINK`, `MSET`, the cross-shard `RENAME` and
+  `LMOVE` two-steps and the `*STORE` destinations were durable and
+  unreplicated — the replication push existed only on the single-key
+  dispatch path. The AOF append and the replication push now travel
+  together. `FLUSHALL` is deliberately excluded: it propagates by
+  bumping the feed generation, and an extra record would land at the
+  offset that bump just reset.
+
+### Secondary index (fixed)
+
+- **A multi-key delete left the rows in the index**, forever:
+  `IDX.QUERY` kept returning them with their sort value and a nil
+  hydration, `IDX.COUNT` kept counting them. The synchronous
+  maintenance hook had exactly one call site. WATCH invalidation and
+  index maintenance are the same event and now travel together.
+- **Rows arriving by `MOVE-SCOPE` never entered the index** — present
+  in the keyspace, invisible to every indexed query, and `IDX.VERIFY`
+  reported the index clean because it audits only its own entries.
+- **`IDX.VERIFY` gains `missing`** — the direction it could not see
+  (rows that derive a value and have no entry), computed by the same
+  classifier `TABLE.VERIFY` already used. Both faces now exclude rows
+  that slid out of a declared window, which would otherwise have made
+  every windowed table report its own sliding as corruption.
+
+### Kept honest
+
+- A test asserts that **every verb the engine writes into its own AOF
+  can be executed by the dispatcher that replays it** — the check that
+  would have caught two of these on its own.
+- Snapshot round-trip per value type (string + TTL, hash, list, set,
+  zset, hash-field TTL, stream) is now pinned; it was clean, and the
+  test asserts a dump exists and no AOF does so it cannot pass on a
+  path it is not testing.
+- Verified against `cargo test --workspace` (223 suites), `crashgate`,
+  `perfgate`, `repligate` and `idxgate`.
+
 ## 4.1.1 — the TTL frame that re-anchored
 
 A consumer's gate caught a TTL reading back *larger* after an AOF
