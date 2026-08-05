@@ -157,10 +157,15 @@ more; it spent the extra on resident memory and broke the budget.
   the 300 µs budget), not the vlog (amplification *improved* with
   scale — 1.27× → 1.06×), not the cold op sweep (14/14 at every rung,
   including the one that failed).
-* **Why the per-entry cost accelerates is not explained by this run.**
-  18.7 B/entry then 104 B/entry is a fivefold step, and the sweep
-  measures it without accounting for it. That is the next question, and
-  it is a decomposition question, not another rung.
+* ~~Why the per-entry cost accelerates~~ — **answered**, and the answer
+  is that it never accelerated:
+  `FINDING-2026-08-05-capacity-per-entry-decomposition.md`. The cost is
+  a flat ~104 B/entry throughout (96 B of it the tier stub); below
+  saturation each new stub was offset by a 4 KiB value being demoted,
+  so `used_memory` stayed pinned at the budget and the slope read low.
+  The ceiling is where a non-demotable floor meets the budget, which
+  gives **max ratio ≈ value_size / (90 B + key)** — predicting 42.7×
+  against the 39.2× measured here.
 * **One workload shape.** Bulk ingest of uniform 4 KiB values plus a
   25 % overwrite churn — which the earlier finding calls close to the
   worst case for fragmentation (*"mixed / slower real workloads fragment
