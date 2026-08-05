@@ -316,21 +316,23 @@ fn strip_err(e: &str) -> &str {
 /// prefix row classified by cause (the server's `classify_prefix_rows`
 /// is the byte-parity twin).
 /// Returns `[coerce_fresh, excluded, absent, rows, missing]`.
-/// `hot_floor` is `(boundary, shape)` for a windowed path — the twin of
-/// the server's `cmd_table_verify::classify_prefix_rows`, including its
-/// reason: a row that slid to a cold segment is absent from the hot
-/// entries by design, and counting it as a hole would make every
-/// windowed table report its own sliding as corruption.
+/// `window` carries the cold side's own count — the twin of the
+/// server's `cmd_table_verify::classify_prefix_rows`, including its
+/// reason: a row that slid is absent from the hot entries by design,
+/// but only if it actually reached a segment, so the rows below the
+/// boundary are reconciled against the live cold entries instead of
+/// being exempted for sitting there.
 fn classify_prefix_rows(
     s: &mut kevy_store::Store,
     spec: &kevy_index::IndexSpec,
     row_keys: &[Vec<u8>],
     indexed: &std::collections::HashSet<&[u8]>,
-    hot_floor: Option<(i64, kevy_index::WindowShape)>,
+    window: Option<kevy_index::WindowAudit>,
 ) -> [u64; 5] {
     let names = spec.scalar_read_names();
     let w = spec.primary_width();
     let mut f = [0u64; 5];
+    let mut below = 0u64;
     for key in row_keys {
         f[3] += 1;
         let cls = match s.peek_hash_fields(key, &names[..w]) {
@@ -340,16 +342,20 @@ fn classify_prefix_rows(
         };
         match cls {
             kevy_index::RowDerivation::Indexed(_) => {
-                let slid = hot_floor.is_some_and(|(boundary, shape)| {
+                let slid = window.is_some_and(|wa| {
                     let v = match s.peek_hash_fields(key, &names[..w]) {
                         Ok(Some(vals)) => spec.derive_scalar(&vals),
                         _ => None,
                     };
-                    v.and_then(|v| kevy_index::window_value_of(&v, shape))
-                        .is_some_and(|wv| wv < boundary)
+                    v.and_then(|v| kevy_index::window_value_of(&v, wa.shape))
+                        .is_some_and(|wv| wv < wa.boundary)
                 });
-                if !slid && !indexed.contains(key.as_slice()) {
-                    f[4] += 1;
+                if !indexed.contains(key.as_slice()) {
+                    if slid {
+                        below += 1;
+                    } else {
+                        f[4] += 1;
+                    }
                 }
             }
             kevy_index::RowDerivation::CoerceFailed => f[0] += 1,
@@ -357,6 +363,9 @@ fn classify_prefix_rows(
             kevy_index::RowDerivation::Absent => f[2] += 1,
         }
     }
+    // Every row that slid should have an entry waiting for it; the
+    // shortfall is the rows that fell between the tree and the segment.
+    f[4] += below.saturating_sub(window.map_or(0, |w| w.cold_live));
     f
 }
 
@@ -367,7 +376,8 @@ fn classify_prefix_rows(
 fn hot_floor_of(
     inner: &crate::store_inner::Inner,
     name: &[u8],
-) -> Option<(i64, kevy_index::WindowShape)> {
+    ty: kevy_index::ValType,
+) -> Option<kevy_index::WindowAudit> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         inner
@@ -375,12 +385,11 @@ fn hot_floor_of(
             .windows
             .iter()
             .find(|(n, _)| n.as_slice() == name)
-            .map(|(_, w)| (w.boundary(), w.shape))
-            .filter(|(b, _)| *b != i64::MIN)
+            .and_then(|(_, w)| w.audit(ty))
     }
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (inner, name);
+        let _ = (inner, name, ty);
         None
     }
 }
@@ -403,7 +412,7 @@ fn shard_index_counts(
     let mut pat = spec.prefix.clone();
     pat.push(b'*');
     let row_keys = inner.store.collect_keys(Some(&pat), None);
-    let hot_floor = hot_floor_of(inner, &spec.name);
+    let window = hot_floor_of(inner, &spec.name, spec.ty);
     let store = &mut inner.store;
     let (drift, fresh) = store.peek_scope(|s| {
         let names = spec.scalar_read_names();
@@ -418,7 +427,7 @@ fn shard_index_counts(
                 drift += 1;
             }
         }
-        (drift, classify_prefix_rows(s, &spec, &row_keys, &indexed, hot_floor))
+        (drift, classify_prefix_rows(s, &spec, &row_keys, &indexed, window))
     });
     sums[0] += stats.entries;
     sums[1] += stats.approx_bytes;

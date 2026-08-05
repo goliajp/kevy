@@ -99,18 +99,49 @@ fn a_row_the_index_does_not_owe_is_not_missing() {
     assert_eq!(field(&chunk, 6), 0, "neither row derives a value");
 }
 
-/// A windowed path slides old rows into cold segments on purpose,
-/// so their absence from the hot entries is the design, not a hole.
-/// Without the boundary every slid row would be reported as a hole
-/// in the index that shed it.
+fn audit(cold_live: u64) -> Option<kevy_index::WindowAudit> {
+    Some(kevy_index::WindowAudit {
+        boundary: 50,
+        shape: kevy_index::WindowShape::PlainI64,
+        cold_live,
+    })
+}
+
+/// A windowed path slides old rows into cold segments on purpose, so
+/// their absence from the hot entries is the design, not a hole —
+/// **when the segment actually has them**. Without the boundary every
+/// slid row is reported as a hole in the index that shed it.
 #[test]
 fn a_row_that_slid_out_of_the_window_is_not_missing() {
     let mut store = Store::new();
     store.hset(b"u:1", &[(b"age".as_slice(), b"10".as_slice())]).unwrap();
     store.hset(b"u:2", &[(b"age".as_slice(), b"90".as_slice())]).unwrap();
-    let floor = Some((50i64, kevy_index::WindowShape::PlainI64));
-    let chunk = encode_verify_chunk(&mut store, &spec(), &[], &stats(), floor);
+    let chunk = encode_verify_chunk(&mut store, &spec(), &[], &stats(), audit(1));
     assert_eq!(field(&chunk, 6), 1, "only the in-window row is a hole");
+}
+
+/// The reason the exemption cannot be positional: a row lost between
+/// the hot tree and the segment sits below the boundary exactly like a
+/// legitimate one. Same store, same boundary — only the cold side's
+/// own count differs, and it is what tells the two apart.
+#[test]
+fn a_slid_row_the_cold_side_never_received_is_missing() {
+    let mut store = Store::new();
+    store.hset(b"u:1", &[(b"age".as_slice(), b"10".as_slice())]).unwrap();
+    store.hset(b"u:2", &[(b"age".as_slice(), b"90".as_slice())]).unwrap();
+    let chunk = encode_verify_chunk(&mut store, &spec(), &[], &stats(), audit(0));
+    assert_eq!(field(&chunk, 6), 2, "the slid row never arrived: both are holes");
+}
+
+/// A cold entry can outlive its row — tombstoning is the writer's job.
+/// That direction belongs to the drift walk, so a surplus must not
+/// underflow into a negative hole count.
+#[test]
+fn more_cold_entries_than_slid_rows_is_not_a_hole() {
+    let mut store = Store::new();
+    store.hset(b"u:1", &[(b"age".as_slice(), b"10".as_slice())]).unwrap();
+    let chunk = encode_verify_chunk(&mut store, &spec(), &[], &stats(), audit(9));
+    assert_eq!(field(&chunk, 6), 0, "surplus cold entries are not holes");
 }
 
 /// A row whose field stopped coercing (someone wrote a string into an i64

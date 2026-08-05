@@ -24,7 +24,7 @@ enum HitsOrChunk {
         /// window value sits below the boundary have legitimately slid
         /// to a cold segment and are absent from the hot entries by
         /// design, so the missing-row sweep must not count them.
-        hot_floor: Option<(i64, kevy_index::WindowShape)>,
+        window: Option<kevy_index::WindowAudit>,
     },
 }
 
@@ -133,22 +133,19 @@ fn run_scalar_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8]) ->
         Shape::Verify => {
             let mut entries: Vec<(Vec<u8>, IndexValue)> = Vec::new();
             seg.each_entry(|k, v| entries.push((k.to_vec(), v.clone())));
-            let hot_floor = win
-                .filter(|w| w.boundary() != i64::MIN)
-                .map(|w| (w.boundary(), w.shape));
             HitsOrChunk::Verify {
                 spec: Box::new(spec.clone()),
                 entries,
                 stats: seg.stats(),
-                hot_floor,
+                window: win.and_then(|w| w.audit(spec.ty)),
             }
         }
     });
     match res {
         Ok(HitsOrChunk::Chunk(chunk)) => chunk,
         Ok(HitsOrChunk::Hits(hits)) => encode_hits_chunk(store, &hits, &q.fields),
-        Ok(HitsOrChunk::Verify { spec, entries, stats, hot_floor }) => {
-            encode_verify_chunk(store, &spec, &entries, &stats, hot_floor)
+        Ok(HitsOrChunk::Verify { spec, entries, stats, window }) => {
+            encode_verify_chunk(store, &spec, &entries, &stats, window)
         }
         Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
         Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
@@ -355,7 +352,7 @@ fn encode_verify_chunk(
     spec: &IndexSpec,
     entries: &[(Vec<u8>, IndexValue)],
     stats: &SegmentStats,
-    hot_floor: Option<(i64, kevy_index::WindowShape)>,
+    window: Option<kevy_index::WindowAudit>,
 ) -> Vec<u8> {
     // VERIFY's recheck is a bulk sweep — inside the peek scope a
     // cold row costs one pread and never promotes or marks the gate.
@@ -376,7 +373,7 @@ fn encode_verify_chunk(
         // uses — one implementation, so the two faces cannot disagree
         // about what a hole is.
         let cls =
-            crate::cmd_table_verify::classify_prefix_rows(s, spec, &row_keys, &indexed, hot_floor);
+            crate::cmd_table_verify::classify_prefix_rows(s, spec, &row_keys, &indexed, window);
         (drift, cls[4])
     });
     let mut chunk = vec![ST_OK];

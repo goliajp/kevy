@@ -19,21 +19,28 @@ use crate::state::Ctx;
 /// The row→index half of the walk, under the no-promote peek: every
 /// prefix row classified by cause.
 /// Returns `[coerce_fresh, excluded, absent, rows, missing]`.
-/// `hot_floor` is `(boundary, shape)` for a windowed path: a row whose
-/// window value sits below the boundary has legitimately slid to a cold
-/// segment and is absent from the hot entries by design, so it is not
-/// `missing`. Without it a windowed path reports every slid row as a
-/// hole in its own index.
+/// `window` is the audit's cold-side evidence on a windowed path. Rows
+/// below the boundary are absent from the hot tree by design — but only
+/// if they reached a cold segment, and a row lost between the two
+/// structures sits below the boundary exactly like a legitimate one.
+/// So they are counted, not exempted, and reconciled against the live
+/// cold entries at the end. Without any of this a windowed path reports
+/// every slid row as a hole in its own index (17500 of them on a
+/// 20000-row table); exempting them by position instead reports zero
+/// even when rows really are lost.
 pub(crate) fn classify_prefix_rows(
     s: &mut Store,
     spec: &kevy_index::IndexSpec,
     row_keys: &[Vec<u8>],
     indexed: &std::collections::HashSet<&[u8]>,
-    hot_floor: Option<(i64, kevy_index::WindowShape)>,
+    window: Option<kevy_index::WindowAudit>,
 ) -> [u64; 5] {
     let names = spec.scalar_read_names();
     let w = spec.primary_width();
     let mut f = [0u64; 5];
+    // Holes below the window boundary: candidates for the cold side,
+    // reconciled against its own count once the walk is done.
+    let mut below = 0u64;
     for key in row_keys {
         f[3] += 1;
         let cls = match s.peek_hash_fields(key, &names[..w]) {
@@ -42,8 +49,12 @@ pub(crate) fn classify_prefix_rows(
         };
         match cls {
             kevy_index::RowDerivation::Indexed(_) => {
-                if !indexed.contains(key.as_slice()) && !slid_out(s, spec, key, hot_floor) {
-                    f[4] += 1;
+                if !indexed.contains(key.as_slice()) {
+                    if slid_out(s, spec, key, window) {
+                        below += 1;
+                    } else {
+                        f[4] += 1;
+                    }
                 }
             }
             kevy_index::RowDerivation::CoerceFailed => f[0] += 1,
@@ -51,25 +62,32 @@ pub(crate) fn classify_prefix_rows(
             kevy_index::RowDerivation::Absent => f[2] += 1,
         }
     }
+    // Every row that slid should have an entry waiting for it. The
+    // shortfall is exactly the rows that fell between the hot tree and
+    // the segment. `saturating_sub` because a cold entry can outlive
+    // its row (tombstoning is the writer's job, not the reader's) —
+    // that direction is the drift walk's, not this one's.
+    f[4] += below.saturating_sub(window.map_or(0, |w| w.cold_live));
     f
 }
 
-/// Did this row leave the hot segment on purpose? Only asked about a
-/// row that looks missing, so the extra peek is paid per candidate hole
-/// rather than per row. The row's own indexed value decides — the same
-/// value the segment would hold — against the window's boundary.
+/// Is this row below the window boundary — i.e. one the cold side is
+/// supposed to be holding? Only asked about a row that looks missing,
+/// so the extra peek is paid per candidate hole rather than per row.
+/// Says nothing about whether the cold side actually has it; the
+/// caller's reconciliation does that.
 fn slid_out(
     s: &mut Store,
     spec: &kevy_index::IndexSpec,
     key: &[u8],
-    hot_floor: Option<(i64, kevy_index::WindowShape)>,
+    window: Option<kevy_index::WindowAudit>,
 ) -> bool {
-    let Some((boundary, shape)) = hot_floor else {
+    let Some(w) = window else {
         return false;
     };
     match index_runtime::row_value(s, spec, key) {
         index_runtime::RowValue::Value(v) => {
-            kevy_index::window_value_of(&v, shape).is_some_and(|wv| wv < boundary)
+            kevy_index::window_value_of(&v, w.shape).is_some_and(|wv| wv < w.boundary)
         }
         _ => false,
     }
@@ -80,14 +98,12 @@ pub(crate) fn index_verify_counts(
     store: &mut Store,
     name: &[u8],
 ) -> Result<[u64; 10], kevy_resp::CmdError> {
-    let (spec, entries, stats, hot_floor) =
+    let (spec, entries, stats, window) =
         index_runtime::with_ready_segment(ctx, store, name, |spec, seg, win| {
             let mut entries: Vec<(Vec<u8>, kevy_index::IndexValue)> = Vec::new();
             seg.each_entry(|k, v| entries.push((k.to_vec(), v.clone())));
-            let floor = win
-                .filter(|w| w.boundary() != i64::MIN)
-                .map(|w| (w.boundary(), w.shape));
-            (spec.clone(), entries, seg.stats(), floor)
+            let audit = win.and_then(|w| w.audit(spec.ty));
+            (spec.clone(), entries, seg.stats(), audit)
         })?;
     let indexed: std::collections::HashSet<&[u8]> =
         entries.iter().map(|(k, _)| k.as_slice()).collect();
@@ -102,7 +118,7 @@ pub(crate) fn index_verify_counts(
                 _ => drift += 1,
             }
         }
-        (drift, classify_prefix_rows(s, &spec, &row_keys, &indexed, hot_floor))
+        (drift, classify_prefix_rows(s, &spec, &row_keys, &indexed, window))
     });
     Ok([
         stats.entries,
