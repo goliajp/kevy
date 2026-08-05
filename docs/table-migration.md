@@ -57,6 +57,14 @@ the one written before the table existed. (This is exactly the class
 `TABLE.VERIFY`'s `missing` counter catches after the fact; the audit
 is how you avoid meeting it in production.)
 
+**There is no tool for this one, deliberately.** The store does not
+hold the fact you need — "which code paths write this table" is not
+recorded anywhere in the data, because writers are code and the engine
+sees only writes. What a tool *can* do is catch the consequence:
+`kevy-cli shadow` reports a forgotten writer as a row the new path is
+missing, before the cutover rather than after. Use the audit to avoid
+the surprise and the shadow run to prove you avoided it.
+
 ### 3. Backfill from the union of every source that can name an item
 
 Legacy indexes disagree with each other — that is the measured 89 %/
@@ -75,6 +83,33 @@ paginated UI turns that into user-visible churn. Log the first
 divergence with **both sort keys** — that one log line names the
 drifting writer immediately.
 
+**`kevy-cli shadow` does this for you.** Give it both commands; it
+compares the two orders of row keys they produce and exits non-zero on
+any disagreement, so a cutover script can gate on it:
+
+```console
+$ kevy-cli shadow -p 6004 \
+    --old "ZRANGE old:act 0 -1 WITHSCORES" --old-pairs \
+    --new "IDX.QUERY u.act RANGE 0 999 LIMIT 20" --samples 50
+shadow: 50 samples, 50 diverged (first at sample 0)
+  ORDER differs at position 0:
+    old: u:5 (sort 5)
+    new: u:1 (sort 10)
+```
+
+That pair of sort values is the line the lesson is about. The other
+shape it reports is `MISSING` — a row the old path has and the new one
+does not, which is lesson 2 arriving early: a writer nobody updated,
+seen *before* the cutover instead of by `TABLE.VERIFY` afterwards.
+
+Two things it does not guess. A kevy paged reply (`[cursor, [key,
+sort, …]]`) is recognised from its shape, but **member/score pairs look
+exactly like a plain list** — pass `--old-pairs` for `WITHSCORES` and
+friends, or every score is read as a row key and every sample diverges.
+And a single disagreement is a lead, not a verdict: both sides are read
+back to back on one connection, so a row written between them shows up
+here. Run `--samples n` and read the rate.
+
 ### 5. Deleting the old structure: readers first, writers second
 
 When the shadow window closes, remove the old index's **readers
@@ -82,6 +117,14 @@ first**, then its writers. The tempting opposite order has a silent
 failure mode: a missing key reads as 0 or empty, not as an error — a
 reader left behind after the writers are gone serves quietly wrong
 answers instead of crashing. Then delete the stored keys.
+
+**No tool here either, and this is the one where a tool would be
+actively harmful.** kevy does not track who *reads* a key, so any
+"nobody reads this any more" probe would be inferred rather than
+observed. This lesson's failure mode is already *quietly reading empty
+and calling it fine* — a probe that says "checked, safe to delete"
+would dress that failure in a confirmation. Order the removal by hand:
+readers first, then writers, then the keys.
 
 ### 6. A predicate the index lacks ⇒ another ORDERPATH, never a duplicated column
 

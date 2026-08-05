@@ -19,9 +19,20 @@ pub mod backup;
 /// [`migrate::run_export`] and [`migrate::run_import`].
 pub mod migrate;
 
+/// Where a subcommand connects when the caller says nothing. Shared
+/// rather than repeated: two copies of a default is a drift waiting to
+/// be reported as a bug.
+pub const DEFAULT_HOST: &str = "127.0.0.1";
+/// The port half of the same default.
+pub const DEFAULT_PORT: u16 = 6379;
+
 /// Prefix bulk ops + diagnostics (`copy-prefix` /
 /// `delete-prefix` / `digest` / `diff` / `inspect`).
 pub mod bulk;
+
+/// `shadow` — run the old query and the new one side by side and
+/// report where they disagree, in membership AND in order.
+pub mod shadow;
 
 /// Pretty-print a reply roughly the way `redis-cli` does. Arrays are
 /// numbered + indented; bulk strings are quoted; nil shows as `(nil)`.
