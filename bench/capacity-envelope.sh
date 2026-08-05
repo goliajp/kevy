@@ -411,10 +411,14 @@ fi
     echo "L14=$L14 hot_p99us=$HOT0->$HOT1 under digest+hydrate+backfill ($BF_NOTE)"
   fi
   if [ "$ONLY" != D1 ]; then
-    L2=$(combine "$V_B2S" "$V_B2H"); L5=$V_AMP
+    # L2 spans both phases: the scalar cold read is B6's, the hash-row
+    # cold read is D1's. A one-phase run reports the half it measured
+    # and says so — silently printing a number it did not take would be
+    # worse than an obvious gap.
+    L2=$(combine "$V_B2S" "${V_B2H:-PASS}"); L5=$V_AMP
     L6=$(combine "$V_RSS" "$V_RATIO")
     if [ "$FAILED" = 1 ] && [ "$ENFORCE" = 1 ]; then L6=FAIL; fi
-    echo "L2=$L2 scalar_p99us=$SCALAR_P99/300 hash_row_p99us=$HASH_P99/500"
+    echo "L2=$L2 scalar_p99us=$SCALAR_P99/300 hash_row_p99us=${HASH_P99:-notrun}/500"
     echo "L5=$L5 vlog=$VLOG cold_bytes=$CBYTES amp=${AMP}x/2.0x"
     echo "L6=$L6 ratio=${RATIO}x/10x used_peak=$PEAK_USED cap=$CAP rss_peak=$RSS_PEAK frag=${FRAG}x sweep=$SWEEP_OK keys=$B6_KEYS val=$B6_VAL budget=$B6_BUDGET"
   fi
