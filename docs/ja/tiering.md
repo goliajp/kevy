@@ -160,4 +160,4 @@ cold key ≈ 96 B (entry overhead) + key heap bytes     # value fully reclaimed
 - [tables.md](tables.md)——ティアリングと一緒に設計された TABLE.* レイヤー。インデックスはホット、行はコールド、index-only クエリは行にゼロ回しか触れません。
 - [persistence.md](persistence.md)——ティアリングが意図的に触れていない永続性の契約。
 - [tuning.md](tuning.md)——tier 予算と共存するメモリのつまみ（`maxmemory` とその仲間）。
-- [`bench/tiergate.sh`](../bench/tiergate.sh) / [`bench/capacity-envelope.sh`](../bench/capacity-envelope.sh)——このページで引用または保留にした、すべての数字の背後にある受け入れゲートと envelope ランナー。
+- [`bench/tiergate.sh`](../../bench/tiergate.sh) / [`bench/capacity-envelope.sh`](../../bench/capacity-envelope.sh)——このページで引用または保留にした、すべての数字の背後にある受け入れゲートと envelope ランナー。

@@ -55,7 +55,7 @@ TABLE.VERIFY name      # component fsck + a bounded column spot check
 素の `TABLE.DECLARE` は厳格形のままです。既存名の再宣言はエラーです。起動時は `ensure`、マイグレーションでは `replace`、名前の重複がバグを意味する場面では `declare` を使ってください。
 
 - カラム型は `i64 | f64 | str`——スカラーインデックスの型そのものです。それ以外（タイムスタンプ、ブール、列挙）はアプリ側でこの 3 つのどれかにエンコードし、粗い対応づけは隠さずに明言されます（kevy-sql は型変換されたカラムごとに注記を出力します）。
-- `PK` は宣言済みカラムを指します。これはドキュメントであり、`VERIFY` の面です——行はこれまでどおりキーで指されます。`serial` 式の id 割り当てはレシピ（[シーケンスのレシピ](cookbook.md#3-sequences)）であって、エンジンの機能ではありません。
+- `PK` は宣言済みカラムを指します。これはドキュメントであり、`VERIFY` の面です——行はこれまでどおりキーで指されます。`serial` 式の id 割り当てはレシピ（[シーケンスのレシピ](cookbook.md#3-シーケンス)）であって、エンジンの機能ではありません。
 - テーブルは最大 64 個。構造上の拒否はすべて名前つきです（重複カラム、未知の `VALUES` カラム、名前衝突、……）。黙って通ることはありません。
 
 `TABLE.VERIFY` は**すべてのカウンタを、呼び出しの瞬間に、双方向で**再計算します（4.1——以前の `coerce_failures` は累積値で、しかも欠落カラムまで呑み込んでいたため、隣の新鮮な `drift` と読み合わせられませんでした）。
@@ -67,7 +67,7 @@ TABLE.VERIFY name      # component fsck + a bounded column spot check
 
 ## 複合 ORDERPATH の意味論
 
-ORDERPATH は[複合順序のレシピ](cookbook.md#8-composite-ordering-order-by-a-b)——`ORDER BY a, b DESC` の歩き方——を、本物の複合インデックスに機械化します。行ごとに順序を保つバイト列が 1 本あり、リレーショナルの複合インデックスと同じやり方で、1 本の B-tree がクエリに答えます。ルールは次のとおりです。
+ORDERPATH は[複合順序のレシピ](cookbook.md#8-複合順序付けorder-by-a-b)——`ORDER BY a, b DESC` の歩き方——を、本物の複合インデックスに機械化します。行ごとに順序を保つバイト列が 1 本あり、リレーショナルの複合インデックスと同じやり方で、1 本の B-tree がクエリに答えます。ルールは次のとおりです。
 
 - **`WHERE` は先頭プレフィックスを取ります。**`WHERE a EQ x [b EQ y …] [RANGE c min max]` は、複合インデックスのカラムを宣言順に先頭から指名しなければなりません。等値のプレフィックス、次に*その次の*カラムへの range を最大 1 つ。それ以降は無制約です（古典的な複合 B-tree の意味論）。プレフィックスでないカラムの指名は名前つきエラーです——スキャンには決してなりません。
 - `RANGE` は `WHERE` の中で終端です——その後には何も続けられません。range の後ろの条件は、1 回の連続した歩きでは表現できないからです。
@@ -100,8 +100,8 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name email
 
 ## NULL、一意性、そして何が強制されるか
 
-- **NULL = 欠けたフィールド。**必須のカラムはありません。インデックス対象カラムを欠く行は、単にそのインデックスにいないだけです。エンジンの `CHECK` も、既定値も、NOT NULL もありません——制約はレシピです（[制約のレシピ](cookbook.md#5-check-constraints-and-multi-key-invariants)、アトミックブロック）。
-- テーブル層の**一意性は、強制ではなく検証です**。`unique` インデックスは `IDX.CREATE KIND unique` が築くのと同じフェンスで（[indexes.md](indexes.md#uniqueness-is-a-fence-not-a-lock)——予約パターンで競合なしにできます）、`TABLE.VERIFY` は `duplicates` を報告します。エンジンが後から書き込みを拒否するのではありません。
+- **NULL = 欠けたフィールド。**必須のカラムはありません。インデックス対象カラムを欠く行は、単にそのインデックスにいないだけです。エンジンの `CHECK` も、既定値も、NOT NULL もありません——制約はレシピです（[制約のレシピ](cookbook.md#5-check制約と複数キー不変条件)、アトミックブロック）。
+- テーブル層の**一意性は、強制ではなく検証です**。`unique` インデックスは `IDX.CREATE KIND unique` が築くのと同じフェンスで（[indexes.md](indexes.md#一意性はフェンスであってロックではない)——予約パターンで競合なしにできます）、`TABLE.VERIFY` は `duplicates` を報告します。エンジンが後から書き込みを拒否するのではありません。
 
 ## それが「ではない」もの
 
@@ -121,7 +121,7 @@ kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004
 - 定数の単一テーブル `CREATE VIEW … AS SELECT` → エンジンのビュー。パラメータつきなら → **クエリカード**——`$N` のスロットをアプリが埋める、出来合いの `IDX.QUERY` テンプレートです。
 - コンパイラもプランしません。ビューを、あなたが宣言したアクセスパスに突き合わせ、合うものがなければ、どの宣言を足すべきか（`add: CREATE INDEX ON t (dept, age)`）を告げます。スキャンを発明することはありません。アドホック SQL、join、サブクエリ、`OR`、`GROUP BY` の類は `line:col` つきで拒否され、置き換えるレシピを指し示します。
 
-端到端のウォークスルー——実物の users/orders/order_items スキーマをコンパイルし、適用し、クエリするまで——は[スキーマ移植のレシピ](cookbook.md#22-porting-a-pgmysql-schema)です。
+端到端のウォークスルー——実物の users/orders/order_items スキーマをコンパイルし、適用し、クエリするまで——は[スキーマ移植のレシピ](../cookbook.md#22-porting-a-pgmysql-schema)です。
 
 ## 組み込み
 

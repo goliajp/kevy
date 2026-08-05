@@ -2451,7 +2451,7 @@ test ... ok in 300.66s
 
 **v2.0 is the result of the 24-version v2 roadmap arc (v1.36 → v1.59)** — Phase A (failure-mode robustness) + B (operability + observability) + C (cluster correctness under chaos) + D (large-scale E2E) + E (ecosystem battle-test) + F (RC fixes + docs). It is the first version we have empirically proven survives the entire failure-mode surface area that production deployments depend on.
 
-The canonical narrative — what v2.0 changes, what it doesn't, the acceptance gates, the open findings, and the drop-in upgrade procedure — is at **[`docs/v2.0-RELEASE-NOTES.md`](docs/v2.0-RELEASE-NOTES.md)**.
+The canonical narrative — what v2.0 changes, what it doesn't, the acceptance gates, the open findings, and the drop-in upgrade procedure — is at **`docs/v2.0-RELEASE-NOTES.md` (since removed)**.
 
 ### TL;DR
 
@@ -2462,7 +2462,7 @@ The canonical narrative — what v2.0 changes, what it doesn't, the acceptance g
 
 ### What v2.0 means empirically
 
-- **16-gate acceptance** (catalog in [`docs/v2-acceptance-baseline.md`](docs/v2-acceptance-baseline.md)) — RESP fuzz (1 M streams, 0 panics) · maxclients enforcement · disk-full restart recovery · FD exhaustion · SIGTERM graceful drain (192 k ACKs / 0 lost / 0.08 s) · backup-restore round-trip · Prometheus `/metrics` · audit log · cluster topology · multi-node peer formation · scope MISDIRECTED · client-side network partition (1000 / 1000 storm conns in 0.10 s) · AOF compat matrix (100 v1.0-vintage commands replay clean) · multi-tenant isolation (5000 ACKs in 0.05 s, zero cross-leak) · burst absorption (10 k ops/s) · long-running soak (143 k ACK/s, 4.7 KiB/sample slope = 56× under leak cap).
+- **16-gate acceptance** (catalog in `docs/v2-acceptance-baseline.md` (since removed)) — RESP fuzz (1 M streams, 0 panics) · maxclients enforcement · disk-full restart recovery · FD exhaustion · SIGTERM graceful drain (192 k ACKs / 0 lost / 0.08 s) · backup-restore round-trip · Prometheus `/metrics` · audit log · cluster topology · multi-node peer formation · scope MISDIRECTED · client-side network partition (1000 / 1000 storm conns in 0.10 s) · AOF compat matrix (100 v1.0-vintage commands replay clean) · multi-tenant isolation (5000 ACKs in 0.05 s, zero cross-leak) · burst absorption (10 k ops/s) · long-running soak (143 k ACK/s, 4.7 KiB/sample slope = 56× under leak cap).
 - **10 ecosystem clients battle-tested unmodified**: BullMQ 5.79 · Sidekiq 6.5 · Bee Queue 1.7 · Celery 5.6 · node-redlock 5 · ioredis 5.7 · Jedis 5.x · StackExchange.Redis 2.x · go-redis v9 · redis-py 5.x.
 
 ### Phase F RC closures shipped in v2.0
@@ -2481,7 +2481,7 @@ The 4 findings the chaos suite surfaced that warranted code fixes are all closed
 - v1.49.x — `INFO memory` reports `used_memory:0` when keyspace empty.
 - v1.52.x — `CLIENT SETNAME` is a documented stub (Jedis records client-side; app correctness unaffected).
 
-Each is filed in [`docs/v2.0-RELEASE-NOTES.md`](docs/v2.0-RELEASE-NOTES.md) with a clear "why this doesn't block v2.0" note.
+Each is filed in `docs/v2.0-RELEASE-NOTES.md` (since removed) with a clear "why this doesn't block v2.0" note.
 
 ### Upgrade procedure
 

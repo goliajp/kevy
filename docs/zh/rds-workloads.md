@@ -11,7 +11,7 @@ RDS 让你先写数据、以后再定访问路径——查询计划器在查询�
 
 ### 与 PostgreSQL 18 的实测对比
 
-不是断言——[脚本在此](../bench/pgcompare.sh)，[结果在此](../bench/PGCOMPARE-2026-07-26.md)。200 万行 / 843 MB CSV，同一套 harness 打两边，PG 用原厂默认：
+不是断言——[脚本在此](../../bench/pgcompare.sh)，[结果在此](../../bench/PGCOMPARE-2026-07-26.md)。200 万行 / 843 MB CSV，同一套 harness 打两边，PG 用原厂默认：
 
 | | kevy（`everysec`） | PG 18 默认 |
 |---|---|---|
