@@ -343,6 +343,56 @@ mod tests {
         assert!(s.contains("HSET"), "HSET emitted: {s:?}");
     }
 
+    /// MOVE-SCOPE is how a prefix changes owner, so what it can carry
+    /// bounds what a reshard can move. This pins the whole set —
+    /// **including streams and TTLs**, both of which the client-side
+    /// rebuild path in `kevy-cli` does not carry (streams) or carries
+    /// differently (absolute PEXPIREAT vs PEXPIREAT here too).
+    ///
+    /// A type added to the engine without an arm here would reshard
+    /// into nothing, and the emitter's catch-all is a bare `continue`
+    /// — the same silence that lost streams from `kevy-cli export`.
+    #[test]
+    fn serialize_prefix_carries_every_type_and_the_ttl() {
+        let mut store = fresh_store();
+        store.set(b"app:s", b"v".to_vec(), None, false, false);
+        store.hset(b"app:h", &[(b"f".as_slice(), b"v".as_slice())]).unwrap();
+        store.rpush(b"app:l", &[b"a".as_slice()]).unwrap();
+        store.sadd(b"app:set", &[b"m".as_slice()]).unwrap();
+        store.zadd(b"app:z", &[(1.0, b"m".as_slice())]).unwrap();
+        store
+            .xadd(
+                b"app:st",
+                kevy_store::XAddIdSpec::AutoAll,
+                vec![(b"f".to_vec(), b"v".to_vec())],
+                false,
+                1,
+            )
+            .unwrap();
+        store.set(
+            b"app:ttl",
+            b"v".to_vec(),
+            Some(std::time::Duration::from_secs(60)),
+            false,
+            false,
+        );
+
+        let (bulk, _count) = serialize_prefix(&mut store, b"app:");
+        let w = String::from_utf8_lossy(&bulk);
+        for (key, verb) in [
+            ("app:s", "SET"),
+            ("app:h", "HSET"),
+            ("app:l", "RPUSH"),
+            ("app:set", "SADD"),
+            ("app:z", "ZADD"),
+            ("app:st", "XADD"),
+        ] {
+            assert!(w.contains(key), "{key} must ship: {w:?}");
+            assert!(w.contains(verb), "{key} needs its rebuild verb {verb}: {w:?}");
+        }
+        assert!(w.contains("PEXPIREAT"), "a TTL'd key ships its deadline: {w:?}");
+    }
+
     #[test]
     fn serialize_prefix_skips_non_matching_keys() {
         let mut store = fresh_store();

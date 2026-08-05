@@ -93,6 +93,32 @@ Idempotent for every type it emits — five of six. All three language
 versions now name the one it leaves behind and show the line to look
 for.
 
+## The engine already knows how to move a stream — just not from there
+
+`MOVE-SCOPE` is the *other* rebuild-frame emitter: server-side, used to
+hand a prefix to another node during a reshard. Measured (a test now
+pins it):
+
+| | types carried | TTL |
+|---|---|---|
+| `MOVE-SCOPE` (server, reshard) | **six — string, hash, list, set, zset, stream** | ✅ `PEXPIREAT` |
+| `kevy-cli export` / `copy-prefix` (client, migration) | five — **no stream** | ✅ `PEXPIREAT` |
+
+So the CLI's gap is **not fundamental**. The engine rebuilds a stream
+perfectly well; the client-side path, which reconstructs over RESP with
+`TYPE` + `GET`/`HGETALL`/`LRANGE`/…, simply never grew the `XRANGE` →
+`XADD`-with-explicit-ids arm the server-side emitter has.
+
+Whether to close that is a product call — the docs now tell you to move
+streams separately, which is honest and may be enough. What the
+asymmetry does establish is that "streams cannot be rebuilt from
+frames" would be the wrong reason to leave it.
+
+**Both emitters share the shape that caused this.** `MOVE-SCOPE`'s
+catch-all is a bare `continue`, so a type added to the engine without
+an arm there reshards into nothing, just as silently. It now has a test
+pinning all six, which is the cheap half of the same lesson.
+
 ## The pattern, seventh instance
 
 Every defect this lens has found today has the same shape: **two facts
