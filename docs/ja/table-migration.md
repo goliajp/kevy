@@ -62,6 +62,20 @@ shadow: 50 samples, 50 diverged (first at sample 0)
 
 カウンタは呼び出しごとに新鮮で、cron や doctor コマンドから回せるほど安価です：`drift` と `missing` は永遠にゼロであるべきで、`absent` / `excluded` / `coerce_failures` は各除外原因が奪った行を名指しします（正確な意味論は [tables.md](tables.md)。ORDERPATH の `duplicates` が非ゼロならページネーションに有界のタイブレークが要る、という話も含めて）。この移行全体の眼目は、これらの数字が*存在する*ことです。読んでください。
 
+**`kevy-cli doctor` がその cron です。** 宣言済みのすべてのテーブルに `VERIFY` を回し、終了コードで答えます：
+
+```console
+$ kevy-cli doctor -p 6004
+  OK       user  (rows 59999 · entries 59999 · absent 0 · excluded 0 · coerce_failures 0)
+  WARN     ev    duplicates 1 — paging this path needs a bounded tie-break or pages repeat rows
+  BUILDING new   — an index is still backfilling, not a verdict
+doctor: 3 table(s) — 0 drifted, 1 warned, 1 still building
+```
+
+対応付けは新しい主張ではなく、この教訓自身の言葉です：`drift` と `missing` が非ゼロなら**失敗**、`duplicates` は**警告**、`absent` / `excluded` / `coerce_failures` は**報告するだけで決して失敗させません**——どれも正当な状態であり、NULL の列が一つあるだけで赤くなる doctor は永遠に赤いままだからです。
+
+意図的な選択が二つ。警告は既定では失敗**させません**——情報で落ちる cron は読まれなくなります——ので、より厳しい契約が欲しい人のために `--warn-is-failure` があります。そしてインデックスが backfill 中のテーブルは `-INDEXBUILDING` を返しますが、それは**失敗ではなく、それ自体が一つの結末**です：失敗として扱えば、インデックスを宣言するたびに誰かを呼び出すことになります。
+
 ## 参照
 
 - [tables.md](tables.md)——宣言の面、VERIFY の意味論、複合 ORDERPATH の規則。

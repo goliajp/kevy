@@ -76,6 +76,14 @@ shadow: 50 samples, 50 diverged (first at sample 0)
 <p>常态就是<a href="../tables/#开机模式ensure">开机模式</a>：每次进程启动 <code>TABLE.ENSURE</code>——第一次开机 <code>Created</code>，以后 <code>Unchanged</code>，而当代码里的 spec 与 store 里的不再一致时，得到<b>点名差异的拒绝</b>——那是让你主动跑一次 <code>TABLE.REPLACE</code> 迁移的信号，而不是被一次迁移撞上。</p>
 <h3 id="8-让-verify-成为运维的一部分而不是迁移的一步">8. 让 <code>VERIFY</code> 成为运维的一部分，而不是迁移的一步</h3>
 <p>这些计数每次调用都是新鲜的，便宜到可以挂在 cron 或 doctor 命令里：<code>drift</code> 和 <code>missing</code> 应当永远为零；<code>absent</code> / <code>excluded</code> / <code>coerce_failures</code> 点名每种排除原因夺走的行（精确语义见 <a href="../tables/">tables.md</a>，包括 ORDERPATH 的 <code>duplicates</code> 非零意味着分页需要一个有界决胜列）。整个迁移的意义就在于这些数字*存在*。去读它们。</p>
+<p><b><code>kevy-cli doctor</code> 就是那个 cron。</b> 它对每张已声明的表跑 <code>VERIFY</code>，用退出码回答：</p>
+<figure class="code"><pre><code class="lang-console">$ kevy-cli doctor -p 6004
+  OK       user  (rows 59999 · entries 59999 · absent 0 · excluded 0 · coerce_failures 0)
+  WARN     ev    duplicates 1 — paging this path needs a bounded tie-break or pages repeat rows
+  BUILDING new   — an index is still backfilling, not a verdict
+doctor: 3 table(s) — 0 drifted, 1 warned, 1 still building</code></pre></figure>
+<p>这套映射是本课自己的话，不是新的主张：<code>drift</code> 与 <code>missing</code> 非零<b>失败</b>；<code>duplicates</code> <b>警告</b>；<code>absent</code> / <code>excluded</code> / <code>coerce_failures</code> <b>只报告、永不失败</b>——每一种都是合法状态，一个会因为某列有 NULL 就报红的 doctor 会一直红下去。</p>
+<p>两个刻意的选择。警告默认<b>不</b>导致失败——会因信息而失败的 cron 很快就没人读了——所以想要更严契约的人有 <code>--warn-is-failure</code>。而索引还在回填的表回的是 <code>-INDEXBUILDING</code>，那是<b>它自己的结局，不是失败</b>：把它当失败，就会在每次声明索引时叫醒某个人。</p>
 <h2 id="参见">参见</h2>
 <ul><li><a href="../tables/">tables.md</a>——声明面、VERIFY 语义、复合 ORDERPATH 规则。</li><li><a href="../cookbook/">cookbook.md</a>——序列、约束、复合排序的配方。</li><li><a href="../tiering/">tiering.md</a>——行冷而索引热；index-only 查询零行触达。</li></ul></main>
   <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#先说为什么只有引擎维护的索引才可验证">先说为什么：只有引擎维护的索引才可验证</a></li><li class="l2"><a href="#八课按需要的顺序">八课，按需要的顺序</a></li><li class="l3"><a href="#1-第一问每个查询维度在行上是单值的吗">1. 第一问：每个查询维度在行上是单值的吗？</a></li><li class="l3"><a href="#2-一旦开始供读每个-writer-都在承重">2. 一旦开始供读，每个 writer 都在承重</a></li><li class="l3"><a href="#3-回填要取所有能点名条目的来源的并集">3. 回填要取"所有能点名条目的来源"的并集</a></li><li class="l3"><a href="#4-切换前影子读比内容也比顺序">4. 切换前影子读——比内容，也比顺序</a></li><li class="l3"><a href="#5-删旧结构先枚举-reader再删-writer">5. 删旧结构：先枚举 reader，再删 writer</a></li><li class="l3"><a href="#6-索引缺谓词-再加一条-orderpath永远不要复制列">6. 索引缺谓词 ⇒ 再加一条 ORDERPATH，永远不要复制列</a></li><li class="l3"><a href="#7-开机用-ensure">7. 开机用 ensure</a></li><li class="l3"><a href="#8-让-verify-成为运维的一部分而不是迁移的一步">8. 让 VERIFY 成为运维的一部分，而不是迁移的一步</a></li><li class="l2"><a href="#参见">参见</a></li></ul></aside>

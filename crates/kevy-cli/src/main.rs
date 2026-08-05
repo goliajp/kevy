@@ -113,6 +113,10 @@ fn route_subcommand(args: &[String]) -> Option<ExitCode> {
     if !args.is_empty() && args[0] == "sql" {
         return Some(sqlcmd::run_sql_cli(&args[1..]));
     }
+    // `doctor`: VERIFY every table and answer with an exit code.
+    if !args.is_empty() && args[0] == "doctor" {
+        return Some(kevy_cli::doctor::run_doctor_cli(&args[1..]));
+    }
     // `shadow`: compare the old read path against the new one, in
     // membership AND in order, before anyone cuts over.
     if !args.is_empty() && args[0] == "shadow" {

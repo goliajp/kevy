@@ -154,6 +154,30 @@ semantics, including why non-zero `duplicates` on an ORDERPATH means
 your pagination needs a bounded tie-break). The point of the whole
 migration is that these numbers *exist*; read them.
 
+**`kevy-cli doctor` is that cron.** It verifies every declared table and
+answers with an exit code:
+
+```console
+$ kevy-cli doctor -p 6004
+  OK       user  (rows 59999 · entries 59999 · absent 0 · excluded 0 · coerce_failures 0)
+  WARN     ev    duplicates 1 — paging this path needs a bounded tie-break or pages repeat rows
+  BUILDING new   — an index is still backfilling, not a verdict
+doctor: 3 table(s) — 0 drifted, 1 warned, 1 still building
+```
+
+The mapping is this lesson's own words rather than a new opinion:
+`drift` and `missing` non-zero **fail**; `duplicates` **warns**;
+`absent` / `excluded` / `coerce_failures` are **reported and never
+fail**, because each is a legitimate state and a doctor that went red on
+a NULL column would be red forever.
+
+Two deliberate choices. A warning does **not** fail by default —
+information that fails a cron stops being read — so `--warn-is-failure`
+exists for anyone who wants the stricter contract. And a table whose
+index is still backfilling answers `-INDEXBUILDING`, which is **its own
+outcome, not a failure**: treating it as one would page someone every
+time an index is declared.
+
 ## See also
 
 - [tables.md](tables.md) — the declaration surface, VERIFY semantics,
