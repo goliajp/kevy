@@ -107,8 +107,30 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name email</code></
 <p>拒否として述べます。エンジンは近似する代わりに、名前つきで拒否するからです。<b>ランタイム SQL はありません</b>（サーバーへ送るのは <code>TABLE.DECLARE</code> であって <code>CREATE TABLE</code> ではありません）。<b>クエリ時の join はありません</b>（ビューの <code>VIA</code> 参照解決は別です——<a href="../views/">views.md</a>）。<b>HAVING / サブクエリ / 式はありません</b>。<b>エンジンによる制約の強制はありません</b>。それぞれの SQL から kevy への対応は <a href="../rds-workloads/">rds-workloads.md</a> に、動くレシピは <a href="../cookbook/">cookbook.md</a> に、スキーマのコンパイル経路はすぐ下にあります。</p>
 <h2 id="kevy-sqlスキーマは送るのではなくコンパイルする">kevy-sql——スキーマは送るのではなく、コンパイルする</h2>
 <p><code>kevy-sql</code>（とその <code>kevy-cli sql</code> の顔）は<b>宣言時コンパイラ</b>です——マイグレーションツールのように、PG/MySQL 方言のスキーマファイルを一度だけ読み、明示的な宣言を出力します。</p>
-<figure class="code"><pre><code class="lang-console">kevy-cli sql compile schema.sql                          # print the plan
-kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004</code></pre></figure>
+<figure class="code"><pre><code class="lang-console">kevy-cli sql compile schema.sql                          # print the declarations
+kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004
+kevy-cli sql plan schema.sql                             # 各クエリがどうなるか</code></pre></figure>
+<p><code>compile</code> と <code>plan</code> は同じファイルを読み、別の問いに答えます。<code>compile</code> はビルド時——実行するコマンドを生み出すので、供給できないビューが一つあればそれはエラーで、そこで止まります。<code>plan</code> は移行の当日です。<b>すべての</b>クエリの行き先を報告します。*「40 本のうち 34 本は動く、残り 6 本には何が要る」*こそ、スキーマを携えて来た人が実際に訊いていることだからです：</p>
+<figure class="code"><pre><code class="lang-console">$ kevy-cli sql plan shop.sql
+2 table(s) to declare:
+  users
+  orders
+
+5 quer(ies) — 3 served, 2 not
+
+  served:
+    paid_orders              orders.status
+    recent_by_user           orders.user_id_created_at
+    by_email                 users.email
+
+  not served:
+    line 25    by_total
+      view 'by_total': WHERE (total EQ) matches no declared access path — add: CREATE INDEX ON orders (total)
+    line 28    everything
+      view 'everything': a view with no WHERE would scan the table — kevy has no scans; add a driving predicate, or page an index directly (IDX.QUERY orders.&lt;col&gt; RANGE …)
+
+plan: 2 of 5 quer(ies) need a declaration change before this schema moves</code></pre></figure>
+<p>供給できないクエリが一つでもあれば非ゼロで終了します。これは警告ではありません。宣言された経路を持たないクエリはそもそも動かないので、スキーマが変わるまで移行を塞ぎます。<i>DDL</i> 自体が解析できない場合は従来どおり普通のエラーです——成立していないスキーマに対して渡せる計画はありません。</p>
 <ul><li><code>CREATE TABLE</code> → <code>TABLE.DECLARE</code>（型は <code>i64|f64|str</code> へ粗く対応づけ、対応づけごとに正直に注記されます）。</li><li><code>CREATE [UNIQUE] INDEX</code> → <code>INDEX</code> 句。PG の <code>INCLUDE</code> カバリングカラム → 保存された <code>VALUES</code>。複数カラムのインデックス → <code>ORDERPATH</code>。</li><li>定数の単一テーブル <code>CREATE VIEW … AS SELECT</code> → エンジンのビュー。パラメータつきなら → <b>クエリカード</b>——<code>$N</code> のスロットをアプリが埋める、出来合いの <code>IDX.QUERY</code> テンプレートです。</li><li>コンパイラもプランしません。ビューを、あなたが宣言したアクセスパスに突き合わせ、合うものがなければ、どの宣言を足すべきか（<code>add: CREATE INDEX ON t (dept, age)</code>）を告げます。スキャンを発明することはありません。アドホック SQL、join、サブクエリ、<code>OR</code>、<code>GROUP BY</code> の類は <code>line:col</code> つきで拒否され、置き換えるレシピを指し示します。</li></ul>
 <p>端到端のウォークスルー——実物の users/orders/order_items スキーマをコンパイルし、適用し、クエリするまで——は<a href="../cookbook/#22-porting-a-pgmysql-schema">スキーマ移植のレシピ</a>です。</p>
 <h2 id="組み込み">組み込み</h2>

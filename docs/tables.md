@@ -331,9 +331,45 @@ compiler** — it reads a PG/MySQL-dialect schema file once, like a
 migration tool, and emits the explicit declarations:
 
 ```console
-kevy-cli sql compile schema.sql                          # print the plan
+kevy-cli sql compile schema.sql                          # print the declarations
 kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004
+kevy-cli sql plan schema.sql                             # what becomes of every query
 ```
+
+`compile` and `plan` read the same file and answer different questions.
+`compile` is build-time: it produces commands, so a view it cannot serve
+is an error and it stops there. `plan` is migration day — it reports
+what becomes of **every** query, because *"34 of your 40 work, here is
+what the other 6 need"* is what someone arriving with a schema is
+actually asking:
+
+```console
+$ kevy-cli sql plan shop.sql
+2 table(s) to declare:
+  users
+  orders
+
+5 quer(ies) — 3 served, 2 not
+
+  served:
+    paid_orders              orders.status
+    recent_by_user           orders.user_id_created_at
+    by_email                 users.email
+
+  not served:
+    line 25    by_total
+      view 'by_total': WHERE (total EQ) matches no declared access path — add: CREATE INDEX ON orders (total)
+    line 28    everything
+      view 'everything': a view with no WHERE would scan the table — kevy has no scans; add a driving predicate, or page an index directly (IDX.QUERY orders.<col> RANGE …)
+
+plan: 2 of 5 quer(ies) need a declaration change before this schema moves
+```
+
+It exits non-zero when any query is unserved. That is not a warning: a
+query with no declared path cannot run at all, so it blocks the move
+until the schema changes. A schema whose *DDL* does not parse is still a
+plain error — there is no plan to give against a schema that does not
+exist.
 
 - `CREATE TABLE` → `TABLE.DECLARE` (types coarsely mapped to
   `i64|f64|str`, each mapping noted honestly).

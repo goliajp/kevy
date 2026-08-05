@@ -115,8 +115,30 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name email</code></
 <p>Stated as refusals, because the engine refuses them by name rather than approximating: <b>no runtime SQL</b> (send <code>TABLE.DECLARE</code>, not <code>CREATE TABLE</code>, to the server), <b>no query-time joins</b> beyond a view's <code>VIA</code> dereference (<a href="../views/">views.md</a>), <b>no HAVING / subqueries / expressions</b>, <b>no engine-enforced constraints</b>. The SQL-to-kevy mapping for each of those lives in <a href="../rds-workloads/">rds-workloads.md</a>, the working recipes in <a href="../cookbook/">cookbook.md</a>, and the schema-compilation path below.</p>
 <h2 id="kevy-sql-compile-a-schema-dont-send-one">kevy-sql: compile a schema, don't send one</h2>
 <p><code>kevy-sql</code> (and its <code>kevy-cli sql</code> face) is a <b>declaration-time compiler</b> — it reads a PG/MySQL-dialect schema file once, like a migration tool, and emits the explicit declarations:</p>
-<figure class="code"><pre><code class="lang-console">kevy-cli sql compile schema.sql                          # print the plan
-kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004</code></pre></figure>
+<figure class="code"><pre><code class="lang-console">kevy-cli sql compile schema.sql                          # print the declarations
+kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004
+kevy-cli sql plan schema.sql                             # what becomes of every query</code></pre></figure>
+<p><code>compile</code> and <code>plan</code> read the same file and answer different questions. <code>compile</code> is build-time: it produces commands, so a view it cannot serve is an error and it stops there. <code>plan</code> is migration day — it reports what becomes of <b>every</b> query, because <i>"34 of your 40 work, here is what the other 6 need"</i> is what someone arriving with a schema is actually asking:</p>
+<figure class="code"><pre><code class="lang-console">$ kevy-cli sql plan shop.sql
+2 table(s) to declare:
+  users
+  orders
+
+5 quer(ies) — 3 served, 2 not
+
+  served:
+    paid_orders              orders.status
+    recent_by_user           orders.user_id_created_at
+    by_email                 users.email
+
+  not served:
+    line 25    by_total
+      view 'by_total': WHERE (total EQ) matches no declared access path — add: CREATE INDEX ON orders (total)
+    line 28    everything
+      view 'everything': a view with no WHERE would scan the table — kevy has no scans; add a driving predicate, or page an index directly (IDX.QUERY orders.&lt;col&gt; RANGE …)
+
+plan: 2 of 5 quer(ies) need a declaration change before this schema moves</code></pre></figure>
+<p>It exits non-zero when any query is unserved. That is not a warning: a query with no declared path cannot run at all, so it blocks the move until the schema changes. A schema whose <i>DDL</i> does not parse is still a plain error — there is no plan to give against a schema that does not exist.</p>
 <ul><li><code>CREATE TABLE</code> → <code>TABLE.DECLARE</code> (types coarsely mapped to <code>i64|f64|str</code>, each mapping noted honestly).</li><li><code>CREATE [UNIQUE] INDEX</code> → <code>INDEX</code> clauses; PG <code>INCLUDE</code> covering columns → stored <code>VALUES</code>; multi-column indexes → an <code>ORDERPATH</code>.</li><li>Constant single-table <code>CREATE VIEW … AS SELECT</code> → an engine view; a parameterized one → a <b>query card</b>: a ready-made <code>IDX.QUERY</code> template with <code>$N</code> slots your app fills in.</li><li>The compiler does not plan either: it matches your view against the access paths you declared, and when none fits it tells you which declaration to add (<code>add: CREATE INDEX ON t (dept, age)</code>) instead of inventing a scan. Ad-hoc SQL, joins, subqueries, <code>OR</code>, <code>GROUP BY</code> and friends are refused with <code>line:col</code> and a pointer to the recipe that replaces them.</li></ul>
 <p>The end-to-end walkthrough — a real users/orders/order_items schema compiled, applied and queried — is <a href="../cookbook/#22-porting-a-pgmysql-schema">the schema-porting recipe</a>.</p>
 <h2 id="embedded">Embedded</h2>

@@ -131,9 +131,36 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name email
 `kevy-sql`（及其 `kevy-cli sql` 面）是一个**声明期编译器**——像迁移工具一样，把一份 PG/MySQL 方言的 schema 文件读一次，产出显式声明：
 
 ```console
-kevy-cli sql compile schema.sql                          # print the plan
+kevy-cli sql compile schema.sql                          # print the declarations
 kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004
+kevy-cli sql plan schema.sql                             # 每条查询会变成什么
 ```
+
+`compile` 与 `plan` 读同一份文件，回答的却是两个问题。`compile` 是构建期：它产出的是要执行的命令，所以遇到一条服务不了的视图就是错误、就停在那里。`plan` 是迁移那天——它报告**每一条**查询的去向，因为*"你这 40 条里 34 条能跑，另外 6 条各缺什么"*才是一个拿着 schema 来的人真正在问的：
+
+```console
+$ kevy-cli sql plan shop.sql
+2 table(s) to declare:
+  users
+  orders
+
+5 quer(ies) — 3 served, 2 not
+
+  served:
+    paid_orders              orders.status
+    recent_by_user           orders.user_id_created_at
+    by_email                 users.email
+
+  not served:
+    line 25    by_total
+      view 'by_total': WHERE (total EQ) matches no declared access path — add: CREATE INDEX ON orders (total)
+    line 28    everything
+      view 'everything': a view with no WHERE would scan the table — kevy has no scans; add a driving predicate, or page an index directly (IDX.QUERY orders.<col> RANGE …)
+
+plan: 2 of 5 quer(ies) need a declaration change before this schema moves
+```
+
+只要有查询服务不了，它就以非零退出。那不是警告：一条没有声明路径的查询**根本跑不了**，所以它在 schema 改掉之前一直挡着这次迁移。而 *DDL* 本身解析不了仍然是普通错误——对一份不成立的 schema 没有计划可言。
 
 - `CREATE TABLE` → `TABLE.DECLARE`（类型粗粒度映射到 `i64|f64|str`，每个映射都如实标注）。
 - `CREATE [UNIQUE] INDEX` → `INDEX` 子句；PG 的 `INCLUDE` 覆盖列 → 存储的 `VALUES`；多列索引 → 一个 `ORDERPATH`。

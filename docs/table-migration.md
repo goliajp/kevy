@@ -7,6 +7,13 @@ migration — a mail system moving its hand-rolled secondary indexes
 engine's documentation, not to their notebook. Every rule below was
 paid for; the order is the order you will need them in.
 
+**Before any of it, the first mile:** `kevy-cli sql plan schema.sql`
+reads the schema you already have and reports what becomes of every one
+of your queries — which declared path serves each, and for the rest, the
+exact `CREATE INDEX` that would. It is the ten-minute answer to *can
+this move at all*, and it needs no server. See
+[tables.md](tables.md#kevy-sql-compile-a-schema-dont-send-one).
+
 ## Lead with why: the engine's index is the only one that can be verified
 
 Before the how, the argument. When application code maintains an
