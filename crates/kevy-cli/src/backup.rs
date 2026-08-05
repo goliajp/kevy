@@ -33,8 +33,9 @@ const MAGIC: &[u8; 8] = b"KEVYBKP1";
 /// `segs-<shard>/` holds cold index segments. Skipping them is correct
 /// because both are **derived** — a snapshot materialises cold values
 /// rather than referencing them, so the backup carries the data without
-/// the spill area and a restore rebuilds it. Measured end to end
-/// (`bench/FINDING-2026-08-05-windowed-index-loses-rows.md`).
+/// the spill area and a restore rebuilds it — measured end to end
+/// against a store whose values had actually been demoted, not
+/// reasoned about.
 ///
 /// That safety is a property of what lives down there, not of the skip.
 /// `subdirectories_are_derived_spill_only` pins the set, so a future
