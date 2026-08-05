@@ -244,6 +244,28 @@ pub(crate) fn cmd_move_scope_ingest<A: ArgvView + ?Sized>(
     };
 
     let _guard = ctx.shard.ingest_guard(prefix.to_vec());
+    let applied = match apply_ingest_frames(ctx, store, bulk) {
+        Ok(n) => n,
+        Err(()) => return encode_error(out, "ERR MOVE-SCOPE-INGEST: malformed bulk"),
+    };
+    let reply = format!("+OK {applied}\r\n");
+    out.extend_from_slice(reply.as_bytes());
+}
+
+
+/// Replay the shipped frames into `store`, returning how many applied.
+///
+/// The rows land by replaying frames straight in, which bypasses the
+/// write path's derived-structure hook — an ingested row used to exist
+/// in the keyspace and be invisible to every `IDX.QUERY`, with
+/// `IDX.VERIFY` unable to see that direction either. Every emitted
+/// frame is `<VERB> <key> …` by construction (`scope_move_emit`), so
+/// the key is `argv[1]`.
+fn apply_ingest_frames(
+    ctx: &Ctx<'_>,
+    store: &mut Store,
+    bulk: &[u8],
+) -> Result<usize, ()> {
     let mut buf = bulk.to_vec();
     let mut applied = 0usize;
     let mut scratch = Vec::with_capacity(256);
@@ -252,31 +274,17 @@ pub(crate) fn cmd_move_scope_ingest<A: ArgvView + ?Sized>(
             Ok(Some((argv, consumed))) => {
                 scratch.clear();
                 crate::dispatch::dispatch_into(ctx, store, &argv, &mut scratch);
-                // The rows land by replaying frames straight into the
-                // store, which bypasses the write path's derived-
-                // structure hook — an ingested row used to exist in the
-                // keyspace and be invisible to every IDX.QUERY, with
-                // IDX.VERIFY unable to see it either (it audits index
-                // entries against the store, not store rows against the
-                // index). Every emitted frame is `<VERB> <key> …` by
-                // construction (`scope_move_emit`), so the key is
-                // argv[1].
                 if let Some(key) = argv.get(1) {
                     note_ingested_key(ctx, store, key);
                 }
                 buf.drain(..consumed);
                 applied += 1;
             }
-            Ok(None) => break,
-            Err(_) => {
-                return encode_error(out, "ERR MOVE-SCOPE-INGEST: malformed bulk");
-            }
+            Ok(None) => return Ok(applied),
+            Err(_) => return Err(()),
         }
     }
-    let reply = format!("+OK {applied}\r\n");
-    out.extend_from_slice(reply.as_bytes());
 }
-
 
 /// Refresh the derived structures for one ingested key — the
 /// `Commands::on_write` body, reachable from the ops layer.

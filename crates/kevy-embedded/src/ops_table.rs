@@ -360,6 +360,31 @@ fn classify_prefix_rows(
     f
 }
 
+/// The window boundary a `missing` count must not fault rows against:
+/// a row below it slid into a cold segment on purpose. `None` when the
+/// path is unwindowed or has not slid yet (and always on wasm, where
+/// nothing slides).
+fn hot_floor_of(
+    inner: &crate::store_inner::Inner,
+    name: &[u8],
+) -> Option<(i64, kevy_index::WindowShape)> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        inner
+            .idx_segs
+            .windows
+            .iter()
+            .find(|(n, _)| n.as_slice() == name)
+            .map(|(_, w)| (w.boundary(), w.shape))
+            .filter(|(b, _)| *b != i64::MIN)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (inner, name);
+        None
+    }
+}
+
 fn shard_index_counts(
     inner: &mut crate::store_inner::Inner,
     ispec: &kevy_index::IndexSpec,
@@ -378,16 +403,7 @@ fn shard_index_counts(
     let mut pat = spec.prefix.clone();
     pat.push(b'*');
     let row_keys = inner.store.collect_keys(Some(&pat), None);
-    #[cfg(not(target_arch = "wasm32"))]
-    let hot_floor = inner
-        .idx_segs
-        .windows
-        .iter()
-        .find(|(n, _)| *n == spec.name)
-        .map(|(_, w)| (w.boundary(), w.shape))
-        .filter(|(b, _)| *b != i64::MIN);
-    #[cfg(target_arch = "wasm32")]
-    let hot_floor = None;
+    let hot_floor = hot_floor_of(inner, &spec.name);
     let store = &mut inner.store;
     let (drift, fresh) = store.peek_scope(|s| {
         let names = spec.scalar_read_names();
