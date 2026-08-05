@@ -22,8 +22,7 @@ use kevy_resp_client::RespClient;
 use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
 
-const DEFAULT_HOST: &str = "127.0.0.1";
-const DEFAULT_PORT: u16 = 6379;
+use kevy_cli::{DEFAULT_HOST, DEFAULT_PORT};
 
 mod args;
 mod embed;
@@ -113,6 +112,11 @@ fn route_subcommand(args: &[String]) -> Option<ExitCode> {
     // SQL compiler (kevy-sql). File-first; TCP only under --apply.
     if !args.is_empty() && args[0] == "sql" {
         return Some(sqlcmd::run_sql_cli(&args[1..]));
+    }
+    // `shadow`: compare the old read path against the new one, in
+    // membership AND in order, before anyone cuts over.
+    if !args.is_empty() && args[0] == "shadow" {
+        return Some(kevy_cli::shadow::run_shadow_cli(&args[1..]));
     }
     // Migration subcommands (TCP, host/port flags inline).
     if !args.is_empty() && (args[0] == "export" || args[0] == "import") {

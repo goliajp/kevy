@@ -30,6 +30,22 @@
 
 让读继续走旧路径，同时在旁边算出新答案并比较。不只比成员，还要比**顺序**：分数漂移产出的是顺序不同的同一集合，分页 UI 会把它变成用户可见的抖动。把第一处分歧连同**两边的排序键**一起写进日志——那一行日志立即点名漂移的 writer。
 
+**`kevy-cli shadow` 替你做这件事。** 把两条命令都给它，它会比较两边产出的行键顺序，只要有分歧就以非零退出——所以切换脚本可以直接 gate：
+
+```console
+$ kevy-cli shadow -p 6004 \
+    --old "ZRANGE old:act 0 -1 WITHSCORES" --old-pairs \
+    --new "IDX.QUERY u.act RANGE 0 999 LIMIT 20" --samples 50
+shadow: 50 samples, 50 diverged (first at sample 0)
+  ORDER differs at position 0:
+    old: u:5 (sort 5)
+    new: u:1 (sort 10)
+```
+
+那一对排序值就是这一课说的那行。它报的另一种形状是 `MISSING`——旧路径有而新路径没有的行，也就是第 2 课**提前到来**：一个没人更新的 writer，在切换**之前**被看见，而不是事后由 `TABLE.VERIFY` 报出来。
+
+有两件事它不猜。kevy 的分页回复（`[游标, [键, 排序值, …]]`）能从形状认出来，但 **member/score 对和平坦列表长得一模一样**——用 `WITHSCORES` 这类命令时要加 `--old-pairs`，否则每个分数都会被当成行键、每次采样都报分歧。另外**单次分歧是线索不是判决**：两侧是在同一条连接上背靠背读的，中间被写入的行会在这里现形。跑 `--samples n`，读那个比率。
+
 ### 5. 删旧结构：先枚举 reader，再删 writer
 
 影子窗口关闭时，先移除旧索引的 **reader**，再移除 writer。相反的顺序有一种静默故障：读一个不存在的键返回 0 或空、不是错误——writer 都删光后残留的一个 reader，不会崩溃，只会静静地供出错误答案。之后再删存储的键。
