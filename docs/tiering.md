@@ -144,6 +144,25 @@ from the capacity model:
   big as the value. Values below the 64-byte spill threshold are
   never spilled. The data:RAM ratio grows linearly with value size;
   every capacity gate names its value size for exactly this reason.
+- **Measured, 2026-08-05.** The ratio curve is no longer only a model.
+  Same budget and keys, only the value size varied (`INFO Tiering`'s
+  `stub_bytes` is the floor doing the work):
+
+  | value size | data:RAM achieved |
+  |---:|---:|
+  | 256 B | **2.65×** |
+  | 1 KiB | **10.43×** |
+  | 4 KiB | **39.2×** (full scale, 2 GB budget, 80 GB of data) |
+
+  The floor is ~96 B of stub per entry at a 9-byte key (~143 B at a
+  48-byte key), flat across every scale tested, which makes the ceiling
+  predictable: **max data:RAM ≈ value_size / (90 B + key length)**.
+  That predicts 2.67× / 10.7× / 42.7× for the three rows above.
+
+  **At 256 B the budget is not merely tight, it is unholdable**:
+  `used_memory` crosses a 16 MB budget by 200 000 entries and reaches
+  77 MB at 800 000, because demoting a 256 B value frees less than the
+  stub it leaves behind. Narrow records are the case to size by hand.
 - **Worked example (sized from the model, not measured into it)**:
   10 M rows × ~1 KiB (≈10 GB of data) with 2
   secondary indexes + stored VALUES columns fits a **3 GB** budget:
@@ -256,9 +275,11 @@ Stated honestly, with the measured/pending status of each number:
   decode. The `kevy-vlog` microbench measures `read_at` at 0.64–14 µs
   across record sizes (dev-box NVMe). The end-to-end SLAs the
   gate clamps — scalar p99 ≤ 100 µs embedded / ≤ 300 µs server,
-  whole-hash-row materialization ≤ 200 µs / ≤ 500 µs — are
-  **pending the bench-box envelope run** (`bench/capacity-envelope.sh`);
-  until that runs they are targets, not measurements.
+  whole-hash-row materialization ≤ 200 µs / ≤ 500 µs — are **measured
+  on the server side**: the envelope run holds scalar p99 at 79–171 µs
+  and whole-hash-row at 145 µs across datasets from 20 GB to 120 GB on
+  a 2 GB budget, with latency flat as the dataset grows 6×. The
+  embedded numbers remain targets — the envelope drives the server.
 - **Embedded holds the shard lock during a cold read.** In-process
   there is no reactor to hand the read to: a cold materialization
   preads under the shard's write lock (the 1-shard default = the
@@ -331,16 +352,20 @@ Stated honestly, with the measured/pending status of each number:
 
 Everything above that is a mechanism claim is covered by tests and
 gates that run in this tree (the transparency suite, the tiered
-persistence suite, `bench/memgate.sh`, `bench/tiergate.sh`). The
-**measured envelope numbers** — cold-read p99, vlog space
-amplification under churn, the 10× capacity ratio, the
-10M-row fused envelope with hydration p95, hydration
-batching at scale, and mixed-workload isolation —
-are **pending the dedicated bench box**:
-`bench/capacity-envelope.sh` is the turnkey runner, and
-`bench/tiergate.sh` stays red on those lines until it has run. This
-page states targets as targets and will not quote an envelope number
-before the gate records it.
+persistence suite, `bench/memgate.sh`, `bench/tiergate.sh`). The **envelope numbers** are measured on the dedicated bench box by
+`bench/capacity-envelope.sh`: cold-read p99, vlog space amplification
+under churn, and the capacity ratio all have numbers on this page and
+in `bench/FINDING-2026-08-05-capacity-ceiling-sweep.md`.
+
+`bench/tiergate.sh` **in a fresh checkout still shows those lines
+pending**, and that is the design rather than a contradiction: the gate
+consumes a results file the bench box produces, so a tree that has not
+been handed one has not verified anything. Run the envelope, carry
+`bench/.capacity-envelope-results` back, and
+`TIERGATE_RUN_ENVELOPE=1 bash bench/tiergate.sh` turns the lines on the
+evidence rather than on this paragraph. A partial run writes to its own
+file for the same reason — the gate must never be handed a results file
+with lines silently missing.
 
 ## See also
 
