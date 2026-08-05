@@ -28,6 +28,18 @@ use std::path::{Path, PathBuf};
 const MAGIC: &[u8; 8] = b"KEVYBKP1";
 
 /// Pack every regular file under `data_dir` into `out_path`.
+/// Subdirectories are skipped, and the data dir stopped being flat when
+/// tiering landed: `tier/<shard>/vlog-*.dat` holds demoted values and
+/// `segs-<shard>/` holds cold index segments. Skipping them is correct
+/// because both are **derived** — a snapshot materialises cold values
+/// rather than referencing them, so the backup carries the data without
+/// the spill area and a restore rebuilds it. Measured end to end
+/// (`bench/FINDING-2026-08-05-windowed-index-loses-rows.md`).
+///
+/// That safety is a property of what lives down there, not of the skip.
+/// `subdirectories_are_derived_spill_only` pins the set, so a future
+/// directory of TRUTH cannot join the data dir without someone reading
+/// this first.
 pub fn pack(data_dir: &Path, out_path: &Path) -> io::Result<u64> {
     let out = OpenOptions::new()
         .create_new(true)
@@ -42,20 +54,7 @@ pub fn pack(data_dir: &Path, out_path: &Path) -> io::Result<u64> {
         let path = entry.path();
         let meta = entry.metadata()?;
         if !meta.is_file() {
-            // Subdirectories are skipped, and the data dir stopped being
-            // flat when tiering landed: `tier/<shard>/vlog-*.dat` holds
-            // demoted values and `segs-<shard>/` holds cold index
-            // segments. Skipping them is correct because both are
-            // DERIVED — a snapshot materialises cold values rather than
-            // referencing them, so the backup carries the data without
-            // the spill area, and a restore rebuilds it. Measured end to
-            // end (bench/FINDING-2026-08-05-windowed-index-loses-rows.md).
-            //
-            // That safety is a property of what lives down there, not of
-            // the skip. `subdirectories_are_derived_spill_only` pins the
-            // set so a future directory of TRUTH cannot be added without
-            // someone reading this.
-            continue;
+            continue; // derived spill — see the note above this fn
         }
         let name = path
             .strip_prefix(data_dir)
