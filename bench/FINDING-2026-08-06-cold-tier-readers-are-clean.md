@@ -1,4 +1,4 @@
-# Two negative results: backfill and TABLE.REPLACE over cold data are clean
+# Three negative results: the cold tier's other readers are clean
 
 Seven defects came out of one lens today — write on one path, read on
 another — so it is worth recording where it found **nothing**. A lens
@@ -60,6 +60,34 @@ and the directory size byte-identical. A verb that leaked a segment set
 per call would have shown as monotonic growth here, and it is the kind
 of leak nobody notices until a disk fills.
 
+## Third surface: replication full-sync, and a claim now fully closed
+
+`docs/tiering.md` makes a three-way promise:
+
+> Snapshot / `BGREWRITEAOF` / replication full-sync on a mostly-cold
+> store stream cold values from the pinned log **without promoting
+> anything**.
+
+Two thirds were already measured this session — snapshot through the
+backup drill, `BGREWRITEAOF` through `tiergate` L10. **Full-sync was
+the untested one**, and it is the hardest of the three: it must
+reproduce the entire store on another process.
+
+A tiered primary (8 MB budget, 6 000 × 4 KiB, 4 296 of them cold) with
+an empty replica pointed at it:
+
+| | |
+|---|---|
+| replica `DBSIZE` after sync | **6000** |
+| primary `PREFIX.DIGEST` | `d1d4d740c6f5eac4` |
+| replica `PREFIX.DIGEST` | **`d1d4d740c6f5eac4`** |
+| primary `promotions_total` after the ship | **0** |
+| primary `cold_keys` after the ship | **4296** (unchanged) |
+
+Identical digests, so this is byte fidelity rather than a count match —
+and the primary shipped 4 296 cold values without pulling one back into
+memory. **The three-way claim is now measured on all three paths.**
+
 ## Why this is worth a file
 
 The six earlier findings all describe something broken, which makes the
@@ -79,3 +107,7 @@ in. Both were reasonable suspects. Neither shares the blind spot.
 measured**: maintenance (two defects, fixed), backfill (clean), rebuild
 (clean). The fourth is replica apply, checked earlier in the session on
 the write side.
+
+And the cold tier's three bulk readers — snapshot, rewrite, full-sync —
+are measured end to end, each against both halves of its claim:
+everything arrives, and nothing is promoted to send it.
