@@ -63,24 +63,39 @@ Same setup, 48-byte keys instead of 9:
 | 48 B | 142.7 B |
 
 39 extra key bytes cost 46.7 B — the key itself plus allocator
-size-class rounding. So:
+size-class rounding.
 
-> **stub ≈ 90 B fixed + the key.**
+**And this constant is not a discovery — it is already gated.**
+`bench/memgate.sh`'s B7 line states the formula outright:
 
-The window model in the master plan estimates **~1 B/entry** of resident
-cold cost (≈200 B per segment + one `(28 B + key)` fence per 4 KiB
-page). That figure is about the cold **index** — and it is not wrong,
-it is about a different structure. What actually bounds capacity is the
-**tier stub**: the in-memory record that says where a demoted value
-lives. It is ~90× larger per entry than the number the capacity model
-carries, and the model does not mention it.
+> stub bytes/entry ≈ `ENTRY_OVERHEAD(96)` + key heap bytes, ±band
+
+with the note that keys under the 22-byte inline boundary carry zero
+key heap, so the formula is *exactly 96*. The 9-byte-key measurement
+above reproduces that to the decimal; the 48-byte measurement adds the
+key heap the formula predicts. `docs/tiering.md`'s worked example
+budgets ~108 B/entry of stub floor for the same reason.
+
+So the stub cost was known, written down, and enforced. **What was
+missing is what it implies.** The floor was documented as a floor — a
+number to subtract from a budget when sizing — and never turned into
+the ceiling it dictates. Everything below is that step, and it is why
+the sweep's own numbers looked like an acceleration to whoever read
+them (me) without it.
+
+The window model's separate **~1 B/entry** figure (≈200 B per segment
+plus one `(28 B + key)` fence per 4 KiB page) is about the cold
+**index**, a different structure, and is not in tension with this.
 
 ## The formula, and it predicts the measured ceiling
 
-If the floor is `entries × (90 B + key)` and the ceiling is the budget,
-then:
+If the floor is `entries × (96 B + key heap)` and the ceiling is the
+budget, then:
 
-> **max data:RAM ≈ value_size / (90 B + key length)**
+> **max data:RAM ≈ value_size / (96 B + key heap)**
+>
+> — the same 96 B `memgate` already gates, with key heap 0 for keys
+> under the 22-byte inline boundary.
 
 Checked against the lx64 sweep, which knew nothing about this model:
 
@@ -139,7 +154,7 @@ most likely to have.
 
 ## Left open — and now it is a design question, not a measurement one
 
-The stub is ~90 B of fixed overhead for what is conceptually a file id,
+The stub is 96 B of fixed overhead for what is conceptually a file id,
 an offset and a length. That is the number to attack if the ratio at
 small values matters, and it is a **`kevy-alloc` / layout** question,
 not a tiering-policy one — which is the third independent line this
