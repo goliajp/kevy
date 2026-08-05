@@ -109,6 +109,41 @@ The window model's separate **~1 B/entry** figure (≈200 B per segment
 plus one `(28 B + key)` fence per 4 KiB page) is about the cold
 **index**, a different structure, and is not in tension with this.
 
+### Is 96 B honest? — measured against the layout it charges for
+
+The constant is the denominator of every ratio above, so "conservative"
+is not a good enough description of it. Measured
+(`entry_overhead_stands_for_a_slot_in_a_growing_table`):
+
+| | |
+|---|---|
+| `Entry` | 48 B |
+| inline key cell (`SmallBytes`) | 24 B |
+| + 1 control byte | **73 B per slot** |
+
+73 B is not the per-*entry* cost, because the keyspace is an
+open-addressing table that **doubles at a 7/8 max load**. Occupancy
+therefore cycles between 7/16 (just after a growth) and 7/8 (at the
+threshold), and a live entry amortises to:
+
+| where the table sits | per live entry |
+|---|---|
+| at the growth threshold | **83 B** |
+| average (~2/3 full) | ~111 B |
+| just after doubling | **167 B** |
+
+**96 B sits inside that band, toward the low end.** So it is not
+padding over the struct sizes — the naive reading, which is 72 B and
+would make the constant look 33 % inflated — and it is not generous
+either: on a freshly doubled table the accounting *under*-states the
+real footprint, which is the correct direction for a bound that must
+not flatter the engine.
+
+Two consequences: the measured ratios above rest on accounting that is
+approximately right, and the lever for improving them is either the
+**slot** (24 B key cell + 48 B `Entry`) or the **load factor** — both
+store-wide, neither reachable from the tier.
+
 ## The formula, and it predicts the measured ceiling
 
 If the floor is `entries × (96 B + key heap)` and the ceiling is the
