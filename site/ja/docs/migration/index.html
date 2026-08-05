@@ -89,7 +89,12 @@ kevy-cli delete-prefix -p 6004 --rate 5000 --dry-run tmp:
 kevy-cli inspect -p 6004 user:</code></pre></figure>
 <h2 id="ワイヤフォーマット">ワイヤフォーマット</h2>
 <p><code>export</code>は再構築フレームのプレーンな<b>RESPコマンドストリーム</b>を書き出します——<code>DEL</code>＋<code>SET</code>/<code>HSET</code>/<code>RPUSH</code>/<code>SADD</code>/<code>ZADD</code>、TTLには絶対時刻の<code>PEXPIREAT</code>です。このためファイルは<code>redis-cli --pipe</code>と双方向に互換です。kevyのエクスポートはRedisに食わせられますし、どんなRESPコマンドファイルも<code>kevy-cli import</code>に食わせられます——RDSのダンプから自作したもの（プレイブックのフェーズ3）を含めて。</p>
-<p>キーごとに先頭へ置かれる<code>DEL</code>が、リプレイを<b>ゼロからの再構築</b>にします——あらゆる型に対して本物の冪等です（RPUSHのような追記verbは、そうしないと再インポートでリスト内容が倍になります）。</p>
+<p>キーごとに先頭へ置かれる<code>DEL</code>が、リプレイを<b>ゼロからの再構築</b>にします——<b>出力する型</b>については本物の冪等です（RPUSHのような追記verbは、そうしないと再インポートでリスト内容が倍になります）。</p>
+<p><b>ただし、すべての型を出力するわけではありません。</b> 文字列・hash・list・set・zset は再構築されますが、<b>ストリームはされません</b>——ここには再構築するverbがないので、エクスポートは置き去りにします。これはこのツールの実際の制限であってデータの性質ではなく、いまは<b>型名つきで報告されます</b>：</p>
+<figure class="code"><pre><code class="lang-console">kevy-cli export: SKIPPED 1 key(s) of type 'stream' — nothing here
+rebuilds that type, so they are NOT in this file
+exported 4006 keys -&gt; dump.resp</code></pre></figure>
+<p>4.1 以前、このスキップは<b>沈黙</b>でした：そのキーは「走査中に消えた」ものとして数えられ、ストリームを持つストアはきれいに、そして短くエクスポートされていました。移行にストリームが含まれるなら、別途移してください——そしてそのファイルを信じる前に、この行を確認してください。</p>
 <h2 id="一貫性と再開可能性">一貫性と再開可能性</h2>
 <ul><li>エクスポートはSCANウォーク下でのキー単位のポイントインタイムです（SCANクラスの保証。エクスポート中に書かれたキーはどちらの状態でも現れ得て、消えたキーはスキップされます）。グローバルスナップショットはありません——設計上の選択です。</li><li>インポートはバッチごとに512コマンドをパイプラインし、バッチごとにバイトオフセットを<code>&lt;file&gt;.progress</code>へfsyncします。<code>--resume</code>はそこから再開します。フレームは再構築形なので、重なりは無害です。<code>--strict</code>は最初のサーバーエラーで中止します。指定がなければエラーは数えられて報告されます。</li><li>インポート中の<code>kill -9</code>はゲートで検証済みのシナリオです。再開は同じ<code>PREFIX.DIGEST</code>へ収束します。</li></ul>
 <h2 id="検証">検証</h2>

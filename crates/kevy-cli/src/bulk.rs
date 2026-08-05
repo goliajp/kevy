@@ -109,7 +109,9 @@ pub fn run_copy_prefix(
             limiter.take();
             let mut dst = dst_prefix.to_vec();
             dst.extend_from_slice(&key[src_prefix.len()..]);
-            let Some(frames) = crate::migrate::rebuild_frames(client, key, &dst)? else {
+            let crate::migrate::Rebuilt::Frames(frames) =
+                crate::migrate::rebuild_frames(client, key, &dst)?
+            else {
                 continue;
             };
             let n_cmds = count_commands(&frames);

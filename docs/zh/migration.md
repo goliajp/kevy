@@ -101,7 +101,17 @@ kevy-cli inspect -p 6004 user:
 
 `export` 写出一条纯 **RESP 命令流**的重建帧——`DEL` + `SET`/`HSET`/`RPUSH`/`SADD`/`ZADD`，TTL 用绝对 `PEXPIREAT`。这让文件与 `redis-cli --pipe` 双向兼容：kevy 的导出能喂 Redis，任何 RESP 命令文件也能喂 `kevy-cli import`——包括你自己从 RDS dump 生成的那份（playbook 的阶段 3）。
 
-每个 key 打头的 `DEL` 让重放**从零重建**——对每种类型都真正幂等（否则 RPUSH 这类追加 verb 会在重复导入时把列表内容翻倍）。
+每个 key 打头的 `DEL` 让重放**从零重建**——对它**发出的**每种类型都真正幂等（否则 RPUSH 这类追加 verb 会在重复导入时把列表内容翻倍）。
+
+**但它并不发出每种类型。** 字符串、hash、list、set、zset 会重建，**流不会**——这里没有重建流的 verb，所以导出会把它们留下。这是这个工具的真实限制，不是你数据的问题，而且现在会**按名字报出来**：
+
+```console
+kevy-cli export: SKIPPED 1 key(s) of type 'stream' — nothing here
+rebuilds that type, so they are NOT in this file
+exported 4006 keys -> dump.resp
+```
+
+4.1 之前这个跳过是**静默的**：那个 key 被当成"遍历途中消失了"，于是带流的 store 导出得又干净又短。如果你的迁移里有流，请单独搬它们——并且在信任那个文件之前先看这行。
 
 ## 一致性与可续传性
 

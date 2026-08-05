@@ -89,7 +89,12 @@ kevy-cli delete-prefix -p 6004 --rate 5000 --dry-run tmp:
 kevy-cli inspect -p 6004 user:</code></pre></figure>
 <h2 id="wire-format">Wire format</h2>
 <p><code>export</code> writes a plain <b>RESP command stream</b> of rebuild frames — <code>DEL</code> + <code>SET</code>/<code>HSET</code>/<code>RPUSH</code>/<code>SADD</code>/<code>ZADD</code>, plus absolute <code>PEXPIREAT</code> for TTLs. That makes the file bidirectionally compatible with <code>redis-cli --pipe</code>: kevy exports feed a Redis, and any RESP command file feeds <code>kevy-cli import</code> — including one you generate yourself from an RDS dump (the playbook's phase 3).</p>
-<p>The leading <code>DEL</code> per key makes replay <b>rebuild from scratch</b> — genuinely idempotent for every type (an append verb like RPUSH would otherwise double list content on re-import).</p>
+<p>The leading <code>DEL</code> per key makes replay <b>rebuild from scratch</b> — genuinely idempotent for every type it emits (an append verb like RPUSH would otherwise double list content on re-import).</p>
+<p><b>It does not emit every type.</b> Strings, hashes, lists, sets and sorted sets rebuild; <b>streams do not</b> — there is no rebuild verb for them here, so an export leaves them behind. That is a real limitation of this tool, not a property of your data, and it is now <b>reported by name</b>:</p>
+<figure class="code"><pre><code class="lang-console">kevy-cli export: SKIPPED 1 key(s) of type 'stream' — nothing here
+rebuilds that type, so they are NOT in this file
+exported 4006 keys -&gt; dump.resp</code></pre></figure>
+<p>Until 4.1 the skip was silent: the key was counted as one that vanished mid-walk, and a store with streams exported clean and short. If your migration includes streams, move them separately — and check that line before you trust the file.</p>
 <h2 id="consistency-and-resumability">Consistency and resumability</h2>
 <ul><li>Export is per-key point-in-time under a SCAN walk (SCAN-class guarantees; keys written during export may appear in either state, vanished keys are skipped). No global snapshot — by design.</li><li>Import pipelines 512 commands per batch and fsyncs a byte offset to <code>&lt;file&gt;.progress</code> after every batch. <code>--resume</code> restarts there; because frames rebuild, overlap is harmless. <code>--strict</code> aborts on the first server error; otherwise errors are counted and reported.</li><li><code>kill -9</code> mid-import is a gated scenario: resume converges to the same <code>PREFIX.DIGEST</code>.</li></ul>
 <h2 id="verification">Verification</h2>

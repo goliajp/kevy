@@ -207,8 +207,25 @@ file feeds `kevy-cli import` — including one you generate yourself
 from an RDS dump (the playbook's phase 3).
 
 The leading `DEL` per key makes replay **rebuild from scratch** —
-genuinely idempotent for every type (an append verb like RPUSH would
-otherwise double list content on re-import).
+genuinely idempotent for every type it emits (an append verb like
+RPUSH would otherwise double list content on re-import).
+
+**It does not emit every type.** Strings, hashes, lists, sets and
+sorted sets rebuild; **streams do not** — there is no rebuild verb for
+them here, so an export leaves them behind. That is a real limitation
+of this tool, not a property of your data, and it is now **reported by
+name**:
+
+```console
+kevy-cli export: SKIPPED 1 key(s) of type 'stream' — nothing here
+rebuilds that type, so they are NOT in this file
+exported 4006 keys -> dump.resp
+```
+
+Until 4.1 the skip was silent: the key was counted as one that vanished
+mid-walk, and a store with streams exported clean and short. If your
+migration includes streams, move them separately — and check that line
+before you trust the file.
 
 ## Consistency and resumability
 

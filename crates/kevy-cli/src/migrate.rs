@@ -21,16 +21,33 @@ const PIPELINE: usize = 512;
 
 /// Run `export` — walk the keyspace (optionally under `prefix`) and
 /// write rebuild frames to `out_path`. Returns exported key count.
+/// What an export did — including what it did NOT do. The skipped map
+/// is the half that used to be invisible: a type with no rebuild verb
+/// produced no frames, no error and no mention, so a migration could
+/// report success while leaving a whole type behind.
+pub struct Export {
+    /// Keys whose frames are in the file.
+    pub keys: u64,
+    /// Type name -> keys left out because nothing here rebuilds them.
+    pub skipped: std::collections::BTreeMap<Vec<u8>, u64>,
+}
+
+/// Walk the keyspace (optionally under `prefix`) and write rebuild
+/// frames to `out_path`, reporting both what went in and what could
+/// not.
 pub fn run_export(
     client: &mut RespClient,
     prefix: Option<&[u8]>,
     out_path: &Path,
-) -> io::Result<u64> {
+) -> io::Result<Export> {
     let mut out = BufWriter::new(File::create(out_path)?);
     let mut cursor: Vec<u8> = b"0".to_vec();
     let mut pattern = prefix.unwrap_or_default().to_vec();
     pattern.push(b'*');
     let mut n = 0u64;
+    // Types with no rebuild verb, counted by name. Silence here is how
+    // a migration loses a whole type and reports success.
+    let mut skipped: std::collections::BTreeMap<Vec<u8>, u64> = Default::default();
     loop {
         let reply = client.request_borrowed(&[b"SCAN", &cursor, b"MATCH", &pattern, b"COUNT", b"512"])?;
         let Reply::Array(items) = reply else {
@@ -44,8 +61,10 @@ pub fn run_export(
         for k in keys {
             let Reply::Bulk(key) = k else { continue };
             let key = key.clone();
-            if export_key(client, &key, &mut out)? {
-                n += 1;
+            match export_key(client, &key, &mut out)? {
+                Some(None) => n += 1,
+                Some(Some(ty)) => *skipped.entry(ty).or_insert(0u64) += 1,
+                None => {}
             }
         }
         cursor = next;
@@ -54,19 +73,39 @@ pub fn run_export(
         }
     }
     out.flush()?;
-    Ok(n)
+    Ok(Export { keys: n, skipped })
 }
 
-/// Emit one key's rebuild frames. Returns false if the key vanished
-/// between SCAN and read (point-in-time per key).
-fn export_key(client: &mut RespClient, key: &[u8], out: &mut impl Write) -> io::Result<bool> {
+/// Emit one key's rebuild frames. `Ok(None)` = nothing written; the
+/// type name comes back when the reason was "no rebuild verb", so the
+/// caller can report what it is leaving behind rather than count it as
+/// a key that happened to vanish.
+fn export_key(
+    client: &mut RespClient,
+    key: &[u8],
+    out: &mut impl Write,
+) -> io::Result<Option<Option<Vec<u8>>>> {
     match rebuild_frames(client, key, key)? {
-        Some(frame) => {
+        Rebuilt::Frames(frame) => {
             out.write_all(&frame)?;
-            Ok(true)
+            Ok(Some(None))
         }
-        None => Ok(false),
+        Rebuilt::Vanished => Ok(None),
+        Rebuilt::UnsupportedType(ty) => Ok(Some(Some(ty))),
     }
+}
+
+/// Why a key produced no frames. The two reasons are not the same and
+/// were indistinguishable: a vanished key is a race the walk expects,
+/// an unsupported type is data the caller is about to leave behind.
+pub(crate) enum Rebuilt {
+    /// The rebuild frames, ready to write.
+    Frames(Vec<u8>),
+    /// The key was gone between SCAN and read — expected, uncounted.
+    Vanished,
+    /// The type has no rebuild verb here. Carries the type name so the
+    /// caller can tell someone rather than skip in silence.
+    UnsupportedType(Vec<u8>),
 }
 
 /// Read `key` and produce DEL+rebuild frames addressed to `dst`
@@ -76,51 +115,85 @@ pub(crate) fn rebuild_frames(
     client: &mut RespClient,
     key: &[u8],
     dst: &[u8],
-) -> io::Result<Option<Vec<u8>>> {
+) -> io::Result<Rebuilt> {
     let ty = match client.request_borrowed(&[b"TYPE", key])? {
         Reply::Simple(t) => t,
-        _ => return Ok(None),
+        _ => return Ok(Rebuilt::Vanished),
     };
+    if ty == b"none" {
+        return Ok(Rebuilt::Vanished);
+    }
     let mut frame = Vec::new();
     // DEL first: replay rebuilds from scratch (idempotence for
     // append-shaped verbs like RPUSH).
     encode_command_borrowed(&mut frame, &[b"DEL", dst]);
-    match ty.as_slice() {
+    match encode_body(client, key, dst, &ty, &mut frame)? {
+        Some(()) => {}
+        None => return Ok(Rebuilt::Vanished),
+    }
+    if frame.len() == encoded_del_len(dst) {
+        return Ok(Rebuilt::UnsupportedType(ty));
+    }
+    append_ttl_frame(client, key, dst, &mut frame)?;
+    Ok(Rebuilt::Frames(frame))
+}
+
+/// The `DEL <dst>` prologue's encoded length — how `rebuild_frames`
+/// tells "the body wrote nothing" from "the body wrote frames".
+fn encoded_del_len(dst: &[u8]) -> usize {
+    let mut probe = Vec::new();
+    encode_command_borrowed(&mut probe, &[b"DEL", dst]);
+    probe.len()
+}
+
+/// Append the type's rebuild verbs to `frame`. `None` = the key
+/// vanished mid-read; leaving `frame` untouched = no verb for this
+/// type, which the caller turns into `UnsupportedType`.
+fn encode_body(
+    client: &mut RespClient,
+    key: &[u8],
+    dst: &[u8],
+    ty: &[u8],
+    frame: &mut Vec<u8>,
+) -> io::Result<Option<()>> {
+    match ty {
         b"string" => {
             let Reply::Bulk(v) = client.request_borrowed(&[b"GET", key])? else {
                 return Ok(None);
             };
-            encode_command_borrowed(&mut frame, &[b"SET", dst, &v]);
+            encode_command_borrowed(frame, &[b"SET", dst, &v]);
         }
         b"hash" => {
             let Some(items) = fetch_bulks(client, &[b"HGETALL", key])? else {
                 return Ok(None);
             };
-            encode_multi(&mut frame, b"HSET", dst, &items);
+            encode_multi(frame, b"HSET", dst, &items);
         }
         b"list" => {
             let Some(vals) = fetch_bulks(client, &[b"LRANGE", key, b"0", b"-1"])? else {
                 return Ok(None);
             };
-            encode_multi(&mut frame, b"RPUSH", dst, &vals);
+            encode_multi(frame, b"RPUSH", dst, &vals);
         }
         b"set" => {
             let Some(ms) = fetch_bulks(client, &[b"SMEMBERS", key])? else {
                 return Ok(None);
             };
-            encode_multi(&mut frame, b"SADD", dst, &ms);
+            encode_multi(frame, b"SADD", dst, &ms);
         }
         b"zset" => {
             let zrange: &[&[u8]] = &[b"ZRANGE", key, b"0", b"-1", b"WITHSCORES"];
             let Some(flat) = fetch_bulks(client, zrange)? else {
                 return Ok(None);
             };
-            encode_zadd(&mut frame, dst, &flat);
+            encode_zadd(frame, dst, &flat);
         }
-        _ => return Ok(None), // streams etc. — out of the rebuild set
+        // Streams and anything added later: no rebuild verb here. The
+        // caller reports it by name — a migration that drops a type
+        // must say which one.
+        _ => return Ok(Some(())),
     }
-    append_ttl_frame(client, key, dst, &mut frame)?;
-    Ok(Some(frame))
+    Ok(Some(()))
 }
 
 /// Issue `cmd` and unwrap its Array reply into bulk payloads.

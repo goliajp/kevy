@@ -86,7 +86,7 @@ fn export_import_roundtrip_digest_equal() {
     let dir = std::env::temp_dir().join(format!("kevy-mig-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("dump.resp");
-    let n = run_export(&mut cs, Some(b"mig:"), &file).unwrap();
+    let n = run_export(&mut cs, Some(b"mig:"), &file).unwrap().keys;
     assert_eq!(n, 1004, "500+500 rows + list/set/zset/ttl");
 
     let mut cd = dst.client();
@@ -106,7 +106,7 @@ fn export_import_roundtrip_digest_equal() {
 
     // resume: restart from a zeroed progress file → idempotent, digest equal
     let file2 = dir.join("dump2.resp");
-    let n2 = run_export(&mut cs, Some(b"mig:"), &file2).unwrap();
+    let n2 = run_export(&mut cs, Some(b"mig:"), &file2).unwrap().keys;
     assert_eq!(n2, n);
     std::fs::write(file2.with_extension("progress"), b"0").unwrap();
     let rep2 = run_import(&mut cd, &file2, true, true).unwrap();
@@ -177,5 +177,46 @@ fn bulk_ops_and_diff() {
     kevy_cli::bulk::run_inspect(&mut c1c, b"bk:", &mut out).unwrap();
     let s = String::from_utf8_lossy(&out);
     assert!(s.contains("201 keys") && s.contains("string: 201"), "{s}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Every type the engine can hold must leave an export either **in the
+/// file** or **in the skipped report**. Neither is optional: a type
+/// that is in neither vanishes on migration day while the tool prints
+/// a success line.
+///
+/// Streams are the type that was in neither. The export walked past
+/// them, counted them as "vanished between SCAN and read", and said
+/// nothing — measured on a 4007-key store that exported 4006.
+#[test]
+fn every_type_is_either_exported_or_reported() {
+    let src = Srv::start();
+    let mut cs = src.client();
+    // One key per type the server will accept.
+    cs.request_borrowed(&[b"SET", b"t:string", b"v"]).unwrap();
+    cs.request_borrowed(&[b"RPUSH", b"t:list", b"a"]).unwrap();
+    cs.request_borrowed(&[b"SADD", b"t:set", b"m"]).unwrap();
+    cs.request_borrowed(&[b"HSET", b"t:hash", b"f", b"v"]).unwrap();
+    cs.request_borrowed(&[b"ZADD", b"t:zset", b"1", b"m"]).unwrap();
+    cs.request_borrowed(&[b"XADD", b"t:stream", b"*", b"f", b"v"]).unwrap();
+
+    let dir = std::env::temp_dir().join(format!("kevy-types-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("types.resp");
+    let out = run_export(&mut cs, Some(b"t:"), &file).unwrap();
+
+    let accounted = out.keys + out.skipped.values().sum::<u64>();
+    assert_eq!(
+        accounted, 6,
+        "6 keys written, {} exported + {} skipped — the difference is silent loss",
+        out.keys,
+        out.skipped.values().sum::<u64>()
+    );
+    assert_eq!(
+        out.skipped.get(b"stream".as_slice()).copied(),
+        Some(1),
+        "the stream must be named in the report, not merely absent: {:?}",
+        out.skipped.keys().map(|k| String::from_utf8_lossy(k).into_owned()).collect::<Vec<_>>()
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
