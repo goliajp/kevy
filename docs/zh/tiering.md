@@ -160,4 +160,4 @@ cold key ≈ 96 B (entry overhead) + key heap bytes     # value fully reclaimed
 - [tables.md](tables.md)——与分层一起设计的 TABLE.* 层：索引热、行冷、index-only 查询零行触达。
 - [persistence.md](persistence.md)——被刻意保持不动的持久化契约。
 - [tuning.md](tuning.md)——与 tier 预算共存的内存旋钮（`maxmemory` 及其同伴）。
-- [`bench/tiergate.sh`](../bench/tiergate.sh) / [`bench/capacity-envelope.sh`](../bench/capacity-envelope.sh)——本页引用或悬置的每个数字背后的验收门禁与 envelope 运行器。
+- [`bench/tiergate.sh`](../../bench/tiergate.sh) / [`bench/capacity-envelope.sh`](../../bench/capacity-envelope.sh)——本页引用或悬置的每个数字背后的验收门禁与 envelope 运行器。

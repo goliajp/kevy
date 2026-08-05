@@ -55,7 +55,7 @@ TABLE.VERIFY name      # component fsck + a bounded column spot check
 裸的 `TABLE.DECLARE` 保持严格形态：重声明既有名字是错误。开机用 `ensure`，迁移用 `replace`，重名即 bug 的场合用 `declare`。
 
 - 列类型是 `i64 | f64 | str`——即标量索引的类型。其余一切（时间戳、布尔、枚举）由应用编码进这三种之一，粗粒度映射被明说而不是被藏起来（kevy-sql 会对每个被转换的列打印一条说明）。
-- `PK` 指向一个已声明的列；它是文档加一个 `VERIFY` 面——行仍按键寻址，和今天完全一样。`serial` 式的 id 分配是一份配方（[序列配方](cookbook.md#3-sequences)），不是引擎特性。
+- `PK` 指向一个已声明的列；它是文档加一个 `VERIFY` 面——行仍按键寻址，和今天完全一样。`serial` 式的 id 分配是一份配方（[序列配方](cookbook.md#3-序列)），不是引擎特性。
 - 最多 64 张表；每一种结构性拒绝都有名字（重复列、未知的 `VALUES` 列、名字冲突……），从不静默。
 
 `TABLE.VERIFY` **在调用那一刻、双向地现算每一个计数器**（4.1——此前 `coerce_failures` 是生命周期累计值，还把缺失列也吞了进去，没法和旁边现算的 `drift` 对读）：
@@ -67,7 +67,7 @@ TABLE.VERIFY name      # component fsck + a bounded column spot check
 
 ## 复合 ORDERPATH 语义
 
-ORDERPATH 把[复合排序配方](cookbook.md#8-composite-ordering-order-by-a-b)——`ORDER BY a, b DESC` 的遍历——机械化成一个真正的复合索引：每行一条保序字节串，于是一棵 B-tree 就能像关系型复合索引那样回答查询。规则如下：
+ORDERPATH 把[复合排序配方](cookbook.md#8-复合排序order-by-a-b)——`ORDER BY a, b DESC` 的遍历——机械化成一个真正的复合索引：每行一条保序字节串，于是一棵 B-tree 就能像关系型复合索引那样回答查询。规则如下：
 
 - **`WHERE` 取前导前缀。**`WHERE a EQ x [b EQ y …] [RANGE c min max]` 必须从头按声明顺序点名复合索引的列：一段等值前缀，然后在*下一列*上最多一个 range；其后全部不受约束（经典的复合 B-tree 语义）。点名一个非前缀列是具名错误——从不是一次扫描。
 - `RANGE` 在 `WHERE` 内是终结的——它后面不能再跟任何东西，因为 range 之后的条件无法表示为一次连续遍历。
@@ -100,8 +100,8 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name email
 
 ## NULL、唯一性，以及什么被强制
 
-- **NULL = 缺失字段。**没有任何列是必填的；缺少被索引列的行只是不在那个索引里。没有引擎级 `CHECK`、默认值或 NOT NULL——约束是配方（[约束配方](cookbook.md#5-check-constraints-and-multi-key-invariants)，原子块）。
-- 表层的**唯一性是校验而非强制**：`unique` 索引就是 `IDX.CREATE KIND unique` 建的那道围栏（[indexes.md](indexes.md#uniqueness-is-a-fence-not-a-lock)——预留模式让它免于竞态），`TABLE.VERIFY` 报告 `duplicates`，而不是引擎事后拒绝你的写入。
+- **NULL = 缺失字段。**没有任何列是必填的；缺少被索引列的行只是不在那个索引里。没有引擎级 `CHECK`、默认值或 NOT NULL——约束是配方（[约束配方](cookbook.md#5-check-约束与多-key-不变量)，原子块）。
+- 表层的**唯一性是校验而非强制**：`unique` 索引就是 `IDX.CREATE KIND unique` 建的那道围栏（[indexes.md](indexes.md#唯一性是围栏不是锁)——预留模式让它免于竞态），`TABLE.VERIFY` 报告 `duplicates`，而不是引擎事后拒绝你的写入。
 
 ## 它不是什么
 
@@ -121,7 +121,7 @@ kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004
 - 常量的单表 `CREATE VIEW … AS SELECT` → 一个引擎视图；带参数的 → 一张**查询卡**：一条现成的 `IDX.QUERY` 模板，`$N` 槽位由你的应用运行时填入。
 - 编译器同样不做规划：它把你的视图与你声明过的访问路径做匹配，匹配不上时告诉你该补哪条声明（`add: CREATE INDEX ON t (dept, age)`），而不是发明一次扫描。临时 SQL、join、子查询、`OR`、`GROUP BY` 等一律带 `line:col` 拒绝，并指向替代它的配方。
 
-端到端的完整演练——一份真实的 users/orders/order_items schema 被编译、应用、查询——见[schema 迁移配方](cookbook.md#22-porting-a-pgmysql-schema)。
+端到端的完整演练——一份真实的 users/orders/order_items schema 被编译、应用、查询——见[schema 迁移配方](../cookbook.md#22-porting-a-pgmysql-schema)。
 
 ## 嵌入式
 
