@@ -79,7 +79,25 @@ fn accept_budget() -> Duration {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1.0);
-    Duration::from_secs_f64(10.0 * mult)
+    Duration::from_secs_f64(30.0 * mult)
+}
+
+/// Only one of these tests may own a server at a time.
+///
+/// Each spawns a real one, the harness runs them in parallel, and the
+/// rest of the workspace suite has the machine — three debug-build
+/// starts at once was still enough to blow a 10 s accept budget after
+/// they were already reduced to one shard each. Making each cheaper
+/// helped and did not settle it; not having three at once is the part
+/// that was actually in the way.
+///
+/// Poisoning is ignored deliberately: a panicking test has already
+/// failed, and turning that into a second failure in every other test
+/// hides which one broke.
+static ONE_SERVER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn server_slot() -> std::sync::MutexGuard<'static, ()> {
+    ONE_SERVER.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn connect_with_retry_on(port: u16) -> TcpStream {
@@ -500,6 +518,7 @@ fn cases() -> Vec<(Vec<&'static [u8]>, Cmp)> {
 /// and the claused replies must match byte-for-byte).
 #[test]
 fn scalar_values_clauses_match_the_real_server() {
+    let _slot = server_slot();
     const PORT2: u16 = 6098;
     let server_dir = kevy_tmpdir::TmpDir::new("dispatch-oracle-values");
     let child = Command::new(server_binary())
@@ -590,6 +609,7 @@ fn scalar_values_clauses_match_the_real_server() {
 /// exactly).
 #[test]
 fn table_surface_matches_the_real_server() {
+    let _slot = server_slot();
     const PORT3: u16 = 6099;
     let server_dir = kevy_tmpdir::TmpDir::new("dispatch-oracle-table");
     let child = Command::new(server_binary())
@@ -671,6 +691,7 @@ fn table_surface_matches_the_real_server() {
 
 #[test]
 fn dispatch_matches_the_real_server() {
+    let _slot = server_slot();
     let server_dir = kevy_tmpdir::TmpDir::new("dispatch-oracle-server");
     let _guard = spawn_server(server_dir.path());
     let mut sock = connect_with_retry();
