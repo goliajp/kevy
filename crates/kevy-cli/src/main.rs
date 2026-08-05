@@ -76,6 +76,20 @@ fn main() -> ExitCode {
 
 /// Route the non-REPL subcommands. `Some(code)` = handled, exit with it;
 /// `None` = no subcommand matched, continue down the redis-cli path.
+/// Say what a rebuild-frame walk left behind. Both `export` and
+/// `copy-prefix` read through the same rebuild set, so both can drop a
+/// type the set does not cover — and a tool that drops data while
+/// printing a success line is the failure this exists to prevent.
+fn report_skipped(verb: &str, skipped: &std::collections::BTreeMap<Vec<u8>, u64>) {
+    for (ty, count) in skipped {
+        eprintln!(
+            "kevy-cli {verb}: SKIPPED {count} key(s) of type '{}' — nothing here rebuilds \
+             that type, so they were NOT carried",
+            String::from_utf8_lossy(ty)
+        );
+    }
+}
+
 fn route_subcommand(args: &[String]) -> Option<ExitCode> {
     // `backup` / `restore` subcommands. Routed BEFORE the RESP
     // client setup because they're file-only operations (no TCP).
@@ -328,13 +342,7 @@ fn run_migrate_cli(args: &[String]) -> ExitCode {
     let res = if verb == "export" {
         kevy_cli::migrate::run_export(&mut client, prefix.as_deref(), std::path::Path::new(&file))
             .map(|e| {
-                for (ty, count) in &e.skipped {
-                    eprintln!(
-                        "kevy-cli export: SKIPPED {count} key(s) of type '{}' — nothing here \
-                         rebuilds that type, so they are NOT in this file",
-                        String::from_utf8_lossy(ty)
-                    );
-                }
+                report_skipped("export", &e.skipped);
                 println!("exported {} keys -> {file}", e.keys);
             })
     } else {
@@ -451,7 +459,10 @@ fn run_bulk_cli(args: &[String]) -> ExitCode {
             let res: io::Result<()> = match (verb, pos.as_slice()) {
                 ("copy-prefix", [src, dst]) => {
                     kevy_cli::bulk::run_copy_prefix(&mut client, src.as_bytes(), dst.as_bytes(), rate)
-                        .map(|n| println!("copied {n} keys"))
+                        .map(|e| {
+                            report_skipped("copy-prefix", &e.skipped);
+                            println!("copied {} keys", e.keys);
+                        })
                 }
                 ("delete-prefix", [p]) => {
                     kevy_cli::bulk::run_delete_prefix(&mut client, p.as_bytes(), rate, dry_run)

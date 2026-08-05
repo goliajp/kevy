@@ -227,6 +227,10 @@ mid-walk, and a store with streams exported clean and short. If your
 migration includes streams, move them separately — and check that line
 before you trust the file.
 
+**`copy-prefix` reads through the same rebuild set** and reports the
+same way, for the same reason: a copy that leaves a type behind while
+printing `copied N keys` is the same silence wearing a different verb.
+
 ## Consistency and resumability
 
 - Export is per-key point-in-time under a SCAN walk (SCAN-class
