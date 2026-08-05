@@ -53,6 +53,16 @@ VIEW.CREATE ready_jobs
     ORDER BY j_pri DESC
     MODE materialized TOPK 100
 VIEW.QUERY ready_jobs LIMIT 10</code></pre></figure>
+<h2 id="first-check-whether-you-need-one">First: check whether you need one</h2>
+<p>The example above is deliberate, and it is also the shape you most often <b>do not</b> need a view for. <code>WHERE state = 'ready' AND pri BETWEEN 0 AND 100 ORDER BY pri DESC</code> is an equality prefix followed by one range on the next column — precisely what a composite <code>ORDERPATH</code> represents as a single contiguous walk (<a href="../tables/#composite-orderpath-semantics">tables.md</a>):</p>
+<figure class="code"><pre><code class="lang-console">kevy-cli TABLE.DECLARE job PREFIX job: PK id \
+    COLUMN id str COLUMN state str COLUMN pri i64 \
+    ORDERPATH ready_by_pri ON state THEN pri DESC
+kevy-cli IDX.QUERY job.ready_by_pri WHERE state EQ ready RANGE pri 0 100 LIMIT 10</code></pre></figure>
+<p>One B-tree, no second structure to maintain, no rebuild to verify. The first real consumer to declare a table covered all fourteen of its list axes this way and declared <b>zero</b> views — that is the expected outcome, not a gap.</p>
+<p>Reach for a view when the shape is one an ordered composite key cannot be:</p>
+<ul><li><b><code>OR</code></b> across independent indexes — a single ordered key has one leading column, so a union is not a walk.</li><li><b><code>DIFF</code></b> — set subtraction, left minus right.</li><li><b>two ranges</b>, on different columns. A composite can range on one column, at the tail, and nothing may follow it; two open dimensions are not one contiguous interval.</li><li>a <b>bounded, always-warm answer</b>: <code>MODE materialized TOPK n</code> keeps the top slice maintained on the write path, so the read is a fixed cost no matter how selective the predicate turns out to be.</li></ul>
+<p>If your shape is not on that list, declare the <code>ORDERPATH</code> and stop. A view is the more expensive of the two by construction — it composes indexes that must exist anyway, and materializing one adds write-path work and a structure <code>VIEW.VERIFY</code> then has to audit.</p>
 <h2 id="quick-start-server">Quick start (server)</h2>
 <p>Everything a view composes must exist first — leaves and the ORDER BY index are declared <code>IDX.*</code> indexes over the same prefix domain (<a href="../indexes/">indexes.md</a>):</p>
 <figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 IDX.CREATE j_pri ON PREFIX job: FIELD pri TYPE i64 KIND range
@@ -129,7 +139,7 @@ fn main() -&gt; kevy_embedded::KevyResult&lt;()&gt; {
 <p>Memory per member ≈ <code>order_value_width + key_len + 48</code> bytes, reported live by <code>VIEW.VERIFY</code>.</p>
 <h2 id="see-also">See also</h2>
 <ul><li><a href="../indexes/">indexes.md</a> — the indexes views compose (declaration, backfill, the consistency envelope views inherit).</li><li><a href="../rds-workloads/">rds-workloads.md</a> — where views sit in the SQL-to-kevy mapping.</li><li><a href="../commands/">verb-reference.md</a> — generated grammar for every <code>VIEW.*</code> form.</li><li><a href="../cookbook/">cookbook.md</a> — view recipes in context.</li></ul></main>
-  <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#quick-start-server">Quick start (server)</a></li><li class="l2"><a href="#the-three-structural-rules">The three structural rules</a></li><li class="l2"><a href="#modes-and-cost-model">Modes and cost model</a></li><li class="l3"><a href="#diff-the-declared-anti-join">DIFF: the declared anti-join</a></li><li class="l2"><a href="#consistency">Consistency</a></li><li class="l2"><a href="#embedded">Embedded</a></li><li class="l2"><a href="#performance">Performance</a></li><li class="l2"><a href="#see-also">See also</a></li></ul></aside>
+  <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#first-check-whether-you-need-one">First: check whether you need one</a></li><li class="l2"><a href="#quick-start-server">Quick start (server)</a></li><li class="l2"><a href="#the-three-structural-rules">The three structural rules</a></li><li class="l2"><a href="#modes-and-cost-model">Modes and cost model</a></li><li class="l3"><a href="#diff-the-declared-anti-join">DIFF: the declared anti-join</a></li><li class="l2"><a href="#consistency">Consistency</a></li><li class="l2"><a href="#embedded">Embedded</a></li><li class="l2"><a href="#performance">Performance</a></li><li class="l2"><a href="#see-also">See also</a></li></ul></aside>
 </div>
 
 <script src="../../assets/docsearch.js?v=8c03463d" defer></script>

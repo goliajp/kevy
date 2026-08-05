@@ -109,6 +109,9 @@ jobs:
       - name: command pages parity (site == VERB_META)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/gen_command_pages.py --check
+      - name: doc pages parity (site == docs/*.md)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python3 tools/gen_docs_site.py --check
       - name: CJK punctuation (no half-width commas in Chinese/Japanese prose)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_cjk_punct.py
