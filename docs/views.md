@@ -19,6 +19,45 @@ VIEW.CREATE ready_jobs
 VIEW.QUERY ready_jobs LIMIT 10
 ```
 
+## First: check whether you need one
+
+The example above is deliberate, and it is also the shape you most
+often **do not** need a view for. `WHERE state = 'ready' AND pri
+BETWEEN 0 AND 100 ORDER BY pri DESC` is an equality prefix followed by
+one range on the next column — precisely what a composite `ORDERPATH`
+represents as a single contiguous walk
+([tables.md](tables.md#composite-orderpath-semantics)):
+
+```console
+kevy-cli TABLE.DECLARE job PREFIX job: PK id \
+    COLUMN id str COLUMN state str COLUMN pri i64 \
+    ORDERPATH ready_by_pri ON state THEN pri DESC
+kevy-cli IDX.QUERY job.ready_by_pri WHERE state EQ ready RANGE pri 0 100 LIMIT 10
+```
+
+One B-tree, no second structure to maintain, no rebuild to verify.
+The first real consumer to declare a table covered all fourteen of its
+list axes this way and declared **zero** views — that is the expected
+outcome, not a gap.
+
+Reach for a view when the shape is one an ordered composite key cannot
+be:
+
+* **`OR`** across independent indexes — a single ordered key has one
+  leading column, so a union is not a walk.
+* **`DIFF`** — set subtraction, left minus right.
+* **two ranges**, on different columns. A composite can range on one
+  column, at the tail, and nothing may follow it; two open dimensions
+  are not one contiguous interval.
+* a **bounded, always-warm answer**: `MODE materialized TOPK n` keeps
+  the top slice maintained on the write path, so the read is a fixed
+  cost no matter how selective the predicate turns out to be.
+
+If your shape is not on that list, declare the `ORDERPATH` and stop.
+A view is the more expensive of the two by construction — it composes
+indexes that must exist anyway, and materializing one adds write-path
+work and a structure `VIEW.VERIFY` then has to audit.
+
 ## Quick start (server)
 
 Everything a view composes must exist first — leaves and the ORDER
