@@ -435,7 +435,7 @@ not a roadmap gap:
 | Refused | Because | Use instead |
 |---|---|---|
 | SQL parser / query DSL | the planner slope starts here | explicit `IDX.*`/`VIEW.*` + this matrix |
-| query planner / auto index selection | engine must execute declared paths, not decide | `IDX.EXPLAIN` (diagnostic only) |
+| query planner / per-query index selection | engine must execute declared paths, not decide | `IDX.EXPLAIN` (diagnostic only) |
 | JOINs | no server-side plan search | denormalize / hydrate (`FIELDS`, `VIA`) / view |
 | `WHERE` without an index | accidental O(n) is a lie waiting to page you | declare the path or don't ship the query |
 | server-side constraint DSL / triggers | stored app logic isn't engine-genre | Lua `EVAL` (atomic unit) + CDC consumers |
@@ -447,6 +447,16 @@ not a roadmap gap:
 | cross-DC active-active, CRDTs | single-DC charter | app-level federation |
 | dynamic membership / auto-replace / resharding | topology is operator-declared | config + rolling restart |
 | HTTP/REST API | RESP + MCP are the two access planes | any Redis client |
+
+**Where that second row stops.** "Not decide" is about *query time*:
+no plan is chosen for you, because your query names its own path.
+It is not a refusal to ever add one. `TABLE.DECLARE … AUTODECLARE n`
+lets the engine turn a shape you keep being refused into a declared
+path — off unless you ask, capped at the `n` you write, only over
+columns you declared, addition-only, and marked `auto` in `IDX.LIST`
+([tables.md](tables.md#autodeclare-the-paths-you-did-not-write)). An
+optimiser you cannot predict and a schema change you asked for are
+different things, and only the first one is refused here.
 
 **One entry that used to sit in that table and does not belong there:
 `OFFSET`.** It was listed as refused; the engine has always provided it

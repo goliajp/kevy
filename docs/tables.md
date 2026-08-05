@@ -70,6 +70,7 @@ TABLE.DECLARE name PREFIX p PK col
     [INDEX col range|unique [VALUES col ...]] ...
     [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] ...
     [WINDOW col SPAN n BUCKET n]
+    [AUTODECLARE n]    # let the engine add up to n paths — see below
 TABLE.ENSURE ...       # TABLE.DECLARE's boot form — see below
 TABLE.REPLACE ...      # explicit drop + declare + rebuild
 TABLE.DROP name        # drops the table + its compiled indexes; 1|0
@@ -257,6 +258,38 @@ hydration page (`FIELDS …`) pays cold reads — one per row, batched.
 An index without `VALUES` columns is byte-identical in memory and
 query path to one on a store that never declares them (the
 zero-cost-when-undeclared gate).
+
+## `AUTODECLARE`: the paths you did not write
+
+A query against a column you never indexed is refused by name. That
+refusal is also a fact about your workload, and `IDX.ADVISE` shows the
+shapes that keep hitting it. `AUTODECLARE n` says: *when a shape has
+been refused often enough and it grounds on a column I declared, go
+ahead and declare the path for me — up to `n` of them.*
+
+Everything about it is bounded on purpose:
+
+* **Off unless you ask.** No clause, no loop. This is not a default.
+* **Capped by the number you wrote.** Budget spent means the query
+  keeps being refused and the shape stays in `IDX.ADVISE` for you to
+  read — the engine does not quietly raise its own limit.
+* **Only over declared columns.** A shape naming a column the table
+  does not declare never grounds; `IDX.ADVISE` still reports it, so
+  the answer stays yours.
+* **Addition only.** Dropping an index is a human act. The worst case
+  of a bad guess is bounded wasted memory, never a lost path.
+* **Visible.** Each such index carries an `auto` marker in `IDX.LIST`,
+  and the table's spec keeps the ledger — you can always read back
+  which paths you wrote and which the engine did.
+* **Out of band.** The query that crosses the threshold still gets its
+  error. The next one finds the path building. Declaring never happens
+  inside a query's answer.
+
+This is not a query planner, and the distinction is the whole point:
+the engine never chooses *which path to run* — your query names it.
+`AUTODECLARE` only extends the declaration, on your invitation, within
+your budget, where you can see it. Query time stays a law: run the
+declared path, refuse the rest by name.
 
 ## NULL, uniqueness, and what is enforced
 
