@@ -1,4 +1,12 @@
-# The capacity envelope ends at ~39×, and the per-entry cost is not linear
+# The capacity envelope ends at ~39× on 4 KiB values
+
+> **Read `FINDING-2026-08-05-capacity-per-entry-decomposition.md`
+> alongside this.** Two readings below were refuted by that
+> decomposition and are marked where they stand: the per-entry cost is
+> *not* non-linear (it is flat, and the budget was masking it), and the
+> stub cost is *not* missing from the design docs (`memgate` gates it).
+> The measurements here are unaffected; the inferences drawn from them
+> in the moment were wrong twice, which is why they are left visible.
 
 Blocker 1 of the v5 RDS ledger — *"the capacity claim has no number"*.
 It has one now, and it is better than the claim.
@@ -70,15 +78,19 @@ only by its 5 % tolerance, with 69 MB of that tolerance left. Between
 25× and 40× the store gained 7.9 M entries and 147 MB of resident
 memory it could not demote:
 
-> **18.7 bytes per entry, resident, non-demotable.**
+> 18.7 bytes per entry, resident, non-demotable.
 
-That is the real capacity model, and it is a number the design docs do
-not have. The window model's own estimate is ~1 B/entry — true for
-*small* values, where many rows share a 4 KiB page and one fence
-amortises across all of them. At 4 KiB values every row is its own page,
-so every row pays its own fence, and the per-entry cost is ~19×
-what the formula suggests. **The capacity claim is a function of value
-size, and the sweep is at the pessimal end of it.**
+**⚠ That reading was wrong, and the decomposition says why.** The real
+per-entry cost is a flat ~104 B (96 B of it the tier stub, a constant
+`bench/memgate.sh` already gates). Below saturation each new stub is
+offset by a 4 KiB value being demoted, so `used_memory` sits pinned at
+the budget and the *observed* marginal reads far too low. 18.7 B/entry
+was the residual of a rising floor against a falling ceiling, not a
+cost.
+
+What survives from this paragraph: **the capacity claim is a function
+of value size** — measured at 2.65× (256 B), 10.43× (1 KiB) and 39.2×
+(4 KiB).
 
 **Cold-read latency is not the constraint.** 79 → 157 → 144 → 148 µs
 against a 300 µs budget: it rises once and then flattens across four
@@ -107,8 +119,11 @@ The capacity claim can be stated, with one honest addition:
 Two multipliers, two different owners:
 
 * **Per-entry resident cost** is the *tiering* account, and it is what
-  sets the true ratio ceiling. It also means the claim must be stated
-  per value size — at 4 KiB the fence cannot amortise, at 256 B it can.
+  sets the true ratio ceiling. It means the claim must be stated per
+  value size — and the direction is the opposite of what this sentence
+  originally guessed: the binding cost is the ~96 B stub, which is the
+  *same* at every value size, so **small values are worse, not better**
+  (2.65× at 256 B against 39.2× at 4 KiB).
 * **The RSS multiplier** is the *allocator* account. The v5 vision
   already names a self-built `kevy-alloc` as first priority against a
   2.24× fragmentation figure; this sweep independently reaches the same
@@ -125,19 +140,24 @@ Written before the 60× rung landed, from the 18.7 B/entry marginal:
 | `used_memory` peak at 60× | ~2.38 GB | **3.28 GB** |
 | ceiling | ≈ 47× | **≈ 41×** |
 
-**Right about the direction, wrong about the shape.** The per-entry cost
-is not linear:
+**Right about the direction, wrong about the shape** — and then wrong
+again about *why* the shape differed:
 
 | segment | marginal resident cost |
 |---|---|
 | 13.1 M → 21.0 M entries | 18.7 B/entry |
 | 21.0 M → 31.5 M entries | **104.3 B/entry** |
 
-5.6× steeper over the second segment. Extrapolating an early slope was
-the mistake — the same mistake as the "plateau" reading two rungs
-earlier, and in the same direction: **treating three points as a law.**
-Where the peak actually crosses the cap, on the measured slope, is
-21.6 M entries = **41× nominal**.
+I read that as a cost that accelerates. It is not: the decomposition
+shows a flat ~104 B/entry at every scale, with the lower segment's
+number an artifact of demotion offsetting stub growth while there were
+still hot values to demote. So extrapolating the *early* slope was
+doubly wrong — it was the wrong slope, of a curve that has none.
+
+**Twice in one finding, the same mistake in the same direction:
+treating three points as a law.** (The other was reading two equal RSS
+peaks as a plateau.) Where the peak actually crosses the cap, on the
+measured constant, is 21.6 M entries = **41× nominal**.
 
 ## The cleaner statement the data supports
 
