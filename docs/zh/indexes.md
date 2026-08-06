@@ -31,7 +31,9 @@ range|unique [MAXMEM <bytes>]`
 
 ## 唯一性是围栏，不是锁
 
-`unique` 索引**不阻塞写入**——在写入时强制全局唯一，就意味着把跨 shard 的写串行化。它的做法是：重复项被计数（VERIFY / LIST 里的 `duplicates`），并且在 `EQ` 读取时以多命中的形式暴露出来。如果你需要的是硬唯一性，就在集群模式下用 `{hashtag}` 前缀把这个域钉到单个 shard 上，或者在 `MULTI` / `WATCH` 下做先查后写。
+`unique` 索引**不阻塞写入**——在写入时强制全局唯一，就意味着把跨 shard 的写串行化。它的做法是：重复项被计数（VERIFY / LIST 里的 `duplicates`），并且在 `EQ` 读取时以多命中的形式暴露出来。
+
+**那个计数器是按 shard 的，读取不是。** `duplicates` 维护在每个 shard 各自的段里，所以它只在两行**落到同一个 shard** 时才看得见它们共享一个值——而键本来就哈希散布到各 shard，所以寻常情况恰恰是它们没落在一起。实测：同一对行，在单 shard 服务器上报 `duplicates 1`，在双 shard 上报 `duplicates 0`。做一个全局计数器需要在写路径上跨 shard 统计取值，而那正是这个 kind 存在所要避开的串行化——所以**永远有效的检测是 `EQ` 读的多命中**；`duplicates` 是提示，那里读到零**不等于**这个值是唯一的。如果你需要的是硬唯一性，就在集群模式下用 `{hashtag}` 前缀把这个域钉到单个 shard 上，或者在 `MULTI` / `WATCH` 下做先查后写。
 
 ## Embedded
 
