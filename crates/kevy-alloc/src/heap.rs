@@ -87,11 +87,6 @@ pub struct Heap {
     /// may go stale (a span can be reassigned after its entry is
     /// pushed) — the pop validates and simply discards liars.
     partials: [PartialRing; NCLASSES],
-    /// Per-class hot stack of just-freed slots of the CURRENT span —
-    /// the locality round's line-reuse layer (see `heap_hot.rs`).
-    hot: [heap_hot::HotSlots; NCLASSES],
-    /// The hot layer's judgment-gate counters.
-    pub hot_stats: heap_hot::HotStats,
     /// Per-class claimed bitmap word (the far-line amortizer): up to 64
     /// slots of the current span's lowest holed word, handed out and
     /// locally recycled without touching the segment header. One header
@@ -126,8 +121,6 @@ impl Heap {
             rounding_bytes: 0,
             outbound: Outbound::new(),
             partials: [PartialRing::EMPTY; NCLASSES],
-            hot: [heap_hot::HotSlots::EMPTY; NCLASSES],
-            hot_stats: heap_hot::HotStats { hits: 0, full: 0 },
             claims: [None; NCLASSES],
             class_cap,
         }
@@ -300,12 +293,6 @@ impl Heap {
     /// runs dry does the span header get touched again (one claim per
     /// 64 slots — the far-line amortizer).
     fn pop_slot(&mut self, c: usize) -> Option<NonNull<u8>> {
-        // The line the program just touched, if the hot layer holds
-        // one for the current span — the L1 reuse the lowest-first
-        // walk cannot give (RFC 2026-08-03-v5-r1-locality).
-        if let Some(p) = self.hot_pop(c) {
-            return Some(p);
-        }
         if let Some(p) = self.pop_claimed(c) {
             return Some(p);
         }
@@ -402,6 +389,37 @@ impl Heap {
         unsafe { crate::large::dealloc(ptr, size) };
     }
 
+    /// Move every slot other shards freed back onto its own span's list.
+    pub fn drain_foreign(&mut self) {
+        let mut seg = self.segments;
+        while !seg.is_null() {
+            // SAFETY: live header from our own list.
+            let s = unsafe { &*seg };
+            let mut node = segment::take_foreign(s);
+            while !node.is_null() {
+                // SAFETY: foreign entries are slot addresses of this
+                // segment, linked through their first word.
+                let next = unsafe { node.cast::<*mut u8>().read() };
+                // SAFETY: non-null in this branch.
+                let p = unsafe { NonNull::new_unchecked(node) };
+                // SAFETY: still queued and untouched, so the size the
+                // freeing thread recorded is still there.
+                let requested = unsafe { segment::foreign_requested(p) };
+                let ix = segment::span_index_of(p);
+                // SAFETY: the span index came from the address itself.
+                let cls = unsafe { (*seg).spans[ix].class };
+                if cls != NO_CLASS {
+                    let c = cls as usize;
+                    self.live_bytes -= requested as u64;
+                    self.rounding_bytes -= (class::size_of(c) - requested) as u64;
+                    // SAFETY: our segment, exclusive access here.
+                    unsafe { self.free_local(NonNull::new_unchecked(seg), p, c) };
+                }
+                node = next;
+            }
+            seg = s.next;
+        }
+    }
 }
 
 impl Heap {
@@ -430,13 +448,6 @@ impl Heap {
                 return;
             }
         }
-        // Next preference: the hot stack, when the slot belongs to
-        // the class's CURRENT span — the just-touched line goes back
-        // out first, and the span's bitmap never learns (the slot
-        // stays live from its view until the stack invalidates).
-        if self.hot_offer(c, seg, ix, ptr) {
-            return;
-        }
         // SAFETY: caller holds exclusive access to this segment.
         let meta = unsafe { &mut (*seg.as_ptr()).spans[ix] };
         let was_full = u32::from(meta.live) == meta.capacity();
@@ -454,7 +465,6 @@ impl Drop for Heap {
         // debug-assert bookkeeping (live counts) honest for any
         // instrumented teardown that walks spans first.
         self.flush_claims();
-        self.flush_hot();
         // The retention pool is process-wide and bounded, so a heap's
         // death owes it nothing — but the fuzzer's tight RSS limit
         // watches every iteration, and draining here keeps single-heap
@@ -478,10 +488,3 @@ impl Drop for Heap {
 #[path = "heap_claims.rs"]
 mod heap_claims;
 pub(crate) use heap_claims::Claim;
-
-#[path = "heap_hot.rs"]
-mod heap_hot;
-
-#[path = "heap_foreign.rs"]
-mod heap_foreign;
-

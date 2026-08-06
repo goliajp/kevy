@@ -35,7 +35,6 @@ impl Heap {
         // Claimed-word bits pin their pages exactly as live slots do;
         // write them back first so the sweep sees true occupancy.
         self.flush_claims();
-        self.flush_hot();
         // Retained large mappings go back each tick: retention beyond a
         // tick requires sustained traffic to re-earn, and idle memory
         // stays bounded by the tick length rather than the pool size.
