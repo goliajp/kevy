@@ -88,6 +88,15 @@ gate on it.
   does not parse is still an error — there is no plan to give against a
   schema that does not exist. Exits non-zero when any query is
   unserved, because a query with no declared path cannot run at all.
+- **`kevy-cli backfill-keys`** — lesson 3, and only the half a machine
+  can do. It unions every structure that can name an item (index keys,
+  a keyspace prefix, a file) and reports how many names *only* each
+  source had — every one of those is a row that backfilling from a
+  single source would have missed. Names go to stdout, the accounting
+  to stderr. Writing the rows stays yours: what the authoritative
+  record is, and what a row looks like, lives in the application, and a
+  tool that guessed would write the wrong rows confidently. A source
+  that cannot be read is an error, not an empty contribution.
 - **`kevy-cli shadow`** — lesson 4. Reads the old path and the new one
   side by side and compares **membership and order**, reporting the
   first divergence with *both* sides' sort keys. It also catches lesson

@@ -97,6 +97,15 @@ kevy-cli delete-prefix -p 6004 --rate 5000 --dry-run tmp:
 kevy-cli inspect -p 6004 user:
 ```
 
+もう三つは、読んで報告するだけで何も動かしません。だから上の一覧の外にあります。移行プレイブックの教訓を実行できる形にしたものです——[table-migration.md](table-migration.md) を参照：
+
+```
+kevy-cli sql plan schema.sql                       # 各クエリの行き先
+kevy-cli backfill-keys --from-index i --from-prefix p:   # 和集合
+kevy-cli shadow -p 6004 --old "…" --new "…"        # カットオーバー前に
+kevy-cli doctor -p 6004                            # VERIFY を cron に
+```
+
 ## ワイヤフォーマット
 
 `export`は再構築フレームのプレーンな**RESPコマンドストリーム**を書き出します——`DEL`＋`SET`/`HSET`/`RPUSH`/`SADD`/`ZADD`、TTLには絶対時刻の`PEXPIREAT`です。このためファイルは`redis-cli --pipe`と双方向に互換です。kevyのエクスポートはRedisに食わせられますし、どんなRESPコマンドファイルも`kevy-cli import`に食わせられます——RDSのダンプから自作したもの（プレイブックのフェーズ3）を含めて。

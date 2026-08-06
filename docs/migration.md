@@ -197,6 +197,17 @@ kevy-cli delete-prefix -p 6004 --rate 5000 --dry-run tmp:
 kevy-cli inspect -p 6004 user:
 ```
 
+Three more read and report rather than move anything, which is why they
+sit outside the list above. They are the migration playbook's lessons
+made runnable — see [table-migration.md](table-migration.md):
+
+```
+kevy-cli sql plan schema.sql                       # every query's fate
+kevy-cli backfill-keys --from-index i --from-prefix p:   # the union
+kevy-cli shadow -p 6004 --old "…" --new "…"        # before cutover
+kevy-cli doctor -p 6004                            # VERIFY as a cron
+```
+
 ## Wire format
 
 `export` writes a plain **RESP command stream** of rebuild frames —

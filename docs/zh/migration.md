@@ -97,6 +97,15 @@ kevy-cli delete-prefix -p 6004 --rate 5000 --dry-run tmp:
 kevy-cli inspect -p 6004 user:
 ```
 
+另有三条只读取和报告、不搬动任何东西，所以不在上面那份清单里。它们是迁移手册里的课变成可以跑的东西——见 [table-migration.md](table-migration.md)：
+
+```
+kevy-cli sql plan schema.sql                       # 每条查询的去向
+kevy-cli backfill-keys --from-index i --from-prefix p:   # 并集
+kevy-cli shadow -p 6004 --old "…" --new "…"        # 切换之前
+kevy-cli doctor -p 6004                            # 把 VERIFY 挂进 cron
+```
+
 ## 线格式
 
 `export` 写出一条纯 **RESP 命令流**的重建帧——`DEL` + `SET`/`HSET`/`RPUSH`/`SADD`/`ZADD`，TTL 用绝对 `PEXPIREAT`。这让文件与 `redis-cli --pipe` 双向兼容：kevy 的导出能喂 Redis，任何 RESP 命令文件也能喂 `kevy-cli import`——包括你自己从 RDS dump 生成的那份（playbook 的阶段 3）。
