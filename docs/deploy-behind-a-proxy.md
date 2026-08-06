@@ -132,7 +132,7 @@ exposing a single port. Pick one; they do not compose.
 
 ## What was verified, and what was not
 
-Measured on kevy 4.1.1 while writing this chapter:
+Measured against this tree while writing this chapter:
 
 - the port surface in the table above, including `--cluster` opening
   `port+1+i` per shard;
