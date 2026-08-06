@@ -40,8 +40,6 @@ ENGLISH_ONLY = {
     "SUPPORT-LINE-3X-VS-4X-2026-07-20.md": "a dated support statement",
     "client-contract.md": "the contract client authors implement, in the language they file issues in",
     "clients.md": "a list of client packages and their install lines",
-    "electron.md": "not translated yet — tracked here rather than passing silently",
-    "tauri.md": "not translated yet — tracked here rather than passing silently",
     "verb-reference.md": "generated verb table, not prose",
 }
 

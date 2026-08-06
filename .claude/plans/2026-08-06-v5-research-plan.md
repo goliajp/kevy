@@ -89,6 +89,17 @@ zadd −18.4),lpush 差 0.5% 回红;M3:1.98× → 2.067×(把对 glibc 2.40×
 脚本文件体,永不上启动 argv);allocgate-mem 的 runner 在报数前退出
 (已知时序债,手工探针同参数取数)。
 
+**R1 追加(同日):仪器债一还一记。** ① `allocgate-mem` 的 "sequencing" 死因
+已定性并修复 = **接口漂移**(`info` 长出必填 `--field` 且改印裸值,runner 仍
+裸调+sed 旧前缀;就绪循环同病所以烧满超时假装就绪,取数行在 pipefail 下
+杀死脚本于 run_one 中途 —— **cleanup 之前**,泄出的 7415 服务借 SO_REUSEPORT
+与下一轮并存分流,制造出 used 939MB > 预算、RSS < used 的谎数)。修复已
+端到端验证(OFF 2.40× / ON 2.06-2.09×,与手工探针吻合),落 `r1-locality`
+本地 `105eecc3`。**教训入账:死在 cleanup 之前的仪器不只失手一次,还会武装
+下一次测量去说谎。** ② **具名未修**:`allocgate.sh` 的 M2 spread 计算有
+重定向 bug(把比值写成文件名,repo 根留 4 个裸数字文件,spread 显示为空;
+判定数学不受影响)—— 留给那条 train,不静默。
+
 **R2 ✅ K4 前提活,带三个设计输入。** `bench/FINDING-2026-08-06-k4-premise-…`:
 identical 语料上字典模式字面就是 O(字典)+N×9B 而 per-datum 永付 89B/值;
 真实 JSON 行 per-datum 留 44% 在桌上;随机语料 per-datum **膨胀**(411>400,
@@ -107,4 +118,38 @@ agg 的 groups 印成 duplicates,ann 把 links+rebuild 两事实挤一数)——
 墓碑机械与过期漏斗修复正确复合)。**四个结构零新缺陷**,过期漏斗
 (`note_expired` → `drain_expired_keys` → `note_key_mutated`)对所有派生
 结构一次覆盖 —— 修在漏斗上的价值在此实证。
+
+---
+
+## 二期(2026-08-06 晚,属主点名"继续做 v5 研究"后追加)
+
+> **先认一笔方向漂移**:R1-R3 收口后我去填了 electron/tauri 翻译 ——
+> 那是 i18n 门禁的具名债,但**不在 v5 轴上**。已被属主点名纠正。
+> 二期回到 T9 判定条件倒排的真缺口,全部自主可做。
+
+**R4 — alloc 残余税的 Phase-A decomposition(v5 判定条件②的正面)。**
+per-word finding 自己写明的下一步:"profile whether the remaining hset tax
+is still allocator self-time or has moved (Pre-Phase-B gate before anything
+is built)"。hot-slot(机制猜测式的一轮 polish)已被两轴否决 —— 按 perf 方法论
+这正是"停止猜机制、切 decomposition"的触发点。
+做法:lx64 checkout **c023ff8a**(per-word 态,不带将被 revert 的 hot-slot),
+双构建,`perf record`(root 跑 perf、kevybench 跑服务 —— paranoid=3 的学费在案)
+分别压 hset 与 zadd 角,对照 v8 账的 17.3% vs 10.1% 基线回答:
+① 分配器 self-time 是否已被 per-word 压下去(→ 税移到哪了,分解新去处)
+② 还是仍驻分配器(→ "allocation-site grouping 能否让 sadd/zadd 的 free
+word-local"才是活候选) ③ 或者按 finding 的第三种可能,税属于
+**value-representation 单元而非分配器**(→ 改前提,不是改分配器)。
+产出:decomp doc 落 `r1-locality`。
+
+**R5 — pubsub 残余(0.83-0.86)的同款 decomposition。** v8 账只说了
+"different residual class",从未具名。同一个 lx64 profile 会话顺带压一轮
+pubsub,给这个 class 起名字。M2 地板 0.92 是 v5 判定条件②的另一半。
+
+**R6 — K1 解码预算的量化(compress 的下一个前提,K4 的续集)。**
+K1 断言"解码必须 memcpy 级"(spg lzss 100MiB/s 会吃掉 105µs 冷读预算里的
+40µs)。在 lx64 实测:memcpy 4KB 的真实 µs、一个朴素 LZ 解码环的真实吞吐、
+预算里可花的解码份额 —— 把 T3 最硬的约束从断言变成数字,与 K4 同款
+(纯研究仪器,零产品代码)。
+
+顺序:R4 → R5(同一 profile 会话)→ R6。产出全部按 train 归属落盘。
 
