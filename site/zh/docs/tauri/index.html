@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>在 Tauri 应用里用 kevy — kevy</title>
+<meta name="description" content="Tauri 应用的后端就是 Rust——所以 kevy 直接嵌入，没有服务器、没有独立进程。tauri-plugin-kevy 在 Tauri 的托管状态里持有一份 kevy-embedded Store，并经 invoke 暴露给 webview。一份共享的 store，每个窗口和你的 Rust 代码都能同样触达。">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../zh/">kevy<span class="v">4.1</span></a>
+    <nav class="nav">
+      <a href="../../../zh/docs/" aria-current="page">文档</a>
+      <a href="../../../zh/docs/commands/">命令</a>
+      <a href="../../../zh/benchmarks/">基准</a>
+      <a href="../../../zh/play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../../zh/docs/search-index.json" data-root="../../../zh/">
+        <input type="search" placeholder="搜索文档……" aria-label="搜索文档……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../../docs/tauri/">EN</a><a href="../../../zh/docs/tauri/" aria-current="page">中文</a><a href="../../../ja/docs/tauri/">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell has-toc">
+  <aside class="side"><p class="side-h">上手</p><ul><li><a href="../../../zh/docs/designing-on-kevy/">在 kevy 上设计应用</a></li><li><a href="../../../zh/docs/cookbook/">RDS→kevy 建模 cookbook</a></li><li><a href="../../../zh/docs/persistence/">持久化</a></li><li><a href="../../../zh/docs/tuning/">调优 kevy</a></li></ul><p class="side-h">运行</p><ul><li><a href="../../../zh/docs/replication/">复制</a></li><li><a href="../../../zh/docs/availability/">可用性</a></li><li><a href="../../../zh/docs/cluster/">集群</a></li><li><a href="../../../zh/docs/tiering/">透明分层存储（[tiering] / with_tier_budget）</a></li><li><a href="../../../zh/docs/accept-shards/">--accept-shards N——把稀疏连接收拢到部分 shard 上</a></li><li><a href="../../../zh/docs/uds/">Unix-domain socket（UDS）传输</a></li><li><a href="../../../zh/docs/async/">异步客户端</a></li></ul><p class="side-h">数据</p><ul><li><a href="../../../zh/docs/indexes/">二级索引（IDX. / idx_）</a></li><li><a href="../../../zh/docs/tables/">表（TABLE. / table_）</a></li><li><a href="../../../zh/docs/table-migration/">从手工维护的索引迁移到表</a></li><li><a href="../../../zh/docs/vector-search/">向量检索（KIND ann）</a></li><li><a href="../../../zh/docs/text-search/">全文检索（KIND text）</a></li><li><a href="../../../zh/docs/views/">视图（VIEW. / view_）</a></li><li><a href="../../../zh/docs/cdc/">CDC——变更流（FEED. / changes_since）</a></li><li><a href="../../../zh/docs/pubsub/">Pub/sub</a></li><li><a href="../../../zh/docs/lua/">Lua 脚本</a></li></ul><p class="side-h">嵌入</p><ul><li><a href="../../../zh/docs/wasm/">kevy 上 WebAssembly</a></li><li><a href="../../../zh/docs/embedded-listener/">Embedded 只读 RESP listener</a></li><li><a href="../../../zh/docs/iot/">kevy 跑在 IoT 设备上</a></li></ul><p class="side-h">参考</p><ul><li><a href="../../../zh/docs/error-replies/">错误回复目录</a></li><li><a href="../../../zh/docs/rds-workloads/">在 kevy 上跑 RDS 负载</a></li><li><a href="../../../zh/docs/migration/">迁移——playbook 与工具链</a></li><li><a href="../../../zh/docs/UPGRADING/">升级 kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../zh/docs/commands/">全部 188 个命令</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>在 Tauri 应用里用 kevy</h1></div>
+<p><a href="https://tauri.app">Tauri</a> 应用的后端就是 Rust——所以 kevy 直接嵌入，没有服务器、没有独立进程。<a href="https://github.com/goliajp/kevy/tree/develop/bindings/tauri"><code>tauri-plugin-kevy</code></a> 在 Tauri 的托管状态里持有一份 <a href="../embedded-listener/"><code>kevy-embedded</code></a> <code>Store</code>，并经 <code>invoke</code> 暴露给 webview。一份共享的 store，每个窗口和你的 Rust 代码都能同样触达。</p>
+<p>完整指南、安装步骤与 API 表：<b><a href="https://github.com/goliajp/kevy/tree/develop/bindings/tauri">bindings/tauri/README.md</a></b>。</p>
+<h2 id="形状">形状</h2>
+<figure class="code"><pre><code class="lang-rust">// src-tauri/src/lib.rs
+tauri::Builder::default()
+    .plugin(tauri_plugin_kevy::init())              // in-memory
+    // .plugin(tauri_plugin_kevy::Builder::new().path("./data").build())  // persistent
+    .run(tauri::generate_context!())
+    .unwrap();</code></pre></figure>
+<figure class="code"><pre><code class="lang-ts">// webview
+import { kevy } from 'tauri-plugin-kevy-api'
+await kevy.set('k', 'v')
+await kevy.getString('k')                           // "v"
+const sub = await kevy.subscribe({ channels: ['room'] }, (m) =&gt; { /* … */ })
+await kevy.publish('room', 'hi')</code></pre></figure>
+<p>webview 触达整个引擎：带类型的 <code>get</code>/<code>set</code>/<code>del</code>/<code>incr</code>，经 Tauri <code>Channel</code> 流式送达的 pub/sub，以及一条通向其余所有动词的裸 <code>cmd(argv)</code> 路径（<code>HSET</code>、<code>ZADD</code>、<code>IDX.*</code>……）——与各语言客户端实现的是同一份<a href="../../../docs/client-contract/">客户端契约</a>。</p>
+<h2 id="两扇门后端-store-vs-wasm">两扇门：后端 store vs. wasm</h2>
+<p>kevy 也可以<a href="../wasm/">整个跑在 webview 里（WASM）</a>。按数据住在哪来选：</p>
+<ul><li><b>后端 store</b>（本插件）——一份原生 store，跨窗口、跨 Rust 共享，持久（快照 + AOF），每次调用一跳 IPC。应用的真实数据放这里。</li><li><b>webview 里的 wasm</b>——隔离、临时、只属于单个 webview 的 store，零 IPC。沙箱草稿区。</li></ul>
+<p>完整决策表见<a href="https://github.com/goliajp/kevy/tree/develop/bindings/tauri#shared-store-this-plugin-vs-wasm-in-webview">绑定 README</a>。</p>
+<h2 id="零依赖边界">零依赖边界</h2>
+<p>kevy 的工作区严格零依赖。而 Tauri 插件必须依赖 <code>tauri</code> crate，所以 <code>tauri-plugin-kevy</code> 位于工作区<b>之外</b>（根 <code>Cargo.toml</code> 的 <code>exclude</code>），依赖 <code>tauri</code> + 零依赖的 <code>kevy-embedded</code> 与 <code>kevy-resp</code>。仓库根的 <code>cargo build</code> 永远看不到 <code>tauri</code>；引擎保持纯净。</p></main>
+  <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#形状">形状</a></li><li class="l2"><a href="#两扇门后端-store-vs-wasm">两扇门：后端 store vs. wasm</a></li><li class="l2"><a href="#零依赖边界">零依赖边界</a></li></ul></aside>
+</div>
+
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>
