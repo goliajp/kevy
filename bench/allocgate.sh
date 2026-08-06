@@ -147,9 +147,13 @@ m2() {
   # anti-pattern the perf methodology names outright — a gap smaller
   # than the baseline's own spread is not a gap.
   local spread
+  # The ternary must be parenthesized: a bare `>` inside a printf
+  # argument list is OUTPUT REDIRECTION to awk, which wrote the spread
+  # into a file named after the computed value (a stray `4.72381` in
+  # the checkout root) and handed stdout the empty string.
   spread=$(printf '%s\n' $offs | awk '{s+=$1; a[NR]=$1} END {
       m=s/NR; for(i=1;i<=NR;i++) v+=(a[i]-m)^2;
-      printf "%.1f%%", NR>1 ? 100*sqrt(v/(NR-1))/m : 0 }')
+      printf "%.1f%%", (NR>1 ? 100*sqrt(v/(NR-1))/m : 0) }')
   awk -v on="$med_on" -v off="$med_off" -v tol="$AB_TOLERANCE" \
       -v sam_on="$ons" -v sam_off="$offs" -v sd="$spread" \
     'BEGIN { r = on / off;
