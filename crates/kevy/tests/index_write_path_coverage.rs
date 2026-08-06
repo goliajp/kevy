@@ -146,6 +146,64 @@ fn assert_clean(c: &mut std::net::TcpStream, after: &str) {
     }
 }
 
+/// The aggregate's count for the seeded group, as the engine reports
+/// it. `IDX.QUERY <name> GROUP <g>` answers `[count, sum, min, max, avg]`.
+fn agg_count(c: &mut std::net::TcpStream) -> i64 {
+    let r = cmd(c, &[b"IDX.QUERY", b"u_grp", b"GROUP", b"red"]);
+    let text = String::from_utf8_lossy(&r);
+    for line in text.split("\r\n") {
+        if let Ok(n) = line.parse::<i64>() {
+            return n; // the first bulk is the count
+        }
+    }
+    -1
+}
+
+/// How many rows the aggregate *should* be counting: those with both
+/// the group field and an indexed value.
+///
+/// Both, not just the group — a row whose indexed field is gone is
+/// excluded by design (`docs/indexes.md`: "a row whose value fails
+/// coercion or whose group field is missing is excluded and counted").
+/// The first version of this counted the group alone and reported the
+/// engine wrong after `HDEL u:3 age`, which was the test being wrong.
+fn live_rows(c: &mut std::net::TcpStream) -> i64 {
+    let r = cmd(c, &[b"KEYS", b"u:*"]);
+    let text = String::from_utf8_lossy(&r).into_owned();
+    let mut n = 0;
+    for line in text.split("\r\n") {
+        if !line.starts_with("u:") {
+            continue;
+        }
+        let key = line.to_string();
+        let g = cmd(c, &[b"HGET", key.as_bytes(), b"team"]);
+        if !String::from_utf8_lossy(&g).contains("red") {
+            continue;
+        }
+        let v = cmd(c, &[b"HGET", key.as_bytes(), b"age"]);
+        let vt = String::from_utf8_lossy(&v);
+        if vt.starts_with("$-1") || vt.starts_with("_") {
+            continue; // no indexed value: excluded, by design
+        }
+        n += 1;
+    }
+    n
+}
+
+/// The aggregate must equal reality — VERIFY will not say so.
+fn assert_agg_matches(c: &mut std::net::TcpStream, after: &str) {
+    for attempt in 0..40 {
+        let (agg, live) = (agg_count(c), live_rows(c));
+        if agg == live {
+            return;
+        }
+        if attempt == 39 {
+            panic!("aggregate count {agg} but {live} live row(s) carry the group, after {after}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 fn ok(c: &mut std::net::TcpStream, parts: &[&[u8]], what: &str) -> Vec<u8> {
     let r = cmd(c, parts);
     assert!(
@@ -162,15 +220,25 @@ fn every_write_path_that_touches_a_row_keeps_the_index_honest() {
     let mut c = srv.connect();
 
     ok(&mut c, &[b"IDX.CREATE", b"u_age", b"ON", b"PREFIX", b"u:", b"FIELD", b"age", b"TYPE", b"i64", b"KIND", b"range"], "IDX.CREATE");
+    // A second kind over the same rows. `KIND agg` needs its own case
+    // because VERIFY cannot be its safety net: `drift` and `missing`
+    // ask "does this entry's row still derive this value", and an agg
+    // entry is a group, not a row. The counters are never recomputed
+    // against the keyspace at runtime — `recompute_stats` exists only
+    // in a unit test — so a write path that forgets to maintain an
+    // aggregate leaves VERIFY reporting zero. Here the assertion is
+    // the count itself.
+    ok(&mut c, &[b"IDX.CREATE", b"u_grp", b"ON", b"PREFIX", b"u:", b"FIELD", b"age", b"TYPE", b"i64", b"KIND", b"agg", b"GROUPBY", b"team"], "IDX.CREATE agg");
 
     // Seed enough rows to span shards; the index is global, the rows
     // are not.
     for i in 1..=12 {
         let key = format!("u:{i}");
         let age = format!("{}", 20 + i);
-        ok(&mut c, &[b"HSET", key.as_bytes(), b"age", age.as_bytes()], "HSET seed");
+        ok(&mut c, &[b"HSET", key.as_bytes(), b"age", age.as_bytes(), b"team", b"red"], "HSET seed");
     }
     assert_clean(&mut c, "the seed writes");
+    assert_agg_matches(&mut c, "the seed writes");
 
     // Each entry: a verb, and the argv that exercises it against an
     // indexed row. A refusal fails the test rather than being skipped —
@@ -193,6 +261,7 @@ fn every_write_path_that_touches_a_row_keeps_the_index_honest() {
     // The one that was broken: a key removed by a *multi-key* verb.
     ok(&mut c, &[b"DEL", b"u:5", b"u:6"], "multi-key DEL");
     assert_clean(&mut c, "DEL (multi-key)");
+    assert_agg_matches(&mut c, "DEL (multi-key)");
 
     ok(&mut c, &[b"UNLINK", b"u:7", b"u:8"], "multi-key UNLINK");
     assert_clean(&mut c, "UNLINK (multi-key)");
@@ -212,6 +281,7 @@ fn every_write_path_that_touches_a_row_keeps_the_index_honest() {
     ok(&mut c, &[b"PEXPIRE", b"u:11", b"50"], "PEXPIRE");
     std::thread::sleep(std::time::Duration::from_millis(400));
     assert_clean(&mut c, "PEXPIRE (the row expires with no command to see it)");
+    assert_agg_matches(&mut c, "PEXPIRE");
 
     // MSET writes strings, so it cannot create an indexed row — but it
     // can overwrite one, which is the multi-key type change.
