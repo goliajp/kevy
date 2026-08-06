@@ -36,6 +36,20 @@ range|unique [MAXMEM <bytes>]`
 
 同一台引擎，类型化 API：`idx_create` / `idx_drop` / `idx_query` / `idx_count` / `idx_stats` / `idx_list`（值是 `IndexValue`，游标是 `IndexCursor`）。没有 `FIELDS` 补水——你人在进程内，字段直接用 `hget` 读。`idx_create` 同步构建，返回即代表索引可服务。
 
+## 索引预算
+
+**64 条索引，全局。** 不是每前缀、也不是每分片——整个 store 一共 64 条（`MAX_INDEXES`，`kevy-index/src/catalog.rs`）。
+
+按字面读，这个数字挡住任何真实 schema：58 张表对 64 条索引看起来不可能，而一次迁移可能在算术上就卡住，还没来得及发现**那道算术本身是错的**。
+
+**索引是一份稀缺的全局预算，而大多数访问路径根本不花它。** 父子导航属于链接键与 zset——`SMEMBERS order:1001:items` 不占任何索引槽，你自己维护的有序 zset 索引也不占（[cookbook §2](cookbook.md#2-一对多多对多)）。索引槽只花在链接键表达不了的东西上：
+
+- **全局值范围**——"所有超过一万的发票"，跨全部行
+- **文本检索**——`KIND text`
+- **聚合**——`KIND agg`，写时 GROUP BY
+
+一个按"每张表一条"读起来要 58 条索引的 schema，按"每种全局查询形状一条"读通常不到 20 条。如果你在逼近 64，该问的问题是：**它们里面有几条其实是披着索引外衣的父子导航。**
+
 ## 一致性与成本模型
 
 - 一次写入和它引发的索引更新，在所属 shard 内是原子的（单 reactor 线程 / shard 锁）。跨 shard 查询逐 shard 归并，没有全局快照（SCAN 类，和 DBSIZE 同级）。

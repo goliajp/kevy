@@ -37,7 +37,7 @@ TABLE.DECLARE name PREFIX p PK col
     COLUMN name i64|f64|str [COLUMN ...]
     [INDEX col range|unique [VALUES col ...]] ...
     [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] ...
-    [WINDOW col SPAN n BUCKET n]   # 滑动热窗（本页尚未译，见英文版）
+    [WINDOW col SPAN n BUCKET n]   # 滑动热窗——见下文
     [AUTODECLARE n]    # 允许引擎替你补最多 n 条路径——见下文
 TABLE.ENSURE ...       # TABLE.DECLARE 的开机形态——见下文
 TABLE.REPLACE ...      # 显式的 drop + declare + 重建
@@ -45,6 +45,19 @@ TABLE.DROP name        # drops the table + its compiled indexes; 1|0
 TABLE.LIST             # name/prefix/pk + column/index/orderpath counts
 TABLE.VERIFY name      # component fsck + a bounded column spot check
 ```
+
+## 滑动窗口
+
+`WINDOW <col> SPAN <n> BUCKET <n>` 在一个 `i64` 列上声明一个滑动的热窗。`SPAN` 与 `BUCKET` 是**以该列自己的单位计**的普通整数——引擎从不假定时间基准，所以这一列可以是 epoch 秒、epoch 毫秒、序列号，任何随数据变旧而单调的东西。边界按**整桶**推进；被驱逐的一桶变成一个冷段。
+
+两条声明期拒绝，都具名：
+
+- 窗口列必须是一个已声明的 `i64` 列；
+- 它必须有一条访问路径，其树尾能免费回答 `max(col)`——要么是它上面的单列 `INDEX <col>`，要么是**首列**就是它、且升序的 `ORDERPATH`。没有就拒绝声明（`WINDOW needs an access path on '<col>'`）——这同时也保证了每张窗口表都能经由同一条路径服务跨窗范围查询。
+
+**今天在滑的是：窗口列上的那条单列 INDEX。** 随着边界推进（整桶地），索引树中落在窗外的前缀会移进 `segs-<shard>/` 下不可变的冷段文件——索引内存缩小，而普通的 `RANGE` / `COUNT` 查询在热+冷上继续作答，**与一条未窗口化的索引逐字节相同**（包括冷行的重写、删除与复活；语义等价的 e2e 把这一点钉住了）。冷索引段是**派生的溢出，不是真相**：行仍然是热键空间里普通的 hash，重启时只是重建并重新滑动。
+
+两处边缘，都是显式的：带子句的查询（`FILTER` / `SORT` / `DISTINCT` / `FACET`）在一条已有冷段的索引上会**具名拒绝**，直到带子句的冷路径落地为止——绝不给一个静默不完整的答案；以及**由窗口列领头的 `ORDERPATH` 满足声明条件，但今天还不滑**。纯内存部署（没有数据目录）接受这条声明，只是保持全热。
 
 ## 开机模式：`ensure`
 

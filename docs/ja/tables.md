@@ -37,7 +37,7 @@ TABLE.DECLARE name PREFIX p PK col
     COLUMN name i64|f64|str [COLUMN ...]
     [INDEX col range|unique [VALUES col ...]] ...
     [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] ...
-    [WINDOW col SPAN n BUCKET n]   # スライディング窓（本ページは未訳、英語版参照）
+    [WINDOW col SPAN n BUCKET n]   # スライディング窓——下記参照
     [AUTODECLARE n]    # エンジンに最大 n 本の経路を足させる——下記参照
 TABLE.ENSURE ...       # TABLE.DECLARE の起動時イディオム——下記参照
 TABLE.REPLACE ...      # 明示の drop + declare + 再構築
@@ -45,6 +45,19 @@ TABLE.DROP name        # drops the table + its compiled indexes; 1|0
 TABLE.LIST             # name/prefix/pk + column/index/orderpath counts
 TABLE.VERIFY name      # component fsck + a bounded column spot check
 ```
+
+## スライディング窓
+
+`WINDOW <col> SPAN <n> BUCKET <n>` は、`i64` の列の上にスライディングなホット窓を宣言します。`SPAN` と `BUCKET` は**その列自身の単位での**ただの整数です——エンジンは時間の基準を一切仮定しないので、その列は epoch 秒でも epoch ミリ秒でも連番でも、データの古さに対して単調なものなら何でも構いません。境界は**バケット単位**で進み、追い出されたバケットが一つの冷たいセグメントになります。
+
+宣言時の拒否が二つ、どちらも名指しです：
+
+- 窓の列は宣言済みの `i64` 列でなければならない；
+- その列には、木の末尾が `max(col)` をただで答えられるアクセス経路が要る——その列の単一列 `INDEX <col>` か、**先頭の列**がそれで昇順の `ORDERPATH` か。無ければ宣言は拒まれます（`WINDOW needs an access path on '<col>'`）——これは同時に、どの窓付きテーブルも同じ経路で窓をまたぐ範囲クエリを供せることを保証します。
+
+**今スライドしているのは、窓の列の単一列 INDEX です。** 境界が（バケット単位で）進むにつれ、索引木の窓外の接頭部は `segs-<shard>/` の下の不変な冷セグメントファイルへ移ります——索引のメモリは縮み、しかし素の `RANGE` / `COUNT` はホットと冷の上で、**窓を張っていない索引とバイト単位で同一に**答え続けます（冷たい行の書き換え・削除・復活を含みます。意味的同値の e2e がこれを固定しています）。冷たい索引セグメントは**派生した溢れであって、真実ではありません**：行はホットなキースペースの普通のハッシュのままで、再起動時にはただ再構築されて再びスライドします。
+
+縁が二つ、どちらも明示です：句を伴うクエリ（`FILTER` / `SORT` / `DISTINCT` / `FACET`）は、冷セグメントを持つ索引の上では、句付きの冷経路が入るまで**名指しで拒みます**——黙って不完全な答えを返すことは決してありません。そして**窓の列が先頭の `ORDERPATH` は宣言を満たしますが、まだスライドしません**。メモリだけの配備（データディレクトリなし）は宣言を受け入れ、ただ全部ホットのままになります。
 
 ## 起動パターン：`ensure`
 

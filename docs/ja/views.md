@@ -13,6 +13,28 @@ VIEW.CREATE ready_jobs
 VIEW.QUERY ready_jobs LIMIT 10
 ```
 
+## まず、本当に必要かを確かめる
+
+上の例は意図して選んだもので、そして同時に、**view を必要としない**ことが最も多い形でもあります。`WHERE state = 'ready' AND pri BETWEEN 0 AND 100 ORDER BY pri DESC` は等値の接頭部に、次の列の範囲がひとつ続いたもの——複合 `ORDERPATH` が単一の連続した走査として表すもの、まさにそれです（[tables.md](tables.md#複合-orderpath-の意味論)）：
+
+```console
+kevy-cli TABLE.DECLARE job PREFIX job: PK id \
+    COLUMN id str COLUMN state str COLUMN pri i64 \
+    ORDERPATH ready_by_pri ON state THEN pri DESC
+kevy-cli IDX.QUERY job.ready_by_pri WHERE state EQ ready RANGE pri 0 100 LIMIT 10
+```
+
+B 木がひとつ、保守すべき second structure はなく、検証すべき再構築もありません。テーブルを宣言した最初の実利用者は、十四本のリスト軸すべてをこのやり方で賄い、view は**ゼロ**個でした——それは欠落ではなく、期待どおりの結果です。
+
+順序付き複合キーでは**なりえない**形のときに、view に手を伸ばしてください：
+
+* 独立したインデックスをまたぐ **`OR`**——順序付きキーの先頭列はひとつなので、和は走査になりません。
+* **`DIFF`**——集合の差、左から右を引く。
+* 別々の列にかかる**二つの範囲**。複合キーが範囲を取れるのは**末尾**の一列だけで、その後ろには何も続けられません。開いた次元が二つあるものは、ひとつの連続区間ではありません。
+* **有界で、常に温かい答え**：`MODE materialized TOPK n` は上位のひと切れを書き込み経路で保守するので、述語がどれだけ絞り込む結果になろうと、読みは固定費です。
+
+あなたの形がこの一覧になければ、`ORDERPATH` を宣言してそこで止めてください。**view は構造上、二つのうち高いほう**です——どのみち存在しなければならないインデックスを組み合わせるものであり、物化すれば書き込み経路に仕事が増え、あとで `VIEW.VERIFY` が監査すべき構造がひとつ生まれます。
+
 ## クイックスタート（サーバー）
 
 ビューが合成するものは、すべて先に存在していなければなりません。葉もORDER BY用インデックスも、同じプレフィックスドメイン上で宣言された`IDX.*`インデックスです（[indexes.md](indexes.md)）。

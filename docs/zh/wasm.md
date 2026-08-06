@@ -155,6 +155,10 @@ let _stats = store.tick();
 
 Cloudflare Workers 之类的边缘 isolate 照浏览器配方：每 isolate 一个实例，`Date.now()` 当时钟源，`tick()` 惰性调或挂 scheduled handler。要跨 isolate 重启的耐久性，就在你的 handler 里把写镜像到平台的持久存储（AOF 泵会把帧交给你）；isolate 内部，kevy 是热的内存层。
 
+## 在 Tauri 应用里
+
+在桌面 / 移动应用里跑 kevy？Tauri 的后端是 Rust，所以 kevy 可以**原生地**嵌在后端（一份共享的 store，持久，跨窗口），而不是以 wasm 的形式嵌在 webview 里。后端 store 与 wasm 之间怎么选，见 [docs/tauri.md](../tauri.md)。
+
 ## FAQ
 
 **完整命令面在浏览器里都可用吗？**npm 包暴露的是 KV + TTL + 计数器 + 扫描 + pub/sub 这一刀——浏览器 store 需要的那部分，刻意保持小巧（wasm 模块未压缩约 425 KB）。wasm target 上的 Rust API 则暴露你编译进来的 `kevy-embedded` feature 的全部能力。

@@ -196,6 +196,16 @@ store.del(&[b"k1".as_slice(), b"k2".as_slice()]);
 
 `core` 档可以交叉编译到 musl 目标，并扛着一份强制预算（二进制 ≤ 700 KB，空 store RSS ≤ 2 MB）；另有五个基础 crate 能构建 `no_std`。见 [iot.md](iot.md)。在体积谱的另一端，同一个 embedded 内核现在能以 `@goliapkg/kevy` 的身份跑在浏览器里——见 [wasm.md](wasm.md)。
 
+## 分层与 TABLE 层（4.0 新增，全部是加法）
+
+4.0 同时带来了透明分层（[tiering.md](tiering.md)）与 `TABLE.*` 层（[tables.md](tables.md)）。升级时两者都不会自动启用；这一节存在，是为了让你知道**底下变了什么、又有什么没变**。
+
+- **分层是 opt-in——不用就零动作。** 没有 `[tiering]` 段（也没调用 `with_tier_budget*`）就意味着今天的路径逐字节不变，而那个"关掉时的成本"本身就是一条被门禁盯住的主张。启用它也不改变持久性契约：AOF 仍是唯一的持久真相，`<data>/tier/` 下的冷值日志是**每次启动即弃**的（每次打开都删掉，从不备份）。
+- **`INFO` 多出一个 `# Tiering` 段——只在分层启用时。** 一台没开分层的 4.0 服务器，`INFO` 输出不变，所以按段枚举的解析器在你主动开启之前看不到任何新东西。
+- **新动词，全部是加法**：`TABLE.DECLARE` / `TABLE.DROP` / `TABLE.LIST` / `TABLE.VERIFY`；`IDX.QUERY` / `IDX.COUNT` 上的 `WHERE` 形式（复合的领头前缀查找）；以及标量子句集——`IDX.CREATE` 时的 `VALUES`，查询时的 `FILTER` / `SORT` / `DISTINCT` / `FACET` / `OFFSET`——此前只对文本可用，现在 `range`/`unique` 两种 kind 上也有了。**没有任何既有动词改变了形状。**
+- **两个新 crate** 加入工作区：`kevy-vlog`（冷值日志那块石头）与 `kevy-sql`（引擎之外的声明期 SQL 编译器，带一个 `kevy-cli sql` 的面）。嵌入式多了 `tier` 这个 cargo feature（在默认集合里——见上表）。
+- **Sidecar catalog 版本 v5/v6。** 索引 catalog 的 sidecar 增加了 v5（标量 kind 存储的 `VALUES`）与 v6（复合 ORDERPATH 索引），另有一个新的 `table-catalog.meta` sidecar。**每一个更老的 sidecar 版本仍然能载入**——包括第一个索引版本留下的 v1 文件。写入方发出的是**能表示这份数据的最老 header**：一个没用到任何新能力的 catalog，会继续逐字节写它原来的版本，于是它的文件对更早的 4.0 线二进制仍然可读；只有当你真的声明了新东西，版本号才往前走。
+
 ## 从 4.0 退回 3.18
 
 换回二进制即可；快照和 AOF 格式是共享的。唯一的边缘：配置文件里用了新的 notify flag（`x` / `e` / `n`）时，3.18 能解析它，但那些事件在那边永远不会触发。
