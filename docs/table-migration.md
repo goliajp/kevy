@@ -81,6 +81,36 @@ the backfill key-set from the **union** of every structure that can
 name an item (old indexes, the primary keyspace scan, archives), then
 write rows from the authoritative record.
 
+**`kevy-cli backfill-keys` builds that union**, and only that — the
+lesson splits itself, and the second half stays yours. What the
+authoritative record is, and what a row looks like, is knowledge that
+lives in your application; a tool that guessed would write the wrong
+rows confidently.
+
+```console
+$ kevy-cli backfill-keys --from-index idx:threads --from-prefix mail: \
+      --from-file archive.txt > keys.txt
+601 name(s) in the union
+  index idx:threads                3 name(s), 0 only here
+  prefix mail:                     600 name(s), 596 only here
+  file archive.txt                 2 name(s), 1 only here
+597 name(s) appear in only one source — backfilling from any single one would have missed them
+```
+
+The names go to **stdout**, one per line, ready to feed whatever writes
+the rows; the accounting goes to **stderr**, so redirecting the list
+does not lose it. That last number is the point: every name that
+appears in only one source is a row that backfilling from any single
+source would have missed — the 89 % / 76 % drift above, measured on
+your own data instead of quoted from someone else's.
+
+Prefix sources strip the prefix by default (`mail:123` becomes `123`)
+so the names line up with the members of an index; pass
+`--keep-prefix` when the key *is* the name. A source that cannot be
+read — a missing key, a key of the wrong type — is an **error**, not an
+empty contribution: a silently empty source is exactly the hole this
+command exists to close.
+
 ### 4. Shadow-read before cutover — compare content **and order**
 
 Serve reads from the old path while computing the new answer beside

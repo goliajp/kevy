@@ -87,6 +87,11 @@ kevy-cli diff    hostA:6379 hostB:6004 user: order:
 kevy-cli copy-prefix   -p 6004 --rate 5000 user: staging:user:
 kevy-cli delete-prefix -p 6004 --rate 5000 --dry-run tmp:
 kevy-cli inspect -p 6004 user:</code></pre></figure>
+<p>另有三条只读取和报告、不搬动任何东西，所以不在上面那份清单里。它们是迁移手册里的课变成可以跑的东西——见 <a href="../table-migration/">table-migration.md</a>：</p>
+<figure class="code"><pre><code>kevy-cli sql plan schema.sql                       # 每条查询的去向
+kevy-cli backfill-keys --from-index i --from-prefix p:   # 并集
+kevy-cli shadow -p 6004 --old "…" --new "…"        # 切换之前
+kevy-cli doctor -p 6004                            # 把 VERIFY 挂进 cron</code></pre></figure>
 <h2 id="线格式">线格式</h2>
 <p><code>export</code> 写出一条纯 <b>RESP 命令流</b>的重建帧——<code>DEL</code> + <code>SET</code>/<code>HSET</code>/<code>RPUSH</code>/<code>SADD</code>/<code>ZADD</code>，TTL 用绝对 <code>PEXPIREAT</code>。这让文件与 <code>redis-cli --pipe</code> 双向兼容：kevy 的导出能喂 Redis，任何 RESP 命令文件也能喂 <code>kevy-cli import</code>——包括你自己从 RDS dump 生成的那份（playbook 的阶段 3）。</p>
 <p>每个 key 打头的 <code>DEL</code> 让重放<b>从零重建</b>——对它<b>发出的</b>每种类型都真正幂等（否则 RPUSH 这类追加 verb 会在重复导入时把列表内容翻倍）。</p>

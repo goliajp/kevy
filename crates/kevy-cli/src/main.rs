@@ -117,6 +117,10 @@ fn route_subcommand(args: &[String]) -> Option<ExitCode> {
     if !args.is_empty() && args[0] == "doctor" {
         return Some(kevy_cli::doctor::run_doctor_cli(&args[1..]));
     }
+    // `backfill-keys`: the union of every source that can name an item.
+    if !args.is_empty() && args[0] == "backfill-keys" {
+        return Some(kevy_cli::backfill_keys::run_backfill_keys_cli(&args[1..]));
+    }
     // `shadow`: compare the old read path against the new one, in
     // membership AND in order, before anyone cuts over.
     if !args.is_empty() && args[0] == "shadow" {

@@ -28,6 +28,22 @@
 
 遗留索引彼此不一致——这就是上面实测的 89% / 76%。从任何*单一*来源回填都会继承它的洞，而 `VERIFY` 看不见一条从未被写过的行。回填的键集合要从每一个能点名条目的结构（旧索引、主键空间扫描、归档）的**并集**构建，行的内容再从权威记录写入。
 
+**`kevy-cli backfill-keys` 就是造这个并集的**——而且只造这个。这一课自己就切成两半，后半留给你：什么是权威记录、一行长什么样，是住在你的应用里的知识；一个去猜的工具会很自信地写出错的行。
+
+```console
+$ kevy-cli backfill-keys --from-index idx:threads --from-prefix mail: \
+      --from-file archive.txt > keys.txt
+601 name(s) in the union
+  index idx:threads                3 name(s), 0 only here
+  prefix mail:                     600 name(s), 596 only here
+  file archive.txt                 2 name(s), 1 only here
+597 name(s) appear in only one source — backfilling from any single one would have missed them
+```
+
+名字走 **stdout**，一行一个，可以直接喂给写行的那一步；账目走 **stderr**，所以把清单重定向出去也不会把它丢掉。最后那个数才是重点：**只在一个来源里出现过的每一个名字，都是"从任何单一来源回填都会漏掉的行"**——也就是上面那 89% / 76% 的漂移，在你自己的数据上量出来，而不是引用别人的。
+
+前缀来源默认剥掉前缀（`mail:123` 变成 `123`），这样名字才跟索引的成员对得上；键本身就是名字时用 `--keep-prefix`。**读不了的来源——键不存在、类型不对——是错误，不是空贡献**：一个静默为空的来源，恰恰是这条命令要堵的洞。
+
 ### 4. 切换前影子读——比内容，**也比顺序**
 
 让读继续走旧路径，同时在旁边算出新答案并比较。不只比成员，还要比**顺序**：分数漂移产出的是顺序不同的同一集合，分页 UI 会把它变成用户可见的抖动。把第一处分歧连同**两边的排序键**一起写进日志——那一行日志立即点名漂移的 writer。

@@ -36,6 +36,7 @@ pub mod shadow;
 
 /// `doctor` — every table's VERIFY counters, turned into an exit code
 /// a cron can act on.
+pub mod backfill_keys;
 pub mod doctor;
 
 /// Pretty-print a reply roughly the way `redis-cli` does. Arrays are

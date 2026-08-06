@@ -87,6 +87,11 @@ kevy-cli diff    hostA:6379 hostB:6004 user: order:
 kevy-cli copy-prefix   -p 6004 --rate 5000 user: staging:user:
 kevy-cli delete-prefix -p 6004 --rate 5000 --dry-run tmp:
 kevy-cli inspect -p 6004 user:</code></pre></figure>
+<p>もう三つは、読んで報告するだけで何も動かしません。だから上の一覧の外にあります。移行プレイブックの教訓を実行できる形にしたものです——<a href="../table-migration/">table-migration.md</a> を参照：</p>
+<figure class="code"><pre><code>kevy-cli sql plan schema.sql                       # 各クエリの行き先
+kevy-cli backfill-keys --from-index i --from-prefix p:   # 和集合
+kevy-cli shadow -p 6004 --old "…" --new "…"        # カットオーバー前に
+kevy-cli doctor -p 6004                            # VERIFY を cron に</code></pre></figure>
 <h2 id="ワイヤフォーマット">ワイヤフォーマット</h2>
 <p><code>export</code>は再構築フレームのプレーンな<b>RESPコマンドストリーム</b>を書き出します——<code>DEL</code>＋<code>SET</code>/<code>HSET</code>/<code>RPUSH</code>/<code>SADD</code>/<code>ZADD</code>、TTLには絶対時刻の<code>PEXPIREAT</code>です。このためファイルは<code>redis-cli --pipe</code>と双方向に互換です。kevyのエクスポートはRedisに食わせられますし、どんなRESPコマンドファイルも<code>kevy-cli import</code>に食わせられます——RDSのダンプから自作したもの（プレイブックのフェーズ3）を含めて。</p>
 <p>キーごとに先頭へ置かれる<code>DEL</code>が、リプレイを<b>ゼロからの再構築</b>にします——<b>出力する型</b>については本物の冪等です（RPUSHのような追記verbは、そうしないと再インポートでリスト内容が倍になります）。</p>
