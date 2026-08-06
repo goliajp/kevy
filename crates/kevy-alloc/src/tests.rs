@@ -22,18 +22,6 @@ macro_rules! require_mapping {
     };
 }
 
-/// Sweep past the pacing gate: pages return only after a span has sat
-/// quiet for QUIET_SWEEPS_BEFORE_RETURN sweeps (RFC candidate A), so a
-/// test that asserts "freed pages actually left" has to age them first.
-/// One sweep observes the occupancy change; the next N age it; the last
-/// one returns. Tests asserting the GATE (activity blocks return) call
-/// reclaim() directly instead.
-fn reclaim_past_gate(h: &mut Heap) {
-    for _ in 0..u32::from(crate::heap::QUIET_SWEEPS_BEFORE_RETURN) + 2 {
-        h.reclaim();
-    }
-}
-
 #[test]
 fn a_round_trip_leaves_nothing_live() {
     require_mapping!();
@@ -207,7 +195,7 @@ fn m4_emptied_spans_have_their_pages_returned() {
     }
     let idle = heap.snapshot();
     assert_eq!(idle.live, 0);
-    reclaim_past_gate(&mut heap);
+    heap.reclaim();
     let after = heap.snapshot();
     assert!(after.balanced(), "{after:?}");
     assert!(
@@ -459,7 +447,7 @@ fn v2_pages_return_while_the_span_still_lives() {
     assert!(!survivors.is_empty(), "the last page must hold live slots");
     let before = heap.snapshot();
     assert_eq!(before.returned, 0, "nothing returned before the sweep");
-    reclaim_past_gate(&mut heap);
+    heap.reclaim();
     let after = heap.snapshot();
     assert!(after.balanced(), "{after:?}");
     assert!(
@@ -525,7 +513,7 @@ fn v2_densification_migrates_free_space_into_whole_pages() {
             live.push(heap.alloc(size, 8).expect("refill"));
         }
     }
-    reclaim_past_gate(&mut heap);
+    heap.reclaim();
     let st = heap.snapshot();
     assert!(st.balanced(), "{st:?}");
     assert!(
@@ -692,66 +680,3 @@ fn claims_span_words_and_never_strand_occupancy() {
     h.reclaim();
     assert!(h.snapshot().balanced());
 }
-
-/// The decay gate itself: a span whose occupancy keeps moving returns
-/// nothing, however many sweeps run — mid-churn pages are exactly what
-/// both residuals price (the sweep walk and the kernel's zero-fill on
-/// refault).
-#[test]
-fn a_churning_span_returns_no_pages() {
-    let mut heap = Heap::new(0);
-    let size = 256;
-    let mut held = Vec::new();
-    for _ in 0..64 {
-        held.push(heap.alloc(size, 8).expect("seed"));
-    }
-    // Occupancy must DIFFER at each sweep: the gate reads the delta, so
-    // alloc-sweep-free in lockstep (always 65 live at the sweep) is the
-    // documented blind spot — equal-occupancy churn slips the gate —
-    // and probing the blind spot is not probing the gate. Alternate a
-    // held slot across sweeps instead: 65, 64, 65, … at sweep time.
-    for i in 0..(u32::from(crate::heap::QUIET_SWEEPS_BEFORE_RETURN) * 3) {
-        if i % 2 == 0 {
-            held.push(heap.alloc(size, 8).expect("churn"));
-        } else {
-            let p = held.pop().expect("held");
-            // SAFETY: ours, this size.
-            unsafe { heap.dealloc(p, size, 8) };
-        }
-        heap.reclaim();
-    }
-    let st = heap.snapshot();
-    assert!(st.balanced(), "{st:?}");
-    assert_eq!(st.returned, 0, "a churning span must retain its pages: {st:?}");
-    for p in held {
-        // SAFETY: ours.
-        unsafe { heap.dealloc(p, size, 8) };
-    }
-}
-
-/// The liveness bound: once quiet, everything leaves within the gate's
-/// own constant — the no-reclaim wedge is why this is unconditional.
-#[test]
-fn a_quiet_span_returns_within_the_bound() {
-    let mut heap = Heap::new(0);
-    let size = 256;
-    let mut given = Vec::new();
-    for _ in 0..256 {
-        given.push(heap.alloc(size, 8).expect("fill"));
-    }
-    for p in given {
-        // SAFETY: ours.
-        unsafe { heap.dealloc(p, size, 8) };
-    }
-    // One sweep observes the drop, N age it, then the return happens —
-    // and the accounting identity holds EXACT at every step between.
-    for _ in 0..u32::from(crate::heap::QUIET_SWEEPS_BEFORE_RETURN) + 2 {
-        let st = heap.snapshot();
-        assert!(st.balanced(), "mid-retention identity broke: {st:?}");
-        heap.reclaim();
-    }
-    let st = heap.snapshot();
-    assert!(st.balanced(), "{st:?}");
-    assert!(st.returned > 0 || st.hysteresis > 0, "the bound did not release: {st:?}");
-}
-

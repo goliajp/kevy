@@ -59,13 +59,6 @@ pub const PER_CLASS_CAP: u16 = 65_535;
 /// eagerly turns a churny workload into an mmap/munmap storm.
 pub const EMPTY_SPAN_HYSTERESIS: u16 = 4;
 
-/// Sweeps a span must sit with unchanged occupancy before its free
-/// pages return to the OS (RFC 2026-08-06-v5-reclaim-pacing, candidate
-/// A). Activity is occupancy delta between sweeps — measured on the
-/// sweep, never on the free path. The liveness bound the no-reclaim
-/// wedge demands: every free page returns within this many quiet
-/// sweeps, unconditionally.
-pub const QUIET_SWEEPS_BEFORE_RETURN: u8 = 8;
 
 /// One shard's heap. Not `Sync`: exactly one thread owns it, which is
 /// what removes the atomics from the fast path.
