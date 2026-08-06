@@ -86,7 +86,18 @@ range|unique [MAXMEM <bytes>]`
 A `unique` index **does not block writes** — enforcing global
 uniqueness at write time would serialize cross-shard writes. Instead:
 duplicates are counted (`duplicates` in
-VERIFY/LIST) and visible as multi-hit `EQ` reads. If you need hard
+VERIFY/LIST) and visible as multi-hit `EQ` reads.
+
+**The counter is per shard; the read is not.** `duplicates` is
+maintained inside each shard's segment, so it sees two rows sharing a
+value only when both landed on the same shard — and keys hash across
+shards, so the ordinary case is that they did not. Measured: the same
+pair of rows reports `duplicates 1` on a single-shard server and
+`duplicates 0` on a two-shard one. A global counter would need
+cross-shard value counting on the write path, which is the
+serialization this kind exists to avoid, so **the multi-hit `EQ` read
+is the detection that always works** — `duplicates` is a hint, and a
+zero there is not a statement that the value is unique. If you need hard
 uniqueness, pin the domain to one shard with a `{hashtag}` prefix in
 cluster mode, or check-then-write under `MULTI`/`WATCH`.
 

@@ -92,6 +92,27 @@ passed against the version that hangs. It forces `KEVY_IO_URING=0` for
 the same reason — on Linux the default reactor is the one that already
 worked, so the regression would never have been reached.
 
+### `duplicates` is per shard, and the docs did not say so
+
+`KIND unique` deliberately does not block writes, and the one guarantee
+it offers instead is that duplicates are counted and show up as
+multi-hit `EQ` reads. The read half always works. The counter half is
+maintained inside each shard's segment, so it only sees two rows
+sharing a value when both landed on the same shard — and keys hash
+across shards, so ordinarily they did not.
+
+Measured: the same pair of rows reports `duplicates 1` on a
+single-shard server and `duplicates 0` on a two-shard one, while
+`IDX.QUERY … EQ` returns both either way. Someone watching
+`duplicates` for uniqueness violations would have read zero with the
+duplicate sitting there.
+
+Documented, not changed: a global counter needs cross-shard value
+counting on the write path, which is the serialization this kind exists
+to avoid. `docs/indexes.md` now says the read is the detection that
+always works, and that a zero in the counter is not a statement that
+the value is unique.
+
 ### What `IDX.VERIFY` cannot falsify
 
 Documented rather than changed, because it follows from the shape. For
