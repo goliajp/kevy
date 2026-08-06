@@ -46,7 +46,20 @@ ENGLISH_ONLY = {
 }
 
 HEADING = re.compile(r"^## (.+?)\s*$", re.M)
+FENCE_LINE = re.compile(r"^(?:```|~~~)", re.M)
 FENCE = re.compile(r"^(?:```|~~~).*?^(?:```|~~~)", re.M | re.S)
+
+
+def fences(path):
+    """How many fenced blocks the page carries.
+
+    A ratchet, not a discovery: every translated chapter already matches
+    its English original here, so this line is green the day it is
+    written. It is worth writing anyway — dropping an example is the
+    same failure as dropping a section, one slice smaller, and the
+    section count found five of those in chapters nobody suspected.
+    """
+    return len(FENCE_LINE.findall(path.read_text(encoding="utf-8")))
 
 
 def sections(path):
@@ -75,14 +88,18 @@ def main():
                 problems.append(
                     f"{lang}/{name}: {len(got)} sections, English has {len(want)}"
                 )
+            elif fences(other) != fences(en):
+                problems.append(
+                    f"{lang}/{name}: {fences(other)} code blocks, English has {fences(en)}"
+                )
     if problems:
         print(f"REFUSED: {len(problems)} translation(s) out of step with the English chapter.")
         for p in problems:
             print(f"  {p}")
-        print("  Translate the missing section, or add the file to ENGLISH_ONLY")
-        print("  in tools/check_doc_i18n.py with the reason.")
+        print("  Carry the missing section or example across, or add the file")
+        print("  to ENGLISH_ONLY in tools/check_doc_i18n.py with the reason.")
         return 1
-    print(f"ok: {checked} translated chapters, each with its English chapter's sections")
+    print(f"ok: {checked} translated chapters, each with its English chapter's sections and examples")
     return 0
 
 
