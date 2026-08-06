@@ -176,5 +176,17 @@ benchmark 输出 / 盒上 checkout 根 289 个 aof 残留)。
 glibc 从不还页所以从不付。**与 R4 是同一个机制的两张脸**(reclaim 的用户态
 tick 成本 + 内核侧零页税)⇒ **设计候选合流为一个:还页滞后/节流**(挂在
 记账既有的 hysteresis 项下,按 M3 包络定尺寸)。判定所需仪器全部在位。
-**R6 ▶ 未做**(K1 解码预算量化)。两者是下轮研究的开口。
+**R6 ✅ K1 预算已量化** —— `bench/FINDING-2026-08-06-k1-decode-budget.md`
+(+ 探针 `bench/k1_budget.rs` 入库):目标盒上 memcpy = **0.183µs/4KiB**,
+词级 wildcopy 解码环 = **0.486µs**(memcpy 的 2.7×,预算的 0.46%);
+**要求量化为"解码 ≥ ~1 GB/s"**(4µs = 预算 3.8%),RFC 的 token-nibble +
+wildcopy 草图裸写都超一个数量级;100 MiB/s 那一档真出局(38%)。
+一行坏仪器如实弃用(byte-loop 被向量化成平凡填充,比 memcpy 还快 ——
+它不再是解码器的证据)。**K4(捕获在字典构造)+ R6(解码有 ~20× 余量):
+T3 最硬的两个约束现在都是数字。**
+
+### 研究计划全线闭合(2026-08-06)
+R1-R6 六条 track 全部收口。v5 轴上的自主研究面已清空;剩余全部归属主
+(r1-locality 的 revert 与 reclaim-节流设计轮 / merge 顺序 / T7 RFC /
+compress T3 开工位置 / push 与补丁版)。
 
