@@ -71,6 +71,14 @@ Notes:
 - **Path must not pre-exist.** kevy refuses to start if `KEVY_UNIX_SOCKET` already points at a file — it will not clobber a path it didn't create. Clean it up on restart (`rm -f /tmp/kevy.sock`) or use a per-run path (`/run/kevy/$(date +%s).sock`). This is intentional: silently unlinking would let a misconfigured kevy steal another service's socket.
 - **Dual-bind is always on when the env var is set.** There is no UDS-only mode — the TCP listener stays up too. If you want to forbid TCP, bind it to a loopback-only address you control and firewall it off.
 - **Shard 0 owns the accept loop.** Accepted connections are dispatched onto the existing per-shard runtime, so `--threads` still controls parallelism for the workload behind the socket.
+- **Which reactor serves it.** Both. The io_uring reactor accepts on
+  the socket through a multishot accept SQE; the readiness reactor
+  (epoll on Linux without io_uring, kqueue on macOS/BSD) registers it
+  alongside the TCP listeners. This was **not** true before the fix
+  noted in the changelog: the listener was bound before any shard
+  spawned, so the socket file appeared and `connect()` succeeded into
+  the backlog, but only io_uring ever accepted — a client on any other
+  reactor waited forever, with no error to show for it.
 - **io_uring path.** On Linux with `KEVY_IO_URING=1`, the UDS accept runs as a multishot accept SQE through the same io_uring instance as TCP — no extra reactor cost. `TCP_NODELAY` is not set on UDS (it isn't an IP socket).
 
 ## Trade-offs

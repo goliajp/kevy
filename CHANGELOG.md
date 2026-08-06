@@ -71,6 +71,27 @@ the keyspace.
   a table that was losing rows; not excusing them at all reported
   17 500 holes on a healthy one.
 
+### The unix socket that was bound but never served
+
+`KEVY_UNIX_SOCKET` created the socket, and on two of the three reactors
+nothing ever accepted on it. The listener is bound in `Runtime::run`
+before any shard spawns, so the file appeared and a client's
+`connect()` succeeded into the kernel backlog — and then waited
+forever, with no error to show for it. Only the io_uring reactor
+accepted; kqueue (macOS, BSD) and the epoll fallback (Linux without
+io_uring) registered the TCP, cluster and replication listeners and not
+this one.
+
+The selector that chose between listeners was a `cluster: bool`, and
+the unix listener arrived after the boolean did. It is an enum now,
+because three listeners cannot ride on two values.
+
+There was no test. The one added here waits for a **reply** rather than
+for the socket file: a test that asserted the file exists would have
+passed against the version that hangs. It forces `KEVY_IO_URING=0` for
+the same reason — on Linux the default reactor is the one that already
+worked, so the regression would never have been reached.
+
 ### Migration day, as tools instead of prose
 
 The migration playbook's eight lessons were a well-written requirements
