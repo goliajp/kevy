@@ -92,6 +92,22 @@ passed against the version that hangs. It forces `KEVY_IO_URING=0` for
 the same reason — on Linux the default reactor is the one that already
 worked, so the regression would never have been reached.
 
+### What `IDX.VERIFY` cannot falsify
+
+Documented rather than changed, because it follows from the shape. For
+`KIND agg` an entry is a *group*, not a row, so the audit's question —
+does this entry's row still derive this value — does not apply.
+`drift` and `missing` stay zero whatever the counts say, and the
+running totals are never recomputed against the keyspace at runtime;
+`recompute_stats` exists only in a unit test.
+
+That matters next to the fix below: an expiring row silently
+decremented nothing, and `IDX.VERIFY` would have reported a clean
+aggregate throughout. So the aggregate's net is a test rather than the
+audit — `index_write_path_coverage` compares the group's count against
+the live rows after each verb, and `docs/indexes.md` now says which
+half of the "VERIFY makes drift falsifiable" claim holds for this kind.
+
 ### The expiring key that stayed in the index
 
 An indexed row whose TTL passed never left the index. A key with a
