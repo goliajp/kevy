@@ -92,6 +92,25 @@ passed against the version that hangs. It forces `KEVY_IO_URING=0` for
 the same reason — on Linux the default reactor is the one that already
 worked, so the regression would never have been reached.
 
+### Deploying behind a proxy
+
+New chapter, [`docs/deploy-behind-a-proxy.md`](docs/deploy-behind-a-proxy.md),
+in three languages: kevy has no AUTH and no TLS by charter, so this is
+the recipe for the thing that does. Configs for stunnel, HAProxy `mode
+tcp` and nginx `stream`, over a loopback port or a unix socket.
+
+Three things in it are worth knowing before you need them. **An HTTP
+reverse proxy cannot carry RESP** — including stock Caddy, whose core
+ships no layer-4 module, so the Caddyfile that would do this does not
+exist. **`kevy-cli` cannot speak to a TLS-terminated kevy**: it rejects
+`rediss://` with `Unsupported`, so plan on the host or an SSH tunnel.
+And **single-node cluster mode does not survive a proxy** — it
+advertises the address kevy is bound to, with no announce-address knob,
+so a client told `127.0.0.1:6101` cannot follow that from elsewhere.
+
+The chapter says which of its claims were measured and which are the
+products' standard configs that were not run here.
+
 ### Migration day, as tools instead of prose
 
 The migration playbook's eight lessons were a well-written requirements

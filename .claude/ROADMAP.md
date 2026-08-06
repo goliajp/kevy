@@ -602,8 +602,21 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - [ ] **诚实前提**:按 SME 的 4-8 核重读,索引查询 kevy 本来就赢 1.9-2.8×(扇出是 16 核放大的问题)⇒ 本 train 的理由是**模型内在一致性**,不是补性能短板
 - [ ] 写侧跨分片维护复用既有 xshard/escrow/outbox;单连接延迟与并发吞吐两头都要守
 
-### T8 — 部署配方(C3 的答案,小,可并行)
-- [ ] `docs/deploy-behind-a-proxy.md`:反代 + TLS 终端 + 只暴露必要端口,**照抄即可、不需要 SRE**;三语 + 站点
+### T8 — 部署配方(C3 的答案,小,可并行)✅(2026-08-06)
+- [x] `docs/deploy-behind-a-proxy.md`:反代 + TLS 终端 + 只暴露必要端口,三语 + 站点。
+      **三条实测结论进了正文,每条都是会被照抄然后失败的那种**:① **HTTP 反代载不动
+      RESP**,包括 stock Caddy(核心无 layer-4 模块,实测 2.11.4)—— 而愿景里那句
+      "caddy 包裹"对 HTTP 成立、对 RESP 不成立 ② **`kevy-cli` 连不上被 TLS 终止的
+      kevy**(它对 `rediss://` 回 `Unsupported`)③ **单机集群模式撑不过代理**
+      (广播的是 bind 地址,`0.0.0.0` 回落 `127.0.0.1`,且没有 announce 旋钮)。
+      实测的是**形状**:TLS 1.3 终止器 → 未经修改的 kevy,回环端口与 unix socket
+      两条都 RESP 完整往返;三段产品配置按标准写法给出并**注明没在这里跑过**。
+- [x] **计划外:写这一章时抓到第九个同形状缺陷** —— `KEVY_UNIX_SOCKET` 在
+      kqueue / epoll 两条 reactor 上**只绑不服务**(socket 文件在、connect 落进
+      backlog、永远等不到 accept,且不报错)。选 listener 的是一个 `cluster: bool`,
+      而 unix listener 是在这个 bool 之后才来的。已改枚举 + poll 循环注册并 drain,
+      补首个 UDS 回归测试(**等回复而不是等文件**,并 `KEVY_IO_URING=0` 强制走那条
+      本来没人走的路);暂存修复实测两测皆红、恢复后 0.9 秒绿。
 - [ ] 引擎侧 AUTH/TLS 仍 OUT(`feedback-kevy-auth-tls-never` 不变;愿景变了也不解锁)
 
 ### T9 — 试验终账(**判定这次尝试算不算 v5**)
