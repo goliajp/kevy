@@ -64,6 +64,7 @@ UDS 的信任边界是**文件系统**——Unix socket 上没有 RESP 层的 AU
 - **路径必须事先不存在。**如果 `KEVY_UNIX_SOCKET` 指向的文件已经存在，kevy 拒绝启动——它不会覆盖一个不是自己创建的路径。重启前清理（`rm -f /tmp/kevy.sock`），或者每次运行用不同路径（`/run/kevy/$(date +%s).sock`）。这是刻意设计：静默 unlink 会让配置错误的 kevy 偷走别的服务的 socket。
 - **设了环境变量就必然双绑定。**没有“只 UDS”模式——TCP 监听始终在。想禁掉 TCP，把它绑到一个你可控的回环地址，再用防火墙挡住。
 - **accept 循环归 shard 0。**接受的连接会分发到既有的 per-shard 运行时，所以 `--threads` 依然控制 socket 背后工作负载的并行度。
+- **哪个 reactor 在服务它。**两个都服务。io_uring reactor 用 multishot accept SQE 在这个 socket 上 accept；readiness reactor（Linux 上没有 io_uring 时的 epoll、macOS/BSD 上的 kqueue）把它和 TCP 监听一起注册。**在 changelog 里那个修复之前并非如此**：监听是在任何分片启动之前就绑好的，所以 socket 文件会出现、`connect()` 会成功地落进 backlog，但**只有 io_uring 真的去 accept** —— 任何别的 reactor 上的客户端都会永远等下去，而且拿不到任何报错。
 - **io_uring 路径。**Linux 上加 `KEVY_IO_URING=1` 时，UDS 的 accept 以 multishot accept SQE 的形式，走与 TCP 同一个 io_uring 实例——没有额外的 reactor 成本。UDS 上不设 `TCP_NODELAY`（它不是 IP socket）。
 
 ## 取舍
