@@ -55,6 +55,30 @@ impl Heap {
                 if s.spans[ix].class == NO_CLASS {
                     continue;
                 }
+                // The decay gate (RFC candidate A): a span whose
+                // occupancy moved since the last sweep is mid-churn, and
+                // returning its free pages now is what both residuals
+                // price — the sweep's own walk on the write side, and
+                // the kernel zero-filling the page on its way back in
+                // (clear_page_erms, 12% -> 21% under pub/sub). Quiet
+                // saturates at the threshold so an aged span keeps
+                // returning on every later sweep (cheap: the discarded
+                // bitmap already dedupes the syscalls), which is the
+                // liveness bound: every free page is gone within
+                // QUIET_SWEEPS_BEFORE_RETURN sweeps of its span going
+                // quiet, unconditionally.
+                {
+                    let meta = &mut s.spans[ix];
+                    if meta.live != meta.last_live {
+                        meta.last_live = meta.live;
+                        meta.quiet = 0;
+                        continue;
+                    }
+                    if meta.quiet < crate::heap::QUIET_SWEEPS_BEFORE_RETURN {
+                        meta.quiet += 1;
+                        continue;
+                    }
+                }
                 if s.spans[ix].live != 0 {
                     Self::discard_free_pages(s, ix);
                     continue;

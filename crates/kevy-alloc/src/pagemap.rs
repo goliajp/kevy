@@ -52,6 +52,14 @@ pub struct SpanMeta {
     /// Pages returned to the OS (`MADV_DONTNEED`) while the span stays
     /// assigned. Cleared per page when an allocation lands back in one.
     pub discarded: u16,
+    /// Occupancy observed by the previous reclaim sweep. The sweep
+    /// compares, not the free path: activity detection costs nothing on
+    /// the hot path, which is why it is a sweep-side field.
+    pub last_live: u16,
+    /// Consecutive sweeps with unchanged occupancy, saturating at the
+    /// pacing threshold. Pages return only from spans quiet this long —
+    /// the decay gate of RFC 2026-08-06-v5-reclaim-pacing (candidate A).
+    pub quiet: u8,
     /// One bit per slot; set = live (or parked on a foreign list, which
     /// pins the page exactly as a live slot does).
     bitmap: [u64; BITMAP_WORDS],
@@ -65,6 +73,8 @@ impl SpanMeta {
             live: 0,
             high_water: 0,
             discarded: 0,
+            last_live: 0,
+            quiet: 0,
             bitmap: [0; BITMAP_WORDS],
         }
     }
