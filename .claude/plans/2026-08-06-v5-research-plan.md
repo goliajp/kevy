@@ -69,3 +69,42 @@
 
 每轮收尾纪律(hygiene.md 全套):本地 rootgate、lx64 清点(`ls ~ | grep -E "^(aof-|dump-)"`
 应为 0、/tmp/kevy-* 空、不留新 checkout)、worktree 用完即清、零等待循环。
+
+---
+
+## 执行结果(2026-08-06 当日回填)
+
+**R1 ✅ 两轴复测完成,双轴皆负 —— hot-slot 层是干净的 REVERT。**
+吞吐:三个目标角比 per-word 轮各恶化 4-5pp(hset −17.0 / sadd −15.7 /
+zadd −18.4),lpush 差 0.5% 回红;M3:1.98× → 2.067×(把对 glibc 2.40×
+优势的四分之一还了回去)。探针自验:OFF 侧复现账上的 2.40× 到分位、
+两侧 used_memory 到分位相等。失败机理 = LIFO cache 的微缩重演(缓存槽
+从 span 视角仍是活的,钉住了致密化本可归还的页;空间界把伤口压到 0.09×,
+但方向是错的,而且吞吐是负的)。finding 已按 train 纪律落在
+**`r1-locality` 本地提交 `b1bfdcfe`**(不 push;revert 与否归属主/那条线)。
+附带记录:判据门的 hit/full 计数器**没有 envelope 级载体**(HotStats 只有
+单测在读),下一个设计想区分"冷机制 vs 有害机制"得先给它出口。
+**仪器学费两笔**:perfgate 的 preflight 会匹配启动链 argv 里的
+`/home/kevybench/...` 路径(两次假拒都是门照见自己的调用者 —— 路径必须走
+脚本文件体,永不上启动 argv);allocgate-mem 的 runner 在报数前退出
+(已知时序债,手工探针同参数取数)。
+
+**R2 ✅ K4 前提活,带三个设计输入。** `bench/FINDING-2026-08-06-k4-premise-…`:
+identical 语料上字典模式字面就是 O(字典)+N×9B 而 per-datum 永付 89B/值;
+真实 JSON 行 per-datum 留 44% 在桌上;随机语料 per-datum **膨胀**(411>400,
+K2 早退是实测需求);**字典构造(非 match-finding)是捕获的胜负手**
+(32KiB 采样字典在真实行上拿到天花板的 72%,在 identical 上只拿到 6%)。
+工具入库 `bench/k4_premise.py`。
+
+**R3 ✅ 全部扫完。** text × 过期:行为过硬(doc 退出 MATCH、BM25 重打分);
+顺手抓到**第 12 个发现并已修**:非标量 kind 的 IDX.VERIFY 四元组被按位置
+贴上标量审计标签(健康 text 索引答 `coerce_failures 7, duplicates 7`,
+agg 的 groups 印成 duplicates,ann 把 links+rebuild 两事实挤一数)——
+已改为 kind 词表作答(chunk 带 tag 字节;进程内扇出,标量逐字节不变)。
+**补扫结果(同日)**:ann × 过期 ✓(向量退出 KNN,墓碑+rebuild 建议正确,
+新词表实测在线);materialized 视图 × 过期 ✓(TOPK 正确补位);
+窗口冷段 × 过期 ✓(已封冷段中的行过期后从跨窗 RANGE 消失 —— 缺陷 #5 的
+墓碑机械与过期漏斗修复正确复合)。**四个结构零新缺陷**,过期漏斗
+(`note_expired` → `drain_expired_keys` → `note_key_mutated`)对所有派生
+结构一次覆盖 —— 修在漏斗上的价值在此实证。
+
