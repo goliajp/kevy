@@ -23,3 +23,10 @@ default = []
 global = []
 
 [dependencies]
+
+# The shim test installs KevyAlloc as the binary's global allocator,
+# which only exists behind the feature; without this stanza a bare
+# `cargo test --workspace` fails to compile the test at all.
+[[test]]
+name = "global_alloc"
+required-features = ["global"]
