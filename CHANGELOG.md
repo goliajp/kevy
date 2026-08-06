@@ -92,6 +92,37 @@ passed against the version that hangs. It forces `KEVY_IO_URING=0` for
 the same reason — on Linux the default reactor is the one that already
 worked, so the regression would never have been reached.
 
+### The expiring key that stayed in the index
+
+An indexed row whose TTL passed never left the index. A key with a
+50 ms TTL was gone from `EXISTS` and still returned by `IDX.QUERY`
+twelve seconds later, hydrating to `age (nil)` — a phantom row with a
+stale sort value, handed to the caller. `IDX.VERIFY` reported `drift 1`
+and went on reporting it; touching the key did not heal it.
+
+Expiry is a write with no client behind it. The store removes the key
+itself — lazy `reap`, the single-lookup read, the active sampler — and
+the runtime never sees a write, so neither the index hook nor the WATCH
+bump fired. The multi-key `DEL` fix above does not cover it: that added
+a call at the runtime layer, and expiry never reaches the runtime
+layer.
+
+All four expiry paths funnel through one function, so the capture went
+there. The store now buffers expired keys on an always-on list, kept
+separate from the keyspace-notification buffer and deliberately not
+sharing its capture flag — this one carries correctness, and
+correctness cannot depend on whether a client happened to subscribe to
+notifications. The runtime drains it and runs the same maintenance a
+delete would.
+
+Found by a test written for the general case: `index_write_path_coverage`
+walks the verbs that can create, change, rename or remove an indexed
+row and asserts `IDX.VERIFY` is clean in **both** directions after each
+one, naming the verb. The two index-drift bugs above were the same
+omission on two paths, each fixed with a regression test for its own
+path — which is right, and is also how a third goes missing, because
+the paths had never been enumerated.
+
 ### A durable effect is a propagated effect, or it is named
 
 The three data-loss fixes above were one omission wearing three faces:
