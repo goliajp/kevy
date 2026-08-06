@@ -24,7 +24,7 @@ range|unique [MAXMEM <bytes>]`
   [FIELDS f…]` → `[next-cursor, rows]`。行是跨全部 shard 按 `(value, key)` 排序的；`FIELDS` 会在每一行所属 shard 上就地补上指定的 hash 字段（不需要第二次往返），并把行切换成嵌套的 `[key, value, fname, fval…]` 形态。
 - `IDX.QUERY COMPOSE AND|OR <n1> <spec1> <n2> <spec2> …`——双索引组合，**按键排序**（两个值域不同），LIMIT / CURSOR / FIELDS 尾巴一样。AND / OR 逐 shard 求解（一个键只住在一个 shard 上，所以逐 shard 的集合代数在全局也成立）。
 - `IDX.COUNT <name> RANGE|EQ …`——不物化键，直接计数。
-- `IDX.VERIFY <name>`——汇总统计：entries、bytes、coerce_failures、duplicates。
+- `IDX.VERIFY <name>`——汇总统计：entries、bytes、coerce_failures、duplicates，外加**审计的两个方向**：`drift`（条目所指的行已经没了、不再能强制转换、或转换成了另一个值）在 `checked` 个条目上，以及 `missing`（前缀下能派生出值、却没有条目的行）。健康的索引上两者都应为零；**`missing` 是走索引自己的条目那一趟看不见的方向**。`kevy-cli doctor` 把这句话变成一个对所有已声明表的退出码，于是「应当为零」可以是一条 cron，而不是某个人记得去查的事（[table-migration.md](table-migration.md#8-让-verify-成为运维的一部分而不是迁移的一步)）。
 - `IDX.LIST`——目录，加上每个索引的状态 / 条目数 / 字节数。
 - 游标契约属于 SCAN 类：整趟遍历期间稳定存在的行**恰好**被看到一次；并发的插入 / 删除可能出现，也可能不出现。`"0"` = 起点 / 已耗尽。
 
