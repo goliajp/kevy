@@ -51,7 +51,6 @@ impl Heap {
         // no caller holds them — they are resident, allocatable bytes,
         // which is the definition of `span_free`.
         st.span_free += self.claims_unused_bytes();
-        st.span_free += self.hot_unused_bytes();
         st
     }
 }
