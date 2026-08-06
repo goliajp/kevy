@@ -90,6 +90,8 @@ kevy-cli inspect -p 6004 user:</code></pre></figure>
 <p>Three more read and report rather than move anything, which is why they sit outside the list above. They are the migration playbook's lessons made runnable — see <a href="../table-migration/">table-migration.md</a>:</p>
 <figure class="code"><pre><code>kevy-cli sql plan schema.sql                       # every query's fate
 kevy-cli backfill-keys --from-index i --from-prefix p:   # the union
+kevy-cli lint overlap --prefix mailbox:              # lesson 1
+kevy-cli lint columns ev                           # lesson 6
 kevy-cli shadow -p 6004 --old "…" --new "…"        # before cutover
 kevy-cli doctor -p 6004                            # VERIFY as a cron</code></pre></figure>
 <h2 id="wire-format">Wire format</h2>

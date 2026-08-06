@@ -20,6 +20,18 @@
 
 インデックスに答えさせたい各クエリを見て、その次元が**行の上で**単一の値かを問うてください。答えはたいてい行ではなく、id 導出やキー構築のコードにあります——このメールシステムの「メールボックスごとのスレッド」は単値に見えましたが、id のコードを読むと、ひとつのスレッドが複数のメールボックスに住めることが分かりました。次元が多値なら、どのカラムもそれを運べません：(owner, item) ごとの**メンバーシップ行**——`member:{owner}:{item}` に owner と item とソート属性をカラムとして持つ——をモデル化し、ORDERPATH にそれをソートさせてください。これを最初に決めることが、テーブル全体の再宣言を防ぎます。
 
+**`kevy-cli lint overlap` が見つけるのは症状であって、原因ではありません。** 原因はコードの中にあり、そこに留まります——しかし多値の次元は、機械が読める痕跡をデータに残します：**同じ名前が二つ以上の owner の下に現れる**。今あなたが持っている、owner ごとのコレクション群に向けてください：
+
+```console
+$ kevy-cli lint overlap -p 6004 --prefix mailbox:
+2 owner(s) under mailbox:, 3 distinct name(s)
+1 name(s) appear under more than one owner:
+  t2  →  mailbox:1, mailbox:2
+this dimension is multi-valued, so no column can hold it — model a membership row per (owner, item) and let an ORDERPATH sort it
+```
+
+交わりがあれば**非ゼロで終了**します。それはヒントではなく**答え**だからです：二つの owner を名指しする次元を保持できる列は存在しないので、宣言スクリプトは止まるべきです。そして**やらないこと**にも注意を：候補の列をサンプリングして単値かを確かめる、ということはしません。ハッシュのフィールドは構造上ひとつの値しか持たないので、その検査は永遠に通ってしまいます。
+
 ### 2. 読み取りが供され始めた瞬間、すべての writer が荷重を担う
 
 導出された行は、それを書く者によって埋まります。読み取りを切り替える前に、**writer を枚挙してください**——基礎エンティティを作成・変更・削除するすべてのコードパスが、テーブルの宣言対象である行を書いていることを確認するのです。忘れる writer は、テーブルが存在する前に書かれた writer です。（これはまさに `TABLE.VERIFY` の `missing` カウンタが事後に捕まえるクラスです。監査は、それに本番で出会わないための手段です。）
@@ -71,6 +83,17 @@ shadow: 50 samples, 50 diverged (first at sample 0)
 ### 6. インデックスにない述語 ⇒ もうひとつの ORDERPATH。カラムの複製は決してしない
 
 新しいクエリが現在の形では出せない述語を必要とするとき、手書き時代の反射は「その値をもう 1 か所にも書く」ことです——それは、この移行が消したばかりの「writer 2 つ、真実 1 つ」問題の再生産です。代わりに同じカラムの上に**もうひとつの ORDERPATH**（またはインデックス）を宣言してください。エンジンは同じ書き込みで、同じ行から両方を導出します。
+
+**`kevy-cli lint columns <table>` が見つけるのは形です。** ほぼすべての行で同じ値を持つ二つの列は、第二のソート順を得るために複製された一つの列です：
+
+```console
+$ kevy-cli lint columns -p 6004 ev
+ev: 43 row(s) sampled under ev:
+  created_at and sort_ts agree on 93% (40/43)
+a column copied to get a second sort order is the shape lesson 6 warns about — the answer is another ORDERPATH; ask IDX.ADVISE which one
+```
+
+`lint overlap` と違い、**何を見つけても 0 で終了します**：二つの列が正当に一致することはあり得るので、これは判決ではなく疑いです。また第 1 の教訓の検査と違い、これはテーブルの宣言の**後**に走ります——行を読むからです。`--sample N` が読む量を、`--threshold PCT` が線の位置を決めます。
 
 ### 7. 起動は `ensure` で
 

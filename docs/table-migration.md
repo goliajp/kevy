@@ -54,6 +54,27 @@ per (owner, item) — `member:{owner}:{item}` with the owner, the item
 and the sort attributes as columns — and let an ORDERPATH sort that.
 Deciding this first prevents re-declaring the whole table later.
 
+**`kevy-cli lint overlap` finds the symptom**, though not the cause.
+The cause is in code and stays there — but a dimension that is
+multi-valued leaves a mark in the data that a machine can read: *the
+same name appears under more than one owner*. Point it at the family of
+owner-keyed collections you have today:
+
+```console
+$ kevy-cli lint overlap -p 6004 --prefix mailbox:
+2 owner(s) under mailbox:, 3 distinct name(s)
+1 name(s) appear under more than one owner:
+  t2  →  mailbox:1, mailbox:2
+this dimension is multi-valued, so no column can hold it — model a membership row per (owner, item) and let an ORDERPATH sort it
+```
+
+It exits non-zero when they intersect, because that is an **answer**
+rather than a hint: no column can hold a dimension that names two
+owners, so a declaring script should stop. Note what it does *not* do —
+sample a candidate column and check that it is single-valued. A hash
+field holds one value by construction, so that check would pass
+forever.
+
 ### 2. Every writer is load-bearing once reads are served
 
 A derived row is populated by whoever writes it. Before cutting reads
@@ -171,6 +192,23 @@ somewhere else too — which recreates the two-writers-one-truth
 problem the migration just removed. Declare **another ORDERPATH**
 (or index) over the same columns instead; the engine derives both
 from the same row on the same write.
+
+**`kevy-cli lint columns <table>` finds the shape.** Two columns that
+carry the same value on nearly every row are one column copied to get a
+second sort order:
+
+```console
+$ kevy-cli lint columns -p 6004 ev
+ev: 43 row(s) sampled under ev:
+  created_at and sort_ts agree on 93% (40/43)
+a column copied to get a second sort order is the shape lesson 6 warns about — the answer is another ORDERPATH; ask IDX.ADVISE which one
+```
+
+Unlike `lint overlap`, this **exits zero whatever it finds**: two
+columns may legitimately agree, so it is a suspicion, not a verdict.
+And unlike lesson 1's check, it runs *after* the table is declared —
+it reads rows. `--sample N` bounds the read, `--threshold PCT` moves
+the bar.
 
 ### 7. Boot with `ensure`
 

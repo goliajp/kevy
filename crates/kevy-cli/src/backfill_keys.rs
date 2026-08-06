@@ -24,7 +24,7 @@ use std::collections::BTreeSet;
 use std::io::{self, Write};
 use std::process::ExitCode;
 
-use kevy_resp_client::{Reply, RespClient};
+use kevy_resp_client::RespClient;
 
 /// Where a set of item names comes from.
 pub enum Source {
@@ -118,7 +118,7 @@ fn account(labels: &[String], per_source: &[BTreeSet<Vec<u8>>]) -> Vec<SourceRep
 
 fn read_source(client: &mut RespClient, s: &Source) -> io::Result<Vec<Vec<u8>>> {
     match s {
-        Source::Index(key) => read_index(client, key),
+        Source::Index(key) => crate::collections::members(client, key),
         Source::Prefix { prefix, keep } => read_prefix(client, prefix, *keep),
         Source::File(path) => Ok(std::fs::read_to_string(path)?
             .lines()
@@ -129,63 +129,14 @@ fn read_source(client: &mut RespClient, s: &Source) -> io::Result<Vec<Vec<u8>>> 
     }
 }
 
-/// The members of a collection key. The verb follows the key's type
-/// rather than being guessed — a wrong verb answers WRONGTYPE, which
-/// would look like an empty source.
-fn read_index(client: &mut RespClient, key: &str) -> io::Result<Vec<Vec<u8>>> {
-    let ty = match client.request_borrowed(&[b"TYPE", key.as_bytes()])? {
-        Reply::Simple(s) | Reply::Bulk(s) => String::from_utf8_lossy(&s).into_owned(),
-        _ => String::new(),
-    };
-    let argv: Vec<&[u8]> = match ty.as_str() {
-        "set" => vec![b"SMEMBERS", key.as_bytes()],
-        "zset" => vec![b"ZRANGE", key.as_bytes(), b"0", b"-1"],
-        "list" => vec![b"LRANGE", key.as_bytes(), b"0", b"-1"],
-        "none" => {
-            return Err(io::Error::other(format!("index '{key}' does not exist")));
-        }
-        other => {
-            return Err(io::Error::other(format!(
-                "index '{key}' is a {other} — a source must be a set, zset, or list of names"
-            )));
-        }
-    };
-    Ok(bulks(client.request_borrowed(&argv)?))
-}
-
-/// Every key under a prefix, via SCAN so the server is never blocked.
+/// Every key under a prefix, stripped unless the caller wants the key
+/// itself: stripped names line up with the members of an index, which
+/// is what makes the union meaningful.
 fn read_prefix(client: &mut RespClient, prefix: &str, keep: bool) -> io::Result<Vec<Vec<u8>>> {
-    let pattern = format!("{prefix}*");
-    let mut cursor = String::from("0");
-    let mut out = Vec::new();
-    loop {
-        let argv: Vec<&[u8]> =
-            vec![b"SCAN", cursor.as_bytes(), b"MATCH", pattern.as_bytes(), b"COUNT", b"500"];
-        let Reply::Array(parts) = client.request_borrowed(&argv)? else {
-            return Err(io::Error::other("SCAN did not answer with a cursor and a batch"));
-        };
-        let [Reply::Bulk(next), batch] = parts.as_slice() else {
-            return Err(io::Error::other("SCAN reply is not [cursor, keys]"));
-        };
-        for k in bulks(batch.clone()) {
-            out.push(if keep { k } else { k[prefix.len().min(k.len())..].to_vec() });
-        }
-        cursor = String::from_utf8_lossy(next).into_owned();
-        if cursor == "0" {
-            return Ok(out);
-        }
-    }
-}
-
-fn bulks(reply: Reply) -> Vec<Vec<u8>> {
-    let Reply::Array(items) = reply else { return Vec::new() };
-    items
+    Ok(crate::collections::scan_prefix(client, prefix)?
         .into_iter()
-        .filter_map(|r| match r {
-            Reply::Bulk(b) => Some(b),
-            _ => None,
-        })
-        .collect()
+        .map(|k| if keep { k } else { k[prefix.len().min(k.len())..].to_vec() })
+        .collect())
 }
 
 /// The accounting, on stderr so redirecting the names keeps it.

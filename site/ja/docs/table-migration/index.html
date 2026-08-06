@@ -53,6 +53,13 @@
 <h2 id="8-つの教訓必要になる順に">8 つの教訓、必要になる順に</h2>
 <h3 id="1-最初の問いクエリの各次元は行の上で単値か">1. 最初の問い：クエリの各次元は、行の上で単値か？</h3>
 <p>インデックスに答えさせたい各クエリを見て、その次元が<b>行の上で</b>単一の値かを問うてください。答えはたいてい行ではなく、id 導出やキー構築のコードにあります——このメールシステムの「メールボックスごとのスレッド」は単値に見えましたが、id のコードを読むと、ひとつのスレッドが複数のメールボックスに住めることが分かりました。次元が多値なら、どのカラムもそれを運べません：(owner, item) ごとの<b>メンバーシップ行</b>——<code>member:{owner}:{item}</code> に owner と item とソート属性をカラムとして持つ——をモデル化し、ORDERPATH にそれをソートさせてください。これを最初に決めることが、テーブル全体の再宣言を防ぎます。</p>
+<p><b><code>kevy-cli lint overlap</code> が見つけるのは症状であって、原因ではありません。</b> 原因はコードの中にあり、そこに留まります——しかし多値の次元は、機械が読める痕跡をデータに残します：<b>同じ名前が二つ以上の owner の下に現れる</b>。今あなたが持っている、owner ごとのコレクション群に向けてください：</p>
+<figure class="code"><pre><code class="lang-console">$ kevy-cli lint overlap -p 6004 --prefix mailbox:
+2 owner(s) under mailbox:, 3 distinct name(s)
+1 name(s) appear under more than one owner:
+  t2  →  mailbox:1, mailbox:2
+this dimension is multi-valued, so no column can hold it — model a membership row per (owner, item) and let an ORDERPATH sort it</code></pre></figure>
+<p>交わりがあれば<b>非ゼロで終了</b>します。それはヒントではなく<b>答え</b>だからです：二つの owner を名指しする次元を保持できる列は存在しないので、宣言スクリプトは止まるべきです。そして<b>やらないこと</b>にも注意を：候補の列をサンプリングして単値かを確かめる、ということはしません。ハッシュのフィールドは構造上ひとつの値しか持たないので、その検査は永遠に通ってしまいます。</p>
 <h3 id="2-読み取りが供され始めた瞬間すべての-writer-が荷重を担う">2. 読み取りが供され始めた瞬間、すべての writer が荷重を担う</h3>
 <p>導出された行は、それを書く者によって埋まります。読み取りを切り替える前に、<b>writer を枚挙してください</b>——基礎エンティティを作成・変更・削除するすべてのコードパスが、テーブルの宣言対象である行を書いていることを確認するのです。忘れる writer は、テーブルが存在する前に書かれた writer です。（これはまさに <code>TABLE.VERIFY</code> の <code>missing</code> カウンタが事後に捕まえるクラスです。監査は、それに本番で出会わないための手段です。）</p>
 <h3 id="3-バックフィルはitem-を名指しできる全ソースの和集合から">3. バックフィルは、item を名指しできる全ソースの和集合から</h3>
@@ -83,6 +90,12 @@ shadow: 50 samples, 50 diverged (first at sample 0)
 <p>シャドーの窓を閉じるとき、旧インデックスの <b>reader を先に</b>、writer を後に取り除いてください。逆順には静かな故障モードがあります：存在しないキーの読み取りはエラーではなく 0 や空として返るので、writer が消えた後に残った reader は、クラッシュする代わりに静かに間違った答えを供します。それからキーを消してください。</p>
 <h3 id="6-インデックスにない述語-もうひとつの-orderpathカラムの複製は決してしない">6. インデックスにない述語 ⇒ もうひとつの ORDERPATH。カラムの複製は決してしない</h3>
 <p>新しいクエリが現在の形では出せない述語を必要とするとき、手書き時代の反射は「その値をもう 1 か所にも書く」ことです——それは、この移行が消したばかりの「writer 2 つ、真実 1 つ」問題の再生産です。代わりに同じカラムの上に<b>もうひとつの ORDERPATH</b>（またはインデックス）を宣言してください。エンジンは同じ書き込みで、同じ行から両方を導出します。</p>
+<p><b><code>kevy-cli lint columns &lt;table&gt;</code> が見つけるのは形です。</b> ほぼすべての行で同じ値を持つ二つの列は、第二のソート順を得るために複製された一つの列です：</p>
+<figure class="code"><pre><code class="lang-console">$ kevy-cli lint columns -p 6004 ev
+ev: 43 row(s) sampled under ev:
+  created_at and sort_ts agree on 93% (40/43)
+a column copied to get a second sort order is the shape lesson 6 warns about — the answer is another ORDERPATH; ask IDX.ADVISE which one</code></pre></figure>
+<p><code>lint overlap</code> と違い、<b>何を見つけても 0 で終了します</b>：二つの列が正当に一致することはあり得るので、これは判決ではなく疑いです。また第 1 の教訓の検査と違い、これはテーブルの宣言の<b>後</b>に走ります——行を読むからです。<code>--sample N</code> が読む量を、<code>--threshold PCT</code> が線の位置を決めます。</p>
 <h3 id="7-起動は-ensure-で">7. 起動は <code>ensure</code> で</h3>
 <p>定常状態は<a href="../tables/#起動パターンensure">起動パターン</a>です：プロセスの開始ごとに <code>TABLE.ENSURE</code>——最初の起動で <code>Created</code>、以後は <code>Unchanged</code>、そしてコードの spec がストアのそれと合わなくなったときは<b>差分を名指しする拒否</b>。それが、意図した <code>TABLE.REPLACE</code> 移行を自分で走らせるための合図です——移行に走られるのではなく。</p>
 <h3 id="8-verify-は移行の一部ではなく運用の一部に">8. <code>VERIFY</code> は移行の一部ではなく、運用の一部に</h3>

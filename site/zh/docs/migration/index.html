@@ -90,6 +90,8 @@ kevy-cli inspect -p 6004 user:</code></pre></figure>
 <p>另有三条只读取和报告、不搬动任何东西，所以不在上面那份清单里。它们是迁移手册里的课变成可以跑的东西——见 <a href="../table-migration/">table-migration.md</a>：</p>
 <figure class="code"><pre><code>kevy-cli sql plan schema.sql                       # 每条查询的去向
 kevy-cli backfill-keys --from-index i --from-prefix p:   # 并集
+kevy-cli lint overlap --prefix mailbox:              # lesson 1
+kevy-cli lint columns ev                           # lesson 6
 kevy-cli shadow -p 6004 --old "…" --new "…"        # 切换之前
 kevy-cli doctor -p 6004                            # 把 VERIFY 挂进 cron</code></pre></figure>
 <h2 id="线格式">线格式</h2>

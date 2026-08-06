@@ -80,5 +80,31 @@ for d in $dir_shapes; do
     done
 done
 
-[ "$fail" -eq 0 ] && echo "rootgate: PASS — repo root clean, no artifacts tracked"
+# 4. The root is not the only directory a test can write into. Check 2
+#    looks at the root because that is where a *server* started by hand
+#    lands; a test binary's cwd is its own crate directory, and on
+#    2026-08-06 a new test left crates/kevy-cli/index-catalog.meta there,
+#    where it survived into the next run and answered "table already
+#    exists". Scan the worktree so neither placement is invisible.
+#
+#    `*-catalog.meta` rather than the one name: there are three sidecars
+#    (index, table, view) and the first version of this check listed
+#    only the index one, so table-catalog.meta walked straight past it
+#    the same afternoon. Same mistake as the shapes list above, one
+#    hour later.
+elsewhere=$(find . -path ./target -prune -o -path ./.git -prune -o \
+    \( -name '*-catalog.meta' -o -name 'shards.meta' -o -name 'aof-*.aof' \
+       -o -name 'dump-*.rdb' -o -name 'feed-*.gen' -o -name 'feed-*.meta' \) \
+    -print 2>/dev/null || true)
+if [ -n "$elsewhere" ]; then
+    n=$(echo "$elsewhere" | wc -l | tr -d ' ')
+    echo "rootgate: FAIL — $n runtime artifact(s) inside the worktree:"
+    echo "$elsewhere" | head -8 | sed 's/^/  /'
+    [ "$n" -gt 8 ] && echo "  … and $((n - 8)) more"
+    echo "  a store opened in a source directory. A test that spawns a"
+    echo "  server must pass --dir <temp>; see .claude/rule/hygiene.md."
+    fail=1
+fi
+
+[ "$fail" -eq 0 ] && echo "rootgate: PASS — worktree clean, no artifacts tracked"
 exit "$fail"

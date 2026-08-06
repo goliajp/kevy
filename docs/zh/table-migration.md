@@ -20,6 +20,18 @@
 
 对每个想让索引回答的查询，问它的维度是不是**行上的**单一值。答案通常不在行里，而在你的 id 推导或键构造代码里——这个邮件系统的"每邮箱一线程"看起来单值，读了 id 代码才发现一个线程可以住在多个邮箱里。若维度是多值的，任何列都载不动它：为每个 (owner, item) 建一条**成员行**——`member:{owner}:{item}`，把 owner、item 和排序属性作为列——让 ORDERPATH 去排它。先决定这个，才不会事后重declare整张表。
 
+**`kevy-cli lint overlap` 找的是症状，不是成因。** 成因在代码里、也留在那里——但一个多值的维度会在数据里留下机器读得到的痕迹：**同一个名字出现在不止一个 owner 之下**。把它对准你今天已有的那一族按 owner 分组的集合：
+
+```console
+$ kevy-cli lint overlap -p 6004 --prefix mailbox:
+2 owner(s) under mailbox:, 3 distinct name(s)
+1 name(s) appear under more than one owner:
+  t2  →  mailbox:1, mailbox:2
+this dimension is multi-valued, so no column can hold it — model a membership row per (owner, item) and let an ORDERPATH sort it
+```
+
+有交叠时它**非零退出**，因为那是一个**答案**而不是提示：没有哪一列能承载一个点名两个 owner 的维度，所以声明脚本应该停下。也请注意它**不做**什么——不去采样某个候选列、看它是不是单值。hash 的一个字段天生只有一个值，那种检查会永远通过。
+
 ### 2. 一旦开始供读，每个 writer 都在承重
 
 派生行由写它的人填充。切读之前，**枚举所有 writer**——每一条创建、修改、删除底层实体的代码路径——确认每一条都在写这张表所声明的行。会忘的那个 writer，就是在表存在之前写下的那个。（这正是 `TABLE.VERIFY` 的 `missing` 计数事后能抓到的类别；审计是让你不必在生产上遇见它的办法。）
@@ -71,6 +83,17 @@ shadow: 50 samples, 50 diverged (first at sample 0)
 ### 6. 索引缺谓词 ⇒ 再加一条 ORDERPATH，永远不要复制列
 
 当新查询需要一个现有形态给不出的谓词时，手工时代的反射是"把这个值再写到一个地方"——那是在重建这次迁移刚刚消灭的"两个 writer、一份真相"问题。改为在同样的列上声明**另一条 ORDERPATH**（或索引）；引擎会在同一次写里、从同一行推导出两者。
+
+**`kevy-cli lint columns <table>` 找的是形状。** 两列在几乎每一行上都带同一个值，就是一列被复制出去换第二种排序：
+
+```console
+$ kevy-cli lint columns -p 6004 ev
+ev: 43 row(s) sampled under ev:
+  created_at and sort_ts agree on 93% (40/43)
+a column copied to get a second sort order is the shape lesson 6 warns about — the answer is another ORDERPATH; ask IDX.ADVISE which one
+```
+
+与 `lint overlap` 不同，它**无论发现什么都以 0 退出**：两列合法地相同是可能的，所以这是嫌疑不是判决。也与第 1 课那条检查不同，它跑在表**声明之后**——它读的是行。`--sample N` 限定读取量，`--threshold PCT` 挪动那条线。
 
 ### 7. 开机用 `ensure`
 

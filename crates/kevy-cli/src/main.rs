@@ -113,18 +113,11 @@ fn route_subcommand(args: &[String]) -> Option<ExitCode> {
     if !args.is_empty() && args[0] == "sql" {
         return Some(sqlcmd::run_sql_cli(&args[1..]));
     }
-    // `doctor`: VERIFY every table and answer with an exit code.
-    if !args.is_empty() && args[0] == "doctor" {
-        return Some(kevy_cli::doctor::run_doctor_cli(&args[1..]));
-    }
-    // `backfill-keys`: the union of every source that can name an item.
-    if !args.is_empty() && args[0] == "backfill-keys" {
-        return Some(kevy_cli::backfill_keys::run_backfill_keys_cli(&args[1..]));
-    }
-    // `shadow`: compare the old read path against the new one, in
-    // membership AND in order, before anyone cuts over.
-    if !args.is_empty() && args[0] == "shadow" {
-        return Some(kevy_cli::shadow::run_shadow_cli(&args[1..]));
+    // The migration-playbook tools: doctor, shadow, lint, backfill-keys.
+    // They route together because they are one family — read, report,
+    // move nothing — and the dispatch lives next to them.
+    if let Some(code) = kevy_cli::route_tool(args) {
+        return Some(code);
     }
     // Migration subcommands (TCP, host/port flags inline).
     if !args.is_empty() && (args[0] == "export" || args[0] == "import") {
