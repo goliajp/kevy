@@ -24,9 +24,14 @@ use crate::os;
 use crate::stats::Stats;
 
 /// Mappings retained for reuse instead of unmapping, process-wide.
-/// Thirty-two bounds idle retention to a few MB total; every shard's
-/// reclaim tick drains it, so retention beyond a tick needs sustained
-/// traffic — which is exactly when it is earning its keep.
+/// Thirty-two is a measured ceiling, not a guess at demand: connection
+/// teardown would park ~100 buffers if the slots existed, but widening
+/// to 128 let dead entries of *distinct* lengths (which exact-length
+/// matching can never serve again) pile up through the aging window,
+/// and one B6 leg answered with an RSS peak of 883 MB against glibc's
+/// 818 — worse than no allocator. Fewer slots forfeit part of a burst;
+/// surplus slots hoard corpses. The burst loss is bounded and the
+/// hoard is not, so the small number wins.
 pub(crate) const POOL_SLOTS: usize = 32;
 
 /// Bytes currently parked in retention pools, process-wide — reported
@@ -104,10 +109,19 @@ fn pool_take(mapped: usize) -> Option<NonNull<u8>> {
     })
 }
 
-/// Park a mapping; refuses when full (the caller unmaps).
+/// Largest mapping the pool will retain. The pool exists for the reply
+/// and dispatch buffers' 36 KB–600 KB growth ladder (~17k births a
+/// second); anything bigger churns on the cadence of a table resize —
+/// the B6 probe counted exactly one such event, a 64 MiB mapping, per
+/// whole run. Parking a giant buys one mmap and prices tens of MB of
+/// hysteresis-term retention for the whole aging window: a bad trade
+/// at any measured frequency, so it passes straight through to munmap.
+const POOL_MAX_LEN: usize = 1 << 20;
+
+/// Park a mapping; refuses when full or oversized (the caller unmaps).
 fn pool_park(ptr: NonNull<u8>, mapped: usize) -> bool {
     with_pool(|p| {
-        if p.len as usize == POOL_SLOTS {
+        if p.len as usize == POOL_SLOTS || mapped > POOL_MAX_LEN {
             return false;
         }
         p.entries[p.len as usize] = (ptr.as_ptr() as usize, mapped, p.generation);
@@ -213,6 +227,56 @@ pub fn large_stats() -> Stats {
         hysteresis: POOLED.load(Relaxed),
         large_count: counters::COUNT.load(Relaxed),
         ..Stats::default()
+    }
+}
+
+/// How many pool slots hold exactly `mapped` bytes right now. Tests
+/// key on lengths nobody else allocates, which makes this exact even
+/// while parallel tests churn the shared pool.
+#[cfg(test)]
+fn parked_count(mapped: usize) -> usize {
+    with_pool(|p| (0..p.len as usize).filter(|&i| p.entries[i].1 == mapped).count())
+}
+
+#[cfg(test)]
+mod pool_tests {
+    use super::*;
+
+    /// What the pub/sub and B6 probes bought (pacing round 3): a
+    /// teardown-scale burst of one length parks whole and serves the
+    /// next wave of births, and an oversized mapping is never parked at
+    /// all. Everything moves through the public alloc/dealloc lifecycle
+    /// so the accounting identity holds at every step even under
+    /// parallel tests.
+    #[test]
+    fn the_pool_holds_a_teardown_burst_and_refuses_any_giant() {
+        let size = crate::class::MAX_SMALL + 98_765;
+        let mapped = os::round_up(size, os::PAGE);
+        let blocks: Vec<NonNull<u8>> =
+            (0..8).map(|_| alloc(size, 8).expect("direct mapping")).collect();
+        for p in blocks {
+            // SAFETY: allocated just above with exactly this size.
+            unsafe { dealloc(p, size) };
+        }
+        assert_eq!(parked_count(mapped), 8, "the burst should park whole");
+        // The parked ones actually serve the next births of this length.
+        let again: Vec<NonNull<u8>> =
+            (0..8).map(|_| alloc(size, 8).expect("retake")).collect();
+        assert_eq!(parked_count(mapped), 0, "a parked mapping was not re-taken");
+        for p in again {
+            // SAFETY: allocated just above with exactly this size.
+            unsafe { dealloc(p, size) };
+        }
+
+        let giant = POOL_MAX_LEN + 1;
+        let p = alloc(giant, 8).expect("map 1 MiB + a byte");
+        // SAFETY: allocated just above with exactly this size.
+        unsafe { dealloc(p, giant) };
+        assert_eq!(
+            parked_count(os::round_up(giant, os::PAGE)),
+            0,
+            "an oversized mapping must never park"
+        );
     }
 }
 
