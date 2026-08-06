@@ -65,13 +65,19 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20</code></pre></figure>
     COLUMN name i64|f64|str [COLUMN ...]
     [INDEX col range|unique [VALUES col ...]] ...
     [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] ...
-    [WINDOW col SPAN n BUCKET n]   # スライディング窓（本ページは未訳、英語版参照）
+    [WINDOW col SPAN n BUCKET n]   # スライディング窓——下記参照
     [AUTODECLARE n]    # エンジンに最大 n 本の経路を足させる——下記参照
 TABLE.ENSURE ...       # TABLE.DECLARE の起動時イディオム——下記参照
 TABLE.REPLACE ...      # 明示の drop + declare + 再構築
 TABLE.DROP name        # drops the table + its compiled indexes; 1|0
 TABLE.LIST             # name/prefix/pk + column/index/orderpath counts
 TABLE.VERIFY name      # component fsck + a bounded column spot check</code></pre></figure>
+<h2 id="スライディング窓">スライディング窓</h2>
+<p><code>WINDOW &lt;col&gt; SPAN &lt;n&gt; BUCKET &lt;n&gt;</code> は、<code>i64</code> の列の上にスライディングなホット窓を宣言します。<code>SPAN</code> と <code>BUCKET</code> は<b>その列自身の単位での</b>ただの整数です——エンジンは時間の基準を一切仮定しないので、その列は epoch 秒でも epoch ミリ秒でも連番でも、データの古さに対して単調なものなら何でも構いません。境界は<b>バケット単位</b>で進み、追い出されたバケットが一つの冷たいセグメントになります。</p>
+<p>宣言時の拒否が二つ、どちらも名指しです：</p>
+<ul><li>窓の列は宣言済みの <code>i64</code> 列でなければならない；</li><li>その列には、木の末尾が <code>max(col)</code> をただで答えられるアクセス経路が要る——その列の単一列 <code>INDEX &lt;col&gt;</code> か、<b>先頭の列</b>がそれで昇順の <code>ORDERPATH</code> か。無ければ宣言は拒まれます（<code>WINDOW needs an access path on '&lt;col&gt;'</code>）——これは同時に、どの窓付きテーブルも同じ経路で窓をまたぐ範囲クエリを供せることを保証します。</li></ul>
+<p><b>今スライドしているのは、窓の列の単一列 INDEX です。</b> 境界が（バケット単位で）進むにつれ、索引木の窓外の接頭部は <code>segs-&lt;shard&gt;/</code> の下の不変な冷セグメントファイルへ移ります——索引のメモリは縮み、しかし素の <code>RANGE</code> / <code>COUNT</code> はホットと冷の上で、<b>窓を張っていない索引とバイト単位で同一に</b>答え続けます（冷たい行の書き換え・削除・復活を含みます。意味的同値の e2e がこれを固定しています）。冷たい索引セグメントは<b>派生した溢れであって、真実ではありません</b>：行はホットなキースペースの普通のハッシュのままで、再起動時にはただ再構築されて再びスライドします。</p>
+<p>縁が二つ、どちらも明示です：句を伴うクエリ（<code>FILTER</code> / <code>SORT</code> / <code>DISTINCT</code> / <code>FACET</code>）は、冷セグメントを持つ索引の上では、句付きの冷経路が入るまで<b>名指しで拒みます</b>——黙って不完全な答えを返すことは決してありません。そして<b>窓の列が先頭の <code>ORDERPATH</code> は宣言を満たしますが、まだスライドしません</b>。メモリだけの配備（データディレクトリなし）は宣言を受け入れ、ただ全部ホットのままになります。</p>
 <h2 id="起動パターンensure">起動パターン：<code>ensure</code></h2>
 <p>起動時の宣言こそが定常状態です——スキーマはコードに住み、プロセスが立ち上がるたびにそれを表明します。<code>TABLE.ENSURE</code>（組み込みでは <code>Store::table_ensure</code>、返り値は <code>TableEnsure::{Created, Unchanged}</code>）は <code>TABLE.DECLARE</code> と同じ文法を取る冪等形です。</p>
 <ul><li><b>テーブルがない</b> → 宣言して構築：<code>Created</code>。</li><li><b>同一の spec</b> → 何もしない成功：<code>Unchanged</code>（ワイヤ上は <code>+UNCHANGED</code>）。2 回目以降の起動はすべてこの経路です。</li><li><b>異なる spec</b> → <b>どこが変わったかを名指しする拒否</b>（<code>COLUMNS</code> / <code>INDEXES</code> / <code>ORDERPATHS</code> / <code>PREFIX</code> / <code>PK</code>）——黙った再構築は決して起きません。再構築はプレフィックス領域全体の埋め戻しであり、それほど高価なものは名前で要求されるべきです。その要求が <code>TABLE.REPLACE</code>（組み込みでは <code>table_replace</code>）です——明示の drop + declare + 再構築で、旧テーブルを落とす<b>前に</b>新しい spec を検証するので、壊れた置き換えは旧テーブルを生かしたままにします。</li></ul>
@@ -151,7 +157,7 @@ store.table_drop(b"user");</code></pre></figure>
 <p>書き込みコストは標準的なインデックス税です。コンパイルされたインデックス 1 本につき、合致する書き込みごとにフィールド読み取り 1 回とセグメント更新 1 回。空のカタログのコストは、取られない分岐 1 つです。</p>
 <h2 id="参照">参照</h2>
 <ul><li><a href="../indexes/">indexes.md</a>——テーブルのコンパイル先であるインデックスエンジン。</li><li><a href="../tiering/">tiering.md</a>——一緒に設計されたもう半分。インデックスはホット、行はコールド。</li><li><a href="../rds-workloads/">rds-workloads.md</a>——SQL 語彙の完全な対応表(何がコンパイルでき、何がレシピで、何が拒否されるか)。</li><li><a href="../cookbook/">cookbook.md</a>——複合順序とスキーマ移植のレシピ。</li><li><a href="../views/">views.md</a>——同じインデックスの上の、名前つきの合成。</li><li><a href="../table-migration/">table-migration.md</a>——手書きインデックスからの移行、8 つの教訓。</li></ul></main>
-  <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#宣言モデル">宣言モデル</a></li><li class="l2"><a href="#文法">文法</a></li><li class="l2"><a href="#起動パターンensure">起動パターン：ensure</a></li><li class="l2"><a href="#複合-orderpath-の意味論">複合 ORDERPATH の意味論</a></li><li class="l2"><a href="#テーブルをクエリする">テーブルをクエリする</a></li><li class="l2"><a href="#autodeclareあなたが書かなかった経路">AUTODECLARE：あなたが書かなかった経路</a></li><li class="l2"><a href="#null一意性そして何が強制されるか">NULL、一意性、そして何が強制されるか</a></li><li class="l2"><a href="#それがではないもの">それが「ではない」もの</a></li><li class="l2"><a href="#kevy-sqlスキーマは送るのではなくコンパイルする">kevy-sql——スキーマは送るのではなく、コンパイルする</a></li><li class="l2"><a href="#組み込み">組み込み</a></li><li class="l2"><a href="#性能">性能</a></li><li class="l2"><a href="#参照">参照</a></li></ul></aside>
+  <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#宣言モデル">宣言モデル</a></li><li class="l2"><a href="#文法">文法</a></li><li class="l2"><a href="#スライディング窓">スライディング窓</a></li><li class="l2"><a href="#起動パターンensure">起動パターン：ensure</a></li><li class="l2"><a href="#複合-orderpath-の意味論">複合 ORDERPATH の意味論</a></li><li class="l2"><a href="#テーブルをクエリする">テーブルをクエリする</a></li><li class="l2"><a href="#autodeclareあなたが書かなかった経路">AUTODECLARE：あなたが書かなかった経路</a></li><li class="l2"><a href="#null一意性そして何が強制されるか">NULL、一意性、そして何が強制されるか</a></li><li class="l2"><a href="#それがではないもの">それが「ではない」もの</a></li><li class="l2"><a href="#kevy-sqlスキーマは送るのではなくコンパイルする">kevy-sql——スキーマは送るのではなく、コンパイルする</a></li><li class="l2"><a href="#組み込み">組み込み</a></li><li class="l2"><a href="#性能">性能</a></li><li class="l2"><a href="#参照">参照</a></li></ul></aside>
 </div>
 
 <script src="../../../assets/docsearch.js?v=8c03463d" defer></script>

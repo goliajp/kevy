@@ -363,6 +363,198 @@ kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 100 PREFIX reading:   # the uplink loop
 
 レシピ19の`MAXLEN`キャップとTTLを組み合わせてください。生の読み取り値はノード上で有界に保たれ、集計行は小さいまま、フィードカーソルは再起動を生き延びます——kevyそれ自体の他に可動部品ゼロの、エッジの物語の全部です。
 
+## 21. 行の純関数としての派生状態
+
+**SQL 対応：**トリガ層まるごと——`ON DELETE CASCADE`、`UNIQUE` 制約、そしてそれらを信じなくなったあとに書く突合ジョブ——[マトリクス：制約とトリガ](rds-workloads.md#制約とトリガー)。
+
+これは上のレシピ群がずっと周回していたパターンです：§2 のリンクキー、§5 の不変条件、§10 のカスケード、§12 の監査行は、同じ考えを四度当てはめたものです。**一度きちんと述べれば、カスケードも一意性もドリフト検出も同時に片づきます。** これは本番の移行から来ていて、そこへ辿り着くのに一日かかりました——節約する価値のある一日です。
+
+**考え方：**行から、そこに由来するすべてのキーへの**純関数**をひとつ書きます。キーを更新する手続きではなく、「何が存在すべきか」を**返す**関数です。
+
+```rust
+// Everything user:42 implies, computed from the row alone.
+fn derived(id: &[u8], row: &Row) -> Vec<Vec<u8>> {
+    vec![
+        key(b"email:", &row.email),          // uniqueness claim
+        key(b"dept:", &row.dept, b":users"), // membership
+    ]
+}
+```
+
+すると、あらゆる操作が差分になり、そのどれもが設計されるのではなく**落ちてきます**：
+
+| 操作 | すること | ただで付いてくるもの |
+|---|---|---|
+| **挿入** | `derived(new)` を足す | 主張とメンバーシップが一緒に現れる |
+| **更新** | `derived(new) - derived(old)` を足し、`derived(old) - derived(new)` を消す | 変更された email が**古い主張を解放する**——誰もが手で書いてしまうバグ |
+| **削除** | `derived(old)` を消す | カスケードが別のコード経路でなくなる |
+| **検証** | 全行で `derived` を再計算し、実在するものと突合 | 設計しなくて済んだドリフト検出器 |
+
+元を取るのは更新の行です。手書きのカスケードはほぼ必ず、新しい主張を足して古いものの解放を忘れます——解放は**チケットで誰も実演しない**ケースだからです。
+
+```rust
+store.atomic_all_shards(|ctx| {
+    let old = read_row(ctx, id)?;
+    let (want, had) = (derived(id, &new), derived(id, &old));
+
+    for k in want.iter().filter(|k| !had.contains(k)) {
+        if ctx.exists(&[k]) > 0 { return Err(Taken); }  // uniqueness
+        ctx.set(k, id);
+    }
+    for k in had.iter().filter(|k| !want.contains(k)) {
+        ctx.del(&[k]);                                  // release
+    }
+    write_row(ctx, id, &new)
+})
+```
+
+`Err` を返せば全体が巻き戻るので（§5）、拒否された書き込みは、行も、半分だけ適用された主張の集合も残しません。
+
+**主張か、インデックスか。** 一意性の主張は**第二の真実の源**であり、行からドリフトしえます。[セカンダリインデックス](indexes.md)は**構造上派生**であり、ドリフトしえません。`atomic_all_shards` の中からは直接引けます：
+
+```rust
+if ctx.idx_count(b"email_idx", &want, &want)? > 0 { return Err(Taken); }
+```
+
+制限が二つ、どちらも意図的です：
+
+- **`atomic_all_shards` の上だけ。** インデックスの項目は、それが指すキーのシャードに住むので、「この email を持つ行があるか」はすべてのシャードについての問いです。単一シャードの `atomic()` はロックを一つしか持たず、自分の取り分についてしか答えられません——キースペースの 1/N しか見ない一意性検査はほぼ常に「一意」と報告するので、脚注付きで提供するのではなく、**提供しません**。
+- **インデックスの読みは、そのトランザクション自身の書き込みを見ません。** 保守はコミット時に走ります。二行を挿入するクロージャは、その二行同士を自分で比べる必要があります。
+
+**検証。** `derived` が関数である以上、**検査器はその関数そのもの**です——同じものを `reconcile` に渡してください：
+
+```rust
+let report = store.snapshot().reconcile(
+    b"user:",                    // the rows
+    &[b"email:", b"dept:"],      // where derived keys live
+    |key, row| derived(key, row),
+);
+if !report.is_clean() {
+    warn!("{} missing, {} orphaned", report.missing_count, report.orphaned_count);
+}
+```
+
+これは**両方向**に突合します。そこが自分で書かずに済ませる価値のある部分です。**欠けたキー**は失われた派生状態ですが、**孤児**——行が消えたのに残っている主張——こそ、半分だけ適用された更新が残すものであり、**あとの挿入を黙って塞ぐ**故障です。欠落だけを探す検査器は、まさにその故障のあいだ「クリーン」と報告します。
+
+これはスナップショット（`store.snapshot()`）に対して、すべてのシャードロックの下で凍結して走るので、並行する書き込みをドリフトと取り違えません。**ただしそれは、書き込み自体が原子的だった場合に限ります**：行とその主張はひとつの `atomic_all_shards` ブロックに入っていなければならず、さもなければ、見つけるべき半適用状態が本当に存在します。突合と原子的書き込みは、同じ保証を両端から見たものです。
+
+起動時に走らせても、定期でも、書き込みを信じきったあとは走らせなくてもかまいません——でも**走らせてください**。「自分が信じている不変条件が、実際に持っている不変条件だ」と言えるものは、これしかないからです。
+
+## 22. PG/MySQL のスキーマを移植する
+
+**SQL 対応：**スキーマファイルそのもの——`CREATE TABLE`、`CREATE INDEX`、`CREATE VIEW`——[マトリクス：セカンダリインデックスの DDL](rds-workloads.md#セカンダリインデックスのddl)。
+
+レシピ 1–8 が手でやることのすべてを、**すでに手元にある** SQL からコンパイルします。`kevy-sql`（そして `kevy-cli sql` という顔）は**宣言時のコンパイラ**です：移行ツールのようにスキーマを**一度だけ**読み、明示的な `TABLE.DECLARE` / `VIEW.CREATE` コマンドと*クエリカード*——`$N` の枠を残した既製の `IDX.QUERY` テンプレート——を出します。サーバの中でクエリごとに走るものは**何もありません**。実行時の場当たり SQL は、エンジン自身が拒み続けます（Law 3）。
+
+対象のスキーマ——[docs/examples/shop.sql](https://github.com/goliajp/kevy/blob/main/docs/examples/shop.sql)、実在の users/orders/order_items を削ったもの：
+
+```sql
+CREATE TABLE users (
+  id     bigserial PRIMARY KEY,
+  email  text,
+  name   text,
+  plan   text
+);
+CREATE UNIQUE INDEX ON users (email);
+
+CREATE TABLE orders (
+  id          bigserial PRIMARY KEY,
+  user_id     bigint,
+  status      text,
+  total       numeric(10,2),
+  created_at  bigint       -- epoch seconds, app-encoded
+);
+-- INCLUDE = PG covering columns -> kevy stored VALUES (residual FILTER/SORT).
+CREATE INDEX ON orders (status) INCLUDE (total, created_at);
+-- Multi-column -> a composite ORDERPATH (the (user_id, created_at DESC) walk).
+CREATE INDEX ON orders (user_id, created_at DESC);
+
+CREATE TABLE order_items (
+  id        bigserial PRIMARY KEY,
+  order_id  bigint,
+  sku       text,
+  qty       int
+);
+CREATE INDEX ON order_items (order_id);
+
+CREATE VIEW paid_orders AS
+  SELECT * FROM orders WHERE status = 'paid';
+
+CREATE VIEW recent_orders_by_user AS
+  SELECT id, status, total, created_at FROM orders
+  WHERE user_id = $1
+  ORDER BY created_at DESC
+  LIMIT 20;
+```
+
+コンパイルし、宣言をサーバに適用します：
+
+```console
+kevy-cli sql compile docs/examples/shop.sql
+kevy-cli sql compile docs/examples/shop.sql --apply --url 127.0.0.1:6004
+```
+
+コンパイル結果のスクリプト（そのまま）。各テーブルは自分のインデックスを**ひとつの** `TABLE.DECLARE` に畳み込みます。定数のビューはエンジンのビューに、パラメータ付きのビューはクエリカードになります。粗い型の対応づけは、どれも notes で**正直に名指し**されます（kevy の列は `i64|f64|str` だけ——タイムスタンプはアプリ側の符号化で、`serial` は id を割り当ててくれません）：
+
+```text
+TABLE.DECLARE users PREFIX users: PK id COLUMN id i64 COLUMN email str COLUMN name str COLUMN plan str INDEX email unique
+TABLE.DECLARE orders PREFIX orders: PK id COLUMN id i64 COLUMN user_id i64 COLUMN status str COLUMN total f64 COLUMN created_at i64 INDEX status range VALUES total created_at ORDERPATH user_id_created_at ON user_id THEN created_at DESC
+TABLE.DECLARE order_items PREFIX order_items: PK id COLUMN id i64 COLUMN order_id i64 COLUMN sku str COLUMN qty i64 INDEX order_id range
+VIEW.CREATE paid_orders QUERY orders.status EQ paid ORDER BY orders.status
+
+# ---- query card: recent_orders_by_user ----
+# runtime template — substitute the $N slots and send as-is:
+#   $1 = user_id (i64)
+#   IDX.QUERY orders.user_id_created_at WHERE user_id EQ $1 LIMIT 20 FIELDS id status total created_at
+
+# notes:
+#   - users.id: bigserial → i64, but ids do NOT auto-increment — allocate them app-side (INCR block, cookbook §3)
+#   - orders.total: numeric → f64 — fixed-point precision becomes binary float; keep money as integer cents if exactness matters
+#   - view paid_orders: read with VIEW.QUERY paid_orders, then hydrate rows with HMGET <key> id user_id status total created_at
+```
+
+行はテーブル接頭辞の下の普通のハッシュで（レシピ 1）、コンパイルされた経路はすぐに供せます——`$1` の枠に実際の引数を入れれば、カードはそのまま走ります：
+
+```console
+kevy-cli -p 6004 HSET users:1 id 1 email ada@example.com name Ada plan pro
+kevy-cli -p 6004 HSET orders:1 id 1 user_id 1 status paid total 19.5 created_at 1700000100
+kevy-cli -p 6004 HSET orders:2 id 2 user_id 1 status pending total 5 created_at 1700000200
+kevy-cli -p 6004 HSET orders:3 id 3 user_id 2 status paid total 8 created_at 1700000300
+kevy-cli -p 6004 HSET order_items:1 id 1 order_id 1 sku sku-7 qty 2
+kevy-cli -p 6004 IDX.QUERY users.email EQ ada@example.com
+kevy-cli -p 6004 IDX.QUERY orders.user_id_created_at WHERE user_id EQ 1 LIMIT 20 FIELDS id status total created_at
+kevy-cli -p 6004 VIEW.QUERY paid_orders LIMIT 10
+kevy-cli -p 6004 IDX.QUERY orders.status EQ paid FILTER total RANGE 10 inf
+kevy-cli -p 6004 IDX.QUERY order_items.order_id EQ 1 FIELDS sku qty
+kevy-cli -p 6004 TABLE.LIST
+```
+
+- カードのクエリは `SELECT id, status, total, created_at FROM orders WHERE user_id = 1 ORDER BY created_at DESC LIMIT 20`——複合の走査が供し、新しい順、一跳で列を補います。
+- `FILTER total RANGE 10 inf` の行は `INCLUDE` された列に対する**残余述語**です——`WHERE status = 'paid' AND total >= 10` を、**行に触れずに**。
+- `order_items.order_id EQ 1` が JOIN を置き換える FK 参照です（レシピ 2）：クエリ二本、クエリ時の join なし。
+
+**拒否が教えます。** コンパイラはクエリ時の評価を要するものをすべて拒みます——**名指しで**、行と列を添えて、それをモデル化するレシピを指して。JOIN なら：
+
+```sql
+CREATE VIEW order_emails AS
+  SELECT id, email FROM orders
+  JOIN users ON users.id = orders.user_id;
+```
+
+```text
+$ kevy-cli sql compile join.sql
+kevy-cli sql: join.sql: line 6, col 3: JOIN is not compilable — kevy
+refuses query-time joins (Law 3); model the lookup with an indexed FK
+column (IDX.QUERY t.fk EQ …) or app-side assembly (cookbook §2)
+```
+
+WHERE が宣言済みのどのアクセス経路にも合わないビューは、**追加すべき宣言を名指しして**エラーになります（`… matches no declared access path — add: CREATE INDEX ON orders (status, total)`）。そして実行時の場当たり SQL には、そもそも扉がありませんでした：
+
+```text
+$ kevy-cli -p 6004 SQL SELECT * FROM users
+(error) ERR unknown command 'SQL'
+```
+
 ## レシピ索引
 
 レシピ↔それが置き換えるSQL構文↔意味論と限界を明記する[rds-workloads.md](rds-workloads.md)のマトリクス行、の対応表です。
@@ -389,3 +581,5 @@ kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 100 PREFIX reading:   # the uplink loop
 | 18 | RAGハイブリッド検索 | tsvector＋pgvector、融合 | [SELECT](../rds-workloads.md#select) |
 | 19 | センサーキャッシュ | アップサートテーブル＋鮮度cron | [運用上の差分](../rds-workloads.md#sizing-and-operational-deltas) |
 | 20 | エッジ集計 | 更新ごとの`GROUP BY`＋ETLアップリンク | [GROUP BYと集計](../rds-workloads.md#group-by-and-aggregates) |
+| 21 | 行の関数としての派生状態 | トリガ層まるごと：カスケード、`UNIQUE`、突合 | [制約とトリガー](../rds-workloads.md#constraints-and-triggers) |
+| 22 | PG/MySQL スキーマの移植 | `CREATE TABLE` / `CREATE INDEX` / `CREATE VIEW`、コンパイル済み | [セカンダリインデックスの DDL](../rds-workloads.md#secondary-index-ddl) |

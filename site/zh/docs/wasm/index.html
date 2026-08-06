@@ -112,13 +112,15 @@ let v = store.get(b"hello")?;   // Some(b"world".to_vec())
 let _stats = store.tick();</code></pre></figure>
 <p>错误是 <code>KevyResult</code> / <code>KevyError</code>，argv 风格的写方法接受借用切片，与 native 完全一致——见 <a href="https://docs.rs/kevy-embedded"><code>kevy-embedded</code></a> 文档。</p>
 <p>Cloudflare Workers 之类的边缘 isolate 照浏览器配方：每 isolate 一个实例，<code>Date.now()</code> 当时钟源，<code>tick()</code> 惰性调或挂 scheduled handler。要跨 isolate 重启的耐久性，就在你的 handler 里把写镜像到平台的持久存储（AOF 泵会把帧交给你）；isolate 内部，kevy 是热的内存层。</p>
+<h2 id="在-tauri-应用里">在 Tauri 应用里</h2>
+<p>在桌面 / 移动应用里跑 kevy？Tauri 的后端是 Rust，所以 kevy 可以<b>原生地</b>嵌在后端（一份共享的 store，持久，跨窗口），而不是以 wasm 的形式嵌在 webview 里。后端 store 与 wasm 之间怎么选，见 <a href="../../../docs/tauri/">docs/tauri.md</a>。</p>
 <h2 id="faq">FAQ</h2>
 <p><b>完整命令面在浏览器里都可用吗？</b>npm 包暴露的是 KV + TTL + 计数器 + 扫描 + pub/sub 这一刀——浏览器 store 需要的那部分，刻意保持小巧（wasm 模块未压缩约 425 KB）。wasm target 上的 Rust API 则暴露你编译进来的 <code>kevy-embedded</code> feature 的全部能力。</p>
 <p><b>持久化的数据可移植吗？</b>可以——它就是标准 kevy AOF。浏览器 → native 和 native → 浏览器都能重放。格式契约见 <a href="../persistence/">persistence.md</a>。</p>
 <p><b>共享内存线程（<code>+atomics</code>）呢？</b>随包模块是单线程的，与所有浏览器类 target 匹配。宿主提供线程的地方引擎是线程安全的，但受支持的路径仍是手动 <code>tick()</code> 模型。</p>
 <p><b>为什么不用 SharedWorker 而用 BroadcastChannel？</b>单一 owner 的 SharedWorker 拓扑理论上更干净，但可用面更窄（Android Chrome 上明显缺席）；BroadcastChannel 桥以同一实测延迟档的兼容性胜出。</p>
 <p><b>为什么不用 wasm-bindgen？</b>kevy 的服务器、embedded、浏览器三面都是零第三方依赖。绑定生成器是一个构建期依赖，还会拥有边界布局的所有权；手写 ABI 让契约保持显式、带版本、可审计。</p></main>
-  <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#快速开始浏览器">快速开始（浏览器）</a></li><li class="l2"><a href="#loader-api">Loader API</a></li><li class="l2"><a href="#绑定的工作方式没有-wasm-bindgen">绑定的工作方式（没有 wasm-bindgen）</a></li><li class="l2"><a href="#持久化一条真日志与-native-kevy-字节同格">持久化：一条真日志，与 native kevy 字节同格</a></li><li class="l2"><a href="#跨-tab-pubsub">跨 tab pub/sub</a></li><li class="l2"><a href="#时钟tick-与-ttl">时钟、tick 与 TTL</a></li><li class="l2"><a href="#性能">性能</a></li><li class="l2"><a href="#rust-面wasi边缘运行时直接嵌入">Rust 面：WASI、边缘运行时、直接嵌入</a></li><li class="l2"><a href="#faq">FAQ</a></li></ul></aside>
+  <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#快速开始浏览器">快速开始（浏览器）</a></li><li class="l2"><a href="#loader-api">Loader API</a></li><li class="l2"><a href="#绑定的工作方式没有-wasm-bindgen">绑定的工作方式（没有 wasm-bindgen）</a></li><li class="l2"><a href="#持久化一条真日志与-native-kevy-字节同格">持久化：一条真日志，与 native kevy 字节同格</a></li><li class="l2"><a href="#跨-tab-pubsub">跨 tab pub/sub</a></li><li class="l2"><a href="#时钟tick-与-ttl">时钟、tick 与 TTL</a></li><li class="l2"><a href="#性能">性能</a></li><li class="l2"><a href="#rust-面wasi边缘运行时直接嵌入">Rust 面：WASI、边缘运行时、直接嵌入</a></li><li class="l2"><a href="#在-tauri-应用里">在 Tauri 应用里</a></li><li class="l2"><a href="#faq">FAQ</a></li></ul></aside>
 </div>
 
 <script src="../../../assets/docsearch.js?v=8c03463d" defer></script>

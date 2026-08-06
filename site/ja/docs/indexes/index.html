@@ -57,6 +57,12 @@ IDX.QUERY idx_age RANGE 18 30 LIMIT 100 FIELDS name</code></pre></figure>
 <p><code>unique</code>インデックスは<b>書き込みをブロックしません</b>。書き込み時にグローバルな一意性を強制すれば、シャードをまたぐ書き込みを直列化することになるからです。代わりに、重複は数えられ（VERIFY/LISTの<code>duplicates</code>）、<code>EQ</code>読み出しが複数ヒットする形で可視になります。硬い一意性が必要なら、クラスタモードで<code>{hashtag}</code>プレフィックスによりドメインを1シャードに固定するか、<code>MULTI</code>/<code>WATCH</code>のもとでcheck-then-writeしてください。</p>
 <h2 id="組み込み">組み込み</h2>
 <p>同じエンジンを型付きAPIで使います。<code>idx_create / idx_drop / idx_query / idx_count / idx_stats / idx_list</code>（値は<code>IndexValue</code>、カーソルは<code>IndexCursor</code>）。<code>FIELDS</code>のhydrationはありません——プロセス内にいるのですから、フィールドは<code>hget</code>で読んでください。<code>idx_create</code>は同期的にビルドし、インデックスが提供可能になった時点で返ります。</p>
+<h2 id="インデックスの予算">インデックスの予算</h2>
+<p><b>インデックスは全体で 64 本。</b> 接頭辞ごとでもシャードごとでもなく、ストア全体で 64 本です（<code>MAX_INDEXES</code>、<code>kevy-index/src/catalog.rs</code>）。</p>
+<p>素直に読むと、この数字はまともなスキーマを軒並み止めます。58 のテーブルに対して 64 本は不可能に見え、移行はその算術で行き詰まりかねません——<b>その算術のほうが間違っている</b>と気づく前に。</p>
+<p><b>インデックスは希少な全体予算であり、ほとんどのアクセス経路はそれを消費しません。</b> 親子のたどりはリンクキーと zset の仕事です——<code>SMEMBERS order:1001:items</code> はインデックス枠を一つも使いませんし、自分で保守する順序付き zset インデックスも同様です（<a href="../cookbook/#2-1対多多対多">cookbook §2</a>）。インデックス枠は、リンクキーでは表せないものにだけ使ってください：</p>
+<ul><li><b>全体にわたる値の範囲</b>——「一万を超える請求書すべて」を全行から</li><li><b>テキスト検索</b>——<code>KIND text</code></li><li><b>集約</b>——<code>KIND agg</code>、書き込み時の GROUP BY</li></ul>
+<p>「テーブルごとに一本」と読めば 58 本要るスキーマも、「全体のクエリ形ごとに一本」と読めばたいてい 20 本を切ります。64 に近づいているなら、問うべきは——<b>そのうち何本が、インデックスの衣を着た親子のたどりなのか</b>です。</p>
 <h2 id="整合性とコストモデル">整合性とコストモデル</h2>
 <ul><li>書き込みとそのインデックス更新は、所有シャードの内側でアトミックです（単一のリアクタースレッド / シャードロック）。シャードをまたぐクエリは、グローバルスナップショットなしにシャードごとにマージされます（SCANクラス。<code>DBSIZE</code>と同じです）。</li><li><b>空のカタログのコストは、書き込みごとに1回の分岐しない分岐</b>です（Relaxedなアトミックロード1回）。インデックスが宣言されている場合、インデックス対象ドメインへの書き込みは、マッチするインデックス1つにつき、ハッシュフィールド読み出し1回とB木更新1回を支払います。</li><li>インデックス1つあたりのメモリは概算で<code>rows × (value_width + avg_key_len + 48)</code>バイトです（定数はエントリごとの構造オーバーヘッド）。<code>IDX.LIST</code>が実測バイト数を報告し、<code>bench/idxgate.sh</code>がこの式をゲートします。</li></ul>
 <h2 id="集約kindkind-agg書き込み時group-by">集約kind（<code>KIND agg</code>）——書き込み時GROUP BY</h2>
@@ -67,7 +73,7 @@ IDX.QUERY ord_amt GROUPS BY sum LIMIT 100         → ranked [group, count, sum,
 <p>HAVINGなし、集約式なし、近似スケッチなし——それはクエリ言語への坂道です。<code>GROUPS</code>の結果はアプリ側でフィルタしてください。</p>
 <p>組み込みでは<code>idx_create_agg(name, prefix, field, ty, group_by)</code> / <code>idx_group(name, g)</code> / <code>idx_groups(name, by, limit)</code>です。</p>
 <p>メモリは概算で<code>groups × (gkey+64) + distinct_values × 18 + rows × (key+10)</code>です（定数は実測RSSに対して較正済み）。GROUP p99 &lt; 1ms @ 1M×10kグループ、GROUPSのtop-100 &lt; 5ms、書き込み税 &lt; 10%とあわせて、<code>bench/agggate.sh</code>が実RSSに対してゲートします。</p></main>
-  <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#宣言する">宣言する</a></li><li class="l2"><a href="#クエリする">クエリする</a></li><li class="l2"><a href="#一意性はフェンスであってロックではない">一意性はフェンスであって、ロックではない</a></li><li class="l2"><a href="#組み込み">組み込み</a></li><li class="l2"><a href="#整合性とコストモデル">整合性とコストモデル</a></li><li class="l2"><a href="#集約kindkind-agg書き込み時group-by">集約kind（KIND agg）——書き込み時GROUP BY</a></li></ul></aside>
+  <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#宣言する">宣言する</a></li><li class="l2"><a href="#クエリする">クエリする</a></li><li class="l2"><a href="#一意性はフェンスであってロックではない">一意性はフェンスであって、ロックではない</a></li><li class="l2"><a href="#組み込み">組み込み</a></li><li class="l2"><a href="#インデックスの予算">インデックスの予算</a></li><li class="l2"><a href="#整合性とコストモデル">整合性とコストモデル</a></li><li class="l2"><a href="#集約kindkind-agg書き込み時group-by">集約kind（KIND agg）——書き込み時GROUP BY</a></li></ul></aside>
 </div>
 
 <script src="../../../assets/docsearch.js?v=8c03463d" defer></script>

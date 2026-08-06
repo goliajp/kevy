@@ -53,6 +53,16 @@ VIEW.CREATE ready_jobs
     ORDER BY j_pri DESC
     MODE materialized TOPK 100
 VIEW.QUERY ready_jobs LIMIT 10</code></pre></figure>
+<h2 id="先问一句你真的需要它吗">先问一句：你真的需要它吗</h2>
+<p>上面那个例子是刻意挑的，而它恰好也是<b>最常见的、并不需要 view</b> 的形状。<code>WHERE state = 'ready' AND pri BETWEEN 0 AND 100 ORDER BY pri DESC</code> 是一个等值前缀后面跟着下一列上的一个范围——这正是一条复合 <code>ORDERPATH</code> 所表示的、单次连续的走查（<a href="../tables/#复合-orderpath-语义">tables.md</a>）：</p>
+<figure class="code"><pre><code class="lang-console">kevy-cli TABLE.DECLARE job PREFIX job: PK id \
+    COLUMN id str COLUMN state str COLUMN pri i64 \
+    ORDERPATH ready_by_pri ON state THEN pri DESC
+kevy-cli IDX.QUERY job.ready_by_pri WHERE state EQ ready RANGE pri 0 100 LIMIT 10</code></pre></figure>
+<p>一棵 B 树，没有第二个结构要维护，没有重建要校验。第一个真正声明了表的消费者，用这种方式覆盖了它全部十四条列表轴，并且声明了<b>零</b>个 view——那是预期结果，不是缺口。</p>
+<p>当形状是有序复合键<b>做不到</b>的那一类时，才伸手去拿 view：</p>
+<ul><li>跨独立索引的 <b><code>OR</code></b>——一条有序键只有一个领头列，所以并集不是一次走查。</li><li><b><code>DIFF</code></b>——集合相减，左减右。</li><li><b>两个范围</b>，落在不同列上。复合键可以在<b>尾部</b>的一列上做范围，且其后不能再跟任何东西；两个开放维度不是一个连续区间。</li><li>一个<b>有界的、永远温着的答案</b>：<code>MODE materialized TOPK n</code> 把顶部那一片维护在写路径上，于是无论谓词最后有多挑剔，读都是固定成本。</li></ul>
+<p>如果你的形状不在这张单子上，那就声明那条 <code>ORDERPATH</code>，然后停手。<b>view 在构造上就是两者中更贵的那个</b>——它组合的是本来就得存在的索引，而物化一个 view 还会给写路径加活、并造出一个之后要由 <code>VIEW.VERIFY</code> 审计的结构。</p>
 <h2 id="快速上手服务器">快速上手（服务器）</h2>
 <p>视图要组合的一切都必须先存在——叶子和 ORDER BY 索引，都是在同一个前缀域上声明过的 <code>IDX.*</code> 索引（<a href="../indexes/">indexes.md</a>）：</p>
 <figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 IDX.CREATE j_pri ON PREFIX job: FIELD pri TYPE i64 KIND range
@@ -129,7 +139,7 @@ fn main() -&gt; kevy_embedded::KevyResult&lt;()&gt; {
 <p>逐成员内存 ≈ <code>order_value_width + key_len + 48</code> 字节，由 <code>VIEW.VERIFY</code> 实时报告。</p>
 <h2 id="另见">另见</h2>
 <ul><li><a href="../indexes/">indexes.md</a>——视图所组合的那些索引（声明、backfill，以及视图继承下来的一致性信封）。</li><li><a href="../rds-workloads/">rds-workloads.md</a>——视图在 SQL 到 kevy 映射里所处的位置。</li><li><a href="../commands/">verb-reference.md</a>——每一种 <code>VIEW.*</code> 形态的生成式语法参考。</li><li><a href="../cookbook/">cookbook.md</a>——放在上下文里的视图菜谱。</li></ul></main>
-  <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#快速上手服务器">快速上手（服务器）</a></li><li class="l2"><a href="#三条结构规则">三条结构规则</a></li><li class="l2"><a href="#模式与成本模型">模式与成本模型</a></li><li class="l3"><a href="#diff声明式的反连接">DIFF：声明式的反连接</a></li><li class="l2"><a href="#一致性">一致性</a></li><li class="l2"><a href="#embedded">Embedded</a></li><li class="l2"><a href="#性能">性能</a></li><li class="l2"><a href="#另见">另见</a></li></ul></aside>
+  <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#先问一句你真的需要它吗">先问一句：你真的需要它吗</a></li><li class="l2"><a href="#快速上手服务器">快速上手（服务器）</a></li><li class="l2"><a href="#三条结构规则">三条结构规则</a></li><li class="l2"><a href="#模式与成本模型">模式与成本模型</a></li><li class="l3"><a href="#diff声明式的反连接">DIFF：声明式的反连接</a></li><li class="l2"><a href="#一致性">一致性</a></li><li class="l2"><a href="#embedded">Embedded</a></li><li class="l2"><a href="#性能">性能</a></li><li class="l2"><a href="#另见">另见</a></li></ul></aside>
 </div>
 
 <script src="../../../assets/docsearch.js?v=8c03463d" defer></script>

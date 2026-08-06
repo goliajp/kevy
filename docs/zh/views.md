@@ -13,6 +13,28 @@ VIEW.CREATE ready_jobs
 VIEW.QUERY ready_jobs LIMIT 10
 ```
 
+## 先问一句：你真的需要它吗
+
+上面那个例子是刻意挑的，而它恰好也是**最常见的、并不需要 view** 的形状。`WHERE state = 'ready' AND pri BETWEEN 0 AND 100 ORDER BY pri DESC` 是一个等值前缀后面跟着下一列上的一个范围——这正是一条复合 `ORDERPATH` 所表示的、单次连续的走查（[tables.md](tables.md#复合-orderpath-语义)）：
+
+```console
+kevy-cli TABLE.DECLARE job PREFIX job: PK id \
+    COLUMN id str COLUMN state str COLUMN pri i64 \
+    ORDERPATH ready_by_pri ON state THEN pri DESC
+kevy-cli IDX.QUERY job.ready_by_pri WHERE state EQ ready RANGE pri 0 100 LIMIT 10
+```
+
+一棵 B 树，没有第二个结构要维护，没有重建要校验。第一个真正声明了表的消费者，用这种方式覆盖了它全部十四条列表轴，并且声明了**零**个 view——那是预期结果，不是缺口。
+
+当形状是有序复合键**做不到**的那一类时，才伸手去拿 view：
+
+* 跨独立索引的 **`OR`**——一条有序键只有一个领头列，所以并集不是一次走查。
+* **`DIFF`**——集合相减，左减右。
+* **两个范围**，落在不同列上。复合键可以在**尾部**的一列上做范围，且其后不能再跟任何东西；两个开放维度不是一个连续区间。
+* 一个**有界的、永远温着的答案**：`MODE materialized TOPK n` 把顶部那一片维护在写路径上，于是无论谓词最后有多挑剔，读都是固定成本。
+
+如果你的形状不在这张单子上，那就声明那条 `ORDERPATH`，然后停手。**view 在构造上就是两者中更贵的那个**——它组合的是本来就得存在的索引，而物化一个 view 还会给写路径加活、并造出一个之后要由 `VIEW.VERIFY` 审计的结构。
+
 ## 快速上手（服务器）
 
 视图要组合的一切都必须先存在——叶子和 ORDER BY 索引，都是在同一个前缀域上声明过的 `IDX.*` 索引（[indexes.md](indexes.md)）：

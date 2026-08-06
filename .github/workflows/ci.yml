@@ -121,6 +121,9 @@ jobs:
       - name: doc links (no dead file or anchor between the markdown docs)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_doc_links.py
+      - name: doc i18n (a translation must not fall behind its English chapter)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python3 tools/check_doc_i18n.py
       - name: site commands (every RESP example on the site actually runs)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |

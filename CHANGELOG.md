@@ -92,6 +92,33 @@ passed against the version that hangs. It forces `KEVY_IO_URING=0` for
 the same reason — on Linux the default reactor is the one that already
 worked, so the regression would never have been reached.
 
+### The translations that quietly fell behind
+
+The docs are published in three languages and nothing was checking that
+they stayed three. `docs/zh/tables.md` still carried a line reading
+"this page is not translated yet, see the English version" for a
+feature that had shipped, and four other chapters were each missing a
+whole section:
+
+- **views.md** — *First: check whether you need one*, the section that
+  exists to say most shapes want an ORDERPATH rather than a view. The
+  correction was made in English only.
+- **indexes.md** — *The index budget*, which exists to stop a migration
+  stalling on arithmetic that is wrong.
+- **UPGRADING.md** — *Tiering and the TABLE layer*, i.e. what 4.0
+  changed underneath a reader who upgrades.
+- **wasm.md** — *In a Tauri app*.
+- **cookbook.md** — recipes 21 and 22, including the schema-porting
+  walkthrough that other pages link to.
+
+All five are translated now, and a gate keeps them that way:
+`tools/check_doc_i18n.py` asks whether each translation has the same
+number of level-2 sections as its English chapter. It cannot tell you a
+section was translated *well* — it can tell you one is missing, which
+is the failure that actually happened. Chapters that are deliberately
+English-only are listed in the script with the reason, so "not
+translated" is a decision on the record rather than a silence.
+
 ### Deploying behind a proxy
 
 New chapter, [`docs/deploy-behind-a-proxy.md`](docs/deploy-behind-a-proxy.md),

@@ -245,10 +245,136 @@ kevy-cli -p 6004 IDX.QUERY zone_w GROUPS BY sum LIMIT 10  # 按负载排名的 z
 kevy-cli -p 6004 FEED.TAIL 0
 kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 100 PREFIX reading:   # 上行循环</code></pre></figure>
 <p>再配上 recipe 19 的 <code>MAXLEN</code> 上限和 TTL：原始读数在节点上有界，聚合行始终很小，feed 游标跨重启存活——除了 kevy 本身，整个边缘故事零活动件。</p>
+<h2 id="21-派生状态作为行的纯函数">21. 派生状态作为行的纯函数</h2>
+<p><b>SQL 对应：</b>整个触发器层，一次全包——<code>ON DELETE CASCADE</code>、<code>UNIQUE</code> 约束，以及你在不再信任它们之后写的那个对账任务——<a href="../rds-workloads/#约束与触发器">矩阵：约束与触发器</a>。</p>
+<p>这是上面那些配方一直在绕的模式：§2 的链接键、§5 的不变量、§10 的级联、§12 的审计行，是同一个想法用了四遍。<b>把它说清楚一次，级联、唯一性与漂移检测就一起解决了。</b> 它来自一次真实迁移，那次花了一天才走到这里——这一天值得替你省下。</p>
+<p><b>想法：</b>写一个从行到"由它派生出的每一个键"的<b>纯函数</b>。不是一个去更新键的过程——是一个<b>返回</b>"应该存在什么"的函数。</p>
+<figure class="code"><pre><code class="lang-rust">// Everything user:42 implies, computed from the row alone.
+fn derived(id: &amp;[u8], row: &amp;Row) -&gt; Vec&lt;Vec&lt;u8&gt;&gt; {
+    vec![
+        key(b"email:", &amp;row.email),          // uniqueness claim
+        key(b"dept:", &amp;row.dept, b":users"), // membership
+    ]
+}</code></pre></figure>
+<p>于是每个操作都成了一次 diff，而且每一条都是<b>落出来的</b>，不是设计出来的：</p>
+<div class="tbl"><table><thead><tr><th>操作</th><th>你做什么</th><th>白得什么</th></tr></thead><tbody><tr><td><b>插入</b></td><td>加上 <code>derived(new)</code></td><td>声明与成员关系一起出现</td></tr><tr><td><b>更新</b></td><td>加上 <code>derived(new) - derived(old)</code>，删掉 <code>derived(old) - derived(new)</code></td><td>改过的 email <b>会释放它旧的声明</b>——那正是人人手写时都会写出的 bug</td></tr><tr><td><b>删除</b></td><td>删掉 <code>derived(old)</code></td><td>级联不再是一条单独的代码路径</td></tr><tr><td><b>校验</b></td><td>对每一行重算 <code>derived</code>，与实际存在的对账</td><td>一个你没设计过的漂移检测器</td></tr></tbody></table></div>
+<p>更新那一行，是这个模式的回本处。手写的级联代码几乎总是加上新声明、忘掉释放旧的——因为"释放"是<b>没人会在工单里演示</b>的那种情形。</p>
+<figure class="code"><pre><code class="lang-rust">store.atomic_all_shards(|ctx| {
+    let old = read_row(ctx, id)?;
+    let (want, had) = (derived(id, &amp;new), derived(id, &amp;old));
+
+    for k in want.iter().filter(|k| !had.contains(k)) {
+        if ctx.exists(&amp;[k]) &gt; 0 { return Err(Taken); }  // uniqueness
+        ctx.set(k, id);
+    }
+    for k in had.iter().filter(|k| !want.contains(k)) {
+        ctx.del(&amp;[k]);                                  // release
+    }
+    write_row(ctx, id, &amp;new)
+})</code></pre></figure>
+<p>返回 <code>Err</code> 会把整件事回滚（§5），所以一次被拒的写入，既不会留下行，也不会留下半套已生效的声明。</p>
+<p><b>是声明，还是索引？</b>一个唯一性声明是<b>第二个真相来源</b>，它可能与行漂移；而<a href="../indexes/">二级索引</a>是<b>按构造派生</b>的，不会。在 <code>atomic_all_shards</code> 里你可以直接查它：</p>
+<figure class="code"><pre><code class="lang-rust">if ctx.idx_count(b"email_idx", &amp;want, &amp;want)? &gt; 0 { return Err(Taken); }</code></pre></figure>
+<p>两条限制，都是刻意的：</p>
+<ul><li><b>只在 <code>atomic_all_shards</code> 上。</b> 一条索引条目住在它所索引的那个键的分片上，所以"有没有任何行用了这个 email"是一个关于<b>每一个</b>分片的问题。单分片的 <code>atomic()</code> 只持有一把锁，只能替它自己那一片作答——一个只查了 1/N 键空间的唯一性检查，几乎总会报"唯一"，所以<b>它不被提供</b>，而不是提供了再加个脚注。</li><li><b>索引读看不见本事务自己的写。</b> 维护发生在提交时。一个在同一闭包里插入两行的写者，必须自己把它们互相比一遍。</li></ul>
+<p><b>校验。</b>因为 <code>derived</code> 是个函数，<b>检查器就是那个函数</b>——把同一个传给 <code>reconcile</code>：</p>
+<figure class="code"><pre><code class="lang-rust">let report = store.snapshot().reconcile(
+    b"user:",                    // the rows
+    &amp;[b"email:", b"dept:"],      // where derived keys live
+    |key, row| derived(key, row),
+);
+if !report.is_clean() {
+    warn!("{} missing, {} orphaned", report.missing_count, report.orphaned_count);
+}</code></pre></figure>
+<p>它<b>双向</b>对账，而这正是值得不自己写的那一半。<b>缺失的键</b>是丢掉的派生状态；而<b>孤儿</b>——行已经没了、声明还在——才是一次半生效的更新会留下的东西，也是那个<b>会静默挡住后续插入</b>的故障。一个只找缺失的检查器，恰恰会在这种故障发生时报"干净"。</p>
+<p>它跑在快照上（<code>store.snapshot()</code>），在每一把分片锁下冻结，所以它不会把一次并发写误当成漂移。<b>但这只在写本身是原子的前提下成立</b>：一行和它的声明必须进同一个 <code>atomic_all_shards</code> 块，否则真的存在一个半生效状态等着被找到。对账与原子写，是同一个保证的两端。</p>
+<p>开机时跑，或者定时跑，或者在你完全信任写路径之后就不跑——但<b>要跑</b>，因为它是唯一能告诉你"你相信的那个不变量就是你实际拥有的那个"的东西。</p>
+<h2 id="22-移植一份-pgmysql-schema">22. 移植一份 PG/MySQL schema</h2>
+<p><b>SQL 对应：</b>schema 文件本身——<code>CREATE TABLE</code>、<code>CREATE INDEX</code>、<code>CREATE VIEW</code>——<a href="../rds-workloads/#二级索引-ddl">矩阵：二级索引 DDL</a>。</p>
+<p>配方 1–8 手工做的一切，从你<b>已经有</b>的那份 SQL 编译出来。<code>kevy-sql</code>（以及它的 <code>kevy-cli sql</code> 那张面孔）是一个<b>声明期编译器</b>：它像迁移工具一样把 schema <b>读一次</b>，产出显式的 <code>TABLE.DECLARE</code> / <code>VIEW.CREATE</code> 命令，外加*查询卡片*——带 <code>$N</code> 槽位的现成 <code>IDX.QUERY</code> 模板。服务器里<b>没有任何东西按查询运行</b>；运行期的 ad-hoc SQL 仍由引擎自己拒绝（Law 3）。</p>
+<p>这份 schema——<a href="https://github.com/goliajp/kevy/blob/main/docs/examples/shop.sql">docs/examples/shop.sql</a>，一份真实的 users/orders/order_items 精简版：</p>
+<figure class="code"><pre><code class="lang-sql">CREATE TABLE users (
+  id     bigserial PRIMARY KEY,
+  email  text,
+  name   text,
+  plan   text
+);
+CREATE UNIQUE INDEX ON users (email);
+
+CREATE TABLE orders (
+  id          bigserial PRIMARY KEY,
+  user_id     bigint,
+  status      text,
+  total       numeric(10,2),
+  created_at  bigint       -- epoch seconds, app-encoded
+);
+-- INCLUDE = PG covering columns -&gt; kevy stored VALUES (residual FILTER/SORT).
+CREATE INDEX ON orders (status) INCLUDE (total, created_at);
+-- Multi-column -&gt; a composite ORDERPATH (the (user_id, created_at DESC) walk).
+CREATE INDEX ON orders (user_id, created_at DESC);
+
+CREATE TABLE order_items (
+  id        bigserial PRIMARY KEY,
+  order_id  bigint,
+  sku       text,
+  qty       int
+);
+CREATE INDEX ON order_items (order_id);
+
+CREATE VIEW paid_orders AS
+  SELECT * FROM orders WHERE status = 'paid';
+
+CREATE VIEW recent_orders_by_user AS
+  SELECT id, status, total, created_at FROM orders
+  WHERE user_id = $1
+  ORDER BY created_at DESC
+  LIMIT 20;</code></pre></figure>
+<p>编译它，然后把声明应用到一台服务器上：</p>
+<figure class="code"><pre><code class="lang-console">kevy-cli sql compile docs/examples/shop.sql
+kevy-cli sql compile docs/examples/shop.sql --apply --url 127.0.0.1:6004</code></pre></figure>
+<p>编译出来的脚本（原样）。每张表把它的索引折进<b>一条</b> <code>TABLE.DECLARE</code>；常量视图变成引擎视图；带参数的视图变成查询卡片；每一处粗粒度的类型映射都在 notes 里被<b>如实点名</b>（kevy 的列只有 <code>i64|f64|str</code>——时间戳由应用编码，<code>serial</code> 不会替你分配 id）：</p>
+<figure class="code"><pre><code class="lang-text">TABLE.DECLARE users PREFIX users: PK id COLUMN id i64 COLUMN email str COLUMN name str COLUMN plan str INDEX email unique
+TABLE.DECLARE orders PREFIX orders: PK id COLUMN id i64 COLUMN user_id i64 COLUMN status str COLUMN total f64 COLUMN created_at i64 INDEX status range VALUES total created_at ORDERPATH user_id_created_at ON user_id THEN created_at DESC
+TABLE.DECLARE order_items PREFIX order_items: PK id COLUMN id i64 COLUMN order_id i64 COLUMN sku str COLUMN qty i64 INDEX order_id range
+VIEW.CREATE paid_orders QUERY orders.status EQ paid ORDER BY orders.status
+
+# ---- query card: recent_orders_by_user ----
+# runtime template — substitute the $N slots and send as-is:
+#   $1 = user_id (i64)
+#   IDX.QUERY orders.user_id_created_at WHERE user_id EQ $1 LIMIT 20 FIELDS id status total created_at
+
+# notes:
+#   - users.id: bigserial → i64, but ids do NOT auto-increment — allocate them app-side (INCR block, cookbook §3)
+#   - orders.total: numeric → f64 — fixed-point precision becomes binary float; keep money as integer cents if exactness matters
+#   - view paid_orders: read with VIEW.QUERY paid_orders, then hydrate rows with HMGET &lt;key&gt; id user_id status total created_at</code></pre></figure>
+<p>行就是表前缀下普通的 hash（配方 1），而编译出来的路径立刻就能服务——把真实参数填进 <code>$1</code> 槽位，卡片就能跑：</p>
+<figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 HSET users:1 id 1 email ada@example.com name Ada plan pro
+kevy-cli -p 6004 HSET orders:1 id 1 user_id 1 status paid total 19.5 created_at 1700000100
+kevy-cli -p 6004 HSET orders:2 id 2 user_id 1 status pending total 5 created_at 1700000200
+kevy-cli -p 6004 HSET orders:3 id 3 user_id 2 status paid total 8 created_at 1700000300
+kevy-cli -p 6004 HSET order_items:1 id 1 order_id 1 sku sku-7 qty 2
+kevy-cli -p 6004 IDX.QUERY users.email EQ ada@example.com
+kevy-cli -p 6004 IDX.QUERY orders.user_id_created_at WHERE user_id EQ 1 LIMIT 20 FIELDS id status total created_at
+kevy-cli -p 6004 VIEW.QUERY paid_orders LIMIT 10
+kevy-cli -p 6004 IDX.QUERY orders.status EQ paid FILTER total RANGE 10 inf
+kevy-cli -p 6004 IDX.QUERY order_items.order_id EQ 1 FIELDS sku qty
+kevy-cli -p 6004 TABLE.LIST</code></pre></figure>
+<ul><li>卡片那条查询是 <code>SELECT id, status, total, created_at FROM orders WHERE user_id = 1 ORDER BY created_at DESC LIMIT 20</code>——由复合走查服务，最新在前，一跳内补全字段。</li><li><code>FILTER total RANGE 10 inf</code> 那一行是在被 <code>INCLUDE</code> 的列上的<b>残余谓词</b>——<code>WHERE status = 'paid' AND total &gt;= 10</code>，<b>不碰任何一行</b>。</li><li><code>order_items.order_id EQ 1</code> 就是那次取代 JOIN 的外键查找（配方 2）：两次查询，没有查询期 join。</li></ul>
+<p><b>拒绝是有教的。</b>编译器拒绝一切需要查询期求值的东西——<b>具名</b>，带行/列，并指向那个替它建模的配方。一个 JOIN：</p>
+<figure class="code"><pre><code class="lang-sql">CREATE VIEW order_emails AS
+  SELECT id, email FROM orders
+  JOIN users ON users.id = orders.user_id;</code></pre></figure>
+<figure class="code"><pre><code class="lang-text">$ kevy-cli sql compile join.sql
+kevy-cli sql: join.sql: line 6, col 3: JOIN is not compilable — kevy
+refuses query-time joins (Law 3); model the lookup with an indexed FK
+column (IDX.QUERY t.fk EQ …) or app-side assembly (cookbook §2)</code></pre></figure>
+<p>一个 WHERE 匹配不到任何已声明访问路径的视图，会报错并<b>点名该加哪一条声明</b>（<code>… matches no declared access path — add: CREATE INDEX ON orders (status, total)</code>）；而运行期的 ad-hoc SQL，从来就没有过门：</p>
+<figure class="code"><pre><code class="lang-text">$ kevy-cli -p 6004 SQL SELECT * FROM users
+(error) ERR unknown command 'SQL'</code></pre></figure>
 <h2 id="recipe-索引">Recipe 索引</h2>
 <p>Recipe ↔ 它替代的 SQL 构造 ↔ 陈述语义与边界的 <a href="../rds-workloads/">rds-workloads.md</a> 矩阵行。</p>
-<div class="tbl"><table><thead><tr><th>#</th><th>Recipe</th><th>SQL 构造</th><th>矩阵行</th></tr></thead><tbody><tr><td>1</td><td>表与行</td><td><code>CREATE TABLE</code>、点查 <code>SELECT</code></td><td><a href="../rds-workloads/#表行列">表、行、列</a></td></tr><tr><td>2</td><td>一对多、多对多</td><td>外键列、关联表、<code>WHERE fk = ?</code></td><td><a href="../rds-workloads/#join">JOIN</a></td></tr><tr><td>3</td><td>序列</td><td><code>AUTO_INCREMENT</code> / <code>nextval()</code></td><td><a href="../rds-workloads/#primary-keyuniqueauto_increment">PK、UNIQUE、AUTO_INCREMENT</a></td></tr><tr><td>4</td><td>乐观锁</td><td>版本列 CAS <code>UPDATE</code></td><td><a href="../rds-workloads/#事务">事务</a></td></tr><tr><td>5</td><td>CHECK 约束</td><td><code>CHECK (…)</code> + 审计触发器</td><td><a href="../rds-workloads/#约束与触发器">约束与触发器</a></td></tr><tr><td>6</td><td>幂等键</td><td><code>UNIQUE INDEX</code> + <code>ON CONFLICT DO NOTHING</code></td><td><a href="../rds-workloads/#primary-keyuniqueauto_increment">PK、UNIQUE、AUTO_INCREMENT</a></td></tr><tr><td>7</td><td>软删除</td><td>标记列 + 过滤视图</td><td><a href="../rds-workloads/#view">VIEW</a></td></tr><tr><td>8</td><td>复合排序</td><td><code>ORDER BY a, b</code></td><td><a href="../rds-workloads/#order-by--limit--offset">ORDER BY / LIMIT / OFFSET</a></td></tr><tr><td>9</td><td>JSONB</td><td>JSON 列 + 生成列索引</td><td><a href="../rds-workloads/#类型系统">类型系统</a></td></tr><tr><td>10</td><td>级联删除 / 外键</td><td><code>ON DELETE CASCADE</code></td><td><a href="../rds-workloads/#约束与触发器">约束与触发器</a></td></tr><tr><td>11</td><td>你不需要的 outbox</td><td>事务性 outbox 表</td><td><a href="../rds-workloads/#cdc">CDC</a></td></tr><tr><td>12</td><td>审计历史</td><td>审计表 / binlog 考古</td><td><a href="../rds-workloads/#cdc">CDC</a></td></tr><tr><td>13</td><td>回滚窗口</td><td>切换期反向复制</td><td><a href="../migration/">迁移 playbook</a></td></tr><tr><td>14</td><td>分析导出</td><td>ETL / binlog tap 到数仓</td><td><a href="../rds-workloads/#cdc">CDC</a></td></tr><tr><td>15</td><td>载入顺序</td><td>先批量 <code>LOAD DATA</code>、后建索引</td><td><a href="../rds-workloads/#二级索引-ddl">二级索引 DDL</a></td></tr><tr><td>16</td><td>带 TTL 的会话上下文</td><td>sessions 表 + 过期 cron</td><td><a href="../rds-workloads/#容量估算与运维差异">容量估算与运维差异</a></td></tr><tr><td>17</td><td>情景记忆</td><td>时间 <code>BETWEEN</code> + pgvector KNN</td><td><a href="../rds-workloads/#select">SELECT</a></td></tr><tr><td>18</td><td>RAG 混合检索</td><td>tsvector + pgvector，融合</td><td><a href="../rds-workloads/#select">SELECT</a></td></tr><tr><td>19</td><td>传感器缓存</td><td>upsert 表 + 陈旧度 cron</td><td><a href="../rds-workloads/#容量估算与运维差异">容量估算与运维差异</a></td></tr><tr><td>20</td><td>边缘聚合</td><td>每刷新一遍 <code>GROUP BY</code> + ETL 上行</td><td><a href="../rds-workloads/#group-by-与聚合">GROUP BY 与聚合</a></td></tr></tbody></table></div></main>
-  <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#1-表与行">1. 表与行</a></li><li class="l2"><a href="#2-一对多多对多">2. 一对多、多对多</a></li><li class="l2"><a href="#3-序列">3. 序列</a></li><li class="l2"><a href="#4-乐观锁行版本">4. 乐观锁（行版本）</a></li><li class="l2"><a href="#5-check-约束与多-key-不变量">5. CHECK 约束与多 key 不变量</a></li><li class="l2"><a href="#6-幂等键">6. 幂等键</a></li><li class="l2"><a href="#7-软删除">7. 软删除</a></li><li class="l2"><a href="#8-复合排序order-by-a-b">8. 复合排序（ORDER BY a, b）</a></li><li class="l2"><a href="#9-jsonb">9. JSONB</a></li><li class="l2"><a href="#10-级联删除-外键">10. 级联删除 / 外键</a></li><li class="l2"><a href="#11-你不需要的-outbox">11. 你不需要的 outbox</a></li><li class="l2"><a href="#12-审计历史">12. 审计历史</a></li><li class="l2"><a href="#13-回滚窗口反向镜像">13. 回滚窗口（反向镜像）</a></li><li class="l2"><a href="#14-分析导出">14. 分析导出</a></li><li class="l2"><a href="#15-载入顺序延迟索引规则">15. 载入顺序（延迟索引规则）</a></li><li class="l2"><a href="#16-带-ttl-的会话上下文">16. 带 TTL 的会话上下文</a></li><li class="l2"><a href="#17-情景记忆时间-语义">17. 情景记忆（时间 × 语义）</a></li><li class="l2"><a href="#18-带混合检索的-rag-分块">18. 带混合检索的 RAG 分块</a></li><li class="l2"><a href="#19-传感器缓存最新值-存活租约">19. 传感器缓存（最新值 + 存活租约）</a></li><li class="l2"><a href="#20-边缘聚合写时-group-by-上行">20. 边缘聚合（写时 GROUP BY + 上行）</a></li><li class="l2"><a href="#recipe-索引">Recipe 索引</a></li></ul></aside>
+<div class="tbl"><table><thead><tr><th>#</th><th>Recipe</th><th>SQL 构造</th><th>矩阵行</th></tr></thead><tbody><tr><td>1</td><td>表与行</td><td><code>CREATE TABLE</code>、点查 <code>SELECT</code></td><td><a href="../rds-workloads/#表行列">表、行、列</a></td></tr><tr><td>2</td><td>一对多、多对多</td><td>外键列、关联表、<code>WHERE fk = ?</code></td><td><a href="../rds-workloads/#join">JOIN</a></td></tr><tr><td>3</td><td>序列</td><td><code>AUTO_INCREMENT</code> / <code>nextval()</code></td><td><a href="../rds-workloads/#primary-keyuniqueauto_increment">PK、UNIQUE、AUTO_INCREMENT</a></td></tr><tr><td>4</td><td>乐观锁</td><td>版本列 CAS <code>UPDATE</code></td><td><a href="../rds-workloads/#事务">事务</a></td></tr><tr><td>5</td><td>CHECK 约束</td><td><code>CHECK (…)</code> + 审计触发器</td><td><a href="../rds-workloads/#约束与触发器">约束与触发器</a></td></tr><tr><td>6</td><td>幂等键</td><td><code>UNIQUE INDEX</code> + <code>ON CONFLICT DO NOTHING</code></td><td><a href="../rds-workloads/#primary-keyuniqueauto_increment">PK、UNIQUE、AUTO_INCREMENT</a></td></tr><tr><td>7</td><td>软删除</td><td>标记列 + 过滤视图</td><td><a href="../rds-workloads/#view">VIEW</a></td></tr><tr><td>8</td><td>复合排序</td><td><code>ORDER BY a, b</code></td><td><a href="../rds-workloads/#order-by--limit--offset">ORDER BY / LIMIT / OFFSET</a></td></tr><tr><td>9</td><td>JSONB</td><td>JSON 列 + 生成列索引</td><td><a href="../rds-workloads/#类型系统">类型系统</a></td></tr><tr><td>10</td><td>级联删除 / 外键</td><td><code>ON DELETE CASCADE</code></td><td><a href="../rds-workloads/#约束与触发器">约束与触发器</a></td></tr><tr><td>11</td><td>你不需要的 outbox</td><td>事务性 outbox 表</td><td><a href="../rds-workloads/#cdc">CDC</a></td></tr><tr><td>12</td><td>审计历史</td><td>审计表 / binlog 考古</td><td><a href="../rds-workloads/#cdc">CDC</a></td></tr><tr><td>13</td><td>回滚窗口</td><td>切换期反向复制</td><td><a href="../migration/">迁移 playbook</a></td></tr><tr><td>14</td><td>分析导出</td><td>ETL / binlog tap 到数仓</td><td><a href="../rds-workloads/#cdc">CDC</a></td></tr><tr><td>15</td><td>载入顺序</td><td>先批量 <code>LOAD DATA</code>、后建索引</td><td><a href="../rds-workloads/#二级索引-ddl">二级索引 DDL</a></td></tr><tr><td>16</td><td>带 TTL 的会话上下文</td><td>sessions 表 + 过期 cron</td><td><a href="../rds-workloads/#容量估算与运维差异">容量估算与运维差异</a></td></tr><tr><td>17</td><td>情景记忆</td><td>时间 <code>BETWEEN</code> + pgvector KNN</td><td><a href="../rds-workloads/#select">SELECT</a></td></tr><tr><td>18</td><td>RAG 混合检索</td><td>tsvector + pgvector，融合</td><td><a href="../rds-workloads/#select">SELECT</a></td></tr><tr><td>19</td><td>传感器缓存</td><td>upsert 表 + 陈旧度 cron</td><td><a href="../rds-workloads/#容量估算与运维差异">容量估算与运维差异</a></td></tr><tr><td>20</td><td>边缘聚合</td><td>每刷新一遍 <code>GROUP BY</code> + ETL 上行</td><td><a href="../rds-workloads/#group-by-与聚合">GROUP BY 与聚合</a></td></tr><tr><td>21</td><td>派生状态作为行的函数</td><td>整个触发器层：级联、<code>UNIQUE</code>、对账</td><td><a href="../rds-workloads/#约束与触发器">约束与触发器</a></td></tr><tr><td>22</td><td>移植一份 PG/MySQL schema</td><td><code>CREATE TABLE</code> / <code>CREATE INDEX</code> / <code>CREATE VIEW</code>，编译过的</td><td><a href="../rds-workloads/#二级索引-ddl">二级索引 DDL</a></td></tr></tbody></table></div></main>
+  <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#1-表与行">1. 表与行</a></li><li class="l2"><a href="#2-一对多多对多">2. 一对多、多对多</a></li><li class="l2"><a href="#3-序列">3. 序列</a></li><li class="l2"><a href="#4-乐观锁行版本">4. 乐观锁（行版本）</a></li><li class="l2"><a href="#5-check-约束与多-key-不变量">5. CHECK 约束与多 key 不变量</a></li><li class="l2"><a href="#6-幂等键">6. 幂等键</a></li><li class="l2"><a href="#7-软删除">7. 软删除</a></li><li class="l2"><a href="#8-复合排序order-by-a-b">8. 复合排序（ORDER BY a, b）</a></li><li class="l2"><a href="#9-jsonb">9. JSONB</a></li><li class="l2"><a href="#10-级联删除-外键">10. 级联删除 / 外键</a></li><li class="l2"><a href="#11-你不需要的-outbox">11. 你不需要的 outbox</a></li><li class="l2"><a href="#12-审计历史">12. 审计历史</a></li><li class="l2"><a href="#13-回滚窗口反向镜像">13. 回滚窗口（反向镜像）</a></li><li class="l2"><a href="#14-分析导出">14. 分析导出</a></li><li class="l2"><a href="#15-载入顺序延迟索引规则">15. 载入顺序（延迟索引规则）</a></li><li class="l2"><a href="#16-带-ttl-的会话上下文">16. 带 TTL 的会话上下文</a></li><li class="l2"><a href="#17-情景记忆时间-语义">17. 情景记忆（时间 × 语义）</a></li><li class="l2"><a href="#18-带混合检索的-rag-分块">18. 带混合检索的 RAG 分块</a></li><li class="l2"><a href="#19-传感器缓存最新值-存活租约">19. 传感器缓存（最新值 + 存活租约）</a></li><li class="l2"><a href="#20-边缘聚合写时-group-by-上行">20. 边缘聚合（写时 GROUP BY + 上行）</a></li><li class="l2"><a href="#21-派生状态作为行的纯函数">21. 派生状态作为行的纯函数</a></li><li class="l2"><a href="#22-移植一份-pgmysql-schema">22. 移植一份 PG/MySQL schema</a></li><li class="l2"><a href="#recipe-索引">Recipe 索引</a></li></ul></aside>
 </div>
 
 <script src="../../../assets/docsearch.js?v=8c03463d" defer></script>

@@ -53,6 +53,16 @@ VIEW.CREATE ready_jobs
     ORDER BY j_pri DESC
     MODE materialized TOPK 100
 VIEW.QUERY ready_jobs LIMIT 10</code></pre></figure>
+<h2 id="まず本当に必要かを確かめる">まず、本当に必要かを確かめる</h2>
+<p>上の例は意図して選んだもので、そして同時に、<b>view を必要としない</b>ことが最も多い形でもあります。<code>WHERE state = 'ready' AND pri BETWEEN 0 AND 100 ORDER BY pri DESC</code> は等値の接頭部に、次の列の範囲がひとつ続いたもの——複合 <code>ORDERPATH</code> が単一の連続した走査として表すもの、まさにそれです（<a href="../tables/#複合-orderpath-の意味論">tables.md</a>）：</p>
+<figure class="code"><pre><code class="lang-console">kevy-cli TABLE.DECLARE job PREFIX job: PK id \
+    COLUMN id str COLUMN state str COLUMN pri i64 \
+    ORDERPATH ready_by_pri ON state THEN pri DESC
+kevy-cli IDX.QUERY job.ready_by_pri WHERE state EQ ready RANGE pri 0 100 LIMIT 10</code></pre></figure>
+<p>B 木がひとつ、保守すべき second structure はなく、検証すべき再構築もありません。テーブルを宣言した最初の実利用者は、十四本のリスト軸すべてをこのやり方で賄い、view は<b>ゼロ</b>個でした——それは欠落ではなく、期待どおりの結果です。</p>
+<p>順序付き複合キーでは<b>なりえない</b>形のときに、view に手を伸ばしてください：</p>
+<ul><li>独立したインデックスをまたぐ <b><code>OR</code></b>——順序付きキーの先頭列はひとつなので、和は走査になりません。</li><li><b><code>DIFF</code></b>——集合の差、左から右を引く。</li><li>別々の列にかかる<b>二つの範囲</b>。複合キーが範囲を取れるのは<b>末尾</b>の一列だけで、その後ろには何も続けられません。開いた次元が二つあるものは、ひとつの連続区間ではありません。</li><li><b>有界で、常に温かい答え</b>：<code>MODE materialized TOPK n</code> は上位のひと切れを書き込み経路で保守するので、述語がどれだけ絞り込む結果になろうと、読みは固定費です。</li></ul>
+<p>あなたの形がこの一覧になければ、<code>ORDERPATH</code> を宣言してそこで止めてください。<b>view は構造上、二つのうち高いほう</b>です——どのみち存在しなければならないインデックスを組み合わせるものであり、物化すれば書き込み経路に仕事が増え、あとで <code>VIEW.VERIFY</code> が監査すべき構造がひとつ生まれます。</p>
 <h2 id="クイックスタートサーバー">クイックスタート（サーバー）</h2>
 <p>ビューが合成するものは、すべて先に存在していなければなりません。葉もORDER BY用インデックスも、同じプレフィックスドメイン上で宣言された<code>IDX.*</code>インデックスです（<a href="../indexes/">indexes.md</a>）。</p>
 <figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 IDX.CREATE j_pri ON PREFIX job: FIELD pri TYPE i64 KIND range
@@ -129,7 +139,7 @@ fn main() -&gt; kevy_embedded::KevyResult&lt;()&gt; {
 <p>メンバーあたりのメモリは概算で<code>order_value_width + key_len + 48</code>バイトで、<code>VIEW.VERIFY</code>がライブで報告します。</p>
 <h2 id="関連項目">関連項目</h2>
 <ul><li><a href="../indexes/">indexes.md</a> — ビューが合成するインデックス（宣言、バックフィル、ビューが継承する整合性の包絡線）。</li><li><a href="../rds-workloads/">rds-workloads.md</a> — SQLからkevyへの写像の中で、ビューが座る位置。</li><li><a href="../commands/">verb-reference.md</a> — すべての<code>VIEW.*</code>形式の、生成された文法。</li><li><a href="../cookbook/">cookbook.md</a> — 文脈の中のビューのレシピ。</li></ul></main>
-  <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#クイックスタートサーバー">クイックスタート（サーバー）</a></li><li class="l2"><a href="#構造上の3つのルール">構造上の3つのルール</a></li><li class="l2"><a href="#モードとコストモデル">モードとコストモデル</a></li><li class="l3"><a href="#diff宣言されたanti-join">DIFF：宣言されたanti-join</a></li><li class="l2"><a href="#整合性">整合性</a></li><li class="l2"><a href="#組み込み">組み込み</a></li><li class="l2"><a href="#パフォーマンス">パフォーマンス</a></li><li class="l2"><a href="#関連項目">関連項目</a></li></ul></aside>
+  <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#まず本当に必要かを確かめる">まず、本当に必要かを確かめる</a></li><li class="l2"><a href="#クイックスタートサーバー">クイックスタート（サーバー）</a></li><li class="l2"><a href="#構造上の3つのルール">構造上の3つのルール</a></li><li class="l2"><a href="#モードとコストモデル">モードとコストモデル</a></li><li class="l3"><a href="#diff宣言されたanti-join">DIFF：宣言されたanti-join</a></li><li class="l2"><a href="#整合性">整合性</a></li><li class="l2"><a href="#組み込み">組み込み</a></li><li class="l2"><a href="#パフォーマンス">パフォーマンス</a></li><li class="l2"><a href="#関連項目">関連項目</a></li></ul></aside>
 </div>
 
 <script src="../../../assets/docsearch.js?v=8c03463d" defer></script>

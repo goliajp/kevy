@@ -65,13 +65,19 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20</code></pre></figure>
     COLUMN name i64|f64|str [COLUMN ...]
     [INDEX col range|unique [VALUES col ...]] ...
     [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] ...
-    [WINDOW col SPAN n BUCKET n]   # 滑动热窗（本页尚未译，见英文版）
+    [WINDOW col SPAN n BUCKET n]   # 滑动热窗——见下文
     [AUTODECLARE n]    # 允许引擎替你补最多 n 条路径——见下文
 TABLE.ENSURE ...       # TABLE.DECLARE 的开机形态——见下文
 TABLE.REPLACE ...      # 显式的 drop + declare + 重建
 TABLE.DROP name        # drops the table + its compiled indexes; 1|0
 TABLE.LIST             # name/prefix/pk + column/index/orderpath counts
 TABLE.VERIFY name      # component fsck + a bounded column spot check</code></pre></figure>
+<h2 id="滑动窗口">滑动窗口</h2>
+<p><code>WINDOW &lt;col&gt; SPAN &lt;n&gt; BUCKET &lt;n&gt;</code> 在一个 <code>i64</code> 列上声明一个滑动的热窗。<code>SPAN</code> 与 <code>BUCKET</code> 是<b>以该列自己的单位计</b>的普通整数——引擎从不假定时间基准，所以这一列可以是 epoch 秒、epoch 毫秒、序列号，任何随数据变旧而单调的东西。边界按<b>整桶</b>推进；被驱逐的一桶变成一个冷段。</p>
+<p>两条声明期拒绝，都具名：</p>
+<ul><li>窗口列必须是一个已声明的 <code>i64</code> 列；</li><li>它必须有一条访问路径，其树尾能免费回答 <code>max(col)</code>——要么是它上面的单列 <code>INDEX &lt;col&gt;</code>，要么是<b>首列</b>就是它、且升序的 <code>ORDERPATH</code>。没有就拒绝声明（<code>WINDOW needs an access path on '&lt;col&gt;'</code>）——这同时也保证了每张窗口表都能经由同一条路径服务跨窗范围查询。</li></ul>
+<p><b>今天在滑的是：窗口列上的那条单列 INDEX。</b> 随着边界推进（整桶地），索引树中落在窗外的前缀会移进 <code>segs-&lt;shard&gt;/</code> 下不可变的冷段文件——索引内存缩小，而普通的 <code>RANGE</code> / <code>COUNT</code> 查询在热+冷上继续作答，<b>与一条未窗口化的索引逐字节相同</b>（包括冷行的重写、删除与复活；语义等价的 e2e 把这一点钉住了）。冷索引段是<b>派生的溢出，不是真相</b>：行仍然是热键空间里普通的 hash，重启时只是重建并重新滑动。</p>
+<p>两处边缘，都是显式的：带子句的查询（<code>FILTER</code> / <code>SORT</code> / <code>DISTINCT</code> / <code>FACET</code>）在一条已有冷段的索引上会<b>具名拒绝</b>，直到带子句的冷路径落地为止——绝不给一个静默不完整的答案；以及<b>由窗口列领头的 <code>ORDERPATH</code> 满足声明条件，但今天还不滑</b>。纯内存部署（没有数据目录）接受这条声明，只是保持全热。</p>
 <h2 id="开机模式ensure">开机模式：<code>ensure</code></h2>
 <p>开机时声明才是常态——schema 住在你的代码里，每次进程启动都陈述一遍。<code>TABLE.ENSURE</code>（嵌入面：<code>Store::table_ensure</code>，返回 <code>TableEnsure::{Created, Unchanged}</code>）接受与 <code>TABLE.DECLARE</code> 相同的文法，是它的幂等形态：</p>
 <ul><li><b>表不存在</b> → 声明并构建：<code>Created</code>。</li><li><b>spec 完全相同</b> → 无操作的成功：<code>Unchanged</code>（线上回 <code>+UNCHANGED</code>）。此后每次开机都走这条路。</li><li><b>spec 不同</b> → <b>点名哪里变了的具名拒绝</b>（<code>COLUMNS</code> / <code>INDEXES</code> / <code>ORDERPATHS</code> / <code>PREFIX</code> / <code>PK</code>）——绝不静默重建。重建是对整个前缀域的全量回填，这么昂贵的事必须被点名要求：<code>TABLE.REPLACE</code>（嵌入面：<code>table_replace</code>）就是那个要求——显式 drop + declare + 重建，并在丢弃旧表<b>之前</b>先验证新 spec，坏的替换会让旧表继续服务。</li></ul>
@@ -151,7 +157,7 @@ store.table_drop(b"user");</code></pre></figure>
 <p>写入成本是标准的索引税：每个编译出的索引对每次匹配写入付一次字段读加一次段更新；空目录的成本是一个不会命中的分支。</p>
 <h2 id="参见">参见</h2>
 <ul><li><a href="../indexes/">indexes.md</a>——表所编译到的索引引擎。</li><li><a href="../tiering/">tiering.md</a>——与表一起设计的另一半：索引热、行冷。</li><li><a href="../rds-workloads/">rds-workloads.md</a>——完整的 SQL 词汇映射（什么可编译、什么是配方、什么被拒绝）。</li><li><a href="../cookbook/">cookbook.md</a>——复合排序与 schema 迁移配方。</li><li><a href="../table-migration/">table-migration.md</a>——从手工维护的索引迁移过来，八课。</li><li><a href="../views/">views.md</a>——同一批索引上的具名组合。</li></ul></main>
-  <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#声明模型">声明模型</a></li><li class="l2"><a href="#语法">语法</a></li><li class="l2"><a href="#开机模式ensure">开机模式：ensure</a></li><li class="l2"><a href="#复合-orderpath-语义">复合 ORDERPATH 语义</a></li><li class="l2"><a href="#查询表">查询表</a></li><li class="l2"><a href="#autodeclare你没写的那些路径">AUTODECLARE：你没写的那些路径</a></li><li class="l2"><a href="#null唯一性以及什么被强制">NULL、唯一性，以及什么被强制</a></li><li class="l2"><a href="#它不是什么">它不是什么</a></li><li class="l2"><a href="#kevy-sql编译-schema而不是发送-schema">kevy-sql：编译 schema，而不是发送 schema</a></li><li class="l2"><a href="#嵌入式">嵌入式</a></li><li class="l2"><a href="#性能">性能</a></li><li class="l2"><a href="#参见">参见</a></li></ul></aside>
+  <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#声明模型">声明模型</a></li><li class="l2"><a href="#语法">语法</a></li><li class="l2"><a href="#滑动窗口">滑动窗口</a></li><li class="l2"><a href="#开机模式ensure">开机模式：ensure</a></li><li class="l2"><a href="#复合-orderpath-语义">复合 ORDERPATH 语义</a></li><li class="l2"><a href="#查询表">查询表</a></li><li class="l2"><a href="#autodeclare你没写的那些路径">AUTODECLARE：你没写的那些路径</a></li><li class="l2"><a href="#null唯一性以及什么被强制">NULL、唯一性，以及什么被强制</a></li><li class="l2"><a href="#它不是什么">它不是什么</a></li><li class="l2"><a href="#kevy-sql编译-schema而不是发送-schema">kevy-sql：编译 schema，而不是发送 schema</a></li><li class="l2"><a href="#嵌入式">嵌入式</a></li><li class="l2"><a href="#性能">性能</a></li><li class="l2"><a href="#参见">参见</a></li></ul></aside>
 </div>
 
 <script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
