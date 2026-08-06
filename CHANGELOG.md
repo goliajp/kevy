@@ -92,6 +92,26 @@ passed against the version that hangs. It forces `KEVY_IO_URING=0` for
 the same reason — on Linux the default reactor is the one that already
 worked, so the regression would never have been reached.
 
+### `IDX.VERIFY` answers each kind in its own vocabulary
+
+For text, aggregate and ann indexes, `VERIFY` used to answer four bare
+numbers that the reducer labelled with the scalar audit's vocabulary. A
+healthy three-document text index answered `coerce_failures 7,
+duplicates 7` — its postings and token counts wearing an integrity
+warning's names — and an aggregate's group count printed as
+`duplicates`. The ann row also carried two facts in one number
+(`links + rebuild_recommended`), the exact shape behind several of the
+bugs above.
+
+Each kind now answers under its own names: agg `rows / bytes /
+excluded / groups`, text `docs / bytes / postings / tokens`, ann
+`vectors / bytes / tombstones / links / rebuild_recommended` — the last
+two travelling separately. None of them print `drift` / `missing`: the
+audit's question applies to row-keyed entries, and theirs are groups,
+postings and graph nodes. The shard chunks are in-process fan-out in
+one binary, so the wire could simply be corrected; scalar indexes are
+unchanged.
+
 ### `duplicates` is per shard, and the docs did not say so
 
 `KIND unique` deliberately does not block writes, and the one guarantee

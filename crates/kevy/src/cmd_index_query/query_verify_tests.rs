@@ -31,7 +31,10 @@ fn drift_and_checked(chunk: &[u8]) -> (u64, u64) {
 }
 
 fn field(chunk: &[u8], i: usize) -> u64 {
-    u64::from_le_bytes(chunk[1 + i * 8..1 + (i + 1) * 8].try_into().expect("8 bytes"))
+    // Byte 0 is the status, byte 1 the kind tag ('s' here — these tests
+    // build scalar segments); the u64 slots start at 2.
+    assert_eq!(chunk[1], b's', "scalar chunks carry the scalar tag");
+    u64::from_le_bytes(chunk[2 + i * 8..2 + (i + 1) * 8].try_into().expect("8 bytes"))
 }
 
 /// A drift counter that can only ever report zero is the dead code it

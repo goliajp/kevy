@@ -56,16 +56,22 @@ range|unique [MAXMEM <bytes>]`
   are applied (the claused count: the total a claused query's pages
   would reach); every clause a count would not apply —
   SORT/DISTINCT/FACET/OFFSET/FIELDS/CURSOR — is refused by name.
-- **What `VERIFY` does not audit: an aggregate's counters.** For
-  `KIND agg` an entry is a *group*, not a row, so "does this entry's
-  row still derive this value" is not a question that applies —
-  `drift` and `missing` stay zero whatever the counts say, and the
-  running totals are never recomputed against the keyspace at runtime.
-  The structure's own arithmetic is unit-tested against a walking
-  reference; its agreement with the keyspace rests on every write path
-  maintaining it, which `IDX.VERIFY` cannot falsify for this kind. A
-  test does instead: `index_write_path_coverage` compares the group's
-  count against the live rows after each verb.
+- **Non-scalar kinds answer `VERIFY` in their own vocabulary.**
+  `KIND agg` answers `rows / bytes / excluded / groups`; `KIND text`
+  answers `docs / bytes / postings / tokens`; `KIND ann` answers
+  `vectors / bytes / tombstones / links / rebuild_recommended`. None of
+  them print `drift` / `missing`, because the audit's question — does
+  this entry's row still derive this value — applies to a row-keyed
+  entry and their entries are groups, postings and graph nodes. (These
+  numbers used to be printed under the scalar labels: a healthy 3-doc
+  text index answered `coerce_failures 7, duplicates 7` — its postings
+  and token counts wearing an integrity warning's names.)
+- **What that means for the aggregate's counters**: the running totals
+  are never recomputed against the keyspace at runtime, so their
+  agreement with reality rests on every write path maintaining them —
+  which `IDX.VERIFY` cannot falsify for this kind. A test does instead:
+  `index_write_path_coverage` compares the group's count against the
+  live rows after each verb.
 - `IDX.VERIFY <name>` — summed stats: entries, bytes,
   coerce_failures, duplicates, plus both directions of the audit:
   `drift` (entries whose row is gone, no longer coerces, or coerces to
