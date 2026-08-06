@@ -559,6 +559,25 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 > 就差一步走进去,是先核前提拦住的。下面的框保持原样(它们记录的是设计,
 > 不是进度);**真进度以 `r1-locality` 为准,merge 归属主**。
 
+> **同日把九条 train 逐条对了一遍账 —— 下面的框有四条是"做完了没打勾"。**
+> 每条给的是**能核的证据**,不是判断:
+>
+> | T | 框显示 | 实际 | 证据 |
+> |---|---|---|---|
+> | T0 门先行 | 未打勾 | **已做**(r1-locality) | `bench/allocgate.sh` / `allocgate-mem.sh` / `compressgate.sh` |
+> | T1 alloc 石头 | 未打勾 | **已做**(r1-locality) | `crates/kevy-alloc/src/` 12+ 文件;v8 收口十二角过七 |
+> | T2 alloc 接线 | 未打勾 | **已做**(r1-locality) | `perf(v5-T2)` 系列提交;M3 1.98× vs 2.40× |
+> | T3 compress 石头 | 未打勾 | **真没开工** | 全仓只有两条 RFC 提交,`crates/kevy-compress` 任何分支都不存在 |
+> | T4 compress 接线 | 未打勾 | **真没开工** | 同上 |
+> | T5 索引冷热窗口 | 未打勾 | **已发布** | `crates/kevy-window` + `crates/kevy-seg` + `kevy-index/src/segcold.rs`;`WINDOW col SPAN n BUCKET n` 语法在册;tiergate 六条窗口线;三语文档(zh/ja 于 2026-08-06 补齐) |
+> | T6 自动声明闭环 | 未打勾 | **已发布** | `AUTODECLARE` 横跨 5 个源文件 + `crates/kevy/tests/idx_advise_e2e.rs` |
+> | T7 索引即键(I2) | 未打勾 | **RFC 已出待拍** | `.claude/rfcs/2026-08-05-v5-i2-single-hop-index.md`;**批准前零实现代码** |
+> | T8 部署配方 | ✅ | **已做**(2026-08-06) | `docs/deploy-behind-a-proxy.md` 三语 + 站点 |
+> | T9 试验终账 | 未打勾 | **开着,被 T3/T4 与 merge 挡着** | 判据要 allocgate + compressgate 双绿 |
+>
+> **⇒ 真正开着的只有 compress 那条 train(T3/T4),外加属主拍板的 T7 与 merge。**
+> 之前"九条几乎都没动"的观感是清单造成的,不是事实。
+
 > 每 train:开工第一动 = feature 分支;标【RFC】的 RFC 批准前零实现代码;finish 前五轴收口全绿。
 
 ### T0 — 门先行(先红)
