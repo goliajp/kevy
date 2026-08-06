@@ -169,6 +169,12 @@ perfgate 累计 ~300M 写后憋死(两次复现,脏/净 checkout 各一),而新�
 (pgrep 选中 sudo 包装 / strip=true 吃掉 debuginfo / `$(…|tail -1)` 吞
 benchmark 输出 / 盒上 checkout 根 289 个 aof 残留)。
 
-**R5 ▶ 未做**(pubsub 残余 profile;同款手法,pubsub_bench 驱动)。
+**R5 ✅ 残余 class 已具名,且与 R4 合流** —— finding 落 `r1-locality` 本地
+`bbd83b16`(`PERF-FINDING-2026-08-06-pubsub-residual-is-page-refault.md`):
+`clear_page_erms`(内核零页填充)在 ON 下近乎翻倍(12.2% → **21.3%,跃居
+第一符号**)。机制 = kevy-alloc 把页还给 OS、下一突发 refault 回来付零填;
+glibc 从不还页所以从不付。**与 R4 是同一个机制的两张脸**(reclaim 的用户态
+tick 成本 + 内核侧零页税)⇒ **设计候选合流为一个:还页滞后/节流**(挂在
+记账既有的 hysteresis 项下,按 M3 包络定尺寸)。判定所需仪器全部在位。
 **R6 ▶ 未做**(K1 解码预算量化)。两者是下轮研究的开口。
 
