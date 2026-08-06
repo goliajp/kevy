@@ -225,3 +225,62 @@ B6 房客起名(demote 批缓冲嫌疑;池内按域再拆是结构解,调 AGE �
 ② 拆分版下重测 clear_page 份额 ③ sadd 逆行单查)。
 **RFC 判据未达成;按方法论这是 re-decomp 前的最后一轮假设。**
 `r1-locality` 本地 +10 笔,未 push。
+
+---
+
+## 四期(2026-08-07,pacing round 3 —— 按 round-2 finding 的 decomposition 序执行)
+
+**三步全跑完,三个自我修正全有同会话对照钉着:**
+
+1. **池的 B6 房客点名**(临时探针:park/take/reject 直方图挂 reclaim tick):
+   整个 B6 **只有 6 次 park** —— 一个 64MiB 通用启动映射(pubsub 服务器里
+   也一样出现)+ 36K-588K ladder 各一笔(~1.1MB)。"demote 批高频搅拌"
+   证伪:池在 B6 近乎静止。
+2. **M3 归因二次翻案**:caps 把 64MB 和 ladder 全赶出池后 RSS 一字不差
+   (2.16×)。三方同会话实验(glibc / eager-947a4660 / caps)裁决:
+   **eager 今天也是 2.16-2.17×,glibc 2.40×** —— 晨间 1.98× 是跨会话盒
+   漂移,round-2 记的"池滞留让 M3 付 0.18×"**本身是错的**(方法论 §1
+   "single run" 反模式的跨会话变体)。**pacing 各轮对 M3 全部零代价**;
+   M3 判据诚实重锚 = 与同会话 eager 打平(已达成)。
+3. **zadd "憋死"洗清**:隔离复现 2×2(round-2 版 / caps 版)——各 1 次
+   >3s INFO 停顿、**全部完赛 ~3.6M/s**。与构建无关的既有尾缺陷
+   (疑点:巨型结构增长 alloc+copy+zero vs glibc realloc 的 mremap);
+   round-1/3 的 REFUSED 与 round-2 的绿只是硬币两面。
+   **pacing 从头到尾没碰过活性。**
+4. **M2 机制看清**:持续负载 profile(第一次采样踩了"200k msgs <1s 跑完、
+   perf 采空转服务器"的坑,重跑 20M msgs)—— split 下 ON clear_page
+   9.3% ≈ OFF 10.2%,**refault 税已闭合**;剩余 4pp 缺口在
+   `deliver_publish` 自身(+6pp,header-free cache line 成本),
+   **不是 WHEN 轴能买的**。稳态 pubsub 根本不碰池;round-2 的
+   0.881 增益来自**跨 bench 实例的连接拆除缓冲复用**;按长度限占 v1
+   把它掐掉(0.863),撤销。
+5. **sadd 与 hset 同源**:allocator 自身符号 ON 13.1pp ≈ glibc 11.4pp,
+   +7pp 在 `drain_replica_inbox`(tick 邻接 LTO 区间,与 R4 结论合流);
+   −17.1 vs −15.7 是盒漂移,非独立机制。
+
+**实现走了三版,前两版各被一行数据否决**:
+v1(按长度限占 4)→ M2 0.863(掐掉跨实例拆除缓冲复用,撤);
+v2(128 槽)→ M2 收复 0.879,**但 B6 一腿 RSS 883MB / 2.59× 比 glibc
+还差** —— 槽位富余让**不同长度的死条目**(exact-length 永远配不上;压实
+类变长缓冲嫌疑)在 64 代 aging 到期前囤成无界尸堆,32 槽本来就是结构性
+兜底。**v3 终版 = 32 槽 + `POOL_MAX_LEN=1MiB` + aging、无按长度限占**,
+每个数字都有同会话实测背书;单测钉"整潮进池/下一波取走/巨型必拒"
+(第一版手搓 park 破坏恒等式被并发测试逮住,改走公共 alloc/dealloc
+生命周期)。
+**仪器债清偿**:allocgate M2 spread 的 awk `printf …, NR>1 ? …` 裸 `>`
+被解析成重定向 —— 比值命名杂散文件 + spread 空串,一个根因两个症状,已修
+(round-2 OFF spread 实测 1.4%,M2 的 0.88 远在噪声带外)。
+
+**v3 终版电池**(perfgate 完整跑完,zadd 硬币正面):活性 ✔ 全 12 角;
+M3 **4/4 腿 2.16-2.17× 全稳**(平价判据达成);M2 0.832;集合角
+sadd −15.8 / hset −12.0 / zadd −14.4(盒漂移 ≤2.9%);lpush/KV 全绿。
+**第四个修正来自表本身**:历轮 M2 = 0.83-0.88(eager 0.83-0.84 / split
+0.881 / v1 0.863 / v2 0.879 / v3 0.832)—— **±0.05 跨会话噪声带吞掉一切
+池效应主张**,round-2 的"aging +4-5pp"不过自家方法论;可靠的是 profile
+对(零填平价 + deliver_publish +6pp)。v3 以**结构理由**入库(滞留双界 +
+全轴零实测代价),不以吞吐主张入库。
+
+**设计收束**:M3 与活性两条线**已了结**(pacing 零代价);M2 剩余缺口
+(delivery layout)与集合写地板(tick 税)都**不在 WHEN 轴上** ——
+pacing 弧到此闭合,下一轮按方法论 = 对 tick 税的全新 decomposition
+(zadd >3s 停顿与 mremap 优势是两个具名入口)。
