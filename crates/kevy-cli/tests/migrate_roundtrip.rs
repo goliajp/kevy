@@ -30,8 +30,15 @@ impl Srv {
             assert!(status.success(), "cargo build -p kevy --bin kevy failed");
         }
         assert!(bin.exists(), "kevy server binary still missing at {bin:?}");
+        // A data directory of its own: without one the server writes
+        // into the test binary's cwd, which is this crate's source
+        // directory. Nothing here declares a table today, so nothing
+        // lands — but that is a property of the test, not of the setup.
+        let dir = std::env::temp_dir().join(format!("kevy-mig-{port}"));
+        std::fs::create_dir_all(&dir).unwrap();
         let child = Command::new(&bin)
             .args(["--port", &port.to_string(), "--threads", "2", "--no-aof"])
+            .args(["--dir", dir.to_str().unwrap()])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()

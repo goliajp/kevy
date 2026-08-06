@@ -72,6 +72,19 @@ checkout/快照(合计 >10G)、现役 checkout 内 1993 个未跟踪数据文件
   发生在 CI 上。同日还发现门的形状清单漏了 `tier/` 与 `segs-*`(分层与
   窗口段是这个门写成之后才加的写者),所以连今天那次都没报 —— 门的注释
   自己写着"清单里没有的形状,就是这个门看不见的形状",已补上并双向验证。
+- **测试起服务必须给 `--dir <临时目录>`;`rootgate` 现在扫整个工作树,不只仓库根。**
+  同日第三次撞到同一族的洞:新写的测试起的服务把 `index-catalog.meta` 写进了
+  `crates/kevy-cli/`(测试二进制的 cwd 是**它自己 crate 的目录**,不是仓库根),
+  于是**活过了这一轮、在下一轮回答"table already exists"**。三件事同时成立才
+  抓到:① 我在测试里断言了 `TABLE.DECLARE` **没有被拒绝**(`request_borrowed`
+  的 `unwrap()` 只解 io 错误,`-ERR` 回复会直接溜过去 —— 第一版测试就是这么骗到
+  我的);② 顺着 "already exists" 去找文件;③ `rootgate` 的磁盘检查**只看根**。
+  已把检查扩到整个工作树(排除 `target/` 与 `.git/`),并双向验证。
+  **一小时后同一个错误又犯了一次**:扩检查时清单只写了 `index-catalog.meta`,
+  而 sidecar 有**三个**(index / table / view),`table-catalog.meta` 当天下午
+  就大摇大摆走过去了。已改成 `*-catalog.meta`。**"清单里没有的形状就是看不见
+  的形状"这句话,今天在同一个门上应验了三次** —— 补清单时**去问写者**
+  (`grep '\.meta"' crates/*/src/`),不要凭手上这一个例子写。
 - tag 推送 = publish 触发器,**tag 之前 CI 必须真绿**(不是"应该绿")。
 - 误发补救顺序:`git push origin :refs/tags/vX.Y.Z`(撤 tag)→
   `gh run cancel <release-run>`(拦 publish)→ 修根因 → CI 真绿 →

@@ -59,7 +59,7 @@ pub struct TableHealth {
 }
 
 /// Pull `[field, value, …]` pairs out of a flat reply array.
-fn fields(items: &[Reply]) -> Vec<(String, String)> {
+pub(crate) fn fields(items: &[Reply]) -> Vec<(String, String)> {
     let bulks: Vec<String> = items
         .iter()
         .map(|r| match r {

@@ -74,10 +74,15 @@ the keyspace.
 ### Migration day, as tools instead of prose
 
 The migration playbook's eight lessons were a well-written requirements
-document that existed only in the reader's head. Three of them are now
-things you can run. None of them invents an opinion: each carries the
-lesson's own words, and the exit code is the verdict so a script can
-gate on it.
+document that existed only in the reader's head. Five of the eight are
+now things you can run, plus the first mile that comes before all of
+them. None invents an opinion: each carries the lesson's own words, and
+the exit code is the verdict so a script can gate on it.
+
+Three of the five turned out not to be the check the plan described.
+Writing them meant reading the lesson again and finding the plan had
+guessed — the notes below say which, because the wrong version of each
+would have passed forever or written the wrong rows confidently.
 
 - **`kevy-cli sql plan <file.sql>`** — the first mile. It reads the
   schema you already have and reports what becomes of *every* query:
@@ -111,6 +116,24 @@ gate on it.
   information that fails a cron stops being read. A table whose index
   is still backfilling reports `BUILDING`, which is its own outcome,
   not a failure.
+
+- **`kevy-cli lint`** — lessons 1 and 6, which are one item in the
+  playbook and two commands here because they run at different moments
+  and answer differently. `lint overlap --prefix p:` reads the family
+  of owner-keyed collections you have today and asks whether they
+  intersect; a name under two owners means the dimension is
+  multi-valued, no column can hold it, and a membership row is the
+  shape. That is an answer, so it exits non-zero. `lint columns
+  <table>` runs *after* the table exists — it reads rows — and reports
+  column pairs that carry the same value on most of them, which is one
+  column copied to get a second sort order. That is a suspicion, so it
+  exits zero.
+
+  Note what `lint overlap` does not do. The plan for it was to sample a
+  candidate column and check it is single-valued; a hash field holds
+  one value by construction, so that check would have passed forever.
+  The lesson says the cause lives in id-derivation code — but the
+  symptom is in the data, one level up from the row.
 
 Lessons 2 and 5 deliberately have no tool. Lesson 2 is a code audit —
 storage does not record who writes a table. Lesson 5 needs to know when

@@ -102,6 +102,8 @@ kevy-cli inspect -p 6004 user:
 ```
 kevy-cli sql plan schema.sql                       # 每条查询的去向
 kevy-cli backfill-keys --from-index i --from-prefix p:   # 并集
+kevy-cli lint overlap --prefix mailbox:              # lesson 1
+kevy-cli lint columns ev                           # lesson 6
 kevy-cli shadow -p 6004 --old "…" --new "…"        # 切换之前
 kevy-cli doctor -p 6004                            # 把 VERIFY 挂进 cron
 ```

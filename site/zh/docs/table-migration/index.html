@@ -53,6 +53,13 @@
 <h2 id="八课按需要的顺序">八课，按需要的顺序</h2>
 <h3 id="1-第一问每个查询维度在行上是单值的吗">1. 第一问：每个查询维度在行上是单值的吗？</h3>
 <p>对每个想让索引回答的查询，问它的维度是不是<b>行上的</b>单一值。答案通常不在行里，而在你的 id 推导或键构造代码里——这个邮件系统的"每邮箱一线程"看起来单值，读了 id 代码才发现一个线程可以住在多个邮箱里。若维度是多值的，任何列都载不动它：为每个 (owner, item) 建一条<b>成员行</b>——<code>member:{owner}:{item}</code>，把 owner、item 和排序属性作为列——让 ORDERPATH 去排它。先决定这个，才不会事后重declare整张表。</p>
+<p><b><code>kevy-cli lint overlap</code> 找的是症状，不是成因。</b> 成因在代码里、也留在那里——但一个多值的维度会在数据里留下机器读得到的痕迹：<b>同一个名字出现在不止一个 owner 之下</b>。把它对准你今天已有的那一族按 owner 分组的集合：</p>
+<figure class="code"><pre><code class="lang-console">$ kevy-cli lint overlap -p 6004 --prefix mailbox:
+2 owner(s) under mailbox:, 3 distinct name(s)
+1 name(s) appear under more than one owner:
+  t2  →  mailbox:1, mailbox:2
+this dimension is multi-valued, so no column can hold it — model a membership row per (owner, item) and let an ORDERPATH sort it</code></pre></figure>
+<p>有交叠时它<b>非零退出</b>，因为那是一个<b>答案</b>而不是提示：没有哪一列能承载一个点名两个 owner 的维度，所以声明脚本应该停下。也请注意它<b>不做</b>什么——不去采样某个候选列、看它是不是单值。hash 的一个字段天生只有一个值，那种检查会永远通过。</p>
 <h3 id="2-一旦开始供读每个-writer-都在承重">2. 一旦开始供读，每个 writer 都在承重</h3>
 <p>派生行由写它的人填充。切读之前，<b>枚举所有 writer</b>——每一条创建、修改、删除底层实体的代码路径——确认每一条都在写这张表所声明的行。会忘的那个 writer，就是在表存在之前写下的那个。（这正是 <code>TABLE.VERIFY</code> 的 <code>missing</code> 计数事后能抓到的类别；审计是让你不必在生产上遇见它的办法。）</p>
 <h3 id="3-回填要取所有能点名条目的来源的并集">3. 回填要取"所有能点名条目的来源"的并集</h3>
@@ -83,6 +90,12 @@ shadow: 50 samples, 50 diverged (first at sample 0)
 <p>影子窗口关闭时，先移除旧索引的 <b>reader</b>，再移除 writer。相反的顺序有一种静默故障：读一个不存在的键返回 0 或空、不是错误——writer 都删光后残留的一个 reader，不会崩溃，只会静静地供出错误答案。之后再删存储的键。</p>
 <h3 id="6-索引缺谓词-再加一条-orderpath永远不要复制列">6. 索引缺谓词 ⇒ 再加一条 ORDERPATH，永远不要复制列</h3>
 <p>当新查询需要一个现有形态给不出的谓词时，手工时代的反射是"把这个值再写到一个地方"——那是在重建这次迁移刚刚消灭的"两个 writer、一份真相"问题。改为在同样的列上声明<b>另一条 ORDERPATH</b>（或索引）；引擎会在同一次写里、从同一行推导出两者。</p>
+<p><b><code>kevy-cli lint columns &lt;table&gt;</code> 找的是形状。</b> 两列在几乎每一行上都带同一个值，就是一列被复制出去换第二种排序：</p>
+<figure class="code"><pre><code class="lang-console">$ kevy-cli lint columns -p 6004 ev
+ev: 43 row(s) sampled under ev:
+  created_at and sort_ts agree on 93% (40/43)
+a column copied to get a second sort order is the shape lesson 6 warns about — the answer is another ORDERPATH; ask IDX.ADVISE which one</code></pre></figure>
+<p>与 <code>lint overlap</code> 不同，它<b>无论发现什么都以 0 退出</b>：两列合法地相同是可能的，所以这是嫌疑不是判决。也与第 1 课那条检查不同，它跑在表<b>声明之后</b>——它读的是行。<code>--sample N</code> 限定读取量，<code>--threshold PCT</code> 挪动那条线。</p>
 <h3 id="7-开机用-ensure">7. 开机用 <code>ensure</code></h3>
 <p>常态就是<a href="../tables/#开机模式ensure">开机模式</a>：每次进程启动 <code>TABLE.ENSURE</code>——第一次开机 <code>Created</code>，以后 <code>Unchanged</code>，而当代码里的 spec 与 store 里的不再一致时，得到<b>点名差异的拒绝</b>——那是让你主动跑一次 <code>TABLE.REPLACE</code> 迁移的信号，而不是被一次迁移撞上。</p>
 <h3 id="8-让-verify-成为运维的一部分而不是迁移的一步">8. 让 <code>VERIFY</code> 成为运维的一部分，而不是迁移的一步</h3>

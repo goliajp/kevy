@@ -13,6 +13,11 @@ use kevy_resp_client::RespClient;
 struct Srv {
     child: Child,
     port: u16,
+    /// The server's data directory. Without one it writes its catalog
+    /// and AOF into the test binary's cwd — which is this crate's
+    /// source directory, where the files then survive into the next
+    /// run and answer "table already exists".
+    dir: std::path::PathBuf,
 }
 
 impl Srv {
@@ -30,8 +35,11 @@ impl Srv {
                 .expect("spawn cargo build");
             assert!(status.success(), "cargo build -p kevy --bin kevy failed");
         }
+        let dir = std::env::temp_dir().join(format!("kevy-srv-{port}"));
+        std::fs::create_dir_all(&dir).unwrap();
         let child = Command::new(&bin)
             .args(["--port", &port.to_string(), "--threads", "1", "--no-aof"])
+            .args(["--dir", dir.to_str().unwrap()])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
@@ -42,7 +50,7 @@ impl Srv {
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        Srv { child, port }
+        Srv { child, port, dir }
     }
 }
 
@@ -50,6 +58,7 @@ impl Drop for Srv {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
 
