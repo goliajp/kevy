@@ -22,7 +22,7 @@ IDX.QUERY idx_age RANGE 18 30 LIMIT 100 FIELDS name
 - `IDX.QUERY <name> RANGE <min> <max> | EQ <v> [LIMIT n] [CURSOR c] [FIELDS f…]` → `[next-cursor, rows]`。行は`(value, key)`で、全シャードにわたって順序づけられます。`FIELDS`は、各行を所有するシャード上で指定されたハッシュフィールドをhydrateし（2回目の往復は発生しません）、行をネストした`[key, value, fname, fval…]`の形に切り替えます。
 - `IDX.QUERY COMPOSE AND|OR <n1> <spec1> <n2> <spec2> …` — 2インデックスの合成です。**キー順**になります（2つの値ドメインが異なるため）。LIMIT/CURSOR/FIELDSの末尾は同じです。AND/ORはシャードごとに走ります（キーはちょうど1つのシャードに住むので、シャードごとの集合代数がグローバルに合成されます）。
 - `IDX.COUNT <name> RANGE|EQ …` — キーを実体化せずに数えます。
-- `IDX.VERIFY <name>` — 合算した統計。entries、bytes、coerce_failures、duplicates。
+- `IDX.VERIFY <name>` — 合算した統計。entries、bytes、coerce_failures、duplicates、そして**監査の両方向**：`checked` 件のエントリに対する `drift`（行が消えた、もう強制変換できない、あるいは別の値に変換されるエントリ）と、`missing`（プレフィックス配下で値を導出できるのにエントリが無い行）。健全なインデックスではどちらもゼロであるべきで、**`missing` はインデックス自身のエントリを走査するだけでは見えない方向**です。`kevy-cli doctor` はこれを宣言済みの全テーブルに対する終了コードに変えるので、「ゼロであるべき」を、誰かが思い出して確かめることではなく cron にできます（[table-migration.md](table-migration.md#8-verify-は移行の一部ではなく運用の一部に)）。
 - `IDX.LIST` — カタログと、インデックスごとのstate/entries/bytes。
 - カーソルの契約はSCANクラスです。走査の全体を通じて安定していた行はちょうど1回見えます。並行する挿入・削除は現れるかもしれないし、現れないかもしれません。`"0"`は開始または枯渇を意味します。
 
