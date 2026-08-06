@@ -46,6 +46,17 @@ impl Store {
         !self.notify_events.is_empty()
     }
 
+    /// Whether any key has expired since the last drain.
+    #[inline]
+    pub fn has_expired_keys(&self) -> bool {
+        !self.expired_keys.is_empty()
+    }
+
+    /// Take the keys dropped by expiry since the last drain.
+    pub fn take_expired_keys(&mut self) -> Vec<Vec<u8>> {
+        core::mem::take(&mut self.expired_keys)
+    }
+
     /// Take every captured event, in capture order.
     pub fn take_notify_events(&mut self) -> Vec<(KeyspaceEvent, Vec<u8>)> {
         core::mem::take(&mut self.notify_events)
@@ -53,6 +64,12 @@ impl Store {
 
     #[inline]
     pub(crate) fn note_expired(&mut self, key: &[u8]) {
+        // Always, whatever the notification flags say: the serving layer
+        // has to maintain derived state for this removal. Every expiry
+        // path — lazy `reap`, the single-lookup read, the active
+        // sampler — funnels through here, which is why the capture
+        // belongs here and not at each of them.
+        self.expired_keys.push(key.to_vec());
         if self.notify_capture & CAPTURE_EXPIRED != 0 {
             self.notify_events.push((KeyspaceEvent::Expired, key.to_vec()));
         }

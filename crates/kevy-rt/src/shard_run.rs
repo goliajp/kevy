@@ -322,6 +322,7 @@ impl<C: Commands> Shard<C> {
                         self.commands.on_shard_tick(&mut self.store);
                         self.drain_tick_frames();
                         self.drain_store_notify();
+                        self.drain_expired_keys();
                         self.apply_live_runtime_config(&mut tick_interval);
                         self.tick_persist();
                         self.tick_conn_gauge();
