@@ -314,7 +314,9 @@ fn text_kind_match_bm25() {
     assert!(s.contains("key value store"), "hydrated body: {s}");
     let r = cmd(&mut c, &[b"IDX.VERIFY", b"d_body"]);
     let s = String::from_utf8_lossy(&r);
-    assert!(s.contains("entries\r\n$1\r\n4"), "4 live docs: {s}");
+    // `docs`, under its own name — this line used to assert the scalar
+    // audit's `entries` label glued onto a text index.
+    assert!(s.contains("docs\r\n$1\r\n4"), "4 live docs: {s}");
 }
 
 #[test]
@@ -381,7 +383,9 @@ fn ann_kind_knn_e2e() {
     // VERIFY reports vectors + tombstones; REBUILD compacts
     let r = cmd(&mut c, &[b"IDX.VERIFY", b"e_v"]);
     let s = String::from_utf8_lossy(&r);
-    assert!(s.contains("entries\r\n$3\r\n199"), "199 living: {s}");
+    // `vectors`, under its own name (the scalar audit's `entries` label
+    // used to be glued onto this kind too).
+    assert!(s.contains("vectors\r\n$3\r\n199"), "199 living: {s}");
     assert_eq!(cmd(&mut c, &[b"IDX.REBUILD", b"e_v"]), b"+OK\r\n");
     let r = cmd(&mut c, &argv);
     assert!(!String::from_utf8_lossy(&r).contains("e:0\r"), "post-rebuild consistent");
@@ -465,7 +469,9 @@ fn agg_kind_group_by_e2e() {
     cmd(&mut c, &[b"HSET", b"ord:9", b"status", b"paid"]);
     let r = cmd(&mut c, &[b"IDX.VERIFY", b"ord_amt"]);
     let s = String::from_utf8_lossy(&r);
-    assert!(s.contains("coerce_failures\r\n$1\r\n1") || s.contains("$1\r\n1"), "excluded visible: {s}");
+    // The aggregate's own vocabulary: a row missing the field is
+    // `excluded`, not a coerce failure of some scalar audit.
+    assert!(s.contains("excluded\r\n$1\r\n1"), "excluded visible: {s}");
     // bad CREATEs rejected
     let r = cmd(&mut c, &[b"IDX.CREATE", b"bad1", b"ON", b"PREFIX", b"x:", b"FIELD", b"f",
                            b"TYPE", b"i64", b"KIND", b"agg"]);

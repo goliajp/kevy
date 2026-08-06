@@ -250,17 +250,13 @@ fn list_sums(chunks: &[Vec<u8>], n: usize) -> Vec<(bool, u64, u64, u64, u64)> {
 /// It used to report four counters and no drift at all, while the registry
 /// and the docs advertised it.
 pub(super) fn reduce_verify(chunks: &[Vec<u8>]) -> Vec<u8> {
-    let mut out = Vec::new();
-    let mut sums = [0u64; 7];
-    for c in chunks {
-        let mut pos = 1usize;
-        for slot in &mut sums {
-            let Some(w) = c.get(pos..pos + 8) else { break };
-            *slot += u64::from_le_bytes(w.try_into().expect("8 bytes"));
-            pos += 8;
-        }
-    }
-    let labels: [&[u8]; 7] = [
+    // Byte 0 is the status, byte 1 the kind tag. The tag decides the
+    // vocabulary: these chunks used to be bare positional u64s, and the
+    // scalar audit's labels were glued onto every kind — a text index's
+    // postings printed as `coerce_failures`, an aggregate's group count
+    // as `duplicates`. In-process fan-out, one binary, so the shape
+    // could simply be corrected.
+    let scalar: &[&[u8]] = &[
         b"entries",
         b"bytes",
         b"coerce_failures",
@@ -272,7 +268,23 @@ pub(super) fn reduce_verify(chunks: &[Vec<u8>]) -> Vec<u8> {
         // that walks only its own entries can never see this direction.
         b"missing",
     ];
-    encode_array_len(&mut out, 14);
+    let labels: &[&[u8]] = match chunks.iter().find_map(|c| c.get(1)) {
+        Some(b'a') => &[b"rows", b"bytes", b"excluded", b"groups"],
+        Some(b't') => &[b"docs", b"bytes", b"postings", b"tokens"],
+        Some(b'v') => &[b"vectors", b"bytes", b"tombstones", b"links", b"rebuild_recommended"],
+        _ => scalar,
+    };
+    let mut out = Vec::new();
+    let mut sums = vec![0u64; labels.len()];
+    for c in chunks {
+        let mut pos = 2usize;
+        for slot in &mut sums {
+            let Some(w) = c.get(pos..pos + 8) else { break };
+            *slot += u64::from_le_bytes(w.try_into().expect("8 bytes"));
+            pos += 8;
+        }
+    }
+    encode_array_len(&mut out, 2 * labels.len() as i64);
     for (label, v) in labels.iter().zip(sums.iter()) {
         encode_bulk(&mut out, label);
         encode_bulk(&mut out, v.to_string().as_bytes());

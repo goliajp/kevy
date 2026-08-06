@@ -72,32 +72,44 @@ pub(super) fn op_query(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>], verb:
 /// (`None` = scalar kind, fall through to the segment path).
 fn verify_kind_stats(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> Option<Vec<u8>> {
     let kind = ctx.state.catalogs.index().and_then(|c| c.get(name).map(|(s, _)| s.kind))?;
+    // Each kind answers with its own numbers UNDER ITS OWN NAMES. These
+    // used to be four bare u64s that the reducer labelled positionally
+    // with the scalar audit's vocabulary — a healthy 3-doc text index
+    // answered `coerce_failures 7, duplicates 7` (its postings and
+    // token counts), which reads as an integrity warning. The tag byte
+    // after the status is what lets the reducer tell the truth. The ann
+    // row also carried two facts in one number (`links +
+    // rebuild_recommended`); they travel separately now.
     let res = match kind {
         kevy_index::IndexKind::Agg => index_runtime::with_ready_agg(ctx, store, name, |a| {
             let st = a.stats();
-            [st.rows, st.approx_bytes, st.excluded, st.groups]
+            (b'a', vec![st.rows, st.approx_bytes, st.excluded, st.groups])
         }),
         kevy_index::IndexKind::Ann => index_runtime::with_ready_ann(ctx, store, name, |g| {
             let st = g.stats();
-            [
-                st.vectors,
-                st.approx_bytes,
-                st.tombstones,
-                st.links + u64::from(st.rebuild_recommended),
-            ]
+            (
+                b'v',
+                vec![
+                    st.vectors,
+                    st.approx_bytes,
+                    st.tombstones,
+                    st.links,
+                    u64::from(st.rebuild_recommended),
+                ],
+            )
         }),
         kevy_index::IndexKind::Text => {
             index_runtime::with_ready_text_segment(ctx, store, name, |_, ts, _, _| {
                 let st = ts.stats();
-                [st.docs, st.approx_bytes, st.postings, st.tokens]
+                (b't', vec![st.docs, st.approx_bytes, st.postings, st.tokens])
             })
         }
         _ => return None,
     };
     Some(match res {
-        Ok(quad) => {
-            let mut chunk = vec![ST_OK];
-            for v in quad {
+        Ok((tag, values)) => {
+            let mut chunk = vec![ST_OK, tag];
+            for v in values {
                 chunk.extend_from_slice(&v.to_le_bytes());
             }
             chunk
@@ -376,7 +388,7 @@ fn encode_verify_chunk(
             crate::cmd_table_verify::classify_prefix_rows(s, spec, &row_keys, &indexed, window);
         (drift, cls[4])
     });
-    let mut chunk = vec![ST_OK];
+    let mut chunk = vec![ST_OK, b's'];
     chunk.extend_from_slice(&stats.entries.to_le_bytes());
     chunk.extend_from_slice(&stats.approx_bytes.to_le_bytes());
     chunk.extend_from_slice(&stats.coerce_failures.to_le_bytes());
