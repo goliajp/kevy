@@ -153,3 +153,22 @@ K1 断言"解码必须 memcpy 级"(spg lzss 100MiB/s 会吃掉 105µs 冷读预�
 
 顺序:R4 → R5(同一 profile 会话)→ R6。产出全部按 train 归属落盘。
 
+### 二期执行结果(同日回填)
+
+**R4 ✅ decomposition 完成,答案比预设三分支更硬** —— finding 落
+`r1-locality` 本地 `bdf88ae0`(`PERF-DECOMP-2026-08-06-collection-write-residual.md`):
+① 具名 alloc 路径只比 glibc 贵 ~3pp(13.5-14.0% vs 10.4-11.0%),解释不了
+−12~−17%;② 更大的 +9-12pp 藏在 tick 邻接符号区间(fat LTO 不给名字;
+唯一 ON-only 的 tick 组件 = `thread_reclaim()`,即 M3 自己的机制);
+③ **用"关掉 reclaim 来定价"的实验失败得恰好回答了问题**:NR build 在
+perfgate 累计 ~300M 写后憋死(两次复现,脏/净 checkout 各一),而新起服务
+60 秒 zadd 全稳 —— **reclaim tick 是活性承重,不是可选成本**;
+④ 1.8 秒突发三方全平(~4.56M)—— 税是稳态现象,短跑仪器永远看不见。
+**⇒ 下一设计候选 = reclaim 节流(每 tick 有界预算 / 每 N tick 摊销),
+优先于任何进一步的 alloc 路径打磨。** 四笔仪器学费全部入档
+(pgrep 选中 sudo 包装 / strip=true 吃掉 debuginfo / `$(…|tail -1)` 吞
+benchmark 输出 / 盒上 checkout 根 289 个 aof 残留)。
+
+**R5 ▶ 未做**(pubsub 残余 profile;同款手法,pubsub_bench 驱动)。
+**R6 ▶ 未做**(K1 解码预算量化)。两者是下轮研究的开口。
+
