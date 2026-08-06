@@ -2,6 +2,15 @@
 
 > v5 **experiment** arc, first train. **Status: DESIGN — not approved, no code.**
 >
+> **Header drift, noted 2026-08-06.** The line above says "not approved,
+> no code". Both halves are contradicted by the record: `.claude/ROADMAP.md`
+> marks this RFC approved, and a train was built against it on the
+> `r1-locality` branch (the allocator reached a v8 closing ledger there).
+> This note states what is verifiable rather than rewriting the status —
+> whether "approved" is the owner's word is theirs to say. What must not
+> stand is a header that sends the next reader looking for permission
+> that the work already assumed.
+>
 > **This is an attempt at v5, not v5** (owner, 2026-07-26). Everything below is
 > a hypothesis under test, revisable down to its premises. If measurement kills
 > a premise, the premise changes — the design is not patched around it, and the
