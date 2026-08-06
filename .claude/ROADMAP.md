@@ -540,6 +540,25 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 
 ## 线性 checklist(v5,从上往下,不跳序)
 
+> **⚠️ 陈旧警告(2026-08-06 核实)——T0 / T1 / T2 已经做过了,不在这条分支上。**
+> 它们活在 **`r1-locality`**(本地 + `origin/r1-locality`,**32 commit 领先
+> develop、111 落后**):`bench/allocgate.sh` / `allocgate-mem.sh` /
+> `compressgate.sh` 都在(= T0),`crates/kevy-alloc/src/` 有 12+ 个文件
+> (class / global / heap / heap_claims / heap_foreign / heap_hot / large /
+> os / outbound / pagemap …)(= T1),并跑到了 **v8 收口**
+> (`17f85688 finding(v5): the v8 closing ledger — seven of twelve, and the
+> residual has a name`;十二角过七、M3 1.98× vs 2.40×、residual 已具名 =
+> 集合写小分配的元数据远线,**天真修法已知会破坏 M3,设计轮待拍板**)。
+>
+> **这条分支(`fix/idx-drift-on-multikey-writes`)上留下的痕迹只有
+> `crates/kevy-alloc/fuzz/`** —— 3049 个语料文件 + 2 个 OOM artifact 被
+> 跟踪着,而 `src/` 与 `Cargo.toml` 从未进过这条线。所以本地看起来"crate 存在
+> 但是空的",这是**分叉的假象,不是半成品**。
+>
+> **照着下面的未打勾去开工,会把一条已经存在的 train 重做一遍**——本轮起手
+> 就差一步走进去,是先核前提拦住的。下面的框保持原样(它们记录的是设计,
+> 不是进度);**真进度以 `r1-locality` 为准,merge 归属主**。
+
 > 每 train:开工第一动 = feature 分支;标【RFC】的 RFC 批准前零实现代码;finish 前五轴收口全绿。
 
 ### T0 — 门先行(先红)
