@@ -58,12 +58,19 @@ static POOLED: AtomicU64 = AtomicU64::new(0);
 /// deterministically, so exact-length matching is both trivial and
 /// sufficient; a miss just maps, and anything unusual falls through.
 struct PoolInner {
-    entries: [(usize, usize); POOL_SLOTS], // (addr, mapped_len)
+    entries: [(usize, usize, u8); POOL_SLOTS], // (addr, mapped_len, parked_gen)
     len: u8,
+    /// Drain-call generation. Ages are measured in drain calls — one
+    /// per shard per tick — because the pool is process-wide and has
+    /// no tick of its own. With N shards the wall-clock bound is
+    /// POOL_AGE_DRAINS / N ticks; the bound existing at all is what
+    /// matters (the no-reclaim wedge's lesson), not its exact length.
+    generation: u8,
 }
 
 static POOL_LOCK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
-static mut POOL: PoolInner = PoolInner { entries: [(0, 0); POOL_SLOTS], len: 0 };
+static mut POOL: PoolInner =
+    PoolInner { entries: [(0, 0, 0); POOL_SLOTS], len: 0, generation: 0 };
 
 /// Run `f` holding the pool lock.
 fn with_pool<R>(f: impl FnOnce(&mut PoolInner) -> R) -> R {
@@ -86,7 +93,7 @@ fn pool_take(mapped: usize) -> Option<NonNull<u8>> {
     with_pool(|p| {
         for i in 0..p.len as usize {
             if p.entries[i].1 == mapped {
-                let (addr, _) = p.entries[i];
+                let (addr, _, _) = p.entries[i];
                 p.len -= 1;
                 p.entries[i] = p.entries[p.len as usize];
                 POOLED.fetch_sub(mapped as u64, Relaxed);
@@ -103,24 +110,42 @@ fn pool_park(ptr: NonNull<u8>, mapped: usize) -> bool {
         if p.len as usize == POOL_SLOTS {
             return false;
         }
-        p.entries[p.len as usize] = (ptr.as_ptr() as usize, mapped);
+        p.entries[p.len as usize] = (ptr.as_ptr() as usize, mapped, p.generation);
         p.len += 1;
         POOLED.fetch_add(mapped as u64, Relaxed);
         true
     })
 }
 
-/// Unmap everything parked. Any shard's reclaim tick calls this, so
-/// retention beyond a tick has to be re-earned by sustained traffic.
+/// Unmap parked mappings that have aged past the pacing bound; young
+/// entries stay parked so a burst cycle re-takes them instead of
+/// paying mmap + kernel zero-fill again
+/// (RFC 2026-08-06-v5-reclaim-pacing). Ages are in drain calls and
+/// every entry still leaves within POOL_AGE_DRAINS of them — the same
+/// unconditional liveness bound as the span sweep's.
 pub(crate) fn pool_drain() {
+    /// Drain calls an entry may sit parked. With N shards each
+    /// ticking, wall-clock retention is this / N ticks.
+    const POOL_AGE_DRAINS: u8 = 64;
     // Collected under the lock, unmapped outside it: munmap takes the
     // process mmap_lock, and holding a spinlock across that invites
     // exactly the convoy this pool exists to prevent.
     let mut held: [(usize, usize); POOL_SLOTS] = [(0, 0); POOL_SLOTS];
     let n = with_pool(|p| {
-        let n = p.len as usize;
-        held[..n].copy_from_slice(&p.entries[..n]);
-        p.len = 0;
+        p.generation = p.generation.wrapping_add(1);
+        let mut n = 0usize;
+        let mut i = 0usize;
+        while i < p.len as usize {
+            let (addr, mapped, born) = p.entries[i];
+            if p.generation.wrapping_sub(born) >= POOL_AGE_DRAINS {
+                held[n] = (addr, mapped);
+                n += 1;
+                p.len -= 1;
+                p.entries[i] = p.entries[p.len as usize];
+            } else {
+                i += 1;
+            }
+        }
         n
     });
     for &(addr, mapped) in &held[..n] {
