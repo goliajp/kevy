@@ -92,6 +92,29 @@ passed against the version that hangs. It forces `KEVY_IO_URING=0` for
 the same reason — on Linux the default reactor is the one that already
 worked, so the regression would never have been reached.
 
+### A durable effect is a propagated effect, or it is named
+
+The three data-loss fixes above were one omission wearing three faces:
+a write reached the AOF and never reached the replica, and because the
+change feed reads the replication backlog, never reached a CDC consumer
+either. The fix paired the two in `log_effect`.
+
+`bench/propgate.sh` keeps the pairing from coming apart again. Every
+`self.log(…)` / `self.log_write(…)` in the runtime must be followed by
+a `push_mutation` within a few code lines, or be listed in the script
+with the reason it is durable-only. There are two such reasons today,
+both real: `FLUSHALL` propagates by bumping the feed generation (a
+record would land at the offset the bump just reset to zero), and
+window-tick `SEGMENTED` frames are per-node — a replica runs its own
+window tick and seals its own segments.
+
+Auditing the nine call sites to write it found no tenth bug: every one
+is paired or named. What it did find is that the big-value io_uring
+fast path hand-writes the pair instead of calling `log_effect` — which
+is why the gate greps for the pairing rather than for the helper, and
+why a new fast path that logs and forgets to push now fails in CI
+rather than in someone's replica.
+
 ### The translations that quietly fell behind
 
 The docs are published in three languages and nothing was checking that
