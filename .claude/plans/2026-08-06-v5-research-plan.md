@@ -617,3 +617,19 @@ flag 2 = 按文件表编码、**零每记录头**;三种字面量编码竞争取
 180)= 序列侧未编码 + 匹配器差距,收益递减带,如实记录。
 kevy-compress 10 测 + workspace 全绿。r1-locality 现 **+35 笔**
 (tip `df9358e8`,先读 ahead 再记账)。
+
+---
+
+## 二十一期(2026-08-07,merge 前 QC —— 门禁全绿化)
+
+分支交付质检:探针残留 **0**(全 grep)/ LOC:locgate 抓 3 处本弧
+fn>50(lz_high 55 / serialize_high 55 / train 51)→ 按缝拆助手当场
+清偿 → **PASS** / **commentgate 30 处内部词汇**(K 判据码、finding
+文件名、RFC 日期)→ 全部改写为自含陈述("注释向读者陈述约束本身,
+不指向项目账本")→ **PASS(0 hits)** / rootgate PASS / clippy 静 /
+cargo doc 静 / workspace 双确认全绿 / compressgate 本地 RED 属设计
+(envelope 结果文件只在盒上生成),收尾语更新为如实指路(哪两条线
+要工件、单测线 FAIL 才是回归)。
+
+r1-locality 现 **+38 笔**(tip `470fe5e6`)。**分支处于 merge-ready
+状态**:全部本地门禁绿、全部测量落档、全部拍板件收拢。
