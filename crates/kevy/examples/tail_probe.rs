@@ -30,9 +30,19 @@ fn main() {
     while Instant::now() < deadline {
         let t0 = Instant::now();
         conn.write_all(b"*1\r\n$4\r\nPING\r\n").expect("write");
-        // +PONG\r\n — a single small read; anything longer is a bug.
-        let n = conn.read(&mut buf).expect("read");
-        assert!(&buf[..n] == b"+PONG\r\n", "unexpected reply: {:?}", &buf[..n]);
+        // Read until the CRLF — under load the kernel may hand the
+        // 7-byte reply in pieces (round 2 of the first box run
+        // panicked exactly there).
+        let mut got = 0usize;
+        loop {
+            let n = conn.read(&mut buf[got..]).expect("read");
+            assert!(n > 0, "server closed mid-reply");
+            got += n;
+            if buf[..got].ends_with(b"\r\n") {
+                break;
+            }
+        }
+        assert!(&buf[..got] == b"+PONG\r\n", "unexpected reply: {:?}", &buf[..got]);
         let rtt = t0.elapsed();
         rtts_us.push(rtt.as_micros() as u64);
         // Pace to ~1 kHz so the prober measures the server, not itself;
