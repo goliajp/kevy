@@ -449,3 +449,18 @@ bench-infra 条款)。诚实弧终账:集合角全部从双位数负改善到个
 不是编译,发盒前要真 build(盒上逮住 field 名错)。finding =
 `bench/PERF-FINDING-2026-08-07-zadd-pause-drain-starvation.md`。
 r1-locality 现 **+25 笔**(tip `c625b585`)。
+
+---
+
+## 十二期(2026-08-07,perfgate-median 落地 —— 定稿账本)
+
+**`bench/perfgate-median.sh` 入库**(`59562cb8`,先实证产出后入门禁,
+按既有纪律):N 轮 perfgate、每角 median(cand) vs median(ref)、
+REFUSED 即中止(部分集的中位数不是中位数)。**首次 N=3 全程零
+REFUSED**(drain 预算修复在门禁上兑现)。
+
+**定稿账本**:get −0.8 / set −4.4 / lpush −5.5 / cluster/compat 绿 /
+zinterstore +9.0 全 PASS;**sadd −10.6 / hset −9.7 / zadd −13.9 /
+incr −10.4 中位数 FAIL** —— 单跑高点(sadd −7.8)与低点(zadd −15.7)
+都是带缘,此表是与 alloc-off 参照的确定距离,残余 RFC 三门现在有了
+精确定价基准。r1-locality 现 **+27 笔**(tip `f47cceb9`)。
