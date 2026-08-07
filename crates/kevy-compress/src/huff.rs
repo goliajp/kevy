@@ -27,7 +27,7 @@ const MAX_LEN: u32 = 12;
 pub(crate) const HEADER_LEN: usize = 128;
 
 /// Build canonical code lengths for `hist`, length-limited to MAX_LEN.
-fn code_lengths(hist: &[u64; 256]) -> [u8; 256] {
+pub(crate) fn code_lengths(hist: &[u64; 256]) -> [u8; 256] {
     // Huffman via repeated pairing over a sorted worklist. 256 symbols
     // at compaction cadence: simplicity beats a heap.
     let mut nodes: Vec<(u64, Vec<u8>)> = hist
@@ -79,7 +79,7 @@ fn code_lengths(hist: &[u64; 256]) -> [u8; 256] {
 
 /// Canonical code assignment from lengths: shorter first, then symbol
 /// order — both sides derive identical codes from the header alone.
-fn canonical_codes(lens: &[u8; 256]) -> [u16; 256] {
+pub(crate) fn canonical_codes(lens: &[u8; 256]) -> [u16; 256] {
     let mut codes = [0u16; 256];
     let mut next: u32 = 0;
     for bits in 1..=MAX_LEN {
@@ -106,12 +106,7 @@ pub(crate) fn encode(input: &[u8]) -> Option<Vec<u8>> {
         hist[b as usize] += 1;
     }
     let lens = code_lengths(&hist);
-    let codes = canonical_codes(&lens);
-    let coded_bits: u64 = hist
-        .iter()
-        .zip(&lens)
-        .map(|(&c, &l)| c * u64::from(l))
-        .sum();
+    let coded_bits = cost_bits(&hist, &lens)?;
     let total = HEADER_LEN + coded_bits.div_ceil(8) as usize;
     if total >= input.len() {
         return None;
@@ -120,6 +115,28 @@ pub(crate) fn encode(input: &[u8]) -> Option<Vec<u8>> {
     for pair in lens.chunks_exact(2) {
         out.push(pair[0] | (pair[1] << 4));
     }
+    write_bits(input, &lens, &mut out);
+    Some(out)
+}
+
+/// Total coded bits of `hist` under `lens` — `None` when a needed
+/// symbol has no code (an external table may not cover this block).
+pub(crate) fn cost_bits(hist: &[u64; 256], lens: &[u8; 256]) -> Option<u64> {
+    let mut bits = 0u64;
+    for (&c, &l) in hist.iter().zip(lens) {
+        if c > 0 {
+            if l == 0 {
+                return None;
+            }
+            bits += c * u64::from(l);
+        }
+    }
+    Some(bits)
+}
+
+/// Append `input` as an LSB-first bitstream under `lens`.
+pub(crate) fn write_bits(input: &[u8], lens: &[u8; 256], out: &mut Vec<u8>) {
+    let codes = canonical_codes(lens);
     let (mut acc, mut nbits) = (0u64, 0u32);
     for &b in input {
         let (code, len) = (codes[b as usize], u32::from(lens[b as usize]));
@@ -135,7 +152,6 @@ pub(crate) fn encode(input: &[u8]) -> Option<Vec<u8>> {
     if nbits > 0 {
         out.push(acc as u8);
     }
-    Some(out)
 }
 
 /// Bit-reverse the low `len` bits (canonical codes are MSB-first by
@@ -157,8 +173,14 @@ pub(crate) fn decode(buf: &[u8], n: usize) -> Result<(Vec<u8>, usize), Corrupt> 
         lens[i * 2] = b & 0x0f;
         lens[i * 2 + 1] = b >> 4;
     }
-    // Kraft validation: a header that over-fills the code space would
-    // let two codes alias; reject instead of guessing.
+    validate_lens(&lens, n)?;
+    let (out, used_bits) = read_bits(&buf[HEADER_LEN..], &lens, n)?;
+    Ok((out, HEADER_LEN + used_bits.div_ceil(8) as usize))
+}
+
+/// Kraft validation: an over-full code space lets two codes alias;
+/// reject instead of guessing.
+pub(crate) fn validate_lens(lens: &[u8; 256], n: usize) -> Result<(), Corrupt> {
     let kraft: u64 = lens
         .iter()
         .filter(|&&l| l > 0)
@@ -167,7 +189,13 @@ pub(crate) fn decode(buf: &[u8], n: usize) -> Result<(Vec<u8>, usize), Corrupt> 
     if kraft > (1u64 << MAX_LEN) || (n > 0 && kraft == 0) {
         return Err(Corrupt);
     }
-    let codes = canonical_codes(&lens);
+    Ok(())
+}
+
+/// Decode `n` symbols from an LSB-first bitstream under `lens`;
+/// returns the bytes and the exact bits consumed.
+pub(crate) fn read_bits(stream: &[u8], lens: &[u8; 256], n: usize) -> Result<(Vec<u8>, u64), Corrupt> {
+    let codes = canonical_codes(lens);
     // Flat table: index = next MAX_LEN reversed bits -> (symbol, len).
     let mut table = vec![(0u8, 0u8); 1 << MAX_LEN];
     for s in 0..256 {
@@ -183,7 +211,6 @@ pub(crate) fn decode(buf: &[u8], n: usize) -> Result<(Vec<u8>, usize), Corrupt> 
             ix += step;
         }
     }
-    let stream = &buf[HEADER_LEN..];
     let mut out = Vec::with_capacity(n);
     let (mut acc, mut nbits, mut pos) = (0u64, 0u32, 0usize);
     let mut used_bits: u64 = 0;
@@ -206,7 +233,7 @@ pub(crate) fn decode(buf: &[u8], n: usize) -> Result<(Vec<u8>, usize), Corrupt> 
     // reader may have pulled bytes past the last code (harmless — they
     // are the caller's next section), and the section boundary must
     // land exactly.
-    Ok((out, HEADER_LEN + used_bits.div_ceil(8) as usize))
+    Ok((out, used_bits))
 }
 
 #[cfg(test)]

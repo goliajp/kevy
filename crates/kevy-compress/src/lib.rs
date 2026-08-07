@@ -71,6 +71,34 @@ pub const TAG_LZH_DICT: u8 = 4;
 /// bounds how much trailing dictionary is reachable.
 pub const MAX_OFFSET: usize = u16::MAX as usize;
 
+/// Magic prefix of a structured dictionary: `[magic][128 B code
+/// lengths][content]`. The embedded table is the file-scoped entropy
+/// model (one header per FILE instead of per record — the reason the
+/// per-record Huffman header could not amortize at 400 B). A
+/// dictionary without the magic is plain content bytes; the vlog is
+/// disposable, so this format carries no compatibility burden.
+const DICT_MAGIC: &[u8; 5] = b"KVCD1";
+
+/// Split a dictionary into its optional entropy table and its content
+/// (the match-history bytes).
+fn parse_dict(dict: &[u8]) -> (Option<[u8; 256]>, &[u8]) {
+    let Some(rest) = dict.strip_prefix(DICT_MAGIC.as_slice()) else {
+        return (None, dict);
+    };
+    let Some((hdr, content)) = rest.split_at_checked(huff::HEADER_LEN) else {
+        return (None, dict);
+    };
+    let mut lens = [0u8; 256];
+    for (i, &b) in hdr.iter().enumerate() {
+        lens[i * 2] = b & 0x0f;
+        lens[i * 2 + 1] = b >> 4;
+    }
+    if huff::validate_lens(&lens, 1).is_err() {
+        return (None, dict);
+    }
+    (Some(lens), content)
+}
+
 /// Decode failure: the frame does not decode to exactly what its
 /// header promises. Corrupt and truncated frames land here — they are
 /// rejected, never mis-decoded (K3).
@@ -89,9 +117,10 @@ impl core::fmt::Display for Corrupt {
 /// adversarial input, anything — the frame stores the bytes raw.
 #[must_use]
 pub fn encode(dict: &[u8], input: &[u8]) -> Vec<u8> {
+    let (_, content) = parse_dict(dict);
     let mut frame = Vec::with_capacity(input.len() + MAX_HEADER);
     let (tag, ok) = if input.len() >= encode::MIN_INPUT {
-        encode::try_lz(dict, input, &mut frame)
+        encode::try_lz(content, input, &mut frame)
     } else {
         (TAG_RAW, false)
     };
@@ -113,9 +142,10 @@ pub fn encode(dict: &[u8], input: &[u8]) -> Vec<u8> {
 /// value re-encoded by compaction has proven cold (RFC §3).
 #[must_use]
 pub fn encode_high(dict: &[u8], input: &[u8]) -> Vec<u8> {
+    let (lens, content) = parse_dict(dict);
     let mut frame = Vec::with_capacity(input.len() + MAX_HEADER);
     let (tag, ok) = if input.len() >= encode::MIN_INPUT {
-        encode::try_high(dict, input, &mut frame)
+        encode::try_high(content, lens.as_ref(), input, &mut frame)
     } else {
         (TAG_RAW, false)
     };
@@ -133,6 +163,7 @@ pub fn encode_high(dict: &[u8], input: &[u8]) -> Vec<u8> {
 /// bytes the encoder was given — the tag records whether the frame
 /// depends on it at all.
 pub fn decode(dict: &[u8], frame: &[u8]) -> Result<Vec<u8>, Corrupt> {
+    let (lens, content) = parse_dict(dict);
     let (&tag, rest) = frame.split_first().ok_or(Corrupt)?;
     let (orig_len, payload) = read_varint(rest)?;
     match tag {
@@ -144,17 +175,17 @@ pub fn decode(dict: &[u8], frame: &[u8]) -> Result<Vec<u8>, Corrupt> {
         }
         TAG_LZ => decode::lz(&[], payload, orig_len),
         TAG_LZ_DICT => {
-            if dict.is_empty() {
+            if content.is_empty() {
                 return Err(Corrupt);
             }
-            decode::lz(dict, payload, orig_len)
+            decode::lz(content, payload, orig_len)
         }
-        TAG_LZH => decode::lz_high(&[], payload, orig_len),
+        TAG_LZH => decode::lz_high(&[], None, payload, orig_len),
         TAG_LZH_DICT => {
-            if dict.is_empty() {
+            if content.is_empty() {
                 return Err(Corrupt);
             }
-            decode::lz_high(dict, payload, orig_len)
+            decode::lz_high(content, lens.as_ref(), payload, orig_len)
         }
         _ => Err(Corrupt),
     }
@@ -171,11 +202,33 @@ pub fn decode(dict: &[u8], frame: &[u8]) -> Result<Vec<u8>, Corrupt> {
 /// burden (the dictionary dies with its vlog file).
 #[must_use]
 pub fn train(samples: &[&[u8]], budget: usize) -> Vec<u8> {
-    let budget = budget.min(MAX_OFFSET);
-    let mut dict = Vec::with_capacity(budget);
+    let mut dict = Vec::with_capacity(budget.min(MAX_OFFSET + 256));
     if samples.is_empty() || budget == 0 {
         return dict;
     }
+    // File-scoped entropy table: one 128 B header per FILE amortizes
+    // where the per-record header measured itself out at 400 B.
+    // Add-one smoothing keeps every byte codable, so a block never
+    // falls back merely because it contains a byte the samples lacked.
+    // The header spends budget like anything else; a budget too small
+    // to leave meaningful content after it skips the table.
+    let header = DICT_MAGIC.len() + huff::HEADER_LEN;
+    if budget >= header * 8 {
+        let mut hist = [1u64; 256];
+        for s in samples {
+            for &b in *s {
+                hist[b as usize] += 1;
+            }
+        }
+        dict.extend_from_slice(DICT_MAGIC);
+        let lens = huff::code_lengths(&hist);
+        for pair in lens.chunks_exact(2) {
+            dict.push(pair[0] | (pair[1] << 4));
+        }
+    }
+    // Content is what back-references reach: clamp IT to the offset
+    // limit; the header rides above that reach.
+    let budget = (budget - dict.len()).min(MAX_OFFSET);
     // Stride so picks span the corpus rather than clustering at the
     // front — rotation seeding hands us *old* files' bytes first, and
     // the tail is as representative as the head. Exact duplicates are
