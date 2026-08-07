@@ -142,3 +142,14 @@ bench-infra clause). The two-run quote is the honest scoreboard:
 sadd −8.5/−9.6 · hset −11.6/−9.4 · zadd −11.7/−15.7 · lpush
 −4.3/−6.1 — all still double-digit improved from the arc's start,
 none provably green but lpush.
+
+## The median ledger (perfgate-median, N=3, zero REFUSED)
+
+With the drain-budget fix killing the zadd coin flip, the first
+median-of-3 gate run closes the book on single-run dancing:
+get −0.8 · set −4.4 · lpush −5.5 · cluster/compat green ·
+zinterstore +9.0 — and **sadd −10.6 · hset −9.7 · zadd −13.9 ·
+incr −10.4 below floor on medians**. That is the definitive current
+distance to the alloc-off reference; the single-run highs (sadd −7.8)
+and lows (zadd −15.7) were both band edges. The residue RFC's doors
+now have their exact number to price against.
