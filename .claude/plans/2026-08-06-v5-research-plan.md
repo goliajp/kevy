@@ -366,3 +366,24 @@ zadd 用一次 owner 线程采样验证同形。
 弃用,wait-for-quiet 守卫已进脚本。finding =
 `bench/PERF-DECOMP-2026-08-07-hset-tax-owner-thread.md`(`ee98f000`,
 r1-locality **+17 笔**)。
+
+---
+
+## 八期(2026-08-07,快路径轮 —— 命中率、重排落地、平坦残差)
+
+**分支率探针**:claims 命中 alloc 99.88% / free recycle 99.86%,慢路径
+与段扫痕量 —— 攻击面 = 命中路径每调用成本本身(探针自身全局原子污染了
+一次 owner profile,比率有效、画像弃用 —— 又一笔仪器学费)。
+**claims-first free 落地**(`42198079`):recycle 路径不再读段头
+(匹配即所有权证明);hset owner 3 轮插值 **+0.8/+2.4/+4.4%,均值
++2.5%**;增行触发 500-LOC 门 → free 侧拆 `heap_free.rs`(手术第一版
+脚本切坏括号,人工重做 —— 结构拆分不该用正则)。
+**重排后 owner srcline 平化**:顶行仅 3.94% = `segment.rs:141` 的
+`off / size_of(class)` 整除(每 free 一次)—— **最后一把具名刀 =
+按类倒数魔数表(mimalloc 同款),值 ~2-4%**;`class::index_of` 已是
+查表,其 3.92% 是入口摊派不是刀。
+**诚实残差**:门(+8pp sadd)+ 重排(+2.5% hset)之后,ON vs glibc
+集合差距是**摊薄在整个 alloc/free 机器上的 ~10%,无主导座位** ——
+再收要么许多小刀(倒数除法先行),要么 class 形状 / claims 宽度
+重设计(与 M3 互动,**设计决策归属主,不是 autorun 尺寸的改动**)。
+r1-locality 现 **+19 笔**(tip `ddec7b2e`)。
