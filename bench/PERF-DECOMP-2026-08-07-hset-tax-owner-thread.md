@@ -98,3 +98,33 @@ tcache push/pop.
   push/pop; closing the rest is either many small knives (reciprocal
   division first) or a class-shape/claims-width redesign — a design
   decision with M3 interplay, not an autorun-sized change.
+
+---
+
+## The reciprocal knife, and the official two-knife table
+
+`slot_index_of`'s division became a per-class `ceil(2^32/size)`
+multiply-shift (`0ce0397d`) — exact by Granlund–Montgomery on this
+domain and exhaustively tested over all 79 classes × 64 Ki offsets.
+hset owner A/B, 6 interleaved rounds (one collapsed-baseline outlier
+excluded): **+3.9 % mean, with visibly tighter spread than baseline**.
+
+perfgate on the two-knife tip (gate + claims-first + reciprocal), full
+run, box drift ≤ ±4.3 %:
+
+| angle | arc start | now | floor |
+|---|---:|---:|---|
+| sadd | −15.8 | **−8.5** | misses green by 0.5 % |
+| hset | −13.4 | −11.6 | red |
+| zadd | −14.4 | −11.7 | red |
+| lpush | −6.3 | **−4.3 green** | ✓ |
+| incr / get / set | green | green (−5.5/−5.4/−7.4) | ✓ |
+| zinterstore | +3.1 | +18.9 | ✓ (tiny-n angle, treat softly) |
+
+The ad-hoc knife means (+2.5 %, +3.9 %) overpromised what the ratchet
+banked (−13.4 → −11.6 on hset): band-edge means with round scatter
+inflate; the official interleaved table is the ledger. Every
+collection angle moved double digits → single digits across the arc;
+none but lpush is green yet. What remains is the flat ~10 % machinery
+spread — the class-shape / claims-width design question (M3 interplay)
+already on the owner's table, plus sadd needing half a point.
