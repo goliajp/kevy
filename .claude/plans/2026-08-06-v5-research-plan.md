@@ -577,3 +577,26 @@ workspace 全绿。r1-locality 现 **+33 笔**(tip `b79ea0dd`)。
 
 **压缩 train 可 autorun 的余项已尽**;熵编码档是"再来一遍同量级
 工作"(RFC 原话),开工与否归属主。
+
+---
+
+## 十九期(2026-08-07,压实级落地 —— 熵编码档接线并自定价)
+
+重读 §7.1 修正上轮的过度保守:"the compaction level lands afterwards
+against the same K-criteria" 是属主 7/26 已拍的既定计划,非新决策。
+**落地**(`b374f9d1`):一个 match finder、两个序列化器;高档把全部
+字面量抽成单块 canonical-Huffman(zstd 形:整块解码 + 字节对齐序列
+流;12 位限长、128B nibble 头、平表解码、入口 Kraft 校验、按位精算
+分节边界);**strictly smallest-wins 对 fast/raw → K2 在高一层构造
+性成立**;`compact_step` 幸存者经 `append_high` 重写(两级取舍骑在
+既有扫描上)。
+
+**双向自定价**:块级 JSON >5% 胜 fast(单测钉死);**400B 值上永不
+接火** —— 每记录 128B 码长头摊不平,huff 自身 K2 拒绝,smallest-wins
+回落 fast(语料表 high 列 = dict 列,诚实)。**结构启示入 follow-up
+名单:小值尺度的熵表应是文件级、搭字典生命周期**(zstd 字典内嵌熵表
+即为此)—— 每文件一头而非每记录;管道(tag/smallest-wins/压实接线)
+已在位,共享表 refinement 可无损落入。
+
+kevy-compress 10 测 + kevy-vlog 14 测 + workspace 全绿。
+r1-locality 现 **+34 笔**(tip `b374f9d1`)。
