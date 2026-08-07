@@ -20,7 +20,10 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/miggate-XXXXXX")
 KEVY_PID=""
 fail() { echo "migrationgate: FAIL — $1"; exit 1; }
 cleanup() {
-    [ -n "$KEVY_PID" ] && kill -9 "$KEVY_PID" 2>/dev/null
+    if [ -n "$KEVY_PID" ]; then
+        kill -9 "$KEVY_PID" 2>/dev/null
+        wait "$KEVY_PID" 2>/dev/null
+    fi
     docker rm -f "$PGC" >/dev/null 2>&1
     rm -rf "$WORK"
 }
