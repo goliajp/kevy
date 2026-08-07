@@ -52,7 +52,16 @@ use crate::segment::{
 /// [`Heap::with_class_cap`] takes a tighter bound where one is wanted —
 /// which is how the exhaustion path stays testable now that the default
 /// is out of reach.
-pub const PER_CLASS_CAP: u16 = 65_535;
+///
+/// **The same lesson, second verse:** the raise above was silently
+/// pinned by its own `u16` — 65,535 spans × 64 KiB is a hidden 4 GiB
+/// ceiling *per class*, and the first hour-long soak found it: a
+/// 3-byte-value storm filled the 16 B class and the process aborted
+/// with "memory allocation of 3 bytes failed" on a box with 48 GiB
+/// free. The counter is now `u32` and the guard sits at 1 TiB per
+/// class — memory governance belongs to maxmemory and the tier
+/// budget, never to an invisible allocator constant.
+pub const PER_CLASS_CAP: u32 = 16_777_216;
 
 /// Empty spans a heap keeps mapped-but-discarded before releasing the
 /// whole segment. Decay-style hysteresis, after jemalloc: releasing
@@ -67,7 +76,7 @@ pub struct Heap {
     pub(crate) segments: *mut Segment,
     /// Current span per class, as (segment, span index).
     pub(crate) partial: [Option<(NonNull<Segment>, u8)>; NCLASSES],
-    pub(crate) spans_in_class: [u16; NCLASSES],
+    pub(crate) spans_in_class: [u32; NCLASSES],
     pub(crate) live_bytes: u64,
     pub(crate) rounding_bytes: u64,
     /// Foreign frees awaiting batched shipment home. The free fast path
@@ -95,7 +104,7 @@ pub struct Heap {
     /// residual this shape exists for. `claimed & !taken` are the bits
     /// owed back to the span on retire.
     claims: [Option<Claim>; NCLASSES],
-    class_cap: u16,
+    class_cap: u32,
 }
 
 impl Heap {
@@ -112,7 +121,7 @@ impl Heap {
     /// which leaves the refusal path unreachable in a test. This makes
     /// it reachable without pretending the default is smaller than it is.
     #[must_use]
-    pub const fn with_class_cap(id: usize, class_cap: u16) -> Self {
+    pub const fn with_class_cap(id: usize, class_cap: u32) -> Self {
         Self {
             id,
             segments: core::ptr::null_mut(),

@@ -147,7 +147,7 @@ fn m6_an_exhausted_class_refuses_instead_of_handing_back_a_wild_pointer() {
     // The default cap is a runaway guard set past any real workload, so
     // a tighter one is used here to reach the refusal at all — see
     // `PER_CLASS_CAP` for why the inherited value was wrong.
-    const CAP: u16 = 3;
+    const CAP: u32 = 3;
     let mut heap = Heap::with_class_cap(0, CAP);
     // The class is chosen large so the number of allocations stays
     // small: 8192-byte slots give 8 per span.
