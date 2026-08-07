@@ -128,3 +128,17 @@ collection angle moved double digits → single digits across the arc;
 none but lpush is green yet. What remains is the flat ~10 % machinery
 spread — the class-shape / claims-width design question (M3 interplay)
 already on the owner's table, plus sadd needing half a point.
+
+## A second official run, and the band it exposes
+
+Same tip, same protocol, next run: sadd −9.6, hset −9.4, zadd −15.7,
+set −10.5, incr −11.5 — against the first run's −8.5/−11.6/−11.7/
+−7.4/−5.5, with the reference legs themselves +3–5 % faster this
+time. **The per-run angle band is ±3–6 pp**; "sadd is 0.5 % from
+green" was a single-run reading, and no single perfgate run can green
+or red an angle inside that band. Declaring any collection angle
+green now requires median-of-N runs (the methodology's own
+bench-infra clause). The two-run quote is the honest scoreboard:
+sadd −8.5/−9.6 · hset −11.6/−9.4 · zadd −11.7/−15.7 · lpush
+−4.3/−6.1 — all still double-digit improved from the arc's start,
+none provably green but lpush.
