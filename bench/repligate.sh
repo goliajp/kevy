@@ -34,7 +34,10 @@ DIR=$(mktemp -d /tmp/kevy-repligate-XXXXXX)
 $WRITER $SRCPORT 50000 > "$DIR/writer.log" 2>&1 &
 WPID=$!
 RPID=""
-trap 'kill $WPID $RPID 2>/dev/null; rm -rf "$DIR"' EXIT
+# -9, not TERM: the script parks the writer with SIGSTOP, and TERM
+# stays pending on a stopped process forever — every early exit while
+# parked orphaned the writer on port 7101 (twice in the field).
+trap 'kill -9 $WPID $RPID 2>/dev/null; rm -rf "$DIR"' EXIT
 for _ in $(seq 100); do
     grep -q READY "$DIR/writer.log" 2>/dev/null && break
     sleep 0.2
