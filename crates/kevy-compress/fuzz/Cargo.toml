@@ -1,0 +1,32 @@
+[package]
+name = "kevy-compress-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Fuzz workspace is intentionally isolated from the main workspace
+# (cargo-fuzz pulls libfuzzer-sys, a third-party crate; main policy is
+# "0 crates.io deps"). The fuzz/ dir is a dev-only adjunct, not part of
+# the published crate.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.kevy-compress]
+path = ".."
+
+[[bin]]
+name = "roundtrip"
+path = "fuzz_targets/roundtrip.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "decode_arbitrary"
+path = "fuzz_targets/decode_arbitrary.rs"
+test = false
+doc = false

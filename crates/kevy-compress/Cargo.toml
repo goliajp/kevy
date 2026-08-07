@@ -1,0 +1,19 @@
+[package]
+name = "kevy-compress"
+description = "Corpus-aware LZ compression for tiered value logs: dictionary-assisted fast level, never-expanding frames, wildcopy-class decode."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/kevy-compress"
+readme = "README.md"
+keywords = ["compression", "lz", "dictionary", "no-std", "kevy"]
+categories = ["compression", "no-std"]
+
+[lints]
+workspace = true
+
+[dependencies]

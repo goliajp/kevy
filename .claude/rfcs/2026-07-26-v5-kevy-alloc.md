@@ -160,25 +160,105 @@ This is where "better" has to come from, so it should be stated precisely.
 
 ## 5. Design sketch
 
-A stone crate `kevy-alloc`, joining `kevy-sys` / `kevy-uring` / `kevy-madvise`
-as one of the few crates permitted `unsafe` (most kevy crates carry
-`#![forbid(unsafe_code)]`, and that stays true of every crate that *uses* it).
+A stone crate `kevy-alloc`, which necessarily carries `unsafe`.
+
+> **Corrected at T0.** This section first said unsafe lived in
+> "`kevy-sys` / `kevy-uring` / `kevy-madvise` — a few crates". Recording the
+> set for allocgate's M8 showed **fourteen** crates actually contain
+> `unsafe {`/`fn`/`impl`/`extern`/`trait` outside tests: the three above plus
+> `kevy-bytes`, `kevy-chaos`, `kevy-ffi`, `kevy-jni`, `kevy-lua-host`,
+> `kevy-map`, `kevy-napi`, `kevy-ring`, `kevy-rt`, `kevy-vector`, `kevy-wasm`.
+> That is what an engine with FFI doors, a wasm ABI, a raw-entry map and a
+> uring reactor looks like, and the claim was simply wrong.
+>
+> What is worth gating is therefore not a small number but that the number does
+> not quietly grow. M8 became a **ratchet** on the recorded set
+> (`bench/.unsafe-crates-baseline`), with `kevy-alloc` pre-approved as a
+> deliberate addition. It runs today and is the one line green at T0.
 
 ```
-alloc(layout):
-  class = size_class(layout.size())         // small path
-    → shard TLAB pop                        // no atomics
-    → on miss: drain foreign-free queue into TLAB
-    → on miss: carve from this shard's partial span
-    → on miss: new span via kevy-madvise mmap  (respect PER_CLASS_CAP)
+alloc(size, align):
+  class = class_for(size, align)            // small path
+    → pop from this class's current span    // no atomics, no header
+    → on miss: drain the foreign-free lists home
+    → on miss: adopt another span of this class that still has room
+    → on miss: claim a free span            (respect PER_CLASS_CAP)
+    → on miss: map a new 4 MiB segment
   large (> class max) → direct mmap, page-aligned
 
-dealloc(ptr, layout):
-  owning shard?  → TLAB push (cap → spill to span freelist)
-  foreign shard? → Treiber push onto the owner's foreign-free queue
-  span fully free + pool above low-water → munmap   ← the reclaim property
+dealloc(ptr, size, align):
+  segment = ptr & !(SEGMENT_BYTES - 1)      // the address answers
+  owning shard?  → push onto that span's own free list
+  foreign shard? → push-only onto the segment's foreign list
+  reclaim(): empty spans past the retained few → MADV_DONTNEED
   large → munmap
 ```
+
+> **Revised at T1, and the revision is the interesting part.** The draft
+> above had a per-shard TLAB in front of the spans, inherited from
+> tcmalloc and torajs. Building it made clear there is nothing for it to
+> sit in front of: a thread cache exists to avoid touching a *shared*
+> heap, and this heap is already owned by one shard. The fast path pops
+> from a span's free list with no atomics either way, so a TLAB would be
+> a cache in front of a cache — and it would break reclaim, because
+> slots parked in a cache belong to spans that then cannot be seen as
+> empty. Removed, and the reason recorded rather than the structure kept
+> for the sake of the reference it came from (ROADMAP rule ⑤).
+>
+> `adopt_partial` is the step the draft was missing outright: slots freed
+> into a span that is not the current one land on *that* span's list, so
+> without it allocation walks past reusable spans until the class cap
+> refuses — indistinguishable from a leak, and invisible to the byte
+> accounting, which balances either way. It is caught by an exported
+> `spans_assigned` count instead.
+
+### 5.1 v2 — page-granular return (the reclaim premise, rebuilt at T2)
+
+M3 measured the v1 structure and the premise died (finding
+`2026-07-27-m3-the-memory-half-does-not-pay.md`): a span returns pages
+only when **every** slot in it is free, and the 416 B class packs 157
+slots per span — so the reclaim unit was ~16× coarser than the 4 KiB
+page glibc works at, and the resident ratio moved 2.40× → 2.32× while
+pub/sub paid 16 %. Being mmap-backed is necessary, not sufficient; what
+decides reclaim is **the granularity at which free space can be handed
+back**.
+
+The v2 answer is structural, and one observation forces its shape:
+**a page can only be discarded if no metadata lives inside it**, and the
+v1 free list threads its next-pointers *through the free slots* — through
+the exact pages `MADV_DONTNEED` would zero. So the free list goes, and
+per-span occupancy becomes a **bitmap in the segment header** (one bit
+per slot; 512 B worst case, 64 spans ≈ 34 KB, comfortably inside the
+64 KiB header span).
+
+That one change buys three properties:
+
+1. **Data pages hold zero metadata.** Any 4 KiB page whose overlapping
+   slots are all free can be returned while its neighbours stay live —
+   the reclaim unit drops from 64 KiB to 4 KiB, glibc's granularity,
+   with the mid-heap discard glibc's brk arena cannot do.
+2. **Lowest-first allocation densifies.** `alloc` takes the lowest free
+   bit, so live slots pack toward a span's low pages and churn migrates
+   free space upward into *whole* pages. The allocator **manufactures
+   returnable pages** instead of waiting for 157 coincident deaths —
+   a compaction-like effect with no copying, which a free-list LIFO
+   (glibc included) structurally cannot express.
+3. **`free` touches one line fewer.** No link is written into the slot,
+   so the free path touches only the header — relevant to the locality
+   finding (`2026-07-26-header-free-costs-a-cache-line.md`), though how
+   far it moves that number is for the box to say, not this section.
+
+Accounting gains one term, declared in the contract with this reason:
+**`returned`** — bytes of free slots whose pages have been discarded;
+mapped, not resident. `predicted_resident` subtracts it. The
+tracked-but-not-a-byte-count `spans_assigned` export stays.
+
+The per-page rule, exactly: page `p` of a live span is discardable iff
+no live slot overlaps it, it lies below the high-water byte (never-touched
+pages are already non-resident — discarding them is a wasted syscall),
+and it is not already discarded. Allocating a slot that overlaps a
+discarded page un-marks those pages; the memory legally reads as zeros,
+and a fresh allocation owes nothing to its contents.
 
 Two properties are load-bearing and both must be gated, not assumed:
 
@@ -244,7 +324,7 @@ server binary decides for itself.
 | **M5** | foreign-shard free correctness under N-core churn | fuzz + a multi-shard stress test |
 | **M6** | per-class cap honoured; exhaustion is an honest OOM, never a null deref | unit test (torajs `c2970b6d`'s lesson) |
 | **M7** | every existing gate green (crashgate/availgate/tiergate/tablegate/textgate/oracle) | existing |
-| **M8** | no new `unsafe` outside `kevy-alloc`; all consumers keep `forbid(unsafe_code)` | locgate/clippy |
+| **M8** | `unsafe` appears in no crate outside the T0-recorded set (`kevy-alloc` pre-approved) — a ratchet, not a count | allocgate (**green at T0**) |
 
 M3 is the reason the arc exists; **M1 and M2 are the reason it could be
 rejected.** Both must be measured on lx64, not on a laptop.

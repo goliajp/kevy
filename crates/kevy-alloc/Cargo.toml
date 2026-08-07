@@ -1,0 +1,32 @@
+[package]
+name = "kevy-alloc"
+description = "Per-shard, mmap-backed, header-free allocator: graded size classes, span ownership, thread-local caching, and exact six-term memory accounting."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/kevy-alloc"
+readme = "README.md"
+keywords = ["allocator", "mmap", "memory", "no-std", "kevy"]
+categories = ["memory-management", "no-std"]
+
+[lints]
+workspace = true
+
+[features]
+# Off by default: registering a global allocator is the binary's
+# decision, and a library must never make it for its dependents.
+default = []
+global = []
+
+[dependencies]
+
+# The shim test installs KevyAlloc as the binary's global allocator,
+# which only exists behind the feature; without this stanza a bare
+# `cargo test --workspace` fails to compile the test at all.
+[[test]]
+name = "global_alloc"
+required-features = ["global"]

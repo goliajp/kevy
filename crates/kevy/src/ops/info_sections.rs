@@ -163,6 +163,10 @@ pub(super) fn info_stats(ctx: &Ctx<'_>, totals: &crate::state::Totals, b: &mut S
         ctx.state.obs.instantaneous_ops_per_sec(totals.commands_processed)
     ));
     b.push_str(&format!("expired_keys:{}\r\n", totals.expired_keys));
+    // Redis reports eviction under `# Stats`; kevy had it only under
+    // `# Memory`. Emitted in both so tools reading the Redis location
+    // see it (additive — the Memory line stays where it was).
+    b.push_str(&format!("evicted_keys:{}\r\n", totals.evicted_keys));
     b.push_str("\r\n");
 }
 

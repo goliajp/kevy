@@ -52,8 +52,15 @@ impl Commands for KevyCommands {
         // `Config::default()` (maxmemory=0), so the call is harmlessly a
         // no-op there.
         let cfg = self.state().config();
+        // maxmemory is an INSTANCE bound; each shard enforces its
+        // share, exactly as the tier budget divides in `tier_tick`.
+        // Handing every shard the whole figure let an N-shard server
+        // hold N x the configured cap (measured: 2 shards, 100 MB cap,
+        // 205 MB steady state; the first soak's "6 GB" cap was
+        // effectively 48 GB).
+        let n = self.state().nshards().max(1) as u64;
         store.set_max_memory(
-            cfg.memory.maxmemory,
+            cfg.memory.maxmemory / n,
             map_eviction_policy(cfg.memory.maxmemory_policy),
         );
     }
@@ -249,10 +256,9 @@ impl Commands for KevyCommands {
         if bits & crate::state::VIEW_NONEMPTY != 0 {
             crate::view_runtime::on_tick(&self.ctx(), store);
         }
-        // Run Redis's `activeExpireCycle` per shard. `sample` controls the
-        // batch size; up to 16 rounds per tick is well below Redis's 25 %
-        // CPU budget at the default 10 Hz cadence. Cheap when no TTL'd
-        // keys exist (a single map-emptiness check + bucket walk).
+        // Redis's `activeExpireCycle` per shard: `sample` sets the batch,
+        // ≤16 rounds/tick is far under Redis's 25 % CPU budget at 10 Hz,
+        // and it is cheap when no TTL'd keys exist.
         let cfg = self.state().config();
         // A replica does NOT actively expire — the primary
         // owns TTL truth and ships DEL/expiry effects through the
@@ -273,17 +279,10 @@ impl Commands for KevyCommands {
         // frames grow their keyspace like any write.
         tier_tick(self, store, bits, &cfg);
         store.demote_step();
-        store.tier_compact_tick(); // bounded vlog compaction — off the query-tail path
+        store.tier_compact_tick(); // vlog compaction + page return, off the query tail
+        alloc_reclaim_tick();
 
-        // Re-apply maxmemory + eviction policy in case `CONFIG SET` has
-        // swapped the global since the previous tick. `store.set_max_memory`
-        // is idempotent and cheap (compares + assigns two scalars + may
-        // recompute soft-limit accounting); paying it every 100 ms is well
-        // below the noise floor of any benchmark.
-        store.set_max_memory(
-            cfg.memory.maxmemory,
-            map_eviction_policy(cfg.memory.maxmemory_policy),
-        );
+        maxmemory_tick(self, store, &cfg);
         // Publish this shard's gauges (used_memory, key/expire counts, …) so
         // `INFO`, answered on any one shard, can sum the process-wide view.
         ops::stats::publish_gauges(self.shard_ctx(), store);
@@ -478,20 +477,12 @@ impl Commands for KevyCommands {
 /// live limit changes are honored (the maxmemory reapply precedent) —
 /// and feed the index/view memory floor into the unified watermark.
 /// Gated on tiering being on: an untiered tick pays one branch.
-fn tier_tick(c: &KevyCommands, store: &mut Store, bits: u32, cfg: &kevy_config::Config) {
-    if !store.tier_enabled() {
-        return;
-    }
-    if let Ok(Some(total)) = crate::resolve_tier_budget(cfg) {
-        let n = c.state().nshards().max(1) as u64;
-        store.set_tier_budget((total / n).max(1));
-    }
-    let mut reserved = 0u64;
-    if bits & crate::state::IDX_NONEMPTY != 0 {
-        reserved += crate::index_runtime::reserved_bytes(&c.ctx(), store);
-    }
-    if bits & crate::state::VIEW_NONEMPTY != 0 {
-        reserved += crate::view_runtime::reserved_bytes(&c.ctx());
-    }
-    store.set_tier_reserved(reserved);
-}
+/// Hand back free pages this shard's allocator holds. Returning pages
+/// is the one thing kevy-alloc does that glibc's brk arena cannot, and
+/// it does nothing until something asks: an allocator has no tick of its
+/// own. Measured with it unwired, the resident ratio was 2.39x against
+/// glibc's 2.40x — the design's whole point, absent.
+
+#[path = "commands_tick.rs"]
+mod commands_tick;
+use commands_tick::{alloc_reclaim_tick, maxmemory_tick, tier_tick};
