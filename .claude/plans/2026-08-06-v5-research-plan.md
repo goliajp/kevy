@@ -284,3 +284,29 @@ sadd −15.8 / hset −12.0 / zadd −14.4(盒漂移 ≤2.9%);lpush/KV 全绿。
 (delivery layout)与集合写地板(tick 税)都**不在 WHEN 轴上** ——
 pacing 弧到此闭合,下一轮按方法论 = 对 tick 税的全新 decomposition
 (zadd >3s 停顿与 mremap 优势是两个具名入口)。
+
+---
+
+## 五期(2026-08-07,tick 税 decomposition —— R4 归因翻案,真凶定量闭账)
+
+**三个具名嫌疑全被计数器杀掉**(sadd 60M/11s 全场探针:sweep 七计数 +
+大块 realloc 拷贝 + caller 计时):sweep 769 次共 **55.5ms = 0.06%**
+(tick=100ms/hz=10,R4 的"税在 thread_reclaim"被直接测量翻案);
+discard→refault 671MB ≈ 0.6%;大块 realloc 拷贝 2.74GB ≈ 1% **且与税
+不相关**(zadd 拷贝只有 1/38,税同级)。
+
+**真凶 = headerless 元数据步的 L1 misses,预算全额闭合**(perf stat
+同窗 A/B):ON 每 op 指令**少 2.4%**、branch miss 好 3.6×,但
+L1d miss **27.2→75.8/op(×2.78)**,IPC 1.67→1.48;+48.6 miss ×
+~13 cyc ≈ +630 est vs **+613 实测,对账 ~3%**。停顿落在执行中的消费者
+符号上 —— 各 profile 的 deliver_publish +6pp / drain_replica_inbox
++7pp 全是同一机制('2026-07-26-header-free-costs-a-cache-line' 的
+定量收束)。集合角税重 = 每 op alloc/free 多;KV 绿 = 少。
+
+**开放**:zadd >3s 停顿(已排除 sweep 与单次 realloc;剩内核嫌疑)/
+mremap(2.7GB 可免拷贝,吞吐 ≤1%,尾延迟候选)。
+**攻击面已具名**(下一设计轮 Phase B):热元数据并线(bitmap+claim
+word 同 cache line)/ span header 预取 / 位图批写 / 或有代价地把
+free-list 词放回被释块。finding =
+`bench/PERF-DECOMP-2026-08-07-collection-tax-is-l1-misses.md`
+(r1-locality `7e944a63`,现 +14 笔)。
