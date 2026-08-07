@@ -29,6 +29,7 @@ pub(crate) fn eval(name: &str, args: &[Scalar]) -> Result<Scalar, ScalarError> {
         "replace" => replace(args),
         "translate" => translate(args),
         "repeat" => repeat(args),
+        "format" => format_fn(args),
         _ => strings_slice::eval(name, args),
     }
 }
@@ -191,6 +192,114 @@ fn repeat(args: &[Scalar]) -> Result<Scalar, ScalarError> {
         return Ok(Scalar::Text(String::new()));
     }
     Ok(Scalar::Text(s.repeat(n as usize)))
+}
+
+/// PG `format(fmt, args…)` — the sprintf-shaped subset probe 32 pins:
+/// `%s` (text form, NULL prints nothing), `%L` (quoted literal with
+/// `''` doubling, NULL prints bare `NULL`), `%I` (identifier, quoted
+/// only when needed, NULL is an error), `%%`, and positional `%n$X`.
+/// Unknown specifiers error — PG refuses them too.
+fn format_fn(args: &[Scalar]) -> Result<Scalar, ScalarError> {
+    const FUNC: &str = "format";
+    let Some((fmt, data)) = args.split_first() else {
+        return Err(ScalarError::Arity { func: FUNC, got: 0 });
+    };
+    let fmt = match fmt {
+        Scalar::Null => return Ok(Scalar::Null),
+        Scalar::Text(s) => s.as_str(),
+        _ => return Err(ScalarError::Type { func: FUNC, arg: 0 }),
+    };
+    let mut out = String::with_capacity(fmt.len());
+    let mut it = fmt.chars().peekable();
+    let mut next = 0usize;
+    while let Some(c) = it.next() {
+        if c != '%' {
+            out.push(c);
+            continue;
+        }
+        let (pos, spec) = parse_spec(&mut it)?;
+        if spec == '%' {
+            out.push('%');
+            continue;
+        }
+        let idx = pos.unwrap_or_else(|| {
+            let i = next;
+            next += 1;
+            i
+        });
+        let v = data.get(idx).ok_or(ScalarError::Domain {
+            func: FUNC,
+            what: "too few arguments for format()",
+        })?;
+        format_spec(spec, v, &mut out)?;
+    }
+    Ok(Scalar::Text(out))
+}
+
+/// After a `%`: the optional `n$` positional prefix (0-based on
+/// return) and the specifier character itself.
+fn parse_spec(
+    it: &mut std::iter::Peekable<std::str::Chars<'_>>,
+) -> Result<(Option<usize>, char), ScalarError> {
+    const FUNC: &str = "format";
+    let mut digits = String::new();
+    while it.peek().is_some_and(char::is_ascii_digit) {
+        digits.push(it.next().expect("peeked"));
+    }
+    let positional = !digits.is_empty() && it.peek() == Some(&'$');
+    if positional {
+        it.next();
+    } else if !digits.is_empty() {
+        return Err(ScalarError::Domain { func: FUNC, what: "unrecognized format() type specifier" });
+    }
+    let spec = it.next().ok_or(ScalarError::Domain {
+        func: FUNC,
+        what: "unterminated format() type specifier",
+    })?;
+    let pos = positional.then(|| digits.parse::<usize>().unwrap_or(0).wrapping_sub(1));
+    Ok((pos, spec))
+}
+
+fn format_spec(spec: char, v: &Scalar, out: &mut String) -> Result<(), ScalarError> {
+    const FUNC: &str = "format";
+    match spec {
+        's' => out.push_str(&to_text(v)), // NULL prints nothing
+        'L' => {
+            if v.is_null() {
+                out.push_str("NULL");
+            } else {
+                out.push('\'');
+                out.push_str(&to_text(v).replace('\'', "''"));
+                out.push('\'');
+            }
+        }
+        'I' => {
+            if v.is_null() {
+                return Err(ScalarError::Domain {
+                    func: FUNC,
+                    what: "null values cannot be formatted as an SQL identifier",
+                });
+            }
+            let id = to_text(v);
+            let bare = !id.is_empty()
+                && id.chars().next().is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+                && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+            if bare {
+                out.push_str(&id);
+            } else {
+                out.push('"');
+                out.push_str(&id.replace('"', "\"\""));
+                out.push('"');
+            }
+        }
+        _ => {
+            return Err(ScalarError::Domain {
+                func: FUNC,
+                what: "unrecognized format() type specifier",
+            });
+        }
+    }
+    Ok(())
 }
 
 /// N text arguments, strict NULL (any NULL → the caller answers NULL).

@@ -166,7 +166,7 @@ pub fn eval(func: &str, args: &[Scalar]) -> Result<Scalar, ScalarError> {
         "lower" | "upper" | "initcap" | "length" | "char_length" | "character_length"
         | "concat" | "concat_ws" | "trim" | "btrim" | "ltrim" | "rtrim" | "replace"
         | "split_part" | "repeat" | "lpad" | "rpad" | "strpos" | "position" | "left"
-        | "right" | "reverse" | "translate" | "substr" | "substring" => {
+        | "right" | "reverse" | "translate" | "substr" | "substring" | "format" => {
             strings::eval(&name, args)
         }
         // ── math ──
