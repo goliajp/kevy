@@ -153,3 +153,24 @@ incr −10.4 below floor on medians**. That is the definitive current
 distance to the alloc-off reference; the single-run highs (sadd −7.8)
 and lows (zadd −15.7) were both band edges. The residue RFC's doors
 now have their exact number to price against.
+
+## Generalization check: zadd yes, incr only partly
+
+Owner-thread profiles on the final tip, ON vs OFF per verb:
+
+| verb | OFF allocator | ON allocator | delta | median tax |
+|---|---:|---:|---:|---:|
+| hset | 13.4 % | 23.3 % | +10 pp | −9.7 |
+| zadd | 13.3 % | 23.5 % | +10.2 pp | −13.9 |
+| incr | 6.7 % | 9.7 % | **+3 pp** | −10.4 |
+
+zadd replicates hset exactly — the fast-path story covers the
+collection writes. **incr does not fit**: its allocations are only the
+forward machinery's envelopes (argv husks are already pooled on the
+batch path), the allocator delta explains ~3 pp of its −10.4 median,
+and the rest is spread thin across every symbol. With incr's
+historical band the widest of all angles (−2.5 … −11.5), its n=3
+median deserves a wider-N pass before any mechanism hunt. For the
+residue RFC this adjusts door B: claims widening is weakly motivated
+at 99.9 % hit rates; if a forward-path knife exists it is envelope
+pooling for the *single* Request/Response arms, not claim shape.
