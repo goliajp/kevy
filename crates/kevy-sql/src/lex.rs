@@ -217,6 +217,12 @@ impl<'a> Lexer<'a> {
             (b'(' | b')' | b',' | b';' | b'*' | b'.' | b'-' | b'+' | b'/', _) => {
                 Ok(Tok::Sym(ch as char))
             }
+            (b':', Some(b':')) => two(self, "::"),
+            (b':', _) => Err(self.err(
+                l,
+                c,
+                "a lone ':' is not SQL — the cast operator is '::'",
+            )),
             (b'`', _) => Err(self.err(
                 l,
                 c,

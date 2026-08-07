@@ -35,6 +35,8 @@
 #![warn(missing_docs)]
 
 mod ast;
+mod fold;
+mod fold_parse;
 mod lex;
 mod parse;
 mod parse_view;
@@ -152,6 +154,7 @@ impl Compilation {
     }
 }
 
+pub use fold::{Folded, fold_select};
 pub use plan::{Plan, PlanEntry, Served, plan};
 
 /// Compile a whole SQL schema file into a [`Compilation`].
