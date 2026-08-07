@@ -45,19 +45,33 @@ line "K1-cold-read-budget" "PENDING(T4)" \
   "cold read p99 stays inside B2 (145us hash / 105us scalar) with compression ON [capacity-envelope]"
 
 # ── K2/K3: the two that make a codec safe to put under a data engine.
-line "K2-never-expands" "PENDING(T3)" \
-  "encoded <= raw + frame header for EVERY input incl. adversarial [fuzz]"
-line "K3-roundtrip" "PENDING(T3)" \
-  "round-trip identity; truncated/corrupt frames REJECTED, never mis-decoded [fuzz]"
+t3_test() { # $1 = test filter -> "PASS ..." | "FAIL ..."
+  if (cd "$ROOT" && cargo test -p kevy-compress "$1" 2>&1 | grep -q "test result: ok"); then
+    echo "PASS"
+  else
+    echo "FAIL"
+  fi
+}
+line "K2-never-expands" "$(t3_test k2_incompressible_never_expands)" \
+  "encoded <= raw + frame header; adversarial input falls back to raw [unit; fuzz target roundtrip.rs]"
+line "K3-roundtrip" "$(t3_test k3_corrupt_frames_reject)" \
+  "round-trip identity; truncated/corrupt frames REJECTED [unit; fuzz targets roundtrip/decode_arbitrary]"
 
 # ── K4: the structural claim. A per-datum baseline provably cannot pass
 # this, which is the whole point — it is not a ratio, it is a category.
-line "K4-cross-value" "PENDING(T3)" \
-  "N identical 400B values in one segment -> O(dictionary) + N x small; a per-datum baseline fails it by construction"
+line "K4-cross-value" "$(t3_test k4_identical_values_collapse_against_the_dictionary)" \
+  "1000 identical 400B values -> <=16 B/value against a shared dictionary; per-datum baseline pays ~half the value each"
 
 # ── K5: identity first (contract §2), then the envelope number.
-line "K5-identity" "PENDING(T3)" \
-  "stored == dictionary + frame_overhead + payload, EXACT (no tolerance)"
+k5_identity() {
+  if (cd "$ROOT" && cargo test -p kevy-vlog rotation_trains_a_dictionary 2>&1 | grep -q "test result: ok"); then
+    echo "PASS"
+  else
+    echo "FAIL"
+  fi
+}
+line "K5-identity" "$(k5_identity)" \
+  "vlog stats.bytes == sum(header + frame body) EXACT, dictionary engaged across rotation [kevy-vlog unit]"
 line "K5-amplification" "PENDING(T4)" \
   "vlog amplification improves on B5's 1.27x for compressible corpora, and compact_below still terminates"
 

@@ -176,8 +176,11 @@ fn fully_dead_files_are_dropped_without_a_scan() {
 fn a_pin_keeps_the_file_on_disk_until_dropped() {
     let d = dir("vlog-pin");
     let mut v = Vlog::open(d.path(), 64).unwrap();
-    let r = v.append(b"pinned", &[7u8; 50]).unwrap();
-    v.append(b"filler", &[8u8; 50]).unwrap(); // seals file 0
+    // Incompressible payloads: sealing is driven by ON-DISK bytes, and
+    // a constant run would compress far below the tiny threshold.
+    let noise: Vec<u8> = (0..50u8).map(|i| i.wrapping_mul(37).wrapping_add(11)).collect();
+    let r = v.append(b"pinned", &noise).unwrap();
+    v.append(b"filler", &noise).unwrap(); // seals file 0
     let pin: Arc<VlogFile> = v.pin(r.file_id).unwrap();
     let path = d.path().join(format!("vlog-{:08}.dat", r.file_id));
 
@@ -187,7 +190,7 @@ fn a_pin_keeps_the_file_on_disk_until_dropped() {
 
     assert!(path.exists(), "pinned file must survive its own retirement");
     let (_, p) = pin.read(r).unwrap();
-    assert_eq!(p, vec![7u8; 50], "pinned reader still sees its record");
+    assert_eq!(p, noise, "pinned reader still sees its record");
     drop(pin);
     assert!(!path.exists(), "last pin drop unlinks the retired file");
 }
@@ -277,7 +280,10 @@ fn image_fetch_and_verify_round_trip() {
     assert_eq!(r.disk_len(), 8 + r.len as usize);
     let image = pin.read_image(r).unwrap();
     assert_eq!(image.len(), r.disk_len());
-    let (k, p) = verify_image(r, image).unwrap();
+    // `verify_image` yields the stored FRAME; decoding against the
+    // file's dictionary is the separate completion step.
+    let (k, frame) = verify_image(r, image).unwrap();
+    let p = pin.decompress(&frame).unwrap();
     assert_eq!((k.as_slice(), p.as_slice()), (&b"row:1"[..], &b"payload-bytes"[..]));
     assert_eq!(pin.read(r).unwrap(), (b"row:1".to_vec(), b"payload-bytes".to_vec()));
 }
@@ -297,4 +303,39 @@ fn verify_image_refuses_wrong_length_and_flipped_bytes() {
     let last = flipped.len() - 1;
     flipped[last] ^= 0xFF;
     assert!(verify_image(r, flipped).is_err());
+}
+
+#[test]
+fn rotation_trains_a_dictionary_and_records_shrink_against_it() {
+    let d = dir("vlog-dict");
+    // Small threshold so the second batch of appends lands in file 1,
+    // whose dictionary was trained on file 0's samples.
+    let mut v = Vlog::open(d.path(), 4096).unwrap();
+    let value: Vec<u8> = (0..400u32).map(|i| (i.wrapping_mul(7) % 251) as u8).collect();
+    let mut refs = Vec::new();
+    for i in 0..60 {
+        refs.push(v.append(format!("k{i}").as_bytes(), &value).unwrap());
+    }
+    let first = refs[0];
+    let last = *refs.last().unwrap();
+    assert!(last.file_id > first.file_id, "the run must cross a rotation");
+    // Same 400 B value: in the dictionary-bearing file it collapses to
+    // a frame a fraction of the raw size (the K4 shape, end to end
+    // through the vlog), and still reads back identical.
+    assert!(
+        (last.len as usize) < value.len() / 4,
+        "post-rotation record should collapse against the trained dictionary \
+         (got {} B for a {} B value)",
+        last.len,
+        value.len()
+    );
+    for r in &refs {
+        let (_, p) = v.read(*r).unwrap();
+        assert_eq!(p, value);
+    }
+    // The stored-bytes identity: stats.bytes is exactly the sum of every
+    // record's on-disk length — frames included, nothing hidden.
+    let s = v.stats();
+    let sum: u64 = refs.iter().map(|r| r.disk_len() as u64).sum();
+    assert_eq!(s.bytes, sum, "stored == sum(header + frame body), exact");
 }

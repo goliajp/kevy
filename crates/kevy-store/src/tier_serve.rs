@@ -367,9 +367,13 @@ mod enabled {
             t.preads_total += plan.len() as u64;
             t.peek_preads_total += plan.len() as u64;
             t.batch_submissions_total += submissions;
-            for ((row, cref), image) in plan.into_iter().zip(images) {
-                let (_key, payload) = verify_image(cref.vref(), image)
+            for (((row, cref), image), read) in plan.into_iter().zip(images).zip(&reads) {
+                let (_key, frame) = verify_image(cref.vref(), image)
                     .expect("tier: cold record image verify failed — process bug");
+                let payload = read
+                    .file
+                    .decompress(&frame)
+                    .expect("tier: cold record decompress failed — process bug");
                 let value = crate::tier_codec::decode(cref.type_tag, payload)
                     .expect("tier: cold record decode failed — process bug");
                 let Value::Hash(h) = &value else {

@@ -128,7 +128,10 @@ fn info_gauges_present_when_tiered_absent_when_not() {
     assert_eq!(t.demotions_total, 1);
     assert_eq!(t.promotions_total, 0);
     assert_eq!(t.vlog_files, 1);
-    assert!(t.vlog_size_bytes > 4096);
+    // The vlog stores kevy-compress frames; a constant-run value
+    // collapses, so on-disk is a fraction of the 4096 B original —
+    // which doubles as the gauge-level proof compression is wired.
+    assert!(t.vlog_size_bytes > 0 && t.vlog_size_bytes < 4096, "{}", t.vlog_size_bytes);
     assert_eq!(t.vlog_live_bytes, t.vlog_size_bytes);
     assert_eq!(t.vlog_epoch, 0);
     assert_eq!(t.index_reserved_bytes, 0, "no indexes declared yet");
