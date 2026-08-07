@@ -69,3 +69,32 @@ tcache push/pop.
 - Two benchmarks overlapped on the box mid-round (my isolation
   violation — one measurement at a time; the contaminated rounds were
   discarded and the wait-for-quiet guard now lives in the scripts).
+
+---
+
+## Round follow-through (same day): rates, the reorder, and what's left
+
+- **Branch-rate probe**: claims hit 99.88 % on alloc, 99.86 % recycle
+  on free; slow path and span scans are trace-level. The fast path's
+  *per-call cost* is the whole face. (The probe's own global atomic
+  counters contaminated one owner profile — 8 threads bouncing the
+  counter lines; its ratios stand, its profile was discarded.)
+- **Claims-first free landed** (`42198079`): the recycle path no
+  longer reads the segment header (the claims match already proves
+  ownership). hset owner A/B, 3× interleaved: +0.8/+2.4/+4.4 %,
+  mean **+2.5 %** vs the unreordered build. The growth pushed
+  `heap.rs` past 500 LOC; the free side now lives in `heap_free.rs`.
+- **Post-reorder owner srcline**: the profile is now *flat* — top
+  line 3.94 % is `segment.rs:141`, the `off / size_of(class)`
+  division `slot_index_of` runs on every free (and inside claims
+  matching). A per-class magic-reciprocal table (mimalloc's move) is
+  the one remaining named knife, worth ~2–4 %. `class::index_of` is
+  already a lookup table; its 3.92 % line is entry overhead, not a
+  knife.
+- **Honest residue**: after the gate (+8 pp sadd) and the reorder
+  (+2.5 % hset), the ON-vs-glibc collection gap is a **broad ~10 %
+  spread across the whole alloc/free machinery** with no dominant
+  seat. Per-call the machinery is simply wider than a tcache
+  push/pop; closing the rest is either many small knives (reciprocal
+  division first) or a class-shape/claims-width redesign — a design
+  decision with M3 interplay, not an autorun-sized change.
