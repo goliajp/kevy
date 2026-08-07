@@ -272,3 +272,27 @@ fn timestamp_parse_render_and_to_char() {
         Err(ScalarError::Domain { .. })
     ));
 }
+
+// ── probe 32: format() — %s/%L/%I/%%/positional ──
+#[test]
+fn format_specifiers_from_probe_32() {
+    assert_eq!(txt(eval("format", &[t("Hello %s"), t("world")])), "Hello world");
+    assert_eq!(
+        txt(eval("format", &[t("%s + %s = %s"), Scalar::Int(1), Scalar::Int(2), Scalar::Int(3)])),
+        "1 + 2 = 3"
+    );
+    assert_eq!(txt(eval("format", &[t("= %L"), t("O'Brien")])), "= 'O''Brien'");
+    assert_eq!(txt(eval("format", &[t("= %L"), Scalar::Null])), "= NULL");
+    assert_eq!(txt(eval("format", &[t("SELECT FROM %I"), t("mytable")])), "SELECT FROM mytable");
+    assert_eq!(txt(eval("format", &[t("100%%")])), "100%");
+    assert_eq!(txt(eval("format", &[t("%2$s %1$s"), t("last"), t("first")])), "first last");
+    assert_eq!(eval("format", &[Scalar::Null, t("x")]).unwrap(), Scalar::Null);
+    assert!(matches!(
+        eval("format", &[t("%q"), t("x")]),
+        Err(ScalarError::Domain { .. })
+    ));
+    assert!(matches!(
+        eval("format", &[t("%s %s"), t("only-one")]),
+        Err(ScalarError::Domain { .. })
+    ));
+}
