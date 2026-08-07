@@ -447,7 +447,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-alloc"
-version = "4.0.0"
+version = "4.1.1"
 
 [[package]]
 name = "kevy-bench"
@@ -524,7 +524,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-compress"
-version = "4.0.0"
+version = "4.1.1"
 
 [[package]]
 name = "kevy-config"
@@ -697,6 +697,10 @@ dependencies = [
  "kevy-uring",
  "loom",
 ]
+
+[[package]]
+name = "kevy-scalar"
+version = "4.1.1"
 
 [[package]]
 name = "kevy-scope"
