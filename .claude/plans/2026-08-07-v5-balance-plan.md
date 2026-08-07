@@ -62,3 +62,35 @@
 - 每格数字 median-of-N 或带 spread;单跑不下结论。
 - 参数 sweep 先问"这个默认是谁拍的"—— 拍的才 sweep,测过的不重测。
 - 发现新缺陷:修小的、finding 大的,不在本轮开新弧。
+
+---
+
+## 结果回填(2026-08-08 收口;全账 = bench/FINDING-2026-08-07-balance-round-ra-rc.md)
+
+**R-A 组合态基线(史上首同测)**:envelope 全 PASS 逐格与 OFF 同
+(frag 1.32 vs 1.35 @4KiB)、冷读 90/210µs、median 角表 = 已知集合税
+(−9~−15)其余全绿、混合风暴 **p99.9=3.2ms**。组合态在 disk/容量/
+stable 轴零代价 —— P1 的取舍被精确定价为"只有集合角"。
+
+**R-B**:信封池化死于实现前(85.7M op 普查:16B×1.96 + 32B×0.98
+= 2.9 分配/op,信封类 0.5%);**真刀具名 = hash 小值内联**(消 ~2/2.9,
+两构建同收益,店侧中爆炸半径,归 V4/P1 执行轮)。
+
+**R-C**:rewrite 无罪(对照同尾);**1GB/s AOF firehose 100-250ms
+p99.9 全属 AOF 追加路径**(no-aof 满压分层 ≤10ms —— 新子系统全部
+无罪),V3 具名靶;compact 阈值 50 维持(epoch=0 之谜 = 轮转粒度:
+8 shard 各一 active 文件永不密封;8MB rotate 下机制 6 秒收敛
+amp 1.14×);realistic 语料压缩省盘 ~30%。
+
+**R-D:三跑 soak,前两跑各挖一个工业级缺陷,全部当日修**:
+① u16 钉死的 4GiB/类 abort 天花板(`7008e36f`)② maxmemory 每 shard
+整份执行 = N× 上限(`d4075a6f`,init+tick 双点)③ evicted_keys 只在
+# Memory 不在 Redis 惯例的 # Stats(`ed16456d`,加法双发)。第三跑
+60 分钟满程:执行正确(2.2% 超额)、frag 收敛 2.2→1.67 无上漂、无
+wedge;crashgate + repligate PASS(修完的组合构建;7101 上的 14 小时
+孤儿 writer 验明正身后清除)。监控学费:子进程式采样自伤 gap 计数,
+tailgate 机制化必须进程内探针。
+
+**默认值定稿(喂 P1/P2)**:alloc ON(代价=且仅=集合角)/ compact 50
+维持 / rotate 256MB 维持+文档+可配置化候选 / 工业配置双旋钮缺一不可。
+r1-locality 现 **+42 笔**(tip `6908f92d`)。
