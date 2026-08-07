@@ -174,3 +174,16 @@ median deserves a wider-N pass before any mechanism hunt. For the
 residue RFC this adjusts door B: claims widening is weakly motivated
 at 99.9 % hit rates; if a forward-path knife exists it is envelope
 pooling for the *single* Request/Response arms, not claim shape.
+
+## incr, characterized and retired from the hunt
+
+Eight interleaved ON/OFF rounds: ratios 0.878 / 0.908 / 0.934 / 0.943
+/ 1.028 / 1.029 / 1.111 / 1.317 — **median ≈ 0.99, band 0.88–1.32**.
+No demonstrable allocator tax on incr; the perfgate −10.4 median was
+this band meeting the (itself drifting) reference base at n=3. Two
+rounds also caught both binaries dropping 40 % in absolute rate
+simultaneously — shared-box interference the interleave can absorb in
+the ratio but not in the band. incr leaves the mechanism-hunt list as
+a noise-dominated angle; any future verdict on it needs a quieter box
+or N well past 8. The collection-write trio (sadd/hset/zadd, all
+mechanism-confirmed) is the real remaining distance.
