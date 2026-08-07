@@ -213,6 +213,18 @@ impl<C: Commands> Shard<C> {
         // batch size as its aggregation signal (a RequestBatch counts
         // its inner requests: that is the unit being aggregated).
         let mut did: usize = 0;
+        // Per-source, per-call budget. Without one, a peer ring fed as
+        // fast as it drains keeps the `while pop()` below alive
+        // indefinitely: the zadd-storm heartbeat caught the hot-key
+        // owner inside ONE drain call for 1.6 s, during which its own
+        // direct clients — accepts, fresh-conn recvs — starved (the
+        // "zadd >3 s pause": not a wedge, not the kernel, this loop).
+        // The budget bounds an iteration to low single-digit ms; a
+        // whole envelope may overshoot it (batches are not split), and
+        // an exhausted source has its dirty bit put BACK, because a
+        // bit lost here strands the ring's tail until that peer's next
+        // send — forever, if the storm just ended.
+        const DRAIN_SRC_BUDGET: usize = 2048;
         let mut mask = dirty;
         while mask != 0 {
             let src = mask.trailing_zeros() as usize;
@@ -220,6 +232,7 @@ impl<C: Commands> Shard<C> {
             if src == me {
                 continue; // no self-ring (defensive — we never OR our own bit)
             }
+            let src_start = did;
             while let Some(msg) = self.inboxes[src].as_mut().expect("peer inbox").pop() {
                 did += 1;
                 match msg {
@@ -355,6 +368,12 @@ impl<C: Commands> Shard<C> {
                             self.mark_pending_write_dirty(conn);
                         }
                     }
+                }
+                if did - src_start >= DRAIN_SRC_BUDGET {
+                    // The ring may hold more; the bit MUST go back or
+                    // its tail strands until the peer's next send.
+                    self.inbound_dirty[me].fetch_or(1 << src, Ordering::Release);
+                    break;
                 }
             }
         }
