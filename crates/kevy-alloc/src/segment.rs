@@ -138,7 +138,10 @@ pub fn span_index_of(ptr: NonNull<u8>) -> usize {
 #[must_use]
 pub fn slot_index_of(ptr: NonNull<u8>, class: usize) -> u32 {
     let off = ptr.as_ptr() as usize & (SPAN_BYTES - 1);
-    (off / class::size_of(class)) as u32
+    // A multiply-shift, not a division: this runs on every free (twice
+    // on the claims path), and the owner-thread srcline profile put the
+    // `div` at the top of the post-reorder residue (3.9 %).
+    class::slot_of_offset(off, class)
 }
 
 /// Push a slot onto a segment's foreign-free stack.
