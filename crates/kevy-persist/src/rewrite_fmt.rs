@@ -10,6 +10,8 @@
 
 use crate::SNAPSHOT_BUF_CAP;
 use kevy_resp::{Argv, ArgvView};
+
+use crate::rewrite_chunk::write_verb_items;
 use kevy_store::{StreamData, StreamId, Value};
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
@@ -28,7 +30,7 @@ use std::path::Path;
 /// `finish_concurrent_rewrite` swaps it in.
 /// Write one command in the image's format: bare multibulk (v1) or a
 /// checksummed record envelope (v2).
-fn emit<W: Write, A: kevy_resp::ArgvView + ?Sized>(
+pub(crate) fn emit<W: Write, A: kevy_resp::ArgvView + ?Sized>(
     w: &mut W,
     args: &A,
     fmt: crate::AofFormat,
@@ -182,35 +184,35 @@ pub(crate) fn write_value_as_commands<W: Write>(
         Value::ArcBulk(a) => write_verb_items(w, b"SET", key, 1, [a.as_ref().to_vec()], fmt, scratch)?,
         Value::Hash(h) => {
             let fv = h.iter().flat_map(|(f, v)| [f.to_vec(), v.clone()]);
-            write_verb_items(w, b"HSET", key, h.len() * 2, fv, fmt, scratch)?;
+            write_verb_items(w, b"HSET", key, 2, fv, fmt, scratch)?;
         }
         // A.8: inline hash / list / zset rewrite to the same HSET / RPUSH
         // / ZADD forms as their heap-backed twins; replay re-runs the
         // encoding switch so small values land inline again.
         Value::SmallHashInline(h) => {
             let fv = h.iter().flat_map(|(f, v)| [f.to_vec(), v.to_vec()]);
-            write_verb_items(w, b"HSET", key, h.len() * 2, fv, fmt, scratch)?;
+            write_verb_items(w, b"HSET", key, 2, fv, fmt, scratch)?;
         }
-        Value::List(l) => write_verb_items(w, b"RPUSH", key, l.len(), l.iter().cloned(), fmt, scratch)?,
+        Value::List(l) => write_verb_items(w, b"RPUSH", key, 1, l.iter().cloned(), fmt, scratch)?,
         Value::SmallListInline(l) => {
-            write_verb_items(w, b"RPUSH", key, l.len(), l.iter().map(<[u8]>::to_vec), fmt, scratch)?;
+            write_verb_items(w, b"RPUSH", key, 1, l.iter().map(<[u8]>::to_vec), fmt, scratch)?;
         }
         // A.7 O5: inline-encoded set rewrites to the same SADD command form
         // as the heap-backed `Value::Set`; replaying through the live SADD
         // handler re-runs the encoding switch (small → inline, big → KevySet).
         Value::Set(s) => {
-            write_verb_items(w, b"SADD", key, s.len(), s.iter().map(kevy_store::SmallBytes::to_vec), fmt, scratch)?;
+            write_verb_items(w, b"SADD", key, 1, s.iter().map(kevy_store::SmallBytes::to_vec), fmt, scratch)?;
         }
         Value::SmallSetInline(s) => {
-            write_verb_items(w, b"SADD", key, s.len(), s.iter().map(<[u8]>::to_vec), fmt, scratch)?;
+            write_verb_items(w, b"SADD", key, 1, s.iter().map(<[u8]>::to_vec), fmt, scratch)?;
         }
         Value::ZSet(z) => {
             let ms = z.ordered().flat_map(|(m, sc)| [fmt_zset_score(sc), m.to_vec()]);
-            write_verb_items(w, b"ZADD", key, z.ordered().count() * 2, ms, fmt, scratch)?;
+            write_verb_items(w, b"ZADD", key, 2, ms, fmt, scratch)?;
         }
         Value::SmallZSetInline(z) => {
             let ms = z.iter().flat_map(|(m, sc)| [fmt_zset_score(sc), m.to_vec()]);
-            write_verb_items(w, b"ZADD", key, z.len() * 2, ms, fmt, scratch)?;
+            write_verb_items(w, b"ZADD", key, 2, ms, fmt, scratch)?;
         }
         Value::Stream(s) => _ = stream_as_commands(w, key, s, fmt, scratch)?,
     }
@@ -230,24 +232,6 @@ fn write_pexpireat<W: Write>(
     let Some(ms) = ttl_ms else { return Ok(()) };
     let deadline = kevy_store::now_unix_ms().saturating_add(ms);
     write_verb_items(w, b"PEXPIREAT", key, 1, [deadline.to_string().into_bytes()], fmt, scratch)
-}
-
-/// One `[verb, key, items…]` multi-bulk frame — the shared body of every
-/// per-type arm above. `expected` pre-sizes the argv (2 + item count).
-fn write_verb_items<W: Write>(
-    w: &mut W,
-    verb: &[u8],
-    key: &[u8],
-    expected: usize,
-    items: impl IntoIterator<Item = Vec<u8>>,
-    fmt: crate::AofFormat,
-    scratch: &mut Vec<u8>,
-) -> io::Result<()> {
-    let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + expected);
-    argv.push(verb.to_vec());
-    argv.push(key.to_vec());
-    argv.extend(items);
-    emit(w, &Argv::from(argv), fmt, scratch)
 }
 
 /// Render one stream as commands: one XADD per entry (slow on huge

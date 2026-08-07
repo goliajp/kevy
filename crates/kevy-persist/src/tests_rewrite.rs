@@ -400,3 +400,72 @@ fn rewrite_reconstructs_stream_groups() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+/// The tailgate storm's crash class: a big collection must rewrite as
+/// MANY bounded frames (Redis's 64-items-per-command batching), never
+/// one giant Argv whose u32 offset table can wrap. 200 list items →
+/// ceil(200/64) = 4 RPUSH frames, order preserved end to end; 100 hash
+/// pairs → 2 HSET frames with no pair split across a boundary.
+#[test]
+fn rewrite_chunks_large_collections() {
+    use kevy_store::Store;
+    let mut store = Store::new();
+    let items: Vec<Vec<u8>> = (0..200u32).map(|i| format!("item-{i:03}").into_bytes()).collect();
+    let refs: Vec<&[u8]> = items.iter().map(Vec::as_slice).collect();
+    store.rpush(b"biglist", &refs).unwrap();
+    let fields: Vec<(Vec<u8>, Vec<u8>)> = (0..100u32)
+        .map(|i| (format!("f{i:03}").into_bytes(), format!("v{i}").into_bytes()))
+        .collect();
+    let pairs: Vec<(&[u8], &[u8])> =
+        fields.iter().map(|(f, v)| (f.as_slice(), v.as_slice())).collect();
+    store.hset(b"bighash", &pairs).unwrap();
+
+    let (buf, keys) = crate::dump_store_to_buf(&store, crate::AofFormat::V1);
+    assert_eq!(keys, 2);
+    let text = String::from_utf8_lossy(&buf);
+    assert_eq!(text.matches("RPUSH").count(), 4, "200 items / 64 per frame");
+    assert_eq!(text.matches("HSET").count(), 2, "100 pairs / 64 per frame");
+
+    // Replay reconstructs the exact values — order and pairing survive
+    // the chunk boundaries.
+    let mut back = Store::new();
+    let mut pos = crate::aof::AOF_MAGIC.len();
+    let mut argv = kevy_resp::Argv::default();
+    while pos < buf.len() {
+        let Ok(Some(used)) = kevy_resp::parse_command_into(&buf[pos..], &mut argv) else {
+            break;
+        };
+        let args: Vec<Vec<u8>> = argv.iter().map(<[u8]>::to_vec).collect();
+        match args[0].as_slice() {
+            b"RPUSH" => {
+                let items: Vec<&[u8]> = args[2..].iter().map(Vec::as_slice).collect();
+                back.rpush(&args[1], &items).unwrap();
+            }
+            b"HSET" => {
+                let pairs: Vec<(&[u8], &[u8])> = args[2..]
+                    .chunks(2)
+                    .map(|fv| (fv[0].as_slice(), fv[1].as_slice()))
+                    .collect();
+                back.hset(&args[1], &pairs).unwrap();
+            }
+            other => panic!("unexpected verb {:?}", String::from_utf8_lossy(other)),
+        }
+        pos += used;
+    }
+    assert_eq!(
+        back.lrange(b"biglist", 0, -1).unwrap(),
+        store.lrange(b"biglist", 0, -1).unwrap()
+    );
+    // hgetall answers in table order, which differs by insertion
+    // history — compare as sets of pairs.
+    let pairs_of = |flat: Vec<Vec<u8>>| {
+        let mut ps: Vec<(Vec<u8>, Vec<u8>)> =
+            flat.chunks(2).map(|fv| (fv[0].clone(), fv[1].clone())).collect();
+        ps.sort();
+        ps
+    };
+    assert_eq!(
+        pairs_of(back.hgetall(b"bighash").unwrap()),
+        pairs_of(store.hgetall(b"bighash").unwrap())
+    );
+}

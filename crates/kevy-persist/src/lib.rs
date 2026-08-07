@@ -50,6 +50,7 @@ mod crc32c;
 mod record;
 mod replay_resync;
 pub mod reshard;
+mod rewrite_chunk;
 mod rewrite_fmt;
 mod rewrite_frames;
 mod shards_meta;
