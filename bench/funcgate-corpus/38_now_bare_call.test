@@ -1,0 +1,72 @@
+# `now()` / `current_timestamp` / `current_date` — foundational
+# time-of-now functions every app uses. Both the bare-function-
+# call shape and the keyword form must return the engine's
+# current wall-clock; pre-this-fix the column-type metadata for
+# the bare call was `Text` instead of `Timestamp`/`Date`, which
+# breaks typed decoders (sqlx::query_as etc).
+
+# Bare call works (sqllogictest's "no clock" path still uses
+# whatever the host returned at compile time of the fixture —
+# we assert on shape, not value).
+statement ok
+SELECT now()
+
+statement ok
+SELECT current_timestamp()
+
+statement ok
+SELECT current_date()
+
+# Keyword forms keep working.
+statement ok
+SELECT CURRENT_TIMESTAMP
+
+statement ok
+SELECT CURRENT_DATE
+
+# Case insensitivity.
+statement ok
+SELECT NOW()
+
+statement ok
+SELECT NoW()
+
+# Extra args rejected.
+statement error
+SELECT now('extra')
+
+# Inside INSERT VALUES.
+statement ok
+CREATE TABLE evt (id INT NOT NULL, t TIMESTAMP NOT NULL, d DATE NOT NULL)
+
+statement ok
+INSERT INTO evt VALUES (1, now(), current_date())
+
+query I
+SELECT id FROM evt
+----
+1
+
+# Inside WHERE — future timestamp > now()
+statement ok
+CREATE TABLE future_evt (id INT NOT NULL, t TIMESTAMP NOT NULL)
+
+statement ok
+INSERT INTO future_evt VALUES (1, '2099-01-01 00:00:00'::TIMESTAMP)
+
+query I
+SELECT id FROM future_evt WHERE t > now()
+----
+1
+
+# Arithmetic — now() - INTERVAL is the Django/Rails "last 30
+# days" idiom.
+statement ok
+SELECT now() - '30 days'::INTERVAL
+
+# Idempotence in a single statement — every reference to now()
+# in one SELECT returns the same instant (PG semantic).
+query I
+SELECT CASE WHEN now() = now() THEN 1 ELSE 0 END
+----
+1

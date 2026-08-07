@@ -1,0 +1,80 @@
+# PG bool_and / bool_or / every — Django Postgres BoolAnd /
+# BoolOr aggregates and SQL-standard `every`.
+
+statement ok
+CREATE TABLE u (id INT NOT NULL, ok BOOL)
+
+statement ok
+INSERT INTO u VALUES (1, true), (1, true), (1, true),
+                    (2, true), (2, false), (2, true),
+                    (3, NULL), (3, true),
+                    (4, NULL), (4, NULL),
+                    (5, false), (5, false)
+
+# bool_and: all true → true.
+query B
+SELECT bool_and(ok) FROM u WHERE id = 1
+----
+1
+
+# bool_and: any false → false.
+query B
+SELECT bool_and(ok) FROM u WHERE id = 2
+----
+0
+
+# bool_and: NULL skipped.
+query B
+SELECT bool_and(ok) FROM u WHERE id = 3
+----
+1
+
+# bool_and: all NULL → NULL.
+query B
+SELECT bool_and(ok) FROM u WHERE id = 4
+----
+NULL
+
+# bool_and: empty group → NULL.
+query B
+SELECT bool_and(ok) FROM u WHERE id = 99
+----
+NULL
+
+# bool_or: any true → true.
+query B
+SELECT bool_or(ok) FROM u WHERE id = 2
+----
+1
+
+# bool_or: all false → false.
+query B
+SELECT bool_or(ok) FROM u WHERE id = 5
+----
+0
+
+# every alias = bool_and.
+query B
+SELECT every(ok) FROM u WHERE id = 2
+----
+0
+
+# GROUP BY rollup.
+query IBB nosort
+SELECT id, bool_and(ok), bool_or(ok) FROM u GROUP BY id ORDER BY id
+----
+1
+1
+1
+2
+0
+1
+3
+1
+1
+4
+NULL
+NULL
+5
+0
+0

@@ -1,0 +1,133 @@
+# PG `split_part(string, delimiter, n)` — split + index.
+# 1-indexed. Negative n counts from end (PG 14+).
+# n=0 / empty delim → error. Out-of-range n → ''.
+# NULL on any arg → NULL.
+
+query T
+SELECT split_part('a,b,c', ',', 1)
+----
+a
+
+query T
+SELECT split_part('a,b,c', ',', 2)
+----
+b
+
+query T
+SELECT split_part('a,b,c', ',', 3)
+----
+c
+
+# Out of range → empty.
+query T
+SELECT split_part('a,b,c', ',', 4)
+----
+(empty)
+
+query T
+SELECT split_part('a,b,c', ',', 9999)
+----
+(empty)
+
+# Negative n.
+query T
+SELECT split_part('a,b,c', ',', -1)
+----
+c
+
+query T
+SELECT split_part('a,b,c', ',', -2)
+----
+b
+
+query T
+SELECT split_part('a,b,c', ',', -3)
+----
+a
+
+query T
+SELECT split_part('a,b,c', ',', -99)
+----
+(empty)
+
+# n=0 → error; an empty delimiter returns the whole string as field 1
+# (v7.39 read01 varlena.c — PG behavior; the old error pin was wrong).
+statement error
+SELECT split_part('a,b,c', ',', 0)
+
+query T
+SELECT split_part('abc', '', 1)
+----
+abc
+
+# Delim not present.
+query T
+SELECT split_part('abcdef', ',', 1)
+----
+abcdef
+
+query T
+SELECT split_part('abcdef', ',', 2)
+----
+(empty)
+
+# Empty fields preserved.
+query T
+SELECT split_part('a,,b', ',', 2)
+----
+(empty)
+
+query T
+SELECT split_part(',a,b', ',', 1)
+----
+(empty)
+
+query T
+SELECT split_part('a,b,', ',', 3)
+----
+(empty)
+
+# Multi-char delim.
+query T
+SELECT split_part('a::b::c', '::', 2)
+----
+b
+
+# Realistic.
+query T
+SELECT split_part('/api/v1/users', '/', 3)
+----
+v1
+
+query T
+SELECT split_part('foo.tar.gz', '.', -1)
+----
+gz
+
+# NULL on any arg.
+query T
+SELECT split_part(NULL, ',', 1)
+----
+NULL
+
+query T
+SELECT split_part('a,b', NULL, 1)
+----
+NULL
+
+query T
+SELECT split_part('a,b', ',', NULL)
+----
+NULL
+
+# WHERE clause.
+statement ok
+CREATE TABLE u (id INT NOT NULL, csv TEXT NOT NULL)
+
+statement ok
+INSERT INTO u VALUES (1, 'alice,30,eng'), (2, 'bob,25,art')
+
+query I
+SELECT id FROM u WHERE split_part(csv, ',', 1) = 'alice'
+----
+1

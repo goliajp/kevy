@@ -1,0 +1,73 @@
+# PG `power(x, y)` / `pow(x, y)` — x raised to y.
+# Integer exponent → exact. Fractional exponent → exp(y*ln(x)).
+# Negative base + fractional exponent → error (complex result).
+# 0 ^ negative → error. NULL → NULL.
+
+query R
+SELECT power(2, 8)
+----
+256
+
+query R
+SELECT power(5, 2)
+----
+25
+
+query R
+SELECT power(5, 0)
+----
+1
+
+query R
+SELECT power(1, 100)
+----
+1
+
+query R
+SELECT power(0, 5)
+----
+0
+
+query R
+SELECT power(-2, 4)
+----
+16
+
+query R
+SELECT power(-2, 3)
+----
+-8
+
+query R
+SELECT power(2, -3)
+----
+0.125
+
+# Fractional exponent (sqrt via 0.5).
+query R
+SELECT power(4, 0.5)
+----
+2.0000000000000000
+
+# pow alias.
+query R
+SELECT pow(3, 4)
+----
+81
+
+# NULL.
+query I
+SELECT power(NULL, 2)
+----
+NULL
+
+query I
+SELECT power(2, NULL)
+----
+NULL
+
+# Realistic: byte threshold (1 GiB).
+query I
+SELECT 1 WHERE 1073741824 >= power(2, 30)
+----
+1

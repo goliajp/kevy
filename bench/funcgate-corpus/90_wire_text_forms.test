@@ -1,0 +1,112 @@
+# v7.39 — canonical text forms for every Value variant that used to
+# fall through to the Debug placeholder (oracle: live PG 18.4).
+
+query T
+SELECT B'1010'
+----
+1010
+
+query T
+SELECT '\xdeadbeef'::bytea
+----
+\xdeadbeef
+
+query T
+SELECT 'A'::"char"
+----
+A
+
+query T
+SELECT '192.168.1.5'::inet
+----
+192.168.1.5
+
+query T
+SELECT '10.0.0.0/8'::cidr
+----
+10.0.0.0/8
+
+query T
+SELECT '08:00:2b:01:02:03'::macaddr
+----
+08:00:2b:01:02:03
+
+query T
+SELECT '08:00:2b:01:02:03:04:05'::macaddr8
+----
+08:00:2b:01:02:03:04:05
+
+query T
+SELECT 12345678901234567890123456789012345678::numeric
+----
+12345678901234567890123456789012345678
+
+query T
+SELECT '<a>x</a>'::xml
+----
+<a>x</a>
+
+query T
+SELECT point(1,2)
+----
+(1,2)
+
+query T
+SELECT lseg '((0,0),(1,1))'
+----
+[(0,0),(1,1)]
+
+query T
+SELECT box '((0,0),(1,1))'
+----
+(1,1),(0,0)
+
+query T
+SELECT path '((0,0),(1,1),(2,0))'
+----
+((0,0),(1,1),(2,0))
+
+query T
+SELECT polygon '((0,0),(1,1),(2,0))'
+----
+((0,0),(1,1),(2,0))
+
+query T
+SELECT circle '<(1,1),2>'
+----
+<(1,1),2>
+
+query T
+SELECT line '{1,-1,0}'
+----
+{1,-1,0}
+
+query T
+SELECT '{[1,3),[5,8)}'::int4multirange
+----
+{[1,3),[5,8)}
+
+query T
+SELECT ARRAY['\xff'::bytea]
+----
+{"\\xff"}
+
+query T
+SELECT ARRAY['{"a":1}'::json]
+----
+{"{\"a\":1}"}
+
+query T
+SELECT ARRAY['1.00'::money]
+----
+{$1.00}
+
+query T
+SELECT ARRAY['x'::varchar]
+----
+{x}
+
+query T
+SELECT ARRAY['y'::char(3)]
+----
+{"y  "}

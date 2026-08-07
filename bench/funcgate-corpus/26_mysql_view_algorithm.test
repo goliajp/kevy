@@ -1,0 +1,85 @@
+# v7.17.0 Phase 2.6 — MySQL `CREATE [ALGORITHM = …] [DEFINER = …]
+# [SQL SECURITY {DEFINER|INVOKER}] VIEW name AS SELECT …` prefix
+# clauses parse cleanly. Pre-2.6 the parser rejected the prefix
+# and every mysqldump restore failed on the first view. The
+# clauses are pure planner / permission metadata; SPG's view-
+# rewrite engine handles all three ALGORITHM values uniformly
+# (TEMPTABLE differs only in perf for huge views, out of v7.17
+# scope), and DEFINER / SQL SECURITY are pure single-user
+# permissioning that SPG ignores by design.
+
+statement ok
+CREATE TABLE t (id INT NOT NULL, label TEXT NOT NULL)
+
+statement ok
+INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c')
+
+# ALGORITHM = UNDEFINED — default mysqldump emission.
+statement ok
+CREATE ALGORITHM = UNDEFINED VIEW v_undef AS SELECT id, label FROM t
+
+query IT rowsort
+SELECT id, label FROM v_undef
+----
+1
+a
+2
+b
+3
+c
+
+# ALGORITHM = MERGE.
+statement ok
+CREATE ALGORITHM = MERGE VIEW v_merge AS SELECT id FROM t WHERE id > 1
+
+query I rowsort
+SELECT id FROM v_merge
+----
+2
+3
+
+# ALGORITHM = TEMPTABLE — accepted as alias of MERGE in v7.17.
+statement ok
+CREATE ALGORITHM = TEMPTABLE VIEW v_temp AS SELECT id FROM t
+
+# DEFINER user-only form.
+statement ok
+CREATE DEFINER = 'root' VIEW v_def_u AS SELECT id FROM t
+
+# DEFINER 'user'@'host' form — standard mysqldump shape.
+statement ok
+CREATE DEFINER = 'root'@'localhost' VIEW v_def_uh AS SELECT id FROM t
+
+# DEFINER 'user'@'%' wildcard host.
+statement ok
+CREATE DEFINER = 'admin'@'%' VIEW v_def_uw AS SELECT id FROM t
+
+# SQL SECURITY DEFINER / INVOKER.
+statement ok
+CREATE SQL SECURITY DEFINER VIEW v_sec_d AS SELECT id FROM t
+
+statement ok
+CREATE SQL SECURITY INVOKER VIEW v_sec_i AS SELECT id FROM t
+
+# All three clauses together — the exact mysqldump shape.
+statement ok
+CREATE ALGORITHM = UNDEFINED DEFINER = 'root'@'localhost' SQL SECURITY DEFINER VIEW v_full AS SELECT id, label FROM t
+
+query IT rowsort
+SELECT id, label FROM v_full WHERE id <= 2
+----
+1
+a
+2
+b
+
+# Order-independent: clauses may appear in any order.
+statement ok
+CREATE SQL SECURITY INVOKER DEFINER = 'u' ALGORITHM = MERGE VIEW v_perm AS SELECT id FROM t
+
+query I rowsort
+SELECT id FROM v_perm
+----
+1
+2
+3

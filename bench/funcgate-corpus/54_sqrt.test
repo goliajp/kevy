@@ -1,0 +1,40 @@
+# PG `sqrt(x)` — square root. Negative input → error.
+
+query R
+SELECT sqrt(16)
+----
+4
+
+query R
+SELECT sqrt(25)
+----
+5
+
+query R
+SELECT sqrt(0)
+----
+0
+
+query R
+SELECT sqrt(1)
+----
+1
+
+query R
+SELECT sqrt(1000000)
+----
+1000
+
+statement error
+SELECT sqrt(-1)
+
+query I
+SELECT sqrt(NULL)
+----
+NULL
+
+# Pythagorean.
+query R
+SELECT sqrt(power(3, 2) + power(4, 2))
+----
+5

@@ -1,0 +1,71 @@
+# v7.17.0 Phase 5.3 — `::regtype` / `::regclass` cast.
+#
+# v7.39 (round 359) — REWRITTEN AGAINST PG TRUTH. The original file
+# encoded a deliberate v7.17 divergence: "text-in / text-out", so that
+# `'public.t'::regclass` answered `t` for a table that did not exist,
+# purely to unblock dump loaders. Round 337 made the cast do what PG
+# does — resolve the name, and raise `relation "…" does not exist` when
+# there is none — and these cases went red. The engine was right and
+# this file was stale; PG 18.4 was re-measured for every line below.
+#
+# Note the cases now CREATE what they name. That is the point: a
+# regclass is a reference to a real relation, so a corpus that names
+# relations which do not exist was testing the divergence, not the cast.
+
+statement ok
+CREATE TABLE users (id INT)
+
+# `'public.tbl'::regclass` strips the schema prefix.
+query T
+SELECT 'public.users'::REGCLASS
+----
+users
+
+# Unqualified name resolves the same way.
+query T
+SELECT 'users'::REGCLASS
+----
+users
+
+# Chained `::regclass::text` round-trip (the dominant pg_dump shape).
+query T
+SELECT ('public.users'::REGCLASS)::TEXT
+----
+users
+
+# A name that is no relation is PG's error, not a pass-through. This is
+# the line the old file had backwards.
+# (the runner asserts that it errors; the exact wording is pinned in
+# the engine e2e suite, round 337)
+statement error
+SELECT 'nope'::REGCLASS
+
+# `to_regclass` is the spelling that answers NULL for a miss — which is
+# why PG has both.
+query T
+SELECT COALESCE(to_regclass('nope')::TEXT, 'null')
+----
+null
+
+# `::regtype` is text-in / text-out for type names, and unchanged.
+# mailrs migration emits `'int4'::regtype` in catalog probes.
+query T
+SELECT 'int4'::REGTYPE
+----
+integer
+
+# An integer with no relation behind it renders as the number. (The
+# oid must be unallocated in BOTH engines: the original line used
+# 16384, which is where SPG's own user-table band STARTS, so it
+# resolved to `users` here while being unallocated in PG. That was the
+# corpus picking an oid, not a behaviour difference.)
+query T
+SELECT 999999::REGCLASS
+----
+999999
+
+# …and one that IS a relation renders as its name, whatever the number.
+query T
+SELECT ('users'::REGCLASS::BIGINT)::REGCLASS::TEXT
+----
+users

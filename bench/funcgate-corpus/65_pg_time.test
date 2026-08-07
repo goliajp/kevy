@@ -1,0 +1,65 @@
+# PG TIME (without time zone) — i64 microseconds since 00:00:00.
+# OID 1083. The wall-clock-of-day half of PG's date/time triplet.
+
+statement ok
+CREATE TABLE schedule (id INT NOT NULL, alarm TIME)
+
+statement ok
+INSERT INTO schedule VALUES
+    (1, '00:00:00'),
+    (2, '08:30:00'),
+    (3, '14:30:45'),
+    (4, '14:30:45.123456'),
+    (5, '23:59:59.999999'),
+    (6, NULL)
+
+# Whole-second value round-trips with `HH:MM:SS` shape.
+query T
+SELECT alarm FROM schedule WHERE id = 3
+----
+14:30:45
+
+# Sub-second value carries `.ffffff` suffix.
+query T
+SELECT alarm FROM schedule WHERE id = 4
+----
+14:30:45.123456
+
+# Edge values: midnight, end of day.
+query T
+SELECT alarm FROM schedule WHERE id = 1
+----
+00:00:00
+
+query T
+SELECT alarm FROM schedule WHERE id = 5
+----
+23:59:59.999999
+
+# NULL preserved.
+query T
+SELECT alarm FROM schedule WHERE id = 6
+----
+NULL
+
+# ORDER BY on TIME — byte/integer ordering match wall-clock ordering.
+query IT nosort
+SELECT id, alarm FROM schedule WHERE alarm IS NOT NULL ORDER BY alarm
+----
+1
+00:00:00
+2
+08:30:00
+3
+14:30:45
+4
+14:30:45.123456
+5
+23:59:59.999999
+
+# Malformed input is a hard SQL error.
+statement error
+INSERT INTO schedule VALUES (99, 'not a time')
+
+statement error
+INSERT INTO schedule VALUES (99, '25:00:00')

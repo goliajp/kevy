@@ -1,0 +1,66 @@
+# v7.17.0 Phase 5.1 — LIMIT NULL / LIMIT ALL / FETCH FIRST / OFFSET
+# ROWS extended SELECT-tail shapes. LIMIT $1 (the original mailrs
+# H2) was closed in v7.9.24; this corpus closes the remaining
+# SQL-standard surface PG accepts equivalently.
+
+statement ok
+CREATE TABLE t (id INT NOT NULL)
+
+statement ok
+INSERT INTO t VALUES (1), (2), (3), (4), (5)
+
+# LIMIT NULL = no limit.
+query I rowsort
+SELECT id FROM t ORDER BY id LIMIT NULL
+----
+1
+2
+3
+4
+5
+
+# LIMIT ALL = no limit.
+query I rowsort
+SELECT id FROM t ORDER BY id LIMIT ALL
+----
+1
+2
+3
+4
+5
+
+# FETCH FIRST <n> ROWS ONLY.
+query I nosort
+SELECT id FROM t ORDER BY id FETCH FIRST 3 ROWS ONLY
+----
+1
+2
+3
+
+# FETCH NEXT <n> ROWS ONLY — same semantics.
+query I nosort
+SELECT id FROM t ORDER BY id FETCH NEXT 2 ROWS ONLY
+----
+1
+2
+
+# Bare FETCH FIRST ROW ONLY = LIMIT 1.
+query I
+SELECT id FROM t ORDER BY id FETCH FIRST ROW ONLY
+----
+1
+
+# OFFSET 2 ROWS — SQL-standard suffix.
+query I nosort
+SELECT id FROM t ORDER BY id OFFSET 2 ROWS
+----
+3
+4
+5
+
+# OFFSET ROWS + FETCH FIRST ROWS ONLY combined.
+query I nosort
+SELECT id FROM t ORDER BY id OFFSET 1 ROWS FETCH FIRST 2 ROWS ONLY
+----
+2
+3

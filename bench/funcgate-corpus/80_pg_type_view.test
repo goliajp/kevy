@@ -1,0 +1,51 @@
+# v7.17.0 Phase 3.P0-50 — pg_catalog.pg_type virtual view.
+#
+# sqlx::query!() / SQLAlchemy / Diesel / pgAdmin all probe
+# pg_type at connect/compile time to map OIDs ↔ language types.
+# SPG synthesises rows from the built-in scalar list + every
+# scalar's array companion, matching PG's pg_type.dat.
+
+# Resolve int4 by OID.
+query T
+SELECT typname FROM pg_catalog.pg_type WHERE oid = 23
+----
+int4
+
+# Resolve text by OID.
+query T
+SELECT typname FROM pg_catalog.pg_type WHERE oid = 25
+----
+text
+
+# Reverse direction: timestamp typname → OID.
+query I
+SELECT oid FROM pg_catalog.pg_type WHERE typname = 'timestamptz'
+----
+1184
+
+# Array OID linked to its scalar element.
+query TT
+SELECT a.typname, b.typname
+FROM pg_catalog.pg_type a JOIN pg_catalog.pg_type b ON a.typelem = b.oid
+WHERE a.typname = '_int4'
+----
+_int4
+int4
+
+# Numeric category for the standard integer / float types.
+query TT rowsort
+SELECT typname, typcategory FROM pg_catalog.pg_type
+WHERE typname IN ('int4', 'int8', 'float8')
+----
+float8
+N
+int4
+N
+int8
+N
+
+# At least 50 rows (scalars + array companions).
+query B
+SELECT COUNT(*) >= 50 FROM pg_catalog.pg_type
+----
+1

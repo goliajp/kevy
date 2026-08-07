@@ -1,0 +1,67 @@
+# PG MONEY (OID 790) — i64 cents, en_US locale display.
+# E-commerce / billing schemas pin price columns to MONEY.
+
+statement ok
+CREATE TABLE invoices (id INT NOT NULL, total MONEY)
+
+statement ok
+INSERT INTO invoices VALUES
+    (1, '$12.34'),
+    (2, '$1,234,567.89'),
+    (3, '-$0.50'),
+    (4, '$0.00'),
+    (5, 100),
+    (6, NULL)
+
+# Simple dollar literal round-trip.
+query T
+SELECT total FROM invoices WHERE id = 1
+----
+$12.34
+
+# Thousands separator preserved on output.
+query T
+SELECT total FROM invoices WHERE id = 2
+----
+$1,234,567.89
+
+# Negative money has sign before `$`.
+query T
+SELECT total FROM invoices WHERE id = 3
+----
+-$0.50
+
+query T
+SELECT total FROM invoices WHERE id = 4
+----
+$0.00
+
+# Bare integer = major units (100 → $100.00).
+query T
+SELECT total FROM invoices WHERE id = 5
+----
+$100.00
+
+query T
+SELECT total FROM invoices WHERE id = 6
+----
+NULL
+
+# ORDER BY on MONEY orders by i64 cents.
+query IT nosort
+SELECT id, total FROM invoices WHERE total IS NOT NULL ORDER BY total
+----
+3
+-$0.50
+4
+$0.00
+1
+$12.34
+5
+$100.00
+2
+$1,234,567.89
+
+# Malformed text → hard error.
+statement error
+INSERT INTO invoices VALUES (99, 'not money')

@@ -1,0 +1,132 @@
+# PG `concat(args...)` — variadic; coerces every arg to text;
+# NULL silently skipped (the NULL-tolerant counterpart to `||`).
+#
+# Reference: https://www.postgresql.org/docs/current/functions-string.html
+
+# Empty / single / pair.
+query T
+SELECT concat()
+----
+(empty)
+
+query T
+SELECT concat('a')
+----
+a
+
+query T
+SELECT concat('foo', 'bar')
+----
+foobar
+
+# NULL skipping.
+query T
+SELECT concat('a', NULL, 'b')
+----
+ab
+
+query T
+SELECT concat(NULL, NULL)
+----
+(empty)
+
+query T
+SELECT concat(NULL)
+----
+(empty)
+
+# Empty strings are kept (NOT NULL).
+query T
+SELECT concat('a', '', 'b')
+----
+ab
+
+# Type coercion.
+query T
+SELECT concat('id=', 42)
+----
+id=42
+
+query T
+SELECT concat('=', -7)
+----
+=-7
+
+query T
+SELECT concat('big=', 9223372036854775807)
+----
+big=9223372036854775807
+
+# Bool → PG single-letter form.
+query T
+SELECT concat(true)
+----
+t
+
+query T
+SELECT concat(false)
+----
+f
+
+# Mixed-type variadic.
+query T
+SELECT concat('a', 1, 'b', true, 'c', NULL)
+----
+a1btc
+
+# Unicode / multi-byte preserved.
+query T
+SELECT concat('日本語', '——', 'OK')
+----
+日本語——OK
+
+# Differentiation from `||` — pipe-pipe IS NULL-sensitive.
+query T
+SELECT 'a' || NULL || 'b'
+----
+NULL
+
+# Nested concat.
+query T
+SELECT concat(concat('A', 'B'), concat('C', 'D'))
+----
+ABCD
+
+# concat over table columns + NULL-row.
+statement ok
+CREATE TABLE u (a TEXT, b TEXT)
+
+statement ok
+INSERT INTO u VALUES ('x', 'y'), ('x', NULL), (NULL, NULL)
+
+query T rowsort
+SELECT concat(a, b) FROM u
+----
+(empty)
+x
+xy
+
+# INSERT VALUES with a function call (regression: pre-this-fix
+# the INSERT path rejected non-literal expressions).
+statement ok
+CREATE TABLE labeled (display TEXT NOT NULL)
+
+statement ok
+INSERT INTO labeled VALUES (concat('U-', 42))
+
+query T
+SELECT display FROM labeled
+----
+U-42
+
+# concat inside WHERE.
+statement ok
+CREATE TABLE u2 (id INT NOT NULL, n TEXT NOT NULL)
+
+statement ok
+INSERT INTO u2 VALUES (1, 'a'), (2, 'b')
+
+query I
+SELECT id FROM u2 WHERE concat(n, '!') = 'b!'
+----
+2

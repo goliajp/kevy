@@ -1,0 +1,110 @@
+# v7.17.0 Phase 1.5 — CREATE DOMAIN name AS base [DEFAULT expr]
+# [NOT NULL] [CHECK (expr)]* + column binding + INSERT-time
+# CHECK / NOT NULL enforcement + DROP DOMAIN.
+
+statement ok
+CREATE DOMAIN positive_int AS INT CHECK (value > 0)
+
+statement ok
+CREATE TABLE t (id INT NOT NULL, n positive_int)
+
+statement ok
+INSERT INTO t VALUES (1, 5), (2, 100)
+
+query II rowsort
+SELECT id, n FROM t
+----
+1
+5
+2
+100
+
+# ---- CHECK rejects bad value ----
+
+statement error
+INSERT INTO t VALUES (3, -1)
+
+statement error
+INSERT INTO t VALUES (3, 0)
+
+# ---- NULL passes (PG-strict) ----
+
+statement ok
+INSERT INTO t VALUES (4, NULL)
+
+query I
+SELECT count(*) FROM t WHERE n IS NULL
+----
+1
+
+# ---- DOMAIN with NOT NULL ----
+
+statement ok
+CREATE DOMAIN required_text AS TEXT NOT NULL
+
+statement ok
+CREATE TABLE u (id INT NOT NULL, label required_text)
+
+statement ok
+INSERT INTO u VALUES (1, 'a')
+
+statement error
+INSERT INTO u VALUES (2, NULL)
+
+# ---- multiple CHECKs ----
+
+statement ok
+CREATE DOMAIN small_pos AS INT CHECK (value > 0) CHECK (value < 100)
+
+statement ok
+CREATE TABLE v (id INT NOT NULL, n small_pos)
+
+statement ok
+INSERT INTO v VALUES (1, 50)
+
+statement error
+INSERT INTO v VALUES (2, 0)
+
+statement error
+INSERT INTO v VALUES (3, 200)
+
+# ---- TEXT-with-length CHECK ----
+
+statement ok
+CREATE DOMAIN short_label AS TEXT CHECK (length(value) <= 5)
+
+statement ok
+CREATE TABLE w (id INT NOT NULL, l short_label)
+
+statement ok
+INSERT INTO w VALUES (1, 'hello')
+
+statement error
+INSERT INTO w VALUES (2, 'too long')
+
+# ---- DROP DOMAIN ----
+
+statement ok
+DROP DOMAIN positive_int
+
+statement ok
+DROP DOMAIN IF EXISTS does_not_exist
+
+statement error
+DROP DOMAIN does_not_exist
+
+# ---- duplicate CREATE DOMAIN ----
+
+statement ok
+CREATE DOMAIN d AS INT
+
+statement error
+CREATE DOMAIN d AS TEXT
+
+# ---- collision with existing table rejected ----
+
+statement ok
+CREATE TABLE foo (id INT NOT NULL)
+
+statement error
+CREATE DOMAIN foo AS INT

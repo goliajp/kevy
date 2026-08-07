@@ -1,0 +1,25 @@
+# v7.17.0 Phase 3.P0-55 — pg_database / pg_roles / pg_user virtual views.
+#
+# v7.39 (round 474) — the pg_database query asked for `postgres`, which was
+# a hardcoded literal in the synth while `current_database()` answered
+# `spg`. The row now comes from the same place current_database() reads.
+
+query T
+SELECT datname FROM pg_catalog.pg_database WHERE datname = current_database()
+----
+spg
+
+query TB
+SELECT rolname, rolsuper FROM pg_catalog.pg_roles WHERE rolname = 'postgres'
+----
+postgres
+1
+
+# v7.39 (round 542) — this asked pg_user for `rolname`, which is
+# pg_roles' column. PG's pg_user is a different view over the same roles
+# and publishes `usename`; the case was pinning SPG's divergence.
+
+query T
+SELECT usename FROM pg_catalog.pg_user WHERE usename = 'postgres'
+----
+postgres

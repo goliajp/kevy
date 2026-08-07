@@ -1,0 +1,111 @@
+# PG `strpos(string, substring)` — substring position lookup.
+# Arg order: strpos(haystack, needle). 1-indexed; 0 if not found;
+# codepoint-counted. Empty needle → 1. NULL → NULL.
+#
+# Note: PG's position() function takes args in reverse order.
+
+query I
+SELECT strpos('hello', 'he')
+----
+1
+
+query I
+SELECT strpos('hello', 'll')
+----
+3
+
+query I
+SELECT strpos('hello', 'o')
+----
+5
+
+# First match wins.
+query I
+SELECT strpos('hello', 'l')
+----
+3
+
+# Not found.
+query I
+SELECT strpos('hello', 'XYZ')
+----
+0
+
+query I
+SELECT strpos('hi', 'hello')
+----
+0
+
+# Empty needle → 1.
+query I
+SELECT strpos('hello', '')
+----
+1
+
+# Empty haystack + non-empty needle → 0.
+query I
+SELECT strpos('', 'a')
+----
+0
+
+# Both empty → 1.
+query I
+SELECT strpos('', '')
+----
+1
+
+# Codepoint-counted, not byte-counted.
+query I
+SELECT strpos('日本語', '本')
+----
+2
+
+query I
+SELECT strpos('日本語', '語')
+----
+3
+
+query I
+SELECT strpos('日本語', '本語')
+----
+2
+
+query I
+SELECT strpos('日aXa日', 'X')
+----
+3
+
+# Case-sensitive.
+query I
+SELECT strpos('HELLO', 'l')
+----
+0
+
+# Arg order differs from position().
+query I
+SELECT position('ll', 'hello')
+----
+3
+
+# NULL handling.
+query I
+SELECT strpos(NULL, 'a')
+----
+NULL
+
+query I
+SELECT strpos('a', NULL)
+----
+NULL
+
+# Realistic: filter rows containing '@' in email.
+statement ok
+CREATE TABLE u (id INT NOT NULL, email TEXT NOT NULL)
+
+statement ok
+INSERT INTO u VALUES (1, 'alice@example.com'), (2, 'no-at-here')
+
+query I
+SELECT id FROM u WHERE strpos(email, '@') > 0
+----
+1

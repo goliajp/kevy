@@ -1,0 +1,72 @@
+# PG `mod(y, x)` — integer modulo. Result sign follows dividend.
+# Division by zero → error. NULL → NULL.
+
+query I
+SELECT mod(7, 3)
+----
+1
+
+query I
+SELECT mod(10, 5)
+----
+0
+
+query I
+SELECT mod(3, 7)
+----
+3
+
+query I
+SELECT mod(0, 5)
+----
+0
+
+# Sign-follows-dividend (CRITICAL).
+query I
+SELECT mod(-7, 3)
+----
+-1
+
+query I
+SELECT mod(7, -3)
+----
+1
+
+query I
+SELECT mod(-7, -3)
+----
+-1
+
+# NULL.
+query I
+SELECT mod(NULL, 3)
+----
+NULL
+
+query I
+SELECT mod(7, NULL)
+----
+NULL
+
+# Division by zero.
+statement error
+SELECT mod(7, 0)
+
+# Realistic: even-number filter.
+statement ok
+CREATE TABLE u (n INT NOT NULL)
+
+statement ok
+INSERT INTO u VALUES (1), (2), (3), (4), (5)
+
+query I rowsort
+SELECT n FROM u WHERE mod(n, 2) = 0
+----
+2
+4
+
+# Large numbers.
+query I
+SELECT mod(1000000007, 7)
+----
+6

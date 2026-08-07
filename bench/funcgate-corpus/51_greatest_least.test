@@ -1,0 +1,103 @@
+# PG `greatest(...)` / `least(...)` — variadic max/min.
+# NULL args silently skipped (PG-canonical). All-NULL → NULL.
+# Cross-type widening for numerics; lexicographic for text.
+
+query I
+SELECT greatest(1, 5, 3)
+----
+5
+
+query I
+SELECT greatest(-5, -1, -3)
+----
+-1
+
+query I
+SELECT greatest(7, 3)
+----
+7
+
+query I
+SELECT greatest(42)
+----
+42
+
+query T
+SELECT greatest('apple', 'banana', 'cherry')
+----
+cherry
+
+query I
+SELECT least(1, 5, 3)
+----
+1
+
+query I
+SELECT least(-5, -1, -3)
+----
+-5
+
+query T
+SELECT least('banana', 'apple', 'cherry')
+----
+apple
+
+# NULL handling.
+query I
+SELECT greatest(NULL, 5, NULL, 3)
+----
+5
+
+query I
+SELECT least(NULL, 5, NULL, 3)
+----
+3
+
+query I
+SELECT greatest(NULL, NULL, NULL)
+----
+NULL
+
+query I
+SELECT least(NULL, NULL)
+----
+NULL
+
+query I
+SELECT greatest(NULL)
+----
+NULL
+
+# Cross-width comparison.
+query I
+SELECT greatest(5, 9999999999)
+----
+9999999999
+
+# Realistic clamp.
+statement ok
+CREATE TABLE u (id INT NOT NULL, n INT NOT NULL)
+
+statement ok
+INSERT INTO u VALUES (1, 5), (2, 15), (3, 25)
+
+query II nosort
+SELECT id, least(n, 10) FROM u ORDER BY id
+----
+1
+5
+2
+10
+3
+10
+
+# Realistic max-of-cols.
+query II nosort
+SELECT id, greatest(n, 10) FROM u ORDER BY id
+----
+1
+10
+2
+15
+3
+25

@@ -1,0 +1,129 @@
+# PG `concat_ws(sep, val1 [, val2 ...])` — variadic with
+# separator. NULL-sep poisons whole result; NULL data args
+# silently skipped (separator NOT inserted around them).
+#
+# Reference: https://www.postgresql.org/docs/current/functions-string.html
+
+# Arity.
+query T
+SELECT concat_ws(',')
+----
+(empty)
+
+query T
+SELECT concat_ws(',', 'only')
+----
+only
+
+query T
+SELECT concat_ws(',', 'a', 'b')
+----
+a,b
+
+query T
+SELECT concat_ws('-', 'a', 'b', 'c', 'd', 'e')
+----
+a-b-c-d-e
+
+# Zero args (no separator) — error.
+statement error
+SELECT concat_ws()
+
+# NULL separator poisons.
+query T
+SELECT concat_ws(NULL, 'a', 'b')
+----
+NULL
+
+query T
+SELECT concat_ws(NULL, 'lonely')
+----
+NULL
+
+query T
+SELECT concat_ws(NULL)
+----
+NULL
+
+# NULL data args skipped — separator NOT doubled.
+query T
+SELECT concat_ws(',', 'a', NULL, 'b')
+----
+a,b
+
+query T
+SELECT concat_ws(',', NULL, NULL)
+----
+(empty)
+
+query T
+SELECT concat_ws(',', NULL)
+----
+(empty)
+
+# Alternating null/value.
+query T
+SELECT concat_ws('-', NULL, 'a', NULL, 'b', NULL, 'c')
+----
+a-b-c
+
+# Separator variants.
+query T
+SELECT concat_ws('', 'a', 'b', 'c')
+----
+abc
+
+query T
+SELECT concat_ws(', ', 'a', 'b', 'c')
+----
+a, b, c
+
+# Empty-string data arg kept — separator wraps around.
+query T
+SELECT concat_ws(',', 'a', '', 'b')
+----
+a,,b
+
+# Type coercion.
+query T
+SELECT concat_ws('-', 1, 2, 3)
+----
+1-2-3
+
+query T
+SELECT concat_ws('|', 'a', 1, true, NULL, 2.5)
+----
+a|1|t|2.5
+
+# Multi-byte UTF-8 separator.
+query T
+SELECT concat_ws('・', 'あ', 'い', 'う')
+----
+あ・い・う
+
+# Realistic "build full name from nullable columns" pattern.
+statement ok
+CREATE TABLE p (first TEXT, middle TEXT, last TEXT)
+
+statement ok
+INSERT INTO p VALUES ('John', NULL, 'Doe'), (NULL, NULL, NULL), ('Mary', 'Jane', 'Smith')
+
+query T rowsort
+SELECT concat_ws(' ', first, middle, last) FROM p
+----
+(empty)
+John Doe
+Mary Jane Smith
+
+# INSERT VALUES with concat_ws (regression: function-call in
+# VALUES still works post the v7.17 fallback).
+statement ok
+CREATE TABLE log (path TEXT NOT NULL)
+
+statement ok
+INSERT INTO log VALUES (concat_ws('/', 'api', 'v1', 'users'))
+
+query T
+SELECT path FROM log
+----
+api/v1/users

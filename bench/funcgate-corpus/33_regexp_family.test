@@ -1,0 +1,89 @@
+# v7.17.0 Phase 3.7 — PG regex function family.
+# regexp_matches / regexp_replace / regexp_split_to_array.
+#
+# SPG ships a minimal POSIX-ERE-shaped matcher: literal chars,
+# `.`, `*`/`+`/`?`, char classes `[abc]` / `[^abc]` / `[a-z]`,
+# shortcuts `\d` `\w` `\s` and uppercase negations, anchors
+# `^` `$`, non-capturing groups, and alternation `|`. NOT
+# supported in v7.17: backreferences, lookaround, lazy
+# quantifiers, counted repetition `{n,m}`, named captures.
+
+# --- regexp_matches ---
+
+query T
+SELECT regexp_matches('hello world', 'world')
+----
+{world}
+
+query T
+SELECT regexp_matches('abc123def', '\d+')
+----
+{123}
+
+# Global flag returns all matches.
+query T
+SELECT regexp_matches('a1b22c333', '\d+', 'g')
+----
+{1}
+{22}
+{333}
+
+# No match → empty array.
+query T
+SELECT regexp_matches('hello', '\d+')
+----
+
+# NULL propagates.
+query T
+SELECT regexp_matches(NULL, '\d+')
+----
+
+# --- regexp_replace ---
+
+query T
+SELECT regexp_replace('hello world', 'world', 'PG')
+----
+hello PG
+
+# Default = replace first match only.
+query T
+SELECT regexp_replace('a b a b', 'a', 'X')
+----
+X b a b
+
+# `g` flag = global replace.
+query T
+SELECT regexp_replace('a b a b', 'a', 'X', 'g')
+----
+X b X b
+
+# Slugify pattern (mailrs / Django common idiom).
+query T
+SELECT regexp_replace('Hello, World!', '[^a-zA-Z0-9]', '-', 'g')
+----
+Hello--World-
+
+# No match leaves the input unchanged.
+query T
+SELECT regexp_replace('hello', '\d+', 'X')
+----
+hello
+
+# --- regexp_split_to_array ---
+
+query T
+SELECT regexp_split_to_array('a,b,c', ',')
+----
+{a,b,c}
+
+# Whitespace split with `\s+`.
+query T
+SELECT regexp_split_to_array('one two   three', '\s+')
+----
+{one,two,three}
+
+# No delimiter → single element.
+query T
+SELECT regexp_split_to_array('abc', ',')
+----
+{abc}

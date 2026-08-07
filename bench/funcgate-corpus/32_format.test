@@ -1,0 +1,59 @@
+# v7.17.0 Phase 3.8 — PG `format(fmt, args…)` sprintf-style.
+# Conversion specifiers covered: `%s`, `%I`, `%L`, `%%`, `%n$X`.
+
+query T
+SELECT format('Hello %s', 'world')
+----
+Hello world
+
+# Multiple args.
+query T
+SELECT format('%s + %s = %s', 1, 2, 3)
+----
+1 + 2 = 3
+
+# `%L` quoted literal with embedded single-quote.
+query T
+SELECT format('= %L', 'O''Brien')
+----
+= 'O''Brien'
+
+# `%L` NULL renders as `NULL` (PG semantics).
+query T
+SELECT format('= %L', NULL)
+----
+= NULL
+
+# `%I` quoted identifier.
+query T
+SELECT format('SELECT FROM %I', 'mytable')
+----
+SELECT FROM mytable
+
+# `%%` literal percent.
+query T
+SELECT format('100%%')
+----
+100%
+
+# Positional `%n$X` references.
+query T
+SELECT format('%2$s %1$s', 'last', 'first')
+----
+first last
+
+# Dynamic SQL assembly — the mailrs migrate-script pattern.
+query T
+SELECT format('INSERT INTO %I (%I) VALUES (%L)', 'users', 'name', 'alice')
+----
+INSERT INTO users (name) VALUES ('alice')
+
+# NULL format string propagates.
+query T
+SELECT format(NULL, 'x')
+----
+NULL
+
+# Unknown specifier — error.
+statement error
+SELECT format('%q', 'x')

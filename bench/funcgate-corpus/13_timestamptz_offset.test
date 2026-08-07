@@ -1,0 +1,67 @@
+# v7.15.0 — TIMESTAMPTZ accepts the offset-suffixed literals
+# pg_dump emits. Pre-v7.15 SPG declared TIMESTAMPTZ columns but
+# rejected `'YYYY-MM-DD HH:MM:SS±OO'` literals as TIMESTAMP at
+# INSERT time, dropping rows silently from real prod-data dumps
+# (mailrs round-8 cutover blocker).
+
+statement ok
+CREATE TABLE tstz (id INT NOT NULL, t TIMESTAMPTZ NOT NULL)
+
+# UTC explicit
+statement ok
+INSERT INTO tstz VALUES (1, '2023-10-27 12:00:00+00')
+
+# Positive offset (east of UTC) — stored as UTC = local - offset
+statement ok
+INSERT INTO tstz VALUES (2, '2024-06-15 09:30:00+09')
+
+# Negative offset (west of UTC) — stored as UTC = local + |offset|
+statement ok
+INSERT INTO tstz VALUES (3, '2025-12-31 23:59:59-05')
+
+# Offset with minutes
+statement ok
+INSERT INTO tstz VALUES (4, '2026-01-01 03:30:00+05:30')
+
+# `Z` suffix (Zulu / UTC)
+statement ok
+INSERT INTO tstz VALUES (5, '2026-01-01 00:00:00Z')
+
+# ` UTC` suffix
+statement ok
+INSERT INTO tstz VALUES (6, '2026-01-01 00:00:00 UTC')
+
+# Offset-free literal — interpreted as already-UTC for SPG's
+# session-timezone-less model.
+statement ok
+INSERT INTO tstz VALUES (7, '2026-02-15 14:30:00')
+
+# Fractional seconds with offset
+statement ok
+INSERT INTO tstz VALUES (8, '2026-03-01 06:00:00.123456+02')
+
+# Round-trip via local engine renders as `... +00` for
+# TIMESTAMPTZ columns (sqllogictest uses the embedded engine
+# directly so it sees the engine-side format_timestamptz).
+query IT nosort
+SELECT id, t FROM tstz ORDER BY id
+----
+1
+2023-10-27 12:00:00
+2
+2024-06-15 00:30:00
+3
+2026-01-01 04:59:59
+4
+2025-12-31 22:00:00
+5
+2026-01-01 00:00:00
+6
+2026-01-01 00:00:00
+7
+2026-02-15 14:30:00
+8
+2026-03-01 04:00:00.123456
+
+statement ok
+DROP TABLE tstz

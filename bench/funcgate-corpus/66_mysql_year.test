@@ -1,0 +1,81 @@
+# MySQL YEAR — u16 in 1901..=2155 + zero-year sentinel.
+# WordPress / Drupal era-data columns commonly use YEAR; SPG
+# carried no such type pre-P0-33.
+
+statement ok
+CREATE TABLE music (id INT NOT NULL, born YEAR)
+
+statement ok
+INSERT INTO music VALUES
+    (1, 1901),
+    (2, 1985),
+    (3, 2007),
+    (4, 2155),
+    (5, 0),
+    (6, NULL)
+
+# Int literal accepted; rendered as 4-digit zero-padded text.
+query T
+SELECT born FROM music WHERE id = 2
+----
+1985
+
+# Boundary low (1901).
+query T
+SELECT born FROM music WHERE id = 1
+----
+1901
+
+# Boundary high (2155).
+query T
+SELECT born FROM music WHERE id = 4
+----
+2155
+
+# Zero-year sentinel renders as `0000`.
+query T
+SELECT born FROM music WHERE id = 5
+----
+0000
+
+# NULL preserved.
+query T
+SELECT born FROM music WHERE id = 6
+----
+NULL
+
+# Text literal also accepted.
+statement ok
+INSERT INTO music VALUES (7, '1999')
+
+query T
+SELECT born FROM music WHERE id = 7
+----
+1999
+
+# ORDER BY honours u16 ordering (zero-year sorts first).
+query IT nosort
+SELECT id, born FROM music WHERE born IS NOT NULL ORDER BY born, id
+----
+5
+0000
+1
+1901
+2
+1985
+7
+1999
+3
+2007
+4
+2155
+
+# Out-of-range int is a hard SQL error.
+statement error
+INSERT INTO music VALUES (99, 1900)
+
+statement error
+INSERT INTO music VALUES (99, 2156)
+
+statement error
+INSERT INTO music VALUES (99, 'not a year')

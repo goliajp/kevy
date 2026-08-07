@@ -1,0 +1,85 @@
+# v7.15.0 — pg_trgm: real trigram-shingle GIN over a TEXT
+# column. CREATE INDEX … USING gin (col gin_trgm_ops) builds a
+# persistent trigram index; LIKE '<pat>' / ILIKE '<pat>' queries
+# pre-filter candidate rows by trigram intersection then re-eval
+# the pattern. similarity(a, b) and show_trgm(t) follow PG.
+
+statement ok
+CREATE TABLE docs (id INT NOT NULL, body TEXT)
+
+statement ok
+INSERT INTO docs VALUES (1, 'Postgres trigram acceleration')
+
+statement ok
+INSERT INTO docs VALUES (2, 'MySQL fulltext rules')
+
+statement ok
+INSERT INTO docs VALUES (3, 'Goliakk SPG pg_trgm support')
+
+statement ok
+INSERT INTO docs VALUES (4, 'random tail text')
+
+statement ok
+CREATE INDEX docs_body_trgm ON docs USING gin (body gin_trgm_ops)
+
+# Index seeded from existing rows — query immediately works.
+query IT rowsort
+SELECT id, body FROM docs WHERE body LIKE '%trigram%'
+----
+1
+Postgres trigram acceleration
+
+# Multi-row match — the trigram intersection still scopes
+# correctly to the rows that actually contain the substring.
+# "%accel%" → trigrams of "accel" (length 5) intersect to just
+# row 1.
+query I rowsort
+SELECT id FROM docs WHERE body LIKE '%accel%'
+----
+1
+
+# Trailing-anchored: pattern's right edge contributes pad-1
+# trigrams like "xt ", which match the rightmost run of text.
+query I rowsort
+SELECT id FROM docs WHERE body LIKE '%text'
+----
+4
+
+# A pattern with no usable trigram constraint (literal run < 3
+# chars and unanchored) falls back to full scan — still correct.
+# "pg" is 2 chars, unanchored → no trigrams → scan path; row 3
+# ("Goliakk SPG pg_trgm support") matches via scan.
+query I rowsort
+SELECT id FROM docs WHERE body LIKE '%pg%' AND id = 3
+----
+3
+
+# Row inserted post-index is indexed incrementally.
+statement ok
+INSERT INTO docs VALUES (5, 'incremental trigram update')
+
+query I rowsort
+SELECT id FROM docs WHERE body LIKE '%trigram%'
+----
+1
+5
+
+# similarity() exposes the trigram Jaccard ratio directly.
+query R
+SELECT similarity('hello', 'hello')
+----
+1
+
+query R
+SELECT similarity('foo', 'foo')
+----
+1
+
+# show_trgm returns the trigram set as TEXT[].
+query T
+SELECT show_trgm('Hi')
+----
+{"  h"," hi","hi "}
+
+statement ok
+DROP TABLE docs

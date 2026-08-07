@@ -1,0 +1,99 @@
+# v7.17.0 Phase 3.P0-47 — PG INET / CIDR containment + overlap ops.
+#
+# Locks the SQL-surface for `<<` / `<<=` / `>>` / `>>=` / `&&`.
+# SPG stores INET / CIDR as Text; these operators parse the textual
+# `addr[/mask]` form and compare network bit ranges.
+
+# Strict supernet contains a host address (default /32 mask).
+query B
+SELECT '10.0.0.0/8'::inet >>= '10.1.2.3'::inet
+----
+1
+
+# Strict supernet does not contain an outside host.
+query B
+SELECT '10.0.0.0/8'::inet >>= '11.0.0.1'::inet
+----
+0
+
+# Host address is contained-by a covering subnet.
+query B
+SELECT '10.0.0.1'::inet <<= '10.0.0.0/8'::inet
+----
+1
+
+# Equal networks: contained-or-equal holds (<<= and >>=).
+query B
+SELECT '10.0.0.0/8'::inet <<= '10.0.0.0/8'::inet
+----
+1
+
+query B
+SELECT '10.0.0.0/8'::inet >>= '10.0.0.0/8'::inet
+----
+1
+
+# Equal networks: strict containment (<<, >>) does NOT hold.
+query B
+SELECT '10.0.0.0/8'::inet << '10.0.0.0/8'::inet
+----
+0
+
+query B
+SELECT '10.0.0.0/8'::inet >> '10.0.0.0/8'::inet
+----
+0
+
+# Strict supernet strictly contains a proper subnet.
+query B
+SELECT '10.0.0.0/8'::inet >> '10.1.0.0/16'::inet
+----
+1
+
+# Overlap between supernet and subnet is true.
+query B
+SELECT '10.0.0.0/8'::inet && '10.1.0.0/16'::inet
+----
+1
+
+# Overlap between disjoint /8 networks is false.
+query B
+SELECT '10.0.0.0/8'::inet && '11.0.0.0/8'::inet
+----
+0
+
+# IPv6 supernet contains an IPv6 member.
+query B
+SELECT '2001:db8::/32'::inet >>= '2001:db8:1::1'::inet
+----
+1
+
+# Mixed family (IPv4 vs IPv6) never overlaps.
+query B
+SELECT '10.0.0.0/8'::inet && '2001:db8::/32'::inet
+----
+0
+
+# NULL on either side propagates 3VL.
+query B
+SELECT NULL::inet >>= '10.0.0.1'::inet
+----
+NULL
+
+query B
+SELECT '10.0.0.0/8'::inet && NULL::inet
+----
+NULL
+
+# CIDR column predicate — common ORM pattern.
+statement ok
+CREATE TABLE nets (id INT NOT NULL, net CIDR NOT NULL)
+
+statement ok
+INSERT INTO nets VALUES (1, '10.0.0.0/8'), (2, '10.1.0.0/16'), (3, '192.168.0.0/16')
+
+query I rowsort
+SELECT id FROM nets WHERE net <<= '10.0.0.0/8'::inet
+----
+1
+2

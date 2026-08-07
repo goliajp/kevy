@@ -1,0 +1,73 @@
+# PG `floor(x)` — largest integer <= x.
+# Negative floats floor TOWARD -infinity (NOT toward zero).
+# Integer types passthrough unchanged. NULL → NULL.
+
+query R
+SELECT floor(1.7)
+----
+1
+
+query R
+SELECT floor(-1.5)
+----
+-2
+
+query R
+SELECT floor(-0.5)
+----
+-1
+
+query R
+SELECT floor(5.0)
+----
+5
+
+query R
+SELECT floor(0.0)
+----
+0
+
+query R
+SELECT floor(-2.999)
+----
+-3
+
+query R
+SELECT floor(-2.001)
+----
+-3
+
+# Integer passthrough.
+query I
+SELECT floor(42)
+----
+42
+
+query I
+SELECT floor(-7)
+----
+-7
+
+# NULL.
+query I
+SELECT floor(NULL)
+----
+NULL
+
+# Arithmetic.
+query R
+SELECT floor(10.0 / 3.0)
+----
+3
+
+# WHERE clause.
+statement ok
+CREATE TABLE u (id INT NOT NULL, x FLOAT NOT NULL)
+
+statement ok
+INSERT INTO u VALUES (1, 1.5), (2, 2.5), (3, 3.5)
+
+query I
+SELECT id FROM u WHERE floor(x) = 2
+----
+2

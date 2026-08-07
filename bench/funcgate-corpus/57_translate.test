@@ -1,0 +1,69 @@
+# PG `translate(s, from, to)` — char-by-char mapping.
+# Positional codepoint substitution. Extra from chars are
+# deleted when to is shorter. NULL → NULL.
+
+query T
+SELECT translate('hello', 'l', 'L')
+----
+heLLo
+
+query T
+SELECT translate('aabbcc', 'abc', 'XYZ')
+----
+XXYYZZ
+
+query T
+SELECT translate('hello world', 'lo', 'L0')
+----
+heLL0 w0rLd
+
+# Extra from chars deleted.
+query T
+SELECT translate('abcdef', 'abc', 'X')
+----
+Xdef
+
+query T
+SELECT translate('hello world', 'lo', '')
+----
+he wrd
+
+# Empty from → unchanged.
+query T
+SELECT translate('hello', '', 'X')
+----
+hello
+
+# Empty input.
+query T
+SELECT translate('', 'a', 'b')
+----
+(empty)
+
+# Duplicate chars in from — first match wins.
+query T
+SELECT translate('aaa', 'aaa', 'XYZ')
+----
+XXX
+
+# Realistic: normalize phone number.
+query T
+SELECT translate('(555) 123-4567', ' ()-', '')
+----
+5551234567
+
+# NULL handling.
+query T
+SELECT translate(NULL, 'a', 'b')
+----
+NULL
+
+query T
+SELECT translate('hi', NULL, 'b')
+----
+NULL
+
+query T
+SELECT translate('hi', 'a', NULL)
+----
+NULL

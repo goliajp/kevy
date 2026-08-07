@@ -1,0 +1,37 @@
+# v7.17.0 Phase 2.4 — PG `application_name` GUC accepts every SET
+# spelling the customer drivers emit (psql, JDBC, asyncpg, psycopg3,
+# DBeaver). The startup-param wiring + the
+# `spg_stat_activity.application_name` column are exercised on the
+# wire in `crates/spg-server/tests/e2e_application_name.rs`; this
+# corpus only pins the parser-level SET surface (the engine's SHOW
+# is catalog-only — GUC reads go through the pgwire layer covered
+# by the e2e test).
+
+statement ok
+SET application_name = 'psql'
+
+# Single-quoted multi-word value.
+statement ok
+SET application_name = 'my app v2'
+
+# Empty string is a legal value (clears the GUC).
+statement ok
+SET application_name = ''
+
+# `SET SESSION` is the explicit form.
+statement ok
+SET SESSION application_name = 'session-form'
+
+# `SET LOCAL` — PG itself treats application_name as session-scoped
+# (its GUC context is U/S, not L), so SET LOCAL still updates the
+# session value. We accept the parse without rejecting LOCAL.
+statement ok
+SET LOCAL application_name = 'local-form'
+
+# `SET ... TO ...` is the SQL-standard spelling alongside `=`.
+statement ok
+SET application_name TO 'to-form'
+
+# Bare identifier (no quotes) — psql / JDBC sometimes emit this form.
+statement ok
+SET application_name TO bare_ident_form

@@ -1,0 +1,58 @@
+# MySQL inline SET('a','b','c') — column-level value list with
+# subset semantics. Storage is TEXT; canonical form is
+# definition-order de-duped comma-joined.
+
+statement ok
+CREATE TABLE files (id INT NOT NULL, perms SET('r','w','x'))
+
+statement ok
+INSERT INTO files VALUES
+    (1, 'r,w'),
+    (2, 'r,w,x'),
+    (3, ''),
+    (4, NULL),
+    (5, 'x,r'),
+    (6, 'w,w,r,r')
+
+# Subset round-trips in definition order.
+query T
+SELECT perms FROM files WHERE id = 1
+----
+r,w
+
+# Full set.
+query T
+SELECT perms FROM files WHERE id = 2
+----
+r,w,x
+
+# Empty string = no flags set.
+query T
+SELECT perms FROM files WHERE id = 3
+----
+(empty)
+
+query T
+SELECT perms FROM files WHERE id = 4
+----
+NULL
+
+# Out-of-order input → canonicalised to definition order.
+query T
+SELECT perms FROM files WHERE id = 5
+----
+r,x
+
+# Duplicates de-duped.
+query T
+SELECT perms FROM files WHERE id = 6
+----
+r,w
+
+# Non-listed token → hard error.
+statement error
+INSERT INTO files VALUES (99, 'r,k')
+
+# Empty SET() declaration → parse error.
+statement error
+CREATE TABLE bad (id INT NOT NULL, p SET())

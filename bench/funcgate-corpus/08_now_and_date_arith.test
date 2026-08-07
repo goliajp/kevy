@@ -1,0 +1,59 @@
+# NOW() / CURRENT_TIMESTAMP / CURRENT_DATE + DATE arithmetic (v2.6).
+# The sqllogictest runner pins the engine clock to
+# 2025-06-15T12:00:00.000000Z so these queries are deterministic.
+
+# Clock-fed scalars rewritten to literal Cast at engine entry.
+query T nosort
+SELECT NOW()
+----
+2025-06-15 12:00:00
+
+query T nosort
+SELECT CURRENT_TIMESTAMP()
+----
+2025-06-15 12:00:00
+
+query T nosort
+SELECT CURRENT_DATE()
+----
+2025-06-15
+
+# EXTRACT chains through the rewritten literal.
+query I nosort
+SELECT EXTRACT(YEAR FROM NOW())
+----
+2025
+
+query I nosort
+SELECT EXTRACT(HOUR FROM NOW())
+----
+12
+
+# DATE + integer (days) round trip.
+query T nosort
+SELECT '2024-01-01'::DATE + 30
+----
+2024-01-31
+
+query T nosort
+SELECT '2024-01-31'::DATE - 30
+----
+2024-01-01
+
+# DATE - DATE returns signed days as a BIGINT.
+query I nosort
+SELECT '2025-01-01'::DATE - '2024-01-01'::DATE
+----
+366
+
+# TIMESTAMP - TIMESTAMP returns an INTERVAL (PG semantics).
+query T nosort
+SELECT '2024-01-01 00:00:01'::TIMESTAMP - '2024-01-01 00:00:00'::TIMESTAMP
+----
+00:00:01
+
+# Commutative integer + DATE.
+query T nosort
+SELECT 7 + '2024-06-01'::DATE
+----
+2024-06-08

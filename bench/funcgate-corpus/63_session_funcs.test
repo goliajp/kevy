@@ -1,0 +1,44 @@
+# Session / introspection functions — engine-level dispatch so
+# they compose inside expressions (the pgwire canned-response path
+# only catches bare top-level SELECT shapes).
+
+query T
+SELECT current_database()
+----
+spg
+
+query T
+SELECT database()
+----
+spg
+
+query T
+SELECT current_schema()
+----
+public
+
+query T
+SELECT current_user()
+----
+admin
+
+# version() banner is shipped — pin it so any drift surfaces.
+query T
+SELECT substr(version(), 1, 10)
+----
+PostgreSQL
+
+# In-expression use: alongside a real table column.
+statement ok
+CREATE TABLE t (id INT NOT NULL)
+
+statement ok
+INSERT INTO t VALUES (1), (2)
+
+query IT nosort
+SELECT id, current_database() AS db FROM t ORDER BY id
+----
+1
+spg
+2
+spg

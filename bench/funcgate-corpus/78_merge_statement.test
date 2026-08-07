@@ -1,0 +1,112 @@
+# v7.17.0 Phase 3.P0-42 — SQL:2003 / PG 15+ MERGE statement.
+#
+# Phase 3.5 (`69b1047`) carved out MERGE entirely. P0-42 lands the
+# real parser + executor for the v7.17 surface:
+#   * Source must be a catalog table (subquery source = follow-up).
+#   * WHEN MATCHED THEN UPDATE SET / DELETE / DO NOTHING
+#   * WHEN NOT MATCHED THEN INSERT (cols) VALUES (vals) / DO NOTHING
+#   * AND-conditioned WHEN clauses
+#   * Multiple WHEN clauses (first applicable fires per source row)
+#
+# v7.17 not yet covered: RETURNING, BY SOURCE / BY TARGET, row
+# triggers, cardinality-conflict detection.
+
+# Upsert shape — the dominant customer use case.
+statement ok
+CREATE TABLE upsert_target (id INT NOT NULL PRIMARY KEY, val INT NOT NULL)
+
+statement ok
+CREATE TABLE upsert_source (id INT NOT NULL, val INT NOT NULL)
+
+statement ok
+INSERT INTO upsert_target VALUES (1, 100), (2, 200)
+
+statement ok
+INSERT INTO upsert_source VALUES (1, 150), (3, 300)
+
+statement ok
+MERGE INTO upsert_target t USING upsert_source s ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET val = s.val
+WHEN NOT MATCHED THEN INSERT (id, val) VALUES (s.id, s.val)
+
+query II rowsort
+SELECT id, val FROM upsert_target
+----
+1
+150
+2
+200
+3
+300
+
+# MATCHED DELETE.
+statement ok
+CREATE TABLE del_target (id INT NOT NULL, val INT NOT NULL)
+
+statement ok
+CREATE TABLE del_source (id INT NOT NULL)
+
+statement ok
+INSERT INTO del_target VALUES (1, 100), (2, 200), (3, 300)
+
+statement ok
+INSERT INTO del_source VALUES (1), (3)
+
+statement ok
+MERGE INTO del_target t USING del_source s ON t.id = s.id
+WHEN MATCHED THEN DELETE
+
+query I rowsort
+SELECT id FROM del_target
+----
+2
+
+# AND-conditioned WHEN clause.
+statement ok
+CREATE TABLE cond_target (id INT NOT NULL, val INT NOT NULL)
+
+statement ok
+CREATE TABLE cond_source (id INT NOT NULL, val INT NOT NULL)
+
+statement ok
+INSERT INTO cond_target VALUES (1, 100), (2, 200)
+
+statement ok
+INSERT INTO cond_source VALUES (1, 50), (2, 999)
+
+statement ok
+MERGE INTO cond_target t USING cond_source s ON t.id = s.id
+WHEN MATCHED AND s.val > 500 THEN UPDATE SET val = s.val
+
+query II rowsort
+SELECT id, val FROM cond_target
+----
+1
+100
+2
+999
+
+# WHEN NOT MATCHED only — matched rows fall through unchanged.
+statement ok
+CREATE TABLE nm_target (id INT NOT NULL, val INT NOT NULL)
+
+statement ok
+CREATE TABLE nm_source (id INT NOT NULL, val INT NOT NULL)
+
+statement ok
+INSERT INTO nm_target VALUES (1, 100)
+
+statement ok
+INSERT INTO nm_source VALUES (1, 999), (2, 222)
+
+statement ok
+MERGE INTO nm_target t USING nm_source s ON t.id = s.id
+WHEN NOT MATCHED THEN INSERT (id, val) VALUES (s.id, s.val)
+
+query II rowsort
+SELECT id, val FROM nm_target
+----
+1
+100
+2
+222

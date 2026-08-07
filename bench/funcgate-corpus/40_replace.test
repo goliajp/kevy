@@ -1,0 +1,91 @@
+# PG `replace(string, from, to)` — substring substitution for
+# every non-overlapping occurrence (greedy left-to-right). NULL
+# on any arg → NULL. Empty `from` → input unchanged. Replacement
+# text is NOT re-scanned.
+
+query T
+SELECT replace('hello', 'l', 'L')
+----
+heLLo
+
+query T
+SELECT replace('aaa', 'a', 'b')
+----
+bbb
+
+query T
+SELECT replace('hello world', 'world', 'PG')
+----
+hello PG
+
+query T
+SELECT replace('aXbXc', 'X', '')
+----
+abc
+
+# Empty from → pass-through.
+query T
+SELECT replace('hello', '', 'X')
+----
+hello
+
+# No match.
+query T
+SELECT replace('hello', 'XYZ', 'Q')
+----
+hello
+
+# Non-recursive: `to` containing `from` doesn't blow up.
+query T
+SELECT replace('abb', 'a', 'aa')
+----
+aabb
+
+# Overlapping matches consumed left-to-right.
+query T
+SELECT replace('aaa', 'aa', 'b')
+----
+ba
+
+query T
+SELECT replace('aaaa', 'aa', 'b')
+----
+bb
+
+# NULL on any arg.
+query T
+SELECT replace(NULL, 'a', 'b')
+----
+NULL
+
+query T
+SELECT replace('hello', NULL, 'b')
+----
+NULL
+
+query T
+SELECT replace('hello', 'l', NULL)
+----
+NULL
+
+# v7.39 (round 625) — PG has no replace(integer, …).
+statement error
+SELECT replace(12321, '2', 'X')
+
+# Realistic: normalise a path / slug.
+statement ok
+CREATE TABLE u (id INT NOT NULL, p TEXT NOT NULL)
+
+statement ok
+INSERT INTO u VALUES (1, '/users/alice'), (2, '/users/bob')
+
+query I rowsort
+SELECT id FROM u WHERE replace(p, '/users/', '') = 'alice'
+----
+1
+
+# Nested replace.
+query T
+SELECT replace(replace('a-b_c', '-', '+'), '_', '=')
+----
+a+b=c

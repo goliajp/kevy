@@ -1,0 +1,138 @@
+# DATE_PART / AGE / TO_CHAR (v2.12). Same clock pin as the rest of the
+# pg_regress suite (TEST_CLOCK_MICROS = 2025-06-15T12:00:00Z) so any call
+# that leans on NOW() / CURRENT_DATE is deterministic.
+
+# DATE_PART mirrors EXTRACT for each field.
+query I nosort
+SELECT DATE_PART('year', '2024-03-15'::DATE)
+----
+2024
+
+query I nosort
+SELECT DATE_PART('month', '2024-03-15'::DATE)
+----
+3
+
+query I nosort
+SELECT DATE_PART('day', '2024-03-15'::DATE)
+----
+15
+
+query I nosort
+SELECT DATE_PART('hour', '2024-03-15 14:30:45'::TIMESTAMP)
+----
+14
+
+query I nosort
+SELECT DATE_PART('minute', '2024-03-15 14:30:45'::TIMESTAMP)
+----
+30
+
+query R nosort
+SELECT DATE_PART('second', '2024-03-15 14:30:45.123456'::TIMESTAMP)
+----
+45.123456
+
+# DATE_PART works on INTERVAL too (component decomposition).
+query I nosort
+SELECT DATE_PART('month', INTERVAL '1 year 5 months')
+----
+5
+
+query I nosort
+SELECT DATE_PART('year', INTERVAL '1 year 5 months')
+----
+1
+
+# Unknown field surfaces as an error.
+statement error
+SELECT DATE_PART('fortnight', '2024-01-01'::DATE)
+
+# NULL on either side propagates.
+query T nosort
+SELECT DATE_PART('year', NULL)
+----
+NULL
+
+# AGE returns an INTERVAL of (a - b) microseconds.
+query T nosort
+SELECT AGE('2024-03-01'::TIMESTAMP, '2024-01-01'::TIMESTAMP)
+----
+2 mons
+
+query T nosort
+SELECT AGE('2024-01-01 12:00:00'::TIMESTAMP, '2024-01-01 09:30:00'::TIMESTAMP)
+----
+02:30:00
+
+# Negative span renders with a leading sign.
+query T nosort
+SELECT AGE('2024-01-01'::TIMESTAMP, '2024-03-01'::TIMESTAMP)
+----
+-2 mons
+
+# Single-arg AGE resolves against the clock (PG: age(now(), t)); the
+# value is clock-dependent so only the shape is asserted.
+statement ok
+SELECT AGE('2024-01-01'::DATE)
+
+# TO_CHAR placeholders cover the high-traffic surface.
+query T nosort
+SELECT TO_CHAR('2024-03-15'::DATE, 'YYYY-MM-DD')
+----
+2024-03-15
+
+query T nosort
+SELECT TO_CHAR('2024-03-15 14:30:45'::TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS')
+----
+2024-03-15 14:30:45
+
+# Month name uses fixed English locale.
+query T nosort
+SELECT TO_CHAR('2024-03-15'::DATE, 'Month DD, YYYY')
+----
+March     15, 2024
+
+query T nosort
+SELECT TO_CHAR('2024-03-15'::DATE, 'Mon DD')
+----
+Mar 15
+
+# 12-hour clock + AM/PM.
+query T nosort
+SELECT TO_CHAR('2024-06-01 13:45:00'::TIMESTAMP, 'HH12:MI PM')
+----
+01:45 PM
+
+query T nosort
+SELECT TO_CHAR('2024-06-01 00:30:00'::TIMESTAMP, 'HH12:MI AM')
+----
+12:30 AM
+
+# YY produces the two-digit year.
+query T nosort
+SELECT TO_CHAR('2024-03-15'::DATE, 'YY/MM/DD')
+----
+24/03/15
+
+# MS / US widen the sub-second fields.
+query T nosort
+SELECT TO_CHAR('2024-03-15 14:30:45.123456'::TIMESTAMP, 'SS.US')
+----
+45.123456
+
+query T nosort
+SELECT TO_CHAR('2024-03-15 14:30:45.123'::TIMESTAMP, 'SS.MS')
+----
+45.123
+
+# NULL propagates.
+query T nosort
+SELECT TO_CHAR(NULL, 'YYYY-MM-DD')
+----
+NULL
+
+query T nosort
+SELECT TO_CHAR('2024-03-15'::DATE, NULL)
+----
+NULL

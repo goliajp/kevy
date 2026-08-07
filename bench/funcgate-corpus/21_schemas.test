@@ -1,0 +1,79 @@
+# v7.17.0 Phase 1.6 — CREATE SCHEMA + DROP SCHEMA registry.
+# Pre-v7.17 CREATE / DROP SCHEMA were silent no-ops; v7.17 makes
+# them real catalog ops with built-in-schema protection.
+
+statement ok
+CREATE SCHEMA app
+
+statement ok
+CREATE SCHEMA analytics
+
+# Duplicate CREATE errors.
+statement error
+CREATE SCHEMA app
+
+# IF NOT EXISTS is silent on duplicate.
+statement ok
+CREATE SCHEMA IF NOT EXISTS app
+
+# AUTHORIZATION clause accepted.
+statement ok
+CREATE SCHEMA finance AUTHORIZATION fin_admin
+
+# Built-in schemas cannot be re-declared.
+statement error
+CREATE SCHEMA public
+
+statement error
+CREATE SCHEMA pg_catalog
+
+statement error
+CREATE SCHEMA information_schema
+
+# IF NOT EXISTS on a built-in is a silent no-op.
+statement ok
+CREATE SCHEMA IF NOT EXISTS public
+
+# ---- DROP ----
+
+statement ok
+DROP SCHEMA analytics
+
+# Re-create allowed.
+statement ok
+CREATE SCHEMA analytics
+
+# IF EXISTS silent on missing.
+statement ok
+DROP SCHEMA IF EXISTS does_not_exist
+
+# Strict DROP errors on missing.
+statement error
+DROP SCHEMA does_not_exist
+
+# Built-in schemas cannot be dropped.
+statement error
+DROP SCHEMA public
+
+# ---- prefix routing for schema-qualified tables ----
+
+statement ok
+CREATE TABLE app.users (id INT NOT NULL, name TEXT)
+
+statement ok
+INSERT INTO app.users VALUES (1, 'alice'), (2, 'bob')
+
+# Bare-name lookup works (Phase 1.6 = prefix routing only).
+query IT rowsort
+SELECT id, name FROM users
+----
+1
+alice
+2
+bob
+
+# A different schema prefix resolves to the same table.
+query I
+SELECT count(*) FROM analytics.users
+----
+2

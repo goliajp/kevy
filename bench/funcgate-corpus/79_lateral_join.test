@@ -1,0 +1,77 @@
+# v7.17.0 Phase 3.P0-41 — LATERAL derived tables.
+#
+# Phase 3.3 (`981812a`) carved out `LATERAL ( SELECT … )` entirely;
+# P0-41 lands the real parser + executor. The inner SELECT may
+# reference columns from earlier FROM items; the executor
+# materialises the subquery per outer row by substituting
+# `<outer_alias>.<col>` references against the current join row.
+
+statement ok
+CREATE TABLE users (id INT NOT NULL, name TEXT NOT NULL)
+
+statement ok
+CREATE TABLE orders (id INT NOT NULL, user_id INT NOT NULL, amount INT NOT NULL)
+
+statement ok
+INSERT INTO users VALUES (1, 'alice'), (2, 'bob')
+
+statement ok
+INSERT INTO orders VALUES (1, 1, 100), (2, 1, 200), (3, 2, 50), (4, 2, 80)
+
+# Per-user top order via LATERAL with LIMIT 1.
+query TI
+SELECT u.name, o.amount
+FROM users u, LATERAL (SELECT amount FROM orders WHERE user_id = u.id ORDER BY amount DESC LIMIT 1) o
+ORDER BY u.id
+----
+alice
+200
+bob
+80
+
+# Multiple rows per outer (top 2).
+query TI
+SELECT u.name, o.amount
+FROM users u, LATERAL (SELECT amount FROM orders WHERE user_id = u.id ORDER BY amount DESC LIMIT 2) o
+ORDER BY u.id, o.amount DESC
+----
+alice
+200
+alice
+100
+bob
+80
+bob
+50
+
+# LATERAL with no inner matches drops the outer row (cross-join shape).
+statement ok
+INSERT INTO users VALUES (3, 'carol')
+
+query TI rowsort
+SELECT u.name, o.amount
+FROM users u, LATERAL (SELECT amount FROM orders WHERE user_id = u.id) o
+----
+alice
+100
+alice
+200
+bob
+50
+bob
+80
+
+# Existing JOIN-without-LATERAL still works (regression).
+query TI
+SELECT u.name, o.amount
+FROM users u JOIN orders o ON o.user_id = u.id
+ORDER BY u.id, o.amount
+----
+alice
+100
+alice
+200
+bob
+50
+bob
+80

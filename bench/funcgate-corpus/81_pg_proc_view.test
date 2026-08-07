@@ -1,0 +1,43 @@
+# v7.17.0 Phase 3.P0-51 — pg_catalog.pg_proc virtual view.
+
+# Resolve `now()` by name.
+query T
+SELECT proname FROM pg_catalog.pg_proc WHERE proname = 'now'
+----
+now
+
+# Window functions have prokind = 'w'.
+query T
+SELECT prokind FROM pg_catalog.pg_proc WHERE proname = 'row_number'
+----
+w
+
+# count(*) is an aggregate.
+query T
+SELECT prokind FROM pg_catalog.pg_proc WHERE proname = 'count' AND pronargs = 0
+----
+a
+
+# JOIN with pg_type to resolve length's return type.
+query TT rowsort
+SELECT p.proname, t.typname
+FROM pg_catalog.pg_proc p
+JOIN pg_catalog.pg_type t ON p.prorettype = t.oid
+WHERE p.proname = 'length'
+----
+length
+float8
+length
+float8
+length
+int4
+length
+int4
+length
+int4
+length
+int4
+length
+int4
+length
+int4

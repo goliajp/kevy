@@ -1,0 +1,77 @@
+# v7.17.0 Phase 1.4 — CREATE TYPE name AS ENUM + column binding +
+# INSERT-time label enforcement + DROP TYPE.
+
+statement ok
+CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy')
+
+statement ok
+CREATE TABLE person (id INT NOT NULL, m mood)
+
+statement ok
+INSERT INTO person VALUES (1, 'happy'), (2, 'sad'), (3, 'ok')
+
+query IT rowsort
+SELECT id, m FROM person
+----
+1
+happy
+2
+sad
+3
+ok
+
+# ---- invalid label rejected at INSERT ----
+
+statement error
+INSERT INTO person VALUES (99, 'angry')
+
+# ---- NULL allowed on nullable column ----
+
+statement ok
+INSERT INTO person VALUES (10, NULL)
+
+query I
+SELECT count(*) FROM person WHERE m IS NULL
+----
+1
+
+# ---- unknown column-type ident is hard-error ----
+
+statement error
+CREATE TABLE p2 (id INT NOT NULL, x not_a_type)
+
+# ---- duplicate CREATE TYPE ----
+
+statement error
+CREATE TYPE mood AS ENUM ('happy')
+
+# ---- duplicate label inside same ENUM ----
+
+statement error
+CREATE TYPE mood2 AS ENUM ('a', 'b', 'a')
+
+# ---- DROP TYPE flow ----
+
+statement ok
+CREATE TYPE size AS ENUM ('small', 'large')
+
+statement ok
+DROP TYPE size
+
+# Re-create allowed.
+statement ok
+CREATE TYPE size AS ENUM ('xl')
+
+statement ok
+DROP TYPE IF EXISTS does_not_exist
+
+statement error
+DROP TYPE does_not_exist
+
+# ---- collision rejection vs table/sequence/view ----
+
+statement ok
+CREATE TABLE color (id INT NOT NULL)
+
+statement error
+CREATE TYPE color AS ENUM ('red')

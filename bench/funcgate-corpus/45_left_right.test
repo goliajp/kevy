@@ -1,0 +1,139 @@
+# PG `left(string, n)` / `right(string, n)` — head/tail substring.
+# Negative n means all-but-|n|-chars-from-opposite-side.
+# n=0 → ''. Codepoint-counted. NULL → NULL.
+#
+# `left` is a reserved keyword token (LEFT [OUTER] JOIN); parser
+# now accepts `left(...)` in expression position.
+
+query T
+SELECT left('hello', 3)
+----
+hel
+
+query T
+SELECT left('hello', 5)
+----
+hello
+
+query T
+SELECT left('hello', 10)
+----
+hello
+
+query T
+SELECT left('hello', 0)
+----
+(empty)
+
+# Negative n.
+query T
+SELECT left('hello', -2)
+----
+hel
+
+query T
+SELECT left('hello', -5)
+----
+(empty)
+
+query T
+SELECT left('hello', -100)
+----
+(empty)
+
+# right() symmetric.
+query T
+SELECT right('hello', 3)
+----
+llo
+
+query T
+SELECT right('hello', 5)
+----
+hello
+
+query T
+SELECT right('hello', 10)
+----
+hello
+
+query T
+SELECT right('hello', 0)
+----
+(empty)
+
+query T
+SELECT right('hello', -2)
+----
+llo
+
+query T
+SELECT right('hello', -100)
+----
+(empty)
+
+# Empty input.
+query T
+SELECT left('', 3)
+----
+(empty)
+
+query T
+SELECT right('', 3)
+----
+(empty)
+
+# Unicode codepoint-counted.
+query T
+SELECT left('日本語', 2)
+----
+日本
+
+query T
+SELECT right('日本語', 2)
+----
+本語
+
+query T
+SELECT left('日本語', -1)
+----
+日本
+
+# NULL on any arg.
+query T
+SELECT left(NULL, 3)
+----
+NULL
+
+query T
+SELECT left('a', NULL)
+----
+NULL
+
+query T
+SELECT right(NULL, 3)
+----
+NULL
+
+# Mixed with LEFT OUTER JOIN — parser regression. left() in
+# the SELECT must NOT confuse the parser into thinking we're
+# starting a LEFT [OUTER] JOIN.
+statement ok
+CREATE TABLE a (id INT NOT NULL)
+
+statement ok
+CREATE TABLE b (id INT NOT NULL, label TEXT NOT NULL)
+
+statement ok
+INSERT INTO a VALUES (1), (2)
+
+statement ok
+INSERT INTO b VALUES (1, 'hello')
+
+query IT rowsort
+SELECT a.id, left(COALESCE(b.label, 'none'), 3) FROM a LEFT JOIN b ON a.id = b.id
+----
+1
+hel
+2
+non

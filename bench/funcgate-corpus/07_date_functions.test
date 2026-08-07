@@ -1,0 +1,79 @@
+# EXTRACT + DATE_TRUNC — v2.5.
+
+statement ok
+CREATE TABLE events (id INT NOT NULL, t TIMESTAMP)
+
+statement ok
+INSERT INTO events VALUES (1, '2024-03-15 10:30:45.123456')
+
+statement ok
+INSERT INTO events VALUES (2, '2025-12-31 23:59:59')
+
+# EXTRACT pulls integer components out of a TIMESTAMP.
+query I nosort
+SELECT EXTRACT(YEAR FROM t) FROM events ORDER BY id
+----
+2024
+2025
+
+query I nosort
+SELECT EXTRACT(MONTH FROM t) FROM events ORDER BY id
+----
+3
+12
+
+query I nosort
+SELECT EXTRACT(HOUR FROM t) FROM events WHERE id = 1
+----
+10
+
+query R nosort
+SELECT EXTRACT(SECOND FROM t) FROM events WHERE id = 1
+----
+45.123456
+
+# EXTRACT against a plain DATE — the date fields resolve; the
+# time-of-day ones are REJECTED (PG 18.4: `unit "hour" not supported for
+# type date`). This block used to assert 0 for the HMS components, which
+# was SPG's own pre-round-253 behaviour, not PG's.
+query I nosort
+SELECT EXTRACT(YEAR FROM '2030-06-15'::DATE)
+----
+2030
+
+statement error
+SELECT EXTRACT(HOUR FROM '2030-06-15'::DATE)
+
+# date_part(), unlike EXTRACT, promotes a date to timestamp first, so the
+# same field answers 0 there (PG 18.4) — the two forms have DIFFERENT
+# field/type matrices.
+query R nosort
+SELECT date_part('hour', '2030-06-15'::DATE)
+----
+0
+
+# DATE_TRUNC rounds down to the requested boundary.
+query T nosort
+SELECT date_trunc('day', t) FROM events WHERE id = 1
+----
+2024-03-15 00:00:00
+
+query T nosort
+SELECT date_trunc('month', t) FROM events WHERE id = 1
+----
+2024-03-01 00:00:00
+
+query T nosort
+SELECT date_trunc('hour', t) FROM events WHERE id = 1
+----
+2024-03-15 10:00:00
+
+# decade is a valid unit (rounds down to the decade boundary).
+query T nosort
+SELECT date_trunc('decade', t) FROM events WHERE id = 1
+----
+2020-01-01 00:00:00
+
+# Unknown unit yields a clear error.
+statement error
+SELECT date_trunc('eon', t) FROM events

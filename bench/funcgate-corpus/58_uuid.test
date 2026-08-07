@@ -1,0 +1,94 @@
+# PG UUID type + gen_random_uuid() / uuid_generate_v4().
+# Canonical lowercase 8-4-4-4-12; accepts hyphenated /
+# unhyphenated / uppercase / brace-wrapped on input.
+
+# Canonical hyphenated round-trip.
+statement ok
+CREATE TABLE u (id UUID NOT NULL, label TEXT NOT NULL)
+
+statement ok
+INSERT INTO u VALUES ('550e8400-e29b-41d4-a716-446655440000', 'alice')
+
+query T
+SELECT id::text FROM u
+----
+550e8400-e29b-41d4-a716-446655440000
+
+# Uppercase normalized to lowercase canonical.
+statement ok
+INSERT INTO u VALUES ('550E8400-E29B-41D4-A716-446655440001', 'bob')
+
+query T
+SELECT id::text FROM u WHERE label = 'bob'
+----
+550e8400-e29b-41d4-a716-446655440001
+
+# Unhyphenated form accepted.
+statement ok
+INSERT INTO u VALUES ('550e8400e29b41d4a716446655440002', 'carol')
+
+query T
+SELECT id::text FROM u WHERE label = 'carol'
+----
+550e8400-e29b-41d4-a716-446655440002
+
+# Brace-wrapped form accepted.
+statement ok
+INSERT INTO u VALUES ('{550e8400-e29b-41d4-a716-446655440003}', 'dave')
+
+query T
+SELECT id::text FROM u WHERE label = 'dave'
+----
+550e8400-e29b-41d4-a716-446655440003
+
+# Equality between Uuid column and text literal (PG unknown-type
+# literal inference).
+query T
+SELECT label FROM u WHERE id = '550e8400-e29b-41d4-a716-446655440000'
+----
+alice
+
+# Cast text → uuid → text.
+query T
+SELECT '550E8400-E29B-41D4-A716-446655440000'::uuid::text
+----
+550e8400-e29b-41d4-a716-446655440000
+
+# Malformed input rejected.
+statement error
+INSERT INTO u VALUES ('not-a-uuid', 'bad')
+
+statement error
+SELECT 'not-a-uuid'::uuid
+
+# NULL handling — nullable column accepts NULL.
+statement ok
+CREATE TABLE optu (id UUID, label TEXT NOT NULL)
+
+statement ok
+INSERT INTO optu VALUES (NULL, 'maybe')
+
+query T
+SELECT label FROM optu WHERE id IS NULL
+----
+maybe
+
+# DEFAULT gen_random_uuid() — Django / Rails / Hibernate default
+# PK pattern. Value is non-deterministic so we assert via shape:
+# 36 chars including 4 hyphens at the canonical positions.
+statement ok
+CREATE TABLE g (id UUID NOT NULL DEFAULT gen_random_uuid(), name TEXT NOT NULL)
+
+statement ok
+INSERT INTO g (name) VALUES ('row1')
+
+query I
+SELECT length(id::text) FROM g WHERE name = 'row1'
+----
+36
+
+# uuid_generate_v4 alias.
+query I
+SELECT length(uuid_generate_v4()::text)
+----
+36

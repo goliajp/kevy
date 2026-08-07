@@ -1,0 +1,131 @@
+# INTERVAL literal + timestamp / date / interval arithmetic (v2.11).
+# Months and microseconds live in separate components — month-shift
+# clamps to the target month's last day, sub-day deltas stay precise.
+
+# Single-unit literal renders the original text in pg-ish form.
+query T nosort
+SELECT INTERVAL '1 day'
+----
+1 day
+
+query T nosort
+SELECT INTERVAL '2 hours'
+----
+02:00:00
+
+query T nosort
+SELECT INTERVAL '1 year 2 months'
+----
+1 year 2 mons
+
+# Negative microsecond span renders with a leading sign.
+query T nosort
+SELECT INTERVAL '-3 days'
+----
+-3 days
+
+# EXTRACT decomposes an INTERVAL by component.
+query I nosort
+SELECT EXTRACT(MONTH FROM INTERVAL '1 year 2 months')
+----
+2
+
+query I nosort
+SELECT EXTRACT(YEAR FROM INTERVAL '1 year 2 months')
+----
+1
+
+query I nosort
+SELECT EXTRACT(DAY FROM INTERVAL '3 days 5 hours')
+----
+3
+
+query I nosort
+SELECT EXTRACT(HOUR FROM INTERVAL '3 days 5 hours')
+----
+5
+
+# TIMESTAMP + INTERVAL (sub-day) — the micros part flows straight through.
+query T nosort
+SELECT '2024-01-01 00:00:00'::TIMESTAMP + INTERVAL '90 minutes'
+----
+2024-01-01 01:30:00
+
+# Commutative.
+query T nosort
+SELECT INTERVAL '30 seconds' + '2024-01-01 00:00:00'::TIMESTAMP
+----
+2024-01-01 00:00:30
+
+# TIMESTAMP - INTERVAL.
+query T nosort
+SELECT '2024-01-01 12:00:00'::TIMESTAMP - INTERVAL '1 hour'
+----
+2024-01-01 11:00:00
+
+# DATE + INTERVAL of integral days stays a DATE.
+query T nosort
+SELECT '2024-06-01'::DATE + INTERVAL '7 days'
+----
+2024-06-08 00:00:00
+
+# DATE - INTERVAL of integral days stays a DATE.
+query T nosort
+SELECT '2024-06-08'::DATE - INTERVAL '7 days'
+----
+2024-06-01 00:00:00
+
+# DATE + INTERVAL that includes sub-day micros lifts to TIMESTAMP.
+query T nosort
+SELECT '2024-06-01'::DATE + INTERVAL '1 hour'
+----
+2024-06-01 01:00:00
+
+# Month math clamps to the target month's last day (PG semantics):
+# 2024-01-31 + 1 month → 2024-02-29 (leap year).
+query T nosort
+SELECT '2024-01-31'::DATE + INTERVAL '1 month'
+----
+2024-02-29 00:00:00
+
+# Same shape in a non-leap year clamps to Feb 28.
+query T nosort
+SELECT '2023-01-31'::DATE + INTERVAL '1 month'
+----
+2023-02-28 00:00:00
+
+# Month math from March 31 minus one month also clamps.
+query T nosort
+SELECT '2024-03-31'::DATE - INTERVAL '1 month'
+----
+2024-02-29 00:00:00
+
+# INTERVAL + INTERVAL combines both components.
+query T nosort
+SELECT INTERVAL '1 day' + INTERVAL '2 hours'
+----
+1 day 02:00:00
+
+# INTERVAL - INTERVAL.
+query T nosort
+SELECT INTERVAL '1 day' - INTERVAL '12 hours'
+----
+1 day -12:00:00
+
+# Week and microsecond units round-trip.
+query T nosort
+SELECT INTERVAL '2 weeks'
+----
+14 days
+
+query I nosort
+SELECT EXTRACT(MICROSECOND FROM INTERVAL '1 second')
+----
+1000000
+
+# Bad shapes fail at parse time.
+statement error
+SELECT INTERVAL '1 fortnight'
+
+statement error
+SELECT INTERVAL 'garbage'

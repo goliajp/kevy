@@ -1,0 +1,86 @@
+# PG `trunc(x)` / `trunc(x, scale)` — truncate TOWARD zero.
+# Distinct from floor (toward -inf) and round (half-away).
+
+query R
+SELECT trunc(1.7)
+----
+1
+
+query R
+SELECT trunc(-1.7)
+----
+-1
+
+query R
+SELECT trunc(-0.5)
+----
+0
+
+query R
+SELECT trunc(1.5)
+----
+1
+
+query R
+SELECT trunc(2.5)
+----
+2
+
+query R
+SELECT trunc(-1.5)
+----
+-1
+
+query R
+SELECT trunc(5.0)
+----
+5
+
+query R
+SELECT trunc(0.0)
+----
+0
+
+# Two-arg form.
+query R
+SELECT trunc(1.2345, 2)
+----
+1.23
+
+query R
+SELECT trunc(2.55, 1)
+----
+2.5
+
+query R
+SELECT trunc(-1.99, 1)
+----
+-1.9
+
+# Negative scale.
+query R
+SELECT trunc(15, -1)
+----
+10
+
+query R
+SELECT trunc(199, -2)
+----
+100
+
+# NULL.
+query I
+SELECT trunc(NULL)
+----
+NULL
+
+query I
+SELECT trunc(1.5, NULL)
+----
+NULL
+
+# Integer passthrough.
+query I
+SELECT trunc(42)
+----
+42

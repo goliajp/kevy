@@ -1,0 +1,66 @@
+# v7.17.0 Phase 3.9 — jsonb_path_query family.
+# Minimal JSONPath subset: `$`, `.field`, `[N]`, `[*]`, chained.
+
+query T
+SELECT jsonb_path_query('{"k":1}'::JSONB, '$.k')
+----
+1
+
+query T
+SELECT jsonb_path_query('{"user":{"name":"bob"}}'::JSONB, '$.user.name')
+----
+"bob"
+
+query T
+SELECT jsonb_path_query('{"items":[10,20,30]}'::JSONB, '$.items[1]')
+----
+20
+
+query T
+SELECT jsonb_path_query('{"items":[1,2,3]}'::JSONB, '$.items[*]')
+----
+1
+2
+3
+
+# Wildcard then field — "find all .name values".
+query T
+SELECT jsonb_path_query('{"users":[{"name":"a"},{"name":"b"}]}'::JSONB, '$.users[*].name')
+----
+"a"
+"b"
+
+# Missing field — empty array.
+query T
+SELECT jsonb_path_query('{"k":1}'::JSONB, '$.missing')
+----
+
+# NULL doc → NULL result.
+query T
+SELECT jsonb_path_query(NULL::JSONB, '$.k')
+----
+
+# jsonb_path_query_first returns single value as Json.
+query T
+SELECT jsonb_path_query_first('{"items":[10,20]}'::JSONB, '$.items[*]')
+----
+10
+
+query T
+SELECT jsonb_path_query_first('{}'::JSONB, '$.missing')
+----
+NULL
+
+# jsonb_path_query_array wraps matches as a single JSON array.
+query T
+SELECT jsonb_path_query_array('{"items":[10,20,30]}'::JSONB, '$.items[*]')
+----
+[10, 20, 30]
+
+# Invalid path — error.
+statement error
+SELECT jsonb_path_query('{}'::JSONB, 'no_dollar_prefix')
+
+# Unsupported filter expression — error.
+statement error
+SELECT jsonb_path_query('[]'::JSONB, '$[?(@.k > 1)]')

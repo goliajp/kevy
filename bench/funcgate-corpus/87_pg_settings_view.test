@@ -1,0 +1,31 @@
+# v7.17.0 Phase 3.P0-57 — pg_catalog.pg_settings virtual view.
+
+# Canonical defaults every PG admin tool probes for.
+query T
+SELECT setting FROM pg_catalog.pg_settings WHERE name = 'client_encoding'
+----
+UTF8
+
+query T
+SELECT setting FROM pg_catalog.pg_settings WHERE name = 'server_encoding'
+----
+UTF8
+
+query T
+SELECT setting FROM pg_catalog.pg_settings WHERE name = 'standard_conforming_strings'
+----
+on
+
+query T
+SELECT setting FROM pg_catalog.pg_settings WHERE name = 'TimeZone'
+----
+UTC
+
+# Session-set value overrides defaults.
+statement ok
+SET search_path TO custom_schema
+
+query T
+SELECT setting FROM pg_catalog.pg_settings WHERE name = 'search_path'
+----
+custom_schema
