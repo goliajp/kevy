@@ -282,19 +282,7 @@ impl Commands for KevyCommands {
         store.tier_compact_tick(); // vlog compaction + page return, off the query tail
         alloc_reclaim_tick();
 
-        // Re-apply maxmemory + eviction policy in case `CONFIG SET` has
-        // swapped the global since the previous tick. `store.set_max_memory`
-        // is idempotent and cheap (compares + assigns two scalars + may
-        // recompute soft-limit accounting); paying it every 100 ms is well
-        // below the noise floor of any benchmark. The instance bound is
-        // divided across shards here exactly as at `on_shard_init` —
-        // this re-apply used to hand every shard the WHOLE figure, so
-        // the init-time division was overwritten within one tick.
-        let n = self.state().nshards().max(1) as u64;
-        store.set_max_memory(
-            cfg.memory.maxmemory / n,
-            map_eviction_policy(cfg.memory.maxmemory_policy),
-        );
+        maxmemory_tick(self, store, &cfg);
         // Publish this shard's gauges (used_memory, key/expire counts, …) so
         // `INFO`, answered on any one shard, can sum the process-wide view.
         ops::stats::publish_gauges(self.shard_ctx(), store);
@@ -497,4 +485,4 @@ impl Commands for KevyCommands {
 
 #[path = "commands_tick.rs"]
 mod commands_tick;
-use commands_tick::{alloc_reclaim_tick, tier_tick};
+use commands_tick::{alloc_reclaim_tick, maxmemory_tick, tier_tick};
