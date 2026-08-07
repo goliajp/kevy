@@ -68,6 +68,58 @@ alloc/free per op; the KV angles stay green for the same reason.
   (2.7 GB of avoidable copies on sadd) but is worth ~1 % throughput at
   best — a tail/latency candidate, not the tax.
 
+## Phase B, first intervention — and the budget model's own correction
+
+Sampling on the *miss event* (not cycles) found the misses were not
+where the self-time profiles pointed: **one inlined atomic load
+(`atomic.rs:3904`) inside `drain_replica_inbox`'s symbol range took
+27.25 % of ALL L1 misses**, and the allocator walk
+(`Heap::alloc`/`pop_slot`/`dealloc`) another ~25 %. Source read: the
+server creates a replica inbox for every shard unconditionally, so
+every reactor iteration paid one `Vec::with_capacity(64)` allocation,
+one idle-mpsc probe (the atomic), and one release store — millions of
+times a second across 8 shards, with the eight signals' atomics packed
+onto shared cache lines by the allocator's dense startup layout
+(glibc's chunk headers happened to pad them apart — placement luck,
+not design).
+
+The fix (flag-gated early return — the wake contract already
+guarantees a sender raises the flag; a capped drain re-raises it —
+plus `#[repr(align(64))]` on the signal):
+
+- **Mechanism: confirmed surgically.** L1 misses 3.31 B → 1.59 B per
+  8 s window (OFF: 1.30 B). The storm is gone.
+- **Correctness: intact.** repligate full PASS (snapshot ship, live
+  frames, restart, SIGKILL cross-generation re-sync); workspace 205
+  suites green.
+- **Throughput: the needle moved only where the storm was measured.**
+  sadd −15.8 % → **−7.8 % (green)**. hset (−13.4) and zadd (−15.2)
+  did not move — and had never been miss-profiled; their storms may
+  sit elsewhere (profiling next).
+
+**And the correction this buys:** the serial budget model above
+(+48.6 misses × ~13 cycles ≈ the whole gap) was numerology. Killing
+1.7 B of those misses recovered only part of one angle: most of the
+polled-line misses were latency-hidden behind other work. A budget
+that reconciles on paper is *consistent with* causation, never proof
+of it — **the intervention is the test** (the same lesson as v1.29's
+"memcpy fraction was real but was a tax, not the bottleneck").
+
+Post-gate follow-ups pinned the rest of the round:
+
+- **hset / zadd / incr miss profiles are flat** (top source line
+  4–6 %, no storm anywhere) — the remaining collection tax is **not a
+  miss story at all**. With instructions/op *below* glibc's and misses
+  near parity, the IPC gap (1.50 vs 1.67) must sit in a stall class
+  these events don't see (store-side/RFO, dependency chains,
+  frontend). The next decomposition round opens with a topdown stall
+  breakdown, not another load-miss hunt.
+- A perfgate run showed incr swinging −2.5 → −11.5 under the gate —
+  refuted as noise by a 3× interleaved gated-vs-ungated A/B (mean
+  +0.8 %, spread ±3 %); the gate costs incr nothing. (That perfgate's
+  rerun REFUSED on the known build-independent zadd pause — the coin
+  flip again.)
+
 ## Where the attack face is (Phase B material, next design round)
 
 The target is **misses per op in the metadata walk**, with the §9 gate
