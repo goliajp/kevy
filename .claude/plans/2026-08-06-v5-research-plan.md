@@ -424,3 +424,28 @@ incr −5.5/−11.5,ref 腿自身 +3-5% 漂移。**每跑带 ±3-6pp;
 "sadd 差 0.5% 到绿"是单跑幻觉;宣绿/宣红需 median-of-N**(方法论
 bench-infra 条款)。诚实弧终账:集合角全部从双位数负改善到个位数负带,
 **除 lpush 外无一可证绿**。r1-locality 现 **+23 笔**(tip `ab4e9bf5`)。
+
+---
+
+## 十一期(2026-08-07,zadd >3s 停顿关闭 —— 五个死嫌疑与一个无界循环)
+
+五连消(每个都被测量杀死,无一靠论证):巨型 realloc(计时探针 10 次
+停顿零命中)/ 内核阻塞(现场内核栈全 R 无 wchan)/ SYN 丢弃
+(ListenDrops=0)/ 错过唤醒(第二快照 8 反应堆全 R)/ SQE 延迟提交
+(每圈都 submit,owner ~3ms 一圈)。**心跳探针一击定位:shard 4
+(热键 owner)单圈迭代冲 1.6s、其余 shard ≤50ms** —— `drain_inbound`
+的 `while pop()` 被 7 个转发者边排边填喂到永不退出,owner **自己的
+直连客户**(accept/新连接 recv)全程挨饿;"停顿"期间吞吐从未下降
+(转发者走环)—— 症状层错了三次的原因。
+
+**修**(`d5312749`):`DRAIN_SRC_BUDGET=2048`/源/次;整批不拆;
+**打满的源 dirty 位必须置回**(丢位 = 风暴尾批永久搁浅);按源预算
+天然公平无需轮转态。**验证:gaps 2-6 → 0;最坏迭代 1639ms →
+50-66ms(park 超时地板);ZADD 3.52 → 3.47/3.42M/s 带内。**
+副产品:perfgate zadd 掷硬币 REFUSED 根除,median-of-N 门禁变可行。
+
+**学费**:①症状在连接层、根因在 drain 层 —— 心跳探针(每 shard
+每圈 wall)入标准工具箱 ②`cargo check` 0.07s "Finished" 是缓存判决
+不是编译,发盒前要真 build(盒上逮住 field 名错)。finding =
+`bench/PERF-FINDING-2026-08-07-zadd-pause-drain-starvation.md`。
+r1-locality 现 **+25 笔**(tip `c625b585`)。
