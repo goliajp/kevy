@@ -663,3 +663,41 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - [ ] SME 口径的产品陈述:一台 32 GB 机器能装多少业务(由内存比值决定)
 - [ ] **判定**(纪律⑤):撑得起 → 走五轴终审 + CHANGELOG + tag/publish(用户拍板版本号);
       撑不起 → 写 finding doc 说清哪条前提死了,**不发版**,回设计轮重来
+
+---
+
+## 当前 arc — v5 工业版(2026-08-07 属主转轨定向)
+
+> **T9 的判定已由属主给出:研究部分足以支撑,v5 转入工业版本轨道。**
+> kevy 本身的提升要做,RDS 支持作为 v5 的**主要附加模块**也要做;
+> 测试标准、产品能力标准、用户面产品形态三套标准重订。
+> **章程(三套标准 + 判定依据)**:`.claude/plans/2026-08-07-v5-industrial-charter.md`
+> 拍板件 P1-P4 见章程 §五(不挡 V0-V3 开工)。
+
+### V0 — 合并轮(无前置拍板,可即刻开工)
+- [ ] `fix/idx-drift-on-multikey-writes`(数据丢失修复 + R4c 迁移工具链 + 边界/文档)merge → develop
+- [ ] `r1-locality`(kevy-alloc 三刀 + drain 修复 + perfgate-median + kevy-compress 全弧)rebase + merge → develop
+- [ ] 合并态全门禁 + CI 真绿(`gh run watch --exit-status`);**不发版**
+
+### V1 —【RFC】标量函数面(RDS 模块商用性的最后一块工程)
+- [ ] RFC:R4a 清单(~40 标量 + 8 日期时间)→ 求值器落点(查询卡片投影/谓词侧)+ `sql plan` 翻译面
+- [ ] 实现 + funcgate:89 探针集覆盖率报告,bar = served ≥ 80%
+
+### V2 — 迁移演练门
+- [ ] 真 PG 库端到端:pg_dump → sql plan → backfill-keys → shadow → doctor 全链;撞墙 finding 化并修
+- [ ] 演练脚本化 = migrationgate.sh(可重复,进发布门)
+
+### V3 — 尾延迟工业化
+- [ ] 心跳探针机制化(常驻可观测)+ tailgate:PING p99.9 ≤ 100ms、reactor 单圈上界 ≤ 100ms
+- [ ] 慢客户端 / 连接风暴防护核查
+
+### V4 — alloc 执行轮(待 P1/P2 拍板)
+- [ ] 按拍板执行默认开关;若收集合角,走残余 RFC 修正后的 B'(单发信封池化),perfgate-median 验收
+
+### V5 — 产品面
+- [ ] 文档四区重构(Core KV / RDS 模块 / 运维 / 迁移指南)三语 + 边界页(14 条 + 函数面进度)
+- [ ] 容量计算器(公式 + 值大小三档表)+ `INFO modules` + 站点同步
+
+### V6 — 发布轮(v5.0.0 或先 rc,待 P4)
+- [ ] CHANGELOG 收口 + upgradegate(R6 双向换二进制门禁化)重测
+- [ ] release-profile 预跑 → CI 真绿 → tag → 34 crates + npm + 渠道 + 装后 smoke
