@@ -464,3 +464,16 @@ zinterstore +9.0 全 PASS;**sadd −10.6 / hset −9.7 / zadd −13.9 /
 incr −10.4 中位数 FAIL** —— 单跑高点(sadd −7.8)与低点(zadd −15.7)
 都是带缘,此表是与 alloc-off 参照的确定距离,残余 RFC 三门现在有了
 精确定价基准。r1-locality 现 **+27 笔**(tip `f47cceb9`)。
+
+---
+
+## 十三期(2026-08-07,泛化核验 —— zadd 全同,incr 半逃逸)
+
+owner 线程 ON/OFF 双 verb 采样:**zadd 精确复刻 hset**(allocator
+13.3%→23.5%,+10.2pp ≈ 其 −13.9 中位税)—— 快路径故事覆盖全部集合写。
+**incr 不吻合**:allocator 仅 +3pp(6.7→9.7),其 −10.4 中位数大半
+薄摊在全符号;且 incr 历史带最宽(−2.5…−11.5),n=3 中位数不宜过度
+解读,机制猎捕前先加大 N。**RFC 门 B 修正**:99.9% 命中率下 claims
+加宽动机弱;转发路径若有刀 = 单发 Request/Response 的信封池化
+(批路径 argv husk 已池化)。r1-locality 现 **+28 笔**(tip
+`0947c951`)。弧图补完,全部余项归属主。
