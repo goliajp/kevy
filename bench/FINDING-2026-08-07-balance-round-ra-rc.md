@@ -135,3 +135,59 @@ fixed and re-validated same-day. Take 3 runs on the double-fixed
 build with enforcement real; the open question it answers: eviction
 counters, and whether giant-key eviction stalls the owning shard
 (the ~3/min >1s gaps' prime suspect).
+
+---
+
+## R-E — the balance table, and where each axis now stands
+
+The round's program (R-A through R-D) is complete. The combined state
+(alloc ON + compress ON + this round's three fixes) reads:
+
+### perf
+- KV / cluster / compat / lpush / incr / set / get: green on medians
+  (−2 to −8 vs the alloc-off reference).
+- Collections (sadd/hset/zadd): −9 to −15 on medians — the known
+  per-op allocation cost (2.9 small allocs/op measured; value-inlining
+  named as the store-side knife). This is the P1 policy trade, priced.
+- Tail under mixed small-op storm: **p99.9 = 3.2 ms** (in-process
+  prober). Under a 1 GB/s AOF firehose: 100–250 ms stalls that belong
+  to the AOF append path alone (tiering/compression/allocator
+  exonerated at ≤10 ms under identical pressure) — the V3 tail train's
+  named target, inherited from v4-era behavior.
+
+### disk
+- Cold read p99 90–128 µs (budget 300); realistic corpora ~30 %
+  smaller on disk from corpus compression; identical-value corpora
+  collapse ~71×.
+- Steady-state amplification: 1.14× once compaction engages; the
+  1.56× young-store figure is a rotation-granularity transient
+  (256 MB/shard, garbage bounded by one unsealed file per shard) —
+  document + make configurable, no code forced.
+
+### stable
+- Three 60-minute soaks: the first two each unmasked an industrial
+  defect (u16-pinned 4 GiB/class abort ceiling; maxmemory enforced at
+  N× the cap), both fixed same-day; the third survived the hour with
+  correct enforcement (used bounded, 2.2 % overshoot at small scale),
+  frag converging (2.2 → 1.67, no creep), no wedge, no death.
+- crashgate PASS; repligate PASS on the final build (one 14-hour
+  orphan writer from a previous session's trap failure occupied the
+  test port — killed after identity check; "Aborted at startup" was
+  AddrInUse, not a code fault).
+- The soak monitor's own subprocess overhead pollutes gap counting —
+  tailgate's mechanization must use an in-process prober (the R-A.3
+  shape), a design note banked for V3.
+
+### Defaults this round settles (feeding P1/P2)
+- **alloc ON** costs nothing outside the collection angles in the
+  combined state (envelope parity at 4 KiB, 2.16× vs 2.40× at 400 B,
+  cold reads in band) — the trade is exactly and only the collection
+  tax.
+- compact threshold 50 stays; rotate 256 MB stays (with the transient
+  documented); industrial config REQUIRES both knobs (tier budget for
+  spillables + maxmemory/policy for the rest) — now that both work.
+
+Round tally: three industrial defects found and fixed (one abort
+ceiling, one enforcement error, one observability location miss), one
+compat gap closed, two named train targets sharpened (AOF tail, value
+inlining), and the first soak/tail instruments the project has had.
