@@ -76,6 +76,18 @@ impl<'a> Lexer<'a> {
                 Some(c) if c.is_ascii_whitespace() => {
                     self.bump();
                 }
+                // A line starting with `\` is a psql meta-command
+                // (pg_dump 18 writes \restrict/\unrestrict) — not SQL,
+                // skipped like a comment. Column 1 only: a backslash
+                // anywhere else is still an error.
+                Some(b'\\') if self.col == 1 => {
+                    while let Some(c) = self.peek() {
+                        if c == b'\n' {
+                            break;
+                        }
+                        self.bump();
+                    }
+                }
                 Some(b'-') if self.peek2() == Some(b'-') => {
                     while let Some(c) = self.peek() {
                         if c == b'\n' {

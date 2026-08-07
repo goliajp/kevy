@@ -18,6 +18,11 @@ impl<'a> P<'a> {
         &self.toks[self.i]
     }
 
+    /// Lookahead without consuming: token at `i + n` (clamped to Eof).
+    pub(crate) fn peek_at(&self, n: usize) -> &'a Token {
+        &self.toks[(self.i + n).min(self.toks.len() - 1)]
+    }
+
     pub(crate) fn bump(&mut self) -> &'a Token {
         let t = &self.toks[self.i];
         if !matches!(t.tok, Tok::Eof) {
@@ -108,7 +113,9 @@ pub(crate) fn parse_script(toks: &[Token]) -> Result<Vec<Stmt>, SqlError> {
         if matches!(p.peek().tok, Tok::Eof) {
             return Ok(out);
         }
-        out.push(parse_statement(&mut p)?);
+        if let Some(stmt) = parse_statement(&mut p)? {
+            out.push(stmt);
+        }
     }
 }
 
@@ -139,11 +146,14 @@ fn refused_verb(p: &P<'_>, verb: &str) -> Option<SqlError> {
     Some(p.refuse(&verb.to_ascii_uppercase(), teach))
 }
 
-fn parse_statement(p: &mut P<'_>) -> Result<Stmt, SqlError> {
+fn parse_statement(p: &mut P<'_>) -> Result<Option<Stmt>, SqlError> {
     let Tok::Ident(verb) = &p.peek().tok else {
         return Err(p.err_here("expected a statement (CREATE \u{2026})"));
     };
     let verb = verb.clone();
+    if let Some(r) = crate::parse_dump::dump_statement(p, &verb) {
+        return r;
+    }
     if let Some(e) = refused_verb(p, &verb) {
         return Err(e);
     }
@@ -152,18 +162,18 @@ fn parse_statement(p: &mut P<'_>) -> Result<Stmt, SqlError> {
     }
     p.bump();
     if p.eat_kw("table") {
-        return parse_create_table(p);
+        return parse_create_table(p).map(Some);
     }
     if p.eat_kw("unique") {
         p.expect_kw("index", "after UNIQUE")?;
-        return parse_create_index(p, true);
+        return parse_create_index(p, true).map(Some);
     }
     if p.eat_kw("index") {
-        return parse_create_index(p, false);
+        return parse_create_index(p, false).map(Some);
     }
     if p.is_kw("view") {
         p.bump();
-        return crate::parse_view::parse_create_view(p);
+        return crate::parse_view::parse_create_view(p).map(Some);
     }
     if p.is_kw("or") {
         return Err(p.refuse(
@@ -186,7 +196,7 @@ fn parse_statement(p: &mut P<'_>) -> Result<Stmt, SqlError> {
 // ───────────── CREATE TABLE ─────────────
 
 fn parse_create_table(p: &mut P<'_>) -> Result<Stmt, SqlError> {
-    let (name, line, col) = p.ident("a table name")?;
+    let (name, line, col) = crate::parse_dump::qualified_name(p, "a table name")?;
     let mut t = CreateTable { name, columns: Vec::new(), pk: None, uniques: Vec::new(), line, col };
     p.expect_sym('(', "to open the column list")?;
     loop {
@@ -350,11 +360,17 @@ fn parse_type(p: &mut P<'_>) -> Result<(Option<KevyType>, String), SqlError> {
         p.expect_kw("precision", "after DOUBLE")?;
         name = "double precision".into();
     }
-    if name == "timestamp" && p.is_kw("with") {
-        return Err(p.refuse(
-            "'timestamp with time zone'",
-            "write timestamptz \u{2014} both map to str (kevy stores app-encoded time)",
-        ));
+    // pg_dump's canonical spellings: `timestamp without time zone` is
+    // plain timestamp; `with time zone` is timestamptz (both map to
+    // str, note-carried — the same verdict the short names get).
+    if name == "timestamp" && (p.is_kw("with") || p.is_kw("without")) {
+        let with = p.is_kw("with");
+        p.bump();
+        p.expect_kw("time", "in the timestamp type name")?;
+        p.expect_kw("zone", "in the timestamp type name")?;
+        if with {
+            name = "timestamptz".into();
+        }
     }
     // Unknown types PARSE — the verdict moves to schema build so the
     // plan face can drop the one table and keep reporting (a pg_dump
@@ -397,12 +413,20 @@ fn parse_create_index(p: &mut P<'_>, unique: bool) -> Result<Stmt, SqlError> {
         Some(n)
     };
     p.expect_kw("on", "in CREATE INDEX")?;
-    let (table, ..) = p.ident("the table name")?;
+    let (table, ..) = crate::parse_dump::qualified_name(p, "the table name")?;
     if p.is_kw("using") {
-        return Err(p.refuse(
-            "USING <method>",
-            "the declared kind picks the structure \u{2014} single column = Range (UNIQUE = Unique), multi-column = a composite ORDERPATH",
-        ));
+        // pg_dump writes `USING btree` on every index — that IS the
+        // structure kevy declares, so it passes. Any other method
+        // keeps the refusal (gin/gist need a different genre).
+        p.bump();
+        if p.is_kw("btree") {
+            p.bump();
+        } else {
+            return Err(p.refuse(
+                "USING <method>",
+                "the declared kind picks the structure \u{2014} single column = Range (UNIQUE = Unique), multi-column = a composite ORDERPATH; text search is the FT.* genre",
+            ));
+        }
     }
     p.expect_sym('(', "to open the index column list")?;
     let mut cols = Vec::new();

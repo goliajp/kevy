@@ -113,3 +113,34 @@ fn a_dropped_table_keeps_the_rest_of_the_plan() {
     };
     assert!(reason.contains("not declarable"), "points at the drop: {reason}");
 }
+
+/// The pg_dump dialect end to end (V2 drill, third wall): psql meta
+/// lines, SET preamble, set_config, schema-qualified names, OWNER,
+/// constraint-carried PRIMARY KEYs, USING btree, and PG's canonical
+/// timestamp spelling — every one of these appears in every real
+/// dump, and every one used to be fatal.
+#[test]
+fn a_real_pg_dump_compiles() {
+    let dump = r"
+\restrict abcDEF123
+SET statement_timeout = 0;
+SELECT pg_catalog.set_config('search_path', '', false);
+CREATE TABLE public.users (
+    id bigint NOT NULL,
+    email text NOT NULL,
+    created_at timestamp without time zone NOT NULL
+);
+ALTER TABLE public.users OWNER TO postgres;
+ALTER TABLE ONLY public.users
+    ADD CONSTRAINT users_pkey PRIMARY KEY (id);
+CREATE UNIQUE INDEX users_email_idx ON public.users USING btree (email);
+\unrestrict abcDEF123
+";
+    let p = kevy_sql::plan(dump).expect("the dump dialect compiles");
+    assert_eq!(p.declares.len(), 1, "users declares: {:?}", p.dropped);
+    assert!(p.dropped.is_empty(), "nothing drops: {:?}", p.dropped);
+    let argv = p.declares[0].join(" ");
+    assert!(argv.contains("users"), "declare: {argv}");
+    assert!(argv.contains("id"), "the ALTER-carried PK folded back: {argv}");
+    assert!(argv.contains("email"), "the unique index attached: {argv}");
+}

@@ -5,7 +5,7 @@
 //! kevy-index's own wire parser in the test suite, so the two
 //! implementations cannot drift.
 
-use crate::ast::{CreateIndex, CreateView, Stmt};
+use crate::ast::{AlterKind, CreateIndex, CreateTable, CreateView, Stmt};
 use crate::{KevyType, SqlError, typemap};
 
 /// Mirrors kevy-index `MAX_COMPOSITE_COLS` (asserted by the round-trip
@@ -58,13 +58,71 @@ impl Table {
 
 type Built = (Vec<Table>, Vec<CreateView>, Vec<String>);
 
+/// Fold the pg_dump-dialect `ALTER TABLE … ADD CONSTRAINT` statements
+/// back onto their `CREATE TABLE`s (a dump never writes inline PKs —
+/// without this every dumped table refuses for "no PRIMARY KEY").
+/// Returns the statement list with the alters consumed, plus the
+/// failures (unknown table, second PK) for the caller's severity.
+fn apply_alters(
+    stmts: &[Stmt],
+    notes: &mut Vec<String>,
+) -> (Vec<Stmt>, Vec<(String, SqlError)>) {
+    let mut out: Vec<Stmt> = Vec::with_capacity(stmts.len());
+    let mut failed: Vec<(String, SqlError)> = Vec::new();
+    for st in stmts {
+        let Stmt::Alter(a) = st else {
+            out.push(st.clone());
+            continue;
+        };
+        let target = out.iter_mut().find_map(|s| match s {
+            Stmt::Table(t) if t.name == a.table => Some(t),
+            _ => None,
+        });
+        let Some(t) = target else {
+            failed.push((
+                a.table.clone(),
+                SqlError::at(a.line, a.col, format!("ALTER TABLE names unknown table '{}'", a.table)),
+            ));
+            continue;
+        };
+        apply_one_alter(t, a, notes, &mut failed);
+    }
+    (out, failed)
+}
+
+fn apply_one_alter(
+    t: &mut CreateTable,
+    a: &crate::ast::AlterConstraint,
+    notes: &mut Vec<String>,
+    failed: &mut Vec<(String, SqlError)>,
+) {
+    match &a.kind {
+        AlterKind::PrimaryKey(col) => {
+            if t.pk.is_some() || t.columns.iter().any(|c| c.inline_pk) {
+                failed.push((
+                    t.name.clone(),
+                    SqlError::at(a.line, a.col, "more than one PRIMARY KEY".to_string()),
+                ));
+            } else {
+                t.pk = Some((col.clone(), a.line, a.col));
+            }
+        }
+        AlterKind::Unique(col) => t.uniques.push((col.clone(), a.line, a.col)),
+        AlterKind::Noted(why) => notes.push(format!("{}: {why}", t.name)),
+    }
+}
+
 /// Accumulate all statements: tables (with their indexes folded in),
 /// views (compiled in pass 2), honest-mapping notes.
 pub(crate) fn build(stmts: &[Stmt]) -> Result<Built, SqlError> {
     let mut tables: Vec<Table> = Vec::new();
     let mut views: Vec<CreateView> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
-    for s in stmts {
+    let (stmts, alter_failures) = apply_alters(stmts, &mut notes);
+    if let Some((_, e)) = alter_failures.into_iter().next() {
+        return Err(e);
+    }
+    for s in &stmts {
         match s {
             Stmt::Table(t) => {
                 let built = build_table(t, &tables, &mut notes)?;
@@ -75,6 +133,8 @@ pub(crate) fn build(stmts: &[Stmt]) -> Result<Built, SqlError> {
             }
             Stmt::Index(ix) => attach_index(ix, &mut tables, &mut notes)?,
             Stmt::View(v) => views.push(v.clone()),
+            // Consumed by apply_alters above.
+            Stmt::Alter(_) => {}
         }
     }
     Ok((tables, views, notes))
@@ -92,7 +152,11 @@ pub(crate) fn build_lenient(stmts: &[Stmt]) -> (Built, Vec<(String, String)>) {
     let mut views: Vec<CreateView> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
     let mut dropped: Vec<(String, String)> = Vec::new();
-    for s in stmts {
+    let (stmts, alter_failures) = apply_alters(stmts, &mut notes);
+    for (name, e) in alter_failures {
+        dropped.push((name, e.message));
+    }
+    for s in &stmts {
         match s {
             Stmt::Table(t) => match build_table(t, &tables, &mut notes) {
                 Ok(built) if tables.len() < MAX_TABLES => tables.push(built),
@@ -108,6 +172,8 @@ pub(crate) fn build_lenient(stmts: &[Stmt]) -> (Built, Vec<(String, String)>) {
                 }
             }
             Stmt::View(v) => views.push(v.clone()),
+            // Consumed by apply_alters above.
+            Stmt::Alter(_) => {}
         }
     }
     ((tables, views, notes), dropped)

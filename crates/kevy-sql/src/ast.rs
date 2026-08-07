@@ -110,4 +110,29 @@ pub(crate) enum Stmt {
     Table(CreateTable),
     Index(CreateIndex),
     View(CreateView),
+    /// `ALTER TABLE [ONLY] <t> ADD CONSTRAINT …` — pg_dump's dialect
+    /// puts every PRIMARY KEY / UNIQUE here instead of inline; the
+    /// schema build folds these back onto their tables before
+    /// building (a dump-shaped schema has NO inline PKs at all).
+    Alter(AlterConstraint),
+}
+
+/// One folded-back constraint from the pg_dump dialect.
+#[derive(Debug, Clone)]
+pub(crate) struct AlterConstraint {
+    pub(crate) table: String,
+    pub(crate) kind: AlterKind,
+    pub(crate) line: u32,
+    pub(crate) col: u32,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum AlterKind {
+    /// `ADD CONSTRAINT <n> PRIMARY KEY (col)`.
+    PrimaryKey(String),
+    /// `ADD CONSTRAINT <n> UNIQUE (col)`.
+    Unique(String),
+    /// An unenforceable constraint (FOREIGN KEY / CHECK) — carried as
+    /// an honest note, the NOT NULL precedent.
+    Noted(&'static str),
 }

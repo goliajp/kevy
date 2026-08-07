@@ -39,6 +39,7 @@ mod fold;
 mod fold_parse;
 mod lex;
 mod parse;
+mod parse_dump;
 mod parse_view;
 mod plan;
 mod render;
