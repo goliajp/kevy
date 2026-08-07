@@ -41,8 +41,21 @@ fi
 # ── K1: the criterion that can reject the design outright. At spg
 # lzss's ~100 MiB/s a 4 KB value costs ~40 us against a 105 us budget,
 # so memcpy-class decode is a design requirement, not an optimisation.
-line "K1-cold-read-budget" "PENDING(T4)" \
-  "cold read p99 stays inside B2 (145us hash / 105us scalar) with compression ON [capacity-envelope]"
+# K1/K5-amp consume the capacity-envelope results file (the tiergate
+# pattern): SLA numbers count only from a full-scale lx64 run.
+ENV_RESULTS=${COMPRESSGATE_ENVELOPE_RESULTS:-$ROOT/bench/.capacity-envelope-results}
+env_line() { # $1 = line key -> the whole results line, or ""
+  [ -f "$ENV_RESULTS" ] && grep -q "^SCALE=full" "$ENV_RESULTS" \
+    && grep "^$1=" "$ENV_RESULTS" || true
+}
+k1_check() {
+  local l; l=$(env_line L2)
+  if [ -z "$l" ]; then echo "PENDING(T4) no full-scale envelope results"; return; fi
+  case "$l" in L2=PASS*) echo "PASS $l";; *) echo "FAIL $l";; esac
+}
+k1_out=$(k1_check)
+line "K1-cold-read-budget" "${k1_out%% *}" \
+  "B2 cold-read p99 inside budget with compression ON — ${k1_out#* }"
 
 # ── K2/K3: the two that make a codec safe to put under a data engine.
 t3_test() { # $1 = test filter -> "PASS ..." | "FAIL ..."
@@ -72,8 +85,14 @@ k5_identity() {
 }
 line "K5-identity" "$(k5_identity)" \
   "vlog stats.bytes == sum(header + frame body) EXACT, dictionary engaged across rotation [kevy-vlog unit]"
-line "K5-amplification" "PENDING(T4)" \
-  "vlog amplification improves on B5's 1.27x for compressible corpora, and compact_below still terminates"
+k5amp_check() {
+  local l; l=$(env_line L5)
+  if [ -z "$l" ]; then echo "PENDING(T4) no full-scale envelope results"; return; fi
+  case "$l" in L5=PASS*) echo "PASS $l (uncompressed baseline was 1.27x)";; *) echo "FAIL $l";; esac
+}
+k5a_out=$(k5amp_check)
+line "K5-amplification" "${k5a_out%% *}" \
+  "vlog amplification on the (cross-value redundant) envelope corpus — ${k5a_out#* }"
 
 # ── K6: provable by inspection, which is the point. Nothing on the hot
 # path may call the encoder — that is what makes the KV/pubsub
@@ -100,8 +119,19 @@ line "K6-no-encode-on-set" "${k6_out%% *}" "${k6_out#* } [+ perfgate KV/pubsub l
 # ── K7: the vlog is disposable by design (AOF is the only durability
 # truth), and a dictionary that lives and dies with its file inherits
 # that — which is what removes the format-compatibility burden entirely.
-line "K7-disposability" "PENDING(T4)" \
-  "no dictionary state outside a vlog file; AOF remains the sole durability truth [tier_persistence B10/B11]"
+k7_check() {
+  # The dictionary is a VlogFile struct field — it is never serialized
+  # anywhere (structural: kevy-vlog writes only record bytes), and the
+  # vlog disposability contract test still passes with frames in the
+  # bodies. The B10/B11 envelope halves live with tiergate L10/L11.
+  if (cd "$ROOT" && cargo test -p kevy-vlog open_is_disposable 2>&1 | grep -q "test result: ok"); then
+    echo "PASS"
+  else
+    echo "FAIL"
+  fi
+}
+line "K7-disposability" "$(k7_check)" \
+  "dictionary lives only in VlogFile (never serialized); vlog disposability contract test green [B10/B11 at tiergate]"
 
 echo
 if [ "$fail" -ne 0 ]; then
