@@ -5,12 +5,12 @@
 //! `extend_from_within`, and only the two genuinely irregular cases —
 //! an overlapping match (offset < length: a repeating pattern by
 //! definition) and a match crossing the dictionary/output boundary —
-//! fall back to stepwise copies. K1's probe put this design an order
+//! fall back to stepwise copies. The decode-budget probe put this an order
 //! of magnitude above the ~1 GB/s budget floor.
 //!
 //! A frame that walks outside its promised bounds at any point is
 //! rejected with [`Corrupt`] — truncated and bit-flipped frames must
-//! fail loudly, never mis-decode (K3).
+//! fail loudly, never mis-decode.
 
 use alloc::vec::Vec;
 

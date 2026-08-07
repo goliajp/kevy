@@ -80,7 +80,7 @@ pub struct Heap {
     /// it falls back to scanning.
     ///
     /// The legacy profile forced this (finding
-    /// `2026-07-27-mmap-lock-was-the-killer.md`, follow-up): with the
+    /// the mmap-lock finding's follow-up): with the
     /// 16–32 KiB classes a span holds 2–8 slots, so churn exhausts one
     /// every few allocations, and the slow path's two O(segments)
     /// scans put `Heap::alloc` at 6 % of server self time. This is

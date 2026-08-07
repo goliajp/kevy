@@ -45,7 +45,7 @@ use crate::Argv;
 /// back-to-back at startup, and an unaligned flag shares its line with
 /// a neighbouring shard's — every reactor iteration polls the flag, so
 /// a shared line ping-pongs across cores at reactor frequency (the
-/// sadd L1-miss A/B, finding 2026-08-07-collection-tax-is-l1-misses).
+/// sadd L1-miss A/B that caught it).
 #[repr(align(64))]
 pub(crate) struct InboxSignal {
     pub(crate) waker: OnceLock<Arc<Waker>>,

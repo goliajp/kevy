@@ -48,7 +48,7 @@
 /// mmap on birth and a munmap on death, eight shards serialised on the
 /// process-wide mmap_lock: **40 % of server self time** was
 /// `__x64_sys_munmap` + `vm_mmap_pgoff` (finding
-/// `2026-07-27-m1-mmap-lock-is-the-killer.md`). glibc recycles those
+/// measured (the mmap-lock convoy finding). glibc recycles those
 /// buffers from its arena with zero syscalls, which is the entire
 /// cross-shard gap. A 64 KiB span still holds 2–8 slots at these sizes.
 pub const MAX_SMALL: usize = 32_768;

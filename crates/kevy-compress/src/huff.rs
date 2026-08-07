@@ -5,14 +5,14 @@
 //! Shape follows zstd rather than deflate: the caller hands us the
 //! whole literal block, we code it as one bitstream with a 128-byte
 //! canonical-lengths header. Decode builds one flat lookup table and
-//! runs a tight loop — the K1 budget cares about decode, and a
+//! runs a tight loop — the cold-read budget cares about decode, and a
 //! table-driven literal pass stays well inside it.
 //!
 //! Codes are length-limited to [`MAX_LEN`] by the pragmatic heuristic
 //! (demote overlong tails onto shorter prefixes and rebalance); the
 //! result is a valid canonical code, merely a hair off Huffman-optimal
 //! in the pathological skews — which the caller's smallest-wins
-//! fallback (K2) absorbs by construction.
+//! fallback absorbs by construction.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -95,7 +95,7 @@ pub(crate) fn canonical_codes(lens: &[u8; 256]) -> [u16; 256] {
 }
 
 /// Encode `input` as `[128-byte lengths header][bitstream]`, or `None`
-/// when the coded form would not be smaller than the input (K2 stays a
+/// when the coded form would not be smaller than the input (never-expand stays a
 /// return value at every layer).
 pub(crate) fn encode(input: &[u8]) -> Option<Vec<u8>> {
     if input.is_empty() {

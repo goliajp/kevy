@@ -8,21 +8,20 @@
 //! cannot see it. kevy's vlog is a **corpus** — a contiguous sample of
 //! one keyspace — so a dictionary trained on the file reaches the
 //! redundancy PG structurally cannot (RFC
-//! `2026-07-26-v5-kevy-compress.md` §2; premise measured alive in
-//! `bench/FINDING-2026-08-06-k4-premise-corpus-vs-datum.md`: on
-//! identical 400 B values a shared dictionary encodes N values as
-//! O(dictionary) + N × ~9 B while per-datum pays 89 B each, forever).
+//! the premise was measured before a line was written: on identical
+//! 400 B values a shared dictionary encodes N values as O(dictionary)
+//! + N × ~9 B while per-datum pays 89 B each, forever).
 //!
 //! # The three measured constraints this crate is shaped by
 //!
-//! - **Decode ≥ ~1 GB/s** (K1): at 100 MiB/s a 4 KiB cold read spends
+//! - **Decode ≥ ~1 GB/s**: at 100 MiB/s a 4 KiB cold read spends
 //!   38 % of its p99 budget in decode; a token + wildcopy design
 //!   measured ~8 GB/s in its naive form. Speed is a requirement of the
 //!   design, not a later optimisation.
-//! - **Never expand** (K2): per-datum zlib on random 400 B values
+//! - **Never expand**: per-datum zlib on random 400 B values
 //!   *grows* them by 11 B. The raw-frame fallback is therefore part of
 //!   the format, not an optimisation.
-//! - **The dictionary carries K4**: match-finding refinements move
+//! - **The dictionary carries the corpus claim**: match-finding refinements move
 //!   little; dictionary construction decides how much of the corpus
 //!   ceiling is captured. The `train` entry point is deliberately a
 //!   replaceable policy behind a stable signature.
@@ -32,7 +31,7 @@
 //! A frame is `[tag: u8][orig_len: LEB128][payload]`.
 //!
 //! - `TAG_RAW`: payload is the input verbatim. Chosen whenever LZ
-//!   would not save a byte — this is what makes K2 structural.
+//!   would not save a byte — never-expanding is structural, not tuned.
 //! - `TAG_LZ` / `TAG_LZ_DICT`: LZ4-style token stream (4-bit literal
 //!   and match-length nibbles with 255-continuation bytes, 16-bit
 //!   little-endian offsets, minimum match 4). With `TAG_LZ_DICT`
@@ -101,7 +100,7 @@ fn parse_dict(dict: &[u8]) -> (Option<[u8; 256]>, &[u8]) {
 
 /// Decode failure: the frame does not decode to exactly what its
 /// header promises. Corrupt and truncated frames land here — they are
-/// rejected, never mis-decoded (K3).
+/// rejected, never mis-decoded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Corrupt;
 
@@ -113,7 +112,7 @@ impl core::fmt::Display for Corrupt {
 
 /// Encode `input` into a frame, using `dict` as shared history when it
 /// pays. The result is **never longer than `input` plus the frame
-/// header** (K2): when LZ cannot save a byte — incompressible input,
+/// header**: when LZ cannot save a byte — incompressible input,
 /// adversarial input, anything — the frame stores the bytes raw.
 #[must_use]
 pub fn encode(dict: &[u8], input: &[u8]) -> Vec<u8> {
@@ -137,7 +136,7 @@ pub fn encode(dict: &[u8], input: &[u8]) -> Vec<u8> {
 /// Encode at the compaction level: same match finder, literals pulled
 /// into one Huffman-coded block (zstd's shape). Strictly
 /// smallest-wins: the result is the smaller of high / fast / raw, so
-/// K2 holds here exactly as it does for [`encode`]. Costs roughly a
+/// never-expanding holds here exactly as for [`encode`]. Costs roughly a
 /// second serialization pass at encode time — which is the point: a
 /// value re-encoded by compaction has proven cold (RFC §3).
 #[must_use]
@@ -195,7 +194,7 @@ pub fn decode(dict: &[u8], frame: &[u8]) -> Result<Vec<u8>, Corrupt> {
 ///
 /// v1 policy: evenly-strided whole samples until the budget fills —
 /// the simplest construction that makes identical and near-identical
-/// corpora hit the "O(dictionary) + N × small" shape. The K4 premise
+/// corpora hit the "O(dictionary) + N × small" shape. The premise
 /// measurement says construction (not match-finding) is where corpus
 /// capture is won, so expect this policy to be replaced behind the
 /// same signature; its output is bytes, and bytes carry no versioning
@@ -224,7 +223,7 @@ pub fn train(samples: &[&[u8]], budget: usize) -> Vec<u8> {
     // the tail is as representative as the head. Exact duplicates are
     // skipped: a dictionary is a model, and a second copy of a sample
     // teaches it nothing while charging every record its amortized
-    // bytes (the K4-corpora run measured the un-deduped version paying
+    // bytes (the corpora comparison measured the un-deduped version paying
     // 65 B/value of dictionary for an identical corpus whose whole
     // model is one 400 B value).
     let mut need = budget;

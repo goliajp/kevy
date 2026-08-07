@@ -45,7 +45,7 @@ impl<C: Commands> Shard<C> {
         // times a second across shards) took 27 % of ALL L1 misses in
         // a sadd A/B — the channel-state atomics of the eight shards
         // sat densely packed on shared cache lines and ping-ponged
-        // (finding 2026-08-07-collection-tax-is-l1-misses).
+        // profiled at 27% of ALL L1 misses before the gate existed.
         if !inbox.signal.wake_pending.load(std::sync::atomic::Ordering::Acquire) {
             return;
         }

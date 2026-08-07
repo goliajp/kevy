@@ -8,7 +8,7 @@
 //! top, so a freed chunk under a live one is a page the OS never gets
 //! back. `malloc_trim(0)` and `MALLOC_ARENA_MAX=2` were both measured
 //! and both moved it by nothing
-//! (`bench/PERF-FINDING-2026-07-25-b6-rss-glibc-fragmentation.md`).
+//! (the resident-set fragmentation finding measured both no-ops).
 //!
 //! For the small companies kevy is aimed at, RAM is the budget line, so
 //! that ratio decides how much business fits on the box they already
@@ -27,7 +27,7 @@
 //!
 //! Part of an experiment, not a settled design. Every claim here is
 //! under test, and a premise that measurement kills gets changed rather
-//! than worked around — see `.claude/rfcs/2026-07-26-v5-kevy-alloc.md`
+//! than worked around — see the allocator RFC
 //! and ROADMAP rule ⑤. The gate is `bench/allocgate.sh`; the accounting
 //! it checks is fixed by `bench/V5-ACCOUNTING-CONTRACT.md`.
 //!
