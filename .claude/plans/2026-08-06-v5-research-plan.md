@@ -490,3 +490,23 @@ owner 线程 ON/OFF 双 verb 采样:**zadd 精确复刻 hset**(allocator
 (机制已全确认 = 快路径每调用成本)**。r1-locality 现 **+29 笔**
 (tip `b07d7bba`)。**快路径弧至此全闭:所有角有机制归属或噪声定性,
 所有余项是拍板件。**
+
+---
+
+## 十五期(2026-08-07,T3 开工 —— kevy-compress v1 落地)
+
+快路径弧全闭后转入唯一开放跑道。**`kevy-compress` v1 入库**
+(`fa3d655c`,444 行核心 + 144 行测试,`forbid(unsafe_code)`,
+no_std+alloc,零依赖):LZ4 形 token 流(单探哈希/16 位偏移/无界长度)
++ **字典作虚拟前置历史**(K4 的机制)+ raw 兜底(K2 结构化)+
+全边界检查解码器。
+
+**对着实测判据交卷**:K1 = **16.7 GB/s 解码**(地板 1GB/s,16× 余量;
+结构化 4KiB 压至 100B = 40.96×)/ K2 = 随机输入落 TAG_RAW,帧 ≤
+输入+6 / K3 = 截断/翻位/未知 tag 全拒 / **K4 = 1000×400B 相同值
+对共享字典 ≤16B/值**(单测钉死 O(dict)+N×small 形状)。`train()` =
+稳定签名后的可替换策略(K4 finding:构造是胜负手)。
+
+**下一切片**:RFC §5 布点(demote 编码 / compact 重编 / 冷读解码),
+K5/K6/K7 骑既有门禁;涉 kevy-store/kevy-vlog,爆炸半径大,单独一轮。
+workspace 207 套件绿。r1-locality 现 **+30 笔**。
