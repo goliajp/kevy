@@ -26,6 +26,7 @@ use kevy_cli::{DEFAULT_HOST, DEFAULT_PORT};
 
 mod args;
 mod embed;
+mod sql_probe;
 mod sqlcmd;
 
 use args::{Config, print_help};

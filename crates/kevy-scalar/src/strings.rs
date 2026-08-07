@@ -90,8 +90,8 @@ pub(crate) fn to_text(v: &Scalar) -> String {
         Scalar::Bool(b) => (if *b { "t" } else { "f" }).to_string(),
         Scalar::Timestamp(us) => crate::datetime_fmt::render_timestamp(*us),
         Scalar::Date(d) => crate::datetime_fmt::render_date(*d),
-        Scalar::Interval { months, micros } => {
-            crate::datetime_fmt::render_interval(*months, *micros)
+        Scalar::Interval { months, days, micros } => {
+            crate::datetime_fmt::render_interval(*months, *days, *micros)
         }
     }
 }

@@ -482,6 +482,7 @@ dependencies = [
  "kevy-persist",
  "kevy-resp",
  "kevy-resp-client",
+ "kevy-scalar",
  "kevy-sql",
  "kevy-tmpdir",
 ]

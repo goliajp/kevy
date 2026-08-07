@@ -180,5 +180,15 @@ fn power(args: &[Scalar]) -> Result<Scalar, ScalarError> {
             .map(Scalar::Int)
             .ok_or(ScalarError::Domain { func: "power", what: "bigint out of range" });
     }
-    Ok(Scalar::Float(x.powf(y)))
+    let r = x.powf(y);
+    // PG's numeric power renders fractional-exponent results at scale
+    // 16 ("2.0000000000000000", probe 53) while integer exponents keep
+    // the short form (0.125). f64's shortest form already matches the
+    // irrational cases; the integral-valued ones need the padding, and
+    // Text is the honest carrier — arithmetic on it fails loud (a Type
+    // refusal), never silently mis-renders.
+    if y.fract() != 0.0 {
+        return Ok(Scalar::Text(format!("{r:.16}")));
+    }
+    Ok(Scalar::Float(r))
 }

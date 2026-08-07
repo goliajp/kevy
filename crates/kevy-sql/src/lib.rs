@@ -155,6 +155,7 @@ impl Compilation {
 }
 
 pub use fold::{Folded, fold_select};
+pub use kevy_scalar::Scalar;
 pub use plan::{Plan, PlanEntry, Served, plan};
 
 /// Compile a whole SQL schema file into a [`Compilation`].

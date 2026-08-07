@@ -72,12 +72,25 @@ fn parse_sql_args(args: &[String]) -> Result<SqlArgs, String> {
 
 /// Entry: `kevy-cli sql …` (args exclude the leading `sql`).
 pub(crate) fn run_sql_cli(args: &[String]) -> ExitCode {
+    match args.first().map(String::as_str) {
+        Some("eval") => return run_eval(&args[1..]),
+        Some("probe") => {
+            let Some(dir) = args.get(1) else {
+                eprintln!("usage: kevy-cli sql probe <corpus-dir>");
+                return ExitCode::FAILURE;
+            };
+            return crate::sql_probe::run_probe(dir);
+        }
+        _ => {}
+    }
     let a = match parse_sql_args(args) {
         Ok(a) => a,
         Err(msg) => {
             eprintln!("kevy-cli sql: {msg}");
             eprintln!("usage: kevy-cli sql compile <file.sql> [--apply --url <host:port>]");
             eprintln!("       kevy-cli sql plan <file.sql>");
+            eprintln!("       kevy-cli sql eval '<select-stmt>' [--at <ts>]");
+            eprintln!("       kevy-cli sql probe <corpus-dir>");
             return ExitCode::FAILURE;
         }
     };
@@ -197,6 +210,56 @@ fn print_entries(plan: &kevy_sql::Plan) {
             let kevy_sql::Served::No { reason } = &q.served else { continue };
             println!("    line {:<5} {}", q.line, q.name);
             println!("      {reason}");
+        }
+    }
+}
+
+/// `sql eval '<stmt>' [--at <timestamp>]` — fold a table-free SELECT
+/// and print one value per line (`NULL` for SQL NULL). The clock
+/// defaults to the wall clock; `--at` pins it (funcgate replays the
+/// corpus against its pinned clock this way).
+fn run_eval(args: &[String]) -> ExitCode {
+    let (mut stmt, mut at) = (None::<&String>, None::<i64>);
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--at" => {
+                let Some(v) = it.next() else {
+                    eprintln!("kevy-cli sql eval: --at requires a timestamp");
+                    return ExitCode::FAILURE;
+                };
+                let Some(us) = kevy_scalar::parse_timestamp(v) else {
+                    eprintln!("kevy-cli sql eval: bad --at timestamp '{v}'");
+                    return ExitCode::FAILURE;
+                };
+                at = Some(us);
+            }
+            _ if stmt.is_none() => stmt = Some(a),
+            other => {
+                eprintln!("kevy-cli sql eval: unexpected argument {other}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    let Some(stmt) = stmt else {
+        eprintln!("usage: kevy-cli sql eval '<select-stmt>' [--at <ts>]");
+        return ExitCode::FAILURE;
+    };
+    let now = at.unwrap_or_else(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_micros() as i64)
+    });
+    match kevy_sql::fold_select(stmt, now) {
+        Ok(f) => {
+            for c in &f.columns {
+                println!("{}", if c.is_null() { "NULL".to_string() } else { c.render() });
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("kevy-cli sql eval: {e}");
+            ExitCode::FAILURE
         }
     }
 }

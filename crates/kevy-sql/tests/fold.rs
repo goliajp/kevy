@@ -10,7 +10,8 @@ const NOW: i64 = 1_749_988_800 * 1_000_000;
 fn one(sql: &str) -> String {
     let f = fold_select(sql, NOW).unwrap_or_else(|e| panic!("{sql}: {e:?}"));
     assert_eq!(f.columns.len(), 1, "{sql}: expected one column");
-    f.columns[0].clone().unwrap_or_else(|| "NULL".into())
+    let v = &f.columns[0];
+    if v.is_null() { "NULL".into() } else { v.render() }
 }
 
 #[test]

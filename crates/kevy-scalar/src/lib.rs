@@ -28,10 +28,13 @@ mod datetime;
 mod datetime_fmt;
 mod math;
 mod nullfam;
+mod ops;
 mod strings;
 mod strings_slice;
 #[cfg(test)]
 mod tests;
+
+pub use ops::binop;
 
 pub use datetime_fmt::{
     parse_date, parse_interval, parse_timestamp, render_date, render_interval,
@@ -64,14 +67,17 @@ pub enum Scalar {
     Timestamp(i64),
     /// A calendar date: days since the Unix epoch.
     Date(i64),
-    /// An interval in PG's two-component shape (probe 10): calendar
-    /// months and exact microseconds never mix — month arithmetic
-    /// clamps to month ends, the micros half stays precise.
+    /// An interval in PG's three-component shape: months, days and
+    /// microseconds never mix (probe 10's `1 day - 12 hours` stays
+    /// `1 day -12:00:00` — no normalization across components). Month
+    /// arithmetic clamps to month ends; the other two are exact.
     Interval {
         /// Whole calendar months (12 per year).
         months: i64,
-        /// Sub-month remainder in microseconds (days fold in here;
-        /// rendering pulls whole days back out).
+        /// Whole days — separate from micros because PG keeps them
+        /// separate (visible in rendering and component extraction).
+        days: i64,
+        /// Sub-day remainder in microseconds.
         micros: i64,
     },
 }
@@ -81,6 +87,14 @@ impl Scalar {
     #[must_use]
     pub fn is_null(&self) -> bool {
         matches!(self, Scalar::Null)
+    }
+
+    /// PG's text output form for this value. `Null` renders as the
+    /// empty string here — a caller that needs a `NULL` marker (the
+    /// sqllogictest runner does) checks [`Scalar::is_null`] first.
+    #[must_use]
+    pub fn render(&self) -> String {
+        strings::to_text(self)
     }
 }
 

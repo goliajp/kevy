@@ -20,11 +20,13 @@ use crate::{SqlError, fold_parse};
 use kevy_scalar::Scalar;
 
 /// One folded statement: the column values of the single result row.
+/// Typed, not pre-rendered — the CLI prints PG text forms while the
+/// probe runner follows sqllogictest's conventions (booleans as 1/0),
+/// and neither should pay for the other's rendering.
 #[derive(Debug)]
 pub struct Folded {
-    /// One rendered value per SELECT column, PG text form; `None` is
-    /// SQL NULL (the caller decides its marker).
-    pub columns: Vec<Option<String>>,
+    /// One value per SELECT column.
+    pub columns: Vec<kevy_scalar::Scalar>,
 }
 
 /// Evaluate a table-free `SELECT expr[, expr…];` against the given
@@ -36,8 +38,7 @@ pub fn fold_select(sql: &str, now_micros: i64) -> Result<Folded, SqlError> {
     p.expect_kw("select")?;
     let mut columns = Vec::new();
     loop {
-        let v = p.expr()?;
-        columns.push(if v.is_null() { None } else { Some(v.render()) });
+        columns.push(p.expr()?);
         if !p.eat_sym(',') {
             break;
         }
