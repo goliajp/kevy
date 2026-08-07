@@ -722,6 +722,7 @@ name = "kevy-sql"
 version = "4.1.1"
 dependencies = [
  "kevy-index",
+ "kevy-scalar",
 ]
 
 [[package]]

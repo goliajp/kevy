@@ -21,6 +21,9 @@ workspace = true
 # TABLE.DECLARE argv back through the engine's own wire parser, so the
 # compiler and the engine cannot drift on the grammar.
 [dependencies]
+# kevy-scalar: the V1 constant folder (`SELECT lower('X')` with no
+# FROM) — still a build/CLI-time face, never inside a serving engine.
+kevy-scalar = { path = "../kevy-scalar", version = "4.1.1" }
 
 [dev-dependencies]
 kevy-index = { path = "../kevy-index" }
