@@ -1,0 +1,72 @@
+# PG `ceil(x)` / `ceiling(x)` — smallest integer >= x.
+# Negative floats round TOWARD zero (i.e. toward +inf):
+# ceil(-1.5) → -1, NOT -2.
+
+query R
+SELECT ceil(1.3)
+----
+2
+
+query R
+SELECT ceil(1.5)
+----
+2
+
+query R
+SELECT ceil(-1.5)
+----
+-1
+
+query R
+SELECT ceil(-0.5)
+----
+0
+
+query R
+SELECT ceil(-2.001)
+----
+-2
+
+query R
+SELECT ceil(2.001)
+----
+3
+
+query R
+SELECT ceil(5.0)
+----
+5
+
+query R
+SELECT ceil(0.0)
+----
+0
+
+# Integer passthrough.
+query I
+SELECT ceil(42)
+----
+42
+
+# ceiling alias.
+query R
+SELECT ceiling(1.3)
+----
+2
+
+# NULL.
+query I
+SELECT ceil(NULL)
+----
+NULL
+
+# Page-count pattern.
+query R
+SELECT ceil(100.0 / 30.0)
+----
+4
+
+query R
+SELECT ceil(90.0 / 30.0)
+----
+3

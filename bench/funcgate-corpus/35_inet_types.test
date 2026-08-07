@@ -1,0 +1,79 @@
+# v7.17.0 Phase 7 — INET / CIDR / MACADDR types (text-backed)
+# + host() / network() / masklen() helpers.
+#
+# SPG stores network address types as Text. Containment / overlap
+# operators (`<<` / `<<=` / `>>` / `>>=` / `&&`) land separately in
+# `74_inet_contains.test` (v7.17.0 Phase 3.P0-47).
+
+# INET column accepts dotted IPv4.
+statement ok
+CREATE TABLE peers (id INT NOT NULL, addr INET NOT NULL)
+
+statement ok
+INSERT INTO peers VALUES (1, '192.168.1.1'), (2, '10.0.0.5')
+
+query T rowsort
+SELECT addr FROM peers
+----
+10.0.0.5
+192.168.1.1
+
+# CIDR column.
+statement ok
+CREATE TABLE nets (id INT NOT NULL, net CIDR NOT NULL)
+
+statement ok
+INSERT INTO nets VALUES (1, '10.0.0.0/8'), (2, '192.168.0.0/16')
+
+query T rowsort
+SELECT net FROM nets
+----
+10.0.0.0/8
+192.168.0.0/16
+
+# MACADDR column.
+statement ok
+CREATE TABLE hw (id INT NOT NULL, mac MACADDR NOT NULL)
+
+statement ok
+INSERT INTO hw VALUES (1, '00:50:56:c0:00:01')
+
+query T
+SELECT mac FROM hw
+----
+00:50:56:c0:00:01
+
+# host() strips the /mask.
+query T
+SELECT host('192.168.1.1/24')
+----
+192.168.1.1
+
+# host() passthrough when no mask.
+query T
+SELECT host('10.0.0.5')
+----
+10.0.0.5
+
+# network() zeros the trailing octets.
+query T
+SELECT network('192.168.42.1/24')
+----
+192.168.42.0/24
+
+query T
+SELECT network('10.5.6.7/8')
+----
+10.0.0.0/8
+
+# masklen() returns the prefix length.
+query I
+SELECT masklen('192.168.1.1/24')
+----
+24
+
+# masklen() defaults to 32 for no-mask.
+query I
+SELECT masklen('10.0.0.0')
+----
+32

@@ -1,0 +1,87 @@
+# v7.17.0 Phase 2.2 — MySQL `FULLTEXT KEY` no longer silently
+# dropped; routes through a real tsvector-GIN over the indexed
+# TEXT/VARCHAR column. `MATCH ... AGAINST ...` parses and
+# returns the rows whose column contains every term lexeme.
+
+statement ok
+CREATE TABLE posts (
+    id INT NOT NULL,
+    body TEXT,
+    FULLTEXT KEY body_ft (body)
+)
+
+statement ok
+INSERT INTO posts VALUES (1, 'Quick brown fox')
+
+statement ok
+INSERT INTO posts VALUES (2, 'Lazy DOG sleeping')
+
+statement ok
+INSERT INTO posts VALUES (3, 'Foxes and dogs play')
+
+# Single term — matches only rows whose body contains the lexeme.
+query I
+SELECT id FROM posts WHERE MATCH(body) AGAINST ('brown') ORDER BY id
+----
+1
+
+# AND-fold across the term's lexemes — both 'brown' and 'fox'
+# must appear in the row.
+query I
+SELECT id FROM posts WHERE MATCH(body) AGAINST ('brown fox') ORDER BY id
+----
+1
+
+# Case-folded — the source is lower-cased before matching.
+query I
+SELECT id FROM posts WHERE MATCH(body) AGAINST ('dog') ORDER BY id
+----
+2
+
+# Mode modifiers are accept-and-ignore at v7.17.
+query I
+SELECT id FROM posts WHERE MATCH(body) AGAINST ('brown' IN BOOLEAN MODE) ORDER BY id
+----
+1
+
+query I
+SELECT id FROM posts WHERE MATCH(body) AGAINST ('brown' IN NATURAL LANGUAGE MODE) ORDER BY id
+----
+1
+
+query I
+SELECT id FROM posts WHERE MATCH(body) AGAINST ('brown' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) ORDER BY id
+----
+1
+
+# Multi-column FULLTEXT KEY — OR-fold across the named columns.
+statement ok
+CREATE TABLE articles (
+    id INT NOT NULL,
+    title TEXT,
+    body TEXT,
+    FULLTEXT KEY tb_ft (title, body)
+)
+
+statement ok
+INSERT INTO articles VALUES (1, 'Mountains', 'in summer')
+
+statement ok
+INSERT INTO articles VALUES (2, 'Rivers', 'mountains nearby')
+
+statement ok
+INSERT INTO articles VALUES (3, 'Beaches', 'sunset over sand')
+
+query I
+SELECT id FROM articles WHERE MATCH(title, body) AGAINST ('mountains') ORDER BY id
+----
+1
+2
+
+# SPATIAL KEY still accept-as-no-op (SPG has no SPATIAL AM).
+statement ok
+CREATE TABLE shapes (
+    id INT NOT NULL,
+    geom TEXT,
+    SPATIAL KEY geom_sp (geom)
+)

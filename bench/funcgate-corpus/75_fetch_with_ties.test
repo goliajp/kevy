@@ -1,0 +1,86 @@
+# v7.17.0 Phase 3.P0-49 — FETCH FIRST <n> ROWS WITH TIES.
+#
+# SQL:2008 standard surface; PG implements it. Phase 5.1 carved out
+# the executor side; P0-49 lands it. With an ORDER BY in play, the
+# WITH TIES tail extends past the LIMIT cutoff through every row
+# that shares the last-kept row's ORDER BY key tuple.
+
+statement ok
+CREATE TABLE scores (id INT NOT NULL, score INT NOT NULL)
+
+statement ok
+INSERT INTO scores VALUES
+    (1, 100), (2, 90), (3, 80), (4, 80), (5, 80), (6, 70), (7, 60)
+
+# Top 3 with ties on score=80: ids {3, 4, 5} join the prefix.
+query I rowsort
+SELECT id FROM scores ORDER BY score DESC FETCH FIRST 3 ROWS WITH TIES
+----
+1
+2
+3
+4
+5
+
+# ONLY (no ties) keeps exactly N.
+query II
+SELECT id, score FROM scores ORDER BY score DESC, id ASC FETCH FIRST 3 ROWS ONLY
+----
+1
+100
+2
+90
+3
+80
+
+# Top 2 — score=90 has no tie, exactly 2 rows.
+query I
+SELECT id FROM scores ORDER BY score DESC, id ASC FETCH FIRST 2 ROWS WITH TIES
+----
+1
+2
+
+# OFFSET 2 + FETCH FIRST 2 WITH TIES against the FULL key tuple
+# (score DESC, id ASC). The 2nd kept row's key is (80, 4); the
+# next row is (80, 5) which differs on `id`, so no tie extension.
+# SQL:2008 extends only through rows with identical key tuples.
+query I rowsort
+SELECT id FROM scores ORDER BY score DESC, id ASC OFFSET 2 FETCH FIRST 2 ROWS WITH TIES
+----
+3
+4
+
+# ASC + WITH TIES extends at the low end (score=80 group).
+query I rowsort
+SELECT id FROM scores ORDER BY score ASC FETCH FIRST 3 ROWS WITH TIES
+----
+3
+4
+5
+6
+7
+
+# Multi-key order: id is unique so no ties even with WITH TIES.
+query I
+SELECT id FROM scores ORDER BY score DESC, id ASC FETCH FIRST 4 ROWS WITH TIES
+----
+1
+2
+3
+4
+
+# WITH TIES without ORDER BY errors (PG-canonical).
+statement error
+SELECT id FROM scores FETCH FIRST 3 ROWS WITH TIES
+
+# Limit larger than row count returns everything.
+query I rowsort
+SELECT id FROM scores ORDER BY score DESC FETCH FIRST 100 ROWS WITH TIES
+----
+1
+2
+3
+4
+5
+6
+7

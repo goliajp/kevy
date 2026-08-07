@@ -1,0 +1,101 @@
+# v7.17.0 Phase 3.1 — `[NOT] DEFERRABLE [INITIALLY {DEFERRED |
+# IMMEDIATE}]` constraint timing on FOREIGN KEY. Pre-3.1 the
+# bare `DEFERRABLE` form hard-errored, breaking pg_dump restores
+# where the source schema declared a deferred FK. SPG is
+# single-writer with no deferred-constraint window, so every
+# spelling maps to the immediate-check path; runtime semantics
+# are unchanged.
+#
+# Phase 1.5 audit finding N5 — pg_dump's `NOT DEFERRABLE
+# INITIALLY IMMEDIATE` — is closed here too.
+
+statement ok
+CREATE TABLE parent (id INT NOT NULL PRIMARY KEY)
+
+statement ok
+INSERT INTO parent VALUES (1), (2), (3)
+
+# Bare DEFERRABLE (Phase 3.1 — pre-3.1 hard-errored).
+statement ok
+CREATE TABLE child_a (
+  id INT NOT NULL,
+  parent_id INT NOT NULL,
+  FOREIGN KEY (parent_id) REFERENCES parent (id) DEFERRABLE
+)
+
+# DEFERRABLE INITIALLY DEFERRED — the canonical pg_dump shape.
+statement ok
+CREATE TABLE child_b (
+  id INT NOT NULL,
+  parent_id INT NOT NULL,
+  FOREIGN KEY (parent_id) REFERENCES parent (id) DEFERRABLE INITIALLY DEFERRED
+)
+
+# DEFERRABLE INITIALLY IMMEDIATE.
+statement ok
+CREATE TABLE child_c (
+  id INT NOT NULL,
+  parent_id INT NOT NULL,
+  FOREIGN KEY (parent_id) REFERENCES parent (id) DEFERRABLE INITIALLY IMMEDIATE
+)
+
+# NOT DEFERRABLE — worked pre-3.1, still works.
+statement ok
+CREATE TABLE child_d (
+  id INT NOT NULL,
+  parent_id INT NOT NULL,
+  FOREIGN KEY (parent_id) REFERENCES parent (id) NOT DEFERRABLE
+)
+
+# NOT DEFERRABLE INITIALLY IMMEDIATE — audit finding N5.
+statement ok
+CREATE TABLE child_e (
+  id INT NOT NULL,
+  parent_id INT NOT NULL,
+  FOREIGN KEY (parent_id) REFERENCES parent (id) NOT DEFERRABLE INITIALLY IMMEDIATE
+)
+
+# Bare INITIALLY DEFERRED — PG accepts without leading DEFERRABLE.
+statement ok
+CREATE TABLE child_f (
+  id INT NOT NULL,
+  parent_id INT NOT NULL,
+  FOREIGN KEY (parent_id) REFERENCES parent (id) INITIALLY DEFERRED
+)
+
+# Bare INITIALLY IMMEDIATE.
+statement ok
+CREATE TABLE child_g (
+  id INT NOT NULL,
+  parent_id INT NOT NULL,
+  FOREIGN KEY (parent_id) REFERENCES parent (id) INITIALLY IMMEDIATE
+)
+
+# ON DELETE CASCADE then DEFERRABLE — pg_dump's emit order.
+statement ok
+CREATE TABLE child_h (
+  id INT NOT NULL,
+  parent_id INT NOT NULL,
+  FOREIGN KEY (parent_id) REFERENCES parent (id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED
+)
+
+# Inline column-level FK with DEFERRABLE.
+statement ok
+CREATE TABLE child_i (
+  id INT NOT NULL,
+  parent_id INT NOT NULL REFERENCES parent (id) DEFERRABLE INITIALLY DEFERRED
+)
+
+# Sanity — FK still enforces immediately even with DEFERRABLE.
+# Single-writer engine = no deferred-constraint window.
+statement error
+INSERT INTO child_b VALUES (1, 999)
+
+statement ok
+INSERT INTO child_b VALUES (1, 1), (2, 2)
+
+query I rowsort
+SELECT id FROM child_b
+----
+1
+2

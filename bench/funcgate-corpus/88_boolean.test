@@ -1,0 +1,439 @@
+# PG18 regress port: src/test/regress/sql/boolean.sql
+#
+# Ported subset:
+# - Sanity SELECT 1
+# - Boolean literal input via '<text>'::bool casts (t/f, true/false,
+#   y/n/yes/no, on/off, 1/0, leading/trailing whitespace tolerated)
+# - Invalid boolean text inputs (statement error)
+# - AND / OR / NOT / =, <>, <, <=, >, >= operators
+# - text->bool case insensitive cast + whitespace trim
+# - bool->text round-trip
+# - Int->bool cast (0 = false, non-zero = true)
+# - CREATE TABLE / INSERT / SELECT (BOOLTBL1/BOOLTBL2/BOOLTBL3/BOOLTBL4 patterns)
+# - 3-valued AND/OR with NULL operand
+# - Cross-table join with bool predicate
+#
+# Skipped:
+# - `bool 't'` typed-literal syntax — SPG parser does not accept it (use cast instead)
+# - `IS TRUE`/`IS FALSE`/`IS UNKNOWN`/`IS NOT *` — SPG parser only supports IS NULL / IS DISTINCT
+# - `pg_input_is_valid` / `pg_input_error_info` — PG18-only builtins, not in SPG
+# - `\pset null '(null)'` — psql meta command
+# - `bool 'of'` (unique-prefix for 'off') — SPG strict-match, doesn't accept partial words
+# - `booleq` / `boolne` internal function references — not registered as user-visible
+
+# -- sanity check
+query I
+SELECT 1 AS one
+----
+1
+
+# -- built-in bool literals
+query B
+SELECT true
+----
+1
+
+query B
+SELECT false
+----
+0
+
+# -- text -> bool casts (true variants)
+query B
+SELECT 't'::bool
+----
+1
+
+query B
+SELECT 'true'::bool
+----
+1
+
+query B
+SELECT 'y'::bool
+----
+1
+
+query B
+SELECT 'yes'::bool
+----
+1
+
+query B
+SELECT 'on'::bool
+----
+1
+
+query B
+SELECT '1'::bool
+----
+1
+
+# -- text -> bool casts (false variants)
+query B
+SELECT 'f'::bool
+----
+0
+
+query B
+SELECT 'false'::bool
+----
+0
+
+query B
+SELECT 'n'::bool
+----
+0
+
+query B
+SELECT 'no'::bool
+----
+0
+
+query B
+SELECT 'off'::bool
+----
+0
+
+query B
+SELECT '0'::bool
+----
+0
+
+# -- leading / trailing whitespace tolerated
+query B
+SELECT '   f           '::bool
+----
+0
+
+# -- invalid bool text inputs (statement error, message not asserted)
+statement error
+SELECT 'test'::bool
+
+statement error
+SELECT 'foo'::bool
+
+statement error
+SELECT 'yeah'::bool
+
+statement error
+SELECT 'nay'::bool
+
+statement error
+SELECT 'o'::bool
+
+statement error
+SELECT 'on_'::bool
+
+statement error
+SELECT 'off_'::bool
+
+statement error
+SELECT '11'::bool
+
+statement error
+SELECT '000'::bool
+
+statement error
+SELECT ''::bool
+
+# -- AND / OR / NOT
+query B
+SELECT true OR false
+----
+1
+
+query B
+SELECT true AND false
+----
+0
+
+query B
+SELECT NOT false
+----
+1
+
+# -- comparison operators on bool
+query B
+SELECT true = false
+----
+0
+
+query B
+SELECT true <> false
+----
+1
+
+query B
+SELECT true > false
+----
+1
+
+query B
+SELECT true >= false
+----
+1
+
+query B
+SELECT false < true
+----
+1
+
+query B
+SELECT false <= true
+----
+1
+
+# -- explicit text<->bool cast, case + whitespace tolerant
+query B
+SELECT 'TrUe'::text::boolean
+----
+1
+
+query B
+SELECT 'fAlse'::text::boolean
+----
+0
+
+query B
+SELECT '    true   '::text::boolean
+----
+1
+
+query B
+SELECT '     FALSE'::text::boolean
+----
+0
+
+# -- bool -> text round trip
+query T
+SELECT true::boolean::text
+----
+true
+
+query T
+SELECT false::boolean::text
+----
+false
+
+# -- malformed text -> bool casts
+statement error
+SELECT '  tru e '::text::boolean
+
+statement error
+SELECT ''::text::boolean
+
+# -- int -> bool: 0 false, non-zero true
+query B
+SELECT 0::boolean
+----
+0
+
+query B
+SELECT 1::boolean
+----
+1
+
+query B
+SELECT 2::boolean
+----
+1
+
+# -- BOOLTBL1 — all true inserts then a single false
+statement ok
+CREATE TABLE booltbl1 (f1 bool)
+
+statement ok
+INSERT INTO booltbl1 (f1) VALUES ('t'::bool), ('True'::bool), ('true'::bool)
+
+query B nosort
+SELECT f1 FROM booltbl1 ORDER BY f1
+----
+1
+1
+1
+
+query B nosort
+SELECT f1 FROM booltbl1 WHERE f1 = 'true'::bool ORDER BY f1
+----
+1
+1
+1
+
+query B nosort
+SELECT f1 FROM booltbl1 WHERE f1 <> 'false'::bool ORDER BY f1
+----
+1
+1
+1
+
+statement ok
+INSERT INTO booltbl1 (f1) VALUES ('f'::bool)
+
+query B
+SELECT f1 FROM booltbl1 WHERE f1 = 'false'::bool
+----
+0
+
+# -- BOOLTBL2 — all false inserts
+statement ok
+CREATE TABLE booltbl2 (f1 bool)
+
+statement ok
+INSERT INTO booltbl2 (f1) VALUES ('f'::bool), ('false'::bool), ('False'::bool), ('FALSE'::bool)
+
+query B nosort
+SELECT f1 FROM booltbl2 ORDER BY f1
+----
+0
+0
+0
+0
+
+# -- invalid insert value rejected
+statement error
+INSERT INTO booltbl2 (f1) VALUES ('XXX'::bool)
+
+# -- cross-table join with bool predicate
+query BB nosort
+SELECT booltbl1.f1, booltbl2.f1
+   FROM booltbl1, booltbl2
+   WHERE booltbl2.f1 <> booltbl1.f1
+   ORDER BY booltbl1.f1, booltbl2.f1
+----
+1
+0
+1
+0
+1
+0
+1
+0
+1
+0
+1
+0
+1
+0
+1
+0
+1
+0
+1
+0
+1
+0
+1
+0
+
+# -- BOOLTBL3 — text + bool (nullable) + ordering int
+statement ok
+CREATE TABLE booltbl3 (d text, b bool, o int)
+
+statement ok
+INSERT INTO booltbl3 (d, b, o) VALUES ('true', true, 1), ('false', false, 2), ('null', null, 3)
+
+# IS NULL / IS NOT NULL substitute for IS UNKNOWN / IS NOT UNKNOWN
+query TB nosort
+SELECT d, b IS NULL FROM booltbl3 ORDER BY o
+----
+true
+0
+false
+0
+null
+1
+
+query TB nosort
+SELECT d, b IS NOT NULL FROM booltbl3 ORDER BY o
+----
+true
+1
+false
+1
+null
+0
+
+# -- BOOLTBL4 — short-circuit + NULL propagation
+statement ok
+CREATE TABLE booltbl4 (isfalse bool, istrue bool, isnul bool)
+
+statement ok
+INSERT INTO booltbl4 VALUES (false, true, null)
+
+# AND: any nulls without a false → NULL
+query B
+SELECT istrue AND isnul AND istrue FROM booltbl4
+----
+NULL
+
+query B
+SELECT istrue AND istrue AND isnul FROM booltbl4
+----
+NULL
+
+query B
+SELECT isnul AND istrue AND istrue FROM booltbl4
+----
+NULL
+
+# AND: any false short-circuits to false even with NULL
+query B
+SELECT isfalse AND isnul AND istrue FROM booltbl4
+----
+0
+
+query B
+SELECT istrue AND isfalse AND isnul FROM booltbl4
+----
+0
+
+query B
+SELECT isnul AND istrue AND isfalse FROM booltbl4
+----
+0
+
+# OR: any nulls without a true → NULL
+query B
+SELECT isfalse OR isnul OR isfalse FROM booltbl4
+----
+NULL
+
+query B
+SELECT isfalse OR isfalse OR isnul FROM booltbl4
+----
+NULL
+
+query B
+SELECT isnul OR isfalse OR isfalse FROM booltbl4
+----
+NULL
+
+# OR: any true short-circuits to true even with NULL
+query B
+SELECT isfalse OR isnul OR istrue FROM booltbl4
+----
+1
+
+query B
+SELECT istrue OR isfalse OR isnul FROM booltbl4
+----
+1
+
+query B
+SELECT isnul OR istrue OR isfalse FROM booltbl4
+----
+1
+
+# -- clean up
+statement ok
+DROP TABLE booltbl1
+
+statement ok
+DROP TABLE booltbl2
+
+statement ok
+DROP TABLE booltbl3
+
+statement ok
+DROP TABLE booltbl4

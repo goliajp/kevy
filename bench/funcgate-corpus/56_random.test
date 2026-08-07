@@ -1,0 +1,26 @@
+# PG `random()` — uniform double in [0, 1). Per-row evaluation.
+# Loose tests since random output is non-deterministic.
+
+# Bounded result.
+query I
+SELECT 1 WHERE random() >= 0.0 AND random() < 1.0
+----
+1
+
+# random() distributes across a small sample.
+statement ok
+CREATE TABLE t (id INT NOT NULL)
+
+statement ok
+INSERT INTO t VALUES (1), (2), (3), (4), (5), (6), (7), (8), (9), (10)
+
+# Loose: count of rows passing is between 0 and 10 — just
+# verifies random() can be evaluated per-row in WHERE.
+query I
+SELECT (count(*) BETWEEN 0 AND 10)::INT FROM t WHERE random() < 1.0
+----
+1
+
+# random() takes no args.
+statement error
+SELECT random(1)

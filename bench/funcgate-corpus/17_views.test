@@ -1,0 +1,137 @@
+# v7.17.0 Phase 1.2 — CREATE [OR REPLACE] [TEMPORARY] VIEW [IF NOT
+# EXISTS] name [(cols)] AS <SELECT> + DROP VIEW [IF EXISTS] names.
+# Closes the silent-no-op VIEW story from the v7.17 customer-
+# readiness audit: pre-v7.17 CREATE VIEW parsed as Statement::Empty
+# so downstream `SELECT FROM v` errored with table-not-found.
+# v7.17 stores the view body in the catalog, then at SELECT-from-
+# view exec time prepends the body as a synthetic CTE.
+
+statement ok
+CREATE TABLE t (id INT NOT NULL, name TEXT)
+
+statement ok
+INSERT INTO t VALUES (1, 'alice'), (2, 'bob'), (3, 'charlie')
+
+# ---- bare CREATE VIEW + SELECT ----
+
+statement ok
+CREATE VIEW v AS SELECT id, name FROM t WHERE id > 1
+
+query IT rowsort
+SELECT id, name FROM v
+----
+2
+bob
+3
+charlie
+
+# ---- CREATE VIEW with column-rename list ----
+
+statement ok
+CREATE VIEW v2 (pk, label) AS SELECT id, name FROM t
+
+query IT rowsort
+SELECT pk, label FROM v2 WHERE pk = 1
+----
+1
+alice
+
+# ---- CREATE OR REPLACE VIEW ----
+
+statement ok
+CREATE VIEW v3 AS SELECT id FROM t WHERE id = 1
+
+query I
+SELECT id FROM v3
+----
+1
+
+statement ok
+CREATE OR REPLACE VIEW v3 AS SELECT id FROM t WHERE id >= 2
+
+query I rowsort
+SELECT id FROM v3
+----
+2
+3
+
+# ---- CREATE VIEW IF NOT EXISTS keeps original ----
+
+statement ok
+CREATE VIEW IF NOT EXISTS v AS SELECT 999 AS id, 'nope'::TEXT AS name FROM t
+
+# Original (id > 1) still wins.
+query IT rowsort
+SELECT id, name FROM v
+----
+2
+bob
+3
+charlie
+
+# ---- DROP VIEW ----
+
+statement ok
+CREATE VIEW v_temp AS SELECT id FROM t
+
+statement ok
+DROP VIEW v_temp
+
+statement error
+SELECT id FROM v_temp
+
+statement ok
+DROP VIEW IF EXISTS does_not_exist
+
+# Strict DROP errors on missing.
+statement error
+DROP VIEW does_not_exist
+
+# ---- View referencing another view (nested) ----
+
+statement ok
+CREATE VIEW v_high AS SELECT id, name FROM t WHERE id >= 2
+
+statement ok
+CREATE VIEW v_highest AS SELECT id, name FROM v_high WHERE id = 3
+
+query IT
+SELECT id, name FROM v_highest
+----
+3
+charlie
+
+# ---- View collision with existing table is rejected ----
+
+statement error
+CREATE VIEW t AS SELECT id FROM t
+
+# ---- View joined with a regular table ----
+
+statement ok
+CREATE TABLE orders (id INT NOT NULL, customer_id INT NOT NULL)
+
+statement ok
+INSERT INTO orders VALUES (10, 1), (11, 2), (12, 3)
+
+statement ok
+CREATE VIEW big_customers AS SELECT id, name FROM t WHERE id >= 2
+
+query I
+SELECT count(*) FROM orders INNER JOIN big_customers ON orders.customer_id = big_customers.id
+----
+2
+
+# ---- DROP a still-referenced view (no FK enforcement on view deps) ----
+
+statement ok
+DROP VIEW big_customers
+
+# Re-create chains.
+statement ok
+CREATE VIEW big_customers AS SELECT id, name FROM t WHERE id >= 2
+
+query I
+SELECT count(*) FROM big_customers
+----
+2

@@ -1,0 +1,27 @@
+# SAVEPOINT / ROLLBACK TO — nested-TX, v1 SPG doesn't implement.
+
+statement ok
+CREATE TABLE t (v INT NOT NULL)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO t VALUES (1)
+
+statement ok
+SAVEPOINT s1
+
+statement ok
+INSERT INTO t VALUES (2)
+
+statement ok
+ROLLBACK TO s1
+
+statement ok
+COMMIT
+
+query I nosort
+SELECT v FROM t
+----
+1

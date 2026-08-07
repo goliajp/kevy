@@ -1,0 +1,244 @@
+# v7.17.0 Phase 1.1 — CREATE / ALTER / DROP SEQUENCE + nextval /
+# currval / setval round-trip. Closes the silent-no-op SEQUENCE
+# story noted in the v7.17 customer-readiness audit: pre-v7.17,
+# `CREATE SEQUENCE foo` parsed as Statement::Empty so downstream
+# `nextval('foo')` returned NULL and the implicit BIGSERIAL
+# counter did not survive a pg_dump round-trip.
+
+# ---- bare CREATE / nextval round-trip ----
+
+statement ok
+CREATE SEQUENCE s1
+
+query I
+SELECT nextval('s1')
+----
+1
+
+query I
+SELECT nextval('s1')
+----
+2
+
+query I
+SELECT currval('s1')
+----
+2
+
+# ---- CREATE with full options ----
+
+statement ok
+CREATE SEQUENCE s2 START WITH 100 INCREMENT BY 5 MAXVALUE 200 CYCLE
+
+query I
+SELECT nextval('s2')
+----
+100
+
+query I
+SELECT nextval('s2')
+----
+105
+
+query I
+SELECT nextval('s2')
+----
+110
+
+# ---- per-row nextval in INSERT VALUES ----
+
+statement ok
+CREATE SEQUENCE foo_id_seq
+
+statement ok
+CREATE TABLE foo (id BIGINT NOT NULL, name TEXT)
+
+statement ok
+INSERT INTO foo (id, name) VALUES (nextval('foo_id_seq'), 'a'), (nextval('foo_id_seq'), 'b'), (nextval('foo_id_seq'), 'c')
+
+query IT rowsort
+SELECT id, name FROM foo
+----
+1
+a
+2
+b
+3
+c
+
+# ---- setval semantics ----
+
+statement ok
+CREATE SEQUENCE s3
+
+query I
+SELECT setval('s3', 99)
+----
+99
+
+query I
+SELECT nextval('s3')
+----
+100
+
+query I
+SELECT setval('s3', 50, false)
+----
+50
+
+# is_called=false means next nextval returns the set value verbatim.
+query I
+SELECT nextval('s3')
+----
+50
+
+# After that nextval, is_called=true so we advance by increment (1).
+query I
+SELECT nextval('s3')
+----
+51
+
+# ---- ALTER SEQUENCE RESTART WITH ----
+
+statement ok
+CREATE SEQUENCE s4
+
+query I
+SELECT nextval('s4')
+----
+1
+
+query I
+SELECT nextval('s4')
+----
+2
+
+statement ok
+ALTER SEQUENCE s4 RESTART WITH 1000
+
+query I
+SELECT nextval('s4')
+----
+1000
+
+# ---- ALTER SEQUENCE option merge ----
+
+statement ok
+CREATE SEQUENCE s5
+
+statement ok
+ALTER SEQUENCE s5 INCREMENT BY 10 MAXVALUE 50
+
+query I
+SELECT nextval('s5')
+----
+1
+
+query I
+SELECT nextval('s5')
+----
+11
+
+# ---- CYCLE on overflow ----
+
+statement ok
+CREATE SEQUENCE s6 START WITH 1 MAXVALUE 3 CYCLE
+
+query I
+SELECT nextval('s6')
+----
+1
+
+query I
+SELECT nextval('s6')
+----
+2
+
+query I
+SELECT nextval('s6')
+----
+3
+
+# Wraps to MINVALUE (default 1 for positive increment).
+query I
+SELECT nextval('s6')
+----
+1
+
+# ---- NO CYCLE errors on overflow ----
+
+statement ok
+CREATE SEQUENCE s7 START WITH 1 MAXVALUE 2
+
+query I
+SELECT nextval('s7')
+----
+1
+
+query I
+SELECT nextval('s7')
+----
+2
+
+statement error
+SELECT nextval('s7')
+
+# ---- IF NOT EXISTS / IF EXISTS guards ----
+
+statement ok
+CREATE SEQUENCE IF NOT EXISTS s1 START WITH 999
+
+# Original definition kept — START=1 not 999.
+query I
+SELECT nextval('s1')
+----
+3
+
+statement ok
+DROP SEQUENCE IF EXISTS does_not_exist
+
+# Strict DROP errors on missing.
+statement error
+DROP SEQUENCE does_not_exist
+
+# ---- DROP SEQUENCE removes nextval access ----
+
+statement ok
+CREATE SEQUENCE s8
+
+statement ok
+DROP SEQUENCE s8
+
+statement error
+SELECT nextval('s8')
+
+# ---- AS data_type ----
+
+statement ok
+CREATE SEQUENCE small_s AS smallint
+
+query I
+SELECT nextval('small_s')
+----
+1
+
+# ---- pg_dump emits this combo ----
+
+statement ok
+CREATE SEQUENCE pgdump_id_seq AS bigint START WITH 1 INCREMENT BY 1 NO MINVALUE NO MAXVALUE CACHE 1
+
+query I
+SELECT nextval('pgdump_id_seq')
+----
+1
+
+# OWNED BY parses + stores.
+statement ok
+CREATE TABLE pgdump_t (id BIGINT NOT NULL)
+
+statement ok
+ALTER SEQUENCE pgdump_id_seq OWNED BY pgdump_t.id
+
+# Re-attach to NONE.
+statement ok
+ALTER SEQUENCE pgdump_id_seq OWNED BY NONE

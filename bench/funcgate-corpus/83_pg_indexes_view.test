@@ -1,0 +1,32 @@
+# v7.17.0 Phase 3.P0-53 — pg_catalog.pg_indexes / pg_index virtual views.
+
+statement ok
+CREATE TABLE users (id INT NOT NULL PRIMARY KEY, name TEXT NOT NULL)
+
+statement ok
+CREATE INDEX idx_users_name ON users (name)
+
+statement ok
+CREATE UNIQUE INDEX uq_users_name ON users (name)
+
+# pg_indexes lists by table.
+query T rowsort
+SELECT indexname FROM pg_catalog.pg_indexes
+WHERE tablename = 'users' AND schemaname = 'public'
+----
+idx_users_name
+uq_users_name
+users_pkey
+
+# pg_index raw: at least one unique index exists.
+query B
+SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_index WHERE indisunique = TRUE)
+----
+1
+
+# Indexdef contains the column name.
+query B
+SELECT indexdef LIKE '%name%' FROM pg_catalog.pg_indexes
+WHERE indexname = 'idx_users_name'
+----
+1

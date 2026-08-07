@@ -1,0 +1,133 @@
+# PG `trim` / `ltrim` / `rtrim` / `btrim` family.
+# Default char set is ASCII SPACE only (NOT POSIX whitespace).
+# `chars` arg is a UTF-8 codepoint SET — any char in the set
+# is stripped (not the substring). NULL on either arg → NULL.
+
+# trim(): default space strip both ends.
+query T
+SELECT trim('  hello  ')
+----
+hello
+
+query T
+SELECT trim('  hello world  ')
+----
+hello world
+
+query T
+SELECT trim('     ')
+----
+(empty)
+
+query T
+SELECT trim('')
+----
+(empty)
+
+# Tab/newline NOT stripped by default (PG-canonical).
+query T
+SELECT length(trim('	hello
+'))
+----
+7
+
+# trim(s, chars) — char-SET strip.
+query T
+SELECT trim('xxhelloxx', 'x')
+----
+hello
+
+query T
+SELECT trim('xyhelloyx', 'xy')
+----
+hello
+
+# Inner chars preserved.
+query T
+SELECT trim('xhelloxxworld', 'x')
+----
+helloxxworld
+
+# ltrim / rtrim variants — strip ONLY the named side. Test
+# without trailing whitespace in the expected because
+# sqllogictest trims line-trailing whitespace on comparison.
+# Use a deterministic char-based form: append a marker so the
+# trailing chars become observable.
+query T
+SELECT ltrim('  hello  ') || '|'
+----
+hello  |
+
+query T
+SELECT '|' || rtrim('  hello  ')
+----
+|  hello
+
+# ltrim with char set.
+
+query T
+SELECT ltrim('xxhelloxx', 'x')
+----
+helloxx
+
+query T
+SELECT rtrim('xxhelloxx', 'x')
+----
+xxhello
+
+# btrim alias.
+query T
+SELECT btrim('  hello  ')
+----
+hello
+
+# NULL handling.
+query T
+SELECT trim(NULL)
+----
+NULL
+
+query T
+SELECT trim('xx', NULL)
+----
+NULL
+
+query T
+SELECT ltrim(NULL)
+----
+NULL
+
+# v7.39 (round 625) — PG has no trim(integer): it resolves trim to
+# pg_catalog.btrim and says the function does not exist. This asserted SPG's
+# own coercion as if it were PG's behaviour.
+statement error
+SELECT trim(42)
+
+# Realistic SELECT shape — strip whitespace from user input.
+statement ok
+CREATE TABLE entries (id INT NOT NULL, name TEXT NOT NULL)
+
+statement ok
+INSERT INTO entries VALUES (1, '   alice   '), (2, ' bob '), (3, 'carol')
+
+query IT rowsort
+SELECT id, trim(name) FROM entries
+----
+1
+alice
+2
+bob
+3
+carol
+
+# WHERE clause filter on trimmed value.
+query I
+SELECT id FROM entries WHERE trim(name) = 'alice'
+----
+1
+
+# Nested trim — strip ws then a char.
+query T
+SELECT trim(trim('   hello   '), 'h')
+----
+ello

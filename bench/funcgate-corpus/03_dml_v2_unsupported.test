@@ -1,0 +1,111 @@
+# DML coverage history: v4.4 added UPDATE / DELETE; v7.13.0
+# unblocked `ALTER TABLE … ADD COLUMN`; v7.14.0 added
+# `DROP TABLE [IF EXISTS]` so pg_dump / mysqldump reloads
+# work without splitting scripts.
+
+statement ok
+CREATE TABLE t (id INT NOT NULL, name TEXT)
+
+statement ok
+INSERT INTO t VALUES (1, 'x')
+
+statement ok
+INSERT INTO t VALUES (2, 'z')
+
+# v4.4: UPDATE now supported
+statement ok
+UPDATE t SET name = 'y' WHERE id = 1
+
+query IT rowsort
+SELECT id, name FROM t
+----
+1
+y
+2
+z
+
+# v4.4: DELETE now supported
+statement ok
+DELETE FROM t WHERE id = 1
+
+query IT rowsort
+SELECT id, name FROM t
+----
+2
+z
+
+# v7.13.0 — ALTER TABLE ADD COLUMN is supported (mailrs round-5 G1).
+statement ok
+ALTER TABLE t ADD COLUMN extra INT
+
+# v7.15.0 — ALTER TABLE RENAME COLUMN. Rename, re-query under
+# the new column name, then rename back. Also exercise the
+# optional COLUMN keyword shorthand.
+statement ok
+ALTER TABLE t RENAME COLUMN name TO label
+
+query IT rowsort
+SELECT id, label FROM t
+----
+2
+z
+
+statement ok
+INSERT INTO t (id, label, extra) VALUES (3, 'w', 7)
+
+query IT rowsort
+SELECT id, label FROM t
+----
+2
+z
+3
+w
+
+statement ok
+ALTER TABLE t RENAME label TO name
+
+query IT rowsort
+SELECT id, name FROM t
+----
+2
+z
+3
+w
+
+# Same-name collision (case-insensitive) rejects.
+statement error
+ALTER TABLE t RENAME COLUMN id TO name
+
+# Non-existent column rejects.
+statement error
+ALTER TABLE t RENAME COLUMN nope TO whatever
+
+# Rename propagates into CHECK predicate source — the new
+# column name must keep being recognised on subsequent inserts.
+statement ok
+CREATE TABLE chk (a INT CHECK (a > 0))
+
+statement ok
+INSERT INTO chk VALUES (5)
+
+statement error
+INSERT INTO chk VALUES (-1)
+
+statement ok
+ALTER TABLE chk RENAME COLUMN a TO b
+
+statement ok
+INSERT INTO chk VALUES (10)
+
+statement error
+INSERT INTO chk VALUES (-2)
+
+statement ok
+DROP TABLE chk
+
+# v7.14.0 — DROP TABLE [IF EXISTS] is supported.
+statement ok
+DROP TABLE t
+
+statement ok
+DROP TABLE IF EXISTS t

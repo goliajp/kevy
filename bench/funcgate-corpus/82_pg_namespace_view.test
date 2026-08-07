@@ -1,0 +1,38 @@
+# v7.17.0 Phase 3.P0-52 — pg_catalog.pg_namespace virtual view.
+
+query I
+SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = 'public'
+----
+2200
+
+query I
+SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = 'pg_catalog'
+----
+11
+
+query I
+SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = 'information_schema'
+----
+13000
+
+# Names, not a count. r661 added spg_catalog and this line kept asserting 3
+# for three rounds without anyone noticing — a count breaks whenever a
+# namespace is added for an unrelated reason and says nothing about which
+# one, which is exactly how it failed. The same count-shaped assertion was
+# rewritten out of the e2e pins in r661; this file was missed.
+#
+# A count is meaningless on PG too: PG18's pg_namespace is dominated by
+# per-session pg_temp_N / pg_toast_temp_N rows, so the number there is a
+# property of who has connected recently.
+query T
+SELECT nspname FROM pg_catalog.pg_namespace ORDER BY nspname
+----
+information_schema
+pg_catalog
+public
+spg_catalog
+
+query I
+SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = 'spg_catalog'
+----
+13500

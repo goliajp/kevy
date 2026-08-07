@@ -1,0 +1,111 @@
+# v7.16.1 — mailrs round-9 closures:
+#   * A.2.a TSVECTOR literal auto-coerce (the pg_dump TEXT-shape
+#     INSERT path was hard-rejected pre-v7.16.1).
+#   * A.2.b ALTER TABLE … { ENABLE | DISABLE } TRIGGER … (pg_dump
+#     --disable-triggers wraps every data block with these).
+#   * Real BEFORE-trigger NEW.col := rewrite (silently no-op'd
+#     v7.14.0 → v7.16.0 because of a schema-qualifier strip
+#     regression in expect_ident_like).
+
+# ---- A.2.a — TSVECTOR literal coerce ----
+
+statement ok
+CREATE TABLE tv (id INT NOT NULL, sv TSVECTOR)
+
+# PG-canonical form with positions + weights.
+statement ok
+INSERT INTO tv VALUES (1, '''hello'':1A ''world'':2B')
+
+# PG-canonical form with bare positions.
+statement ok
+INSERT INTO tv VALUES (2, '''quick'':1 ''brown'':2 ''fox'':3')
+
+# Empty tsvector — PG accepts.
+statement ok
+INSERT INTO tv VALUES (3, '')
+
+# PG implicit promotion: bare TEXT is split into lexemes.
+statement ok
+INSERT INTO tv VALUES (4, 'foo bar baz')
+
+query I rowsort
+SELECT id FROM tv
+----
+1
+2
+3
+4
+
+statement ok
+DROP TABLE tv
+
+# ---- A.2.b — ENABLE / DISABLE TRIGGER ----
+# Trigger rewrites NEW.v to 999. DISABLE TRIGGER ALL must let
+# the original value through; ENABLE re-arms.
+
+statement ok
+CREATE TABLE t (id INT NOT NULL, v INT NOT NULL)
+
+statement ok
+CREATE FUNCTION force_v() RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN NEW.v := 999; RETURN NEW; END; $$
+
+statement ok
+CREATE TRIGGER tg BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION force_v()
+
+# trigger active — NEW.v := 999 rewrites 10 → 999
+statement ok
+INSERT INTO t VALUES (1, 10)
+
+query II nosort
+SELECT id, v FROM t WHERE id = 1
+----
+1
+999
+
+# disable triggers; original value lands
+statement ok
+ALTER TABLE t DISABLE TRIGGER ALL
+
+statement ok
+INSERT INTO t VALUES (2, 20)
+
+query II nosort
+SELECT id, v FROM t WHERE id = 2
+----
+2
+20
+
+# re-enable; trigger fires again
+statement ok
+ALTER TABLE t ENABLE TRIGGER ALL
+
+statement ok
+INSERT INTO t VALUES (3, 30)
+
+query II nosort
+SELECT id, v FROM t WHERE id = 3
+----
+3
+999
+
+# per-name DISABLE form (pg_dump uses ALL but the per-name shape
+# is in the AST — verify it doesn't silently lose state).
+statement ok
+ALTER TABLE t DISABLE TRIGGER tg
+
+statement ok
+INSERT INTO t VALUES (4, 40)
+
+query II nosort
+SELECT id, v FROM t WHERE id = 4
+----
+4
+40
+
+# unknown trigger name rejects (PG semantics — don't drop state
+# silently).
+statement error
+ALTER TABLE t DISABLE TRIGGER nope
+
+statement ok
+DROP TABLE t

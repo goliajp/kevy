@@ -1,0 +1,68 @@
+# PG `repeat(string, n)` — duplicate N times.
+# n<=0 → ''; NULL on any arg → NULL.
+
+query T
+SELECT repeat('ab', 3)
+----
+ababab
+
+query T
+SELECT repeat('hello', 1)
+----
+hello
+
+query T
+SELECT repeat('hello', 0)
+----
+(empty)
+
+query T
+SELECT repeat('hello', -1)
+----
+(empty)
+
+query T
+SELECT repeat('', 5)
+----
+(empty)
+
+query T
+SELECT repeat('-', 10)
+----
+----------
+
+query T
+SELECT repeat('日', 3)
+----
+日日日
+
+query T
+SELECT repeat('日本', 3)
+----
+日本日本日本
+
+# v7.39 (round 625) — PG has no repeat(integer, integer).
+statement error
+SELECT repeat(7, 3)
+
+query T
+SELECT repeat(NULL, 3)
+----
+NULL
+
+query T
+SELECT repeat('a', NULL)
+----
+NULL
+
+# Stress — 1000 chars.
+query I
+SELECT length(repeat('x', 1000))
+----
+1000
+
+# Build a CSV-row separator.
+query T
+SELECT '|' || repeat('-', 5) || '|'
+----
+|-----|

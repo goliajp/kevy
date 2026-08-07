@@ -1,0 +1,46 @@
+# v7.17.0 Phase 2.3 — PG `statement_timeout` GUC parses and stores.
+# The actual cancellation runs through pgwire (the engine is
+# `#![no_std]` and can't reach `Instant::now()` itself), so this
+# corpus only exercises the SQL surface — the wire-level behavior
+# is covered by `crates/spg-server/tests/e2e_statement_timeout.rs`.
+
+statement ok
+SET statement_timeout = 0
+
+statement ok
+SET statement_timeout = '0'
+
+# Bare integer = milliseconds (PG default).
+statement ok
+SET statement_timeout = 5000
+
+# Common unit forms PG accepts.
+statement ok
+SET statement_timeout = '5000'
+
+statement ok
+SET statement_timeout = '5s'
+
+statement ok
+SET statement_timeout = '500ms'
+
+statement ok
+SET statement_timeout = '1min'
+
+statement ok
+SET statement_timeout = '1h'
+
+# SESSION / LOCAL prefix — the parser must accept both.
+statement ok
+SET SESSION statement_timeout = '5s'
+
+statement ok
+SET LOCAL statement_timeout = '1ms'
+
+# `SET ... TO ...` is the standard SQL spelling alongside `=`.
+statement ok
+SET statement_timeout TO '2s'
+
+# Restoring to disabled must still be accepted.
+statement ok
+SET statement_timeout = 0

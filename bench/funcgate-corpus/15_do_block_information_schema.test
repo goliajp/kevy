@@ -1,0 +1,148 @@
+# v7.16.2 — mailrs round-10 closures:
+#   * A.1  SET SESSION AUTHORIZATION DEFAULT parses (pg_dump
+#     preamble was emitting this and failing).
+#   * A.2  DO $$ … END $$ blocks ACTUALLY execute. Pre-v7.16.2
+#     the parser discarded the body and the engine returned
+#     CommandOk — a SEV-1 silent no-op that turned every mailrs
+#     idempotent migration into an invisible no-op.
+#   * A.3  information_schema.{columns, tables} +
+#     pg_catalog.{pg_class, pg_attribute} virtual views work
+#     so the mailrs `IF EXISTS (SELECT 1 FROM
+#     information_schema.columns WHERE …)` idiom evaluates
+#     against the live catalog.
+
+# ---- A.1 — SET SESSION AUTHORIZATION DEFAULT ----
+
+statement ok
+SET SESSION AUTHORIZATION DEFAULT
+
+# v7.39 (round 697) — the role is CREATED first now. This asserted that
+# `SET SESSION AUTHORIZATION 'someuser'` succeeds for a role nobody made,
+# which PG18 refuses (`role "someuser" does not exist`) — the case was
+# pinning SPG's own laxness, the F31 shape, inside the conformance corpus.
+# The form under test is the quoted-role spelling, and it still is.
+statement ok
+CREATE ROLE someuser
+
+statement ok
+SET SESSION AUTHORIZATION 'someuser'
+
+statement ok
+SET AUTHORIZATION DEFAULT
+
+# ---- A.3 — information_schema introspection ----
+
+statement ok
+CREATE TABLE oauth_clients (id BIGINT NOT NULL, redirect_uris TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[])
+
+query T nosort
+SELECT data_type FROM information_schema.columns WHERE table_name = 'oauth_clients' AND column_name = 'redirect_uris'
+----
+ARRAY
+
+query T nosort
+SELECT data_type FROM information_schema.columns WHERE table_name = 'oauth_clients' AND column_name = 'id'
+----
+bigint
+
+# Empty result for non-existent column.
+query T nosort
+SELECT data_type FROM information_schema.columns WHERE table_name = 'oauth_clients' AND column_name = 'nope'
+----
+
+# information_schema.tables
+query T nosort
+SELECT table_type FROM information_schema.tables WHERE table_name = 'oauth_clients'
+----
+BASE TABLE
+
+# pg_catalog.pg_class
+query T nosort
+SELECT relkind FROM pg_catalog.pg_class WHERE relname = 'oauth_clients'
+----
+r
+
+# ---- A.2 — DO block + mailrs migrate-038 idiom ----
+
+# First run: redirect_uris is still ARRAY → THEN branch fires.
+statement ok
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'oauth_clients'
+          AND column_name = 'redirect_uris'
+          AND data_type = 'ARRAY'
+    ) THEN
+        ALTER TABLE oauth_clients RENAME COLUMN redirect_uris TO redirect_uris_arr;
+        ALTER TABLE oauth_clients ADD COLUMN redirect_uris TEXT NOT NULL DEFAULT '';
+    END IF;
+END $$
+
+query T rowsort
+SELECT column_name FROM information_schema.columns WHERE table_name = 'oauth_clients'
+----
+id
+redirect_uris
+redirect_uris_arr
+
+# Verify the rename happened
+query T nosort
+SELECT data_type FROM information_schema.columns WHERE table_name = 'oauth_clients' AND column_name = 'redirect_uris_arr'
+----
+ARRAY
+
+query T nosort
+SELECT data_type FROM information_schema.columns WHERE table_name = 'oauth_clients' AND column_name = 'redirect_uris'
+----
+text
+
+# Idempotent re-run: the IF EXISTS condition is now false
+# (redirect_uris is TEXT not ARRAY) so the THEN branch skips.
+statement ok
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'oauth_clients'
+          AND column_name = 'redirect_uris'
+          AND data_type = 'ARRAY'
+    ) THEN
+        ALTER TABLE oauth_clients RENAME COLUMN redirect_uris TO redirect_uris_arr;
+        ALTER TABLE oauth_clients ADD COLUMN redirect_uris TEXT NOT NULL DEFAULT '';
+    END IF;
+END $$
+
+# Schema unchanged from after the first run.
+query T rowsort
+SELECT column_name FROM information_schema.columns WHERE table_name = 'oauth_clients'
+----
+id
+redirect_uris
+redirect_uris_arr
+
+# DO with plain ALTER + UPDATE (no condition) — also works.
+statement ok
+CREATE TABLE t (id INT NOT NULL)
+
+statement ok
+INSERT INTO t VALUES (1)
+
+statement ok
+DO $$
+BEGIN
+    ALTER TABLE t ADD COLUMN tag TEXT;
+    UPDATE t SET tag = 'foo' WHERE id = 1;
+END $$
+
+query IT nosort
+SELECT id, tag FROM t
+----
+1
+foo
+
+statement ok
+DROP TABLE t
+
+statement ok
+DROP TABLE oauth_clients

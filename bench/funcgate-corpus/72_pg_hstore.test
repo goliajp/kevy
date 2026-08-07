@@ -1,0 +1,54 @@
+# PG hstore extension type — text=>text map with NULL value
+# support. SPG advertises as TEXT OID 25 on the wire (no
+# extension OID).
+
+statement ok
+CREATE TABLE config (id INT NOT NULL, props HSTORE)
+
+statement ok
+INSERT INTO config VALUES
+    (1, 'theme=>dark, lang=>en'),
+    (2, 'k=>v'),
+    (3, ''),
+    (4, NULL),
+    (5, 'a=>NULL, b=>"world"'),
+    (6, 'k=>1, k=>2')
+
+# Cast to text → canonical PG `"k"=>"v"` form.
+query T
+SELECT props::text FROM config WHERE id = 1
+----
+"theme"=>"dark", "lang"=>"en"
+
+query T
+SELECT props::text FROM config WHERE id = 2
+----
+"k"=>"v"
+
+# Empty input → empty map.
+query T
+SELECT props::text FROM config WHERE id = 3
+----
+(empty)
+
+query T
+SELECT props::text FROM config WHERE id = 4
+----
+NULL
+
+# NULL value renders as bare NULL (no quotes).
+query T
+SELECT props::text FROM config WHERE id = 5
+----
+"a"=>NULL, "b"=>"world"
+
+# Duplicate keys: PG's hstore_in keeps the FIRST occurrence
+# (v7.39 round 780 — measured; this record pinned last-wins).
+query T
+SELECT props::text FROM config WHERE id = 6
+----
+"k"=>"1"
+
+# Malformed → hard error.
+statement error
+INSERT INTO config VALUES (99, 'junk-no-arrow')

@@ -1,0 +1,82 @@
+# v7.17.0 Phase 3.P0-43 — window functions over JOIN.
+#
+# Phase 3.6 (`4453e95`) rejected this combination outright; P0-43
+# routes the joined+filtered row stream through the existing
+# window pipeline so PARTITION BY / ORDER BY / aggregate-window
+# all evaluate against the composite `alias.col` schema.
+
+statement ok
+CREATE TABLE depts (id INT NOT NULL, name TEXT NOT NULL)
+
+statement ok
+CREATE TABLE emps (
+    id INT NOT NULL,
+    dept_id INT NOT NULL,
+    name TEXT NOT NULL,
+    salary INT NOT NULL
+)
+
+statement ok
+INSERT INTO depts VALUES (1, 'Eng'), (2, 'Sales')
+
+statement ok
+INSERT INTO emps VALUES
+    (1, 1, 'Alice', 100),
+    (2, 1, 'Bob', 90),
+    (3, 1, 'Carol', 90),
+    (4, 2, 'Dave', 80),
+    (5, 2, 'Eve', 70)
+
+# ROW_NUMBER per dept, ordered by salary DESC.
+query TII
+SELECT emps.name, depts.id AS dept_id, ROW_NUMBER() OVER (PARTITION BY depts.id ORDER BY emps.salary DESC) AS rn
+FROM emps JOIN depts ON emps.dept_id = depts.id
+ORDER BY dept_id, rn, emps.name
+----
+Alice
+1
+1
+Bob
+1
+2
+Carol
+1
+3
+Dave
+2
+1
+Eve
+2
+2
+
+# RANK ties on equal salary (Bob and Carol both at 90 → rank 2,2).
+query TI
+SELECT emps.name, RANK() OVER (PARTITION BY depts.id ORDER BY emps.salary DESC) AS rk
+FROM emps JOIN depts ON emps.dept_id = depts.id WHERE depts.id = 1
+ORDER BY rk, emps.name
+----
+Alice
+1
+Bob
+2
+Carol
+2
+
+# SUM window per dept — same value across the partition.
+query R
+SELECT SUM(emps.salary) OVER (PARTITION BY depts.id)
+FROM emps JOIN depts ON emps.dept_id = depts.id WHERE depts.id = 1 LIMIT 1
+----
+280
+
+# LEFT JOIN keeps the NULL-extended row for an empty department.
+statement ok
+INSERT INTO depts VALUES (3, 'Empty')
+
+query TI
+SELECT depts.name, ROW_NUMBER() OVER (PARTITION BY depts.id ORDER BY emps.salary) AS rn
+FROM depts LEFT JOIN emps ON emps.dept_id = depts.id WHERE depts.id = 3
+ORDER BY depts.name
+----
+Empty
+1

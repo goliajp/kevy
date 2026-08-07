@@ -1,0 +1,56 @@
+# MySQL inline ENUM('a','b','c') — column-level value list,
+# validated on INSERT/UPDATE. Storage is TEXT; variant order is
+# preserved (matters for MySQL `ORDER BY enum_col`).
+
+statement ok
+CREATE TABLE users (id INT NOT NULL, role ENUM('admin','editor','viewer'))
+
+statement ok
+INSERT INTO users VALUES (1, 'admin'), (2, 'editor'), (3, 'viewer'), (4, NULL)
+
+# Listed values round-trip.
+query T
+SELECT role FROM users WHERE id = 1
+----
+admin
+
+query T
+SELECT role FROM users WHERE id = 2
+----
+editor
+
+query T
+SELECT role FROM users WHERE id = 3
+----
+viewer
+
+# NULL preserved.
+query T
+SELECT role FROM users WHERE id = 4
+----
+NULL
+
+# Non-listed value → hard error (no silent ''→empty fallback).
+statement error
+INSERT INTO users VALUES (99, 'superuser')
+
+# Empty value list → parse error.
+statement error
+CREATE TABLE bad (id INT NOT NULL, x ENUM())
+
+# Multi-row INSERT, all listed values accepted.
+statement ok
+CREATE TABLE sizes (id INT NOT NULL, sz ENUM('small','medium','large','xlarge'))
+
+statement ok
+INSERT INTO sizes VALUES (1, 'small'), (2, 'large'), (3, 'xlarge')
+
+query IT nosort
+SELECT id, sz FROM sizes ORDER BY id
+----
+1
+small
+2
+large
+3
+xlarge

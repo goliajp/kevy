@@ -1,0 +1,121 @@
+# PG `lpad(string, length [, fill])` / `rpad(string, length [, fill])`.
+# length is target codepoint count. Truncate from RIGHT when input
+# longer. Pad with fill (default ' ') cycling for multi-char fills.
+# length<=0 → ''. Empty fill + needs padding → input verbatim.
+# NULL on any arg → NULL.
+
+query T
+SELECT lpad('5', 3, '0')
+----
+005
+
+query T
+SELECT '|' || lpad('5', 3) || '|'
+----
+|  5|
+
+query T
+SELECT rpad('5', 3, '0')
+----
+500
+
+query T
+SELECT '|' || rpad('5', 3) || '|'
+----
+|5  |
+
+# Already long enough → truncate (KEEP LEFT side).
+query T
+SELECT lpad('helloXX', 5)
+----
+hello
+
+query T
+SELECT rpad('helloXX', 5)
+----
+hello
+
+# Exact length → passthrough.
+query T
+SELECT lpad('hello', 5, 'X')
+----
+hello
+
+# length<=0 → ''.
+query T
+SELECT lpad('hello', 0, 'X')
+----
+(empty)
+
+query T
+SELECT lpad('hello', -1, 'X')
+----
+(empty)
+
+# Multi-char fill cycles.
+query T
+SELECT lpad('a', 7, 'xy')
+----
+xyxyxya
+
+query T
+SELECT rpad('a', 7, 'xy')
+----
+axyxyxy
+
+query T
+SELECT lpad('a', 6, 'xyz')
+----
+xyzxya
+
+# Empty fill passthrough.
+query T
+SELECT lpad('hello', 10, '')
+----
+hello
+
+# Unicode (codepoint counted, not bytes).
+query T
+SELECT lpad('日本', 5, '_')
+----
+___日本
+
+query T
+SELECT lpad('a', 4, '日')
+----
+日日日a
+
+query T
+SELECT rpad('日本', 5, '_')
+----
+日本___
+
+# NULL on any arg.
+query T
+SELECT lpad(NULL, 5, 'x')
+----
+NULL
+
+query T
+SELECT lpad('a', NULL, 'x')
+----
+NULL
+
+query T
+SELECT lpad('a', 5, NULL)
+----
+NULL
+
+# Realistic: zero-padded invoice IDs.
+statement ok
+CREATE TABLE invoices (n INT NOT NULL)
+
+statement ok
+INSERT INTO invoices VALUES (1), (42), (1234)
+
+query T nosort
+SELECT lpad(n::TEXT, 6, '0') FROM invoices ORDER BY n
+----
+000001
+000042
+001234

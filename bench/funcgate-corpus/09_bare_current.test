@@ -1,0 +1,25 @@
+# PG-style bare CURRENT_TIMESTAMP / CURRENT_DATE (no parens). Runner
+# clock pinned to 2025-06-15T12:00:00Z.
+
+query T nosort
+SELECT CURRENT_TIMESTAMP
+----
+2025-06-15 12:00:00
+
+query T nosort
+SELECT CURRENT_DATE
+----
+2025-06-15
+
+# Bare form composes with EXTRACT.
+query I nosort
+SELECT EXTRACT(YEAR FROM CURRENT_DATE)
+----
+2025
+
+# The function form keeps working alongside the bare form.
+query T nosort
+SELECT CURRENT_TIMESTAMP, CURRENT_TIMESTAMP()
+----
+2025-06-15 12:00:00
+2025-06-15 12:00:00

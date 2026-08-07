@@ -1,0 +1,92 @@
+# v7.17.0 Phase 2.5 — `COLLATE <name>` clause on TEXT columns
+# stops being a silent no-op. The case-insensitive classifier
+# treats `case_insensitive`, `*_ci`, `*_ai_ci`, and `nocase` as
+# CaseInsensitive; everything else (`C`, `POSIX`, `default`,
+# `pg_catalog.default`, `*_bin`, `*_cs`, unknown names) stays
+# Binary so prior snapshots keep their byte-wise compare.
+
+# Binary default — byte-wise compare keeps the legacy semantics.
+statement ok
+CREATE TABLE t_bin (id INT NOT NULL, name TEXT NOT NULL)
+
+statement ok
+INSERT INTO t_bin (id, name) VALUES (1, 'Alice'), (2, 'alice')
+
+query I
+SELECT id FROM t_bin WHERE name = 'alice'
+----
+2
+
+# PG `case_insensitive` quoted-ident form.
+statement ok
+CREATE TABLE t_ci (id INT NOT NULL, name TEXT COLLATE "case_insensitive" NOT NULL)
+
+statement ok
+INSERT INTO t_ci (id, name) VALUES (1, 'Alice'), (2, 'BOB')
+
+query I rowsort
+SELECT id FROM t_ci WHERE name = 'alice'
+----
+1
+
+query I rowsort
+SELECT id FROM t_ci WHERE name = 'bob'
+----
+2
+
+# MySQL `_ci` suffix on the bare ident form.
+statement ok
+CREATE TABLE t_mysql (id INT NOT NULL, name TEXT COLLATE utf8mb4_unicode_ci NOT NULL)
+
+statement ok
+INSERT INTO t_mysql (id, name) VALUES (1, 'Carol')
+
+query I
+SELECT id FROM t_mysql WHERE name = 'CAROL'
+----
+1
+
+# Quoted-ident PG default — stays Binary.
+statement ok
+CREATE TABLE t_default (id INT NOT NULL, name TEXT COLLATE "C" NOT NULL)
+
+statement ok
+INSERT INTO t_default (id, name) VALUES (1, 'Alice')
+
+query I rowsort
+SELECT id FROM t_default WHERE name = 'alice'
+----
+
+# Schema-qualified `pg_catalog.default` (pg_dump emits this).
+statement ok
+CREATE TABLE t_pg (id INT NOT NULL, name TEXT COLLATE pg_catalog.default NOT NULL)
+
+statement ok
+INSERT INTO t_pg (id, name) VALUES (1, 'Alice')
+
+query I rowsort
+SELECT id FROM t_pg WHERE name = 'alice'
+----
+
+# MySQL bin-suffix stays Binary too.
+statement ok
+CREATE TABLE t_bin_suffix (id INT NOT NULL, name TEXT COLLATE utf8mb4_bin NOT NULL)
+
+statement ok
+INSERT INTO t_bin_suffix (id, name) VALUES (1, 'Alice')
+
+query I rowsort
+SELECT id FROM t_bin_suffix WHERE name = 'alice'
+----
+
+# `nocase` (the SQLite-ish keyword) classifies as CaseInsensitive.
+statement ok
+CREATE TABLE t_nocase (id INT NOT NULL, name TEXT COLLATE nocase NOT NULL)
+
+statement ok
+INSERT INTO t_nocase (id, name) VALUES (1, 'Mixed')
+
+query I
+SELECT id FROM t_nocase WHERE name = 'MIXED'
+----
+1

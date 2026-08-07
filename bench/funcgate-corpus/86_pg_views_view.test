@@ -1,0 +1,20 @@
+# v7.17.0 Phase 3.P0-56 — pg_catalog.pg_views / pg_matviews virtual views.
+
+statement ok
+CREATE TABLE t (id INT NOT NULL, label TEXT NOT NULL)
+
+statement ok
+CREATE VIEW v AS SELECT id, label FROM t
+
+# pg_views lists the declared view.
+query TT
+SELECT viewname, schemaname FROM pg_catalog.pg_views WHERE viewname = 'v'
+----
+v
+public
+
+# pg_matviews is empty (no materialised view surface in v7.17).
+query I
+SELECT COUNT(*) FROM pg_catalog.pg_matviews
+----
+0

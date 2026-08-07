@@ -1,0 +1,70 @@
+# PG string_agg(value, separator) and array_agg(value).
+# Hibernate / Rails / Django GROUP BY rollups.
+
+statement ok
+CREATE TABLE t (id INT NOT NULL, tag TEXT)
+
+statement ok
+INSERT INTO t VALUES (1, 'red'), (1, 'green'), (1, 'blue'),
+                    (2, 'orange'), (2, 'yellow'),
+                    (3, NULL), (3, 'cyan')
+
+# string_agg with separator, single group.
+query T
+SELECT string_agg(tag, ',') FROM t WHERE id = 1
+----
+red,green,blue
+
+# string_agg skips NULL inputs; separator inserted between
+# surviving values only.
+query T
+SELECT string_agg(tag, ',') FROM t WHERE id = 3
+----
+cyan
+
+# Empty group → NULL.
+query T
+SELECT string_agg(tag, ',') FROM t WHERE id = 99
+----
+NULL
+
+# string_agg with GROUP BY.
+query IT nosort
+SELECT id, string_agg(tag, ',') FROM t GROUP BY id ORDER BY id
+----
+1
+red,green,blue
+2
+orange,yellow
+3
+cyan
+
+# array_agg of TEXT.
+query T
+SELECT array_agg(tag) FROM t WHERE id = 1
+----
+{red,green,blue}
+
+# array_agg preserves NULL elements.
+query T
+SELECT array_agg(tag) FROM t WHERE id = 3
+----
+{NULL,cyan}
+
+# array_agg empty group → NULL.
+query T
+SELECT array_agg(tag) FROM t WHERE id = 99
+----
+NULL
+
+# array_agg of INT.
+statement ok
+CREATE TABLE n (v INT)
+
+statement ok
+INSERT INTO n VALUES (3), (1), (4), (1), (5)
+
+query T
+SELECT array_agg(v) FROM n
+----
+{3,1,4,1,5}

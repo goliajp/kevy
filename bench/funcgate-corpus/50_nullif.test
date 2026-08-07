@@ -1,0 +1,82 @@
+# PG `nullif(a, b)` — NULL if a=b else a.
+# Universal divide-by-zero / empty-string guard.
+
+query I
+SELECT nullif(5, 5)
+----
+NULL
+
+query I
+SELECT nullif(5, 3)
+----
+5
+
+query T
+SELECT nullif('hello', 'hello')
+----
+NULL
+
+query T
+SELECT nullif('hello', 'world')
+----
+hello
+
+query T
+SELECT nullif('', '')
+----
+NULL
+
+query I
+SELECT nullif(0, 0)
+----
+NULL
+
+# NULL handling.
+query I
+SELECT nullif(NULL, 5)
+----
+NULL
+
+query I
+SELECT nullif(5, NULL)
+----
+5
+
+query I
+SELECT nullif(NULL, NULL)
+----
+NULL
+
+query I
+SELECT nullif(-5, -5)
+----
+NULL
+
+# Realistic: divide-by-zero protection.
+statement ok
+CREATE TABLE rate (num INT NOT NULL, denom INT NOT NULL)
+
+statement ok
+INSERT INTO rate VALUES (10, 2), (5, 0)
+
+# Without nullif, 5/0 errors. With it, → NULL.
+query R rowsort
+SELECT num::FLOAT / nullif(denom, 0) FROM rate
+----
+5
+NULL
+
+# Realistic: empty-string normalization.
+statement ok
+CREATE TABLE form (id INT NOT NULL, name TEXT NOT NULL)
+
+statement ok
+INSERT INTO form VALUES (1, ''), (2, 'alice')
+
+query IT nosort
+SELECT id, nullif(name, '') FROM form ORDER BY id
+----
+1
+NULL
+2
+alice

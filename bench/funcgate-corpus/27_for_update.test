@@ -1,0 +1,101 @@
+# v7.17.0 Phase 3.4 — SELECT trailing `FOR { UPDATE | NO KEY
+# UPDATE | SHARE | KEY SHARE } [ OF tbl ] [ NOWAIT | SKIP LOCKED ]`
+# row-lock clauses. Pre-3.4 the parser hard-errored on FOR,
+# breaking every mailrs / Rails / Django path that emits
+# `SELECT ... FOR UPDATE` for advisory pessimistic locking.
+# SPG is single-writer so the clauses have no behavioural effect
+# — the rows return identical to the no-clause form.
+
+statement ok
+CREATE TABLE t (id INT NOT NULL, label TEXT NOT NULL)
+
+statement ok
+INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c')
+
+# FOR UPDATE — the dominant Rails / mailrs form.
+query IT rowsort
+SELECT id, label FROM t WHERE id = 2 FOR UPDATE
+----
+2
+b
+
+# FOR SHARE — read-with-intent-to-block-writers.
+query I rowsort
+SELECT id FROM t WHERE id = 1 FOR SHARE
+----
+1
+
+# FOR NO KEY UPDATE (PG 9.3+ surface).
+query I rowsort
+SELECT id FROM t FOR NO KEY UPDATE
+----
+1
+2
+3
+
+# FOR KEY SHARE.
+query I rowsort
+SELECT id FROM t FOR KEY SHARE
+----
+1
+2
+3
+
+# FOR UPDATE NOWAIT — queue-worker pattern, claim-or-skip.
+query I rowsort
+SELECT id FROM t WHERE id = 3 FOR UPDATE NOWAIT
+----
+3
+
+# FOR UPDATE SKIP LOCKED — modern queue-worker dequeue.
+query I rowsort
+SELECT id FROM t FOR UPDATE SKIP LOCKED
+----
+1
+2
+3
+
+# FOR UPDATE OF <tbl> — mailrs join-then-lock-one-side.
+query I rowsort
+SELECT id FROM t FOR UPDATE OF t
+----
+1
+2
+3
+
+# FOR UPDATE after LIMIT / OFFSET — pagination + lock combo.
+query I nosort
+SELECT id FROM t ORDER BY id LIMIT 2 OFFSET 1 FOR UPDATE
+----
+2
+3
+
+# The classic queue-claim shape — order + limit + lock + skip.
+query I
+SELECT id FROM t ORDER BY id LIMIT 1 FOR UPDATE OF t SKIP LOCKED
+----
+1
+
+# Stacked FOR clauses (PG allows multiple).
+statement ok
+CREATE TABLE u (id INT NOT NULL)
+
+statement ok
+INSERT INTO u VALUES (1), (2)
+
+query I rowsort
+SELECT t.id FROM t JOIN u ON t.id = u.id FOR UPDATE OF t FOR SHARE OF u
+----
+1
+2
+
+# Identity sanity: FOR UPDATE returns the same rows as no clause.
+query IT rowsort
+SELECT id, label FROM t ORDER BY id FOR UPDATE
+----
+1
+a
+2
+b
+3
+c

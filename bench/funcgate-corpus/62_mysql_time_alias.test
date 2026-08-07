@@ -1,0 +1,94 @@
+# MySQL time aliases — date_format / unix_timestamp / from_unixtime.
+# WordPress, Laravel, mysql-connector-python rely on this triplet
+# for display formatting and cache-key derivation.
+#
+# Note: SPG presents a unified surface (PG dialect parser also
+# accepts MySQL function names). These tests live under pg_regress
+# corpus to confirm the cross-dialect availability.
+
+# ─── date_format ─────────────────────────────────────────────────
+
+query T
+SELECT date_format('2025-06-08 14:30:45'::TIMESTAMP, '%Y-%m-%d')
+----
+2025-06-08
+
+query T
+SELECT date_format('2025-06-08 14:30:45'::TIMESTAMP, '%Y-%m-%d %H:%i:%s')
+----
+2025-06-08 14:30:45
+
+# %i is MINUTE in MySQL (NOT month — that's %M).
+query T
+SELECT date_format('2025-06-08 14:30:45'::TIMESTAMP, '%i')
+----
+30
+
+# %M is full month name.
+query T
+SELECT date_format('2025-06-08 14:30:45'::TIMESTAMP, '%M')
+----
+June
+
+query T
+SELECT date_format('2025-06-08 14:30:45'::TIMESTAMP, '%b')
+----
+Jun
+
+# %p AM/PM split.
+query T
+SELECT date_format('2025-06-08 09:30:45'::TIMESTAMP, '%p')
+----
+AM
+
+query T
+SELECT date_format('2025-06-08 14:30:45'::TIMESTAMP, '%p')
+----
+PM
+
+# %f microsecond, always 6 digits.
+query T
+SELECT date_format('2025-06-08 14:30:45.123456'::TIMESTAMP, '%f')
+----
+123456
+
+# %% literal percent.
+query T
+SELECT date_format('2025-06-08 14:30:45'::TIMESTAMP, '%Y%%')
+----
+2025%
+
+# NULL propagation.
+query T
+SELECT date_format(NULL, '%Y')
+----
+NULL
+
+# ─── unix_timestamp ──────────────────────────────────────────────
+
+query I
+SELECT unix_timestamp('2025-06-08 14:30:45'::TIMESTAMP)
+----
+1749393045
+
+query I
+SELECT unix_timestamp('2025-06-08'::DATE)
+----
+1749340800
+
+query I
+SELECT unix_timestamp(NULL)
+----
+NULL
+
+# ─── from_unixtime ───────────────────────────────────────────────
+
+query T
+SELECT from_unixtime(1749393045, '%Y-%m-%d %H:%i:%s')
+----
+2025-06-08 14:30:45
+
+query I
+SELECT from_unixtime(NULL)
+----
+NULL

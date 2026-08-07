@@ -1,0 +1,97 @@
+# PG `round(x)` / `round(x, scale)` — half-away-from-zero rule
+# (NUMERIC semantic, NOT banker's rounding).
+# Two-arg form rounds to N decimal places (n>0) or to nearest
+# 10^|n| (n<0).
+
+# Half-step.
+query R
+SELECT round(0.5)
+----
+1
+
+query R
+SELECT round(1.5)
+----
+2
+
+query R
+SELECT round(2.5)
+----
+3
+
+query R
+SELECT round(-0.5)
+----
+-1
+
+query R
+SELECT round(-1.5)
+----
+-2
+
+# Quarter steps.
+query R
+SELECT round(0.4)
+----
+0
+
+query R
+SELECT round(0.6)
+----
+1
+
+# Two-arg form.
+query R
+SELECT round(1.2345, 2)
+----
+1.23
+
+query R
+SELECT round(1.23456, 3)
+----
+1.235
+
+query R
+SELECT round(2.55, 1)
+----
+2.6
+
+# Negative scale (round to tens/hundreds).
+query R
+SELECT round(15, -1)
+----
+20
+
+query R
+SELECT round(150, -2)
+----
+200
+
+# Integer passthrough.
+query I
+SELECT round(42)
+----
+42
+
+# NULL.
+query I
+SELECT round(NULL)
+----
+NULL
+
+query I
+SELECT round(1.5, NULL)
+----
+NULL
+
+# WHERE.
+statement ok
+CREATE TABLE u (id INT NOT NULL, x FLOAT NOT NULL)
+
+statement ok
+INSERT INTO u VALUES (1, 2.4), (2, 2.6)
+
+query I
+SELECT id FROM u WHERE round(x) = 3
+----
+2

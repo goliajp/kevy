@@ -1,0 +1,76 @@
+# PG `pg_typeof(any)` — sqlx / SQLAlchemy / Diesel introspection
+# probes. Canonical PG lowercase type name, NOT SPG's UPPERCASE
+# Display shape.
+
+query T
+SELECT pg_typeof(42)
+----
+integer
+
+query T
+SELECT pg_typeof(9999999999)
+----
+bigint
+
+query T
+SELECT pg_typeof('hi'::text)
+----
+text
+
+query T
+SELECT pg_typeof(true)
+----
+boolean
+
+# NULL has no resolved value-level type.
+query T
+SELECT pg_typeof(NULL)
+----
+unknown
+
+query T
+SELECT pg_typeof(3.14::float)
+----
+double precision
+
+query T
+SELECT pg_typeof('2025-06-08'::DATE)
+----
+date
+
+query T
+SELECT pg_typeof('2025-06-08 14:30:45'::TIMESTAMP)
+----
+timestamp without time zone
+
+query T
+SELECT pg_typeof('{}'::json)
+----
+json
+
+query T
+SELECT pg_typeof(gen_random_uuid())
+----
+uuid
+
+# Column-routed checks — exercise column→value type propagation.
+statement ok
+CREATE TABLE t (id INT NOT NULL, body TEXT, n NUMERIC(10,2))
+
+statement ok
+INSERT INTO t VALUES (1, 'x', 3.50)
+
+query T
+SELECT pg_typeof(id) FROM t
+----
+integer
+
+query T
+SELECT pg_typeof(body) FROM t
+----
+text
+
+query T
+SELECT pg_typeof(n) FROM t
+----
+numeric

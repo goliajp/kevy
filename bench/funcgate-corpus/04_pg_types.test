@@ -1,0 +1,101 @@
+# PG-specific column types: SMALLINT / NUMERIC / VARCHAR / CHAR / DEFAULT.
+# v1.11 added SMALLINT/VARCHAR/CHAR/DEFAULT; v1.12 adds NUMERIC.
+
+statement ok
+CREATE TABLE small_ints (x SMALLINT)
+
+statement ok
+CREATE TABLE money (price NUMERIC(10, 2))
+
+# NUMERIC stores exact decimals — no f64 rounding artifacts.
+statement ok
+INSERT INTO money VALUES (123.45)
+
+statement ok
+INSERT INTO money VALUES (-9.99)
+
+statement ok
+INSERT INTO money VALUES (0.01)
+
+# Sorted by exact decimal value — no f64 rounding artifacts.
+query T nosort
+SELECT price FROM money ORDER BY price
+----
+-9.99
+0.01
+123.45
+
+# NUMERIC(10, 2) leaves 8 integer digits — 100000000 (9 digits) overflows.
+statement error
+INSERT INTO money VALUES (100000000.00)
+
+# But 99999999.99 (8 + 2 = 10 digits) fits exactly.
+statement ok
+INSERT INTO money VALUES (99999999.99)
+
+statement ok
+CREATE TABLE bounded (name VARCHAR(64))
+
+statement ok
+CREATE TABLE fixed (code CHAR(4))
+
+statement ok
+CREATE TABLE with_default (id INT NOT NULL, n INT DEFAULT 0)
+
+# SMALLINT round-trips an i16.
+statement ok
+INSERT INTO small_ints VALUES (-100)
+
+statement ok
+INSERT INTO small_ints VALUES (30000)
+
+# SMALLINT rejects out-of-range values.
+statement error
+INSERT INTO small_ints VALUES (40000)
+
+query I rowsort
+SELECT x FROM small_ints
+----
+-100
+30000
+
+# VARCHAR enforces its max-length on insert.
+statement ok
+INSERT INTO bounded VALUES ('alice')
+
+statement error
+INSERT INTO bounded VALUES ('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+
+query T rowsort
+SELECT name FROM bounded
+----
+alice
+
+# CHAR(4) right-pads on insert. We verify the padded length rather
+# than the raw cell so trailing-space rendering isn't a concern.
+statement ok
+INSERT INTO fixed VALUES ('ab')
+
+query I rowsort
+SELECT length(code) FROM fixed
+----
+2
+
+# CHAR(n) rejects values longer than n.
+statement error
+INSERT INTO fixed VALUES ('toolong')
+
+# DEFAULT fills omitted columns on column-list INSERT.
+statement ok
+INSERT INTO with_default (id) VALUES (1)
+
+statement ok
+INSERT INTO with_default VALUES (2, 99)
+
+query II rowsort
+SELECT id, n FROM with_default
+----
+1
+0
+2
+99

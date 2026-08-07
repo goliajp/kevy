@@ -1,0 +1,53 @@
+# PG `sign(x)` — -1 / 0 / 1.
+
+query I
+SELECT sign(5)
+----
+1
+
+query I
+SELECT sign(-5)
+----
+-1
+
+query I
+SELECT sign(0)
+----
+0
+
+query R
+SELECT sign(0.001)
+----
+1
+
+query R
+SELECT sign(-0.001)
+----
+-1
+
+query I
+SELECT sign(-9999999999)
+----
+-1
+
+query I
+SELECT sign(NULL)
+----
+NULL
+
+# Branch-by-sign pattern.
+statement ok
+CREATE TABLE bal (id INT NOT NULL, amount FLOAT NOT NULL)
+
+statement ok
+INSERT INTO bal VALUES (1, 100.0), (2, -50.0), (3, 0.0)
+
+query IR nosort
+SELECT id, sign(amount) FROM bal ORDER BY id
+----
+1
+1
+2
+-1
+3
+0
