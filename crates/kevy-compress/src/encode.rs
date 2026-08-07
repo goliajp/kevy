@@ -161,29 +161,7 @@ fn serialize_high(
     lits.extend_from_slice(&input[tail.start - d..tail.end - d]);
     let mut out = Vec::with_capacity(input.len().min(cap) + 16);
     crate::push_varint(&mut out, lits.len());
-    // Three literal encodings compete; smallest wins. Flag 2 (the
-    // file-scoped shared table) has no per-record header, which is
-    // what lets entropy coding engage at 400 B.
-    let shared_bytes = lens.and_then(|l| {
-        let mut hist = [0u64; 256];
-        for &b in &lits {
-            hist[b as usize] += 1;
-        }
-        crate::huff::cost_bits(&hist, l).map(|bits| bits.div_ceil(8) as usize)
-    });
-    let inline = crate::huff::encode(&lits);
-    let inline_len = inline.as_ref().map_or(usize::MAX, Vec::len);
-    let shared_len = shared_bytes.unwrap_or(usize::MAX);
-    if shared_len < inline_len && shared_len < lits.len() {
-        out.push(2);
-        crate::huff::write_bits(&lits, lens.expect("shared_len set"), &mut out);
-    } else if let Some(coded) = inline.filter(|c| c.len() < lits.len()) {
-        out.push(1);
-        out.extend_from_slice(&coded);
-    } else {
-        out.push(0);
-        out.extend_from_slice(&lits);
-    }
+    emit_literal_block(&lits, lens, &mut out);
     for s in seqs {
         let lit_len = s.lits.len();
         let mat = s.len - MIN_MATCH;
@@ -240,6 +218,33 @@ pub(crate) fn try_high(
             (if used_dict { TAG_LZ_DICT } else { TAG_LZ }, true)
         }
         None => (TAG_LZ, false),
+    }
+}
+
+/// Three literal encodings compete; smallest wins. Flag 2 (the
+/// file-scoped shared table) has no per-record header, which is what
+/// lets entropy coding engage at 400 B; flag 1 carries its own table;
+/// flag 0 is raw — K2 at every layer.
+fn emit_literal_block(lits: &[u8], lens: Option<&[u8; 256]>, out: &mut Vec<u8>) {
+    let shared_bytes = lens.and_then(|l| {
+        let mut hist = [0u64; 256];
+        for &b in lits {
+            hist[b as usize] += 1;
+        }
+        crate::huff::cost_bits(&hist, l).map(|bits| bits.div_ceil(8) as usize)
+    });
+    let inline = crate::huff::encode(lits);
+    let inline_len = inline.as_ref().map_or(usize::MAX, Vec::len);
+    let shared_len = shared_bytes.unwrap_or(usize::MAX);
+    if shared_len < inline_len && shared_len < lits.len() {
+        out.push(2);
+        crate::huff::write_bits(lits, lens.expect("shared_len set"), out);
+    } else if let Some(coded) = inline.filter(|c| c.len() < lits.len()) {
+        out.push(1);
+        out.extend_from_slice(&coded);
+    } else {
+        out.push(0);
+        out.extend_from_slice(lits);
     }
 }
 
