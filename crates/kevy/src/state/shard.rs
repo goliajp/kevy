@@ -204,6 +204,15 @@ impl ShardCtx {
         self.persist_stats.set((in_flight, aof_rewrites_total));
     }
 
+    /// Fold this tick's lateness into the shard's stall gauge
+    /// (`fetch_max` — the gauge is a high-water mark, not a sum).
+    pub(crate) fn note_tick_gap(&self, excess_us: u64) {
+        self.with_stats_slot(|st| {
+            st.tick_gap_max_us
+                .fetch_max(excess_us, std::sync::atomic::Ordering::Relaxed);
+        });
+    }
+
     pub(crate) fn set_aof_format(&self, format: u8) {
         self.aof_format.set(format);
     }
