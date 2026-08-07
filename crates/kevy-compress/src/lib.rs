@@ -214,17 +214,7 @@ pub fn train(samples: &[&[u8]], budget: usize) -> Vec<u8> {
     // to leave meaningful content after it skips the table.
     let header = DICT_MAGIC.len() + huff::HEADER_LEN;
     if budget >= header * 8 {
-        let mut hist = [1u64; 256];
-        for s in samples {
-            for &b in *s {
-                hist[b as usize] += 1;
-            }
-        }
-        dict.extend_from_slice(DICT_MAGIC);
-        let lens = huff::code_lengths(&hist);
-        for pair in lens.chunks_exact(2) {
-            dict.push(pair[0] | (pair[1] << 4));
-        }
+        emit_table(samples, &mut dict);
     }
     // Content is what back-references reach: clamp IT to the offset
     // limit; the header rides above that reach.
@@ -251,6 +241,22 @@ pub fn train(samples: &[&[u8]], budget: usize) -> Vec<u8> {
         i += stride;
     }
     dict
+}
+
+/// The dictionary's file-scoped entropy table: magic + packed code
+/// lengths from an add-one-smoothed histogram of the sample bytes.
+fn emit_table(samples: &[&[u8]], dict: &mut Vec<u8>) {
+    let mut hist = [1u64; 256];
+    for s in samples {
+        for &b in *s {
+            hist[b as usize] += 1;
+        }
+    }
+    dict.extend_from_slice(DICT_MAGIC);
+    let lens = huff::code_lengths(&hist);
+    for pair in lens.chunks_exact(2) {
+        dict.push(pair[0] | (pair[1] << 4));
+    }
 }
 
 /// Sample identity for training dedup — FNV-1a over the whole sample.

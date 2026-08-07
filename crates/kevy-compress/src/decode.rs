@@ -46,6 +46,34 @@ pub(crate) fn lz(dict: &[u8], payload: &[u8], orig_len: usize) -> Result<Vec<u8>
     if out.len() == orig_len { Ok(out) } else { Err(Corrupt) }
 }
 
+/// The literal section by flag: raw slice (0), inline-table Huffman
+/// (1), or the dictionary's file-scoped table (2 — a frame that needs
+/// it cannot decode without its dictionary). Returns the literals and
+/// the section's byte length.
+fn read_literal_block<'a>(
+    flag: u8,
+    rest: &'a [u8],
+    lit_total: usize,
+    lens: Option<&[u8; 256]>,
+) -> Result<(alloc::borrow::Cow<'a, [u8]>, usize), Corrupt> {
+    match flag {
+        0 => {
+            let l = rest.get(..lit_total).ok_or(Corrupt)?;
+            Ok((alloc::borrow::Cow::Borrowed(l), lit_total))
+        }
+        1 => {
+            let (l, used) = crate::huff::decode(rest, lit_total)?;
+            Ok((alloc::borrow::Cow::Owned(l), used))
+        }
+        2 => {
+            let l = lens.ok_or(Corrupt)?;
+            let (out, bits) = crate::huff::read_bits(rest, l, lit_total)?;
+            Ok((alloc::borrow::Cow::Owned(out), bits.div_ceil(8) as usize))
+        }
+        _ => Err(Corrupt),
+    }
+}
+
 /// Nibble plus 255-continuation extension.
 fn read_len(payload: &[u8], p: &mut usize, nibble: usize) -> Result<usize, Corrupt> {
     if nibble < 15 {
@@ -112,25 +140,7 @@ pub(crate) fn lz_high(
 ) -> Result<Vec<u8>, Corrupt> {
     let (lit_total, rest) = crate::read_varint(payload)?;
     let (&flag, rest) = rest.split_first().ok_or(Corrupt)?;
-    let (lits, seq_start): (alloc::borrow::Cow<'_, [u8]>, usize) = match flag {
-        0 => {
-            let l = rest.get(..lit_total).ok_or(Corrupt)?;
-            (alloc::borrow::Cow::Borrowed(l), lit_total)
-        }
-        1 => {
-            let (l, used) = crate::huff::decode(rest, lit_total)?;
-            (alloc::borrow::Cow::Owned(l), used)
-        }
-        2 => {
-            // File-scoped table: the lengths live in the dictionary
-            // header, not the frame — a frame that needs them cannot
-            // decode without its dictionary.
-            let l = lens.ok_or(Corrupt)?;
-            let (out, bits) = crate::huff::read_bits(rest, l, lit_total)?;
-            (alloc::borrow::Cow::Owned(out), bits.div_ceil(8) as usize)
-        }
-        _ => return Err(Corrupt),
-    };
+    let (lits, seq_start) = read_literal_block(flag, rest, lit_total, lens)?;
     let seqs = rest.get(seq_start..).ok_or(Corrupt)?;
     let mut out = Vec::with_capacity(orig_len);
     let (mut p, mut lp) = (0usize, 0usize);
