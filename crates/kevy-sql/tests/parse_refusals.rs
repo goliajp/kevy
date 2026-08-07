@@ -110,11 +110,6 @@ fn create_variants_refused() {
 #[test]
 fn type_refusals() {
     refuses("CREATE TABLE t (id bigint PRIMARY KEY, a bytea);", "type 'bytea' is not in the compilable subset", 1);
-    refuses(
-        "CREATE TABLE t (id bigint PRIMARY KEY, a timestamp with time zone);",
-        "'timestamp with time zone'",
-        1,
-    );
     refuses("CREATE TABLE t (id bigint PRIMARY KEY, a text(5));", "takes no arguments", 1);
 }
 
@@ -164,4 +159,14 @@ fn unenforceable_column_constraints_become_notes() {
     let notes = c.notes.join("\n");
     assert!(notes.contains("t.a: NOT NULL is not enforced"), "notes: {notes}");
     assert!(notes.contains("t.b: DEFAULT dropped"), "notes: {notes}");
+}
+
+/// PG's canonical long spellings compile — `timestamp with time zone`
+/// is timestamptz (str, note-carried), not a refusal: pg_dump writes
+/// the long form on every timestamptz column.
+#[test]
+fn timestamp_long_spellings_compile() {
+    let c = compile("CREATE TABLE t (id bigint PRIMARY KEY, a timestamp with time zone);")
+        .expect("timestamptz compiles");
+    assert!(c.notes.join("\n").contains("timestamptz"), "{:?}", c.notes);
 }
