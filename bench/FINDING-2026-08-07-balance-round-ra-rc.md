@@ -109,3 +109,29 @@ budget bounds spillable values; maxmemory + policy bounds the rest);
 frag under the mixed small-value shape ran 2.1–3.9× (vs 1.32× at the
 uniform-4KiB envelope) — the value-size dependence of the fragmentation
 story, now measured from the stability side too.
+
+## R-D.8 second soak: survived the hour — and unmasked the second industrial defect
+
+Take 2 (cap-fixed build, "maxmemory 6gb + allkeys-lru") ran the full
+60 minutes: no death, frag converged 2.2 → 1.67 with no upward creep,
+used sawtoothed in multi-GB drops with `evicted_keys` stubbornly zero
+— and used peaked ABOVE the configured cap. A 5-minute local test
+(2 shards, 100MB cap, write 250MB) turned suspicion into a number:
+**steady state 205MB = 2 × the cap.**
+
+**maxmemory was enforced per shard without dividing by shard count**
+— at `on_shard_init` AND at the 100ms tick re-apply (fixing only the
+init site would last one tick). An N-shard server enforced N× the
+configured bound; the soak's 6GB cap was effectively 48GB, and the
+sawtooth was the single shard holding the giant lpush lists crossing
+6GB alone. The tier budget already divided per shard; maxmemory now
+does the same at both sites (`d4075a6f`). After: 102.2MB steady
+against 100MB (2.2% overshoot).
+
+The balance round's stability tally so far: two industrial-grade
+defects (a hidden 4GiB-per-class abort ceiling; an N× maxmemory
+enforcement error), both found by the first soak that ever ran, both
+fixed and re-validated same-day. Take 3 runs on the double-fixed
+build with enforcement real; the open question it answers: eviction
+counters, and whether giant-key eviction stalls the owning shard
+(the ~3/min >1s gaps' prime suspect).
