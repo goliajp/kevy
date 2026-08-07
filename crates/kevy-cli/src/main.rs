@@ -22,8 +22,7 @@ use kevy_resp_client::RespClient;
 use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
 
-const DEFAULT_HOST: &str = "127.0.0.1";
-const DEFAULT_PORT: u16 = 6379;
+use kevy_cli::{DEFAULT_HOST, DEFAULT_PORT};
 
 mod args;
 mod embed;
@@ -76,6 +75,20 @@ fn main() -> ExitCode {
 
 /// Route the non-REPL subcommands. `Some(code)` = handled, exit with it;
 /// `None` = no subcommand matched, continue down the redis-cli path.
+/// Say what a rebuild-frame walk left behind. Both `export` and
+/// `copy-prefix` read through the same rebuild set, so both can drop a
+/// type the set does not cover — and a tool that drops data while
+/// printing a success line is the failure this exists to prevent.
+fn report_skipped(verb: &str, skipped: &std::collections::BTreeMap<Vec<u8>, u64>) {
+    for (ty, count) in skipped {
+        eprintln!(
+            "kevy-cli {verb}: SKIPPED {count} key(s) of type '{}' — nothing here rebuilds \
+             that type, so they were NOT carried",
+            String::from_utf8_lossy(ty)
+        );
+    }
+}
+
 fn route_subcommand(args: &[String]) -> Option<ExitCode> {
     // `backup` / `restore` subcommands. Routed BEFORE the RESP
     // client setup because they're file-only operations (no TCP).
@@ -99,6 +112,12 @@ fn route_subcommand(args: &[String]) -> Option<ExitCode> {
     // SQL compiler (kevy-sql). File-first; TCP only under --apply.
     if !args.is_empty() && args[0] == "sql" {
         return Some(sqlcmd::run_sql_cli(&args[1..]));
+    }
+    // The migration-playbook tools: doctor, shadow, lint, backfill-keys.
+    // They route together because they are one family — read, report,
+    // move nothing — and the dispatch lives next to them.
+    if let Some(code) = kevy_cli::route_tool(args) {
+        return Some(code);
     }
     // Migration subcommands (TCP, host/port flags inline).
     if !args.is_empty() && (args[0] == "export" || args[0] == "import") {
@@ -327,7 +346,10 @@ fn run_migrate_cli(args: &[String]) -> ExitCode {
     };
     let res = if verb == "export" {
         kevy_cli::migrate::run_export(&mut client, prefix.as_deref(), std::path::Path::new(&file))
-            .map(|n| println!("exported {n} keys -> {file}"))
+            .map(|e| {
+                report_skipped("export", &e.skipped);
+                println!("exported {} keys -> {file}", e.keys);
+            })
     } else {
         kevy_cli::migrate::run_import(&mut client, std::path::Path::new(&file), resume, strict)
             .map(|r| {
@@ -442,7 +464,10 @@ fn run_bulk_cli(args: &[String]) -> ExitCode {
             let res: io::Result<()> = match (verb, pos.as_slice()) {
                 ("copy-prefix", [src, dst]) => {
                     kevy_cli::bulk::run_copy_prefix(&mut client, src.as_bytes(), dst.as_bytes(), rate)
-                        .map(|n| println!("copied {n} keys"))
+                        .map(|e| {
+                            report_skipped("copy-prefix", &e.skipped);
+                            println!("copied {} keys", e.keys);
+                        })
                 }
                 ("delete-prefix", [p]) => {
                     kevy_cli::bulk::run_delete_prefix(&mut client, p.as_bytes(), rate, dry_run)

@@ -1040,3 +1040,229 @@ fn relative_ttl_frames_do_not_reanchor_on_replay() {
     });
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `MSET` and a same-shard `RENAME` must survive a restart.
+///
+/// Both are served to clients by the routing layer, and the op records
+/// its effect into the AOF **using the same verb** — but replay goes
+/// through the local dispatcher, where `MSET` answered an arity error
+/// and `RENAME` was not implemented at all. The record was written and
+/// could not be replayed, so the write was acknowledged, readable, and
+/// gone after the next start. Measured before the fix, with
+/// `appendfsync always`: all four `MSET` keys absent, and `RENAME`
+/// *reverted* — the source key alive again, the destination missing.
+#[test]
+fn mset_and_rename_survive_a_restart() {
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-persist-replayverbs-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    // One shard, so RENAME takes the same-shard atomic op (the
+    // cross-shard two-step is a separate record path).
+    let nshards = 1;
+
+    with_runtime(free_port(), &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.write_all(&req(&[b"CONFIG", b"SET", b"appendfsync", b"always"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        c.write_all(&req(&[b"MSET", b"m:1", b"a", b"m:2", b"b"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        c.write_all(&req(&[b"SET", b"src", b"v"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        c.write_all(&req(&[b"RENAME", b"src", b"dst"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+    });
+
+    with_runtime(free_port(), &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.write_all(&req(&[b"GET", b"m:1"])).unwrap();
+        read_reply(&mut c, b"$1\r\na\r\n");
+        c.write_all(&req(&[b"GET", b"m:2"])).unwrap();
+        read_reply(&mut c, b"$1\r\nb\r\n");
+        c.write_all(&req(&[b"GET", b"dst"])).unwrap();
+        read_reply(&mut c, b"$1\r\nv\r\n");
+        // …and the rename really moved it rather than copying.
+        c.write_all(&req(&[b"GET", b"src"])).unwrap();
+        read_reply(&mut c, b"$-1\r\n");
+    });
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A cross-shard `RENAME` must survive a restart — every value type,
+/// its TTL, and the refusal branch.
+///
+/// The two halves land on different shards, and neither used to write a
+/// record at all: `Op::RenameTake` removed the source and `Op::RenamePut`
+/// placed the value, both silently, so a restart reverted the whole
+/// rename (source alive again, destination missing). The destination now
+/// records the value through the rewrite serializer, and the source
+/// records its delete **after** the put commits — never at take time,
+/// because a refused `RENAMENX` rolls the value back and an early
+/// delete would outlive that rollback as a lie.
+#[test]
+fn cross_shard_rename_survives_a_restart() {
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-persist-xrename-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let nshards = 4;
+
+    // Pick pairs that genuinely straddle two shards — a same-shard pair
+    // would exercise the atomic op and prove nothing about this path.
+    let cross = |a: &[u8], b: &[u8]| {
+        kevy_rt::shard_of_key(a, nshards, false) != kevy_rt::shard_of_key(b, nshards, false)
+    };
+    assert!(cross(b"src", b"dst"), "test fixture must be cross-shard");
+    assert!(cross(b"h:src", b"h:dst"), "hash fixture must be cross-shard");
+    assert!(cross(b"keep", b"taken"), "refusal fixture must be cross-shard");
+
+    with_runtime(free_port(), &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.write_all(&req(&[b"CONFIG", b"SET", b"appendfsync", b"always"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        c.write_all(&req(&[b"SET", b"src", b"v"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        c.write_all(&req(&[b"EXPIRE", b"src", b"1000"])).unwrap();
+        read_reply(&mut c, b":1\r\n");
+        c.write_all(&req(&[b"HSET", b"h:src", b"f", b"1"])).unwrap();
+        read_reply(&mut c, b":1\r\n");
+        c.write_all(&req(&[b"RENAME", b"src", b"dst"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        c.write_all(&req(&[b"RENAME", b"h:src", b"h:dst"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        // The refusal branch: dst exists, so the value goes home.
+        c.write_all(&req(&[b"SET", b"keep", b"mine"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        c.write_all(&req(&[b"SET", b"taken", b"theirs"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        c.write_all(&req(&[b"RENAMENX", b"keep", b"taken"])).unwrap();
+        read_reply(&mut c, b":0\r\n");
+    });
+
+    with_runtime(free_port(), &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.write_all(&req(&[b"GET", b"dst"])).unwrap();
+        read_reply(&mut c, b"$1\r\nv\r\n");
+        c.write_all(&req(&[b"GET", b"src"])).unwrap();
+        read_reply(&mut c, b"$-1\r\n");
+        // The TTL rode along rather than being dropped or reset.
+        c.write_all(&req(&[b"TTL", b"dst"])).unwrap();
+        let mut buf = [0u8; 32];
+        let n = c.read(&mut buf).unwrap();
+        let ttl: i64 = String::from_utf8_lossy(&buf[1..n - 2]).parse().unwrap();
+        assert!((900..=1000).contains(&ttl), "TTL must survive the move: {ttl}");
+        c.write_all(&req(&[b"HGET", b"h:dst", b"f"])).unwrap();
+        read_reply(&mut c, b"$1\r\n1\r\n");
+        c.write_all(&req(&[b"EXISTS", b"h:src"])).unwrap();
+        read_reply(&mut c, b":0\r\n");
+        // Refused rename: both keys exactly as they were.
+        c.write_all(&req(&[b"GET", b"keep"])).unwrap();
+        read_reply(&mut c, b"$4\r\nmine\r\n");
+        c.write_all(&req(&[b"GET", b"taken"])).unwrap();
+        read_reply(&mut c, b"$6\r\ntheirs\r\n");
+    });
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Every value type — and its TTL — must round-trip through a snapshot.
+///
+/// The snapshot is the *second* writer of the same data (the AOF is the
+/// first), with its own format and its own loader. The AOF pair turned
+/// out to have three holes where a value was written in a form its
+/// reader could not restore, so the sibling pair deserves the same
+/// question asked of it rather than assumed. Today's answer is clean;
+/// this keeps it that way. Existing coverage was strings
+/// (`data_survives_restart_via_save`) and stream groups only.
+#[test]
+fn every_value_type_round_trips_through_a_snapshot() {
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-persist-snaptypes-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let nshards = 2;
+
+    with_runtime_configured(free_port(), &dir, nshards, |rt| rt.with_aof(false), |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.write_all(&req(&[b"SET", b"str", b"v"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        c.write_all(&req(&[b"EXPIRE", b"str", b"500"])).unwrap();
+        read_reply(&mut c, b":1\r\n");
+        c.write_all(&req(&[b"HSET", b"h", b"f1", b"1", b"f2", b"2"])).unwrap();
+        read_reply(&mut c, b":2\r\n");
+        c.write_all(&req(&[b"RPUSH", b"l", b"a", b"b", b"c"])).unwrap();
+        read_reply(&mut c, b":3\r\n");
+        c.write_all(&req(&[b"SADD", b"s", b"m1", b"m2"])).unwrap();
+        read_reply(&mut c, b":2\r\n");
+        c.write_all(&req(&[b"ZADD", b"z", b"2.5", b"zn"])).unwrap();
+        read_reply(&mut c, b":1\r\n");
+        c.write_all(&req(&[b"HSET", b"hx", b"g", b"1"])).unwrap();
+        read_reply(&mut c, b":1\r\n");
+        c.write_all(&req(&[b"HEXPIRE", b"hx", b"400", b"FIELDS", b"1", b"g"])).unwrap();
+        read_reply(&mut c, b"*1\r\n:1\r\n");
+        c.write_all(&req(&[b"XADD", b"strm", b"1-1", b"f", b"v"])).unwrap();
+        read_reply(&mut c, b"$3\r\n1-1\r\n");
+        c.write_all(&req(&[b"SAVE"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+    });
+
+    // Prove the snapshot is what carries this: a dump per shard, and no
+    // AOF anywhere. Without this the test could pass vacuously on an AOF
+    // that was never disabled.
+    let dumps = (0..nshards).filter(|i| dir.join(format!("dump-{i}.rdb")).exists()).count();
+    assert!(dumps > 0, "no snapshot was written — nothing to round-trip");
+    let aofs = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".aof"))
+        .count();
+    assert_eq!(aofs, 0, "an AOF exists, so the snapshot is not what is under test");
+
+    with_runtime_configured(free_port(), &dir, nshards, |rt| rt.with_aof(false), |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.write_all(&req(&[b"GET", b"str"])).unwrap();
+        read_reply(&mut c, b"$1\r\nv\r\n");
+        c.write_all(&req(&[b"HGET", b"h", b"f2"])).unwrap();
+        read_reply(&mut c, b"$1\r\n2\r\n");
+        c.write_all(&req(&[b"LRANGE", b"l", b"0", b"-1"])).unwrap();
+        read_reply(&mut c, b"*3\r\n$1\r\na\r\n$1\r\nb\r\n$1\r\nc\r\n");
+        c.write_all(&req(&[b"SISMEMBER", b"s", b"m2"])).unwrap();
+        read_reply(&mut c, b":1\r\n");
+        c.write_all(&req(&[b"ZSCORE", b"z", b"zn"])).unwrap();
+        read_reply(&mut c, b"$3\r\n2.5\r\n");
+        c.write_all(&req(&[b"XRANGE", b"strm", b"-", b"+"])).unwrap();
+        read_reply(&mut c, b"*1\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n");
+        // The two TTL flavours: key-level and hash-field-level. Both are
+        // absolute deadlines, so they come back a little smaller.
+        for (probe, floor) in [
+            (req(&[b"TTL", b"str"]), 400i64),
+            (req(&[b"HTTL", b"hx", b"FIELDS", b"1", b"g"]), 300i64),
+        ] {
+            c.write_all(&probe).unwrap();
+            let mut buf = [0u8; 64];
+            let n = c.read(&mut buf).unwrap();
+            let text = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let secs: i64 = text
+                .rsplit(':')
+                .next()
+                .and_then(|t| t.trim_end_matches("\r\n").parse().ok())
+                .unwrap_or(-1);
+            assert!(secs > floor, "TTL must survive the snapshot, got {text:?}");
+        }
+    });
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

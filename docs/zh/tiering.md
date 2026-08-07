@@ -78,6 +78,17 @@ cold key ≈ 96 B (entry overhead) + key heap bytes     # value fully reclaimed
 冷键公式以 ±20 % 的容差对照实测 RSS 由门禁把守（`bench/memgate.sh`）。有两条值得据此做规划的推论，都来自这套容量模型：
 
 - **约 64 B 的值永远不可能有利可图地分层**——stub 差不多和值一样大。低于 64 字节下沉门槛的值从不下沉。`data:RAM` 比随值大小线性增长；每条容量门禁都写明自己的值大小，原因正在于此。
+- **已实测（2026-08-05）。** 比例曲线不再只是模型。同一预算、同一键长，只变值大小：
+
+  | 值大小 | 实测 data:RAM |
+  |---:|---:|
+  | 256 B | **2.65×** |
+  | 1 KiB | **10.43×** |
+  | 4 KiB | **39.2×**（全尺度：2 GB 预算扛 80 GB 数据） |
+
+  地板是每条目约 96 B 的**键空间条目**（键长 9 B 时；键长 48 B 时约 143 B）——不是 stub，stub 本身 24 B 内联、不占堆；这 96 B 是每个键无论冷热都要付的，分层能还回值、还不回键。它在测过的每个尺度上都是平的，于是上限可以预测：**上限 data:RAM ≈ 值大小 /（96 B + key heap）**，对上面三行分别预测 2.67× / 10.7× / 42.7×。
+
+  **256 B 时预算不是紧，而是根本守不住**：20 万条就越过 16 MB 预算，80 万条时用到 77 MB——因为降级一个 256 B 值省下的还不够它留下的 stub。窄记录要手算着定预算。
 - **算例（按模型推算，不是实测）**：10 M 行 × 约 1 KiB（约 10 GB 数据）加 2 个二级索引和存储的 VALUES 列，装进 **3 GB** 预算：stub 下限 10 M × 约 108 B ≈ 1.1 GB，索引下限 10 M ×（68 + 68 + 约 30 VALUES 字节）≈ 1.7 GB，合计 ≈ 2.8 GB ≤ 3 GB。值为 4 KiB 时，比例门禁是 ≥ 10× `data:RAM`（5 M × 4 KiB = 20 GB 对 2 GB 预算；stub 下限 ≈ 540 MB）。窄行由每键固定成本主导——在相信任何预算之前，先把 stub 下限和索引下限算一遍，这正是公式放在前面的原因。
 
 ## 冷键上的语义
@@ -133,7 +144,7 @@ cold key ≈ 96 B (entry overhead) + key heap bytes     # value fully reclaimed
 照实说，并标明每个数字是实测还是待测：
 
 - **热路径：结构不变。**热值读写路径只多出一个永远不会命中的 match 分支；分层编译进来但关闭时，perfgate 的 12 项指标按既有容差把关；分层打开且工作集全热时，新的 `tiered_hotset_*` 行以同样方式把关。**基线待专用基准机记录**——门禁行已经存在，在那之前显式跳过并提示。
-- **冷点读 = 一次定位读**加一次 CRC 校验和一次解码。`kevy-vlog` 微基准测得 `read_at` 在各记录大小下为 0.64–14 µs（开发机 NVMe）。门禁要压的端到端 SLA——标量 p99 嵌入式 ≤ 100 µs / 服务端 ≤ 300 µs，整行 hash 物化 ≤ 200 µs / ≤ 500 µs——**待基准机 envelope 运行**（`bench/capacity-envelope.sh`）；在它跑完之前，这些是目标，不是测量结果。
+- **冷点读 = 一次定位读**加一次 CRC 校验和一次解码。`kevy-vlog` 微基准测得 `read_at` 在各记录大小下为 0.64–14 µs（开发机 NVMe）。门禁要压的端到端 SLA——标量 p99 嵌入式 ≤ 100 µs / 服务端 ≤ 300 µs，整行 hash 物化 ≤ 200 µs / ≤ 500 µs——**服务端已实测**：envelope 运行下标量 p99 落在 79–171 µs、整行 hash 145 µs，数据集从 20 GB 涨到 120 GB（6 倍）延迟基本持平。嵌入式那两个仍是目标——envelope 驱动的是服务端。
 - **嵌入式在冷读期间持有 shard 锁。**进程内没有 reactor 可以把读转交出去：一次冷物化在 shard 写锁下做 pread（1-shard 默认 = 整个 store），期间该 shard 的读者会被停住——NVMe 上是 µs 级，云块存储上可能到 ms 级，值越大按比例越久。嵌入式配置默认把可下沉的最大值封在 **256 KiB**（`max_spill_value`；`with_max_spill_value(bytes)`，0 = 不限），把这个窗口约束住——超限的值就留在热层。服务端不设上限（thread-per-core 的 shard 不共享锁）。彻底消掉这个窗口的 drop-lock / pread / relock 方案已有设计，明确排在 post-v4。
 - **批量 hydration：每行一次读。**一页 `FIELDS` hydration 或对冷行的 `VIEW.HYDRATE` 会按 log 位置合并读请求、作为一批提交（io_uring：副环上的链式读；poller / 嵌入式：有序定位读循环）。一次读解码一行**全部**被请求的字段——计数器断言 `preads == cold rows`，从不是 `rows × fields`。
 - **index-only 查询零行触达**——FILTER / SORT / COUNT 从常驻 RAM 的索引列作答，所以在一张全冷的表上它们做零次磁盘读（计数器断言）。这正是在分层表上声明 `VALUES` 列的理由：见 [tables.md](tables.md)。
@@ -147,17 +158,21 @@ cold key ≈ 96 B (entry overhead) + key heap bytes     # value fully reclaimed
 - value log 位于 `<data>/tier/`（或 `[tiering] spill_dir`），**每次 open 时删除**，随重放越过水位线而重建。不要备份它；不要让两个 store 指向同一个下沉目录。
 - 段文件按 256 MiB 轮转；已封口的段在存活比低于 50 % 时压实（空间放大 ≤ 存活冷字节的 2.0×，有门禁）。压实尊重 pin——进行中的快照或 AOF rewrite 会让它的段文件保持可读，直到它结束。
 - 每条记录携带 CRC32C；下沉区里的位腐坏在读取时被拒绝，而不是被端出去。
-- **数据集 > 预算的启动能工作**：重放一边走一边检查水位线、就地下沉，所以整个启动过程 RSS 保持 ≤ 预算 × 1.05（有门禁），而不是在分层还没运转之前就 OOM。同样的就地 demote 也作用于 reshard 与副本快照装载。
-- 在大部分数据已冷的 store 上做快照 / `BGREWRITEAOF` / 复制全量同步，会从被 pin 住的 log 流式读出冷值而**不 promote 任何东西**——额外 RAM 峰值是一个值，且 rewrite 不丢任何冷值（有门禁）。
-- 持续保持 RSS ≤ 预算 × 1.05 是一条独立门禁行，包括 auto 探测在 cgroup 容器内和裸机上都回答正确。
+- **数据集 > 预算的启动能工作**：重放一边走一边检查水位线、就地下沉，而不是在分层还没运转之前就 OOM。同样的就地 demote 也作用于 reshard 与副本快照装载。2026-08-05 实测——2.3 GB 的 AOF 对 64 MB 预算（36 倍）干净重放，30 万行全在，`used_memory` 稳定在 35 MB，离上限很远。
+
+  **RSS 是另一回事，本页此前把它说过头了。** 它声称启动全程 RSS ≤ 预算 × 1.05 并称其"有门禁"，两句都不成立：那次重放实测 RSS 峰值 **137 MB，是预算的 2.15 倍**——与容量扫描在稳态测到的是同一份分配器开销；而 `tiergate` 的 L11 行**根本还没有测量体**（显示 PENDING）。启动全程成立的是**逻辑**边界，那才是分层记的账；**按 RSS 配机器，别按预算配**。
+- 在大部分数据已冷的 store 上做快照 / `BGREWRITEAOF` / 复制全量同步，会从被 pin 住的 log 流式读出冷值而**不 promote 任何东西**——额外 RAM 峰值是一个值，且 rewrite 不丢任何冷值。**2026-08-05 实测，不是门禁**：60 000 个键其中 54 912 已冷，`BGREWRITEAOF` 后重启，60 000 个全部回来，跨区间抽检的每个键长度都对，AOF 重放干净。`tiergate` 对应的 L10 行仍是 `PENDING`，所以这条靠的是那次实测，不是 CI。
+- **持续保持 `used_memory` ≤ 预算 × 1.05** 是一条独立门禁行（`tiergate` L8），包括 auto 探测在 cgroup 容器内和裸机上都回答正确。它压的是**逻辑**边界——门禁把 RSS 报在旁边，而不是钳住它。2026-08-05 实测：`used_memory` 253 MB 对上限 281 MB，同时报告 RSS 488 MB（预算的 1.93 倍）。把这行读成 RSS 保证，正是本页上面两条曾经犯的错。
 
 ## 门禁状态（诚实账本）
 
-上文所有机制性主张都由本树中运行的测试和门禁覆盖（透明性套件、分层持久化套件、`bench/memgate.sh`、`bench/tiergate.sh`）。**实测 envelope 数字**——冷读 p99、写入翻涌下的 vlog 空间放大、10× 容量比、带 hydration p95 的 10M 行综合 envelope、规模化的 hydration 批量、混合负载隔离——**待专用基准机**：`bench/capacity-envelope.sh` 是一键运行器，在它跑完之前 `bench/tiergate.sh` 在这些行上保持红色。本页把目标写成目标，在门禁记录之前不会引用任何 envelope 数字。
+上文所有机制性主张都由本树中运行的测试和门禁覆盖（透明性套件、分层持久化套件、`bench/memgate.sh`、`bench/tiergate.sh`）。**envelope 数字**由专用基准机上的 `bench/capacity-envelope.sh` 实测：冷读 p99、写入翻涌下的 vlog 空间放大、容量比，本页与 `bench/FINDING-2026-08-05-capacity-ceiling-sweep.md` 都有数。
+
+而 `bench/tiergate.sh` **在一份全新检出里仍然把那几行显示为待测**——这是设计而非自相矛盾：门禁消费的是基准机产出的结果文件，没拿到结果文件的树就是什么都没验证过。跑完 envelope、把 `bench/.capacity-envelope-results` 带回来、再 `TIERGATE_RUN_ENVELOPE=1 bash bench/tiergate.sh`，那几行才凭证据翻绿，而不是凭这段话。只跑一半会写进它自己的结果文件，理由相同：**绝不能把缺行的结果文件递给门禁**。
 
 ## 参见
 
 - [tables.md](tables.md)——与分层一起设计的 TABLE.* 层：索引热、行冷、index-only 查询零行触达。
 - [persistence.md](persistence.md)——被刻意保持不动的持久化契约。
 - [tuning.md](tuning.md)——与 tier 预算共存的内存旋钮（`maxmemory` 及其同伴）。
-- [`bench/tiergate.sh`](../bench/tiergate.sh) / [`bench/capacity-envelope.sh`](../bench/capacity-envelope.sh)——本页引用或悬置的每个数字背后的验收门禁与 envelope 运行器。
+- [`bench/tiergate.sh`](../../bench/tiergate.sh) / [`bench/capacity-envelope.sh`](../../bench/capacity-envelope.sh)——本页引用或悬置的每个数字背后的验收门禁与 envelope 运行器。

@@ -319,3 +319,45 @@ fn prefix_stats_fanout() {
     assert!(s.contains("keys\r\n:20\r\n"), "20 keys under ps:, got {s}");
     assert!(s.contains("expires\r\n:1\r\n"), "1 ttl'd, got {s}");
 }
+
+/// A cross-shard `RENAME` must reach the change feed on both ends.
+///
+/// It did not. Until 2026-08-05 the destination write (`Op::RenamePut`)
+/// carried no logging at all — not AOF, not the feed — so a consumer
+/// rebuilding state from frames kept the old key forever and never
+/// learned the new one. Nobody hit it because nobody consumes the feed
+/// yet; that is exactly the reason to hold it with a test rather than
+/// with adoption.
+#[test]
+fn cross_shard_rename_reaches_the_feed_on_both_ends() {
+    let cross = |a: &[u8], b: &[u8]| {
+        kevy_rt::shard_of_key(a, NSHARDS, false) != kevy_rt::shard_of_key(b, NSHARDS, false)
+    };
+    assert!(cross(b"fsrc", b"fdst"), "fixture must straddle two shards");
+    let src_sh = kevy_rt::shard_of_key(b"fsrc", NSHARDS, false);
+    let dst_sh = kevy_rt::shard_of_key(b"fdst", NSHARDS, false);
+
+    let srv = Feed::start();
+    let mut c = srv.connect();
+    cmd(&mut c, &[b"SET", b"fsrc", b"payload"]);
+    assert_eq!(cmd(&mut c, &[b"RENAME", b"fsrc", b"fdst"]), b"+OK\r\n");
+
+    let frames = |c: &mut std::net::TcpStream, sh: usize| {
+        String::from_utf8_lossy(&cmd(
+            c,
+            &[b"FEED.READ", sh.to_string().as_bytes(), b"1", b"0", b"COUNT", b"100"],
+        ))
+        .into_owned()
+    };
+
+    // The destination shard learns the value, not just the name.
+    let dst = frames(&mut c, dst_sh);
+    assert!(dst.contains("fdst"), "destination shard saw no frame for fdst: {dst}");
+    assert!(dst.contains("payload"), "the value must travel with it: {dst}");
+
+    // The source shard records the removal — an idempotent consumer
+    // replaying both streams must not end up holding the key twice.
+    let src = frames(&mut c, src_sh);
+    assert!(src.contains("DEL"), "source shard saw no removal of fsrc: {src}");
+    assert!(src.contains("fsrc"), "the removal must name the key: {src}");
+}

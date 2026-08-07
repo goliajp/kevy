@@ -216,6 +216,17 @@ impl<C: Commands> Shard<C> {
         put_stored: Option<bool>,
     ) {
         if put_stored.unwrap_or(false) {
+            // The put committed, so the source's half of the record is
+            // now safe to write — and only now. `RenameStep::Restore`
+            // exists precisely because an NX-refused put rolls the value
+            // back, and a delete recorded at take time would have
+            // outlived that rollback as a lie.
+            let src_shard = self.shard_of(&src);
+            if src_shard == self.id {
+                self.log_rename_source_committed(&src);
+            } else {
+                self.send_to(src_shard, Inbound::RenameCommitted { src });
+            }
             let reply = if nx { b":1\r\n".to_vec() } else { b"+OK\r\n".to_vec() };
             self.fill_rename_slot(conn_id, seq, reply);
             return;

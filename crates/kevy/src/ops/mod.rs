@@ -23,6 +23,7 @@ mod memory;
 pub(crate) mod replication;
 pub(crate) mod scope_move;
 mod scope_move_emit;
+mod scope_move_ingest;
 mod scope_move_stream;
 pub(crate) mod stats;
 mod info_sections;

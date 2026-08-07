@@ -144,6 +144,33 @@ from the capacity model:
   big as the value. Values below the 64-byte spill threshold are
   never spilled. The data:RAM ratio grows linearly with value size;
   every capacity gate names its value size for exactly this reason.
+- **Measured, 2026-08-05.** The ratio curve is no longer only a model.
+  Same budget and keys, only the value size varied (`INFO Tiering`'s
+  `stub_bytes` is the floor doing the work):
+
+  | value size | data:RAM achieved |
+  |---:|---:|
+  | 256 B | **2.65×** |
+  | 1 KiB | **10.43×** |
+  | 4 KiB | **39.2×** (full scale, 2 GB budget, 80 GB of data) |
+
+  The floor is ~96 B per entry at a 9-byte key (~143 B at a 48-byte
+  key), flat across every scale tested, which makes the ceiling
+  predictable: **max data:RAM ≈ value_size / (96 B + key heap)**. That
+  predicts 2.67× / 10.7× / 42.7× for the three rows above.
+
+  **What that 96 B is matters for where the lever is.** It is the
+  keyspace entry (`ENTRY_OVERHEAD`: the inline key cell plus the
+  `Entry`), which **every** key pays whether it is tiered or not — the
+  cold stub itself is 24 B inline and owns no heap. Tiering returns the
+  value and can never return the key that names it, so no tiering knob
+  moves this number; only the store's entry layout does, and that
+  changes what every key costs in every workload.
+
+  **At 256 B the budget is not merely tight, it is unholdable**:
+  `used_memory` crosses a 16 MB budget by 200 000 entries and reaches
+  77 MB at 800 000, because demoting a 256 B value frees less than the
+  stub it leaves behind. Narrow records are the case to size by hand.
 - **Worked example (sized from the model, not measured into it)**:
   10 M rows × ~1 KiB (≈10 GB of data) with 2
   secondary indexes + stored VALUES columns fits a **3 GB** budget:
@@ -256,9 +283,11 @@ Stated honestly, with the measured/pending status of each number:
   decode. The `kevy-vlog` microbench measures `read_at` at 0.64–14 µs
   across record sizes (dev-box NVMe). The end-to-end SLAs the
   gate clamps — scalar p99 ≤ 100 µs embedded / ≤ 300 µs server,
-  whole-hash-row materialization ≤ 200 µs / ≤ 500 µs — are
-  **pending the bench-box envelope run** (`bench/capacity-envelope.sh`);
-  until that runs they are targets, not measurements.
+  whole-hash-row materialization ≤ 200 µs / ≤ 500 µs — are **measured
+  on the server side**: the envelope run holds scalar p99 at 79–171 µs
+  and whole-hash-row at 145 µs across datasets from 20 GB to 120 GB on
+  a 2 GB budget, with latency flat as the dataset grows 6×. The
+  embedded numbers remain targets — the envelope drives the server.
 - **Embedded holds the shard lock during a cold read.** In-process
   there is no reactor to hand the read to: a cold materialization
   preads under the shard's write lock (the 1-shard default = the
@@ -314,33 +343,55 @@ Stated honestly, with the measured/pending status of each number:
   flight keeps its segment files readable until it finishes.
 - Every record carries a CRC32C; bit rot in the spill area is refused
   at read, not served.
-- **Boot with dataset > budget works**: replay checks the watermark
-  as it goes and spills inline, so RSS stays ≤ budget × 1.05
-  throughout boot (gated) instead of OOMing before tiering ever
-  runs. The same inline demotion rides reshard and replica
-  snapshot-load.
+- **Boot with dataset > budget works**: replay checks the watermark as
+  it goes and spills inline instead of OOMing before tiering ever runs.
+  The same inline demotion rides reshard and replica snapshot-load.
+  Measured 2026-08-05 — a 2.3 GB AOF against a 64 MB budget (36×)
+  replays clean, all 300 000 rows present, `used_memory` settling at
+  35 MB, comfortably inside the bound.
+
+  **RSS is another matter, and this page used to overstate it.** It
+  claimed RSS stays ≤ budget × 1.05 throughout boot and called that
+  gated; neither was true. Measured peak RSS during that replay was
+  **137 MB — 2.15× the budget** — the same allocator overhead the
+  capacity sweep measures in steady state, and `tiergate`'s L11 line
+  has no measurement body yet (it reads `PENDING`). What holds through
+  boot is the **logical** bound, which is what the tier accounts for;
+  size the machine from RSS, not from the budget.
 - Snapshot / `BGREWRITEAOF` / replication full-sync on a mostly-cold
   store stream cold values from the pinned log **without promoting
   anything** — peak extra RAM is one value, and zero cold values are
-  lost from a rewrite (gated).
-- RSS ≤ budget × 1.05 sustained is its own gate line, including
-  the auto-probe answering correctly in a cgroup container and on
-  bare metal.
+  lost from a rewrite. **Measured 2026-08-05, not gated:** 60 000 keys
+  with 54 912 of them cold, `BGREWRITEAOF`, restart — all 60 000 back,
+  every spot-checked key across the range its full length, AOF clean.
+  `tiergate`'s L10 line for this is still `PENDING`, so the claim rests
+  on that measurement rather than on CI.
+- **`used_memory` ≤ budget × 1.05 sustained** is its own gate line
+  (`tiergate` L8), including the auto-probe answering correctly in a
+  cgroup container and on bare metal. It is the *logical* bound — the
+  gate reports RSS beside it rather than clamping it. Measured
+  2026-08-05: `used_memory` 253 MB against a 281 MB cap, with RSS
+  488 MB (1.93× the budget) reported. Reading that line as an RSS
+  guarantee is the mistake this page made two bullets up.
 
 ## Gate status (honesty ledger)
 
 Everything above that is a mechanism claim is covered by tests and
 gates that run in this tree (the transparency suite, the tiered
-persistence suite, `bench/memgate.sh`, `bench/tiergate.sh`). The
-**measured envelope numbers** — cold-read p99, vlog space
-amplification under churn, the 10× capacity ratio, the
-10M-row fused envelope with hydration p95, hydration
-batching at scale, and mixed-workload isolation —
-are **pending the dedicated bench box**:
-`bench/capacity-envelope.sh` is the turnkey runner, and
-`bench/tiergate.sh` stays red on those lines until it has run. This
-page states targets as targets and will not quote an envelope number
-before the gate records it.
+persistence suite, `bench/memgate.sh`, `bench/tiergate.sh`). The **envelope numbers** are measured on the dedicated bench box by
+`bench/capacity-envelope.sh`: cold-read p99, vlog space amplification
+under churn, and the capacity ratio all have numbers on this page and
+in `bench/FINDING-2026-08-05-capacity-ceiling-sweep.md`.
+
+`bench/tiergate.sh` **in a fresh checkout still shows those lines
+pending**, and that is the design rather than a contradiction: the gate
+consumes a results file the bench box produces, so a tree that has not
+been handed one has not verified anything. Run the envelope, carry
+`bench/.capacity-envelope-results` back, and
+`TIERGATE_RUN_ENVELOPE=1 bash bench/tiergate.sh` turns the lines on the
+evidence rather than on this paragraph. A partial run writes to its own
+file for the same reason — the gate must never be handed a results file
+with lines silently missing.
 
 ## See also
 

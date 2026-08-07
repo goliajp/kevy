@@ -8,16 +8,21 @@
 //! leaves the tree untouched (the batch is read before it is cut),
 //! and a restart drops the segment set and re-slides.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::Path;
 
 #[path = "text.rs"]
 mod text;
+
+#[cfg(test)]
+#[path = "tests.rs"]
+mod tests;
 pub use text::{ColdHit, ColdPage, ColdPageQuery, TextColdDir};
 
 use kevy_index::{
     ColdBloom, ColdEntryRow, FacetBucket, IndexValue, ScalarClauses, ScalarHit, ValType,
-    WindowShape, WindowSpec, claused_over, decode_seg_key, decode_seg_values, encode_seg_values,
+    WindowAudit, WindowShape, WindowSpec, claused_over, decode_seg_key, decode_seg_values,
+    encode_seg_values,
     seg_bounds, seg_key, values_pass, window_bound, window_value_of,
 };
 
@@ -32,14 +37,27 @@ pub struct WindowRt {
     w: i64,
     /// Segment file name counter.
     seq: u64,
-    cold: Vec<kevy_seg::Seg>,
+    /// Sealed segments with the sequence number each was built under —
+    /// the number a tombstone is compared against.
+    cold: Vec<(u64, kevy_seg::Seg)>,
     /// Rows that MAY have cold entries — consulted before spending a
     /// tombstone on a write.
     bloom: ColdBloom,
-    /// Rows whose cold entries are shadowed (rewritten / deleted /
-    /// revived after eviction). Memory-only: replayed writes re-earn
-    /// them through the same bloom on the rebuilt state.
-    tombs: HashSet<Vec<u8>>,
+    /// Rows whose cold entries are shadowed, each recorded with the
+    /// sequence number the shadow reaches: entries in segments sealed
+    /// BEFORE it are hidden, entries sealed after it are not.
+    ///
+    /// A flat set was wrong and lost rows for it. The set is fed by a
+    /// bloom, so a write can tombstone a row that has no cold entry at
+    /// all; when that row later slid, the stale shadow hid the live
+    /// entry it had just been given, permanently. Recording how far
+    /// the shadow reaches costs one `u64` and makes it exact — the
+    /// same property `text.rs` states for its own tombstones.
+    ///
+    /// A row earns one by being rewritten, deleted, or revived after
+    /// eviction. Memory-only: replayed writes re-earn them through the
+    /// same bloom on the rebuilt state.
+    tombs: HashMap<Vec<u8>, u64>,
     /// Ticks that cost exactly one comparison (the idle-convergence
     /// gate counter).
     pub idle_ticks: u64,
@@ -60,7 +78,7 @@ impl WindowRt {
             seq: 0,
             cold: Vec::new(),
             bloom: ColdBloom::new(4096),
-            tombs: HashSet::new(),
+            tombs: HashMap::new(),
             idle_ticks: 0,
             cleaned: false,
         }
@@ -78,12 +96,57 @@ impl WindowRt {
         self.w
     }
 
-    /// The write path saw `row_key` change: shadow any cold entry it
-    /// may have. A bloom false positive spends one stray set entry.
+    /// Is this row's entry in the segment sealed as `seq` shadowed?
+    /// A shadow reaches only backwards: it was recorded to hide what
+    /// existed when the row changed, and cannot hide what the row was
+    /// given afterwards.
+    fn shadowed(&self, row: &[u8], seq: u64) -> bool {
+        self.tombs.get(row).is_some_and(|&reach| seq < reach)
+    }
+
+    /// The write path saw `row_key` change: shadow whatever cold entry
+    /// it may have RIGHT NOW. A bloom false positive spends one stray
+    /// map entry that shadows nothing, which is the point: the reach
+    /// is the current sequence, and anything this row is given later
+    /// is sealed above it.
     pub fn on_row_write(&mut self, row_key: &[u8]) {
         if self.bloom.contains(row_key) {
-            self.tombs.insert(row_key.to_vec());
+            self.tombs.insert(row_key.to_vec(), self.seq);
         }
+    }
+
+    /// What an audit needs from the cold side: the boundary, the tree
+    /// shape, and how many entries are actually down there. `None`
+    /// until something has slid.
+    ///
+    /// The count is over each segment's OWN extent rather than a value
+    /// range, because the caller wants "everything cold" and building
+    /// an unbounded upper bound differs per tree shape — a segment
+    /// already knows its own first and last key.
+    pub fn audit(&self, ty: ValType) -> Option<WindowAudit> {
+        if self.w == i64::MIN {
+            return None;
+        }
+        let mut cold_live = 0u64;
+        for (seq, seg) in &self.cold {
+            let (lo, hi) = (seg.meta().min_key.clone(), seg.meta().max_key.clone());
+            if self.tombs.is_empty() {
+                cold_live += seg.count_range(&lo, &hi).ok()?;
+                continue;
+            }
+            // Tombstones are bloom-gated, so a stray one can name a row
+            // with no cold entry at all. Counting records minus tombs
+            // would under-report and the audit would invent a hole, so
+            // the live entries are counted directly.
+            for r in seg.range(&lo, &hi) {
+                let (k, _) = r.ok()?;
+                let Some((_, row)) = decode_seg_key(ty, &k) else { continue };
+                if !self.shadowed(&row, *seq) {
+                    cold_live += 1;
+                }
+            }
+        }
+        Some(WindowAudit { boundary: self.w, shape: self.shape, cold_live })
     }
 
     /// Cold count of values in `[min, max]`: fast whole-segment
@@ -99,7 +162,7 @@ impl WindowRt {
         let (lo, hi) = seg_bounds(min, max);
         if self.tombs.is_empty() {
             let mut n = 0u64;
-            for s in &self.cold {
+            for (_, s) in &self.cold {
                 n += s.count_range(&lo, &hi).map_err(|e| e.to_string())?;
             }
             return Ok(n);
@@ -126,11 +189,11 @@ impl WindowRt {
     ) -> Result<Vec<(Vec<u8>, IndexValue)>, String> {
         let (lo, hi) = seg_bounds(min, max);
         let mut out = Vec::new();
-        for seg in &self.cold {
+        for (seq, seg) in &self.cold {
             for r in seg.range(&lo, &hi) {
                 let (k, _) = r.map_err(|e| e.to_string())?;
                 let Some((v, row)) = decode_seg_key(ty, &k) else { continue };
-                if self.tombs.contains(&row) {
+                if self.shadowed(&row, *seq) {
                     continue;
                 }
                 if cursor.is_some_and(|c| (&v, row.as_slice()) <= (&c.value, c.key.as_slice())) {
@@ -192,12 +255,12 @@ impl WindowRt {
     ) -> Result<Vec<ColdEntryRow>, String> {
         let (lo, hi) = seg_bounds(min, max);
         let mut out = Vec::new();
-        for seg in &self.cold {
+        for (seq, seg) in &self.cold {
             for r in seg.range(&lo, &hi) {
                 let (k, payload) = r.map_err(|e| e.to_string())?;
                 let (v, row) =
                     decode_seg_key(ty, &k).ok_or_else(|| "corrupt cold key".to_string())?;
-                if self.tombs.contains(&row) {
+                if self.shadowed(&row, *seq) {
                     continue;
                 }
                 if cursor.is_some_and(|c| (&v, row.as_slice()) <= (&c.value, c.key.as_slice())) {
@@ -259,11 +322,36 @@ impl WindowRt {
         for (_, k) in &batch {
             self.bloom.insert(k);
         }
-        self.cold.push(
+        // `seq` was consumed by `build_segment`, so this file's own
+        // number is one below the counter it left behind.
+        self.cold.push((
+            self.seq - 1,
             kevy_seg::Seg::open(&segs_dir.join(&file)).map_err(|e| format!("reopen {file}: {e}"))?,
-        );
+        ));
+        self.probe(index_name, batch.len());
         self.w = target;
         Ok(true)
+    }
+
+    /// `KEVY_PROBE_SLIDE=1`: one line per slide with what was sealed,
+    /// what left the tree, and how many shadows are outstanding.
+    ///
+    /// This is the instrument that found the stale-tombstone loss. The
+    /// first three numbers refute the obvious theory (the seal drops
+    /// what arrives mid-build — it does not; sealed always equals
+    /// split_off), which is what left the tombstone count as the only
+    /// remaining place the missing rows could be.
+    fn probe(&self, index_name: &[u8], split_off: usize) {
+        if std::env::var_os("KEVY_PROBE_SLIDE").is_none() {
+            return;
+        }
+        let sealed = self.cold.last().map(|c| c.1.meta().records).unwrap_or(0);
+        eprintln!(
+            "PROBE slide {} sealed={sealed} split_off={split_off} tombs={} {}",
+            String::from_utf8_lossy(index_name),
+            self.tombs.len(),
+            if sealed as usize == split_off { "ok" } else { "MISMATCH" }
+        );
     }
 
     /// Seal the below-bound prefix into a manifest-registered segment

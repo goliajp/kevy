@@ -19,9 +19,41 @@ pub mod backup;
 /// [`migrate::run_export`] and [`migrate::run_import`].
 pub mod migrate;
 
+/// Where a subcommand connects when the caller says nothing. Shared
+/// rather than repeated: two copies of a default is a drift waiting to
+/// be reported as a bug.
+pub const DEFAULT_HOST: &str = "127.0.0.1";
+/// The port half of the same default.
+pub const DEFAULT_PORT: u16 = 6379;
+
 /// Prefix bulk ops + diagnostics (`copy-prefix` /
 /// `delete-prefix` / `digest` / `diff` / `inspect`).
 pub mod bulk;
+
+/// `shadow` — run the old query and the new one side by side and
+/// report where they disagree, in membership AND in order.
+pub mod shadow;
+
+/// `doctor` — every table's VERIFY counters, turned into an exit code
+/// a cron can act on.
+pub mod backfill_keys;
+pub(crate) mod collections;
+pub mod doctor;
+pub mod lint;
+
+/// Route the migration-playbook tools, which share a shape: they read
+/// and report, none of them moves data, and each exits with its own
+/// verdict. `None` when `args` names something else.
+pub fn route_tool(args: &[String]) -> Option<std::process::ExitCode> {
+    let rest = args.get(1..).unwrap_or(&[]);
+    match args.first().map(String::as_str)? {
+        "doctor" => Some(doctor::run_doctor_cli(rest)),
+        "shadow" => Some(shadow::run_shadow_cli(rest)),
+        "lint" => Some(lint::run_lint_cli(rest)),
+        "backfill-keys" => Some(backfill_keys::run_backfill_keys_cli(rest)),
+        _ => None,
+    }
+}
 
 /// Pretty-print a reply roughly the way `redis-cli` does. Arrays are
 /// numbered + indented; bulk strings are quoted; nil shows as `(nil)`.

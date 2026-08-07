@@ -7,6 +7,13 @@ migration — a mail system moving its hand-rolled secondary indexes
 engine's documentation, not to their notebook. Every rule below was
 paid for; the order is the order you will need them in.
 
+**Before any of it, the first mile:** `kevy-cli sql plan schema.sql`
+reads the schema you already have and reports what becomes of every one
+of your queries — which declared path serves each, and for the rest, the
+exact `CREATE INDEX` that would. It is the ten-minute answer to *can
+this move at all*, and it needs no server. See
+[tables.md](tables.md#kevy-sql-compile-a-schema-dont-send-one).
+
 ## Lead with why: the engine's index is the only one that can be verified
 
 Before the how, the argument. When application code maintains an
@@ -47,6 +54,27 @@ per (owner, item) — `member:{owner}:{item}` with the owner, the item
 and the sort attributes as columns — and let an ORDERPATH sort that.
 Deciding this first prevents re-declaring the whole table later.
 
+**`kevy-cli lint overlap` finds the symptom**, though not the cause.
+The cause is in code and stays there — but a dimension that is
+multi-valued leaves a mark in the data that a machine can read: *the
+same name appears under more than one owner*. Point it at the family of
+owner-keyed collections you have today:
+
+```console
+$ kevy-cli lint overlap -p 6004 --prefix mailbox:
+2 owner(s) under mailbox:, 3 distinct name(s)
+1 name(s) appear under more than one owner:
+  t2  →  mailbox:1, mailbox:2
+this dimension is multi-valued, so no column can hold it — model a membership row per (owner, item) and let an ORDERPATH sort it
+```
+
+It exits non-zero when they intersect, because that is an **answer**
+rather than a hint: no column can hold a dimension that names two
+owners, so a declaring script should stop. Note what it does *not* do —
+sample a candidate column and check that it is single-valued. A hash
+field holds one value by construction, so that check would pass
+forever.
+
 ### 2. Every writer is load-bearing once reads are served
 
 A derived row is populated by whoever writes it. Before cutting reads
@@ -57,6 +85,14 @@ the one written before the table existed. (This is exactly the class
 `TABLE.VERIFY`'s `missing` counter catches after the fact; the audit
 is how you avoid meeting it in production.)
 
+**There is no tool for this one, deliberately.** The store does not
+hold the fact you need — "which code paths write this table" is not
+recorded anywhere in the data, because writers are code and the engine
+sees only writes. What a tool *can* do is catch the consequence:
+`kevy-cli shadow` reports a forgotten writer as a row the new path is
+missing, before the cutover rather than after. Use the audit to avoid
+the surprise and the shadow run to prove you avoided it.
+
 ### 3. Backfill from the union of every source that can name an item
 
 Legacy indexes disagree with each other — that is the measured 89 %/
@@ -65,6 +101,36 @@ and `VERIFY` cannot see a row that was never written at all. Build
 the backfill key-set from the **union** of every structure that can
 name an item (old indexes, the primary keyspace scan, archives), then
 write rows from the authoritative record.
+
+**`kevy-cli backfill-keys` builds that union**, and only that — the
+lesson splits itself, and the second half stays yours. What the
+authoritative record is, and what a row looks like, is knowledge that
+lives in your application; a tool that guessed would write the wrong
+rows confidently.
+
+```console
+$ kevy-cli backfill-keys --from-index idx:threads --from-prefix mail: \
+      --from-file archive.txt > keys.txt
+601 name(s) in the union
+  index idx:threads                3 name(s), 0 only here
+  prefix mail:                     600 name(s), 596 only here
+  file archive.txt                 2 name(s), 1 only here
+597 name(s) appear in only one source — backfilling from any single one would have missed them
+```
+
+The names go to **stdout**, one per line, ready to feed whatever writes
+the rows; the accounting goes to **stderr**, so redirecting the list
+does not lose it. That last number is the point: every name that
+appears in only one source is a row that backfilling from any single
+source would have missed — the 89 % / 76 % drift above, measured on
+your own data instead of quoted from someone else's.
+
+Prefix sources strip the prefix by default (`mail:123` becomes `123`)
+so the names line up with the members of an index; pass
+`--keep-prefix` when the key *is* the name. A source that cannot be
+read — a missing key, a key of the wrong type — is an **error**, not an
+empty contribution: a silently empty source is exactly the hole this
+command exists to close.
 
 ### 4. Shadow-read before cutover — compare content **and order**
 
@@ -75,6 +141,33 @@ paginated UI turns that into user-visible churn. Log the first
 divergence with **both sort keys** — that one log line names the
 drifting writer immediately.
 
+**`kevy-cli shadow` does this for you.** Give it both commands; it
+compares the two orders of row keys they produce and exits non-zero on
+any disagreement, so a cutover script can gate on it:
+
+```console
+$ kevy-cli shadow -p 6004 \
+    --old "ZRANGE old:act 0 -1 WITHSCORES" --old-pairs \
+    --new "IDX.QUERY u.act RANGE 0 999 LIMIT 20" --samples 50
+shadow: 50 samples, 50 diverged (first at sample 0)
+  ORDER differs at position 0:
+    old: u:5 (sort 5)
+    new: u:1 (sort 10)
+```
+
+That pair of sort values is the line the lesson is about. The other
+shape it reports is `MISSING` — a row the old path has and the new one
+does not, which is lesson 2 arriving early: a writer nobody updated,
+seen *before* the cutover instead of by `TABLE.VERIFY` afterwards.
+
+Two things it does not guess. A kevy paged reply (`[cursor, [key,
+sort, …]]`) is recognised from its shape, but **member/score pairs look
+exactly like a plain list** — pass `--old-pairs` for `WITHSCORES` and
+friends, or every score is read as a row key and every sample diverges.
+And a single disagreement is a lead, not a verdict: both sides are read
+back to back on one connection, so a row written between them shows up
+here. Run `--samples n` and read the rate.
+
 ### 5. Deleting the old structure: readers first, writers second
 
 When the shadow window closes, remove the old index's **readers
@@ -82,6 +175,14 @@ first**, then its writers. The tempting opposite order has a silent
 failure mode: a missing key reads as 0 or empty, not as an error — a
 reader left behind after the writers are gone serves quietly wrong
 answers instead of crashing. Then delete the stored keys.
+
+**No tool here either, and this is the one where a tool would be
+actively harmful.** kevy does not track who *reads* a key, so any
+"nobody reads this any more" probe would be inferred rather than
+observed. This lesson's failure mode is already *quietly reading empty
+and calling it fine* — a probe that says "checked, safe to delete"
+would dress that failure in a confirmation. Order the removal by hand:
+readers first, then writers, then the keys.
 
 ### 6. A predicate the index lacks ⇒ another ORDERPATH, never a duplicated column
 
@@ -91,6 +192,23 @@ somewhere else too — which recreates the two-writers-one-truth
 problem the migration just removed. Declare **another ORDERPATH**
 (or index) over the same columns instead; the engine derives both
 from the same row on the same write.
+
+**`kevy-cli lint columns <table>` finds the shape.** Two columns that
+carry the same value on nearly every row are one column copied to get a
+second sort order:
+
+```console
+$ kevy-cli lint columns -p 6004 ev
+ev: 43 row(s) sampled under ev:
+  created_at and sort_ts agree on 93% (40/43)
+a column copied to get a second sort order is the shape lesson 6 warns about — the answer is another ORDERPATH; ask IDX.ADVISE which one
+```
+
+Unlike `lint overlap`, this **exits zero whatever it finds**: two
+columns may legitimately agree, so it is a suspicion, not a verdict.
+And unlike lesson 1's check, it runs *after* the table is declared —
+it reads rows. `--sample N` bounds the read, `--threshold PCT` moves
+the bar.
 
 ### 7. Boot with `ensure`
 
@@ -110,6 +228,30 @@ exclusion cause claimed ([tables.md](tables.md) has the exact
 semantics, including why non-zero `duplicates` on an ORDERPATH means
 your pagination needs a bounded tie-break). The point of the whole
 migration is that these numbers *exist*; read them.
+
+**`kevy-cli doctor` is that cron.** It verifies every declared table and
+answers with an exit code:
+
+```console
+$ kevy-cli doctor -p 6004
+  OK       user  (rows 59999 · entries 59999 · absent 0 · excluded 0 · coerce_failures 0)
+  WARN     ev    duplicates 1 — paging this path needs a bounded tie-break or pages repeat rows
+  BUILDING new   — an index is still backfilling, not a verdict
+doctor: 3 table(s) — 0 drifted, 1 warned, 1 still building
+```
+
+The mapping is this lesson's own words rather than a new opinion:
+`drift` and `missing` non-zero **fail**; `duplicates` **warns**;
+`absent` / `excluded` / `coerce_failures` are **reported and never
+fail**, because each is a legitimate state and a doctor that went red on
+a NULL column would be red forever.
+
+Two deliberate choices. A warning does **not** fail by default —
+information that fails a cron stops being read — so `--warn-is-failure`
+exists for anyone who wants the stricter contract. And a table whose
+index is still backfilling answers `-INDEXBUILDING`, which is **its own
+outcome, not a failure**: treating it as one would page someone every
+time an index is declared.
 
 ## See also
 

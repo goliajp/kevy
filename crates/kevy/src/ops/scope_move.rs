@@ -30,13 +30,14 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
-use kevy_resp::{ArgvView, encode_error, parse_command};
+use kevy_resp::{ArgvView, encode_error};
 use kevy_store::Store;
 
 use crate::state::Ctx;
 // Serialization half lives in `scope_move_emit` (500-LOC split);
 // re-exported so `scope_move::serialize_prefix` callers keep working.
 pub(super) use super::scope_move_emit::serialize_prefix;
+pub(crate) use super::scope_move_ingest::cmd_move_scope_ingest;
 
 /// `MOVE-SCOPE <prefix> FROM <from-id> TO <to-id>` — operator-issued
 /// scope migration.
@@ -221,51 +222,6 @@ fn ship_prefix_to_target(
     Ok(count)
 }
 
-/// `MOVE-SCOPE-INGEST <prefix> <bulk>` — target-side receiver.
-/// Parses concatenated RESP commands out of `<bulk>` and dispatches
-/// each one with scope routing bypassed for `<prefix>`.
-pub(crate) fn cmd_move_scope_ingest<A: ArgvView + ?Sized>(
-    ctx: &Ctx<'_>,
-    store: &mut Store,
-    args: &A,
-    out: &mut Vec<u8>,
-) {
-    if args.len() != 3 {
-        return encode_error(
-            out,
-            "ERR wrong number of arguments — MOVE-SCOPE-INGEST <prefix> <bulk>",
-        );
-    }
-    let Some(prefix) = args.get(1) else {
-        return encode_error(out, "ERR MOVE-SCOPE-INGEST: missing prefix");
-    };
-    let Some(bulk) = args.get(2) else {
-        return encode_error(out, "ERR MOVE-SCOPE-INGEST: missing bulk");
-    };
-
-    let _guard = ctx.shard.ingest_guard(prefix.to_vec());
-    let mut buf = bulk.to_vec();
-    let mut applied = 0usize;
-    let mut scratch = Vec::with_capacity(256);
-    loop {
-        match parse_command(&buf) {
-            Ok(Some((argv, consumed))) => {
-                scratch.clear();
-                crate::dispatch::dispatch_into(ctx, store, &argv, &mut scratch);
-                buf.drain(..consumed);
-                applied += 1;
-            }
-            Ok(None) => break,
-            Err(_) => {
-                return encode_error(out, "ERR MOVE-SCOPE-INGEST: malformed bulk");
-            }
-        }
-    }
-    let reply = format!("+OK {applied}\r\n");
-    out.extend_from_slice(reply.as_bytes());
-}
-
-
 #[cfg(test)]
 mod tests {
     use super::super::scope_move_emit::append_resp_argv;
@@ -310,6 +266,109 @@ mod tests {
         assert_eq!(count, 1);
         let s = String::from_utf8_lossy(&bulk);
         assert!(s.contains("HSET"), "HSET emitted: {s:?}");
+    }
+
+    /// MOVE-SCOPE is how a prefix changes owner, so what it can carry
+    /// bounds what a reshard can move. This pins the whole set —
+    /// **including streams and TTLs**, both of which the client-side
+    /// rebuild path in `kevy-cli` does not carry (streams) or carries
+    /// differently (absolute PEXPIREAT vs PEXPIREAT here too).
+    ///
+    /// A type added to the engine without an arm here would reshard
+    /// into nothing, and the emitter's catch-all is a bare `continue`
+    /// — the same silence that lost streams from `kevy-cli export`.
+    #[test]
+    fn serialize_prefix_carries_every_type_and_the_ttl() {
+        let mut store = fresh_store();
+        store.set(b"app:s", b"v".to_vec(), None, false, false);
+        store.hset(b"app:h", &[(b"f".as_slice(), b"v".as_slice())]).unwrap();
+        store.rpush(b"app:l", &[b"a".as_slice()]).unwrap();
+        store.sadd(b"app:set", &[b"m".as_slice()]).unwrap();
+        store.zadd(b"app:z", &[(1.0, b"m".as_slice())]).unwrap();
+        store
+            .xadd(
+                b"app:st",
+                kevy_store::XAddIdSpec::AutoAll,
+                vec![(b"f".to_vec(), b"v".to_vec())],
+                false,
+                1,
+            )
+            .unwrap();
+        store.set(
+            b"app:ttl",
+            b"v".to_vec(),
+            Some(std::time::Duration::from_secs(60)),
+            false,
+            false,
+        );
+
+        let (bulk, _count) = serialize_prefix(&mut store, b"app:");
+        let w = String::from_utf8_lossy(&bulk);
+        for (key, verb) in [
+            ("app:s", "SET"),
+            ("app:h", "HSET"),
+            ("app:l", "RPUSH"),
+            ("app:set", "SADD"),
+            ("app:z", "ZADD"),
+            ("app:st", "XADD"),
+        ] {
+            assert!(w.contains(key), "{key} must ship: {w:?}");
+            assert!(w.contains(verb), "{key} needs its rebuild verb {verb}: {w:?}");
+        }
+        assert!(w.contains("PEXPIREAT"), "a TTL'd key ships its deadline: {w:?}");
+    }
+
+    /// A frame the target REFUSES must fail the whole ingest, by name.
+    ///
+    /// It used to reply `+OK 1`: the dispatch reply was written into a
+    /// scratch buffer and never read, so a WRONGTYPE counted as
+    /// applied. The source commits on that count — ownership of the
+    /// prefix moves to a node that does not have the row, and the row
+    /// is then unreachable from either side.
+    #[test]
+    fn a_refused_frame_fails_the_ingest_and_names_the_key() {
+        let kevy = crate::KevyCommands::with_state(std::sync::Arc::new(
+            crate::RuntimeState::new(
+                std::sync::Arc::new(kevy_config::Config::default()),
+                std::path::PathBuf::new(),
+                1,
+            )
+            .unwrap(),
+        ));
+        let mut store = fresh_store();
+        // The target already holds this key as a STRING; the shipped
+        // frame rebuilds it as a LIST, and RPUSH on a string is refused.
+        store.set(b"app:x", b"already-a-string".to_vec(), None, false, false);
+        let mut bulk = Vec::new();
+        append_resp_argv(&mut bulk, &[b"RPUSH", b"app:x", b"a"]);
+
+        let args = argv(&[b"MOVE-SCOPE-INGEST", b"app:", &bulk]);
+        let reply = String::from_utf8_lossy(&kevy.dispatch(&mut store, &args)).into_owned();
+
+        assert!(reply.starts_with('-'), "a refused frame must not answer +OK: {reply:?}");
+        assert!(reply.contains("app:x"), "the reply must name the key: {reply:?}");
+        assert!(reply.contains("WRONGTYPE"), "and why it was refused: {reply:?}");
+    }
+
+    /// The ordinary path still answers with a count.
+    #[test]
+    fn an_accepted_ingest_still_reports_how_many_applied() {
+        let kevy = crate::KevyCommands::with_state(std::sync::Arc::new(
+            crate::RuntimeState::new(
+                std::sync::Arc::new(kevy_config::Config::default()),
+                std::path::PathBuf::new(),
+                1,
+            )
+            .unwrap(),
+        ));
+        let mut store = fresh_store();
+        let mut bulk = Vec::new();
+        append_resp_argv(&mut bulk, &[b"SET", b"app:a", b"1"]);
+        append_resp_argv(&mut bulk, &[b"SET", b"app:b", b"2"]);
+        let args = argv(&[b"MOVE-SCOPE-INGEST", b"app:", &bulk]);
+        let reply = String::from_utf8_lossy(&kevy.dispatch(&mut store, &args)).into_owned();
+        assert!(reply.starts_with("+OK 2"), "two frames applied: {reply:?}");
+        assert_eq!(store.type_of(b"app:a"), "string");
     }
 
     #[test]

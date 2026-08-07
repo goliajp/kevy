@@ -28,6 +28,19 @@ use std::path::{Path, PathBuf};
 const MAGIC: &[u8; 8] = b"KEVYBKP1";
 
 /// Pack every regular file under `data_dir` into `out_path`.
+/// Subdirectories are skipped, and the data dir stopped being flat when
+/// tiering landed: `tier/<shard>/vlog-*.dat` holds demoted values and
+/// `segs-<shard>/` holds cold index segments. Skipping them is correct
+/// because both are **derived** — a snapshot materialises cold values
+/// rather than referencing them, so the backup carries the data without
+/// the spill area and a restore rebuilds it — measured end to end
+/// against a store whose values had actually been demoted, not
+/// reasoned about.
+///
+/// That safety is a property of what lives down there, not of the skip.
+/// `subdirectories_are_derived_spill_only` pins the set, so a future
+/// directory of TRUTH cannot join the data dir without someone reading
+/// this first.
 pub fn pack(data_dir: &Path, out_path: &Path) -> io::Result<u64> {
     let out = OpenOptions::new()
         .create_new(true)
@@ -42,7 +55,7 @@ pub fn pack(data_dir: &Path, out_path: &Path) -> io::Result<u64> {
         let path = entry.path();
         let meta = entry.metadata()?;
         if !meta.is_file() {
-            continue; // skip subdirs (kevy data_dir is flat anyway)
+            continue; // derived spill — see the note above this fn
         }
         let name = path
             .strip_prefix(data_dir)
@@ -217,6 +230,52 @@ mod tests {
     /// directories and files.
     fn tmp_file(name: &str) -> PathBuf {
         tmp("files").join(name)
+    }
+
+    /// `pack` skips subdirectories. That is safe only while everything
+    /// under the data dir's subdirectories is derived spill the restore
+    /// can rebuild — true today for `tier/` (demoted values, reachable
+    /// through a snapshot that materialises them) and `segs-*/` (cold
+    /// index segments, rebuilt by re-sliding).
+    ///
+    /// This test does not verify that property; it pins the *set* so
+    /// that adding a subdirectory forces the person adding it to come
+    /// here and state which kind it is. A backup that silently omits a
+    /// directory of truth is the failure this is standing in front of.
+    #[test]
+    fn subdirectories_are_derived_spill_only() {
+        const DERIVED: [&str; 2] = ["tier", "segs"];
+        let src = tmp("derived");
+        std::fs::write(src.join("aof-0.aof"), b"truth").unwrap();
+        for d in ["tier/0", "segs-0"] {
+            std::fs::create_dir_all(src.join(d)).unwrap();
+            std::fs::write(src.join(d).join("spill.dat"), b"derived").unwrap();
+        }
+        let out = tmp_file("derived.kevybkp");
+        pack(&src, &out).unwrap();
+        let target = tmp("derived-restored");
+        unpack(&out, &target).unwrap();
+
+        assert_eq!(std::fs::read(target.join("aof-0.aof")).unwrap(), b"truth");
+        for d in ["tier", "segs-0"] {
+            assert!(!target.join(d).exists(), "{d} came along; it is spill, not truth");
+        }
+        // The guard: every subdirectory the source had must be one the
+        // list above already calls derived.
+        for e in std::fs::read_dir(&src).unwrap() {
+            let e = e.unwrap();
+            if e.metadata().unwrap().is_dir() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                assert!(
+                    DERIVED.iter().any(|d| name.starts_with(d)),
+                    "'{name}' is a data-dir subdirectory the backup skips. \
+                     If it holds truth rather than derived spill, pack() \
+                     is losing it — see the comment at the skip."
+                );
+            }
+        }
+        std::fs::remove_dir_all(&src).ok();
+        std::fs::remove_dir_all(&target).ok();
     }
 
     #[test]

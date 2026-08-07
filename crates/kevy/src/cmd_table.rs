@@ -19,7 +19,6 @@ use kevy_rt::ExtensionReduced;
 use kevy_store::Store;
 
 use crate::cmd_index_query::{ST_BUILDING, ST_NOINDEX, ST_OK};
-use crate::index_runtime;
 use crate::state::{CatalogState, Ctx, RuntimeState};
 
 const SIDECAR: &str = "table-catalog.meta";
@@ -230,7 +229,7 @@ fn op_verify(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let mut chunk = vec![ST_OK];
     chunk.extend_from_slice(&(compiled.len() as u32).to_le_bytes());
     for ispec in &compiled {
-        match index_verify_counts(ctx, store, &ispec.name) {
+        match crate::cmd_table_verify::index_verify_counts(ctx, store, &ispec.name) {
             Ok(counts) => {
                 for v in counts {
                     chunk.extend_from_slice(&v.to_le_bytes());
@@ -246,87 +245,6 @@ fn op_verify(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     chunk
 }
 
-/// One compiled index's per-shard verify counters — both directions
-/// (the embedded face's `shard_index_counts` is the byte-parity
-/// twin, and the oracle holds them together).
-///
-/// index→row: the IDX.VERIFY drift recheck. row→index: every prefix row
-/// classifies against the spec with the cause kept — fresh
-/// `coerce_failures` (present-but-wrong-type only; the 4.0 lifetime
-/// counter also swallowed absences), `excluded` (composite oversize),
-/// `absent` (NULL by design), and `missing` (derives a value, has no
-/// entry — the class a drift walk cannot see).
-/// The row→index half of the walk, under the no-promote peek: every
-/// prefix row classified by cause.
-/// Returns `[coerce_fresh, excluded, absent, rows, missing]`.
-fn classify_prefix_rows(
-    s: &mut Store,
-    spec: &kevy_index::IndexSpec,
-    row_keys: &[Vec<u8>],
-    indexed: &std::collections::HashSet<&[u8]>,
-) -> [u64; 5] {
-    let names = spec.scalar_read_names();
-    let w = spec.primary_width();
-    let mut f = [0u64; 5];
-    for key in row_keys {
-        f[3] += 1;
-        let cls = match s.peek_hash_fields(key, &names[..w]) {
-            Ok(Some(vals)) => spec.classify_scalar(&vals),
-            _ => kevy_index::RowDerivation::Absent,
-        };
-        match cls {
-            kevy_index::RowDerivation::Indexed(_) => {
-                if !indexed.contains(key.as_slice()) {
-                    f[4] += 1;
-                }
-            }
-            kevy_index::RowDerivation::CoerceFailed => f[0] += 1,
-            kevy_index::RowDerivation::Oversize => f[1] += 1,
-            kevy_index::RowDerivation::Absent => f[2] += 1,
-        }
-    }
-    f
-}
-
-fn index_verify_counts(
-    ctx: &Ctx<'_>,
-    store: &mut Store,
-    name: &[u8],
-) -> Result<[u64; 10], kevy_resp::CmdError> {
-    let (spec, entries, stats) =
-        index_runtime::with_ready_segment(ctx, store, name, |spec, seg, _| {
-            let mut entries: Vec<(Vec<u8>, kevy_index::IndexValue)> = Vec::new();
-            seg.each_entry(|k, v| entries.push((k.to_vec(), v.clone())));
-            (spec.clone(), entries, seg.stats())
-        })?;
-    let indexed: std::collections::HashSet<&[u8]> =
-        entries.iter().map(|(k, _)| k.as_slice()).collect();
-    let mut pat = spec.prefix.clone();
-    pat.push(b'*');
-    let row_keys = store.collect_keys(Some(&pat), None);
-    let (drift, fresh) = store.peek_scope(|s| {
-        let mut drift = 0u64;
-        for (key, held) in &entries {
-            match index_runtime::row_value(s, &spec, key) {
-                index_runtime::RowValue::Value(actual) if &actual == held => {}
-                _ => drift += 1,
-            }
-        }
-        (drift, classify_prefix_rows(s, &spec, &row_keys, &indexed))
-    });
-    Ok([
-        stats.entries,
-        stats.approx_bytes,
-        fresh[0],
-        stats.duplicates,
-        drift,
-        entries.len() as u64,
-        fresh[1],
-        fresh[2],
-        fresh[3],
-        fresh[4],
-    ])
-}
 
 /// Sample up to [`SPOTCHECK_ROWS`] rows on this shard and check that
 /// every PRESENT declared-typed column coerces (absent = NULL, never

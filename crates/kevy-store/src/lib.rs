@@ -235,6 +235,15 @@ pub struct Store {
     /// Captured events awaiting the serving layer's drain
     /// ([`Self::take_notify_events`]), in capture order.
     pub(crate) notify_events: Vec<(notify::KeyspaceEvent, Vec<u8>)>,
+    /// Keys this store dropped because their TTL passed, awaiting the
+    /// serving layer's drain ([`Self::take_expired_keys`]).
+    ///
+    /// Separate from `notify_events` and **always on**, because it
+    /// carries correctness rather than observability: an expiring key
+    /// must still leave every secondary index and invalidate every
+    /// WATCH on it, and neither may depend on whether some client
+    /// happened to subscribe to keyspace notifications.
+    pub(crate) expired_keys: Vec<Vec<u8>>,
     /// Count of live keys carrying a TTL — the size of Redis's "expire set"
     /// (`INFO keyspace`'s `expires=`). Maintained in O(1) at every TTL
     /// transition (`insert_entry` / `remove_entry` deltas + the in-place

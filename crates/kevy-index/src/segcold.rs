@@ -93,6 +93,30 @@ pub enum WindowShape {
     CompositeLed,
 }
 
+/// What an audit needs to tell "slid out on purpose" from "lost".
+///
+/// A row whose window value sits below `boundary` is absent from the
+/// hot tree by design — but only if it actually reached a cold
+/// segment. Position alone cannot distinguish the two, and a row lost
+/// between the two structures sits below the boundary exactly like a
+/// legitimate one. So the audit carries the cold side's own count and
+/// checks the identity instead:
+///
+///   missing = (rows below the boundary that should be indexed)
+///             - (live cold entries below it)
+///
+/// One `u64` out of the segment scope, no per-row cold lookup, and the
+/// answer is evidence rather than assumption.
+#[derive(Debug, Clone, Copy)]
+pub struct WindowAudit {
+    /// Bucket-aligned eviction boundary: entries below it are cold.
+    pub boundary: i64,
+    /// Which tree shape the boundary lives in.
+    pub shape: WindowShape,
+    /// Live (non-tombstoned) cold entries below `boundary`.
+    pub cold_live: u64,
+}
+
 /// The window-column value a tree entry carries, under `shape`.
 /// `None` = the entry cannot carry one (wrong variant / short bytes) —
 /// the caller treats the tree as having no boundary to advance.

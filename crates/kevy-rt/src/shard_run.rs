@@ -5,6 +5,7 @@
 
 use crate::Commands;
 use crate::shard::Shard;
+use crate::shard_lifecycle::Accepted;
 use kevy_persist::{load_snapshot, replay_aof};
 use kevy_resp::ArgvView;
 use std::io;
@@ -131,6 +132,19 @@ impl<C: Commands> Shard<C> {
             if self.arms_accept { self.poller.add(cl.raw(), true, false)?; }
             cluster_fd = cl.raw();
         }
+        // Same trick for the unix-domain listener, which only shard 0
+        // holds. Registering it here is what this reactor was missing:
+        // the socket is bound before any shard spawns, so a client's
+        // connect() lands in the backlog and then waits forever for an
+        // accept that only the io_uring reactor ever performed.
+        let mut unix_fd = -1;
+        if let Some(un) = &self.unix_listener {
+            un.set_nonblocking()?;
+            if self.arms_accept {
+                self.poller.add(un.raw(), true, false)?;
+            }
+            unix_fd = un.raw();
+        }
         // Same "fd or -1" trick for the replication listener (per Issue
         // Ledger I2 — per-shard, deterministic ports). Replication-off
         // pays one dead integer compare per event and nothing more.
@@ -203,9 +217,11 @@ impl<C: Commands> Shard<C> {
                 let events = std::mem::take(&mut self.events);
                 for ev in &events {
                     if ev.fd == listener_fd {
-                        self.accept_ready(false)?;
+                        self.accept_ready(Accepted::Compat)?;
                     } else if ev.fd == cluster_fd {
-                        self.accept_ready(true)?;
+                        self.accept_ready(Accepted::Cluster)?;
+                    } else if ev.fd == unix_fd {
+                        self.accept_ready(Accepted::Unix)?;
                     } else if ev.fd == replication_fd {
                         self.accept_ready_replication()?;
                     } else if ev.fd == waker_fd {
@@ -306,6 +322,7 @@ impl<C: Commands> Shard<C> {
                         self.commands.on_shard_tick(&mut self.store);
                         self.drain_tick_frames();
                         self.drain_store_notify();
+                        self.drain_expired_keys();
                         self.apply_live_runtime_config(&mut tick_interval);
                         self.tick_persist();
                         self.tick_conn_gauge();

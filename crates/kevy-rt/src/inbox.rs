@@ -325,6 +325,9 @@ impl<C: Commands> Shard<C> {
                             self.mark_pending_write_dirty(conn);
                         }
                     }
+                    Inbound::RenameCommitted { src } => {
+                        self.log_rename_source_committed(&src);
+                    }
                     Inbound::BlockServeAck { origin, conn } => {
                         self.target_release_escrow(origin, conn);
                     }

@@ -64,6 +64,7 @@ UDSの信頼境界は**ファイルシステム**です。UnixソケットにRES
 - **パスが事前に存在してはいけません。** `KEVY_UNIX_SOCKET`が既存ファイルを指している場合、kevyは起動を拒否します。自分が作ったのではないパスを上書きしないためです。再起動時に掃除する（`rm -f /tmp/kevy.sock`）か、実行ごとのパス（`/run/kevy/$(date +%s).sock`）を使ってください。これは意図的な仕様です。黙ってunlinkしてしまうと、設定を誤ったkevyが他サービスのソケットを奪いかねません。
 - **環境変数が設定されていれば常にデュアルバインド。** UDS専用モードはなく、TCPリスナーも必ず上がります。TCPを禁止したければ、管理下にあるループバック専用アドレスにbindし、ファイアウォールで塞いでください。
 - **acceptループはシャード0が所有します。** acceptされた接続は既存のシャード別ランタイムへディスパッチされるので、ソケット越しのワークロードの並列性も引き続き`--threads`で制御できます。
+- **どのreactorがこれを供するか。** 両方です。io_uring reactorはmultishot accept SQEでこのソケットをacceptし、readiness reactor（Linuxでio_uringがない場合のepoll、macOS/BSDのkqueue）はTCPのリスナと並べて登録します。**changelogに記した修正より前はそうではありませんでした**：リスナはどのシャードよりも先にバインドされるため、ソケットファイルは現れ、`connect()`はbacklogへ成功しますが、**実際にacceptしていたのはio_uringだけ**でした——他のreactorのクライアントは、エラーひとつ得られないまま永遠に待ちます。
 - **io_uringパス。** Linuxで`KEVY_IO_URING=1`のとき、UDSのacceptはTCPと同じio_uringインスタンスを通るmultishot accept SQEとして動き、余計なreactorコストはかかりません。`TCP_NODELAY`はUDSには設定されません（IPソケットではないためです）。
 
 ## トレードオフ

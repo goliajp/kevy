@@ -70,6 +70,7 @@ TABLE.DECLARE name PREFIX p PK col
     [INDEX col range|unique [VALUES col ...]] ...
     [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] ...
     [WINDOW col SPAN n BUCKET n]
+    [AUTODECLARE n]    # let the engine add up to n paths — see below
 TABLE.ENSURE ...       # TABLE.DECLARE's boot form — see below
 TABLE.REPLACE ...      # explicit drop + declare + rebuild
 TABLE.DROP name        # drops the table + its compiled indexes; 1|0
@@ -237,6 +238,16 @@ ways. Naming a field the index did not store is an error that names
 the fields it did. The driving predicate is always the indexed
 range/EQ/WHERE — there is no `WHERE`-without-an-index.
 
+`OFFSET` is the one clause here that costs more the bigger it gets, and
+**the only surface in this engine that gets slower as you add shards**:
+every shard fetches `limit + offset` hits, because no shard can know
+which of its own hits survive the global merge, so the origin
+materialises `(limit + offset) × shards` to hand back `limit`. Measured
+on 30 000 in-range rows returning `LIMIT 20`, `OFFSET 1000` costs
+1.53 ms on one shard and 6.90 ms on eight. Page with the returned
+cursor — constant per page, and position-stable
+([rds-workloads.md](rds-workloads.md#order-by--limit--offset)).
+
 **Index-only queries touch zero rows.** A FILTER/SORT/COUNT query
 answers entirely from the RAM-resident index — the row-read counter
 is asserted `== 0` in the gate suite (`bench/tablegate.sh`). This is
@@ -247,6 +258,46 @@ hydration page (`FIELDS …`) pays cold reads — one per row, batched.
 An index without `VALUES` columns is byte-identical in memory and
 query path to one on a store that never declares them (the
 zero-cost-when-undeclared gate).
+
+## `AUTODECLARE`: the paths you did not write
+
+A query against a column you never indexed is refused by name. That
+refusal is also a fact about your workload, and `IDX.ADVISE` shows the
+shapes that keep hitting it. `AUTODECLARE n` says: *when a shape has
+been refused often enough and it grounds on a column I declared, go
+ahead and declare the path for me — up to `n` of them.*
+
+**"Often enough" is 16 refusals of the same shape.** The number is a
+constant, not a knob: a per-table threshold would be exactly the
+per-workload tuning this engine claims not to need, and a workload
+whose shape arrives slowly pays 16 refusals before relief either way.
+It is written here because an operator reading `IDX.ADVISE` and
+wondering why nothing has happened yet deserves the number, not
+because it is something to set.
+
+Everything about it is bounded on purpose:
+
+* **Off unless you ask.** No clause, no loop. This is not a default.
+* **Capped by the number you wrote.** Budget spent means the query
+  keeps being refused and the shape stays in `IDX.ADVISE` for you to
+  read — the engine does not quietly raise its own limit.
+* **Only over declared columns.** A shape naming a column the table
+  does not declare never grounds; `IDX.ADVISE` still reports it, so
+  the answer stays yours.
+* **Addition only.** Dropping an index is a human act. The worst case
+  of a bad guess is bounded wasted memory, never a lost path.
+* **Visible.** Each such index carries an `auto` marker in `IDX.LIST`,
+  and the table's spec keeps the ledger — you can always read back
+  which paths you wrote and which the engine did.
+* **Out of band.** The query that crosses the threshold still gets its
+  error. The next one finds the path building. Declaring never happens
+  inside a query's answer.
+
+This is not a query planner, and the distinction is the whole point:
+the engine never chooses *which path to run* — your query names it.
+`AUTODECLARE` only extends the declaration, on your invitation, within
+your budget, where you can see it. Query time stays a law: run the
+declared path, refuse the rest by name.
 
 ## NULL, uniqueness, and what is enforced
 
@@ -280,9 +331,45 @@ compiler** — it reads a PG/MySQL-dialect schema file once, like a
 migration tool, and emits the explicit declarations:
 
 ```console
-kevy-cli sql compile schema.sql                          # print the plan
+kevy-cli sql compile schema.sql                          # print the declarations
 kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004
+kevy-cli sql plan schema.sql                             # what becomes of every query
 ```
+
+`compile` and `plan` read the same file and answer different questions.
+`compile` is build-time: it produces commands, so a view it cannot serve
+is an error and it stops there. `plan` is migration day — it reports
+what becomes of **every** query, because *"34 of your 40 work, here is
+what the other 6 need"* is what someone arriving with a schema is
+actually asking:
+
+```console
+$ kevy-cli sql plan shop.sql
+2 table(s) to declare:
+  users
+  orders
+
+5 quer(ies) — 3 served, 2 not
+
+  served:
+    paid_orders              orders.status
+    recent_by_user           orders.user_id_created_at
+    by_email                 users.email
+
+  not served:
+    line 25    by_total
+      view 'by_total': WHERE (total EQ) matches no declared access path — add: CREATE INDEX ON orders (total)
+    line 28    everything
+      view 'everything': a view with no WHERE would scan the table — kevy has no scans; add a driving predicate, or page an index directly (IDX.QUERY orders.<col> RANGE …)
+
+plan: 2 of 5 quer(ies) need a declaration change before this schema moves
+```
+
+It exits non-zero when any query is unserved. That is not a warning: a
+query with no declared path cannot run at all, so it blocks the move
+until the schema changes. A schema whose *DDL* does not parse is still a
+plain error — there is no plan to give against a schema that does not
+exist.
 
 - `CREATE TABLE` → `TABLE.DECLARE` (types coarsely mapped to
   `i64|f64|str`, each mapping noted honestly).
