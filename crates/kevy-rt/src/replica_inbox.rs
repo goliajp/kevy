@@ -40,6 +40,13 @@ use crate::Argv;
 /// shard installs its own waker at reactor start; `wake_pending`
 /// throttles the self-pipe to one write per drain cycle no matter how
 /// many frames a burst carries.
+///
+/// Aligned to a cache line: eight shards' signals are allocated
+/// back-to-back at startup, and an unaligned flag shares its line with
+/// a neighbouring shard's — every reactor iteration polls the flag, so
+/// a shared line ping-pongs across cores at reactor frequency (the
+/// sadd L1-miss A/B, finding 2026-08-07-collection-tax-is-l1-misses).
+#[repr(align(64))]
 pub(crate) struct InboxSignal {
     pub(crate) waker: OnceLock<Arc<Waker>>,
     pub(crate) wake_pending: AtomicBool,
