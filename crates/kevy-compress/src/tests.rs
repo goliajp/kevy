@@ -140,7 +140,10 @@ fn train_bounds_its_budget() {
     let dict = train(&refs, 32 * 1024);
     assert!(dict.len() <= 32 * 1024);
     let huge = train(&refs, usize::MAX);
-    assert!(huge.len() <= MAX_OFFSET, "a dictionary past offset reach is dead weight");
+    // Content past offset reach is dead weight; the 133-byte container
+    // header (magic + entropy table) rides above the reach and is the
+    // one exception.
+    assert!(huge.len() <= MAX_OFFSET + 133, "content past offset reach is dead weight");
 }
 
 /// The compaction level: identity on every shape the fast level

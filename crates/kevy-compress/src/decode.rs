@@ -104,7 +104,12 @@ fn copy_match(dict: &[u8], out: &mut Vec<u8>, dist: usize, len: usize) {
 /// pass (Huffman table loop or a plain slice), then the byte-aligned
 /// sequence stream interleaves them with matches — same token grammar
 /// as the fast level minus the inline literals.
-pub(crate) fn lz_high(dict: &[u8], payload: &[u8], orig_len: usize) -> Result<Vec<u8>, Corrupt> {
+pub(crate) fn lz_high(
+    dict: &[u8],
+    lens: Option<&[u8; 256]>,
+    payload: &[u8],
+    orig_len: usize,
+) -> Result<Vec<u8>, Corrupt> {
     let (lit_total, rest) = crate::read_varint(payload)?;
     let (&flag, rest) = rest.split_first().ok_or(Corrupt)?;
     let (lits, seq_start): (alloc::borrow::Cow<'_, [u8]>, usize) = match flag {
@@ -115,6 +120,14 @@ pub(crate) fn lz_high(dict: &[u8], payload: &[u8], orig_len: usize) -> Result<Ve
         1 => {
             let (l, used) = crate::huff::decode(rest, lit_total)?;
             (alloc::borrow::Cow::Owned(l), used)
+        }
+        2 => {
+            // File-scoped table: the lengths live in the dictionary
+            // header, not the frame — a frame that needs them cannot
+            // decode without its dictionary.
+            let l = lens.ok_or(Corrupt)?;
+            let (out, bits) = crate::huff::read_bits(rest, l, lit_total)?;
+            (alloc::borrow::Cow::Owned(out), bits.div_ceil(8) as usize)
         }
         _ => return Err(Corrupt),
     };

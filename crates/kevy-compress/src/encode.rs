@@ -147,6 +147,7 @@ fn serialize_fast(
 /// (flag 0: K2 holds at every layer).
 fn serialize_high(
     dict: &[u8],
+    lens: Option<&[u8; 256]>,
     input: &[u8],
     seqs: &[Seq],
     tail: &core::ops::Range<usize>,
@@ -160,15 +161,28 @@ fn serialize_high(
     lits.extend_from_slice(&input[tail.start - d..tail.end - d]);
     let mut out = Vec::with_capacity(input.len().min(cap) + 16);
     crate::push_varint(&mut out, lits.len());
-    match crate::huff::encode(&lits) {
-        Some(coded) => {
-            out.push(1);
-            out.extend_from_slice(&coded);
+    // Three literal encodings compete; smallest wins. Flag 2 (the
+    // file-scoped shared table) has no per-record header, which is
+    // what lets entropy coding engage at 400 B.
+    let shared_bytes = lens.and_then(|l| {
+        let mut hist = [0u64; 256];
+        for &b in &lits {
+            hist[b as usize] += 1;
         }
-        None => {
-            out.push(0);
-            out.extend_from_slice(&lits);
-        }
+        crate::huff::cost_bits(&hist, l).map(|bits| bits.div_ceil(8) as usize)
+    });
+    let inline = crate::huff::encode(&lits);
+    let inline_len = inline.as_ref().map_or(usize::MAX, Vec::len);
+    let shared_len = shared_bytes.unwrap_or(usize::MAX);
+    if shared_len < inline_len && shared_len < lits.len() {
+        out.push(2);
+        crate::huff::write_bits(&lits, lens.expect("shared_len set"), &mut out);
+    } else if let Some(coded) = inline.filter(|c| c.len() < lits.len()) {
+        out.push(1);
+        out.extend_from_slice(&coded);
+    } else {
+        out.push(0);
+        out.extend_from_slice(&lits);
     }
     for s in seqs {
         let lit_len = s.lits.len();
@@ -205,13 +219,18 @@ pub(crate) fn try_lz(dict: &[u8], input: &[u8], out: &mut Vec<u8>) -> (u8, bool)
 
 /// The compaction level: collect once, serialize both ways, keep the
 /// smallest of high / fast / raw.
-pub(crate) fn try_high(dict: &[u8], input: &[u8], out: &mut Vec<u8>) -> (u8, bool) {
+pub(crate) fn try_high(
+    dict: &[u8],
+    lens: Option<&[u8; 256]>,
+    input: &[u8],
+    out: &mut Vec<u8>,
+) -> (u8, bool) {
     let d = dict.len().min(MAX_OFFSET);
     let dict = &dict[dict.len() - d..];
     let (seqs, tail, used_dict) = collect(dict, input);
     let fast = serialize_fast(dict, input, &seqs, &tail, input.len());
     let cap = fast.as_ref().map_or(input.len(), Vec::len);
-    if let Some(high) = serialize_high(dict, input, &seqs, &tail, cap) {
+    if let Some(high) = serialize_high(dict, lens, input, &seqs, &tail, cap) {
         *out = high;
         return (if used_dict { TAG_LZH_DICT } else { TAG_LZH }, true);
     }
