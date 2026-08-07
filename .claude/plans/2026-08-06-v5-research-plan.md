@@ -536,3 +536,26 @@ workspace 连续两轮全绿(persistence flake 未复现)。
 B2 冷读 p99)/ K5-amplification(可压缩语料 vs B5 1.27×)/ K7
 (B10/B11)+ perfgate KV/pubsub 不退化线。r1-locality 现
 **+31 笔**(tip `066da155`)。
+
+---
+
+## 十七期(2026-08-07,T4 envelope 收口 —— compressgate 八线全绿)
+
+lx64 全刻度 capacity-envelope 于 T4 tip **全 phase PASS**(学费:
+/tmp 是 tmpfs,envelope 自带拒绝,TMPDIR 指盘即过):**K1 = 冷读
+p99 128µs 标量 / 130µs 行**(预算 300/500,解码埋在带内;无压缩
+基线 ~105µs)/ **K5-amp = 0.01×**(同值语料 ~19.4GB 冷字节 →
+273MB vlog ≈ 71×;无压缩基线 1.27×)/ B6 10.1× / B8 预算 ✓ /
+sweep 14/14 / D1-D4 全绿。**compressgate 八条 K 线全部真断言全绿**
+(K1/K5-amp 消费 envelope 结果文件 = tiergate 模式;K7 = 字典纯
+内存字段 + 可弃性契约测试)。
+
+**两条诚实 caveat 已入 finding**(`fe4948ae`):① envelope 语料 =
+单值重复 = K4 类别主张的**天花板端**,现实中位 = K4 前提表的
+templated-JSON 2.2×,对外口径保持定性 ② amp 0.01× 下压实阈值
+从未触发(epoch=0),compact 终止性本轮仅单测覆盖。
+
+**T3+T4 弧闭**:kevy-compress(石头)+ vlog 布线 + 八线门禁,三轮
+落地。r1-locality 现 **+32 笔**(tip `fe4948ae`)。ROADMAP 的压缩
+train 余项 = 熵编码档(RFC §7.1 具名 follow-up)与真实消费者语料
+测量(mailrs),均非本轮。
