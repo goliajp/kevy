@@ -600,3 +600,20 @@ against the same K-criteria" 是属主 7/26 已拍的既定计划,非新决策�
 
 kevy-compress 10 测 + kevy-vlog 14 测 + workspace 全绿。
 r1-locality 现 **+34 笔**(tip `b374f9d1`)。
+
+---
+
+## 二十期(2026-08-07,文件级熵表 —— 400B 尺度接火)
+
+上轮"归属主"的判断再修正:vlog 可弃性 = 字典格式零兼容负担(RFC
+原话),文件级熵表**嵌进 train() 输出**([KVCD1][128B 码长][内容],
+加一平滑保全字节可编),vlog 一行不改地携带;高档字面量块新增
+flag 2 = 按文件表编码、**零每记录头**;三种字面量编码竞争取最小
+(K2 构造性),flag-2 帧无字典必拒。
+
+**语料表**:templated 264.6 → **245.3 B/值**(400B 接火,向 oracle
+180 收口)/ identical 9.5 不变(无字面量可编)/ random 正确拒绝
+零损 / textual 微动(字面量已被 LZ 吃剩)。对 oracle 残差(245 vs
+180)= 序列侧未编码 + 匹配器差距,收益递减带,如实记录。
+kevy-compress 10 测 + workspace 全绿。r1-locality 现 **+35 笔**
+(tip `df9358e8`,先读 ahead 再记账)。
