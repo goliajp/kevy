@@ -7,11 +7,20 @@ use crate::KevyType;
 #[derive(Debug, Clone)]
 pub(crate) struct ColumnDef {
     pub(crate) name: String,
-    pub(crate) ty: KevyType,
+    /// `None` = the SQL type is outside the compilable subset; the
+    /// build step turns that into the named error (or a dropped-table
+    /// row on the lenient path).
+    pub(crate) ty: Option<KevyType>,
     /// The SQL type as written (`bigserial`, `numeric`, …) — drives the
     /// honest-mapping notes.
     pub(crate) sql_ty: String,
     pub(crate) inline_pk: bool,
+    /// `NOT NULL` was written — unenforceable here, carried as an
+    /// honest-mapping note instead of a refusal (a real pg_dump has it
+    /// on nearly every column; refusing it walls the first mile).
+    pub(crate) not_null: bool,
+    /// `DEFAULT <expr>` was written and dropped (note-carried).
+    pub(crate) dropped_default: bool,
     pub(crate) line: u32,
     pub(crate) col: u32,
 }

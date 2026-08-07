@@ -78,8 +78,6 @@ fn view_shapes_refused() {
 
 #[test]
 fn table_constraints_refused() {
-    refuses("CREATE TABLE t (id bigint PRIMARY KEY, a text NOT NULL);", "NOT NULL is not compilable", 1);
-    refuses("CREATE TABLE t (id bigint PRIMARY KEY, a text DEFAULT 'x');", "DEFAULT is not compilable", 1);
     refuses("CREATE TABLE t (id bigint PRIMARY KEY, a bigint REFERENCES u(id));", "REFERENCES is not compilable", 1);
     refuses("CREATE TABLE t (id bigint PRIMARY KEY, a text UNIQUE);", "an inline UNIQUE is not compilable", 1);
     refuses("CREATE TABLE t (id bigint PRIMARY KEY, CHECK (id > 0));", "CHECK is not compilable", 1);
@@ -151,4 +149,19 @@ fn line_and_col_anchor_the_offender() {
         format!("line 12, col 3: {}", e.message),
         "Display shape is the contract"
     );
+}
+
+/// NOT NULL / DEFAULT are NOT refusals: every real pg_dump carries
+/// them on nearly every column, and a fatal error walls migration day
+/// at the first mile (the V2 drill's own seed schema hit it). They
+/// compile with an honest-mapping note each instead.
+#[test]
+fn unenforceable_column_constraints_become_notes() {
+    let c = kevy_sql::compile(
+        "CREATE TABLE t (id bigint PRIMARY KEY, a text NOT NULL, b bigint DEFAULT (1 + 2));",
+    )
+    .expect("NOT NULL / DEFAULT must compile");
+    let notes = c.notes.join("\n");
+    assert!(notes.contains("t.a: NOT NULL is not enforced"), "notes: {notes}");
+    assert!(notes.contains("t.b: DEFAULT dropped"), "notes: {notes}");
 }

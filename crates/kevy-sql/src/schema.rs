@@ -80,6 +80,64 @@ pub(crate) fn build(stmts: &[Stmt]) -> Result<Built, SqlError> {
     Ok((tables, views, notes))
 }
 
+/// [`build`], but a table that cannot be declared becomes a
+/// `(name, reason)` row instead of killing the whole build — the plan
+/// face's contract ("report every fate") extended down to DDL: a
+/// pg_dump with one refused type in one table must still yield a plan
+/// for the other twenty (the V2 drill's second wall). Indexes and
+/// views over a dropped table are skipped; the table's own row
+/// already names why.
+pub(crate) fn build_lenient(stmts: &[Stmt]) -> (Built, Vec<(String, String)>) {
+    let mut tables: Vec<Table> = Vec::new();
+    let mut views: Vec<CreateView> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    let mut dropped: Vec<(String, String)> = Vec::new();
+    for s in stmts {
+        match s {
+            Stmt::Table(t) => match build_table(t, &tables, &mut notes) {
+                Ok(built) if tables.len() < MAX_TABLES => tables.push(built),
+                Ok(_) => dropped.push((t.name.clone(), "table limit reached (64)".into())),
+                Err(e) => dropped.push((t.name.clone(), e.message)),
+            },
+            Stmt::Index(ix) => {
+                if dropped.iter().any(|(n, _)| *n == ix.table) {
+                    continue;
+                }
+                if let Err(e) = attach_index(ix, &mut tables, &mut notes) {
+                    dropped.push((format!("index on {}", ix.table), e.message));
+                }
+            }
+            Stmt::View(v) => views.push(v.clone()),
+        }
+    }
+    ((tables, views, notes), dropped)
+}
+
+/// The honest-mapping notes one column carries: the unenforceable
+/// constraints it wrote (NOT NULL / DEFAULT — note-carried, never
+/// refused, or every real pg_dump would wall at the first mile) plus
+/// the type-mapping note when the mapping loses something.
+fn column_notes(table: &str, c: &crate::ast::ColumnDef, notes: &mut Vec<String>) {
+    if c.not_null {
+        notes.push(format!(
+            "{table}.{}: NOT NULL is not enforced — kevy enforces no schema at \
+             write time (Law 3); an absent field reads as NULL and the row \
+             simply leaves the index",
+            c.name
+        ));
+    }
+    if c.dropped_default {
+        notes.push(format!(
+            "{table}.{}: DEFAULT dropped — kevy enforces no schema; write the \
+             default value app-side",
+            c.name
+        ));
+    }
+    if let Some(n) = typemap::mapping_note(table, &c.name, &c.sql_ty) {
+        notes.push(n);
+    }
+}
+
 fn build_table(
     t: &crate::ast::CreateTable,
     existing: &[Table],
@@ -93,10 +151,20 @@ fn build_table(
         if columns.iter().any(|(n, _)| n == &c.name) {
             return Err(SqlError::at(c.line, c.col, format!("duplicate column '{}'", c.name)));
         }
-        if let Some(n) = typemap::mapping_note(&t.name, &c.name, &c.sql_ty) {
-            notes.push(n);
-        }
-        columns.push((c.name.clone(), c.ty));
+        column_notes(&t.name, c, notes);
+        let Some(ty) = c.ty else {
+            return Err(SqlError::at(
+                c.line,
+                c.col,
+                format!(
+                    "type '{}' is not in the compilable subset \u{2014} kevy \
+                     columns are i64|f64|str; map it explicitly (type table: \
+                     cookbook \u{a7}22)",
+                    c.sql_ty
+                ),
+            ));
+        };
+        columns.push((c.name.clone(), ty));
     }
     let pk = resolve_pk(t)?;
     let mut table =
