@@ -559,3 +559,21 @@ templated-JSON 2.2×,对外口径保持定性 ② amp 0.01× 下压实阈值
 落地。r1-locality 现 **+32 笔**(tip `fe4948ae`)。ROADMAP 的压缩
 train 余项 = 熵编码档(RFC §7.1 具名 follow-up)与真实消费者语料
 测量(mailrs),均非本轮。
+
+---
+
+## 十八期(2026-08-07,oracle 对表 + train() 第一课)
+
+`examples/k4_corpora.rs` 把 K4 前提四语料过真 codec 对 zlib oracle
+对表(B/值):**identical 去重后 9.4 vs oracle 41.8(反超 4.4×** ——
+整值字典命中一个 token vs zlib 每记录 deflate 头)/ templated
+264 vs 180 / textual 241 vs 104 / random 447 vs 406。三个事实:
+① **train() 第一次被测量教育**:未去重版把 164 份同值塞进字典
+(65B/值摊销买零捕获)→ FNV 精确去重落地(碰撞无害)
+② **对 oracle 残差 = 字面量熵编码**(dict 捕获本身在工作:templated
+payload 354→199)—— §7.1 具名 follow-up 档现在有了按语料的定价
+③ 不可压语料上字典是纯成本(vlog 尺度 0.02%,记录不动作)。
+workspace 全绿。r1-locality 现 **+33 笔**(tip `b79ea0dd`)。
+
+**压缩 train 可 autorun 的余项已尽**;熵编码档是"再来一遍同量级
+工作"(RFC 原话),开工与否归属主。
