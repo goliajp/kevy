@@ -135,7 +135,10 @@ line "K7-disposability" "$(k7_check)" \
 
 echo
 if [ "$fail" -ne 0 ]; then
-  echo "compressgate: RED — as designed at T0. Lines turn green as T3/T4 land."
+  echo "compressgate: RED — the envelope-fed lines (K1, K5-amplification) need"
+  echo "  bench/.capacity-envelope-results from a full-scale lx64 run beside this"
+  echo "  checkout; every unit-fed line asserts locally. A FAIL on a unit-fed"
+  echo "  line is a regression, not a missing artifact."
   exit 1
 fi
 echo "compressgate: PASS"
