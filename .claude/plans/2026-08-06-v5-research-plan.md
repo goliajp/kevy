@@ -338,3 +338,31 @@ shard 无条件建 replica inbox,reactor 每迭代付"1 次 Vec(64) 分配 +
 指令/op 比 glibc 少、miss 近平价、IPC 仍 1.50 vs 1.67 ——
 **下一轮开局 = topdown stall 分解**(store/RFO、依赖链、前端),
 不再猎 load-miss。r1-locality 现 **+16 笔**。
+
+---
+
+## 七期(2026-08-07,hset 税四层剥洋葱 —— 瓶颈线程付快路径)
+
+四层测量各杀上一层假设:① TopdownL1/L2 进程级 ON/OFF 几乎全同
+(retiring 48.8/50.0、memory-bound 5.0/4.9)—— 不是 stall 故事(进程级)
+② 指令形状漂移:批处理→每迭代开销;直接数 syscall:**OFF 3.85-3.88
+enters/op,ON 4.47-5.15(+15-34%)** ③ per-thread 拆穿拓扑:hset 单热键
+→ **owner shard 8s 只打 2.6k enters(饱和、从不阻塞、就是吞吐上限),
+7 个转发 shard 各打 ~20M 空转** —— 此前所有全进程 profile 都被 1:8
+稀释(包括本弧"allocator 自身符号平价"的读数);转发者多打的 enter
+是症状不是因 ④ **只采 owner 线程:kevy-alloc 快路径 23.3%
+(alloc 10.5 + dealloc 9.2 + pop_slot 3.6)vs glibc 13.4%
+(malloc 5.0 + cfree 8.4)—— 每调用成本 ~1.7×,+10pp 瓶颈线程
+≈ −12% hset 税**。无风暴、无停顿、无 tick —— 快路径每调用就是比
+tcache push/pop 干得多。
+
+**下轮攻击面(探针先行)**:dealloc claims-first 重排(回收命中路径
+根本不需要读段头 owner)/ claims 命中率计数(alloc 2× malloc 提示
+refill/慢路径超设计预期;已删 LIFO 缓存的 M3 教训框住设计空间)/
+zadd 用一次 owner 线程采样验证同形。
+
+**纪律学费**:①饱和单 shard 角 = 单线程测量,全进程 profile 稀释 1:8,
+要采瓶颈线程 ②本轮曾两个 bench 同盒重叠(违反隔离纪律),污染轮
+弃用,wait-for-quiet 守卫已进脚本。finding =
+`bench/PERF-DECOMP-2026-08-07-hset-tax-owner-thread.md`(`ee98f000`,
+r1-locality **+17 笔**)。
