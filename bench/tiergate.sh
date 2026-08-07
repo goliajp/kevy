@@ -131,6 +131,11 @@ l4_replay_spill() { # $1 = budget, $2 = floor -> "PASS ..." | "FAIL: why"
   kill "$srv" 2>/dev/null; sleep 0.3; kill -9 "$srv" 2>/dev/null; wait "$srv" 2>/dev/null
   replay_ms() { # $1 = copy name, $2 = tier budget ("" = off) -> total ms
     cp -r "$base/src" "$base/$1"
+    # Settle writeback before timing. The tiered side WRITES its spill
+    # while the plain side only reads, so leftover dirty pages from the
+    # copy (or from whatever line ran before this one) throttle exactly
+    # one side of the ratio: measured 3x on a dirty box vs a quiet one.
+    sync; sleep 2
     local log="$base/$1.log"
     if [ -n "$2" ]; then
       KEVY_TIER_BUDGET="$2" "$bin" --port "$port" --threads 2 --dir "$base/$1" &>"$log" &
@@ -148,21 +153,28 @@ l4_replay_spill() { # $1 = budget, $2 = floor -> "PASS ..." | "FAIL: why"
     awk '/replayed .* in [0-9]+ ms/{for(i=1;i<=NF;i++) if($i=="in") {v=$(i+1)+0; if(v>m) m=v}} END{print m+0}' "$log"
     echo "$n" >&2
   }
-  local plain_ms tiered_ms plain_n tiered_n
-  plain_ms=$(replay_ms plain "" 2>"$base/plain.n"); plain_n=$(cat "$base/plain.n")
-  tiered_ms=$(replay_ms tiered "$budget" 2>"$base/tiered.n"); tiered_n=$(cat "$base/tiered.n")
-  if [ "${plain_ms:-0}" -le 0 ] || [ "${tiered_ms:-0}" -le 0 ]; then
-    echo "FAIL: no replay timing parsed (plain=${plain_ms:-} tiered=${tiered_ms:-})"; return 0
-  fi
-  if [ "$plain_n" != "$wrote" ] || [ "$tiered_n" != "$wrote" ]; then
-    echo "FAIL: replay lost keys — wrote $wrote, plain $plain_n, tiered $tiered_n"; return 0
-  fi
+  # Median-of-3 on the ratio, same doctrine as perfgate-median: the
+  # quiet-box band at 8x over budget is 0.44-0.55, so a single run
+  # against a 0.45 floor is a coin toss even with the writeback settle.
+  local ratios="" plain_ms tiered_ms plain_n tiered_n rep
+  for rep in 1 2 3; do
+    plain_ms=$(replay_ms "plain$rep" "" 2>"$base/plain.n"); plain_n=$(cat "$base/plain.n")
+    tiered_ms=$(replay_ms "tiered$rep" "$budget" 2>"$base/tiered.n"); tiered_n=$(cat "$base/tiered.n")
+    if [ "${plain_ms:-0}" -le 0 ] || [ "${tiered_ms:-0}" -le 0 ]; then
+      echo "FAIL: no replay timing parsed (plain=${plain_ms:-} tiered=${tiered_ms:-})"; return 0
+    fi
+    if [ "$plain_n" != "$wrote" ] || [ "$tiered_n" != "$wrote" ]; then
+      echo "FAIL: replay lost keys — wrote $wrote, plain $plain_n, tiered $tiered_n"; return 0
+    fi
+    ratios="$ratios $(awk -v p="$plain_ms" -v t="$tiered_ms" 'BEGIN{printf "%.2f",p/t}')"
+    rm -rf "$base/plain$rep" "$base/tiered$rep"
+  done
   # rate ratio = plain_ms / tiered_ms (same command count both sides).
-  local ratio; ratio=$(awk -v p="$plain_ms" -v t="$tiered_ms" 'BEGIN{printf "%.2f",p/t}')
+  local ratio; ratio=$(printf '%s\n' $ratios | sort -n | sed -n 2p)
   if awk -v r="$ratio" -v f="$floor" 'BEGIN{exit !(r < f)}'; then
-    echo "FAIL: tiered replay ${ratio}x of plain (floor ${floor}) at budget ${budget} — plain ${plain_ms}ms, tiered ${tiered_ms}ms, $wrote keys"
+    echo "FAIL: tiered replay median ${ratio}x of plain (floor ${floor}) at budget ${budget} — runs:${ratios}, $wrote keys"
   else
-    echo "PASS: ${ratio}x of plain rate (floor ${floor}) at budget ${budget} — plain ${plain_ms}ms, tiered ${tiered_ms}ms, $wrote keys both sides"
+    echo "PASS: median ${ratio}x of plain rate (floor ${floor}) at budget ${budget} — runs:${ratios}, $wrote keys both sides"
   fi
 }
 
