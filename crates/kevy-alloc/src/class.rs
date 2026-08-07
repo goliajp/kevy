@@ -161,6 +161,33 @@ pub fn size_of(index: usize) -> usize {
     CLASSES[index] as usize
 }
 
+/// `ceil(2^32 / size)` per class — the reciprocal that turns the free
+/// path's slot-index division into a multiply-shift.
+///
+/// Exactness (Granlund–Montgomery): with `m = ceil(2^32 / d)`,
+/// `(n * m) >> 32 == n / d` for every `n` where
+/// `n * (m*d − 2^32) < 2^32`. Here `m*d − 2^32 < d ≤ 2^15` and
+/// `n < SPAN_BYTES = 2^16`, so the error product stays below `2^31`.
+/// The unit test still checks every class at every span offset —
+/// exhaustively, because a proof in a comment has no CI.
+const RECIP: [u32; NCLASSES] = {
+    let mut t = [0u32; NCLASSES];
+    let mut i = 0;
+    while i < NCLASSES {
+        t[i] = ((1u64 << 32).div_ceil(CLASSES[i] as u64)) as u32;
+        i += 1;
+    }
+    t
+};
+
+/// Divide a span offset by a class's slot size via the reciprocal
+/// table. `off` must be below [`SPAN_BYTES`].
+#[inline]
+#[must_use]
+pub fn slot_of_offset(off: usize, index: usize) -> u32 {
+    ((off as u64 * RECIP[index] as u64) >> 32) as u32
+}
+
 /// Slots that fit in a span of this class.
 #[must_use]
 pub const fn slots_per_span(index: usize) -> usize {
@@ -250,5 +277,23 @@ mod tests {
         }
         assert_eq!(SPAN_BYTES % crate::os::PAGE, 0, "a span must be a whole number of pages");
         assert!(SPAN_BYTES.is_power_of_two(), "masking needs a power-of-two span");
+    }
+
+    /// The reciprocal shortcut must equal the division at every span
+    /// offset of every class — exhaustive, not sampled: 64 Ki offsets
+    /// x 79 classes is five million cheap checks, and the proof in the
+    /// table's comment has no CI without this.
+    #[test]
+    fn the_reciprocal_agrees_with_division_everywhere() {
+        for c in 0..NCLASSES {
+            let size = size_of(c);
+            for off in 0..SPAN_BYTES {
+                assert_eq!(
+                    slot_of_offset(off, c) as usize,
+                    off / size,
+                    "class {c} (size {size}) at offset {off}"
+                );
+            }
+        }
     }
 }
