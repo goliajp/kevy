@@ -52,8 +52,15 @@ impl Commands for KevyCommands {
         // `Config::default()` (maxmemory=0), so the call is harmlessly a
         // no-op there.
         let cfg = self.state().config();
+        // maxmemory is an INSTANCE bound; each shard enforces its
+        // share, exactly as the tier budget divides in `tier_tick`.
+        // Handing every shard the whole figure let an N-shard server
+        // hold N x the configured cap (measured: 2 shards, 100 MB cap,
+        // 205 MB steady state; the first soak's "6 GB" cap was
+        // effectively 48 GB).
+        let n = self.state().nshards().max(1) as u64;
         store.set_max_memory(
-            cfg.memory.maxmemory,
+            cfg.memory.maxmemory / n,
             map_eviction_policy(cfg.memory.maxmemory_policy),
         );
     }
@@ -279,9 +286,13 @@ impl Commands for KevyCommands {
         // swapped the global since the previous tick. `store.set_max_memory`
         // is idempotent and cheap (compares + assigns two scalars + may
         // recompute soft-limit accounting); paying it every 100 ms is well
-        // below the noise floor of any benchmark.
+        // below the noise floor of any benchmark. The instance bound is
+        // divided across shards here exactly as at `on_shard_init` —
+        // this re-apply used to hand every shard the WHOLE figure, so
+        // the init-time division was overwritten within one tick.
+        let n = self.state().nshards().max(1) as u64;
         store.set_max_memory(
-            cfg.memory.maxmemory,
+            cfg.memory.maxmemory / n,
             map_eviction_policy(cfg.memory.maxmemory_policy),
         );
         // Publish this shard's gauges (used_memory, key/expire counts, …) so
@@ -483,26 +494,7 @@ impl Commands for KevyCommands {
 /// it does nothing until something asks: an allocator has no tick of its
 /// own. Measured with it unwired, the resident ratio was 2.39x against
 /// glibc's 2.40x — the design's whole point, absent.
-#[inline]
-fn alloc_reclaim_tick() {
-    #[cfg(feature = "kevy-alloc")]
-    kevy_alloc::thread_reclaim();
-}
 
-fn tier_tick(c: &KevyCommands, store: &mut Store, bits: u32, cfg: &kevy_config::Config) {
-    if !store.tier_enabled() {
-        return;
-    }
-    if let Ok(Some(total)) = crate::resolve_tier_budget(cfg) {
-        let n = c.state().nshards().max(1) as u64;
-        store.set_tier_budget((total / n).max(1));
-    }
-    let mut reserved = 0u64;
-    if bits & crate::state::IDX_NONEMPTY != 0 {
-        reserved += crate::index_runtime::reserved_bytes(&c.ctx(), store);
-    }
-    if bits & crate::state::VIEW_NONEMPTY != 0 {
-        reserved += crate::view_runtime::reserved_bytes(&c.ctx());
-    }
-    store.set_tier_reserved(reserved);
-}
+#[path = "commands_tick.rs"]
+mod commands_tick;
+use commands_tick::{alloc_reclaim_tick, tier_tick};
