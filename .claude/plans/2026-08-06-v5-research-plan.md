@@ -310,3 +310,31 @@ word 同 cache line)/ span header 预取 / 位图批写 / 或有代价地把
 free-list 词放回被释块。finding =
 `bench/PERF-DECOMP-2026-08-07-collection-tax-is-l1-misses.md`
 (r1-locality `7e944a63`,现 +14 笔)。
+
+---
+
+## 六期(2026-08-07,Phase B 第一刀 —— inbox 旗门 + 干预检验)
+
+**miss 事件采样(不是 cycles)把 27.25% 的全部 L1 miss 定位到
+`drain_replica_inbox` 区间内一条内联原子**;源读揭底:server 给每个
+shard 无条件建 replica inbox,reactor 每迭代付"1 次 Vec(64) 分配 +
+1 次空 mpsc 探测 + 1 次共享 line store",8 个 shard 的信号原子被密排
+进共享 cache line 互相 ping-pong(glibc 靠 chunk header 恰好垫开 ——
+布局运气,不是设计)。
+
+**修 = 旗门早退**(wake 契约本保证发送必举旗;打满 1024 自己重举旗)
++ `InboxSignal` `#[repr(align(64))]`(`a63cf47d`)。判决:
+- 机制:miss 3.31B→1.59B/8s(OFF 1.30B),风暴外科级消灭;
+- 契约:repligate 全 PASS(快照/活帧/重启/SIGKILL 跨代)+ 205 套件绿;
+- 吞吐:**sadd −15.8→−7.8 转绿**;hset −13.4 / zadd −15.2 不动;
+  incr 单跑 −11.5 经 3 轮插值洗清为噪声(+0.8% ±3%)。
+
+**方法论修正(重要)**:串行预算"48.6 miss × 13cyc = 全部缺口"是
+数字巧合 —— 消灭 1.7B miss 只回收一个角:被轮询 line 的 miss 大半被
+乱序引擎藏掉。**纸面对账 = 与因果相容,不是因果证明;干预才是检验**
+(与 v1.29 "memcpy 是税不是瓶颈"同构)。已入 finding(`5c7181c1`)。
+
+**剩余集合税的形状**:hset/zadd/incr miss 画像全平(顶行 4-6%),
+指令/op 比 glibc 少、miss 近平价、IPC 仍 1.50 vs 1.67 ——
+**下一轮开局 = topdown stall 分解**(store/RFO、依赖链、前端),
+不再猎 load-miss。r1-locality 现 **+16 笔**。
