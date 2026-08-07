@@ -51,14 +51,26 @@ pub fn parse_command(buf: &[u8]) -> Result<Option<(Command, usize)>, ProtocolErr
 /// `dst` is cleared at the start of every call; on `Ok(None)` and `Err`, `dst`
 /// is left empty (so the caller doesn't see partial state).
 pub fn parse_command_into(buf: &[u8], dst: &mut Argv) -> Result<Option<usize>, ProtocolError> {
-    dst.clear();
-    if buf.is_empty() {
-        return Ok(None);
-    }
-    if buf[0] == b'*' {
-        parse_multibulk_into(buf, dst)
-    } else {
-        parse_inline_into(buf, dst)
+    // Empty parses are consumed silently and parsing continues — the
+    // Redis semantics the borrowed twin documents (see
+    // `parse_command_borrowed`); the two entries must agree.
+    let mut base = 0usize;
+    loop {
+        dst.clear();
+        let rest = &buf[base..];
+        if rest.is_empty() {
+            return Ok(None);
+        }
+        let parsed = if rest[0] == b'*' {
+            parse_multibulk_into(rest, dst)?
+        } else {
+            parse_inline_into(rest, dst)?
+        };
+        match parsed {
+            None => return Ok(None),
+            Some(used) if dst.is_empty() => base += used,
+            Some(used) => return Ok(Some(base + used)),
+        }
     }
 }
 

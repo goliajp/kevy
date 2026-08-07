@@ -21,13 +21,27 @@ use crate::request::{MAX_MULTIBULK_LEN, find_crlf, parse_bulk_len, parse_int};
 pub fn parse_command_borrowed(
     buf: &[u8],
 ) -> Result<Option<(ArgvBorrowed<'_>, usize)>, ProtocolError> {
-    if buf.is_empty() {
-        return Ok(None);
-    }
-    if buf[0] == b'*' {
-        parse_multibulk_borrowed(buf)
-    } else {
-        parse_inline_borrowed(buf)
+    // Empty parses (a bare CRLF inline line, `*-1`, `*0`) are consumed
+    // SILENTLY and parsing continues — Redis semantics. redis-cli
+    // --pipe ends every stream with "\r\nECHO <magic>": answering the
+    // bare CRLF with an error makes every pipe import report
+    // "errors: 1" (the migrationgate discovery).
+    let mut base = 0usize;
+    loop {
+        let rest = &buf[base..];
+        if rest.is_empty() {
+            return Ok(None);
+        }
+        let parsed = if rest[0] == b'*' {
+            parse_multibulk_borrowed(rest)?
+        } else {
+            parse_inline_borrowed(rest)?
+        };
+        match parsed {
+            None => return Ok(None),
+            Some((argv, used)) if argv.is_empty() => base += used,
+            Some((argv, used)) => return Ok(Some((argv, base + used))),
+        }
     }
 }
 
@@ -218,11 +232,24 @@ mod tests {
     }
 
     #[test]
-    fn borrowed_null_array_yields_empty_argv() {
-        let frame = b"*-1\r\n";
-        let (argv, used) = parse_command_borrowed(frame).unwrap().unwrap();
-        assert!(argv.is_empty());
-        assert_eq!(used, frame.len());
+    fn empty_parses_are_consumed_silently() {
+        // Redis semantics: a null array, an empty array and a bare CRLF
+        // inline line all vanish — the NEXT real command parses, and
+        // `consumed` covers the skipped bytes too.
+        for prefix in [b"*-1\r\n" as &[u8], b"*0\r\n", b"\r\n", b"\r\n\r\n"] {
+            let mut stream = prefix.to_vec();
+            stream.extend_from_slice(b"*1\r\n$4\r\nPING\r\n");
+            let (argv, used) = parse_command_borrowed(&stream).unwrap().unwrap();
+            assert_eq!(argv, vec![b"PING".to_vec()], "prefix {prefix:?}");
+            assert_eq!(used, stream.len(), "prefix {prefix:?}");
+        }
+        // Nothing but empties → need more bytes, not a command.
+        assert!(parse_command_borrowed(b"*-1\r\n").unwrap().is_none());
+        // The redis-cli --pipe trailer shape end to end.
+        let pipe_tail = b"\r\n*2\r\n$4\r\nECHO\r\n$3\r\nxyz\r\n";
+        let (argv, used) = parse_command_borrowed(pipe_tail).unwrap().unwrap();
+        assert_eq!(argv.first(), Some(b"ECHO" as &[u8]));
+        assert_eq!(used, pipe_tail.len());
     }
 
     #[test]
