@@ -4,7 +4,7 @@
 //! while cross-shard KV paid 18–39 %, and the per-free bill was three
 //! atomic RMWs on the owning segment's header line — a CAS-loop push
 //! plus two `fetch_add`s — with up to seven shards hammering the same
-//! line (`PERF-FINDING-2026-07-27-m1-foreign-frees-are-the-kv-killer.md`).
+//! line (the foreign-frees KV finding measured the per-op bill).
 //!
 //! glibc dodges that bill by letting the freeing thread keep and reuse
 //! the foreign chunk locally. We deliberately do not: once a slot can be

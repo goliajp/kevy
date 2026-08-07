@@ -86,7 +86,7 @@ fn collect(dict: &[u8], input: &[u8]) -> (Vec<Seq>, core::ops::Range<usize>, boo
 }
 
 /// Pre-hash the dictionary so its positions are reachable from the
-/// first input byte — the cross-value capture K4 is about.
+/// first input byte — the cross-value capture this crate exists for.
 fn seed(dict: &[u8], table: &mut [u32]) {
     if dict.len() < MIN_MATCH {
         return;
@@ -144,7 +144,7 @@ fn serialize_fast(
 /// High-level serializer: `[varint lit_total][flag][literal block]
 /// [sequence stream]` — literals pulled out of the stream and
 /// Huffman-coded as one block when that wins (flag 1), raw otherwise
-/// (flag 0: K2 holds at every layer).
+/// (flag 0: never-expanding holds at every layer).
 fn serialize_high(
     dict: &[u8],
     lens: Option<&[u8; 256]>,
@@ -180,7 +180,7 @@ fn serialize_high(
 }
 
 /// Try to LZ-encode `input` into `out` at the fast level (payload
-/// only, no header). `(_, false)` when raw wins — the K2 discipline is
+/// only, no header). `(_, false)` when raw wins — never-expanding is
 /// a return value, not a hope.
 pub(crate) fn try_lz(dict: &[u8], input: &[u8], out: &mut Vec<u8>) -> (u8, bool) {
     let d = dict.len().min(MAX_OFFSET);
@@ -224,7 +224,7 @@ pub(crate) fn try_high(
 /// Three literal encodings compete; smallest wins. Flag 2 (the
 /// file-scoped shared table) has no per-record header, which is what
 /// lets entropy coding engage at 400 B; flag 1 carries its own table;
-/// flag 0 is raw — K2 at every layer.
+/// flag 0 is raw — never-expanding at every layer.
 fn emit_literal_block(lits: &[u8], lens: Option<&[u8; 256]>, out: &mut Vec<u8>) {
     let shared_bytes = lens.and_then(|l| {
         let mut hist = [0u64; 256];

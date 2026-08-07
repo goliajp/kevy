@@ -46,8 +46,7 @@ static POOLED: AtomicU64 = AtomicU64::new(0);
 /// ceiling, the legacy shape still ran ~17k direct allocations a second
 /// — dispatch and reply buffers growing through a 36 KB–300 KB ladder —
 /// each paying an mmap on birth and a munmap on death while glibc paid
-/// zero syscalls (finding `2026-07-27-mmap-lock-was-the-killer.md`,
-/// follow-up).
+/// zero syscalls (the mmap-lock finding's follow-up measurement).
 ///
 /// Its scope: the first version was per-heap and moved the count by
 /// **nothing**, because these buffers are born on one shard and die on
@@ -134,7 +133,7 @@ fn pool_park(ptr: NonNull<u8>, mapped: usize) -> bool {
 /// Unmap parked mappings that have aged past the pacing bound; young
 /// entries stay parked so a burst cycle re-takes them instead of
 /// paying mmap + kernel zero-fill again
-/// (RFC 2026-08-06-v5-reclaim-pacing). Ages are in drain calls and
+/// (the reclaim-pacing design round). Ages are in drain calls and
 /// every entry still leaves within POOL_AGE_DRAINS of them — the same
 /// unconditional liveness bound as the span sweep's.
 pub(crate) fn pool_drain() {
