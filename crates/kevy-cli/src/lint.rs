@@ -104,7 +104,7 @@ pub struct Coincidence {
 impl Coincidence {
     /// How often they agreed, as a percentage of rows compared.
     pub fn percent(&self) -> u32 {
-        if self.compared == 0 { 0 } else { (self.same * 100 / self.compared) as u32 }
+        (self.same * 100).checked_div(self.compared).unwrap_or(0) as u32
     }
 }
 
@@ -171,10 +171,8 @@ fn table_prefix(client: &mut RespClient, table: &str) -> io::Result<String> {
         let Reply::Array(items) = t else { continue };
         let f = crate::doctor::fields(items);
         let named = f.iter().any(|(k, v)| k == "name" && v == table);
-        if named {
-            if let Some((_, p)) = f.iter().find(|(k, _)| k == "prefix") {
-                return Ok(p.clone());
-            }
+        if named && let Some((_, p)) = f.iter().find(|(k, _)| k == "prefix") {
+            return Ok(p.clone());
         }
     }
     Err(io::Error::other(format!("no declared table named '{table}'")))
