@@ -69,6 +69,10 @@ pub struct Plan {
     pub queries: Vec<PlanEntry>,
     /// Honest-mapping notes, as [`crate::Compilation::notes`].
     pub notes: Vec<String>,
+    /// Tables (and stray indexes) that could NOT be declared:
+    /// `(name, named reason)`. The charter's migration bar reads
+    /// "every type either moved or named" — this is the named half.
+    pub dropped: Vec<(String, String)>,
 }
 
 impl Plan {
@@ -86,16 +90,21 @@ impl Plan {
 pub fn plan(sql: &str) -> Result<Plan, SqlError> {
     let toks = lex::lex(sql)?;
     let stmts = parse::parse_script(&toks)?;
-    let (tables, views, mut notes) = schema::build(&stmts)?;
+    let ((tables, views, mut notes), dropped) = schema::build_lenient(&stmts);
     let declares: Vec<Vec<String>> = tables.iter().map(schema::declare_argv).collect();
     let mut queries = Vec::with_capacity(views.len());
     for v in &views {
         let served = match tables.iter().find(|t| t.name == v.table) {
             None => Served::No {
-                reason: format!(
-                    "FROM unknown table '{}' — CREATE TABLE it first (this compiler is whole-file: declare, then view)",
-                    v.table
-                ),
+                reason: match dropped.iter().find(|(n, _)| *n == v.table) {
+                    Some((_, why)) => {
+                        format!("its table '{}' was not declarable — {why}", v.table)
+                    }
+                    None => format!(
+                        "FROM unknown table '{}' — CREATE TABLE it first (this compiler is whole-file: declare, then view)",
+                        v.table
+                    ),
+                },
             },
             Some(t) => match viewplan::plan_view(v, t, &mut notes) {
                 Ok(viewplan::Planned::View(argv)) => {
@@ -116,7 +125,7 @@ pub fn plan(sql: &str) -> Result<Plan, SqlError> {
             served,
         });
     }
-    Ok(Plan { declares, queries, notes })
+    Ok(Plan { declares, queries, notes, dropped })
 }
 
 /// The declared paths an argv rides, read off the argv rather than

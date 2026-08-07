@@ -267,25 +267,57 @@ fn parse_table_unique(p: &mut P<'_>, t: &mut CreateTable) -> Result<(), SqlError
     Ok(())
 }
 
+/// Consume a `DEFAULT` expression without interpreting it: anything
+/// up to the next top-level `,` or `)`. The value is app-side
+/// knowledge (the note says so); the parser only needs the boundary.
+fn skip_default_expr(p: &mut P<'_>) -> Result<(), SqlError> {
+    let mut depth = 0u32;
+    loop {
+        match &p.peek().tok {
+            Tok::Sym('(') => depth += 1,
+            Tok::Sym(')') if depth == 0 => return Ok(()),
+            Tok::Sym(')') => depth -= 1,
+            Tok::Sym(',') if depth == 0 => return Ok(()),
+            Tok::Eof => {
+                let t = p.peek();
+                return Err(SqlError::at(t.line, t.col, "unterminated DEFAULT expression"));
+            }
+            _ => {}
+        }
+        p.bump();
+    }
+}
+
 fn parse_column_def(p: &mut P<'_>, t: &mut CreateTable) -> Result<(), SqlError> {
     let (name, line, col) = p.ident("a column name or a table constraint")?;
     let (ty, sql_ty) = parse_type(p)?;
-    let mut def = ColumnDef { name, ty, sql_ty, inline_pk: false, line, col };
+    let mut def = ColumnDef {
+        name,
+        ty,
+        sql_ty,
+        inline_pk: false,
+        not_null: false,
+        dropped_default: false,
+        line,
+        col,
+    };
     loop {
         if p.is_kw("primary") {
             p.bump();
             p.expect_kw("key", "after PRIMARY")?;
             def.inline_pk = true;
         } else if p.is_kw("not") {
-            return Err(p.refuse(
-                "NOT NULL",
-                "kevy enforces no schema at write time (Law 3); an absent field reads as NULL and the row simply leaves the index",
-            ));
+            // Accepted with an honest note, not refused: every real
+            // pg_dump writes NOT NULL on nearly every column, and a
+            // fatal refusal here walls migration day at the first
+            // mile (the V2 drill hit this on its own seed schema).
+            p.bump();
+            p.expect_kw("null", "after NOT")?;
+            def.not_null = true;
         } else if p.is_kw("default") {
-            return Err(p.refuse(
-                "DEFAULT",
-                "kevy enforces no schema; write the default value app-side",
-            ));
+            p.bump();
+            skip_default_expr(p)?;
+            def.dropped_default = true;
         } else if p.is_kw("references") {
             return Err(p.refuse(
                 "REFERENCES",
@@ -307,7 +339,7 @@ fn parse_column_def(p: &mut P<'_>, t: &mut CreateTable) -> Result<(), SqlError> 
 }
 
 /// Parse one SQL type (with optional `(n[, m])` args) and map it.
-fn parse_type(p: &mut P<'_>) -> Result<(KevyType, String), SqlError> {
+fn parse_type(p: &mut P<'_>) -> Result<(Option<KevyType>, String), SqlError> {
     let t = p.peek();
     let Tok::Ident(first) = &t.tok else {
         return Err(p.err_here("expected a column type"));
@@ -324,13 +356,13 @@ fn parse_type(p: &mut P<'_>) -> Result<(KevyType, String), SqlError> {
             "write timestamptz \u{2014} both map to str (kevy stores app-encoded time)",
         ));
     }
-    let Some(ty) = typemap::map_type(&name) else {
-        return Err(p.err_here(format!(
-            "type '{name}' is not in the compilable subset \u{2014} kevy columns are i64|f64|str; map it explicitly (type table: cookbook \u{a7}22)"
-        )));
-    };
+    // Unknown types PARSE — the verdict moves to schema build so the
+    // plan face can drop the one table and keep reporting (a pg_dump
+    // with one money column must not lose its whole plan). `compile`
+    // still fails on it, at the same message, from build_table.
+    let ty = typemap::map_type(&name);
     if p.is_sym('(') {
-        if !typemap::takes_args(&name) {
+        if ty.is_some() && !typemap::takes_args(&name) {
             return Err(p.err_here(format!("type '{name}' takes no arguments")));
         }
         p.bump();

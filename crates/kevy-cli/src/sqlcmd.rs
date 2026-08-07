@@ -170,6 +170,13 @@ fn run_plan(file: &str, src: &str) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if !plan.dropped.is_empty() {
+        println!("{} table(s)/index(es) NOT declarable:", plan.dropped.len());
+        for (name, why) in &plan.dropped {
+            println!("  ✗ {name}: {why}");
+        }
+        println!();
+    }
     println!("{} table(s) to declare:", plan.declares.len());
     for d in &plan.declares {
         println!("  {}", d[1]);

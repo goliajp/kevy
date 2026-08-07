@@ -91,3 +91,25 @@ CREATE VIEW paid AS SELECT * FROM orders WHERE status = 'paid';
     assert_eq!(p.unserved(), 1);
     assert!(p.queries[1].served.is_served(), "the later view is still planned");
 }
+
+/// The V2 drill's second wall: one refused type in one table must not
+/// kill the whole plan. The billing-shaped table drops with a named
+/// reason; the healthy tables still declare; a view over the dropped
+/// table points at the drop instead of "unknown table".
+#[test]
+fn a_dropped_table_keeps_the_rest_of_the_plan() {
+    let p = kevy_sql::plan(
+        "CREATE TABLE users (id bigint PRIMARY KEY, email text);
+         CREATE TABLE billing (id bigint PRIMARY KEY, amount money);
+         CREATE INDEX ON billing (amount);
+         CREATE VIEW v AS SELECT * FROM billing WHERE id = 1;",
+    )
+    .expect("the plan survives the dropped table");
+    assert_eq!(p.declares.len(), 1, "users still declares");
+    assert_eq!(p.dropped.len(), 1, "billing drops once: {:?}", p.dropped);
+    assert!(p.dropped[0].1.contains("money"), "named reason: {}", p.dropped[0].1);
+    let kevy_sql::Served::No { reason } = &p.queries[0].served else {
+        panic!("the view over the dropped table cannot be served");
+    };
+    assert!(reason.contains("not declarable"), "points at the drop: {reason}");
+}
