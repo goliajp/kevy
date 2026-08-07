@@ -37,12 +37,27 @@ TABLE.DECLARE name PREFIX p PK col
     COLUMN name i64|f64|str [COLUMN ...]
     [INDEX col range|unique [VALUES col ...]] ...
     [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] ...
+    [WINDOW col SPAN n BUCKET n]   # 滑动热窗——见下文
+    [AUTODECLARE n]    # 允许引擎替你补最多 n 条路径——见下文
 TABLE.ENSURE ...       # TABLE.DECLARE 的开机形态——见下文
 TABLE.REPLACE ...      # 显式的 drop + declare + 重建
 TABLE.DROP name        # drops the table + its compiled indexes; 1|0
 TABLE.LIST             # name/prefix/pk + column/index/orderpath counts
 TABLE.VERIFY name      # component fsck + a bounded column spot check
 ```
+
+## 滑动窗口
+
+`WINDOW <col> SPAN <n> BUCKET <n>` 在一个 `i64` 列上声明一个滑动的热窗。`SPAN` 与 `BUCKET` 是**以该列自己的单位计**的普通整数——引擎从不假定时间基准，所以这一列可以是 epoch 秒、epoch 毫秒、序列号，任何随数据变旧而单调的东西。边界按**整桶**推进；被驱逐的一桶变成一个冷段。
+
+两条声明期拒绝，都具名：
+
+- 窗口列必须是一个已声明的 `i64` 列；
+- 它必须有一条访问路径，其树尾能免费回答 `max(col)`——要么是它上面的单列 `INDEX <col>`，要么是**首列**就是它、且升序的 `ORDERPATH`。没有就拒绝声明（`WINDOW needs an access path on '<col>'`）——这同时也保证了每张窗口表都能经由同一条路径服务跨窗范围查询。
+
+**今天在滑的是：窗口列上的那条单列 INDEX。** 随着边界推进（整桶地），索引树中落在窗外的前缀会移进 `segs-<shard>/` 下不可变的冷段文件——索引内存缩小，而普通的 `RANGE` / `COUNT` 查询在热+冷上继续作答，**与一条未窗口化的索引逐字节相同**（包括冷行的重写、删除与复活；语义等价的 e2e 把这一点钉住了）。冷索引段是**派生的溢出，不是真相**：行仍然是热键空间里普通的 hash，重启时只是重建并重新滑动。
+
+两处边缘，都是显式的：带子句的查询（`FILTER` / `SORT` / `DISTINCT` / `FACET`）在一条已有冷段的索引上会**具名拒绝**，直到带子句的冷路径落地为止——绝不给一个静默不完整的答案；以及**由窗口列领头的 `ORDERPATH` 满足声明条件，但今天还不滑**。纯内存部署（没有数据目录）接受这条声明，只是保持全热。
 
 ## 开机模式：`ensure`
 
@@ -55,7 +70,7 @@ TABLE.VERIFY name      # component fsck + a bounded column spot check
 裸的 `TABLE.DECLARE` 保持严格形态：重声明既有名字是错误。开机用 `ensure`，迁移用 `replace`，重名即 bug 的场合用 `declare`。
 
 - 列类型是 `i64 | f64 | str`——即标量索引的类型。其余一切（时间戳、布尔、枚举）由应用编码进这三种之一，粗粒度映射被明说而不是被藏起来（kevy-sql 会对每个被转换的列打印一条说明）。
-- `PK` 指向一个已声明的列；它是文档加一个 `VERIFY` 面——行仍按键寻址，和今天完全一样。`serial` 式的 id 分配是一份配方（[序列配方](cookbook.md#3-sequences)），不是引擎特性。
+- `PK` 指向一个已声明的列；它是文档加一个 `VERIFY` 面——行仍按键寻址，和今天完全一样。`serial` 式的 id 分配是一份配方（[序列配方](cookbook.md#3-序列)），不是引擎特性。
 - 最多 64 张表；每一种结构性拒绝都有名字（重复列、未知的 `VALUES` 列、名字冲突……），从不静默。
 
 `TABLE.VERIFY` **在调用那一刻、双向地现算每一个计数器**（4.1——此前 `coerce_failures` 是生命周期累计值，还把缺失列也吞了进去，没法和旁边现算的 `drift` 对读）：
@@ -67,7 +82,7 @@ TABLE.VERIFY name      # component fsck + a bounded column spot check
 
 ## 复合 ORDERPATH 语义
 
-ORDERPATH 把[复合排序配方](cookbook.md#8-composite-ordering-order-by-a-b)——`ORDER BY a, b DESC` 的遍历——机械化成一个真正的复合索引：每行一条保序字节串，于是一棵 B-tree 就能像关系型复合索引那样回答查询。规则如下：
+ORDERPATH 把[复合排序配方](cookbook.md#8-复合排序order-by-a-b)——`ORDER BY a, b DESC` 的遍历——机械化成一个真正的复合索引：每行一条保序字节串，于是一棵 B-tree 就能像关系型复合索引那样回答查询。规则如下：
 
 - **`WHERE` 取前导前缀。**`WHERE a EQ x [b EQ y …] [RANGE c min max]` 必须从头按声明顺序点名复合索引的列：一段等值前缀，然后在*下一列*上最多一个 range；其后全部不受约束（经典的复合 B-tree 语义）。点名一个非前缀列是具名错误——从不是一次扫描。
 - `RANGE` 在 `WHERE` 内是终结的——它后面不能再跟任何东西，因为 range 之后的条件无法表示为一次连续遍历。
@@ -98,10 +113,27 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name email
 
 **index-only 查询零行触达。**一条 FILTER / SORT / COUNT 查询完全从常驻 RAM 的索引作答——行读计数器在门禁套件里被断言 `== 0`（`bench/tablegate.sh`）。这正是这两个特性一起设计时瞄准的分层协同：开着[透明分层存储](tiering.md)时，一张全冷的表以**零磁盘读**服务 index-only 查询，只有最后的 hydration 页（`FIELDS …`）付冷读——每行一次、批量提交。不带 `VALUES` 列的索引在内存与查询路径上，与从未声明过这些列的 store 上的索引逐字节相同（零成本-未声明门禁）。
 
+## `AUTODECLARE`：你没写的那些路径
+
+查询一个你从未建索引的列会被按名字拒绝。那次拒绝同时也是一条关于你负载的事实，`IDX.ADVISE` 会把反复撞上它的形状列出来。`AUTODECLARE n` 的意思是：**当某个形状被拒得足够多、并且它落在我已声明的列上时，就替我把这条路径声明掉——最多 n 条。**
+
+它的每一处都是刻意有界的：
+
+* **不问就不开。** 没有这个子句就没有这个循环。这不是默认行为。
+* **上限就是你写的那个数。** 预算用完之后查询照样被拒，形状留在 `IDX.ADVISE` 里等你读——引擎不会悄悄抬高自己的上限。
+* **只在已声明的列上。** 形状若指向表没有声明的列，就永远无法落地；`IDX.ADVISE` 仍会报告它，答案还是你的。
+* **只增不删。** 删索引是人的动作。猜错的最坏后果是有界的内存浪费，绝不会是丢掉一条路径。
+* **看得见。** 这样建出的索引在 `IDX.LIST` 里带 `auto` 标记，表的 spec 里也留着账本——你随时能回读哪些是你写的、哪些是引擎补的。
+* **不在查询答案里发生。** 越过阈值的那次查询照样拿到它的错误，下一次才会发现路径正在建。
+
+**"足够多"是同一形状被拒 16 次。** 这个数是常量，不是旋钮：每表可调的阈值恰恰就是本引擎声称不需要的那种逐负载调优，而形状到得慢的负载无论如何都要先付 16 次拒绝。之所以写在这里，是因为一个盯着 `IDX.ADVISE` 纳闷"怎么还没动静"的运维应该拿到这个数——而不是因为它可以设。
+
+这不是查询计划器，这个区别就是全部要点：引擎从不替你选**走哪条路径**——你的查询自己点名。`AUTODECLARE` 只是在你的邀请下、在你的预算内、在你看得见的地方**扩展声明**。查询期仍是一条铁律：跑已声明的路径，其余按名字拒绝。
+
 ## NULL、唯一性，以及什么被强制
 
-- **NULL = 缺失字段。**没有任何列是必填的；缺少被索引列的行只是不在那个索引里。没有引擎级 `CHECK`、默认值或 NOT NULL——约束是配方（[约束配方](cookbook.md#5-check-constraints-and-multi-key-invariants)，原子块）。
-- 表层的**唯一性是校验而非强制**：`unique` 索引就是 `IDX.CREATE KIND unique` 建的那道围栏（[indexes.md](indexes.md#uniqueness-is-a-fence-not-a-lock)——预留模式让它免于竞态），`TABLE.VERIFY` 报告 `duplicates`，而不是引擎事后拒绝你的写入。
+- **NULL = 缺失字段。**没有任何列是必填的；缺少被索引列的行只是不在那个索引里。没有引擎级 `CHECK`、默认值或 NOT NULL——约束是配方（[约束配方](cookbook.md#5-check-约束与多-key-不变量)，原子块）。
+- 表层的**唯一性是校验而非强制**：`unique` 索引就是 `IDX.CREATE KIND unique` 建的那道围栏（[indexes.md](indexes.md#唯一性是围栏不是锁)——预留模式让它免于竞态），`TABLE.VERIFY` 报告 `duplicates`，而不是引擎事后拒绝你的写入。
 
 ## 它不是什么
 
@@ -112,16 +144,43 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name email
 `kevy-sql`（及其 `kevy-cli sql` 面）是一个**声明期编译器**——像迁移工具一样，把一份 PG/MySQL 方言的 schema 文件读一次，产出显式声明：
 
 ```console
-kevy-cli sql compile schema.sql                          # print the plan
+kevy-cli sql compile schema.sql                          # print the declarations
 kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004
+kevy-cli sql plan schema.sql                             # 每条查询会变成什么
 ```
+
+`compile` 与 `plan` 读同一份文件，回答的却是两个问题。`compile` 是构建期：它产出的是要执行的命令，所以遇到一条服务不了的视图就是错误、就停在那里。`plan` 是迁移那天——它报告**每一条**查询的去向，因为*"你这 40 条里 34 条能跑，另外 6 条各缺什么"*才是一个拿着 schema 来的人真正在问的：
+
+```console
+$ kevy-cli sql plan shop.sql
+2 table(s) to declare:
+  users
+  orders
+
+5 quer(ies) — 3 served, 2 not
+
+  served:
+    paid_orders              orders.status
+    recent_by_user           orders.user_id_created_at
+    by_email                 users.email
+
+  not served:
+    line 25    by_total
+      view 'by_total': WHERE (total EQ) matches no declared access path — add: CREATE INDEX ON orders (total)
+    line 28    everything
+      view 'everything': a view with no WHERE would scan the table — kevy has no scans; add a driving predicate, or page an index directly (IDX.QUERY orders.<col> RANGE …)
+
+plan: 2 of 5 quer(ies) need a declaration change before this schema moves
+```
+
+只要有查询服务不了，它就以非零退出。那不是警告：一条没有声明路径的查询**根本跑不了**，所以它在 schema 改掉之前一直挡着这次迁移。而 *DDL* 本身解析不了仍然是普通错误——对一份不成立的 schema 没有计划可言。
 
 - `CREATE TABLE` → `TABLE.DECLARE`（类型粗粒度映射到 `i64|f64|str`，每个映射都如实标注）。
 - `CREATE [UNIQUE] INDEX` → `INDEX` 子句；PG 的 `INCLUDE` 覆盖列 → 存储的 `VALUES`；多列索引 → 一个 `ORDERPATH`。
 - 常量的单表 `CREATE VIEW … AS SELECT` → 一个引擎视图；带参数的 → 一张**查询卡**：一条现成的 `IDX.QUERY` 模板，`$N` 槽位由你的应用运行时填入。
 - 编译器同样不做规划：它把你的视图与你声明过的访问路径做匹配，匹配不上时告诉你该补哪条声明（`add: CREATE INDEX ON t (dept, age)`），而不是发明一次扫描。临时 SQL、join、子查询、`OR`、`GROUP BY` 等一律带 `line:col` 拒绝，并指向替代它的配方。
 
-端到端的完整演练——一份真实的 users/orders/order_items schema 被编译、应用、查询——见[schema 迁移配方](cookbook.md#22-porting-a-pgmysql-schema)。
+端到端的完整演练——一份真实的 users/orders/order_items schema 被编译、应用、查询——见[schema 迁移配方](../cookbook.md#22-porting-a-pgmysql-schema)。
 
 ## 嵌入式
 

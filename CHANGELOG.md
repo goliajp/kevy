@@ -1,5 +1,336 @@
 # Changelog
 
+## Unreleased — the writes that were acknowledged and gone
+
+A probe built to settle a question about replicas answered a different
+one: the replica had not received a multi-key `DEL` at all. Pulling
+that thread found three data-loss bugs on the 4.1.1 surface, all the
+same shape — **the path that writes was not the path that reads it
+back** — plus two ways a secondary index could quietly disagree with
+the keyspace.
+
+### Data loss (fixed)
+
+- **`MSET` did not survive a restart.** It answered `+OK`, read back
+  correctly, and every key was gone at the next start — even with
+  `appendfsync always`. The op recorded its effect into the AOF using
+  the verb `MSET`, but replay runs the *local* dispatcher, where `MSET`
+  answered an arity error: the record went to disk in a language its
+  only reader did not speak. `MSET`/`RENAME`/`RENAMENX` now execute
+  there, which also makes **AOFs already on disk replayable** — the fix
+  recovers data that was written before it.
+- **`RENAME` did not survive a restart** — it came back *reverted*,
+  source alive and destination missing. Same cause for the same-shard
+  form; the cross-shard form wrote no record at all (a deferral the
+  code documented, on the assumption that a faithful value record
+  needed MIGRATE/RESTORE binary frames — it did not: the rewrite
+  serializer already renders any value and TTL as replayable commands).
+  The source's delete is recorded only after the destination's put
+  commits, and only if the key is still absent, so a refused
+  `RENAMENX` or a client that recreated the key cannot be replayed
+  away. The two halves live in two shards' AOFs and are not atomic: a
+  crash between them replays the key under **both** names — the
+  deliberate direction, and measured rather than assumed.
+- **Nothing the runtime routes as a cross-shard op reached a replica.**
+  Multi-key `DEL`/`UNLINK`, `MSET`, the cross-shard `RENAME` and
+  `LMOVE` two-steps and the `*STORE` destinations were durable and
+  unreplicated — the replication push existed only on the single-key
+  dispatch path. The AOF append and the replication push now travel
+  together. `FLUSHALL` is deliberately excluded: it propagates by
+  bumping the feed generation, and an extra record would land at the
+  offset that bump just reset.
+
+### Secondary index (fixed)
+
+- **A multi-key delete left the rows in the index**, forever:
+  `IDX.QUERY` kept returning them with their sort value and a nil
+  hydration, `IDX.COUNT` kept counting them. The synchronous
+  maintenance hook had exactly one call site. WATCH invalidation and
+  index maintenance are the same event and now travel together.
+- **Rows arriving by `MOVE-SCOPE` never entered the index** — present
+  in the keyspace, invisible to every indexed query, and `IDX.VERIFY`
+  reported the index clean because it audits only its own entries.
+- **`IDX.VERIFY` gains `missing`** — the direction it could not see
+  (rows that derive a value and have no entry), computed by the same
+  classifier `TABLE.VERIFY` already used.
+- **A windowed index lost rows to a stale tombstone.** On a table that
+  had slid, a handful of rows became unreachable through their own
+  index while still sitting in the keyspace — 19 to 21 out of 20 000
+  written, and permanent. A tombstone shadows a row's cold entry when
+  the row changes, and the set that held them was flat: a bloom false
+  positive could shadow a row that had no cold entry *yet*, and the
+  shadow then hid the entry the row was given when it first slid. The
+  same flat set hid the *new* entry of any row that was rewritten and
+  slid again. A tombstone now records how far back it reaches, so it
+  can only hide what existed when it was spent.
+- **A windowed table's `missing` count is reconciled, not assumed.**
+  Rows below the window boundary are supposed to be in a cold segment;
+  they are now counted and checked against the live cold entries
+  instead of being excused for their position — which is what surfaced
+  the tombstone loss above. Excusing them by position reported zero on
+  a table that was losing rows; not excusing them at all reported
+  17 500 holes on a healthy one.
+
+### The unix socket that was bound but never served
+
+`KEVY_UNIX_SOCKET` created the socket, and on two of the three reactors
+nothing ever accepted on it. The listener is bound in `Runtime::run`
+before any shard spawns, so the file appeared and a client's
+`connect()` succeeded into the kernel backlog — and then waited
+forever, with no error to show for it. Only the io_uring reactor
+accepted; kqueue (macOS, BSD) and the epoll fallback (Linux without
+io_uring) registered the TCP, cluster and replication listeners and not
+this one.
+
+The selector that chose between listeners was a `cluster: bool`, and
+the unix listener arrived after the boolean did. It is an enum now,
+because three listeners cannot ride on two values.
+
+There was no test. The one added here waits for a **reply** rather than
+for the socket file: a test that asserted the file exists would have
+passed against the version that hangs. It forces `KEVY_IO_URING=0` for
+the same reason — on Linux the default reactor is the one that already
+worked, so the regression would never have been reached.
+
+### `IDX.VERIFY` answers each kind in its own vocabulary
+
+For text, aggregate and ann indexes, `VERIFY` used to answer four bare
+numbers that the reducer labelled with the scalar audit's vocabulary. A
+healthy three-document text index answered `coerce_failures 7,
+duplicates 7` — its postings and token counts wearing an integrity
+warning's names — and an aggregate's group count printed as
+`duplicates`. The ann row also carried two facts in one number
+(`links + rebuild_recommended`), the exact shape behind several of the
+bugs above.
+
+Each kind now answers under its own names: agg `rows / bytes /
+excluded / groups`, text `docs / bytes / postings / tokens`, ann
+`vectors / bytes / tombstones / links / rebuild_recommended` — the last
+two travelling separately. None of them print `drift` / `missing`: the
+audit's question applies to row-keyed entries, and theirs are groups,
+postings and graph nodes. The shard chunks are in-process fan-out in
+one binary, so the wire could simply be corrected; scalar indexes are
+unchanged.
+
+### `duplicates` is per shard, and the docs did not say so
+
+`KIND unique` deliberately does not block writes, and the one guarantee
+it offers instead is that duplicates are counted and show up as
+multi-hit `EQ` reads. The read half always works. The counter half is
+maintained inside each shard's segment, so it only sees two rows
+sharing a value when both landed on the same shard — and keys hash
+across shards, so ordinarily they did not.
+
+Measured: the same pair of rows reports `duplicates 1` on a
+single-shard server and `duplicates 0` on a two-shard one, while
+`IDX.QUERY … EQ` returns both either way. Someone watching
+`duplicates` for uniqueness violations would have read zero with the
+duplicate sitting there.
+
+Documented, not changed: a global counter needs cross-shard value
+counting on the write path, which is the serialization this kind exists
+to avoid. `docs/indexes.md` now says the read is the detection that
+always works, and that a zero in the counter is not a statement that
+the value is unique.
+
+### What `IDX.VERIFY` cannot falsify
+
+Documented rather than changed, because it follows from the shape. For
+`KIND agg` an entry is a *group*, not a row, so the audit's question —
+does this entry's row still derive this value — does not apply.
+`drift` and `missing` stay zero whatever the counts say, and the
+running totals are never recomputed against the keyspace at runtime;
+`recompute_stats` exists only in a unit test.
+
+That matters next to the fix below: an expiring row silently
+decremented nothing, and `IDX.VERIFY` would have reported a clean
+aggregate throughout. So the aggregate's net is a test rather than the
+audit — `index_write_path_coverage` compares the group's count against
+the live rows after each verb, and `docs/indexes.md` now says which
+half of the "VERIFY makes drift falsifiable" claim holds for this kind.
+
+### The expiring key that stayed in the index
+
+An indexed row whose TTL passed never left the index. A key with a
+50 ms TTL was gone from `EXISTS` and still returned by `IDX.QUERY`
+twelve seconds later, hydrating to `age (nil)` — a phantom row with a
+stale sort value, handed to the caller. `IDX.VERIFY` reported `drift 1`
+and went on reporting it; touching the key did not heal it.
+
+Expiry is a write with no client behind it. The store removes the key
+itself — lazy `reap`, the single-lookup read, the active sampler — and
+the runtime never sees a write, so neither the index hook nor the WATCH
+bump fired. The multi-key `DEL` fix above does not cover it: that added
+a call at the runtime layer, and expiry never reaches the runtime
+layer.
+
+All four expiry paths funnel through one function, so the capture went
+there. The store now buffers expired keys on an always-on list, kept
+separate from the keyspace-notification buffer and deliberately not
+sharing its capture flag — this one carries correctness, and
+correctness cannot depend on whether a client happened to subscribe to
+notifications. The runtime drains it and runs the same maintenance a
+delete would.
+
+Found by a test written for the general case: `index_write_path_coverage`
+walks the verbs that can create, change, rename or remove an indexed
+row and asserts `IDX.VERIFY` is clean in **both** directions after each
+one, naming the verb. The two index-drift bugs above were the same
+omission on two paths, each fixed with a regression test for its own
+path — which is right, and is also how a third goes missing, because
+the paths had never been enumerated.
+
+### A durable effect is a propagated effect, or it is named
+
+The three data-loss fixes above were one omission wearing three faces:
+a write reached the AOF and never reached the replica, and because the
+change feed reads the replication backlog, never reached a CDC consumer
+either. The fix paired the two in `log_effect`.
+
+`bench/propgate.sh` keeps the pairing from coming apart again. Every
+`self.log(…)` / `self.log_write(…)` in the runtime must be followed by
+a `push_mutation` within a few code lines, or be listed in the script
+with the reason it is durable-only. There are two such reasons today,
+both real: `FLUSHALL` propagates by bumping the feed generation (a
+record would land at the offset the bump just reset to zero), and
+window-tick `SEGMENTED` frames are per-node — a replica runs its own
+window tick and seals its own segments.
+
+Auditing the nine call sites to write it found no tenth bug: every one
+is paired or named. What it did find is that the big-value io_uring
+fast path hand-writes the pair instead of calling `log_effect` — which
+is why the gate greps for the pairing rather than for the helper, and
+why a new fast path that logs and forgets to push now fails in CI
+rather than in someone's replica.
+
+### The translations that quietly fell behind
+
+The docs are published in three languages and nothing was checking that
+they stayed three. `docs/zh/tables.md` still carried a line reading
+"this page is not translated yet, see the English version" for a
+feature that had shipped, and four other chapters were each missing a
+whole section:
+
+- **views.md** — *First: check whether you need one*, the section that
+  exists to say most shapes want an ORDERPATH rather than a view. The
+  correction was made in English only.
+- **indexes.md** — *The index budget*, which exists to stop a migration
+  stalling on arithmetic that is wrong.
+- **UPGRADING.md** — *Tiering and the TABLE layer*, i.e. what 4.0
+  changed underneath a reader who upgrades.
+- **wasm.md** — *In a Tauri app*.
+- **cookbook.md** — recipes 21 and 22, including the schema-porting
+  walkthrough that other pages link to.
+
+All five are translated now, and a gate keeps them that way:
+`tools/check_doc_i18n.py` asks whether each translation has the same
+number of level-2 sections as its English chapter. It cannot tell you a
+section was translated *well* — it can tell you one is missing, which
+is the failure that actually happened. Chapters that are deliberately
+English-only are listed in the script with the reason, so "not
+translated" is a decision on the record rather than a silence.
+
+### Deploying behind a proxy
+
+New chapter, [`docs/deploy-behind-a-proxy.md`](docs/deploy-behind-a-proxy.md),
+in three languages: kevy has no AUTH and no TLS by charter, so this is
+the recipe for the thing that does. Configs for stunnel, HAProxy `mode
+tcp` and nginx `stream`, over a loopback port or a unix socket.
+
+Three things in it are worth knowing before you need them. **An HTTP
+reverse proxy cannot carry RESP** — including stock Caddy, whose core
+ships no layer-4 module, so the Caddyfile that would do this does not
+exist. **`kevy-cli` cannot speak to a TLS-terminated kevy**: it rejects
+`rediss://` with `Unsupported`, so plan on the host or an SSH tunnel.
+And **single-node cluster mode does not survive a proxy** — it
+advertises the address kevy is bound to, with no announce-address knob,
+so a client told `127.0.0.1:6101` cannot follow that from elsewhere.
+
+The chapter says which of its claims were measured and which are the
+products' standard configs that were not run here.
+
+### Migration day, as tools instead of prose
+
+The migration playbook's eight lessons were a well-written requirements
+document that existed only in the reader's head. Five of the eight are
+now things you can run, plus the first mile that comes before all of
+them. None invents an opinion: each carries the lesson's own words, and
+the exit code is the verdict so a script can gate on it.
+
+Three of the five turned out not to be the check the plan described.
+Writing them meant reading the lesson again and finding the plan had
+guessed — the notes below say which, because the wrong version of each
+would have passed forever or written the wrong rows confidently.
+
+- **`kevy-cli sql plan <file.sql>`** — the first mile. It reads the
+  schema you already have and reports what becomes of *every* query:
+  which declared path serves each one, and for the rest, the exact
+  `CREATE INDEX` that would. `sql compile` stops at the first view it
+  cannot serve, which is right when the output is commands to apply and
+  wrong when the question is "can this move at all". A schema whose DDL
+  does not parse is still an error — there is no plan to give against a
+  schema that does not exist. Exits non-zero when any query is
+  unserved, because a query with no declared path cannot run at all.
+- **`kevy-cli backfill-keys`** — lesson 3, and only the half a machine
+  can do. It unions every structure that can name an item (index keys,
+  a keyspace prefix, a file) and reports how many names *only* each
+  source had — every one of those is a row that backfilling from a
+  single source would have missed. Names go to stdout, the accounting
+  to stderr. Writing the rows stays yours: what the authoritative
+  record is, and what a row looks like, lives in the application, and a
+  tool that guessed would write the wrong rows confidently. A source
+  that cannot be read is an error, not an empty contribution.
+- **`kevy-cli shadow`** — lesson 4. Reads the old path and the new one
+  side by side and compares **membership and order**, reporting the
+  first divergence with *both* sides' sort keys. It also catches lesson
+  2 early: a writer nobody updated shows up as `MISSING` before the
+  cutover rather than after.
+- **`kevy-cli doctor`** — lesson 8. Runs `TABLE.VERIFY` on every
+  declared table and turns the counters into an exit code: `drift` and
+  `missing` fail, `duplicates` warns (pagination needs a bounded
+  tie-break), and the exclusion causes are reported but never failed on
+  — each is a legitimate state, and a doctor that went red on a NULL
+  column would be red forever. A warning does not fail by default;
+  information that fails a cron stops being read. A table whose index
+  is still backfilling reports `BUILDING`, which is its own outcome,
+  not a failure.
+
+- **`kevy-cli lint`** — lessons 1 and 6, which are one item in the
+  playbook and two commands here because they run at different moments
+  and answer differently. `lint overlap --prefix p:` reads the family
+  of owner-keyed collections you have today and asks whether they
+  intersect; a name under two owners means the dimension is
+  multi-valued, no column can hold it, and a membership row is the
+  shape. That is an answer, so it exits non-zero. `lint columns
+  <table>` runs *after* the table exists — it reads rows — and reports
+  column pairs that carry the same value on most of them, which is one
+  column copied to get a second sort order. That is a suspicion, so it
+  exits zero.
+
+  Note what `lint overlap` does not do. The plan for it was to sample a
+  candidate column and check it is single-valued; a hash field holds
+  one value by construction, so that check would have passed forever.
+  The lesson says the cause lives in id-derivation code — but the
+  symptom is in the data, one level up from the row.
+
+Lessons 2 and 5 deliberately have no tool. Lesson 2 is a code audit —
+storage does not record who writes a table. Lesson 5 needs to know when
+a structure has no readers left, which the engine does not track; a
+probe that guessed would give false confidence, and that lesson's
+failure mode is already *silently, correctly, reading nothing*.
+
+### Kept honest
+
+- A test asserts that **every verb the engine writes into its own AOF
+  can be executed by the dispatcher that replays it** — the check that
+  would have caught two of these on its own.
+- Snapshot round-trip per value type (string + TTL, hash, list, set,
+  zset, hash-field TTL, stream) is now pinned; it was clean, and the
+  test asserts a dump exists and no AOF does so it cannot pass on a
+  path it is not testing.
+- Verified against `cargo test --workspace` (223 suites), `crashgate`,
+  `perfgate`, `repligate` and `idxgate`.
+
 ## 4.1.1 — the TTL frame that re-anchored
 
 A consumer's gate caught a TTL reading back *larger* after an AOF
@@ -2383,7 +2714,7 @@ test ... ok in 300.66s
 
 **v2.0 is the result of the 24-version v2 roadmap arc (v1.36 → v1.59)** — Phase A (failure-mode robustness) + B (operability + observability) + C (cluster correctness under chaos) + D (large-scale E2E) + E (ecosystem battle-test) + F (RC fixes + docs). It is the first version we have empirically proven survives the entire failure-mode surface area that production deployments depend on.
 
-The canonical narrative — what v2.0 changes, what it doesn't, the acceptance gates, the open findings, and the drop-in upgrade procedure — is at **[`docs/v2.0-RELEASE-NOTES.md`](docs/v2.0-RELEASE-NOTES.md)**.
+The canonical narrative — what v2.0 changes, what it doesn't, the acceptance gates, the open findings, and the drop-in upgrade procedure — is at **`docs/v2.0-RELEASE-NOTES.md` (since removed)**.
 
 ### TL;DR
 
@@ -2394,7 +2725,7 @@ The canonical narrative — what v2.0 changes, what it doesn't, the acceptance g
 
 ### What v2.0 means empirically
 
-- **16-gate acceptance** (catalog in [`docs/v2-acceptance-baseline.md`](docs/v2-acceptance-baseline.md)) — RESP fuzz (1 M streams, 0 panics) · maxclients enforcement · disk-full restart recovery · FD exhaustion · SIGTERM graceful drain (192 k ACKs / 0 lost / 0.08 s) · backup-restore round-trip · Prometheus `/metrics` · audit log · cluster topology · multi-node peer formation · scope MISDIRECTED · client-side network partition (1000 / 1000 storm conns in 0.10 s) · AOF compat matrix (100 v1.0-vintage commands replay clean) · multi-tenant isolation (5000 ACKs in 0.05 s, zero cross-leak) · burst absorption (10 k ops/s) · long-running soak (143 k ACK/s, 4.7 KiB/sample slope = 56× under leak cap).
+- **16-gate acceptance** (catalog in `docs/v2-acceptance-baseline.md` (since removed)) — RESP fuzz (1 M streams, 0 panics) · maxclients enforcement · disk-full restart recovery · FD exhaustion · SIGTERM graceful drain (192 k ACKs / 0 lost / 0.08 s) · backup-restore round-trip · Prometheus `/metrics` · audit log · cluster topology · multi-node peer formation · scope MISDIRECTED · client-side network partition (1000 / 1000 storm conns in 0.10 s) · AOF compat matrix (100 v1.0-vintage commands replay clean) · multi-tenant isolation (5000 ACKs in 0.05 s, zero cross-leak) · burst absorption (10 k ops/s) · long-running soak (143 k ACK/s, 4.7 KiB/sample slope = 56× under leak cap).
 - **10 ecosystem clients battle-tested unmodified**: BullMQ 5.79 · Sidekiq 6.5 · Bee Queue 1.7 · Celery 5.6 · node-redlock 5 · ioredis 5.7 · Jedis 5.x · StackExchange.Redis 2.x · go-redis v9 · redis-py 5.x.
 
 ### Phase F RC closures shipped in v2.0
@@ -2413,7 +2744,7 @@ The 4 findings the chaos suite surfaced that warranted code fixes are all closed
 - v1.49.x — `INFO memory` reports `used_memory:0` when keyspace empty.
 - v1.52.x — `CLIENT SETNAME` is a documented stub (Jedis records client-side; app correctness unaffected).
 
-Each is filed in [`docs/v2.0-RELEASE-NOTES.md`](docs/v2.0-RELEASE-NOTES.md) with a clear "why this doesn't block v2.0" note.
+Each is filed in `docs/v2.0-RELEASE-NOTES.md` (since removed) with a clear "why this doesn't block v2.0" note.
 
 ### Upgrade procedure
 

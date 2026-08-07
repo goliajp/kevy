@@ -126,8 +126,8 @@
 > Jump to the latest segments:
 > - [v1.25 perf sprint — 16 attacks, precision-verified](#v125-perf-sprint--16-attacks-precision-verified-2026-06-22-lx64)
 > - [v1.22 bundle bench (server, embed, pub/sub, async)](#v122-v3-cluster-bundle--bench-refresh-2026-06-20-lx64)
-> - [v1.17 cluster-aware client](#v117-cluster-aware-clusterclient---tail-latency-fixed-2026-06-15-lx64)
-> - [Perf-ceiling campaign](#server-perf-ceiling-campaign--regression-recovered-then-peak-surpassed-2026-060910-lx64)
+> - [v1.17 cluster-aware client](#v117--cluster-aware-clusterclient--tail-latency-fixed-2026-06-15-lx64)
+> - [Perf-ceiling campaign](#server-perf-ceiling-campaign--regression-recovered-then-peak-surpassed-2026-06-0910-lx64)
 > - [CLUSTER slot routing](#single-node-cluster-slot-routing--the-forwarding-tax-measured-honestly-2026-06-10-lx64)
 >
 > The chronological narrative below preserves the v0.2 → v1.25 journey.

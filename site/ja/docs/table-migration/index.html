@@ -45,6 +45,7 @@
   <aside class="side"><p class="side-h">はじめに</p><ul><li><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a></li><li><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a></li><li><a href="../../../ja/docs/persistence/">永続化</a></li><li><a href="../../../ja/docs/tuning/">kevyのチューニング</a></li></ul><p class="side-h">運用</p><ul><li><a href="../../../ja/docs/replication/">レプリケーション</a></li><li><a href="../../../ja/docs/availability/">可用性</a></li><li><a href="../../../ja/docs/cluster/">クラスタ</a></li><li><a href="../../../ja/docs/tiering/">透過的ティアリング（[tiering] / with_tier_budget）</a></li><li><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a></li><li><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a></li><li><a href="../../../ja/docs/async/">非同期クライアント</a></li></ul><p class="side-h">データ</p><ul><li><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX. / idx_）</a></li><li><a href="../../../ja/docs/tables/">テーブル（TABLE. / table_）</a></li><li><a href="../../../ja/docs/table-migration/" aria-current="page">手書きインデックスからテーブルへ移行する</a></li><li><a href="../../../ja/docs/vector-search/">ベクトル検索（KIND ann）</a></li><li><a href="../../../ja/docs/text-search/">全文検索（KIND text）</a></li><li><a href="../../../ja/docs/views/">ビュー（VIEW. / view_）</a></li><li><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED. / changes_since）</a></li><li><a href="../../../ja/docs/pubsub/">Pub/sub</a></li><li><a href="../../../ja/docs/lua/">Luaスクリプティング</a></li></ul><p class="side-h">組み込み</p><ul><li><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a></li><li><a href="../../../ja/docs/embedded-listener/">組み込みの読み取り専用RESPリスナー</a></li><li><a href="../../../ja/docs/iot/">IoTデバイス上のkevy</a></li></ul><p class="side-h">リファレンス</p><ul><li><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a></li><li><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a></li><li><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></li><li><a href="../../../ja/docs/UPGRADING/">kevyのアップグレード</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../ja/docs/commands/">188 コマンド全て</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>手書きインデックスからテーブルへ移行する</h1></div>
 <p>この章が存在するのは、ある本番の利用者が完全な移行——メールシステムが、アプリケーションコードで保守してきた手書きのセカンダリインデックス（sorted set とカウンタキー）を <code>TABLE.DECLARE</code> に載せ替える——をやり切り、その教訓を持ち帰ってきたからです。教訓はその人のノートではなく、エンジンのドキュメントに属します。以下のルールはどれも対価を払って得たもので、並び順は、あなたが必要とする順です。</p>
+<p><b>そのすべてに先立つ最初の一マイル：</b><code>kevy-cli sql plan schema.sql</code> は、あなたが既に持っているスキーマを読み、各クエリがどうなるかを報告します——それぞれどの宣言経路が供給するのか、供給できないものには、ちょうど追加すべき <code>CREATE INDEX</code> を。*そもそも移せるのか*への 10 分の答えであり、サーバを起こす必要もありません。<a href="../tables/#kevy-sqlスキーマは送るのではなくコンパイルする">tables.md</a> を参照。</p>
 <h2 id="まずなぜからエンジンのインデックスだけが検証できる">まず「なぜ」から：エンジンのインデックスだけが検証できる</h2>
 <p>やり方の前に、論拠を。アプリケーションコードがインデックスを保守するとき、すべての writer が、永遠に、そのインデックスの保守を覚えていなければなりません。何もチェックしません。上の移行は、よく保守された実コードベースでそれが何を意味するかを、手書きの構造をエンジンが新しく構築したインデックスと突き合わせて<b>実測</b>しました：</p>
 <ul><li>ある手書きインデックスでは行の <b>89 %</b> が欠けていた——後から追加された writer は、そのインデックスの存在をそもそも知らなかった（*書かれなかった*ドリフト）。</li><li>別のインデックスではエントリの <b>76 %</b> が陳腐化していた——削除パスは行を消したが、インデックスのエントリを消さなかった（*消されなかった*ドリフト）。</li><li>3 つ目はメンバーシップは一致するのに順序が食い違った——スコアの式が、片方の writer だけで変更されていた（*スコア*のドリフト）。</li></ul>
@@ -52,20 +53,61 @@
 <h2 id="8-つの教訓必要になる順に">8 つの教訓、必要になる順に</h2>
 <h3 id="1-最初の問いクエリの各次元は行の上で単値か">1. 最初の問い：クエリの各次元は、行の上で単値か？</h3>
 <p>インデックスに答えさせたい各クエリを見て、その次元が<b>行の上で</b>単一の値かを問うてください。答えはたいてい行ではなく、id 導出やキー構築のコードにあります——このメールシステムの「メールボックスごとのスレッド」は単値に見えましたが、id のコードを読むと、ひとつのスレッドが複数のメールボックスに住めることが分かりました。次元が多値なら、どのカラムもそれを運べません：(owner, item) ごとの<b>メンバーシップ行</b>——<code>member:{owner}:{item}</code> に owner と item とソート属性をカラムとして持つ——をモデル化し、ORDERPATH にそれをソートさせてください。これを最初に決めることが、テーブル全体の再宣言を防ぎます。</p>
+<p><b><code>kevy-cli lint overlap</code> が見つけるのは症状であって、原因ではありません。</b> 原因はコードの中にあり、そこに留まります——しかし多値の次元は、機械が読める痕跡をデータに残します：<b>同じ名前が二つ以上の owner の下に現れる</b>。今あなたが持っている、owner ごとのコレクション群に向けてください：</p>
+<figure class="code"><pre><code class="lang-console">$ kevy-cli lint overlap -p 6004 --prefix mailbox:
+2 owner(s) under mailbox:, 3 distinct name(s)
+1 name(s) appear under more than one owner:
+  t2  →  mailbox:1, mailbox:2
+this dimension is multi-valued, so no column can hold it — model a membership row per (owner, item) and let an ORDERPATH sort it</code></pre></figure>
+<p>交わりがあれば<b>非ゼロで終了</b>します。それはヒントではなく<b>答え</b>だからです：二つの owner を名指しする次元を保持できる列は存在しないので、宣言スクリプトは止まるべきです。そして<b>やらないこと</b>にも注意を：候補の列をサンプリングして単値かを確かめる、ということはしません。ハッシュのフィールドは構造上ひとつの値しか持たないので、その検査は永遠に通ってしまいます。</p>
 <h3 id="2-読み取りが供され始めた瞬間すべての-writer-が荷重を担う">2. 読み取りが供され始めた瞬間、すべての writer が荷重を担う</h3>
 <p>導出された行は、それを書く者によって埋まります。読み取りを切り替える前に、<b>writer を枚挙してください</b>——基礎エンティティを作成・変更・削除するすべてのコードパスが、テーブルの宣言対象である行を書いていることを確認するのです。忘れる writer は、テーブルが存在する前に書かれた writer です。（これはまさに <code>TABLE.VERIFY</code> の <code>missing</code> カウンタが事後に捕まえるクラスです。監査は、それに本番で出会わないための手段です。）</p>
 <h3 id="3-バックフィルはitem-を名指しできる全ソースの和集合から">3. バックフィルは、item を名指しできる全ソースの和集合から</h3>
 <p>レガシーのインデックスは互いに食い違います——それが上の実測 89 % / 76 % です。どれか*ひとつ*からバックフィルすれば、その穴を相続します。そして <code>VERIFY</code> は、一度も書かれなかった行を見ることができません。バックフィルのキー集合は、item を名指しできるすべての構造（旧インデックス、プライマリキースペースのスキャン、アーカイブ）の<b>和集合</b>から作り、行は権威ある記録から書いてください。</p>
+<p><b>その和集合を作るのが <code>kevy-cli backfill-keys</code> です</b>——そしてそれだけです。この教訓はそれ自身で二つに割れており、後半はあなたのものです。何が権威ある記録なのか、行がどんな形なのかは、アプリケーションの側に住む知識です。推測する道具は、間違った行を自信たっぷりに書きます。</p>
+<figure class="code"><pre><code class="lang-console">$ kevy-cli backfill-keys --from-index idx:threads --from-prefix mail: \
+      --from-file archive.txt &gt; keys.txt
+601 name(s) in the union
+  index idx:threads                3 name(s), 0 only here
+  prefix mail:                     600 name(s), 596 only here
+  file archive.txt                 2 name(s), 1 only here
+597 name(s) appear in only one source — backfilling from any single one would have missed them</code></pre></figure>
+<p>名前は <b>stdout</b> へ一行ずつ、行を書く工程にそのまま流せます。会計は <b>stderr</b> へ出るので、リストをリダイレクトしても失われません。最後の数字が肝心です：<b>ただ一つのソースにしか現れない名前は、どれか一つからバックフィルしていたら取りこぼしていた行</b>です——上の 89 % / 76 % のドリフトを、他人の数字の引用ではなく、あなた自身のデータで測ったものです。</p>
+<p>プレフィックスのソースは既定でプレフィックスを剥がします（<code>mail:123</code> → <code>123</code>）。そうするとインデックスのメンバと名前が揃うからです。キーそのものが名前である場合は <code>--keep-prefix</code> を。<b>読めないソース——存在しないキー、型の違うキー——はエラーであって、空の貢献ではありません</b>：黙って空になるソースこそ、このコマンドが塞ぐために存在する穴です。</p>
 <h3 id="4-切り替えの前にシャドーリード内容と順序を比較する">4. 切り替えの前にシャドーリード——内容<b>と順序</b>を比較する</h3>
 <p>旧経路から読みを供しつつ、新しい答えを横で計算して比較してください。メンバーシップだけでなく<b>順序</b>も比較すること：スコアのドリフトは、同一の集合を異なる順序で生みます。ページネーションされた UI はそれをユーザーに見える揺れに変えます。最初の食い違いを<b>両方のソートキー</b>つきでログに残してください——その 1 行が、ドリフトしている writer を即座に名指しします。</p>
+<p><b><code>kevy-cli shadow</code> がこれを代わりにやります。</b> 両方のコマンドを渡すと、それぞれが返す行キーの順序を比較し、食い違いがあれば非ゼロで終了します——カットオーバーのスクリプトはそれをそのままゲートにできます：</p>
+<figure class="code"><pre><code class="lang-console">$ kevy-cli shadow -p 6004 \
+    --old "ZRANGE old:act 0 -1 WITHSCORES" --old-pairs \
+    --new "IDX.QUERY u.act RANGE 0 999 LIMIT 20" --samples 50
+shadow: 50 samples, 50 diverged (first at sample 0)
+  ORDER differs at position 0:
+    old: u:5 (sort 5)
+    new: u:1 (sort 10)</code></pre></figure>
+<p>このソート値の対こそ、この教訓が言っている行です。もう一つ報告される形は <code>MISSING</code>——旧経路にあって新経路にない行、つまり<b>先回りして現れた第 2 の教訓</b>です：誰も更新しなかった writer が、カットオーバーの<b>前</b>に見えます。<code>TABLE.VERIFY</code> が後から報告するのを待つ必要はありません。</p>
+<p>推測しないことが二つあります。kevy のページ応答（<code>[カーソル, [キー, ソート値, …]]</code>）は形から判別できますが、<b>member/score の対はプレーンなリストと見分けがつきません</b>——<code>WITHSCORES</code> の類には <code>--old-pairs</code> を付けてください。さもないとスコアがすべて行キーとして読まれ、毎サンプルが食い違いになります。そして<b>一度の食い違いは手がかりであって判決ではありません</b>：両側は同じ接続で連続して読まれるので、その間に書かれた行はここに現れます。<code>--samples n</code> を回して、その比率を読んでください。</p>
 <h3 id="5-旧構造の削除先に-reader次に-writer">5. 旧構造の削除：先に reader、次に writer</h3>
 <p>シャドーの窓を閉じるとき、旧インデックスの <b>reader を先に</b>、writer を後に取り除いてください。逆順には静かな故障モードがあります：存在しないキーの読み取りはエラーではなく 0 や空として返るので、writer が消えた後に残った reader は、クラッシュする代わりに静かに間違った答えを供します。それからキーを消してください。</p>
 <h3 id="6-インデックスにない述語-もうひとつの-orderpathカラムの複製は決してしない">6. インデックスにない述語 ⇒ もうひとつの ORDERPATH。カラムの複製は決してしない</h3>
 <p>新しいクエリが現在の形では出せない述語を必要とするとき、手書き時代の反射は「その値をもう 1 か所にも書く」ことです——それは、この移行が消したばかりの「writer 2 つ、真実 1 つ」問題の再生産です。代わりに同じカラムの上に<b>もうひとつの ORDERPATH</b>（またはインデックス）を宣言してください。エンジンは同じ書き込みで、同じ行から両方を導出します。</p>
+<p><b><code>kevy-cli lint columns &lt;table&gt;</code> が見つけるのは形です。</b> ほぼすべての行で同じ値を持つ二つの列は、第二のソート順を得るために複製された一つの列です：</p>
+<figure class="code"><pre><code class="lang-console">$ kevy-cli lint columns -p 6004 ev
+ev: 43 row(s) sampled under ev:
+  created_at and sort_ts agree on 93% (40/43)
+a column copied to get a second sort order is the shape lesson 6 warns about — the answer is another ORDERPATH; ask IDX.ADVISE which one</code></pre></figure>
+<p><code>lint overlap</code> と違い、<b>何を見つけても 0 で終了します</b>：二つの列が正当に一致することはあり得るので、これは判決ではなく疑いです。また第 1 の教訓の検査と違い、これはテーブルの宣言の<b>後</b>に走ります——行を読むからです。<code>--sample N</code> が読む量を、<code>--threshold PCT</code> が線の位置を決めます。</p>
 <h3 id="7-起動は-ensure-で">7. 起動は <code>ensure</code> で</h3>
 <p>定常状態は<a href="../tables/#起動パターンensure">起動パターン</a>です：プロセスの開始ごとに <code>TABLE.ENSURE</code>——最初の起動で <code>Created</code>、以後は <code>Unchanged</code>、そしてコードの spec がストアのそれと合わなくなったときは<b>差分を名指しする拒否</b>。それが、意図した <code>TABLE.REPLACE</code> 移行を自分で走らせるための合図です——移行に走られるのではなく。</p>
 <h3 id="8-verify-は移行の一部ではなく運用の一部に">8. <code>VERIFY</code> は移行の一部ではなく、運用の一部に</h3>
 <p>カウンタは呼び出しごとに新鮮で、cron や doctor コマンドから回せるほど安価です：<code>drift</code> と <code>missing</code> は永遠にゼロであるべきで、<code>absent</code> / <code>excluded</code> / <code>coerce_failures</code> は各除外原因が奪った行を名指しします（正確な意味論は <a href="../tables/">tables.md</a>。ORDERPATH の <code>duplicates</code> が非ゼロならページネーションに有界のタイブレークが要る、という話も含めて）。この移行全体の眼目は、これらの数字が*存在する*ことです。読んでください。</p>
+<p><b><code>kevy-cli doctor</code> がその cron です。</b> 宣言済みのすべてのテーブルに <code>VERIFY</code> を回し、終了コードで答えます：</p>
+<figure class="code"><pre><code class="lang-console">$ kevy-cli doctor -p 6004
+  OK       user  (rows 59999 · entries 59999 · absent 0 · excluded 0 · coerce_failures 0)
+  WARN     ev    duplicates 1 — paging this path needs a bounded tie-break or pages repeat rows
+  BUILDING new   — an index is still backfilling, not a verdict
+doctor: 3 table(s) — 0 drifted, 1 warned, 1 still building</code></pre></figure>
+<p>対応付けは新しい主張ではなく、この教訓自身の言葉です：<code>drift</code> と <code>missing</code> が非ゼロなら<b>失敗</b>、<code>duplicates</code> は<b>警告</b>、<code>absent</code> / <code>excluded</code> / <code>coerce_failures</code> は<b>報告するだけで決して失敗させません</b>——どれも正当な状態であり、NULL の列が一つあるだけで赤くなる doctor は永遠に赤いままだからです。</p>
+<p>意図的な選択が二つ。警告は既定では失敗<b>させません</b>——情報で落ちる cron は読まれなくなります——ので、より厳しい契約が欲しい人のために <code>--warn-is-failure</code> があります。そしてインデックスが backfill 中のテーブルは <code>-INDEXBUILDING</code> を返しますが、それは<b>失敗ではなく、それ自体が一つの結末</b>です：失敗として扱えば、インデックスを宣言するたびに誰かを呼び出すことになります。</p>
 <h2 id="参照">参照</h2>
 <ul><li><a href="../tables/">tables.md</a>——宣言の面、VERIFY の意味論、複合 ORDERPATH の規則。</li><li><a href="../cookbook/">cookbook.md</a>——シーケンス、制約、複合順序のレシピ。</li><li><a href="../tiering/">tiering.md</a>——行がコールドでもインデックスはホット。index-only クエリは行にゼロ回しか触れません。</li></ul></main>
   <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#まずなぜからエンジンのインデックスだけが検証できる">まず「なぜ」から：エンジンのインデックスだけが検証できる</a></li><li class="l2"><a href="#8-つの教訓必要になる順に">8 つの教訓、必要になる順に</a></li><li class="l3"><a href="#1-最初の問いクエリの各次元は行の上で単値か">1. 最初の問い：クエリの各次元は、行の上で単値か？</a></li><li class="l3"><a href="#2-読み取りが供され始めた瞬間すべての-writer-が荷重を担う">2. 読み取りが供され始めた瞬間、すべての writer が荷重を担う</a></li><li class="l3"><a href="#3-バックフィルはitem-を名指しできる全ソースの和集合から">3. バックフィルは、item を名指しできる全ソースの和集合から</a></li><li class="l3"><a href="#4-切り替えの前にシャドーリード内容と順序を比較する">4. 切り替えの前にシャドーリード——内容と順序を比較する</a></li><li class="l3"><a href="#5-旧構造の削除先に-reader次に-writer">5. 旧構造の削除：先に reader、次に writer</a></li><li class="l3"><a href="#6-インデックスにない述語-もうひとつの-orderpathカラムの複製は決してしない">6. インデックスにない述語 ⇒ もうひとつの ORDERPATH。カラムの複製は決してしない</a></li><li class="l3"><a href="#7-起動は-ensure-で">7. 起動は ensure で</a></li><li class="l3"><a href="#8-verify-は移行の一部ではなく運用の一部に">8. VERIFY は移行の一部ではなく、運用の一部に</a></li><li class="l2"><a href="#参照">参照</a></li></ul></aside>

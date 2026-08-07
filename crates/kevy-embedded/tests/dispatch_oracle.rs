@@ -49,7 +49,12 @@ fn server_binary() -> PathBuf {
 
 fn spawn_server(dir: &std::path::Path) -> ServerGuard {
     let child = Command::new(server_binary())
-        .args(["--port", &PORT.to_string(), "--dir"])
+        // One shard: this oracle compares DISPATCH, and the store it
+        // compares against is single-shard, so a multi-shard server
+        // adds a variable and N times the startup cost — three of
+        // those spawning at once under the workspace suite is what
+        // starved the accept loop.
+        .args(["--threads", "1", "--port", &PORT.to_string(), "--dir"])
         .arg(dir)
         .current_dir(dir) // never run a server from the repo root
         .stdout(Stdio::null())
@@ -59,15 +64,61 @@ fn spawn_server(dir: &std::path::Path) -> ServerGuard {
     ServerGuard(child)
 }
 
-fn connect_with_retry() -> TcpStream {
-    for _ in 0..100 {
-        if let Ok(s) = TcpStream::connect(("127.0.0.1", PORT)) {
+/// How long to wait for a spawned server to accept — 10 s, scaled by
+/// `KEVY_TEST_PATIENCE`, the same knob the replication suite uses.
+///
+/// A fixed 10 s is enough on an idle machine and not enough under
+/// `cargo test --workspace`, where this oracle spawns a real server
+/// while the rest of the suite has the cores. That lost three runs in
+/// one day, each time passing on its own immediately afterwards. The
+/// budget now tracks machine speed instead of being raised blind: a
+/// server that is genuinely wedged still fails at 10 s in a normal
+/// build.
+fn accept_budget() -> Duration {
+    let mult: f64 = std::env::var("KEVY_TEST_PATIENCE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1.0);
+    Duration::from_secs_f64(30.0 * mult)
+}
+
+/// Only one of these tests may own a server at a time.
+///
+/// Each spawns a real one, the harness runs them in parallel, and the
+/// rest of the workspace suite has the machine — three debug-build
+/// starts at once was still enough to blow a 10 s accept budget after
+/// they were already reduced to one shard each. Making each cheaper
+/// helped and did not settle it; not having three at once is the part
+/// that was actually in the way.
+///
+/// Poisoning is ignored deliberately: a panicking test has already
+/// failed, and turning that into a second failure in every other test
+/// hides which one broke.
+static ONE_SERVER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn server_slot() -> std::sync::MutexGuard<'static, ()> {
+    ONE_SERVER.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn connect_with_retry_on(port: u16) -> TcpStream {
+    let deadline = std::time::Instant::now() + accept_budget();
+    loop {
+        if let Ok(s) = TcpStream::connect(("127.0.0.1", port)) {
             s.set_read_timeout(Some(Duration::from_secs(5))).expect("read timeout");
             return s;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "kevy server did not accept on port {port} within {:?} — \
+             a loaded runner widens this with KEVY_TEST_PATIENCE",
+            accept_budget()
+        );
         std::thread::sleep(Duration::from_millis(100));
     }
-    panic!("kevy server did not accept on port {PORT} within 10 s");
+}
+
+fn connect_with_retry() -> TcpStream {
+    connect_with_retry_on(PORT)
 }
 
 fn encode_req(argv: &[&[u8]]) -> Vec<u8> {
@@ -467,10 +518,16 @@ fn cases() -> Vec<(Vec<&'static [u8]>, Cmp)> {
 /// and the claused replies must match byte-for-byte).
 #[test]
 fn scalar_values_clauses_match_the_real_server() {
+    let _slot = server_slot();
     const PORT2: u16 = 6098;
     let server_dir = kevy_tmpdir::TmpDir::new("dispatch-oracle-values");
     let child = Command::new(server_binary())
-        .args(["--port", &PORT2.to_string(), "--dir"])
+        // One shard: this oracle compares DISPATCH, and the store it
+        // compares against is single-shard, so a multi-shard server
+        // adds a variable and N times the startup cost — three of
+        // those spawning at once under the workspace suite is what
+        // starved the accept loop.
+        .args(["--threads", "1", "--port", &PORT2.to_string(), "--dir"])
         .arg(server_dir.path())
         .current_dir(server_dir.path())
         .stdout(Stdio::null())
@@ -478,18 +535,7 @@ fn scalar_values_clauses_match_the_real_server() {
         .spawn()
         .expect("spawn kevy server");
     let _guard = ServerGuard(child);
-    let mut sock = {
-        let mut s = None;
-        for _ in 0..100 {
-            if let Ok(c) = TcpStream::connect(("127.0.0.1", PORT2)) {
-                c.set_read_timeout(Some(Duration::from_secs(5))).expect("read timeout");
-                s = Some(c);
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        s.expect("server accepts")
-    };
+    let mut sock = connect_with_retry_on(PORT2);
     let mut buf = Vec::new();
     let store =
         Store::open(Config::default().with_ttl_reaper_manual()).expect("open embedded store");
@@ -563,10 +609,16 @@ fn scalar_values_clauses_match_the_real_server() {
 /// exactly).
 #[test]
 fn table_surface_matches_the_real_server() {
+    let _slot = server_slot();
     const PORT3: u16 = 6099;
     let server_dir = kevy_tmpdir::TmpDir::new("dispatch-oracle-table");
     let child = Command::new(server_binary())
-        .args(["--port", &PORT3.to_string(), "--dir"])
+        // One shard: this oracle compares DISPATCH, and the store it
+        // compares against is single-shard, so a multi-shard server
+        // adds a variable and N times the startup cost — three of
+        // those spawning at once under the workspace suite is what
+        // starved the accept loop.
+        .args(["--threads", "1", "--port", &PORT3.to_string(), "--dir"])
         .arg(server_dir.path())
         .current_dir(server_dir.path())
         .stdout(Stdio::null())
@@ -574,18 +626,7 @@ fn table_surface_matches_the_real_server() {
         .spawn()
         .expect("spawn kevy server");
     let _guard = ServerGuard(child);
-    let mut sock = {
-        let mut s = None;
-        for _ in 0..100 {
-            if let Ok(c) = TcpStream::connect(("127.0.0.1", PORT3)) {
-                c.set_read_timeout(Some(Duration::from_secs(5))).expect("read timeout");
-                s = Some(c);
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        s.expect("server accepts")
-    };
+    let mut sock = connect_with_retry_on(PORT3);
     let mut buf = Vec::new();
     let store =
         Store::open(Config::default().with_ttl_reaper_manual()).expect("open embedded store");
@@ -650,6 +691,7 @@ fn table_surface_matches_the_real_server() {
 
 #[test]
 fn dispatch_matches_the_real_server() {
+    let _slot = server_slot();
     let server_dir = kevy_tmpdir::TmpDir::new("dispatch-oracle-server");
     let _guard = spawn_server(server_dir.path());
     let mut sock = connect_with_retry();

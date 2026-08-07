@@ -82,6 +82,7 @@ impl<C: Commands> Shard<C> {
         // Store-origin events first: a `new` fired by this command
         // precedes the command's own class event on the wire.
         self.drain_store_notify();
+        self.drain_expired_keys();
         let Some(class) = self.commands.notify_class(args) else { return };
         if !class.enabled_in(&self.notify_flags) {
             return;
@@ -101,6 +102,7 @@ impl<C: Commands> Shard<C> {
             return;
         }
         self.drain_store_notify();
+        self.drain_expired_keys();
         if !self.notify_flags.generic {
             return;
         }
@@ -115,6 +117,7 @@ impl<C: Commands> Shard<C> {
             return;
         }
         self.drain_store_notify();
+        self.drain_expired_keys();
         if !self.notify_flags.string {
             return;
         }
@@ -129,6 +132,27 @@ impl<C: Commands> Shard<C> {
     /// Called on write paths (so a `new` precedes its command's class
     /// event) and on the shard tick (reaper batches + read-path lazy
     /// expiry); the steady-state cost is one length check.
+    /// Maintain derived state for keys the store dropped on expiry.
+    ///
+    /// An expiring key is a write nobody issued: the store removes it
+    /// on its own, inside a `reap` that the runtime never sees, so
+    /// neither the index hook nor the WATCH bump fires — and the index
+    /// keeps serving the row forever. Measured before the fix: a key
+    /// with a 50 ms TTL was gone from `EXISTS` and still returned by
+    /// `IDX.QUERY` twelve seconds later, hydrating to nil fields.
+    ///
+    /// Drained beside `drain_store_notify` because they are the same
+    /// moment; kept separate because that one is observability and this
+    /// one is correctness.
+    pub(crate) fn drain_expired_keys(&mut self) {
+        if !self.store.has_expired_keys() {
+            return;
+        }
+        for key in self.store.take_expired_keys() {
+            self.note_key_mutated(&key);
+        }
+    }
+
     pub(crate) fn drain_store_notify(&mut self) {
         if !self.store.has_notify_events() {
             return;

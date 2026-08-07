@@ -92,25 +92,37 @@ pub fn run_delete_prefix(
 /// `copy-prefix`: SCAN src prefix, re-key under dst prefix via
 /// read+rebuild frames (the server has no COPY verb; TTL carried as
 /// absolute PEXPIREAT). Rate-limited per source key.
+///
+/// Returns what it copied **and what it could not** — same contract as
+/// `export`, for the same reason: the rebuild set does not cover every
+/// type, and a copy that quietly drops one is worse than a refusal.
 pub fn run_copy_prefix(
     client: &mut RespClient,
     src_prefix: &[u8],
     dst_prefix: &[u8],
     rate: u64,
-) -> io::Result<u64> {
+) -> io::Result<crate::migrate::Export> {
     let mut pattern = src_prefix.to_vec();
     pattern.push(b'*');
     let mut cursor: Vec<u8> = b"0".to_vec();
     let mut limiter = RateLimiter::new(rate);
     let mut n = 0u64;
+    // Same skip as `export`, and it must be as loud: a copy that leaves
+    // a type behind and says "copied N keys" is the same silence.
+    let mut skipped: std::collections::BTreeMap<Vec<u8>, u64> = Default::default();
     loop {
         let (next, keys) = scan_page(client, &cursor, &pattern)?;
         for key in &keys {
             limiter.take();
             let mut dst = dst_prefix.to_vec();
             dst.extend_from_slice(&key[src_prefix.len()..]);
-            let Some(frames) = crate::migrate::rebuild_frames(client, key, &dst)? else {
-                continue;
+            let frames = match crate::migrate::rebuild_frames(client, key, &dst)? {
+                crate::migrate::Rebuilt::Frames(f) => f,
+                crate::migrate::Rebuilt::Vanished => continue,
+                crate::migrate::Rebuilt::UnsupportedType(ty) => {
+                    *skipped.entry(ty).or_insert(0u64) += 1;
+                    continue;
+                }
             };
             let n_cmds = count_commands(&frames);
             for r in client.pipeline_raw(&frames, n_cmds)? {
@@ -125,7 +137,7 @@ pub fn run_copy_prefix(
         }
         cursor = next;
         if cursor == b"0" {
-            return Ok(n);
+            return Ok(crate::migrate::Export { keys: n, skipped });
         }
     }
 }

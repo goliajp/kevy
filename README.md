@@ -379,6 +379,7 @@ server's own metadata — the same rows `COMMAND DOCS` serves).
 | Pub/Sub | [`docs/pubsub.md`](docs/pubsub.md) |
 | Replication | [`docs/replication.md`](docs/replication.md) |
 | Cluster mode | [`docs/cluster.md`](docs/cluster.md) |
+| Deploying behind a proxy (TLS) | [`docs/deploy-behind-a-proxy.md`](docs/deploy-behind-a-proxy.md) |
 | Lua scripting | [`docs/lua.md`](docs/lua.md) |
 | Unix-domain socket | [`docs/uds.md`](docs/uds.md) |
 | Async client | [`docs/async.md`](docs/async.md) |
@@ -395,8 +396,10 @@ kevy is honest about what it does not do. By charter, these are
 permanently out of scope and there is no plan to add them:
 
 - **AUTH and TLS.** kevy assumes a trusted network. Front it with a
-  TLS-terminating sidecar (envoy, stunnel) and an authentication proxy
-  if you need either.
+  TLS-terminating sidecar (stunnel, HAProxy, nginx `stream`) and an
+  authentication proxy if you need either —
+  [`docs/deploy-behind-a-proxy.md`](docs/deploy-behind-a-proxy.md) is
+  the recipe, including why an HTTP reverse proxy cannot do this job.
 - **Multi-DC active-active and cross-DC replication.** Single-DC only.
 - **Multi-database `SELECT`.** One keyspace per server.
 - **ACL.** Single trust domain.

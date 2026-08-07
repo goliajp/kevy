@@ -192,12 +192,22 @@ Semantics and limits, honestly:
   indexed field at write time — `a * 1_000_000 + b` for bounded
   integers, zero-padded strings for lexicographic composites
   (cookbook recipe 8).
-- **`OFFSET` does not exist.** There is deliberately no "skip N rows"
-  — it is O(N) waste in any engine and an anti-pattern at depth.
+- **`OFFSET` exists on the claused surface, and you should still
+  paginate with the cursor.** This page used to say it did not exist;
+  that was wrong — `IDX.QUERY … OFFSET n` parses and runs (see
+  `docs/tables.md`). What is true is the cost: it is a "skip N rows",
+  linear in `n`, and — unlike every other axis here — **it gets worse
+  as you add shards**, because each shard must fetch `limit + offset`
+  (none of them can know which of its hits survive the global merge)
+  and the origin materialises `(limit + offset) × shards` hits to
+  return `limit`. Measured on 30 000 in-range rows returning
+  `LIMIT 20`: `OFFSET 1000` costs 1.53 ms on one shard and 6.90 ms on
+  eight; `OFFSET 10000` costs 11.5 ms and 20.1 ms.
   Paginate with the returned cursor (constant cost per page,
   position-stable under the SCAN-class contract). If your product
-  needs "jump to page 47", precompute page anchors or rethink the UX;
-  kevy will not hide the cost.
+  needs "jump to page 47", precompute page anchors or rethink the UX.
+  kevy does not hide this cost — but until now it did not state it
+  either, which is worse than hiding it.
 
 ## GROUP BY and aggregates
 
@@ -425,19 +435,51 @@ not a roadmap gap:
 | Refused | Because | Use instead |
 |---|---|---|
 | SQL parser / query DSL | the planner slope starts here | explicit `IDX.*`/`VIEW.*` + this matrix |
-| query planner / auto index selection | engine must execute declared paths, not decide | `IDX.EXPLAIN` (diagnostic only) |
+| query planner / per-query index selection | engine must execute declared paths, not decide | `IDX.EXPLAIN` (diagnostic only) |
 | JOINs | no server-side plan search | denormalize / hydrate (`FIELDS`, `VIA`) / view |
 | `WHERE` without an index | accidental O(n) is a lie waiting to page you | declare the path or don't ship the query |
 | server-side constraint DSL / triggers | stored app logic isn't engine-genre | Lua `EVAL` (atomic unit) + CDC consumers |
 | DECIMAL type | no server-side arithmetic beyond i64/f64 | integer minor units |
 | JSON-path queries | hash fields ARE the column model | flatten to fields (cookbook recipe 9) |
 | `HAVING` / aggregate expressions | query-language slope | filter `GROUPS` output app-side |
-| `OFFSET` pagination | O(N) skip is an anti-pattern | cursors |
 | multi-database `SELECT n` | one keyspace per server | prefixes or separate instances |
 | AUTH / TLS | trust boundary is the network perimeter | loopback bind (default), sidecar proxy |
 | cross-DC active-active, CRDTs | single-DC charter | app-level federation |
 | dynamic membership / auto-replace / resharding | topology is operator-declared | config + rolling restart |
 | HTTP/REST API | RESP + MCP are the two access planes | any Redis client |
+
+**Where that second row stops.** "Not decide" is about *query time*:
+no plan is chosen for you, because your query names its own path.
+It is not a refusal to ever add one. `TABLE.DECLARE … AUTODECLARE n`
+lets the engine turn a shape you keep being refused into a declared
+path — off unless you ask, capped at the `n` you write, only over
+columns you declared, addition-only, and marked `auto` in `IDX.LIST`
+([tables.md](tables.md#autodeclare-the-paths-you-did-not-write)). An
+optimiser you cannot predict and a schema change you asked for are
+different things, and only the first one is refused here.
+
+**One entry that used to sit in that table and does not belong there:
+`OFFSET`.** It was listed as refused; the engine has always provided it
+on the claused surface (`docs/tables.md`), so the table was describing
+an intention rather than the behaviour. What is true, measured on
+30 000 rows in range returning `LIMIT 20` (p50 of 30 calls):
+
+| OFFSET | 1 shard | 8 shards |
+|---|---:|---:|
+| 0 | 219 µs | 526 µs |
+| 1 000 | 1.53 ms | 6.90 ms |
+| 10 000 | 11.5 ms | 20.1 ms |
+
+It is linear in the offset, and **it gets worse as you add shards** —
+each shard must fetch `limit + offset` because none of them can know
+which of its hits survive the global merge, so the origin materialises
+`(limit + offset) × shards` hits to return `limit`. Every other axis in
+this engine gets faster with more cores; this one does not.
+
+**Use cursors.** `OFFSET` is there, it is not refused, and a deep one is
+the O(N) skip the rest of this table exists to keep out of your latency.
+Full measurement and the open policy question:
+`bench/FINDING-2026-08-05-offset-boundary-drift.md`.
 
 ## Sizing and operational deltas
 

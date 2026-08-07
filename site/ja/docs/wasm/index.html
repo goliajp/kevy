@@ -112,13 +112,15 @@ let v = store.get(b"hello")?;   // Some(b"world".to_vec())
 let _stats = store.tick();</code></pre></figure>
 <p>エラーは<code>KevyResult</code>／<code>KevyError</code>で、argvスタイルの書き込みメソッドは借用スライスを取ります。ネイティブとまったく同じです——<a href="https://docs.rs/kevy-embedded"><code>kevy-embedded</code></a>のドキュメントを参照してください。</p>
 <p>Cloudflare Workersなどのエッジアイソレートはブラウザのレシピに従います。アイソレートごとに1インスタンス、クロックソースは<code>Date.now()</code>、<code>tick()</code>は遅延実行かスケジュールされたハンドラから。アイソレート再起動をまたぐ永続性には、ハンドラからプラットフォームの永続ストアへ書き込みをミラーします（AOFポンプがフレームをくれます）。アイソレートの内側では、kevyがホットなインメモリ層です。</p>
+<h2 id="tauri-アプリの中で">Tauri アプリの中で</h2>
+<p>デスクトップ／モバイルのアプリで kevy を走らせるなら？ Tauri のバックエンドは Rust なので、kevy は webview に wasm として置くのではなく、バックエンドに<b>ネイティブに</b>組み込めます（共有のストアがひとつ、永続、ウィンドウをまたぐ）。バックエンドのストアと wasm のどちらを選ぶかは <a href="../tauri/">docs/tauri.md</a> を参照してください。</p>
 <h2 id="faq">FAQ</h2>
 <p><b>ブラウザでフルのコマンド面は動きますか？</b> npmパッケージが公開するのはKV＋TTL＋カウンタ＋スキャン＋pub/subの切り出しです——ブラウザのストアに必要な面を、意図的に小さく保っています（wasmモジュールは非圧縮で約425 KB）。wasmターゲット上のRust APIは、コンパイル時に有効化した<code>kevy-embedded</code>フィーチャーの全面を公開します。</p>
 <p><b>永続化されたデータはポータブルですか？</b> はい——標準のkevy AOFです。ブラウザ→ネイティブも、ネイティブ→ブラウザも、どちらもリプレイできます。フォーマット契約は<a href="../persistence/">persistence.md</a>を参照してください。</p>
 <p><b>共有メモリスレッド（<code>+atomics</code>）は？</b> 同梱モジュールはシングルスレッドで、これはブラウザ系のすべてのターゲットに合致します。ホストがスレッドを提供する場所ではエンジンはスレッドセーフですが、手動<code>tick()</code>モデルがサポートされるパスのままです。</p>
 <p><b>BroadcastChannelではなくSharedWorkerは？</b> 単一オーナーのSharedWorkerトポロジは理論上はきれいですが、利用可能な範囲が狭い（特にAndroid Chromeに不在）。BroadcastChannelブリッジが、同じ実測レイテンシ級のまま互換性で勝ちました。</p>
 <p><b>なぜwasm-bindgenを使わないのですか？</b> kevyはサーバーも組み込みもブラウザも、サードパーティ依存ゼロで出荷します。バインディングジェネレータはビルド時依存になり、境界レイアウトの所有権を持ってしまいます。手書きのABIなら、契約は明示的で、バージョン付きで、監査可能なままです。</p></main>
-  <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#クイックスタートブラウザ">クイックスタート（ブラウザ）</a></li><li class="l2"><a href="#ローダーapi">ローダーAPI</a></li><li class="l2"><a href="#バインディングの仕組みwasm-bindgen不使用">バインディングの仕組み（wasm-bindgen不使用）</a></li><li class="l2"><a href="#永続化ネイティブkevyとバイト互換の本物のログ">永続化——ネイティブkevyとバイト互換の本物のログ</a></li><li class="l2"><a href="#タブ間pubsub">タブ間pub/sub</a></li><li class="l2"><a href="#クロックtickttl">クロック、tick、TTL</a></li><li class="l2"><a href="#パフォーマンス">パフォーマンス</a></li><li class="l2"><a href="#rustの顔wasiエッジランタイム直接組み込み">Rustの顔——WASI、エッジランタイム、直接組み込み</a></li><li class="l2"><a href="#faq">FAQ</a></li></ul></aside>
+  <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#クイックスタートブラウザ">クイックスタート（ブラウザ）</a></li><li class="l2"><a href="#ローダーapi">ローダーAPI</a></li><li class="l2"><a href="#バインディングの仕組みwasm-bindgen不使用">バインディングの仕組み（wasm-bindgen不使用）</a></li><li class="l2"><a href="#永続化ネイティブkevyとバイト互換の本物のログ">永続化——ネイティブkevyとバイト互換の本物のログ</a></li><li class="l2"><a href="#タブ間pubsub">タブ間pub/sub</a></li><li class="l2"><a href="#クロックtickttl">クロック、tick、TTL</a></li><li class="l2"><a href="#パフォーマンス">パフォーマンス</a></li><li class="l2"><a href="#rustの顔wasiエッジランタイム直接組み込み">Rustの顔——WASI、エッジランタイム、直接組み込み</a></li><li class="l2"><a href="#tauri-アプリの中で">Tauri アプリの中で</a></li><li class="l2"><a href="#faq">FAQ</a></li></ul></aside>
 </div>
 
 <script src="../../../assets/docsearch.js?v=8c03463d" defer></script>

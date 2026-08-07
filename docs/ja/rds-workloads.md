@@ -11,7 +11,7 @@ RDSでは、まずデータを書いておいて、アクセスパスはあと�
 
 ### PostgreSQL 18との実測比較
 
-主張ではなく、[実行](../bench/pgcompare.sh)して[記録](../bench/PGCOMPARE-2026-07-26.md)したものです。200万行／843 MBのCSV、同一のharnessで両方を駆動、PGは素の設定：
+主張ではなく、[実行](../../bench/pgcompare.sh)して[記録](../../bench/PGCOMPARE-2026-07-26.md)したものです。200万行／843 MBのCSV、同一のharnessで両方を駆動、PGは素の設定：
 
 | | kevy（`everysec`） | PG 18 素の設定 |
 |---|---|---|

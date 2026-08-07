@@ -22,6 +22,7 @@
 //! which routes both to one shard and restores the atomic path. This is the
 //! same trade-off `exec_rename` makes, and it is stated in `docs/migration.md`.
 
+use crate::message::Part;
 use crate::message::{Agg, Inbound, Op, PendingSlot, SmallReply};
 use crate::message_agg::ListMoveStep;
 use crate::reduce::drain_front;
@@ -269,8 +270,8 @@ impl<C: Commands> Shard<C> {
     /// cross-shard path's — a replay does not have to know which shard layout
     /// produced it.
     pub(crate) fn after_list_move(&mut self, src: &[u8], dst: &[u8], from_left: bool, to_left: bool) {
-        self.store.bump_if_watched(src);
-        self.store.bump_if_watched(dst);
+        self.note_key_mutated(src);
+        self.note_key_mutated(dst);
         self.log_list_pop(src, from_left);
         self.notify_list_event(src, from_left, true);
         self.notify_list_event(dst, to_left, false);
@@ -279,22 +280,26 @@ impl<C: Commands> Shard<C> {
     /// One `LPOP` / `RPOP` effect record. The pushed half is logged by
     /// [`Self::log_list_push`] on whichever shard actually took the element.
     pub(crate) fn log_list_pop(&mut self, key: &[u8], from_left: bool) {
-        if self.aof.is_some() {
+        // Built whenever there is anywhere for it to go. Gating on the
+        // AOF alone meant a replication-only deployment (AOF off) never
+        // produced the record at all, so the move reached neither disk
+        // nor replica.
+        if self.aof.is_some() || self.replicate.is_some() {
             let mut c = kevy_resp::Argv::with_capacity(2, 0);
             c.push(if from_left { b"LPOP" } else { b"RPOP" });
             c.push(key);
-            self.log(&c);
+            self.log_effect(&c);
         }
     }
 
     /// One `LPUSH` / `RPUSH` effect record carrying the moved element.
     pub(crate) fn log_list_push(&mut self, key: &[u8], value: &[u8], to_left: bool) {
-        if self.aof.is_some() {
+        if self.aof.is_some() || self.replicate.is_some() {
             let mut c = kevy_resp::Argv::with_capacity(3, 0);
             c.push(if to_left { b"LPUSH" } else { b"RPUSH" });
             c.push(key);
             c.push(value);
-            self.log(&c);
+            self.log_effect(&c);
         }
     }
 
@@ -311,5 +316,69 @@ impl<C: Commands> Shard<C> {
             (false, false) => b"rpush",
         };
         self.notify_keyspace_event(event, key);
+    }
+
+    /// `Op::ListMoveTake` — split out of `exec_op` for the LOC ceiling.
+    pub(crate) fn op_list_move_take(&mut self, key: &[u8], from_left: bool) -> Part {
+        // Step 1 of the cross-shard move: pop one element. The
+        // destination is not touched until the element is in hand, so
+        // an empty source costs the destination nothing.
+        let popped = if from_left {
+            self.store.lpop(key, 1)
+        } else {
+            self.store.rpop(key, 1)
+        };
+        match popped {
+            Ok(mut v) => {
+                let element = v.pop();
+                if element.is_some() {
+                    self.note_key_mutated(key);
+                    self.log_list_pop(key, from_left);
+                    self.notify_list_event(key, from_left, true);
+                }
+                Part::ListMoveTaken(Ok(element))
+            }
+            Err(_) => Part::ListMoveTaken(Err(())),
+        }
+    }
+
+    /// `Op::ListMovePush` — split out of `exec_op` for the LOC ceiling.
+    pub(crate) fn op_list_move_push(&mut self, key: &[u8], value: Vec<u8>, to_left: bool) -> Part {
+        // Step 2. A destination that exists and is not a list refuses
+        // the element and hands it back — the orchestrator restores it
+        // to the source rather than dropping it.
+        let pushed = if to_left {
+            self.store.lpush(key, &[value.as_slice()])
+        } else {
+            self.store.rpush(key, &[value.as_slice()])
+        };
+        match pushed {
+            Ok(_) => {
+                self.note_key_mutated(key);
+                self.notify_list_event(key, to_left, false);
+                self.log_list_push(key, &value, to_left);
+                Part::ListMovePushed { refused: None }
+            }
+            Err(_) => Part::ListMovePushed { refused: Some(value) },
+        }
+    }
+
+    /// `Op::ListMoveRestore` — split out of `exec_op` for the LOC ceiling.
+    pub(crate) fn op_list_move_restore(
+    &mut self,
+    key: &[u8],
+    value: &[u8],
+    from_left: bool,
+    ) -> Part {
+
+        // Rollback: put the element back on the end it was taken from.
+        let _ = if from_left {
+            self.store.lpush(key, &[value])
+        } else {
+            self.store.rpush(key, &[value])
+        };
+        self.note_key_mutated(key);
+        self.log_list_push(key, value, from_left);
+        Part::Ok
     }
 }

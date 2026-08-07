@@ -37,12 +37,27 @@ TABLE.DECLARE name PREFIX p PK col
     COLUMN name i64|f64|str [COLUMN ...]
     [INDEX col range|unique [VALUES col ...]] ...
     [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] ...
+    [WINDOW col SPAN n BUCKET n]   # スライディング窓——下記参照
+    [AUTODECLARE n]    # エンジンに最大 n 本の経路を足させる——下記参照
 TABLE.ENSURE ...       # TABLE.DECLARE の起動時イディオム——下記参照
 TABLE.REPLACE ...      # 明示の drop + declare + 再構築
 TABLE.DROP name        # drops the table + its compiled indexes; 1|0
 TABLE.LIST             # name/prefix/pk + column/index/orderpath counts
 TABLE.VERIFY name      # component fsck + a bounded column spot check
 ```
+
+## スライディング窓
+
+`WINDOW <col> SPAN <n> BUCKET <n>` は、`i64` の列の上にスライディングなホット窓を宣言します。`SPAN` と `BUCKET` は**その列自身の単位での**ただの整数です——エンジンは時間の基準を一切仮定しないので、その列は epoch 秒でも epoch ミリ秒でも連番でも、データの古さに対して単調なものなら何でも構いません。境界は**バケット単位**で進み、追い出されたバケットが一つの冷たいセグメントになります。
+
+宣言時の拒否が二つ、どちらも名指しです：
+
+- 窓の列は宣言済みの `i64` 列でなければならない；
+- その列には、木の末尾が `max(col)` をただで答えられるアクセス経路が要る——その列の単一列 `INDEX <col>` か、**先頭の列**がそれで昇順の `ORDERPATH` か。無ければ宣言は拒まれます（`WINDOW needs an access path on '<col>'`）——これは同時に、どの窓付きテーブルも同じ経路で窓をまたぐ範囲クエリを供せることを保証します。
+
+**今スライドしているのは、窓の列の単一列 INDEX です。** 境界が（バケット単位で）進むにつれ、索引木の窓外の接頭部は `segs-<shard>/` の下の不変な冷セグメントファイルへ移ります——索引のメモリは縮み、しかし素の `RANGE` / `COUNT` はホットと冷の上で、**窓を張っていない索引とバイト単位で同一に**答え続けます（冷たい行の書き換え・削除・復活を含みます。意味的同値の e2e がこれを固定しています）。冷たい索引セグメントは**派生した溢れであって、真実ではありません**：行はホットなキースペースの普通のハッシュのままで、再起動時にはただ再構築されて再びスライドします。
+
+縁が二つ、どちらも明示です：句を伴うクエリ（`FILTER` / `SORT` / `DISTINCT` / `FACET`）は、冷セグメントを持つ索引の上では、句付きの冷経路が入るまで**名指しで拒みます**——黙って不完全な答えを返すことは決してありません。そして**窓の列が先頭の `ORDERPATH` は宣言を満たしますが、まだスライドしません**。メモリだけの配備（データディレクトリなし）は宣言を受け入れ、ただ全部ホットのままになります。
 
 ## 起動パターン：`ensure`
 
@@ -55,7 +70,7 @@ TABLE.VERIFY name      # component fsck + a bounded column spot check
 素の `TABLE.DECLARE` は厳格形のままです。既存名の再宣言はエラーです。起動時は `ensure`、マイグレーションでは `replace`、名前の重複がバグを意味する場面では `declare` を使ってください。
 
 - カラム型は `i64 | f64 | str`——スカラーインデックスの型そのものです。それ以外（タイムスタンプ、ブール、列挙）はアプリ側でこの 3 つのどれかにエンコードし、粗い対応づけは隠さずに明言されます（kevy-sql は型変換されたカラムごとに注記を出力します）。
-- `PK` は宣言済みカラムを指します。これはドキュメントであり、`VERIFY` の面です——行はこれまでどおりキーで指されます。`serial` 式の id 割り当てはレシピ（[シーケンスのレシピ](cookbook.md#3-sequences)）であって、エンジンの機能ではありません。
+- `PK` は宣言済みカラムを指します。これはドキュメントであり、`VERIFY` の面です——行はこれまでどおりキーで指されます。`serial` 式の id 割り当てはレシピ（[シーケンスのレシピ](cookbook.md#3-シーケンス)）であって、エンジンの機能ではありません。
 - テーブルは最大 64 個。構造上の拒否はすべて名前つきです（重複カラム、未知の `VALUES` カラム、名前衝突、……）。黙って通ることはありません。
 
 `TABLE.VERIFY` は**すべてのカウンタを、呼び出しの瞬間に、双方向で**再計算します（4.1——以前の `coerce_failures` は累積値で、しかも欠落カラムまで呑み込んでいたため、隣の新鮮な `drift` と読み合わせられませんでした）。
@@ -67,7 +82,7 @@ TABLE.VERIFY name      # component fsck + a bounded column spot check
 
 ## 複合 ORDERPATH の意味論
 
-ORDERPATH は[複合順序のレシピ](cookbook.md#8-composite-ordering-order-by-a-b)——`ORDER BY a, b DESC` の歩き方——を、本物の複合インデックスに機械化します。行ごとに順序を保つバイト列が 1 本あり、リレーショナルの複合インデックスと同じやり方で、1 本の B-tree がクエリに答えます。ルールは次のとおりです。
+ORDERPATH は[複合順序のレシピ](cookbook.md#8-複合順序付けorder-by-a-b)——`ORDER BY a, b DESC` の歩き方——を、本物の複合インデックスに機械化します。行ごとに順序を保つバイト列が 1 本あり、リレーショナルの複合インデックスと同じやり方で、1 本の B-tree がクエリに答えます。ルールは次のとおりです。
 
 - **`WHERE` は先頭プレフィックスを取ります。**`WHERE a EQ x [b EQ y …] [RANGE c min max]` は、複合インデックスのカラムを宣言順に先頭から指名しなければなりません。等値のプレフィックス、次に*その次の*カラムへの range を最大 1 つ。それ以降は無制約です（古典的な複合 B-tree の意味論）。プレフィックスでないカラムの指名は名前つきエラーです——スキャンには決してなりません。
 - `RANGE` は `WHERE` の中で終端です——その後には何も続けられません。range の後ろの条件は、1 回の連続した歩きでは表現できないからです。
@@ -98,10 +113,27 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name email
 
 **index-only クエリは行にゼロ回しか触れません。**FILTER / SORT / COUNT のクエリは RAM 常駐のインデックスだけで答えます——行読み取りカウンタはゲートスイートで `== 0` と表明されています（`bench/tablegate.sh`）。これが、この 2 つの機能を一緒に設計した狙いのティアリング相乗効果です。[透過的ティアリング](tiering.md)をオンにすれば、全行コールドなテーブルが index-only クエリを**ディスク読み取りゼロ**で捌き、最後の hydration ページ（`FIELDS …`）だけがコールド読み取りを払います——1 行 1 回、バッチで。`VALUES` カラムのないインデックスは、メモリとクエリパスにおいて、それを一度も宣言しないストアのインデックスとバイト単位で同一です（宣言しなければゼロコストのゲート）。
 
+## `AUTODECLARE`：あなたが書かなかった経路
+
+インデックスを張っていない列へのクエリは、名前つきで拒否されます。その拒否はあなたのワークロードについての事実でもあり、`IDX.ADVISE` は繰り返し当たっている形を見せてくれます。`AUTODECLARE n` はこう言うことです——**同じ形が十分な回数拒否され、しかもそれが宣言済みの列の上に着地するなら、その経路は私の代わりに宣言してよい。最大 n 本まで。**
+
+すべてが意図的に有界です：
+
+* **頼まなければ動きません。** 句がなければループもありません。既定値ではありません。
+* **上限はあなたが書いた数です。** 予算を使い切れば、そのクエリは拒否され続け、形は `IDX.ADVISE` に残ってあなたが読むのを待ちます——エンジンが自分の上限を黙って上げることはありません。
+* **宣言済みの列の上だけ。** テーブルが宣言していない列を指す形は決して着地しません。`IDX.ADVISE` はそれでも報告するので、答えはあなたのものです。
+* **追加のみ。** インデックスを落とすのは人の仕事です。読み違いの最悪でも有界のメモリ浪費であって、経路の消失ではありません。
+* **見えます。** こうして作られたインデックスは `IDX.LIST` で `auto` 印を持ち、テーブルの spec にも台帳が残ります——どれを自分が書き、どれをエンジンが足したのか、いつでも読み返せます。
+* **クエリの答えの中では起きません。** 閾値を越えたそのクエリはエラーを受け取り、次のクエリが経路の構築中を見つけます。
+
+**「十分な回数」は同じ形が 16 回拒否されることです。** この数は定数であって、つまみではありません：テーブルごとの閾値は、まさにこのエンジンが不要だと主張しているワークロードごとのチューニングそのものですし、形がゆっくり現れるワークロードはどのみち 16 回の拒否を先に払います。ここに書いてあるのは、`IDX.ADVISE` を眺めて「なぜまだ何も起きないのか」と思っている運用者がこの数を知る資格があるからで、設定できるからではありません。
+
+これはクエリプランナではありません。そしてその違いこそが要点です：エンジンは**どの経路を走るか**を選びません——あなたのクエリが自分で名指しします。`AUTODECLARE` は、あなたの招きで、あなたの予算の中で、あなたに見える場所で、宣言を広げるだけです。クエリ時は法則のままです：宣言された経路を走り、それ以外は名前つきで拒否する。
+
 ## NULL、一意性、そして何が強制されるか
 
-- **NULL = 欠けたフィールド。**必須のカラムはありません。インデックス対象カラムを欠く行は、単にそのインデックスにいないだけです。エンジンの `CHECK` も、既定値も、NOT NULL もありません——制約はレシピです（[制約のレシピ](cookbook.md#5-check-constraints-and-multi-key-invariants)、アトミックブロック）。
-- テーブル層の**一意性は、強制ではなく検証です**。`unique` インデックスは `IDX.CREATE KIND unique` が築くのと同じフェンスで（[indexes.md](indexes.md#uniqueness-is-a-fence-not-a-lock)——予約パターンで競合なしにできます）、`TABLE.VERIFY` は `duplicates` を報告します。エンジンが後から書き込みを拒否するのではありません。
+- **NULL = 欠けたフィールド。**必須のカラムはありません。インデックス対象カラムを欠く行は、単にそのインデックスにいないだけです。エンジンの `CHECK` も、既定値も、NOT NULL もありません——制約はレシピです（[制約のレシピ](cookbook.md#5-check制約と複数キー不変条件)、アトミックブロック）。
+- テーブル層の**一意性は、強制ではなく検証です**。`unique` インデックスは `IDX.CREATE KIND unique` が築くのと同じフェンスで（[indexes.md](indexes.md#一意性はフェンスであってロックではない)——予約パターンで競合なしにできます）、`TABLE.VERIFY` は `duplicates` を報告します。エンジンが後から書き込みを拒否するのではありません。
 
 ## それが「ではない」もの
 
@@ -112,16 +144,43 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name email
 `kevy-sql`（とその `kevy-cli sql` の顔）は**宣言時コンパイラ**です——マイグレーションツールのように、PG/MySQL 方言のスキーマファイルを一度だけ読み、明示的な宣言を出力します。
 
 ```console
-kevy-cli sql compile schema.sql                          # print the plan
+kevy-cli sql compile schema.sql                          # print the declarations
 kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004
+kevy-cli sql plan schema.sql                             # 各クエリがどうなるか
 ```
+
+`compile` と `plan` は同じファイルを読み、別の問いに答えます。`compile` はビルド時——実行するコマンドを生み出すので、供給できないビューが一つあればそれはエラーで、そこで止まります。`plan` は移行の当日です。**すべての**クエリの行き先を報告します。*「40 本のうち 34 本は動く、残り 6 本には何が要る」*こそ、スキーマを携えて来た人が実際に訊いていることだからです：
+
+```console
+$ kevy-cli sql plan shop.sql
+2 table(s) to declare:
+  users
+  orders
+
+5 quer(ies) — 3 served, 2 not
+
+  served:
+    paid_orders              orders.status
+    recent_by_user           orders.user_id_created_at
+    by_email                 users.email
+
+  not served:
+    line 25    by_total
+      view 'by_total': WHERE (total EQ) matches no declared access path — add: CREATE INDEX ON orders (total)
+    line 28    everything
+      view 'everything': a view with no WHERE would scan the table — kevy has no scans; add a driving predicate, or page an index directly (IDX.QUERY orders.<col> RANGE …)
+
+plan: 2 of 5 quer(ies) need a declaration change before this schema moves
+```
+
+供給できないクエリが一つでもあれば非ゼロで終了します。これは警告ではありません。宣言された経路を持たないクエリはそもそも動かないので、スキーマが変わるまで移行を塞ぎます。*DDL* 自体が解析できない場合は従来どおり普通のエラーです——成立していないスキーマに対して渡せる計画はありません。
 
 - `CREATE TABLE` → `TABLE.DECLARE`（型は `i64|f64|str` へ粗く対応づけ、対応づけごとに正直に注記されます）。
 - `CREATE [UNIQUE] INDEX` → `INDEX` 句。PG の `INCLUDE` カバリングカラム → 保存された `VALUES`。複数カラムのインデックス → `ORDERPATH`。
 - 定数の単一テーブル `CREATE VIEW … AS SELECT` → エンジンのビュー。パラメータつきなら → **クエリカード**——`$N` のスロットをアプリが埋める、出来合いの `IDX.QUERY` テンプレートです。
 - コンパイラもプランしません。ビューを、あなたが宣言したアクセスパスに突き合わせ、合うものがなければ、どの宣言を足すべきか（`add: CREATE INDEX ON t (dept, age)`）を告げます。スキャンを発明することはありません。アドホック SQL、join、サブクエリ、`OR`、`GROUP BY` の類は `line:col` つきで拒否され、置き換えるレシピを指し示します。
 
-端到端のウォークスルー——実物の users/orders/order_items スキーマをコンパイルし、適用し、クエリするまで——は[スキーマ移植のレシピ](cookbook.md#22-porting-a-pgmysql-schema)です。
+端到端のウォークスルー——実物の users/orders/order_items スキーマをコンパイルし、適用し、クエリするまで——は[スキーマ移植のレシピ](../cookbook.md#22-porting-a-pgmysql-schema)です。
 
 ## 組み込み
 

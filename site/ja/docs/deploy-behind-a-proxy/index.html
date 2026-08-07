@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kevy をプロキシの後ろに置いて運用する — kevy</title>
+<meta name="description" content="kevy に AUTH はなく、TLS もなく、そしてこれからも入りません——それは憲章の決定であって、いつか埋まる穴ではありません。認証も暗号化も、すべてプロセスの前で行います。 この章はそのレシピで、書き換えるためではなく、そのまま写すために書かれています。">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../ja/">kevy<span class="v">4.1</span></a>
+    <nav class="nav">
+      <a href="../../../ja/docs/" aria-current="page">ドキュメント</a>
+      <a href="../../../ja/docs/commands/">コマンド</a>
+      <a href="../../../ja/benchmarks/">ベンチマーク</a>
+      <a href="../../../ja/play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../../ja/docs/search-index.json" data-root="../../../ja/">
+        <input type="search" placeholder="ドキュメントを検索……" aria-label="ドキュメントを検索……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../../docs/deploy-behind-a-proxy/">EN</a><a href="../../../zh/docs/deploy-behind-a-proxy/">中文</a><a href="../../../ja/docs/deploy-behind-a-proxy/" aria-current="page">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell has-toc">
+  <aside class="side"><p class="side-h">はじめに</p><ul><li><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a></li><li><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a></li><li><a href="../../../ja/docs/persistence/">永続化</a></li><li><a href="../../../ja/docs/tuning/">kevyのチューニング</a></li></ul><p class="side-h">運用</p><ul><li><a href="../../../ja/docs/replication/">レプリケーション</a></li><li><a href="../../../ja/docs/availability/">可用性</a></li><li><a href="../../../ja/docs/cluster/">クラスタ</a></li><li><a href="../../../ja/docs/tiering/">透過的ティアリング（[tiering] / with_tier_budget）</a></li><li><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a></li><li><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a></li><li><a href="../../../ja/docs/async/">非同期クライアント</a></li></ul><p class="side-h">データ</p><ul><li><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX. / idx_）</a></li><li><a href="../../../ja/docs/tables/">テーブル（TABLE. / table_）</a></li><li><a href="../../../ja/docs/table-migration/">手書きインデックスからテーブルへ移行する</a></li><li><a href="../../../ja/docs/vector-search/">ベクトル検索（KIND ann）</a></li><li><a href="../../../ja/docs/text-search/">全文検索（KIND text）</a></li><li><a href="../../../ja/docs/views/">ビュー（VIEW. / view_）</a></li><li><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED. / changes_since）</a></li><li><a href="../../../ja/docs/pubsub/">Pub/sub</a></li><li><a href="../../../ja/docs/lua/">Luaスクリプティング</a></li></ul><p class="side-h">組み込み</p><ul><li><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a></li><li><a href="../../../ja/docs/embedded-listener/">組み込みの読み取り専用RESPリスナー</a></li><li><a href="../../../ja/docs/iot/">IoTデバイス上のkevy</a></li></ul><p class="side-h">リファレンス</p><ul><li><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a></li><li><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a></li><li><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></li><li><a href="../../../ja/docs/UPGRADING/">kevyのアップグレード</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../ja/docs/commands/">188 コマンド全て</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>kevy をプロキシの後ろに置いて運用する</h1></div>
+<p>kevy に AUTH はなく、TLS もなく、そしてこれからも入りません——それは憲章の決定であって、いつか埋まる穴ではありません。<b>認証も暗号化も、すべてプロセスの前で行います。</b> この章はそのレシピで、書き換えるためではなく、そのまま写すために書かれています。</p>
+<h2 id="kevy-が開くもの">kevy が開くもの</h2>
+<div class="tbl"><table><thead><tr><th></th><th>ポート</th><th>備考</th></tr></thead><tbody><tr><td>既定</td><td><b>ひとつ</b>（<code>6004</code>）</td><td><code>--threads N</code> は<b>同じ</b>ポートに <code>SO_REUSEPORT</code> のリスナを N 個開くのであって、N 個のポートではありません</td></tr><tr><td><code>--cluster</code></td><td><b>1 + N</b></td><td>メインポートに加えて、シャードごとに <code>port+1+i</code></td></tr><tr><td><code>KEVY_UNIX_SOCKET=&lt;path&gt;</code></td><td>変わらない</td><td>unix ソケットは<b>追加</b>されるだけで、TCP のリスナはそのまま</td></tr></tbody></table></div>
+<p>既定のバインドは <code>127.0.0.1</code> です。それはこの章が求める形そのものです：エンジンはこのホストからしか届かない場所で待ち、公開アドレスを持つのは終端器だけになります。</p>
+<h2 id="形">形</h2>
+<figure class="code"><pre><code>   client ──TLS──▶  terminator  ──plain──▶  kevy
+  (rediss://)     (stunnel / HAProxy /     127.0.0.1:6004
+                   nginx stream)           または /run/kevy/kevy.sock</code></pre></figure>
+<p>kevy 側は何も変わりません。RESP はホスト名も SNI も絶対 URL も運ばないので、前に置いたバイトプロキシは両側から見えません。</p>
+<h2 id="resp-は-http-ではない">RESP は HTTP ではない</h2>
+<p>HTTP のリバースプロキシは RESP を運べません。<b>stock の Caddy も同様</b>です：コアに layer-4 モジュールがないので、Caddyfile をどう書いても <code>caddy</code> だけで kevy に TLS を被せることはできません。必要なのは TCP レベルの終端器です：</p>
+<ul><li><b>stunnel</b>——最小、どこでもパッケージがあり、この一仕事だけをする；</li><li><b>HAProxy</b> の <code>mode tcp</code>——既に HAProxy を運用している、あるいはヘルスチェックとフェイルオーバーを同じ場所に置きたいなら；</li><li><b>nginx</b> の <code>stream</code> モジュール——既に nginx があるなら同様。</li></ul>
+<h3 id="stunnel-ループバックのポート">stunnel → ループバックのポート</h3>
+<figure class="code"><pre><code class="lang-ini">[kevy]
+accept  = 0.0.0.0:6379
+connect = 127.0.0.1:6004
+cert    = /etc/kevy/tls/fullchain.pem
+key     = /etc/kevy/tls/privkey.pem</code></pre></figure>
+<h3 id="haproxy-unix-ソケット">HAProxy → unix ソケット</h3>
+<p>もう一段締めるなら：エンジンのソケットファイルにはファイルシステムの権限が付くので、このホストの中でさえ、届くプロセスは終端器だけになります。</p>
+<figure class="code"><pre><code>listen kevy
+    bind :6379 ssl crt /etc/kevy/tls/kevy.pem
+    mode tcp
+    timeout client 0
+    timeout server 0
+    server kevy unix@/run/kevy/kevy.sock</code></pre></figure>
+<p>ソケット付きで kevy を起動します：</p>
+<figure class="code"><pre><code class="lang-console">KEVY_UNIX_SOCKET=/run/kevy/kevy.sock kevy --dir /var/lib/kevy</code></pre></figure>
+<p>そのパスについて二つ。<b>既に存在する場合 kevy は起動を拒みます</b>——自分が作ったのではないパスを上書きしません——ので、再起動時に片付けるか、実行ごとに変わるパスを使ってください。そして <code>127.0.0.1</code> の TCP リスナはそのまま残ります。ソケットは置き換えではなく追加です。</p>
+<h3 id="nginx-stream-unix-ソケット">nginx stream → unix ソケット</h3>
+<figure class="code"><pre><code class="lang-nginx">stream {
+    upstream kevy { server unix:/run/kevy/kevy.sock; }
+    server {
+        listen 6379 ssl;
+        ssl_certificate     /etc/kevy/tls/fullchain.pem;
+        ssl_certificate_key /etc/kevy/tls/privkey.pem;
+        proxy_pass kevy;
+        proxy_timeout 1h;
+    }
+}</code></pre></figure>
+<p>三つとも、タイムアウトに注意してください：ブロッキングの <code>BLPOP</code> や、待っているだけの Pub/Sub 購読者は、一バイトも流れないまま、アプリケーションが望むだけ接続を開いたままにします。アイドル接続を刈るプロキシは、<b>kevy が購読者を落としているのと見分けがつきません</b>。</p>
+<h2 id="クライアント側">クライアント側</h2>
+<p>TLS を有効にした標準の Redis クライアントなら——<code>rediss://host:6379</code>——終端された kevy とそのまま話せます。</p>
+<p><b><code>kevy-cli</code> はできません。</b> <code>rediss://</code> に対して <code>Unsupported</code> を返します。kevy が TLS なしで出荷され、CLI にも貸せる TLS スタックがないからです。これは行き当たりばったりで気づくのではなく、先に段取りしておく価値のある運用上の帰結です：ホスト上で直接操作するか、SSH トンネルを使ってください：</p>
+<figure class="code"><pre><code class="lang-console">ssh -N -L 6004:127.0.0.1:6004 you@host   # そのあと：kevy-cli -p 6004</code></pre></figure>
+<h2 id="必要なものだけを晒す">必要なものだけを晒す</h2>
+<p>既定のバインドなら、<b>kevy にファイアウォール規則は一つも要りません</b>——そもそもホストの外から届きません。開けるポートは終端器の分だけです。どうしても kevy を実インタフェースにバインドするなら、ループバックのバインドがただでやっていた仕事をファイアウォールが引き受けることになり、そしてそれが、ネットワークと<b>認証のないデータベース</b>との間にある唯一のものになります。</p>
+<h2 id="クラスタモードはこの層を越えられない">クラスタモードはこの層を越えられない</h2>
+<p>単一ノードのクラスタモードは<b>同じホスト上のクライアント</b>のためのもので、プロキシがそれを延長してくれることはありません。<code>CLUSTER SLOTS</code> と <code>CLUSTER NODES</code> は kevy がバインドしているアドレスを広告し、<code>0.0.0.0</code> のワイルドカードのときは <code>127.0.0.1</code> に置き換えます（到達不能なアドレスを広告すれば、すべてのクライアントが立ち往生するからです）。<b>announce-address に相当するつまみはありません</b>ので、<code>127.0.0.1:6101</code> と告げられたキー認識クライアントは、他所からそれを追えません。</p>
+<p>リモートからのキー認識ルーティングが要るなら、ルーティング可能なアドレスにバインドし、その <code>1 + N</code> 個のポートを一対一で通すことになります——それは「ポートを一つだけ晒す」のちょうど反対です。どちらかを選んでください。両立はしません。</p>
+<h2 id="実測したことしていないこと">実測したこと、していないこと</h2>
+<p>この章を書きながら、このツリーに対して実測：</p>
+<ul><li>上の表のポート面（<code>--cluster</code> がシャードごとに <code>port+1+i</code> を開くことを含む）；</li><li>素の TCP プロキシを前に置いても kevy に対して透過である（<code>PING</code>・<code>SET</code>・<code>GET</code> がフォワーダを通る）；</li><li><b>TLS を終端しても、手を入れていない kevy に対して RESP が往復する</b>——ループバックのポートと unix ソケットの両方、TLS 1.3、<code>+PONG</code> / <code>+OK</code> / 格納した値がそのまま返る；</li><li>stock の Caddy（2.11.4）に layer-4 モジュールがないこと；</li><li><code>0.0.0.0</code> バインド時に <code>CLUSTER SLOTS</code> が <code>127.0.0.1</code> を広告すること；</li><li><code>kevy-cli</code> が <code>rediss://</code> を拒むこと。</li></ul>
+<p>三つの設定ブロックは各製品がこの仕事をする際の標準的な書き方で、<b>ここでは実行していません</b>。実測したのは、それらが実装している「形」のほうです。</p>
+<h2 id="参照">参照</h2>
+<ul><li><a href="../uds/">uds.md</a>——unix ソケットの詳細</li><li><a href="../cluster/">cluster.md</a>——単一ノードのクラスタモードは何のためか</li><li><a href="../tuning/">tuning.md</a>——<code>--threads</code> と、少ないほうが速い理由</li></ul></main>
+  <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#kevy-が開くもの">kevy が開くもの</a></li><li class="l2"><a href="#形">形</a></li><li class="l2"><a href="#resp-は-http-ではない">RESP は HTTP ではない</a></li><li class="l3"><a href="#stunnel-ループバックのポート">stunnel → ループバックのポート</a></li><li class="l3"><a href="#haproxy-unix-ソケット">HAProxy → unix ソケット</a></li><li class="l3"><a href="#nginx-stream-unix-ソケット">nginx stream → unix ソケット</a></li><li class="l2"><a href="#クライアント側">クライアント側</a></li><li class="l2"><a href="#必要なものだけを晒す">必要なものだけを晒す</a></li><li class="l2"><a href="#クラスタモードはこの層を越えられない">クラスタモードはこの層を越えられない</a></li><li class="l2"><a href="#実測したことしていないこと">実測したこと、していないこと</a></li><li class="l2"><a href="#参照">参照</a></li></ul></aside>
+</div>
+
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

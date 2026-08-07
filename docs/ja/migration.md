@@ -97,11 +97,34 @@ kevy-cli delete-prefix -p 6004 --rate 5000 --dry-run tmp:
 kevy-cli inspect -p 6004 user:
 ```
 
+もう三つは、読んで報告するだけで何も動かしません。だから上の一覧の外にあります。移行プレイブックの教訓を実行できる形にしたものです——[table-migration.md](table-migration.md) を参照：
+
+```
+kevy-cli sql plan schema.sql                       # 各クエリの行き先
+kevy-cli backfill-keys --from-index i --from-prefix p:   # 和集合
+kevy-cli lint overlap --prefix mailbox:              # lesson 1
+kevy-cli lint columns ev                           # lesson 6
+kevy-cli shadow -p 6004 --old "…" --new "…"        # カットオーバー前に
+kevy-cli doctor -p 6004                            # VERIFY を cron に
+```
+
 ## ワイヤフォーマット
 
 `export`は再構築フレームのプレーンな**RESPコマンドストリーム**を書き出します——`DEL`＋`SET`/`HSET`/`RPUSH`/`SADD`/`ZADD`、TTLには絶対時刻の`PEXPIREAT`です。このためファイルは`redis-cli --pipe`と双方向に互換です。kevyのエクスポートはRedisに食わせられますし、どんなRESPコマンドファイルも`kevy-cli import`に食わせられます——RDSのダンプから自作したもの（プレイブックのフェーズ3）を含めて。
 
-キーごとに先頭へ置かれる`DEL`が、リプレイを**ゼロからの再構築**にします——あらゆる型に対して本物の冪等です（RPUSHのような追記verbは、そうしないと再インポートでリスト内容が倍になります）。
+キーごとに先頭へ置かれる`DEL`が、リプレイを**ゼロからの再構築**にします——**出力する型**については本物の冪等です（RPUSHのような追記verbは、そうしないと再インポートでリスト内容が倍になります）。
+
+**ただし、すべての型を出力するわけではありません。** 文字列・hash・list・set・zset は再構築されますが、**ストリームはされません**——ここには再構築するverbがないので、エクスポートは置き去りにします。これはこのツールの実際の制限であってデータの性質ではなく、いまは**型名つきで報告されます**：
+
+```console
+kevy-cli export: SKIPPED 1 key(s) of type 'stream' — nothing here
+rebuilds that type, so they are NOT in this file
+exported 4006 keys -> dump.resp
+```
+
+4.1 以前、このスキップは**沈黙**でした：そのキーは「走査中に消えた」ものとして数えられ、ストリームを持つストアはきれいに、そして短くエクスポートされていました。移行にストリームが含まれるなら、別途移してください——そしてそのファイルを信じる前に、この行を確認してください。
+
+**`copy-prefix` も同じ再構築セットを通ります**。報告のしかたも同じで、理由も同じです：ある型を置き去りにしながら `copied N keys` と表示するコピーは、動詞を変えただけの、同じ沈黙です。
 
 ## 一貫性と再開可能性
 

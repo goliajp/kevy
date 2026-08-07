@@ -363,6 +363,198 @@ kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 100 PREFIX reading:   # 上行循环
 
 再配上 recipe 19 的 `MAXLEN` 上限和 TTL：原始读数在节点上有界，聚合行始终很小，feed 游标跨重启存活——除了 kevy 本身，整个边缘故事零活动件。
 
+## 21. 派生状态作为行的纯函数
+
+**SQL 对应：**整个触发器层，一次全包——`ON DELETE CASCADE`、`UNIQUE` 约束，以及你在不再信任它们之后写的那个对账任务——[矩阵：约束与触发器](rds-workloads.md#约束与触发器)。
+
+这是上面那些配方一直在绕的模式：§2 的链接键、§5 的不变量、§10 的级联、§12 的审计行，是同一个想法用了四遍。**把它说清楚一次，级联、唯一性与漂移检测就一起解决了。** 它来自一次真实迁移，那次花了一天才走到这里——这一天值得替你省下。
+
+**想法：**写一个从行到"由它派生出的每一个键"的**纯函数**。不是一个去更新键的过程——是一个**返回**"应该存在什么"的函数。
+
+```rust
+// Everything user:42 implies, computed from the row alone.
+fn derived(id: &[u8], row: &Row) -> Vec<Vec<u8>> {
+    vec![
+        key(b"email:", &row.email),          // uniqueness claim
+        key(b"dept:", &row.dept, b":users"), // membership
+    ]
+}
+```
+
+于是每个操作都成了一次 diff，而且每一条都是**落出来的**，不是设计出来的：
+
+| 操作 | 你做什么 | 白得什么 |
+|---|---|---|
+| **插入** | 加上 `derived(new)` | 声明与成员关系一起出现 |
+| **更新** | 加上 `derived(new) - derived(old)`，删掉 `derived(old) - derived(new)` | 改过的 email **会释放它旧的声明**——那正是人人手写时都会写出的 bug |
+| **删除** | 删掉 `derived(old)` | 级联不再是一条单独的代码路径 |
+| **校验** | 对每一行重算 `derived`，与实际存在的对账 | 一个你没设计过的漂移检测器 |
+
+更新那一行，是这个模式的回本处。手写的级联代码几乎总是加上新声明、忘掉释放旧的——因为"释放"是**没人会在工单里演示**的那种情形。
+
+```rust
+store.atomic_all_shards(|ctx| {
+    let old = read_row(ctx, id)?;
+    let (want, had) = (derived(id, &new), derived(id, &old));
+
+    for k in want.iter().filter(|k| !had.contains(k)) {
+        if ctx.exists(&[k]) > 0 { return Err(Taken); }  // uniqueness
+        ctx.set(k, id);
+    }
+    for k in had.iter().filter(|k| !want.contains(k)) {
+        ctx.del(&[k]);                                  // release
+    }
+    write_row(ctx, id, &new)
+})
+```
+
+返回 `Err` 会把整件事回滚（§5），所以一次被拒的写入，既不会留下行，也不会留下半套已生效的声明。
+
+**是声明，还是索引？**一个唯一性声明是**第二个真相来源**，它可能与行漂移；而[二级索引](indexes.md)是**按构造派生**的，不会。在 `atomic_all_shards` 里你可以直接查它：
+
+```rust
+if ctx.idx_count(b"email_idx", &want, &want)? > 0 { return Err(Taken); }
+```
+
+两条限制，都是刻意的：
+
+- **只在 `atomic_all_shards` 上。** 一条索引条目住在它所索引的那个键的分片上，所以"有没有任何行用了这个 email"是一个关于**每一个**分片的问题。单分片的 `atomic()` 只持有一把锁，只能替它自己那一片作答——一个只查了 1/N 键空间的唯一性检查，几乎总会报"唯一"，所以**它不被提供**，而不是提供了再加个脚注。
+- **索引读看不见本事务自己的写。** 维护发生在提交时。一个在同一闭包里插入两行的写者，必须自己把它们互相比一遍。
+
+**校验。**因为 `derived` 是个函数，**检查器就是那个函数**——把同一个传给 `reconcile`：
+
+```rust
+let report = store.snapshot().reconcile(
+    b"user:",                    // the rows
+    &[b"email:", b"dept:"],      // where derived keys live
+    |key, row| derived(key, row),
+);
+if !report.is_clean() {
+    warn!("{} missing, {} orphaned", report.missing_count, report.orphaned_count);
+}
+```
+
+它**双向**对账，而这正是值得不自己写的那一半。**缺失的键**是丢掉的派生状态；而**孤儿**——行已经没了、声明还在——才是一次半生效的更新会留下的东西，也是那个**会静默挡住后续插入**的故障。一个只找缺失的检查器，恰恰会在这种故障发生时报"干净"。
+
+它跑在快照上（`store.snapshot()`），在每一把分片锁下冻结，所以它不会把一次并发写误当成漂移。**但这只在写本身是原子的前提下成立**：一行和它的声明必须进同一个 `atomic_all_shards` 块，否则真的存在一个半生效状态等着被找到。对账与原子写，是同一个保证的两端。
+
+开机时跑，或者定时跑，或者在你完全信任写路径之后就不跑——但**要跑**，因为它是唯一能告诉你"你相信的那个不变量就是你实际拥有的那个"的东西。
+
+## 22. 移植一份 PG/MySQL schema
+
+**SQL 对应：**schema 文件本身——`CREATE TABLE`、`CREATE INDEX`、`CREATE VIEW`——[矩阵：二级索引 DDL](rds-workloads.md#二级索引-ddl)。
+
+配方 1–8 手工做的一切，从你**已经有**的那份 SQL 编译出来。`kevy-sql`（以及它的 `kevy-cli sql` 那张面孔）是一个**声明期编译器**：它像迁移工具一样把 schema **读一次**，产出显式的 `TABLE.DECLARE` / `VIEW.CREATE` 命令，外加*查询卡片*——带 `$N` 槽位的现成 `IDX.QUERY` 模板。服务器里**没有任何东西按查询运行**；运行期的 ad-hoc SQL 仍由引擎自己拒绝（Law 3）。
+
+这份 schema——[docs/examples/shop.sql](https://github.com/goliajp/kevy/blob/main/docs/examples/shop.sql)，一份真实的 users/orders/order_items 精简版：
+
+```sql
+CREATE TABLE users (
+  id     bigserial PRIMARY KEY,
+  email  text,
+  name   text,
+  plan   text
+);
+CREATE UNIQUE INDEX ON users (email);
+
+CREATE TABLE orders (
+  id          bigserial PRIMARY KEY,
+  user_id     bigint,
+  status      text,
+  total       numeric(10,2),
+  created_at  bigint       -- epoch seconds, app-encoded
+);
+-- INCLUDE = PG covering columns -> kevy stored VALUES (residual FILTER/SORT).
+CREATE INDEX ON orders (status) INCLUDE (total, created_at);
+-- Multi-column -> a composite ORDERPATH (the (user_id, created_at DESC) walk).
+CREATE INDEX ON orders (user_id, created_at DESC);
+
+CREATE TABLE order_items (
+  id        bigserial PRIMARY KEY,
+  order_id  bigint,
+  sku       text,
+  qty       int
+);
+CREATE INDEX ON order_items (order_id);
+
+CREATE VIEW paid_orders AS
+  SELECT * FROM orders WHERE status = 'paid';
+
+CREATE VIEW recent_orders_by_user AS
+  SELECT id, status, total, created_at FROM orders
+  WHERE user_id = $1
+  ORDER BY created_at DESC
+  LIMIT 20;
+```
+
+编译它，然后把声明应用到一台服务器上：
+
+```console
+kevy-cli sql compile docs/examples/shop.sql
+kevy-cli sql compile docs/examples/shop.sql --apply --url 127.0.0.1:6004
+```
+
+编译出来的脚本（原样）。每张表把它的索引折进**一条** `TABLE.DECLARE`；常量视图变成引擎视图；带参数的视图变成查询卡片；每一处粗粒度的类型映射都在 notes 里被**如实点名**（kevy 的列只有 `i64|f64|str`——时间戳由应用编码，`serial` 不会替你分配 id）：
+
+```text
+TABLE.DECLARE users PREFIX users: PK id COLUMN id i64 COLUMN email str COLUMN name str COLUMN plan str INDEX email unique
+TABLE.DECLARE orders PREFIX orders: PK id COLUMN id i64 COLUMN user_id i64 COLUMN status str COLUMN total f64 COLUMN created_at i64 INDEX status range VALUES total created_at ORDERPATH user_id_created_at ON user_id THEN created_at DESC
+TABLE.DECLARE order_items PREFIX order_items: PK id COLUMN id i64 COLUMN order_id i64 COLUMN sku str COLUMN qty i64 INDEX order_id range
+VIEW.CREATE paid_orders QUERY orders.status EQ paid ORDER BY orders.status
+
+# ---- query card: recent_orders_by_user ----
+# runtime template — substitute the $N slots and send as-is:
+#   $1 = user_id (i64)
+#   IDX.QUERY orders.user_id_created_at WHERE user_id EQ $1 LIMIT 20 FIELDS id status total created_at
+
+# notes:
+#   - users.id: bigserial → i64, but ids do NOT auto-increment — allocate them app-side (INCR block, cookbook §3)
+#   - orders.total: numeric → f64 — fixed-point precision becomes binary float; keep money as integer cents if exactness matters
+#   - view paid_orders: read with VIEW.QUERY paid_orders, then hydrate rows with HMGET <key> id user_id status total created_at
+```
+
+行就是表前缀下普通的 hash（配方 1），而编译出来的路径立刻就能服务——把真实参数填进 `$1` 槽位，卡片就能跑：
+
+```console
+kevy-cli -p 6004 HSET users:1 id 1 email ada@example.com name Ada plan pro
+kevy-cli -p 6004 HSET orders:1 id 1 user_id 1 status paid total 19.5 created_at 1700000100
+kevy-cli -p 6004 HSET orders:2 id 2 user_id 1 status pending total 5 created_at 1700000200
+kevy-cli -p 6004 HSET orders:3 id 3 user_id 2 status paid total 8 created_at 1700000300
+kevy-cli -p 6004 HSET order_items:1 id 1 order_id 1 sku sku-7 qty 2
+kevy-cli -p 6004 IDX.QUERY users.email EQ ada@example.com
+kevy-cli -p 6004 IDX.QUERY orders.user_id_created_at WHERE user_id EQ 1 LIMIT 20 FIELDS id status total created_at
+kevy-cli -p 6004 VIEW.QUERY paid_orders LIMIT 10
+kevy-cli -p 6004 IDX.QUERY orders.status EQ paid FILTER total RANGE 10 inf
+kevy-cli -p 6004 IDX.QUERY order_items.order_id EQ 1 FIELDS sku qty
+kevy-cli -p 6004 TABLE.LIST
+```
+
+- 卡片那条查询是 `SELECT id, status, total, created_at FROM orders WHERE user_id = 1 ORDER BY created_at DESC LIMIT 20`——由复合走查服务，最新在前，一跳内补全字段。
+- `FILTER total RANGE 10 inf` 那一行是在被 `INCLUDE` 的列上的**残余谓词**——`WHERE status = 'paid' AND total >= 10`，**不碰任何一行**。
+- `order_items.order_id EQ 1` 就是那次取代 JOIN 的外键查找（配方 2）：两次查询，没有查询期 join。
+
+**拒绝是有教的。**编译器拒绝一切需要查询期求值的东西——**具名**，带行/列，并指向那个替它建模的配方。一个 JOIN：
+
+```sql
+CREATE VIEW order_emails AS
+  SELECT id, email FROM orders
+  JOIN users ON users.id = orders.user_id;
+```
+
+```text
+$ kevy-cli sql compile join.sql
+kevy-cli sql: join.sql: line 6, col 3: JOIN is not compilable — kevy
+refuses query-time joins (Law 3); model the lookup with an indexed FK
+column (IDX.QUERY t.fk EQ …) or app-side assembly (cookbook §2)
+```
+
+一个 WHERE 匹配不到任何已声明访问路径的视图，会报错并**点名该加哪一条声明**（`… matches no declared access path — add: CREATE INDEX ON orders (status, total)`）；而运行期的 ad-hoc SQL，从来就没有过门：
+
+```text
+$ kevy-cli -p 6004 SQL SELECT * FROM users
+(error) ERR unknown command 'SQL'
+```
+
 ## Recipe 索引
 
 Recipe ↔ 它替代的 SQL 构造 ↔ 陈述语义与边界的 [rds-workloads.md](rds-workloads.md) 矩阵行。
@@ -389,3 +581,5 @@ Recipe ↔ 它替代的 SQL 构造 ↔ 陈述语义与边界的 [rds-workloads.m
 | 18 | RAG 混合检索 | tsvector + pgvector，融合 | [SELECT](rds-workloads.md#select) |
 | 19 | 传感器缓存 | upsert 表 + 陈旧度 cron | [容量估算与运维差异](rds-workloads.md#容量估算与运维差异) |
 | 20 | 边缘聚合 | 每刷新一遍 `GROUP BY` + ETL 上行 | [GROUP BY 与聚合](rds-workloads.md#group-by-与聚合) |
+| 21 | 派生状态作为行的函数 | 整个触发器层：级联、`UNIQUE`、对账 | [约束与触发器](rds-workloads.md#约束与触发器) |
+| 22 | 移植一份 PG/MySQL schema | `CREATE TABLE` / `CREATE INDEX` / `CREATE VIEW`，编译过的 | [二级索引 DDL](rds-workloads.md#二级索引-ddl) |

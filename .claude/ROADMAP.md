@@ -540,6 +540,44 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 
 ## 线性 checklist(v5,从上往下,不跳序)
 
+> **⚠️ 陈旧警告(2026-08-06 核实)——T0 / T1 / T2 已经做过了,不在这条分支上。**
+> 它们活在 **`r1-locality`**(本地 + `origin/r1-locality`,**32 commit 领先
+> develop、111 落后**):`bench/allocgate.sh` / `allocgate-mem.sh` /
+> `compressgate.sh` 都在(= T0),`crates/kevy-alloc/src/` 有 12+ 个文件
+> (class / global / heap / heap_claims / heap_foreign / heap_hot / large /
+> os / outbound / pagemap …)(= T1),并跑到了 **v8 收口**
+> (`17f85688 finding(v5): the v8 closing ledger — seven of twelve, and the
+> residual has a name`;十二角过七、M3 1.98× vs 2.40×、residual 已具名 =
+> 集合写小分配的元数据远线,**天真修法已知会破坏 M3,设计轮待拍板**)。
+>
+> **这条分支(`fix/idx-drift-on-multikey-writes`)上留下的痕迹只有
+> `crates/kevy-alloc/fuzz/`** —— 3049 个语料文件 + 2 个 OOM artifact 被
+> 跟踪着,而 `src/` 与 `Cargo.toml` 从未进过这条线。所以本地看起来"crate 存在
+> 但是空的",这是**分叉的假象,不是半成品**。
+>
+> **照着下面的未打勾去开工,会把一条已经存在的 train 重做一遍**——本轮起手
+> 就差一步走进去,是先核前提拦住的。下面的框保持原样(它们记录的是设计,
+> 不是进度);**真进度以 `r1-locality` 为准,merge 归属主**。
+
+> **同日把九条 train 逐条对了一遍账 —— 下面的框有四条是"做完了没打勾"。**
+> 每条给的是**能核的证据**,不是判断:
+>
+> | T | 框显示 | 实际 | 证据 |
+> |---|---|---|---|
+> | T0 门先行 | 未打勾 | **已做**(r1-locality) | `bench/allocgate.sh` / `allocgate-mem.sh` / `compressgate.sh` |
+> | T1 alloc 石头 | 未打勾 | **已做**(r1-locality) | `crates/kevy-alloc/src/` 12+ 文件;v8 收口十二角过七 |
+> | T2 alloc 接线 | 未打勾 | **已做**(r1-locality) | `perf(v5-T2)` 系列提交;M3 1.98× vs 2.40× |
+> | T3 compress 石头 | 未打勾 | **真没开工** | 全仓只有两条 RFC 提交,`crates/kevy-compress` 任何分支都不存在 |
+> | T4 compress 接线 | 未打勾 | **真没开工** | 同上 |
+> | T5 索引冷热窗口 | 未打勾 | **已发布** | `crates/kevy-window` + `crates/kevy-seg` + `kevy-index/src/segcold.rs`;`WINDOW col SPAN n BUCKET n` 语法在册;tiergate 六条窗口线;三语文档(zh/ja 于 2026-08-06 补齐) |
+> | T6 自动声明闭环 | 未打勾 | **已发布** | `AUTODECLARE` 横跨 5 个源文件 + `crates/kevy/tests/idx_advise_e2e.rs` |
+> | T7 索引即键(I2) | 未打勾 | **RFC 已出待拍** | `.claude/rfcs/2026-08-05-v5-i2-single-hop-index.md`;**批准前零实现代码** |
+> | T8 部署配方 | ✅ | **已做**(2026-08-06) | `docs/deploy-behind-a-proxy.md` 三语 + 站点 |
+> | T9 试验终账 | 未打勾 | **开着,被 T3/T4 与 merge 挡着** | 判据要 allocgate + compressgate 双绿 |
+>
+> **⇒ 真正开着的只有 compress 那条 train(T3/T4),外加属主拍板的 T7 与 merge。**
+> 之前"九条几乎都没动"的观感是清单造成的,不是事实。
+
 > 每 train:开工第一动 = feature 分支;标【RFC】的 RFC 批准前零实现代码;finish 前五轴收口全绿。
 
 ### T0 — 门先行(先红)
@@ -590,12 +628,33 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - [ ] 拒绝面不许缩水:ad-hoc SQL / PG wire 仿真仍拒(C2 的松动是**自主设计**,不是把 Law 3 作废)
 
 ### T7 — 索引即键(消 I2 特例)【RFC】
+> **RFC 已出,待拍板**:`.claude/rfcs/2026-08-05-v5-i2-single-hop-index.md`
+> (设计轮:四方案含"不做" + 四个拍板题 + 四切片)。**批准前零实现代码。**
+> R3 的实测已经把这条 train 的前提坐实:SME 4-8 核上 kevy 两轴本来
+> 就赢 PG(idx p99 72-80 vs 164、page 111 vs 147),16 核那档的 p99
+> 悬崖是部署形状(`--threads ≤ cores − 2`),A3 落地后 page p50 与
+> PG18 打平 —— **所以下面这句"理由是模型一致性不是性能短板"是对的**,
+> RFC §三b 按它改了口径。真难点在 s1:按 hash 分区的全局索引只能答
+> 等值,而输给 PG 的两条里 page 是范围 ⇒ 必须按值**序**分区。
 - [ ] 模型最干净的一条:索引项本身就是键、按同一条路由规则分片 —— **消特例而非加特例**
 - [ ] **诚实前提**:按 SME 的 4-8 核重读,索引查询 kevy 本来就赢 1.9-2.8×(扇出是 16 核放大的问题)⇒ 本 train 的理由是**模型内在一致性**,不是补性能短板
 - [ ] 写侧跨分片维护复用既有 xshard/escrow/outbox;单连接延迟与并发吞吐两头都要守
 
-### T8 — 部署配方(C3 的答案,小,可并行)
-- [ ] `docs/deploy-behind-a-proxy.md`:反代 + TLS 终端 + 只暴露必要端口,**照抄即可、不需要 SRE**;三语 + 站点
+### T8 — 部署配方(C3 的答案,小,可并行)✅(2026-08-06)
+- [x] `docs/deploy-behind-a-proxy.md`:反代 + TLS 终端 + 只暴露必要端口,三语 + 站点。
+      **三条实测结论进了正文,每条都是会被照抄然后失败的那种**:① **HTTP 反代载不动
+      RESP**,包括 stock Caddy(核心无 layer-4 模块,实测 2.11.4)—— 而愿景里那句
+      "caddy 包裹"对 HTTP 成立、对 RESP 不成立 ② **`kevy-cli` 连不上被 TLS 终止的
+      kevy**(它对 `rediss://` 回 `Unsupported`)③ **单机集群模式撑不过代理**
+      (广播的是 bind 地址,`0.0.0.0` 回落 `127.0.0.1`,且没有 announce 旋钮)。
+      实测的是**形状**:TLS 1.3 终止器 → 未经修改的 kevy,回环端口与 unix socket
+      两条都 RESP 完整往返;三段产品配置按标准写法给出并**注明没在这里跑过**。
+- [x] **计划外:写这一章时抓到第九个同形状缺陷** —— `KEVY_UNIX_SOCKET` 在
+      kqueue / epoll 两条 reactor 上**只绑不服务**(socket 文件在、connect 落进
+      backlog、永远等不到 accept,且不报错)。选 listener 的是一个 `cluster: bool`,
+      而 unix listener 是在这个 bool 之后才来的。已改枚举 + poll 循环注册并 drain,
+      补首个 UDS 回归测试(**等回复而不是等文件**,并 `KEVY_IO_URING=0` 强制走那条
+      本来没人走的路);暂存修复实测两测皆红、恢复后 0.9 秒绿。
 - [ ] 引擎侧 AUTH/TLS 仍 OUT(`feedback-kevy-auth-tls-never` 不变;愿景变了也不解锁)
 
 ### T9 — 试验终账(**判定这次尝试算不算 v5**)
@@ -604,3 +663,41 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - [ ] SME 口径的产品陈述:一台 32 GB 机器能装多少业务(由内存比值决定)
 - [ ] **判定**(纪律⑤):撑得起 → 走五轴终审 + CHANGELOG + tag/publish(用户拍板版本号);
       撑不起 → 写 finding doc 说清哪条前提死了,**不发版**,回设计轮重来
+
+---
+
+## 当前 arc — v5 工业版(2026-08-07 属主转轨定向)
+
+> **T9 的判定已由属主给出:研究部分足以支撑,v5 转入工业版本轨道。**
+> kevy 本身的提升要做,RDS 支持作为 v5 的**主要附加模块**也要做;
+> 测试标准、产品能力标准、用户面产品形态三套标准重订。
+> **章程(三套标准 + 判定依据)**:`.claude/plans/2026-08-07-v5-industrial-charter.md`
+> 拍板件 P1-P4 见章程 §五(不挡 V0-V3 开工)。
+
+### V0 — 合并轮(无前置拍板,可即刻开工)
+- [ ] `fix/idx-drift-on-multikey-writes`(数据丢失修复 + R4c 迁移工具链 + 边界/文档)merge → develop
+- [ ] `r1-locality`(kevy-alloc 三刀 + drain 修复 + perfgate-median + kevy-compress 全弧)rebase + merge → develop
+- [ ] 合并态全门禁 + CI 真绿(`gh run watch --exit-status`);**不发版**
+
+### V1 —【RFC】标量函数面(RDS 模块商用性的最后一块工程)
+- [ ] RFC:R4a 清单(~40 标量 + 8 日期时间)→ 求值器落点(查询卡片投影/谓词侧)+ `sql plan` 翻译面
+- [ ] 实现 + funcgate:89 探针集覆盖率报告,bar = served ≥ 80%
+
+### V2 — 迁移演练门
+- [ ] 真 PG 库端到端:pg_dump → sql plan → backfill-keys → shadow → doctor 全链;撞墙 finding 化并修
+- [ ] 演练脚本化 = migrationgate.sh(可重复,进发布门)
+
+### V3 — 尾延迟工业化
+- [ ] 心跳探针机制化(常驻可观测)+ tailgate:PING p99.9 ≤ 100ms、reactor 单圈上界 ≤ 100ms
+- [ ] 慢客户端 / 连接风暴防护核查
+
+### V4 — alloc 执行轮(待 P1/P2 拍板)
+- [ ] 按拍板执行默认开关;若收集合角,走残余 RFC 修正后的 B'(单发信封池化),perfgate-median 验收
+
+### V5 — 产品面
+- [ ] 文档四区重构(Core KV / RDS 模块 / 运维 / 迁移指南)三语 + 边界页(14 条 + 函数面进度)
+- [ ] 容量计算器(公式 + 值大小三档表)+ `INFO modules` + 站点同步
+
+### V6 — 发布轮(v5.0.0 或先 rc,待 P4)
+- [ ] CHANGELOG 收口 + upgradegate(R6 双向换二进制门禁化)重测
+- [ ] release-profile 预跑 → CI 真绿 → tag → 34 crates + npm + 渠道 + 装后 smoke

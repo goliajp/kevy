@@ -109,12 +109,21 @@ jobs:
       - name: command pages parity (site == VERB_META)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/gen_command_pages.py --check
+      - name: doc pages parity (site == docs/*.md)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python3 tools/gen_docs_site.py --check
       - name: CJK punctuation (no half-width commas in Chinese/Japanese prose)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_cjk_punct.py
       - name: site links (no dead internal link in site/)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_links.py
+      - name: doc links (no dead file or anchor between the markdown docs)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python3 tools/check_doc_links.py
+      - name: doc i18n (a translation must not fall behind its English chapter)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python3 tools/check_doc_i18n.py
       - name: site commands (every RESP example on the site actually runs)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
@@ -128,6 +137,12 @@ jobs:
       - name: locgate (files ≤500 LOC, fns ≤50 or waivered)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: bash bench/locgate.sh
+      # propgate: a durable write must also propagate, or be named. Three
+      # data-loss bugs on one branch were the same omission — the AOF got
+      # the write and the replica (and so the change feed) did not.
+      - name: propgate (a durable effect is a propagated effect, or named)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: bash bench/propgate.sh
       # consumergate: tools/facadegate builds and runs from OUTSIDE the
       # workspace with facade imports only. 4.0 shipped the TABLE face
       # uncallable (dogfood F7) because nothing ever stood where an

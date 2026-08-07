@@ -314,7 +314,9 @@ fn text_kind_match_bm25() {
     assert!(s.contains("key value store"), "hydrated body: {s}");
     let r = cmd(&mut c, &[b"IDX.VERIFY", b"d_body"]);
     let s = String::from_utf8_lossy(&r);
-    assert!(s.contains("entries\r\n$1\r\n4"), "4 live docs: {s}");
+    // `docs`, under its own name — this line used to assert the scalar
+    // audit's `entries` label glued onto a text index.
+    assert!(s.contains("docs\r\n$1\r\n4"), "4 live docs: {s}");
 }
 
 #[test]
@@ -381,7 +383,9 @@ fn ann_kind_knn_e2e() {
     // VERIFY reports vectors + tombstones; REBUILD compacts
     let r = cmd(&mut c, &[b"IDX.VERIFY", b"e_v"]);
     let s = String::from_utf8_lossy(&r);
-    assert!(s.contains("entries\r\n$3\r\n199"), "199 living: {s}");
+    // `vectors`, under its own name (the scalar audit's `entries` label
+    // used to be glued onto this kind too).
+    assert!(s.contains("vectors\r\n$3\r\n199"), "199 living: {s}");
     assert_eq!(cmd(&mut c, &[b"IDX.REBUILD", b"e_v"]), b"+OK\r\n");
     let r = cmd(&mut c, &argv);
     assert!(!String::from_utf8_lossy(&r).contains("e:0\r"), "post-rebuild consistent");
@@ -465,7 +469,9 @@ fn agg_kind_group_by_e2e() {
     cmd(&mut c, &[b"HSET", b"ord:9", b"status", b"paid"]);
     let r = cmd(&mut c, &[b"IDX.VERIFY", b"ord_amt"]);
     let s = String::from_utf8_lossy(&r);
-    assert!(s.contains("coerce_failures\r\n$1\r\n1") || s.contains("$1\r\n1"), "excluded visible: {s}");
+    // The aggregate's own vocabulary: a row missing the field is
+    // `excluded`, not a coerce failure of some scalar audit.
+    assert!(s.contains("excluded\r\n$1\r\n1"), "excluded visible: {s}");
     // bad CREATEs rejected
     let r = cmd(&mut c, &[b"IDX.CREATE", b"bad1", b"ON", b"PREFIX", b"x:", b"FIELD", b"f",
                            b"TYPE", b"i64", b"KIND", b"agg"]);
@@ -1358,4 +1364,121 @@ fn idx_count_applies_filter() {
     );
     // A clause the count would not apply is a refusal, not silence.
     assert!(cmd(&mut c, &[b"IDX.COUNT", b"by_score", b"RANGE", b"0", b"100", b"SORT", b"dept", b"ASC"]).starts_with(b"-ERR"));
+}
+
+/// A key deleted by a MULTI-key verb must leave the index with it.
+///
+/// The index is maintained by `Commands::on_write`, which the dispatch
+/// path calls only when the resolver produced a single `key_idx`.
+/// Multi-key `DEL`/`UNLINK`, and the cross-shard `RENAME` two-step,
+/// route by key without one and used to execute their op on the owning
+/// shard without ever telling the index: `IDX.QUERY` kept answering
+/// with rows that no longer existed (hydration nil, sort value intact),
+/// `IDX.COUNT` kept counting them, and nothing repaired it — only
+/// `IDX.VERIFY` could see the drift. That breaks the
+/// derived-by-construction invariant the whole IDX surface rests on.
+#[test]
+fn multi_key_delete_and_rename_keep_the_index_honest() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+
+    for i in 0..24 {
+        cmd(
+            &mut c,
+            &[b"HSET", format!("row:{i}").as_bytes(), b"age", format!("{}", 20 + i).as_bytes()],
+        );
+    }
+    assert_eq!(
+        cmd(
+            &mut c,
+            &[b"IDX.CREATE", b"byage", b"ON", b"PREFIX", b"row:", b"FIELD", b"age", b"TYPE", b"i64", b"KIND", b"range"],
+        ),
+        b"+OK\r\n"
+    );
+    let indexed = |c: &mut std::net::TcpStream| -> String {
+        String::from_utf8_lossy(&query_ready(
+            c,
+            &[b"IDX.QUERY", b"byage", b"RANGE", b"0", b"999", b"LIMIT", b"200"],
+        ))
+        .into_owned()
+    };
+    let before = indexed(&mut c);
+    for i in 0..24 {
+        assert!(before.contains(&format!("row:{i}\r\n")), "row:{i} must be indexed first");
+    }
+
+    // Two keys per verb, so each call is genuinely multi-key and spans
+    // shards (24 rows over 8 shards).
+    cmd(&mut c, &[b"DEL", b"row:7", b"row:11"]);
+    cmd(&mut c, &[b"UNLINK", b"row:5", b"row:6"]);
+    cmd(&mut c, &[b"RENAME", b"row:12", b"moved:12"]);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    let after = indexed(&mut c);
+    for gone in ["row:7", "row:11", "row:5", "row:6", "row:12"] {
+        assert!(!after.contains(&format!("{gone}\r\n")), "{gone} still answers IDX.QUERY");
+    }
+    for kept in ["row:8", "row:23", "row:0"] {
+        assert!(after.contains(&format!("{kept}\r\n")), "{kept} must survive");
+    }
+
+    // The engine's own auditor agrees on BOTH directions, and a later
+    // write still indexes.
+    let v = cmd(&mut c, &[b"IDX.VERIFY", b"byage"]);
+    let v = String::from_utf8_lossy(&v);
+    for counter in ["drift", "missing"] {
+        assert!(v.contains(counter), "VERIFY shape changed: {v}");
+        let got = v.split(&format!("{counter}\r\n$")).nth(1).and_then(|s| s.split("\r\n").nth(1));
+        assert_eq!(got, Some("0"), "VERIFY reports {counter}: {v}");
+    }
+    cmd(&mut c, &[b"HSET", b"row:99", b"age", b"77"]);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(indexed(&mut c).contains("row:99\r\n"), "a fresh write must still index");
+}
+
+/// A row that arrives by scope migration must be indexed like any other.
+///
+/// `MOVE-SCOPE-INGEST` replays the emitted frames straight into the
+/// store (`ops::scope_move`), which is not the write path, so the
+/// derived structures never heard about the rows: they existed in the
+/// keyspace and were invisible to every `IDX.QUERY`. Worse than the
+/// stale-entry direction, `IDX.VERIFY` cannot see this one either — it
+/// audits index entries against the store, not store rows against the
+/// index — so a migrated-into node under-answered silently.
+#[test]
+fn scope_ingested_rows_enter_the_index() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+
+    for i in 0..8 {
+        cmd(&mut c, &[b"HSET", format!("row:{i}").as_bytes(), b"age", format!("{}", 20 + i).as_bytes()]);
+    }
+    assert_eq!(
+        cmd(
+            &mut c,
+            &[b"IDX.CREATE", b"byage", b"ON", b"PREFIX", b"row:", b"FIELD", b"age", b"TYPE", b"i64", b"KIND", b"range"],
+        ),
+        b"+OK\r\n"
+    );
+    let indexed = |c: &mut std::net::TcpStream| -> String {
+        String::from_utf8_lossy(&query_ready(
+            c,
+            &[b"IDX.QUERY", b"byage", b"RANGE", b"0", b"999", b"LIMIT", b"200"],
+        ))
+        .into_owned()
+    };
+    assert!(indexed(&mut c).contains("row:0\r\n"));
+
+    // Exactly what a migration source ships: `<VERB> <key> …` frames.
+    let bulk: &[u8] = b"*4\r\n$4\r\nHSET\r\n$6\r\nrow:50\r\n$3\r\nage\r\n$2\r\n60\r\n\
+*4\r\n$4\r\nHSET\r\n$6\r\nrow:51\r\n$3\r\nage\r\n$2\r\n61\r\n";
+    let r = cmd(&mut c, &[b"MOVE-SCOPE-INGEST", b"row:", bulk]);
+    assert!(r.starts_with(b"+OK 2"), "ingest failed: {}", String::from_utf8_lossy(&r));
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    let after = indexed(&mut c);
+    for row in ["row:50", "row:51"] {
+        assert!(after.contains(&format!("{row}\r\n")), "{row} arrived but never indexed");
+    }
+    assert_eq!(cmd(&mut c, &[b"IDX.COUNT", b"byage", b"RANGE", b"0", b"999"]), b":10\r\n");
 }

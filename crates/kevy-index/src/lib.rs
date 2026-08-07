@@ -54,7 +54,8 @@ pub use table::{
     window_driver, window_for, window_text_for,
 };
 pub use segcold::{
-    ColdBloom, WindowShape, decode_seg_key, decode_seg_values, encode_seg_values, seg_bounds,
+    ColdBloom, WindowAudit, WindowShape, decode_seg_key, decode_seg_values, encode_seg_values,
+    seg_bounds,
     seg_key, value_order_bytes, window_bound, window_value_of,
 };
 pub use table_verify::{IndexVerify, TableEnsure, TableVerify, spec_diff};

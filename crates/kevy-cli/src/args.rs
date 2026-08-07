@@ -37,6 +37,35 @@ SQL COMPILER (declaration-time only — never per-query):
     sql compile <file.sql> --apply --url <h:p>  additionally run the commands
                                                 against a server (exits non-zero
                                                 on any error reply)
+    sql plan <file.sql>                         what becomes of every query:
+                                                which path serves it, or the
+                                                CREATE INDEX it needs (no server)
+"
+    );
+    print_help_migration_day();
+}
+
+/// The migration-playbook tools, listed apart because they share a
+/// property worth seeing: each reads, reports, and moves nothing.
+fn print_help_migration_day() {
+    println!(
+        "\
+MIGRATION DAY (read and report; none of these moves data):
+    lint overlap --prefix <p:>                  does a name live under more than
+                                                one owner? then no column can
+                                                carry that dimension
+    lint columns <table>                        column pairs that agree on most
+                                                rows — one column copied to get
+                                                a second sort order
+    backfill-keys --from-index <k> --from-prefix <p:> --from-file <f>
+                                                the union of every source that
+                                                can name an item, and how many
+                                                names only one source had
+    shadow --old <cmd> --new <cmd>              compare the old read path with
+                                                the new one, in membership AND
+                                                in order, before cutting over
+    doctor [--warn-is-failure]                  TABLE.VERIFY every table and
+                                                answer with an exit code
 
 MIGRATION TOOLS:
     export  -p <port> [--prefix <p>] <file>     dump the keyspace to a RESP file

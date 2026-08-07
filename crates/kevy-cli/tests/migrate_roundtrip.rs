@@ -30,8 +30,15 @@ impl Srv {
             assert!(status.success(), "cargo build -p kevy --bin kevy failed");
         }
         assert!(bin.exists(), "kevy server binary still missing at {bin:?}");
+        // A data directory of its own: without one the server writes
+        // into the test binary's cwd, which is this crate's source
+        // directory. Nothing here declares a table today, so nothing
+        // lands — but that is a property of the test, not of the setup.
+        let dir = std::env::temp_dir().join(format!("kevy-mig-{port}"));
+        std::fs::create_dir_all(&dir).unwrap();
         let child = Command::new(&bin)
             .args(["--port", &port.to_string(), "--threads", "2", "--no-aof"])
+            .args(["--dir", dir.to_str().unwrap()])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
@@ -86,7 +93,7 @@ fn export_import_roundtrip_digest_equal() {
     let dir = std::env::temp_dir().join(format!("kevy-mig-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("dump.resp");
-    let n = run_export(&mut cs, Some(b"mig:"), &file).unwrap();
+    let n = run_export(&mut cs, Some(b"mig:"), &file).unwrap().keys;
     assert_eq!(n, 1004, "500+500 rows + list/set/zset/ttl");
 
     let mut cd = dst.client();
@@ -106,7 +113,7 @@ fn export_import_roundtrip_digest_equal() {
 
     // resume: restart from a zeroed progress file → idempotent, digest equal
     let file2 = dir.join("dump2.resp");
-    let n2 = run_export(&mut cs, Some(b"mig:"), &file2).unwrap();
+    let n2 = run_export(&mut cs, Some(b"mig:"), &file2).unwrap().keys;
     assert_eq!(n2, n);
     std::fs::write(file2.with_extension("progress"), b"0").unwrap();
     let rep2 = run_import(&mut cd, &file2, true, true).unwrap();
@@ -126,8 +133,9 @@ fn bulk_ops_and_diff() {
     c.request_borrowed(&[b"PEXPIRE", b"bk:ttl", b"60000"]).unwrap();
 
     // copy-prefix carries values + TTL (COPY REPLACE)
-    let n = kevy_cli::bulk::run_copy_prefix(&mut c, b"bk:", b"ck:", 0).unwrap();
-    assert_eq!(n, 201);
+    let copied = kevy_cli::bulk::run_copy_prefix(&mut c, b"bk:", b"ck:", 0).unwrap();
+    assert_eq!(copied.keys, 201);
+    assert!(copied.skipped.is_empty(), "nothing here is outside the rebuild set");
     let (na, da) = kevy_cli::bulk::run_digest(&mut c, b"bk:").unwrap();
     let (nb, _db) = kevy_cli::bulk::run_digest(&mut c, b"ck:").unwrap();
     assert_eq!((na, nb), (201, 201));
@@ -177,5 +185,57 @@ fn bulk_ops_and_diff() {
     kevy_cli::bulk::run_inspect(&mut c1c, b"bk:", &mut out).unwrap();
     let s = String::from_utf8_lossy(&out);
     assert!(s.contains("201 keys") && s.contains("string: 201"), "{s}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Every type the engine can hold must leave an export either **in the
+/// file** or **in the skipped report**. Neither is optional: a type
+/// that is in neither vanishes on migration day while the tool prints
+/// a success line.
+///
+/// Streams are the type that was in neither. The export walked past
+/// them, counted them as "vanished between SCAN and read", and said
+/// nothing — measured on a 4007-key store that exported 4006.
+#[test]
+fn every_type_is_either_exported_or_reported() {
+    let src = Srv::start();
+    let mut cs = src.client();
+    // One key per type the server will accept.
+    cs.request_borrowed(&[b"SET", b"t:string", b"v"]).unwrap();
+    cs.request_borrowed(&[b"RPUSH", b"t:list", b"a"]).unwrap();
+    cs.request_borrowed(&[b"SADD", b"t:set", b"m"]).unwrap();
+    cs.request_borrowed(&[b"HSET", b"t:hash", b"f", b"v"]).unwrap();
+    cs.request_borrowed(&[b"ZADD", b"t:zset", b"1", b"m"]).unwrap();
+    cs.request_borrowed(&[b"XADD", b"t:stream", b"*", b"f", b"v"]).unwrap();
+
+    let dir = std::env::temp_dir().join(format!("kevy-types-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("types.resp");
+    let out = run_export(&mut cs, Some(b"t:"), &file).unwrap();
+
+    let accounted = out.keys + out.skipped.values().sum::<u64>();
+    assert_eq!(
+        accounted, 6,
+        "6 keys written, {} exported + {} skipped — the difference is silent loss",
+        out.keys,
+        out.skipped.values().sum::<u64>()
+    );
+    assert_eq!(
+        out.skipped.get(b"stream".as_slice()).copied(),
+        Some(1),
+        "the stream must be named in the report, not merely absent: {:?}",
+        out.skipped.keys().map(|k| String::from_utf8_lossy(k).into_owned()).collect::<Vec<_>>()
+    );
+
+    // copy-prefix reads through the same rebuild set, so it drops the
+    // same type and must be as loud about it. It was not: the sibling
+    // command kept its silence when export lost its.
+    let copied = kevy_cli::bulk::run_copy_prefix(&mut cs, b"t:", b"c:", 0).unwrap();
+    assert_eq!(copied.keys + copied.skipped.values().sum::<u64>(), 6);
+    assert_eq!(
+        copied.skipped.get(b"stream".as_slice()).copied(),
+        Some(1),
+        "copy-prefix must name what it left behind too"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

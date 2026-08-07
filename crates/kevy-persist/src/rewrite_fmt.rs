@@ -154,7 +154,7 @@ pub fn dump_store_to_buf<S: crate::SnapshotSource>(
 #[cold]
 // LOC-WAIVER: pure per-Value-variant dispatch table — one arm per
 // stored type mapping it to its canonical rewrite verb; no control flow.
-fn write_value_as_commands<W: Write>(
+pub(crate) fn write_value_as_commands<W: Write>(
     w: &mut W,
     key: &[u8],
     value: &Value,

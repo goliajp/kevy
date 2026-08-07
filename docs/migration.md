@@ -197,6 +197,19 @@ kevy-cli delete-prefix -p 6004 --rate 5000 --dry-run tmp:
 kevy-cli inspect -p 6004 user:
 ```
 
+Three more read and report rather than move anything, which is why they
+sit outside the list above. They are the migration playbook's lessons
+made runnable — see [table-migration.md](table-migration.md):
+
+```
+kevy-cli sql plan schema.sql                       # every query's fate
+kevy-cli backfill-keys --from-index i --from-prefix p:   # the union
+kevy-cli lint overlap --prefix mailbox:              # lesson 1
+kevy-cli lint columns ev                           # lesson 6
+kevy-cli shadow -p 6004 --old "…" --new "…"        # before cutover
+kevy-cli doctor -p 6004                            # VERIFY as a cron
+```
+
 ## Wire format
 
 `export` writes a plain **RESP command stream** of rebuild frames —
@@ -207,8 +220,29 @@ file feeds `kevy-cli import` — including one you generate yourself
 from an RDS dump (the playbook's phase 3).
 
 The leading `DEL` per key makes replay **rebuild from scratch** —
-genuinely idempotent for every type (an append verb like RPUSH would
-otherwise double list content on re-import).
+genuinely idempotent for every type it emits (an append verb like
+RPUSH would otherwise double list content on re-import).
+
+**It does not emit every type.** Strings, hashes, lists, sets and
+sorted sets rebuild; **streams do not** — there is no rebuild verb for
+them here, so an export leaves them behind. That is a real limitation
+of this tool, not a property of your data, and it is now **reported by
+name**:
+
+```console
+kevy-cli export: SKIPPED 1 key(s) of type 'stream' — nothing here
+rebuilds that type, so they are NOT in this file
+exported 4006 keys -> dump.resp
+```
+
+Until 4.1 the skip was silent: the key was counted as one that vanished
+mid-walk, and a store with streams exported clean and short. If your
+migration includes streams, move them separately — and check that line
+before you trust the file.
+
+**`copy-prefix` reads through the same rebuild set** and reports the
+same way, for the same reason: a copy that leaves a type behind while
+printing `copied N keys` is the same silence wearing a different verb.
 
 ## Consistency and resumability
 

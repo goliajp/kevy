@@ -2,6 +2,8 @@
 
 这一章之所以存在，是因为一位生产环境的消费者完整做过这次迁移——一个邮件系统把应用代码里手工维护的二级索引（sorted set 与计数键）搬到了 `TABLE.DECLARE` 上——并把教训带了回来。这些教训属于引擎的文档，不属于他们的笔记本。下面每条规则都是付过学费的；排列顺序就是你将会需要它们的顺序。
 
+**在这一切之前，是第一公里：**`kevy-cli sql plan schema.sql` 读你手上已经有的那份 schema，报告你的每一条查询会变成什么——各由哪条声明路径服务，服务不了的那些，则给出正好该加的那条 `CREATE INDEX`。它是*这东西到底搬不搬得动*的十分钟答案，而且不需要起服务。见 [tables.md](tables.md#kevy-sql编译-schema而不是发送-schema)。
+
 ## 先说为什么：只有引擎维护的索引才可验证
 
 讲怎么做之前，先讲论据。当应用代码维护一个索引时，每一个 writer 都必须永远记得维护它，而没有任何东西在检查。上述迁移把手工维护的结构与引擎新建的索引对照，在一个维护良好的真实代码库里**实测**了这意味着什么：
@@ -18,6 +20,18 @@
 
 对每个想让索引回答的查询，问它的维度是不是**行上的**单一值。答案通常不在行里，而在你的 id 推导或键构造代码里——这个邮件系统的"每邮箱一线程"看起来单值，读了 id 代码才发现一个线程可以住在多个邮箱里。若维度是多值的，任何列都载不动它：为每个 (owner, item) 建一条**成员行**——`member:{owner}:{item}`，把 owner、item 和排序属性作为列——让 ORDERPATH 去排它。先决定这个，才不会事后重declare整张表。
 
+**`kevy-cli lint overlap` 找的是症状，不是成因。** 成因在代码里、也留在那里——但一个多值的维度会在数据里留下机器读得到的痕迹：**同一个名字出现在不止一个 owner 之下**。把它对准你今天已有的那一族按 owner 分组的集合：
+
+```console
+$ kevy-cli lint overlap -p 6004 --prefix mailbox:
+2 owner(s) under mailbox:, 3 distinct name(s)
+1 name(s) appear under more than one owner:
+  t2  →  mailbox:1, mailbox:2
+this dimension is multi-valued, so no column can hold it — model a membership row per (owner, item) and let an ORDERPATH sort it
+```
+
+有交叠时它**非零退出**，因为那是一个**答案**而不是提示：没有哪一列能承载一个点名两个 owner 的维度，所以声明脚本应该停下。也请注意它**不做**什么——不去采样某个候选列、看它是不是单值。hash 的一个字段天生只有一个值，那种检查会永远通过。
+
 ### 2. 一旦开始供读，每个 writer 都在承重
 
 派生行由写它的人填充。切读之前，**枚举所有 writer**——每一条创建、修改、删除底层实体的代码路径——确认每一条都在写这张表所声明的行。会忘的那个 writer，就是在表存在之前写下的那个。（这正是 `TABLE.VERIFY` 的 `missing` 计数事后能抓到的类别；审计是让你不必在生产上遇见它的办法。）
@@ -26,9 +40,41 @@
 
 遗留索引彼此不一致——这就是上面实测的 89% / 76%。从任何*单一*来源回填都会继承它的洞，而 `VERIFY` 看不见一条从未被写过的行。回填的键集合要从每一个能点名条目的结构（旧索引、主键空间扫描、归档）的**并集**构建，行的内容再从权威记录写入。
 
+**`kevy-cli backfill-keys` 就是造这个并集的**——而且只造这个。这一课自己就切成两半，后半留给你：什么是权威记录、一行长什么样，是住在你的应用里的知识；一个去猜的工具会很自信地写出错的行。
+
+```console
+$ kevy-cli backfill-keys --from-index idx:threads --from-prefix mail: \
+      --from-file archive.txt > keys.txt
+601 name(s) in the union
+  index idx:threads                3 name(s), 0 only here
+  prefix mail:                     600 name(s), 596 only here
+  file archive.txt                 2 name(s), 1 only here
+597 name(s) appear in only one source — backfilling from any single one would have missed them
+```
+
+名字走 **stdout**，一行一个，可以直接喂给写行的那一步；账目走 **stderr**，所以把清单重定向出去也不会把它丢掉。最后那个数才是重点：**只在一个来源里出现过的每一个名字，都是"从任何单一来源回填都会漏掉的行"**——也就是上面那 89% / 76% 的漂移，在你自己的数据上量出来，而不是引用别人的。
+
+前缀来源默认剥掉前缀（`mail:123` 变成 `123`），这样名字才跟索引的成员对得上；键本身就是名字时用 `--keep-prefix`。**读不了的来源——键不存在、类型不对——是错误，不是空贡献**：一个静默为空的来源，恰恰是这条命令要堵的洞。
+
 ### 4. 切换前影子读——比内容，**也比顺序**
 
 让读继续走旧路径，同时在旁边算出新答案并比较。不只比成员，还要比**顺序**：分数漂移产出的是顺序不同的同一集合，分页 UI 会把它变成用户可见的抖动。把第一处分歧连同**两边的排序键**一起写进日志——那一行日志立即点名漂移的 writer。
+
+**`kevy-cli shadow` 替你做这件事。** 把两条命令都给它，它会比较两边产出的行键顺序，只要有分歧就以非零退出——所以切换脚本可以直接 gate：
+
+```console
+$ kevy-cli shadow -p 6004 \
+    --old "ZRANGE old:act 0 -1 WITHSCORES" --old-pairs \
+    --new "IDX.QUERY u.act RANGE 0 999 LIMIT 20" --samples 50
+shadow: 50 samples, 50 diverged (first at sample 0)
+  ORDER differs at position 0:
+    old: u:5 (sort 5)
+    new: u:1 (sort 10)
+```
+
+那一对排序值就是这一课说的那行。它报的另一种形状是 `MISSING`——旧路径有而新路径没有的行，也就是第 2 课**提前到来**：一个没人更新的 writer，在切换**之前**被看见，而不是事后由 `TABLE.VERIFY` 报出来。
+
+有两件事它不猜。kevy 的分页回复（`[游标, [键, 排序值, …]]`）能从形状认出来，但 **member/score 对和平坦列表长得一模一样**——用 `WITHSCORES` 这类命令时要加 `--old-pairs`，否则每个分数都会被当成行键、每次采样都报分歧。另外**单次分歧是线索不是判决**：两侧是在同一条连接上背靠背读的，中间被写入的行会在这里现形。跑 `--samples n`，读那个比率。
 
 ### 5. 删旧结构：先枚举 reader，再删 writer
 
@@ -38,6 +84,17 @@
 
 当新查询需要一个现有形态给不出的谓词时，手工时代的反射是"把这个值再写到一个地方"——那是在重建这次迁移刚刚消灭的"两个 writer、一份真相"问题。改为在同样的列上声明**另一条 ORDERPATH**（或索引）；引擎会在同一次写里、从同一行推导出两者。
 
+**`kevy-cli lint columns <table>` 找的是形状。** 两列在几乎每一行上都带同一个值，就是一列被复制出去换第二种排序：
+
+```console
+$ kevy-cli lint columns -p 6004 ev
+ev: 43 row(s) sampled under ev:
+  created_at and sort_ts agree on 93% (40/43)
+a column copied to get a second sort order is the shape lesson 6 warns about — the answer is another ORDERPATH; ask IDX.ADVISE which one
+```
+
+与 `lint overlap` 不同，它**无论发现什么都以 0 退出**：两列合法地相同是可能的，所以这是嫌疑不是判决。也与第 1 课那条检查不同，它跑在表**声明之后**——它读的是行。`--sample N` 限定读取量，`--threshold PCT` 挪动那条线。
+
 ### 7. 开机用 `ensure`
 
 常态就是[开机模式](tables.md#开机模式ensure)：每次进程启动 `TABLE.ENSURE`——第一次开机 `Created`，以后 `Unchanged`，而当代码里的 spec 与 store 里的不再一致时，得到**点名差异的拒绝**——那是让你主动跑一次 `TABLE.REPLACE` 迁移的信号，而不是被一次迁移撞上。
@@ -45,6 +102,20 @@
 ### 8. 让 `VERIFY` 成为运维的一部分，而不是迁移的一步
 
 这些计数每次调用都是新鲜的，便宜到可以挂在 cron 或 doctor 命令里：`drift` 和 `missing` 应当永远为零；`absent` / `excluded` / `coerce_failures` 点名每种排除原因夺走的行（精确语义见 [tables.md](tables.md)，包括 ORDERPATH 的 `duplicates` 非零意味着分页需要一个有界决胜列）。整个迁移的意义就在于这些数字*存在*。去读它们。
+
+**`kevy-cli doctor` 就是那个 cron。** 它对每张已声明的表跑 `VERIFY`，用退出码回答：
+
+```console
+$ kevy-cli doctor -p 6004
+  OK       user  (rows 59999 · entries 59999 · absent 0 · excluded 0 · coerce_failures 0)
+  WARN     ev    duplicates 1 — paging this path needs a bounded tie-break or pages repeat rows
+  BUILDING new   — an index is still backfilling, not a verdict
+doctor: 3 table(s) — 0 drifted, 1 warned, 1 still building
+```
+
+这套映射是本课自己的话，不是新的主张：`drift` 与 `missing` 非零**失败**；`duplicates` **警告**；`absent` / `excluded` / `coerce_failures` **只报告、永不失败**——每一种都是合法状态，一个会因为某列有 NULL 就报红的 doctor 会一直红下去。
+
+两个刻意的选择。警告默认**不**导致失败——会因信息而失败的 cron 很快就没人读了——所以想要更严契约的人有 `--warn-is-failure`。而索引还在回填的表回的是 `-INDEXBUILDING`，那是**它自己的结局，不是失败**：把它当失败，就会在每次声明索引时叫醒某个人。
 
 ## 参见
 

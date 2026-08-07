@@ -36,7 +36,7 @@ pub(super) const ROWS: &[VerbMeta] = &[
     v("IDX.REBUILD", "index", 2,  WX, "Rebuild an ANN index (tombstone compaction).", "3.0.0", "IDX.REBUILD name",
       "Vector indexes only (tombstone compaction). O(V_live * ef_construction * M * dim) distance evaluations, on every shard, synchronously — the most expensive verb in the extension surface",
       "kevy-only: no Redis analogue — RediSearch handles HNSW deletes internally and exposes no rebuild verb"),
-    v("IDX.VERIFY",  "index", 2,  RX, "Verify an index: re-read every held entry against its row and report entries/bytes/coerce_failures/duplicates/drift/checked.", "3.0.0", "IDX.VERIFY name",
+    v("IDX.VERIFY",  "index", 2,  RX, "Verify an index. Scalar kinds re-read every held entry against its row and report entries/bytes/coerce_failures/duplicates/drift/checked/missing (both audit directions); agg/text/ann answer their own sizing vocabulary (rows|docs|vectors, bytes, ...) and carry no row-keyed audit.", "3.0.0", "IDX.VERIFY name",
       "O(N) per shard — every held entry is re-read against its row and re-coerced, which is the point: it makes index drift falsifiable rather than merely asserted",
       "kevy-only: no Redis analogue — RediSearch's index is asynchronously maintained and offers no consistency-verify verb"),
     // ---- table -----------------------------------------------------

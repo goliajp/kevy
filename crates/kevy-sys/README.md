@@ -44,5 +44,5 @@ is safe. See the crate docs' *Safety* section for the ABI invariants.
 
 ## License
 
-Licensed under either of [MIT](LICENSE-MIT) or
-[Apache-2.0](LICENSE-APACHE) at your option.
+Licensed under either of [MIT](../../LICENSE-MIT) or
+[Apache-2.0](../../LICENSE-APACHE) at your option.

@@ -2051,3 +2051,77 @@ fn unclean_restart_generation_fence_ships_instead_of_aliasing() {
     assert_eq!(ack_offset, 10, "snapshot covers all of the new history");
     server.shutdown();
 }
+
+
+/// A multi-key delete must reach a replica.
+///
+/// The replication push lived on the single-key dispatch path only, so
+/// every mutation the runtime routes as an `Op` — multi-key `DEL` /
+/// `UNLINK`, `MSET`, the cross-shard `RENAME` and `LMOVE` two-steps,
+/// the `*STORE` destinations, `FLUSHALL` — was written to the AOF and
+/// never streamed. Measured before the fix: `DEL row:2` reached the
+/// replica, `DEL row:3 row:4` never did, and the replica kept the rows
+/// for as long as anyone waited.
+#[test]
+fn multi_key_delete_reaches_a_replica() {
+    let primary = Server::start(1);
+    let mut w = std::net::TcpStream::connect(("127.0.0.1", primary.port)).unwrap();
+    for i in 0..6 {
+        send_resp(&mut w, &[b"SET", format!("k:{i}").as_bytes(), b"v"]);
+        assert_eq!(read_line(&mut w), b"+OK\r\n");
+    }
+
+    let replica_commands = kevy::KevyCommands::sharded(1);
+    let receivers = replica_commands.state().take_replica_inboxes().expect("fresh state");
+    let replica_port = free_port_block(1) + 1;
+    let replica_dir = TmpDir::new("kevy-replica-multikey-del");
+    let replica_dir_path = replica_dir.path().to_path_buf();
+    // SAFETY: see Server::start.
+    unsafe { std::env::set_var("KEVY_IO_URING", "0"); }
+    let replica_stop = Arc::new(AtomicBool::new(false));
+    let replica_stop_thread = replica_stop.clone();
+    let replica_handle = std::thread::spawn(move || {
+        let rt = kevy_rt::Runtime::builder(replica_commands)
+            .bind([127, 0, 0, 1], replica_port)
+            .shards(1)
+            .with_data_dir(replica_dir_path)
+            .with_aof(false)
+            .with_replica_inboxes(receivers);
+        let _ = rt.run(replica_stop_thread);
+    });
+    wait_port(replica_port, "server");
+
+    let mut admin = std::net::TcpStream::connect(("127.0.0.1", replica_port)).unwrap();
+    let base = primary.replication_base.to_string();
+    send_resp(&mut admin, &[b"REPLICAOF", b"127.0.0.1", base.as_bytes()]);
+    assert_eq!(read_line(&mut admin), b"+OK\r\n");
+
+    let mut r = std::net::TcpStream::connect(("127.0.0.1", replica_port)).unwrap();
+    /// Poll until `probe` answers `want`, so a "not yet" is never read as
+    /// a "never" (and vice versa).
+    fn settles(s: &mut std::net::TcpStream, probe: &[&[u8]], want: &[u8]) -> bool {
+        for _ in 0..250 {
+            send_resp(s, probe);
+            if read_line(s) == want {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        false
+    }
+    assert!(settles(&mut r, &[b"EXISTS", b"k:5"], b":1\r\n"), "replica never caught up");
+
+    send_resp(&mut w, &[b"DEL", b"k:1", b"k:2"]);
+    assert_eq!(read_line(&mut w), b":2\r\n");
+    assert!(
+        settles(&mut r, &[b"EXISTS", b"k:1"], b":0\r\n"),
+        "the replica still holds k:1 after a multi-key DEL on the primary",
+    );
+    assert!(settles(&mut r, &[b"EXISTS", b"k:2"], b":0\r\n"), "k:2 too");
+    // The untouched keys are still there — the fix must not over-delete.
+    assert!(settles(&mut r, &[b"EXISTS", b"k:3"], b":1\r\n"), "k:3 must survive");
+
+    replica_stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    let _ = std::net::TcpStream::connect(("127.0.0.1", replica_port));
+    let _ = replica_handle.join();
+}

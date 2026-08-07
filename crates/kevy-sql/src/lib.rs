@@ -38,6 +38,7 @@ mod ast;
 mod lex;
 mod parse;
 mod parse_view;
+mod plan;
 mod render;
 mod schema;
 mod typemap;
@@ -150,6 +151,8 @@ impl Compilation {
         render::render(self)
     }
 }
+
+pub use plan::{Plan, PlanEntry, Served, plan};
 
 /// Compile a whole SQL schema file into a [`Compilation`].
 ///

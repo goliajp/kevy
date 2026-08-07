@@ -56,8 +56,32 @@ range|unique [MAXMEM <bytes>]`
   are applied (the claused count: the total a claused query's pages
   would reach); every clause a count would not apply —
   SORT/DISTINCT/FACET/OFFSET/FIELDS/CURSOR — is refused by name.
+- **Non-scalar kinds answer `VERIFY` in their own vocabulary.**
+  `KIND agg` answers `rows / bytes / excluded / groups`; `KIND text`
+  answers `docs / bytes / postings / tokens`; `KIND ann` answers
+  `vectors / bytes / tombstones / links / rebuild_recommended`. None of
+  them print `drift` / `missing`, because the audit's question — does
+  this entry's row still derive this value — applies to a row-keyed
+  entry and their entries are groups, postings and graph nodes. (These
+  numbers used to be printed under the scalar labels: a healthy 3-doc
+  text index answered `coerce_failures 7, duplicates 7` — its postings
+  and token counts wearing an integrity warning's names.)
+- **What that means for the aggregate's counters**: the running totals
+  are never recomputed against the keyspace at runtime, so their
+  agreement with reality rests on every write path maintaining them —
+  which `IDX.VERIFY` cannot falsify for this kind. A test does instead:
+  `index_write_path_coverage` compares the group's count against the
+  live rows after each verb.
 - `IDX.VERIFY <name>` — summed stats: entries, bytes,
-  coerce_failures, duplicates.
+  coerce_failures, duplicates, plus both directions of the audit:
+  `drift` (entries whose row is gone, no longer coerces, or coerces to
+  a different value) over `checked` entries, and `missing` (rows under
+  the prefix that derive a value and have no entry). Both should be
+  zero on a healthy index; `missing` is the direction a walk over the
+  index's own entries cannot see. `kevy-cli doctor` turns that into an
+  exit code over every declared table, so "should be zero" can be a
+  cron rather than a thing someone remembers to check
+  ([table-migration.md](table-migration.md#8-make-verify-part-of-operations-not-part-of-the-migration)).
 - `IDX.LIST` — catalog + per-index state/entries/bytes.
 - Cursor contract is SCAN-class: rows stable across the whole
   traversal are seen exactly once; concurrent insertions/deletions
@@ -68,7 +92,18 @@ range|unique [MAXMEM <bytes>]`
 A `unique` index **does not block writes** — enforcing global
 uniqueness at write time would serialize cross-shard writes. Instead:
 duplicates are counted (`duplicates` in
-VERIFY/LIST) and visible as multi-hit `EQ` reads. If you need hard
+VERIFY/LIST) and visible as multi-hit `EQ` reads.
+
+**The counter is per shard; the read is not.** `duplicates` is
+maintained inside each shard's segment, so it sees two rows sharing a
+value only when both landed on the same shard — and keys hash across
+shards, so the ordinary case is that they did not. Measured: the same
+pair of rows reports `duplicates 1` on a single-shard server and
+`duplicates 0` on a two-shard one. A global counter would need
+cross-shard value counting on the write path, which is the
+serialization this kind exists to avoid, so **the multi-hit `EQ` read
+is the detection that always works** — `duplicates` is a hint, and a
+zero there is not a statement that the value is unique. If you need hard
 uniqueness, pin the domain to one shard with a `{hashtag}` prefix in
 cluster mode, or check-then-write under `MULTI`/`WATCH`.
 

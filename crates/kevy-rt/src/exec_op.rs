@@ -51,14 +51,14 @@ impl<C: Commands> Shard<C> {
                 let n = self.store.del(&key_refs);
                 if n > 0 {
                     for k in &keys {
-                        self.store.bump_if_watched(k);
+                        self.note_key_mutated(k);
                     }
                     let mut c = Argv::with_capacity(keys.len() + 1, 0);
                     c.push(b"DEL");
                     for k in &keys {
                         c.push(k);
                     }
-                    self.log(&c);
+                    self.log_effect(&c);
                     self.maybe_notify_del(&keys);
                 }
                 Part::Int(n as i64)
@@ -89,6 +89,14 @@ impl<C: Commands> Shard<C> {
                 }
                 let mut c = Argv::with_capacity(1, 8);
                 c.push(b"FLUSHALL");
+                // AOF only — deliberately NOT `log_effect`. A flush
+                // reaches replicas through the generation bump above:
+                // their cursors fall behind the new generation and get
+                // `-FEEDRESYNC <gen> 0`. Pushing a FLUSHALL record too
+                // would put a frame at the offset the bump just reset to
+                // zero, which is the contract `feed_cdc`'s
+                // `flushall_bumps_generation_and_old_cursor_resyncs`
+                // pins.
                 self.log(&c);
                 self.maybe_notify_flush();
                 Part::Ok
@@ -96,7 +104,7 @@ impl<C: Commands> Shard<C> {
             Op::MSet(pairs) => {
                 for (k, v) in &pairs {
                     self.store.set(k, v.clone(), None, false, false);
-                    self.store.bump_if_watched(k);
+                    self.note_key_mutated(k);
                 }
                 if !pairs.is_empty() {
                     let mut c = Argv::with_capacity(pairs.len() * 2 + 1, 0);
@@ -105,7 +113,7 @@ impl<C: Commands> Shard<C> {
                         c.push(k);
                         c.push(v);
                     }
-                    self.log(&c);
+                    self.log_effect(&c);
                     self.maybe_notify_mset(&pairs);
                 }
                 Part::Ok
@@ -132,14 +140,14 @@ impl<C: Commands> Shard<C> {
             }
             Op::ZStoreResult { dst, pairs } => {
                 let n = self.store.zstore_result(&dst, &pairs);
-                self.store.bump_if_watched(&dst);
+                self.note_key_mutated(&dst);
                 // Propagate the EFFECT: DEL + plain ZADD (deterministic
                 // on replay/replica regardless of source state — the
                 // campaign's effect-not-condition rule).
                 let mut c = Argv::with_capacity(2, 0);
                 c.push(b"DEL");
                 c.push(&dst);
-                self.log(&c);
+                self.log_effect(&c);
                 if !pairs.is_empty() {
                     let mut z = Argv::with_capacity(2 + pairs.len() * 2, 0);
                     z.push(b"ZADD");
@@ -148,7 +156,7 @@ impl<C: Commands> Shard<C> {
                         z.push(format!("{sc}").as_bytes());
                         z.push(m);
                     }
-                    self.log(&z);
+                    self.log_effect(&z);
                 }
                 Part::Int(n as i64)
             }
@@ -160,11 +168,11 @@ impl<C: Commands> Shard<C> {
                     let member_refs: Vec<&[u8]> = members.iter().map(Vec::as_slice).collect();
                     self.store.sadd(&dst, &member_refs).unwrap_or(0)
                 };
-                self.store.bump_if_watched(&dst);
+                self.note_key_mutated(&dst);
                 let mut c = Argv::with_capacity(2, 0);
                 c.push(b"DEL");
                 c.push(&dst);
-                self.log(&c);
+                self.log_effect(&c);
                 if !members.is_empty() {
                     let mut a = Argv::with_capacity(2 + members.len(), 0);
                     a.push(b"SADD");
@@ -172,7 +180,7 @@ impl<C: Commands> Shard<C> {
                     for m in &members {
                         a.push(m);
                     }
-                    self.log(&a);
+                    self.log_effect(&a);
                 }
                 Part::Int(n as i64)
             }
@@ -251,14 +259,16 @@ impl<C: Commands> Shard<C> {
                 };
                 if renamed {
                     // AOF + WATCH bump for both src (deleted) and dst (created).
-                    self.store.bump_if_watched(&src);
-                    self.store.bump_if_watched(&dst);
-                    if self.aof.is_some() {
+                    self.note_key_mutated(&src);
+                    self.note_key_mutated(&dst);
+                    // Gating the record on the AOF alone meant a
+                    // replication-only deployment produced none at all.
+                    if self.aof.is_some() || self.replicate.is_some() {
                         let mut c = Argv::with_capacity(3, 0);
                         c.push(if nx { b"RENAMENX" } else { b"RENAME" });
                         c.push(&src);
                         c.push(&dst);
-                        self.log(&c);
+                        self.log_effect(&c);
                     }
                     // Keyspace notifications: generic class, two events
                     // (`rename_from` on src, `rename_to` on dst) per
@@ -295,57 +305,12 @@ impl<C: Commands> Shard<C> {
                 }
                 Part::Reply(SmallReply::from_vec(out))
             }
-            Op::ListMoveTake { key, from_left } => {
-                // Step 1 of the cross-shard move: pop one element. The
-                // destination is not touched until the element is in hand, so
-                // an empty source costs the destination nothing.
-                let popped = if from_left {
-                    self.store.lpop(&key, 1)
-                } else {
-                    self.store.rpop(&key, 1)
-                };
-                match popped {
-                    Ok(mut v) => {
-                        let element = v.pop();
-                        if element.is_some() {
-                            self.store.bump_if_watched(&key);
-                            self.log_list_pop(&key, from_left);
-                            self.notify_list_event(&key, from_left, true);
-                        }
-                        Part::ListMoveTaken(Ok(element))
-                    }
-                    Err(_) => Part::ListMoveTaken(Err(())),
-                }
-            }
+            Op::ListMoveTake { key, from_left } => self.op_list_move_take(&key, from_left),
             Op::ListMovePush { key, value, to_left } => {
-                // Step 2. A destination that exists and is not a list refuses
-                // the element and hands it back — the orchestrator restores it
-                // to the source rather than dropping it.
-                let pushed = if to_left {
-                    self.store.lpush(&key, &[value.as_slice()])
-                } else {
-                    self.store.rpush(&key, &[value.as_slice()])
-                };
-                match pushed {
-                    Ok(_) => {
-                        self.store.bump_if_watched(&key);
-                        self.notify_list_event(&key, to_left, false);
-                        self.log_list_push(&key, &value, to_left);
-                        Part::ListMovePushed { refused: None }
-                    }
-                    Err(_) => Part::ListMovePushed { refused: Some(value) },
-                }
+                self.op_list_move_push(&key, value, to_left)
             }
             Op::ListMoveRestore { key, value, from_left } => {
-                // Rollback: put the element back on the end it was taken from.
-                let _ = if from_left {
-                    self.store.lpush(&key, &[value.as_slice()])
-                } else {
-                    self.store.rpush(&key, &[value.as_slice()])
-                };
-                self.store.bump_if_watched(&key);
-                self.log_list_push(&key, &value, from_left);
-                Part::Ok
+                self.op_list_move_restore(&key, &value, from_left)
             }
             Op::RenameTake(src) => {
                 // Step 1 of cross-shard RENAME: atomically take the
@@ -354,7 +319,7 @@ impl<C: Commands> Shard<C> {
                 // `Op::RenamePut` on the destination shard.
                 match self.store.take_with_ttl(&src) {
                     Some((value, ttl_ms)) => {
-                        self.store.bump_if_watched(&src);
+                        self.note_key_mutated(&src);
                         Part::RenameTaken { value, ttl_ms }
                     }
                     None => Part::RenameNoSuchSrc,
@@ -377,13 +342,16 @@ impl<C: Commands> Shard<C> {
                         refused: Some((value, ttl_ms)),
                     };
                 }
+                self.log_value_placed(&dst, &value, ttl_ms);
                 self.store.put_with_ttl(dst.clone(), value, ttl_ms);
-                self.store.bump_if_watched(&dst);
-                // AOF / cross-shard RENAME durability is deferred —
-                // a faithful AOF replay would need to serialise the
-                // value through MIGRATE/RESTORE-style binary frames.
-                // For v2-3b, document the gap: cross-shard RENAME
-                // works in-memory but is not replayed through AOF.
+                self.note_key_mutated(&dst);
+                // The gap this used to document ("cross-shard RENAME
+                // works in-memory but is not replayed through AOF") is
+                // closed by the line above: no MIGRATE/RESTORE binary
+                // frame was needed, because the rewrite serializer
+                // already renders any value as replayable commands. The
+                // source's `DEL` is recorded separately, once this put
+                // has committed — see `log_rename_source_committed`.
                 Part::RenamePutDone { refused: None }
             }
             Op::CollectWatchVersions(keys) => {
