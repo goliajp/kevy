@@ -25,6 +25,10 @@ pub(crate) struct ShardStats {
     /// Live client conns on this shard right now (gauge, published per
     /// tick from the reactor's conn table; cluster-bus links excluded).
     pub clients_connected: AtomicU64,
+    /// High-water mark of the reactor tick's lateness (µs over its
+    /// interval) — the single-iteration stall upper bound (V3 tail
+    /// train). fetch_max'd from the tick, never reset.
+    pub tick_gap_max_us: AtomicU64,
     /// This shard's tiering gauges (all zero when
     /// tiering is off — `tier_enabled` is the section gate).
     pub tier: TierGauges,
@@ -65,6 +69,9 @@ pub(crate) struct Totals {
     pub commands_processed: u64,
     pub connections_received: u64,
     pub clients_connected: u64,
+    /// MAX across shards (a stall on one shard is the instance's
+    /// answer — summing stalls would say something false).
+    pub tick_gap_max_us: u64,
     /// Tiering totals. `tier_enabled` = any shard tiers (they
     /// all do or none does — the config is process-wide).
     pub tier_enabled: bool,
@@ -173,6 +180,7 @@ impl ObsState {
             t.commands_processed += s.commands_processed.load(Relaxed);
             t.connections_received += s.connections_received.load(Relaxed);
             t.clients_connected += s.clients_connected.load(Relaxed);
+            t.tick_gap_max_us = t.tick_gap_max_us.max(s.tick_gap_max_us.load(Relaxed));
             t.tier_enabled |= s.tier.enabled.load(Relaxed) != 0;
             t.tier.budget += s.tier.budget.load(Relaxed);
             t.tier.effective_target += s.tier.effective_target.load(Relaxed);

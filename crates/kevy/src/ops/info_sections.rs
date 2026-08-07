@@ -167,6 +167,13 @@ pub(super) fn info_stats(ctx: &Ctx<'_>, totals: &crate::state::Totals, b: &mut S
     // `# Memory`. Emitted in both so tools reading the Redis location
     // see it (additive — the Memory line stays where it was).
     b.push_str(&format!("evicted_keys:{}\r\n", totals.evicted_keys));
+    // kevy extension: the reactor's single-iteration stall upper
+    // bound, as the tick's worst observed lateness (µs). The tailgate
+    // reads this for its "reactor single-loop <= 100ms" line.
+    b.push_str(&format!(
+        "reactor_tick_gap_max_us:{}\r\n",
+        totals.tick_gap_max_us
+    ));
     b.push_str("\r\n");
 }
 

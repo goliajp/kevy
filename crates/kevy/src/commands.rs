@@ -79,6 +79,10 @@ impl Commands for KevyCommands {
         self.shard_ctx().set_persist_stats(in_flight, aof_rewrites_total);
     }
 
+    fn on_tick_gap(&self, excess_us: u64) {
+        self.shard_ctx().note_tick_gap(excess_us);
+    }
+
     fn on_aof_format(&self, format: u8) {
         self.shard_ctx().set_aof_format(format);
     }

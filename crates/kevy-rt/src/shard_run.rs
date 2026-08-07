@@ -318,7 +318,15 @@ impl<C: Commands> Shard<C> {
                     // WAIT / REPL.WAIT deadline sweep — same
                     // cadence as the BLOCK timeout reactor above.
                     self.tick_repl_waiters();
-                    if now.duration_since(last_tick) >= iv {
+                    let gap = now.duration_since(last_tick);
+                    if gap >= iv {
+                        // Tail observability: how late is this tick? A
+                        // reactor stalled 250 ms in one iteration fires
+                        // its next tick ~250 ms over the interval — the
+                        // gauge IS the single-iteration upper bound,
+                        // measured without touching the per-iter path.
+                        self.commands
+                            .on_tick_gap((gap - iv).as_micros() as u64);
                         self.commands.on_shard_tick(&mut self.store);
                         self.drain_tick_frames();
                         self.drain_store_notify();

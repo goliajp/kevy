@@ -89,6 +89,12 @@ pub trait Commands: Clone + Send + 'static {
     /// Default: no-op.
     fn on_persist_stats(&self, _in_flight: bool, _aof_rewrites_total: u64) {}
 
+    /// The shard tick fired `excess_us` microseconds later than its
+    /// interval asked — the reactor's own stall gauge (a long-blocking
+    /// iteration delays the tick by exactly its overrun). Called at
+    /// tick cadence (10 Hz), so implementations may do real work.
+    fn on_tick_gap(&self, _excess_us: u64) {}
+
     /// Per-tick AOF on-disk format gauge (the embedder ask's 
     /// server twin): 0 = AOF off, 1 = a pre-4.0 v1 file still being
     /// appended (a 3.x binary swap-back still works), 2 = v2. Follows
