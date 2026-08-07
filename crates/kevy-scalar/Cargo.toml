@@ -10,3 +10,6 @@ authors.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+kevy-time = { path = "../kevy-time", version = "4.1.1" }

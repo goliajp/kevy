@@ -88,6 +88,11 @@ pub(crate) fn to_text(v: &Scalar) -> String {
         Scalar::Float(f) => crate::math::render_float(*f),
         Scalar::Text(s) => s.clone(),
         Scalar::Bool(b) => (if *b { "t" } else { "f" }).to_string(),
+        Scalar::Timestamp(us) => crate::datetime_fmt::render_timestamp(*us),
+        Scalar::Date(d) => crate::datetime_fmt::render_date(*d),
+        Scalar::Interval { months, micros } => {
+            crate::datetime_fmt::render_interval(*months, *micros)
+        }
     }
 }
 

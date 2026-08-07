@@ -24,12 +24,19 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod datetime;
+mod datetime_fmt;
 mod math;
 mod nullfam;
 mod strings;
 mod strings_slice;
 #[cfg(test)]
 mod tests;
+
+pub use datetime_fmt::{
+    parse_date, parse_interval, parse_timestamp, render_date, render_interval,
+    render_timestamp,
+};
 
 /// A typed scalar value — the closed set the function library speaks.
 ///
@@ -51,6 +58,22 @@ pub enum Scalar {
     Text(String),
     /// A boolean.
     Bool(bool),
+    /// A timestamp (no time zone): microseconds since the Unix epoch.
+    /// Probe 38's lesson is baked in: `now()` and friends must be
+    /// TYPED, not text — the sql face rewrites them to this variant.
+    Timestamp(i64),
+    /// A calendar date: days since the Unix epoch.
+    Date(i64),
+    /// An interval in PG's two-component shape (probe 10): calendar
+    /// months and exact microseconds never mix — month arithmetic
+    /// clamps to month ends, the micros half stays precise.
+    Interval {
+        /// Whole calendar months (12 per year).
+        months: i64,
+        /// Sub-month remainder in microseconds (days fold in here;
+        /// rendering pulls whole days back out).
+        micros: i64,
+    },
 }
 
 impl Scalar {
@@ -137,6 +160,10 @@ pub fn eval(func: &str, args: &[Scalar]) -> Result<Scalar, ScalarError> {
         | "sqrt" | "sign" | "abs" => math::eval(&name, args),
         // ── null family ──
         "coalesce" | "nullif" | "greatest" | "least" => nullfam::eval(&name, args),
+        // ── date/time ──
+        "extract" | "date_part" | "date_trunc" | "age" | "to_char" => {
+            datetime::eval(&name, args)
+        }
         _ => Err(ScalarError::UnknownFunction(func.to_string())),
     }
 }

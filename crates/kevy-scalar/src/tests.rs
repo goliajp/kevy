@@ -182,3 +182,91 @@ fn unknown_function_is_named() {
     assert_eq!(name, "no_such_fn");
     assert_eq!(format!("{}", ScalarError::UnknownFunction(name)), "unknown function: no_such_fn");
 }
+
+// ── probes 07/10/11: date/time family ──
+
+fn ts(s: &str) -> Scalar {
+    Scalar::Timestamp(crate::parse_timestamp(s).expect("valid timestamp literal"))
+}
+
+#[test]
+fn extract_and_date_part_field_matrices() {
+    let t1 = ts("2024-03-15 10:20:45.123456");
+    assert_eq!(flt(eval("extract", &[t("year"), t1.clone()])), 2024.0);
+    assert_eq!(flt(eval("extract", &[t("month"), t1.clone()])), 3.0);
+    assert_eq!(flt(eval("extract", &[t("hour"), t1.clone()])), 10.0);
+    assert_eq!(flt(eval("extract", &[t("second"), t1.clone()])), 45.123456);
+    // extract refuses time fields on DATE; date_part promotes to 0.
+    let d = Scalar::Date(crate::parse_date("2030-06-15").unwrap());
+    assert_eq!(flt(eval("extract", &[t("year"), d.clone()])), 2030.0);
+    assert!(matches!(
+        eval("extract", &[t("hour"), d.clone()]),
+        Err(ScalarError::Domain { .. })
+    ));
+    assert_eq!(flt(eval("date_part", &[t("hour"), d])), 0.0);
+    // Interval decomposition (probe 11).
+    let iv = Scalar::Interval { months: 17, micros: 0 };
+    assert_eq!(flt(eval("date_part", &[t("month"), iv.clone()])), 5.0);
+    assert_eq!(flt(eval("date_part", &[t("year"), iv])), 1.0);
+    assert!(matches!(
+        eval("date_part", &[t("fortnight"), ts("2024-01-01")]),
+        Err(ScalarError::Domain { .. })
+    ));
+    assert_eq!(eval("date_part", &[t("year"), Scalar::Null]).unwrap(), Scalar::Null);
+}
+
+#[test]
+fn date_trunc_boundaries() {
+    let t1 = ts("2024-03-15 14:30:45");
+    let out = eval("date_trunc", &[t("day"), t1.clone()]).unwrap();
+    assert_eq!(crate::render_timestamp(match out {
+        Scalar::Timestamp(us) => us,
+        other => panic!("{other:?}"),
+    }), "2024-03-15 00:00:00");
+    let out = eval("date_trunc", &[t("month"), t1.clone()]).unwrap();
+    assert_eq!(out, ts("2024-03-01 00:00:00"));
+    let out = eval("date_trunc", &[t("hour"), t1]).unwrap();
+    assert_eq!(out, ts("2024-03-15 14:00:00"));
+    // ISO week starts Monday: 2024-03-15 is a Friday.
+    let out = eval("date_trunc", &[t("week"), ts("2024-03-15 14:30:45")]).unwrap();
+    assert_eq!(out, ts("2024-03-11 00:00:00"));
+}
+
+#[test]
+fn interval_parse_and_render_round_trip() {
+    assert_eq!(crate::parse_interval("1 day"), Some((0, 86_400_000_000)));
+    assert_eq!(crate::parse_interval("1 year 2 months"), Some((14, 0)));
+    assert_eq!(crate::render_interval(0, 86_400_000_000), "1 day");
+    assert_eq!(crate::render_interval(0, 7_200_000_000), "02:00:00");
+    assert_eq!(crate::render_interval(14, 0), "1 year 2 mons");
+    assert_eq!(crate::render_interval(0, -3 * 86_400_000_000), "-3 days");
+    assert_eq!(crate::render_interval(0, 0), "00:00:00");
+}
+
+#[test]
+fn age_decomposes_calendar_months_first() {
+    let out = eval("age", &[ts("2025-06-15 00:00:00"), ts("2024-03-10 00:00:00")]).unwrap();
+    assert_eq!(out, Scalar::Interval { months: 15, micros: 5 * 86_400_000_000 });
+    // Reversed arguments flip every component's sign.
+    let out = eval("age", &[ts("2024-03-10 00:00:00"), ts("2025-06-15 00:00:00")]).unwrap();
+    assert_eq!(out, Scalar::Interval { months: -15, micros: -5 * 86_400_000_000 });
+}
+
+#[test]
+fn timestamp_parse_render_and_to_char() {
+    assert_eq!(crate::render_timestamp(crate::parse_timestamp("2024-01-01 00:00:30").unwrap()),
+        "2024-01-01 00:00:30");
+    assert_eq!(crate::render_timestamp(
+        crate::parse_timestamp("2024-03-15 10:20:45.123456").unwrap()),
+        "2024-03-15 10:20:45.123456");
+    assert_eq!(crate::parse_date("2024-02-30"), None); // round-trip reject
+    assert_eq!(crate::parse_timestamp("2024-13-01"), None);
+    assert_eq!(
+        txt(eval("to_char", &[ts("2024-03-15 14:30:45"), t("YYYY-MM-DD HH24:MI:SS")])),
+        "2024-03-15 14:30:45"
+    );
+    assert!(matches!(
+        eval("to_char", &[ts("2024-03-15"), t("Month")]),
+        Err(ScalarError::Domain { .. })
+    ));
+}
