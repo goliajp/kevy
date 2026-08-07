@@ -721,9 +721,9 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - [x] RFC:`.claude/rfcs/2026-08-08-v5-v1-scalar-functions.md`(2026-08-08)——落点被 Law 3 钉死在 sql 面(引擎零改动);**章程 bar「89×80%」实测不可达(天花板 ~50%),重锚 = 拍板点①**;姐妹先例清点(spg eval 家族 + 3236 行纯 Rust ERE)
 - [ ] 实现 + funcgate(大部已落,2026-08-08):`kevy-scalar` 石头(36 函数,探针转写语义,三分量 interval)/ kevy-sql `fold_select` + `sql eval` / `sql probe` 分类 runner / **`bench/funcgate.sh` 已立:wrong==0 硬线 + subset-foldable 74% ratchet(356/479)**;语料 89 件已入库。**余项:S3 regexp(拍板点③,推荐 fork spg)/ md5(拍板点④)/ bar 终值(拍板点①)**
 
-### V2 — 迁移演练门
-- [ ] 真 PG 库端到端:pg_dump → sql plan → backfill-keys → shadow → doctor 全链;撞墙 finding 化并修
-- [ ] 演练脚本化 = migrationgate.sh(可重复,进发布门)
+### V2 — 迁移演练门 ✅(2026-08-08)
+- [x] 真 PG 库端到端:自有 postgres:18 容器 + 52k 行确定性种子;**四堵墙全 finding 化并修**(NOT NULL/DEFAULT 致命拒 → 注记;单表坏类型杀全 plan → lenient dropped 行;pg_dump 方言七构造含 ALTER 携带的 PK 回填;**引擎对 redis-cli --pipe 的裸 CRLF 回幽灵 ERR → 空解析静默吞掉,Redis 语义**)。总账 `bench/FINDING-2026-08-08-migration-drill-four-walls.md`
+- [x] `bench/migrationgate.sh`:seed→dump→plan 断言→day-2 apply→COPY→帧→import→行数+抽样对账→VERIFY drift 0→doctor,全 trap 清理;**连跑两遍 PASS(可重复性证毕)**
 
 ### V3 — 尾延迟工业化
 - [ ] 心跳探针机制化(常驻可观测)+ tailgate:PING p99.9 ≤ 100ms、reactor 单圈上界 ≤ 100ms
