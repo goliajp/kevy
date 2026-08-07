@@ -523,6 +523,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "kevy-compress"
+version = "4.0.0"
+
+[[package]]
 name = "kevy-config"
 version = "4.1.1"
 
