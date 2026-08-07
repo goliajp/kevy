@@ -406,3 +406,21 @@ ratchet 兑现打折 —— 带边均值 + 轮间散布会夸大,官方插值表
 弧总账:集合角全线双位数→个位数;残余 = 平坦 ~10% 机器摊薄
 (class 形状/claims 宽度设计题,M3 互动,归属主)+ sadd 差半个点。
 r1-locality 现 **+21 笔**(tip `68ec04b1`)。
+
+---
+
+## 十期(2026-08-07,残余 RFC + 角表噪声带曝光)
+
+**残余设计 RFC 已出**(`.claude/rfcs/2026-08-07-v5-fastpath-residue.md`,
+`23536fc1`):三扇门 —— A 接受(headline 是 KV+查询+内存,R4a 证
+prod 事故 100% 读聚合)/ B claims 加宽(双词或 128 槽,半 refill 频率,
+保 lowest-first,估 1-3%,需含 M3 四腿电池)/ C class 形状重设计
+(RFC 级,动核心论题,无目标负载不开)。**推荐 A-then-B**;另设更上位
+拍板点:集合角 0.92 floor 是否仍应是 v5 门(floor 定立早于税形状被测清)。
+
+**perfgate 复跑曝光角表噪声带**(`ab4e9bf5`):同 tip 两跑 ——
+sadd −8.5/−9.6、hset −11.6/−9.4、zadd −11.7/−15.7、set −7.4/−10.5、
+incr −5.5/−11.5,ref 腿自身 +3-5% 漂移。**每跑带 ±3-6pp;
+"sadd 差 0.5% 到绿"是单跑幻觉;宣绿/宣红需 median-of-N**(方法论
+bench-infra 条款)。诚实弧终账:集合角全部从双位数负改善到个位数负带,
+**除 lpush 外无一可证绿**。r1-locality 现 **+23 笔**(tip `ab4e9bf5`)。
