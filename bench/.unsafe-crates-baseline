@@ -1,0 +1,18 @@
+# Crates containing real unsafe (unsafe {/fn/impl/extern/trait) in non-test src.
+# Recorded at v5 T0. allocgate M8 asserts this set does not grow.
+# Adding a crate here is a deliberate act and needs a reason in the commit.
+kevy-bytes
+kevy-chaos
+kevy-ffi
+kevy-jni
+kevy-lua-host
+kevy-madvise
+kevy-map
+kevy-napi
+kevy-ring
+kevy-rt
+kevy-sys
+kevy-uring
+kevy-vector
+kevy-wasm
+kevy-alloc

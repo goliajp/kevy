@@ -580,26 +580,63 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 
 > 每 train:开工第一动 = feature 分支;标【RFC】的 RFC 批准前零实现代码;finish 前五轴收口全绿。
 
-### T0 — 门先行(先红)
-- [ ] `bench/allocgate.sh` 骨架:alloc RFC §8 的 M1-M8 逐条落成断言(先红,标 train 归属)
-- [ ] `bench/compressgate.sh` 骨架:compress RFC §6 的 K1-K7 同上(先红)
-- [ ] **四项记账契约**先定死:分配器导出 rounding / span slack / cache retention / hysteresis 四项(alloc RFC §8.1),压缩导出 incompressible / dictionary / frame / match-miss 四项(compress RFC §6.1)—— gate 断言"四项之和 == 实测差值"(不许有解释不了的部分)
-- [ ] perfgate 新增 KV+pubsub 的 **allocator-ON** 对照线(铁律④ 的承载)
+### T0 — 门先行(先红)✅ 完(2026-07-26,`feature/v5-memory`)
+- [x] `bench/allocgate.sh`:M1-M8 逐条落成(9 行,标 train 归属);**RED exit 1 如设计**
+- [x] `bench/compressgate.sh`:K1-K7 同上(8 行);**RED exit 1 如设计**
+- [x] **记账契约定死** = `bench/V5-ACCOUNTING-CONTRACT.md`(两 crate 要导出的字段名 + 恒等式 + 拒绝条款)。**恒等式不设容差** —— 未被解释的字节正是 glibc 那 2.24× 藏身之处;"加一项去凑平"明令禁止
+  - **诚实降级**:compress RFC §6.1 的四项里 **incompressible residual 与 match-finder miss 靠记账不可分**(要知道漏了多少冗余,就得先知道有多少 —— 那就是压缩问题本身)。契约不假装:合成一项 `cmp_payload_bytes`,拆分改为**带外**用 spg lzss 的**暴力穷举 matcher 当 oracle** 实测(T3 出 finding doc),不进每轮 gate
+- [x] **M8 当场变成真断言(T0 唯一绿灯)**:反例验证过(给 `kevy-hash` 加一个 `unsafe fn` → FAIL,还原 → PASS)。**顺带抓到 RFC 一句不实陈述** —— 我写"unsafe 只在 kevy-sys/kevy-uring/kevy-madvise 少数几个 crate",实录是 **14 个**(FFI 门 / wasm ABI / raw-entry map / uring reactor 本来就该有)。RFC 已更正;M8 改为对 `bench/.unsafe-crates-baseline` 的 **ratchet**(不看数量看不许悄悄增长,`kevy-alloc` 预批)
+- [x] **计划外偏离(已论证)**:原写"perfgate 新增 allocator-ON 对照线",实施时改放 allocgate。理由 = 两者问的不是同一个问题:**perfgate 是对历史基线的 ratchet;分配器问的是同源两构建、同盒、交错的 A/B**。perfgate 待 T2 末分配器默认 ON 后,其既有线自然就在测它,**无需新增 metric**
 
-### T1 — `kevy-alloc` 石头(不接线)【RFC 已批】
-- [ ] size class 分级表(tcmalloc 式,最坏舍入 ~12.5%)+ span(mmap via `kevy-madvise`,一 span 一 class,空槽内联 freelist)+ span registry
-- [ ] 每分片 TLAB(非原子快路径)+ 外分片 free 队列(snmalloc 式消息传递;torajs `central.rs` 的 ABA 条款**重新论证不许继承**——kevy 真有 N 核并发 free)
-- [ ] `PER_CLASS_CAP` + 诚实 OOM(torajs `c2970b6d` 的学费:无上限 = SIGSEGV 不是泄漏)
-- [ ] 归还策略(jemalloc decay 式滞后)+ **M4 直测:分配 N span → 释放 → 断言 RSS 真回落**
-- [ ] 四项记账导出(T0 契约)· unit + fuzz(§1 那个 churn 形状)+ 对 system allocator 的 bench
-- [ ] **无 header 契约**:只服务 sized dealloc,断言任何 size class 路径不写每块 header
+### T1 — `kevy-alloc` 石头(不接线)✅ 完(2026-07-26,`feature/v5-memory`)
+- [x] **几何**:segment 4 MiB(按 4 MiB 对齐 map)× 64 span × 64 KiB,span 0 放头。**指针掩码即查表** —— `ptr & !(4MiB-1)` 得 segment、偏移得 span、span meta 得 class,于是**每块零 header**(mimalloc segment/page + Go mheap arena 索引)
+- [x] **size class 63 档**(每八度 8 等分,最坏相对舍入 11.1%)+ 空槽内联 freelist + 按 class 的 span 归属
+- [x] **外分片 free = push-only + swap-drain**(mimalloc thread-free 式)。**ABA 不是被接受而是被消除**:torajs `central.rs` 记录并接受了 Treiber pop 的 ABA(理由是它单线程),kevy 真有 N 核并发 free,**继承那条注释就是继承一个 bug**。改成只有属主移除、且一次 `swap` 取走整条链 —— 消费侧没有 CAS,ABA 无窗口可开
+- [x] `PER_CLASS_CAP = 64` span/类 + 耗尽答 `None`(torajs `c2970b6d` 的学费)· jemalloc decay 式 `EMPTY_SPAN_HYSTERESIS`
+- [x] **记账七项**(T0 契约 §1)+ `Stats::balanced()` 恒等式无容差;`snapshot()` 走 segment 计算,热路径只维护 live/rounding 两个计数器
+- [x] 验证:**21 单测全绿**(darwin;Linux/wasm/thumbv7em 交叉 check 净)· **fuzz `heap_churn` 431,413 runs 零 crash**(已进 fuzz.yml)· clippy/locgate 绿 · release.yml 发布链已登记
+- [x] **bench 入 STONE-BENCH**(与 system allocator 并排):alloc+free 400B **5ns vs 18ns**;churn 4096×400B **3.8 vs 19.5 ns/op**;**含归还页 29.3 ns/op —— 该行没有对手列,因为那是 glibc 出多少钱都做不到的操作**
+- [x] **allocgate 四行翻绿**:M3-identity / M4-reclaim / M6-class-cap / M8-unsafe-ratchet(其余五行归 T2)
+- **三处与参照系分岔(铁律②要求写清)**:① **不放 TLAB** —— tcmalloc/mimalloc 的线程缓存是为了挡在共享堆前面,kevy 每核一分片,堆本身就是线程本地的,快路径已无原子,再加一层是缓存前面套缓存;② **span 统一 64 KiB 而非按 class 变长** —— 初稿按 class 变长以压 slack,被两点推翻:掩码需要统一几何(变长要在 free 路径上加查找结构),且 span 尾部是 bump 之上的 **virgin**(已映射但从未触碰 = 不常驻),担心本身错位;③ **OS 边界自建而非复用 `kevy-madvise`** —— 后者 Linux-only 且契约就是大页建议,而分配器要 macOS 也能跑、且要能**归还**页
+- **两处自测抓到的真错**:① `MIN_ALIGN=16` 是假的 —— 步长 8 的类(24/40/…)只有 8 对齐,已改为 class 选择满足对齐(`index_of(size, align)`);② "8 字节步长不额外花钱"是假的 —— 16→24 相对浪费 29%,已改成两段式声明(≥128 相对界 <12.5%,以下**绝对界 ≤7B**,那是 8 字节粒度的地板不是选择)
+- **一处 bench 自欺已修**:首版把 `reclaim()` 计进 churn 行,读出来是"慢 1.5×" —— 实为**拿我们的归还去比对手的什么都不做**。已拆成独立行,并注明该行没有对手列
 
-### T2 — `kevy-alloc` 接线 + M1/M2/M3 实测(lx64)
-- [ ] `#[global_allocator]` 挂在 `kevy` 二进制,feature 门控默认 OFF;`kevy_alloc::KevyAlloc` 导出给嵌入方自行选用(库不许替调用方决定)
-- [ ] perfgate 双跑(ON/OFF):**M1 KV 线 + M2 pubsub 线在既有容差内(ON 时)** —— 红则回设计,不许调容差
-- [ ] **M3**:capacity-envelope B6 + 新增 400B 变体,四项加总解释实测差值,且只有舍入项随数据量增长
+### T2 — `kevy-alloc` 接线 + M1/M2/M3 实测(lx64)—— **进行中,已出一条推翻前提的 finding**
+- [x] `#[global_allocator]` 挂 `kevy` 二进制(feature `kevy-alloc`,默认 OFF)+ `KevyAlloc` 导出给嵌入方;TLS 堆用 `ManuallyDrop`(线程退出**泄漏地址空间而非 unmap 活内存** —— 值跨分片共享,segment 可能比分配它的线程活得久)
+- [x] **把分配器装进测试二进制,让标准库当调用方** —— 当场抓到两个单线程测试够不到的缺陷:①跨线程 free 扣了**释放方**的计数器(那些字节记在属主堆上)→ 改为释放方把请求尺寸写进空槽 + segment 原子记在途量,属主 drain 时结账;②大块路径同病但无处结账(直接映射无 segment 无属主)→ 计数器改进程级,`Heap::snapshot` 不含,免得按分片求和时重复计
+- [x] **`PER_CLASS_CAP` 继承值错了三个数量级**:64 span = 4 MiB/类,合法程序当场爆 "memory allocation of 6152 bytes failed"(机器还有几十 GB)。改为真正的失控护栏 + `with_class_cap` 保住可测性
+- [x] M1 委托 perfgate(**不重写测量循环** —— 它已有交错 + 每实例翻序,抵消盒况漂移);perfgate `refuse`(缺工具/盒子脏)报 PENDING 不报 FAIL,但**仍不许 PASS**
+- [x] M5 绿(5 条,KevyAlloc 作进程分配器);M4 在 Linux 上**两条都绿**(内核 RSS 真回落)
+- [ ] **M2 在 lx64 FAIL:0.84,地板 0.92 —— 六轮两个分布完全不重叠**。`perf stat` 说我们**指令少 6%、缺页 1415→61,却多花 12% 周期**(IPC 1.53→1.29,cache-references +17%)。根因 = **无 header 不是白拿的:它把元数据搬离了数据**。glibc 的 chunk header 和 payload 同 cache line;我们的 span meta 在 64KiB–4MiB 外的 segment 头,每次 alloc/free 多碰一条线。**推翻 RFC 两处**:①"零 header 是纯赚"是**取舍**不是赢;②"不要线程缓存"的论证不完整 —— 线程缓存**也是局部性装置**,不只是避锁。finding:`bench/PERF-FINDING-2026-07-26-header-free-costs-a-cache-line.md`
+- [ ] **一次失败的 round + 一次被跳过的门(自记)**:先实现了 in-place `realloc`(0.852→0.843,没动针)。profile 里 libc realloc 只占 **2.32%**,而方法论的 **Pre-Phase-B 门要求攻击目标 ≥ 双位数 pp** —— 门会拒掉这次改动,而我没跑门。realloc 本身值得留(没有它每次扩容都拷贝),但它不是这个问题的答案
+- [ ] 下一步(未决,需你拍):把当前 span 的 free-list 头缓存进 heap(mimalloc 的位置)/ 小类把元数据放回数据旁(等于认输)/ 接受这条形状上的损失换内存(**但 M3 内存数还没测,没人能称这笔账**)
+- [ ] M1 仍未测:perfgate 拒绝在盒子有其它负载时跑
+- [x] **M3 内存那半已测,结果为负(2026-07-27,用户指令"先测 M3 内存那半,拿到数再决定")**。lx64,2M×400B/512MB 预算,同 commit 两二进制:**OFF 341.2MB 逻辑 / 818.1MB 常驻 = 2.40×;ON(reclaim 未接)2.39×;ON(reclaim 接上 shard tick)790.5MB = 2.32×**。对上 pubsub 的 0.84 → **拿 16% 吞吐换 3% 内存**。
+  - **中间那行的意义**:`Heap::reclaim` 写了、测了、导出了,**没人调用** —— 分配器没有自己的 tick。空 span 既留映射又留常驻,等于把 glibc 的失败模式用"漏接"复现一遍。接上 tick 后机制确实工作,只是**找不到多少可还的**
+  - **真正的前提之死**:**span 只有全空才能还,而 416B 类的 64KiB span 有 157 个槽** —— 157 个值全死才还得回一页;glibc 的单位是 4KiB 页,约 10 个值。**我们的回收粒度比要打败的对象粗约 16 倍。** mmap-backed 是必要不充分:决定回收的是**能交还的粒度**,而 slab 分配器的天然粒度就是 slab
+  - 真答案是**在 span 内按页归还**(jemalloc/mimalloc 都做),那是另一种结构不是旋钮:span meta 要按页记占用,free 路径要察觉某页最后一个槽走了。**不是答案的两条**(记下来免得被当答案试):更小的 span(把问题换成另一项)/ 更频繁地 reclaim(扫描已每 tick 跑,限制在于可还的量)
+  - finding:`bench/PERF-FINDING-2026-07-27-m3-the-memory-half-does-not-pay.md`。**决定权在你**:改回收结构 / 改目标(承认赢面在别处:微基准 3-4×、小值零 header 占用)/ 停
+- [x] **v2 结构落地(2026-07-27,用户拍板"完整这个设计,ceiling-first + clean")**:free list 换 **segment 头内位图**(数据页零元数据 → **页粒度归还**,回收单位 64KiB→4KiB)+ **最低位优先分配 = 主动致密化**(churn 把空闲空间往上挤成整页,无拷贝的类压缩,LIFO free list 表达不了)+ 记账新增 `returned` 项(映射未常驻)。31 单测(Linux 含两条内核 RSS 直证)+ 218k/99k fuzz + clippy/locgate 绿
+- [x] **M3 内存半:2.40× → 1.98×,双向复测稳定**(818→676MB @ 341MB 逻辑;v1 只 -3%,v2 **-17%**)。非天花板:剩 335MB 未归因,待七项导出
+- [x] **M2 吞吐半:三个机制假设全被测量淘汰**(in-place realloc 0.852→0.843 / 位图重构元数据 0.826 / 热缓存消除 churn 路径全部 segment 触碰 0.844)。**缺口按 payload 分形**:16B 0.92 / 64B 0.84 / 4096B ~1.0;**perf 挂上时缩到噪声甚至反转** —— 是时序/布局效应不是热符号,三次符号级修复无效与此自洽。剩余假设空间 = 布局形(着色/预取/TLB),**需要专门的分解轮,不许第四次盲修**。finding:`PERF-FINDING-2026-07-27-v2-memory-delivered-throughput-gap-unexplained.md`
+- [ ] M3 七项在 envelope 尺度的分解导出(INFO `# Allocator` 段)—— 剩余 335MB 的归因需要它
+- [x] **外分片路径重设计轮(2026-07-27,用户拍板;两轮结构 + 一次判别)**:
+  - **v3 批量回家**:free 快路径 = 本地环两次 store;flush 按 segment 分组、槽内穿链、**整批一记 CAS 拼接 + 两记 fetch_add**(跨核流量摊薄 ~百倍);drain 端格式不变;所有权照旧精确。**A/B 裁决:纹丝不动**(compat_get −40.1% vs −38.5%)—— **机制候选①③(原子流量/drain 走查)死**
+  - **判别实验**:同一 compat 拓扑 `--threads 1`(跨分片不可能存在)→ **1.006 / 1.023 全净** ⇒ 触发器确是跨分片形状,但成本不是流量,**是内存冷热**
+  - **v4 吸收复用**:稳态跨分片流里 B 的 free 全外来、B 的分配全死在别处 ⇒ home-routing 让热缓存**结构性饿死**,每次分配摸冷 span(唯一能事后解释 v2 热缓存无效的机制,计数器签名全吻合)。tcache 式吸收复用,三方记账问题用"**segment 属主 = 永久会计人**"解:吸收记 (−r,−(s−r))、复用记精确逆,负和恒等于外方缓存停驻字节,第三分片只需地址;每 custody 变更两记 relaxed fetch_add(**执照 = v3 证明原子不是成本**)。custody-cycle 三方逐步恒等式测试;被吸收槽故意不随 tick 回家(暖供给)。31+5 测试 + 110k fuzz 绿
+- [x] **v4 裁决:跨分片纹丝不动 + 打崩同分片 SET(−50.3%)→ REVERT**。custody 洞:A-拥有/B-复用/**A-亲自释放**走 local 分支双重记账(测试只走了 C-释放)。第五个死机制
+- [x] **布局 probe:零**(全函数 64B 对齐归一,比值同带)—— 第六个;副产品 = 证明缺口在 compat harness 上**经得起剖析器**
+- [x] **差分剖析终于点名(2026-07-27)**:`osq_lock` 15.9% + rwsem 自旋 + `__x64_sys_munmap` 27.6% + `vm_mmap_pgoff` 12% = **40% 服务器时间在 mmap/munmap 两个 syscall,8 分片串行在进程 `mmap_lock`**。凶手是大块路径那行注释:"no pooling; large allocs are assumed infrequent"。全部异象归位(threads=1 净/cluster 净 compat 输/五轮小路径零/微基准快/对齐零/IPC 低)
+- [x] **v5 类表扩 32 KiB**:compat −40 → −9.1
+- [x] **v6 partial rings**:无效于吞吐(留作 v8 的正确结构);**v7 删热缓存:M3 从 2.38× 复原 1.98×** —— LIFO 复用破坏致密化,137MB 静默蒸发了四轮(教训:**为轴 A 的改动若可能触碰轴 B 的机制,必须复测轴 B**)
+- [x] **v8 进程级映射池**:syscall 计数抓到还剩 105k mmap/6s(36–300KB 增长阶梯);每堆池**零效果**(缓冲跨分片生死,池在错侧)→ 进程级 + 自旋锁(锁下收集、锁外 munmap)→ **mmap −97%**。fuzzer 几分钟抓到 `Heap::drop` 忘排池的真泄漏
+- [x] **v8 终裁:12 角 7 过**(compat_get −2.8 / legacy_get **+2.1** / zalg **+7.5 反超**;compat_set 差 0.035% = 噪声距离);**M3 保持 1.98×**。residual = 4 条集合写线 −10.6~−18.6,**已剖面孤立**:hset 上分配器 17.3% vs glibc 10.1% 自身时间 = 最初的元数据远线故事;天真修法(热缓存)已知破坏 M3。finding:`PERF-FINDING-2026-07-27-v8-closing-ledger.md`
+- [ ] **residual 设计轮(待拍板)**:既回收热槽又保持位置感知(候选:仅持最低 span 槽的有界缓存 / per-word 位批发 / 或接受集合写 −10~−19% 换 −17% 内存 —— SME 取舍归属主)
+- [ ] M2 pubsub 0.858(同 residual 类;池不覆盖它)
+- [x] **M1 已测(2026-07-27,盒 98% idle 时 perfgate 全套 A/B 真跑):判别子干净** —— **同分片 KV ±1% 全净**(pinned_cluster get/set +0.3%/-0.9%,conn=属主),**跨分片 KV -18~-39%**(compat -38.5%/-39.2%,legacy 七线 -17.6~-28.4%,zalg -24.6%)。**快路径无罪,外分片 free 路径定罪**;pubsub 是 --threads 1(无外分片 free),两个回归就此分开。机制候选(待分解轮判):①每次外分片 free 一记跨核 CAS(七个分片捶同一 segment 原子,RFO ping-pong;compat_get 基线 ~52ns/op,一记争用 CAS 足以解释)②glibc tcache 把外来 chunk 推进**释放线程自己的**缓存并**本地复用**——我们的设计每个外来槽都要绕道回家;③`drain_foreign` O(全 segment)。finding:`PERF-FINDING-2026-07-27-m1-foreign-frees-are-the-kv-killer.md`
+- **三轴账目(T2 完整测量后)**:内存 **-17%** / 同分片 KV **±1%** / 跨分片 KV **-18~-39%(C4 直接不过)** / pubsub 小包 -8~-16%。**现状不可默认 ON**;外分片路径需要重设计轮(tcache 式本地复用 + 相应的所有权记账)才能重新称账
 - [ ] 大页作**旋钮**对着 M1/M3 实测(`MADV_HUGEPAGE`,非 `MAP_HUGETLB`;span 仍是细粒度回收单位)
-- [ ] 全绿后默认 ON;M7 既有门全绿(crashgate/availgate/tiergate/tablegate/textgate/oracle)
+- [ ] 全绿后才谈默认 ON;M7 既有门全绿(crashgate/availgate/tiergate/tablegate/textgate/oracle)
 
 ### T3 — `kevy-compress` 石头(不接线)【RFC 已批】
 - [ ] frame 格式(`[tag][orig_len][payload]`)+ 快速 LZ 级:哈希表单探 match finder / 64 KiB 窗口 / token nibble + 续字节变长 / 8 字节 wildcopy 解码

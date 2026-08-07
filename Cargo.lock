@@ -416,6 +416,7 @@ dependencies = [
 name = "kevy"
 version = "4.1.1"
 dependencies = [
+ "kevy-alloc",
  "kevy-bench",
  "kevy-chaos",
  "kevy-cli",
@@ -445,9 +446,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kevy-alloc"
+version = "4.0.0"
+
+[[package]]
 name = "kevy-bench"
 version = "4.1.1"
 dependencies = [
+ "kevy-alloc",
  "kevy-config",
  "kevy-map",
  "kevy-ring",
@@ -515,6 +521,10 @@ dependencies = [
  "kevy-resp-client",
  "kevy-rt",
 ]
+
+[[package]]
+name = "kevy-compress"
+version = "4.0.0"
 
 [[package]]
 name = "kevy-config"
@@ -752,6 +762,7 @@ version = "4.1.1"
 name = "kevy-vlog"
 version = "4.1.1"
 dependencies = [
+ "kevy-compress",
  "kevy-sys",
  "kevy-tmpdir",
 ]

@@ -8,6 +8,21 @@ use crate::value::{COLD_TAG_HASH, COLD_TAG_STRING, Value};
 use crate::{Store, StoreError, tier_codec};
 use core::time::Duration;
 
+/// Incompressible filler: several tier tests reason about ON-DISK
+/// sizes and sealing, and the vlog now stores kevy-compress frames —
+/// a constant run would collapse and break their size premises.
+fn noise(n: usize) -> Vec<u8> {
+    let mut x: u32 = 0x9E37_79B9;
+    (0..n)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x as u8
+        })
+        .collect()
+}
+
 fn tiered(name: &str, budget: u64) -> (Store, kevy_tmpdir::TmpDir) {
     let d = kevy_tmpdir::TmpDir::new(name);
     let mut s = Store::new();
@@ -341,12 +356,12 @@ fn snapshot_view_pins_survive_file_retirement() {
     // (enable_tiering hardcodes the production 256 MiB default).
     s.tier.as_mut().unwrap().vlog = kevy_vlog::Vlog::open(d.path(), 4096).unwrap();
 
-    let frozen = vec![b'p'; 3000];
+    let frozen = noise(3000);
     s.set(b"pinned", frozen.clone(), None, false, false);
     assert!(s.debug_force_demote(b"pinned")); // → file 0
-    s.set(b"filler", vec![b'f'; 3000], None, false, false);
+    s.set(b"filler", noise(3000), None, false, false);
     assert!(s.debug_force_demote(b"filler")); // → file 0 (now past rotate)
-    s.set(b"other", vec![b'o'; 3000], None, false, false);
+    s.set(b"other", noise(3000), None, false, false);
     assert!(s.debug_force_demote(b"other")); // rotates → file 1
 
     let view = s.collect_snapshot();
@@ -506,7 +521,7 @@ fn t5_live_budget_update_does_not_disturb_the_vlog() {
 #[test]
 fn t5_stats_carry_vlog_gauges() {
     let (mut s, _d) = tiered("tier-t5-vlog", u64::MAX);
-    s.set(b"v", vec![b'v'; 1024], None, false, false);
+    s.set(b"v", noise(1024), None, false, false);
     assert!(s.debug_force_demote(b"v"));
     let st = s.tier_stats();
     assert_eq!(st.vlog_files, 1);

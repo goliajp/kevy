@@ -24,6 +24,7 @@ workspace = true
 # The six-stone baseline runner (`examples/stones/`) drives each stone crate's
 # public API. Dev-only so the harness library itself stays zero-dependency.
 [dev-dependencies]
+kevy-alloc  = { path = "../kevy-alloc" }
 kevy-config = { path = "../kevy-config" }
 kevy-map    = { path = "../kevy-map" }
 kevy-ring   = { path = "../kevy-ring" }
