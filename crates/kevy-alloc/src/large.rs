@@ -229,6 +229,36 @@ pub fn large_stats() -> Stats {
     }
 }
 
+/// Map `size` bytes directly, reusing a parked mapping when one of
+/// exactly the right length is waiting. `None` when the OS refuses or
+/// the alignment is stricter than a fresh mapping provides.
+pub(crate) fn alloc(size: usize, align: usize) -> Option<NonNull<u8>> {
+    if align > os::PAGE {
+        return None;
+    }
+    let mapped = os::round_up(size, os::PAGE);
+    if let Some(p) = pool_take(mapped) {
+        counters::add_live_only(mapped as u64, size as u64);
+        return Some(p);
+    }
+    let p = os::map_aligned(mapped, os::PAGE)?;
+    counters::add(mapped as u64, size as u64);
+    Some(p)
+}
+
+/// # Safety
+/// `ptr`/`size` must come from [`alloc`] and not be used afterwards.
+pub(crate) unsafe fn dealloc(ptr: NonNull<u8>, size: usize) {
+    let mapped = os::round_up(size, os::PAGE);
+    counters::sub_live_only(mapped as u64, size as u64);
+    if pool_park(ptr, mapped) {
+        return;
+    }
+    counters::sub_mapped_only(mapped as u64);
+    // SAFETY: delegated to the caller's contract.
+    unsafe { os::unmap(ptr, mapped) };
+}
+
 /// How many pool slots hold exactly `mapped` bytes right now. Tests
 /// key on lengths nobody else allocates, which makes this exact even
 /// while parallel tests churn the shared pool.
@@ -277,34 +307,4 @@ mod pool_tests {
             "an oversized mapping must never park"
         );
     }
-}
-
-/// Map `size` bytes directly, reusing a parked mapping when one of
-/// exactly the right length is waiting. `None` when the OS refuses or
-/// the alignment is stricter than a fresh mapping provides.
-pub(crate) fn alloc(size: usize, align: usize) -> Option<NonNull<u8>> {
-    if align > os::PAGE {
-        return None;
-    }
-    let mapped = os::round_up(size, os::PAGE);
-    if let Some(p) = pool_take(mapped) {
-        counters::add_live_only(mapped as u64, size as u64);
-        return Some(p);
-    }
-    let p = os::map_aligned(mapped, os::PAGE)?;
-    counters::add(mapped as u64, size as u64);
-    Some(p)
-}
-
-/// # Safety
-/// `ptr`/`size` must come from [`alloc`] and not be used afterwards.
-pub(crate) unsafe fn dealloc(ptr: NonNull<u8>, size: usize) {
-    let mapped = os::round_up(size, os::PAGE);
-    counters::sub_live_only(mapped as u64, size as u64);
-    if pool_park(ptr, mapped) {
-        return;
-    }
-    counters::sub_mapped_only(mapped as u64);
-    // SAFETY: delegated to the caller's contract.
-    unsafe { os::unmap(ptr, mapped) };
 }
