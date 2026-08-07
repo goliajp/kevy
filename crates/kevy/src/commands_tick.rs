@@ -7,6 +7,11 @@ use kevy_store::Store;
 
 use crate::KevyCommands;
 
+/// Hand back free pages this shard's allocator holds. Returning pages
+/// is the one thing kevy-alloc does that glibc's brk arena cannot, and
+/// it does nothing until something asks: an allocator has no tick of its
+/// own. Measured with it unwired, the resident ratio was 2.39x against
+/// glibc's 2.40x — the design's whole point, absent.
 #[inline]
 pub(super) fn alloc_reclaim_tick() {
     #[cfg(feature = "kevy-alloc")]
@@ -29,6 +34,11 @@ pub(super) fn maxmemory_tick(c: &KevyCommands, store: &mut Store, cfg: &kevy_con
     );
 }
 
+/// The shard tick's tiering upkeep: re-resolve the
+/// budget spec — auto/percent re-probe the cgroup/meminfo bound so
+/// live limit changes are honored (the maxmemory reapply precedent) —
+/// and feed the index/view memory floor into the unified watermark.
+/// Gated on tiering being on: an untiered tick pays one branch.
 pub(super) fn tier_tick(c: &KevyCommands, store: &mut Store, bits: u32, cfg: &kevy_config::Config) {
     if !store.tier_enabled() {
         return;
