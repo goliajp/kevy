@@ -34,3 +34,35 @@ eight K lines are now all real assertions, all green.
   B10/B11 envelope halves belong to tiergate's L10/L11.
 - K2/K3/K4/K5-identity run the crate and vlog unit tests directly;
   fuzz targets `roundtrip` / `decode_arbitrary` stand beside them.
+
+---
+
+## Our codec against the oracle table (same corpora, measured not estimated)
+
+`examples/k4_corpora.rs` mirrors `bench/k4_premise.py`'s four corpora
+through `kevy_compress` itself (B/value, dictionary bytes counted):
+
+| corpus | per-datum ours/oracle | shared-dict ours/oracle |
+|---|---:|---:|
+| identical | 98.0 / 89.0 | **9.4 / 41.8** (dict 400 B after dedupe) |
+| templated | 354.4 / 231.6 | 264.4 / 180.0 |
+| random | 403.0 / 411.0 | 446.8 / 405.7 |
+| textual | 231.7 / 148.8 | 240.6 / 103.8 |
+
+Three facts fall out:
+
+1. **train() learned its first measured lesson**: the un-deduped v1
+   filled its budget with 164 copies of the identical value — 65 B/val
+   of amortized dictionary buying nothing. Exact-duplicate dedupe
+   (FNV-identity, collisions harmless) landed and the identical corpus
+   now beats the oracle 4.4× — one whole-value token versus zlib's
+   per-record deflate overhead.
+2. **The residual gap to the oracle is literal entropy, not match
+   finding**: dictionary capture works (templated payload 354→199
+   before amortization) but our token stream stores literals raw where
+   zlib Huffman-codes them — exactly RFC §7.1's named follow-up level,
+   now with its price measured per corpus.
+3. **On incompressible corpora a dictionary is pure cost** (random:
+   shared-dict worse than per-datum by the amortization plus a
+   sample-inclusion artifact). At vlog scale this is 64 KiB per 256 MiB
+   file (0.02 %) — noted, not actioned.

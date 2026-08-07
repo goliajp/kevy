@@ -141,18 +141,38 @@ pub fn train(samples: &[&[u8]], budget: usize) -> Vec<u8> {
     }
     // Stride so picks span the corpus rather than clustering at the
     // front — rotation seeding hands us *old* files' bytes first, and
-    // the tail is as representative as the head.
+    // the tail is as representative as the head. Exact duplicates are
+    // skipped: a dictionary is a model, and a second copy of a sample
+    // teaches it nothing while charging every record its amortized
+    // bytes (the K4-corpora run measured the un-deduped version paying
+    // 65 B/value of dictionary for an identical corpus whose whole
+    // model is one 400 B value).
     let mut need = budget;
     let avg = samples.iter().map(|s| s.len()).sum::<usize>() / samples.len().max(1);
     let stride = if avg == 0 { 1 } else { (samples.len() * avg / budget).max(1) };
+    let mut seen = alloc::collections::BTreeSet::new();
     let mut i = 0;
     while i < samples.len() && need > 0 {
-        let take = samples[i].len().min(need);
-        dict.extend_from_slice(&samples[i][..take]);
-        need -= take;
+        if seen.insert(fnv1a(samples[i])) {
+            let take = samples[i].len().min(need);
+            dict.extend_from_slice(&samples[i][..take]);
+            need -= take;
+        }
         i += stride;
     }
     dict
+}
+
+/// Sample identity for training dedup — FNV-1a over the whole sample.
+/// A collision merely drops one sample from the dictionary; it cannot
+/// affect correctness (the dictionary is advisory bytes).
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x100_0000_01b3);
+    }
+    h
 }
 
 /// Largest header: tag byte plus a five-byte LEB128 length.
