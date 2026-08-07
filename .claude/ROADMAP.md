@@ -712,9 +712,10 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 > 拍板件 P1-P4 见章程 §五(不挡 V0-V3 开工)。
 
 ### V0 — 合并轮(无前置拍板,可即刻开工)
-- [ ] `fix/idx-drift-on-multikey-writes`(数据丢失修复 + R4c 迁移工具链 + 边界/文档)merge → develop
-- [ ] `r1-locality`(kevy-alloc 三刀 + drain 修复 + perfgate-median + kevy-compress 全弧)rebase + merge → develop
+- [x] `fix/idx-drift-on-multikey-writes`(数据丢失修复 + R4c 迁移工具链 + 边界/文档)merge → develop(2026-08-08,`ac5a3f53`)
+- [x] `r1-locality`(kevy-alloc 三刀 + drain 修复 + perfgate-median + kevy-compress 全弧)rebase + merge → develop(`e17b75ac`;rebase 三处冲突手工收,evicted_keys 改落 `info_sections.rs`,tick 拆分复位 50-LOC)
 - [ ] 合并态全门禁 + CI 真绿(`gh run watch --exit-status`);**不发版**
+      —— 本地+盒上已全绿(2026-08-08):workspace 233 套件 exit 0 / clippy -D warnings 0(修三处)/ locgate/commentgate/rootgate PASS / crashgate·repligate·idxgate·envelope·compressgate PASS / tiergate 有测量体的行全 PASS(L4 是仪器修复 `42c1a956` 后真 PASS;L1/L3 设计内 PENDING)/ perfgate-median 12 角 median-of-3 全 PASS。**剩 CI = push 归属主**
 
 ### V1 —【RFC】标量函数面(RDS 模块商用性的最后一块工程)
 - [ ] RFC:R4a 清单(~40 标量 + 8 日期时间)→ 求值器落点(查询卡片投影/谓词侧)+ `sql plan` 翻译面
