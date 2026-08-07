@@ -64,10 +64,11 @@ pub fn parse_date(s: &str) -> Option<i64> {
 }
 
 /// Parse a PG interval literal: whitespace-separated `<n> <unit>`
-/// pairs (`1 year 2 months`, `-3 days`, `90 minutes`).
+/// pairs (`1 year 2 months`, `-3 days`, `90 minutes`) into the
+/// three-component `(months, days, micros)`.
 #[must_use]
-pub fn parse_interval(s: &str) -> Option<(i64, i64)> {
-    let (mut months, mut micros) = (0i64, 0i64);
+pub fn parse_interval(s: &str) -> Option<(i64, i64, i64)> {
+    let (mut months, mut days, mut micros) = (0i64, 0i64, 0i64);
     let mut it = s.split_whitespace();
     let mut any = false;
     while let Some(tok) = it.next() {
@@ -76,8 +77,8 @@ pub fn parse_interval(s: &str) -> Option<(i64, i64)> {
         match unit {
             "year" | "yr" => months += n * 12,
             "month" | "mon" => months += n,
-            "week" => micros += n * 7 * MICROS_PER_DAY,
-            "day" => micros += n * MICROS_PER_DAY,
+            "week" => days += n * 7,
+            "day" => days += n,
             "hour" => micros += n * 3600 * MICROS_PER_SEC,
             "minute" | "min" => micros += n * 60 * MICROS_PER_SEC,
             "second" | "sec" => micros += n * MICROS_PER_SEC,
@@ -85,7 +86,7 @@ pub fn parse_interval(s: &str) -> Option<(i64, i64)> {
         }
         any = true;
     }
-    if any { Some((months, micros)) } else { None }
+    if any { Some((months, days, micros)) } else { None }
 }
 
 /// `YYYY-MM-DD HH:MM:SS[.ffffff]` — fraction only when non-zero.
@@ -112,13 +113,14 @@ pub fn render_date(days: i64) -> String {
 }
 
 /// PG's interval output: `N year(s) N mon(s) N day(s) HH:MM:SS`, each
-/// piece only when non-zero, `00:00:00` alone when everything is.
+/// piece only when non-zero, `00:00:00` alone when everything is. The
+/// components render independently — `1 day -12:00:00` stays exactly
+/// that (probe 10).
 #[must_use]
-pub fn render_interval(months: i64, micros: i64) -> String {
+pub fn render_interval(months: i64, days: i64, micros: i64) -> String {
     let mut parts: Vec<String> = Vec::new();
     let (y, mon) = (months / 12, months % 12);
-    let days = micros / MICROS_PER_DAY;
-    let rem = micros % MICROS_PER_DAY;
+    let rem = micros;
     if y != 0 {
         parts.push(format!("{y} year{}", if y.abs() == 1 { "" } else { "s" }));
     }

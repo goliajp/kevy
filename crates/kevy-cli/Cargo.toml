@@ -28,4 +28,5 @@ kevy-embedded = { path = "../kevy-embedded", version = "4.1.1" }
 kevy-persist = { path = "../kevy-persist", version = "4.1.1" }
 kevy-resp = { path = "../kevy-resp", version = "4.1.1" }
 kevy-resp-client = { path = "../kevy-resp-client", version = "4.1.1" }
+kevy-scalar = { path = "../kevy-scalar", version = "4.1.1" }
 kevy-sql = { path = "../kevy-sql", version = "4.1.1" }

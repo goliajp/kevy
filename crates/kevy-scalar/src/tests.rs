@@ -205,7 +205,7 @@ fn extract_and_date_part_field_matrices() {
     ));
     assert_eq!(flt(eval("date_part", &[t("hour"), d])), 0.0);
     // Interval decomposition (probe 11).
-    let iv = Scalar::Interval { months: 17, micros: 0 };
+    let iv = Scalar::Interval { months: 17, days: 0, micros: 0 };
     assert_eq!(flt(eval("date_part", &[t("month"), iv.clone()])), 5.0);
     assert_eq!(flt(eval("date_part", &[t("year"), iv])), 1.0);
     assert!(matches!(
@@ -234,22 +234,24 @@ fn date_trunc_boundaries() {
 
 #[test]
 fn interval_parse_and_render_round_trip() {
-    assert_eq!(crate::parse_interval("1 day"), Some((0, 86_400_000_000)));
-    assert_eq!(crate::parse_interval("1 year 2 months"), Some((14, 0)));
-    assert_eq!(crate::render_interval(0, 86_400_000_000), "1 day");
-    assert_eq!(crate::render_interval(0, 7_200_000_000), "02:00:00");
-    assert_eq!(crate::render_interval(14, 0), "1 year 2 mons");
-    assert_eq!(crate::render_interval(0, -3 * 86_400_000_000), "-3 days");
-    assert_eq!(crate::render_interval(0, 0), "00:00:00");
+    assert_eq!(crate::parse_interval("1 day"), Some((0, 1, 0)));
+    assert_eq!(crate::parse_interval("1 year 2 months"), Some((14, 0, 0)));
+    assert_eq!(crate::render_interval(0, 1, 0), "1 day");
+    assert_eq!(crate::render_interval(0, 0, 7_200_000_000), "02:00:00");
+    assert_eq!(crate::render_interval(14, 0, 0), "1 year 2 mons");
+    assert_eq!(crate::render_interval(0, -3, 0), "-3 days");
+    assert_eq!(crate::render_interval(0, 0, 0), "00:00:00");
+    // Components never normalize across each other (probe 10).
+    assert_eq!(crate::render_interval(0, 1, -12 * 3_600_000_000), "1 day -12:00:00");
 }
 
 #[test]
 fn age_decomposes_calendar_months_first() {
     let out = eval("age", &[ts("2025-06-15 00:00:00"), ts("2024-03-10 00:00:00")]).unwrap();
-    assert_eq!(out, Scalar::Interval { months: 15, micros: 5 * 86_400_000_000 });
+    assert_eq!(out, Scalar::Interval { months: 15, days: 5, micros: 0 });
     // Reversed arguments flip every component's sign.
     let out = eval("age", &[ts("2024-03-10 00:00:00"), ts("2025-06-15 00:00:00")]).unwrap();
-    assert_eq!(out, Scalar::Interval { months: -15, micros: -5 * 86_400_000_000 });
+    assert_eq!(out, Scalar::Interval { months: -15, days: -5, micros: 0 });
 }
 
 #[test]

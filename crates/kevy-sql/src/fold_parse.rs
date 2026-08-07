@@ -65,10 +65,10 @@ fn keyword_or_call(
             let Tok::Str(lit) = &t.tok else {
                 return Err(SqlError::at(t.line, t.col, "INTERVAL needs a quoted literal"));
             };
-            let Some((months, micros)) = kevy_scalar::parse_interval(lit) else {
+            let Some((months, days, micros)) = kevy_scalar::parse_interval(lit) else {
                 return Err(SqlError::at(t.line, t.col, format!("bad interval literal '{lit}'")));
             };
-            return Ok(Scalar::Interval { months, micros });
+            return Ok(Scalar::Interval { months, days, micros });
         }
         _ => {}
     }
@@ -157,9 +157,9 @@ fn cast(v: &Scalar, ty: &str) -> Result<Scalar, String> {
             kevy_scalar::parse_date(s).ok_or_else(|| format!("bad date literal '{s}'"))?,
         ),
         ("interval", Scalar::Text(s)) => {
-            let (months, micros) = kevy_scalar::parse_interval(s)
+            let (months, days, micros) = kevy_scalar::parse_interval(s)
                 .ok_or_else(|| format!("bad interval literal '{s}'"))?;
-            Scalar::Interval { months, micros }
+            Scalar::Interval { months, days, micros }
         }
         ("int" | "integer" | "bigint" | "int4" | "int8", Scalar::Text(s)) => Scalar::Int(
             s.trim().parse().map_err(|_| format!("'{s}' is not an integer"))?,

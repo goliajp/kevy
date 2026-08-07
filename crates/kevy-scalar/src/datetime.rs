@@ -44,7 +44,9 @@ fn field_of(func: &'static str, args: &[Scalar], promote: bool) -> Result<Scalar
             }
             field_of_ts(func, &field, days * MICROS_PER_DAY)
         }
-        Scalar::Interval { months, micros } => field_of_interval(func, &field, *months, *micros),
+        Scalar::Interval { months, days, micros } => {
+            field_of_interval(func, &field, *months, *days, *micros)
+        }
         _ => Err(ScalarError::Type { func, arg: 1 }),
     }
 }
@@ -82,22 +84,24 @@ fn doy(c: kevy_time::Civil) -> i64 {
     (this - jan1) / 86_400 + 1
 }
 
-/// Interval component decomposition (probe 11): `year`/`month` read
-/// the month half, the time fields read the micros half.
+/// Interval component decomposition (probe 11): each field reads its
+/// own component — days never fold into hours or vice versa.
 fn field_of_interval(
     func: &'static str,
     field: &str,
     months: i64,
+    days: i64,
     micros: i64,
 ) -> Result<Scalar, ScalarError> {
     let out = match field {
         "year" => (months / 12) as f64,
         "month" => (months % 12) as f64,
-        "day" => (micros / MICROS_PER_DAY) as f64,
-        "hour" => (micros % MICROS_PER_DAY / (3600 * MICROS_PER_SEC)) as f64,
+        "day" => days as f64,
+        "hour" => (micros / (3600 * MICROS_PER_SEC)) as f64,
         "minute" => (micros % (3600 * MICROS_PER_SEC) / (60 * MICROS_PER_SEC)) as f64,
         "second" => (micros % (60 * MICROS_PER_SEC)) as f64 / 1e6,
-        "epoch" => months as f64 * 30.0 * 86_400.0 + micros as f64 / 1e6,
+        // PG's epoch convention: a month counts 30 days.
+        "epoch" => (months * 30 + days) as f64 * 86_400.0 + micros as f64 / 1e6,
         _ => {
             return Err(ScalarError::Domain { func, what: "unknown extract field" });
         }
@@ -166,10 +170,11 @@ fn age(args: &[Scalar]) -> Result<Scalar, ScalarError> {
     }
     let anchored = kevy_time::add_months(es, months) * MICROS_PER_SEC
         + earlier.rem_euclid(MICROS_PER_SEC);
-    let micros = later - anchored;
+    let rest = later - anchored;
+    let (days, micros) = (rest / MICROS_PER_DAY, rest % MICROS_PER_DAY);
     Ok(if neg {
-        Scalar::Interval { months: -months, micros: -micros }
+        Scalar::Interval { months: -months, days: -days, micros: -micros }
     } else {
-        Scalar::Interval { months, micros }
+        Scalar::Interval { months, days, micros }
     })
 }
