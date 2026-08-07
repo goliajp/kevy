@@ -53,6 +53,7 @@ use alloc::vec::Vec;
 
 mod decode;
 mod encode;
+mod huff;
 
 /// Frame tag: payload is the original bytes verbatim.
 pub const TAG_RAW: u8 = 0;
@@ -60,6 +61,11 @@ pub const TAG_RAW: u8 = 0;
 pub const TAG_LZ: u8 = 1;
 /// Frame tag: LZ token stream, history is `dict ++ output`.
 pub const TAG_LZ_DICT: u8 = 2;
+/// Frame tag: high (compaction) level — literals Huffman-coded as one
+/// block, byte-aligned sequence stream after it.
+pub const TAG_LZH: u8 = 3;
+/// Frame tag: high level with dictionary history.
+pub const TAG_LZH_DICT: u8 = 4;
 
 /// Longest back-reference the 16-bit offset can express, which also
 /// bounds how much trailing dictionary is reachable.
@@ -99,6 +105,30 @@ pub fn encode(dict: &[u8], input: &[u8]) -> Vec<u8> {
     frame
 }
 
+/// Encode at the compaction level: same match finder, literals pulled
+/// into one Huffman-coded block (zstd's shape). Strictly
+/// smallest-wins: the result is the smaller of high / fast / raw, so
+/// K2 holds here exactly as it does for [`encode`]. Costs roughly a
+/// second serialization pass at encode time — which is the point: a
+/// value re-encoded by compaction has proven cold (RFC §3).
+#[must_use]
+pub fn encode_high(dict: &[u8], input: &[u8]) -> Vec<u8> {
+    let mut frame = Vec::with_capacity(input.len() + MAX_HEADER);
+    let (tag, ok) = if input.len() >= encode::MIN_INPUT {
+        encode::try_high(dict, input, &mut frame)
+    } else {
+        (TAG_RAW, false)
+    };
+    if ok {
+        finish_header(&mut frame, tag, input.len());
+    } else {
+        frame.clear();
+        push_header(&mut frame, TAG_RAW, input.len());
+        frame.extend_from_slice(input);
+    }
+    frame
+}
+
 /// Decode one frame produced by [`encode`]. `dict` must be the same
 /// bytes the encoder was given — the tag records whether the frame
 /// depends on it at all.
@@ -118,6 +148,13 @@ pub fn decode(dict: &[u8], frame: &[u8]) -> Result<Vec<u8>, Corrupt> {
                 return Err(Corrupt);
             }
             decode::lz(dict, payload, orig_len)
+        }
+        TAG_LZH => decode::lz_high(&[], payload, orig_len),
+        TAG_LZH_DICT => {
+            if dict.is_empty() {
+                return Err(Corrupt);
+            }
+            decode::lz_high(dict, payload, orig_len)
         }
         _ => Err(Corrupt),
     }
@@ -180,7 +217,11 @@ const MAX_HEADER: usize = 6;
 
 fn push_header(out: &mut Vec<u8>, tag: u8, orig_len: usize) {
     out.push(tag);
-    let mut v = orig_len as u64;
+    push_varint(out, orig_len);
+}
+
+pub(crate) fn push_varint(out: &mut Vec<u8>, value: usize) {
+    let mut v = value as u64;
     loop {
         let b = (v & 0x7f) as u8;
         v >>= 7;
@@ -201,7 +242,7 @@ fn finish_header(frame: &mut Vec<u8>, tag: u8, orig_len: usize) {
     frame.splice(0..0, header);
 }
 
-fn read_varint(buf: &[u8]) -> Result<(usize, &[u8]), Corrupt> {
+pub(crate) fn read_varint(buf: &[u8]) -> Result<(usize, &[u8]), Corrupt> {
     let mut v: u64 = 0;
     let mut shift = 0u32;
     for (i, &b) in buf.iter().enumerate() {

@@ -98,3 +98,51 @@ fn copy_match(dict: &[u8], out: &mut Vec<u8>, dist: usize, len: usize) {
         }
     }
 }
+
+/// Decode a high-level payload: `[varint lit_total][flag]
+/// [literal block][sequence stream]`. Literals come back as one bulk
+/// pass (Huffman table loop or a plain slice), then the byte-aligned
+/// sequence stream interleaves them with matches — same token grammar
+/// as the fast level minus the inline literals.
+pub(crate) fn lz_high(dict: &[u8], payload: &[u8], orig_len: usize) -> Result<Vec<u8>, Corrupt> {
+    let (lit_total, rest) = crate::read_varint(payload)?;
+    let (&flag, rest) = rest.split_first().ok_or(Corrupt)?;
+    let (lits, seq_start): (alloc::borrow::Cow<'_, [u8]>, usize) = match flag {
+        0 => {
+            let l = rest.get(..lit_total).ok_or(Corrupt)?;
+            (alloc::borrow::Cow::Borrowed(l), lit_total)
+        }
+        1 => {
+            let (l, used) = crate::huff::decode(rest, lit_total)?;
+            (alloc::borrow::Cow::Owned(l), used)
+        }
+        _ => return Err(Corrupt),
+    };
+    let seqs = rest.get(seq_start..).ok_or(Corrupt)?;
+    let mut out = Vec::with_capacity(orig_len);
+    let (mut p, mut lp) = (0usize, 0usize);
+    loop {
+        let token = *seqs.get(p).ok_or(Corrupt)?;
+        p += 1;
+        let lit_len = read_len(seqs, &mut p, (token >> 4) as usize)?;
+        let lit_end = lp.checked_add(lit_len).ok_or(Corrupt)?;
+        if lit_end > lits.len() || out.len() + lit_len > orig_len {
+            return Err(Corrupt);
+        }
+        out.extend_from_slice(&lits[lp..lit_end]);
+        lp = lit_end;
+        if p == seqs.len() {
+            break;
+        }
+        let off_bytes: [u8; 2] =
+            seqs.get(p..p + 2).ok_or(Corrupt)?.try_into().map_err(|_| Corrupt)?;
+        let dist = usize::from(u16::from_le_bytes(off_bytes));
+        p += 2;
+        let len = read_len(seqs, &mut p, (token & 0x0f) as usize)? + 4;
+        if dist == 0 || dist > out.len() + dict.len() || out.len() + len > orig_len {
+            return Err(Corrupt);
+        }
+        copy_match(dict, &mut out, dist, len);
+    }
+    if out.len() == orig_len && lp == lits.len() { Ok(out) } else { Err(Corrupt) }
+}

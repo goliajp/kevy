@@ -112,7 +112,7 @@ impl Vlog {
             let (key, payload, body_len) = read_record(&cur.handle, cur.offset)?;
             let old = VlogRef { file_id: cur.file_id, offset: cur.offset, len: body_len };
             if owner.is_live(&key, old) {
-                let new = self.append(&key, &payload)?;
+                let new = self.append_high(&key, &payload)?;
                 owner.moved(&key, old, new);
             }
             cur.offset += HEADER + u64::from(body_len);

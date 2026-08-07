@@ -306,6 +306,19 @@ impl Vlog {
     /// Append one record; returns its address. Rotates the active file
     /// past the threshold FIRST, so a record never spans files.
     pub fn append(&mut self, key: &[u8], payload: &[u8]) -> io::Result<VlogRef> {
+        self.append_level(key, payload, false)
+    }
+
+    /// [`Self::append`] with the compaction level: literals
+    /// entropy-coded when that wins (strictly smallest-wins, so it can
+    /// only shrink). Compaction rewrites through here — a record that
+    /// survived to compaction has earned the more expensive encoding
+    /// (the RFC's two-stage trade riding a scan that already exists).
+    pub(crate) fn append_high(&mut self, key: &[u8], payload: &[u8]) -> io::Result<VlogRef> {
+        self.append_level(key, payload, true)
+    }
+
+    fn append_level(&mut self, key: &[u8], payload: &[u8], high: bool) -> io::Result<VlogRef> {
         if 4 + key.len() + payload.len() > MAX_BODY as usize {
             return Err(bad(format!(
                 "vlog: record too large ({} B)",
@@ -321,7 +334,12 @@ impl Vlog {
             self.sample_bytes += payload.len();
             self.samples.push(payload.to_vec());
         }
-        let frame = kevy_compress::encode(&self.active().handle.dict, payload);
+        let dict = &self.active().handle.dict;
+        let frame = if high {
+            kevy_compress::encode_high(dict, payload)
+        } else {
+            kevy_compress::encode(dict, payload)
+        };
         let body_len = 4 + key.len() + frame.len();
         let mut body = Vec::with_capacity(body_len);
         body.extend_from_slice(&(key.len() as u32).to_le_bytes());

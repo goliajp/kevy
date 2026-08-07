@@ -96,10 +96,17 @@ fn run(name: &str, values: &[Vec<u8>], oracle_pd: f64, oracle_dict: f64) {
         let f = kevy_compress::encode(&dict, v);
         assert_eq!(&kevy_compress::decode(&dict, &f).unwrap(), v);
     }
+    let with_high: usize = dict.len()
+        + values.iter().map(|v| kevy_compress::encode_high(&dict, v).len()).sum::<usize>();
+    for v in values.iter().take(20) {
+        let f = kevy_compress::encode_high(&dict, v);
+        assert_eq!(&kevy_compress::decode(&dict, &f).unwrap(), v);
+    }
     println!(
-        "{name:<10} per-datum {:>6.1} B/val (oracle {oracle_pd:>6.1})   shared-dict {:>6.1} B/val (oracle {oracle_dict:>6.1}, dict {} B counted)",
+        "{name:<10} per-datum {:>6.1} B/val (oracle {oracle_pd:>6.1})   dict {:>6.1} (oracle {oracle_dict:>6.1})   dict+high {:>6.1}   [dict {} B counted]",
         per_datum as f64 / N as f64,
         with_dict as f64 / N as f64,
+        with_high as f64 / N as f64,
         dict.len(),
     );
 }
