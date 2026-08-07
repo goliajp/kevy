@@ -57,3 +57,31 @@ Instrument caveats, recorded: BGREWRITEAOF's completion gauge is the
 answering shard's view (INFO persistence is shard-local), so "rewrite
 wall 59ms" measured the wrong thing; the rewrite-duration question
 needs a per-shard gauge and stays open.
+
+## R-C.5 / R-C.7 — the compaction "mystery" is rotation granularity, and the machinery is healthy
+
+A realistic corpus (1.5M distinct templated 400B rows, 256MB/shard
+budget) with two 30% churn passes settled at **amp 1.56× with
+vlog_epoch=0 — compaction never ran at ANY threshold (50/65/80)**.
+The suspicion escalated to "dead accounting broken"; a local
+small-scale repro with INFO gauges killed that: **vlog_live_bytes
+tracks dead bytes correctly** (37.5% dead visible).
+
+The real mechanism: 8 files on the box = **8 shards × 1 vlog each**,
+and at 256MB rotation each shard's ~116MB log is entirely its ACTIVE
+file — never sealed, and the active file is never compacted **by
+design**. With an 8MB rotation locally the machinery proves itself
+whole: churn → dead accrues → **epoch advances within 6s of ticks,
+48MB → 31.2MB (amp 1.14×)**, tails unaffected (p99.9 well under 1ms
+during compaction).
+
+Balance verdicts:
+- **Threshold 50 is fine**; the knob that matters is `rotate_bytes`
+  (hardcoded 256MB/shard): overwrite garbage lingers up to one
+  rotation's worth per shard as a *young-store transient*, not a
+  steady-state leak. Product doc item + a configurability candidate;
+  no code change forced.
+- The identical-to-the-byte reruns that exposed this also exposed an
+  instrument lesson: a `cargo build | tail -1` pipeline without
+  pipefail swallowed a build failure and re-ran a stale binary —
+  **results too consistent are a reason to suspect the instrument**.
