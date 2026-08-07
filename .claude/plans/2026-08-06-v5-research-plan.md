@@ -510,3 +510,29 @@ no_std+alloc,零依赖):LZ4 形 token 流(单探哈希/16 位偏移/无界长度
 **下一切片**:RFC §5 布点(demote 编码 / compact 重编 / 冷读解码),
 K5/K6/K7 骑既有门禁;涉 kevy-store/kevy-vlog,爆炸半径大,单独一轮。
 workspace 207 套件绿。r1-locality 现 **+30 笔**。
+
+---
+
+## 十六期(2026-08-07,T4 布线 —— vlog 每记录一帧,字典随文件生死)
+
+RFC §5 落位在 **vlog 层**(`066da155`):encode 只存在于
+`Vlog::append` 内 → **K6 构造性成立**(SET 路径不可达);每
+`VlogFile` 携带自己的字典 —— 轮转时用**上一文件的原始样本**训练
+(§7.2 轮转播种:同种群、真字节、无冷启动窗),随文件消亡(**K7
+可弃性是继承的,不是工程的**);compact 跨文件自动 decode→按目标
+字典 re-encode(§3 白得)。盘上封框不动:帧在 body 内,CRC 恰盖
+存储字节;`verify_image` 交帧,`VlogFile::decompress` 是完成步
+(tier_serve 批读点配对)。487 行 lib.rs 越限 → compaction 拆
+`compact.rs`。
+
+**测试**:kevy-vlog 14(新:字典跨轮转生效 —— 400B 值在带字典文件
+塌缩至 <1/4 raw;stats.bytes == Σdisk_len EXACT)/ 四处常量值形状
+测试改噪声载荷(压缩改写了密封与大小前提 —— 本身就是布线生效的
+证据)/ fuzz 双靶入库 / **compressgate T3 五线转绿**
+(K2/K3/K4/K5-identity/K6),K1/K5-amp/K7 留待 envelope。
+workspace 连续两轮全绿(persistence flake 未复现)。
+
+**下一切片(T4 收口)**:lx64 capacity-envelope —— K1(压缩开启下
+B2 冷读 p99)/ K5-amplification(可压缩语料 vs B5 1.27×)/ K7
+(B10/B11)+ perfgate KV/pubsub 不退化线。r1-locality 现
+**+31 笔**(tip `066da155`)。
