@@ -66,3 +66,34 @@ Three facts fall out:
    shared-dict worse than per-datum by the amortization plus a
    sample-inclusion artifact). At vlog scale this is 64 KiB per 256 MiB
    file (0.02 %) — noted, not actioned.
+
+---
+
+## The compaction level lands — and prices its own limit
+
+RFC §7.1's named follow-up (owner-decided 2026-07-26: "the compaction
+level lands afterwards against the same K-criteria") is in: one match
+finder, two serializers. The high level pulls all literals into one
+canonical-Huffman block (zstd's shape: bulk literal decode, then a
+byte-aligned sequence stream), is strictly smallest-wins against fast
+and raw (K2 holds by construction one level up), and
+`Vlog::compact_step` now rewrites survivors through it — the two-stage
+trade riding the scan that already exists.
+
+Measured immediately, in both directions:
+
+- On block-scale text (20 KB JSON rows) the entropy layer beats the
+  fast level by >5 % — asserted in a unit test, not observed once.
+- **On the 400 B corpora it never engages**: the 128-byte
+  code-lengths header does not amortize inside a small value's literal
+  block, huff::encode K2-refuses, and smallest-wins falls back to the
+  fast frame. The corpora table's dict+high column equals the dict
+  column at 400 B — by design, and honestly.
+
+The structural lesson goes on the follow-up list rather than into the
+format tonight: at kevy's small-value scale the entropy table wants to
+be **file-scoped, riding the dictionary lifecycle** (zstd embeds
+entropy tables in its dictionaries for exactly this reason) — one
+header per file instead of per record. Format churn deferred; the
+level's plumbing (tags, smallest-wins, compaction wiring) is where a
+shared-table refinement drops in without touching callers.

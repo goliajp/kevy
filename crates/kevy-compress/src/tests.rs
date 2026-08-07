@@ -142,3 +142,62 @@ fn train_bounds_its_budget() {
     let huge = train(&refs, usize::MAX);
     assert!(huge.len() <= MAX_OFFSET, "a dictionary past offset reach is dead weight");
 }
+
+/// The compaction level: identity on every shape the fast level
+/// covers, strictly-smallest against fast and raw, and rejection on
+/// corruption — the same K2/K3 posture one level up.
+#[test]
+fn high_level_roundtrips_and_never_loses_to_fast() {
+    let mut text = Vec::new();
+    for i in 0..500 {
+        text.extend_from_slice(
+            alloc::format!("{{\"user\":\"u{i}\",\"role\":\"admin\",\"active\":true}}\n").as_bytes(),
+        );
+    }
+    let value: Vec<u8> = (0..400u32).map(|i| (i * 7 % 251) as u8).collect();
+    let dict = train(&[&value], MAX_OFFSET);
+    let mut x: u64 = 0x1234_5678_9abc_def1;
+    let mut random = Vec::with_capacity(2048);
+    for _ in 0..2048 {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        random.push(x as u8);
+    }
+    for (d, v) in [
+        (&[][..], &text),
+        (&[][..], &random),
+        (dict.as_slice(), &value),
+        (&[][..], &alloc::vec![0u8; 10_000]),
+    ] {
+        let high = encode_high(d, v);
+        assert_eq!(&decode(d, &high).unwrap(), v, "high round-trip");
+        let fast = encode(d, v);
+        assert!(
+            high.len() <= fast.len(),
+            "high must never lose to fast ({} > {})",
+            high.len(),
+            fast.len()
+        );
+        assert!(high.len() <= v.len() + MAX_HEADER, "K2 at the high level");
+    }
+    // Text actually gains from the entropy layer, not just ties.
+    let high = encode_high(&[], &text);
+    let fast = encode(&[], &text);
+    assert!(
+        high.len() < fast.len() * 95 / 100,
+        "entropy coding should beat fast by >5% on JSON text ({} vs {})",
+        high.len(),
+        fast.len()
+    );
+    // Corruption still rejects, never mis-decodes.
+    for flip in [1usize, 8, high.len() / 2, high.len() - 1] {
+        let mut bad = high.clone();
+        bad[flip] ^= 0x20;
+        let out = decode(&[], &bad);
+        assert!(
+            out.is_err() || out.as_deref() == Ok(&text[..]),
+            "bit flip at {flip} mis-decoded silently"
+        );
+    }
+}
