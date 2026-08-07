@@ -85,3 +85,27 @@ Balance verdicts:
   instrument lesson: a `cargo build | tail -1` pipeline without
   pipefail swallowed a build failure and re-ran a stale binary —
   **results too consistent are a reason to suspect the instrument**.
+
+## R-D.8 first soak: the veto fired in ten minutes, and it was the point
+
+The first hour-long soak (mixed 3-byte KV/collection storm + 1KiB
+tiered ingest waves, tier budget 512MB, no maxmemory) killed the
+server at minute 10: **"memory allocation of 3 bytes failed" → abort,
+at RSS 13.5 GB on a box with 48 GB free.**
+
+Not OOM — a structural ceiling: `PER_CLASS_CAP`'s counter was `u16`,
+so the guard that its own doc records having "raised three orders of
+magnitude" was silently pinned at 65,535 spans × 64 KiB = **a hidden
+4 GiB ceiling per size class**. The 3-byte storm filled the 16 B
+class and the allocator refused a 3-byte request with terabytes of
+address space to spare. Fixed (`7008e36f`): counter and cap are u32,
+the guard sits at 1 TiB/class, and the lesson joins its first verse
+in the constant's doc — memory governance belongs to maxmemory and
+the tier budget, never to an invisible allocator constant.
+
+Also recorded from the same ten minutes: the unspillable-value
+boundary is real and industrial config must set BOTH knobs (tier
+budget bounds spillable values; maxmemory + policy bounds the rest);
+frag under the mixed small-value shape ran 2.1–3.9× (vs 1.32× at the
+uniform-4KiB envelope) — the value-size dependence of the fragmentation
+story, now measured from the stability side too.
