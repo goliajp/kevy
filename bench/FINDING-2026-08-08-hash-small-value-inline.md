@@ -144,6 +144,41 @@ official perfgate-median run with an alloc-ON build, and the sadd/zadd residual
 tax needs its own knife (fastpath-residue RFC). Those are the remaining gates
 before alloc default-ON can ship.
 
+## Full P2 pricing — official perfgate-median ×3, alloc-ON build (post-merge)
+
+Run on develop tip `2e242e78` (V4 hash-inline merged), `--features kevy-alloc`,
+median-of-3, floor = ref × 0.92 (ref = PERF-BASELINE, the last-release default
+build — the P2 ratchet semantics):
+
+| angle | median vs ref | verdict |
+|---|---|---|
+| legacy_8sh_hset | **−5.5 %** | **PASS** (balance round priced this −9~−15) |
+| legacy_8sh_sadd | −8.1 % | FAIL (0.1 pp below floor — edge of the noise band) |
+| legacy_8sh_zadd | **−15.0 %** | **FAIL** (the real remaining distance) |
+| legacy_8sh_incr / lpush / set / get | −5.7 / −3.8 / −4.3 / −2.9 % | PASS |
+| pinned_cluster get/set | −1.5 / −3.0 % | PASS |
+| pinned_compat get/set | −1.8 / −2.4 % | PASS |
+| zalg_zinterstore | +6.0 % | PASS |
+
+**10/12 PASS.** The hash angle is confirmed recovered on the official harness —
+V4's enabler did its job. The two remaining reds are exactly the
+fastpath-residue set: sadd sits 0.1 pp under the floor (edge), zadd is a real
+−15 %. Per the methodology (Round 4+), zadd's distance calls for a fresh
+decomposition, not another polish round; the direction choice (accept / widen
+claims / class redesign — fastpath-residue RFC) is the owner's.
+
+**Bottom line: alloc default-ON stays blocked on sadd/zadd; the hash blocker
+is gone.**
+
+Measurement-hygiene note for the record: three consecutive REFUSED runs before
+this one were observer effects — (a) a zombie watcher pair from an earlier
+session (mutually kept alive: each saw the other's `perfgate-median.sh`
+cmdline in its `pgrep -f` loop condition) spawning `cp .../captmp/pgmed-*`
+every 5 s whose argv contains "kevybench" ⊃ "kevy"; (b) my own status-polling
+ssh chains (`sudo -iu kevybench …` — the gate's exclusion only matches
+`sudo -u`). Fix: poll a /tmp path with a kevy-free argv and never query the
+bench account while a gate is running.
+
 ## Honest disposition
 
 Correct, all gates green, ~3 % RSS win, and — measured under the CPU-bound
