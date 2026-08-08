@@ -440,7 +440,10 @@ impl<C: Commands> Shard<C> {
             // when the peer drains).
             woke_from_park = false;
             let has_backlog = self.backlog.iter().any(|b| !b.is_empty());
-            if !io_work && did_inbound == 0 && !has_backlog {
+            // A closing conn's recv is not re-armed → no further CQE;
+            // parking would strand its fd half-open, so keep spinning.
+            let reap_pending = !self.closing_uring_conns.is_empty();
+            if !io_work && did_inbound == 0 && !has_backlog && !reap_pending {
                 // Forwarded requests outstanding ⇒ replies land
                 // within ~one cross-shard RTT — stay in the spin rung
                 // rather than paying a kernel sleep + wake per reply
