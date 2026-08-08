@@ -73,6 +73,33 @@ gap, which pointed at the vs-ref comparison itself.
   redesign scoped to the set fast path. B (widen claims 1-3 %) remains
   insufficient. Owner's call.
 
+## ERRATUM (same day, dual-candidate perfgate adjudication)
+
+Conclusion 3's "board-wide ~4-5 pp sag" filing is **withdrawn — it was my own
+metric mismatch**: the −2.9~+3.3 verification account was the DEFAULT build,
+the P2 table's −5~−8 PASS angles were the ALLOC-ON build. Subtracting tables
+from two different builds manufactured a sag that does not exist. The
+adjudication (perfgate-median n=3 on the default build, both PRE `ca7696e2`
+and TIP `301fed75` candidates, interleaved rebuilt ref):
+
+- **TIP default build: 12/12 PASS, −2.9~+4.2 — zadd −0.1 %, sadd +4.1 %.**
+- PRE: 12/12 PASS, −1.6~+2.7. PRE ≈ TIP → **develop carries no regression**
+  (the three uring fixes also cleared a direct 5-build hunt: zadd flat
+  1.15-1.22 M across all boundaries).
+- The vs-ref readings are trustworthy (ref is rebuilt and interleaved per
+  run; the box-drift hypothesis is dead).
+
+Conclusion 1 must be **narrowed, not withdrawn**: zadd's alloc tax is
+**shape-dependent** — ~−3.2 % in the 2-shard single-hot-key cell (this doc's
+A/B) but ~−13.4 % in the official legacy_8sh shape (default −0.1 % vs
+alloc-ON −13.5 % against the same ref). In 8sh the fixed zadd key makes 1
+owner + 7 forwarding shards, so the 8sh-only tax points at the cross-shard
+forwarding path's allocations (envelope/inbox), NOT the zset tree walk. Note
+the envelope-pooling refutation (B', 0.5 % of allocs) was measured in a
+non-forwarding-dense shape and does not transfer. If option C is taken, the
+attack surface to decompose first is the forwarding envelope path under 8sh,
+second the set fast path (sadd's tax is shape-stable: −16.5 % / −13.8 %).
+
 ## Measurement lessons (this round)
 
 - `ps` TIME cannot identify the owner among busy-poll shards — sample all
