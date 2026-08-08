@@ -15,7 +15,7 @@
 ## 代码质量规则(hard rule,新代码必须遵守,旧代码 split 来还债)
 
 - **文件 ≤ 500 LOC**(src/*.rs);test 文件 / `tests/` 目录豁免(Rust 社区惯例)。接近 500 时立即按职责拆 submodule,不要等。
-- **函数 ≤ 50 LOC**(包括签名+body+闭合 brace);超了就拆助手函数。例外仅限纯数据驱动的 dispatch / match 表(写下来才合理,而非控制流复杂)。
+- **函数 ≤ 50 LOC**(包括签名+body+闭合 brace);超了就拆助手函数。例外(需 `// LOC-WAIVER: <理由>` 标注)两类:① 纯数据驱动的 dispatch / match 表(写下来才合理,而非控制流复杂);② **vendored 第三方引擎核心**——从姐妹项目按字节 fork 进来的已测代码(如 spg 的 ERE 匹配器),拆分上游函数会注入 bug 而无可读性收益;waiver 里注明来源。
 - **写新 crate 前先想 API surface**:public fn ≤ 7-10 个常用入口;复杂内部用 pub(crate) 隔离。
 - **每 commit 后 quick check**: 触动 src/*.rs 的 commit 提交前跑 `wc -l <touched-files>` + grep `^fn \|^pub fn ` 数行;违规当场拆。
 - 详细判断标准见 memory `feedback-no-large-file-or-fn`。

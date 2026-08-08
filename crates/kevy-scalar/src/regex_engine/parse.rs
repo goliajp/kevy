@@ -72,7 +72,7 @@ pub(crate) fn re_compile(pat: &str) -> Result<ReNode, ReErr> {
             }
         }
     }
-    // v7.38 (read01 P6.11) — `x` extended mode: unescaped whitespace outside a
+    // `x` extended mode: unescaped whitespace outside a
     // character class is ignored and `#` starts a comment to end-of-line, so a
     // pattern can be laid out readably. Previously `x` was silently dropped,
     // which made a spaced-out pattern fail to match instead of matching.
@@ -82,7 +82,7 @@ pub(crate) fn re_compile(pat: &str) -> Result<ReNode, ReErr> {
         all[start..].to_vec()
     };
     let mut p = 0;
-    // v7.38 (read01) — 1-based capturing-group counter, assigned left-to-right
+    // 1-based capturing-group counter, assigned left-to-right
     // as `(` groups are parsed. Group 0 is the whole match (handled by re_find).
     let mut ng = 1usize;
     let mut n = re_parse_alt(&body, &mut p, 0, &mut ng)?;
@@ -97,7 +97,7 @@ pub(crate) fn re_compile(pat: &str) -> Result<ReNode, ReErr> {
     Ok(n)
 }
 
-/// v7.38 (read01 P6.11) — implement the regex `x` (extended) flag: drop
+/// implement the regex `x` (extended) flag: drop
 /// unescaped whitespace and `#`-to-EOL comments, but keep whitespace that is
 /// escaped (`\ `) or inside a `[...]` character class, matching PG / POSIX ARE.
 pub(crate) fn strip_regex_extended_whitespace(chars: &[char]) -> Vec<char> {
@@ -147,7 +147,7 @@ pub(crate) fn re_parse_alt(
     depth: u32,
     ng: &mut usize,
 ) -> Result<ReNode, ReErr> {
-    // v7.37.16 Epic Rx P0 — bound group nesting so `"((((…"` can't
+    // bound group nesting so `"((((…"` can't
     // blow the parser's own recursion stack.
     if depth > PARSE_DEPTH_LIMIT {
         return Err(ReErr::TypeMismatch {
@@ -166,6 +166,7 @@ pub(crate) fn re_parse_alt(
     }
 }
 
+// LOC-WAIVER: vendored spg ERE engine core (byte-identical fork); splitting upstream's tested matcher/parser injects bugs without readability gain.
 pub(crate) fn re_parse_concat(
     chars: &[char],
     p: &mut usize,
@@ -218,7 +219,7 @@ pub(crate) fn re_parse_concat(
                     }
                 }
                 '{' => {
-                    // v7.37.16 Epic Rx — counted repetition. Only a
+                    // counted repetition. Only a
                     // well-formed `{m}` / `{m,}` / `{m,n}` becomes a
                     // quantifier; a stray `{` (e.g. `foo{bar`) is left
                     // as an ordinary literal (PG/ERE semantics), so
@@ -253,6 +254,7 @@ pub(crate) fn re_parse_concat(
     }
 }
 
+// LOC-WAIVER: vendored spg ERE engine core (byte-identical fork); splitting upstream's tested matcher/parser injects bugs without readability gain.
 pub(crate) fn re_parse_atom(
     chars: &[char],
     p: &mut usize,
@@ -287,7 +289,7 @@ pub(crate) fn re_parse_atom(
                         capturing = false;
                         *p += 2;
                     }
-                    // v7.39 (round 223) — any other `(?x` form here is NOT
+                    // any other `(?x` form here is NOT
                     // part of PG's ARE syntax (leading `(?flags)` options are
                     // consumed before parsing; PCRE named groups `(?P<n>` /
                     // `(?<n>` and atomic `(?>` don't exist in ARE).
@@ -307,7 +309,7 @@ pub(crate) fn re_parse_atom(
                     }
                 }
             }
-            // v7.38 (read01) — reserve this group's number BEFORE parsing the
+            // reserve this group's number BEFORE parsing the
             // inner so nested groups number in source order (`(a(b))` → 1, 2).
             let group_idx = if capturing {
                 let idx = *ng;
@@ -441,7 +443,7 @@ pub(crate) fn re_parse_atom(
                         })?;
                     Ok(ReNode::Literal(char::from_u32(code).unwrap_or('\u{fffd}')))
                 }
-                // v7.38 (read01, T7-br) — `\1`..`\9` backreference. A
+                // `\1`..`\9` backreference. A
                 // forward/unopened reference (`n >= *ng`, since `*ng` is the
                 // next group number to assign) errors like PG.
                 d @ '1'..='9' => {

@@ -71,7 +71,7 @@ pub(crate) const MATCH_DEPTH_LIMIT: u32 = 500;
 /// engine will spend on a single `re_find` invocation before it aborts
 /// with a clean "too complex" error.
 ///
-/// v7.37.16 Epic Rx P0 — this is the TIME bound, independent of and
+/// this is the TIME bound, independent of and
 /// complementary to `MATCH_DEPTH_LIMIT` (the STACK bound). Catastrophic
 /// backtracking (`(a+)+$`, `(a|aa)*b`, …) recurses only shallowly but
 /// explores exponentially many paths, so a depth cap alone leaves the
@@ -90,7 +90,7 @@ pub(crate) const MATCH_DEPTH_LIMIT: u32 = 500;
 /// classic ReDoS pattern trips this bound quickly rather than hanging.
 pub(crate) const MATCH_STEP_LIMIT: u64 = 10_000_000;
 
-/// v7.37.16 Epic Rx P2-⑧ (`checkmatchall`) — the largest input length
+/// the largest input length
 /// for which the dot-repetition length short-circuit is engaged.
 ///
 /// The short-circuit replaces the backtracker for a whole-string match
@@ -151,7 +151,7 @@ pub(crate) enum ReNode {
     /// == true) succeeds iff it does NOT. Either way it consumes no input. Runs
     /// under the same ReDoS step/depth budget as every other node.
     Lookahead { negative: bool, inner: Box<ReNode> },
-    /// v7.38 (read01) — a capturing group `(inner)`. `idx` is the 1-based
+    /// a capturing group `(inner)`. `idx` is the 1-based
     /// group number (assigned left-to-right at parse time). Matching is
     /// transparent — it matches exactly what `inner` matches — but the matcher
     /// additionally records the `[start, end)` span it spanned into the
@@ -159,7 +159,7 @@ pub(crate) enum ReNode {
     /// substring(from pattern) can read the sub-match. `(?:…)` non-capturing
     /// groups and lookarounds are NOT wrapped in this node.
     Group { idx: usize, inner: Box<ReNode> },
-    /// v7.38 (read01, T7-br) — in-pattern backreference `\1`..`\9`: matches the
+    /// in-pattern backreference `\1`..`\9`: matches the
     /// literal text captured by group `idx`. `ci` is set by `fold_case` for the
     /// `~*` case-insensitive path (the comparison folds both sides).
     Backref { idx: usize, ci: bool },
@@ -208,7 +208,7 @@ pub(crate) const CAP_MATCH_DEPTH_LIMIT: u32 = 300;
 
 pub(crate) type Caps = Vec<Option<(usize, usize)>>;
 
-/// v7.38 — a match span `(start, end)` plus its capture groups.
+/// a match span `(start, end)` plus its capture groups.
 pub(crate) type MatchWithCaps = ((usize, usize), Caps);
 /// Undo log: `(group index, previous value)` recorded before each write, so a
 /// failed backtrack branch restores exactly the captures it overwrote.

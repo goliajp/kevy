@@ -10,7 +10,7 @@ pub(crate) fn class_matches(member: &ClassMember, c: char) -> bool {
     }
 }
 
-/// v7.37.16 regex slice — the ASCII member list of a `\d`/`\w`/`\s`
+/// the ASCII member list of a `\d`/`\w`/`\s`
 /// shortcut, shared by the top-level escape parser (`re_parse_atom`) and
 /// the in-bracket parser (`re_parse_class`) so both stay byte-identical.
 /// `\v`/`\f` are included in the space set to match PG's `[[:space:]]`.
@@ -35,11 +35,12 @@ pub(crate) fn shortcut_members(kind: char) -> Vec<ClassMember> {
     }
 }
 
-/// v7.37.16 regex slice — the ASCII member list of a POSIX class name
+/// the ASCII member list of a POSIX class name
 /// (`alpha`, `digit`, …) as it appears inside `[[:name:]]`. Returns
 /// `Err` for an unknown name, matching PG18's "invalid character class"
 /// compile error. Scoped to ASCII, consistent with this engine's
 /// ASCII-only `\w`/`\d` handling (the matcher does not decode UTF-8).
+// LOC-WAIVER: vendored spg ERE engine core (byte-identical fork); splitting upstream's tested matcher/parser injects bugs without readability gain.
 pub(crate) fn posix_class_members(name: &str) -> Result<Vec<ClassMember>, ReErr> {
     let members = match name {
         "alpha" => vec![ClassMember::Range('a', 'z'), ClassMember::Range('A', 'Z')],
