@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>IDX.VERIFY — kevy command reference</title>
-<meta name="description" content="IDX.VERIFY — Verify an index: re-read every held entry against its row and report entries/bytes/coerce_failures/duplicates/drift/checked. O(N) per shard — every held entry is re-read against its row and re-coerced, which is the point: it makes index drift falsifiable rather than merely asserted">
+<meta name="description" content="IDX.VERIFY — Verify an index. Scalar kinds re-read every held entry against its row and report entries/bytes/coerce_failures/duplicates/drift/checked/missing (both audit directions); agg/text/ann answer their own sizing vocabulary (rows|docs|vectors, bytes, ...) and carry no row-keyed audit. O(N) per shard — every held entry is re-read against its row and re-coerced, which is the point: it makes index drift falsifiable rather than merely asserted">
 <link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
 <link rel="stylesheet" href="../../../assets/docs.css?v=d4b38be8">
 <script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
@@ -50,7 +50,7 @@
     <nav class="crumb"><a href="../">Commands</a> <span>/</span> <span>Indexes</span> <span>/</span> <b>IDX.VERIFY</b></nav>
 
     <h1 class="cmd">IDX.VERIFY</h1>
-    <p class="lede">Verify an index: re-read every held entry against its row and report entries/bytes/coerce_failures/duplicates/drift/checked.</p>
+    <p class="lede">Verify an index. Scalar kinds re-read every held entry against its row and report entries/bytes/coerce_failures/duplicates/drift/checked/missing (both audit directions); agg/text/ann answer their own sizing vocabulary (rows|docs|vectors, bytes, ...) and carry no row-keyed audit.</p>
 
     <pre class="syntax"><code>IDX.VERIFY name</code></pre>
 
