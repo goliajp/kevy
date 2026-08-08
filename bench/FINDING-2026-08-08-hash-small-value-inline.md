@@ -79,6 +79,43 @@ unaffected by the hot-representation change.
 3. **crashgate + repligate** — SmallBytes value round-trips through AOF rewrite,
    snapshot payload, and tier demote/promote.
 
+## Box validation (lx64, f42f4bf1 vs develop-tip 0c10627e)
+
+All measured on the box; DEV = develop-tip, V4 = DEV + this change (only diff).
+
+**Correctness — all green:**
+- workspace 2470 tests / 237 suites green (local).
+- repligate PASS (SmallBytes hash value round-trips through replication).
+- memgate PASS (16 B→96, 1024 B→1120, cold-key→96 bytes/entry, within ±20 %
+  band — the string keyspace formulas the hash change doesn't touch).
+- crashgate PASS (payload-flip open + integrity: corrupt value detected, not
+  replayed — the new value format survives the AOF/snapshot crash path).
+
+**Throughput — neutral (sub-noise):** HSET large-N median-of-5 (NH=12M, escapes
+redis-benchmark's 250 ms quantization) V4 479,942 vs DEV 470,311 = +2.0 %, but
+the SADD control (untouched code) swung −2.1 % → box noise band ±2-3 %. The HSET
+gain is inside it. This is the §8 pattern: a per-op allocation reduction gets
+pipeline-overlapped / kernel-TCP-swallowed at the throughput level.
+
+**Memory — modest real win:** one giant hash (redis-benchmark HSET uses a fixed
+key + random field → ~100k fields, 8 B values, dbsize=1), after 12M ops:
+- RSS: DEV +143.5 MB vs V4 +138.8 MB → V4 saves ~4.6 MB (**~3.2 %**).
+- used_memory: DEV 4.00 MB → V4 3.20 MB = **−800 KB = exactly 100k × 8 B**, i.e.
+  the inline values now charge 0 heap — the accounting shift works precisely and
+  memgate re-accepts it.
+
+## Honest disposition
+
+Correct, throughput-neutral, ~3 % RSS win, all gates green — a keepable memory
+efficiency improvement at zero throughput cost, but NOT the dramatic
+collection-tax recovery the hypothesis reached for. **V4's actual purpose (does
+this let alloc-ON clear P2 — not regress collections vs the last release)
+remains unmeasured**: that needs an alloc-ON build A/B (kevy-alloc feature on,
+V4 vs last-release-equivalent). The glibc throughput being neutral suggests the
+alloc-ON recovery, if any, is also modest — but it is the logical next
+measurement before claiming V4 is unblocked. Merge decision + the alloc-ON
+follow-up are open for the owner.
+
 ## Local status
 
 - workspace build clean; locgate PASS (extracted `heap_hash_set` helper to keep
