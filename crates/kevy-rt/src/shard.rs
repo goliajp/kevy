@@ -292,6 +292,8 @@ pub(crate) struct Shard<C: Commands> {
     pub(crate) arms_accept: bool,
     /// Per-shard cap (`max_clients / nshards`). `0` = unlimited.
     pub(crate) max_clients_per_shard: usize,
+    /// [`crate::CLIENT_INPUT_HARD_LIMIT`], after the debug-env override.
+    pub(crate) input_hard_limit: usize,
     /// Accumulator for `rejected_connections` (INFO clients).
     pub(crate) rejected_connections: u64,
     /// SLOWLOG ring + threshold (see [`crate::exec_slowlog::SlowlogState`]).

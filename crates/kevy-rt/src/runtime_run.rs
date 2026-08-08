@@ -364,6 +364,10 @@ impl<C: Commands> Runtime<C> {
                     self.max_clients.div_ceil(n)
                 },
                 rejected_connections: 0,
+                input_hard_limit: std::env::var("KEVY_DEBUG_INPUT_LIMIT")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(crate::CLIENT_INPUT_HARD_LIMIT),
                 // `Poller::wait` takes the timeout as `i32` (POSIX
                 // poll/epoll convention). The config knob is `u32` —
                 // we clamp to i32::MAX, far above any sane park-timeout.

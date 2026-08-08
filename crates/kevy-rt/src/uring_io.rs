@@ -260,8 +260,21 @@ impl<C: Commands> Shard<C> {
         if outcome.conn_gone {
             return;
         }
+        let mut over_input = false;
         if let Some(c) = self.conns.get_mut(&cid) {
+            // The query-buffer guard (see CLIENT_INPUT_HARD_LIMIT) —
+            // checked at the restore point, where the accumulated
+            // unparsed residue is what survives the batch.
+            over_input = input_buf.len() > self.input_hard_limit;
             c.input = input_buf;
+        }
+        if over_input {
+            eprintln!(
+                "kevy: shard {} closing conn {cid}: query buffer exceeded {} bytes",
+                self.id, self.input_hard_limit,
+            );
+            self.uring_mark_closing(cid, io);
+            return;
         }
         if outcome.protocol_error {
             self.protocol_error(cid);
