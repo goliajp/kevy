@@ -163,6 +163,15 @@ mod uring_write_linearize;
 /// `Shard::enforce_output_limit` / `uring_enforce_output_limit`.
 pub(crate) const CLIENT_OUTPUT_HARD_LIMIT: usize = 512 * 1024 * 1024;
 
+/// Cap on a conn's ACCUMULATED unparsed input (Redis's
+/// client-query-buffer-limit, same 1GB default): a client streaming an
+/// incomplete-but-valid giant frame (1M declared args × 512MB bulks)
+/// would otherwise grow `conn.input` without bound and OOM the shard.
+/// Overridable via `KEVY_DEBUG_INPUT_LIMIT` (a debug surface, like
+/// `KEVY_DEBUG_STALL_MS`) so the guard is e2e-testable without
+/// streaming a real gigabyte.
+pub(crate) const CLIENT_INPUT_HARD_LIMIT: usize = 1024 * 1024 * 1024;
+
 pub use blocked::{BlockHint, BlockKind};
 pub use lua_wake_bridge::push_lua_wake_key;
 pub use reduce::shard_of as shard_of_key;

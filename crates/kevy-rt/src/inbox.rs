@@ -117,7 +117,18 @@ impl<C: Commands> Shard<C> {
                     conn.closing = true;
                     break;
                 }
-                Ok(n) => conn.input.extend_from_slice(&self.read_buf[..n]),
+                Ok(n) => {
+                    conn.input.extend_from_slice(&self.read_buf[..n]);
+                    // The query-buffer guard (see CLIENT_INPUT_HARD_LIMIT).
+                    if conn.input.len() > self.input_hard_limit {
+                        eprintln!(
+                            "kevy: shard {} closing conn {conn_id}: query buffer exceeded {} bytes",
+                            self.id, self.input_hard_limit,
+                        );
+                        conn.closing = true;
+                        break;
+                    }
+                }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {} // retry the read
                 Err(_) => {
