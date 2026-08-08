@@ -1520,3 +1520,66 @@ PAGES["benchmarks"] = {
         },
     ],
 }
+
+PAGES["capacity"] = {
+    "title": "Capacity calculator — kevy",
+    "desc": "How much data one kevy process serves from a fixed RAM budget with tiering: the measured formula, interactive.",
+    "foot": "the formula is gated at ±20% against measured RSS",
+    "blocks": [
+        {
+            "t": "hero",
+            "eyebrow": "Capacity",
+            "h1": "How much data fits?",
+            "lede": (
+                "With <a href=\"~/docs/tiering/\">tiering</a>, kevy serves a keyspace "
+                "bigger than RAM: hot values stay resident, cold values spill to disk, "
+                "and every key keeps a resident stub. The ceiling is set by one "
+                "measured number — the ~96 B per-entry floor — and this page is that "
+                "formula, interactive. <b>The answer depends on your value size</b>; "
+                "no honest capacity claim fits on a sticker."
+            ),
+        },
+        {
+            "t": "calc",
+            "h2": "Your numbers",
+            "intro": (
+                "max data:RAM ≈ value_size / (96 B + key heap). Keys ≤ 22 B live "
+                "inline and add nothing; longer keys add their own bytes. Values "
+                "under 64 B never spill — the stub would be as big as the value."
+            ),
+            "fields": {
+                "value": "Typical value size (bytes)",
+                "key": "Typical key size (bytes)",
+                "budget": "RAM budget (GB)",
+                "ratio": "data:RAM ceiling",
+                "served": "data served from that budget",
+                "below": "Values under 64 B never tier — the stub is as big as the value, so the ratio stays 1×. Capacity is your RAM.",
+                "note": "The model, not a promise: real ratios land within the gate's ±20% band, and the measured rows below sit slightly under the model.",
+            },
+        },
+        {
+            "t": "table",
+            "h2": "Measured, same budget and keys",
+            "intro": "Only the value size varies. Full runs in the repository's capacity findings.",
+            "head": ["Value size", "Model predicts", "Measured data:RAM"],
+            "rows": [
+                ["256 B", "2.67×", "2.65×"],
+                ["1 KiB", "10.7×", "10.43×"],
+                ["4 KiB", "42.7×", "39.2× — full scale: 80 GB served on a 2 GB budget"],
+            ],
+        },
+        {
+            "t": "callout",
+            "kind": "info",
+            "title": "Where the 96 B goes",
+            "body": (
+                "It is the keyspace entry itself — the inline key cell plus the "
+                "entry header — which every key pays whether tiered or not; the "
+                "cold stub adds no heap. The floor and the spill threshold are "
+                "gated in CI (<code>memgate</code>, ±20%), so this page cannot "
+                "drift from the engine without a red build. Details: "
+                "<a href=\"~/docs/tiering/\">tiering</a>."
+            ),
+        },
+    ],
+}

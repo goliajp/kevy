@@ -259,8 +259,67 @@ def tabs(b, up, L=""):
 </section>"""
 
 
+def calc(b, up, L=""):
+    """The capacity calculator: the tiering ceiling formula, interactive.
+
+    The formula is the measured one (docs/tiering.md, memgate-gated ±20%):
+    max data:RAM ≈ value_size / (96 B + key heap), where keys ≤ 22 B live
+    inline (0 heap) and the 64 B spill threshold marks where tiering starts
+    paying at all. The JS below is that one formula and nothing else — the
+    page must not be able to say something the gate does not."""
+    f = b["fields"]  # labels: value, key, budget, ratio, served, below, note
+    return f"""<section class="band{tone(b)}"{anchor(b)}>
+  <div class="sec-h">
+    {f'<p class="eyebrow">{e(b["eyebrow"])}</p>' if b.get("eyebrow") else ""}
+    <h2>{b["h2"]}</h2>
+    {f'<p class="sec-lede">{b["intro"]}</p>' if b.get("intro") else ""}
+  </div>
+  <style>
+    .capcalc {{max-width: 34rem; margin: 0 auto}}
+    .capcalc label {{display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; margin: .6rem 0; font-size: .95rem}}
+    .capcalc input {{width: 7.5rem; padding: .35rem .5rem; border: 1px solid var(--edge-hi); border-radius: .4rem; background: transparent; color: inherit; font: inherit; text-align: right}}
+    .capcalc-out {{margin-top: 1.1rem; padding: .9rem 1.1rem; border: 1px solid var(--edge-hi); border-radius: .6rem}}
+    .capcalc-out b {{font-size: 1.35rem}}
+    .capcalc-warn {{display: none; margin-top: .6rem; font-size: .9rem; opacity: .85}}
+  </style>
+  <div class="capcalc">
+    <label>{e(f["value"])}<input id="cc-v" type="number" min="1" value="1024" inputmode="numeric"></label>
+    <label>{e(f["key"])}<input id="cc-k" type="number" min="1" value="16" inputmode="numeric"></label>
+    <label>{e(f["budget"])}<input id="cc-b" type="number" min="0.1" step="0.1" value="2" inputmode="decimal"></label>
+    <div class="capcalc-out">
+      <div>{e(f["ratio"])} <b id="cc-r">—</b></div>
+      <div>{e(f["served"])} <b id="cc-d">—</b></div>
+      <p class="capcalc-warn" id="cc-w">{e(f["below"])}</p>
+    </div>
+    <p class="tbl-note">{f["note"]}</p>
+  </div>
+  <script>
+  (function () {{
+    var v = document.getElementById("cc-v"), k = document.getElementById("cc-k"),
+        b = document.getElementById("cc-b"), r = document.getElementById("cc-r"),
+        d = document.getElementById("cc-d"), w = document.getElementById("cc-w");
+    function fmt(gb) {{
+      return gb >= 1024 ? (gb / 1024).toFixed(1) + " TB" : gb.toFixed(1) + " GB";
+    }}
+    function go() {{
+      var val = +v.value || 0, key = +k.value || 0, bud = +b.value || 0;
+      var floor = 96 + (key > 22 ? key : 0);
+      var below = val < 64;
+      var ratio = below ? 1 : val / floor;
+      w.style.display = below ? "block" : "none";
+      r.textContent = ratio.toFixed(ratio >= 10 ? 0 : 1) + "\\u00d7";
+      d.textContent = fmt(bud * ratio);
+    }}
+    [v, k, b].forEach(function (el) {{ el.addEventListener("input", go); }});
+    go();
+  }})();
+  </script>
+</section>"""
+
+
 BLOCKS = {
     "hero": hero,
+    "calc": calc,
     "bars": bars,
     "tabs": tabs,
     "prose": prose,
