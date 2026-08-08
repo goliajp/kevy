@@ -4,8 +4,8 @@
 //! both under the 500-LOC house rule.
 
 use super::*;
-use std::borrow::Cow;
 use crate::tests_aof::temp_aof;
+use std::borrow::Cow;
 use std::time::Duration;
 
 // ───────────── AOF rewrite (Wave 2 #3) ─────────────
@@ -93,14 +93,21 @@ pub(crate) fn apply_for_test(store: &mut Store, args: &Argv) {
             let added: u64 = std::str::from_utf8(&args[4]).unwrap().parse().unwrap();
             assert_eq!(args[5].to_ascii_uppercase(), b"MAXDELETEDID");
             let mxd = kevy_store::parse_explicit_id(&args[6], false).unwrap();
-            store.xsetid(&args[1], last, Some(added), Some(mxd)).unwrap();
+            store
+                .xsetid(&args[1], last, Some(added), Some(mxd))
+                .unwrap();
         }
         b"XGROUP" => match args[1].to_ascii_uppercase().as_slice() {
             b"CREATE" => {
                 assert_eq!(args[5].to_ascii_uppercase(), b"MKSTREAM");
                 let at = kevy_store::parse_explicit_id(&args[4], false).unwrap();
                 store
-                    .xgroup_create(&args[2], &args[3], kevy_store::GroupCreateMode::AtId(at), true)
+                    .xgroup_create(
+                        &args[2],
+                        &args[3],
+                        kevy_store::GroupCreateMode::AtId(at),
+                        true,
+                    )
                     .unwrap();
             }
             b"CREATECONSUMER" => {
@@ -126,15 +133,18 @@ pub(crate) fn apply_for_test(store: &mut Store, args: &Argv) {
                 min_idle_ms: 0,
                 idle_override_ms: None,
                 time_override_ms: Some(std::str::from_utf8(&args[7]).unwrap().parse().unwrap()),
-                retrycount_override: Some(
-                    std::str::from_utf8(&args[9]).unwrap().parse().unwrap(),
-                ),
+                retrycount_override: Some(std::str::from_utf8(&args[9]).unwrap().parse().unwrap()),
                 force: true,
                 justid: true,
             };
-            store.xclaim(&args[1], &args[2], &args[3], &[id], &opts, 0).unwrap();
+            store
+                .xclaim(&args[1], &args[2], &args[3], &[id], &opts, 0)
+                .unwrap();
         }
-        other => panic!("unexpected verb in AOF rewrite: {:?}", String::from_utf8_lossy(other)),
+        other => panic!(
+            "unexpected verb in AOF rewrite: {:?}",
+            String::from_utf8_lossy(other)
+        ),
     }
 }
 
@@ -145,11 +155,21 @@ fn rewrite_reconstructs_full_keyspace() {
     let mut src = Store::new();
     src.set(b"str", b"hello".to_vec(), None, false, false);
     src.set(b"binary", vec![0u8, 1, 2, 255], None, false, false);
-    src.hset(b"hash", &[(b"f1".as_slice(), b"v1".as_slice()), (b"f2".as_slice(), b"v2".as_slice())])
+    src.hset(
+        b"hash",
+        &[
+            (b"f1".as_slice(), b"v1".as_slice()),
+            (b"f2".as_slice(), b"v2".as_slice()),
+        ],
+    )
+    .unwrap();
+    src.rpush(
+        b"list",
+        &[b"i1".as_slice(), b"i2".as_slice(), b"i3".as_slice()],
+    )
+    .unwrap();
+    src.sadd(b"set", &[b"m1".as_slice(), b"m2".as_slice()])
         .unwrap();
-    src.rpush(b"list", &[b"i1".as_slice(), b"i2".as_slice(), b"i3".as_slice()])
-        .unwrap();
-    src.sadd(b"set", &[b"m1".as_slice(), b"m2".as_slice()]).unwrap();
     src.zadd(b"zset", &[(1.5, b"a".as_slice()), (2.5, b"b".as_slice())])
         .unwrap();
     src.set(
@@ -174,7 +194,10 @@ fn rewrite_reconstructs_full_keyspace() {
     replay_aof(&path, |args| apply_for_test(&mut dst, &args)).unwrap();
     assert_eq!(dst.dbsize(), 7);
     assert_eq!(dst.get(b"str").unwrap(), Some(Cow::Borrowed(&b"hello"[..])));
-    assert_eq!(dst.get(b"binary").unwrap(), Some(Cow::Borrowed(&[0u8, 1, 2, 255][..])));
+    assert_eq!(
+        dst.get(b"binary").unwrap(),
+        Some(Cow::Borrowed(&[0u8, 1, 2, 255][..]))
+    );
     assert_eq!(dst.hget(b"hash", b"f1").unwrap(), Some(&b"v1"[..]));
     assert_eq!(dst.hget(b"hash", b"f2").unwrap(), Some(&b"v2"[..]));
     assert_eq!(dst.llen(b"list").unwrap(), 3);
@@ -209,11 +232,18 @@ fn rewrite_replaces_old_log_atomically() {
     let stats = aof.rewrite_from(&store).unwrap();
     assert_eq!(stats.keys, 2);
     let new_size = std::fs::metadata(&path).unwrap().len();
-    assert!(new_size < big_size, "rewrite should shrink: {new_size} vs {big_size}");
+    assert!(
+        new_size < big_size,
+        "rewrite should shrink: {new_size} vs {big_size}"
+    );
 
     // Step 3: appending after rewrite lands in the new file.
-    aof.append(&Argv::from(vec![b"SET".to_vec(), b"third".to_vec(), b"v".to_vec()]))
-        .unwrap();
+    aof.append(&Argv::from(vec![
+        b"SET".to_vec(),
+        b"third".to_vec(),
+        b"v".to_vec(),
+    ]))
+    .unwrap();
     drop(aof);
 
     let mut dst = Store::new();
@@ -228,12 +258,20 @@ fn append_bumps_size_estimate() {
     let mut aof = Aof::open(&path, Fsync::No).unwrap();
     // Fresh AOF carries the 9-byte AOF_MAGIC header.
     let base = aof.size_bytes();
-    aof.append(&Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]))
-        .unwrap();
+    aof.append(&Argv::from(vec![
+        b"SET".to_vec(),
+        b"k".to_vec(),
+        b"v".to_vec(),
+    ]))
+    .unwrap();
     let after_one = aof.size_bytes();
     assert!(after_one > base);
-    aof.append(&Argv::from(vec![b"SET".to_vec(), b"k2".to_vec(), b"v".to_vec()]))
-        .unwrap();
+    aof.append(&Argv::from(vec![
+        b"SET".to_vec(),
+        b"k2".to_vec(),
+        b"v".to_vec(),
+    ]))
+    .unwrap();
     assert!(aof.size_bytes() > after_one);
     let _ = std::fs::remove_file(&path);
 }
@@ -243,8 +281,12 @@ fn rewrite_resets_size_anchor() {
     let path = temp_aof("size-anchor");
     let mut aof = Aof::open(&path, Fsync::Always).unwrap();
     for _ in 0..10 {
-        aof.append(&Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]))
-            .unwrap();
+        aof.append(&Argv::from(vec![
+            b"SET".to_vec(),
+            b"k".to_vec(),
+            b"v".to_vec(),
+        ]))
+        .unwrap();
     }
     assert!(aof.size_bytes() > aof.size_at_last_rewrite());
     let store = Store::new();
@@ -295,8 +337,16 @@ fn concurrent_rewrite_captures_writes_during_spill() {
     let mut dst = Store::new();
     replay_aof(&path, |a| apply_for_test(&mut dst, &a)).unwrap();
     assert_eq!(dst.get(b"a").unwrap(), None, "DEL during spill must apply");
-    assert_eq!(dst.get(b"b").unwrap(), Some(Cow::Borrowed(&b"22"[..])), "overwrite must win");
-    assert_eq!(dst.get(b"c").unwrap(), Some(Cow::Borrowed(&b"3"[..])), "new key must survive");
+    assert_eq!(
+        dst.get(b"b").unwrap(),
+        Some(Cow::Borrowed(&b"22"[..])),
+        "overwrite must win"
+    );
+    assert_eq!(
+        dst.get(b"c").unwrap(),
+        Some(Cow::Borrowed(&b"3"[..])),
+        "new key must survive"
+    );
     let _ = std::fs::remove_file(&path);
 }
 
@@ -313,12 +363,7 @@ fn argv(parts: &[&[u8]]) -> Argv {
 fn rewrite_reconstructs_stream_groups() {
     use kevy_store::{GroupCreateMode, ReadGroupId, StreamId, XAddIdSpec};
     let id = |ms, seq| StreamId { ms, seq };
-    let f = |k: &str| {
-        (
-            k.as_bytes().to_vec(),
-            vec![(b"f".to_vec(), b"v".to_vec())],
-        )
-    };
+    let f = |k: &str| (k.as_bytes().to_vec(), vec![(b"f".to_vec(), b"v".to_vec())]);
     let path = temp_aof("rewrite-groups");
 
     let mut src = Store::new();
@@ -326,25 +371,33 @@ fn rewrite_reconstructs_stream_groups() {
     // then 2-1 deleted → tombstone PEL row.
     for ms in [1u64, 2, 3] {
         let (k, fields) = f("st");
-        src.xadd(&k, XAddIdSpec::Explicit(id(ms, 1)), fields, false, 0).unwrap();
+        src.xadd(&k, XAddIdSpec::Explicit(id(ms, 1)), fields, false, 0)
+            .unwrap();
     }
-    src.xgroup_create(b"st", b"g", GroupCreateMode::AtId(StreamId::MIN), false).unwrap();
-    src.xreadgroup(b"st", b"g", b"c1", ReadGroupId::New, Some(2), false, 1000).unwrap();
-    src.xreadgroup(b"st", b"g", b"c2", ReadGroupId::New, None, false, 2000).unwrap();
+    src.xgroup_create(b"st", b"g", GroupCreateMode::AtId(StreamId::MIN), false)
+        .unwrap();
+    src.xreadgroup(b"st", b"g", b"c1", ReadGroupId::New, Some(2), false, 1000)
+        .unwrap();
+    src.xreadgroup(b"st", b"g", b"c2", ReadGroupId::New, None, false, 2000)
+        .unwrap();
     src.xdel(b"st", &[id(2, 1)]).unwrap();
     // deltail: groupless, tail entry deleted → scalars need XSETID.
     for ms in [7u64, 8] {
         let (k, fields) = f("deltail");
-        src.xadd(&k, XAddIdSpec::Explicit(id(ms, 1)), fields, false, 0).unwrap();
+        src.xadd(&k, XAddIdSpec::Explicit(id(ms, 1)), fields, false, 0)
+            .unwrap();
     }
     src.xdel(b"deltail", &[id(8, 1)]).unwrap();
     // emptyg: every entry deleted, but a group remains.
     let (k, fields) = f("emptyg");
-    src.xadd(&k, XAddIdSpec::Explicit(id(5, 1)), fields, false, 0).unwrap();
+    src.xadd(&k, XAddIdSpec::Explicit(id(5, 1)), fields, false, 0)
+        .unwrap();
     src.xdel(b"emptyg", &[id(5, 1)]).unwrap();
-    src.xgroup_create(b"emptyg", b"g2", GroupCreateMode::AtId(id(5, 1)), false).unwrap();
+    src.xgroup_create(b"emptyg", b"g2", GroupCreateMode::AtId(id(5, 1)), false)
+        .unwrap();
     // virgin: never had an entry, group created via MKSTREAM.
-    src.xgroup_create(b"virgin", b"g3", GroupCreateMode::AtId(StreamId::MIN), true).unwrap();
+    src.xgroup_create(b"virgin", b"g3", GroupCreateMode::AtId(StreamId::MIN), true)
+        .unwrap();
 
     let mut aof = Aof::open(&path, Fsync::No).unwrap();
     aof.rewrite_from(&src).unwrap();
@@ -357,7 +410,12 @@ fn rewrite_reconstructs_stream_groups() {
     // recreate a PEL row for a deleted entry; documented trade-off).
     let v = dst.stream_view(b"st").unwrap().unwrap();
     assert_eq!(
-        (v.length(), v.last_id(), v.entries_added(), v.max_deleted_id()),
+        (
+            v.length(),
+            v.last_id(),
+            v.entries_added(),
+            v.max_deleted_id()
+        ),
         (2, id(3, 1), 3, id(2, 1))
     );
     let g = v.group(b"g").expect("group must survive the rewrite");
@@ -365,30 +423,50 @@ fn rewrite_reconstructs_stream_groups() {
     assert_eq!(g.pending_count(), 2); // 2-1 tombstone dropped by design
     let p1 = g.pel.get(&id(1, 1)).unwrap();
     assert_eq!(
-        (p1.consumer.as_slice(), p1.delivery_time_ms, p1.delivery_count),
+        (
+            p1.consumer.as_slice(),
+            p1.delivery_time_ms,
+            p1.delivery_count
+        ),
         (&b"c1"[..], 1000, 1)
     );
     let p3 = g.pel.get(&id(3, 1)).unwrap();
     assert_eq!(
-        (p3.consumer.as_slice(), p3.delivery_time_ms, p3.delivery_count),
+        (
+            p3.consumer.as_slice(),
+            p3.delivery_time_ms,
+            p3.delivery_count
+        ),
         (&b"c2"[..], 2000, 1)
     );
-    let mut consumers: Vec<(Vec<u8>, usize)> =
-        g.consumers_iter().map(|(n, c)| (n.to_vec(), c.pending_count())).collect();
+    let mut consumers: Vec<(Vec<u8>, usize)> = g
+        .consumers_iter()
+        .map(|(n, c)| (n.to_vec(), c.pending_count()))
+        .collect();
     consumers.sort();
     assert_eq!(consumers, vec![(b"c1".to_vec(), 1), (b"c2".to_vec(), 1)]);
 
     // deltail — deleted tail must not roll the ID clock back.
     let v = dst.stream_view(b"deltail").unwrap().unwrap();
     assert_eq!(
-        (v.length(), v.last_id(), v.entries_added(), v.max_deleted_id()),
+        (
+            v.length(),
+            v.last_id(),
+            v.entries_added(),
+            v.max_deleted_id()
+        ),
         (1, id(8, 1), 2, id(8, 1))
     );
 
     // emptyg — empty stream with a group used to vanish entirely.
     let v = dst.stream_view(b"emptyg").unwrap().unwrap();
     assert_eq!(
-        (v.length(), v.last_id(), v.entries_added(), v.max_deleted_id()),
+        (
+            v.length(),
+            v.last_id(),
+            v.entries_added(),
+            v.max_deleted_id()
+        ),
         (0, id(5, 1), 1, id(5, 1))
     );
     assert_eq!(v.group(b"g2").unwrap().last_delivered_id(), id(5, 1));
@@ -410,14 +488,23 @@ fn rewrite_reconstructs_stream_groups() {
 fn rewrite_chunks_large_collections() {
     use kevy_store::Store;
     let mut store = Store::new();
-    let items: Vec<Vec<u8>> = (0..200u32).map(|i| format!("item-{i:03}").into_bytes()).collect();
+    let items: Vec<Vec<u8>> = (0..200u32)
+        .map(|i| format!("item-{i:03}").into_bytes())
+        .collect();
     let refs: Vec<&[u8]> = items.iter().map(Vec::as_slice).collect();
     store.rpush(b"biglist", &refs).unwrap();
     let fields: Vec<(Vec<u8>, Vec<u8>)> = (0..100u32)
-        .map(|i| (format!("f{i:03}").into_bytes(), format!("v{i}").into_bytes()))
+        .map(|i| {
+            (
+                format!("f{i:03}").into_bytes(),
+                format!("v{i}").into_bytes(),
+            )
+        })
         .collect();
-    let pairs: Vec<(&[u8], &[u8])> =
-        fields.iter().map(|(f, v)| (f.as_slice(), v.as_slice())).collect();
+    let pairs: Vec<(&[u8], &[u8])> = fields
+        .iter()
+        .map(|(f, v)| (f.as_slice(), v.as_slice()))
+        .collect();
     store.hset(b"bighash", &pairs).unwrap();
 
     let (buf, keys) = crate::dump_store_to_buf(&store, crate::AofFormat::V1);
@@ -459,8 +546,10 @@ fn rewrite_chunks_large_collections() {
     // hgetall answers in table order, which differs by insertion
     // history — compare as sets of pairs.
     let pairs_of = |flat: Vec<Vec<u8>>| {
-        let mut ps: Vec<(Vec<u8>, Vec<u8>)> =
-            flat.chunks(2).map(|fv| (fv[0].clone(), fv[1].clone())).collect();
+        let mut ps: Vec<(Vec<u8>, Vec<u8>)> = flat
+            .chunks(2)
+            .map(|fv| (fv[0].clone(), fv[1].clone()))
+            .collect();
         ps.sort();
         ps
     };
@@ -468,4 +557,47 @@ fn rewrite_chunks_large_collections() {
         pairs_of(back.hgetall(b"bighash").unwrap()),
         pairs_of(store.hgetall(b"bighash").unwrap())
     );
+}
+
+/// The baseline estimator serialises through the same emitters a real
+/// rewrite uses, so on an untiered store its count equals the in-memory
+/// image's exact size — the anchor the short-lived-process fix relies on.
+#[test]
+fn estimate_matches_the_real_dump() {
+    let mut store = Store::new();
+    apply_for_test(&mut store, &argv(&[b"SET", b"k1", b"value-one"]));
+    apply_for_test(
+        &mut store,
+        &argv(&[b"HSET", b"h", b"f1", b"v1", b"f2", b"v2"]),
+    );
+    apply_for_test(&mut store, &argv(&[b"RPUSH", b"l", b"a", b"b", b"c"]));
+    apply_for_test(&mut store, &argv(&[b"SADD", b"s", b"m1", b"m2"]));
+    apply_for_test(&mut store, &argv(&[b"ZADD", b"z", b"1.5", b"member"]));
+    let (buf, _) = crate::dump_store_to_buf(&store, crate::AofFormat::V2);
+    assert_eq!(
+        crate::estimate_rewrite_size(&store),
+        buf.len() as u64,
+        "counting writer must agree with the real serialiser byte-for-byte"
+    );
+}
+
+/// `replay_aof_quiet` returns the same report as the loud path — only
+/// the stderr line differs.
+#[test]
+fn quiet_replay_reports_identically() {
+    let path = temp_aof("quiet-replay");
+    {
+        let mut aof = Aof::open(&path, Fsync::No).unwrap();
+        aof.append(&argv(&[b"SET", b"a", b"1"])).unwrap();
+        aof.append(&argv(&[b"SET", b"b", b"2"])).unwrap();
+    }
+    let mut loud = 0u64;
+    let r1 = crate::replay_aof(&path, |_| loud += 1).unwrap();
+    let mut quiet = 0u64;
+    let r2 = crate::replay_aof_quiet(&path, false, |_| quiet += 1).unwrap();
+    assert_eq!(loud, quiet);
+    assert_eq!(r1.commands, r2.commands);
+    assert_eq!(r1.bytes, r2.bytes);
+    assert_eq!(r1.replayed_bytes, r2.replayed_bytes);
+    std::fs::remove_file(&path).ok();
 }

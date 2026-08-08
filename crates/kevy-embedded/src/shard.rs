@@ -23,8 +23,7 @@ use kevy_hash::KevyHash;
 use kevy_persist::reshard::{ShardLayout, commit_reshard, merge_sources, recover_journal};
 #[cfg(feature = "persist")]
 use kevy_persist::{
-    Aof, Routing, ShardsMeta, layout, layout::infer_files_n, read_shards_meta,
-    write_shards_meta,
+    Aof, Routing, ShardsMeta, layout, layout::infer_files_n, read_shards_meta, write_shards_meta,
 };
 use kevy_store::Store as Keyspace;
 
@@ -108,7 +107,10 @@ fn build_shards_persist(
                 "tiering requires a disk data dir (with_persist); a memory-only store has no cold tier",
             ));
         }
-        return Ok((into_inners(stores, (0..n).map(|_| None).collect()), OpenReport::default()));
+        return Ok((
+            into_inners(stores, (0..n).map(|_| None).collect()),
+            OpenReport::default(),
+        ));
     };
     std::fs::create_dir_all(&dir)?;
     // Complete (or safely discard) a reshard a crash interrupted, before
@@ -122,7 +124,18 @@ fn build_shards_persist(
     enable_tiering(config, &dir, &mut stores)?;
     let mut report = load_or_reshard(&dir, config, n, &mut stores)?;
 
-    let aofs = open_live_aofs(config, &dir, n, &mut report)?;
+    let mut aofs = open_live_aofs(config, &dir, n, &mut report)?;
+    // Anchor each AOF's growth-rule baseline to the live image's estimated
+    // rewrite size. `Aof::open` can only baseline at the file size, which
+    // for a short-lived process re-opening the same directory resets the
+    // growth ratio every run — the log then grows without bound while the
+    // live keyspace stays tiny (a CLI reusing one store directory paid
+    // 100 MB of file for 3 live keys). The estimate is O(keys), zero-alloc.
+    for (aof, store) in aofs.iter_mut().zip(stores.iter()) {
+        if let Some(aof) = aof {
+            aof.anchor_rewrite_baseline(kevy_persist::estimate_rewrite_size(store));
+        }
+    }
     Ok((into_inners(stores, aofs), report))
 }
 
@@ -266,7 +279,13 @@ fn load_or_reshard(
 
     if same_layout {
         let report = load_in_place(dir, config, n, stores)?;
-        write_shards_meta(&meta_path, ShardsMeta { n, routing: Routing::KevyHash })?;
+        write_shards_meta(
+            &meta_path,
+            ShardsMeta {
+                n,
+                routing: Routing::KevyHash,
+            },
+        )?;
         return Ok(report);
     }
     {
@@ -321,7 +340,16 @@ fn reshard(
     let src_n = prev_n.unwrap_or(1);
     let (temp, report) = merge_into_temp(dir, config, src_n)?;
     redistribute(&temp, n, stores);
-    commit_reshard(dir, src_n, ShardsMeta { n, routing: Routing::KevyHash }, stores, &lay)?;
+    commit_reshard(
+        dir,
+        src_n,
+        ShardsMeta {
+            n,
+            routing: Routing::KevyHash,
+        },
+        stores,
+        &lay,
+    )?;
     // The merge scratch vlog is dead once the temp keyspace is gone.
     #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
     if config.tier_budget.is_some() {
@@ -337,7 +365,11 @@ fn reshard(
 /// scratch vlog dir (wiped by `reshard` after redistribution) and the
 /// merge demotes inline exactly like boot replay does.
 #[cfg(feature = "persist")]
-fn merge_into_temp(dir: &Path, config: &Config, src_n: usize) -> io::Result<(Keyspace, OpenReport)> {
+fn merge_into_temp(
+    dir: &Path,
+    config: &Config,
+    src_n: usize,
+) -> io::Result<(Keyspace, OpenReport)> {
     let lay = EmbLayout;
     let mut temp = fresh_keyspace(config);
     #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
