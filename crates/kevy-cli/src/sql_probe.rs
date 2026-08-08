@@ -1,6 +1,6 @@
 //! `sql probe` — replay the funcgate corpus and classify every record.
 //!
-//! Three verdicts per record (RFC 2026-08-08 §4):
+//! Three verdicts per record (the funcgate contract):
 //!   * PASS    — folded, and the output matches the probe expectation;
 //!     `statement error` records pass when folding errors.
 //!   * REFUSED — a named refusal (table statements, unknown function,

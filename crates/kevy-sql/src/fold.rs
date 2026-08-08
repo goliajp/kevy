@@ -1,6 +1,6 @@
 //! `fold` — evaluate a table-free `SELECT` to literal rows.
 //!
-//! The V1 scalar-function face (RFC 2026-08-08): `SELECT f(args…)`
+//! The V1 scalar-function face: `SELECT f(args…)`
 //! with no FROM clause is a pure expression, and the whole probe
 //! corpus' scalar block has exactly that shape. Evaluation delegates
 //! to kevy-scalar; this module owns only the SYNTAX — function-call

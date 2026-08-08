@@ -1,7 +1,7 @@
 //! kevy-scalar — PG-canonical scalar function evaluation.
 //!
-//! The function library behind kevy's sql face (V1 train, RFC
-//! 2026-08-08): `SELECT lower('X')`-shaped constant folding and the
+//! The function library behind kevy's sql face (the V1 scalar
+//! surface): `SELECT lower('X')`-shaped constant folding and the
 //! query-card projection epilogue both call [`eval`]. Nothing here
 //! ever runs inside a serving engine process — evaluation stays in
 //! the sql face by design (Law 3), which is why this crate knows
