@@ -180,6 +180,38 @@ Semantics and limits, honestly:
   `est_rows`, and the plan line for the query you already wrote —
   there is no optimizer choosing among plans.
 
+## Scalar functions
+
+SQL expressions in migrated queries lean on a scalar-function
+vocabulary, and kevy covers it **in the SQL face, not the engine**:
+`kevy-cli sql eval` (and the `sql` toolbox's constant folding) evaluate
+expressions client-side with PostgreSQL-canonical semantics, and the
+serving engine never sees an expression — the same division of labor as
+everywhere else on this page.
+
+Covered today (names matched case-insensitively, PG's fold):
+
+| Family | Functions |
+|---|---|
+| strings | `lower upper initcap length char_length concat concat_ws trim btrim ltrim rtrim replace split_part repeat lpad rpad strpos position left right reverse translate substr substring format` |
+| math | `floor ceil ceiling round trunc mod power pow sqrt sign abs` |
+| NULL family | `coalesce nullif greatest least` |
+| date/time | `extract date_part date_trunc age to_char` (`interval` carries PG's real three-component form: months, days, micros) |
+| regexp (POSIX ERE) | `regexp_replace regexp_matches regexp_split_to_array` |
+| hash | `md5` |
+
+The claims discipline behind that table:
+
+- Semantics are **probe-transcribed from PostgreSQL's own regression
+  corpus** and gated in CI (`funcgate`): a covered function answering
+  differently from PG is a hard failure — the gate's wrong-answer count
+  must be zero. The corpus-coverage ratio is a ratchet (currently
+  ≥ 76 % of subset-foldable probes) that only moves up.
+- Anything outside the table is **refused by name**, never guessed.
+  The same goes for shapes inside a covered function that would change
+  cardinality — `regexp_matches` returning zero or several rows is
+  refused rather than flattened into a wrong scalar.
+
 ## ORDER BY / LIMIT / OFFSET
 
 - A `range` index **is** the order: `IDX.QUERY … RANGE` returns rows

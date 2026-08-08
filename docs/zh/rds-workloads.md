@@ -100,6 +100,26 @@ WATCH + MULTI/EXEC check-then-write           # CAS loop (cookbook recipe 4)
 - **`FIELDS`** 在同一次调用里、在每行所属的 shard 上水合指定的 hash 字段——用一跳替代“索引扫描 + 主键回查”的两跳。它同时也是 JOIN 形状的水合原语（见下文）。
 - **`IDX.EXPLAIN` 仅作诊断。**它报告 kind、state、`est_rows`，以及你已写定的那条查询的计划行——没有在多个计划之间挑选的优化器。
 
+## Scalar functions
+
+迁移过来的查询里，SQL 表达式依赖一套标量函数词汇，kevy 在 **SQL 面而非引擎里**覆盖它：`kevy-cli sql eval`（以及 `sql` 工具箱的常量折叠）在客户端按 PostgreSQL 规范语义求值表达式，服务引擎从不接触表达式——与本页其它地方一样的分工。
+
+当前覆盖（函数名大小写不敏感，同 PG 的折叠规则）：
+
+| 族 | 函数 |
+|---|---|
+| 字符串 | `lower upper initcap length char_length concat concat_ws trim btrim ltrim rtrim replace split_part repeat lpad rpad strpos position left right reverse translate substr substring format` |
+| 数学 | `floor ceil ceiling round trunc mod power pow sqrt sign abs` |
+| NULL 族 | `coalesce nullif greatest least` |
+| 日期时间 | `extract date_part date_trunc age to_char`（`interval` 采用 PG 真身的三分量形式：months、days、micros） |
+| 正则（POSIX ERE） | `regexp_replace regexp_matches regexp_split_to_array` |
+| 哈希 | `md5` |
+
+这张表背后的口径纪律：
+
+- 语义**逐条转写自 PostgreSQL 自己的回归语料**，并有 CI 门禁（`funcgate`）：已覆盖函数与 PG 答案不一致即硬失败——门禁的错答数必须为零。语料覆盖率是只升不降的 ratchet（当前 ≥ 76% 的可子集折叠探针）。
+- 表外的任何函数**按名拒绝**，绝不瞎猜。已覆盖函数内部会改变基数的形状同理——`regexp_matches` 返回零行或多行时直接拒绝，而不是压平成一个错的标量。
+
 ## ORDER BY / LIMIT / OFFSET
 
 - `range` 索引**本身就是**顺序：`IDX.QUERY … RANGE` 按索引值升序返回行。`ORDER BY col ASC LIMIT n` = 在 `col` 上声明一个范围索引，查询时带 `LIMIT n`。

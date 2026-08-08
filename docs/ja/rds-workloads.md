@@ -100,6 +100,26 @@ WATCH + MULTI/EXEC check-then-write           # CAS loop (cookbook recipe 4)
 - **`FIELDS`**は、各行を所有するシャード上で、指定されたハッシュフィールドを同じ呼び出しの中でhydrateします——「インデックススキャン + 主キー参照」という二重ホップの、ワンホップの置き換えです。これはJOINの形をしたhydrationのプリミティブでもあります（後述）。
 - **`IDX.EXPLAIN`は診断専用です。** kind、state、`est_rows`、そしてあなたがすでに書いたクエリのプラン行を報告します——複数のプランから選ぶオプティマイザは存在しません。
 
+## Scalar functions
+
+移行してきたクエリの SQL 式はスカラー関数の語彙に依存します。kevy はそれを**エンジンではなく SQL 面で**カバーします：`kevy-cli sql eval`（および `sql` ツールボックスの定数畳み込み）が PostgreSQL 準拠のセマンティクスでクライアント側で式を評価し、サービングエンジンは式に一切触れません——このページの他の場所と同じ分業です。
+
+現在のカバレッジ（関数名は大文字小文字を区別せず、PG と同じ折りたたみ規則）：
+
+| ファミリ | 関数 |
+|---|---|
+| 文字列 | `lower upper initcap length char_length concat concat_ws trim btrim ltrim rtrim replace split_part repeat lpad rpad strpos position left right reverse translate substr substring format` |
+| 数学 | `floor ceil ceiling round trunc mod power pow sqrt sign abs` |
+| NULL ファミリ | `coalesce nullif greatest least` |
+| 日付時刻 | `extract date_part date_trunc age to_char`（`interval` は PG 本来の三成分形式：months、days、micros） |
+| 正規表現（POSIX ERE） | `regexp_replace regexp_matches regexp_split_to_array` |
+| ハッシュ | `md5` |
+
+この表を支える主張の規律：
+
+- セマンティクスは **PostgreSQL 自身の回帰コーパスから逐一転写**され、CI ゲート（`funcgate`）で守られています：カバー済み関数が PG と異なる答えを返せばハード失敗——ゲートの誤答数はゼロでなければなりません。コーパスのカバレッジ比率は上がる一方のラチェットです（現在、サブセット畳み込み可能なプローブの ≥ 76%）。
+- 表の外の関数は**名前を挙げて拒否**され、推測は決してしません。カバー済み関数の内部でも、基数を変えてしまう形は同様です——`regexp_matches` が零行または複数行を返すケースは、誤ったスカラーに潰されるのではなく拒否されます。
+
 ## ORDER BY / LIMIT / OFFSET
 
 - rangeインデックスが順序**そのもの**です。`IDX.QUERY … RANGE`は、インデックス値の昇順で行を返します。`ORDER BY col ASC LIMIT n`は、`col`にrangeインデックスを宣言して`LIMIT n`でクエリすることに等しくなります。
