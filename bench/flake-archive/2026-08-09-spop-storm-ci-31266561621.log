@@ -1,0 +1,962 @@
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	﻿2026-08-08T16:18:15.8302475Z ##[group]Run cargo test --workspace --lib --tests --target x86_64-unknown-linux-gnu
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:15.8303111Z ^[[36;1mcargo test --workspace --lib --tests --target x86_64-unknown-linux-gnu^[[0m
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:15.8346608Z shell: /usr/bin/bash -e {0}
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:15.8346868Z env:
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:15.8347071Z   CARGO_TERM_COLOR: always
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:15.8347315Z   RUST_BACKTRACE: 1
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:15.8347538Z   RUSTFLAGS: -D warnings
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:15.8347775Z   KEVY_TEST_PATIENCE: 3
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:15.8347998Z ##[endgroup]
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:16.0253179Z ^[[1m^[[92m   Compiling^[[0m kevy-client-async v2.1.0 (/home/runner/work/kevy/kevy/crates/kevy-client-async)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:16.0257359Z ^[[1m^[[92m   Compiling^[[0m kevy-cluster-rw v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-cluster-rw)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:16.0260253Z ^[[1m^[[92m   Compiling^[[0m kevy-bench v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-bench)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:16.0261721Z ^[[1m^[[92m   Compiling^[[0m kevy-napi v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-napi)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:16.9125665Z ^[[1m^[[92m   Compiling^[[0m kevy-jni v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-jni)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:17.3635433Z ^[[1m^[[92m   Compiling^[[0m kevy v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:22.1584755Z ^[[1m^[[92m   Compiling^[[0m kevy-cli v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-cli)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:37.7969255Z ^[[1m^[[92m   Compiling^[[0m kevy-sql v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-sql)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:38.6256081Z ^[[1m^[[92m   Compiling^[[0m kevy-client v2.1.0 (/home/runner/work/kevy/kevy/crates/kevy-client)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:38.6726454Z ^[[1m^[[92m   Compiling^[[0m kevy-embedded v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-embedded)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:45.1969319Z ^[[1m^[[92m   Compiling^[[0m kevy-ring v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-ring)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:45.4442397Z ^[[1m^[[92m   Compiling^[[0m kevy-lua v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-lua)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:46.0415951Z ^[[1m^[[92m   Compiling^[[0m kevy-map v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-map)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:46.0541260Z ^[[1m^[[92m   Compiling^[[0m kevy-store v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-store)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:46.1574915Z ^[[1m^[[92m   Compiling^[[0m kevy-bytes v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-bytes)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:46.1695140Z ^[[1m^[[92m   Compiling^[[0m kevy-resp v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-resp)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:46.5056571Z ^[[1m^[[92m   Compiling^[[0m kevy-hash v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-hash)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:47.1732838Z ^[[1m^[[92m   Compiling^[[0m kevy-rt v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-rt)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:47.2821491Z ^[[1m^[[92m   Compiling^[[0m kevy-geo v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-geo)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:47.4545485Z ^[[1m^[[92m   Compiling^[[0m kevy-elect v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-elect)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:47.6225680Z ^[[1m^[[92m   Compiling^[[0m kevy-uring v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-uring)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:47.8645653Z ^[[1m^[[92m   Compiling^[[0m kevy-wasm v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-wasm)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:48.5883539Z ^[[1m^[[92m   Compiling^[[0m kevy-seg v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-seg)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:48.8577607Z ^[[1m^[[92m   Compiling^[[0m kevy-vlog v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-vlog)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:49.0795775Z ^[[1m^[[92m   Compiling^[[0m kevy-persist v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-persist)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:49.2015741Z ^[[1m^[[92m   Compiling^[[0m kevy-ffi v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-ffi)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:50.3758406Z ^[[1m^[[92m   Compiling^[[0m kevy-lua-host v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-lua-host)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:50.6235729Z ^[[1m^[[92m   Compiling^[[0m kevy-window v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-window)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:50.8755803Z ^[[1m^[[92m   Compiling^[[0m kevy-config v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-config)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:51.2146911Z ^[[1m^[[92m   Compiling^[[0m kevy-mcp v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-mcp)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:51.2252733Z ^[[1m^[[92m   Compiling^[[0m kevy-resp-client v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-resp-client)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:51.4256322Z ^[[1m^[[92m   Compiling^[[0m kevy-ranktree v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-ranktree)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:51.4767333Z ^[[1m^[[92m   Compiling^[[0m kevy-replicate v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-replicate)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:51.8876523Z ^[[1m^[[92m   Compiling^[[0m kevy-scalar v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-scalar)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:51.9175386Z ^[[1m^[[92m   Compiling^[[0m kevy-index v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-index)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:52.1515788Z ^[[1m^[[92m   Compiling^[[0m kevy-chaos v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-chaos)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:52.4287492Z ^[[1m^[[92m   Compiling^[[0m kevy-pubsub-bench v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-pubsub-bench)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:52.4446255Z ^[[1m^[[92m   Compiling^[[0m kevy-time v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-time)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:52.5484426Z ^[[1m^[[92m   Compiling^[[0m kevy-madvise v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-madvise)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:52.6660537Z ^[[1m^[[92m   Compiling^[[0m kevy-scope v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-scope)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:52.7298778Z ^[[1m^[[92m   Compiling^[[0m kevy-sys v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-sys)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:52.8925755Z ^[[1m^[[92m   Compiling^[[0m kevy-vector v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-vector)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:52.9485362Z ^[[1m^[[92m   Compiling^[[0m kevy-compress v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-compress)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:52.9929264Z ^[[1m^[[92m   Compiling^[[0m kevy-tmpdir v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-tmpdir)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.1764375Z ^[[1m^[[92m   Compiling^[[0m kevy-text v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-text)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.1779530Z ^[[1m^[[92m   Compiling^[[0m kevy-alloc v4.1.1 (/home/runner/work/kevy/kevy/crates/kevy-alloc)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.5224719Z ^[[1m^[[92m    Finished^[[0m `test` profile [unoptimized + debuginfo] target(s) in 37.67s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6653480Z ^[[1m^[[92m     Running^[[0m unittests src/lib.rs (target/x86_64-unknown-linux-gnu/debug/deps/kevy-f4330d086f11b8e2)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6669219Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6669400Z running 202 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6686290Z test cmd_block_serve::restore_tests::an_empty_key_has_nothing_to_restore ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6689028Z test cmd_block_serve::restore_tests::blpop_restores_the_head_with_lpush ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6690110Z test cmd_block_serve::restore_tests::brpop_restores_the_tail_with_rpush ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6691106Z test cmd_block_serve::restore_tests::capturing_the_undo_does_not_mutate ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6692077Z test cmd_block_serve::restore_tests::bzpopmin_restores_the_minimum_with_its_score ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6693086Z test cmd_block_serve::restore_tests::kinds_that_consume_nothing_have_no_undo ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6694758Z test cmd_index_query::args::terminal_surface_tests::a_reserved_word_as_the_query_text_is_not_a_clause ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6695831Z test cmd_index_query::args::terminal_surface_tests::highlight_parses ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6696670Z test cmd_index_query::args::terminal_surface_tests::filter_parses ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6697602Z test cmd_index_query::args::terminal_surface_tests::genuine_nonsense_is_still_bad_args ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6698736Z test cmd_index_query::args::terminal_surface_tests::nothing_is_reserved_and_the_surface_is_complete ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6699748Z test cmd_index_query::args::terminal_surface_tests::sort_parses ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6700836Z test cmd_index_query::args::terminal_surface_tests::pass_two_reparses_every_clause ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6701807Z test cmd_index_query::args::terminal_surface_tests::scope_parses ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6702842Z test cmd_index_query::args::terminal_surface_tests::the_shipped_surface_still_parses ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6739649Z test cmd_index_query::args::terminal_surface_tests::offset_parses ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6740516Z test cmd_index_query::args::terminal_surface_tests::typo_parses ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6741441Z test cmd_index_query::query::verify_tests::a_row_that_slid_out_of_the_window_is_not_missing ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6742483Z test cmd_index_query::query::verify_tests::a_row_that_no_longer_coerces_counts_as_drift ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6743433Z test cmd_index_query::query::verify_tests::a_healthy_index_reports_zero_drift ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6744748Z test cmd_index_query::query::verify_tests::a_row_the_index_does_not_owe_is_not_missing ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6745546Z test cmd_index_query::query::verify_tests::a_row_with_no_entry_counts_as_missing ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6746326Z test cmd_index_query::query::verify_tests::a_slid_row_the_cold_side_never_received_is_missing ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6747107Z test cmd_index_query::query::verify_tests::more_cold_entries_than_slid_rows_is_not_a_hole ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6747769Z test cmd_index_query::query::verify_tests::drift_counts_every_way_an_entry_can_disagree_with_its_row ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6748335Z test cmd_repl::tests::parse_repl_wait_rejects_malformed ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6748783Z test cmd_repl::tests::parse_repl_wait_multi_pair_with_timeout_clause ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6749333Z test cmd_repl::tests::repl_token_route_is_fanout_on_primary_and_local_on_arity_error ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6749838Z test cmd_repl::tests::repl_wait_malformed_token_errors ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6750263Z test cmd_repl::tests::parse_repl_wait_pairs_and_default_timeout ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6750676Z test cmd_repl::tests::wait_on_replica_is_rejected ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6751107Z test cmd_repl::tests::parse_wait_args_accepts_valid_and_rejects_garbage ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6751602Z test cmd_repl::tests::repl_wait_on_primary_replies_ok_immediately ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6752118Z test cmd_repl::tests::wait_route_shapes ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6752696Z test cmd_view::hydrate_tests::cold_rows_hydrate_byte_identical_without_promoting ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6753289Z test elect_persist::tests::load_missing_file_is_fresh ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6753799Z test elect_persist::tests::corrupt_file_reads_as_fresh ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6754905Z test index_runtime::tests::hook_backfill_and_query_lifecycle ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6755614Z test ops::client::tests::bare_client_errors ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6756347Z test ops::client::tests::bare_list_without_a_runtime_is_empty ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6757273Z test ops::client::tests::filtered_list_is_a_syntax_error ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6758087Z test ops::client::tests::getname_returns_empty_bulk ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6758762Z test ops::client::tests::id_returns_integer ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6759630Z test ops::client::tests::info_returns_bulk ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6764323Z test ops::client::tests::kill_returns_zero ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6765199Z test ops::client::tests::malformed_kill_is_a_syntax_error ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6765962Z test ops::client::tests::no_evict_returns_ok ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6766591Z test ops::client::tests::setname_accepted ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6767195Z test ops::client::tests::setname_wrong_args ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6767844Z test ops::client::tests::unknown_subcommand_errors ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6768651Z test ops::config::tests::apply_hot_set_appendfsync_round_trips_enum_name ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6769669Z test ops::config::tests::apply_hot_set_auto_aof_rewrite_min_size_accepts_size_literal ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6770690Z test ops::config::tests::apply_hot_set_auto_aof_rewrite_pct_accepts_integer ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6771615Z test ops::config::tests::apply_hot_set_bad_value_returns_useful_reason ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6772526Z test ops::config::tests::apply_hot_set_hz_and_samples_accept_integers ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6773516Z test ops::config::tests::apply_hot_set_logfile_accepts_stdout_stderr_but_rejects_paths ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6774966Z test ops::config::tests::apply_hot_set_loglevel_round_trips_warning_alias ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6775877Z test ops::config::tests::apply_hot_set_maxmemory_parses_size_literal ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6776769Z test ops::config::tests::apply_hot_set_maxmemory_policy_round_trips_enum_name ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6777687Z test ops::config::tests::apply_hot_set_read_only_fields_report_clearly ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6778539Z test ops::config::tests::apply_hot_set_unknown_field_returns_unknown ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6779252Z test ops::config::tests::config_get_exact_key ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6779852Z test ops::config::tests::config_get_glob ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6780539Z test ops::config::tests::config_get_multiple_patterns ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6781278Z test ops::config::tests::config_get_unknown_key_returns_empty_array ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6782193Z test ops::config::tests::config_rewrite_without_source_returns_no_config_file_error ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6783107Z test elect_persist::tests::save_load_round_trip_with_vote ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6784172Z test ops::config::tests::config_set_bad_value_returns_error_reply ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6786856Z test ops::config::tests::config_rewrite_writes_atomic_round_trip_file ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6787861Z test ops::config::tests::config_set_read_only_field_returns_restart_required_error ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6788726Z test ops::config::tests::config_set_wrong_arity_errors ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6789444Z test ops::config::tests::config_unknown_subcommand_errors ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6790188Z test ops::config::tests::glob_matcher_handles_star_and_literal ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6790932Z test ops::memory::tests::human_format_matches_redis_style ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6791819Z test ops::config::tests::config_set_unknown_field_returns_unknown_param_error ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6792698Z test elect_persist::tests::save_load_round_trip_without_vote ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6793466Z test ops::memory::tests::memory_stats_encodes_all_eight_fields ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6794524Z test elect_persist::tests::save_overwrites_previous_pair ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6795313Z test ops::memory::tests::memory_usage_returns_integer_for_present_key ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6796159Z test ops::memory::tests::memory_top_level_dispatches_each_subcommand ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6797003Z test ops::memory::tests::memory_usage_returns_nil_for_absent_key ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6797921Z test ops::replication::tests::aggregate_falls_back_to_peer_port_for_foreign_ids ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6798753Z test ops::memory::tests::memory_usage_wrong_arity ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6799412Z test ops::replication::tests::parse_upstream_host_port ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6800257Z test ops::replication::tests::aggregate_folds_one_process_across_shards ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6801520Z test ops::replication::tests::aggregate_reports_syncing_when_any_stream_lacks_an_ack ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6802545Z test ops::replication::tests::parse_upstream_ipv6_uses_rightmost_colon ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6803489Z test ops::replication::tests::parse_upstream_missing_port_defaults_to_zero ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6804584Z test ops::replication::tests::parse_upstream_none_yields_empty ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6805394Z test ops::replication::tests::replicaof_bad_port_errors ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6806136Z test ops::replication::tests::replicaof_empty_host_errors ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6806884Z test ops::replication::tests::replicaof_wrong_args_errors ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6807611Z test ops::replication::tests::replicaof_no_one_returns_ok ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6808359Z test ops::replication::tests::role_master_offset_reflects_view ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6810904Z test ops::replication::tests::role_master_emits_per_replica_array ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6811789Z test ops::replication::tests::role_default_master_zero_offset ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6812829Z test ops::replication::tests::replicaof_host_port_returns_ok ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6813613Z test ops::replication::tests::role_wrong_args_returns_error ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6814709Z test ops::scope_move::tests::a_refused_frame_fails_the_ingest_and_names_the_key ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6815679Z test ops::scope_move::tests::an_accepted_ingest_still_reports_how_many_applied ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6816546Z test ops::scope_move::tests::ingest_handler_rejects_wrong_arity ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6817348Z test ops::scope_move::tests::move_scope_rejects_bad_syntax ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6818185Z test ops::scope_move::tests::move_scope_rejects_when_self_node_id_not_configured ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6819144Z test ops::scope_move::tests::serialize_prefix_carries_every_type_and_the_ttl ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6820160Z test ops::scope_move::tests::ingest_handler_applies_embedded_commands_and_replies_ok ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6821146Z test ops::scope_move::tests::serialize_prefix_emits_hset_for_hash_in_order ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6822021Z test ops::scope_move::tests::serialize_prefix_skips_non_matching_keys ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6822905Z test ops::scope_move::tests::serialize_prefix_emits_set_for_strings ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6824031Z test ops::scope_move_stream::tests::empty_stream_with_advanced_clock_roundtrips ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6825030Z test ops::tests::cluster_info_carries_standalone_markers ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6825888Z test ops::scope_move_stream::tests::stream_roundtrips_entries_and_scalar_state ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6826872Z test ops::scope_move_stream::tests::stream_roundtrips_groups_consumers_and_pel ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6827835Z test ops::tests::debug_sleep_zero_returns_immediately ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6828509Z test ops::tests::cluster_nodes_single_self_entry ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6829156Z test ops::tests::info_memory_reports_process_rss ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6829821Z test ops::tests::info_persistence_reports_aof_format ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6830545Z test ops::tests::info_replication_master_default_shape ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6831191Z test ops::tests::info_specific_section ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6831790Z test ops::tests::info_returns_bulk_with_sections ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6832565Z test ops::tests::repl_token_on_replica_flag_reports_runner_view ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6833286Z test ops::tests::wait_returns_zero_replicas ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6834429Z test ops::tests::repl_wait_on_primary_is_ok_and_bad_token_errors ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6835233Z test ops::tests::wait_non_integer_args_error ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6835924Z test replica_runner::tests::early_exit_drop_lowers_loading ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6836600Z test ops::tests::wait_wrong_args_errors ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6837342Z test replica_runner::tests::event_to_apply_frame_advances_offset_by_one ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6838480Z test replica_runner::tests::event_to_apply_snapshot_end_advances_offset ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6839388Z test replica_runner::tests::event_to_apply_snapshot_begin_passthrough ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6840334Z test replica_runner::tests::loading_lowers_only_when_the_apply_gate_drops ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6841138Z test replication::tests::parse_upstream_host_port ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6841848Z test replication::tests::parse_upstream_empty_host_is_none ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6842626Z test replication::tests::parse_upstream_missing_port_is_none ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6843369Z test replication::tests::resolve_host_ipv4_literal ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6844415Z test replication::tests::parse_upstream_ipv6_brackets_kept_in_host ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6845283Z test replication::tests::resolve_host_ipv6_bracketed_literal_strips ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6846110Z test state::election::tests::is_configured_both_set_returns_true ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6846945Z test state::election::tests::is_configured_empty_peers_returns_false ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6848036Z test state::election::tests::resolved_elect_port_base_uses_explicit_when_set ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6848943Z test state::election::tests::is_configured_empty_node_id_returns_false ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6849835Z test state::election::tests::resolved_elect_port_base_falls_back_when_zero ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6850743Z test state::election::tests::set_view_offset_out_of_range_shard_is_safe ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6851543Z test state::obs::tests::aggregate_sums_across_slots ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6852220Z test state::obs::tests::audit_off_when_path_empty ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6852865Z test state::obs::tests::ops_ring_caps_at_window ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6853527Z test state::obs::tests::audit_records_one_sanitised_line ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6854579Z test state::replication::tests::applied_offset_sum_is_per_runner_sum_not_max ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6855417Z test state::replication::tests::fresh_state_defaults ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6856258Z test state::replication::tests::min_replicas_on_primary_keeps_write_gate_raised ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6857243Z test state::replication::tests::every_gate_writer_bumps_the_control_epoch ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6858177Z test state::replication::tests::promote_bumps_epoch_only_from_replica ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6859110Z test state::replication::tests::start_runners_before_runtime_wiring_errors ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6859974Z test state::replication::tests::write_denied_orders_fences ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6860730Z test state::scope::tests::encode_misdirected_wire_shape ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6861553Z test state::scope::tests::resolve_addr_falls_back_to_node_id_when_unmapped ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6862380Z test state::scope::tests::from_config_default_is_inert ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6863137Z test state::shard::tests::gate_bits_cache_hits_until_epoch_moves ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6864357Z test state::shard::tests::healthy_replica_count_excludes_acks_past_the_lag_window ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6865354Z test state::shard::tests::ingest_guard_sets_and_clears_prefix ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6866156Z test state::shard::tests::healthy_replica_count_requires_an_ack ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6866951Z test state::shard::tests::lead_shard_requires_an_assigned_id ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6867740Z test state::tests::clone_shares_state_but_not_shard_zone ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6868520Z test state::tests::config_replace_flips_explicit_and_swaps_value ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6869413Z test state::tests::embedded_state_has_no_sidecar_dir_and_no_explicit_config ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6870313Z test state::tests::explicit_state_reports_config_and_sidecar_dir ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6871157Z test state::tests::sharded_state_mirrors_nshards_into_config_threads ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6871909Z test tests::config_enum_mapping_round_trips ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6872605Z test tests::drain_commands_handles_quit_and_protocol_error ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6873602Z test tests::dispatch_returns_oom_when_no_eviction_at_limit ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6874581Z test tests::dispatch_evicts_under_allkeys_random ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6875169Z test tests::incr_paths_and_errors ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6875719Z test tests::is_write_and_txn_kind_matrix ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6876287Z test tests::memory_usage_via_dispatch ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6876879Z test tests::resolve_unifies_route_and_txn_kind ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6877441Z test tests::ping_and_echo ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6877910Z test tests::route_keyspace_verbs ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6878455Z test tests::route_del_exists_arity_branches ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6879114Z test tests::every_verb_the_engine_logs_can_be_replayed ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6880406Z test tests::routing_and_write_classification ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6882311Z test tests::route_local_verbs ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6884212Z test tests::select_zero_ok_others_rejected ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6884848Z test tests::set_options_and_errors ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6885447Z test tests::route_multikey_and_pubsub_verbs ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6886209Z test tests::shard_tick_interval_falls_back_to_disabled ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6887479Z test tests::unknown_and_config_and_type ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6888070Z test tests::string_completion ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6888685Z test tests_op_table::is_growing_write_verb_matches_table ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6889617Z test tests_op_table::is_write_verb_matches_table ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6890432Z test tests_op_table::notify_class_matches_table ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6891076Z test tests_op_table::wake_set_matches_table ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6891782Z test tests_verb_meta::internal_continuations_stay_undocumented ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6892528Z test tests_verb_meta::meta_rows_are_well_formed ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6901626Z test tests_verb_meta::no_duplicate_meta_rows ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6915156Z test tests_verb_meta::op_table_server_verbs_all_documented ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6920797Z test tests_verb_meta::command_docs_covers_every_meta_row_and_nothing_else ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6923295Z test verb_meta::tests::every_family_row_reaches_the_table ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6924496Z test verb_meta::tests::every_verb_states_its_complexity_and_its_redis_compatibility ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6926019Z test verb_meta::tests::the_costs_that_differ_from_redis_stay_differing ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6926888Z test verb_meta::tests::the_fixed_deviations_stay_fixed ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6928920Z test verb_meta::tests::verb_names_are_unique ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.6945845Z test tests_verb_meta::route_matches_resolve_route_for_every_verb ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7307797Z test ops::tests::debug_sleep_small_actually_sleeps ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7351748Z test tests_op_table::server_surface_has_dispatch_literals ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7352255Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7352723Z test result: ok. 202 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7353344Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7357282Z ^[[1m^[[92m     Running^[[0m unittests src/bin/gen_docs.rs (target/x86_64-unknown-linux-gnu/debug/deps/gen_docs-713469f3cacb6ef8)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7368247Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7368475Z running 0 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7368704Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7369134Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7369743Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7371363Z ^[[1m^[[92m     Running^[[0m unittests src/main.rs (target/x86_64-unknown-linux-gnu/debug/deps/kevy-1ad742367750a552)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7380471Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7380635Z running 2 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7383456Z test tests::ipv4_parser_accepts_valid_only ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7384241Z test tests::loopback_classification ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7384615Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7384897Z test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7385789Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7386688Z ^[[1m^[[92m     Running^[[0m tests/advanced_config.rs (target/x86_64-unknown-linux-gnu/debug/deps/advanced_config-ac99995787512a87)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7400574Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7400727Z running 3 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7404033Z test advanced_defaults_match_pre_v14_constants ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7406989Z test advanced_section_round_trips_through_toml ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7476255Z test runtime_with_advanced_runs_cmds_correctly ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7476689Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7477099Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7477692Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7481376Z ^[[1m^[[92m     Running^[[0m tests/aof_compat_matrix_chaos.rs (target/x86_64-unknown-linux-gnu/debug/deps/aof_compat_matrix_chaos-7caa231f80cbcbb3)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7491723Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7491924Z running 1 test
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7493300Z test aof_compat_matrix_replays_v1_vintage_aof ... ignored, chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7494808Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7495273Z test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7495936Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7497737Z ^[[1m^[[92m     Running^[[0m tests/audit_log_chaos.rs (target/x86_64-unknown-linux-gnu/debug/deps/audit_log_chaos-f5b3f83676227063)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7506361Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7506548Z running 1 test
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7507922Z test audit_log_captures_admin_calls_in_order ... ignored, chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7509558Z ^[[1m^[[92m     Running^[[0m tests/backup_restore_chaos.rs (target/x86_64-unknown-linux-gnu/debug/deps/backup_restore_chaos-6af58a056f9c6e75)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7510478Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7510916Z test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7511423Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7518852Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7519055Z running 1 test
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7520525Z test backup_restore_round_trip_no_fabrication ... ignored, chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7522148Z ^[[1m^[[92m     Running^[[0m tests/blocking.rs (target/x86_64-unknown-linux-gnu/debug/deps/blocking-5e638536e78b405f)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7523023Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7523441Z test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7524201Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7536267Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7536452Z running 14 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7608942Z test blpop_multi_key_immediate_hit_first_available ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.7768249Z test blpop_returns_immediately_when_list_has_value ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.8213660Z test blpop_multi_key_woken_on_second_key ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.8278441Z test brpop_returns_immediately_when_list_has_value ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.8370636Z test blpop_woken_by_concurrent_push ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.8845872Z test brpop_woken_by_concurrent_rpush ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.8910737Z test xread_block_returns_immediately_when_stream_has_entry ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.8938376Z test xread_block_dollar_id_wakes ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.9530882Z test xread_block_woken_by_concurrent_xadd ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.9622671Z test blpop_multi_key_times_out_when_all_empty ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:53.9784603Z test blpop_times_out_with_nil_array_when_list_empty ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:54.0196336Z test xreadgroup_block_woken_by_concurrent_xadd ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:54.0951517Z test xread_block_times_out_with_nil_bulk_when_no_entries ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:54.1564043Z test xreadgroup_block_times_out_when_no_new_entries ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:54.1564465Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:54.1564839Z test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:54.1565370Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:54.1571218Z ^[[1m^[[92m     Running^[[0m tests/blocking_cross_shard.rs (target/x86_64-unknown-linux-gnu/debug/deps/blocking_cross_shard-74a3ec541c6dabea)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:54.1586556Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:54.1586728Z running 8 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:54.2229650Z test blpop_multi_key_woken_on_either_key ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:54.2476446Z test blpop_remote_key_immediate_hit ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:54.4801871Z test blpop_multi_key_all_empty_times_out ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:54.5060425Z test blpop_remote_key_woken_by_push ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:54.5639978Z test xread_block_remote_stream_woken_by_xadd ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:54.7372954Z test blpop_remote_disconnect_then_push_is_clean ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:54.7405696Z test xread_block_remote_stream_times_out ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:55.5358757Z test blpop_remote_key_times_out_not_hang ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:55.5359159Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:55.5359527Z test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.38s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:55.5360073Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:55.5386841Z ^[[1m^[[92m     Running^[[0m tests/blocking_xshard_serve_race.rs (target/x86_64-unknown-linux-gnu/debug/deps/blocking_xshard_serve_race-7c6972974eb190f2)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:55.5402099Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:55.5402275Z running 1 test
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.5073477Z test a_disconnect_during_the_serve_does_not_lose_the_element ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.5074415Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.5075012Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.97s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.5075628Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.5086457Z ^[[1m^[[92m     Running^[[0m tests/bullmq_bzpopmin.rs (target/x86_64-unknown-linux-gnu/debug/deps/bullmq_bzpopmin-321d49148895a378)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.5102156Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.5102356Z running 11 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.5174755Z test bzpopmin_multi_key_returns_from_first_non_empty ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.5329873Z test bzpopmin_negative_timeout_returns_err ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.5382441Z test bzpopmin_non_numeric_timeout_returns_err ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.5437412Z test bzpopmin_returns_float_score_via_fmt_score ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.5492040Z test bzpopmin_returns_lowest_scored_when_zset_has_members ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.5779975Z test bzpopmin_multi_key_woken_on_second_key ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.6096542Z test bzpopmin_woken_by_concurrent_zadd ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.6174203Z test bzpopmin_wrong_type_key_returns_wrongtype ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.6347025Z test bzpopmin_woken_by_concurrent_zincrby_on_new_key ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7190213Z test bzpopmin_multi_key_times_out_when_all_empty ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7507071Z test bzpopmin_times_out_with_nil_array_when_zset_empty ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7507664Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7508157Z test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7508734Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7515871Z ^[[1m^[[92m     Running^[[0m tests/bullmq_hash.rs (target/x86_64-unknown-linux-gnu/debug/deps/bullmq_hash-7ff75363ab3ee36d)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7530079Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7530275Z running 5 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7537110Z test hmset_on_wrong_type_errors ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7538494Z test hmset_overwrites_existing_field ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7538993Z test hmset_returns_ok_and_stores_pairs ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7539370Z test hexpire_httl_hpersist_dispatch ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7539724Z test hmset_wrong_arity_errors ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7540079Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7540766Z test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7541408Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7542610Z ^[[1m^[[92m     Running^[[0m tests/bullmq_list.rs (target/x86_64-unknown-linux-gnu/debug/deps/bullmq_list-cb34a3d865bf9a27)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7555830Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7556014Z running 13 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7561240Z test lmove_empty_src_returns_nil ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7561796Z test lmove_bad_direction_errors ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7562879Z test lmove_left_to_right_moves_head_to_tail ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7568673Z test lmove_right_to_left_matches_rpoplpush ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7572313Z test lpos_absent_element_returns_nil_without_count ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7573280Z ^[[1m^[[92m     Running^[[0m tests/bullmq_zset.rs (target/x86_64-unknown-linux-gnu/debug/deps/bullmq_zset-d56cd60a739050a2)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7574651Z test lpos_count_returns_array_of_indices ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7575338Z test lpos_default_returns_first_match_index ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7576268Z test rpoplpush_dst_wrong_type_errors_without_consuming ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7577051Z test lpos_rank_negative_scans_from_tail ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7577585Z test lpos_rank_zero_errors ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7578077Z test rpoplpush_empty_src_returns_nil ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7578668Z test rpoplpush_moves_tail_of_src_to_head_of_dst ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7579252Z test rpoplpush_same_key_rotates ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7579575Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7580056Z test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7580940Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7588442Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7588682Z running 15 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7595122Z test zpopmin_empty_key_returns_empty_array ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7595880Z test zpopmin_returns_lowest_member_and_score ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7599534Z test zpopmin_with_count_returns_n_pairs ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7600157Z test zpopmin_below_pops_only_due ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7600650Z test zpopmin_wrong_type_errors ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7601180Z test zremrangebyrank_absent_key_returns_zero ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7601789Z test zremrangebyrank_removes_in_inclusive_range ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7602409Z test zremrangebyrank_negative_indices ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7602934Z test zremrangebyscore_inf_bounds ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7603479Z test zremrangebyscore_exclusive_bound_via_paren ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7604613Z test zrevrangebyscore_bad_bound_errors ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7605230Z test zremrangebyscore_removes_inclusive_bounds ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7605945Z test zrevrangebyscore_returns_descending_order ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7606535Z test zrevrangebyscore_limit ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7607040Z test zrevrangebyscore_withscores_v2_shape ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7607413Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7607826Z test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7608423Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7609443Z ^[[1m^[[92m     Running^[[0m tests/burst_ramp_realistic_chaos.rs (target/x86_64-unknown-linux-gnu/debug/deps/burst_ramp_realistic_chaos-5ac6617e77ec56ab)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7616919Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7617093Z running 1 test
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7618313Z test burst_ramp_realistic_workload ... ignored, chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7619086Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7619344Z test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7619884Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7620779Z ^[[1m^[[92m     Running^[[0m tests/client_setname_persistence.rs (target/x86_64-unknown-linux-gnu/debug/deps/client_setname_persistence-c2841c41111540a1)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7628869Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7629052Z running 1 test
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7630010Z test client_setname_persists_per_connection ... ignored, chaos test — opt-in via --ignored
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7630647Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7630902Z test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7631244Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7632007Z ^[[1m^[[92m     Running^[[0m tests/cluster.rs (target/x86_64-unknown-linux-gnu/debug/deps/cluster-478b5ae4b8ad8ad2)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7645329Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:18:58.7645510Z running 5 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:00.2935504Z test cluster_port_moves_wrong_shard_key_and_serves_own ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:00.6936119Z test cluster_slots_topology_is_exact_and_covering ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.1616344Z test keyslot_matches_local_computation ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.2051634Z test compat_port_keeps_forwarding_in_cluster_mode ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.2798922Z test reshard_migrates_kevyhash_data_to_slots_losslessly ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.2799399Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.2799767Z test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.52s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.2800286Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.2807622Z ^[[1m^[[92m     Running^[[0m tests/cluster_client.rs (target/x86_64-unknown-linux-gnu/debug/deps/cluster_client-94b24b58ee662a84)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.2822251Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3814221Z running 1 test
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3814605Z test cluster_client_routes_every_key_to_owner ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3814860Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3815121Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3815472Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3820300Z ^[[1m^[[92m     Running^[[0m tests/cluster_crossslot_mget.rs (target/x86_64-unknown-linux-gnu/debug/deps/cluster_crossslot_mget-8aca851ae0811759)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3830850Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3831345Z running 1 test
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3833163Z test cluster_mode_multikey_emits_crossslot ... ignored, chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3834758Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3835739Z ^[[1m^[[92m     Running^[[0m tests/cluster_known_nodes_count.rs (target/x86_64-unknown-linux-gnu/debug/deps/cluster_known_nodes_count-46e540f13334341f)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3837119Z test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3837666Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3842964Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3843124Z running 1 test
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3844639Z test cluster_info_known_nodes_reports_peer_count ... ignored, chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3845258Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3845517Z test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3846113Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3846977Z ^[[1m^[[92m     Running^[[0m tests/cluster_peer_formation_chaos.rs (target/x86_64-unknown-linux-gnu/debug/deps/cluster_peer_formation_chaos-da8a2f4bda17275c)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3855622Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3855784Z running 1 test
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3857178Z test cluster_peer_formation_survives_node_death ... ignored, chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3858031Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3858389Z test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3858988Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3859785Z ^[[1m^[[92m     Running^[[0m tests/cluster_topology_chaos.rs (target/x86_64-unknown-linux-gnu/debug/deps/cluster_topology_chaos-32346aa22f2408bd)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3867962Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3868110Z running 1 test
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3871099Z test cluster_topology_routing_under_chaos ... ignored, chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3871941Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3872380Z test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3872995Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3873739Z ^[[1m^[[92m     Running^[[0m tests/cmd_matrix.rs (target/x86_64-unknown-linux-gnu/debug/deps/cmd_matrix-874d26004d1562db)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3883244Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3883463Z running 9 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3890506Z test generic_keyspace ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3891251Z test hash_full_surface ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3892114Z test list_full_surface ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3895261Z test multikey_stubs ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3895800Z test string_counters_and_wrongtype ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3896504Z test conn_and_introspection ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3897113Z test set_full_surface ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3898302Z test string_set_get_family ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3899007Z test zset_full_surface ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3899515Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3899939Z test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3902481Z ^[[1m^[[92m     Running^[[0m tests/commands.rs (target/x86_64-unknown-linux-gnu/debug/deps/commands-cd8836c4b2a94b72)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3902929Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3914552Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3914711Z running 4 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3925893Z test counters ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3926354Z test expiry_commands ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3930689Z test string_lifecycle ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3932053Z ^[[1m^[[92m     Running^[[0m tests/concurrent_writers_overlap.rs (target/x86_64-unknown-linux-gnu/debug/deps/concurrent_writers_overlap-9d67561a7a445351)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3933214Z test set_options_and_flush ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3933517Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3934140Z test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3934748Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3940524Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3940717Z running 1 test
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3941916Z test concurrent_writers_overlap_no_fabrication ... ignored, chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3943075Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3943812Z ^[[1m^[[92m     Running^[[0m tests/config_set.rs (target/x86_64-unknown-linux-gnu/debug/deps/config_set-34d8834e0eff5c8d)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3945204Z test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3945795Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3957029Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.3957214Z running 5 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4028305Z test config_set_appendfsync_round_trips_through_get ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4042256Z test config_set_maxmemory_takes_effect_globally ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4043109Z test config_rewrite_without_source_path_returns_error ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4055279Z test config_rewrite_writes_round_trippable_file_from_source_path ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4086170Z test config_set_read_only_bind_returns_restart_required_error ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4086706Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4087125Z test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4087738Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4092459Z ^[[1m^[[92m     Running^[[0m tests/crash_always.rs (target/x86_64-unknown-linux-gnu/debug/deps/crash_always-4af095d8dd6f9d71)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4101143Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4101285Z running 1 test
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4104357Z test crash_always_fsync_zero_loss ... ignored, chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4105184Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4105605Z test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4107105Z ^[[1m^[[92m     Running^[[0m tests/crash_during_rewrite.rs (target/x86_64-unknown-linux-gnu/debug/deps/crash_during_rewrite-49357ddb42a795bb)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4107967Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4112901Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4113049Z running 1 test
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4114306Z test crash_during_aof_rewrite_no_corruption ... ignored, chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4114880Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4115157Z test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4115524Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4116597Z ^[[1m^[[92m     Running^[[0m tests/crash_everysec.rs (target/x86_64-unknown-linux-gnu/debug/deps/crash_everysec-92db5756a4fa6258)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4124878Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4125018Z running 1 test
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4126487Z test crash_everysec_no_corruption_bounded_loss ... ignored, chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4127370Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4127838Z test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4128289Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4129218Z ^[[1m^[[92m     Running^[[0m tests/crash_replication_followed.rs (target/x86_64-unknown-linux-gnu/debug/deps/crash_replication_followed-508c5db8f3e0f28b)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4137587Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4137961Z running 1 test
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4138856Z test crash_replication_followed_no_corruption ... ignored, chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4139457Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4139738Z test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4140128Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4140682Z ^[[1m^[[92m     Running^[[0m tests/disk_full_chaos.rs (target/x86_64-unknown-linux-gnu/debug/deps/disk_full_chaos-6d9f259326b3875b)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4149244Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4149397Z running 1 test
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4151796Z test disk_full_kevy_stays_alive_after_rlimit_fsize ... ignored, chaos test (Unix) — opt-in via --ignored, needs `cargo build --release -p kevy` first
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4152845Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4153300Z test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4154914Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4156011Z ^[[1m^[[92m     Running^[[0m tests/dual_instance.rs (target/x86_64-unknown-linux-gnu/debug/deps/dual_instance-09940eb4e5a36830)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4166249Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4166434Z running 1 test
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4588825Z test two_runtimes_in_one_process_do_not_share_state ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4592708Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4593162Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4593759Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4595114Z ^[[1m^[[92m     Running^[[0m tests/fd_exhaust_chaos.rs (target/x86_64-unknown-linux-gnu/debug/deps/fd_exhaust_chaos-aef9ff8e7497234f)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4602239Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4602407Z running 1 test
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4603785Z test fd_exhaust_kevy_stays_alive_refuses_cleanly ... ignored, chaos test (Unix) — opt-in via --ignored, needs `cargo build --release -p kevy` first
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4604765Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4605027Z test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4605628Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4606297Z ^[[1m^[[92m     Running^[[0m tests/feed_cdc.rs (target/x86_64-unknown-linux-gnu/debug/deps/feed_cdc-c6904daaf2a52755)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4618778Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:01.4618963Z running 7 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:02.8009344Z test clean_restart_keeps_cursor_unclean_bumps ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:02.9658708Z test cross_shard_rename_reaches_the_feed_on_both_ends ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:03.4187019Z test flushall_bumps_generation_and_old_cursor_resyncs ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:03.6805186Z test prefix_stats_fanout ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:03.9398036Z test feed_shards_tail_read_roundtrip ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.2293426Z test save_snapshot_records_feed_cursor ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.3294393Z test feed_prefix_filter_and_errors ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.3294851Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.3295359Z test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.87s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.3295905Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.3322000Z ^[[1m^[[92m     Running^[[0m tests/geo.rs (target/x86_64-unknown-linux-gnu/debug/deps/geo-14a25a6d4a956d9c)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.3337393Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.3337594Z running 32 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.3604924Z test geoadd_nx_only_inserts_when_missing ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.3650274Z test geoadd_rejects_out_of_range_coordinates ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.3704387Z test geoadd_returns_count_of_new_members ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.3758575Z test geoadd_xx_only_updates_when_present ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.3810334Z test geodist_missing_member_returns_nil ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.3862367Z test geodist_palermo_catania_kilometres ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.3915509Z test geohash_emits_11_char_base32 ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.3971929Z test geopos_returns_coordinates_for_known_members ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.3975751Z test geo_store_empty_result_deletes_the_destination_on_its_shard ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.4083467Z test geo_storedist_scores_are_in_the_queried_unit ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.4109381Z test georadius_legacy_form_returns_members ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.4130651Z test georadius_ro_rejects_store ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.4214761Z test georadius_store_with_with_clause_is_rejected ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.4299389Z test georadius_store_writes_geohash_scores ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.4456040Z test georadiusbymember_legacy_form_returns_members ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.4610634Z test georadius_desc_with_count_returns_the_farthest ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.4677822Z test geosearch_asc_orders_by_distance ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.4744122Z test geosearch_bybox_filters_to_rectangle ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.4832004Z test geosearch_byradius_fromlonlat_returns_members_within_radius ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.4843220Z test georadius_store_writes_destination_on_its_own_shard ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.4900210Z test geosearch_byradius_frommember_with_self_match ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.4960381Z test geosearch_count_truncates_results ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.4961070Z test georadius_storedist_scores_are_in_the_queried_unit ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.5078191Z test geosearch_frommember_unknown_member_errors ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.5097100Z test georadiusbymember_store_writes_destination_on_its_own_shard ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.5121118Z test geosearch_withcoord_withdist_withhash_emit_nested_arrays ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.5175732Z test geosearchstore_empty_result_clears_destination ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.5294876Z test geosearchstore_with_storedist_writes_distance_scores ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.5454909Z test geosearchstore_writes_geohash_scores_to_destination ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.5580376Z test geosearch_desc_with_count_returns_the_farthest ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.5772568Z test geosearchstore_frommember_resolves_anchor_on_the_source_shard ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.5927300Z test geosearchstore_writes_destination_on_its_own_shard ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.5927976Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.5928427Z test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.5928966Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.5965355Z ^[[1m^[[92m     Running^[[0m tests/goredis_redispy_battle.rs (target/x86_64-unknown-linux-gnu/debug/deps/goredis_redispy_battle-6e6cd4bba580eec8)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.5975528Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.5975735Z running 2 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.5977045Z test goredis_v9_golden_path ... ignored, battle test — opt-in via --ignored, needs `cargo build --release -p kevy` first
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.5978703Z test redispy_5x_golden_path ... ignored, battle test — opt-in via --ignored, needs `cargo build --release -p kevy` first
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.5980329Z ^[[1m^[[92m     Running^[[0m tests/hash_ttl_e2e.rs (target/x86_64-unknown-linux-gnu/debug/deps/hash_ttl_e2e-04c9815ec0f9e576)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.5981178Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.5981632Z test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.5982273Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.5993041Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:04.5993220Z running 1 test
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:06.0621123Z test hexpire_survives_replay_without_reanchor ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:06.0621683Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:06.0622047Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.46s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:06.0622569Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:06.0628951Z ^[[1m^[[92m     Running^[[0m tests/hello3.rs (target/x86_64-unknown-linux-gnu/debug/deps/hello3-ed29788f36a506de)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:06.0644300Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:06.0644519Z running 6 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:06.0707874Z test hello_2_explicit_returns_array_shape ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:06.0762801Z test hello_3_proto_is_per_conn ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:06.0814891Z test hello_3_returns_map_shape_and_flips_conn ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:06.0872323Z test hello_3_then_normal_command_still_works ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:06.0920968Z test hello_4_unsupported_replies_noproto_error ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:06.0971001Z test hello_no_arg_keeps_v2_default ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:06.0971704Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:06.0972168Z test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:06.0972908Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:06.0977109Z ^[[1m^[[92m     Running^[[0m tests/idx_advise_e2e.rs (target/x86_64-unknown-linux-gnu/debug/deps/idx_advise_e2e-724b96c553925b9d)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:06.0992005Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:06.0992197Z running 2 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:06.9203110Z test refusals_become_declarations_that_serve ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:07.9667691Z test autodeclare_serves_a_zero_declaration_workload ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:07.9668314Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:07.9668821Z test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.87s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:07.9669537Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:07.9686829Z ^[[1m^[[92m     Running^[[0m tests/index_e2e.rs (target/x86_64-unknown-linux-gnu/debug/deps/index_e2e-b9b31d5d76726828)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:07.9702672Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:07.9702887Z running 27 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:08.4611231Z test distinct_over_the_wire ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:08.5856901Z test agg_kind_group_by_e2e ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:08.9330443Z test facet_over_the_wire ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:08.9462156Z test field_scope_over_the_wire ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:09.0454504Z test fields_arity_errors ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:09.0566815Z test fields_defaults_and_non_text_refusal ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:09.2758468Z test fields_multi_attribute_create_and_rank ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:09.6763267Z test filter_over_the_wire ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:09.7463226Z test create_backfill_query_cursor_count_verify_drop ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:09.9061946Z test highlight_returns_match_spans ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:10.1074407Z test flushall_empties_the_index_segments ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:10.7104425Z test hydration_and_compose ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:11.1206076Z test idx_count_applies_filter ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:11.6326370Z test offset_pages_the_merged_ranking ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:11.9451615Z test phrase_query_matches_only_adjacent_docs ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:12.1748052Z test positions_create_succeeds_and_ranking_is_unaffected ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:12.2858766Z test positions_flag_is_text_only_and_validated ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:12.4249823Z test multi_key_delete_and_rename_keep_the_index_honest ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:12.4970673Z test prefix_digest_server_matches_embedded ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:12.6366101Z test prefix_query_over_the_wire ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:13.4496948Z test scope_ingested_rows_enter_the_index ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:13.6088034Z test scalar_values_filter_sort_distinct_facet_offset ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:14.2128495Z test sort_over_the_wire ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:14.2711519Z test text_kind_match_bm25 ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:14.4677159Z test ann_kind_knn_e2e ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:14.5267918Z test typo_query_over_the_wire ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:16.3262965Z test maxmem_budget_fails_declaratively ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:16.3263596Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:16.3264398Z test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.36s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:16.3265275Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:16.3301245Z ^[[1m^[[92m     Running^[[0m tests/index_write_path_coverage.rs (target/x86_64-unknown-linux-gnu/debug/deps/index_write_path_coverage-85c8db06502378a5)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:16.3317194Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:16.3317383Z running 1 test
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:20.7976157Z test every_write_path_that_touches_a_row_keeps_the_index_honest ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:20.7976609Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:20.7976913Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.47s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:20.7977351Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:20.7983682Z ^[[1m^[[92m     Running^[[0m tests/jedis_stackex_battle.rs (target/x86_64-unknown-linux-gnu/debug/deps/jedis_stackex_battle-970e5ab6b9a797d7)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:20.7993497Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:20.7993642Z running 2 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:20.7995025Z test jedis_5x_golden_path ... ignored, battle test — opt-in via --ignored, needs `cargo build --release -p kevy` first
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:20.7996086Z test stackexchange_redis_golden_path ... ignored, battle test — opt-in via --ignored, needs `cargo build --release -p kevy` first
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:20.7997439Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:20.7997743Z test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:20.7999077Z ^[[1m^[[92m     Running^[[0m tests/keyspace_notify.rs (target/x86_64-unknown-linux-gnu/debug/deps/keyspace_notify-9fd6ebab421410df)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:20.7999993Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:20.8011603Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:20.8011821Z running 6 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:21.3091095Z test both_channels_with_alias_all_classes ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:22.0241840Z test class_gate_filters_unrelated_events ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:22.7356878Z test default_off_emits_nothing ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:23.2431554Z test keyevent_channel_fires_on_set ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:23.7504420Z test keyspace_channel_fires_on_set ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:24.2578509Z test xadd_fires_stream_keyspace_event ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:24.2578904Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:24.2579306Z test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.46s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:24.2580054Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:24.2585171Z ^[[1m^[[92m     Running^[[0m tests/list_move_cross_shard.rs (target/x86_64-unknown-linux-gnu/debug/deps/list_move_cross_shard-5a4bd819553c677b)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:24.2599767Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:24.2599934Z running 11 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:24.3241415Z test a_queue_drain_moves_every_job_exactly_once ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:24.3381567Z test a_wrongtype_destination_gives_the_element_back ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:24.3520744Z test a_wrongtype_destination_gives_the_element_back_on_the_blocking_path ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:24.3588904Z test an_empty_source_replies_nil_and_leaves_the_destination_absent ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:24.3850599Z test brpoplpush_lands_the_element_on_the_destinations_shard ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:24.4224075Z test co_located_keys_still_take_the_atomic_same_shard_path ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:24.4468166Z test lmove_honours_both_ends_across_shards ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:24.4890263Z test rpoplpush_lands_the_element_on_the_destinations_shard ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:24.5071998Z test source_equals_destination_rotates ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:24.6992493Z test brpoplpush_parks_then_serves_a_later_push_to_the_right_shard ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4647596Z test brpoplpush_times_out_with_nil ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4648148Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4648697Z test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4649429Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4680294Z ^[[1m^[[92m     Running^[[0m tests/lua_cluster.rs (target/x86_64-unknown-linux-gnu/debug/deps/lua_cluster-e1bf1986fe291ed1)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4693823Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4695272Z running 5 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4699115Z test eval_cross_slot_rejected_under_cluster ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4704872Z test evalsha_cross_slot_rejected_under_cluster ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4705887Z test eval_zero_keys_accepted_under_cluster ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4706643Z test eval_single_key_accepted_under_cluster ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4707337Z test eval_same_slot_via_hashtag_accepted_under_cluster ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4707680Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4707973Z test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4708397Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4711218Z ^[[1m^[[92m     Running^[[0m tests/lua_ecosystem.rs (target/x86_64-unknown-linux-gnu/debug/deps/lua_ecosystem-cbd0f31ce5e2dafc)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4723497Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4723693Z running 10 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4743502Z test atomic_incr_or_init_existing_key_skips_init ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4744481Z test redlock_extend_success_path ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4745000Z test atomic_incr_or_init_fresh_key ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4745572Z test atomic_incr_or_init_with_ttl_sets_expire ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4746196Z test redlock_extend_wrong_token_returns_zero ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4751695Z test redlock_unlock_missing_key_returns_zero ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4752781Z test redlock_unlock_wrong_token_returns_zero_and_preserves_lock ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4753519Z test redlock_unlock_success_path ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4754355Z test sliding_window_rate_limiter_first_request_allowed ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4754958Z test sliding_window_rate_limiter_over_limit_rejected ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4755263Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4755696Z test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4756286Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4756843Z ^[[1m^[[92m     Running^[[0m tests/lua_eval.rs (target/x86_64-unknown-linux-gnu/debug/deps/lua_eval-6a3d9907e1c31a25)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4768141Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4768294Z running 21 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4774880Z test eval_missing_args_returns_wrong_args_err ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4779931Z test eval_pure_lua_no_redis_call ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4780507Z test eval_redis_call_set_then_get_round_trips ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4781106Z test eval_redlock_unlock_canonical_script ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4789221Z test eval_ro_allows_get ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4792574Z test eval_multi_key_cluster_off_passes ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4795184Z test eval_ro_blocks_del ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4795799Z test eval_ro_blocks_incrby_via_pcall_returns_err_table ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4796685Z test eval_redlock_unlock_token_mismatch_returns_zero ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4797605Z test eval_ro_blocks_set ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4801380Z test eval_shebang_lua_53_integer_divide_through_kevy ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4809694Z test eval_single_key_never_cross_slots ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4810547Z test eval_uses_kevy_incr_through_redis_call ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4811236Z test eval_with_wrong_numkeys_returns_resp_error ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4812588Z test eval_zero_keys_never_cross_slots ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4813185Z test eval_writeable_resumes_after_eval_ro ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4814513Z test evalsha_ro_blocks_write_in_cached_script ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4815157Z test eval_under_default_budget_runs_modest_loop ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4815518Z test script_flush_clears_cache ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4819225Z test script_load_then_evalsha_round_trips ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4819833Z test script_exists_reports_hits_and_misses ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4820203Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4820625Z test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4821231Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4824260Z ^[[1m^[[92m     Running^[[0m tests/lua_multishard.rs (target/x86_64-unknown-linux-gnu/debug/deps/lua_multishard-135ca225c6c3d26f)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4837608Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4837760Z running 7 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4854967Z test route_eval_numkeys0_local ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4855726Z test route_eval_to_key1_shard ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.4856468Z test route_script_local ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.5240947Z test eval_writes_visible_across_shards ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.5580986Z test redlock_canonical_works_across_shards ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.5650751Z test script_flush_clears_global_cache ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.5819059Z test script_load_then_evalsha_across_shards ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.5819430Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.5819709Z test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.5820258Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.5827287Z ^[[1m^[[92m     Running^[[0m tests/maxclients_chaos.rs (target/x86_64-unknown-linux-gnu/debug/deps/maxclients_chaos-98ad24c014652bab)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.5836982Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.5837277Z running 1 test
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.5838666Z test maxclients_storm_refuses_past_cap ... ignored, chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.5839619Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.5849023Z test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.5849697Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.5850372Z ^[[1m^[[92m     Running^[[0m tests/multi_mget_ryow.rs (target/x86_64-unknown-linux-gnu/debug/deps/multi_mget_ryow-a2bab363f5da4852)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.5855299Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.5855478Z running 5 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.6498745Z test get_in_multi_still_sees_earlier_write_cross_shard ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.6602455Z test interleaved_set_mget_in_multi_cross_shard ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.6679859Z test mget_in_multi_sees_earlier_writes_cross_shard ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.6780014Z test mset_then_mget_in_multi_cross_shard ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.7108893Z test nontxn_mget_fans_out_cross_shard ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.7109406Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.7109932Z test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.7110449Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.7139675Z ^[[1m^[[92m     Running^[[0m tests/multi_tenant_e2e_chaos.rs (target/x86_64-unknown-linux-gnu/debug/deps/multi_tenant_e2e_chaos-a57b280a5648bab0)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.7149467Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.7149622Z running 1 test
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.7152791Z test multi_tenant_e2e_isolation_and_fairness ... ignored, chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.7153695Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.7154269Z test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.7154786Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.7155468Z ^[[1m^[[92m     Running^[[0m tests/network_partition_chaos.rs (target/x86_64-unknown-linux-gnu/debug/deps/network_partition_chaos-c23aeeb5661b6fc3)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.7162199Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.7162463Z running 1 test
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.7163681Z test network_partition_client_side_disconnects ... ignored, chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.7164849Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.7165286Z test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.7165917Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.7166580Z ^[[1m^[[92m     Running^[[0m tests/persistence.rs (target/x86_64-unknown-linux-gnu/debug/deps/persistence-bf40ad1d2bf32d94)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.7180072Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.7180240Z running 18 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:25.8065757Z test auto_aof_rewrite_fires_when_threshold_crossed ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:26.0212274Z test bgsave_writes_snapshot_in_background_and_keeps_post_save_writes ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:26.1351432Z test cross_shard_rename_survives_a_restart ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:26.1370519Z test bgrewriteaof_shrinks_log_and_preserves_data ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:26.2471697Z test data_survives_restart_via_aof_without_save ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:26.2622719Z test data_survives_restart_via_save ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:26.3066032Z test every_value_type_round_trips_through_a_snapshot ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:26.3191586Z test mset_and_rename_survive_a_restart ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:26.3676577Z test info_persistence_reports_rewrite_completion ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:26.6008200Z test aof_truncated_tail_is_tolerated_on_restart ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:26.6073258Z test restart_tolerates_corrupt_snapshot ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:27.2157189Z test save_at_shutdown_drains_to_disk ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:27.3304298Z test auto_aof_rewrite_respects_pct_zero_disable ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:27.4470251Z test stream_groups_survive_bgrewriteaof_restart ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:27.4611846Z test stream_groups_survive_save_restart ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:28.8288000Z test relative_ttl_frames_do_not_reanchor_on_replay ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:29.3804479Z test relative_ttl_survives_restart_at_original_deadline ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:29.5133342Z test save_does_not_block_reactor_for_disk_write ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:29.5134082Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:29.5134508Z test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.80s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:29.5135057Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:29.5151737Z ^[[1m^[[92m     Running^[[0m tests/psubscribe.rs (target/x86_64-unknown-linux-gnu/debug/deps/psubscribe-7cc3940cb46c8d1a)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:29.5167621Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:29.5167819Z running 8 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:29.5743722Z test channel_plus_pattern_both_fire ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:29.5928738Z test psubscribe_ack_then_pmessage_round_trip ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:29.6296583Z test punsubscribe_all_drains_held_patterns ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:29.6356426Z test punsubscribe_with_no_patterns_held_emits_nil_ack ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:29.6475889Z test punsubscribe_specific_pattern_stops_delivery ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:29.7412176Z test subscriber_disconnect_unregisters_patterns ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:29.7886727Z test pattern_no_match_no_delivery ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.3396726Z test cross_shard_pattern_delivery ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.3397279Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.3397642Z test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.82s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.3398173Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.3412907Z ^[[1m^[[92m     Running^[[0m tests/query_buffer_limit.rs (target/x86_64-unknown-linux-gnu/debug/deps/query_buffer_limit-d7d7ccb93465e4ec)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.3428666Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.3428860Z running 1 test
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.4206029Z test a_streaming_giant_frame_is_disconnected_at_the_cap ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.4206707Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.4207038Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.4207515Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.4211790Z ^[[1m^[[92m     Running^[[0m tests/randomkey_is_random.rs (target/x86_64-unknown-linux-gnu/debug/deps/randomkey_is_random-35a6ccfea4ceaea7)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.4226674Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.4226841Z running 4 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.5028125Z test randomkey_on_an_empty_db_is_nil ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.5384923Z test a_single_key_is_always_found ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.6935998Z test two_servers_disagree_about_arbitrary ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.7681183Z test randomkey_ranges_over_the_whole_keyspace ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.7681551Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.7681883Z test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.7682375Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.7713091Z ^[[1m^[[92m     Running^[[0m tests/rename.rs (target/x86_64-unknown-linux-gnu/debug/deps/rename-440f0b89157742ee)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.7729239Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.7729387Z running 10 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.7970678Z test rename_no_such_key_errors ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.8039758Z test rename_overwrites_destination ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.8107666Z test rename_preserves_ttl ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.8171492Z test rename_same_key_is_ok_for_rename ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.8236715Z test renamenx_returns_one_when_dst_missing ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.8296625Z test cross_shard_rename_preserves_ttl_v2_3b ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.8306571Z test renamenx_returns_zero_when_dst_exists ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.8347431Z test cross_shard_rename_succeeds_v2_3b ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.8361410Z test renamenx_same_key_returns_zero ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.8413349Z test cross_shard_renamenx_returns_zero_when_dst_exists ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.8413664Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.8414296Z test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.8414819Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.8422811Z ^[[1m^[[92m     Running^[[0m tests/replication.rs (target/x86_64-unknown-linux-gnu/debug/deps/replication-7b028490a4d1d982)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.8438793Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.8439527Z running 24 tests
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.8528274Z test fresh_replica_join_snapshot_then_live_frames ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.8611371Z test malformed_handshake_closes_connection_no_ack ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.8773030Z test repl_token_on_primary_reports_live_per_shard_pairs ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.9130782Z test multi_key_delete_reaches_a_replica ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.9200960Z test replica_apply_dispatch_mirrors_primary_store ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.9265059Z test replica_client_handshake_and_receive_set_frame ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:30.9266500Z test replica_client_handshake_failure_on_closed_port ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:31.3593500Z test repl_wait_read_your_writes_and_future_token_misdirects ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:31.4423992Z test replicaof_command_dynamically_attaches_to_primary ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:31.4482947Z test replication_disabled_means_no_listener_on_replication_port ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:31.5678568Z test role_reports_master_offset_advancing_with_writes ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:31.7008934Z test server_as_replica_applies_upstream_writes ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:31.7089396Z test snapshot_ship_loaded_into_local_store_matches_primary ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:31.7168161Z test snapshot_ship_triggers_when_replica_falls_behind_backlog ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:33.9121493Z test handshake_with_nonzero_offset_echoed_in_ack_then_fence_ships ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:33.9889558Z test replica_handshake_receives_ack_and_stays_connected ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:39.9408539Z test multi_shard_listener_binds_per_shard_port ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:51.6476390Z test streaming_replica_receives_multiple_frames_in_order ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:51.6576897Z test streaming_replica_receives_set_command_as_wire_frame ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:51.6701201Z test unclean_restart_generation_fence_ships_instead_of_aliasing ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:51.9275934Z test wait_with_no_replica_times_out_to_zero_and_wait_zero_is_immediate ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:52.7197590Z test wait_one_with_live_replica_returns_at_least_one ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:19:53.2069903Z test streaming_replica_receives_only_its_shards_writes ... ok
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:20:31.7170516Z test spop_storm_keeps_replica_sets_identical has been running for over 60 seconds
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5105140Z test spop_storm_keeps_replica_sets_identical ... FAILED
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5105492Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5105581Z failures:
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5105715Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5105890Z ---- spop_storm_keeps_replica_sets_identical stdout ----
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5106321Z kevy: shard 0 expired 1 replication slot(s) past reconnect window
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5106586Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5106931Z thread 'spop_storm_keeps_replica_sets_identical' (23157) panicked at crates/kevy/tests/replication.rs:1553:9:
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5107539Z replica never caught up to the post-storm fence within 180s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5108104Z replica is not accepting connections on port 58422; runtime thread has EXITED (panicked, find the crash)
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5108772Z stack backtrace:
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5109015Z    0: __rustc::rust_begin_unwind
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5109445Z              at /rustc/8bab26f4f68e0e26f0bb7960be334d5b520ea452/library/std/src/panicking.rs:689:5
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5109920Z    1: core::panicking::panic_fmt
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5110367Z              at /rustc/8bab26f4f68e0e26f0bb7960be334d5b520ea452/library/core/src/panicking.rs:80:14
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5110895Z    2: replication::spop_storm_keeps_replica_sets_identical
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5111239Z              at ./tests/replication.rs:1553:9
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5111616Z    3: replication::spop_storm_keeps_replica_sets_identical::{closure#0}
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5111997Z              at ./tests/replication.rs:1460:45
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5134737Z    4: <replication::spop_storm_keeps_replica_sets_identical::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5135564Z              at /rustc/8bab26f4f68e0e26f0bb7960be334d5b520ea452/library/core/src/ops/function.rs:250:5
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5136274Z    5: <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5136939Z              at /rustc/8bab26f4f68e0e26f0bb7960be334d5b520ea452/library/core/src/ops/function.rs:250:5
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5137542Z note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5137884Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5137914Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5137991Z failures:
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5138201Z     spop_storm_keeps_replica_sets_identical
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5138405Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5138689Z test result: FAILED. 23 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 237.67s
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5139368Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5162301Z ^[[1m^[[91merror^[[0m: test failed, to rerun pass `-p kevy --test replication`
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-08T16:23:28.5207771Z ##[error]Process completed with exit code 101.
