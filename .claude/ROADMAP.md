@@ -728,7 +728,7 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 ### V3 — 尾延迟工业化
 - [ ] 心跳探针机制化(常驻可观测)+ tailgate:PING p99.9 ≤ 100ms、reactor 单圈上界 ≤ 100ms
       —— **仪器已落地(2026-08-08)**:`reactor_tick_gap_max_us` 引擎 gauge(tick 迟到 = 单迭代停顿上界,10Hz 零热路径成本,双 reactor 接线)+ `examples/tail_probe.rs` 进程内探针 + `bench/tailgate.sh` 两 cell。**基线(诚实 RED)**:mixed p999=100.8ms/gap 6.07s、firehose p999=280-460ms/gap 1.3-2.3s(×3)。**副产物:仪器首日抓出并修掉一个必崩缺陷**——单值 >4GiB 时 AOF 重写单帧 Argv u32 偏移回绕、persist 线程带崩全进程(`f94c3635`,按 Redis AOF_REWRITE_ITEMS_PER_CMD=64 分块 + 256MB 帧字节界)。**余项 = 两类停顿的 Phase A decomp + attack**(mixed 的 6s 与 firehose 的 AOF 追加路径)
-- [ ] 慢客户端 / 连接风暴防护核查
+- [x] 慢客户端 / 连接风暴防护核查(2026-08-08)—— 三面审计:输出侧 `CLIENT_OUTPUT_HARD_LIMIT` 512MB 每 tick 扫(双 reactor,已有)/ 接入侧 maxclients 按 shard 分摊 + rejected 计数(已有)/ **输入侧无界 = 真缺口**:合法但永不完帧的巨型 multibulk 可把 `conn.input` 撑到 OOM → 补 `CLIENT_INPUT_HARD_LIMIT` 1GB(Redis client-query-buffer-limit 同值)双 reactor 读时执行,`KEVY_DEBUG_INPUT_LIMIT` 可覆盖,e2e 钉死断连+服务器无恙(`a692525c`)
 
 ### V4 — alloc 执行轮(待 P1/P2 拍板)
 - [ ] 按拍板执行默认开关;若收集合角,走残余 RFC 修正后的 B'(单发信封池化),perfgate-median 验收
