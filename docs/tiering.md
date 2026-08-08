@@ -157,7 +157,9 @@ from the capacity model:
   The floor is ~96 B per entry at a 9-byte key (~143 B at a 48-byte
   key), flat across every scale tested, which makes the ceiling
   predictable: **max data:RAM ≈ value_size / (96 B + key heap)**. That
-  predicts 2.67× / 10.7× / 42.7× for the three rows above.
+  predicts 2.67× / 10.7× / 42.7× for the three rows above. An
+  interactive version of this formula lives at
+  <https://kevy.golia.jp/capacity/>.
 
   **What that 96 B is matters for where the lever is.** It is the
   keyspace entry (`ENTRY_OVERHEAD`: the inline key cell plus the
