@@ -331,6 +331,24 @@ failure mode is already *silently, correctly, reading nothing*.
 - Verified against `cargo test --workspace` (223 suites), `crashgate`,
   `perfgate`, `repligate` and `idxgate`.
 
+### Added
+
+- **`INFO` grew a `# Modules` section** (also addressable as
+  `INFO modules`): one `module:name=…` line per capability surface in
+  Redis's shape, so tools that probe modules parse it unchanged. kevy's
+  modules are built in, not loaded — the section answers "what can this
+  server do": `alloc` reports the compiled-in allocator
+  (`kevy-alloc`/`system`), `tiering` its runtime state, and the command
+  surfaces (indexes, tables, views, text, vector, cdc, pubsub, lua)
+  report present-by-construction.
+- **Small hash values now live inline in the store** (`HashData` value
+  slot): field values ≤ 22 B pay zero per-value heap allocation,
+  erasing the alloc-ON hash-angle tax (−5.8 % → −0.2 % same-box) and
+  buying +12.7 % pipelined HSET and ~3 % RSS on the default build.
+- **`docs/alloc.md`** (en/zh/ja): what the opt-in allocator buys, what
+  it costs, and when to enable it — plus an interactive capacity
+  calculator on the site (`/capacity/`).
+
 ## 4.1.1 — the TTL frame that re-anchored
 
 A consumer's gate caught a TTL reading back *larger* after an AOF

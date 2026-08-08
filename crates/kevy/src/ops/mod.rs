@@ -137,6 +137,9 @@ fn build_info_body(
     if want_section(want, "replication") {
         info_replication(ctx, &mut body);
     }
+    if want_section(want, "modules") {
+        info_modules(totals, &mut body);
+    }
     if want_section(want, "cluster") {
         info_cluster(cfg, &mut body);
     }

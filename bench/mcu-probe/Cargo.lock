@@ -4,22 +4,22 @@ version = 4
 
 [[package]]
 name = "kevy-bytes"
-version = "4.1.0"
+version = "4.1.1"
 dependencies = [
  "kevy-hash",
 ]
 
 [[package]]
 name = "kevy-hash"
-version = "4.1.0"
+version = "4.1.1"
 
 [[package]]
 name = "kevy-madvise"
-version = "4.1.0"
+version = "4.1.1"
 
 [[package]]
 name = "kevy-map"
-version = "4.1.0"
+version = "4.1.1"
 dependencies = [
  "kevy-hash",
  "kevy-madvise",
@@ -34,11 +34,11 @@ dependencies = [
 
 [[package]]
 name = "kevy-ranktree"
-version = "4.1.0"
+version = "4.1.1"
 
 [[package]]
 name = "kevy-store"
-version = "4.1.0"
+version = "4.1.1"
 dependencies = [
  "kevy-bytes",
  "kevy-hash",
