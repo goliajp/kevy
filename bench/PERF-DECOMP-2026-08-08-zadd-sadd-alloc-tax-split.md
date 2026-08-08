@@ -100,6 +100,27 @@ non-forwarding-dense shape and does not transfer. If option C is taken, the
 attack surface to decompose first is the forwarding envelope path under 8sh,
 second the set fast path (sadd's tax is shape-stable: −16.5 % / −13.8 %).
 
+## ERRATUM 2 — the 8sh forwarding hypothesis is refuted; one unified seat
+
+8-shard (legacy shape) all-thread sampling, ON vs OFF, killed the forwarding
+hypothesis cleanly: the 7 forwarding shards show **zero allocator symbols**
+and identical profiles on both builds. The tax lives on the owner, and the
+per-thread arithmetic closes the loop: with 11 threads at ~9 % of total
+samples each, the owner's `Heap::alloc` at 2.12 % global ≈ **~23 % of the
+owner's own time** — exactly the pacing arc's 23.3 % (vs glibc 13.4 %,
+~1.7×/call).
+
+The 2sh "−3.2 %" was an **unsaturated-owner artifact**: 2sh zadd ran at
+1.18 M ops/s vs ~4 M in 8sh — the idle headroom absorbed the per-call cost.
+Saturate the owner and the full tax shows (−13.4 %).
+
+**Unified conclusion**: the sadd AND zadd alloc-ON taxes are the same thing —
+the kevy-alloc fast-path per-call cost on a saturated owner thread. Not the
+forwarding envelopes, not the zset tree. Option C's attack surface is the
+fast path itself, which the pacing arc already peeled four layers deep: no
+dominant seat, so C means many small knives or a class redesign. The A-vs-C
+decision now has its final, fully-decomposed input.
+
 ## Measurement lessons (this round)
 
 - `ps` TIME cannot identify the owner among busy-poll shards — sample all
