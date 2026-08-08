@@ -28,6 +28,8 @@ mod datetime;
 mod datetime_fmt;
 mod math;
 mod md5;
+mod regex_engine;
+mod regexp;
 mod nullfam;
 mod ops;
 mod strings;
@@ -179,6 +181,8 @@ pub fn eval(func: &str, args: &[Scalar]) -> Result<Scalar, ScalarError> {
         "extract" | "date_part" | "date_trunc" | "age" | "to_char" => {
             datetime::eval(&name, args)
         }
+        // ── regexp (vendored engine) ──
+        "regexp_replace" | "regexp_matches" | "regexp_split_to_array" => regexp::eval(&name, args),
         // ── hash ──
         "md5" => match args {
             [Scalar::Null] => Ok(Scalar::Null),
