@@ -51,6 +51,14 @@ tailgate 双 cell 双 bar 全绿(p99.9 ≤100ms 且 reactor gap ≤100ms)
 
 ## 4. 实施切片(拍板后)
 
+**进度(2026-08-08)**:S1 persist 半场已落(`Aof` queued-append 模式:
+`enable_queued_appends`/`take_pending`/`queued_fd` + 结构性入口诚实回退,
+`97151955`,逐字节等价钉死)+ uring 原语已落(`prep_write_at`/`prep_fsync`,
+`e2a54785`)。**S1 余 = reactor 热循环接线**(在途 chunk 跨 CQE 存活 /
+fsync 排在在途写之后 / rotation 前 drain / everysec fsync 调度 / epoll
+兜底)—— 崩溃安全爆炸半径大,建议新鲜上下文开工。
+
+切片:
 S1 uring `write` SQE 化(everysec/no 先行,回复不等待)→ S2
 `always` 的 CQE-gated 回复 → S3 epoll 兜底(B 案短环)→ S4 tailgate
 转绿 + 三门禁复跑 → S5 finding 收尾。
