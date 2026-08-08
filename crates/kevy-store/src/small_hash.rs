@@ -236,7 +236,7 @@ impl<'a> Iterator for SmallHashIter<'a> {
 pub(crate) fn promote(inline: &SmallHashData) -> crate::value::HashData {
     let mut h = crate::value::HashData::with_capacity(inline.len().max(1));
     for (f, v) in inline.iter() {
-        h.insert(SmallBytes::from_slice(f), v.to_vec());
+        h.insert(SmallBytes::from_slice(f), SmallBytes::from_slice(v));
     }
     h
 }
@@ -332,7 +332,7 @@ mod tests {
         s.try_set(b"bb", b"22");
         let h = promote(&s);
         assert_eq!(h.len(), 2);
-        assert_eq!(h.get(b"a".as_slice()).map(Vec::as_slice), Some(b"1".as_slice()));
-        assert_eq!(h.get(b"bb".as_slice()).map(Vec::as_slice), Some(b"22".as_slice()));
+        assert_eq!(h.get(b"a".as_slice()).map(SmallBytes::as_slice), Some(b"1".as_slice()));
+        assert_eq!(h.get(b"bb".as_slice()).map(SmallBytes::as_slice), Some(b"22".as_slice()));
     }
 }
