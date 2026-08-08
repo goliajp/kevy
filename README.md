@@ -388,6 +388,7 @@ server's own metadata — the same rows `COMMAND DOCS` serves).
 | Tauri apps | [`docs/tauri.md`](docs/tauri.md) |
 | IoT & feature tiers | [`docs/iot.md`](docs/iot.md) |
 | Accept-shard sizing | [`docs/accept-shards.md`](docs/accept-shards.md) |
+| Opt-in allocator (`kevy-alloc`) | [`docs/alloc.md`](docs/alloc.md) |
 | Error reply reference | [`docs/error-replies.md`](docs/error-replies.md) |
 
 ## Out of scope

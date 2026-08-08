@@ -79,6 +79,8 @@ Eviction policies mirror Redis: `noeviction`, `allkeys-lru`, `allkeys-lfu`, `all
 
 **Size containers from `process_rss_bytes`, not `used_memory`.** `INFO memory` reports both: `used_memory` is the store's keyspace accounting — what `maxmemory` and the tiering budget act on — while `process_rss_bytes` is what the OS actually holds resident for the process, which additionally carries indexes and views, connection and replication buffers, and allocator overhead/fragmentation. A container memory limit set from `used_memory` will OOM-kill a healthy process; set limits against observed RSS with headroom.
 
+**The opt-in allocator.** A build with `--features kevy-alloc` swaps glibc malloc for kevy's own span allocator: ~10 % smaller steady-state RSS under churn, at a throughput cost only on saturated collection-write shards. When memory capacity is the binding constraint, it is worth the build; see [docs/alloc.md](https://github.com/goliajp/kevy/blob/develop/docs/alloc.md) for the measured trade.
+
 ### Network
 
 The default transport is TCP. When the client lives on the same host, switch to a Unix-domain socket and skip the loopback TCP stack entirely:

@@ -83,3 +83,30 @@ industrialization scorecard, C only with a workload in hand. sadd's
 3. mremap for giant reallocs: throughput-irrelevant (≤1 %), but the
    zadd >3 s pause (kernel-side suspect) is a tail-latency defect on
    any door; separate small investigation, owner to rank it.
+
+## Resolution (2026-08-09, evidence-complete)
+
+**Door A — accept; kevy-alloc stays opt-in.** Decided under the owner's
+"this is your research, you decide" delegation, on the completed Phase A
+chain (bench/PERF-DECOMP-2026-08-08-zadd-sadd-alloc-tax-split.md + errata):
+
+- The hash angle was recovered by the V4 value-inline enabler (−5.8 → −0.2
+  same-box; official medians −5.5 PASS): the recoverable part is recovered.
+- The sadd/zadd residue is ONE thing — the fast-path per-call cost on a
+  saturated owner (owner-internal `Heap::alloc` ~23 % vs glibc ~13 %,
+  ~1.7×/call). Forwarding-envelope and tree-walk hypotheses both refuted;
+  B (claims widening) numerically insufficient for −10~−16; B' (envelope
+  pooling) long refuted (0.5 % of allocs).
+- C (class redesign) therefore prices as a many-small-knives/redesign
+  program against a diffuse seat, for at most 10-16 pp on saturated
+  collection angles — a poor trade against v5-industrial's timeline, and
+  revisitable with a workload in hand (decision point 1's own terms).
+- The alloc-ON value story (capacity/fragmentation: 2.16× vs 2.40 RSS,
+  disk/stable zero-cost) stands and is delivered as an opt-in with a
+  documented when-to-enable guide (docs/alloc.md), which is the honest
+  industrial claims posture (charter 口径纪律).
+
+P1's original "default ON" recommendation carried the premise "collection
+angles recoverable"; the premise is now measured false for sadd/zadd, so P1
+executes as opt-in. Decision point 2 (the 0.92 floor's future) and point 3
+(the zadd >3 s kernel-side pause) remain open, owner-ranked.
