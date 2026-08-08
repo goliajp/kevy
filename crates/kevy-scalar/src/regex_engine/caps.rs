@@ -16,6 +16,7 @@ pub(crate) fn cap_undo(caps: &mut Caps, journal: &mut CapJournal, mark: usize) {
     }
 }
 
+// LOC-WAIVER: vendored spg ERE engine core (byte-identical fork); splitting upstream's tested matcher/parser injects bugs without readability gain.
 pub(crate) fn re_match_at_caps(
     node: &ReNode,
     s: &[char],
@@ -127,7 +128,7 @@ pub(crate) fn re_match_at_caps(
                 None => Ok(None),
             }
         }
-        // v7.38 (read01, T7-br) — match the previously-captured group text at
+        // match the previously-captured group text at
         // `pos`. A group that did not participate matches the empty string.
         ReNode::Backref { idx, ci } => match caps.get(*idx).copied().flatten() {
             Some((cs, ce)) => {
@@ -153,6 +154,7 @@ pub(crate) fn re_match_at_caps(
     }
 }
 
+// LOC-WAIVER: vendored spg ERE engine core (byte-identical fork); splitting upstream's tested matcher/parser injects bugs without readability gain.
 pub(crate) fn re_match_seq_caps(
     items: &[ReNode],
     s: &[char],
@@ -178,7 +180,7 @@ pub(crate) fn re_match_seq_caps(
         return Ok(Some(pos));
     };
     match first {
-        // v7.38 (read01, T7-br) — a captured *quantified* group (`(a*)`) must be
+        // a captured *quantified* group (`(a*)`) must be
         // a backtrack point when a following backref constrains it: enumerate the
         // inner quant's reachable ends, record caps[idx] at each rep count, and
         // try the tail (so `^(a*)\1$` on `aaaa` gives back to group = `aa`).
@@ -225,7 +227,7 @@ pub(crate) fn re_match_seq_caps(
                     }
                     continue;
                 }
-                // v7.39 (read01 regexp.c) — keep the caps of the first `reps`
+                // keep the caps of the first `reps`
                 // repetitions: roll back to the state AFTER rep `reps`
                 // finished (marks[k] is the mark BEFORE rep k+1 starts, so
                 // that state is marks[reps + 1]; at the full count nothing

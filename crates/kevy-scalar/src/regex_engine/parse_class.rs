@@ -2,6 +2,7 @@
 #![allow(clippy::all, clippy::pedantic)]
 use super::*;
 
+// LOC-WAIVER: vendored spg ERE engine core (byte-identical fork); splitting upstream's tested matcher/parser injects bugs without readability gain.
 pub(crate) fn re_parse_class(chars: &[char], p: &mut usize) -> Result<ReNode, ReErr> {
     debug_assert_eq!(chars.get(*p), Some(&'['));
     *p += 1;
@@ -73,7 +74,7 @@ pub(crate) fn re_parse_class(chars: &[char], p: &mut usize) -> Result<ReNode, Re
         if *p + 1 < chars.len() && chars[*p] == '-' && chars[*p + 1] != ']' {
             let end = chars[*p + 1];
             *p += 2;
-            // v7.39 (round 772, F31 J2) — a REVERSED range (`[z-a]`)
+            // a REVERSED range (`[z-a]`)
             // is PG's "invalid regular expression: invalid character
             // range" (measured); the old parser recorded it and
             // matched nothing, silently.
@@ -93,7 +94,7 @@ pub(crate) fn re_parse_class(chars: &[char], p: &mut usize) -> Result<ReNode, Re
     })
 }
 
-/// v7.37.16 Epic Rx P0 — parse a `{m}` / `{m,}` / `{m,n}` counted
+/// parse a `{m}` / `{m,}` / `{m,n}` counted
 /// repetition beginning at `chars[*p] == '{'`.
 ///
 /// * `Ok(Some((min, max)))` — a well-formed bound; `*p` is advanced

@@ -133,6 +133,38 @@ fn regexp_replace(args: &[Scalar]) -> Result<Scalar, ScalarError> {
     Ok(Scalar::Text(out))
 }
 
+/// One rendered `{...}` array per match (its capture groups, or the
+/// whole match when the pattern has none). `regexp_matches` is a
+/// set-returning function; this collects the rows and the caller maps
+/// their cardinality onto the one-row fold face.
+fn match_rows(
+    func: &'static str,
+    node: &re::ReNode,
+    text: &str,
+    global: bool,
+) -> Result<Vec<String>, ScalarError> {
+    let chars: Vec<char> = text.chars().collect();
+    let ngroups = re::max_group(node);
+    let mut rows: Vec<String> = Vec::new();
+    let (mut from, err) = (0usize, matcher_err(func));
+    while let Some(((s, e), caps)) = re::re_find_caps(node, &chars, from, ngroups).map_err(&err)? {
+        let elems: Vec<Option<String>> = if ngroups == 0 {
+            vec![Some(chars[s..e].iter().collect())]
+        } else {
+            (1..=ngroups).map(|g| caps[g].map(|(a, b)| chars[a..b].iter().collect())).collect()
+        };
+        rows.push(render_array(&elems));
+        if !global {
+            break;
+        }
+        from = if e > s { e } else { e + 1 };
+        if from > chars.len() {
+            break;
+        }
+    }
+    Ok(rows)
+}
+
 /// `regexp_matches(text, pattern [, flags])` — one array of the
 /// pattern's capture groups (or the whole match when it has none);
 /// with `g`, every match's groups flattened; NULL / no-match → NULL
@@ -159,31 +191,7 @@ fn regexp_matches(args: &[Scalar]) -> Result<Scalar, ScalarError> {
         return Err(ScalarError::Type { func: FUNC, arg: 0 });
     };
     let node = compile(FUNC, pat, flags.contains('i'))?;
-    let global = flags.contains('g');
-    let chars: Vec<char> = t.chars().collect();
-    let ngroups = re::max_group(&node);
-    // regexp_matches is a SET-returning function: one ROW per match,
-    // each row the array of that match's groups (or the whole match
-    // when there are none). The fold face serves ONE row — so a `g`
-    // flag that produces more than one match is refused by name
-    // rather than flattened into a single wrong array. No match → NULL.
-    let mut rows: Vec<String> = Vec::new();
-    let (mut from, err) = (0usize, matcher_err(FUNC));
-    while let Some(((s, e), caps)) = re::re_find_caps(&node, &chars, from, ngroups).map_err(&err)? {
-        let elems: Vec<Option<String>> = if ngroups == 0 {
-            vec![Some(chars[s..e].iter().collect())]
-        } else {
-            (1..=ngroups).map(|g| caps[g].map(|(a, b)| chars[a..b].iter().collect())).collect()
-        };
-        rows.push(render_array(&elems));
-        if !global {
-            break;
-        }
-        from = if e > s { e } else { e + 1 };
-        if from > chars.len() {
-            break;
-        }
-    }
+    let mut rows = match_rows(FUNC, &node, t, flags.contains('g'))?;
     // A set-returning function: the fold face serves exactly ONE row.
     // Zero rows (no match / NULL input — PG emits empty output) and
     // more than one (the g flag over several matches) are both out of

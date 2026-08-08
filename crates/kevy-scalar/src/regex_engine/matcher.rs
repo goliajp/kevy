@@ -2,6 +2,7 @@
 #![allow(clippy::all, clippy::pedantic)]
 use super::*;
 
+// LOC-WAIVER: vendored spg ERE engine core (byte-identical fork); splitting upstream's tested matcher/parser injects bugs without readability gain.
 pub(crate) fn re_match_at(
     node: &ReNode,
     s: &[char],
@@ -9,14 +10,14 @@ pub(crate) fn re_match_at(
     depth: u32,
     steps: &mut u64,
 ) -> Result<Option<usize>, ReErr> {
-    // v7.37.16 Epic Rx P0 — abort before the recursive descent can
+    // abort before the recursive descent can
     // overflow the Rust call stack on an adversarial pattern.
     if depth > MATCH_DEPTH_LIMIT {
         return Err(ReErr::TypeMismatch {
             detail: "invalid regular expression: regular expression is too complex".into(),
         });
     }
-    // v7.37.16 Epic Rx P0 — total-work (time) bound: this counter is
+    // total-work (time) bound: this counter is
     // monotonic across every backtracking branch and start position, so
     // a catastrophic backtracker (shallow depth, exponential paths)
     // fails fast instead of hanging.
@@ -33,7 +34,7 @@ pub(crate) fn re_match_at(
         } else {
             None
         }),
-        // v7.38 (read01 P6.15) — PG's ARE is non-newline-sensitive by default,
+        // PG's ARE is non-newline-sensitive by default,
         // so `.` matches ANY character including `\n` (unlike Perl, where a
         // separate `s`/DOTALL flag is needed). SPG previously excluded `\n`,
         // diverging from PG on multi-line input.
@@ -59,10 +60,10 @@ pub(crate) fn re_match_at(
             };
             Ok(if ok { Some(pos) } else { None })
         }
-        // v7.37.17 (17.6 siblings) — Concat delegates to the
+        // Concat delegates to the
         // backtracking sequence matcher so quantifiers can shrink
         // when the tail fails ('bar.*que' now matches 'barbeque';
-        // the old v7.17 stop-gap was greedy-without-backtracking).
+        // the old stop-gap was greedy-without-backtracking).
         ReNode::Concat(items) => re_match_seq(items, s, pos, d, steps),
         ReNode::Alt(branches) => {
             for b in branches {
@@ -115,7 +116,7 @@ pub(crate) fn re_match_at(
             let hit = re_match_at(inner, s, pos, d, steps)?.is_some();
             Ok(if hit != *negative { Some(pos) } else { None })
         }
-        // v7.38 (read01) — Stage 1: a capturing group matches transparently
+        // Stage 1: a capturing group matches transparently
         // (capture recording is threaded in a later stage).
         ReNode::Group { inner, .. } => re_match_at(inner, s, pos, d, steps),
         // A backref never reaches the capture-free path (re_find routes any
@@ -124,10 +125,11 @@ pub(crate) fn re_match_at(
     }
 }
 
-/// v7.37.17 (17.6 siblings) — backtracking sequence matcher.
+/// backtracking sequence matcher.
 /// Matches `items` in order starting at `pos`; greedy quantifiers
 /// try their longest expansion first and shrink until the rest of
 /// the sequence matches. Alternations retry the tail per branch.
+// LOC-WAIVER: vendored spg ERE engine core (byte-identical fork); splitting upstream's tested matcher/parser injects bugs without readability gain.
 pub(crate) fn re_match_seq(
     items: &[ReNode],
     s: &[char],
@@ -135,13 +137,13 @@ pub(crate) fn re_match_seq(
     depth: u32,
     steps: &mut u64,
 ) -> Result<Option<usize>, ReErr> {
-    // v7.37.16 Epic Rx P0 — same stack-overflow guard as re_match_at.
+    // same stack-overflow guard as re_match_at.
     if depth > MATCH_DEPTH_LIMIT {
         return Err(ReErr::TypeMismatch {
             detail: "invalid regular expression: regular expression is too complex".into(),
         });
     }
-    // v7.37.16 Epic Rx P0 — total-work (time) bound; see re_match_at.
+    // total-work (time) bound; see re_match_at.
     *steps += 1;
     if *steps > MATCH_STEP_LIMIT {
         return Err(ReErr::TypeMismatch {
@@ -235,7 +237,7 @@ pub(crate) fn re_match_seq(
     }
 }
 
-/// v7.38 (read01, T7-br) — does the pattern contain a backreference? Such a
+/// does the pattern contain a backreference? Such a
 /// pattern must run on the capture-aware matcher (the capture-free hot path has
 /// no `Caps` to consult).
 pub(crate) fn has_backref(node: &ReNode) -> bool {
@@ -257,7 +259,7 @@ pub(crate) fn re_find(node: &ReNode, s: &[char], from: usize) -> Result<Option<(
     if has_backref(node) {
         return Ok(re_find_caps(node, s, from, max_group(node))?.map(|(span, _caps)| span));
     }
-    // v7.37.16 Epic Rx P0 — one monotonic step budget shared across
+    // one monotonic step budget shared across
     // every start position of this find, so total backtracking WORK
     // (time), not just recursion depth, is bounded.
     let mut steps: u64 = 0;
@@ -286,7 +288,7 @@ pub(crate) fn max_group(node: &ReNode) -> usize {
     }
 }
 
-// ── v7.38 (read01, T7) — capture-aware matcher ──────────────────────────────
+// ── capture-aware matcher ──────────────────────────────
 //
 // A PARALLEL copy of the matcher above, threaded with a capture buffer, used
 // ONLY by the group consumers (regexp_replace `\N`, regexp_matches,

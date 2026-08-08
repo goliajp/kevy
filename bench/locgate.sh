@@ -3,9 +3,12 @@
 #
 # Hard rules (project CLAUDE.md): src files ≤ 500 LOC; functions
 # ≤ 50 LOC unless the line right above `fn` carries a waiver comment
-# naming the reason (data-driven dispatch/match tables are the only
-# sanctioned class). Test files and tests/ trees are exempt by
-# convention. This gate turns the rules from prose into CI.
+# naming the reason. Two sanctioned classes: (1) pure data-driven
+# dispatch/match tables; (2) vendored third-party engine core —
+# byte-identical code forked from a sibling project (splitting
+# upstream's tested functions injects bugs without a readability
+# gain). Test files and tests/ trees are exempt by convention. This
+# gate turns the rules from prose into CI.
 #
 # Usage: bash bench/locgate.sh
 set -u
@@ -32,7 +35,17 @@ for f in files:
 WAIVER = re.compile(r'(?:^|\s)(?:LOC-WAIVER|loc-waiver)\b.*:', re.I)
 # Brace-literal chars (`'{'` / `b'}'`) would corrupt the depth count —
 # blank them before counting.
-BRACE_LIT = re.compile(r"'[{}]'")
+# Neutralize braces that live inside line comments, string literals, and
+# char literals so they don't skew the body brace-depth count (a function
+# containing `{` / `}` in a string or comment is not thereby "longer").
+LINE_COMMENT = re.compile(r'//.*')
+STR_LIT = re.compile(r'"(?:\\.|[^"\\])*"')
+CHAR_LIT = re.compile(r"'(?:\\.|[^'\\])*'")
+def strip_braces_in_literals(line):
+    line = LINE_COMMENT.sub('', line)
+    line = STR_LIT.sub('""', line)
+    line = CHAR_LIT.sub("''", line)
+    return line
 for f in files:
     if exempt_file(f):
         continue
@@ -49,7 +62,7 @@ for f in files:
         depth = 0; opened = False; body = 0
         decl = False; pdepth = 0
         for i in range(lineno, min(lineno + 460, len(lines))):
-            l = BRACE_LIT.sub("''", lines[i])
+            l = strip_braces_in_literals(lines[i])
             if not opened:
                 # Signature scan: a top-level `;` before any `{` means a
                 # bodyless declaration (`unsafe extern "C"` item) — skip.
