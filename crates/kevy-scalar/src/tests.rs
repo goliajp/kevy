@@ -296,3 +296,14 @@ fn format_specifiers_from_probe_32() {
         Err(ScalarError::Domain { .. })
     ));
 }
+
+// ── md5 (RFC 1321) as PG's md5(text) ──
+#[test]
+fn md5_matches_postgres() {
+    // PG: md5('') = the empty digest; lowercase hex; NULL → NULL.
+    assert_eq!(txt(eval("md5", &[t("")])), "d41d8cd98f00b204e9800998ecf8427e");
+    assert_eq!(txt(eval("md5", &[t("abc")])), "900150983cd24fb0d6963f7d28e17f72");
+    assert_eq!(eval("md5", &[Scalar::Null]).unwrap(), Scalar::Null);
+    assert!(matches!(eval("md5", &[Scalar::Int(1)]), Err(ScalarError::Type { .. })));
+    assert!(matches!(eval("md5", &[t("a"), t("b")]), Err(ScalarError::Arity { .. })));
+}

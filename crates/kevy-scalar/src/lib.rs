@@ -27,6 +27,7 @@
 mod datetime;
 mod datetime_fmt;
 mod math;
+mod md5;
 mod nullfam;
 mod ops;
 mod strings;
@@ -178,6 +179,13 @@ pub fn eval(func: &str, args: &[Scalar]) -> Result<Scalar, ScalarError> {
         "extract" | "date_part" | "date_trunc" | "age" | "to_char" => {
             datetime::eval(&name, args)
         }
+        // ── hash ──
+        "md5" => match args {
+            [Scalar::Null] => Ok(Scalar::Null),
+            [Scalar::Text(t)] => Ok(Scalar::Text(md5::md5_hex(t.as_bytes()))),
+            [_] => Err(ScalarError::Type { func: "md5", arg: 0 }),
+            _ => Err(ScalarError::Arity { func: "md5", got: args.len() }),
+        },
         _ => Err(ScalarError::UnknownFunction(func.to_string())),
     }
 }
