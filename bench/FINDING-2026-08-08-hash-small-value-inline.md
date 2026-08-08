@@ -170,6 +170,25 @@ claims / class redesign — fastpath-residue RFC) is the owner's.
 **Bottom line: alloc default-ON stays blocked on sadd/zadd; the hash blocker
 is gone.**
 
+**N=5 precision round** (same build, medians of 5 full perfgate runs): the
+"sadd is 0.1 pp under the floor — band edge" reading did NOT survive:
+
+| angle | n=3 | n=5 | verdict |
+|---|---|---|---|
+| legacy_8sh_sadd | −8.1 % | **−9.7 %** | FAIL — real distance, not noise |
+| legacy_8sh_zadd | −15.0 % | **−13.5 %** | FAIL — real distance |
+| legacy_8sh_hset | −5.5 % | −5.4 % | PASS — recovery stable |
+| (other 9 angles) | PASS | PASS | stable |
+
+Methodology note: an angle sitting at the floor edge on n=3 medians is not
+adjudicable — raise N before calling it either way (the mirror image of the
+"single run shows −X%" trigger). Here n=5 moved sadd AWAY from the floor.
+
+**Final P2 input for the fastpath-residue decision**: sadd −9.7 % and zadd
+−13.5 % are real, stable distances. Option B (widen claims 1-3 %) cannot cover
+them; the live choices are A (accept, alloc stays opt-in) or C (class
+redesign, needs its own decomposition round). Owner's call.
+
 Measurement-hygiene note for the record: three consecutive REFUSED runs before
 this one were observer effects — (a) a zombie watcher pair from an earlier
 session (mutually kept alive: each saw the other's `perfgate-median.sh`
