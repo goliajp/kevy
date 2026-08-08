@@ -74,7 +74,13 @@ fn replay_shard_aof(
             store.demote_to_watermark();
         }
     };
-    let r = if config.replay_resync {
+    // A registered metric sink receives the replay numbers as data
+    // (`KevyMetric`), so the informational stderr summary would be a
+    // duplicate on every open — a real cost for per-command CLI
+    // processes. The corrupt-frame WARN prints regardless.
+    let r = if config.metric_sink.is_some() {
+        kevy_persist::replay_aof_quiet(aof, config.replay_resync, apply)?
+    } else if config.replay_resync {
         kevy_persist::replay_aof_resync(aof, apply)?
     } else {
         replay_aof(aof, apply)?
@@ -95,4 +101,3 @@ fn fold_replay_report(report: &mut OpenReport, r: &kevy_persist::ReplayReport) {
     report.corrupt |= r.corrupt;
     report.resynced_bytes += r.resynced_ranges.iter().map(|(a, b)| b - a).sum::<u64>();
 }
-
