@@ -252,6 +252,21 @@ impl Aof {
         Ok(())
     }
 
+    /// Write the encoded scratch frame straight to the file (the
+    /// non-queued path): V2 = length + CRC header then payload, V1 = bare.
+    fn write_scratch_to_file(&mut self) -> io::Result<()> {
+        match self.format {
+            crate::AofFormat::V2 => {
+                self.file
+                    .write_all(&(self.scratch.len() as u32).to_le_bytes())?;
+                self.file
+                    .write_all(&crate::crc32c::crc32c(&self.scratch).to_le_bytes())?;
+                self.file.write_all(&self.scratch)
+            }
+            crate::AofFormat::V1 => self.file.write_all(&self.scratch),
+        }
+    }
+
     /// Append one command, applying the fsync policy. V2 files get the
     /// checksummed record envelope; a V1 file keeps its bare-RESP form
     /// until a rewrite upgrades it.
@@ -272,16 +287,7 @@ impl Aof {
                 crate::AofFormat::V1 => q.extend_from_slice(&self.scratch),
             }
         } else {
-            match self.format {
-                crate::AofFormat::V2 => {
-                    self.file
-                        .write_all(&(self.scratch.len() as u32).to_le_bytes())?;
-                    self.file
-                        .write_all(&crate::crc32c::crc32c(&self.scratch).to_le_bytes())?;
-                    self.file.write_all(&self.scratch)?;
-                }
-                crate::AofFormat::V1 => self.file.write_all(&self.scratch)?,
-            }
+            self.write_scratch_to_file()?;
         }
         if let Some(tee) = &mut self.rewrite_tee {
             crate::record::write_record(tee, &self.scratch)?;
