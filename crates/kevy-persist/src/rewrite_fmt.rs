@@ -183,7 +183,7 @@ pub(crate) fn write_value_as_commands<W: Write>(
         // ArcBulk again for > BULK_THRESHOLD bytes.
         Value::ArcBulk(a) => write_verb_items(w, b"SET", key, 1, [a.as_ref().to_vec()], fmt, scratch)?,
         Value::Hash(h) => {
-            let fv = h.iter().flat_map(|(f, v)| [f.to_vec(), v.clone()]);
+            let fv = h.iter().flat_map(|(f, v)| [f.to_vec(), v.to_vec()]);
             write_verb_items(w, b"HSET", key, 2, fv, fmt, scratch)?;
         }
         // A.8: inline hash / list / zset rewrite to the same HSET / RPUSH
