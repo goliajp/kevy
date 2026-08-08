@@ -388,6 +388,17 @@ impl<C: Commands> Shard<C> {
                 uc.recv_armed = true;
                 uc.big_arg_rearm_recv = false;
             }
+            // A closing conn whose multishot recv is still armed keeps
+            // the socket pinned in the kernel — `close(fd)` at reap
+            // then never sends FIN and the conn leaks half-open (the
+            // query-buffer / output guard's disconnect never reaches
+            // the client). Cancel the recv; its terminal CQE clears
+            // `recv_armed`, and the next reap closes cleanly. Skip when
+            // the big-arg state machine owns the recv (it runs its own
+            // cancel). Idempotent: a redundant cancel returns -ENOENT.
+            if uc.closing && uc.recv_armed && !big_arg_owns_recv {
+                ring.prep_cancel(OP_RECV | cid, crate::uring_reactor::OP_BIG_CANCEL | cid);
+            }
             // A wanted recv-arm the SQ couldn't take THIS iter (ring
             // momentarily full — a burst of pub/sub fan-out writes or
             // many conns arming at once) must NOT let the conn drop out
