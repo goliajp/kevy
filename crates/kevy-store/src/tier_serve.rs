@@ -398,6 +398,7 @@ mod disabled {
 
     use crate::value::Value;
     use crate::{Entry, Store, StoreError};
+    use kevy_bytes::SmallBytes;
 
     impl Store {
         #[inline]
