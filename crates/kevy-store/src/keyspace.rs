@@ -345,10 +345,12 @@ impl Store {
         fields: Vec<(Vec<u8>, Vec<u8>)>,
         ttl_ms: Option<u64>,
     ) {
-        // Hash keys are SmallBytes; values stay Vec<u8>. From-iter converts.
+        // Both field and value are SmallBytes (short values inline in the
+        // slot, no per-value heap alloc). `from_vec` reuses each Vec's
+        // allocation on the >22 B heap path.
         let hash_data: HashData = fields
             .into_iter()
-            .map(|(f, v)| (SmallBytes::from_vec(f), v))
+            .map(|(f, v)| (SmallBytes::from_vec(f), SmallBytes::from_vec(v)))
             .collect();
         self.insert_loaded(key, Value::Hash(Arc::new(hash_data)), ttl_ms);
     }

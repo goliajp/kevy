@@ -30,7 +30,7 @@ pub(crate) fn encode(v: &Value) -> Option<(Vec<u8>, u8)> {
             out.extend_from_slice(&(h.len() as u32).to_le_bytes());
             for (f, val) in h.iter() {
                 put_chunk(&mut out, f.as_slice());
-                put_chunk(&mut out, val);
+                put_chunk(&mut out, val.as_slice());
             }
             Some((out, COLD_TAG_HASH))
         }
@@ -77,7 +77,7 @@ fn decode_hash(p: &[u8]) -> Result<Value, &'static str> {
     for _ in 0..n {
         let f = read_chunk(p, &mut cur)?;
         let v = read_chunk(p, &mut cur)?;
-        h.insert(SmallBytes::from_slice(f), v.to_vec());
+        h.insert(SmallBytes::from_slice(f), SmallBytes::from_slice(v));
     }
     if cur != p.len() {
         return Err("tier: hash payload has trailing bytes");

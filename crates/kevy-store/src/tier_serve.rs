@@ -29,6 +29,7 @@ mod enabled {
 
     use crate::value::{COLD_TAG_HASH, ColdRef, Value};
     use crate::{Entry, Store, StoreError};
+    use kevy_bytes::SmallBytes;
 
     /// One planned cold-record read in a [`Store::peek_hash_rows`]
     /// batch. The pinned file keeps the record readable even if a
@@ -88,7 +89,7 @@ mod enabled {
         fields: &[&[u8]],
     ) -> Result<Vec<Option<Vec<u8>>>, StoreError> {
         match &e.value {
-            Value::Hash(h) => Ok(fields.iter().map(|f| h.get(*f).cloned()).collect()),
+            Value::Hash(h) => Ok(fields.iter().map(|f| h.get(*f).map(SmallBytes::to_vec)).collect()),
             Value::SmallHashInline(h) => {
                 Ok(fields.iter().map(|f| h.get(f).map(<[u8]>::to_vec)).collect())
             }
@@ -256,7 +257,7 @@ mod enabled {
                     let Value::Hash(h) = &value else {
                         unreachable!("hash-tagged record decodes to a hash")
                     };
-                    Ok(Some(fields.iter().map(|f| h.get(*f).cloned()).collect()))
+                    Ok(Some(fields.iter().map(|f| h.get(*f).map(SmallBytes::to_vec)).collect()))
                 }
             }
         }
@@ -281,7 +282,7 @@ mod enabled {
                 let Value::Hash(h) = &value else {
                     unreachable!("hash-tagged record decodes to a hash")
                 };
-                out[row] = Ok(Some(fields.iter().map(|f| h.get(*f).cloned()).collect()));
+                out[row] = Ok(Some(fields.iter().map(|f| h.get(*f).map(SmallBytes::to_vec)).collect()));
             }
             kept
         }
@@ -379,7 +380,7 @@ mod enabled {
                 let Value::Hash(h) = &value else {
                     unreachable!("hash-tagged record decodes to a hash")
                 };
-                out[row] = Ok(Some(fields.iter().map(|f| h.get(*f).cloned()).collect()));
+                out[row] = Ok(Some(fields.iter().map(|f| h.get(*f).map(SmallBytes::to_vec)).collect()));
             }
         }
     }
@@ -432,7 +433,7 @@ mod disabled {
                 None => Ok(None),
                 Some(e) => match &e.value {
                     Value::Hash(h) => {
-                        Ok(Some(fields.iter().map(|f| h.get(*f).cloned()).collect()))
+                        Ok(Some(fields.iter().map(|f| h.get(*f).map(SmallBytes::to_vec)).collect()))
                     }
                     Value::SmallHashInline(h) => {
                         Ok(Some(fields.iter().map(|f| h.get(f).map(<[u8]>::to_vec)).collect()))

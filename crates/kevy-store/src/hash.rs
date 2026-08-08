@@ -86,7 +86,7 @@ impl Store {
             None => Ok(None),
             Some(e) => match &e.value {
                 Value::Hash(h) => Ok(Some(
-                    h.iter().map(|(f, v)| (f.to_vec(), v.clone())).collect(),
+                    h.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect(),
                 )),
                 Value::SmallHashInline(h) => Ok(Some(
                     h.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect(),
@@ -166,7 +166,7 @@ impl Store {
         match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
             None => Ok(None),
             Some(e) => match &e.value {
-                Value::Hash(h) => Ok(h.get(field).map(Vec::as_slice)),
+                Value::Hash(h) => Ok(h.get(field).map(SmallBytes::as_slice)),
                 Value::SmallHashInline(h) => Ok(h.get(field)),
                 _ => Err(StoreError::WrongType),
             },
@@ -207,7 +207,7 @@ impl Store {
         match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
             None => Ok(fields.iter().map(|_| None).collect()),
             Some(e) => match &e.value {
-                Value::Hash(h) => Ok(fields.iter().map(|f| h.get(*f).cloned()).collect()),
+                Value::Hash(h) => Ok(fields.iter().map(|f| h.get(*f).map(SmallBytes::to_vec)).collect()),
                 Value::SmallHashInline(h) => Ok(fields
                     .iter()
                     .map(|f| h.get(f).map(<[u8]>::to_vec))
@@ -250,7 +250,7 @@ impl Store {
         match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
             None => Ok(Vec::new()),
             Some(e) => match &e.value {
-                Value::Hash(h) => Ok(h.values().cloned().collect()),
+                Value::Hash(h) => Ok(h.values().map(SmallBytes::to_vec).collect()),
                 Value::SmallHashInline(h) => Ok(h.iter().map(|(_, v)| v.to_vec()).collect()),
                 _ => Err(StoreError::WrongType),
             },
@@ -282,7 +282,7 @@ impl Store {
                         if let Some(old_v) = h.remove(*f) {
                             r += 1;
                             let smb = SmallBytes::from_slice(f);
-                            d -= hash_field_weight(&smb, old_v.len()) as i64;
+                            d -= hash_field_weight(&smb, old_v.heap_bytes()) as i64;
                         }
                     }
                     let drop_now = h.is_empty();
@@ -323,20 +323,20 @@ impl Store {
         let (next, weight_delta) = {
             let h = self.hash_mut(key, true)?.expect("created");
             let cur = match h.get(field) {
-                Some(v) => parse_f64(v).ok_or(StoreError::NotFloat)?,
+                Some(v) => parse_f64(v.as_slice()).ok_or(StoreError::NotFloat)?,
                 None => 0.0,
             };
             let next = cur + delta;
             if !next.is_finite() {
                 return Err(StoreError::NotFloat);
             }
-            let new_bytes = format!("{next}").into_bytes();
+            let vb = SmallBytes::from_vec(format!("{next}").into_bytes());
             let smb = SmallBytes::from_slice(field);
-            let new_field_w = hash_field_weight(&smb, new_bytes.len()) as i64;
-            let new_value_len = new_bytes.len();
-            let wd = match h.insert(smb, new_bytes) {
+            let new_field_w = hash_field_weight(&smb, vb.heap_bytes()) as i64;
+            let new_value_heap = vb.heap_bytes() as i64;
+            let wd = match h.insert(smb, vb) {
                 None => new_field_w,
-                Some(old) => new_value_len as i64 - old.len() as i64,
+                Some(old) => new_value_heap - old.heap_bytes() as i64,
             };
             (next, wd)
         };
@@ -351,17 +351,17 @@ impl Store {
         let (next, weight_delta) = {
             let h = self.hash_mut(key, true)?.expect("created");
             let cur = match h.get(field) {
-                Some(v) => parse_i64(v).ok_or(StoreError::NotInteger)?,
+                Some(v) => parse_i64(v.as_slice()).ok_or(StoreError::NotInteger)?,
                 None => 0,
             };
             let next = cur.checked_add(delta).ok_or(StoreError::Overflow)?;
-            let new_bytes = next.to_string().into_bytes();
+            let vb = SmallBytes::from_vec(next.to_string().into_bytes());
             let smb = SmallBytes::from_slice(field);
-            let new_field_w = hash_field_weight(&smb, new_bytes.len()) as i64;
-            let new_value_len = new_bytes.len();
-            let wd = match h.insert(smb, new_bytes) {
+            let new_field_w = hash_field_weight(&smb, vb.heap_bytes()) as i64;
+            let new_value_heap = vb.heap_bytes() as i64;
+            let wd = match h.insert(smb, vb) {
                 None => new_field_w,
-                Some(old) => new_value_len as i64 - old.len() as i64,
+                Some(old) => new_value_heap - old.heap_bytes() as i64,
             };
             (next, wd)
         };
@@ -388,35 +388,16 @@ impl Store {
                 HAddResult::Added => Ok(HsetOutcome::AddedInline),
                 HAddResult::Updated => Ok(HsetOutcome::UpdatedInline),
                 HAddResult::NoRoom => {
-                    // Promote inline → Hash(Arc<HashData>), then set
-                    // (handles the spilling pair).
+                    // Promote inline → Hash(Arc<HashData>), then set the
+                    // spilling pair; reweigh absorbs the encoding switch.
                     let mut promoted = small_hash::promote(h);
-                    let smb = SmallBytes::from_slice(field);
-                    let new_w = hash_field_weight(&smb, value.len()) as i64;
-                    let added = !promoted.contains_key(field);
-                    let prior_v_len = promoted.get(field).map_or(0, Vec::len);
-                    promoted.insert(smb, value.to_vec());
+                    let outcome = heap_hash_set(&mut promoted, field, value);
                     *v = Value::Hash(Arc::new(promoted));
                     self.reweigh_entry(key);
-                    if added {
-                        Ok(HsetOutcome::AddedHeap(new_w))
-                    } else {
-                        Ok(HsetOutcome::UpdatedHeap(value.len() as i64 - prior_v_len as i64))
-                    }
+                    Ok(outcome)
                 }
             },
-            Value::Hash(h) => {
-                let h = Arc::make_mut(h);
-                let smb = SmallBytes::from_slice(field);
-                let new_w = hash_field_weight(&smb, value.len()) as i64;
-                let new_value_len = value.len();
-                match h.insert(smb, value.to_vec()) {
-                    None => Ok(HsetOutcome::AddedHeap(new_w)),
-                    Some(old) => {
-                        Ok(HsetOutcome::UpdatedHeap(new_value_len as i64 - old.len() as i64))
-                    }
-                }
-            }
+            Value::Hash(h) => Ok(heap_hash_set(Arc::make_mut(h), field, value)),
             _ => Err(StoreError::WrongType),
         }
     }
@@ -435,7 +416,7 @@ impl Store {
         } else {
             let smb_f = SmallBytes::from_slice(field);
             let mut h = HashData::with_capacity(1);
-            h.insert(smb_f, value.to_vec());
+            h.insert(smb_f, SmallBytes::from_slice(value));
             self.insert_entry(
                 SmallBytes::from_slice(key),
                 Entry::new(Value::Hash(Arc::new(h)), None),
@@ -444,6 +425,20 @@ impl Store {
         }
     }
 
+}
+
+/// Set one `(field, value)` pair into a heap-backed hash, charging heap bytes
+/// only (short values ≤22 B inline in the slot, no per-value allocation).
+/// Returns whether the field was added or updated, with the weight delta.
+fn heap_hash_set(h: &mut HashData, field: &[u8], value: &[u8]) -> HsetOutcome {
+    let smb = SmallBytes::from_slice(field);
+    let vb = SmallBytes::from_slice(value);
+    let new_value_heap = vb.heap_bytes() as i64;
+    let new_w = hash_field_weight(&smb, vb.heap_bytes()) as i64;
+    match h.insert(smb, vb) {
+        None => HsetOutcome::AddedHeap(new_w),
+        Some(old) => HsetOutcome::UpdatedHeap(new_value_heap - old.heap_bytes() as i64),
+    }
 }
 
 enum HsetOutcome {

@@ -69,7 +69,7 @@ fn snapshot_view_collections_are_cow() {
         Some(Value::Hash(h)) => {
             assert_eq!(h.len(), 1, "view hash gained post-collect fields");
             assert_eq!(
-                h.get(big_f.as_slice()).map(std::vec::Vec::as_slice),
+                h.get(big_f.as_slice()).map(|v| v.as_slice()),
                 Some(big_v1.as_slice())
             );
         }
