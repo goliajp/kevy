@@ -104,17 +104,55 @@ key + random field → ~100k fields, 8 B values, dbsize=1), after 12M ops:
   the inline values now charge 0 heap — the accounting shift works precisely and
   memgate re-accepts it.
 
+## P2 measurement — the alloc-ON 4-cell (the decisive run)
+
+Two takes; the first taught a methodology lesson.
+
+**Take 1 (P=1) — wrong shape, everything neutral.** {DEV,V4}×{ON,OFF} at
+`-P 1`: all four hset cells within ±2 %. With one op per network round trip the
+server is never CPU-bound, so per-op alloc cost hides under TCP latency — the
+alloc-ON collection tax (balance round: −9~−15) does not even reproduce. A
+neutral reading here would have been the §1 metric-mismatch trap.
+
+**Take 2 (P=256, perfgate legacy-angle shape, server CPU-bound) — decisive:**
+
+| cell | hset median (rps) | ON/OFF | sadd median | ON/OFF |
+|---|---|---|---|---|
+| DEV-OFF | 3,126,642 | — | 4,727,408 | — |
+| DEV-ON | 2,946,389 | **−5.8 %** | 3,651,872 | −22.7 % |
+| V4-OFF | 3,524,865 (+12.7 % vs DEV-OFF) | — | 4,613,276 | — |
+| V4-ON | 3,518,664 | **−0.2 %** | 4,131,680 | −10.4 % |
+
+- **The hash-angle alloc-ON tax is erased**: DEV pays −5.8 % (raw bands fully
+  separated, every ON run below every OFF run); V4 pays −0.2 % (ON/OFF bands
+  identical). The balance round's named knife — store-side hash small-value
+  inlining is the alloc-ON enabler — is confirmed for the hash angle.
+- **Bonus**: V4-OFF beats DEV-OFF +12.7 % median on pipelined hset — when the
+  server is CPU-bound the two removed allocs/op show up as throughput even on
+  glibc. (Raw bands mostly separated; call it ~+10 % with noise caution.)
+- **sadd caveat**: both branches still pay an alloc-ON sadd tax; set members
+  were already SmallBytes, so that tax is the kevy-alloc fast-path per-call
+  cost the pacing arc priced — a different knife, out of this change's scope.
+  sadd raw spread here is ±12 % (known bimodality), so its exact tax number is
+  weak; the sign is not.
+- Methodology: per-op alloc reductions need a CPU-bound (deep-pipeline) cell to
+  be visible — P=1 cells structurally cannot price them.
+
+**P2 status**: the hash collection angle no longer regresses under alloc-ON.
+Full P2 (all 12 perfgate-median angles vs the last release) still needs the
+official perfgate-median run with an alloc-ON build, and the sadd/zadd residual
+tax needs its own knife (fastpath-residue RFC). Those are the remaining gates
+before alloc default-ON can ship.
+
 ## Honest disposition
 
-Correct, throughput-neutral, ~3 % RSS win, all gates green — a keepable memory
-efficiency improvement at zero throughput cost, but NOT the dramatic
-collection-tax recovery the hypothesis reached for. **V4's actual purpose (does
-this let alloc-ON clear P2 — not regress collections vs the last release)
-remains unmeasured**: that needs an alloc-ON build A/B (kevy-alloc feature on,
-V4 vs last-release-equivalent). The glibc throughput being neutral suggests the
-alloc-ON recovery, if any, is also modest — but it is the logical next
-measurement before claiming V4 is unblocked. Merge decision + the alloc-ON
-follow-up are open for the owner.
+Correct, all gates green, ~3 % RSS win, and — measured under the CPU-bound
+cell above — **the hash-angle alloc-ON tax is erased (−5.8 % → −0.2 %) plus a
+~+10-12 % pipelined-hset throughput win even on glibc**. The earlier "neutral"
+readings (P=1 throughput cells) were the wrong shape, not the wrong change.
+Remaining before alloc default-ON: official perfgate-median with an alloc-ON
+build (full 12-angle P2), and the sadd/zadd fast-path residual (different
+knife, fastpath-residue RFC). Merge decision is the owner's.
 
 ## Local status
 
