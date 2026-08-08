@@ -274,9 +274,7 @@ impl<C: Commands> Shard<C> {
                 self.id, self.input_hard_limit,
             );
             self.uring_mark_closing(cid, io);
-            return;
-        }
-        if outcome.protocol_error {
+        } else if outcome.protocol_error {
             self.protocol_error(cid);
             self.uring_mark_closing(cid, io);
         }
