@@ -10,6 +10,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "kevy-compress"
+version = "4.1.1"
+
+[[package]]
 name = "kevy-embedded"
 version = "4.1.1"
 dependencies = [
@@ -121,6 +125,7 @@ version = "4.1.1"
 name = "kevy-vlog"
 version = "4.1.1"
 dependencies = [
+ "kevy-compress",
  "kevy-sys",
 ]
 

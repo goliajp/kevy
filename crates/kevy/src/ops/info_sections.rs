@@ -253,6 +253,30 @@ pub(super) fn info_cluster(cfg: &Config, b: &mut String) {
     b.push_str("\r\n");
 }
 
+/// `# Modules`: the capability surface of THIS build and configuration,
+/// one line per module in Redis's `module:name=…` shape so existing
+/// tools parse it. kevy's modules are built in, not loaded — the section
+/// answers "what can this server do", not "what was dlopen'd": `alloc`
+/// reports the compiled-in allocator, `tiering` its runtime state, and
+/// the command surfaces report present-by-construction.
+pub(super) fn info_modules(totals: &crate::state::Totals, b: &mut String) {
+    b.push_str("# Modules\r\n");
+    b.push_str(if cfg!(feature = "kevy-alloc") {
+        "module:name=alloc,impl=kevy-alloc\r\n"
+    } else {
+        "module:name=alloc,impl=system\r\n"
+    });
+    b.push_str(if totals.tier_enabled {
+        "module:name=tiering,status=on\r\n"
+    } else {
+        "module:name=tiering,status=off\r\n"
+    });
+    for name in ["indexes", "tables", "views", "text", "vector", "cdc", "pubsub", "lua"] {
+        b.push_str(&format!("module:name={name},status=on\r\n"));
+    }
+    b.push_str("\r\n");
+}
+
 pub(super) fn info_keyspace(totals: &crate::state::Totals, b: &mut String) {
     b.push_str("# Keyspace\r\n");
     // Redis omits the `dbN:` line entirely for an empty keyspace. `avg_ttl` is
