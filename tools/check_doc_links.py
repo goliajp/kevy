@@ -90,7 +90,19 @@ def main():
                 continue
             path, _, frag = raw.partition("#")
             n_links += 1
+            # A link whose TARGET is under `.claude/` (private working
+            # notes, intentionally gitignored) or absolute (a machine-
+            # specific path) is an external reference, not a repo-internal
+            # doc link — skip it the same way the source dirs are skipped.
+            if path.startswith("/") or ".claude/" in path:
+                continue
             target = f if not path else (f.parent / path).resolve()
+            # Also skip if it resolved to somewhere outside the repo root
+            # (e.g. a `../` chain escaping into a sibling project).
+            try:
+                target.relative_to(ROOT)
+            except ValueError:
+                continue
             if not target.exists():
                 bad.append((f, raw, "no such file"))
                 continue
