@@ -331,6 +331,30 @@ failure mode is already *silently, correctly, reading nothing*.
 - Verified against `cargo test --workspace` (223 suites), `crashgate`,
   `perfgate`, `repligate` and `idxgate`.
 
+### Embedded: the short-lived-process AOF trap (fixed)
+
+From a consumer report (smix, 2026-08-09) — a CLI opening the same
+store directory once per command reached **100 MB of AOF for 3 live
+keys**, replayed in full on every start:
+
+- **The auto-rewrite growth baseline now survives process boundaries.**
+  `Aof::open` baselines the +pct% growth rule at the current file size —
+  correct for a long-lived server, a trap for short-lived processes:
+  every run re-anchored at the ever-larger file, appended a few KB, and
+  exited before the rule could fire. Growth was cross-process; the
+  baseline was per-process. Embedded opens now re-anchor the baseline to
+  the live image's estimated rewrite size after replay (O(keys),
+  zero-alloc, exact on untiered stores), so the rule again means "the
+  log is pct% history". Regression test reproduces the reported shape
+  (40 reopens, one live key) and fails on the previous behavior.
+- **The replay summary respects a registered metric sink.** The
+  informational stderr lines (`kevy: AOF … replayed …`) print per open —
+  per command, for a CLI. A caller that registered
+  `Config::with_metric_sink` already receives those numbers as data, so
+  the embedded open path now suppresses the informational lines for it
+  (`replay_aof_quiet` in kevy-persist). The corrupt-frame WARN is an
+  incident signal and still prints unconditionally.
+
 ### Added
 
 - **`INFO` grew a `# Modules` section** (also addressable as

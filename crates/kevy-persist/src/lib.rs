@@ -38,22 +38,24 @@
 #![warn(missing_docs)]
 
 mod aof;
+mod aof_policy;
 mod aof_queue;
 mod aof_txn;
+mod aof_util;
+mod baseline;
+mod crc32c;
 pub mod feed_meta;
 pub mod layout;
-mod replay;
-mod replay_txn;
-mod segmented;
-mod aof_policy;
-mod aof_util;
-mod crc32c;
 mod record;
+mod replay;
+mod replay_log;
 mod replay_resync;
+mod replay_txn;
 pub mod reshard;
 mod rewrite_chunk;
 mod rewrite_fmt;
 mod rewrite_frames;
+mod segmented;
 mod shards_meta;
 mod snapshot_fmt;
 mod snapshot_payload;
@@ -61,10 +63,11 @@ mod snapshot_read;
 mod snapshot_write;
 
 pub use aof::{AOF_MAGIC, Aof, Fsync, RewritePlan, RewriteStats};
-pub use aof_util::write_aof_base;
 pub use aof_policy::RewritePolicy;
+pub use aof_util::write_aof_base;
+pub use baseline::estimate_rewrite_size;
 pub use record::{AOF2_MAGIC, AofFormat, RecordStep, next_record, write_record_multibulk};
-pub use replay::{ReplayReport, replay_aof, replay_aof_resync};
+pub use replay::{ReplayReport, replay_aof, replay_aof_quiet, replay_aof_resync};
 pub use segmented::{SEGMENTED, segmented_argv, segmented_frame};
 
 /// How often bulk-load paths check the tiering demote watermark:
@@ -75,21 +78,21 @@ pub use segmented::{SEGMENTED, segmented_argv, segmented_frame};
 /// (whose drive loops live in the callers — kevy-rt / kevy-embedded)
 /// and the snapshot loader stride identically.
 pub const REPLAY_DEMOTE_INTERVAL: u64 = 1024;
-pub use shards_meta::{Routing, ShardsMeta, read_shards_meta, write_shards_meta};
 pub use kevy_resp::{Argv, ArgvView};
+use kevy_store::Store;
+use kevy_store::Value;
+pub(crate) use rewrite_fmt::estimate_multibulk_bytes;
 pub use rewrite_fmt::{dump_aof, dump_store_to_buf, write_multibulk, write_stream_as_commands};
 pub use rewrite_frames::value_as_v1_frames;
+pub use shards_meta::{Routing, ShardsMeta, read_shards_meta, write_shards_meta};
+pub(crate) use snapshot_fmt::{SNAPSHOT_BUF_CAP, write_bytes};
 pub use snapshot_read::{
     load_snapshot, load_snapshot_filtered, load_snapshot_from, read_snapshot_cursor,
 };
+pub(crate) use snapshot_write::write_stream_groups;
 pub use snapshot_write::{
     save_snapshot, write_snapshot_tmp, write_snapshot_to, write_snapshot_to_with_cursor,
 };
-pub(crate) use rewrite_fmt::estimate_multibulk_bytes;
-pub(crate) use snapshot_fmt::{SNAPSHOT_BUF_CAP, write_bytes};
-pub(crate) use snapshot_write::write_stream_groups;
-use kevy_store::Store;
-use kevy_store::Value;
 
 /// Anything that can enumerate `(key, &Value, ttl_ms)` triples for
 /// serialization: a live [`Store`] (its `snapshot_each`, the synchronous
