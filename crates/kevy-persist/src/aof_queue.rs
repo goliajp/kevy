@@ -35,6 +35,9 @@ impl Aof {
     }
 
     /// The fd queued chunks are written to (the driver's SQE target).
+    /// Unix-only — the driver is the io_uring reactor (Linux); wasm and
+    /// other fd-less targets never enable queued appends.
+    #[cfg(unix)]
     #[must_use]
     pub fn queued_fd(&self) -> Option<std::os::fd::RawFd> {
         use std::os::fd::AsRawFd;

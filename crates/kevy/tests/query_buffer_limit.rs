@@ -47,15 +47,23 @@ fn a_streaming_giant_frame_is_disconnected_at_the_cap() {
         std::thread::sleep(Duration::from_millis(5));
     }
 
-    // A syntactically valid frame that never completes: one declared
-    // 512KB bulk, body streamed in 1KB junk pieces. Each piece parses
-    // to "need more bytes" and accumulates.
+    // A syntactically valid frame that never completes, streamed as
+    // MANY small args (not one big bulk): a multibulk declaring a huge
+    // arg count, then `$3\r\nabc\r\n` bulks forever. Small bulks
+    // accumulate in the connection's input buffer on BOTH reactors
+    // (the big-single-bulk shape would divert to the io_uring
+    // kernel-direct path and never touch the query buffer — the reason
+    // an earlier version of this test passed on epoll but not on the
+    // io_uring CI runner).
     let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
     // Short probe timeout: the loop's read is a liveness poll, not a
     // wait-for-reply.
     c.set_read_timeout(Some(Duration::from_millis(50))).unwrap();
-    c.write_all(b"*2\r\n$4\r\nECHO\r\n$524288\r\n").unwrap();
-    let junk = [b'x'; 1024];
+    c.write_all(b"*1000000\r\n").unwrap();
+    let mut junk = Vec::new();
+    for _ in 0..256 {
+        junk.extend_from_slice(b"$3\r\nabc\r\n"); // 256 small args per write
+    }
     let mut disconnected = false;
     for _ in 0..64 {
         if c.write_all(&junk).is_err() {
@@ -82,7 +90,7 @@ fn a_streaming_giant_frame_is_disconnected_at_the_cap() {
             }
         }
     }
-    assert!(disconnected, "64KB streamed past a 4KB cap without a disconnect");
+    assert!(disconnected, "a multibulk of small args streamed past the 4KB cap without a disconnect");
 
     // The server itself is fine: a fresh conn still answers.
     let mut c2 = TcpStream::connect(("127.0.0.1", port)).unwrap();
