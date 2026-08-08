@@ -307,3 +307,46 @@ fn md5_matches_postgres() {
     assert!(matches!(eval("md5", &[Scalar::Int(1)]), Err(ScalarError::Type { .. })));
     assert!(matches!(eval("md5", &[t("a"), t("b")]), Err(ScalarError::Arity { .. })));
 }
+
+// ── probe 33: regexp family over the vendored engine ──
+#[test]
+fn regexp_replace_matches_and_split() {
+    // replace: first vs global, capture-group backrefs, char classes.
+    assert_eq!(txt(eval("regexp_replace", &[t("hello world"), t("world"), t("PG")])), "hello PG");
+    assert_eq!(txt(eval("regexp_replace", &[t("a b a b"), t("a"), t("X")])), "X b a b");
+    assert_eq!(txt(eval("regexp_replace", &[t("a b a b"), t("a"), t("X"), t("g")])), "X b X b");
+    assert_eq!(
+        txt(eval("regexp_replace", &[t("Hello, World!"), t("[^a-zA-Z0-9]"), t("-"), t("g")])),
+        "Hello--World-"
+    );
+    assert_eq!(txt(eval("regexp_replace", &[t("hello"), t(r"\d+"), t("X")])), "hello");
+    assert_eq!(eval("regexp_replace", &[Scalar::Null, t("a"), t("b")]).unwrap(), Scalar::Null);
+
+    // matches: single row renders as a PG {..} array; g / no-match / NULL
+    // are set-returning cardinalities the one-row fold face refuses.
+    assert_eq!(txt(eval("regexp_matches", &[t("abc123def"), t(r"\d+")])), "{123}");
+    assert_eq!(txt(eval("regexp_matches", &[t("hello world"), t("world")])), "{world}");
+    assert!(matches!(
+        eval("regexp_matches", &[t("a1b22c333"), t(r"\d+"), t("g")]),
+        Err(ScalarError::Domain { .. }) // multiple rows
+    ));
+    assert!(matches!(
+        eval("regexp_matches", &[t("hello"), t(r"\d+")]),
+        Err(ScalarError::Domain { .. }) // zero rows
+    ));
+    assert!(matches!(
+        eval("regexp_matches", &[Scalar::Null, t(r"\d+")]),
+        Err(ScalarError::Domain { .. }) // NULL input → zero rows
+    ));
+
+    // split_to_array: literal and whitespace-class delimiters.
+    assert_eq!(txt(eval("regexp_split_to_array", &[t("a,b,c"), t(",")])), "{a,b,c}");
+    assert_eq!(txt(eval("regexp_split_to_array", &[t("one two   three"), t(r"\s+")])), "{one,two,three}");
+    assert_eq!(txt(eval("regexp_split_to_array", &[t("abc"), t(",")])), "{abc}");
+
+    // A bad pattern is a named refusal, not a wrong answer.
+    assert!(matches!(
+        eval("regexp_replace", &[t("x"), t("("), t("y")]),
+        Err(ScalarError::Domain { .. })
+    ));
+}
