@@ -86,6 +86,28 @@ pub fn replay_aof_quiet<F: FnMut(Argv)>(
     replay_v1_slice(path, &data, &mut apply, true)
 }
 
+/// The v1 frame loop: parse-apply until clean end, truncated tail, or a
+/// corrupt frame. Advances `pos`; returns the stop and the applied count.
+fn v1_walk<F: FnMut(Argv)>(data: &[u8], pos: &mut usize, apply: &mut F) -> (ReplayStop, u64) {
+    let total = data.len();
+    let mut replayed: u64 = 0;
+    let stop = loop {
+        if *pos >= total {
+            break ReplayStop::Clean;
+        }
+        match kevy_resp::parse_command(&data[*pos..]) {
+            Ok(Some((args, consumed))) => {
+                apply(args);
+                *pos += consumed;
+                replayed += 1;
+            }
+            Ok(None) => break ReplayStop::TruncatedTail,
+            Err(e) => break ReplayStop::CorruptFrame(format!("{e:?}")),
+        }
+    };
+    (stop, replayed)
+}
+
 /// The v1 (bare-RESP) replay walk over a whole-file slice.
 fn replay_v1_slice<F: FnMut(Argv)>(
     path: &Path,
@@ -106,33 +128,14 @@ fn replay_v1_slice<F: FnMut(Argv)>(
     } else {
         0
     };
-    let mut replayed: u64 = 0;
-    let stop = loop {
-        if pos >= total {
-            break ReplayStop::Clean;
-        }
-        match kevy_resp::parse_command(&data[pos..]) {
-            Ok(Some((args, consumed))) => {
-                apply(args);
-                pos += consumed;
-                replayed += 1;
-            }
-            Ok(None) => break ReplayStop::TruncatedTail,
-            Err(e) => break ReplayStop::CorruptFrame(format!("{e:?}")),
-        }
-    };
+    let (stop, replayed) = v1_walk(data, &mut pos, apply);
     let elapsed_ms = start.elapsed().as_millis();
     let corrupt = matches!(stop, ReplayStop::CorruptFrame(_));
-    log_replay_summary(
-        path,
-        total,
-        pos,
-        replayed,
-        &data[pos.min(total)..],
-        stop,
-        elapsed_ms,
-        quiet_info,
-    );
+    // quiet_info silences only the informational outcomes; the corrupt
+    // WARN is an incident signal and always prints.
+    if corrupt || !quiet_info {
+        log_replay_summary(path, total, pos, replayed, &data[pos.min(total)..], stop, elapsed_ms);
+    }
     Ok(ReplayReport {
         commands: replayed,
         bytes: total as u64,
@@ -240,7 +243,9 @@ fn stream_v2(
         crate::replay_resync::resync_fallback(path, &mut w, &mut apply, &mut ranges)?;
     }
     let elapsed_ms = start.elapsed().as_millis();
-    if apply.is_some() {
+    // quiet_info silences only the informational outcomes; the corrupt
+    // WARN always prints.
+    if apply.is_some() && (corrupt || !quiet_info) {
         log_replay_summary(
             path,
             total as usize,
@@ -249,7 +254,6 @@ fn stream_v2(
             &w.preview[..w.preview_len],
             w.stop,
             elapsed_ms,
-            quiet_info,
         );
     }
     Ok(ReplayReport {

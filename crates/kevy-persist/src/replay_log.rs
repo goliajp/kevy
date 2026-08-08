@@ -14,8 +14,9 @@ use std::path::Path;
 
 /// Emit the one-line replay summary. Goes to stderr because kevy-persist
 /// has no log-crate dependency (pure-Rust + 0 deps charter); production
-/// deployments route stderr to their existing log sink. `quiet_info`
-/// suppresses the Clean / TruncatedTail lines only.
+/// deployments route stderr to their existing log sink. Quiet-mode
+/// suppression of the informational branches happens at the call sites
+/// (the corrupt-frame WARN is always emitted there).
 pub(crate) fn log_replay_summary(
     path: &Path,
     total: usize,
@@ -24,24 +25,17 @@ pub(crate) fn log_replay_summary(
     remainder: &[u8],
     stop: ReplayStop,
     elapsed_ms: u128,
-    quiet_info: bool,
 ) {
     let display = path.display();
     let dropped = total - pos;
     match stop {
         ReplayStop::Clean => {
-            if quiet_info {
-                return;
-            }
             eprintln!(
                 "kevy: AOF {display} replayed {replayed} commands from {total} bytes \
                  in {elapsed_ms} ms (clean)"
             );
         }
         ReplayStop::TruncatedTail => {
-            if quiet_info {
-                return;
-            }
             eprintln!(
                 "kevy: AOF {display} replayed {replayed} commands from {total} bytes \
                  in {elapsed_ms} ms; trailing {dropped} bytes \
