@@ -561,3 +561,71 @@ fn a_committed_txn_survives_a_torn_one_after_it() {
     replay_aof(&path, |a| seen.push(a[1].to_vec())).unwrap();
     assert_eq!(seen, vec![b"kept".to_vec()]);
 }
+
+/// Queued-append mode (RFC v3-aof-offload S1's persist half): the
+/// SAME bytes a synchronous append writes, handed to the driver as
+/// (offset, chunk) pairs instead. Byte-for-byte equivalence is the
+/// whole contract — a driver writing every taken chunk at its stated
+/// offset must produce a file identical to sync mode's.
+#[test]
+fn queued_appends_hand_over_the_exact_sync_bytes() {
+    use std::io::{Seek, SeekFrom};
+    let sync_path = temp_file("aof-sync");
+    let queued_path = temp_file("aof-queued");
+
+    let mut sync_aof = Aof::open(&sync_path, Fsync::No).unwrap();
+    let mut q_aof = Aof::open(&queued_path, Fsync::No).unwrap();
+    q_aof.enable_queued_appends();
+
+    let frames: [&[&[u8]]; 3] =
+        [&[b"SET", b"a", b"1"], &[b"RPUSH", b"l", b"x", b"y"], &[b"INCR", b"a"]];
+    // Interleave takes between appends so multiple chunks (with
+    // advancing offsets) are exercised, not one big take.
+    let mut taken: Vec<(u64, Vec<u8>)> = Vec::new();
+    for (i, f) in frames.iter().enumerate() {
+        sync_aof.append(&cmd(f)).unwrap();
+        q_aof.append(&cmd(f)).unwrap();
+        if i % 2 == 0 {
+            taken.extend(q_aof.take_pending());
+        }
+    }
+    taken.extend(q_aof.take_pending());
+    assert!(q_aof.take_pending().is_none(), "drained");
+    assert!(q_aof.queued_fd().is_some());
+
+    // Play the driver: write every chunk at its stated offset.
+    {
+        let mut f = OpenOptions::new().write(true).open(&queued_path).unwrap();
+        for (at, chunk) in &taken {
+            f.seek(SeekFrom::Start(*at)).unwrap();
+            f.write_all(chunk).unwrap();
+        }
+        f.sync_all().unwrap();
+    }
+    drop(sync_aof);
+    drop(q_aof);
+    let sync_bytes = std::fs::read(&sync_path).unwrap();
+    let queued_bytes = std::fs::read(&queued_path).unwrap();
+    assert_eq!(sync_bytes, queued_bytes, "the two modes must write identical files");
+    let _ = std::fs::remove_file(&sync_path);
+    let _ = std::fs::remove_file(&queued_path);
+}
+
+/// The structural entry points flush what is still queued (the honest
+/// fallback documented on the field): sync_now on a queued log leaves
+/// the file complete and replayable.
+#[test]
+fn sync_now_flushes_queued_leftovers() {
+    let path = temp_file("aof-queued-flush");
+    let mut aof = Aof::open(&path, Fsync::No).unwrap();
+    aof.enable_queued_appends();
+    aof.append(&cmd(&[b"SET", b"k", b"v"])).unwrap();
+    // Nothing taken; sync_now must land it synchronously.
+    aof.sync_now().unwrap();
+    drop(aof);
+    let mut got: Vec<Argv> = Vec::new();
+    replay_aof(&path, |a| got.push(a)).unwrap();
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].get(2), Some(b"v" as &[u8]));
+    let _ = std::fs::remove_file(&path);
+}

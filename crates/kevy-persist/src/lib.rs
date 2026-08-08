@@ -38,6 +38,7 @@
 #![warn(missing_docs)]
 
 mod aof;
+mod aof_queue;
 mod aof_txn;
 pub mod feed_meta;
 pub mod layout;

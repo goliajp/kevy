@@ -4,7 +4,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use kevy_resp::ArgvView;
 use kevy_store::Store;
@@ -104,6 +104,24 @@ pub struct Aof {
     /// Reusable payload buffer for V2 envelope encoding (and the tee,
     /// which is always V2 because the rewrite output it lands in is).
     scratch: Vec<u8>,
+    /// `Some` = queued-append mode (RFC v3-aof-offload S1): encoded
+    /// record bytes accumulate here instead of hitting `file`, and the
+    /// DRIVER (the io_uring reactor) drains them via
+    /// [`Aof::take_pending`] as async write SQEs at
+    /// [`Aof::append_offset`]. `None` = every append writes
+    /// synchronously — today's behavior, and the epoll / test default.
+    ///
+    /// Contract for the driver: before any structural file operation
+    /// (truncate, rewrite finish, fsync-policy upgrade to Always) the
+    /// driver must have COMPLETED its in-flight writes; bytes still
+    /// queued HERE are flushed synchronously by those entry points as
+    /// an honest fallback, but bytes already taken are invisible to
+    /// this struct and only the driver can order them.
+    pub(crate) queue: Option<Vec<u8>>,
+    /// File offset where the NEXT taken chunk lands (queued mode):
+    /// advances as chunks are taken, so concurrent chunks carry
+    /// non-overlapping explicit offsets in their SQEs.
+    pub(crate) queued_offset: u64,
 }
 
 
@@ -191,6 +209,8 @@ impl Aof {
             last_rewrite_at: Instant::now(),
             format,
             scratch: Vec::new(),
+            queue: None,
+            queued_offset: size,
         })
     }
 
@@ -224,6 +244,9 @@ impl Aof {
     pub fn set_fsync(&mut self, fsync: Fsync) -> io::Result<()> {
         let upgrading_to_always = matches!(fsync, Fsync::Always) && !matches!(self.fsync, Fsync::Always);
         self.fsync = fsync;
+        if upgrading_to_always {
+            self.flush_queued()?;
+        }
         if upgrading_to_always && self.dirty {
             self.file.flush()?;
             self.file.get_ref().sync_data()?;
@@ -242,13 +265,25 @@ impl Aof {
         // land in the rewrite output, which is V2 by contract.
         self.scratch.clear();
         write_multibulk(&mut self.scratch, args)?;
-        match self.format {
-            crate::AofFormat::V2 => {
-                self.file.write_all(&(self.scratch.len() as u32).to_le_bytes())?;
-                self.file.write_all(&crate::crc32c::crc32c(&self.scratch).to_le_bytes())?;
-                self.file.write_all(&self.scratch)?;
+        if let Some(q) = &mut self.queue {
+            // Queued mode: the same bytes, into the driver's chunk.
+            match self.format {
+                crate::AofFormat::V2 => {
+                    q.extend_from_slice(&(self.scratch.len() as u32).to_le_bytes());
+                    q.extend_from_slice(&crate::crc32c::crc32c(&self.scratch).to_le_bytes());
+                    q.extend_from_slice(&self.scratch);
+                }
+                crate::AofFormat::V1 => q.extend_from_slice(&self.scratch),
             }
-            crate::AofFormat::V1 => self.file.write_all(&self.scratch)?,
+        } else {
+            match self.format {
+                crate::AofFormat::V2 => {
+                    self.file.write_all(&(self.scratch.len() as u32).to_le_bytes())?;
+                    self.file.write_all(&crate::crc32c::crc32c(&self.scratch).to_le_bytes())?;
+                    self.file.write_all(&self.scratch)?;
+                }
+                crate::AofFormat::V1 => self.file.write_all(&self.scratch)?,
+            }
         }
         if let Some(tee) = &mut self.rewrite_tee {
             crate::record::write_record(tee, &self.scratch)?;
@@ -275,40 +310,11 @@ impl Aof {
         Ok(())
     }
 
-    /// Durability barrier: flush + `fdatasync` NOW, regardless
-    /// of the fsync policy. On return, every append made so far is on
-    /// stable storage. Lets an `EverySec` deployment make individual
-    /// critical writes durable-on-ack (Postgres
-    /// `synchronous_commit`-per-transaction genre) without paying
-    /// `Always` on every op. No-op cost when nothing is dirty.
-    pub fn sync_now(&mut self) -> io::Result<()> {
-        if self.dirty {
-            self.file.flush()?;
-            self.file.get_ref().sync_data()?;
-            self.dirty = false;
-            self.last_sync = Instant::now();
-        }
-        Ok(())
-    }
-
-    /// Flush+fsync if the `EverySec` window has elapsed. Call once per loop tick.
-    pub fn maybe_sync(&mut self) -> io::Result<()> {
-        if matches!(self.fsync, Fsync::EverySec)
-            && self.dirty
-            && self.last_sync.elapsed() >= Duration::from_secs(1)
-        {
-            self.file.flush()?;
-            self.file.get_ref().sync_data()?;
-            self.dirty = false;
-            self.last_sync = Instant::now();
-        }
-        Ok(())
-    }
-
     /// Empty the log (after a snapshot has captured the full state). The
     /// post-truncate file keeps the `AOF_MAGIC` header so replays of
     /// the freshly-trimmed log still identify as kevy-managed.
     pub fn truncate(&mut self) -> io::Result<()> {
+        self.flush_queued()?;
         self.file.flush()?;
         let f = self.file.get_mut();
         f.set_len(0)?;
@@ -318,6 +324,7 @@ impl Aof {
         self.dirty = false;
         self.format = crate::AofFormat::V2; // an empty log restarts in v2
         self.size_bytes = crate::record::AOF2_MAGIC.len() as u64;
+        self.queued_offset = self.size_bytes;
         self.size_at_last_rewrite = crate::record::AOF2_MAGIC.len() as u64;
         self.last_rewrite_at = Instant::now();
         Ok(())
@@ -360,6 +367,7 @@ impl Aof {
     pub fn rewrite_from(&mut self, store: &Store) -> io::Result<RewriteStats> {
         // Flush any pending writes to the OLD file first so the snapshot
         // accounts for everything the caller intended to durabilise.
+        self.flush_queued()?;
         self.file.flush()?;
 
         let tmp = crate::aof_util::rewrite_tmp_path(&self.path);
@@ -373,6 +381,7 @@ impl Aof {
         self.file = BufWriter::with_capacity(AOF_BUF_CAP, f);
         self.format = crate::AofFormat::V2; // the rewrite output always is
         self.size_bytes = bytes;
+        self.queued_offset = bytes;
         self.size_at_last_rewrite = bytes;
         self.last_rewrite_at = Instant::now();
         self.dirty = false;
@@ -397,6 +406,7 @@ impl Aof {
     /// lock again. Writes that land during the off-lock spill are captured by
     /// the tee and appended after the snapshot, so nothing is lost.
     pub fn begin_concurrent_rewrite(&mut self, store: &Store) -> io::Result<RewritePlan> {
+        self.flush_queued()?;
         let (body, keys) = dump_store_to_buf(store, crate::AofFormat::V2);
         self.rewrite_tee = Some(Vec::new());
         Ok(RewritePlan {
@@ -423,6 +433,7 @@ impl Aof {
         self.file = BufWriter::with_capacity(AOF_BUF_CAP, f);
         self.format = crate::AofFormat::V2; // the rewrite output always is
         self.size_bytes = bytes;
+        self.queued_offset = bytes;
         self.size_at_last_rewrite = bytes;
         self.last_rewrite_at = Instant::now();
         self.dirty = false;
@@ -450,6 +461,7 @@ impl Aof {
     /// (tee started late) or replay twice (tee started early) — and
     /// commands like LPUSH are not idempotent.
     pub fn begin_view_rewrite(&mut self) -> io::Result<std::path::PathBuf> {
+        self.flush_queued()?;
         self.file.flush()?;
         self.rewrite_tee = Some(Vec::new());
         Ok(crate::aof_util::rewrite_tmp_path(&self.path))
