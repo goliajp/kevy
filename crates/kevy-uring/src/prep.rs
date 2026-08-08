@@ -86,6 +86,57 @@ impl IoUring {
         true
     }
 
+    /// Queue a positioned `write(fd)` of `len` bytes from `buf` at file
+    /// `offset` — the AOF-offload path's primitive (RFC v3-aof-offload
+    /// S1): queued append chunks carry explicit non-overlapping offsets
+    /// so in-flight chunks never race each other's file position.
+    /// Returns `false` if the SQ is full.
+    ///
+    /// # Safety
+    /// `buf` must point to `len` readable bytes and stay valid until the
+    /// matching completion is reaped.
+    pub unsafe fn prep_write_at(
+        &mut self,
+        fd: i32,
+        buf: *const u8,
+        len: u32,
+        offset: u64,
+        user_data: u64,
+    ) -> bool {
+        let Some(idx) = self.reserve() else {
+            return false;
+        };
+        // SAFETY: `idx` is a freshly reserved, in-bounds SQE slot we own alone.
+        unsafe {
+            let sqe = self.sqes_ptr().add(idx);
+            ptr::write(
+                sqe,
+                IoUringSqe::new(IORING_OP_WRITE, fd, buf as u64, len, user_data),
+            );
+            (*sqe).off = offset;
+        }
+        true
+    }
+
+    /// Queue an `fdatasync(fd)` (`IORING_FSYNC_DATASYNC`) — the
+    /// AOF-offload path's durability barrier, submitted only when no
+    /// append chunk is in flight so ordering needs no ring-wide drain.
+    /// Returns `false` if the SQ is full.
+    pub fn prep_fsync(&mut self, fd: i32, user_data: u64) -> bool {
+        let Some(idx) = self.reserve() else {
+            return false;
+        };
+        // SAFETY: `idx` is a freshly reserved, in-bounds SQE slot we own alone.
+        unsafe {
+            let sqe = self.sqes_ptr().add(idx);
+            ptr::write(sqe, IoUringSqe::new(IORING_OP_FSYNC, fd, 0, 0, user_data));
+            // fsync_flags shares the union at `off`'s sibling field:
+            // IoUringSqe models it as `rw_flags`.
+            (*sqe).rw_flags = IORING_FSYNC_DATASYNC;
+        }
+        true
+    }
+
     /// Queue a `writev(fd, iov, iovcnt)`. The reactor's
     /// reply path uses this to fuse [header iovec, value-borrow iovec,
     /// CRLF iovec] into one syscall — the per-GET memcpy of the value
