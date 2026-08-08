@@ -122,6 +122,9 @@ pub const IORING_OP_ACCEPT: u8 = 13;
 /// reactor uses this to cancel an in-flight multishot recv before
 /// switching the conn to single-shot `prep_read` for big-arg ingest.
 pub const IORING_OP_ASYNC_CANCEL: u8 = 14;
+pub const IORING_OP_FSYNC: u8 = 3;
+/// `fsync_flags` bit: fdatasync semantics (skip the metadata flush).
+pub const IORING_FSYNC_DATASYNC: u32 = 1;
 pub const IORING_OP_READ: u8 = 22;
 pub const IORING_OP_WRITEV: u8 = 2;
 pub const IORING_OP_WRITE: u8 = 23;
