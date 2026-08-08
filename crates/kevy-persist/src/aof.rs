@@ -9,9 +9,7 @@ use std::time::Instant;
 use kevy_resp::ArgvView;
 use kevy_store::Store;
 
-use crate::{
-    dump_store_to_buf, estimate_multibulk_bytes, write_multibulk,
-};
+use crate::{dump_store_to_buf, estimate_multibulk_bytes, write_multibulk};
 
 /// 9-byte file-format header written at the start of every kevy-managed
 /// AOF. `replay_aof` strips it before parsing RESP, so
@@ -124,7 +122,6 @@ pub struct Aof {
     pub(crate) queued_offset: u64,
 }
 
-
 /// Handoff between the two halves of a non-blocking rewrite: the serialized
 /// keyspace image (produced under the store lock) and the temp path to spill
 /// it to (off-lock). See [`Aof::begin_concurrent_rewrite`].
@@ -146,7 +143,6 @@ pub struct RewriteStats {
     /// New AOF size in bytes.
     pub bytes: u64,
 }
-
 
 impl Aof {
     /// The on-disk record format this file currently speaks.
@@ -214,7 +210,6 @@ impl Aof {
         })
     }
 
-
     /// The quarantine file `open` wrote while repairing a dropped tail, if
     /// any. `None` after a clean open.
     #[inline]
@@ -242,7 +237,8 @@ impl Aof {
     /// disk before reply" contract is honoured starting on the next
     /// append, not after the dirty backlog clears.
     pub fn set_fsync(&mut self, fsync: Fsync) -> io::Result<()> {
-        let upgrading_to_always = matches!(fsync, Fsync::Always) && !matches!(self.fsync, Fsync::Always);
+        let upgrading_to_always =
+            matches!(fsync, Fsync::Always) && !matches!(self.fsync, Fsync::Always);
         self.fsync = fsync;
         if upgrading_to_always {
             self.flush_queued()?;
@@ -278,8 +274,10 @@ impl Aof {
         } else {
             match self.format {
                 crate::AofFormat::V2 => {
-                    self.file.write_all(&(self.scratch.len() as u32).to_le_bytes())?;
-                    self.file.write_all(&crate::crc32c::crc32c(&self.scratch).to_le_bytes())?;
+                    self.file
+                        .write_all(&(self.scratch.len() as u32).to_le_bytes())?;
+                    self.file
+                        .write_all(&crate::crc32c::crc32c(&self.scratch).to_le_bytes())?;
                     self.file.write_all(&self.scratch)?;
                 }
                 crate::AofFormat::V1 => self.file.write_all(&self.scratch)?,
@@ -342,6 +340,21 @@ impl Aof {
     #[inline]
     pub fn size_at_last_rewrite(&self) -> u64 {
         self.size_at_last_rewrite
+    }
+
+    /// Re-anchor the growth-rule baseline to `bytes` — the live image's
+    /// estimated rewrite size ([`crate::estimate_rewrite_size`]), called
+    /// by open paths after replay. `open` alone can only baseline at the
+    /// file's current size, which for a short-lived process re-opening
+    /// the same directory resets the growth ratio every run and lets the
+    /// log grow without bound; anchoring to the live estimate keeps the
+    /// +pct% rule meaning "the log is pct% history" across processes.
+    /// Ignored while a rewrite is in flight (its completion sets the
+    /// true post-rewrite size).
+    pub fn anchor_rewrite_baseline(&mut self, bytes: u64) {
+        if !self.is_rewriting() {
+            self.size_at_last_rewrite = bytes.max(crate::record::AOF2_MAGIC.len() as u64);
+        }
     }
 
     /// Successful rewrite count since `Self::open`. Surfaced in INFO.
@@ -467,5 +480,3 @@ impl Aof {
         Ok(crate::aof_util::rewrite_tmp_path(&self.path))
     }
 }
-
-

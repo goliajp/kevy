@@ -48,7 +48,7 @@ pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<Repla
     // would have OOM'd. v1 (legacy) keeps the whole-file read; its first
     // rewrite upgrades it out of that world.
     if matches!(sniff_format(path)?, crate::AofFormat::V2) {
-        return stream_v2(path, Some(&mut apply), false);
+        return stream_v2(path, Some(&mut apply), false, false);
     }
     let mut data = Vec::new();
     match File::open(path) {
@@ -58,7 +58,32 @@ pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<Repla
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(ReplayReport::default()),
         Err(e) => return Err(e),
     }
-    replay_v1_slice(path, &data, &mut apply)
+    replay_v1_slice(path, &data, &mut apply, false)
+}
+
+/// [`replay_aof`] (or, with `resync`, [`replay_aof_resync`]) with the
+/// informational summary lines suppressed. For embedded callers that
+/// receive the same numbers through a metric sink: the data path has
+/// taken over, so the stderr line would be a duplicate. The corrupt-frame
+/// WARN still prints unconditionally — it is an incident signal, not
+/// information, and does not share this switch.
+pub fn replay_aof_quiet<F: FnMut(Argv)>(
+    path: &Path,
+    resync: bool,
+    mut apply: F,
+) -> io::Result<ReplayReport> {
+    if matches!(sniff_format(path)?, crate::AofFormat::V2) {
+        return stream_v2(path, Some(&mut apply), resync, true);
+    }
+    let mut data = Vec::new();
+    match File::open(path) {
+        Ok(mut f) => {
+            f.read_to_end(&mut data)?;
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(ReplayReport::default()),
+        Err(e) => return Err(e),
+    }
+    replay_v1_slice(path, &data, &mut apply, true)
 }
 
 /// The v1 (bare-RESP) replay walk over a whole-file slice.
@@ -66,6 +91,7 @@ fn replay_v1_slice<F: FnMut(Argv)>(
     path: &Path,
     data: &[u8],
     apply: &mut F,
+    quiet_info: bool,
 ) -> io::Result<ReplayReport> {
     let total = data.len();
     if total == 0 {
@@ -97,7 +123,16 @@ fn replay_v1_slice<F: FnMut(Argv)>(
     };
     let elapsed_ms = start.elapsed().as_millis();
     let corrupt = matches!(stop, ReplayStop::CorruptFrame(_));
-    log_replay_summary(path, total, pos, replayed, &data[pos.min(total)..], stop, elapsed_ms);
+    log_replay_summary(
+        path,
+        total,
+        pos,
+        replayed,
+        &data[pos.min(total)..],
+        stop,
+        elapsed_ms,
+        quiet_info,
+    );
     Ok(ReplayReport {
         commands: replayed,
         bytes: total as u64,
@@ -119,7 +154,7 @@ fn replay_v1_slice<F: FnMut(Argv)>(
 /// too (their first rewrite upgrades them into resync's world).
 pub fn replay_aof_resync<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<ReplayReport> {
     if matches!(sniff_format(path)?, crate::AofFormat::V2) {
-        return stream_v2(path, Some(&mut apply), true);
+        return stream_v2(path, Some(&mut apply), true, false);
     }
     replay_aof(path, apply)
 }
@@ -185,6 +220,7 @@ fn stream_v2(
     path: &Path,
     mut apply: Option<&mut dyn FnMut(Argv)>,
     resync: bool,
+    quiet_info: bool,
 ) -> io::Result<ReplayReport> {
     use std::io::BufReader;
     let file = match File::open(path) {
@@ -213,6 +249,7 @@ fn stream_v2(
             &w.preview[..w.preview_len],
             w.stop,
             elapsed_ms,
+            quiet_info,
         );
     }
     Ok(ReplayReport {
@@ -380,7 +417,7 @@ pub(crate) fn valid_prefix_len_of_file(path: &Path, resync: bool) -> io::Result<
     // resync the point is "after the LAST recoverable record", so interior
     // corruption stays put and only trailing garbage is repaired away.
     if matches!(sniff_format(path)?, crate::AofFormat::V2) {
-        return Ok(stream_v2(path, None, resync)?.replayed_bytes);
+        return Ok(stream_v2(path, None, resync, false)?.replayed_bytes);
     }
     let mut data = Vec::new();
     match File::open(path) {
@@ -429,69 +466,15 @@ fn valid_prefix_len(data: &[u8]) -> usize {
     pos
 }
 
-/// Outcome of an AOF replay run — drives the summary log shape.
+/// Outcome of an AOF replay run — drives the summary log shape (rendered
+/// in `replay_log.rs`).
 pub(crate) enum ReplayStop {
     Clean,
     TruncatedTail,
     CorruptFrame(String),
 }
 
-/// Emit the one-line replay summary. Goes to stderr because kevy-persist
-/// has no log-crate dependency (pure-Rust + 0 deps charter); production
-/// deployments route stderr to their existing log sink.
-fn log_replay_summary(
-    path: &Path,
-    total: usize,
-    pos: usize,
-    replayed: u64,
-    remainder: &[u8],
-    stop: ReplayStop,
-    elapsed_ms: u128,
-) {
-    let display = path.display();
-    let dropped = total - pos;
-    match stop {
-        ReplayStop::Clean => {
-            eprintln!(
-                "kevy: AOF {display} replayed {replayed} commands from {total} bytes \
-                 in {elapsed_ms} ms (clean)"
-            );
-        }
-        ReplayStop::TruncatedTail => {
-            eprintln!(
-                "kevy: AOF {display} replayed {replayed} commands from {total} bytes \
-                 in {elapsed_ms} ms; trailing {dropped} bytes \
-                 were a partial frame (crash mid-append, recoverable)"
-            );
-        }
-        ReplayStop::CorruptFrame(err) => {
-            let preview = preview_bytes(remainder);
-            eprintln!(
-                "kevy WARN: AOF {display} replayed {replayed} commands in {elapsed_ms} ms \
-                 then hit a corrupt \
-                 frame at byte {pos}; dropping the trailing {dropped} bytes \
-                 (quarantined before truncation). \
-                 Preview: {preview}. Parser error: {err}. \
-                 Most common cause: the process was killed mid-append (a torn \
-                 frame); less commonly, non-kevy bytes got written into this \
-                 file path (e.g. a deploy pipeline redirecting stderr here)."
-            );
-        }
-    }
-}
-
-/// Hex + ASCII preview of up to 16 bytes, for diagnostic eprintlns.
-fn preview_bytes(b: &[u8]) -> String {
-    use std::fmt::Write;
-    let n = b.len().min(16);
-    let mut hex = String::with_capacity(n * 3);
-    let mut ascii = String::with_capacity(n);
-    for &x in &b[..n] {
-        if !hex.is_empty() {
-            hex.push(' ');
-        }
-        let _ = write!(hex, "{x:02x}");
-        ascii.push(if (0x20..0x7f).contains(&x) { x as char } else { '.' });
-    }
-    format!("hex=[{hex}] ascii=[{ascii}]")
-}
+// The summary line lives in `replay_log.rs` (500-LOC split); the corrupt
+// WARN branch is unconditional there, the informational branches honor
+// `quiet_info`.
+use crate::replay_log::log_replay_summary;
