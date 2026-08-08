@@ -5,14 +5,14 @@
 #   1. wrong == 0 — a silent wrong answer fails the gate outright.
 #      Refusing by name is honest; answering wrong is not.
 #   2. subset-foldable ratio >= FLOOR — a RATCHET at the measured
-#      level (74% with format() landed), pending the owner's bar decision
+#      level (76% with the regexp fork landed), pending the owner's bar decision
 #      (RFC 拍板点①). Raise it as functions land; never lower it.
 #
 # Deterministic: the corpus clock is pinned inside `sql probe`, no
 # server, no network — CI-safe.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-FLOOR=${FUNCGATE_FLOOR:-74}
+FLOOR=${FUNCGATE_FLOOR:-76}
 
 OUT=$(cargo run -q -p kevy-cli -- sql probe bench/funcgate-corpus)
 echo "$OUT" | tail -20

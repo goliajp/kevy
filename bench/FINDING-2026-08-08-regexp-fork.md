@@ -53,7 +53,19 @@ resolutions, none of which should be rushed at a session's tail:
    REFUSED, the subset bar caps ~2pp lower, and the engine work is
    kept on the branch for later.
 
-## Recommendation
+## Resolution (2026-08-08)
+
+Taken: **option 2** (owner delegated the call; the researcher ruled it).
+CLAUDE.md and locgate now sanction a "vendored third-party engine core"
+waiver category alongside data-driven tables; the 8 spg matcher/parser
+functions carry an honest `// LOC-WAIVER` naming them as such. My own
+wrapper functions were made rule-conformant instead (render_array was a
+locgate false count — now fixed to strip braces inside literals /
+comments; regexp_matches split a `match_rows` helper). spg's internal
+version tags scrubbed from the vendored comments. funcgate 76.4%,
+wrong=0, all gates green — merged to develop.
+
+## Recommendation (as-filed, now taken)
 
 Option 2 (a vendored-engine waiver category) is the cleanest: it keeps
 spg's tested matcher byte-identical (no bug-injection risk), it's
