@@ -25,7 +25,7 @@ pub(crate) fn write_hash_payload<W: Write>(w: &mut W, h: &kevy_store::HashData) 
     w.write_all(&(h.len() as u32).to_le_bytes())?;
     for (f, v) in h {
         write_bytes(w, f.as_slice())?;
-        write_bytes(w, v)?;
+        write_bytes(w, v.as_slice())?;
     }
     Ok(())
 }

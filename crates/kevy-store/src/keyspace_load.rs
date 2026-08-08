@@ -29,7 +29,7 @@ impl Store {
             // load. Arc::clone is cheap; avoids re-copying the bytes.
             Value::ArcBulk(a) => self.insert_loaded(k, Value::ArcBulk(a.clone()), ttl_ms),
             Value::Hash(h) => {
-                self.load_hash(k, h.iter().map(|(f, v)| (f.to_vec(), v.clone())).collect(), ttl_ms)
+                self.load_hash(k, h.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect(), ttl_ms)
             }
             // A.8: same shape as A.7 — re-materialise to the heap-backed
             // variant on snapshot/replication load. First mutation that

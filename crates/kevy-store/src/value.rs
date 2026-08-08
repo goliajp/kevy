@@ -13,7 +13,7 @@ use alloc::sync::Arc;
 /// (22 B inline / heap-else). Field names ≤22B (the vast majority — `name`,
 /// `email`, etc.) live entirely inside the bucket, saving the 24 B Vec
 /// metadata + heap allocation per field on a 22-byte budget.
-pub type HashData = KevyMap<SmallBytes, Vec<u8>>;
+pub type HashData = KevyMap<SmallBytes, SmallBytes>;
 /// Backing structure for a List value (a ring-buffer deque — O(1) both ends).
 pub type ListData = VecDeque<Vec<u8>>;
 /// Backing structure for a Set value — [`KevySet`] of [`SmallBytes`].
@@ -311,7 +311,7 @@ impl Value {
             Value::ArcBulk(a) => a.len() as u64,
             Value::Hash(h) => collection_overhead(h.capacity(), HASH_SLOT_BYTES) + h
                 .iter()
-                .map(|(f, v)| f.heap_bytes() as u64 + v.capacity() as u64)
+                .map(|(f, v)| f.heap_bytes() as u64 + v.heap_bytes() as u64)
                 .sum::<u64>(),
             Value::List(l) => (l.capacity() as u64).saturating_mul(LIST_SLOT_BYTES)
                 + l.iter().map(|v| v.capacity() as u64).sum::<u64>(),
@@ -429,11 +429,14 @@ fn collection_overhead(capacity: usize, per_slot: u64) -> u64 {
 }
 
 /// Per-field delta a new hash field charges against the entry weight: heap
-/// bytes for the field name (if not inline) + value capacity + one slot of
-/// bucket overhead. Used when an HSET inserts a brand-new field.
+/// bytes for the field name (if not inline) + heap bytes for the value (0 when
+/// the value is ≤22 B and lives inline in the slot) + one slot of bucket
+/// overhead. Used when an HSET inserts a brand-new field. Both field and value
+/// inline in the fixed-size slot when short, so only the off-slot footprint is
+/// charged — symmetric with [`set_member_weight`].
 #[inline]
-pub fn hash_field_weight(field: &SmallBytes, value_cap: usize) -> u64 {
-    field.heap_bytes() as u64 + value_cap as u64 + HASH_SLOT_BYTES
+pub fn hash_field_weight(field: &SmallBytes, value_heap: usize) -> u64 {
+    field.heap_bytes() as u64 + value_heap as u64 + HASH_SLOT_BYTES
 }
 
 /// Per-member delta a new set member charges. Mirrors [`hash_field_weight`]
