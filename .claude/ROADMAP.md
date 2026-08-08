@@ -730,8 +730,11 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
       —— **仪器已落地(2026-08-08)**:`reactor_tick_gap_max_us` 引擎 gauge(tick 迟到 = 单迭代停顿上界,10Hz 零热路径成本,双 reactor 接线)+ `examples/tail_probe.rs` 进程内探针 + `bench/tailgate.sh` 两 cell。**基线(诚实 RED)**:mixed p999=100.8ms/gap 6.07s、firehose p999=280-460ms/gap 1.3-2.3s(×3)。**副产物:仪器首日抓出并修掉一个必崩缺陷**——单值 >4GiB 时 AOF 重写单帧 Argv u32 偏移回绕、persist 线程带崩全进程(`f94c3635`,按 Redis AOF_REWRITE_ITEMS_PER_CMD=64 分块 + 256MB 帧字节界)。**余项 = 两类停顿的 Phase A decomp + attack**(mixed 的 6s 与 firehose 的 AOF 追加路径)
 - [x] 慢客户端 / 连接风暴防护核查(2026-08-08)—— 三面审计:输出侧 `CLIENT_OUTPUT_HARD_LIMIT` 512MB 每 tick 扫(双 reactor,已有)/ 接入侧 maxclients 按 shard 分摊 + rejected 计数(已有)/ **输入侧无界 = 真缺口**:合法但永不完帧的巨型 multibulk 可把 `conn.input` 撑到 OOM → 补 `CLIENT_INPUT_HARD_LIMIT` 1GB(Redis client-query-buffer-limit 同值)双 reactor 读时执行,`KEVY_DEBUG_INPUT_LIMIT` 可覆盖,e2e 钉死断连+服务器无恙(`a692525c`)
 
-### V4 — alloc 执行轮(待 P1/P2 拍板)
-- [ ] 按拍板执行默认开关;若收集合角,走残余 RFC 修正后的 B'(单发信封池化),perfgate-median 验收
+### V4 — alloc 执行轮 ✅(2026-08-09 收卷:enabler 落地 + P1 终判 opt-in)
+- [x] hash 小值内联 enabler 合 develop(`2e242e78`):HashData 值槽 →SmallBytes,alloc-ON hset 角税 −5.8→−0.2 清零,+12.7% 流水线 hset,RSS −3.2%,全门禁绿
+- [x] 完整 P2 定价(perfgate-median ×3/×5 alloc-ON):10/12 PASS;sadd −9.7 / zadd −13.5 为真距离
+- [x] 残税 Phase A 决算(`bench/PERF-DECOMP-2026-08-08-zadd-sadd-alloc-tax-split.md` + 两勘误):sadd/zadd 同源 = 饱和 owner 快路径每调用成本;转发信封与 tree-walk 假设均证伪;B' 不适用、B 数字不够、C 无主导座位
+- [x] **P1 终判 = A 案(opt-in)**,fastpath-residue RFC Resolution + charter §六 已记;用户侧何时开 alloc 指南 = docs/alloc.md
 
 ### V5 — 产品面
 - [ ] 文档四区重构(Core KV / RDS 模块 / 运维 / 迁移指南)三语 + 边界页(14 条 + 函数面进度)
