@@ -169,6 +169,33 @@ impl PersistWorker {
     }
 }
 
+/// Best-effort page-cache drop for a fully-synced streamed file.
+fn drop_file_cache(f: &std::fs::File) {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        let _ = kevy_sys::fadvise_dontneed_all(f.as_raw_fd());
+    }
+}
+
+/// Append+fsync one tee generation, drop its cache, return the buffer.
+fn run_tee_append(tmp: PathBuf, mut bytes: Vec<u8>) -> PersistDone {
+    let result = (|| {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().append(true).open(&tmp)?;
+        f.write_all(&bytes)?;
+        f.sync_all()?;
+        drop_file_cache(&f);
+        Ok(())
+    })();
+    bytes.clear();
+    PersistDone::TeeAppend {
+        result,
+        tmp,
+        buf: bytes,
+    }
+}
+
 fn run_job(job: PersistJob) -> PersistDone {
     match job {
         PersistJob::Save {
@@ -182,27 +209,24 @@ fn run_job(job: PersistJob) -> PersistDone {
             aof_reset,
         },
         PersistJob::Rewrite { view, tmp } => PersistDone::Rewrite {
-            result: kevy_persist::dump_aof(&tmp, &view).map(|(keys, _bytes)| keys),
+            result: kevy_persist::dump_aof(&tmp, &view).and_then(|(keys, _bytes)| {
+                // Sync + drop the multi-GB image from the page cache
+                // NOW, off-thread: left dirty it floods memory until
+                // reclaim's LRU traffic contends with reactor faults
+                // (S5-E/F lock profile), and the final swap's fsync
+                // would pay for it on the reactor.
+                let f = std::fs::File::open(&tmp)?;
+                f.sync_all()?;
+                drop_file_cache(&f);
+                Ok(keys)
+            }),
             tmp,
         },
         PersistJob::Remove { path } => PersistDone::Remove {
             result: std::fs::remove_file(&path),
             path,
         },
-        PersistJob::TeeAppend { tmp, mut bytes } => {
-            let result = (|| {
-                use std::io::Write;
-                let mut f = std::fs::OpenOptions::new().append(true).open(&tmp)?;
-                f.write_all(&bytes)?;
-                f.sync_all()
-            })();
-            bytes.clear();
-            PersistDone::TeeAppend {
-                result,
-                tmp,
-                buf: bytes,
-            }
-        }
+        PersistJob::TeeAppend { tmp, bytes } => run_tee_append(tmp, bytes),
         PersistJob::DropBufs { bufs } => {
             drop(bufs);
             PersistDone::DropBufs
