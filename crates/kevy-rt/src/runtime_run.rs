@@ -196,10 +196,15 @@ impl<C: Commands> Runtime<C> {
     /// advertises 127.0.0.1 — an unroutable redirect target would strand
     /// every cluster client (single-machine scope; no announce-ip knob).
     fn cluster_topo(&self) -> Option<crate::cluster::ClusterTopo> {
-        self.cluster_port_base.map(|base| crate::cluster::ClusterTopo {
-            ip: if self.ip == [0, 0, 0, 0] { [127, 0, 0, 1] } else { self.ip },
-            port_base: base,
-        })
+        self.cluster_port_base
+            .map(|base| crate::cluster::ClusterTopo {
+                ip: if self.ip == [0, 0, 0, 0] {
+                    [127, 0, 0, 1]
+                } else {
+                    self.ip
+                },
+                port_base: base,
+            })
     }
 
     /// Build all `n` shards: per-shard listeners + store + the flat
@@ -274,6 +279,7 @@ impl<C: Commands> Runtime<C> {
             shards.push(Shard {
                 #[cfg(target_os = "linux")]
                 aof_offload: Default::default(),
+                rewrite_handoff: None,
                 xshard_inflight: 0,
                 id,
                 nshards: n,
@@ -410,7 +416,11 @@ fn reactor_choice() -> (bool, bool) {
             eprintln!(
                 "kevy: reactor = {} (io_uring {})",
                 if avail { "io_uring" } else { "epoll" },
-                if avail { "available" } else { "unavailable — kernel <5.19 or seccomp; using epoll" },
+                if avail {
+                    "available"
+                } else {
+                    "unavailable — kernel <5.19 or seccomp; using epoll"
+                },
             );
             (avail, false)
         }
