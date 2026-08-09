@@ -50,4 +50,8 @@ pub(crate) const OP_BIG_CANCEL: u64 = 8 << OP_SHIFT;
 /// until the entire body is received; the multishot is re-armed on
 /// completion to accept any pipelined commands after the big body.
 pub(crate) const OP_BIG_READ: u64 = 9 << OP_SHIFT;
+/// AOF-offload SQEs (RFC v3-aof-offload S1): positioned append writes
+/// and the everysec DATASYNC. Low bits carry the chunk sequence number
+/// (0 = the fsync) instead of a conn id — the AOF has no connection.
+pub(crate) const OP_AOF: u64 = 10 << OP_SHIFT;
 pub(crate) const CONN_MASK: u64 = (1 << OP_SHIFT) - 1;
