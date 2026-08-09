@@ -168,10 +168,10 @@ pub(crate) struct Shard<C: Commands> {
     pub(crate) data_dir: PathBuf,
     /// `None` disables the append-only log (e.g. pure in-memory benchmarking).
     pub(crate) aof: Option<Aof>,
-    /// Two-phase rewrite handoff state: `(tmp, keys, tee generations
-    /// already handed to the worker)`. `Some` between the worker's
-    /// image-spill completing and the final swap.
-    pub(crate) rewrite_handoff: Option<(std::path::PathBuf, u64, u8)>,
+    /// Two-phase rewrite handoff state. `Some` between the worker's
+    /// image-spill completing and the final swap (or a divergence
+    /// abort). See `persist_rewrite.rs` for the protocol.
+    pub(crate) rewrite_handoff: Option<crate::persist_rewrite::RewriteHandoff>,
     /// io_uring AOF offload state (RFC v3-aof-offload S1); dormant
     /// unless the reactor's setup opts in.
     #[cfg(target_os = "linux")]
