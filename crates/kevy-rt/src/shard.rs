@@ -13,20 +13,20 @@
 //! that is what keeps the all-to-all mesh deadlock-free.
 
 use crate::Commands;
+use crate::NotificationFlags;
 use crate::blocked::BlockedClients;
 use crate::conn::Conn;
-use crate::NotificationFlags;
 use crate::message::{Inbound, PubMsg, PubSubPatternReg, PubSubReg, ReqBatch};
+use kevy_map::KevyMap;
 use kevy_persist::Aof;
 use kevy_ring::{Consumer, Producer};
 use kevy_store::Store;
 use kevy_sys::{Event, Poller, Socket, Waker};
-use kevy_map::KevyMap;
 use std::collections::{HashMap, VecDeque};
-use std::time::Instant;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::time::Instant;
 
 pub(crate) use crate::cache_padded::CachePadded;
 
@@ -168,6 +168,10 @@ pub(crate) struct Shard<C: Commands> {
     pub(crate) data_dir: PathBuf,
     /// `None` disables the append-only log (e.g. pure in-memory benchmarking).
     pub(crate) aof: Option<Aof>,
+    /// Two-phase rewrite handoff state: `(tmp, keys, tee generations
+    /// already handed to the worker)`. `Some` between the worker's
+    /// image-spill completing and the final swap.
+    pub(crate) rewrite_handoff: Option<(std::path::PathBuf, u64, u8)>,
     /// io_uring AOF offload state (RFC v3-aof-offload S1); dormant
     /// unless the reactor's setup opts in.
     #[cfg(target_os = "linux")]

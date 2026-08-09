@@ -72,3 +72,26 @@ slotted as S4 with this finding as its Phase A.
 - R2 remaining: S2 (`always` CQE-gated replies), S3 (epoll writer
   thread), S4 (rewrite two-phase, the named seat), S5 (tailgate green —
   needs S4 plus the 195 ms residual).
+
+## S4 postscript (same day): the rewrite seat collapsed as predicted
+
+Two-phase handoff landed (`feature/r2-s4-rewrite-handoff`): the driver
+hands large tee generations to the persist worker (append+fsync
+off-thread) while writes keep teeing into a fresh generation; the
+reactor pays only a bounded (≤4 MiB tee) synchronous final swap,
+handoffs capped at 4. Real-disk tailgate, offload on, rewrite ON:
+
+| cell | gap @ S1 | gap @ S4 | PING p99.9 |
+|---|---|---|---|
+| firehose | 9 514 ms | **314 ms (30×)** | 61.7 ms ✓ |
+| mixed | 818 ms | **581 ms** | 9.8 ms ✓ |
+
+The rewrite-ON firehose gap now sits at the same order as S1's
+rewrite-OFF ablation (195 ms) — the seat this slice was named for is
+gone. The residual (314/581 ms vs the 100 ms bar) is the third seat:
+unnamed, needs its own decomposition before S5 can close.
+
+Review bonus: an S1-latent uring exit-order bug (shutdown_drain — which
+can rename+reopen the AOF and append-flush the queue — ran BEFORE the
+in-flight positioned writes drained; a straggler CQE could then land in
+a reused fd number). Exit now drains the ring first.

@@ -601,3 +601,70 @@ fn quiet_replay_reports_identically() {
     assert_eq!(r1.replayed_bytes, r2.replayed_bytes);
     std::fs::remove_file(&path).ok();
 }
+
+/// The two-phase handoff (S4): early tee generations are appended to the
+/// tmp image off-thread (simulated here), later writes keep teeing into a
+/// fresh generation, and the final swap applies only the last one. Replay
+/// must see every write exactly once, in order.
+#[test]
+fn two_phase_handoff_replays_every_generation_once() {
+    let path = temp_aof("handoff-rw");
+    let mut store = Store::new();
+    store.set(b"a", b"1".to_vec(), None, false, false);
+
+    let mut aof = Aof::open(&path, Fsync::Always).unwrap();
+    let plan = aof.begin_concurrent_rewrite(&store).unwrap();
+
+    // Generation 1: writes during the off-lock spill.
+    aof.append(&argv(&[b"SET", b"g1", b"x"])).unwrap();
+    aof.append(&argv(&[b"SET", b"k", b"gen1"])).unwrap();
+    std::fs::write(&plan.tmp, &plan.body).unwrap();
+
+    // Handoff: the driver takes gen 1 for the worker; the tee restarts.
+    let gen1 = aof.take_tee_for_handoff().unwrap();
+    assert!(!gen1.is_empty());
+    assert!(aof.is_rewriting(), "handoff must keep the rewrite live");
+
+    // Generation 2: writes during the worker's off-thread append.
+    aof.append(&argv(&[b"SET", b"g2", b"y"])).unwrap();
+    aof.append(&argv(&[b"SET", b"k", b"gen2"])).unwrap();
+
+    // Worker lands gen 1 (append + fsync), exactly like PersistJob::TeeAppend.
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&plan.tmp)
+            .unwrap();
+        f.write_all(&gen1).unwrap();
+        f.sync_all().unwrap();
+    }
+
+    // Final swap with the (small) last generation.
+    let gen2 = aof.take_tee_for_handoff().unwrap();
+    let stats = aof
+        .finish_concurrent_rewrite_with(&plan.tmp, plan.keys, gen2)
+        .unwrap();
+    assert!(!aof.is_rewriting());
+    assert_eq!(stats.keys, 1);
+
+    let mut dst = Store::new();
+    replay_aof(&path, |a| apply_for_test(&mut dst, &a)).unwrap();
+    assert_eq!(dst.get(b"a").unwrap(), Some(Cow::Borrowed(&b"1"[..])));
+    assert_eq!(
+        dst.get(b"g1").unwrap(),
+        Some(Cow::Borrowed(&b"x"[..])),
+        "gen-1 write must survive"
+    );
+    assert_eq!(
+        dst.get(b"g2").unwrap(),
+        Some(Cow::Borrowed(&b"y"[..])),
+        "gen-2 write must survive"
+    );
+    assert_eq!(
+        dst.get(b"k").unwrap(),
+        Some(Cow::Borrowed(&b"gen2"[..])),
+        "generations must replay in order (gen 2 wins)"
+    );
+    let _ = std::fs::remove_file(&path);
+}

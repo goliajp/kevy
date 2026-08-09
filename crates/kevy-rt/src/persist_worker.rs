@@ -40,6 +40,8 @@ pub(crate) enum PersistJob {
     },
     /// Dump `view` as RESP commands at the AOF's `.rewrite` tmp.
     Rewrite { view: SnapshotView, tmp: PathBuf },
+    /// Append a handed-off tee generation to the rewrite tmp and fsync.
+    TeeAppend { tmp: PathBuf, bytes: Vec<u8> },
 }
 
 pub(crate) enum PersistDone {
@@ -50,6 +52,12 @@ pub(crate) enum PersistDone {
     },
     Rewrite {
         result: io::Result<u64>, // keys dumped
+        tmp: PathBuf,
+    },
+    /// One handed-off tee generation appended+fsynced to `tmp`
+    /// (the two-phase rewrite's phase 2; see `advance_rewrite_handoff`).
+    TeeAppend {
+        result: io::Result<()>,
         tmp: PathBuf,
     },
 }
@@ -63,7 +71,10 @@ pub(crate) struct PersistWorker {
 
 impl PersistWorker {
     pub(crate) fn new() -> Self {
-        Self { chans: None, in_flight: false }
+        Self {
+            chans: None,
+            in_flight: false,
+        }
     }
 
     /// One job in flight at a time — callers check before collecting a view.
@@ -145,13 +156,27 @@ impl PersistWorker {
 
 fn run_job(job: PersistJob) -> PersistDone {
     match job {
-        PersistJob::Save { view, snap_path, aof_reset, cursor } => PersistDone::Save {
+        PersistJob::Save {
+            view,
+            snap_path,
+            aof_reset,
+            cursor,
+        } => PersistDone::Save {
             result: write_snapshot_tmp_with_cursor(&view, &snap_path, cursor),
             snap_path,
             aof_reset,
         },
         PersistJob::Rewrite { view, tmp } => PersistDone::Rewrite {
             result: kevy_persist::dump_aof(&tmp, &view).map(|(keys, _bytes)| keys),
+            tmp,
+        },
+        PersistJob::TeeAppend { tmp, bytes } => PersistDone::TeeAppend {
+            result: (|| {
+                use std::io::Write;
+                let mut f = std::fs::OpenOptions::new().append(true).open(&tmp)?;
+                f.write_all(&bytes)?;
+                f.sync_all()
+            })(),
             tmp,
         },
     }
@@ -163,8 +188,16 @@ impl<C: Commands> Shard<C> {
     /// log line if a background job or rewrite is already in flight.
     #[cold]
     pub(crate) fn start_bg_save(&mut self) {
-        if self.persist.busy() || self.aof.as_ref().is_some_and(kevy_persist::Aof::is_rewriting) {
-            eprintln!("kevy: shard {} bgsave skipped (persist job in flight)", self.id);
+        if self.persist.busy()
+            || self
+                .aof
+                .as_ref()
+                .is_some_and(kevy_persist::Aof::is_rewriting)
+        {
+            eprintln!(
+                "kevy: shard {} bgsave skipped (persist job in flight)",
+                self.id
+            );
             return;
         }
         // collect + begin_view_rewrite back-to-back on this thread: no
@@ -188,7 +221,12 @@ impl<C: Commands> Shard<C> {
         // frozen in the same no-append window as the view itself, so
         // "snapshot + frames from cursor" is exact.
         let cursor = self.replicate.as_ref().map(|f| f.tail());
-        let job = PersistJob::Save { view, snap_path: self.snapshot_path(), aof_reset, cursor };
+        let job = PersistJob::Save {
+            view,
+            snap_path: self.snapshot_path(),
+            aof_reset,
+            cursor,
+        };
         if !self.persist.submit(self.id, job) {
             eprintln!("kevy: shard {} persist worker unavailable", self.id);
             if let Some(aof) = &mut self.aof {
@@ -212,9 +250,17 @@ impl<C: Commands> Shard<C> {
             self.aof_offload.want_restructure = true;
             return;
         }
-        if self.persist.busy() || self.aof.as_ref().is_none_or(kevy_persist::Aof::is_rewriting) {
+        if self.persist.busy()
+            || self
+                .aof
+                .as_ref()
+                .is_none_or(kevy_persist::Aof::is_rewriting)
+        {
             if self.aof.is_some() {
-                eprintln!("kevy: shard {} aof rewrite skipped (persist job in flight)", self.id);
+                eprintln!(
+                    "kevy: shard {} aof rewrite skipped (persist job in flight)",
+                    self.id
+                );
             }
             return;
         }
@@ -227,9 +273,15 @@ impl<C: Commands> Shard<C> {
                 return;
             }
         };
-        if !self.persist.submit(self.id, PersistJob::Rewrite { view, tmp }) {
+        if !self
+            .persist
+            .submit(self.id, PersistJob::Rewrite { view, tmp })
+        {
             eprintln!("kevy: shard {} persist worker unavailable", self.id);
-            self.aof.as_mut().expect("checked").abort_concurrent_rewrite();
+            self.aof
+                .as_mut()
+                .expect("checked")
+                .abort_concurrent_rewrite();
         }
     }
 
@@ -238,7 +290,9 @@ impl<C: Commands> Shard<C> {
     /// aborts the tee and leaves the previous snapshot + live AOF intact.
     #[cold]
     pub(crate) fn poll_persist_done(&mut self) {
-        let Some(done) = self.persist.try_complete() else { return };
+        let Some(done) = self.persist.try_complete() else {
+            return;
+        };
         self.commit_persist_done(done);
     }
 
@@ -275,12 +329,9 @@ impl<C: Commands> Shard<C> {
     pub(crate) fn write_feed_shutdown_marker(&self) {
         if let Some(f) = &self.replicate {
             let (generation, next) = f.tail();
-            if let Err(e) = kevy_persist::feed_meta::write_feed_meta(
-                &self.data_dir,
-                self.id,
-                generation,
-                next,
-            ) {
+            if let Err(e) =
+                kevy_persist::feed_meta::write_feed_meta(&self.data_dir, self.id, generation, next)
+            {
                 eprintln!("kevy: shard {} feed marker write failed: {e}", self.id);
             }
         }
@@ -342,7 +393,11 @@ impl<C: Commands> Shard<C> {
     #[cold]
     pub(crate) fn commit_persist_done(&mut self, done: PersistDone) {
         match done {
-            PersistDone::Save { result: Ok(tmp), snap_path, aof_reset } => {
+            PersistDone::Save {
+                result: Ok(tmp),
+                snap_path,
+                aof_reset,
+            } => {
                 if let Err(e) = std::fs::rename(&tmp, &snap_path) {
                     eprintln!("kevy: shard {} bgsave rename failed: {e}", self.id);
                     self.abort_persist_tee(aof_reset);
@@ -358,26 +413,98 @@ impl<C: Commands> Shard<C> {
                     }
                 }
             }
-            PersistDone::Save { result: Err(e), aof_reset, .. } => {
+            PersistDone::Save {
+                result: Err(e),
+                aof_reset,
+                ..
+            } => {
                 eprintln!("kevy: shard {} bgsave failed: {e}", self.id);
                 self.abort_persist_tee(aof_reset);
             }
-            PersistDone::Rewrite { result: Ok(keys), tmp } => {
-                if let Some(aof) = &mut self.aof
-                    && let Err(e) = aof.finish_concurrent_rewrite(&tmp, keys)
-                {
-                    eprintln!("kevy: shard {} aof rewrite swap failed: {e}", self.id);
-                    aof.abort_concurrent_rewrite();
-                    let _ = std::fs::remove_file(&tmp);
-                }
+            PersistDone::Rewrite {
+                result: Ok(keys),
+                tmp,
+            } => {
+                self.rewrite_handoff = Some((tmp, keys, 0));
+                self.advance_rewrite_handoff();
             }
-            PersistDone::Rewrite { result: Err(e), tmp } => {
+            PersistDone::TeeAppend {
+                result: Ok(()),
+                tmp: _,
+            } => {
+                self.advance_rewrite_handoff();
+            }
+            PersistDone::TeeAppend {
+                result: Err(e),
+                tmp,
+            } => {
+                eprintln!("kevy: shard {} aof rewrite tee append failed: {e}", self.id);
+                self.rewrite_handoff = None;
+                if let Some(aof) = &mut self.aof {
+                    aof.abort_concurrent_rewrite();
+                }
+                let _ = std::fs::remove_file(&tmp);
+            }
+            PersistDone::Rewrite {
+                result: Err(e),
+                tmp,
+            } => {
                 eprintln!("kevy: shard {} aof rewrite failed: {e}", self.id);
                 if let Some(aof) = &mut self.aof {
                     aof.abort_concurrent_rewrite();
                 }
                 let _ = std::fs::remove_file(&tmp);
             }
+        }
+    }
+
+    /// The two-phase rewrite's driver: hand large tee generations to
+    /// the worker (append+fsync off-thread), and only when the current
+    /// generation is small do the bounded synchronous swap. The
+    /// synchronous cost is the handoff window's writes — ms — instead
+    /// of the whole rewrite window's (measured 9.5 s on a firehose).
+    /// Iterations are capped: if ingest outruns the disk, the final
+    /// swap pays one bounded-large append rather than looping forever.
+    #[cold]
+    pub(crate) fn advance_rewrite_handoff(&mut self) {
+        const SMALL_TEE: usize = 4 << 20; // 4 MiB: ms-scale append+sync
+        const MAX_HANDOFFS: u8 = 4;
+        let Some((tmp, keys, iters)) = self.rewrite_handoff.take() else {
+            return;
+        };
+        let Some(aof) = &mut self.aof else { return };
+        let tee = aof.take_tee_for_handoff().unwrap_or_default();
+        if tee.len() > SMALL_TEE && iters < MAX_HANDOFFS {
+            if self.persist.submit(
+                self.id,
+                PersistJob::TeeAppend {
+                    tmp: tmp.clone(),
+                    bytes: tee,
+                },
+            ) {
+                self.rewrite_handoff = Some((tmp, keys, iters + 1));
+            } else {
+                // Worker gone — the handed-off tee is lost with it, so
+                // the tmp image is incomplete: abort the rewrite. No
+                // data is at risk (the live file has carried every one
+                // of those writes through the normal append path).
+                eprintln!(
+                    "kevy: shard {} persist worker unavailable for tee handoff — rewrite aborted",
+                    self.id
+                );
+                self.aof
+                    .as_mut()
+                    .expect("checked above")
+                    .abort_concurrent_rewrite();
+                let _ = std::fs::remove_file(&tmp);
+            }
+            return;
+        }
+        let aof = self.aof.as_mut().expect("checked above");
+        if let Err(e) = aof.finish_concurrent_rewrite_with(&tmp, keys, tee) {
+            eprintln!("kevy: shard {} aof rewrite swap failed: {e}", self.id);
+            aof.abort_concurrent_rewrite();
+            let _ = std::fs::remove_file(&tmp);
         }
     }
 }

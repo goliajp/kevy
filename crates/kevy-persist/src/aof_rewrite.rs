@@ -1,0 +1,111 @@
+//! The concurrent (non-blocking) rewrite family of [`Aof`] — begin /
+//! tee handoff / finish / abort — split from `aof.rs` at the 500-LOC
+//! line when the two-phase handoff grew it past the cap. The two-phase
+//! protocol's driver lives in kevy-rt (`advance_rewrite_handoff`); this
+//! file owns the Aof-side state transitions.
+
+use std::fs::OpenOptions;
+use std::io::{self, BufWriter, Write};
+use std::path::Path;
+use std::time::Instant;
+
+use crate::aof::{AOF_BUF_CAP, Aof, RewritePlan, RewriteStats};
+use crate::dump_store_to_buf;
+use kevy_store::Store;
+
+impl Aof {
+    /// Phase 1 of a **non-blocking** rewrite (Background auto-rewrite). Must be
+    /// called under the store lock: it serializes the keyspace into an
+    /// in-memory image and starts teeing subsequent `append`s into a diff
+    /// buffer — both atomic w.r.t. other writes. The caller then spills
+    /// `plan.body` to `plan.tmp` **with the lock released** (the slow disk
+    /// write), and finally calls [`Self::finish_concurrent_rewrite`] under the
+    /// lock again. Writes that land during the off-lock spill are captured by
+    /// the tee and appended after the snapshot, so nothing is lost.
+    pub fn begin_concurrent_rewrite(&mut self, store: &Store) -> io::Result<RewritePlan> {
+        self.flush_queued()?;
+        let (body, keys) = dump_store_to_buf(store, crate::AofFormat::V2);
+        self.rewrite_tee = Some(Vec::new());
+        Ok(RewritePlan {
+            body,
+            tmp: crate::aof_util::rewrite_tmp_path(&self.path),
+            keys,
+        })
+    }
+
+    /// Phase 2: the `plan.body` is already on disk at `tmp` (spilled off-lock).
+    /// Append the diff buffer (writes since `begin`), fsync, atomically swap
+    /// over the live AOF, and reopen the append handle against it. Call under
+    /// the store lock. `keys` is `plan.keys`.
+    pub fn finish_concurrent_rewrite(&mut self, tmp: &Path, keys: u64) -> io::Result<RewriteStats> {
+        let tee = self.rewrite_tee.take().unwrap_or_default();
+        self.finish_concurrent_rewrite_with(tmp, keys, tee)
+    }
+
+    /// Take the accumulated diff buffer for an off-thread append and
+    /// immediately start a fresh generation — the two-phase rewrite's
+    /// handoff step (the worker appends+fsyncs THIS tee while new writes
+    /// keep teeing into the fresh one). `None` when no rewrite is live.
+    /// `is_rewriting` stays true throughout.
+    pub fn take_tee_for_handoff(&mut self) -> Option<Vec<u8>> {
+        self.rewrite_tee.as_mut().map(|t| std::mem::take(t))
+    }
+
+    /// Phase-final of the two-phase rewrite: `last_tee` is the (small)
+    /// final diff generation; everything earlier was appended+fsynced
+    /// to `tmp` off-thread. The synchronous cost here is bounded by the
+    /// handoff window's writes, not the rewrite window's — `sync_all`
+    /// pays for dirty pages, and the worker already flushed the image
+    /// and the earlier tee generations.
+    pub fn finish_concurrent_rewrite_with(
+        &mut self,
+        tmp: &Path,
+        keys: u64,
+        tee: Vec<u8>,
+    ) -> io::Result<RewriteStats> {
+        self.rewrite_tee = None;
+        {
+            let mut f = OpenOptions::new().append(true).open(tmp)?;
+            f.write_all(&tee)?;
+            f.sync_all()?;
+        }
+        std::fs::rename(tmp, &self.path)?;
+        let f = OpenOptions::new().append(true).open(&self.path)?;
+        let bytes = f.metadata().map_or(0, |m| m.len());
+        self.file = BufWriter::with_capacity(AOF_BUF_CAP, f);
+        self.format = crate::AofFormat::V2; // the rewrite output always is
+        self.size_bytes = bytes;
+        self.queued_offset = bytes;
+        self.size_at_last_rewrite = bytes;
+        self.last_rewrite_at = Instant::now();
+        self.dirty = false;
+        self.rewrites_total = self.rewrites_total.saturating_add(1);
+        Ok(RewriteStats { keys, bytes })
+    }
+
+    /// Abandon an in-flight non-blocking rewrite (e.g. the off-lock spill
+    /// failed): drop the diff buffer and resume normal appends. The live AOF
+    /// is untouched, so no data is at risk; the caller deletes the temp file.
+    pub fn abort_concurrent_rewrite(&mut self) {
+        self.rewrite_tee = None;
+    }
+
+    /// Phase 1 of a **COW** rewrite: flush pending appends and start teeing
+    /// subsequent ones into the diff buffer. O(1) — the keyspace itself is
+    /// already frozen in the caller's `SnapshotView`. Returns the temp path
+    /// the background serializer must write (via [`crate::dump_aof`]),
+    /// after which [`Self::finish_concurrent_rewrite`] (same thread as the
+    /// appends) swaps it in, or [`Self::abort_concurrent_rewrite`] backs out.
+    ///
+    /// **Atomicity contract**: the `collect_snapshot` and this call must
+    /// happen with no `append` between them (same critical section / same
+    /// thread). A write squeezing in between would either miss the new AOF
+    /// (tee started late) or replay twice (tee started early) — and
+    /// commands like LPUSH are not idempotent.
+    pub fn begin_view_rewrite(&mut self) -> io::Result<std::path::PathBuf> {
+        self.flush_queued()?;
+        self.file.flush()?;
+        self.rewrite_tee = Some(Vec::new());
+        Ok(crate::aof_util::rewrite_tmp_path(&self.path))
+    }
+}
