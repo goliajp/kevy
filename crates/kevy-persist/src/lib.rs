@@ -40,6 +40,7 @@
 mod aof;
 mod aof_policy;
 mod aof_queue;
+mod aof_rewrite;
 mod aof_txn;
 mod aof_util;
 mod baseline;
