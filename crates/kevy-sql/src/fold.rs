@@ -111,10 +111,57 @@ impl<'a> Parser<'a> {
         Err(SqlError::at(t.line, t.col, format!("expected '{c}'")))
     }
 
-    /// `expr := term (('+'|'-') term)*` — evaluated left to right;
-    /// precedence with `* /` handled one level down.
+    /// `expr := and_expr (OR and_expr)*` — the top of the operator
+    /// pyramid (PG precedence: OR < AND < NOT < comparison < `+ -` <
+    /// `* /`), three-valued logic in kevy-scalar.
     pub(crate) fn expr(&mut self) -> Result<Scalar, SqlError> {
-        let mut acc = self.term()?;
+        let mut acc = self.and_expr()?;
+        while self.eat_kw("or") {
+            let rhs = self.and_expr()?;
+            acc = kevy_scalar::logic_or(&acc, &rhs)
+                .map_err(|e| SqlError::at(0, 0, e.to_string()))?;
+        }
+        Ok(acc)
+    }
+
+    fn and_expr(&mut self) -> Result<Scalar, SqlError> {
+        let mut acc = self.not_expr()?;
+        while self.eat_kw("and") {
+            let rhs = self.not_expr()?;
+            acc = kevy_scalar::logic_and(&acc, &rhs)
+                .map_err(|e| SqlError::at(0, 0, e.to_string()))?;
+        }
+        Ok(acc)
+    }
+
+    fn not_expr(&mut self) -> Result<Scalar, SqlError> {
+        if self.eat_kw("not") {
+            let v = self.not_expr()?;
+            return kevy_scalar::logic_not(&v).map_err(|e| SqlError::at(0, 0, e.to_string()));
+        }
+        self.cmp_expr()
+    }
+
+    /// One optional comparison: `add (op add)?` — SQL comparisons do
+    /// not chain (`a < b < c` is a type error in PG too). The lexer
+    /// already folds the two-character forms into single Op tokens.
+    fn cmp_expr(&mut self) -> Result<Scalar, SqlError> {
+        let lhs = self.add_expr()?;
+        let t = self.peek();
+        let (line, col) = (t.line, t.col);
+        let op: &str = match t.tok {
+            Tok::Op(o @ ("=" | "<" | ">" | "<=" | ">=" | "<>" | "!=")) => o,
+            _ => return Ok(lhs),
+        };
+        self.i += 1;
+        let rhs = self.add_expr()?;
+        kevy_scalar::cmp_op(op, &lhs, &rhs).map_err(|e| SqlError::at(line, col, e.to_string()))
+    }
+
+    /// `add_expr := concat (('+'|'-') concat)*` — evaluated left to
+    /// right; `||` binds tighter (PG precedence), `* /` one level below.
+    fn add_expr(&mut self) -> Result<Scalar, SqlError> {
+        let mut acc = self.concat_expr()?;
         loop {
             let t = self.peek();
             let op = match t.tok {
@@ -123,10 +170,25 @@ impl<'a> Parser<'a> {
             };
             let (line, col) = (t.line, t.col);
             self.i += 1;
-            let rhs = self.term()?;
+            let rhs = self.concat_expr()?;
             acc = kevy_scalar::binop(op, &acc, &rhs)
                 .map_err(|e| SqlError::at(line, col, e.to_string()))?;
         }
+    }
+
+    /// `concat := term ('||' term)*` — SQL string concatenation with
+    /// strict NULL propagation ('a' || NULL is NULL, unlike concat()).
+    fn concat_expr(&mut self) -> Result<Scalar, SqlError> {
+        let mut acc = self.term()?;
+        while matches!(self.peek().tok, Tok::Op("||")) {
+            self.i += 1;
+            let rhs = self.term()?;
+            acc = match (&acc, &rhs) {
+                (Scalar::Null, _) | (_, Scalar::Null) => Scalar::Null,
+                (a, b) => Scalar::Text(format!("{}{}", a.render(), b.render())),
+            };
+        }
+        Ok(acc)
     }
 
     fn term(&mut self) -> Result<Scalar, SqlError> {

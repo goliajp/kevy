@@ -26,6 +26,7 @@
 
 mod datetime;
 mod datetime_fmt;
+mod logic;
 mod math;
 mod md5;
 mod regex_engine;
@@ -37,6 +38,7 @@ mod strings_slice;
 #[cfg(test)]
 mod tests;
 
+pub use logic::{cmp_op, logic_and, logic_not, logic_or, parse_pg_bool};
 pub use ops::binop;
 
 pub use datetime_fmt::{
@@ -178,9 +180,8 @@ pub fn eval(func: &str, args: &[Scalar]) -> Result<Scalar, ScalarError> {
         // ── null family ──
         "coalesce" | "nullif" | "greatest" | "least" => nullfam::eval(&name, args),
         // ── date/time ──
-        "extract" | "date_part" | "date_trunc" | "age" | "to_char" => {
-            datetime::eval(&name, args)
-        }
+        "extract" | "date_part" | "date_trunc" | "age" | "to_char" | "date_format"
+        | "unix_timestamp" | "from_unixtime" => datetime::eval(&name, args),
         // ── regexp (vendored engine) ──
         "regexp_replace" | "regexp_matches" | "regexp_split_to_array" => regexp::eval(&name, args),
         // ── hash ──

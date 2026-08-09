@@ -159,34 +159,145 @@ pub(crate) fn to_char(args: &[Scalar]) -> Result<Scalar, ScalarError> {
         _ => return Err(ScalarError::Arity { func: FUNC, got: args.len() }),
     };
     let c = kevy_time::civil_from_epoch(us.div_euclid(MICROS_PER_SEC));
+    let frac = us.rem_euclid(MICROS_PER_SEC);
     let mut out = String::with_capacity(tpl.len());
     let mut rest = tpl;
     while !rest.is_empty() {
-        let (token, len): (String, usize) = if rest.starts_with("YYYY") {
-            (format!("{:04}", c.y), 4)
-        } else if rest.starts_with("HH24") {
-            (format!("{:02}", c.h), 4)
-        } else if rest.starts_with("MM") {
-            (format!("{:02}", c.m), 2)
-        } else if rest.starts_with("DD") {
-            (format!("{:02}", c.d), 2)
-        } else if rest.starts_with("MI") {
-            (format!("{:02}", c.min), 2)
-        } else if rest.starts_with("SS") {
-            (format!("{:02}", c.s), 2)
-        } else {
-            let ch = rest.chars().next().expect("non-empty rest");
-            if ch.is_ascii_alphanumeric() {
-                // An unrecognized pattern letter — refuse, never guess.
-                return Err(ScalarError::Domain {
-                    func: FUNC,
-                    what: "unsupported to_char template pattern",
-                });
+        let (token, len) = match to_char_token(rest, &c, frac) {
+            Some(hit) => hit,
+            None => {
+                let ch = rest.chars().next().expect("non-empty rest");
+                if ch.is_ascii_alphanumeric() {
+                    // An unrecognized pattern letter — refuse, never guess.
+                    return Err(ScalarError::Domain {
+                        func: FUNC,
+                        what: "unsupported to_char template pattern",
+                    });
+                }
+                (ch.to_string(), ch.len_utf8())
             }
-            (ch.to_string(), ch.len_utf8())
         };
         out.push_str(&token);
         rest = &rest[len..];
     }
     Ok(Scalar::Text(out))
+}
+
+/// English month names, PG's spellings (`Month` pads to 9, `Mon` is 3).
+const MONTHS: [&str; 12] = [
+    "January", "February", "March", "April", "May", "June", "July", "August", "September",
+    "October", "November", "December",
+];
+
+/// One `to_char` template token at the head of `rest` — longest pattern
+/// first (`Month` before `Mon`, `HH24`/`HH12` before `MI`/`MM`). PG's
+/// `AM`/`PM` both render the ACTUAL meridiem; the template letter only
+/// picks the style.
+fn to_char_token(rest: &str, c: &kevy_time::Civil, frac: i64) -> Option<(String, usize)> {
+    let month = MONTHS[(c.m as usize).saturating_sub(1).min(11)];
+    let hit = if rest.starts_with("YYYY") {
+        (format!("{:04}", c.y), 4)
+    } else if rest.starts_with("HH24") {
+        (format!("{:02}", c.h), 4)
+    } else if rest.starts_with("HH12") {
+        let h12 = match c.h % 12 {
+            0 => 12,
+            h => h,
+        };
+        (format!("{h12:02}"), 4)
+    } else if rest.starts_with("Month") {
+        (format!("{month:<9}"), 5)
+    } else if rest.starts_with("Mon") {
+        (month[..3].to_string(), 3)
+    } else if rest.starts_with("MM") {
+        (format!("{:02}", c.m), 2)
+    } else if rest.starts_with("DD") {
+        (format!("{:02}", c.d), 2)
+    } else if rest.starts_with("MI") {
+        (format!("{:02}", c.min), 2)
+    } else if rest.starts_with("MS") {
+        (format!("{:03}", frac / 1_000), 2)
+    } else if rest.starts_with("SS") {
+        (format!("{:02}", c.s), 2)
+    } else if rest.starts_with("US") {
+        (format!("{frac:06}"), 2)
+    } else if rest.starts_with("YY") {
+        (format!("{:02}", c.y.rem_euclid(100)), 2)
+    } else if rest.starts_with("AM") || rest.starts_with("PM") {
+        (if c.h < 12 { "AM" } else { "PM" }.to_string(), 2)
+    } else {
+        return None;
+    };
+    Some(hit)
+}
+
+/// MySQL's `date_format(ts, '%…')` template subset (probe 62: the
+/// WordPress/Laravel display triplet). Unknown `%` letters refuse.
+pub(crate) fn date_format(args: &[Scalar]) -> Result<Scalar, ScalarError> {
+    const FUNC: &str = "date_format";
+    let (us, tpl) = match args {
+        [Scalar::Null, _] | [_, Scalar::Null] => return Ok(Scalar::Null),
+        [Scalar::Timestamp(us), Scalar::Text(t)] => (*us, t.as_str()),
+        [Scalar::Date(d), Scalar::Text(t)] => (d * MICROS_PER_DAY, t.as_str()),
+        [_, _] => return Err(ScalarError::Type { func: FUNC, arg: 0 }),
+        _ => return Err(ScalarError::Arity { func: FUNC, got: args.len() }),
+    };
+    let c = kevy_time::civil_from_epoch(us.div_euclid(MICROS_PER_SEC));
+    let frac = us.rem_euclid(MICROS_PER_SEC);
+    let month = MONTHS[(c.m as usize).saturating_sub(1).min(11)];
+    let mut out = String::with_capacity(tpl.len());
+    let mut it = tpl.chars();
+    while let Some(ch) = it.next() {
+        if ch != '%' {
+            out.push(ch);
+            continue;
+        }
+        match it.next() {
+            Some('Y') => out.push_str(&format!("{:04}", c.y)),
+            Some('m') => out.push_str(&format!("{:02}", c.m)),
+            Some('d') => out.push_str(&format!("{:02}", c.d)),
+            Some('H') => out.push_str(&format!("{:02}", c.h)),
+            Some('i') => out.push_str(&format!("{:02}", c.min)),
+            Some('s') => out.push_str(&format!("{:02}", c.s)),
+            Some('M') => out.push_str(month),
+            Some('b') => out.push_str(&month[..3]),
+            Some('p') => out.push_str(if c.h < 12 { "AM" } else { "PM" }),
+            Some('f') => out.push_str(&format!("{frac:06}")),
+            Some('%') => out.push('%'),
+            _ => {
+                return Err(ScalarError::Domain {
+                    func: FUNC,
+                    what: "unsupported date_format template specifier",
+                });
+            }
+        }
+    }
+    Ok(Scalar::Text(out))
+}
+
+/// MySQL `unix_timestamp(ts|date)` — whole seconds since the epoch.
+pub(crate) fn unix_timestamp(args: &[Scalar]) -> Result<Scalar, ScalarError> {
+    const FUNC: &str = "unix_timestamp";
+    match args {
+        [Scalar::Null] => Ok(Scalar::Null),
+        [Scalar::Timestamp(us)] => Ok(Scalar::Int(us.div_euclid(MICROS_PER_SEC))),
+        [Scalar::Date(d)] => Ok(Scalar::Int(d * 86_400)),
+        [_] => Err(ScalarError::Type { func: FUNC, arg: 0 }),
+        _ => Err(ScalarError::Arity { func: FUNC, got: args.len() }),
+    }
+}
+
+/// MySQL `from_unixtime(secs[, format])` — epoch seconds to a
+/// timestamp, optionally rendered through [`date_format`].
+pub(crate) fn from_unixtime(args: &[Scalar]) -> Result<Scalar, ScalarError> {
+    const FUNC: &str = "from_unixtime";
+    match args {
+        [Scalar::Null] | [Scalar::Null, _] => Ok(Scalar::Null),
+        [Scalar::Int(secs)] => Ok(Scalar::Timestamp(secs * MICROS_PER_SEC)),
+        [Scalar::Int(secs), tpl @ Scalar::Text(_)] => {
+            date_format(&[Scalar::Timestamp(secs * MICROS_PER_SEC), tpl.clone()])
+        }
+        [_, ..] => Err(ScalarError::Type { func: FUNC, arg: 0 }),
+        _ => Err(ScalarError::Arity { func: FUNC, got: args.len() }),
+    }
 }
