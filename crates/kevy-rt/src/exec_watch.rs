@@ -269,10 +269,19 @@ impl<C: Commands> Shard<C> {
             drain_front(c);
         }
         // Each queued cmd's slot was pre-allocated in `exec_transaction_watched`.
+        // Same marker bracket as the unwatched path: EXEC is the atomic
+        // unit, and replay must see its local appends all-or-nothing.
+        let marked = queued.len() > 1;
+        if marked {
+            self.aof_begin_group();
+        }
         for (i, cmd) in queued.iter().enumerate() {
             let qseq = header_seq + 1 + i as u64;
             let resolved = self.commands.resolve(cmd);
             self.start_command_at_seq(conn_id, qseq, cmd, resolved);
+        }
+        if marked {
+            self.aof_end_group_logged();
         }
     }
 

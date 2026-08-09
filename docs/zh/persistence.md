@@ -276,6 +276,8 @@ store.evictions_total();        // total evicted by maxmemory
 
 **多 shard 偏斜。** 每个 shard 独立拥有 `aof-<id>.aof`、独立修复，崩溃后不同 shard 可能各自恢复到略有差异的时刻（各在各的丢失上界内）。kevy 不为独立写入承诺跨 shard 原子性——`atomic`/`atomic_all_shards` 块在提交时按触及的 shard fsync，是一组写入必须一起落地时该用的工具。
 
+**事务标记只属于事务。**流水线批不是事务（Redis 的 pipelining 明确非原子），所以 reactor 批不带标记（`always` 下只共享一次 fsync；4.x 线上曾有一段时间每个单命令批都要付约 65 B 的标记对，被磁盘门禁抓出后修正）。服务器侧的 `MULTI`/`EXEC` 在连接所属 shard 上为排队命令成组打标；扇出到其它 shard 的命令落进各自的日志、逐条独立。因此跨 shard `EXEC` 的崩溃原子性是按 shard 的，不是全局的——与 Redis 自己「EXEC 内运行时错误不回滚其它命令」的精神一致。上文的全有或全无保证属于嵌入式 `atomic()` 家族，它的写入按构造就是单 shard 的。
+
 **feed（CDC）只在内存中，且跑在磁盘前面。** feed backlog 不会在打开时从 AOF 重建；重启后只有 `(generation, offset)` 游标存活。帧在 apply 时刻发射，**早于**记录同一笔写入的 AOF 字节被 fsync——`everysec` 下消费者可能观测到最多约 1 秒后被崩溃回滚的写入（`always`：零；`no`：无上界）。崩溃会 bump feed generation，所以所有崩溃前游标都会收到 `-FEEDRESYNC` / `FeedError::Resync`，消费者必须从恢复后的 store 重新扫描重建。只有覆盖某帧的 fsync 窗口关闭后，才能把它当成 durable 事实——对未 durable 帧采取的副作用，resync 无法召回。
 
 **副本对未 fsync 的帧不持有耐久性主张。** 主节点 unclean 重启后会按未 fsync 后缀回滚并 bump feed generation；应用过被回滚写入的副本处于领先位，重连时其分叉历史经全量快照重同步丢弃。重连握手携带副本的 generation（v4），generation 不匹配时主节点拒绝按 offset 续传——无论副本隔多久重连，都不可能被静默喂入新历史的同号 offset（见 [replication.md](replication.md)）。

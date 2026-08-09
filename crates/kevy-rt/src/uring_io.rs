@@ -215,7 +215,7 @@ impl<C: Commands> Shard<C> {
         if let Some(uc) = io.get_mut(&cid)
             && uc.pending_big_arg.is_some()
         {
-            self.aof_begin_group();
+            self.aof_begin_fsync_window();
             let total = slab_offset + n;
             let slab_bytes = &pbuf.bytes(bid, total)[slab_offset..];
             self.uring_bigbulk_feed(cid, io, slab_bytes);
@@ -251,7 +251,7 @@ impl<C: Commands> Shard<C> {
                 return;
             }
         };
-        self.aof_begin_group();
+        self.aof_begin_fsync_window();
         let total = slab_offset + n;
         let slab_for_dispatch = &pbuf.bytes(bid, total)[slab_offset..];
         let outcome = self.uring_recv_dispatch(cid, slab_for_dispatch, &mut input_buf, io);
