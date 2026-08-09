@@ -46,9 +46,47 @@ impl Aof {
     /// immediately start a fresh generation — the two-phase rewrite's
     /// handoff step (the worker appends+fsyncs THIS tee while new writes
     /// keep teeing into the fresh one). `None` when no rewrite is live.
-    /// `is_rewriting` stays true throughout.
+    /// `is_rewriting` stays true throughout. The fresh generation reuses
+    /// the recycled spare buffer when one is stashed (warm pages, no
+    /// fresh mmap — see `stash_tee_spare`).
     pub fn take_tee_for_handoff(&mut self) -> Option<Vec<u8>> {
-        self.rewrite_tee.as_mut().map(std::mem::take)
+        let spare = self.tee_spare.take().unwrap_or_default();
+        match self.rewrite_tee.as_mut() {
+            Some(t) => Some(std::mem::replace(t, spare)),
+            None => {
+                self.tee_spare = Some(spare);
+                None
+            }
+        }
+    }
+
+    /// Return an appended generation's buffer (cleared) for the next
+    /// generation to grow into. Ping-pong: at most one generation is
+    /// ever out with the worker, so the slot is normally empty; a
+    /// surprise second return is kept only if larger (the bigger warm
+    /// buffer wins, the smaller one is µs to drop).
+    pub fn stash_tee_spare(&mut self, mut buf: Vec<u8>) {
+        buf.clear();
+        match &self.tee_spare {
+            Some(held) if held.capacity() >= buf.capacity() => {}
+            _ => self.tee_spare = Some(buf),
+        }
+    }
+
+    /// Drain every retained tee buffer (the live diff and the recycled
+    /// spare) for an off-thread drop at rewrite teardown — freeing a
+    /// GB-scale buffer is a munmap that must not run on the reactor.
+    /// Call BEFORE `abort_concurrent_rewrite` (which drops inline).
+    pub fn take_tee_teardown(&mut self) -> Vec<Vec<u8>> {
+        let mut bufs = Vec::new();
+        if let Some(t) = self.rewrite_tee.take() {
+            bufs.push(t);
+        }
+        if let Some(s) = self.tee_spare.take() {
+            bufs.push(s);
+        }
+        bufs.retain(|b| b.capacity() > 0);
+        bufs
     }
 
     /// Phase-final of the two-phase rewrite: `last_tee` is the (small)

@@ -38,21 +38,11 @@ impl<C: Commands> Shard<C> {
                 });
                 self.advance_rewrite_handoff();
             }
-            PersistDone::TeeAppend {
-                result: Ok(()),
-                tmp: _,
-            } => {
-                self.advance_rewrite_handoff();
+            PersistDone::TeeAppend { result, tmp, buf } => {
+                self.on_tee_appended(result, &tmp, buf);
             }
+            PersistDone::DropBufs => {}
             PersistDone::Remove { result, path } => self.note_remove_done(result, &path),
-            PersistDone::TeeAppend {
-                result: Err(e),
-                tmp,
-            } => {
-                eprintln!("kevy: shard {} aof rewrite tee append failed: {e}", self.id);
-                self.rewrite_handoff = None;
-                self.abort_rewrite_cleanup(&tmp);
-            }
             PersistDone::Rewrite {
                 result: Err(e),
                 tmp,
@@ -123,6 +113,23 @@ impl<C: Commands> Shard<C> {
         self.hand_off_generation(h, tee);
     }
 
+    /// A tee generation landed (or failed) on the worker: recycle its
+    /// cleared buffer into the pool either way, then advance the
+    /// handoff — or tear the rewrite down on an append error.
+    fn on_tee_appended(&mut self, result: std::io::Result<()>, tmp: &std::path::Path, buf: Vec<u8>) {
+        if let Some(aof) = &mut self.aof {
+            aof.stash_tee_spare(buf);
+        }
+        match result {
+            Ok(()) => self.advance_rewrite_handoff(),
+            Err(e) => {
+                eprintln!("kevy: shard {} aof rewrite tee append failed: {e}", self.id);
+                self.rewrite_handoff = None;
+                self.abort_rewrite_cleanup(tmp);
+            }
+        }
+    }
+
     /// Off-thread unlink completed — best-effort, log-only on failure
     /// (an orphaned `.rewrite` tmp is reclaimed by the next rewrite's
     /// truncating open of the same deterministic path).
@@ -167,6 +174,25 @@ impl<C: Commands> Shard<C> {
         if let Err(e) = aof.finish_concurrent_rewrite_with(&h.tmp, h.keys, tee) {
             eprintln!("kevy: shard {} aof rewrite swap failed: {e}", self.id);
             self.abort_rewrite_cleanup(&h.tmp);
+            return;
+        }
+        // The recycled spare can still hold a GB-scale warm buffer —
+        // its free belongs on the worker with the rest of them.
+        self.ship_tee_teardown();
+    }
+
+    /// Ship every retained tee buffer to the worker for an off-thread
+    /// drop. Worker gone/busy = drop inline (shutdown or error path —
+    /// nothing latency-critical left to protect).
+    fn ship_tee_teardown(&mut self) {
+        let Some(aof) = &mut self.aof else { return };
+        let bufs = aof.take_tee_teardown();
+        if bufs.is_empty() {
+            return;
+        }
+        if !self.persist.submit(self.id, PersistJob::DropBufs { bufs }) {
+            // submit dropped the job (and the buffers) on the floor
+            // already — nothing further to do.
         }
     }
 
@@ -179,6 +205,7 @@ impl<C: Commands> Shard<C> {
     /// pending Remove on the same deterministic tmp path. Worker gone =
     /// inline best-effort (shutdown path; nothing left to stall).
     fn abort_rewrite_cleanup(&mut self, tmp: &std::path::Path) {
+        self.ship_tee_teardown();
         if let Some(aof) = &mut self.aof {
             aof.abort_concurrent_rewrite();
         }
