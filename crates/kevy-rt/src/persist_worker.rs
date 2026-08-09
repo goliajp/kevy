@@ -178,15 +178,19 @@ fn drop_file_cache(f: &std::fs::File) {
     }
 }
 
-/// Append+fsync one tee generation, drop its cache, return the buffer.
+/// Append+fsync one tee generation in drop-behind strides (64 MB write
+/// → fdatasync → cache drop), so a GB generation never floods the page
+/// cache into reclaim; return the buffer cleared for the pool.
 fn run_tee_append(tmp: PathBuf, mut bytes: Vec<u8>) -> PersistDone {
     let result = (|| {
         use std::io::Write;
         let mut f = std::fs::OpenOptions::new().append(true).open(&tmp)?;
-        f.write_all(&bytes)?;
-        f.sync_all()?;
-        drop_file_cache(&f);
-        Ok(())
+        for chunk in bytes.chunks(64 << 20) {
+            f.write_all(chunk)?;
+            f.sync_data()?;
+            drop_file_cache(&f);
+        }
+        f.sync_all()
     })();
     bytes.clear();
     PersistDone::TeeAppend {
@@ -209,17 +213,8 @@ fn run_job(job: PersistJob) -> PersistDone {
             aof_reset,
         },
         PersistJob::Rewrite { view, tmp } => PersistDone::Rewrite {
-            result: kevy_persist::dump_aof(&tmp, &view).and_then(|(keys, _bytes)| {
-                // Sync + drop the multi-GB image from the page cache
-                // NOW, off-thread: left dirty it floods memory until
-                // reclaim's LRU traffic contends with reactor faults
-                // (S5-E/F lock profile), and the final swap's fsync
-                // would pay for it on the reactor.
-                let f = std::fs::File::open(&tmp)?;
-                f.sync_all()?;
-                drop_file_cache(&f);
-                Ok(keys)
-            }),
+            // dump_aof drop-behinds its own cache and sync_all()s.
+            result: kevy_persist::dump_aof(&tmp, &view).map(|(keys, _bytes)| keys),
             tmp,
         },
         PersistJob::Remove { path } => PersistDone::Remove {
