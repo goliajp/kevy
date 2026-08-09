@@ -14,6 +14,17 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering, fence};
 use std::time::{Duration, Instant};
 
+/// Batch size at which a work iteration checks the tick clock directly
+/// instead of waiting out the 256-iter counter. Shared by both reactors:
+/// a saturated loop (large batches, never parks) would otherwise only
+/// consult the clock every 256 iterations — ~1 s of accumulated busy
+/// time on the mixed tailgate cell — delaying BLOCK timeouts and
+/// inflating the tick-gap gauge with non-stall time. An iteration
+/// serving ≥ this many events/completions does tens of µs of work, so
+/// the one vDSO clock read it buys is noise; smaller iterations (the
+/// -c1 hot path) never pay it.
+pub(crate) const TICK_CHECK_BATCH_MIN: usize = 8;
+
 /// Store-only replay of one logged frame — the body shared by both
 /// reactors' AOF replay and the reshard merge. Replay never re-logs /
 /// re-pushes, so nothing downstream consumes a propagation override; a
@@ -205,6 +216,7 @@ impl<C: Commands> Shard<C> {
                 self.parked[me].store(false, Ordering::SeqCst);
             }
 
+            let batch_events = self.events.len();
             let mut did_work = !self.events.is_empty();
             if did_work {
                 // Redis-style `updateCachedTime`: refresh the store's coarse
@@ -305,9 +317,21 @@ impl<C: Commands> Shard<C> {
             // = ~12 s on a fully-idle server — bypass the counter when
             // we just came back from a parking wait so the tick fires
             // at every park iteration regardless of recent traffic.
+            // `batch_events >= TICK_CHECK_BATCH_MIN`: a saturated reactor
+            // never parks, so the 256-iter counter was its only tick gate
+            // — and 256 large-batch iterations can span ~1 s, which both
+            // delayed the tick (BLPOP/WAIT timeout slop under load) and
+            // made the tick-gap gauge report accumulated busy time as a
+            // "stall" (tailgate mixed read 949 ms while PING p99.9 sat
+            // under 1 ms). A big-batch iteration already does tens of µs
+            // of work, so one vDSO clock read is noise there; small-batch
+            // (-c1) iterations keep the counter-only path byte-identical.
             if let Some(iv) = tick_interval {
                 tick_check_counter = tick_check_counter.wrapping_add(1);
-                if tick_check_counter >= self.tick_check_every || !spinning {
+                if tick_check_counter >= self.tick_check_every
+                    || !spinning
+                    || batch_events >= TICK_CHECK_BATCH_MIN
+                {
                     tick_check_counter = 0;
                     let now = Instant::now();
                     // BLOCK reactor: fire timeouts every tick gate (not gated
