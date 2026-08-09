@@ -78,10 +78,11 @@ impl<C: Commands> Shard<C> {
             None => return Ok(()),
         };
 
-        // Group-commit window for `appendfsync always`: the writes dispatched
+        // Fsync-only window for `appendfsync always`: the writes dispatched
         // from this pipelined read batch buffer their AOF appends and fsync
         // once in `aof_end_group`, BEFORE `flush_conn` sends their replies.
-        self.aof_begin_group();
+        // No transaction markers — a pipelined batch is not a transaction.
+        self.aof_begin_fsync_window();
         let outcome = self.dispatch_batch(conn_id, &input_buf);
         // fsync the batch's buffered writes before any reply leaves the shard.
         self.aof_end_group()?;
@@ -148,6 +149,18 @@ impl<C: Commands> Shard<C> {
     pub(crate) fn aof_begin_group(&mut self) {
         if let Some(aof) = &mut self.aof {
             aof.begin_group();
+        }
+    }
+
+    /// The fsync-only bracket for reactor batches: one fsync per batch
+    /// under `always`, NO transaction markers — a pipelined batch is
+    /// not a transaction, and the marker pair cost ~65 B per
+    /// single-command batch. Pair with [`Self::aof_end_group`] (COMMIT
+    /// is skipped there when no marker window is open).
+    #[inline]
+    pub(crate) fn aof_begin_fsync_window(&mut self) {
+        if let Some(aof) = &mut self.aof {
+            aof.begin_fsync_window();
         }
     }
 
@@ -278,7 +291,10 @@ impl<C: Commands> Shard<C> {
                         // Aggregation unit = inner requests, not envelopes.
                         did += reqs.len().saturating_sub(1);
                         let mut resps = Vec::with_capacity(reqs.len());
-                        self.aof_begin_group();
+                        // Fsync-only: the batch aggregates INDEPENDENT
+                        // commands from different conns — marking them
+                        // atomic would promise more than each origin did.
+                        self.aof_begin_fsync_window();
                         for (conn, seq, argv, proto, meta) in reqs {
                             let part = self.run_dispatch(&argv, proto, meta);
                             // The spent argv husk rides home with the reply;
