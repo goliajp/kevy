@@ -83,6 +83,8 @@ mod conn;
 mod exec;
 mod exec_build;
 mod exec_txn;
+#[cfg(target_os = "linux")]
+mod uring_aof;
 mod exec_client_intercept;
 mod exec_crossslot;
 mod exec_dispatch;

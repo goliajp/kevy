@@ -272,6 +272,8 @@ impl<C: Commands> Runtime<C> {
             }
             self.commands.on_shard_init(&mut store);
             shards.push(Shard {
+                #[cfg(target_os = "linux")]
+                aof_offload: Default::default(),
                 xshard_inflight: 0,
                 id,
                 nshards: n,
