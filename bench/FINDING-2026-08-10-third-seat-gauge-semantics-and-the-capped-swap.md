@@ -111,3 +111,31 @@ chunked tee (fixed-size chunk list, no realloc above chunk size;
 hand-off and finish write the chunk list as-is). Arithmetic to verify
 in Phase B: biggest realloc ≈ half the largest generation; firehose's
 tight 476-516 ms band should collapse to chunk-scale.
+
+## S5-D REFUTED and reverted — the tee realloc was not the seat
+
+Chunked tee implemented (8 MiB chunks, io::Write drop-in, chunk-list
+handoff — all local + box gates green) and median-of-3 measured
+**worse**: firehose PING p99.9 median 84.7 → 181 ms (129..267,
+non-overlapping with the tight 84.7..87.8 before — a real regression),
+gap median 514 → 720 ms; mixed grew a 1.04 s client max. Branch
+deleted, not merged.
+
+Two lessons, both methodology triggers I walked into:
+
+1. The "0.2-0.4 s GB memcpy" estimate was hand-waved from the cost
+   table without a profile. Large-allocation realloc paths (mremap
+   genre — and kevy runs its own kevy-alloc) do not necessarily copy
+   at all; the estimate justified a slice that measurably regressed.
+2. Two armchair candidates in a row (batch-count gauge proxy, tee
+   realloc) both refuted on the box. The remaining 300-700 ms band
+   does not get another guessed knife: the next slice (S5-E) is an
+   INSTRUMENTED decomposition — perf record (on-CPU) + off-CPU/sched
+   profiling of the reactor threads during the firehose cell, naming
+   the seat by symbol before any code moves. Nothing merges on this
+   surface until a profile names it.
+
+Where the bar stands after revert (= merged develop, A+B+B2):
+mixed gap median ~300 ms (straddling), firehose PING green at median
+(84.7 ms) with gap median ~514 ms. Both cells' PING p99.9 medians are
+within or at the bar; the reactor-gap bar is the open half.
