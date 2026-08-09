@@ -75,40 +75,39 @@ pub use block_xshard_confirm::counters as serve_counters;
 mod block_xshard_registry;
 mod block_xshard_target;
 mod blocked;
-mod lua_wake_bridge;
 mod cache_padded;
 mod client_ops;
 mod cluster;
 mod conn;
 mod exec;
 mod exec_build;
-mod exec_txn;
-#[cfg(target_os = "linux")]
-mod uring_aof;
 mod exec_client_intercept;
 mod exec_crossslot;
 mod exec_dispatch;
+mod exec_feed;
 mod exec_fold;
+mod exec_geostore;
+mod exec_listmove;
 mod exec_mutated;
 mod exec_notify;
 mod exec_op;
 mod exec_pubsub;
 mod exec_pubsub_pattern;
-mod exec_listmove;
 mod exec_rename;
 mod exec_replwait;
 mod exec_scan;
-mod exec_feed;
-mod exec_geostore;
-mod exec_zalgebra;
 mod exec_slowlog;
+mod exec_txn;
 mod exec_watch;
+mod exec_zalgebra;
 mod inbox;
+mod lua_wake_bridge;
+mod message;
+mod message_agg;
+mod message_kinds;
+mod persist_rewrite;
 mod persist_worker;
 pub mod propagation;
-mod message;
-mod message_kinds;
-mod message_agg;
 mod reduce;
 mod replica_inbox;
 mod replication;
@@ -127,6 +126,8 @@ mod shard_lifecycle;
 mod shard_run;
 mod shard_tick;
 mod types;
+#[cfg(target_os = "linux")]
+mod uring_aof;
 #[cfg(target_os = "linux")]
 mod uring_arm;
 #[cfg(target_os = "linux")]
@@ -176,8 +177,7 @@ pub(crate) const CLIENT_OUTPUT_HARD_LIMIT: usize = 512 * 1024 * 1024;
 pub(crate) const CLIENT_INPUT_HARD_LIMIT: usize = 1024 * 1024 * 1024;
 
 pub use blocked::{BlockHint, BlockKind};
-pub use lua_wake_bridge::push_lua_wake_key;
-pub use reduce::shard_of as shard_of_key;
+pub use client_ops::ClientKillFilter;
 pub use cluster::shard_slot_range;
 pub use exec_geostore::GeoHits;
 pub use exec_slowlog::{SlowlogSub, parse_slowlog_sub};
@@ -185,13 +185,14 @@ pub use kevy_config::NotificationFlags;
 pub use kevy_persist::Fsync;
 pub use kevy_resp::{Argv, ArgvBorrowed, ArgvView, RespVersion};
 pub use kevy_store::Store;
+pub use lua_wake_bridge::push_lua_wake_key;
+pub use message::{MultiOp, ZCombine};
+pub use reduce::shard_of as shard_of_key;
 pub use replica_inbox::{
     ReplicaApply, ReplicaInboxReceiver, ReplicaInboxSender, SnapshotGate, replica_inbox_pair,
 };
 pub use replication_gate::ReplicatedApplyGuard;
 pub use route::{Route, ScanArgs, XGroupCtx};
-pub use client_ops::ClientKillFilter;
-pub use message::{MultiOp, ZCombine};
 pub use runtime::Runtime;
 pub use types::{
     ExtensionReduced, LiveRuntimeConfig, NotifyClass, ReplicaAck, ReplicaViewRow, ResolvedCmd,
@@ -200,5 +201,3 @@ pub use types::{
 
 pub use crate::commands_trait::Commands;
 mod commands_trait;
-
-

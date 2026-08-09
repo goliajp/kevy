@@ -421,90 +421,9 @@ impl<C: Commands> Shard<C> {
                 eprintln!("kevy: shard {} bgsave failed: {e}", self.id);
                 self.abort_persist_tee(aof_reset);
             }
-            PersistDone::Rewrite {
-                result: Ok(keys),
-                tmp,
-            } => {
-                self.rewrite_handoff = Some((tmp, keys, 0));
-                self.advance_rewrite_handoff();
+            done @ (PersistDone::Rewrite { .. } | PersistDone::TeeAppend { .. }) => {
+                self.commit_rewrite_done(done);
             }
-            PersistDone::TeeAppend {
-                result: Ok(()),
-                tmp: _,
-            } => {
-                self.advance_rewrite_handoff();
-            }
-            PersistDone::TeeAppend {
-                result: Err(e),
-                tmp,
-            } => {
-                eprintln!("kevy: shard {} aof rewrite tee append failed: {e}", self.id);
-                self.rewrite_handoff = None;
-                if let Some(aof) = &mut self.aof {
-                    aof.abort_concurrent_rewrite();
-                }
-                let _ = std::fs::remove_file(&tmp);
-            }
-            PersistDone::Rewrite {
-                result: Err(e),
-                tmp,
-            } => {
-                eprintln!("kevy: shard {} aof rewrite failed: {e}", self.id);
-                if let Some(aof) = &mut self.aof {
-                    aof.abort_concurrent_rewrite();
-                }
-                let _ = std::fs::remove_file(&tmp);
-            }
-        }
-    }
-
-    /// The two-phase rewrite's driver: hand large tee generations to
-    /// the worker (append+fsync off-thread), and only when the current
-    /// generation is small do the bounded synchronous swap. The
-    /// synchronous cost is the handoff window's writes — ms — instead
-    /// of the whole rewrite window's (measured 9.5 s on a firehose).
-    /// Iterations are capped: if ingest outruns the disk, the final
-    /// swap pays one bounded-large append rather than looping forever.
-    #[cold]
-    pub(crate) fn advance_rewrite_handoff(&mut self) {
-        const SMALL_TEE: usize = 4 << 20; // 4 MiB: ms-scale append+sync
-        const MAX_HANDOFFS: u8 = 4;
-        let Some((tmp, keys, iters)) = self.rewrite_handoff.take() else {
-            return;
-        };
-        let Some(aof) = &mut self.aof else { return };
-        let tee = aof.take_tee_for_handoff().unwrap_or_default();
-        if tee.len() > SMALL_TEE && iters < MAX_HANDOFFS {
-            if self.persist.submit(
-                self.id,
-                PersistJob::TeeAppend {
-                    tmp: tmp.clone(),
-                    bytes: tee,
-                },
-            ) {
-                self.rewrite_handoff = Some((tmp, keys, iters + 1));
-            } else {
-                // Worker gone — the handed-off tee is lost with it, so
-                // the tmp image is incomplete: abort the rewrite. No
-                // data is at risk (the live file has carried every one
-                // of those writes through the normal append path).
-                eprintln!(
-                    "kevy: shard {} persist worker unavailable for tee handoff — rewrite aborted",
-                    self.id
-                );
-                self.aof
-                    .as_mut()
-                    .expect("checked above")
-                    .abort_concurrent_rewrite();
-                let _ = std::fs::remove_file(&tmp);
-            }
-            return;
-        }
-        let aof = self.aof.as_mut().expect("checked above");
-        if let Err(e) = aof.finish_concurrent_rewrite_with(&tmp, keys, tee) {
-            eprintln!("kevy: shard {} aof rewrite swap failed: {e}", self.id);
-            aof.abort_concurrent_rewrite();
-            let _ = std::fs::remove_file(&tmp);
         }
     }
 }

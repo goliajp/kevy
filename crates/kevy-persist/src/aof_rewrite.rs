@@ -48,7 +48,7 @@ impl Aof {
     /// keep teeing into the fresh one). `None` when no rewrite is live.
     /// `is_rewriting` stays true throughout.
     pub fn take_tee_for_handoff(&mut self) -> Option<Vec<u8>> {
-        self.rewrite_tee.as_mut().map(|t| std::mem::take(t))
+        self.rewrite_tee.as_mut().map(std::mem::take)
     }
 
     /// Phase-final of the two-phase rewrite: `last_tee` is the (small)
