@@ -324,7 +324,15 @@ impl<C: Commands> Shard<C> {
                 // — parked iterations are ≥ ms apart, so gating them behind
                 // the 256-iter counter would delay ticks (and BLPOP/XREAD
                 // timeouts) by minutes on an idle shard.
-                if tick_check_counter >= self.tick_check_every || woke_from_park {
+                // `|| comps.len() >= …`: the epoll path's saturation gate
+                // (see `TICK_CHECK_BATCH_MIN`) — big-batch iterations
+                // check the clock directly so a saturated shard's tick
+                // fires on schedule and the tick-gap gauge measures
+                // stalls, not accumulated busy time.
+                if tick_check_counter >= self.tick_check_every
+                    || woke_from_park
+                    || comps.len() >= crate::shard_run::TICK_CHECK_BATCH_MIN
+                {
                     tick_check_counter = 0;
                     let now = Instant::now();
                     // BLOCK reactor: same cadence as the epoll path so
