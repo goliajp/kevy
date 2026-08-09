@@ -205,7 +205,9 @@ impl<C: Commands> Shard<C> {
     /// run right now? False while any chunk is in flight — the caller
     /// sets `want_restructure` and the tick retries after the drain.
     pub(crate) fn uring_aof_restructure_ready(&self) -> bool {
-        !self.aof_offload.enabled || self.aof_offload.inflight.is_empty()
+        !self.aof_offload.enabled
+            || (self.aof_offload.inflight.is_empty()
+                && self.aof.as_ref().is_none_or(kevy_persist::Aof::queued_is_empty))
     }
 
     /// Tick wrapper for the persistence trio under offload: structural
