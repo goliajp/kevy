@@ -90,6 +90,19 @@ impl Aof {
         self.rewrite_tee = None;
     }
 
+    /// A rewrite was aborted because ingest outran the disk (the tee
+    /// generations stopped shrinking — see the two-phase driver in
+    /// kevy-rt). Re-anchor the auto-rewrite growth rule at the CURRENT
+    /// size, as if a rewrite had landed here: retrying immediately would
+    /// diverge again identically, so the next attempt waits for another
+    /// full growth factor (or an explicit BGREWRITEAOF). Degradation,
+    /// not a stall: under sustained overload the log grows and the
+    /// reactor stays responsive.
+    pub fn anchor_rewrite_deferred(&mut self) {
+        self.size_at_last_rewrite = self.size_bytes;
+        self.last_rewrite_at = Instant::now();
+    }
+
     /// Phase 1 of a **COW** rewrite: flush pending appends and start teeing
     /// subsequent ones into the diff buffer. O(1) — the keyspace itself is
     /// already frozen in the caller's `SnapshotView`. Returns the temp path

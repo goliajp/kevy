@@ -29,7 +29,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
-cell() { # $1 = name, $2... = the redis-benchmark load args
+# Median-of-N (default 3, TAILGATE_RUNS=n overrides): the mixed cell's
+# single-run reactor-gap spread measured 581-1657 ms across four runs
+# (FINDING-2026-08-10-third-seat) — single runs cannot rank an A/B on
+# these cells. Bars gate on the per-run MEDIAN; min..max is reported so
+# a fix that only moves the tail is visible too.
+RUNS=${TAILGATE_RUNS:-3}
+median_of() { printf "%s\n" "$@" | sort -n | awk '{a[NR]=$1} END {print a[int((NR+1)/2)]}'; }
+
+one_run() { # $1 = name, $2... = load args; echoes the probe line
     local name=$1; shift
     rm -rf "$WORK/$name"
     target/release/kevy --port $PORT --threads 4 --dir "$WORK/$name" \
@@ -42,20 +50,32 @@ cell() { # $1 = name, $2... = the redis-benchmark load args
     redis-benchmark -p $PORT "$@" -q >/dev/null 2>&1 &
     BENCH=$!
     sleep 2 # let the load reach steady state before probing
-    local out
-    out=$(target/release/examples/tail_probe $PORT 60)
+    target/release/examples/tail_probe $PORT 60
     kill -9 "$BENCH" 2>/dev/null; wait "$BENCH" 2>/dev/null; BENCH=""
     kill -9 "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null; SRV=""
-    echo "$name: $out"
+}
+
+cell() { # $1 = name, $2... = the redis-benchmark load args
+    local name=$1; shift
+    local p999s=() gaps=() out
+    for i in $(seq "$RUNS"); do
+        out=$(one_run "$name" "$@")
+        echo "$name[$i/$RUNS]: $out"
+        p999s+=("$(echo "$out" | grep -oE 'p999us=[0-9]+' | cut -d= -f2)")
+        gaps+=("$(echo "$out" | grep -oE 'reactor_gap_us=[0-9]+' | cut -d= -f2)")
+    done
     local p999 gap
-    p999=$(echo "$out" | grep -oE 'p999us=[0-9]+' | cut -d= -f2)
-    gap=$(echo "$out" | grep -oE 'reactor_gap_us=[0-9]+' | cut -d= -f2)
+    p999=$(median_of "${p999s[@]}")
+    gap=$(median_of "${gaps[@]}")
+    echo "$name: median p999us=$p999 reactor_gap_us=$gap" \
+         "(p999 $(printf '%s\n' "${p999s[@]}" | sort -n | head -1)..$(printf '%s\n' "${p999s[@]}" | sort -n | tail -1)," \
+         "gap $(printf '%s\n' "${gaps[@]}" | sort -n | head -1)..$(printf '%s\n' "${gaps[@]}" | sort -n | tail -1))"
     if [ "${p999:-999999999}" -gt 100000 ]; then
-        echo "  ✗ $name: PING p99.9 ${p999}us over the 100ms bar"
+        echo "  ✗ $name: median PING p99.9 ${p999}us over the 100ms bar"
         fail=1
     fi
     if [ "${gap:-999999999}" -gt 100000 ]; then
-        echo "  ✗ $name: reactor tick gap ${gap}us over the 100ms bar"
+        echo "  ✗ $name: median reactor tick gap ${gap}us over the 100ms bar"
         fail=1
     fi
 }

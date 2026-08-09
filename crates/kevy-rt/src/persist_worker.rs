@@ -42,6 +42,11 @@ pub(crate) enum PersistJob {
     Rewrite { view: SnapshotView, tmp: PathBuf },
     /// Append a handed-off tee generation to the rewrite tmp and fsync.
     TeeAppend { tmp: PathBuf, bytes: Vec<u8> },
+    /// Delete an abandoned multi-GB rewrite image. Unlinking a large
+    /// file contends on the fs journal — seconds under a saturated
+    /// disk — so it must not run on the reactor (measured as the
+    /// firehose residual after the divergence-defer landed).
+    Remove { path: PathBuf },
 }
 
 pub(crate) enum PersistDone {
@@ -54,6 +59,8 @@ pub(crate) enum PersistDone {
         result: io::Result<u64>, // keys dumped
         tmp: PathBuf,
     },
+    /// A deferred/aborted rewrite's image deleted off-thread.
+    Remove { result: io::Result<()>, path: PathBuf },
     /// One handed-off tee generation appended+fsynced to `tmp`
     /// (the two-phase rewrite's phase 2; see `advance_rewrite_handoff`).
     TeeAppend {
@@ -169,6 +176,10 @@ fn run_job(job: PersistJob) -> PersistDone {
         PersistJob::Rewrite { view, tmp } => PersistDone::Rewrite {
             result: kevy_persist::dump_aof(&tmp, &view).map(|(keys, _bytes)| keys),
             tmp,
+        },
+        PersistJob::Remove { path } => PersistDone::Remove {
+            result: std::fs::remove_file(&path),
+            path,
         },
         PersistJob::TeeAppend { tmp, bytes } => PersistDone::TeeAppend {
             result: (|| {
@@ -421,7 +432,9 @@ impl<C: Commands> Shard<C> {
                 eprintln!("kevy: shard {} bgsave failed: {e}", self.id);
                 self.abort_persist_tee(aof_reset);
             }
-            done @ (PersistDone::Rewrite { .. } | PersistDone::TeeAppend { .. }) => {
+            done @ (PersistDone::Rewrite { .. }
+            | PersistDone::TeeAppend { .. }
+            | PersistDone::Remove { .. }) => {
                 self.commit_rewrite_done(done);
             }
         }
