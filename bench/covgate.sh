@@ -49,8 +49,8 @@ COVLOG=$(mktemp)
 # tests it can never execute only dilutes the workspace ratio.
 cargo llvm-cov --workspace --exclude kevy-napi --lib --tests --summary-only --json \
     --output-path "$COVJSON" >"$COVLOG" 2>&1 || {
-    echo "covgate: cargo llvm-cov run failed — last 40 lines:" >&2
-    tail -40 "$COVLOG" >&2
+    echo "covgate: cargo llvm-cov run failed — last 200 lines (a flaky replication test's panic prints well before the summary; 40 lines once truncated the crash away):" >&2
+    tail -200 "$COVLOG" >&2
     exit 2
 }
 rm -f "$COVLOG"
