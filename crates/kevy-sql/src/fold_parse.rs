@@ -34,6 +34,31 @@ pub(crate) fn primary(p: &mut Parser<'_>) -> Result<Scalar, SqlError> {
     cast_suffix(p, v)
 }
 
+/// `CASE WHEN cond THEN val [WHEN..THEN..]* [ELSE val] END` — the
+/// searched form only (the corpus subset; the simple form's implicit
+/// equality is a different construct and refuses by name). All arms
+/// evaluate (fold is constant-only, there is nothing effectful to
+/// short-circuit); a NULL / false condition just doesn't select.
+fn case_expr(p: &mut Parser<'_>, line: u32, col: u32) -> Result<Scalar, SqlError> {
+    let mut chosen: Option<Scalar> = None;
+    let mut saw_when = false;
+    while p.eat_kw("when") {
+        saw_when = true;
+        let cond = p.expr()?;
+        p.expect_kw("then")?;
+        let val = p.expr()?;
+        if chosen.is_none() && matches!(cond, Scalar::Bool(true)) {
+            chosen = Some(val);
+        }
+    }
+    if !saw_when {
+        return Err(SqlError::at(line, col, "CASE requires at least one WHEN"));
+    }
+    let else_val = if p.eat_kw("else") { Some(p.expr()?) } else { None };
+    p.expect_kw("end")?;
+    Ok(chosen.or(else_val).unwrap_or(Scalar::Null))
+}
+
 fn number(text: &str, line: u32, col: u32) -> Result<Scalar, SqlError> {
     if text.contains('.') {
         text.parse::<f64>()
@@ -56,6 +81,7 @@ fn keyword_or_call(
         "null" => return Ok(Scalar::Null),
         "true" => return Ok(Scalar::Bool(true)),
         "false" => return Ok(Scalar::Bool(false)),
+        "case" => return case_expr(p, line, col),
         // The clock rewrites (probe 08/38): keyword forms have no
         // parens; now() below takes the call path.
         "current_timestamp" => return Ok(Scalar::Timestamp(p.now)),
@@ -146,20 +172,45 @@ fn cast_suffix(p: &mut Parser<'_>, mut v: Scalar) -> Result<Scalar, SqlError> {
     }
 }
 
-fn cast(v: &Scalar, ty: &str) -> Result<Scalar, String> {
-    let out = match (ty, v) {
-        (_, Scalar::Null) => Scalar::Null,
-        ("timestamp" | "datetime", Scalar::Text(s)) => Scalar::Timestamp(
+
+/// The datetime text-literal casts, split from [`cast`] (50-LOC rule).
+fn cast_datetime(v: &Scalar, ty: &str) -> Result<Scalar, String> {
+    // The caller matched Text; by argument any other variant reaching
+    // here is a wiring bug — answer the honest cast error, not a panic.
+    let Scalar::Text(s) = v else {
+        return Err(format!("cannot cast this value to {ty}"));
+    };
+    Ok(match ty {
+        "timestamp" | "datetime" => Scalar::Timestamp(
             kevy_scalar::parse_timestamp(s)
                 .ok_or_else(|| format!("bad timestamp literal '{s}'"))?,
         ),
-        ("date", Scalar::Text(s)) => Scalar::Date(
+        "date" => Scalar::Date(
             kevy_scalar::parse_date(s).ok_or_else(|| format!("bad date literal '{s}'"))?,
         ),
-        ("interval", Scalar::Text(s)) => {
+        _ => {
             let (months, days, micros) = kevy_scalar::parse_interval(s)
                 .ok_or_else(|| format!("bad interval literal '{s}'"))?;
             Scalar::Interval { months, days, micros }
+        }
+    })
+}
+
+fn cast(v: &Scalar, ty: &str) -> Result<Scalar, String> {
+    if let ("timestamp" | "datetime" | "date" | "interval", Scalar::Text(_)) = (ty, v) {
+        return cast_datetime(v, ty);
+    }
+    let out = match (ty, v) {
+        (_, Scalar::Null) => Scalar::Null,
+        ("bool" | "boolean", Scalar::Text(s)) => Scalar::Bool(
+            kevy_scalar::parse_pg_bool(s)
+                .ok_or_else(|| format!("invalid input syntax for type boolean: '{s}'"))?,
+        ),
+        ("bool" | "boolean", Scalar::Bool(b)) => Scalar::Bool(*b),
+        // PG: int → bool is 0 = false, non-zero = true.
+        ("bool" | "boolean", Scalar::Int(i)) => Scalar::Bool(*i != 0),
+        ("int" | "integer" | "bigint" | "int4" | "int8", Scalar::Bool(b)) => {
+            Scalar::Int(i64::from(*b))
         }
         ("int" | "integer" | "bigint" | "int4" | "int8", Scalar::Text(s)) => Scalar::Int(
             s.trim().parse().map_err(|_| format!("'{s}' is not an integer"))?,
@@ -168,6 +219,11 @@ fn cast(v: &Scalar, ty: &str) -> Result<Scalar, String> {
         ("int" | "integer" | "bigint" | "int4" | "int8", Scalar::Float(f)) => {
             // PG rounds (half away) on float→int casts, not truncates.
             Scalar::Int(if *f >= 0.0 { (f + 0.5).floor() } else { (f - 0.5).ceil() } as i64)
+        }
+        // PG's bool→text cast spells the word out ('true'/'false');
+        // the terse 't'/'f' is the wire form, not the cast result.
+        ("text" | "varchar", Scalar::Bool(b)) => {
+            Scalar::Text(if *b { "true" } else { "false" }.into())
         }
         ("text" | "varchar", other) => Scalar::Text(other.render()),
         ("float" | "float8" | "double" | "numeric" | "decimal", Scalar::Int(i)) => {

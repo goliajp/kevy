@@ -12,7 +12,7 @@
 # server, no network — CI-safe.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-FLOOR=${FUNCGATE_FLOOR:-76}
+FLOOR=${FUNCGATE_FLOOR:-82}
 
 OUT=$(cargo run -q -p kevy-cli -- sql probe bench/funcgate-corpus)
 echo "$OUT" | tail -20

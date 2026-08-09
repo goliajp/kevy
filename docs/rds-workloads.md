@@ -195,10 +195,12 @@ Covered today (names matched case-insensitively, PG's fold):
 |---|---|
 | strings | `lower upper initcap length char_length concat concat_ws trim btrim ltrim rtrim replace split_part repeat lpad rpad strpos position left right reverse translate substr substring format` |
 | math | `floor ceil ceiling round trunc mod power pow sqrt sign abs` |
+| operators | `AND OR NOT` (three-valued), comparisons `= <> != < <= > >=`, `\|\|` concatenation, searched `CASE WHEN … THEN … [ELSE …] END`, `::bool` with PG's input vocabulary |
 | NULL family | `coalesce nullif greatest least` |
 | date/time | `extract date_part date_trunc age to_char` (`interval` carries PG's real three-component form: months, days, micros) |
 | regexp (POSIX ERE) | `regexp_replace regexp_matches regexp_split_to_array` |
 | hash | `md5` |
+| MySQL aliases | `date_format unix_timestamp from_unixtime` (probe-transcribed against MySQL's semantics — the WordPress/Laravel display triplet) |
 
 The claims discipline behind that table:
 
@@ -206,7 +208,7 @@ The claims discipline behind that table:
   corpus** and gated in CI (`funcgate`): a covered function answering
   differently from PG is a hard failure — the gate's wrong-answer count
   must be zero. The corpus-coverage ratio is a ratchet (currently
-  ≥ 76 % of subset-foldable probes) that only moves up.
+  ≥ 82 % of subset-foldable probes) that only moves up.
 - Anything outside the table is **refused by name**, never guessed.
   The same goes for shapes inside a covered function that would change
   cardinality — `regexp_matches` returning zero or several rows is
