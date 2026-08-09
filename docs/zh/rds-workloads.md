@@ -110,14 +110,16 @@ WATCH + MULTI/EXEC check-then-write           # CAS loop (cookbook recipe 4)
 |---|---|
 | 字符串 | `lower upper initcap length char_length concat concat_ws trim btrim ltrim rtrim replace split_part repeat lpad rpad strpos position left right reverse translate substr substring format` |
 | 数学 | `floor ceil ceiling round trunc mod power pow sqrt sign abs` |
+| 运算符 | `AND OR NOT`（三值逻辑）、比较 `= <> != < <= > >=`、`\|\|` 连接、searched `CASE WHEN … THEN … [ELSE …] END`、`::bool`（PG 输入词表） |
 | NULL 族 | `coalesce nullif greatest least` |
 | 日期时间 | `extract date_part date_trunc age to_char`（`interval` 采用 PG 真身的三分量形式：months、days、micros） |
 | 正则（POSIX ERE） | `regexp_replace regexp_matches regexp_split_to_array` |
 | 哈希 | `md5` |
+| MySQL 别名 | `date_format unix_timestamp from_unixtime`（按 MySQL 语义逐条转写——WordPress/Laravel 的展示三件套） |
 
 这张表背后的口径纪律：
 
-- 语义**逐条转写自 PostgreSQL 自己的回归语料**，并有 CI 门禁（`funcgate`）：已覆盖函数与 PG 答案不一致即硬失败——门禁的错答数必须为零。语料覆盖率是只升不降的 ratchet（当前 ≥ 76% 的可子集折叠探针）。
+- 语义**逐条转写自 PostgreSQL 自己的回归语料**，并有 CI 门禁（`funcgate`）：已覆盖函数与 PG 答案不一致即硬失败——门禁的错答数必须为零。语料覆盖率是只升不降的 ratchet（当前 ≥ 82% 的可子集折叠探针）。
 - 表外的任何函数**按名拒绝**，绝不瞎猜。已覆盖函数内部会改变基数的形状同理——`regexp_matches` 返回零行或多行时直接拒绝，而不是压平成一个错的标量。
 
 ## ORDER BY / LIMIT / OFFSET

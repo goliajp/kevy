@@ -219,6 +219,7 @@ impl<'a> Lexer<'a> {
             Ok(Tok::Op(op))
         };
         match (ch, self.peek()) {
+            (b'|', Some(b'|')) => two(self, "||"),
             (b'<', Some(b'=')) => two(self, "<="),
             (b'<', Some(b'>')) => two(self, "<>"),
             (b'>', Some(b'=')) => two(self, ">="),
