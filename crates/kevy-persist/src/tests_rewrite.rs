@@ -668,3 +668,27 @@ fn two_phase_handoff_replays_every_generation_once() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+/// A divergence-deferred rewrite re-anchors the auto-rewrite growth
+/// rule at the CURRENT size — retrying immediately would diverge the
+/// same way, so the next attempt must wait for another growth factor.
+#[test]
+fn deferred_rewrite_reanchors_at_current_size() {
+    let path = temp_aof("defer-anchor");
+    let mut aof = Aof::open(&path, Fsync::No).unwrap();
+    for i in 0..100 {
+        let key = format!("k{i}");
+        aof.append(&argv(&[b"SET", key.as_bytes(), b"0123456789abcdef"])).unwrap();
+    }
+    assert!(
+        aof.size_bytes() > aof.size_at_last_rewrite(),
+        "log must have outgrown the anchor"
+    );
+    aof.anchor_rewrite_deferred();
+    assert_eq!(
+        aof.size_bytes(),
+        aof.size_at_last_rewrite(),
+        "deferral must anchor the growth rule at the current size"
+    );
+    let _ = std::fs::remove_file(&path);
+}
