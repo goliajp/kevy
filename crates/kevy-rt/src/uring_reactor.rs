@@ -56,7 +56,7 @@ const NAP_BATCH_MIN: usize = 4;
 // Re-exported so the sibling uring modules keep their
 // `crate::uring_reactor::…` paths.
 pub(crate) use crate::uring_ops::{
-    CONN_MASK, ENOBUFS, MAX_IOVECS_PER_WRITEV, OP_ACCEPT, OP_ACCEPT_CL, OP_ACCEPT_UN,
+    CONN_MASK, ENOBUFS, MAX_IOVECS_PER_WRITEV, OP_ACCEPT, OP_ACCEPT_CL, OP_ACCEPT_UN, OP_AOF,
     OP_BIG_CANCEL, OP_BIG_READ, OP_RECV, OP_TIMEOUT, OP_WAKER, OP_WRITE,
 };
 
@@ -77,6 +77,7 @@ impl<C: Commands> Shard<C> {
         stop: Arc<AtomicBool>,
     ) -> io::Result<()> {
         self.prepare_uring_shard()?;
+        self.uring_aof_setup();
 
         // One provided-buffer ring per shard feeds every conn's multishot recv
         // (needs Linux 5.19+; the epoll reactor is the fallback for older
@@ -190,6 +191,7 @@ impl<C: Commands> Shard<C> {
                 let op = c.user_data & !CONN_MASK;
                 let cid = c.user_data & CONN_MASK;
                 match op {
+                    OP_AOF => self.uring_aof_on_cqe(c.user_data, c.res),
                     OP_RECV => {
                         io_work = true;
                         self.uring_on_recv(cid, c, &mut io, &mut pbuf);
@@ -311,9 +313,7 @@ impl<C: Commands> Shard<C> {
             // check, so the cost on iters that did no overwrite is
             // sub-ns.
             self.store.flush_pending_drops();
-            if let Some(aof) = &mut self.aof {
-                let _ = aof.maybe_sync();
-            }
+            self.uring_aof_tick(&mut ring);
             reap_counter = reap_counter.wrapping_add(1);
             if reap_counter & 0xF == 0 {
                 self.uring_reap_closed(&mut io);
@@ -352,30 +352,10 @@ impl<C: Commands> Shard<C> {
                         self.drain_store_notify();
                         self.drain_expired_keys();
                         self.apply_live_runtime_config(&mut tick_interval);
-                        self.tick_persist();
+                        self.uring_tick_persist();
                         self.tick_conn_gauge();
                         self.uring_enforce_output_limit(&mut io);
-                        // Replication housekeeping: the io_uring path
-                        // can't watch the replication listener / replica
-                        // fds via epoll, so poll them here once per tick
-                        // (10 Hz). New replica accepts see ≤ 100 ms wait;
-                        // replica handshake bytes ditto. The streaming
-                        // pump stays per-iter via `pump_replication`
-                        // (below) — the throughput-sensitive write side.
-                        if let Err(e) = self.accept_ready_replication() {
-                            eprintln!("kevy: shard {} accept_ready_replication: {e}", self.id);
-                        }
-                        for idx in 0..self.replicas.len() {
-                            if let Err(e) = self.replica_readable(idx) {
-                                self.replica_io_failed(idx, "read", &e);
-                            }
-                            if let Err(e) = self.replica_writable(idx) {
-                                self.replica_io_failed(idx, "write", &e);
-                            }
-                        }
-                        self.tick_replication_slots(now);
-                        self.tick_replication_view();
-                        self.tick_replication_watermark();
+                        self.uring_tick_replication(now);
                         last_tick = now;
                     }
                 }
@@ -487,6 +467,7 @@ impl<C: Commands> Shard<C> {
         // a torn snapshot), final AOF fsync, feed marker — see
         // [`Shard::shutdown_drain`].
         self.shutdown_drain();
+        self.uring_aof_drain_exit(&mut ring);
         Ok(())
     }
 

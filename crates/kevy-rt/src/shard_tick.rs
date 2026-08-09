@@ -267,4 +267,27 @@ impl<C: Commands> Shard<C> {
         }
         self.commands.on_replication_view(offset, replicas);
     }
+
+    /// Replication housekeeping for the io_uring path: it can't watch
+    /// the replication listener / replica fds via epoll, so poll them
+    /// once per tick (10 Hz). New replica accepts see ≤ 100 ms wait;
+    /// handshake bytes ditto. The streaming pump stays per-iter via
+    /// `pump_replication` — the throughput-sensitive write side.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn uring_tick_replication(&mut self, now: std::time::Instant) {
+        if let Err(e) = self.accept_ready_replication() {
+            eprintln!("kevy: shard {} accept_ready_replication: {e}", self.id);
+        }
+        for idx in 0..self.replicas.len() {
+            if let Err(e) = self.replica_readable(idx) {
+                self.replica_io_failed(idx, "read", &e);
+            }
+            if let Err(e) = self.replica_writable(idx) {
+                self.replica_io_failed(idx, "write", &e);
+            }
+        }
+        self.tick_replication_slots(now);
+        self.tick_replication_view();
+        self.tick_replication_watermark();
+    }
 }
