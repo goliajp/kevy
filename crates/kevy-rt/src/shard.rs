@@ -168,6 +168,10 @@ pub(crate) struct Shard<C: Commands> {
     pub(crate) data_dir: PathBuf,
     /// `None` disables the append-only log (e.g. pure in-memory benchmarking).
     pub(crate) aof: Option<Aof>,
+    /// io_uring AOF offload state (RFC v3-aof-offload S1); dormant
+    /// unless the reactor's setup opts in.
+    #[cfg(target_os = "linux")]
+    pub(crate) aof_offload: crate::uring_aof::AofOffload,
     /// Per-shard replication backlog. `None` when `[replication] role`
     /// is `standalone` (default — zero hot-path cost: every write checks
     /// `replicate.is_some()` and skips). `Some` when `role = "primary"`

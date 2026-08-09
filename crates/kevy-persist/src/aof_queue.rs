@@ -34,6 +34,14 @@ impl Aof {
         Some((at, chunk))
     }
 
+    /// Nothing waiting in the queue (always true outside queued mode).
+    /// The offload driver's restructure gate checks this alongside its
+    /// in-flight set, so a rewrite's `begin` never has bytes to flush.
+    #[must_use]
+    pub fn queued_is_empty(&self) -> bool {
+        self.queue.as_ref().is_none_or(Vec::is_empty)
+    }
+
     /// The fd queued chunks are written to (the driver's SQE target).
     /// Unix-only — the driver is the io_uring reactor (Linux); wasm and
     /// other fd-less targets never enable queued appends.

@@ -202,6 +202,16 @@ impl<C: Commands> Shard<C> {
     /// old synchronous behavior); skipped if a job is already in flight.
     #[cold]
     pub(crate) fn start_bg_rewrite(&mut self) {
+        // AOF-offload contract: a rewrite's begin/finish must not run
+        // while append chunks are in flight on the ring (their writes
+        // target the pre-swap fd). Defer to the tick, which retries
+        // after the drain — µs-scale, and BGREWRITEAOF is already
+        // "background" by contract.
+        #[cfg(target_os = "linux")]
+        if !self.uring_aof_restructure_ready() {
+            self.aof_offload.want_restructure = true;
+            return;
+        }
         if self.persist.busy() || self.aof.as_ref().is_none_or(kevy_persist::Aof::is_rewriting) {
             if self.aof.is_some() {
                 eprintln!("kevy: shard {} aof rewrite skipped (persist job in flight)", self.id);
