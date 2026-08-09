@@ -20,12 +20,12 @@
 use crate::Commands;
 use crate::conn::Conn;
 use crate::shard::Shard;
-pub(crate) use crate::uring_conn::UringConn;
 use crate::uring_conn::ParkState;
-use kevy_sys::Socket;
-use kevy_uring::{Completion, IoUring};
+pub(crate) use crate::uring_conn::UringConn;
 pub(crate) use crate::uring_setup::{URING_ENTRIES, build_uring, io_uring_available};
 use kevy_map::KevyMap;
+use kevy_sys::Socket;
+use kevy_uring::{Completion, IoUring};
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -59,7 +59,6 @@ pub(crate) use crate::uring_ops::{
     CONN_MASK, ENOBUFS, MAX_IOVECS_PER_WRITEV, OP_ACCEPT, OP_ACCEPT_CL, OP_ACCEPT_UN, OP_AOF,
     OP_BIG_CANCEL, OP_BIG_READ, OP_RECV, OP_TIMEOUT, OP_WAKER, OP_WRITE,
 };
-
 
 impl<C: Commands> Shard<C> {
     /// Completion-based run loop (Linux io_uring). Mirrors [`Shard::run`] but
@@ -143,22 +142,19 @@ impl<C: Commands> Shard<C> {
                 && !accept_inflight
                 && let Some(l) = &self.listener
             {
-                accept_inflight =
-                    ring.prep_accept_multishot(l.raw(), OP_ACCEPT);
+                accept_inflight = ring.prep_accept_multishot(l.raw(), OP_ACCEPT);
             }
             if self.arms_accept
                 && !cl_accept_inflight
                 && let Some(cl) = &self.cluster_listener
             {
-                cl_accept_inflight =
-                    ring.prep_accept_multishot(cl.raw(), OP_ACCEPT_CL);
+                cl_accept_inflight = ring.prep_accept_multishot(cl.raw(), OP_ACCEPT_CL);
             }
             if self.arms_accept
                 && !un_accept_inflight
                 && let Some(un) = &self.unix_listener
             {
-                un_accept_inflight =
-                    ring.prep_accept_multishot(un.raw(), OP_ACCEPT_UN);
+                un_accept_inflight = ring.prep_accept_multishot(un.raw(), OP_ACCEPT_UN);
             }
             self.uring_arm_conns(&mut ring, &mut io, pbuf.group());
 
@@ -345,8 +341,7 @@ impl<C: Commands> Shard<C> {
                         // Tail observability — the epoll twin's comment
                         // applies verbatim: the tick's lateness IS the
                         // single-iteration stall upper bound.
-                        self.commands
-                            .on_tick_gap((gap - iv).as_micros() as u64);
+                        self.commands.on_tick_gap((gap - iv).as_micros() as u64);
                         self.commands.on_shard_tick(&mut self.store);
                         self.drain_tick_frames();
                         self.drain_store_notify();
@@ -462,12 +457,18 @@ impl<C: Commands> Shard<C> {
                 }
             }
         }
-        // Exit sequence: optional `SHUTDOWN SAVE` snapshot, drain bg
+        // Exit sequence: land every in-flight AOF chunk FIRST — the
+        // shutdown drain below may commit a rewrite (rename + reopen:
+        // the old fd closes and its number can be reused by the new
+        // file, so a straggler positioned write would corrupt it) and
+        // its final `sync_now` flushes the queue in append mode (EOF
+        // is only truthful once the positioned writes have landed).
+        // Then the usual drain: optional `SHUTDOWN SAVE` snapshot, bg
         // persist completions (so a `+OK` SAVE reply isn't followed by
         // a torn snapshot), final AOF fsync, feed marker — see
         // [`Shard::shutdown_drain`].
-        self.shutdown_drain();
         self.uring_aof_drain_exit(&mut ring);
+        self.shutdown_drain();
         Ok(())
     }
 
