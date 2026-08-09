@@ -1153,6 +1153,11 @@ fn multi_shard_listener_binds_per_shard_port() {
 /// byte-equivalent keyspace. Validates the full pipe — replica
 /// runner → ReplicaInboxSender → Shard.drain_replica_inbox →
 /// apply_replica_frame (under `ReplicatedApplyGuard`) → local store.
+/// Why the last replica runtime thread exited (Err return or panic
+/// message) — filled by the `ReplicaServer` thread wrapper, printed by
+/// the fence-timeout diagnostics so a CI flake names its own crash.
+static REPLICA_RT_EXIT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
 struct ReplicaServer {
     port: u16,
     stop_runtime: Arc<AtomicBool>,
@@ -1179,11 +1184,34 @@ impl ReplicaServer {
         let stop_runtime = Arc::new(AtomicBool::new(false));
         let stop_runtime_thread = stop_runtime.clone();
         let rt_handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1)).bind([127, 0, 0, 1], port).shards(1)
-            .with_data_dir(dir_path)
-            .with_aof(false)
-            .with_replica_inboxes(vec![receiver]);
-            let _ = rt.run(stop_runtime_thread);
+            // Capture WHY the runtime thread exits: the CI spop_storm flake
+            // died with "runtime thread has EXITED (panicked, find the
+            // crash)" and nothing to find — a `let _ = rt.run(...)` swallows
+            // an Err return outright, and a panic's stderr line was truncated
+            // out of the covgate log. Both now land in REPLICA_RT_EXIT and
+            // the fence-timeout message prints them verbatim.
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1)).bind([127, 0, 0, 1], port).shards(1)
+                .with_data_dir(dir_path)
+                .with_aof(false)
+                .with_replica_inboxes(vec![receiver]);
+                rt.run(stop_runtime_thread)
+            }));
+            let reason = match run {
+                Ok(Ok(())) => None,
+                Ok(Err(e)) => Some(format!("Runtime::run returned Err({e})")),
+                Err(p) => Some(format!(
+                    "Runtime::run PANICKED: {}",
+                    p.downcast_ref::<String>().map(String::as_str).or_else(
+                        || p.downcast_ref::<&str>().copied()
+                    ).unwrap_or("<non-string panic payload>")
+                )),
+            };
+            if let Some(r) = reason {
+                eprintln!("replica-runtime-exit: {r}");
+                *REPLICA_RT_EXIT.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    Some(r);
+            }
         });
         wait_port(port, "server");
 
@@ -1547,7 +1575,18 @@ fn spop_storm_keeps_replica_sets_identical() {
             None => format!(
                 "replica is not accepting connections on port {}; runtime thread {}",
                 replica.port,
-                if replica.runtime_alive() { "still ALIVE (slow, widen KEVY_TEST_PATIENCE)" } else { "has EXITED (panicked, find the crash)" },
+                if replica.runtime_alive() {
+                    "still ALIVE (slow, widen KEVY_TEST_PATIENCE)".to_string()
+                } else {
+                    format!(
+                        "has EXITED — {}",
+                        REPLICA_RT_EXIT
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .clone()
+                            .unwrap_or_else(|| "no recorded reason (exit before wrapper?)".to_string())
+                    )
+                },
             ),
         };
         panic!(
