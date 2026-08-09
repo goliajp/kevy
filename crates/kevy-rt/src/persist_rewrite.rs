@@ -44,6 +44,7 @@ impl<C: Commands> Shard<C> {
             } => {
                 self.advance_rewrite_handoff();
             }
+            PersistDone::Remove { result, path } => self.note_remove_done(result, &path),
             PersistDone::TeeAppend {
                 result: Err(e),
                 tmp,
@@ -122,6 +123,19 @@ impl<C: Commands> Shard<C> {
         self.hand_off_generation(h, tee);
     }
 
+    /// Off-thread unlink completed — best-effort, log-only on failure
+    /// (an orphaned `.rewrite` tmp is reclaimed by the next rewrite's
+    /// truncating open of the same deterministic path).
+    fn note_remove_done(&self, result: std::io::Result<()>, path: &std::path::Path) {
+        if let Err(e) = result {
+            eprintln!(
+                "kevy: shard {} abandoned rewrite image {} not deleted: {e}",
+                self.id,
+                path.display()
+            );
+        }
+    }
+
     /// Ship one (still-shrinking) generation to the worker. A gone
     /// worker aborts: the handed-off tee is lost with it, so the tmp
     /// image is incomplete — and the live file carried every write.
@@ -158,11 +172,23 @@ impl<C: Commands> Shard<C> {
 
     /// Common abort tail: drop the tee, delete the half-built image.
     /// The live AOF carried every write through the normal append path,
-    /// so an abort never risks data.
+    /// so an abort never risks data. The unlink goes to the worker —
+    /// deleting a multi-GB image contends on the fs journal (seconds
+    /// under a saturated disk) and must not run on the reactor; the
+    /// worker runs jobs serially, so a later Rewrite can never race the
+    /// pending Remove on the same deterministic tmp path. Worker gone =
+    /// inline best-effort (shutdown path; nothing left to stall).
     fn abort_rewrite_cleanup(&mut self, tmp: &std::path::Path) {
         if let Some(aof) = &mut self.aof {
             aof.abort_concurrent_rewrite();
         }
-        let _ = std::fs::remove_file(tmp);
+        if !self.persist.submit(
+            self.id,
+            PersistJob::Remove {
+                path: tmp.to_path_buf(),
+            },
+        ) {
+            let _ = std::fs::remove_file(tmp);
+        }
     }
 }
