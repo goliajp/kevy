@@ -168,6 +168,35 @@ pub fn malloc_trim_now() -> bool {
     false
 }
 
+/// Drop the page cache backing `fd`'s already-synced bytes
+/// (`posix_fadvise(POSIX_FADV_DONTNEED)` over the whole file). The
+/// rewrite pipeline streams multi-GB files through the persist worker;
+/// left in the cache those pages flood memory until the kernel enters
+/// direct reclaim, and the reclaim's LRU-lock traffic contends with
+/// the reactor's page faults (the S5-E/F lock profile: `evict_folios`
+/// running inside kevy threads). Only CLEAN pages drop — callers fsync
+/// first. Best-effort: `true` when the kernel accepted the advice.
+#[cfg(target_os = "linux")]
+pub fn fadvise_dontneed_all(fd: std::os::fd::RawFd) -> bool {
+    const POSIX_FADV_DONTNEED: core::ffi::c_int = 4;
+    unsafe extern "C" {
+        fn posix_fadvise(
+            fd: core::ffi::c_int,
+            offset: i64,
+            len: i64,
+            advice: core::ffi::c_int,
+        ) -> core::ffi::c_int;
+    }
+    // len = 0 ⇒ "to end of file" per POSIX.
+    unsafe { posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED) == 0 }
+}
+
+/// No fadvise on this target — the advice is a no-op.
+#[cfg(not(target_os = "linux"))]
+pub fn fadvise_dontneed_all(_fd: std::os::fd::RawFd) -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(any(target_os = "linux", target_os = "android"))]
