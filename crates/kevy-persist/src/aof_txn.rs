@@ -48,9 +48,28 @@ impl Aof {
         frame.extend_from_slice(b"\r\n");
         match self.format {
             crate::AofFormat::V2 => {
-                self.file.write_all(&(frame.len() as u32).to_le_bytes())?;
-                self.file.write_all(&crate::crc32c::crc32c(&frame).to_le_bytes())?;
-                self.file.write_all(&frame)?;
+                // Queued-append mode (AOF offload): the marker rides the
+                // queue like every other record — writing it straight to
+                // the file here would interleave with in-flight
+                // positioned writes and corrupt the log.
+                if let Some(q) = &mut self.queue {
+                    q.extend_from_slice(&(frame.len() as u32).to_le_bytes());
+                    q.extend_from_slice(&crate::crc32c::crc32c(&frame).to_le_bytes());
+                    q.extend_from_slice(&frame);
+                } else {
+                    self.file.write_all(&(frame.len() as u32).to_le_bytes())?;
+                    self.file.write_all(&crate::crc32c::crc32c(&frame).to_le_bytes())?;
+                    self.file.write_all(&frame)?;
+                }
+                // A concurrent rewrite's diff buffer must carry the
+                // markers too, or the post-rewrite log would replay the
+                // bracketed run as independent commands.
+                if let Some(tee) = &mut self.rewrite_tee {
+                    crate::record::write_record(tee, &frame)?;
+                }
+                self.size_bytes = self
+                    .size_bytes
+                    .saturating_add((crate::record::RECORD_HEADER + frame.len()) as u64);
             }
             // v1 has no envelope, so it cannot express a torn-transaction
             // boundary; a v1 log stays exactly as atomic as it was. The

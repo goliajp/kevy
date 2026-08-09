@@ -67,7 +67,7 @@ pub struct Aof {
     pub(crate) last_sync: Instant,
     /// Estimated bytes currently in the AOF file (existing + appended since
     /// open). Maintained without fstat() syscalls per append.
-    size_bytes: u64,
+    pub(crate) size_bytes: u64,
     /// File size right after the most recent [`Self::rewrite_from`] (or
     /// `Self::open` if never rewritten). Anchor for `auto_aof_rewrite_*`.
     size_at_last_rewrite: u64,
@@ -87,7 +87,7 @@ pub struct Aof {
     /// tees its RESP frame here, so writes that land *during* an off-lock
     /// rewrite are captured and replayed after the compacted snapshot. See
     /// [`Self::begin_concurrent_rewrite`].
-    rewrite_tee: Option<Vec<u8>>,
+    pub(crate) rewrite_tee: Option<Vec<u8>>,
     /// Where `open` quarantined a dropped tail, if it had to repair one —
     /// surfaced so the store's open report can name the file.
     open_quarantine: Option<PathBuf>,
