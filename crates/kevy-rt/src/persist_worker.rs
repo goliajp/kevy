@@ -42,6 +42,10 @@ pub(crate) enum PersistJob {
     Rewrite { view: SnapshotView, tmp: PathBuf },
     /// Append a handed-off tee generation to the rewrite tmp and fsync.
     TeeAppend { tmp: PathBuf, bytes: Vec<u8> },
+    /// Drop retained GB-scale buffers off-thread (rewrite teardown) —
+    /// a multi-GB munmap holds the address-space lock long enough to
+    /// stall every reactor page fault (the S5-E finding's seat).
+    DropBufs { bufs: Vec<Vec<u8>> },
     /// Delete an abandoned multi-GB rewrite image. Unlinking a large
     /// file contends on the fs journal — seconds under a saturated
     /// disk — so it must not run on the reactor (measured as the
@@ -63,10 +67,14 @@ pub(crate) enum PersistDone {
     Remove { result: io::Result<()>, path: PathBuf },
     /// One handed-off tee generation appended+fsynced to `tmp`
     /// (the two-phase rewrite's phase 2; see `advance_rewrite_handoff`).
+    /// `buf` is the generation's buffer, CLEARED, for the pool.
     TeeAppend {
         result: io::Result<()>,
         tmp: PathBuf,
+        buf: Vec<u8>,
     },
+    /// Buffers dropped off-thread; nothing to apply.
+    DropBufs,
 }
 
 /// Lazily-spawned single-thread persister. Dropping it closes the channel;
@@ -181,15 +189,24 @@ fn run_job(job: PersistJob) -> PersistDone {
             result: std::fs::remove_file(&path),
             path,
         },
-        PersistJob::TeeAppend { tmp, bytes } => PersistDone::TeeAppend {
-            result: (|| {
+        PersistJob::TeeAppend { tmp, mut bytes } => {
+            let result = (|| {
                 use std::io::Write;
                 let mut f = std::fs::OpenOptions::new().append(true).open(&tmp)?;
                 f.write_all(&bytes)?;
                 f.sync_all()
-            })(),
-            tmp,
-        },
+            })();
+            bytes.clear();
+            PersistDone::TeeAppend {
+                result,
+                tmp,
+                buf: bytes,
+            }
+        }
+        PersistJob::DropBufs { bufs } => {
+            drop(bufs);
+            PersistDone::DropBufs
+        }
     }
 }
 
@@ -434,7 +451,8 @@ impl<C: Commands> Shard<C> {
             }
             done @ (PersistDone::Rewrite { .. }
             | PersistDone::TeeAppend { .. }
-            | PersistDone::Remove { .. }) => {
+            | PersistDone::Remove { .. }
+            | PersistDone::DropBufs) => {
                 self.commit_rewrite_done(done);
             }
         }
