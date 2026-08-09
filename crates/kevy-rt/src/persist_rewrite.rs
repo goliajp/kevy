@@ -83,7 +83,7 @@ impl<C: Commands> Shard<C> {
     /// old policy force-swapped after 4 handoffs and the reactor paid a
     /// bounded-LARGE synchronous append — median tailgate measured up
     /// to a 6 s client-visible stall on the mixed cell
-    /// (FINDING-2026-08-10-third-seat). Now a non-shrinking generation
+    /// (the third-seat finding in bench/). Now a non-shrinking generation
     /// (or the hard cap) ABORTS the rewrite instead and re-anchors the
     /// auto-rewrite growth rule at the current size: under sustained
     /// overload the log grows and the server degrades; it does not

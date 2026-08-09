@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 /// tick gate — ~1 s of accumulated busy time between clock reads on the
 /// mixed tailgate cell, which both delayed BLOCK/WAIT timeouts and made
 /// the tick-gap gauge report busy time as a "stall". Batch SIZE was
-/// tried first and refuted (FINDING-2026-08-10-third-seat: one P16
+/// tried first and refuted (the third-seat finding in bench/: one P16
 /// completion carries 16 commands, so batch count ≠ work). Counting
 /// WORK ITERATIONS is load-proportional: every 4th working iteration
 /// pays one vDSO clock read (~30 ns amortized to <10 ns/iter on the
