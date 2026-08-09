@@ -74,3 +74,40 @@ the methodology's single-run trigger word.
   measurement artifact (A), part real capped-swap stall (B). Do not
   widen the bar; fix A so the number means what the bar says, then
   attack B.
+
+## Postscript (same day): A, B, C landed — two seats fell, one named
+
+Median-of-3 (C) first: the single-run spread was worse than feared —
+baseline mixed gap median **3 077 ms** (484..5 939), one run showing a
+**6.04 s client-visible PING max**; firehose PING p99.9 median 117 ms
+(the earlier "double green PING" was single-run luck).
+
+Three changes, each box-gated (crashgate/repligate ×2 modes, perfgate
+on the hot-loop one, 239 release suites):
+
+1. **A — work-iteration tick gate** (`TICK_CHECK_WORK_ITERS = 4`):
+   batch-count refuted, work-iteration counting landed; perfgate PASS
+   (every-4th-work-iteration vDSO read is noise).
+2. **B — divergence defer** (`40bfc07b`): generations must halve to
+   keep handing off; a non-shrinking generation defers the rewrite
+   (abort + re-anchor the growth rule) instead of force-swapping.
+   Mixed cell: gap median 3 077 → **93 ms**, max PING 6 s → **86 ms**.
+3. **B2 — worker-side unlink** (`35771876`): B moved the firehose cost
+   into its own defer path — deleting the multi-GB abandoned image on
+   the reactor contends on the fs journal under a saturated disk
+   (measured: gap median 576 → 1 485 ms, PING max 1.78 s once defers
+   began firing). PersistJob::Remove ships the unlink to the worker.
+   Firehose: PING p99.9 median 118 → **84.7 ms — first-ever green**,
+   max 1.78 s → 141-388 ms.
+
+Remaining after all three (median-of-3): mixed gap 308 ms (44..320,
+median straddles the bar run-to-run), firehose gap 514 ms (476..516,
+tight). One suspect covers every remaining observation, including
+"gauge high while the probe shard's clients never wait" (the stalls
+are on the OTHER shards): **the rewrite tee is a single Vec grown by
+doubling on the reactor's append path** — at GB scale one realloc is a
+0.2-0.4 s memcpy, paid inside command processing. Next slice (S5-D):
+chunked tee (fixed-size chunk list, no realloc above chunk size;
+hand-off and finish write the chunk list as-is). Arithmetic to verify
+in Phase B: biggest realloc ≈ half the largest generation; firehose's
+tight 476-516 ms band should collapse to chunk-scale.
