@@ -19,6 +19,9 @@ pub(crate) fn eval(name: &str, args: &[Scalar]) -> Result<Scalar, ScalarError> {
         "date_trunc" => date_trunc(args),
         "age" => age(args),
         "to_char" => fmt::to_char(args),
+        "date_format" => fmt::date_format(args),
+        "unix_timestamp" => fmt::unix_timestamp(args),
+        "from_unixtime" => fmt::from_unixtime(args),
         _ => Err(ScalarError::UnknownFunction(name.to_string())),
     }
 }

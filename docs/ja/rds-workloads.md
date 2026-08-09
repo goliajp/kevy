@@ -110,14 +110,16 @@ WATCH + MULTI/EXEC check-then-write           # CAS loop (cookbook recipe 4)
 |---|---|
 | 文字列 | `lower upper initcap length char_length concat concat_ws trim btrim ltrim rtrim replace split_part repeat lpad rpad strpos position left right reverse translate substr substring format` |
 | 数学 | `floor ceil ceiling round trunc mod power pow sqrt sign abs` |
+| 演算子 | `AND OR NOT`（三値論理）、比較 `= <> != < <= > >=`、`\|\|` 連結、searched `CASE WHEN … THEN … [ELSE …] END`、`::bool`（PG の入力語彙） |
 | NULL ファミリ | `coalesce nullif greatest least` |
 | 日付時刻 | `extract date_part date_trunc age to_char`（`interval` は PG 本来の三成分形式：months、days、micros） |
 | 正規表現（POSIX ERE） | `regexp_replace regexp_matches regexp_split_to_array` |
 | ハッシュ | `md5` |
+| MySQL エイリアス | `date_format unix_timestamp from_unixtime`（MySQL のセマンティクスから逐一転写——WordPress/Laravel の表示トリオ） |
 
 この表を支える主張の規律：
 
-- セマンティクスは **PostgreSQL 自身の回帰コーパスから逐一転写**され、CI ゲート（`funcgate`）で守られています：カバー済み関数が PG と異なる答えを返せばハード失敗——ゲートの誤答数はゼロでなければなりません。コーパスのカバレッジ比率は上がる一方のラチェットです（現在、サブセット畳み込み可能なプローブの ≥ 76%）。
+- セマンティクスは **PostgreSQL 自身の回帰コーパスから逐一転写**され、CI ゲート（`funcgate`）で守られています：カバー済み関数が PG と異なる答えを返せばハード失敗——ゲートの誤答数はゼロでなければなりません。コーパスのカバレッジ比率は上がる一方のラチェットです（現在、サブセット畳み込み可能なプローブの ≥ 82%）。
 - 表の外の関数は**名前を挙げて拒否**され、推測は決してしません。カバー済み関数の内部でも、基数を変えてしまう形は同様です——`regexp_matches` が零行または複数行を返すケースは、誤ったスカラーに潰されるのではなく拒否されます。
 
 ## ORDER BY / LIMIT / OFFSET

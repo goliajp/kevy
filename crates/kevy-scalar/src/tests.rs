@@ -267,8 +267,11 @@ fn timestamp_parse_render_and_to_char() {
         txt(eval("to_char", &[ts("2024-03-15 14:30:45"), t("YYYY-MM-DD HH24:MI:SS")])),
         "2024-03-15 14:30:45"
     );
+    // `Month` graduated from refused to rendered (9-char pad, PG's
+    // spelling); an unknown letter still refuses by name.
+    assert_eq!(txt(eval("to_char", &[ts("2024-03-15 00:00:00"), t("Month")])), "March    ");
     assert!(matches!(
-        eval("to_char", &[ts("2024-03-15"), t("Month")]),
+        eval("to_char", &[ts("2024-03-15 00:00:00"), t("Q")]),
         Err(ScalarError::Domain { .. })
     ));
 }
@@ -349,4 +352,65 @@ fn regexp_replace_matches_and_split() {
         eval("regexp_replace", &[t("x"), t("("), t("y")]),
         Err(ScalarError::Domain { .. })
     ));
+}
+
+#[test]
+fn three_valued_logic_and_comparisons() {
+    use crate::{Scalar as S, cmp_op, logic_and, logic_not, logic_or};
+    let (t, f, n) = (S::Bool(true), S::Bool(false), S::Null);
+    assert_eq!(logic_and(&n, &f).unwrap(), f);
+    assert_eq!(logic_and(&n, &t).unwrap(), n);
+    assert_eq!(logic_or(&n, &t).unwrap(), t);
+    assert_eq!(logic_or(&n, &f).unwrap(), n);
+    assert_eq!(logic_not(&n).unwrap(), n);
+    assert_eq!(cmp_op("<", &f, &t).unwrap(), S::Bool(true));
+    assert_eq!(cmp_op("<>", &S::Int(2), &S::Float(2.5)).unwrap(), S::Bool(true));
+    assert_eq!(cmp_op("=", &n, &t).unwrap(), n);
+    assert_eq!(
+        cmp_op("=", &S::Timestamp(86_400_000_000), &S::Date(1)).unwrap(),
+        S::Bool(true)
+    );
+}
+
+#[test]
+fn pg_bool_vocabulary() {
+    use crate::parse_pg_bool;
+    for s in ["t", "TRUE", " yes ", "on", "1"] {
+        assert_eq!(parse_pg_bool(s), Some(true), "{s}");
+    }
+    for s in ["f", "False", "no", "OFF", "0"] {
+        assert_eq!(parse_pg_bool(s), Some(false), "{s}");
+    }
+    for s in ["", "2", "of", "tru e"] {
+        assert_eq!(parse_pg_bool(s), None, "{s}");
+    }
+}
+
+#[test]
+fn mysql_time_alias_trio() {
+    use crate::{Scalar as S, eval};
+    let ts = S::Timestamp(1_749_393_045 * 1_000_000); // 2025-06-08 14:30:45
+    let fmt = |tpl: &str| eval("date_format", &[ts.clone(), S::Text(tpl.into())]).unwrap();
+    assert_eq!(fmt("%Y-%m-%d %H:%i:%s"), S::Text("2025-06-08 14:30:45".into()));
+    assert_eq!(fmt("%M"), S::Text("June".into()));
+    assert_eq!(fmt("%b"), S::Text("Jun".into()));
+    assert_eq!(fmt("%p"), S::Text("PM".into()));
+    assert_eq!(fmt("%Y%%"), S::Text("2025%".into()));
+    assert_eq!(eval("unix_timestamp", std::slice::from_ref(&ts)).unwrap(), S::Int(1_749_393_045));
+    assert_eq!(
+        eval("from_unixtime", &[S::Int(1_749_393_045)]).unwrap(),
+        S::Timestamp(1_749_393_045 * 1_000_000)
+    );
+}
+
+#[test]
+fn to_char_extended_patterns() {
+    use crate::{Scalar as S, eval};
+    let d = S::Date(19_797); // 2024-03-15
+    let tc = |v: &S, tpl: &str| eval("to_char", &[v.clone(), S::Text(tpl.into())]).unwrap();
+    assert_eq!(tc(&d, "Month DD, YYYY"), S::Text("March     15, 2024".into()));
+    assert_eq!(tc(&d, "Mon DD"), S::Text("Mar 15".into()));
+    assert_eq!(tc(&d, "YY/MM/DD"), S::Text("24/03/15".into()));
+    let noon_ish = S::Timestamp((19_875 * 86_400 + 13 * 3600 + 45 * 60) * 1_000_000);
+    assert_eq!(tc(&noon_ish, "HH12:MI PM"), S::Text("01:45 PM".into()));
 }
