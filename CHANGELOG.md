@@ -355,6 +355,20 @@ keys**, replayed in full on every start:
   (`replay_aof_quiet` in kevy-persist). The corrupt-frame WARN is an
   incident signal and still prints unconditionally.
 
+### The transaction-marker tax on single-command batches (fixed)
+
+The release-matrix disk gate caught plain `SET`s costing 178 AOF
+bytes/op against a 106 baseline: every reactor batch — including a
+batch of ONE command — was bracketed by `KEVYTXNBEGIN`/`COMMIT` marker
+records (~65 B/pair). A pipelined batch is not a transaction (Redis
+pipelining is explicitly non-atomic), so the window split in two:
+reactor batches keep only the group-fsync half, and `MULTI`/`EXEC`
+brackets its queued commands itself on the connection's shard — the
+marker now appears exactly where atomicity was promised. Byte-level
+regression test pins both sides; the cross-shard `EXEC` crash
+semantics (per-shard, not global) are now documented in
+`docs/persistence.md`. The embedded `atomic()` family is unchanged.
+
 ### Added
 
 - **`INFO` grew a `# Modules` section** (also addressable as

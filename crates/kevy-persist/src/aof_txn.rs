@@ -67,10 +67,23 @@ impl Aof {
     /// the batch's replies.
     #[inline]
     pub fn begin_group(&mut self) {
+        self.begin_fsync_window();
+        self.in_txn = self.append_marker(Self::TXN_BEGIN).is_ok();
+    }
+
+    /// Open ONLY the group-fsync half of the window: `Fsync::Always`
+    /// appends buffer until [`Self::end_group`] fsyncs once — no
+    /// transaction markers. This is the reactor-batch bracket: a
+    /// pipelined read batch is not a transaction (Redis pipelining is
+    /// explicitly non-atomic), so bracketing it with BEGIN/COMMIT
+    /// records over-promised at ~65 B per single-command batch — the
+    /// dominant shape for every non-pipelining client. Real atomic
+    /// units (embedded `atomic()`, EXEC) call [`Self::begin_group`].
+    #[inline]
+    pub fn begin_fsync_window(&mut self) {
         if matches!(self.fsync, Fsync::Always) {
             self.deferred = true;
         }
-        self.in_txn = self.append_marker(Self::TXN_BEGIN).is_ok();
     }
 
     /// Close the group-commit window: one `flush()+sync_data()` for the

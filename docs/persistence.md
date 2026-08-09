@@ -148,6 +148,19 @@ v1-format logs have no record envelope and cannot express a transaction
 boundary; they keep the old behaviour until their first rewrite
 promotes them to v2.
 
+**The markers belong to transactions and to nothing else.** A pipelined
+read batch is not a transaction — Redis pipelining is explicitly
+non-atomic — so reactor batches carry no markers (they only share one
+fsync under `always`; briefly in the 4.x line every single-command
+batch paid the ~65 B marker pair, which a disk gate caught). On the
+server, `MULTI`/`EXEC` brackets its queued commands on the connection's
+shard; commands that fan out to other shards land in those shards' own
+logs individually. Cross-shard `EXEC` atomicity under crash is
+therefore per-shard, not global — same spirit as Redis's own rule that
+a runtime error inside `EXEC` does not undo the other commands. The
+all-or-nothing guarantee above is the embedded `atomic()` family's,
+whose writes are single-shard by construction.
+
 
 | Knob | Server (TOML / `CONFIG SET`) | Embedded (`Config::…`) | Default | Notes |
 |---|---|---|---|---|
