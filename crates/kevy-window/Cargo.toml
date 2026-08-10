@@ -9,12 +9,12 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-kevy-index = { path = "../kevy-index", version = "4.1.1" }
-kevy-seg = { path = "../kevy-seg", version = "4.1.1" }
-kevy-text = { path = "../kevy-text", version = "4.1.1" }
+kevy-index = { path = "../kevy-index", version = "5.0.0" }
+kevy-seg = { path = "../kevy-seg", version = "5.0.0" }
+kevy-text = { path = "../kevy-text", version = "5.0.0" }
 
 [dev-dependencies]
-kevy-tmpdir = { path = "../kevy-tmpdir", version = "4.1.1" }
+kevy-tmpdir = { path = "../kevy-tmpdir", version = "5.0.0" }
 
 [lints]
 workspace = true
