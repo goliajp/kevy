@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — the writes that were acknowledged and gone
+## 5.0.0 — the tail-latency release
 
 A probe built to settle a question about replicas answered a different
 one: the replica had not received a multi-key `DEL` at all. Pulling
@@ -451,6 +451,14 @@ next occurrence diagnoses itself instead of costing a rerun round.
 - **`docs/alloc.md`** (en/zh/ja): what the opt-in allocator buys, what
   it costs, and when to enable it — plus an interactive capacity
   calculator on the site (`/capacity/`).
+
+### Versions
+
+Workspace crates → **5.0.0** (40-crate publish chain — five crates
+born since 4.x join it: kevy-time, kevy-compress, kevy-seg,
+kevy-scalar, kevy-window); `kevy-client` and `kevy-client-async` →
+**2.2.0** (their own line; API unchanged, the shared crates moved
+under them). Upgrade guide: `docs/upgrading-4-to-5.md` (en/zh/ja).
 
 ## 4.1.1 — the TTL frame that re-anchored
 

@@ -23,10 +23,10 @@ name = "kevy-cli"
 path = "src/main.rs"
 
 [dependencies]
-kevy-tmpdir = { path = "../kevy-tmpdir", version = "4.1.1" }
-kevy-embedded = { path = "../kevy-embedded", version = "4.1.1" }
-kevy-persist = { path = "../kevy-persist", version = "4.1.1" }
-kevy-resp = { path = "../kevy-resp", version = "4.1.1" }
-kevy-resp-client = { path = "../kevy-resp-client", version = "4.1.1" }
-kevy-scalar = { path = "../kevy-scalar", version = "4.1.1" }
-kevy-sql = { path = "../kevy-sql", version = "4.1.1" }
+kevy-tmpdir = { path = "../kevy-tmpdir", version = "5.0.0" }
+kevy-embedded = { path = "../kevy-embedded", version = "5.0.0" }
+kevy-persist = { path = "../kevy-persist", version = "5.0.0" }
+kevy-resp = { path = "../kevy-resp", version = "5.0.0" }
+kevy-resp-client = { path = "../kevy-resp-client", version = "5.0.0" }
+kevy-scalar = { path = "../kevy-scalar", version = "5.0.0" }
+kevy-sql = { path = "../kevy-sql", version = "5.0.0" }
