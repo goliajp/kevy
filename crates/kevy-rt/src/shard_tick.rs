@@ -167,7 +167,11 @@ impl<C: Commands> Shard<C> {
         // of sustained calm before beginning.
         const CALM_TICKS: u32 = 20;
         self.rewrite_calm_ticks = self.rewrite_calm_ticks.saturating_add(1);
-        self.rewrite_calm_ticks < CALM_TICKS
+        // Shard-id stagger: lockstep shards otherwise begin together
+        // and their finishes collide in one tick — four simultaneous
+        // fsync+rename storms serialize on the journal (the tick
+        // sub-probe's 400ms×4). ~300ms spread breaks the herd.
+        self.rewrite_calm_ticks < CALM_TICKS + (self.id as u32) * 3
     }
 
     /// Tick half of background persistence: apply any finished BGSAVE /
