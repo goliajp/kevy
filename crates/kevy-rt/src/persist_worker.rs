@@ -42,15 +42,16 @@ pub(crate) enum PersistJob {
     Rewrite { view: SnapshotView, tmp: PathBuf },
     /// Append a handed-off tee generation to the rewrite tmp and fsync.
     TeeAppend { tmp: PathBuf, bytes: Vec<u8> },
-    /// Drop retained GB-scale buffers off-thread (rewrite teardown) —
-    /// a multi-GB munmap holds the address-space lock long enough to
-    /// stall every reactor page fault (the S5-E finding's seat).
-    DropBufs { bufs: Vec<Vec<u8>> },
-    /// Delete an abandoned multi-GB rewrite image. Unlinking a large
-    /// file contends on the fs journal — seconds under a saturated
-    /// disk — so it must not run on the reactor (measured as the
-    /// firehose residual after the divergence-defer landed).
-    Remove { path: PathBuf },
+    /// Rewrite-teardown housekeeping in ONE job (the worker is serial —
+    /// a second submit while it holds the first would be dropped):
+    /// unlink abandoned files (multi-GB unlinks contend the fs journal)
+    /// and free retained buffers (multi-GB munmaps stall reactor
+    /// faults), all off-thread.
+    Cleanup { paths: Vec<PathBuf>, bufs: Vec<Vec<u8>> },
+    /// Fold `[from, to)` of the tee file into the tmp image
+    /// (file-to-file; io::copy specializes to copy_file_range on
+    /// Linux), with the drop-behind stride on the destination.
+    TeeCopy { src: std::fs::File, from: u64, to: u64, tmp: PathBuf },
 }
 
 pub(crate) enum PersistDone {
@@ -63,8 +64,10 @@ pub(crate) enum PersistDone {
         result: io::Result<u64>, // keys dumped
         tmp: PathBuf,
     },
-    /// A deferred/aborted rewrite's image deleted off-thread.
-    Remove { result: io::Result<()>, path: PathBuf },
+    /// Teardown housekeeping done; failed unlinks named for the log.
+    Cleanup { failed: Vec<(PathBuf, io::Error)> },
+    /// `[from, to)` folded into `tmp` (or not — the driver aborts on Err).
+    TeeCopy { result: io::Result<()>, tmp: PathBuf, to: u64 },
     /// One handed-off tee generation appended+fsynced to `tmp`
     /// (the two-phase rewrite's phase 2; see `advance_rewrite_handoff`).
     /// `buf` is the generation's buffer, CLEARED, for the pool.
@@ -73,8 +76,6 @@ pub(crate) enum PersistDone {
         tmp: PathBuf,
         buf: Vec<u8>,
     },
-    /// Buffers dropped off-thread; nothing to apply.
-    DropBufs,
 }
 
 /// Lazily-spawned single-thread persister. Dropping it closes the channel;
@@ -169,36 +170,7 @@ impl PersistWorker {
     }
 }
 
-/// Best-effort page-cache drop for a fully-synced streamed file.
-fn drop_file_cache(f: &std::fs::File) {
-    #[cfg(unix)]
-    {
-        use std::os::fd::AsRawFd;
-        let _ = kevy_sys::fadvise_dontneed_all(f.as_raw_fd());
-    }
-}
-
-/// Append+fsync one tee generation in drop-behind strides (64 MB write
-/// → fdatasync → cache drop), so a GB generation never floods the page
-/// cache into reclaim; return the buffer cleared for the pool.
-fn run_tee_append(tmp: PathBuf, mut bytes: Vec<u8>) -> PersistDone {
-    let result = (|| {
-        use std::io::Write;
-        let mut f = std::fs::OpenOptions::new().append(true).open(&tmp)?;
-        for chunk in bytes.chunks(64 << 20) {
-            f.write_all(chunk)?;
-            f.sync_data()?;
-            drop_file_cache(&f);
-        }
-        f.sync_all()
-    })();
-    bytes.clear();
-    PersistDone::TeeAppend {
-        result,
-        tmp,
-        buf: bytes,
-    }
-}
+use crate::persist_jobs::{run_tee_append, run_tee_copy};
 
 fn run_job(job: PersistJob) -> PersistDone {
     match job {
@@ -217,15 +189,23 @@ fn run_job(job: PersistJob) -> PersistDone {
             result: kevy_persist::dump_aof(&tmp, &view).map(|(keys, _bytes)| keys),
             tmp,
         },
-        PersistJob::Remove { path } => PersistDone::Remove {
-            result: std::fs::remove_file(&path),
-            path,
+        PersistJob::Cleanup { paths, bufs } => {
+            let mut failed = Vec::new();
+            for p in paths {
+                if let Err(e) = std::fs::remove_file(&p) {
+                    failed.push((p, e));
+                }
+            }
+            drop(bufs);
+            PersistDone::Cleanup { failed }
+        }
+        PersistJob::TeeCopy { src, from, to, tmp } => PersistDone::TeeCopy {
+            result: run_tee_copy(&src, from, to, &tmp),
+            tmp,
+            to,
         },
         PersistJob::TeeAppend { tmp, bytes } => run_tee_append(tmp, bytes),
-        PersistJob::DropBufs { bufs } => {
-            drop(bufs);
-            PersistDone::DropBufs
-        }
+
     }
 }
 
@@ -286,6 +266,22 @@ impl<C: Commands> Shard<C> {
     /// start the tee, dump off-thread. No-op without an AOF (matches the
     /// old synchronous behavior); skipped if a job is already in flight.
     #[cold]
+    /// Offload mode tees the rewrite diff to `<aof>.tee` through the
+    /// ring (S5-G) instead of an anonymous Vec; everywhere else keeps
+    /// the in-memory tee with its overrun cap.
+    fn begin_rewrite_tee(&mut self) -> io::Result<PathBuf> {
+        #[cfg(target_os = "linux")]
+        let filetee = self.aof_offload.enabled;
+        #[cfg(not(target_os = "linux"))]
+        let filetee = false;
+        let aof = self.aof.as_mut().expect("caller checked");
+        if filetee {
+            aof.begin_view_rewrite_filetee()
+        } else {
+            aof.begin_view_rewrite()
+        }
+    }
+
     pub(crate) fn start_bg_rewrite(&mut self) {
         // AOF-offload contract: a rewrite's begin/finish must not run
         // while append chunks are in flight on the ring (their writes
@@ -312,8 +308,7 @@ impl<C: Commands> Shard<C> {
             return;
         }
         let view = self.store.collect_snapshot();
-        let aof = self.aof.as_mut().expect("checked above");
-        let tmp = match aof.begin_view_rewrite() {
+        let tmp = match self.begin_rewrite_tee() {
             Ok(t) => t,
             Err(e) => {
                 eprintln!("kevy: shard {} aof rewrite begin failed: {e}", self.id);
@@ -470,8 +465,8 @@ impl<C: Commands> Shard<C> {
             }
             done @ (PersistDone::Rewrite { .. }
             | PersistDone::TeeAppend { .. }
-            | PersistDone::Remove { .. }
-            | PersistDone::DropBufs) => {
+            | PersistDone::TeeCopy { .. }
+            | PersistDone::Cleanup { .. }) => {
                 self.commit_rewrite_done(done);
             }
         }

@@ -33,6 +33,10 @@ use kevy_uring::IoUring;
 struct InflightChunk {
     seq: u64,
     offset: u64,
+    /// Target fd: the AOF itself, or the rewrite's `<aof>.tee`.
+    fd: std::os::fd::RawFd,
+    /// Tee chunks recycle their buffer back to the staging pool.
+    tee: bool,
     bytes: Vec<u8>,
     /// Bytes already acknowledged by short-write CQEs; the remainder is
     /// resubmitted at `offset + written`.
@@ -106,6 +110,7 @@ impl<C: Commands> Shard<C> {
         }
         // New queue contents become an in-flight chunk.
         if let Some(aof) = &mut self.aof
+            && let Some(fd) = aof.queued_fd()
             && let Some((offset, bytes)) = aof.take_pending()
         {
             let seq = self.aof_offload.next_seq;
@@ -113,6 +118,25 @@ impl<C: Commands> Shard<C> {
             self.aof_offload.inflight.push_back(InflightChunk {
                 seq,
                 offset,
+                fd,
+                tee: false,
+                bytes,
+                written: 0,
+                needs_submit: true,
+            });
+        }
+        // Rewrite-tee staging rides the same ring, after the AOF's own
+        // chunks (S5-G: the diff goes to `<aof>.tee`, not to memory).
+        if let Some(aof) = &mut self.aof
+            && let Some((offset, bytes, fd)) = aof.take_tee_pending()
+        {
+            let seq = self.aof_offload.next_seq;
+            self.aof_offload.next_seq += 1;
+            self.aof_offload.inflight.push_back(InflightChunk {
+                seq,
+                offset,
+                fd,
+                tee: true,
                 bytes,
                 written: 0,
                 needs_submit: true,
@@ -125,16 +149,13 @@ impl<C: Commands> Shard<C> {
     /// Submit every chunk (or remainder) still waiting for an SQE. SQ
     /// full is fine — the flag stays set and the next iteration retries.
     fn uring_aof_submit_pending(&mut self, ring: &mut IoUring) {
-        let Some(fd) = self.aof.as_ref().and_then(kevy_persist::Aof::queued_fd) else {
-            return;
-        };
         for c in self.aof_offload.inflight.iter_mut().filter(|c| c.needs_submit) {
             let rest = &c.bytes[c.written as usize..];
             let ud = OP_AOF | c.seq;
             // SAFETY: `rest` points into `c.bytes`, which lives in
             // `inflight` until this chunk's final CQE is reaped.
             let ok = unsafe {
-                ring.prep_write_at(fd, rest.as_ptr(), rest.len() as u32, c.offset + u64::from(c.written), ud)
+                ring.prep_write_at(c.fd, rest.as_ptr(), rest.len() as u32, c.offset + u64::from(c.written), ud)
             };
             if !ok {
                 return; // SQ full; retry next iter (order preserved: we stop at the first miss)
@@ -197,8 +218,16 @@ impl<C: Commands> Shard<C> {
             c.needs_submit = true; // short write: resubmit the remainder
             return;
         }
-        self.aof_offload.inflight.remove(pos);
-        self.aof_offload.dirty_since_sync = true;
+        let done = self.aof_offload.inflight.remove(pos).expect("pos from position()");
+        if done.tee {
+            // Tee bytes need no fsync (a crash discards the attempt);
+            // the buffer goes back to the staging pool.
+            if let Some(aof) = &mut self.aof {
+                aof.stash_tee_spare(done.bytes);
+            }
+        } else {
+            self.aof_offload.dirty_since_sync = true;
+        }
     }
 
     /// May a structural file operation (rewrite begin/finish, truncate)

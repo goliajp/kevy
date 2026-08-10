@@ -57,8 +57,8 @@ impl<C: Commands> Shard<C> {
             PersistDone::TeeAppend { result, tmp, buf } => {
                 self.on_tee_appended(result, &tmp, buf);
             }
-            PersistDone::DropBufs => {}
-            PersistDone::Remove { result, path } => self.note_remove_done(result, &path),
+            PersistDone::Cleanup { failed } => self.note_cleanup_failures(failed),
+            PersistDone::TeeCopy { result, tmp, to } => self.on_tee_copied(result, tmp, to),
             PersistDone::Rewrite {
                 result: Err(e),
                 tmp,
@@ -108,6 +108,10 @@ impl<C: Commands> Shard<C> {
             return;
         };
         let Some(aof) = &mut self.aof else { return };
+        if aof.tee_watermarks().is_some() {
+            self.advance_filetee(h);
+            return;
+        }
         let tee = aof.take_tee_for_handoff().unwrap_or_default();
         if tee.len() <= SMALL_TEE {
             self.finish_rewrite_swap(&h, tee);
@@ -127,6 +131,85 @@ impl<C: Commands> Shard<C> {
             return;
         }
         self.hand_off_generation(h, tee);
+    }
+
+    /// File-tee advance: fold `[consumed, handed)` while the lag
+    /// halves per step, finish when the whole remainder (staging
+    /// included) fits the synchronous bound, defer on divergence or
+    /// overrun — the same policy as the Vec tee, expressed in file
+    /// offsets. Runs under the structural gate (ring drained), so
+    /// `handed` bytes are all in the file.
+    fn advance_filetee(&mut self, h: RewriteHandoff) {
+        const SMALL_TEE: u64 = 4 << 20;
+        const MAX_HANDOFFS: u8 = 12;
+        let Some(aof) = &mut self.aof else { return };
+        let Some((consumed, handed)) = aof.tee_watermarks() else { return };
+        let lag = aof.tee_len().unwrap_or(0) as u64; // incl. staging
+        if lag <= SMALL_TEE {
+            self.finish_filetee_swap(&h);
+            return;
+        }
+        let shrinking = handed - consumed <= (h.prev_len as u64) / 2;
+        if h.iters >= MAX_HANDOFFS
+            || (h.iters > 0 && !shrinking)
+            || lag > TEE_DEFER_CAP as u64
+        {
+            eprintln!(
+                "kevy: shard {} aof rewrite deferred: tee lag {lag} B after {} folds \
+                 (ingest outrunning disk) — auto-rewrite re-anchored at current size",
+                self.id, h.iters
+            );
+            aof.anchor_rewrite_deferred();
+            self.abort_rewrite_cleanup(&h.tmp);
+            return;
+        }
+        self.submit_tee_fold(h, consumed, handed);
+    }
+
+    /// Ship one fold `[consumed, handed)` to the worker; a gone worker
+    /// or unclonable handle aborts (live AOF carried every write).
+    fn submit_tee_fold(&mut self, h: RewriteHandoff, consumed: u64, handed: u64) {
+        let src = match self.aof.as_ref().and_then(kevy_persist::Aof::tee_copy_handle) {
+            Some(Ok(f)) => f,
+            _ => {
+                eprintln!("kevy: shard {} tee handle clone failed — rewrite aborted", self.id);
+                self.abort_rewrite_cleanup(&h.tmp);
+                return;
+            }
+        };
+        let job = PersistJob::TeeCopy {
+            src,
+            from: consumed,
+            to: handed,
+            tmp: h.tmp.clone(),
+        };
+        if self.persist.submit(self.id, job) {
+            self.rewrite_handoff = Some(RewriteHandoff {
+                iters: h.iters + 1,
+                prev_len: (handed - consumed) as usize,
+                ..h
+            });
+        } else {
+            eprintln!(
+                "kevy: shard {} persist worker unavailable for tee fold — rewrite aborted",
+                self.id
+            );
+            self.abort_rewrite_cleanup(&h.tmp);
+        }
+    }
+
+    /// The bounded synchronous final swap, file-tee mode: staging
+    /// remainder + ≤SMALL_TEE tail fold, rename, ship the `.tee` for
+    /// an off-thread unlink.
+    fn finish_filetee_swap(&mut self, h: &RewriteHandoff) {
+        let Some(aof) = &mut self.aof else { return };
+        match aof.finish_concurrent_rewrite_from_tee(&h.tmp, h.keys) {
+            Ok((_stats, tee_path)) => self.ship_cleanup(vec![tee_path], Vec::new()),
+            Err(e) => {
+                eprintln!("kevy: shard {} aof rewrite swap failed: {e}", self.id);
+                self.abort_rewrite_cleanup(&h.tmp);
+            }
+        }
     }
 
     /// A tee generation landed (or failed) on the worker: recycle its
@@ -168,24 +251,46 @@ impl<C: Commands> Shard<C> {
             // Image still dumping: the completion arm sees the abort
             // (is_rewriting false) and cleans the tmp up itself.
             None => {
-                self.ship_tee_teardown();
+                let mut paths = Vec::new();
+                let mut bufs = Vec::new();
                 if let Some(aof) = &mut self.aof {
+                    bufs = aof.take_tee_teardown();
+                    if let Some(tee_path) = aof.take_tee_file_teardown() {
+                        paths.push(tee_path);
+                    }
                     aof.abort_concurrent_rewrite();
                 }
+                self.ship_cleanup(paths, bufs);
             }
         }
     }
 
-    /// Off-thread unlink completed — best-effort, log-only on failure
-    /// (an orphaned `.rewrite` tmp is reclaimed by the next rewrite's
-    /// truncating open of the same deterministic path).
-    fn note_remove_done(&self, result: std::io::Result<()>, path: &std::path::Path) {
-        if let Err(e) = result {
+    /// Best-effort teardown unlinks that failed — named for the log.
+    fn note_cleanup_failures(&self, failed: Vec<(std::path::PathBuf, std::io::Error)>) {
+        for (path, e) in failed {
             eprintln!(
-                "kevy: shard {} abandoned rewrite image {} not deleted: {e}",
+                "kevy: shard {} teardown file {} not deleted: {e}",
                 self.id,
                 path.display()
             );
+        }
+    }
+
+    /// A tee-file fold landed (or failed): advance the consumed
+    /// watermark and take the next step, or tear the rewrite down.
+    fn on_tee_copied(&mut self, result: std::io::Result<()>, tmp: std::path::PathBuf, to: u64) {
+        match result {
+            Ok(()) => {
+                if let Some(aof) = &mut self.aof {
+                    aof.tee_advance_consumed(to);
+                }
+                self.advance_rewrite_handoff();
+            }
+            Err(e) => {
+                eprintln!("kevy: shard {} aof tee fold failed: {e}", self.id);
+                self.rewrite_handoff = None;
+                self.abort_rewrite_cleanup(&tmp);
+            }
         }
     }
 
@@ -223,45 +328,45 @@ impl<C: Commands> Shard<C> {
             return;
         }
         // The recycled spare can still hold a GB-scale warm buffer —
-        // its free belongs on the worker with the rest of them.
-        self.ship_tee_teardown();
+        // its free belongs on the worker.
+        let bufs = self.aof.as_mut().map(kevy_persist::Aof::take_tee_teardown).unwrap_or_default();
+        self.ship_cleanup(Vec::new(), bufs);
     }
 
-    /// Ship every retained tee buffer to the worker for an off-thread
-    /// drop. Worker gone/busy = drop inline (shutdown or error path —
-    /// nothing latency-critical left to protect).
-    fn ship_tee_teardown(&mut self) {
-        let Some(aof) = &mut self.aof else { return };
-        let bufs = aof.take_tee_teardown();
-        if bufs.is_empty() {
-            return;
-        }
-        if !self.persist.submit(self.id, PersistJob::DropBufs { bufs }) {
-            // submit dropped the job (and the buffers) on the floor
-            // already — nothing further to do.
-        }
-    }
 
-    /// Common abort tail: drop the tee, delete the half-built image.
-    /// The live AOF carried every write through the normal append path,
-    /// so an abort never risks data. The unlink goes to the worker —
-    /// deleting a multi-GB image contends on the fs journal (seconds
-    /// under a saturated disk) and must not run on the reactor; the
-    /// worker runs jobs serially, so a later Rewrite can never race the
-    /// pending Remove on the same deterministic tmp path. Worker gone =
-    /// inline best-effort (shutdown path; nothing left to stall).
+    /// Common abort tail: drop every retained tee resource and the
+    /// half-built image via ONE worker Cleanup job (the worker is
+    /// serial; split submits silently dropped the second — measured as
+    /// inline GB unlinks sneaking back onto the reactor). The live AOF
+    /// carried every write through the normal append path, so an abort
+    /// never risks data. Worker gone = inline best-effort (shutdown or
+    /// error path; nothing latency-critical left to protect).
     fn abort_rewrite_cleanup(&mut self, tmp: &std::path::Path) {
-        self.ship_tee_teardown();
+        let mut paths = vec![tmp.to_path_buf()];
+        let mut bufs = Vec::new();
         if let Some(aof) = &mut self.aof {
+            bufs = aof.take_tee_teardown();
+            if let Some(tee_path) = aof.take_tee_file_teardown() {
+                paths.push(tee_path);
+            }
             aof.abort_concurrent_rewrite();
         }
-        if !self.persist.submit(
-            self.id,
-            PersistJob::Remove {
-                path: tmp.to_path_buf(),
-            },
-        ) {
-            let _ = std::fs::remove_file(tmp);
+        self.ship_cleanup(paths, bufs);
+    }
+
+    /// One Cleanup submit; inline fallback when the worker is gone.
+    fn ship_cleanup(&mut self, paths: Vec<std::path::PathBuf>, bufs: Vec<Vec<u8>>) {
+        if paths.is_empty() && bufs.is_empty() {
+            return;
+        }
+        let job = PersistJob::Cleanup {
+            paths: paths.clone(),
+            bufs,
+        };
+        if !self.persist.submit(self.id, job) {
+            for p in paths {
+                let _ = std::fs::remove_file(&p);
+            }
         }
     }
 }
