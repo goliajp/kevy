@@ -369,6 +369,71 @@ regression test pins both sides; the cross-shard `EXEC` crash
 semantics (per-shard, not global) are now documented in
 `docs/persistence.md`. The embedded `atomic()` family is unchanged.
 
+### The tail-latency arc: both bars, both cells, factory defaults
+
+The V3 charter's tail gate — PING p99.9 ≤ 100 ms AND a ≤ 100 ms
+reactor tick gap, on an everyday mixed storm and on a 64 KiB-value
+firehose — opened this cycle at a 6-second client-visible stall
+(mixed) and a 9.5-second reactor gap (firehose). It closes green on
+both cells, median-of-3, with no tuning flags. What it took, in the
+order the measurements forced it:
+
+- **AOF appends and fsyncs ride the shard's own io_uring** (positioned
+  write SQEs, DATASYNC once per second window, short-write resubmit,
+  explicit non-overlapping offsets). The reactor never traps into a
+  synchronous `write(2)` on the hot path — which dirty-page throttling
+  had been parking for seconds under GB/s ingest.
+- **Rewrites hand off in two phases**: the worker appends and fsyncs
+  each large tee generation off-thread while writes keep teeing into a
+  fresh one; the reactor's synchronous share shrank from "the whole
+  rewrite window" to a bounded final step — and then to nothing (see
+  the swap below). Firehose reactor gap: 9.5 s → 314 ms in one step.
+- **A rewrite that cannot converge defers instead of stalling.** Tee
+  generations must halve; a generation past 256 MB — checked while it
+  GROWS, even when the ring is saturated — re-anchors the auto-rewrite
+  growth rule and walks away. Under sustained overload the log grows
+  and the server answers; an abort never risks data (the live log
+  carried every write through the normal append path).
+- **Attempts themselves are gated.** Measured from both directions
+  (an in-memory tee drives the box into direct reclaim; a file-backed
+  tee triples traffic on the saturated device — that experiment was
+  built, measured, rejected, and documented), a rewrite attempt under
+  saturating ingest is the disturbance. The auto-rewrite trigger now
+  samples the append rate and requires ~2 s of sustained calm, with
+  per-shard stagger so lockstep shards don't form a herd.
+- **Every remaining file operation left the reactor**: tee-generation
+  landings, the final swap's append+fsync, the swap's hardlink+rename
+  (journal work that measured 400 ms × 4 shards colliding in one jbd2
+  commit window), multi-GB unlinks, and multi-GB buffer frees all run
+  on the persist worker. The reactor's whole synchronous share of a
+  rewrite is now: reopen an existing file.
+
+Twenty-plus finding documents in `bench/` carry the full elimination
+ladders, including the refuted hypotheses.
+
+### AOF offload is the io_uring default
+
+The measured configuration is the shipped one: with an AOF and a
+non-`always` fsync policy, the io_uring reactor enters queued-append
+mode by default. `KEVY_AOF_OFFLOAD=0` opts back into the classic
+synchronous path; `appendfsync always` keeps it by definition (the
+reply gates on the write); the epoll reactor (older-kernel fallback)
+keeps its classic path — with the same defer/gate policy protections,
+and with the off-thread swap correctly excluded (an append stream that
+cannot be held must not have its file renamed underneath it — caught
+in review, fixed, and verified on the epoll face before this note was
+written).
+
+### A flaky test now names its own crash
+
+The replication suite's storm test flaked three times in CI with
+nothing to autopsy: the harness swallowed the replica runtime's `Err`
+return outright, and the coverage gate kept only the last 40 log
+lines — the actual panic always scrolled off. The runtime thread now
+records WHY it exited (Err payload or caught panic, verbatim) and the
+fence-timeout diagnostics print it; the log window is 200 lines. The
+next occurrence diagnoses itself instead of costing a rerun round.
+
 ### Added
 
 - **`INFO` grew a `# Modules` section** (also addressable as
