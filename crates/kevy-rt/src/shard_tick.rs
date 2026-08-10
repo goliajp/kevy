@@ -156,7 +156,18 @@ impl<C: Commands> Shard<C> {
         }
         let rate = size.saturating_sub(s0) as f64 / dt; // bytes/sec
         // Cap / 2s: past this, the tee provably outruns the fold.
-        rate > (crate::persist_rewrite::TEE_DEFER_CAP as f64) / 2.0
+        if rate > (crate::persist_rewrite::TEE_DEFER_CAP as f64) / 2.0 {
+            self.rewrite_calm_ticks = 0;
+            return true;
+        }
+        // Hysteresis: a workload whose rate STRADDLES the threshold
+        // (measured: the mixed cell) would otherwise slip a giant
+        // postponed attempt through a momentary lull — consistently a
+        // 1.1s stall vs 47ms with the attempt suppressed. Require ~2s
+        // of sustained calm before beginning.
+        const CALM_TICKS: u32 = 20;
+        self.rewrite_calm_ticks = self.rewrite_calm_ticks.saturating_add(1);
+        self.rewrite_calm_ticks < CALM_TICKS
     }
 
     /// Tick half of background persistence: apply any finished BGSAVE /
