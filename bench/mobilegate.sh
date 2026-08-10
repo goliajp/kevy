@@ -37,7 +37,16 @@ if ! command -v npx >/dev/null 2>&1; then
 fi
 command -v flutter >/dev/null 2>&1 || export PATH="/opt/homebrew/bin:$PATH"
 
+# The target simulator, honouring KEVY_IOS_SIM (a UDID) when it is set.
+# Without it this takes whatever simctl lists first among the booted —
+# which on a machine running OTHER projects' simulators installs a gate
+# build onto somebody else's session. Same reasoning as ANDROID_SERIAL
+# below.
 ios_sim_id() {
+    if [ -n "${KEVY_IOS_SIM:-}" ]; then
+        printf '%s' "$KEVY_IOS_SIM"
+        return
+    fi
     xcrun simctl list devices booted -j | grep -o '"udid" : "[^"]*"' | head -1 | sed 's/.*: "//;s/"//'
 }
 # The target device, honouring ANDROID_SERIAL (adb's own variable) when
@@ -191,7 +200,11 @@ run() {
 
 case "$platform" in
     ios)
-        run "$ios_cmd" "xcrun simctl spawn booted log stream --level debug --predicate 'eventMessage CONTAINS \"MOBILEGATE\" OR eventMessage CONTAINS \"Terminating app\"'"
+        # Stream the TARGET sim's log, not `booted` — with several booted
+        # simulators (other projects' sessions on a shared host) `booted` is
+        # ambiguous, simctl picks one, and a verdict printed on the right sim
+        # never reaches the watched stream: a PASS reads as a 16-min TIMEOUT.
+        run "$ios_cmd" "xcrun simctl spawn $(ios_sim_id) log stream --level debug --predicate 'eventMessage CONTAINS \"MOBILEGATE\" OR eventMessage CONTAINS \"Terminating app\"'"
         ;;
     android)
         adb logcat -c 2>/dev/null || true

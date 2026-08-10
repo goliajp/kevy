@@ -126,9 +126,10 @@ Android: the engine ships as a prebuilt per-ABI `libkevy_ffi.so` under
 `android/src/main/jniLibs/` (rebuild with
 `packaging/android/build-ffi-jnilibs.sh`).
 
-iOS: the engine ships as `ios/KevyEngine.xcframework` (built by
-`packaging/apple/build-xcframework.sh`; gitignored for size — regenerate
-locally). `KevyNitro.podspec` compiles the C++ HybridObject and links it.
+iOS: the engine ships as `ios/KevyEngine.xcframework` (regenerate
+locally with `bash scripts/prepare-native.sh` — it renames the KevyKit
+xcframework and strips its `module Kevy` modulemap, which would otherwise
+collide with the Expo door's in the dual-door example; gitignored for size). `KevyNitro.podspec` compiles the C++ HybridObject and links it.
 The sim slice is `ios-arm64-simulator`; a Release sim build needs
 `ARCHS=arm64 EXCLUDED_ARCHS=x86_64` (Apple-Silicon host) or an added
 x86_64-sim slice.
