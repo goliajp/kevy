@@ -83,11 +83,11 @@ jobs:
           chain=$(printf '%s\n' \
             kevy-alloc kevy-compress kevy-config kevy-geo kevy-hash kevy-bytes \
             kevy-lua kevy-lua-host kevy-madvise kevy-map kevy-ranktree kevy-resp \
-            kevy-elect kevy-replicate kevy-resp-client kevy-client-async kevy-cluster-rw kevy-mcp \
-            kevy-ring kevy-scope kevy-sys kevy-seg kevy-text kevy-time \
-            kevy-index kevy-scalar kevy-sql kevy-tmpdir kevy-uring kevy-vector \
-            kevy-vlog kevy-store kevy-persist kevy-rt kevy-window kevy \
-            kevy-embedded kevy-cli kevy-client kevy-wasm | sort -u)
+            kevy-elect kevy-replicate kevy-resp-client kevy-client-async kevy-mcp kevy-ring \
+            kevy-scope kevy-sys kevy-text kevy-time kevy-index kevy-scalar \
+            kevy-sql kevy-tmpdir kevy-seg kevy-uring kevy-vector kevy-vlog \
+            kevy-store kevy-persist kevy-rt kevy-cluster-rw kevy-window kevy-embedded \
+            kevy kevy-cli kevy-client kevy-wasm | sort -u)
           expected=$(cargo metadata --no-deps --format-version 1 \
             | jq -r '.packages | map(select(.publish == null)) | .[].name' \
             | sort -u)
@@ -163,11 +163,11 @@ jobs:
           for c in \
             kevy-alloc kevy-compress kevy-config kevy-geo kevy-hash kevy-bytes \
             kevy-lua kevy-lua-host kevy-madvise kevy-map kevy-ranktree kevy-resp \
-            kevy-elect kevy-replicate kevy-resp-client kevy-client-async kevy-cluster-rw kevy-mcp \
-            kevy-ring kevy-scope kevy-sys kevy-seg kevy-text kevy-time \
-            kevy-index kevy-scalar kevy-sql kevy-tmpdir kevy-uring kevy-vector \
-            kevy-vlog kevy-store kevy-persist kevy-rt kevy-window kevy \
-            kevy-embedded kevy-cli kevy-client kevy-wasm; do
+            kevy-elect kevy-replicate kevy-resp-client kevy-client-async kevy-mcp kevy-ring \
+            kevy-scope kevy-sys kevy-text kevy-time kevy-index kevy-scalar \
+            kevy-sql kevy-tmpdir kevy-seg kevy-uring kevy-vector kevy-vlog \
+            kevy-store kevy-persist kevy-rt kevy-cluster-rw kevy-window kevy-embedded \
+            kevy kevy-cli kevy-client kevy-wasm; do
             publish_or_skip "$c"
           done
           echo "all publishable crates handled"
