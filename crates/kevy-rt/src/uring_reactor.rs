@@ -375,7 +375,7 @@ impl<C: Commands> Shard<C> {
                         // single-iteration stall upper bound.
                         self.commands.on_tick_gap((gap - iv).as_micros() as u64);
                         let mut worst = std::time::Duration::ZERO;
-                        let mut mark = |label: &'static str, t0: std::time::Instant, worst: &mut std::time::Duration, slow: &mut &'static str| {
+                        let mark = |label: &'static str, t0: std::time::Instant, worst: &mut std::time::Duration, slow: &mut &'static str| {
                             let d = t0.elapsed();
                             if d > *worst { *worst = d; *slow = label; }
                         };
