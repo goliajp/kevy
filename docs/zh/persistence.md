@@ -158,9 +158,9 @@ fn main() -> kevy_embedded::KevyResult<()> {
 
 **后台任务并发。**每个 shard 同一时刻最多跑一个后台保存或重写。任务进行中再来的重复请求会记一条日志然后跳过，绝不排队。
 
-**AOF 写与 reactor 线程(5.0,io_uring 默认)。**io_uring 可用且策略非 `always` 时,追加与 everysec fsync 作为排队操作走 shard 自己的 ring——reactor 热路径上不再阻塞于 `write(2)`(GB/s 摄入下它曾被脏页限流停上数秒;5.0 尾延迟工作的核心,端到端实测见 `bench/` 的 finding 文档)。耐久性不变:`everysec` 崩溃窗口仍 ≤ 1 秒,crash 门双模式验证。`KEVY_AOF_OFFLOAD=0` 恢复经典同步路径;`always` 按语义保持同步;epoll reactor(旧内核)同样保持。
+**AOF 写与 reactor 线程(5.0,io_uring 默认)。**io_uring 可用且策略非 `always` 时，追加与 everysec fsync 作为排队操作走 shard 自己的 ring——reactor 热路径上不再阻塞于 `write(2)`(GB/s 摄入下它曾被脏页限流停上数秒;5.0 尾延迟工作的核心，端到端实测见 `bench/` 的 finding 文档)。耐久性不变：`everysec` 崩溃窗口仍 ≤ 1 秒，crash 门双模式验证。`KEVY_AOF_OFFLOAD=0` 恢复经典同步路径；`always` 按语义保持同步；epoll reactor(旧内核)同样保持。
 
-**饱和摄入下 rewrite 顺延(5.0)。**rewrite 必须折入运行期间落下的写;当追加速率被证明跑赢折入速度时,5.0 顺延 rewrite 而不是付无界停顿:增长规则在当前大小重新锚定,下一个增长因子后重试。显式 `BGREWRITEAOF` 永不受限。可观察的交换项:持续写饱和下 AOF 会越过常规重写点继续增长,压力缓解后收回——磁盘可退,停顿不可退。rewrite 前后可能短暂看到 `<aof>.rewrite`(构建中镜像)与 `<aof>.trashN`(把旧日志 GB 级释放挪出服务线程的硬链接);两者自动清理,崩溃孤儿由下次 rewrite 回收。备份请排除 `*.rewrite` / `*.trash*`。
+**饱和摄入下 rewrite 顺延(5.0)。**rewrite 必须折入运行期间落下的写；当追加速率被证明跑赢折入速度时,5.0 顺延 rewrite 而不是付无界停顿：增长规则在当前大小重新锚定，下一个增长因子后重试。显式 `BGREWRITEAOF` 永不受限。可观察的交换项：持续写饱和下 AOF 会越过常规重写点继续增长，压力缓解后收回——磁盘可退，停顿不可退。rewrite 前后可能短暂看到 `<aof>.rewrite`(构建中镜像)与 `<aof>.trashN`(把旧日志 GB 级释放挪出服务线程的硬链接)；两者自动清理，崩溃孤儿由下次 rewrite 回收。备份请排除 `*.rewrite` / `*.trash*`。
 
 **TTL 持久化。**TTL 以绝对的 Unix 毫秒截止时间落盘（AOF 里写 `PEXPIREAT`，快照格式里是一个绝对时间字段），所以无论重启多少次，键都保持原来的过期时刻，进程停机的时长也能正确扣除。记录相对剩余时间的旧版 AOF 仍可加载（载入时按相对时间处理）；新写入一律是绝对时间。`EXPIREAT` 和 `PEXPIREAT` 都作为客户端命令开放。
 
