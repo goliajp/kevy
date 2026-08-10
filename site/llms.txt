@@ -37,7 +37,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - [WASM / browser](https://kevy.golia.jp/docs/wasm/) · [Electron apps](https://kevy.golia.jp/docs/electron/) · [Tauri apps](https://kevy.golia.jp/docs/tauri/) · [IoT / embedded tiers](https://kevy.golia.jp/docs/iot/)
 - [Error contract](https://kevy.golia.jp/docs/error-replies/) · [Tuning](https://kevy.golia.jp/docs/tuning/)
 
-## Verbs (190 total)
+## Verbs (191 total)
 
 ### scan
 
@@ -578,6 +578,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 
 ### index
 
+- `IDX.ADVISE` [readonly,extension] — The declarations refused queries have been asking for, most-refused first — each rendered as the command that would serve it.
+  - complexity: O(observed families); the refusal log is bounded (128 families, least-refused evicted) and cleared on every catalog install
+  - compat: kevy-only: no Redis analogue — the refusal log turns 'no such index' into the declaration that would have served the query
 - `IDX.COUNT name RANGE min max | EQ value` [readonly,extension] — Count index entries matching a range or equality predicate.
   - complexity: O(log N + matched) per shard — NOT an O(1) counter and not a B-tree rank query; it counts the matched range
   - compat: kevy-only: nearest is FT.SEARCH with LIMIT 0 0
@@ -599,19 +602,19 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `IDX.REBUILD name` [write,extension] — Rebuild an ANN index (tombstone compaction).
   - complexity: Vector indexes only (tombstone compaction). O(V_live * ef_construction * M * dim) distance evaluations, on every shard, synchronously — the most expensive verb in the extension surface
   - compat: kevy-only: no Redis analogue — RediSearch handles HNSW deletes internally and exposes no rebuild verb
-- `IDX.VERIFY name` [readonly,extension] — Verify an index: re-read every held entry against its row and report entries/bytes/coerce_failures/duplicates/drift/checked.
+- `IDX.VERIFY name` [readonly,extension] — Verify an index. Scalar kinds re-read every held entry against its row and report entries/bytes/coerce_failures/duplicates/drift/checked/missing (both audit directions); agg/text/ann answer their own sizing vocabulary (rows|docs|vectors, bytes, ...) and carry no row-keyed audit.
   - complexity: O(N) per shard — every held entry is re-read against its row and re-coerced, which is the point: it makes index drift falsifiable rather than merely asserted
   - compat: kevy-only: no Redis analogue — RediSearch's index is asynchronously maintained and offers no consistency-verify verb
 
 ### table
 
-- `TABLE.DECLARE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX col range|unique [VALUES col ...]] [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...]` [write,extension] — Declare a relational table that compiles at declare time into named indexes (catalog mutation, sidecar-persisted).
+- `TABLE.DECLARE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX col range|unique [VALUES col ...]] [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] [WINDOW col SPAN n BUCKET n] [AUTODECLARE n]` [write,extension] — Declare a relational table that compiles at declare time into named indexes (catalog mutation, sidecar-persisted).
   - complexity: O(declaration size) at the call; each compiled index then backfills like IDX.CREATE (2048 rows per tick per shard). The engine gains no query planner: queries name the compiled paths (`<table>.<col>`, `<table>.<orderpath>`) explicitly
   - compat: kevy-only: nearest is CREATE TABLE in an RDBMS — but this is a declaration compiler, not a schema enforcer: a row with a missing column is a row with an absent field (NULL semantics), never an error, and no SQL executes at query time
-- `TABLE.ENSURE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX ...] [ORDERPATH ...]` [write,extension] — TABLE.DECLARE's boot form: identical existing declaration answers +UNCHANGED, a different one is a named refusal saying which part differs — never a silent rebuild.
+- `TABLE.ENSURE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX ...] [ORDERPATH ...] [WINDOW ...] [AUTODECLARE n]` [write,extension] — TABLE.DECLARE's boot form: identical existing declaration answers +UNCHANGED, a different one is a named refusal saying which part differs — never a silent rebuild.
   - complexity: declare-at-boot is the steady state; plain DECLARE errors on re-declare, which quiet boot code then ignores forever (dogfood F8.2)
   - compat: kevy-only: nearest is CREATE TABLE IF NOT EXISTS — plus the spec comparison IF NOT EXISTS does not do
-- `TABLE.REPLACE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX ...] [ORDERPATH ...]` [write,extension] — Drop and redeclare in one verb, rebuilding every compiled index from the rows. Named for its cost: a full backfill, asked for explicitly. A bad spec refuses BEFORE the old table drops.
+- `TABLE.REPLACE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX ...] [ORDERPATH ...] [WINDOW ...] [AUTODECLARE n]` [write,extension] — Drop and redeclare in one verb, rebuilding every compiled index from the rows. Named for its cost: a full backfill, asked for explicitly. A bad spec refuses BEFORE the old table drops.
   - complexity: the migration verb: spec changed, rebuild wanted
   - compat: kevy-only: nearest is DROP TABLE + CREATE TABLE, atomic against a bad new spec
 - `TABLE.DROP name` [write,extension] — Drop a declared table and its compiled indexes (catalog mutation, sidecar-persisted).
