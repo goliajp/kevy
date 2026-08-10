@@ -37,7 +37,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - [WASM / browser](https://kevy.golia.jp/docs/wasm/) · [Electron apps](https://kevy.golia.jp/docs/electron/) · [Tauri apps](https://kevy.golia.jp/docs/tauri/) · [IoT / embedded tiers](https://kevy.golia.jp/docs/iot/)
 - [Error contract](https://kevy.golia.jp/docs/error-replies/) · [Tuning](https://kevy.golia.jp/docs/tuning/)
 
-## Verbs (190 total)
+## Verbs (191 total)
 
 ### scan
 
@@ -578,6 +578,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 
 ### index
 
+- `IDX.ADVISE` [readonly,extension] — The declarations refused queries have been asking for, most-refused first — each rendered as the command that would serve it.
+  - complexity: O(observed families); the refusal log is bounded (128 families, least-refused evicted) and cleared on every catalog install
+  - compat: kevy-only: no Redis analogue — the refusal log turns 'no such index' into the declaration that would have served the query
 - `IDX.COUNT name RANGE min max | EQ value` [readonly,extension] — Count index entries matching a range or equality predicate.
   - complexity: O(log N + matched) per shard — NOT an O(1) counter and not a B-tree rank query; it counts the matched range
   - compat: kevy-only: nearest is FT.SEARCH with LIMIT 0 0
@@ -599,19 +602,19 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `IDX.REBUILD name` [write,extension] — Rebuild an ANN index (tombstone compaction).
   - complexity: Vector indexes only (tombstone compaction). O(V_live * ef_construction * M * dim) distance evaluations, on every shard, synchronously — the most expensive verb in the extension surface
   - compat: kevy-only: no Redis analogue — RediSearch handles HNSW deletes internally and exposes no rebuild verb
-- `IDX.VERIFY name` [readonly,extension] — Verify an index: re-read every held entry against its row and report entries/bytes/coerce_failures/duplicates/drift/checked.
+- `IDX.VERIFY name` [readonly,extension] — Verify an index. Scalar kinds re-read every held entry against its row and report entries/bytes/coerce_failures/duplicates/drift/checked/missing (both audit directions); agg/text/ann answer their own sizing vocabulary (rows|docs|vectors, bytes, ...) and carry no row-keyed audit.
   - complexity: O(N) per shard — every held entry is re-read against its row and re-coerced, which is the point: it makes index drift falsifiable rather than merely asserted
   - compat: kevy-only: no Redis analogue — RediSearch's index is asynchronously maintained and offers no consistency-verify verb
 
 ### table
 
-- `TABLE.DECLARE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX col range|unique [VALUES col ...]] [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...]` [write,extension] — Declare a relational table that compiles at declare time into named indexes (catalog mutation, sidecar-persisted).
+- `TABLE.DECLARE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX col range|unique [VALUES col ...]] [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] [WINDOW col SPAN n BUCKET n] [AUTODECLARE n]` [write,extension] — Declare a relational table that compiles at declare time into named indexes (catalog mutation, sidecar-persisted).
   - complexity: O(declaration size) at the call; each compiled index then backfills like IDX.CREATE (2048 rows per tick per shard). The engine gains no query planner: queries name the compiled paths (`<table>.<col>`, `<table>.<orderpath>`) explicitly
   - compat: kevy-only: nearest is CREATE TABLE in an RDBMS — but this is a declaration compiler, not a schema enforcer: a row with a missing column is a row with an absent field (NULL semantics), never an error, and no SQL executes at query time
-- `TABLE.ENSURE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX ...] [ORDERPATH ...]` [write,extension] — TABLE.DECLARE's boot form: identical existing declaration answers +UNCHANGED, a different one is a named refusal saying which part differs — never a silent rebuild.
+- `TABLE.ENSURE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX ...] [ORDERPATH ...] [WINDOW ...] [AUTODECLARE n]` [write,extension] — TABLE.DECLARE's boot form: identical existing declaration answers +UNCHANGED, a different one is a named refusal saying which part differs — never a silent rebuild.
   - complexity: declare-at-boot is the steady state; plain DECLARE errors on re-declare, which quiet boot code then ignores forever (dogfood F8.2)
   - compat: kevy-only: nearest is CREATE TABLE IF NOT EXISTS — plus the spec comparison IF NOT EXISTS does not do
-- `TABLE.REPLACE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX ...] [ORDERPATH ...]` [write,extension] — Drop and redeclare in one verb, rebuilding every compiled index from the rows. Named for its cost: a full backfill, asked for explicitly. A bad spec refuses BEFORE the old table drops.
+- `TABLE.REPLACE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX ...] [ORDERPATH ...] [WINDOW ...] [AUTODECLARE n]` [write,extension] — Drop and redeclare in one verb, rebuilding every compiled index from the rows. Named for its cost: a full backfill, asked for explicitly. A bad spec refuses BEFORE the old table drops.
   - complexity: the migration verb: spec changed, rebuild wanted
   - compat: kevy-only: nearest is DROP TABLE + CREATE TABLE, atomic against a bad new spec
 - `TABLE.DROP name` [write,extension] — Drop a declared table and its compiled indexes (catalog mutation, sidecar-persisted).
@@ -1761,6 +1764,40 @@ Semantics and limits, honestly:
   `est_rows`, and the plan line for the query you already wrote —
   there is no optimizer choosing among plans.
 
+## Scalar functions
+
+SQL expressions in migrated queries lean on a scalar-function
+vocabulary, and kevy covers it **in the SQL face, not the engine**:
+`kevy-cli sql eval` (and the `sql` toolbox's constant folding) evaluate
+expressions client-side with PostgreSQL-canonical semantics, and the
+serving engine never sees an expression — the same division of labor as
+everywhere else on this page.
+
+Covered today (names matched case-insensitively, PG's fold):
+
+| Family | Functions |
+|---|---|
+| strings | `lower upper initcap length char_length concat concat_ws trim btrim ltrim rtrim replace split_part repeat lpad rpad strpos position left right reverse translate substr substring format` |
+| math | `floor ceil ceiling round trunc mod power pow sqrt sign abs` |
+| operators | `AND OR NOT` (three-valued), comparisons `= <> != < <= > >=`, `\|\|` concatenation, searched `CASE WHEN … THEN … [ELSE …] END`, `::bool` with PG's input vocabulary |
+| NULL family | `coalesce nullif greatest least` |
+| date/time | `extract date_part date_trunc age to_char` (`interval` carries PG's real three-component form: months, days, micros) |
+| regexp (POSIX ERE) | `regexp_replace regexp_matches regexp_split_to_array` |
+| hash | `md5` |
+| MySQL aliases | `date_format unix_timestamp from_unixtime` (probe-transcribed against MySQL's semantics — the WordPress/Laravel display triplet) |
+
+The claims discipline behind that table:
+
+- Semantics are **probe-transcribed from PostgreSQL's own regression
+  corpus** and gated in CI (`funcgate`): a covered function answering
+  differently from PG is a hard failure — the gate's wrong-answer count
+  must be zero. The corpus-coverage ratio is a ratchet (currently
+  ≥ 82 % of subset-foldable probes) that only moves up.
+- Anything outside the table is **refused by name**, never guessed.
+  The same goes for shapes inside a covered function that would change
+  cardinality — `regexp_matches` returning zero or several rows is
+  refused rather than flattened into a wrong scalar.
+
 ## ORDER BY / LIMIT / OFFSET
 
 - A `range` index **is** the order: `IDX.QUERY … RANGE` returns rows
@@ -1773,12 +1810,22 @@ Semantics and limits, honestly:
   indexed field at write time — `a * 1_000_000 + b` for bounded
   integers, zero-padded strings for lexicographic composites
   (cookbook recipe 8).
-- **`OFFSET` does not exist.** There is deliberately no "skip N rows"
-  — it is O(N) waste in any engine and an anti-pattern at depth.
+- **`OFFSET` exists on the claused surface, and you should still
+  paginate with the cursor.** This page used to say it did not exist;
+  that was wrong — `IDX.QUERY … OFFSET n` parses and runs (see
+  `docs/tables.md`). What is true is the cost: it is a "skip N rows",
+  linear in `n`, and — unlike every other axis here — **it gets worse
+  as you add shards**, because each shard must fetch `limit + offset`
+  (none of them can know which of its hits survive the global merge)
+  and the origin materialises `(limit + offset) × shards` hits to
+  return `limit`. Measured on 30 000 in-range rows returning
+  `LIMIT 20`: `OFFSET 1000` costs 1.53 ms on one shard and 6.90 ms on
+  eight; `OFFSET 10000` costs 11.5 ms and 20.1 ms.
   Paginate with the returned cursor (constant cost per page,
   position-stable under the SCAN-class contract). If your product
-  needs "jump to page 47", precompute page anchors or rethink the UX;
-  kevy will not hide the cost.
+  needs "jump to page 47", precompute page anchors or rethink the UX.
+  kevy does not hide this cost — but until now it did not state it
+  either, which is worse than hiding it.
 
 ## GROUP BY and aggregates
 
@@ -2006,19 +2053,51 @@ not a roadmap gap:
 | Refused | Because | Use instead |
 |---|---|---|
 | SQL parser / query DSL | the planner slope starts here | explicit `IDX.*`/`VIEW.*` + this matrix |
-| query planner / auto index selection | engine must execute declared paths, not decide | `IDX.EXPLAIN` (diagnostic only) |
+| query planner / per-query index selection | engine must execute declared paths, not decide | `IDX.EXPLAIN` (diagnostic only) |
 | JOINs | no server-side plan search | denormalize / hydrate (`FIELDS`, `VIA`) / view |
 | `WHERE` without an index | accidental O(n) is a lie waiting to page you | declare the path or don't ship the query |
 | server-side constraint DSL / triggers | stored app logic isn't engine-genre | Lua `EVAL` (atomic unit) + CDC consumers |
 | DECIMAL type | no server-side arithmetic beyond i64/f64 | integer minor units |
 | JSON-path queries | hash fields ARE the column model | flatten to fields (cookbook recipe 9) |
 | `HAVING` / aggregate expressions | query-language slope | filter `GROUPS` output app-side |
-| `OFFSET` pagination | O(N) skip is an anti-pattern | cursors |
 | multi-database `SELECT n` | one keyspace per server | prefixes or separate instances |
 | AUTH / TLS | trust boundary is the network perimeter | loopback bind (default), sidecar proxy |
 | cross-DC active-active, CRDTs | single-DC charter | app-level federation |
 | dynamic membership / auto-replace / resharding | topology is operator-declared | config + rolling restart |
 | HTTP/REST API | RESP + MCP are the two access planes | any Redis client |
+
+**Where that second row stops.** "Not decide" is about *query time*:
+no plan is chosen for you, because your query names its own path.
+It is not a refusal to ever add one. `TABLE.DECLARE … AUTODECLARE n`
+lets the engine turn a shape you keep being refused into a declared
+path — off unless you ask, capped at the `n` you write, only over
+columns you declared, addition-only, and marked `auto` in `IDX.LIST`
+([tables.md](https://kevy.golia.jp/docs/tables/#autodeclare-the-paths-you-did-not-write)). An
+optimiser you cannot predict and a schema change you asked for are
+different things, and only the first one is refused here.
+
+**One entry that used to sit in that table and does not belong there:
+`OFFSET`.** It was listed as refused; the engine has always provided it
+on the claused surface (`docs/tables.md`), so the table was describing
+an intention rather than the behaviour. What is true, measured on
+30 000 rows in range returning `LIMIT 20` (p50 of 30 calls):
+
+| OFFSET | 1 shard | 8 shards |
+|---|---:|---:|
+| 0 | 219 µs | 526 µs |
+| 1 000 | 1.53 ms | 6.90 ms |
+| 10 000 | 11.5 ms | 20.1 ms |
+
+It is linear in the offset, and **it gets worse as you add shards** —
+each shard must fetch `limit + offset` because none of them can know
+which of its hits survive the global merge, so the origin materialises
+`(limit + offset) × shards` hits to return `limit`. Every other axis in
+this engine gets faster with more cores; this one does not.
+
+**Use cursors.** `OFFSET` is there, it is not refused, and a deep one is
+the O(N) skip the rest of this table exists to keep out of your latency.
+Full measurement and the open policy question:
+`bench/FINDING-2026-08-05-offset-boundary-drift.md`.
 
 ## Sizing and operational deltas
 
@@ -2226,6 +2305,19 @@ v1-format logs have no record envelope and cannot express a transaction
 boundary; they keep the old behaviour until their first rewrite
 promotes them to v2.
 
+**The markers belong to transactions and to nothing else.** A pipelined
+read batch is not a transaction — Redis pipelining is explicitly
+non-atomic — so reactor batches carry no markers (they only share one
+fsync under `always`; briefly in the 4.x line every single-command
+batch paid the ~65 B marker pair, which a disk gate caught). On the
+server, `MULTI`/`EXEC` brackets its queued commands on the connection's
+shard; commands that fan out to other shards land in those shards' own
+logs individually. Cross-shard `EXEC` atomicity under crash is
+therefore per-shard, not global — same spirit as Redis's own rule that
+a runtime error inside `EXEC` does not undo the other commands. The
+all-or-nothing guarantee above is the embedded `atomic()` family's,
+whose writes are single-shard by construction.
+
 
 | Knob | Server (TOML / `CONFIG SET`) | Embedded (`Config::…`) | Default | Notes |
 |---|---|---|---|---|
@@ -2279,9 +2371,17 @@ window is tolerable. Neither choice affects transactions.
 
 **Background-job concurrency.** Each shard runs at most one background save or rewrite at a time. A duplicate request that arrives mid-job is skipped with a log line, never queued.
 
+**AOF writes and the reactor thread (5.0, io_uring default).** With io_uring available and a non-`always` policy, appends and the everysec fsync ride the shard's own ring as queued operations — the reactor never blocks in `write(2)` on the hot path, which is what used to park it for seconds under GB/s ingest (the 5.0 tail-latency work; measured end-to-end in `bench/`'s finding documents). Durability is unchanged: the `everysec` crash window is still ≤ 1 s, verified by the crash gate in both modes. `KEVY_AOF_OFFLOAD=0` restores the classic synchronous path; `always` keeps it by definition; the epoll reactor (older kernels) keeps it too.
+
+**Rewrites defer under saturating ingest (5.0).** A rewrite must fold the writes that land while it runs; when the append rate provably outruns that fold, 5.0 defers the rewrite instead of paying an unbounded stall: the growth rule re-anchors at the current size and retries after the next growth factor. Explicit `BGREWRITEAOF` is never gated. The observable trade: under sustained write saturation the AOF grows past its usual rewrite point and shrinks once pressure eases — disk is refundable, a stall is not. Around a rewrite you may briefly see `<aof>.rewrite` (the image under construction) and `<aof>.trashN` (a hardlink that moves the old log's multi-gigabyte free off the serving thread); both clean themselves up, and orphans from a crash are reclaimed by the next rewrite. Exclude `*.rewrite` / `*.trash*` from backups.
+
 **TTL persistence.** TTLs are written as absolute Unix-millisecond deadlines (`PEXPIREAT` in the AOF, an absolute field in the snapshot format), so a key keeps its original expiry instant across any number of restarts and the time the process spent down is subtracted correctly. Older AOFs that recorded relative remaining time still load (treated as relative on entry); new writes are always absolute. `EXPIREAT` and `PEXPIREAT` are exposed as client commands.
 
+One consequence worth knowing, reported from a consumer's gate: because the persisted deadline is **wall-clock** time, a system clock step (NTP correction) between the write and a later replay moves the remaining TTL by exactly the step, in either direction — a backwards step reads back a *longer* remainder, a forwards step a *shorter* one. This is inherent to absolute wall deadlines (Redis has the same property, in-memory too); kevy's live TTLs run on the monotonic clock and are immune — only the restart boundary converts through wall time. For short rate-limiter TTLs, treat the remainder as accurate to within your host's clock discipline across a restart.
+
 **Shard-layout changes are crash-idempotent.** Changing `--threads` / `shards` writes new snapshots under `.reshard` temp names, commits via a durable `reshard.journal`, and rolls an interrupted migration forward on the next start. Source files survive as `.premigration.<unix_ts>` backups; the journal is the commit point and must never be deleted by hand.
+
+**Giant single collections vs the rewrite window.** A write to a collection value whose reference is pinned by an in-flight rewrite or snapshot view pays a copy-on-write clone of the WHOLE value on the serving thread. For ordinary values this is microseconds and invisible; a single list/set/hash that has grown to gigabytes pays seconds (soak-measured: 7-9 s at multi-GB single keys under sustained appends). If your workload keeps unbounded single-key queues at that scale, cap them (`LTRIM`-style) or expect rewrite-window latency spikes on that key's shard; an element-granular fix is on the roadmap.
 
 **What is not persisted.** Pub/sub channels, subscriptions, and undelivered messages live only in memory. Blocking-command waiters such as `BLPOP` and blocking `XREAD` are connection state, not data. Neither is written to the AOF or snapshot, and neither is replayed.
 
@@ -2491,6 +2591,40 @@ The per-record overhead is 8 bytes; for the mailrs-shaped workload
 (mixed small commands) the disk cost measures in the low single-digit
 percent, and the CRC rides the hardware instruction on both server
 architectures.
+
+### Internal frames — and what "the truth set" means
+
+Two kinds of record carry a NUL-prefixed name no client-typed RESP
+verb can collide with:
+
+- **Transaction brackets** (`\0KEVYTXNBEGIN` / `\0KEVYTXNCOMMIT`) —
+  make a group of appends replay all-or-nothing.
+- **The segment stitch** (`\0KEVYSEGMENTED <file>`) — records that a
+  batch of rows was evicted from the hot layer into a cold segment
+  file under `segs-<shard>/`. Replay re-does that eviction: the rows'
+  write frames precede the stitch in the log, replay brings them in
+  and the stitch asks them back out. A write frame *after* the stitch
+  is a revival and simply stays (hot-first reads shadow the segment
+  copy).
+
+Once a data dir contains `segs-<shard>/` directories, **the AOF alone
+is no longer the complete truth**. The truth set is: the snapshots
+(`dump-*.rdb`) + the AOFs (`aof-*.aof`) + the segment directories
+(`segs-*/`, each holding its segment files and the `segs.manifest`
+ledger that makes them real). A backup must copy all three; segments
+are immutable once sealed, so incremental backup is "copy the new
+segment files and the manifest".
+
+The manifest — not the stitch frame — is the segment set's source of
+truth (it is fsynced *before* the frame is logged). Two consequences:
+a stitch frame naming a segment the manifest does not hold means the
+segment directory was damaged after the fact, and startup **refuses
+by name** rather than silently dropping the rows whose only durable
+copy is unreachable; conversely a stitch frame lost to a snapshot
+truncation or an AOF rewrite is harmless — by then the hot layer no
+longer holds those rows, or (if a rewrite view froze mid-eviction)
+the rows survive in both tiers and hot-first reads shadow the
+segment copy.
 
 ### Resync replay — recovering the good tail
 
@@ -2744,6 +2878,8 @@ Eviction policies mirror Redis: `noeviction`, `allkeys-lru`, `allkeys-lfu`, `all
 `maxmemory-samples` is a quality-vs-cost dial for the approximate policies — sampling more keys produces a closer approximation to true LRU/LFU at a per-eviction CPU cost. The default of 5 is sufficient for most cache workloads; raise to 10 if you can see eviction picking poor victims in your access pattern, lower to 3 only if eviction itself is showing up in profiles.
 
 **Size containers from `process_rss_bytes`, not `used_memory`.** `INFO memory` reports both: `used_memory` is the store's keyspace accounting — what `maxmemory` and the tiering budget act on — while `process_rss_bytes` is what the OS actually holds resident for the process, which additionally carries indexes and views, connection and replication buffers, and allocator overhead/fragmentation. A container memory limit set from `used_memory` will OOM-kill a healthy process; set limits against observed RSS with headroom.
+
+**The opt-in allocator.** A build with `--features kevy-alloc` swaps glibc malloc for kevy's own span allocator: ~10 % smaller steady-state RSS under churn, at a throughput cost only on saturated collection-write shards. When memory capacity is the binding constraint, it is worth the build; see [docs/alloc.md](https://github.com/goliajp/kevy/blob/develop/docs/alloc.md) for the measured trade.
 
 ### Network
 
@@ -3043,9 +3179,37 @@ range|unique [MAXMEM <bytes>]`
   composition, **key-ordered** (the two value domains differ), same
   LIMIT/CURSOR/FIELDS tail. AND/OR run per shard (a key lives on
   exactly one shard, so per-shard set algebra composes globally).
-- `IDX.COUNT <name> RANGE|EQ …` — count without materializing keys.
+- `IDX.COUNT <name> RANGE|EQ|WHERE … [FILTER …]…` — count without
+  materializing keys. `FILTER` predicates over stored `VALUES` columns
+  are applied (the claused count: the total a claused query's pages
+  would reach); every clause a count would not apply —
+  SORT/DISTINCT/FACET/OFFSET/FIELDS/CURSOR — is refused by name.
+- **Non-scalar kinds answer `VERIFY` in their own vocabulary.**
+  `KIND agg` answers `rows / bytes / excluded / groups`; `KIND text`
+  answers `docs / bytes / postings / tokens`; `KIND ann` answers
+  `vectors / bytes / tombstones / links / rebuild_recommended`. None of
+  them print `drift` / `missing`, because the audit's question — does
+  this entry's row still derive this value — applies to a row-keyed
+  entry and their entries are groups, postings and graph nodes. (These
+  numbers used to be printed under the scalar labels: a healthy 3-doc
+  text index answered `coerce_failures 7, duplicates 7` — its postings
+  and token counts wearing an integrity warning's names.)
+- **What that means for the aggregate's counters**: the running totals
+  are never recomputed against the keyspace at runtime, so their
+  agreement with reality rests on every write path maintaining them —
+  which `IDX.VERIFY` cannot falsify for this kind. A test does instead:
+  `index_write_path_coverage` compares the group's count against the
+  live rows after each verb.
 - `IDX.VERIFY <name>` — summed stats: entries, bytes,
-  coerce_failures, duplicates.
+  coerce_failures, duplicates, plus both directions of the audit:
+  `drift` (entries whose row is gone, no longer coerces, or coerces to
+  a different value) over `checked` entries, and `missing` (rows under
+  the prefix that derive a value and have no entry). Both should be
+  zero on a healthy index; `missing` is the direction a walk over the
+  index's own entries cannot see. `kevy-cli doctor` turns that into an
+  exit code over every declared table, so "should be zero" can be a
+  cron rather than a thing someone remembers to check
+  ([table-migration.md](https://kevy.golia.jp/docs/table-migration/#8-make-verify-part-of-operations-not-part-of-the-migration)).
 - `IDX.LIST` — catalog + per-index state/entries/bytes.
 - Cursor contract is SCAN-class: rows stable across the whole
   traversal are seen exactly once; concurrent insertions/deletions
@@ -3056,7 +3220,18 @@ range|unique [MAXMEM <bytes>]`
 A `unique` index **does not block writes** — enforcing global
 uniqueness at write time would serialize cross-shard writes. Instead:
 duplicates are counted (`duplicates` in
-VERIFY/LIST) and visible as multi-hit `EQ` reads. If you need hard
+VERIFY/LIST) and visible as multi-hit `EQ` reads.
+
+**The counter is per shard; the read is not.** `duplicates` is
+maintained inside each shard's segment, so it sees two rows sharing a
+value only when both landed on the same shard — and keys hash across
+shards, so the ordinary case is that they did not. Measured: the same
+pair of rows reports `duplicates 1` on a single-shard server and
+`duplicates 0` on a two-shard one. A global counter would need
+cross-shard value counting on the write path, which is the
+serialization this kind exists to avoid, so **the multi-hit `EQ` read
+is the detection that always works** — `duplicates` is a hint, and a
+zero there is not a statement that the value is unique. If you need hard
 uniqueness, pin the domain to one shard with a `{hashtag}` prefix in
 cluster mode, or check-then-write under `MULTI`/`WATCH`.
 
@@ -3231,12 +3406,50 @@ TABLE.DECLARE name PREFIX p PK col
     COLUMN name i64|f64|str [COLUMN ...]
     [INDEX col range|unique [VALUES col ...]] ...
     [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] ...
+    [WINDOW col SPAN n BUCKET n]
+    [AUTODECLARE n]    # let the engine add up to n paths — see below
 TABLE.ENSURE ...       # TABLE.DECLARE's boot form — see below
 TABLE.REPLACE ...      # explicit drop + declare + rebuild
 TABLE.DROP name        # drops the table + its compiled indexes; 1|0
-TABLE.LIST             # name/prefix/pk + column/index/orderpath counts
+TABLE.LIST             # name/prefix/pk + counts + the window (or -)
 TABLE.VERIFY name      # component fsck + a bounded column spot check
 ```
+
+## The sliding window
+
+`WINDOW <col> SPAN <n> BUCKET <n>` declares a sliding hot window over
+an `i64` column. `SPAN` and `BUCKET` are plain integers **in the
+column's own units** — the engine never assumes a time base, so the
+column can be epoch seconds, epoch millis, a sequence number, anything
+monotone with data age. The boundary will advance in whole buckets;
+an evicted bucket becomes one cold segment.
+
+Two declare-time refusals, both named:
+
+- the window column must be a declared `i64` column;
+- it must have an access path whose tree tail answers `max(col)` for
+  free — a single-column `INDEX <col>` on it, or an `ORDERPATH` whose
+  *first* column is it, ascending. Without one the declaration is
+  refused (`WINDOW needs an access path on '<col>'`) — which also
+  guarantees every windowed table can serve cross-window range queries
+  through that same path.
+
+What slides today: the **single-column INDEX on the window column**.
+As the boundary advances (whole buckets), the index tree's
+out-of-window prefix moves into immutable cold segment files under
+`segs-<shard>/` — index memory shrinks while plain `RANGE` / `COUNT`
+queries keep answering over hot + cold **byte-identically** to an
+unwindowed index (rewrites, deletes and revivals of cold rows
+included; the semantic-equivalence e2e pins this). Cold index segments
+are derived spill, not truth: rows stay ordinary hashes in the hot
+keyspace, and a restart simply rebuilds and re-slides.
+
+Two edges, both explicit: clause-carrying queries (`FILTER` / `SORT` /
+`DISTINCT` / `FACET`) on an index that has cold segments refuse by
+name until the claused cold path lands — never a silently incomplete
+answer; and an `ORDERPATH` led by the window column satisfies the
+declaration but does not slide yet. Memory-only deployments (no data
+dir) accept the declaration and simply stay all-hot.
 
 ## The boot pattern: `ensure`
 
@@ -3320,6 +3533,9 @@ query the way a relational composite index does. The rules:
   than **255 bytes** also excludes the row: the same class of cap a
   relational B-tree puts on index-row size, and what keeps range
   bounds exact. Up to 8 components.
+- `IDX.COUNT` applies `FILTER` on stored `VALUES` columns — counting
+  a filtered axis (the badge/tab number) is one call, not a paged
+  fetch-and-len.
 - `WHERE` works on `IDX.COUNT` too, and on an index that declares no
   composite columns it is refused by name.
 - **A non-zero `duplicates` in `TABLE.VERIFY` means the ORDERPATH is
@@ -3359,6 +3575,16 @@ ways. Naming a field the index did not store is an error that names
 the fields it did. The driving predicate is always the indexed
 range/EQ/WHERE — there is no `WHERE`-without-an-index.
 
+`OFFSET` is the one clause here that costs more the bigger it gets, and
+**the only surface in this engine that gets slower as you add shards**:
+every shard fetches `limit + offset` hits, because no shard can know
+which of its own hits survive the global merge, so the origin
+materialises `(limit + offset) × shards` to hand back `limit`. Measured
+on 30 000 in-range rows returning `LIMIT 20`, `OFFSET 1000` costs
+1.53 ms on one shard and 6.90 ms on eight. Page with the returned
+cursor — constant per page, and position-stable
+([rds-workloads.md](https://kevy.golia.jp/docs/rds-workloads/#order-by--limit--offset)).
+
 **Index-only queries touch zero rows.** A FILTER/SORT/COUNT query
 answers entirely from the RAM-resident index — the row-read counter
 is asserted `== 0` in the gate suite (`bench/tablegate.sh`). This is
@@ -3369,6 +3595,46 @@ hydration page (`FIELDS …`) pays cold reads — one per row, batched.
 An index without `VALUES` columns is byte-identical in memory and
 query path to one on a store that never declares them (the
 zero-cost-when-undeclared gate).
+
+## `AUTODECLARE`: the paths you did not write
+
+A query against a column you never indexed is refused by name. That
+refusal is also a fact about your workload, and `IDX.ADVISE` shows the
+shapes that keep hitting it. `AUTODECLARE n` says: *when a shape has
+been refused often enough and it grounds on a column I declared, go
+ahead and declare the path for me — up to `n` of them.*
+
+**"Often enough" is 16 refusals of the same shape.** The number is a
+constant, not a knob: a per-table threshold would be exactly the
+per-workload tuning this engine claims not to need, and a workload
+whose shape arrives slowly pays 16 refusals before relief either way.
+It is written here because an operator reading `IDX.ADVISE` and
+wondering why nothing has happened yet deserves the number, not
+because it is something to set.
+
+Everything about it is bounded on purpose:
+
+* **Off unless you ask.** No clause, no loop. This is not a default.
+* **Capped by the number you wrote.** Budget spent means the query
+  keeps being refused and the shape stays in `IDX.ADVISE` for you to
+  read — the engine does not quietly raise its own limit.
+* **Only over declared columns.** A shape naming a column the table
+  does not declare never grounds; `IDX.ADVISE` still reports it, so
+  the answer stays yours.
+* **Addition only.** Dropping an index is a human act. The worst case
+  of a bad guess is bounded wasted memory, never a lost path.
+* **Visible.** Each such index carries an `auto` marker in `IDX.LIST`,
+  and the table's spec keeps the ledger — you can always read back
+  which paths you wrote and which the engine did.
+* **Out of band.** The query that crosses the threshold still gets its
+  error. The next one finds the path building. Declaring never happens
+  inside a query's answer.
+
+This is not a query planner, and the distinction is the whole point:
+the engine never chooses *which path to run* — your query names it.
+`AUTODECLARE` only extends the declaration, on your invitation, within
+your budget, where you can see it. Query time stays a law: run the
+declared path, refuse the rest by name.
 
 ## NULL, uniqueness, and what is enforced
 
@@ -3402,9 +3668,45 @@ compiler** — it reads a PG/MySQL-dialect schema file once, like a
 migration tool, and emits the explicit declarations:
 
 ```console
-kevy-cli sql compile schema.sql                          # print the plan
+kevy-cli sql compile schema.sql                          # print the declarations
 kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004
+kevy-cli sql plan schema.sql                             # what becomes of every query
 ```
+
+`compile` and `plan` read the same file and answer different questions.
+`compile` is build-time: it produces commands, so a view it cannot serve
+is an error and it stops there. `plan` is migration day — it reports
+what becomes of **every** query, because *"34 of your 40 work, here is
+what the other 6 need"* is what someone arriving with a schema is
+actually asking:
+
+```console
+$ kevy-cli sql plan shop.sql
+2 table(s) to declare:
+  users
+  orders
+
+5 quer(ies) — 3 served, 2 not
+
+  served:
+    paid_orders              orders.status
+    recent_by_user           orders.user_id_created_at
+    by_email                 users.email
+
+  not served:
+    line 25    by_total
+      view 'by_total': WHERE (total EQ) matches no declared access path — add: CREATE INDEX ON orders (total)
+    line 28    everything
+      view 'everything': a view with no WHERE would scan the table — kevy has no scans; add a driving predicate, or page an index directly (IDX.QUERY orders.<col> RANGE …)
+
+plan: 2 of 5 quer(ies) need a declaration change before this schema moves
+```
+
+It exits non-zero when any query is unserved. That is not a warning: a
+query with no declared path cannot run at all, so it blocks the move
+until the schema changes. A schema whose *DDL* does not parse is still a
+plain error — there is no plan to give against a schema that does not
+exist.
 
 - `CREATE TABLE` → `TABLE.DECLARE` (types coarsely mapped to
   `i64|f64|str`, each mapping noted honestly).
@@ -3965,6 +4267,45 @@ VIEW.CREATE ready_jobs
     MODE materialized TOPK 100
 VIEW.QUERY ready_jobs LIMIT 10
 ```
+
+## First: check whether you need one
+
+The example above is deliberate, and it is also the shape you most
+often **do not** need a view for. `WHERE state = 'ready' AND pri
+BETWEEN 0 AND 100 ORDER BY pri DESC` is an equality prefix followed by
+one range on the next column — precisely what a composite `ORDERPATH`
+represents as a single contiguous walk
+([tables.md](https://kevy.golia.jp/docs/tables/#composite-orderpath-semantics)):
+
+```console
+kevy-cli TABLE.DECLARE job PREFIX job: PK id \
+    COLUMN id str COLUMN state str COLUMN pri i64 \
+    ORDERPATH ready_by_pri ON state THEN pri DESC
+kevy-cli IDX.QUERY job.ready_by_pri WHERE state EQ ready RANGE pri 0 100 LIMIT 10
+```
+
+One B-tree, no second structure to maintain, no rebuild to verify.
+The first real consumer to declare a table covered all fourteen of its
+list axes this way and declared **zero** views — that is the expected
+outcome, not a gap.
+
+Reach for a view when the shape is one an ordered composite key cannot
+be:
+
+* **`OR`** across independent indexes — a single ordered key has one
+  leading column, so a union is not a walk.
+* **`DIFF`** — set subtraction, left minus right.
+* **two ranges**, on different columns. A composite can range on one
+  column, at the tail, and nothing may follow it; two open dimensions
+  are not one contiguous interval.
+* a **bounded, always-warm answer**: `MODE materialized TOPK n` keeps
+  the top slice maintained on the write path, so the read is a fixed
+  cost no matter how selective the predicate turns out to be.
+
+If your shape is not on that list, declare the `ORDERPATH` and stop.
+A view is the more expensive of the two by construction — it composes
+indexes that must exist anyway, and materializing one adds write-path
+work and a structure `VIEW.VERIFY` then has to audit.
 
 ## Quick start (server)
 
@@ -5827,6 +6168,35 @@ from the capacity model:
   big as the value. Values below the 64-byte spill threshold are
   never spilled. The data:RAM ratio grows linearly with value size;
   every capacity gate names its value size for exactly this reason.
+- **Measured, 2026-08-05.** The ratio curve is no longer only a model.
+  Same budget and keys, only the value size varied (`INFO Tiering`'s
+  `stub_bytes` is the floor doing the work):
+
+  | value size | data:RAM achieved |
+  |---:|---:|
+  | 256 B | **2.65×** |
+  | 1 KiB | **10.43×** |
+  | 4 KiB | **39.2×** (full scale, 2 GB budget, 80 GB of data) |
+
+  The floor is ~96 B per entry at a 9-byte key (~143 B at a 48-byte
+  key), flat across every scale tested, which makes the ceiling
+  predictable: **max data:RAM ≈ value_size / (96 B + key heap)**. That
+  predicts 2.67× / 10.7× / 42.7× for the three rows above. An
+  interactive version of this formula lives at
+  <https://kevy.golia.jp/capacity/>.
+
+  **What that 96 B is matters for where the lever is.** It is the
+  keyspace entry (`ENTRY_OVERHEAD`: the inline key cell plus the
+  `Entry`), which **every** key pays whether it is tiered or not — the
+  cold stub itself is 24 B inline and owns no heap. Tiering returns the
+  value and can never return the key that names it, so no tiering knob
+  moves this number; only the store's entry layout does, and that
+  changes what every key costs in every workload.
+
+  **At 256 B the budget is not merely tight, it is unholdable**:
+  `used_memory` crosses a 16 MB budget by 200 000 entries and reaches
+  77 MB at 800 000, because demoting a 256 B value frees less than the
+  stub it leaves behind. Narrow records are the case to size by hand.
 - **Worked example (sized from the model, not measured into it)**:
   10 M rows × ~1 KiB (≈10 GB of data) with 2
   secondary indexes + stored VALUES columns fits a **3 GB** budget:
@@ -5939,9 +6309,11 @@ Stated honestly, with the measured/pending status of each number:
   decode. The `kevy-vlog` microbench measures `read_at` at 0.64–14 µs
   across record sizes (dev-box NVMe). The end-to-end SLAs the
   gate clamps — scalar p99 ≤ 100 µs embedded / ≤ 300 µs server,
-  whole-hash-row materialization ≤ 200 µs / ≤ 500 µs — are
-  **pending the bench-box envelope run** (`bench/capacity-envelope.sh`);
-  until that runs they are targets, not measurements.
+  whole-hash-row materialization ≤ 200 µs / ≤ 500 µs — are **measured
+  on the server side**: the envelope run holds scalar p99 at 79–171 µs
+  and whole-hash-row at 145 µs across datasets from 20 GB to 120 GB on
+  a 2 GB budget, with latency flat as the dataset grows 6×. The
+  embedded numbers remain targets — the envelope drives the server.
 - **Embedded holds the shard lock during a cold read.** In-process
   there is no reactor to hand the read to: a cold materialization
   preads under the shard's write lock (the 1-shard default = the
@@ -5997,33 +6369,55 @@ Stated honestly, with the measured/pending status of each number:
   flight keeps its segment files readable until it finishes.
 - Every record carries a CRC32C; bit rot in the spill area is refused
   at read, not served.
-- **Boot with dataset > budget works**: replay checks the watermark
-  as it goes and spills inline, so RSS stays ≤ budget × 1.05
-  throughout boot (gated) instead of OOMing before tiering ever
-  runs. The same inline demotion rides reshard and replica
-  snapshot-load.
+- **Boot with dataset > budget works**: replay checks the watermark as
+  it goes and spills inline instead of OOMing before tiering ever runs.
+  The same inline demotion rides reshard and replica snapshot-load.
+  Measured 2026-08-05 — a 2.3 GB AOF against a 64 MB budget (36×)
+  replays clean, all 300 000 rows present, `used_memory` settling at
+  35 MB, comfortably inside the bound.
+
+  **RSS is another matter, and this page used to overstate it.** It
+  claimed RSS stays ≤ budget × 1.05 throughout boot and called that
+  gated; neither was true. Measured peak RSS during that replay was
+  **137 MB — 2.15× the budget** — the same allocator overhead the
+  capacity sweep measures in steady state, and `tiergate`'s L11 line
+  has no measurement body yet (it reads `PENDING`). What holds through
+  boot is the **logical** bound, which is what the tier accounts for;
+  size the machine from RSS, not from the budget.
 - Snapshot / `BGREWRITEAOF` / replication full-sync on a mostly-cold
   store stream cold values from the pinned log **without promoting
   anything** — peak extra RAM is one value, and zero cold values are
-  lost from a rewrite (gated).
-- RSS ≤ budget × 1.05 sustained is its own gate line, including
-  the auto-probe answering correctly in a cgroup container and on
-  bare metal.
+  lost from a rewrite. **Measured 2026-08-05, not gated:** 60 000 keys
+  with 54 912 of them cold, `BGREWRITEAOF`, restart — all 60 000 back,
+  every spot-checked key across the range its full length, AOF clean.
+  `tiergate`'s L10 line for this is still `PENDING`, so the claim rests
+  on that measurement rather than on CI.
+- **`used_memory` ≤ budget × 1.05 sustained** is its own gate line
+  (`tiergate` L8), including the auto-probe answering correctly in a
+  cgroup container and on bare metal. It is the *logical* bound — the
+  gate reports RSS beside it rather than clamping it. Measured
+  2026-08-05: `used_memory` 253 MB against a 281 MB cap, with RSS
+  488 MB (1.93× the budget) reported. Reading that line as an RSS
+  guarantee is the mistake this page made two bullets up.
 
 ## Gate status (honesty ledger)
 
 Everything above that is a mechanism claim is covered by tests and
 gates that run in this tree (the transparency suite, the tiered
-persistence suite, `bench/memgate.sh`, `bench/tiergate.sh`). The
-**measured envelope numbers** — cold-read p99, vlog space
-amplification under churn, the 10× capacity ratio, the
-10M-row fused envelope with hydration p95, hydration
-batching at scale, and mixed-workload isolation —
-are **pending the dedicated bench box**:
-`bench/capacity-envelope.sh` is the turnkey runner, and
-`bench/tiergate.sh` stays red on those lines until it has run. This
-page states targets as targets and will not quote an envelope number
-before the gate records it.
+persistence suite, `bench/memgate.sh`, `bench/tiergate.sh`). The **envelope numbers** are measured on the dedicated bench box by
+`bench/capacity-envelope.sh`: cold-read p99, vlog space amplification
+under churn, and the capacity ratio all have numbers on this page and
+in `bench/FINDING-2026-08-05-capacity-ceiling-sweep.md`.
+
+`bench/tiergate.sh` **in a fresh checkout still shows those lines
+pending**, and that is the design rather than a contradiction: the gate
+consumes a results file the bench box produces, so a tree that has not
+been handed one has not verified anything. Run the envelope, carry
+`bench/.capacity-envelope-results` back, and
+`TIERGATE_RUN_ENVELOPE=1 bash bench/tiergate.sh` turns the lines on the
+evidence rather than on this paragraph. A partial run writes to its own
+file for the same reason — the gate must never be handed a results file
+with lines silently missing.
 
 ## See also
 
@@ -6225,6 +6619,14 @@ Notes:
 - **Path must not pre-exist.** kevy refuses to start if `KEVY_UNIX_SOCKET` already points at a file — it will not clobber a path it didn't create. Clean it up on restart (`rm -f /tmp/kevy.sock`) or use a per-run path (`/run/kevy/$(date +%s).sock`). This is intentional: silently unlinking would let a misconfigured kevy steal another service's socket.
 - **Dual-bind is always on when the env var is set.** There is no UDS-only mode — the TCP listener stays up too. If you want to forbid TCP, bind it to a loopback-only address you control and firewall it off.
 - **Shard 0 owns the accept loop.** Accepted connections are dispatched onto the existing per-shard runtime, so `--threads` still controls parallelism for the workload behind the socket.
+- **Which reactor serves it.** Both. The io_uring reactor accepts on
+  the socket through a multishot accept SQE; the readiness reactor
+  (epoll on Linux without io_uring, kqueue on macOS/BSD) registers it
+  alongside the TCP listeners. This was **not** true before the fix
+  noted in the changelog: the listener was bound before any shard
+  spawned, so the socket file appeared and `connect()` succeeded into
+  the backlog, but only io_uring ever accepted — a client on any other
+  reactor waited forever, with no error to show for it.
 - **io_uring path.** On Linux with `KEVY_IO_URING=1`, the UDS accept runs as a multishot accept SQE through the same io_uring instance as TCP — no extra reactor cost. `TCP_NODELAY` is not set on UDS (it isn't an IP socket).
 
 ## Trade-offs
@@ -7373,6 +7775,19 @@ kevy-cli delete-prefix -p 6004 --rate 5000 --dry-run tmp:
 kevy-cli inspect -p 6004 user:
 ```
 
+Three more read and report rather than move anything, which is why they
+sit outside the list above. They are the migration playbook's lessons
+made runnable — see [table-migration.md](https://kevy.golia.jp/docs/table-migration/):
+
+```
+kevy-cli sql plan schema.sql                       # every query's fate
+kevy-cli backfill-keys --from-index i --from-prefix p:   # the union
+kevy-cli lint overlap --prefix mailbox:              # lesson 1
+kevy-cli lint columns ev                           # lesson 6
+kevy-cli shadow -p 6004 --old "…" --new "…"        # before cutover
+kevy-cli doctor -p 6004                            # VERIFY as a cron
+```
+
 ## Wire format
 
 `export` writes a plain **RESP command stream** of rebuild frames —
@@ -7383,8 +7798,29 @@ file feeds `kevy-cli import` — including one you generate yourself
 from an RDS dump (the playbook's phase 3).
 
 The leading `DEL` per key makes replay **rebuild from scratch** —
-genuinely idempotent for every type (an append verb like RPUSH would
-otherwise double list content on re-import).
+genuinely idempotent for every type it emits (an append verb like
+RPUSH would otherwise double list content on re-import).
+
+**It does not emit every type.** Strings, hashes, lists, sets and
+sorted sets rebuild; **streams do not** — there is no rebuild verb for
+them here, so an export leaves them behind. That is a real limitation
+of this tool, not a property of your data, and it is now **reported by
+name**:
+
+```console
+kevy-cli export: SKIPPED 1 key(s) of type 'stream' — nothing here
+rebuilds that type, so they are NOT in this file
+exported 4006 keys -> dump.resp
+```
+
+Until 4.1 the skip was silent: the key was counted as one that vanished
+mid-walk, and a store with streams exported clean and short. If your
+migration includes streams, move them separately — and check that line
+before you trust the file.
+
+**`copy-prefix` reads through the same rebuild set** and reports the
+same way, for the same reason: a copy that leaves a type behind while
+printing `copied N keys` is the same silence wearing a different verb.
 
 ## Consistency and resumability
 
