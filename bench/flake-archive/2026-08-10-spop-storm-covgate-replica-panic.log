@@ -1,0 +1,52 @@
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	﻿2026-08-09T19:40:38.2667722Z ##[group]Run bash bench/covgate.sh
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:40:38.2668003Z ^[[36;1mbash bench/covgate.sh^[[0m
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:40:38.3599485Z shell: /usr/bin/bash -e {0}
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:40:38.3599746Z env:
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:40:38.3599954Z   CARGO_TERM_COLOR: always
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:40:38.3600153Z   RUST_BACKTRACE: 1
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:40:38.3600334Z   RUSTFLAGS: -D warnings
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:40:38.3600516Z   KEVY_IO_URING: 0
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:40:38.3600685Z ##[endgroup]
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:40:38.3925129Z covgate: measuring workspace line coverage (instrumented build + tests)...
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2577556Z covgate: cargo llvm-cov run failed — last 40 lines:
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2593100Z test streaming_replica_receives_set_command_as_wire_frame has been running for over 60 seconds
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2593767Z test streaming_replica_receives_multiple_frames_in_order ... ok
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2594291Z test streaming_replica_receives_set_command_as_wire_frame ... ok
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2594836Z test unclean_restart_generation_fence_ships_instead_of_aliasing ... ok
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2595254Z test wait_one_with_live_replica_returns_at_least_one ... ok
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2595594Z test wait_with_no_replica_times_out_to_zero_and_wait_zero_is_immediate ... ok
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2596183Z test streaming_replica_receives_only_its_shards_writes ... ok
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2596488Z test spop_storm_keeps_replica_sets_identical ... FAILED
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2596665Z 
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2596739Z failures:
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2596824Z 
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2596954Z ---- spop_storm_keeps_replica_sets_identical stdout ----
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2597290Z kevy: shard 0 expired 1 replication slot(s) past reconnect window
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2597498Z 
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2597765Z thread 'spop_storm_keeps_replica_sets_identical' (22821) panicked at crates/kevy/tests/replication.rs:1553:9:
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2598199Z replica never caught up to the post-storm fence within 360s
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2598614Z replica is not accepting connections on port 50238; runtime thread has EXITED (panicked, find the crash)
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2598973Z stack backtrace:
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2603153Z    0: __rustc::rust_begin_unwind
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2603532Z              at /rustc/8bab26f4f68e0e26f0bb7960be334d5b520ea452/library/std/src/panicking.rs:689:5
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2603917Z    1: core::panicking::panic_fmt
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2604254Z              at /rustc/8bab26f4f68e0e26f0bb7960be334d5b520ea452/library/core/src/panicking.rs:80:14
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2604657Z    2: replication::spop_storm_keeps_replica_sets_identical
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2604922Z              at ./tests/replication.rs:1553:9
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2605211Z    3: replication::spop_storm_keeps_replica_sets_identical::{closure#0}
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2605501Z              at ./tests/replication.rs:1460:45
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2605930Z    4: <replication::spop_storm_keeps_replica_sets_identical::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2606484Z              at /rustc/8bab26f4f68e0e26f0bb7960be334d5b520ea452/library/core/src/ops/function.rs:250:5
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2607020Z    5: <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2607512Z              at /rustc/8bab26f4f68e0e26f0bb7960be334d5b520ea452/library/core/src/ops/function.rs:250:5
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2607969Z note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2608223Z 
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2608228Z 
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2608292Z failures:
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2608465Z     spop_storm_keeps_replica_sets_identical
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2608619Z 
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2608830Z test result: FAILED. 23 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 464.03s
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2609104Z 
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2609361Z ^[[1m^[[91merror^[[0m: test failed, to rerun pass `-p kevy --test replication`
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2610348Z error: process didn't exit successfully: `/home/runner/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo test --manifest-path /home/runner/work/kevy/kevy/Cargo.toml --target-dir /home/runner/work/kevy/kevy/target/llvm-cov-target --workspace --exclude kevy-napi --lib --tests` (exit status: 101)
+covgate (line-coverage ratchet)	covgate (ratchet vs bench/COV-BASELINE.json)	2026-08-09T19:50:20.2623243Z ##[error]Process completed with exit code 2.
