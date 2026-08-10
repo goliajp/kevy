@@ -110,7 +110,15 @@ impl<C: Commands> Shard<C> {
         let Some(aof) = &mut self.aof else { return };
         let tee = aof.take_tee_for_handoff().unwrap_or_default();
         if tee.is_empty() {
-            self.submit_offthread_swap(h);
+            if aof.queued_mode() {
+                self.submit_offthread_swap(h);
+            } else {
+                // Non-queued (epoll): appends write straight to the live
+                // fd — nothing can hold them through a worker-side
+                // rename (they would land on the renamed-away inode and
+                // vanish). Keep this mode's classic synchronous swap.
+                self.finish_rewrite_swap(&h, tee);
+            }
             return;
         }
         if tee.len() <= SMALL_TEE && h.iters >= MAX_HANDOFFS {
