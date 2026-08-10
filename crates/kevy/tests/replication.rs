@@ -1169,6 +1169,30 @@ struct ReplicaServer {
 
 impl ReplicaServer {
     fn start(upstream_replication_port: u16) -> Self {
+        // The port race, finally named by the exit-reason trap: the
+        // probe-then-bind window loses to PARALLEL TEST BINARIES (the
+        // START_GATE only serializes within this one), and the replica
+        // runtime exits with AddrInUse — three CI flakes of "runtime
+        // thread has EXITED" before the trap printed the Err. Bounded
+        // retry on a fresh port is the honest shape: the race is
+        // cross-process and cannot be locked away.
+        for attempt in 0..5 {
+            match Self::try_start(upstream_replication_port) {
+                Ok(s) => return s,
+                Err(retry_at) => {
+                    eprintln!(
+                        "replica port {retry_at} lost the cross-process bind race \
+                         (attempt {attempt}) — retrying on a fresh port"
+                    );
+                }
+            }
+        }
+        panic!("replica runtime lost the port race 5 times in a row");
+    }
+
+    /// One spawn attempt; `Err(port)` = the runtime exited with
+    /// AddrInUse before the port answered (cross-process bind race).
+    fn try_start(upstream_replication_port: u16) -> Result<Self, u16> {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = free_port_block(0) + 1; // one free port (no replication listener / cluster)
         let dir = TmpDir::new("kevy-replica-rt");
@@ -1213,7 +1237,33 @@ impl ReplicaServer {
                     Some(r);
             }
         });
-        wait_port(port, "server");
+        // Race-aware wait: if the runtime thread exits AddrInUse while
+        // we wait, stop waiting and let the caller retry a fresh port.
+        {
+            let deadline = std::time::Instant::now() + patience();
+            loop {
+                if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                    break;
+                }
+                if rt_handle.is_finished() {
+                    let reason = REPLICA_RT_EXIT
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .take();
+                    if reason.as_deref().is_some_and(|r| r.contains("Address already in use")) {
+                        return Err(port);
+                    }
+                    panic!(
+                        "replica runtime exited before binding: {}",
+                        reason.unwrap_or_else(|| "no recorded reason".into())
+                    );
+                }
+                if std::time::Instant::now() > deadline {
+                    panic!("replica server never came up on {port}");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
 
         // Manual replica runner — connects to the primary, forwards
         // every event into the inbox until told to stop.
@@ -1264,14 +1314,14 @@ impl ReplicaServer {
             }
         });
 
-        Self {
+        Ok(Self {
             port,
             stop_runtime,
             stop_runner,
             rt_handle: Some(rt_handle),
             runner_handle: Some(runner_handle),
             _dir: dir,
-        }
+        })
     }
 
     /// Whether the replica's in-process runtime thread is still running.
