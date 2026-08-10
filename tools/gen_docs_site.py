@@ -222,7 +222,7 @@ def shell(lang, slug, title, desc, body, toc, nav, depth, have=None):
 <a class="skip" href="#main">Skip to content</a>
 <header class="mast">
   <div class="mast-in">
-    <a class="brand" href="{up}{d}">kevy<span class="v">4.1</span></a>
+    <a class="brand" href="{up}{d}">kevy<span class="v">5.0</span></a>
     <nav class="nav">
       <a href="{up}{d}docs/" aria-current="page">{nav_l[0]}</a>
       <a href="{up}{d}docs/commands/">{nav_l[1]}</a>
