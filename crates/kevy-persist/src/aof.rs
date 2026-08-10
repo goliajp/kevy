@@ -97,6 +97,9 @@ pub struct Aof {
     /// unlink (see `swap_image` — rename must not drop a multi-GB
     /// inode's last link on the reactor).
     pub(crate) swap_trash: Option<PathBuf>,
+    /// Off-thread swap window open: the driver holds queue drains and
+    /// fsyncs while the worker renames over the live path.
+    pub(crate) swap_hold: bool,
     /// Where `open` quarantined a dropped tail, if it had to repair one —
     /// surfaced so the store's open report can name the file.
     open_quarantine: Option<PathBuf>,
@@ -212,6 +215,7 @@ impl Aof {
             rewrite_tee: None,
             tee_spare: None,
             swap_trash: None,
+            swap_hold: false,
             open_quarantine: quarantined,
             last_rewrite_at: Instant::now(),
             format,

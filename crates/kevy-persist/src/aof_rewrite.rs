@@ -129,6 +129,70 @@ impl Aof {
         Ok(RewriteStats { keys, bytes })
     }
 
+    /// The graveyard name for the NEXT swap (queued mode only): the
+    /// pre-swap log keeps a link so `rename(2)` never frees a multi-GB
+    /// inode's extents inside the syscall.
+    #[must_use]
+    pub fn swap_trash_name(&self) -> Option<PathBuf> {
+        self.queue.as_ref()?;
+        let mut name = self
+            .path
+            .file_name()
+            .map(|n| n.to_os_string())
+            .unwrap_or_else(|| std::ffi::OsString::from("aof"));
+        name.push(format!(".trash{}", self.rewrites_total));
+        Some(self.path.with_file_name(name))
+    }
+
+    /// The live log's path — the off-thread swap job's rename target.
+    #[must_use]
+    pub fn live_path(&self) -> PathBuf {
+        self.path.clone()
+    }
+
+    /// Enter the swap-hold window: the worker is about to hardlink +
+    /// rename over the live path, so the offload driver must stop
+    /// draining the append queue (bytes keep accumulating in it —
+    /// bounded by the hold's duration) and must not fsync the old fd.
+    pub fn begin_swap_hold(&mut self) {
+        self.swap_hold = true;
+    }
+
+    /// Whether the swap-hold window is open (the driver's queue gate).
+    #[must_use]
+    pub fn swap_holding(&self) -> bool {
+        self.swap_hold
+    }
+
+    /// The reactor's half of an off-thread swap: the worker already
+    /// renamed the image over the live path (journal work, done off
+    /// this thread); reopen the append handle against it, reset every
+    /// anchor, release the hold. Opening an EXISTING file writes no
+    /// journal metadata — the reactor's synchronous cost is µs.
+    pub fn swap_finalize_reopen(&mut self, keys: u64, trash: Option<PathBuf>) -> io::Result<RewriteStats> {
+        self.swap_hold = false;
+        self.rewrite_tee = None;
+        self.swap_trash = trash;
+        let f = OpenOptions::new().append(true).open(&self.path)?;
+        let bytes = f.metadata().map_or(0, |m| m.len());
+        self.file = BufWriter::with_capacity(AOF_BUF_CAP, f);
+        self.format = crate::AofFormat::V2;
+        self.size_bytes = bytes;
+        self.queued_offset = bytes;
+        self.size_at_last_rewrite = bytes;
+        self.last_rewrite_at = Instant::now();
+        self.dirty = false;
+        self.rewrites_total = self.rewrites_total.saturating_add(1);
+        Ok(RewriteStats { keys, bytes })
+    }
+
+    /// Abort an off-thread swap that failed before the rename landed:
+    /// the live path still names the old log — resume appends against
+    /// it unchanged.
+    pub fn abort_swap_hold(&mut self) {
+        self.swap_hold = false;
+    }
+
     /// The graveyard hardlink from the last swap, for the caller's
     /// off-thread unlink. `None` outside queued mode (the epoll path
     /// keeps the classic inline drop — pre-existing behavior).
