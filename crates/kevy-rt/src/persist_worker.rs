@@ -324,7 +324,7 @@ impl<C: Commands> Shard<C> {
             "kevy-diag: shard {} rewrite begin: collect {} ms (entries {}), begin+tee {} ms",
             self.id,
             diag_collect.as_millis(),
-            self.store.len(),
+            view.len(),
             (diag_t0.elapsed() - diag_collect).as_millis()
         );
         if !self
