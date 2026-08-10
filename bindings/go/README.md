@@ -9,7 +9,7 @@ engine. One import ships both faces of the [client contract](../../docs/client-c
 - **Remote** (`kevy://` / `redis://` / `tcp://`): a native RESP2/RESP3 TCP
   client. Same business code, switch backends by changing only the URL.
 
-> **Pre-release.** This client tracks kevy **4.0.0**. The standalone module repo does not exist yet, so
+> **Pre-release.** This client tracks kevy **5.0.0**. The standalone module repo does not exist yet, so
 > `go get github.com/goliajp/kevy-go` is not runnable. Until then, use this
 > client from the in-repo copy at `bindings/go` (clone the kevy repo and
 > import the local module, or `replace github.com/goliajp/kevy-go => ./bindings/go`
