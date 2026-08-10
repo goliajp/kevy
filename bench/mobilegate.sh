@@ -200,7 +200,11 @@ run() {
 
 case "$platform" in
     ios)
-        run "$ios_cmd" "xcrun simctl spawn booted log stream --level debug --predicate 'eventMessage CONTAINS \"MOBILEGATE\" OR eventMessage CONTAINS \"Terminating app\"'"
+        # Stream the TARGET sim's log, not `booted` — with several booted
+        # simulators (other projects' sessions on a shared host) `booted` is
+        # ambiguous, simctl picks one, and a verdict printed on the right sim
+        # never reaches the watched stream: a PASS reads as a 16-min TIMEOUT.
+        run "$ios_cmd" "xcrun simctl spawn $(ios_sim_id) log stream --level debug --predicate 'eventMessage CONTAINS \"MOBILEGATE\" OR eventMessage CONTAINS \"Terminating app\"'"
         ;;
     android)
         adb logcat -c 2>/dev/null || true
