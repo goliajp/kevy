@@ -46,6 +46,10 @@ pub(crate) fn emit<W: Write, A: kevy_resp::ArgvView + ?Sized>(
 /// (fsynced): the rewrite image — always the v2 checksummed-record
 /// format. Returns `(keys, bytes)`.
 pub fn dump_aof<S: crate::SnapshotSource>(path: &Path, src: &S) -> io::Result<(u64, u64)> {
+    // Drop-behind stride — a multi-GB image left dirty floods the page
+    // cache into direct reclaim inside the server's own fault paths
+    // (5.2M pages scanned vs 6.6k without; the S5-E/F finding).
+    const DROP_BEHIND: u64 = 64 << 20;
     let f = File::create(path)?;
     let mut w = BufWriter::with_capacity(SNAPSHOT_BUF_CAP, f);
     let mut scratch = Vec::new();
@@ -53,6 +57,7 @@ pub fn dump_aof<S: crate::SnapshotSource>(path: &Path, src: &S) -> io::Result<(u
     let mut keys = 0u64;
     let mut err: Option<io::Error> = None;
     let mut cold_seqs: Vec<u32> = Vec::new();
+    let mut since_drop: u64 = 0;
     src.for_each_entry(|key, value, ttl_ms| {
         if err.is_some() {
             return;
@@ -74,13 +79,31 @@ pub fn dump_aof<S: crate::SnapshotSource>(path: &Path, src: &S) -> io::Result<(u
             err = Some(e);
         } else {
             keys += 1;
+            // scratch underestimates multi-frame values ⇒ drops only more often.
+            since_drop = since_drop.saturating_add(scratch.len() as u64);
+            if since_drop >= DROP_BEHIND {
+                since_drop = 0;
+                crate::dump_cache::drop_behind_step(&mut w);
+            }
         }
     });
     if let Some(e) = err {
         return Err(e);
     }
-    write_hash_ttl_frames(&mut w, src, crate::AofFormat::V2, &mut scratch)?;
-    crate::segmented::write_segmented_frames(&mut w, src, &cold_seqs, &mut scratch)?;
+    finish_dump(w, src, &cold_seqs, &mut scratch, keys)
+}
+
+/// `dump_aof`'s tail: trailing hash-TTL + SEGMENTED frames, final
+/// flush + fsync, size readout. Split for the 50-LOC rule.
+fn finish_dump<S: crate::SnapshotSource>(
+    mut w: BufWriter<File>,
+    src: &S,
+    cold_seqs: &[u32],
+    scratch: &mut Vec<u8>,
+    keys: u64,
+) -> io::Result<(u64, u64)> {
+    write_hash_ttl_frames(&mut w, src, crate::AofFormat::V2, scratch)?;
+    crate::segmented::write_segmented_frames(&mut w, src, cold_seqs, scratch)?;
     w.flush()?;
     let inner = w
         .into_inner()

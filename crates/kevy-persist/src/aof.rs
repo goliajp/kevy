@@ -88,6 +88,11 @@ pub struct Aof {
     /// rewrite are captured and replayed after the compacted snapshot. See
     /// [`Self::begin_concurrent_rewrite`].
     pub(crate) rewrite_tee: Option<Vec<u8>>,
+    /// Recycled tee buffer (two-phase rewrite): the worker returns each
+    /// appended generation's buffer CLEARED, and the next generation
+    /// grows into its warm pages instead of faulting a fresh range —
+    /// the reactor-vs-worker mmap churn convicted in the S5-E finding.
+    pub(crate) tee_spare: Option<Vec<u8>>,
     /// Where `open` quarantined a dropped tail, if it had to repair one —
     /// surfaced so the store's open report can name the file.
     open_quarantine: Option<PathBuf>,
@@ -201,6 +206,7 @@ impl Aof {
             rewrites_total: 0,
             deferred: false,
             rewrite_tee: None,
+            tee_spare: None,
             open_quarantine: quarantined,
             last_rewrite_at: Instant::now(),
             format,
