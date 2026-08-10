@@ -145,7 +145,15 @@ impl Store {
                 }
             }
             Value::List(l) => {
+                let diag_shared = Arc::strong_count(l) > 1;
+                let diag_t0 = std::time::Instant::now();
                 let l = Arc::make_mut(l);
+                if diag_shared {
+                    let ms = diag_t0.elapsed().as_millis();
+                    if ms >= 10 {
+                        eprintln!("kevy-diag: COW list clone took {ms} ms ({} elems)", l.len());
+                    }
+                }
                 if front {
                     l.push_front(v.to_vec());
                 } else {
