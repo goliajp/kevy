@@ -692,3 +692,51 @@ fn deferred_rewrite_reanchors_at_current_size() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+/// The tee pool (S5-F): a returned generation buffer is reused by the
+/// next `take_tee_for_handoff` (warm pages, no fresh mapping), and
+/// teardown drains every retained buffer for the off-thread drop.
+#[test]
+fn tee_pool_recycles_buffers_and_teardown_drains() {
+    let path = temp_aof("tee-pool");
+    let mut store = Store::new();
+    store.set(b"a", b"1".to_vec(), None, false, false);
+    let mut aof = Aof::open(&path, Fsync::No).unwrap();
+    let plan = aof.begin_concurrent_rewrite(&store).unwrap();
+
+    aof.append(&argv(&[b"SET", b"g1", b"x"])).unwrap();
+    let gen1 = aof.take_tee_for_handoff().unwrap();
+    assert!(!gen1.is_empty());
+
+    // Worker returns the buffer cleared; remember its identity.
+    let mut returned = gen1;
+    returned.clear();
+    let cap_marker = {
+        returned.reserve(1 << 20); // give it a recognizable capacity
+        returned.capacity()
+    };
+    aof.stash_tee_spare(returned);
+
+    // The stash installs at the NEXT take (ping-pong is one step
+    // deep): gen2 still grows in the take-1-installed buffer; the
+    // recycled 1 MiB one becomes the live tee at take 2 and comes back
+    // as generation 3.
+    aof.append(&argv(&[b"SET", b"g2", b"y"])).unwrap();
+    let gen2 = aof.take_tee_for_handoff().unwrap();
+    aof.append(&argv(&[b"SET", b"g3", b"z"])).unwrap();
+    let gen3 = aof.take_tee_for_handoff().unwrap();
+    assert_eq!(gen3.capacity(), cap_marker, "handoff must reuse the pooled buffer");
+
+    aof.stash_tee_spare(gen2);
+    aof.stash_tee_spare(gen3); // bigger buffer wins the slot, gen2 drops
+    let bufs = aof.take_tee_teardown();
+    assert!(
+        bufs.iter().any(|b| b.capacity() == cap_marker),
+        "teardown must drain the retained warm buffer"
+    );
+    assert!(aof.take_tee_teardown().is_empty(), "teardown drains everything once");
+    aof.abort_concurrent_rewrite();
+    assert!(!aof.is_rewriting());
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&plan.tmp);
+}

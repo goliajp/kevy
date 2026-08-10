@@ -42,6 +42,10 @@ pub(crate) enum PersistJob {
     Rewrite { view: SnapshotView, tmp: PathBuf },
     /// Append a handed-off tee generation to the rewrite tmp and fsync.
     TeeAppend { tmp: PathBuf, bytes: Vec<u8> },
+    /// Drop retained GB-scale buffers off-thread (rewrite teardown) —
+    /// a multi-GB munmap holds the address-space lock long enough to
+    /// stall every reactor page fault (the S5-E finding's seat).
+    DropBufs { bufs: Vec<Vec<u8>> },
     /// Delete an abandoned multi-GB rewrite image. Unlinking a large
     /// file contends on the fs journal — seconds under a saturated
     /// disk — so it must not run on the reactor (measured as the
@@ -63,10 +67,14 @@ pub(crate) enum PersistDone {
     Remove { result: io::Result<()>, path: PathBuf },
     /// One handed-off tee generation appended+fsynced to `tmp`
     /// (the two-phase rewrite's phase 2; see `advance_rewrite_handoff`).
+    /// `buf` is the generation's buffer, CLEARED, for the pool.
     TeeAppend {
         result: io::Result<()>,
         tmp: PathBuf,
+        buf: Vec<u8>,
     },
+    /// Buffers dropped off-thread; nothing to apply.
+    DropBufs,
 }
 
 /// Lazily-spawned single-thread persister. Dropping it closes the channel;
@@ -161,6 +169,37 @@ impl PersistWorker {
     }
 }
 
+/// Best-effort page-cache drop for a fully-synced streamed file.
+fn drop_file_cache(f: &std::fs::File) {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        let _ = kevy_sys::fadvise_dontneed_all(f.as_raw_fd());
+    }
+}
+
+/// Append+fsync one tee generation in drop-behind strides (64 MB write
+/// → fdatasync → cache drop), so a GB generation never floods the page
+/// cache into reclaim; return the buffer cleared for the pool.
+fn run_tee_append(tmp: PathBuf, mut bytes: Vec<u8>) -> PersistDone {
+    let result = (|| {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().append(true).open(&tmp)?;
+        for chunk in bytes.chunks(64 << 20) {
+            f.write_all(chunk)?;
+            f.sync_data()?;
+            drop_file_cache(&f);
+        }
+        f.sync_all()
+    })();
+    bytes.clear();
+    PersistDone::TeeAppend {
+        result,
+        tmp,
+        buf: bytes,
+    }
+}
+
 fn run_job(job: PersistJob) -> PersistDone {
     match job {
         PersistJob::Save {
@@ -174,6 +213,7 @@ fn run_job(job: PersistJob) -> PersistDone {
             aof_reset,
         },
         PersistJob::Rewrite { view, tmp } => PersistDone::Rewrite {
+            // dump_aof drop-behinds its own cache and sync_all()s.
             result: kevy_persist::dump_aof(&tmp, &view).map(|(keys, _bytes)| keys),
             tmp,
         },
@@ -181,15 +221,11 @@ fn run_job(job: PersistJob) -> PersistDone {
             result: std::fs::remove_file(&path),
             path,
         },
-        PersistJob::TeeAppend { tmp, bytes } => PersistDone::TeeAppend {
-            result: (|| {
-                use std::io::Write;
-                let mut f = std::fs::OpenOptions::new().append(true).open(&tmp)?;
-                f.write_all(&bytes)?;
-                f.sync_all()
-            })(),
-            tmp,
-        },
+        PersistJob::TeeAppend { tmp, bytes } => run_tee_append(tmp, bytes),
+        PersistJob::DropBufs { bufs } => {
+            drop(bufs);
+            PersistDone::DropBufs
+        }
     }
 }
 
@@ -434,7 +470,8 @@ impl<C: Commands> Shard<C> {
             }
             done @ (PersistDone::Rewrite { .. }
             | PersistDone::TeeAppend { .. }
-            | PersistDone::Remove { .. }) => {
+            | PersistDone::Remove { .. }
+            | PersistDone::DropBufs) => {
                 self.commit_rewrite_done(done);
             }
         }
