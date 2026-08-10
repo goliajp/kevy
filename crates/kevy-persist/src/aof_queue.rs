@@ -34,6 +34,14 @@ impl Aof {
         Some((at, chunk))
     }
 
+    /// Whether queued-append (offload) mode is on — the discriminant
+    /// for protocol choices that are only safe when the driver can
+    /// hold the append stream (e.g. the off-thread swap).
+    #[must_use]
+    pub fn queued_mode(&self) -> bool {
+        self.queue.is_some()
+    }
+
     /// Nothing waiting in the queue (always true outside queued mode).
     /// The offload driver's restructure gate checks this alongside its
     /// in-flight set, so a rewrite's `begin` never has bytes to flush.
