@@ -107,9 +107,13 @@ esac
 # accidentally cover an unrelated process, and it cannot miss a wrapper
 # nobody thought to name.
 SELF_CHAIN=$(p=$$; while [ "${p:-0}" -gt 1 ]; do echo "$p"; p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' '); done | paste -sd'|' -)
-LEFTOVER=$(ps ax -o pid=,command= | grep -E "(^|/)kevy( |$)|redis-benchmark" \
+# ppid column too: the $( ) running this scan is a FORK of this script —
+# same command line, new pid, ppid = $$ — and the pid-only exclusion
+# flagged the scan itself whenever the script's argv matched the
+# pattern (…/kevy as KEVY_BIN does). Parent-in-chain covers the fork.
+LEFTOVER=$(ps ax -o pid=,ppid=,command= | grep -E "(^|/)kevy( |$)|redis-benchmark" \
   | grep -v grep \
-  | awk -v self="$SELF_CHAIN" 'BEGIN{n=split(self,a,"|"); for(i=1;i<=n;i++) s[a[i]]=1} !($1 in s)' || true)
+  | awk -v self="$SELF_CHAIN" 'BEGIN{n=split(self,a,"|"); for(i=1;i<=n;i++) s[a[i]]=1} !($1 in s) && !($2 in s)' || true)
 [ -n "$LEFTOVER" ] && refuse "leftover bench processes (sweep first):
 $LEFTOVER"
 if [ "$SCALE" = full ]; then
