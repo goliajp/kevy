@@ -116,16 +116,7 @@ impl Store {
             Value::Set(s) => {
                 let smb = SmallBytes::from_slice(m);
                 let w = set_member_weight(&smb) as i64;
-                let diag_shared = Arc::strong_count(s) > 1;
-                let diag_t0 = std::time::Instant::now();
-                let s = Arc::make_mut(s);
-                if diag_shared {
-                    let ms = diag_t0.elapsed().as_millis();
-                    if ms >= 10 {
-                        eprintln!("kevy-diag: COW set clone took {ms} ms ({} members)", s.len());
-                    }
-                }
-                if s.insert(smb) {
+                if Arc::make_mut(s).insert(smb) {
                     Ok(SaddOutcome::AddedHeap(w))
                 } else {
                     Ok(SaddOutcome::AlreadyPresent)
