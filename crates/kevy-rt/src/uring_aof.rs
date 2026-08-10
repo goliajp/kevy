@@ -156,7 +156,7 @@ impl<C: Commands> Shard<C> {
             return;
         }
         let Some(aof) = &mut self.aof else { return };
-        if !matches!(aof.fsync_policy(), kevy_persist::Fsync::EverySec) {
+        if aof.swap_holding() || !matches!(aof.fsync_policy(), kevy_persist::Fsync::EverySec) {
             return;
         }
         let Some(fd) = aof.queued_fd() else { return };

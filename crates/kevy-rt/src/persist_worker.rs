@@ -42,6 +42,13 @@ pub(crate) enum PersistJob {
     Rewrite { view: SnapshotView, tmp: PathBuf },
     /// Append a handed-off tee generation to the rewrite tmp and fsync.
     TeeAppend { tmp: PathBuf, bytes: Vec<u8> },
+    /// The off-thread half of the final swap: hardlink the live log to
+    /// its graveyard (rename must not free a GB inode inline) and
+    /// rename the finished image over the live path. Journal work —
+    /// measured 400ms x4 shards when it ran on the reactors inside one
+    /// jbd2 commit window. The reactor holds its queue meanwhile and
+    /// reopens on completion.
+    SwapImage { tmp: PathBuf, live: PathBuf, trash: Option<PathBuf> },
     /// Rewrite-teardown housekeeping in ONE job (the worker is serial —
     /// a second submit while it holds the first would be dropped, which
     /// silently pushed GB unlinks back inline onto the reactor):
@@ -63,6 +70,8 @@ pub(crate) enum PersistDone {
     },
     /// Teardown housekeeping done; failed unlinks named for the log.
     Cleanup { failed: Vec<(PathBuf, io::Error)> },
+    /// Rename landed (or not); the reactor finalizes or aborts.
+    SwapImage { result: io::Result<()>, trash: Option<PathBuf> },
     /// One handed-off tee generation appended+fsynced to `tmp`
     /// (the two-phase rewrite's phase 2; see `advance_rewrite_handoff`).
     /// `buf` is the generation's buffer, CLEARED, for the pool.
@@ -213,6 +222,16 @@ fn run_job(job: PersistJob) -> PersistDone {
             result: kevy_persist::dump_aof(&tmp, &view).map(|(keys, _bytes)| keys),
             tmp,
         },
+        PersistJob::SwapImage { tmp, live, trash } => {
+            let linked = match &trash {
+                Some(t) => std::fs::hard_link(&live, t).is_ok(),
+                None => false,
+            };
+            PersistDone::SwapImage {
+                result: std::fs::rename(&tmp, &live),
+                trash: trash.filter(|_| linked),
+            }
+        }
         PersistJob::Cleanup { paths, bufs } => {
             let mut failed = Vec::new();
             for p in paths {
@@ -472,6 +491,7 @@ impl<C: Commands> Shard<C> {
             }
             done @ (PersistDone::Rewrite { .. }
             | PersistDone::TeeAppend { .. }
+            | PersistDone::SwapImage { .. }
             | PersistDone::Cleanup { .. }) => {
                 self.commit_rewrite_done(done);
             }

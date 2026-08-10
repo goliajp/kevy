@@ -58,6 +58,7 @@ impl<C: Commands> Shard<C> {
                 self.on_tee_appended(result, &tmp, buf);
             }
             PersistDone::Cleanup { failed } => self.note_cleanup_failures(failed),
+            PersistDone::SwapImage { result, trash } => self.on_swap_done(result, trash),
             PersistDone::Rewrite {
                 result: Err(e),
                 tmp,
@@ -109,14 +110,28 @@ impl<C: Commands> Shard<C> {
         let Some(aof) = &mut self.aof else { return };
         let tee = aof.take_tee_for_handoff().unwrap_or_default();
         if tee.is_empty() {
-            // Zero-I/O swap: every byte (including the smallest final
-            // generation) went through the worker's append+fsync, so
-            // the reactor pays only rename+reopen. The old <=SMALL_TEE
-            // shortcut appended+synced HERE — and four shards' lockstep
-            // rewrites finished in the same tick, serializing four
-            // fsync+rename storms on the journal (named by the tick
-            // sub-probe: tick_persist 408-421ms on all shards at once).
-            self.finish_rewrite_swap(&h, tee);
+            // Off-thread swap: even rename+hardlink are journal work
+            // that blocks ~400ms behind a loaded jbd2 commit (the tick
+            // sub-probe named poll=416ms x4 shards in one window). The
+            // worker does them; the reactor holds its queue (appends
+            // accumulate, bounded by the hold) and reopens on Done.
+            let live = aof.live_path();
+            let trash = aof.swap_trash_name();
+            aof.begin_swap_hold();
+            let job = PersistJob::SwapImage {
+                tmp: h.tmp.clone(),
+                live,
+                trash,
+            };
+            if self.persist.submit(self.id, job) {
+                self.rewrite_handoff = Some(h); // keys carried to finalize
+            } else {
+                // Worker gone (shutdown): synchronous fallback.
+                if let Some(aof) = &mut self.aof {
+                    aof.abort_swap_hold();
+                }
+                self.finish_rewrite_swap(&h, tee);
+            }
             return;
         }
         if tee.len() <= SMALL_TEE && h.iters >= MAX_HANDOFFS {
@@ -193,6 +208,45 @@ impl<C: Commands> Shard<C> {
                     None => Vec::new(),
                 };
                 self.ship_cleanup(Vec::new(), bufs);
+            }
+        }
+    }
+
+    /// The worker's rename landed (or failed): reactor-side finalize
+    /// (reopen + anchors, µs) or abort (live path still the old log).
+    fn on_swap_done(&mut self, result: std::io::Result<()>, trash: Option<std::path::PathBuf>) {
+        let Some(h) = self.rewrite_handoff.take() else { return };
+        let Some(aof) = &mut self.aof else { return };
+        match result {
+            Ok(()) => match aof.swap_finalize_reopen(h.keys, trash) {
+                Ok(_stats) => {
+                    let paths = self
+                        .aof
+                        .as_mut()
+                        .and_then(kevy_persist::Aof::take_swap_trash)
+                        .into_iter()
+                        .collect();
+                    let bufs = self
+                        .aof
+                        .as_mut()
+                        .map(kevy_persist::Aof::take_tee_teardown)
+                        .unwrap_or_default();
+                    self.ship_cleanup(paths, bufs);
+                }
+                Err(e) => {
+                    // Rename landed but reopen failed — the log IS the
+                    // new image; keep trying to reopen is the only
+                    // honest move, but at minimum say it loudly.
+                    eprintln!(
+                        "kevy: shard {} post-swap reopen failed: {e} — appends will error until reopened",
+                        self.id
+                    );
+                }
+            },
+            Err(e) => {
+                eprintln!("kevy: shard {} off-thread swap failed: {e}", self.id);
+                aof.abort_swap_hold();
+                self.abort_rewrite_cleanup(&h.tmp);
             }
         }
     }
