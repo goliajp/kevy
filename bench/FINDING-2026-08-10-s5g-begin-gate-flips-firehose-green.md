@@ -75,3 +75,40 @@ bracket the worker-completion commit path.
   the median even though the event itself pre-exists on develop.
 - Next round (S5-H): name the 340 ms event, then re-verdict; the
   firehose flip merges together with the mixed fix.
+
+## S5-H postscript: the 340 ms named in two probe layers — TAILGATE PASSES
+
+The ported phase probes named it in one run: **tick+aof phase, all
+four shards in the same tick, 399-433 ms each**. The tick_persist
+sub-split narrowed it to **poll_persist_done** — the commit path.
+Mechanism: lockstep shard growth → lockstep auto-rewrite begins → four
+parallel worker dumps finish together → four commit-side swaps
+(small-tee append + sync_all + hardlink + rename) collide in one jbd2
+commit window and each waits ~400 ms for the journal, which is busy
+flushing the workload's gigabytes. En route, two more refutations with
+numbers: collect_snapshot 15-27 ms at 250-500k entries (not the seat)
+and COW clones of the shared giant list/set <10 ms (not the seat).
+
+Three knives, in measurement order:
+
+1. **Zero-I/O finish** — the final tee generation goes through the
+   worker's append+fsync like any other; the reactor's finish fires
+   only on an EMPTY tee. (Necessary, not sufficient: rename+hardlink
+   alone still queued 400 ms behind jbd2.)
+2. **Shard-staggered begins** (~300 ms spread) — herd mitigation;
+   also insufficient alone (the jbd2 window is wider).
+3. **Off-thread SwapImage** — the worker does hardlink+rename behind
+   a driver-held queue (appends accumulate in the offload queue,
+   bounded by the hold); the reactor reopens the EXISTING file (no
+   journal metadata write) and re-anchors. This one closed it.
+
+**Verdict (median-of-3, everything on): tailgate PASS, twice — once
+with probes in, once on the diag-stripped merge candidate.**
+
+- mixed: gap 43-48 ms, PING p99.9 0.7-9.7 ms, max 13-25 ms
+- firehose: gap 24-78 ms, PING p99.9 10.6-13.5 ms
+
+From the balance round's opening position (mixed ~6 s client stalls,
+firehose 9.5 s reactor gaps) to both bars green with AOF offload,
+auto-rewrite, two-phase handoff, and all gates (crash/repli both
+modes) green. Merged to develop with the diag commits stripped.
