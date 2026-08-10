@@ -309,7 +309,9 @@ impl<C: Commands> Shard<C> {
             }
             return;
         }
+        let diag_t0 = std::time::Instant::now();
         let view = self.store.collect_snapshot();
+        let diag_collect = diag_t0.elapsed();
         let aof = self.aof.as_mut().expect("checked above");
         let tmp = match aof.begin_view_rewrite() {
             Ok(t) => t,
@@ -318,6 +320,13 @@ impl<C: Commands> Shard<C> {
                 return;
             }
         };
+        eprintln!(
+            "kevy-diag: shard {} rewrite begin: collect {} ms (entries {}), begin+tee {} ms",
+            self.id,
+            diag_collect.as_millis(),
+            self.store.len(),
+            (diag_t0.elapsed() - diag_collect).as_millis()
+        );
         if !self
             .persist
             .submit(self.id, PersistJob::Rewrite { view, tmp })
