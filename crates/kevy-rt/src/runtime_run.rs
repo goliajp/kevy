@@ -280,6 +280,8 @@ impl<C: Commands> Runtime<C> {
                 #[cfg(target_os = "linux")]
                 aof_offload: Default::default(),
                 rewrite_handoff: None,
+                rewrite_rate_mark: None,
+                rewrite_calm_ticks: 0,
                 xshard_inflight: 0,
                 id,
                 nshards: n,
