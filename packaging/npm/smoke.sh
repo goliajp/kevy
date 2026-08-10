@@ -39,7 +39,7 @@ node -e '
 (cd "$scratch/kevy-bin-$os-$cpu" && npm pack --silent --pack-destination "$scratch" > /dev/null)
 mv "$scratch"/goliapkg-kevy-bin-"$os"-"$cpu"-*.tgz "$scratch/kevy-bin-$os-$cpu.tgz"
 (cd "$scratch/kevy-bin-meta" && npm pack --silent --pack-destination "$scratch" > /dev/null)
-mv "$scratch"/goliapkg-kevy-bin-4*.tgz "$scratch/kevy-bin-meta.tgz"
+mv "$scratch"/goliapkg-kevy-bin-[0-9]*.tgz "$scratch/kevy-bin-meta.tgz"
 npm install --silent --no-audit --no-fund "$scratch/kevy-bin-$os-$cpu.tgz"
 npm install --silent --no-audit --no-fund "$scratch/kevy-bin-meta.tgz"
 
