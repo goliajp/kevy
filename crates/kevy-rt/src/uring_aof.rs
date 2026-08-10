@@ -72,12 +72,19 @@ impl Default for AofOffload {
 }
 
 impl<C: Commands> Shard<C> {
-    /// Opt into queued-append mode at reactor setup. Requires an AOF,
-    /// a non-`Always` policy (S1 scope: replies never wait on the log)
-    /// and `KEVY_AOF_OFFLOAD=1`.
+    /// Queued-append mode at reactor setup — DEFAULT ON for the
+    /// io_uring reactor with an AOF and a non-`Always` policy (the
+    /// whole S4/S5 arc: appends, fsyncs, tee, folds, swap and frees
+    /// all off the reactor; tailgate green was measured in this mode).
+    /// `KEVY_AOF_OFFLOAD=0/off/no/false` opts back into the classic
+    /// synchronous path; `always` keeps it by definition (replies
+    /// gate on the write).
     pub(crate) fn uring_aof_setup(&mut self) {
         let Some(aof) = &mut self.aof else { return };
-        if !matches!(std::env::var("KEVY_AOF_OFFLOAD").as_deref(), Ok("1")) {
+        if matches!(
+            std::env::var("KEVY_AOF_OFFLOAD").as_deref(),
+            Ok("0" | "off" | "no" | "false")
+        ) {
             return;
         }
         if matches!(aof.fsync_policy(), kevy_persist::Fsync::Always) {
