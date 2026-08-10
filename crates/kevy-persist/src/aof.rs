@@ -93,6 +93,10 @@ pub struct Aof {
     /// grows into its warm pages instead of faulting a fresh range —
     /// the reactor-vs-worker mmap churn convicted in the S5-E finding.
     pub(crate) tee_spare: Option<Vec<u8>>,
+    /// The pre-swap log's graveyard hardlink, awaiting an off-thread
+    /// unlink (see `swap_image` — rename must not drop a multi-GB
+    /// inode's last link on the reactor).
+    pub(crate) swap_trash: Option<PathBuf>,
     /// Where `open` quarantined a dropped tail, if it had to repair one —
     /// surfaced so the store's open report can name the file.
     open_quarantine: Option<PathBuf>,
@@ -207,6 +211,7 @@ impl Aof {
             deferred: false,
             rewrite_tee: None,
             tee_spare: None,
+            swap_trash: None,
             open_quarantine: quarantined,
             last_rewrite_at: Instant::now(),
             format,

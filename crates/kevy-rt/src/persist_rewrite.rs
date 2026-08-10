@@ -226,10 +226,16 @@ impl<C: Commands> Shard<C> {
             self.abort_rewrite_cleanup(&h.tmp);
             return;
         }
-        // The recycled spare can still hold a GB-scale warm buffer —
-        // its free belongs on the worker.
-        let bufs = self.aof.as_mut().map(kevy_persist::Aof::take_tee_teardown).unwrap_or_default();
-        self.ship_cleanup(Vec::new(), bufs);
+        // Ship the pre-swap log's graveyard link and any GB-scale warm
+        // spare to the worker — both frees contend the journal/LRU.
+        let (paths, bufs) = match &mut self.aof {
+            Some(aof) => (
+                aof.take_swap_trash().into_iter().collect::<Vec<_>>(),
+                aof.take_tee_teardown(),
+            ),
+            None => (Vec::new(), Vec::new()),
+        };
+        self.ship_cleanup(paths, bufs);
     }
 
 

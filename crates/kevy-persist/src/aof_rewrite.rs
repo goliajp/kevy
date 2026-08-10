@@ -6,7 +6,7 @@
 
 use std::fs::OpenOptions;
 use std::io::{self, BufWriter, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::aof::{AOF_BUF_CAP, Aof, RewritePlan, RewriteStats};
@@ -127,6 +127,13 @@ impl Aof {
         self.dirty = false;
         self.rewrites_total = self.rewrites_total.saturating_add(1);
         Ok(RewriteStats { keys, bytes })
+    }
+
+    /// The graveyard hardlink from the last swap, for the caller's
+    /// off-thread unlink. `None` outside queued mode (the epoll path
+    /// keeps the classic inline drop — pre-existing behavior).
+    pub fn take_swap_trash(&mut self) -> Option<PathBuf> {
+        self.swap_trash.take()
     }
 
     /// Abandon an in-flight non-blocking rewrite (e.g. the off-lock spill
