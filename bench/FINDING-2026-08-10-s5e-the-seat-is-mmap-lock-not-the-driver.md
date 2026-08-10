@@ -77,6 +77,48 @@ Phase B candidates (next round, in likely-order):
 - Confirming probe first: `perf lock` / mmap_lock tracepoints during
   cell C, or an ablation that pools ONLY the image buffer.
 
+## Phase B postscript (S5-F1..F4): mixed goes green; firehose names its endgame
+
+Four knives, each gated by a fresh differential (the first two missed
+and taught; the measurements are the story):
+
+1. **F1 pooled tee** (ping-pong buffers, off-thread teardown): tailgate
+   unchanged. In hindsight the retained spare DOUBLED the anon
+   footprint — the pool attacked mmap churn when the mechanism was
+   allocation-rate-driven reclaim.
+2. **Lock profile** (`lock:contention_begin`, 205k events): the
+   contended lock is NOT mmap_lock — it is the folio/LRU spinlocks,
+   with `evict_folios` (direct reclaim) running INSIDE kevy threads'
+   fault paths. mmap_lock: refuted.
+3. **Reclaim differential** (vmstat, B vs C): with a rewrite,
+   pgscan_direct +5.2M pages / pgsteal +2.97M in 45 s; without, +6.6k.
+   A thousandfold difference, and the B anchor re-validated ×3
+   (22.8/25.4/38.8 ms — the earlier single run was NOT luck).
+4. **F2 post-hoc fadvise + F3 64 MB drop-behind strides** (image dump
+   + tee appends sync+drop as they stream): client latency moved
+   (firehose PING p99.9 median 84.7→65.6 ms, probe throughput +50%)
+   but direct reclaim still scanned 6.5M pages — the driver is the
+   tee's GB/s ANONYMOUS allocation, which no file-cache advice
+   touches.
+5. **F4 tee overrun cap** (TEE_DEFER_CAP 256 MB, checked on the tick
+   while the tee grows; stale-completion guard for mid-dump defers):
+   divergence detected before the gigabytes exist.
+
+Where the bar stands (median-of-3, everything on):
+
+- **mixed: BOTH BARS GREEN — gap median 47.6 ms, PING p99.9 median
+  7.5 ms.** From a 6 s client-visible stall (pre-S4) to green.
+- firehose: gap median ~950 ms, still red. Even a capped ~1 s rewrite
+  attempt (≤256 MB tee + image-dump start) disturbs the cell; attempts
+  recur as the log grows. PING p99.9 median 76 ms (green-side).
+
+The firehose endgame is named for S5-G, and it is a design, not a
+patch: **the tee must stop being memory** — tee bytes ride the offload
+ring as positioned writes to a tee FILE (bounded staging only), and
+the worker concatenates file-to-file. No GB anon, no reclaim driver,
+and the two-phase protocol keeps its crash story. RFC-worthy; do not
+knife it.
+
 ## Also in this round
 
 - spop_storm CI flake #3 (new signature: replica runtime thread
