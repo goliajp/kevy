@@ -224,6 +224,8 @@ One consequence worth knowing, reported from a consumer's gate: because the pers
 
 **Shard-layout changes are crash-idempotent.** Changing `--threads` / `shards` writes new snapshots under `.reshard` temp names, commits via a durable `reshard.journal`, and rolls an interrupted migration forward on the next start. Source files survive as `.premigration.<unix_ts>` backups; the journal is the commit point and must never be deleted by hand.
 
+**Giant single collections vs the rewrite window.** A write to a collection value whose reference is pinned by an in-flight rewrite or snapshot view pays a copy-on-write clone of the WHOLE value on the serving thread. For ordinary values this is microseconds and invisible; a single list/set/hash that has grown to gigabytes pays seconds (soak-measured: 7-9 s at multi-GB single keys under sustained appends). If your workload keeps unbounded single-key queues at that scale, cap them (`LTRIM`-style) or expect rewrite-window latency spikes on that key's shard; an element-granular fix is on the roadmap.
+
 **What is not persisted.** Pub/sub channels, subscriptions, and undelivered messages live only in memory. Blocking-command waiters such as `BLPOP` and blocking `XREAD` are connection state, not data. Neither is written to the AOF or snapshot, and neither is replayed.
 
 ## FAQ
