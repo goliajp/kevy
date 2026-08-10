@@ -63,6 +63,7 @@ mod snapshot_fmt;
 mod snapshot_payload;
 mod snapshot_read;
 mod snapshot_write;
+mod tee_file;
 
 pub use aof::{AOF_MAGIC, Aof, Fsync, RewritePlan, RewriteStats};
 pub use aof_policy::RewritePolicy;

@@ -66,6 +66,8 @@ impl Aof {
                 // bracketed run as independent commands.
                 if let Some(tee) = &mut self.rewrite_tee {
                     crate::record::write_record(tee, &frame)?;
+                } else if let Some(tf) = &mut self.tee_file {
+                    crate::record::write_record(&mut tf.staged, &frame)?;
                 }
                 self.size_bytes = self
                     .size_bytes

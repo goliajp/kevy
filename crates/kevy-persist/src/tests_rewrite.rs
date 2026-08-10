@@ -740,3 +740,64 @@ fn tee_pool_recycles_buffers_and_teardown_drains() {
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(&plan.tmp);
 }
+
+/// File-backed tee (S5-G): records stage → ring-style positioned
+/// writes into `<aof>.tee` → worker-style fold into the image →
+/// bounded final swap. Replay must see the image plus every diff byte
+/// exactly once, in order.
+#[cfg(unix)]
+#[test]
+fn file_tee_roundtrip_replays_every_generation() {
+    use std::os::unix::fs::FileExt;
+    let path = temp_aof("filetee-rw");
+    let mut store = Store::new();
+    store.set(b"a", b"1".to_vec(), None, false, false);
+
+    let mut aof = Aof::open(&path, Fsync::No).unwrap();
+    // The image (worker-side in production): dump the store to tmp.
+    let tmp = aof.begin_view_rewrite_filetee().unwrap();
+    assert!(aof.is_rewriting());
+    crate::dump_aof(&tmp, &store).unwrap();
+
+    // Diff generation 1, driver-style: stage → chunk → positioned write.
+    aof.append(&argv(&[b"SET", b"g1", b"x"])).unwrap();
+    aof.append(&argv(&[b"SET", b"k", b"gen1"])).unwrap();
+    let (off, chunk, _fd) = aof.take_tee_pending().unwrap();
+    assert_eq!(off, 0);
+    let tee_handle = aof.tee_copy_handle().unwrap().unwrap();
+    tee_handle.write_all_at(&chunk, off).unwrap();
+    aof.stash_tee_spare(chunk);
+
+    // Worker fold of [consumed, handed).
+    let (consumed, handed) = aof.tee_watermarks().unwrap();
+    assert_eq!((consumed, handed), (0, off + tee_handle.metadata().unwrap().len()));
+    {
+        use std::io::{Read, Seek, Write};
+        let mut src = tee_handle.try_clone().unwrap();
+        src.seek(std::io::SeekFrom::Start(consumed)).unwrap();
+        let mut dst = std::fs::OpenOptions::new().append(true).open(&tmp).unwrap();
+        let mut take = src.take(handed - consumed);
+        std::io::copy(&mut take, &mut dst).unwrap();
+        dst.flush().unwrap();
+    }
+    aof.tee_advance_consumed(handed);
+
+    // Diff generation 2 stays in staging — the final swap flushes it.
+    aof.append(&argv(&[b"SET", b"g2", b"y"])).unwrap();
+    aof.append(&argv(&[b"SET", b"k", b"gen2"])).unwrap();
+    let (stats, tee_path) = aof.finish_concurrent_rewrite_from_tee(&tmp, 1).unwrap();
+    assert!(!aof.is_rewriting());
+    assert_eq!(stats.keys, 1);
+    let _ = std::fs::remove_file(&tee_path);
+
+    let mut dst = Store::new();
+    replay_aof(&path, |a| apply_for_test(&mut dst, &a)).unwrap();
+    assert_eq!(dst.get(b"a").unwrap(), Some(Cow::Borrowed(&b"1"[..])));
+    assert_eq!(dst.get(b"g1").unwrap(), Some(Cow::Borrowed(&b"x"[..])), "folded gen-1 must survive");
+    assert_eq!(dst.get(b"g2").unwrap(), Some(Cow::Borrowed(&b"y"[..])), "staged gen-2 must survive");
+    assert_eq!(
+        dst.get(b"k").unwrap(),
+        Some(Cow::Borrowed(&b"gen2"[..])),
+        "generations must replay in order"
+    );
+}

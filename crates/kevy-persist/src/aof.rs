@@ -93,6 +93,9 @@ pub struct Aof {
     /// grows into its warm pages instead of faulting a fresh range —
     /// the reactor-vs-worker mmap churn convicted in the S5-E finding.
     pub(crate) tee_spare: Option<Vec<u8>>,
+    /// File-backed tee (offload-mode rewrites; see `tee_file.rs`).
+    /// Mutually exclusive with `rewrite_tee`.
+    pub(crate) tee_file: Option<crate::tee_file::TeeFile>,
     /// Where `open` quarantined a dropped tail, if it had to repair one —
     /// surfaced so the store's open report can name the file.
     open_quarantine: Option<PathBuf>,
@@ -207,6 +210,7 @@ impl Aof {
             deferred: false,
             rewrite_tee: None,
             tee_spare: None,
+            tee_file: None,
             open_quarantine: quarantined,
             last_rewrite_at: Instant::now(),
             format,
@@ -297,6 +301,8 @@ impl Aof {
         }
         if let Some(tee) = &mut self.rewrite_tee {
             crate::record::write_record(tee, &self.scratch)?;
+        } else if let Some(tf) = &mut self.tee_file {
+            crate::record::write_record(&mut tf.staged, &self.scratch)?;
         }
         let overhead = match self.format {
             crate::AofFormat::V2 => crate::record::RECORD_HEADER as u64,
@@ -419,6 +425,6 @@ impl Aof {
     /// don't start another rewrite — `append` is teeing into the diff buffer.
     #[inline]
     pub fn is_rewriting(&self) -> bool {
-        self.rewrite_tee.is_some()
+        self.rewrite_tee.is_some() || self.tee_file.is_some()
     }
 }

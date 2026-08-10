@@ -65,7 +65,10 @@ impl Aof {
     /// while the tee is still growing (before the gigabytes, not after).
     #[must_use]
     pub fn tee_len(&self) -> Option<usize> {
-        self.rewrite_tee.as_ref().map(Vec::len)
+        self.rewrite_tee
+            .as_ref()
+            .map(Vec::len)
+            .or_else(|| self.tee_file.as_ref().map(|t| t.lag() as usize))
     }
 
     /// Return an appended generation's buffer (cleared) for the next
@@ -115,6 +118,12 @@ impl Aof {
             f.write_all(&tee)?;
             f.sync_all()?;
         }
+        self.swap_image(tmp, keys)
+    }
+
+    /// The shared swap tail: rename the finished image over the live
+    /// log, reopen the append handle, reset every size/format anchor.
+    pub(crate) fn swap_image(&mut self, tmp: &Path, keys: u64) -> io::Result<RewriteStats> {
         std::fs::rename(tmp, &self.path)?;
         let f = OpenOptions::new().append(true).open(&self.path)?;
         let bytes = f.metadata().map_or(0, |m| m.len());
