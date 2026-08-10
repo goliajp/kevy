@@ -81,20 +81,13 @@ jobs:
         run: |
           set -euo pipefail
           chain=$(printf '%s\n' \
-            kevy-madvise kevy-alloc kevy-sys kevy-tmpdir kevy-ranktree kevy-vlog \
-            kevy-time kevy-compress kevy-seg kevy-scalar \
-            kevy-hash kevy-config kevy-uring \
-            kevy-bytes kevy-resp kevy-ring kevy-map kevy-geo kevy-scope \
-            kevy-resp-client kevy-store \
-            kevy-text kevy-vector kevy-index kevy-window \
-            kevy-persist \
-            kevy-replicate \
-            kevy-elect \
-            kevy-rt kevy-embedded kevy-wasm \
-            kevy-lua kevy-lua-host \
-            kevy kevy-client \
-            kevy-sql kevy-cli kevy-mcp \
-            kevy-cluster-rw kevy-client-async | sort -u)
+            kevy-alloc kevy-compress kevy-config kevy-geo kevy-hash kevy-bytes \
+            kevy-lua kevy-lua-host kevy-madvise kevy-map kevy-ranktree kevy-resp \
+            kevy-elect kevy-replicate kevy-resp-client kevy-client-async kevy-cluster-rw kevy-mcp \
+            kevy-ring kevy-scope kevy-sys kevy-seg kevy-text kevy-time \
+            kevy-index kevy-scalar kevy-sql kevy-tmpdir kevy-uring kevy-vector \
+            kevy-vlog kevy-store kevy-persist kevy-rt kevy-window kevy \
+            kevy-embedded kevy-cli kevy-client kevy-wasm | sort -u)
           expected=$(cargo metadata --no-deps --format-version 1 \
             | jq -r '.packages | map(select(.publish == null)) | .[].name' \
             | sort -u)
@@ -168,20 +161,13 @@ jobs:
           # dev-dep kevy-client doesn't affect publish — placed at the
           # end alongside kevy-cluster-rw).
           for c in \
-            kevy-madvise kevy-alloc kevy-sys kevy-tmpdir kevy-ranktree kevy-vlog \
-            kevy-time kevy-compress kevy-seg kevy-scalar \
-            kevy-hash kevy-config kevy-uring \
-            kevy-bytes kevy-resp kevy-ring kevy-map kevy-geo kevy-scope \
-            kevy-resp-client kevy-store \
-            kevy-text kevy-vector kevy-index kevy-window \
-            kevy-persist \
-            kevy-replicate \
-            kevy-elect \
-            kevy-rt kevy-embedded kevy-wasm \
-            kevy-lua kevy-lua-host \
-            kevy kevy-client \
-            kevy-sql kevy-cli kevy-mcp \
-            kevy-cluster-rw kevy-client-async; do
+            kevy-alloc kevy-compress kevy-config kevy-geo kevy-hash kevy-bytes \
+            kevy-lua kevy-lua-host kevy-madvise kevy-map kevy-ranktree kevy-resp \
+            kevy-elect kevy-replicate kevy-resp-client kevy-client-async kevy-cluster-rw kevy-mcp \
+            kevy-ring kevy-scope kevy-sys kevy-seg kevy-text kevy-time \
+            kevy-index kevy-scalar kevy-sql kevy-tmpdir kevy-uring kevy-vector \
+            kevy-vlog kevy-store kevy-persist kevy-rt kevy-window kevy \
+            kevy-embedded kevy-cli kevy-client kevy-wasm; do
             publish_or_skip "$c"
           done
           echo "all publishable crates handled"
