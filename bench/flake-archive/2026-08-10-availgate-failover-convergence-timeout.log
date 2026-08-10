@@ -1,0 +1,65 @@
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	﻿2026-08-10T07:57:43.2538766Z ##[group]Run bash bench/availgate.sh target/release/kevy
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:57:43.2539200Z ^[[36;1mbash bench/availgate.sh target/release/kevy^[[0m
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:57:43.2586428Z shell: /usr/bin/bash -e {0}
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:57:43.2586720Z env:
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:57:43.2586938Z   CARGO_TERM_COLOR: always
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:57:43.2587187Z   RUST_BACKTRACE: 1
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:57:43.2587430Z   RUSTFLAGS: -D warnings
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:57:43.2587673Z ##[endgroup]
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:57:48.8296491Z availgate: ok — READONLY holds while apply advances (dbsize=200)
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:57:50.8396004Z availgate: ok — lag 0 + data plane converged
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:57:50.8637742Z availgate: ok — slave0 acked truth, advertised port + ROLE truth both sides (slave0:ip=127.0.0.1,port=7391,state=online,offset=200,sent=200,lag=0
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:57:50.8638607Z )
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:57:54.8715839Z availgate: ok — link down within window
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:57:58.9118811Z availgate: ok — link recovers to up
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:00.0550924Z availgate: ok — solo primary refuses writes (min_replicas=1)
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:00.5744995Z availgate: ok — write opens once a replica ACKs
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:11.7887326Z availgate: ok — crash failover: 7460 won and opened writes
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0090233Z --- FORENSICS other(7480):
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0120993Z "# Replication
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0121416Z role:slave
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0121895Z master_host:127.0.0.1
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0122364Z master_port:17460
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0122707Z master_link_status:up
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0122961Z master_last_io_seconds_ago:0
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0123212Z master_sync_in_progress:0
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0123482Z slave_read_only:1
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0124776Z availgate: FAIL — surviving replica never converged on the new primary's write
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0300619Z --- pri.out (tail)
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0301453Z kevy v4.1.1 starting: 127.0.0.1:7381, 4 shard(s), dir=/tmp/kevy-availgate-326t7j/p, aof=off (thread-per-core)
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0302179Z kevy: reactor = io_uring (io_uring available)
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0302522Z --- rep.out (tail)
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0302951Z kevy v4.1.1 starting: 127.0.0.1:7391, 4 shard(s), dir=/tmp/kevy-availgate-326t7j/r, aof=off (thread-per-core)
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0303424Z kevy: reactor = io_uring (io_uring available)
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0304333Z kevy: replica runner upstream error: replication socket I/O error: Connection reset by peer (os error 104)
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0305353Z --- n1.out (tail)
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0305650Z kevy: reactor = io_uring (io_uring available)
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0306178Z kevy: elect — this node is PRIMARY (writes open)
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0306666Z kevy: shard 0 promoted — replication feed generation bumped to 2
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0307654Z kevy: shard 3 promoted — replication feed generation bumped to 2
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0308475Z kevy: shard 1 promoted — replication feed generation bumped to 2
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0309334Z kevy: shard 2 promoted — replication feed generation bumped to 2
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0310048Z --- n2.out (tail)
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0311071Z kevy: replica runner 'kevy-replica-7460#1' connect to (127.0.0.1, 17441) failed: replication socket I/O error: Connection refused (os error 111); retrying in 250ms
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0312333Z kevy: elect — this node is PRIMARY (writes open)
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0313007Z kevy: shard 0 promoted — replication feed generation bumped to 2
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0314050Z kevy: shard 3 promoted — replication feed generation bumped to 2
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0314797Z kevy: shard 1 promoted — replication feed generation bumped to 2
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0315526Z kevy: shard 2 promoted — replication feed generation bumped to 2
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0316044Z --- n3.out (tail)
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0316986Z kevy: replica runner 'kevy-replica-7480#3' connect to (127.0.0.1, 17443) failed: replication socket I/O error: Connection refused (os error 111); retrying in 250ms
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0318635Z kevy: replica runner 'kevy-replica-7480#1' connect to (127.0.0.1, 17441) failed: replication socket I/O error: Connection refused (os error 111); retrying in 250ms
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0320673Z kevy: replica runner 'kevy-replica-7480#2' connect to (127.0.0.1, 17442) failed: replication socket I/O error: Connection refused (os error 111); retrying in 250ms
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0322356Z kevy: replica runner 'kevy-replica-7480#3' connect to (127.0.0.1, 17443) failed: replication socket I/O error: Connection refused (os error 111); retrying in 250ms
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0324156Z kevy: replica runner 'kevy-replica-7480#2' connect to (127.0.0.1, 17442) failed: replication socket I/O error: Connection refused (os error 111); retrying in 250ms
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0324985Z kevy: elect — following new primary 'n2' at 127.0.0.1:17460
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0325337Z --- pri.out (tail)
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0325777Z kevy v4.1.1 starting: 127.0.0.1:7381, 4 shard(s), dir=/tmp/kevy-availgate-326t7j/p, aof=off (thread-per-core)
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0326264Z kevy: reactor = io_uring (io_uring available)
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0326547Z --- rep.out (tail)
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0327176Z kevy v4.1.1 starting: 127.0.0.1:7391, 4 shard(s), dir=/tmp/kevy-availgate-326t7j/r, aof=off (thread-per-core)
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0327637Z kevy: reactor = io_uring (io_uring available)
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0328131Z kevy: replica runner upstream error: replication socket I/O error: Connection reset by peer (os error 104)
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0328695Z --- listener + accept-queue state (Recv-Q = unaccepted conns):
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0864393Z State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess                         
+contract gates (availgate + aigate + repligate)	availgate (16 clamps, 4 phases)	2026-08-10T07:58:32.0911330Z ##[error]Process completed with exit code 1.
