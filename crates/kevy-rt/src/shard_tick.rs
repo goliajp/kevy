@@ -129,7 +129,34 @@ impl<C: Commands> Shard<C> {
         if !aof.rewrite_due(policy) {
             return;
         }
+        if self.rewrite_predicted_diverging() {
+            return; // re-checked next tick; explicit BGREWRITEAOF bypasses
+        }
         self.start_bg_rewrite();
+    }
+
+    /// The auto-rewrite begin-gate: measured on the box from BOTH
+    /// sides, a rewrite ATTEMPT under saturating ingest is itself the
+    /// disturbance — an in-memory tee drives direct reclaim, a
+    /// file-backed one triples traffic on the saturated device — and
+    /// every such attempt ends in the divergence defer anyway. If
+    /// appends since the last due tick project past the overrun cap
+    /// within ~2s, do not begin: zero work beats deferred work. The
+    /// gated firehose cell measured 26 ms gap vs ~950 ms with attempts
+    /// running. Explicit BGREWRITEAOF is not gated.
+    fn rewrite_predicted_diverging(&mut self) -> bool {
+        let size = self.aof.as_ref().map_or(0, kevy_persist::Aof::size_bytes);
+        let now = std::time::Instant::now();
+        let Some((t0, s0)) = self.rewrite_rate_mark.replace((now, size)) else {
+            return true; // no sample yet — wait one tick for a rate
+        };
+        let dt = now.duration_since(t0).as_secs_f64();
+        if dt <= 0.0 {
+            return true;
+        }
+        let rate = size.saturating_sub(s0) as f64 / dt; // bytes/sec
+        // Cap / 2s: past this, the tee provably outruns the fold.
+        rate > (crate::persist_rewrite::TEE_DEFER_CAP as f64) / 2.0
     }
 
     /// Tick half of background persistence: apply any finished BGSAVE /
