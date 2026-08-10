@@ -108,12 +108,29 @@ impl<C: Commands> Shard<C> {
         };
         let Some(aof) = &mut self.aof else { return };
         let tee = aof.take_tee_for_handoff().unwrap_or_default();
-        if tee.len() <= SMALL_TEE {
+        if tee.is_empty() {
+            // Zero-I/O swap: every byte (including the smallest final
+            // generation) went through the worker's append+fsync, so
+            // the reactor pays only rename+reopen. The old <=SMALL_TEE
+            // shortcut appended+synced HERE — and four shards' lockstep
+            // rewrites finished in the same tick, serializing four
+            // fsync+rename storms on the journal (named by the tick
+            // sub-probe: tick_persist 408-421ms on all shards at once).
+            self.finish_rewrite_swap(&h, tee);
+            return;
+        }
+        if tee.len() <= SMALL_TEE && h.iters >= MAX_HANDOFFS {
+            // Backstop only: converged-but-never-empty under trickle
+            // appends — pay the bounded synchronous tail.
             self.finish_rewrite_swap(&h, tee);
             return;
         }
         let shrinking = tee.len() <= h.prev_len / SHRINK_DEN * SHRINK_NUM;
-        if h.iters >= MAX_HANDOFFS || (h.iters > 0 && !shrinking) || tee.len() > TEE_DEFER_CAP {
+        let small = tee.len() <= SMALL_TEE;
+        if (h.iters >= MAX_HANDOFFS && !small)
+            || (h.iters > 0 && !shrinking && !small)
+            || tee.len() > TEE_DEFER_CAP
+        {
             eprintln!(
                 "kevy: shard {} aof rewrite deferred: tee generation {} B after {} handoffs \
                  (ingest outrunning disk) — auto-rewrite re-anchored at current size",
