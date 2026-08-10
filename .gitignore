@@ -61,3 +61,4 @@ bench/.capacity-envelope-results
 aof-*.aof.premigration.*
 dump-*.rdb.premigration.*
 tools/facadegate/target/
+/tier/
