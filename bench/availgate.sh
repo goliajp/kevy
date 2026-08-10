@@ -286,14 +286,17 @@ done
 }
 OTHER=$N3; [ "$NEWP" = "$N3" ] && OTHER=$N2
 WOK=0
-for _ in $(seq 40); do
+# 60s: waiting longer costs nothing on a healthy run (breaks on
+# success) and only spends time on a run that is already failing — a
+# contended CI runner missed the old 20s window once (flake archive).
+for _ in $(seq 120); do
     echo "$($CLI -p $NEWP SET postfail v1 2>&1)" | grep -q OK && { WOK=1; break; }
     sleep 0.5
 done
 [ $WOK = 1 ] || fail "new primary $NEWP never opened writes"
 note "crash failover: $NEWP won and opened writes"
 CONV=0
-for _ in $(seq 40); do
+for _ in $(seq 120); do
     echo "$($CLI -p $OTHER GET postfail 2>/dev/null)" | grep -q '"v1"' && { CONV=1; break; }
     sleep 0.5
 done
