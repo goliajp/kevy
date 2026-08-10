@@ -166,6 +166,8 @@ fn main() -> kevy_embedded::KevyResult<()> {
 
 **shard 布局变更崩溃幂等。**修改 `--threads` / `shards` 时，新快照先写到 `.reshard` 临时名下，经由一份耐久的 `reshard.journal` 提交；迁移若中断，下次启动会向前滚完。源文件保留为 `.premigration.<unix_ts>` 备份；journal 是提交点，绝不能手工删除。
 
+**巨型单集合与 rewrite 窗口。**当一个集合值的引用被进行中的 rewrite 或快照 view 钉住时，对它的写入要在服务线程上付整值的写时复制克隆。普通值是微秒级、不可见；单个已长到 GB 级的 list/set/hash 则要付秒级(soak 实测：多 GB 单键持续追加下 7-9 秒)。若你的负载在这种规模上维持无界单键队列，请做截断(`LTRIM` 类)或预期该键所在 shard 在 rewrite 窗口内的延迟尖峰；元素粒度的修复在路线图上。
+
 **哪些东西不持久化。**Pub/sub 频道、订阅和未投递的消息只活在内存里。`BLPOP` 之类阻塞命令的等待者和阻塞式 `XREAD` 属于连接状态，不是数据。这两类都不写 AOF、不进快照，也不参与回放。
 
 ## FAQ

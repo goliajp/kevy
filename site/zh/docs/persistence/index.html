@@ -142,6 +142,7 @@ fn main() -&gt; kevy_embedded::KevyResult&lt;()&gt; {
 <p><b>饱和摄入下 rewrite 顺延(5.0)。</b>rewrite 必须折入运行期间落下的写；当追加速率被证明跑赢折入速度时,5.0 顺延 rewrite 而不是付无界停顿：增长规则在当前大小重新锚定，下一个增长因子后重试。显式 <code>BGREWRITEAOF</code> 永不受限。可观察的交换项：持续写饱和下 AOF 会越过常规重写点继续增长，压力缓解后收回——磁盘可退，停顿不可退。rewrite 前后可能短暂看到 <code>&lt;aof&gt;.rewrite</code>(构建中镜像)与 <code>&lt;aof&gt;.trashN</code>(把旧日志 GB 级释放挪出服务线程的硬链接)；两者自动清理，崩溃孤儿由下次 rewrite 回收。备份请排除 <code>*.rewrite</code> / <code>*.trash*</code>。</p>
 <p><b>TTL 持久化。</b>TTL 以绝对的 Unix 毫秒截止时间落盘（AOF 里写 <code>PEXPIREAT</code>，快照格式里是一个绝对时间字段），所以无论重启多少次，键都保持原来的过期时刻，进程停机的时长也能正确扣除。记录相对剩余时间的旧版 AOF 仍可加载（载入时按相对时间处理）；新写入一律是绝对时间。<code>EXPIREAT</code> 和 <code>PEXPIREAT</code> 都作为客户端命令开放。</p>
 <p><b>shard 布局变更崩溃幂等。</b>修改 <code>--threads</code> / <code>shards</code> 时，新快照先写到 <code>.reshard</code> 临时名下，经由一份耐久的 <code>reshard.journal</code> 提交；迁移若中断，下次启动会向前滚完。源文件保留为 <code>.premigration.&lt;unix_ts&gt;</code> 备份；journal 是提交点，绝不能手工删除。</p>
+<p><b>巨型单集合与 rewrite 窗口。</b>当一个集合值的引用被进行中的 rewrite 或快照 view 钉住时，对它的写入要在服务线程上付整值的写时复制克隆。普通值是微秒级、不可见；单个已长到 GB 级的 list/set/hash 则要付秒级(soak 实测：多 GB 单键持续追加下 7-9 秒)。若你的负载在这种规模上维持无界单键队列，请做截断(<code>LTRIM</code> 类)或预期该键所在 shard 在 rewrite 窗口内的延迟尖峰；元素粒度的修复在路线图上。</p>
 <p><b>哪些东西不持久化。</b>Pub/sub 频道、订阅和未投递的消息只活在内存里。<code>BLPOP</code> 之类阻塞命令的等待者和阻塞式 <code>XREAD</code> 属于连接状态，不是数据。这两类都不写 AOF、不进快照，也不参与回放。</p>
 <h2 id="faq">FAQ</h2>
 <h3 id="aof-文件一直在涨怎么压实">AOF 文件一直在涨——怎么压实？</h3>
