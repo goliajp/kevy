@@ -222,26 +222,8 @@ fn run_job(job: PersistJob) -> PersistDone {
             result: kevy_persist::dump_aof(&tmp, &view).map(|(keys, _bytes)| keys),
             tmp,
         },
-        PersistJob::SwapImage { tmp, live, trash } => {
-            let linked = match &trash {
-                Some(t) => std::fs::hard_link(&live, t).is_ok(),
-                None => false,
-            };
-            PersistDone::SwapImage {
-                result: std::fs::rename(&tmp, &live),
-                trash: trash.filter(|_| linked),
-            }
-        }
-        PersistJob::Cleanup { paths, bufs } => {
-            let mut failed = Vec::new();
-            for p in paths {
-                if let Err(e) = std::fs::remove_file(&p) {
-                    failed.push((p, e));
-                }
-            }
-            drop(bufs);
-            PersistDone::Cleanup { failed }
-        }
+        PersistJob::SwapImage { tmp, live, trash } => crate::persist_jobs::run_swap(tmp, live, trash),
+        PersistJob::Cleanup { paths, bufs } => crate::persist_jobs::run_cleanup(paths, bufs),
         PersistJob::TeeAppend { tmp, bytes } => run_tee_append(tmp, bytes),
     }
 }
@@ -328,9 +310,7 @@ impl<C: Commands> Shard<C> {
             }
             return;
         }
-        let diag_t0 = std::time::Instant::now();
         let view = self.store.collect_snapshot();
-        let diag_collect = diag_t0.elapsed();
         let aof = self.aof.as_mut().expect("checked above");
         let tmp = match aof.begin_view_rewrite() {
             Ok(t) => t,
@@ -339,8 +319,6 @@ impl<C: Commands> Shard<C> {
                 return;
             }
         };
-        eprintln!("kevy-diag: shard {} rewrite begin: collect {} ms (entries {})",
-            self.id, diag_collect.as_millis(), view.len());
         if !self
             .persist
             .submit(self.id, PersistJob::Rewrite { view, tmp })

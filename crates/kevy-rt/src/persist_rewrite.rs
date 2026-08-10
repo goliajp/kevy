@@ -110,28 +110,7 @@ impl<C: Commands> Shard<C> {
         let Some(aof) = &mut self.aof else { return };
         let tee = aof.take_tee_for_handoff().unwrap_or_default();
         if tee.is_empty() {
-            // Off-thread swap: even rename+hardlink are journal work
-            // that blocks ~400ms behind a loaded jbd2 commit (the tick
-            // sub-probe named poll=416ms x4 shards in one window). The
-            // worker does them; the reactor holds its queue (appends
-            // accumulate, bounded by the hold) and reopens on Done.
-            let live = aof.live_path();
-            let trash = aof.swap_trash_name();
-            aof.begin_swap_hold();
-            let job = PersistJob::SwapImage {
-                tmp: h.tmp.clone(),
-                live,
-                trash,
-            };
-            if self.persist.submit(self.id, job) {
-                self.rewrite_handoff = Some(h); // keys carried to finalize
-            } else {
-                // Worker gone (shutdown): synchronous fallback.
-                if let Some(aof) = &mut self.aof {
-                    aof.abort_swap_hold();
-                }
-                self.finish_rewrite_swap(&h, tee);
-            }
+            self.submit_offthread_swap(h);
             return;
         }
         if tee.len() <= SMALL_TEE && h.iters >= MAX_HANDOFFS {
@@ -209,6 +188,32 @@ impl<C: Commands> Shard<C> {
                 };
                 self.ship_cleanup(Vec::new(), bufs);
             }
+        }
+    }
+
+    /// Off-thread swap submit: even rename+hardlink are journal work
+    /// that blocks ~400ms behind a loaded jbd2 commit (the tick
+    /// sub-probe named poll=416ms x4 shards in one window). The worker
+    /// does them; the reactor holds its queue (appends accumulate,
+    /// bounded by the hold) and reopens on Done. Worker gone
+    /// (shutdown) falls back to the synchronous swap.
+    fn submit_offthread_swap(&mut self, h: RewriteHandoff) {
+        let Some(aof) = &mut self.aof else { return };
+        let live = aof.live_path();
+        let trash = aof.swap_trash_name();
+        aof.begin_swap_hold();
+        let job = PersistJob::SwapImage {
+            tmp: h.tmp.clone(),
+            live,
+            trash,
+        };
+        if self.persist.submit(self.id, job) {
+            self.rewrite_handoff = Some(h); // keys carried to finalize
+        } else {
+            if let Some(aof) = &mut self.aof {
+                aof.abort_swap_hold();
+            }
+            self.finish_rewrite_swap(&h, Vec::new());
         }
     }
 
