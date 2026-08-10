@@ -51,8 +51,8 @@ EOF
   <key>CFBundleIdentifier</key><string>jp.golia.kevyffi</string>
   <key>CFBundleName</key><string>$FW</string>
   <key>CFBundlePackageType</key><string>FMWK</string>
-  <key>CFBundleVersion</key><string>4.0.0</string>
-  <key>CFBundleShortVersionString</key><string>4.0.0</string>
+  <key>CFBundleVersion</key><string>5.0.0</string>
+  <key>CFBundleShortVersionString</key><string>5.0.0</string>
   <key>MinimumOSVersion</key><string>15.0</string>
   <key>CFBundleSupportedPlatforms</key><array><string>$platform</string></array>
 </dict></plist>
