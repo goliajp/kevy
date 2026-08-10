@@ -172,6 +172,13 @@ pub(crate) struct Shard<C: Commands> {
     /// image-spill completing and the final swap (or a divergence
     /// abort). See `persist_rewrite.rs` for the protocol.
     pub(crate) rewrite_handoff: Option<crate::persist_rewrite::RewriteHandoff>,
+    /// `(when, aof size)` at the last auto-rewrite rate sample — the
+    /// begin-gate's memory (see `maybe_auto_rewrite_aof`).
+    pub(crate) rewrite_rate_mark: Option<(std::time::Instant, u64)>,
+    /// Consecutive due-ticks below the begin-gate's rate threshold —
+    /// the gate's hysteresis (a storm's momentary lull must not admit
+    /// a giant postponed attempt).
+    pub(crate) rewrite_calm_ticks: u32,
     /// io_uring AOF offload state (RFC v3-aof-offload S1); dormant
     /// unless the reactor's setup opts in.
     #[cfg(target_os = "linux")]

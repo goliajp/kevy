@@ -156,7 +156,7 @@ impl<C: Commands> Shard<C> {
             return;
         }
         let Some(aof) = &mut self.aof else { return };
-        if !matches!(aof.fsync_policy(), kevy_persist::Fsync::EverySec) {
+        if aof.swap_holding() || !matches!(aof.fsync_policy(), kevy_persist::Fsync::EverySec) {
             return;
         }
         let Some(fd) = aof.queued_fd() else { return };
@@ -215,6 +215,16 @@ impl<C: Commands> Shard<C> {
     /// with the ring drained of append chunks; a deferred explicit
     /// BGREWRITEAOF fires here too.
     pub(crate) fn uring_tick_persist(&mut self) {
+        // The tee overrun check is a safety valve and must run even
+        // while the ring is busy: the structural gate below stays
+        // closed for exactly as long as saturating ingest keeps the
+        // queue non-empty — which is exactly when the tee grows
+        // unchecked (measured: a single-key LPUSH storm concentrated
+        // on one shard grew a GB tee with zero defers logged, because
+        // the gated tick never ran the check). The check itself does
+        // no structural file ops: the abort is memory-only and the
+        // unlinks ship to the worker.
+        self.check_tee_overrun();
         if self.uring_aof_restructure_ready() {
             if self.aof_offload.want_restructure {
                 self.aof_offload.want_restructure = false;

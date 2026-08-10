@@ -105,6 +105,7 @@ mod lua_wake_bridge;
 mod message;
 mod message_agg;
 mod message_kinds;
+mod persist_jobs;
 mod persist_rewrite;
 mod persist_worker;
 pub mod propagation;
