@@ -8,6 +8,15 @@ use crate::Commands;
 use crate::persist_worker::{PersistDone, PersistJob};
 use crate::shard::Shard;
 
+/// A tee past this size defers the rewrite at once: 64× the swap
+/// bound cannot shrink to `SMALL_TEE` while ingest continues, and
+/// letting it keep growing is the damage itself — the tee's GB/s
+/// anonymous allocation is what pushed the box into direct reclaim
+/// (5-6.5M pages scanned vs 6-18k without a rewrite; the S5-E/F
+/// finding), stalling reactor faults on the LRU locks. Checked on the
+/// tick WHILE the tee grows and again at each handoff step.
+pub(crate) const TEE_DEFER_CAP: usize = 256 << 20;
+
 /// In-flight two-phase handoff: the worker has spilled the image to
 /// `tmp`; tee generations are being appended off-thread until they
 /// converge (or provably can't).
@@ -30,6 +39,13 @@ impl<C: Commands> Shard<C> {
                 result: Ok(keys),
                 tmp,
             } => {
+                // Stale completion: the tick's overrun check deferred
+                // this rewrite while the image was still dumping. The
+                // diff is gone with the tee — swapping would lose it.
+                if !self.aof.as_ref().is_some_and(kevy_persist::Aof::is_rewriting) {
+                    self.abort_rewrite_cleanup(&tmp);
+                    return;
+                }
                 self.rewrite_handoff = Some(RewriteHandoff {
                     tmp,
                     keys,
@@ -98,7 +114,7 @@ impl<C: Commands> Shard<C> {
             return;
         }
         let shrinking = tee.len() <= h.prev_len / SHRINK_DEN * SHRINK_NUM;
-        if h.iters >= MAX_HANDOFFS || (h.iters > 0 && !shrinking) {
+        if h.iters >= MAX_HANDOFFS || (h.iters > 0 && !shrinking) || tee.len() > TEE_DEFER_CAP {
             eprintln!(
                 "kevy: shard {} aof rewrite deferred: tee generation {} B after {} handoffs \
                  (ingest outrunning disk) — auto-rewrite re-anchored at current size",
@@ -126,6 +142,36 @@ impl<C: Commands> Shard<C> {
                 eprintln!("kevy: shard {} aof rewrite tee append failed: {e}", self.id);
                 self.rewrite_handoff = None;
                 self.abort_rewrite_cleanup(tmp);
+            }
+        }
+    }
+
+    /// Tick-side overrun check: a rewrite whose tee has outgrown
+    /// [`TEE_DEFER_CAP`] while the image is still dumping (or between
+    /// handoffs) is deferred NOW — the growth itself is the damage.
+    pub(crate) fn check_tee_overrun(&mut self) {
+        let Some(aof) = &mut self.aof else { return };
+        let Some(len) = aof.tee_len() else { return };
+        if len <= TEE_DEFER_CAP {
+            return;
+        }
+        eprintln!(
+            "kevy: shard {} aof rewrite deferred mid-flight: tee at {len} B \
+             (ingest outrunning disk) — auto-rewrite re-anchored at current size",
+            self.id
+        );
+        aof.anchor_rewrite_deferred();
+        let tmp = self.rewrite_handoff.take().map(|h| h.tmp);
+        match tmp {
+            // Between handoffs: the tmp image is ours to delete.
+            Some(t) => self.abort_rewrite_cleanup(&t),
+            // Image still dumping: the completion arm sees the abort
+            // (is_rewriting false) and cleans the tmp up itself.
+            None => {
+                self.ship_tee_teardown();
+                if let Some(aof) = &mut self.aof {
+                    aof.abort_concurrent_rewrite();
+                }
             }
         }
     }
