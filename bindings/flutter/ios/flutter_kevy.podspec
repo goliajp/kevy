@@ -13,7 +13,7 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'flutter_kevy'
-  s.version          = '4.0.0'
+  s.version          = '5.0.0'
   s.summary          = 'kevy embedded in Flutter over dart:ffi — TTL, structures, pub/sub, persistence you can read.'
   s.description      = 'kevy embedded in Flutter over dart:ffi, wrapping the kevy-ffi C ABI. The MMKV shape plus everything MMKV lacks.'
   s.homepage         = 'https://kevy.golia.jp'

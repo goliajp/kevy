@@ -64,7 +64,7 @@ cat > "$APP/app.csproj" <<'EOF'
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Kevy" Version="4.0.0" />
+    <PackageReference Include="Kevy" Version="5.0.0" />
   </ItemGroup>
 </Project>
 EOF
