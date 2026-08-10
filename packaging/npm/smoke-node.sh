@@ -35,7 +35,7 @@ bash packaging/npm/gen-node-platform-pkg.sh "$os" "$cpu" \
 APP="$STAGE/app"
 mkdir -p "$APP"
 (cd "$APP" && npm init -y >/dev/null 2>&1 && npm install --no-audit --no-fund --quiet \
-    "$STAGE"/goliapkg-kevy-node-4*.tgz "$STAGE"/goliapkg-kevy-node-"$os"-"$cpu"-*.tgz >/dev/null)
+    "$STAGE"/goliapkg-kevy-node-[0-9]*.tgz "$STAGE"/goliapkg-kevy-node-"$os"-"$cpu"-*.tgz >/dev/null)
 
 cat > "$APP/smoke.mjs" <<'EOF'
 import { open, text } from "@goliapkg/kevy-node";
