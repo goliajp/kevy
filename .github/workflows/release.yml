@@ -82,10 +82,11 @@ jobs:
           set -euo pipefail
           chain=$(printf '%s\n' \
             kevy-madvise kevy-alloc kevy-sys kevy-tmpdir kevy-ranktree kevy-vlog \
+            kevy-time kevy-compress kevy-seg kevy-scalar \
             kevy-hash kevy-config kevy-uring \
             kevy-bytes kevy-resp kevy-ring kevy-map kevy-geo kevy-scope \
             kevy-resp-client kevy-store \
-            kevy-text kevy-vector kevy-index \
+            kevy-text kevy-vector kevy-index kevy-window \
             kevy-persist \
             kevy-replicate \
             kevy-elect \
@@ -168,10 +169,11 @@ jobs:
           # end alongside kevy-cluster-rw).
           for c in \
             kevy-madvise kevy-alloc kevy-sys kevy-tmpdir kevy-ranktree kevy-vlog \
+            kevy-time kevy-compress kevy-seg kevy-scalar \
             kevy-hash kevy-config kevy-uring \
             kevy-bytes kevy-resp kevy-ring kevy-map kevy-geo kevy-scope \
             kevy-resp-client kevy-store \
-            kevy-text kevy-vector kevy-index \
+            kevy-text kevy-vector kevy-index kevy-window \
             kevy-persist \
             kevy-replicate \
             kevy-elect \
