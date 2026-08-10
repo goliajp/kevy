@@ -178,9 +178,23 @@ impl<C: Commands> Shard<C> {
     /// rewrite (commit or abort — see `poll_persist_done`), then check the
     /// auto-rewrite threshold.
     pub(crate) fn tick_persist(&mut self) {
+        let d0 = std::time::Instant::now();
         self.poll_persist_done();
+        let d1 = d0.elapsed();
         self.check_tee_overrun();
+        let d2 = d0.elapsed();
         self.maybe_auto_rewrite_aof();
+        let d3 = d0.elapsed();
+        if d3.as_millis() >= 50 {
+            eprintln!(
+                "kevy-diag: shard {} tick_persist {} ms (poll {} / overrun {} / auto_rw {})",
+                self.id,
+                d3.as_millis(),
+                d1.as_millis(),
+                (d2 - d1).as_millis(),
+                (d3 - d2).as_millis()
+            );
+        }
         let in_flight =
             self.persist.busy() || self.aof.as_ref().is_some_and(kevy_persist::Aof::is_rewriting);
         let rewrites = self.aof.as_ref().map_or(0, kevy_persist::Aof::rewrites_total);
