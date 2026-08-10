@@ -60,6 +60,14 @@ impl Aof {
         }
     }
 
+    /// Live diff-buffer size, `None` when no rewrite is running — the
+    /// tick's overrun check reads this to defer a diverging rewrite
+    /// while the tee is still growing (before the gigabytes, not after).
+    #[must_use]
+    pub fn tee_len(&self) -> Option<usize> {
+        self.rewrite_tee.as_ref().map(Vec::len)
+    }
+
     /// Return an appended generation's buffer (cleared) for the next
     /// generation to grow into. Ping-pong: at most one generation is
     /// ever out with the worker, so the slot is normally empty; a

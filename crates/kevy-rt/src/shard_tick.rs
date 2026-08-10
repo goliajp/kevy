@@ -137,6 +137,7 @@ impl<C: Commands> Shard<C> {
     /// auto-rewrite threshold.
     pub(crate) fn tick_persist(&mut self) {
         self.poll_persist_done();
+        self.check_tee_overrun();
         self.maybe_auto_rewrite_aof();
         let in_flight =
             self.persist.busy() || self.aof.as_ref().is_some_and(kevy_persist::Aof::is_rewriting);
