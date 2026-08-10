@@ -57,8 +57,7 @@ impl<C: Commands> Shard<C> {
             PersistDone::TeeAppend { result, tmp, buf } => {
                 self.on_tee_appended(result, &tmp, buf);
             }
-            PersistDone::DropBufs => {}
-            PersistDone::Remove { result, path } => self.note_remove_done(result, &path),
+            PersistDone::Cleanup { failed } => self.note_cleanup_failures(failed),
             PersistDone::Rewrite {
                 result: Err(e),
                 tmp,
@@ -168,21 +167,26 @@ impl<C: Commands> Shard<C> {
             // Image still dumping: the completion arm sees the abort
             // (is_rewriting false) and cleans the tmp up itself.
             None => {
-                self.ship_tee_teardown();
-                if let Some(aof) = &mut self.aof {
-                    aof.abort_concurrent_rewrite();
-                }
+                let bufs = match &mut self.aof {
+                    Some(aof) => {
+                        let b = aof.take_tee_teardown();
+                        aof.abort_concurrent_rewrite();
+                        b
+                    }
+                    None => Vec::new(),
+                };
+                self.ship_cleanup(Vec::new(), bufs);
             }
         }
     }
 
-    /// Off-thread unlink completed — best-effort, log-only on failure
+    /// Best-effort teardown unlinks that failed — named for the log
     /// (an orphaned `.rewrite` tmp is reclaimed by the next rewrite's
     /// truncating open of the same deterministic path).
-    fn note_remove_done(&self, result: std::io::Result<()>, path: &std::path::Path) {
-        if let Err(e) = result {
+    fn note_cleanup_failures(&self, failed: Vec<(std::path::PathBuf, std::io::Error)>) {
+        for (path, e) in failed {
             eprintln!(
-                "kevy: shard {} abandoned rewrite image {} not deleted: {e}",
+                "kevy: shard {} teardown file {} not deleted: {e}",
                 self.id,
                 path.display()
             );
@@ -223,45 +227,44 @@ impl<C: Commands> Shard<C> {
             return;
         }
         // The recycled spare can still hold a GB-scale warm buffer —
-        // its free belongs on the worker with the rest of them.
-        self.ship_tee_teardown();
+        // its free belongs on the worker.
+        let bufs = self.aof.as_mut().map(kevy_persist::Aof::take_tee_teardown).unwrap_or_default();
+        self.ship_cleanup(Vec::new(), bufs);
     }
 
-    /// Ship every retained tee buffer to the worker for an off-thread
-    /// drop. Worker gone/busy = drop inline (shutdown or error path —
-    /// nothing latency-critical left to protect).
-    fn ship_tee_teardown(&mut self) {
-        let Some(aof) = &mut self.aof else { return };
-        let bufs = aof.take_tee_teardown();
-        if bufs.is_empty() {
+
+    /// Common abort tail: retained tee buffers and the half-built
+    /// image go to the worker in ONE Cleanup job (the worker is
+    /// serial; split submits silently dropped the second, sneaking GB
+    /// unlinks back inline onto the reactor). The live AOF carried
+    /// every write through the normal append path, so an abort never
+    /// risks data. Worker gone = inline best-effort (shutdown/error
+    /// path; nothing latency-critical left to protect).
+    fn abort_rewrite_cleanup(&mut self, tmp: &std::path::Path) {
+        let bufs = match &mut self.aof {
+            Some(aof) => {
+                let b = aof.take_tee_teardown();
+                aof.abort_concurrent_rewrite();
+                b
+            }
+            None => Vec::new(),
+        };
+        self.ship_cleanup(vec![tmp.to_path_buf()], bufs);
+    }
+
+    /// One Cleanup submit; inline fallback when the worker is gone.
+    fn ship_cleanup(&mut self, paths: Vec<std::path::PathBuf>, bufs: Vec<Vec<u8>>) {
+        if paths.is_empty() && bufs.is_empty() {
             return;
         }
-        if !self.persist.submit(self.id, PersistJob::DropBufs { bufs }) {
-            // submit dropped the job (and the buffers) on the floor
-            // already — nothing further to do.
-        }
-    }
-
-    /// Common abort tail: drop the tee, delete the half-built image.
-    /// The live AOF carried every write through the normal append path,
-    /// so an abort never risks data. The unlink goes to the worker —
-    /// deleting a multi-GB image contends on the fs journal (seconds
-    /// under a saturated disk) and must not run on the reactor; the
-    /// worker runs jobs serially, so a later Rewrite can never race the
-    /// pending Remove on the same deterministic tmp path. Worker gone =
-    /// inline best-effort (shutdown path; nothing left to stall).
-    fn abort_rewrite_cleanup(&mut self, tmp: &std::path::Path) {
-        self.ship_tee_teardown();
-        if let Some(aof) = &mut self.aof {
-            aof.abort_concurrent_rewrite();
-        }
-        if !self.persist.submit(
-            self.id,
-            PersistJob::Remove {
-                path: tmp.to_path_buf(),
-            },
-        ) {
-            let _ = std::fs::remove_file(tmp);
+        let job = PersistJob::Cleanup {
+            paths: paths.clone(),
+            bufs,
+        };
+        if !self.persist.submit(self.id, job) {
+            for p in paths {
+                let _ = std::fs::remove_file(&p);
+            }
         }
     }
 }

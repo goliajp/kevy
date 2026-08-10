@@ -42,15 +42,13 @@ pub(crate) enum PersistJob {
     Rewrite { view: SnapshotView, tmp: PathBuf },
     /// Append a handed-off tee generation to the rewrite tmp and fsync.
     TeeAppend { tmp: PathBuf, bytes: Vec<u8> },
-    /// Drop retained GB-scale buffers off-thread (rewrite teardown) —
-    /// a multi-GB munmap holds the address-space lock long enough to
-    /// stall every reactor page fault (the S5-E finding's seat).
-    DropBufs { bufs: Vec<Vec<u8>> },
-    /// Delete an abandoned multi-GB rewrite image. Unlinking a large
-    /// file contends on the fs journal — seconds under a saturated
-    /// disk — so it must not run on the reactor (measured as the
-    /// firehose residual after the divergence-defer landed).
-    Remove { path: PathBuf },
+    /// Rewrite-teardown housekeeping in ONE job (the worker is serial —
+    /// a second submit while it holds the first would be dropped, which
+    /// silently pushed GB unlinks back inline onto the reactor):
+    /// unlink abandoned files (multi-GB unlinks contend the fs journal)
+    /// and free retained buffers (multi-GB munmaps stall reactor
+    /// faults), all off-thread.
+    Cleanup { paths: Vec<PathBuf>, bufs: Vec<Vec<u8>> },
 }
 
 pub(crate) enum PersistDone {
@@ -63,8 +61,8 @@ pub(crate) enum PersistDone {
         result: io::Result<u64>, // keys dumped
         tmp: PathBuf,
     },
-    /// A deferred/aborted rewrite's image deleted off-thread.
-    Remove { result: io::Result<()>, path: PathBuf },
+    /// Teardown housekeeping done; failed unlinks named for the log.
+    Cleanup { failed: Vec<(PathBuf, io::Error)> },
     /// One handed-off tee generation appended+fsynced to `tmp`
     /// (the two-phase rewrite's phase 2; see `advance_rewrite_handoff`).
     /// `buf` is the generation's buffer, CLEARED, for the pool.
@@ -73,8 +71,6 @@ pub(crate) enum PersistDone {
         tmp: PathBuf,
         buf: Vec<u8>,
     },
-    /// Buffers dropped off-thread; nothing to apply.
-    DropBufs,
 }
 
 /// Lazily-spawned single-thread persister. Dropping it closes the channel;
@@ -217,15 +213,17 @@ fn run_job(job: PersistJob) -> PersistDone {
             result: kevy_persist::dump_aof(&tmp, &view).map(|(keys, _bytes)| keys),
             tmp,
         },
-        PersistJob::Remove { path } => PersistDone::Remove {
-            result: std::fs::remove_file(&path),
-            path,
-        },
-        PersistJob::TeeAppend { tmp, bytes } => run_tee_append(tmp, bytes),
-        PersistJob::DropBufs { bufs } => {
+        PersistJob::Cleanup { paths, bufs } => {
+            let mut failed = Vec::new();
+            for p in paths {
+                if let Err(e) = std::fs::remove_file(&p) {
+                    failed.push((p, e));
+                }
+            }
             drop(bufs);
-            PersistDone::DropBufs
+            PersistDone::Cleanup { failed }
         }
+        PersistJob::TeeAppend { tmp, bytes } => run_tee_append(tmp, bytes),
     }
 }
 
@@ -470,8 +468,7 @@ impl<C: Commands> Shard<C> {
             }
             done @ (PersistDone::Rewrite { .. }
             | PersistDone::TeeAppend { .. }
-            | PersistDone::Remove { .. }
-            | PersistDone::DropBufs) => {
+            | PersistDone::Cleanup { .. }) => {
                 self.commit_rewrite_done(done);
             }
         }
