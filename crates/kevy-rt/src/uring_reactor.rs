@@ -126,6 +126,7 @@ impl<C: Commands> Shard<C> {
         let mut reap_counter: u32 = 0;
 
         while !stop.load(Ordering::Relaxed) {
+            let diag_iter_t0 = std::time::Instant::now();
             // One multishot accept SQE per listener stays
             // armed across many connections. The kernel re-fires it per
             // incoming conn, each CQE carrying the new fd in `res` and
@@ -172,6 +173,8 @@ impl<C: Commands> Shard<C> {
             // `park_timeout_ms`, and treating that as work would reset the
             // idle ladder into a 100 %-CPU spin burst per tick.
             let mut io_work = false;
+            let mut diag_max_call = std::time::Duration::ZERO;
+            let mut diag_max_op: &'static str = "-";
             // E11: dispatch loop body. RECV / WRITE dominate at -c1
             // (every request is one recv + one write); ACCEPT / WAKER /
             // TIMEOUT fire once at conn start and at park transitions.
@@ -190,11 +193,23 @@ impl<C: Commands> Shard<C> {
                     OP_AOF => self.uring_aof_on_cqe(c.user_data, c.res),
                     OP_RECV => {
                         io_work = true;
+                        let t0 = std::time::Instant::now();
                         self.uring_on_recv(cid, c, &mut io, &mut pbuf);
+                        let d = t0.elapsed();
+                        if d > diag_max_call {
+                            diag_max_call = d;
+                            diag_max_op = "recv";
+                        }
                     }
                     OP_WRITE => {
                         io_work = true;
+                        let t0 = std::time::Instant::now();
                         self.uring_on_write(cid, c.res, &mut io);
+                        let d = t0.elapsed();
+                        if d > diag_max_call {
+                            diag_max_call = d;
+                            diag_max_op = "write";
+                        }
                         // A write CQE — even a fully-drained one —
                         // wants an arm visit so a chunked-writev tail
                         // (pub/sub burst > IOV_MAX) gets its next
@@ -284,9 +299,12 @@ impl<C: Commands> Shard<C> {
                 }
             }
 
+            let diag_reap_done = diag_iter_t0.elapsed();
+            let diag_comps_n = comps.len();
             // Cross-core: forwarded requests + replies (output accumulates; the
             // io_uring write path below flushes it).
             let did_inbound = self.uring_drain_inbound();
+            let diag_inbound_done = diag_iter_t0.elapsed();
             // `self.dirty` is no longer cleared here —
             // pub/sub deliver paths push into it and `uring_arm_conns`
             // drains it into `arm_pending` on the next iter. The prior
@@ -367,6 +385,22 @@ impl<C: Commands> Shard<C> {
                 }
             }
 
+            {
+                let total = diag_iter_t0.elapsed();
+                if total.as_millis() >= 50 {
+                    eprintln!(
+                        "kevy-diag: shard {} slow iter {} ms (reap+dispatch {} ms / inbound {} ms / tick+aof {} ms, comps={}, max_call={} ms op={})",
+                        self.id,
+                        total.as_millis(),
+                        diag_reap_done.as_millis(),
+                        (diag_inbound_done - diag_reap_done).as_millis(),
+                        (total - diag_inbound_done).as_millis(),
+                        diag_comps_n,
+                        diag_max_call.as_millis(),
+                        diag_max_op,
+                    );
+                }
+            }
             // Per-iter replication pump: writes streaming
             // frames + drives snapshot ship chunks. Hoist the
             // "is this shard actually doing replication" predicate to
