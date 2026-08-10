@@ -107,12 +107,15 @@ impl Server {
         // Wait for both ports.
         for p in [port, replication_base] {
             let mut ready = false;
-            for _ in 0..400 {
+            // 30s: a contended CI runner missed the old 2s window once
+            // (flake archive). Healthy runs break out in milliseconds;
+            // only an already-failing run spends the budget.
+            for _ in 0..3000 {
                 if std::net::TcpStream::connect(("127.0.0.1", p)).is_ok() {
                     ready = true;
                     break;
                 }
-                std::thread::sleep(Duration::from_millis(5));
+                std::thread::sleep(Duration::from_millis(10));
             }
             assert!(ready, "server did not come up on port {p}");
         }
