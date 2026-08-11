@@ -293,6 +293,14 @@ impl SegMap<SmallBytes> {
     }
 }
 
+impl SegMap<f64> {
+    /// Shell + slot overhead only (the zset door charges member heap
+    /// bytes itself, with its ×2 dual-structure rule).
+    pub(crate) fn weight_shell_only(&self) -> u64 {
+        self.shell_weight(crate::value::HASH_SLOT_BYTES)
+    }
+}
+
 impl SegMap<()> {
     /// [`crate::Value::weight`]'s SegSet arm — the flat Set model plus
     /// the shell.

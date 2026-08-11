@@ -5,6 +5,7 @@
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
 use crate::small_zset::{self, AddResult as ZAddResult, SmallZSetData};
+use crate::zset_seg::{SegZSetData, Z_PROMOTE};
 use crate::value::{ZSetData, SmallBytes, Value, zset_member_weight};
 use crate::{Entry, Store, StoreError};
 use alloc::sync::Arc;
@@ -12,8 +13,10 @@ use alloc::sync::Arc;
 impl Store {
     // ---- sorted sets ---------------------------------------------------
 
-    /// Borrow the key's zset mutably; promote inline → heap if needed.
-    fn zset_mut(&mut self, key: &[u8], create: bool) -> Result<Option<&mut ZSetData>, StoreError> {
+    /// Borrow the key's zset mutably; promotes inline → flat, and flat →
+    /// segmented at the threshold (so ZINCRBY-only workloads cross the
+    /// boundary too).
+    fn zset_mut(&mut self, key: &[u8], create: bool) -> Result<Option<ZRefMut<'_>>, StoreError> {
         if self.live_entry_mut(key).is_none() {
             if !create {
                 return Ok(None);
@@ -24,26 +27,35 @@ impl Store {
             );
         }
         // A.8: see hash.rs::hash_mut — promote out-of-scope.
-        let is_inline = matches!(
-            self.map.get(key).map(|e| &e.value),
-            Some(Value::SmallZSetInline(_))
-        );
-        if is_inline {
-            let promoted = {
-                let e = self.map.get(key).expect("present");
-                if let Value::SmallZSetInline(s) = &e.value {
-                    small_zset::promote(s)
-                } else {
-                    unreachable!()
-                }
-            };
-            self.map.get_mut(key).expect("present").value = Value::ZSet(Arc::new(promoted));
-            self.reweigh_entry(key);
+        let needs = match self.map.get(key).map(|e| &e.value) {
+            Some(Value::SmallZSetInline(_)) => true,
+            Some(Value::ZSet(z)) => z.len() >= Z_PROMOTE,
+            _ => false,
+        };
+        if needs {
+            self.promote_zset_encoding(key);
         }
         match &mut self.map.get_mut(key).expect("present").value {
-            Value::ZSet(z) => Ok(Some(Arc::make_mut(z))),
+            Value::ZSet(z) => Ok(Some(ZRefMut::Flat(Arc::make_mut(z)))),
+            Value::SegZSet(z) => Ok(Some(ZRefMut::Seg(Arc::make_mut(z)))),
             _ => Err(StoreError::WrongType),
         }
+    }
+
+    /// One promotion step: inline → flat, or flat-at-threshold →
+    /// segmented. Reweighs the entry.
+    fn promote_zset_encoding(&mut self, key: &[u8]) {
+        let Some(e) = self.map.get_mut(key) else { return };
+        match &mut e.value {
+            Value::SmallZSetInline(s) => {
+                e.value = Value::ZSet(Arc::new(small_zset::promote(s)));
+            }
+            Value::ZSet(z) => {
+                e.value = Value::SegZSet(Arc::new(SegZSetData::from_flat(z)));
+            }
+            _ => return,
+        }
+        self.reweigh_entry(key);
     }
 
     /// A.8: read the key's zset slot for ZADD. None when absent.
@@ -51,7 +63,9 @@ impl Store {
         match self.live_entry_mut(key) {
             None => Ok(None),
             Some(e) => match &e.value {
-                Value::ZSet(_) | Value::SmallZSetInline(_) => Ok(Some(&mut e.value)),
+                Value::ZSet(_) | Value::SegZSet(_) | Value::SmallZSetInline(_) => {
+                    Ok(Some(&mut e.value))
+                }
                 _ => Err(StoreError::WrongType),
             },
         }
@@ -60,6 +74,7 @@ impl Store {
     fn drop_if_empty_zset(&mut self, key: &[u8]) {
         let empty = match self.map.get(key).map(|e| &e.value) {
             Some(Value::ZSet(z)) => z.len() == 0,
+            Some(Value::SegZSet(z)) => z.is_empty(),
             Some(Value::SmallZSetInline(z)) => z.is_empty(),
             _ => false,
         };
@@ -101,6 +116,7 @@ impl Store {
             None => Ok(None),
             Some(e) => match &e.value {
                 Value::ZSet(z) => Ok(z.by_member.get(member).copied()),
+                Value::SegZSet(z) => Ok(z.score_of(member)),
                 Value::SmallZSetInline(z) => Ok(z.score(member)),
                 _ => Err(StoreError::WrongType),
             },
@@ -112,6 +128,7 @@ impl Store {
             None => Ok(0),
             Some(e) => match &e.value {
                 Value::ZSet(z) => Ok(z.len()),
+                Value::SegZSet(z) => Ok(z.len()),
                 Value::SmallZSetInline(z) => Ok(z.len()),
                 _ => Err(StoreError::WrongType),
             },
@@ -131,6 +148,15 @@ impl Store {
                 match &mut e.value {
                     Value::ZSet(z) => {
                         // G-A3: hoist Arc::make_mut OUT of loop.
+                        let z = Arc::make_mut(z);
+                        for m in members {
+                            if z.remove(m) {
+                                r += 1;
+                                d -= zset_member_weight(&SmallBytes::from_slice(m)) as i64;
+                            }
+                        }
+                    }
+                    Value::SegZSet(z) => {
                         let z = Arc::make_mut(z);
                         for m in members {
                             if z.remove(m) {
@@ -167,6 +193,9 @@ impl Store {
                     .get(member)
                     .copied()
                     .and_then(|sc| z.rank_of(member, sc))),
+                Value::SegZSet(z) => {
+                    Ok(z.score_of(member).and_then(|sc| z.rank_of(member, sc)))
+                }
                 Value::SmallZSetInline(z) => {
                     // Inline holds at most 2 entries; sort by score (then
                     // bytes) so ZRANK matches ZRANGE order.
@@ -183,11 +212,11 @@ impl Store {
 
     /// `ZINCRBY` — add `incr` to a member's score; returns the new score.
     pub fn zincrby(&mut self, key: &[u8], incr: f64, member: &[u8]) -> Result<f64, StoreError> {
-        let z = self.zset_mut(key, true)?.expect("created");
-        let cur = z.by_member.get(member).copied().unwrap_or(0.0);
+        let mut z = self.zset_mut(key, true)?.expect("created");
+        let cur = z.score_of(member).unwrap_or(0.0);
         let next = cur + incr;
         let smb = SmallBytes::from_slice(member);
-        let is_new = !z.by_member.contains_key(member);
+        let is_new = !z.contains_member(member);
         z.insert(member, next);
         let d = if is_new { zset_member_weight(&smb) as i64 } else { 0 };
         self.account_delta(key, d);
@@ -205,21 +234,32 @@ impl Store {
                 ZAddResult::Added => Ok(ZaddOutcome::AddedInline),
                 ZAddResult::Updated => Ok(ZaddOutcome::UpdatedInline),
                 ZAddResult::NoRoom => {
-                    let mut promoted = small_zset::promote(z);
-                    let smb = SmallBytes::from_slice(m);
-                    let is_new = !promoted.by_member.contains_key(m);
-                    let w = zset_member_weight(&smb) as i64;
-                    promoted.insert(m, score);
-                    *v = Value::ZSet(Arc::new(promoted));
+                    let outcome = promote_inline_zset_and_add(v, m, score);
                     self.reweigh_entry(key);
-                    if is_new {
-                        Ok(ZaddOutcome::AddedHeap(w))
-                    } else {
-                        Ok(ZaddOutcome::UpdatedHeap)
-                    }
+                    Ok(outcome)
                 }
             },
+            Value::ZSet(z) if z.len() >= Z_PROMOTE => {
+                let is_new = promote_flat_zset_and_add(v, m, score);
+                self.reweigh_entry(key);
+                // Reweighed from scratch — swallow the per-member delta.
+                if is_new {
+                    Ok(ZaddOutcome::AddedHeap(0))
+                } else {
+                    Ok(ZaddOutcome::UpdatedHeap)
+                }
+            }
             Value::ZSet(z) => {
+                let z = Arc::make_mut(z);
+                let smb = SmallBytes::from_slice(m);
+                let w = zset_member_weight(&smb) as i64;
+                if z.insert(m, score) {
+                    Ok(ZaddOutcome::AddedHeap(w))
+                } else {
+                    Ok(ZaddOutcome::UpdatedHeap)
+                }
+            }
+            Value::SegZSet(z) => {
                 let z = Arc::make_mut(z);
                 let smb = SmallBytes::from_slice(m);
                 let w = zset_member_weight(&smb) as i64;
@@ -249,6 +289,62 @@ impl Store {
                 Entry::new(Value::ZSet(Arc::new(z)), None),
             );
             ZaddOutcome::AddedInline
+        }
+    }
+}
+
+/// Inline zset out of room: promote to the flat heap encoding, then
+/// set the spilling pair. Caller reweighs the entry.
+fn promote_inline_zset_and_add(v: &mut Value, m: &[u8], score: f64) -> ZaddOutcome {
+    let Value::SmallZSetInline(z) = v else { unreachable!("matched inline") };
+    let mut promoted = small_zset::promote(z);
+    let smb = SmallBytes::from_slice(m);
+    let is_new = !promoted.by_member.contains_key(m);
+    let w = zset_member_weight(&smb) as i64;
+    promoted.insert(m, score);
+    *v = Value::ZSet(Arc::new(promoted));
+    if is_new {
+        ZaddOutcome::AddedHeap(w)
+    } else {
+        ZaddOutcome::UpdatedHeap
+    }
+}
+
+/// Flat zset at the threshold: segment, then set. One-time
+/// O(Z_PROMOTE) rebuild (or clone, if a view pins it now). Returns
+/// whether the member was new; caller reweighs.
+fn promote_flat_zset_and_add(v: &mut Value, m: &[u8], score: f64) -> bool {
+    let Value::ZSet(z) = v else { unreachable!("matched ZSet") };
+    let mut seg = SegZSetData::from_flat(z);
+    let is_new = seg.insert(m, score);
+    *v = Value::SegZSet(Arc::new(seg));
+    is_new
+}
+
+/// A mutable borrow of either heap zset encoding — the read-modify-
+/// write entry point (`zincrby`) stays encoding-blind.
+enum ZRefMut<'a> {
+    Flat(&'a mut ZSetData),
+    Seg(&'a mut SegZSetData),
+}
+
+impl ZRefMut<'_> {
+    fn score_of(&self, member: &[u8]) -> Option<f64> {
+        match self {
+            Self::Flat(z) => z.by_member.get(member).copied(),
+            Self::Seg(z) => z.score_of(member),
+        }
+    }
+    fn contains_member(&self, member: &[u8]) -> bool {
+        match self {
+            Self::Flat(z) => z.by_member.contains_key(member),
+            Self::Seg(z) => z.contains_member(member),
+        }
+    }
+    fn insert(&mut self, member: &[u8], score: f64) -> bool {
+        match self {
+            Self::Flat(z) => z.insert(member, score),
+            Self::Seg(z) => z.insert(member, score),
         }
     }
 }

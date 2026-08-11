@@ -159,6 +159,9 @@ impl Store {
                     .iter()
                     .map(|(m, s)| (m.to_vec(), *s))
                     .collect()),
+                Value::SegZSet(z) => {
+                    Ok(z.ordered().map(|(m, s)| (m.to_vec(), s)).collect())
+                }
                 Value::SmallZSetInline(z) => {
                     Ok(z.iter().map(|(m, s)| (m.to_vec(), s)).collect())
                 }
