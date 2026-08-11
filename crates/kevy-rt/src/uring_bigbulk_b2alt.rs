@@ -262,6 +262,7 @@ impl<C: Commands> Shard<C> {
         // this path records a literal `SET` it built itself — deterministic,
         // never SPOP — and none can be pending anyway: every other dispatch
         // consumes its own override before this runs.
+        let w0 = self.always_hold_w0();
         if self.aof.is_some() {
             self.log_write(&view);
         }
@@ -281,6 +282,7 @@ impl<C: Commands> Shard<C> {
         if let Some(c) = self.conns.get_mut(&cid) {
             c.output.extend_from_slice(b"+OK\r\n");
         }
+        self.uring_stamp_hold(w0, cid, io);
         self.mark_arm_pending(cid, io);
     }
 }

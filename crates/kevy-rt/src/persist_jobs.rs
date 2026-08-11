@@ -35,8 +35,23 @@ pub(crate) fn run_swap(
         Some(t) => std::fs::hard_link(&live, t).is_ok(),
         None => false,
     };
+    // Make the rename itself crash-durable: the image's DATA is
+    // sync_all'd (snapshot dump, every tee generation, the tail
+    // above), but the new name linkage is directory metadata. The
+    // Always reply gate treats a completed swap as proof of
+    // durability (uring_aof_mark_all_durable), so the directory
+    // entry must survive power loss too. A dir-sync failure does NOT
+    // un-commit the swap — the rename is the commit point; report it
+    // loudly (same contract as an fsync failure) and carry on.
+    let result = std::fs::rename(&tmp, &live);
+    if result.is_ok()
+        && let Some(d) = live.parent()
+        && let Err(e) = std::fs::File::open(d).and_then(|f| f.sync_all())
+    {
+        eprintln!("kevy: aof swap directory sync failed: {e}");
+    }
     PersistDone::SwapImage {
-        result: std::fs::rename(&tmp, &live),
+        result,
         trash: trash.filter(|_| linked),
     }
 }

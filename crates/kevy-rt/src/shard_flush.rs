@@ -224,6 +224,51 @@ impl<C: Commands> Shard<C> {
         }
         Ok(())
     }
+
+    /// S2 Always reply gate, capture half: the queued-record watermark
+    /// BEFORE a dispatch, `Some` only when the gate is active (io_uring
+    /// offload + `appendfsync=always`). Compare with the watermark
+    /// after the dispatch to learn whether it appended records whose
+    /// replies must wait for the fsync CQE.
+    #[cfg(target_os = "linux")]
+    #[inline]
+    pub(crate) fn always_hold_w0(&self) -> Option<u64> {
+        if !self.aof_offload.enabled {
+            return None;
+        }
+        let aof = self.aof.as_ref()?;
+        if !matches!(aof.fsync_policy(), kevy_persist::Fsync::Always) {
+            return None;
+        }
+        Some(aof.queued_watermark())
+    }
+
+    /// Non-Linux reactors have no ring to gate on; the synchronous
+    /// Always path fsyncs before replies by construction.
+    #[cfg(not(target_os = "linux"))]
+    #[inline]
+    pub(crate) fn always_hold_w0(&self) -> Option<u64> {
+        None
+    }
+
+    /// Send a cross-shard response batch — or, when the S2 gate is
+    /// active and this batch's dispatch appended records past `w0`,
+    /// hold it until the fsync CQE proves them durable
+    /// (`uring_flush_held_responses` sends it then).
+    pub(crate) fn send_or_hold_response(&mut self, w0: Option<u64>, origin: usize, batch: Inbound) {
+        #[cfg(target_os = "linux")]
+        {
+            let w1 = self.aof.as_ref().map(kevy_persist::Aof::queued_watermark);
+            if let (Some(w0), Some(w1)) = (w0, w1)
+                && w1 > w0
+            {
+                self.held_responses.push((w1, origin, batch));
+                return;
+            }
+        }
+        let _ = w0;
+        self.send_to(origin, batch);
+    }
 }
 
 /// Materialise a conn's pending arc-bulk bodies into `conn.output` at
@@ -255,4 +300,5 @@ fn splice_output_arcs(conn: &mut crate::conn::Conn) {
         linear.extend_from_slice(&conn.output[prev..]);
     }
     conn.output = linear;
+
 }

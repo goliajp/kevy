@@ -279,6 +279,8 @@ impl<C: Commands> Runtime<C> {
             shards.push(Shard {
                 #[cfg(target_os = "linux")]
                 aof_offload: Default::default(),
+                #[cfg(target_os = "linux")]
+                held_responses: Vec::new(),
                 rewrite_handoff: None,
                 rewrite_rate_mark: None,
                 rewrite_calm_ticks: 0,

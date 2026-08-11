@@ -6,10 +6,12 @@
 //! the Phase A decomposition convicted for the multi-second tail stalls
 //! (dirty-page throttling parks the writer under GB/s ingest).
 //!
-//! S1 scope: `everysec` / `no` policies (replies never wait on the AOF);
-//! `always` keeps today's synchronous path — its reply-gating moves in
-//! S2. Off by default: `KEVY_AOF_OFFLOAD=1` opts in, and the epoll
-//! reactor is untouched (S3's writer-thread lane).
+//! Policies: `everysec` / `no` replies never wait on the AOF. `always`
+//! (S2) holds each write's reply bytes in `conn.output` until a
+//! DATASYNC CQE proves its records durable — the reactor never blocks
+//! on an fsync, and concurrent conns' writes share one fsync round
+//! (group commit). The epoll reactor is untouched (S3's writer-thread
+//! lane keeps the synchronous fsync-before-reply path).
 //!
 //! Ordering contract (the `queue` field's doc in kevy-persist): chunks
 //! carry explicit non-overlapping offsets, so in-flight writes never
@@ -81,26 +83,19 @@ impl Default for AofOffload {
 
 impl<C: Commands> Shard<C> {
     /// Queued-append mode at reactor setup — DEFAULT ON for the
-    /// io_uring reactor with an AOF and a non-`Always` policy (the
-    /// whole S4/S5 arc: appends, fsyncs, tee, folds, swap and frees
-    /// all off the reactor; tailgate green was measured in this mode).
-    /// `KEVY_AOF_OFFLOAD=0/off/no/false` opts back into the classic
-    /// synchronous path; `always` keeps it by definition (replies
-    /// gate on the write).
+    /// io_uring reactor with an AOF (the whole S4/S5 arc: appends,
+    /// fsyncs, tee, folds, swap and frees all off the reactor;
+    /// tailgate green was measured in this mode). Under `always` the
+    /// replies are CQE-gated instead of fsync-blocking (S2): held in
+    /// `conn.output` until the ring fsync proves their records
+    /// durable. `KEVY_AOF_OFFLOAD=0/off/no/false` opts back into the
+    /// classic synchronous path (fsync on the reactor before reply).
     pub(crate) fn uring_aof_setup(&mut self) {
         let Some(aof) = &mut self.aof else { return };
         if matches!(
             std::env::var("KEVY_AOF_OFFLOAD").as_deref(),
             Ok("0" | "off" | "no" | "false")
         ) {
-            return;
-        }
-        if matches!(aof.fsync_policy(), kevy_persist::Fsync::Always) {
-            eprintln!(
-                "kevy: shard {} AOF offload requested but appendfsync=always keeps the \
-                 synchronous path in this build (S1 scope)",
-                self.id
-            );
             return;
         }
         aof.enable_queued_appends();
@@ -188,8 +183,12 @@ impl<C: Commands> Shard<C> {
         let Some(fd) = aof.queued_fd() else { return };
         if ring.prep_fsync(fd, OP_AOF) {
             o.fsync_inflight = true;
-            // Queue empty + ring empty ⇒ every queued record's bytes
-            // are in the file; this fsync proves them all.
+            // Under Always the due-check required queue empty + ring
+            // empty, so every queued record's bytes are in the file
+            // and this fsync proves them all. (everysec may submit
+            // with records still queued — its covers value is never
+            // consulted: stamps only exist under Always, and a policy
+            // upgrade to Always syncs everything synchronously first.)
             o.fsync_covers = aof.queued_watermark();
         }
     }
@@ -210,6 +209,7 @@ impl<C: Commands> Shard<C> {
                 self.aof_offload.last_sync = Instant::now();
                 self.aof_offload.durable_watermark =
                     self.aof_offload.durable_watermark.max(self.aof_offload.fsync_covers);
+                self.uring_flush_held_responses();
             }
             return;
         }
@@ -244,6 +244,46 @@ impl<C: Commands> Shard<C> {
             let w = aof.queued_watermark();
             let o = &mut self.aof_offload;
             o.durable_watermark = o.durable_watermark.max(w);
+        }
+        self.uring_flush_held_responses();
+    }
+
+    /// S2 stamp: if the dispatch bracketed by `w0` (see
+    /// [`Self::always_hold_w0`]) appended queued records, mark the
+    /// conn's pending output as held until the fsync CQE covers them.
+    /// A conn holding replies for several batches keeps the highest
+    /// watermark — release only when everything it answered is durable.
+    pub(crate) fn uring_stamp_hold(
+        &mut self,
+        w0: Option<u64>,
+        cid: u64,
+        io: &mut kevy_map::KevyMap<u64, crate::uring_conn::UringConn>,
+    ) {
+        let Some(w0) = w0 else { return };
+        let Some(aof) = self.aof.as_ref() else { return };
+        let w1 = aof.queued_watermark();
+        if w1 > w0
+            && let Some(uc) = io.get_mut(&cid)
+        {
+            uc.held_watermark = Some(uc.held_watermark.map_or(w1, |h| h.max(w1)));
+        }
+    }
+
+    /// Send every held cross-shard response batch whose records the
+    /// durable watermark now covers (called after each advance).
+    fn uring_flush_held_responses(&mut self) {
+        if self.held_responses.is_empty() {
+            return;
+        }
+        let d = self.aof_offload.durable_watermark;
+        let mut i = 0;
+        while i < self.held_responses.len() {
+            if self.held_responses[i].0 <= d {
+                let (_, origin, batch) = self.held_responses.swap_remove(i);
+                self.send_to(origin, batch);
+            } else {
+                i += 1;
+            }
         }
     }
 
