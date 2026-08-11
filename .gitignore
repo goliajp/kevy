@@ -62,3 +62,4 @@ aof-*.aof.premigration.*
 dump-*.rdb.premigration.*
 tools/facadegate/target/
 /tier/
+bench/.flake-archive/*.log
