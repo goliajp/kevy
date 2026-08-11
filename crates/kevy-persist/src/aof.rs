@@ -319,7 +319,10 @@ impl Aof {
             // Inside a group-commit window, defer the fsync to `end_group`
             // (one per batch, still before the batch's replies). Outside
             // one, fsync per command — the safe default for every path.
-            Fsync::Always if self.deferred => self.dirty = true,
+            // Queued appends live in the driver's chunk, not the file: a
+            // sync here would durabilize nothing. The ring fsync owns
+            // durability there; mark dirty so the driver can see it.
+            Fsync::Always if self.deferred || self.queue.is_some() => self.dirty = true,
             Fsync::Always => {
                 self.file.flush()?;
                 self.file.get_ref().sync_data()?;
