@@ -25,12 +25,14 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 STRICT=${PENDING_STRICT:-0}
 
+cargo build -q -p kevy --bin kevy
 cargo build -q -p kevy-embedded --example crash_writer --example crash_check \
     --example crash_window_writer --example crash_window_check || exit 1
 WRITER="$HERE/target/debug/examples/crash_writer"
 CHECK="$HERE/target/debug/examples/crash_check"
 WWRITER="$HERE/target/debug/examples/crash_window_writer"
 WCHECK="$HERE/target/debug/examples/crash_window_check"
+SRV="$HERE/target/debug/kevy"
 
 WORK=$(mktemp -d /tmp/crashgate.XXXXXX)
 WPID=""
@@ -216,6 +218,96 @@ else
     verdict $rc "payload-flip/open" "open after payload flip rc=$rc"
     [ "${tainted:-1}" -eq 0 ] && pending 0 T5 "payload-flip/integrity" "corrupt value detected, not replayed" \
         || pending 1 T5 "payload-flip/integrity" "$tainted tainted value(s) replayed silently — no on-disk integrity check"
+fi
+
+# S — SERVER-path always (the S2 verification surface): a real kevy
+# process, appendfsync=always, SIGKILLed mid-write. Every key whose
+# reply the client RECEIVED must survive the restart — the durability
+# contract the reply itself asserts. Today's synchronous
+# fsync-before-reply path is the baseline; the S2 CQE-gated reply
+# path must keep this cell green. (The append-always/window-always
+# cells above drive kevy-embedded and never touch the reactor.)
+dir="$WORK/srvalways"; mkdir -p "$dir"
+cat > "$dir/kevy.toml" <<'TOML'
+[persistence]
+aof = true
+appendfsync = "always"
+TOML
+SPID=""
+for _attempt in 1 2 3 4 5; do
+    port=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')
+    "$SRV" --port "$port" --dir "$dir" --config "$dir/kevy.toml" >"$dir/server1.log" 2>&1 &
+    SPID=$!
+    up=""
+    for _ in $(seq 40); do
+        if python3 -c "import socket;socket.create_connection(('127.0.0.1',$port),0.2).close()" 2>/dev/null; then up=1; break; fi
+        kill -0 "$SPID" 2>/dev/null || break # lost the port race — retry
+        sleep 0.1
+    done
+    [ -n "$up" ] && break
+    wait "$SPID" 2>/dev/null; SPID=""
+done
+if [ -z "$SPID" ]; then
+    verdict 1 "server-always/setup" "server never came up (5 port attempts)"
+else
+    ( sleep 2; kill -9 "$SPID" 2>/dev/null ) &
+    KILLER=$!
+    acked=$(python3 - "$port" <<'PYCLIENT'
+import socket, sys
+port = int(sys.argv[1])
+s = socket.create_connection(("127.0.0.1", port))
+s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+f = s.makefile("rb")
+acked = 0
+try:
+    for i in range(1, 2_000_000):
+        k = b"k%d" % i
+        v = b"v%d" % i
+        s.sendall(b"*3\r\n$3\r\nSET\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n" % (len(k), k, len(v), v))
+        if f.readline() != b"+OK\r\n":
+            break
+        acked = i
+except OSError:
+    pass
+print(acked)
+PYCLIENT
+)
+    wait "$KILLER" 2>/dev/null
+    wait "$SPID" 2>/dev/null; SPID=""
+    "$SRV" --port "$port" --dir "$dir" --config "$dir/kevy.toml" >"$dir/server2.log" 2>&1 &
+    SPID=$!
+    for _ in $(seq 150); do
+        python3 -c "import socket;socket.create_connection(('127.0.0.1',$port),0.2).close()" 2>/dev/null && break
+        sleep 0.2
+    done
+    survived=$(python3 - "$port" "$acked" <<'PYCHECK'
+import socket, sys
+port, acked = int(sys.argv[1]), int(sys.argv[2])
+s = socket.create_connection(("127.0.0.1", port))
+f = s.makefile("rb")
+ok = 0
+for i in range(1, acked + 1):
+    k = b"k%d" % i
+    s.sendall(b"*2\r\n$3\r\nGET\r\n$%d\r\n%s\r\n" % (len(k), k))
+    line = f.readline()
+    if not line.startswith(b"$") or line == b"$-1\r\n":
+        break
+    n = int(line[1:])
+    body = f.read(n + 2)[:-2]
+    if body != b"v%d" % i:
+        break
+    ok = i
+print(ok)
+PYCHECK
+)
+    kill -9 "$SPID" 2>/dev/null; wait "$SPID" 2>/dev/null
+    if [ "${acked:-0}" -eq 0 ]; then
+        verdict 1 "server-always/setup" "client acked nothing before the kill"
+    elif [ "${survived:-0}" -ge "$acked" ]; then
+        verdict 0 "server-always/loss-bound" "all $acked replied writes survived kill -9"
+    else
+        verdict 1 "server-always/loss-bound" "replied $acked but only ${survived:-0} survived — a reply outran its fsync"
+    fi
 fi
 
 echo
