@@ -30,6 +30,7 @@ fn model(n: usize) -> alloc::vec::Vec<(alloc::vec::Vec<u8>, f64)> {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "16K-element promotion loops; hours under miri's interpretation overhead. The unsafe surface these paths reach (kevy-map slot management) is miri-covered by the flat-zset subset and kevy-map's own suite; SegZSet itself is safe composition (kevy-store is forbid(unsafe_code)).")]
 fn zadd_promotes_and_order_holds_across_segments() {
     let mut st = Store::new();
     let n = 2 * Z_PROMOTE + 100;
@@ -59,6 +60,7 @@ fn zadd_promotes_and_order_holds_across_segments() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "16K-element promotion loops; hours under miri's interpretation overhead. The unsafe surface these paths reach (kevy-map slot management) is miri-covered by the flat-zset subset and kevy-map's own suite; SegZSet itself is safe composition (kevy-store is forbid(unsafe_code)).")]
 fn zincr_only_workload_promotes() {
     let mut st = Store::new();
     for i in 0..Z_PROMOTE + 2 {
@@ -73,6 +75,7 @@ fn zincr_only_workload_promotes() {
 /// The arc's headline claim, zset door: a write under a pinned view
 /// clones one member bucket + one segment tree.
 #[test]
+#[cfg_attr(miri, ignore = "16K-element promotion loops; hours under miri's interpretation overhead. The unsafe surface these paths reach (kevy-map slot management) is miri-covered by the flat-zset subset and kevy-map's own suite; SegZSet itself is safe composition (kevy-store is forbid(unsafe_code)).")]
 fn cow_write_under_pinned_view_clones_one_segment() {
     let mut st = Store::new();
     let n = 3 * Z_PROMOTE;
@@ -100,6 +103,7 @@ fn cow_write_under_pinned_view_clones_one_segment() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "16K-element promotion loops; hours under miri's interpretation overhead. The unsafe surface these paths reach (kevy-map slot management) is miri-covered by the flat-zset subset and kevy-map's own suite; SegZSet itself is safe composition (kevy-store is forbid(unsafe_code)).")]
 fn segmented_ops_match_semantics() {
     let mut st = Store::new();
     let n = Z_PROMOTE + 500;
@@ -145,6 +149,7 @@ fn segmented_ops_match_semantics() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "16K-element promotion loops; hours under miri's interpretation overhead. The unsafe surface these paths reach (kevy-map slot management) is miri-covered by the flat-zset subset and kevy-map's own suite; SegZSet itself is safe composition (kevy-store is forbid(unsafe_code)).")]
 fn accounting_round_trips_through_segmented_ops() {
     let mut st = Store::new();
     let baseline = st.used_memory();
@@ -159,6 +164,7 @@ fn accounting_round_trips_through_segmented_ops() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "16K-element promotion loops; hours under miri's interpretation overhead. The unsafe surface these paths reach (kevy-map slot management) is miri-covered by the flat-zset subset and kevy-map's own suite; SegZSet itself is safe composition (kevy-store is forbid(unsafe_code)).")]
 fn load_zset_applies_the_encoding_switch() {
     let mut st = Store::new();
     let big: alloc::vec::Vec<(alloc::vec::Vec<u8>, f64)> = (0..Z_PROMOTE + 1)
