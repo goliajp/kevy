@@ -752,6 +752,6 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 ### P1 — 元素粒度 COW(巨集合 rewrite 窗写停顿收口)【当前】
 - [x] 设计轮 ✅(2026-08-11):正式 RFC `.claude/rfcs/2026-08-11-post-v5-element-cow.md`(A 案分段;Explore 全图供地面真相;分期 L→HS→Z,Stream 文档边界)
 - [x] Stage L(List)✅(2026-08-11,merge `183bc8f3` CI 绿):Value::SegList 16K 元素段;盒上 Phase A 形状复测 352/666ms → **0.4/0.6ms 与 N 无关**,RSS 瞬态 341-392MB → ~2MB;perfgate-median 12/12 PASS(lpush cell -6.6% 在 floor 与波带内,观察项);finding=bench/FINDING-2026-08-11-element-cow-stage-l.md
-- [ ] Stage HS(Hash/Set):KevyMap hash 前缀分桶(SegMap<V>;目录翻倍 + 单桶分裂);soak 的 myhash/myset cell 在此收口
-- [ ] Stage Z(ZSet):先 kevy-ranktree 节点 Arc 化 path-copy(独立石头轮:bench+proptest),再接 by_member SegMap
+- [x] Stage HS(Hash/Set)✅(2026-08-11,merge `f74e83c2` CI 绿):SegMap<V> 可扩展哈希(目录存索引/桶独立存放——首版目录内 Arc 共享被 100K 分裂测试抓出写分叉,已重设计);盒上复测:hash 窗内首写 1.2-2.1ms、set 0.1-0.3ms,20M 与 1M 无差,RSS 瞬态 ≈ 单桶;perfgate-median 12/12(hset +2.7/sadd +4.2 触碰面为正);crashgate midfile-resync 首犯 flake 入档(本地+重跑双绿);finding=bench/FINDING-2026-08-11-element-cow-stage-hs.md
+- [x] Stage Z(ZSet)✅(2026-08-11,merge `f8acc77e`):设计改道——不 fork ranktree 内部(remove 再平衡是注 bug 高发面),SegZSet = 有序分段 Vec<Arc<RankTree>>(区间不交 + 缓存 max 路由)+ by_member 复用 SegMap<f64>,两石头零改动;盒上复测 0.7-1.0ms 窗内首写、20M 与 1M 无差;perfgate-median 12/12(zadd -1.7 波带内);miri 40min 超时被新测试撞出 → seg 套件按既有 time-box 先例 cfg_attr(miri, ignore)(unsafe 面已由平表示子集覆盖);finding=bench/FINDING-2026-08-11-element-cow-stage-z.md
 - [ ] 收口验收:rc-soak 巨集合工况缩短版重跑,gap 全程 ≤100ms;persistence 三语边界段落改写(List/Hash/Set/ZSet 已收口,Stream 仍整值)
