@@ -24,9 +24,11 @@ use kevy_ranktree::RankTree;
 /// Flat `Value::ZSet` size at which a write promotes to the segmented
 /// representation.
 pub const Z_PROMOTE: usize = 16 * 1024;
-/// Entries per score-ordered segment tree; one segment is the COW
-/// clone bound (a ~16K-entry `RankTree` deep clone, ~1 ms class).
-pub const ZSEG_CAP: usize = 16 * 1024;
+/// Entries per score-ordered segment tree; one segment is the per-write
+/// COW clone bound, and — as with `seg_map::BUCKET_SPLIT` — the grain
+/// score-scattered write bursts aggregate over per tick. 2K entries
+/// keeps a burst's per-tick clone total under the tick bar.
+pub const ZSEG_CAP: usize = 2 * 1024;
 
 type ZKey = (Score, SmallBytes);
 
