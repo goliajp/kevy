@@ -32,6 +32,15 @@ LTRIM releases whole out-of-range segments without cloning; LREM clones only
 match-bearing segments. Unit proof: a write under a pinned view leaves
 exactly one segment unshared (`tests_list_seg.rs`).
 
+## Gates
+
+perfgate-median (box, 3 runs, 0.92 floor): 12/12 PASS. The touched-op cell
+`legacy_8sh_lpush` sits at -6.6% median — inside the gate's floor and the
+instrument's documented ±3-6 pp same-tip band, and the benchmark's default
+shape exercises the untouched inline-list path; flagged for a re-read if the
+next perfgate run shows it again. Workspace 2487 tests, locgate, clippy
+-D warnings, commentgate, branch CI: green.
+
 ## Boundary that remains (per RFC stages)
 
 Sets/hashes (Stage HS — bucket-sharded KevyMap), zsets (Stage Z — ranktree
