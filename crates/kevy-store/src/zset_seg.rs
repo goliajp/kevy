@@ -27,8 +27,9 @@ pub const Z_PROMOTE: usize = 16 * 1024;
 /// Entries per score-ordered segment tree; one segment is the per-write
 /// COW clone bound, and — as with `seg_map::BUCKET_SPLIT` — the grain
 /// score-scattered write bursts aggregate over per tick. 2K entries
-/// keeps a burst's per-tick clone total under the tick bar.
-pub const ZSEG_CAP: usize = 2 * 1024;
+/// keeps a burst's per-tick clone total under the tick bar (empirically
+/// sized alongside `BUCKET_SPLIT` — see its note).
+pub const ZSEG_CAP: usize = 512;
 
 type ZKey = (Score, SmallBytes);
 
