@@ -1,0 +1,276 @@
+crashgate (crash-consistency contract)	Set up job	﻿2026-08-11T07:57:59.7600429Z Current runner version: '2.336.0'
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7622132Z ##[group]Runner Image Provisioner
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7622900Z Hosted Compute Agent
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7623455Z Version: 20260707.563
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7623985Z Commit: 02667638d2b423fbc733a8e32a88b44996a3ba6e
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7624616Z Build Date: 2026-07-07T19:33:50Z
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7625220Z Worker ID: {cc895584-1795-47b5-bfff-9b6f6611bede}
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7625809Z Azure Region: westus3
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7626269Z ##[endgroup]
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7627584Z ##[group]Operating System
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7628150Z Ubuntu
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7628646Z 24.04.4
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7629088Z LTS
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7629519Z ##[endgroup]
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7630014Z ##[group]Runner Image
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7630535Z Image: ubuntu-24.04
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7630968Z Version: 20260720.247.2
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7632229Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260720.247/images/ubuntu/Ubuntu2404-Readme.md
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7633682Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260720.247
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7634481Z ##[endgroup]
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7637109Z ##[group]GITHUB_TOKEN Permissions
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7639030Z Actions: write
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7639538Z ArtifactMetadata: write
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7640186Z Attestations: write
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7640664Z Checks: write
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7641156Z CodeQuality: write
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7641643Z Contents: write
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7642114Z CopilotRequests: write
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7642668Z Deployments: write
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7643132Z Discussions: write
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7643570Z Drives: write
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7644065Z Issues: write
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7644504Z Metadata: read
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7645037Z Models: read
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7645520Z Packages: write
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7645960Z Pages: write
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7646438Z PullRequests: write
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7647034Z RepositoryProjects: write
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7647553Z SecurityEvents: write
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7648108Z Statuses: write
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7648570Z VulnerabilityAlerts: read
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7649078Z ##[endgroup]
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7650826Z Secret source: Actions
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7651781Z Prepare workflow directory
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.7964932Z Prepare all required actions
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:57:59.8005554Z Getting action download info
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:58:00.0987770Z Download action repository 'actions/checkout@v7' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:58:00.7516034Z Download action repository 'actions/cache@v4' (SHA:0057852bfaa89a56745cba8c7296529d2fc39830)
+crashgate (crash-consistency contract)	Set up job	2026-08-11T07:58:00.9176427Z Complete job name: crashgate (crash-consistency contract)
+crashgate (crash-consistency contract)	Run actions/checkout@v7	﻿2026-08-11T07:58:00.9820006Z ##[group]Run actions/checkout@v7
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:00.9821144Z with:
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:00.9821731Z   repository: goliajp/kevy
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:00.9824980Z   token: ***
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:00.9825353Z   ssh-strict: true
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:00.9825729Z   ssh-user: git
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:00.9826135Z   persist-credentials: true
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:00.9826546Z   clean: true
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:00.9827040Z   sparse-checkout-cone-mode: true
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:00.9827481Z   fetch-depth: 1
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:00.9827840Z   fetch-tags: false
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:00.9828210Z   show-progress: true
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:00.9828585Z   lfs: false
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:00.9828948Z   submodules: false
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:00.9829318Z   set-safe-directory: true
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:00.9829734Z   allow-unsafe-pr-checkout: false
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:00.9830386Z env:
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:00.9830737Z   CARGO_TERM_COLOR: always
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:00.9831144Z   RUST_BACKTRACE: 1
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:00.9831558Z   RUSTFLAGS: -D warnings
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:00.9831949Z ##[endgroup]
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0683852Z Syncing repository: goliajp/kevy
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0685489Z ##[group]Getting Git version info
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0686063Z Working directory is '/home/runner/work/kevy/kevy'
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0687161Z [command]/usr/bin/git version
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0738194Z git version 2.54.0
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0759731Z ##[endgroup]
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0776440Z Temporarily overriding HOME='/home/runner/work/_temp/f9ddf4a7-2a52-4d17-b2ff-9981115bda1a' before making global git config changes
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0778571Z Adding repository directory to the temporary git global config as a safe directory
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0779931Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/kevy/kevy
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0810462Z Deleting the contents of '/home/runner/work/kevy/kevy'
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0813657Z ##[group]Determining repository object format
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0814871Z ##[endgroup]
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0815921Z ##[group]Initializing the repository
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0818511Z [command]/usr/bin/git init /home/runner/work/kevy/kevy
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0894309Z hint: Using 'master' as the name for the initial branch. This default branch name
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0897899Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0899502Z hint: to use in all of your new repositories, which will suppress this warning,
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0900709Z hint: call:
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0901667Z hint:
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0902497Z hint: 	git config --global init.defaultBranch <name>
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0903382Z hint:
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0904165Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0905453Z hint: 'development'. The just-created branch can be renamed via this command:
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0906438Z hint:
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0907161Z hint: 	git branch -m <name>
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0907761Z hint:
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0908578Z hint: Disable this message with "git config set advice.defaultBranchName false"
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0909959Z Initialized empty Git repository in /home/runner/work/kevy/kevy/.git/
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0912301Z [command]/usr/bin/git remote add origin https://github.com/goliajp/kevy
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0942759Z ##[endgroup]
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0943988Z ##[group]Disabling automatic garbage collection
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0946012Z [command]/usr/bin/git config --local gc.auto 0
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0977102Z ##[endgroup]
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0978399Z ##[group]Setting up auth
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0979491Z Removing SSH command configuration
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.0982405Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.1018491Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.1302762Z Removing HTTP extra header
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.1309589Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.1343261Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.1537294Z Removing includeIf entries pointing to credentials config files
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.1541198Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.1572856Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.1765799Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-51c8ec4f-b621-4dfd-a2ce-81588e183d4c.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.1800177Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/kevy/kevy/.git.path /home/runner/work/_temp/git-credentials-51c8ec4f-b621-4dfd-a2ce-81588e183d4c.config
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.1829155Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/kevy/kevy/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-51c8ec4f-b621-4dfd-a2ce-81588e183d4c.config
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.1856466Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-51c8ec4f-b621-4dfd-a2ce-81588e183d4c.config
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.1884461Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-51c8ec4f-b621-4dfd-a2ce-81588e183d4c.config
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.1910340Z ##[endgroup]
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.1911010Z ##[group]Fetching the repository
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:01.1915604Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +75bc2c8feba23ccda3c6ef370e76c93d2843304a:refs/remotes/origin/feature/element-cow-hs
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:03.5201981Z From https://github.com/goliajp/kevy
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:03.5203754Z  * [new ref]         75bc2c8feba23ccda3c6ef370e76c93d2843304a -> origin/feature/element-cow-hs
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:03.5228781Z [command]/usr/bin/git branch --list --remote origin/feature/element-cow-hs
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:03.5254248Z   origin/feature/element-cow-hs
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:03.5260795Z [command]/usr/bin/git rev-parse refs/remotes/origin/feature/element-cow-hs
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:03.5284273Z 75bc2c8feba23ccda3c6ef370e76c93d2843304a
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:03.5287698Z ##[endgroup]
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:03.5288098Z ##[group]Determining the checkout info
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:03.5288723Z ##[endgroup]
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:03.5291848Z [command]/usr/bin/git sparse-checkout disable
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:03.6703252Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:03.7180530Z ##[group]Checking out the ref
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:03.7186320Z [command]/usr/bin/git checkout --progress --force -B feature/element-cow-hs refs/remotes/origin/feature/element-cow-hs
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:04.3171771Z Switched to a new branch 'feature/element-cow-hs'
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:04.3173083Z branch 'feature/element-cow-hs' set up to track 'origin/feature/element-cow-hs'.
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:04.3204862Z ##[endgroup]
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:04.3247560Z [command]/usr/bin/git log -1 --format=%H
+crashgate (crash-consistency contract)	Run actions/checkout@v7	2026-08-11T07:58:04.3266074Z 75bc2c8feba23ccda3c6ef370e76c93d2843304a
+crashgate (crash-consistency contract)	Install Rust	﻿2026-08-11T07:58:04.3448416Z ##[group]Run rustup toolchain install stable --no-self-update
+crashgate (crash-consistency contract)	Install Rust	2026-08-11T07:58:04.3448837Z ^[[36;1mrustup toolchain install stable --no-self-update^[[0m
+crashgate (crash-consistency contract)	Install Rust	2026-08-11T07:58:04.3492020Z shell: /usr/bin/bash -e {0}
+crashgate (crash-consistency contract)	Install Rust	2026-08-11T07:58:04.3492260Z env:
+crashgate (crash-consistency contract)	Install Rust	2026-08-11T07:58:04.3492436Z   CARGO_TERM_COLOR: always
+crashgate (crash-consistency contract)	Install Rust	2026-08-11T07:58:04.3492648Z   RUST_BACKTRACE: 1
+crashgate (crash-consistency contract)	Install Rust	2026-08-11T07:58:04.3492828Z   RUSTFLAGS: -D warnings
+crashgate (crash-consistency contract)	Install Rust	2026-08-11T07:58:04.3493016Z ##[endgroup]
+crashgate (crash-consistency contract)	Install Rust	2026-08-11T07:58:05.1070467Z info: syncing channel updates for stable-x86_64-unknown-linux-gnu
+crashgate (crash-consistency contract)	Install Rust	2026-08-11T07:58:05.2219357Z 
+crashgate (crash-consistency contract)	Install Rust	2026-08-11T07:58:05.2296782Z   stable-x86_64-unknown-linux-gnu unchanged - rustc 1.97.1 (8bab26f4f 2026-07-14)
+crashgate (crash-consistency contract)	Install Rust	2026-08-11T07:58:05.2297259Z 
+crashgate (crash-consistency contract)	Cache cargo	﻿2026-08-11T07:58:05.2902538Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:05.2904189Z ##[group]Run actions/cache@v4
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:05.2904404Z with:
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:05.2904585Z   path: ~/.cargo/registry
+crashgate (crash-consistency contract)	Cache cargo	~/.cargo/git
+crashgate (crash-consistency contract)	Cache cargo	target
+crashgate (crash-consistency contract)	Cache cargo	
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:05.2904951Z   key: cargo-crashgate-b40b611d85b33306e8ae20bf6977ca6058a26af8544d68362ab397c8d9c1ad51
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:05.2905324Z   restore-keys: cargo-crashgate-
+crashgate (crash-consistency contract)	Cache cargo	
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:05.2905561Z   enableCrossOsArchive: false
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:05.2905780Z   fail-on-cache-miss: false
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:05.2905969Z   lookup-only: false
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:05.2906154Z   save-always: false
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:05.2906322Z env:
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:05.2906476Z   CARGO_TERM_COLOR: always
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:05.2906880Z   RUST_BACKTRACE: 1
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:05.2907100Z   RUSTFLAGS: -D warnings
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:05.2907283Z ##[endgroup]
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:05.3764205Z (node:2209) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:05.3765157Z (Use `node --trace-deprecation ...` to show where the warning was created)
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:05.6391618Z Cache hit for: cargo-crashgate-b40b611d85b33306e8ae20bf6977ca6058a26af8544d68362ab397c8d9c1ad51
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:05.6479933Z (node:2209) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:06.8630031Z Received 20971520 of 251502811 (8.3%), 20.0 MBs/sec
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:07.8633148Z Received 130023424 of 251502811 (51.7%), 62.0 MBs/sec
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:08.8632905Z Received 184549376 of 251502811 (73.4%), 58.6 MBs/sec
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:09.8637092Z Received 247308507 of 251502811 (98.3%), 58.9 MBs/sec
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:10.8628540Z Received 247308507 of 251502811 (98.3%), 47.2 MBs/sec
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:11.2915347Z Received 251502811 of 251502811 (100.0%), 44.2 MBs/sec
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:11.2917138Z Cache Size: ~240 MB (251502811 B)
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:11.2950759Z [command]/usr/bin/tar -xf /home/runner/work/_temp/0c5cf0b8-7da3-4534-b13d-4ff9457f6f93/cache.tzst -P -C /home/runner/work/kevy/kevy --use-compress-program unzstd
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:12.6653811Z Cache restored successfully
+crashgate (crash-consistency contract)	Cache cargo	2026-08-11T07:58:12.6818416Z Cache restored from key: cargo-crashgate-b40b611d85b33306e8ae20bf6977ca6058a26af8544d68362ab397c8d9c1ad51
+crashgate (crash-consistency contract)	Run crashgate	﻿2026-08-11T07:58:12.6921699Z ##[group]Run PENDING_STRICT=1 bash bench/crashgate.sh
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:12.6922032Z ^[[36;1mPENDING_STRICT=1 bash bench/crashgate.sh^[[0m
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:12.6959777Z shell: /usr/bin/bash -e {0}
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:12.6959993Z env:
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:12.6960191Z   CARGO_TERM_COLOR: always
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:12.6960387Z   RUST_BACKTRACE: 1
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:12.6960573Z   RUSTFLAGS: -D warnings
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:12.6960767Z ##[endgroup]
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:22.6228757Z == crashgate: SIGKILL matrix ==
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:26.0661114Z crashgate: PASS  append-everysec/loss-bound (recovered 137500 >= synced 137000)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:27.8889599Z crashgate: PASS  append-everysec/no-blackhole (restart#2 sees 137600 >= marked 137600)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:30.2615470Z crashgate: PASS  append-always/loss-bound (recovered 2010 >= synced 2000)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:30.3950546Z crashgate: PASS  append-always/no-blackhole (restart#2 sees 2110 >= marked 2110)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:33.0549818Z crashgate: PASS  append-4shard/loss-bound (recovered 99000 >= synced 99000)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:34.3844593Z crashgate: PASS  append-4shard/no-blackhole (restart#2 sees 99100 >= marked 99100)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:36.0880532Z crashgate: PASS  rewrite-everysec/loss-bound (recovered 3500 >= synced 3000)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:36.2398401Z crashgate: PASS  rewrite-everysec/no-blackhole (restart#2 sees 3600 >= marked 3600)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:37.6839238Z crashgate: PASS  snapshot-everysec/loss-bound (recovered 31000 >= synced 30500)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:37.8068363Z crashgate: PASS  snapshot-everysec/no-blackhole (restart#2 sees 31100 >= marked 31100)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:40.2585002Z crashgate: PASS  feed-everysec/loss-bound (recovered 79500 >= synced 79500)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:41.3548774Z crashgate: PASS  feed-everysec/no-blackhole (restart#2 sees 79600 >= marked 79600)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:41.3551067Z == crashgate: windowed SIGKILL cells (R2c) ==
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:44.4008015Z crashgate: PASS  window-everysec-a/contract (OK synced=9400 count=9400 checked=184)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:45.7769671Z crashgate: PASS  window-everysec-a/no-blackhole (restart#2 counts 9400 >= 9400)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:48.8488739Z crashgate: PASS  window-everysec-b/contract (OK synced=9600 count=9600 checked=192)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:50.2570059Z crashgate: PASS  window-everysec-b/no-blackhole (restart#2 counts 9600 >= 9600)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:52.4998668Z crashgate: PASS  window-always/contract (OK synced=3000 count=3136 checked=120)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:52.9583901Z crashgate: PASS  window-always/no-blackhole (restart#2 counts 3136 >= 3136)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:55.8868661Z crashgate: PASS  window-2shard/contract (OK synced=10200 count=10200 checked=216)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:57.1223624Z crashgate: PASS  window-2shard/no-blackhole (restart#2 counts 10200 >= 10200)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:57.1224312Z == crashgate: injected-damage cells ==
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:59.7090630Z crashgate: PASS  torn-tail/open (open after torn tail rc=0)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:58:59.7091314Z crashgate: PASS  torn-tail/loss-bound (recovered 123499 >= synced-1 (123500-1))
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:59:01.3425353Z crashgate: PASS  torn-tail/no-blackhole (restart#2 sees 123599 >= marked 123599)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:59:01.3426039Z crashgate: PASS  torn-tail/quarantine (1 quarantine file(s))
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:59:07.3202152Z crashgate: PASS  midfile-corrupt/open (open after mid-file corruption rc=0)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:59:08.5539341Z crashgate: PASS  midfile-corrupt/no-blackhole (restart#2 sees 90235 >= marked 90235)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:59:08.5540235Z crashgate: PASS  midfile-corrupt/quarantine (1 quarantine file(s))
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:59:08.5541063Z crashgate: REDpending(T6)  midfile-corrupt/recovery-rate (resync recovered 90135 < synced 180000)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:59:10.5458184Z crashgate: PASS  payload-flip/open (open after payload flip rc=0)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:59:10.5458754Z crashgate: PASS  payload-flip/integrity (corrupt value detected, not replayed)
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:59:10.5459066Z 
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:59:10.5459172Z crashgate: FAIL
+crashgate (crash-consistency contract)	Run crashgate	2026-08-11T07:59:10.5780730Z ##[error]Process completed with exit code 1.
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	﻿2026-08-11T07:59:10.5893181Z Post job cleanup.
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.6577459Z [command]/usr/bin/git version
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.6612893Z git version 2.54.0
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.6647410Z Temporarily overriding HOME='/home/runner/work/_temp/9aa1b227-7b1f-4fe8-ab86-2fdbca36fbc0' before making global git config changes
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.6648507Z Adding repository directory to the temporary git global config as a safe directory
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.6651422Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/kevy/kevy
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.6683494Z Removing SSH command configuration
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.6689030Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.6720884Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.6942069Z Removing HTTP extra header
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.6948014Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.6989662Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.7204679Z Removing includeIf entries pointing to credentials config files
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.7211460Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.7238587Z includeif.gitdir:/home/runner/work/kevy/kevy/.git.path
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.7239338Z includeif.gitdir:/home/runner/work/kevy/kevy/.git/worktrees/*.path
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.7240041Z includeif.gitdir:/github/workspace/.git.path
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.7240747Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.7246033Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/kevy/kevy/.git.path
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.7275641Z /home/runner/work/_temp/git-credentials-51c8ec4f-b621-4dfd-a2ce-81588e183d4c.config
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.7285601Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/kevy/kevy/.git.path \/home\/runner\/work\/_temp\/git\-credentials\-51c8ec4f\-b621\-4dfd\-a2ce\-81588e183d4c\.config
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.7324171Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/kevy/kevy/.git/worktrees/*.path
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.7358895Z /home/runner/work/_temp/git-credentials-51c8ec4f-b621-4dfd-a2ce-81588e183d4c.config
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.7382908Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/kevy/kevy/.git/worktrees/*.path \/home\/runner\/work\/_temp\/git\-credentials\-51c8ec4f\-b621\-4dfd\-a2ce\-81588e183d4c\.config
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.7416449Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.7439679Z /github/runner_temp/git-credentials-51c8ec4f-b621-4dfd-a2ce-81588e183d4c.config
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.7445986Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-51c8ec4f\-b621\-4dfd\-a2ce\-81588e183d4c\.config
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.7477681Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.7499383Z /github/runner_temp/git-credentials-51c8ec4f-b621-4dfd-a2ce-81588e183d4c.config
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.7506298Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-51c8ec4f\-b621\-4dfd\-a2ce\-81588e183d4c\.config
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.7539053Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+crashgate (crash-consistency contract)	Post Run actions/checkout@v7	2026-08-11T07:59:10.7735791Z Removing credentials config '/home/runner/work/_temp/git-credentials-51c8ec4f-b621-4dfd-a2ce-81588e183d4c.config'
+crashgate (crash-consistency contract)	Complete job	﻿2026-08-11T07:59:10.7878994Z Cleaning up orphan processes
+crashgate (crash-consistency contract)	Complete job	2026-08-11T07:59:10.8146433Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+
+# Verdict notes (2026-08-11, feature/element-cow-hs):
+# midfile-corrupt/recovery-rate REDpending(T6): resync recovered 90135 < synced 180000
+# — the good tail behind the mid-file splice did not resync (recovered ≈ front half).
+# First occurrence of this cell flaking. Evidence for flake, not regression:
+#   - diff under test touches kevy-store collection encodings only; the cell's
+#     workload is strings-only (crash_writer SET loop) and the resync scanner
+#     (kevy-persist replay) is untouched by the branch.
+#   - local run on the same tree: recovery-rate PASS (91500 >= 91500).
+#   - CI rerun of the same commit: PASS.
+# Mechanism hypothesis: the 7-byte splice at size/2 is position-dependent —
+# values are uniform 'b' runs, and an unlucky offset can leave the forward
+# scanner without a recoverable frame boundary lock. Recurs => instrument the
+# resync scanner with the splice offset and dig per the flake discipline.
