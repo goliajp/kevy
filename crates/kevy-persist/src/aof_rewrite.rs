@@ -39,7 +39,10 @@ impl Aof {
     /// the store lock. `keys` is `plan.keys`.
     pub fn finish_concurrent_rewrite(&mut self, tmp: &Path, keys: u64) -> io::Result<RewriteStats> {
         let tee = self.rewrite_tee.take().unwrap_or_default();
+        // Embedded/synchronous path: the caller's own thread is not a
+        // reactor, so dropping the spent buffers inline here is fine.
         self.finish_concurrent_rewrite_with(tmp, keys, tee)
+            .map(|(stats, _bufs)| stats)
     }
 
     /// Take the accumulated diff buffer for an off-thread append and
@@ -71,13 +74,19 @@ impl Aof {
     /// Return an appended generation's buffer (cleared) for the next
     /// generation to grow into. Ping-pong: at most one generation is
     /// ever out with the worker, so the slot is normally empty; a
-    /// surprise second return is kept only if larger (the bigger warm
-    /// buffer wins, the smaller one is µs to drop).
-    pub fn stash_tee_spare(&mut self, mut buf: Vec<u8>) {
+    /// surprise second return is kept only if larger. The LOSING buffer
+    /// is returned to the caller instead of dropped here — both
+    /// ping-pong buffers carry the FIRST generation's capacity forever
+    /// (a clear never shrinks), so "the smaller one" can still be
+    /// gigabytes, and a GB munmap on the reactor was the finish-tick
+    /// stall the diag timers caught at 288 ms. The caller ships it to
+    /// the worker like every other GB-scale free.
+    #[must_use]
+    pub fn stash_tee_spare(&mut self, mut buf: Vec<u8>) -> Option<Vec<u8>> {
         buf.clear();
         match &self.tee_spare {
-            Some(held) if held.capacity() >= buf.capacity() => {}
-            _ => self.tee_spare = Some(buf),
+            Some(held) if held.capacity() >= buf.capacity() => Some(buf),
+            _ => self.tee_spare.replace(buf),
         }
     }
 
@@ -108,13 +117,19 @@ impl Aof {
         tmp: &Path,
         keys: u64,
         tee: Vec<u8>,
-    ) -> io::Result<RewriteStats> {
-        self.rewrite_tee = None;
+    ) -> io::Result<(RewriteStats, Vec<Vec<u8>>)> {
+        // Both the live tee and the passed generation can carry the
+        // FIRST generation's GB-scale capacity (clears never shrink);
+        // hand them back to the caller instead of dropping here — on
+        // the reactor a GB munmap is the finish-tick stall the diag
+        // timers measured at 288 ms.
+        let mut spent: Vec<Vec<u8>> = self.rewrite_tee.take().into_iter().collect();
         {
             let mut f = OpenOptions::new().append(true).open(tmp)?;
             f.write_all(&tee)?;
             f.sync_all()?;
         }
+        spent.push(tee);
         std::fs::rename(tmp, &self.path)?;
         let f = OpenOptions::new().append(true).open(&self.path)?;
         let bytes = f.metadata().map_or(0, |m| m.len());
@@ -126,7 +141,7 @@ impl Aof {
         self.last_rewrite_at = Instant::now();
         self.dirty = false;
         self.rewrites_total = self.rewrites_total.saturating_add(1);
-        Ok(RewriteStats { keys, bytes })
+        Ok((RewriteStats { keys, bytes }, spent))
     }
 
     /// The graveyard name for the NEXT swap (queued mode only): the
@@ -171,7 +186,13 @@ impl Aof {
     /// journal metadata — the reactor's synchronous cost is µs.
     pub fn swap_finalize_reopen(&mut self, keys: u64, trash: Option<PathBuf>) -> io::Result<RewriteStats> {
         self.swap_hold = false;
-        self.rewrite_tee = None;
+        // Deliberately NOT clearing `rewrite_tee` here: the buffer can
+        // carry a GB-scale capacity (clears never shrink it), and `=
+        // None` was an inline munmap on the reactor. The caller drains
+        // it via `take_tee_teardown` immediately after this returns and
+        // ships it to the worker; `is_rewriting` stays true for those
+        // few statements on the same single-threaded reactor, which
+        // nothing observes in between.
         self.swap_trash = trash;
         let f = OpenOptions::new().append(true).open(&self.path)?;
         let bytes = f.metadata().map_or(0, |m| m.len());

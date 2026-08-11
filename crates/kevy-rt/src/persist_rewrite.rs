@@ -109,22 +109,11 @@ impl<C: Commands> Shard<C> {
         };
         let Some(aof) = &mut self.aof else { return };
         let tee = aof.take_tee_for_handoff().unwrap_or_default();
-        if tee.is_empty() {
-            if aof.queued_mode() {
-                self.submit_offthread_swap(h);
-            } else {
-                // Non-queued (epoll): appends write straight to the live
-                // fd — nothing can hold them through a worker-side
-                // rename (they would land on the renamed-away inode and
-                // vanish). Keep this mode's classic synchronous swap.
-                self.finish_rewrite_swap(&h, tee);
-            }
-            return;
-        }
-        if tee.len() <= SMALL_TEE && h.iters >= MAX_HANDOFFS {
-            // Backstop only: converged-but-never-empty under trickle
-            // appends — pay the bounded synchronous tail.
-            self.finish_rewrite_swap(&h, tee);
+        if tee.is_empty() || (tee.len() <= SMALL_TEE && h.iters >= MAX_HANDOFFS) {
+            // Terminal: converged (empty) or the trickle backstop —
+            // either way the residual is ≤ SMALL_TEE and rides the
+            // swap (off-thread in queued mode; see finish_terminal).
+            self.finish_terminal(h, tee);
             return;
         }
         let shrinking = tee.len() <= h.prev_len / SHRINK_DEN * SHRINK_NUM;
@@ -147,12 +136,38 @@ impl<C: Commands> Shard<C> {
         self.hand_off_generation(h, tee);
     }
 
+
+    /// Terminal step: the residual tee (possibly empty) is small enough
+    /// to ride the swap. Queued mode hands it to the worker as the
+    /// image's tail — append, fsync, hardlink, rename, all off-thread;
+    /// the buffer (which can carry a large CAPACITY even at len 0 —
+    /// clears never shrink) is freed on the worker too. Non-queued
+    /// (epoll) keeps the classic synchronous swap: appends write
+    /// straight to the live fd — nothing can hold them through a
+    /// worker-side rename (they would land on the renamed-away inode
+    /// and vanish).
+    fn finish_terminal(&mut self, h: RewriteHandoff, tee: Vec<u8>) {
+        let queued = self.aof.as_ref().is_some_and(kevy_persist::Aof::queued_mode);
+        if queued {
+            self.submit_offthread_swap(h, tee);
+        } else {
+            self.finish_rewrite_swap(&h, tee);
+        }
+    }
+
     /// A tee generation landed (or failed) on the worker: recycle its
     /// cleared buffer into the pool either way, then advance the
     /// handoff — or tear the rewrite down on an append error.
     fn on_tee_appended(&mut self, result: std::io::Result<()>, tmp: &std::path::Path, buf: Vec<u8>) {
         if let Some(aof) = &mut self.aof {
-            aof.stash_tee_spare(buf);
+            // The spare slot's loser can still carry GB capacity —
+            // ship it to the worker like every other big free (tiny
+            // capacities drop inline; the channel hop would cost more).
+            if let Some(evicted) = aof.stash_tee_spare(buf)
+                && evicted.capacity() >= 1 << 20
+            {
+                self.ship_cleanup(Vec::new(), vec![evicted]);
+            }
         }
         match result {
             Ok(()) => self.advance_rewrite_handoff(),
@@ -205,7 +220,7 @@ impl<C: Commands> Shard<C> {
     /// does them; the reactor holds its queue (appends accumulate,
     /// bounded by the hold) and reopens on Done. Worker gone
     /// (shutdown) falls back to the synchronous swap.
-    fn submit_offthread_swap(&mut self, h: RewriteHandoff) {
+    fn submit_offthread_swap(&mut self, h: RewriteHandoff, tail: Vec<u8>) {
         let Some(aof) = &mut self.aof else { return };
         let live = aof.live_path();
         let trash = aof.swap_trash_name();
@@ -214,14 +229,18 @@ impl<C: Commands> Shard<C> {
             tmp: h.tmp.clone(),
             live,
             trash,
+            tail,
         };
-        if self.persist.submit(self.id, job) {
-            self.rewrite_handoff = Some(h); // keys carried to finalize
-        } else {
-            if let Some(aof) = &mut self.aof {
-                aof.abort_swap_hold();
+        match self.persist.submit_reclaim_tail(self.id, job) {
+            Ok(()) => self.rewrite_handoff = Some(h), // keys carried to finalize
+            Err(tail) => {
+                // Worker gone: the reclaimed tail's bytes exist only in
+                // that buffer — synchronous fallback carries them.
+                if let Some(aof) = &mut self.aof {
+                    aof.abort_swap_hold();
+                }
+                self.finish_rewrite_swap(&h, tail);
             }
-            self.finish_rewrite_swap(&h, Vec::new());
         }
     }
 
@@ -305,20 +324,25 @@ impl<C: Commands> Shard<C> {
     /// append + fsync the last generation, rename, reopen.
     fn finish_rewrite_swap(&mut self, h: &RewriteHandoff, tee: Vec<u8>) {
         let Some(aof) = &mut self.aof else { return };
-        if let Err(e) = aof.finish_concurrent_rewrite_with(&h.tmp, h.keys, tee) {
-            eprintln!("kevy: shard {} aof rewrite swap failed: {e}", self.id);
-            self.abort_rewrite_cleanup(&h.tmp);
-            return;
-        }
-        // Ship the pre-swap log's graveyard link and any GB-scale warm
-        // spare to the worker — both frees contend the journal/LRU.
-        let (paths, bufs) = match &mut self.aof {
+        let spent = match aof.finish_concurrent_rewrite_with(&h.tmp, h.keys, tee) {
+            Ok((_stats, spent)) => spent,
+            Err(e) => {
+                eprintln!("kevy: shard {} aof rewrite swap failed: {e}", self.id);
+                self.abort_rewrite_cleanup(&h.tmp);
+                return;
+            }
+        };
+        // Ship the pre-swap log's graveyard link, the spent tee
+        // buffers, and any GB-scale warm spare to the worker — all
+        // these frees contend the journal/LRU.
+        let (paths, mut bufs) = match &mut self.aof {
             Some(aof) => (
                 aof.take_swap_trash().into_iter().collect::<Vec<_>>(),
                 aof.take_tee_teardown(),
             ),
             None => (Vec::new(), Vec::new()),
         };
+        bufs.extend(spent);
         self.ship_cleanup(paths, bufs);
     }
 

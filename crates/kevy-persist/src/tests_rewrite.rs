@@ -642,7 +642,7 @@ fn two_phase_handoff_replays_every_generation_once() {
 
     // Final swap with the (small) last generation.
     let gen2 = aof.take_tee_for_handoff().unwrap();
-    let stats = aof
+    let (stats, _spent) = aof
         .finish_concurrent_rewrite_with(&plan.tmp, plan.keys, gen2)
         .unwrap();
     assert!(!aof.is_rewriting());
@@ -715,7 +715,7 @@ fn tee_pool_recycles_buffers_and_teardown_drains() {
         returned.reserve(1 << 20); // give it a recognizable capacity
         returned.capacity()
     };
-    aof.stash_tee_spare(returned);
+    let _ = aof.stash_tee_spare(returned);
 
     // The stash installs at the NEXT take (ping-pong is one step
     // deep): gen2 still grows in the take-1-installed buffer; the
@@ -727,8 +727,8 @@ fn tee_pool_recycles_buffers_and_teardown_drains() {
     let gen3 = aof.take_tee_for_handoff().unwrap();
     assert_eq!(gen3.capacity(), cap_marker, "handoff must reuse the pooled buffer");
 
-    aof.stash_tee_spare(gen2);
-    aof.stash_tee_spare(gen3); // bigger buffer wins the slot, gen2 drops
+    let _ = aof.stash_tee_spare(gen2);
+    let _ = aof.stash_tee_spare(gen3); // bigger buffer wins the slot; loser returns
     let bufs = aof.take_tee_teardown();
     assert!(
         bufs.iter().any(|b| b.capacity() == cap_marker),
