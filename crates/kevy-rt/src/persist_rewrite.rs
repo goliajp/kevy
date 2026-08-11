@@ -34,6 +34,30 @@ impl<C: Commands> Shard<C> {
     /// arms of `commit_persist_done` — `Save` stays there).
     #[cold]
     pub(crate) fn commit_rewrite_done(&mut self, done: PersistDone) {
+        // DIAG(finish-tick): coarse wall-time around the whole
+        // reactor-side completion arm. Coarse block only — paired fine
+        // timers get reordered by the optimizer (methodology §1).
+        let diag_t0 = std::time::Instant::now();
+        let diag_kind = match &done {
+            PersistDone::Rewrite { .. } => "rewrite-done",
+            PersistDone::TeeAppend { .. } => "tee-appended",
+            PersistDone::SwapImage { .. } => "swap-done",
+            PersistDone::Cleanup { .. } => "cleanup-done",
+            PersistDone::Save { .. } => "save-misroute",
+        };
+        self.commit_rewrite_done_inner(done);
+        let el = diag_t0.elapsed();
+        if el.as_millis() >= 5 {
+            eprintln!(
+                "DIAG finish-tick shard {} {} took {}us",
+                self.id,
+                diag_kind,
+                el.as_micros()
+            );
+        }
+    }
+
+    fn commit_rewrite_done_inner(&mut self, done: PersistDone) {
         match done {
             PersistDone::Rewrite {
                 result: Ok(keys),
