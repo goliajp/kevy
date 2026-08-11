@@ -52,6 +52,32 @@ pub(crate) fn write_seglist_payload<W: Write>(
     Ok(())
 }
 
+/// Same OP_HASH wire format as [`write_hash_payload`] — the load side
+/// re-applies the encoding switch by field count.
+pub(crate) fn write_seghash_payload<W: Write>(
+    w: &mut W,
+    h: &kevy_store::seg_map::SegMap<kevy_store::SmallBytes>,
+) -> io::Result<()> {
+    w.write_all(&(h.len() as u32).to_le_bytes())?;
+    for (f, v) in h.iter() {
+        write_bytes(w, f.as_slice())?;
+        write_bytes(w, v.as_slice())?;
+    }
+    Ok(())
+}
+
+/// Same OP_SET wire format as [`write_set_payload`].
+pub(crate) fn write_segset_payload<W: Write>(
+    w: &mut W,
+    s: &kevy_store::seg_map::SegMap<()>,
+) -> io::Result<()> {
+    w.write_all(&(s.len() as u32).to_le_bytes())?;
+    for m in s.keys() {
+        write_bytes(w, m.as_slice())?;
+    }
+    Ok(())
+}
+
 pub(crate) fn write_set_payload<W: Write>(
     w: &mut W,
     set: &kevy_store::SetData,

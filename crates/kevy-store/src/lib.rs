@@ -92,12 +92,14 @@ pub mod expire;
 pub use expire::ExpireStats;
 pub(crate) use entry::Entry;
 mod hash;
+mod hash_read;
 mod hash_ttl;
 pub use hash_ttl::{HExpireCode, HExpireCond};
 mod keyspace;
 mod keyspace_load;
 mod list;
 pub mod list_seg;
+pub mod seg_map;
 mod list_read;
 mod notify;
 mod rng;
@@ -105,6 +107,7 @@ mod scan;
 pub use notify::KeyspaceEvent;
 mod list_ops;
 mod set;
+mod set_read;
 mod small_set;
 pub use small_set::{SmallSetData, SmallSetIter};
 mod small_hash;
@@ -357,6 +360,8 @@ mod tests;
 mod tests_list_seg;
 #[cfg(test)]
 mod tests_memory;
+#[cfg(test)]
+mod tests_seg_map;
 #[cfg(test)]
 mod tests_snapshot;
 #[cfg(test)]

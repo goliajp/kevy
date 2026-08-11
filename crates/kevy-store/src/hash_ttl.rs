@@ -54,6 +54,7 @@ impl Store {
             None => Ok(false),
             Some(e) => match &e.value {
                 Value::Hash(h) => Ok(h.get(field).is_some()),
+                Value::SegHash(h) => Ok(h.get(field).is_some()),
                 Value::SmallHashInline(h) => Ok(h.get(field).is_some()),
                 _ => Err(StoreError::WrongType),
             },
