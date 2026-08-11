@@ -66,6 +66,9 @@ impl Store {
             Value::ZSet(z) => {
                 self.load_zset(k, z.ordered().map(|(m, sc)| (m.to_vec(), sc)).collect(), ttl_ms)
             }
+            Value::SegZSet(z) => {
+                self.load_zset(k, z.ordered().map(|(m, sc)| (m.to_vec(), sc)).collect(), ttl_ms)
+            }
             Value::SmallZSetInline(z) => {
                 self.load_zset(k, z.iter().map(|(m, sc)| (m.to_vec(), sc)).collect(), ttl_ms)
             }
