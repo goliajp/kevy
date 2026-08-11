@@ -760,3 +760,7 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 ### P2 — forced-rewrite finish 座位(尝试一刀,被测量翻案,重新定名)
 - [x] stagger 攻击已试并撤销 ✅(2026-08-12,`849f816c` 记档):按「多 shard swap 碰撞」归因实现了 BGREWRITEAOF fan-out 错峰(shard i 延迟 i×500ms)——复测显示 finish 已分离(三个 50ms 级小阶)但**单 shard finish 自己仍扛 183ms tick**,碰撞框架被证伪 → 分支未 merge 即删,翻案入 closeout finding Post-script
 - [x] 单 shard finish 分解 + 刀 ✅(2026-08-12,merge `ad0ed0a4` CI 绿):三轮插桩定名——臂级计时锁定 tee-appended 283ms → 第一刀(GB 缓冲反应堆内联释放三漏,真隐患但非本座位,保留)→ 分步计时破案:**涓流工况 tee 永不排空,每次 rewrite 都走反应堆同步兜底 swap(S5 离线 SwapImage 只在 tee 空时启用),rename/fsync 撞 jbd2 提交窗即 ~300ms**;刀 = 终局小尾巴 tee 作为 SwapImage 的 tail 交 worker(append/fsync/hardlink/rename 全离线,dead-worker 回收 tail 走同步回退,epoll 保同步语义);复测最坏 tick 188ms → **50.5ms 噪音底,8 次强制 rewrite 零超线,PASS**;crashgate 31/31 + perfgate-median 12/12 + CI 绿;persist_worker 按 500 LOC 拆 job 体到 persist_jobs。finding=bench/FINDING-2026-08-12-rewrite-finish-offthread-tail.md
+
+### P3 — S2:appendfsync=always 的 CQE-gated 回复【当前】
+- [x] 设计轮 ✅(2026-08-12):正式 RFC `.claude/rfcs/2026-08-12-s2-always-cqe-gated.md`(Explore 全图地面真相;epoch 门控回复持有 + 排空后 fsync 免 SQE 链接;**两个关键地面事实:queued 模式下同步 fsync 对空文件 = 潜在正确性陷阱必修;crashgate 对反应堆侧 always 零覆盖,server-always cell 必须先行**)
+- [ ] 实施(按 RFC §5 顺序):① server-always crashgate cell 旧路径基线绿 ② kevy-persist queued+Always 分支 + 陷阱回归 ③ uring_aof epoch + OP_AOF_FSYNC ④ 门点/持有/跨 shard held_responses ⑤ 盒上 cell + perf A/B + perfgate + 全门禁 → merge
