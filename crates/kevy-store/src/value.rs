@@ -185,6 +185,11 @@ pub enum Value {
     ArcBulk(Arc<Box<[u8]>>),
     Hash(Arc<HashData>),
     List(Arc<ListData>),
+    /// A list past [`crate::list_seg::SEG_PROMOTE`] elements: a deque of
+    /// `Arc`-shared segments so a COW write under a live snapshot view
+    /// clones one segment, not the whole (possibly multi-GB) value. See
+    /// `list_seg.rs` for the promotion contract.
+    SegList(Arc<crate::list_seg::SegListData>),
     Set(Arc<SetData>),
     ZSet(Arc<ZSetData>),
     Stream(Arc<crate::stream::StreamData>),
@@ -286,7 +291,7 @@ impl Value {
         match self {
             Value::Str(_) | Value::Int(_) | Value::ArcBulk(_) => "string",
             Value::Hash(_) | Value::SmallHashInline(_) => "hash",
-            Value::List(_) | Value::SmallListInline(_) => "list",
+            Value::List(_) | Value::SegList(_) | Value::SmallListInline(_) => "list",
             Value::Set(_) | Value::SmallSetInline(_) => "set",
             Value::ZSet(_) | Value::SmallZSetInline(_) => "zset",
             Value::Stream(_) => "stream",
@@ -314,6 +319,11 @@ impl Value {
                 .map(|(f, v)| f.heap_bytes() as u64 + v.heap_bytes() as u64)
                 .sum::<u64>(),
             Value::List(l) => (l.capacity() as u64).saturating_mul(LIST_SLOT_BYTES)
+                + l.iter().map(|v| v.capacity() as u64).sum::<u64>(),
+            // Segments charge like flat lists; the outer deque-of-Arcs
+            // adds one pointer slot per segment.
+            Value::SegList(l) => (l.seg_count() as u64).saturating_mul(8)
+                + (l.len() as u64).saturating_mul(LIST_SLOT_BYTES)
                 + l.iter().map(|v| v.capacity() as u64).sum::<u64>(),
             Value::Set(s) => collection_overhead(s.capacity(), SET_SLOT_BYTES) + s
                 .iter()
@@ -378,6 +388,12 @@ impl Value {
             // drop is expensive (it really frees the inner payload).
             Value::Hash(a) => alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
             Value::List(a) => alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
+            // Bio-drop only pays off when the drop really frees: outer
+            // AND every segment unique. A view-shared SegList's drop is
+            // refcount decrements — cheap enough inline.
+            Value::SegList(a) => {
+                alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty() && a.all_unique()
+            }
             Value::Set(a) => alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
             Value::ZSet(a) => {
                 alloc::sync::Arc::strong_count(a) == 1 && !a.by_member.is_empty()
