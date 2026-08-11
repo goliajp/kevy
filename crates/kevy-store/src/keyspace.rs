@@ -356,7 +356,17 @@ impl Store {
     }
 
     pub fn load_list(&mut self, key: Vec<u8>, items: Vec<Vec<u8>>, ttl_ms: Option<u64>) {
-        self.insert_loaded(key, Value::List(Arc::new(items.into_iter().collect())), ttl_ms);
+        // Same encoding switch a live push applies: a list past the
+        // promotion threshold loads straight into segments, so a
+        // snapshot restore of a giant list lands COW-ready.
+        let value = if items.len() > crate::list_seg::SEG_PROMOTE {
+            Value::SegList(Arc::new(crate::list_seg::SegListData::from_flat(
+                items.into_iter().collect(),
+            )))
+        } else {
+            Value::List(Arc::new(items.into_iter().collect()))
+        };
+        self.insert_loaded(key, value, ttl_ms);
     }
 
     pub fn load_set(&mut self, key: Vec<u8>, members: Vec<Vec<u8>>, ttl_ms: Option<u64>) {

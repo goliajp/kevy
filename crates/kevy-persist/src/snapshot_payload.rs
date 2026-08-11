@@ -38,6 +38,20 @@ pub(crate) fn write_list_payload<W: Write>(w: &mut W, l: &kevy_store::ListData) 
     Ok(())
 }
 
+/// Same OP_LIST wire format as [`write_list_payload`] — the load side
+/// re-applies the encoding switch by element count, so the segmented
+/// representation is a memory-layout fact, not a wire fact.
+pub(crate) fn write_seglist_payload<W: Write>(
+    w: &mut W,
+    l: &kevy_store::list_seg::SegListData,
+) -> io::Result<()> {
+    w.write_all(&(l.len() as u32).to_le_bytes())?;
+    for item in l.iter() {
+        write_bytes(w, item)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn write_set_payload<W: Write>(
     w: &mut W,
     set: &kevy_store::SetData,

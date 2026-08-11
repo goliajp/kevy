@@ -97,6 +97,8 @@ pub use hash_ttl::{HExpireCode, HExpireCond};
 mod keyspace;
 mod keyspace_load;
 mod list;
+pub mod list_seg;
+mod list_read;
 mod notify;
 mod rng;
 mod scan;
@@ -351,6 +353,8 @@ pub(crate) use util::{apply_delta, key_heap_bytes_for};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_list_seg;
 #[cfg(test)]
 mod tests_memory;
 #[cfg(test)]
