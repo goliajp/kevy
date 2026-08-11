@@ -134,25 +134,7 @@ impl<C: Commands> Shard<C> {
         let Some(aof) = &mut self.aof else { return };
         let tee = aof.take_tee_for_handoff().unwrap_or_default();
         if tee.is_empty() {
-            let queued = aof.queued_mode();
-            if queued {
-                // Empty by LENGTH — the buffer still carries its
-                // largest generation's capacity, and a scope-drop here
-                // is an inline GB munmap on the reactor. Ship it with
-                // the other frees. (The non-queued branch hands it to
-                // finish_rewrite_swap, whose spent-buffer return ships
-                // it the same way.)
-                if tee.capacity() >= 1 << 20 {
-                    self.ship_cleanup(Vec::new(), vec![tee]);
-                }
-                self.submit_offthread_swap(h);
-            } else {
-                // Non-queued (epoll): appends write straight to the live
-                // fd — nothing can hold them through a worker-side
-                // rename (they would land on the renamed-away inode and
-                // vanish). Keep this mode's classic synchronous swap.
-                self.finish_rewrite_swap(&h, tee);
-            }
+            self.finish_with_empty_tee(h, tee);
             return;
         }
         if tee.len() <= SMALL_TEE && h.iters >= MAX_HANDOFFS {
@@ -179,6 +161,28 @@ impl<C: Commands> Shard<C> {
             return;
         }
         self.hand_off_generation(h, tee);
+    }
+
+
+    /// Converged: the last generation drained empty. The buffer still
+    /// carries its largest generation's CAPACITY, and a scope-drop
+    /// would be an inline GB munmap on the reactor — the queued branch
+    /// ships it with the other frees; the non-queued branch hands it to
+    /// finish_rewrite_swap, whose spent-buffer return ships it the same
+    /// way. Non-queued (epoll) keeps the classic synchronous swap:
+    /// appends write straight to the live fd — nothing can hold them
+    /// through a worker-side rename (they would land on the
+    /// renamed-away inode and vanish).
+    fn finish_with_empty_tee(&mut self, h: RewriteHandoff, tee: Vec<u8>) {
+        let queued = self.aof.as_ref().is_some_and(kevy_persist::Aof::queued_mode);
+        if queued {
+            if tee.capacity() >= 1 << 20 {
+                self.ship_cleanup(Vec::new(), vec![tee]);
+            }
+            self.submit_offthread_swap(h);
+        } else {
+            self.finish_rewrite_swap(&h, tee);
+        }
     }
 
     /// A tee generation landed (or failed) on the worker: recycle its

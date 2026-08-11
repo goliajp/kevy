@@ -86,10 +86,7 @@ impl Aof {
         buf.clear();
         match &self.tee_spare {
             Some(held) if held.capacity() >= buf.capacity() => Some(buf),
-            _ => {
-                let evicted = self.tee_spare.replace(buf);
-                evicted
-            }
+            _ => self.tee_spare.replace(buf),
         }
     }
 
