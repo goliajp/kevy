@@ -1,30 +1,51 @@
-//! `Store` hash commands.
+//! `Store` hash write commands. Reads live in `hash_read.rs`.
+//!
+//! Three encodings, promoted in order of size: `SmallHashInline`
+//! (couple of tiny pairs, in the Value body) → `Hash(Arc<KevyMap>)`
+//! (flat heap) → `SegHash` (bucket-sharded COW past
+//! [`crate::seg_map::HS_PROMOTE`] fields — a write under a live
+//! snapshot view clones one bucket, not the whole value).
 
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
+use crate::seg_map::{HS_PROMOTE, SegMap};
 use crate::small_hash::{self, AddResult as HAddResult, SmallHashData};
 use crate::util::{parse_f64, parse_i64};
 use crate::value::{HashData, SmallBytes, Value, hash_field_weight};
-/// `(field, value)` pairs collected off either hash encoding.
-type FieldValuePairs = Vec<(Vec<u8>, Vec<u8>)>;
-
 use crate::{Entry, Store, StoreError, now_ns};
 use alloc::sync::Arc;
+
+/// A mutable borrow of either heap hash encoding — lets the
+/// read-modify-write entry points (`hincrby` / `hincrbyfloat`) stay
+/// encoding-blind: both arms expose the same `get`/`insert` shape.
+pub(crate) enum HashRefMut<'a> {
+    Flat(&'a mut HashData),
+    Seg(&'a mut SegMap<SmallBytes>),
+}
+
+impl HashRefMut<'_> {
+    fn get(&self, field: &[u8]) -> Option<&SmallBytes> {
+        match self {
+            Self::Flat(h) => h.get(field),
+            Self::Seg(h) => h.get(field),
+        }
+    }
+    fn insert(&mut self, field: SmallBytes, value: SmallBytes) -> Option<SmallBytes> {
+        match self {
+            Self::Flat(h) => h.insert(field, value),
+            Self::Seg(h) => h.insert(field, value),
+        }
+    }
+}
 
 impl Store {
     // ---- hashes --------------------------------------------------------
 
-    /// Borrow the key's hash mutably, optionally creating it. `Ok(None)` means
-    /// the key is absent and `create` was false.
-    ///
-    /// A.8: only used by the heap-backed legacy read/mutate sites
-    /// (`hincrby`, the `hash_ref` reader). The bulk writers (`hset` /
-    /// `hdel`) take the encoding-switch path via `hset_one` /
-    /// `hash_field_get_mut_for_hset`. When `create=true` on a missing
-    /// key, materialises a heap `Value::Hash(Arc::default())` (no inline
-    /// path), matching pre-A.8 behaviour for read-modify-write entry
-    /// points that don't carry per-pair size info.
-    fn hash_mut(&mut self, key: &[u8], create: bool) -> Result<Option<&mut HashData>, StoreError> {
+    /// Borrow the key's hash mutably, optionally creating it. `Ok(None)`
+    /// means the key is absent and `create` was false. Promotes inline →
+    /// flat, and flat → sharded at the threshold, so HINCRBY-only
+    /// workloads cross the segmentation boundary too.
+    fn hash_mut(&mut self, key: &[u8], create: bool) -> Result<Option<HashRefMut<'_>>, StoreError> {
         self.tier_resolve(key, crate::value::COLD_TAG_HASH)?;
         if self.live_entry_mut(key).is_none() {
             if !create {
@@ -35,69 +56,58 @@ impl Store {
                 Entry::new(Value::Hash(Arc::default()), None),
             );
         }
-        // A.8: detect inline-encoding first (independent borrow), then
-        // upgrade out-of-scope of the &mut, then re-borrow as Hash. The
-        // borrow checker rejects the obvious in-place match because
-        // both arms would return a borrow tied to the same `&mut self`.
-        let is_inline = matches!(
-            self.map.get(key).map(|e| &e.value),
-            Some(Value::SmallHashInline(_))
-        );
-        if is_inline {
-            let promoted = {
-                let e = self.map.get(key).expect("present");
-                if let Value::SmallHashInline(s) = &e.value {
-                    small_hash::promote(s)
-                } else {
-                    unreachable!()
-                }
-            };
-            self.map.get_mut(key).expect("present").value = Value::Hash(Arc::new(promoted));
-            self.reweigh_entry(key);
+        // A.8: detect encoding first (independent borrow), upgrade
+        // out-of-scope of the &mut, then re-borrow — the borrow checker
+        // rejects the in-place match.
+        let needs = match self.map.get(key).map(|e| &e.value) {
+            Some(Value::SmallHashInline(_)) => true,
+            Some(Value::Hash(h)) => h.len() >= HS_PROMOTE,
+            _ => false,
+        };
+        if needs {
+            self.promote_hash_encoding(key);
         }
         match &mut self.map.get_mut(key).expect("present").value {
-            Value::Hash(h) => Ok(Some(Arc::make_mut(h))),
+            Value::Hash(h) => Ok(Some(HashRefMut::Flat(Arc::make_mut(h)))),
+            Value::SegHash(h) => Ok(Some(HashRefMut::Seg(Arc::make_mut(h)))),
             _ => Err(StoreError::WrongType),
         }
     }
 
+    /// One promotion step: inline → flat, or flat-at-threshold →
+    /// sharded. Reweighs the entry (the encoding switch changes the
+    /// overhead model).
+    fn promote_hash_encoding(&mut self, key: &[u8]) {
+        let Some(e) = self.map.get_mut(key) else { return };
+        match &mut e.value {
+            Value::SmallHashInline(s) => {
+                e.value = Value::Hash(Arc::new(small_hash::promote(s)));
+            }
+            Value::Hash(h) => {
+                let flat = Arc::try_unwrap(core::mem::take(h)).unwrap_or_else(|a| (*a).clone());
+                e.value = Value::SegHash(Arc::new(SegMap::from_flat(flat)));
+            }
+            _ => return,
+        }
+        self.reweigh_entry(key);
+    }
+
     /// A.8: read the key's hash slot for HSET. `WrongType` if the entry
-    /// is not a hash. Returns `None` when the key is absent — caller
-    /// (`hset_one`) creates the entry then.
+    /// is not a hash. Returns `None` when the key is absent.
     fn hash_value_for_set(&mut self, key: &[u8]) -> Result<Option<&mut Value>, StoreError> {
-        // Write path: a cold hash pages in; a cold string refuses with
-        // zero preads (the stage-1 tag check).
         self.tier_resolve(key, crate::value::COLD_TAG_HASH)?;
         match self.live_entry_mut(key) {
             None => Ok(None),
             Some(e) => match &e.value {
-                Value::Hash(_) | Value::SmallHashInline(_) => Ok(Some(&mut e.value)),
+                Value::Hash(_) | Value::SegHash(_) | Value::SmallHashInline(_) => {
+                    Ok(Some(&mut e.value))
+                }
                 _ => Err(StoreError::WrongType),
             },
         }
     }
 
-    /// Read the key's hash immutably (lazily expiring) — returns the
-    /// pairs as a vector of `(&[u8], &[u8])`. None if absent.
-    /// Internal helper for read-only paths; collects into a new Vec to
-    /// avoid the two-encoding match dance at every callsite.
-    fn hash_pairs(&mut self, key: &[u8]) -> Result<Option<FieldValuePairs>, StoreError> {
-        match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
-            None => Ok(None),
-            Some(e) => match &e.value {
-                Value::Hash(h) => Ok(Some(
-                    h.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect(),
-                )),
-                Value::SmallHashInline(h) => Ok(Some(
-                    h.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect(),
-                )),
-                _ => Err(StoreError::WrongType),
-            },
-        }
-    }
-
-    /// `HSET` — returns the count of newly-added fields. Borrowed argv:
-    /// no per-field allocation; routes through the encoding-switch path.
+    /// `HSET` — returns the count of newly-added fields.
     pub fn hset(
         &mut self,
         key: &[u8],
@@ -116,34 +126,28 @@ impl Store {
         let mut delta: i64 = 0;
         for (f, v) in pairs {
             match self.hset_one(key, f, v)? {
-                HsetOutcome::AddedInline => {
-                    added += 1;
-                    // Inline carries zero heap delta — already accounted
-                    // at insert_entry / per-call via value.weight()==0.
-                }
+                HsetOutcome::AddedInline => added += 1,
                 HsetOutcome::UpdatedInline => {}
                 HsetOutcome::AddedHeap(w) => {
                     added += 1;
                     delta += w;
                 }
-                HsetOutcome::UpdatedHeap(d) => {
-                    delta += d;
-                }
+                HsetOutcome::UpdatedHeap(d) => delta += d,
             }
         }
         self.account_delta(key, delta);
         Ok(added)
     }
 
-    /// `HSETNX` — set only if the field is absent; returns whether it was set.
+    /// `HSETNX` — set only if the field is absent; returns whether set.
     pub fn hsetnx(&mut self, key: &[u8], field: &[u8], val: &[u8]) -> Result<bool, StoreError> {
         self.purge_hash_ttl(key);
         self.tier_resolve(key, crate::value::COLD_TAG_HASH)?;
-        // Existing-field fast check via the encoding-aware reader.
         let exists = match self.live_entry(key) {
             None => false,
             Some(e) => match &e.value {
                 Value::Hash(h) => h.contains_key(field),
+                Value::SegHash(h) => h.contains_key(field),
                 Value::SmallHashInline(h) => h.contains_key(field),
                 _ => return Err(StoreError::WrongType),
             },
@@ -161,103 +165,7 @@ impl Store {
         }
     }
 
-    pub fn hget(&mut self, key: &[u8], field: &[u8]) -> Result<Option<&[u8]>, StoreError> {
-        self.purge_hash_ttl(key);
-        match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
-            None => Ok(None),
-            Some(e) => match &e.value {
-                Value::Hash(h) => Ok(h.get(field).map(SmallBytes::as_slice)),
-                Value::SmallHashInline(h) => Ok(h.get(field)),
-                _ => Err(StoreError::WrongType),
-            },
-        }
-    }
-
-    pub fn hexists(&mut self, key: &[u8], field: &[u8]) -> Result<bool, StoreError> {
-        self.purge_hash_ttl(key);
-        match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
-            None => Ok(false),
-            Some(e) => match &e.value {
-                Value::Hash(h) => Ok(h.contains_key(field)),
-                Value::SmallHashInline(h) => Ok(h.contains_key(field)),
-                _ => Err(StoreError::WrongType),
-            },
-        }
-    }
-
-    pub fn hlen(&mut self, key: &[u8]) -> Result<usize, StoreError> {
-        self.purge_hash_ttl(key);
-        match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
-            None => Ok(0),
-            Some(e) => match &e.value {
-                Value::Hash(h) => Ok(h.len()),
-                Value::SmallHashInline(h) => Ok(h.len()),
-                _ => Err(StoreError::WrongType),
-            },
-        }
-    }
-
-    /// `HMGET` — one `Option` per requested field, in input order.
-    pub fn hmget(
-        &mut self,
-        key: &[u8],
-        fields: &[&[u8]],
-    ) -> Result<Vec<Option<Vec<u8>>>, StoreError> {
-        self.purge_hash_ttl(key);
-        match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
-            None => Ok(fields.iter().map(|_| None).collect()),
-            Some(e) => match &e.value {
-                Value::Hash(h) => Ok(fields.iter().map(|f| h.get(*f).map(SmallBytes::to_vec)).collect()),
-                Value::SmallHashInline(h) => Ok(fields
-                    .iter()
-                    .map(|f| h.get(f).map(<[u8]>::to_vec))
-                    .collect()),
-                _ => Err(StoreError::WrongType),
-            },
-        }
-    }
-
-    /// `HGETALL` — flat `[field, value, field, value, ...]`.
-    pub fn hgetall(&mut self, key: &[u8]) -> Result<Vec<Vec<u8>>, StoreError> {
-        self.purge_hash_ttl(key);
-        match self.hash_pairs(key)? {
-            None => Ok(Vec::new()),
-            Some(pairs) => {
-                let mut out = Vec::with_capacity(pairs.len() * 2);
-                for (f, v) in pairs {
-                    out.push(f);
-                    out.push(v);
-                }
-                Ok(out)
-            }
-        }
-    }
-
-    pub fn hkeys(&mut self, key: &[u8]) -> Result<Vec<Vec<u8>>, StoreError> {
-        self.purge_hash_ttl(key);
-        match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
-            None => Ok(Vec::new()),
-            Some(e) => match &e.value {
-                Value::Hash(h) => Ok(h.keys().map(kevy_bytes::SmallBytes::to_vec).collect()),
-                Value::SmallHashInline(h) => Ok(h.iter().map(|(f, _)| f.to_vec()).collect()),
-                _ => Err(StoreError::WrongType),
-            },
-        }
-    }
-
-    pub fn hvals(&mut self, key: &[u8]) -> Result<Vec<Vec<u8>>, StoreError> {
-        self.purge_hash_ttl(key);
-        match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
-            None => Ok(Vec::new()),
-            Some(e) => match &e.value {
-                Value::Hash(h) => Ok(h.values().map(SmallBytes::to_vec).collect()),
-                Value::SmallHashInline(h) => Ok(h.iter().map(|(_, v)| v.to_vec()).collect()),
-                _ => Err(StoreError::WrongType),
-            },
-        }
-    }
-
-    /// `HDEL` — returns count removed; deletes the key if hash becomes empty.
+    /// `HDEL` — returns count removed; deletes the key if emptied.
     pub fn hdel(
         &mut self,
         key: &[u8],
@@ -272,22 +180,10 @@ impl Store {
         let (removed, delta, drop_key) = {
             let h_entry = self.map.get_mut(key).expect("live");
             match &mut h_entry.value {
-                Value::Hash(h) => {
-                    // G-A3: hoist Arc::make_mut OUT of the loop — done
-                    // once per command instead of per-field.
-                    let h = Arc::make_mut(h);
-                    let mut r = 0usize;
-                    let mut d: i64 = 0;
-                    for f in fields {
-                        if let Some(old_v) = h.remove(*f) {
-                            r += 1;
-                            let smb = SmallBytes::from_slice(f);
-                            d -= hash_field_weight(&smb, old_v.heap_bytes()) as i64;
-                        }
-                    }
-                    let drop_now = h.is_empty();
-                    (r, d, drop_now)
-                }
+                // G-A3: hoist Arc::make_mut OUT of the loop — done once
+                // per command instead of per-field.
+                Value::Hash(h) => heap_hash_del(HashRefMut::Flat(Arc::make_mut(h)), fields),
+                Value::SegHash(h) => heap_hash_del(HashRefMut::Seg(Arc::make_mut(h)), fields),
                 Value::SmallHashInline(h) => {
                     let mut r = 0usize;
                     for f in fields {
@@ -295,8 +191,7 @@ impl Store {
                             r += 1;
                         }
                     }
-                    let drop_now = h.is_empty();
-                    (r, 0i64, drop_now)
+                    (r, 0i64, h.is_empty())
                 }
                 _ => return Err(StoreError::WrongType),
             }
@@ -310,8 +205,6 @@ impl Store {
     }
 
     /// `HINCRBYFLOAT` — atomic float increment of a hash field.
-    /// Preserves TTL; errors with `NotFloat` if the field isn't a
-    /// parseable float. Returns the post-increment value.
     pub fn hincrbyfloat(
         &mut self,
         key: &[u8],
@@ -321,7 +214,7 @@ impl Store {
         self.purge_hash_ttl(key);
         self.clear_hash_field_ttls(key, &[field]);
         let (next, weight_delta) = {
-            let h = self.hash_mut(key, true)?.expect("created");
+            let mut h = self.hash_mut(key, true)?.expect("created");
             let cur = match h.get(field) {
                 Some(v) => parse_f64(v.as_slice()).ok_or(StoreError::NotFloat)?,
                 None => 0.0,
@@ -349,7 +242,7 @@ impl Store {
         self.purge_hash_ttl(key);
         self.clear_hash_field_ttls(key, &[field]);
         let (next, weight_delta) = {
-            let h = self.hash_mut(key, true)?.expect("created");
+            let mut h = self.hash_mut(key, true)?.expect("created");
             let cur = match h.get(field) {
                 Some(v) => parse_i64(v.as_slice()).ok_or(StoreError::NotInteger)?,
                 None => 0,
@@ -370,15 +263,13 @@ impl Store {
     }
 
     /// A.8 core: set one `(field, value)` pair, applying the
-    /// encoding-switch. Returns the per-call outcome (whether added or
-    /// updated, and whether it sits in the inline or heap variant).
+    /// encoding-switch.
     fn hset_one(
         &mut self,
         key: &[u8],
         field: &[u8],
         value: &[u8],
     ) -> Result<HsetOutcome, StoreError> {
-        // Missing key — pick encoding by first pair size.
         if self.hash_value_for_set(key)?.is_none() {
             return Ok(self.hset_create(key, field, value));
         }
@@ -388,30 +279,42 @@ impl Store {
                 HAddResult::Added => Ok(HsetOutcome::AddedInline),
                 HAddResult::Updated => Ok(HsetOutcome::UpdatedInline),
                 HAddResult::NoRoom => {
-                    // Promote inline → Hash(Arc<HashData>), then set the
-                    // spilling pair; reweigh absorbs the encoding switch.
                     let mut promoted = small_hash::promote(h);
-                    let outcome = heap_hash_set(&mut promoted, field, value);
+                    let outcome = heap_hash_set(HashRefMut::Flat(&mut promoted), field, value);
                     *v = Value::Hash(Arc::new(promoted));
                     self.reweigh_entry(key);
                     Ok(outcome)
                 }
             },
-            Value::Hash(h) => Ok(heap_hash_set(Arc::make_mut(h), field, value)),
+            // Flat hash at the threshold: shard, then set. One-time
+            // O(HS_PROMOTE) re-bucket (or clone, if a view pins it now).
+            Value::Hash(h) if h.len() >= HS_PROMOTE => {
+                let flat = Arc::try_unwrap(core::mem::take(h)).unwrap_or_else(|a| (*a).clone());
+                let mut seg = SegMap::from_flat(flat);
+                let outcome = heap_hash_set(HashRefMut::Seg(&mut seg), field, value);
+                *v = Value::SegHash(Arc::new(seg));
+                self.reweigh_entry(key);
+                // Reweighed from scratch — swallow the per-pair delta.
+                Ok(match outcome {
+                    HsetOutcome::AddedHeap(_) => HsetOutcome::AddedHeap(0),
+                    other => other,
+                })
+            }
+            Value::Hash(h) => Ok(heap_hash_set(HashRefMut::Flat(Arc::make_mut(h)), field, value)),
+            Value::SegHash(h) => {
+                Ok(heap_hash_set(HashRefMut::Seg(Arc::make_mut(h)), field, value))
+            }
             _ => Err(StoreError::WrongType),
         }
     }
 
-    /// Create a fresh entry for `key` holding one pair. Picks inline
-    /// when both field + value fit, falls back to heap otherwise.
+    /// Create a fresh entry for `key` holding one pair.
     fn hset_create(&mut self, key: &[u8], field: &[u8], value: &[u8]) -> HsetOutcome {
         if let Some(inline) = SmallHashData::with_one(field, value) {
             self.insert_entry(
                 SmallBytes::from_slice(key),
                 Entry::new(Value::SmallHashInline(inline), None),
             );
-            // Insert already accounts via value.weight() == 0; per-pair
-            // delta is zero in the caller (matches inline arm).
             HsetOutcome::AddedInline
         } else {
             let smb_f = SmallBytes::from_slice(field);
@@ -424,13 +327,11 @@ impl Store {
             HsetOutcome::AddedInline
         }
     }
-
 }
 
-/// Set one `(field, value)` pair into a heap-backed hash, charging heap bytes
-/// only (short values ≤22 B inline in the slot, no per-value allocation).
-/// Returns whether the field was added or updated, with the weight delta.
-fn heap_hash_set(h: &mut HashData, field: &[u8], value: &[u8]) -> HsetOutcome {
+/// Set one `(field, value)` pair into a heap-backed hash (either
+/// encoding), charging heap bytes only.
+fn heap_hash_set(mut h: HashRefMut<'_>, field: &[u8], value: &[u8]) -> HsetOutcome {
     let smb = SmallBytes::from_slice(field);
     let vb = SmallBytes::from_slice(value);
     let new_value_heap = vb.heap_bytes() as i64;
@@ -439,6 +340,29 @@ fn heap_hash_set(h: &mut HashData, field: &[u8], value: &[u8]) -> HsetOutcome {
         None => HsetOutcome::AddedHeap(new_w),
         Some(old) => HsetOutcome::UpdatedHeap(new_value_heap - old.heap_bytes() as i64),
     }
+}
+
+/// The HDEL field loop over a heap-backed hash (either encoding).
+/// Returns `(removed, weight_delta, now_empty)`.
+fn heap_hash_del(mut h: HashRefMut<'_>, fields: &[&[u8]]) -> (usize, i64, bool) {
+    let mut r = 0usize;
+    let mut d: i64 = 0;
+    for f in fields {
+        let old = match &mut h {
+            HashRefMut::Flat(m) => m.remove(*f),
+            HashRefMut::Seg(m) => m.remove(f),
+        };
+        if let Some(old_v) = old {
+            r += 1;
+            let smb = SmallBytes::from_slice(f);
+            d -= hash_field_weight(&smb, old_v.heap_bytes()) as i64;
+        }
+    }
+    let empty = match &h {
+        HashRefMut::Flat(m) => m.is_empty(),
+        HashRefMut::Seg(m) => m.is_empty(),
+    };
+    (r, d, empty)
 }
 
 enum HsetOutcome {
