@@ -252,6 +252,11 @@ impl<C: Commands> Shard<C> {
         match result {
             Ok(()) => match aof.swap_finalize_reopen(h.keys, trash) {
                 Ok(_stats) => {
+                    // The worker sync_all'd the image and journaled the
+                    // rename: everything queued before the swap is
+                    // durable — release any Always-held replies.
+                    #[cfg(target_os = "linux")]
+                    self.uring_aof_mark_all_durable();
                     let paths = self
                         .aof
                         .as_mut()

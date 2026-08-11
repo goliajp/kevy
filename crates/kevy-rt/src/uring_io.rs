@@ -215,12 +215,14 @@ impl<C: Commands> Shard<C> {
         if let Some(uc) = io.get_mut(&cid)
             && uc.pending_big_arg.is_some()
         {
+            let w0 = self.always_hold_w0();
             self.aof_begin_fsync_window();
             let total = slab_offset + n;
             let slab_bytes = &pbuf.bytes(bid, total)[slab_offset..];
             self.uring_bigbulk_feed(cid, io, slab_bytes);
             pbuf.recycle(bid);
             self.aof_end_group_logged();
+            self.uring_stamp_hold(w0, cid, io);
             // Payload first, THEN the terminal bookkeeping: transitioning
             // before the feed would size the single-shot read against
             // bytes this very CQE is about to deliver.
@@ -251,12 +253,14 @@ impl<C: Commands> Shard<C> {
                 return;
             }
         };
+        let w0 = self.always_hold_w0();
         self.aof_begin_fsync_window();
         let total = slab_offset + n;
         let slab_for_dispatch = &pbuf.bytes(bid, total)[slab_offset..];
         let outcome = self.uring_recv_dispatch(cid, slab_for_dispatch, &mut input_buf, io);
         pbuf.recycle(bid);
         self.aof_end_group_logged();
+        self.uring_stamp_hold(w0, cid, io);
         if outcome.conn_gone {
             return;
         }
