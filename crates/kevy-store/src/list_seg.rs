@@ -9,8 +9,8 @@
 //! at hundreds of millions of elements) plus ONLY the segment it
 //! touches, instead of the whole value. That turns the rc-soak's
 //! multi-second `Arc::make_mut` reactor stall on multi-GB single lists
-//! into a bounded ~one-segment clone (see
-//! `.claude/rfcs/2026-08-11-post-v5-element-cow.md`).
+//! into a bounded ~one-segment clone (element-COW RFC under
+//! `.claude/rfcs/`).
 //!
 //! Lists at or below [`SEG_PROMOTE`] keep the flat `Value::List`
 //! representation — the segment indirection is only paid where the
