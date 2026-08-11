@@ -32,8 +32,19 @@ pub fn parse_size(input: &str) -> Result<u64, String> {
         .map_err(|_| format!("size literal {input:?} has invalid number: {num_part:?}"))?;
     let multiplier = parse_unit(unit_part.trim())
         .ok_or_else(|| format!("size literal {input:?} has unknown unit: {unit_part:?}"))?;
-    n.checked_mul(multiplier)
-        .ok_or_else(|| format!("size literal {input:?} overflows u64"))
+    let total = n
+        .checked_mul(multiplier)
+        .ok_or_else(|| format!("size literal {input:?} overflows u64"))?;
+    // The TOML lexer reads bare integers as i64 and the emitter writes
+    // sizes as bare integers, so a size past i64::MAX would serialize
+    // but never reparse (the config_toml fuzz target caught the
+    // asymmetry live: `maxmemory = "<huge>gb"` accepted, its emitted
+    // form refused). No real byte budget approaches 8 EiB; refuse at
+    // the door so parse and reparse agree.
+    if total > i64::MAX as u64 {
+        return Err(format!("size literal {input:?} exceeds the 8 EiB ceiling"));
+    }
+    Ok(total)
 }
 
 fn parse_unit(s: &str) -> Option<u64> {
@@ -51,6 +62,17 @@ fn parse_unit(s: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sizes_past_i64_max_are_refused() {
+        // Emit writes sizes as bare TOML integers and the lexer reads
+        // them as i64 — anything larger must fail HERE so parse and
+        // reparse agree (fuzz config_toml regression).
+        assert!(parse_size("9223372036854775807").is_ok()); // i64::MAX exactly
+        assert!(parse_size("9223372036854775808").is_err()); // one past
+        assert!(parse_size("9007199254740993gb").is_err()); // huge via unit
+        assert!(parse_size("18446744073709551615").is_err()); // u64::MAX
+    }
 
     #[test]
     fn bare_integer_is_bytes() {
