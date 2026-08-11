@@ -1,0 +1,24 @@
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-11T14:08:17.1922959Z ---- cluster_slots_topology_is_exact_and_covering stdout ----
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-11T14:08:17.1923410Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-11T14:08:17.1925277Z thread '<unnamed>' (21826) panicked at crates/kevy/tests/cluster.rs:134:33:
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-11T14:08:17.1926023Z called `Result::unwrap()` on an `Err` value: Os { code: 98, kind: AddrInUse, message: "Address already in use" }
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-11T14:08:17.1926820Z stack backtrace:
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-11T14:08:17.1927064Z    0: __rustc::rust_begin_unwind
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-11T14:08:17.1927546Z              at /rustc/8bab26f4f68e0e26f0bb7960be334d5b520ea452/library/std/src/panicking.rs:689:5
+--
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-11T14:08:17.1932386Z note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-11T14:08:17.1932776Z 
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-11T14:08:17.1933151Z thread 'cluster_slots_topology_is_exact_and_covering' (21823) panicked at crates/kevy/tests/cluster.rs:157:13:
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-11T14:08:17.1933751Z runtime did not come up on port 45709
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-11T14:08:17.1934038Z stack backtrace:
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-11T14:08:17.1934269Z    0: __rustc::rust_begin_unwind
+test (x86_64-unknown-linux-gnu)	Test (workspace, --lib --tests)	2026-08-11T14:08:17.1934735Z              at /rustc/8bab26f4f68e0e26f0bb7960be334d5b520ea452/library/std/src/panicking.rs:689:5
+
+# Verdict notes (2026-08-11, feature/element-cow-closeout):
+# cluster_slots_topology_is_exact_and_covering: AddrInUse on port 45709 —
+# the slow-runner cross-process port-bind race class (same family as the
+# archived spop_storm / availgate / embed-boot occurrences; spop_storm got
+# the retry-on-AddrInUse harness fix, the cluster test harness has not).
+# The failing commit is a docs-only site regeneration — test code
+# unreachable from the diff. First occurrence for this test; recurs =>
+# port the spop_storm retry fix to the cluster test harness.

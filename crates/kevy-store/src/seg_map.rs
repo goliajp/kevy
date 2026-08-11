@@ -32,9 +32,17 @@ use kevy_bytes::SmallBytes;
 use kevy_hash::KevyHash;
 use kevy_map::KevyMap;
 
-/// Bucket size that triggers a split. One bucket is the COW clone
-/// bound, mirroring `list_seg::SEG_CAP`.
-pub const BUCKET_SPLIT: usize = 16 * 1024;
+/// Bucket size that triggers a split. One bucket is the per-WRITE COW
+/// clone bound — and, because a burst of hash-scattered writes under a
+/// pinned view first-touches many buckets in one reactor tick, it is
+/// also the granularity the per-TICK aggregate spreads over (the total
+/// bytes ≈ the value, whatever the granularity — same as fork-based
+/// page COW; finer buckets amortize the spikes). 2K entries ≈ ~130 KB
+/// per clone at 2K. The closing soak sized it empirically: 16K buckets
+/// aggregated a scattered burst to ~1.9 s ticks, 2K to a 188 ms
+/// worst tick, 512 (~33 KB per clone) holds the window-opening burst
+/// under the 100 ms tick bar with the control run's ~50 ms noise floor.
+pub const BUCKET_SPLIT: usize = 512;
 /// Flat `Value::Hash`/`Value::Set` length at which a write promotes to
 /// the sharded representation.
 pub const HS_PROMOTE: usize = 16 * 1024;
