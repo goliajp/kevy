@@ -156,6 +156,20 @@ pub(crate) fn write_zset_payload<W: Write>(
     Ok(())
 }
 
+/// Same OP_ZSET wire format as [`write_zset_payload`] — the load side
+/// re-applies the encoding switch by member count.
+pub(crate) fn write_segzset_payload<W: Write>(
+    w: &mut W,
+    z: &kevy_store::zset_seg::SegZSetData,
+) -> io::Result<()> {
+    w.write_all(&(z.len() as u32).to_le_bytes())?;
+    for (m, sc) in z.ordered() {
+        write_bytes(w, m)?;
+        w.write_all(&sc.to_bits().to_le_bytes())?;
+    }
+    Ok(())
+}
+
 pub(crate) fn write_stream_payload<W: Write>(
     w: &mut W,
     s: &kevy_store::StreamData,

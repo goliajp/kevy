@@ -199,6 +199,9 @@ pub enum Value {
     /// same bucket-sharded COW as [`Value::SegHash`].
     SegSet(Arc<crate::seg_map::SegMap<()>>),
     ZSet(Arc<ZSetData>),
+    /// A zset past `zset_seg::Z_PROMOTE` members — sharded member map
+    /// + ordered segments; COW writes clone one bucket + one segment.
+    SegZSet(Arc<crate::zset_seg::SegZSetData>),
     Stream(Arc<crate::stream::StreamData>),
     /// Valkey-orthodox encoding switch: tiny sets (1-N
     /// short members) live inline in 24 bytes instead of behind
@@ -300,7 +303,7 @@ impl Value {
             Value::Hash(_) | Value::SegHash(_) | Value::SmallHashInline(_) => "hash",
             Value::List(_) | Value::SegList(_) | Value::SmallListInline(_) => "list",
             Value::Set(_) | Value::SegSet(_) | Value::SmallSetInline(_) => "set",
-            Value::ZSet(_) | Value::SmallZSetInline(_) => "zset",
+            Value::ZSet(_) | Value::SegZSet(_) | Value::SmallZSetInline(_) => "zset",
             Value::Stream(_) => "stream",
             // Stage-1 funnel: TYPE (and SCAN's TYPE filter) answer from
             // the tag — a cold key never pays a pread for its type.
@@ -336,9 +339,9 @@ impl Value {
                 .iter()
                 .map(|m| m.heap_bytes() as u64)
                 .sum::<u64>(),
-            // Sharded twins; the walks live on SegMap (LOC budget).
             Value::SegHash(h) => h.weight_as_hash(),
             Value::SegSet(s) => s.weight_as_set(),
+            Value::SegZSet(z) => z.weight_as_zset(),
             // Inline collections live entirely in the Value variant
             // body — zero heap, zero bucket overhead. Accounting matches
             // `Value::Int` / inline `Value::Str` (both also return 0).
@@ -401,6 +404,9 @@ impl Value {
                 alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty() && a.all_unique()
             }
             Value::SegSet(a) => {
+                alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty() && a.all_unique()
+            }
+            Value::SegZSet(a) => {
                 alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty() && a.all_unique()
             }
             Value::List(a) => alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty(),

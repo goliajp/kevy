@@ -146,6 +146,7 @@ mod util;
 mod value;
 mod value_cold;
 mod zset;
+pub mod zset_seg;
 mod zset_algebra;
 mod zset_range;
 pub use zset_algebra::{ZAggregate, zdiff, zinter, zintercard, zunion};
@@ -362,6 +363,8 @@ mod tests_list_seg;
 mod tests_memory;
 #[cfg(test)]
 mod tests_seg_map;
+#[cfg(test)]
+mod tests_zset_seg;
 #[cfg(test)]
 mod tests_snapshot;
 #[cfg(test)]
