@@ -726,7 +726,7 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - [x] `bench/migrationgate.sh`:seed→dump→plan 断言→day-2 apply→COPY→帧→import→行数+抽样对账→VERIFY drift 0→doctor,全 trap 清理;**连跑两遍 PASS(可重复性证毕)**
 
 ### V3 — 尾延迟工业化
-- [ ] 心跳探针机制化(常驻可观测)+ tailgate:PING p99.9 ≤ 100ms、reactor 单圈上界 ≤ 100ms
+- [x] 心跳探针机制化 + tailgate ✅(2026-08-10 S4→S5→R2b 全弧:出厂默认双 cell 双 bar PASS——mixed gap 43-48ms/PING p999 sub-10ms、firehose gap 24-78ms;AOF offload 默认化 + 两段式 rewrite 全离场设计;方法论与证据链 = bench/FINDING-2026-08-10-s5*.md + memory RESUME)
       —— **仪器已落地(2026-08-08)**:`reactor_tick_gap_max_us` 引擎 gauge(tick 迟到 = 单迭代停顿上界,10Hz 零热路径成本,双 reactor 接线)+ `examples/tail_probe.rs` 进程内探针 + `bench/tailgate.sh` 两 cell。**基线(诚实 RED)**:mixed p999=100.8ms/gap 6.07s、firehose p999=280-460ms/gap 1.3-2.3s(×3)。**副产物:仪器首日抓出并修掉一个必崩缺陷**——单值 >4GiB 时 AOF 重写单帧 Argv u32 偏移回绕、persist 线程带崩全进程(`f94c3635`,按 Redis AOF_REWRITE_ITEMS_PER_CMD=64 分块 + 256MB 帧字节界)。**余项 = 两类停顿的 Phase A decomp + attack**(mixed 的 6s 与 firehose 的 AOF 追加路径)
 - [x] 慢客户端 / 连接风暴防护核查(2026-08-08)—— 三面审计:输出侧 `CLIENT_OUTPUT_HARD_LIMIT` 512MB 每 tick 扫(双 reactor,已有)/ 接入侧 maxclients 按 shard 分摊 + rejected 计数(已有)/ **输入侧无界 = 真缺口**:合法但永不完帧的巨型 multibulk 可把 `conn.input` 撑到 OOM → 补 `CLIENT_INPUT_HARD_LIMIT` 1GB(Redis client-query-buffer-limit 同值)双 reactor 读时执行,`KEVY_DEBUG_INPUT_LIMIT` 可覆盖,e2e 钉死断连+服务器无恙(`a692525c`)
 
@@ -741,5 +741,14 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - [ ] 容量计算器(公式 + 值大小三档表)+ `INFO modules` + 站点同步
 
 ### V6 — 发布轮(v5.0.0 或先 rc,待 P4)
-- [ ] CHANGELOG 收口 + upgradegate(R6 双向换二进制门禁化)重测
-- [ ] release-profile 预跑 → CI 真绿 → tag → 34 crates + npm + 渠道 + 装后 smoke
+- [x] CHANGELOG 收口 + upgradegate 重测 ✅(2026-08-10 RC-READY F1-F3)
+- [x] v5.0.0 完全发布 ✅(2026-08-11:40 crates 全链 + 三平台二进制 + npm @goliapkg/kevy + GitHub Release + 官网同步 + 装后 smoke 双通道;publish 链三修见 memory)
+
+## post-v5(2026-08-11 起)
+
+### P0 — SDK v5 真对齐 ✅(2026-08-11,merge `4ad82630` CI 绿)
+- [x] 17 绑定 manifest 真 5.0.0 + vendored 原生 5.0.0 重建(vendorgate 29/29)+ 本机 11 门真绿 + mobilegate 六格设备门全 PASS;四个潜伏缺陷抓修(npm smoke -4* glob / nitro modulemap 配方脚本化 / expo ffi .so 漂移 / mobilegate booted 歧义)。渠道首发(npm 家族/NuGet/PyPI/pub.dev/maven/kevy-go repo/SPM 根 manifest)= 属主拍板项
+
+### P1 — 元素粒度 COW(巨集合 rewrite 窗写停顿收口)【当前】
+- [ ] 设计轮:RFC 草案(.claude/plans/2026-08-10-post-v5-element-cow-rfc-draft.md,含 Phase A 实测:整值克隆 ~50-70ms/百万 64B 元素,5M=352ms+341MB 瞬态)→ 正式 RFC(A 案分段集合;段容量/四集合矩阵/升段阈值/序列化不变量)
+- [ ] 实现 + 验收:soak 同款巨集合工况 gap 秒级 → ≤100ms;perfgate 全 cell 无回归(小集合保整值表示);crash/repli/全门禁照常

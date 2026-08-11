@@ -123,7 +123,7 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
         Value::Str(_) | Value::Int(_) | Value::ArcBulk(_) => OP_STR, // L1/L2: all reuse OP_STR.
 
         Value::Hash(_) | Value::SmallHashInline(_) => OP_HASH,
-        Value::List(_) | Value::SmallListInline(_) => OP_LIST,
+        Value::List(_) | Value::SegList(_) | Value::SmallListInline(_) => OP_LIST,
         // A.7 O5: both Set encodings share the OP_SET wire format —
         // payload is `[len: u32 LE][bulk: len-prefixed bytes]*`, agnostic
         // of whether the in-memory representation is `SmallSetInline` or
@@ -153,6 +153,7 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
         Value::Hash(h) => snapshot_payload::write_hash_payload(w, h),
         Value::SmallHashInline(h) => snapshot_payload::write_small_hash_payload(w, h),
         Value::List(l) => snapshot_payload::write_list_payload(w, l),
+        Value::SegList(l) => snapshot_payload::write_seglist_payload(w, l),
         Value::SmallListInline(l) => snapshot_payload::write_small_list_payload(w, l),
         Value::Set(set) => snapshot_payload::write_set_payload(w, set),
         Value::SmallSetInline(s) => snapshot_payload::write_small_set_payload(w, s),
