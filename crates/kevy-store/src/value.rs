@@ -184,6 +184,10 @@ pub enum Value {
     /// cache-line storage beats an Arc indirection for the common case.
     ArcBulk(Arc<Box<[u8]>>),
     Hash(Arc<HashData>),
+    /// A hash past `seg_map::HS_PROMOTE` fields: an extendible-hash
+    /// directory of `Arc`-shared buckets — a COW write under a live
+    /// snapshot view clones one bucket, not the whole value.
+    SegHash(Arc<crate::seg_map::SegMap<SmallBytes>>),
     List(Arc<ListData>),
     /// A list past [`crate::list_seg::SEG_PROMOTE`] elements: a deque of
     /// `Arc`-shared segments so a COW write under a live snapshot view
@@ -191,6 +195,9 @@ pub enum Value {
     /// `list_seg.rs` for the promotion contract.
     SegList(Arc<crate::list_seg::SegListData>),
     Set(Arc<SetData>),
+    /// A set past `seg_map::HS_PROMOTE` members — the set door of the
+    /// same bucket-sharded COW as [`Value::SegHash`].
+    SegSet(Arc<crate::seg_map::SegMap<()>>),
     ZSet(Arc<ZSetData>),
     Stream(Arc<crate::stream::StreamData>),
     /// Valkey-orthodox encoding switch: tiny sets (1-N
@@ -290,9 +297,9 @@ impl Value {
     pub fn type_name(&self) -> &'static str {
         match self {
             Value::Str(_) | Value::Int(_) | Value::ArcBulk(_) => "string",
-            Value::Hash(_) | Value::SmallHashInline(_) => "hash",
+            Value::Hash(_) | Value::SegHash(_) | Value::SmallHashInline(_) => "hash",
             Value::List(_) | Value::SegList(_) | Value::SmallListInline(_) => "list",
-            Value::Set(_) | Value::SmallSetInline(_) => "set",
+            Value::Set(_) | Value::SegSet(_) | Value::SmallSetInline(_) => "set",
             Value::ZSet(_) | Value::SmallZSetInline(_) => "zset",
             Value::Stream(_) => "stream",
             // Stage-1 funnel: TYPE (and SCAN's TYPE filter) answer from
@@ -329,6 +336,9 @@ impl Value {
                 .iter()
                 .map(|m| m.heap_bytes() as u64)
                 .sum::<u64>(),
+            // Sharded twins; the walks live on SegMap (LOC budget).
+            Value::SegHash(h) => h.weight_as_hash(),
+            Value::SegSet(s) => s.weight_as_set(),
             // Inline collections live entirely in the Value variant
             // body — zero heap, zero bucket overhead. Accounting matches
             // `Value::Int` / inline `Value::Str` (both also return 0).
@@ -387,6 +397,12 @@ impl Value {
             // cross-thread traffic. A unique Arc IS the case where
             // drop is expensive (it really frees the inner payload).
             Value::Hash(a) => alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
+            Value::SegHash(a) => {
+                alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty() && a.all_unique()
+            }
+            Value::SegSet(a) => {
+                alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty() && a.all_unique()
+            }
             Value::List(a) => alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
             // Bio-drop only pays off when the drop really frees: outer
             // AND every segment unique. A view-shared SegList's drop is

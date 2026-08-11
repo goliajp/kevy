@@ -163,6 +163,7 @@ impl Store {
                     Ok(z.iter().map(|(m, s)| (m.to_vec(), s)).collect())
                 }
                 Value::Set(s) => Ok(s.iter().map(|m| (m.to_vec(), 1.0)).collect()),
+                Value::SegSet(s) => Ok(s.keys().map(|m| (m.to_vec(), 1.0)).collect()),
                 Value::SmallSetInline(s) => Ok(s.iter().map(|m| (m.to_vec(), 1.0)).collect()),
                 _ => Err(StoreError::WrongType),
             },

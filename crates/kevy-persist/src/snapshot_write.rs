@@ -119,16 +119,25 @@ pub fn write_snapshot_tmp<S: SnapshotSource>(src: &S, path: &Path) -> io::Result
 
 /// Serialize one entry: `[op][ttl][key][payload]`.
 fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>) -> io::Result<()> {
-    let op = match value {
+    let op = op_for(value)?;
+    w.write_all(&[op])?;
+    write_ttl(w, ttl)?;
+    write_bytes(w, key)?;
+    write_payload(w, value)
+}
+
+/// The wire opcode for a value (encoding-agnostic per type).
+fn op_for(value: &Value) -> io::Result<u8> {
+    Ok(match value {
         Value::Str(_) | Value::Int(_) | Value::ArcBulk(_) => OP_STR, // L1/L2: all reuse OP_STR.
 
-        Value::Hash(_) | Value::SmallHashInline(_) => OP_HASH,
+        Value::Hash(_) | Value::SegHash(_) | Value::SmallHashInline(_) => OP_HASH,
         Value::List(_) | Value::SegList(_) | Value::SmallListInline(_) => OP_LIST,
         // A.7 O5: both Set encodings share the OP_SET wire format —
         // payload is `[len: u32 LE][bulk: len-prefixed bytes]*`, agnostic
         // of whether the in-memory representation is `SmallSetInline` or
         // `Arc<KevySet>`.
-        Value::Set(_) | Value::SmallSetInline(_) => OP_SET,
+        Value::Set(_) | Value::SegSet(_) | Value::SmallSetInline(_) => OP_SET,
         Value::ZSet(_) | Value::SmallZSetInline(_) => OP_ZSET,
         Value::Stream(_) => OP_STREAM,
         // Seg-backed stub: persist the REFERENCE — the row's data is
@@ -142,20 +151,23 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
                 "vlog stub reached the snapshot writer — SnapshotSource must materialize (T4)",
             ));
         }
-    };
-    w.write_all(&[op])?;
-    write_ttl(w, ttl)?;
-    write_bytes(w, key)?;
+    })
+}
+
+/// The per-encoding payload writer half of [`write_entry`].
+fn write_payload<W: Write>(w: &mut W, value: &Value) -> io::Result<()> {
     match value {
         Value::Str(v) => write_bytes(w, v.as_slice()),
         Value::Int(n) => write_bytes(w, n.to_string().as_bytes()),
         Value::ArcBulk(a) => write_bytes(w, a.as_ref()),
         Value::Hash(h) => snapshot_payload::write_hash_payload(w, h),
+        Value::SegHash(h) => snapshot_payload::write_seghash_payload(w, h),
         Value::SmallHashInline(h) => snapshot_payload::write_small_hash_payload(w, h),
         Value::List(l) => snapshot_payload::write_list_payload(w, l),
         Value::SegList(l) => snapshot_payload::write_seglist_payload(w, l),
         Value::SmallListInline(l) => snapshot_payload::write_small_list_payload(w, l),
         Value::Set(set) => snapshot_payload::write_set_payload(w, set),
+        Value::SegSet(set) => snapshot_payload::write_segset_payload(w, set),
         Value::SmallSetInline(s) => snapshot_payload::write_small_set_payload(w, s),
         Value::ZSet(z) => snapshot_payload::write_zset_payload(w, z),
         Value::SmallZSetInline(z) => snapshot_payload::write_small_zset_payload(w, z),
