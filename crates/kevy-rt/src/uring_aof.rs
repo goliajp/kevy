@@ -52,6 +52,12 @@ pub(crate) struct AofOffload {
     /// A write CQE completed since the last fsync completion.
     dirty_since_sync: bool,
     last_sync: Instant,
+    /// Records ever queued that are fsync-proven durable (S2): the
+    /// Always reply-gate releases a held conn once this passes the
+    /// [`kevy_persist::Aof::queued_watermark`] value stamped on it.
+    pub(crate) durable_watermark: u64,
+    /// What the in-flight fsync will prove durable when its CQE lands.
+    fsync_covers: u64,
     /// A structural operation (BGREWRITEAOF, auto-rewrite) arrived while
     /// chunks were in flight; the tick retries it after the drain.
     pub(crate) want_restructure: bool,
@@ -66,6 +72,8 @@ impl Default for AofOffload {
             fsync_inflight: false,
             dirty_since_sync: false,
             last_sync: Instant::now(),
+            durable_watermark: 0,
+            fsync_covers: 0,
             want_restructure: false,
         }
     }
@@ -150,25 +158,39 @@ impl<C: Commands> Shard<C> {
         }
     }
 
-    /// everysec: one DATASYNC SQE per elapsed window, submitted only
-    /// when no write is in flight (ordering without a ring-wide drain —
-    /// the fsync must not overtake a write it is meant to cover).
+    /// One DATASYNC SQE at a time, submitted only when no write is in
+    /// flight (ordering without a ring-wide drain — the fsync must not
+    /// overtake a write it is meant to cover). everysec: one per
+    /// elapsed window. Always (S2): as soon as every queued record's
+    /// bytes are completed into the file and any of them is not yet
+    /// fsync-proven — held replies are waiting on exactly this CQE.
     fn uring_aof_maybe_fsync(&mut self, ring: &mut IoUring) {
         let o = &mut self.aof_offload;
-        if o.fsync_inflight
-            || !o.dirty_since_sync
-            || !o.inflight.is_empty()
-            || o.last_sync.elapsed().as_secs() < 1
-        {
+        if o.fsync_inflight || !o.inflight.is_empty() {
             return;
         }
         let Some(aof) = &mut self.aof else { return };
-        if aof.swap_holding() || !matches!(aof.fsync_policy(), kevy_persist::Fsync::EverySec) {
+        if aof.swap_holding() {
+            return;
+        }
+        let due = match aof.fsync_policy() {
+            kevy_persist::Fsync::Always => {
+                aof.queued_is_empty() && aof.queued_watermark() > o.durable_watermark
+            }
+            kevy_persist::Fsync::EverySec => {
+                o.dirty_since_sync && o.last_sync.elapsed().as_secs() >= 1
+            }
+            kevy_persist::Fsync::No => false,
+        };
+        if !due {
             return;
         }
         let Some(fd) = aof.queued_fd() else { return };
         if ring.prep_fsync(fd, OP_AOF) {
             o.fsync_inflight = true;
+            // Queue empty + ring empty ⇒ every queued record's bytes
+            // are in the file; this fsync proves them all.
+            o.fsync_covers = aof.queued_watermark();
         }
     }
 
@@ -180,10 +202,14 @@ impl<C: Commands> Shard<C> {
         if seq == 0 {
             self.aof_offload.fsync_inflight = false;
             if res < 0 {
+                // The Always gate keeps its held conns held (watermark
+                // unmoved) and the tick resubmits — no false ack.
                 eprintln!("kevy: shard {} aof offload fsync failed: errno {}", self.id, -res);
             } else {
                 self.aof_offload.dirty_since_sync = false;
                 self.aof_offload.last_sync = Instant::now();
+                self.aof_offload.durable_watermark =
+                    self.aof_offload.durable_watermark.max(self.aof_offload.fsync_covers);
             }
             return;
         }
@@ -206,6 +232,19 @@ impl<C: Commands> Shard<C> {
         }
         self.aof_offload.inflight.remove(pos);
         self.aof_offload.dirty_since_sync = true;
+    }
+
+    /// A structural operation (rewrite swap, SAVE truncate) just made
+    /// everything appended so far durable by other means — the worker
+    /// fsyncs the image before the rename, and both run only with the
+    /// queue and ring drained. Advance the reply-gate watermark so any
+    /// held conns release without waiting for a redundant fsync.
+    pub(crate) fn uring_aof_mark_all_durable(&mut self) {
+        if let Some(aof) = &self.aof {
+            let w = aof.queued_watermark();
+            let o = &mut self.aof_offload;
+            o.durable_watermark = o.durable_watermark.max(w);
+        }
     }
 
     /// May a structural file operation (rewrite begin/finish, truncate)
