@@ -132,34 +132,12 @@ impl<C: Commands> Shard<C> {
             return;
         };
         let Some(aof) = &mut self.aof else { return };
-        let dt = std::time::Instant::now();
         let tee = aof.take_tee_for_handoff().unwrap_or_default();
-        let d_take = dt.elapsed();
-        if d_take.as_millis() >= 3 {
-            eprintln!(
-                "DIAG adv-take shard {} take={}us tee_len={} tee_cap={}",
-                self.id,
-                d_take.as_micros(),
-                tee.len(),
-                tee.capacity()
-            );
-        }
-        if tee.is_empty() {
-            let df = std::time::Instant::now();
-            self.finish_with_empty_tee(h, tee);
-            if df.elapsed().as_millis() >= 3 {
-                eprintln!(
-                    "DIAG adv-emptyfin shard {} took={}us",
-                    self.id,
-                    df.elapsed().as_micros()
-                );
-            }
-            return;
-        }
-        if tee.len() <= SMALL_TEE && h.iters >= MAX_HANDOFFS {
-            // Backstop only: converged-but-never-empty under trickle
-            // appends — pay the bounded synchronous tail.
-            self.finish_rewrite_swap(&h, tee);
+        if tee.is_empty() || (tee.len() <= SMALL_TEE && h.iters >= MAX_HANDOFFS) {
+            // Terminal: converged (empty) or the trickle backstop —
+            // either way the residual is ≤ SMALL_TEE and rides the
+            // swap (off-thread in queued mode; see finish_terminal).
+            self.finish_terminal(h, tee);
             return;
         }
         let shrinking = tee.len() <= h.prev_len / SHRINK_DEN * SHRINK_NUM;
@@ -183,22 +161,19 @@ impl<C: Commands> Shard<C> {
     }
 
 
-    /// Converged: the last generation drained empty. The buffer still
-    /// carries its largest generation's CAPACITY, and a scope-drop
-    /// would be an inline GB munmap on the reactor — the queued branch
-    /// ships it with the other frees; the non-queued branch hands it to
-    /// finish_rewrite_swap, whose spent-buffer return ships it the same
-    /// way. Non-queued (epoll) keeps the classic synchronous swap:
-    /// appends write straight to the live fd — nothing can hold them
-    /// through a worker-side rename (they would land on the
-    /// renamed-away inode and vanish).
-    fn finish_with_empty_tee(&mut self, h: RewriteHandoff, tee: Vec<u8>) {
+    /// Terminal step: the residual tee (possibly empty) is small enough
+    /// to ride the swap. Queued mode hands it to the worker as the
+    /// image's tail — append, fsync, hardlink, rename, all off-thread;
+    /// the buffer (which can carry a large CAPACITY even at len 0 —
+    /// clears never shrink) is freed on the worker too. Non-queued
+    /// (epoll) keeps the classic synchronous swap: appends write
+    /// straight to the live fd — nothing can hold them through a
+    /// worker-side rename (they would land on the renamed-away inode
+    /// and vanish).
+    fn finish_terminal(&mut self, h: RewriteHandoff, tee: Vec<u8>) {
         let queued = self.aof.as_ref().is_some_and(kevy_persist::Aof::queued_mode);
         if queued {
-            if tee.capacity() >= 1 << 20 {
-                self.ship_cleanup(Vec::new(), vec![tee]);
-            }
-            self.submit_offthread_swap(h);
+            self.submit_offthread_swap(h, tee);
         } else {
             self.finish_rewrite_swap(&h, tee);
         }
@@ -287,7 +262,7 @@ impl<C: Commands> Shard<C> {
     /// does them; the reactor holds its queue (appends accumulate,
     /// bounded by the hold) and reopens on Done. Worker gone
     /// (shutdown) falls back to the synchronous swap.
-    fn submit_offthread_swap(&mut self, h: RewriteHandoff) {
+    fn submit_offthread_swap(&mut self, h: RewriteHandoff, tail: Vec<u8>) {
         let Some(aof) = &mut self.aof else { return };
         let live = aof.live_path();
         let trash = aof.swap_trash_name();
@@ -296,14 +271,18 @@ impl<C: Commands> Shard<C> {
             tmp: h.tmp.clone(),
             live,
             trash,
+            tail,
         };
-        if self.persist.submit(self.id, job) {
-            self.rewrite_handoff = Some(h); // keys carried to finalize
-        } else {
-            if let Some(aof) = &mut self.aof {
-                aof.abort_swap_hold();
+        match self.persist.submit_reclaim_tail(self.id, job) {
+            Ok(()) => self.rewrite_handoff = Some(h), // keys carried to finalize
+            Err(tail) => {
+                // Worker gone: the reclaimed tail's bytes exist only in
+                // that buffer — synchronous fallback carries them.
+                if let Some(aof) = &mut self.aof {
+                    aof.abort_swap_hold();
+                }
+                self.finish_rewrite_swap(&h, tail);
             }
-            self.finish_rewrite_swap(&h, Vec::new());
         }
     }
 

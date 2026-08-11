@@ -48,7 +48,13 @@ pub(crate) enum PersistJob {
     /// measured 400ms x4 shards when it ran on the reactors inside one
     /// jbd2 commit window. The reactor holds its queue meanwhile and
     /// reopens on completion.
-    SwapImage { tmp: PathBuf, live: PathBuf, trash: Option<PathBuf> },
+    /// `tail`: the last (small, ≤SMALL_TEE) tee generation — appended +
+    /// fsynced to `tmp` before the rename, so trickle workloads whose
+    /// tee never drains empty still get the off-thread swap instead of
+    /// the reactor-side synchronous backstop (whose rename/fsync eats
+    /// a ~300ms jbd2 commit-window stall under load — the finish-tick
+    /// diag finding).
+    SwapImage { tmp: PathBuf, live: PathBuf, trash: Option<PathBuf>, tail: Vec<u8> },
     /// Rewrite-teardown housekeeping in ONE job (the worker is serial —
     /// a second submit while it holds the first would be dropped, which
     /// silently pushed GB unlinks back inline onto the reactor):
@@ -106,6 +112,35 @@ impl PersistWorker {
     /// Hand a job to the worker (spawning it on first use). Returns `false`
     /// (without panicking) if the worker thread died — callers log + abort.
     pub(crate) fn submit(&mut self, shard_id: usize, job: PersistJob) -> bool {
+        if self.sender(shard_id).send(job).is_err() {
+            return false;
+        }
+        self.in_flight = true;
+        true
+    }
+
+    /// Like [`Self::submit`] but reclaims the swap job's TAIL on a dead
+    /// worker — those tee bytes exist only in that buffer, and the
+    /// synchronous fallback needs them. Non-swap jobs reclaim nothing.
+    pub(crate) fn submit_reclaim_tail(
+        &mut self,
+        shard_id: usize,
+        job: PersistJob,
+    ) -> Result<(), Vec<u8>> {
+        match self.sender(shard_id).send(job) {
+            Ok(()) => {
+                self.in_flight = true;
+                Ok(())
+            }
+            Err(std::sync::mpsc::SendError(job)) => Err(match job {
+                PersistJob::SwapImage { tail, .. } => tail,
+                _ => Vec::new(),
+            }),
+        }
+    }
+
+    /// The job channel's sender, spawning the worker on first use.
+    fn sender(&mut self, shard_id: usize) -> &mpsc::Sender<PersistJob> {
         let (tx, _) = self.chans.get_or_insert_with(|| {
             let (tx, job_rx) = mpsc::channel::<PersistJob>();
             let (done_tx, done_rx) = mpsc::channel::<PersistDone>();
@@ -113,7 +148,7 @@ impl PersistWorker {
                 .name(format!("kevy-persist-{shard_id}"))
                 .spawn(move || {
                     while let Ok(job) = job_rx.recv() {
-                        let done = run_job(job);
+                        let done = crate::persist_jobs::run_job(job);
                         if done_tx.send(done).is_err() {
                             return; // shard gone — nothing to report to
                         }
@@ -122,11 +157,7 @@ impl PersistWorker {
                 .expect("spawn persist worker");
             (tx, done_rx)
         });
-        if tx.send(job).is_err() {
-            return false;
-        }
-        self.in_flight = true;
-        true
+        tx
     }
 
     /// Non-blocking completion poll (called from the shard tick).
@@ -175,7 +206,7 @@ impl PersistWorker {
 }
 
 /// Best-effort page-cache drop for a fully-synced streamed file.
-fn drop_file_cache(f: &std::fs::File) {
+pub(crate) fn drop_file_cache(f: &std::fs::File) {
     #[cfg(unix)]
     {
         use std::os::fd::AsRawFd;
@@ -183,50 +214,7 @@ fn drop_file_cache(f: &std::fs::File) {
     }
 }
 
-/// Append+fsync one tee generation in drop-behind strides (64 MB write
-/// → fdatasync → cache drop), so a GB generation never floods the page
-/// cache into reclaim; return the buffer cleared for the pool.
-fn run_tee_append(tmp: PathBuf, mut bytes: Vec<u8>) -> PersistDone {
-    let result = (|| {
-        use std::io::Write;
-        let mut f = std::fs::OpenOptions::new().append(true).open(&tmp)?;
-        for chunk in bytes.chunks(64 << 20) {
-            f.write_all(chunk)?;
-            f.sync_data()?;
-            drop_file_cache(&f);
-        }
-        f.sync_all()
-    })();
-    bytes.clear();
-    PersistDone::TeeAppend {
-        result,
-        tmp,
-        buf: bytes,
-    }
-}
 
-fn run_job(job: PersistJob) -> PersistDone {
-    match job {
-        PersistJob::Save {
-            view,
-            snap_path,
-            aof_reset,
-            cursor,
-        } => PersistDone::Save {
-            result: write_snapshot_tmp_with_cursor(&view, &snap_path, cursor),
-            snap_path,
-            aof_reset,
-        },
-        PersistJob::Rewrite { view, tmp } => PersistDone::Rewrite {
-            // dump_aof drop-behinds its own cache and sync_all()s.
-            result: kevy_persist::dump_aof(&tmp, &view).map(|(keys, _bytes)| keys),
-            tmp,
-        },
-        PersistJob::SwapImage { tmp, live, trash } => crate::persist_jobs::run_swap(tmp, live, trash),
-        PersistJob::Cleanup { paths, bufs } => crate::persist_jobs::run_cleanup(paths, bufs),
-        PersistJob::TeeAppend { tmp, bytes } => run_tee_append(tmp, bytes),
-    }
-}
 
 impl<C: Commands> Shard<C> {
     /// `BGSAVE` on this shard: freeze the view, start the AOF tee (the
@@ -479,7 +467,7 @@ impl<C: Commands> Shard<C> {
 
 /// [`kevy_persist::write_snapshot_tmp`] with the feed-cursor header —
 /// same durable-tmp discipline (fsync before the caller's rename).
-fn write_snapshot_tmp_with_cursor(
+pub(crate) fn write_snapshot_tmp_with_cursor(
     view: &SnapshotView,
     path: &std::path::Path,
     cursor: Option<(u64, u64)>,
