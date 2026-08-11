@@ -119,7 +119,10 @@ impl Aof {
         }
         if self.deferred {
             self.deferred = false;
-            if self.dirty {
+            // Queued bytes are in the driver's chunk — syncing the file
+            // here would durabilize nothing. Leave `dirty` set; the ring
+            // fsync is the durability point for queued appends.
+            if self.dirty && self.queue.is_none() {
                 self.file.flush()?;
                 self.file.get_ref().sync_data()?;
                 self.dirty = false;
