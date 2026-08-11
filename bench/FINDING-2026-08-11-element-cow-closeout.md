@@ -20,12 +20,29 @@ Measured (box, watermark = `reactor_tick_gap_max_us`):
 | granularity | scattered-burst worst tick |
 |---|---:|
 | 16K-entry buckets/segments | **1.86 s** (2000-field burst into a pinned 20M hash) |
-| 2K | **188 ms** (realistic 200-write bursts; single outlier per ~8 min) |
-| 512 (~33 KB/clone) | re-verification pending (expected under the bar) |
+| 2K | **188 ms** |
+| 512 (~33 KB/clone) | **120-137 ms** (n=4; every occurrence at t≈17 s) |
 
-Control discrimination (same sustained shape, rewrites OFF): worst tick
-50 ms over 8 minutes — the over-bar ticks are rewrite-window-attributable,
-everything else is the box's noise floor. Dataset integrity across the
+Two control discriminations closed the attribution:
+
+1. **Rewrites OFF** (same sustained shape): worst tick 50 ms over 8
+   minutes — over-bar ticks only happen with windows.
+2. **Strings-only writes with windows** (zero giant-collection writes =
+   zero element COW): the ~127 ms tick STILL appears, same t≈17 s, and
+   the correlation probe pins that instant to the `aof_rewrite_in_progress
+   1→0` transition — **rewrite FINISH**, the last of the simultaneously
+   forced per-shard rewrites landing. That is the S5-documented
+   swap-commit-window family (`FINDING-2026-08-10-s5g-*`): the auto-rewrite
+   path staggers shards precisely to avoid it, and a client-forced
+   `BGREWRITEAOF` fans out to every shard at once, defeating the stagger.
+   Not an element-COW seat.
+
+Net: with windows forced every 30 s, **COW-attributable ticks stay ≤65 ms
+— under the 100 ms bar**; the residual 120-137 ms once-per-cycle tick
+reproduces byte-for-byte without any collection write and belongs to the
+forced-simultaneous-rewrite finish path (a pre-existing, documented
+family; auto-rewrite's stagger keeps it out of steady state, per the rc
+soak's 98 auto-rewrites at gap ≤47 ms). Dataset integrity across the
 restart-for-fresh-watermark was asserted (4 × 20M counts).
 
 Instrument note: the gap gauge is a **monotone watermark** — a phase that
@@ -40,10 +57,11 @@ acceptance.
 - Per-write bound (RFC micro line): **met** at every stage (0.4-2.1 ms,
   size-independent to 20M, RSS transient ≈ one shard).
 - Steady-state realistic-granularity soak with rewrite windows (RFC macro
-  line, gap ≤ 100 ms): 16K FAIL (1.86 s) → 2K FAIL by one 188 ms outlier →
-  512-grain re-run pending (blocked mid-arc by a host-side
-  opendirectoryd/DNS outage on the dev machine; the box still holds the
-  preloaded dataset for the rerun).
+  line, gap ≤ 100 ms): **PASS for the COW-attributable share** (≤65 ms at
+  512-grain, by the strings-only differential above). The 120-137 ms
+  once-per-cycle residual is the forced-simultaneous-rewrite finish seat —
+  orthogonal to this arc, named for a future attack (candidate: extend the
+  begin-gate stagger to client-forced BGREWRITEAOF fan-out).
 
 ## Boundary that remains
 
