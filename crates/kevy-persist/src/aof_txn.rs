@@ -56,6 +56,7 @@ impl Aof {
                     q.extend_from_slice(&(frame.len() as u32).to_le_bytes());
                     q.extend_from_slice(&crate::crc32c::crc32c(&frame).to_le_bytes());
                     q.extend_from_slice(&frame);
+                    self.queued_seq += 1;
                 } else {
                     self.file.write_all(&(frame.len() as u32).to_le_bytes())?;
                     self.file.write_all(&crate::crc32c::crc32c(&frame).to_le_bytes())?;

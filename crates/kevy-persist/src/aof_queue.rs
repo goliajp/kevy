@@ -34,6 +34,15 @@ impl Aof {
         Some((at, chunk))
     }
 
+    /// S2 reply-gate watermark: how many records have ever been queued.
+    /// Monotone for the life of this log (never resets on rewrite), so
+    /// the driver can compare it against its fsync-proven durable
+    /// watermark without wedging held replies across a file swap.
+    #[must_use]
+    pub fn queued_watermark(&self) -> u64 {
+        self.queued_seq
+    }
+
     /// Whether queued-append (offload) mode is on — the discriminant
     /// for protocol choices that are only safe when the driver can
     /// hold the append stream (e.g. the off-thread swap).
