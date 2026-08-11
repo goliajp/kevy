@@ -31,7 +31,7 @@ impl Store {
         match self.live_entry(dst) {
             None => {}
             Some(e) => match &e.value {
-                Value::List(_) | Value::SmallListInline(_) => {}
+                Value::List(_) | Value::SegList(_) | Value::SmallListInline(_) => {}
                 _ => return Err(StoreError::WrongType),
             },
         }
@@ -58,7 +58,7 @@ impl Store {
         match self.live_entry(dst) {
             None => {}
             Some(e) => match &e.value {
-                Value::List(_) | Value::SmallListInline(_) => {}
+                Value::List(_) | Value::SegList(_) | Value::SmallListInline(_) => {}
                 _ => return Err(StoreError::WrongType),
             },
         }
@@ -112,6 +112,7 @@ impl Store {
             None => return Ok(Vec::new()),
             Some(e) => match &e.value {
                 Value::List(l) => l.iter().cloned().collect(),
+                Value::SegList(l) => l.iter().cloned().collect(),
                 Value::SmallListInline(l) => l.iter().map(<[u8]>::to_vec).collect(),
                 _ => return Err(StoreError::WrongType),
             },

@@ -217,6 +217,9 @@ pub(crate) fn write_value_as_commands<W: Write>(
             write_verb_items(w, b"HSET", key, 2, fv, fmt, scratch)?;
         }
         Value::List(l) => write_verb_items(w, b"RPUSH", key, 1, l.iter().cloned(), fmt, scratch)?,
+        Value::SegList(l) => {
+            write_verb_items(w, b"RPUSH", key, 1, l.iter().cloned(), fmt, scratch)?;
+        }
         Value::SmallListInline(l) => {
             write_verb_items(w, b"RPUSH", key, 1, l.iter().map(<[u8]>::to_vec), fmt, scratch)?;
         }
