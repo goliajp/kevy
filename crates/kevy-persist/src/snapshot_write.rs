@@ -138,7 +138,7 @@ fn op_for(value: &Value) -> io::Result<u8> {
         // of whether the in-memory representation is `SmallSetInline` or
         // `Arc<KevySet>`.
         Value::Set(_) | Value::SegSet(_) | Value::SmallSetInline(_) => OP_SET,
-        Value::ZSet(_) | Value::SmallZSetInline(_) => OP_ZSET,
+        Value::ZSet(_) | Value::SegZSet(_) | Value::SmallZSetInline(_) => OP_ZSET,
         Value::Stream(_) => OP_STREAM,
         // Seg-backed stub: persist the REFERENCE — the row's data is
         // truth in the segment directory beside this snapshot.
@@ -170,6 +170,7 @@ fn write_payload<W: Write>(w: &mut W, value: &Value) -> io::Result<()> {
         Value::SegSet(set) => snapshot_payload::write_segset_payload(w, set),
         Value::SmallSetInline(s) => snapshot_payload::write_small_set_payload(w, s),
         Value::ZSet(z) => snapshot_payload::write_zset_payload(w, z),
+        Value::SegZSet(z) => snapshot_payload::write_segzset_payload(w, z),
         Value::SmallZSetInline(z) => snapshot_payload::write_small_zset_payload(w, z),
         Value::Stream(s) => snapshot_payload::write_stream_payload(w, s),
         Value::Cold(c) => {

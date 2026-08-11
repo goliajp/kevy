@@ -438,6 +438,13 @@ impl Store {
         for (m, score) in pairs {
             z.insert(&m, score);
         }
-        self.insert_loaded(key, Value::ZSet(Arc::new(z)), ttl_ms);
+        // Same encoding switch a live ZADD applies: giant zsets load
+        // straight into the segmented representation, COW-ready.
+        let value = if z.len() > crate::zset_seg::Z_PROMOTE {
+            Value::SegZSet(Arc::new(crate::zset_seg::SegZSetData::from_flat(&z)))
+        } else {
+            Value::ZSet(Arc::new(z))
+        };
+        self.insert_loaded(key, value, ttl_ms);
     }
 }
