@@ -347,7 +347,16 @@ impl Store {
     ) {
         // Both field and value are SmallBytes (short values inline in the
         // slot, no per-value heap alloc). `from_vec` reuses each Vec's
-        // allocation on the >22 B heap path.
+        // allocation on the >22 B heap path. Giant hashes load straight
+        // into buckets — same switch a live HSET applies.
+        if fields.len() > crate::seg_map::HS_PROMOTE {
+            let mut seg = crate::seg_map::SegMap::default();
+            for (f, v) in fields {
+                seg.insert(SmallBytes::from_vec(f), SmallBytes::from_vec(v));
+            }
+            self.insert_loaded(key, Value::SegHash(Arc::new(seg)), ttl_ms);
+            return;
+        }
         let hash_data: HashData = fields
             .into_iter()
             .map(|(f, v)| (SmallBytes::from_vec(f), SmallBytes::from_vec(v)))
@@ -370,6 +379,16 @@ impl Store {
     }
 
     pub fn load_set(&mut self, key: Vec<u8>, members: Vec<Vec<u8>>, ttl_ms: Option<u64>) {
+        // Same encoding switch a live SADD applies: a giant set loads
+        // straight into buckets, COW-ready.
+        if members.len() > crate::seg_map::HS_PROMOTE {
+            let mut seg = crate::seg_map::SegMap::default();
+            for m in members {
+                seg.insert(SmallBytes::from_vec(m), ());
+            }
+            self.insert_loaded(key, Value::SegSet(Arc::new(seg)), ttl_ms);
+            return;
+        }
         let set_data: SetData = members.into_iter().map(SmallBytes::from_vec).collect();
         self.insert_loaded(key, Value::Set(Arc::new(set_data)), ttl_ms);
     }

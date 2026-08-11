@@ -90,6 +90,9 @@ mod enabled {
     ) -> Result<Vec<Option<Vec<u8>>>, StoreError> {
         match &e.value {
             Value::Hash(h) => Ok(fields.iter().map(|f| h.get(*f).map(SmallBytes::to_vec)).collect()),
+            Value::SegHash(h) => {
+                Ok(fields.iter().map(|f| h.get(f).map(SmallBytes::to_vec)).collect())
+            }
             Value::SmallHashInline(h) => {
                 Ok(fields.iter().map(|f| h.get(f).map(<[u8]>::to_vec)).collect())
             }
@@ -296,7 +299,7 @@ mod enabled {
                 Some(e) => match &e.value {
                     Value::Cold(c) if c.type_tag == COLD_TAG_HASH => Probe::ColdHash(*c),
                     Value::Cold(_) => Probe::WrongType,
-                    Value::Hash(_) | Value::SmallHashInline(_) => Probe::Hot,
+                    Value::Hash(_) | Value::SegHash(_) | Value::SmallHashInline(_) => Probe::Hot,
                     _ => Probe::WrongType,
                 },
             }
@@ -435,6 +438,9 @@ mod disabled {
                 Some(e) => match &e.value {
                     Value::Hash(h) => {
                         Ok(Some(fields.iter().map(|f| h.get(*f).map(SmallBytes::to_vec)).collect()))
+                    }
+                    Value::SegHash(h) => {
+                        Ok(Some(fields.iter().map(|f| h.get(f).map(SmallBytes::to_vec)).collect()))
                     }
                     Value::SmallHashInline(h) => {
                         Ok(Some(fields.iter().map(|f| h.get(f).map(<[u8]>::to_vec)).collect()))

@@ -750,5 +750,8 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - [x] 17 绑定 manifest 真 5.0.0 + vendored 原生 5.0.0 重建(vendorgate 29/29)+ 本机 11 门真绿 + mobilegate 六格设备门全 PASS;四个潜伏缺陷抓修(npm smoke -4* glob / nitro modulemap 配方脚本化 / expo ffi .so 漂移 / mobilegate booted 歧义)。渠道首发(npm 家族/NuGet/PyPI/pub.dev/maven/kevy-go repo/SPM 根 manifest)= 属主拍板项
 
 ### P1 — 元素粒度 COW(巨集合 rewrite 窗写停顿收口)【当前】
-- [ ] 设计轮:RFC 草案(.claude/plans/2026-08-10-post-v5-element-cow-rfc-draft.md,含 Phase A 实测:整值克隆 ~50-70ms/百万 64B 元素,5M=352ms+341MB 瞬态)→ 正式 RFC(A 案分段集合;段容量/四集合矩阵/升段阈值/序列化不变量)
-- [ ] 实现 + 验收:soak 同款巨集合工况 gap 秒级 → ≤100ms;perfgate 全 cell 无回归(小集合保整值表示);crash/repli/全门禁照常
+- [x] 设计轮 ✅(2026-08-11):正式 RFC `.claude/rfcs/2026-08-11-post-v5-element-cow.md`(A 案分段;Explore 全图供地面真相;分期 L→HS→Z,Stream 文档边界)
+- [x] Stage L(List)✅(2026-08-11,merge `183bc8f3` CI 绿):Value::SegList 16K 元素段;盒上 Phase A 形状复测 352/666ms → **0.4/0.6ms 与 N 无关**,RSS 瞬态 341-392MB → ~2MB;perfgate-median 12/12 PASS(lpush cell -6.6% 在 floor 与波带内,观察项);finding=bench/FINDING-2026-08-11-element-cow-stage-l.md
+- [ ] Stage HS(Hash/Set):KevyMap hash 前缀分桶(SegMap<V>;目录翻倍 + 单桶分裂);soak 的 myhash/myset cell 在此收口
+- [ ] Stage Z(ZSet):先 kevy-ranktree 节点 Arc 化 path-copy(独立石头轮:bench+proptest),再接 by_member SegMap
+- [ ] 收口验收:rc-soak 巨集合工况缩短版重跑,gap 全程 ≤100ms;persistence 三语边界段落改写(List/Hash/Set/ZSet 已收口,Stream 仍整值)

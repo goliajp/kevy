@@ -216,6 +216,10 @@ pub(crate) fn write_value_as_commands<W: Write>(
             let fv = h.iter().flat_map(|(f, v)| [f.to_vec(), v.to_vec()]);
             write_verb_items(w, b"HSET", key, 2, fv, fmt, scratch)?;
         }
+        Value::SegHash(h) => {
+            let fv = h.iter().flat_map(|(f, v)| [f.to_vec(), v.to_vec()]);
+            write_verb_items(w, b"HSET", key, 2, fv, fmt, scratch)?;
+        }
         Value::List(l) => write_verb_items(w, b"RPUSH", key, 1, l.iter().cloned(), fmt, scratch)?,
         Value::SegList(l) => {
             write_verb_items(w, b"RPUSH", key, 1, l.iter().cloned(), fmt, scratch)?;
@@ -228,6 +232,9 @@ pub(crate) fn write_value_as_commands<W: Write>(
         // handler re-runs the encoding switch (small → inline, big → KevySet).
         Value::Set(s) => {
             write_verb_items(w, b"SADD", key, 1, s.iter().map(kevy_store::SmallBytes::to_vec), fmt, scratch)?;
+        }
+        Value::SegSet(s) => {
+            write_verb_items(w, b"SADD", key, 1, s.keys().map(kevy_store::SmallBytes::to_vec), fmt, scratch)?;
         }
         Value::SmallSetInline(s) => {
             write_verb_items(w, b"SADD", key, 1, s.iter().map(<[u8]>::to_vec), fmt, scratch)?;
