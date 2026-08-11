@@ -34,30 +34,6 @@ impl<C: Commands> Shard<C> {
     /// arms of `commit_persist_done` — `Save` stays there).
     #[cold]
     pub(crate) fn commit_rewrite_done(&mut self, done: PersistDone) {
-        // DIAG(finish-tick): coarse wall-time around the whole
-        // reactor-side completion arm. Coarse block only — paired fine
-        // timers get reordered by the optimizer (methodology §1).
-        let diag_t0 = std::time::Instant::now();
-        let diag_kind = match &done {
-            PersistDone::Rewrite { .. } => "rewrite-done",
-            PersistDone::TeeAppend { .. } => "tee-appended",
-            PersistDone::SwapImage { .. } => "swap-done",
-            PersistDone::Cleanup { .. } => "cleanup-done",
-            PersistDone::Save { .. } => "save-misroute",
-        };
-        self.commit_rewrite_done_inner(done);
-        let el = diag_t0.elapsed();
-        if el.as_millis() >= 5 {
-            eprintln!(
-                "DIAG finish-tick shard {} {} took {}us",
-                self.id,
-                diag_kind,
-                el.as_micros()
-            );
-        }
-    }
-
-    fn commit_rewrite_done_inner(&mut self, done: PersistDone) {
         match done {
             PersistDone::Rewrite {
                 result: Ok(keys),
@@ -183,10 +159,6 @@ impl<C: Commands> Shard<C> {
     /// cleared buffer into the pool either way, then advance the
     /// handoff — or tear the rewrite down on an append error.
     fn on_tee_appended(&mut self, result: std::io::Result<()>, tmp: &std::path::Path, buf: Vec<u8>) {
-        // DIAG(finish-tick): step split. Coarse blocks around I/O-ish
-        // work; a single arm-level number cannot name the seat.
-        let d0 = std::time::Instant::now();
-        let bufcap = buf.capacity();
         if let Some(aof) = &mut self.aof {
             // The spare slot's loser can still carry GB capacity —
             // ship it to the worker like every other big free (tiny
@@ -197,22 +169,8 @@ impl<C: Commands> Shard<C> {
                 self.ship_cleanup(Vec::new(), vec![evicted]);
             }
         }
-        let d_stash = d0.elapsed();
         match result {
-            Ok(()) => {
-                let d1 = std::time::Instant::now();
-                self.advance_rewrite_handoff();
-                let d_adv = d1.elapsed();
-                if d_stash.as_millis() >= 3 || d_adv.as_millis() >= 3 {
-                    eprintln!(
-                        "DIAG tee-arm shard {} stash={}us adv={}us bufcap={}",
-                        self.id,
-                        d_stash.as_micros(),
-                        d_adv.as_micros(),
-                        bufcap
-                    );
-                }
-            }
+            Ok(()) => self.advance_rewrite_handoff(),
             Err(e) => {
                 eprintln!("kevy: shard {} aof rewrite tee append failed: {e}", self.id);
                 self.rewrite_handoff = None;
@@ -342,8 +300,6 @@ impl<C: Commands> Shard<C> {
     /// worker aborts: the handed-off tee is lost with it, so the tmp
     /// image is incomplete — and the live file carried every write.
     fn hand_off_generation(&mut self, h: RewriteHandoff, tee: Vec<u8>) {
-        let dh = std::time::Instant::now();
-        let dbg_len = tee.len();
         let prev_len = tee.len();
         let job = PersistJob::TeeAppend {
             tmp: h.tmp.clone(),
@@ -355,14 +311,6 @@ impl<C: Commands> Shard<C> {
                 prev_len,
                 ..h
             });
-            if dh.elapsed().as_millis() >= 3 {
-                eprintln!(
-                    "DIAG handoff shard {} took={}us len={}",
-                    self.id,
-                    dh.elapsed().as_micros(),
-                    dbg_len
-                );
-            }
         } else {
             eprintln!(
                 "kevy: shard {} persist worker unavailable for tee handoff — rewrite aborted",
@@ -375,8 +323,6 @@ impl<C: Commands> Shard<C> {
     /// The bounded synchronous final swap (`tee` ≤ `SMALL_TEE`):
     /// append + fsync the last generation, rename, reopen.
     fn finish_rewrite_swap(&mut self, h: &RewriteHandoff, tee: Vec<u8>) {
-        let ds = std::time::Instant::now();
-        let dbg_len = tee.len();
         let Some(aof) = &mut self.aof else { return };
         let spent = match aof.finish_concurrent_rewrite_with(&h.tmp, h.keys, tee) {
             Ok((_stats, spent)) => spent,
@@ -398,14 +344,6 @@ impl<C: Commands> Shard<C> {
         };
         bufs.extend(spent);
         self.ship_cleanup(paths, bufs);
-        if ds.elapsed().as_millis() >= 3 {
-            eprintln!(
-                "DIAG syncswap shard {} took={}us tee_len={}",
-                self.id,
-                ds.elapsed().as_micros(),
-                dbg_len
-            );
-        }
     }
 
 
