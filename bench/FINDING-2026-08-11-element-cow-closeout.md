@@ -59,9 +59,29 @@ acceptance.
 - Steady-state realistic-granularity soak with rewrite windows (RFC macro
   line, gap ≤ 100 ms): **PASS for the COW-attributable share** (≤65 ms at
   512-grain, by the strings-only differential above). The 120-137 ms
-  once-per-cycle residual is the forced-simultaneous-rewrite finish seat —
-  orthogonal to this arc, named for a future attack (candidate: extend the
-  begin-gate stagger to client-forced BGREWRITEAOF fan-out).
+  once-per-cycle residual is the forced-rewrite finish seat — orthogonal
+  to this arc.
+
+## Post-script: the stagger attack, tried and refuted
+
+The first attribution read the residual as the multi-shard swap COLLISION
+(all shards forced at once finish together — the S5-G commit-window
+family), so a per-shard start stagger (shard i waits i × 500 ms) was
+implemented and re-probed. The stagger visibly separated the finishes
+(three distinct ~50 ms steps where one landed before) — and a **183 ms
+tick still appeared at one of the separated finishes**. A SINGLE shard's
+forced-rewrite finish carries the over-bar tick by itself on a multi-GB
+per-shard dataset; the collision framing was wrong, and the stagger adds
+no measured benefit. Reverted (unmerged branch deleted) per the
+attack-refuted-by-measurement discipline. The properly-scoped next
+attack is a decomposition of ONE shard's finish tick — instrument what
+runs on the reactor between the worker's PersistDone and the swapped-in
+state (reopen, tee hand-off, generation bookkeeping) against a multi-GB
+AOF, then knife the named cost. Until then the boundary statement stands:
+client-forced BGREWRITEAOF on multi-GB-per-shard datasets can cost a
+~100-200 ms reactor tick per shard finish; the auto-rewrite path's
+begin-gate machinery keeps steady state clean (rc-soak: 98 auto-rewrites,
+gap ≤ 47 ms).
 
 ## Boundary that remains
 
