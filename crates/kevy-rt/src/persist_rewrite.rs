@@ -134,7 +134,17 @@ impl<C: Commands> Shard<C> {
         let Some(aof) = &mut self.aof else { return };
         let tee = aof.take_tee_for_handoff().unwrap_or_default();
         if tee.is_empty() {
-            if aof.queued_mode() {
+            let queued = aof.queued_mode();
+            if queued {
+                // Empty by LENGTH — the buffer still carries its
+                // largest generation's capacity, and a scope-drop here
+                // is an inline GB munmap on the reactor. Ship it with
+                // the other frees. (The non-queued branch hands it to
+                // finish_rewrite_swap, whose spent-buffer return ships
+                // it the same way.)
+                if tee.capacity() >= 1 << 20 {
+                    self.ship_cleanup(Vec::new(), vec![tee]);
+                }
                 self.submit_offthread_swap(h);
             } else {
                 // Non-queued (epoll): appends write straight to the live
@@ -176,7 +186,14 @@ impl<C: Commands> Shard<C> {
     /// handoff — or tear the rewrite down on an append error.
     fn on_tee_appended(&mut self, result: std::io::Result<()>, tmp: &std::path::Path, buf: Vec<u8>) {
         if let Some(aof) = &mut self.aof {
-            aof.stash_tee_spare(buf);
+            // The spare slot's loser can still carry GB capacity —
+            // ship it to the worker like every other big free (tiny
+            // capacities drop inline; the channel hop would cost more).
+            if let Some(evicted) = aof.stash_tee_spare(buf)
+                && evicted.capacity() >= 1 << 20
+            {
+                self.ship_cleanup(Vec::new(), vec![evicted]);
+            }
         }
         match result {
             Ok(()) => self.advance_rewrite_handoff(),
@@ -329,20 +346,25 @@ impl<C: Commands> Shard<C> {
     /// append + fsync the last generation, rename, reopen.
     fn finish_rewrite_swap(&mut self, h: &RewriteHandoff, tee: Vec<u8>) {
         let Some(aof) = &mut self.aof else { return };
-        if let Err(e) = aof.finish_concurrent_rewrite_with(&h.tmp, h.keys, tee) {
-            eprintln!("kevy: shard {} aof rewrite swap failed: {e}", self.id);
-            self.abort_rewrite_cleanup(&h.tmp);
-            return;
-        }
-        // Ship the pre-swap log's graveyard link and any GB-scale warm
-        // spare to the worker — both frees contend the journal/LRU.
-        let (paths, bufs) = match &mut self.aof {
+        let spent = match aof.finish_concurrent_rewrite_with(&h.tmp, h.keys, tee) {
+            Ok((_stats, spent)) => spent,
+            Err(e) => {
+                eprintln!("kevy: shard {} aof rewrite swap failed: {e}", self.id);
+                self.abort_rewrite_cleanup(&h.tmp);
+                return;
+            }
+        };
+        // Ship the pre-swap log's graveyard link, the spent tee
+        // buffers, and any GB-scale warm spare to the worker — all
+        // these frees contend the journal/LRU.
+        let (paths, mut bufs) = match &mut self.aof {
             Some(aof) => (
                 aof.take_swap_trash().into_iter().collect::<Vec<_>>(),
                 aof.take_tee_teardown(),
             ),
             None => (Vec::new(), Vec::new()),
         };
+        bufs.extend(spent);
         self.ship_cleanup(paths, bufs);
     }
 
