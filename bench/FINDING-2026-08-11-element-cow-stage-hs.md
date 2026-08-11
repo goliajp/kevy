@@ -41,6 +41,16 @@ byte-for-byte. Wire formats unchanged. Sharded hashes are not demotable to
 the cold tier (they answer Hot); SPOP/SRANDMEMBER keep their
 arbitrary-member contract via a length-weighted bucket pick.
 
+## Gates
+
+perfgate-median (box, 3 runs, 0.92 floor): 12/12 PASS — the touched cells
+sit positive (`hset` +2.7%, `sadd` +4.2%), and `lpush` reads -4.8%, back
+inside the band that made Stage L flag it (supporting the noise read).
+Workspace tests, locgate, clippy -D warnings, branch CI green; the one CI
+red was crashgate's midfile-resync cell — archived as a first-occurrence
+flake with local + rerun evidence
+(`bench/flake-archive/2026-08-11-crashgate-midfile-resync-halftail-*.log`).
+
 ## Boundary that remains (per RFC stages)
 
 ZSets (Stage Z — ranktree path-copy) and streams (documented boundary)
