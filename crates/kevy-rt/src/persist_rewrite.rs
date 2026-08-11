@@ -132,9 +132,28 @@ impl<C: Commands> Shard<C> {
             return;
         };
         let Some(aof) = &mut self.aof else { return };
+        let dt = std::time::Instant::now();
         let tee = aof.take_tee_for_handoff().unwrap_or_default();
+        let d_take = dt.elapsed();
+        if d_take.as_millis() >= 3 {
+            eprintln!(
+                "DIAG adv-take shard {} take={}us tee_len={} tee_cap={}",
+                self.id,
+                d_take.as_micros(),
+                tee.len(),
+                tee.capacity()
+            );
+        }
         if tee.is_empty() {
+            let df = std::time::Instant::now();
             self.finish_with_empty_tee(h, tee);
+            if df.elapsed().as_millis() >= 3 {
+                eprintln!(
+                    "DIAG adv-emptyfin shard {} took={}us",
+                    self.id,
+                    df.elapsed().as_micros()
+                );
+            }
             return;
         }
         if tee.len() <= SMALL_TEE && h.iters >= MAX_HANDOFFS {
@@ -189,6 +208,10 @@ impl<C: Commands> Shard<C> {
     /// cleared buffer into the pool either way, then advance the
     /// handoff — or tear the rewrite down on an append error.
     fn on_tee_appended(&mut self, result: std::io::Result<()>, tmp: &std::path::Path, buf: Vec<u8>) {
+        // DIAG(finish-tick): step split. Coarse blocks around I/O-ish
+        // work; a single arm-level number cannot name the seat.
+        let d0 = std::time::Instant::now();
+        let bufcap = buf.capacity();
         if let Some(aof) = &mut self.aof {
             // The spare slot's loser can still carry GB capacity —
             // ship it to the worker like every other big free (tiny
@@ -199,8 +222,22 @@ impl<C: Commands> Shard<C> {
                 self.ship_cleanup(Vec::new(), vec![evicted]);
             }
         }
+        let d_stash = d0.elapsed();
         match result {
-            Ok(()) => self.advance_rewrite_handoff(),
+            Ok(()) => {
+                let d1 = std::time::Instant::now();
+                self.advance_rewrite_handoff();
+                let d_adv = d1.elapsed();
+                if d_stash.as_millis() >= 3 || d_adv.as_millis() >= 3 {
+                    eprintln!(
+                        "DIAG tee-arm shard {} stash={}us adv={}us bufcap={}",
+                        self.id,
+                        d_stash.as_micros(),
+                        d_adv.as_micros(),
+                        bufcap
+                    );
+                }
+            }
             Err(e) => {
                 eprintln!("kevy: shard {} aof rewrite tee append failed: {e}", self.id);
                 self.rewrite_handoff = None;
@@ -326,6 +363,8 @@ impl<C: Commands> Shard<C> {
     /// worker aborts: the handed-off tee is lost with it, so the tmp
     /// image is incomplete — and the live file carried every write.
     fn hand_off_generation(&mut self, h: RewriteHandoff, tee: Vec<u8>) {
+        let dh = std::time::Instant::now();
+        let dbg_len = tee.len();
         let prev_len = tee.len();
         let job = PersistJob::TeeAppend {
             tmp: h.tmp.clone(),
@@ -337,6 +376,14 @@ impl<C: Commands> Shard<C> {
                 prev_len,
                 ..h
             });
+            if dh.elapsed().as_millis() >= 3 {
+                eprintln!(
+                    "DIAG handoff shard {} took={}us len={}",
+                    self.id,
+                    dh.elapsed().as_micros(),
+                    dbg_len
+                );
+            }
         } else {
             eprintln!(
                 "kevy: shard {} persist worker unavailable for tee handoff — rewrite aborted",
@@ -349,6 +396,8 @@ impl<C: Commands> Shard<C> {
     /// The bounded synchronous final swap (`tee` ≤ `SMALL_TEE`):
     /// append + fsync the last generation, rename, reopen.
     fn finish_rewrite_swap(&mut self, h: &RewriteHandoff, tee: Vec<u8>) {
+        let ds = std::time::Instant::now();
+        let dbg_len = tee.len();
         let Some(aof) = &mut self.aof else { return };
         let spent = match aof.finish_concurrent_rewrite_with(&h.tmp, h.keys, tee) {
             Ok((_stats, spent)) => spent,
@@ -370,6 +419,14 @@ impl<C: Commands> Shard<C> {
         };
         bufs.extend(spent);
         self.ship_cleanup(paths, bufs);
+        if ds.elapsed().as_millis() >= 3 {
+            eprintln!(
+                "DIAG syncswap shard {} took={}us tee_len={}",
+                self.id,
+                ds.elapsed().as_micros(),
+                dbg_len
+            );
+        }
     }
 
 
