@@ -158,7 +158,7 @@ fn main() -> kevy_embedded::KevyResult<()> {
 
 **后台任务并发。**每个 shard 同一时刻最多跑一个后台保存或重写。任务进行中再来的重复请求会记一条日志然后跳过，绝不排队。
 
-**AOF 写与 reactor 线程(5.0,io_uring 默认)。**io_uring 可用且策略非 `always` 时，追加与 everysec fsync 作为排队操作走 shard 自己的 ring——reactor 热路径上不再阻塞于 `write(2)`(GB/s 摄入下它曾被脏页限流停上数秒;5.0 尾延迟工作的核心，端到端实测见 `bench/` 的 finding 文档)。耐久性不变：`everysec` 崩溃窗口仍 ≤ 1 秒，crash 门双模式验证。`KEVY_AOF_OFFLOAD=0` 恢复经典同步路径；`always` 按语义保持同步；epoll reactor(旧内核)同样保持。
+**AOF 写与 reactor 线程。**追加与 fsync 在任何 reactor 上都不占用 reactor 线程：io_uring 下作为排队操作走 shard 自己的 ring；epoll/kqueue reactor 下由每 shard 一个的 writer 线程以顺序追加排空同一条队列(盘上字节相同)。无论哪种，reactor 热路径上都不再阻塞于 `write(2)` 或 `fsync(2)`——GB/s 摄入下曾把它停上数秒的正是这里(5.0 尾延迟工作，端到端实测见 `bench/` 的 finding 文档)。耐久性不变：`everysec` 崩溃窗口仍 ≤ 1 秒；`always` 下写入的回复会保持到覆盖它的 fsync 落盘——回复本身依旧担保耐久性，只是 reactor 不再陪着等，并发连接共享 fsync 轮次(组提交)。`KEVY_AOF_OFFLOAD=0` 在任何 reactor 上都恢复经典同步路径。
 
 **饱和摄入下 rewrite 顺延(5.0)。**rewrite 必须折入运行期间落下的写；当追加速率被证明跑赢折入速度时,5.0 顺延 rewrite 而不是付无界停顿：增长规则在当前大小重新锚定，下一个增长因子后重试。显式 `BGREWRITEAOF` 永不受限。可观察的交换项：持续写饱和下 AOF 会越过常规重写点继续增长，压力缓解后收回——磁盘可退，停顿不可退。rewrite 前后可能短暂看到 `<aof>.rewrite`(构建中镜像)与 `<aof>.trashN`(把旧日志 GB 级释放挪出服务线程的硬链接)；两者自动清理，崩溃孤儿由下次 rewrite 回收。备份请排除 `*.rewrite` / `*.trash*`。
 
