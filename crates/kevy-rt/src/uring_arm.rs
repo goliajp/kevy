@@ -142,6 +142,10 @@ impl<C: Commands> Shard<C> {
         // Swap out so we can re-push during processing without
         // disturbing the iteration. Reuses the Vec storage.
         let mut queue = std::mem::take(&mut self.arm_pending);
+        // S2 Always gate threshold, copied out so the per-conn borrows
+        // below stay disjoint. Advances only via fsync CQEs / structural
+        // durability, both outside this loop.
+        let durable = self.aof_offload.durable_watermark;
         let mut prev: Option<*const UringConn> = None;
         for &cid in &queue {
             let Some(conn) = self.conns.get_mut(&cid) else {
@@ -180,9 +184,25 @@ impl<C: Commands> Shard<C> {
             };
             prev = Some(uc as *const UringConn);
             uc.arm_queued = false;
+            // S2 Always gate: a write's reply bytes stay in
+            // `conn.output` until the fsync CQE proves its records
+            // durable. The needs_more check below sees the un-swapped
+            // output and re-queues the conn, so release is re-checked
+            // every pass (≤1 pass of latency after the CQE). Bytes
+            // already in `write_buf` were released earlier and may
+            // proceed regardless.
+            let gate_open = match uc.held_watermark {
+                Some(h) if h > durable => false,
+                Some(_) => {
+                    uc.held_watermark = None;
+                    true
+                }
+                None => true,
+            };
             // Start a new write: move the conn's output (bytes + arc-bulk
             // references) into stable per-`UringConn` state.
-            if !uc.write_inflight
+            if gate_open
+                && !uc.write_inflight
                 && uc.write_buf.is_empty()
                 && uc.write_arcs.is_empty()
                 && (!conn.output.is_empty() || !conn.output_arcs.is_empty())

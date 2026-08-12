@@ -629,3 +629,35 @@ fn sync_now_flushes_queued_leftovers() {
     assert_eq!(got[0].get(2), Some(b"v" as &[u8]));
     let _ = std::fs::remove_file(&path);
 }
+
+/// The queued+Always trap (S2 groundwork): with appends queued for the
+/// ring driver, a synchronous fsync in `append`/`end_group` syncs a
+/// file that does NOT contain the bytes — silently claiming a
+/// durability the log does not have. Both paths must instead leave the
+/// bytes queued and `dirty` set, so the ring fsync (the real
+/// durability point) is the one that clears them.
+#[test]
+fn queued_always_marks_dirty_instead_of_syncing_an_empty_file() {
+    let path = temp_file("aof-queued-always");
+    let mut aof = Aof::open(&path, Fsync::Always).unwrap();
+    aof.enable_queued_appends();
+    let file_len_before = std::fs::metadata(&path).unwrap().len();
+
+    // Per-command path: no phantom sync, bytes stay queued, dirty set.
+    aof.append(&cmd(&[b"SET", b"k", b"v"])).unwrap();
+    assert!(aof.dirty, "queued Always append must mark dirty for the ring fsync");
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().len(),
+        file_len_before,
+        "append must not write through to the file in queued mode"
+    );
+
+    // Group-commit path: end_group must not clear dirty by syncing the
+    // (byte-less) file either.
+    aof.begin_fsync_window();
+    aof.append(&cmd(&[b"SET", b"k2", b"v2"])).unwrap();
+    aof.end_group().unwrap();
+    assert!(aof.dirty, "end_group must leave dirty set while bytes sit in the queue");
+    assert!(aof.take_pending().is_some(), "both appends still queued for the driver");
+    let _ = std::fs::remove_file(&path);
+}

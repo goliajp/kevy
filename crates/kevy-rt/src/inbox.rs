@@ -294,6 +294,7 @@ impl<C: Commands> Shard<C> {
                         // Fsync-only: the batch aggregates INDEPENDENT
                         // commands from different conns — marking them
                         // atomic would promise more than each origin did.
+                        let w0 = self.always_hold_w0();
                         self.aof_begin_fsync_window();
                         for (conn, seq, argv, proto, meta) in reqs {
                             let part = self.run_dispatch(&argv, proto, meta);
@@ -307,7 +308,7 @@ impl<C: Commands> Shard<C> {
                         } else {
                             self.aof_end_group_logged();
                         }
-                        self.send_to(origin, Inbound::ResponseBatch(resps));
+                        self.send_or_hold_response(w0, origin, Inbound::ResponseBatch(resps));
                     }
                     // Batched replies: fold each by seq, then flush each
                     // touched conn once (dedup — pipelined replies share a

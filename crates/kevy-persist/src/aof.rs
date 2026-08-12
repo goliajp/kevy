@@ -132,6 +132,11 @@ pub struct Aof {
     /// advances as chunks are taken, so concurrent chunks carry
     /// non-overlapping explicit offsets in their SQEs.
     pub(crate) queued_offset: u64,
+    /// Monotone count of records ever pushed into `queue`. The uring
+    /// driver's Always reply-gate (S2) compares this watermark against
+    /// the fsync-proven durable watermark; unlike file offsets it never
+    /// resets across a rewrite swap, so held replies cannot wedge.
+    pub(crate) queued_seq: u64,
 }
 
 /// Handoff between the two halves of a non-blocking rewrite: the serialized
@@ -222,6 +227,7 @@ impl Aof {
             scratch: Vec::new(),
             queue: None,
             queued_offset: size,
+            queued_seq: 0,
         })
     }
 
@@ -301,6 +307,7 @@ impl Aof {
                 }
                 crate::AofFormat::V1 => q.extend_from_slice(&self.scratch),
             }
+            self.queued_seq += 1;
         } else {
             self.write_scratch_to_file()?;
         }
@@ -319,7 +326,10 @@ impl Aof {
             // Inside a group-commit window, defer the fsync to `end_group`
             // (one per batch, still before the batch's replies). Outside
             // one, fsync per command — the safe default for every path.
-            Fsync::Always if self.deferred => self.dirty = true,
+            // Queued appends live in the driver's chunk, not the file: a
+            // sync here would durabilize nothing. The ring fsync owns
+            // durability there; mark dirty so the driver can see it.
+            Fsync::Always if self.deferred || self.queue.is_some() => self.dirty = true,
             Fsync::Always => {
                 self.file.flush()?;
                 self.file.get_ref().sync_data()?;
