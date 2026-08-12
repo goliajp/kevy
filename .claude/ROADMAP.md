@@ -776,6 +776,10 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - [x] 实施 ✅(2026-08-12,feature/s3-epoll-writer-thread):①-④ 全落地。实施期三收紧(RFC §6):dead-lane SendError chunk 经新 `Aof::requeue_front` 回插队首(order+offset 回归钉死)/ CONFIG SET appendfsync 先 settle lane(owner 句柄 flush 与 clone 在途交错缝)/ 门 park 撤 write interest 防 level-triggered 自旋。S2 三件套全平台化(always_hold_w0/held_responses/flush_held_responses 摘 cfg(linux),双驱动共用)。
 - [x] 验证 ✅:crashgate 33/33 双 host(server-always 双 cell:盒 auto 37,896 + epoll 37,813 acked 全存活;macOS kqueue 423/409)+ persist 72/72 + rt 50/50 + **盒上 A/B(ext4,KEVY_IO_URING=0,always):SET c50 478→10,540 rps(+22×组提交);c1 391 vs 384 持平且 fsync-bound=门无泄漏** + perfgate-median 12/12(uring 面零回归)。PR 测试矩阵(强制 epoll)整体即 lane 实弹面。finding=bench/FINDING-2026-08-12-s3-epoll-writer-lane.md
 
+## v5.1.0 ✅ 已发布(2026-08-13)
+
+**全渠道到位**:crates.io 38/40 crate 至 5.1.0(kevy-client / kevy-client-async 走独立 2.2.0 轨)+ npm `@goliapkg/kevy` 5.1.0 + GitHub Release v5.1.0 非草稿(三平台二进制 + sha256)+ 官网 kevy.golia.jp 同步(三语升级指南 200;**playground wasm 重建为 5.1.0**,真 Chrome 13/13 验过,线上与本地 sha256 逐字节一致)。tag `v5.1.0` 指向 develop `e08f6d09`;**master 已快进到发布态**(此前落后 1216 提交,GIT-FLOW 那句"每个 tag 指向 master"重新成真)。**装后 smoke 双通道**:`cargo add kevy-resp@5.1.0` 编译运行 / 发布二进制 sha256 校验 + 起服读写 + `kevy_version:5.1.0`。smix 通知已投 `/tmp/kevy-notice-to-smix-2026-08-13.md`(头条=5.0.0 的 vlog 冷值读挂隐患,升级本身即修复)。
+
 ## v5.1.0 target(属主令 2026-08-12:nodefer 到工业级能用,然后全面更新)
 总计划=`.claude/plans/2026-08-12-v5.1-target.md`(IN 六项全闭才请属主扣发布扳机;OUT 已写死)。
 
