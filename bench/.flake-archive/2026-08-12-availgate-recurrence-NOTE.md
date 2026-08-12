@@ -44,3 +44,28 @@ offset, per-shard feed gen/next, ship begin/end events) + an
 availgate loop under CPU contention on the box until it fires with
 the probes on. Box ×10 passed post-fix, so contention/timing is part
 of the recipe.
+
+## CLOSED — the third cause found (2026-08-12, `bugfix/availgate-promotion-window-repro`)
+
+The probe surface went in and paid off, but not via the contention
+loop: 28 contended rounds on the box did not reproduce it, because the
+recipe is a ONE-TICK ordering window, not load. A deterministic
+in-process reproduction closed it instead
+(`promoted_node_ships_its_keyspace_to_a_fresh_cursor`).
+
+Root cause: the generation fence had a fresh-cursor EXCEPTION. A
+cursor claiming `generation 0 / offset 0` was adopted and streamed
+from offset 0 — sound only while the feed's offset space covers the
+store's whole life. A promotion bump replaces the source (frames
+dropped, `next_offset` → 0) while the store keeps every key, so the
+adopted cursor read as exactly caught up at 0 and was shipped nothing,
+with heartbeats keeping the link up. A write accepted in the promotion
+window (writes open on the epoch bump; each shard fences on its own
+tick) lands in the old generation's backlog and is destroyed by the
+bump — that is the `postfail` availgate then waits 60 s for.
+
+Fix: every generation mismatch ships a snapshot, no exception — a
+no-claim cursor is not proof of an empty replica (a respawned runner's
+cursor always restarts at zero, so a replica holding a full stale
+keyspace looks identical to a blank one on the wire). Full write-up:
+`bench/FINDING-2026-08-12-availgate-promotion-window-wedge.md`.
