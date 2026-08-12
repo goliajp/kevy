@@ -183,11 +183,13 @@ pub(crate) struct Shard<C: Commands> {
     /// unless the reactor's setup opts in.
     #[cfg(target_os = "linux")]
     pub(crate) aof_offload: crate::uring_aof::AofOffload,
-    /// S2 Always reply gate, cross-shard half: ResponseBatches whose
-    /// forwarded writes are queued but not yet fsync-proven. Each
-    /// entry is (record watermark, origin shard, batch); flushed by
-    /// `uring_flush_held_responses` once the durable watermark passes.
-    #[cfg(target_os = "linux")]
+    /// S3: the epoll/kqueue reactors' AOF writer lane; dormant unless
+    /// that reactor's setup opts in (uring shards never enable it).
+    pub(crate) aof_lane: crate::aof_writer::AofWriterLane,
+    /// S2/S3 Always reply gate, cross-shard half: ResponseBatches
+    /// whose forwarded writes are queued but not yet fsync-proven.
+    /// Each entry is (record watermark, origin shard, batch); flushed
+    /// by `flush_held_responses` once the durable watermark passes.
     pub(crate) held_responses: Vec<(u64, usize, crate::message::Inbound)>,
     /// Per-shard replication backlog. `None` when `[replication] role`
     /// is `standalone` (default — zero hot-path cost: every write checks

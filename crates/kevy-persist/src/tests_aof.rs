@@ -661,3 +661,51 @@ fn queued_always_marks_dirty_instead_of_syncing_an_empty_file() {
     assert!(aof.take_pending().is_some(), "both appends still queued for the driver");
     let _ = std::fs::remove_file(&path);
 }
+
+/// The writer-thread lane's handle contract (S3): a clone taken in
+/// queued mode shares the O_APPEND file description, so bytes written
+/// through it land after everything the owner wrote — byte-identical
+/// to the synchronous path's file.
+#[test]
+fn queued_file_clone_appends_through_shared_description() {
+    use std::io::Write as _;
+    let path = temp_file("aof-clone");
+    let mut aof = Aof::open(&path, Fsync::No).unwrap();
+    assert!(aof.queued_file_clone().is_none(), "None outside queued mode");
+    aof.enable_queued_appends();
+    aof.append(&cmd(&[b"SET", b"a", b"1"])).unwrap();
+    let (_, chunk) = aof.take_pending().expect("queued bytes");
+    let mut clone = aof.queued_file_clone().expect("queued mode").expect("clone ok");
+    clone.write_all(&chunk).unwrap();
+    clone.sync_all().unwrap();
+    drop(clone);
+    drop(aof);
+    let mut got: Vec<Argv> = Vec::new();
+    replay_aof(&path, |a| got.push(a)).unwrap();
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].get(2), Some(b"1" as &[u8]));
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Dead-writer reclaim (S3): a chunk taken but never written goes
+/// back to the queue FRONT, offset accounting rewinds, and the honest
+/// synchronous fallback then lands every record exactly once, in
+/// order — nothing lost, nothing doubled.
+#[test]
+fn requeue_front_preserves_order_and_offsets() {
+    let path = temp_file("aof-requeue");
+    let mut aof = Aof::open(&path, Fsync::No).unwrap();
+    aof.enable_queued_appends();
+    aof.append(&cmd(&[b"SET", b"a", b"1"])).unwrap();
+    let (_, taken) = aof.take_pending().expect("first chunk");
+    aof.append(&cmd(&[b"SET", b"b", b"2"])).unwrap();
+    aof.requeue_front(taken);
+    aof.sync_now().unwrap();
+    drop(aof);
+    let mut got: Vec<Argv> = Vec::new();
+    replay_aof(&path, |a| got.push(a)).unwrap();
+    assert_eq!(got.len(), 2);
+    assert_eq!(got[0].get(1), Some(b"a" as &[u8]), "reclaimed chunk replays FIRST");
+    assert_eq!(got[1].get(1), Some(b"b" as &[u8]));
+    let _ = std::fs::remove_file(&path);
+}

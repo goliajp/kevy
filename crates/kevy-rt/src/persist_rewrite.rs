@@ -257,6 +257,7 @@ impl<C: Commands> Shard<C> {
                     // durable — release any Always-held replies.
                     #[cfg(target_os = "linux")]
                     self.uring_aof_mark_all_durable();
+                    self.epoll_aof_on_swap_finalized();
                     let paths = self
                         .aof
                         .as_mut()

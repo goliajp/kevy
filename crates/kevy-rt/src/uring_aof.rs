@@ -209,7 +209,7 @@ impl<C: Commands> Shard<C> {
                 self.aof_offload.last_sync = Instant::now();
                 self.aof_offload.durable_watermark =
                     self.aof_offload.durable_watermark.max(self.aof_offload.fsync_covers);
-                self.uring_flush_held_responses();
+                self.flush_held_responses();
             }
             return;
         }
@@ -245,7 +245,7 @@ impl<C: Commands> Shard<C> {
             let o = &mut self.aof_offload;
             o.durable_watermark = o.durable_watermark.max(w);
         }
-        self.uring_flush_held_responses();
+        self.flush_held_responses();
     }
 
     /// S2 stamp: if the dispatch bracketed by `w0` (see
@@ -266,24 +266,6 @@ impl<C: Commands> Shard<C> {
             && let Some(uc) = io.get_mut(&cid)
         {
             uc.held_watermark = Some(uc.held_watermark.map_or(w1, |h| h.max(w1)));
-        }
-    }
-
-    /// Send every held cross-shard response batch whose records the
-    /// durable watermark now covers (called after each advance).
-    fn uring_flush_held_responses(&mut self) {
-        if self.held_responses.is_empty() {
-            return;
-        }
-        let d = self.aof_offload.durable_watermark;
-        let mut i = 0;
-        while i < self.held_responses.len() {
-            if self.held_responses[i].0 <= d {
-                let (_, origin, batch) = self.held_responses.swap_remove(i);
-                self.send_to(origin, batch);
-            } else {
-                i += 1;
-            }
         }
     }
 
