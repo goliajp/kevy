@@ -776,6 +776,16 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - [x] 实施 ✅(2026-08-12,feature/s3-epoll-writer-thread):①-④ 全落地。实施期三收紧(RFC §6):dead-lane SendError chunk 经新 `Aof::requeue_front` 回插队首(order+offset 回归钉死)/ CONFIG SET appendfsync 先 settle lane(owner 句柄 flush 与 clone 在途交错缝)/ 门 park 撤 write interest 防 level-triggered 自旋。S2 三件套全平台化(always_hold_w0/held_responses/flush_held_responses 摘 cfg(linux),双驱动共用)。
 - [x] 验证 ✅:crashgate 33/33 双 host(server-always 双 cell:盒 auto 37,896 + epoll 37,813 acked 全存活;macOS kqueue 423/409)+ persist 72/72 + rt 50/50 + **盒上 A/B(ext4,KEVY_IO_URING=0,always):SET c50 478→10,540 rps(+22×组提交);c1 391 vs 384 持平且 fsync-bound=门无泄漏** + perfgate-median 12/12(uring 面零回归)。PR 测试矩阵(强制 epoll)整体即 lane 实弹面。finding=bench/FINDING-2026-08-12-s3-epoll-writer-lane.md
 
-### P6 — availgate failover 收敛 wedge:插桩复现弧(三犯,post-P4-fix)
-- [ ] 三犯(run 31581877633,post-generation-identity-fix;随机 gen 已实锤在 log)同签名:survivor follow 新主、四 runner 全连通、link up、sync_in_progress 0、60s 不收敛。纸面推演穷尽(每条 adopt/ship/stream 交错都应收敛)→ **必须插桩复现**:临时探针面(per-runner cursor gen/offset、per-shard feed gen/next、ship begin/end 事件)+ 盒上 CPU 争用下循环 availgate 至触发(盒 ×10 无争用曾全过=时序/争用是配方一部分)。
-- [ ] 破案 → 修 → 回归(争用循环 ×N 绿)。
+## v5.1.0 target(属主令 2026-08-12:nodefer 到工业级能用,然后全面更新)
+总计划=`.claude/plans/2026-08-12-v5.1-target.md`(IN 六项全闭才请属主扣发布扳机;OUT 已写死)。
+
+### P6 — 【5.1 关键路径】availgate failover 收敛 wedge:插桩复现弧(三犯,post-P4-fix)
+- [ ] 三犯(run 31581877633;随机 gen 已实锤在 log)同签名:survivor follow 新主、四 runner 全连通、link up、sync_in_progress 0、60s 不收敛。纸面推演穷尽 → **插桩复现**:临时探针面(per-runner cursor gen/offset、per-shard feed gen/next、ship begin/end 事件)+ 盒上 CPU 争用循环 availgate 至触发(盒 ×10 无争用全过=争用是配方)。
+- [ ] 破案 → 修 → 争用循环 ×N 绿 + CI。**不绿不发 5.1。**
+
+### P7 — 5.1 收口面(可与 P6 等待窗穿插)
+- [ ] 混版本升级互通:v5.0.0 二进制 ↔ 5.1 tip 双向 primary/replica 脚本验证(gen mismatch → 一次性 snapshot resync 自愈实测;vlog 帧双向读实测)→ 入升级指南。
+- [ ] CI infra 两小刀(时间盒一天):npm fetch-retries;csharp harness 端口重试(spop 配方)。
+- [ ] tailgate epoll 观察轮(盒,KEVY_IO_URING=0,数字入 finding,不设门)。
+- [ ] 文档:persistence ja/zh 同步(S3 只改了英文)+ upgrading-5.0-to-5.1 三语 + CHANGELOG 5.1.0 + site 再生。
+- [ ] 发布彩排:release-profile 预跑 + publish 链拓扑序核对(含 dev-deps)+ npm 版本推导 + 全门终跑 → 「5.1 RC-READY」三栏报告请属主拍板(tag/publish/官网/smix 通知=属主触发)。
