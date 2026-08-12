@@ -186,6 +186,12 @@ pub(crate) struct Shard<C: Commands> {
     /// S3: the epoll/kqueue reactors' AOF writer lane; dormant unless
     /// that reactor's setup opts in (uring shards never enable it).
     pub(crate) aof_lane: crate::aof_writer::AofWriterLane,
+    /// A live-config fsync-policy switch waiting for the offload
+    /// driver's in-flight appends to drain: `set_fsync`'s Always
+    /// upgrade flushes the queue through the OWNER handle, which must
+    /// not interleave with writes the driver already holds. Applied
+    /// (and cleared) by `try_apply_fsync_policy` on the tick.
+    pub(crate) pending_fsync_policy: Option<kevy_persist::Fsync>,
     /// S2/S3 Always reply gate, cross-shard half: ResponseBatches
     /// whose forwarded writes are queued but not yet fsync-proven.
     /// Each entry is (record watermark, origin shard, batch); flushed

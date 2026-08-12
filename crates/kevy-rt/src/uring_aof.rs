@@ -269,6 +269,13 @@ impl<C: Commands> Shard<C> {
         }
     }
 
+    /// No append chunk is in flight on the ring (a queued backlog is
+    /// fine — the caller's owner-handle flush handles the queue; only
+    /// IN-FLIGHT writes can interleave with it).
+    pub(crate) fn uring_aof_appends_drained(&self) -> bool {
+        self.aof_offload.inflight.is_empty()
+    }
+
     /// May a structural file operation (rewrite begin/finish, truncate)
     /// run right now? False while any chunk is in flight — the caller
     /// sets `want_restructure` and the tick retries after the drain.
