@@ -19,7 +19,7 @@ use std::sync::OnceLock;
 use std::time::Instant;
 
 /// Phases in loop order. Fixed array, no allocation on the hot path.
-const PHASES: usize = 7;
+const PHASES: usize = 16;
 
 static THRESHOLD_MS: OnceLock<Option<u64>> = OnceLock::new();
 
