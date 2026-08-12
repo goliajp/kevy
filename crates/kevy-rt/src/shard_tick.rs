@@ -58,19 +58,9 @@ impl<C: Commands> Shard<C> {
     /// fsync policy + the three rewrite triggers.
     fn apply_live_persist_knobs(&mut self, live: &crate::LiveRuntimeConfig) {
         if let Some(f) = live.appendfsync && self.aof.is_some() {
-            // set_fsync's Always upgrade flushes the queue through the
-            // OWNER handle; the writer lane's in-flight appends must
-            // land first or the two handles would interleave records.
-            self.epoll_aof_settle();
-            // A failure to flush on policy tighten is logged but doesn't
-            // bring the shard down — the policy itself still takes effect
-            // and subsequent appends will retry the sync.
-            if let Some(aof) = &mut self.aof
-                && let Err(e) = aof.set_fsync(f)
-            {
-                eprintln!("kevy: shard {} set_fsync failed: {e}", self.id);
-            }
+            self.pending_fsync_policy = Some(f);
         }
+        self.try_apply_fsync_policy();
         if let Some(p) = live.auto_aof_rewrite_pct {
             self.auto_aof_rewrite_pct = p;
         }
@@ -82,6 +72,36 @@ impl<C: Commands> Shard<C> {
         }
         if let Some(i) = live.auto_aof_rewrite_interval_secs {
             self.auto_aof_rewrite_interval_secs = i;
+        }
+    }
+
+    /// Apply a pending fsync-policy switch once the offload driver's
+    /// in-flight appends have drained. Runs every tick (both
+    /// reactors), so a deferral retries within ≤1 tick — µs-scale on
+    /// the ring, one settle on the lane. A queued backlog does not
+    /// defer: `set_fsync`'s own `flush_queued` handles it; only
+    /// IN-FLIGHT writes can interleave with the owner handle.
+    fn try_apply_fsync_policy(&mut self) {
+        let Some(f) = self.pending_fsync_policy else { return };
+        // The lane settles synchronously (its worker progresses off
+        // this thread); the ring cannot — its CQEs need this loop, so
+        // defer and let the next tick retry (µs-scale drain). A queued
+        // backlog never defers either driver: `set_fsync`'s own
+        // `flush_queued` handles the queue, and only IN-FLIGHT writes
+        // can interleave with the owner handle.
+        self.epoll_aof_settle();
+        #[cfg(target_os = "linux")]
+        if !self.uring_aof_appends_drained() {
+            return; // retried next tick
+        }
+        self.pending_fsync_policy = None;
+        // A failure to flush on policy tighten is logged but doesn't
+        // bring the shard down — the policy itself still takes effect
+        // and subsequent appends will retry the sync.
+        if let Some(aof) = &mut self.aof
+            && let Err(e) = aof.set_fsync(f)
+        {
+            eprintln!("kevy: shard {} set_fsync failed: {e}", self.id);
         }
     }
 

@@ -27,3 +27,20 @@
   code) + feed/feed_meta identity unit tests + availgate ×10 on the
   box all PASS (earlier ×10 loop artifacts were the loop's own fixed-
   port AddrInUse collisions, cured with an inter-run settle).
+
+## THIRD occurrence — post-fix (run 31581877633, log archived alongside)
+
+The generation-identity fix landed two real defects but did NOT close
+this flake: same wedge signature (survivor following the new primary,
+link up, io 0s, no resync in progress, 60 s no convergence) with
+random generations demonstrably live in the logs. The retargeted
+fleet connected cleanly to all four of the new primary's feeds (no
+connect errors after the follow line), so the remaining hole is past
+the handshake — somewhere in adopt/ship/stream sequencing around the
+promotion bump. Armchair analysis is exhausted: every traced
+interleaving converges. Next step is a booked arc: INSTRUMENTED
+reproduction — a temporary probe surface (per-runner cursor gen/
+offset, per-shard feed gen/next, ship begin/end events) + an
+availgate loop under CPU contention on the box until it fires with
+the probes on. Box ×10 passed post-fix, so contention/timing is part
+of the recipe.
