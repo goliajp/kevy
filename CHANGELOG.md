@@ -1,5 +1,83 @@
 # Changelog
 
+## 5.1.0 — the industrial pass
+
+Everything in this release is a defect closed or a stall removed on
+the 5.0 surface. Nothing changed on the wire, and every 5.0 data
+directory opens as-is in both directions. Upgrade guide:
+`docs/upgrading-5.0-to-5.1.md` (en/zh/ja).
+
+### Data integrity (fixed)
+
+- **A compressed value could read back corrupt after compaction.**
+  When a dictionary carried a shared Huffman table, `kevy-compress`
+  tagged a literal-only frame as if it used dictionary matches, and
+  the decoder then refused a frame its own encoder had written. The
+  CRC covers the bytes that were written, so nothing detects it at
+  write time — it surfaces later, on the value log's compaction path,
+  as a decode error on a value that was stored successfully. The tag
+  now follows the shared table, and an explicit compatibility arm
+  decodes the mis-tagged frames 5.0 already put on disk. Frames
+  written by 5.1 stay readable by 5.0. **This is the reason to
+  upgrade promptly if you use compression or value logging.**
+- **A replica could stay attached to a promoted primary and never
+  converge.** A replication cursor with no continuity claim
+  (`generation 0 / offset 0` — the state of every runner after a
+  retarget, since a runner's cursor lives in its thread and restarts
+  at zero) was adopted and streamed from offset 0. That reconstructs
+  a replica only while the feed's offset space has covered the store's
+  whole life, and a promotion bump breaks exactly that: it replaces
+  the source, dropping buffered frames and restarting offsets at 0,
+  while the store keeps every key. The adopted cursor then read as
+  exactly caught up at 0 and was shipped nothing, while the 1 Hz
+  heartbeat kept `master_link_status:up` and
+  `master_last_io_seconds_ago:0`. A write accepted in the promotion
+  window — writes open when the epoch bumps, but each shard fences on
+  its own tick — was destroyed by the fence and existed in the
+  keyspace but in no stream. Every generation mismatch now ships a
+  snapshot, with no fresh-cursor exception: a stream can add and
+  overwrite keys but can never remove one the replica holds and the
+  primary does not, so a snapshot is the only reply that converges an
+  unknown peer. An unclean boot with data on disk restarts offsets the
+  same way, so this closed that variant too.
+- **A size literal could round-trip asymmetrically.** A config value
+  large enough to multiply past `i64::MAX` was emitted as a bare
+  integer the lexer then refused, so a config kevy wrote could not be
+  read back. `parse_size` caps at the door.
+
+### Stalls removed
+
+- **Giant collections no longer stall their shard on the first write
+  inside a rewrite window.** Lists, hashes, sets and sorted sets past
+  ~16k elements copy on write at element granularity: a write that
+  lands while a rewrite or snapshot pins the value clones one segment
+  — about a millisecond, independent of collection size — instead of
+  the whole value, which cost 0.35–9.5 s and briefly doubled that
+  collection's resident memory. Streams are the remaining exception
+  (`XTRIM` bounds them).
+- **`appendfsync always` no longer blocks the reactor.** Both reactors
+  group-commit: io_uring gates the reply on the fsync completion, and
+  epoll/kqueue gets a per-shard writer lane doing the same. Measured
+  on ext4 at 50 concurrent connections: 353 → 8,273 writes/s on
+  io_uring, 478 → 10,540 on epoll. A reply still means the write is on
+  disk; `KEVY_AOF_OFFLOAD=0` restores the synchronous path on either
+  reactor.
+- **A forced rewrite no longer spikes the reactor for ~200 ms.** Under
+  a trickle workload the rewrite tee never drains, so every rewrite
+  fell back to the reactor's synchronous swap — 3–9 ms normally, ~300
+  ms when it hit a journal commit window. The final small tee now
+  rides along to the worker, which does the append, fsync, hardlink
+  and rename off-thread. Worst tick 188 ms → 50.5 ms.
+
+### Behavior changes
+
+- **Feed generations are random 53-bit history identities**, not
+  counters: two nodes can no longer name two different histories the
+  same way. Compare them for equality only, never for order.
+- **A fsync-policy switch drains first.** `CONFIG SET appendfsync`
+  now settles the offload driver's in-flight appends before applying,
+  on both reactors.
+
 ## 5.0.0 — the tail-latency release
 
 A probe built to settle a question about replicas answered a different

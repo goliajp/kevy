@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>5.0 から 5.1 へのアップグレード — kevy</title>
+<meta name="description" content="短く言うと：5.0 のサーバーを停止し、同じデータディレクトリで 5.1 のバイナリを起動するだけです。設定変更もワイヤ変更もクライアント 変更も不要。リリースゲートはタグを打つ前に、この手順を両方向で—— バージョン混在の primary/replica ペアも含めて——毎回再演します。">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../ja/">kevy<span class="v">5.0</span></a>
+    <nav class="nav">
+      <a href="../../../ja/docs/" aria-current="page">ドキュメント</a>
+      <a href="../../../ja/docs/commands/">コマンド</a>
+      <a href="../../../ja/benchmarks/">ベンチマーク</a>
+      <a href="../../../ja/play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../../ja/docs/search-index.json" data-root="../../../ja/">
+        <input type="search" placeholder="ドキュメントを検索……" aria-label="ドキュメントを検索……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../../docs/upgrading-5.0-to-5.1/">EN</a><a href="../../../zh/docs/upgrading-5.0-to-5.1/">中文</a><a href="../../../ja/docs/upgrading-5.0-to-5.1/" aria-current="page">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell has-toc">
+  <aside class="side"><p class="side-h">はじめに</p><ul><li><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a></li><li><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a></li><li><a href="../../../ja/docs/persistence/">永続化</a></li><li><a href="../../../ja/docs/tuning/">kevyのチューニング</a></li></ul><p class="side-h">運用</p><ul><li><a href="../../../ja/docs/upgrading-5.0-to-5.1/" aria-current="page">5.0 から 5.1 へのアップグレード</a></li><li><a href="../../../ja/docs/upgrading-4-to-5/">4.x から 5.0 へのアップグレード</a></li><li><a href="../../../ja/docs/replication/">レプリケーション</a></li><li><a href="../../../ja/docs/availability/">可用性</a></li><li><a href="../../../ja/docs/cluster/">クラスタ</a></li><li><a href="../../../ja/docs/tiering/">透過的ティアリング（[tiering] / with_tier_budget）</a></li><li><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a></li><li><a href="../../../ja/docs/alloc/">kevy-alloc——オプトインのアロケータ：得られるもの、支払うもの</a></li><li><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a></li><li><a href="../../../ja/docs/async/">非同期クライアント</a></li></ul><p class="side-h">データ</p><ul><li><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX. / idx_）</a></li><li><a href="../../../ja/docs/tables/">テーブル（TABLE. / table_）</a></li><li><a href="../../../ja/docs/table-migration/">手書きインデックスからテーブルへ移行する</a></li><li><a href="../../../ja/docs/vector-search/">ベクトル検索（KIND ann）</a></li><li><a href="../../../ja/docs/text-search/">全文検索（KIND text）</a></li><li><a href="../../../ja/docs/views/">ビュー（VIEW. / view_）</a></li><li><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED. / changes_since）</a></li><li><a href="../../../ja/docs/pubsub/">Pub/sub</a></li><li><a href="../../../ja/docs/lua/">Luaスクリプティング</a></li></ul><p class="side-h">組み込み</p><ul><li><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a></li><li><a href="../../../ja/docs/embedded-listener/">組み込みの読み取り専用RESPリスナー</a></li><li><a href="../../../ja/docs/iot/">IoTデバイス上のkevy</a></li></ul><p class="side-h">リファレンス</p><ul><li><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a></li><li><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a></li><li><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></li><li><a href="../../../ja/docs/UPGRADING/">kevyのアップグレード</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../ja/docs/commands/">188 コマンド全て</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>5.0 から 5.1 へのアップグレード</h1></div>
+<p>短く言うと：<b>5.0 のサーバーを停止し、同じデータディレクトリで 5.1 のバイナリを起動するだけ</b>です。設定変更もワイヤ変更もクライアント 変更も不要。リリースゲートはタグを打つ前に、この手順を両方向で—— バージョン混在の primary/replica ペアも含めて——毎回再演します。</p>
+<p><b>圧縮や value log を使っているなら、早めに上げてください。</b> 5.0 の エンコーダは、5.0 自身のデコーダが受け付けないフレームを書きうるから です（コンパクション後、コールドな値が corrupt として読み戻る）。5.1 はエンコーダを直したうえで、5.0 がすでにディスクに書いてしまった フレームを救出します。詳細は下記。</p>
+<h2 id="このリリースが存在する理由">このリリースが存在する理由</h2>
+<ul><li><b>5.0 の読み出しハザードを修復。</b> 辞書が共有 Huffman テーブルを 運んでいるとき、<code>kevy-compress</code> はリテラルのみのフレームを「辞書 マッチを使った」かのようにタグ付けすることがありました。書き込み 時には何も検出できず（CRC は書いたバイト列に対するもの）、障害は 後になって、コンパクション経路で、正常に保存されたはずの値のデコ ードエラーとして表面化します。5.1 はタグを修正し、さらに 5.0 が すでに書いた誤タグのフレームをデコードする明示的な互換アームを 追加しました。5.1 が書いたフレームは 5.0 でも読めます。</li><li><b>巨大コレクションがシャードを止めなくなった。</b> list・hash・set・ sorted-set は約 1.6 万要素を超えると要素粒度のコピーオンライトに なります。rewrite やスナップショットが値を固定している間の書き込み は、1 セグメント（約 1 ミリ秒、コレクション総サイズに依存しない） だけをクローンします。従来は値全体で 0.35〜9.5 秒かかり、その コレクションの常駐メモリを一時的に倍にしていました。</li><li><b><code>appendfsync always</code> が reactor を止めなくなった。</b> 両方の reactor がグループコミットします：io_uring では応答を fsync 完了で ゲートし、epoll/kqueue ではシャードごとの writer レーンが同じことを します。ext4・50 並行接続での実測は、io_uring で 353 → 8,273 writes/s、epoll で 478 → 10,540。耐久性の契約は不変です——応答は 依然として「ディスクに載った」を意味します。</li><li><b>フェイルオーバーの収束を修正。</b> 新しく昇格した primary に切り 替えた replica が、接続したまま永久に何も受け取らないことがあり ました：link は up、ハートビートは流れ、resync も進行中でないのに、 フェイルオーバー後の書き込みが届かない。下の複製の節を参照。</li></ul>
+<h2 id="そのまま引き継がれるもの">そのまま引き継がれるもの</h2>
+<ul><li><b>データファイル。</b> 5.1 は 5.0 のディレクトリをそのまま開き、5.0 も 5.1 が最後に書いたディレクトリを開き直せます（両方向ともゲート 済み）。どちらに切り替える場合もクリーンシャットダウンしてから。</li><li><b>ワイヤプロトコル・コマンド・クライアント契約。</b> 削除も型変更も ありません。既存クライアントは変更もリビルドも不要です。</li><li><b>設定ファイルとフラグ。</b> 5.0 のキーはすべて、同じデフォルトで 受け付けられます。</li></ul>
+<h2 id="振る舞いが変わるもの">振る舞いが変わるもの</h2>
+<h3 id="再接続した-replica-は-1-回スナップショット-resync-する">再接続した replica は 1 回スナップショット resync する</h3>
+<p>複製カーソルが継続性を主張できない replica——retarget、<code>REPLICAOF</code>、 あるいは feed の generation が動くバージョン変更のあとの状態——には、 現在のオフセット空間の先頭からの再生ではなく、フルスナップショット で答えるようになりました。primary から中身が見えない replica を収束 させる唯一の答えがこれだからです：フレームの列はキーを追加・上書き できても、replica が持っていて primary が持たないキーを削除できません。</p>
+<p>アップグレード後の最初の接続で、シャードごとに一度だけ次が見えます：</p>
+<figure class="code"><pre><code class="lang-text">kevy: replica fd 42 generation 6843605247850762 != feed generation
+      4198793490690396 (sent_offset 0); shipping snapshot</code></pre></figure>
+<p>これは想定どおりで、自己修復します。同時に、replica のローカルな 分岐は持ち越されずに破棄される、という分岐履歴に対する文書化済みの 契約でもあります。</p>
+<p>その resync が着地するまでのあいだ、replica は読み取りに <code>-LOADING</code> を返します——これは従来からフル resync で同じでした。キー空間が置き 換えられている最中であり、一貫した答えが存在しないからです。<code>PING</code> は例外のままです。窓の長さはデータセット次第なので、この間の読み取り 不可を許容できない場合は、再起動の前にその replica を読み取りプール から外してください。</p>
+<p>これが閉じるバグ：昇格は選挙が決着した瞬間に書き込みを開放しますが、 各シャードは自分の tick で複製オフセットをフェンスします。その窓の なかで受理された書き込みはフェンスに破棄され、あとから接続した replica は「すでに追いついている」と告げられます——結果、その書き込み は primary のキー空間には存在するのにどのストリームにも存在せず、 リンクは完璧に健全だと報告し続けます。</p>
+<h3 id="appendfsync-always-は-fsync-ラウンドを共有する"><code>appendfsync always</code> は fsync ラウンドを共有する</h3>
+<p><code>always</code> では、並行接続がそれぞれ自分の fsync を払うのではなく、 fsync ラウンドを共有（グループコミット）します。逐次実行の単一 クライアントは少し遅くなり——インラインの fsync ではなくキューされた fsync とその完了を待つため——並行負荷では桁違いに速くなります。 従来の形が必要なら、<code>KEVY_AOF_OFFLOAD=0</code> がどちらの reactor でも 古典的な同期パスを復元します。</p>
+<h3 id="feed-の-generation-はランダムな識別子になった">feed の generation はランダムな識別子になった</h3>
+<p>feed の generation はカウンタではなくランダムな 53 ビットの履歴識別子 になりました。2 つのノードが異なる履歴を同じ名前で呼ぶことは、もはや ありえません。generation を表示・保存していたもの（<code>REPL.TOKEN</code>、 <code>REPL.WAIT</code>、<code>FEED.TAIL</code>）は、大きく順序のない数値を示します。これは 識別子です：等値比較のみに使い、大小比較には決して使わないでください。</p>
+<h2 id="推奨手順">推奨手順</h2>
+<ol><li>バックアップを取る：クリーンシャットダウン（または <code>BGSAVE</code> + コピー）してから、データディレクトリをコピーします。</li><li>replica を先に、primary をあとにアップグレードします。混在ペアは 両方向で動作し、各 replica はカーソルの generation が一致しなく なった時点で一度だけ resync します。</li><li>検証：各 replica の <code>INFO replication</code>（link up、オフセットが前進）、 <code>INFO persistence</code>、期待値に対する <code>DBSIZE</code>、そしてアプリケーション 自身のスモークテスト。</li><li>必要ならロールバック：5.1 をクリーンに停止し、同じディレクトリで 5.0 を起動します。5.1 が書いた値はそのまま読めます。</li></ol></main>
+  <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#このリリースが存在する理由">このリリースが存在する理由</a></li><li class="l2"><a href="#そのまま引き継がれるもの">そのまま引き継がれるもの</a></li><li class="l2"><a href="#振る舞いが変わるもの">振る舞いが変わるもの</a></li><li class="l3"><a href="#再接続した-replica-は-1-回スナップショット-resync-する">再接続した replica は 1 回スナップショット resync する</a></li><li class="l3"><a href="#appendfsync-always-は-fsync-ラウンドを共有する">appendfsync always は fsync ラウンドを共有する</a></li><li class="l3"><a href="#feed-の-generation-はランダムな識別子になった">feed の generation はランダムな識別子になった</a></li><li class="l2"><a href="#推奨手順">推奨手順</a></li></ul></aside>
+</div>
+
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>
