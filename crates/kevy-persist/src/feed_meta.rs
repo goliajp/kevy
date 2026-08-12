@@ -95,7 +95,7 @@ pub fn load_feed_boot(dir: &Path, shard: usize) -> io::Result<FeedBoot> {
         // fresh node called its history "1", a startup election and a
         // failover promotion both called theirs "2", and a replica's
         // stale cursor then passed the generation fence into offset
-        // aliasing (availgate failover wedge, 2026-08-12).
+        // aliasing (the availgate failover wedge).
         (None, _) => FeedBoot { generation: fresh_generation(0), next_offset: 0 },
         (Some(g), Some((mg, off))) if mg == g => FeedBoot { generation: g, next_offset: off },
         (Some(g), _) => FeedBoot { generation: fresh_generation(g), next_offset: 0 },

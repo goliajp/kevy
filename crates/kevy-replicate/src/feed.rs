@@ -132,7 +132,7 @@ impl FeedSource {
 /// collide on the same number for different histories, and a replica's
 /// stale cursor then passes the generation fence into offset aliasing
 /// — served as "caught up" at a foreign offset, it wedges forever
-/// (availgate failover-convergence flake, 2026-08-12). `RandomState`
+/// (the availgate failover-convergence flake). `RandomState`
 /// carries the process's OS-seeded entropy; identity, not crypto.
 pub(crate) fn fresh_generation(old: u64) -> u64 {
     use std::hash::{BuildHasher, Hasher};
@@ -201,7 +201,7 @@ mod tests {
         assert_eq!(frames.len(), 1);
     }
 
-    /// The 2026-08-12 availgate wedge, distilled: generations are
+    /// The availgate failover wedge, distilled: generations are
     /// identities, not counters. A bump must never land on a
     /// PREDICTABLE next value (old+1 is what a peer node's own bump
     /// would produce for a DIFFERENT history), and any mismatched

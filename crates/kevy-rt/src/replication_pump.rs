@@ -185,7 +185,7 @@ impl<C: Commands> Shard<C> {
             // and must fall through to frames_from, whose Future arm
             // ships a snapshot. The old `>=` shadowed that arm: the
             // ahead cursor sat "caught up" with heartbeats flowing
-            // and never converged (availgate wedge, 2026-08-12).
+            // and never converged (the availgate failover wedge).
         }
         let pending = self.replicas[idx].output.len() - self.replicas[idx].write_off;
         if pending >= STREAMING_OUTPUT_CAP / 2 {
