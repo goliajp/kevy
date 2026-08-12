@@ -56,6 +56,7 @@ impl Aof {
                     q.extend_from_slice(&(frame.len() as u32).to_le_bytes());
                     q.extend_from_slice(&crate::crc32c::crc32c(&frame).to_le_bytes());
                     q.extend_from_slice(&frame);
+                    self.queued_seq += 1;
                 } else {
                     self.file.write_all(&(frame.len() as u32).to_le_bytes())?;
                     self.file.write_all(&crate::crc32c::crc32c(&frame).to_le_bytes())?;
@@ -119,7 +120,10 @@ impl Aof {
         }
         if self.deferred {
             self.deferred = false;
-            if self.dirty {
+            // Queued bytes are in the driver's chunk — syncing the file
+            // here would durabilize nothing. Leave `dirty` set; the ring
+            // fsync is the durability point for queued appends.
+            if self.dirty && self.queue.is_none() {
                 self.file.flush()?;
                 self.file.get_ref().sync_data()?;
                 self.dirty = false;

@@ -214,6 +214,11 @@ pub(crate) struct UringConn {
     /// completion (full body + CRLF received) or on connection close.
     /// See [`BigArgState`] for the full state machine.
     pub(crate) pending_big_arg: Option<Box<BigArgState>>,
+    /// S2 Always reply gate: `Some(w)` = this conn's pending output
+    /// answers writes queued up to record-watermark `w`, and must not
+    /// be swapped into a write SQE until the shard's fsync-proven
+    /// durable watermark reaches `w` (see `uring_aof`).
+    pub(crate) held_watermark: Option<u64>,
 }
 
 impl UringConn {
@@ -236,6 +241,7 @@ impl UringConn {
             recv_zero_streak: 0,
             closing: false,
             pending_big_arg: None,
+            held_watermark: None,
         }
     }
 }
