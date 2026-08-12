@@ -61,7 +61,12 @@ directory opens as-is in both directions. Upgrade guide:
   on ext4 at 50 concurrent connections: 353 → 8,273 writes/s on
   io_uring, 478 → 10,540 on epoll. A reply still means the write is on
   disk; `KEVY_AOF_OFFLOAD=0` restores the synchronous path on either
-  reactor.
+  reactor. The poll reactors now meet the same tail bars as the ring:
+  the tick treated an unchanged `appendfsync` as a pending policy
+  switch, and the switch protocol settles the writer lane first, so
+  every tick busy-waited for the lane to drain — worst reactor stall
+  790 ms → 34–42 ms and worst client round trip 862 ms → 14–16 ms under
+  a 1 GB/s ingest.
 - **A forced rewrite no longer spikes the reactor for ~200 ms.** Under
   a trickle workload the rewrite tee never drains, so every rewrite
   fell back to the reactor's synchronous swap — 3–9 ms normally, ~300
