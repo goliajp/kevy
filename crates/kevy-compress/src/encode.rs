@@ -152,7 +152,7 @@ fn serialize_high(
     seqs: &[Seq],
     tail: &core::ops::Range<usize>,
     cap: usize,
-) -> Option<Vec<u8>> {
+) -> Option<(Vec<u8>, bool)> {
     let d = dict.len();
     let mut lits = Vec::new();
     for s in seqs {
@@ -161,7 +161,7 @@ fn serialize_high(
     lits.extend_from_slice(&input[tail.start - d..tail.end - d]);
     let mut out = Vec::with_capacity(input.len().min(cap) + 16);
     crate::push_varint(&mut out, lits.len());
-    emit_literal_block(&lits, lens, &mut out);
+    let used_shared = emit_literal_block(&lits, lens, &mut out);
     for s in seqs {
         let lit_len = s.lits.len();
         let mat = s.len - MIN_MATCH;
@@ -176,7 +176,7 @@ fn serialize_high(
     let lit_len = tail.len();
     out.push((lit_len.min(15) as u8) << 4);
     push_ext(&mut out, lit_len);
-    (out.len() < cap).then_some(out)
+    (out.len() < cap).then_some((out, used_shared))
 }
 
 /// Try to LZ-encode `input` into `out` at the fast level (payload
@@ -208,9 +208,15 @@ pub(crate) fn try_high(
     let (seqs, tail, used_dict) = collect(dict, input);
     let fast = serialize_fast(dict, input, &seqs, &tail, input.len());
     let cap = fast.as_ref().map_or(input.len(), Vec::len);
-    if let Some(high) = serialize_high(dict, lens, input, &seqs, &tail, cap) {
+    if let Some((high, used_shared)) = serialize_high(dict, lens, input, &seqs, &tail, cap) {
         *out = high;
-        return (if used_dict { TAG_LZH_DICT } else { TAG_LZH }, true);
+        // The frame depends on the dict if EITHER the match finder
+        // referenced its content OR the literal block chose the
+        // dict-carried shared Huffman table (flag 2) — the fuzz-found
+        // asymmetry: a shared-table frame tagged TAG_LZH decodes with
+        // lens=None and is rejected as corrupt.
+        let dep = used_dict || used_shared;
+        return (if dep { TAG_LZH_DICT } else { TAG_LZH }, true);
     }
     match fast {
         Some(payload) => {
@@ -225,7 +231,9 @@ pub(crate) fn try_high(
 /// file-scoped shared table) has no per-record header, which is what
 /// lets entropy coding engage at 400 B; flag 1 carries its own table;
 /// flag 0 is raw — never-expanding at every layer.
-fn emit_literal_block(lits: &[u8], lens: Option<&[u8; 256]>, out: &mut Vec<u8>) {
+/// Returns whether the block chose flag 2 — the dict-carried shared
+/// table — which makes the enclosing frame dict-dependent.
+fn emit_literal_block(lits: &[u8], lens: Option<&[u8; 256]>, out: &mut Vec<u8>) -> bool {
     let shared_bytes = lens.and_then(|l| {
         let mut hist = [0u64; 256];
         for &b in lits {
@@ -239,13 +247,16 @@ fn emit_literal_block(lits: &[u8], lens: Option<&[u8; 256]>, out: &mut Vec<u8>) 
     if shared_len < inline_len && shared_len < lits.len() {
         out.push(2);
         crate::huff::write_bits(lits, lens.expect("shared_len set"), out);
-    } else if let Some(coded) = inline.filter(|c| c.len() < lits.len()) {
+        return true;
+    }
+    if let Some(coded) = inline.filter(|c| c.len() < lits.len()) {
         out.push(1);
         out.extend_from_slice(&coded);
     } else {
         out.push(0);
         out.extend_from_slice(lits);
     }
+    false
 }
 
 /// 255-continuation length extension (LZ4's shape).
