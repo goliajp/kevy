@@ -73,8 +73,22 @@ run() { # run <name> <cmd...>
 NODEAPP="$DIR/nodeapp"
 mkdir -p "$NODEAPP"
 cp bench/clientgate/node_redis.mjs bench/clientgate/ioredis.mjs "$NODEAPP/"
-(cd "$NODEAPP" && npm init -y >/dev/null 2>&1 \
-    && npm install --no-audit --no-fund --quiet redis ioredis >/dev/null 2>&1)
+(cd "$NODEAPP" && npm init -y >/dev/null 2>&1)
+# Registry fetches flake on hosted runners (two archived runs died on a
+# transient self-signed-cert MITM window). Retry with backoff on top of
+# npm's own fetch retries, and fail LOUDLY with the log — the old
+# silent >/dev/null install surfaced only as a confusing module-not-
+# found in the client smoke two steps later.
+for attempt in 1 2 3; do
+    (cd "$NODEAPP" && npm install --no-audit --no-fund --quiet \
+        --fetch-retries=5 redis ioredis) > "$NODEAPP/npm-install.log" 2>&1 && break
+    if [ "$attempt" = 3 ]; then
+        echo "clientgate: FAIL — npm install failed after 3 attempts:"
+        tail -20 "$NODEAPP/npm-install.log"
+        exit 1
+    fi
+    sleep $((attempt * 10))
+done
 run node-redis env KEVY_PORT=$PORT node "$NODEAPP/node_redis.mjs"
 run ioredis    env KEVY_PORT=$PORT node "$NODEAPP/ioredis.mjs"
 
