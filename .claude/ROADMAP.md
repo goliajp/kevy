@@ -765,3 +765,7 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - [x] 设计轮 ✅(2026-08-12):正式 RFC `.claude/rfcs/2026-08-12-s2-always-cqe-gated.md`(Explore 全图地面真相;epoch 门控回复持有 + 排空后 fsync 免 SQE 链接;**两个关键地面事实:queued 模式下同步 fsync 对空文件 = 潜在正确性陷阱必修;crashgate 对反应堆侧 always 零覆盖,server-always cell 必须先行**)
 - [x] 实施 ✅(2026-08-12,feature/s2-crashgate-server-always):①-④ 全落地,机制按实现轮改道为**记录水位线**(queued_seq / durable_watermark,免 OP_AOF_FSYNC 新 tag;RFC §6 Resolution)。stamp 面 ×3(recv 批 / bigbulk feed / **B2-alt bareset——Explore 图漏的第三面**);跨 shard held_responses;run_swap 补 rename 后目录 fsync。步② 陷阱修红-绿验证。
 - [x] 验证 ✅:crashgate 32/32(盒 uring 门控路径;新 server-always cell 基线先绿于旧路径)+ kevy-persist 70/70 + kevy-rt 50/50(Linux)+ 分支 CI 绿(availgate 二犯 flake 入档 bench/.flake-archive,--no-aof 不可达,rerun 绿)。**A/B(盒 ext4):SET c50 353→8,273 rps(+23×,组提交);c1 序贯 −29~49%(fsync+ring 往返,RFC 预告的语义代价);三组数据三角证门无泄漏(tmpfs 51µs/op vs ext4 7ms/op 全 fsync-bound)**。finding=bench/FINDING-2026-08-12-s2-always-cqe-gated.md
+
+### P4 — availgate failover 收敛 flake 根因(二犯过宽限,欠账 arc)
+- [ ] 根因:archived log(bench/.flake-archive/2026-08-12-availgate-*)显示 crash failover 后**双节点瞬态同报 PRIMARY(feed generation 均 bump 到 2)**再收敛;判定是协议真窗(split-brain 风险)还是 benign 交接瞬态 + gate 断言窗过窄。
+- [ ] 修复 + 复现回归(慢 runner 时序注入)+ gate 全绿。
