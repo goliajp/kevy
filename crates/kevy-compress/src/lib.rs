@@ -179,7 +179,18 @@ pub fn decode(dict: &[u8], frame: &[u8]) -> Result<Vec<u8>, Corrupt> {
             }
             decode::lz(content, payload, orig_len)
         }
-        TAG_LZH => decode::lz_high(&[], None, payload, orig_len),
+        TAG_LZH => match decode::lz_high(&[], None, payload, orig_len) {
+            // Compat: the 5.0.0 encoder could emit a shared-table
+            // (flag 2) literal block under TAG_LZH — the tag missed
+            // the dict dependency (fuzz crash 6b733e74; fixed in
+            // try_high). Those on-disk frames need the dict's lens
+            // table: retry with it before declaring corrupt. The
+            // record's CRC already vouched for the bytes.
+            Err(Corrupt) if lens.is_some() => {
+                decode::lz_high(&[], lens.as_ref(), payload, orig_len)
+            }
+            r => r,
+        },
         TAG_LZH_DICT => {
             if content.is_empty() {
                 return Err(Corrupt);
