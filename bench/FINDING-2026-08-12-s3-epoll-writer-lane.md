@@ -50,8 +50,10 @@ tested) and reverts to the synchronous path.
 - **The whole PR test matrix now exercises the lane** (integration
   tests force KEVY_IO_URING=0 and the lane defaults on): replication /
   feed_cdc / persistence e2e green on both hosts.
-- **perfgate-median 12/12** (uring face — S3 touches none of it; the
-  gate is the proof): recorded below before merge.
+- **perfgate-median 12/12 PASS** (box, floor 0.92, n=3 medians; worst
+  angle get −3.9% inside the band) — the uring face S3 does not touch,
+  and perfgate runs --no-aof so the lane never engages there: this is
+  the pure-regression gate.
 
 ## Boundaries (recorded, accepted)
 
