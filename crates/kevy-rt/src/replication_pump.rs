@@ -61,6 +61,9 @@ impl<C: Commands> Shard<C> {
                     self.maybe_append_heartbeat(idx, generation, next);
                 }
                 ReplicaState::SnapshotShipping { .. } => self.pump_snapshot_chunks(idx),
+                ReplicaState::AckSent { .. } if crate::repl_trace() => {
+                    self.trace_acksent_pending(idx);
+                }
                 _ => {}
             }
         }
@@ -84,6 +87,16 @@ impl<C: Commands> Shard<C> {
         }
         conn.output.extend_from_slice(&encode_ping(generation, primary_next));
         conn.last_ping = Some(std::time::Instant::now());
+        if crate::repl_trace()
+            && let ReplicaState::Streaming { sent_offset, generation: cursor_gen, .. } =
+                conn.state
+        {
+            crate::repl_trace_line(format_args!(
+                "shard {} fd {} streaming: cursor gen {cursor_gen} \
+                 sent {sent_offset} | feed gen {generation} next {primary_next}",
+                self.id, conn.fd,
+            ));
+        }
     }
 
     /// Parse complete `REPLCONF ACK <offset>` lines off a
@@ -155,6 +168,13 @@ impl<C: Commands> Shard<C> {
             if generation == 0 && sent_offset == 0 {
                 // Fresh replica, no continuity claim, nothing served
                 // yet — adopt the current generation and stream from 0.
+                if crate::repl_trace() {
+                    crate::repl_trace_line(format_args!(
+                        "shard {} fd {} fresh-cursor adopt: \
+                         feed gen {feed_gen} next {primary_next}",
+                        self.id, self.replicas[idx].fd,
+                    ));
+                }
                 if let ReplicaState::Streaming { generation, .. } =
                     &mut self.replicas[idx].state
                 {
@@ -329,9 +349,21 @@ impl<C: Commands> Shard<C> {
         let ReplicaState::Streaming { ref replica_id, .. } = self.replicas[idx].state else {
             // Defensive: only Streaming replicas should reach the
             // TooOld branch in fill_streaming_output.
+            if crate::repl_trace() {
+                crate::repl_trace_line(format_args!(
+                    "shard {} fd {} ship SKIPPED: conn not Streaming",
+                    self.id, self.replicas[idx].fd,
+                ));
+            }
             return Ok(());
         };
         let replica_id = replica_id.clone();
+        if crate::repl_trace() {
+            crate::repl_trace_line(format_args!(
+                "shard {} fd {} ship begin: gen {generation} ack_offset {ack_offset}",
+                self.id, self.replicas[idx].fd,
+            ));
+        }
         let view = self.store.collect_snapshot();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::Builder::new()
@@ -442,6 +474,12 @@ impl<C: Commands> Shard<C> {
             // Snapshot fully chunked — emit the end marker and flip
             // state to Streaming so the next pump fills from the
             // backlog at `ack_offset`.
+            if crate::repl_trace() {
+                crate::repl_trace_line(format_args!(
+                    "shard {} fd {} ship end: gen {generation} ack_offset {ack_offset}",
+                    self.id, conn.fd,
+                ));
+            }
             conn.output.extend_from_slice(&encode_snapshot_end(ack_offset));
             if let ReplicaState::SnapshotShipping { replica_id, .. } = &conn.state {
                 let rid = replica_id.clone();

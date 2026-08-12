@@ -108,6 +108,9 @@ impl<C: Commands> Shard<C> {
                             self.replicas[idx].state,
                             ReplicaState::HandshakePending
                         ) {
+                            if crate::repl_trace() {
+                                self.trace_handshake(idx);
+                            }
                             return Ok(());
                         }
                     }
