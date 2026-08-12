@@ -332,12 +332,7 @@ fn drain_client(
                 crate::replica_trace::trace_session_event(
                     runner_slot, &event, &mut traced_first_frame,
                 );
-                let gate = loading.observe(&event);
-                let mut apply = event_to_apply(event, &mut from_offset);
-                if let ReplicaApply::SnapshotEnd { gate: g, .. } = &mut apply {
-                    *g = gate;
-                }
-                if sender.send(apply).is_err() {
+                if forward_event(event, &mut from_offset, &mut loading, sender).is_err() {
                     // Receiver dropped — the shard / runtime is gone;
                     // the runner should also exit.
                     return from_offset;
@@ -352,6 +347,24 @@ fn drain_client(
         }
     }
     from_offset
+}
+
+/// Turn one wire event into an apply and hand it to the shard,
+/// carrying the loading gate on a `SnapshotEnd` so the `-LOADING`
+/// window closes only once the shard has finished loading. `Err` means
+/// the receiver is gone.
+fn forward_event(
+    event: ReplicaEvent,
+    from_offset: &mut u64,
+    loading: &mut LoadingGuard,
+    sender: &ReplicaInboxSender,
+) -> Result<(), ()> {
+    let gate = loading.observe(&event);
+    let mut apply = event_to_apply(event, from_offset);
+    if let ReplicaApply::SnapshotEnd { gate: g, .. } = &mut apply {
+        *g = gate;
+    }
+    sender.send(apply).map_err(|_| ())
 }
 
 /// The 100 ms ack cadence: report the applied position upstream (and
