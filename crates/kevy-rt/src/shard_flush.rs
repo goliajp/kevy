@@ -213,6 +213,19 @@ impl<C: Commands> Shard<C> {
             (close, out_remaining, conn.sock.raw(), conn.closing)
         };
 
+        self.flush_conn_epilogue(conn_id, close, want_write, fd, closing_now)
+    }
+
+    /// The post-write half of [`Self::flush_conn`]: escrow resolution,
+    /// deferred close, write-interest upkeep.
+    fn flush_conn_epilogue(
+        &mut self,
+        conn_id: u64,
+        close: bool,
+        want_write: bool,
+        fd: i32,
+        closing_now: bool,
+    ) -> io::Result<()> {
         self.resolve_serve_by_write(conn_id, closing_now, !want_write);
 
         if close && !self.hold_serving_close_for_tests(conn_id) {
