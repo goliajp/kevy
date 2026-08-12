@@ -766,6 +766,7 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - [x] 实施 ✅(2026-08-12,feature/s2-crashgate-server-always):①-④ 全落地,机制按实现轮改道为**记录水位线**(queued_seq / durable_watermark,免 OP_AOF_FSYNC 新 tag;RFC §6 Resolution)。stamp 面 ×3(recv 批 / bigbulk feed / **B2-alt bareset——Explore 图漏的第三面**);跨 shard held_responses;run_swap 补 rename 后目录 fsync。步② 陷阱修红-绿验证。
 - [x] 验证 ✅:crashgate 32/32(盒 uring 门控路径;新 server-always cell 基线先绿于旧路径)+ kevy-persist 70/70 + kevy-rt 50/50(Linux)+ 分支 CI 绿(availgate 二犯 flake 入档 bench/.flake-archive,--no-aof 不可达,rerun 绿)。**A/B(盒 ext4):SET c50 353→8,273 rps(+23×,组提交);c1 序贯 −29~49%(fsync+ring 往返,RFC 预告的语义代价);三组数据三角证门无泄漏(tmpfs 51µs/op vs ext4 7ms/op 全 fsync-bound)**。finding=bench/FINDING-2026-08-12-s2-always-cqe-gated.md
 
-### P4 — availgate failover 收敛 flake 根因(二犯过宽限,欠账 arc)
-- [ ] 根因:archived log(bench/.flake-archive/2026-08-12-availgate-*)显示 crash failover 后**双节点瞬态同报 PRIMARY(feed generation 均 bump 到 2)**再收敛;判定是协议真窗(split-brain 风险)还是 benign 交接瞬态 + gate 断言窗过窄。
-- [ ] 修复 + 复现回归(慢 runner 时序注入)+ gate 全绿。
+### P4 — availgate failover 收敛 flake 根因 ✅(2026-08-12,bugfix/replication-generation-identity)
+- [x] 根因(首稿「双主瞬态」判读被 forensics 复核推翻——n1 的 PRIMARY 是启动自选举):**① feed generation 是计数器,跨节点数字必然碰撞**(fresh 全叫 1;启动选举与 failover 提升都叫 2),stale cursor 穿过 gen fence 进 offset 别史;**② pump 的 caught-up `>=` 遮蔽了文档承诺的 forked-history snapshot ship**——同代 ahead cursor 永久假 caught-up(心跳照发 link up 不收敛 = forensics 原样签名)。
+- [x] 修复:generation = 随机 53 位**历史身份**(RESP i64 + JS Number 2^53 双线安全;fresh/unclean boot 与每次 bump 都重抽;mismatch 一律 Resync,身份无序);caught-up 改精确相等,ahead cursor 落入 Future 臂 ship snapshot。**JS 2^53 线是实战教训:63 位首版被 ts conformance 抓出 Number 精度截断自 Resync 循环**。
+- [x] 验证:新 ahead-cursor e2e(旧码上 wedge 为 ping-only)+ feed/feed_meta/embedded 身份单测 + gen 字面断言全库迁移(feed_cdc/wrap_parity/embedded/e2e ~20 处)+ **盒上 availgate ×10 全 PASS**(带轮间端口 settle;此前 ×10 的 5 FAIL 是循环器自身固定端口 AddrInUse 工件)+ repligate PASS。
