@@ -57,7 +57,17 @@ impl<C: Commands> Shard<C> {
     /// The persistence half of [`Self::apply_live_runtime_config`]:
     /// fsync policy + the three rewrite triggers.
     fn apply_live_persist_knobs(&mut self, live: &crate::LiveRuntimeConfig) {
-        if let Some(f) = live.appendfsync && self.aof.is_some() {
+        // Only a CHANGE is pending work. The embedder reports the live
+        // policy every tick, so accepting it unconditionally marked a
+        // switch as pending 10 times a second — and the switch protocol
+        // settles the offload driver first, which on the poll reactors
+        // means busy-waiting for the AOF writer lane to drain. Measured
+        // on the box: up to 890 ms inside one tick under the firehose
+        // cell, with the reactor doing nothing else (the epoll
+        // tick-cadence finding in bench/).
+        if let Some(f) = live.appendfsync
+            && self.aof.as_ref().is_some_and(|a| a.fsync_policy() != f)
+        {
             self.pending_fsync_policy = Some(f);
         }
         self.try_apply_fsync_policy();

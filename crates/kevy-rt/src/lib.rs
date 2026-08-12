@@ -128,6 +128,7 @@ mod shard_flush;
 mod shard_lifecycle;
 mod shard_run;
 mod shard_tick;
+mod slow_iter;
 mod types;
 mod aof_writer;
 #[cfg(target_os = "linux")]
