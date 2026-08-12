@@ -298,20 +298,21 @@ fn feed_shards_tail_read_round_trip() {
         c.set(format!("fk{i}").as_bytes(), b"v").unwrap();
     }
 
-    // Find a shard that saw writes; a fresh dir starts at generation 1.
+    // Find a shard that saw writes; a fresh dir draws a random
+    // nonzero generation (identity, not counter).
     let mut hit = None;
     for sh in 0..NSHARDS {
         let (generation, off) = c.feed_tail(sh).unwrap();
-        assert_eq!(generation, 1, "fresh dir starts at generation 1");
+        assert_ne!(generation, 0, "fresh dir draws a nonzero generation");
         if off > 0 {
-            hit = Some((sh, off));
+            hit = Some((sh, generation, off));
             break;
         }
     }
-    let (sh, tail_off) = hit.expect("some shard saw writes");
+    let (sh, live_gen, tail_off) = hit.expect("some shard saw writes");
 
-    let batch = c.feed_read(sh, 1, 0, None, &[]).unwrap();
-    assert_eq!(batch.generation, 1);
+    let batch = c.feed_read(sh, live_gen, 0, None, &[]).unwrap();
+    assert_eq!(batch.generation, live_gen);
     assert_eq!(batch.next_offset, tail_off);
     assert!(!batch.frames.is_empty());
     let frame = &batch.frames[0];
@@ -319,13 +320,13 @@ fn feed_shards_tail_read_round_trip() {
     assert!(frame.argv[1].starts_with(b"fk"));
 
     // COUNT clamps the page; the cursor still advances monotonically.
-    let page = c.feed_read(sh, 1, 0, Some(1), &[]).unwrap();
+    let page = c.feed_read(sh, live_gen, 0, Some(1), &[]).unwrap();
     assert_eq!(page.frames.len(), 1);
     assert!(page.next_offset <= tail_off);
 
     // A prefix that matches nothing filters every frame out (SET's
     // key layout is cheap to determine → not fail-open).
-    let none = c.feed_read(sh, 1, 0, None, &[b"other:"]).unwrap();
+    let none = c.feed_read(sh, live_gen, 0, None, &[b"other:"]).unwrap();
     assert!(none.frames.is_empty());
     assert_eq!(none.next_offset, tail_off, "filtering never moves the cursor differently");
 }

@@ -89,9 +89,16 @@ pub fn load_feed_boot(dir: &Path, shard: usize) -> io::Result<FeedBoot> {
     let marker = read_meta(dir, shard);
     let _ = fs::remove_file(meta_path(dir, shard));
     let boot = match (highwater, marker) {
-        (None, _) => FeedBoot { generation: 1, next_offset: 0 },
+        // Fresh dir and unclean boot both DRAW a random generation —
+        // a generation is a history identity, not a counter. Fixed
+        // starts (1) or increments (g+1) collide across nodes: every
+        // fresh node called its history "1", a startup election and a
+        // failover promotion both called theirs "2", and a replica's
+        // stale cursor then passed the generation fence into offset
+        // aliasing (the availgate failover wedge).
+        (None, _) => FeedBoot { generation: fresh_generation(0), next_offset: 0 },
         (Some(g), Some((mg, off))) if mg == g => FeedBoot { generation: g, next_offset: off },
-        (Some(g), _) => FeedBoot { generation: g + 1, next_offset: 0 },
+        (Some(g), _) => FeedBoot { generation: fresh_generation(g), next_offset: 0 },
     };
     // Persist the (possibly bumped, possibly fresh) generation as the
     // new high-water before serving anything under it.
@@ -99,6 +106,27 @@ pub fn load_feed_boot(dir: &Path, shard: usize) -> io::Result<FeedBoot> {
         write_feed_gen(dir, shard, boot.generation)?;
     }
     Ok(boot)
+}
+
+/// Random nonzero u64 distinct from `old` — mirror of
+/// `kevy_replicate::feed::fresh_generation` (kevy-persist does not
+/// depend on kevy-replicate; the ~8 lines are duplicated rather than
+/// inverting the dependency for them). Identity, not crypto.
+fn fresh_generation(old: u64) -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    loop {
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u64(old);
+        // Mask to 53 bits: generations ride RESP integers (REPL.TOKEN
+        // / REPL.WAIT / FEED.TAIL), and client bindings surface them
+        // as JS Numbers, whose integer precision ends at 2^53 — a
+        // wider value round-trips corrupted and self-resyncs forever.
+        // A 2^53 identity space still makes collisions negligible.
+        let g = h.finish() & ((1u64 << 53) - 1);
+        if g != 0 && g != old {
+            return g;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -110,12 +138,23 @@ mod tests {
     }
 
     #[test]
-    fn fresh_dir_starts_at_gen_one() {
+    fn fresh_dir_draws_a_random_gen() {
         let d = tmp();
-        assert_eq!(load_feed_boot(&d, 0).unwrap(), FeedBoot { generation: 1, next_offset: 0 });
+        let b = load_feed_boot(&d, 0).unwrap();
+        assert_ne!(b.generation, 0);
+        assert_eq!(b.next_offset, 0);
         // gen high-water persisted
-        assert_eq!(fs::read_to_string(d.join("feed-0.gen")).unwrap(), "1");
+        assert_eq!(
+            fs::read_to_string(d.join("feed-0.gen")).unwrap(),
+            b.generation.to_string()
+        );
+        // Two fresh dirs must not share an identity (the "every fresh
+        // node is gen 1" collision).
+        let d2 = tmp();
+        let b2 = load_feed_boot(&d2, 0).unwrap();
+        assert_ne!(b.generation, b2.generation);
         let _ = fs::remove_dir_all(&d);
+        let _ = fs::remove_dir_all(&d2);
     }
 
     #[test]
@@ -124,39 +163,46 @@ mod tests {
         let b = load_feed_boot(&d, 0).unwrap();
         write_feed_meta(&d, 0, b.generation, 42).unwrap();
         let b2 = load_feed_boot(&d, 0).unwrap();
-        assert_eq!(b2, FeedBoot { generation: 1, next_offset: 42 });
-        // marker consumed: a crash NOW must bump next time
+        assert_eq!(b2, FeedBoot { generation: b.generation, next_offset: 42 });
+        // marker consumed: a crash NOW must draw fresh next time
         let b3 = load_feed_boot(&d, 0).unwrap();
-        assert_eq!(b3, FeedBoot { generation: 2, next_offset: 0 });
+        assert_ne!(b3.generation, b.generation);
+        assert_ne!(b3.generation, 0);
+        assert_eq!(b3.next_offset, 0);
         let _ = fs::remove_dir_all(&d);
     }
 
     #[test]
     fn unclean_boot_bumps_and_persists_highwater() {
         let d = tmp();
-        let _ = load_feed_boot(&d, 0).unwrap(); // gen 1
-        // no marker written (crash) → bump
+        let g1 = load_feed_boot(&d, 0).unwrap().generation;
+        // no marker written (crash) → fresh identity
         let b = load_feed_boot(&d, 0).unwrap();
-        assert_eq!(b.generation, 2);
-        assert_eq!(fs::read_to_string(d.join("feed-0.gen")).unwrap(), "2");
+        assert_ne!(b.generation, g1);
+        assert_ne!(b.generation, 0);
+        assert_eq!(
+            fs::read_to_string(d.join("feed-0.gen")).unwrap(),
+            b.generation.to_string()
+        );
         let _ = fs::remove_dir_all(&d);
     }
 
     #[test]
     fn mismatched_marker_bumps() {
         let d = tmp();
-        let _ = load_feed_boot(&d, 0).unwrap(); // gen 1
+        let g1 = load_feed_boot(&d, 0).unwrap().generation;
         write_feed_meta(&d, 0, 99, 7).unwrap(); // stale/corrupt marker
         let b = load_feed_boot(&d, 0).unwrap();
-        assert_eq!(b, FeedBoot { generation: 2, next_offset: 0 });
+        assert_ne!(b.generation, g1);
+        assert_eq!(b.next_offset, 0);
         let _ = fs::remove_dir_all(&d);
     }
 
     #[test]
     fn shards_are_independent() {
         let d = tmp();
-        let _ = load_feed_boot(&d, 0).unwrap();
-        write_feed_meta(&d, 0, 1, 10).unwrap();
+        let g0 = load_feed_boot(&d, 0).unwrap().generation;
+        write_feed_meta(&d, 0, g0, 10).unwrap();
         let _ = load_feed_boot(&d, 1).unwrap(); // fresh shard 1
         let b0 = load_feed_boot(&d, 0).unwrap();
         assert_eq!(b0.next_offset, 10);
