@@ -339,3 +339,72 @@ fn rotation_trains_a_dictionary_and_records_shrink_against_it() {
     let sum: u64 = refs.iter().map(|r| r.disk_len() as u64).sum();
     assert_eq!(s.bytes, sum, "stored == sum(header + frame body), exact");
 }
+
+/// Regression: fuzz vlog_churn crash 6b733e74 (2026-08-12, CI run
+/// 31549258857). A live ref moved by compaction read back as
+/// "kevy-compress: corrupt or truncated frame" — CRC passed, so the
+/// bytes were exactly as written and the DECODER rejected its own
+/// encoder's frame. The input replays the fuzz target's op decoding
+/// verbatim (append/delete/read/compact over a 16-key universe,
+/// 384-byte rotation).
+#[test]
+fn fuzz_churn_crash_6b733e74_replays_clean() {
+    const CRASH: &[u8] = &[
+        0x73, 0x03, 0x03, 0x03, 0x03, 0xff, 0xff, 0x03, 0xff, 0x03, 0xaa, 0xaa, 0xaa, 0xf9, 0xff,
+        0xff, 0xff, 0xff, 0x03, 0x27, 0x03, 0x03, 0x6b, 0x30, 0x37, 0x03, 0x03, 0x03, 0x03, 0xaa,
+        0xaa, 0xaa, 0xf9, 0xff, 0xff, 0xff, 0xff, 0xeb, 0x92, 0x01, 0x00, 0x00, 0x04, 0xeb, 0xeb,
+        0xeb, 0xeb, 0x5d, 0xff, 0xd2, 0xd2, 0x25, 0x2d, 0xf5, 0xfb, 0xff, 0xed, 0x2d, 0x2d, 0xd2,
+        0xd2, 0x03, 0x03, 0x03, 0x6b, 0x31, 0x30, 0xff, 0xff, 0xff, 0xfe, 0xff, 0xff, 0xff, 0xff,
+        0x03, 0x03, 0x03, 0xc4, 0xf7, 0x03, 0x03, 0x03, 0x03, 0x03, 0xf7, 0xff, 0x03, 0x03, 0x11,
+    ];
+    struct Owner {
+        live: std::collections::HashMap<Vec<u8>, (VlogRef, u8)>,
+    }
+    impl CompactOwner for Owner {
+        fn is_live(&mut self, key: &[u8], old: VlogRef) -> bool {
+            self.live.get(key).map(|(r, _)| *r) == Some(old)
+        }
+        fn moved(&mut self, key: &[u8], old: VlogRef, new: VlogRef) {
+            let e = self.live.get_mut(key).expect("moved() for a live key");
+            assert_eq!(e.0, old);
+            e.0 = new;
+        }
+    }
+    let d = dir("fuzz-churn-6b733e74");
+    let mut v = Vlog::open(d.path(), 384).unwrap();
+    let mut owner = Owner { live: std::collections::HashMap::new() };
+    let mut it = CRASH.iter().copied();
+    while let Some(op) = it.next() {
+        let key = format!("k{}", op % 16).into_bytes();
+        match op % 5 {
+            0 | 1 => {
+                let fill = it.next().unwrap_or(0);
+                let plen = usize::from(it.next().unwrap_or(0)) * 3;
+                let r = v.append(&key, &vec![fill; plen]).unwrap();
+                if let Some((old, _)) = owner.live.insert(key, (r, fill)) {
+                    v.note_dead(old);
+                }
+            }
+            2 => {
+                if let Some((old, _)) = owner.live.remove(&key) {
+                    v.note_dead(old);
+                }
+            }
+            3 => {
+                if let Some((r, fill)) = owner.live.get(&key) {
+                    let (rk, rp) = v.read(*r).unwrap();
+                    assert_eq!(rk, key);
+                    assert!(rp.iter().all(|b| b == fill));
+                }
+            }
+            _ => {
+                v.compact_below(u32::from(it.next().unwrap_or(50) % 102), &mut owner).unwrap();
+            }
+        }
+    }
+    for (key, (r, fill)) in &owner.live {
+        let (rk, rp) = v.read(*r).unwrap();
+        assert_eq!(&rk, key);
+        assert!(rp.iter().all(|b| b == fill));
+    }
+}

@@ -204,3 +204,42 @@ fn high_level_roundtrips_and_never_loses_to_fast() {
         );
     }
 }
+
+/// Regression: fuzz vlog_churn crash 6b733e74 (2026-08-12). A high
+/// frame whose ONLY dict dependency was the shared Huffman table
+/// (flag-2 literal block, no LZ match into dict content) was tagged
+/// TAG_LZH — so decode ran with lens=None and rejected the encoder's
+/// own output. The dependency tag must cover the shared table too.
+#[test]
+fn high_frame_with_shared_table_only_dependency_roundtrips() {
+    // A dict whose byte distribution makes the shared table win for
+    // the payload's literals, while the payload itself is too distant
+    // for any LZ match into dict content.
+    let samples: Vec<Vec<u8>> = (0..40).map(|i| vec![0x03u8.wrapping_add(i % 2); 400]).collect();
+    let refs: Vec<&[u8]> = samples.iter().map(Vec::as_slice).collect();
+    let dict = train(&refs, MAX_OFFSET);
+    // Alternating bytes: no 4-byte LZ match into the dict's uniform
+    // runs, but both bytes are cheap in its shared table — flag 2
+    // wins with used_dict=false, the exact mistagged shape.
+    let payload: Vec<u8> = (0..9).map(|i| if i % 2 == 0 { 3u8 } else { 4u8 }).collect();
+    let frame = encode_high(&dict, &payload);
+    assert_eq!(frame[0], TAG_LZH_DICT, "shared-table use must be tagged as a dict dependency");
+    assert_eq!(decode(&dict, &frame).as_deref(), Ok(payload.as_slice()));
+}
+
+/// Compat: frames the 5.0.0 encoder wrote with the bug above (flag-2
+/// shared-table block under TAG_LZH) are on real disks. decode must
+/// recover them by retrying with the dict's lens table instead of
+/// declaring corruption — simulated here by rewriting the fixed
+/// encoder's TAG_LZH_DICT back to TAG_LZH.
+#[test]
+fn legacy_mistagged_shared_table_frame_still_decodes() {
+    let samples: Vec<Vec<u8>> = (0..40).map(|i| vec![0x03u8.wrapping_add(i % 2); 400]).collect();
+    let refs: Vec<&[u8]> = samples.iter().map(Vec::as_slice).collect();
+    let dict = train(&refs, MAX_OFFSET);
+    let payload: Vec<u8> = (0..9).map(|i| if i % 2 == 0 { 3u8 } else { 4u8 }).collect();
+    let mut frame = encode_high(&dict, &payload);
+    assert_eq!(frame[0], TAG_LZH_DICT, "setup must produce a shared-table frame");
+    frame[0] = TAG_LZH; // what the 5.0.0 encoder emitted
+    assert_eq!(decode(&dict, &frame).as_deref(), Ok(payload.as_slice()));
+}

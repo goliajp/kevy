@@ -54,13 +54,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kevy-compress"
+version = "5.0.0"
+
+[[package]]
 name = "kevy-sys"
-version = "4.0.0"
+version = "5.0.0"
 
 [[package]]
 name = "kevy-vlog"
-version = "4.0.0"
+version = "5.0.0"
 dependencies = [
+ "kevy-compress",
  "kevy-sys",
 ]
 
