@@ -2,8 +2,8 @@
 //! `KEVY_DEBUG_SLOW_ITER_MS` dump.
 //!
 //! The tick-gap gauge says a single loop iteration occasionally takes
-//! half a second on epoll (`bench/FINDING-2026-08-12-tailgate-epoll-
-//! observation.md`); it cannot say WHERE. This records coarse phase
+//! half a second on epoll (the epoll tick-cadence findings in
+//! `bench/`); it cannot say WHERE. This records coarse phase
 //! boundaries and prints the breakdown for any iteration over the
 //! threshold, so the seat is named by a measurement instead of a guess.
 //!
