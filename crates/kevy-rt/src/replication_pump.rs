@@ -61,6 +61,9 @@ impl<C: Commands> Shard<C> {
                     self.maybe_append_heartbeat(idx, generation, next);
                 }
                 ReplicaState::SnapshotShipping { .. } => self.pump_snapshot_chunks(idx),
+                ReplicaState::AckSent { .. } if crate::repl_trace() => {
+                    self.trace_acksent_pending(idx);
+                }
                 _ => {}
             }
         }
@@ -84,6 +87,16 @@ impl<C: Commands> Shard<C> {
         }
         conn.output.extend_from_slice(&encode_ping(generation, primary_next));
         conn.last_ping = Some(std::time::Instant::now());
+        if crate::repl_trace()
+            && let ReplicaState::Streaming { sent_offset, generation: cursor_gen, .. } =
+                conn.state
+        {
+            crate::repl_trace_line(format_args!(
+                "shard {} fd {} streaming: cursor gen {cursor_gen} \
+                 sent {sent_offset} | feed gen {generation} next {primary_next}",
+                self.id, conn.fd,
+            ));
+        }
     }
 
     /// Parse complete `REPLCONF ACK <offset>` lines off a
@@ -143,6 +156,18 @@ impl<C: Commands> Shard<C> {
     /// restarts at 0, so a stale `sent_offset` reads as "caught up"
     /// forever — until the new history grows past it and the pump
     /// starts serving aliased frames. Both failure shapes die here.
+    ///
+    /// The fence has no fresh-cursor exception. It used to ADOPT the
+    /// feed generation for a `0 / 0` cursor and stream from offset 0,
+    /// which reconstructs a replica only when the offset space has
+    /// covered the store's whole life. A generation bump breaks exactly
+    /// that: promotion — and an unclean boot with data
+    /// (`kevy_persist::feed_meta`) — restart the offsets at 0 while the
+    /// store keeps every key. The adopted cursor then sat at
+    /// `sent_offset == primary_next == 0`, read as exactly caught up,
+    /// and was shipped nothing while the 1 Hz heartbeat kept the link
+    /// `up` — keyspaces diverged in silence (the availgate
+    /// crash-failover convergence wedge).
     // LOC-WAIVER: per-iter replication pump body (gen fence +
     // backpressure gate + backlog window walk + resync arms) — one
     // protocol state machine.
@@ -152,32 +177,29 @@ impl<C: Commands> Shard<C> {
             return;
         };
         if generation != feed_gen {
-            if generation == 0 && sent_offset == 0 {
-                // Fresh replica, no continuity claim, nothing served
-                // yet — adopt the current generation and stream from 0.
-                if let ReplicaState::Streaming { generation, .. } =
-                    &mut self.replicas[idx].state
-                {
-                    *generation = feed_gen;
-                }
-            } else {
-                // Stale-generation resume claim, or the feed bumped
-                // under a live stream. `sent_offset` belongs to a
-                // DIFFERENT offset history — never serve it. Ship.
+            // EVERY generation mismatch ships — including a cursor that
+            // claims nothing (generation 0). `sent_offset` belongs to a
+            // different offset history and must never be served, and a
+            // no-claim cursor is not proof of an empty replica: a
+            // runner's cursor lives in its thread and restarts at zero
+            // on every respawn (retarget, REPLICAOF), so a replica
+            // holding a full stale keyspace presents exactly as a blank
+            // one. Frames only add and overwrite — streaming can never
+            // remove what the replica holds and this primary does not.
+            // Only a snapshot REPLACES a keyspace.
+            eprintln!(
+                "kevy: replica fd {} generation {} != feed generation {feed_gen} \
+                 (sent_offset {sent_offset}); shipping snapshot",
+                self.replicas[idx].fd, generation,
+            );
+            if let Err(e) = self.start_snapshot_ship(idx, feed_gen, primary_next) {
                 eprintln!(
-                    "kevy: replica fd {} generation {} != feed generation {feed_gen} \
-                     (sent_offset {sent_offset}); shipping snapshot",
-                    self.replicas[idx].fd, generation,
+                    "kevy: replica fd {} gen-fence ship trigger failed: {e}; dropping link",
+                    self.replicas[idx].fd,
                 );
-                if let Err(e) = self.start_snapshot_ship(idx, feed_gen, primary_next) {
-                    eprintln!(
-                        "kevy: replica fd {} gen-fence ship trigger failed: {e}; dropping link",
-                        self.replicas[idx].fd,
-                    );
-                    self.replicas[idx].close();
-                }
-                return;
+                self.replicas[idx].close();
             }
+            return;
         }
         if sent_offset == primary_next {
             return; // caught up — EXACTLY equal only. An offset AHEAD
@@ -329,9 +351,21 @@ impl<C: Commands> Shard<C> {
         let ReplicaState::Streaming { ref replica_id, .. } = self.replicas[idx].state else {
             // Defensive: only Streaming replicas should reach the
             // TooOld branch in fill_streaming_output.
+            if crate::repl_trace() {
+                crate::repl_trace_line(format_args!(
+                    "shard {} fd {} ship SKIPPED: conn not Streaming",
+                    self.id, self.replicas[idx].fd,
+                ));
+            }
             return Ok(());
         };
         let replica_id = replica_id.clone();
+        if crate::repl_trace() {
+            crate::repl_trace_line(format_args!(
+                "shard {} fd {} ship begin: gen {generation} ack_offset {ack_offset}",
+                self.id, self.replicas[idx].fd,
+            ));
+        }
         let view = self.store.collect_snapshot();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::Builder::new()
@@ -442,6 +476,12 @@ impl<C: Commands> Shard<C> {
             // Snapshot fully chunked — emit the end marker and flip
             // state to Streaming so the next pump fills from the
             // backlog at `ack_offset`.
+            if crate::repl_trace() {
+                crate::repl_trace_line(format_args!(
+                    "shard {} fd {} ship end: gen {generation} ack_offset {ack_offset}",
+                    self.id, conn.fd,
+                ));
+            }
             conn.output.extend_from_slice(&encode_snapshot_end(ack_offset));
             if let ReplicaState::SnapshotShipping { replica_id, .. } = &conn.state {
                 let rid = replica_id.clone();

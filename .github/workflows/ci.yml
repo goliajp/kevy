@@ -124,6 +124,12 @@ jobs:
       - name: doc i18n (a translation must not fall behind its English chapter)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_doc_i18n.py
+      # An ordering mistake here is only observable at tag time, when
+      # half the chain is already on crates.io and cannot be unpublished
+      # — the v5.0.0 release paid for two of them with retags.
+      - name: publish order (the release chain is a real topological order)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python3 tools/check_publish_order.py
       - name: site commands (every RESP example on the site actually runs)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |

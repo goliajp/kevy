@@ -704,7 +704,12 @@ fn reconnect_within_backlog_resumes_no_snapshot() {
         if replica.last_offset.load(std::sync::atomic::Ordering::Relaxed) >= 3 { break; }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    assert_eq!(replica.snapshot_count(), 0, "initial connection should not snapshot");
+    // A first connection claims no generation, and a claim-less cursor
+    // is answered with a snapshot — the primary cannot see what the
+    // peer already holds, and frames can add but never remove. So the
+    // join costs exactly one ship, and the subject of this test is that
+    // the RECONNECT adds no second one.
+    assert_eq!(replica.snapshot_count(), 1, "the initial join ships once");
 
     // Disconnect the runner (replica RT stays up).
     replica.stop_runner();
@@ -731,8 +736,8 @@ fn reconnect_within_backlog_resumes_no_snapshot() {
         "replica didn't catch up to offset 6"
     );
     assert_eq!(
-        replica.snapshot_count(), 0,
-        "reconnect-within-backlog must NOT trigger a snapshot ship"
+        replica.snapshot_count(), 1,
+        "reconnect-within-backlog must NOT trigger a SECOND snapshot ship"
     );
 
     drop(writer);
@@ -794,7 +799,7 @@ fn reconnect_outside_backlog_triggers_snapshot() {
         if replica.last_offset.load(std::sync::atomic::Ordering::Relaxed) >= 3 { break; }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    assert_eq!(replica.snapshot_count(), 0);
+    assert_eq!(replica.snapshot_count(), 1, "the initial join ships once");
 
     replica.stop_runner();
 
@@ -812,12 +817,13 @@ fn reconnect_outside_backlog_triggers_snapshot() {
     // resume path returns TooOld → primary ships a snapshot.
     replica.start_runner();
     for _ in 0..400 {
-        if replica.snapshot_count() > 0 { break; }
+        if replica.snapshot_count() > 1 { break; }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     assert!(
-        replica.snapshot_count() >= 1,
-        "reconnect-outside-backlog must trigger a snapshot ship (got count={})",
+        replica.snapshot_count() >= 2,
+        "reconnect-outside-backlog must trigger a snapshot ship of its own, \
+         on top of the join's (got count={})",
         replica.snapshot_count(),
     );
 

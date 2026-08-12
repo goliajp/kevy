@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Upgrading from 5.0 to 5.1 — kevy</title>
+<meta name="description" content="The short version: stop the 5.0 server, start the 5.1 binary on the same data directory. No config changes, no wire changes, no client changes. The release gate replays this proced">
+<link rel="stylesheet" href="../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../">kevy<span class="v">5.0</span></a>
+    <nav class="nav">
+      <a href="../../docs/" aria-current="page">Docs</a>
+      <a href="../../docs/commands/">Commands</a>
+      <a href="../../benchmarks/">Benchmarks</a>
+      <a href="../../play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../docs/search-index.json" data-root="../../">
+        <input type="search" placeholder="Search docs…" aria-label="Search docs…" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../docs/upgrading-5.0-to-5.1/" aria-current="page">EN</a><a href="../../zh/docs/upgrading-5.0-to-5.1/">中文</a><a href="../../ja/docs/upgrading-5.0-to-5.1/">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell has-toc">
+  <aside class="side"><p class="side-h">Getting started</p><ul><li><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a></li><li><a href="../../docs/cookbook/">The RDS→kevy modeling cookbook</a></li><li><a href="../../docs/persistence/">Persistence</a></li><li><a href="../../docs/tuning/">Tuning kevy</a></li></ul><p class="side-h">Running it</p><ul><li><a href="../../docs/upgrading-5.0-to-5.1/" aria-current="page">Upgrading from 5.0 to 5.1</a></li><li><a href="../../docs/upgrading-4-to-5/">Upgrading from 4.x to 5.0</a></li><li><a href="../../docs/replication/">Replication</a></li><li><a href="../../docs/availability/">Availability</a></li><li><a href="../../docs/cluster/">Cluster</a></li><li><a href="../../docs/tiering/">Transparent tiering ([tiering] / with_tier_budget)</a></li><li><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a></li><li><a href="../../docs/alloc/">kevy-alloc — the opt-in allocator: what it buys, what it costs</a></li><li><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a></li><li><a href="../../docs/async/">Async client</a></li></ul><p class="side-h">Working with data</p><ul><li><a href="../../docs/indexes/">Secondary indexes (IDX. / idx_)</a></li><li><a href="../../docs/tables/">Tables (TABLE. / table_)</a></li><li><a href="../../docs/table-migration/">Migrating hand-maintained indexes to tables</a></li><li><a href="../../docs/vector-search/">Vector search (KIND ann)</a></li><li><a href="../../docs/text-search/">Full-text search (KIND text)</a></li><li><a href="../../docs/views/">Views (VIEW. / view_)</a></li><li><a href="../../docs/cdc/">CDC — the change feed (FEED. / changes_since)</a></li><li><a href="../../docs/pubsub/">Pub/sub</a></li><li><a href="../../docs/lua/">Lua scripting</a></li></ul><p class="side-h">Embedding it</p><ul><li><a href="../../docs/wasm/">kevy on WebAssembly</a></li><li><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a></li><li><a href="../../docs/iot/">kevy on IoT devices</a></li></ul><p class="side-h">Reference</p><ul><li><a href="../../docs/error-replies/">Error reply catalog</a></li><li><a href="../../docs/rds-workloads/">RDS workloads on kevy</a></li><li><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></li><li><a href="../../docs/UPGRADING/">Upgrading kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../docs/commands/">All 188 commands</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>Upgrading from 5.0 to 5.1</h1></div>
+<p>The short version: <b>stop the 5.0 server, start the 5.1 binary on the same data directory.</b> No config changes, no wire changes, no client changes. The release gate replays this procedure in both directions, including a mixed-version primary/replica pair, before every tag.</p>
+<p><b>Upgrade sooner rather than later if you use compression or value logging.</b> 5.0's encoder can write a compressed frame that 5.0's own decoder rejects after compaction — a cold value that reads back as corrupt. 5.1 fixes the encoder and teaches the decoder to rescue the frames 5.0 already put on disk. Details below.</p>
+<h2 id="why-this-release-exists">Why this release exists</h2>
+<ul><li><b>A 5.0 read hazard is repaired.</b> When a dictionary carried a shared Huffman table, <code>kevy-compress</code> could tag a literal-only frame as if it used dictionary matches. Nothing detects it at write time (the CRC is over the bytes that were written), so the failure surfaces later, on the compaction path, as a decode error on a value that was stored successfully. 5.1 fixes the tag AND adds an explicit compatibility arm that decodes the mis-tagged frames 5.0 has already written. Frames written by 5.1 stay readable by 5.0.</li><li><b>Giant collections stop stalling their shard.</b> Lists, hashes, sets and sorted sets past ~16k elements now copy on write at element granularity. A write that lands while a rewrite or snapshot pins the value clones one segment (about a millisecond, independent of collection size) instead of the whole value — which used to cost 0.35–9.5 s and briefly double that collection's memory.</li><li><b><code>appendfsync always</code> stops blocking the reactor.</b> Both reactors now group-commit: on io_uring the reply is gated on the fsync completion, and on epoll/kqueue a per-shard writer lane does the same. Measured on ext4, 50 concurrent connections: 353 → 8,273 writes/s on io_uring, 478 → 10,540 on epoll. The durability contract is unchanged — a reply still means the write is on disk.</li><li><b>Failover convergence is fixed.</b> A replica retargeted at a newly promoted primary could stay attached and idle forever: link up, heartbeats flowing, no resync in progress, and the post-failover writes never arriving. See the replication section below.</li></ul>
+<h2 id="what-carries-over-unchanged">What carries over unchanged</h2>
+<ul><li><b>Data files.</b> 5.1 opens 5.0 directories as-is, and 5.0 re-opens a directory last written by 5.1 (both directions are gated). Do a clean shutdown before switching either way.</li><li><b>Wire protocol, commands, and client contracts.</b> Nothing was removed or re-typed. Existing clients need no change and no rebuild.</li><li><b>Config files and flags.</b> Every 5.0 key is accepted, with the same defaults.</li></ul>
+<h2 id="what-behaves-differently">What behaves differently</h2>
+<h3 id="a-replica-that-reconnects-gets-one-snapshot-resync">A replica that reconnects gets one snapshot resync</h3>
+<p>A replica whose replication cursor has no continuity claim — the state after any retarget, <code>REPLICAOF</code>, or a version change that moves the feed's generation — is now answered with a full snapshot rather than a replay from the start of the current offset space. This is the only answer that converges a replica whose contents the primary cannot see: a stream of frames can add and overwrite keys, but it can never remove a key the replica holds and the primary does not.</p>
+<p>What you will observe once, per shard, on the first connection after the upgrade:</p>
+<figure class="code"><pre><code class="lang-text">kevy: replica fd 42 generation 6843605247850762 != feed generation
+      4198793490690396 (sent_offset 0); shipping snapshot</code></pre></figure>
+<p>That is expected and self-healing. It also means a replica's local divergence is discarded rather than carried forward, which is the documented contract for a forked history.</p>
+<p>While that resync lands, the replica answers reads with <code>-LOADING</code>, as it already did for any full resync — its keyspace is being replaced, so there is no consistent answer to give. <code>PING</code> stays exempt. Size the window by your dataset, and drain a replica from your read pool before restarting it if you cannot tolerate the gap.</p>
+<p>The bug this closes: promotion opens writes the instant the election resolves, but each shard fences its replication offsets on its own tick. A write accepted inside that window was destroyed by the fence, and a replica attaching afterwards was told it was already caught up — so the write existed in the primary's keyspace and in no stream, with the link reporting perfect health.</p>
+<h3 id="appendfsync-always-shares-fsync-rounds"><code>appendfsync always</code> shares fsync rounds</h3>
+<p>Under <code>always</code>, concurrent connections now share fsync rounds (group commit) instead of each paying its own. A single sequential client sees a modest slowdown — its write now waits for a queued fsync and its completion rather than an inline one — while any concurrent load gains an order of magnitude. <code>KEVY_AOF_OFFLOAD=0</code> restores the classic synchronous path on either reactor if you need the old shape.</p>
+<h3 id="feed-generations-are-random-identities">Feed generations are random identities</h3>
+<p>A feed generation is now a random 53-bit history identity rather than a counter, so two nodes can never call two different histories by the same name. Anything that printed or stored a generation (<code>REPL.TOKEN</code>, <code>REPL.WAIT</code>, <code>FEED.TAIL</code>) will show large unordered numbers. They are identities: compare them for equality, never for order.</p>
+<h2 id="recommended-procedure">Recommended procedure</h2>
+<ol><li>Take a backup: clean shutdown (or <code>BGSAVE</code> + copy), then copy the data directory.</li><li>Upgrade replicas first, then the primary. A mixed pair works in both directions; each replica resyncs once when its cursor's generation stops matching.</li><li>Verify: <code>INFO replication</code> on each replica (link up, offsets advancing), <code>INFO persistence</code>, <code>DBSIZE</code> against expectations, and your application's own smoke test.</li><li>Rollback, if needed: stop 5.1 cleanly, start 5.0 on the same directory. Values written by 5.1 remain readable.</li></ol></main>
+  <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#why-this-release-exists">Why this release exists</a></li><li class="l2"><a href="#what-carries-over-unchanged">What carries over unchanged</a></li><li class="l2"><a href="#what-behaves-differently">What behaves differently</a></li><li class="l3"><a href="#a-replica-that-reconnects-gets-one-snapshot-resync">A replica that reconnects gets one snapshot resync</a></li><li class="l3"><a href="#appendfsync-always-shares-fsync-rounds">appendfsync always shares fsync rounds</a></li><li class="l3"><a href="#feed-generations-are-random-identities">Feed generations are random identities</a></li><li class="l2"><a href="#recommended-procedure">Recommended procedure</a></li></ul></aside>
+</div>
+
+<script src="../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

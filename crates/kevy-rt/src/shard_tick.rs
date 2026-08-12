@@ -123,6 +123,19 @@ impl<C: Commands> Shard<C> {
             return;
         }
         self.seen_promotion_epoch = Some(epoch);
+        if crate::repl_trace()
+            && let Some(f) = self.replicate.as_ref()
+        {
+            crate::repl_trace_line(format_args!(
+                "shard {} promotion bump: pre-bump gen {} next {} \
+                 buffered {} frame(s), conns {}",
+                self.id,
+                f.generation(),
+                f.source().next_offset(),
+                f.source().len(),
+                self.replicas_brief(),
+            ));
+        }
         if let Some(f) = self.replicate.as_mut() {
             f.bump_generation();
             let g = f.generation();

@@ -209,6 +209,12 @@ fn make_topology_callback(
                 // promotion counter → per-shard feed-gen fence.
                 replication.promote_stop_runners();
                 eprintln!("kevy: elect — this node is PRIMARY (writes open)");
+                if kevy_rt::repl_trace() {
+                    kevy_rt::repl_trace_line(format_args!(
+                        "elect: promotion epoch bumped — writes open NOW, \
+                         per-shard feed bumps trail on each shard's tick"
+                    ));
+                }
             }
             (Role::Replica, Some(pid)) if pid != my_id => {
                 follow_new_primary(&replication, &member_table, &pid);
@@ -233,7 +239,14 @@ fn follow_new_primary(
     };
     let upstream = format!("{host}:{}", cport + 10_000);
     match crate::replication::retarget_upstream(replication, &upstream) {
-        Ok(()) => eprintln!("kevy: elect — following new primary '{pid}' at {upstream}"),
+        Ok(()) => {
+            eprintln!("kevy: elect — following new primary '{pid}' at {upstream}");
+            if kevy_rt::repl_trace() {
+                kevy_rt::repl_trace_line(format_args!(
+                    "elect: runners respawned toward {upstream} with reset cursors"
+                ));
+            }
+        }
         Err(e) => eprintln!("kevy: elect — retarget to '{pid}' ({upstream}) failed: {e}"),
     }
 }

@@ -214,6 +214,7 @@ fn drain_session(
     data_gen: &mut u64,
 ) -> u64 {
     set_socket_slot(socket_slot, client.socket_handle().ok());
+    crate::replica_trace::trace_session_start(runner_slot, client, *data_gen);
     let from_offset = match target {
         Target::PerShard(sender) => {
             drain_client(client, sender, stop, runner_slot, progress, data_gen)
@@ -235,6 +236,7 @@ fn set_socket_slot(slot: &Mutex<Option<TcpStream>>, value: Option<TcpStream>) {
         *guard = value;
     }
 }
+
 
 /// Tracks this runner's snapshot-ship window against the shared
 /// [`ReplicaProgress`] loading count: raised at `SnapshotBegin`,
@@ -312,6 +314,7 @@ fn drain_client(
     }
     let mut last_ack = std::time::Instant::now();
     let mut loading = LoadingGuard::new(Arc::clone(progress));
+    let mut traced_first_frame = false;
     while !stop.load(Ordering::Relaxed) {
         match client.next_event() {
             Some(Ok(ReplicaEvent::Ping { generation, primary_offset })) => {
@@ -326,12 +329,10 @@ fn drain_client(
                 if matches!(event, ReplicaEvent::SnapshotEnd { .. }) {
                     *data_gen = ack_gen;
                 }
-                let gate = loading.observe(&event);
-                let mut apply = event_to_apply(event, &mut from_offset);
-                if let ReplicaApply::SnapshotEnd { gate: g, .. } = &mut apply {
-                    *g = gate;
-                }
-                if sender.send(apply).is_err() {
+                crate::replica_trace::trace_session_event(
+                    runner_slot, &event, &mut traced_first_frame,
+                );
+                if forward_event(event, &mut from_offset, &mut loading, sender).is_err() {
                     // Receiver dropped — the shard / runtime is gone;
                     // the runner should also exit.
                     return from_offset;
@@ -346,6 +347,24 @@ fn drain_client(
         }
     }
     from_offset
+}
+
+/// Turn one wire event into an apply and hand it to the shard,
+/// carrying the loading gate on a `SnapshotEnd` so the `-LOADING`
+/// window closes only once the shard has finished loading. `Err` means
+/// the receiver is gone.
+fn forward_event(
+    event: ReplicaEvent,
+    from_offset: &mut u64,
+    loading: &mut LoadingGuard,
+    sender: &ReplicaInboxSender,
+) -> Result<(), ()> {
+    let gate = loading.observe(&event);
+    let mut apply = event_to_apply(event, from_offset);
+    if let ReplicaApply::SnapshotEnd { gate: g, .. } = &mut apply {
+        *g = gate;
+    }
+    sender.send(apply).map_err(|_| ())
 }
 
 /// The 100 ms ack cadence: report the applied position upstream (and

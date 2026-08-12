@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>从 5.0 升级到 5.1 — kevy</title>
+<meta name="description" content="一句话版本：停掉 5.0 的服务器，用 5.1 的二进制在同一个数据目录上 启动。不用改配置、不改 wire、不改客户端。每次打 tag 前，发布门都会 把这套流程双向重演一遍，包括一对混版本的 primary/replica。">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../zh/">kevy<span class="v">5.0</span></a>
+    <nav class="nav">
+      <a href="../../../zh/docs/" aria-current="page">文档</a>
+      <a href="../../../zh/docs/commands/">命令</a>
+      <a href="../../../zh/benchmarks/">基准</a>
+      <a href="../../../zh/play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../../zh/docs/search-index.json" data-root="../../../zh/">
+        <input type="search" placeholder="搜索文档……" aria-label="搜索文档……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../../docs/upgrading-5.0-to-5.1/">EN</a><a href="../../../zh/docs/upgrading-5.0-to-5.1/" aria-current="page">中文</a><a href="../../../ja/docs/upgrading-5.0-to-5.1/">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell has-toc">
+  <aside class="side"><p class="side-h">上手</p><ul><li><a href="../../../zh/docs/designing-on-kevy/">在 kevy 上设计应用</a></li><li><a href="../../../zh/docs/cookbook/">RDS→kevy 建模 cookbook</a></li><li><a href="../../../zh/docs/persistence/">持久化</a></li><li><a href="../../../zh/docs/tuning/">调优 kevy</a></li></ul><p class="side-h">运行</p><ul><li><a href="../../../zh/docs/upgrading-5.0-to-5.1/" aria-current="page">从 5.0 升级到 5.1</a></li><li><a href="../../../zh/docs/upgrading-4-to-5/">从 4.x 升级到 5.0</a></li><li><a href="../../../zh/docs/replication/">复制</a></li><li><a href="../../../zh/docs/availability/">可用性</a></li><li><a href="../../../zh/docs/cluster/">集群</a></li><li><a href="../../../zh/docs/tiering/">透明分层存储（[tiering] / with_tier_budget）</a></li><li><a href="../../../zh/docs/accept-shards/">--accept-shards N——把稀疏连接收拢到部分 shard 上</a></li><li><a href="../../../zh/docs/alloc/">kevy-alloc——可选分配器：它买到什么、代价是什么</a></li><li><a href="../../../zh/docs/uds/">Unix-domain socket（UDS）传输</a></li><li><a href="../../../zh/docs/async/">异步客户端</a></li></ul><p class="side-h">数据</p><ul><li><a href="../../../zh/docs/indexes/">二级索引（IDX. / idx_）</a></li><li><a href="../../../zh/docs/tables/">表（TABLE. / table_）</a></li><li><a href="../../../zh/docs/table-migration/">从手工维护的索引迁移到表</a></li><li><a href="../../../zh/docs/vector-search/">向量检索（KIND ann）</a></li><li><a href="../../../zh/docs/text-search/">全文检索（KIND text）</a></li><li><a href="../../../zh/docs/views/">视图（VIEW. / view_）</a></li><li><a href="../../../zh/docs/cdc/">CDC——变更流（FEED. / changes_since）</a></li><li><a href="../../../zh/docs/pubsub/">Pub/sub</a></li><li><a href="../../../zh/docs/lua/">Lua 脚本</a></li></ul><p class="side-h">嵌入</p><ul><li><a href="../../../zh/docs/wasm/">kevy 上 WebAssembly</a></li><li><a href="../../../zh/docs/embedded-listener/">Embedded 只读 RESP listener</a></li><li><a href="../../../zh/docs/iot/">kevy 跑在 IoT 设备上</a></li></ul><p class="side-h">参考</p><ul><li><a href="../../../zh/docs/error-replies/">错误回复目录</a></li><li><a href="../../../zh/docs/rds-workloads/">在 kevy 上跑 RDS 负载</a></li><li><a href="../../../zh/docs/migration/">迁移——playbook 与工具链</a></li><li><a href="../../../zh/docs/UPGRADING/">升级 kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../zh/docs/commands/">全部 188 个命令</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>从 5.0 升级到 5.1</h1></div>
+<p>一句话版本：<b>停掉 5.0 的服务器，用 5.1 的二进制在同一个数据目录上 启动</b>。不用改配置、不改 wire、不改客户端。每次打 tag 前，发布门都会 把这套流程双向重演一遍，包括一对混版本的 primary/replica。</p>
+<p><b>如果你用了压缩或 value log，请尽早升级。</b>5.0 的编码器可能写出一个 连 5.0 自己的解码器都拒收的帧——compaction 之后，一个冷值会读回 corrupt。5.1 修了编码器，并教解码器把 5.0 已经写到盘上的那些帧救回来。 细节见下。</p>
+<h2 id="这个版本为什么存在">这个版本为什么存在</h2>
+<ul><li><b>修掉 5.0 的一个读取隐患。</b>当字典携带共享 Huffman 表时， <code>kevy-compress</code> 可能把一个纯字面量帧标记成"用了字典匹配"。写入时 什么都察觉不到（CRC 校验的是已经写下的字节），故障要到后来、在 compaction 路径上，以"一个明明存成功了的值解码失败"的形式浮出来。 5.1 修正了 tag，并额外加了一条显式兼容分支，把 5.0 已经写下的错标 帧解出来。5.1 写的帧，5.0 依然读得了。</li><li><b>巨型集合不再卡住它所在的 shard。</b>list、hash、set、sorted-set 超过约 1.6 万元素后按元素粒度写时复制。rewrite 或快照钉住值期间的 写入只克隆一个段（约 1 毫秒，与集合总尺寸无关），而不是整个值—— 后者过去要付 0.35〜9.5 秒，并让该集合的常驻内存短暂翻倍。</li><li><b><code>appendfsync always</code> 不再阻塞 reactor。</b>两个 reactor 现在都做 组提交：io_uring 上回复由 fsync 完成来放行，epoll/kqueue 上由每 shard 一条 writer lane 做同样的事。ext4、50 并发连接实测：io_uring 353 → 8,273 writes/s，epoll 478 → 10,540。耐久性契约不变——回复 依然意味着"已经落盘"。</li><li><b>修好了 failover 的收敛。</b>切换到新晋升 primary 的 replica 可能 永远挂着不动：link up、心跳在走、也没有 resync 在进行，但 failover 之后的写入就是不到。见下面的复制一节。</li></ul>
+<h2 id="原样继承的东西">原样继承的东西</h2>
+<ul><li><b>数据文件。</b>5.1 直接打开 5.0 的目录，5.0 也能重新打开 5.1 最后 写过的目录（两个方向都有门禁把关）。无论往哪个方向切，先做一次 干净停机。</li><li><b>wire 协议、命令、客户端契约。</b>没有删除、没有改类型。现有客户端 不需要改动，也不需要重新构建。</li><li><b>配置文件与命令行开关。</b>5.0 的每个键都被接受，默认值不变。</li></ul>
+<h2 id="行为有变化的地方">行为有变化的地方</h2>
+<h3 id="重连的-replica-会做一次快照-resync">重连的 replica 会做一次快照 resync</h3>
+<p>复制游标拿不出连续性凭据的 replica——retarget、<code>REPLICAOF</code>，或者任何 让 feed generation 移动的版本变更之后的状态——现在会收到一份完整快照， 而不是从当前 offset 空间起点的重放。因为对一个 primary 看不见其内容的 replica，这是唯一能让它收敛的答复：帧流能新增和覆盖键，却永远删不掉 replica 有而 primary 没有的键。</p>
+<p>升级后第一次连接时，你会在每个 shard 上看到一次：</p>
+<figure class="code"><pre><code class="lang-text">kevy: replica fd 42 generation 6843605247850762 != feed generation
+      4198793490690396 (sent_offset 0); shipping snapshot</code></pre></figure>
+<p>这是预期行为，且能自愈。它同时意味着 replica 本地的分叉会被丢弃而不是 带着走——这正是分叉历史的既定契约。</p>
+<p>这次 resync 落地期间，replica 对读请求回 <code>-LOADING</code>——任何全量 resync 本来就是这样：它的键空间正在被替换，给不出一个自洽的答案。<code>PING</code> 依然 豁免。窗口长短取决于数据集大小；如果你不能容忍这段读不可用，请在重启 该 replica 之前先把它从读池里摘掉。</p>
+<p>它关掉的 bug：选举一落定，晋升就立刻开放写入，但每个 shard 要等自己的 tick 才给复制 offset 落栅栏。在那个窗口里被接受的写入会被栅栏销毁， 而之后接上来的 replica 被告知"你已经追平了"——于是这条写入存在于 primary 的键空间里，却不存在于任何一条流里，而链路一直报告自己完全 健康。</p>
+<h3 id="appendfsync-always-共享-fsync-轮次"><code>appendfsync always</code> 共享 fsync 轮次</h3>
+<p><code>always</code> 下，并发连接现在共享 fsync 轮次（组提交），而不是各付各的。 单个串行客户端会略慢一点——它的写入现在要等一次排队的 fsync 及其 完成，而不是内联的那次——任何并发负载则快一个数量级。如果你需要旧的 形状，<code>KEVY_AOF_OFFLOAD=0</code> 在两种 reactor 上都能恢复经典同步路径。</p>
+<h3 id="feed-generation-变成随机身份">feed generation 变成随机身份</h3>
+<p>feed generation 现在是随机的 53 位历史身份，不再是计数器，所以两个 节点再也不可能用同一个名字称呼两段不同的历史。任何显示或存储过 generation 的地方（<code>REPL.TOKEN</code>、<code>REPL.WAIT</code>、<code>FEED.TAIL</code>）都会显示 又大又无序的数字。它们是身份：只做相等比较，永远不要比大小。</p>
+<h2 id="推荐流程">推荐流程</h2>
+<ol><li>先备份：干净停机（或 <code>BGSAVE</code> + 拷贝），然后复制数据目录。</li><li>先升级 replica，再升级 primary。混版本的一对在两个方向都能工作； 每个 replica 在它的游标 generation 对不上的那一刻 resync 一次。</li><li>验证：每个 replica 的 <code>INFO replication</code>（link up、offset 在前进）、 <code>INFO persistence</code>、<code>DBSIZE</code> 对照预期，以及你自己应用的冒烟测试。</li><li>需要回滚就：干净停掉 5.1，在同一目录上启动 5.0。5.1 写下的值照样 读得出来。</li></ol></main>
+  <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#这个版本为什么存在">这个版本为什么存在</a></li><li class="l2"><a href="#原样继承的东西">原样继承的东西</a></li><li class="l2"><a href="#行为有变化的地方">行为有变化的地方</a></li><li class="l3"><a href="#重连的-replica-会做一次快照-resync">重连的 replica 会做一次快照 resync</a></li><li class="l3"><a href="#appendfsync-always-共享-fsync-轮次">appendfsync always 共享 fsync 轮次</a></li><li class="l3"><a href="#feed-generation-变成随机身份">feed generation 变成随机身份</a></li><li class="l2"><a href="#推荐流程">推荐流程</a></li></ul></aside>
+</div>
+
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>
