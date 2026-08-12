@@ -349,6 +349,7 @@ impl<C: Commands> Shard<C> {
                     // WAIT / REPL.WAIT deadline sweep — same
                     // cadence as the BLOCK timeout reactor above.
                     self.tick_repl_waiters();
+                    slow.mark("t:timeouts");
                     let gap = now.duration_since(last_tick);
                     if gap >= iv {
                         // Tail observability: how late is this tick? A
@@ -359,13 +360,19 @@ impl<C: Commands> Shard<C> {
                         self.commands
                             .on_tick_gap((gap - iv).as_micros() as u64);
                         self.commands.on_shard_tick(&mut self.store);
+                        slow.mark("t:shard_tick");
                         self.drain_tick_frames();
                         self.drain_store_notify();
+                        slow.mark("t:drains");
                         self.drain_expired_keys();
+                        slow.mark("t:expired");
                         self.apply_live_runtime_config(&mut tick_interval);
+                        slow.mark("t:live_cfg");
                         self.epoll_tick_persist();
+                        slow.mark("t:persist");
                         self.tick_conn_gauge();
                         self.enforce_output_limit();
+                        slow.mark("t:gauge_limit");
                         // Replication slot expiry:
                         // drop slots whose reconnect window has passed.
                         // No-op short-circuits when replication is off or
