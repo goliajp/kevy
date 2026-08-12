@@ -127,6 +127,7 @@ mod shard_lifecycle;
 mod shard_run;
 mod shard_tick;
 mod types;
+mod aof_writer;
 #[cfg(target_os = "linux")]
 mod uring_aof;
 #[cfg(target_os = "linux")]

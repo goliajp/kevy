@@ -284,6 +284,10 @@ impl<C: Commands> Shard<C> {
             self.aof_offload.want_restructure = true;
             return;
         }
+        if !self.epoll_aof_restructure_ready() {
+            self.aof_lane.want_restructure = true;
+            return;
+        }
         if self.persist.busy()
             || self
                 .aof

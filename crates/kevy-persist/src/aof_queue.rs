@@ -69,6 +69,26 @@ impl Aof {
         self.queue.as_ref().map(|_| self.file.get_ref().as_raw_fd())
     }
 
+    /// Put a taken-but-unwritten chunk BACK at the queue's front (the
+    /// dead-writer reclaim path): the chunk's records precede anything
+    /// queued since it was taken, so order is preserved and the honest
+    /// synchronous fallbacks (`flush_queued`/`sync_now`) then land
+    /// every byte exactly once.
+    pub fn requeue_front(&mut self, bytes: Vec<u8>) {
+        if let Some(q) = &mut self.queue {
+            // Undo the take's offset advance — the next take (or
+            // flush_queued) re-counts these bytes.
+            self.queued_offset = self.queued_offset.saturating_sub(bytes.len() as u64);
+            if q.is_empty() {
+                *q = bytes;
+            } else {
+                let mut joined = bytes;
+                joined.extend_from_slice(q);
+                *q = joined;
+            }
+        }
+    }
+
     /// A cloned handle to the live log file (the writer-thread lane's
     /// target — S3). The clone shares the O_APPEND file description,
     /// so the thread's sequential `write_all`s land exactly where the
