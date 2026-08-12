@@ -279,7 +279,7 @@ impl<C: Commands> Runtime<C> {
             shards.push(Shard {
                 #[cfg(target_os = "linux")]
                 aof_offload: Default::default(),
-                #[cfg(target_os = "linux")]
+                aof_lane: Default::default(),
                 held_responses: Vec::new(),
                 rewrite_handoff: None,
                 rewrite_rate_mark: None,

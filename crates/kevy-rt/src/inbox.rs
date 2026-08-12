@@ -82,10 +82,12 @@ impl<C: Commands> Shard<C> {
         // from this pipelined read batch buffer their AOF appends and fsync
         // once in `aof_end_group`, BEFORE `flush_conn` sends their replies.
         // No transaction markers — a pipelined batch is not a transaction.
+        let w0 = self.always_hold_w0();
         self.aof_begin_fsync_window();
         let outcome = self.dispatch_batch(conn_id, &input_buf);
         // fsync the batch's buffered writes before any reply leaves the shard.
         self.aof_end_group()?;
+        self.epoll_stamp_hold(w0, conn_id);
         if outcome.conn_gone {
             // Connection was closed mid-batch; drop the rest of the buf.
             return Ok(());
