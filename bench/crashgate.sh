@@ -220,38 +220,45 @@ else
         || pending 1 T5 "payload-flip/integrity" "$tainted tainted value(s) replayed silently — no on-disk integrity check"
 fi
 
-# S — SERVER-path always (the S2 verification surface): a real kevy
-# process, appendfsync=always, SIGKILLed mid-write. Every key whose
-# reply the client RECEIVED must survive the restart — the durability
-# contract the reply itself asserts. Today's synchronous
-# fsync-before-reply path is the baseline; the S2 CQE-gated reply
-# path must keep this cell green. (The append-always/window-always
-# cells above drive kevy-embedded and never touch the reactor.)
-dir="$WORK/srvalways"; mkdir -p "$dir"
-cat > "$dir/kevy.toml" <<'TOML'
+# S — SERVER-path always: a real kevy process, appendfsync=always,
+# SIGKILLed mid-write. Every key whose reply the client RECEIVED must
+# survive the restart — the durability contract the reply itself
+# asserts. Runs twice: the platform-default reactor (io_uring on the
+# Linux boxes — the S2 CQE-gated reply path) and an explicit
+# KEVY_IO_URING=0 cell for the epoll/kqueue lane (the S3 writer-thread
+# verification surface; today's synchronous fsync-before-reply path is
+# its baseline). The append-always/window-always cells above drive
+# kevy-embedded and never touch a reactor.
+server_always_cell() { # $1=label $2=KEVY_IO_URING value ("" = platform default)
+    local label=$1 uring_env=$2
+    local dir="$WORK/srvalways-$label"; mkdir -p "$dir"
+    cat > "$dir/kevy.toml" <<'TOML'
 [persistence]
 aof = true
 appendfsync = "always"
 TOML
-SPID=""
-for _attempt in 1 2 3 4 5; do
-    port=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')
-    "$SRV" --port "$port" --dir "$dir" --config "$dir/kevy.toml" >"$dir/server1.log" 2>&1 &
-    SPID=$!
-    up=""
-    for _ in $(seq 40); do
-        if python3 -c "import socket;socket.create_connection(('127.0.0.1',$port),0.2).close()" 2>/dev/null; then up=1; break; fi
-        kill -0 "$SPID" 2>/dev/null || break # lost the port race — retry
-        sleep 0.1
+    local SPID="" port up
+    for _attempt in 1 2 3 4 5; do
+        port=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')
+        env ${uring_env:+KEVY_IO_URING=$uring_env} \
+            "$SRV" --port "$port" --dir "$dir" --config "$dir/kevy.toml" >"$dir/server1.log" 2>&1 &
+        SPID=$!
+        up=""
+        for _ in $(seq 40); do
+            if python3 -c "import socket;socket.create_connection(('127.0.0.1',$port),0.2).close()" 2>/dev/null; then up=1; break; fi
+            kill -0 "$SPID" 2>/dev/null || break # lost the port race — retry
+            sleep 0.1
+        done
+        [ -n "$up" ] && break
+        wait "$SPID" 2>/dev/null; SPID=""
     done
-    [ -n "$up" ] && break
-    wait "$SPID" 2>/dev/null; SPID=""
-done
-if [ -z "$SPID" ]; then
-    verdict 1 "server-always/setup" "server never came up (5 port attempts)"
-else
+    if [ -z "$SPID" ]; then
+        verdict 1 "server-always-$label/setup" "server never came up (5 port attempts)"
+        return
+    fi
     ( sleep 2; kill -9 "$SPID" 2>/dev/null ) &
-    KILLER=$!
+    local KILLER=$!
+    local acked
     acked=$(python3 - "$port" <<'PYCLIENT'
 import socket, sys
 port = int(sys.argv[1])
@@ -274,12 +281,14 @@ PYCLIENT
 )
     wait "$KILLER" 2>/dev/null
     wait "$SPID" 2>/dev/null; SPID=""
-    "$SRV" --port "$port" --dir "$dir" --config "$dir/kevy.toml" >"$dir/server2.log" 2>&1 &
+    env ${uring_env:+KEVY_IO_URING=$uring_env} \
+        "$SRV" --port "$port" --dir "$dir" --config "$dir/kevy.toml" >"$dir/server2.log" 2>&1 &
     SPID=$!
     for _ in $(seq 150); do
         python3 -c "import socket;socket.create_connection(('127.0.0.1',$port),0.2).close()" 2>/dev/null && break
         sleep 0.2
     done
+    local survived
     survived=$(python3 - "$port" "$acked" <<'PYCHECK'
 import socket, sys
 port, acked = int(sys.argv[1]), int(sys.argv[2])
@@ -302,13 +311,15 @@ PYCHECK
 )
     kill -9 "$SPID" 2>/dev/null; wait "$SPID" 2>/dev/null
     if [ "${acked:-0}" -eq 0 ]; then
-        verdict 1 "server-always/setup" "client acked nothing before the kill"
+        verdict 1 "server-always-$label/setup" "client acked nothing before the kill"
     elif [ "${survived:-0}" -ge "$acked" ]; then
-        verdict 0 "server-always/loss-bound" "all $acked replied writes survived kill -9"
+        verdict 0 "server-always-$label/loss-bound" "all $acked replied writes survived kill -9"
     else
-        verdict 1 "server-always/loss-bound" "replied $acked but only ${survived:-0} survived — a reply outran its fsync"
+        verdict 1 "server-always-$label/loss-bound" "replied $acked but only ${survived:-0} survived — a reply outran its fsync"
     fi
-fi
+}
+server_always_cell auto ""
+server_always_cell epoll 0
 
 echo
 [ "$fail" -eq 0 ] && echo "crashgate: PASS (pending cells listed above gate the arc finish)" || echo "crashgate: FAIL"
