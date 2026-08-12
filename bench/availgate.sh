@@ -48,6 +48,14 @@ trap 'kill $PPID_ $RPID_ 2>/dev/null; rm -rf "$DIR"' EXIT
 
 fail() {
     echo "availgate: FAIL — $1"
+    # Crime-scene preservation: the EXIT trap rm -rfs $DIR, which
+    # destroys the node logs (and any probe output) exactly when they
+    # matter. KEVY_AVAILGATE_KEEP=<dir> copies the whole run dir out
+    # before the trap fires.
+    if [ -n "${KEVY_AVAILGATE_KEEP:-}" ] && [ -d "${KEVY_AVAILGATE_KEEP}" ]; then
+        SCENE="${KEVY_AVAILGATE_KEEP}/availgate-scene-$(date +%s)"
+        cp -r "$DIR" "$SCENE" 2>/dev/null && echo "availgate: crime scene kept at $SCENE"
+    fi
     # The crime scene, not just the verdict: a server that died at
     # startup says why on its own stderr, which a mute "never came up"
     # used to discard (one port-squatter and one Linux-only startup

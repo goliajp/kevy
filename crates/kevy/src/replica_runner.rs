@@ -214,6 +214,7 @@ fn drain_session(
     data_gen: &mut u64,
 ) -> u64 {
     set_socket_slot(socket_slot, client.socket_handle().ok());
+    crate::replica_trace::trace_session_start(runner_slot, client, *data_gen);
     let from_offset = match target {
         Target::PerShard(sender) => {
             drain_client(client, sender, stop, runner_slot, progress, data_gen)
@@ -235,6 +236,7 @@ fn set_socket_slot(slot: &Mutex<Option<TcpStream>>, value: Option<TcpStream>) {
         *guard = value;
     }
 }
+
 
 /// Tracks this runner's snapshot-ship window against the shared
 /// [`ReplicaProgress`] loading count: raised at `SnapshotBegin`,
@@ -312,6 +314,7 @@ fn drain_client(
     }
     let mut last_ack = std::time::Instant::now();
     let mut loading = LoadingGuard::new(Arc::clone(progress));
+    let mut traced_first_frame = false;
     while !stop.load(Ordering::Relaxed) {
         match client.next_event() {
             Some(Ok(ReplicaEvent::Ping { generation, primary_offset })) => {
@@ -326,6 +329,9 @@ fn drain_client(
                 if matches!(event, ReplicaEvent::SnapshotEnd { .. }) {
                     *data_gen = ack_gen;
                 }
+                crate::replica_trace::trace_session_event(
+                    runner_slot, &event, &mut traced_first_frame,
+                );
                 let gate = loading.observe(&event);
                 let mut apply = event_to_apply(event, &mut from_offset);
                 if let ReplicaApply::SnapshotEnd { gate: g, .. } = &mut apply {

@@ -78,6 +78,7 @@ mod elect_persist;
 mod ops;
 mod replica_runner;
 mod replica_runner_routed;
+mod replica_trace;
 mod state;
 mod tier_read;
 pub mod verb_meta;

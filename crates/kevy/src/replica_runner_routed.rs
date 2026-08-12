@@ -84,6 +84,7 @@ pub(crate) fn drain_client_routed(
     }
     let mut last_ack = std::time::Instant::now();
     let mut loading = LoadingGuard::new(Arc::clone(progress));
+    let mut traced_first_frame = false;
     while !stop.load(Ordering::Relaxed) {
         match client.next_event() {
             Some(Ok(ReplicaEvent::Ping { generation, primary_offset })) => {
@@ -98,6 +99,9 @@ pub(crate) fn drain_client_routed(
                 if matches!(event, ReplicaEvent::SnapshotEnd { .. }) {
                     *data_gen = ack_gen;
                 }
+                crate::replica_trace::trace_session_event(
+                    runner_slot, &event, &mut traced_first_frame,
+                );
                 let gate = loading.observe(&event);
                 if route_event(event, &mut from_offset, senders, gate).is_err() {
                     return from_offset;
