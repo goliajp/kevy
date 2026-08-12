@@ -25,7 +25,12 @@ fn main() {
     conn.set_nodelay(true).expect("nodelay");
     let mut buf = [0u8; 512];
 
-    let deadline = Instant::now() + Duration::from_secs(secs);
+    // Tick cadence is a RATE, so it needs two reads over a known
+    // window. The gap gauge alone is a high-water mark: one late tick
+    // and a chronically starved loop print the same number.
+    let ticks_before = read_stat(&mut conn, "reactor_ticks_total:");
+    let window_start = Instant::now();
+    let deadline = window_start + Duration::from_secs(secs);
     let mut rtts_us: Vec<u64> = Vec::with_capacity((secs as usize) * 1100);
     while Instant::now() < deadline {
         let t0 = Instant::now();
@@ -58,21 +63,28 @@ fn main() {
         let idx = ((rtts_us.len() as f64) * p).ceil() as usize;
         rtts_us[idx.clamp(1, rtts_us.len()) - 1]
     };
-    let reactor_gap = read_reactor_gap(&mut conn);
+    let elapsed = window_start.elapsed();
+    let reactor_gap = read_stat(&mut conn, "reactor_tick_gap_max_us:");
+    let ticks = read_stat(&mut conn, "reactor_ticks_total:").saturating_sub(ticks_before);
+    // Instance-wide ticks per second: every shard ticks on its own
+    // clock, so this is the housekeeping rate of the server as a whole.
+    let tick_hz = (ticks as f64) / elapsed.as_secs_f64();
     println!(
-        "tail-probe: n={} p50us={} p99us={} p999us={} maxus={} reactor_gap_us={}",
+        "tail-probe: n={} p50us={} p99us={} p999us={} maxus={} reactor_gap_us={} \
+ticks={} tick_hz={tick_hz:.1}",
         rtts_us.len(),
         pct(0.50),
         pct(0.99),
         pct(0.999),
         rtts_us.last().copied().unwrap_or(0),
         reactor_gap,
+        ticks,
     );
 }
 
-/// `INFO stats` → the reactor's own stall gauge, so the report carries
-/// both the client view and the server's self-observation.
-fn read_reactor_gap(conn: &mut TcpStream) -> u64 {
+/// `INFO stats` → one named `u64` line, so the report carries both the
+/// client view and the server's self-observation.
+fn read_stat(conn: &mut TcpStream, key: &str) -> u64 {
     conn.write_all(b"*2\r\n$4\r\nINFO\r\n$5\r\nstats\r\n").expect("write INFO");
     let mut out = Vec::new();
     let mut buf = [0u8; 4096];
@@ -82,9 +94,9 @@ fn read_reactor_gap(conn: &mut TcpStream) -> u64 {
         // The bulk reply is complete once the payload matches its
         // declared length; a lazy check that suffices here: stop when
         // the terminator arrives and the gauge line is present.
-        if out.ends_with(b"\r\n") && out.windows(4).any(|w| w == b"gap_") {
+        if out.ends_with(b"\r\n") {
             let text = String::from_utf8_lossy(&out);
-            if let Some(line) = text.lines().find(|l| l.starts_with("reactor_tick_gap_max_us:")) {
+            if let Some(line) = text.lines().find(|l| l.starts_with(key)) {
                 return line.split(':').nth(1).and_then(|v| v.trim().parse().ok()).unwrap_or(0);
             }
         }

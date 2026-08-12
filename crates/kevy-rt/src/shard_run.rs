@@ -183,6 +183,7 @@ impl<C: Commands> Shard<C> {
             ms => Some(Duration::from_millis(ms)),
         };
         let mut last_tick = Instant::now();
+        let mut slow = crate::slow_iter::SlowIter::new();
         let mut tick_check_counter: u32 = 0;
 
         let mut idle_spins: u32 = 0;
@@ -216,11 +217,15 @@ impl<C: Commands> Shard<C> {
                 Some(self.park_timeout_ms)
             };
 
+            slow.begin();
             self.poller.wait(&mut self.events, timeout)?;
+            slow.mark("poll");
             if !spinning {
                 self.parked[me].store(false, Ordering::SeqCst);
             }
 
+            let events_seen = self.events.len();
+            let mut ticked = false;
             let mut did_work = !self.events.is_empty();
             if did_work {
                 // Redis-style `updateCachedTime`: refresh the store's coarse
@@ -270,6 +275,7 @@ impl<C: Commands> Shard<C> {
                     }
                 }
                 self.events = events;
+                slow.mark("events");
                 // Drop conns that hit Closed mid-event (handshake
                 // error / peer EOF / `+ACK` drained in this batch's
                 // terminal state). Reaping before the next poll
@@ -292,6 +298,7 @@ impl<C: Commands> Shard<C> {
             if self.drain_inbound()? {
                 did_work = true;
             }
+            slow.mark("inbound");
             // Re-push anything that overflowed a full ring last iteration.
             self.flush_backlog();
             // Send this iteration's batched single-key dispatches (one per target).
@@ -302,6 +309,7 @@ impl<C: Commands> Shard<C> {
             self.flush_dirty()?;
             // One wakeup per touched (and parked) target this iteration.
             self.flush_wakes();
+            slow.mark("flush");
             // Ship the per-shard bio-drop batch to the bio
             // thread BEFORE the AOF fsync window. Same rationale as the
             // io_uring path: don't let a pending fsync stall pin the
@@ -309,9 +317,11 @@ impl<C: Commands> Shard<C> {
             // window. Empty-buffer fast path = predicted-not-taken
             // length check, sub-ns on iters that did no overwrite.
             self.store.flush_pending_drops();
+            slow.mark("drops");
             // AOF pump: writer-lane reap/submit/fsync (S3), or the
             // classic synchronous EverySec window when the lane is off.
             self.epoll_aof_tick();
+            slow.mark("aof");
             // Active TTL reaper / shard housekeeping. Skip the wall-clock
             // read on most iters: in busy-poll the tick fires at 10 Hz
             // with negligible overhead (counter saturates in ~us, then
@@ -339,6 +349,7 @@ impl<C: Commands> Shard<C> {
                     // WAIT / REPL.WAIT deadline sweep — same
                     // cadence as the BLOCK timeout reactor above.
                     self.tick_repl_waiters();
+                    slow.mark("t:timeouts");
                     let gap = now.duration_since(last_tick);
                     if gap >= iv {
                         // Tail observability: how late is this tick? A
@@ -349,13 +360,19 @@ impl<C: Commands> Shard<C> {
                         self.commands
                             .on_tick_gap((gap - iv).as_micros() as u64);
                         self.commands.on_shard_tick(&mut self.store);
+                        slow.mark("t:shard_tick");
                         self.drain_tick_frames();
                         self.drain_store_notify();
+                        slow.mark("t:drains");
                         self.drain_expired_keys();
+                        slow.mark("t:expired");
                         self.apply_live_runtime_config(&mut tick_interval);
+                        slow.mark("t:live_cfg");
                         self.epoll_tick_persist();
+                        slow.mark("t:persist");
                         self.tick_conn_gauge();
                         self.enforce_output_limit();
+                        slow.mark("t:gauge_limit");
                         // Replication slot expiry:
                         // drop slots whose reconnect window has passed.
                         // No-op short-circuits when replication is off or
@@ -372,9 +389,11 @@ impl<C: Commands> Shard<C> {
                         // when replication is off / no consumers yet.
                         self.tick_replication_watermark();
                         last_tick = now;
+                        ticked = true;
                     }
                 }
             }
+            slow.mark("tick");
 
             // Replication producer pump.
             // OUTSIDE the did_work block: the
@@ -393,6 +412,13 @@ impl<C: Commands> Shard<C> {
             // the call site like the pump above.
             if self.replica_inbox.is_some() {
                 self.drain_replica_inbox();
+            }
+            slow.mark("repl");
+            if slow.enabled() {
+                slow.finish(
+                    self.id,
+                    format_args!("events={events_seen} ticked={ticked} conns={}", self.conns.len()),
+                );
             }
             // A non-empty backlog means a peer ring is full: keep spinning so we
             // re-attempt the flush (and keep draining inbound to unblock peers).
