@@ -210,6 +210,11 @@ impl ShardCtx {
         self.with_stats_slot(|st| {
             st.tick_gap_max_us
                 .fetch_max(excess_us, std::sync::atomic::Ordering::Relaxed);
+            // The reactor calls this exactly once per tick BODY, so the
+            // count rides along for free and turns the max gauge into a
+            // pair a reader can tell apart: one late tick vs a slow one.
+            st.ticks_total
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         });
     }
 
