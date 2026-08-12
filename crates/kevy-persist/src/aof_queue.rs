@@ -69,6 +69,16 @@ impl Aof {
         self.queue.as_ref().map(|_| self.file.get_ref().as_raw_fd())
     }
 
+    /// A cloned handle to the live log file (the writer-thread lane's
+    /// target — S3). The clone shares the O_APPEND file description,
+    /// so the thread's sequential `write_all`s land exactly where the
+    /// synchronous path's would; after a rewrite swap the caller must
+    /// hand the lane a FRESH clone (the old one points at the
+    /// renamed-away inode). `None` outside queued mode.
+    pub fn queued_file_clone(&self) -> Option<std::io::Result<std::fs::File>> {
+        self.queue.as_ref().map(|_| self.file.get_ref().try_clone())
+    }
+
     /// Honest fallback for the structural entry points (truncate,
     /// rewrite finish, Always upgrade): synchronously write whatever is
     /// still queued HERE so the file is self-consistent before the
