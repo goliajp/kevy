@@ -175,35 +175,7 @@ impl<C: Commands> Shard<C> {
     /// served truncated GET replies for any value > `BULK_THRESHOLD`. We
     /// now materialise the iovec content into `output` before the write loop.
     pub(crate) fn flush_conn(&mut self, conn_id: u64) -> io::Result<()> {
-        // S3 Always gate: a write's reply bytes stay in `conn.output`
-        // until the writer lane's fsync proves its records durable.
-        // Parked conns drop write interest (a level-triggered poller
-        // would spin on a writable socket we refuse to write) and are
-        // flushed directly by `epoll_release_held` on watermark
-        // advance.
-        let durable = self.aof_lane.durable_watermark;
-        let park = match self.conns.get_mut(&conn_id) {
-            Some(conn) => match conn.held_watermark {
-                Some(h) if h > durable => {
-                    let armed = conn.want_write;
-                    conn.want_write = false;
-                    Some((armed, conn.sock.raw()))
-                }
-                Some(_) => {
-                    conn.held_watermark = None;
-                    None
-                }
-                None => None,
-            },
-            None => return Ok(()),
-        };
-        if let Some((was_armed, fd)) = park {
-            if was_armed {
-                self.poller.modify(fd, true, false)?;
-            }
-            if !self.aof_lane.held_conns.contains(&conn_id) {
-                self.aof_lane.held_conns.push(conn_id);
-            }
+        if self.park_if_held(conn_id)? {
             return Ok(());
         }
         let (close, want_write, fd, closing_now) = {
@@ -254,6 +226,42 @@ impl<C: Commands> Shard<C> {
             self.poller.modify(fd, true, want_write)?;
         }
         Ok(())
+    }
+
+    /// S3 Always gate: a write's reply bytes stay in `conn.output`
+    /// until the writer lane's fsync proves its records durable.
+    /// Returns true when the conn is parked (or gone) — the caller
+    /// skips the write. Parked conns drop write interest (a
+    /// level-triggered poller would spin on a writable socket we
+    /// refuse to write) and are flushed directly by
+    /// `epoll_release_held` on watermark advance.
+    fn park_if_held(&mut self, conn_id: u64) -> io::Result<bool> {
+        let durable = self.aof_lane.durable_watermark;
+        let park = match self.conns.get_mut(&conn_id) {
+            Some(conn) => match conn.held_watermark {
+                Some(h) if h > durable => {
+                    let armed = conn.want_write;
+                    conn.want_write = false;
+                    Some((armed, conn.sock.raw()))
+                }
+                Some(_) => {
+                    conn.held_watermark = None;
+                    None
+                }
+                None => None,
+            },
+            None => return Ok(true),
+        };
+        let Some((was_armed, fd)) = park else {
+            return Ok(false);
+        };
+        if was_armed {
+            self.poller.modify(fd, true, false)?;
+        }
+        if !self.aof_lane.held_conns.contains(&conn_id) {
+            self.aof_lane.held_conns.push(conn_id);
+        }
+        Ok(true)
     }
 
     /// S2/S3 Always reply gate, capture half: the queued-record
