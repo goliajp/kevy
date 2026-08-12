@@ -68,7 +68,9 @@ internal static class Env
 /// remote-backend tests; each test flushes for a clean slate).</summary>
 public sealed class ServerFixture : IDisposable
 {
-    private readonly Process? _proc;
+    // Not readonly: the port-collision retry in the constructor
+    // disposes a loser and respawns via SpawnProcess.
+    private Process? _proc;
     private readonly string _tmp;
     /// <summary>The server's stderr, drained as it arrives. A spawn that
     /// dies during startup otherwise reports only "exited", which is the
@@ -88,8 +90,29 @@ public sealed class ServerFixture : IDisposable
         var bin = Env.ServerBinary();
         _tmp = Directory.CreateTempSubdirectory("kevy-xunit-").FullName;
         if (bin is null) return;
-        var port = FreePort();
-        Port = port;
+        // FreePort's probe→bind window can hand two nearby spawns the
+        // same port; the loser exits at bind with "address already in
+        // use" on stderr. Retry that exact signature on a fresh port;
+        // any other startup death rethrows unchanged.
+        for (var attempt = 1; ; attempt++)
+        {
+            var port = FreePort();
+            Port = port;
+            Url = $"kevy://127.0.0.1:{port}";
+            SpawnProcess(bin, port, extra, config);
+            try { WaitReady(); return; }
+            catch (InvalidOperationException e)
+                when (attempt < 5 && e.Message.Contains("already in use", StringComparison.OrdinalIgnoreCase))
+            {
+                _proc?.Dispose();
+                _proc = null;
+                lock (_stderr) _stderr.Clear();
+            }
+        }
+    }
+
+    private void SpawnProcess(string bin, int port, string[] extra, string? config)
+    {
         var args = new List<string> { "--bind", "127.0.0.1", "--port", port.ToString(), "--dir", _tmp };
         if (config is not null)
         {
@@ -107,8 +130,6 @@ public sealed class ServerFixture : IDisposable
             _proc.ErrorDataReceived += (_, e) => { if (e.Data is not null) lock (_stderr) _stderr.AppendLine(e.Data); };
             _proc.BeginErrorReadLine();
         }
-        Url = $"kevy://127.0.0.1:{port}";
-        WaitReady();
     }
 
     /// <summary>The remote URL. Callers guard on <see cref="HasServer"/>
@@ -145,11 +166,9 @@ public sealed class ServerFixture : IDisposable
     ///
     /// There is a window between this listener closing and the server
     /// binding, so two spawns close together can be handed the same port
-    /// and the loser exits immediately. That is the leading suspect for
-    /// the occasional "exited before ready" here, but it is a suspicion,
-    /// not a diagnosis — the stderr now captured in
-    /// <see cref="ServerFixture"/> will say so outright the next time it
-    /// happens, and the fix belongs after that, not before.</summary>
+    /// and the loser exits immediately — the diagnosis the captured
+    /// stderr confirmed (same recipe as the Rust harness's spop_storm
+    /// fix). The constructor retries that signature on a fresh port.</summary>
     internal static int FreePort()
     {
         var l = new TcpListener(IPAddress.Loopback, 0);
