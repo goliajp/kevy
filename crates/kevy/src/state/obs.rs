@@ -29,6 +29,12 @@ pub(crate) struct ShardStats {
     /// interval) — the single-iteration stall upper bound (V3 tail
     /// train). fetch_max'd from the tick, never reset.
     pub tick_gap_max_us: AtomicU64,
+    /// Reactor tick bodies run on this shard since boot. The gap gauge
+    /// above is a high-water mark and cannot answer "how OFTEN does
+    /// housekeeping run" — a single 400 ms outlier and a chronically
+    /// starved 2 Hz cadence produce the same number. Two reads of this
+    /// counter divided by the elapsed time answer it directly.
+    pub ticks_total: AtomicU64,
     /// This shard's tiering gauges (all zero when
     /// tiering is off — `tier_enabled` is the section gate).
     pub tier: TierGauges,
@@ -72,6 +78,10 @@ pub(crate) struct Totals {
     /// MAX across shards (a stall on one shard is the instance's
     /// answer — summing stalls would say something false).
     pub tick_gap_max_us: u64,
+    /// SUM across shards — every shard ticks on its own clock, so the
+    /// instance's housekeeping rate is the total (divide by shard count
+    /// for the per-shard cadence).
+    pub ticks_total: u64,
     /// Tiering totals. `tier_enabled` = any shard tiers (they
     /// all do or none does — the config is process-wide).
     pub tier_enabled: bool,
@@ -181,6 +191,7 @@ impl ObsState {
             t.connections_received += s.connections_received.load(Relaxed);
             t.clients_connected += s.clients_connected.load(Relaxed);
             t.tick_gap_max_us = t.tick_gap_max_us.max(s.tick_gap_max_us.load(Relaxed));
+            t.ticks_total += s.ticks_total.load(Relaxed);
             t.tier_enabled |= s.tier.enabled.load(Relaxed) != 0;
             t.tier.budget += s.tier.budget.load(Relaxed);
             t.tier.effective_target += s.tier.effective_target.load(Relaxed);

@@ -174,6 +174,11 @@ pub(super) fn info_stats(ctx: &Ctx<'_>, totals: &crate::state::Totals, b: &mut S
         "reactor_tick_gap_max_us:{}\r\n",
         totals.tick_gap_max_us
     ));
+    // The gauge above is a high-water mark; this counter is the other
+    // half of the pair. One late tick and a chronically starved cadence
+    // read the same on the gauge alone — two reads of this counter over
+    // a known interval tell them apart.
+    b.push_str(&format!("reactor_ticks_total:{}\r\n", totals.ticks_total));
     b.push_str("\r\n");
 }
 
