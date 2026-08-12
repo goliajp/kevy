@@ -779,13 +779,16 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 ## v5.1.0 target(属主令 2026-08-12:nodefer 到工业级能用,然后全面更新)
 总计划=`.claude/plans/2026-08-12-v5.1-target.md`(IN 六项全闭才请属主扣发布扳机;OUT 已写死)。
 
-### P6 — 【5.1 关键路径】availgate failover 收敛 wedge:插桩复现弧(三犯,post-P4-fix)
-- [ ] 三犯(run 31581877633;随机 gen 已实锤在 log)同签名:survivor follow 新主、四 runner 全连通、link up、sync_in_progress 0、60s 不收敛。纸面推演穷尽 → **插桩复现**:临时探针面(per-runner cursor gen/offset、per-shard feed gen/next、ship begin/end 事件)+ 盒上 CPU 争用循环 availgate 至触发(盒 ×10 无争用全过=争用是配方)。
-- [ ] 破案 → 修 → 争用循环 ×N 绿 + CI。**不绿不发 5.1。**
+### P6 — 【5.1 关键路径】availgate failover 收敛 wedge:插桩复现弧 ✅ CLOSED
+- [x] 探针面 ✅(2026-08-12,`KEVY_DEBUG_REPL_TRACE=1`,保留为常设调试面):promotion bump 时刻(bump 前 feed 位置 + 全部已挂 cursor 状态)、握手 claim vs feed 位置、两个此前**零日志**的 pump 臂、ship begin/end、AckSent 卡住检测、runner 会话事件;全部带统一挂钟 ms 戳,三节点 log 可交织成一条序列。availgate.sh 加 `KEVY_AVAILGATE_KEEP`(EXIT trap 此前会删掉自己的犯罪现场)。
+- [x] 破案 ✅:**争用循环不是配方**(修前探针版 28 轮争用未复现)——窗口只有约一个 tick 宽,确定性 in-process 复现才破的案。根因 = generation fence 的 fresh-cursor 例外:`gen 0/offset 0` 被当作"空 replica"采纳并从 0 流帧,而促升 bump(以及带数据的非干净重启)会**换掉整个 source**(帧全弃、next 归 0)却保留 store → 采纳后的 cursor 恰好"已追平"、永不 ship,心跳照发 link up。促升窗口(写闸随 epoch 开、各 shard 自己 tick 才 fence)内的写入被 bump 销毁 = availgate 等的那条 postfail。
+- [x] 修 ✅(merge `caa5f346`):**gen 不匹配一律 ship snapshot,无 fresh-cursor 例外**——无 claim 的 cursor 不等于空 replica(runner cursor 每次 respawn 都归零),帧流只能增改、删不掉 replica 多出来的键,只有快照能替换键空间。同 Redis 的 full-resync 模型。
+- [x] 验证 ✅:新 e2e(红→绿,两种红脸:停滞 + 静默分叉)+ replication 26/26 + cluster-rw + rt/replicate/persist 全绿;**盒上争用循环 20/20 绿**;repligate PASS + crashgate PASS;分支 CI 全绿。finding=bench/FINDING-2026-08-12-availgate-promotion-window-wedge.md;flake 档案已结案。
 
-### P7 — 5.1 收口面(可与 P6 等待窗穿插)
-- [ ] 混版本升级互通:v5.0.0 二进制 ↔ 5.1 tip 双向 primary/replica 脚本验证(gen mismatch → 一次性 snapshot resync 自愈实测;vlog 帧双向读实测)→ 入升级指南。
-- [ ] CI infra 两小刀(时间盒一天):npm fetch-retries;csharp harness 端口重试(spop 配方)。
-- [ ] tailgate epoll 观察轮(盒,KEVY_IO_URING=0,数字入 finding,不设门)。
-- [ ] 文档:persistence ja/zh 同步(S3 只改了英文)+ upgrading-5.0-to-5.1 三语 + CHANGELOG 5.1.0 + site 再生。
-- [ ] 发布彩排:release-profile 预跑 + publish 链拓扑序核对(含 dev-deps)+ npm 版本推导 + 全门终跑 → 「5.1 RC-READY」三栏报告请属主拍板(tag/publish/官网/smix 通知=属主触发)。
+### P7 — 5.1 收口面
+- [x] 混版本升级互通 ✅:`bench/upgrade-interop.sh`(A/B/C/D 四场景,对打真 v5.0.0 二进制)全 PASS。**场景 C 修前是红的**——带 5.0 计数器 gen sidecar 的 replica 重指 5.1 primary 会保留升级前的键(fork 没丢弃);修后每 shard 恰好一次 snapshot resync 自愈。即 P6 的修复正是 5.0→5.1 升级自愈路径的前提。
+- [x] CI infra 两小刀 ✅(merge `57227fbe`):clientgate npm install 三次重试 + `--fetch-retries` + 失败时打完整日志(此前静默吞掉,两步之后才以 module-not-found 现形);C# harness 的 FreePort 探测→bind 碰撞按 spop 配方换端口重试。
+- [x] tailgate epoll 观察轮 ✅(不设门):同日同构建 A/B——uring 双 cell 双 bar 仍 PASS;epoll mixed p999 4.68ms(优于 uring 8.15ms)但 tick gap 440ms(10×);firehose p999 117ms / gap 774ms 超线。mixed 的背离**单列为待测项而非解释**。finding=bench/FINDING-2026-08-12-tailgate-epoll-observation.md。**仪器教训**:首轮忘了 `TMPDIR=$HOME/captmp`,落到 32GB tmpfs 上被写满 → 探针全 reset,而门把空值渲染成四条超线 FAIL(空测量长得像失败测量);这个陷阱 FINDING-2026-08-09 早写过。
+- [x] 文档 ✅:persistence ja/zh 同步 + upgrading-5.0-to-5.1 三语(含新增的 `-LOADING` 窗口说明)+ CHANGELOG 5.1.0 + site 再生 107 页;doc 四门绿。
+- [x] publish 链拓扑序 ✅ 变成门禁:`tools/check_publish_order.py` 进 CI——含 **dev/build 依赖**(v5.0 那次 kevy-cluster-rw dev-dep kevy-rt 的真陷阱已红-绿实证),并交叉核对 workflow 里两份手维护列表。
+- [ ] 发布彩排剩余:workspace bump 5.1.0 + release-profile 预跑 + npm 版本推导核对 + perfgate-median 终跑 → 「5.1 RC-READY」三栏报告请属主拍板(tag/publish/官网/smix 通知=属主触发)。
