@@ -137,6 +137,9 @@ impl<C: Commands> Shard<C> {
             -1
         };
         self.poller.add(self.waker.read_fd(), true, false)?;
+        // S3: queued appends + writer thread (fsync off the reactor);
+        // no-op when opted out or without an AOF.
+        self.epoll_aof_setup();
         // -1 never matches an event fd, so the cluster-off loop below pays
         // one dead integer compare per event and nothing else.
         let mut cluster_fd = -1;
@@ -306,10 +309,9 @@ impl<C: Commands> Shard<C> {
             // window. Empty-buffer fast path = predicted-not-taken
             // length check, sub-ns on iters that did no overwrite.
             self.store.flush_pending_drops();
-            // Honor the EverySec AOF fsync window.
-            if let Some(aof) = &mut self.aof {
-                let _ = aof.maybe_sync();
-            }
+            // AOF pump: writer-lane reap/submit/fsync (S3), or the
+            // classic synchronous EverySec window when the lane is off.
+            self.epoll_aof_tick();
             // Active TTL reaper / shard housekeeping. Skip the wall-clock
             // read on most iters: in busy-poll the tick fires at 10 Hz
             // with negligible overhead (counter saturates in ~us, then
@@ -351,7 +353,7 @@ impl<C: Commands> Shard<C> {
                         self.drain_store_notify();
                         self.drain_expired_keys();
                         self.apply_live_runtime_config(&mut tick_interval);
-                        self.tick_persist();
+                        self.epoll_tick_persist();
                         self.tick_conn_gauge();
                         self.enforce_output_limit();
                         // Replication slot expiry:
@@ -414,6 +416,7 @@ impl<C: Commands> Shard<C> {
         // rename + AOF reset (the commit phase otherwise runs on the
         // next tick, which won't happen after `stop=true`), then the
         // final AOF fsync + feed marker. See [`Self::shutdown_drain`].
+        self.epoll_aof_settle();
         self.shutdown_drain();
         Ok(())
     }

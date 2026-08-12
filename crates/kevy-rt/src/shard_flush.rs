@@ -175,6 +175,37 @@ impl<C: Commands> Shard<C> {
     /// served truncated GET replies for any value > `BULK_THRESHOLD`. We
     /// now materialise the iovec content into `output` before the write loop.
     pub(crate) fn flush_conn(&mut self, conn_id: u64) -> io::Result<()> {
+        // S3 Always gate: a write's reply bytes stay in `conn.output`
+        // until the writer lane's fsync proves its records durable.
+        // Parked conns drop write interest (a level-triggered poller
+        // would spin on a writable socket we refuse to write) and are
+        // flushed directly by `epoll_release_held` on watermark
+        // advance.
+        let durable = self.aof_lane.durable_watermark;
+        let park = match self.conns.get_mut(&conn_id) {
+            Some(conn) => match conn.held_watermark {
+                Some(h) if h > durable => {
+                    let armed = conn.want_write;
+                    conn.want_write = false;
+                    Some((armed, conn.sock.raw()))
+                }
+                Some(_) => {
+                    conn.held_watermark = None;
+                    None
+                }
+                None => None,
+            },
+            None => return Ok(()),
+        };
+        if let Some((was_armed, fd)) = park {
+            if was_armed {
+                self.poller.modify(fd, true, false)?;
+            }
+            if !self.aof_lane.held_conns.contains(&conn_id) {
+                self.aof_lane.held_conns.push(conn_id);
+            }
+            return Ok(());
+        }
         let (close, want_write, fd, closing_now) = {
             let Some(conn) = self.conns.get_mut(&conn_id) else {
                 return Ok(());
@@ -225,15 +256,19 @@ impl<C: Commands> Shard<C> {
         Ok(())
     }
 
-    /// S2 Always reply gate, capture half: the queued-record watermark
-    /// BEFORE a dispatch, `Some` only when the gate is active (io_uring
-    /// offload + `appendfsync=always`). Compare with the watermark
-    /// after the dispatch to learn whether it appended records whose
-    /// replies must wait for the fsync CQE.
-    #[cfg(target_os = "linux")]
+    /// S2/S3 Always reply gate, capture half: the queued-record
+    /// watermark BEFORE a dispatch, `Some` only when a gate-bearing
+    /// driver is active (io_uring offload or the writer lane) under
+    /// `appendfsync=always`. Compare with the watermark after the
+    /// dispatch to learn whether it appended records whose replies
+    /// must wait for the covering fsync.
     #[inline]
     pub(crate) fn always_hold_w0(&self) -> Option<u64> {
-        if !self.aof_offload.enabled {
+        #[cfg(target_os = "linux")]
+        let driver_on = self.aof_offload.enabled || self.aof_lane.enabled;
+        #[cfg(not(target_os = "linux"))]
+        let driver_on = self.aof_lane.enabled;
+        if !driver_on {
             return None;
         }
         let aof = self.aof.as_ref()?;
@@ -243,12 +278,26 @@ impl<C: Commands> Shard<C> {
         Some(aof.queued_watermark())
     }
 
-    /// Non-Linux reactors have no ring to gate on; the synchronous
-    /// Always path fsyncs before replies by construction.
-    #[cfg(not(target_os = "linux"))]
-    #[inline]
-    pub(crate) fn always_hold_w0(&self) -> Option<u64> {
-        None
+    /// Send every held cross-shard response batch the durable
+    /// watermark now covers (either driver's — only one is active on
+    /// any given shard, the other's watermark stays 0).
+    pub(crate) fn flush_held_responses(&mut self) {
+        if self.held_responses.is_empty() {
+            return;
+        }
+        #[cfg(target_os = "linux")]
+        let durable = self.aof_lane.durable_watermark.max(self.aof_offload.durable_watermark);
+        #[cfg(not(target_os = "linux"))]
+        let durable = self.aof_lane.durable_watermark;
+        let mut i = 0;
+        while i < self.held_responses.len() {
+            if self.held_responses[i].0 <= durable {
+                let (_, origin, batch) = self.held_responses.swap_remove(i);
+                self.send_to(origin, batch);
+            } else {
+                i += 1;
+            }
+        }
     }
 
     /// Send a cross-shard response batch — or, when the S2 gate is
@@ -256,17 +305,13 @@ impl<C: Commands> Shard<C> {
     /// hold it until the fsync CQE proves them durable
     /// (`uring_flush_held_responses` sends it then).
     pub(crate) fn send_or_hold_response(&mut self, w0: Option<u64>, origin: usize, batch: Inbound) {
-        #[cfg(target_os = "linux")]
+        let w1 = self.aof.as_ref().map(kevy_persist::Aof::queued_watermark);
+        if let (Some(w0), Some(w1)) = (w0, w1)
+            && w1 > w0
         {
-            let w1 = self.aof.as_ref().map(kevy_persist::Aof::queued_watermark);
-            if let (Some(w0), Some(w1)) = (w0, w1)
-                && w1 > w0
-            {
-                self.held_responses.push((w1, origin, batch));
-                return;
-            }
+            self.held_responses.push((w1, origin, batch));
+            return;
         }
-        let _ = w0;
         self.send_to(origin, batch);
     }
 }

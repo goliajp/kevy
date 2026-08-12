@@ -114,6 +114,13 @@ pub(crate) struct Conn {
     /// `WATCH` time. `EXEC` fans these out via `Op::CheckWatch`; if any
     /// shard reports a mismatch, the transaction aborts (nil multi-bulk).
     pub(crate) watched: Vec<(Vec<u8>, u64)>,
+    /// S3 Always reply gate: `Some(w)` = this conn's pending output
+    /// answers writes queued up to record-watermark `w` and must not
+    /// leave until the writer lane's durable watermark reaches `w`
+    /// (see `aof_writer` — the epoll counterpart of
+    /// `UringConn::held_watermark`). Cold: only touched on gated
+    /// flushes under appendfsync=always.
+    pub(crate) held_watermark: Option<u64>,
     /// `CLIENT SETNAME` persisted value. Set by
     /// `handle_command`'s CLIENT-intercept arm; read by the same
     /// arm on `CLIENT GETNAME`. Empty by default (matches Redis).
@@ -152,6 +159,7 @@ impl Conn {
             multi: None,
             multi_dirty: false,
             watched: Vec::new(),
+            held_watermark: None,
             client_name: Vec::new(),
             proto: RespVersion::default(),
             blocked: false,

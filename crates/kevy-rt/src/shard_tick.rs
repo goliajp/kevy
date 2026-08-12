@@ -57,13 +57,17 @@ impl<C: Commands> Shard<C> {
     /// The persistence half of [`Self::apply_live_runtime_config`]:
     /// fsync policy + the three rewrite triggers.
     fn apply_live_persist_knobs(&mut self, live: &crate::LiveRuntimeConfig) {
-        if let Some(f) = live.appendfsync
-            && let Some(aof) = &mut self.aof
-        {
+        if let Some(f) = live.appendfsync && self.aof.is_some() {
+            // set_fsync's Always upgrade flushes the queue through the
+            // OWNER handle; the writer lane's in-flight appends must
+            // land first or the two handles would interleave records.
+            self.epoll_aof_settle();
             // A failure to flush on policy tighten is logged but doesn't
             // bring the shard down — the policy itself still takes effect
             // and subsequent appends will retry the sync.
-            if let Err(e) = aof.set_fsync(f) {
+            if let Some(aof) = &mut self.aof
+                && let Err(e) = aof.set_fsync(f)
+            {
                 eprintln!("kevy: shard {} set_fsync failed: {e}", self.id);
             }
         }
