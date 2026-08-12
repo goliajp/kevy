@@ -131,21 +131,21 @@ fn feed_shards_tail_read_roundtrip() {
     let mut hit = None;
     for sh in 0..NSHARDS {
         let (g, off) = parse_tail(&cmd(&mut c, &[b"FEED.TAIL", sh.to_string().as_bytes()]));
-        assert_eq!(g, 1, "fresh dir starts at generation 1");
+        assert_ne!(g, 0, "fresh dir draws a random nonzero generation");
         if off > 0 {
-            hit = Some((sh, off));
+            hit = Some((sh, g, off));
             break;
         }
     }
-    let (sh, off) = hit.expect("some shard saw writes");
+    let (sh, live_gen, off) = hit.expect("some shard saw writes");
 
     // Read from 0: frames come back in order with argv payloads.
     let r = cmd(
         &mut c,
-        &[b"FEED.READ", sh.to_string().as_bytes(), b"1", b"0", b"COUNT", b"100"],
+        &[b"FEED.READ", sh.to_string().as_bytes(), live_gen.to_string().as_bytes(), b"0", b"COUNT", b"100"],
     );
     let s = String::from_utf8_lossy(&r);
-    assert!(s.starts_with("*3\r\n:1\r\n"), "got {s}");
+    assert!(s.starts_with(&format!("*3\r\n:{live_gen}\r\n")), "got {s}");
     assert!(s.contains("SET"), "frames carry the effect argv: {s}");
     // Cursor advanced to the tail we saw.
     assert!(s.contains(&format!(":{off}\r\n")), "next cursor = tail: {s}");
@@ -153,7 +153,7 @@ fn feed_shards_tail_read_roundtrip() {
     // Caught-up read = empty frame list, cursor unchanged.
     let r2 = cmd(
         &mut c,
-        &[b"FEED.READ", sh.to_string().as_bytes(), b"1", off.to_string().as_bytes()],
+        &[b"FEED.READ", sh.to_string().as_bytes(), live_gen.to_string().as_bytes(), off.to_string().as_bytes()],
     );
     let s2 = String::from_utf8_lossy(&r2);
     assert!(s2.ends_with("*0\r\n"), "caught up: {s2}");
@@ -170,14 +170,14 @@ fn feed_prefix_filter_and_errors() {
     }
     // Find a shard with frames, read with PREFIX user:
     for sh in 0..NSHARDS {
-        let (_, off) = parse_tail(&cmd(&mut c, &[b"FEED.TAIL", sh.to_string().as_bytes()]));
+        let (g, off) = parse_tail(&cmd(&mut c, &[b"FEED.TAIL", sh.to_string().as_bytes()]));
         if off == 0 {
             continue;
         }
         let r = cmd(
             &mut c,
             &[
-                b"FEED.READ", sh.to_string().as_bytes(), b"1", b"0",
+                b"FEED.READ", sh.to_string().as_bytes(), g.to_string().as_bytes(), b"0",
                 b"COUNT", b"100", b"PREFIX", b"user:",
             ],
         );
@@ -187,7 +187,14 @@ fn feed_prefix_filter_and_errors() {
     // errors
     let r = cmd(&mut c, &[b"FEED.READ", b"99", b"1", b"0"]);
     assert!(r.starts_with(b"-ERR shard out of range"), "{:?}", String::from_utf8_lossy(&r));
+    // A generation the feed never issued (identities are random now,
+    // so ANY foreign gen — a counter's "9" included) → resync, never
+    // a quiet stream.
     let r = cmd(&mut c, &[b"FEED.READ", b"0", b"9", b"0"]);
+    assert!(r.starts_with(b"-FEEDRESYNC "), "{:?}", String::from_utf8_lossy(&r));
+    // An offset ahead of the stream in the LIVE generation → cursor-ahead.
+    let (g0, _) = parse_tail(&cmd(&mut c, &[b"FEED.TAIL", b"0"]));
+    let r = cmd(&mut c, &[b"FEED.READ", b"0", g0.to_string().as_bytes(), b"999999"]);
     assert!(
         r.starts_with(b"-ERR feed cursor ahead"),
         "{:?}",
@@ -202,14 +209,20 @@ fn flushall_bumps_generation_and_old_cursor_resyncs() {
     for i in 0..16 {
         cmd(&mut c, &[b"SET", format!("gb{i}").as_bytes(), b"v"]);
     }
+    let (g_before, _) = parse_tail(&cmd(&mut c, &[b"FEED.TAIL", b"0"]));
     cmd(&mut c, &[b"FLUSHALL"]);
-    // Post-flush: generation 2 everywhere, offsets restarted.
+    // Post-flush: a fresh generation everywhere, offsets restarted.
     let (g, off) = parse_tail(&cmd(&mut c, &[b"FEED.TAIL", b"0"]));
-    assert_eq!(g, 2);
+    assert_ne!(g, g_before);
     assert_eq!(off, 0);
-    // The old generation-1 cursor answers FEEDRESYNC with the new tail.
-    let r = cmd(&mut c, &[b"FEED.READ", b"0", b"1", b"5"]);
-    assert!(r.starts_with(b"-FEEDRESYNC 2 0"), "{:?}", String::from_utf8_lossy(&r));
+    // The old-generation cursor answers FEEDRESYNC with the new tail.
+    let r = cmd(&mut c, &[b"FEED.READ", b"0", g_before.to_string().as_bytes(), b"5"]);
+    let want = format!("-FEEDRESYNC {g} 0");
+    assert!(
+        r.starts_with(want.as_bytes()),
+        "want {want:?}, got {:?}",
+        String::from_utf8_lossy(&r)
+    );
 }
 
 #[test]
@@ -231,10 +244,12 @@ fn clean_restart_keeps_cursor_unclean_bumps() {
         cmd(&mut c, &[b"SET", format!("rk{i}").as_bytes(), b"v"]);
     }
     let mut busy = (0usize, 0u64);
+    let mut busy_gen = 0u64;
     for sh in 0..NSHARDS {
-        let (_, off) = parse_tail(&cmd(&mut c, &[b"FEED.TAIL", sh.to_string().as_bytes()]));
+        let (g, off) = parse_tail(&cmd(&mut c, &[b"FEED.TAIL", sh.to_string().as_bytes()]));
         if off > busy.1 {
             busy = (sh, off);
+            busy_gen = g;
         }
     }
     drop(c);
@@ -244,7 +259,7 @@ fn clean_restart_keeps_cursor_unclean_bumps() {
     let srv2 = Feed::boot(dir.clone());
     let mut c2 = srv2.connect();
     let (g, off) = parse_tail(&cmd(&mut c2, &[b"FEED.TAIL", busy.0.to_string().as_bytes()]));
-    assert_eq!(g, 1, "clean restart keeps the generation");
+    assert_eq!(g, busy_gen, "clean restart keeps the generation");
     assert_eq!(off, busy.1, "clean restart keeps the offset");
     drop(c2);
     let dir = srv2.shutdown(); // clean stop re-writes the markers…
@@ -256,7 +271,8 @@ fn clean_restart_keeps_cursor_unclean_bumps() {
     let srv3 = Feed::boot(dir.clone());
     let mut c3 = srv3.connect();
     let (g3, off3) = parse_tail(&cmd(&mut c3, &[b"FEED.TAIL", busy.0.to_string().as_bytes()]));
-    assert_eq!(g3, 2, "unclean restart bumps the generation");
+    assert_ne!(g3, busy_gen, "unclean restart draws a fresh generation");
+    assert_ne!(g3, 0);
     assert_eq!(off3, 0, "offsets restart after a bump");
     drop(c3);
     drop(srv3);
@@ -343,9 +359,10 @@ fn cross_shard_rename_reaches_the_feed_on_both_ends() {
     assert_eq!(cmd(&mut c, &[b"RENAME", b"fsrc", b"fdst"]), b"+OK\r\n");
 
     let frames = |c: &mut std::net::TcpStream, sh: usize| {
+        let (g, _) = parse_tail(&cmd(c, &[b"FEED.TAIL", sh.to_string().as_bytes()]));
         String::from_utf8_lossy(&cmd(
             c,
-            &[b"FEED.READ", sh.to_string().as_bytes(), b"1", b"0", b"COUNT", b"100"],
+            &[b"FEED.READ", sh.to_string().as_bytes(), g.to_string().as_bytes(), b"0", b"COUNT", b"100"],
         ))
         .into_owned()
     };

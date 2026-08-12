@@ -139,9 +139,12 @@ pub(crate) fn fresh_generation(old: u64) -> u64 {
     loop {
         let mut h = std::collections::hash_map::RandomState::new().build_hasher();
         h.write_u64(old);
-        // Mask to 63 bits: generations ride RESP integers (REPL.TOKEN
-        // / REPL.WAIT), which are i64 — the identity space is still 2^63.
-        let g = h.finish() & (i64::MAX as u64);
+        // Mask to 53 bits: generations ride RESP integers (REPL.TOKEN
+        // / REPL.WAIT / FEED.TAIL), and client bindings surface them
+        // as JS Numbers, whose integer precision ends at 2^53 — a
+        // wider value round-trips corrupted and self-resyncs forever.
+        // A 2^53 identity space still makes collisions negligible.
+        let g = h.finish() & ((1u64 << 53) - 1);
         if g != 0 && g != old {
             return g;
         }
