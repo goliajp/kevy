@@ -63,8 +63,8 @@ impl<C: Commands> Shard<C> {
         // settles the offload driver first, which on the poll reactors
         // means busy-waiting for the AOF writer lane to drain. Measured
         // on the box: up to 890 ms inside one tick under the firehose
-        // cell, with the reactor doing nothing else
-        // (bench/FINDING-2026-08-12-tailgate-epoll-observation.md).
+        // cell, with the reactor doing nothing else (the epoll
+        // tick-cadence finding in bench/).
         if let Some(f) = live.appendfsync
             && self.aof.as_ref().is_some_and(|a| a.fsync_policy() != f)
         {
