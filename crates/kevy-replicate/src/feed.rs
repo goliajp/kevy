@@ -5,12 +5,18 @@
 //! Cursor contract:
 //! - `generation` identifies one unbroken offset history. A given
 //!   `(gen, offset)` pair refers to the same stream prefix forever.
+//!   The value is an OPAQUE random identity, not a counter: two nodes
+//!   counting in lockstep (a startup election on one, a failover
+//!   promotion on the other) land on the same number for different
+//!   histories, and a stale cursor then slips through the fence into
+//!   offset aliasing (the availgate failover wedge). Randomness is
+//!   what makes cross-node fencing sound; there is no ordering.
 //! - Clean shutdown + restart preserves both (continuity); FLUSHALL,
-//!   restore-from-snapshot, or an unclean shutdown bumps `gen` and
-//!   resets `offset` to 0.
-//! - A cursor the backlog can no longer serve (older generation, or
-//!   evicted offsets) answers `FeedRead::Resync` carrying the current
-//!   tail — the consumer rebuilds (SCAN) and resumes from there.
+//!   restore-from-snapshot, or an unclean shutdown draws a fresh
+//!   `gen` and resets `offset` to 0.
+//! - A cursor from any OTHER generation, or one whose offsets were
+//!   evicted, answers `FeedRead::Resync` carrying the current tail —
+//!   the consumer rebuilds (SCAN) and resumes from there.
 
 use crate::source::{FromOffset, ReplicationSource};
 
@@ -25,8 +31,10 @@ pub enum FeedRead {
         /// Next offset the source will assign (resume point).
         tail: u64,
     },
-    /// Cursor is ahead of the stream (`offset > next`) in the current
+    /// Cursor is ahead of the stream (`offset > next`) in the CURRENT
     /// generation — caller bug or epoch confusion; reject the read.
+    /// (A mismatched generation is `Resync`, never `Future`:
+    /// generations carry no order to be "ahead" in.)
     Future,
 }
 
@@ -71,12 +79,12 @@ impl FeedSource {
         &mut self.source
     }
 
-    /// Break continuity: bump the generation and restart offsets at 0
-    /// (FLUSHALL / restore / unclean-boot policy). The backlog empties
-    /// — frames from the old generation must never be served under
-    /// the new one.
+    /// Break continuity: draw a fresh generation and restart offsets
+    /// at 0 (FLUSHALL / restore / promotion / unclean-boot policy).
+    /// The backlog empties — frames from the old generation must
+    /// never be served under the new one.
     pub fn bump_generation(&mut self) {
-        self.generation += 1;
+        self.generation = fresh_generation(self.generation);
         let budget = self.source.max_bytes();
         self.source = ReplicationSource::new(budget);
     }
@@ -89,10 +97,10 @@ impl FeedSource {
 
     /// Serve up to `max` frames at cursor `(generation, offset)`.
     ///
-    /// - Stale generation → `Resync` (any pre-bump cursor is
-    ///   unservable — uniqueness of `(gen, offset)` forbids
-    ///   re-serving).
-    /// - Generation from the future → `Future` (caller confusion).
+    /// - Any OTHER generation → `Resync` (the cursor belongs to a
+    ///   different offset history — uniqueness of `(gen, offset)`
+    ///   forbids serving it; generations are identities, not ordered).
+    /// - Offset ahead of this generation's stream → `Future`.
     /// - Evicted offset → `Resync` with the current tail.
     pub fn read(
         &self,
@@ -100,10 +108,7 @@ impl FeedSource {
         offset: u64,
         max: usize,
     ) -> Result<Vec<FeedFrame<'_>>, FeedRead> {
-        if cursor_gen > self.generation {
-            return Err(FeedRead::Future);
-        }
-        if cursor_gen < self.generation {
+        if cursor_gen != self.generation {
             let (generation, tail) = self.tail();
             return Err(FeedRead::Resync { generation, tail });
         }
@@ -117,6 +122,31 @@ impl FeedSource {
                 Err(FeedRead::Resync { generation, tail })
             }
             Err(FromOffset::Future) => Err(FeedRead::Future),
+        }
+    }
+}
+
+/// Draw a fresh generation: a random nonzero u64 distinct from `old`.
+/// A generation is a HISTORY IDENTITY. Counters are unsound here: two
+/// nodes bumping in lockstep (startup election vs failover promotion)
+/// collide on the same number for different histories, and a replica's
+/// stale cursor then passes the generation fence into offset aliasing
+/// — served as "caught up" at a foreign offset, it wedges forever
+/// (the availgate failover-convergence flake). `RandomState`
+/// carries the process's OS-seeded entropy; identity, not crypto.
+pub(crate) fn fresh_generation(old: u64) -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    loop {
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u64(old);
+        // Mask to 53 bits: generations ride RESP integers (REPL.TOKEN
+        // / REPL.WAIT / FEED.TAIL), and client bindings surface them
+        // as JS Numbers, whose integer precision ends at 2^53 — a
+        // wider value round-trips corrupted and self-resyncs forever.
+        // A 2^53 identity space still makes collisions negligible.
+        let g = h.finish() & ((1u64 << 53) - 1);
+        if g != 0 && g != old {
+            return g;
         }
     }
 }
@@ -157,23 +187,55 @@ mod tests {
     fn stale_generation_resyncs_with_tail() {
         let mut f = feed_with(3);
         f.bump_generation();
+        let g2 = f.generation();
         f.source_mut().push_mutation(&argv(&[b"SET", b"new", b"v"]));
         match f.read(1, 2, 10) {
             Err(FeedRead::Resync { generation, tail }) => {
-                assert_eq!(generation, 2);
+                assert_eq!(generation, g2);
                 assert_eq!(tail, 1);
             }
             other => panic!("expected Resync, got {:?}", other.map(|v| v.len())),
         }
         // old-generation frames are gone — new gen serves only its own
-        let frames = f.read(2, 0, 10).unwrap();
+        let frames = f.read(g2, 0, 10).unwrap();
         assert_eq!(frames.len(), 1);
+    }
+
+    /// The availgate failover wedge, distilled: generations are
+    /// identities, not counters. A bump must never land on a
+    /// PREDICTABLE next value (old+1 is what a peer node's own bump
+    /// would produce for a DIFFERENT history), and any mismatched
+    /// cursor — including one "from the future" of a counter's view —
+    /// resyncs instead of erroring.
+    #[test]
+    fn generations_are_random_identities() {
+        let mut a = FeedSource::new(1, ReplicationSource::new(1 << 20));
+        let mut b = FeedSource::new(1, ReplicationSource::new(1 << 20));
+        a.bump_generation();
+        b.bump_generation();
+        assert_ne!(a.generation(), 0);
+        assert_ne!(a.generation(), 1, "old value must not repeat");
+        assert_ne!(a.generation(), 2, "a counter's next value is the collision");
+        assert_ne!(
+            a.generation(),
+            b.generation(),
+            "two nodes bumping from the same value must diverge"
+        );
+        // A cursor from a foreign history (any unknown gen) resyncs.
+        let g = a.generation();
+        match a.read(g.wrapping_add(1), 0, 10) {
+            Err(FeedRead::Resync { generation, .. }) => assert_eq!(generation, g),
+            other => panic!("expected Resync, got {:?}", other.map(|v| v.len())),
+        }
     }
 
     #[test]
     fn future_cursors_rejected() {
         let f = feed_with(2);
-        assert!(matches!(f.read(3, 0, 1), Err(FeedRead::Future)));
+        // Unknown generation (a counter would call gen 3 "the
+        // future") → Resync, not Future: identities have no order.
+        assert!(matches!(f.read(3, 0, 1), Err(FeedRead::Resync { .. })));
+        // Offset ahead within the CURRENT generation → Future.
         assert!(matches!(f.read(1, 99, 1), Err(FeedRead::Future)));
     }
 

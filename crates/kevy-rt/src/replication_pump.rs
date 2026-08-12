@@ -179,8 +179,13 @@ impl<C: Commands> Shard<C> {
                 return;
             }
         }
-        if sent_offset >= primary_next {
-            return; // caught up
+        if sent_offset == primary_next {
+            return; // caught up — EXACTLY equal only. An offset AHEAD
+            // of this generation's history is a forked/foreign cursor
+            // and must fall through to frames_from, whose Future arm
+            // ships a snapshot. The old `>=` shadowed that arm: the
+            // ahead cursor sat "caught up" with heartbeats flowing
+            // and never converged (the availgate failover wedge).
         }
         let pending = self.replicas[idx].output.len() - self.replicas[idx].write_off;
         if pending >= STREAMING_OUTPUT_CAP / 2 {

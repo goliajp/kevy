@@ -252,13 +252,16 @@ fn feed_consume_loop_and_prefix() {
 #[test]
 fn feed_flushall_bumps_generation() {
     let s = Store::open(Config::default().with_ttl_reaper_manual().with_feed(0)).unwrap();
+    let (g_before, _) = s.changes_tail().unwrap();
     s.set(b"k", b"v").unwrap();
     s.flushall().unwrap();
     let (g, off) = s.changes_tail().unwrap();
-    assert_eq!((g, off), (2, 0));
-    match s.changes_since(1, 0, 10, &[]) {
+    assert_ne!(g, g_before, "FLUSHALL draws a fresh generation identity");
+    assert_ne!(g, 0);
+    assert_eq!(off, 0);
+    match s.changes_since(g_before, 0, 10, &[]) {
         Err(FeedError::Resync { generation, tail }) => {
-            assert_eq!(generation, 2);
+            assert_eq!(generation, g);
             assert_eq!(tail, 0);
         }
         other => panic!("expected Resync, got {other:?}"),
@@ -268,36 +271,39 @@ fn feed_flushall_bumps_generation() {
 #[test]
 fn feed_clean_reopen_continues_crash_bumps() {
     let dir = crate::store::test_suites::tests::tmp_dir("feed-reopen");
-    {
-        let s = Store::open(
-            Config::default().with_persist(&dir).with_ttl_reaper_manual().with_feed(0),
-        )
-        .unwrap();
-        s.set(b"a", b"1").unwrap();
-        s.set(b"b", b"2").unwrap();
-        assert_eq!(s.changes_tail().unwrap(), (1, 2));
-    } // clean drop → marker written after AOF flush
+    let s = Store::open(
+        Config::default().with_persist(&dir).with_ttl_reaper_manual().with_feed(0),
+    )
+    .unwrap();
+    s.set(b"a", b"1").unwrap();
+    s.set(b"b", b"2").unwrap();
+    let (g1, off1) = s.changes_tail().unwrap();
+    assert_ne!(g1, 0);
+    assert_eq!(off1, 2);
+    drop(s); // clean drop → marker written after AOF flush
 
-    {
-        let s2 = Store::open(
-            Config::default().with_persist(&dir).with_ttl_reaper_manual().with_feed(0),
-        )
-        .unwrap();
-        // clean reopen: same generation, offset continues
-        assert_eq!(s2.changes_tail().unwrap(), (1, 2));
-        s2.set(b"c", b"3").unwrap();
-        let batch = s2.changes_since(1, 2, 10, &[]).unwrap();
-        assert_eq!(batch.changes.len(), 1);
-        assert_eq!(batch.changes[0].offset, 2);
-    }
+    let s2 = Store::open(
+        Config::default().with_persist(&dir).with_ttl_reaper_manual().with_feed(0),
+    )
+    .unwrap();
+    // clean reopen: same generation, offset continues
+    assert_eq!(s2.changes_tail().unwrap(), (g1, 2));
+    s2.set(b"c", b"3").unwrap();
+    let batch = s2.changes_since(g1, 2, 10, &[]).unwrap();
+    assert_eq!(batch.changes.len(), 1);
+    assert_eq!(batch.changes[0].offset, 2);
+    drop(s2);
 
-    // simulate crash: markers gone → next open bumps
+    // simulate crash: markers gone → next open draws a fresh identity
     std::fs::remove_file(std::path::Path::new(&dir).join("feed-0.meta")).unwrap();
     let s3 = Store::open(
         Config::default().with_persist(&dir).with_ttl_reaper_manual().with_feed(0),
     )
     .unwrap();
-    assert_eq!(s3.changes_tail().unwrap(), (2, 0));
+    let (g3, off3) = s3.changes_tail().unwrap();
+    assert_ne!(g3, g1, "unclean reopen draws a fresh generation");
+    assert_ne!(g3, 0);
+    assert_eq!(off3, 0);
     drop(s3);
     let _ = std::fs::remove_dir_all(&dir);
 }
