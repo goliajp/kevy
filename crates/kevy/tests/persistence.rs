@@ -720,13 +720,17 @@ fn stream_groups_survive_bgrewriteaof_restart() {
         c.write_all(&req(&[b"BGREWRITEAOF"])).unwrap();
         read_reply(&mut c, b"+OK\r\n");
         // Background rewrite: wait for the compacted file to swap in
-        // before stopping the runtime. Discriminator: the raw history
-        // contains literal XREADGROUP frames; a rewritten log never does
-        // (it reconstructs PELs via XCLAIM). Plain growth (e.g. the
-        // begin-rewrite flush) doesn't trip this.
+        // before stopping the runtime. Discriminator: the rewritten
+        // image reconstructs PELs via XCLAIM frames, which this test
+        // never issues — so their PRESENCE proves the swap landed.
+        // (The old "no XREADGROUP" check assumed appends hit the disk
+        // synchronously; under the AOF offload the on-disk file LAGS
+        // the replies, and an early read of the not-yet-written log
+        // matched spuriously — the recurring flake in the ledger.)
         wait_for("rewritten AOF to swap in", || {
             std::fs::read(dir.join("aof-0.aof")).is_ok_and(|now| {
-                !now.is_empty() && !now.windows(10).any(|w| w == b"XREADGROUP")
+                now.windows(6).any(|w| w == b"XCLAIM")
+                    && !now.windows(10).any(|w| w == b"XREADGROUP")
             })
         });
     });

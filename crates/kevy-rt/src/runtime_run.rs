@@ -280,6 +280,7 @@ impl<C: Commands> Runtime<C> {
                 #[cfg(target_os = "linux")]
                 aof_offload: Default::default(),
                 aof_lane: Default::default(),
+                pending_fsync_policy: None,
                 held_responses: Vec::new(),
                 rewrite_handoff: None,
                 rewrite_rate_mark: None,
