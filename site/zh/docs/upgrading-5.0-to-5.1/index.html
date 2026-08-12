@@ -57,6 +57,7 @@
 <figure class="code"><pre><code class="lang-text">kevy: replica fd 42 generation 6843605247850762 != feed generation
       4198793490690396 (sent_offset 0); shipping snapshot</code></pre></figure>
 <p>这是预期行为，且能自愈。它同时意味着 replica 本地的分叉会被丢弃而不是 带着走——这正是分叉历史的既定契约。</p>
+<p>这次 resync 落地期间，replica 对读请求回 <code>-LOADING</code>——任何全量 resync 本来就是这样：它的键空间正在被替换，给不出一个自洽的答案。<code>PING</code> 依然 豁免。窗口长短取决于数据集大小；如果你不能容忍这段读不可用，请在重启 该 replica 之前先把它从读池里摘掉。</p>
 <p>它关掉的 bug：选举一落定，晋升就立刻开放写入，但每个 shard 要等自己的 tick 才给复制 offset 落栅栏。在那个窗口里被接受的写入会被栅栏销毁， 而之后接上来的 replica 被告知"你已经追平了"——于是这条写入存在于 primary 的键空间里，却不存在于任何一条流里，而链路一直报告自己完全 健康。</p>
 <h3 id="appendfsync-always-共享-fsync-轮次"><code>appendfsync always</code> 共享 fsync 轮次</h3>
 <p><code>always</code> 下，并发连接现在共享 fsync 轮次（组提交），而不是各付各的。 单个串行客户端会略慢一点——它的写入现在要等一次排队的 fsync 及其 完成，而不是内联的那次——任何并发负载则快一个数量级。如果你需要旧的 形状，<code>KEVY_AOF_OFFLOAD=0</code> 在两种 reactor 上都能恢复经典同步路径。</p>

@@ -72,6 +72,12 @@ That is expected and self-healing. It also means a replica's local
 divergence is discarded rather than carried forward, which is the
 documented contract for a forked history.
 
+While that resync lands, the replica answers reads with `-LOADING`, as
+it already did for any full resync — its keyspace is being replaced,
+so there is no consistent answer to give. `PING` stays exempt. Size
+the window by your dataset, and drain a replica from your read pool
+before restarting it if you cannot tolerate the gap.
+
 The bug this closes: promotion opens writes the instant the election
 resolves, but each shard fences its replication offsets on its own
 tick. A write accepted inside that window was destroyed by the fence,
