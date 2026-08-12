@@ -57,6 +57,7 @@
 <figure class="code"><pre><code class="lang-text">kevy: replica fd 42 generation 6843605247850762 != feed generation
       4198793490690396 (sent_offset 0); shipping snapshot</code></pre></figure>
 <p>これは想定どおりで、自己修復します。同時に、replica のローカルな 分岐は持ち越されずに破棄される、という分岐履歴に対する文書化済みの 契約でもあります。</p>
+<p>その resync が着地するまでのあいだ、replica は読み取りに <code>-LOADING</code> を返します——これは従来からフル resync で同じでした。キー空間が置き 換えられている最中であり、一貫した答えが存在しないからです。<code>PING</code> は例外のままです。窓の長さはデータセット次第なので、この間の読み取り 不可を許容できない場合は、再起動の前にその replica を読み取りプール から外してください。</p>
 <p>これが閉じるバグ：昇格は選挙が決着した瞬間に書き込みを開放しますが、 各シャードは自分の tick で複製オフセットをフェンスします。その窓の なかで受理された書き込みはフェンスに破棄され、あとから接続した replica は「すでに追いついている」と告げられます——結果、その書き込み は primary のキー空間には存在するのにどのストリームにも存在せず、 リンクは完璧に健全だと報告し続けます。</p>
 <h3 id="appendfsync-always-は-fsync-ラウンドを共有する"><code>appendfsync always</code> は fsync ラウンドを共有する</h3>
 <p><code>always</code> では、並行接続がそれぞれ自分の fsync を払うのではなく、 fsync ラウンドを共有（グループコミット）します。逐次実行の単一 クライアントは少し遅くなり——インラインの fsync ではなくキューされた fsync とその完了を待つため——並行負荷では桁違いに速くなります。 従来の形が必要なら、<code>KEVY_AOF_OFFLOAD=0</code> がどちらの reactor でも 古典的な同期パスを復元します。</p>

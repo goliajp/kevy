@@ -1799,13 +1799,16 @@ fn replicaof_command_dynamically_attaches_to_primary() {
         for (k, _v) in pairs {
             send_resp(&mut reader, &[b"GET", k]);
             let line = read_line(&mut reader);
-            if line.starts_with(b"$-1") {
+            // A bulk header is the ONLY success shape. `$-1` is a miss,
+            // and an error line (`-LOADING` while the join's snapshot
+            // resync lands) is not an answer at all — treating either as
+            // present ended this poll early and left the next command
+            // reading a stream that had drifted.
+            if !line.starts_with(b"$") || line.starts_with(b"$-1") {
                 got_all = false;
                 break;
             }
-            if line.starts_with(b"$") {
-                let _ = read_line(&mut reader);
-            }
+            let _ = read_line(&mut reader);
         }
         if got_all {
             all_seen = true;
@@ -1924,6 +1927,18 @@ fn read_int(s: &mut std::net::TcpStream) -> i64 {
     std::str::from_utf8(&line[1..line.len() - 2]).unwrap().parse().unwrap()
 }
 
+/// [`read_int_array`] for a reply that may legitimately not be an
+/// array yet — `None` for anything that is not a `*N` header, so a
+/// poller can wait out a transient like `-LOADING`.
+fn try_read_int_array(s: &mut std::net::TcpStream) -> Option<Vec<i64>> {
+    let header = read_line(s);
+    if !header.starts_with(b"*") {
+        return None;
+    }
+    let n: usize = std::str::from_utf8(&header[1..header.len() - 2]).ok()?.parse().ok()?;
+    Some((0..n).map(|_| read_int(s)).collect())
+}
+
 /// Read a flat `*N` array of `:int` elements.
 fn read_int_array(s: &mut std::net::TcpStream) -> Vec<i64> {
     let header = read_line(s);
@@ -1939,7 +1954,13 @@ fn wait_replica_gen_learned(replica_port: u16) -> u64 {
     let mut c = std::net::TcpStream::connect(("127.0.0.1", replica_port)).unwrap();
     for _ in 0..200 {
         send_resp(&mut c, &[b"REPL.TOKEN"]);
-        let pairs = read_int_array(&mut c);
+        // `-LOADING` while the join's snapshot resync lands is a reply,
+        // just not an array — keep polling rather than decoding it as
+        // one.
+        let Some(pairs) = try_read_int_array(&mut c) else {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+            continue;
+        };
         if pairs.len() == 2 && pairs[0] > 0 {
             return pairs[0] as u64;
         }
