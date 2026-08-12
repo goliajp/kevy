@@ -23,7 +23,7 @@ workspace = true
 [dependencies]
 # kevy-scalar: the V1 constant folder (`SELECT lower('X')` with no
 # FROM) — still a build/CLI-time face, never inside a serving engine.
-kevy-scalar = { path = "../kevy-scalar", version = "5.0.0" }
+kevy-scalar = { path = "../kevy-scalar", version = "5.1.0" }
 
 [dev-dependencies]
 kevy-index = { path = "../kevy-index" }
