@@ -791,4 +791,10 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - [x] tailgate epoll 观察轮 ✅(不设门):同日同构建 A/B——uring 双 cell 双 bar 仍 PASS;epoll mixed p999 4.68ms(优于 uring 8.15ms)但 tick gap 440ms(10×);firehose p999 117ms / gap 774ms 超线。mixed 的背离**单列为待测项而非解释**。finding=bench/FINDING-2026-08-12-tailgate-epoll-observation.md。**仪器教训**:首轮忘了 `TMPDIR=$HOME/captmp`,落到 32GB tmpfs 上被写满 → 探针全 reset,而门把空值渲染成四条超线 FAIL(空测量长得像失败测量);这个陷阱 FINDING-2026-08-09 早写过。
 - [x] 文档 ✅:persistence ja/zh 同步 + upgrading-5.0-to-5.1 三语(含新增的 `-LOADING` 窗口说明)+ CHANGELOG 5.1.0 + site 再生 107 页;doc 四门绿。
 - [x] publish 链拓扑序 ✅ 变成门禁:`tools/check_publish_order.py` 进 CI——含 **dev/build 依赖**(v5.0 那次 kevy-cluster-rw dev-dep kevy-rt 的真陷阱已红-绿实证),并交叉核对 workflow 里两份手维护列表。
-- [ ] 发布彩排剩余:workspace bump 5.1.0 + release-profile 预跑 + npm 版本推导核对 + perfgate-median 终跑 → 「5.1 RC-READY」三栏报告请属主拍板(tag/publish/官网/smix 通知=属主触发)。
+- [x] 发布彩排 ✅:workspace bump 5.1.0(40 crate 同步,含精确 pin 与对齐 pin)+ release-profile 全 workspace 构建 EXIT=0 + npm 版本从 tag 推导已核 + perfgate PASS 12/12(漂移 ±2% 内)+ develop CI 实测绿。**三栏报告=`.claude/plans/2026-08-12-v5.1-rc-ready.md`,只剩属主扣扳机**(tag→publish 链→npm→Release→官网→smix 通知)。
+
+### P8 — epoll/kqueue tick 节拍(P7 观察轮点名的下一步测量)✅ CLOSED
+- [x] 破案 ✅(merge `8cd450f2`,CI 绿):tick 把"没变过的 appendfsync"当成待应用的策略切换,而切换协议按设计先排空 offload driver——poll 反应堆上那是忙等 writer lane 排空,于是**每 100ms 同步排空一次**,火管工况下就是大半秒。修=只有策略真变了才算待切换(uring 的 deferral 半边未动)。**不是 5.0 回归**:lane 与排空纪律都是 5.1 新增。
+- [x] 定位全程靠测量,三步 ✅:① `reactor_ticks_total` 把最高水位 gauge 变成可读的一对——**节拍其实健康(38/40Hz),证伪了我自己"约 2Hz"的读法**(那条已在 finding 里撤回)② `KEVY_DEBUG_SLOW_ITER_MS` 相位分解把停顿钉在 tick 相且 `events=0` ③ 再拆 tick 体,891ms 的迭代里 884ms 在 `apply_live_runtime_config` 一个调用里。
+- [x] 验证 ✅:epoll firehose 最坏反应堆停顿 790→34-42ms、最坏客户端往返 862→14-16ms、p99.9 123→10ms、超 100ms 迭代 97-106→**0**;**tailgate 在 poll 反应堆转绿**(此前四数红三);crashgate PASS;perfgate 面未触碰(改动只在 tick 相)。finding=bench/FINDING-2026-08-12-epoll-tick-drained-the-lane.md。
+- [ ] 建议未采纳(留属主/后续):epoll 既已进 bar,tailgate 的 epoll cell 可以正式设门——代价是门的墙钟翻倍,属 scope 决定。
