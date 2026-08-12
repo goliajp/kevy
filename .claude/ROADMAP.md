@@ -770,3 +770,7 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - [x] 根因(首稿「双主瞬态」判读被 forensics 复核推翻——n1 的 PRIMARY 是启动自选举):**① feed generation 是计数器,跨节点数字必然碰撞**(fresh 全叫 1;启动选举与 failover 提升都叫 2),stale cursor 穿过 gen fence 进 offset 别史;**② pump 的 caught-up `>=` 遮蔽了文档承诺的 forked-history snapshot ship**——同代 ahead cursor 永久假 caught-up(心跳照发 link up 不收敛 = forensics 原样签名)。
 - [x] 修复:generation = 随机 53 位**历史身份**(RESP i64 + JS Number 2^53 双线安全;fresh/unclean boot 与每次 bump 都重抽;mismatch 一律 Resync,身份无序);caught-up 改精确相等,ahead cursor 落入 Future 臂 ship snapshot。**JS 2^53 线是实战教训:63 位首版被 ts conformance 抓出 Number 精度截断自 Resync 循环**。
 - [x] 验证:新 ahead-cursor e2e(旧码上 wedge 为 ping-only)+ feed/feed_meta/embedded 身份单测 + gen 字面断言全库迁移(feed_cdc/wrap_parity/embedded/e2e ~20 处)+ **盒上 availgate ×10 全 PASS**(带轮间端口 settle;此前 ×10 的 5 FAIL 是循环器自身固定端口 AddrInUse 工件)+ repligate PASS。
+
+### P5 — S3:epoll/kqueue 反应堆的 AOF writer 线程【当前】
+- [x] 设计轮 ✅(2026-08-12):正式 RFC `.claude/rfcs/2026-08-12-s3-epoll-writer-thread.md`(Explore 全图;**关键地面事实:epoll=kqueue 共路径一条 Shard::run;queue 机制 cfg(unix) 可直接复用、O_APPEND 下 offset 只是记账、顺序 write_all 与 uring positioned write 磁盘等价;S5 off-thread swap 封锁判据是 queued_mode() 非反应堆种类=按构造自动解锁;S3 现状零专属门——crashgate cell S/tailgate 全 auto 反应堆,盒上即 uring**)。机制=per-shard writer 线程(persist_worker/bio 先例)+ S2 三件套 epoll 对偶(Conn.held_watermark + flush_conn 单门点覆盖 7 个写点 + cfg 放宽)。
+- [ ] 实施(RFC §5):① crashgate server-always-epoll cell(KEVY_IO_URING=0 显式)旧路径基线绿 ② kevy-persist queued_file_clone ③ aof_writer.rs lane ④ 接线+always 门 ⑤ 盒上 cell+perf A/B+全门禁 → merge
