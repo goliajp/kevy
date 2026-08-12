@@ -260,17 +260,37 @@ impl Server {
     }
 }
 
-fn replicate_from(offset: &str, id: &str) -> Vec<u8> {
-    // Raw 6-arg 4.0 handshake with a gen-0 (fresh / no-claim)
-    // generation — the shape every one of these streaming tests
-    // wants: a fresh server's feed gen is 1, and the pump's fence
-    // adopts it for a gen-0 offset-0 claim.
+/// The live feed generation behind one replication port.
+///
+/// A cursor that claims NOTHING (generation 0) is always answered with
+/// a full snapshot: the primary cannot see what a replica already
+/// holds, and frames only add and overwrite, so a snapshot is the only
+/// reply that converges an unknown peer. A test that wants to observe
+/// FRAME streaming must therefore present the continuity claim a
+/// RESUMING replica would — which starts by learning the generation,
+/// exactly as a real replica learns it from its first `+ACK`.
+fn live_generation(replication_port: u16) -> u64 {
+    let probe = kevy_replicate::replica::ReplicaClient::connect(
+        ("127.0.0.1", replication_port),
+        "gen-probe",
+        0,
+    )
+    .expect("probe handshake");
+    probe.primary_gen_at_handshake()
+}
+
+/// Raw 6-arg 4.0 handshake: `REPLICATE FROM <generation> <offset> ID
+/// <id>`. Pass generation 0 for a no-claim (fresh) cursor — which the
+/// pump's fence answers with a snapshot — or a real generation from
+/// [`live_generation`] to resume on the frame path.
+fn replicate_from(generation: u64, offset: &str, id: &str) -> Vec<u8> {
+    let gen_str = generation.to_string();
     let mut v = Vec::new();
     v.extend_from_slice(b"*6\r\n");
     for arg in [
         b"REPLICATE".as_slice(),
         b"FROM",
-        b"0",
+        gen_str.as_bytes(),
         offset.as_bytes(),
         b"ID",
         id.as_bytes(),
@@ -362,7 +382,8 @@ fn replica_handshake_receives_ack_and_stays_connected() {
     // when its 2 s timeout elapses, NOT when the server closes.
     let server = Server::start(1);
     let mut s = std::net::TcpStream::connect(("127.0.0.1", server.replication_base)).unwrap();
-    s.write_all(&replicate_from("0", "replica-a")).unwrap();
+    s.write_all(&replicate_from(live_generation(server.replication_base), "0", "replica-a"))
+        .unwrap();
     let reply = read_to_eof(&mut s);
     let (_, off, _) = parse_ack(&reply);
     assert_eq!(off, 0);
@@ -379,7 +400,7 @@ fn handshake_with_nonzero_offset_echoed_in_ack_then_fence_ships() {
     // snapshot ship, never a quiet streaming socket (T8).
     let server = Server::start(1);
     let mut s = std::net::TcpStream::connect(("127.0.0.1", server.replication_base)).unwrap();
-    s.write_all(&replicate_from("12345", "node-7")).unwrap();
+    s.write_all(&replicate_from(0, "12345", "node-7")).unwrap();
     let reply = read_to_eof(&mut s);
     let (_, off, rest) = parse_ack(&reply);
     assert_eq!(off, 12345, "ACK echoes the requested offset");
@@ -479,7 +500,9 @@ fn streaming_replica_receives_set_command_as_wire_frame() {
         server.replication_base,
     ))
     .unwrap();
-    replica.write_all(&replicate_from("0", "replica-stream")).unwrap();
+    replica
+        .write_all(&replicate_from(live_generation(server.replication_base), "0", "replica-stream"))
+        .unwrap();
     // First bytes back must be the +ACK.
     let (_, ack_off, ack_leftover) = read_ack(&mut replica);
     assert_eq!(ack_off, 0);
@@ -534,7 +557,9 @@ fn streaming_replica_receives_multiple_frames_in_order() {
         server.replication_base,
     ))
     .unwrap();
-    replica.write_all(&replicate_from("0", "replica-multi")).unwrap();
+    replica
+        .write_all(&replicate_from(live_generation(server.replication_base), "0", "replica-multi"))
+        .unwrap();
     let (_, ack_off, ack_leftover) = read_ack(&mut replica);
     assert_eq!(ack_off, 0);
 
@@ -600,12 +625,10 @@ fn streaming_replica_receives_only_its_shards_writes() {
     let server = Server::start(2);
     let mut replicas: Vec<_> = (0..server.nshards)
         .map(|i| {
-            let mut r = std::net::TcpStream::connect((
-                "127.0.0.1",
-                server.replication_base + i as u16,
-            ))
-            .unwrap();
-            r.write_all(&replicate_from("0", &format!("replica-{i}"))).unwrap();
+            let port = server.replication_base + i as u16;
+            let mut r = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+            r.write_all(&replicate_from(live_generation(port), "0", &format!("replica-{i}")))
+                .unwrap();
             let (_, ack_off, leftover) = read_ack(&mut r);
             assert_eq!(ack_off, 0);
             (r, leftover)
@@ -681,10 +704,15 @@ fn replica_client_handshake_and_receive_set_frame() {
     // ad-hoc SET test, but via the published replica API instead of
     // raw TCP — pins down the client contract end-to-end.
     let server = Server::start(1);
-    let mut client = kevy_replicate::replica::ReplicaClient::connect(
+    // Resume-shaped claim (the live generation at offset 0), so the
+    // fence serves frames instead of the full snapshot a no-claim
+    // cursor now gets — this test is about the frame contract.
+    let mut client = kevy_replicate::replica::ReplicaClient::connect_at(
         ("127.0.0.1", server.replication_base),
         "replica-via-client",
+        live_generation(server.replication_base),
         0,
+        std::time::Duration::from_secs(5),
     )
     .expect("connect + handshake");
     assert_eq!(client.primary_offset_at_handshake(), 0);
@@ -1016,10 +1044,13 @@ fn replica_apply_dispatch_mirrors_primary_store() {
     // on the primary. That's the full replication contract for the
     // in-process recipe.
     let server = Server::start(1);
-    let mut client = kevy_replicate::replica::ReplicaClient::connect(
+    // Resume-shaped claim — see replica_client_handshake_and_receive_set_frame.
+    let mut client = kevy_replicate::replica::ReplicaClient::connect_at(
         ("127.0.0.1", server.replication_base),
         "replica-apply",
+        live_generation(server.replication_base),
         0,
+        std::time::Duration::from_secs(5),
     )
     .expect("connect + handshake");
 
@@ -1156,7 +1187,8 @@ fn multi_shard_listener_binds_per_shard_port() {
     for i in 0..server.nshards {
         let port = server.replication_base + i as u16;
         let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
-        s.write_all(&replicate_from("0", &format!("replica-{i}"))).unwrap();
+        s.write_all(&replicate_from(live_generation(port), "0", &format!("replica-{i}")))
+            .unwrap();
         let reply = read_to_eof(&mut s);
         let (_, ack_off, rest) = parse_ack(&reply);
         assert_eq!(ack_off, 0);
@@ -2280,4 +2312,128 @@ fn multi_key_delete_reaches_a_replica() {
     replica_stop.store(true, std::sync::atomic::Ordering::SeqCst);
     let _ = std::net::TcpStream::connect(("127.0.0.1", replica_port));
     let _ = replica_handle.join();
+}
+
+
+/// A promoted node must serve its keyspace to a fresh replica cursor.
+///
+/// Promotion fences the offset space: the shard bumps its feed
+/// generation, which REPLACES the source — buffered frames dropped,
+/// `next_offset` back to 0 — while the store keeps every key. A
+/// replica that attaches after that presents `generation 0 / offset 0`
+/// (a respawned runner's cursor is thread-local and starts at zero, so
+/// a node holding a full keyspace is indistinguishable on the wire
+/// from a blank one). The pump read that pair as "fresh replica,
+/// nothing served yet", adopted the generation, and then found
+/// `sent_offset == primary_next == 0` — exactly caught up. Nothing was
+/// ever shipped, while the 1 Hz heartbeat kept the link `up` with
+/// `master_last_io_seconds_ago:0` and no resync in progress.
+///
+/// That is the availgate crash-failover convergence wedge (third
+/// occurrence, run 31581877633). The write taken in the promotion
+/// window — writes open at the command layer the instant the epoch
+/// bumps, but each shard fences only on its own tick — is the write
+/// availgate then waits 60 s for.
+///
+/// `REPLICAOF NO ONE` on a following replica drives the same promotion
+/// counter as an election win, so the sequencing reproduces without an
+/// elect cluster.
+#[test]
+fn promoted_node_ships_its_keyspace_to_a_fresh_cursor() {
+    // Upstream primary with a keyspace to mirror.
+    let primary = Server::start(1);
+    let mut writer = std::net::TcpStream::connect(("127.0.0.1", primary.port)).unwrap();
+    for i in 0..50 {
+        send_resp(&mut writer, &[b"SET", format!("pre{i}").as_bytes(), b"v"]);
+        assert_eq!(read_line(&mut writer), b"+OK\r\n");
+    }
+
+    // The node under test: a replica that ALSO carries a replication
+    // source + listener, exactly as `kevy::serve` builds one (topology
+    // symmetry — a replica must be able to serve replicas the moment it
+    // is promoted).
+    let commands = kevy::KevyCommands::sharded(1);
+    let receivers = commands.state().take_replica_inboxes().expect("fresh state");
+    let base = free_port_block(1);
+    let node_port = base;
+    let node_repl_base = base + 1;
+    let dir = TmpDir::new("kevy-promotion-window");
+    let dir_path = dir.path().to_path_buf();
+    // SAFETY: see Server::start.
+    unsafe { std::env::set_var("KEVY_IO_URING", "0"); }
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_thread = stop.clone();
+    let handle = std::thread::spawn(move || {
+        let rt = kevy_rt::Runtime::builder(commands)
+            .bind([127, 0, 0, 1], node_port)
+            .shards(1)
+            .with_data_dir(dir_path)
+            .with_aof(false)
+            .with_replication(true, 1024 * 1024)
+            .with_replication_listener(node_repl_base)
+            .with_replica_inboxes(receivers);
+        let _ = rt.run(stop_thread);
+    });
+    wait_port(node_port, "node");
+    wait_port(node_repl_base, "node replication listener");
+
+    // Follow the primary and mirror its keyspace.
+    let mut admin = std::net::TcpStream::connect(("127.0.0.1", node_port)).unwrap();
+    let upstream = primary.replication_base.to_string();
+    send_resp(&mut admin, &[b"REPLICAOF", b"127.0.0.1", upstream.as_bytes()]);
+    assert_eq!(read_line(&mut admin), b"+OK\r\n");
+    let mut mirrored = false;
+    for _ in 0..400 {
+        send_resp(&mut admin, &[b"GET", b"pre49"]);
+        let line = read_line(&mut admin);
+        if line.starts_with(b"$") && !line.starts_with(b"$-1") {
+            let _ = read_line(&mut admin);
+            mirrored = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(mirrored, "the node never mirrored the upstream keyspace");
+
+    // Promote, then take a write in the window before the shard's tick
+    // fences the feed.
+    send_resp(&mut admin, &[b"REPLICAOF", b"NO", b"ONE"]);
+    assert_eq!(read_line(&mut admin), b"+OK\r\n");
+    send_resp(&mut admin, &[b"SET", b"postfail", b"v1"]);
+    assert_eq!(read_line(&mut admin), b"+OK\r\n");
+    // Let the tick land the generation bump.
+    std::thread::sleep(std::time::Duration::from_millis(600));
+
+    // A fresh cursor — no continuity claim, and no way to express one.
+    // The promoted node's history is not in its (just-replaced) backlog,
+    // so the only correct answer is a snapshot ship.
+    let mut cursor = kevy_replicate::replica::ReplicaClient::connect(
+        ("127.0.0.1", node_repl_base),
+        "window-probe",
+        0,
+    )
+    .expect("fresh handshake");
+    let mut pings = 0;
+    let outcome = loop {
+        match cursor.next_event().expect("event").expect("ok") {
+            kevy_replicate::replica::ReplicaEvent::SnapshotBegin => break "snapshot",
+            kevy_replicate::replica::ReplicaEvent::Ping { .. } => {
+                pings += 1;
+                assert!(
+                    pings < 10,
+                    "10 heartbeats and no snapshot — the fresh cursor sat \
+                     'caught up' at offset 0 while the promoted node's whole \
+                     keyspace (including the promotion-window write) stayed \
+                     invisible: the availgate failover wedge"
+                );
+            }
+            other => panic!("expected a snapshot ship, got {other:?}"),
+        }
+    };
+    assert_eq!(outcome, "snapshot");
+
+    stop.store(true, Ordering::SeqCst);
+    let _ = std::net::TcpStream::connect(("127.0.0.1", node_port));
+    let _ = handle.join();
+    primary.shutdown();
 }
