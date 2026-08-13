@@ -796,9 +796,16 @@ v5.1.0 已发布并 dogfood 回归通过。此前散在几个旧 arc 里的未�
 - [x] **边界页 `docs/boundaries.md` 三语已写并上站**(Reference 区):四条线(Redis 契约不归我们改 / 含义与执行计划留在应用 / 拓扑声明非发现 / 网络可信)+ 按领域的拒绝表(每条写为什么和改用什么)+ 函数面现在地(能力线 82.5% ratchet、诚实线 wrong==0 硬线)。此前拒绝清单只活在 `.claude/`,用户面一处都没有——这才是这条的真缺口
 - [x] **四区重构:我判定不做,理由在此**。现有五区是**任务导向**(上手/运行/数据/嵌入/参考),提议的四区(Core KV / RDS 模块 / 运维 / 迁移)是**产品架构导向**。读文档的人问的是"我要做 X 怎么做",不是"这属于哪个产品分区";把可用的任务导向结构改成架构导向会让读者更难找到东西。那条目里真正有价值的半条是边界页,已做
 
-## F4 — 属主硬闸(不可逆对外动作,材料我备好)
-- [ ] SDK 渠道首发(NuGet / PyPI / pub.dev / maven / kevy-go / SPM):**技术面已就绪**(全部 5.1.0、门绿),缺的是各 registry 的账号与凭据,不在我手上
-- [ ] `bindings/ts` 与 wasm 包同名 `@goliapkg/kevy` 的命名冲突:需要一个命名决定才能发
+## F4 — 属主硬闸(已查清各渠道**具体**卡在哪,不是笼统"待拍板")
+
+技术面全部就绪:14 个门全 5.1.0、vendored 字节 5.1.0、ffigate 30 格 /
+TS 50/50 / python 真跑通。剩下的阻塞按渠道分三类:
+
+- [ ] **缺凭据(仓库 secrets 只有 `CARGO_REGISTRY_TOKEN` / `NPM_TOKEN` / `DOCKERHUB_*`)**:NuGet 无 API key、PyPI 无 token、pub.dev 无 credentials、maven 无签名密钥。这四个不是我能补的
+- [ ] **缺一个命名决定**:`bindings/ts` 与 wasm 包同名 `@goliapkg/kevy`。**npm token 是有的**,所以 node / electron / expo / nitro 四个包今天就能发,只有 ts 被这个重名卡住
+- [ ] **缺一个仓库结构决定**:Go 模块要独立 repo(`go.mod` 已声明 `github.com/goliajp/kevy-go`,该 repo 不存在);SPM 要**仓库根**有 `Package.swift`(现在在 `bindings/apple/KevyKit/`),等于要决定这个 repo 是否同时充当 SwiftPM 包
+
+三类都要属主动作(给凭据 / 定名字 / 定结构),我这边不再有可推进的余量。
 
 ## F5 — 写死 OUT(不再作为"开着的"出现)
 - 断电级 fsync 验证(dm-flakey):kill -9 面已覆盖顺序性,电源级留研究项
