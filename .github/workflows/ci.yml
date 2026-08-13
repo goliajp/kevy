@@ -149,6 +149,21 @@ jobs:
       - name: locgate (files ≤500 LOC, fns ≤50 or waivered)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: bash bench/locgate.sh
+      # compressgate: each K criterion is still backed by a NAMED test.
+      # `cargo test --workspace` cannot see this — delete the test behind
+      # a criterion and the suite goes green with one fewer test while
+      # the criterion silently loses its assertion. Same shape as
+      # ffigate-contract holding each door to every row.
+      #
+      # UNIT_ONLY because K1 and K5-amplification are SLA numbers read
+      # from a full-scale lx64 envelope run; a hosted runner has no such
+      # artifact and cannot make one. They report NOT-OWNED here rather
+      # than passing unmeasured, and stay the box's job.
+      - name: compressgate (the K contract still has named tests behind it)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        env:
+          COMPRESSGATE_UNIT_ONLY: "1"
+        run: bash bench/compressgate.sh
       # propgate: a durable write must also propagate, or be named. Three
       # data-loss bugs on one branch were the same omission — the AOF got
       # the write and the replica (and so the change feed) did not.

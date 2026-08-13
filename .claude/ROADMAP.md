@@ -559,6 +559,13 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 > 就差一步走进去,是先核前提拦住的。下面的框保持原样(它们记录的是设计,
 > 不是进度);**真进度以 `r1-locality` 为准,merge 归属主**。
 
+> **⚠️ 这张核账表自己也过期了(2026-08-13 复核)。** T3/T4 那两格写的是
+> 「真没开工 / `crates/kevy-compress` 任何分支都不存在」—— 那是 08-06 的
+> 事实;该 crate 现在在 develop 上,随 5.1.0 发布,并在 08-12 修过一个真
+> bug(共享 Huffman 表帧的 tag 缺依赖标记,会让冷值读回 Corrupt)。
+> **教训:一次「核过账」不会永久成立。把结论写下来时要一并写下核账日期,
+> 读的人才知道该不该重核。**
+
 > **同日把九条 train 逐条对了一遍账 —— 下面的框有四条是"做完了没打勾"。**
 > 每条给的是**能核的证据**,不是判断:
 >
@@ -567,8 +574,8 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 > | T0 门先行 | 未打勾 | **已做**(r1-locality) | `bench/allocgate.sh` / `allocgate-mem.sh` / `compressgate.sh` |
 > | T1 alloc 石头 | 未打勾 | **已做**(r1-locality) | `crates/kevy-alloc/src/` 12+ 文件;v8 收口十二角过七 |
 > | T2 alloc 接线 | 未打勾 | **已做**(r1-locality) | `perf(v5-T2)` 系列提交;M3 1.98× vs 2.40× |
-> | T3 compress 石头 | 未打勾 | **真没开工** | 全仓只有两条 RFC 提交,`crates/kevy-compress` 任何分支都不存在 |
-> | T4 compress 接线 | 未打勾 | **真没开工** | 同上 |
+> | T3 compress 石头 | 未打勾 | ~~真没开工~~ → **已发布**(2026-08-13 复核) | `crates/kevy-compress/src/` 5 文件,随 5.1.0 发布 |
+> | T4 compress 接线 | 未打勾 | ~~真没开工~~ → **已接线**(2026-08-13 复核) | `kevy-vlog` 版本 pin 依赖它;**`bash bench/compressgate.sh` 在 develop 上真跑 PASS,K1-K7 全绿**(K4 跨值字典 1000×400B → ≤16 B/值;K5 放大 1.27×/2.0×;K6 SET 路径零 encode)|
 > | T5 索引冷热窗口 | 未打勾 | **已发布** | `crates/kevy-window` + `crates/kevy-seg` + `kevy-index/src/segcold.rs`;`WINDOW col SPAN n BUCKET n` 语法在册;tiergate 六条窗口线;三语文档(zh/ja 于 2026-08-06 补齐) |
 > | T6 自动声明闭环 | 未打勾 | **已发布** | `AUTODECLARE` 横跨 5 个源文件 + `crates/kevy/tests/idx_advise_e2e.rs` |
 > | T7 索引即键(I2) | 未打勾 | **RFC 已出待拍** | `.claude/rfcs/2026-08-05-v5-i2-single-hop-index.md`;**批准前零实现代码** |
@@ -737,8 +744,8 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - [x] **P1 终判 = A 案(opt-in)**,fastpath-residue RFC Resolution + charter §六 已记;用户侧何时开 alloc 指南 = docs/alloc.md
 
 ### V5 — 产品面
-- [ ] 文档四区重构(Core KV / RDS 模块 / 运维 / 迁移指南)三语 + 边界页(14 条 + 函数面进度)
-- [ ] 容量计算器(公式 + 值大小三档表)+ `INFO modules` + 站点同步
+- [x] ~~文档四区重构~~ **判定不做(F3,2026-08-13)**:四区(Core KV / RDS / 运维 / 迁移)是**产品架构导向**,而现有五区是**任务导向** —— 读者问的是「我要做 X 怎么办」,不是「这属于哪个分区」,改了更难找。这条里真有价值的半条是**边界页**,已做:`docs/boundaries.md` + zh/ja 上站(四条线 + 按领域的拒绝表「为什么 + 改用什么」+ 函数面现在地);此前拒绝清单只活在 `.claude/`,用户面一处都没有
+- [x] ~~容量计算器 + `INFO modules`~~ **早已实现(F1 核实,2026-08-13;本轮复验)**:`kevy.golia.jp/capacity/` 200 且含公式与交互;`INFO modules` 由真二进制实测返回(`module:name=alloc/tiering/indexes`)。**ROADMAP 落后于代码的第 N 次** —— 清点开放项前先核实实现
 
 ### V6 — 发布轮(v5.0.0 或先 rc,待 P4)
 - [x] CHANGELOG 收口 + upgradegate 重测 ✅(2026-08-10 RC-READY F1-F3)
