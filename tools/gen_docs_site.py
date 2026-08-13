@@ -407,6 +407,25 @@ def main():
             json.dumps(search, ensure_ascii=False, separators=(",", ":")) + "\n"
         )
 
+    # The release notes, at the URL a stranger guesses first. Until this
+    # page existed the only way to read them was to fetch CHANGELOG.md
+    # off a git branch — and the branch our own GIT-FLOW calls the
+    # stable line sat two release lines behind, so the conventional
+    # guess returned notes that stopped at 3.8.0. A downstream user
+    # reported it as "the changelog comes back empty"; they were
+    # reading exactly what we served them.
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    cl_body, cl_toc = render(changelog)
+    cl_body = re.sub(
+        r"^<h1[^>]*>(.*?)</h1>", r'<div class="doc-head"><h1>\1</h1></div>',
+        cl_body, count=1,
+    )
+    want[ROOT / "site" / "changelog" / "index.html"] = shell(
+        "en", "", "Changelog — kevy",
+        "Every kevy release and what changed in it.",
+        cl_body, cl_toc, "", 1,
+    )
+
     if check:
         stale = [p for p, t in want.items()
                  if not p.exists() or p.read_text(encoding="utf-8") != t]

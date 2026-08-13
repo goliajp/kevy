@@ -64,7 +64,13 @@ cell() {
     kill -9 "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null; WPID=""
     local synced
     synced=$(grep SYNCED "$log" | tail -1 | awk '{print $2}')
-    [ -n "$synced" ] || { verdict 1 "$name/setup" "writer never reached a SYNCED barrier"; return; }
+    # A barrier at ZERO is not a barrier: `recovered >= synced` is
+    # satisfied by an empty store when synced is 0, so a run that wrote
+    # nothing would report the durability bound as met. Ask the question
+    # a downstream user taught us to ask — "would an empty data directory
+    # give the same answer?" — and make the answer no.
+    [ -n "$synced" ] && [ "$synced" -gt 0 ] \
+        || { verdict 1 "$name/setup" "writer never reached a nonzero SYNCED barrier (got '${synced:-none}')"; return; }
 
     # Reopen #1: loss bound, then mark 100 clean writes.
     local checkflags=() fl=" ${flags[*]+${flags[*]}} "
@@ -101,7 +107,13 @@ window_cell() { # $1 = cell name, rest = writer flags
     kill -9 "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null; WPID=""
     local synced
     synced=$(grep SYNCED "$log" | tail -1 | awk '{print $2}')
-    [ -n "$synced" ] || { verdict 1 "$name/setup" "writer never reached a SYNCED barrier"; return; }
+    # A barrier at ZERO is not a barrier: `recovered >= synced` is
+    # satisfied by an empty store when synced is 0, so a run that wrote
+    # nothing would report the durability bound as met. Ask the question
+    # a downstream user taught us to ask — "would an empty data directory
+    # give the same answer?" — and make the answer no.
+    [ -n "$synced" ] && [ "$synced" -gt 0 ] \
+        || { verdict 1 "$name/setup" "writer never reached a nonzero SYNCED barrier (got '${synced:-none}')"; return; }
     local checkflags=() fl=" ${flags[*]+${flags[*]}} "
     [[ "$fl" == *" --shards "* ]] && checkflags+=(--shards "$(echo "$fl" | sed 's/.*--shards \([0-9]*\).*/\1/')")
     local out1 rc count1
