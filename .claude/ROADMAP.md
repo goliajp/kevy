@@ -776,6 +776,16 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - [x] 实施 ✅(2026-08-12,feature/s3-epoll-writer-thread):①-④ 全落地。实施期三收紧(RFC §6):dead-lane SendError chunk 经新 `Aof::requeue_front` 回插队首(order+offset 回归钉死)/ CONFIG SET appendfsync 先 settle lane(owner 句柄 flush 与 clone 在途交错缝)/ 门 park 撤 write interest 防 level-triggered 自旋。S2 三件套全平台化(always_hold_w0/held_responses/flush_held_responses 摘 cfg(linux),双驱动共用)。
 - [x] 验证 ✅:crashgate 33/33 双 host(server-always 双 cell:盒 auto 37,896 + epoll 37,813 acked 全存活;macOS kqueue 423/409)+ persist 72/72 + rt 50/50 + **盒上 A/B(ext4,KEVY_IO_URING=0,always):SET c50 478→10,540 rps(+22×组提交);c1 391 vs 384 持平且 fsync-bound=门无泄漏** + perfgate-median 12/12(uring 面零回归)。PR 测试矩阵(强制 epoll)整体即 lane 实弹面。finding=bench/FINDING-2026-08-12-s3-epoll-writer-lane.md
 
+## 绑定全面跟版 5.1.0 ✅(2026-08-13,属主令「要绑定到 5.1,因为 5.0 有严重缺陷」)
+
+**我的漏**:5.1.0 的 bump 只动了 Cargo manifest,14 个绑定还声明 5.0.0——**其中两个是用字节声明的**。这次这不只是不自洽:5.0.0 的编码器会写出自己解码器拒收的压缩帧,所以带 5.0.0 引擎的门就是在发这个隐患本身。
+
+**真正陈旧的是引擎字节(其余只是版本字符串)**:nitro track 进 git 的两个 jniLibs(arm64-v8a / x86_64)自报 5.0.0 → 用 `packaging/android/build-ffi-jnilibs.sh` 重建;KevyKit 的 `Kevy.xcframework`(ios/ios-sim/macos)重建并经 `prepare-native.sh` 重新 vendor 进 nitro;**三者现在都自报 5.1.0,vendorgate 29/29 PASS**。
+
+**版本声明面 26 个文件**:12 个 manifest(npm×6 / pyproject / pubspec / 两个 csproj / server 二进制 npm 包 / wasm 包模板)+ **包间 `@goliapkg/*` 互 pin**(否则 5.1 的门会拉到 5.0 的同伴包)+ expo gradle 的 `version` 与 `versionName` + tauri 插件 crate 版本 + **python 活的 `__version__`** + README/PUBLISH-FORM 里"tracks kevy 5.0.0"的声明。**故意没动**:第三方 lockfile 里的 5.0.0;tauri 插件的 path 依赖(从来没 pin 版本,一直在构建 5.1.0)。
+
+**验证不是假 bump**:ffigate-contract 30 格(六门×五行)/ TS 套件 50/50 / python 门从树内 import 自报 5.1.0 且对新构建引擎真跑通读写 / vendorgate / locgate / commentgate / rootgate / **develop CI 绿**。**发布仍是属主的**:除 `@goliapkg/kevy`(wasm,已 5.1.0)外,其余绑定包在各 registry **从未发布过**(npm 四个包 E404、PyPI/NuGet/pub.dev 全 404),所以没有任何陈旧产物在用户手里;首发决策照旧留属主。
+
 ## v5.1.0 dogfood 第二轮 ✅(2026-08-13,smix 回执 b)
 
 **他们要的那一节已写并上线**:`docs/upgrading-5.0-to-5.1.md` 三语加"如果你是嵌入式使用者"——只写他们说的那两句 + "哪些配置项对嵌入式无意义"清单。**两句是实测不是推断**(拿已发布 crate 跑嵌入式路径:5.0.0 写 201 键含一个 200KB → 5.1.0 读回 201 → 5.1.0 追加 201 → 5.0.0 重开读回 402,双向 clean replay,同一程序对两版本无改动编译)。他们的整个调用面=`Config::default().with_persist(dir)` + `Store::open` + get/set/del/keys,`grep -niE "getex|pexpire|expire|ttl"` 在其源码上命中 0 处 → 4.1.1 的 GETEX 缺陷与 TTL 绝对挂钟契约都够不到他们。
