@@ -21,7 +21,7 @@ import (
 	"time"
 
 	badger "github.com/dgraph-io/badger/v4"
-	kevy "github.com/goliajp/kevy-go"
+	kevy "github.com/goliajp/kevy-go/v5"
 	bolt "go.etcd.io/bbolt"
 )
 

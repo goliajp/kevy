@@ -1,3 +1,5 @@
+//go:build kevy_embedded
+
 package kevy
 
 // The Go smoke — the same contract as examples/c/smoke.c: commands, a

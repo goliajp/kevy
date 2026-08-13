@@ -1,18 +1,7 @@
-// Package kevy is the first-party Go client for kevy — the pure-Rust
-// Redis-compatible engine. It ships two things behind one import:
-//
-//   - The embedded engine (this file + emb_sub.go), bound to the C ABI in
-//     crates/kevy-ffi: an in-process Store reachable through one Cmd path
-//     plus scalar Get/Set and polled pub/sub (contract §5).
-//   - The unified Client (client*.go), which routes a single Connect(url)
-//     to either the embedded engine (mem:// / file://) or a native RESP
-//     TCP server (kevy:// / redis:// / tcp://), exposing every command
-//     family with both a blocking and an async face (contract §1–§4).
-//
-// A protocol error (-ERR …) from the embedded Cmd path is a Reply with
-// Kind == KindError, not a Go error: the engine answering "no" is a
-// working engine. The typed Client methods, by contrast, map -ERR to a
-// *KevyError, because a typed call has exactly one meaning.
+//go:build kevy_embedded
+
+// The embedded backend: the engine linked in-process over its C ABI.
+// See embedded_seam.go for why this is behind a build tag.
 package kevy
 
 /*
