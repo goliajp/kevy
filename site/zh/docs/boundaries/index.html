@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kevy 不做什么 — kevy</title>
+<meta name="description" content="一个产品的形状，由它拒绝的东西定义的程度不亚于它提供的东西。这一页把 kevy 的拒绝集中在一处，好让"它能不能做 X"这个问题在你据此动工之前就有 答案。每条都写清为什么，以及那个需求该由什么来满足。">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../../assets/docs.css?v=d4b38be8">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../zh/">kevy<span class="v">5.0</span></a>
+    <nav class="nav">
+      <a href="../../../zh/docs/" aria-current="page">文档</a>
+      <a href="../../../zh/docs/commands/">命令</a>
+      <a href="../../../zh/benchmarks/">基准</a>
+      <a href="../../../zh/play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+    </nav>
+    <div class="mast-right">
+      <div id="docsearch" data-index="../../../zh/docs/search-index.json" data-root="../../../zh/">
+        <input type="search" placeholder="搜索文档……" aria-label="搜索文档……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
+      <nav class="lang" aria-label="Language"><a href="../../../docs/boundaries/">EN</a><a href="../../../zh/docs/boundaries/" aria-current="page">中文</a><a href="../../../ja/docs/boundaries/">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell has-toc">
+  <aside class="side"><p class="side-h">上手</p><ul><li><a href="../../../zh/docs/designing-on-kevy/">在 kevy 上设计应用</a></li><li><a href="../../../zh/docs/cookbook/">RDS→kevy 建模 cookbook</a></li><li><a href="../../../zh/docs/persistence/">持久化</a></li><li><a href="../../../zh/docs/tuning/">调优 kevy</a></li></ul><p class="side-h">运行</p><ul><li><a href="../../../zh/docs/upgrading-5.0-to-5.1/">从 5.0 升级到 5.1</a></li><li><a href="../../../zh/docs/upgrading-4-to-5/">从 4.x 升级到 5.0</a></li><li><a href="../../../zh/docs/replication/">复制</a></li><li><a href="../../../zh/docs/availability/">可用性</a></li><li><a href="../../../zh/docs/cluster/">集群</a></li><li><a href="../../../zh/docs/tiering/">透明分层存储（[tiering] / with_tier_budget）</a></li><li><a href="../../../zh/docs/accept-shards/">--accept-shards N——把稀疏连接收拢到部分 shard 上</a></li><li><a href="../../../zh/docs/alloc/">kevy-alloc——可选分配器：它买到什么、代价是什么</a></li><li><a href="../../../zh/docs/uds/">Unix-domain socket（UDS）传输</a></li><li><a href="../../../zh/docs/async/">异步客户端</a></li></ul><p class="side-h">数据</p><ul><li><a href="../../../zh/docs/indexes/">二级索引（IDX. / idx_）</a></li><li><a href="../../../zh/docs/tables/">表（TABLE. / table_）</a></li><li><a href="../../../zh/docs/table-migration/">从手工维护的索引迁移到表</a></li><li><a href="../../../zh/docs/vector-search/">向量检索（KIND ann）</a></li><li><a href="../../../zh/docs/text-search/">全文检索（KIND text）</a></li><li><a href="../../../zh/docs/views/">视图（VIEW. / view_）</a></li><li><a href="../../../zh/docs/cdc/">CDC——变更流（FEED. / changes_since）</a></li><li><a href="../../../zh/docs/pubsub/">Pub/sub</a></li><li><a href="../../../zh/docs/lua/">Lua 脚本</a></li></ul><p class="side-h">嵌入</p><ul><li><a href="../../../zh/docs/wasm/">kevy 上 WebAssembly</a></li><li><a href="../../../zh/docs/embedded-listener/">Embedded 只读 RESP listener</a></li><li><a href="../../../zh/docs/iot/">kevy 跑在 IoT 设备上</a></li></ul><p class="side-h">参考</p><ul><li><a href="../../../zh/docs/boundaries/" aria-current="page">kevy 不做什么</a></li><li><a href="../../../zh/docs/error-replies/">错误回复目录</a></li><li><a href="../../../zh/docs/rds-workloads/">在 kevy 上跑 RDS 负载</a></li><li><a href="../../../zh/docs/migration/">迁移——playbook 与工具链</a></li><li><a href="../../../zh/docs/UPGRADING/">升级 kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../zh/docs/commands/">全部 188 个命令</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>kevy 不做什么</h1></div>
+<p>一个产品的形状，由它拒绝的东西定义的程度不亚于它提供的东西。这一页把 kevy 的拒绝集中在一处，好让"它能不能做 X"这个问题在你据此动工之前就有 答案。每条都写清<b>为什么</b>，以及那个需求该由什么来满足。</p>
+<p>这里的拒绝是持久的。它们不是"还没做"——它们是设计据以成立的线，改动 其中一条是重新设计，不是加一个功能。</p>
+<h2 id="四条线">四条线</h2>
+<p><b>1. Redis 契约不归我们改。</b>kevy 用 Redis 命令名回答的任何东西，含义 就是 Redis 的含义。新能力走自己的命名空间(<code>IDX.*</code>、<code>FEED.*</code>、 <code>VIEW.*</code>、<code>FT.*</code>、<code>VEC.*</code>)，而不是给已有动词加载荷。所以：没有"改进 版"的 SET 语义，也不会给已有回复形状加字段。</p>
+<p><b>2. 含义与执行计划留在你的应用里。</b>kevy 负责存与取，不决定你的数据 是什么意思、也不决定一个查询该怎么执行。这条线拒掉的是 SQL 查询语言、 join 和基于代价的 planner：引擎一旦替你选计划，你的延迟里就多了一个你 没做、也看不见的决定。它给的是<b>声明式访问路径</b>——索引由你命名，代价 由你预测。</p>
+<p><b>3. 拓扑是声明的，不是发现的。</b>成员表来自配置。角色是动态的，成员 不是。</p>
+<p><b>4. 网络是可信的。</b>kevy 永久不做认证与传输加密——请把它放在一个具备 这两者的代理之后(Caddy、nginx、服务网格，或一个私有子网)。</p>
+<h2 id="拒绝清单按领域">拒绝清单，按领域</h2>
+<div class="tbl"><table><thead><tr><th>领域</th><th>拒绝</th><th>为什么，以及改用什么</th></tr></thead><tbody><tr><td>查询</td><td>SQL 查询语言、join、基于代价的 planner、视图层的即席谓词</td><td>线 2——声明一个索引或视图；<code>IDX.QUERY</code> / <code>VIEW.QUERY</code> 显式命名访问路径</td></tr><tr><td>查询</td><td>写路径回调 / 触发器</td><td>你的写入方本来就知道自己写了什么；回调把延迟藏进写入里</td></tr><tr><td>安全</td><td>AUTH、TLS、ACL、多用户</td><td>线 4——在代理那一层终结</td></tr><tr><td>集群</td><td>分片多主、跨 DC 双活、CRDT</td><td>按设计是单 DC、单分区容忍；无冲突合并是应用层的模型</td></tr><tr><td>集群</td><td>Raft / 强一致日志复制</td><td>这套设计给的一致性是 quorum lease 加 epoch 栅栏；完整共识日志是另一个产品</td></tr><tr><td>集群</td><td>在线 resharding、gossip 发现、动态成员</td><td>线 3——改配置，重启该成员</td></tr><tr><td>存储</td><td>跨存储事务、租户语义</td><td>在引擎边界之外；在它之上组合</td></tr><tr><td>平台</td><td>server 的 <code>no_std</code> / MCU 目标</td><td>五个石头 crate 本来就 <code>no_std</code>-capable;server 需要操作系统</td></tr></tbody></table></div>
+<h2 id="函数面现在到哪了">函数面现在到哪了</h2>
+<p>kevy 那层 SQL 形状的面是一个<b>折叠器</b>，不是查询引擎：它算标量表达式， 好让一个从关系型数据库迁过来的应用不必重新实现它们；而任何需要 planner 的东西，它<b>按名拒绝、绝不静默</b>。</p>
+<p>每次改动都被两条线卡着：</p>
+<ul><li><b>能力</b>：本弧声明要服务的函数子集里，82.5% 能正确折叠，而且这个比例 只许升不许降。</li><li><b>诚实</b>：全部 89 个探针文件里 <b>零个错误答案</b>。拒绝会自报家门，答错 不会。</li></ul>
+<p>你在决定要不要依赖它的时候，该看的是第二条。拒绝在调用处就可见，所以你 是在写代码的时候发现它，不是在生产环境里。</p></main>
+  <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#四条线">四条线</a></li><li class="l2"><a href="#拒绝清单按领域">拒绝清单，按领域</a></li><li class="l2"><a href="#函数面现在到哪了">函数面现在到哪了</a></li></ul></aside>
+</div>
+
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

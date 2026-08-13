@@ -52,7 +52,7 @@ SECTIONS = [
     ("embed", {"en": "Embedding it", "zh": "嵌入", "ja": "組み込み"},
      ["wasm", "embedded-listener", "iot"]),
     ("ref", {"en": "Reference", "zh": "参考", "ja": "リファレンス"},
-     ["error-replies", "rds-workloads", "migration", "UPGRADING"]),
+     ["boundaries", "error-replies", "rds-workloads", "migration", "UPGRADING"]),
 ]
 
 # One line each, for the hub. Written here rather than scraped from the file,
@@ -62,6 +62,7 @@ BLURB = {
         "designing-on-kevy": "How to think in keys when you are used to thinking in tables.",
         "cookbook": "Recipes that run: sessions, rate limits, queues, leaderboards, feeds.",
         "persistence": "The append-only log, snapshots, and what survives a kill -9.",
+        "boundaries": "What kevy refuses, why, and what to use instead — read before you build on a guess.",
         "upgrading-5.0-to-5.1": "Stop 5.0, start 5.1 on the same directory — a read hazard repaired and two stalls removed.",
         "upgrading-4-to-5": "Stop 4.1.1, start 5.0 on the same directory — and what behaves differently.",
         "tuning": "Shards, connections, and the two flags that actually matter.",
@@ -94,6 +95,7 @@ BLURB = {
         "designing-on-kevy": "习惯了想表，现在要学着想键。",
         "cookbook": "能直接跑的配方：会话、限流、队列、排行榜、信息流。",
         "persistence": "append-only 日志、快照，以及 kill -9 之后还剩下什么。",
+        "boundaries": "kevy 拒绝什么、为什么、改用什么——在你据此动工之前先读。",
         "upgrading-5.0-to-5.1": "停 5.0、同目录启 5.1——修掉一个读取隐患，去掉两处停顿。",
         "upgrading-4-to-5": "停 4.1.1、同目录启 5.0——以及哪些行为变了。",
         "tuning": "shard、连接数，以及真正有用的那两个开关。",
@@ -126,6 +128,7 @@ BLURB = {
         "designing-on-kevy": "テーブルで考えることに慣れた頭で、キーで考え直す。",
         "cookbook": "そのまま動くレシピ —— セッション、レート制限、キュー、ランキング、フィード。",
         "persistence": "append-only ログ、スナップショット、そして kill -9 の後に何が残るか。",
+        "boundaries": "kevy が拒むもの、その理由、代わりに使うもの——推測の上に作り始める前に。",
         "upgrading-5.0-to-5.1": "5.0 を止めて同じディレクトリで 5.1 を起動——読み出しハザードを修復し、停止を 2 つ除去。",
         "upgrading-4-to-5": "4.1.1 を止めて同じディレクトリで 5.0 を起動——変わる挙動はこれだ。",
         "tuning": "shard、コネクション、そして本当に効く二つのフラグ。",
