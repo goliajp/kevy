@@ -563,3 +563,47 @@ cache miss。
 **未实施,交用户拍板** —— 理由不是难,是这属于**新 train**:一个新 stone
 crate(FST 词典),ROADMAP 已把词典结构改动记为 v4 之后的优化,且它会改变
 textgate 正在断言的内存公式。范围决定权不在我。
+
+
+---
+
+## arena bare face — 2026-08-13 — kevy 5.1.0
+
+Re-measured because the site was serving 4.0-era numbers under a 5.1.0
+masthead. The site's benchmark table and the landing page's now both come
+from this run and nothing else.
+
+`bash bench/arena.sh target/release/kevy` on lx64, 16 cores. Server pinned
+to 0-7, load generator to 8-15, one engine at a time, host loopback.
+`-c 50 -P 16`, median of five runs per cell with sample stdev. Throughput
+read from each server's own `total_commands_processed` over a timed 3.0 s
+window after a 1.0 s ramp — not from redis-benchmark's reported rate,
+which quantises to 250 ms buckets under `--threads` and understates every
+engine (bench/PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md).
+
+Competitors: `valkey/valkey:9.1` (reports v=9.1.1), `redis:8`,
+`docker.dragonflydb.io/dragonflydb/dragonfly`, each with persistence off
+and eight io/proactor threads.
+
+| verb | kevy 5.1.0 | Redis 8 | valkey 9.1.1 | Dragonfly | vs Redis 8 |
+|---|---:|---:|---:|---:|---:|
+| GET | 7,371,451 | 5,703,669 | 3,287,418 | 2,800,249 | 1.29x |
+| SET | 6,968,430 | 2,523,162 | 1,698,736 | 1,851,895 | 2.76x |
+| INCR | 5,905,021 | 3,392,895 | 2,242,787 | 1,905,756 | 1.74x |
+| SADD | 5,194,985 | 3,730,922 | 2,409,047 | 1,697,913 | 1.39x |
+| HSET | 4,494,466 | 3,069,040 | 1,994,103 | 1,834,717 | 1.46x |
+| LPUSH | 3,090,006 | 2,844,889 | 1,867,039 | 1,451,926 | 1.09x |
+| ZADD | 3,064,599 | 2,833,020 | 1,913,900 | 1,734,808 | 1.08x |
+
+Gap rule: `|kevy - other| <= max(stdev_kevy, stdev_other)` reads as NOISE.
+No cell hit it — LPUSH and ZADD are the narrow ones at 1.09x and 1.08x,
+and both gaps are larger than either side's stdev.
+
+**Against the 4.0 measurement of the same table**: every engine lands
+within a few per cent of where it was, which is the useful part — it says
+the ruler did not move. kevy's own cells drift both ways (GET 7.80M ->
+7.37M, HSET 4.29M -> 4.49M), all within or near the run-to-run spread,
+so this is not a performance claim in either direction. It is a current
+number under a current version.
+
+Raw: `/tmp/arena-5.1.0.txt` on lx64.

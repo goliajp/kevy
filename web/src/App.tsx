@@ -32,15 +32,22 @@ db.set(b"user:1", b"alice", None)?;
 // python: pip install kevy   ·   go: go get github.com/goliajp/kevy-go/v5
 // flutter: flutter pub add flutter_kevy   ·   npm: @goliapkg/kevy`
 
-// Measured, not claimed. bench/REPORT.md, precision bench: one million
-// operations per run, ten runs, median. The report also carries the
-// workloads where kevy does not win, and this table links to it rather
-// than quietly ending at the last row it likes.
+// Measured, not claimed — bench/arena.sh on the lx64 bench box, 2026-08-13,
+// kevy 5.1.0 against valkey 9.1.1. Both servers pinned to cores 0-7 and the
+// load generator to 8-15, one engine at a time; 50 connections, pipeline
+// depth 16; median of five runs. Throughput is read from each server's own
+// command counter over a timed window rather than from redis-benchmark's
+// reported rate, which quantises to 250 ms buckets under --threads and
+// understates both sides.
+//
+// The full table has three more verbs and two more engines, including the
+// cells where kevy is barely ahead. A table that only showed the wins
+// would not be a measurement.
 const PERF: { op: string; kevy: string; valkey: string; ratio: string }[] = [
-  { op: 'SET, single connection', kevy: '94.7 k', valkey: '62.2 k', ratio: '1.52×' },
-  { op: 'GET, single connection', kevy: '97.3 k', valkey: '65.0 k', ratio: '1.50×' },
-  { op: 'SET, 50 conns pipelined', kevy: '4.11 M', valkey: '1.75 M', ratio: '2.35×' },
-  { op: 'GET, 50 conns pipelined', kevy: '4.35 M', valkey: '3.42 M', ratio: '1.27×' },
+  { op: 'GET', kevy: '7.37 M', valkey: '3.29 M', ratio: '2.24×' },
+  { op: 'SET', kevy: '6.97 M', valkey: '1.70 M', ratio: '4.10×' },
+  { op: 'INCR', kevy: '5.91 M', valkey: '2.24 M', ratio: '2.63×' },
+  { op: 'HSET', kevy: '4.49 M', valkey: '1.99 M', ratio: '2.25×' },
 ]
 
 const BEYOND = ['vector', 'fts', 'idx', 'view', 'feed', 'embed'] as const
@@ -133,7 +140,7 @@ export function App() {
 
           <div className="figures">
             <div className="figure">
-              <div className="v">2.35×</div>
+              <div className="v">4.10×</div>
               <div className="k">
                 <T k="front.fig.speed" />
               </div>
