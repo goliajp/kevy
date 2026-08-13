@@ -21,7 +21,9 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SITE = "https://kevy.golia.jp"
-GH = "https://github.com/goliajp/kevy/blob/main"
+# `main` is a branch this repository does not have; every link built
+# from it 404s. Keep it next to the site generator's REPO_REF.
+GH = "https://github.com/goliajp/kevy/blob/develop"
 
 # Reading order. The first three are the ones an assistant needs before it
 # writes a single command; the rest answer questions as they come up.

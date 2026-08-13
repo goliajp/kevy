@@ -20,6 +20,8 @@ _sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
 from assetv import v as av
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+# Branch or tag the site's "see this file in the repo" links point at.
+REPO_REF = "develop"
 sys.path.insert(0, str(ROOT / "tools"))
 from md import inline, render  # noqa: E402
 
@@ -344,7 +346,12 @@ def build(lang, present, titles, have, search_out):
             # clicks that deserves to land on it.
             out = re.match(r"^(?:\.{1,2}/)+((?:bench|crates|tools|examples|\.github)/.*|[A-Z]+\.md)$", href)
             if out:
-                return f"https://github.com/goliajp/kevy/blob/main/{out.group(1)}"
+                # `main` is a branch this repository does not have (it is
+                # develop + master), so every one of these 404'd on 26 pages.
+                # Point at the tagged release instead of a moving branch: a
+                # changelog entry citing a file means the file AS OF that
+                # release, and a permalink cannot rot when the file moves.
+                return f"https://github.com/goliajp/kevy/blob/{REPO_REF}/{out.group(1)}"
             m = re.match(r"^(?:\.{1,2}/)*([\w.-]+)\.md(#.*)?$", href)
             if not m:
                 return href
@@ -415,7 +422,21 @@ def main():
     # reported it as "the changelog comes back empty"; they were
     # reading exactly what we served them.
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    cl_body, cl_toc = render(changelog)
+
+    def cl_link(href):
+        # A docs page the site actually serves.
+        m = re.match(r"^(?:\.{1,2}/)*docs/([\w.-]+)\.md(#.*)?$", href)
+        if m:
+            return f"../docs/{m.group(1)}/{m.group(2) or ''}"
+        if href.startswith(("http://", "https://", "#")):
+            return href
+        # Everything else a changelog cites is a repo artifact — RFCs,
+        # workflows, finding documents, once even an absolute path on the
+        # author's disk. Those are not web resources; sending a reader to
+        # /changelog/.claude/rfcs/... is worse than plain text.
+        return None
+
+    cl_body, cl_toc = render(changelog, cl_link)
     cl_body = re.sub(
         r"^<h1[^>]*>(.*?)</h1>", r'<div class="doc-head"><h1>\1</h1></div>',
         cl_body, count=1,
