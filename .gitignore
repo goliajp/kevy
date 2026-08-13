@@ -63,3 +63,6 @@ dump-*.rdb.premigration.*
 tools/facadegate/target/
 /tier/
 bench/.flake-archive/*.log
+
+# SwiftPM build output — the root Package.swift puts it here.
+.build/
