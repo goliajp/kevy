@@ -77,7 +77,7 @@ module ships source — so it is not in the published module. It is built
 from the kevy tree, where cargo has just produced the library:
 
 ```bash
-cargo build --release -p kevy-ffi
+cargo build -p kevy-ffi   # debug: that is the path the cgo preamble links
 cd bindings/go && go test -tags kevy_embedded ./...
 ```
 
