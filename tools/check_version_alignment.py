@@ -141,6 +141,18 @@ def layer23_manifests(v: str, bad: list) -> int:
             if m.group(1) != v:
                 bad.append(f"{p}: {m.group(1)} != {v}")
 
+    # Maven poms. Their absence from this gate is how the Java door sat at
+    # 5.0.0 through a release that moved everything else — the gate could
+    # only see the formats it had been taught.
+    for f in sorted(ROOT.glob("bindings/**/pom.xml")):
+        if skip(f):
+            continue
+        m = re.search(r"<version>(\d+\.\d+\.\d+)</version>", f.read_text(encoding="utf-8"))
+        if m:
+            checked += 1
+            if m.group(1) != v:
+                bad.append(f"{f.relative_to(ROOT)}: <version> {m.group(1)} != {v}")
+
     for f in sorted(ROOT.glob("bindings/**/*.csproj")):
         if skip(f):
             continue
