@@ -100,6 +100,15 @@ def main():
     for f in sorted((ROOT / "site").rglob("index.html")):
         if "/docs/" in str(f) or "/play/" in str(f):
             continue  # generated from docs/, gated separately
+        if "/changelog/" in str(f):
+            # A changelog's code blocks are EVIDENCE, not instructions:
+            # benchmark transcripts, the error message a fixed bug used
+            # to print, output from a version that no longer exists. The
+            # one that tripped this gate is a `=== PING:` / `PONG`
+            # benchmark capture from v2.0.15 — running `PONG` as a
+            # command against today's build tests nothing, and the
+            # mismatch only grows as history accumulates.
+            continue
         html = f.read_text(encoding="utf-8")
         for m in re.finditer(r"<pre><code[^>]*>(.*?)</code></pre>", html, re.S):
             body = (
