@@ -30,7 +30,7 @@ public final class Crc16 {
         return crc;
     }
 
-    /** The Redis-cluster hash slot of a key: crc16(hashtag(key)) & 16383. */
+    /** The Redis-cluster hash slot of a key: crc16(hashtag(key)) &amp; 16383. */
     public static int keyHashSlot(byte[] key) {
         return crc16(hashtag(key)) & 0x3FFF;
     }
