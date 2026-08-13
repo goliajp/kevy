@@ -40,7 +40,11 @@ python3 tools/check_version_alignment.py
 
 It knows the independent tracks (`kevy-client` / `kevy-client-async`
 keep their own 2.x line) and ignores example apps and third-party
-lockfiles. It is in CI. When it flags vendored bytes, rebuild:
+lockfiles. It is in CI. Each layer also carries a floor, so a layer
+that finds *nothing* fails instead of passing — a bare checkout with no
+vendored artifacts built must not read as "everything agrees".
+
+When it flags vendored bytes, rebuild:
 
 ```sh
 # Android — both doors: kevy-ffi (dart:ffi / C++) and kevy-jni (Kotlin)
