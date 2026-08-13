@@ -686,7 +686,10 @@ jobs:
         with:
           go-version: 'stable'
           cache-dependency-path: bindings/go/go.mod
-      - run: go test ./...
+      # The tag is what links the engine in. Without it this runs the
+      # pure-Go remote client — which is a real thing to test, but not
+      # in the job that just built libkevy_ffi to test the door.
+      - run: go test -tags kevy_embedded ./...
         working-directory: bindings/go
 
       - name: Bun smoke
@@ -1065,3 +1068,42 @@ jobs:
           swift build
           swift test
 
+
+  # ───────────── the generated Go module stands alone ─────────────
+  #
+  # github.com/goliajp/kevy-go is produced from bindings/go, never
+  # edited. Go has no registry: an import path is a repository URL, so
+  # the client has to exist at the address people import.
+  #
+  # What this job protects is the property that makes the mirror safe to
+  # generate — that the pure-Go half compiles, vets, and passes its
+  # tests with no C toolchain and nothing above it in the tree. The
+  # generator builds it outside the repo for exactly that reason: under
+  # the kevy tree the cgo paths would still resolve, and a module that
+  # only works where it was extracted from would pass here and fail for
+  # its first user.
+  go-mirror:
+    name: kevy-go mirror (pure-Go, standalone)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+          cache-dependency-path: bindings/go/go.mod
+      - name: Install Rust (stable)
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: go-mirror-${{ hashFiles('Cargo.lock') }}
+      # The mirror's remote tests need a server to talk to. Without one
+      # they skip, and a fully skipped suite is also green — so the
+      # generator treats a missing binary as a failure, not a skip.
+      - name: Build the server the mirror's tests talk to
+        run: cargo build --release -p kevy --bin kevy
+      - run: bash scripts/mirror-go-module.sh

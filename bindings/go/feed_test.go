@@ -64,6 +64,10 @@ func TestFeedStaleCursorResync(t *testing.T) {
 }
 
 func TestFeedEmbeddedUnsupported(t *testing.T) {
+	// Embedded-only: it asserts what the embedded backend refuses.
+	if openEmbeddedStore == nil {
+		t.Skip("no embedded engine in this build")
+	}
 	c := mustConnect(t, "mem://feed-bus")
 	if n, _ := c.FeedShards(bg); n != 1 {
 		t.Fatalf("embedded FeedShards=%d want 1", n)

@@ -25,4 +25,6 @@ cp "$REL" "$DBG"
 
 cd "$ROOT/bench/embeddedgate/go"
 go mod tidy >/dev/null 2>&1 || true
-go run .
+# The tag is what links the engine in; without it this harness would
+# build the pure-Go remote client and have no engine to measure.
+go run -tags kevy_embedded .

@@ -9,13 +9,18 @@ import (
 // Pub/sub round-trip (contract §3.11, §6). Named embedded bus + remote.
 
 func pubsubBackends(t *testing.T) []backend {
-	return []backend{
-		{
+	// Same rule as bothBackends: the embedded half exists only where the
+	// engine was linked in.
+	backends := []backend{}
+	if openEmbeddedStore != nil {
+		backends = append(backends, backend{
 			name: "embedded",
 			url: func(t *testing.T) (string, func()) {
 				return fmt.Sprintf("mem://ps-%d", uniqueID()), func() {}
 			},
-		},
+		})
+	}
+	return append(backends, []backend{
 		{
 			name: "remote",
 			url: func(t *testing.T) (string, func()) {
@@ -23,7 +28,7 @@ func pubsubBackends(t *testing.T) []backend {
 				return s.url(), func() {}
 			},
 		},
-	}
+	}...)
 }
 
 func TestPubSubMessage(t *testing.T) {
@@ -90,6 +95,10 @@ func TestPubSubPattern(t *testing.T) {
 }
 
 func TestAnonymousMemSubscriberRejected(t *testing.T) {
+	// Embedded-only: it opens the in-process engine directly.
+	if openEmbeddedStore == nil {
+		t.Skip("no embedded engine in this build")
+	}
 	_, err := SubscriberConnect("mem://")
 	if !IsKind(err, KindUnsupported) {
 		t.Fatalf("anonymous mem:// Subscriber should be Unsupported, got %v", err)
@@ -125,6 +134,10 @@ func TestRemoteHello3PushFrames(t *testing.T) {
 }
 
 func TestEmbeddedHello3Unsupported(t *testing.T) {
+	// Embedded-only: it opens the in-process engine directly.
+	if openEmbeddedStore == nil {
+		t.Skip("no embedded engine in this build")
+	}
 	sub, err := SubscriberConnect("mem://h3-bus")
 	if err != nil {
 		t.Fatal(err)
