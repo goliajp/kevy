@@ -8,14 +8,12 @@ version = "5.1.0"
 description = "First-party Python client for kevy — the pure-Rust Redis-compatible engine (embedded + remote, blocking + asyncio)."
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "MIT OR Apache-2.0" }
+license = "MIT OR Apache-2.0"
 authors = [{ name = "GOLIA K.K." }]
 keywords = ["kevy", "redis", "resp", "key-value", "database", "asyncio"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Topic :: Database",
     "Topic :: Database :: Front-Ends",
