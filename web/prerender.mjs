@@ -214,7 +214,37 @@ for (const lang of LANGS) {
   }
 }
 
-process.stdout.write(`prerender: ${written} reference pages\n`)
+// ── the command reference ────────────────────────────────────────────────
+// One page per verb, in each language, from the table the engine
+// dispatches on. Nothing here is written by hand, which is the point: a
+// verb that gains a flag changes these pages by changing the code.
+const { renderCommandIndex, renderCommandPage } = await import('./.ssr/entry-commands.js')
+const commands = JSON.parse(
+  readFileSync(join(ROOT, 'site/data/commands.json'), 'utf8'),
+).commands
+if (!Array.isArray(commands) || commands.length === 0) {
+  throw new Error('site/data/commands.json holds no commands')
+}
+
+let cmdPages = 0
+for (const lang of LANGS) {
+  const base = lang === 'en' ? join(DIST, 'docs', 'commands') : join(DIST, lang, 'docs', 'commands')
+  const depth = lang === 'en' ? 2 : 3
+  mkdirSync(base, { recursive: true })
+  writeFileSync(join(base, 'index.html'), renderCommandIndex(lang, commands, VERSION, depth, CSS))
+  cmdPages++
+  for (const c of commands) {
+    // A verb name can carry a dot (IDX.CREATE) or a bar; the directory
+    // name has to survive a filesystem and a URL both.
+    const slug = c.name.toLowerCase().replace(/[^a-z0-9.]/g, '-')
+    const dir = join(base, slug)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'index.html'), renderCommandPage(lang, c, VERSION, depth + 1, CSS))
+    cmdPages++
+  }
+}
+
+process.stdout.write(`prerender: ${written} reference pages, ${cmdPages} command pages\n`)
 
 // The engine binary the landing page loads is also what the docs describe.
 // Nothing here depends on it, but a build that quietly shipped a different

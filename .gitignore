@@ -28,6 +28,11 @@ node_modules/
 **/node_modules/
 package.json
 package-lock.json
+# …except the website's. `npm ci` needs a lockfile to be reproducible,
+# and CI's node cache keys on it. Without this the site job cannot even
+# start. The rule above is for the language bindings, whose lockfiles
+# belong to whoever installs them.
+!web/package-lock.json
 yarn.lock
 bun.lock
 # …but the packages we SHIP are real: their manifests are exempt
