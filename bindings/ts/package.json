@@ -1,5 +1,5 @@
 {
-  "name": "@goliapkg/kevy",
+  "name": "@goliapkg/kevy-ts",
   "version": "5.1.0",
   "description": "The first-party TypeScript client for kevy — the pure-Rust Redis-compatible engine. One connect(url) routes to the in-process embedded engine (mem:// / file://, over bun:ffi or the N-API addon) or a native RESP2/3 TCP server (kevy:// / redis:// / tcp://). Async-by-default with a synchronous embedded escape hatch. Runs on both Node and Bun.",
   "license": "(Apache-2.0 OR MIT)",

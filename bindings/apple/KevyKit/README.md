@@ -11,6 +11,13 @@ ios-sim-arm64 / macos-arm64 static libraries).
 .package(url: "https://github.com/goliajp/kevy", from: "5.1.0")
 ```
 
+The package manifest lives at the **repository root** — SwiftPM resolves
+a package from the root of the repository it clones, so that is the only
+place it can be reached from. Sources, tests and `Artifacts/` stay here.
+
+```swift
+```
+
 > **Pre-release.** `v5.1.0` is tagged, but the repo root carries no
 > `Package.swift` — SwiftPM cannot resolve the URL form above yet.
 > Until the package manifest is hoisted, depend on the package by path:

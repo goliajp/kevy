@@ -1,21 +1,19 @@
 // swift-tools-version:5.9
-// KevyKit — kevy embedded for Swift (iOS / macOS), wrapping the kevy-ffi
-// C ABI shipped as Kevy.xcframework.
+// The KevyKit package manifest lives at the REPOSITORY ROOT, not here.
 //
-// Development builds point the binary target at the in-repo build product:
-//   packaging/apple/build-xcframework.sh bindings/apple/KevyKit/Artifacts
-// The published package pins a release URL + checksum instead.
+// SwiftPM resolves a package from the root of the repository it clones,
+// so a manifest in this directory could never be reached by
+// `.package(url: "https://github.com/goliajp/kevy", …)` — the line this
+// directory's README has always shown. Two manifests would also drift:
+// this one built its binary target from "Artifacts/…", the root one from
+// "bindings/apple/KevyKit/Artifacts/…", and only one of them is the one
+// consumers get.
+//
+// Sources, tests and Artifacts all stay here. Edit ../../../Package.swift.
 import PackageDescription
 
 let package = Package(
-    name: "KevyKit",
-    platforms: [.iOS(.v15), .macOS(.v12)],
-    products: [
-        .library(name: "KevyKit", targets: ["KevyKit"])
-    ],
-    targets: [
-        .binaryTarget(name: "Kevy", path: "Artifacts/Kevy.xcframework"),
-        .target(name: "KevyKit", dependencies: ["Kevy"]),
-        .testTarget(name: "KevyKitTests", dependencies: ["KevyKit"]),
-    ]
+    name: "KevyKit-moved",
+    products: [],
+    targets: []
 )
