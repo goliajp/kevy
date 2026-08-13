@@ -446,7 +446,7 @@ if !report.is_clean() {
 
 配方 1–8 手工做的一切，从你**已经有**的那份 SQL 编译出来。`kevy-sql`（以及它的 `kevy-cli sql` 那张面孔）是一个**声明期编译器**：它像迁移工具一样把 schema **读一次**，产出显式的 `TABLE.DECLARE` / `VIEW.CREATE` 命令，外加*查询卡片*——带 `$N` 槽位的现成 `IDX.QUERY` 模板。服务器里**没有任何东西按查询运行**；运行期的 ad-hoc SQL 仍由引擎自己拒绝（Law 3）。
 
-这份 schema——[docs/examples/shop.sql](https://github.com/goliajp/kevy/blob/main/docs/examples/shop.sql)，一份真实的 users/orders/order_items 精简版：
+这份 schema——[docs/examples/shop.sql](https://github.com/goliajp/kevy/blob/develop/docs/examples/shop.sql)，一份真实的 users/orders/order_items 精简版：
 
 ```sql
 CREATE TABLE users (

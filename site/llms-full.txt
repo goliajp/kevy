@@ -1421,7 +1421,7 @@ ready-made `IDX.QUERY` templates with `$N` slots. Nothing runs
 per-query inside the server; ad-hoc runtime SQL stays refused by the
 engine itself (Law 3).
 
-The schema — [docs/examples/shop.sql](https://github.com/goliajp/kevy/blob/main/docs/examples/shop.sql), a real
+The schema — [docs/examples/shop.sql](https://github.com/goliajp/kevy/blob/develop/docs/examples/shop.sql), a real
 users/orders/order_items cut-down:
 
 ```sql
@@ -1615,8 +1615,8 @@ explicit:
 
 ### Measured against PostgreSQL 18
 
-Not asserted — [run](https://github.com/goliajp/kevy/blob/main/bench/pgcompare.sh) and
-[recorded](https://github.com/goliajp/kevy/blob/main/bench/PGCOMPARE-2026-07-26.md). 2M rows / 843 MB of CSV,
+Not asserted — [run](https://github.com/goliajp/kevy/blob/develop/bench/pgcompare.sh) and
+[recorded](https://github.com/goliajp/kevy/blob/develop/bench/PGCOMPARE-2026-07-26.md). 2M rows / 843 MB of CSV,
 one harness driving both, PG stock:
 
 | | kevy (`everysec`) | PG 18 stock |
@@ -2371,7 +2371,7 @@ window is tolerable. Neither choice affects transactions.
 
 **Background-job concurrency.** Each shard runs at most one background save or rewrite at a time. A duplicate request that arrives mid-job is skipped with a log line, never queued.
 
-**AOF writes and the reactor thread (5.0, io_uring default).** With io_uring available and a non-`always` policy, appends and the everysec fsync ride the shard's own ring as queued operations — the reactor never blocks in `write(2)` on the hot path, which is what used to park it for seconds under GB/s ingest (the 5.0 tail-latency work; measured end-to-end in `bench/`'s finding documents). Durability is unchanged: the `everysec` crash window is still ≤ 1 s, verified by the crash gate in both modes. `KEVY_AOF_OFFLOAD=0` restores the classic synchronous path; `always` keeps it by definition; the epoll reactor (older kernels) keeps it too.
+**AOF writes and the reactor thread.** Appends and fsyncs stay off the reactor on every reactor: with io_uring they ride the shard's own ring as queued operations; on the epoll/kqueue reactors a per-shard writer thread drains the same queue with sequential appends (byte-identical on disk). Either way the reactor never blocks in `write(2)` or `fsync(2)` on the hot path — which is what used to park it for seconds under GB/s ingest (the 5.0 tail-latency work; measured end-to-end in `bench/`'s finding documents). Durability is unchanged: the `everysec` crash window is still ≤ 1 s, and under `always` a write's reply is held until the fsync covering it completes — the reply itself still guarantees durability, the reactor just no longer waits alongside it, and concurrent connections share fsync rounds (group commit). `KEVY_AOF_OFFLOAD=0` restores the classic synchronous path on any reactor.
 
 **Rewrites defer under saturating ingest (5.0).** A rewrite must fold the writes that land while it runs; when the append rate provably outruns that fold, 5.0 defers the rewrite instead of paying an unbounded stall: the growth rule re-anchors at the current size and retries after the next growth factor. Explicit `BGREWRITEAOF` is never gated. The observable trade: under sustained write saturation the AOF grows past its usual rewrite point and shrinks once pressure eases — disk is refundable, a stall is not. Around a rewrite you may briefly see `<aof>.rewrite` (the image under construction) and `<aof>.trashN` (a hardlink that moves the old log's multi-gigabyte free off the serving thread); both clean themselves up, and orphans from a crash are reclaimed by the next rewrite. Exclude `*.rewrite` / `*.trash*` from backups.
 
@@ -2381,7 +2381,7 @@ One consequence worth knowing, reported from a consumer's gate: because the pers
 
 **Shard-layout changes are crash-idempotent.** Changing `--threads` / `shards` writes new snapshots under `.reshard` temp names, commits via a durable `reshard.journal`, and rolls an interrupted migration forward on the next start. Source files survive as `.premigration.<unix_ts>` backups; the journal is the commit point and must never be deleted by hand.
 
-**Giant single collections vs the rewrite window.** A write to a collection value whose reference is pinned by an in-flight rewrite or snapshot view pays a copy-on-write clone of the WHOLE value on the serving thread. For ordinary values this is microseconds and invisible; a single list/set/hash that has grown to gigabytes pays seconds (soak-measured: 7-9 s at multi-GB single keys under sustained appends). If your workload keeps unbounded single-key queues at that scale, cap them (`LTRIM`-style) or expect rewrite-window latency spikes on that key's shard; an element-granular fix is on the roadmap.
+**Giant single collections vs the rewrite window.** Lists, hashes, sets, and sorted sets past ~16K elements use element-granular (segmented) copy-on-write: a write while a rewrite or snapshot view pins the value clones only the ~16K-element segment it touches, so the cost is about a millisecond and independent of collection size (box-measured 0.4-2.1 ms first-write at 20M elements, where the previous whole-value clone paid 0.35-9.5 s and briefly doubled the collection's resident memory). Streams are the remaining exception: a stream value still clones whole under a pinned view, so an unbounded single-key stream at multi-GB scale can see rewrite-window latency spikes on its shard — trim with `XTRIM` if you keep one.
 
 **What is not persisted.** Pub/sub channels, subscriptions, and undelivered messages live only in memory. Blocking-command waiters such as `BLPOP` and blocking `XREAD` are connection state, not data. Neither is written to the AOF or snapshot, and neither is replayed.
 
@@ -2408,7 +2408,7 @@ If you want persistence but no AOF growth at all between snapshots, that combina
 
 The blocking portion is tiny. A per-shard freeze of the keyspace is O(keys), not O(bytes), because collection values are reference-counted and shared with the live store; on a million-key shard the freeze takes single-digit milliseconds. Serialization itself runs with the keyspace live — writes are not paused.
 
-The transient cost you pay is memory. Any collection (list, hash, set, sorted-set) that gets mutated while the snapshot is being written gets cloned once, so the live store can move on without disturbing the frozen view. For workloads dominated by `SET` on plain string keys the extra memory is negligible; for workloads dominated by `HSET` / `LPUSH` on a small number of huge collections it can briefly double the resident size of those specific collections.
+The transient cost you pay is memory. A collection mutated while the snapshot is being written clones the parts the writes touch, so the live store can move on without disturbing the frozen view. For plain string keys and for lists/hashes/sets/sorted-sets (which clone per ~16K-element segment) the extra memory is a few megabytes at worst; only a stream mutated under a pinned view still clones whole and can briefly double that stream's resident size.
 
 A successful snapshot also resets the AOF — the snapshot now carries everything the log used to, and the log restarts with only writes that landed after the freeze. A restart then loads snapshot + log without ever double-applying history.
 
@@ -3891,7 +3891,7 @@ recall@10, 100 → 0.77, 400 → the ≥ 0.90 gate line). Embedded:
 `idx_knn(…, ef)` (0 = default).
 
 Recall is gated ≥ 0.90 at EF 400 against exact brute-force ground
-truth by [`bench/vectorgate.sh`](https://github.com/goliajp/kevy/blob/main/bench/vectorgate.sh) — on a
+truth by [`bench/vectorgate.sh`](https://github.com/goliajp/kevy/blob/develop/bench/vectorgate.sh) — on a
 realistic corpus geometry (an intrinsic-dimension-20 manifold in
 128d; ambient-uniform random vectors suffer distance concentration
 and represent nothing). If your recall matters, measure it on YOUR
@@ -3954,12 +3954,12 @@ CONTENT is derived state, rebuilt after restart.
 
 Measured envelope (receipts in the bench tree):
 
-- [`bench/vectorgate.sh`](https://github.com/goliajp/kevy/blob/main/bench/vectorgate.sh) gates KNN LIMIT 10
+- [`bench/vectorgate.sh`](https://github.com/goliajp/kevy/blob/develop/bench/vectorgate.sh) gates KNN LIMIT 10
   p95 < 30ms at 1M × 128d against a real server, with recall ≥ 0.90
   at EF 400 holding simultaneously (both clamps at once — a fast
   wrong answer doesn't pass), plus the memory formula against real
   RSS growth (0.5-1.5×).
-- [`bench/PERF-LEDGER.md`](https://github.com/goliajp/kevy/blob/main/bench/PERF-LEDGER.md) records the
+- [`bench/PERF-LEDGER.md`](https://github.com/goliajp/kevy/blob/develop/bench/PERF-LEDGER.md) records the
   comparative shootout: recall-aligned at 1.000, KNN answers in
   0.48 ms vs 0.79 ms — **1.64× ahead** of the RediSearch HNSW on
   the same corpus.
@@ -4112,7 +4112,7 @@ exactly that, and it runs in CI.
 Query time, not a periodic snapshot: nothing is cached, so there is no
 staleness window to document, and nothing is coordinated on the write
 path. The second round costs 0.06 ms of a 28 ms p95 over a million
-documents (measured — [PERF-LEDGER.md](https://github.com/goliajp/kevy/blob/main/bench/PERF-LEDGER.md)),
+documents (measured — [PERF-LEDGER.md](https://github.com/goliajp/kevy/blob/develop/bench/PERF-LEDGER.md)),
 because pass 1 moves only `(term, df)` pairs for the terms actually
 queried.
 
@@ -4206,12 +4206,12 @@ the kth floor, so even the most common term answers in ~0.1ms at
 
 Measured envelope (receipts in the bench tree):
 
-- [`bench/textgate.sh`](https://github.com/goliajp/kevy/blob/main/bench/textgate.sh) gates `MATCH` p95
+- [`bench/textgate.sh`](https://github.com/goliajp/kevy/blob/develop/bench/textgate.sh) gates `MATCH` p95
   < 20ms at 1M mixed-script documents (~100 bytes each) against a
   real server, plus the memory formula against real RSS growth.
   It runs in CI-adjacent release checks — the numbers are clamps,
   not aspirations.
-- [`bench/PERF-LEDGER.md`](https://github.com/goliajp/kevy/blob/main/bench/PERF-LEDGER.md) records the
+- [`bench/PERF-LEDGER.md`](https://github.com/goliajp/kevy/blob/develop/bench/PERF-LEDGER.md) records the
   comparative shootout: BM25 top-10 at +21% qps with a p95 tie
   against RediSearch's `FT.SEARCH` on the same corpus.
 
@@ -4370,7 +4370,7 @@ preserving), `VIEW.DROP name`.
   `k + k/4`, evicting from the view's worst end; a non-member worse
   than the current worst is rejected with a single comparison — the
   steady-state write tax measured by
-  [`bench/viewgate.sh`](https://github.com/goliajp/kevy/blob/main/bench/viewgate.sh) is ~2% for 3 indexes +
+  [`bench/viewgate.sh`](https://github.com/goliajp/kevy/blob/develop/bench/viewgate.sh) is ~2% for 3 indexes +
   4 top-K views (the gate clamps it < 15%). Shrinking below `k`
   schedules a local per-shard rebuild (next tick). Unbounded
   materialized views pay O(log members) per affected write.
@@ -4482,7 +4482,7 @@ fn main() -> kevy_embedded::KevyResult<()> {
 ## Performance
 
 Measured envelope — the clamps live in
-[`bench/viewgate.sh`](https://github.com/goliajp/kevy/blob/main/bench/viewgate.sh), run against a real
+[`bench/viewgate.sh`](https://github.com/goliajp/kevy/blob/develop/bench/viewgate.sh), run against a real
 server at 1M rows:
 
 - Virtual `VIEW.QUERY` p99 < 3ms (two-component tree).
@@ -6427,8 +6427,8 @@ with lines silently missing.
   deliberately untouched by tiering.
 - [tuning.md](https://kevy.golia.jp/docs/tuning/) — memory knobs (`maxmemory` and friends)
   that coexist with the tier budget.
-- [`bench/tiergate.sh`](https://github.com/goliajp/kevy/blob/main/bench/tiergate.sh) /
-  [`bench/capacity-envelope.sh`](https://github.com/goliajp/kevy/blob/main/bench/capacity-envelope.sh) — the
+- [`bench/tiergate.sh`](https://github.com/goliajp/kevy/blob/develop/bench/tiergate.sh) /
+  [`bench/capacity-envelope.sh`](https://github.com/goliajp/kevy/blob/develop/bench/capacity-envelope.sh) — the
   acceptance gate and the envelope runner behind every number quoted
   or pended on this page.
 
@@ -6991,7 +6991,7 @@ runs `tick()` on a timer (default 100 ms). Consequences:
 ## Performance
 
 Full methodology, environment, and raw numbers:
-[bench/WASM-BENCH.md](https://github.com/goliajp/kevy/blob/main/bench/WASM-BENCH.md) (headless-Chrome
+[bench/WASM-BENCH.md](https://github.com/goliajp/kevy/blob/develop/bench/WASM-BENCH.md) (headless-Chrome
 harness, median of 3 runs, 16-byte values at 1k and 100k keys).
 Against the storage a web app actually has:
 
@@ -7155,7 +7155,7 @@ the kevy server, both framed requests and inline commands (the
 - `Config::with_resp_listener(addr)` — one `SocketAddr`. **Off by
   default**; when off there is **no thread and no socket — zero
   tax** (gated: idle-listener write throughput within 10% of off,
-  [`bench/topogate.sh`](https://github.com/goliajp/kevy/blob/main/bench/topogate.sh)).
+  [`bench/topogate.sh`](https://github.com/goliajp/kevy/blob/develop/bench/topogate.sh)).
 - The code is behind the `listener` cargo feature (on by default;
   not available on wasm32 targets).
 - The listener holds only a weak handle: it never keeps the store
@@ -7276,7 +7276,7 @@ Escalation path, in order of machinery:
 
 ## Performance
 
-[`bench/topogate.sh`](https://github.com/goliajp/kevy/blob/main/bench/topogate.sh) is the clamp, and it is
+[`bench/topogate.sh`](https://github.com/goliajp/kevy/blob/develop/bench/topogate.sh) is the clamp, and it is
 a TRUE two-process test — a writer binary under continuous HSET
 load, a separate reader process asserting live data:
 
@@ -7367,7 +7367,7 @@ device later grows `persist`.
 ## Resource budgets (gated, not aspirational)
 
 Two budget lines, enforced by
-[`bench/iotgate.sh`](https://github.com/goliajp/kevy/blob/main/bench/iotgate.sh) as a ratchet — raising
+[`bench/iotgate.sh`](https://github.com/goliajp/kevy/blob/develop/bench/iotgate.sh) as a ratchet — raising
 either number requires a written verdict:
 
 | Budget | Line | Measured |
@@ -8401,7 +8401,7 @@ ladder — [docs/availability.md](https://kevy.golia.jp/docs/availability/)), an
 toolchain (`kevy-cli import/export/--verify/diff/
 inspect/digest`). Start at [docs/designing-on-kevy.md](https://kevy.golia.jp/docs/designing-on-kevy/)
 and [docs/cookbook.md](https://kevy.golia.jp/docs/cookbook/); performance receipts live in
-[bench/PERF-LEDGER.md](https://github.com/goliajp/kevy/blob/main/bench/PERF-LEDGER.md).
+[bench/PERF-LEDGER.md](https://github.com/goliajp/kevy/blob/develop/bench/PERF-LEDGER.md).
 
 None of these activate implicitly: a 3.x server with a 2.x workload
 has an empty catalog, and the index hook on an empty catalog is on

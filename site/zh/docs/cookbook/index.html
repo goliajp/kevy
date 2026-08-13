@@ -292,7 +292,7 @@ if !report.is_clean() {
 <h2 id="22-移植一份-pgmysql-schema">22. 移植一份 PG/MySQL schema</h2>
 <p><b>SQL 对应：</b>schema 文件本身——<code>CREATE TABLE</code>、<code>CREATE INDEX</code>、<code>CREATE VIEW</code>——<a href="../rds-workloads/#二级索引-ddl">矩阵：二级索引 DDL</a>。</p>
 <p>配方 1–8 手工做的一切，从你<b>已经有</b>的那份 SQL 编译出来。<code>kevy-sql</code>（以及它的 <code>kevy-cli sql</code> 那张面孔）是一个<b>声明期编译器</b>：它像迁移工具一样把 schema <b>读一次</b>，产出显式的 <code>TABLE.DECLARE</code> / <code>VIEW.CREATE</code> 命令，外加*查询卡片*——带 <code>$N</code> 槽位的现成 <code>IDX.QUERY</code> 模板。服务器里<b>没有任何东西按查询运行</b>；运行期的 ad-hoc SQL 仍由引擎自己拒绝（Law 3）。</p>
-<p>这份 schema——<a href="https://github.com/goliajp/kevy/blob/main/docs/examples/shop.sql">docs/examples/shop.sql</a>，一份真实的 users/orders/order_items 精简版：</p>
+<p>这份 schema——<a href="https://github.com/goliajp/kevy/blob/develop/docs/examples/shop.sql">docs/examples/shop.sql</a>，一份真实的 users/orders/order_items 精简版：</p>
 <figure class="code"><pre><code class="lang-sql">CREATE TABLE users (
   id     bigserial PRIMARY KEY,
   email  text,

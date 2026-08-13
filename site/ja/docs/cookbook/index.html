@@ -292,7 +292,7 @@ if !report.is_clean() {
 <h2 id="22-pgmysql-のスキーマを移植する">22. PG/MySQL のスキーマを移植する</h2>
 <p><b>SQL 対応：</b>スキーマファイルそのもの——<code>CREATE TABLE</code>、<code>CREATE INDEX</code>、<code>CREATE VIEW</code>——<a href="../rds-workloads/#セカンダリインデックスのddl">マトリクス：セカンダリインデックスの DDL</a>。</p>
 <p>レシピ 1–8 が手でやることのすべてを、<b>すでに手元にある</b> SQL からコンパイルします。<code>kevy-sql</code>（そして <code>kevy-cli sql</code> という顔）は<b>宣言時のコンパイラ</b>です：移行ツールのようにスキーマを<b>一度だけ</b>読み、明示的な <code>TABLE.DECLARE</code> / <code>VIEW.CREATE</code> コマンドと*クエリカード*——<code>$N</code> の枠を残した既製の <code>IDX.QUERY</code> テンプレート——を出します。サーバの中でクエリごとに走るものは<b>何もありません</b>。実行時の場当たり SQL は、エンジン自身が拒み続けます（Law 3）。</p>
-<p>対象のスキーマ——<a href="https://github.com/goliajp/kevy/blob/main/docs/examples/shop.sql">docs/examples/shop.sql</a>、実在の users/orders/order_items を削ったもの：</p>
+<p>対象のスキーマ——<a href="https://github.com/goliajp/kevy/blob/develop/docs/examples/shop.sql">docs/examples/shop.sql</a>、実在の users/orders/order_items を削ったもの：</p>
 <figure class="code"><pre><code class="lang-sql">CREATE TABLE users (
   id     bigserial PRIMARY KEY,
   email  text,

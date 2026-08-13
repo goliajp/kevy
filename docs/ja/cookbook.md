@@ -446,7 +446,7 @@ if !report.is_clean() {
 
 レシピ 1–8 が手でやることのすべてを、**すでに手元にある** SQL からコンパイルします。`kevy-sql`（そして `kevy-cli sql` という顔）は**宣言時のコンパイラ**です：移行ツールのようにスキーマを**一度だけ**読み、明示的な `TABLE.DECLARE` / `VIEW.CREATE` コマンドと*クエリカード*——`$N` の枠を残した既製の `IDX.QUERY` テンプレート——を出します。サーバの中でクエリごとに走るものは**何もありません**。実行時の場当たり SQL は、エンジン自身が拒み続けます（Law 3）。
 
-対象のスキーマ——[docs/examples/shop.sql](https://github.com/goliajp/kevy/blob/main/docs/examples/shop.sql)、実在の users/orders/order_items を削ったもの：
+対象のスキーマ——[docs/examples/shop.sql](https://github.com/goliajp/kevy/blob/develop/docs/examples/shop.sql)、実在の users/orders/order_items を削ったもの：
 
 ```sql
 CREATE TABLE users (

@@ -481,7 +481,11 @@ sleep 2
 # Cut the replica, roll the primary far past its 64kb backlog, restart.
 kill $RPID_ 2>/dev/null; wait $RPID_ 2>/dev/null
 kill -0 $PPID_ 2>/dev/null || fail "phase-4 primary died before the seed: $(tail -5 "$DIR/pri.out")"
-python3 - "$PPORT" <<'PYEOF'
+# `|| fail` on the command itself, not `[ $? -eq 0 ]` several lines
+# below it: a status read at a distance silently starts reporting on
+# whatever gets inserted in between. The sibling seeder further down
+# already had the tighter form.
+python3 - "$PPORT" <<'PYEOF' || fail "phase-4 seed did not complete (traceback above)"
 import socket, sys
 port = int(sys.argv[1])
 s = socket.create_connection(("127.0.0.1", port)); s.settimeout(30)
@@ -525,7 +529,6 @@ PYEOF
 # the -LOADING probe, which then failed with "never observed -LOADING" — a
 # true statement about a keyspace that was never written, and a misleading
 # one about what actually broke.
-[ $? -eq 0 ] || fail "phase-4 seed did not complete (traceback above)"
 env KEVY_BIND=127.0.0.1 "$KBIN" --threads 4 --port $RPORT --dir "$DIR/r" --no-aof \
     --config "$DIR/rep4.toml" > "$DIR/rep.out" 2>&1 &
 RPID_=$!
