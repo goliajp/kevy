@@ -11,10 +11,29 @@ requires-python = ">=3.9"
 license = { text = "MIT OR Apache-2.0" }
 authors = [{ name = "GOLIA K.K." }]
 keywords = ["kevy", "redis", "resp", "key-value", "database", "asyncio"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Database",
+    "Topic :: Database :: Front-Ends",
+    "Typing :: Typed",
+]
 
 # Zero runtime dependencies: the embedded door is ctypes (stdlib), the
 # remote door is socket/asyncio (stdlib). The wire is bytes throughout.
 dependencies = []
+
+# PyPI renders these as the sidebar links. Without them the project page
+# is a dead end: no way from the package to the engine it talks to.
+[project.urls]
+Homepage = "https://kevy.golia.jp"
+Documentation = "https://kevy.golia.jp"
+Repository = "https://github.com/goliajp/kevy"
+Changelog = "https://kevy.golia.jp/changelog/"
+Issues = "https://github.com/goliajp/kevy/issues"
 
 [project.optional-dependencies]
 test = ["pytest>=7", "pytest-asyncio>=0.21", "pytest-timeout>=2"]

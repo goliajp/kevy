@@ -1,0 +1,100 @@
+# Publish the .NET client to NuGet.org.
+#
+# NO API KEY. NuGet trusted publishing trades a short-lived GitHub OIDC
+# token for a temporary key valid for one hour, so nothing long-lived
+# lives in this repository. The policy on nuget.org is pinned to
+# (owner, repository, workflow filename) — renaming this file
+# invalidates it, and the next release fails at the token exchange with
+# an error that says nothing about a rename.
+#
+# One thing to know about the policy: for a newly created one it is
+# "temporarily active" for 7 days until a first publish supplies the
+# GitHub repository and owner IDs it locks itself to. If no publish
+# happens in that window it goes inactive and the window has to be
+# restarted. So configure it and publish in the same sitting.
+#
+# WHAT IS IN THE PACKAGE
+#
+# Managed code only. The embedded engine is P/Invoke against
+# libkevy_ffi, a per-platform native library; packing it would mean
+# either one package per RID or a package that works on the three
+# targets we happened to build. Instead the first embedded call raises a
+# KevyException naming where to get the engine (KevyDb.CheckAbi), and
+# the remote RESP client — which is the whole product for a .NET service
+# talking to a kevy server — needs nothing. Same split as the Go module
+# and the Python wheel.
+#
+# Manual on purpose: a NuGet version cannot be reused, and unlisting is
+# not deletion.
+name: nuget — publish the .NET client
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Actually push to NuGet.org (a version is forever). Unchecked = pack and check only.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: kevy → NuGet.org
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # the OIDC token traded for the temporary key
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build + test (with an engine, so the embedded half is real)
+        run: |
+          cargo build --release -p kevy-ffi
+          cd bindings/csharp
+          KEVY_FFI_LIB=$PWD/../../target/release/libkevy_ffi.so \
+            dotnet test Kevy.Client.Tests/Kevy.Client.Tests.csproj --nologo
+
+      # Packed WITHOUT runtimes/: the csproj includes that tree only when
+      # it exists, and nothing here creates it. Stated rather than left to
+      # a condition nobody reads — this is the decision, not an accident.
+      - name: Pack
+        run: |
+          cd bindings/csharp
+          test ! -d Kevy.Embedded/runtimes || {
+            echo "✗ runtimes/ present: this package is managed-only" >&2; exit 1; }
+          dotnet pack Kevy.Client/Kevy.Client.csproj -c Release -o ../../nupkgs --nologo
+          dotnet pack Kevy.Embedded/Kevy.Embedded.csproj -c Release -o ../../nupkgs --nologo
+          ls -l ../../nupkgs
+
+      - name: The packed version is the workspace version
+        run: |
+          want=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+          for f in nupkgs/*.nupkg; do
+            got=$(echo "$f" | sed -E 's/.*\.([0-9]+\.[0-9]+\.[0-9]+)\.nupkg/\1/')
+            echo "  $f → $got"
+            [ "$got" = "$want" ] || { echo "✗ $f is $got, workspace is $want" >&2; exit 1; }
+          done
+
+      # Requested immediately before the push: the temporary key expires
+      # in an hour, and asking early is how a long build ends with an
+      # expired credential.
+      - name: NuGet login (OIDC → temporary key)
+        if: ${{ inputs.publish }}
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
+      - name: Push
+        if: ${{ inputs.publish }}
+        run: |
+          dotnet nuget push 'nupkgs/*.nupkg' \
+            --api-key '${{ steps.login.outputs.NUGET_API_KEY }}' \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
