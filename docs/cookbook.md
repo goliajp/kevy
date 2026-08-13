@@ -638,7 +638,7 @@ ready-made `IDX.QUERY` templates with `$N` slots. Nothing runs
 per-query inside the server; ad-hoc runtime SQL stays refused by the
 engine itself (Law 3).
 
-The schema — [docs/examples/shop.sql](https://github.com/goliajp/kevy/blob/main/docs/examples/shop.sql), a real
+The schema — [docs/examples/shop.sql](https://github.com/goliajp/kevy/blob/develop/docs/examples/shop.sql), a real
 users/orders/order_items cut-down:
 
 ```sql

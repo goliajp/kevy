@@ -66,7 +66,7 @@ $ redis-cli -p 6009 scan 0 match 'row:*' count 100
 $ kevy-cli -p 6009 DBSIZE</code></pre></figure>
 <p>RESPクライアントならどれでも動きます。リスナーはkevyサーバーと同じプロトコルを話し、フレーム化されたリクエストもインラインコマンド（<code>redis-cli</code>のPING形式）も受け付けます。</p>
 <h2 id="有効にする">有効にする</h2>
-<ul><li><code>Config::with_resp_listener(addr)</code> — <code>SocketAddr</code>を1つ渡します。<b>デフォルトはオフ</b>です。オフのときは<b>スレッドもソケットも存在しません——税はゼロ</b>です（ゲート済み：リスナーを有効にしたまま遊休させたときの書き込みスループットが、オフのときの10%以内。<a href="https://github.com/goliajp/kevy/blob/main/bench/topogate.sh"><code>bench/topogate.sh</code></a>）。</li><li>コードは<code>listener</code> cargoフィーチャの背後にあります（デフォルトで有効。wasm32ターゲットでは利用できません）。</li><li>リスナーが持つのは弱いハンドルだけです。ストアを生かし続けることはなく、ストアがdropされればコネクションも終わります。</li><li>認証はありません（意図的です。kevyにAUTHプレーンは存在しません）。ループバックかプライベートインタフェースにbindしてください。到達できる者は誰でも、ホワイトリストが提供するものすべてを読めます。</li></ul>
+<ul><li><code>Config::with_resp_listener(addr)</code> — <code>SocketAddr</code>を1つ渡します。<b>デフォルトはオフ</b>です。オフのときは<b>スレッドもソケットも存在しません——税はゼロ</b>です（ゲート済み：リスナーを有効にしたまま遊休させたときの書き込みスループットが、オフのときの10%以内。<a href="https://github.com/goliajp/kevy/blob/develop/bench/topogate.sh"><code>bench/topogate.sh</code></a>）。</li><li>コードは<code>listener</code> cargoフィーチャの背後にあります（デフォルトで有効。wasm32ターゲットでは利用できません）。</li><li>リスナーが持つのは弱いハンドルだけです。ストアを生かし続けることはなく、ストアがdropされればコネクションも終わります。</li><li>認証はありません（意図的です。kevyにAUTHプレーンは存在しません）。ループバックかプライベートインタフェースにbindしてください。到達できる者は誰でも、ホワイトリストが提供するものすべてを読めます。</li></ul>
 <h2 id="面">面</h2>
 <p>ホワイトリストのみです。それ以外はすべて<code>-ERR READONLY embedded listener</code>を返します。</p>
 <figure class="code"><pre><code>PING ECHO GET MGET EXISTS TYPE TTL PTTL DBSIZE KEYS SCAN
@@ -97,7 +97,7 @@ store.dispatch_readonly(
 <p>機構の重さの順に、エスカレーションの道筋を示します。</p>
 <ol><li><b>このリスナー</b> — 生きた読み出し、書き込みコストゼロ、1プロセス。</li><li><b>CDCフィード</b>（<a href="../cdc/">cdc.md</a>） — 相手プロセスに読み出しをポーリングさせるのではなく、変更をそちらへpushします。</li><li><b>組み込みをプライマリにするレプリケーション</b> — <code>with_embed_writer</code>がレプリケーションソースを公開し、<code>[replication] single_source = true</code>のkevyサーバーが、その組み込みストアをレプリカとして追随します。あなたのプロセスが供給し、サーバーのハードウェア上で読み出しをフルにファンアウトする形です。<a href="../replication/">replication.md</a>の*組み込みをプライマリにする*節を参照してください。</li></ol>
 <h2 id="パフォーマンス">パフォーマンス</h2>
-<p><a href="https://github.com/goliajp/kevy/blob/main/bench/topogate.sh"><code>bench/topogate.sh</code></a>がclampであり、これは<b>本物の2プロセステスト</b>です。連続的なHSET負荷の下にあるライターのバイナリと、生きたデータを表明する別プロセスのリーダーからなります。</p>
+<p><a href="https://github.com/goliajp/kevy/blob/develop/bench/topogate.sh"><code>bench/topogate.sh</code></a>がclampであり、これは<b>本物の2プロセステスト</b>です。連続的なHSET負荷の下にあるライターのバイナリと、生きたデータを表明する別プロセスのリーダーからなります。</p>
 <ul><li>所有者が連続的に書き込んでいるあいだ、リーダーの<code>GET</code> p99 &lt; 1ms（6コネクションの中央値）。</li><li>READONLYの強制（書き込みverbが契約テキストとともに拒否されること）。</li><li>ゼロ税。リスナーを有効にしたまま遊休させたときの所有者の書き込みスループットが、リスナーオフのときの10%以内。</li></ul>
 <p>読み出しがシャードロックのもとで走るという設計は、リスナーのトラフィックが重ければ、同じシャード上で所有者の書き込みと競合し<b>得る</b>ことを意味します。それが、ラグゼロの真実と引き換えに払う代償です。ツール規模の読み出しレート（ダッシュボード、スポットチェック）は、所有者の書き込みスループットの中では計測不能なほど小さくなります。サービング規模の読み出しが必要なら、このリスナーではなく、レプリケーション（上記）を使ってください。</p>
 <h2 id="関連項目">関連項目</h2>

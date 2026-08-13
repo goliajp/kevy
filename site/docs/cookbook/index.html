@@ -293,7 +293,7 @@ if !report.is_clean() {
 <h2 id="22-porting-a-pgmysql-schema">22. Porting a PG/MySQL schema</h2>
 <p><b>SQL equivalent:</b> the schema file itself — <code>CREATE TABLE</code>, <code>CREATE INDEX</code>, <code>CREATE VIEW</code> — <a href="../rds-workloads/#secondary-index-ddl">matrix: secondary index DDL</a>.</p>
 <p>Everything recipes 1–8 do by hand, compiled from the SQL you already have. <code>kevy-sql</code> (and its <code>kevy-cli sql</code> face) is a <b>declaration-time compiler</b>: it reads the schema ONCE, like a migration tool, and emits explicit <code>TABLE.DECLARE</code> / <code>VIEW.CREATE</code> commands plus <i>query cards</i> — ready-made <code>IDX.QUERY</code> templates with <code>$N</code> slots. Nothing runs per-query inside the server; ad-hoc runtime SQL stays refused by the engine itself (Law 3).</p>
-<p>The schema — <a href="https://github.com/goliajp/kevy/blob/main/docs/examples/shop.sql">docs/examples/shop.sql</a>, a real users/orders/order_items cut-down:</p>
+<p>The schema — <a href="https://github.com/goliajp/kevy/blob/develop/docs/examples/shop.sql">docs/examples/shop.sql</a>, a real users/orders/order_items cut-down:</p>
 <figure class="code"><pre><code class="lang-sql">CREATE TABLE users (
   id     bigserial PRIMARY KEY,
   email  text,

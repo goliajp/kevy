@@ -38,6 +38,34 @@ frames 5.0 already put on disk. Details below.
   heartbeats flowing, no resync in progress, and the post-failover
   writes never arriving. See the replication section below.
 
+## If you embed the store
+
+If your application links `kevy-embedded` instead of running a server,
+most of this page is about machinery you do not have. One embedder's
+entire call surface is `Config::default().with_persist(dir)` plus
+`Store::open` and `get` / `set` / `del` / `keys` — for that shape the
+upgrade is two questions.
+
+**Does 5.1 read what 5.0 wrote? Yes. Does 5.0 still read what 5.1 wrote
+afterwards? Yes.** Measured on the published crates rather than inferred
+from the server path: a 5.0.0 embedded store wrote 201 keys — one of
+them 200 KB, so the big-value path is included — and rewrote its AOF;
+5.1.0 opened that directory and read all 201 back; 5.1.0 appended 201
+more of its own; 5.0.0 re-opened the result and read all 402. Clean
+replay in both directions, and the same program compiles unchanged
+against either version.
+
+The rest of this page is server machinery. In-process there is no
+reactor, no io_uring, no replication and no listener, so these carry no
+meaning for you: `KEVY_AOF_OFFLOAD`, the `appendfsync always` group
+commit, the snapshot resync and its `-LOADING` window, feed generations,
+`--accept-shards`, and every tail-latency number quoted above.
+
+What does reach you: the compression fix, **if** you enabled compression
+or the value log (`Config::default()` does not), and the
+element-granularity copy-on-write for collections past ~16k elements,
+which shortens the pause a `rewrite_aof()` can impose on a write.
+
 ## What carries over unchanged
 
 - **Data files.** 5.1 opens 5.0 directories as-is, and 5.0 re-opens a

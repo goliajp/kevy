@@ -48,6 +48,11 @@
 <p><b>如果你用了压缩或 value log，请尽早升级。</b>5.0 的编码器可能写出一个 连 5.0 自己的解码器都拒收的帧——compaction 之后，一个冷值会读回 corrupt。5.1 修了编码器，并教解码器把 5.0 已经写到盘上的那些帧救回来。 细节见下。</p>
 <h2 id="这个版本为什么存在">这个版本为什么存在</h2>
 <ul><li><b>修掉 5.0 的一个读取隐患。</b>当字典携带共享 Huffman 表时， <code>kevy-compress</code> 可能把一个纯字面量帧标记成"用了字典匹配"。写入时 什么都察觉不到（CRC 校验的是已经写下的字节），故障要到后来、在 compaction 路径上，以"一个明明存成功了的值解码失败"的形式浮出来。 5.1 修正了 tag，并额外加了一条显式兼容分支，把 5.0 已经写下的错标 帧解出来。5.1 写的帧，5.0 依然读得了。</li><li><b>巨型集合不再卡住它所在的 shard。</b>list、hash、set、sorted-set 超过约 1.6 万元素后按元素粒度写时复制。rewrite 或快照钉住值期间的 写入只克隆一个段（约 1 毫秒，与集合总尺寸无关），而不是整个值—— 后者过去要付 0.35〜9.5 秒，并让该集合的常驻内存短暂翻倍。</li><li><b><code>appendfsync always</code> 不再阻塞 reactor。</b>两个 reactor 现在都做 组提交：io_uring 上回复由 fsync 完成来放行，epoll/kqueue 上由每 shard 一条 writer lane 做同样的事。ext4、50 并发连接实测：io_uring 353 → 8,273 writes/s，epoll 478 → 10,540。耐久性契约不变——回复 依然意味着"已经落盘"。</li><li><b>修好了 failover 的收敛。</b>切换到新晋升 primary 的 replica 可能 永远挂着不动：link up、心跳在走、也没有 resync 在进行，但 failover 之后的写入就是不到。见下面的复制一节。</li></ul>
+<h2 id="如果你是嵌入式使用者">如果你是嵌入式使用者</h2>
+<p>如果你的应用链接的是 <code>kevy-embedded</code> 而不是跑一个服务器，这一页的大半 讲的是你根本没有的机构。有位嵌入式使用者的全部调用面就是 <code>Config::default().with_persist(dir)</code> 加上 <code>Store::open</code> 和 <code>get</code> / <code>set</code> / <code>del</code> / <code>keys</code>——对这种形状，升级只剩两个问题。</p>
+<p><b>5.1 读不读得了 5.0 写下的？读得了。之后 5.0 还读不读得了 5.1 写过的？ 读得了。</b>这不是从服务器侧的路径推断出来的，是拿已发布的 crate 实测的： 5.0.0 的嵌入式 store 写了 201 个键（其中一个 200 KB，所以大值路径也在 里面）并重写了 AOF；5.1.0 打开那个目录，201 个全部读回；5.1.0 又追加了 自己的 201 个；5.0.0 重新打开，402 个全部读回。两个方向都是 clean replay， 而且同一个程序对两个版本都无改动编译通过。</p>
+<p>这一页其余部分是服务器机构。进程内没有 reactor、没有 io_uring、没有复制、 没有监听器，所以下面这些对你没有意义：<code>KEVY_AOF_OFFLOAD</code>、 <code>appendfsync always</code> 的组提交、快照 resync 及其 <code>-LOADING</code> 窗口、 feed generation、<code>--accept-shards</code>，以及上文引用的全部尾延迟数字。</p>
+<p>真正会碰到你的：压缩那条修复——<b>前提是</b>你开了压缩或 value log （<code>Config::default()</code> 不开），以及超过约 1.6 万元素的集合的元素粒度 写时复制，它缩短的是 <code>rewrite_aof()</code> 可能施加给一次写入的停顿。</p>
 <h2 id="原样继承的东西">原样继承的东西</h2>
 <ul><li><b>数据文件。</b>5.1 直接打开 5.0 的目录，5.0 也能重新打开 5.1 最后 写过的目录（两个方向都有门禁把关）。无论往哪个方向切，先做一次 干净停机。</li><li><b>wire 协议、命令、客户端契约。</b>没有删除、没有改类型。现有客户端 不需要改动，也不需要重新构建。</li><li><b>配置文件与命令行开关。</b>5.0 的每个键都被接受，默认值不变。</li></ul>
 <h2 id="行为有变化的地方">行为有变化的地方</h2>
@@ -65,7 +70,7 @@
 <p>feed generation 现在是随机的 53 位历史身份，不再是计数器，所以两个 节点再也不可能用同一个名字称呼两段不同的历史。任何显示或存储过 generation 的地方（<code>REPL.TOKEN</code>、<code>REPL.WAIT</code>、<code>FEED.TAIL</code>）都会显示 又大又无序的数字。它们是身份：只做相等比较，永远不要比大小。</p>
 <h2 id="推荐流程">推荐流程</h2>
 <ol><li>先备份：干净停机（或 <code>BGSAVE</code> + 拷贝），然后复制数据目录。</li><li>先升级 replica，再升级 primary。混版本的一对在两个方向都能工作； 每个 replica 在它的游标 generation 对不上的那一刻 resync 一次。</li><li>验证：每个 replica 的 <code>INFO replication</code>（link up、offset 在前进）、 <code>INFO persistence</code>、<code>DBSIZE</code> 对照预期，以及你自己应用的冒烟测试。</li><li>需要回滚就：干净停掉 5.1，在同一目录上启动 5.0。5.1 写下的值照样 读得出来。</li></ol></main>
-  <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#这个版本为什么存在">这个版本为什么存在</a></li><li class="l2"><a href="#原样继承的东西">原样继承的东西</a></li><li class="l2"><a href="#行为有变化的地方">行为有变化的地方</a></li><li class="l3"><a href="#重连的-replica-会做一次快照-resync">重连的 replica 会做一次快照 resync</a></li><li class="l3"><a href="#appendfsync-always-共享-fsync-轮次">appendfsync always 共享 fsync 轮次</a></li><li class="l3"><a href="#feed-generation-变成随机身份">feed generation 变成随机身份</a></li><li class="l2"><a href="#推荐流程">推荐流程</a></li></ul></aside>
+  <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#这个版本为什么存在">这个版本为什么存在</a></li><li class="l2"><a href="#如果你是嵌入式使用者">如果你是嵌入式使用者</a></li><li class="l2"><a href="#原样继承的东西">原样继承的东西</a></li><li class="l2"><a href="#行为有变化的地方">行为有变化的地方</a></li><li class="l3"><a href="#重连的-replica-会做一次快照-resync">重连的 replica 会做一次快照 resync</a></li><li class="l3"><a href="#appendfsync-always-共享-fsync-轮次">appendfsync always 共享 fsync 轮次</a></li><li class="l3"><a href="#feed-generation-变成随机身份">feed generation 变成随机身份</a></li><li class="l2"><a href="#推荐流程">推荐流程</a></li></ul></aside>
 </div>
 
 <script src="../../../assets/docsearch.js?v=8c03463d" defer></script>

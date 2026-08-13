@@ -61,7 +61,7 @@ core,listener               # + redis-cli-able diagnostics port</code></pre></fi
 kevy-embedded = { version = "4", default-features = false, features = ["core"] }</code></pre></figure>
 <p>APIの顔はどの階層でも同じです。<code>Store::open(Config)</code>、<code>KevyResult</code> / <code>KevyError</code>のエラー、書き込みメソッドの借用スライスargv。<code>core</code>に対して書いたコードは、デバイスがのちに<code>persist</code>を得ても、そのまま再コンパイルできます。</p>
 <h2 id="リソース予算願望ではなくゲート済み">リソース予算（願望ではなく、ゲート済み）</h2>
-<p>予算のラインは2本あり、<a href="https://github.com/goliajp/kevy/blob/main/bench/iotgate.sh"><code>bench/iotgate.sh</code></a>がラチェットとして強制します。どちらの数値も、引き上げるには文書化された裁定が必要です。</p>
+<p>予算のラインは2本あり、<a href="https://github.com/goliajp/kevy/blob/develop/bench/iotgate.sh"><code>bench/iotgate.sh</code></a>がラチェットとして強制します。どちらの数値も、引き上げるには文書化された裁定が必要です。</p>
 <div class="tbl"><table><thead><tr><th>予算</th><th>ライン</th><th>実測</th></tr></thead><tbody><tr><td>バイナリサイズ（<code>core</code>のコンシューマ、静的musl）</td><td>600 KB以下</td><td><b>454 KB</b>（x86_64）・<b>411 KB</b>（aarch64）・<b>383 KB</b>（armv7）</td></tr><tr><td><code>open</code>直後の空ストアのRSS（Linux）</td><td>2 MB以下</td><td><b>336 KB</b>（aarch64）</td></tr></tbody></table></div>
 <blockquote><p>これらは<code>bench/iot-consumer</code>上で計測しています——ワークスペースの<b>外側</b>に意図的に置いた、唯一の依存が<code>kevy-embedded</code>であるcrateです。それこそが、あなたが出荷する形です。このゲートの以前のバージョンはワークスペースの<code>--example</code>を測っていました。exampleのビルドはdev-dependencies（<code>kevy</code>サーバーcrate）を引き込むため、報告されるサイズがおよそ60%も水増しされていました。</p></blockquote>
 <p><code>iot</code> cargoプロファイルはワークスペースのルートで定義されています——<code>release</code>のcodegenに、サイズを最優先させたものです。</p>
