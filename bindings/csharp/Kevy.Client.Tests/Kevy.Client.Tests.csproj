@@ -20,6 +20,12 @@
 
   <ItemGroup>
     <ProjectReference Include="../Kevy.Client/Kevy.Client.csproj" />
+    <!-- Direct, because Kevy.Client marks its own reference to this
+         PrivateAssets="all" — it folds the assembly into the package
+         rather than exposing it as a dependency, and that hides it from
+         anything reaching it transitively. The tests exercise the
+         embedded surface by name, so they ask for it themselves. -->
+    <ProjectReference Include="../Kevy.Embedded/Kevy.Embedded.csproj" />
   </ItemGroup>
 
 </Project>
