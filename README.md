@@ -108,8 +108,25 @@ Full examples per language: [docs/clients.md](docs/clients.md).
 For the browser, the engine itself ships as an npm package —
 `npm install @goliapkg/kevy` ([In the browser](#in-the-browser)).
 Native in-process bindings for Node, Python, Go, C#, Java, Swift,
-Kotlin, Flutter and React Native live under [`bindings/`](bindings) and
-build from source today; they are not on their language registries yet.
+Kotlin, Flutter and React Native live under [`bindings/`](bindings).
+Four are on their language registries:
+
+```sh
+npm i @goliapkg/kevy-ts                          # Node / TypeScript
+go get github.com/goliajp/kevy-go/v5             # Go
+```
+```xml
+<dependency>                                     <!-- Java -->
+  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>5.1.0</version>
+</dependency>
+```
+
+The Go module is the remote client; its embedded engine is cgo against
+a static library, which a Go module cannot carry, so that half builds
+from this tree with `-tags kevy_embedded` (see
+[bindings/go](bindings/go)). The rest — Python, C#, Swift, Kotlin,
+Flutter, React Native — build from source and are not on PyPI, NuGet,
+SwiftPM or pub.dev yet.
 
 The Rust surface is on crates.io:
 
