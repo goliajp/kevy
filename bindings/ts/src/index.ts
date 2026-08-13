@@ -1,4 +1,6 @@
-// @goliapkg/kevy — the first-party TypeScript client for kevy.
+// @goliapkg/kevy-ts — the first-party TypeScript client for kevy.
+// (@goliapkg/kevy is the browser wasm build; this is the client that
+// routes one connect(url) to the in-process engine or a remote server.)
 //
 // One connect(url) chooses the backend from the URL scheme (contract §1):
 //   mem:// / file://           → the in-process embedded engine (bun:ffi on
@@ -9,7 +11,7 @@
 // embedded escape hatch on `client.sync` (contract §1.4 / §7). Runs on both
 // Node and Bun with no build step.
 //
-//   import { connect } from "@goliapkg/kevy";
+//   import { connect } from "@goliapkg/kevy-ts";
 //   const c = await connect("mem://app");
 //   await c.set("k", "v");
 //   c.sync.get("k");            // embedded-only synchronous face

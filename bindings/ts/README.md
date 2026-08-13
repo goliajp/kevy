@@ -12,11 +12,11 @@ both **Node** and **Bun**:
   client. Same business code, switch backends by changing only the URL.
 
 ```bash
-npm install @goliapkg/kevy        # or: bun add @goliapkg/kevy
+npm install @goliapkg/kevy-ts        # or: bun add @goliapkg/kevy-ts
 ```
 
 ```ts
-import { connect, textOf } from "@goliapkg/kevy";
+import { connect, textOf } from "@goliapkg/kevy-ts";
 
 // Embedded in-process, or "kevy://127.0.0.1:6379" for a server — same code.
 const c = await connect("mem://app");
@@ -27,7 +27,7 @@ textOf(v!);                                  // "v" — decode bytes to a string
 await c.zadd("board", { score: 42, member: "alice" });
 
 // Errors are typed and inspectable by variant.
-import { StoreError } from "@goliapkg/kevy";
+import { StoreError } from "@goliapkg/kevy-ts";
 try {
   await c.incr("k");
 } catch (e) {
