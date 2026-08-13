@@ -101,6 +101,10 @@ func TestIdxRangeAndPaging(t *testing.T) {
 }
 
 func TestIdxEmbeddedUnsupported(t *testing.T) {
+	// Embedded-only: it asserts what the embedded backend refuses.
+	if openEmbeddedStore == nil {
+		t.Skip("no embedded engine in this build")
+	}
 	c := mustConnect(t, "mem://idx-bus")
 	if _, err := c.IdxList(bg); !IsKind(err, KindUnsupported) {
 		t.Fatalf("embedded IdxList: %v", err)

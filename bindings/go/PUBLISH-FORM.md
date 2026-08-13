@@ -1,74 +1,91 @@
-# Go module publish form — audit
+# Go module publish form — resolved
 
-What `go get github.com/goliajp/kevy-go` must resolve to, versus what the
-in-repo `bindings/go` is today. This is a checklist for the t6 channel
-release, not something to build now: embedding per-target static libraries
-is part of publishing, and the standalone repo does not exist yet.
+How `github.com/goliajp/kevy-go` is produced, and why it does not carry
+the embedded engine. Recorded because the earlier plan in this file said
+the opposite, and someone reading the code later deserves to know the
+plan changed on purpose rather than by neglect.
 
-## The gap
+## The shape
 
-The embedded engine is cgo over `crates/kevy-ffi`. The current preamble
-(`kevy.go`) points at the kevy checkout by relative path:
-
-```go
-#cgo CFLAGS: -I${SRCDIR}/../../crates/kevy-ffi/include
-#cgo LDFLAGS: ${SRCDIR}/../../target/debug/libkevy_ffi.a
-```
-
-Both `../..` paths leave the module. They work here because `bindings/go`
-sits inside the kevy tree; they break the moment the module is a
-standalone repo, and `target/debug` is a dev build regardless. So a
-published `go get` would compile the Go and then fail to link.
-
-## The publish form
-
-A standalone module carries its own natives, the way apple carries an
-xcframework and android carries jniLibs:
+`kevy-go` is **generated** from this directory by
+`scripts/mirror-go-module.sh` and pushed on each release. It contains
+the pure-Go files only: everything without the `kevy_embedded` build
+tag. No cgo, no vendored natives, no dependencies beyond the standard
+library.
 
 ```
 kevy-go/
-  go.mod                       module github.com/goliajp/kevy-go
-  *.go
-  include/kevy.h               vendored from crates/kevy-ffi/include
-  libs/
-    darwin_arm64/libkevy_ffi.a
-    linux_amd64/libkevy_ffi.a
-    linux_arm64/libkevy_ffi.a
+  go.mod            module github.com/goliajp/kevy-go/v5
+  *.go              32 files, copied verbatim
+  README.md         generated; says it is generated
+  LICENSE-APACHE, LICENSE-MIT
 ```
 
-with the preamble resolving to the vendored copies, per-target:
+Nobody edits it. Changes are made here; the release regenerates it.
 
-```go
-#cgo CFLAGS: -I${SRCDIR}/include
-#cgo darwin,arm64 LDFLAGS: ${SRCDIR}/libs/darwin_arm64/libkevy_ffi.a
-#cgo linux,amd64  LDFLAGS: ${SRCDIR}/libs/linux_amd64/libkevy_ffi.a
-#cgo linux,arm64  LDFLAGS: ${SRCDIR}/libs/linux_arm64/libkevy_ffi.a
-#cgo linux LDFLAGS: -lpthread -ldl -lm
+## Why it exists at all
+
+Go has no package registry. An import path *is* a repository URL, so
+`import "github.com/goliajp/kevy-go/v5"` requires a repository at that
+exact address with `go.mod` at its root. Every other binding publishes
+by uploading a built artifact to a registry; this one publishes by
+having a second repository exist. `bindings/go` inside this tree cannot
+be imported by anyone, no matter what is in it.
+
+## Why the embedded engine is not in it
+
+The earlier plan was to vendor `libkevy_ffi.a` for three targets, the
+way the apple door carries an xcframework and the android door carries
+jniLibs. That plan does not survive contact with how Go distributes
+code:
+
+- **A Go module ships source.** Consumers fetch through
+  `proxy.golang.org`, which serves a zip of the repository. Static
+  libraries for three targets are tens of megabytes each, and every
+  version ever published stays in the proxy's cache forever.
+- **It buys nothing for most users.** The remote RESP client is what a
+  Go service normally wants; the embedded engine is for a process that
+  wants the store *inside* it, and that process is being built from a
+  tree where cargo has just produced the library anyway.
+- **It would cap the platforms.** Vendoring three `.a` files makes the
+  module work on three platforms. Pure Go works everywhere Go works,
+  including `GOOS=windows` and `js/wasm`, neither of which the engine
+  builds for today.
+
+So the split is by build tag. Without `kevy_embedded`, `mem://` and
+`file://` return an error naming the fix. With it — inside this tree,
+where the relative cgo paths resolve — the engine is linked in.
+
+```sh
+cargo build --release -p kevy-ffi
+go test -tags kevy_embedded ./...
 ```
 
-`GOFLAGS=-mod=mod` and cgo on; nothing about the Go source changes, only
-where the `.a` and the header come from.
+The seam is `embedded_seam.go`: the tagged files register themselves
+into two function variables at init, and everything else talks to the
+engine through interfaces. That is what lets the mirror be produced by
+*omitting* files rather than by maintaining a parallel set of stubs — a
+stub set would be a second definition of the same surface, and the two
+would drift the first time someone added a method to one.
 
-## Checklist for the release
+## The `/vN` suffix
 
-- [ ] Standalone repo `github.com/goliajp/kevy-go` created.
-- [ ] `include/kevy.h` vendored (not a `../..` reference).
-- [ ] `libs/<goos>_<goarch>/libkevy_ffi.a` built release, three targets to
-      match the other doors (darwin-arm64, linux-amd64, linux-arm64).
-- [ ] Preamble switched to `${SRCDIR}/include` + per-target `libs/…`.
-- [ ] `go.mod` tagged `v5.1.0`, so `go get …@v5.1.0` resolves — the module
-      path already declares no `/v4` suffix issue because the tag is the
-      first v4 (a v2+ module normally needs a `/vN` path suffix; confirm
-      whether kevy-go adopts `/v4` or ships as its own first major).
-- [ ] `pkg.go.dev` front-door README (the README already written here,
-      copied or referenced from the standalone repo).
+`go.mod` declares `github.com/goliajp/kevy-go/v5`, and the tag is
+`v5.1.0`. Go requires the major version in the path for v2 and up; the
+alternative — starting kevy-go's own versioning at v1, independent of
+the engine — was rejected because a user comparing `kevy-go v1.2.0`
+against a `kevy 5.1.0` server has no way to tell whether they match.
+Tracking the engine's version makes the question answerable by reading.
 
-## Note on the /vN suffix
+The mirror script refuses to push if the path suffix and the version's
+major disagree, because that mismatch is not a build error — it is a
+module that resolves to the wrong major forever.
 
-Go modules require the major version in the path for v2 and up:
-`github.com/goliajp/kevy-go/v4`. If kevy-go's own history starts at v4 to
-track the engine, that suffix is mandatory and the current
-`module github.com/goliajp/kevy-go` line is wrong for a v4 tag. This is the
-one decision the release must make consciously — either start kevy-go's
-versioning independently (its own v1) or adopt the `/v4` path to mirror the
-engine. Left to the channel-release owner.
+## Guarantees, and where they are checked
+
+The `go-mirror` CI job runs the generator on every push. It builds the
+module **outside** the kevy tree — under it, the cgo paths would still
+resolve, and a module that only works where it was extracted from would
+pass the check and fail for its first real user — then vets it and runs
+its tests against a real server binary. A missing binary is a failure
+there, not a skip: a fully skipped suite is also green.

@@ -21,7 +21,7 @@ import (
 // errors.As / IsKind / StoreErrorOf (contract §2).
 type Client struct {
 	remote *respConn
-	emb    *DB
+	emb    embStore
 	embKey string // registry key, for release on Close
 	url    string
 }

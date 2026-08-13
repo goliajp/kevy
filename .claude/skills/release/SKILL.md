@@ -115,6 +115,24 @@ recognising:
   `package.json`**, which drifts for a whole release line. The workflow
   derives it; do not "fix" the committed file to match.
 
+**Go is not in that workflow, and cannot be.** Go has no registry: an
+import path is a repository URL, so publishing means pushing a second
+repository. It needs write access to `goliajp/kevy-go`, so it runs from
+a machine that has it, right after the tag push:
+
+```sh
+bash scripts/mirror-go-module.sh --push X.Y.Z
+```
+
+That regenerates `kevy-go` from `bindings/go` (pure-Go files only — the
+`kevy_embedded` half is cgo against a per-platform static library that
+cannot travel through the module proxy), proves it builds and passes
+its tests standing OUTSIDE the kevy tree, then pushes and tags it.
+Never edit `kevy-go` directly; the next release overwrites it. A Go
+version is immutable once the proxy has fetched it — moving a tag
+changes nothing for anyone who already resolved it — so the script
+refuses a version already tagged.
+
 ## 4. Verify each channel — by content, never by status code
 
 A soft 404 serves the home page with HTTP 200. A registry that has
@@ -138,6 +156,16 @@ EOF
 
 npm view @goliapkg/kevy version
 gh release view vX.Y.Z --json tagName,isDraft,assets
+
+# Go — ask the PROXY, not the repository. A user's `go get` resolves
+# through proxy.golang.org, which fetches on first request and caches
+# independently; a pushed tag the proxy has not taken is not published
+# as far as anyone downstream is concerned.
+curl -sf https://proxy.golang.org/github.com/goliajp/kevy-go/v5/@v/vX.Y.Z.info
+
+# Maven Central — repo1 is the authority. The Portal saying "PUBLISHED"
+# is its own bookkeeping, and it says that before repo1 serves the file.
+curl -sfI https://repo1.maven.org/maven2/jp/golia/kevy/X.Y.Z/kevy-X.Y.Z.pom
 ```
 
 Then **install what you published** — both channels, because they fail

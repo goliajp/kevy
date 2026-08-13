@@ -1,3 +1,5 @@
+//go:build kevy_embedded
+
 package kevy
 
 import (
@@ -11,14 +13,14 @@ import (
 // handle common case. The store is shared through the process registry so
 // a Publish on the same URL reaches here.
 type embSub struct {
-	db      *DB
+	db      embStore
 	key     string
 	handles []subHandle
 	rr      int
 }
 
 type subHandle struct {
-	sub     *Sub
+	sub     embSubscription
 	name    []byte
 	pattern bool
 }
