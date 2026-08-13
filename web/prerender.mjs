@@ -244,7 +244,88 @@ for (const lang of LANGS) {
   }
 }
 
-process.stdout.write(`prerender: ${written} reference pages, ${cmdPages} command pages\n`)
+// ── the written pages ────────────────────────────────────────────────────
+// The scenario guides, the migration guide, the benchmark report and the
+// capacity calculator, from content exported verbatim out of the Python
+// dicts that have held it since the previous site.
+const { renderPage } = await import('./.ssr/entry-pages.js')
+const CONTENT = JSON.parse(readFileSync(join(HERE, 'src/content.json'), 'utf8'))
+
+let writtenPages = 0
+for (const lang of LANGS) {
+  const pages = CONTENT[lang]
+  if (!pages) throw new Error(`content.json has no ${lang}`)
+  for (const [slug, page] of Object.entries(pages)) {
+    // The home page is the React landing page, which Vite already built.
+    // The content module still carries its blocks because the two shared a
+    // source; rendering them again would overwrite index.html with a
+    // second, static home page.
+    if (slug === '') continue
+    const dir = lang === 'en' ? join(DIST, slug) : join(DIST, lang, slug)
+    mkdirSync(dir, { recursive: true })
+    const depth = (lang === 'en' ? 0 : 1) + slug.split('/').length
+    const hasCalc = page.blocks.some((b) => (b.t ?? b.kind) === 'calc')
+    writeFileSync(
+      join(dir, 'index.html'),
+      renderPage(
+        { lang, slug, title: page.title, desc: page.desc, blocks: page.blocks, version: VERSION, depth },
+        CSS,
+        hasCalc,
+      ),
+    )
+    writtenPages++
+  }
+  // Each language needs its own landing page too. English is served by the
+  // React build at the root; zh and ja get a static one from the same
+  // content, so a reader who lands on /zh/ is not sent to English.
+  if (lang !== 'en') {
+    const home = pages['']
+    if (home) {
+      mkdirSync(join(DIST, lang), { recursive: true })
+      writeFileSync(
+        join(DIST, lang, 'index.html'),
+        renderPage(
+          { lang, slug: '', title: home.title, desc: home.desc, blocks: home.blocks, version: VERSION, depth: 1 },
+          CSS,
+          false,
+        ),
+      )
+      writtenPages++
+    }
+  }
+}
+
+// ── llms.txt ─────────────────────────────────────────────────────────────
+// A plain-text index of the site for language models, and the full text
+// behind it. Generated here rather than written, so it cannot describe a
+// site that no longer exists.
+{
+  const lines = [
+    `# kevy ${VERSION}`,
+    '',
+    '> A Redis-compatible engine with vector search, full text, secondary',
+    '> indexes, materialised views and a change feed inside it. Pure Rust,',
+    '> no third-party crates.',
+    '',
+    '## Documentation',
+    '',
+  ]
+  const full = [...lines]
+  for (const lang of LANGS) {
+    for (const slug of slugsFor(lang)) {
+      const url = `https://kevy.golia.jp${lang === 'en' ? '' : `/${lang}`}/docs/${slug}/`
+      if (lang === 'en') lines.push(`- [${slug}](${url})`)
+      full.push(`\n\n# ${slug} (${lang})\n${url}\n`)
+      full.push(readFileSync(join(docDir(lang), `${slug}.md`), 'utf8'))
+    }
+  }
+  writeFileSync(join(DIST, 'llms.txt'), lines.join('\n') + '\n')
+  writeFileSync(join(DIST, 'llms-full.txt'), full.join('\n') + '\n')
+}
+
+process.stdout.write(
+  `prerender: ${written} reference, ${cmdPages} command, ${writtenPages} written pages, llms.txt\n`,
+)
 
 // The engine binary the landing page loads is also what the docs describe.
 // Nothing here depends on it, but a build that quietly shipped a different

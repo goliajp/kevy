@@ -72,16 +72,20 @@ for (const f of pages) {
       fail(`${relative(DIST, f)}: masthead says ${m[1]}, the workspace is ${VERSION}`)
     }
   }
-  // Any OTHER version-shaped string next to the product name is a hand-typed
-  // claim. `kevy 4.0` in a hero is exactly what went stale before.
-  for (const m of html.matchAll(/kevy[\s ]+(\d+\.\d+(?:\.\d+)?)/gi)) {
-    const v = m[1]
-    if (v !== VERSION && !VERSION.startsWith(v + '.') && v !== VERSION.slice(0, v.length)) {
-      // Version numbers legitimately appear in prose about OTHER versions —
-      // upgrade guides name the version you are coming from. Those live in
-      // the markdown, so only the generated chrome is held to this.
-      if (!relative(DIST, f).includes('docs/')) {
-        fail(`${relative(DIST, f)}: a typed "kevy ${v}" beside a site serving ${VERSION}`)
+  // A version in the page's CHROME must be the version the page ships.
+  // Content may name any version it likes, and often must: an upgrade
+  // guide names the release you are coming from, and a benchmark's legend
+  // names the build that was measured. Rewriting that legend to the
+  // current version would turn an honest record of a 4.0 measurement into
+  // a false claim about 5.1 — a stale benchmark is a reason to re-measure,
+  // not to relabel.
+  //
+  // So the scan is scoped to the eyebrow, which is chrome, and which is
+  // exactly where `kevy 4.0` sat on a site that was serving 5.1.0.
+  for (const eyebrow of html.matchAll(/<div class="eyebrow">(.*?)<\/div>/gs)) {
+    for (const m of eyebrow[1].matchAll(/kevy[\s ]+(\d+\.\d+(?:\.\d+)?)/gi)) {
+      if (m[1] !== VERSION) {
+        fail(`${relative(DIST, f)}: eyebrow says "kevy ${m[1]}", the site serves ${VERSION}`)
       }
     }
   }

@@ -42,7 +42,6 @@ PAGES[""] = {
     "blocks": [
         {
             "t": "hero",
-            "eyebrow": "kevy 4.0",
             "h1": "AI 系统的<br>数据层。",
             "lede": (
                 "兼容 Redis——你的客户端不用改就能连。每一个操作都更快。"
@@ -53,7 +52,7 @@ PAGES[""] = {
             "ctas": [
                 {"label": "cargo install kevy", "href": "#start"},
                 {"label": "它能做什么", "href": "#code"},
-                {"label": "打开 Playground", "href": "play/"},
+                {"label": "打开 Playground", "href": "#try"},
             ],
             "live_term": {
                 "hint": "输入一条命令——SET、GET、TTL、INCR、KEYS、SUBSCRIBE、PUBLISH……",
@@ -939,7 +938,7 @@ const db = await open({ persist: { name: "app" } });""",
             "intro": "",
             "items": [
                 {"kicker": "指南", "title": "发布订阅", "body": "频道、模式匹配，以及一个跟不上的订阅者会怎么样。", "go": "去读", "href": "docs/pubsub/"},
-                {"kicker": "试一下", "title": "两个标签页，没有服务端", "body": "在两个标签页里打开 playground，从任意一边发布。", "go": "Playground", "href": "play/"},
+                {"kicker": "试一下", "title": "两个标签页，没有服务端", "body": "在两个标签页里打开 playground，从任意一边发布。", "go": "Playground", "href": "#try"},
             ],
         },
     ],

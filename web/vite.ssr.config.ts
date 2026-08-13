@@ -24,6 +24,7 @@ export default defineConfig({
       input: {
         'entry-docs': resolve(__dirname, 'src/entry-docs.tsx'),
         'entry-commands': resolve(__dirname, 'src/entry-commands.tsx'),
+        'entry-pages': resolve(__dirname, 'src/entry-pages.tsx'),
         md: resolve(__dirname, 'src/md.ts'),
       },
       output: { format: 'es', entryFileNames: '[name].js' },
