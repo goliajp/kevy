@@ -1055,8 +1055,12 @@ jobs:
       - name: vendorgate (the vendored natives match the source)
         run: bash bench/vendorgate.sh
 
+      # From the REPOSITORY ROOT: SwiftPM resolves a package from the
+      # root of the repository it clones, so that is where the manifest
+      # lives and where a consumer's `.package(url: ".../kevy", …)`
+      # reaches it. Building from the old subdirectory now finds only
+      # the pointer manifest left behind to stop the two from drifting.
       - name: KevyKit — swift build + swift test
-        working-directory: bindings/apple/KevyKit
         run: |
           swift build
           swift test
