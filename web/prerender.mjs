@@ -95,15 +95,46 @@ function descOf(md) {
 
 // Links between markdown files must become links between pages. `foo.md`
 // and `foo.md#bar` are siblings; anything else is left alone.
-function linkMap(href) {
+// The repository on GitHub, for the files that have no page here. A link
+// to a benchmark ledger should go somewhere, and the somewhere is the file
+// itself — dropping it leaves a reader with a name and no way to reach it.
+const GH = 'https://github.com/goliajp/kevy/blob/develop/'
+
+function linkMapFor(lang, present) {
+  return function linkMap(href) {
   if (/^(https?:|mailto:|#|\/)/.test(href)) return href
-  const m = /^(?:\.\/)?([\w.-]+)\.md(#.*)?$/.exec(href)
-  if (m) return `../${m[1]}/${m[2] ?? ''}`
-  // A link to something that is not a document and not a URL — a source
-  // file, a script — has no page on this site. md.ts drops the anchor and
-  // keeps the text rather than shipping a dead href.
-  if (/\.(rs|py|sh|toml|json|ya?ml|txt)$/.test(href)) return null
+
+  // A sibling document. `./foo.md`, `foo.md` and `../foo.md` all mean the
+  // same page: docs are flat, and the `../` form appears because in the
+  // markdown tree a translation sits one level deeper. Handling only the
+  // bare form left 13 dead links per language.
+  const sibling = /^(?:\.{1,2}\/)*([\w.-]+)\.md(#.*)?$/.exec(href)
+  if (sibling) {
+    const slug = sibling[1]
+    const frag = sibling[2] ?? ''
+    // A page the site does not publish is not a page to link to. Send the
+    // reader to the file in the repository, which is where it lives.
+    if (EXCLUDE.has(slug)) return `${GH}docs/${slug}.md${frag}`
+    // A translation that links to a page its language does not have would
+    // 404. The English original is the honest target: the reader gets the
+    // document, in the language it exists in, rather than nothing.
+    if (!present.has(slug)) {
+      const root = lang === 'en' ? '../../' : '../../../'
+      return `${root}docs/${slug}/${frag}`
+    }
+    return `../${slug}/${frag}`
+  }
+
+  // A path into the repository — a benchmark report, a script, a source
+  // file. None of these has a page; all of them exist on GitHub.
+  if (/^(?:\.{1,2}\/)*(bench|crates|tools|packaging|scripts|\.github)\//.test(href)) {
+    return GH + href.replace(/^(?:\.{1,2}\/)+/, '')
+  }
+  if (/\.(rs|py|sh|toml|json|ya?ml|txt)$/.test(href)) {
+    return GH + href.replace(/^(?:\.{1,2}\/)+/, '')
+  }
   return href
+  }
 }
 
 // ── the stylesheet Vite emitted, by name ─────────────────────────────────
@@ -156,7 +187,7 @@ for (const lang of LANGS) {
 
   for (const slug of slugs) {
     const md = sources[slug]
-    const { html, toc } = render(md, linkMap)
+    const { html, toc } = render(md, linkMapFor(lang, present))
     const have = LANGS.filter((l) => existsSync(join(docDir(l), `${slug}.md`)))
     const outDir =
       lang === 'en' ? join(DIST, 'docs', slug) : join(DIST, lang, 'docs', slug)

@@ -238,22 +238,35 @@ the tag.
   release notes that stopped two majors ago and reported the changelog
   as "empty". They were reading exactly what we served.
   `git push origin develop:master`.
-- **Rebuild the site's wasm before rsync.** The docs will say the new
-  version while the playground still runs the old engine otherwise:
+- **Rebuild and re-verify the site, then deploy it.** The version on every
+  page comes from `Cargo.toml` at build time, so a site that was not
+  rebuilt is a site still claiming the previous release — which is exactly
+  what happened before this pipeline existed, for a whole release line, in
+  two places at once.
 
   ```sh
   cargo build -p kevy-wasm --target wasm32-unknown-unknown --release
   cp target/wasm32-unknown-unknown/release/kevy_wasm.wasm crates/kevy-wasm/pkg/kevy.wasm
-  cp crates/kevy-wasm/pkg/{kevy.js,kevy.d.ts,kevy-opfs-worker.js,kevy.wasm} site/demo/pkg/
-  python3 -m http.server 8901 --directory site &   # the verifier needs this
-  node tools/verify_play.mjs                       # drives real Chrome, 13 assertions
-  python3 tools/gen_docs_site.py && python3 tools/gen_docs_site.py --check
-  rsync -av --delete site/ t01:/apps/kevy/web/
+  (cd web && npm ci && npm install @goliapkg/kevy@X.Y.Z && npm run build)
+  (cd web && node check.mjs)          # versions, links, two builds compared
+  (cd web && npx vite preview --port 6040 &)
+  (cd web && node verify.mjs)         # real Chromium, the engine must answer
+  rsync -av --delete web/dist/ t01:/apps/kevy/web/
   ```
 
-  Then confirm the deployed wasm is the one you built:
-  `curl -s https://kevy.golia.jp/demo/pkg/kevy.wasm | shasum -a 256`
-  against the local file.
+  The engine the site loads is the PUBLISHED npm package, pinned to the
+  version being released — not the working tree's build. That is deliberate:
+  the terminal on the landing page should be the thing a reader can install,
+  and `npm install @goliapkg/kevy@X.Y.Z` is the line that makes the two the
+  same. `prerender.mjs` refuses to build if that package's version and the
+  workspace disagree.
+
+  Then verify the DEPLOYED site, not the local one — rsync succeeding says
+  nothing about what the server serves:
+
+  ```sh
+  (cd web && node verify.mjs https://kevy.golia.jp)
+  ```
 - **Check the release notes are reachable without branch archaeology**:
   <https://kevy.golia.jp/changelog/> must be a real page (grep the
   `<title>`, not the status code) and must contain the new version.
