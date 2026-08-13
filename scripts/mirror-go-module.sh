@@ -190,8 +190,13 @@ Generated from goliajp/kevy bindings/go by scripts/mirror-go-module.sh.
 Do not edit here."
 fi
 git -C "$WORK" tag "v$PUSH_VERSION"
-git -C "$WORK" push --quiet origin HEAD:main
-git -C "$WORK" push --quiet origin "v$PUSH_VERSION"
+# ONE atomic push, not a branch push followed by a tag push. Between
+# two pushes there is a window where the repository has the commit and
+# not the tag, and anything that fetches during it — the module proxy,
+# the checksum database — records "unknown revision" and caches that
+# answer for far longer than the window lasted. --atomic makes the ref
+# update all-or-nothing on the server.
+git -C "$WORK" push --quiet --atomic origin HEAD:main "v$PUSH_VERSION"
 echo "  ✓ pushed and tagged v$PUSH_VERSION"
 
 cat <<NOTE
