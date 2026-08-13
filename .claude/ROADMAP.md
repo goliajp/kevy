@@ -776,6 +776,14 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - [x] 实施 ✅(2026-08-12,feature/s3-epoll-writer-thread):①-④ 全落地。实施期三收紧(RFC §6):dead-lane SendError chunk 经新 `Aof::requeue_front` 回插队首(order+offset 回归钉死)/ CONFIG SET appendfsync 先 settle lane(owner 句柄 flush 与 clone 在途交错缝)/ 门 park 撤 write interest 防 level-triggered 自旋。S2 三件套全平台化(always_hold_w0/held_responses/flush_held_responses 摘 cfg(linux),双驱动共用)。
 - [x] 验证 ✅:crashgate 33/33 双 host(server-always 双 cell:盒 auto 37,896 + epoll 37,813 acked 全存活;macOS kqueue 423/409)+ persist 72/72 + rt 50/50 + **盒上 A/B(ext4,KEVY_IO_URING=0,always):SET c50 478→10,540 rps(+22×组提交);c1 391 vs 384 持平且 fsync-bound=门无泄漏** + perfgate-median 12/12(uring 面零回归)。PR 测试矩阵(强制 epoll)整体即 lane 实弹面。finding=bench/FINDING-2026-08-12-s3-epoll-writer-lane.md
 
+## v5.1.0 dogfood 第二轮 ✅(2026-08-13,smix 回执 b)
+
+**他们要的那一节已写并上线**:`docs/upgrading-5.0-to-5.1.md` 三语加"如果你是嵌入式使用者"——只写他们说的那两句 + "哪些配置项对嵌入式无意义"清单。**两句是实测不是推断**(拿已发布 crate 跑嵌入式路径:5.0.0 写 201 键含一个 200KB → 5.1.0 读回 201 → 5.1.0 追加 201 → 5.0.0 重开读回 402,双向 clean replay,同一程序对两版本无改动编译)。他们的整个调用面=`Config::default().with_persist(dir)` + `Store::open` + get/set/del/keys,`grep -niE "getex|pexpire|expire|ttl"` 在其源码上命中 0 处 → 4.1.1 的 GETEX 缺陷与 TTL 绝对挂钟契约都够不到他们。
+
+**他们的两条规则又替我们抓出三处**:① **管道吃判决**审计:全部 `bench/*gate*.sh` **没有真缺陷**(唯一 `$?` 站点是 heredoc 取 python 退出码),但收紧一处**隔空读 `$?`**(availgate seeder 的 `[ $? -eq 0 ]` 隔着三行注释,改成 `|| fail` 挂命令上,与同文件姐妹 seeder 一致);**判断:不给全部脚本盲加 pipefail**(`grep | head` 的 SIGPIPE 会变非零 = 拿一个坑换另一个坑)。② changelog 页上站后 `check_links` 立刻抓到**29 条死链**(changelog 引用的是仓库产物:RFC/workflow/finding/一条笔记本绝对路径)→ 渲染器支持链接映射**拒绝**一个链接(留文字去锚点)。③ 同一次扫描顺出**存量缺陷:26 个页面的仓库链接指向 `blob/main`,而本仓库没有 main 分支**,全 404(含每处"见 bench/REPORT.md"和 cookbook 的 shop.sql);三个来源各自硬编码,现 256 条全指向真实 ref(抽验 200)。**取舍报备**:site-commands 门把 changelog 里 v2.0.15 的基准输出转录(`=== PING:`/`PONG`)当命令跑而红 → **changelog 排除出该门**,理由=changelog 的代码块是证据不是指令,拿今天的二进制执行历史转录测不出东西。回信 `/tmp/kevy-reply-to-smix-2026-08-13-b.md`。
+
+**这轮的元教训**:新东西上线最大的价值经常不是新东西本身,而是**它把老东西送进了一道之前没扫到它的门**(29 条新死链 + 26 页存量 404 是同一次扫描出来的)。
+
 ## v5.1.0 dogfood 回归 ✅(2026-08-13,smix 回执)
 
 **smix 已升 5.1.0 并双向验证**(真实跑了几个月的 5.5MB store,非 fixture):升级方向 5.1 与 4.1.1 各读同一批 4.1.x 字节、**162 条三类记录逐字段相同**;降级方向 5.1 写入副本后 4.1.1 重开、**replay 300 条 clean** —— 我们指南承诺的降级窗口第一次有了真实用户机器上的证据。嵌入式一侧 4→5 无 API 破坏(编译即判据)。他们全量 preflight 28 门绿,落 `043b5e51b`。**vlog/压缩隐患对他们结构上不成立**(`kevy-embedded = "4.1"` caret 走不到 5.0 + 只用 `Config::default().with_persist()` 没开压缩)——**我们通知写法的问题:按"所有人都用全部功能"写的,下次先按对方实际打开的能力面裁**。
