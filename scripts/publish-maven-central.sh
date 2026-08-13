@@ -63,12 +63,23 @@ GROUP_PATH="jp/golia/kevy"
 # first version of this check applied to both and made the
 # validate-from-a-branch path — the reason the workflow defaults to
 # validate-only — impossible to reach.
+# `java-vX.Y.Z` as well as `vX.Y.Z`, because the two can legitimately
+# point at different commits. The release tag is cut when the engine
+# ships; the Java artifact may need a change that touches nothing else —
+# a pom's Central metadata, an unescaped ampersand in a doc comment —
+# and moving an already-published tag to pick those up would both lie
+# about what was released and re-trigger the crates.io and npm chains
+# that tag already fired. A second, artifact-scoped tag names the tree
+# this jar was actually built from, which is the whole point of the
+# check. It does not match the release workflow's tag filter, so it
+# publishes nothing else.
 if [ "$PUBLISH" -eq 1 ] && [ -n "${GITHUB_REF_NAME:-}" ]; then
   case "$GITHUB_REF_NAME" in
-    "v${VERSION}") ;;
+    "v${VERSION}"|"java-v${VERSION}") ;;
     *) echo "✗ pom says ${VERSION} but the ref is ${GITHUB_REF_NAME}." >&2
-       echo "  Publishing must run from the tag it claims to be. Validation" >&2
-       echo "  can run from anywhere; publishing cannot." >&2
+       echo "  Publishing must run from the tag it claims to be:" >&2
+       echo "    v${VERSION}  or  java-v${VERSION}" >&2
+       echo "  Validation can run from anywhere; publishing cannot." >&2
        exit 1;;
   esac
 fi
