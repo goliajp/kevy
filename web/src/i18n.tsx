@@ -1,0 +1,202 @@
+// Trilingual dictionary + a tiny hook. No i18n library: three locales, one
+// landing page, a flat key space — a Record and a context are the whole
+// machinery. The reference pages carry their own translations as markdown
+// under docs/{zh,ja}/ and are checked by tools/check_doc_i18n.py.
+//
+// Each locale is written, not translated. The register is a technical
+// project page: say what the thing does and what was measured, in the
+// shortest form that stays precise. No defending against claims nobody
+// made, no hedging, no filler connectives — those read as translationese
+// in Chinese and Japanese and as padding in English.
+//
+// Every number here is measured and sourced. bench/REPORT.md holds the
+// throughput figures (precision bench, n=1M x 10 runs); the command count
+// comes from site/data/commands.json, which is generated from VERB_META.
+
+import { createContext, useContext } from 'react'
+
+export type Lang = 'en' | 'zh' | 'ja'
+
+export const LANGS: { id: Lang; label: string }[] = [
+  { id: 'en', label: 'EN' },
+  { id: 'zh', label: '中文' },
+  { id: 'ja', label: '日本語' },
+]
+
+export function detectLang(): Lang {
+  const saved = localStorage.getItem('lang')
+  if (saved === 'en' || saved === 'zh' || saved === 'ja') return saved
+  const nav = navigator.language.toLowerCase()
+  if (nav.startsWith('zh')) return 'zh'
+  if (nav.startsWith('ja')) return 'ja'
+  return 'en'
+}
+
+type Dict = Record<string, { en: string; zh: string; ja: string }>
+
+const dict: Dict = {
+  // ── masthead ──────────────────────────────────────────────────────
+  'nav.try': { en: 'Try it', zh: '在线试用', ja: '試す' },
+  'nav.speed': { en: 'Speed', zh: '性能', ja: '性能' },
+  'nav.beyond': { en: 'Beyond Redis', zh: '超出 Redis 的部分', ja: 'Redis の先' },
+  'nav.install': { en: 'Install', zh: '安装', ja: '導入' },
+  'nav.docs': { en: 'Docs', zh: '文档', ja: 'ドキュメント' },
+
+  // ── front matter ──────────────────────────────────────────────────
+  'front.eyebrow': {
+    en: 'Open source · Maintained by Golia Lab',
+    zh: '开源 · 由 Golia Lab 承诺保持维护',
+    ja: 'オープンソース · Golia Lab が継続的にメンテナンス',
+  },
+  'front.title.a': { en: 'A ', zh: '', ja: '' },
+  'front.title.b': { en: 'Redis-compatible', zh: 'Redis 兼容', ja: 'Redis 互換' },
+  'front.title.c': { en: ' engine that goes further', zh: '，但走得更远', ja: 'の、その先へ' },
+  'front.abstract': {
+    en: 'Your Redis client connects unchanged and every operation is faster — 1.5× on single-connection GET and SET, 2.35× on pipelined writes. What it adds is the rest of the data layer: vector search, full-text, secondary indexes, materialised views and a change feed, inside the engine rather than in four services around it. Pure Rust, no third-party crates, 46 of them. The terminal below is the real engine compiled to WebAssembly, running in this tab.',
+    zh: '你的 Redis 客户端不用改一行就能连上，而每个操作都更快 —— 单连接 GET/SET 快 1.5 倍，流水线写入快 2.35 倍。它多出来的是数据层的其余部分：向量检索、全文、二级索引、物化视图、变更流，全在引擎内部，而不是围着它的四个服务里。纯 Rust，零第三方 crate，共 46 个。下面这个终端是真引擎编译成 WebAssembly 后跑在你这个标签页里。',
+    ja: 'お使いの Redis クライアントは一行も変えずに接続でき、しかも全操作が速い——単一接続の GET/SET で 1.5 倍、パイプライン書き込みで 2.35 倍。加えてデータ層の残りが揃います：ベクトル検索、全文検索、セカンダリインデックス、マテリアライズドビュー、チェンジフィード。周辺の四つのサービスではなく、エンジンの中に。純 Rust、サードパーティ crate ゼロ、全 46 crate。下のターミナルは本物のエンジンを WebAssembly にしたもので、このタブの中で動いています。',
+  },
+  'front.fig.speed': {
+    en: 'faster on pipelined SET',
+    zh: '流水线 SET 吞吐',
+    ja: 'パイプライン SET 速度',
+  },
+  'front.fig.commands': { en: 'commands', zh: '条命令', ja: 'コマンド' },
+  'front.fig.deps': {
+    en: 'third-party crates',
+    zh: '个第三方 crate',
+    ja: 'サードパーティ crate',
+  },
+  'front.fig.langs': { en: 'language bindings', zh: '种语言绑定', ja: '言語バインディング' },
+  'front.cta.try': { en: 'Try it in your browser', zh: '在浏览器里试', ja: 'ブラウザで試す' },
+
+  // ── terminal ──────────────────────────────────────────────────────
+  'term.heading': { en: 'The engine, in this tab', zh: '引擎，就在这个标签页里', ja: 'このタブの中のエンジン' },
+  'term.blurb': {
+    en: 'Not a simulation and not a recording: this is kevy compiled to WebAssembly, holding real state in your browser. Type any command, or start from one below.',
+    zh: '不是模拟，也不是录像：这是 kevy 编译成 WebAssembly 后在你浏览器里持有真实状态。可以随便敲命令，也可以从下面挑一条开始。',
+    ja: 'シミュレーションでも録画でもありません。WebAssembly にコンパイルした kevy が、ブラウザ内で実際の状態を保持しています。任意のコマンドを入力するか、下のいずれかから始めてください。',
+  },
+  'term.caption.label': { en: 'Terminal.', zh: '终端。', ja: 'ターミナル。' },
+  'term.caption': {
+    en: 'The same binary the server runs, minus the network. State lives in this tab and disappears when you close it — the full playground persists to OPFS instead.',
+    zh: '与服务端同一份二进制，只是去掉了网络。状态活在这个标签页里，关掉即消失 —— 完整版试用区改为持久化到 OPFS。',
+    ja: 'サーバーが動かすものと同じバイナリから、ネットワークだけを外したもの。状態はこのタブ内にあり、閉じると消えます——フル版のプレイグラウンドは OPFS に永続化します。',
+  },
+  'term.booting': { en: 'starting engine…', zh: '正在启动引擎…', ja: 'エンジン起動中…' },
+  'term.live': { en: 'live', zh: '运行中', ja: '実行中' },
+  'term.failed': {
+    en: 'the engine could not start in this browser',
+    zh: '引擎无法在此浏览器中启动',
+    ja: 'このブラウザではエンジンを起動できませんでした',
+  },
+  'term.full': { en: 'Full playground', zh: '完整试用区', ja: 'フル版プレイグラウンド' },
+
+  // ── speed ─────────────────────────────────────────────────────────
+  'perf.heading': { en: 'Measured against valkey', zh: '与 valkey 实测对照', ja: 'valkey との実測比較' },
+  'perf.blurb': {
+    en: 'Same host, same client, same workload, alternating runs. Every cell is a precision bench — one million operations per run, ten runs, median reported.',
+    zh: '同一主机、同一客户端、同一负载，交替执行。每一格都是精度基准 —— 每轮一百万次操作，十轮取中位数。',
+    ja: '同一ホスト・同一クライアント・同一ワークロードを交互に実行。各セルは精密ベンチ——1 回あたり 100 万オペレーション、10 回の中央値。',
+  },
+  'perf.col.op': { en: 'Operation', zh: '操作', ja: '操作' },
+  'perf.col.kevy': { en: 'kevy', zh: 'kevy', ja: 'kevy' },
+  'perf.col.valkey': { en: 'valkey 9.1', zh: 'valkey 9.1', ja: 'valkey 9.1' },
+  'perf.col.ratio': { en: 'Ratio', zh: '倍数', ja: '倍率' },
+  'perf.caption.label': { en: 'Table 1.', zh: '表 1。', ja: '表 1。' },
+  'perf.caption': {
+    en: 'Throughput in operations per second, higher is better. Full method, hardware and the workloads where kevy does not win are in the benchmark report — a table that only showed the wins would not be a measurement.',
+    zh: '吞吐量,单位为每秒操作数,越高越好。完整方法、硬件,以及 kevy 并未取胜的负载都在基准报告里 —— 只列胜场的表不叫测量。',
+    ja: 'スループット(秒あたりオペレーション数、高いほど良い)。手法・ハードウェア・および kevy が勝っていないワークロードはベンチマークレポートに記載——勝ち星だけを並べた表は測定ではありません。',
+  },
+  'perf.report': { en: 'Full benchmark report', zh: '完整基准报告', ja: 'ベンチマーク全文' },
+
+  // ── beyond redis ──────────────────────────────────────────────────
+  'more.heading': { en: 'What Redis leaves to other services', zh: 'Redis 交给其它服务的那些事', ja: 'Redis が他のサービスに任せる領域' },
+  'more.blurb': {
+    en: 'Each of these usually means another process to run, another copy of the data, and a job to keep the two in step. Here they read the same keys the writes just landed in.',
+    zh: '这些能力通常各自意味着再跑一个进程、再存一份数据,外加一个让两边保持同步的任务。在这里,它们读的就是写入刚落下的那批键。',
+    ja: 'いずれも通常は、別プロセスをもう一つ動かし、データをもう一部持ち、両者を同期させるジョブを抱えることを意味します。ここではそれらが、書き込みが今落ちたのと同じキーを読みます。',
+  },
+  'more.vector.h': { en: 'Vector search', zh: '向量检索', ja: 'ベクトル検索' },
+  'more.vector.p': {
+    en: 'Approximate nearest neighbour over embeddings stored as ordinary values, filtered by ordinary keys.',
+    zh: '在按普通值存储的向量上做近似最近邻,并可用普通键做过滤。',
+    ja: '通常の値として保存した埋め込みに対する近似最近傍探索。通常のキーで絞り込めます。',
+  },
+  'more.fts.h': { en: 'Full text', zh: '全文检索', ja: '全文検索' },
+  'more.fts.p': {
+    en: 'Tokenised, scored search with CJK segmentation, over the values already in the store.',
+    zh: '带评分的分词检索,支持中日韩切分,直接作用于已在库中的值。',
+    ja: 'スコア付きのトークン検索。CJK の分かち書きに対応し、すでに格納済みの値を対象とします。',
+  },
+  'more.idx.h': { en: 'Secondary indexes', zh: '二级索引', ja: 'セカンダリインデックス' },
+  'more.idx.p': {
+    en: 'Declare a field, query by it. The index is maintained by the write path, so it cannot lag behind it.',
+    zh: '声明一个字段,就能按它查询。索引由写路径自己维护,不可能落后于写入。',
+    ja: 'フィールドを宣言すれば、それで問い合わせられます。インデックスは書き込みパス自身が維持するため、書き込みから遅れることがありません。',
+  },
+  'more.view.h': { en: 'Materialised views', zh: '物化视图', ja: 'マテリアライズドビュー' },
+  'more.view.p': {
+    en: 'A query whose result is kept current as the keys under it change, without a refresh job.',
+    zh: '一条查询,其结果随下层键的变化保持最新,不需要刷新任务。',
+    ja: '配下のキーが変わるたびに結果が最新に保たれるクエリ。リフレッシュジョブは不要です。',
+  },
+  'more.feed.h': { en: 'Change feed', zh: '变更流', ja: 'チェンジフィード' },
+  'more.feed.p': {
+    en: 'An ordered, replayable log of what changed, with a cursor — the thing people bolt a CDC pipeline on for.',
+    zh: '一条有序、可重放、带游标的变更日志 —— 平常要为此外挂一整套 CDC 流水线。',
+    ja: '順序付きで再生可能な変更ログとカーソル。通常はこのために CDC パイプラインを外付けします。',
+  },
+  'more.embed.h': { en: 'Embeddable', zh: '可嵌入', ja: '組み込み可能' },
+  'more.embed.p': {
+    en: 'The same engine as a library inside your process, over a C ABI. No server, no socket, same data files.',
+    zh: '同一个引擎可作为库嵌入你的进程,走 C ABI。无服务端、无套接字,数据文件相同。',
+    ja: '同じエンジンを C ABI 経由でプロセス内のライブラリとして。サーバーもソケットも不要で、データファイルは同一です。',
+  },
+
+  // ── install ───────────────────────────────────────────────────────
+  'inst.heading': { en: 'Install', zh: '安装', ja: '導入' },
+  'inst.server.blurb': {
+    en: 'Run it as a server and point any Redis client at it. Nothing in your client code changes.',
+    zh: '作为服务端跑起来,把任意 Redis 客户端指过来。客户端代码一行都不用改。',
+    ja: 'サーバーとして起動し、任意の Redis クライアントを向けるだけ。クライアント側のコードは変わりません。',
+  },
+  'inst.embed.blurb': {
+    en: 'Or embed it. Eight language bindings wrap the same C ABI; the Rust one is the engine itself.',
+    zh: '也可以嵌入。八种语言绑定包裹同一套 C ABI;Rust 那一份就是引擎本体。',
+    ja: '組み込みも可能です。八つの言語バインディングが同一の C ABI を包んでおり、Rust 版はエンジン本体そのものです。',
+  },
+  'inst.docs': {
+    en: 'Every command, every configuration key and the migration guides:',
+    zh: '每条命令、每个配置项,以及迁移指南:',
+    ja: '全コマンド・全設定キー・移行ガイド:',
+  },
+
+  // ── footer ────────────────────────────────────────────────────────
+  'foot.license': {
+    en: 'MIT or Apache-2.0 · © 2026 GOLIA K.K.',
+    zh: 'MIT 或 Apache-2.0 · © 2026 GOLIA K.K.',
+    ja: 'MIT または Apache-2.0 · © 2026 GOLIA K.K.',
+  },
+}
+
+export const LangContext = createContext<Lang>('en')
+
+export function useLang() {
+  return useContext(LangContext)
+}
+
+export function t(key: string, lang: Lang): string {
+  const entry = dict[key]
+  // A missing key is a bug, not a fallback: showing the key makes it
+  // visible in every locale rather than silently serving English.
+  if (!entry) return key
+  return entry[lang]
+}
+
+export function T({ k }: { k: string }) {
+  return <>{t(k, useLang())}</>
+}
+
+export { dict as DICT }
