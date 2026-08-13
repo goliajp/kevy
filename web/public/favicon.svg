@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="kevy">
+  <!-- A key-value pair as a mark: the ledger rule, the key, and the value
+       that answers it. Drawn on the same grid as the page's hairlines. -->
+  <rect width="32" height="32" rx="6" fill="#17161a"/>
+  <path d="M7 10h7M7 16h11M7 22h5" stroke="#fcfbf8" stroke-width="2.4" stroke-linecap="round"/>
+  <circle cx="23" cy="22" r="2.6" fill="#1576ff"/>
+</svg>
