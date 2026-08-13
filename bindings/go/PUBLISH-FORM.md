@@ -57,7 +57,7 @@ So the split is by build tag. Without `kevy_embedded`, `mem://` and
 where the relative cgo paths resolve — the engine is linked in.
 
 ```sh
-cargo build --release -p kevy-ffi
+cargo build -p kevy-ffi   # debug: that is the path the cgo preamble links
 go test -tags kevy_embedded ./...
 ```
 

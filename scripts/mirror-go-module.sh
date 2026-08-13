@@ -100,7 +100,7 @@ cp "$ROOT/LICENSE-APACHE" "$ROOT/LICENSE-MIT" "$OUT/" 2>/dev/null || true
     printf 'and far too large to travel through the Go module proxy — a Go module ships\n'
     printf 'source. So it is not in this repository. Build it from the kevy tree, where\n'
     printf 'cargo has just produced the library:\n\n'
-    printf '```\ngit clone https://github.com/goliajp/kevy\ncd kevy && cargo build --release -p kevy-ffi\ncd bindings/go && go test -tags kevy_embedded ./...\n```\n\n'
+    printf '```\ngit clone https://github.com/goliajp/kevy\ncd kevy && cargo build -p kevy-ffi\ncd bindings/go && go test -tags kevy_embedded ./...\n```\n\n'
     printf 'Without that tag, `mem://` and `file://` return an error saying so.\n\n'
     printf '## Documentation\n\nhttps://kevy.golia.jp\n'
 } > "$OUT/README.md"
