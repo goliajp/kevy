@@ -776,6 +776,37 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - [x] 实施 ✅(2026-08-12,feature/s3-epoll-writer-thread):①-④ 全落地。实施期三收紧(RFC §6):dead-lane SendError chunk 经新 `Aof::requeue_front` 回插队首(order+offset 回归钉死)/ CONFIG SET appendfsync 先 settle lane(owner 句柄 flush 与 clone 在途交错缝)/ 门 park 撤 write interest 防 level-triggered 自旋。S2 三件套全平台化(always_hold_w0/held_responses/flush_held_responses 摘 cfg(linux),双驱动共用)。
 - [x] 验证 ✅:crashgate 33/33 双 host(server-always 双 cell:盒 auto 37,896 + epoll 37,813 acked 全存活;macOS kqueue 423/409)+ persist 72/72 + rt 50/50 + **盒上 A/B(ext4,KEVY_IO_URING=0,always):SET c50 478→10,540 rps(+22×组提交);c1 391 vs 384 持平且 fsync-bound=门无泄漏** + perfgate-median 12/12(uring 面零回归)。PR 测试矩阵(强制 epoll)整体即 lane 实弹面。finding=bench/FINDING-2026-08-12-s3-epoll-writer-lane.md
 
+# 开放工作流(2026-08-13 重整,属主令「把这些问题都先合理地补充到 flow 然后全部解决」)
+
+v5.1.0 已发布并 dogfood 回归通过。此前散在几个旧 arc 里的未勾条目,按
+**归属**重排如下——每条要么我做、要么属主拍、要么写死 OUT,**不留含糊**。
+线性,从上往下。
+
+## F1 — 陈账清理(账目落后于实现,先对齐再谈剩余)✅
+- [x] `V1 余项` 三条经核实**已实现**:`kevy-scalar/src/regex_engine/`(1260 行,fork 自 spg ERE)+ `regexp.rs` + `md5.rs`,全部接进 dispatch,`cargo test -p kevy-scalar` 25+1 绿,funcgate PASS。ROADMAP 记的是旧状态。
+- [x] `V0 合并态全门禁` 与 `T9 allocgate/compressgate/envelope` 同属"当时已绿、只差 CI push"的历史条目;5.1.0 的发布本身就是这些门在 CI 上真绿的证据。
+
+## F2 — 拍板点 ①③④ 终判(属主已授权「你来定」)
+- [ ] ③ regexp:**fork spg + 改壳** —— RFC 推荐即已实施,补记 Resolution
+- [ ] ④ md5:**自研** —— 已实施(`md5.rs`),补记 Resolution
+- [ ] ① bar 终值:采纳 **B-1 双线**,把 funcgate 的断言写成 B-1 的两条线并去掉"pending 拍板"的措辞
+
+## F3 — V5 产品面(唯一还有实体工作量的旧条目)
+- [ ] 容量计算器(公式 + 值大小三档表)+ `INFO modules` + 站点同步
+- [ ] 文档四区重构(Core KV / RDS 模块 / 运维 / 迁移指南)三语 + 边界页
+
+## F4 — 属主硬闸(不可逆对外动作,材料我备好)
+- [ ] SDK 渠道首发(NuGet / PyPI / pub.dev / maven / kevy-go / SPM):**技术面已就绪**(全部 5.1.0、门绿),缺的是各 registry 的账号与凭据,不在我手上
+- [ ] `bindings/ts` 与 wasm 包同名 `@goliapkg/kevy` 的命名冲突:需要一个命名决定才能发
+
+## F5 — 写死 OUT(不再作为"开着的"出现)
+- 断电级 fsync 验证(dm-flakey):kill -9 面已覆盖顺序性,电源级留研究项
+- bounded SPSC 环 / write+fsync SQE 链接:S2/S3 的优化观察项,无正确性面
+- macOS 并行 spawn-timeout:A/B 证明与代码无关,环境 flake
+- 引擎侧 AUTH/TLS:`feedback-kevy-auth-tls-never`,愿景变了也不解锁
+- 写时计算列(拍板点 ②):RFC 已定"V1 不做,V4 后议"
+- T9「判定这次尝试算不算 v5」+ SME 口径 PG 复测:**v5.0.0/5.1.0 已发布,这个判定被事实回答了**;PG 对比作为独立选题保留,不挂在 v5 判定上
+
 ## 绑定全面跟版 5.1.0 ✅(2026-08-13,属主令「要绑定到 5.1,因为 5.0 有严重缺陷」)
 
 **我的漏**:5.1.0 的 bump 只动了 Cargo manifest,14 个绑定还声明 5.0.0——**其中两个是用字节声明的**。这次这不只是不自洽:5.0.0 的编码器会写出自己解码器拒收的压缩帧,所以带 5.0.0 引擎的门就是在发这个隐患本身。
