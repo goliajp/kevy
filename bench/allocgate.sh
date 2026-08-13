@@ -13,6 +13,17 @@
 # premise dies here, the premise changes (ROADMAP v5 rule 5) — nobody
 # widens a tolerance to make a line pass.
 #
+# NOT IN CI, and that is not an oversight. The T1/T2 lines are green on
+# the `r1-locality` branch, not on develop, so on develop this gate is
+# red by construction — and a gate that is red by default teaches people
+# to ignore it, which costs more than not running it. It goes into CI
+# when that branch merges (the owner's call), at which point every
+# PENDING(T2) line below has a real assertion behind it.
+#
+# Its sibling compressgate DOES run in CI, narrowed with
+# COMPRESSGATE_UNIT_ONLY=1 to the lines a checkout can assert. The same
+# split would work here once the crate is on the branch CI builds.
+#
 # Line ownership:
 #   T1 (stone, unwired): M4 reclaim, M6 per-class cap, M8 unsafe
 #                        containment, and the M3 identity at unit scale
