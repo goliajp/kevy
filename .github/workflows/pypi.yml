@@ -1,0 +1,106 @@
+# Publish the Python client to PyPI.
+#
+# NO TOKEN. PyPI trusted publishing exchanges a short-lived GitHub OIDC
+# token for upload rights, so there is no long-lived secret in this
+# repository to leak, rotate, or forget to rotate. The trust is pinned to
+# (this repository, this workflow filename, this environment) on PyPI's
+# side — which is why the filename below must not be renamed casually:
+# renaming it invalidates the publisher and the next release fails with a
+# permission error that says nothing about a rename.
+#
+# The package is the PURE-PYTHON half: the remote RESP client, which
+# needs nothing but the standard library and works on every platform
+# CPython does. The embedded engine is ctypes over libkevy_ffi, a
+# per-platform native library; a wheel that carried it would work on the
+# three targets we happened to build and nowhere else, so mem:// and
+# file:// instead raise an error naming where to get the engine. Same
+# split, and the same reasoning, as the Go module.
+#
+# Manual on purpose. A PyPI version cannot be reused once uploaded — not
+# even after deleting it — so this is not something a tag push should do
+# on its own while the form of the package is still settling.
+name: pypi — publish the Python client
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Actually upload to PyPI (a version is forever). Unchecked = build and check only.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: kevy → PyPI
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      # The whole mechanism. Without it there is no OIDC token to trade
+      # and the upload step fails at the exchange, not at the upload.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build sdist + wheel
+        working-directory: bindings/python
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          # Metadata PyPI would reject is cheaper to find here than after
+          # the version number has been spent.
+          twine check dist/*
+          ls -l dist/
+
+      # The version in the artifact must be the version the rest of the
+      # release ships. check_version_alignment.py holds pyproject.toml to
+      # the workspace on every push; this re-asks the question of the
+      # BUILT file, because that is what gets uploaded.
+      - name: The built version is the workspace version
+        run: |
+          whl=$(find bindings/python/dist -name '*.whl' | head -1)
+          built=$(echo "$whl" | sed -E 's/.*kevy-([0-9]+\.[0-9]+\.[0-9]+)-.*/\1/')
+          want=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+          echo "built=$built want=$want"
+          [ "$built" = "$want" ] || { echo "✗ wheel says $built, workspace says $want" >&2; exit 1; }
+
+      # Installed, then run — against a real server, because "it imports"
+      # is not the claim being made. The remote half is the whole product
+      # here; if it does not answer, the upload should not happen.
+      - name: The built wheel actually talks to a server
+        run: |
+          cargo build --release -p kevy --bin kevy
+          ./target/release/kevy --port 6397 --dir "$(mktemp -d)" &
+          sleep 3
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install bindings/python/dist/*.whl
+          # From /tmp, never from bindings/python: with the source tree on
+          # sys.path `import kevy` picks IT up instead of the wheel, and
+          # its relative search finds the engine three directories up. A
+          # green run then proves nothing about what a user installs.
+          cd /tmp && /tmp/smoke/bin/python -c "
+          import kevy
+          assert 'site-packages' in kevy.__file__, kevy.__file__
+          c = kevy.connect('kevy://127.0.0.1:6397')
+          c.set(b'k', b'v'); assert c.get(b'k') == b'v'
+          c.close()
+          try:
+              kevy.connect('mem://x').set(b'a', b'b')
+              raise SystemExit('mem:// worked in a wheel that carries no engine')
+          except kevy.KevyError as e:
+              assert 'no embedded engine' in str(e), e
+          print('remote ok; embedded refuses with the message that names the fix')
+          "
+
+      - name: Upload to PyPI
+        if: ${{ inputs.publish }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: bindings/python/dist/

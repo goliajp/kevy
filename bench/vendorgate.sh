@@ -16,6 +16,15 @@
 # any release that ships vendored binaries:
 #
 #   bash bench/vendorgate.sh
+#
+# WHAT IT DOES NOT ANSWER, stated because the two look alike: this asks
+# whether the artifact ON DISK is current. It does not ask whether the
+# artifact reaches a user. flutter_kevy's four are gitignored, so they
+# pass here and `dart pub publish` — which takes only what git tracks —
+# omitted every one of them, producing a package that resolved and
+# analysed clean with no engine in it. Publishability is
+# scripts/mirror-flutter-package.sh's job: it reads the dry-run's own
+# file list and refuses a package the engine is missing from.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 fail=0

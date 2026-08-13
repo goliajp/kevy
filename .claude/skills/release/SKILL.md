@@ -133,6 +133,40 @@ version is immutable once the proxy has fetched it — moving a tag
 changes nothing for anyone who already resolved it — so the script
 refuses a version already tagged.
 
+**Flutter is the same arrangement, for a different reason.** `dart pub
+publish` includes only what git tracks, and flutter_kevy's 11 MB of
+xcframework and jniLibs are gitignored — publishing from this tree
+yields a 20 KB archive that resolves, analyses clean, and has no engine
+in it. The binaries live in `goliajp/kevy-flutter` so they do not enter
+this repository's history at 11 MB per release:
+
+```sh
+packaging/android/build-ffi-jnilibs.sh
+cd bindings/flutter && bash scripts/prepare-native.sh && cd ../..
+bash scripts/mirror-flutter-package.sh --push X.Y.Z
+```
+
+The generator refuses to push unless the dry-run's own file list
+contains the xcframework and the jniLibs, and unless the `.so` reports
+the version being shipped. pub.dev then needs the FIRST version pushed
+by hand (`flutter pub publish` from a clone of kevy-flutter); after
+that its Admin tab enables GitHub Actions publishing on tag pattern
+`v{{version}}`.
+
+**PyPI and NuGet need no credential at all.** Both do trusted publishing
+— a short-lived GitHub OIDC token traded for upload rights — configured
+once against (owner, repository, workflow filename). Run
+`.github/workflows/pypi.yml` and `nuget.yml` from the Actions tab with
+`publish: true`. Renaming either workflow file invalidates the policy,
+and the next release then fails at the token exchange with an error
+that says nothing about a rename. NuGet's policy is only *temporarily*
+active for 7 days until a first publish locks it to the repository IDs,
+so configure and publish in one sitting.
+
+Both ship the MANAGED half only, for the reason the Go module does:
+the embedded engine is a per-platform native library, and the first
+embedded call raises a message naming where to get it.
+
 ## 4. Verify each channel — by content, never by status code
 
 A soft 404 serves the home page with HTTP 200. A registry that has

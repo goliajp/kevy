@@ -15,7 +15,8 @@ namespace Kevy.Embedded;
 /// <summary>Thrown on ABI misuse and by the typed surface on a protocol
 /// error. <see cref="KevyDb.Cmd"/> never throws for a protocol error — it
 /// returns <see cref="KevyValue.Error"/> as a value.</summary>
-public sealed class KevyException(string message) : Exception(message);
+public sealed class KevyException(string message, Exception? inner = null)
+    : Exception(message, inner);
 
 /// <summary>One node of a parsed RESP reply.</summary>
 public abstract record KevyValue

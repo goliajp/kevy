@@ -64,8 +64,13 @@ def _load_library() -> ctypes.CDLL:
             return ctypes.CDLL(path)
         tried.append(path)
     raise IoError(
-        "libkevy_ffi not found; set KEVY_FFI_LIB or build it "
-        "(cargo build --release -p kevy-ffi). Tried: " + ", ".join(tried)
+        "kevy: no embedded engine — mem:// and file:// need libkevy_ffi, "
+        "a per-platform native library that a Python wheel does not carry. "
+        "Either point KEVY_FFI_LIB at one, or build it from the engine "
+        "source: git clone https://github.com/goliajp/kevy && cargo build "
+        "--release -p kevy-ffi (the library lands in target/release/). "
+        "A kevy:// or redis:// URL needs none of this — that client is "
+        "pure Python. Tried: " + ", ".join(tried)
     )
 
 
