@@ -81,7 +81,17 @@ command -v mvn >/dev/null || { echo "✗ mvn is not on PATH" >&2; exit 1; }
 echo "→ import the signing key"
 export GNUPG_HOME_TMP="$(mktemp -d)"
 chmod 700 "$GNUPG_HOME_TMP"
-printf '%s' "$SIGNING_KEY" | GNUPGHOME="$GNUPG_HOME_TMP" gpg --batch --import 2>/dev/null
+# gpg's own words, kept. Discarding them here left a bare `exit 2` as
+# the only evidence of why an import failed, which is the least useful
+# thing a failing step can say.
+if ! printf '%s' "$SIGNING_KEY" \
+     | GNUPGHOME="$GNUPG_HOME_TMP" gpg --batch --import 2>"$GNUPG_HOME_TMP/import.err"; then
+  echo "✗ gpg could not import SIGNING_KEY:" >&2
+  sed 's/^/    /' "$GNUPG_HOME_TMP/import.err" >&2
+  echo "  The secret must be the ARMOURED PRIVATE key, newlines intact:" >&2
+  echo "    gpg --export-secret-keys --armor <keyid>" >&2
+  exit 1
+fi
 KEYID="$(GNUPGHOME="$GNUPG_HOME_TMP" gpg --batch --list-secret-keys --with-colons \
   | awk -F: '/^fpr:/{print $10; exit}')"
 [ -n "$KEYID" ] || { echo "✗ could not read a key id out of SIGNING_KEY" >&2; exit 1; }
