@@ -186,14 +186,25 @@ def layer4_live_constants(v: str, bad: list) -> int:
 def layer5_prose(v: str, bad: list) -> int:
     """"This door tracks kevy X" — a claim a reader trusts."""
     checked = 0
-    claim = re.compile(r"tracks kevy \*\*(\d+\.\d+\.\d+)\*\*|`jp\.golia:kevy:(\d+\.\d+\.\d+)`")
-    for f in sorted(ROOT.glob("bindings/**/*.md")):
+    # The third alternative is the copy-pasteable Maven coordinate. A
+    # reader does not "trust" that one — they paste it, and a stale
+    # version resolves to a real older artifact rather than erroring.
+    claim = re.compile(
+        r"tracks kevy \*\*(\d+\.\d+\.\d+)\*\*"
+        r"|`jp\.golia:kevy:(\d+\.\d+\.\d+)`"
+        r"|<artifactId>kevy</artifactId><version>(\d+\.\d+\.\d+)</version>")
+    # The root README is in scope and was not: it is the most-read file
+    # here, and its install block states versions. docs/ stays out on
+    # purpose — the upgrade guides name old versions correctly, and a
+    # gate that dragged those forward would be rewriting history.
+    files = sorted(ROOT.glob("bindings/**/*.md")) + [ROOT / "README.md"]
+    for f in files:
         if skip(f):
             continue
         for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
             m = claim.search(line)
             if m:
-                found = m.group(1) or m.group(2)
+                found = m.group(1) or m.group(2) or m.group(3)
                 checked += 1
                 if found != v:
                     bad.append(f"{f.relative_to(ROOT)}:{i}: claims {found} != {v}")

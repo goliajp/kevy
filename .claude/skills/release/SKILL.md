@@ -245,3 +245,16 @@ Recognise these; each one cost a debugging round.
   turned up 29 dead links of its own *and* 26 pages of `blob/main`
   links to a branch this repo does not have. The gate was always right;
   the page was new.
+- **A pipeline exit status is the last command's, not the interesting
+  one's.** `go build … 2>&1 | tail -5` reports `tail`'s success, so a
+  `&&` after it fires on a failed build. This ate a verdict here for at
+  least the third time. Redirect to a file and check `$?`, or drop the
+  pipe.
+- **A publish has three separate audiences, and reaching one is not
+  reaching the others.** Go makes this explicit: pushing the tag, the
+  module proxy fetching it, and `sum.golang.org` recording its checksum
+  are three events minutes apart, and `go get` fails with `unknown
+  revision` while the middle one has already succeeded. The same shape
+  is why npm 404s a package it just accepted and why the Maven Portal
+  says PUBLISHED before repo1 serves the file. Verify at the layer the
+  *user* resolves through, and expect to wait.
