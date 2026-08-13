@@ -24,6 +24,16 @@
 
 **[.claude/rule/hygiene.md](rule/hygiene.md)** — 不在 repo 根跑 server;gate 脚本 trap 清理 + 当轮收尾清 /tmp 与远程盒;删历史目录前双零审计(dirty=0 + unpushed=0)。CI 门禁唯一姿势 = `gh run watch --exit-status`(`gh run view -q .conclusion` 是查询不是门禁,永远 exit 0);tag = publish 触发器,tag 前 CI 必须真绿;python replace 后必须验证命中。
 
+## 发布规则(任何 vX.Y.Z 必读)
+
+**[.claude/skills/release/SKILL.md](skills/release/SKILL.md)** — 发布 skill。
+版本号活在**六层**(Cargo / 各语言 manifest / 包间互 pin / 活常量 / README
+声明 / **vendored 引擎字节**),只改一层就是发了一个谎;5.1.0 就是这么把
+14 个绑定留在 5.0.0 的,其中两个是用字节留的。对齐由 `python3
+tools/check_version_alignment.py` **机械判定**(在 CI 里,每层带下限,
+查不到东西也算失败),不靠记忆。tag = publish 触发器,**属主扣扳机**。
+渠道核验**看内容不看状态码**(软 404 会返回 200)。
+
 ## Perf 工作规则(对抗 valkey / redis 必读)
 
 **[.claude/rule/perf-vs-foss.md](rule/perf-vs-foss.md)** — Decomposition + Attack 两步 dance。
