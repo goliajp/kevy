@@ -1,0 +1,59 @@
+# Publish jp.golia:kevy — the Java client — to Maven Central.
+#
+# Manual on purpose, and validate-only by default. A release on Central
+# cannot be withdrawn, so it is not something a merge or a tag push
+# should do on its own: the tag workflow publishes crates.io and npm,
+# where a mistake is a new patch version; this one is a door that only
+# opens outward.
+#
+# The four credentials are ORG-level secrets on goliajp, so every
+# repository publishing under the jp.golia group shares one set and a
+# rotation happens in one place. A repository must be in the secret's
+# access list to see them; if this job reports one as unset, that is
+# what to check first.
+name: maven central — publish the Java client
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Actually publish (irreversible). Unchecked = validate only.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: jp.golia:kevy → Maven Central
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # The pom's version must be the one this ref describes, or Central
+      # gets sources no tag accounts for. The script enforces it from
+      # GITHUB_REF_NAME; running from a branch skips the check, which is
+      # why validate-only is the default.
+      - name: which version, from which ref
+        run: |
+          echo "ref: ${GITHUB_REF_NAME}"
+          grep -m1 -A1 '<artifactId>kevy</artifactId>' bindings/java/pom.xml
+
+      - name: publish
+        env:
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+        run: |
+          if [ "${{ inputs.publish }}" = "true" ]; then
+            bash scripts/publish-maven-central.sh --publish
+          else
+            bash scripts/publish-maven-central.sh
+          fi
