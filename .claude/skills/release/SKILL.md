@@ -302,3 +302,14 @@ Recognise these; each one cost a debugging round.
   is why npm 404s a package it just accepted and why the Maven Portal
   says PUBLISHED before repo1 serves the file. Verify at the layer the
   *user* resolves through, and expect to wait.
+- **Reading an artifact is not installing it.** `kevy` 5.1.0 went to
+  NuGet declaring a dependency on a package that cannot exist
+  (`IsPackable=false` on the project it referenced), so every restore
+  failed with NU1101. The nuspec was inspected before the push and the
+  dependency line was read as "publish both" — a coherent reading, and
+  wrong, and one `dotnet restore` would have settled it. Nothing in the
+  repository could catch it: every test builds from the projects, not
+  the package. **Every publish workflow must install its own output
+  from a local feed and run it against something real before it
+  pushes.** The Python one did; the .NET one did not; that is the whole
+  difference between the two outcomes.
