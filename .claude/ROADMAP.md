@@ -776,6 +776,14 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - [x] 实施 ✅(2026-08-12,feature/s3-epoll-writer-thread):①-④ 全落地。实施期三收紧(RFC §6):dead-lane SendError chunk 经新 `Aof::requeue_front` 回插队首(order+offset 回归钉死)/ CONFIG SET appendfsync 先 settle lane(owner 句柄 flush 与 clone 在途交错缝)/ 门 park 撤 write interest 防 level-triggered 自旋。S2 三件套全平台化(always_hold_w0/held_responses/flush_held_responses 摘 cfg(linux),双驱动共用)。
 - [x] 验证 ✅:crashgate 33/33 双 host(server-always 双 cell:盒 auto 37,896 + epoll 37,813 acked 全存活;macOS kqueue 423/409)+ persist 72/72 + rt 50/50 + **盒上 A/B(ext4,KEVY_IO_URING=0,always):SET c50 478→10,540 rps(+22×组提交);c1 391 vs 384 持平且 fsync-bound=门无泄漏** + perfgate-median 12/12(uring 面零回归)。PR 测试矩阵(强制 epoll)整体即 lane 实弹面。finding=bench/FINDING-2026-08-12-s3-epoll-writer-lane.md
 
+## v5.1.0 dogfood 回归 ✅(2026-08-13,smix 回执)
+
+**smix 已升 5.1.0 并双向验证**(真实跑了几个月的 5.5MB store,非 fixture):升级方向 5.1 与 4.1.1 各读同一批 4.1.x 字节、**162 条三类记录逐字段相同**;降级方向 5.1 写入副本后 4.1.1 重开、**replay 300 条 clean** —— 我们指南承诺的降级窗口第一次有了真实用户机器上的证据。嵌入式一侧 4→5 无 API 破坏(编译即判据)。他们全量 preflight 28 门绿,落 `043b5e51b`。**vlog/压缩隐患对他们结构上不成立**(`kevy-embedded = "4.1"` caret 走不到 5.0 + 只用 `Config::default().with_persist()` 没开压缩)——**我们通知写法的问题:按"所有人都用全部功能"写的,下次先按对方实际打开的能力面裁**。
+
+**他们报的发布物缺陷已修两处**:① 他们拉不到 4.1.1 的 CHANGELOG——仓库公开、develop 分支 200,但**按惯例会去的 master 落后 1216 提交、最新条目停在 v3.8.0**,任何按"stable line"找 4.1.x 的人拿到的是没有 4.x 条目的文件;master 已快进,发布流程补了这步。② **发布说明上站** `https://kevy.golia.jp/changelog/`(此前是软 404 返回首页还给 200),从 CHANGELOG.md 生成并进站点 `--check` 门。回信 `/tmp/kevy-reply-to-smix-2026-08-13.md`(含 4.1.1 的实质答案:`Store::getex` 记相对 PEXPIRE → replay 重锚 → GETEX 做缓存续期的键跨重启永不过期)。
+
+**他们送的方法论已进门禁纪律**(`.claude/rule/hygiene.md`,注明来源):**判据不许在空数据目录上成立** —— "拿一个空数据目录跑它,还会给出同样答案吗?会的话这条判据没在验存储"。按它审计自家门抓到并修两处空判据:`crashgate` 的 `recovered >= synced` 在 synced=0 时恒真(已要求非零,**红-绿实证:同一零写入输入旧 guard 过、新 guard 红**);`upgrade-interop` 场景 D 的 `0 = 0`(已先断言种子非空)。推论也写下:**"必须不存在"型断言天生空判据**,必须与"必须存在"的内容断言配对。crashgate 改后盒上仍 PASS。
+
 ## v5.1.0 ✅ 已发布(2026-08-13)
 
 **全渠道到位**:crates.io 38/40 crate 至 5.1.0(kevy-client / kevy-client-async 走独立 2.2.0 轨)+ npm `@goliapkg/kevy` 5.1.0 + GitHub Release v5.1.0 非草稿(三平台二进制 + sha256)+ 官网 kevy.golia.jp 同步(三语升级指南 200;**playground wasm 重建为 5.1.0**,真 Chrome 13/13 验过,线上与本地 sha256 逐字节一致)。tag `v5.1.0` 指向 develop `e08f6d09`;**master 已快进到发布态**(此前落后 1216 提交,GIT-FLOW 那句"每个 tag 指向 master"重新成真)。**装后 smoke 双通道**:`cargo add kevy-resp@5.1.0` 编译运行 / 发布二进制 sha256 校验 + 起服读写 + `kevy_version:5.1.0`。smix 通知已投 `/tmp/kevy-notice-to-smix-2026-08-13.md`(头条=5.0.0 的 vlog 冷值读挂隐患,升级本身即修复)。
