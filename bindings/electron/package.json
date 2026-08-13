@@ -1,6 +1,6 @@
 {
   "name": "@goliapkg/kevy-electron",
-  "version": "5.0.0",
+  "version": "5.1.0",
   "description": "kevy embedded in an Electron app — the real native engine in the main process (via the N-API door), reached from any renderer through a contextBridge preload + IPC. Safe under contextIsolation and sandbox; no electron-rebuild (stable Node-API).",
   "license": "(Apache-2.0 OR MIT)",
   "repository": {
@@ -35,6 +35,6 @@
     }
   },
   "dependencies": {
-    "@goliapkg/kevy-node": "5.0.0"
+    "@goliapkg/kevy-node": "5.1.0"
   }
 }

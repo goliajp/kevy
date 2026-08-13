@@ -6,7 +6,7 @@ in-process embedded engine (`mem://` / `file://`) or a remote RESP server
 synchronous and an async `Task` face. Same package also ships the raw
 embedded door (`Kevy.Embedded.KevyDb`, below). Pure Rust engine, no server.
 
-> **Pre-release.** This document tracks kevy **5.0.0**. Nothing is on
+> **Pre-release.** This document tracks kevy **5.1.0**. Nothing is on
 > NuGet yet, so the command below does not resolve — until it is,
 > `bash packaging/nuget/pack-and-smoke.sh` packs the same artifact to a
 > local feed and installs from there.

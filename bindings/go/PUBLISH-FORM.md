@@ -56,7 +56,7 @@ where the `.a` and the header come from.
 - [ ] `libs/<goos>_<goarch>/libkevy_ffi.a` built release, three targets to
       match the other doors (darwin-arm64, linux-amd64, linux-arm64).
 - [ ] Preamble switched to `${SRCDIR}/include` + per-target `libs/…`.
-- [ ] `go.mod` tagged `v5.0.0`, so `go get …@v5.0.0` resolves — the module
+- [ ] `go.mod` tagged `v5.1.0`, so `go get …@v5.1.0` resolves — the module
       path already declares no `/v4` suffix issue because the tag is the
       first v4 (a v2+ module normally needs a `/vN` path suffix; confirm
       whether kevy-go adopts `/v4` or ships as its own first major).

@@ -179,7 +179,7 @@ def abi() -> int:
 
 
 def version() -> str:
-    """Engine version, e.g. "5.0.0"."""
+    """Engine version, e.g. "5.1.0"."""
     raw = _library().kevy_version()
     return raw.decode() if raw else ""
 

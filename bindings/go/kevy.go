@@ -419,7 +419,7 @@ func (d *DB) OpenReport() (OpenReport, error) {
 	}, nil
 }
 
-// Version reports the engine version, e.g. "5.0.0".
+// Version reports the engine version, e.g. "5.1.0".
 func Version() string {
 	return C.GoString(C.kevy_version())
 }
