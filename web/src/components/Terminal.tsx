@@ -6,10 +6,11 @@ import { T, t, useLang } from '../i18n'
 // back something that answers `cmd(...args)` with a decoded RESP reply —
 // the same reply the server would put on a socket.
 //
-// Persistence is off here on purpose. The landing page's terminal should be
-// empty for every visitor, so what they see is what they typed; the full
-// playground at /play/ opens the same engine with OPFS behind it and keeps
-// state across reloads. One engine, two configurations.
+// Persistence is off: the terminal should be empty for every visitor, so
+// what they see is what they typed. There is no second, bigger playground
+// somewhere else — this is it, in the same shell as every other page,
+// because a demo that lives behind its own fullscreen surface is a demo
+// most readers never open.
 type Reply = unknown
 type Engine = { cmd: (...args: string[]) => Reply; close: () => Promise<void> }
 

@@ -175,6 +175,47 @@ try {
     check(`no horizontal overflow at ${width}px`, !over)
   }
 
+  // ── a reference page, in the same shell ─────────────────────────────
+  // The docs are 104 static pages built by a different code path from the
+  // landing page. They share a stylesheet and components, which is exactly
+  // the arrangement that looks fine until one of them is rendered without
+  // the other — so one is opened and checked here rather than assumed.
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto(`${URL_.replace(/\/$/, '')}/docs/persistence/`, { waitUntil: 'domcontentloaded' })
+  const docVer = (await page.textContent('.brand .ver'))?.trim()
+  check('a reference page carries the same version', docVer === want, `page=${docVer}`)
+  check('the reference nav rendered', (await page.locator('.docnav a').count()) > 10)
+  check('the reference body rendered', (await page.locator('.docmain h1').count()) === 1)
+
+  // The language switch on a document is links, not buttons: a translated
+  // twin has its own URL and should open in a new tab. A switch that goes
+  // nowhere is the same defect as no switch.
+  const twins = await page.evaluate(() =>
+    [...document.querySelectorAll('.langswitch a')].map((a) => a.getAttribute('href')),
+  )
+  check('the document offers its translations', twins.length >= 2, twins.join(' '))
+  const zh = twins.find((h) => h && h.includes('/zh/'))
+  if (zh) {
+    // Following it is the check. A href that 404s looks identical to one
+    // that works, in the markup.
+    const res = await page.goto(new URL(zh, page.url()).href, { waitUntil: 'domcontentloaded' })
+    const lang = await page.evaluate(() => document.documentElement.lang)
+    check(
+      'the translated twin exists and declares its language',
+      res?.status() === 200 && lang === 'zh-CN',
+      `${res?.status()} ${lang}`,
+    )
+  }
+
+  // A doc page must be readable with JavaScript off — that is the whole
+  // reason these are prerendered rather than routed.
+  const noJs = await browser.newContext({ javaScriptEnabled: false })
+  const flat = await noJs.newPage()
+  await flat.goto(`${URL_.replace(/\/$/, '')}/docs/persistence/`, { waitUntil: 'domcontentloaded' })
+  const words = (await flat.textContent('.docmain'))?.trim().length ?? 0
+  check('a reference page reads with JavaScript disabled', words > 2000, `${words} chars`)
+  await noJs.close()
+
   // ── the page did not shout ──────────────────────────────────────────
   // Font CSS from a CDN can fail in a sandbox without breaking anything;
   // that is noise, not a defect this gate owns.
