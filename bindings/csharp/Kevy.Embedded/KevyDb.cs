@@ -32,7 +32,30 @@ public sealed unsafe class KevyDb : IDisposable
     // memory corruption at the first call.
     private static void CheckAbi()
     {
-        var actual = KevyNative.kevy_abi();
+        uint actual;
+        try
+        {
+            // Every embedded entry point comes through here, so this is the
+            // one place the engine's absence can be turned into a sentence
+            // that names the fix. The runtime's own DllNotFoundException
+            // says "Unable to load shared library 'kevy_ffi'" and leaves a
+            // reader to guess whether they typed something wrong, are on an
+            // unsupported platform, or are missing a step. Not a caught
+            // failure being swallowed — it is rethrown, with the answer.
+            actual = KevyNative.kevy_abi();
+        }
+        catch (DllNotFoundException e)
+        {
+            throw new KevyException(
+                "kevy: no embedded engine — the in-process store needs " +
+                "libkevy_ffi, a per-platform native library this package " +
+                "does not carry. Either set KEVY_FFI_LIB to one, or build " +
+                "it from the engine source: git clone " +
+                "https://github.com/goliajp/kevy && cargo build --release " +
+                "-p kevy-ffi (it lands in target/release/). A kevy:// or " +
+                "redis:// URL needs none of this — that client is managed " +
+                "code only.", e);
+        }
         if (actual != ExpectedAbi)
             throw new KevyException(
                 $"kevy: ABI mismatch — this client targets kevy_abi {ExpectedAbi}, " +
