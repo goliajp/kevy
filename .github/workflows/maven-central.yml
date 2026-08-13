@@ -36,10 +36,11 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # The pom's version must be the one this ref describes, or Central
-      # gets sources no tag accounts for. The script enforces it from
-      # GITHUB_REF_NAME; running from a branch skips the check, which is
-      # why validate-only is the default.
+      # A PUBLISH must run from the tag whose version the pom carries, or
+      # Central gets sources no tag accounts for; the script enforces
+      # that from GITHUB_REF_NAME. Validation deliberately does not
+      # enforce it — checking a branch before tagging it is the whole
+      # point of a validate-only run, and its deployment can be dropped.
       - name: which version, from which ref
         run: |
           echo "ref: ${GITHUB_REF_NAME}"

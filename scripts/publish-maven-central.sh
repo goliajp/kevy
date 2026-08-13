@@ -44,8 +44,6 @@ for v in CENTRAL_USERNAME CENTRAL_PASSWORD SIGNING_KEY SIGNING_PASSWORD; do
   fi
 done
 
-command -v mvn >/dev/null || { echo "✗ mvn is not on PATH" >&2; exit 1; }
-
 POM="bindings/java/pom.xml"
 # The project's own <version> — matched via its artifactId so a plugin's
 # <version> can never be picked up instead. (A heredoc inside $( ) does
@@ -58,14 +56,27 @@ WORK="$(mktemp -d)"
 BUNDLE="$ROOT/bindings/java/target/kevy-${VERSION}-bundle.zip"
 GROUP_PATH="jp/golia/kevy"
 
-# The version in the tree must match the tag this release is cut from,
-# or Central gets sources no tag describes.
-if [ -n "${GITHUB_REF_NAME:-}" ]; then
+# What is PUBLISHED must be cut from the tag that names it, or Central
+# gets sources no tag describes. What is merely VALIDATED does not:
+# validation exists precisely so a branch can be checked before anyone
+# tags it, and a deployment that stops at VALIDATED can be dropped. The
+# first version of this check applied to both and made the
+# validate-from-a-branch path — the reason the workflow defaults to
+# validate-only — impossible to reach.
+if [ "$PUBLISH" -eq 1 ] && [ -n "${GITHUB_REF_NAME:-}" ]; then
   case "$GITHUB_REF_NAME" in
     "v${VERSION}") ;;
-    *) echo "✗ pom says ${VERSION} but the ref is ${GITHUB_REF_NAME}" >&2; exit 1;;
+    *) echo "✗ pom says ${VERSION} but the ref is ${GITHUB_REF_NAME}." >&2
+       echo "  Publishing must run from the tag it claims to be. Validation" >&2
+       echo "  can run from anywhere; publishing cannot." >&2
+       exit 1;;
   esac
 fi
+
+# After the ref check, not before: a publish from the wrong ref is wrong
+# whether or not this machine has Maven, and naming the toolchain first
+# would hide that.
+command -v mvn >/dev/null || { echo "✗ mvn is not on PATH" >&2; exit 1; }
 
 echo "→ import the signing key"
 export GNUPG_HOME_TMP="$(mktemp -d)"
