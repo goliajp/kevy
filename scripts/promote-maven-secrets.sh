@@ -5,23 +5,29 @@
 #
 #   bash scripts/promote-maven-secrets.sh <path-to-armoured-signing-key>
 #
-# Three of the four already live on this machine, in the Gradle
-# properties file under the vanniktech plugin's names:
+# All four live on this machine, but in two different places, and the
+# obvious-looking source for one of them is empty:
 #
-#   CENTRAL_USERNAME  ← mavenCentralUsername
-#   CENTRAL_PASSWORD  ← mavenCentralPassword
-#   SIGNING_PASSWORD  ← signingInMemoryKeyPassword
+#   CENTRAL_USERNAME  ← ~/.gradle/gradle.properties  mavenCentralUsername
+#   CENTRAL_PASSWORD  ← ~/.gradle/gradle.properties  mavenCentralPassword
+#   SIGNING_KEY       ← sentori/.secrets/gpg/private.asc
+#   SIGNING_PASSWORD  ← sentori/.secrets/gpg/passphrase.txt
 #
-# The fourth, SIGNING_KEY, is the armoured PRIVATE key and is NOT here:
-# the local keyring holds FBD802632CFAD78B (smix SDK release signing),
-# while the artifacts actually on Central under jp.golia are signed by
-# 22BD3D63FE94A270 — a different key, whose public half is on
-# keyserver.ubuntu.com with its user ID intact. Export the private half
-# from wherever it lives and pass the file:
+# Not `signingInMemoryKeyPassword` from the Gradle file: that key is
+# present with an EMPTY value, which reads as "configured" to anything
+# that only checks whether the line exists. The passphrase that actually
+# unlocks the key is the one beside the key itself — verified by signing
+# with it, which is the only check that distinguishes a passphrase from
+# a string.
 #
-#   gpg --export-secret-keys --armor 22BD3D63FE94A270 > /tmp/signing.asc
-#   bash scripts/promote-maven-secrets.sh /tmp/signing.asc
-#   shred -u /tmp/signing.asc     # or rm, on a filesystem without shred
+# Nor is the key in the local GPG keyring the right one: that holds
+# FBD802632CFAD78B (smix SDK release signing), whose public half is on
+# no keyserver, while the artifacts on Central under jp.golia are signed
+# by 22BD3D63FE94A270 — the key in sentori/.secrets. Asking repo1 which
+# key signed the published .pom.asc is what settled it.
+#
+#   bash scripts/promote-maven-secrets.sh
+#   bash scripts/promote-maven-secrets.sh /path/to/other-key.asc  # override
 #
 # No value is ever printed. `gh secret set` encrypts locally before
 # sending, and this script pipes values on stdin so none of them can
@@ -32,10 +38,12 @@ ORG=goliajp
 REPOS=kevy,sentori
 GRADLE_PROPS="$HOME/.gradle/gradle.properties"
 
-KEYFILE="${1:-}"
-if [ -z "$KEYFILE" ] || [ ! -f "$KEYFILE" ]; then
-    echo "usage: $0 <path-to-armoured-signing-key>" >&2
-    echo "  gpg --export-secret-keys --armor 22BD3D63FE94A270 > /tmp/signing.asc" >&2
+SECRETS_DIR="$HOME/workspace/goliajp/sentori/.secrets/gpg"
+KEYFILE="${1:-$SECRETS_DIR/private.asc}"
+PASSFILE="$SECRETS_DIR/passphrase.txt"
+if [ ! -f "$KEYFILE" ]; then
+    echo "✗ no signing key at $KEYFILE" >&2
+    echo "  usage: $0 [path-to-armoured-signing-key]" >&2
     exit 1
 fi
 grep -q "BEGIN PGP PRIVATE KEY BLOCK" "$KEYFILE" || {
@@ -77,17 +85,35 @@ set_secret() { # name, value on stdin
     echo "  ✓ $1"
 }
 
-echo "→ reading three from ${GRADLE_PROPS/#$HOME/\~}"
+echo "→ the Portal token from ${GRADLE_PROPS/#$HOME/\~}"
 for pair in "CENTRAL_USERNAME:mavenCentralUsername" \
-            "CENTRAL_PASSWORD:mavenCentralPassword" \
-            "SIGNING_PASSWORD:signingInMemoryKeyPassword"; do
+            "CENTRAL_PASSWORD:mavenCentralPassword"; do
     name="${pair%%:*}" prop="${pair##*:}"
     value="$(read_prop "$prop")"
-    [ -n "$value" ] || { echo "✗ $prop is not in $GRADLE_PROPS" >&2; exit 1; }
+    [ -n "$value" ] || { echo "✗ $prop is empty or absent in $GRADLE_PROPS" >&2; exit 1; }
     set_secret "$name" "$value"
 done
 
-echo "→ the signing key from $KEYFILE"
+echo "→ the passphrase, proven against the key rather than assumed"
+[ -f "$PASSFILE" ] || { echo "✗ no passphrase at $PASSFILE" >&2; exit 1; }
+# A THROWAWAY keyring: proving the passphrase must not leave the release
+# key sitting in the operator's own keyring as a side effect.
+PROOF="$(mktemp -d)"; chmod 700 "$PROOF"
+GNUPGHOME="$PROOF" gpg --batch --import "$KEYFILE" >/dev/null 2>&1
+echo probe > "$PROOF/probe.txt"
+if ! GNUPGHOME="$PROOF" gpg --batch --pinentry-mode loopback \
+        --passphrase-file "$PASSFILE" --detach-sign \
+        -o "$PROOF/probe.sig" "$PROOF/probe.txt" 2>/dev/null; then
+    echo "✗ that passphrase does not unlock that key." >&2
+    echo "  Checking that a passphrase EXISTS proves nothing — the Gradle" >&2
+    echo "  file has the key for it with an empty value, which reads as" >&2
+    echo "  configured. Signing with it is the check." >&2
+    rm -rf "$PROOF"; exit 1
+fi
+rm -rf "$PROOF"
+set_secret SIGNING_PASSWORD "$(cat "$PASSFILE")"
+
+echo "→ the signing key from ${KEYFILE/#$HOME/\~}"
 set_secret SIGNING_KEY "$(cat "$KEYFILE")"
 
 echo "→ what the org holds now"
