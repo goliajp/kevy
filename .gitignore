@@ -28,10 +28,12 @@ node_modules/
 **/node_modules/
 package.json
 package-lock.json
-# …except the website's. `npm ci` needs a lockfile to be reproducible,
-# and CI's node cache keys on it. Without this the site job cannot even
-# start. The rule above is for the language bindings, whose lockfiles
-# belong to whoever installs them.
+# …except the website's. It is a real source tree, not an installed
+# artefact: `npm ci` needs its lockfile to be reproducible, CI's node
+# cache keys on it, and without package.json the site job cannot start at
+# all. The rules above are for the language bindings, whose manifests and
+# lockfiles belong to whoever installs them.
+!web/package.json
 !web/package-lock.json
 yarn.lock
 bun.lock
