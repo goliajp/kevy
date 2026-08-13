@@ -12,7 +12,16 @@
 # The rule, mechanically: every `pkill -f` whose pattern interpolates a
 # variable must have an emptiness guard on that variable within the three
 # preceding lines. Patterns with no `$` are bounded by construction and
-# pass. `pgrep` is read-only and is not gated.
+# pass.
+#
+# Second rule, added 2026-08-13: a WAIT loop must not decide whether its
+# subject is alive by looking for the subject's own name. `until ! pgrep -f
+# arena.sh` never exits, because the shell running that pgrep has
+# `arena.sh` in its own command line and pgrep counts it. That is the
+# read-only face of the same confusion the incident above is the
+# destructive face of, and it costs a background slot and an hour rather
+# than a machine — which is why it went unnoticed twice. See
+# .claude/rule/hygiene.md, "等待条件不能自匹配".
 #
 # Usage: bash bench/killgate.sh [dir ...]     (default: bench scripts/)
 set -euo pipefail
@@ -66,6 +75,40 @@ if bad:
               file=sys.stderr)
     sys.exit(1)
 
+# ── wait loops must not self-match ──────────────────────────────────────
+# A `pgrep`/`pkill` pattern inside a `until`/`while` condition, where the
+# pattern is a plain script name, matches the very shell evaluating it.
+selfmatch = []
+for f in files:
+    lines = pathlib.Path(f).read_text(errors="replace").split("\n")
+    for i, line in enumerate(lines):
+        if not re.search(r"\b(until|while)\b", line):
+            continue
+        m = re.search(r"pgrep\s+(-\w+\s+)*-\w*f\w*\s+['\"]?([\w./-]+)['\"]?", line)
+        if not m:
+            continue
+        pat = m.group(2)
+        # `pgrep -x` matches the executable name exactly and cannot match a
+        # shell whose ARGUMENTS mention it; a pattern anchored with ^ or
+        # carrying a path separator is likewise specific enough.
+        if "-x" in line or pat.startswith("^") or "\\." in pat:
+            continue
+        selfmatch.append((f, i + 1, line.strip()))
+
+if selfmatch:
+    print("killgate: FAIL — a wait loop that matches itself", file=sys.stderr)
+    print("  `until ! pgrep -f <name>` never exits: the shell running that",
+          file=sys.stderr)
+    print("  pgrep has <name> in its own command line, so pgrep counts it.",
+          file=sys.stderr)
+    print("  Wait on evidence the subject produces instead — a finished-marker",
+          file=sys.stderr)
+    print("  line, a flag file, an exit-code file. See .claude/rule/hygiene.md.\n",
+          file=sys.stderr)
+    for f, n, line in selfmatch:
+        print(f"  {f}:{n}: {line}", file=sys.stderr)
+    sys.exit(1)
+
 print(f"killgate: OK — {len(files)} shell scripts, every interpolated "
-      f"`pkill -f` guarded")
+      f"`pkill -f` guarded, no self-matching wait loop")
 PYEOF
