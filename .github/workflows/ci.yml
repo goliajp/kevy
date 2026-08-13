@@ -130,6 +130,12 @@ jobs:
       - name: publish order (the release chain is a real topological order)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_publish_order.py
+      # A bump that moves the Cargo manifests and forgets the language
+      # doors ships a version that is true in one layer and false in
+      # five. 5.1.0 did exactly that until this gate existed.
+      - name: version alignment (six layers agree with the workspace)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python3 tools/check_version_alignment.py
       - name: site commands (every RESP example on the site actually runs)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
