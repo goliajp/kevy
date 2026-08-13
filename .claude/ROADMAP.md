@@ -796,6 +796,14 @@ v5.1.0 已发布并 dogfood 回归通过。此前散在几个旧 arc 里的未�
 - [x] **边界页 `docs/boundaries.md` 三语已写并上站**(Reference 区):四条线(Redis 契约不归我们改 / 含义与执行计划留在应用 / 拓扑声明非发现 / 网络可信)+ 按领域的拒绝表(每条写为什么和改用什么)+ 函数面现在地(能力线 82.5% ratchet、诚实线 wrong==0 硬线)。此前拒绝清单只活在 `.claude/`,用户面一处都没有——这才是这条的真缺口
 - [x] **四区重构:我判定不做,理由在此**。现有五区是**任务导向**(上手/运行/数据/嵌入/参考),提议的四区(Core KV / RDS 模块 / 运维 / 迁移)是**产品架构导向**。读文档的人问的是"我要做 X 怎么做",不是"这属于哪个产品分区";把可用的任务导向结构改成架构导向会让读者更难找到东西。那条目里真正有价值的半条是边界页,已做
 
+## F4b — npm 全族已发布 ✅(2026-08-13,属主令「你先把 npm 的发了」)
+
+**9 个包 5.1.0 全部在册**,按依赖序发:三个平台包(叶子,含各平台原生字节)→ `@goliapkg/kevy-node` / `kevy-ts` / `kevy-electron` → `expo-kevy` / `react-native-kevy-nitro`;`@goliapkg/kevy`(wasm)本就随 tag 发过。**三平台原生产物都是真构的**:darwin-arm64 本机、linux-x64 盒上、**linux-arm64 盒上交叉编译**(`aarch64-linux-gnu-gcc`),`file` 逐个核过架构。发布前跑 `packaging/npm/smoke-node.sh`(node+bun 安装布局)。
+
+**装后 smoke 真做了**:从 registry 新装 `@goliapkg/kevy-node@5.1.0`,平台包被正确解析进 `node_modules/@goliapkg/kevy-node-darwin-arm64`,`await version()` → **5.1.0**,`SET → OK`,`GET → v510`。
+
+**一个必须记的教训**:六个 scoped 包 `npm publish` 打印了 `+ pkg@5.1.0`,而随后 `npm view` 与 registry GET **都是 404**——我一度据此报了"全部发出"。真相是**读端索引传播延迟**:重跑 publish 拿到 `403 You cannot publish over the previously published versions: 5.1.0`,写端才是权威。**成功行不是证据,而读端的 404 也不是失败的证据**——两边都要看,轮询到读端 200 才算完。
+
 ## F4 — 属主硬闸(已查清各渠道**具体**卡在哪,不是笼统"待拍板")
 
 技术面全部就绪:14 个门全 5.1.0、vendored 字节 5.1.0、ffigate 30 格 /
