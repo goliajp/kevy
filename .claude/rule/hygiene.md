@@ -156,3 +156,40 @@ smix 这轮吃过一次,已把"验收命令一律直读 `$?`、不接管道"写�
 **别为此给全部脚本盲加 `set -o pipefail`**:`grep | head` 这类良性管道
 会因 SIGPIPE 变成非零,那是拿一个坑换另一个坑。要判的是"关键命令在不在
 管道末尾"。
+
+---
+
+## 等待条件不能自匹配 —— `pgrep` 会数到自己
+
+一个后台轮询器写成:
+
+```sh
+until ! ssh box "pgrep -f arena.sh >/dev/null"; do sleep 60; done
+```
+
+**永远不会退出。** ssh 在远端跑的那条命令,它自己的命令行里就含
+`arena.sh` 这个字符串,于是 `pgrep -f` 数到自己,条件恒真。同一天里我用
+同样的写法等 `cargo build`,cargo 早已结束,而那个 waiter 又跑了半小时,
+匹配到的唯一进程是它自己。
+
+这不是新坑:`bench/INCIDENT-2026-07-perfgate-pkill-massacre.md` 是它的
+破坏性版本(`pkill -f "$X"` 在 `$X` 为空时杀光整台机器),`killgate` 守的
+是那一面。本条守的是**等待**那一面 —— 不炸,只是永远不结束,而一个永不
+结束的 zombie 会一直占着一个后台槽位,并让人误以为工作还在进行。
+
+**判据要与被等待的对象无关。** 挑一个只有"真的做完了"才会出现的旁证:
+
+```sh
+# 好: 等它自己写出的终止标记 —— 与 pgrep 无关
+until ssh box "grep -q '^# gap rule' /tmp/arena.txt"; do sleep 60; done
+
+# 好: 等文件出现 / 行数到位 / 退出码文件落地
+until ssh box "test -f /tmp/done.flag"; do sleep 30; done
+
+# 不得已要用 pgrep 时,把自己排除掉
+pgrep -f 'bash bench/arena\.sh' | grep -v "^$$\$"   # 或用 pgrep -x / 全路径
+```
+
+这与 [[perf-vs-foss]] §1 那条"每个测量挂一个与被测量无关的旁证"是同一条
+纪律的两个面:**测量要有旁证,等待也要有旁证**。靠被测对象自己的名字判断
+它在不在,是把测量装置和被测物混成一件东西。
