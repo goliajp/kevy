@@ -786,10 +786,10 @@ v5.1.0 已发布并 dogfood 回归通过。此前散在几个旧 arc 里的未�
 - [x] `V1 余项` 三条经核实**已实现**:`kevy-scalar/src/regex_engine/`(1260 行,fork 自 spg ERE)+ `regexp.rs` + `md5.rs`,全部接进 dispatch,`cargo test -p kevy-scalar` 25+1 绿,funcgate PASS。ROADMAP 记的是旧状态。
 - [x] `V0 合并态全门禁` 与 `T9 allocgate/compressgate/envelope` 同属"当时已绿、只差 CI push"的历史条目;5.1.0 的发布本身就是这些门在 CI 上真绿的证据。
 
-## F2 — 拍板点 ①③④ 终判(属主已授权「你来定」)
-- [ ] ③ regexp:**fork spg + 改壳** —— RFC 推荐即已实施,补记 Resolution
-- [ ] ④ md5:**自研** —— 已实施(`md5.rs`),补记 Resolution
-- [ ] ① bar 终值:采纳 **B-1 双线**,把 funcgate 的断言写成 B-1 的两条线并去掉"pending 拍板"的措辞
+## F2 — 拍板点 ①③④ 终判 ✅(2026-08-13)
+- [x] ③ regexp = **fork spg + 改壳**(已实施,1260 行 `regex_engine/`);理由与 CLAUDE.md 的 LOC-WAIVER 第二类同源:重写一份已测引擎核心是注 bug 高发面、可读性收益为零
+- [x] ④ md5 = **自研**(`md5.rs`);引 crate 会破零依赖铁律,而 md5 无演进面
+- [x] ① bar = **B-1 双线终值**:线①能力 `subset-foldable ≥ 82%`(实测 82.5%,ratchet 只升不降,分母是本弧声明要服务的子集而非 89 文件);线②诚实 `wrong == 0`(**硬线**,实测 89/89 零 wrong)。章程的「89×80%」是测量前写下的句子——分母吃进了 52 个永久具名拒的探针,按它设线只会逼出假绿。RFC §7 Resolution 已记,funcgate 措辞已换终值
 
 ## F3 — V5 产品面(唯一还有实体工作量的旧条目)
 - [ ] 容量计算器(公式 + 值大小三档表)+ `INFO modules` + 站点同步
