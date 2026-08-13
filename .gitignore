@@ -66,3 +66,10 @@ bench/.flake-archive/*.log
 
 # SwiftPM build output — the root Package.swift puts it here.
 .build/
+
+# Release credentials kept beside the repo that uses them: the Maven
+# Central Portal token, and the signing key whose public half Central
+# already trusts. Never tracked — this line exists before the directory
+# does, so there is no window in which a private key sits in git's
+# working tree unignored.
+.secrets/
