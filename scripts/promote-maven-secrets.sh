@@ -86,9 +86,14 @@ sys.stdout.write(m.group(1).strip() if m else '')
 "
 }
 
-set_secret() { # name, value on stdin
+set_secret() { # name, value
+    # No `--body -`: gh takes that as the LITERAL string "-" rather than
+    # a read-from-stdin marker, and stores a one-character secret. It
+    # succeeds loudly and fails much later, when gpg reports "no valid
+    # OpenPGP data found" about a key that is a single dash. With no
+    # --body at all, gh reads stdin, which is what this needs.
     printf '%s' "$2" | gh secret set "$1" --org "$ORG" \
-        --visibility selected --repos "$REPOS" --body -
+        --visibility selected --repos "$REPOS"
     echo "  ✓ $1"
 }
 
