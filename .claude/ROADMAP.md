@@ -334,8 +334,8 @@ D2 事务标记(全有全无,与事务大小无关)/ R2 事务内集合读。
 - [x] **A2 fmt —— 决定不采纳**(2026-07-21)。查证:仓库**没有 rustfmt.toml**,`cargo fmt --check` 报 **519 个文件 / 2642 处**(395 src + 96 tests)。这不是漂移,是本项目从不用 rustfmt、风格手工维护。采纳意味着重写 519 个文件 + 冲掉 git blame + 撞所有在飞工作;不采纳是零风险现状。CLAUDE.md 的代码质量规则只管文件/函数长度(locgate 已守),不含 fmt。pushgate 不跑 fmt,保持不跑。**要改成采纳需用户明确批准**(那是有代价的方向)。
 - [x] **A3 三轮同码全绿** — v4「验证完备自洽」的达标线,**达标(2026-07-23)**。同一 commit `f5e0293c` 三次独立 CI 执行全绿(run 29981355519 attempt 1/2/3 = success),证明这份代码稳定无脆测。前置 = 本 session 修好的三个真 flake:escrow 回归(LRANGE 去竞态)/ spop_storm(patience 旋钮 + 副本饿死诊断)/ C1(write-result,三 reactor 确定性)——正是"验证完备自洽"要求的"CI 不再有脆测掩盖真 bug"。C1 另经 perfgate PASS(12 指标全在容差,热路径改动吞吐中性)双轴验证。
 
-- [ ] **B1 交付消费者答复** — `docs/SUPPORT-LINE-3X-VS-4X-2026-07-20.md` 已写好但**尚未交出去**;对方正在为薪资数据选型,而 3.18 带 D1 缺陷且无修复版本。交付时同时问回那个只有他们能答的问题:256 KiB 悬崖形状的 3.18.x 对他们是否仍有用(取决于他们的事务大小)。
-- [ ] **B1' 拍板项(用户)** — 依 B1 的回答决定是否建 3.18.x。默认不建(理由见支持线文档:带隐形尺寸悬崖的保证比明说没有更糟)。
+- [x] ~~B1 交付消费者答复~~ **被事实回答(2026-08-13 复核)**:那份文档要问的是「3.18.x 对你们还有没有用」,而收件人(smix,即 `REPORT-FROM-GOLIAJP-…-EMBEDDED-AS-PRIMARY-STORE.md` 的作者)**已经在 5.1 上** —— `smix/crates/smix-store/Cargo.toml` 写着 `kevy-embedded = "5.1"`,且该报告顶部自己标了 **RESOLVED in 4.0.0(2026-07-26 验证)**。他们越过了整条 3.x 分岔。文档留作支持线记录
+- [x] ~~B1' 拍板项~~ **不必再拍**:唯一等它的消费者已在 5.1。默认就是不建 3.18.x(理由仍成立:带隐形尺寸悬崖的保证比明说没有更糟),现在连唯一的例外理由也没了
 - [x] **B2 R4 启动期不变量对账钩子** — 报告里唯一「不做则每个消费者都要重造、且各造各的错」的条目;与既有 `PREFIX.DIGEST` 配对设计。
 - [x] **B3 R6 菜谱** — 「一行数据、多个派生键」端到端写进 `docs/cookbook.md`(对方甚至提出愿意贡献)。
 - [x] **B4 R3 事务内索引读** — 先判定是否与 R2 同形(同一个 op-table 缺口),同形则一并补齐,不同形则单列。
@@ -559,6 +559,13 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 > 就差一步走进去,是先核前提拦住的。下面的框保持原样(它们记录的是设计,
 > 不是进度);**真进度以 `r1-locality` 为准,merge 归属主**。
 
+> **⚠️ 这张核账表自己也过期了(2026-08-13 复核)。** T3/T4 那两格写的是
+> 「真没开工 / `crates/kevy-compress` 任何分支都不存在」—— 那是 08-06 的
+> 事实;该 crate 现在在 develop 上,随 5.1.0 发布,并在 08-12 修过一个真
+> bug(共享 Huffman 表帧的 tag 缺依赖标记,会让冷值读回 Corrupt)。
+> **教训:一次「核过账」不会永久成立。把结论写下来时要一并写下核账日期,
+> 读的人才知道该不该重核。**
+
 > **同日把九条 train 逐条对了一遍账 —— 下面的框有四条是"做完了没打勾"。**
 > 每条给的是**能核的证据**,不是判断:
 >
@@ -567,8 +574,8 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 > | T0 门先行 | 未打勾 | **已做**(r1-locality) | `bench/allocgate.sh` / `allocgate-mem.sh` / `compressgate.sh` |
 > | T1 alloc 石头 | 未打勾 | **已做**(r1-locality) | `crates/kevy-alloc/src/` 12+ 文件;v8 收口十二角过七 |
 > | T2 alloc 接线 | 未打勾 | **已做**(r1-locality) | `perf(v5-T2)` 系列提交;M3 1.98× vs 2.40× |
-> | T3 compress 石头 | 未打勾 | **真没开工** | 全仓只有两条 RFC 提交,`crates/kevy-compress` 任何分支都不存在 |
-> | T4 compress 接线 | 未打勾 | **真没开工** | 同上 |
+> | T3 compress 石头 | 未打勾 | ~~真没开工~~ → **已发布**(2026-08-13 复核) | `crates/kevy-compress/src/` 5 文件,随 5.1.0 发布 |
+> | T4 compress 接线 | 未打勾 | ~~真没开工~~ → **已接线**(2026-08-13 复核) | `kevy-vlog` 版本 pin 依赖它;**`bash bench/compressgate.sh` 在 develop 上真跑 PASS,K1-K7 全绿**(K4 跨值字典 1000×400B → ≤16 B/值;K5 放大 1.27×/2.0×;K6 SET 路径零 encode)|
 > | T5 索引冷热窗口 | 未打勾 | **已发布** | `crates/kevy-window` + `crates/kevy-seg` + `kevy-index/src/segcold.rs`;`WINDOW col SPAN n BUCKET n` 语法在册;tiergate 六条窗口线;三语文档(zh/ja 于 2026-08-06 补齐) |
 > | T6 自动声明闭环 | 未打勾 | **已发布** | `AUTODECLARE` 横跨 5 个源文件 + `crates/kevy/tests/idx_advise_e2e.rs` |
 > | T7 索引即键(I2) | 未打勾 | **RFC 已出待拍** | `.claude/rfcs/2026-08-05-v5-i2-single-hop-index.md`;**批准前零实现代码** |
@@ -737,8 +744,8 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - [x] **P1 终判 = A 案(opt-in)**,fastpath-residue RFC Resolution + charter §六 已记;用户侧何时开 alloc 指南 = docs/alloc.md
 
 ### V5 — 产品面
-- [ ] 文档四区重构(Core KV / RDS 模块 / 运维 / 迁移指南)三语 + 边界页(14 条 + 函数面进度)
-- [ ] 容量计算器(公式 + 值大小三档表)+ `INFO modules` + 站点同步
+- [x] ~~文档四区重构~~ **判定不做(F3,2026-08-13)**:四区(Core KV / RDS / 运维 / 迁移)是**产品架构导向**,而现有五区是**任务导向** —— 读者问的是「我要做 X 怎么办」,不是「这属于哪个分区」,改了更难找。这条里真有价值的半条是**边界页**,已做:`docs/boundaries.md` + zh/ja 上站(四条线 + 按领域的拒绝表「为什么 + 改用什么」+ 函数面现在地);此前拒绝清单只活在 `.claude/`,用户面一处都没有
+- [x] ~~容量计算器 + `INFO modules`~~ **早已实现(F1 核实,2026-08-13;本轮复验)**:`kevy.golia.jp/capacity/` 200 且含公式与交互;`INFO modules` 由真二进制实测返回(`module:name=alloc/tiering/indexes`)。**ROADMAP 落后于代码的第 N 次** —— 清点开放项前先核实实现
 
 ### V6 — 发布轮(v5.0.0 或先 rc,待 P4)
 - [x] CHANGELOG 收口 + upgradegate 重测 ✅(2026-08-10 RC-READY F1-F3)
