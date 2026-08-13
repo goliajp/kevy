@@ -6,19 +6,21 @@ in-process embedded engine (`mem://` / `file://`) or a remote RESP server
 synchronous and an async `Task` face. Same package also ships the raw
 embedded door (`Kevy.Embedded.KevyDb`, below). Pure Rust engine, no server.
 
-> **Pre-release.** This document tracks kevy **5.1.0**. Nothing is on
-> NuGet yet, so the command below does not resolve — until it is,
-> `bash packaging/nuget/pack-and-smoke.sh` packs the same artifact to a
-> local feed and installs from there.
+This document tracks kevy **5.1.0**.
 
 ```bash
-dotnet add package Kevy
+dotnet add package kevy
 ```
+
+The package is managed code only. `mem://` and `file://` additionally
+need `libkevy_ffi`, a per-platform native library — see
+[The embedded engine](#the-embedded-engine) below; a remote URL needs
+nothing else.
 
 ```csharp
 using Kevy;
 
-using var c = KevyClient.Connect("mem://app");   // or "kevy://127.0.0.1:6379"
+using var c = KevyClient.Connect("kevy://127.0.0.1:6379");   // or "mem://app"
 c.Set("k", "v");
 c.Get("k");                                       // byte[]  ("v")
 await c.SetAsync("k", "v2");                       // async twin, same client
@@ -42,7 +44,25 @@ Errors are a `KevyException` hierarchy: a recognized store error surfaces as
 families — `IDX.*`, `MULTI`/`EXEC`, pipeline, cluster — throw
 `KevyUnsupportedException` on the embedded backend (reach for `Do(...)`).
 
-## Embedded door (in-process engine)
+## The embedded engine
+
+`mem://`, `file://` and everything under `Kevy.Embedded` run kevy inside
+your process through `libkevy_ffi`, a per-platform native library. The
+NuGet package does not carry it: it would work on the handful of
+runtime identifiers we happened to build and nowhere else, while the
+managed remote client works wherever .NET does. So the engine comes
+from the engine's own repository —
+
+```bash
+git clone https://github.com/goliajp/kevy
+cd kevy && cargo build --release -p kevy-ffi   # → target/release/
+```
+
+— and is loaded by pointing `KEVY_FFI_LIB` at the built library, or by
+placing it where the runtime probes (`runtimes/<rid>/native/` in a
+published app). Without it, the first embedded call throws a
+`KevyException` saying exactly this, with the underlying
+`DllNotFoundException` as its `InnerException`.
 
 ```csharp
 using Kevy.Embedded;
