@@ -23,6 +23,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         'entry-docs': resolve(__dirname, 'src/entry-docs.tsx'),
+        'entry-commands': resolve(__dirname, 'src/entry-commands.tsx'),
         md: resolve(__dirname, 'src/md.ts'),
       },
       output: { format: 'es', entryFileNames: '[name].js' },
