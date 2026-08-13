@@ -148,6 +148,22 @@ for want in kevy_ffi.xcframework jniLibs; do
         exit 1; }
 done
 echo "  archive contains the xcframework and the jniLibs"
+
+# The dry-run says "The server may enforce additional checks" and means
+# it: pub.dev rejected a package this reported as having 0 warnings,
+# because LICENSE still held `flutter create`'s placeholder. Anything
+# learned from a server refusal goes here, since the dry-run will not
+# learn it.
+[ -s "$OUT/LICENSE" ] || { echo "✗ no LICENSE in the package" >&2; exit 1; }
+if grep -qi "TODO" "$OUT/LICENSE"; then
+    echo "✗ LICENSE still contains a TODO — pub.dev refuses that outright," >&2
+    echo "  and the dry-run does not: it reported 0 warnings on the file" >&2
+    echo "  that got the package rejected." >&2
+    exit 1
+fi
+grep -qiE "MIT|Apache" "$OUT/LICENSE" || {
+    echo "✗ LICENSE names neither licence this project ships under" >&2; exit 1; }
+echo "  LICENSE is a real licence"
 cd "$ROOT"
 
 if [ -z "$PUSH_VERSION" ]; then
@@ -176,9 +192,21 @@ WORK="$STAGE/push"
 git clone --quiet "$REPO" "$WORK" 2>/dev/null || git init --quiet "$WORK"
 git -C "$WORK" remote add origin "$REPO" 2>/dev/null || true
 if git -C "$WORK" rev-parse "v$PUSH_VERSION" >/dev/null 2>&1; then
-    echo "✗ v$PUSH_VERSION is already tagged on kevy-flutter." >&2
-    echo "  A pub.dev version cannot be replaced either. Ship the next one." >&2
-    exit 1
+    # A tag here is only meaningful once pub.dev has published from it;
+    # before that it is a staging pointer nobody has consumed, and the
+    # first publish attempt can fail on something only the server checks.
+    # So ask pub.dev, not the tag: if the version is live, it is fixed
+    # forever and the answer is a new version.
+    live=$(curl -sf "https://pub.dev/api/packages/flutter_kevy" 2>/dev/null \
+        | grep -o "\"version\":\"$PUSH_VERSION\"" || true)
+    if [ -n "$live" ]; then
+        echo "✗ flutter_kevy $PUSH_VERSION is already on pub.dev." >&2
+        echo "  A published version is permanent there. Ship the next one." >&2
+        exit 1
+    fi
+    echo "  v$PUSH_VERSION is tagged but not published — moving the tag"
+    git -C "$WORK" tag -d "v$PUSH_VERSION" >/dev/null
+    git -C "$WORK" push --quiet --delete origin "v$PUSH_VERSION" 2>/dev/null || true
 fi
 rm -rf "$OUT/.dart_tool"
 find "$WORK" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
