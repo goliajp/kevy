@@ -230,6 +230,21 @@ def main() -> int:
         "prose claims": layer5_prose(v, bad),
         "vendored bytes": layer6_vendored_bytes(v, bad),
     }
+    # A layer that finds nothing has not verified anything. Without this
+    # the gate would go green on a checkout where the vendored artifacts
+    # were never built, or after someone untracks them — the same empty-
+    # predicate failure this project writes rules about. Floors are the
+    # minimum a bare checkout must contain, not a target.
+    floors = {"cargo": 40, "manifests+pins": 10, "live constants": 3,
+              "prose claims": 3, "vendored bytes": 2}
+    for layer, floor in floors.items():
+        if counts[layer] < floor:
+            bad.append(
+                f"layer '{layer}' found only {counts[layer]} declaration(s), "
+                f"expected at least {floor} — the layer verified nothing, "
+                f"which is not the same as everything agreeing"
+            )
+
     if bad:
         print(f"REFUSED: {len(bad)} file(s) disagree with the workspace version {v}")
         for b in bad:
