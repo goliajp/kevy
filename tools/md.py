@@ -47,6 +47,13 @@ def inline(s, link_map=None):
         href = re.sub(r"\\(.)", r"\1", href)
         if link_map:
             href = link_map(href)
+            # A map may DECLINE a link (return None) — the target is not a
+            # web resource at all. Keep the text, drop the anchor: a reader
+            # loses nothing, and no dead href ships.
+            # `text` came out of an already-escaped string; escaping it
+            # again would turn &amp; into &amp;amp;.
+            if href is None:
+                return text
         return f'<a href="{html.escape(href, quote=True)}">{text}</a>'
 
     s = _LINK.sub(link, s)
