@@ -1,9 +1,15 @@
 # Go: publishing a language that has no registry
 
-What it took to put the Go client on its channel, and the three things
-that were wrong on the way. Recorded because two of them are shaped
-like defects we have paid for before in other channels, and the third
-was a coverage regression I introduced myself while fixing the first.
+What it took to put the Go client on its channel, and the four things
+that were wrong on the way.
+
+They are recorded together because they are one shape: **a check that
+passed for a reason other than the one intended.** A mirror verified
+inside the tree it was extracted from. A test job that went green after
+its subject was removed from it. A publish whose registry said yes
+while its proxy said no. A documented command that worked only because
+the state it was supposed to create already existed. Two of the four I
+introduced myself while fixing the first.
 
 ## The constraint
 
@@ -50,7 +56,7 @@ arity, `Close`'s error, `Sub.Next`'s triple return). The compiler named
 every one. Worth stating plainly because the temptation was to write
 them from memory of the calling code rather than from the methods.
 
-## Three defects
+## Four defects
 
 ### 1. The gate that only works where it was extracted from
 
@@ -112,6 +118,28 @@ failure wearing the sumdb's URL.
 
 It cleared on its own after roughly half an hour. The push is one
 `--atomic` ref update now, so the window does not exist.
+
+### 4. An instruction verified against a machine, not against a clone
+
+The README I wrote for this — including the one the generated
+repository shows everyone who lands on it — told a reader to run
+`cargo build --release -p kevy-ffi` before `go test -tags
+kevy_embedded`. The cgo preamble links `target/debug/libkevy_ffi.a`.
+So `--release` builds an artifact nothing looks at, and a fresh clone
+stops on a missing `.a`.
+
+I ran the sequence and it passed. It passed because a debug build from
+earlier work was already sitting there — the command being *wrong* was
+invisible, because the state it was supposed to produce already
+existed. Moving that file away first is what actually tested the
+instruction rather than the machine.
+
+Same family as the three above, and as the hygiene rule about criteria
+an empty input satisfies: **a check whose precondition is already
+satisfied is not checking the thing that establishes it.** For a
+documented command the question is not "does this work here" but "does
+this work on a clone" — and the cheap way to ask it is to delete what
+the command claims to produce.
 
 ## Where it is enforced
 
