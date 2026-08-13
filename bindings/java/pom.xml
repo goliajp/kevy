@@ -120,6 +120,15 @@
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-javadoc-plugin</artifactId>
                         <version>3.6.3</version>
+                        <configuration>
+                            <!-- Report broken syntax, not absent prose. An
+                                 undocumented member is a gap; malformed
+                                 markup is a defect that renders wrong on
+                                 the published site, and only the second
+                                 should stop a release. `&` unescaped in a
+                                 doc comment is the defect this caught. -->
+                            <doclint>all,-missing</doclint>
+                        </configuration>
                         <executions>
                             <execution>
                                 <id>attach-javadocs</id>
