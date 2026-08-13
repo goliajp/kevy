@@ -816,7 +816,12 @@ v5.1.0 已发布并 dogfood 回归通过。此前散在几个旧 arc 里的未�
 技术面全部就绪:14 个门全 5.1.0、vendored 字节 5.1.0、ffigate 30 格 /
 TS 50/50 / python 真跑通。剩下的阻塞按渠道分三类:
 
-- [ ] **缺凭据 —— 只剩三个渠道**:NuGet 无 API key、PyPI 无 token、pub.dev 无 credentials。仓库 secrets 只有 `CARGO_REGISTRY_TOKEN` / `NPM_TOKEN` / `DOCKERHUB_*`;maven 那四个已提到 org 级(见下)。这三个不是我能补的
+- [x] ~~缺凭据~~ **前提是错的(2026-08-13 查证)**:三家里**两家根本不需要凭据** —— PyPI 与 NuGet.org 都做 OIDC 可信发布(短期 GitHub token 换上传权),PyPI 还有 pending publisher 覆盖"项目尚不存在"的情形;pub.dev 也是 OIDC,只是**首版必须手动** `dart pub publish`(官方明说自动发布只能更新已存在的包)。**真阻塞是包的形态,不是凭据**:
+      - **Python**:装进干净 venv 后 wheel 里**没有任何原生库**,而加载器找的是 `../../../target/{release,debug}` —— 只在 kevy 树内存在。实测 `mem://` 从 site-packages 报 `libkevy_ffi not found`。按 Go 的解法发**纯远程那一半**(22 个模块里 ctypes 只出现在 1 个),`mem://`/`file://` 给出指明去哪构建的错误;pyproject 补 classifiers + urls(缺了 PyPI 页面是回不到引擎的死路)
+      - **.NET**:P/Invoke 惰性解析,所以托管客户端能用,首次嵌入式调用抛 `DllNotFoundException`("Unable to load shared library",什么也没说明)。`CheckAbi` 是所有嵌入式入口的唯一必经点,在那里换成同一句能指路的话并把原异常留在 inner;两向验过(无库出那句话、`KEVY_FFI_LIB` 设了仍加载),67 测试绿。nupkg 不带 `runtimes/`,workflow 显式断言而非依赖 csproj 的 `Exists()` 条件被人读到
+      - **Flutter**:`flutter pub publish --dry-run` 打出 **20 KB、零引擎** —— pub 只收 git 跟踪的文件,而 11 MB 的 xcframework + jniLibs 被 `.gitignore` 排除。走**产物仓 `goliajp/kevy-flutter`**(属主定:「也一样?走 kevy-flutter 的产物仓」),与 kevy-go 同构,理由也同:发布物有源码树不该背的负担;仓库已建、v5.1.0 已推(16 MB / 13 个引擎文件 / 自报 5.1.0 / dry-run 5 MB 含引擎)。**pub.dev 不做仓库溯源验证**(查证:没有徽章可丢),故 `repository:` 仍指 `goliajp/kevy`
+      **三个 workflow / 脚本已就位并 CI 绿**:`.github/workflows/pypi.yml`、`nuget.yml`(都手动触发、默认只验证不发布、都对**构建出的产物**再验一次版本)、`scripts/mirror-flutter-package.sh`(读 dry-run 自己的文件清单,包里没引擎就拒绝;推之前问 `.so` 自报什么版本)
+- [ ] **属主的三步**(每步 2 分钟):① PyPI Account settings → Publishing → pending publisher(`kevy` / `goliajp` / `kevy` / `pypi.yml` / env `pypi`)+ GitHub 建名为 `pypi` 的 environment ② nuget.org → Trusted Publishing 策略(`goliajp` / `kevy` / `nuget.yml`)+ 仓库 secret `NUGET_USER`(用户名非邮箱);**新策略只临时激活 7 天,配好当天就发** ③ `git clone kevy-flutter && flutter pub publish` 首版,然后 Admin 页开 GitHub Actions 发布(tag pattern `v{{version}}`)
 - [x] ~~命名决定~~ ✅ **属主定 `@goliapkg/kevy-ts`,已改**:那个不带后缀的名字留给已发布 4 个版本的 wasm 包(改它要弃用已发布名,改 ts 免费),且与 kevy-node/electron/expo 家族一致。**npm token 本来就有 → npm 五个包现在全部可发**
 - [x] ~~SPM 仓库结构~~ ✅ **`Package.swift` 已移到仓库根**:SwiftPM 只从被 clone 仓库的根解析包(没有 Go 那样的子目录形式),所以放在 `bindings/apple/KevyKit/` 的 manifest 永远够不到 README 一直写着的 `.package(url: ".../kevy", from: "5.1.0")`。源码/测试/Artifacts 原地不动,旧位置留指针防漂移。`swift build` + `swift test` 3/3 绿。**SPM 不再需要任何新东西**
 - [x] **Go 的 `/v5` 已补(强制项,与选哪个 repo 无关)**:语义化导入版本要求 major ≥ 2 的 module path 带 `/vN`,原 `module github.com/goliajp/kevy-go` **根本无法以 v5.1.0 打 tag**。构建+测试绿
