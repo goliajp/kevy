@@ -1,3 +1,5 @@
+//go:build kevy_embedded
+
 package kevy
 
 /*

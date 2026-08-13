@@ -33,10 +33,18 @@ func freePort(t *testing.T) int {
 // build then the workspace build.
 func serverBinary(t *testing.T) string {
 	t.Helper()
+	// KEVY_SERVER_BIN first: the generated standalone module has no
+	// kevy tree above it, so the relative candidates cannot resolve
+	// there and its gate passes the path in explicitly.
+	if bin := os.Getenv("KEVY_SERVER_BIN"); bin != "" {
+		if _, err := os.Stat(bin); err != nil {
+			t.Fatalf("KEVY_SERVER_BIN=%s: %v", bin, err)
+		}
+		return bin
+	}
 	candidates := []string{
 		"../../target/release/kevy",
 		"../../../../../target/release/kevy",
-		"/Users/doracawl/workspace/goliajp/kevy/target/release/kevy",
 	}
 	for _, c := range candidates {
 		if abs, err := filepath.Abs(c); err == nil {
@@ -45,7 +53,7 @@ func serverBinary(t *testing.T) string {
 			}
 		}
 	}
-	t.Skip("kevy server binary not found (build with: cargo build --release -p kevy)")
+	t.Skip("kevy server binary not found (build with: cargo build --release -p kevy, or set KEVY_SERVER_BIN)")
 	return ""
 }
 
@@ -122,14 +130,23 @@ type backend struct {
 // embedded URL is a unique named bus per subtest so pub/sub works and
 // stores don't leak across tests; the remote URL points at a fresh server.
 func bothBackends(t *testing.T) []backend {
-	return []backend{
-		{
+	// The embedded half exists only in a build that linked the engine.
+	// Asked from the pure-Go build it would fail every conformance test
+	// with the same "no embedded engine" sentence — a true statement
+	// about a backend this binary was never meant to have, repeated
+	// nineteen times. The seam that decides it is the same one the
+	// library uses, so this cannot drift from the real answer.
+	backends := []backend{}
+	if openEmbeddedStore != nil {
+		backends = append(backends, backend{
 			name: "embedded",
 			url: func(t *testing.T) (string, func()) {
 				u := fmt.Sprintf("mem://test-%d", uniqueID())
 				return u, func() {}
 			},
-		},
+		})
+	}
+	return append(backends, []backend{
 		{
 			name: "remote",
 			url: func(t *testing.T) (string, func()) {
@@ -137,7 +154,7 @@ func bothBackends(t *testing.T) []backend {
 				return s.url(), func() {}
 			},
 		},
-	}
+	}...)
 }
 
 var idCounter struct {

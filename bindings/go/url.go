@@ -119,7 +119,7 @@ func parseAuthority(authority string) (string, uint16, error) {
 // the last strong handle drops — modelled here with reference counting.
 
 type sharedStore struct {
-	db   *DB
+	db   embStore
 	refs int
 }
 
@@ -130,7 +130,7 @@ var registry = struct {
 
 // resolveStore opens (or shares) the embedded store for an embedded
 // target and returns it plus the registry key to release later.
-func resolveStore(t target) (*DB, string, error) {
+func resolveStore(t target) (embStore, string, error) {
 	key := t.registryKey()
 	if key != "" {
 		registry.mu.Lock()
@@ -160,12 +160,15 @@ func resolveStore(t target) (*DB, string, error) {
 	return db, key, nil
 }
 
-func openEmbedded(t target) (*DB, error) {
+func openEmbedded(t target) (embStore, error) {
+	// Nil unless this binary was built with `kevy_embedded` — see
+	// embedded_seam.go. The message names the build that has it.
+	if openEmbeddedStore == nil {
+		return nil, errNoEmbedded
+	}
 	switch t.kind {
-	case targetMemAnon, targetMemNamed:
-		return OpenMem()
-	case targetFile:
-		return Open(t.path)
+	case targetMemAnon, targetMemNamed, targetFile:
+		return openEmbeddedStore(t)
 	default:
 		return nil, errInvalidInput("resolveStore called on a non-embedded target")
 	}
@@ -173,7 +176,7 @@ func openEmbedded(t target) (*DB, error) {
 
 // releaseStore drops one reference to a shared store, closing it when the
 // last handle goes. Anonymous stores (key == "") are closed directly.
-func releaseStore(key string, db *DB) {
+func releaseStore(key string, db embStore) {
 	if key == "" {
 		db.Close()
 		return

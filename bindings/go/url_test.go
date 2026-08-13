@@ -8,6 +8,10 @@ import (
 // Connection & URL routing conformance (contract §6).
 
 func TestURLRejections(t *testing.T) {
+	// Embedded-only: it opens the in-process engine directly.
+	if openEmbeddedStore == nil {
+		t.Skip("no embedded engine in this build")
+	}
 	cases := []struct {
 		url  string
 		kind ErrorKind
@@ -34,6 +38,10 @@ func TestURLRejections(t *testing.T) {
 }
 
 func TestMemAnonymousIsolated(t *testing.T) {
+	// Embedded-only: it opens the in-process engine directly.
+	if openEmbeddedStore == nil {
+		t.Skip("no embedded engine in this build")
+	}
 	a := mustConnect(t, "mem://")
 	bcli := mustConnect(t, "mem://")
 	if err := a.Set(bg, b("k"), b("va")); err != nil {
@@ -46,6 +54,10 @@ func TestMemAnonymousIsolated(t *testing.T) {
 }
 
 func TestMemNamedShares(t *testing.T) {
+	// Embedded-only: it opens the in-process engine directly.
+	if openEmbeddedStore == nil {
+		t.Skip("no embedded engine in this build")
+	}
 	url := "mem://shared-bus-1"
 	a := mustConnect(t, url)
 	bcli := mustConnect(t, url)
@@ -59,6 +71,10 @@ func TestMemNamedShares(t *testing.T) {
 }
 
 func TestFileShares(t *testing.T) {
+	// Embedded-only: it opens the in-process engine directly.
+	if openEmbeddedStore == nil {
+		t.Skip("no embedded engine in this build")
+	}
 	dir := filepath.Join(t.TempDir(), "data")
 	url := "file://" + dir
 	a := mustConnect(t, url)
@@ -73,6 +89,10 @@ func TestFileShares(t *testing.T) {
 }
 
 func TestRegistryEvictsOnLastClose(t *testing.T) {
+	// Embedded-only: it opens the in-process engine directly.
+	if openEmbeddedStore == nil {
+		t.Skip("no embedded engine in this build")
+	}
 	url := "mem://evict-1"
 	a, err := Connect(url)
 	if err != nil {

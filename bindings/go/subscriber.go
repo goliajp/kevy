@@ -44,7 +44,7 @@ type PubsubEvent struct {
 // Subscriber is one subscribed connection.
 type Subscriber struct {
 	remote      *respConn
-	emb         *embSub
+	emb         embSubscriber
 	readTimeout *time.Duration
 	// pending holds events read while waiting for a subscribe ack, in
 	// arrival order. See Subscribe.
@@ -66,7 +66,11 @@ func SubscriberConnect(url string) (*Subscriber, error) {
 		if oerr != nil {
 			return nil, oerr
 		}
-		return &Subscriber{emb: &embSub{db: db, key: key}}, nil
+		if newEmbSubscriber == nil {
+			releaseStore(key, db)
+			return nil, errNoEmbedded
+		}
+		return &Subscriber{emb: newEmbSubscriber(db, key)}, nil
 	default:
 		conn, derr := dialResp(t.host, t.port)
 		if derr != nil {

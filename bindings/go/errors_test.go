@@ -58,6 +58,10 @@ func TestGenericProtocolError(t *testing.T) {
 }
 
 func TestEmbeddedRemoteOnlyUnsupported(t *testing.T) {
+	// Embedded-only: it asserts what the embedded backend refuses.
+	if openEmbeddedStore == nil {
+		t.Skip("no embedded engine in this build")
+	}
 	c := mustConnect(t, "mem://unsupported-1")
 	if _, err := c.IdxList(bg); !IsKind(err, KindUnsupported) {
 		t.Fatalf("embedded IDX.LIST: want Unsupported, got %v", err)
