@@ -79,9 +79,9 @@ const dict: Dict = {
   },
   'term.caption.label': { en: 'Terminal.', zh: '终端。', ja: 'ターミナル。' },
   'term.caption': {
-    en: 'The same binary the server runs, minus the network. State lives in this tab and disappears when you close it — the full playground persists to OPFS instead.',
-    zh: '与服务端同一份二进制，只是去掉了网络。状态活在这个标签页里，关掉即消失 —— 完整版试用区改为持久化到 OPFS。',
-    ja: 'サーバーが動かすものと同じバイナリから、ネットワークだけを外したもの。状態はこのタブ内にあり、閉じると消えます——フル版のプレイグラウンドは OPFS に永続化します。',
+    en: 'The same binary the server runs, minus the network. State lives in this tab and disappears when you close it.',
+    zh: '与服务端同一份二进制，只是去掉了网络。状态活在这个标签页里，关掉即消失。',
+    ja: 'サーバーが動かすものと同じバイナリから、ネットワークだけを外したもの。状態はこのタブ内にあり、閉じると消えます。',
   },
   'term.booting': { en: 'starting engine…', zh: '正在启动引擎…', ja: 'エンジン起動中…' },
   'term.live': { en: 'live', zh: '运行中', ja: '実行中' },
@@ -90,7 +90,6 @@ const dict: Dict = {
     zh: '引擎无法在此浏览器中启动',
     ja: 'このブラウザではエンジンを起動できませんでした',
   },
-  'term.full': { en: 'Full playground', zh: '完整试用区', ja: 'フル版プレイグラウンド' },
 
   // ── speed ─────────────────────────────────────────────────────────
   'perf.heading': { en: 'Measured against valkey', zh: '与 valkey 实测对照', ja: 'valkey との実測比較' },
@@ -173,12 +172,9 @@ const dict: Dict = {
     ja: '全コマンド・全設定キー・移行ガイド:',
   },
 
-  // ── footer ────────────────────────────────────────────────────────
-  'foot.license': {
-    en: 'MIT or Apache-2.0 · © 2026 GOLIA K.K.',
-    zh: 'MIT 或 Apache-2.0 · © 2026 GOLIA K.K.',
-    ja: 'MIT または Apache-2.0 · © 2026 GOLIA K.K.',
-  },
+  // The footer lives in components/Footer.tsx, shared with the reference
+  // pages, and computes its year. A second copy of that string here is a
+  // second thing to keep current.
 }
 
 export const LangContext = createContext<Lang>('en')

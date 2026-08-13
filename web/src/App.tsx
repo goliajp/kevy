@@ -2,13 +2,13 @@ import { ArrowDown, ArrowUpRight, Package } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 import { CodeBlock } from './components/CodeBlock'
+import { Footer } from './components/Footer'
 import { Terminal } from './components/Terminal'
 import { detectLang, LANGS, LangContext, T, type Lang } from './i18n'
 
 const GITHUB = 'https://github.com/goliajp/kevy'
 const CRATES = 'https://crates.io/crates/kevy'
 const DOCSRS = 'https://docs.rs/kevy'
-const GOLIA = 'https://golia.jp'
 const DOCS = '/docs/'
 
 const LINKS = [
@@ -179,10 +179,7 @@ export function App() {
             <b>
               <T k="term.caption.label" />
             </b>{' '}
-            <T k="term.caption" />{' '}
-            <a href="/play/">
-              <T k="term.full" /> →
-            </a>
+            <T k="term.caption" />
           </p>
         </Section>
 
@@ -270,25 +267,7 @@ export function App() {
           </p>
         </Section>
 
-        <footer>
-          <div>
-            <a className="org" href={GOLIA} target="_blank" rel="noreferrer">
-              GOLIA
-            </a>
-            <div>
-              <T k="foot.license" />
-            </div>
-          </div>
-          <div className="links">
-            {LINKS.map(({ label, href, icon }) => (
-              <a key={label} href={href} target="_blank" rel="noreferrer">
-                {icon}
-                {label}
-                <ArrowUpRight size={12} strokeWidth={2} className="ext" />
-              </a>
-            ))}
-          </div>
-        </footer>
+        <Footer lang={lang} />
       </div>
     </LangContext.Provider>
   )
