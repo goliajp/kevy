@@ -802,8 +802,11 @@ v5.1.0 已发布并 dogfood 回归通过。此前散在几个旧 arc 里的未�
 TS 50/50 / python 真跑通。剩下的阻塞按渠道分三类:
 
 - [ ] **缺凭据(仓库 secrets 只有 `CARGO_REGISTRY_TOKEN` / `NPM_TOKEN` / `DOCKERHUB_*`)**:NuGet 无 API key、PyPI 无 token、pub.dev 无 credentials、maven 无签名密钥。这四个不是我能补的
-- [ ] **缺一个命名决定**:`bindings/ts` 与 wasm 包同名 `@goliapkg/kevy`。**npm token 是有的**,所以 node / electron / expo / nitro 四个包今天就能发,只有 ts 被这个重名卡住
-- [ ] **缺一个仓库结构决定**:Go 模块要独立 repo(`go.mod` 已声明 `github.com/goliajp/kevy-go`,该 repo 不存在);SPM 要**仓库根**有 `Package.swift`(现在在 `bindings/apple/KevyKit/`),等于要决定这个 repo 是否同时充当 SwiftPM 包
+- [x] ~~命名决定~~ ✅ **属主定 `@goliapkg/kevy-ts`,已改**:那个不带后缀的名字留给已发布 4 个版本的 wasm 包(改它要弃用已发布名,改 ts 免费),且与 kevy-node/electron/expo 家族一致。**npm token 本来就有 → npm 五个包现在全部可发**
+- [x] ~~SPM 仓库结构~~ ✅ **`Package.swift` 已移到仓库根**:SwiftPM 只从被 clone 仓库的根解析包(没有 Go 那样的子目录形式),所以放在 `bindings/apple/KevyKit/` 的 manifest 永远够不到 README 一直写着的 `.package(url: ".../kevy", from: "5.1.0")`。源码/测试/Artifacts 原地不动,旧位置留指针防漂移。`swift build` + `swift test` 3/3 绿。**SPM 不再需要任何新东西**
+- [x] **Go 的 `/v5` 已补(强制项,与选哪个 repo 无关)**:语义化导入版本要求 major ≥ 2 的 module path 带 `/vN`,原 `module github.com/goliajp/kevy-go` **根本无法以 v5.1.0 打 tag**。构建+测试绿
+- [ ] Go 只剩一件:`github.com/goliajp/kevy-go` 这个 repo 不存在,而 Go 没有 registry(import path 就是仓库 URL),所以要么建这个 repo(我的 token 在 org 上 `admin: false`,建不了),要么改用仓库内子模块 `github.com/goliajp/kevy/bindings/go/v5` + `bindings/go/v5.1.0` 形状的 tag(退路已写进 go.mod)
+- [ ] **maven:凭据在 `goliajp/sentori` 仓库上**(`CENTRAL_USERNAME` / `CENTRAL_PASSWORD` / `SIGNING_KEY` / `SIGNING_PASSWORD`),**org 层没有**,kevy 仓库也没有。GitHub 不把 secret 值给我,所以**复制或提升为 org 级只能属主做**。另:sentori 那套是 Gradle,kevy 的 java 门是 Maven(`pom.xml`),脚本不能直接抄;pom 还缺 Central 必需的 `licenses` / `developers` / `scm` 与 gpg 签名、sources/javadoc jar —— 这部分是我的活,凭据到位前先做也行
 
 三类都要属主动作(给凭据 / 定名字 / 定结构),我这边不再有可推进的余量。
 
