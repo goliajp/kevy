@@ -98,6 +98,42 @@ The header says so now, and points at what answers the second one. Same
 discipline as pushgate declaring the CI steps it does not cover: a
 partial check has to name its own boundary, or it reads as a total one.
 
+## .NET, part two: the one I shipped anyway
+
+The section above says the .NET package needed a better error message
+and was otherwise fine. It was not fine. `kevy` 5.1.0 went to NuGet and
+could not be installed by anyone:
+
+    error NU1101: Unable to find package Kevy.Embedded.Internal
+
+`Kevy.Embedded.csproj` carries `IsPackable=false` and a comment saying
+the unified package "folds this FFI door in as an internal building
+block". The folding was never implemented. A plain `ProjectReference`
+becomes a package *dependency* at pack time, so the nuspec asked for a
+package that by construction cannot exist.
+
+**What makes this worth writing down is that I read the nuspec.** The
+dependency line was right there, I saw it, and I read it as "both
+packages must be published" — which is a coherent reading, and wrong,
+and one `dotnet restore` would have settled it. In the same session I
+had written an install-and-run step for the Python workflow and watched
+it catch nothing, because Python was fine. I did not write the same step
+for .NET.
+
+The repository could not have caught this: every test, gate and smoke
+here builds from the *projects*. The package is a different artifact
+with different contents, and nothing consumed it.
+
+Fixed with `PrivateAssets="all"` and a pack target that puts the
+assembly in `lib/net8.0/` — two assemblies, zero dependencies, verified
+by restoring from a local feed and running it against a live server. The
+workflow now does that before it will push. NuGet cannot replace a
+published version, so 5.1.0 is unlisted and the fix rides the next
+engine release.
+
+**Packing proves a file was written. Restoring proves someone can use
+it. Only the second was ever the question.**
+
 ## The generalisation
 
 Every one of these was found by asking what an installed package does,
@@ -107,3 +143,7 @@ all of them ran inside the tree.
 For anything that gets published, the check has to stand where the user
 stands: outside the tree, from a fresh install, with the thing the build
 was supposed to produce deleted first.
+
+And reading the artifact is not standing there. The .NET nuspec was
+inspected, understood, and shipped broken. **Install it and run it, or
+you have not checked it.**
