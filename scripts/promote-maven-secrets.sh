@@ -10,8 +10,8 @@
 #
 #   CENTRAL_USERNAME  ← ~/.gradle/gradle.properties  mavenCentralUsername
 #   CENTRAL_PASSWORD  ← ~/.gradle/gradle.properties  mavenCentralPassword
-#   SIGNING_KEY       ← sentori/.secrets/gpg/private.asc
-#   SIGNING_PASSWORD  ← sentori/.secrets/gpg/passphrase.txt
+#   SIGNING_KEY       ← .secrets/gpg/private.asc      (this repo, ignored)
+#   SIGNING_PASSWORD  ← .secrets/gpg/passphrase.txt   (this repo, ignored)
 #
 # Not `signingInMemoryKeyPassword` from the Gradle file: that key is
 # present with an EMPTY value, which reads as "configured" to anything
@@ -23,8 +23,8 @@
 # Nor is the key in the local GPG keyring the right one: that holds
 # FBD802632CFAD78B (smix SDK release signing), whose public half is on
 # no keyserver, while the artifacts on Central under jp.golia are signed
-# by 22BD3D63FE94A270 — the key in sentori/.secrets. Asking repo1 which
-# key signed the published .pom.asc is what settled it.
+# by 22BD3D63FE94A270 — the key in .secrets/gpg. Asking repo1 which key
+# signed the published .pom.asc is what settled it.
 #
 #   bash scripts/promote-maven-secrets.sh
 #   bash scripts/promote-maven-secrets.sh /path/to/other-key.asc  # override
@@ -34,11 +34,18 @@
 # land in shell history or a log.
 set -euo pipefail
 
+# Derived from the script's own location, not the caller's cwd: this is
+# run from wherever the operator happens to be standing.
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
 ORG=goliajp
 REPOS=kevy,sentori
 GRADLE_PROPS="$HOME/.gradle/gradle.properties"
 
-SECRETS_DIR="$HOME/workspace/goliajp/sentori/.secrets/gpg"
+# This repository's own copy. Credentials live beside the repo that uses
+# them rather than being read across a sibling checkout, which would tie
+# a kevy release to whether sentori happens to be cloned here.
+SECRETS_DIR="$ROOT/.secrets/gpg"
 KEYFILE="${1:-$SECRETS_DIR/private.asc}"
 PASSFILE="$SECRETS_DIR/passphrase.txt"
 if [ ! -f "$KEYFILE" ]; then
@@ -85,7 +92,7 @@ set_secret() { # name, value on stdin
     echo "  ✓ $1"
 }
 
-echo "→ the Portal token from ${GRADLE_PROPS/#$HOME/\~}"
+echo "→ the Portal token from ${GRADLE_PROPS/#$HOME/~}"
 for pair in "CENTRAL_USERNAME:mavenCentralUsername" \
             "CENTRAL_PASSWORD:mavenCentralPassword"; do
     name="${pair%%:*}" prop="${pair##*:}"
@@ -113,7 +120,7 @@ fi
 rm -rf "$PROOF"
 set_secret SIGNING_PASSWORD "$(cat "$PASSFILE")"
 
-echo "→ the signing key from ${KEYFILE/#$HOME/\~}"
+echo "→ the signing key from ${KEYFILE/#$HOME/~}"
 set_secret SIGNING_KEY "$(cat "$KEYFILE")"
 
 echo "→ what the org holds now"
