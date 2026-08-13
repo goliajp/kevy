@@ -30,7 +30,6 @@ PAGES[""] = {
     "blocks": [
         {
             "t": "hero",
-            "eyebrow": "kevy 4.0",
             "h1": "The data layer<br>for AI systems.",
             "lede": (
                 "Redis-compatible — your client connects unchanged. Faster on every "
@@ -42,7 +41,7 @@ PAGES[""] = {
             "ctas": [
                 {"label": "cargo install kevy", "href": "#start"},
                 {"label": "What it can do", "href": "#code"},
-                {"label": "Open the playground", "href": "play/"},
+                {"label": "Open the playground", "href": "#try"},
             ],
             "live_term": {
                 "hint": "type a command — SET, GET, TTL, INCR, KEYS, SUBSCRIBE, PUBLISH…",
@@ -972,7 +971,7 @@ const db = await open({ persist: { name: "app" } });""",
             "intro": "",
             "items": [
                 {"kicker": "Guide", "title": "Pub/sub", "body": "Channels, patterns, and what happens to a subscriber that falls behind.", "go": "Read it", "href": "docs/pubsub/"},
-                {"kicker": "Try it", "title": "Two tabs, no server", "body": "Open the playground in two tabs and publish from either one.", "go": "Playground", "href": "play/"},
+                {"kicker": "Try it", "title": "Two tabs, no server", "body": "Open the playground in two tabs and publish from either one.", "go": "Playground", "href": "#try"},
             ],
         },
     ],

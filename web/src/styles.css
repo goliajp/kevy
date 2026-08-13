@@ -847,3 +847,250 @@ footer .links a:hover {
     display: none;
   }
 }
+
+/* ── content blocks ───────────────────────────────────────────────────
+   The twelve block types the trilingual page content uses. They inherit
+   the page's type and rules; what each one adds is the shape its content
+   needs — a bar has to be drawn, a recipe has to show its cost, a tab has
+   to open without JavaScript. */
+
+.callout {
+  border: 1px solid var(--rule-strong);
+  border-left: 2px solid var(--accent);
+  border-radius: 3px;
+  background: var(--paper-raised);
+  padding: 1.1rem 1.25rem;
+  max-width: var(--measure);
+}
+/* A section about what the engine will NOT do is not a warning and not an
+   error — it is a boundary, and it reads better in ink than in red. */
+.callout.loss {
+  border-left-color: var(--ink);
+}
+.callout h3 {
+  font-family: var(--display);
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 0.4rem;
+}
+.callout p + p {
+  margin-top: 0.6rem;
+}
+
+/* Bars: two measured series, scaled to the largest value in the block, so
+   the chart cannot flatter one side by choosing its own axis. */
+.bars {
+  display: grid;
+  gap: 0.9rem;
+}
+.barrow {
+  display: grid;
+  grid-template-columns: minmax(6rem, 12rem) minmax(0, 1fr);
+  gap: 0.9rem;
+  align-items: center;
+}
+@media (max-width: 640px) {
+  .barrow {
+    grid-template-columns: 1fr;
+    gap: 0.25rem;
+  }
+}
+.barlabel {
+  font-size: 0.86rem;
+  color: var(--ink-soft);
+}
+.bartrack {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.bar {
+  height: 1.35rem;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 0.45rem;
+  border-radius: 2px;
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  white-space: nowrap;
+  min-width: 4.5rem;
+}
+.bar.us {
+  background: var(--accent);
+  color: #fff;
+}
+.bar.them {
+  background: var(--paper-sunk);
+  border: 1px solid var(--rule-strong);
+  color: var(--ink-soft);
+}
+
+.steps {
+  counter-reset: step;
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 1.4rem;
+  max-width: var(--measure);
+}
+.steps li {
+  counter-increment: step;
+  padding-left: 2.4rem;
+  position: relative;
+}
+.steps li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 0.05rem;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--accent);
+  border: 1px solid var(--rule-strong);
+  border-radius: 50%;
+  width: 1.6rem;
+  height: 1.6rem;
+  display: grid;
+  place-items: center;
+}
+.steps h3 {
+  font-family: var(--display);
+  font-size: 0.98rem;
+  font-weight: 600;
+}
+.steps p {
+  color: var(--ink-soft);
+  margin-top: 0.25rem;
+}
+.steps pre {
+  background: var(--paper-raised);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  margin-top: 0.5rem;
+}
+
+.faq details {
+  border-bottom: 1px solid var(--rule);
+  padding: 0.85rem 0;
+  max-width: var(--measure);
+}
+.faq summary {
+  cursor: pointer;
+  font-weight: 500;
+}
+.faq p {
+  color: var(--ink-soft);
+  margin-top: 0.5rem;
+}
+
+.recipe {
+  display: grid;
+  gap: 1px;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+}
+.recipe .step {
+  background: var(--paper);
+  padding: 0.9rem 1rem;
+}
+.recipe .rh {
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  color: var(--ink-faint);
+  margin-bottom: 0.4rem;
+}
+.recipe pre {
+  background: var(--paper-sunk);
+  border-radius: 3px;
+  padding: 0.6rem 0.7rem;
+  font-size: 0.8rem;
+}
+.recipe p {
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+  margin-top: 0.5rem;
+  max-width: var(--measure);
+}
+
+/* Tabs on radio inputs, not JavaScript: these pages are prerendered, and a
+   tab that needs a bundle to open does not open for a crawler or with
+   scripting off. */
+.tabs {
+  border: 1px solid var(--rule-strong);
+  border-radius: 4px;
+  overflow: hidden;
+  display: flex;
+  flex-wrap: wrap;
+}
+.tabinput {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.tablabel {
+  order: -1;
+  padding: 0.5rem 0.9rem;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  background: var(--paper-sunk);
+  border-bottom: 1px solid var(--rule-strong);
+  border-right: 1px solid var(--rule);
+  cursor: pointer;
+}
+.tabinput:checked + .tablabel {
+  background: var(--paper-raised);
+  color: var(--ink);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.tabpanel {
+  display: none;
+  width: 100%;
+  padding: 1rem 1.1rem;
+  background: var(--paper-raised);
+}
+.tabinput:checked ~ .tabpanel {
+  display: block;
+}
+.tabs > span {
+  display: contents;
+}
+
+.calc {
+  display: grid;
+  gap: 0.7rem;
+  max-width: 32rem;
+  border: 1px solid var(--rule-strong);
+  border-radius: 4px;
+  background: var(--paper-raised);
+  padding: 1.1rem 1.2rem;
+}
+.calc label {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 8rem auto;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.9rem;
+}
+.calc input {
+  font: inherit;
+  font-family: var(--mono);
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--rule-strong);
+  border-radius: 3px;
+  background: var(--paper);
+  color: var(--ink);
+  text-align: right;
+}
+.calc em {
+  font-style: normal;
+  font-size: 0.8rem;
+  color: var(--ink-faint);
+}
+.calc output {
+  font-family: var(--mono);
+  font-size: 1.15rem;
+  border-top: 1px solid var(--rule);
+  padding-top: 0.7rem;
+  margin-top: 0.2rem;
+}

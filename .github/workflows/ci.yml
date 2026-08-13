@@ -1173,3 +1173,10 @@ jobs:
         working-directory: web
       - name: the markdown renderers still agree
         run: python3 tools/check_md_port.py
+      # The written pages moved to the new site by being exported and
+      # rendered, not rewritten. These two prove the move lost nothing and
+      # that the export has not drifted from the Python content since.
+      - name: the content export is current
+        run: python3 tools/export_site_content.py --check
+      - name: every word of the written pages reached the site
+        run: python3 tools/check_site_content_parity.py

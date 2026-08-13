@@ -35,7 +35,6 @@ PAGES[""] = {
     "blocks": [
         {
             "t": "hero",
-            "eyebrow": "kevy 4.0",
             "h1": "AI システムのための<br>データレイヤ。",
             "lede": (
                 "Redis 互換——クライアントは、そのままつながります。どの操作でも、"
@@ -47,7 +46,7 @@ PAGES[""] = {
             "ctas": [
                 {"label": "cargo install kevy", "href": "#start"},
                 {"label": "何ができるのか", "href": "#code"},
-                {"label": "playground を開く", "href": "play/"},
+                {"label": "playground を開く", "href": "#try"},
             ],
             "live_term": {
                 "hint": "コマンドを入力——SET、GET、TTL、INCR、KEYS、SUBSCRIBE、PUBLISH…",
@@ -899,7 +898,7 @@ const db = await open({ persist: { name: "app" } });""",
             "intro": "",
             "items": [
                 {"kicker": "ガイド", "title": "pub/sub", "body": "チャネル、パターン、そして遅れた購読者に何が起きるのか。", "go": "読む", "href": "docs/pubsub/"},
-                {"kicker": "試す", "title": "2 つのタブ、サーバーなし", "body": "playground を 2 つのタブで開いて、どちらからでも publish してみてください。", "go": "Playground", "href": "play/"},
+                {"kicker": "試す", "title": "2 つのタブ、サーバーなし", "body": "playground を 2 つのタブで開いて、どちらからでも publish してみてください。", "go": "Playground", "href": "#try"},
             ],
         },
     ],
