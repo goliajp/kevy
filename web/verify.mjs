@@ -121,8 +121,12 @@ try {
   check('an unknown verb answers as data, not a crash', Boolean(await errText.jsonValue()))
 
   // ── the version is the workspace version ────────────────────────────
-  const shown = (await page.textContent('.brand .ver'))?.trim()
-  check('masthead version matches the workspace', shown === want, `page=${shown} cargo=${want}`)
+  const shown = await page.getAttribute('meta[name="generator"]', 'content')
+  check(
+    'the page declares the workspace version',
+    shown === `kevy ${want}`,
+    `page=${shown} cargo=${want}`,
+  )
 
   // The wasm build is the embedded store, not the server: it has no INFO
   // and no COMMAND. So the engine-side version is checked where it is
@@ -182,8 +186,8 @@ try {
   // the other — so one is opened and checked here rather than assumed.
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto(`${URL_.replace(/\/$/, '')}/docs/persistence/`, { waitUntil: 'domcontentloaded' })
-  const docVer = (await page.textContent('.brand .ver'))?.trim()
-  check('a reference page carries the same version', docVer === want, `page=${docVer}`)
+  const docVer = await page.getAttribute('meta[name="generator"]', 'content')
+  check('a reference page declares the same version', docVer === `kevy ${want}`, `page=${docVer}`)
   check('the reference nav rendered', (await page.locator('.docnav a').count()) > 10)
   check('the reference body rendered', (await page.locator('.docmain h1').count()) === 1)
 

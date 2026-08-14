@@ -94,6 +94,7 @@ export function renderDocPage(p: DocPage, css: string): string {
   return page(
     {
       lang: p.lang,
+      version: p.version,
       title: `${p.title} · kevy`,
       desc: p.desc,
       canonical: `${p.lang === 'en' ? '' : `/${p.lang}`}/docs/${p.slug}/`,
@@ -105,7 +106,6 @@ export function renderDocPage(p: DocPage, css: string): string {
     },
     <Layout
       lang={p.lang}
-      version={p.version}
       root={root}
       here="docs"
       langs={{ kind: 'links', href: (l) => twin(l, p.slug, p.depth), have: p.have }}
@@ -145,6 +145,7 @@ export function renderDocHub(p: HubPage, css: string): string {
   return page(
     {
       lang: p.lang,
+      version: p.version,
       title: `${HUB_TITLE[p.lang]} · kevy`,
       desc: HUB_LEDE[p.lang],
       canonical: `${p.lang === 'en' ? '' : `/${p.lang}`}/docs/`,
@@ -153,7 +154,6 @@ export function renderDocHub(p: HubPage, css: string): string {
     },
     <Layout
       lang={p.lang}
-      version={p.version}
       root={root}
       here="docs"
       langs={{ kind: 'links', href: (l) => `${langRoot(l)}docs/` }}

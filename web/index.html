@@ -11,6 +11,11 @@
     <link rel="canonical" href="https://kevy.golia.jp/" />
     <meta name="color-scheme" content="light" />
     <meta name="theme-color" content="#fcfbf8" />
+    <!-- The version, on the one page Vite builds rather than prerender.
+         %KEVY_VERSION% is substituted by the plugin in vite.config.ts, so
+         this is the same value every other page states and not a second
+         copy someone has to remember. -->
+    <meta name="generator" content="kevy %KEVY_VERSION%" />
     <link rel="icon" href="/kevy-logo.svg" type="image/svg+xml" />
 
     <meta property="og:type" content="website" />

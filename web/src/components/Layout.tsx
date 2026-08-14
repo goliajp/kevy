@@ -39,7 +39,6 @@ export type LangControl =
 
 export type LayoutProps = {
   lang: Lang
-  version: string
   /** `../` repeated — how far this page sits from the site root. */
   root: string
   /** Which nav entry is this page, so it can be marked current. */
@@ -54,7 +53,6 @@ export type LayoutProps = {
 
 export function Layout({
   lang,
-  version,
   root,
   here,
   langs,
@@ -70,8 +68,8 @@ export function Layout({
       <header className="masthead">
         <div className="masthead-inner">
           <a className="brand" href={langRoot}>
+            <img src={`${root}kevy-logo.svg`} alt="" width={26} height={26} />
             <span className="wordmark">kevy</span>
-            <span className="ver">{version}</span>
           </a>
           <nav className="topnav">
             {extraNav?.map((n, i) => (
@@ -137,7 +135,7 @@ export function Layout({
       )}
 
       <div className="shell">
-        <Footer lang={lang} />
+        <Footer lang={lang} root={root} />
       </div>
     </>
   )
@@ -153,6 +151,8 @@ function escapeAttr(s: string) {
 
 export type DocumentProps = {
   lang: Lang
+  /** Stated in a meta tag so every page can be held to the manifest. */
+  version: string
   title: string
   desc: string
   /** Absolute path on the site, e.g. `/docs/persistence/`. */
@@ -182,6 +182,7 @@ export function documentHtml(p: DocumentProps, body: string): string {
     <meta name="description" content="${escapeAttr(p.desc)}">
     <link rel="canonical" href="https://kevy.golia.jp${p.canonical}">
     ${alt}
+    <meta name="generator" content="kevy ${p.version}">
     <meta name="color-scheme" content="light">
     <meta name="theme-color" content="#fcfbf8">
     <link rel="icon" href="${p.root}kevy-logo.svg" type="image/svg+xml">

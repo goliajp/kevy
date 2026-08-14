@@ -90,6 +90,7 @@ export function renderPage(p: PageInput, css: string, calcJs: boolean): string {
   const html = page(
     {
       lang: p.lang,
+      version: p.version,
       title: p.title,
       desc: p.desc,
       canonical: `${p.lang === 'en' ? '' : `/${p.lang}`}/${p.slug ? `${p.slug}/` : ''}`,
@@ -99,7 +100,6 @@ export function renderPage(p: PageInput, css: string, calcJs: boolean): string {
     },
     <Layout
       lang={p.lang}
-      version={p.version}
       root={root}
       langs={{ kind: 'links', href: (l) => `${langRoot(l)}${p.slug ? `${p.slug}/` : ''}` }}
     >

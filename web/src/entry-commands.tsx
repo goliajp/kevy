@@ -87,6 +87,7 @@ export function renderCommandIndex(
   return page(
     {
       lang,
+      version,
       title: `${t.index} · kevy`,
       desc: t.lede(cmds.length),
       canonical: `${lang === 'en' ? '' : `/${lang}`}/docs/commands/`,
@@ -95,7 +96,6 @@ export function renderCommandIndex(
     },
     <Layout
       lang={lang}
-      version={version}
       root={root}
       here="commands"
       langs={{ kind: 'links', href: (l) => `${langRoot(l)}docs/commands/` }}
@@ -159,6 +159,7 @@ export function renderCommandPage(
   return page(
     {
       lang,
+      version,
       title: `${c.name} · kevy`,
       desc: c.summary,
       canonical: `${lang === 'en' ? '' : `/${lang}`}/docs/commands/${slugOf(c.name)}/`,
@@ -167,7 +168,6 @@ export function renderCommandPage(
     },
     <Layout
       lang={lang}
-      version={version}
       root={root}
       here="commands"
       langs={{ kind: 'links', href: (l) => `${langRoot(l)}docs/commands/${slugOf(c.name)}/` }}
