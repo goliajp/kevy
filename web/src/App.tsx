@@ -29,8 +29,12 @@ const EMBED_SNIPPET = `// the same engine, in your process — no server, no soc
 let db = kevy_embedded::Store::open("data/")?;
 db.set(b"user:1", b"alice", None)?;
 
-// python: pip install kevy   ·   go: go get github.com/goliajp/kevy-go/v5
-// flutter: flutter pub add flutter_kevy   ·   npm: @goliapkg/kevy`
+// and from six more languages, each on its own registry:
+//   pip install kevy
+//   go get github.com/goliajp/kevy-go/v5
+//   npm i @goliapkg/kevy-ts      (or @goliapkg/kevy for the browser)
+//   flutter pub add flutter_kevy
+//   jp.golia:kevy                (Maven Central)`
 
 // Measured, not claimed — bench/arena.sh on the lx64 bench box, 2026-08-13,
 // kevy 5.1.0 against valkey 9.1.1. Both servers pinned to cores 0-7 and the
@@ -270,7 +274,7 @@ export function App() {
           </div>
           <p className="caption">
             <T k="inst.docs" />{' '}
-            <a href={DOCS}>kevy.golia.jp/docs</a>
+            <a href={`${DOCS}bindings/`}>kevy.golia.jp/docs/bindings</a>
           </p>
         </Section>
 

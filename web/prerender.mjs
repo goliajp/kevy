@@ -46,7 +46,7 @@ const SECTIONS = [
   ['embed', { en: 'Embedding it', zh: '嵌入', ja: '組み込み' },
     ['wasm', 'embedded-listener', 'electron', 'tauri', 'iot']],
   ['clients', { en: 'Clients', zh: '客户端', ja: 'クライアント' },
-    ['clients', 'client-contract']],
+    ['clients', 'bindings', 'client-contract']],
   ['ref', { en: 'Reference', zh: '参考', ja: 'リファレンス' },
     ['boundaries', 'error-replies', 'rds-workloads', 'deploy-behind-a-proxy',
      'migration', 'UPGRADING']],
