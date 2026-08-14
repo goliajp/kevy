@@ -27,11 +27,24 @@ workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# The engine, cut to the surface the browser binding exposes: KV + TTL +
-# pub/sub (`core`) plus the AOF frame machinery (`persist`) that powers
-# host-mediated persistence. Index/replication/listener subsystems stay
-# out of the wasm closure.
-kevy-embedded = { path = "../kevy-embedded", version = "5.1.0", default-features = false, features = ["core", "persist"] }
+# The engine, at every feature a browser can actually run.
+#
+# KV + TTL + pub/sub (`core`), the AOF frame machinery behind
+# host-mediated persistence (`persist`), and the three that make kevy more
+# than a key-value store: secondary indexes and materialised views
+# (`index`), full-text search (`text`), and vector search (`vector`).
+#
+# It was `core` + `persist` alone, which cost 714 KB less and made the
+# terminal on the landing page unable to run a single one of the verbs
+# that page is about — `IDX.CREATE` came back "unknown command" beside
+# prose promising indexes live in the engine. A demo that cannot do the
+# thing being claimed argues against the claim.
+#
+# The three left out are left out because a browser has nowhere to put
+# them, not to save bytes: `replicate` needs a network peer, `listener`
+# needs a TCP socket, and `tier` needs a disk directory — its own docs
+# say a wasm store rejects the config at open.
+kevy-embedded = { path = "../kevy-embedded", version = "5.1.0", default-features = false, features = ["core", "persist", "index", "text", "vector"] }
 # Clock access: TTL frames record absolute deadlines, anchored to the
 # host-fed wall clock.
 kevy-store = { path = "../kevy-store", version = "5.1.0" }
