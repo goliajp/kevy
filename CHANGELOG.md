@@ -1,6 +1,27 @@
 # Changelog
 
-## [Unreleased]
+## 5.2.0 — the browser gets the whole data layer
+
+Two things a reader could reach for and not find. The browser build was
+compiled without the features the landing page is about, and the Lua
+runtime was three minor versions behind a set of dialect corrections.
+Nothing changed on the wire, and every 5.1 data directory opens as-is.
+
+### Added
+
+- **The WebAssembly build carries the whole embedded surface.** It was
+  compiled `features = ["core", "persist"]`, so `IDX.*`, `VIEW.*` and
+  `TABLE.*` answered `unknown command` in the browser — on a page whose
+  argument is that kevy does secondary indexes, full-text and vector
+  search inside the engine. `index`, `text` and `vector` are on now.
+  726 KB → 1441 KB (481 KB gzipped).
+
+  What stays out needs something a browser cannot provide, rather than
+  bytes saved: `replicate` a network peer, `listener` a TCP socket,
+  `tier` a disk directory. Streams, transactions, geo and scripting are
+  outside the embedded engine's verb surface on every platform — the
+  boundary is the ESTORE_OPS manifest, not this build. `cmd` reaches
+  112 of the 191 verbs the server answers.
 
 ### Changed
 

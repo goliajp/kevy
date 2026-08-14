@@ -1,6 +1,6 @@
 name: flutter_kevy
 description: "kevy embedded in Flutter over dart:ffi — the real pure-Rust Redis-compatible engine in your app: TTL, hashes/lists/zsets, pub/sub, persistence. The MMKV shape, and everything MMKV lacks."
-version: 5.1.0
+version: 5.2.0
 homepage: https://kevy.golia.jp
 repository: https://github.com/goliajp/kevy
 
