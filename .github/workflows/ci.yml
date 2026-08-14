@@ -1187,6 +1187,11 @@ jobs:
         working-directory: web
       - name: the markdown renderers still agree
         run: python3 tools/check_md_port.py
+      # The size the site quotes is the size of the wasm it ships. It said
+      # 218 KB in three languages for a build that was 481 KB, because the
+      # number was measured once and then quoted forever.
+      - name: the quoted wasm size is the wasm's size
+        run: python3 tools/check_wasm_size.py
       # The written pages moved to the new site by being exported and
       # rendered, not rewritten. These two prove the move lost nothing and
       # that the export has not drifted from the Python content since.

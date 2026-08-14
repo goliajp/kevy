@@ -175,7 +175,7 @@ cargo install kevy && kevy --port 6379
 let db = Db::open("data/")?;
 db.set(b"k", b"v", None)?;
 
-# a browser tab — 218 KB, persists to OPFS
+# a browser tab — 481 KB, persists to OPFS
 const db = await open({ persist: { name: "app" } });
 
 # a microcontroller — no OS, no allocator
@@ -494,7 +494,7 @@ PAGES["choose"] = {
                 ["One program owns the data", "Embedded",
                  "No socket, no second process, nothing to serialise. A function call, not a round trip."],
                 ["The data belongs to the user's device", "Browser",
-                 "218 KB of WebAssembly. Real TTLs and pub/sub, persisted to the browser's filesystem. Works offline."],
+                 "481 KB of WebAssembly. Real TTLs and pub/sub, persisted to the browser's filesystem. Works offline."],
                 ["Code runs at the edge, per request", "Edge",
                  "Nothing to warm up, no connection to open. The store is in the isolate with your code."],
                 ["A device with no OS and no heap", "Bare metal",
@@ -1307,7 +1307,7 @@ PAGES["use/embedded"] = {
             "h1": "Put the store<br>inside the thing",
             "lede": (
                 "No server, no socket, no network. The engine is a struct you call, a "
-                "218 KB WebAssembly module, or a no_std library on a chip with no "
+                "481 KB WebAssembly module, or a no_std library on a chip with no "
                 "operating system — <b>and it is the same engine, with the same "
                 "commands, in all three.</b>"
             ),
@@ -1365,7 +1365,7 @@ assert_eq!(db.get(b"session:7f3a")?.is_some(), true);""",
         {
             "t": "recipe",
             "h2": "In a browser tab",
-            "goal": "218 KB gzipped. Persists to the browser's own filesystem, survives a reload, and speaks pub/sub across tabs.",
+            "goal": "481 KB gzipped. Persists to the browser's own filesystem, survives a reload, and speaks pub/sub across tabs.",
             "cost_t": "Cost & limits",
             "items": [
                 {
@@ -1500,7 +1500,7 @@ PAGES["benchmarks"] = {
             "head": ["", "Size", ""],
             "rows": [
                 ["kevy.wasm", "416 KB", "the engine, uncompressed"],
-                ["gzipped", "218 KB", "what crosses the wire"],
+                ["gzipped", "481 KB", "what crosses the wire"],
                 ["Cold start", "&lt; 20 ms", "compile and instantiate, warm cache"],
             ],
             "note": (

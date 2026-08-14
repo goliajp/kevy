@@ -89,7 +89,7 @@
               "note": "Resumable offsets. Nothing to poll, nothing to miss."
             },
             {
-              "code": "# a 16-core server\ncargo install kevy && kevy --port 6379\n\n# inside your binary — no socket, no process\nlet db = Db::open(\"data/\")?;\ndb.set(b\"k\", b\"v\", None)?;\n\n# a browser tab — 218 KB, persists to OPFS\nconst db = await open({ persist: { name: \"app\" } });\n\n# a microcontroller — no OS, no allocator\nlet mut store = Store::new_in(&mut arena);",
+              "code": "# a 16-core server\ncargo install kevy && kevy --port 6379\n\n# inside your binary — no socket, no process\nlet db = Db::open(\"data/\")?;\ndb.set(b\"k\", b\"v\", None)?;\n\n# a browser tab — 481 KB, persists to OPFS\nconst db = await open({ persist: { name: \"app\" } });\n\n# a microcontroller — no OS, no allocator\nlet mut store = Store::new_in(&mut arena);",
               "go": "Embedding kevy",
               "href": "use/embedded/",
               "label": "Anywhere",
@@ -302,7 +302,7 @@
             ],
             [
               "gzipped",
-              "218 KB",
+              "481 KB",
               "what crosses the wire"
             ],
             [
@@ -424,7 +424,7 @@
             [
               "The data belongs to the user's device",
               "Browser",
-              "218 KB of WebAssembly. Real TTLs and pub/sub, persisted to the browser's filesystem. Works offline."
+              "481 KB of WebAssembly. Real TTLs and pub/sub, persisted to the browser's filesystem. Works offline."
             ],
             [
               "Code runs at the edge, per request",
@@ -1005,7 +1005,7 @@
         {
           "eyebrow": "Ship it inside",
           "h1": "Put the store<br>inside the thing",
-          "lede": "No server, no socket, no network. The engine is a struct you call, a 218 KB WebAssembly module, or a no_std library on a chip with no operating system — <b>and it is the same engine, with the same commands, in all three.</b>",
+          "lede": "No server, no socket, no network. The engine is a struct you call, a 481 KB WebAssembly module, or a no_std library on a chip with no operating system — <b>and it is the same engine, with the same commands, in all three.</b>",
           "t": "hero"
         },
         {
@@ -1041,7 +1041,7 @@
         {
           "cost": "<b>localStorage is faster for a small synchronous read</b> — it is a map in the page's own address space, and nothing built on OPFS will beat it at that. kevy wins on everything that makes localStorage a bad idea anyway: real TTLs, no 5 MB ceiling, byte values rather than strings, and writes that do not block the main thread.",
           "cost_t": "Cost & limits",
-          "goal": "218 KB gzipped. Persists to the browser's own filesystem, survives a reload, and speaks pub/sub across tabs.",
+          "goal": "481 KB gzipped. Persists to the browser's own filesystem, survives a reload, and speaks pub/sub across tabs.",
           "h2": "In a browser tab",
           "items": [
             {
@@ -1390,7 +1390,7 @@
               "note": "再開可能なオフセット。ポーリングするものも、取りこぼすものもありません。"
             },
             {
-              "code": "# a 16-core server\ncargo install kevy && kevy --port 6379\n\n# inside your binary — no socket, no process\nlet db = Db::open(\"data/\")?;\ndb.set(b\"k\", b\"v\", None)?;\n\n# a browser tab — 218 KB, persists to OPFS\nconst db = await open({ persist: { name: \"app\" } });\n\n# a microcontroller — no OS, no allocator\nlet mut store = Store::new_in(&mut arena);",
+              "code": "# a 16-core server\ncargo install kevy && kevy --port 6379\n\n# inside your binary — no socket, no process\nlet db = Db::open(\"data/\")?;\ndb.set(b\"k\", b\"v\", None)?;\n\n# a browser tab — 481 KB, persists to OPFS\nconst db = await open({ persist: { name: \"app\" } });\n\n# a microcontroller — no OS, no allocator\nlet mut store = Store::new_in(&mut arena);",
               "go": "kevy を組み込む",
               "href": "use/embedded/",
               "label": "どこでも",
@@ -1603,7 +1603,7 @@
             ],
             [
               "gzip 後",
-              "218 KB",
+              "481 KB",
               "回線を流れる量"
             ],
             [
@@ -1725,7 +1725,7 @@
             [
               "データはユーザーの端末のもの",
               "ブラウザ",
-              "218 KB の WebAssembly。本物の TTL と pub/sub があり、ブラウザのファイルシステムに永続化されます。オフラインでも動きます。"
+              "481 KB の WebAssembly。本物の TTL と pub/sub があり、ブラウザのファイルシステムに永続化されます。オフラインでも動きます。"
             ],
             [
               "リクエストごとに、エッジで動く",
@@ -2306,7 +2306,7 @@
         {
           "eyebrow": "中に組み込む",
           "h1": "ストアを、<br>そのものの中へ",
-          "lede": "サーバーもソケットもネットワークもありません。エンジンは、呼び出せる struct であり、218 KB の WebAssembly モジュールであり、OS のないチップの上の no_std ライブラリです——<b>そして 3 つとも、同じコマンドを持つ、同じエンジンです。</b>",
+          "lede": "サーバーもソケットもネットワークもありません。エンジンは、呼び出せる struct であり、481 KB の WebAssembly モジュールであり、OS のないチップの上の no_std ライブラリです——<b>そして 3 つとも、同じコマンドを持つ、同じエンジンです。</b>",
           "t": "hero"
         },
         {
@@ -2342,7 +2342,7 @@
         {
           "cost": "<b>小さな同期の読み取りなら、localStorage のほうが速いです</b>——あれはページ自身のアドレス空間にあるマップであり、OPFS の上に作られたものが、そこで勝つことはありません。kevy が勝つのは、そもそも localStorage を選ぶべきでない理由のほうです。本物の TTL、5 MB の上限がないこと、値が文字列ではなくバイト列であること、そして書き込みがメインスレッドを止めないこと。",
           "cost_t": "コストと制約",
-          "goal": "gzip 後 218 KB。ブラウザ自身のファイルシステムに永続化され、リロードに耐え、タブをまたいで pub/sub を話します。",
+          "goal": "gzip 後 481 KB。ブラウザ自身のファイルシステムに永続化され、リロードに耐え、タブをまたいで pub/sub を話します。",
           "h2": "ブラウザのタブで",
           "items": [
             {
@@ -2691,7 +2691,7 @@
               "note": "偏移量可以续上。不用轮询，也不会漏。"
             },
             {
-              "code": "# a 16-core server\ncargo install kevy && kevy --port 6379\n\n# inside your binary — no socket, no process\nlet db = Db::open(\"data/\")?;\ndb.set(b\"k\", b\"v\", None)?;\n\n# a browser tab — 218 KB, persists to OPFS\nconst db = await open({ persist: { name: \"app\" } });\n\n# a microcontroller — no OS, no allocator\nlet mut store = Store::new_in(&mut arena);",
+              "code": "# a 16-core server\ncargo install kevy && kevy --port 6379\n\n# inside your binary — no socket, no process\nlet db = Db::open(\"data/\")?;\ndb.set(b\"k\", b\"v\", None)?;\n\n# a browser tab — 481 KB, persists to OPFS\nconst db = await open({ persist: { name: \"app\" } });\n\n# a microcontroller — no OS, no allocator\nlet mut store = Store::new_in(&mut arena);",
               "go": "把 kevy 嵌进去",
               "href": "use/embedded/",
               "label": "哪里都能放",
@@ -2904,7 +2904,7 @@
             ],
             [
               "gzip 之后",
-              "218 KB",
+              "481 KB",
               "真正过网络的量"
             ],
             [
@@ -3026,7 +3026,7 @@
             [
               "数据属于用户的设备",
               "浏览器",
-              "218 KB 的 WebAssembly。真的 TTL，真的发布订阅，落在浏览器自己的文件系统上。离线也能用。"
+              "481 KB 的 WebAssembly。真的 TTL，真的发布订阅，落在浏览器自己的文件系统上。离线也能用。"
             ],
             [
               "代码在边缘按请求执行",
@@ -3607,7 +3607,7 @@
         {
           "eyebrow": "装进产品里",
           "h1": "把存储<br>放进东西本身",
-          "lede": "没有服务端，没有 socket，没有网络。这个引擎可以是一个你直接调用的 struct，可以是一个 218 KB 的 WebAssembly 模块，也可以是一颗没有操作系统的芯片上的 no_std 库——<b>而且这三种情况下，它是同一个引擎、同一批命令。</b>",
+          "lede": "没有服务端，没有 socket，没有网络。这个引擎可以是一个你直接调用的 struct，可以是一个 481 KB 的 WebAssembly 模块，也可以是一颗没有操作系统的芯片上的 no_std 库——<b>而且这三种情况下，它是同一个引擎、同一批命令。</b>",
           "t": "hero"
         },
         {
@@ -3643,7 +3643,7 @@
         {
           "cost": "<b>做一次小的同步读，localStorage 更快</b>——它就是页面自己地址空间里的一个 map，任何建在 OPFS 上的东西都赢不了它这一点。kevy 赢在那些本来就让 localStorage 不该被用的地方：真的 TTL、没有 5 MB 上限、value 是字节而不是字符串、写入不挡主线程。",
           "cost_t": "成本与限制",
-          "goal": "gzip 之后 218 KB。落在浏览器自己的文件系统上，刷新之后还在，发布订阅还能跨标签页。",
+          "goal": "gzip 之后 481 KB。落在浏览器自己的文件系统上，刷新之后还在，发布订阅还能跨标签页。",
           "h2": "在一个浏览器标签页里",
           "items": [
             {

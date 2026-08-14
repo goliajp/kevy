@@ -49,6 +49,7 @@ run "README benchmarks"    python3 tools/sync_readme_bench.py --check
 run "action versions"      python3 tools/check_action_versions.py
 run "content export"       python3 tools/export_site_content.py --check
 run "markdown port"        python3 tools/check_md_port.py
+run "wasm size"            python3 tools/check_wasm_size.py
 # The site's own gates need a build, which needs node_modules. Offered
 # rather than assumed: a checkout without them should still get every
 # other check rather than one red line about a missing directory.
@@ -69,7 +70,7 @@ fi
 # Derived from ci.yml rather than hand-listed, so a newly added CI step
 # shows up here as uncovered instead of being silently missed.
 printf '\n\033[1m== CI steps NOT covered by this run\033[0m\n'
-COVERED_KEYS="clippy locgate.sh commentgate.sh killgate.sh vendorgate.sh gen_docs check_cjk_punct sync_readme_bench export_site_content check_md_port check.mjs check_site_content_parity"
+COVERED_KEYS="clippy locgate.sh commentgate.sh killgate.sh vendorgate.sh gen_docs check_cjk_punct sync_readme_bench export_site_content check_md_port check_wasm_size check.mjs check_site_content_parity"
 [ "$WITH_TESTS" = 1 ] && COVERED_KEYS="$COVERED_KEYS cargo build --workspace|cargo test --workspace"
 
 COVERED_KEYS="$COVERED_KEYS" python3 - <<'PY'
