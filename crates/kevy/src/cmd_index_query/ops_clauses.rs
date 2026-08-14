@@ -57,8 +57,11 @@ fn nofield_error(clause: &str, bad: &[u8], offered: &[&[u8]]) -> Vec<u8> {
 
 fn clause_text(clause: &str, bad: &[u8], verb: &str, offered: &[&[u8]]) -> String {
     format!(
-        "{clause} names field '{}', which this index does not {verb} — it {verb}es: {}",
+        "{clause} names field '{}', which this index does not {verb} — it {}: {}",
         String::from_utf8_lossy(bad),
+        // Third person singular: a sibilant takes -es ("indexes"), anything
+        // else takes -s ("stores"). `{verb}es` for both printed "storees".
+        if verb.ends_with(['s', 'x', 'z']) { format!("{verb}es") } else { format!("{verb}s") },
         String::from_utf8_lossy(&offered.join(&b", "[..])),
     )
 }

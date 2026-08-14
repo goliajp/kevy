@@ -250,7 +250,7 @@ fn clause_errors_name_the_field_and_the_type() {
     let s = seeded();
     assert_eq!(
         String::from_utf8_lossy(&q(&s, &[b"FILTER", b"nope", b"EQ", b"1"])),
-        "-ERR IDX.QUERY 'vals': FILTER names field 'nope', which this index does not store — it storees: city, price\r\n"
+        "-ERR IDX.QUERY 'vals': FILTER names field 'nope', which this index does not store — it stores: city, price\r\n"
     );
     assert_eq!(
         String::from_utf8_lossy(&q(&s, &[b"FILTER", b"price", b"EQ", b"abc"])),
@@ -258,7 +258,7 @@ fn clause_errors_name_the_field_and_the_type() {
     );
     assert_eq!(
         String::from_utf8_lossy(&q(&s, &[b"SORT", b"nope", b"ASC"])),
-        "-ERR IDX.QUERY 'vals': SORT names field 'nope', which this index does not store — it storees: city, price\r\n"
+        "-ERR IDX.QUERY 'vals': SORT names field 'nope', which this index does not store — it stores: city, price\r\n"
     );
 }
 
