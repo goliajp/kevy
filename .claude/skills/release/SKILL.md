@@ -66,6 +66,27 @@ one command away and beats any amount of reasoning:
 strings <artifact> | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -u
 ```
 
+### The READMEs quote measurements
+
+Three READMEs carry the benchmark tables. They are generated from the
+most recent `arena bare face` entry in `bench/PERF-LEDGER.md`, not typed:
+
+```sh
+python3 tools/sync_readme_bench.py          # rewrite from the ledger
+python3 tools/sync_readme_bench.py --check  # in CI and pushgate
+```
+
+**If the numbers are old, re-measure — do not relabel.** A benchmark
+table headed with a version is a statement about which build was
+measured, and changing the header to the current release turns an honest
+record into a false claim. `bash bench/arena.sh <kevy-binary>` on the
+lx64 box produces a new ledger entry; the sync then carries it into the
+READMEs and the site.
+
+The READMEs went a whole release line showing v4-era numbers under a 5.1.0
+tag for exactly this reason: nothing tied them to a measurement, so
+nothing said they had stopped being true.
+
 ## 2. Before the tag
 
 Every one of these has failed at least once here.

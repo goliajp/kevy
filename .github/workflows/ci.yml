@@ -127,6 +127,12 @@ jobs:
       - name: version alignment (six layers agree with the workspace)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_version_alignment.py
+      # The READMEs quote benchmark numbers. They were hand-written from a
+      # v4-era run and still showing it under a 5.1.0 release, because
+      # nothing tied them to a measurement. They come from the ledger now.
+      - name: README benchmarks match the ledger
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python3 tools/sync_readme_bench.py --check
       - name: doc configs (every ```toml in docs/ actually loads)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
