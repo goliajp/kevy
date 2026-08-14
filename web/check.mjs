@@ -121,8 +121,17 @@ for (const f of pages) {
     const target = path.startsWith('/')
       ? join(DIST, path)
       : resolve(dirname(f), path)
-    const ok = existsSync(target) || existsSync(join(target, 'index.html'))
-    if (!ok) fail(`${relative(DIST, f)}: dead link ${href}`)
+    // A directory is not a page. `existsSync(dist/docs)` is true because
+    // the directory holds 36 subdirectories — and the link to /docs/ went
+    // to a 404 for every visitor while this check reported it fine. What a
+    // static server can serve is a FILE, or a directory that has an
+    // index.html inside it.
+    const ok = statSync(target, { throwIfNoEntry: false })?.isDirectory()
+      ? existsSync(join(target, 'index.html'))
+      : existsSync(target)
+    if (!ok) {
+      fail(`${relative(DIST, f)}: dead link ${href}`)
+    }
   }
 }
 
