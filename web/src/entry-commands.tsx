@@ -1,13 +1,12 @@
-import { renderToStaticMarkup } from 'react-dom/server'
+import { type Lang, Layout, page } from './components/Layout'
 
-import { Footer } from './components/Footer'
+// The command reference: one page per verb, plus an index, through the
+// same Layout as everything else. Generated from web/src/commands.json,
+// which the engine's own gen_docs binary writes out of VERB_META — a verb
+// that gains a flag changes these pages by changing the code, and there is
+// no second description to update.
 
-// The command reference: one page per verb, plus an index. Generated from
-// site/data/commands.json, which is itself generated from VERB_META in the
-// engine — so a verb that gains a flag or loses an argument changes these
-// pages by changing the code, and there is no second description to update.
-
-export type Lang = 'en' | 'zh' | 'ja'
+export type { Lang }
 
 export type Command = {
   name: string
@@ -23,9 +22,6 @@ export type Command = {
 
 const L = {
   en: {
-    docs: 'Docs',
-    home: 'Home',
-    commands: 'Commands',
     index: 'Command reference',
     lede: (n: number) =>
       `Every verb the engine answers — ${n} of them, generated from the same table the server dispatches on.`,
@@ -39,11 +35,8 @@ const L = {
     all: 'All commands',
   },
   zh: {
-    docs: '文档',
-    home: '首页',
-    commands: '命令',
     index: '命令参考',
-    lede: (n: number) => `引擎能回答的每一条动词 —— 共 ${n} 条，与服务端分发所用的是同一张表。`,
+    lede: (n: number) => `引擎能回答的每一条动词 —— 共 ${n} 条,与服务端分发所用的是同一张表。`,
     syntax: '语法',
     since: '起始版本',
     complexity: '复杂度',
@@ -54,9 +47,6 @@ const L = {
     all: '全部命令',
   },
   ja: {
-    docs: 'ドキュメント',
-    home: 'ホーム',
-    commands: 'コマンド',
     index: 'コマンドリファレンス',
     lede: (n: number) =>
       `エンジンが応答するすべての動詞——全 ${n} 件。サーバーがディスパッチに使う表から生成しています。`,
@@ -71,90 +61,11 @@ const L = {
   },
 } as const
 
-const LANG_HTML: Record<Lang, string> = { en: 'en', zh: 'zh-CN', ja: 'ja' }
-const LANG_LABEL: Record<Lang, string> = { en: 'EN', zh: '中文', ja: '日本語' }
+const up = (depth: number) => '../'.repeat(depth)
 
-function up(depth: number) {
-  return '../'.repeat(depth)
-}
-
-function Chrome({
-  lang,
-  depth,
-  version,
-  here,
-  children,
-}: {
-  lang: Lang
-  depth: number
-  version: string
-  /** `''` for the index, otherwise the verb name. */
-  here: string
-  children: React.ReactNode
-}) {
-  const root = up(depth)
-  const langRoot = (l: Lang) => (l === 'en' ? root : `${root}${l}/`)
-  return (
-    <>
-      <header className="masthead">
-        <div className="masthead-inner">
-          <a className="brand" href={langRoot(lang)}>
-            <span className="wordmark">kevy</span>
-            <span className="ver">{version}</span>
-          </a>
-          <nav className="topnav">
-            <a href={langRoot(lang)}>{L[lang].home}</a>
-            <a href={`${langRoot(lang)}docs/`}>{L[lang].docs}</a>
-            <div className="langswitch" role="group" aria-label="language">
-              {(['en', 'zh', 'ja'] as Lang[]).map((l) => (
-                <a
-                  key={l}
-                  className={l === lang ? 'on' : ''}
-                  href={`${langRoot(l)}docs/commands/${here ? `${here.toLowerCase()}/` : ''}`}
-                  hrefLang={LANG_HTML[l]}
-                >
-                  {LANG_LABEL[l]}
-                </a>
-              ))}
-            </div>
-          </nav>
-        </div>
-      </header>
-      <div className="shell">{children}</div>
-      <div className="shell">
-        <Footer lang={lang} />
-      </div>
-    </>
-  )
-}
-
-function esc(s: string) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-}
-
-function doc(lang: Lang, title: string, desc: string, canonical: string, depth: number, css: string, body: string) {
-  return `<!doctype html>
-<html lang="${LANG_HTML[lang]}">
-  <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${esc(title)} · kevy</title>
-    <meta name="description" content="${esc(desc)}">
-    <link rel="canonical" href="https://kevy.golia.jp${canonical}">
-    <meta name="color-scheme" content="light">
-    <meta name="theme-color" content="#fcfbf8">
-    <link rel="icon" href="${up(depth)}kevy-logo.svg" type="image/svg+xml">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="${up(depth)}${css}">
-  </head>
-  <body>
-${body}
-  </body>
-</html>
-`
-}
+/** A verb name can carry a dot (IDX.CREATE); the directory has to survive
+ *  a filesystem and a URL both. */
+export const slugOf = (name: string) => name.toLowerCase().replace(/[^a-z0-9.]/g, '-')
 
 export function renderCommandIndex(
   lang: Lang,
@@ -164,17 +75,33 @@ export function renderCommandIndex(
   css: string,
 ): string {
   const t = L[lang]
-  // Grouped, because 191 verbs in one alphabetical run is a list nobody
-  // reads. The groups come from the engine's own table.
+  const root = up(depth)
+  const langRoot = (l: Lang) => (l === 'en' ? root : `${root}${l}/`)
+  // Grouped: 191 verbs in one alphabetical run is a list nobody reads. The
+  // groups come from the engine's own table.
   const groups = new Map<string, Command[]>()
   for (const c of cmds) {
     if (!groups.has(c.group)) groups.set(c.group, [])
     groups.get(c.group)!.push(c)
   }
-  const body = renderToStaticMarkup(
-    <Chrome lang={lang} depth={depth} version={version} here="">
+  return page(
+    {
+      lang,
+      title: `${t.index} · kevy`,
+      desc: t.lede(cmds.length),
+      canonical: `${lang === 'en' ? '' : `/${lang}`}/docs/commands/`,
+      root,
+      css,
+    },
+    <Layout
+      lang={lang}
+      version={version}
+      root={root}
+      here="commands"
+      langs={{ kind: 'links', href: (l) => `${langRoot(l)}docs/commands/` }}
+    >
       <section className="frontmatter">
-        <div className="eyebrow">{t.commands}</div>
+        <div className="eyebrow">{t.index}</div>
         <h1>{t.index}</h1>
         <p className="abstract">{t.lede(cmds.length)}</p>
       </section>
@@ -193,7 +120,7 @@ export function renderCommandIndex(
                     .map((c) => (
                       <tr key={c.name}>
                         <td style={{ whiteSpace: 'nowrap' }}>
-                          <a href={`${c.name.toLowerCase().replace(/[^a-z0-9.]/g, '-')}/`}>
+                          <a href={`${slugOf(c.name)}/`}>
                             <code>{c.name}</code>
                           </a>
                         </td>
@@ -205,16 +132,7 @@ export function renderCommandIndex(
             </div>
           </section>
         ))}
-    </Chrome>,
-  )
-  return doc(
-    lang,
-    t.index,
-    t.lede(cmds.length),
-    `${lang === 'en' ? '' : `/${lang}`}/docs/commands/`,
-    depth,
-    css,
-    body,
+    </Layout>,
   )
 }
 
@@ -226,6 +144,8 @@ export function renderCommandPage(
   css: string,
 ): string {
   const t = L[lang]
+  const root = up(depth)
+  const langRoot = (l: Lang) => (l === 'en' ? root : `${root}${l}/`)
   const rows: [string, React.ReactNode][] = [
     [t.syntax, <code>{c.syntax}</code>],
     [t.group, c.group],
@@ -236,13 +156,27 @@ export function renderCommandPage(
   if (c.complexity) rows.push([t.complexity, c.complexity])
   if (c.compat) rows.push([t.compat, c.compat])
 
-  const body = renderToStaticMarkup(
-    <Chrome lang={lang} depth={depth} version={version} here={c.name}>
+  return page(
+    {
+      lang,
+      title: `${c.name} · kevy`,
+      desc: c.summary,
+      canonical: `${lang === 'en' ? '' : `/${lang}`}/docs/commands/${slugOf(c.name)}/`,
+      root,
+      css,
+    },
+    <Layout
+      lang={lang}
+      version={version}
+      root={root}
+      here="commands"
+      langs={{ kind: 'links', href: (l) => `${langRoot(l)}docs/commands/${slugOf(c.name)}/` }}
+    >
       <section className="frontmatter">
         <div className="breadcrumb">
-          <a href={up(depth) + (lang === 'en' ? '' : `${lang}/`)}>kevy</a>
+          <a href={langRoot(lang)}>kevy</a>
           {' / '}
-          <a href="../">{t.commands}</a>
+          <a href="../">{t.all}</a>
         </div>
         <h1>
           <code>{c.name}</code>
@@ -264,15 +198,6 @@ export function renderCommandPage(
           <a href="../">← {t.all}</a>
         </p>
       </section>
-    </Chrome>,
-  )
-  return doc(
-    lang,
-    c.name,
-    c.summary,
-    `${lang === 'en' ? '' : `/${lang}`}/docs/commands/${c.name.toLowerCase()}/`,
-    depth,
-    css,
-    body,
+    </Layout>,
   )
 }
