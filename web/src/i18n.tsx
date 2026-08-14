@@ -83,6 +83,19 @@ const dict: Dict = {
     zh: '与服务端同一份二进制，只是去掉了网络。状态活在这个标签页里，关掉即消失。',
     ja: 'サーバーが動かすものと同じバイナリから、ネットワークだけを外したもの。状態はこのタブ内にあり、閉じると消えます。',
   },
+  'term.scenarios': { en: 'What to run', zh: '跑哪一段', ja: '何を実行するか' },
+  'term.pick': {
+    en: 'Pick one — each builds its own rows, then asks a question of them.',
+    zh: '挑一个 —— 每段先建自己的数据,再对它提问。',
+    ja: 'ひとつ選ぶ——各段はまず自分のデータを作り、それに問いを立てます。',
+  },
+  'term.prompt': { en: 'type a command', zh: '输入命令', ja: 'コマンドを入力' },
+  'term.reset': { en: 'clear', zh: '清空', ja: 'クリア' },
+  'term.reach': {
+    en: '112 of the 191 server verbs — the embedded surface. Arrow keys walk history; a pasted block runs line by line.',
+    zh: '服务端 191 条动词中的 112 条 —— 嵌入式面。方向键翻历史,整段粘贴逐行执行。',
+    ja: 'サーバーの 191 動詞のうち 112——組み込み面。矢印キーで履歴、貼り付けたブロックは一行ずつ実行。',
+  },
   'term.booting': { en: 'starting engine…', zh: '正在启动引擎…', ja: 'エンジン起動中…' },
   'term.live': { en: 'live', zh: '运行中', ja: '実行中' },
   'term.failed': {

@@ -11,14 +11,13 @@ import { Brand } from './Brand'
 
 export type Lang = 'en' | 'zh' | 'ja'
 
-// Never a typed year. On the landing page this evaluates in the reader's
-// browser; on the prerendered pages it evaluates at build time, and the
-// release gate rebuilds the site every release. A hardcoded one goes
-// wrong on 1 January and stays wrong.
-const LICENSE: Record<Lang, (y: number) => string> = {
-  en: (y) => `MIT or Apache-2.0 · © ${y} GOLIA K.K.`,
-  zh: (y) => `MIT 或 Apache-2.0 · © ${y} GOLIA K.K.`,
-  ja: (y) => `MIT または Apache-2.0 · © ${y} GOLIA K.K.`,
+// The same line tiktoken.golia.jp carries, in the same words: the GOLIA
+// wordmark above it already says whose publication this is, so a second
+// "GOLIA K.K." beside a year says it twice and dates the page besides.
+const LICENSE: Record<Lang, string> = {
+  en: 'Released under MIT OR Apache-2.0',
+  zh: '以 MIT OR Apache-2.0 双许可发布',
+  ja: 'MIT OR Apache-2.0 のデュアルライセンスで公開',
 }
 
 // crates.io has no simple-icons entry; lucide's Package is what a crate
@@ -47,7 +46,7 @@ export function Footer({ lang, root = './' }: { lang: Lang; root?: string }) {
         >
           <img src={`${root}golia-wordmark.png`} alt="GOLIA" width={92} height={20} />
         </a>
-        <div>{LICENSE[lang](new Date().getFullYear())}</div>
+        <div>{LICENSE[lang]}</div>
       </div>
       <div className="links">
         {LINKS.map(({ label, href, icon }) => (
