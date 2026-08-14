@@ -1,4 +1,5 @@
 import { type Lang, Layout, page } from './components/Layout'
+import { phrase } from './i18n'
 import type { Toc } from './md'
 
 // The reference pages and their index, rendered at build time through the
@@ -160,8 +161,8 @@ export function renderDocHub(p: HubPage, css: string): string {
     >
       <section className="frontmatter">
         <div className="eyebrow">{HUB_TITLE[p.lang]}</div>
-        <h1>{HUB_TITLE[p.lang]}</h1>
-        <p className="abstract">{HUB_LEDE[p.lang]}</p>
+        <h1>{phrase(HUB_TITLE[p.lang], p.lang)}</h1>
+        <p className="abstract">{phrase(HUB_LEDE[p.lang], p.lang)}</p>
       </section>
       {p.nav.map((g) => (
         <section key={g.id} id={g.id}>
@@ -189,7 +190,7 @@ export function renderDocHub(p: HubPage, css: string): string {
             <h3>
               <a href="commands/">{HUB_COMMANDS[p.lang]}</a>
             </h3>
-            <p>{HUB_COMMANDS_BLURB[p.lang]}</p>
+            <p>{phrase(HUB_COMMANDS_BLURB[p.lang], p.lang)}</p>
           </div>
         </div>
       </section>

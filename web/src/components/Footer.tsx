@@ -1,5 +1,6 @@
 import { ArrowUpRight, Package } from 'lucide-react'
 
+import { phrase } from '../i18n'
 import { Brand } from './Brand'
 
 // One footer for every page on the site, and the same footer
@@ -46,7 +47,7 @@ export function Footer({ lang, root = './' }: { lang: Lang; root?: string }) {
         >
           <img src={`${root}golia-wordmark.png`} alt="GOLIA" width={92} height={20} />
         </a>
-        <div>{LICENSE[lang]}</div>
+        <div>{phrase(LICENSE[lang], lang)}</div>
       </div>
       <div className="links">
         {LINKS.map(({ label, href, icon }) => (

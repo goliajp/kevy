@@ -204,8 +204,48 @@ export function t(key: string, lang: Lang): string {
   return entry[lang]
 }
 
+const CJK = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3000-\u303f]/
+const LATIN = /[0-9A-Za-z]/
+
+/**
+ * Chinese and Japanese line-breaking is the browser's job, and it does it
+ * correctly: CJK folds at any character boundary — that is how CJK is
+ * typeset — and `line-break: strict` in the stylesheet enforces kinsoku,
+ * so a line never begins with 、 or ends with 「.
+ *
+ * The one thing the browser gets wrong is the space around embedded Latin
+ * (盘古之白). That space is typographic, not lexical: 「IDX.QUERY 查询」and
+ * 「二级索引」are single terms, and a fold there reads as a mistake. Make
+ * exactly that space non-breaking and leave everything else alone — a space
+ * between two Latin words ("Apple M4 Mac mini") is a real separator.
+ *
+ * Ported from tiktoken.golia.jp, where it already ran: the two lab pages
+ * are one publication, and comparing the footers byte for byte is what
+ * turned this up — the licence line read identically and differed, because
+ * theirs had U+00A0 where ours had U+0020.
+ *
+ * Deliberately a plain string transform: emitting a wbr element or splitting into
+ * nodes would override `line-break: strict` (a wbr element is an explicit break
+ * opportunity, honoured even where kinsoku forbids one) and shred the text
+ * into dozens of DOM nodes.
+ */
+export function phrase(text: string, lang: Lang): string {
+  if (lang === 'en') return text
+  return text.replace(/ /g, (_m, i: number) => {
+    const a = text[i - 1]
+    const b = text[i + 1]
+    // A space at the edge of a fragment: the string is assembled around
+    // an em or a code element, so the space exists only to set off the
+    // Latin on the other side of the seam.
+    if (!a || !b) return '\u00a0'
+    const mixed = (CJK.test(a) && LATIN.test(b)) || (LATIN.test(a) && CJK.test(b))
+    return mixed ? '\u00a0' : ' '
+  })
+}
+
 export function T({ k }: { k: string }) {
-  return <>{t(k, useLang())}</>
+  const lang = useLang()
+  return <>{phrase(t(k, lang), lang)}</>
 }
 
 export { dict as DICT }

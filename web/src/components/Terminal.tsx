@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 
-import { T, t, useLang } from '../i18n'
+import { T, phrase, t, useLang } from '../i18n'
 import { SCENARIOS } from '../scenarios'
 
 // The engine, in the page. `open()` instantiates the wasm module and hands
@@ -180,12 +180,12 @@ export function Terminal() {
             className={s.id === scenario ? 'on' : undefined}
             onClick={() => runScenario(s.id)}
           >
-            {s.label[lang]}
+            {phrase(s.label[lang], lang)}
           </button>
         ))}
       </div>
       <p className="term-blurb">
-        {chosen ? chosen.blurb[lang] : <T k="term.pick" />}
+        {chosen ? phrase(chosen.blurb[lang], lang) : <T k="term.pick" />}
       </p>
       <div className="term">
         <div className="term-head">
