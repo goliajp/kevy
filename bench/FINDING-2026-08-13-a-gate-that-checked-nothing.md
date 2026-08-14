@@ -77,3 +77,50 @@ output that reads like one.
 | `tools/check_cjk_punct.py` | 50 translated chapters | pointing the targets at directories that do not exist |
 | `web/check.mjs` | 100 pages | (had one from the start, for this reason) |
 | `scripts/mirror-go-module.sh` | non-zero passing tests | (added when written; a fully skipped suite is also green) |
+
+## Postscript, 2026-08-14 — a floor is not enough
+
+`tools/check_wasm_size.py` was written with a floor from the start
+(fewer than ten quoted sizes means the selector broke), and it passed
+that floor while seeing barely half of what it was pointed at.
+
+Its pattern for a claim was `(\d{2,4})\s*KB([^\n]{0,80})` — the trailing
+group meant to capture context. Being greedy, it swallowed the rest of
+the line, so `finditer` only ever found the **first** size on it:
+
+    (496 KB packed, 218 KB gzipped over the wire)
+     ^^^^^^ seen                ^^^^^^ invisible
+
+The gate reported 19 claims, all true, and passed. Removing the group
+found 21, one of them stale. It was caught by red-green — injecting the
+old number and watching the gate stay green — and by nothing else.
+
+So the checklist gains a line, and it is the one that did the work here:
+
+- a floor catches *nothing was examined*;
+- **red-green catches *half of it was examined*.**
+
+The floor is the cheaper check and it fires on the more catastrophic
+failure, which is why it is worth writing first. But a selector can be
+wrong in a way that leaves the count plausible, and no floor distinguishes
+"19 of 19" from "19 of 21". Only breaking something the gate is supposed
+to catch, and watching it go red, does.
+
+Two more from the same day, both the same shape — a green that was
+compatible with not having looked:
+
+- The landing page's demo commands were never run by anything. One of
+  them (`IDX.CREATE …` written from memory) had been answering
+  "unknown command" to visitors, on the page whose argument is that kevy
+  does secondary indexes. `web/verify.mjs` now runs every scenario in a
+  browser and fails on any error reply; red-green by injecting the
+  broken command back.
+- `tools/check_site_commands.py` grew a floor for the playground
+  (`fewer than 40 commands means the parse is wrong`) and earned it
+  within the hour: a formatter rewrote the file's quotes and the parse
+  dropped to 8. The gate said so instead of passing.
+
+| gate | floor | verified by |
+|---|---|---|
+| `tools/check_wasm_size.py` | 10 quoted sizes | injecting the stale number (which the floor did **not** catch) |
+| `web/verify.mjs` (scenarios) | 6 scenarios, each non-empty | injecting the broken `IDX.CREATE` |
