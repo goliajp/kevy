@@ -162,14 +162,14 @@ const dict: Dict = {
     ja: 'サーバーとして起動し、任意の Redis クライアントを向けるだけ。クライアント側のコードは変わりません。',
   },
   'inst.embed.blurb': {
-    en: 'Or embed it. Eight language bindings wrap the same C ABI; the Rust one is the engine itself.',
-    zh: '也可以嵌入。八种语言绑定包裹同一套 C ABI;Rust 那一份就是引擎本体。',
-    ja: '組み込みも可能です。八つの言語バインディングが同一の C ABI を包んでおり、Rust 版はエンジン本体そのものです。',
+    en: 'Or embed it — no server, no socket, the same data files. Seven languages are on their registries; the Rust one is the engine itself.',
+    zh: '也可以嵌入 —— 无服务端、无套接字,数据文件相同。七种语言已在各自的包管理器上;Rust 那一份就是引擎本体。',
+    ja: '組み込みも可能です——サーバーもソケットも不要、データファイルは同一。七つの言語が各レジストリに公開済みで、Rust 版はエンジン本体そのものです。',
   },
   'inst.docs': {
-    en: 'Every command, every configuration key and the migration guides:',
-    zh: '每条命令、每个配置项,以及迁移指南:',
-    ja: '全コマンド・全設定キー・移行ガイド:',
+    en: 'Every install line, every command, every configuration key:',
+    zh: '每条安装命令、每条引擎命令、每个配置项:',
+    ja: '各言語の導入手順・全コマンド・全設定キー:',
   },
 
   // The footer lives in components/Footer.tsx, shared with the reference
