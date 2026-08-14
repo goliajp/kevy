@@ -2,9 +2,9 @@ import { ArrowDown, ArrowUpRight, Package } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 import { CodeBlock } from './components/CodeBlock'
-import { Footer } from './components/Footer'
+import { Layout } from './components/Layout'
 import { Terminal } from './components/Terminal'
-import { detectLang, LANGS, LangContext, T, type Lang } from './i18n'
+import { detectLang, LangContext, T, type Lang } from './i18n'
 
 const GITHUB = 'https://github.com/goliajp/kevy'
 const CRATES = 'https://crates.io/crates/kevy'
@@ -89,44 +89,24 @@ export function App() {
 
   return (
     <LangContext.Provider value={lang}>
-      <header className="masthead">
-        <div className="masthead-inner">
-          <a className="brand" href="/">
-            <span className="wordmark">kevy</span>
-            <span className="ver">{__KEVY_VERSION__}</span>
-          </a>
-          <nav className="topnav">
-            <a className="navlink" href="#try">
-              <T k="nav.try" />
-            </a>
-            <a className="navlink hide-sm" href="#speed">
-              <T k="nav.speed" />
-            </a>
-            <a className="navlink hide-sm" href="#beyond">
-              <T k="nav.beyond" />
-            </a>
-            <a className="navlink" href={DOCS}>
-              <T k="nav.docs" />
-            </a>
-            <div className="langswitch" role="group" aria-label="language">
-              {LANGS.map((l) => (
-                <button
-                  key={l.id}
-                  className={lang === l.id ? 'on' : ''}
-                  onClick={() => {
-                    setLang(l.id)
-                    localStorage.setItem('lang', l.id)
-                  }}
-                >
-                  {l.label}
-                </button>
-              ))}
-            </div>
-          </nav>
-        </div>
-      </header>
-
-      <div className="shell">
+      <Layout
+        lang={lang}
+        version={__KEVY_VERSION__}
+        root="./"
+        langs={{
+          kind: 'buttons',
+          current: lang,
+          onPick: (l) => {
+            setLang(l)
+            localStorage.setItem('lang', l)
+          },
+        }}
+        extraNav={[
+          { href: '#try', label: <T k="nav.try" /> },
+          { href: '#speed', label: <T k="nav.speed" /> },
+          { href: '#beyond', label: <T k="nav.beyond" /> },
+        ]}
+      >
         <section className="frontmatter">
           <div className="eyebrow">
             <T k="front.eyebrow" />
@@ -278,8 +258,7 @@ export function App() {
           </p>
         </Section>
 
-        <Footer lang={lang} />
-      </div>
+      </Layout>
     </LangContext.Provider>
   )
 }
