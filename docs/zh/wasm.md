@@ -163,6 +163,8 @@ Cloudflare Workers 之类的边缘 isolate 照浏览器配方：每 isolate 一�
 
 **完整命令面在浏览器里都可用吗？**大部分可用。模块按浏览器能承载的全部 feature 构建——`core`、`persist`、`index`、`text`、`vector`——所以 `cmd` 除了 KV、TTL、计数器、扫描与 pub/sub，还能到达 `IDX.*`（二级索引、全文、向量检索）、`VIEW.*` 与 `TABLE.*`。2026-08 之前它只有较小的那一刀，项目自己的首页因此在一个没编进索引的构建上演示二级索引。
 
+**哪个已发布版本有：**npm 上 5.1.0 及更早带的是较小的那一刀 —— 在那里 `IDX.*`、`VIEW.*`、`TABLE.*` 会答 `unknown command`。更宽的构建在主分支上、也在 kevy.golia.jp 上，随下一个已发布版本到达 npm。想更早拿到就从源码构建(`cargo build -p kevy-wasm --target wasm32-unknown-unknown --release`)。
+
 被留在外面的东西缺的不是字节，而是浏览器给不了的东西：`replicate` 要网络对端，`listener` 要 TCP socket，`tier` 要磁盘目录。流、事务、geo 与脚本在任何平台上都不在嵌入式引擎的动词面里——边界是 ESTORE_OPS manifest，不是这个构建。
 
 wasm target 上的 Rust API 则暴露你编译进来的 `kevy-embedded` feature 的全部能力。
