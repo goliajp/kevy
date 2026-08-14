@@ -81,6 +81,43 @@ jobs:
             [ "$got" = "$want" ] || { echo "✗ $f is $got, workspace is $want" >&2; exit 1; }
           done
 
+      # INSTALL IT. Packing proves a file was written; restoring proves a
+      # consumer can use it. 5.1.0 shipped without this step and was
+      # unusable from the moment it appeared: the ProjectReference had
+      # become a dependency on Kevy.Embedded.Internal, a package that
+      # cannot exist because that project sets IsPackable=false, so every
+      # restore failed with NU1101. Every test in the repository passed,
+      # because they all build from the projects rather than the package.
+      - name: Install the packed package and run it
+        run: |
+          cargo build --release -p kevy --bin kevy
+          ./target/release/kevy --port 6395 --dir "$(mktemp -d)" &
+          sleep 3
+          work=$(mktemp -d); cd "$work"
+          cat > s.csproj <<'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+            <ItemGroup><PackageReference Include="kevy" Version="VERSION" /></ItemGroup>
+          </Project>
+          EOF
+          sed -i "s/VERSION/$(grep -m1 '^version = ' "$GITHUB_WORKSPACE/Cargo.toml" | sed -E 's/.*"(.*)".*/\1/')/" s.csproj
+          printf '<?xml version="1.0"?><configuration><packageSources><clear /><add key="local" value="%s/nupkgs" /></packageSources></configuration>\n' "$GITHUB_WORKSPACE" > nuget.config
+          cat > Program.cs <<'EOF'
+          using Kevy;
+          var c = KevyClient.Connect("kevy://127.0.0.1:6395");
+          c.Set("k", "from-nuget");
+          var got = System.Text.Encoding.UTF8.GetString(c.Get("k"));
+          if (got != "from-nuget") throw new System.Exception("remote round-trip: " + got);
+          try {
+              Kevy.Embedded.KevyDb.OpenInMemory();
+              throw new System.Exception("embedded opened in a package that carries no engine");
+          } catch (Kevy.Embedded.KevyException e) {
+              if (!e.Message.Contains("no embedded engine")) throw;
+          }
+          System.Console.WriteLine("restored, ran, and refused the embedded half with the message that names the fix");
+          EOF
+          dotnet run --no-launch-profile
+
       # Requested immediately before the push: the temporary key expires
       # in an hour, and asking early is how a long build ends with an
       # expired credential.

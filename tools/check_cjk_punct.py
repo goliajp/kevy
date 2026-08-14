@@ -11,7 +11,7 @@ Japanese takes 「、」 for both. Neither takes ASCII `,` `.` `;` `:` `!` `?`
 adjacent to CJK text. Inside code, `<pre>`, `<code>`, attributes, URLs and
 Latin-script runs, ASCII punctuation is correct and is left alone.
 
-Run: python3 tools/check_cjk_punct.py            # checks site/zh, site/ja, docs
+Run: python3 tools/check_cjk_punct.py            # docs/{zh,ja}, the content, web/src
      python3 tools/check_cjk_punct.py <paths…>
 """
 
@@ -60,7 +60,7 @@ SOFT = [
 ]
 STRIP = [
     # A `*` or `!` right after an opening quote is the table renderer's win/loss
-    # marker on a data cell, not punctuation: site_render.table() strips it before
+    # marker on a data cell, not punctuation: the renderer strips it before
     # the cell reaches the page. Both CJK content files need it — 「"!不要搬"」 and
     # 「"!移すな"」 are the three refusal rows on the migration page, and the marker
     # is the whole reason they are painted red.
@@ -145,9 +145,13 @@ def main():
         # catch the mistake one step downstream of where it is fixable — and
         # would miss it entirely in a string that is not rendered on every page.
         targets = [
-            root / "site/zh", root / "site/ja",
             root / "docs/zh", root / "docs/ja",
-            root / "site/assets", root / "site/data", root / "tools",
+            # The written pages' translations, at their source. Checking the
+            # rendered HTML would catch a mistake one step downstream of
+            # where it is fixable, and would miss it entirely in a string
+            # that is not on every page.
+            root / "tools/site_content", root / "web/src",
+            root / "tools",
         ]
 
     files = []
@@ -162,6 +166,26 @@ def main():
     # without failing on its own test fixtures.
     me = pathlib.Path(__file__).resolve()
     files = sorted({f for f in files if f.resolve() != me})
+
+    # A floor, on the files this gate exists for rather than on the total.
+    #
+    # Deleting the old site/ tree took two of its three target directories
+    # with it and it went on reporting "ok: 0 files, no half-width
+    # punctuation" — a green line meaning it had read nothing. So there is
+    # a floor now. But a floor on the TOTAL counts whatever happens to be
+    # in tools/ (caches, generated JSON) and differs between a working
+    # tree and a fresh clone: the first version of this check passed here
+    # at 224 files and failed a clean clone at 84, which is the floor
+    # measuring the environment instead of the subject.
+    #
+    # The subject is the translated documentation. There are 34 chapters in
+    # each of two languages and that number only grows.
+    translated = [f for f in files if "/docs/zh/" in str(f) or "/docs/ja/" in str(f)]
+    if len(translated) < 50:
+        print(f"check_cjk_punct: only {len(translated)} translated chapters found — "
+              "the targets are wrong.")
+        print("  Scanning nothing reports success; that is not the same as passing.")
+        return 1
 
     total = 0
     broken = 0

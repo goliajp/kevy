@@ -96,9 +96,23 @@ def main():
         print(f"SKIP: {KEVY.relative_to(ROOT)} not built")
         return 0
 
+    # The built site, which is what a visitor gets. Reading the sources
+    # would test what the content says rather than what the page serves,
+    # and those are two different files with a renderer between them.
+    dist = ROOT / "web/dist"
+    if not dist.exists():
+        print("check_site_commands: no web/dist — run npm run build in web/")
+        return 1
+
     blocks = []
-    for f in sorted((ROOT / "site").rglob("index.html")):
-        if "/docs/" in str(f) or "/play/" in str(f):
+    pages = sorted(dist.rglob("index.html"))
+    # A gate that finds nothing must not pass. An empty dist is a broken
+    # build, not a site with no examples in it.
+    if len(pages) < 100:
+        print(f"check_site_commands: only {len(pages)} pages in web/dist — expected the whole site")
+        return 1
+    for f in pages:
+        if "/docs/" in str(f):
             continue  # generated from docs/, gated separately
         if "/changelog/" in str(f):
             # A changelog's code blocks are EVIDENCE, not instructions:
@@ -155,6 +169,14 @@ def main():
         print(f"REFUSED: {len(bad)} of {n} commands on the site do not run.")
         print("A command that errors is the fastest way to lose a visitor who was "
               "giving you the benefit of the doubt.")
+        return 1
+    # A floor. This gate reported "ok: 0 commands" against a site full of
+    # them, because the renderer emitted bare <pre> where it looks for
+    # <pre><code> — a green line meaning it had checked nothing. Finding
+    # nothing is a broken selector, not a site without examples.
+    if n < 50:
+        print(f"check_site_commands: only {n} commands found — the site has more than that.")
+        print("  A selector that matches nothing reports success. Check what the pages emit.")
         return 1
     print(f"ok: {n} commands in the site's examples, all of them run")
     return 0

@@ -24,7 +24,25 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../Kevy.Embedded/Kevy.Embedded.csproj" />
+    <!-- PrivateAssets=all, plus the pack target below: this reference is
+         an internal building block, not a package a consumer resolves.
+         Without both, `dotnet pack` writes it into the nuspec as a
+         dependency on Kevy.Embedded.Internal — a package that does not
+         exist, because that project sets IsPackable=false. The result
+         restores with NU1101 and nothing in this repository notices,
+         since everything here builds from the projects. 5.1.0 shipped
+         exactly that. -->
+    <ProjectReference Include="../Kevy.Embedded/Kevy.Embedded.csproj"
+                      PrivateAssets="all" />
   </ItemGroup>
+
+  <!-- Fold the assembly in, which is what the comment in Kevy.Embedded's
+       csproj has always said this package does. -->
+  <Target Name="IncludeEmbeddedAssembly" BeforeTargets="_GetPackageFiles">
+    <ItemGroup>
+      <None Include="$(OutputPath)Kevy.Embedded.dll"
+            Pack="true" PackagePath="lib/$(TargetFramework)/" />
+    </ItemGroup>
+  </Target>
 
 </Project>

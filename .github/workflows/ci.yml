@@ -106,18 +106,9 @@ jobs:
       - name: generated docs parity (llms.txt / verb-reference == VERB_META)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo run -p kevy --bin gen_docs -- . --check
-      - name: command pages parity (site == VERB_META)
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: python3 tools/gen_command_pages.py --check
-      - name: doc pages parity (site == docs/*.md)
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: python3 tools/gen_docs_site.py --check
       - name: CJK punctuation (no half-width commas in Chinese/Japanese prose)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_cjk_punct.py
-      - name: site links (no dead internal link in site/)
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: python3 tools/check_links.py
       - name: doc links (no dead file or anchor between the markdown docs)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_doc_links.py
@@ -136,11 +127,6 @@ jobs:
       - name: version alignment (six layers agree with the workspace)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_version_alignment.py
-      - name: site commands (every RESP example on the site actually runs)
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: |
-          cargo build -q -p kevy --bin kevy
-          python3 tools/check_site_commands.py
       - name: doc configs (every ```toml in docs/ actually loads)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
@@ -1122,3 +1108,68 @@ jobs:
       - name: Build the server the mirror's tests talk to
         run: cargo build --release -p kevy --bin kevy
       - run: bash scripts/mirror-go-module.sh
+
+  # ───────────── the website cannot go stale ─────────────
+  #
+  # The site this replaces served a masthead reading 5.0 and a hero reading
+  # 4.0 while shipping 5.1.0, for a whole release line. Nothing was lying on
+  # purpose: those were typed, and nothing in CI opened the page or compared
+  # what it said against the manifest.
+  #
+  # Two halves, because they catch different things. check.mjs reads the
+  # built output — every version, every internal link, the translations
+  # lining up, and the whole site built twice and compared byte for byte, so
+  # nothing in it can depend on the clock or the machine. verify.mjs opens
+  # it in a real Chromium and asserts what no build can see: that the wasm
+  # engine starts and answers, that a locale switch changes the text, that
+  # nothing overflows sideways on a phone, and that a reference page is
+  # readable with JavaScript turned off.
+  site:
+    name: site (built, checked, and opened in a browser)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 'lts/*'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - name: check (versions, links, reproducibility)
+        run: node check.mjs
+        working-directory: web
+      - name: a browser Chromium for verify.mjs
+        run: npx playwright install --with-deps chromium
+        working-directory: web
+      - name: serve the built site
+        run: npx vite preview --port 6040 &
+        working-directory: web
+      - name: verify (the engine runs, the pages read)
+        run: |
+          # The preview server needs a moment; poll rather than sleep, so a
+          # slow runner does not fail on a fixed guess.
+          for _ in $(seq 1 30); do
+            curl -sf -o /dev/null http://localhost:6040/ && break
+            sleep 1
+          done
+          node verify.mjs
+        working-directory: web
+      - name: the markdown renderers still agree
+        run: python3 tools/check_md_port.py
+      # The written pages moved to the new site by being exported and
+      # rendered, not rewritten. These two prove the move lost nothing and
+      # that the export has not drifted from the Python content since.
+      - name: the content export is current
+        run: python3 tools/export_site_content.py --check
+      - name: every word of the written pages reached the site
+        run: python3 tools/check_site_content_parity.py
+      # Every RESP example on the site is executed against a real engine.
+      # It runs here rather than in the test job because it reads the BUILT
+      # site: what a visitor gets, not what the content says.
+      - name: every RESP example on the site actually runs
+        run: |
+          cargo build -q -p kevy --bin kevy
+          python3 tools/check_site_commands.py

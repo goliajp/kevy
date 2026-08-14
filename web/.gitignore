@@ -1,0 +1,7 @@
+node_modules/
+dist/
+# The SSR bundle prerender.mjs imports. A build artefact: it is rebuilt by
+# `npm run build` before anything reads it, and a committed copy would be a
+# second, stale source of the doc shell.
+.ssr/
+*.tsbuildinfo
