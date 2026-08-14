@@ -275,6 +275,13 @@ full-text, vector search), `VIEW.*` and `TABLE.*`. It was the smaller
 cut until 2026-08, which is how the project's own landing page came to
 demonstrate secondary indexes against a build compiled without them.
 
+**Which published version has it:** the npm package at 5.1.0 and earlier
+carries the smaller cut — `IDX.*`, `VIEW.*` and `TABLE.*` answer
+`unknown command` there. The wider build is on the main branch and on
+kevy.golia.jp; it reaches npm with the next published version. Build from
+the checkout to have it sooner (`cargo build -p kevy-wasm --target
+wasm32-unknown-unknown --release`).
+
 What is left out needs something a browser cannot provide rather than
 bytes saved: `replicate` a network peer, `listener` a TCP socket,
 `tier` a disk directory. Streams, transactions, geo and scripting are
