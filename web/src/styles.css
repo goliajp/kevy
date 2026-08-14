@@ -253,23 +253,36 @@ section {
   border-radius: 3px;
   overflow: hidden;
 }
-.langswitch button {
+/* Buttons on the landing page, links everywhere else — one control, two
+   elements, and for a while only one of them had any of this. The
+   selectors name both, because which element it is depends on whether the
+   page has one URL or a translated twin, and a reader should not be able
+   to tell. */
+.langswitch button,
+.langswitch a {
   font: inherit;
   font-size: 0.76rem;
   font-family: var(--mono);
+  line-height: 1.4;
   padding: 0.22rem 0.5rem;
   background: var(--paper-raised);
   color: var(--ink-faint);
   border: 0;
   cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
 }
-.langswitch button + button {
+.langswitch button + button,
+.langswitch a + a {
   border-left: 1px solid var(--rule);
 }
-.langswitch button:hover {
+.langswitch button:hover,
+.langswitch a:hover {
   color: var(--ink);
+  text-decoration: none;
 }
-.langswitch button.on {
+.langswitch button.on,
+.langswitch a.on {
   background: var(--ink);
   color: var(--paper);
 }

@@ -216,6 +216,57 @@ try {
   check('a reference page reads with JavaScript disabled', words > 2000, `${words} chars`)
   await noJs.close()
 
+  // ── the header is the same header everywhere ────────────────────────
+  //
+  // Five copies of the masthead drifted three ways before this existed —
+  // one page offering fewer nav entries than the others, and the language
+  // control rendering as a styled segmented button on the landing page
+  // and as three unstyled links everywhere else, because the stylesheet
+  // named only `.langswitch button`. None of that is visible in the
+  // markup diff; all of it is visible in the computed style.
+  // English throughout. The locale checks above left the landing page in
+  // Japanese, and comparing a Japanese nav against English ones reports a
+  // difference that is a translation rather than a drift.
+  await page.evaluate(() => localStorage.setItem('lang', 'en'))
+  const HEADERS = ['/', '/docs/', '/docs/persistence/', '/docs/commands/get/', '/use/cache/']
+  const shape = []
+  for (const path of HEADERS) {
+    await page.goto(`${URL_.replace(/\/$/, '')}${path}`, { waitUntil: 'domcontentloaded' })
+    // The landing page renders its nav in the browser; wait for it rather
+    // than reading the empty shell.
+    await page.waitForSelector('.topnav a')
+    shape.push(
+      await page.evaluate(() => {
+        const item = document.querySelector('.langswitch a, .langswitch button')
+        const s = item ? getComputedStyle(item) : null
+        return {
+          nav: [...document.querySelectorAll('.topnav > a')].map((a) => a.textContent).join('|'),
+          langs: document.querySelectorAll('.langswitch a, .langswitch button').length,
+          // The two properties that were wrong: the control had no padding
+          // and fell back to the body font.
+          pad: s?.padding ?? '',
+          font: s?.fontFamily.split(',')[0] ?? '',
+          footer: document.querySelectorAll('footer').length,
+        }
+      }),
+    )
+  }
+  const first = JSON.stringify({ ...shape[0], nav: undefined })
+  const same = shape.every((x) => JSON.stringify({ ...x, nav: undefined }) === first)
+  check('every page header is styled the same', same, JSON.stringify(shape[0]))
+  // The landing page adds anchors to its own sections; every page carries
+  // the same three site-wide entries. Demanding identical navs would have
+  // demanded the landing page drop links to its own content — the check
+  // being wrong rather than the page.
+  const siteWide = shape.map((x) => x.nav.split('|').slice(-3).join('|'))
+  check(
+    'every page offers the same site-wide navigation',
+    new Set(siteWide).size === 1,
+    [...new Set(siteWide)].join('  ≠  '),
+  )
+  check('the language control is a real control', shape.every((x) => x.pad !== '0px'), shape[0].pad)
+  check('exactly one footer per page', shape.every((x) => x.footer === 1))
+
   // ── the page did not shout ──────────────────────────────────────────
   // Font CSS from a CDN can fail in a sandbox without breaking anything;
   // that is noise, not a defect this gate owns.
