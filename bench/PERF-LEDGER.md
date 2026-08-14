@@ -567,6 +567,51 @@ textgate 正在断言的内存公式。范围决定权不在我。
 
 ---
 
+## arena bare face — 2026-08-14 — kevy 5.2.0
+
+Re-measured for the 5.2.0 release rather than relabelling the 5.1.0 run:
+a benchmark table headed with a version says which build was measured,
+so carrying the old numbers under a new heading turns a record into a
+claim. The site's table, the landing page's figure and the three READMEs
+all come from this run.
+
+`bash bench/arena.sh target/release/kevy` on lx64, 16 cores. Server pinned
+to 0-7, load generator to 8-15, one engine at a time, host loopback.
+`-c 50 -P 16`, median of five runs per cell with sample stdev. Throughput
+read from each server's own `total_commands_processed` over a timed 3.0 s
+window after a 1.0 s ramp — not from redis-benchmark's reported rate,
+which quantises to 250 ms buckets under `--threads` and understates every
+engine (bench/PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md).
+
+Competitors: `valkey/valkey:9.1` (reports v=9.1.1), `redis:8`,
+`docker.dragonflydb.io/dragonflydb/dragonfly`, each with persistence off
+and eight io/proactor threads.
+
+| verb | kevy 5.2.0 | Redis 8 | valkey 9.1.1 | Dragonfly | vs Redis 8 |
+|---|---:|---:|---:|---:|---:|
+| GET | 7,421,434 | 5,490,744 | 3,059,825 | 2,896,061 | 1.35x |
+| SET | 6,803,042 | 2,519,336 | 1,693,228 | 1,863,375 | 2.70x |
+| INCR | 6,257,248 | 3,275,159 | 2,314,211 | 2,032,917 | 1.91x |
+| SADD | 6,326,464 | 3,663,988 | 2,212,577 | 1,755,908 | 1.73x |
+| HSET | 4,624,267 | 3,002,949 | 1,813,222 | 1,726,330 | 1.54x |
+| LPUSH | 3,152,557 | 2,865,516 | 1,900,425 | 1,476,418 | 1.10x |
+| ZADD | 3,131,849 | 2,838,225 | 1,780,257 | 1,746,110 | 1.10x |
+
+Gap rule: `|kevy - other| <= max(stdev_kevy, stdev_other)` reads as NOISE.
+No cell hit it. The narrow ones are LPUSH and ZADD at 1.10x each, and
+both gaps clear the tolerance comfortably — 287,041 against 118,253 for
+LPUSH, 293,624 against 75,610 for ZADD.
+
+**Do not read the movement against the 5.1.0 run as an improvement.**
+Nothing in the serving path changed between the two releases; what
+changed is the Lua runtime and the browser build's feature set. SADD
+(5,194,985 -> 6,326,464) and INCR (5,905,021 -> 6,257,248) moved most,
+and those are also the cells with the widest kevy stdev in this run
+(620,640 and 315,148) — day-to-day variation on a shared box, not a
+result. The competitor numbers moved in both directions too, which is
+the same statement from the other side: valkey GET fell 3,287,418 ->
+3,059,825 without anyone touching valkey.
+
 ## arena bare face — 2026-08-13 — kevy 5.1.0
 
 Re-measured because the site was serving 4.0-era numbers under a 5.1.0

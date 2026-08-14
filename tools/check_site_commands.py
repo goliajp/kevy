@@ -63,6 +63,14 @@ def commands_in(text):
             continue
         if re.match(r"^\d+\) ", line):
             continue
+        # A command wearing a CLI in front of it is still a command. The
+        # landing page's install snippet read
+        #   redis-cli IDX.CREATE users ON HASH PREFIX user: FIELDS city
+        # which is not a syntax the engine accepts — and this gate skipped
+        # the whole line as shell, because it does not begin with a verb.
+        # It was the same wrong form a reader had already reported from
+        # the terminal, sitting two screens above it, unexamined.
+        line = re.sub(r"^(redis-cli|kevy-cli|valkey-cli)\b(\s+-[a-zA-Z]\s*\S+)*\s+", "", line)
         # Only lines that start with an UPPERCASE verb are commands.
         if not re.match(r"^[A-Z][A-Z0-9._]*(\s|$)", line):
             continue
@@ -138,6 +146,23 @@ def main():
     # web/verify.mjs runs them against the wasm engine in a browser, which is
     # the authority; this is the cheap fast copy that says which line and why
     # without a build and a Chromium.
+    # The landing page is rendered in the browser, so its code blocks are
+    # not in dist/index.html and this gate never saw them. That is where
+    # the install snippet sat with `IDX.CREATE … ON HASH PREFIX … FIELDS
+    # city` in it — the exact form a reader had already reported from the
+    # terminal two screens below, on the same page, for as long as the
+    # gate had been passing.
+    app = ROOT / "web/src/App.tsx"
+    if not app.exists():
+        print("check_site_commands: web/src/App.tsx is missing — the landing page moved")
+        return 1
+    snippets = re.findall(r"^const [A-Z_]+ = `(.*?)`$", app.read_text(encoding="utf-8"), re.S | re.M)
+    if len(snippets) < 2:
+        print(f"check_site_commands: only {len(snippets)} landing-page snippets — the parse is wrong")
+        return 1
+    for body in snippets:
+        blocks.append((app.relative_to(ROOT), body))
+
     scen = ROOT / "web/src/scenarios.ts"
     if not scen.exists():
         print("check_site_commands: web/src/scenarios.ts is missing — the playground moved")
@@ -174,8 +199,15 @@ def main():
                     # TYPE (a "<768-float vector>" became "x"). What must never
                     # happen is an unknown command or a wrong arity — those are
                     # OUR mistake, not the placeholder's.
+                    # `usage:` belongs here: a verb that exists but was
+                    # called with a shape it does not accept answers with
+                    # its usage string, and that is our mistake in exactly
+                    # the way a wrong arity is. Without it this gate read
+                    # `IDX.CREATE … ON HASH PREFIX … FIELDS city` — the
+                    # very form a reader had reported — as a legitimate
+                    # reply and passed.
                     if re.search(r"unknown command|wrong number of arguments|"
-                                 r"syntax error|unknown subcommand", err, re.I):
+                                 r"syntax error|unknown subcommand|usage:", err, re.I):
                         bad.append((f, line, err))
     finally:
         srv.terminate()

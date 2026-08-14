@@ -35,7 +35,12 @@ def latest_arena():
     )
     if not blocks:
         sys.exit("sync_readme_bench: no arena table in bench/PERF-LEDGER.md")
-    date, version, table = blocks[-1]
+    # By date, not by position. It was `blocks[-1]`, which means "last in
+    # the file" — true only while entries are appended in order, and the
+    # ledger reads newest-first. Adding a newer entry at the top therefore
+    # left this reading the OLD one and reporting success with the version
+    # it had just not used.
+    date, version, table = max(blocks, key=lambda b: b[0])
     rows = {}
     for line in table.split("\n")[2:]:
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
@@ -95,6 +100,84 @@ def build(date, version, rows):
     return out
 
 
+
+# ── the site quotes the same run, in five more places ────────────────────
+#
+# The three READMEs were tied to the ledger; the site was not. Its
+# four-engine table lives in tools/site_content/{en,zh,ja}.py, and the
+# landing page carries a shorter table, a hero figure and a sentence of
+# prose with the ratios written into it — all typed. After the 5.2.0
+# re-measurement every one of them still said 5.1.0's numbers, and
+# nothing anywhere would have said so.
+
+SITE_CONTENT = ["tools/site_content/en.py", "tools/site_content/zh.py",
+                "tools/site_content/ja.py"]
+APP = "web/src/App.tsx"
+I18N = "web/src/i18n.tsx"
+
+
+def _m(n):
+    """7,421,434 -> '7.42 M' — the landing page's shorter form."""
+    return f"{n / 1_000_000:.2f} M"
+
+
+def write_site(rows, version, check):
+    """rows: {verb: {engine: int}}. Returns a list of complaints."""
+    bad = []
+    order = ["GET", "SET", "INCR", "SADD", "HSET", "LPUSH", "ZADD"]
+    for rel in SITE_CONTENT:
+        p = ROOT / rel
+        text = p.read_text(encoding="utf-8")
+        before = text
+        for verb in order:
+            r = rows[verb]
+            ratio = r["kevy"] / r["redis8"]
+            mark = "!" if ratio < 1.2 else "*"
+            new = (f'["{verb}", "{r["kevy"]:,}", "{r["redis8"]:,}", '
+                   f'"{r["valkey"]:,}", "{r["dragonfly"]:,}", "{mark}{ratio:.2f}×"]')
+            text = re.sub(rf'\["{verb}", "[\d,]+", "[\d,]+", "[\d,]+", "[\d,]+", "[!*][\d.]+×"\]',
+                          new.replace("\\", "\\\\"), text)
+        text = re.sub(r'"kevy \d+\.\d+\.\d+"', f'"kevy {version}"', text)
+        if text != before:
+            if check:
+                bad.append(f"{rel} does not carry the {version} numbers")
+            else:
+                p.write_text(text, encoding="utf-8")
+
+    # the landing page's four-row table and its hero figure
+    p = ROOT / APP
+    text = p.read_text(encoding="utf-8")
+    before = text
+    for verb in ["GET", "SET", "INCR", "HSET"]:
+        r = rows[verb]
+        new = (f"{{ op: '{verb}', kevy: '{_m(r['kevy'])}', "
+               f"valkey: '{_m(r['valkey'])}', ratio: '{r['kevy'] / r['valkey']:.2f}×' }}")
+        text = re.sub(rf"\{{ op: '{verb}', kevy: '[^']+', valkey: '[^']+', ratio: '[^']+' \}}",
+                      new.replace("\\", "\\\\"), text)
+    set_ratio = f"{rows['SET']['kevy'] / rows['SET']['valkey']:.2f}×"
+    text = re.sub(r'<div className="v">[\d.]+×</div>', f'<div className="v">{set_ratio}</div>', text)
+    if text != before:
+        if check:
+            bad.append(f"{APP} does not carry the {version} numbers")
+        else:
+            p.write_text(text, encoding="utf-8")
+
+    # the abstract, which states both ratios to one decimal in three languages
+    p = ROOT / I18N
+    text = p.read_text(encoding="utf-8")
+    g = rows["GET"]["kevy"] / rows["GET"]["valkey"]
+    st = rows["SET"]["kevy"] / rows["SET"]["valkey"]
+    new_text = re.sub(r"[\d.]+× on GET, [\d.]+× on SET", f"{g:.1f}× on GET, {st:.1f}× on SET", text)
+    new_text = re.sub(r"GET 快 [\d.]+ 倍、SET 快 [\d.]+ 倍", f"GET 快 {g:.1f} 倍、SET 快 {st:.1f} 倍", new_text)
+    new_text = re.sub(r"GET は [\d.]+ 倍、SET は [\d.]+ 倍", f"GET は {g:.1f} 倍、SET は {st:.1f} 倍", new_text)
+    if new_text != text:
+        if check:
+            bad.append(f"{I18N} does not carry the {version} ratios")
+        else:
+            p.write_text(new_text, encoding="utf-8")
+    return bad
+
+
 def main():
     check = "--check" in sys.argv
     date, version, rows = latest_arena()
@@ -132,16 +215,18 @@ def main():
             else:
                 p.write_text(s, encoding="utf-8")
 
+    stale += write_site(rows, version, check)
+
     if check:
         if stale:
             print(f"sync_readme_bench: STALE — {', '.join(stale)}")
             print(f"  The ledger's latest arena run is {date} (kevy {version}).")
             print("  Regenerate with: python3 tools/sync_readme_bench.py")
             sys.exit(1)
-        print(f"ok: 3 READMEs carry the {date} arena numbers (kevy {version})")
+        print(f"ok: 3 READMEs and the site carry the {date} arena numbers (kevy {version})")
         return
 
-    print(f"wrote the {date} arena numbers (kevy {version}) into 3 READMEs")
+    print(f"wrote the {date} arena numbers (kevy {version}) into 3 READMEs and the site")
 
 
 if __name__ == "__main__":
