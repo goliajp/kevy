@@ -22,8 +22,13 @@ const ROOT = join(HERE, '..')
 const DIST = join(HERE, 'dist')
 const DOCS = join(ROOT, 'docs')
 
-const { renderDocPage } = await import('./.ssr/entry-docs.js')
+const { renderDocPage, renderDocHub } = await import('./.ssr/entry-docs.js')
 const { render } = await import('./.ssr/md.js')
+
+// One line per chapter for the index, recovered from the generator this
+// build replaced rather than rewritten — they were written to be read
+// second, which is not something a first paragraph can be scraped for.
+const BLURBS = JSON.parse(readFileSync(join(HERE, 'src/blurbs.json'), 'utf8'))
 
 // ── the version, from the one place that has it ──────────────────────────
 const VERSION = readFileSync(join(ROOT, 'Cargo.toml'), 'utf8').match(
@@ -184,6 +189,20 @@ for (const lang of LANGS) {
     )
     process.exitCode = 1
   }
+
+  // The index. Every page's nav links to it, and for the first deploy of
+  // this site it did not exist — a 404 for anyone who clicked Docs, while
+  // the link check passed because the directory was there.
+  const hubDir = lang === 'en' ? join(DIST, 'docs') : join(DIST, lang, 'docs')
+  mkdirSync(hubDir, { recursive: true })
+  writeFileSync(
+    join(hubDir, 'index.html'),
+    renderDocHub(
+      { lang, nav, blurbs: BLURBS[lang] ?? {}, version: VERSION, depth: lang === 'en' ? 1 : 2 },
+      CSS,
+    ),
+  )
+  written++
 
   for (const slug of slugs) {
     const md = sources[slug]

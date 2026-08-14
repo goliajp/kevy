@@ -144,6 +144,141 @@ function Doc(p: DocPage) {
   )
 }
 
+/** The documentation index — the page /docs/ serves.
+ *
+ *  It did not exist for the first deploy of this site: every page's nav
+ *  linked to /docs/ and every visitor who clicked it got a 404, while
+ *  check.mjs reported the link fine because `dist/docs` exists as a
+ *  DIRECTORY. A directory is not a page; the gate asks for an index.html
+ *  inside one now. */
+export type HubPage = {
+  lang: Lang
+  nav: NavGroup[]
+  blurbs: Record<string, string>
+  version: string
+  depth: number
+}
+
+const HUB_TITLE: Record<Lang, string> = {
+  en: 'Documentation',
+  zh: '文档',
+  ja: 'ドキュメント',
+}
+const HUB_LEDE: Record<Lang, string> = {
+  en: 'Every chapter, in reading order. Each one is a markdown file in the repository — what you see here and what GitHub shows are the same text.',
+  zh: '全部章节,按阅读顺序排列。每一篇都是仓库里的一个 markdown 文件 —— 你在这里看到的和 GitHub 上显示的是同一份文字。',
+  ja: 'すべての章を、読む順に。各章はリポジトリ内の markdown ファイルそのもので、ここで読めるものと GitHub が表示するものは同じ文章です。',
+}
+const HUB_COMMANDS: Record<Lang, string> = {
+  en: 'Command reference',
+  zh: '命令参考',
+  ja: 'コマンドリファレンス',
+}
+const HUB_COMMANDS_BLURB: Record<Lang, string> = {
+  en: 'Every verb the engine answers, generated from the table it dispatches on.',
+  zh: '引擎能回答的每一条动词,由它分发所用的那张表生成。',
+  ja: 'エンジンが応答するすべての動詞。ディスパッチに使う表から生成しています。',
+}
+
+function Hub(p: HubPage) {
+  const root = up(p.depth)
+  const langRoot = (l: Lang) => (l === 'en' ? root : `${root}${l}/`)
+  return (
+    <>
+      <header className="masthead">
+        <div className="masthead-inner">
+          <a className="brand" href={langRoot(p.lang)}>
+            <span className="wordmark">kevy</span>
+            <span className="ver">{p.version}</span>
+          </a>
+          <nav className="topnav">
+            <a href={langRoot(p.lang)}>{p.lang === 'en' ? 'Home' : p.lang === 'zh' ? '首页' : 'ホーム'}</a>
+            <div className="langswitch" role="group" aria-label="language">
+              {(['en', 'zh', 'ja'] as Lang[]).map((l) => (
+                <a
+                  key={l}
+                  className={l === p.lang ? 'on' : ''}
+                  href={`${langRoot(l)}docs/`}
+                  hrefLang={LANG_HTML[l]}
+                >
+                  {LANG_LABEL[l]}
+                </a>
+              ))}
+            </div>
+          </nav>
+        </div>
+      </header>
+
+      <div className="shell">
+        <section className="frontmatter">
+          <div className="eyebrow">{HUB_TITLE[p.lang]}</div>
+          <h1>{HUB_TITLE[p.lang]}</h1>
+          <p className="abstract">{HUB_LEDE[p.lang]}</p>
+        </section>
+
+        {p.nav.map((g) => (
+          <section key={g.id} id={g.id}>
+            <div className="sechead">
+              <h2>{g.label}</h2>
+            </div>
+            <div className="cards">
+              {g.items.map((it) => (
+                <div className="card" key={it.slug}>
+                  <h3>
+                    <a href={`${it.slug}/`}>{it.title}</a>
+                  </h3>
+                  {p.blurbs[it.slug] && <p>{p.blurbs[it.slug]}</p>}
+                </div>
+              ))}
+            </div>
+          </section>
+        ))}
+
+        <section id="commands">
+          <div className="sechead">
+            <h2>{HUB_COMMANDS[p.lang]}</h2>
+          </div>
+          <div className="cards">
+            <div className="card">
+              <h3>
+                <a href="commands/">{HUB_COMMANDS[p.lang]}</a>
+              </h3>
+              <p>{HUB_COMMANDS_BLURB[p.lang]}</p>
+            </div>
+          </div>
+        </section>
+
+        <Footer lang={p.lang} />
+      </div>
+    </>
+  )
+}
+
+export function renderDocHub(p: HubPage, cssHref: string): string {
+  const body = renderToStaticMarkup(<Hub {...p} />)
+  return `<!doctype html>
+<html lang="${LANG_HTML[p.lang]}">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${HUB_TITLE[p.lang]} · kevy</title>
+    <meta name="description" content="${escapeAttr(HUB_LEDE[p.lang])}">
+    <link rel="canonical" href="https://kevy.golia.jp${p.lang === 'en' ? '' : `/${p.lang}`}/docs/">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#fcfbf8">
+    <link rel="icon" href="${up(p.depth)}kevy-logo.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="${up(p.depth)}${cssHref}">
+  </head>
+  <body>
+${body}
+  </body>
+</html>
+`
+}
+
 export function renderDocPage(p: DocPage, cssHref: string): string {
   const body = renderToStaticMarkup(<Doc {...p} />)
   const alt = p.have
