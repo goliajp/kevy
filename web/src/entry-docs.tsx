@@ -35,7 +35,7 @@ const ON_THIS_PAGE: Record<Lang, string> = {
 const HUB_TITLE: Record<Lang, string> = { en: 'Documentation', zh: '文档', ja: 'ドキュメント' }
 const HUB_LEDE: Record<Lang, string> = {
   en: 'Every chapter, in reading order. Each one is a markdown file in the repository — what you read here and what GitHub shows are the same text.',
-  zh: '全部章节,按阅读顺序排列。每一篇都是仓库里的一个 markdown 文件 —— 你在这里读到的和 GitHub 上显示的是同一份文字。',
+  zh: '全部章节，按阅读顺序排列。每一篇都是仓库里的一个 markdown 文件 —— 你在这里读到的和 GitHub 上显示的是同一份文字。',
   ja: 'すべての章を、読む順に。各章はリポジトリ内の markdown ファイルそのもので、ここで読めるものと GitHub が表示するものは同じ文章です。',
 }
 const HUB_COMMANDS: Record<Lang, string> = {
@@ -45,7 +45,7 @@ const HUB_COMMANDS: Record<Lang, string> = {
 }
 const HUB_COMMANDS_BLURB: Record<Lang, string> = {
   en: 'Every verb the engine answers, generated from the table it dispatches on.',
-  zh: '引擎能回答的每一条动词,由它分发所用的那张表生成。',
+  zh: '引擎能回答的每一条动词，由它分发所用的那张表生成。',
   ja: 'エンジンが応答するすべての動詞。ディスパッチに使う表から生成しています。',
 }
 
