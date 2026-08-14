@@ -46,6 +46,7 @@ run "vendorgate"  bash bench/vendorgate.sh
 run "docs parity" cargo run -q -p kevy --bin gen_docs -- . --check
 run "CJK punctuation"      python3 tools/check_cjk_punct.py
 run "README benchmarks"    python3 tools/sync_readme_bench.py --check
+run "action versions"      python3 tools/check_action_versions.py
 run "content export"       python3 tools/export_site_content.py --check
 run "markdown port"        python3 tools/check_md_port.py
 # The site's own gates need a build, which needs node_modules. Offered
