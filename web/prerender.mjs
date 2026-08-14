@@ -220,7 +220,7 @@ for (const lang of LANGS) {
 // verb that gains a flag changes these pages by changing the code.
 const { renderCommandIndex, renderCommandPage } = await import('./.ssr/entry-commands.js')
 const commands = JSON.parse(
-  readFileSync(join(ROOT, 'site/data/commands.json'), 'utf8'),
+  readFileSync(join(HERE, 'src/commands.json'), 'utf8'),
 ).commands
 if (!Array.isArray(commands) || commands.length === 0) {
   throw new Error('site/data/commands.json holds no commands')

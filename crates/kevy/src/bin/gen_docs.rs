@@ -22,8 +22,10 @@ fn main() -> ExitCode {
         (root.join("llms.txt"), llms_txt()),
         (root.join("docs/verb-reference.md"), verb_reference()),
         // The site's command reference renders from this. Same table, same CI
-        // parity check — the pages cannot drift from the engine.
-        (root.join("site/data/commands.json"), commands_json()),
+        // parity check — the 576 command pages cannot drift from the engine.
+        // It lives beside the site's other sources rather than in the built
+        // output: it is an input to the build, not a product of it.
+        (root.join("web/src/commands.json"), commands_json()),
     ];
     let mut stale = false;
     for (path, want) in outputs {
