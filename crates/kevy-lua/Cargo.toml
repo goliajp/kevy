@@ -37,7 +37,7 @@ workspace = true
 #      74 transitive cranelift + std-ecosystem crates. kevy must stay
 #      with `luna-core`.
 [dependencies]
-luna-core = "=2.16.0"  # pinned exact: luna v2.16. Bridge surface
+luna-core = "=3.0.0"  # pinned exact: luna v3.0. Bridge surface
                        # (Vm/Value/Table/Gc/LuaError/LuaVersion)
                        # audited on each bump — build + the full
                        # kevy-lua test suite are the audit pass.
@@ -50,4 +50,4 @@ kevy-bench = { path = "../kevy-bench" }
 # so the dev `tests/*.rs` files can name the type directly. Must
 # match the regular [dependencies] pin to avoid pulling two luna-core
 # semver buckets into the workspace cache.
-luna-core = "=2.16.0"
+luna-core = "=3.0.0"
