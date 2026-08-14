@@ -783,6 +783,49 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - [x] 实施 ✅(2026-08-12,feature/s3-epoll-writer-thread):①-④ 全落地。实施期三收紧(RFC §6):dead-lane SendError chunk 经新 `Aof::requeue_front` 回插队首(order+offset 回归钉死)/ CONFIG SET appendfsync 先 settle lane(owner 句柄 flush 与 clone 在途交错缝)/ 门 park 撤 write interest 防 level-triggered 自旋。S2 三件套全平台化(always_hold_w0/held_responses/flush_held_responses 摘 cfg(linux),双驱动共用)。
 - [x] 验证 ✅:crashgate 33/33 双 host(server-always 双 cell:盒 auto 37,896 + epoll 37,813 acked 全存活;macOS kqueue 423/409)+ persist 72/72 + rt 50/50 + **盒上 A/B(ext4,KEVY_IO_URING=0,always):SET c50 478→10,540 rps(+22×组提交);c1 391 vs 384 持平且 fsync-bound=门无泄漏** + perfgate-median 12/12(uring 面零回归)。PR 测试矩阵(强制 epoll)整体即 lane 实弹面。finding=bench/FINDING-2026-08-12-s3-epoll-writer-lane.md
 
+## 站点重做 ✅(2026-08-13,属主令「按 tiktoken.golia.jp 的风格完全重做,并钉死 web 和 docs 到 release gate 不允许腐败」)
+
+**merge `baf1a0f8` → develop,CI 47 job 零失败。** 站点是 Vite + React 一套系统:
+713 页(首页 + 104 文档 + 576 命令页 + 32 写作页)、三语言、一套组件树一套样式表,
+设计系统与 `tiktoken.golia.jp` 同源(paper 底 / ink 墨 / 发丝规线 / GOLIA 蓝作结构色 /
+Archivo + IBM Plex / CJK `line-break: strict` + `word-break: auto-phrase`)。真 wasm
+引擎在首页(不再有独立 playground —— 属主令「所有东西都是一套的」)。
+
+**页面上没有一处手写的事实**:版本从 `Cargo.toml` 构建期注入、年份走 `getFullYear()`、
+命令表从 `VERB_META` 生成、基准数字来自当天实测并记入账本。旧的 5 个 Python 生成器 +
+渲染器 + 749 个产物文件全部删除。
+
+**五道门**(都红-绿验过,都接进 CI 与 release skill):
+- `web/check.mjs` —— 每页版本对 `Cargo.toml`、12,566 条内链全解析、翻译对齐、**同一份源构建两次逐字节比对**
+- `web/verify.mjs` —— 真 Chromium 17 项:引擎起得来并应答、未知动词返回数据不崩、三语真的不同、无未翻译键、三档视口无横向溢出、文档页翻译孪生页真 200、**关掉 JS 仍可读 38k 字**
+- `tools/check_md_port.py` —— 391 个 markdown 在 Python/TS 两个渲染器下逐字节一致
+- `tools/check_site_content_parity.py` —— 962 段文本全部到达页面
+- `tools/check_site_commands.py` —— 219 条 RESP 示例对真引擎跑通
+
+**基准同轮重测**(属主令「重测,也包括在 site/doc 更新的范畴」):`bench/arena.sh` 在 lx64,
+kevy 5.1.0 vs Redis 8 / valkey 9.1.1 / Dragonfly,绑核 0-7 / 8-15、`-c50 -P16`、每格
+median-of-5 + stdev、吞吐读服务端计数器。七格全部真实领先无 NOISE(最窄 LPUSH 1.09× /
+ZADD 1.08×,gap 仍大于 stdev,照留表内)。**尺子自证**:四引擎全落在 4.0 时代各自位置的
+几个百分点内。四引擎表(三语)+ 首页表 + abstract + 首屏数字 + `PERF-LEDGER.md` 同步。
+
+**门自己抓到的真缺陷(每一个都是"绿灯意味着什么都没查")**:
+- 旧站 hero 写 `kevy 4.0`、masthead 写 `5.0`,而站点服务 5.1.0 —— **同一页两个不同的过期版本**
+- `tools/md.py` **无限循环**:`|` 开头但下一行不是分隔行的表格行,表格分支不接、段落分支排除,`i` 原地打转,三个文件渲染即挂死(存量缺陷)
+- **`\w` 在 Python 是 Unicode、在 JS 只是 ASCII** —— `フォーマット*レコード*（` 一边不斜体一边斜体,24 文件分歧
+- 79 条死链(`~/` 语言根未解析)+ 24 条(卡片链接未按语言根解析)
+- **5 个从来没人能点到的孤儿页**(旧站也没渲染)
+- 我**猜了块的字段名** —— 每个 recipe 的命令、每张卡片的链接都没渲染,而两道门都报绿
+- **内容对账门的递归从没走进 `items`**(报 423 段"全部到位",一条命令没看过 → 962)
+- **`check_site_commands` 报 "ok: 0 commands, all of them run"**(选择器坏了)
+- **删 `site/` 静默废掉 `check_cjk_punct`**(三个目标目录去了两个,继续报 "ok: 0 files")
+- **我给它加的下限本身是错的**(按总数设:本机 224 过、干净克隆 84 挂 —— 下限在量环境不在量被测对象;改成数翻译章节)
+
+**流程教训**:CI 连挂两次都是「本机有而 git 没有的文件」(`web/package.json` 被仓库级
+`package.json` ignore 挡掉、lockfile 同理、`.ssr/` 反向误入库)。此后每次推之前**从
+干净克隆跑 CI 的确切命令**,再没挂过。
+
+**未做**:站点**尚未部署**(`web/dist` 已构建并本地验证,rsync 到 t01 是发布动作,等属主)。
+
 # 开放工作流(2026-08-13 重整,属主令「把这些问题都先合理地补充到 flow 然后全部解决」)
 
 v5.1.0 已发布并 dogfood 回归通过。此前散在几个旧 arc 里的未勾条目,按
