@@ -160,7 +160,27 @@ export const SCENARIOS: Scenario[] = [
     ],
   },
   {
-id: 'scan',
+    id: 'table',
+    label: { en: 'Tables', zh: '表', ja: 'テーブル' },
+    blurb: {
+      en: 'Declare columns over a key prefix and the indexes come with it — rows stay ordinary hashes.',
+      zh: '在键前缀上声明列,索引随之而来 —— 行仍然是普通的哈希。',
+      ja: 'キー接頭辞に列を宣言すれば索引もついてくる——行は普通のハッシュのまま。',
+    },
+    // No query at the end: a freshly declared table's index answers
+    // `-INDEXBUILDING` until it finishes, and the reply itself says to poll
+    // IDX.LIST. Ending on a query would make this scenario's result depend
+    // on how fast the machine is.
+    lines: [
+      'TABLE.DECLARE people PREFIX p: PK id COLUMN id i64 COLUMN name str COLUMN age i64 INDEX age range',
+      'HSET p:1 id 1 name alice age 34',
+      'HSET p:2 id 2 name bob age 41',
+      'TABLE.LIST',
+      'IDX.LIST',
+    ],
+  },
+  {
+    id: 'scan',
     label: { en: 'Keyspace', zh: '键空间', ja: 'キー空間' },
     blurb: {
       en: 'Cursor iteration, bulk writes, and a digest that fingerprints every key under a prefix.',
