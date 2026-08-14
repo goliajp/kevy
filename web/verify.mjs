@@ -120,6 +120,52 @@ try {
   )
   check('an unknown verb answers as data, not a crash', Boolean(await errText.jsonValue()))
 
+  // Every scenario must run clean. Two chips on the old landing page did
+  // not — `INFO server` and an IDX.CREATE written from memory both came
+  // back "unknown command", so a page whose argument is that kevy indexes
+  // and searches answered its own example with a refusal. Nothing could
+  // have caught it: the page asked the published wasm package for a verb
+  // that package was not built with. Now the site builds the engine from
+  // this checkout, and this runs all of it.
+  const picks = await page.locator('.term-pick button').count()
+  check('the playground offers scenarios', picks >= 6, `${picks} scenarios`)
+  const failures = []
+  for (let i = 0; i < picks; i++) {
+    const label = (await page.locator('.term-pick button').nth(i).textContent())?.trim()
+    await page.locator('.term-pick button').nth(i).click()
+    await page.waitForTimeout(250)
+    const rows = await page.evaluate(() =>
+      [...document.querySelectorAll('.term-body > div')].map((d) => [d.className, d.textContent]),
+    )
+    const errs = rows.filter((r) => r[0] === 'err')
+    if (!rows.length) failures.push(`${label}: ran nothing`)
+    for (const e of errs) failures.push(`${label}: ${e[1]}`)
+  }
+  check(
+    'every scenario runs against the engine without an error',
+    failures.length === 0,
+    failures.slice(0, 2).join(' | '),
+  )
+
+  // History and pasted blocks are the two ways anyone with a recipe in
+  // front of them drives a terminal.
+  const pasted = await page.evaluate(async () => {
+    const input = document.querySelector('.term-form input')
+    const dt = new DataTransfer()
+    dt.setData('text', 'SET pasted:1 a\nSET pasted:2 b\nDBSIZE')
+    input.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true }))
+    await new Promise((r) => setTimeout(r, 200))
+    return [...document.querySelectorAll('.term-body > div')].map((d) => d.textContent)
+  })
+  check(
+    'a pasted block runs line by line',
+    pasted.filter((l) => l.startsWith('SET pasted:')).length === 2,
+    pasted.slice(-4).join(' / '),
+  )
+  await page.locator('.term-form input').press('ArrowUp')
+  const recalled = await page.inputValue('.term-form input')
+  check('the arrow keys walk history', recalled === 'DBSIZE', recalled)
+
   // ── the version is the workspace version ────────────────────────────
   const shown = await page.getAttribute('meta[name="generator"]', 'content')
   check(
@@ -270,6 +316,52 @@ try {
   )
   check('the language control is a real control', shape.every((x) => x.pad !== '0px'), shape[0].pad)
   check('exactly one footer per page', shape.every((x) => x.footer === 1))
+
+  // ── the footer is the same footer everywhere, and the lab's footer ──
+  //
+  // The masthead check above was written after the masthead drifted, and
+  // the footer then drifted on its own in exactly the ways nobody sees in
+  // a markup diff: its links lost the underline every other link on the
+  // site carries, because `footer .links a` said `border-bottom: none`;
+  // and the licence line grew a year and a second "GOLIA K.K." under a
+  // wordmark that already says it. web/compare-lab.mjs compares against
+  // the live tiktoken.golia.jp; these are the parts that can be checked
+  // here, without depending on another site being up.
+  const feet = []
+  for (const path of HEADERS) {
+    await page.goto(`${URL_.replace(/\/$/, '')}${path}`, { waitUntil: 'domcontentloaded' })
+    feet.push(
+      await page.evaluate(() => {
+        const f = document.querySelector('footer')
+        const a = f.querySelector('.links a')
+        const s = getComputedStyle(a)
+        const texts = [...f.querySelectorAll('div')]
+          .map((d) => d.textContent.trim())
+          .filter((t) => t && !/GitHub/.test(t))
+        return {
+          border: `${s.borderBottomWidth} ${s.borderBottomStyle}`,
+          links: [...f.querySelectorAll('.links a')].map((x) => x.textContent.trim()).join('|'),
+          mark: f.querySelector('.org img')?.getAttribute('alt') ?? '',
+          licence: texts[texts.length - 1] ?? '',
+        }
+      }),
+    )
+  }
+  check(
+    'every page footer is the same footer',
+    new Set(feet.map((f) => JSON.stringify(f))).size === 1,
+    JSON.stringify(feet[0]),
+  )
+  check(
+    'footer links carry the underline every other link carries',
+    feet.every((f) => f.border !== '0px none' && f.border.startsWith('1px')),
+    feet[0].border,
+  )
+  check(
+    'the licence line does not repeat the organisation or date the page',
+    feet.every((f) => !/GOLIA/.test(f.licence) && !/20\d\d/.test(f.licence)),
+    `${feet[0].mark} wordmark + "${feet[0].licence}"`,
+  )
 
   // ── the page did not shout ──────────────────────────────────────────
   // Font CSS from a CDN can fail in a sandbox without breaking anything;
