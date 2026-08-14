@@ -186,7 +186,7 @@ cargo install kevy && kevy --port 6379
 let db = Db::open("data/")?;
 db.set(b"k", b"v", None)?;
 
-# a browser tab — 218 KB, persists to OPFS
+# a browser tab — 481 KB, persists to OPFS
 const db = await open({ persist: { name: "app" } });
 
 # a microcontroller — no OS, no allocator
@@ -482,7 +482,7 @@ PAGES["choose"] = {
                 ["数据只属于一个程序", "嵌入",
                  "没有 socket，没有第二个进程，也没有东西要序列化。是一次函数调用，不是一次网络往返。"],
                 ["数据属于用户的设备", "浏览器",
-                 "218 KB 的 WebAssembly。真的 TTL，真的发布订阅，落在浏览器自己的文件系统上。离线也能用。"],
+                 "481 KB 的 WebAssembly。真的 TTL，真的发布订阅，落在浏览器自己的文件系统上。离线也能用。"],
                 ["代码在边缘按请求执行", "边缘",
                  "没有要预热的东西，也不用建连接。存储和你的代码待在同一个 isolate 里。"],
                 ["一台没有操作系统、没有堆的设备", "裸机",
@@ -1252,7 +1252,7 @@ PAGES["use/embedded"] = {
             "h1": "把存储<br>放进东西本身",
             "lede": (
                 "没有服务端，没有 socket，没有网络。这个引擎可以是一个你直接调用的 struct，"
-                "可以是一个 218 KB 的 WebAssembly 模块，也可以是一颗没有操作系统的芯片上的 "
+                "可以是一个 481 KB 的 WebAssembly 模块，也可以是一颗没有操作系统的芯片上的 "
                 "no_std 库——<b>而且这三种情况下，它是同一个引擎、同一批命令。</b>"
             ),
         },
@@ -1305,7 +1305,7 @@ assert_eq!(db.get(b"session:7f3a")?.is_some(), true);""",
         {
             "t": "recipe",
             "h2": "在一个浏览器标签页里",
-            "goal": "gzip 之后 218 KB。落在浏览器自己的文件系统上，刷新之后还在，发布订阅还能跨标签页。",
+            "goal": "gzip 之后 481 KB。落在浏览器自己的文件系统上，刷新之后还在，发布订阅还能跨标签页。",
             "cost_t": "成本与限制",
             "items": [
                 {
@@ -1434,7 +1434,7 @@ PAGES["benchmarks"] = {
             "head": ["", "体积", ""],
             "rows": [
                 ["kevy.wasm", "416 KB", "引擎本体，未压缩"],
-                ["gzip 之后", "218 KB", "真正过网络的量"],
+                ["gzip 之后", "481 KB", "真正过网络的量"],
                 ["冷启动", "&lt; 20 ms", "编译加实例化，缓存已热"],
             ],
             "note": (
