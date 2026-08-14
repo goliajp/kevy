@@ -41,7 +41,7 @@ export const SCENARIOS: Scenario[] = [
     label: { en: 'Keys & TTL', zh: '键与 TTL', ja: 'キーと TTL' },
     blurb: {
       en: 'The Redis surface, answered in this tab: strings, counters, expiry.',
-      zh: '在这个标签页里作答的 Redis 面:字符串、计数器、过期。',
+      zh: '在这个标签页里作答的 Redis 面：字符串、计数器、过期。',
       ja: 'このタブが応答する Redis 面——文字列、カウンタ、期限。',
     },
     lines: [
@@ -60,7 +60,7 @@ export const SCENARIOS: Scenario[] = [
     label: { en: 'Structures', zh: '数据结构', ja: 'データ構造' },
     blurb: {
       en: 'Lists, hashes, sets and sorted sets — the same commands, the same replies.',
-      zh: '列表、哈希、集合、有序集合 —— 同样的命令,同样的回复。',
+      zh: '列表、哈希、集合、有序集合 —— 同样的命令，同样的回复。',
       ja: 'リスト・ハッシュ・セット・ソート済みセット——同じコマンド、同じ応答。',
     },
     lines: [
@@ -79,7 +79,7 @@ export const SCENARIOS: Scenario[] = [
     label: { en: 'Secondary index', zh: '二级索引', ja: 'セカンダリ索引' },
     blurb: {
       en: 'Query hashes by a field instead of by key — range, filter, sort, and two indexes composed.',
-      zh: '按字段查哈希,而不是按键 —— 范围、过滤、排序,以及两个索引的合成。',
+      zh: '按字段查哈希，而不是按键 —— 范围、过滤、排序，以及两个索引的合成。',
       ja: 'キーではなくフィールドでハッシュを引く——範囲・絞り込み・並べ替え、そして二つの索引の合成。',
     },
     lines: [
@@ -99,7 +99,7 @@ export const SCENARIOS: Scenario[] = [
     label: { en: 'Full text', zh: '全文检索', ja: '全文検索' },
     blurb: {
       en: 'An inverted index over a field, and a phrase query against it.',
-      zh: '在字段上建倒排索引,再对它做短语查询。',
+      zh: '在字段上建倒排索引，再对它做短语查询。',
       ja: 'フィールド上の転置索引と、それに対するフレーズ検索。',
     },
     lines: [
@@ -115,7 +115,7 @@ export const SCENARIOS: Scenario[] = [
     label: { en: 'Vector search', zh: '向量检索', ja: 'ベクトル検索' },
     blurb: {
       en: 'An HNSW index over an embedding field. Eight dimensions to stay readable; real ones are 768+.',
-      zh: '在嵌入字段上建 HNSW 索引。这里用 8 维以便读懂,真实场景是 768 维起。',
+      zh: '在嵌入字段上建 HNSW 索引。这里用 8 维以便读懂，真实场景是 768 维起。',
       ja: '埋め込みフィールド上の HNSW 索引。読みやすさのため 8 次元、実際は 768 次元以上。',
     },
     lines: [
@@ -131,7 +131,7 @@ export const SCENARIOS: Scenario[] = [
     label: { en: 'Aggregation', zh: '聚合', ja: '集計' },
     blurb: {
       en: 'Group-by maintained on write: counts, sums and extremes without scanning.',
-      zh: '在写入时维护的 group-by:计数、求和、极值,不需要扫描。',
+      zh: '在写入时维护的 group-by：计数、求和、极值，不需要扫描。',
       ja: '書き込み時に維持される group-by——走査せずに件数・合計・極値。',
     },
     lines: [
@@ -148,7 +148,7 @@ export const SCENARIOS: Scenario[] = [
     label: { en: 'Views', zh: '视图', ja: 'ビュー' },
     blurb: {
       en: 'A named query kept up to date as the rows under it change.',
-      zh: '一个具名查询,随它下面的行变化而保持最新。',
+      zh: '一个具名查询，随它下面的行变化而保持最新。',
       ja: '下の行が変わるたびに最新に保たれる名前付きクエリ。',
     },
     lines: [
@@ -164,7 +164,7 @@ export const SCENARIOS: Scenario[] = [
     label: { en: 'Tables', zh: '表', ja: 'テーブル' },
     blurb: {
       en: 'Declare columns over a key prefix and the indexes come with it — rows stay ordinary hashes.',
-      zh: '在键前缀上声明列,索引随之而来 —— 行仍然是普通的哈希。',
+      zh: '在键前缀上声明列，索引随之而来 —— 行仍然是普通的哈希。',
       ja: 'キー接頭辞に列を宣言すれば索引もついてくる——行は普通のハッシュのまま。',
     },
     // No query at the end: a freshly declared table's index answers
@@ -184,7 +184,7 @@ export const SCENARIOS: Scenario[] = [
     label: { en: 'Keyspace', zh: '键空间', ja: 'キー空間' },
     blurb: {
       en: 'Cursor iteration, bulk writes, and a digest that fingerprints every key under a prefix.',
-      zh: '游标迭代、批量写入,以及给某个前缀下所有键取指纹的摘要。',
+      zh: '游标迭代、批量写入，以及给某个前缀下所有键取指纹的摘要。',
       ja: 'カーソル走査、一括書き込み、そして接頭辞配下の全キーを指紋化するダイジェスト。',
     },
     // Bitmaps were here first, and they run — in this tab. They are not in

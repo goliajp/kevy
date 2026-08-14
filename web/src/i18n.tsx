@@ -86,14 +86,14 @@ const dict: Dict = {
   'term.scenarios': { en: 'What to run', zh: '跑哪一段', ja: '何を実行するか' },
   'term.pick': {
     en: 'Pick one — each builds its own rows, then asks a question of them.',
-    zh: '挑一个 —— 每段先建自己的数据,再对它提问。',
+    zh: '挑一个 —— 每段先建自己的数据，再对它提问。',
     ja: 'ひとつ選ぶ——各段はまず自分のデータを作り、それに問いを立てます。',
   },
   'term.prompt': { en: 'type a command', zh: '输入命令', ja: 'コマンドを入力' },
   'term.reset': { en: 'clear', zh: '清空', ja: 'クリア' },
   'term.reach': {
     en: '112 of the 191 server verbs — the embedded surface. Arrow keys walk history; a pasted block runs line by line.',
-    zh: '服务端 191 条动词中的 112 条 —— 嵌入式面。方向键翻历史,整段粘贴逐行执行。',
+    zh: '服务端 191 条动词中的 112 条 —— 嵌入式面。方向键翻历史，整段粘贴逐行执行。',
     ja: 'サーバーの 191 動詞のうち 112——組み込み面。矢印キーで履歴、貼り付けたブロックは一行ずつ実行。',
   },
   'term.booting': { en: 'starting engine…', zh: '正在启动引擎…', ja: 'エンジン起動中…' },
@@ -118,7 +118,7 @@ const dict: Dict = {
   'perf.caption.label': { en: 'Table 1.', zh: '表 1。', ja: '表 1。' },
   'perf.caption': {
     en: 'Throughput in operations per second, higher is better. Full method, hardware and the workloads where kevy does not win are in the benchmark report — a table that only showed the wins would not be a measurement.',
-    zh: '吞吐量,单位为每秒操作数,越高越好。完整方法、硬件,以及 kevy 并未取胜的负载都在基准报告里 —— 只列胜场的表不叫测量。',
+    zh: '吞吐量，单位为每秒操作数，越高越好。完整方法、硬件，以及 kevy 并未取胜的负载都在基准报告里 —— 只列胜场的表不叫测量。',
     ja: 'スループット(秒あたりオペレーション数、高いほど良い)。手法・ハードウェア・および kevy が勝っていないワークロードはベンチマークレポートに記載——勝ち星だけを並べた表は測定ではありません。',
   },
   'perf.report': { en: 'Full benchmark report', zh: '完整基准报告', ja: 'ベンチマーク全文' },
@@ -127,31 +127,31 @@ const dict: Dict = {
   'more.heading': { en: 'What Redis leaves to other services', zh: 'Redis 交给其它服务的那些事', ja: 'Redis が他のサービスに任せる領域' },
   'more.blurb': {
     en: 'Each of these usually means another process to run, another copy of the data, and a job to keep the two in step. Here they read the same keys the writes just landed in.',
-    zh: '这些能力通常各自意味着再跑一个进程、再存一份数据,外加一个让两边保持同步的任务。在这里,它们读的就是写入刚落下的那批键。',
+    zh: '这些能力通常各自意味着再跑一个进程、再存一份数据，外加一个让两边保持同步的任务。在这里，它们读的就是写入刚落下的那批键。',
     ja: 'いずれも通常は、別プロセスをもう一つ動かし、データをもう一部持ち、両者を同期させるジョブを抱えることを意味します。ここではそれらが、書き込みが今落ちたのと同じキーを読みます。',
   },
   'more.vector.h': { en: 'Vector search', zh: '向量检索', ja: 'ベクトル検索' },
   'more.vector.p': {
     en: 'Approximate nearest neighbour over embeddings stored as ordinary values, filtered by ordinary keys.',
-    zh: '在按普通值存储的向量上做近似最近邻,并可用普通键做过滤。',
+    zh: '在按普通值存储的向量上做近似最近邻，并可用普通键做过滤。',
     ja: '通常の値として保存した埋め込みに対する近似最近傍探索。通常のキーで絞り込めます。',
   },
   'more.fts.h': { en: 'Full text', zh: '全文检索', ja: '全文検索' },
   'more.fts.p': {
     en: 'Tokenised, scored search with CJK segmentation, over the values already in the store.',
-    zh: '带评分的分词检索,支持中日韩切分,直接作用于已在库中的值。',
+    zh: '带评分的分词检索，支持中日韩切分，直接作用于已在库中的值。',
     ja: 'スコア付きのトークン検索。CJK の分かち書きに対応し、すでに格納済みの値を対象とします。',
   },
   'more.idx.h': { en: 'Secondary indexes', zh: '二级索引', ja: 'セカンダリインデックス' },
   'more.idx.p': {
     en: 'Declare a field, query by it. The index is maintained by the write path, so it cannot lag behind it.',
-    zh: '声明一个字段,就能按它查询。索引由写路径自己维护,不可能落后于写入。',
+    zh: '声明一个字段，就能按它查询。索引由写路径自己维护，不可能落后于写入。',
     ja: 'フィールドを宣言すれば、それで問い合わせられます。インデックスは書き込みパス自身が維持するため、書き込みから遅れることがありません。',
   },
   'more.view.h': { en: 'Materialised views', zh: '物化视图', ja: 'マテリアライズドビュー' },
   'more.view.p': {
     en: 'A query whose result is kept current as the keys under it change, without a refresh job.',
-    zh: '一条查询,其结果随下层键的变化保持最新,不需要刷新任务。',
+    zh: '一条查询，其结果随下层键的变化保持最新，不需要刷新任务。',
     ja: '配下のキーが変わるたびに結果が最新に保たれるクエリ。リフレッシュジョブは不要です。',
   },
   'more.feed.h': { en: 'Change feed', zh: '变更流', ja: 'チェンジフィード' },
@@ -163,7 +163,7 @@ const dict: Dict = {
   'more.embed.h': { en: 'Embeddable', zh: '可嵌入', ja: '組み込み可能' },
   'more.embed.p': {
     en: 'The same engine as a library inside your process, over a C ABI. No server, no socket, same data files.',
-    zh: '同一个引擎可作为库嵌入你的进程,走 C ABI。无服务端、无套接字,数据文件相同。',
+    zh: '同一个引擎可作为库嵌入你的进程，走 C ABI。无服务端、无套接字，数据文件相同。',
     ja: '同じエンジンを C ABI 経由でプロセス内のライブラリとして。サーバーもソケットも不要で、データファイルは同一です。',
   },
 
@@ -171,18 +171,18 @@ const dict: Dict = {
   'inst.heading': { en: 'Install', zh: '安装', ja: '導入' },
   'inst.server.blurb': {
     en: 'Run it as a server and point any Redis client at it. Nothing in your client code changes.',
-    zh: '作为服务端跑起来,把任意 Redis 客户端指过来。客户端代码一行都不用改。',
+    zh: '作为服务端跑起来，把任意 Redis 客户端指过来。客户端代码一行都不用改。',
     ja: 'サーバーとして起動し、任意の Redis クライアントを向けるだけ。クライアント側のコードは変わりません。',
   },
   'inst.embed.blurb': {
     en: 'Or embed it — no server, no socket, the same data files. Seven languages are on their registries; the Rust one is the engine itself.',
-    zh: '也可以嵌入 —— 无服务端、无套接字,数据文件相同。七种语言已在各自的包管理器上;Rust 那一份就是引擎本体。',
+    zh: '也可以嵌入 —— 无服务端、无套接字，数据文件相同。七种语言已在各自的包管理器上；Rust 那一份就是引擎本体。',
     ja: '組み込みも可能です——サーバーもソケットも不要、データファイルは同一。七つの言語が各レジストリに公開済みで、Rust 版はエンジン本体そのものです。',
   },
   'inst.docs': {
     en: 'Every install line, every command, every configuration key:',
-    zh: '每条安装命令、每条引擎命令、每个配置项:',
-    ja: '各言語の導入手順・全コマンド・全設定キー:',
+    zh: '每条安装命令、每条引擎命令、每个配置项：',
+    ja: '各言語の導入手順・全コマンド・全設定キー：',
   },
 
   // The footer lives in components/Footer.tsx, shared with the reference

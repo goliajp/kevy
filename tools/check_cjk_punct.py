@@ -157,7 +157,12 @@ def main():
     files = []
     for t in targets:
         if t.is_dir():
-            for ext in ("*.html", "*.md", "*.js", "*.py", "*.json"):
+            # .ts/.tsx were missing until the site moved to React and the
+            # user-facing Chinese and Japanese moved with it: every string
+            # in web/src/i18n.tsx and web/src/scenarios.ts was outside this
+            # list, so the gate reported "no half-width punctuation" about
+            # files it had never opened.
+            for ext in ("*.html", "*.md", "*.js", "*.py", "*.json", "*.ts", "*.tsx"):
                 files += sorted(t.rglob(ext))
         elif t.exists():
             files.append(t)
