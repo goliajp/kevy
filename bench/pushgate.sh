@@ -45,6 +45,7 @@ run "killgate"    bash bench/killgate.sh
 run "vendorgate"  bash bench/vendorgate.sh
 run "docs parity" cargo run -q -p kevy --bin gen_docs -- . --check
 run "CJK punctuation"      python3 tools/check_cjk_punct.py
+run "README benchmarks"    python3 tools/sync_readme_bench.py --check
 run "content export"       python3 tools/export_site_content.py --check
 run "markdown port"        python3 tools/check_md_port.py
 # The site's own gates need a build, which needs node_modules. Offered
@@ -67,7 +68,7 @@ fi
 # Derived from ci.yml rather than hand-listed, so a newly added CI step
 # shows up here as uncovered instead of being silently missed.
 printf '\n\033[1m== CI steps NOT covered by this run\033[0m\n'
-COVERED_KEYS="clippy locgate.sh commentgate.sh killgate.sh vendorgate.sh gen_docs check_cjk_punct export_site_content check_md_port check.mjs check_site_content_parity"
+COVERED_KEYS="clippy locgate.sh commentgate.sh killgate.sh vendorgate.sh gen_docs check_cjk_punct sync_readme_bench export_site_content check_md_port check.mjs check_site_content_parity"
 [ "$WITH_TESTS" = 1 ] && COVERED_KEYS="$COVERED_KEYS cargo build --workspace|cargo test --workspace"
 
 COVERED_KEYS="$COVERED_KEYS" python3 - <<'PY'

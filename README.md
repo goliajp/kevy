@@ -278,21 +278,20 @@ from a script in [`bench/`](bench/).
 
 | Workload | kevy | valkey 9.1 | Ratio |
 |---|---:|---:|---:|
-| `GET -c 50 -P 16` | 7.24 M/s | 2.95 M/s | **2.46×** |
-| `SET -c 50 -P 16` | 6.67 M/s | 1.67 M/s | **4.00×** |
+| `GET -c 50 -P 16` | 7.37 M/s | 3.29 M/s | **2.24×** |
+| `SET -c 50 -P 16` | 6.97 M/s | 1.70 M/s | **4.10×** |
 | Pub/sub fan-out (50 subs) | 23.1 M/s | 5.1 M/s | **4.52×** |
 | Embedded `get` (hit) | 9.0 M/s | — | (no in-process Redis) |
 
-The same `GET -c 50 -P 16` face, four engines on one box — kevy at
-7.24 M/s against each (median-of-5; method and per-engine cycle
+The same `GET -c 50 -P 16` face, four engines on one box — kevy at 7.37 M/s against each (median-of-5; method and per-engine cycle
 accounting in
 [`bench/PERF-VERDICT-V4-T9.md`](bench/PERF-VERDICT-V4-T9.md)):
 
 | Engine | kevy's lead |
 |---|---:|
-| valkey 9.1 | **2.46×** |
-| redis 8 | **1.25×** |
-| dragonfly | **3.48×** |
+| valkey 9.1 | **2.24×** |
+| redis 8 | **1.29×** |
+| dragonfly | **2.63×** |
 
 These ratios are **lower than the ones published before 2026-07-19**,
 and the reason is the ruler, not the engines. The earlier figures read
