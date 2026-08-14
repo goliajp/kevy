@@ -267,6 +267,7 @@ the tag.
 
   ```sh
   (cd web && npm ci && npm run build)   # `npm run build` compiles the wasm first
+  python3 tools/check_wasm_published.py  # the deployed wasm vs the published one
   (cd web && node check.mjs)          # versions, links, two builds compared
   (cd web && npx vite preview --port 6040 &)
   (cd web && node verify.mjs)         # real Chromium, the engine must answer
@@ -288,6 +289,18 @@ the tag.
   now points the other way: the page can show a verb the published package
   cannot answer yet. If a deploy adds a capability to the terminal, the npm
   package needs a publish before a reader has it.
+
+  `check_wasm_published.py` answers the one question a deploy can get wrong
+  without anyone noticing: the site's terminal announces a version, npm
+  serves a package announcing the same version, and on 2026-08-14 those
+  were two different builds — 726 KB without `IDX.CREATE` on npm, 1441 KB
+  with it on the site, both labelled 5.1.0. It is not a CI gate: between
+  releases the tree is supposed to be ahead, so it would be red from the
+  first engine change after every release and read as noise. It runs here,
+  where the divergence becomes public. A difference is a **release**
+  decision — publish a new version so the two agree, or deploy knowing the
+  page answers verbs the package cannot. Republishing the same version is
+  not an option npm offers, and would not be honest if it were.
 
   Then verify the DEPLOYED site, not the local one — rsync succeeding says
   nothing about what the server serves:
