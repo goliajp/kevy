@@ -91,7 +91,6 @@ export function App() {
     <LangContext.Provider value={lang}>
       <Layout
         lang={lang}
-        version={__KEVY_VERSION__}
         root="./"
         langs={{
           kind: 'buttons',

@@ -66,10 +66,13 @@ if (!VERSION) fail('no workspace version in Cargo.toml')
 let versionsSeen = 0
 for (const f of pages) {
   const html = readFileSync(f, 'utf8')
-  for (const m of html.matchAll(/class="ver">([^<]+)</g)) {
+  // The version is a meta tag, not chrome: the Golia Lab masthead carries
+  // a wordmark and nothing else. Every page still states it, so every page
+  // can still be held to the manifest.
+  for (const m of html.matchAll(/<meta name="generator" content="kevy ([^"]+)">/g)) {
     versionsSeen++
     if (m[1].trim() !== VERSION) {
-      fail(`${relative(DIST, f)}: masthead says ${m[1]}, the workspace is ${VERSION}`)
+      fail(`${relative(DIST, f)}: page declares ${m[1]}, the workspace is ${VERSION}`)
     }
   }
   // A version in the page's CHROME must be the version the page ships.

@@ -30,16 +30,6 @@
   --accent-deep: #1447e6;
   --accent-wash: #eef3ff;
 
-  /* The terminal quotes another surface, so it keeps a dark ground of its
-     own. These are the only near-black values on the page that are not
-     --ink, and they exist for exactly that one component. */
-  --term-bg: #1b1a1f;
-  --term-fg: #e8e6e1;
-  --term-dim: #8d8a95;
-  --term-accent: #7fb0ff;
-  --term-ok: #8fcfa1;
-  --term-err: #e69a9a;
-
   /* Archivo is a tight grotesque — engineered rather than literary; it does
      the display work a serif used to. Plex Sans carries prose, Plex Mono
      every number, identifier and command. CJK falls back to the system UI
@@ -163,6 +153,8 @@ section {
 }
 
 /* ── masthead ─────────────────────────────────────────────────────── */
+/* The Golia Lab masthead, matching tiktoken.golia.jp exactly: the two lab
+   pages are one publication and should not differ in their chrome. */
 
 .masthead {
   position: sticky;
@@ -175,59 +167,59 @@ section {
 .masthead-inner {
   max-width: var(--maxw);
   margin: 0 auto;
-  padding: 0.75rem 2rem;
+  padding: 0.7rem 2rem;
   display: flex;
   align-items: center;
-  gap: 1.5rem;
+  justify-content: space-between;
+  gap: 1rem;
 }
 @media (max-width: 640px) {
   .masthead-inner {
-    padding: 0.7rem 1.15rem;
+    padding: 0.6rem 1.15rem;
   }
 }
 
 .brand {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0.45rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  border-bottom: none;
   color: var(--ink);
-  margin-right: auto;
 }
 .brand:hover {
+  border-bottom: none;
+  color: var(--ink);
   text-decoration: none;
 }
-.brand .wordmark {
-  font-family: var(--display);
-  font-weight: 700;
-  font-size: 1.05rem;
-  letter-spacing: -0.02em;
+.brand img {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  display: block;
 }
-/* The version rides the wordmark. It is generated from the workspace
-   version at build time — see version.ts — because a hand-typed one went
-   stale twice on the previous site, in two different places, saying 4.0
-   and 5.0 on a page serving 5.1.0. */
-.brand .ver {
+.brand .wordmark {
   font-family: var(--mono);
-  font-size: 0.72rem;
-  color: var(--ink-faint);
+  font-weight: 600;
+  font-size: 1rem;
+  letter-spacing: -0.01em;
 }
 
 .topnav {
   display: flex;
   align-items: center;
-  gap: 1.15rem;
-  font-size: 0.88rem;
-  /* A flex item's min-width defaults to its content, so the nav refuses to
-     shrink and pushes the document wider than the viewport instead. It
-     costs 7px at 390 with the Japanese labels — invisible unless something
-     measures it, which is why verify.mjs does. */
+  gap: 1.35rem;
+  font-size: 0.86rem;
+  /* A flex item will not shrink below its content, so without this the
+     nav pushes the document wider than the viewport — 7px at 390 with the
+     Japanese labels, which verify.mjs measures. */
   min-width: 0;
 }
 .topnav a {
   color: var(--ink-soft);
+  border-bottom: none;
 }
 .topnav a:hover {
-  color: var(--ink);
+  color: var(--accent);
   text-decoration: none;
 }
 @media (max-width: 860px) {
@@ -235,9 +227,6 @@ section {
     display: none;
   }
 }
-/* Below this the two remaining links and the language switch stop fitting
-   beside the wordmark in every locale. The switch is the one control a
-   reader cannot get to any other way, so the links yield first. */
 @media (max-width: 460px) {
   .topnav {
     gap: 0.8rem;
@@ -252,25 +241,24 @@ section {
   border: 1px solid var(--rule-strong);
   border-radius: 3px;
   overflow: hidden;
+  background: var(--paper-raised);
 }
 /* Buttons on the landing page, links everywhere else — one control, two
-   elements, and for a while only one of them had any of this. The
-   selectors name both, because which element it is depends on whether the
-   page has one URL or a translated twin, and a reader should not be able
-   to tell. */
+   elements, and for a while only one of them had any of this. */
 .langswitch button,
 .langswitch a {
-  font: inherit;
-  font-size: 0.76rem;
-  font-family: var(--mono);
-  line-height: 1.4;
-  padding: 0.22rem 0.5rem;
-  background: var(--paper-raised);
+  appearance: none;
+  border: none;
+  background: transparent;
   color: var(--ink-faint);
-  border: 0;
+  font-family: var(--sans);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  padding: 0.28rem 0.55rem;
   cursor: pointer;
   text-decoration: none;
   white-space: nowrap;
+  transition: background 120ms ease, color 120ms ease;
 }
 .langswitch button + button,
 .langswitch a + a {
@@ -283,8 +271,8 @@ section {
 }
 .langswitch button.on,
 .langswitch a.on {
-  background: var(--ink);
-  color: var(--paper);
+  background: var(--accent);
+  color: #fff;
 }
 
 /* ── frontmatter ──────────────────────────────────────────────────── */
@@ -410,29 +398,34 @@ footer .links a:hover > svg:first-child {
 }
 
 /* ── terminal ─────────────────────────────────────────────────────── */
+/* Paper, like the playground on tiktoken.golia.jp and like everything else
+   on the page. An earlier version gave it a dark ground on the theory that
+   a shell is a quotation from another surface; beside a paper page it read
+   as a hole punched in one. */
 
 .term {
   border: 1px solid var(--rule-strong);
   border-radius: 4px;
   overflow: hidden;
-  background: var(--term-bg);
+  background: var(--paper-raised);
 }
 .term-head {
   display: flex;
   align-items: center;
   gap: 0.6rem;
-  padding: 0.5rem 0.85rem;
-  background: #232128;
-  border-bottom: 1px solid #34313b;
+  padding: 0.6rem 0.95rem;
+  background: var(--paper-sunk);
+  border-bottom: 1px solid var(--rule);
   font-family: var(--mono);
-  font-size: 0.74rem;
-  color: var(--term-dim);
+  font-size: 0.76rem;
+  color: var(--ink-soft);
+  letter-spacing: 0.02em;
 }
 .term-head .dot {
-  width: 9px;
-  height: 9px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  background: #3d3a45;
+  background: var(--rule-strong);
   flex: none;
 }
 .term-head .state {
@@ -440,24 +433,29 @@ footer .links a:hover > svg:first-child {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
+  color: var(--ink-faint);
+}
+.term-head .state.live {
+  color: var(--ink-soft);
 }
 .term-head .state.live::before {
   content: '';
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--term-ok);
+  background: var(--accent);
 }
 .term-body {
   font-family: var(--mono);
   font-size: 0.84rem;
-  line-height: 1.55;
-  color: var(--term-fg);
+  line-height: 1.6;
+  color: var(--ink);
   padding: 0.9rem 0.95rem;
   height: 22rem;
   overflow-y: auto;
   white-space: pre-wrap;
   word-break: break-word;
+  background: var(--paper-raised);
 }
 @media (max-width: 640px) {
   .term-body {
@@ -465,40 +463,46 @@ footer .links a:hover > svg:first-child {
     font-size: 0.78rem;
   }
 }
+/* What you typed is ink; what the engine answered is quieter, the way a
+   transcript distinguishes the two without colour. */
 .term-body .in {
-  color: var(--term-fg);
+  color: var(--ink);
 }
 .term-body .in::before {
   content: '› ';
-  color: var(--term-accent);
+  color: var(--accent);
 }
 .term-body .out {
-  color: var(--term-dim);
+  color: var(--ink-soft);
 }
 .term-body .err {
-  color: var(--term-err);
+  color: #a33a3a;
 }
 .term-form {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  border-top: 1px solid #34313b;
+  border-top: 1px solid var(--rule);
   padding: 0.55rem 0.95rem;
-  background: #201f25;
+  background: var(--paper-sunk);
 }
 .term-form span {
   font-family: var(--mono);
-  color: var(--term-accent);
+  color: var(--accent);
   font-size: 0.84rem;
 }
 .term-form input {
   flex: 1;
+  min-width: 0;
   font-family: var(--mono);
   font-size: 0.84rem;
   background: transparent;
   border: 0;
   outline: 0;
-  color: var(--term-fg);
+  color: var(--ink);
+}
+.term-form input::placeholder {
+  color: var(--ink-faint);
 }
 .term-chips {
   display: flex;
@@ -516,10 +520,15 @@ footer .links a:hover > svg:first-child {
   background: var(--paper-raised);
   color: var(--ink-soft);
   cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease;
 }
-.term-chips button:hover {
-  border-color: var(--ink);
-  color: var(--ink);
+.term-chips button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.term-chips button:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 /* ── tables ───────────────────────────────────────────────────────── */
@@ -679,35 +688,58 @@ code {
 
 /* ── footer ───────────────────────────────────────────────────────── */
 
+/* The Golia Lab footer, matching tiktoken.golia.jp: a 2px ink rule closes
+   the page the way the figures strip opens it, and the organisation mark
+   is the wordmark rather than the word. */
 footer {
-  border-top: 1px solid var(--rule);
-  padding: 2.4rem 0 3.5rem;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1.5rem;
-  justify-content: space-between;
-  align-items: flex-start;
-  font-size: 0.85rem;
+  border-top: 2px solid var(--ink);
+  padding: 2rem 0 3.2rem;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 1.2rem;
+  align-items: start;
+  font-size: 0.82rem;
   color: var(--ink-faint);
+}
+@media (max-width: 640px) {
+  footer {
+    grid-template-columns: 1fr;
+  }
 }
 footer .org {
   display: inline-block;
-  margin-bottom: 0.5rem;
+  border-bottom: none;
+  margin-bottom: 0.6rem;
+}
+footer .org:hover {
+  border-bottom: none;
+  opacity: 0.75;
+  text-decoration: none;
+}
+footer .org img {
+  display: block;
+  width: auto;
+  height: 20px;
 }
 footer .links {
   display: flex;
   flex-wrap: wrap;
-  gap: 1rem;
+  gap: 1.1rem;
+  align-items: center;
 }
 footer .links a {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: 0.4rem;
   color: var(--ink-soft);
+  border-bottom: none;
 }
 footer .links a:hover {
-  color: var(--ink);
+  color: var(--accent);
   text-decoration: none;
+}
+footer .links .ext {
+  opacity: 0.45;
 }
 
 /* ── docs ─────────────────────────────────────────────────────────── */

@@ -1,42 +1,58 @@
 import { ArrowUpRight, Package } from 'lucide-react'
 
-// One footer for every page on the site. The landing page renders it in the
-// browser, the reference pages render it at build time through the same
-// component — so there is no second copy to fall out of step with the first.
+import { Brand } from './Brand'
+
+// One footer for every page on the site, and the same footer
+// tiktoken.golia.jp carries — the two lab pages are one publication.
+//
+// The organisation mark is the GOLIA wordmark rather than the word: the
+// same image file, from the same place, so the two pages close the same
+// way.
 
 export type Lang = 'en' | 'zh' | 'ja'
 
 // Never a typed year. On the landing page this evaluates in the reader's
-// browser, so it is right by definition; on the reference pages it
-// evaluates at build time, and the site is rebuilt on every release, which
-// the release gate now enforces. A hardcoded one goes wrong on 1 January
-// and stays wrong until somebody notices, which is the same shape as the
-// version numbers that read 4.0 and 5.0 on a site serving 5.1.0.
+// browser; on the prerendered pages it evaluates at build time, and the
+// release gate rebuilds the site every release. A hardcoded one goes
+// wrong on 1 January and stays wrong.
 const LICENSE: Record<Lang, (y: number) => string> = {
   en: (y) => `MIT or Apache-2.0 · © ${y} GOLIA K.K.`,
   zh: (y) => `MIT 或 Apache-2.0 · © ${y} GOLIA K.K.`,
   ja: (y) => `MIT または Apache-2.0 · © ${y} GOLIA K.K.`,
 }
 
+// crates.io has no simple-icons entry; lucide's Package is what a crate
+// is, and it reads consistently beside the others.
 export const LINKS = [
-  { label: 'GitHub', href: 'https://github.com/goliajp/kevy' },
-  { label: 'crates.io', href: 'https://crates.io/crates/kevy' },
-  { label: 'docs.rs', href: 'https://docs.rs/kevy' },
+  { label: 'GitHub', href: 'https://github.com/goliajp/kevy', icon: <Brand name="GitHub" /> },
+  {
+    label: 'crates.io',
+    href: 'https://crates.io/crates/kevy',
+    icon: <Package size={14} strokeWidth={2} />,
+  },
+  { label: 'npm', href: 'https://www.npmjs.com/package/@goliapkg/kevy', icon: <Brand name="Npm" /> },
+  { label: 'docs.rs', href: 'https://docs.rs/kevy', icon: <Brand name="DocsRs" /> },
 ]
 
-export function Footer({ lang }: { lang: Lang }) {
+export function Footer({ lang, root = './' }: { lang: Lang; root?: string }) {
   return (
     <footer>
       <div>
-        <a className="org" href="https://golia.jp" target="_blank" rel="noreferrer">
-          GOLIA
+        <a
+          className="org"
+          href="https://golia.jp"
+          target="_blank"
+          rel="noreferrer"
+          aria-label="GOLIA"
+        >
+          <img src={`${root}golia-wordmark.png`} alt="GOLIA" width={92} height={20} />
         </a>
         <div>{LICENSE[lang](new Date().getFullYear())}</div>
       </div>
       <div className="links">
-        {LINKS.map(({ label, href }) => (
+        {LINKS.map(({ label, href, icon }) => (
           <a key={label} href={href} target="_blank" rel="noreferrer">
-            <Package size={13} strokeWidth={2} />
+            {icon}
             {label}
             <ArrowUpRight size={12} strokeWidth={2} className="ext" />
           </a>

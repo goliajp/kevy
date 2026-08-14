@@ -20,7 +20,18 @@ function workspaceVersion(): string {
 }
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    // index.html is the only page Vite renders; every other page states the
+    // version through the Layout. This puts the same value in this one,
+    // from the same source, so check.mjs can hold all 719 to the manifest.
+    {
+      name: 'kevy-version-in-html',
+      transformIndexHtml(html: string) {
+        return html.replace(/%KEVY_VERSION%/g, workspaceVersion())
+      },
+    },
+  ],
   define: {
     __KEVY_VERSION__: JSON.stringify(workspaceVersion()),
   },
