@@ -132,6 +132,26 @@ def main():
             )
             blocks.append((f.relative_to(ROOT), body))
 
+    # The playground's scenarios are commands on the site too, but they live
+    # in JavaScript rather than in a <pre>, so this gate could not see them —
+    # and that is where the one command a visitor reported as broken was.
+    # web/verify.mjs runs them against the wasm engine in a browser, which is
+    # the authority; this is the cheap fast copy that says which line and why
+    # without a build and a Chromium.
+    scen = ROOT / "web/src/scenarios.ts"
+    if not scen.exists():
+        print("check_site_commands: web/src/scenarios.ts is missing — the playground moved")
+        return 1
+    lines = [
+        c
+        for arr in re.findall(r"lines:\s*\[(.*?)\n\s*\],", scen.read_text(encoding="utf-8"), re.S)
+        for c in re.findall(r"^\s*'(.*?)',\s*$", arr, re.M)
+    ]
+    if len(lines) < 40:
+        print(f"check_site_commands: only {len(lines)} playground commands — the parse is wrong")
+        return 1
+    blocks.append((scen.relative_to(ROOT), "\n".join(c.replace("\\'", "'") for c in lines)))
+
     srv = subprocess.Popen(
         [str(KEVY), "--port", str(PORT), "--dir", "/tmp/kevy-cmdgate"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

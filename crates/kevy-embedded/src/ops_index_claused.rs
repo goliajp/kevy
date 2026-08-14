@@ -107,8 +107,11 @@ pub(crate) fn unknown_field(clause: &str, bad: &[u8], verb: &str, offered: &[&[u
     let names: Vec<String> =
         offered.iter().map(|n| String::from_utf8_lossy(n).into_owned()).collect();
     KevyError::InvalidInput(format!(
-        "{clause} names field '{}', which this index does not {verb} — it {verb}es: {}",
+        "{clause} names field '{}', which this index does not {verb} — it {}: {}",
         String::from_utf8_lossy(bad),
+        // Third person singular: a sibilant takes -es ("indexes"), anything
+        // else takes -s ("stores"). `{verb}es` for both printed "storees".
+        if verb.ends_with(['s', 'x', 'z']) { format!("{verb}es") } else { format!("{verb}s") },
         names.join(", ")
     ))
 }

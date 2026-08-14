@@ -6,12 +6,20 @@
 //!
 //! # Feature reach
 //!
-//! The wasm module is built `features = ["core", "persist"]`, so `cmd`
-//! reaches every verb in that closure: the string/hash/list/set/zset,
-//! bitmap, keyspace and misc surfaces. Index (`IDX.*` / `VIEW.*`) and
-//! replication verbs are **not** compiled into this build and come back
-//! as an `-ERR unknown command '…'` RESP error — the correct, expected
-//! answer, not a bug.
+//! The wasm module is built with every feature a browser can host —
+//! `core`, `persist`, `index`, `text`, `vector` — so `cmd` reaches the
+//! string/hash/list/set/zset, bitmap, keyspace and misc surfaces *and*
+//! `IDX.*` / `VIEW.*` / `TABLE.*`. What is left out needs something the
+//! browser cannot provide: `replicate` a network peer, `listener` a TCP
+//! socket, `tier` a disk directory.
+//!
+//! It was built `["core", "persist"]` until 2026-08, which meant the
+//! project's own landing page demonstrated secondary indexes against an
+//! engine compiled without them, and answered its own example with
+//! `unknown command`. Verbs outside the embedded surface (streams,
+//! transactions, geo, scripting — the ESTORE_OPS manifest is the
+//! boundary) still answer that way, and for those it is the correct
+//! answer rather than a build mistake.
 //!
 //! # Persistence note
 //!

@@ -4,12 +4,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build && vite build --config vite.ssr.config.ts && node prerender.mjs",
+    "build": "node engine.mjs && tsc -b && vite build && vite build --config vite.ssr.config.ts && node prerender.mjs",
     "preview": "vite preview",
-    "check": "node check.mjs"
+    "check": "node check.mjs",
+    "engine": "node engine.mjs"
   },
   "dependencies": {
-    "@goliapkg/kevy": "^5.1.0",
+    "@goliapkg/kevy": "file:../crates/kevy-wasm/pkg",
     "lucide-react": "^0.469.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

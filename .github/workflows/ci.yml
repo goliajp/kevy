@@ -1144,6 +1144,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # The site depends on `file:../crates/kevy-wasm/pkg`, so the engine
+      # the page runs is the engine in this commit. The published npm
+      # package used to stand in for it, and it lagged: the landing page
+      # demonstrated secondary indexes against a build compiled without
+      # them, and answered "unknown command" to its own example.
+      - name: Rust + the wasm target
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm-site
       - uses: actions/setup-node@v7
         with:
           node-version: 'lts/*'
@@ -1174,6 +1187,11 @@ jobs:
         working-directory: web
       - name: the markdown renderers still agree
         run: python3 tools/check_md_port.py
+      # The size the site quotes is the size of the wasm it ships. It said
+      # 218 KB in three languages for a build that was 481 KB, because the
+      # number was measured once and then quoted forever.
+      - name: the quoted wasm size is the wasm's size
+        run: python3 tools/check_wasm_size.py
       # The written pages moved to the new site by being exported and
       # rendered, not rewritten. These two prove the move lost nothing and
       # that the export has not drifted from the Python content since.
