@@ -106,18 +106,9 @@ jobs:
       - name: generated docs parity (llms.txt / verb-reference == VERB_META)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo run -p kevy --bin gen_docs -- . --check
-      - name: command pages parity (site == VERB_META)
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: python3 tools/gen_command_pages.py --check
-      - name: doc pages parity (site == docs/*.md)
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: python3 tools/gen_docs_site.py --check
       - name: CJK punctuation (no half-width commas in Chinese/Japanese prose)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_cjk_punct.py
-      - name: site links (no dead internal link in site/)
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: python3 tools/check_links.py
       - name: doc links (no dead file or anchor between the markdown docs)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_doc_links.py
@@ -136,11 +127,6 @@ jobs:
       - name: version alignment (six layers agree with the workspace)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_version_alignment.py
-      - name: site commands (every RESP example on the site actually runs)
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: |
-          cargo build -q -p kevy --bin kevy
-          python3 tools/check_site_commands.py
       - name: doc configs (every ```toml in docs/ actually loads)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
@@ -1180,3 +1166,10 @@ jobs:
         run: python3 tools/export_site_content.py --check
       - name: every word of the written pages reached the site
         run: python3 tools/check_site_content_parity.py
+      # Every RESP example on the site is executed against a real engine.
+      # It runs here rather than in the test job because it reads the BUILT
+      # site: what a visitor gets, not what the content says.
+      - name: every RESP example on the site actually runs
+        run: |
+          cargo build -q -p kevy --bin kevy
+          python3 tools/check_site_commands.py
