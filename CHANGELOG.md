@@ -1,5 +1,45 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **The Lua runtime moves to luna-core 3.0.0** (from the exact pin at
+  2.16.0). luna's own 3.0 is a maturity marker, not an API break — its
+  public surface is identical to 2.18.0 and the bridge
+  (`Vm`/`Value`/`Table`/`Gc`/`LuaError`/`LuaVersion`) compiled unchanged.
+  The zero-dependency contract holds: luna-core has no dependencies of its
+  own, so this still adds exactly one third-party crate to kevy's tree.
+
+  **What changes for scripts** comes from 2.18, which corrected the 5.1
+  and 5.2 dialects against PUC 5.5.1. kevy's default dialect is 5.1, so
+  these are visible through `EVAL` without anyone opting in. Measured
+  against the previous pin, same script, same server:
+
+  | | 2.16.0 | 3.0.0 |
+  |---|---|---|
+  | calling a nil local | `attempt to call a nil value (local 'f')` | `attempt to call local 'f' (a nil value)` |
+  | indexing a nil local | `attempt to index a nil value (local 't')` | `attempt to index local 't' (a nil value)` |
+  | arithmetic on a nil local | `…on a nil value (local 'a')` | `…on local 'a' (a nil value)` |
+  | `table.setn` | absent | present (raises "'setn' is obsolete", as PUC does) |
+  | `table.unpack` | present | **absent** |
+  | `table.create` | present | **absent** |
+
+  PUC Lua ≤ 5.2 names the operand first and 5.3 flipped to type-first;
+  luna had been emitting the 5.3+ shape on every dialect. And the table
+  library had been registering the union of every version's functions, so
+  5.1 saw names it does not have. Both are now per-dialect.
+
+  A script that used `table.unpack` under the default dialect will stop
+  finding it. That script was relying on a name real Lua 5.1 does not
+  have — the 5.1 spelling is the global `unpack`, which is unaffected and
+  verified working. Scripts that want `table.unpack` can ask for the
+  dialect that has it: `#!lua version=5.4`, also verified.
+
+  Also in 2.18: `string.rep("", math.maxinteger, "")` no longer hangs the
+  VM. That one is a denial of service reachable from any script, so an
+  embedder running untrusted Lua wants this version.
+
 ## 5.1.0 — the industrial pass
 
 Everything in this release is a defect closed or a stall removed on

@@ -123,6 +123,7 @@ shebang 行上的 Redis 7.0 Functions 元数据（`flags=`、`name=`）会被解
 
 - **没有文件系统、网络或 OS 访问。** `io`、`os`、`package`、`debug`、`coroutine` 都不加载。脚本无法打开文件、建立 socket、派生进程，或读取环境变量。
 - **不加载字节码。** `load(bytecode)` 和 `string.dump` 被封死。只有 Lua 源码能进 VM，这堵死了历史上屡次攻破 Lua 沙箱的“字节码验证器”逃逸路线。
+- **标准库随方言。** 每个方言拿到的是该方言真正有的函数，所以在这里跑通的脚本在同版本的原版 Lua 上也跑得通。默认的 5.1 下，`table.setn` 存在（会抛「'setn' is obsolete」，与 PUC 一致），而 `table.unpack` / `table.create` 不存在——5.1 的写法是全局 `unpack`。想要它们就用 `#!lua version=5.4` 指定有它们的方言。luna-core 3.0.0 之前每个方言看到的是五个版本的并集，脚本因此能用上目标版本并没有的名字。
 - **白名单标准库。** 可用的是 `base`、`math`、`string`、`table`、`cjson`、`cmsgpack`。其他标准模块一概不在。
 - **逐脚本的时间预算。** 每次 `EVAL` 都在一份由 `[lua] time_limit_ms` 推导出的指令预算下运行（默认 5000 ms ≈ 2 亿条指令——与 Redis 默认的 `lua-time-limit` 同一条上限；设 `0` 关闭）。超出返回一个可被接住的 Lua error 并中止脚本。
 - **逐脚本的内存预算。** 每个脚本跑在一份从逐方言 VM 池里取出的全新解释器状态上；调用期间创建的表和字符串在返回时回收。调用之间没有共享的可变 Lua 状态——要持久化什么，用 kevy 的键。
