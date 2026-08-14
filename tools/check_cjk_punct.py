@@ -167,11 +167,23 @@ def main():
     me = pathlib.Path(__file__).resolve()
     files = sorted({f for f in files if f.resolve() != me})
 
-    # A floor. Deleting the old site/ tree took two of this gate's three
-    # target directories with it, and it went on reporting "ok: 0 files, no
-    # half-width punctuation" — a green line meaning it had read nothing.
-    if len(files) < 100:
-        print(f"check_cjk_punct: only {len(files)} files to check — the targets are wrong.")
+    # A floor, on the files this gate exists for rather than on the total.
+    #
+    # Deleting the old site/ tree took two of its three target directories
+    # with it and it went on reporting "ok: 0 files, no half-width
+    # punctuation" — a green line meaning it had read nothing. So there is
+    # a floor now. But a floor on the TOTAL counts whatever happens to be
+    # in tools/ (caches, generated JSON) and differs between a working
+    # tree and a fresh clone: the first version of this check passed here
+    # at 224 files and failed a clean clone at 84, which is the floor
+    # measuring the environment instead of the subject.
+    #
+    # The subject is the translated documentation. There are 34 chapters in
+    # each of two languages and that number only grows.
+    translated = [f for f in files if "/docs/zh/" in str(f) or "/docs/ja/" in str(f)]
+    if len(translated) < 50:
+        print(f"check_cjk_punct: only {len(translated)} translated chapters found — "
+              "the targets are wrong.")
         print("  Scanning nothing reports success; that is not the same as passing.")
         return 1
 
