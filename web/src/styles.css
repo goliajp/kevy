@@ -76,6 +76,8 @@ body {
 a {
   color: var(--accent);
   text-decoration: none;
+  border-bottom: 1px solid rgba(21, 93, 252, 0.3);
+  transition: border-color 130ms ease, color 130ms ease;
 }
 a:hover {
   text-decoration: underline;
@@ -711,36 +713,40 @@ footer .org {
   border-bottom: none;
   margin-bottom: 0.6rem;
 }
+
 footer .org:hover {
   border-bottom: none;
   opacity: 0.75;
-  text-decoration: none;
 }
+
 footer .org img {
   display: block;
   width: auto;
   height: 20px;
 }
+
 footer .links {
   display: flex;
-  flex-wrap: wrap;
   gap: 1.1rem;
-  align-items: center;
+  flex-wrap: wrap;
 }
+
+footer a {
+  color: var(--ink-soft);
+  border-bottom-color: var(--rule-strong);
+}
+
+footer a:hover {
+  color: var(--accent);
+}
+
+
 footer .links a {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  color: var(--ink-soft);
-  border-bottom: none;
+  gap: 0.2rem;
 }
-footer .links a:hover {
-  color: var(--accent);
-  text-decoration: none;
-}
-footer .links .ext {
-  opacity: 0.45;
-}
+
 
 /* ── docs ─────────────────────────────────────────────────────────── */
 
@@ -1138,4 +1144,67 @@ footer .links .ext {
   border-top: 1px solid var(--rule);
   padding-top: 0.7rem;
   margin-top: 0.2rem;
+}
+
+/* The playground's scenario picker. Same paper palette as the page: the
+   terminal is the one place with its own surface, and it stops at the
+   terminal's own border — these controls sit on the page, not inside it. */
+.term-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 1.4rem 0 0.7rem;
+}
+.term-pick button {
+  font: inherit;
+  font-size: 0.78rem;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  color: var(--ink-soft);
+  background: var(--paper-sunk);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  padding: 0.32rem 0.62rem;
+  cursor: pointer;
+  transition: border-color 130ms ease, color 130ms ease, background 130ms ease;
+}
+.term-pick button:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--rule-strong);
+}
+/* After :hover, and matching it as well: `.term-pick button:hover:not(…)`
+   outranks a plain `.on`, so the chosen scenario went back to looking
+   unchosen for as long as the pointer rested on it — which is exactly when
+   somebody is looking at it. */
+.term-pick button.on,
+.term-pick button.on:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--paper);
+}
+.term-pick button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.term-blurb {
+  margin: 0 0 0.7rem;
+  font-size: 0.86rem;
+  color: var(--ink-faint);
+}
+.term-foot {
+  margin: 0.6rem 0 0;
+  font-size: 0.76rem;
+  color: var(--ink-faint);
+}
+.term-foot .linkish {
+  font: inherit;
+  color: var(--accent);
+  background: none;
+  border: none;
+  border-bottom: 1px solid rgba(21, 93, 252, 0.3);
+  padding: 0;
+  cursor: pointer;
+}
+.term-foot .linkish:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
