@@ -53,7 +53,16 @@ function resolveTildes(html: string, lang: Lang, depth: number): string {
   // landing page, in the same shell as everything else — so a link to it
   // is a link to that section, not to a surface that no longer exists.
   html = html.replace(/(href|src)="~\/play\/"/g, `$1="${langRoot}#try"`)
-  return html.replace(/(href|src)="~\//g, `$1="${langRoot}`)
+  html = html.replace(/(href|src)="~\//g, `$1="${langRoot}`)
+  // Card and tab links are written root-relative in the content — the
+  // previous renderer resolved them through a loc() helper, and without
+  // an equivalent they point at a path relative to whatever directory the
+  // page happens to sit in. On use/cache/ that made `docs/persistence/`
+  // mean `use/cache/docs/persistence/`, which is nowhere.
+  return html.replace(
+    /(href)="(docs\/|benchmarks\/|capacity\/|choose\/|migrate\/|use\/)/g,
+    `$1="${langRoot}$2`,
+  )
 }
 
 function Page(p: PageInput) {

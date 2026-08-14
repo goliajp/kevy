@@ -95,9 +95,10 @@ function Cards({ b }: { b: Any }) {
       <div className="cards">
         {(b.items ?? []).map((it: Any, i: number) => (
           <div className="card" key={i}>
-            {it.h && (
+            {it.kicker && <div className="cmd">{it.kicker}</div>}
+            {it.title && (
               <h3>
-                <Html h={it.h} />
+                <Html h={it.title} />
               </h3>
             )}
             {it.body && (
@@ -105,7 +106,11 @@ function Cards({ b }: { b: Any }) {
                 <Html h={it.body} />
               </p>
             )}
-            {it.cmd && <div className="cmd">{it.cmd}</div>}
+            {it.href && (
+              <p className="cmd">
+                <a href={it.href}>{it.go ?? it.href} →</a>
+              </p>
+            )}
           </div>
         ))}
       </div>
@@ -241,9 +246,9 @@ function Steps({ b }: { b: Any }) {
       <ol className="steps">
         {(b.items ?? []).map((it: Any, i: number) => (
           <li key={i}>
-            {it.h && (
+            {it.title && (
               <h3>
-                <Html h={it.h} />
+                <Html h={it.title} />
               </h3>
             )}
             {it.body && (
@@ -251,7 +256,11 @@ function Steps({ b }: { b: Any }) {
                 <Html h={it.body} />
               </p>
             )}
-            {it.cmd && <pre>{it.cmd}</pre>}
+            {it.code && (
+              <pre>
+                <code>{it.code}</code>
+              </pre>
+            )}
           </li>
         ))}
       </ol>
@@ -294,11 +303,19 @@ function Recipe({ b }: { b: Any }) {
       <div className="recipe">
         {(b.items ?? []).map((it: Any, i: number) => (
           <div className="step" key={i}>
-            {it.h && <div className="rh">{it.h}</div>}
-            {it.cmd && <pre>{it.cmd}</pre>}
-            {it.body && (
+            {it.do && (
+              <div className="rh">
+                <Html h={it.do} />
+              </div>
+            )}
+            {it.code && (
+              <pre>
+                <code>{it.code}</code>
+              </pre>
+            )}
+            {it.note && (
               <p>
-                <Html h={it.body} />
+                <Html h={it.note} />
               </p>
             )}
           </div>
@@ -332,15 +349,24 @@ function Tabs({ b, uid }: { b: Any; uid: string }) {
               className="tabinput"
             />
             <label htmlFor={`${uid}-${i}`} className="tablabel">
-              {it.h ?? it.label}
+              {it.label}
             </label>
             <div className="tabpanel">
-              {it.body && (
+              {it.code && (
+              <pre>
+                <code>{it.code}</code>
+              </pre>
+            )}
+              {it.note && (
                 <p>
-                  <Html h={it.body} />
+                  <Html h={it.note} />
                 </p>
               )}
-              {it.cmd && <pre>{it.cmd}</pre>}
+              {it.href && (
+                <p className="caption">
+                  <a href={it.href}>{it.go ?? it.href} →</a>
+                </p>
+              )}
             </div>
           </span>
         ))}
