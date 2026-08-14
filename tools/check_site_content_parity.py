@@ -27,10 +27,23 @@ CONTENT = ROOT / "web/src/content.json"
 
 # Fields that hold prose. Everything else in a block is structure: ids,
 # hrefs, tone names, block types.
+# Every field that carries something a reader is meant to see, including
+# the code. Leaving `code` out is how four recipe blocks rendered with no
+# commands in them while this gate still reported every fragment present:
+# the prose around the commands was there, and the commands were the part
+# that mattered.
 TEXT_KEYS = {
     "h1", "h2", "h3", "h", "lede", "intro", "body", "title", "text", "note",
     "caption", "goal", "cost", "q", "a", "label", "summary", "eyebrow",
+    "code", "do", "kicker", "go",
 }
+
+
+# Containers to walk INTO. Without these the recursion stops at the first
+# dict whose key is not itself a text key, which is how `items` — the list
+# holding every card, step, recipe line and tab — was skipped whole. The
+# gate reported 423 fragments present and had never looked at one command.
+CONTAINER_KEYS = {"items", "blocks", "rows", "fields"}
 
 
 def strings(node, out):
@@ -42,17 +55,47 @@ def strings(node, out):
             strings(x, out)
     elif isinstance(node, dict):
         for k, v in node.items():
-            if k in TEXT_KEYS:
+            if k in TEXT_KEYS or k in CONTAINER_KEYS:
                 strings(v, out)
 
 
-def normalise(s):
-    """HTML the content wrote by hand, plus the entities the renderer adds,
-    reduced to the words a reader sees. Comparing markup would fail on
-    formatting differences that change nothing."""
-    s = re.sub(r"<[^>]+>", "", s)
+# Tags the content genuinely writes by hand for emphasis and links. Only
+# these are stripped — `<768 f32, little-endian>` inside a code sample is
+# not markup, and treating every angle bracket as a tag deleted it from
+# the source side while the page rendered it correctly, reporting sixteen
+# false losses.
+INLINE_TAG = re.compile(r"</?(?:b|i|em|strong|code|a|span|kbd)\b[^>]*>", re.I)
+# `<br>` is not decoration around a word, it is a line: dropping it joins
+# "the data" to "and the way" into one token that appears on no page.
+BREAK_TAG = re.compile(r"<br\s*/?>", re.I)
+
+
+def normalise(s, *, source):
+    """The words a reader sees. Comparing markup would fail on formatting
+    differences that change nothing.
+
+    `source` distinguishes the two sides: the content writes a handful of
+    inline tags by hand, while the rendered page is HTML throughout."""
+    if source:
+        s = BREAK_TAG.sub(" ", s)
+        s = INLINE_TAG.sub("", s)
+    else:
+        s = re.sub(r"<[^>]+>", " ", s)
     s = html.unescape(s)
-    return re.sub(r"\s+", " ", s).strip()
+    # ALL whitespace goes, both sides.
+    #
+    # React emits a space between an element and its neighbouring text, so
+    # `<b>…read</b>, and` renders as `read , and` and `(<code>EF</code>)`
+    # as `( EF)`. In Japanese, where the source has no spaces at all, every
+    # `</b>` boundary produces one. Chasing these with punctuation rules
+    # took 160 false losses down to 128 and would never have reached zero:
+    # the artefact is "whitespace appears at element boundaries", and the
+    # boundaries are wherever the prose happens to be marked up.
+    #
+    # Whitespace is not evidence of content loss. A dropped paragraph
+    # changes the characters; a moved space does not. Comparing with all of
+    # it removed is what makes this gate answer the question it asks.
+    return re.sub(r"\s+", "", s)
 
 
 def main():
@@ -79,12 +122,12 @@ def main():
                 missing.append(f"{lang}:{slug or '(home)'}: no page was built at {rel}")
                 continue
             pages += 1
-            rendered = normalise(f.read_text(encoding="utf-8"))
+            rendered = normalise(f.read_text(encoding="utf-8"), source=False)
 
             texts = []
             strings(page.get("blocks", []), texts)
             for t in texts:
-                want = normalise(t)
+                want = normalise(t, source=True)
                 # Very short fragments ("OK", a single verb) collide with
                 # chrome and prove nothing either way.
                 if len(want) < 12:
