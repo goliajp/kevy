@@ -267,12 +267,22 @@ kevy is the hot in-memory tier.
 
 ## FAQ
 
-**Does the full command surface work in the browser?** The npm
-package exposes the KV + TTL + counter + scan + pub/sub cut — the
-surface a browser store needs, kept small on purpose (the wasm module
-is 416 KB uncompressed). The Rust API on wasm targets exposes the
-full `kevy-embedded` feature set of whichever features you compile
-in.
+**Does the full command surface work in the browser?** Most of it.
+The module is built with every feature a browser can host — `core`,
+`persist`, `index`, `text`, `vector` — so `cmd` reaches the KV, TTL,
+counter, scan and pub/sub surfaces *and* `IDX.*` (secondary indexes,
+full-text, vector search), `VIEW.*` and `TABLE.*`. It was the smaller
+cut until 2026-08, which is how the project's own landing page came to
+demonstrate secondary indexes against a build compiled without them.
+
+What is left out needs something a browser cannot provide rather than
+bytes saved: `replicate` a network peer, `listener` a TCP socket,
+`tier` a disk directory. Streams, transactions, geo and scripting are
+outside the embedded engine's verb surface on every platform — the
+boundary is the ESTORE_OPS manifest, not this build.
+
+The Rust API on wasm targets exposes the full `kevy-embedded` feature
+set of whichever features you compile in.
 
 **Is the persisted data portable?** Yes — it is a standard kevy AOF.
 Browser → native and native → browser both replay. See

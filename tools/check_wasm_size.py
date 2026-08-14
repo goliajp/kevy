@@ -9,10 +9,12 @@ it again — the same way the site said 4.0 while shipping 5.1.0.
 
 So it is measured here, from the artifact the npm package would carry, and
 compared against every place the number is written down. The tolerance is
-generous (25%): gzip output moves a little with the toolchain, and a gate
-that fails on a 2% drift would be trained away rather than fixed. What it
-catches is a number that has stopped being true, which is a factor, not a
-percent.
+10%: gzip output moves with the zlib version, but by a percent or two, not
+by ten. It was 25% at first, and 25% was too kind — docs/wasm.md said "416
+KB uncompressed" for a 1442 KB module, and 416 sits inside 25% of the 481
+KB compressed figure, so the gate read a number that was wrong about a
+different quantity as a number that was nearly right about this one. A
+tolerance wide enough to absorb a category error is not a tolerance.
 
 Run: python3 tools/check_wasm_size.py [--write]
 
@@ -37,6 +39,12 @@ SOURCES = [
     "README.md",
     "docs/wasm.md",
     "docs/cookbook.md",
+    # The translations quote the size too, and quote it separately: while
+    # English said 416 KB the Chinese and Japanese said 425 KB, a number
+    # from an even older build that no gate was looking at because this
+    # list stopped at the English chapter.
+    "docs/zh/wasm.md",
+    "docs/ja/wasm.md",
 ]
 
 # A claim is "<n> KB" within a few words of something naming the browser
@@ -55,7 +63,7 @@ NEAR = re.compile(r"wasm|WebAssembly|gzip|gzipped|packed|回線|ブラウザ|浏
 # rather than letting this gate rewrite a number it does not measure.
 NOT_OURS = re.compile(r"IoT|no_std|chip|チップ|芯片|core tier|`core`", re.I)
 
-TOLERANCE = 0.25
+TOLERANCE = 0.10
 
 
 def measured():

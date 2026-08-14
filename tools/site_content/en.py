@@ -1499,7 +1499,7 @@ PAGES["benchmarks"] = {
             "intro": "What you actually ship to a tab.",
             "head": ["", "Size", ""],
             "rows": [
-                ["kevy.wasm", "416 KB", "the engine, uncompressed"],
+                ["kevy.wasm", "1442 KB", "the engine, uncompressed"],
                 ["gzipped", "481 KB", "what crosses the wire"],
                 ["Cold start", "&lt; 20 ms", "compile and instantiate, warm cache"],
             ],

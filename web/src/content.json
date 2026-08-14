@@ -297,7 +297,7 @@
           "rows": [
             [
               "kevy.wasm",
-              "416 KB",
+              "1442 KB",
               "the engine, uncompressed"
             ],
             [
@@ -1598,7 +1598,7 @@
           "rows": [
             [
               "kevy.wasm",
-              "416 KB",
+              "1442 KB",
               "エンジン本体、非圧縮"
             ],
             [
@@ -2899,7 +2899,7 @@
           "rows": [
             [
               "kevy.wasm",
-              "416 KB",
+              "1442 KB",
               "引擎本体，未压缩"
             ],
             [

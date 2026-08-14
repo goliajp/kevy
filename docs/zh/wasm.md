@@ -30,7 +30,7 @@ db.publish("events", "hi from this or any other tab");
 await db.flush();                  // 耐久性屏障
 ```
 
-写入以 kevy append-only 日志的形式流进存储，下次以同一个 `persist.name` 调用 `open()` 时重放。4.0 起日志说带校验和的 v2 记录格式（`KEVYAOF2`——见 [persistence.md](persistence.md)）：存储字节里的位翻转在重放时被拒绝，而不是静默应用。4.0 之前的 tab 存下的日志照常重放（v1，永久可读），并在首次 compaction 时升格 v2；从浏览器 tab 泵出的日志依旧能在原生 kevy 里原样重放，反之亦然。整个包共六个文件（打包 231 KB，过网络 gzip 后 218 KB）：wasm 模块、loader、OPFS worker、手写的 TypeScript 类型，加上常规的 README 和 manifest。边界两侧都是零依赖。
+写入以 kevy append-only 日志的形式流进存储，下次以同一个 `persist.name` 调用 `open()` 时重放。4.0 起日志说带校验和的 v2 记录格式（`KEVYAOF2`——见 [persistence.md](persistence.md)）：存储字节里的位翻转在重放时被拒绝，而不是静默应用。4.0 之前的 tab 存下的日志照常重放（v1，永久可读），并在首次 compaction 时升格 v2；从浏览器 tab 泵出的日志依旧能在原生 kevy 里原样重放，反之亦然。整个包共六个文件（打包 496 KB，过网络 gzip 后 481 KB）：wasm 模块、loader、OPFS worker、手写的 TypeScript 类型，加上常规的 README 和 manifest。边界两侧都是零依赖。
 
 ## Loader API
 
@@ -161,7 +161,11 @@ Cloudflare Workers 之类的边缘 isolate 照浏览器配方：每 isolate 一�
 
 ## FAQ
 
-**完整命令面在浏览器里都可用吗？**npm 包暴露的是 KV + TTL + 计数器 + 扫描 + pub/sub 这一刀——浏览器 store 需要的那部分，刻意保持小巧（wasm 模块未压缩约 425 KB）。wasm target 上的 Rust API 则暴露你编译进来的 `kevy-embedded` feature 的全部能力。
+**完整命令面在浏览器里都可用吗？**大部分可用。模块按浏览器能承载的全部 feature 构建——`core`、`persist`、`index`、`text`、`vector`——所以 `cmd` 除了 KV、TTL、计数器、扫描与 pub/sub，还能到达 `IDX.*`（二级索引、全文、向量检索）、`VIEW.*` 与 `TABLE.*`。2026-08 之前它只有较小的那一刀，项目自己的首页因此在一个没编进索引的构建上演示二级索引。
+
+被留在外面的东西缺的不是字节，而是浏览器给不了的东西：`replicate` 要网络对端，`listener` 要 TCP socket，`tier` 要磁盘目录。流、事务、geo 与脚本在任何平台上都不在嵌入式引擎的动词面里——边界是 ESTORE_OPS manifest，不是这个构建。
+
+wasm target 上的 Rust API 则暴露你编译进来的 `kevy-embedded` feature 的全部能力。
 
 **持久化的数据可移植吗？**可以——它就是标准 kevy AOF。浏览器 → native 和 native → 浏览器都能重放。格式契约见 [persistence.md](persistence.md)。
 
