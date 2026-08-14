@@ -38,17 +38,20 @@ public class BlockingTests(ServerFixture fx)
         Assert.Throws<KevyInvalidInputException>(() => c.BLPop(Array.Empty<KevyBytes>(), TimeSpan.FromSeconds(1)));
     });
 
+    // Async, because the body waits on a task: `GetAwaiter().GetResult()`
+    // inside a sync test blocks the thread the task may need to finish on,
+    // which is a deadlock waiting for a slower machine (xUnit1031).
     [Fact]
-    public void WakesOnConcurrentPush()
+    public async Task WakesOnConcurrentPush()
     {
         foreach (var url in H.PubsubUrls(fx))
         {
             using var consumer = KevyClient.Connect(url);
             using var producer = KevyClient.Connect(url);
             var task = Task.Run(() => consumer.BLPop(new KevyBytes[] { "bq" }, TimeSpan.FromSeconds(3)));
-            Thread.Sleep(80);
+            await Task.Delay(80);
             producer.RPush("bq", "payload");
-            var hit = task.GetAwaiter().GetResult();
+            var hit = await task;
             Assert.NotNull(hit);
             Assert.Equal("payload", H.Str(hit!.Value.Value));
         }

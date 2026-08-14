@@ -133,6 +133,15 @@ jobs:
       - name: README benchmarks match the ledger
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/sync_readme_bench.py --check
+      # Every workflow pins each action at one major. Three majors of
+      # setup-node ran side by side here, so a fix applied to one job did
+      # not apply to the next. The --online mode, which also compares
+      # against each action's latest release, is run by hand: a gate that
+      # goes red because somebody else published cannot be acted on at the
+      # moment it fires.
+      - name: workflow actions agree on their versions
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python3 tools/check_action_versions.py
       - name: doc configs (every ```toml in docs/ actually loads)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
@@ -343,7 +352,7 @@ jobs:
         run: rustup toolchain install stable --no-self-update
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -617,14 +626,14 @@ jobs:
           key: clientgate-${{ hashFiles('Cargo.lock') }}
       - name: Build server + cli (release)
         run: cargo build --release -p kevy --bin kevy -p kevy-cli --bin kevy-cli
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 'lts/*'
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: 'stable'
           cache-dependency-path: bench/clientgate/goredis/go.mod
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '8.0.x'
       - name: Install hiredis
@@ -689,7 +698,7 @@ jobs:
           /tmp/kevy-smoke-cpp /tmp/kevy-smoke-cpp-data
 
       - name: Go smoke
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: 'stable'
           cache-dependency-path: bindings/go/go.mod
@@ -705,7 +714,7 @@ jobs:
         working-directory: bindings/node
 
       - name: Node smoke
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: 'lts/*'
       - run: cargo build -p kevy-napi
@@ -720,7 +729,7 @@ jobs:
         working-directory: bindings/electron
 
       - name: C# smoke
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '8.0.x'
       - run: |
@@ -756,7 +765,7 @@ jobs:
           - { os: ubuntu-latest, rid: linux-x64 }
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version: '22' }
       - uses: oven-sh/setup-bun@v2
       - name: Install Rust (stable)
@@ -834,20 +843,20 @@ jobs:
       # ── per-language toolchains (exactly one leg fires each) ──────────────
       - name: Set up Go
         if: matrix.lang == 'go'
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: 'stable'
           cache-dependency-path: bindings/go/go.mod
 
       - name: Set up Python
         if: matrix.lang == 'python'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.x'
 
       - name: Set up Node
         if: matrix.lang == 'node'
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           # `node --test` strips TS types natively (the suite is *.test.ts);
           # that is default-on from Node 23.6, so pin the current LTS (24)
@@ -860,7 +869,7 @@ jobs:
 
       - name: Set up .NET
         if: matrix.lang == 'dotnet'
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '8.0.x'
 
@@ -870,7 +879,7 @@ jobs:
         # (cmake + g++ for the C++ leg are already on the ubuntu-latest image,
         # so that door needs no setup step.)
         if: matrix.lang == 'java' || matrix.lang == 'android'
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -899,7 +908,7 @@ jobs:
 
       - name: Set up Node (electron door)
         if: matrix.lang == 'electron'
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: '24'
 
@@ -1094,7 +1103,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: 'stable'
           cache-dependency-path: bindings/go/go.mod
@@ -1135,7 +1144,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 'lts/*'
           cache: npm
