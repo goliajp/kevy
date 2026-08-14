@@ -44,9 +44,19 @@ run "commentgate" bash bench/commentgate.sh
 run "killgate"    bash bench/killgate.sh
 run "vendorgate"  bash bench/vendorgate.sh
 run "docs parity" cargo run -q -p kevy --bin gen_docs -- . --check
-run "command pages parity" python3 tools/gen_command_pages.py --check
 run "CJK punctuation"      python3 tools/check_cjk_punct.py
-run "site links"           python3 tools/check_links.py
+run "content export"       python3 tools/export_site_content.py --check
+run "markdown port"        python3 tools/check_md_port.py
+# The site's own gates need a build, which needs node_modules. Offered
+# rather than assumed: a checkout without them should still get every
+# other check rather than one red line about a missing directory.
+if [ -d web/node_modules ]; then
+    run "site build"   sh -c 'cd web && npm run build >/dev/null'
+    run "site check"   sh -c 'cd web && node check.mjs'
+    run "content parity" python3 tools/check_site_content_parity.py
+else
+    printf '  \033[33mskip\033[0m site build/check — run `npm ci` in web/ first\n'
+fi
 
 if [ "$WITH_TESTS" = 1 ]; then
     run "build"  cargo build --workspace
@@ -57,7 +67,7 @@ fi
 # Derived from ci.yml rather than hand-listed, so a newly added CI step
 # shows up here as uncovered instead of being silently missed.
 printf '\n\033[1m== CI steps NOT covered by this run\033[0m\n'
-COVERED_KEYS="clippy locgate.sh commentgate.sh killgate.sh vendorgate.sh gen_docs gen_command_pages check_cjk_punct check_links"
+COVERED_KEYS="clippy locgate.sh commentgate.sh killgate.sh vendorgate.sh gen_docs check_cjk_punct export_site_content check_md_port check.mjs check_site_content_parity"
 [ "$WITH_TESTS" = 1 ] && COVERED_KEYS="$COVERED_KEYS cargo build --workspace|cargo test --workspace"
 
 COVERED_KEYS="$COVERED_KEYS" python3 - <<'PY'

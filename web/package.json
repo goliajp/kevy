@@ -1,0 +1,26 @@
+{
+  "name": "kevy-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build && vite build --config vite.ssr.config.ts && node prerender.mjs",
+    "preview": "vite preview",
+    "check": "node check.mjs"
+  },
+  "dependencies": {
+    "@goliapkg/kevy": "^5.1.0",
+    "lucide-react": "^0.469.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "playwright-core": "^1.62.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7"
+  }
+}

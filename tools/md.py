@@ -200,5 +200,17 @@ def render(md, link_map=None):
             i += 1
         if body:
             out.append(f'<p>{inline(" ".join(body), link_map)}</p>')
+        elif i < n:
+            # Nothing consumed this line and nothing advanced past it, so the
+            # loop would spin here forever. It happens to a `|` row whose
+            # next line is not a `|---|` separator — the table branch
+            # declines it (no separator) and the paragraph branch excludes
+            # every line starting with `|`. Three files in this repository
+            # hit it, and rendering any of them hung until this arm existed.
+            #
+            # Emitting it as its own paragraph is what a reader wants from a
+            # pipe row that is not a table: the text, verbatim.
+            out.append(f'<p>{inline(lines[i].strip(), link_map)}</p>')
+            i += 1
 
     return "\n".join(out), toc
