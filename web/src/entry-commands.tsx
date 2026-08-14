@@ -1,4 +1,5 @@
 import { type Lang, Layout, page } from './components/Layout'
+import { phrase } from './i18n'
 
 // The command reference: one page per verb, plus an index, through the
 // same Layout as everything else. Generated from web/src/commands.json,
@@ -103,7 +104,7 @@ export function renderCommandIndex(
       <section className="frontmatter">
         <div className="eyebrow">{t.index}</div>
         <h1>{t.index}</h1>
-        <p className="abstract">{t.lede(cmds.length)}</p>
+        <p className="abstract">{phrase(t.lede(cmds.length), lang)}</p>
       </section>
       {[...groups.entries()]
         .sort(([a], [b]) => a.localeCompare(b))

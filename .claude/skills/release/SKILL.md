@@ -266,21 +266,28 @@ the tag.
   two places at once.
 
   ```sh
-  cargo build -p kevy-wasm --target wasm32-unknown-unknown --release
-  cp target/wasm32-unknown-unknown/release/kevy_wasm.wasm crates/kevy-wasm/pkg/kevy.wasm
-  (cd web && npm ci && npm install @goliapkg/kevy@X.Y.Z && npm run build)
+  (cd web && npm ci && npm run build)   # `npm run build` compiles the wasm first
   (cd web && node check.mjs)          # versions, links, two builds compared
   (cd web && npx vite preview --port 6040 &)
   (cd web && node verify.mjs)         # real Chromium, the engine must answer
   rsync -av --delete web/dist/ t01:/apps/kevy/web/
   ```
 
-  The engine the site loads is the PUBLISHED npm package, pinned to the
-  version being released — not the working tree's build. That is deliberate:
-  the terminal on the landing page should be the thing a reader can install,
-  and `npm install @goliapkg/kevy@X.Y.Z` is the line that makes the two the
-  same. `prerender.mjs` refuses to build if that package's version and the
-  workspace disagree.
+  The engine the site loads is built from the checkout: web/package.json
+  depends on `file:../crates/kevy-wasm/pkg` and web/engine.mjs compiles it
+  before every build. It used to be the published npm package pinned to the
+  version being released, on the reasoning that the terminal should be the
+  thing a reader can install — but the site is also deployed between
+  releases, and then "published" means "older". It did exactly that: the
+  landing page demonstrated secondary indexes against a package built
+  without them, and answered `unknown command` to its own example, until a
+  reader said so.
+
+  At release time the two coincide, because release.yml publishes the wasm
+  package from this same tree. **Between releases they do not**, and the gap
+  now points the other way: the page can show a verb the published package
+  cannot answer yet. If a deploy adds a capability to the terminal, the npm
+  package needs a publish before a reader has it.
 
   Then verify the DEPLOYED site, not the local one — rsync succeeding says
   nothing about what the server serves:
