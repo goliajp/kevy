@@ -58,6 +58,45 @@ where it happens, not three commands later. Fixing it means reading a
 whole RESP reply and comparing that, which is test-only work and does
 not belong on a release branch.
 
+## Second occurrence, different test, same cause (2026-08-14)
+
+Run 31837341244 on `release/5.2.0`, same job, a different test:
+
+```
+apply_declares_then_a_card_query_serves ... FAILED
+kevy-cli sql: could not connect to 127.0.0.1:35967: Connection refused
+```
+
+Two failures, two tests, one explanation. Every test file here defines
+its own `free_port()`:
+
+```rust
+std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+```
+
+That asks the kernel for a free ephemeral port, reads it, and **closes
+the listener before the server binds it**. Under `cargo test`'s
+parallelism dozens of test processes draw from the same ephemeral range
+at once, so the window is real and the two observed symptoms are its two
+sides:
+
+- the port was taken by another test's server before ours bound it, and
+  the connection landed on a *different* engine — which answers
+  correctly for its own state, and so returns `:1` where this test's
+  data would have given `:0`;
+- or the port was taken by something that had already exited, our server
+  failed to bind, and the connect got `Connection refused`.
+
+35967 is an ephemeral port, consistent with the diagnosis. It does not
+reproduce locally because a single test binary run alone has nobody to
+race.
+
+**This is a harness defect, not an engine one.** The fix is a port
+helper that keeps the reservation until the server has it, or retries on
+a failed bind and waits for readiness — and it belongs in one place, not
+in the 42 files that each carry a copy. That is test-infrastructure work
+and does not belong on a release branch.
+
 ## Verdict
 
 Archived as a first occurrence. If it recurs, start from the hypothesis
