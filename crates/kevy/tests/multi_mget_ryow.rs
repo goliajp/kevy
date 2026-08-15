@@ -22,13 +22,7 @@ static START_GATE: Mutex<()> = Mutex::new(());
 
 const NSHARDS: usize = 8;
 
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
+use kevy_testnet::free_port;
 
 fn req(parts: &[&[u8]]) -> Vec<u8> {
     let mut v = format!("*{}\r\n", parts.len()).into_bytes();

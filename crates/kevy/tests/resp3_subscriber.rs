@@ -12,10 +12,7 @@ use std::time::Duration;
 
 static START_GATE: Mutex<()> = Mutex::new(());
 
-fn free_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port()
-}
+use kevy_testnet::free_port;
 
 struct Server {
     port: u16,
@@ -44,12 +41,7 @@ impl Server {
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });
-        for _ in 0..200 {
-            if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        kevy_testnet::assert_listening(port, "the server under test");
         Self { port, dir, stop, handle: Some(handle) }
     }
 

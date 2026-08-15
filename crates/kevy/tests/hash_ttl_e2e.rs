@@ -27,9 +27,7 @@ fn cmd(s: &mut std::net::TcpStream, parts: &[&[u8]]) -> Vec<u8> {
     buf[..n].to_vec()
 }
 
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
-}
+use kevy_testnet::free_port;
 
 fn boot(port: u16, dir: std::path::PathBuf, stop: Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {

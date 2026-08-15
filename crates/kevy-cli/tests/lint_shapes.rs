@@ -43,12 +43,7 @@ impl Srv {
             .stderr(std::process::Stdio::null())
             .spawn()
             .expect("spawn kevy server");
-        for _ in 0..1500 {
-            if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+        kevy_testnet::assert_listening(port, "the server under test");
         Srv { child, port, dir }
     }
 }

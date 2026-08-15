@@ -12,25 +12,7 @@ use std::time::Duration;
 
 use kevy_client::ClusterClient;
 
-/// A free base port with `base..=base+n` all bindable (compat port + n cluster
-/// ports). Hold the anchors until just before bind to avoid a TOCTOU race.
-fn free_port_block(n: usize) -> u16 {
-    loop {
-        let anchor = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let base = anchor.local_addr().unwrap().port();
-        let mut ok = true;
-        let mut held = vec![anchor];
-        for i in 1..=n as u16 {
-            if let Ok(l) = std::net::TcpListener::bind(("127.0.0.1", base + i)) { held.push(l) } else {
-                ok = false;
-                break;
-            }
-        }
-        if ok {
-            return base;
-        }
-    }
-}
+use kevy_testnet::free_port_block;
 
 struct Server {
     cluster_base: u16,
