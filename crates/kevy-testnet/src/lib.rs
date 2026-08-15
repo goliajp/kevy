@@ -164,7 +164,7 @@ pub fn free_ports(n: usize) -> Vec<u16> {
 /// than this scheme can promise rather than a transient failure.
 pub fn free_port_block(width: usize) -> u16 {
     assert!(
-        width + 1 <= BLOCK as usize,
+        width < BLOCK as usize,
         "kevy-testnet: asked for a base plus {width} ports; a process block is {BLOCK}"
     );
     let base = block_base();
