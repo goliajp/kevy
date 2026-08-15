@@ -61,6 +61,29 @@ if (pages.length < 100) {
 const VERSION = readFileSync(join(ROOT, 'Cargo.toml'), 'utf8').match(
   /^version = "(\d+\.\d+\.\d+)"/m,
 )?.[1]
+
+// ── the release notes are a real page ───────────────────────────────
+//
+// /changelog/ vanished when the site was rebuilt — the old pipeline
+// generated it, the new one did not, and the server answers an unknown
+// path with the shell and HTTP 200. A status code cannot tell those
+// apart, so this asks for the content: the current version's heading,
+// and enough of the file to be the file.
+{
+  const p = join(DIST, 'changelog', 'index.html')
+  if (!existsSync(p)) {
+    fail('there is no /changelog/ page at all')
+  } else {
+    const html = readFileSync(p, 'utf8')
+    if (html.length < 50_000) {
+      fail(`/changelog/ is only ${html.length} bytes — that is a shell, not the notes`)
+    }
+    if (!html.includes(VERSION)) {
+      fail(`/changelog/ does not mention ${VERSION}`)
+    }
+  }
+}
+
 if (!VERSION) fail('no workspace version in Cargo.toml')
 
 let versionsSeen = 0

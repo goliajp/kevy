@@ -26,6 +26,11 @@ export type DocPage = {
   depth: number
   /** Which other languages have this page. */
   have: Lang[]
+  /** Where this page actually lives, when that is not `/docs/<slug>/`.
+   *  The release notes keep the URL they were published under and that
+   *  downstream users were pointed at; without this the language control
+   *  links to a `/docs/changelog/` that does not exist. */
+  selfHref?: string
 }
 
 const ON_THIS_PAGE: Record<Lang, string> = {
@@ -109,7 +114,11 @@ export function renderDocPage(p: DocPage, css: string): string {
       lang={p.lang}
       root={root}
       here="docs"
-      langs={{ kind: 'links', href: (l) => twin(l, p.slug, p.depth), have: p.have }}
+      langs={{
+        kind: 'links',
+        href: (l) => p.selfHref ?? twin(l, p.slug, p.depth),
+        have: p.have,
+      }}
       aside={<Sidebar nav={p.nav} lang={p.lang} slug={p.slug} depth={p.depth} />}
     >
       {p.toc.length > 2 && (
