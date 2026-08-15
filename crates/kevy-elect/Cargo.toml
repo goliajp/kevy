@@ -18,3 +18,6 @@ workspace = true
 
 [dependencies]
 kevy-resp = { path = "../kevy-resp", version = "5.1.0" }
+
+[dev-dependencies]
+kevy-testnet = { path = "../kevy-testnet" }
