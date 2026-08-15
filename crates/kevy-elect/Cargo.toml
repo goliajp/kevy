@@ -17,4 +17,5 @@ categories = ["database", "network-programming"]
 workspace = true
 
 [dependencies]
+kevy-testnet = { path = "../kevy-testnet" }
 kevy-resp = { path = "../kevy-resp", version = "5.2.0" }

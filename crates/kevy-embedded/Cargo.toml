@@ -77,6 +77,7 @@ kevy-window = { path = "../kevy-window", version = "5.2.0", optional = true }
 kevy-sys = { path = "../kevy-sys", version = "5.2.0", optional = true }
 
 [dev-dependencies]
+kevy-testnet = { path = "../kevy-testnet" }
 # v2.0.20: the `kevy` dev-dep blocks `cargo publish kevy-embedded`
 # because the chain publishes `kevy` LATER (kevy depends on the
 # embedded surface transitively, so kevy-embedded MUST publish

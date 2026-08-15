@@ -24,27 +24,7 @@ fn build_cluster_slots_reply(n: usize, cluster_base: usize) -> String {
 
 static START_GATE: Mutex<()> = Mutex::new(());
 
-/// Pick a base port such that `base..=base+n` are all currently bindable
-/// (the runtime needs the compat port plus `n` cluster ports). The probe
-/// listeners are dropped before returning; START_GATE is held from here
-/// until the runtime is up, closing the rebind race between tests.
-fn free_port_block(n: usize) -> u16 {
-    'retry: loop {
-        let anchor = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let base = anchor.local_addr().unwrap().port();
-        if base.checked_add(n as u16).is_none() {
-            continue;
-        }
-        let mut probes = Vec::with_capacity(n);
-        for i in 1..=n as u16 {
-            match std::net::TcpListener::bind(("127.0.0.1", base + i)) {
-                Ok(l) => probes.push(l),
-                Err(_) => continue 'retry,
-            }
-        }
-        return base;
-    }
-}
+use kevy_testnet::free_port_block;
 
 fn req(parts: &[&[u8]]) -> Vec<u8> {
     let mut v = format!("*{}\r\n", parts.len()).into_bytes();

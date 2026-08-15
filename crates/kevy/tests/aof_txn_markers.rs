@@ -12,16 +12,7 @@ use std::net::TcpStream;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-fn free_port() -> u16 {
-    use std::sync::atomic::AtomicU16;
-    static NEXT: AtomicU16 = AtomicU16::new(26_500);
-    loop {
-        let p = NEXT.fetch_add(1, Ordering::Relaxed);
-        if std::net::TcpListener::bind(("127.0.0.1", p)).is_ok() {
-            return p;
-        }
-    }
-}
+use kevy_testnet::free_port;
 
 fn tmp_dir(tag: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("kevy-txnmark-{tag}-{}", std::process::id()));

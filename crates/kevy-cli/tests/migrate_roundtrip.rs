@@ -47,12 +47,7 @@ impl Srv {
         // machine with every other build and suite, and a server that needs
         // 3 s to come up is slow, not absent. A wait budget tuned on an idle
         // machine is a flake scheduled for the first busy one.
-        for _ in 0..500 {
-            if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+        kevy_testnet::assert_listening(port, "the server under test");
         Srv { child, port }
     }
     fn client(&self) -> RespClient {

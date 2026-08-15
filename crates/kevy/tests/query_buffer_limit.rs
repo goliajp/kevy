@@ -15,9 +15,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-fn free_port() -> u16 {
-    std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port()
-}
+use kevy_testnet::free_port;
 
 #[test]
 fn a_streaming_giant_frame_is_disconnected_at_the_cap() {
@@ -40,12 +38,7 @@ fn a_streaming_giant_frame_is_disconnected_at_the_cap() {
             .run(stop2)
             .unwrap();
     });
-    for _ in 0..200 {
-        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    kevy_testnet::assert_listening(port, "the server under test");
 
     // A syntactically valid frame that never completes, streamed as
     // MANY small args (not one big bulk): a multibulk declaring a huge

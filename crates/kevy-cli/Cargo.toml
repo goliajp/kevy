@@ -23,6 +23,7 @@ name = "kevy-cli"
 path = "src/main.rs"
 
 [dependencies]
+kevy-testnet = { path = "../kevy-testnet" }
 kevy-tmpdir = { path = "../kevy-tmpdir", version = "5.2.0" }
 kevy-embedded = { path = "../kevy-embedded", version = "5.2.0" }
 kevy-persist = { path = "../kevy-persist", version = "5.2.0" }

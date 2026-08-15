@@ -3,7 +3,7 @@
 //! primary, and verifies a replica promotes within the spec'd
 //! window.
 
-use std::net::{IpAddr, Ipv4Addr, TcpListener};
+use std::net::{IpAddr, Ipv4Addr};
 use std::time::{Duration, Instant};
 
 use kevy_elect::{
@@ -12,19 +12,7 @@ use kevy_elect::{
     message::Role,
 };
 
-/// Probe 3 free localhost ports. Same pattern as the
-/// `kevy/tests/replication.rs` `free_port_block` helper.
-fn free_ports(n: usize) -> Vec<u16> {
-    let listeners: Vec<TcpListener> = (0..n)
-        .map(|_| TcpListener::bind("127.0.0.1:0").expect("bind"))
-        .collect();
-    let ports: Vec<u16> = listeners
-        .iter()
-        .map(|l| l.local_addr().unwrap().port())
-        .collect();
-    drop(listeners);
-    ports
-}
+use kevy_testnet::free_ports;
 
 fn fast_cfg() -> ElectConfig {
     ElectConfig {
