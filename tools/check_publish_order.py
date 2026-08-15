@@ -68,6 +68,46 @@ def workspace_deps():
     return deps, publishable
 
 
+
+def unversioned_path_deps():
+    """Path dependencies with no version, in a crate that gets published.
+
+    `cargo publish` refuses them: the path is stripped when the crate is
+    uploaded, so a dependency with no version requirement has nothing left
+    to resolve. It refuses dev-dependencies too — and a test-only crate is
+    exactly where the omission is easy to make, because everything builds
+    and tests fine locally.
+
+    This gate verified the *order* of the chain and said nothing about
+    whether each crate could be published at all, so a `kevy-testnet =
+    { path = "../kevy-testnet" }` written without a version passed here
+    and failed eleven crates into the real publish — after eleven had
+    already gone to crates.io, where nothing can be taken back.
+    """
+    bad = []
+    for manifest in sorted(ROOT.glob("crates/*/Cargo.toml")):
+        text = manifest.read_text(encoding="utf-8")
+        if "publish = false" in text:
+            continue
+        section = None
+        for line_no, line in enumerate(text.splitlines(), 1):
+            st = line.strip()
+            if st.startswith("["):
+                section = st
+                continue
+            # Only real and build dependencies. cargo publish strips
+            # dev-dependencies entirely, so a version-less one is fine
+            # there — kevy-store and kevy-vlog have carried exactly that
+            # for many releases and published every time. Flagging them
+            # would be this gate inventing a rule cargo does not have.
+            if section not in ("[dependencies]", "[build-dependencies]"):
+                continue
+            if "path = " in st and "version" not in st and not st.startswith("#"):
+                name = st.split("=")[0].strip()
+                bad.append((manifest.relative_to(ROOT), line_no, name, section))
+    return bad
+
+
 def main():
     text = WORKFLOW.read_text()
     lists = chains_from_workflow(text)
@@ -112,6 +152,16 @@ def main():
         for p in problems:
             print(f"  {p}")
         print("\nfix: move each crate after every dependency listed above")
+        return 1
+
+    unversioned = unversioned_path_deps()
+    if unversioned:
+        print(f"check_publish_order: FAIL — {len(unversioned)} path dependency(ies) with no version")
+        for rel, line_no, name, section in unversioned:
+            print(f"  \u2717 {rel}:{line_no}  {name} in {section}")
+        print("\ncargo publish strips the path and has nothing left to resolve.")
+        print("An unpublished helper still needs a version beside its path, or the")
+        print("crate depending on it cannot be published at all.")
         return 1
 
     edges = sum(len(deps.get(c, ())) for c in chain)

@@ -15,7 +15,7 @@
     <AssemblyName>Kevy.Client</AssemblyName>
 
     <PackageId>kevy</PackageId>
-    <Version>5.1.0</Version>
+    <Version>5.2.0</Version>
     <Authors>GOLIA K.K.</Authors>
     <Description>The first-party kevy client for .NET — one Connect(url) to the embedded engine or a remote RESP server, every command family on both a sync and an async face. Pure Rust engine, zero services.</Description>
     <PackageLicenseExpression>Apache-2.0 OR MIT</PackageLicenseExpression>
@@ -30,7 +30,7 @@
          dependency on Kevy.Embedded.Internal — a package that does not
          exist, because that project sets IsPackable=false. The result
          restores with NU1101 and nothing in this repository notices,
-         since everything here builds from the projects. 5.1.0 shipped
+         since everything here builds from the projects. 5.2.0 shipped
          exactly that. -->
     <ProjectReference Include="../Kevy.Embedded/Kevy.Embedded.csproj"
                       PrivateAssets="all" />

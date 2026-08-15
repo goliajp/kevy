@@ -33,10 +33,10 @@ categories = ["database", "caching", "api-bindings"]
 workspace = true
 
 [dependencies]
-kevy-embedded = { path = "../kevy-embedded", version = "5.1.0" }
-kevy-resp = { path = "../kevy-resp", version = "5.1.0" }
-kevy-resp-client = { path = "../kevy-resp-client", version = "5.1.0" }
-kevy-hash = { path = "../kevy-hash", version = "5.1.0" }
+kevy-embedded = { path = "../kevy-embedded", version = "5.2.0" }
+kevy-resp = { path = "../kevy-resp", version = "5.2.0" }
+kevy-resp-client = { path = "../kevy-resp-client", version = "5.2.0" }
+kevy-hash = { path = "../kevy-hash", version = "5.2.0" }
 
 [dev-dependencies]
 kevy-testnet = { path = "../kevy-testnet" }

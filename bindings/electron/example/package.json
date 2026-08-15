@@ -1,6 +1,6 @@
 {
   "name": "kevy-electron-example",
-  "version": "5.1.0",
+  "version": "5.2.0",
   "private": true,
   "description": "Minimal Electron app embedding kevy in the main process, reached from the renderer over a contextBridge preload.",
   "license": "(Apache-2.0 OR MIT)",
@@ -10,7 +10,7 @@
     "start": "electron ."
   },
   "dependencies": {
-    "@goliapkg/kevy-electron": "5.1.0"
+    "@goliapkg/kevy-electron": "5.2.0"
   },
   "devDependencies": {
     "electron": ">=28"
