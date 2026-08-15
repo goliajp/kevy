@@ -102,12 +102,7 @@ impl Server {
                 .run(st)
                 .unwrap();
         });
-        for _ in 0..200 {
-            if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        kevy_testnet::assert_listening(port, "the server under test");
         Self { port, dir, stop, handle: Some(handle) }
     }
     /// Stop the runtime but keep the data dir (for reopen tests).

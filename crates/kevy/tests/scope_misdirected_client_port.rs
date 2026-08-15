@@ -28,7 +28,7 @@ use kevy_chaos::{Harness, HarnessConfig};
 #[ignore = "chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first"]
 fn scope_misdirected_reply_uses_client_port() {
     let bin_path = resolve_kevy_bin();
-    let base = pick_free_port_block(48);
+    let base = free_port_block(48);
 
     let node_ports: Vec<(u16, u16, u16)> = (0..2)
         .map(|i| {
@@ -117,23 +117,7 @@ fn scope_misdirected_reply_uses_client_port() {
     }
 }
 
-fn pick_free_port_block(width: usize) -> u16 {
-    'retry: loop {
-        let anchor = std::net::TcpListener::bind("127.0.0.1:0").expect("bind anchor");
-        let base = anchor.local_addr().expect("local_addr").port();
-        if base.checked_add(width as u16).is_none() {
-            continue;
-        }
-        let mut probes = Vec::with_capacity(width);
-        for i in 1..=width as u16 {
-            match std::net::TcpListener::bind(("127.0.0.1", base + i)) {
-                Ok(l) => probes.push(l),
-                Err(_) => continue 'retry,
-            }
-        }
-        return base;
-    }
-}
+use kevy_testnet::free_port_block;
 
 fn resolve_kevy_bin() -> PathBuf {
     if let Ok(p) = std::env::var("KEVY_BIN") {

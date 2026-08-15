@@ -7,7 +7,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::io::{Read, Write};
-use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -47,27 +46,7 @@ mod tempdir {
     }
 }
 
-/// Reserve a contiguous block of `width` free ports starting at some
-/// random base — same trick as `crates/kevy/tests/replication.rs`
-/// `free_port_block`, kept private here to avoid pulling that file
-/// across crate boundaries.
-fn free_port_block(width: usize) -> u16 {
-    'retry: loop {
-        let anchor = TcpListener::bind("127.0.0.1:0").unwrap();
-        let base = anchor.local_addr().unwrap().port();
-        if base.checked_add(width as u16).is_none() {
-            continue;
-        }
-        let mut probes = Vec::with_capacity(width);
-        for i in 1..=width as u16 {
-            match TcpListener::bind(("127.0.0.1", base + i)) {
-                Ok(l) => probes.push(l),
-                Err(_) => continue 'retry,
-            }
-        }
-        return base;
-    }
-}
+use kevy_testnet::free_port_block;
 
 struct Server {
     port: u16,

@@ -1,0 +1,15 @@
+[package]
+name = "kevy-testnet"
+description = "Port allocation and readiness waiting for kevy's own tests. Not published."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+# Test scaffolding, not a product. Nothing outside this workspace should
+# depend on how kevy's tests find a port.
+publish = false
+
+[dependencies]

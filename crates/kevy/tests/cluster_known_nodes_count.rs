@@ -29,7 +29,7 @@ fn cluster_info_known_nodes_reports_peer_count() {
     // PHASE 1: single-node cluster — no peers = "..." string, no
     // elect_port_base (matches cluster_topology_chaos minimal config).
     // Expect `cluster_known_nodes:1` (this node only).
-    let base_a = pick_free_port_block(16);
+    let base_a = free_port_block(16);
     let port_a = base_a;
     let cluster_a = base_a + 1;
     let tmp_a = std::env::temp_dir().join(format!("kevy-chaos-known-a-{port_a}"));
@@ -60,7 +60,7 @@ fn cluster_info_known_nodes_reports_peer_count() {
     // 3-peer list (all listed at fictitious ports; we don't actually
     // start the other 2 — we just verify the node's CLUSTER INFO
     // reads the peer count from its OWN config, not live state).
-    let base_b = pick_free_port_block(32);
+    let base_b = free_port_block(32);
     let port_b = base_b;
     let cluster_b = base_b + 1;
     let elect_b = base_b + 16;
@@ -105,23 +105,7 @@ fn query_cluster_info(port: u16) -> String {
     String::from_utf8_lossy(&buf[..n]).into_owned()
 }
 
-fn pick_free_port_block(width: usize) -> u16 {
-    'retry: loop {
-        let anchor = std::net::TcpListener::bind("127.0.0.1:0").expect("bind anchor");
-        let base = anchor.local_addr().expect("local_addr").port();
-        if base.checked_add(width as u16).is_none() {
-            continue;
-        }
-        let mut probes = Vec::with_capacity(width);
-        for i in 1..=width as u16 {
-            match std::net::TcpListener::bind(("127.0.0.1", base + i)) {
-                Ok(l) => probes.push(l),
-                Err(_) => continue 'retry,
-            }
-        }
-        return base;
-    }
-}
+use kevy_testnet::free_port_block;
 
 fn resolve_kevy_bin() -> PathBuf {
     if let Ok(p) = std::env::var("KEVY_BIN") {

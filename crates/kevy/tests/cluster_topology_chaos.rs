@@ -30,7 +30,7 @@ fn cluster_topology_routing_under_chaos() {
     let main_port = pick_free_port().expect("free port");
     // Reserve a block of consecutive ports for shard-specific cluster
     // listeners: port_base, port_base+1, port_base+2, port_base+3.
-    let cluster_port_base = pick_free_port_block(8);
+    let cluster_port_base = free_port_block(8);
     let tmp = std::env::temp_dir().join(format!("kevy-chaos-cluster-{main_port}"));
     let _ = std::fs::remove_dir_all(&tmp);
 
@@ -168,26 +168,7 @@ fn cluster_topology_routing_under_chaos() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Pick a port `base` such that `base..base+n` are all free at the
-/// moment of return (best-effort; no guarantee they stay free under
-/// concurrent test execution, but pick_free_port has same race).
-fn pick_free_port_block(width: usize) -> u16 {
-    'retry: loop {
-        let anchor = std::net::TcpListener::bind("127.0.0.1:0").expect("bind anchor");
-        let base = anchor.local_addr().expect("local_addr").port();
-        if base.checked_add(width as u16).is_none() {
-            continue;
-        }
-        let mut probes = Vec::with_capacity(width);
-        for i in 1..=width as u16 {
-            match std::net::TcpListener::bind(("127.0.0.1", base + i)) {
-                Ok(l) => probes.push(l),
-                Err(_) => continue 'retry,
-            }
-        }
-        return base;
-    }
-}
+use kevy_testnet::free_port_block;
 
 fn resolve_kevy_bin() -> PathBuf {
     if let Ok(p) = std::env::var("KEVY_BIN") {

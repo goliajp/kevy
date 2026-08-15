@@ -8,10 +8,7 @@ use std::sync::{Arc, Mutex};
 
 static START_GATE: Mutex<()> = Mutex::new(());
 
-fn free_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port()
-}
+use kevy_testnet::free_port;
 
 fn req(parts: &[&[u8]]) -> Vec<u8> {
     let mut v = format!("*{}\r\n", parts.len()).into_bytes();
@@ -103,12 +100,7 @@ impl Server {
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });
-        for _ in 0..200 {
-            if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        kevy_testnet::assert_listening(port, "the server under test");
         Self { port, dir, stop, handle: Some(handle) }
     }
 
