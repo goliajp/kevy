@@ -45,12 +45,7 @@ impl Server {
                 .with_feed(true, 0);
             rt.run(stop_thread).unwrap();
         });
-        for _ in 0..400 {
-            if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        kevy_testnet::assert_listening(port, "the server under test");
         Self { port, dir, stop, handle: Some(handle) }
     }
 

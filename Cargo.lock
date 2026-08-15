@@ -438,6 +438,7 @@ dependencies = [
  "kevy-seg",
  "kevy-store",
  "kevy-sys",
+ "kevy-testnet",
  "kevy-text",
  "kevy-tmpdir",
  "kevy-uring",
@@ -484,6 +485,7 @@ dependencies = [
  "kevy-resp-client",
  "kevy-scalar",
  "kevy-sql",
+ "kevy-testnet",
  "kevy-tmpdir",
 ]
 
@@ -497,6 +499,7 @@ dependencies = [
  "kevy-resp",
  "kevy-resp-client",
  "kevy-rt",
+ "kevy-testnet",
 ]
 
 [[package]]
@@ -521,6 +524,7 @@ dependencies = [
  "kevy-resp",
  "kevy-resp-client",
  "kevy-rt",
+ "kevy-testnet",
 ]
 
 [[package]]
@@ -536,6 +540,7 @@ name = "kevy-elect"
 version = "5.1.0"
 dependencies = [
  "kevy-resp",
+ "kevy-testnet",
 ]
 
 [[package]]
@@ -553,6 +558,7 @@ dependencies = [
  "kevy-seg",
  "kevy-store",
  "kevy-sys",
+ "kevy-testnet",
  "kevy-text",
  "kevy-tmpdir",
  "kevy-vector",
@@ -742,6 +748,10 @@ dependencies = [
 
 [[package]]
 name = "kevy-sys"
+version = "5.1.0"
+
+[[package]]
+name = "kevy-testnet"
 version = "5.1.0"
 
 [[package]]

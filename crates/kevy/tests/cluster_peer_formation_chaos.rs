@@ -37,7 +37,7 @@ fn cluster_peer_formation_survives_node_death() {
     // for cluster + 4 for elect = ~8). Allocate one big 48-port block
     // up front to avoid race-y collisions between consecutive
     // pick_free_port_block calls.
-    let base = pick_free_port_block(48);
+    let base = free_port_block(48);
     let ports: Vec<(u16, u16, u16)> = (0..3)
         .map(|i| {
             let node_base = base + (i as u16) * 16;
@@ -147,23 +147,7 @@ fn info_cluster_known_nodes(port: u16) -> u32 {
     0
 }
 
-fn pick_free_port_block(width: usize) -> u16 {
-    'retry: loop {
-        let anchor = std::net::TcpListener::bind("127.0.0.1:0").expect("bind anchor");
-        let base = anchor.local_addr().expect("local_addr").port();
-        if base.checked_add(width as u16).is_none() {
-            continue;
-        }
-        let mut probes = Vec::with_capacity(width);
-        for i in 1..=width as u16 {
-            match std::net::TcpListener::bind(("127.0.0.1", base + i)) {
-                Ok(l) => probes.push(l),
-                Err(_) => continue 'retry,
-            }
-        }
-        return base;
-    }
-}
+use kevy_testnet::free_port_block;
 
 fn resolve_kevy_bin() -> PathBuf {
     if let Ok(p) = std::env::var("KEVY_BIN") {

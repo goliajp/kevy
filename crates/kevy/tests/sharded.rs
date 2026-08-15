@@ -15,11 +15,7 @@ use std::sync::{Arc, Mutex};
 /// from `free_port()` until our runtime is bound closes that window.
 static START_GATE: Mutex<()> = Mutex::new(());
 
-/// Pick a free localhost port, then free it for the runtime to re-bind.
-fn free_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port()
-}
+use kevy_testnet::free_port;
 
 /// Build a RESP multi-bulk request.
 fn req(parts: &[&[u8]]) -> Vec<u8> {
