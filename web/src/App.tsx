@@ -1,21 +1,19 @@
-import { ArrowDown, ArrowUpRight, Package } from 'lucide-react'
+import { ArrowDown, ArrowUpRight } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 import { CodeBlock } from './components/CodeBlock'
+import { LINKS as FOOTER_LINKS } from './components/Footer'
 import { Layout } from './components/Layout'
 import { Terminal } from './components/Terminal'
 import { detectLang, LangContext, T, type Lang } from './i18n'
 
-const GITHUB = 'https://github.com/goliajp/kevy'
-const CRATES = 'https://crates.io/crates/kevy'
-const DOCSRS = 'https://docs.rs/kevy'
 const DOCS = '/docs/'
 
-const LINKS = [
-  { label: 'GitHub', href: GITHUB, icon: <Package size={14} strokeWidth={2} /> },
-  { label: 'crates.io', href: CRATES, icon: <Package size={14} strokeWidth={2} /> },
-  { label: 'docs.rs', href: DOCSRS, icon: <Package size={14} strokeWidth={2} /> },
-]
+// The hero's buttons are the footer's, minus npm — one definition of what
+// each destination is called and what mark it carries. They used to be a
+// second list here, and it drifted: all three wore the crates.io box,
+// so GitHub and docs.rs were unidentifiable at a glance.
+const LINKS = FOOTER_LINKS.filter((l) => l.label !== 'npm')
 
 const SERVER_SNIPPET = `# a server on the Redis port, speaking RESP2 and RESP3
 cargo install kevy
@@ -23,7 +21,7 @@ kevy --port 6379
 
 # your client does not know the difference
 redis-cli SET user:1 alice
-redis-cli IDX.CREATE users ON HASH PREFIX user: FIELDS city`
+redis-cli IDX.CREATE users ON PREFIX user: FIELD city TYPE str KIND range`
 
 const EMBED_SNIPPET = `// the same engine, in your process — no server, no socket
 let db = kevy_embedded::Store::open("data/")?;
@@ -48,10 +46,10 @@ db.set(b"user:1", b"alice", None)?;
 // cells where kevy is barely ahead. A table that only showed the wins
 // would not be a measurement.
 const PERF: { op: string; kevy: string; valkey: string; ratio: string }[] = [
-  { op: 'GET', kevy: '7.37 M', valkey: '3.29 M', ratio: '2.24×' },
-  { op: 'SET', kevy: '6.97 M', valkey: '1.70 M', ratio: '4.10×' },
-  { op: 'INCR', kevy: '5.91 M', valkey: '2.24 M', ratio: '2.63×' },
-  { op: 'HSET', kevy: '4.49 M', valkey: '1.99 M', ratio: '2.25×' },
+  { op: 'GET', kevy: '7.42 M', valkey: '3.06 M', ratio: '2.43×' },
+  { op: 'SET', kevy: '6.80 M', valkey: '1.69 M', ratio: '4.02×' },
+  { op: 'INCR', kevy: '6.26 M', valkey: '2.31 M', ratio: '2.70×' },
+  { op: 'HSET', kevy: '4.62 M', valkey: '1.81 M', ratio: '2.55×' },
 ]
 
 const BEYOND = ['vector', 'fts', 'idx', 'view', 'feed', 'embed'] as const
@@ -123,7 +121,7 @@ export function App() {
 
           <div className="figures">
             <div className="figure">
-              <div className="v">4.10×</div>
+              <div className="v">4.02×</div>
               <div className="k">
                 <T k="front.fig.speed" />
               </div>
