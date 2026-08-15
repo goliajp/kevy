@@ -11,10 +11,7 @@ use std::io::{Read, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-fn free_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port()
-}
+use kevy_testnet::free_port;
 
 fn req(parts: &[&[u8]]) -> Vec<u8> {
     let mut v = format!("*{}\r\n", parts.len()).into_bytes();
@@ -88,12 +85,7 @@ fn hot_reload_takes_effect_within_one_tick() {
             .with_aof(false);
         rt.run(stop_thread).unwrap();
     });
-    for _ in 0..200 {
-        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    kevy_testnet::assert_listening(port, "the server under test");
     // Wait several ticks so `apply_live_runtime_config` has latched the
     // -1 setting from config_global on shard 0.
     std::thread::sleep(std::time::Duration::from_millis(500));

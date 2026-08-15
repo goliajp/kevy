@@ -167,17 +167,24 @@ fn compare_stores(s: &Store, c: &Store, tag: &str) {
             );
         }
         // TTL is wall-clock-relative: the two reads happen a real
-        // instant apart, so a second boundary can sit between them
-        // (999 vs 1000 on a slow runner). Equal-liveness ±1s is the
-        // invariant; exact equality is a race.
+        // instant apart, so the answers may differ by the time that
+        // actually passed between them. A fixed ±1 assumed the pair could
+        // never straddle more than one second boundary, and on a loaded
+        // machine it does — this failed at 998 vs 1000 with two suites
+        // competing for the cores. Bounding the difference by the elapsed
+        // time is the same invariant stated honestly: it stays ±1 on a
+        // quiet machine, absorbs a scheduler stall, and still refuses a
+        // real divergence, which is not bounded by how long the reads took.
         let ttl_of = |st: &Store| -> i64 {
             let r = run(st, &[b"TTL", key]);
             String::from_utf8_lossy(&r).trim_start_matches(':').trim().parse().unwrap()
         };
+        let started = std::time::Instant::now();
         let (a, b) = (ttl_of(s), ttl_of(c));
+        let slack = started.elapsed().as_secs() as i64 + 1;
         assert!(
-            (a - b).abs() <= 1 && (a > 0) == (b > 0),
-            "{tag}: TTL {} diverged ({a} vs {b})",
+            (a - b).abs() <= slack && (a > 0) == (b > 0),
+            "{tag}: TTL {} diverged ({a} vs {b}, {slack}s of slack)",
             String::from_utf8_lossy(key)
         );
     }

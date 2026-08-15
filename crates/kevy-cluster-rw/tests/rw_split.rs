@@ -36,23 +36,7 @@ mod tempdir {
     }
 }
 
-fn free_port_block(width: usize) -> u16 {
-    'retry: loop {
-        let anchor = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let base = anchor.local_addr().unwrap().port();
-        if base.checked_add(width as u16).is_none() {
-            continue;
-        }
-        let mut probes = Vec::with_capacity(width);
-        for i in 1..=width as u16 {
-            match std::net::TcpListener::bind(("127.0.0.1", base + i)) {
-                Ok(l) => probes.push(l),
-                Err(_) => continue 'retry,
-            }
-        }
-        return base;
-    }
-}
+use kevy_testnet::free_port_block;
 
 struct PrimaryServer {
     port: u16,
@@ -141,12 +125,7 @@ impl ReplicaServer {
                 .with_replica_inboxes(vec![receiver]);
             let _ = rt.run(stop_thread);
         });
-        for _ in 0..400 {
-            if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        kevy_testnet::assert_listening(port, "the server under test");
 
         let runner_stop = Arc::new(AtomicBool::new(false));
         let runner_stop_thread = runner_stop.clone();

@@ -19,58 +19,7 @@ fn dispatch<A: kevy_rt::ArgvView + ?Sized>(store: &mut kevy_store::Store, args: 
 
 static START_GATE: Mutex<()> = Mutex::new(());
 
-/// Hand out a process-unique block of `width + 1` consecutive ports.
-/// An atomic bump makes blocks disjoint across the (now lock-free
-/// parallel) tests in this binary — the probe-bind only guards
-/// against ports held by OTHER processes; the old probe-then-drop
-/// scheme had a TOCTOU window that parallel tests could race into.
-/// A block of consecutive free ports, in a band this PROCESS owns.
-///
-/// `cargo test` compiles each test file into its own binary and runs them
-/// concurrently, and every one of them used to start this counter at 21000.
-/// A bind-check does not save you from that: kevy binds with SO_REUSEPORT, so
-/// two servers in two test processes can hold the SAME port at once and the
-/// kernel routes each connection to one of them by hash. That is how a
-/// replication test that asserts "a quiet stream carries only pings" would
-/// occasionally read a data frame — it had connected to a DIFFERENT test's
-/// server, one that was busy being written to.
-///
-/// Seeding the band from the pid gives each test binary its own 512-port
-/// window, so two of them cannot hand out the same port at all. The bind-check
-/// stays as a second line against anything else on the box.
-fn free_port_block(width: usize) -> u16 {
-    use std::sync::atomic::{AtomicU16, Ordering};
-    use std::sync::LazyLock;
-
-    const BAND: u16 = 512;
-    const LO: u16 = 21_000;
-    const BANDS: u16 = 80; // 21_000 .. 61_960
-
-    /// The first port of THIS process's band.
-    static BAND_LO: LazyLock<u16> = LazyLock::new(|| {
-        // Mix the pid so consecutive pids do not land in adjacent bands and
-        // pids differing by a multiple of BANDS do not collide.
-        let mixed = std::process::id().wrapping_mul(2_654_435_761) >> 16;
-        LO + (mixed % u32::from(BANDS)) as u16 * BAND
-    });
-    static NEXT: LazyLock<AtomicU16> = LazyLock::new(|| AtomicU16::new(*BAND_LO));
-
-    'retry: loop {
-        let span = width as u16 + 1;
-        let base = NEXT.fetch_add(span, Ordering::Relaxed);
-        // Wrap inside our own band, never into someone else's.
-        if base.checked_add(span).is_none() || base + span >= *BAND_LO + BAND {
-            NEXT.store(*BAND_LO, Ordering::Relaxed);
-            continue;
-        }
-        for i in 0..=width as u16 {
-            if std::net::TcpListener::bind(("127.0.0.1", base + i)).is_err() {
-                continue 'retry;
-            }
-        }
-        return base;
-    }
-}
+use kevy_testnet::free_port_block;
 
 /// Poll `port` until something accepts, or fail by name.
 ///
