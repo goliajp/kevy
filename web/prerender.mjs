@@ -233,6 +233,46 @@ for (const lang of LANGS) {
   }
 }
 
+// ── the release notes ────────────────────────────────────────────────────
+// CHANGELOG.md, rendered with the same markdown renderer and the same
+// shell as everything else.
+//
+// It went missing when the site was rebuilt: the old pipeline generated
+// /changelog/ and the new one did not, so the page a reader reaches for
+// release notes became a soft 404 — the shell, served with HTTP 200,
+// which is the shape that hides this. It existed in the first place
+// because a downstream user could not find the notes for the version
+// they were on and read a stale branch instead.
+{
+  const changelogMd = readFileSync(join(HERE, '..', 'CHANGELOG.md'), 'utf8')
+  if (!/^## \[?\d+\.\d+\.\d+/m.test(changelogMd)) {
+    throw new Error('CHANGELOG.md has no version heading — the release notes page would be empty')
+  }
+  const { html, toc } = render(changelogMd, () => null)
+  const outDir = join(DIST, 'changelog')
+  mkdirSync(outDir, { recursive: true })
+  writeFileSync(
+    join(outDir, 'index.html'),
+    renderDocPage(
+      {
+        lang: 'en',
+        slug: 'changelog',
+        title: 'Release notes',
+        desc: `Every kevy release, newest first. Current: ${VERSION}.`,
+        bodyHtml: html,
+        toc,
+        nav: [],
+        version: VERSION,
+        depth: 1,
+        have: ['en'],
+        selfHref: './',
+      },
+      CSS,
+    ),
+  )
+  written++
+}
+
 // ── the command reference ────────────────────────────────────────────────
 // One page per verb, in each language, from the table the engine
 // dispatches on. Nothing here is written by hand, which is the point: a
