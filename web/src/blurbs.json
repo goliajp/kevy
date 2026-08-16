@@ -1,6 +1,6 @@
 {
   "en": {
-    "UPGRADING": "3.x to 4.x: what breaks, and why.",
+    "UPGRADING": "The older majors: 2.x to 3.x and 3.x to 4.0.",
     "accept-shards": "The flag that bought 10.6% by giving fewer cores the listener.",
     "alloc": "The opt-in allocator: ~10% smaller RSS, priced honestly.",
     "async": "Pipelining, and why the engine has no async runtime.",
@@ -30,10 +30,11 @@
     "upgrading-5.0-to-5.1": "Stop 5.0, start 5.1 on the same directory — a read hazard repaired and two stalls removed.",
     "vector-search": "KNN over your keyspace. No embedding model included.",
     "views": "Materialised views, kept fresh by the write path.",
-    "wasm": "151 KB in a browser tab, persisted to OPFS."
+    "wasm": "151 KB in a browser tab, persisted to OPFS.",
+    "upgrading-5.1-to-5.2": "Stop 5.1, start 5.2 on the same directory — the Lua dialects now match upstream."
   },
   "ja": {
-    "UPGRADING": "3.x から 4.x へ —— 何が壊れ、なぜ壊れるのか。",
+    "UPGRADING": "以前のメジャー——2.x から 3.x、および 3.x から 4.0。",
     "accept-shards": "listener を持つ core を減らして 10.6% を買ったフラグ。",
     "alloc": "オプトインのアロケータ —— RSS 約 10% 減、代価は正直に値札どおり。",
     "async": "pipelining と、このエンジンに async runtime が無い理由。",
@@ -63,10 +64,11 @@
     "upgrading-5.0-to-5.1": "5.0 を止めて同じディレクトリで 5.1 を起動——読み出しハザードを修復し、停止を 2 つ除去。",
     "vector-search": "キー空間の上での KNN。embedding モデルは含まない。",
     "views": "マテリアライズドビュー。書き込みパスが鮮度を保つ。",
-    "wasm": "ブラウザのタブに 151 KB、OPFS へ永続化。"
+    "wasm": "ブラウザのタブに 151 KB、OPFS へ永続化。",
+    "upgrading-5.1-to-5.2": "5.1 を止め、同じディレクトリで 5.2 を起動——Lua の方言が上流と一致します。"
   },
   "zh": {
-    "UPGRADING": "3.x 到 4.x：什么会坏，为什么。",
+    "UPGRADING": "更早的大版本：2.x 到 3.x，以及 3.x 到 4.0。",
     "accept-shards": "一个开关，把 listener 交给更少的核，换来 10.6%。",
     "alloc": "可选分配器：RSS 省约 10%，代价照实标价。",
     "async": "pipelining，以及这个引擎为什么没有 async runtime。",
@@ -96,6 +98,7 @@
     "upgrading-5.0-to-5.1": "停 5.0、同目录启 5.1——修掉一个读取隐患，去掉两处停顿。",
     "vector-search": "在你的键空间上做 KNN。不含 embedding 模型。",
     "views": "物化视图，由写路径顺手保持新鲜。",
-    "wasm": "浏览器标签页里的 151 KB，持久化到 OPFS。"
+    "wasm": "浏览器标签页里的 151 KB，持久化到 OPFS。",
+    "upgrading-5.1-to-5.2": "停 5.1、在同一目录起 5.2 —— Lua 方言与上游对齐。"
   }
 }

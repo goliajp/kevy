@@ -43,7 +43,8 @@ const SECTIONS = [
   ['start', { en: 'Getting started', zh: '上手', ja: 'はじめに' },
     ['designing-on-kevy', 'cookbook', 'persistence', 'tuning']],
   ['deploy', { en: 'Running it', zh: '运行', ja: '運用' },
-    ['upgrading-5.0-to-5.1', 'upgrading-4-to-5', 'replication', 'availability', 'cluster',
+    ['upgrading-5.1-to-5.2', 'upgrading-5.0-to-5.1', 'upgrading-4-to-5', 'UPGRADING',
+     'replication', 'availability', 'cluster',
      'tiering', 'accept-shards', 'alloc', 'uds', 'async']],
   ['data', { en: 'Working with data', zh: '数据', ja: 'データ' },
     ['indexes', 'tables', 'table-migration', 'vector-search', 'text-search', 'views',
@@ -54,7 +55,7 @@ const SECTIONS = [
     ['clients', 'bindings', 'client-contract']],
   ['ref', { en: 'Reference', zh: '参考', ja: 'リファレンス' },
     ['boundaries', 'error-replies', 'rds-workloads', 'deploy-behind-a-proxy',
-     'migration', 'UPGRADING']],
+     'migration']],
 ]
 
 const LANGS = ['en', 'zh', 'ja']
