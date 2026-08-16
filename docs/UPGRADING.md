@@ -1,4 +1,4 @@
-# Upgrading kevy
+# Upgrading across the older majors
 
 Two chapters, newest first: **3.x → 4.0** (an API-definition major:
 the client wire carries over, the disk opens unchanged and upgrades
