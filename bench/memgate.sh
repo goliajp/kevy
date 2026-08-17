@@ -31,7 +31,11 @@ command -v redis-benchmark >/dev/null 2>&1 || {
 }
 
 DIR=$(mktemp -d)
-"$BIN" --port "$PORT" --threads 1 &> "$DIR/server.log" &
+# --dir, always: without it the server's data directory is the CURRENT
+# directory, and this gate ran from the repo root — the aof-0.aof +
+# shards.meta pair that kept appearing there between suite rounds was
+# this line's single shard.
+"$BIN" --port "$PORT" --threads 1 --dir "$DIR/data" &> "$DIR/server.log" &
 SRV=$!
 trap 'kill $SRV 2>/dev/null; sleep 0.2; kill -9 $SRV 2>/dev/null; wait $SRV 2>/dev/null; rm -rf "$DIR"' EXIT
 sleep 1
