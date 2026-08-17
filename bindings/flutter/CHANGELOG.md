@@ -1,3 +1,19 @@
+## 5.3.0
+
+Tracks the kevy 5.3.0 engine. No API change in this door — 5.3's core
+deliverable is the engine's own test system (a three-tier audited
+suite), and its one product fix is in `kevy-cli`, which this door does
+not ship. The vendored engine is rebuilt and self-reports 5.3.0.
+
+## 5.2.0
+
+Tracks the kevy 5.2.0 engine. No API change in this door.
+
+* **Lua dialect corrections.** The embedded scripting engine moved to
+  luna-core 3.0.0: each Lua dialect now serves its own table surface
+  and error wording, and the `string.rep` denial-of-service fix from
+  the 5.1 line is pinned by a dedicated gate.
+
 ## 5.1.0
 
 Tracks the kevy 5.1.0 engine. No API change in this door — the vendored
