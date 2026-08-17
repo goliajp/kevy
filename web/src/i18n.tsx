@@ -52,9 +52,9 @@ const dict: Dict = {
   'front.title.b': { en: 'Redis-compatible', zh: 'Redis 兼容', ja: 'Redis 互換' },
   'front.title.c': { en: ' engine that goes further', zh: '，但走得更远', ja: 'の、その先へ' },
   'front.abstract': {
-    en: 'Your Redis client connects unchanged and every operation is faster — 2.4× on GET, 4.0× on SET against valkey 9.1, and ahead of Redis 8 on all seven verbs measured. What it adds is the rest of the data layer: vector search, full-text, secondary indexes, materialised views and a change feed, inside the engine rather than in four services around it. Pure Rust, no third-party crates, 46 of them. The terminal below is the real engine compiled to WebAssembly, running in this tab.',
-    zh: '你的 Redis 客户端不用改一行就能连上，而每个操作都更快 —— 对 valkey 9.1，GET 快 2.4 倍、SET 快 4.0 倍；对 Redis 8，实测的七条命令全部领先。它多出来的是数据层的其余部分：向量检索、全文、二级索引、物化视图、变更流，全在引擎内部，而不是围着它的四个服务里。纯 Rust，零第三方 crate，共 46 个。下面这个终端是真引擎编译成 WebAssembly 后跑在你这个标签页里。',
-    ja: 'お使いの Redis クライアントは一行も変えずに接続でき、しかも全操作が速い——valkey 9.1 に対して GET は 2.4 倍、SET は 4.0 倍。Redis 8 に対しても、計測した 7 コマンドすべてで上回ります。加えてデータ層の残りが揃います：ベクトル検索、全文検索、セカンダリインデックス、マテリアライズドビュー、チェンジフィード。周辺の四つのサービスではなく、エンジンの中に。純 Rust、サードパーティ crate ゼロ、全 46 crate。下のターミナルは本物のエンジンを WebAssembly にしたもので、このタブの中で動いています。',
+    en: 'Your Redis client connects unchanged and every operation is faster — 2.5× on GET, 4.1× on SET against valkey 9.1, and ahead of Redis 8 on all seven verbs measured. What it adds is the rest of the data layer: vector search, full-text, secondary indexes, materialised views and a change feed, inside the engine rather than in four services around it. Pure Rust, no third-party crates, 46 of them. The terminal below is the real engine compiled to WebAssembly, running in this tab.',
+    zh: '你的 Redis 客户端不用改一行就能连上，而每个操作都更快 —— 对 valkey 9.1，GET 快 2.5 倍、SET 快 4.1 倍；对 Redis 8，实测的七条命令全部领先。它多出来的是数据层的其余部分：向量检索、全文、二级索引、物化视图、变更流，全在引擎内部，而不是围着它的四个服务里。纯 Rust，零第三方 crate，共 46 个。下面这个终端是真引擎编译成 WebAssembly 后跑在你这个标签页里。',
+    ja: 'お使いの Redis クライアントは一行も変えずに接続でき、しかも全操作が速い——valkey 9.1 に対して GET は 2.5 倍、SET は 4.1 倍。Redis 8 に対しても、計測した 7 コマンドすべてで上回ります。加えてデータ層の残りが揃います：ベクトル検索、全文検索、セカンダリインデックス、マテリアライズドビュー、チェンジフィード。周辺の四つのサービスではなく、エンジンの中に。純 Rust、サードパーティ crate ゼロ、全 46 crate。下のターミナルは本物のエンジンを WebAssembly にしたもので、このタブの中で動いています。',
   },
   'front.fig.speed': {
     en: 'SET, against valkey 9.1',
