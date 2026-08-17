@@ -12,7 +12,11 @@ struct Srv {
 
 impl Srv {
     fn start() -> Srv {
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        // The suite's shared allocator, not an inline bind(:0)-and-close:
+        // that pattern lost its race under CI parallelism here too — the
+        // one file the 42-copy sweep missed, because its copy lived
+        // inline in start() rather than in a fn the sweep could see.
+        let port = kevy_testnet::free_port();
         // the kevy server binary lives next to our own test artifacts
         let bin = std::path::Path::new(env!("CARGO_BIN_EXE_kevy-cli"))
             .parent()
