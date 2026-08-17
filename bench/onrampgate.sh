@@ -105,13 +105,21 @@ fi
 
 # ---- clamp 3: kill -9 mid-import → resume ----
 $CLI delete-prefix -p $PB mig: >/dev/null
-rm -f "$DIR/dump.progress"
+rm -f "$DIR/dump.resp.progress"
 $CLI import -p $PB "$DIR/dump.resp" >/dev/null 2>&1 &
 IMP=$!
-sleep 1.2
+# Kill once progress is REAL, not after a fixed nap: a fresh import now
+# writes offset 0 at open, and on a cold page cache the first batch can
+# take longer than any fixed sleep — a kill landing before it proves
+# nothing about resume. Poll for a positive offset, then kill.
+for _ in $(seq 1 100); do
+    CUR=$(cat "$DIR/dump.resp.progress" 2>/dev/null || echo 0)
+    [ "${CUR:-0}" -gt 0 ] 2>/dev/null && break
+    sleep 0.1
+done
 kill -9 $IMP 2>/dev/null
 wait $IMP 2>/dev/null
-OFF=$(cat "$DIR/dump.progress" 2>/dev/null || echo 0)
+OFF=$(cat "$DIR/dump.resp.progress" 2>/dev/null || echo 0)
 echo "onrampgate: killed mid-import at offset $OFF"
 if [ "$OFF" = "0" ]; then
     echo "onrampgate: FAIL — no progress recorded before kill"

@@ -140,6 +140,27 @@ def wait_ready():
 # first measurement still climbing, and a line sitting at the
 # distribution's edge flips on exactly that. Steady state is what the
 # claim describes, so steady state is what gets measured.
+# ---- clamp: memory formula vs COLD RSS growth ----
+# Before the write-tax loop, which builds and drops this index five
+# times: after that churn the allocator's span cache covers the final
+# build entirely and RSS growth measures ~0 or negative (round four
+# measured -7 MiB), which says something true about span reuse and
+# nothing about the formula. The formula describes a cold build, so a
+# cold build is what it is checked against.
+rss_before = rss_kb()
+assert cmd(s, buf, "IDX.CREATE", "a_agg", "ON", "PREFIX", "a:", "FIELD", "val",
+           "TYPE", "i64", "KIND", "agg", "GROUPBY", "grp") == b"+OK"
+wait_ready()
+r = cmd(s, buf, "IDX.VERIFY", "a_agg")
+kv = {r[i].decode(): r[i+1].decode() for i in range(0, len(r), 2)}
+formula = int(kv["bytes"])
+growth = (rss_kb() - rss_before) * 1024
+ratio = formula / growth if growth > 0 else 0
+print(f"agggate: formula={formula/2**20:.0f}MiB cold-rss-growth={growth/2**20:.0f}MiB ratio={ratio:.2f}", flush=True)
+if not (0.5 <= ratio <= 1.5):
+    print(f"agggate: FAIL — formula explains {ratio:.2f}x of cold RSS growth"); sys.exit(1)
+cmd(s, buf, "IDX.DROP", "a_agg")
+
 prev = burst()
 for _ in range(6):
     cur = burst()
@@ -176,8 +197,7 @@ if tax >= 10.5:
 if tax >= 10.0:
     print(f"agggate: AT-THE-LINE — write tax {tax:.1f}% vs the 10% claim (within measurement noise)")
 
-# ---- rebuild for the query clamps + memory ----
-rss_before = rss_kb()
+# ---- rebuild for the query clamps ----
 assert cmd(s, buf, "IDX.CREATE", "a_agg", "ON", "PREFIX", "a:", "FIELD", "val",
            "TYPE", "i64", "KIND", "agg", "GROUPBY", "grp") == b"+OK"
 t0 = time.time()
@@ -210,13 +230,5 @@ print(f"agggate: GROUPS top-100 p99 median={p[3]:.3f}ms worst={p[5]:.3f}ms")
 if p[3] >= 5.0:
     print(f"agggate: FAIL — GROUPS p99 {p[3]:.3f}ms >= 5ms"); sys.exit(1)
 
-r = cmd(s, buf, "IDX.VERIFY", "a_agg")
-kv = {r[i].decode(): r[i+1].decode() for i in range(0, len(r), 2)}
-formula = int(kv["bytes"])
-growth = (rss_kb() - rss_before) * 1024
-ratio = formula / growth if growth > 0 else 0
-print(f"agggate: formula={formula/2**20:.0f}MiB rss-growth={growth/2**20:.0f}MiB ratio={ratio:.2f}")
-if not (0.5 <= ratio <= 1.5):
-    print(f"agggate: FAIL — formula explains {ratio:.2f}x of RSS growth"); sys.exit(1)
 print("agggate: PASS")
 PYEOF
