@@ -1,0 +1,789 @@
+# The kevy test suite — the single source of truth for what is checked.
+#
+# Read by tools/suite.py. Three tiers, by inheritance: a check declares
+# the LOWEST tier it runs in and runs in every tier above it, so
+# checks(precommit) ⊆ checks(prerelease) ⊆ checks(full) holds by
+# construction rather than by discipline.
+#
+#   precommit   pins the current version's goals + fast regressions.
+#   prerelease  adds the release claims and iron rules.
+#   full        adds everything: the problem-hunting surface.
+#
+# Fields:
+#   id        unique name (the scoreboard key)
+#   area      hygiene | release-pins | arch | doc | perf | mem | disk |
+#             compat | dialect | feature | case | doors | cov
+#   tier      lowest tier this runs in
+#   cmd       what to run, from the repo root
+#   expected  seconds, warm tree, quiet machine — audited against the
+#             tier budgets so "precommit is fast" is arithmetic, not hope
+#   timeout   hard per-check ceiling (seconds)
+#   requires  infrastructure this needs; a missing requirement is a loud
+#             NOT-RUN, never a silent pass:
+#             server-debug | server-release | linux | box | node |
+#             chromium | docker | device | ci
+#   advisory  true = reported but does not fail the tier (used only for
+#             checks whose red can be a legitimate state, e.g. the
+#             published-wasm divergence between releases)
+#
+# Exploration probes (v125-*, axis_*, loopback_*) are deliberately not
+# here: instruments for finding, not standards for holding. See the RFC.
+
+[suite]
+manifest_floor = 40
+
+[suite.budgets]
+precommit = 300
+prerelease = 5400
+
+# ── hygiene ──────────────────────────────────────────────────────────
+
+[[check]]
+id = "rootgate"
+area = "hygiene"
+tier = "precommit"
+cmd = "bash bench/rootgate.sh"
+expected = 14
+timeout = 60
+requires = []
+proves = "the repo root and worktree hold no runtime residue"
+
+[[check]]
+id = "locgate"
+area = "hygiene"
+tier = "precommit"
+cmd = "bash bench/locgate.sh"
+expected = 2
+timeout = 120
+requires = []
+proves = "files ≤ 500 LOC, functions ≤ 50 or waivered"
+
+[[check]]
+id = "commentgate"
+area = "hygiene"
+tier = "precommit"
+cmd = "bash bench/commentgate.sh"
+expected = 2
+timeout = 120
+requires = []
+proves = "no internal vocabulary or dated citations in comments"
+
+[[check]]
+id = "killgate"
+area = "hygiene"
+tier = "precommit"
+cmd = "bash bench/killgate.sh"
+expected = 2
+timeout = 120
+requires = []
+proves = "the mechanical form of the hard rules holds"
+
+# ── release pins ─────────────────────────────────────────────────────
+
+[[check]]
+id = "version-alignment"
+area = "release-pins"
+tier = "precommit"
+cmd = "python3 tools/check_version_alignment.py"
+expected = 72
+timeout = 120
+requires = []
+proves = "all six version layers agree, including vendored engine bytes"
+
+[[check]]
+id = "publish-order"
+area = "release-pins"
+tier = "precommit"
+cmd = "python3 tools/check_publish_order.py"
+expected = 2
+timeout = 60
+requires = []
+proves = "the publish chain is a topological order and every crate is publishable"
+
+[[check]]
+id = "action-versions"
+area = "release-pins"
+tier = "precommit"
+cmd = "python3 tools/check_action_versions.py"
+expected = 2
+timeout = 60
+requires = []
+proves = "workflow actions agree on one major each"
+
+# ── architecture ─────────────────────────────────────────────────────
+
+[[check]]
+id = "architecture"
+area = "arch"
+tier = "precommit"
+cmd = "python3 tools/check_architecture.py"
+expected = 2
+timeout = 60
+requires = []
+proves = "every crate classified; shipping deps point down the stone/steel/cement layers"
+
+# ── docs ─────────────────────────────────────────────────────────────
+
+[[check]]
+id = "doc-links"
+area = "doc"
+tier = "precommit"
+cmd = "python3 tools/check_doc_links.py"
+expected = 2
+timeout = 120
+requires = []
+proves = "no dead markdown link anywhere in the tree"
+
+[[check]]
+id = "cjk-punct"
+area = "doc"
+tier = "precommit"
+cmd = "python3 tools/check_cjk_punct.py"
+expected = 2
+timeout = 120
+requires = []
+proves = "no half-width punctuation in CJK prose, site sources included"
+
+[[check]]
+id = "doc-i18n"
+area = "doc"
+tier = "precommit"
+cmd = "python3 tools/check_doc_i18n.py"
+expected = 2
+timeout = 120
+requires = []
+proves = "every translated chapter carries its English chapter's sections"
+
+[[check]]
+id = "doc-toml"
+area = "doc"
+tier = "precommit"
+# Not a parse check: each of the ~45 blocks is fed to the real binary,
+# which costs about a minute. Declared honestly rather than trimmed —
+# a config block that does not load hands a first-time reader a server
+# that refuses to start.
+cmd = "python3 tools/check_doc_toml.py"
+expected = 125
+timeout = 180
+requires = ["server-debug"]
+proves = "every TOML block in the docs parses"
+
+[[check]]
+id = "md-port"
+area = "doc"
+tier = "precommit"
+cmd = "python3 tools/check_md_port.py"
+expected = 3
+timeout = 300
+requires = ["node", "web-deps"]
+proves = "the Python and TypeScript markdown renderers agree byte-for-byte"
+
+[[check]]
+id = "wasm-size"
+area = "doc"
+tier = "precommit"
+cmd = "python3 tools/check_wasm_size.py"
+expected = 2
+timeout = 60
+requires = ["wasm-artifact"]
+proves = "every stated wasm size is within 10% of the built artifact"
+
+[[check]]
+id = "readme-bench"
+area = "doc"
+tier = "precommit"
+cmd = "python3 tools/sync_readme_bench.py --check"
+expected = 2
+timeout = 60
+requires = []
+proves = "READMEs and the site quote the ledger's latest measured run"
+
+[[check]]
+id = "content-export"
+area = "doc"
+tier = "precommit"
+cmd = "python3 tools/export_site_content.py --check"
+expected = 2
+timeout = 60
+requires = []
+proves = "the site content export matches the Python sources"
+
+# ── dialects ─────────────────────────────────────────────────────────
+
+[[check]]
+id = "dialectgate"
+area = "dialect"
+tier = "precommit"
+cmd = "bash bench/dialectgate.sh target/debug/kevy"
+expected = 2
+timeout = 300
+requires = ["server-debug"]
+proves = "Lua 5.1–5.5 each serve their own surface and wording; the string.rep DoS stays fixed"
+
+# ── prerelease: build health ─────────────────────────────────────────
+
+[[check]]
+id = "clippy"
+area = "hygiene"
+tier = "prerelease"
+cmd = "cargo clippy --workspace --all-targets -- -D warnings"
+expected = 240
+timeout = 1800
+requires = []
+proves = "zero clippy findings across every target"
+
+[[check]]
+id = "workspace-tests"
+area = "feature"
+tier = "prerelease"
+cmd = "cargo test --workspace --lib --tests"
+expected = 1800
+timeout = 5400
+requires = []
+proves = "the whole workspace's unit and integration tests, in parallel"
+
+# ── prerelease: the site serves the tree ─────────────────────────────
+
+[[check]]
+id = "sitegate"
+area = "doc"
+tier = "prerelease"
+cmd = "bash bench/sitegate.sh"
+expected = 240
+timeout = 1200
+requires = ["node", "chromium"]
+proves = "the site builds reproducibly, every page at the tree's version, and a real browser runs the engine"
+
+[[check]]
+id = "site-commands"
+area = "doc"
+tier = "prerelease"
+cmd = "python3 tools/check_site_commands.py"
+expected = 30
+timeout = 600
+requires = ["server-debug", "node", "web-deps"]
+proves = "every RESP example the site shows runs against a real server"
+
+[[check]]
+id = "site-parity"
+area = "doc"
+tier = "prerelease"
+cmd = "python3 tools/check_site_content_parity.py"
+expected = 5
+timeout = 120
+requires = ["node", "web-deps"]
+proves = "every written fragment reached the built site"
+
+[[check]]
+id = "wasm-published"
+area = "release-pins"
+tier = "prerelease"
+cmd = "python3 tools/check_wasm_published.py"
+expected = 10
+timeout = 300
+requires = []
+advisory = true
+proves = "whether the built wasm is the published one — divergence is a release decision, said out loud"
+
+# ── prerelease: the owner-claim gates (box) ──────────────────────────
+
+[[check]]
+id = "crashgate"
+area = "disk"
+tier = "prerelease"
+cmd = "bash bench/crashgate.sh"
+expected = 600
+timeout = 3600
+requires = ["linux", "server-release"]
+proves = "kill -9 at any point loses nothing the server acknowledged"
+
+[[check]]
+id = "perfgate"
+area = "perf"
+tier = "prerelease"
+cmd = "bash bench/perfgate.sh target/release/kevy"
+expected = 420
+timeout = 3600
+requires = ["box", "server-release"]
+proves = "throughput holds the recorded baselines, angle by angle"
+
+[[check]]
+id = "tailgate"
+area = "perf"
+tier = "prerelease"
+cmd = "bash bench/tailgate.sh target/release/kevy"
+expected = 900
+timeout = 5400
+requires = ["box", "server-release"]
+proves = "tail latency stays inside the shipped bars on a real disk"
+
+[[check]]
+id = "repligate"
+area = "feature"
+tier = "prerelease"
+cmd = "bash bench/repligate.sh"
+expected = 300
+timeout = 1800
+requires = ["linux", "server-release"]
+proves = "a replica ships a snapshot, follows frames, and converges"
+
+[[check]]
+id = "availgate"
+area = "feature"
+tier = "prerelease"
+cmd = "bash bench/availgate.sh target/release/kevy"
+expected = 420
+timeout = 3600
+requires = ["box", "server-release"]
+proves = "failover converges; WAIT tells the truth; staleness is bounded"
+
+# ── prerelease: compat + cases + doors that pin the release ──────────
+
+[[check]]
+id = "cookbook"
+area = "case"
+tier = "prerelease"
+cmd = "bash bench/cookbook_smoke.sh"
+expected = 120
+timeout = 1200
+requires = ["server-debug"]
+proves = "every kevy-cli line in the cookbook runs green as written"
+
+[[check]]
+id = "vendorgate"
+area = "doors"
+tier = "prerelease"
+cmd = "bash bench/vendorgate.sh"
+expected = 30
+timeout = 600
+requires = []
+proves = "vendored native artifacts match the current ABI and version"
+
+[[check]]
+id = "ffigate-contract"
+area = "doors"
+tier = "prerelease"
+cmd = "bash bench/ffigate-contract.sh"
+expected = 180
+timeout = 1800
+requires = []
+proves = "one contract table, six language doors, checked"
+
+[[check]]
+id = "propgate"
+area = "feature"
+tier = "prerelease"
+# Static analysis over the source, not a server gate — it finished in
+# under a second and the first manifest draft had it down for two
+# minutes with a server requirement it never had.
+cmd = "bash bench/propgate.sh"
+expected = 2
+timeout = 120
+requires = []
+proves = "a durable effect is a propagated effect, unless it is named"
+
+# ── full: perf beyond the pins ───────────────────────────────────────
+
+[[check]]
+id = "perfgate-median"
+area = "perf"
+tier = "full"
+cmd = "bash bench/perfgate-median.sh target/release/kevy"
+expected = 2400
+timeout = 10800
+requires = ["box", "server-release"]
+proves = "per-angle medians over N perfgate runs — the noise-resistant verdict"
+
+[[check]]
+id = "arena"
+area = "perf"
+tier = "full"
+cmd = "bash bench/arena.sh target/release/kevy"
+expected = 1800
+timeout = 7200
+requires = ["box", "server-release", "docker"]
+proves = "kevy vs valkey/redis/dragonfly, core-pinned, median-of-5, server-side counters"
+
+[[check]]
+id = "kevy-ab"
+area = "perf"
+tier = "full"
+cmd = "bash bench/kevy_ab.sh target/release/kevy"
+expected = 900
+timeout = 3600
+requires = ["box", "server-release"]
+proves = "epoll vs io_uring on one binary, isolated cores"
+
+# ── full: memory ─────────────────────────────────────────────────────
+
+[[check]]
+id = "memgate"
+area = "mem"
+tier = "full"
+cmd = "bash bench/memgate.sh"
+expected = 900
+timeout = 3600
+requires = ["linux", "server-release"]
+proves = "bytes/entry match each declared memory formula within tolerance"
+
+[[check]]
+id = "allocgate"
+area = "mem"
+tier = "full"
+cmd = "bash bench/allocgate.sh"
+expected = 600
+timeout = 3600
+requires = ["linux"]
+proves = "the allocator's fragmentation and RSS budget"
+
+[[check]]
+id = "allocgate-mem"
+area = "mem"
+tier = "full"
+cmd = "bash bench/allocgate-mem.sh"
+expected = 600
+timeout = 3600
+requires = ["linux"]
+proves = "the memory half of the allocator experiment, both builds"
+
+[[check]]
+id = "compressgate"
+area = "mem"
+tier = "full"
+cmd = "bash bench/compressgate.sh"
+expected = 600
+timeout = 3600
+requires = ["linux"]
+proves = "compression ratios and speeds hold their recorded lines"
+
+[[check]]
+id = "replaymemgate"
+area = "mem"
+tier = "full"
+cmd = "bash bench/replaymemgate.sh"
+expected = 600
+timeout = 3600
+requires = ["linux", "server-release"]
+proves = "streaming replay's memory promise, measured"
+
+[[check]]
+id = "iotgate"
+area = "mem"
+tier = "full"
+cmd = "bash bench/iotgate.sh"
+expected = 300
+timeout = 1800
+requires = []
+proves = "the IoT core archetype stays inside its size and RSS budgets"
+
+# ── full: disk beyond the pins ───────────────────────────────────────
+
+[[check]]
+id = "diskgate"
+area = "disk"
+tier = "full"
+cmd = "bash bench/diskgate.sh"
+expected = 900
+timeout = 5400
+requires = ["linux", "server-release"]
+proves = "disk growth bounds and persistence latency at envelope scale"
+
+[[check]]
+id = "chaosfsck"
+area = "disk"
+tier = "full"
+cmd = "bash bench/chaosfsck.sh"
+expected = 600
+timeout = 3600
+requires = ["linux", "server-release"]
+proves = "derived-state honesty after a hard kill"
+
+[[check]]
+id = "restore-drill"
+area = "disk"
+tier = "full"
+cmd = "bash bench/restore-drill.sh"
+expected = 600
+timeout = 3600
+requires = ["linux", "server-release"]
+proves = "snapshot S + (gen, O) is an exact restore point, executed"
+
+# ── full: compat ─────────────────────────────────────────────────────
+
+[[check]]
+id = "compat3"
+area = "compat"
+tier = "full"
+cmd = "bash bench/compat3.sh"
+expected = 900
+timeout = 3600
+requires = ["docker", "server-release"]
+proves = "the same command sequence answers identically on kevy, valkey and redis"
+
+[[check]]
+id = "clientgate"
+area = "compat"
+tier = "full"
+cmd = "bash bench/clientgate.sh"
+expected = 900
+timeout = 3600
+requires = ["node", "docker"]
+proves = "bring-your-redis-client, executable: real client libraries against kevy"
+
+[[check]]
+id = "upgrade-interop"
+area = "compat"
+tier = "full"
+cmd = "bash bench/upgrade-interop.sh"
+expected = 900
+timeout = 3600
+requires = ["linux", "server-release"]
+proves = "mixed-version primary/replica pairs interoperate across the upgrade boundary"
+
+[[check]]
+id = "upgradegate"
+area = "compat"
+tier = "full"
+cmd = "bash bench/upgradegate.sh"
+expected = 600
+timeout = 3600
+requires = ["linux", "server-release"]
+proves = "swapping the binary on a live directory is the whole upgrade"
+
+[[check]]
+id = "pgcompare"
+area = "compat"
+tier = "full"
+cmd = "bash bench/pgcompare.sh"
+expected = 1800
+timeout = 7200
+requires = ["box", "docker"]
+proves = "the RDS workloads against PostgreSQL, numbers as they fall"
+
+# ── full: kevy's own features ────────────────────────────────────────
+
+[[check]]
+id = "idxgate"
+area = "feature"
+tier = "full"
+cmd = "bash bench/idxgate.sh"
+expected = 600
+timeout = 3600
+requires = ["linux", "server-release"]
+proves = "secondary-index perf clamps and memory bounds"
+
+[[check]]
+id = "textgate"
+area = "feature"
+tier = "full"
+cmd = "bash bench/textgate.sh"
+expected = 600
+timeout = 3600
+requires = ["linux", "server-release"]
+proves = "full-text clamps against a real server"
+
+[[check]]
+id = "vectorgate"
+area = "feature"
+tier = "full"
+cmd = "bash bench/vectorgate.sh"
+expected = 600
+timeout = 3600
+requires = ["linux", "server-release"]
+proves = "ANN recall and latency clamps"
+
+[[check]]
+id = "viewgate"
+area = "feature"
+tier = "full"
+cmd = "bash bench/viewgate.sh"
+expected = 600
+timeout = 3600
+requires = ["linux", "server-release"]
+proves = "view maintenance clamps"
+
+[[check]]
+id = "agggate"
+area = "feature"
+tier = "full"
+cmd = "bash bench/agggate.sh"
+expected = 600
+timeout = 3600
+requires = ["linux", "server-release"]
+proves = "aggregate-kind clamps"
+
+[[check]]
+id = "tablegate"
+area = "feature"
+tier = "full"
+cmd = "bash bench/tablegate.sh"
+expected = 600
+timeout = 3600
+requires = ["linux", "server-release"]
+proves = "TABLE.* and the RDS views"
+
+[[check]]
+id = "tiergate"
+area = "feature"
+tier = "full"
+cmd = "bash bench/tiergate.sh"
+expected = 900
+timeout = 5400
+requires = ["linux", "server-release"]
+proves = "transparent tiering: budgets, demotion, cold reads"
+
+[[check]]
+id = "topogate"
+area = "feature"
+tier = "full"
+cmd = "bash bench/topogate.sh"
+expected = 600
+timeout = 3600
+requires = ["linux", "server-release"]
+proves = "topology declarations, true two-process"
+
+[[check]]
+id = "uringgate"
+area = "feature"
+tier = "full"
+cmd = "bash bench/uringgate.sh"
+expected = 600
+timeout = 3600
+requires = ["linux", "server-release"]
+proves = "the io_uring data-plane contract"
+
+[[check]]
+id = "servinggate"
+area = "feature"
+tier = "full"
+cmd = "bash bench/servinggate.sh"
+expected = 900
+timeout = 5400
+requires = ["linux", "server-release"]
+proves = "the serving-engine headline lines"
+
+[[check]]
+id = "funcgate"
+area = "feature"
+tier = "full"
+cmd = "bash bench/funcgate.sh"
+expected = 300
+timeout = 1800
+requires = ["server-debug"]
+proves = "the scalar-function surface against the 89-probe corpus: capability ratchet + zero wrong answers"
+
+# ── full: classic cases ──────────────────────────────────────────────
+
+[[check]]
+id = "migrationgate"
+area = "case"
+tier = "full"
+cmd = "bash bench/migrationgate.sh"
+expected = 900
+timeout = 5400
+requires = ["linux", "server-release", "docker"]
+proves = "migration day end to end, repeatable"
+
+[[check]]
+id = "drill-mailrs"
+area = "case"
+tier = "full"
+cmd = "bash bench/drill_mailrs.sh"
+expected = 900
+timeout = 5400
+requires = ["linux", "server-release"]
+proves = "a mailrs-shaped migration rehearsal, end to end"
+
+[[check]]
+id = "onrampgate"
+area = "case"
+tier = "full"
+cmd = "bash bench/onrampgate.sh"
+expected = 600
+timeout = 3600
+requires = ["server-debug"]
+proves = "the on-ramp clamps with the real CLI binary"
+
+[[check]]
+id = "scalesoak"
+area = "case"
+tier = "full"
+cmd = "bash bench/scalesoak.sh"
+expected = 3600
+timeout = 14400
+requires = ["box", "server-release"]
+proves = "the serving stack at declared scale, soaked"
+
+[[check]]
+id = "capacity-envelope"
+area = "case"
+tier = "full"
+cmd = "bash bench/capacity-envelope.sh"
+expected = 1800
+timeout = 7200
+requires = ["box", "server-release"]
+proves = "the capacity-arc envelope holds at 30M keys"
+
+# ── full: doors ──────────────────────────────────────────────────────
+
+[[check]]
+id = "consumergate"
+area = "doors"
+tier = "full"
+cmd = "bash bench/consumergate.sh"
+expected = 600
+timeout = 3600
+requires = []
+proves = "the facade builds and runs from a consumer's position"
+
+[[check]]
+id = "jnigate"
+area = "doors"
+tier = "full"
+cmd = "bash bench/jnigate.sh"
+expected = 600
+timeout = 3600
+requires = ["node"]
+proves = "the raw Android/JVM door opens on the host"
+
+[[check]]
+id = "mcpgate"
+area = "doors"
+tier = "full"
+cmd = "bash bench/mcpgate.sh"
+expected = 300
+timeout = 1800
+requires = ["node", "server-debug"]
+proves = "the MCP protocol end to end"
+
+[[check]]
+id = "mobilegate-all"
+area = "doors"
+tier = "full"
+cmd = "bash bench/mobilegate-all.sh"
+expected = 3600
+timeout = 14400
+requires = ["device"]
+proves = "three frameworks × two platforms on real simulators/emulators"
+
+# ── full: coverage + fuzz ────────────────────────────────────────────
+
+[[check]]
+id = "covgate"
+area = "cov"
+tier = "full"
+cmd = "bash bench/covgate.sh"
+expected = 3600
+timeout = 14400
+requires = ["linux"]
+proves = "line coverage holds the ratchet"
+
+[[check]]
+id = "fuzz-smoke"
+area = "feature"
+tier = "full"
+cmd = "true"
+expected = 1
+timeout = 60
+requires = ["ci"]
+proves = "fuzz targets run in CI on every push and weekly with a crash-artifact gate — this row keeps the area accounted for"
