@@ -140,8 +140,27 @@ def wait_ready():
 # first measurement still climbing, and a line sitting at the
 # distribution's edge flips on exactly that. Steady state is what the
 # claim describes, so steady state is what gets measured.
+
+prev = burst()
+for _ in range(6):
+    cur = burst()
+    if abs(cur - prev) / prev < 0.01:
+        break
+    prev = cur
+# Five alternations, not three. At three, the base medians wobbled 1.3%
+# run to run while the measured tax sits at ~10.0% against a 10% line —
+# the verdict was a coin flip (9.9 / 10.0 / 10.1 / 10.2 across four
+# runs). More samples per side narrows the median before the line
+# judges it; the line itself is untouched.
 # ---- clamp: memory formula vs COLD RSS growth ----
-# Before the write-tax loop, which builds and drops this index five
+# After the warm bursts and before the write-tax loop. Order is the
+# whole measurement: before warmup, the build's scan re-faults the
+# dataset's madvised-away pages and RSS grows by the DATASET (305 MiB
+# measured, for a 39 MiB formula); after the tax loop's five
+# build/drop rounds, the span cache covers the build and growth is
+# ~zero or negative. Warm dataset + first index build is the window
+# in which RSS growth means what the formula claims.
+# The tax loop below builds and drops this index five
 # times: after that churn the allocator's span cache covers the final
 # build entirely and RSS growth measures ~0 or negative (round four
 # measured -7 MiB), which says something true about span reuse and
@@ -161,17 +180,6 @@ if not (0.5 <= ratio <= 1.5):
     print(f"agggate: FAIL — formula explains {ratio:.2f}x of cold RSS growth"); sys.exit(1)
 cmd(s, buf, "IDX.DROP", "a_agg")
 
-prev = burst()
-for _ in range(6):
-    cur = burst()
-    if abs(cur - prev) / prev < 0.01:
-        break
-    prev = cur
-# Five alternations, not three. At three, the base medians wobbled 1.3%
-# run to run while the measured tax sits at ~10.0% against a 10% line —
-# the verdict was a coin flip (9.9 / 10.0 / 10.1 / 10.2 across four
-# runs). More samples per side narrows the median before the line
-# judges it; the line itself is untouched.
 bases, taxeds = [], []
 for _round in range(5):
     bases.append(burst())
