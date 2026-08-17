@@ -261,7 +261,7 @@ outbox**: every committed write is already a change frame at a
 kevy-cli -p 6004 HSET order:9001 status paid
 kevy-cli -p 6004 FEED.SHARDS
 kevy-cli -p 6004 FEED.TAIL 0                             # a fresh consumer's starting cursor
-kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 10 PREFIX order:  # gen 1 = a fresh data dir's first generation
+kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1 | awk '{print $3}') 0 COUNT 10 PREFIX order:  # generation from FEED.TAIL: an identity, not a counter
 ```
 
 ## 12. Audit history
@@ -278,7 +278,7 @@ point-in-time reconstruction: restore snapshot + replay to the
 ```console
 kevy-cli -p 6004 HSET acct:7 balance 100
 kevy-cli -p 6004 HSET acct:7 balance 90
-kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 100 PREFIX acct:   # who set what, in commit order
+kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1 | awk '{print $3}') 0 COUNT 100 PREFIX acct:  # who set what, in commit order
 ```
 
 ## 13. The rollback window (reverse mirror)
@@ -294,7 +294,7 @@ is the confidence meter.
 
 ```console
 kevy-cli -p 6004 HSET user:42 name ada
-kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 10 PREFIX user:   # the mirror consumer's read loop
+kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1 | awk '{print $3}') 0 COUNT 10 PREFIX user:  # the mirror consumer's read loop
 kevy-cli diff 127.0.0.1:6004 127.0.0.1:6004 user:        # digests match: safe form of the check
 kevy-cli diff old-rds-mirror.internal:6379 127.0.0.1:6004 user:   # needs-external
 ```
@@ -315,7 +315,7 @@ Serving and analytics don't share an engine. Export patterns:
 ```console
 kevy-cli -p 6004 HSET order:1001 user_id 42 total 1999
 kevy-cli export -p 6004 --prefix order: /tmp/orders.resp
-kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 100 PREFIX order:   # the CDC-to-warehouse read loop
+kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1 | awk '{print $3}') 0 COUNT 100 PREFIX order:  # the CDC-to-warehouse read loop
 ```
 
 ## 15. Loading order (the deferred-index rule)
@@ -361,7 +361,7 @@ kevy-cli -p 6004 EXPIRE session:a7 3600
 kevy-cli -p 6004 HSET session:a7 turns 7 messages 'refund approved; awaiting confirmation'
 kevy-cli -p 6004 EXPIRE session:a7 3600                       # renew the lease on every turn
 kevy-cli -p 6004 FEED.TAIL 0                                  # audit cursor: where the log ends now
-kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 100 PREFIX session:    # gen 1 = a fresh data dir's first generation
+kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1 | awk '{print $3}') 0 COUNT 100 PREFIX session:  # generation from FEED.TAIL: an identity, not a counter
 ```
 
 The `messages` field holds whatever summary your compaction step
@@ -504,7 +504,7 @@ cloud needs:
 ```console
 # needs [feed] enabled = true in kevy.toml (docs/cdc.md)
 kevy-cli -p 6004 FEED.TAIL 0
-kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 100 PREFIX reading:   # the uplink loop
+kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1 | awk '{print $3}') 0 COUNT 100 PREFIX reading:  # the uplink loop
 ```
 
 Pair it with recipe 19's `MAXLEN` cap and TTLs: raw readings stay

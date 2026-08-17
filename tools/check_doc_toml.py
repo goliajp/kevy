@@ -40,12 +40,22 @@ def loads(body):
     try:
         # The server does not exit on success — it starts serving. Give it a
         # moment, then kill it: what we are testing is that it got past config.
-        r = subprocess.run(
-            ["sh", "-c", f"'{KEVY}' --config {path} 2>&1 & P=$!; sleep 1.2; kill $P 2>/dev/null"],
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
+        #
+        # In a scratch cwd, always: a doc block that names no data dir
+        # gets the server's default, which is the CURRENT DIRECTORY —
+        # and this check runs from the repo root. Forty-five blocks per
+        # run were each writing aof/dump/premigration files into the
+        # root, this check exited green, and the residue was billed to
+        # whoever looked next (rootgate, one run later). The mystery
+        # root residue that kept appearing between sessions was this.
+        with tempfile.TemporaryDirectory(prefix="kevy-doctoml-") as scratch:
+            r = subprocess.run(
+                ["sh", "-c", f"'{KEVY}' --config {path} 2>&1 & P=$!; sleep 1.2; kill $P 2>/dev/null; wait"],
+                capture_output=True,
+                text=True,
+                timeout=20,
+                cwd=scratch,
+            )
         out = (r.stdout or r.stderr).strip()
         first = out.splitlines()[0] if out else "(no output)"
         if "kevy-config:" in out or "error" in first.lower():

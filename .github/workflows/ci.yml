@@ -1187,6 +1187,16 @@ jobs:
         working-directory: web
       - name: the markdown renderers still agree
         run: python3 tools/check_md_port.py
+      # The suite manifest is the single source of truth for what is
+      # checked (v5.3). The audit proves its invariants — tier subsets,
+      # budget arithmetic, no dark areas, and that every listed check's
+      # file still exists, so a deleted gate cannot silently leave the
+      # suite. The architecture gate rides here too: every crate
+      # classified, shipping deps pointing down the layers.
+      - name: the suite manifest holds its invariants
+        run: python3 tools/suite.py --audit
+      - name: crate layering follows the model
+        run: python3 tools/check_architecture.py
       # The size the site quotes is the size of the wasm it ships. It said
       # 218 KB in three languages for a build that was 481 KB, because the
       # number was measured once and then quoted forever.

@@ -58,7 +58,11 @@ while IFS= read -r line; do
         *'<<'*)               skipped=$((skipped + 1)); echo "cookbook-smoke: skip — $line"; continue ;;
     esac
     run=${line//6004/7341}
-    run="$CLI ${run#kevy-cli }"
+    # Every occurrence, not just the leading one: a recipe may nest a
+    # kevy-cli call in a $() substitution (the FEED recipes read the
+    # shard generation that way), and a reader's PATH has kevy-cli
+    # where this harness has a build product.
+    run=${run//kevy-cli/$CLI}
     tries=0
     while :; do
         out=$(eval "$run" 2>&1)
