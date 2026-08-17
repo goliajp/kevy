@@ -567,6 +567,38 @@ textgate 正在断言的内存公式。范围决定权不在我。
 
 ---
 
+## arena bare face — 2026-08-17 — kevy 5.3.0
+
+Re-measured for the 5.3.0 release rather than relabelled, per the rule
+that a table headed with a version states which build was measured. The
+first attempt of this run produced garbage — negative medians, stdev
+ten times the median — because a benchmark killed mid-flight earlier
+had leaked a server that was still answering on the same box; the
+run was discarded, the leak cleaned, and the suite's exit-hygiene
+sweep is why the next one could not happen silently.
+
+`bash bench/arena.sh target/release/kevy` on lx64, same protocol as
+every entry: cores 0-7 server / 8-15 client, one engine at a time,
+`-c 50 -P 16`, median-of-5 with sample stdev, throughput from each
+server's own command counter over a timed window.
+
+| verb | kevy 5.3.0 | Redis 8 | valkey 9.1.1 | Dragonfly | vs Redis 8 |
+|---|---:|---:|---:|---:|---:|
+| GET | 7,506,349 | 5,822,141 | 3,046,095 | 2,885,997 | 1.29x |
+| SET | 6,876,300 | 2,609,199 | 1,679,993 | 1,996,727 | 2.64x |
+| INCR | 6,549,550 | 3,359,132 | 2,226,254 | 2,079,269 | 1.95x |
+| SADD | 5,746,793 | 3,770,936 | 2,265,300 | 1,762,696 | 1.52x |
+| HSET | 4,105,521 | 2,940,319 | 1,886,049 | 1,762,757 | 1.40x |
+| LPUSH | 3,087,402 | 2,850,640 | 1,879,305 | 1,456,966 | 1.08x |
+| ZADD | 3,007,920 | 2,865,099 | 1,807,314 | 1,754,359 | 1.05x |
+
+Gap rule: `|kevy - other| <= max(stdev_kevy, stdev_other)` reads as
+NOISE. No cell hit it; the narrow cells are ZADD at 1.05x (gap 142,821 vs tolerance 91,709); LPUSH at 1.08x (gap 236,762 vs tolerance 111,422).
+
+The engine's serving path is unchanged from 5.2.0 (this release's code
+changes are kevy-cli and the test system), so movement against the
+5.2.0 entry is day-to-day machine variation, not a result.
+
 ## arena bare face — 2026-08-14 — kevy 5.2.0
 
 Re-measured for the 5.2.0 release rather than relabelling the 5.1.0 run:
