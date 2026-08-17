@@ -50,6 +50,17 @@ cleanup() {
   # killgate: an empty KPORT would make this pattern match everything.
   [ -n "${KPORT}" ] || return 0
   pkill -f "kevy --port $KPORT" 2>/dev/null
+  # Drop the dataset too. A run left a 979 MB table loaded in the
+  # always-on container, and postgres's autovacuum ground through it in
+  # the background for hours — diskgate's rewrite measurement on the
+  # same disk went from 42 ms to 553 ms on exactly one tier run, and
+  # the spike was this container's housekeeping, not the engine. The
+  # data is regenerated every run; keeping it buys nothing.
+  "$VENV" -c "
+import psycopg
+with psycopg.connect('host=127.0.0.1 port=$PGPORT user=postgres password=bench dbname=bench') as c:
+    c.execute('DROP TABLE IF EXISTS t')
+" 2>/dev/null || true
 }
 trap cleanup EXIT
 
