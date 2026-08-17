@@ -276,20 +276,7 @@ pub fn run_import(
     resume: bool,
     strict: bool,
 ) -> io::Result<ImportReport> {
-    // APPENDED to the name, never replacing its extension. The doc
-    // comment above always said `<src>.progress`, but with_extension
-    // turned dump.kevy into dump.progress — so everything written
-    // against the documented name (the migration drill removes it
-    // between rehearsal runs) was touching a file this code never read.
-    let progress_path = {
-        let mut os = src.as_os_str().to_owned();
-        os.push(".progress");
-        std::path::PathBuf::from(os)
-    };
-    let mut start = 0u64;
-    if resume && let Ok(text) = std::fs::read_to_string(&progress_path) {
-        start = text.trim().parse().unwrap_or(0);
-    }
+    let (mut progress, start) = open_progress(src, resume)?;
     let mut f = File::open(src)?;
     f.seek(SeekFrom::Start(start))?;
     let mut pending: Vec<u8> = Vec::with_capacity(1 << 20);
@@ -297,17 +284,6 @@ pub fn run_import(
     let mut chunk = vec![0u8; 1 << 20];
     let mut batch_bytes = 0usize;
     let mut batch_cmds = 0usize;
-    let mut progress = OpenOptions::new().create(true).truncate(false).write(true).open(&progress_path)?;
-    // A fresh (non-resume) import resets the file NOW, not at the first
-    // batch. A completed earlier import leaves offset = EOF here; if a
-    // fresh import into a fresh server is killed before its first batch
-    // lands, that stale EOF survives, and a later --resume seeks to the
-    // end and imports nothing while reporting success. The migration
-    // drill hit exactly that: kill at dbsize=0, "resume" in one second,
-    // digests disagreeing.
-    if !resume {
-        write_progress(&mut progress, 0)?;
-    }
     loop {
         let n = f.read(&mut chunk)?;
         if n == 0 {
@@ -357,6 +333,35 @@ fn flush_batch(
     }
     report.offset += raw.len() as u64;
     Ok(())
+}
+
+/// The progress file, opened, and the offset to start from.
+///
+/// The name is `<src>.progress`, APPENDED — the doc always said so, but
+/// `with_extension` turned dump.kevy into dump.progress, and everything
+/// written against the documented name (the migration drill's cleanup
+/// included) touched a file this code never read.
+///
+/// A fresh (non-resume) import resets the file immediately, before any
+/// batch. A completed earlier import leaves offset = EOF on disk; kill a
+/// fresh import before its first batch lands and that stale EOF
+/// survives — a later `--resume` then seeks to the end, imports nothing,
+/// and reports success. The migration drill hit exactly that window.
+fn open_progress(src: &Path, resume: bool) -> io::Result<(File, u64)> {
+    let path = {
+        let mut os = src.as_os_str().to_owned();
+        os.push(".progress");
+        std::path::PathBuf::from(os)
+    };
+    let mut start = 0u64;
+    if resume && let Ok(text) = std::fs::read_to_string(&path) {
+        start = text.trim().parse().unwrap_or(0);
+    }
+    let mut f = OpenOptions::new().create(true).truncate(false).write(true).open(&path)?;
+    if !resume {
+        write_progress(&mut f, 0)?;
+    }
+    Ok((f, start))
 }
 
 fn write_progress(f: &mut File, offset: u64) -> io::Result<()> {
