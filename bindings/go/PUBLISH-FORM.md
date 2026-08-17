@@ -71,10 +71,10 @@ would drift the first time someone added a method to one.
 ## The `/vN` suffix
 
 `go.mod` declares `github.com/goliajp/kevy-go/v5`, and the tag is
-`v5.2.0`. Go requires the major version in the path for v2 and up; the
+`v5.3.0`. Go requires the major version in the path for v2 and up; the
 alternative — starting kevy-go's own versioning at v1, independent of
 the engine — was rejected because a user comparing `kevy-go v1.2.0`
-against a `kevy 5.2.0` server has no way to tell whether they match.
+against a `kevy 5.3.0` server has no way to tell whether they match.
 Tracking the engine's version makes the question answerable by reading.
 
 The mirror script refuses to push if the path suffix and the version's

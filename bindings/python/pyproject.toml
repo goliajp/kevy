@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kevy"
-version = "5.2.0"
+version = "5.3.0"
 description = "First-party Python client for kevy — the pure-Rust Redis-compatible engine (embedded + remote, blocking + asyncio)."
 readme = "README.md"
 requires-python = ">=3.9"
