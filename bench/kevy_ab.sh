@@ -37,10 +37,10 @@ run() { # port label
 
 echo "### $LABEL  ($KBIN)  -c50 -P16 n=$N  threads=$KEVY_THREADS"
 echo "--- $LABEL epoll ---"
-KEVY_IO_URING=0 KEVY_BIND=127.0.0.1 taskset -c "$SRV_CORES" "$KBIN" --threads "$KEVY_THREADS" --port 7001 --no-aof >/tmp/ab_srv.log 2>&1 &
+KEVY_IO_URING=0 KEVY_BIND=127.0.0.1 taskset -c "$SRV_CORES" "$KBIN" --threads "$KEVY_THREADS" --port 7001 --no-aof --dir "$(mktemp -d)" >/tmp/ab_srv.log 2>&1 &
 P=$!; run 7001 "$LABEL-epoll"; kill "$P" 2>/dev/null; wait "$P" 2>/dev/null
 
 echo "--- $LABEL io_uring ---"
-KEVY_IO_URING=1 KEVY_BIND=127.0.0.1 taskset -c "$SRV_CORES" "$KBIN" --threads "$KEVY_THREADS" --port 7001 --no-aof >/tmp/ab_uring.log 2>&1 &
+KEVY_IO_URING=1 KEVY_BIND=127.0.0.1 taskset -c "$SRV_CORES" "$KBIN" --threads "$KEVY_THREADS" --port 7001 --no-aof --dir "$(mktemp -d)" >/tmp/ab_uring.log 2>&1 &
 P=$!; run 7001 "$LABEL-uring"; kill "$P" 2>/dev/null; wait "$P" 2>/dev/null
 echo "### AB_DONE $LABEL"
