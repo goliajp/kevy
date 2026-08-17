@@ -177,7 +177,9 @@ if recall < 0.90:
 r = cmd(s, buf, "IDX.VERIFY", "x_v")
 kv = {r[i].decode(): r[i+1].decode() for i in range(0, len(r), 2)}
 formula = int(kv["bytes"])
-assert int(kv["entries"]) == N, kv
+# Per-kind VERIFY vocabulary (docs/indexes.md): an ann index answers
+# vectors/bytes/tombstones/links. "entries" is the scalar kinds' word.
+assert int(kv["vectors"]) == N, kv
 growth = (rss_kb() - rss_before) * 1024
 ratio = formula / growth if growth > 0 else 0
 print(f"vectorgate: formula={formula/2**30:.2f}GiB rss-growth={growth/2**30:.2f}GiB ratio={ratio:.2f}")

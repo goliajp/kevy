@@ -135,8 +135,13 @@ def wait_ready():
         time.sleep(0.3)
 
 _ = burst()  # warm
+# Five alternations, not three. At three, the base medians wobbled 1.3%
+# run to run while the measured tax sits at ~10.0% against a 10% line —
+# the verdict was a coin flip (9.9 / 10.0 / 10.1 / 10.2 across four
+# runs). More samples per side narrows the median before the line
+# judges it; the line itself is untouched.
 bases, taxeds = [], []
-for _round in range(3):
+for _round in range(5):
     bases.append(burst())
     assert cmd(s, buf, "IDX.CREATE", "a_agg", "ON", "PREFIX", "a:", "FIELD", "val",
                "TYPE", "i64", "KIND", "agg", "GROUPBY", "grp") == b"+OK"
@@ -145,7 +150,7 @@ for _round in range(3):
     taxeds.append(burst())
     cmd(s, buf, "IDX.DROP", "a_agg")
 bases.sort(); taxeds.sort()
-tax = (bases[1] - taxeds[1]) / bases[1] * 100
+tax = (bases[2] - taxeds[2]) / bases[2] * 100
 print(f"agggate: write tax bases={[int(b) for b in bases]} taxed={[int(t) for t in taxeds]} median tax={tax:.1f}%")
 if tax >= 10.0:
     print(f"agggate: FAIL — write tax {tax:.1f}% >= 10%"); sys.exit(1)
