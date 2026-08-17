@@ -123,6 +123,18 @@ def _have_docker():
     return (r.returncode == 0), "docker daemon is not running"
 
 
+def _have_pgcmp_infra():
+    import socket
+    try:
+        socket.create_connection(("127.0.0.1", 15499), timeout=2).close()
+    except OSError:
+        return False, "no Postgres on 127.0.0.1:15499 (root starts kevy-pgcmp once; see bench/pgcompare.sh)"
+    venv = pathlib.Path.home() / "pgbench-venv/bin/python"
+    if not venv.exists():
+        return False, "no psycopg venv at ~/pgbench-venv"
+    return True, ""
+
+
 def _have_device():
     import os
     if os.environ.get("KEVY_DEVICE") == "1":
@@ -142,6 +154,7 @@ def requirement_gap(check):
             "chromium": _have_chromium,
             "docker": _have_docker,
             "web-deps": _have_web_deps,
+            "pgcmp-infra": _have_pgcmp_infra,
             "wasm-artifact": _have_wasm_artifact,
             "device": _have_device,
             "ci": lambda: (False, "runs in CI, not locally"),
@@ -289,6 +302,28 @@ def run_tier(suite, checks, tier, only=None, area=None):
     # the red was billed to whoever ran next. Not a manifest entry so it
     # cannot be reordered or forgotten.
     if not only and not area:
+        # Leaked servers first: a gate that exits without killing what it
+        # spawned leaves a squatter that makes a LATER gate refuse — the
+        # box's first full run had capacity-envelope refuse over a server
+        # some earlier check had leaked. Only processes running THIS
+        # repo's binaries are ours to kill; another session's servers are
+        # not, and pgrep's own invocation must not match itself.
+        import os, signal as sig
+        leaked = subprocess.run(
+            ["pgrep", "-af", str(ROOT / "target")],
+            capture_output=True, text=True).stdout.strip()
+        leaked_rows = [l for l in leaked.splitlines()
+                       if "/kevy" in l and "pgrep" not in l]
+        if leaked_rows:
+            print(f"  ✗ exit-hygiene: {len(leaked_rows)} leaked server(s), killed:")
+            for row in leaked_rows:
+                print(f"      {row[:130]}")
+                try:
+                    os.kill(int(row.split()[0]), sig.SIGKILL)
+                except (ValueError, ProcessLookupError, PermissionError):
+                    pass
+            results.append(({"id": "exit-hygiene-procs", "area": "hygiene"},
+                            "FAIL", 0.0, "\n".join(leaked_rows[:4])))
         sweep = subprocess.run(["bash", "bench/rootgate.sh"], cwd=ROOT,
                                capture_output=True, text=True)
         if sweep.returncode != 0:
