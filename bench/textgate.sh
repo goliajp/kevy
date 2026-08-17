@@ -298,7 +298,11 @@ if p95s[3] >= p95_limit:
 r = cmd(s, buf, "IDX.VERIFY", "a_body")
 kv = {r[i].decode(): r[i+1].decode() for i in range(0, len(r), 2)}
 formula = int(kv["bytes"])
-docs = int(kv["entries"])
+# Per-kind VERIFY vocabulary (docs/indexes.md): a text index answers
+# docs/bytes/postings/tokens. This read "entries" — the scalar kinds'
+# word — from before the vocabularies split, and the gate had not run
+# against a live server since.
+docs = int(kv["docs"])
 assert docs == N, kv
 rss_after = rss_kb()
 growth = (rss_after - rss_before) * 1024
