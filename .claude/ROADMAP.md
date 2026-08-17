@@ -870,7 +870,7 @@ npm 包",并说明**版本之间**缺口现在朝另一个方向:页面可以展
 部署解决不了)。finding 追加在 `bench/FINDING-2026-08-13-a-gate-that-checked-nothing.md`:
 **下限抓"什么都没查",红-绿抓"只查了一半"**。
 
-## v5.3 target — 系统化 testsuite(2026-08-17 属主令,核心要求)🔄
+## v5.3 target — 系统化 testsuite(2026-08-17 属主令,核心要求)✅ **v5.3.0 已发布(2026-08-18)**
 
 **属主原话**:三档 full / precommit / prerelease,性能要求极高(precommit < prerelease < full);
 full 找问题、全面、标准不留死角;prerelease 钉回归+当前版本目标+ironrule;precommit 钉当前版本
@@ -896,9 +896,21 @@ full 找问题、全面、标准不留死角;prerelease 钉回归+当前版本�
   根因(临时 cwd)② cookbook 六处 FEED.READ 硬编码 generation=1,而 P4 后 generation 是
   随机身份不是计数器 → 三语改为从 FEED.TAIL 读,smoke 110 条全过 ③ cookbook_smoke 只改写
   行首 kevy-cli,嵌套替换里的漏掉
-- [ ] 盒上跑 `suite prerelease` 全档并按实测校准 box 检查的声明时长
-- [ ] `suite full` 首次全量跑(标准不留死角的实证),NOT-RUN 清单归零或具名归档
-- [ ] 五轴门(mem/disk/cov)在新框架下的基线复核;perfgate-median 基线 ratchet 迁移记录
+- [x] 盒上 `suite prerelease` 全档:26 passed / 0 failed / 1 advisory / 5 not-run,1633s(预算 5400s)
+- [x] `suite full` 首次全量跑到全绿(第 4 轮,58 pass;每轮红全部追到根因而非重跑洗绿),
+  NOT-RUN 具名归档;途中抓到并修复 kevy-cli `import --resume` 静默空导入(真产品缺陷,进 CHANGELOG)
+- [x] 五轴基线复核 + 5.3.0 arena 实测入 `bench/PERF-LEDGER.md`(首轮垃圾数据弃并记档:泄漏
+  server 污染,exit-hygiene 扫尾由此长出);tailgate 间歇 gap 经 5.1.0 released-binary 对照 3/3
+  证伪为环境位,门保持硬线
+
+**5.3.0 发布记录(2026-08-18)**:tag=v5.3.0 @ d02c641a(CI 绿 + 盒 prerelease 26/0 双绿后扣);
+crates.io 40-crate 链 ✓ / npm @goliapkg/kevy 5.3.0 ✓ / GitHub Release 6 资产 sha256 核 ✓ /
+装后 smoke 双通道(cargo add kevy-resp@5.3.0 编译 + 发布二进制起服读写 kevy_version:5.3.0)✓ /
+Docker ✓ / Go 镜像 proxy .info 与 repo tag 同哈希 ✓ / Flutter 镜像 v5.3.0(补写 5.2.0+5.3.0
+CHANGELOG 条目;引擎字节四处自报 5.3.0)✓ / PyPI 5.3.0 ✓ / NuGet+Maven publish 派发(Maven
+发现 5.2.0 漏发,Central 停 5.1.0,本轮补齐)/ master 快进到 tag / 站点 723 页部署 t01
+(远端备份 web.bak-530),线上 verify 28/28 + changelog 页含 5.3.0。wasm 对账:同 5.3.0/同
+能力标记,字节差 ~1KB = macOS 本地 vs CI Linux 工具链不可复现,同源判定可部署(有意决策)。
 
 # 开放工作流(2026-08-13 重整,属主令「把这些问题都先合理地补充到 flow 然后全部解决」)
 
