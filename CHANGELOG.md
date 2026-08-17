@@ -1,5 +1,63 @@
 # Changelog
 
+## 5.3.0 — the suite that checks the checker
+
+The release whose core deliverable is the test system itself: 71 checks
+across 13 areas in three audited tiers (precommit ⊆ prerelease ⊆ full,
+by construction), a mechanical architecture gate, and an artifact
+reclamation tool. Running the new full tier against a live server for
+the first time surfaced one real product defect, which this release
+fixes. Nothing changed on the wire; every 5.2 data directory opens
+as-is in both directions.
+
+### Fixed
+
+- **`kevy-cli import --resume` could silently import nothing.** Two
+  defects compounded on the restore path. The progress file lived at a
+  name the documentation (and everything written against it) did not
+  use: `Path::with_extension` turned `dump.kevy` into `dump.progress`
+  where the contract says `<src>.progress`. And a fresh import never
+  reset a stale progress file — a completed earlier import leaves
+  offset = EOF, so killing a fresh import into a fresh server before
+  its first batch landed let a later `--resume` seek to the end, import
+  nothing, and report success. In real operations that is silent data
+  loss on a restore. Both fixed; the regression test fails against the
+  old code with exactly the drill's signature.
+
+### Added
+
+- **The test suite** (`suite/manifest.toml`, `tools/suite.py`):
+  `python3 tools/suite.py precommit|prerelease|full`. Budgets are
+  audited arithmetic, a missing requirement is a loud NOT-RUN by name,
+  a deleted check fails the audit, timeouts kill whole process trees,
+  and every tier ends with an exit-hygiene sweep for residue and leaked
+  servers. Measured on the release hardware: precommit ≈ 90 s,
+  prerelease ≈ 27 min, full ≈ 113 min.
+- **The architecture gate** (`tools/check_architecture.py`): every
+  workspace crate classified into the stone/steel/cement model,
+  unclassified crates fail, and all 91 shipping dependency edges must
+  point down the layers.
+- **The dialect gate** (`bench/dialectgate.sh`): fifteen pins holding
+  what 5.2 corrected — each Lua dialect serves its own table surface
+  and error wording, the `string.rep` denial-of-service stays fixed,
+  unknown dialects are refused, RESP3 serves the same dialect.
+- **`tools/clean.py`**: build and test products reclaimed by class —
+  runtime residue, tmp scratch stores, site products, the cargo dev
+  profile — report first, tracked files never.
+
+### Findings published (measurement, not regression)
+
+- The agg index build's RSS transient is ~8× its settled formula and
+  invariant to dataset residency; the formula describes the settled
+  index correctly (`bench/FINDING-2026-08-17-agg-build-rss-transient.md`).
+- The agg write tax measures 9.9 ± 0.5 % against its 10 % claim — the
+  spread exceeds the distance to the line
+  (`bench/FINDING-2026-08-17-agg-write-tax-at-the-line.md`).
+- The firehose-epoll reactor-gap bar breaches ~1 in 5 runs on the bench
+  box; a released 5.1.0 binary reproduces it on the same disk, so it is
+  the documented jbd2 tail, not a regression
+  (`bench/.flake-archive/2026-08-18-tailgate-firehose-gap-intermittent-NOTE.md`).
+
 ## 5.2.0 — the browser gets the whole data layer
 
 Two things a reader could reach for and not find. The browser build was
