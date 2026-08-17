@@ -430,6 +430,11 @@ proves = "bytes/entry match each declared memory formula within tolerance"
 id = "allocgate"
 area = "mem"
 tier = "full"
+# M2 records a REAL measured trade (allocator ON costs ~13% on
+# pub/sub — the header-free finding) and three lines await capacity
+# trains. The kevy-alloc feature ships OFF; this ledger tracks the
+# experiment, red by design until its decision lands.
+advisory = true
 cmd = "bash -c 'eval \"$(bash bench/allocgate-prep.sh)\" && bash bench/allocgate.sh'"
 expected = 600
 timeout = 3600
@@ -440,6 +445,8 @@ proves = "the allocator's fragmentation and RSS budget"
 id = "allocgate-mem"
 area = "mem"
 tier = "full"
+# The other half of the same experiment ledger.
+advisory = true
 cmd = "bash -c 'eval \"$(bash bench/allocgate-prep.sh)\" && bash bench/allocgate-mem.sh'"
 expected = 600
 timeout = 3600
