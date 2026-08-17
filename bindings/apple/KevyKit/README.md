@@ -8,7 +8,7 @@ ios-sim-arm64 / macos-arm64 static libraries).
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/goliajp/kevy", from: "5.2.0")
+.package(url: "https://github.com/goliajp/kevy", from: "5.3.0")
 ```
 
 The package manifest lives at the **repository root** — SwiftPM resolves
@@ -18,7 +18,7 @@ place it can be reached from. Sources, tests and `Artifacts/` stay here.
 ```swift
 ```
 
-> **Pre-release.** `v5.2.0` is tagged, but the repo root carries no
+> **Pre-release.** `v5.3.0` is tagged, but the repo root carries no
 > `Package.swift` — SwiftPM cannot resolve the URL form above yet.
 > Until the package manifest is hoisted, depend on the package by path:
 > `.package(path: "/path/to/kevy/bindings/apple/KevyKit")`, after
