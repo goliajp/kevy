@@ -166,6 +166,24 @@ for _ in range(6):
 # measured -7 MiB), which says something true about span reuse and
 # nothing about the formula. The formula describes a cold build, so a
 # cold build is what it is checked against.
+# Residency first, quantitatively: the warm bursts touch 40k random
+# keys per round — under a third of the dataset even after several —
+# and the build's full scan re-faults every page madvise reclaimed,
+# growing RSS by the DATASET (305 MiB measured twice, for a 39 MiB
+# formula). One pipelined read sweep over all N keys makes the dataset
+# genuinely resident; only then does build-time growth mean the index.
+b2 = []
+for i in range(N):
+    b2.append(enc("HGET", f"a:{i}", "val"))
+    if len(b2) == 1000:
+        s.sendall(b"".join(b2))
+        for _ in range(len(b2)):
+            read_reply(s, buf)
+        b2 = []
+if b2:
+    s.sendall(b"".join(b2))
+    for _ in range(len(b2)):
+        read_reply(s, buf)
 rss_before = rss_kb()
 assert cmd(s, buf, "IDX.CREATE", "a_agg", "ON", "PREFIX", "a:", "FIELD", "val",
            "TYPE", "i64", "KIND", "agg", "GROUPBY", "grp") == b"+OK"
