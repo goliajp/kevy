@@ -175,7 +175,7 @@ tier = "precommit"
 cmd = "python3 tools/check_md_port.py"
 expected = 3
 timeout = 300
-requires = ["node"]
+requires = ["node", "web-deps"]
 proves = "the Python and TypeScript markdown renderers agree byte-for-byte"
 
 [[check]]
@@ -185,7 +185,7 @@ tier = "precommit"
 cmd = "python3 tools/check_wasm_size.py"
 expected = 2
 timeout = 60
-requires = []
+requires = ["wasm-artifact"]
 proves = "every stated wasm size is within 10% of the built artifact"
 
 [[check]]
@@ -261,7 +261,7 @@ tier = "prerelease"
 cmd = "python3 tools/check_site_commands.py"
 expected = 30
 timeout = 600
-requires = ["server-debug", "node"]
+requires = ["server-debug", "node", "web-deps"]
 proves = "every RESP example the site shows runs against a real server"
 
 [[check]]
@@ -271,7 +271,7 @@ tier = "prerelease"
 cmd = "python3 tools/check_site_content_parity.py"
 expected = 5
 timeout = 120
-requires = ["node"]
+requires = ["node", "web-deps"]
 proves = "every written fragment reached the built site"
 
 [[check]]

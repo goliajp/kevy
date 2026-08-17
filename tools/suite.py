@@ -23,6 +23,7 @@ Exit code: 1 on any hard FAIL or audit violation; 0 otherwise (the
 verdict still lists NOT-RUN and advisory rows by name).
 """
 
+import functools
 import json
 import pathlib
 import shutil
@@ -30,6 +31,11 @@ import subprocess
 import sys
 import time
 import tomllib
+
+# Line-buffered even when redirected: a tier run under nohup showed a
+# zero-byte log for its whole first hour, which reads as "hung" and is
+# merely buffered.
+print = functools.partial(print, flush=True)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "suite/manifest.toml"
@@ -95,6 +101,21 @@ def _have_chromium():
     return False, "web/node_modules is not installed (npm ci in web/)"
 
 
+def _have_web_deps():
+    # Distinct from node itself: the box has node and no web/node_modules,
+    # and the first box run failed four site checks that should have been
+    # honest NOT-RUNs for exactly this gap.
+    if (ROOT / "web/node_modules").exists():
+        return True, ""
+    return False, "web/node_modules is not installed (npm ci in web/)"
+
+
+def _have_wasm_artifact():
+    if (ROOT / "crates/kevy-wasm/pkg/kevy.wasm").exists():
+        return True, ""
+    return False, "crates/kevy-wasm/pkg/kevy.wasm is not built (npm run engine in web/)"
+
+
 def _have_docker():
     if not shutil.which("docker"):
         return False, "docker is not on PATH"
@@ -120,6 +141,8 @@ def requirement_gap(check):
             "node": _have_node,
             "chromium": _have_chromium,
             "docker": _have_docker,
+            "web-deps": _have_web_deps,
+            "wasm-artifact": _have_wasm_artifact,
             "device": _have_device,
             "ci": lambda: (False, "runs in CI, not locally"),
         }[r]()
