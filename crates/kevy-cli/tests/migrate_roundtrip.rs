@@ -110,7 +110,11 @@ fn export_import_roundtrip_digest_equal() {
     let file2 = dir.join("dump2.resp");
     let n2 = run_export(&mut cs, Some(b"mig:"), &file2).unwrap().keys;
     assert_eq!(n2, n);
-    std::fs::write(file2.with_extension("progress"), b"0").unwrap();
+    // The documented name is `<src>.progress`, appended — dump2.resp ->
+    // dump2.resp.progress. The implementation used with_extension, which
+    // REPLACED .resp, and this line matched it bug-for-bug, so the pair
+    // passed while both were wrong about the name.
+    std::fs::write(progress_of(&file2), b"0").unwrap();
     let rep2 = run_import(&mut cd, &file2, true, true).unwrap();
     assert_eq!(rep2.errors, 0, "idempotent replay");
     assert_eq!(digest(&mut cd, "mig:"), ds);
@@ -232,5 +236,45 @@ fn every_type_is_either_exported_or_reported() {
         Some(1),
         "copy-prefix must name what it left behind too"
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn progress_of(src: &std::path::Path) -> std::path::PathBuf {
+    let mut os = src.as_os_str().to_owned();
+    os.push(".progress");
+    std::path::PathBuf::from(os)
+}
+
+#[test]
+fn a_fresh_import_ignores_stale_progress_and_resume_honors_it() {
+    // The trap the migration drill found: a completed import leaves
+    // progress = EOF on disk. Against a FRESH server, --resume then
+    // seeks to the end, imports nothing, and reports success — while a
+    // fresh (non-resume) import must start at 0 regardless and reset
+    // the file so a crash before its first batch cannot resurrect the
+    // stale offset. Both halves pinned here, under the DOCUMENTED
+    // progress name (<src>.progress, appended): the old code replaced
+    // the extension instead, and the old test matched it bug for bug.
+    let srv = Srv::start();
+    let mut c = srv.client();
+    let dir = std::env::temp_dir().join(format!("kevy-cli-staleprog-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dump = dir.join("dump.kevy");
+    std::fs::write(&dump, b"*3\r\n$3\r\nSET\r\n$8\r\nstale:k1\r\n$1\r\nv\r\n").unwrap();
+    let eof = dump.metadata().unwrap().len();
+    std::fs::write(progress_of(&dump), eof.to_string()).unwrap();
+
+    // resume=true honors the (stale) offset: nothing lands.
+    let rep = run_import(&mut c, &dump, true, true).unwrap();
+    assert_eq!(rep.sent, 0, "resume from EOF imports nothing");
+    let r = c.request_borrowed(&[b"EXISTS", b"stale:k1"]).unwrap();
+    assert_eq!(format!("{r:?}"), "Int(0)");
+
+    // resume=false starts at 0 no matter what the file claims…
+    let rep = run_import(&mut c, &dump, false, true).unwrap();
+    assert_eq!(rep.sent, 1, "a fresh import starts at zero");
+    let r = c.request_borrowed(&[b"EXISTS", b"stale:k1"]).unwrap();
+    assert_eq!(format!("{r:?}"), "Int(1)");
+
     let _ = std::fs::remove_dir_all(&dir);
 }
