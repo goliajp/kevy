@@ -134,7 +134,18 @@ def wait_ready():
             return
         time.sleep(0.3)
 
-_ = burst()  # warm
+# Warm until the measurement is steady, not a fixed once: across three
+# gate invocations the first base sample was always the lowest (395k,
+# 404k, 413k ops/s on the same server) — a single warm burst leaves the
+# first measurement still climbing, and a line sitting at the
+# distribution's edge flips on exactly that. Steady state is what the
+# claim describes, so steady state is what gets measured.
+prev = burst()
+for _ in range(6):
+    cur = burst()
+    if abs(cur - prev) / prev < 0.01:
+        break
+    prev = cur
 # Five alternations, not three. At three, the base medians wobbled 1.3%
 # run to run while the measured tax sits at ~10.0% against a 10% line —
 # the verdict was a coin flip (9.9 / 10.0 / 10.1 / 10.2 across four
