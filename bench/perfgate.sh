@@ -113,7 +113,20 @@ command -v redis-cli >/dev/null || refuse "redis-cli not installed (the --thread
 # never touched a server would be refused as a leftover. Exclude the
 # sudo wrapper line itself; real leftover servers/benchmarks are
 # direct processes, not sudo shells.
-LEFTOVER=$(pgrep -af "kevy|redis-benchmark" | grep -v perfgate | grep -v claude \
+# …and exclude this gate's own ANCESTRY. A runner that invokes the gate
+# (tools/suite.py, a wrapper shell, nohup) has "kevy" in its cmdline by
+# way of the repo path, and the name-based excludes above cannot know
+# every runner's name — the suite's first box run was refused because
+# the sweep matched the suite itself. Real leftovers are never our own
+# ancestors.
+ANCESTORS=""
+APID=$$
+while [ "$APID" -gt 1 ] 2>/dev/null; do
+  ANCESTORS="$ANCESTORS|^$APID "
+  APID=$(awk '{print $4}' "/proc/$APID/stat" 2>/dev/null || echo 1)
+done
+LEFTOVER=$(pgrep -af "kevy|redis-benchmark" | grep -Ev "${ANCESTORS#|}" \
+  | grep -v perfgate | grep -v claude | grep -v suite.py \
   | grep -v "sudo -u kevybench" || true)
 [ -n "$LEFTOVER" ] && refuse "leftover bench processes (sweep first):
 $LEFTOVER"

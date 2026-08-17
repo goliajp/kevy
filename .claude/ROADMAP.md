@@ -870,6 +870,36 @@ npm 包",并说明**版本之间**缺口现在朝另一个方向:页面可以展
 部署解决不了)。finding 追加在 `bench/FINDING-2026-08-13-a-gate-that-checked-nothing.md`:
 **下限抓"什么都没查",红-绿抓"只查了一半"**。
 
+## v5.3 target — 系统化 testsuite(2026-08-17 属主令,核心要求)🔄
+
+**属主原话**:三档 full / precommit / prerelease,性能要求极高(precommit < prerelease < full);
+full 找问题、全面、标准不留死角;prerelease 钉回归+当前版本目标+ironrule;precommit 钉当前版本
+目标+快速回归+重要标准。内容面:性能/disk/mem/doc/标准 redis+RDS 兼容/方言/性能对打/kevy 特性/
+经典案例。另:clean architecture 工具链、清理编译测试产物、release skill flow 全面建立。
+
+**已落地(feature/v5-3-testsuite)**:
+- [x] RFC `.claude/rfcs/2026-08-17-v5.3-testsuite.md`(盘点 92 脚本/16 检查/21 CI job → 体系)
+- [x] `suite/manifest.toml` + `tools/suite.py`:71 检查、13 面、17 ⊆ 32 ⊆ 71 子集不变量
+  由构造保证;预算是算术不是希望(声明时长按实测×2 校准,audit 对账);缺基础设施 = 指名
+  NOT-RUN 永不静默;文件消失 = audit 红;超时杀整个进程组;每档收尾 exit-hygiene 扫尾
+- [x] `tools/check_architecture.py` + `suite/architecture.toml`:钢筋水泥石头机械化,47 crate
+  全分类(未分类 = 红),91 条 shipping 边全部向下;首跑即抓到我把已发布的 kevy-tmpdir 误分为
+  support(证据:crates.io 5.2.0 + cli 产品代码引用)
+- [x] `bench/dialectgate.sh`(新,方言面):15 pin,Lua 5.1–5.5 各自的 table 面/错误措辞/DoS
+  保持修复/未知方言拒绝/RESP3 同面
+- [x] `tools/clean.py`:runtime 残留/tmp scratch/site 产物/cargo dev profile 四类,先报告后
+  回收,永不碰 tracked 文件
+- [x] pushgate → `suite precommit` 薄别名;CI 加 suite audit + 架构门;release skill §2 重写
+  为三档流程
+- [x] **建套件当场抓到的存量真缺陷**:① check_doc_toml 把 45 个文档配置块喂给真服务器时
+  没给数据目录 → 每跑一次往 repo 根写一堆 aof/dump(「历史上神秘根残留」的谜底),已修在
+  根因(临时 cwd)② cookbook 六处 FEED.READ 硬编码 generation=1,而 P4 后 generation 是
+  随机身份不是计数器 → 三语改为从 FEED.TAIL 读,smoke 110 条全过 ③ cookbook_smoke 只改写
+  行首 kevy-cli,嵌套替换里的漏掉
+- [ ] 盒上跑 `suite prerelease` 全档并按实测校准 box 检查的声明时长
+- [ ] `suite full` 首次全量跑(标准不留死角的实证),NOT-RUN 清单归零或具名归档
+- [ ] 五轴门(mem/disk/cov)在新框架下的基线复核;perfgate-median 基线 ratchet 迁移记录
+
 # 开放工作流(2026-08-13 重整,属主令「把这些问题都先合理地补充到 flow 然后全部解决」)
 
 v5.1.0 已发布并 dogfood 回归通过。此前散在几个旧 arc 里的未勾条目,按

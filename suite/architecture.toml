@@ -1,0 +1,77 @@
+# The steel/cement/stone model, made mechanical.
+#
+# Every workspace crate is classified. stone knows no business and may
+# depend only on stone; steel knows the domain and may depend on steel
+# and stone; cement is a product face and may depend on anything;
+# support is dev-only scaffolding (benches, test harnesses) and is
+# exempt from the direction rule but must still be named here —
+# an unclassified crate fails the gate, so a new crate cannot slip in
+# below the model.
+#
+# Checked by tools/check_architecture.py from `cargo metadata` (normal
+# dependencies only; dev/build deps do not ship).
+
+[layers]
+# Business-free. Any project could take these, and several came from or
+# feed sister projects. Highest quality bar, widest blast radius.
+stone = [
+  "kevy-alloc",    # allocator
+  "kevy-bytes",    # byte-string primitive
+  "kevy-hash",     # hashing
+  "kevy-compress", # LZ + entropy coding
+  "kevy-map",      # hash table
+  "kevy-madvise",  # page-advice shim
+  "kevy-ranktree", # order-statistic tree
+  "kevy-ring",     # ring buffer
+  "kevy-seg",      # segment store
+  "kevy-time",     # clock
+  "kevy-sys",      # the one OS boundary (sockets/poller/mmap)
+  "kevy-uring",    # io_uring bindings
+  "kevy-text",     # full-text segments
+  "kevy-vector",   # HNSW segments
+  "kevy-geo",      # geohash math
+  "kevy-scalar",   # scalar function engine (regex/md5/interval)
+  "kevy-tmpdir",   # unique temp dirs — published, used by cli embed/backup
+]
+
+# Domain-aware, serving many flows: the engine's skeleton.
+steel = [
+  "kevy-store",    # the keyspace
+  "kevy-vlog",     # value log (cold values)
+  "kevy-resp",     # RESP protocol + ops table
+  "kevy-resp-client",
+  "kevy-persist",  # AOF + snapshots
+  "kevy-index",    # secondary indexes
+  "kevy-window",   # windowed/materialized maintenance
+  "kevy-replicate",
+  "kevy-elect",
+  "kevy-config",
+  "kevy-lua",      # EVAL surface over luna-core
+  "kevy-lua-host",
+  "kevy-scope",
+  "kevy-sql",
+  "kevy-rt",       # the reactor runtime
+  "kevy-embedded", # the embeddable engine facade
+]
+
+# Product faces: the server, the CLI, the language doors.
+cement = [
+  "kevy",
+  "kevy-cli",
+  "kevy-ffi",
+  "kevy-jni",
+  "kevy-napi",
+  "kevy-wasm",
+  "kevy-client",
+  "kevy-client-async",
+  "kevy-cluster-rw",
+  "kevy-mcp",
+]
+
+# Dev-only scaffolding. Exempt from the direction rule; publish = false.
+support = [
+  "kevy-bench",
+  "kevy-chaos",
+  "kevy-pubsub-bench",
+  "kevy-testnet",
+]

@@ -87,30 +87,59 @@ The READMEs went a whole release line showing v4-era numbers under a 5.1.0
 tag for exactly this reason: nothing tied them to a measurement, so
 nothing said they had stopped being true.
 
-## 2. Before the tag
+## 2. Before the tag — the suite is the flow (v5.3)
 
-Every one of these has failed at least once here.
+Since 5.3 the checks live in one manifest (`suite/manifest.toml`) and
+run in three tiers. The flow is the tiers:
 
-1. **Worktree clean, and no runtime residue in the repo root.**
-   `bash bench/rootgate.sh` — a test that spawned a server in the
-   source directory leaves `dump-*.rdb` / `feed-*.meta` behind.
-2. **CI green on the exact commit you will tag.** The only posture is
+```sh
+python3 tools/suite.py precommit    # before every push  (≤ 5 min)
+python3 tools/suite.py prerelease   # before ANY tag     (≤ 90 min)
+python3 tools/suite.py full         # hunting problems; before majors
+```
+
+- **precommit** runs on every push (pushgate is now an alias for it):
+  hygiene, the version pins across all six layers, publish order,
+  crate layering, the fast doc gates, and the Lua dialect pins.
+- **prerelease** is the tag gate. It adds clippy, the workspace tests,
+  the site built and opened in a real browser, the compat and cookbook
+  cases — and the five owner-claim gates (perfgate, crashgate,
+  repligate, availgate, tailgate). Those need the box: run the tier
+  there as `kevybench` with `TMPDIR=$HOME/captmp` (tmpfs numbers are
+  fiction and the firehose fills RAM). Off the box they report NOT-RUN
+  **by name**; a prerelease with NOT-RUN rows is not a tag-ready
+  prerelease — run those rows where they can run.
+- **full** is everything, including the sweeps, soaks, capacity
+  envelope, doors and coverage. It exists to find problems; slow is
+  acceptable, dark corners are not (the audit proves every area has a
+  check).
+
+The runner's verdict is honest by construction: a missing requirement
+is a loud NOT-RUN, never a silent pass; the manifest audit fails if a
+listed check's file has vanished; the tier fails if it runs over its
+own declared budget; and every tier ends with an exit-hygiene sweep so
+a check that leaves residue is billed to this run, not the next one.
+
+Beyond the suite, three things remain manual because they are about
+the *world*, not the tree:
+
+1. **CI green on the exact commit you will tag.** The only posture is
    `gh run watch <id> --exit-status`; `gh run view -q .conclusion` is a
-   query, not a gate — it exits 0 whatever it prints. Note that a
-   *cancelled* run is not a failure: pushing again cancels the previous
-   run by concurrency group.
-3. **Version alignment** (§1) and **publish order**
-   (`python3 tools/check_publish_order.py`).
-4. **The self-hosted runner is online** — the release workflow's verify
-   job runs on it. `gh api orgs/goliajp/actions/runners` (the runners
-   are registered at the *org*, not the repo; the repo endpoint returns
-   an empty list and that is not a diagnosis).
-5. **Gates that own the release's claims**: perfgate, crashgate,
-   repligate, availgate, tailgate. Run them on the box as `kevybench`,
-   and give tailgate a real disk: `TMPDIR=$HOME/captmp`. On tmpfs its
-   numbers are fiction and the firehose fills 32 GB of RAM.
-6. **A release-profile build of the whole workspace** — `cargo build
-   --release --workspace` must exit 0 before the tag, not during it.
+   query, not a gate — it exits 0 whatever it prints. A *cancelled*
+   run is not a failure: pushing again cancels the previous run by
+   concurrency group.
+2. **The self-hosted runner is online** — the release workflow's verify
+   job runs on it. `gh api orgs/goliajp/actions/runners` (registered at
+   the *org*; the repo endpoint returns an empty list and that is not a
+   diagnosis).
+3. **A release-profile build of the whole workspace** — `cargo build
+   --release --workspace` exits 0 before the tag, not during it.
+
+Housekeeping rides the flow rather than waiting for a disk to fill:
+`python3 tools/clean.py` reports what build/test products are
+reclaimable by class (runtime residue, tmp scratch stores, site
+products, the cargo dev profile — 4.6 GB the first time it ran);
+`--all` reclaims. It never touches tracked files.
 
 ## 3. Tag and publish
 
