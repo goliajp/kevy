@@ -170,10 +170,23 @@ def audit(suite, checks):
             bad.append(f"{c['id']}: unknown area {c['area']!r}")
         # Every path-looking token in the command must exist: a renamed
         # or deleted gate must fail here, not vanish from coverage.
-        for tok in c["cmd"].split():
+        # shlex, not str.split: a compound command quotes its inner
+        # script, and a naive split hands back tokens wearing quote
+        # marks that no filesystem contains.
+        import shlex
+        try:
+            toks = shlex.split(c["cmd"])
+        except ValueError:
+            toks = c["cmd"].split()
+        inner = []
+        for t in toks:
+            inner += shlex.split(t) if (" " in t) else [t]
+        for tok in inner:
             if "/" in tok and not tok.startswith("-") and not (ROOT / tok).exists():
                 if tok.startswith("target/"):
                     continue  # build products are a requirement, not a file check
+                if any(ch in tok for ch in "$()\""):
+                    continue  # a substitution, not a path
                 bad.append(f"{c['id']}: {tok} does not exist")
         if c.get("expected", 0) > c.get("timeout", 0):
             bad.append(f"{c['id']}: expected {c['expected']}s exceeds its own timeout")
