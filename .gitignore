@@ -80,3 +80,8 @@ bench/.flake-archive/*.log
 # does, so there is no window in which a private key sits in git's
 # working tree unignored.
 .secrets/
+# clientgate's .NET build products — dotnet build writes them on every
+# clientgate run, and 31 of them were tracked, so running the gate made
+# the tree dirty. Compile products do not belong in history.
+bench/clientgate/seredis/bin/
+bench/clientgate/seredis/obj/
