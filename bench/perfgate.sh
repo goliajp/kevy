@@ -126,7 +126,7 @@ while [ "$APID" -gt 1 ] 2>/dev/null; do
   APID=$(awk '{print $4}' "/proc/$APID/stat" 2>/dev/null || echo 1)
 done
 LEFTOVER=$(pgrep -af "kevy|redis-benchmark" | grep -Ev "${ANCESTORS#|}" \
-  | grep -v perfgate | grep -v claude | grep -v suite.py \
+  | grep -v perfgate | grep -v claude | grep -v kevypgcmp | grep -v suite.py \
   | grep -v "sudo -u kevybench" || true)
 [ -n "$LEFTOVER" ] && refuse "leftover bench processes (sweep first):
 $LEFTOVER"
