@@ -351,7 +351,7 @@ fn ann_kind_knn_e2e() {
     let r = query_ready(&mut c, &argv);
     let s = String::from_utf8_lossy(&r);
     assert!(s.contains("e:100"), "nearest is the exact point: {s}");
-    assert!(s.find("e:100\r").unwrap() < s.find("e:99\r").map_or(usize::MAX, |x| x), "{s}");
+    assert!(s.find("e:100\r").unwrap() < s.find("e:99\r").unwrap_or(usize::MAX), "{s}");
 
     // csv debug form + hydration
     let mut argv: Vec<&[u8]> = vec![b"IDX.QUERY", b"e_v", b"KNN"];

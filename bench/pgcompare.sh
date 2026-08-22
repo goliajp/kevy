@@ -54,8 +54,9 @@ CSV="$WORK/data.csv"
 SRVPAT="--port $KPORT --dir $WORK"
 
 cleanup() {
-  # killgate: an empty KPORT would make this pattern match everything.
-  [ -n "${KPORT}" ] || return 0
+  # killgate: an empty SRVPAT would make this pattern match every process
+  # on the box — that took lx64 offline three times in 2026-07.
+  [ -n "${SRVPAT}" ] || return 0
   pkill -f -- "$SRVPAT" 2>/dev/null
   # Drop the dataset too. A run left a 979 MB table loaded in the
   # always-on container, and postgres's autovacuum ground through it in
@@ -162,7 +163,7 @@ PY
   # Wait for it to actually be gone rather than for a fixed second: freeing a
   # 17 GB resident set takes the kernel longer than that, and the next mode
   # then starts its own load under the dying process's memory pressure.
-  if [ -n "${KPORT}" ]; then
+  if [ -n "${SRVPAT}" ]; then
     pkill -f -- "$SRVPAT" 2>/dev/null
     for _ in $(seq 60); do
       pgrep -f -- "$SRVPAT" >/dev/null 2>&1 || break

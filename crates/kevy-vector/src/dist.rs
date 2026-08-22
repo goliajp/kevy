@@ -129,7 +129,7 @@ fn dot_lanes(a: &[f32], b: &[f32]) -> f32 {
     let mut acc = [0.0f32; 8];
     let (ac, ar) = a.split_at(a.len() - a.len() % 8);
     let (bc, br) = b.split_at(ac.len().min(b.len()));
-    for (ca, cb) in ac.chunks_exact(8).zip(bc.chunks_exact(8)) {
+    for (ca, cb) in ac.as_chunks::<8>().0.iter().zip(bc.as_chunks::<8>().0) {
         for i in 0..8 {
             acc[i] += ca[i] * cb[i];
         }
@@ -148,7 +148,7 @@ fn l2_lanes(a: &[f32], b: &[f32]) -> f32 {
     let mut acc = [0.0f32; 8];
     let (ac, ar) = a.split_at(a.len() - a.len() % 8);
     let (bc, br) = b.split_at(ac.len().min(b.len()));
-    for (ca, cb) in ac.chunks_exact(8).zip(bc.chunks_exact(8)) {
+    for (ca, cb) in ac.as_chunks::<8>().0.iter().zip(bc.as_chunks::<8>().0) {
         for i in 0..8 {
             let d = ca[i] - cb[i];
             acc[i] += d * d;
@@ -178,7 +178,7 @@ pub fn parse_vector(raw: &[u8], dim: usize) -> Option<Vec<f32>> {
         return None;
     }
     let mut out = Vec::with_capacity(dim);
-    for chunk in raw.chunks_exact(4) {
+    for chunk in raw.as_chunks::<4>().0 {
         let x = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         if !x.is_finite() {
             return None;

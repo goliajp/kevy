@@ -49,7 +49,8 @@ mkdir -p "$WORK"; : >"$OUT"
 CSV="$WORK/data.csv"
 
 cleanup() {
-  [ -n "${KPORT}" ] && pkill -f -- "$SRVPAT" 2>/dev/null
+  # killgate: an empty pattern matches every process on the box.
+  [ -n "${SRVPAT}" ] && pkill -f -- "$SRVPAT" 2>/dev/null
   "$VENV" -c "
 import psycopg
 with psycopg.connect('host=127.0.0.1 port=$PGPORT user=postgres password=bench dbname=bench') as c:
@@ -123,6 +124,7 @@ PY
   taskset -c "$DRV_CPUS" "$VENV" "$CONC_PY" kevy --port "$KPORT" \
     --rows "$ROWS" --conc "$CONC" --ops "$OPS" --mode "$MODE" \
     --label "kevy$T" --driver-cores "$DRV_CORES" | tee -a "$OUT"
+  [ -n "${SRVPAT}" ] || refuse "empty server pattern — the teardown would match everything"
   pkill -f -- "$SRVPAT" 2>/dev/null
   for _ in $(seq 60); do pgrep -f -- "$SRVPAT" >/dev/null 2>&1 || break; sleep 0.5; done
   pgrep -f -- "$SRVPAT" >/dev/null 2>&1 &&
