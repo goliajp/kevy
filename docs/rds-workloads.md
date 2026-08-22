@@ -31,26 +31,33 @@ explicit:
 
 ### Measured against PostgreSQL 18
 
-Not asserted — [run](../bench/pgcompare.sh) and
-[recorded](../bench/PGCOMPARE-2026-07-26.md). 2M rows / 843 MB of CSV,
-one harness driving both, PG stock:
+Not asserted — [run](../bench/pgcompare.sh). 2M rows / 854 MB of CSV, one
+harness driving both, PG stock, median of three interleaved passes on
+kevy 5.4:
 
 | | kevy (`everysec`) | PG 18 stock |
 |---|---|---|
-| single-row update p99 | **62 µs** | 1689 µs |
-| single-row update p99, *matched* durability (fsync per write) | 3097 µs | **1689 µs** |
-| secondary-index lookup p99 | 212 µs | **126 µs** |
-| list page p99 (filter + range + order + limit) | 248 µs | **131 µs** |
-| memory per MB of CSV | 6153 KB | **625 KB** |
+| single-row update p99 | **41 µs** | 1,676 µs |
+| single-row update p99, *matched* durability (fsync per write) | 3,339 µs | **1,676 µs** |
+| secondary-index lookup p99 | 160 µs | 154 µs |
+| list page p99 (filter + range + order + limit) | 200 µs | **162 µs** |
+| memory per MB of CSV | 5,821 KB | **883 KB** |
 
-Read that as three separate findings, because they point different
-ways. kevy absorbs writes **27× faster** if one second of loss is
-acceptable — that is the pressure that puts a cache in front of an RDS
-in the first place. At matched per-write durability **PostgreSQL is
-1.8× faster**: it group-commits its WAL, kevy fsyncs per command. And
-on the read shapes this page is about, **PostgreSQL stock is the faster
-engine** — 1.5–1.8× — while using about a tenth of the memory. Rows
-held in-process cost RAM; a planner over a B-tree is good at its job.
+**These numbers replace a set that was not comparing like with like.** Until
+5.4 the kevy read shapes asked for no columns while the SQL they were timed
+against selected two or three, and the kevy table declared six of the seven
+columns its rows carried. Both are fixed, and both moved the answer: the
+index lookup was published as 212 µs against PostgreSQL's 126 and is now a
+tie within 4%.
+
+Read the rows as separate findings, because they point different ways. kevy
+absorbs writes **41× faster** if one second of loss is acceptable — that is
+the pressure that puts a cache in front of an RDS in the first place. At
+matched per-write durability **PostgreSQL is 2.0× faster**: it group-commits
+its WAL, kevy fsyncs per command. On the indexed lookup the two engines are
+**level**; on the list page **PostgreSQL is 1.2× faster** — a planner over a
+B-tree is good at its job. And kevy holds the same data in **6.6× the
+memory**: rows held in-process cost RAM.
 When the dataset stops fitting — 11.5 GB of CSV, PostgreSQL capped at
 2 GB of memory, kevy at a 1 GB tiering budget — only the *random-access*
 shape changes hands: a lookup by random primary key is **184 µs on PG
