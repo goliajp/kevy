@@ -1477,3 +1477,52 @@ fn scope_ingested_rows_enter_the_index() {
     }
     assert_eq!(cmd(&mut c, &[b"IDX.COUNT", b"byage", b"RANGE", b"0", b"999"]), b":10\r\n");
 }
+
+/// The k-way merge must return the globally smallest LIMIT rows, in order,
+/// when the winners are scattered across shards.
+///
+/// The reduce used to flatten every shard's page and sort the lot; it now
+/// merges the already-sorted pages and stops at LIMIT. Both must produce the
+/// same answer, and the way a merge goes wrong is subtle — it takes a prefix
+/// of one shard instead of interleaving, or it stops early because one chunk
+/// ran dry. Neither shows up unless the correct answer is interleaved across
+/// shards, which is what this fixture forces: 200 rows on distinct keys, so
+/// the hash scatters them, and a LIMIT far below the match count.
+#[test]
+fn merge_returns_the_globally_smallest_page_across_shards() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+
+    for i in 0..200 {
+        cmd(
+            &mut c,
+            &[b"HSET", format!("m:{i:03}").as_bytes(), b"n", format!("{i}").as_bytes()],
+        );
+    }
+    let r = cmd(
+        &mut c,
+        &[b"IDX.CREATE", b"n_idx", b"ON", b"PREFIX", b"m:", b"FIELD", b"n", b"TYPE", b"i64", b"KIND", b"range"],
+    );
+    assert_eq!(r, b"+OK\r\n");
+
+    let r = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"n_idx", b"RANGE", b"0", b"199", b"LIMIT", b"20"],
+    );
+    let s = String::from_utf8_lossy(&r);
+
+    // Exactly LIMIT rows, and exactly the twenty smallest — m:000..m:019.
+    assert_eq!(s.matches("m:").count(), 20, "LIMIT honoured: {s}");
+    for i in 0..20 {
+        assert!(s.contains(&format!("m:{i:03}")), "m:{i:03} in the page: {s}");
+    }
+    assert!(!s.contains("m:020"), "m:020 is the 21st and must not appear: {s}");
+
+    // And they arrive in (value, key) order, not shard order.
+    let mut at = 0usize;
+    for i in 0..20 {
+        let needle = format!("m:{i:03}");
+        let found = s[at..].find(&needle).unwrap_or_else(|| panic!("{needle} after {at}: {s}"));
+        at += found + needle.len();
+    }
+}
