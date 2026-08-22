@@ -15,7 +15,7 @@
     <AssemblyName>Kevy.Client</AssemblyName>
 
     <PackageId>kevy</PackageId>
-    <Version>5.3.0</Version>
+    <Version>5.4.0</Version>
     <Authors>GOLIA K.K.</Authors>
     <Description>The first-party kevy client for .NET — one Connect(url) to the embedded engine or a remote RESP server, every command family on both a sync and an async face. Pure Rust engine, zero services.</Description>
     <PackageLicenseExpression>Apache-2.0 OR MIT</PackageLicenseExpression>

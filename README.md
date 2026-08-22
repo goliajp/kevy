@@ -117,7 +117,7 @@ go get github.com/goliajp/kevy-go/v5             # Go
 ```
 ```xml
 <dependency>                                     <!-- Java -->
-  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>5.3.0</version>
+  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>5.4.0</version>
 </dependency>
 ```
 
