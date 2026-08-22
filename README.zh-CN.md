@@ -242,8 +242,8 @@ loader API 与 ABI 契约见 [docs/zh/wasm.md](docs/zh/wasm.md)；
 
 | Workload | kevy | valkey 9.1 | 比值 |
 |---|---:|---:|---:|
-| `GET -c 50 -P 16` | 7.51 M/s | 3.05 M/s | **2.46×** |
-| `SET -c 50 -P 16` | 6.88 M/s | 1.68 M/s | **4.09×** |
+| `GET -c 50 -P 16` | 7.39 M/s | 3.29 M/s | **2.25×** |
+| `SET -c 50 -P 16` | 6.83 M/s | 1.74 M/s | **3.93×** |
 | Pub/sub 扇出（50 订阅） | 23.1 M/s | 5.1 M/s | **4.52×** |
 | 嵌入式 `get`（命中） | 9.0 M/s | — | （Redis 无进程内形态） |
 
@@ -253,8 +253,8 @@ loader API 与 ABI 契约见 [docs/zh/wasm.md](docs/zh/wasm.md)；
 
 | 引擎 | kevy 领先 |
 |---|---:|
-| valkey 9.1 | **2.46×** |
-| redis 8 | **1.29×** |
+| valkey 9.1 | **2.25×** |
+| redis 8 | **1.27×** |
 | dragonfly | **2.60×** |
 
 这些比值**低于 2026-07-19 之前公布的数字**，原因在尺子，不在引擎。

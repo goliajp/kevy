@@ -196,7 +196,20 @@ impl<C: Commands> Shard<C> {
     /// CQE for an offload SQE: `user_data` low bits carry the chunk seq
     /// (0 = the fsync). Errors mirror the synchronous path's
     /// best-effort contract (`Shard::log` eprintlns and carries on).
-    pub(crate) fn uring_aof_on_cqe(&mut self, user_data: u64, res: i32) {
+    ///
+    /// Returns whether the durable watermark moved — which the reactor
+    /// counts as work. It has to: under `always` a reply's bytes wait in
+    /// `conn.output` behind `UringConn::held_watermark` and are released by
+    /// the NEXT arming pass, so an iteration that advances the watermark has
+    /// a pending consequence and must not be the one that parks. At a single
+    /// client nothing else can wake the shard — the only client is waiting
+    /// for exactly that reply — so the park runs to its timeout.
+    ///
+    /// Measured, `appendfsync always`, one connection, `park_timeout_ms` the
+    /// only variable: p99 7,843 µs at 5 ms against 47,748 µs at the default
+    /// 50 ms, with p50 unchanged at 2,685 / 2,903. The tail followed the
+    /// setting; the fsync did not move.
+    pub(crate) fn uring_aof_on_cqe(&mut self, user_data: u64, res: i32) -> bool {
         let seq = user_data & !(0xF << OP_SHIFT);
         if seq == 0 {
             self.aof_offload.fsync_inflight = false;
@@ -204,17 +217,18 @@ impl<C: Commands> Shard<C> {
                 // The Always gate keeps its held conns held (watermark
                 // unmoved) and the tick resubmits — no false ack.
                 eprintln!("kevy: shard {} aof offload fsync failed: errno {}", self.id, -res);
-            } else {
-                self.aof_offload.dirty_since_sync = false;
-                self.aof_offload.last_sync = Instant::now();
-                self.aof_offload.durable_watermark =
-                    self.aof_offload.durable_watermark.max(self.aof_offload.fsync_covers);
-                self.flush_held_responses();
+                return false;
             }
-            return;
+            self.aof_offload.dirty_since_sync = false;
+            self.aof_offload.last_sync = Instant::now();
+            let before = self.aof_offload.durable_watermark;
+            self.aof_offload.durable_watermark =
+                self.aof_offload.durable_watermark.max(self.aof_offload.fsync_covers);
+            self.flush_held_responses();
+            return self.aof_offload.durable_watermark > before;
         }
         let Some(pos) = self.aof_offload.inflight.iter().position(|c| c.seq == seq) else {
-            return; // already reaped (defensive)
+            return false; // already reaped (defensive)
         };
         if res < 0 {
             // Same contract as the synchronous append: report loudly,
@@ -222,16 +236,19 @@ impl<C: Commands> Shard<C> {
             // retry next iteration.
             eprintln!("kevy: shard {} aof offload write failed: errno {}", self.id, -res);
             self.aof_offload.inflight[pos].needs_submit = true;
-            return;
+            return false;
         }
         let c = &mut self.aof_offload.inflight[pos];
         c.written += res as u32;
         if (c.written as usize) < c.bytes.len() {
             c.needs_submit = true; // short write: resubmit the remainder
-            return;
+            return false;
         }
         self.aof_offload.inflight.remove(pos);
         self.aof_offload.dirty_since_sync = true;
+        // An append completion does not release anything: the fsync it
+        // leads to does. The reactor keeps treating this one as idle.
+        false
     }
 
     /// A structural operation (rewrite swap, SAVE truncate) just made
