@@ -523,6 +523,7 @@ def run_kevy():
     # So every row carries what one row costs, and what the server says its
     # setting is — neither derived from the other.
     witness = {"packed_rows": "?", "sample_row_bytes": 0}
+    c = None
     try:
         c = K(port)
         got = c.cmd("CONFIG", "GET", "packed-rows")
@@ -535,6 +536,15 @@ def run_kevy():
             witness["sample_row_bytes"] = int(n[1:-2])
     except (OSError, ValueError, AttributeError):
         pass
+    finally:
+        # Close it. This probe runs immediately before the mode is torn
+        # down, and an open client is exactly what makes a server outlive
+        # its mode — which the next mode's port check then refuses.
+        if c is not None:
+            try:
+                c.s.close()
+            except OSError:
+                pass
     if witness["sample_row_bytes"] == 0:
         sys.exit("pgcompare: REFUSED — could not read what one row costs, so the "
                  "memory column has no witness for the storage form it is "
