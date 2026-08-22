@@ -44,15 +44,19 @@ fn main() {
     // A monotone sequence key per shard-spread keyspace: `seq` carries the
     // loss-bound counter; k<i> keys give the AOF realistic bulk.
     let val = vec![0x62u8; 256];
-    for n in 1u64.. {
+    // Deliberately without end: this writer exists to be killed mid-write, so
+    // `loop` says what a range to infinity only implied.
+    let mut n = 0u64;
+    loop {
+        n += 1;
         store.set(format!("k{}", n % 1000).as_bytes(), &val).expect("set");
         store.set(b"seq", n.to_string().as_bytes()).expect("seq");
-        if n % SYNC_EVERY == 0 {
+        if n.is_multiple_of(SYNC_EVERY) {
             store.fsync_aof().expect("fsync");
             writeln!(out, "SYNCED {n}").unwrap();
             out.flush().unwrap();
         }
-        if n % MAINTENANCE_EVERY == 0 {
+        if n.is_multiple_of(MAINTENANCE_EVERY) {
             if rewrite {
                 store.rewrite_aof().expect("rewrite");
             }

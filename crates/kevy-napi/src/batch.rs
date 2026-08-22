@@ -32,7 +32,7 @@ pub(crate) unsafe extern "C" fn js_set_many(env: NapiEnv, info: NapiCallbackInfo
         if pairs.len() % 2 != 0 {
             return unsafe { throw(env, "kevy: setMany needs key/value pairs\0") };
         }
-        for kv in pairs.chunks_exact(2) {
+        for kv in pairs.as_chunks::<2>().0 {
             let (k, v) = (&kv[0], &kv[1]);
             let rc = unsafe { kevy_ffi::kevy_set(db, k.as_ptr(), k.len(), v.as_ptr(), v.len(), 0) };
             if rc < 0 {
