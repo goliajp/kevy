@@ -35,6 +35,10 @@ SRV_CPUS=${PGCONC_SRV_CPUS:-0-7}
 DRV_CPUS=${PGCONC_DRV_CPUS:-8-15}
 SRV_THREADS=${PGCONC_SRV_THREADS:-8}
 DRV_CORES=${PGCONC_DRV_CORES:-8}
+# Identify the server by its flags, never by the binary's name — KEVY_BIN
+# legitimately points at differently-named builds, and a pattern that misses
+# leaves the old server bound to the same port under SO_REUSEPORT.
+SRVPAT="--port $KPORT --dir $WORK"
 
 refuse() { echo "pgconc: REFUSED — $1" >&2; exit 2; }
 [ -x "$KEVY" ] || refuse "no kevy binary at $KEVY"
@@ -45,7 +49,7 @@ mkdir -p "$WORK"; : >"$OUT"
 CSV="$WORK/data.csv"
 
 cleanup() {
-  [ -n "${KPORT}" ] && pkill -f "kevy --port $KPORT" 2>/dev/null
+  [ -n "${KPORT}" ] && pkill -f -- "$SRVPAT" 2>/dev/null
   "$VENV" -c "
 import psycopg
 with psycopg.connect('host=127.0.0.1 port=$PGPORT user=postgres password=bench dbname=bench') as c:
@@ -119,8 +123,10 @@ PY
   taskset -c "$DRV_CPUS" "$VENV" "$CONC_PY" kevy --port "$KPORT" \
     --rows "$ROWS" --conc "$CONC" --ops "$OPS" --mode "$MODE" \
     --label "kevy$T" --driver-cores "$DRV_CORES" | tee -a "$OUT"
-  pkill -f "kevy --port $KPORT" 2>/dev/null
-  for _ in $(seq 60); do pgrep -f "kevy --port $KPORT" >/dev/null 2>&1 || break; sleep 0.5; done
+  pkill -f -- "$SRVPAT" 2>/dev/null
+  for _ in $(seq 60); do pgrep -f -- "$SRVPAT" >/dev/null 2>&1 || break; sleep 0.5; done
+  pgrep -f -- "$SRVPAT" >/dev/null 2>&1 &&
+    refuse "a server matching '$SRVPAT' outlived mode $MODE; the next mode would share its port"
 done
 
 echo
