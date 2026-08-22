@@ -109,6 +109,45 @@ That test changes no code, which is why it comes first. Only after it
 decides is the fix worth writing — and the fix is then narrow: an OP_AOF
 completion that advances the watermark counts as work for that iteration.
 
+## The verdict
+
+`appendfsync always`, one connection, 5,000 rows, 2,000 timed writes, the
+store on ext4 (a `/tmp` default put the first attempt on tmpfs and it
+measured the scheduler at 26 µs a write — the probe now refuses a tmpfs
+store, an empty AOF, and any p50 under 200 µs):
+
+| config | p50 | p99 | mean | max |
+|---|---:|---:|---:|---:|
+| offload on, `park_timeout_ms` = 5 | 2,685 | **7,843** | 2,754 | 10,453 |
+| offload on, 50 (default) | 2,903 | **47,748** | 4,612 | 52,826 |
+| offload on, 200 | 2,922 | **196,938** | 13,083 | 200,672 |
+| **offload off**, 50 | 2,618 | **3,147** | 2,634 | 4,103 |
+
+**The p99 tracks the setting to three digits** — 7.8 ms, 47.7 ms, 196.9 ms —
+while the p50 does not move at all (2,618 to 2,922 across all four). The
+fsync costs what it costs; what changes is the tail, and the tail is a park.
+
+**And the classic path answers 3,147 µs**, against the 2026-07-26 record's
+3,097 µs for the same shape. So the difference is a **regression**, and it
+has a name: `48d06ae7` (2026-08-12) made CQE-gated replies the default for
+`always` on io_uring, and it shipped in 5.2 and 5.3 unmeasured because
+nothing between those releases re-ran this shape.
+
+The mean says how often: 4,612 against 2,634 is about 1.9 ms per write of
+extra average, so roughly 4% of writes pay a full park at the default.
+
+## The fix
+
+`uring_aof_on_cqe` now reports whether the durable watermark moved, and the
+reactor counts that as work for the iteration. Every other AOF completion
+stays idle: an append does not release anything, the fsync it leads to does.
+
+The distinction the reactor draws — park-administrative completions must not
+reset the idle ladder — is right and was drawn one category too wide. A park
+timeout and a waker read cannot have a pending consequence. A fsync
+completion that moved the watermark always does: a held reply, released by
+the next arming pass, which the park was preventing from running.
+
 ## Why it matters beyond the number
 
 `always` is the mode where the published comparison has PostgreSQL ahead of

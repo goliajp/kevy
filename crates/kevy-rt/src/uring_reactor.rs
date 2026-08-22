@@ -187,7 +187,10 @@ impl<C: Commands> Shard<C> {
                 let op = c.user_data & !CONN_MASK;
                 let cid = c.user_data & CONN_MASK;
                 match op {
-                    OP_AOF => self.uring_aof_on_cqe(c.user_data, c.res),
+                    // `true` = the watermark moved, so a held reply is
+                    // waiting on the next arming pass and this iteration
+                    // must not park. See `uring_aof_on_cqe`.
+                    OP_AOF => io_work |= self.uring_aof_on_cqe(c.user_data, c.res),
                     OP_RECV => {
                         io_work = true;
                         self.uring_on_recv(cid, c, &mut io, &mut pbuf);
