@@ -99,7 +99,8 @@ impl<C: Commands> Shard<C> {
                 )
             }
             Route::Extension => {
-                let argv: Vec<Vec<u8>> = (0..args.len()).map(|i| args[i].to_vec()).collect();
+                let argv: std::sync::Arc<[Vec<u8>]> =
+                    (0..args.len()).map(|i| args[i].to_vec()).collect();
                 let targets = (0..self.nshards)
                     .map(|s| (s, Op::Extension { argv: argv.clone() }))
                     .collect();

@@ -44,7 +44,7 @@ pub(crate) enum Agg {
     ClientKill { killed: i64, oldform: bool },
     /// Extension fan-out accumulator; reduced by
     /// `Commands::extension_reduce` when the last chunk lands.
-    ExtensionGather { argv: Vec<Vec<u8>>, chunks: Vec<Vec<u8>> },
+    ExtensionGather { argv: std::sync::Arc<[Vec<u8>]>, chunks: Vec<Vec<u8>> },
     /// zset-algebra `*STORE` orchestrator, step 1: gather scored
     /// (or set) members per source key; on completion the origin
     /// computes the combination and ships `Op::ZStoreResult` /
