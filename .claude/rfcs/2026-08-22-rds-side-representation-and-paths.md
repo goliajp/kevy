@@ -76,9 +76,15 @@ and only one of them is what this RFC is mostly about:
 2. **Residency** — scales with rows. *Already solved*: tiering holds 98.8%
    of 3M rows on disk at `used_memory` 0.42 GiB. Nothing to design.
 3. **Fragmentation** — scales with allocation frequency. RSS is **7.2× the
-   accounted bytes** in tiered mode. `kevy-alloc` exists for exactly this,
-   is feature-gated off (`crates/kevy/Cargo.toml:25`), and has never been
-   measured on this workload. **Measurement, not design** — in flight.
+   accounted bytes** in tiered mode. `kevy-alloc` exists for exactly this
+   and is feature-gated off (`crates/kevy/Cargo.toml:25`). **Measured
+   2026-08-22, and it does not pay**:
+   `bench/FINDING-2026-08-22-kevy-alloc-costs-memory-on-rds.md` — enabling
+   it costs **8.5–15% more** resident memory and roughly 2.5× worse page
+   p99, reproduced to within 0.1 percentage points with the A/B order
+   reversed, against a baseline whose RSS variance is under 0.5%. The
+   fragmentation term stays on the books, and §3 is now the only design
+   lever left in this column.
 
 ## 3. Axis A — a declared row deserves a declared representation
 
@@ -230,10 +236,27 @@ and is currently 50 ms at the tail. **The acceptance line for this axis is
 that the third term stops appearing in the distribution at all** — the p99
 should be a durability number, and today it is a scheduling number.
 
-Whether the second term can be improved by a *window* rather than an
-in-flight gate is the design question, and the answer must come after Item 2
-measures what the current emergent batching already achieves under load —
-that measurement is in flight and this RFC does not pre-judge it.
+**Measured 2026-08-22, and it settles the second term.**
+`bench/FINDING-2026-08-22-write-durability-is-a-flush-budget.md`: at 64
+clients kevy carries **4.72 writes per flush** and issues **1,549 flushes/s**
+against a device that does 1,212/s bare; PostgreSQL carries **38.5** and
+issues **749/s**. Three runs, ~1% spread, and the identity closes
+(1,549 × 4.72 = 7,311 against a measured 7,316).
+
+So the emergent batching is real but 8× weak, and **kevy's flush budget is
+already spent while PostgreSQL uses 62% of its own**. The device is not the
+constraint and an absence of batching is not the constraint; the constraint
+is that kevy needs eight times as many durability barriers for the same
+work, with the per-shard split as the multiplier — eight logs against one
+WAL.
+
+That makes the term concrete: the acceptance line for it is **writes per
+flush**, it is measured at 4.72, and a window would be a *chosen* size
+rather than the accident the in-flight gate currently yields. It does not
+follow that a window reaches 38.5 — PostgreSQL's rides on one WAL, and a
+kevy window is still per-shard, so an eight-shard server's ceiling is eight
+windows' worth. The measurement sizes the term; it does not promise the
+redesign.
 
 ## 6. What is refused here
 
@@ -248,10 +271,13 @@ that measurement is in flight and this RFC does not pre-judge it.
 
 ## 7. Sequencing
 
-1. **Measure `kevy-alloc` on this workload** (Axis A term 3). Built, gated,
-   off by default, never measured here. In flight.
-2. **Measure `always` under concurrency** (Axis C term 2). The only
-   comparison that can settle the write column. In flight.
+1. ~~**Measure `kevy-alloc` on this workload**~~ — **done, refuted.** It
+   costs 8.5–15% more memory and 2.5× worse page p99. Finding archived; the
+   term stays on the books and §3 is the only lever left in that column.
+2. ~~**Measure `always` under concurrency**~~ — **done.** PostgreSQL wins
+   at every level, 8.1× at one client narrowing to 2.9× at sixty-four, and
+   the flush decomposition (§5) says why: 4.72 writes per flush against
+   38.5, with kevy's flush budget already spent.
 3. **Axis B items 1–4.** Local to the reduce path and the hydration point;
    each is independently testable and independently revertible, and the
    suite already has `idxgate`/`servinggate` to hold them.
