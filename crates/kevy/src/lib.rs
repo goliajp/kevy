@@ -60,6 +60,7 @@ mod cmd_view_reduce;
 mod cmd_index_query;
 mod cmd_index_reduce;
 mod index_runtime;
+mod table_runtime;
 mod view_runtime;
 mod cmd_hello;
 mod cmd_lua;

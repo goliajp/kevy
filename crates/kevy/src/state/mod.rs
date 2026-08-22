@@ -28,7 +28,8 @@ pub(crate) use progress::ReplicaProgress;
 pub(crate) use replication::ReplicationState;
 pub(crate) use scope::{ScopeState, WriteRedirect, encode_misdirected, encode_quiesced};
 pub(crate) use shard::{
-    IDX_NONEMPTY, READ_GATED, SCOPE_ACTIVE, ShardCtx, VIEW_NONEMPTY, WRITE_GATED,
+    IDX_NONEMPTY, READ_GATED, SCOPE_ACTIVE, ShardCtx, TABLE_NONEMPTY, VIEW_NONEMPTY,
+    WRITE_GATED,
 };
 
 use std::path::{Path, PathBuf};

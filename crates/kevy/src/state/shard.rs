@@ -40,6 +40,15 @@ pub(crate) const IDX_NONEMPTY: u32 = 1 << 3;
 /// The shared view catalog is nonempty — writes feed
 /// `view_runtime::on_write`.
 pub(crate) const VIEW_NONEMPTY: u32 = 1 << 4;
+/// The shared TABLE catalog is nonempty — writes may take the packed
+/// representation.
+///
+/// Separate from `IDX_NONEMPTY` on purpose: a table that declares columns
+/// and no index is legal, and its rows are as declared as any other. Hanging
+/// the representation off the index gate made a convenience of implementation
+/// into a precondition of the feature, and the rows silently kept the general
+/// form.
+pub(crate) const TABLE_NONEMPTY: u32 = 1 << 5;
 
 /// The per-shard gate cache: bits valid for exactly one value of
 /// `RuntimeState`'s control epoch.
@@ -74,6 +83,9 @@ fn rebuild_gate(state: &RuntimeState) -> u32 {
     }
     if state.catalogs.view_nonempty() {
         bits |= VIEW_NONEMPTY;
+    }
+    if state.catalogs.table_nonempty() {
+        bits |= TABLE_NONEMPTY;
     }
     bits
 }
