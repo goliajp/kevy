@@ -1,6 +1,6 @@
 {
   "name": "expo-kevy",
-  "version": "5.3.0",
+  "version": "5.4.0",
   "description": "kevy embedded in React Native via Expo Modules — the real native engine, synchronous JSI calls, one cmd() entry to all verbs. The MMKV shape (sync scalar get/set) plus everything MMKV doesn't have: TTL, structures, pub/sub, persistence you can read.",
   "license": "(Apache-2.0 OR MIT)",
   "repository": {

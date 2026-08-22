@@ -9,7 +9,7 @@ structures, pub/sub, and persistence you can read (AOF + snapshots).
 - Both come from the platform package `optionalDependencies` resolve;
   nothing compiles on install.
 
-> **Pre-release.** This document tracks kevy **5.3.0**. The package is
+> **Pre-release.** This document tracks kevy **5.4.0**. The package is
 > not on npm yet, so the command below does not resolve — until it is,
 > use the in-repo copy: `npm install /path/to/kevy/bindings/node` after
 > `cargo build -p kevy-ffi -p kevy-napi`.
