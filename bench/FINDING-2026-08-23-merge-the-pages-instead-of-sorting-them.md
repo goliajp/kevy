@@ -67,8 +67,10 @@ where develop was tight. The suspected mechanism was the shared `Arc`: a
 refcount that sixteen shard threads now touch on one cache line, where
 before each held its own `Vec`.
 
-A third binary was built with the merge but without the shared argv, and the
-three arms were run five times interleaved. **The hypothesis is refuted.**
+A third binary was built with the merge but without the shared argv
+(`51030a4a` on `feature/idx-page-merge-only`, kept rather than deleted so
+the control arm stays reproducible), and the three arms were run five times
+interleaved. **The hypothesis is refuted.**
 The shared-argv arm is the *best* of the three on every statistic including
 p99, and its spread is no worse than develop's.
 
