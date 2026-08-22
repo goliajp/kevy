@@ -103,6 +103,23 @@ impl PackedRow {
         i < self.columns() && self.0.buf[2 + i / 8] & (1 << (i % 8)) != 0
     }
 
+    /// The value of the column named `field`, or `None` when the table has
+    /// no such column or this row does not have it.
+    ///
+    /// Linear over the column names, which is the right shape here: a
+    /// declared table has a handful of columns, and a scan of that many
+    /// short slices beats a per-row hash table — the per-row hash table
+    /// being the thing this type exists to delete.
+    pub fn get_named(&self, field: &[u8]) -> Option<&[u8]> {
+        let i = self.0.cols.iter().position(|c| c == field)?;
+        self.get(i)
+    }
+
+    /// Whether the row has a column named `field`.
+    pub fn has_named(&self, field: &[u8]) -> bool {
+        self.0.cols.iter().position(|c| c == field).is_some_and(|i| self.has(i))
+    }
+
     /// Column `i`'s bytes, or `None` when it is absent or out of range.
     pub fn get(&self, i: usize) -> Option<&[u8]> {
         if !self.has(i) {
@@ -215,6 +232,20 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn looks_a_column_up_by_the_name_the_wire_uses() {
+        let n: ColumnNames = vec![b"id".to_vec(), b"name".to_vec(), b"dept".to_vec()].into();
+        let r = PackedRow::build(&n, &[Some(&b"7"[..]), None, Some(&b"eng"[..])]).expect("fits");
+        assert_eq!(r.get_named(b"id"), Some(&b"7"[..]));
+        assert_eq!(r.get_named(b"dept"), Some(&b"eng"[..]));
+        // Declared but absent on this row, and undeclared, both read as None
+        // — but only the first is a column of the table.
+        assert_eq!(r.get_named(b"name"), None);
+        assert!(!r.has_named(b"name"));
+        assert_eq!(r.get_named(b"nosuch"), None);
+        assert!(!r.has_named(b"nosuch"));
+    }
+
+    #[test]
     fn refuses_a_payload_it_cannot_address() {
         let big = vec![0u8; PACKED_MAX + 1];
         assert!(PackedRow::build(&names(1), &[Some(&big[..])]).is_none());
@@ -262,5 +293,78 @@ mod cost_tests {
         let (a, b) = (w(3), w(12));
         // Nine more columns of 32 bytes each, plus nine more ends.
         assert_eq!(b - a, 9 * (32 + 2) + 1, "growth is payload + ends + bitmap byte");
+    }
+}
+
+#[cfg(test)]
+mod read_parity_tests {
+    use super::*;
+    use crate::{Store, Value};
+
+    /// Two stores holding the same row, one packed and one general.
+    fn both() -> (Store, Store, [&'static [u8]; 3]) {
+        let cols: [&[u8]; 3] = [b"id", b"name", b"dept"];
+        let vals: [Option<&[u8]>; 3] = [Some(b"7"), None, Some(b"eng")];
+        let n: ColumnNames = cols.iter().map(|c| c.to_vec()).collect();
+        let mut packed = Store::new();
+        packed.load_value(b"row:1", &Value::PackedRow(PackedRow::build(&n, &vals).unwrap()), None);
+        let mut general = Store::new();
+        for (c, v) in cols.iter().zip(vals.iter()) {
+            if let Some(v) = v {
+                general.hset(b"row:1", &[(c, v)]).unwrap();
+            }
+        }
+        (packed, general, cols)
+    }
+
+    /// The per-field verbs must agree for every column, including one the
+    /// table declares that this row does not have.
+    ///
+    /// Every read path ends in a `_ => WrongType` catch-all, so a
+    /// representation its arms do not name is not a compile error — it is a
+    /// WRONGTYPE at runtime, or a silently empty answer. The compiler cannot
+    /// hold this; these tests do.
+    #[test]
+    fn the_per_field_verbs_agree_with_the_general_hash() {
+        let (mut p, mut g, cols) = both();
+        assert_eq!(p.hlen(b"row:1").unwrap(), g.hlen(b"row:1").unwrap());
+        for c in &cols {
+            let name = String::from_utf8_lossy(c);
+            assert_eq!(
+                p.hget(b"row:1", c).unwrap().map(<[u8]>::to_vec),
+                g.hget(b"row:1", c).unwrap().map(<[u8]>::to_vec),
+                "HGET {name}"
+            );
+            assert_eq!(
+                p.hexists(b"row:1", c).unwrap(),
+                g.hexists(b"row:1", c).unwrap(),
+                "HEXISTS {name}"
+            );
+        }
+        assert_eq!(p.hmget(b"row:1", &cols).unwrap(), g.hmget(b"row:1", &cols).unwrap());
+    }
+
+    /// The whole-row verbs must agree as sets — the general hash promises no
+    /// order, and HGETALL is a flat field/value stream, so it is paired up
+    /// before sorting or a field could compare against another field's value.
+    #[test]
+    fn the_whole_row_verbs_agree_with_the_general_hash() {
+        let (mut p, mut g, _) = both();
+        let sorted = |mut v: Vec<Vec<u8>>| {
+            v.sort();
+            v
+        };
+        assert_eq!(sorted(p.hkeys(b"row:1").unwrap()), sorted(g.hkeys(b"row:1").unwrap()));
+        assert_eq!(sorted(p.hvals(b"row:1").unwrap()), sorted(g.hvals(b"row:1").unwrap()));
+        let paired = |v: Vec<Vec<u8>>| {
+            let mut q: Vec<(Vec<u8>, Vec<u8>)> =
+                v.chunks(2).map(|c| (c[0].clone(), c[1].clone())).collect();
+            q.sort();
+            q
+        };
+        assert_eq!(
+            paired(p.hgetall(b"row:1").unwrap()),
+            paired(g.hgetall(b"row:1").unwrap())
+        );
     }
 }

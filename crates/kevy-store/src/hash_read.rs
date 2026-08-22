@@ -27,6 +27,9 @@ impl Store {
                 Value::SmallHashInline(h) => Ok(Some(
                     h.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect(),
                 )),
+                Value::PackedRow(r) => Ok(Some(
+                    r.fields().map(|(f, v)| (f.to_vec(), v.to_vec())).collect(),
+                )),
                 _ => Err(StoreError::WrongType),
             },
         }
@@ -40,6 +43,7 @@ impl Store {
                 Value::Hash(h) => Ok(h.get(field).map(SmallBytes::as_slice)),
                 Value::SegHash(h) => Ok(h.get(field).map(SmallBytes::as_slice)),
                 Value::SmallHashInline(h) => Ok(h.get(field)),
+                Value::PackedRow(r) => Ok(r.get_named(field)),
                 _ => Err(StoreError::WrongType),
             },
         }
@@ -53,6 +57,7 @@ impl Store {
                 Value::Hash(h) => Ok(h.contains_key(field)),
                 Value::SegHash(h) => Ok(h.contains_key(field)),
                 Value::SmallHashInline(h) => Ok(h.contains_key(field)),
+                Value::PackedRow(r) => Ok(r.has_named(field)),
                 _ => Err(StoreError::WrongType),
             },
         }
@@ -66,6 +71,7 @@ impl Store {
                 Value::Hash(h) => Ok(h.len()),
                 Value::SegHash(h) => Ok(h.len()),
                 Value::SmallHashInline(h) => Ok(h.len()),
+                Value::PackedRow(r) => Ok(r.len()),
                 _ => Err(StoreError::WrongType),
             },
         }
@@ -90,6 +96,10 @@ impl Store {
                 Value::SmallHashInline(h) => Ok(fields
                     .iter()
                     .map(|f| h.get(f).map(<[u8]>::to_vec))
+                    .collect()),
+                Value::PackedRow(r) => Ok(fields
+                    .iter()
+                    .map(|f| r.get_named(f).map(<[u8]>::to_vec))
                     .collect()),
                 _ => Err(StoreError::WrongType),
             },
@@ -120,6 +130,7 @@ impl Store {
                 Value::Hash(h) => Ok(h.keys().map(kevy_bytes::SmallBytes::to_vec).collect()),
                 Value::SegHash(h) => Ok(h.keys().map(kevy_bytes::SmallBytes::to_vec).collect()),
                 Value::SmallHashInline(h) => Ok(h.iter().map(|(f, _)| f.to_vec()).collect()),
+                Value::PackedRow(r) => Ok(r.fields().map(|(f, _)| f.to_vec()).collect()),
                 _ => Err(StoreError::WrongType),
             },
         }
@@ -133,6 +144,7 @@ impl Store {
                 Value::Hash(h) => Ok(h.values().map(SmallBytes::to_vec).collect()),
                 Value::SegHash(h) => Ok(h.values().map(SmallBytes::to_vec).collect()),
                 Value::SmallHashInline(h) => Ok(h.iter().map(|(_, v)| v.to_vec()).collect()),
+                Value::PackedRow(r) => Ok(r.fields().map(|(_, v)| v.to_vec()).collect()),
                 _ => Err(StoreError::WrongType),
             },
         }
