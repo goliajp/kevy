@@ -157,23 +157,32 @@ box-specific: `MEMORY USAGE` 1,440 → 543 (897 B saved per row) against an
 RSS-per-row of 1,697 → 1,091 (606 B saved). Two thirds, measured from
 outside the process.
 
-**RSS is the load-bearing number** — it is taken from `/proc` and does not
-depend on the accounting the engine keeps about itself. So the honest
-statement of A1's effect is the RSS column, and the engine's own accounting
-**overstates the saving by roughly a factor of two**.
+### Correction — the accounting is not the culprit
 
-That is not only a reporting matter. Tiering budgets are resolved against
-`used_memory` (`INFO memory`), so a representation whose accounted cost
-diverges from its real cost by 2× moves the budget away from the resident
-figure it is meant to bound. The existing under-report on the general hash
-is recorded in
-`bench/FINDING-2026-08-23-a-rows-fixed-cost-is-independent-of-its-columns.md`;
-this is the same instrument, disagreeing in the other direction on the new
-form.
+The paragraph that stood here blamed the engine's own accounting, saying it
+overstated the saving about twofold. **That was wrong**, and the measurement
+that settles it is in
+`bench/FINDING-2026-08-23-the-order-of-two-statements-decides-the-memory.md`:
 
-Candidates, none yet measured: allocator retention (an 816-byte table freed
-and a ~560-byte chunk taken leaves the arena holding the difference), the
-backfill's own key list (a `Vec<u8>` per key, two million of them, taken
-while the rows were still unpacked), and an error in `PackedRow::heap_bytes`
-relative to what the allocator actually reserves. Deciding between them is
-its own measurement and does not gate the axis.
+| | accounted | RSS per row | difference |
+|---|---:|---:|---:|
+| general hash | 1,200 | 1,609 | 409 |
+| packed row | 578 | 991 | 413 |
+
+Both under-report by the same ~410 bytes — the keyspace slot, the `Entry`,
+and allocator rounding, which neither charges to the value. So the *delta*
+is accurate: 622 accounted against 618 resident, agreeing to within 1%.
+
+The shortfall on the box is therefore **the order, not the instrument**. The
+benchmark loads two million rows in the general form and declares the table
+afterwards, so every packed buffer is allocated beside the table it replaces
+and the freed tables stay in the allocator's arena. The saving that reaches
+RSS is whatever the allocator chooses to return.
+
+`used_memory` still deserves the caution: the tiering target is resolved
+against it (`tier_demote.rs:126`), so a representation that lowers the
+accounted cost lets more rows stay hot under the same budget. That is the
+budget doing what it was told, and it is the likely reason the `tiered` arm
+is the one mode where packing does not help. Documented rather than
+"fixed" — a byte budget denominated in accounted bytes is not wrong for
+becoming easier to satisfy when rows get cheaper.
