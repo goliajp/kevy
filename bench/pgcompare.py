@@ -382,7 +382,15 @@ def run_kevy():
             for line in f:
                 if line.startswith("VmRSS:"):
                     rss = int(line.split()[1]) * 1024
-    report("kevy4", mode, csv_path, load_s, lat, disk, rss, rows,
+    # The label was "kevy4" as a constant, so every result file since the 4.x
+    # line has said kevy4 whatever binary produced it — a 5.3.0 run reported
+    # itself as kevy4. Ask the server what it is.
+    ver = ""
+    srv = K(port).cmd("INFO", "server")
+    for line in (srv.decode(errors="replace") if isinstance(srv, bytes) else "").splitlines():
+        if line.startswith("kevy_version:"):
+            ver = line.split(":", 1)[1].strip()
+    report(f"kevy{ver}" if ver else "kevy", mode, csv_path, load_s, lat, disk, rss, rows,
            extra=extra or None)
 
 
