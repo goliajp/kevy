@@ -136,8 +136,8 @@ fn the_read_modify_write_verbs_agree_with_the_general_hash() {
     assert_eq!(g.hincrbyfloat(b"row:1", b"id", 0.5).unwrap(), 7.5);
     assert_eq!(p.hincrby(b"row:1", b"n", 3).unwrap(), 3);
     assert_eq!(g.hincrby(b"row:1", b"n", 3).unwrap(), 3);
-    assert_eq!(p.hsetnx(b"row:1", b"dept", b"sales").unwrap(), false, "the column is present");
-    assert_eq!(p.hsetnx(b"row:1", b"name", b"alice").unwrap(), true, "declared but absent");
+    assert!(!p.hsetnx(b"row:1", b"dept", b"sales").unwrap(), "the column is present");
+    assert!(p.hsetnx(b"row:1", b"name", b"alice").unwrap(), "declared but absent");
     assert_eq!(p.hget(b"row:1", b"name").unwrap(), Some(&b"alice"[..]));
     assert_eq!(p.hget(b"row:1", b"dept").unwrap(), Some(&b"eng"[..]));
 }
