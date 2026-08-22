@@ -75,29 +75,50 @@ PY
 echo "== dataset =="
 asuser "$VENV" "$HERE/bench/pgcompare.py" gen --rows "$ROWS" --out "$CSV" --pad 400
 
-probe() { # $1 = label, $2 = pid list (comma), $3.. = the load command
-  local label=$1 pids=$2; shift 2
+# System-wide, not per-pid. PostgreSQL forks a backend per connection, so
+# `perf -p` would attach to the postmaster and miss every backend the sweep
+# creates — the fsyncs would be counted as zero and read as "no fsyncs".
+# System-wide catches whatever forks, at the cost of catching the box's other
+# containers too, which is what the idle baseline below is for.
+idle_syncs() { # $1 = seconds — the box's own fsync noise with nothing loaded
+  local log="$WORK/idle.perf"
+  perf stat -a -e syscalls:sys_enter_fdatasync,syscalls:sys_enter_fsync \
+    -o "$log" -- sleep "$1" >/dev/null 2>&1
+  awk '/sys_enter_f(data)?sync/{gsub(",","",$1); t+=$1} END{printf "%d", t}' "$log"
+}
+
+probe() { # $1 = label, $2.. = the load command
+  local label=$1; shift
   local log="$WORK/$label.perf"
-  perf stat -e syscalls:sys_enter_fdatasync,syscalls:sys_enter_fsync \
-    -p "$pids" -o "$log" -- "$@" > "$WORK/$label.out" 2>"$WORK/$label.err"
-  local secs
+  perf stat -a -e syscalls:sys_enter_fdatasync,syscalls:sys_enter_fsync \
+    -o "$log" -- "$@" > "$WORK/$label.out" 2>"$WORK/$label.err"
+  local secs tot
   secs=$(awk '/seconds time elapsed/{print $1}' "$log")
-  local fd fs
-  fd=$(awk '/sys_enter_fdatasync/{gsub(",","",$1); print $1}' "$log")
-  fs=$(awk '/sys_enter_fsync/{gsub(",","",$1); print $1}' "$log")
-  echo "  $label: fdatasync=$fd fsync=$fs over ${secs}s"
-  asuser "$VENV" - "$WORK/$label.out" "${fd:-0}" "${fs:-0}" "${secs:-1}" <<'PY'
+  tot=$(awk '/sys_enter_f(data)?sync/{gsub(",","",$1); t+=$1} END{printf "%d", t}' "$log")
+  # An empty counter formats as a blank in a sentence and reads like a
+  # measurement. It is the absence of one: perf could not exec the workload,
+  # or attached to nothing. Refuse rather than print a row with holes in it.
+  [ -n "$secs" ] || { sed -n "1,20p" "$log" >&2; refuse "$label: perf produced no elapsed time — see $log and $WORK/$label.err"; }
+  [ "${tot:-0}" -gt 0 ] || { tail -3 "$WORK/$label.err" >&2; refuse "$label: zero fsync syscalls over ${secs}s — the probe measured nothing"; }
+  echo "  $label: fsync syscalls=$tot over ${secs}s (box idle noise: $IDLE_RATE/s)"
+  sudo -u "$BENCH_USER" "$VENV" - "$WORK/$label.out" "$tot" "$secs" "$IDLE_RATE" <<'PYEOF'
 import json, sys
 rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip().startswith("{")]
-syncs = int(sys.argv[2]) + int(sys.argv[3]); secs = float(sys.argv[4])
+tot, secs, idle = int(sys.argv[2]), float(sys.argv[3]), float(sys.argv[4])
+rate = tot / secs - idle          # the box's other containers, subtracted out
 for r in rows:
     w = r.get("write_ops_per_s")
     if not w:
         continue
-    print(f"    conc={r['conc']:<4} writes/s={w:>10,}  fsync/s={syncs/secs:>10,.0f}"
-          f"  writes per fsync={w/(syncs/secs) if syncs else float('inf'):>8.2f}")
-PY
+    per = w / rate if rate > 0 else float("inf")
+    print(f"    conc={r['conc']:<4} writes/s={w:>10,}  fsync/s={rate:>10,.0f}"
+          f"  writes per fsync={per:>8.2f}")
+PYEOF
 }
+
+echo "== the box's own fsync noise =="
+IDLE_RATE=$(sudo -u "$BENCH_USER" "$VENV" -c "print($(idle_syncs 10)/10.0)")
+echo "  idle: $IDLE_RATE fsync/s from everything else on this box"
 
 echo "== kevy, appendfsync=always =="
 DIR="$WORK/kevy-always"; rm -rf "$DIR"; mkdir -p "$DIR"; chown "$BENCH_USER:$BENCH_USER" "$DIR"
@@ -125,22 +146,16 @@ EFF=$(redis-cli -p "$KPORT" CONFIG GET appendfsync 2>/dev/null | tail -1)
 [ "$EFF" = "always" ] || refuse "appendfsync is '$EFF' — the probe would count the wrong policy"
 asuser "$VENV" "$HERE/bench/pgcompare.py" kevy --csv "$CSV" --port "$KPORT" \
   --mode always --datadir "$DIR" --samples 1 >/dev/null || refuse "the kevy load failed"
-KPIDS=$(pgrep -d, -f -- "$SRVPAT")
-[ -n "$KPIDS" ] || refuse "no kevy pid to attach to"
-probe kevy "$KPIDS" asuser "$VENV" "$HERE/bench/pgconc.py" kevy --port "$KPORT" \
+probe kevy sudo -u "$BENCH_USER" "$VENV" "$HERE/bench/pgconc.py" kevy --port "$KPORT" \
   --rows "$ROWS" --conc "$CONC" --ops "$OPS" --shapes write --mode always
 pkill -f -- "$SRVPAT" 2>/dev/null
 
 echo "== postgres 18 =="
-PGPIDS=$(pgrep -d, -f "cluster_name=${PGCMP_CLUSTER:-kevypgcmp}")
-[ -n "$PGPIDS" ] || refuse "no postgres process carrying the cluster marker"
 DSN="host=127.0.0.1 port=$PGPORT user=postgres password=bench dbname=bench"
 asuser "$VENV" "$HERE/bench/pgcompare.py" pg --csv "$CSV" \
   --cluster "${PGCMP_CLUSTER:-kevypgcmp}" --dsn "$DSN" --samples 1 >/dev/null \
   || refuse "the postgres load failed"
-# Re-read the pid list: the load may have forked backends the earlier list missed.
-PGPIDS=$(pgrep -d, -f "cluster_name=${PGCMP_CLUSTER:-kevypgcmp}")
-probe postgres "$PGPIDS" asuser "$VENV" "$HERE/bench/pgconc.py" pg --dsn "$DSN" \
+probe postgres sudo -u "$BENCH_USER" "$VENV" "$HERE/bench/pgconc.py" pg --dsn "$DSN" \
   --rows "$ROWS" --conc "$CONC" --ops "$OPS" --shapes write
 
 echo
