@@ -751,6 +751,38 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
 - [x] CHANGELOG 收口 + upgradegate 重测 ✅(2026-08-10 RC-READY F1-F3)
 - [x] v5.0.0 完全发布 ✅(2026-08-11:40 crates 全链 + 三平台二进制 + npm @goliapkg/kevy + GitHub Release + 官网同步 + 装后 smoke 双通道;publish 链三修见 memory)
 
+## v5.4 target — use the declaration(2026-08-23 属主令「以 perf / mem / disk 都大幅改善为目标设计与研发 5.4」)
+
+**设计**:`.claude/rfcs/2026-08-23-v5.4-use-the-declaration.md`(主)+
+`.claude/rfcs/2026-08-23-v5.4-a1-packed-row.md`(A1 子 RFC,含实现阶段的四条修订)。
+
+一句话:`TABLE.DECLARE` 把 schema 全告诉了服务器并持久化了它,而实现在三个
+介质上都当作没被告知过。5.4 不是三个优化,是**一个表示法决定应用在声明被
+忽略的三处**。
+
+- [x] **基线** — 三轴、固定参照、修正口径后的 median-of-3。内存缺口最大:
+      5821 vs 879 KB/CSV-MB = 6.6 倍。
+- [x] ~~**Axis B** — index-only reads~~ 实测为噪声,revert;它顺带挖出的
+      正确性缺陷(覆盖列副本比它复制的字段活得久)保留。
+- [x] **Axis D 天花板更正** — 16% → 6%,降级排到 A 之后。
+- [ ] **Axis A1 — 打包行**。类型 / 读路径 / 写路径 / 九处内存管理路径 /
+      三个变更动词 / tick 回填 全部落地,`formgate` 挡住第四次复发。
+      **盒上三轮交错测量进行中**;预测写在 `bench/FINDING-2026-08-23-a-
+      declaration-does-not-reach-the-rows-that-preceded-it.md` 的末尾。
+      判定线按 RFC §8 第 5 步:RSS 项不动就整轴 revert。
+- [ ] **`packed-rows` 默认值** — 属主拍板。现在默认关,RFC §7 的理由指向
+      开;内存收益与写吞吐代价分开报再定。
+- [ ] **`docs/rds-workloads.md` 重述** — 现发布的索引/翻页数字来自 7 月那版
+      harness,当时 kevy 的计时形状**没有 `FIELDS`**,是在做更少的工作量。
+      5.4 用公平口径重测的数字重写。
+- [ ] **p99 = 50,304 µs ≈ `park_timeout_ms`**(主 RFC §6 点名,「无论 Axis C
+      是否入选都要修」)。单客户端写,漏一次唤醒付一整个 park。需盒上定位。
+- [ ] **发布 5.4.0** — 六层版本对齐由 `tools/check_version_alignment.py`
+      机械判定(当前 159 处全在 5.3.0),tag 由属主扣扳机。
+
+**下一轮**(不在 5.4):A2 — 索引项改稠密 row-id,另外 24.6%;依赖行有稳定
+的稠密标识,A1 不产生它。
+
 ## post-v5(2026-08-11 起)
 
 ### P0 — SDK v5 真对齐 ✅(2026-08-11,merge `4ad82630` CI 绿)
