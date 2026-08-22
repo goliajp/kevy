@@ -44,6 +44,18 @@ refuse() { echo "fsyncprobe: REFUSED — $1" >&2; exit 2; }
 [ -x "$KEVY" ] || refuse "no kevy binary at $KEVY"
 command -v perf >/dev/null || refuse "no perf"
 
+# kevy runs the io_uring reactor here, and IORING_OP_FSYNC never becomes an
+# fdatasync SYSCALL — so counting syscalls alone reported kevy as doing 5
+# fsyncs while it served 7,250 writes/s, a number that looked like batching
+# and was blindness. Both interfaces are counted; this is the opcode.
+OP_FSYNC=3
+
+# fsync on tmpfs is free, and a data directory under /tmp makes every
+# durability number in this probe a fiction. (It made one: a validation run
+# put the store in mktemp -d and measured 34,500 fsync/s on a device that
+# does 1,100.)
+fstype() { stat -f -c %T "$1" 2>/dev/null; }
+
 asuser() { sudo -u "$BENCH_USER" "$@"; }
 SRVPAT="--port $KPORT --dir $WORK"
 
@@ -51,6 +63,9 @@ cleanup() { pkill -f -- "$SRVPAT" 2>/dev/null; }
 trap cleanup EXIT
 
 mkdir -p "$WORK"; chown "$BENCH_USER:$BENCH_USER" "$WORK"
+FS=$(fstype "$WORK")
+case "$FS" in tmpfs|ramfs) refuse "$WORK is $FS — fsync there is free and every number below would be a fiction" ;; esac
+echo "  store filesystem: $FS"
 CSV="$WORK/data.csv"
 
 echo "== the device's own ceiling =="
@@ -82,19 +97,21 @@ asuser "$VENV" "$HERE/bench/pgcompare.py" gen --rows "$ROWS" --out "$CSV" --pad 
 # containers too, which is what the idle baseline below is for.
 idle_syncs() { # $1 = seconds — the box's own fsync noise with nothing loaded
   local log="$WORK/idle.perf"
-  perf stat -a -e syscalls:sys_enter_fdatasync,syscalls:sys_enter_fsync \
+  perf stat -a -e syscalls:sys_enter_fdatasync -e syscalls:sys_enter_fsync \
+    -e io_uring:io_uring_submit_req --filter "opcode==$OP_FSYNC" \
     -o "$log" -- sleep "$1" >/dev/null 2>&1
-  awk '/sys_enter_f(data)?sync/{gsub(",","",$1); t+=$1} END{printf "%d", t}' "$log"
+  awk '/sys_enter_f(data)?sync|io_uring_submit_req/{gsub(",","",$1); t+=$1} END{printf "%d", t}' "$log"
 }
 
 probe() { # $1 = label, $2.. = the load command
   local label=$1; shift
   local log="$WORK/$label.perf"
-  perf stat -a -e syscalls:sys_enter_fdatasync,syscalls:sys_enter_fsync \
+  perf stat -a -e syscalls:sys_enter_fdatasync -e syscalls:sys_enter_fsync \
+    -e io_uring:io_uring_submit_req --filter "opcode==$OP_FSYNC" \
     -o "$log" -- "$@" > "$WORK/$label.out" 2>"$WORK/$label.err"
   local secs tot
   secs=$(awk '/seconds time elapsed/{print $1}' "$log")
-  tot=$(awk '/sys_enter_f(data)?sync/{gsub(",","",$1); t+=$1} END{printf "%d", t}' "$log")
+  tot=$(awk '/sys_enter_f(data)?sync|io_uring_submit_req/{gsub(",","",$1); t+=$1} END{printf "%d", t}' "$log")
   # An empty counter formats as a blank in a sentence and reads like a
   # measurement. It is the absence of one: perf could not exec the workload,
   # or attached to nothing. Refuse rather than print a row with holes in it.
