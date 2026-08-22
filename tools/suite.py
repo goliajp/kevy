@@ -63,10 +63,30 @@ def tier_checks(checks, tier):
 # where we cannot know, the answer is "not here", said as such.
 
 def _have_server(profile):
+    """The binary exists AND is not older than the code it must reflect.
+
+    Existence alone is not enough. A stale `target/debug/kevy` satisfied
+    this check while `doc-toml` used it to load the documentation's config
+    blocks, and reported `packed_rows` as an unknown key — a key the source
+    in the working tree had had for hours. That failure was loud enough to
+    chase, but the same hole passes silently in the other direction: a doc
+    block the current server would reject, accepted by an older binary,
+    reads as a green gate.
+    """
     p = ROOT / f"target/{profile}/kevy"
-    if p.exists():
-        return True, ""
-    return False, f"target/{profile}/kevy is not built"
+    if not p.exists():
+        return False, f"target/{profile}/kevy is not built"
+    built = p.stat().st_mtime
+    newest, where = 0.0, ""
+    for src in list(ROOT.glob("crates/*/src/**/*.rs")) + [ROOT / "Cargo.toml"]:
+        m = src.stat().st_mtime
+        if m > newest:
+            newest, where = m, str(src.relative_to(ROOT))
+    if newest > built:
+        age = int((newest - built) / 60)
+        return False, (f"target/{profile}/kevy is {age} min older than {where} — "
+                       f"rebuild it, or the gate tests code that is not here")
+    return True, ""
 
 
 def _have_linux():
