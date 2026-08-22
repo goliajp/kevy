@@ -101,3 +101,43 @@ fn the_whole_row_verbs_agree_with_the_general_hash() {
         paired(g.hgetall(b"row:1").unwrap())
     );
 }
+
+/// The mutating verbs a catch-all had been answering for.
+///
+/// `HDEL` and `HINCRBYFLOAT` reach the value through paths that named
+/// the general forms only, so a packed row got WRONGTYPE about a row it
+/// holds — and the field-TTL reaper deletes through `HDEL` and drops the
+/// result, so an expired field on a packed row stayed readable forever.
+#[test]
+fn deleting_a_column_agrees_with_the_general_hash() {
+    let (mut p, mut g, _) = both();
+    assert_eq!(p.hdel(b"row:1", &[b"id", b"absent"]).unwrap(), 1);
+    assert_eq!(g.hdel(b"row:1", &[b"id", b"absent"]).unwrap(), 1);
+    assert_eq!(p.hget(b"row:1", b"id").unwrap(), None);
+    assert_eq!(p.hget(b"row:1", b"dept").unwrap(), Some(&b"eng"[..]));
+    assert_eq!(p.hlen(b"row:1").unwrap(), g.hlen(b"row:1").unwrap());
+}
+
+#[test]
+fn deleting_every_column_drops_the_key_like_the_general_hash() {
+    let (mut p, mut g, _) = both();
+    p.hdel(b"row:1", &[b"id", b"dept"]).unwrap();
+    g.hdel(b"row:1", &[b"id", b"dept"]).unwrap();
+    assert_eq!(p.hlen(b"row:1").unwrap(), 0);
+    let k: [&[u8]; 1] = [b"row:1"];
+    assert_eq!(p.exists(&k), g.exists(&k), "an emptied hash takes its key with it");
+}
+
+#[test]
+fn the_read_modify_write_verbs_agree_with_the_general_hash() {
+    let (mut p, mut g, _) = both();
+    p.hset(b"row:1", &[(b"id".as_slice(), b"7".as_slice())]).unwrap();
+    assert_eq!(p.hincrbyfloat(b"row:1", b"id", 0.5).unwrap(), 7.5);
+    assert_eq!(g.hincrbyfloat(b"row:1", b"id", 0.5).unwrap(), 7.5);
+    assert_eq!(p.hincrby(b"row:1", b"n", 3).unwrap(), 3);
+    assert_eq!(g.hincrby(b"row:1", b"n", 3).unwrap(), 3);
+    assert_eq!(p.hsetnx(b"row:1", b"dept", b"sales").unwrap(), false, "the column is present");
+    assert_eq!(p.hsetnx(b"row:1", b"name", b"alice").unwrap(), true, "declared but absent");
+    assert_eq!(p.hget(b"row:1", b"name").unwrap(), Some(&b"alice"[..]));
+    assert_eq!(p.hget(b"row:1", b"dept").unwrap(), Some(&b"eng"[..]));
+}
