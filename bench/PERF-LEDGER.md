@@ -567,6 +567,41 @@ textgate 正在断言的内存公式。范围决定权不在我。
 
 ---
 
+## arena bare face — 2026-08-23 — kevy 5.4.0
+
+Re-measured for the 5.4.0 release rather than relabelled, per the rule that
+a table headed with a version states which build was measured.
+
+`bash bench/arena.sh target/release/kevy` on lx64, same protocol as every
+entry: cores 0-7 server / 8-15 client, one engine at a time, `-c 50 -P 16`,
+median-of-5 with sample stdev, throughput from each server's own command
+counter over a timed window.
+
+| verb | kevy 5.4.0 | Redis 8 | valkey 9.1.1 | Dragonfly | vs Redis 8 |
+|---|---:|---:|---:|---:|---:|
+| GET | 7,391,182 | 5,821,211 | 3,288,784 | 2,846,930 | 1.27x |
+| SET | 6,831,207 | 2,577,415 | 1,740,326 | 1,855,128 | 2.65x |
+| INCR | 6,345,807 | 3,334,691 | 2,238,322 | 2,018,528 | 1.90x |
+| SADD | 5,855,274 | 3,760,040 | 2,250,453 | 1,785,213 | 1.56x |
+| HSET | 4,757,415 | 2,948,014 | 1,850,860 | 1,734,250 | 1.61x |
+| LPUSH | 3,306,296 | 2,805,078 | 1,871,496 | 1,491,325 | 1.18x |
+| ZADD | 3,299,310 | 2,907,782 | 1,758,659 | 1,750,629 | 1.13x |
+
+Gap rule: `|kevy - other| <= max(stdev_kevy, stdev_other)` reads as
+NOISE. No cell hit it; the narrowest is ZADD at 1.13x (gap 391,528 vs tolerance 89,198).
+
+**This release's serving-path change does not execute in this benchmark.**
+`arena.sh` starts kevy with `--no-aof`, and 5.4's reactor change is a single
+branch taken on an `OP_AOF` completion — of which there are none without an
+AOF. The packed row is off by default and this workload declares no table
+either. So movement against the 5.3.0 entry is day-to-day machine variation,
+not a result: HSET reads +16% and GET −1.5%, and neither is a claim.
+
+Dragonfly's stdev is 20-45% of its median on five of seven verbs (SET:
+841,700 on a median of 1,855,128). That is its own run-to-run behaviour on
+this protocol, recorded rather than smoothed; its column is the least
+trustworthy on the page.
+
 ## arena bare face — 2026-08-17 — kevy 5.3.0
 
 Re-measured for the 5.3.0 release rather than relabelled, per the rule
