@@ -67,12 +67,43 @@ The distinction the code draws is right and drawn one category too wide: a
 park timeout and a waker read are administrative, but **an fsync completion
 that moves the durable watermark is work with a pending consequence**.
 
+## It is not only the concurrency harness, and it may be a regression
+
+The serial harness sees the same thing. `bench/pgcompare.py`'s write shape is
+one connection issuing one `HSET` at a time, and the fair 5.4 baseline,
+median of three passes, puts `always` at:
+
+| | write p50 | write p99 |
+|---|---:|---:|
+| kevy `always` | 2,889 | **47,264** |
+| kevy `everysec` | 29 | 41 |
+| PostgreSQL 18 | 825 | 1,678 |
+
+Two harnesses, the same signature. And the number has moved: the
+2026-07-26 record has this shape's p99 at **3,097 µs** — which is roughly
+today's *p50*, i.e. that run had no tail of this kind at all.
+
+Between the two, `48d06ae7` (2026-08-12) made **CQE-gated replies the
+default for `always` on io_uring**; before it, `always` took the classic
+synchronous path. If that is the cause, the 15× p99 difference is a
+regression that shipped in 5.2 and 5.3 and nobody measured, because nothing
+between those releases re-ran this shape.
+
+That is checkable without touching code either: `KEVY_AOF_OFFLOAD=0` keeps
+the classic path.
+
 ## The test, before any code
 
-`park_timeout_ms` is an `[advanced]` config key. If this mechanism is the
-cause, **the p99 follows the setting**: at 5 ms the p99 lands near 5 ms, at
-200 ms near 200. If it stays at 50 ms regardless, or does not move with it,
-the mechanism is wrong and the code above is not the explanation.
+`park_timeout_ms` is an `[advanced]` config key and `KEVY_AOF_OFFLOAD` is an
+environment switch, so both questions are answered by four runs that change
+no code:
+
+| run | what it decides |
+|---|---|
+| offload on, `park_timeout_ms` = 5 | if the p99 follows the setting, the mechanism above is the cause |
+| offload on, 50 (default) | the reference |
+| offload on, 200 | the same question from the other side — a p99 that does not move is a refutation |
+| **offload off**, 50 | whether the classic path still has the 3,097 µs shape, which would make this a named regression |
 
 That test changes no code, which is why it comes first. Only after it
 decides is the fix worth writing — and the fix is then narrow: an OP_AOF
