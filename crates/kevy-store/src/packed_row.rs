@@ -135,6 +135,35 @@ impl PackedRow {
         Some(&self.0.buf[header + start..header + end_at(i)])
     }
 
+    /// Overwrite column `i` in place when the new value is exactly as wide as
+    /// the old one, so the offsets do not move.
+    ///
+    /// `false` back when it does not fit that shape — a different width, an
+    /// absent column becoming present, or an index past the end — and the
+    /// caller rebuilds through [`PackedRow::with_column`].
+    ///
+    /// This is an opportunistic fast path, never a property the design
+    /// assumes: whether an update keeps its width is a property of the COLUMN
+    /// (a unix-ms timestamp always does, an enum usually does not, an i64
+    /// counter does until it crosses a digit), and the declaration carries
+    /// types but a type does not fix a width.
+    pub fn set_same_width(&mut self, i: usize, v: &[u8]) -> bool {
+        let Some(old) = self.get(i) else { return false };
+        if old.len() != v.len() {
+            return false;
+        }
+        let bitmap = (self.columns() as u16).div_ceil(8) as usize;
+        let header = 2 + bitmap + self.columns() * 2;
+        let start = if i == 0 {
+            0
+        } else {
+            let at = 2 + bitmap + (i - 1) * 2;
+            u16::from_le_bytes([self.0.buf[at], self.0.buf[at + 1]]) as usize
+        };
+        self.0.buf[header + start..header + start + v.len()].copy_from_slice(v);
+        true
+    }
+
     /// Replace column `i`, rebuilding the row. `None` back when the result
     /// would exceed [`PACKED_MAX`].
     pub fn with_column(&self, i: usize, v: Option<&[u8]>) -> Option<Self> {
@@ -229,6 +258,45 @@ pub(crate) mod tests {
         let r3 = r.with_column(0, None).expect("fits");
         assert!(!r3.has(0));
         assert_eq!(r3.get(2), Some(&b"ccc"[..]));
+    }
+
+    #[test]
+    fn an_in_place_write_touches_exactly_one_column() {
+        // The failure this guards is not "the write did not happen" — it is a
+        // write that lands one column over. Every neighbour is checked.
+        let n = names(4);
+        let mut r = PackedRow::build(
+            &n,
+            &[Some(&b"aaa"[..]), Some(&b"bbb"[..]), Some(&b"ccc"[..]), Some(&b"ddd"[..])],
+        )
+        .expect("fits");
+        assert!(r.set_same_width(1, b"XXX"), "same width goes in place");
+        assert_eq!(r.get(0), Some(&b"aaa"[..]), "left neighbour untouched");
+        assert_eq!(r.get(1), Some(&b"XXX"[..]));
+        assert_eq!(r.get(2), Some(&b"ccc"[..]), "right neighbour untouched");
+        assert_eq!(r.get(3), Some(&b"ddd"[..]));
+        // The first and last columns are the ones an off-by-one reaches past.
+        assert!(r.set_same_width(0, b"ZZZ"));
+        assert_eq!(r.get(0), Some(&b"ZZZ"[..]));
+        assert_eq!(r.get(1), Some(&b"XXX"[..]));
+        assert!(r.set_same_width(3, b"WWW"));
+        assert_eq!(r.get(2), Some(&b"ccc"[..]));
+        assert_eq!(r.get(3), Some(&b"WWW"[..]));
+    }
+
+    #[test]
+    fn an_in_place_write_refuses_anything_that_would_move_an_offset() {
+        let n = names(3);
+        let mut r =
+            PackedRow::build(&n, &[Some(&b"aa"[..]), None, Some(&b"cc"[..])]).expect("fits");
+        assert!(!r.set_same_width(0, b"aaa"), "wider must rebuild");
+        assert!(!r.set_same_width(0, b"a"), "narrower must rebuild");
+        assert!(!r.set_same_width(1, b"xx"), "an absent column must rebuild");
+        assert!(!r.set_same_width(9, b"xx"), "out of range");
+        // And a refusal changes nothing.
+        assert_eq!(r.get(0), Some(&b"aa"[..]));
+        assert_eq!(r.get(2), Some(&b"cc"[..]));
+        assert!(!r.has(1));
     }
 
     #[test]
