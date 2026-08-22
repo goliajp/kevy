@@ -274,7 +274,17 @@ impl Commands for KevyCommands {
             // Sweep due hash field TTLs. Deadlines live in the AOF
             // (HPEXPIREAT frames), so replay purges identically — no
             // logging needed here, same determinism argument as key TTLs.
-            let _ = store.tick_hash_ttl(64);
+            // The reaper already returns the keys whose fields it dropped;
+            // throwing that away left every structure derived from those
+            // rows believing the field was still there. A covering `VALUES`
+            // copy outlived the field it copies, so `FILTER` went on
+            // selecting rows by a value `HGET` already answered nil for.
+            // A field expiring is not a write and reaches no hook on its
+            // own — announcing it here is what makes it one.
+            let expired = store.tick_hash_ttl(64);
+            for (key, _fields) in expired {
+                self.on_write(store, &key);
+            }
         }
         // Tiering upkeep: budget re-resolution + the index/view floor
         // feed (body in `tier_tick` below — 50-LOC rule), then the
