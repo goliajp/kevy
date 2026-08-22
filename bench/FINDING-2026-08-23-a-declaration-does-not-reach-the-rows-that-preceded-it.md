@@ -127,3 +127,131 @@ Two things predicted to move the wrong way:
 If RSS lands within a few percent of 4,450 the arithmetic in §3 of the A1
 RFC holds at scale. If it lands near 5,824 again, something is still
 refusing rows and the witness in each result row will say so.
+
+## What the first pass says, and the account that does not close
+
+Pass 1 of three, both arms, one flag apart on one binary. The witness in each
+row confirms the form took: `sample_row_bytes` 1,200 against 578.
+
+| mode | packed=0 | packed=1 | |
+|---|---:|---:|---:|
+| none | 5,504 | 4,760 | −13.5% |
+| everysec | 5,824 | 5,522 | −5.2% |
+| always | 5,882 | 5,155 | −12.4% |
+| tiered | 5,218 | 5,440 | +4.3% |
+
+n=1 per cell, so the spread between modes is not yet a finding. What is
+already visible is that **the prediction of −24% is not met**, and the reason
+is not that fewer rows packed than expected:
+
+| | |
+|---|---:|
+| per-row difference, by `MEMORY USAGE` | 622 B |
+| × 2,000,000 rows | 1.24 GB |
+| RSS actually saved, `none` | 0.61 GB — **52%** of it |
+| RSS actually saved, `always` | 0.59 GB — **51%** |
+| RSS actually saved, `everysec` | 0.25 GB — **21%** |
+
+The same disagreement appears on this machine at 50k rows and is not
+box-specific: `MEMORY USAGE` 1,440 → 543 (897 B saved per row) against an
+RSS-per-row of 1,697 → 1,091 (606 B saved). Two thirds, measured from
+outside the process.
+
+### Correction — the accounting is not the culprit
+
+The paragraph that stood here blamed the engine's own accounting, saying it
+overstated the saving about twofold. **That was wrong**, and the measurement
+that settles it is in
+`bench/FINDING-2026-08-23-the-order-of-two-statements-decides-the-memory.md`:
+
+| | accounted | RSS per row | difference |
+|---|---:|---:|---:|
+| general hash | 1,200 | 1,609 | 409 |
+| packed row | 578 | 991 | 413 |
+
+Both under-report by the same ~410 bytes — the keyspace slot, the `Entry`,
+and allocator rounding, which neither charges to the value. So the *delta*
+is accurate: 622 accounted against 618 resident, agreeing to within 1%.
+
+The shortfall on the box is therefore **the order, not the instrument**. The
+benchmark loads two million rows in the general form and declares the table
+afterwards, so every packed buffer is allocated beside the table it replaces
+and the freed tables stay in the allocator's arena. The saving that reaches
+RSS is whatever the allocator chooses to return.
+
+`used_memory` still deserves the caution: the tiering target is resolved
+against it (`tier_demote.rs:126`), so a representation that lowers the
+accounted cost lets more rows stay hot under the same budget. That is the
+budget doing what it was told, and it is the likely reason the `tiered` arm
+is the one mode where packing does not help. Documented rather than
+"fixed" — a byte budget denominated in accounted bytes is not wrong for
+becoming easier to satisfy when rows get cheaper.
+
+## The result, three interleaved passes, both arms
+
+One binary, one flag, median of three. The control arm reproduces the 5.4
+baseline to within single digits per cell (5,882 / 5,824 / 5,504 / 5,221
+against 5,880 / 5,821 / 5,504 / 5,221), so the harness is stable and the
+comparison is between the arms rather than between runs.
+
+| mode | packed=0 | packed=1 | RSS | load rows/s | page p50 |
+|---|---:|---:|---:|---:|---:|
+| none | 5,504 | 4,760 | **−13.5%** | 154,694 → 153,248 | 145 → 155 |
+| everysec | 5,824 | 5,527 | **−5.1%** | 148,730 → 148,686 | 149 → 158 |
+| always | 5,882 | 5,137 | **−12.7%** | 32,417 → 32,117 | 148 → 155 |
+| tiered | 5,221 | 5,460 | **+4.6%** | 144,585 → 144,617 | 164 → 156 |
+
+## Both predictions were wrong, in opposite directions
+
+The prediction recorded above this section said −24% RSS and about −8.5% on
+load. Measured:
+
+| | predicted | measured |
+|---|---|---|
+| RSS, `everysec` | −24% | **−5.1%** |
+| load | −8.5% | **−0.03%** |
+
+**The memory saving is a third to a half of what the arithmetic said**, for
+the reason the order finding gives: the benchmark loads two million rows in
+the general form and declares afterwards, so every packed buffer is taken
+beside the table it replaces and only what the allocator returns reaches
+RSS. The per-row arithmetic was not wrong about the representation; it was
+wrong about how much of it a process gives back.
+
+**The load cost did not appear at all.** The 8.5% came from a single local
+run of 50,000 rows, and at two million rows on the box the two arms are
+within a tenth of a percent — the conversion is not on the load path at all
+in this order, because the backfill runs on the tick after the load, not
+during it. That is a prediction refuted by its own measurement, and the
+refutation is more useful than the estimate was: **§5b's write-amplification
+warning applies to the declare-first order, and this order does not pay it.**
+
+## What moved that was not predicted at all
+
+- **`tiered` is the one mode where packing makes memory worse** (+4.6%), and
+  it has a named cause: the demotion gate is `used_memory <=
+  effective_target` (`tier_demote.rs:126`). Packing lowers the accounted
+  cost, the store sees itself under budget sooner, and fewer rows demote.
+  The witness shows it directly — the control arm's sample row is a cold
+  stub (96 bytes), the packed arm's is still hot (578).
+- **`tiered` writes get much faster** as the other face of the same thing:
+  write p50/p99 163/242 → 31/43, because rows that stay hot do not take the
+  tier path on write. A byte budget that is easier to satisfy keeps more
+  rows in RAM and makes them cheaper to write. Both halves are the budget
+  doing what it was told.
+- **The list page costs about 7% more** (p50 145 → 155 at `none`, 149 → 158
+  at `everysec`). A packed row answers `get_named` by scanning its declared
+  names, which is the design's own trade — no per-row hash table, a linear
+  scan of a handful of short slices instead — and the page shape hydrates
+  one column per row across twenty rows. Small, consistent across modes,
+  and the first measured cost of the representation.
+
+## Verdict against RFC §8 step 5
+
+The step says revert the axis if the RSS term does not move. **It moves**, in
+three of four modes, by 5–13.5%. It stays.
+
+It does not meet its own prediction, the fourth mode goes the other way, and
+the reads cost about 7% more on one shape. All three belong in the release
+notes rather than in a footnote, and the default stays off until the owner
+decides otherwise.

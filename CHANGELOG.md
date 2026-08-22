@@ -1,5 +1,108 @@
 # Changelog
 
+## 5.4.0 — use the declaration
+
+`TABLE.DECLARE` tells the server a table's whole shape and persists it, and
+the implementation went on storing those rows as if it had never been told.
+This release is one representation decision applied where the declaration
+was being ignored — plus the defects that finding it turned up, several of
+which were older than the work.
+
+Nothing changes on the wire. Every 5.3 data directory opens as-is in both
+directions, and a declared row's storage form is invisible to every verb.
+
+### Added
+
+- **The packed row** — a declared table's row becomes one allocation: its
+  column values in declared order behind a small offset table, with no
+  per-row hash table and no field names stored. A row's overhead stops
+  being a constant and starts scaling with its actual shape, which is the
+  structural statement; the byte figures are its consequence.
+
+  Off by default, `packed-rows` in `[server]`, `KEVY_PACKED_ROWS`, and
+  settable at runtime with `CONFIG SET packed-rows yes` so the two
+  representations can be compared on one running server rather than two
+  builds. A declaration also reaches rows that were already there: the
+  conversion backfills in bounded batches per tick, the way the index
+  backfill already handles the identical problem.
+
+  Measured on the release box, two million rows, three interleaved passes,
+  one binary one flag apart: resident memory per MB of source CSV falls
+  **13.5% / 5.1% / 12.7%** with the AOF off / at `everysec` / at `always`,
+  and **rises 4.6%** with tiering on. Load throughput is unchanged. The list
+  page costs about 7% more, which is the trade for having no per-row hash
+  table.
+
+  The tiering row goes the wrong way for a reason worth knowing: the
+  demotion budget is denominated in the store's own accounting, packing
+  lowers that, so a store sees itself under budget sooner and keeps more
+  rows resident. Its writes get much faster for the same reason.
+
+  And **the order matters more than any of it**: declaring a table before
+  loading it saves 23.4% per row; declaring it afterwards costs 3.5%, same
+  representation and same peak, because the backfill's freed tables reach
+  the process only if the allocator returns them. `docs/packed-rows.md` has
+  both rows and what to do about them.
+
+### Fixed
+
+- **A 47 ms write tail at one client under `appendfsync always`** — a
+  regression this project shipped in 5.2 and 5.3 without measuring it.
+
+  Under `always` on io_uring a reply waits behind a durability watermark and
+  is released by the reactor's next arming pass. The completion that
+  advanced that watermark did not count as work, so the shard could park
+  before running the pass — and at one client nothing could wake it, because
+  the only client was waiting for exactly the reply the un-run pass would
+  have sent. The park ran to its timeout.
+
+  Confirmed by moving `park_timeout_ms` and watching the p99 follow it to
+  three digits (7.8 ms / 47.7 ms / 196.9 ms at 5 / 50 / 200) while the p50
+  did not move at all. Fixed, the p99 stops following it: **3.2 ms at every
+  setting**, and 47,748 → 3,294 µs at the default. `48d06ae7` (5.2) made
+  CQE-gated replies the default for this mode; turning the offload off still
+  gives the 3.1 ms the 2026-07-26 record has, which is how the regression
+  was attributed.
+
+  Only the io_uring reactor had this. The epoll/kqueue path flushes held
+  connections inside the same reap rather than deferring to a later pass.
+
+- **A covering `VALUES` copy outlived the field it copies.** An index
+  declared with `VALUES` keeps its own copy of a column so a query can be
+  answered without touching the row. When that column's field TTL expired,
+  the row lost it and the index did not, so `FIELDS` kept answering with a
+  value the row no longer had. The proactive reaper's own return value now
+  drives the notification.
+
+### Changed
+
+- **The list page merges instead of sorting.** A paged query used to
+  flatten every shard's page, sort the union, and discard all but `LIMIT`
+  rows. It now merges the already-sorted pages lazily and stops at `LIMIT`,
+  which is `LIMIT + N` decodes instead of `N × LIMIT`.
+
+### Benchmarks and gates
+
+- **`bench/pgcompare.py` was not comparing like with like**, in two ways,
+  both fixed. The kevy read shapes asked for no columns while the SQL they
+  were timed against selected two or three — for a whole release line. And
+  the kevy declaration listed six of the seven columns the loader writes,
+  so the engine was answering about a schema that did not describe its own
+  rows. There is now one column list; the declaration is built from it, the
+  SQL table is read back from `pg_attribute` and compared to it, and the
+  loaded rows' own fields are compared to it.
+- **Every kevy benchmark row carries a witness for how its rows are
+  stored**, because a memory column reads the same whether the storage form
+  under test took effect or not — and once it did not.
+- **`bench/formgate.sh`** requires every public hash verb to be exercised
+  against a packed row, or to say where it is covered instead. A `match`
+  that ends in a catch-all does not mention the form it is getting wrong,
+  so there is nothing to grep for at the site of the defect; this does that
+  search mechanically.
+- **`bench/clippygate.sh`** lints every target in CI's own matrix, read out
+  of `ci.yml` rather than restated, because a local clippy run reports
+  nothing about the architectures it does not compile.
+
 ## 5.3.0 — the suite that checks the checker
 
 The release whose core deliverable is the test system itself: 71 checks
