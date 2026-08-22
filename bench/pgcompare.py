@@ -131,17 +131,25 @@ def server_pids(marker):
             p = int(open(f"/proc/{p}/stat").read().rsplit(")", 1)[1].split()[1])
         except (OSError, IndexError, ValueError):
             break
-    found = []
+    found, parent = [], {}
     for d in os.listdir("/proc"):
         if not d.isdigit() or int(d) in mine:
             continue
         try:
             cmd = open(f"/proc/{d}/cmdline", "rb").read().replace(b"\0", b" ")
+            stat = open(f"/proc/{d}/stat").read()
         except OSError:
             continue
         if marker.encode() in cmd:
             found.append(d)
-    return found
+            parent[d] = stat.rsplit(")", 1)[1].split()[1]
+    # A launcher that stays resident carries the same argv as the thing it
+    # launched — `sudo kevy --dir X` matches every marker `kevy --dir X` does,
+    # and counting both reads as a leaked server. The launcher is by
+    # definition the parent, so drop any match that another match descends
+    # from. No name list: this holds for sudo, a shell, or anything else.
+    kids = set(parent.values())
+    return [d for d in found if d not in kids]
 
 
 def proc_tree_rss(marker):
