@@ -80,6 +80,15 @@ which is how the index backfill already handles the identical problem
 key list collected at declare time). The same trigger covers the snapshot
 case, since the catalog is loaded there too.
 
+**Verified after the fact, not assumed** (this sentence was written before
+it was checked): a server restarted from a snapshot with the switch on
+repacks its rows — `row:5` went 608 bytes → 150 within 100 ms, at two shards
+and at eight. Checking it also turned up a separate property worth knowing
+before measuring anything across a restart: `CONFIG SET packed-rows` writes
+the running config, not the file, so a server told to pack at runtime comes
+back **not** packing. The first attempt at this check read as "the backfill
+misses the snapshot" for exactly that reason.
+
 ## How it was caught
 
 By a witness that had nothing to do with the number being measured: the
