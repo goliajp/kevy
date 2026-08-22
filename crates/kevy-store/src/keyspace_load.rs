@@ -28,6 +28,9 @@ impl Store {
             // L1: preserve the Arc-backed encoding on snapshot/replication
             // load. Arc::clone is cheap; avoids re-copying the bytes.
             Value::ArcBulk(a) => self.insert_loaded(k, Value::ArcBulk(a.clone()), ttl_ms),
+            // Column order comes from the declaration, not from the shard, so
+            // a re-home keeps the packed encoding as it stands.
+            Value::PackedRow(r) => self.insert_loaded(k, Value::PackedRow(r.clone()), ttl_ms),
             Value::Hash(h) => {
                 self.load_hash(k, h.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect(), ttl_ms)
             }

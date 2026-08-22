@@ -22,10 +22,23 @@ use crate::write_bytes;
 use std::io::{self, Write};
 
 pub(crate) fn write_hash_payload<W: Write>(w: &mut W, h: &kevy_store::HashData) -> io::Result<()> {
-    w.write_all(&(h.len() as u32).to_le_bytes())?;
-    for (f, v) in h {
-        write_bytes(w, f.as_slice())?;
-        write_bytes(w, v.as_slice())?;
+    write_pairs_payload(w, h.len(), h.iter().map(|(f, v)| (f.as_slice(), v.as_slice())))
+}
+
+/// The OP_HASH payload, from any source of field/value pairs.
+///
+/// One encoder for every hash representation, so a packed row and a general
+/// hash cannot drift into writing different bytes for the same content —
+/// which matters because a snapshot written by one is replayed into the
+/// other.
+pub(crate) fn write_pairs_payload<'a, W: Write, I>(w: &mut W, n: usize, pairs: I) -> io::Result<()>
+where
+    I: Iterator<Item = (&'a [u8], &'a [u8])>,
+{
+    w.write_all(&(n as u32).to_le_bytes())?;
+    for (f, v) in pairs {
+        write_bytes(w, f)?;
+        write_bytes(w, v)?;
     }
     Ok(())
 }
