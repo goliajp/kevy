@@ -38,7 +38,12 @@ pub const PACKED_MAX: usize = u16::MAX as usize;
 /// names per row would reintroduce exactly the cost this type removes, so
 /// they live here: one allocation per TABLE, cloned into each row as a
 /// pointer.
-pub type ColumnNames = std::sync::Arc<[Vec<u8>]>;
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
+#[cfg(not(feature = "std"))]
+use alloc::vec;
+
+pub type ColumnNames = alloc::sync::Arc<[Vec<u8>]>;
 
 /// A declared row's values, in declared column order, plus a shared pointer
 /// to its table's column names.
