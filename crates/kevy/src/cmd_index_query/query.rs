@@ -127,9 +127,35 @@ fn verify_kind_stats(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> Option<Ve
 fn run_scalar_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8]) -> Vec<u8> {
     // Read before the segment borrow takes the store.
     let has_field_ttls = store.has_field_ttls();
-    let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg, win| match q
-        .shape
-    {
+    let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg, win| {
+        scan_segment(ctx, q, verb, spec, seg, win, has_field_ttls)
+    });
+    match res {
+        Ok(HitsOrChunk::Chunk(chunk)) => chunk,
+        Ok(HitsOrChunk::Hits(hits)) => encode_hits_chunk(store, &hits, &q.fields),
+        Ok(HitsOrChunk::HitsCovered(hits, vals)) => {
+            encode_hits_chunk_covered(&hits, &vals, q.fields.len())
+        }
+        Ok(HitsOrChunk::Verify { spec, entries, stats, window }) => {
+            encode_verify_chunk(store, &spec, &entries, &stats, window)
+        }
+        Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
+        Err(_) => vec![ST_NOINDEX],
+    }
+}
+
+/// One query against one shard's segment, inside the borrow.
+fn scan_segment(
+    ctx: &Ctx<'_>,
+    q: &Query,
+    verb: &[u8],
+    spec: &kevy_index::IndexSpec,
+    seg: &kevy_index::Segment,
+    win: Option<&index_runtime::WindowRt>,
+    has_field_ttls: bool,
+) -> HitsOrChunk {
+    match q.shape {
         Shape::Range { .. } | Shape::Eq { .. } | Shape::Where(_) => {
             let now = (kevy_store::now_unix_ms() / 1000) as i64;
             let (min, max) = match q.bounds_for(spec, now) {
@@ -146,12 +172,7 @@ fn run_scalar_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8]) ->
         // VERIFY answers "does the index still agree with the keyspace?".
         // The segment cannot be walked and the store re-read at the same time
         // (`with_ready_segment` holds the store), so snapshot the held
-        // (key, value) pairs here and do the recheck outside — which is what
-        // this arm was always shaped for, except the snapshot was collected,
-        // thrown away with `let _ = (...)`, and the drift it was for never
-        // computed. That left an O(N) walk plus an O(N) allocation per shard
-        // per VERIFY, producing nothing, while `verb_meta` and the docs
-        // advertised a drift statistic the reply did not carry.
+        // (key, value) pairs here and do the recheck outside.
         Shape::Verify => {
             let mut entries: Vec<(Vec<u8>, IndexValue)> = Vec::new();
             seg.each_entry(|k, v| entries.push((k.to_vec(), v.clone())));
@@ -162,19 +183,6 @@ fn run_scalar_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8]) ->
                 window: win.and_then(|w| w.audit(spec.ty)),
             }
         }
-    });
-    match res {
-        Ok(HitsOrChunk::Chunk(chunk)) => chunk,
-        Ok(HitsOrChunk::Hits(hits)) => encode_hits_chunk(store, &hits, &q.fields),
-        Ok(HitsOrChunk::HitsCovered(hits, vals)) => {
-            encode_hits_chunk_covered(&hits, &vals, q.fields.len())
-        }
-        Ok(HitsOrChunk::Verify { spec, entries, stats, window }) => {
-            encode_verify_chunk(store, &spec, &entries, &stats, window)
-        }
-        Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
-        Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
-        Err(_) => vec![ST_NOINDEX],
     }
 }
 
