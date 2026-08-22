@@ -1,5 +1,21 @@
 # kevy 4 vs PostgreSQL 18 — measured, including where kevy loses
 
+> **Superseded, and two of its read numbers were not comparing like with
+> like.** The harness that produced this run timed kevy read shapes that
+> asked for **no columns**, against SQL that selected two or three, and the
+> kevy table declared six of the seven columns its rows carried. Both were
+> fixed in 5.4. Re-measured fairly, the secondary-index lookup published
+> here as 212 µs against PostgreSQL's 126 is a tie within 4% (160 against
+> 154), and the list page's 1.9× gap is 1.2×.
+>
+> The write and memory rows do not have that defect, and the
+> matched-durability figure here (3,097 µs) is the one 5.4 returns to after
+> fixing a regression that made it 47 ms in 5.2 and 5.3.
+>
+> Current numbers: [`docs/rds-workloads.md`](../docs/rds-workloads.md).
+> This file stays as the record of what was run and when — not as a source
+> of current figures.
+
 The repo had never benchmarked kevy against a relational database. It
 has valkey numbers and embedded-KV numbers; every "faster than an RDS"
 sentence was inference. This is the measurement, in two rounds — a
