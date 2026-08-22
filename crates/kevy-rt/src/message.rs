@@ -76,7 +76,10 @@ pub(crate) enum Op {
     FeedTail,
     /// Extension fan-out: run `Commands::extension_op` on this
     /// shard with the original argv; reply is an opaque chunk.
-    Extension { argv: Vec<Vec<u8>> },
+    /// Shared, not cloned: the same argv goes to every shard, and copying
+    /// ten byte-strings sixteen times to hand each thread its own set was
+    /// ~160 allocations a query for bytes nobody mutates.
+    Extension { argv: std::sync::Arc<[Vec<u8>]> },
     /// Step-1 of the geo `*STORE` orchestrator: run the search half of
     /// `GEOSEARCHSTORE` / `GEORADIUS[BYMEMBER] … STORE` on the SOURCE key's
     /// shard (read-only — the destination write is a separate
