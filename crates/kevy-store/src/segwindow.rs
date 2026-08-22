@@ -66,7 +66,7 @@ impl Store {
     pub(crate) fn peek_value_kind(&mut self, key: &[u8]) -> RowState {
         match self.live_entry(key).map(|e| &e.value) {
             None => RowState::Absent,
-            Some(Value::Hash(_) | Value::SmallHashInline(_)) => RowState::Hot,
+            Some(Value::Hash(_) | Value::SmallHashInline(_) | Value::PackedRow(_)) => RowState::Hot,
             Some(Value::Cold(_)) => RowState::AlreadyCold,
             Some(_) => RowState::OtherType,
         }

@@ -233,7 +233,7 @@ impl Store {
             return None;
         }
         match &e.value {
-            Value::Hash(_) | Value::SmallHashInline(_) => {
+            Value::Hash(_) | Value::SmallHashInline(_) | Value::PackedRow(_) => {
                 tier_codec::encode(&e.value).map(|(payload, _tag)| payload)
             }
             _ => None,
@@ -280,7 +280,10 @@ impl Store {
     /// the eviction filter), fires no events, clears no field TTLs.
     pub(crate) fn demote_row_to_seg(&mut self, key: &[u8], seg_ix: u32) -> bool {
         let Some(e) = self.map.get_mut(key) else { return false };
-        if !matches!(e.value, Value::Hash(_) | Value::SmallHashInline(_)) {
+        if !matches!(
+            e.value,
+            Value::Hash(_) | Value::SmallHashInline(_) | Value::PackedRow(_)
+        ) {
             return false;
         }
         let key_heap = key_heap_bytes_for(key);

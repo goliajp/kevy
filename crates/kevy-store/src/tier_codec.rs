@@ -17,6 +17,11 @@
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
 use crate::value::{COLD_TAG_HASH, COLD_TAG_STRING, HashData, SmallBytes, Value};
+
+/// High bit of the hash payload's field count: set when the row was
+/// packed and should come back packed. A row has at most `u16::MAX`
+/// columns, so the count itself never reaches this bit.
+const PACKED_FLAG: u32 = 1 << 31;
 use alloc::sync::Arc;
 
 /// Encode a spillable value into its vlog payload. `None` for a value
@@ -31,6 +36,20 @@ pub(crate) fn encode(v: &Value) -> Option<(Vec<u8>, u8)> {
             for (f, val) in h.iter() {
                 put_chunk(&mut out, f.as_slice());
                 put_chunk(&mut out, val.as_slice());
+            }
+            Some((out, COLD_TAG_HASH))
+        }
+        Value::PackedRow(r) => {
+            // A packed row is a hash in a different storage form, so it
+            // keeps COLD_TAG_HASH: the tag answers TYPE and gates the
+            // WRONGTYPE precheck, and both of those are about the type.
+            // Which form to rebuild on the way back is a property of the
+            // payload, and rides in the high bit of the field count.
+            let mut out = Vec::with_capacity(4 + r.len() * 16);
+            out.extend_from_slice(&((r.len() as u32) | PACKED_FLAG).to_le_bytes());
+            for (f, val) in r.fields() {
+                put_chunk(&mut out, f);
+                put_chunk(&mut out, val);
             }
             Some((out, COLD_TAG_HASH))
         }
@@ -72,17 +91,40 @@ pub(crate) fn decode(tag: u8, payload: Vec<u8>) -> Result<Value, &'static str> {
 
 fn decode_hash(p: &[u8]) -> Result<Value, &'static str> {
     let mut cur = 0usize;
-    let n = read_u32(p, &mut cur)? as usize;
-    let mut h = HashData::with_capacity(n.max(1));
+    let raw = read_u32(p, &mut cur)?;
+    let n = (raw & !PACKED_FLAG) as usize;
+    let mut pairs = Vec::with_capacity(n);
     for _ in 0..n {
         let f = read_chunk(p, &mut cur)?;
         let v = read_chunk(p, &mut cur)?;
-        h.insert(SmallBytes::from_slice(f), SmallBytes::from_slice(v));
+        pairs.push((f, v));
     }
     if cur != p.len() {
         return Err("tier: hash payload has trailing bytes");
     }
+    if raw & PACKED_FLAG != 0
+        && let Some(r) = rebuild_packed(&pairs)
+    {
+        return Ok(Value::PackedRow(r));
+    }
+    let mut h = HashData::with_capacity(n.max(1));
+    for (f, v) in pairs {
+        h.insert(SmallBytes::from_slice(f), SmallBytes::from_slice(v));
+    }
     Ok(Value::Hash(Arc::new(h)))
+}
+
+/// Rebuild the packed form from the payload's own pairs. Only the
+/// columns that were present got written, so the row comes back
+/// declaring exactly those — which answers every verb identically,
+/// since a column absent from the declaration and a column absent from
+/// the row are the same answer. `None` if the row no longer fits the
+/// packed form, and then the general hash carries the same data.
+fn rebuild_packed(pairs: &[(&[u8], &[u8])]) -> Option<crate::packed_row::PackedRow> {
+    let names: crate::packed_row::ColumnNames =
+        pairs.iter().map(|(f, _)| f.to_vec()).collect();
+    let vals: Vec<Option<&[u8]>> = pairs.iter().map(|(_, v)| Some(*v)).collect();
+    crate::packed_row::PackedRow::build(&names, &vals)
 }
 
 fn read_u32(p: &[u8], cur: &mut usize) -> Result<u32, &'static str> {
