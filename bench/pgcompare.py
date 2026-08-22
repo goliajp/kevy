@@ -187,38 +187,8 @@ def run_pg():
         load_s = time.time() - t0
 
         c.execute("CHECKPOINT")
-        lat = {"pk": [], "idx": [], "page": [], "write": []}
-        rng = random.Random(7)
         cur = c.cursor()
-        for _ in range(n):
-            i = rng.randrange(rows)
-            t = time.perf_counter_ns()
-            cur.execute("SELECT name, dept, age FROM t WHERE id = %s", (i,))
-            cur.fetchall()
-            lat["pk"].append((time.perf_counter_ns() - t) / 1000)
-        skus = max(1, rows // 20)
-        for _ in range(n):
-            k = rng.randrange(skus)
-            t = time.perf_counter_ns()
-            cur.execute("SELECT id, name FROM t WHERE sku = %s LIMIT 20", (k,))
-            cur.fetchall()
-            lat["idx"].append((time.perf_counter_ns() - t) / 1000)
-        for _ in range(n):
-            # A random time window anywhere in the table, not a fixed
-            # low-cardinality slice: the page a real user asks for.
-            d = DEPTS[rng.randrange(len(DEPTS))]
-            lo = 1700000000 + rng.randrange(max(1, rows - 2000))
-            t = time.perf_counter_ns()
-            cur.execute(
-                "SELECT id, name, ts FROM t WHERE dept = %s AND ts BETWEEN %s AND %s "
-                "ORDER BY ts LIMIT 20", (d, lo, lo + 2000))
-            cur.fetchall()
-            lat["page"].append((time.perf_counter_ns() - t) / 1000)
-        for _ in range(n):
-            i = rng.randrange(rows)
-            t = time.perf_counter_ns()
-            cur.execute("UPDATE t SET age = age + 1 WHERE id = %s", (i,))
-            lat["write"].append((time.perf_counter_ns() - t) / 1000)
+        lat = time_serial(cur, PG_SHAPES, n, rows)
 
         c.execute("CHECKPOINT")
         # Ask Postgres itself rather than shelling into the container: the
@@ -239,6 +209,78 @@ def run_pg():
 
 
 # ── kevy ────────────────────────────────────────────────────────────────────
+
+# ── the four shapes, defined once ────────────────────────────────────
+#
+# Both the serial runs below and the concurrency sweep in pgconc.py call
+# these, so "the idx query" cannot come to mean two different queries
+# depending on which axis is being measured. Each takes an open handle, a
+# seeded RNG and the row count, and performs exactly one operation.
+
+def pg_pk(cur, rng, rows):
+    cur.execute("SELECT name, dept, age FROM t WHERE id = %s", (rng.randrange(rows),))
+    cur.fetchall()
+
+
+def pg_idx(cur, rng, rows):
+    k = rng.randrange(max(1, rows // 20))
+    cur.execute("SELECT id, name FROM t WHERE sku = %s LIMIT 20", (k,))
+    cur.fetchall()
+
+
+def pg_page(cur, rng, rows):
+    # A random time window anywhere in the table, not a fixed
+    # low-cardinality slice: the page a real user asks for.
+    d = DEPTS[rng.randrange(len(DEPTS))]
+    lo = 1700000000 + rng.randrange(max(1, rows - 2000))
+    cur.execute(
+        "SELECT id, name, ts FROM t WHERE dept = %s AND ts BETWEEN %s AND %s "
+        "ORDER BY ts LIMIT 20", (d, lo, lo + 2000))
+    cur.fetchall()
+
+
+def pg_write(cur, rng, rows):
+    cur.execute("UPDATE t SET age = age + 1 WHERE id = %s", (rng.randrange(rows),))
+
+
+def k_pk(c, rng, rows):
+    c.cmd("HMGET", f"row:{rng.randrange(rows)}", "name", "dept", "age")
+
+
+def k_idx(c, rng, rows):
+    k = rng.randrange(max(1, rows // 20))
+    c.cmd("IDX.QUERY", "t.sku", "EQ", str(k), "LIMIT", "20")
+
+
+def k_page(c, rng, rows):
+    d = DEPTS[rng.randrange(len(DEPTS))]
+    lo = 1700000000 + rng.randrange(max(1, rows - 2000))
+    c.cmd("IDX.QUERY", "t.by_dept_ts", "WHERE", "dept", "EQ", d,
+          "RANGE", "ts", str(lo), str(lo + 2000), "LIMIT", "20")
+
+
+def k_write(c, rng, rows):
+    c.cmd("HSET", f"row:{rng.randrange(rows)}", "age", str(18 + rng.randrange(60)))
+
+
+PG_SHAPES = {"pk": pg_pk, "idx": pg_idx, "page": pg_page, "write": pg_write}
+K_SHAPES = {"pk": k_pk, "idx": k_idx, "page": k_page, "write": k_write}
+SHAPE_ORDER = ("pk", "idx", "page", "write")
+
+
+def time_serial(handle, shapes, n, rows, seed=7):
+    """Run each shape n times on one handle, returning µs per operation."""
+    lat = {}
+    rng = random.Random(seed)
+    for name in SHAPE_ORDER:
+        fn, xs = shapes[name], []
+        for _ in range(n):
+            t = time.perf_counter_ns()
+            fn(handle, rng, rows)
+            xs.append((time.perf_counter_ns() - t) / 1000)
+        lat[name] = xs
+    return lat
+
 
 def enc(*parts):
     out = [b"*%d\r\n" % len(parts)]
@@ -318,31 +360,7 @@ def run_kevy():
             time.sleep(1)
     load_s = time.time() - t0
 
-    lat = {"pk": [], "idx": [], "page": [], "write": []}
-    rng = random.Random(7)
-    for _ in range(n):
-        i = rng.randrange(rows)
-        t = time.perf_counter_ns()
-        c.cmd("HMGET", f"row:{i}", "name", "dept", "age")
-        lat["pk"].append((time.perf_counter_ns() - t) / 1000)
-    skus = max(1, rows // 20)
-    for _ in range(n):
-        k = rng.randrange(skus)
-        t = time.perf_counter_ns()
-        c.cmd("IDX.QUERY", "t.sku", "EQ", str(k), "LIMIT", "20")
-        lat["idx"].append((time.perf_counter_ns() - t) / 1000)
-    for _ in range(n):
-        d = DEPTS[rng.randrange(len(DEPTS))]
-        lo = 1700000000 + rng.randrange(max(1, rows - 2000))
-        t = time.perf_counter_ns()
-        c.cmd("IDX.QUERY", "t.by_dept_ts", "WHERE", "dept", "EQ", d,
-              "RANGE", "ts", str(lo), str(lo + 2000), "LIMIT", "20")
-        lat["page"].append((time.perf_counter_ns() - t) / 1000)
-    for _ in range(n):
-        i = rng.randrange(rows)
-        t = time.perf_counter_ns()
-        c.cmd("HSET", f"row:{i}", "age", str(18 + rng.randrange(60)))
-        lat["write"].append((time.perf_counter_ns() - t) / 1000)
+    lat = time_serial(c, K_SHAPES, n, rows)
 
     # A "tiered" row nobody can check is worth nothing: pull the gauges so
     # the finding can show demotion actually happened and what stayed
@@ -395,6 +413,9 @@ def run_kevy():
 
 
 CMDS = {"gen": run_gen, "pg": run_pg, "kevy": run_kevy}
-if len(sys.argv) < 2 or sys.argv[1] not in CMDS:
-    sys.exit(__doc__)
-CMDS[sys.argv[1]]()
+
+# Guarded so pgconc.py can import the shapes rather than restate them.
+if __name__ == "__main__":
+    if len(sys.argv) < 2 or sys.argv[1] not in CMDS:
+        sys.exit(__doc__)
+    CMDS[sys.argv[1]]()
