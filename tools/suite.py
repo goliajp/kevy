@@ -63,29 +63,34 @@ def tier_checks(checks, tier):
 # where we cannot know, the answer is "not here", said as such.
 
 def _have_server(profile):
-    """The binary exists AND is not older than the code it must reflect.
+    """Build the binary, rather than judge whether the one on disk is current.
 
-    Existence alone is not enough. A stale `target/debug/kevy` satisfied
-    this check while `doc-toml` used it to load the documentation's config
-    blocks, and reported `packed_rows` as an unknown key — a key the source
-    in the working tree had had for hours. That failure was loud enough to
-    chase, but the same hole passes silently in the other direction: a doc
-    block the current server would reject, accepted by an older binary,
-    reads as a green gate.
+    Existence alone was not enough: a `target/debug/kevy` from an earlier
+    checkout satisfied it while `doc-toml` used that binary to load the
+    documentation's config blocks, and reported `packed_rows` as an unknown
+    `[server]` key — hours after the source in the same tree had gained it.
+    On the box that binary was rebuilt later in the same tier, by
+    `workspace-tests`, which is why the same check passed on a re-run.
+
+    The first fix compared the binary's mtime against the sources, and was
+    wrong in a way worth recording: cargo decides freshness by hashing
+    content, so a `git checkout` or a merge moves mtimes without changing
+    anything, and the check cried stale after every branch operation. A gate
+    that cries wolf gets worked around.
+
+    So this asks cargo, which is the tool whose job that is. A fresh tree
+    costs ~0.1 s; a stale one costs a build, which is the honest price of
+    the guarantee.
     """
-    p = ROOT / f"target/{profile}/kevy"
-    if not p.exists():
-        return False, f"target/{profile}/kevy is not built"
-    built = p.stat().st_mtime
-    newest, where = 0.0, ""
-    for src in list(ROOT.glob("crates/*/src/**/*.rs")) + [ROOT / "Cargo.toml"]:
-        m = src.stat().st_mtime
-        if m > newest:
-            newest, where = m, str(src.relative_to(ROOT))
-    if newest > built:
-        age = int((newest - built) / 60)
-        return False, (f"target/{profile}/kevy is {age} min older than {where} — "
-                       f"rebuild it, or the gate tests code that is not here")
+    flags = ["--release"] if profile == "release" else []
+    r = subprocess.run(["cargo", "build", "-p", "kevy", "--bin", "kevy", "--quiet", *flags],
+                       cwd=ROOT, capture_output=True, text=True)
+    if r.returncode != 0:
+        tail = (r.stderr or r.stdout).strip().splitlines()
+        why = tail[-1] if tail else f"cargo build --bin kevy failed ({r.returncode})"
+        return False, f"target/{profile}/kevy does not build: {why[:120]}"
+    if not (ROOT / f"target/{profile}/kevy").exists():
+        return False, f"cargo build succeeded but target/{profile}/kevy is not there"
     return True, ""
 
 
