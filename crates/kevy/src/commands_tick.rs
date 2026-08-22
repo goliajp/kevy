@@ -6,6 +6,7 @@
 use kevy_store::Store;
 
 use crate::KevyCommands;
+use kevy_rt::Commands as _;
 
 /// Hand back free pages this shard's allocator holds. Returning pages
 /// is the one thing kevy-alloc does that glibc's brk arena cannot, and
@@ -55,4 +56,22 @@ pub(super) fn tier_tick(c: &KevyCommands, store: &mut Store, bits: u32, cfg: &ke
         reserved += crate::view_runtime::reserved_bytes(&c.ctx());
     }
     store.set_tier_reserved(reserved);
+}
+
+/// Sweep due hash-field TTLs, and announce what the sweep removed.
+///
+/// Deadlines live in the AOF (`HPEXPIREAT` frames), so replay purges
+/// identically — no logging needed here, the same determinism argument as
+/// key TTLs.
+///
+/// The reaper already returns the keys whose fields it dropped. Throwing
+/// that away left every structure derived from those rows believing the
+/// field was still there: a covering `VALUES` copy outlived the field it
+/// copies, so `FILTER` went on selecting rows by a value `HGET` already
+/// answered nil for. A field expiring is not a write and reaches no hook on
+/// its own — announcing it here is what makes it one.
+pub(super) fn sweep_hash_field_ttls(cmds: &KevyCommands, store: &mut Store) {
+    for (key, _fields) in store.tick_hash_ttl(64) {
+        cmds.on_write(store, &key);
+    }
 }

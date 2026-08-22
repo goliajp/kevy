@@ -23,6 +23,12 @@ pub struct ServerSection {
     pub threads: usize,
     /// Only shards `0..N` arm accept SQE; rest stay compute-only.
     pub accept_shards: Option<usize>,
+    /// Store a declared table's rows in the packed representation: the
+    /// columns in declared order in one buffer, with no per-row field names
+    /// and no per-row hash table. Default `false` while the trade is being
+    /// measured — the memory it saves is paid for in work at each row's first
+    /// write, and the two are reported apart.
+    pub packed_rows: bool,
     /// Cap on total active client connections. `0` = unlimited.
     /// Default `10000` (matches Redis). New connection past cap is closed
     /// + `rejected_connections` counter increments + INFO clients reports.
@@ -38,6 +44,7 @@ impl Default for ServerSection {
             port: 6004,
             threads: 0,
             accept_shards: None,
+            packed_rows: false,
             max_clients: 10_000,
             data_dir: PathBuf::from("."),
         }

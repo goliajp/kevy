@@ -148,6 +148,17 @@ impl CatalogState {
             .is_some_and(|c| !c.is_empty())
     }
 
+    /// Whether any table is declared — the gate for the packed
+    /// representation, which a table earns by declaring columns whether or
+    /// not it also declares an index.
+    pub(crate) fn table_nonempty(&self) -> bool {
+        self.table
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|c| !c.is_empty())
+    }
+
     /// The index-catalog generation (Acquire — pairs with the install
     /// bump so a moved value guarantees the new catalog is visible).
     pub(crate) fn index_gen(&self) -> u64 {
