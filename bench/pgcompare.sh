@@ -46,10 +46,17 @@ refuse() { echo "pgcompare: REFUSED — $1" >&2; exit 2; }
 mkdir -p "$WORK"; : >"$OUT"
 CSV="$WORK/data.csv"
 
+# Match the server by its flags, not by the binary's name: KEVY_BIN points at
+# `kevy-off` / `kevy-on` for the allocator comparison, and "kevy --port N"
+# matches neither — so nothing was ever killed between modes, every mode's
+# server stayed bound to the same port under SO_REUSEPORT, and CONFIG GET
+# reached whichever answered. Both guards below need a non-empty port.
+SRVPAT="--port $KPORT --dir $WORK"
+
 cleanup() {
   # killgate: an empty KPORT would make this pattern match everything.
   [ -n "${KPORT}" ] || return 0
-  pkill -f "kevy --port $KPORT" 2>/dev/null
+  pkill -f -- "$SRVPAT" 2>/dev/null
   # Drop the dataset too. A run left a 979 MB table loaded in the
   # always-on container, and postgres's autovacuum ground through it in
   # the background for hours — diskgate's rewrite measurement on the
@@ -125,9 +132,17 @@ TOML
   # shellcheck disable=SC2086
   KEVY_BIND=127.0.0.1 "$KEVY" --port "$KPORT" --dir "$DIR" $ARGS \
     >"$DIR/srv.log" 2>&1 &
-  for _ in $(seq 60); do
+  # Ready means it ANSWERS, not that the port accepts. The listener binds
+  # before the AOF shards finish replaying, so a bare connect() succeeds on a
+  # server that cannot yet serve a command — at 11.5 GB that gap was wide
+  # enough for the CONFIG GET below to come back empty and refuse the run as
+  # mislabelled, losing three of the four modes.
+  for _ in $(seq 120); do
     "$VENV" - "$KPORT" <<'PY' >/dev/null 2>&1 && break
-import socket,sys; socket.create_connection(("127.0.0.1",int(sys.argv[1])),0.3).close()
+import socket,sys
+s = socket.create_connection(("127.0.0.1", int(sys.argv[1])), 1.0)
+s.settimeout(2.0); s.sendall(b"PING\r\n")
+sys.exit(0 if s.recv(64).startswith(b"+PONG") else 1)
 PY
     sleep 0.5
   done
@@ -144,7 +159,22 @@ PY
   esac
   "$VENV" "$PY" kevy --csv "$CSV" --port "$KPORT" --mode "$MODE" \
     --datadir "$DIR" --samples "${PGCMP_SAMPLES:-5000}" | tee -a "$OUT"
-  [ -n "${KPORT}" ] && pkill -f "kevy --port $KPORT" 2>/dev/null; sleep 1
+  # Wait for it to actually be gone rather than for a fixed second: freeing a
+  # 17 GB resident set takes the kernel longer than that, and the next mode
+  # then starts its own load under the dying process's memory pressure.
+  if [ -n "${KPORT}" ]; then
+    pkill -f -- "$SRVPAT" 2>/dev/null
+    for _ in $(seq 60); do
+      pgrep -f -- "$SRVPAT" >/dev/null 2>&1 || break
+      sleep 0.5
+    done
+    sleep 1
+    # SO_REUSEPORT lets a survivor keep answering on the same port, so a
+    # failed teardown does not look like a failure — it looks like the next
+    # mode's numbers. Prove the port is clear before opening the next one.
+    pgrep -f -- "$SRVPAT" >/dev/null 2>&1 &&
+      refuse "a server matching '$SRVPAT' outlived its mode; the next mode would share its port"
+  fi
 done
 
 echo
