@@ -286,15 +286,23 @@ def k_pk(c, rng, rows):
 
 
 def k_idx(c, rng, rows):
+    # FIELDS name, because the PostgreSQL side selects id and name. Without
+    # it kevy returned the key and the indexed value and no columns at all,
+    # so the two engines were not answering the same question and every read
+    # ratio taken before 2026-08-23 flattered kevy by the cost of the columns
+    # it never fetched. `name` is a declared VALUES column on t.sku.
     k = rng.randrange(max(1, rows // 20))
-    c.cmd("IDX.QUERY", "t.sku", "EQ", str(k), "LIMIT", "20")
+    c.cmd("IDX.QUERY", "t.sku", "EQ", str(k), "LIMIT", "20", "FIELDS", "name")
 
 
 def k_page(c, rng, rows):
     d = DEPTS[rng.randrange(len(DEPTS))]
     lo = 1700000000 + rng.randrange(max(1, rows - 2000))
+    # Same correction: the PostgreSQL side selects id, name and ts. The key
+    # carries id, the composite value carries ts, so `name` is what was
+    # missing from the reply.
     c.cmd("IDX.QUERY", "t.by_dept_ts", "WHERE", "dept", "EQ", d,
-          "RANGE", "ts", str(lo), str(lo + 2000), "LIMIT", "20")
+          "RANGE", "ts", str(lo), str(lo + 2000), "LIMIT", "20", "FIELDS", "name")
 
 
 def k_write(c, rng, rows):
@@ -397,6 +405,22 @@ def run_kevy():
                 break
             time.sleep(1)
     load_s = time.time() - t0
+
+    # The two engines must answer the same question. The PostgreSQL read
+    # shapes select columns; for a whole release line the kevy shapes did not
+    # ask for any, so kevy returned a key and an indexed value and was timed
+    # doing strictly less work. Nothing in the output said so. Assert that a
+    # read shape comes back carrying the column it is supposed to carry.
+    for label, probe in (("idx", ("IDX.QUERY", "t.sku", "EQ", "1", "LIMIT", "20", "FIELDS", "name")),
+                         ("page", ("IDX.QUERY", "t.by_dept_ts", "WHERE", "dept", "EQ", "eng",
+                                   "RANGE", "ts", "0", "9999999999", "LIMIT", "20",
+                                   "FIELDS", "name"))):
+        r = c.cmd(*probe)
+        blob = repr(r).encode() if not isinstance(r, bytes) else r
+        if b"user" not in blob:
+            sys.exit(f"pgcompare: REFUSED — the {label} shape came back without the "
+                     f"hydrated column; it would be timed doing less work than the "
+                     f"SQL it is compared against. Reply: {blob[:200]!r}")
 
     lat = time_serial(c, K_SHAPES, n, rows)
 
