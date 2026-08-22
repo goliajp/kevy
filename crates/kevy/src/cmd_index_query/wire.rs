@@ -121,27 +121,13 @@ pub(crate) fn peek_hydration(
 /// per-field `hget` loop (missing key / wrong type / missing field all
 /// encode nil).
 pub(crate) fn encode_hydration_row(chunk: &mut Vec<u8>, nfields: usize, row: &HydrationRow) {
+    chunk.push(nfields as u8);
     let vals = match row {
         Ok(Some(vals)) => vals.as_slice(),
         _ => &[],
     };
-    let slots: Vec<Option<&[u8]>> = (0..nfields)
-        .map(|i| vals.get(i).and_then(Option::as_deref))
-        .collect();
-    encode_hydration_slots(chunk, nfields, &slots);
-}
-
-/// The wire shape both hydration paths share — the row read and the
-/// index-only answer from the covering `VALUES` copies. One encoder so the
-/// two cannot drift into producing different bytes for the same page.
-pub(crate) fn encode_hydration_slots(
-    chunk: &mut Vec<u8>,
-    nfields: usize,
-    slots: &[Option<&[u8]>],
-) {
-    chunk.push(nfields as u8);
     for i in 0..nfields {
-        match slots.get(i).copied().flatten() {
+        match vals.get(i).and_then(Option::as_deref) {
             Some(v) => {
                 chunk.extend_from_slice(&(v.len() as u32).to_le_bytes());
                 chunk.extend_from_slice(v);
