@@ -154,3 +154,27 @@ the next arming pass, which the park was preventing from running.
 kevy (`docs/rds-workloads.md`: 3,097 µs against 1,689 µs at matched
 durability). Part of that column is a scheduling artefact wearing a
 durability number's clothes, and the doc says nothing about it.
+
+## After the fix
+
+Same probe, same box, same four configurations, one commit later:
+
+| config | p50 | p99 before | **p99 after** | mean |
+|---|---:|---:|---:|---:|
+| offload on, `park_timeout_ms` = 5 | 2,634 | 7,843 | **3,241** | 2,551 |
+| offload on, 50 (default) | 2,703 | 47,748 | **3,294** | 2,682 |
+| offload on, 200 | 2,661 | 196,938 | **3,238** | 2,642 |
+| offload off, 50 (control) | 2,633 | 3,147 | 3,160 | 2,561 |
+
+**The p99 no longer tracks the setting** — 3,241 / 3,294 / 3,238 across a
+forty-fold range of `park_timeout_ms`, where before it followed it to three
+digits. That is the same test that confirmed the mechanism, run against the
+fix, and it now refutes the mechanism's precondition: there is no park left
+to wait out.
+
+At the default the tail is **47,748 → 3,294 µs, 14.5× better**, and the mean
+falls 4,612 → 2,682. The offload path now matches the classic path's tail
+(3,294 against 3,160) while keeping the throughput it was introduced for.
+
+The control moved by 13 µs, which is what says the fix changed the thing it
+claimed to and not something global.
