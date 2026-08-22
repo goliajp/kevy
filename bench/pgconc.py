@@ -52,12 +52,12 @@ def _open(engine, target):
     return client, K_SHAPES, lambda: None
 
 
-def _worker(engine, target, rows, ops, wid, barrier, q):
+def _worker(engine, target, rows, ops, wid, barrier, q, want):
     """One client. Every shape starts on the barrier so the load is real."""
     handle, shapes, close = _open(engine, target)
     rng = random.Random(1000 + wid)
     out = {}
-    for name in SHAPE_ORDER:
+    for name in want:
         fn = shapes[name]
         for _ in range(WARMUP):
             fn(handle, rng, rows)
@@ -72,11 +72,11 @@ def _worker(engine, target, rows, ops, wid, barrier, q):
     q.put((wid, out))
 
 
-def _collect(engine, target, rows, ops, conc):
+def _collect(engine, target, rows, ops, conc, want):
     """Run `conc` clients; return {shape: (starts, ends, cpu, latencies)}."""
     barrier, q = mp.Barrier(conc), mp.Queue()
     procs = [mp.Process(target=_worker,
-                        args=(engine, target, rows, ops, i, barrier, q))
+                        args=(engine, target, rows, ops, i, barrier, q, want))
              for i in range(conc)]
     for p in procs:
         p.start()
@@ -88,7 +88,7 @@ def _collect(engine, target, rows, ops, conc):
         sys.exit(f"pgconc: {len(dead)} client(s) died (exit {dead[0]}) — "
                  f"the level would be reported from survivors only")
     merged = {}
-    for name in SHAPE_ORDER:
+    for name in want:
         starts, ends, cpu, xs = [], [], 0.0, []
         for _, out in got:
             t0, t1, c, lat = out[name]
@@ -97,12 +97,12 @@ def _collect(engine, target, rows, ops, conc):
     return merged
 
 
-def _row(label, mode, conc, ops, rows, merged, cores):
+def _row(label, mode, conc, ops, rows, merged, cores, want):
     """One result line: latency, throughput, and what the driver cost."""
     rec = {"engine": label, "mode": mode, "conc": conc,
            "ops_per_conn": ops, "rows": rows}
     hot = []
-    for name in SHAPE_ORDER:
+    for name in want:
         t0, t1, cpu, xs = merged[name]
         wall = max(t1 - t0, 1e-9)
         drv = cpu / wall
@@ -132,9 +132,16 @@ def main():
     label = opt("--label", "postgres18" if engine == "pg" else "kevy")
     mode = opt("--mode", "stock")
     cores = int(opt("--driver-cores", str(os.cpu_count() or 1)))
+    # --shapes narrows the run to one or more shapes. The fsync probe needs a
+    # window that is nothing but writes, so a counter attached to it is
+    # counting that shape and not the three that precede it.
+    want = tuple(opt("--shapes", ",".join(SHAPE_ORDER)).split(","))
+    bad = [s for s in want if s not in SHAPE_ORDER]
+    if bad:
+        sys.exit(f"pgconc: unknown shape(s) {bad}; known: {list(SHAPE_ORDER)}")
     for conc in [int(x) for x in opt("--conc", "1,8,32,64").split(",")]:
-        merged = _collect(engine, target, rows, ops, conc)
-        print(json.dumps(_row(label, mode, conc, ops, rows, merged, cores)),
+        merged = _collect(engine, target, rows, ops, conc, want)
+        print(json.dumps(_row(label, mode, conc, ops, rows, merged, cores, want)),
               flush=True)
 
 
