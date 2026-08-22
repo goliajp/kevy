@@ -247,11 +247,34 @@ fn apply_hot_set(cfg: &mut Config, key: &[u8], value: &[u8]) -> Result<(), SetEr
             );
             Ok(())
         }
+        // The storage form of a declared row. Hot-settable because the two
+        // representations must be comparable on ONE running server rather
+        // than two builds, and because a replica has to store rows the way
+        // its primary does — a failover otherwise changes the memory
+        // profile. Turning it on converts existing rows through the tick
+        // backfill; turning it off leaves packed rows packed until the next
+        // write to each, which is a form, not a behaviour.
+        "packed-rows" => set_packed_rows(cfg, key_str, value_str),
         "bind" | "port" | "io-threads" | "dir" | "appendonly" | "tiering-spill-dir" => {
             Err(SetError::ReadOnly(key_str.to_string()))
         }
         other => Err(SetError::Unknown(other.to_string())),
     }
+}
+
+/// `packed-rows yes|no` — the storage form of a declared row.
+fn set_packed_rows(cfg: &mut Config, key: &str, value: &str) -> Result<(), SetError> {
+    cfg.server.packed_rows = match value {
+        "yes" | "on" | "true" | "1" => true,
+        "no" | "off" | "false" | "0" => false,
+        _ => {
+            return Err(SetError::BadValue {
+                key: key.to_string(),
+                reason: "expected one of yes / no".to_string(),
+            });
+        }
+    };
+    Ok(())
 }
 
 fn set_memory(cfg: &mut Config, key: &str, value: &str) -> Result<(), SetError> {
@@ -367,6 +390,7 @@ fn config_pairs(cfg: &Config) -> Vec<(&'static str, String)> {
     v.push(("bind", format!("{a}.{b}.{c}.{d}")));
     v.push(("port", cfg.server.port.to_string()));
     v.push(("io-threads", cfg.server.threads.to_string()));
+    v.push(("packed-rows", if cfg.server.packed_rows { "yes" } else { "no" }.to_string()));
     v.push(("dir", cfg.server.data_dir.display().to_string()));
     v.push(("appendonly", yes_no(cfg.persistence.aof)));
     // kevy has no RDB save schedule (snapshots are explicit SAVE/BGSAVE);

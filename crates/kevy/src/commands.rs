@@ -263,6 +263,9 @@ impl Commands for KevyCommands {
         if bits & crate::state::VIEW_NONEMPTY != 0 {
             crate::view_runtime::on_tick(&self.ctx(), store);
         }
+        if bits & crate::state::TABLE_NONEMPTY != 0 {
+            crate::table_runtime::on_tick(&self.ctx(), store);
+        }
         // Redis's `activeExpireCycle` per shard: `sample` sets the batch,
         // ≤16 rounds/tick is far under Redis's 25 % CPU budget at 10 Hz,
         // and it is cheap when no TTL'd keys exist.

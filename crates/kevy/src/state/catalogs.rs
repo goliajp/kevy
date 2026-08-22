@@ -33,9 +33,13 @@ pub(crate) struct CatalogState {
     /// Bumped (Release) on every view-catalog install.
     view_gen: AtomicU64,
     /// The table catalog (TABLE.DECLARE / TABLE.DROP / sidecar boot).
-    /// Declarations only — its compiled indexes live in `index`, so
-    /// shards need no per-table state and no generation.
     table: RwLock<Option<Arc<TableCatalog>>>,
+    /// Bumped (Release) on every table-catalog install. A table used to
+    /// carry no per-shard state — its runtime footprint was its compiled
+    /// indexes — but the packed representation gave it one: a declaration
+    /// has to reach the rows that were already there, and a shard learns a
+    /// new declaration exists by this moving.
+    table_gen: AtomicU64,
     /// The refusal log (the auto-declaration loop's observation
     /// face): written at the origin reduce when a query is refused
     /// for a missing declaration, read by `IDX.ADVISE`. Cleared on
@@ -60,6 +64,7 @@ impl CatalogState {
             view: RwLock::new(None),
             view_gen: AtomicU64::new(0),
             table: RwLock::new(None),
+            table_gen: AtomicU64::new(0),
             advise: Mutex::new(AdviseLog::new()),
             usage: RwLock::new(HashMap::new()),
         }
@@ -188,6 +193,11 @@ impl CatalogState {
         self.view_gen.load(Ordering::Acquire)
     }
 
+    /// The table-catalog generation (Acquire).
+    pub(crate) fn table_gen(&self) -> u64 {
+        self.table_gen.load(Ordering::Acquire)
+    }
+
     /// Snapshot the current table catalog (None = empty).
     pub(crate) fn table(&self) -> Option<Arc<TableCatalog>> {
         self.table
@@ -228,16 +238,15 @@ impl RuntimeState {
         self.bump_control_epoch();
     }
 
-    /// Swap in a new table catalog. No generation, no epoch: shards
-    /// carry no per-table state — a table's runtime footprint is its
-    /// compiled indexes, installed via
-    /// [`Self::install_index_catalog`] in the same command.
+    /// Swap in a new table catalog, and tell the shards a declaration
+    /// changed so the packing backfill picks up the rows that preceded it.
     pub(crate) fn install_table_catalog(&self, c: TableCatalog) {
         *self
             .catalogs
             .table
             .write()
             .unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(c));
+        self.catalogs.table_gen.fetch_add(1, Ordering::Release);
         self.catalogs.advise_clear();
     }
 }

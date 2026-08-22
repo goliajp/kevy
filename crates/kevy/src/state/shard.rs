@@ -131,6 +131,9 @@ pub(crate) struct ShardCtx {
     /// This shard's slice of every declared index (index-follows-key),
     /// refreshed lazily against the shared catalog generation.
     pub(crate) indexes: RefCell<crate::index_runtime::ShardIndexes>,
+    /// This shard's packing backfill — the rows a table declaration
+    /// found already there. Same lifecycle as `indexes`.
+    pub(crate) packing: RefCell<crate::table_runtime::PackBackfill>,
     /// This shard's view states — same lifecycle as `indexes`.
     ///
     /// (The per-shard `LuaHost` is NOT here: it is `!Send` — luna-core's
