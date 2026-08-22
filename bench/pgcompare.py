@@ -229,9 +229,9 @@ def run_pg():
         # than from the string above, so a column added to the CREATE and
         # not to COLUMNS is caught here instead of becoming a difference in
         # what the two engines were told.
-        c.execute("SELECT attname FROM pg_attribute WHERE attrelid = 't'::regclass "
-                  "AND attnum > 0 AND NOT attisdropped ORDER BY attnum")
-        pg_cols = [r[0].encode() for r in c.fetchall()]
+        cur = c.execute("SELECT attname FROM pg_attribute WHERE attrelid = 't'::regclass "
+                        "AND attnum > 0 AND NOT attisdropped ORDER BY attnum")
+        pg_cols = [r[0].encode() for r in cur.fetchall()]
         if pg_cols != COLUMN_NAMES:
             sys.exit(f"pgcompare: REFUSED — the SQL table has {pg_cols!r} and the "
                      f"shared schema says {COLUMN_NAMES!r}. The two engines would be "
