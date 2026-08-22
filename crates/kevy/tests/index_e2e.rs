@@ -1526,3 +1526,45 @@ fn merge_returns_the_globally_smallest_page_across_shards() {
         at += found + needle.len();
     }
 }
+
+/// A covering `VALUES` column must not outlive the hash field it copies.
+///
+/// `FILTER` / `SORT` / `DISTINCT` / `FACET` read the segment's stored copy
+/// rather than the row — that is the point of `VALUES`, and `tablegate`
+/// L6/L7 assert the row-read counter stays at zero for them. Nothing
+/// asserted that the copy tracks a field-level TTL, and it does not: the
+/// index write hook runs on writes, and a field expiring is not a write.
+///
+/// So after `HPEXPIRE` removes the field, `HGET` says nil and `FIELDS` says
+/// nil (it probes the keyspace), while `FILTER` still matches the value
+/// nobody can read any more — the row is selected by a value that no longer
+/// exists.
+#[test]
+fn a_covering_value_does_not_outlive_the_field_it_copies() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+
+    for i in 0..5 {
+        cmd(&mut c, &[b"HSET", format!("tt:{i}").as_bytes(), b"n",
+                      format!("{i}").as_bytes(), b"label", format!("L{i}").as_bytes()]);
+    }
+    let r = cmd(&mut c, &[b"IDX.CREATE", b"tix", b"ON", b"PREFIX", b"tt:", b"FIELD", b"n",
+                          b"TYPE", b"i64", b"KIND", b"range", b"VALUES", b"label"]);
+    assert_eq!(r, b"+OK\r\n");
+    // Settle the backfill before expiring anything.
+    query_ready(&mut c, &[b"IDX.QUERY", b"tix", b"RANGE", b"0", b"9", b"LIMIT", b"5"]);
+
+    cmd(&mut c, &[b"HPEXPIRE", b"tt:2", b"1", b"FIELDS", b"1", b"label"]);
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+
+    // The field is gone from the row.
+    let direct = cmd(&mut c, &[b"HGET", b"tt:2", b"label"]);
+    assert_eq!(direct, b"$-1\r\n", "the expired field reads as nil: {direct:?}");
+
+    // Therefore nothing may still select tt:2 by that value.
+    let filtered = cmd(&mut c, &[b"IDX.QUERY", b"tix", b"RANGE", b"0", b"9", b"LIMIT", b"5",
+                                 b"FILTER", b"label", b"EQ", b"L2"]);
+    let s = String::from_utf8_lossy(&filtered);
+    assert!(!s.contains("tt:2"),
+            "FILTER matched a covering value whose field has expired: {s}");
+}
