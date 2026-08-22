@@ -472,8 +472,32 @@ def run_kevy():
     for line in (srv.decode(errors="replace") if isinstance(srv, bytes) else "").splitlines():
         if line.startswith("kevy_version:"):
             ver = line.split(":", 1)[1].strip()
+    # A memory column with no witness for HOW rows are stored reads the same
+    # whether the storage form under test took effect or not. It did not
+    # once: two million rows kept the general form for a whole run because
+    # this harness declares the table AFTER loading, and the result was a
+    # 9-byte difference that looked exactly like "the change does nothing".
+    # So every row carries what one row costs, and what the server says its
+    # setting is — neither derived from the other.
+    witness = {"packed_rows": "?", "sample_row_bytes": 0}
+    try:
+        c = K(port)
+        got = c.cmd("CONFIG", "GET", "packed-rows")
+        if isinstance(got, list) and len(got) >= 2:
+            witness["packed_rows"] = got[1].decode(errors="replace")
+        # An integer reply comes back as its raw line (`:1234\r\n`), so it
+        # has to be unwrapped rather than handed to int().
+        n = c.cmd("MEMORY", "USAGE", "row:1")
+        if isinstance(n, bytes) and n[:1] == b":":
+            witness["sample_row_bytes"] = int(n[1:-2])
+    except (OSError, ValueError, AttributeError):
+        pass
+    if witness["sample_row_bytes"] == 0:
+        sys.exit("pgcompare: REFUSED — could not read what one row costs, so the "
+                 "memory column has no witness for the storage form it is "
+                 "measuring. A zero here is a broken probe, not a free row.")
     report(f"kevy{ver}" if ver else "kevy", mode, csv_path, load_s, lat, disk, rss, rows,
-           extra=extra or None)
+           extra={**(extra or {}), **witness})
 
 
 CMDS = {"gen": run_gen, "pg": run_pg, "kevy": run_kevy}
