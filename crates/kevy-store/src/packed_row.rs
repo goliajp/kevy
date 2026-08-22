@@ -412,6 +412,33 @@ mod read_parity_tests {
         assert_eq!(p.hmget(b"row:1", &cols).unwrap(), g.hmget(b"row:1", &cols).unwrap());
     }
 
+    /// Writing a declared column keeps the packed form and the other columns.
+    #[test]
+    fn a_declared_column_write_stays_packed() {
+        let (mut p, _, _) = both();
+        p.hset(b"row:1", &[(b"id".as_slice(), b"9".as_slice())]).unwrap();
+        assert_eq!(p.hget(b"row:1", b"id").unwrap(), Some(&b"9"[..]));
+        assert_eq!(p.hget(b"row:1", b"dept").unwrap(), Some(&b"eng"[..]));
+        assert!(p.is_packed(b"row:1"), "still packed");
+        // A different width rebuilds and must not lose a neighbour either.
+        p.hset(b"row:1", &[(b"id".as_slice(), b"1234567".as_slice())]).unwrap();
+        assert_eq!(p.hget(b"row:1", b"id").unwrap(), Some(&b"1234567"[..]));
+        assert_eq!(p.hget(b"row:1", b"dept").unwrap(), Some(&b"eng"[..]));
+        assert!(p.is_packed(b"row:1"), "still packed");
+    }
+
+    /// A column the table never declared cannot live in a packed row, so the
+    /// row leaves the form — carrying every value it had.
+    #[test]
+    fn an_undeclared_column_write_leaves_the_form_without_losing_data() {
+        let (mut p, _, _) = both();
+        p.hset(b"row:1", &[(b"extra".as_slice(), b"v".as_slice())]).unwrap();
+        assert_eq!(p.hget(b"row:1", b"extra").unwrap(), Some(&b"v"[..]));
+        assert_eq!(p.hget(b"row:1", b"id").unwrap(), Some(&b"7"[..]), "declared column survived");
+        assert_eq!(p.hget(b"row:1", b"dept").unwrap(), Some(&b"eng"[..]));
+        assert!(!p.is_packed(b"row:1"), "left the form");
+    }
+
     /// The whole-row verbs must agree as sets — the general hash promises no
     /// order, and HGETALL is a flat field/value stream, so it is paired up
     /// before sorting or a field could compare against another field's value.
@@ -434,5 +461,32 @@ mod read_parity_tests {
             paired(p.hgetall(b"row:1").unwrap()),
             paired(g.hgetall(b"row:1").unwrap())
         );
+    }
+}
+
+impl crate::Store {
+    /// Whether `key` currently holds the packed representation.
+    ///
+    /// Test-only: the representation is deliberately invisible on the wire,
+    /// so nothing outside these tests has a reason to ask, and a production
+    /// caller that did would be depending on something it must not.
+    #[cfg(test)]
+    pub(crate) fn is_packed(&mut self, key: &[u8]) -> bool {
+        matches!(self.live_entry(key).map(|e| &e.value), Some(crate::Value::PackedRow(_)))
+    }
+
+    /// Allow rows under a declared prefix to take the packed representation.
+    ///
+    /// Off by default, and settable at runtime, so the packed row can be
+    /// measured against the general one with the SAME binary — a comparison
+    /// one flag apart rather than two builds apart, which is what the
+    /// allocator A/B needed digests to prove and this does not.
+    pub fn set_packed_rows(&mut self, on: bool) {
+        self.packed_rows = on;
+    }
+
+    /// Whether the packed representation is allowed.
+    pub fn packed_rows_enabled(&self) -> bool {
+        self.packed_rows
     }
 }

@@ -200,6 +200,11 @@ pub struct Store {
     /// deadline). Holds ONLY keys with live field TTLs — one
     /// `is_empty()` branch per hash access when the feature is unused.
     pub(crate) hfttl: SideMap<SmallBytes, KevyMap<SmallBytes, u64>>,
+    /// Whether a row under a declared prefix may take the packed
+    /// representation. Off means every hash keeps the general form, which is
+    /// what makes the packed row measurable: the same binary answers both
+    /// ways, so a comparison is one flag apart rather than two builds apart.
+    pub(crate) packed_rows: bool,
     /// Coarse cached monotonic clock (ns since [`epoch`]), refreshed by the
     /// reactor loop / reaper tick via [`Self::refresh_clock`]. Lazy expiry on
     /// the read path (`live_entry`) compares deadlines against this instead of
