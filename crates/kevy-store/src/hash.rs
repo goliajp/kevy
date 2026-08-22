@@ -47,6 +47,7 @@ impl Store {
     /// workloads cross the segmentation boundary too.
     fn hash_mut(&mut self, key: &[u8], create: bool) -> Result<Option<HashRefMut<'_>>, StoreError> {
         self.tier_resolve(key, crate::value::COLD_TAG_HASH)?;
+        self.unpack_row(key);
         if self.live_entry_mut(key).is_none() {
             if !create {
                 return Ok(None);
@@ -147,18 +148,33 @@ impl Store {
         field: &[u8],
         value: &[u8],
     ) -> Result<HsetOutcome, StoreError> {
-        let v = self.hash_value_for_set(key)?.expect("present and packed");
-        let Value::PackedRow(r) = v else { return Err(StoreError::WrongType) };
-        let pairs: Vec<(Vec<u8>, Vec<u8>)> =
-            r.fields().map(|(f, val)| (f.to_vec(), val.to_vec())).collect();
-        let mut flat = HashData::default();
-        for (f, val) in &pairs {
-            flat.insert(SmallBytes::from_slice(f), SmallBytes::from_slice(val));
-        }
-        let outcome = heap_hash_set(HashRefMut::Flat(&mut flat), field, value);
-        *v = Value::Hash(Arc::new(flat));
+        self.unpack_row(key);
+        let v = self.hash_value_for_set(key)?.expect("present");
+        let Value::Hash(h) = v else { return Err(StoreError::WrongType) };
+        let outcome = heap_hash_set(HashRefMut::Flat(Arc::make_mut(h)), field, value);
         self.reweigh_entry(key);
         Ok(outcome)
+    }
+
+    /// Turn a packed row back into the general hash, in place. A no-op on
+    /// every other value, including a hash that is already general.
+    ///
+    /// Every mutation that is not the packed form's own fast path goes
+    /// through here first. The alternative — teaching each mutating verb to
+    /// edit the packed buffer — is how the form came to answer WRONGTYPE
+    /// from `HDEL` and `HINCRBYFLOAT`: those verbs never named the packed
+    /// form, so a catch-all answered for them. One conversion in front of
+    /// the mutation makes the general arms right for all of them, and the
+    /// table's write hook packs the row again afterwards.
+    pub(crate) fn unpack_row(&mut self, key: &[u8]) {
+        let Some(e) = self.map.get_mut(key) else { return };
+        let Value::PackedRow(r) = &e.value else { return };
+        let mut flat = HashData::with_capacity(r.len().max(1));
+        for (f, val) in r.fields() {
+            flat.insert(SmallBytes::from_slice(f), SmallBytes::from_slice(val));
+        }
+        e.value = Value::Hash(Arc::new(flat));
+        self.reweigh_entry(key);
     }
 
     /// `HSET` — returns the count of newly-added fields.
@@ -203,6 +219,7 @@ impl Store {
                 Value::Hash(h) => h.contains_key(field),
                 Value::SegHash(h) => h.contains_key(field),
                 Value::SmallHashInline(h) => h.contains_key(field),
+                Value::PackedRow(r) => r.has_named(field),
                 _ => return Err(StoreError::WrongType),
             },
         };
@@ -227,6 +244,7 @@ impl Store {
     ) -> Result<usize, StoreError> {
         self.purge_hash_ttl(key);
         self.tier_resolve(key, crate::value::COLD_TAG_HASH)?;
+        self.unpack_row(key);
         let now = now_ns();
         if !self.reap(key, now) {
             return Ok(0);
