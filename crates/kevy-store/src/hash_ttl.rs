@@ -181,17 +181,6 @@ impl Store {
         let _ = self.hdel(key, &due_refs);
     }
 
-    /// Whether any field-level TTL exists at all.
-    ///
-    /// For callers that may serve a hash field from a copy instead of the
-    /// row: field expiry is swept by a SAMPLING reaper, so between a
-    /// deadline passing and the sweep reaching that key, a copy still holds
-    /// a value the row no longer returns. A copy is only safe to serve when
-    /// there is no field TTL anywhere — which this answers in one branch.
-    pub fn has_field_ttls(&self) -> bool {
-        !self.hfttl.is_empty()
-    }
-
     /// Overwrite hook — `HSET`/`HINCRBY*` on a field discards its TTL.
     pub(crate) fn clear_hash_field_ttls(&mut self, key: &[u8], fields: &[&[u8]]) {
         if self.hfttl.is_empty() {
