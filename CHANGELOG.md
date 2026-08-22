@@ -46,6 +46,27 @@ directions, and a declared row's storage form is invisible to every verb.
 
 ### Fixed
 
+- **A 47 ms write tail at one client under `appendfsync always`** — a
+  regression this project shipped in 5.2 and 5.3 without measuring it.
+
+  Under `always` on io_uring a reply waits behind a durability watermark and
+  is released by the reactor's next arming pass. The completion that
+  advanced that watermark did not count as work, so the shard could park
+  before running the pass — and at one client nothing could wake it, because
+  the only client was waiting for exactly the reply the un-run pass would
+  have sent. The park ran to its timeout.
+
+  Confirmed by moving `park_timeout_ms` and watching the p99 follow it to
+  three digits (7.8 ms / 47.7 ms / 196.9 ms at 5 / 50 / 200) while the p50
+  did not move at all. Fixed, the p99 stops following it: **3.2 ms at every
+  setting**, and 47,748 → 3,294 µs at the default. `48d06ae7` (5.2) made
+  CQE-gated replies the default for this mode; turning the offload off still
+  gives the 3.1 ms the 2026-07-26 record has, which is how the regression
+  was attributed.
+
+  Only the io_uring reactor had this. The epoll/kqueue path flushes held
+  connections inside the same reap rather than deferring to a later pass.
+
 - **A covering `VALUES` copy outlived the field it copies.** An index
   declared with `VALUES` keeps its own copy of a column so a query can be
   answered without touching the row. When that column's field TTL expired,
