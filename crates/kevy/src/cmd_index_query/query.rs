@@ -12,6 +12,10 @@ use crate::state::Ctx;
 
 enum HitsOrChunk {
     Hits(Vec<(Vec<u8>, IndexValue)>),
+    /// Hits whose requested fields the index already stores — the covering
+    /// `VALUES` copy, read inside the segment borrow so the rows never have
+    /// to be touched at all. See [`covered_slots`] for when this is taken.
+    HitsCovered(Vec<(Vec<u8>, IndexValue)>, Vec<Vec<Option<Vec<u8>>>>),
     Chunk(Vec<u8>),
     /// A VERIFY snapshot: the segment's held entries plus its stats. The drift
     /// recheck needs the store, which the segment borrow holds, so it runs
@@ -121,9 +125,37 @@ fn verify_kind_stats(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> Option<Ve
 
 /// Range / Eq / scalar-Verify against this shard's segment.
 fn run_scalar_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8]) -> Vec<u8> {
-    let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg, win| match q
-        .shape
-    {
+    // Read before the segment borrow takes the store.
+    let has_field_ttls = store.has_field_ttls();
+    let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg, win| {
+        scan_segment(ctx, q, verb, spec, seg, win, has_field_ttls)
+    });
+    match res {
+        Ok(HitsOrChunk::Chunk(chunk)) => chunk,
+        Ok(HitsOrChunk::Hits(hits)) => encode_hits_chunk(store, &hits, &q.fields),
+        Ok(HitsOrChunk::HitsCovered(hits, vals)) => {
+            encode_hits_chunk_covered(&hits, &vals, q.fields.len())
+        }
+        Ok(HitsOrChunk::Verify { spec, entries, stats, window }) => {
+            encode_verify_chunk(store, &spec, &entries, &stats, window)
+        }
+        Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
+        Err(_) => vec![ST_NOINDEX],
+    }
+}
+
+/// One query against one shard's segment, inside the borrow.
+fn scan_segment(
+    ctx: &Ctx<'_>,
+    q: &Query,
+    verb: &[u8],
+    spec: &kevy_index::IndexSpec,
+    seg: &kevy_index::Segment,
+    win: Option<&index_runtime::WindowRt>,
+    has_field_ttls: bool,
+) -> HitsOrChunk {
+    match q.shape {
         Shape::Range { .. } | Shape::Eq { .. } | Shape::Where(_) => {
             let now = (kevy_store::now_unix_ms() / 1000) as i64;
             let (min, max) = match q.bounds_for(spec, now) {
@@ -131,17 +163,16 @@ fn run_scalar_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8]) ->
                 Err(chunk) => return HitsOrChunk::Chunk(chunk),
             };
             super::probe_window(ctx, &q.name, win, &min);
-            scalar_range_or_count(q, verb, spec, seg, win, &min, &max)
+            scalar_range_or_count(
+                q,
+                verb,
+                &ScalarScan { spec, seg, win, min: &min, max: &max, has_field_ttls },
+            )
         }
         // VERIFY answers "does the index still agree with the keyspace?".
         // The segment cannot be walked and the store re-read at the same time
         // (`with_ready_segment` holds the store), so snapshot the held
-        // (key, value) pairs here and do the recheck outside — which is what
-        // this arm was always shaped for, except the snapshot was collected,
-        // thrown away with `let _ = (...)`, and the drift it was for never
-        // computed. That left an O(N) walk plus an O(N) allocation per shard
-        // per VERIFY, producing nothing, while `verb_meta` and the docs
-        // advertised a drift statistic the reply did not carry.
+        // (key, value) pairs here and do the recheck outside.
         Shape::Verify => {
             let mut entries: Vec<(Vec<u8>, IndexValue)> = Vec::new();
             seg.each_entry(|k, v| entries.push((k.to_vec(), v.clone())));
@@ -152,31 +183,29 @@ fn run_scalar_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8]) ->
                 window: win.and_then(|w| w.audit(spec.ty)),
             }
         }
-    });
-    match res {
-        Ok(HitsOrChunk::Chunk(chunk)) => chunk,
-        Ok(HitsOrChunk::Hits(hits)) => encode_hits_chunk(store, &hits, &q.fields),
-        Ok(HitsOrChunk::Verify { spec, entries, stats, window }) => {
-            encode_verify_chunk(store, &spec, &entries, &stats, window)
-        }
-        Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
-        Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
-        Err(_) => vec![ST_NOINDEX],
     }
 }
 
 /// The range/count body: hot tree plus — on a windowed index that has
 /// evicted — the cold segments' half. A corrupt cold segment answers
 /// ST_NOINDEX, never a partial number.
-fn scalar_range_or_count(
-    q: &Query,
-    verb: &[u8],
-    spec: &kevy_index::IndexSpec,
-    seg: &kevy_index::Segment,
-    win: Option<&index_runtime::WindowRt>,
-    min: &IndexValue,
-    max: &IndexValue,
-) -> HitsOrChunk {
+/// The segment side of one scalar query: the index, its window, and the
+/// bounds the shape resolved to.
+struct ScalarScan<'a> {
+    spec: &'a kevy_index::IndexSpec,
+    seg: &'a kevy_index::Segment,
+    win: Option<&'a index_runtime::WindowRt>,
+    min: &'a IndexValue,
+    max: &'a IndexValue,
+    /// Field expiry is swept by a SAMPLING reaper, so between a deadline
+    /// passing and the sweep reaching that key the covering copy still holds
+    /// a value the row no longer returns. Serving the copy is only sound
+    /// when no field TTL exists anywhere.
+    has_field_ttls: bool,
+}
+
+fn scalar_range_or_count(q: &Query, verb: &[u8], sc: &ScalarScan<'_>) -> HitsOrChunk {
+    let ScalarScan { spec, seg, win, min, max, has_field_ttls } = *sc;
     let cold = win.filter(|w| w.has_cold());
     if verb.eq_ignore_ascii_case(b"IDX.COUNT") {
         let cold_n = match cold.map(|w| w.cold_count(spec.ty, min, max)).transpose() {
@@ -189,6 +218,20 @@ fn scalar_range_or_count(
     }
     let cursor = q.cursor(spec.ty);
     let (hits, _) = seg.range(min, max, cursor.as_ref(), q.limit);
+    // Index-only: when the index already stores every requested field, the
+    // page can be answered without touching a single row. Only for the
+    // all-hot half — a cold hit's stored values live in its evicted payload,
+    // not in this segment, so `seg.stored` would answer nil for it.
+    if cold.is_none()
+        && !has_field_ttls
+        && let Some(slots) = covered_slots(spec, &q.fields)
+    {
+        let vals = hits
+            .iter()
+            .map(|(k, _)| slots.iter().map(|&f| seg.stored(k, f).map(<[u8]>::to_vec)).collect())
+            .collect();
+        return HitsOrChunk::HitsCovered(hits, vals);
+    }
     match cold.map(|w| w.cold_hits(spec.ty, min, max, cursor.as_ref(), q.limit)).transpose() {
         Ok(None) => HitsOrChunk::Hits(hits),
         Ok(Some(cold_hits)) => HitsOrChunk::Hits(merge_cold(hits, cold_hits, q.limit)),
@@ -218,6 +261,42 @@ fn merge_cold(
         out.push((k, v));
     }
     out
+}
+
+/// The declared `VALUES` slot for each requested field, or `None` when any
+/// of them is not covered.
+///
+/// `VALUES` exists so a clause can be answered without reading the row, and
+/// the bytes are already paid for in the segment. Returning them for
+/// `FIELDS` is the same read — it is only sound when the index covers
+/// EVERY requested field, because a partial answer would silently drop a
+/// column.
+fn covered_slots(spec: &kevy_index::IndexSpec, fields: &[Vec<u8>]) -> Option<Vec<usize>> {
+    if fields.is_empty() || spec.values.is_empty() {
+        return None;
+    }
+    fields
+        .iter()
+        .map(|f| spec.values.iter().position(|v| v.name == *f))
+        .collect()
+}
+
+/// Encode a page from the index's own copies — no store, no row reads.
+fn encode_hits_chunk_covered(
+    hits: &[(Vec<u8>, IndexValue)],
+    vals: &[Vec<Option<Vec<u8>>>],
+    nfields: usize,
+) -> Vec<u8> {
+    let mut chunk = vec![ST_OK];
+    chunk.extend_from_slice(&(hits.len() as u32).to_le_bytes());
+    for (i, (k, v)) in hits.iter().enumerate() {
+        chunk.extend_from_slice(&(k.len() as u32).to_le_bytes());
+        chunk.extend_from_slice(k);
+        encode_value(&mut chunk, v);
+        let row: Vec<Option<&[u8]>> = vals[i].iter().map(|o| o.as_deref()).collect();
+        super::wire::encode_hydration_slots(&mut chunk, nfields, &row);
+    }
+    chunk
 }
 
 /// Hydration happens OUTSIDE the segment borrow: the hits' rows live
