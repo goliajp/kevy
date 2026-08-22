@@ -217,6 +217,12 @@ pub enum Value {
     /// to `Value::Hash(Arc<HashData>)` on overflow. Mirrors valkey's
     /// `OBJ_ENCODING_LISTPACK` for hashes.
     SmallHashInline(crate::small_hash::SmallHashData),
+    /// A declared table's row: the columns in declared order, in one payload
+    /// buffer, with no field names and no per-row table.
+    ///
+    /// Reachable only for a key under a declared prefix — an undeclared hash
+    /// keeps [`Value::Hash`].
+    PackedRow(crate::packed_row::PackedRow),
     /// Tiny lists inline encoding; promoted to
     /// `Value::List(Arc<ListData>)` on overflow.
     SmallListInline(crate::small_list::SmallListData),
@@ -300,7 +306,7 @@ impl Value {
     pub fn type_name(&self) -> &'static str {
         match self {
             Value::Str(_) | Value::Int(_) | Value::ArcBulk(_) => "string",
-            Value::Hash(_) | Value::SegHash(_) | Value::SmallHashInline(_) => "hash",
+            Value::Hash(_) | Value::SegHash(_) | Value::SmallHashInline(_) | Value::PackedRow(_) => "hash",
             Value::List(_) | Value::SegList(_) | Value::SmallListInline(_) => "list",
             Value::Set(_) | Value::SegSet(_) | Value::SmallSetInline(_) => "set",
             Value::ZSet(_) | Value::SegZSet(_) | Value::SmallZSetInline(_) => "zset",
@@ -311,120 +317,7 @@ impl Value {
         }
     }
 
-    /// Approximate heap bytes the value owns. Excludes the inline `Entry` /
-    /// bucket slot — that's a separate per-entry constant accounted by the
-    /// store. Walks collections, so prefer the cached `Entry::weight` for
-    /// hot-path accounting and only call this when bootstrapping or after a
-    /// load-from-snapshot.
-    pub fn weight(&self) -> u64 {
-        match self {
-            Value::Str(s) => s.heap_bytes() as u64,
-            // i64 fits in the enum tag's space; no heap.
-            Value::Int(_) => 0,
-            // Arc<[u8]> heap = the byte slice itself (refcount overhead
-            // is amortised across shared clones).
-            Value::ArcBulk(a) => a.len() as u64,
-            Value::Hash(h) => collection_overhead(h.capacity(), HASH_SLOT_BYTES) + h
-                .iter()
-                .map(|(f, v)| f.heap_bytes() as u64 + v.heap_bytes() as u64)
-                .sum::<u64>(),
-            Value::List(l) => (l.capacity() as u64).saturating_mul(LIST_SLOT_BYTES)
-                + l.iter().map(|v| v.capacity() as u64).sum::<u64>(),
-            // Segments charge like flat lists; the outer deque-of-Arcs
-            // adds one pointer slot per segment.
-            Value::SegList(l) => (l.seg_count() as u64).saturating_mul(8)
-                + (l.len() as u64).saturating_mul(LIST_SLOT_BYTES)
-                + l.iter().map(|v| v.capacity() as u64).sum::<u64>(),
-            Value::Set(s) => collection_overhead(s.capacity(), SET_SLOT_BYTES) + s
-                .iter()
-                .map(|m| m.heap_bytes() as u64)
-                .sum::<u64>(),
-            Value::SegHash(h) => h.weight_as_hash(),
-            Value::SegSet(s) => s.weight_as_set(),
-            Value::SegZSet(z) => z.weight_as_zset(),
-            // Inline collections live entirely in the Value variant
-            // body — zero heap, zero bucket overhead. Accounting matches
-            // `Value::Int` / inline `Value::Str` (both also return 0).
-            Value::SmallSetInline(_)
-            | Value::SmallHashInline(_)
-            | Value::SmallListInline(_)
-            | Value::SmallZSetInline(_) => 0,
-            // The stub owns no heap — its 24 bytes live inline in the
-            // Entry. The reclaimed value bytes are exactly the point:
-            // a cold key weighs key-heap + ENTRY_OVERHEAD only (B7).
-            Value::Cold(_) => 0,
-            // Each member's bytes live twice when they spill to heap (>22 B):
-            // once as the `by_member` key, once inside the rank tree's
-            // `(Score, SmallBytes)` key — hence the ×2 on `heap_bytes`.
-            // Members ≤22 B are inline in both slots (heap_bytes = 0).
-            Value::ZSet(z) => collection_overhead(z.by_member.capacity(), HASH_SLOT_BYTES)
-                + z.by_member
-                    .iter()
-                    .map(|(m, _)| 2 * m.heap_bytes() as u64)
-                    .sum::<u64>()
-                + (z.by_score.len() as u64).saturating_mul(RANKTREE_SLOT_BYTES),
-            Value::Stream(s) => s.weight(),
-        }
-    }
 
-    /// Whether this value's `Drop` is heavy enough to deserve being
-    /// shipped to the bio thread instead of freed inline. Fast: every
-    /// variant decides off a sub-field cheap to inspect (no recursive
-    /// walk), so it's safe to call on every overwrite-SET on the hot
-    /// path. The threshold is intentionally conservative — small Arcs
-    /// and every short string stay on inline-drop where jemalloc small-
-    /// class is sub-µs and a cross-thread hand-off would lose.
-    #[inline]
-    pub fn is_heap_heavy(&self) -> bool {
-        match self {
-            // Inline 22 B / heap ≤ small-class — fast to free inline.
-            Value::Str(_)
-            | Value::Int(_)
-            | Value::SmallSetInline(_)
-            | Value::SmallHashInline(_)
-            | Value::SmallListInline(_)
-            | Value::SmallZSetInline(_) => false,
-            // 24 inline bytes; dropping a stub frees nothing.
-            Value::Cold(_) => false,
-            // Lazy-drop's primary case: the large-value SET tail culprit.
-            Value::ArcBulk(a) => a.len() >= HEAP_HEAVY_BYTES,
-            // Collection drops walk every element + the bucket array;
-            // worst-case microseconds on a multi-KB hash/zset. Send to
-            // bio so a SET that overwrites a collection-typed key (the
-            // Redis polymorphic case) doesn't stall the reactor.
-            //
-            // The check uses `Arc::strong_count == 1` to avoid sending
-            // a still-shared Arc: another holder (a SnapshotView in
-            // flight, a same-shard live read) would force the bio
-            // thread to only do a refcount-decrement, which is wasted
-            // cross-thread traffic. A unique Arc IS the case where
-            // drop is expensive (it really frees the inner payload).
-            Value::Hash(a) => alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
-            Value::SegHash(a) => {
-                alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty() && a.all_unique()
-            }
-            Value::SegSet(a) => {
-                alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty() && a.all_unique()
-            }
-            Value::SegZSet(a) => {
-                alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty() && a.all_unique()
-            }
-            Value::List(a) => alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
-            // Bio-drop only pays off when the drop really frees: outer
-            // AND every segment unique. A view-shared SegList's drop is
-            // refcount decrements — cheap enough inline.
-            Value::SegList(a) => {
-                alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty() && a.all_unique()
-            }
-            Value::Set(a) => alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
-            Value::ZSet(a) => {
-                alloc::sync::Arc::strong_count(a) == 1 && !a.by_member.is_empty()
-            }
-            Value::Stream(a) => {
-                alloc::sync::Arc::strong_count(a) == 1 && a.length() > 0
-            }
-        }
-    }
 }
 
 // `BioDropSender = mpsc::Sender<Box<Value>>` requires `Value: Send`. Static
@@ -462,7 +355,7 @@ pub(crate) const RANKTREE_SLOT_BYTES: u64 = 64;
 pub const ENTRY_OVERHEAD: u64 = 96;
 
 #[inline]
-fn collection_overhead(capacity: usize, per_slot: u64) -> u64 {
+pub(crate) fn collection_overhead(capacity: usize, per_slot: u64) -> u64 {
     (capacity as u64).saturating_mul(per_slot)
 }
 

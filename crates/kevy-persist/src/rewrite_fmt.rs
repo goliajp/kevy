@@ -216,6 +216,17 @@ pub(crate) fn write_value_as_commands<W: Write>(
             let fv = h.iter().flat_map(|(f, v)| [f.to_vec(), v.to_vec()]);
             write_verb_items(w, b"HSET", key, 2, fv, fmt, scratch)?;
         }
+        // A declared row rewrites to the same HSET a client would have sent:
+        // the log is a command stream, so replay rebuilds the packed form by
+        // running the declaration again. Nothing about the encoding reaches
+        // the file, which is why the packed row needs no format version.
+        Value::PackedRow(r) => {
+            let fv = r.fields().map(|(f, v)| (f.to_vec(), v.to_vec()))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .flat_map(|(f, v)| [f, v]);
+            write_verb_items(w, b"HSET", key, 2, fv, fmt, scratch)?;
+        }
         Value::SegHash(h) => {
             let fv = h.iter().flat_map(|(f, v)| [f.to_vec(), v.to_vec()]);
             write_verb_items(w, b"HSET", key, 2, fv, fmt, scratch)?;

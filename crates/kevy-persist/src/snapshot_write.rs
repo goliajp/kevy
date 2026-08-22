@@ -131,7 +131,10 @@ fn op_for(value: &Value) -> io::Result<u8> {
     Ok(match value {
         Value::Str(_) | Value::Int(_) | Value::ArcBulk(_) => OP_STR, // L1/L2: all reuse OP_STR.
 
-        Value::Hash(_) | Value::SegHash(_) | Value::SmallHashInline(_) => OP_HASH,
+        Value::Hash(_)
+        | Value::SegHash(_)
+        | Value::SmallHashInline(_)
+        | Value::PackedRow(_) => OP_HASH,
         Value::List(_) | Value::SegList(_) | Value::SmallListInline(_) => OP_LIST,
         // A.7 O5: both Set encodings share the OP_SET wire format —
         // payload is `[len: u32 LE][bulk: len-prefixed bytes]*`, agnostic
@@ -161,6 +164,13 @@ fn write_payload<W: Write>(w: &mut W, value: &Value) -> io::Result<()> {
         Value::Int(n) => write_bytes(w, n.to_string().as_bytes()),
         Value::ArcBulk(a) => write_bytes(w, a.as_ref()),
         Value::Hash(h) => snapshot_payload::write_hash_payload(w, h),
+        // Same OP_HASH payload as every other hash encoding — the snapshot
+        // records a hash, not how this process happened to store it.
+        Value::PackedRow(r) => snapshot_payload::write_pairs_payload(
+            w,
+            r.len(),
+            r.fields(),
+        ),
         Value::SegHash(h) => snapshot_payload::write_seghash_payload(w, h),
         Value::SmallHashInline(h) => snapshot_payload::write_small_hash_payload(w, h),
         Value::List(l) => snapshot_payload::write_list_payload(w, l),

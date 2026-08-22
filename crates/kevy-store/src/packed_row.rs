@@ -30,16 +30,44 @@
 /// The largest total value payload a packed row can address.
 pub const PACKED_MAX: usize = u16::MAX as usize;
 
-/// A declared row's values, in declared column order, in one allocation.
+/// The column names of one declared table, shared by every row in it.
+///
+/// A packed row has to be able to name its columns — `HGETALL`, the AOF
+/// rewrite and the snapshot writer all need field names, and none of them
+/// can reach the table catalog, which lives above the store. Carrying the
+/// names per row would reintroduce exactly the cost this type removes, so
+/// they live here: one allocation per TABLE, cloned into each row as a
+/// pointer.
+pub type ColumnNames = std::sync::Arc<[Vec<u8>]>;
+
+/// A declared row's values, in declared column order, plus a shared pointer
+/// to its table's column names.
+///
+/// Boxed as one indirection because `Value` is capped at 32 bytes and
+/// `Entry` at 48 — assertions that exist so a new variant cannot quietly
+/// undo the box-collection win, and they caught this one. The row is
+/// therefore two allocations, not one: a 48 B inner and the payload buffer.
+/// Costed against the alternatives before choosing — carrying the names
+/// behind an `Arc` in `Value` is 560 B for the measured row, this is 544 B,
+/// and a bare table id with no names at all would be 496 B but leaves the
+/// rewrite and the snapshot writer unable to name a column, which is the
+/// problem being solved.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PackedRow(Box<[u8]>);
+pub struct PackedRow(Box<PackedInner>);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PackedInner {
+    cols: ColumnNames,
+    buf: Box<[u8]>,
+}
 
 impl PackedRow {
     /// Build from one value per declared column, `None` for an absent one.
     ///
     /// `None` back when the payload exceeds [`PACKED_MAX`] or the column
     /// count exceeds `u16` — the caller keeps the general form.
-    pub fn build(cols: &[Option<&[u8]>]) -> Option<Self> {
+    pub fn build(names: &ColumnNames, cols: &[Option<&[u8]>]) -> Option<Self> {
+        debug_assert_eq!(names.len(), cols.len(), "one value slot per declared column");
         let ncol = u16::try_from(cols.len()).ok()?;
         let total: usize = cols.iter().flatten().map(|v| v.len()).sum();
         if total > PACKED_MAX {
@@ -59,17 +87,20 @@ impl PackedRow {
             let at = 2 + bitmap + i * 2;
             buf[at..at + 2].copy_from_slice(&(end as u16).to_le_bytes());
         }
-        Some(PackedRow(buf.into_boxed_slice()))
+        Some(PackedRow(Box::new(PackedInner {
+            cols: names.clone(),
+            buf: buf.into_boxed_slice(),
+        })))
     }
 
     /// Declared column count.
     pub fn columns(&self) -> usize {
-        u16::from_le_bytes([self.0[0], self.0[1]]) as usize
+        u16::from_le_bytes([self.0.buf[0], self.0.buf[1]]) as usize
     }
 
     /// Whether column `i` is present. Out of range reads as absent.
     pub fn has(&self, i: usize) -> bool {
-        i < self.columns() && self.0[2 + i / 8] & (1 << (i % 8)) != 0
+        i < self.columns() && self.0.buf[2 + i / 8] & (1 << (i % 8)) != 0
     }
 
     /// Column `i`'s bytes, or `None` when it is absent or out of range.
@@ -81,10 +112,10 @@ impl PackedRow {
         let header = 2 + bitmap + self.columns() * 2;
         let end_at = |j: usize| {
             let at = 2 + bitmap + j * 2;
-            u16::from_le_bytes([self.0[at], self.0[at + 1]]) as usize
+            u16::from_le_bytes([self.0.buf[at], self.0.buf[at + 1]]) as usize
         };
         let start = if i == 0 { 0 } else { end_at(i - 1) };
-        Some(&self.0[header + start..header + end_at(i)])
+        Some(&self.0.buf[header + start..header + end_at(i)])
     }
 
     /// Replace column `i`, rebuilding the row. `None` back when the result
@@ -92,12 +123,26 @@ impl PackedRow {
     pub fn with_column(&self, i: usize, v: Option<&[u8]>) -> Option<Self> {
         let mut cols: Vec<Option<&[u8]>> = (0..self.columns()).map(|j| self.get(j)).collect();
         *cols.get_mut(i)? = v;
-        PackedRow::build(&cols)
+        PackedRow::build(&self.0.cols, &cols)
     }
 
-    /// Total heap bytes — the whole row is one allocation.
+    /// The column names this row's table declared.
+    pub fn names(&self) -> &ColumnNames {
+        &self.0.cols
+    }
+
+    /// Field name and value for every present column, in declared order —
+    /// what `HGETALL`, the rewrite and the snapshot writer need.
+    pub fn fields(&self) -> impl Iterator<Item = (&[u8], &[u8])> {
+        (0..self.columns()).filter_map(move |i| {
+            Some((self.0.cols.get(i)?.as_slice(), self.get(i)?))
+        })
+    }
+
+    /// Total heap bytes of THIS row — the shared column names are one
+    /// allocation per table and are not charged per row.
     pub fn heap_bytes(&self) -> usize {
-        self.0.len()
+        self.0.buf.len() + core::mem::size_of::<PackedInner>()
     }
 
     /// The number of present columns, for `HLEN`.
@@ -112,14 +157,20 @@ impl PackedRow {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// `n` throwaway column names — the tests are about the payload layout,
+    /// not about what the columns are called.
+    pub(crate) fn names(n: usize) -> ColumnNames {
+        (0..n).map(|i| format!("c{i}").into_bytes()).collect()
+    }
 
     #[test]
     fn round_trips_every_column_including_absent_and_empty() {
         let cols: Vec<Option<&[u8]>> =
             vec![Some(&b"id7"[..]), None, Some(&b""[..]), Some(&b"a longer value"[..])];
-        let r = PackedRow::build(&cols).expect("fits");
+        let r = PackedRow::build(&names(cols.len()), &cols).expect("fits");
         assert_eq!(r.columns(), 4);
         for (i, want) in cols.iter().enumerate() {
             assert_eq!(r.get(i), *want, "column {i}");
@@ -132,23 +183,27 @@ mod tests {
     }
 
     #[test]
-    fn one_allocation_scales_with_the_row_not_with_a_floor() {
+    fn the_cost_scales_with_the_row_rather_than_sitting_on_a_floor() {
         // The defect being removed: a fixed cost independent of shape.
-        let three = PackedRow::build(&[Some(&b"x"[..]); 3]).expect("fits");
-        let twelve = PackedRow::build(&[Some(&b"x"[..]); 12]).expect("fits");
+        let three = PackedRow::build(&names(3), &[Some(&b"x"[..]); 3]).expect("fits");
+        let twelve = PackedRow::build(&names(12), &[Some(&b"x"[..]); 12]).expect("fits");
         assert!(
             twelve.heap_bytes() > three.heap_bytes(),
             "a wider row must cost more, not the same: {} vs {}",
             three.heap_bytes(),
             twelve.heap_bytes()
         );
-        // And the whole row is one allocation: header + payload, nothing else.
-        assert_eq!(three.heap_bytes(), 2 + 1 + 3 * 2 + 3);
+        // Payload buffer plus the boxed inner, and nothing else. The inner is
+        // the price of `Value`'s 32-byte cap; it is a constant, so it does not
+        // reintroduce the floor — it shifts the line the row scales from.
+        let inner = core::mem::size_of::<PackedInner>();
+        assert_eq!(three.heap_bytes(), (2 + 1 + 3 * 2 + 3) + inner);
+        assert_eq!(twelve.heap_bytes(), (2 + 2 + 12 * 2 + 12) + inner);
     }
 
     #[test]
     fn replacing_a_column_leaves_the_others_alone() {
-        let r = PackedRow::build(&[Some(&b"a"[..]), Some(&b"bb"[..]), Some(&b"ccc"[..])])
+        let r = PackedRow::build(&names(3), &[Some(&b"a"[..]), Some(&b"bb"[..]), Some(&b"ccc"[..])])
             .expect("fits");
         let r2 = r.with_column(1, Some(b"REPLACED")).expect("fits");
         assert_eq!(r2.get(0), Some(&b"a"[..]));
@@ -162,15 +217,16 @@ mod tests {
     #[test]
     fn refuses_a_payload_it_cannot_address() {
         let big = vec![0u8; PACKED_MAX + 1];
-        assert!(PackedRow::build(&[Some(&big[..])]).is_none());
+        assert!(PackedRow::build(&names(1), &[Some(&big[..])]).is_none());
         let just = vec![0u8; PACKED_MAX];
-        assert!(PackedRow::build(&[Some(&just[..])]).is_some());
+        assert!(PackedRow::build(&names(1), &[Some(&just[..])]).is_some());
     }
 }
 
 #[cfg(test)]
 mod cost_tests {
     use super::*;
+    use super::tests::names;
 
     /// The claim this type exists for, as arithmetic rather than prose.
     ///
@@ -185,7 +241,7 @@ mod cost_tests {
         for (ncol, vlen) in [(3usize, 400usize), (7, 400), (12, 400)] {
             let v = vec![b'x'; vlen / ncol];
             let cols: Vec<Option<&[u8]>> = (0..ncol).map(|_| Some(&v[..])).collect();
-            let packed = PackedRow::build(&cols).expect("fits").heap_bytes();
+            let packed = PackedRow::build(&names(ncol), &cols).expect("fits").heap_bytes();
             let today = TABLE_REQUEST + ARC_AND_MAP + vlen;
             assert!(
                 packed * 2 < today,
@@ -199,7 +255,7 @@ mod cost_tests {
     fn the_cost_is_not_flat_in_the_column_count() {
         let v = [b'x'; 32];
         let w = |n: usize| {
-            PackedRow::build(&(0..n).map(|_| Some(&v[..])).collect::<Vec<_>>())
+            PackedRow::build(&names(n), &(0..n).map(|_| Some(&v[..])).collect::<Vec<_>>())
                 .expect("fits")
                 .heap_bytes()
         };
