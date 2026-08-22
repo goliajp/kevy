@@ -38,6 +38,10 @@ fn int(reply: &[u8]) -> i64 {
 struct Server {
     port: u16,
     dir: std::path::PathBuf,
+    /// Whether dropping this server also removes the data directory. The
+    /// restart half must not: the first server's `Drop` deleting the
+    /// snapshot is indistinguishable from the snapshot not restoring.
+    owns_dir: bool,
     stop: Arc<AtomicBool>,
     handle: Option<std::thread::JoinHandle<()>>,
 }
@@ -45,7 +49,16 @@ struct Server {
 impl Server {
     fn start() -> Self {
         let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        let dir = std::env::temp_dir().join(format!("kevy-packbf-{port}"));
+        Self::spawn(port, std::env::temp_dir().join(format!("kevy-packbf-{port}")), true)
+    }
+
+    /// A server over an existing data directory — the restart half.
+    fn start_in(dir: &std::path::Path) -> Self {
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        Self::spawn(port, dir.to_path_buf(), false)
+    }
+
+    fn spawn(port: u16, dir: std::path::PathBuf, owns_dir: bool) -> Self {
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let (stop_t, dir_t) = (stop.clone(), dir.clone());
@@ -58,7 +71,7 @@ impl Server {
                 .unwrap();
         });
         kevy_testnet::assert_listening(port, "the server under test");
-        Self { port, dir, stop, handle: Some(handle) }
+        Self { port, dir, owns_dir, stop, handle: Some(handle) }
     }
 
     fn connect(&self) -> std::net::TcpStream {
@@ -75,7 +88,9 @@ impl Drop for Server {
         if let Some(h) = self.handle.take() {
             let _ = h.join();
         }
-        let _ = std::fs::remove_dir_all(&self.dir);
+        if self.owns_dir {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
     }
 }
 
@@ -192,4 +207,70 @@ fn read_packed_rows(c: &mut std::net::TcpStream) -> String {
         }
     }
     panic!("CONFIG GET packed-rows answered {text:?}");
+}
+
+/// Rows that arrived through the snapshot loader must pack.
+///
+/// The loader installs rows through `Store::load_hash`, which does not go
+/// through the dispatcher and therefore not through the write hook — unlike
+/// AOF replay, which does. So these rows have never been offered to the
+/// hook in their lives, which is what separates this from the test above.
+///
+/// A real server also reloads its table catalog at boot, and then the
+/// backfill runs without anyone declaring anything: verified by hand
+/// against `target/release/kevy` at two and eight shards, where a restarted
+/// server repacked `row:5` from 608 bytes back to 150 within 100 ms of the
+/// switch going on. This harness cannot cover that half — it runs the
+/// runtime directly rather than through `kevy::serve`, so the sidecar boot
+/// does not run — and it asserts the catalog is absent rather than assuming
+/// it.
+#[test]
+fn a_snapshot_restore_comes_back_packed() {
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-packbf-snap-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let packed_before = {
+        let srv = Server::start_in(&dir);
+        let mut c = srv.connect();
+        assert_eq!(cmd(&mut c, &[b"CONFIG", b"SET", b"packed-rows", b"yes"]), b"+OK\r\n");
+        load_rows(&mut c);
+        assert_eq!(declare(&mut c), b"+OK\r\n");
+        let before = int(&cmd(&mut c, &[b"MEMORY", b"USAGE", b"row:5"]));
+        let packed = wait_shrunk(&mut c, b"row:5", before);
+        assert!(packed < before, "setup: the row must be packed before the restart");
+        assert_eq!(cmd(&mut c, &[b"SAVE"]), b"+OK\r\n");
+        packed
+    };
+
+    let srv = Server::start_in(&dir);
+    let mut c = srv.connect();
+    // The switch does NOT survive: CONFIG SET writes the running config,
+    // not the file. A restart reads the file, so a server told to pack at
+    // runtime comes back not packing — which is worth its own assertion,
+    // because it looked exactly like "the backfill missed the snapshot".
+    assert_eq!(read_packed_rows(&mut c), "no", "CONFIG SET does not outlive the process");
+    assert_eq!(cmd(&mut c, &[b"HGET", b"row:5", b"name"]), b"$5\r\nuser5\r\n");
+    let restored = int(&cmd(&mut c, &[b"MEMORY", b"USAGE", b"row:5"]));
+    assert!(restored > packed_before, "with the switch off the rows come back general");
+
+    // This harness runs the runtime directly, not `kevy::serve`, so the
+    // catalog sidecar boot does not run and the table has to be declared
+    // again. Asserted rather than assumed, because if it ever DID come back
+    // the re-declaration below would silently become a no-op and this test
+    // would stop covering the loader path it exists for.
+    assert_eq!(cmd(&mut c, &[b"TABLE.LIST"]), b"*0\r\n", "the in-process boot loads no catalog");
+    assert_eq!(declare(&mut c), b"+OK\r\n");
+
+    assert_eq!(cmd(&mut c, &[b"CONFIG", b"SET", b"packed-rows", b"yes"]), b"+OK\r\n");
+    let repacked = wait_shrunk(&mut c, b"row:5", restored);
+    assert_eq!(
+        repacked, packed_before,
+        "and turning it back on repacks the snapshot's rows to what they cost before"
+    );
+    assert_eq!(cmd(&mut c, &[b"HLEN", b"row:5"]), b":6\r\n");
+    let _ = std::fs::remove_dir_all(&dir);
 }
