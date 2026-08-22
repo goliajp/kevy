@@ -110,6 +110,7 @@ mod set;
 mod set_read;
 mod small_set;
 pub use small_set::{SmallSetData, SmallSetIter};
+pub mod packed_row;
 mod small_hash;
 pub use small_hash::{SmallHashData, SmallHashIter};
 mod small_list;
