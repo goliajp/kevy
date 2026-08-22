@@ -34,7 +34,10 @@ const COMPACT_STEP_RECORDS: usize = 256;
 /// inline hash)? Threshold and Cold-skip are the sampler's job.
 #[inline]
 fn spillable_class(v: &Value) -> bool {
-    matches!(v, Value::ArcBulk(_) | Value::Hash(_) | Value::SmallHashInline(_))
+    matches!(
+        v,
+        Value::ArcBulk(_) | Value::Hash(_) | Value::SmallHashInline(_) | Value::PackedRow(_)
+    )
 }
 
 impl Store {

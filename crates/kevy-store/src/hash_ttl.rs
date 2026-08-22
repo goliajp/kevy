@@ -56,6 +56,7 @@ impl Store {
                 Value::Hash(h) => Ok(h.get(field).is_some()),
                 Value::SegHash(h) => Ok(h.get(field).is_some()),
                 Value::SmallHashInline(h) => Ok(h.get(field).is_some()),
+                Value::PackedRow(r) => Ok(r.has_named(field)),
                 _ => Err(StoreError::WrongType),
             },
         }

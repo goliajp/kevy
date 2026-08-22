@@ -21,6 +21,25 @@
 //! += 1 per cold ROW peeked; `batch_submissions_total` += the reader's
 //! kernel submission count per page with ≥1 cold row.
 
+/// Pull the requested fields out of a record this module just decoded.
+///
+/// A hash-tagged record decodes to one of the two hash forms — which
+/// one depends on how the row was stored, not on its type — so both
+/// answer here, and anything else is the decoder contradicting its own
+/// tag rather than a value a caller could have supplied.
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+fn decoded_hash_fields(value: &crate::Value, fields: &[&[u8]]) -> Vec<Option<Vec<u8>>> {
+    match value {
+        crate::Value::Hash(h) => {
+            fields.iter().map(|f| h.get(*f).map(crate::value::SmallBytes::to_vec)).collect()
+        }
+        crate::Value::PackedRow(r) => {
+            fields.iter().map(|f| r.get_named(f).map(<[u8]>::to_vec)).collect()
+        }
+        _ => unreachable!("hash-tagged record decodes to a hash"),
+    }
+}
+
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 mod enabled {
     use std::sync::Arc;
@@ -90,6 +109,9 @@ mod enabled {
     ) -> Result<Vec<Option<Vec<u8>>>, StoreError> {
         match &e.value {
             Value::Hash(h) => Ok(fields.iter().map(|f| h.get(*f).map(SmallBytes::to_vec)).collect()),
+            Value::PackedRow(r) => {
+                Ok(fields.iter().map(|f| r.get_named(f).map(<[u8]>::to_vec)).collect())
+            }
             Value::SegHash(h) => {
                 Ok(fields.iter().map(|f| h.get(f).map(SmallBytes::to_vec)).collect())
             }
@@ -257,10 +279,7 @@ mod enabled {
                     {
                         t.peek_preads_total += 1;
                     }
-                    let Value::Hash(h) = &value else {
-                        unreachable!("hash-tagged record decodes to a hash")
-                    };
-                    Ok(Some(fields.iter().map(|f| h.get(*f).map(SmallBytes::to_vec)).collect()))
+                    Ok(Some(super::decoded_hash_fields(&value, fields)))
                 }
             }
         }
@@ -282,10 +301,7 @@ mod enabled {
                     continue;
                 }
                 let value = self.segrow_read(c, keys[row]);
-                let Value::Hash(h) = &value else {
-                    unreachable!("hash-tagged record decodes to a hash")
-                };
-                out[row] = Ok(Some(fields.iter().map(|f| h.get(*f).map(SmallBytes::to_vec)).collect()));
+                out[row] = Ok(Some(super::decoded_hash_fields(&value, fields)));
             }
             kept
         }
@@ -299,7 +315,10 @@ mod enabled {
                 Some(e) => match &e.value {
                     Value::Cold(c) if c.type_tag == COLD_TAG_HASH => Probe::ColdHash(*c),
                     Value::Cold(_) => Probe::WrongType,
-                    Value::Hash(_) | Value::SegHash(_) | Value::SmallHashInline(_) => Probe::Hot,
+                    Value::Hash(_)
+                    | Value::SegHash(_)
+                    | Value::SmallHashInline(_)
+                    | Value::PackedRow(_) => Probe::Hot,
                     _ => Probe::WrongType,
                 },
             }
@@ -444,6 +463,9 @@ mod disabled {
                     }
                     Value::SmallHashInline(h) => {
                         Ok(Some(fields.iter().map(|f| h.get(f).map(<[u8]>::to_vec)).collect()))
+                    }
+                    Value::PackedRow(r) => {
+                        Ok(Some(fields.iter().map(|f| r.get_named(f).map(<[u8]>::to_vec)).collect()))
                     }
                     _ => Err(StoreError::WrongType),
                 },

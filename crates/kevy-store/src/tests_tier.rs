@@ -646,3 +646,89 @@ fn entry_overhead_stands_for_a_slot_in_a_growing_table() {
          the budget would be spent on accounting that no table pays"
     );
 }
+
+// ---- packed rows through the tier ------------------------------------
+//
+// A packed row is a hash in a different storage form, and every one of
+// these paths decided what to do by matching on the form. Each test
+// below covers one place where a catch-all arm would have answered
+// "not a hash" about a hash.
+
+/// Build `key` as a packed row of three columns.
+fn packed(s: &mut Store, key: &[u8]) {
+    let pad = noise(4096);
+    let pairs: [(&[u8], &[u8]); 3] =
+        [(b"id", b"7"), (b"name", b"alice"), (b"pad", pad.as_slice())];
+    s.hset(key, &pairs).unwrap();
+    let names: Vec<Vec<u8>> = vec![b"id".to_vec(), b"name".to_vec(), b"pad".to_vec()];
+    s.set_packed_rows(true);
+    s.pack_row(key, &names);
+    assert!(s.is_packed(key), "setup: the row must be packed before the test starts");
+}
+
+#[test]
+fn a_packed_row_is_spillable_and_comes_back_packed() {
+    let (mut s, _d) = tiered("tier-packed-roundtrip", u64::MAX);
+    packed(&mut s, b"row:1");
+    let used_hot = s.used_memory();
+
+    assert!(s.debug_force_demote(b"row:1"), "a packed row must be spillable");
+    assert!(is_cold(&s, b"row:1"));
+
+    s.promote_in_place(b"row:1");
+    assert_eq!(s.hget(b"row:1", b"name").unwrap(), Some(b"alice".as_slice()));
+    assert_eq!(s.hlen(b"row:1").unwrap(), 3);
+    // The point of the round trip: a promoted row that came back as a
+    // general hash would answer every assertion above and still have
+    // undone the saving this representation exists for.
+    assert!(s.is_packed(b"row:1"), "promote must rebuild the packed form, not a general hash");
+    assert_eq!(s.used_memory(), used_hot, "the round trip is weight-exact");
+}
+
+#[test]
+fn a_cold_packed_row_answers_field_reads_without_promoting() {
+    let (mut s, _d) = tiered("tier-packed-peek", u64::MAX);
+    packed(&mut s, b"row:1");
+    assert!(s.debug_force_demote(b"row:1"));
+
+    let got = s.peek_hash_fields(b"row:1", &[b"name", b"id", b"absent"]).unwrap();
+    assert_eq!(
+        got,
+        Some(vec![Some(b"alice".to_vec()), Some(b"7".to_vec()), None]),
+        "the peek lane reads a cold packed row's fields"
+    );
+    assert!(is_cold(&s, b"row:1"), "a peek is not an access signal");
+}
+
+#[test]
+fn a_packed_row_answers_the_field_ttl_precheck() {
+    let (mut s, _d) = tiered("tier-packed-hfttl", u64::MAX);
+    packed(&mut s, b"row:1");
+    // The precheck behind every field-TTL verb matched the general
+    // forms only, so a packed row answered WRONGTYPE about a field it
+    // holds. -2 is "no such field"; 1 is "deadline set".
+    let codes = s
+        .hexpire_at(
+            b"row:1",
+            &[b"name", b"absent"],
+            u64::MAX / 2,
+            crate::hash_ttl::HExpireCond::Always,
+        )
+        .unwrap();
+    assert_eq!(codes, vec![1, -2]);
+}
+
+#[test]
+fn the_packed_payload_carries_its_form_without_a_second_tag() {
+    let names: crate::packed_row::ColumnNames = vec![b"a".to_vec(), b"b".to_vec()].into();
+    let row = crate::packed_row::PackedRow::build(
+        &names,
+        &[Some(b"1".as_slice()), Some(b"2".as_slice())],
+    )
+    .unwrap();
+    let (payload, tag) = tier_codec::encode(&Value::PackedRow(row)).unwrap();
+    // The tag answers TYPE and gates the WRONGTYPE precheck, and both
+    // of those are about the type — which has not changed.
+    assert_eq!(tag, COLD_TAG_HASH, "a packed row is tagged as the hash it is");
+    assert!(matches!(tier_codec::decode(tag, payload).unwrap(), Value::PackedRow(_)));
+}
