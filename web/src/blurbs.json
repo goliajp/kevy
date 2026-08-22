@@ -31,7 +31,8 @@
     "vector-search": "KNN over your keyspace. No embedding model included.",
     "views": "Materialised views, kept fresh by the write path.",
     "wasm": "151 KB in a browser tab, persisted to OPFS.",
-    "upgrading-5.1-to-5.2": "Stop 5.1, start 5.2 on the same directory — the Lua dialects now match upstream."
+    "upgrading-5.1-to-5.2": "Stop 5.1, start 5.2 on the same directory — the Lua dialects now match upstream.",
+    "packed-rows": "One allocation per declared row, and the ordering that decides whether it saves anything."
   },
   "ja": {
     "UPGRADING": "以前のメジャー——2.x から 3.x、および 3.x から 4.0。",
@@ -65,7 +66,8 @@
     "vector-search": "キー空間の上での KNN。embedding モデルは含まない。",
     "views": "マテリアライズドビュー。書き込みパスが鮮度を保つ。",
     "wasm": "ブラウザのタブに 151 KB、OPFS へ永続化。",
-    "upgrading-5.1-to-5.2": "5.1 を止め、同じディレクトリで 5.2 を起動——Lua の方言が上流と一致します。"
+    "upgrading-5.1-to-5.2": "5.1 を止め、同じディレクトリで 5.2 を起動——Lua の方言が上流と一致します。",
+    "packed-rows": "宣言済みの行を 1 回の確保に。節約になるかを決めるのは順序のほう。"
   },
   "zh": {
     "UPGRADING": "更早的大版本：2.x 到 3.x，以及 3.x 到 4.0。",
@@ -99,6 +101,7 @@
     "vector-search": "在你的键空间上做 KNN。不含 embedding 模型。",
     "views": "物化视图，由写路径顺手保持新鲜。",
     "wasm": "浏览器标签页里的 151 KB，持久化到 OPFS。",
-    "upgrading-5.1-to-5.2": "停 5.1、在同一目录起 5.2 —— Lua 方言与上游对齐。"
+    "upgrading-5.1-to-5.2": "停 5.1、在同一目录起 5.2 —— Lua 方言与上游对齐。",
+    "packed-rows": "声明过的行存成一次分配，以及决定它到底省不省的那个顺序。"
   }
 }
