@@ -81,12 +81,17 @@ taskset -c "$DRV_CPUS" "$VENV" "$CONC_PY" pg \
   --rows "$ROWS" --conc "$CONC" --ops "$OPS" --driver-cores "$DRV_CORES" \
   | tee -a "$OUT"
 
-for MODE in everysec tiered; do
+for MODE in ${PGCONC_MODES:-everysec tiered}; do
   echo "== kevy (aof=$MODE, cpus $SRV_CPUS, threads $SRV_THREADS) =="
   DIR="$WORK/kevy-$MODE"; rm -rf "$DIR"; mkdir -p "$DIR"
+  # `tiered` is everysec plus a RAM budget; every other mode names its own
+  # fsync policy. Written to TOML because appendfsync has no CLI or env face
+  # — passing --appendfsync silently does nothing, which once made an
+  # `always` row a duplicate of `everysec`.
+  case "$MODE" in tiered) FSYNC=everysec ;; *) FSYNC=$MODE ;; esac
   {
     printf '[server]\ndata_dir = "%s"\n\n[persistence]\naof = true\n' "$DIR"
-    printf 'appendfsync = "everysec"\n'
+    printf 'appendfsync = "%s"\n' "$FSYNC"
     [ "$MODE" = "tiered" ] && printf '\n[tiering]\nbudget = "%s"\n' "${PGCONC_TIER_BUDGET:-2gb}"
   } > "$DIR/kevy.toml"
   KEVY_BIND=127.0.0.1 taskset -c "$SRV_CPUS" "$KEVY" --port "$KPORT" --dir "$DIR" \
@@ -102,7 +107,13 @@ PY
   done
   T=$(redis-cli -p "$KPORT" INFO server 2>/dev/null | tr -d '\r' | awk -F: '/^kevy_version:/{print $2}')
   [ -n "$T" ] || refuse "kevy on $KPORT never answered — the level would be mislabelled"
-  echo "  kevy $T up on cpus $SRV_CPUS"
+  EFF=$(redis-cli -p "$KPORT" CONFIG GET appendfsync 2>/dev/null | tail -1)
+  [ "$EFF" = "$FSYNC" ] || refuse "appendfsync is '$EFF', asked for '$FSYNC' — the run would be mislabelled"
+  if [ "$MODE" = "tiered" ]; then
+    B=$(redis-cli -p "$KPORT" INFO tiering 2>/dev/null | tr -d '\r' | awk -F: '/^tier_budget_bytes:/{print $2}')
+    [ "${B:-0}" -gt 0 ] || refuse "tiering budget is '${B:-unset}' — the run would be mislabelled"
+  fi
+  echo "  kevy $T up on cpus $SRV_CPUS, appendfsync=$EFF (confirmed)"
   "$VENV" "$PY" kevy --csv "$CSV" --port "$KPORT" --mode "$MODE" \
     --datadir "$DIR" --samples 1 >"$WORK/kevy-$MODE-load.json" || refuse "the kevy load failed"
   taskset -c "$DRV_CPUS" "$VENV" "$CONC_PY" kevy --port "$KPORT" \
