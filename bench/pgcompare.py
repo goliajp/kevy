@@ -175,6 +175,20 @@ def proc_tree_rss(marker):
     return total
 
 
+#: Every column a row carries, in CSV order, with its kevy type. One schema
+#: in one place: the kevy declaration is BUILT from this, the SQL table is
+#: read back from `pg_attribute` and compared to it, and the loaded rows'
+#: own fields are compared to it. `pad` was absent from the kevy declaration
+#: for a whole release line while the SQL CREATE TABLE had it — the engine
+#: was told about six of the seven columns its rows carried, and could not
+#: use a declaration that did not describe them.
+COLUMNS = [
+    (b"id", b"i64"), (b"name", b"str"), (b"dept", b"str"), (b"age", b"i64"),
+    (b"ts", b"i64"), (b"sku", b"i64"), (b"pad", b"str"),
+]
+COLUMN_NAMES = [n for n, _ in COLUMNS]
+
+
 def report(engine, mode, csv_path, load_s, lat, disk_b, rss_b, rows, extra=None):
     mb = csv_mb(csv_path)
     out = {
@@ -211,6 +225,17 @@ def run_pg():
         c.execute("""CREATE TABLE t (
             id BIGINT PRIMARY KEY, name TEXT, dept TEXT,
             age INT, ts BIGINT, sku BIGINT, pad TEXT)""")
+        # The SQL half of the one schema. Read back from the catalog rather
+        # than from the string above, so a column added to the CREATE and
+        # not to COLUMNS is caught here instead of becoming a difference in
+        # what the two engines were told.
+        c.execute("SELECT attname FROM pg_attribute WHERE attrelid = 't'::regclass "
+                  "AND attnum > 0 AND NOT attisdropped ORDER BY attnum")
+        pg_cols = [r[0].encode() for r in c.fetchall()]
+        if pg_cols != COLUMN_NAMES:
+            sys.exit(f"pgcompare: REFUSED — the SQL table has {pg_cols!r} and the "
+                     f"shared schema says {COLUMN_NAMES!r}. The two engines would be "
+                     f"told different things about the same rows.")
         # The same two access paths kevy declares: a range index on age
         # (with the columns a list page shows) and a composite dept+age.
         t0 = time.time()
@@ -392,11 +417,29 @@ def run_kevy():
         c.s.sendall(payload)
         for _ in range(count):
             c.reply()
-    c.cmd("TABLE.DECLARE", "t", "PREFIX", "row:", "PK", "id",
-          "COLUMN", "id", "i64", "COLUMN", "name", "str", "COLUMN", "dept", "str",
-          "COLUMN", "age", "i64", "COLUMN", "ts", "i64", "COLUMN", "sku", "i64",
-          "INDEX", "sku", "range", "VALUES", "name",
-          "ORDERPATH", "by_dept_ts", "ON", "dept", "THEN", "ts")
+    # Every column the loader writes, which is every column the SQL side
+    # declares in its CREATE TABLE. `pad` was missing here for a whole
+    # release line: PostgreSQL was told about seven columns and kevy about
+    # six, so kevy's rows carried a value its own catalog had never heard
+    # of. Nothing failed — the engine simply could not use a declaration
+    # that did not describe its rows, and the storage form under test
+    # refused every row rather than dropping the undeclared value.
+    decl = ["TABLE.DECLARE", "t", "PREFIX", "row:", "PK", "id"]
+    for name, ty in COLUMNS:
+        decl += ["COLUMN", name, ty]
+    decl += ["INDEX", "sku", "range", "VALUES", "name",
+             "ORDERPATH", "by_dept_ts", "ON", "dept", "THEN", "ts"]
+    c.cmd(*decl)
+    # The rows' own fields, against the same list. Built-from beats checked
+    # for the declaration above — the two cannot disagree — but what the
+    # loader actually wrote is a separate fact and still needs asserting.
+    carried = set(c.cmd("HKEYS", "row:1"))
+    undeclared = carried - set(COLUMN_NAMES)
+    if undeclared or not carried:
+        sys.exit(f"pgcompare: REFUSED — row:1 carries {sorted(carried)!r} and the "
+                 f"shared schema declares {COLUMN_NAMES!r}. kevy would be answering "
+                 f"about a schema that does not describe its own rows, while the "
+                 f"SQL side has the whole CREATE TABLE.")
     for probe in (("IDX.QUERY", "t.sku", "EQ", "1"),
                   ("IDX.QUERY", "t.by_dept_ts", "WHERE", "dept", "EQ", "eng", "LIMIT", "1")):
         for _ in range(3600):
