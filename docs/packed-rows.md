@@ -87,14 +87,27 @@ Whether a saving appears at all depends on **when the table is declared**.
 | declare, then load | 1,663 | 1,274 | **−23.4%** |
 | load, then declare | 1,663 | 1,721 | **+3.5%** |
 
-Bytes of resident memory per row, 500,000 rows, no index. Declaring first
-means every row is built packed and the general form is never allocated.
-Declaring afterwards means every row is built general, and the backfill then
-allocates a packed buffer beside the table it replaces and frees the table —
-and **what reaches the process is only what the allocator gives back**.
+Bytes of resident memory per row, 500,000 rows, **no index**. Declaring
+first means every row is built packed and the general form is never
+allocated. Declaring afterwards means every row is built general, and the
+backfill then allocates a packed buffer beside the table it replaces and
+frees the table — and **what reaches the process is only what the allocator
+gives back**.
 
 The peak is identical either way, which is the point: the representation is
 not what differs, the history is.
+
+**Two of the measurements on this page disagree, and the disagreement is
+not resolved.** The table above the ordering one is also the load-then-
+declare order, and it *saves* 13.5% — while this one costs 3.5%. What
+differs between them is scale (two million rows against half a million) and
+that the benchmark's table also declares an index, whose own backfill
+allocates heavily right where the packing backfill has just freed. An
+allocator that reuses those freed tables instead of holding them would
+explain it, and nothing has measured that yet. Read the −23.4% as the
+representation's own effect, and treat both load-first figures as saying
+that the backfill path's outcome depends on what else the process is doing
+at the time.
 
 So:
 
