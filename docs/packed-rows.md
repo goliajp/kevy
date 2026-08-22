@@ -97,17 +97,30 @@ gives back**.
 The peak is identical either way, which is the point: the representation is
 not what differs, the history is.
 
-**Two of the measurements on this page disagree, and the disagreement is
-not resolved.** The table above the ordering one is also the load-then-
-declare order, and it *saves* 13.5% — while this one costs 3.5%. What
-differs between them is scale (two million rows against half a million) and
-that the benchmark's table also declares an index, whose own backfill
-allocates heavily right where the packing backfill has just freed. An
-allocator that reuses those freed tables instead of holding them would
-explain it, and nothing has measured that yet. Read the −23.4% as the
-representation's own effect, and treat both load-first figures as saying
-that the backfill path's outcome depends on what else the process is doing
-at the time.
+**Two of the measurements on this page disagree, and the named explanation
+for it has been measured and is wrong.** The table above the ordering one is
+also the load-then-declare order, and it *saves* 13.5% — while this one costs
+3.5%. The obvious suspect was the index: the benchmark's table declares one,
+whose backfill allocates heavily right where the packing backfill has just
+freed, and an allocator reusing those tables rather than holding them would
+account for the difference.
+
+Measured, same probe with an index declared, median of three:
+
+| load-then-declare | packed off | packed on | |
+|---|---:|---:|---:|
+| no index | 1,663 | 1,721 | +3.4% |
+| **with an index** | **1,828** | **2,186** | **+19.6%** |
+
+The index makes it **worse**, not better. So whatever lets two million rows
+save 13.5% in this order, it is not the index backfill's allocations, and
+the difference remains unexplained — scale and shard count are what is left,
+and neither has been isolated.
+
+Read the −23.4% as the representation's own effect. Read every load-first
+figure as saying that the backfill path's outcome depends on something this
+page has not identified, and that at half a million rows it costs memory in
+both configurations tested.
 
 So:
 
