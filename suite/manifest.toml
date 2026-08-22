@@ -30,7 +30,7 @@
 # here: instruments for finding, not standards for holding. See the RFC.
 
 [suite]
-manifest_floor = 40
+manifest_floor = 41
 
 [suite.budgets]
 precommit = 300
@@ -47,6 +47,16 @@ expected = 14
 timeout = 60
 requires = []
 proves = "the repo root and worktree hold no runtime residue"
+
+[[check]]
+id = "formgate"
+area = "hygiene"
+tier = "precommit"
+cmd = "bash bench/formgate.sh"
+expected = 0
+timeout = 60
+requires = []
+proves = "every hash verb is exercised against the packed row, or says where it is covered"
 
 [[check]]
 id = "locgate"
