@@ -264,7 +264,7 @@ fn emit_table(samples: &[&[u8]], dict: &mut Vec<u8>) {
     }
     dict.extend_from_slice(DICT_MAGIC);
     let lens = huff::code_lengths(&hist);
-    for pair in lens.chunks_exact(2) {
+    for pair in lens.as_chunks::<2>().0 {
         dict.push(pair[0] | (pair[1] << 4));
     }
 }
