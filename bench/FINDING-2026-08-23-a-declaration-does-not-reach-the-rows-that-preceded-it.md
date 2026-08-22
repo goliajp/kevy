@@ -95,3 +95,35 @@ By a witness that had nothing to do with the number being measured: the
 run printed `MEMORY USAGE` for one row under each setting before starting.
 Without it the reading was "A1 does not work on the box, revert it per RFC
 §8 step 5" — a conclusion with a measurement behind it, and wrong.
+
+## Prediction, written before the measurement
+
+Recorded here so the comparison cannot be assembled after the fact.
+
+Per row, measured locally on the benchmark's exact shape — seven columns,
+a 400-byte `pad`, declared then packed: **1,168 B → 567 B**, a 601-byte
+saving per row.
+
+At two million rows that is 1.20 GB. The `everysec` baseline is 5,824 KB per
+CSV-MB across 853.9 MB of CSV, or about 4.74 GiB resident.
+
+| quantity | predicted |
+|---|---:|
+| RSS after | 3.62 GiB |
+| RSS per CSV-MB after | **≈ 4,450** (from 5,824) |
+| change | **−24%** |
+| vs PostgreSQL's 881 | 5.1× (from 6.6×) |
+
+Two things predicted to move the wrong way:
+
+- **Load throughput down.** The conversion reads the row back and rebuilds a
+  buffer once per row, and a bulk load is every row. Locally that cost 8.5%.
+- **A transient of the backfill's own.** Collecting the key list allocates a
+  `Vec<u8>` per key; at two million keys that is tens of MB the allocator
+  will likely not return to the OS. It should be invisible against a
+  1.2 GB saving, and it is the whole story in a run where nothing packs —
+  which is what the previous run measured (+0.7% to +2% RSS, no packing).
+
+If RSS lands within a few percent of 4,450 the arithmetic in §3 of the A1
+RFC holds at scale. If it lands near 5,824 again, something is still
+refusing rows and the witness in each result row will say so.
