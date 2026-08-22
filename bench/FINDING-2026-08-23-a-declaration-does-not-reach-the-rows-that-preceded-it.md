@@ -127,3 +127,53 @@ Two things predicted to move the wrong way:
 If RSS lands within a few percent of 4,450 the arithmetic in §3 of the A1
 RFC holds at scale. If it lands near 5,824 again, something is still
 refusing rows and the witness in each result row will say so.
+
+## What the first pass says, and the account that does not close
+
+Pass 1 of three, both arms, one flag apart on one binary. The witness in each
+row confirms the form took: `sample_row_bytes` 1,200 against 578.
+
+| mode | packed=0 | packed=1 | |
+|---|---:|---:|---:|
+| none | 5,504 | 4,760 | −13.5% |
+| everysec | 5,824 | 5,522 | −5.2% |
+| always | 5,882 | 5,155 | −12.4% |
+| tiered | 5,218 | 5,440 | +4.3% |
+
+n=1 per cell, so the spread between modes is not yet a finding. What is
+already visible is that **the prediction of −24% is not met**, and the reason
+is not that fewer rows packed than expected:
+
+| | |
+|---|---:|
+| per-row difference, by `MEMORY USAGE` | 622 B |
+| × 2,000,000 rows | 1.24 GB |
+| RSS actually saved, `none` | 0.61 GB — **52%** of it |
+| RSS actually saved, `always` | 0.59 GB — **51%** |
+| RSS actually saved, `everysec` | 0.25 GB — **21%** |
+
+The same disagreement appears on this machine at 50k rows and is not
+box-specific: `MEMORY USAGE` 1,440 → 543 (897 B saved per row) against an
+RSS-per-row of 1,697 → 1,091 (606 B saved). Two thirds, measured from
+outside the process.
+
+**RSS is the load-bearing number** — it is taken from `/proc` and does not
+depend on the accounting the engine keeps about itself. So the honest
+statement of A1's effect is the RSS column, and the engine's own accounting
+**overstates the saving by roughly a factor of two**.
+
+That is not only a reporting matter. Tiering budgets are resolved against
+`used_memory` (`INFO memory`), so a representation whose accounted cost
+diverges from its real cost by 2× moves the budget away from the resident
+figure it is meant to bound. The existing under-report on the general hash
+is recorded in
+`bench/FINDING-2026-08-23-a-rows-fixed-cost-is-independent-of-its-columns.md`;
+this is the same instrument, disagreeing in the other direction on the new
+form.
+
+Candidates, none yet measured: allocator retention (an 816-byte table freed
+and a ~560-byte chunk taken leaves the arena holding the difference), the
+backfill's own key list (a `Vec<u8>` per key, two million of them, taken
+while the rows were still unpacked), and an error in `PackedRow::heap_bytes`
+relative to what the allocator actually reserves. Deciding between them is
+its own measurement and does not gate the axis.
