@@ -46,10 +46,17 @@ refuse() { echo "pgcompare: REFUSED — $1" >&2; exit 2; }
 mkdir -p "$WORK"; : >"$OUT"
 CSV="$WORK/data.csv"
 
+# Match the server by its flags, not by the binary's name: KEVY_BIN points at
+# `kevy-off` / `kevy-on` for the allocator comparison, and "kevy --port N"
+# matches neither — so nothing was ever killed between modes, every mode's
+# server stayed bound to the same port under SO_REUSEPORT, and CONFIG GET
+# reached whichever answered. Both guards below need a non-empty port.
+SRVPAT="--port $KPORT --dir $WORK"
+
 cleanup() {
   # killgate: an empty KPORT would make this pattern match everything.
   [ -n "${KPORT}" ] || return 0
-  pkill -f "kevy --port $KPORT" 2>/dev/null
+  pkill -f -- "$SRVPAT" 2>/dev/null
   # Drop the dataset too. A run left a 979 MB table loaded in the
   # always-on container, and postgres's autovacuum ground through it in
   # the background for hours — diskgate's rewrite measurement on the
@@ -156,12 +163,17 @@ PY
   # 17 GB resident set takes the kernel longer than that, and the next mode
   # then starts its own load under the dying process's memory pressure.
   if [ -n "${KPORT}" ]; then
-    pkill -f "kevy --port $KPORT" 2>/dev/null
+    pkill -f -- "$SRVPAT" 2>/dev/null
     for _ in $(seq 60); do
-      pgrep -f "kevy --port $KPORT" >/dev/null 2>&1 || break
+      pgrep -f -- "$SRVPAT" >/dev/null 2>&1 || break
       sleep 0.5
     done
     sleep 1
+    # SO_REUSEPORT lets a survivor keep answering on the same port, so a
+    # failed teardown does not look like a failure — it looks like the next
+    # mode's numbers. Prove the port is clear before opening the next one.
+    pgrep -f -- "$SRVPAT" >/dev/null 2>&1 &&
+      refuse "a server matching '$SRVPAT' outlived its mode; the next mode would share its port"
   fi
 done
 

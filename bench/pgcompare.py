@@ -114,6 +114,36 @@ def pct(xs, p):
     return xs[min(len(xs) - 1, int(len(xs) * p))]
 
 
+def server_pids(marker):
+    """PIDs whose cmdline carries `marker`, excluding us and our ancestors.
+
+    Not `pgrep`: this process's own argv carries the data directory, and so
+    does every shell above it, so a name match finds the measurer as readily
+    as the measured. And not the binary's name either — `KEVY_BIN` points at
+    `kevy-off` / `kevy-on` for the allocator comparison, and a pattern of
+    "kevy --port N" matches neither, which is how a whole run reported a
+    resident set of zero and a leaked server kept answering on the same port.
+    """
+    mine, p = set(), os.getpid()
+    while p > 1:
+        mine.add(p)
+        try:
+            p = int(open(f"/proc/{p}/stat").read().rsplit(")", 1)[1].split()[1])
+        except (OSError, IndexError, ValueError):
+            break
+    found = []
+    for d in os.listdir("/proc"):
+        if not d.isdigit() or int(d) in mine:
+            continue
+        try:
+            cmd = open(f"/proc/{d}/cmdline", "rb").read().replace(b"\0", b" ")
+        except OSError:
+            continue
+        if marker.encode() in cmd:
+            found.append(d)
+    return found
+
+
 def proc_tree_rss(marker):
     """Σ RSS of every process whose cmdline carries `marker`. Containers
     share the host process table, so this reaches into the PG container
@@ -392,14 +422,16 @@ def run_kevy():
         for root, _, files in os.walk(datadir):
             for fn in files:
                 disk += os.path.getsize(os.path.join(root, fn))
-    pid = subprocess.run(["pgrep", "-f", f"kevy --port {port}"],
-                         capture_output=True, text=True).stdout.split()
+    pid = server_pids(datadir or f"--port {port}")
+    if len(pid) != 1:
+        sys.exit(f"pgcompare: REFUSED — {len(pid)} server(s) own {datadir!r}. "
+                 f"One is the measurement; zero means the memory column would "
+                 f"be a lie; more means a mode leaked and shares the port.")
     rss = 0
-    if pid:
-        with open(f"/proc/{pid[0]}/status") as f:
-            for line in f:
-                if line.startswith("VmRSS:"):
-                    rss = int(line.split()[1]) * 1024
+    with open(f"/proc/{pid[0]}/status") as f:
+        for line in f:
+            if line.startswith("VmRSS:"):
+                rss = int(line.split()[1]) * 1024
     # The label was "kevy4" as a constant, so every result file since the 4.x
     # line has said kevy4 whatever binary produced it — a 5.3.0 run reported
     # itself as kevy4. Ask the server what it is.
