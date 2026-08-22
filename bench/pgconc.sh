@@ -60,6 +60,18 @@ echo "== dataset =="
 echo "== postgres 18 (cpus $SRV_CPUS) =="
 "$VENV" -c "import socket,sys; socket.create_connection(('127.0.0.1', $PGPORT), 3).close()" \
   || refuse "no Postgres on 127.0.0.1:$PGPORT (see bench/pgcompare.sh for the runbook)"
+# The core split IS the fairness of this run, so prove it rather than
+# assume it: an unpinned container would give PostgreSQL all sixteen cores
+# against kevy's eight and the sweep would read as an engine difference.
+# The bench account has no docker socket, but the container shares the host
+# process table, so /proc answers.
+PGPID=$(pgrep -f "cluster_name=${PGCMP_CLUSTER:-kevypgcmp}" | head -1)
+[ -n "$PGPID" ] || refuse "no postgres process carrying cluster_name=${PGCMP_CLUSTER:-kevypgcmp}"
+PGCPUS=$(awk '/^Cpus_allowed_list:/{print $2}' "/proc/$PGPID/status")
+[ "$PGCPUS" = "$SRV_CPUS" ] || refuse "postgres runs on cpus '$PGCPUS', kevy will get '$SRV_CPUS' —
+  the run would compare different core counts. Fix it as root, once:
+    docker update --cpuset-cpus $SRV_CPUS ${PGCMP_CTR:-kevy-pgcmp}"
+echo "  postgres pinned to cpus $PGCPUS (confirmed via /proc/$PGPID)"
 # --samples 1 because this call is here to LOAD; the sweep does the timing.
 "$VENV" "$PY" pg --csv "$CSV" --cluster "${PGCMP_CLUSTER:-kevypgcmp}" \
   --dsn "host=127.0.0.1 port=$PGPORT user=postgres password=bench dbname=bench" \
