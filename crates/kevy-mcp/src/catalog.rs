@@ -115,7 +115,7 @@ pub fn parse_docs(reply: &Reply) -> Result<Vec<VerbDoc>, String> {
         ));
     }
     let mut docs = Vec::with_capacity(items.len() / 2);
-    for pair in items.chunks_exact(2) {
+    for pair in items.as_chunks::<2>().0 {
         let name = text(&pair[0])
             .ok_or_else(|| "COMMAND DOCS: verb name is not a string".to_string())?;
         docs.push(parse_fields(name, &pair[1])?);
@@ -155,7 +155,7 @@ fn parse_fields(name: String, fields: &Reply) -> Result<VerbDoc, String> {
         syntax: String::new(),
         flags: Vec::new(),
     };
-    for f in kv.chunks_exact(2) {
+    for f in kv.as_chunks::<2>().0 {
         let key = text(&f[0]).ok_or_else(|| {
             format!("COMMAND DOCS '{}': field key is not a string", doc.name)
         })?;

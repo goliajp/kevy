@@ -67,14 +67,14 @@ const fn next_table(prev: &[u16; 256]) -> [u16; 256] {
 #[inline]
 pub fn crc16(bytes: &[u8]) -> u16 {
     let mut crc: u16 = 0;
-    let mut chunks = bytes.chunks_exact(4);
-    for c in &mut chunks {
+    let (chunks, tail) = bytes.as_chunks::<4>();
+    for c in chunks {
         crc = TABLE3[(((crc >> 8) as u8) ^ c[0]) as usize]
             ^ TABLE2[((crc as u8) ^ c[1]) as usize]
             ^ TABLE1[c[2] as usize]
             ^ TABLE[c[3] as usize];
     }
-    for &b in chunks.remainder() {
+    for &b in tail {
         crc = (crc << 8) ^ TABLE[(((crc >> 8) as u8) ^ b) as usize];
     }
     crc

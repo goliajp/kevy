@@ -38,7 +38,7 @@ pub fn sha1(data: &[u8]) -> [u8; 20] {
     buf.extend_from_slice(&bit_len.to_be_bytes());
     debug_assert_eq!(buf.len() % 64, 0);
 
-    for chunk in buf.chunks_exact(64) {
+    for chunk in buf.as_chunks::<64>().0 {
         compress(&mut h, chunk);
     }
 
@@ -52,7 +52,7 @@ pub fn sha1(data: &[u8]) -> [u8; 20] {
 /// One 64-byte block of the SHA-1 compression function.
 fn compress(h: &mut [u32; 5], chunk: &[u8]) {
     let mut w = [0u32; 80];
-    for (i, word) in chunk.chunks_exact(4).enumerate() {
+    for (i, word) in chunk.as_chunks::<4>().0.iter().enumerate() {
         w[i] = u32::from_be_bytes([word[0], word[1], word[2], word[3]]);
     }
     for i in 16..80 {
@@ -107,7 +107,7 @@ pub fn parse_hex(hex_str: &[u8]) -> Option<[u8; 20]> {
         return None;
     }
     let mut out = [0u8; 20];
-    for (i, pair) in hex_str.chunks_exact(2).enumerate() {
+    for (i, pair) in hex_str.as_chunks::<2>().0.iter().enumerate() {
         let hi = hex_nibble(pair[0])?;
         let lo = hex_nibble(pair[1])?;
         out[i] = (hi << 4) | lo;

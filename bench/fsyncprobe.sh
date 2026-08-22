@@ -59,7 +59,8 @@ fstype() { stat -f -c %T "$1" 2>/dev/null; }
 asuser() { sudo -u "$BENCH_USER" "$@"; }
 SRVPAT="--port $KPORT --dir $WORK"
 
-cleanup() { pkill -f -- "$SRVPAT" 2>/dev/null; }
+# killgate: an empty pattern matches every process on the box.
+cleanup() { [ -n "${SRVPAT}" ] && pkill -f -- "$SRVPAT" 2>/dev/null; true; }
 trap cleanup EXIT
 
 mkdir -p "$WORK"; chown "$BENCH_USER:$BENCH_USER" "$WORK"
@@ -165,6 +166,7 @@ asuser "$VENV" "$HERE/bench/pgcompare.py" kevy --csv "$CSV" --port "$KPORT" \
   --mode always --datadir "$DIR" --samples 1 >/dev/null || refuse "the kevy load failed"
 probe kevy sudo -u "$BENCH_USER" "$VENV" "$HERE/bench/pgconc.py" kevy --port "$KPORT" \
   --rows "$ROWS" --conc "$CONC" --ops "$OPS" --shapes write --mode always
+[ -n "${SRVPAT}" ] || refuse "empty server pattern — the teardown would match everything"
 pkill -f -- "$SRVPAT" 2>/dev/null
 
 echo "== postgres 18 =="

@@ -112,7 +112,7 @@ pub(crate) fn encode(input: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     let mut out = Vec::with_capacity(total);
-    for pair in lens.chunks_exact(2) {
+    for pair in lens.as_chunks::<2>().0 {
         out.push(pair[0] | (pair[1] << 4));
     }
     write_bits(input, &lens, &mut out);
