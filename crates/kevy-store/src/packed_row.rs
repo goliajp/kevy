@@ -8,9 +8,9 @@
 //! The measured defect this removes is not that the general representation
 //! is large but that it is **flat**: a hash of three fields and a hash of
 //! twelve cost the same 1,700 bytes of RSS, because `KevyMap` rounds to
-//! `MIN_CAP = 16` and a promoted hash asks for `with_capacity(1)`
-//! (`bench/FINDING-2026-08-23-a-rows-fixed-cost-is-independent-of-its-columns.md`).
-//! Here every term scales with the row's actual shape.
+//! `MIN_CAP = 16` and a promoted hash asks for `with_capacity(1)`, so every
+//! hash from one to fourteen fields allocates the same 16-slot table. Here
+//! every term scales with the row's actual shape instead.
 //!
 //! ```text
 //! [ncol u16][present bitmap ⌈ncol/8⌉][end_1 u16] … [end_n u16][values …]
