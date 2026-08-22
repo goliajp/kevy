@@ -87,6 +87,9 @@ impl<C: Commands> Shard<C> {
     /// Re-arm the slot for a continuation phase and fan the new
     /// argv to every shard (stateless two-phase — see exec.rs fold).
     pub(crate) fn start_extension_phase(&mut self, conn_id: u64, seq: u64, argv: Vec<Vec<u8>>) {
+        // One buffer, N refcount bumps — the phase-2 argv is as shared as
+        // the phase-1 one, and for the same reason.
+        let argv: std::sync::Arc<[Vec<u8>]> = argv.into();
         if let Some(c) = self.conns.get_mut(&conn_id) {
             let idx = (seq - c.next_emit) as usize;
             if let Some(slot) = c.pending.get_mut(idx) {

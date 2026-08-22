@@ -134,6 +134,72 @@ pub(super) fn reduce_compose(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
     out
 }
 
+/// The k-way merge the doc comment above has always described.
+///
+/// Every shard walks its own tree in `(value, key)` order and stops at
+/// LIMIT, so each chunk arrives sorted and the merge only ever needs each
+/// chunk's head. Flattening all of them and sorting decoded N×LIMIT rows to
+/// keep LIMIT — 320 to keep 20 at the default shard count — and paid a heap
+/// allocation per key, per value and per hydrated field on every one of the
+/// 300 that lose.
+///
+/// This decodes a head per chunk and then one row per row emitted:
+/// LIMIT + N decodes instead of N×LIMIT. The comparison is unchanged, and
+/// so is the result — `SORT` diverts to the claused reduce before here, so
+/// this path is always ascending.
+fn merge_chunks(chunks: &[Vec<u8>], limit: usize) -> Vec<(IndexValue, Vec<u8>, Hydrated)> {
+    // (remaining, read position) per chunk; a chunk whose header does not
+    // parse contributes nothing, exactly as the flattening version treated it.
+    let mut cur: Vec<(u32, usize)> = Vec::with_capacity(chunks.len());
+    for c in chunks {
+        let mut pos = 1usize;
+        cur.push(match read_u32(c, &mut pos) {
+            Some(n) => (n, pos),
+            None => (0, pos),
+        });
+    }
+    let mut head: Vec<Option<(IndexValue, Vec<u8>, Hydrated)>> = (0..chunks.len())
+        .map(|i| next_row(&chunks[i], &mut cur[i]))
+        .collect();
+
+    let mut out = Vec::with_capacity(limit.min(64));
+    while out.len() < limit {
+        let mut best: Option<usize> = None;
+        for (i, h) in head.iter().enumerate() {
+            let Some((v, k, _)) = h else { continue };
+            match &best {
+                None => best = Some(i),
+                Some(b) => {
+                    let (bv, bk, _) = head[*b].as_ref().expect("best is Some");
+                    if (v, k) < (bv, bk) {
+                        best = Some(i);
+                    }
+                }
+            }
+        }
+        let Some(i) = best else { break };
+        let row = head[i].take().expect("best is Some");
+        head[i] = next_row(&chunks[i], &mut cur[i]);
+        out.push(row);
+    }
+    out
+}
+
+/// One decoded row from a chunk, advancing its cursor. `None` at the end or
+/// on a truncated frame — the flattening version also stopped at the first
+/// field it could not read.
+fn next_row(c: &[u8], state: &mut (u32, usize)) -> Option<(IndexValue, Vec<u8>, Hydrated)> {
+    let (left, pos) = state;
+    if *left == 0 {
+        return None;
+    }
+    *left -= 1;
+    let key = read_kbytes(c, pos)?;
+    let v = decode_value(c, pos)?;
+    let fv = read_hydration(c, pos)?;
+    Some((v, key, fv))
+}
+
 /// IDX.QUERY: k-way merge by (value, key), global LIMIT + cursor.
 /// Selection clauses (SORT / DISTINCT / FACET / OFFSET) take the
 /// claused reduce; FILTER alone rides this path unchanged — the shards
@@ -146,19 +212,7 @@ pub(super) fn reduce_query(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
         return super::claused::reduce_query_claused(&q, chunks);
     }
     let mut out = Vec::new();
-    let mut all: Vec<(IndexValue, Vec<u8>, Hydrated)> = Vec::new();
-    for c in chunks {
-        let mut pos = 1usize;
-        let Some(n) = read_u32(c, &mut pos) else { continue };
-        for _ in 0..n {
-            let Some(key) = read_kbytes(c, &mut pos) else { break };
-            let Some(v) = decode_value(c, &mut pos) else { break };
-            let Some(fv) = read_hydration(c, &mut pos) else { break };
-            all.push((v, key, fv));
-        }
-    }
-    all.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
-    all.truncate(q.limit);
+    let all = merge_chunks(chunks, q.limit);
     let next = if all.len() == q.limit {
         all.last().map(|(v, k, _)| encode_cursor(v, k)).unwrap_or_else(|| b"0".to_vec())
     } else {
