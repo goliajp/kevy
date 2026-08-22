@@ -99,12 +99,66 @@ impl Store {
         match self.live_entry_mut(key) {
             None => Ok(None),
             Some(e) => match &e.value {
-                Value::Hash(_) | Value::SegHash(_) | Value::SmallHashInline(_) => {
-                    Ok(Some(&mut e.value))
-                }
+                Value::Hash(_)
+                | Value::SegHash(_)
+                | Value::SmallHashInline(_)
+                | Value::PackedRow(_) => Ok(Some(&mut e.value)),
                 _ => Err(StoreError::WrongType),
             },
         }
+    }
+
+    /// `HSET` into a declared row.
+    ///
+    /// Three ways out, and every one keeps the data: same width overwrites in
+    /// place, a different width rebuilds the buffer, and anything the packed
+    /// form cannot hold — a field the table never declared, or a payload past
+    /// what u16 offsets address — leaves the packed form for the general one
+    /// with every value intact. None of them is an error: a packed row is a
+    /// size class and a declaration, not a type.
+    fn hset_packed(
+        &mut self,
+        key: &[u8],
+        field: &[u8],
+        value: &[u8],
+    ) -> Result<HsetOutcome, StoreError> {
+        let v = self.hash_value_for_set(key)?.expect("present and packed");
+        let Value::PackedRow(r) = v else { return Err(StoreError::WrongType) };
+        let slot = r.names().iter().position(|c| c == field);
+        let existed = slot.is_some_and(|i| r.has(i));
+        let rebuilt = match slot {
+            Some(i) if r.set_same_width(i, value) => Some(()),
+            Some(i) => r.with_column(i, Some(value)).map(|next| {
+                *r = next;
+            }),
+            None => None,
+        };
+        if rebuilt.is_none() {
+            return self.unpack_then_set(key, field, value);
+        }
+        self.reweigh_entry(key);
+        Ok(if existed { HsetOutcome::UpdatedInline } else { HsetOutcome::AddedInline })
+    }
+
+    /// Leave the packed form for the general one, then apply the write.
+    fn unpack_then_set(
+        &mut self,
+        key: &[u8],
+        field: &[u8],
+        value: &[u8],
+    ) -> Result<HsetOutcome, StoreError> {
+        let v = self.hash_value_for_set(key)?.expect("present and packed");
+        let Value::PackedRow(r) = v else { return Err(StoreError::WrongType) };
+        let pairs: Vec<(Vec<u8>, Vec<u8>)> =
+            r.fields().map(|(f, val)| (f.to_vec(), val.to_vec())).collect();
+        let mut flat = HashData::default();
+        for (f, val) in &pairs {
+            flat.insert(SmallBytes::from_slice(f), SmallBytes::from_slice(val));
+        }
+        let outcome = heap_hash_set(HashRefMut::Flat(&mut flat), field, value);
+        *v = Value::Hash(Arc::new(flat));
+        self.reweigh_entry(key);
+        Ok(outcome)
     }
 
     /// `HSET` — returns the count of newly-added fields.
@@ -286,6 +340,7 @@ impl Store {
                     Ok(outcome)
                 }
             },
+            Value::PackedRow(_) => self.hset_packed(key, field, value),
             // Flat hash at the threshold: shard, then set. One-time
             // O(HS_PROMOTE) re-bucket (or clone, if a view pins it now).
             Value::Hash(h) if h.len() >= HS_PROMOTE => {
