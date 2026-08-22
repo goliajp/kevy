@@ -54,12 +54,12 @@ unsafe fn crc32c_aarch64(data: &[u8]) -> u32 {
 unsafe fn crc32c_x86(data: &[u8]) -> u32 {
     use std::arch::x86_64::{_mm_crc32_u8, _mm_crc32_u64};
     let mut crc = !0u64;
-    let mut chunks = data.chunks_exact(8);
-    for c in &mut chunks {
-        crc = _mm_crc32_u64(crc, u64::from_le_bytes(c.try_into().unwrap()));
+    let (chunks, tail) = data.as_chunks::<8>();
+    for c in chunks {
+        crc = _mm_crc32_u64(crc, u64::from_le_bytes(*c));
     }
     let mut crc = crc as u32;
-    for &b in chunks.remainder() {
+    for &b in tail {
         crc = _mm_crc32_u8(crc, b);
     }
     !crc
