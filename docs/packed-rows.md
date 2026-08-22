@@ -112,10 +112,17 @@ Measured, same probe with an index declared, median of three:
 | no index | 1,663 | 1,721 | +3.4% |
 | **with an index** | **1,828** | **2,186** | **+19.6%** |
 
-The index makes it **worse**, not better. So whatever lets two million rows
-save 13.5% in this order, it is not the index backfill's allocations, and
-the difference remains unexplained — scale and shard count are what is left,
-and neither has been isolated.
+The index makes it **worse**, not better. Scale is not it either: the same
+probe at two million rows, no index, gives 1,522 → 1,576 — **+3.5%**, which
+is what half a million gives. And the shard count is the same on both sides
+(the box's default), as is the AOF setting.
+
+So three candidates are out, and the difference is **unexplained**. What is
+left is the rest of what the full benchmark does and this probe does not:
+pipelined bulk loading, and a query phase after the load. Neither has been
+isolated, and until one is, the honest reading is that the representation is
+worth −23.4% when declared first, and that the backfill path's outcome
+depends on something not identified here.
 
 Read the −23.4% as the representation's own effect. Read every load-first
 figure as saying that the backfill path's outcome depends on something this
