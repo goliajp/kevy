@@ -30,7 +30,7 @@
 # here: instruments for finding, not standards for holding. See the RFC.
 
 [suite]
-manifest_floor = 42
+manifest_floor = 43
 
 [suite.budgets]
 precommit = 300
@@ -47,6 +47,16 @@ expected = 14
 timeout = 60
 requires = []
 proves = "the repo root and worktree hold no runtime residue"
+
+[[check]]
+id = "secretgate"
+area = "hygiene"
+tier = "precommit"
+cmd = "bash bench/secretgate.sh"
+expected = 0
+timeout = 60
+requires = []
+proves = "no credential file is tracked or staged, and no token literal is in tracked content"
 
 [[check]]
 id = "nostdgate"
