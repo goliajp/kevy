@@ -40,11 +40,19 @@ impl Srv {
         // lands — but that is a property of the test, not of the setup.
         let dir = std::env::temp_dir().join(format!("kevy-mig-{port}"));
         std::fs::create_dir_all(&dir).unwrap();
+        // Keep the server's output. It used to go to /dev/null, and when
+        // this test failed with ConnectionRefused under full-workspace
+        // parallelism there was nothing to say whether the server had died
+        // or simply lost a race — the evidence had been discarded by the
+        // test itself.
+        let log = dir.join("server.log");
+        let out = std::fs::File::create(&log).expect("create server log");
+        let err = out.try_clone().expect("dup server log");
         let child = Command::new(&bin)
             .args(["--port", &port.to_string(), "--threads", "2", "--no-aof"])
             .args(["--dir", dir.to_str().unwrap()])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(out))
+            .stderr(std::process::Stdio::from(err))
             .spawn()
             .expect("spawn kevy server");
         // 10 s, not 2: under full-workspace parallelism this test shares the
@@ -55,7 +63,23 @@ impl Srv {
         Srv { child, port }
     }
     fn client(&self) -> RespClient {
-        RespClient::connect("127.0.0.1", self.port).unwrap()
+        match RespClient::connect("127.0.0.1", self.port) {
+            Ok(c) => c,
+            Err(e) => {
+                // Say what the server said. A bare ConnectionRefused here is
+                // indistinguishable between "it crashed" and "it lost a race
+                // with 106 parallel suites", and those want opposite fixes.
+                let log = std::env::temp_dir()
+                    .join(format!("kevy-mig-{}", self.port))
+                    .join("server.log");
+                let said = std::fs::read_to_string(&log).unwrap_or_default();
+                panic!(
+                    "connect to 127.0.0.1:{} failed: {e}\n--- server said ---\n{}",
+                    self.port,
+                    if said.is_empty() { "(nothing)" } else { said.trim() }
+                );
+            }
+        }
     }
 }
 

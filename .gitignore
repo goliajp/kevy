@@ -85,3 +85,8 @@ bench/.flake-archive/*.log
 # the tree dirty. Compile products do not belong in history.
 bench/clientgate/seredis/bin/
 bench/clientgate/seredis/obj/
+
+# Local credentials — never committed. Verified by `git check-ignore`
+# before anything is written here.
+.env.local
+.env.*.local

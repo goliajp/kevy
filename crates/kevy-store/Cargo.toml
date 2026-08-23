@@ -31,16 +31,16 @@ external-clock = []
 workspace = true
 
 [dependencies]
-kevy-hash = { path = "../kevy-hash", version = "5.4.0", default-features = false }
-kevy-bytes = { path = "../kevy-bytes", version = "5.4.0", default-features = false }
-kevy-map = { path = "../kevy-map", version = "5.4.0", default-features = false }
-kevy-ranktree = { path = "../kevy-ranktree", version = "5.4.0", default-features = false }
+kevy-hash = { path = "../kevy-hash", version = "5.4.1", default-features = false }
+kevy-bytes = { path = "../kevy-bytes", version = "5.4.1", default-features = false }
+kevy-map = { path = "../kevy-map", version = "5.4.1", default-features = false }
+kevy-ranktree = { path = "../kevy-ranktree", version = "5.4.1", default-features = false }
 
 # The tiering vlog needs a real filesystem (unix positional IO) — never
 # on wasm32. Optional: activated by the `std` feature off-wasm only.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kevy-vlog = { path = "../kevy-vlog", version = "5.4.0", optional = true }
-kevy-seg = { path = "../kevy-seg", version = "5.4.0", optional = true }
+kevy-vlog = { path = "../kevy-vlog", version = "5.4.1", optional = true }
+kevy-seg = { path = "../kevy-seg", version = "5.4.1", optional = true }
 
 [dev-dependencies]
 kevy-bench = { path = "../kevy-bench" }

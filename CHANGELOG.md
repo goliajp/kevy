@@ -1,5 +1,72 @@
 # Changelog
 
+## 5.4.1 — the packed row, on
+
+5.4.0 shipped the packed row switched off, for three reasons. Each was then
+measured and each fell. This turns it on, and the rest of the release is the
+measuring.
+
+### Changed
+
+- **`packed-rows` is on by default.** A declared table's row is stored as one
+  allocation. A deployment that wants 5.4.0's representation sets
+  `packed-rows no`; nothing about the wire or the on-disk formats moves
+  either way.
+
+  The three reasons it shipped off, and what happened to them:
+
+  - *"the adoption path costs memory"* — true only of a probe that never read
+    a row back. **The saving is collected on reads, not writes**: a query
+    phase after the load adds 359 bytes a row to the general form and 56 to
+    the packed one, which flips the same measurement from +12.4% to −3.4%.
+    Four other candidates for that sign difference — the index backfill's
+    allocations, shard count, scale, and pipelined loading — were each
+    measured and refuted first.
+  - *"the sign difference is unexplained"* — it was the same thing.
+  - *"it stops tiering demoting"* — at half a million rows the store had room
+    and correctly said so. At three million against a 512 MB budget it demotes
+    **2,998,956 keys, more than the general form's 2,994,126**, with nothing
+    evicted and nothing lost.
+
+### Fixed
+
+- **The repository's `NPM_TOKEN` was invalid**, which is why 5.4.0's npm
+  publish failed with a 404 on PUT — what npm returns for a scope a token
+  cannot write to. The 5.4.0 package was published by hand; this stops the
+  next tag failing the same way.
+
+### Gates
+
+- **`secretgate`**: no credential file tracked or staged, no token-shaped
+  literal in tracked content. Ignoring a file is not protecting it when the
+  ignore rule is itself a tracked file — stashing `.gitignore` during the
+  5.4.0 release took the protection away and left the credential behind. The
+  rule now lives in `.git/info/exclude`, which no checkout or stash moves, and
+  the gate checks the outcome rather than the rule because `git add -f`
+  defeats every ignore file there is.
+- **A test that discarded the evidence of its own failure** now keeps it:
+  `migrate_roundtrip` sent its server's output to `/dev/null`, so a
+  `ConnectionRefused` under 106 parallel suites could not be told apart from a
+  crash — and those want opposite fixes.
+
+### Measured, not changed
+
+Three findings that ship as documentation because the measurement said there
+was nothing to build:
+
+- **The tiering budget steers by a figure 2–3× from resident memory**, and
+  that gap is glibc's arena, which has no known recovery: `malloc_trim` and
+  `MALLOC_ARENA_MAX` were measured as no-ops, and `kevy-alloc` costs 8.5–15%
+  *more* on this workload. It is a property to size around, not a defect.
+- **An index costs 670 bytes a row here, and it decomposes**: 256 for a
+  scalar index, 412 for a composite one — a composite index costs 1.6× a
+  scalar, which had never been measured. Inside the scalar 256, the key
+  stored twice is 68 and 140 bytes have no name in the memory formula.
+- **A2 — replacing an index's key bytes with a dense row id — was carried as
+  the largest remaining memory item at 24.6% of the store.** Measured, it is
+  worth about 52 bytes a row, the third-largest of the three terms above. It
+  was stopped by the Pre-Phase-B gate before any code was written.
+
 ## 5.4.0 — use the declaration
 
 `TABLE.DECLARE` tells the server a table's whole shape and persists it, and
