@@ -843,14 +843,18 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
       CHANGELOG 首条是 `## 5.4.1`、Go 代理解析到 v5.4.1、站点首页 5.4.1
       且三语 packed-rows 页 200。
 
-- [x] **dogfood 主力版本已切换 ✅**(2026-08-23):
-      | 项目 | 从 | 验证 |
-      |---|---|---|
-      | smix | 5.3 | 构建 + `smix-store` 全绿 |
-      | devops | **路径依赖** | 构建 + 9 套件 |
-      | buwanren | **1.4.20** | 构建 + 166 用例 / 19 套件 |
-      | labs/lab35-rfid | **3.17** | 构建 + 75 用例 / 13 套件 |
-      | kevy-loadtest/embed-bench | **1.1.20** | 构建 + **真跑出数** |
+- [x] **dogfood 升级已验证 ✅**,但**尚未落到任何 mainline**(2026-08-23):
+      | 项目 | 从 | 验证 | 落点 |
+      |---|---|---|---|
+      | smix | 5.3 | 构建 + `smix-store` 全绿 | 分支 `feature/kevy-5.4.1` |
+      | devops | **路径依赖** | 构建 + 9 套件 | 分支 `feature/kevy-5.4.1` |
+      | buwanren | **1.4.20** | 构建 + 166 用例 / 19 套件 | 分支 `kevy-541` |
+      | labs/lab35-rfid | **3.17** | 构建 + 75 用例 / 13 套件 | 分支 `deps/kevy-5.4.1`(**该仓库无远程**) |
+      | kevy-loadtest/embed-bench | **1.1.20** | 构建 + **真跑出数** | **已生效**(不在版本控制里,无分支可停) |
+      四个有 git 的消费方**都停在未合的分支上**,所以严格讲此刻没有一个
+      mainline 在 5.4.1 上 —— 唯一实际生效的是那个没有版本控制的。
+      合入是属主动作,五个仓库不是我该替他们拍板的。原先这条写的是
+      「主力版本已切换」,那是夸大:验证过 ≠ 落地。
       buwanren 与 embed-bench 各跨四个大版本、lab35-rfid 跨两个,
       **都不需要改一行代码**(只用 `Store::open` / `Config::default` / `Store`)。
       embed-bench 是 bench 工具不是库,所以验收线不是构建而是出数:
