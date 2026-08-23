@@ -40,7 +40,40 @@ the index occupies.
 
 **A2 removes under 1% of the term it was aimed at, not 24.6%.**
 
-## Where the 669 bytes are instead
+## Correction — "under 1%" was my own arithmetic error
+
+The paragraph above computed A2's saving as `keylen − 8` per index per row.
+That treats the key bytes as the whole of what an entry spends on the key,
+and reading `Segment` says otherwise:
+
+```rust
+tree:  BTreeSet<(IndexValue, Vec<u8>)>   // the value + a full copy of the key
+back:  HashMap<Vec<u8>, IndexValue>      // a second full copy of the key
+```
+
+**The key is stored twice**, and each copy is a `Vec<u8>` — 24 bytes of fat
+pointer on 64-bit plus its own heap allocation, not just the bytes. So what a
+dense row id replaces is `2 × (24 + keylen)`, not `keylen`.
+
+The structural account agrees with the measurement, which is why it is worth
+believing: long keys cost 118 B/row more across two indexes, i.e. **59 per
+index**, against a predicted `2 × (36 − 10) = 52`.
+
+| key | key-related cost per index per row | share of the ~334 B an index spends |
+|---|---:|---:|
+| 10 B (short) | 68 B | **20%** |
+| 36 B (long) | 120 B | 36% |
+
+At a short key A2 would remove `2 × (24 + 10 − 8) = 52` bytes — **~16% of
+what an index costs**, not 1%.
+
+That does not restore the 24.6% claim, which was a share of the whole store,
+and it does not remove A2's real precondition: it needs a stable dense
+identifier that A1 does not create. The gate's verdict stands — do not build
+from the cost table — but the reason had to be stated correctly, and my first
+statement of it was wrong in the direction of dismissing the work.
+
+## Where the rest of the 669 bytes are
 
 Not measured here, and that is the next step rather than a guess. The
 candidates visible in the source are the per-entry structural overhead
