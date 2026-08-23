@@ -67,7 +67,7 @@ from ._types import (
     KV,
 )
 
-__version__ = "5.4.0"
+__version__ = "5.4.1"
 
 
 def connect(url: str) -> Client:

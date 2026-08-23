@@ -17,8 +17,8 @@ categories = ["database-implementations", "filesystem"]
 workspace = true
 
 [dependencies]
-kevy-compress = { path = "../kevy-compress", version = "5.4.0" }
-kevy-sys = { path = "../kevy-sys", version = "5.4.0" }
+kevy-compress = { path = "../kevy-compress", version = "5.4.1" }
+kevy-sys = { path = "../kevy-sys", version = "5.4.1" }
 
 [dev-dependencies]
 kevy-tmpdir = { path = "../kevy-tmpdir" }
