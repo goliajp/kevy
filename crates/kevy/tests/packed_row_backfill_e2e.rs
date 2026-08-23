@@ -178,24 +178,36 @@ fn a_declaration_reaches_the_rows_that_preceded_it() {
 }
 
 #[test]
-fn the_switch_stays_off_until_it_is_asked_for() {
+fn the_switch_can_be_turned_off_and_the_rows_stay_readable() {
+    // Named for what it now proves. Until 5.4.1 the default was off and this
+    // asserted that nothing packed until asked; the default is on, so the
+    // property worth holding is the other one — a deployment that wants
+    // 5.4.0's representation can have it, and turning the switch off does not
+    // cost it a row.
     let srv = Server::start();
     let mut c = srv.connect();
-    assert_eq!(read_packed_rows(&mut c), "no", "off by default");
+    assert_eq!(read_packed_rows(&mut c), "yes", "on by default since 5.4.1");
 
     load_rows(&mut c);
     let before = int(&cmd(&mut c, &[b"MEMORY", b"USAGE", b"row:5"]));
     assert_eq!(declare(&mut c), b"+OK\r\n");
-    std::thread::sleep(std::time::Duration::from_millis(600));
-    assert_eq!(
-        int(&cmd(&mut c, &[b"MEMORY", b"USAGE", b"row:5"])),
-        before,
-        "a declaration alone must not change the representation"
-    );
+    let packed = wait_shrunk(&mut c, b"row:5", before);
+    assert!(packed < before, "the default packs without being asked");
 
-    assert_eq!(cmd(&mut c, &[b"CONFIG", b"SET", b"packed-rows", b"yes"]), b"+OK\r\n");
-    assert_eq!(read_packed_rows(&mut c), "yes");
-    assert!(wait_shrunk(&mut c, b"row:5", before) < before, "and turning it on converts them");
+    assert_eq!(cmd(&mut c, &[b"CONFIG", b"SET", b"packed-rows", b"no"]), b"+OK\r\n");
+    assert_eq!(read_packed_rows(&mut c), "no");
+
+    // Turning it off does not convert anything back — the form is a storage
+    // decision, not a mode — so what has to hold is that every row still
+    // answers, and that a write from here on lands in the general form.
+    let last = format!("row:{}", ROWS - 1);
+    assert_eq!(cmd(&mut c, &[b"HLEN", last.as_bytes()]), b":6\r\n");
+    assert_eq!(
+        cmd(&mut c, &[b"HGET", last.as_bytes(), b"name"]),
+        format!("${}\r\nuser{}\r\n", 4 + (ROWS - 1).to_string().len(), ROWS - 1).into_bytes()
+    );
+    cmd(&mut c, &[b"HSET", b"row:5", b"name", b"renamed"]);
+    assert_eq!(cmd(&mut c, &[b"HGET", b"row:5", b"name"]), b"$7\r\nrenamed\r\n");
 }
 
 fn read_packed_rows(c: &mut std::net::TcpStream) -> String {
@@ -236,7 +248,6 @@ fn a_snapshot_restore_comes_back_packed() {
     let packed_before = {
         let srv = Server::start_in(&dir);
         let mut c = srv.connect();
-        assert_eq!(cmd(&mut c, &[b"CONFIG", b"SET", b"packed-rows", b"yes"]), b"+OK\r\n");
         load_rows(&mut c);
         assert_eq!(declare(&mut c), b"+OK\r\n");
         let before = int(&cmd(&mut c, &[b"MEMORY", b"USAGE", b"row:5"]));
@@ -248,14 +259,15 @@ fn a_snapshot_restore_comes_back_packed() {
 
     let srv = Server::start_in(&dir);
     let mut c = srv.connect();
-    // The switch does NOT survive: CONFIG SET writes the running config,
-    // not the file. A restart reads the file, so a server told to pack at
-    // runtime comes back not packing — which is worth its own assertion,
-    // because it looked exactly like "the backfill missed the snapshot".
-    assert_eq!(read_packed_rows(&mut c), "no", "CONFIG SET does not outlive the process");
+    // The switch does NOT survive: CONFIG SET writes the running config, not
+    // the file. Asserted from the other side now that the default is on — a
+    // server told at runtime to STOP packing comes back packing. It is worth
+    // its own assertion because when it bit, it looked exactly like "the
+    // backfill missed the snapshot".
+    assert_eq!(read_packed_rows(&mut c), "yes", "CONFIG SET does not outlive the process");
     assert_eq!(cmd(&mut c, &[b"HGET", b"row:5", b"name"]), b"$5\r\nuser5\r\n");
     let restored = int(&cmd(&mut c, &[b"MEMORY", b"USAGE", b"row:5"]));
-    assert!(restored > packed_before, "with the switch off the rows come back general");
+    assert!(restored > packed_before, "the loader installs the general form");
 
     // This harness runs the runtime directly, not `kevy::serve`, so the
     // catalog sidecar boot does not run and the table has to be declared
