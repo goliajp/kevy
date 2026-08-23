@@ -113,11 +113,46 @@ the budget would stop bounding anything — but half a million rows fit in both
 arms, so this probe cannot see that case. **The experiment that can is one
 where the data does not fit, and it has not been run.**
 
-That experiment is N3's real content: load past the budget with packing on,
-and see whether the store spills, evicts, or grows until the OOM killer takes
-it. Until it runs, "packing breaks tiering" is a hypothesis with a plausible
-mechanism and no evidence, which is the same shape as the four candidates
-this session already refuted.
+## The experiment ran. The hypothesis is refuted.
 
-Still blocks `packed-rows` defaulting on: a tiered deployment would go from
-142,552 demotions to none.
+Three million rows against the same 512 MB budget — data that genuinely does
+not fit:
+
+| | demotions | vlog | evicted | DBSIZE | `HGET row:1 name` |
+|---|---:|---:|---:|---:|---|
+| packed off | 2,994,126 | 412,582,475 | 0 | 3,000,000 | `user1` |
+| packed **on** | **2,998,956** | 391,633,468 | **0** | 3,000,000 | `user1` |
+
+**The packed arm spilled more than the control**, by 4,830 keys. Nothing was
+evicted, nothing was lost, neither process was killed. All three bad outcomes
+this experiment was designed to distinguish — evict instead of spill, grow
+until killed, never spill — happened in neither arm.
+
+So the zero demotions at half a million rows was **scale, not a defect**: at
+that size the store had room and correctly said so; at three million it does
+not, and it engages exactly as it should.
+
+**There is nothing here to fix.** The premise this whole item was written on
+— that packing switches tiering off — is wrong.
+
+## What survives
+
+- The accounted figure still sits far from resident memory (5.68× and 5.95×
+  here, 2.03× and 3.00× at the smaller size). That is the glibc arena, it has
+  no known recovery, and both exits are closed. It is a **property to
+  document**, not a defect to fix.
+- `tier_effective_target` reaches **0** at this size — the index and stub
+  floors consume the whole budget — so the store is permanently "over target"
+  and relies on the backoff to avoid re-walking the sample window forever.
+  That mechanism exists and works, but a target of zero is worth knowing
+  about when sizing a budget.
+- **`packed-rows` is no longer blocked by tiering.** The last of the three
+  reasons for keeping it off is gone.
+
+## The shape of my own error, since it is the fifth time this session
+
+A plausible mechanism (accounting gets accurate → figure shrinks → gate stops
+firing) plus a suggestive observation (zero demotions) is not evidence. Four
+candidates for the packed row's sign difference had exactly this shape and
+all four were refuted. This is the fifth. The only thing that went right is
+that the experiment ran before the fix was written.
