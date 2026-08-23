@@ -73,15 +73,55 @@ identifier that A1 does not create. The gate's verdict stands — do not build
 from the cost table — but the reason had to be stated correctly, and my first
 statement of it was wrong in the direction of dismissing the work.
 
-## Where the rest of the 669 bytes are
+## Where the rest of the 670 bytes are — measured, one variable at a time
 
-Not measured here, and that is the next step rather than a guess. The
-candidates visible in the source are the per-entry structural overhead
-(`ENTRY_OVERHEAD = 48` in `crates/kevy-index/src/segment.rs`), the segment's
-own node structure, the `IndexValue`, and the derived composite key an
-`ORDERPATH` builds per row. Two indexes at 669 bytes is ~334 bytes each,
-against 48 declared per entry — so most of it is somewhere the memory formula
-does not name.
+Five declarations over the same 500,000 rows, each adding exactly one thing:
+
+| shape | RSS/row | difference |
+|---|---:|---:|
+| no index | 1,663 | — |
+| `INDEX sku range` | 1,919 | **+256** — one scalar index |
+| … `VALUES name` | 2,084 | +165 — the covering copy |
+| `ORDERPATH dept→ts` | 2,075 | **+412** — one composite index |
+| both indexes | 2,333 | **+670** |
+
+**The decomposition closes**: 256 + 412 = 668 against a measured 670. Two
+indexes cost what they cost separately; there is no sharing to reclaim
+between them, and a two-byte residual on a 670-byte term says the split is
+clean rather than fitted.
+
+**A composite index costs 1.6× a scalar one** — 412 against 256. Nobody had
+measured that. It derives an `IndexValue::Str` per row, which is another
+`Vec<u8>`, and `tree` and `back` each hold a copy of it just as they do the
+key.
+
+Inside the 256 bytes a scalar index spends:
+
+| term | bytes | share |
+|---|---:|---:|
+| the key, stored twice as `Vec<u8>` (short key) | 68 | 27% |
+| `ENTRY_OVERHEAD` as the formula declares it | 48 | 19% |
+| **unnamed** | **140** | **55%** |
+
+More than half of a scalar index's cost is somewhere the memory formula does
+not account for: `BTreeSet` and `HashMap` node overhead, the third container
+(`value_counts`), and allocator rounding on every one of those separate
+`Vec<u8>` allocations.
+
+## What this makes worth attacking, in order
+
+1. **The composite index at 412 B/row.** The largest single term, 1.6× a
+   scalar index, and unmeasured until now.
+2. **The 140 unnamed bytes per scalar index.** `tree` holds
+   `(IndexValue, Vec<u8>)` and `back` holds `Vec<u8> → IndexValue` — both the
+   value *and* the key exist twice, in two containers that never share. An
+   index needs value→keys and key→value; it does not need two independent
+   copies of each to provide them.
+3. **A2, at ~52 B/row of that 68.** Real, and smaller than both of the above.
+
+None of these should be built from this table either. Each is a Phase A
+target that now has a measured size, which is what the gate asked for and
+what the 24.6% never had.
 
 ## Why this is the fifth time
 
