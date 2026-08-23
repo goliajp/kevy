@@ -112,17 +112,32 @@ Measured, same probe with an index declared, median of three:
 | no index | 1,663 | 1,721 | +3.4% |
 | **with an index** | **1,828** | **2,186** | **+19.6%** |
 
-The index makes it **worse**, not better. Scale is not it either: the same
-probe at two million rows, no index, gives 1,522 → 1,576 — **+3.5%**, which
-is what half a million gives. And the shard count is the same on both sides
-(the box's default), as is the AOF setting.
+The index makes it worse, scale gives the same +3.5% at two million rows,
+the shard count and AOF setting are identical on both sides, and loading
+one-at-a-time instead of in batches changes nothing (+3.6% against +3.5%).
 
-So three candidates are out, and the difference is **unexplained**. What is
-left is the rest of what the full benchmark does and this probe does not:
-pipelined bulk loading, and a query phase after the load. Neither has been
-isolated, and until one is, the honest reading is that the representation is
-worth −23.4% when declared first, and that the backfill path's outcome
-depends on something not identified here.
+**The answer is the query phase.** The benchmark runs four query shapes 5,000
+times each after the load; no probe had ever run one. Adding them, median of
+three:
+
+| load-then-declare, with an index | packed off | packed on | |
+|---|---:|---:|---:|
+| no queries | 1,848 | 2,077 | +12.4% |
+| **with queries** | **2,207** | **2,133** | **−3.4%** |
+
+The sign flips, and the asymmetry says why: the query phase adds **359 bytes
+a row** to the general form and **56** to the packed one — which lands on
+2,133 on every pass, to the byte, while the general arm scatters over 244.
+
+**The saving is collected when rows are read, not when they are written.** A
+write into a packed row costs: a buffer allocated beside the table it
+replaces, and whatever the allocator keeps. A *read* out of a general hash
+walks a table and hands back one `SmallBytes` per field; a packed row's
+values are one contiguous run and its reads allocate almost nothing. Over ten
+thousand reads that is 300 bytes a row of retained arena.
+
+So a row is written once and read many times, which is the case this form is
+for — and the case a load-only measurement never sees.
 
 Read the −23.4% as the representation's own effect. Read every load-first
 figure as saying that the backfill path's outcome depends on something this

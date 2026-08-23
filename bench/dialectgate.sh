@@ -34,7 +34,13 @@ import socket, sys, time
 
 port = int(sys.argv[1])
 
-deadline = time.time() + 15
+# 60 s, not 15. A debug build on a machine already running the rest of the
+# suite took 15.2 s to accept and this gate reported it as "never" — the
+# same lesson `crates/kevy-cli/tests/migrate_roundtrip.rs` wrote down when it
+# went from 2 s to 10: a wait budget tuned on an idle machine is a flake
+# scheduled for the first busy one. The server was fine; hand-started it
+# listens, answers PING, and prints its banner.
+deadline = time.time() + 60
 while time.time() < deadline:
     try:
         s = socket.create_connection(("127.0.0.1", port), timeout=1)
@@ -42,7 +48,9 @@ while time.time() < deadline:
     except OSError:
         time.sleep(0.2)
 else:
-    sys.exit(f"dialectgate: server never accepted on 127.0.0.1:{port}")
+    sys.exit(f"dialectgate: server never accepted on 127.0.0.1:{port} "
+             f"within 60s — it is slow or absent, and this cannot tell "
+             f"which; check the server log in the work dir")
 s.settimeout(10)
 
 def ev(script):
