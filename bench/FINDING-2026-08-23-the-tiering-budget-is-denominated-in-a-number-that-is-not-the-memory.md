@@ -80,25 +80,44 @@ That finding also recorded the same phenomenon at a different scale: tiered
 mode holding `used_memory` at 0.42 GiB while RSS sat at 3.03 GiB — **7.2×**.
 The 2.03× and 3.00× above are that, reproduced.
 
-## So what is actually actionable here
+## Correction — "packing makes tiering worse" is not what this measured
 
-**The fragmentation term has no known recovery**, and this finding does not
-claim one. But one thing in the table above is not fragmentation and is
-plainly a defect:
+The section above asserted that, and the RSS column refutes it — a column
+that was in the same table:
 
-> **the packed arm demoted zero keys.**
+| | demotions | RSS |
+|---|---:|---:|
+| packed off | 142,552 | 896,667,648 |
+| packed **on** | **0** | **865,800,192** — **3.4 % lower** |
 
-Whatever RSS does, tiering's job is to move cold rows to disk, and with
-packing on it stopped doing that entirely — not because memory was fine, but
-because the accounted figure it steers by got *more accurate* and therefore
-smaller. A store where improving a value's accounting switches off its
-reclaim is mis-wired regardless of what the allocator does underneath.
+The packed arm kept every row in RAM and still used less memory than the arm
+that spilled 142,552 keys. At this size, demoting nothing was not a
+regression; it was the store correctly observing it had room.
 
-So N3 is not "pick an accounting basis". It is: **make the demotion trigger
-stop depending on `used_memory ≈ RSS`, which is known false.** The budget can
-keep meaning accounted bytes — that is defensible, and it is what the general
-arm already honours to nine thousand bytes in four hundred million — but the
-*trigger* must not silently stop firing when a representation gets honest.
+I nearly wrote a fix for a defect I had asserted rather than measured.
+
+## What is actually established, and what is not
+
+**Established.** The figure the demotion gate steers by sits 2–3× from the
+process's resident memory, and packing widens that ratio because the packed
+form's weight is honest about itself while the general hash's under-charges
+by roughly 344 bytes a row. The general arm honours its target to nine
+thousand bytes in four hundred million; the mechanism is not broken.
+
+**Established.** The fragmentation term has no known recovery. Both exits
+were measured here and closed (above).
+
+**Not established.** That any of this harms anyone. With packing on the tier
+never engages, so a dataset that genuinely exceeds RAM would not spill and
+the budget would stop bounding anything — but half a million rows fit in both
+arms, so this probe cannot see that case. **The experiment that can is one
+where the data does not fit, and it has not been run.**
+
+That experiment is N3's real content: load past the budget with packing on,
+and see whether the store spills, evicts, or grows until the OOM killer takes
+it. Until it runs, "packing breaks tiering" is a hypothesis with a plausible
+mechanism and no evidence, which is the same shape as the four candidates
+this session already refuted.
 
 Still blocks `packed-rows` defaulting on: a tiered deployment would go from
 142,552 demotions to none.
