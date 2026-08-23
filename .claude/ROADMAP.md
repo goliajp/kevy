@@ -836,8 +836,28 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
       标量索引 256 B 里:键(2 份 `Vec<u8>`)68、`ENTRY_OVERHEAD` 48、
       **未命名 140(55%)**。见
       `bench/FINDING-2026-08-23-A2-attacks-under-one-percent-of-what-an-index-costs.md`。
-- [ ] **N5 — 发布 5.4.1**。六层版本对齐 + 盒上 prerelease 五项 + CI 真绿 + 全渠道
-      按内容核验(含真装一次 npm 包)。
+- [x] **N5 — 5.4.1 已发布 ✅**(2026-08-23)。tag `v5.4.1` @ `25f02fcb`,
+      CI 30/30、发布 workflow 7/7(**含 5.4.0 时失败的 npm publish** —— L1 被
+      真实发布验证)。全渠道**按内容**核验:crates.io 四个 crate 全 5.4.1、
+      npm **真装下来**、GitHub release 6 资产、master 快进后下游拉到的
+      CHANGELOG 首条是 `## 5.4.1`、Go 代理解析到 v5.4.1、站点首页 5.4.1
+      且三语 packed-rows 页 200。
+
+- [x] **dogfood 主力版本已切换 ✅**(2026-08-23):
+      | 项目 | 从 | 验证 |
+      |---|---|---|
+      | smix | 5.3 | 构建 + `smix-store` 全绿 |
+      | devops | **路径依赖** | 构建 + 9 套件 |
+      | buwanren | **1.4.20** | 构建 + 166 用例 / 19 套件 |
+      buwanren 跨四个大版本**不需要改一行代码**(只用 `Store::open` /
+      `Config::default`)。
+      **devops 此前从未 dogfood 过任何一次发布** —— 它依赖
+      `path = "../../../kevy/..."`,跟的是另一个 checkout 的磁盘状态;证据是
+      它仓库里一个未提交的 `Cargo.lock`,被 kevy 工作区的编辑改成 5.4.0,
+      且在 5.4.1 发布后仍写着 5.4.0。已改为 crates.io 版本依赖。
+      **覆盖面的真实边界**:三个消费方**都不声明表**,所以验证了「依赖能升、
+      构建能过、行为没退」,**没有验证打包行本身**。真正会踩到新默认的是
+      声明了表的用户,目前没有这样的 dogfood 消费方。
 
 ### 5.4.0 遗留的三笔账（在 N1 之前先清，它们很小但会咬人）
 
