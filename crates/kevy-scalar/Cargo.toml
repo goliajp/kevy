@@ -12,4 +12,4 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
-kevy-time = { path = "../kevy-time", version = "5.4.0" }
+kevy-time = { path = "../kevy-time", version = "5.4.1" }
