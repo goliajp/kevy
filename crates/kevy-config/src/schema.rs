@@ -25,9 +25,22 @@ pub struct ServerSection {
     pub accept_shards: Option<usize>,
     /// Store a declared table's rows in the packed representation: the
     /// columns in declared order in one buffer, with no per-row field names
-    /// and no per-row hash table. Default `false` while the trade is being
-    /// measured — the memory it saves is paid for in work at each row's first
-    /// write, and the two are reported apart.
+    /// and no per-row hash table.
+    ///
+    /// Default `true` since 5.4.1. It shipped off in 5.4.0 for three reasons
+    /// and each was then measured away:
+    ///
+    /// - *the adoption path costs memory* — true only of a probe that never
+    ///   read a row back. The saving is collected on reads, not writes: a
+    ///   query phase adds 359 B/row to the general form and 56 to this one
+    ///   (`the-gap-opens-when-the-rows-are-read`);
+    /// - *an unexplained sign difference* — that was the same thing;
+    /// - *it stops tiering demoting* — at three million rows against a
+    ///   512 MB budget it demotes 2,998,956 keys, more than the general form
+    ///   (`the-tiering-budget-is-denominated-in-a-number-that-is-not-the-memory`).
+    ///
+    /// A deployment that wants 5.4.0's representation sets this to `false`;
+    /// nothing about the wire or the on-disk formats changes either way.
     pub packed_rows: bool,
     /// Cap on total active client connections. `0` = unlimited.
     /// Default `10000` (matches Redis). New connection past cap is closed
@@ -44,7 +57,7 @@ impl Default for ServerSection {
             port: 6004,
             threads: 0,
             accept_shards: None,
-            packed_rows: false,
+            packed_rows: true,
             max_clients: 10_000,
             data_dir: PathBuf::from("."),
         }
