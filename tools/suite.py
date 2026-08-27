@@ -246,6 +246,19 @@ def audit(suite, checks):
     # name a requirement nothing satisfies and it is indistinguishable from
     # one satisfied on a machine nobody is at — the NOT-RUN line says what is
     # missing, never where the row does run.
+    # `advisory` means the row can never redden its tier, while its `proves`
+    # line goes on claiming something. This project already requires a reason
+    # attached to a waiver and to an accepted set-growth; the same rule, for
+    # the same reason: the exemption must not outlive whoever understood it.
+    for c in checks:
+        if c.get("advisory") and not c.get("advisory_reason", "").strip():
+            bad.append(f"{c['id']}: advisory = true with no advisory_reason — "
+                       f"a row that cannot fail must say why, and what would "
+                       f"end that")
+        if c.get("advisory_reason", "").strip() and not c.get("advisory"):
+            bad.append(f"{c['id']}: has an advisory_reason but is not advisory "
+                       f"— the reason outlived the exemption")
+
     declared = suite.get("requirements", {})
     used = {r for c in checks for r in c.get("requires", [])}
     for r in sorted(used - set(declared)):
@@ -414,6 +427,10 @@ def run_tier(suite, checks, tier, only=None, area=None):
     if advis:
         for c, _, _, why in advis:
             print(f"  △ advisory {c['id']}: {why.splitlines()[-1][:120] if why else ''}")
+            # Why it cannot redden the tier, at the moment it did not.
+            reason = " ".join(c.get("advisory_reason", "").split())
+            if reason:
+                print(f"      advisory because: {reason[:180]}")
     if fails:
         print("  failed:")
         for c, _, _, _ in fails:
