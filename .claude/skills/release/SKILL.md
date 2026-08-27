@@ -15,7 +15,7 @@ Pushing the tag publishes 40 crates to crates.io, which cannot be
 undone, under the owner's company identity — so the tag push waits for
 an explicit instruction, every time, no matter how green everything is.
 
-## 1. What carries a version (six layers)
+## 1. What carries a version (seven layers)
 
 A bump that moves one layer and forgets another ships a lie. The
 5.1.0 bump moved layer 1 and stopped; fourteen language doors kept
@@ -31,6 +31,7 @@ would have shipped the hazard the release existed to close.
 | 4 | Live constants | python `__version__`, gradle `version` / `versionName` | code, not metadata — it answers at runtime |
 | 5 | Prose claims | `README` "this door tracks kevy X", `PUBLISH-FORM.md` | a reader trusts these more than the manifest |
 | 6 | **Vendored engine bytes** | `bindings/*/android/**/jniLibs/*.so`, `bindings/*/ios/*.xcframework/**/*.a` | these do not *say* a version, they **are** one |
+| 7 | **The Go module's major** | `scripts/mirror-go-module.sh`'s `MODULE=`, `bindings/go/go.mod`, and every documented `github.com/goliajp/kevy-go/vN` import | Go puts the major IN the import path, so it does not *say* a version either — for major ≥ 2 it **is** one, and a wrong one resolves to the wrong major forever |
 
 Run the gate, do not eyeball it:
 
@@ -43,6 +44,13 @@ keep their own 2.x line) and ignores example apps and third-party
 lockfiles. It is in CI. Each layer also carries a floor, so a layer
 that finds *nothing* fails instead of passing — a bare checkout with no
 vendored artifacts built must not read as "everything agrees".
+
+Layer 7 was added in 6.0.0, after a bump found that `kevy-client` and
+`kevy-cluster-rw` pinned `kevy` itself and the gate's pattern
+(`kevy-[\w-]+`) could not see a path ending in the project's own name.
+`bump_version.py` moves layer 7; it does not move layer 6, and it skips the
+changelog, the roadmap and the finding records, because rewriting `/v5` in a
+record of what happened in August makes the record false rather than current.
 
 When it flags vendored bytes, rebuild:
 
@@ -99,7 +107,7 @@ python3 tools/suite.py full         # hunting problems; before majors
 ```
 
 - **precommit** runs on every push (pushgate is now an alias for it):
-  hygiene, the version pins across all six layers, publish order,
+  hygiene, the version pins across all seven layers, publish order,
   crate layering, the fast doc gates, and the Lua dialect pins.
 - **prerelease** is the tag gate. It adds clippy, the workspace tests,
   the site built and opened in a real browser, the compat and cookbook
