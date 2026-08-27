@@ -188,11 +188,58 @@ def update(base_path, obs_path, reason):
     return 0
 
 
+def envelope(base_path, obs_paths):
+    """Record the element-wise MAXIMUM across several observed sets.
+
+    A ratchet over a measurement with a noisy tail cannot hold one sample:
+    three consecutive CI runs of this workspace each produced a different
+    handful of grown symbols, none overlapping — match_migrating and
+    resolve_xadd_id in one, maybe_ack and dispatch_with_proto and os::trim
+    in the next. Registering them as they appear does not converge, because
+    the next run names different ones.
+
+    So the baseline holds the UPPER BOUND of what the noise has been
+    observed to do. Growth then means "worse than the worst of N runs",
+    which is a claim about the code rather than about which run it was.
+    The count of runs is recorded, because an envelope over one run is
+    just a sample and should not be able to pass itself off as more.
+    """
+    docs = [load(p, f"observed {i + 1}") for i, p in enumerate(obs_paths)]
+    ids = {json.dumps(identity(d), sort_keys=True) for d in docs}
+    if len(ids) != 1:
+        refuse(f"the {len(docs)} observed sets do not share one identity: {ids}")
+
+    merged = {}
+    for d in docs:
+        for k, v in d["symbols"].items():
+            merged[k] = max(merged.get(k, 0), v)
+
+    out = dict(docs[-1])
+    out["symbols"] = dict(sorted(merged.items()))
+    out["envelope_runs"] = len(docs)
+    out["dead_regions"] = sum(merged.values())
+    prior = pathlib.Path(base_path)
+    out["history"] = (load(base_path, "baseline").get("history", []) if prior.exists() else []) + [
+        {"envelope_over": len(docs),
+         "symbols": len(merged),
+         "regions": out["dead_regions"],
+         "reason": "element-wise maximum; growth now means worse than the worst observed run"},
+    ]
+    prior.write_text(json.dumps(out, indent=2) + "\n")
+    per = [d["dead_regions"] for d in docs]
+    print(f"setratchet: envelope over {len(docs)} runs -> {len(merged)} symbols / "
+          f"{out['dead_regions']} regions (individual runs: {per})")
+    return 0
+
+
 def main():
     args = sys.argv[1:]
-    if len(args) < 3 or args[0] not in ("gate", "update"):
+    if len(args) < 3 or args[0] not in ("gate", "update", "envelope"):
         refuse("usage: setratchet.py gate|update <baseline.json> <observed.json> "
-               "[--accept-growth \"reason\"]")
+               "[--accept-growth \"reason\"]\n"
+               "       setratchet.py envelope <baseline.json> <observed.json>...")
+    if args[0] == "envelope":
+        return envelope(args[1], args[2:])
     mode, base_path, obs_path = args[0], args[1], args[2]
     reason = ""
     if "--accept-growth" in args:

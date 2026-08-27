@@ -2,16 +2,16 @@
   "corpus": "c1",
   "platform": "linux",
   "total_regions": 163085,
-  "dead_regions": 27738,
-  "llvm_per_instantiation_dead": 28711,
+  "dead_regions": 27873,
+  "llvm_per_instantiation_dead": 28776,
   "crates": {
     "kevy": {
       "regions": 28714,
-      "dead": 5601
+      "dead": 5610
     },
     "kevy-alloc": {
       "regions": 1694,
-      "dead": 117
+      "dead": 119
     },
     "kevy-bench": {
       "regions": 130,
@@ -55,7 +55,7 @@
     },
     "kevy-embedded": {
       "regions": 27533,
-      "dead": 4263
+      "dead": 4275
     },
     "kevy-ffi": {
       "regions": 842,
@@ -71,7 +71,7 @@
     },
     "kevy-index": {
       "regions": 5863,
-      "dead": 438
+      "dead": 449
     },
     "kevy-jni": {
       "regions": 526,
@@ -127,7 +127,7 @@
     },
     "kevy-rt": {
       "regions": 15689,
-      "dead": 4783
+      "dead": 4803
     },
     "kevy-scalar": {
       "regions": 4383,
@@ -147,7 +147,7 @@
     },
     "kevy-store": {
       "regions": 18642,
-      "dead": 1539
+      "dead": 1536
     },
     "kevy-sys": {
       "regions": 730,
@@ -847,7 +847,7 @@
     "::tier_stats": 1,
     "::to_sidecar": 6,
     "::tokens": 4,
-    "::top_groups": 12,
+    "::top_groups": 23,
     "::touch_policy": 1,
     "::trim_maxlen": 2,
     "::trim_minid": 1,
@@ -1030,8 +1030,8 @@
     "<kevy_rt::shard::Shard>::build_xread_targets": 2,
     "<kevy_rt::shard::Shard>::build_zalgebra_store::": 4,
     "<kevy_rt::shard::Shard>::build_zintercard::": 4,
-    "<kevy_rt::shard::Shard>::cancel_xshard_on_close": 2,
-    "<kevy_rt::shard::Shard>::check_repl_ack_waiters": 48,
+    "<kevy_rt::shard::Shard>::cancel_xshard_on_close": 8,
+    "<kevy_rt::shard::Shard>::check_repl_ack_waiters": 53,
     "<kevy_rt::shard::Shard>::check_repl_apply_waiters": 2,
     "<kevy_rt::shard::Shard>::check_tee_overrun": 27,
     "<kevy_rt::shard::Shard>::client_getname::": 37,
@@ -1138,7 +1138,7 @@
     "<kevy_rt::shard::Shard>::park_blocked_xshard": 1,
     "<kevy_rt::shard::Shard>::park_dispatch::": 2,
     "<kevy_rt::shard::Shard>::park_if_held": 6,
-    "<kevy_rt::shard::Shard>::parse_replica_acks": 11,
+    "<kevy_rt::shard::Shard>::parse_replica_acks": 48,
     "<kevy_rt::shard::Shard>::post_write_housekeeping::": 3,
     "<kevy_rt::shard::Shard>::preallocate_exec_slots": 1,
     "<kevy_rt::shard::Shard>::prepare_uring_shard": 92,
@@ -1156,8 +1156,8 @@
     "<kevy_rt::shard::Shard>::repl_ack_count": 4,
     "<kevy_rt::shard::Shard>::repl_waiter_reply": 5,
     "<kevy_rt::shard::Shard>::replica_conn_is_live": 11,
-    "<kevy_rt::shard::Shard>::replica_io_failed": 1,
-    "<kevy_rt::shard::Shard>::replica_readable": 13,
+    "<kevy_rt::shard::Shard>::replica_io_failed": 8,
+    "<kevy_rt::shard::Shard>::replica_readable": 27,
     "<kevy_rt::shard::Shard>::replica_writable": 13,
     "<kevy_rt::shard::Shard>::replicas_brief": 29,
     "<kevy_rt::shard::Shard>::reply_feed_error": 13,
@@ -1167,7 +1167,7 @@
     "<kevy_rt::shard::Shard>::restore_serve_on_teardown": 9,
     "<kevy_rt::shard::Shard>::rewrite_aof_after_resync": 11,
     "<kevy_rt::shard::Shard>::rewrite_predicted_diverging": 3,
-    "<kevy_rt::shard::Shard>::run": 74,
+    "<kevy_rt::shard::Shard>::run": 79,
     "<kevy_rt::shard::Shard>::run_uring": 334,
     "<kevy_rt::shard::Shard>::run_uring::cold_path_hint": 2,
     "<kevy_rt::shard::Shard>::send_or_hold_response": 8,
@@ -1197,8 +1197,8 @@
     "<kevy_rt::shard::Shard>::tick_blocked_timeouts": 1,
     "<kevy_rt::shard::Shard>::tick_persist": 1,
     "<kevy_rt::shard::Shard>::tick_replication_slots": 2,
-    "<kevy_rt::shard::Shard>::tick_replication_view": 9,
-    "<kevy_rt::shard::Shard>::tick_replication_watermark": 3,
+    "<kevy_rt::shard::Shard>::tick_replication_view": 13,
+    "<kevy_rt::shard::Shard>::tick_replication_watermark": 5,
     "<kevy_rt::shard::Shard>::tick_xshard_timeouts": 2,
     "<kevy_rt::shard::Shard>::trace_acksent_pending": 17,
     "<kevy_rt::shard::Shard>::trace_handshake": 20,
@@ -1492,7 +1492,7 @@
     "kevy::dispatch::dispatch_conn::": 4,
     "kevy::dispatch::dispatch_generic::": 1,
     "kevy::dispatch::dispatch_string::": 32,
-    "kevy::dispatch::dispatch_with_proto::": 10,
+    "kevy::dispatch::dispatch_with_proto::": 14,
     "kevy::dispatch_collections::cmd_brpoplpush::": 8,
     "kevy::dispatch_collections::cmd_lmove::": 7,
     "kevy::dispatch_collections::dispatch_hash::": 4,
@@ -1676,6 +1676,7 @@
     "kevy::replica_runner::drain_session": 8,
     "kevy::replica_runner::event_to_apply": 1,
     "kevy::replica_runner::gen_still_matches": 3,
+    "kevy::replica_runner::maybe_ack": 5,
     "kevy::replica_runner::run_loop": 3,
     "kevy::replica_runner::set_socket_slot": 1,
     "kevy::replica_runner_routed::drain_client_routed": 68,
@@ -1724,7 +1725,7 @@
     "kevy_alloc::large::with_pool::": 1,
     "kevy_alloc::os::discard": 1,
     "kevy_alloc::os::map_aligned": 4,
-    "kevy_alloc::os::trim": 1,
+    "kevy_alloc::os::trim": 3,
     "kevy_alloc::os::unmap": 1,
     "kevy_alloc::segment::splice_foreign": 2,
     "kevy_bench::bench::": 1,
@@ -2111,8 +2112,9 @@
     "kevy_embedded::replay::parse_zadd_flags": 2,
     "kevy_embedded::replica_runner::drain_session": 4,
     "kevy_embedded::replica_runner::finish_snapshot": 1,
+    "kevy_embedded::replica_runner::run_loop": 6,
     "kevy_embedded::replica_runner::run_session": 1,
-    "kevy_embedded::replica_runner::sleep_interruptible": 9,
+    "kevy_embedded::replica_runner::sleep_interruptible": 15,
     "kevy_embedded::replica_runner::snapshot_event": 4,
     "kevy_embedded::replica_source::handshake_and_prepare": 3,
     "kevy_embedded::replica_source::next_frame_bytes": 3,
@@ -2448,7 +2450,7 @@
     "kevy_replicate::wire::parse_decimal": 2,
     "kevy_replicate::wire::parse_envelope_header": 2,
     "kevy_replicate::wire::parse_signed_decimal": 5,
-    "kevy_replicate::wire_snapshot::decode_replconf_ack": 7,
+    "kevy_replicate::wire_snapshot::decode_replconf_ack": 27,
     "kevy_replicate::wire_snapshot::decode_snapshot_chunk": 1,
     "kevy_replicate::wire_snapshot::decode_snapshot_marker": 1,
     "kevy_resp::fuzz::run_n": 5,
@@ -2476,7 +2478,7 @@
     "kevy_resp_client::pubsub_event::take_bulk": 4,
     "kevy_resp_client::pubsub_event::take_bulk_or_nil": 7,
     "kevy_resp_client::pubsub_event::take_int": 4,
-    "kevy_rt::aof_writer::run_worker": 5,
+    "kevy_rt::aof_writer::run_worker": 6,
     "kevy_rt::blocked::encode_block_timeout": 3,
     "kevy_rt::client_ops::client_row": 2,
     "kevy_rt::exec_build::gather_error": 9,
@@ -2818,6 +2820,7 @@
     "kevy_window::text::clean_stale": 17,
     "kevy_window::text::write_seg_file": 11
   },
+  "envelope_runs": 3,
   "history": [
     {
       "accepted": [
@@ -2849,6 +2852,12 @@
       ],
       "reason": "Two regions, against a set that shrank by 120 (27,858 -> 27,738). ::match_migrating (kevy-scope slot migration) and ::resolve_xadd_id (stream XADD id resolution) are both unqualified monomorphised generics, the same shape as the three already registered unstable, but ONE run is not evidence that they vary \u2014 it is evidence that they differ from a baseline that is itself one sample. Accepted here rather than registered. The rule for next time: if these same two recur in the next run's growth, they earn an unstable entry with the differing values; if different symbols appear each run instead, that pattern is itself the evidence that the tail of this measurement is noisy and the registration should be by prefix.",
       "delta": 2
+    },
+    {
+      "envelope_over": 3,
+      "symbols": 2615,
+      "regions": 27873,
+      "reason": "element-wise maximum; growth now means worse than the worst observed run"
     }
   ]
 }
