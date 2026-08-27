@@ -38,10 +38,31 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # Packages on their own version track, with the reason. An entry here is
 # a claim that the file is SUPPOSED to disagree with the workspace.
+def _independent_versions():
+    """The version each independently-lined crate actually declares.
+
+    Read from the crate rather than restated here: a second copy of a
+    version number is one more place for a bump to forget, which is the
+    whole defect this gate exists to catch.
+    """
+    out = {}
+    for rel in INDEPENDENT:
+        try:
+            txt = (ROOT / rel).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        m = re.search(r'^version\s*=\s*"(\d+\.\d+\.\d+)"', txt, re.M)
+        if m:
+            out[rel] = m.group(1)
+    return out
+
+
 INDEPENDENT = {
     "crates/kevy-client/Cargo.toml": "the sync client keeps its own 2.x line",
     "crates/kevy-client-async/Cargo.toml": "twin of kevy-client, same line",
 }
+
+INDEPENDENT_VERSION = _independent_versions()
 
 # Example / demo applications that ship with a binding. They version
 # themselves as sample code and are not products.
@@ -91,14 +112,29 @@ def layer1_cargo(v: str, bad: list) -> int:
                     bad.append(f"{rel}:{i}: own version {m.group(1)} != {v}")
                 continue
             # A version-gated path dependency on a sibling.
+            #
+            # The pin must match the version line of the crate it POINTS AT,
+            # which is not always the workspace version: kevy-client and its
+            # async twin keep their own 2.x line (see INDEPENDENT above), so a
+            # correct pin on them reads 2.2.0 and a pin reading 5.4.1 would
+            # name a version that does not exist.
+            #
+            # Until v6 those pins carried no version at all — a path-only
+            # dev-dependency, invisible to this check and dropped outright by
+            # `cargo package`, which is how four published stones came to ship
+            # tests importing a crate their manifest never declared. Giving
+            # them versions is what made this case reachable.
             m = re.search(
-                r'path\s*=\s*"[^"]*kevy-[\w-]+"\s*,\s*version\s*=\s*"=?(\d+\.\d+\.\d+)"',
+                r'path\s*=\s*"[^"]*?(kevy-[\w-]+)"\s*,\s*version\s*=\s*"=?(\d+\.\d+\.\d+)"',
                 line,
             )
             if m:
                 checked += 1
-                if m.group(1) != v:
-                    bad.append(f"{rel}:{i}: path-dep pin {m.group(1)} != {v}")
+                target = f"crates/{m.group(1)}/Cargo.toml"
+                want = INDEPENDENT_VERSION.get(target, v)
+                if m.group(2) != want:
+                    where = "" if want == v else f" (independent line: {target})"
+                    bad.append(f"{rel}:{i}: path-dep pin {m.group(2)} != {want}{where}")
     return checked
 
 
@@ -277,7 +313,16 @@ def main() -> int:
         return 1
     total = sum(counts.values())
     detail = ", ".join(f"{k} {n}" for k, n in counts.items())
-    print(f"ok: {total} version declarations all at {v} ({detail})")
+    # "all at 5.4.1" stopped being true the moment pins on the independent
+    # 2.x client line became visible to this gate. A summary that overstates
+    # what it checked is the same kind of lie the gate exists to catch.
+    if INDEPENDENT_VERSION:
+        lines = ", ".join(f"{k.split('/')[1]} at {ver}"
+                          for k, ver in sorted(INDEPENDENT_VERSION.items()))
+        print(f"ok: {total} version declarations consistent — workspace at {v}, "
+              f"{lines} ({detail})")
+    else:
+        print(f"ok: {total} version declarations all at {v} ({detail})")
     return 0
 
 

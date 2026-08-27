@@ -24,6 +24,6 @@ kevy-resp-client = { path = "../kevy-resp-client", version = "5.4.1" }
 kevy-testnet = { path = "../kevy-testnet" }
 # Integration tests spin up real kevy primary + replica Runtimes to
 # verify routing end-to-end.
-kevy = { path = "../kevy" }
+kevy = { path = "../kevy", version = "5.4.1" }
 kevy-rt = { path = "../kevy-rt", version = "5.4.1" }
 kevy-replicate = { path = "../kevy-replicate", version = "5.4.1" }

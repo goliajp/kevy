@@ -70,7 +70,7 @@ smol = { version = "2" }
 async-std = { version = "1", features = ["attributes"] }
 # T4.23 benchmark vs the blocking client. Workspace path, no
 # crates.io dep — blocking client is itself a 0-dep crate.
-kevy-client = { path = "../kevy-client" }
+kevy-client = { path = "../kevy-client", version = "2.2.0" }
 
 [features]
 # `default = ["tokio"]` is a dev convenience so `cargo test --workspace`

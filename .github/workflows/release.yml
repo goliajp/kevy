@@ -83,11 +83,11 @@ jobs:
           chain=$(printf '%s\n' \
             kevy-alloc kevy-compress kevy-config kevy-geo kevy-hash kevy-bytes \
             kevy-lua kevy-lua-host kevy-madvise kevy-map kevy-ranktree kevy-resp \
-            kevy-elect kevy-replicate kevy-resp-client kevy-client-async kevy-mcp kevy-ring \
+            kevy-elect kevy-replicate kevy-resp-client kevy-mcp kevy-ring \
             kevy-scope kevy-sys kevy-text kevy-time kevy-index kevy-scalar \
             kevy-sql kevy-tmpdir kevy-seg kevy-uring kevy-vector kevy-vlog \
-            kevy-store kevy-persist kevy-rt kevy-cluster-rw kevy-window kevy-embedded \
-            kevy kevy-cli kevy-client kevy-wasm | sort -u)
+            kevy-store kevy-persist kevy-rt kevy-window kevy-embedded \
+            kevy kevy-cli kevy-client kevy-cluster-rw kevy-client-async kevy-wasm | sort -u)
           expected=$(cargo metadata --no-deps --format-version 1 \
             | jq -r '.packages | map(select(.publish == null)) | .[].name' \
             | sort -u)
@@ -157,17 +157,33 @@ jobs:
           # Topological order — leaves first, then crates that depend on
           # them. Same chain as RELEASE-DRY-RUN.md. v1.22.0 adds
           # kevy-scope (pure-data stone, std-only — sits with the other
-          # leaves) and kevy-client-async (deps kevy-resp + kevy-hash;
-          # dev-dep kevy-client doesn't affect publish — placed at the
-          # end alongside kevy-cluster-rw).
+          # leaves) and kevy-client-async (deps kevy-resp + kevy-hash).
+          #
+          # v6 moved kevy-client-async and kevy-cluster-rw to the end. The
+          # note that used to sit here said a dev-dependency on kevy-client
+          # does not affect publish. That was true only while the dependency
+          # carried no version: `cargo package` drops a path-only
+          # dev-dependency outright, which is how published crates came to
+          # ship tests importing a crate their manifest never declared.
+          # Those pins now carry versions, a versioned dev-dependency is
+          # resolved against crates.io exactly like a normal one, and so it
+          # is an ordering constraint.
+          #
+          # kevy and kevy-embedded keep theirs path-only on purpose.
+          # Versioning those closes a cycle with no order: kevy-cli,
+          # kevy-client and kevy-wasm all depend on kevy-embedded, while
+          # kevy-embedded's own tests need kevy and kevy-client. A crate at
+          # that layer does not promise "take it and run its tests" — its
+          # suite needs a test network, a chaos harness and the CLI. Stones
+          # do make that promise, so theirs are versioned.
           for c in \
             kevy-alloc kevy-compress kevy-config kevy-geo kevy-hash kevy-bytes \
             kevy-lua kevy-lua-host kevy-madvise kevy-map kevy-ranktree kevy-resp \
-            kevy-elect kevy-replicate kevy-resp-client kevy-client-async kevy-mcp kevy-ring \
+            kevy-elect kevy-replicate kevy-resp-client kevy-mcp kevy-ring \
             kevy-scope kevy-sys kevy-text kevy-time kevy-index kevy-scalar \
             kevy-sql kevy-tmpdir kevy-seg kevy-uring kevy-vector kevy-vlog \
-            kevy-store kevy-persist kevy-rt kevy-cluster-rw kevy-window kevy-embedded \
-            kevy kevy-cli kevy-client kevy-wasm; do
+            kevy-store kevy-persist kevy-rt kevy-window kevy-embedded \
+            kevy kevy-cli kevy-client kevy-cluster-rw kevy-client-async kevy-wasm; do
             publish_or_skip "$c"
           done
           echo "all publishable crates handled"

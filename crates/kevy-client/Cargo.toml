@@ -44,5 +44,5 @@ kevy-testnet = { path = "../kevy-testnet" }
 # full kevy command set (same harness as crates/kevy/tests/*). Path-
 # only (no version) so publish strips them — mirrors kevy's own
 # dev-dependency on kevy-client; the normal-dep graph stays acyclic.
-kevy = { path = "../kevy" }
-kevy-rt = { path = "../kevy-rt" }
+kevy = { path = "../kevy", version = "5.4.1" }
+kevy-rt = { path = "../kevy-rt", version = "5.4.1" }
