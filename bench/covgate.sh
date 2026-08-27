@@ -38,7 +38,22 @@ command -v cargo-llvm-cov >/dev/null 2>&1 || {
 }
 
 echo "covgate: measuring workspace line coverage (instrumented build + tests)..."
-COVJSON=$(mktemp)
+# One instrumented run, two instruments. deadgate needs the per-function
+# region records this run already produces and --summary-only throws away;
+# re-running the suite to get them would double a 25-minute CI job for data
+# that was on the floor. When KEVY_COV_JSON names a path, the full export
+# lands there and survives, and suite/corpus.toml declares this exact
+# command so the percentage and the dead set are two readings of one run
+# rather than two runs that disagree.
+if [ -n "${KEVY_COV_JSON:-}" ]; then
+    COVJSON="$KEVY_COV_JSON"
+    SUMMARY_ONLY=""
+    KEEP_JSON=1
+else
+    COVJSON=$(mktemp)
+    SUMMARY_ONLY="--summary-only"
+    KEEP_JSON=0
+fi
 # --output-path keeps the JSON pure: runners interleave rustup/cargo
 # info lines into stdout, which broke stdout capture (2026-07-03).
 COVLOG=$(mktemp)
@@ -47,7 +62,7 @@ COVLOG=$(mktemp)
 # node_api symbols do not even link outside one), and ffigate runs its
 # real suite via `node --test`. llvm-cov instrumenting a crate whose
 # tests it can never execute only dilutes the workspace ratio.
-cargo llvm-cov --workspace --exclude kevy-napi --lib --tests --summary-only --json \
+cargo llvm-cov --workspace --exclude kevy-napi --lib --tests $SUMMARY_ONLY --json \
     --output-path "$COVJSON" >"$COVLOG" 2>&1 || {
     echo "covgate: cargo llvm-cov run failed — last 200 lines (a flaky replication test's panic prints well before the summary; 40 lines once truncated the crash away):" >&2
     tail -200 "$COVLOG" >&2
@@ -59,7 +74,8 @@ import json
 d = json.load(open('$COVJSON'))
 print(f\"{d['data'][0]['totals']['lines']['percent']:.2f}\")
 ")
-rm -f "$COVJSON"
+[ "$KEEP_JSON" = "1" ] || rm -f "$COVJSON"
+[ "$KEEP_JSON" = "1" ] && echo "covgate: full export kept at $COVJSON for deadgate"
 
 if [ "$MODE" = "--update-baseline" ]; then
     printf '{\n  "workspace_line_coverage_pct": %s,\n  "recorded": "%s",\n  "note": "ratchet: only raise via --update-baseline after a deliberate improvement"\n}\n' \

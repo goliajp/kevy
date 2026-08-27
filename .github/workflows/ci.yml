@@ -49,7 +49,68 @@ jobs:
         # test matrix and the lx64 gates.
         env:
           KEVY_IO_URING: "0"
+          # One instrumented run feeds two instruments. Naming a path here
+          # makes covgate keep the full region export instead of the
+          # summary it would otherwise throw away; re-running the suite to
+          # recover it would double this job.
+          KEVY_COV_JSON: ${{ github.workspace }}/target/cov-c1.json
         run: bash bench/covgate.sh
+
+      # The dead set, from the run that just happened. This job RECORDS and
+      # does not gate: bench/DEAD-BASELINE.json does not exist yet, and a
+      # baseline can only be recorded on the enforcing platform — code
+      # switched off by cfg is absent from a coverage run rather than dead
+      # in it, so a macOS reading makes whole symbols leave the set, which a
+      # ratchet reads as improvement. Once the artifact below is committed
+      # as the baseline, this becomes `bash bench/deadgate.sh`.
+      - name: dead-path atlas (record, does not gate yet)
+        run: |
+          test -s "${{ github.workspace }}/target/cov-c1.json" || {
+            echo "no coverage export — covgate did not keep one" >&2; exit 1; }
+          python3 tools/coverage_atlas.py "${{ github.workspace }}/target/cov-c1.json"
+      - name: upload dead set
+        uses: actions/upload-artifact@v7
+        with:
+          name: dead-set-linux
+          path: |
+            bench/DEAD-SET.json
+            bench/DEAD-ATLAS.md
+          if-no-files-found: error
+
+  # ───────────── doc deficit: what the documentation owes ─────────────
+  docdeficit:
+    name: doc deficit (record)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      # rustdoc's coverage mode is nightly-only. Measuring documentation by
+      # grepping for `///` instead would count a comment that documents
+      # nothing and miss #[doc = ...], so the right answer when nightly is
+      # absent is to refuse, not to approximate.
+      - name: Install Rust (nightly)
+        run: |
+          rustup toolchain install nightly --no-self-update
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: doc-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: rustdoc coverage
+        run: |
+          RUSTDOCFLAGS='-Z unstable-options --show-coverage' \
+            cargo +nightly doc --workspace --no-deps
+      # Records; does not gate. Same reason as the dead set above: no
+      # baseline exists yet and it can only be recorded here.
+      - name: doc deficit (record, does not gate yet)
+        run: python3 tools/doc_deficit.py --out bench/DOC-DEFICIT.json
+      - name: upload doc deficit
+        uses: actions/upload-artifact@v7
+        with:
+          name: doc-deficit-linux
+          path: bench/DOC-DEFICIT.json
+          if-no-files-found: error
 
   # ───────────── native cargo test on the OS matrix ─────────────
   test:

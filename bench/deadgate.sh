@@ -23,13 +23,18 @@ ROOT=$(dirname "$HERE")
 BASELINE="$HERE/DEAD-BASELINE.json"
 OBSERVED="$HERE/DEAD-SET.json"
 COV="${KEVY_COV_JSON:-$ROOT/target/llvm-cov-c1.json}"
+# The corpus command, kept in one place. Changing it here without changing
+# suite/corpus.toml is how two instruments start answering different
+# questions while both look healthy.
+CORPUS_ARGS="--workspace --exclude kevy-napi --lib --tests"
 MODE=${1:-gate}
 
 command -v cargo >/dev/null || { echo "deadgate: REFUSED — no cargo" >&2; exit 2; }
 
 if [ ! -f "$COV" ]; then
   echo "deadgate: producing the corpus run (this is the slow part)"
-  KEVY_TEST_PATIENCE=6 cargo llvm-cov --workspace --lib --tests \
+  # shellcheck disable=SC2086
+  KEVY_TEST_PATIENCE=6 cargo llvm-cov $CORPUS_ARGS \
       --json --output-path "$COV" || {
     echo "deadgate: REFUSED — the corpus run failed; there is nothing to measure" >&2
     exit 2
