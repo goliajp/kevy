@@ -21,4 +21,4 @@ kevy-compress = { path = "../kevy-compress", version = "5.4.1" }
 kevy-sys = { path = "../kevy-sys", version = "5.4.1" }
 
 [dev-dependencies]
-kevy-tmpdir = { path = "../kevy-tmpdir" }
+kevy-tmpdir = { path = "../kevy-tmpdir", version = "5.4.1" }

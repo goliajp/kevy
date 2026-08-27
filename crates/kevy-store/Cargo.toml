@@ -44,4 +44,4 @@ kevy-seg = { path = "../kevy-seg", version = "5.4.1", optional = true }
 
 [dev-dependencies]
 kevy-bench = { path = "../kevy-bench" }
-kevy-tmpdir = { path = "../kevy-tmpdir" }
+kevy-tmpdir = { path = "../kevy-tmpdir", version = "5.4.1" }

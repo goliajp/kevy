@@ -26,4 +26,4 @@ workspace = true
 kevy-scalar = { path = "../kevy-scalar", version = "5.4.1" }
 
 [dev-dependencies]
-kevy-index = { path = "../kevy-index" }
+kevy-index = { path = "../kevy-index", version = "5.4.1" }
