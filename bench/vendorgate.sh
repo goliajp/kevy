@@ -115,4 +115,15 @@ if [ "$fail" -ne 0 ]; then
     echo "  then each door's scripts/prepare-native.sh"
     exit 1
 fi
+# 29 vendored artifacts today across the mobile doors. Zero means nobody
+# built them, and this gate guards layer 6 of the release — the bytes that
+# do not SAY a version, they ARE one. "0 artifacts current" printed the
+# number and passed anyway.
+MIN_ARTIFACTS=10
+if [ "$checked" -lt "$MIN_ARTIFACTS" ]; then
+  echo "vendorgate: REFUSED — checked $checked artifact(s), expected at least" >&2
+  echo "  $MIN_ARTIFACTS. Nothing vendored is not the same as everything current;" >&2
+  echo "  build them (see the release skill) rather than reading this as green." >&2
+  exit 2
+fi
 echo "vendorgate: PASS ($checked artifacts current)"
