@@ -308,6 +308,25 @@ def gated_modules(root):
     return out
 
 
+def _unstable_spec():
+    """-> {"symbols": [...], "prefixes": [...]} from the register.
+
+    Prefixes exist because the nondeterminism has subsystem granularity,
+    not symbol granularity: three runs of one corpus produced three
+    different growth lists over the same reactor and replication paths.
+    Carried into the baseline so the ratchet's tolerance is part of what
+    was recorded.
+    """
+    if not REGISTER.exists():
+        return {"symbols": [], "prefixes": []}
+    doc = tomllib.loads(REGISTER.read_text())
+    e = doc.get("unstable", [])
+    return {
+        "symbols": sorted(x["symbol"] for x in e if "symbol" in x),
+        "prefixes": sorted(x["prefix"] for x in e if "prefix" in x),
+    }
+
+
 def crate_of(path):
     parts = str(path).split("/crates/")
     return parts[1].split("/")[0] if len(parts) > 1 else None
@@ -344,9 +363,12 @@ def register():
     by_symbol = {e["symbol"]: e for e in doc.get("dead", [])}
     by_crate = {e["crate"]: e for e in doc.get("dead_crate", [])}
     for e in doc.get("unstable", []):
+        who = e.get("symbol") or e.get("prefix")
+        if not who:
+            refuse("an unstable entry needs either a `symbol` or a `prefix`")
         if not e.get("observed") or not e.get("why", "").strip():
-            refuse(f"unstable entry for {e.get('symbol')} needs the differing "
-                   f"values as `observed` and a `why`")
+            refuse(f"unstable entry for {who} needs the differing values as "
+                   f"`observed` and a `why`")
     for e in doc.get("dead_crate", []):
         if not e.get("gate", "").strip() or not e.get("reason", "").strip():
             refuse(f"dead_crate entry for {e.get('crate')} needs both a gate and a reason")
@@ -435,10 +457,7 @@ def write_outputs(cfg, counts, rows, llvm_dead):
         "crates": per_crate(counts),
         # Carried into the baseline so the ratchet reads its tolerance from
         # what was recorded, not from whatever the register says today.
-        "unstable": sorted(
-            e["symbol"]
-            for e in tomllib.loads(REGISTER.read_text()).get("unstable", [])
-        ) if REGISTER.exists() else [],
+        "unstable": _unstable_spec(),
         "symbols": dict(sorted(by_symbol.items())),
     }, indent=2) + "\n")
 
