@@ -26,7 +26,7 @@ rather than dead in it.
 | stone | lifts | tests | docs | examples | dead regions | semver |
 |---|---|---:|---:|---:|---:|---|
 | kevy-scalar | yes | 26 | 39/39 (100%) | 1 | 1712/4383 | clean |
-| kevy-seg | yes | 11 | 18/20 (90%) | 0 | 122/1206 | clean |
+| kevy-seg | yes | 11 | 20/20 (100%) | 0 | 122/1206 | clean |
 | kevy-sys | yes | 9 | 24/24 (100%) | 1 | 122/634 | clean |
 | kevy-alloc | yes | 37 | 88/88 (100%) | 1 | 119/1694 | clean |
 | kevy-text | yes | 98 | 76/76 (100%) | 0 | 119/3987 | clean |
@@ -35,8 +35,8 @@ rather than dead in it.
 | kevy-time | yes | 5 | 12/12 (100%) | 0 | 24/289 | clean |
 | kevy-ranktree | yes | 7 | 17/17 (100%) | 0 | 12/826 | clean |
 | kevy-madvise | yes | 4 | 4/4 (100%) | 0 | 10/55 | clean |
-| kevy-geo | yes | 18 | 12/12 (100%) | 0 | 4/334 | clean |
-| kevy-tmpdir | yes | 3 | 4/5 (80%) | 0 | 3/85 | clean |
+| kevy-geo | yes | 20 | 12/12 (100%) | 0 | 4/334 | clean |
+| kevy-tmpdir | yes | 3 | 5/5 (100%) | 0 | 3/85 | clean |
 | kevy-uring | yes | 0 | 1/1 (100%) | 0 | **not measured** | clean |
 | kevy-hash — error[E0432]: unresolved import `kevy_bench` | builds | 0 | 10/10 (100%) | 1 | 31/535 | clean |
 | kevy-map — error[E0432]: unresolved import `kevy_bench` | builds | 0 | 13/13 (100%) | 0 | 24/1221 | clean |

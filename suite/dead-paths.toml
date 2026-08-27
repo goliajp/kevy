@@ -1,0 +1,49 @@
+# Never-executed regions that a human has classified, with the reason.
+#
+# `tools/coverage_atlas.py` labels a region `panic` or `platform` only on
+# evidence it can point at, and calls everything else `untested`. It never
+# says `unreachable`, because no static reading of coverage data can
+# establish that. This file is where that judgement goes, and it must be
+# written down rather than remembered.
+#
+# The distinction that matters, and the reason this file is not just a
+# suppression list:
+#
+#   untested      — a test is owed. Write it; the region leaves the set.
+#   unreachable   — no caller can reach it. Then ask the harder question:
+#                   is it safe to DELETE? Sometimes it is not, and that is
+#                   the only interesting case here.
+#
+# An entry is keyed by symbol, the same identity the set-ratchet uses, so
+# a rename moves it and is noticed.
+
+[[dead]]
+symbol = "kevy_geo::estimate_step"
+regions = 1
+kind = "unreachable"
+delete = false
+reason = """
+`if radius_m <= 0.0 { return GEO_STEP; }` at crates/kevy-geo/src/lib.rs:250.
+
+Unreachable today: `estimate_step` is private, has exactly one call site
+(line 222), and that site sits after line 219's early return on
+`radius_m <= 0.0`. Verified by grep — two occurrences in the whole
+workspace, the definition and the one call.
+
+**It must not be deleted.** Without it a non-positive radius enters
+`while r < MERCATOR_MAX { r *= 2.0; step += 1; }` with `r <= 0.0`, which
+never reaches the bound: an infinite loop in release, a step overflow in
+debug. The guard is not redundant defence against a condition that cannot
+happen — it is the thing that makes the loop terminate, and it is dead only
+because one caller happens to check first today.
+
+The atlas found this as one of four never-executed regions in kevy-geo and
+my first reading of it was that it was a redundant guard to remove. Reading
+the loop underneath is what changed the answer. That is the whole reason
+this file distinguishes `unreachable` from `delete = true`.
+
+The other three regions the atlas found in this crate were `untested`, not
+unreachable, and are now covered by
+`a_radius_larger_than_the_world_returns_the_whole_range` and
+`cells_past_the_latitude_limit_are_skipped_not_wrapped`.
+"""

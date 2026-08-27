@@ -180,9 +180,9 @@
       "tests": 11,
       "lift_note": "",
       "docs": {
-        "documented": 18,
+        "documented": 20,
         "items": 20,
-        "pct": 90.0,
+        "pct": 100.0,
         "examples": 0
       },
       "semver": {
@@ -303,7 +303,7 @@
       "packaged": true,
       "built": true,
       "tested": true,
-      "tests": 18,
+      "tests": 20,
       "lift_note": "",
       "docs": {
         "documented": 12,
@@ -348,9 +348,9 @@
       "tests": 3,
       "lift_note": "",
       "docs": {
-        "documented": 4,
+        "documented": 5,
         "items": 5,
-        "pct": 80.0,
+        "pct": 100.0,
         "examples": 0
       },
       "semver": {

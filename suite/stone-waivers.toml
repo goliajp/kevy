@@ -90,22 +90,6 @@ closes_when = "the corpus is recorded on Linux and this row is re-read; if it is
 # docs
 
 [[waiver]]
-crate = "kevy-seg"
-rules = ["doc_pct"]
-reason = "90% — 5 of 7 items in manifest.rs are documented; the rest of the crate is at 100%."
-closes_when = "manifest.rs's two undocumented items are documented"
-
-[[waiver]]
-crate = "kevy-tmpdir"
-rules = ["doc_pct"]
-reason = "80% — 4 of 5 public items."
-closes_when = "the fifth item is documented"
-
-# ---------------------------------------------------------------------------
-# examples — 12 of 17 stones carry none. This is the widest gap the first
-# stone report found, and the one G5 (doctestgate) exists to close.
-
-[[waiver]]
 crate = "kevy-compress"
 rules = ["min_examples"]
 reason = "100% documented in prose, 0 items with an executable example."
