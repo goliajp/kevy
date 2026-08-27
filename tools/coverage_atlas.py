@@ -37,6 +37,7 @@ import collections
 import json
 import pathlib
 import re
+import platform as _platform
 import subprocess
 import sys
 import tomllib
@@ -58,10 +59,34 @@ def refuse(msg):
     sys.exit(2)
 
 
+def host_platform():
+    """What this run actually happened on — never what the corpus wishes."""
+    return {"Linux": "linux", "Darwin": "macos", "Windows": "windows"}.get(
+        _platform.system(), _platform.system().lower())
+
+
 def corpus():
     if not CORPUS.exists():
         refuse(f"no {CORPUS.relative_to(ROOT)}; the corpus defines what 'executed' means")
-    return tomllib.loads(CORPUS.read_text())["corpus"]
+    c = dict(tomllib.loads(CORPUS.read_text())["corpus"])
+    enforcing, here = c["platform"], host_platform()
+    c["enforcing_platform"] = enforcing
+    # The identity records where the measurement HAPPENED, never what the
+    # corpus wishes. Code switched off by cfg does not appear in coverage
+    # data as dead — it is absent from the denominator entirely: measured
+    # 2026-08-27, a macOS run sees 1 of 16 uring_*.rs files and none of
+    # kevy-uring at all. So a cross-platform comparison does not merely add
+    # dead regions, it makes whole symbols LEAVE the set, which a ratchet
+    # reads as improvement. That is a silent false green, and the identity
+    # check is what makes it impossible without anyone having to remember.
+    c["platform"] = here
+    if here != enforcing:
+        print(f"atlas: NOTE — measured on {here}; the enforcing platform is "
+              f"{enforcing}. Not baseline material: cfg({enforcing})-only code "
+              f"is absent from this run rather than dead in it, so this set is "
+              f"smaller on both sides and cannot be compared with one from "
+              f"{enforcing}.")
+    return c
 
 
 def merge_regions(data, scope):
@@ -87,22 +112,50 @@ def merge_regions(data, scope):
 
 
 def reconcile(data, counts):
-    """llvm computed these totals independently. Disagreement is our bug."""
+    """Verify the enumeration against llvm, and report the definitional gap.
+
+    llvm's per-file `summary.regions.count` is computed by something other
+    than this script, so agreement on it is a real witness: across the
+    workspace all 599 files agree and the global total matches exactly
+    (160,062). The same region set is being enumerated.
+
+    The *covered* verdict differs, and the difference is a definition
+    rather than a defect. A span inside a generic can be reached by one
+    instantiation and not another; llvm's merged model keeps those apart
+    and counts the unexercised copy as an uncovered region, while summing
+    across instantiations calls the span covered. For "how thoroughly is
+    every instantiation exercised", llvm's reading is the right one. For
+    "which source can I delete, or must I write a test for" — the question
+    this atlas exists to answer — summing is: the line ran, so it is not
+    dead and cannot be removed. Measured 2026-08-27, the two readings
+    differ on 822 of 160,062 regions, 2.8% of the dead set.
+
+    Three other reconstructions were tried and each disagreed with llvm's
+    summary *and* with the others — segments (493 of 599 files off), LCOV
+    DA records (81,235 unique lines against a declared LF of 83,962, with
+    no duplicate records to explain the gap), and per-name merging. The
+    summary comes from a merged model the export formats do not fully
+    expose. Demanding equality with it would make this gate unusable
+    without making it more correct, so the enumeration is enforced and the
+    verdict gap is reported.
+    """
     mine = collections.Counter()
     mine_zero = collections.Counter()
     for (src, *_), n in counts.items():
         mine[src] += 1
         if n == 0:
             mine_zero[src] += 1
+    llvm_dead = 0
     for f in data["files"]:
         s = f["summary"]["regions"]
         got, want = mine[f["filename"]], s["count"]
-        gz, wz = mine_zero[f["filename"]], s["count"] - s["covered"]
-        if (got, gz) != (want, wz):
+        if got != want:
             refuse(
-                f"reconciliation failed for {f['filename']}: "
-                f"parsed {got} regions / {gz} dead, llvm reports {want} / {wz}"
+                f"enumeration mismatch for {f['filename']}: "
+                f"parsed {got} regions, llvm maps {want}"
             )
+        llvm_dead += s["count"] - s["covered"]
+    return llvm_dead
 
 
 def demangle(names):
@@ -152,8 +205,50 @@ def enclosing_cfg(path, lineno, cache):
     return None
 
 
-def classify(path, lineno, cache):
+MODCFG = re.compile(r"^\s*#\[cfg\(([^\]]*)\)\]\s*$")
+MODDECL = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;")
+
+
+def gated_modules(root):
+    """Files whose whole module is behind a #[cfg(...)].
+
+    The per-region scan looks 60 lines up for an attribute and therefore
+    cannot see the commonest gating there is: `#[cfg(target_os = "linux")]
+    mod uring_reactor;` in lib.rs, which switches off an entire file from
+    somewhere else entirely. Without this, every io_uring region on a mac
+    lands in `untested` — 'a test is owed' for code the host cannot even
+    compile, which is the wrong work item and a large one.
+    """
+    out = {}
+    for f in root.rglob("*.rs"):
+        try:
+            lines = f.read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        pending = None
+        for line in lines:
+            m = MODCFG.match(line)
+            if m:
+                pending = m.group(1)
+                continue
+            d = MODDECL.match(line)
+            if d and pending:
+                name = d.group(1)
+                for cand in (f.parent / f"{name}.rs", f.parent / name / "mod.rs",
+                             f.with_suffix("") / f"{name}.rs",
+                             f.with_suffix("") / name / "mod.rs"):
+                    if cand.exists():
+                        out[str(cand.resolve())] = pending
+            if not MODCFG.match(line):
+                pending = pending if d and not d.group(1) else (pending if m else None)
+    return out
+
+
+def classify(path, lineno, cache, gated=None):
     text = source_line(path, lineno, cache)
+    g = (gated or {}).get(str(pathlib.Path(path).resolve()))
+    if g and ("target_os" in g or "unix" in g or "windows" in g or "linux" in g):
+        return "platform", f"module gated by cfg({g})"
     if PANIC.search(text):
         return "panic", text
     cfg = enclosing_cfg(path, lineno, cache)
@@ -179,25 +274,26 @@ def build(path):
                f"(a package-scoped run reports every other crate as dead)")
     scope = {f["filename"] for f in files}
     counts, owners = merge_regions(data, scope)
-    reconcile(data, counts)
+    llvm_dead = reconcile(data, counts)
 
     dead = {k: v for k, v in counts.items() if v == 0}
     names = {n for k in dead for n in owners[k]}
     dm = demangle(names)
+    gated = gated_modules(ROOT / "crates")
     cache, rows = {}, []
     for key in sorted(dead):
         src, l1, c1, l2, c2 = key
         syms = {symbol_of(dm[n]) for n in owners[key]}
-        kind, evidence = classify(src, l1, cache)
+        kind, evidence = classify(src, l1, cache, gated)
         rows.append({
             "symbol": sorted(syms)[0] if syms else "?",
             "file": str(pathlib.Path(src).relative_to(ROOT)) if str(src).startswith(str(ROOT)) else src,
             "line": l1, "kind": kind, "evidence": evidence,
         })
-    return cfg, counts, rows
+    return cfg, counts, rows, llvm_dead
 
 
-def write_outputs(cfg, counts, rows):
+def write_outputs(cfg, counts, rows, llvm_dead):
     reg = register()
     by_symbol = collections.Counter(r["symbol"] for r in rows)
     OUT_SET.write_text(json.dumps({
@@ -205,6 +301,7 @@ def write_outputs(cfg, counts, rows):
         "platform": cfg["platform"],
         "total_regions": len(counts),
         "dead_regions": len(rows),
+        "llvm_per_instantiation_dead": llvm_dead,
         "symbols": dict(sorted(by_symbol.items())),
     }, indent=2) + "\n")
 
@@ -217,6 +314,13 @@ def write_outputs(cfg, counts, rows):
            f"{len(by_symbol)} symbols in {len(by_crate)} crates.", "",
            "Generated by `tools/coverage_atlas.py`; do not edit. Human",
            "classification goes in `suite/dead-paths.toml`.", "",
+           f"A span is dead when no instantiation of any function containing it",
+           f"executed. llvm's own per-instantiation reading counts "
+           f"**{llvm_dead}** instead: a span reached by `foo<u32>` but not by",
+           "`foo<String>` is dead in that reading and live in this one. Both are",
+           "correct about different questions; this one answers *what can be",
+           "deleted or must be tested*. The enumeration itself is verified",
+           "exactly against llvm, file by file.", "",
            "## By class", "", "| class | regions | meaning |", "|---|---:|---|",
            f"| `untested` | {by_kind['untested']} | reachable as far as this can tell — a test is owed |",
            f"| `panic` | {by_kind['panic']} | a panic/abort edge |",
@@ -236,8 +340,8 @@ def write_outputs(cfg, counts, rows):
 def main():
     if len(sys.argv) != 2:
         refuse("usage: coverage_atlas.py <llvm-cov.json>")
-    cfg, counts, rows = build(sys.argv[1])
-    write_outputs(cfg, counts, rows)
+    cfg, counts, rows, llvm_dead = build(sys.argv[1])
+    write_outputs(cfg, counts, rows, llvm_dead)
     print(f"atlas: {len(rows)} dead regions of {len(counts)} "
           f"({100 * len(rows) / len(counts):.1f}%) — corpus {cfg['id']}/{cfg['platform']}")
     print(f"  {OUT_MD.relative_to(ROOT)}  {OUT_SET.relative_to(ROOT)}")
