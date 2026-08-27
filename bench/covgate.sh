@@ -77,10 +77,30 @@ print(f\"{d['data'][0]['totals']['lines']['percent']:.2f}\")
 [ "$KEEP_JSON" = "1" ] || rm -f "$COVJSON"
 [ "$KEEP_JSON" = "1" ] && echo "covgate: full export kept at $COVJSON for deadgate"
 
+HOST=$(uname -s | tr '[:upper:]' '[:lower:]')
+case "$HOST" in darwin) HOST=macos ;; esac
+
 if [ "$MODE" = "--update-baseline" ]; then
-    printf '{\n  "workspace_line_coverage_pct": %s,\n  "recorded": "%s",\n  "note": "ratchet: only raise via --update-baseline after a deliberate improvement"\n}\n' \
-        "$PCT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$BASELINE"
-    echo "covgate: baseline updated to ${PCT}%"
+    # Records the platform, and keeps what the old file said in prose. The
+    # previous form wrote three fields and dropped the rest, so one update
+    # from anywhere erased the only statement of where the number came
+    # from — including `reference_macos`, which is the evidence that the
+    # two platforms do not measure the same thing.
+    PCT="$PCT" HOST="$HOST" BASELINE="$BASELINE" python3 - <<'PY'
+import json, os, pathlib, datetime
+p = pathlib.Path(os.environ["BASELINE"])
+old = json.loads(p.read_text()) if p.exists() else {}
+out = {
+    "workspace_line_coverage_pct": float(os.environ["PCT"]),
+    "platform": os.environ["HOST"],
+    "recorded": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+}
+for k in ("recorded_on", "reference_macos", "note"):
+    if k in old:
+        out[k] = old[k]
+p.write_text(json.dumps(out, indent=2) + "\n")
+PY
+    echo "covgate: baseline updated to ${PCT}% (platform ${HOST})"
     exit 0
 fi
 
@@ -88,6 +108,31 @@ fi
     echo "covgate: no baseline at $BASELINE — run with --update-baseline first" >&2
     exit 2
 }
+# The baseline names the platform it was taken on, and this one has always
+# been Linux — the file said so in prose and carried `reference_macos:
+# 82.08` beside a Linux 79.64 as proof that the two do not measure the same
+# thing. 2.44 points is many times any tolerance this gate would use, so a
+# cross-platform comparison here is not a loose reading, it is a different
+# question. setratchet already refuses exactly this; the oldest baseline in
+# the tree did not.
+BASE_PLATFORM=$(python3 -c "import json; print(json.load(open('$BASELINE')).get('platform',''))")
+if [ -z "$BASE_PLATFORM" ]; then
+    # A baseline that does not name its platform permits every platform,
+    # which is the same permissive-on-missing-data shape this check was
+    # added to close. --update-baseline writes the field; a file without
+    # it predates that and cannot be compared against safely.
+    echo "covgate: REFUSED — $BASELINE does not record the platform it was" >&2
+    echo "  taken on, so nothing here can tell whether this comparison is" >&2
+    echo "  like for like. Re-record it with --update-baseline where it belongs." >&2
+    exit 2
+fi
+if [ "$BASE_PLATFORM" != "$HOST" ]; then
+    echo "covgate: REFUSED — the baseline was recorded on ${BASE_PLATFORM} and this" >&2
+    echo "  is ${HOST}. Coverage is not portable across them (this file records" >&2
+    echo "  ${BASE_PLATFORM} $(python3 -c "import json;print(json.load(open('$BASELINE'))['workspace_line_coverage_pct'])")% beside a macOS reference of" >&2
+    echo "  $(python3 -c "import json;print(json.load(open('$BASELINE')).get('reference_macos','?'))")%). Run it where the baseline lives, or record a new one there." >&2
+    exit 2
+fi
 BASE=$(python3 -c "import json; print(json.load(open('$BASELINE'))['workspace_line_coverage_pct'])")
 FLOOR=$(python3 -c "print(f'{$BASE - $TOLERANCE_PCT:.2f}')")
 
