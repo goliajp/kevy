@@ -1,5 +1,94 @@
 # Changelog
 
+## 6.0.0 — the instruments
+
+v6's charter is a clean architecture: solid stones, quality and documentation
+and performance at their limit, no dead code, no complex implementation of
+something a simple one already does. This release is the equipment for it,
+and the defects that building the equipment found.
+
+Nothing here is a compatibility break. `cargo semver-checks` reports all
+eighteen stones clean against 5.4.1, and the wire protocol, the on-disk
+formats and the replication stream are untouched. The major is the
+milestone's name, not a claim that an API moved.
+
+### Fixed
+
+- **Twelve of fourteen arity-guarded verbs told callers a command that
+  exists does not.** `IDX.QUERY` with too few arguments answered
+  `ERR unknown command 'IDX.QUERY'`. The routes guard on argument count
+  (`IDX.QUERY if args.len() >= 4`) and, when the guard misses, fall through
+  to the unhandled-verb path, which only asked whether the name was known
+  to the dispatch chain. It now consults the arity that `verb_meta` carried
+  all along, and answers `ERR wrong number of arguments` — Redis's
+  convention and this engine's own everywhere else.
+
+- **Fifteen published crates shipped code that cannot compile.** Their
+  `tests/` and `examples/` imported dev-dependencies declared only by path,
+  and `cargo package` drops a path-only dev-dependency while packaging the
+  sources that need it. Anyone who downloaded kevy-bytes 5.4.1 and ran
+  `cargo test` inside it got a compile error, across 122 files. The stones
+  now declare those dependencies with versions; the crates that are not
+  meant to be built standalone exclude the sources instead. `packagegate`
+  holds it, computing the packaged set from git rather than from
+  `cargo package --list`, which needs every dependency resolvable and so
+  cannot run on the crate that is broken.
+
+- **Two surfaces answered the same typo differently.** Of 111 verbs reachable
+  through both the server and the embedded facade, 109 now reply byte for
+  byte on a wrong-arity call. The two that differ do so because their
+  signatures differ — the server shards, the facade does not.
+
+- **A backreference to an unset group** in the vendored regex engine, and a
+  stale committed `Cargo.lock` that only `--locked` could object to — and
+  `--locked` ran nowhere before the release image.
+
+### Added
+
+- **`kevy-bench` is published.** It was already a stone by every reading —
+  business-free, no dependencies, a measuring harness any project could
+  take — and four other stones dev-depend on it, which is why they could not
+  package until it existed on crates.io.
+
+- **The examples in the documentation are compiled and run.** Every test
+  invocation in this repository spelled `cargo test --workspace --lib
+  --tests`, and that pair is exactly the combination that excludes doctests;
+  `--doc` occurred nowhere in the tree. Ninety-nine examples now run in CI,
+  up from eighteen when the arc began — and they are written from
+  measurements, so kevy-geo's pin the geohash Redis publishes for the same
+  fixture and kevy-time's pin that adding a month to January 31 is not
+  reversible.
+
+- **Twelve instruments and gauges**, and a mechanism underneath them. The
+  wall was 102 gate scripts and four baselines, every one of them a scalar
+  with a tolerance band, while v6's claims are about sets ("no dead paths"),
+  relations ("no redundant implementation") and independence ("a solid
+  stone"). A *set-ratchet* records identities rather than counts, so coverage
+  can hold at 79.64% while the identity of the uncovered fifth is completely
+  substituted and the ratchet still fires. Its baselines are envelopes over
+  three runs: growth means worse than the worst of three, not different from
+  one sample.
+
+### Changed
+
+- **Every public item is documented** — 2,661 of 2,661, from 93.9%. All 34
+  stone and steel crates are at 100%, four of them holding it with
+  `#![warn(missing_docs)]`, so the next gap is a compile error naming a line
+  rather than a number that drifts.
+
+- **The stone bar is measured on the platform that enforces it.** Code
+  switched off by `cfg` is absent from a coverage run rather than dead in
+  it, so a report taken on macOS could not see kevy-uring at all — the crate
+  is `#![cfg(target_os = "linux")]`. Two of its waivers said it had no tests;
+  on Linux it has fifteen and they pass. Waivers: eleven to eight, and all
+  eight close when this release puts kevy-bench on crates.io.
+
+- **Dead regions**, cut by measured ablation rather than by counting tests:
+  kevy-scalar 42.0% → 27.8%, the async client 70.5% → 39.3%, kevy-cli 42.4%
+  → 37.5%.
+
+- The suite is 84 checks across three tiers, from 75.
+
 ## 5.4.1 — the packed row, on
 
 5.4.0 shipped the packed row switched off, for three reasons. Each was then

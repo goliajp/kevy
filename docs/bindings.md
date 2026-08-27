@@ -21,7 +21,7 @@ written down.
 |---|---|---|
 | Rust | `cargo add kevy-embedded` | 5.1.0 |
 | Python | `pip install kevy` | 5.1.0 |
-| Go | `go get github.com/goliajp/kevy-go/v5` | 5.1.0 |
+| Go | `go get github.com/goliajp/kevy-go/v6` | 5.1.0 |
 | Java | `jp.golia:kevy` on Maven Central | 5.1.0 |
 | Node / TypeScript | `npm i @goliapkg/kevy-ts` | 5.1.0 |
 | Browser (wasm) | `npm i @goliapkg/kevy` | 5.1.0 |
@@ -81,8 +81,8 @@ db.get(b"user:1")                            # b"alice"
 ```
 
 ```go
-// Go — go get github.com/goliajp/kevy-go/v5
-import kevy "github.com/goliajp/kevy-go/v5"
+// Go — go get github.com/goliajp/kevy-go/v6
+import kevy "github.com/goliajp/kevy-go/v6"
 
 c, _ := kevy.Connect("kevy://127.0.0.1:6379")
 c.Set(ctx, []byte("user:1"), []byte("alice"))

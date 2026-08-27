@@ -91,6 +91,30 @@ def skip(path: pathlib.Path) -> bool:
     return any(t in s for t in THIRD_PARTY) or any(e in s for e in EXAMPLE_APPS)
 
 
+# Records of what happened, which layer 7 must not rewrite.
+#
+# A finding, a changelog entry and a completed roadmap line describe a past
+# state. Moving `/v5` to `/v6` in them does not update anything — it makes
+# the record false, the way relabelling a benchmark table with the current
+# release turns an honest measurement into a claim about a build nobody
+# ran. One of them ended up reading `go get .../kevy-go/v6@v5.1.0`, a
+# command that never existed and could not have worked.
+#
+# Layer 7 governs what DETERMINES or INSTRUCTS the import path: code,
+# manifests, scripts, and the documents that tell a reader what to import.
+HISTORICAL = (
+    "CHANGELOG.md",
+    ".claude/ROADMAP.md",
+    "bench/FINDING-",
+    "bench/PERF-",
+)
+
+
+def historical(p) -> bool:
+    rel = str(p.relative_to(ROOT))
+    return any(rel == h or rel.startswith(h) for h in HISTORICAL)
+
+
 def layer1_cargo(v: str, bad: list) -> int:
     """Workspace version + every version-gated path dependency."""
     checked = 0
@@ -124,8 +148,14 @@ def layer1_cargo(v: str, bad: list) -> int:
             # `cargo package`, which is how four published stones came to ship
             # tests importing a crate their manifest never declared. Giving
             # them versions is what made this case reachable.
+            # `kevy-[\w-]+` required a suffix, so every pin on the crate the
+            # project is NAMED after — `path = "../kevy"` — was invisible to
+            # this gate. Two carried it: kevy-client and kevy-cluster-rw. A
+            # stale pin there is the exact hazard layer 1 is about, because
+            # `cargo publish` resolves a version-gated dependency against
+            # crates.io: the new crate would have resolved to the old sibling.
             m = re.search(
-                r'path\s*=\s*"[^"]*?(kevy-[\w-]+)"\s*,\s*version\s*=\s*"=?(\d+\.\d+\.\d+)"',
+                r'path\s*=\s*"[^"]*?(kevy(?:-[\w-]+)?)"\s*,\s*version\s*=\s*"=?(\d+\.\d+\.\d+)"',
                 line,
             )
             if m:
@@ -305,7 +335,7 @@ def layer7_go_module_major(v: str, bad: list) -> int:
     used = re.compile(r"github\.com/goliajp/kevy-go/v(\d+)")
     checked = 0
     for pth in sorted(ROOT.glob("**/*")):
-        if pth.is_dir() or skip(pth) or pth.suffix not in (
+        if pth.is_dir() or skip(pth) or historical(pth) or pth.suffix not in (
                 ".go", ".mod", ".sh", ".md", ".yml", ".yaml"):
             continue
         try:

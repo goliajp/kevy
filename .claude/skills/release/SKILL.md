@@ -247,7 +247,7 @@ gh release view vX.Y.Z --json tagName,isDraft,assets
 # as far as anyone downstream is concerned. The per-version endpoint is
 # the one that matters: `@latest` and `@v/list` can answer correctly
 # while `.info` still 404s, because they are separately cached.
-curl -sf https://proxy.golang.org/github.com/goliajp/kevy-go/v5/@v/vX.Y.Z.info
+curl -sf https://proxy.golang.org/github.com/goliajp/kevy-go/v6/@v/vX.Y.Z.info
 
 # ...and they are in SERIES. sum.golang.org hashes the zip it gets from
 # the proxy, so while the proxy 404s the checksum database cannot
@@ -255,7 +255,7 @@ curl -sf https://proxy.golang.org/github.com/goliajp/kevy-go/v5/@v/vX.Y.Z.info
 # error wearing the sumdb's URL. Diagnose which layer is stuck by
 # bypassing both — if this works, the artifact is fine and you are
 # waiting on a cache:
-#   GOPROXY=direct GOSUMDB=off go get github.com/goliajp/kevy-go/v5@vX.Y.Z
+#   GOPROXY=direct GOSUMDB=off go get github.com/goliajp/kevy-go/v6@vX.Y.Z
 
 # Maven Central — repo1 is the authority. The Portal saying "PUBLISHED"
 # is its own bookkeeping, and it says that before repo1 serves the file.

@@ -15,7 +15,7 @@ library.
 
 ```
 kevy-go/
-  go.mod            module github.com/goliajp/kevy-go/v5
+  go.mod            module github.com/goliajp/kevy-go/v6
   *.go              32 files, copied verbatim
   README.md         generated; says it is generated
   LICENSE-APACHE, LICENSE-MIT
@@ -26,7 +26,7 @@ Nobody edits it. Changes are made here; the release regenerates it.
 ## Why it exists at all
 
 Go has no package registry. An import path *is* a repository URL, so
-`import "github.com/goliajp/kevy-go/v5"` requires a repository at that
+`import "github.com/goliajp/kevy-go/v6"` requires a repository at that
 exact address with `go.mod` at its root. Every other binding publishes
 by uploading a built artifact to a registry; this one publishes by
 having a second repository exist. `bindings/go` inside this tree cannot
@@ -70,7 +70,7 @@ would drift the first time someone added a method to one.
 
 ## The `/vN` suffix
 
-`go.mod` declares `github.com/goliajp/kevy-go/v5`, and the tag is
+`go.mod` declares `github.com/goliajp/kevy-go/v6`, and the tag is
 `v5.3.0`. Go requires the major version in the path for v2 and up; the
 alternative — starting kevy-go's own versioning at v1, independent of
 the engine — was rejected because a user comparing `kevy-go v1.2.0`
