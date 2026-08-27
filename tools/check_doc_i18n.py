@@ -97,6 +97,16 @@ def main():
         print("  Carry the missing section or example across, or add the file")
         print("  to ENGLISH_ONLY in tools/check_doc_i18n.py with the reason.")
         return 1
+    # 74 translated chapters today, across two languages. Zero of them
+    # satisfying the rule is not the rule being satisfied — run this from
+    # the wrong directory and it used to print "ok: 0 translated chapters"
+    # and exit 0, which is the shape of a pass over an empty set.
+    MIN_CHAPTERS = 20
+    if checked < MIN_CHAPTERS:
+        print(f"check_doc_i18n: REFUSED — found {checked} translated chapter(s), "
+              f"expected at least {MIN_CHAPTERS}. Nothing to be behind is not "
+              f"the same as nothing behind.")
+        return 2
     print(f"ok: {checked} translated chapters, each with its English chapter's sections and examples")
     return 0
 
