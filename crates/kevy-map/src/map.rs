@@ -114,6 +114,21 @@ pub(crate) fn table_layout<KV>(cap: usize) -> (Layout, usize) {
 /// array of `MaybeUninit<(K, V)>` co-allocated with the metadata.
 ///
 /// When `cap == 0` both pointers are dangling and no allocation is held.
+/// # Examples
+///
+/// Keys are byte strings or integers — whatever implements `KevyHash`.
+/// There is deliberately no `&str` impl: the keyspace deals in bytes, and a
+/// key that exists only as UTF-8 would need validating on every lookup.
+///
+/// ```
+/// let mut m: kevy_map::KevyMap<Vec<u8>, u32> = kevy_map::KevyMap::new();
+/// assert_eq!(m.insert(b"k".to_vec(), 1), None, "insert returns what it displaced");
+/// assert_eq!(m.insert(b"k".to_vec(), 2), Some(1));
+/// assert_eq!(m.get(b"k".as_slice()), Some(&2));
+/// assert_eq!(m.remove(b"k".as_slice()), Some(2));
+/// assert_eq!(m.get(b"k".as_slice()), None);
+/// assert!(m.is_empty());
+/// ```
 pub struct KevyMap<K, V> {
     /// Slot array. `cap` initialised iff the corresponding metadata byte is
     /// in `0x00..=0x7F`. Dangling when `cap == 0`.

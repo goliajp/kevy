@@ -67,6 +67,32 @@ use node::Node;
 /// Duplicate keys are rejected ([`RankTree::insert`] returns `false`), which
 /// makes every key's rank unique — the property the rank arithmetic rests on.
 #[derive(Clone)]
+/// # Examples
+///
+/// The point of an order-statistic tree is that rank is a lookup, not a
+/// scan: inserting out of order still answers rank in sorted order.
+///
+/// ```
+/// let mut t = kevy_ranktree::RankTree::new();
+/// for k in [30, 10, 20] {
+///     assert!(t.insert(k), "each key is new");
+/// }
+/// assert_eq!(t.len(), 3);
+/// assert_eq!(t.rank_of(&10), Some(0));
+/// assert_eq!(t.rank_of(&20), Some(1));
+/// assert_eq!(t.rank_of(&30), Some(2));
+/// assert_eq!(t.rank_of(&25), None, "a key that is not there has no rank");
+/// ```
+///
+/// Re-inserting an existing key reports that it was not new, and leaves
+/// the tree alone.
+///
+/// ```
+/// let mut t = kevy_ranktree::RankTree::new();
+/// assert!(t.insert(1));
+/// assert!(!t.insert(1));
+/// assert_eq!(t.len(), 1);
+/// ```
 pub struct RankTree<K> {
     root: Node<K>,
 }

@@ -64,6 +64,21 @@ pub fn decode_score(score: f64) -> (f64, f64) {
 /// Great-circle distance in metres between two `(longitude, latitude)`
 /// points on the WGS84 sphere (mean radius — matches Redis). Returns
 /// `0.0` if the inputs are equal.
+/// # Examples
+///
+/// The Sicily fixture the cross-engine differential uses — Palermo to
+/// Catania, the same pair `GEODIST` is checked against.
+///
+/// ```
+/// let d = kevy_geo::haversine_meters(13.361_389, 38.115_556, 15.087_269, 37.502_669);
+/// assert!((d - 166_274.0).abs() < 100.0, "got {d}");
+/// ```
+///
+/// A point against itself is zero, not an epsilon.
+///
+/// ```
+/// assert_eq!(kevy_geo::haversine_meters(1.0, 2.0, 1.0, 2.0), 0.0);
+/// ```
 pub fn haversine_meters(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
     let phi1 = lat1.to_radians();
     let phi2 = lat2.to_radians();

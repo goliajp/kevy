@@ -1,6 +1,7 @@
 //! Tests for [`crate::hnsw`] (child module via `#[path]`, so the
 //! graph internals stay reachable).
 
+use crate::dist::Distance;
 use super::*;
 
 fn grid(n: usize) -> Hnsw {

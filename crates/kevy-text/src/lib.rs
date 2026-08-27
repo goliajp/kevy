@@ -8,6 +8,7 @@
 mod bm25;
 pub mod cold;
 mod buckets;
+mod clauses;
 mod docblobs;
 mod docvalues;
 mod edit;

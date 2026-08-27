@@ -112,73 +112,8 @@ closes_when = "the corpus is recorded on Linux and this row is re-read; if it is
 # docs
 
 [[waiver]]
-crate = "kevy-compress"
-rules = ["min_examples"]
-reason = "100% documented in prose, 0 items with an executable example."
-closes_when = "at least one public entry point carries a doctest"
-
-[[waiver]]
-crate = "kevy-madvise"
-rules = ["min_examples"]
-reason = "100% documented in prose, 0 items with an executable example."
-closes_when = "at least one public entry point carries a doctest"
-
-[[waiver]]
-crate = "kevy-ranktree"
-rules = ["min_examples"]
-reason = "100% documented in prose, 0 items with an executable example."
-closes_when = "at least one public entry point carries a doctest"
-
-[[waiver]]
-crate = "kevy-seg"
-rules = ["min_examples"]
-reason = "0 items with an executable example."
-closes_when = "at least one public entry point carries a doctest"
-
-[[waiver]]
-crate = "kevy-time"
-rules = ["min_examples"]
-reason = "100% documented in prose, 0 items with an executable example."
-closes_when = "at least one public entry point carries a doctest"
-
-[[waiver]]
 crate = "kevy-uring"
 rules = ["min_examples"]
 reason = "0 items with an executable example."
 closes_when = "at least one public entry point carries a doctest"
 
-[[waiver]]
-crate = "kevy-text"
-rules = ["min_examples"]
-reason = "98 tests and 0 executable examples — the crate is exercised but its documentation is not."
-closes_when = "at least one public entry point carries a doctest"
-
-[[waiver]]
-crate = "kevy-vector"
-rules = ["min_examples"]
-reason = "100% documented in prose, 0 items with an executable example."
-closes_when = "at least one public entry point carries a doctest"
-
-[[waiver]]
-crate = "kevy-geo"
-rules = ["min_examples"]
-reason = "100% documented in prose, 0 items with an executable example."
-closes_when = "at least one public entry point carries a doctest"
-
-[[waiver]]
-crate = "kevy-tmpdir"
-rules = ["min_examples"]
-reason = "0 items with an executable example."
-closes_when = "at least one public entry point carries a doctest"
-
-[[waiver]]
-crate = "kevy-bytes"
-rules = ["min_examples"]
-reason = "0 items with an executable example."
-closes_when = "at least one public entry point carries a doctest"
-
-[[waiver]]
-crate = "kevy-map"
-rules = ["min_examples"]
-reason = "0 items with an executable example."
-closes_when = "at least one public entry point carries a doctest"

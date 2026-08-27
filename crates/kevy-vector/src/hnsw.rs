@@ -4,39 +4,7 @@
 
 use std::collections::{BinaryHeap, HashMap};
 
-use crate::dist::Distance;
-
-/// Construction/search parameters (immutable once built).
-#[derive(Debug, Clone, Copy)]
-pub struct HnswParams {
-    /// Max bidirectional links per node per layer (layer 0 gets 2M).
-    pub m: usize,
-    /// Construction beam width.
-    pub ef_construction: usize,
-    /// Metric.
-    pub distance: Distance,
-}
-
-impl Default for HnswParams {
-    fn default() -> Self {
-        Self { m: 16, ef_construction: 200, distance: Distance::Cosine }
-    }
-}
-
-/// Sizing counters.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct VectorStats {
-    /// Living vectors.
-    pub vectors: u64,
-    /// Tombstoned nodes still in the graph.
-    pub tombstones: u64,
-    /// Total graph links.
-    pub links: u64,
-    /// Approximate heap bytes.
-    pub approx_bytes: u64,
-    /// 1 when tombstones exceed the rebuild threshold (30%).
-    pub rebuild_recommended: bool,
-}
+use crate::params::{HnswParams, VectorStats};
 
 struct Node {
     /// Every LIVING key whose vector is exactly this one (duplicate
@@ -52,6 +20,37 @@ struct Node {
 }
 
 /// One shard's ANN graph for one index.
+/// # Examples
+///
+/// Build an index, put three vectors in it, and ask for the nearest. The
+/// query is the second vector exactly, so it must come back first at
+/// distance zero.
+///
+/// ```
+/// use kevy_vector::{Hnsw, HnswParams};
+/// let mut idx = Hnsw::new(3, HnswParams::default());
+/// idx.apply(b"a", Some(vec![1.0, 0.0, 0.0]));
+/// idx.apply(b"b", Some(vec![0.0, 1.0, 0.0]));
+/// idx.apply(b"c", Some(vec![0.0, 0.0, 1.0]));
+///
+/// let hits = idx.knn(&[0.0, 1.0, 0.0], 1, 16);
+/// assert_eq!(hits.len(), 1);
+/// assert_eq!(hits[0].0, b"b".to_vec());
+/// assert!(hits[0].1 < 1e-6, "an exact match is distance zero, got {}", hits[0].1);
+/// ```
+///
+/// `apply` with `None` removes, and the key stops being returned.
+///
+/// ```
+/// use kevy_vector::{Hnsw, HnswParams};
+/// let mut idx = Hnsw::new(2, HnswParams::default());
+/// idx.apply(b"gone", Some(vec![1.0, 0.0]));
+/// idx.apply(b"kept", Some(vec![0.0, 1.0]));
+/// idx.apply(b"gone", None);
+/// let keys: Vec<_> = idx.knn(&[1.0, 0.0], 5, 16).into_iter().map(|h| h.0).collect();
+/// assert!(!keys.contains(&b"gone".to_vec()));
+/// assert!(keys.contains(&b"kept".to_vec()));
+/// ```
 pub struct Hnsw {
     params: HnswParams,
     dim: usize,

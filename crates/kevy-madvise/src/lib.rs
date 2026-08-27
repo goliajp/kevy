@@ -51,6 +51,27 @@ mod ffi {
 /// expects page-aligned `addr` and a page-multiple `length`; we round addr
 /// UP and len DOWN to 4 KiB. If nothing remains, we don't call. Regions
 /// smaller than ~ a few pages are not worth a syscall.
+/// # Examples
+///
+/// A hint, never a contract: it takes any region and reports nothing, so
+/// the caller keeps the same code on every platform and every kernel.
+/// Off Linux it compiles to nothing at all.
+///
+/// ```
+/// let buf = vec![0u8; 4 * 1024 * 1024];
+/// kevy_madvise::advise_hugepage(buf.as_ptr(), buf.len());
+/// assert_eq!(buf.len(), 4 * 1024 * 1024, "the region is untouched by the hint");
+/// ```
+///
+/// A region too small to be worth a syscall is dropped without one, and a
+/// zero-length region is not passed to the kernel either. Neither is an
+/// error to the caller.
+///
+/// ```
+/// let tiny = [0u8; 8];
+/// kevy_madvise::advise_hugepage(tiny.as_ptr(), tiny.len());
+/// kevy_madvise::advise_hugepage(tiny.as_ptr(), 0);
+/// ```
 pub fn advise_hugepage(ptr: *const u8, len: usize) {
     // Miri cannot execute foreign syscalls; madvise is purely advisory, so
     // a no-op under miri preserves correctness and lets miri exercise the

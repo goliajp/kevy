@@ -20,6 +20,15 @@ Reads the tables from rustdoc's own coverage mode. Both figures come from
 rustc rather than from a scan for `///`, which would count a comment that
 documents nothing and miss `#[doc = ...]`.
 
+**The example count is a lower bound, not an exact figure.** rustdoc counts
+an example only when it hangs off an item already in its coverage set, and
+a doctest on a method inside a private module's `impl` runs and passes
+without ever registering. kevy-seg showed 0 examples while
+`SegBuilder::create`'s doctest was passing; moving the same block onto
+`pub struct SegBuilder` took the file from 0 to 1. So the deficit this
+emits may overstate what is owed — which is the safe direction for a
+ratchet, and worth knowing before anyone reads 1.1% as the whole truth.
+
 Run:
   RUSTDOCFLAGS='-Z unstable-options --show-coverage' \
       cargo +nightly doc --workspace --no-deps

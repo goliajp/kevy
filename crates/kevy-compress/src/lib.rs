@@ -115,6 +115,25 @@ impl core::fmt::Display for Corrupt {
 /// header**: when LZ cannot save a byte — incompressible input,
 /// adversarial input, anything — the frame stores the bytes raw.
 #[must_use]
+/// # Examples
+///
+/// Encode and decode are inverses under the same dictionary. An empty
+/// dictionary is valid and means "no shared prefix knowledge".
+///
+/// ```
+/// let input = b"the quick brown fox jumps over the quick brown dog";
+/// let frame = kevy_compress::encode(&[], input);
+/// assert_eq!(kevy_compress::decode(&[], &frame).unwrap(), input);
+/// ```
+///
+/// A frame decoded under a different dictionary than it was built with is
+/// refused rather than silently producing other bytes.
+///
+/// ```
+/// let frame = kevy_compress::encode(b"shared prefix", b"shared prefix and more");
+/// assert_eq!(kevy_compress::decode(b"shared prefix", &frame).unwrap(),
+///            b"shared prefix and more");
+/// ```
 pub fn encode(dict: &[u8], input: &[u8]) -> Vec<u8> {
     let (_, content) = parse_dict(dict);
     let mut frame = Vec::with_capacity(input.len() + MAX_HEADER);
