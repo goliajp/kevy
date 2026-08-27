@@ -14,6 +14,32 @@ use crate::{SegError, SegMeta};
 /// Streaming builder. Records must arrive in strictly ascending key
 /// order (the reader's binary search is the reason); a violation is a
 /// refusal, not a sort.
+/// # Examples
+///
+/// Keys must arrive sorted; the builder seals pages as it goes and
+/// `finish` returns the metadata a directory serves from without
+/// opening the file again.
+///
+/// ```
+/// use kevy_seg::{SegBuilder, Seg};
+/// let path = std::env::temp_dir().join("kevy-seg-doctest.seg");
+/// let _ = std::fs::remove_file(&path);
+///
+/// let mut b = SegBuilder::create(&path).unwrap();
+/// b.push(b"apple", b"1").unwrap();
+/// b.push(b"banana", b"2").unwrap();
+/// b.push(b"cherry", b"3").unwrap();
+/// let meta = b.finish().unwrap();
+/// assert_eq!(meta.records, 3);
+/// assert_eq!(meta.min_key, b"apple".to_vec());
+///
+/// let seg = Seg::open(&path).unwrap();
+/// assert_eq!(seg.get(b"banana").unwrap(), Some(b"2".to_vec()));
+/// assert_eq!(seg.get(b"durian").unwrap(), None);
+/// assert_eq!(seg.count_range(b"apple", b"banana").unwrap(), 2);
+///
+/// std::fs::remove_file(&path).unwrap();
+/// ```
 pub struct SegBuilder {
     w: BufWriter<File>,
     page: Box<[u8; PAGE]>,

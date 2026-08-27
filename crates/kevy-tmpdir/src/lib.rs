@@ -51,6 +51,16 @@ pub fn unique_dir(label: &str) -> PathBuf {
 /// Dropped on unwind too, so a failing test does not leave litter behind for the
 /// next one to trip over.
 #[derive(Debug)]
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+/// let dir = kevy_tmpdir::TmpDir::new("doctest");
+/// let kept: std::path::PathBuf = dir.path().to_path_buf();
+/// assert!(kept.is_dir());
+/// drop(dir);
+/// assert!(!kept.exists(), "the guard deletes the directory it made");
+/// ```
 pub struct TmpDir(PathBuf);
 
 impl TmpDir {

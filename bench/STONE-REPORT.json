@@ -37,7 +37,7 @@
         "documented": 12,
         "items": 12,
         "pct": 100.0,
-        "examples": 0
+        "examples": 1
       },
       "semver": {
         "ok": true,
@@ -75,13 +75,13 @@
       "packaged": true,
       "built": true,
       "tested": true,
-      "tests": 12,
+      "tests": 14,
       "lift_note": "",
       "docs": {
         "documented": 12,
         "items": 12,
         "pct": 100.0,
-        "examples": 0
+        "examples": 1
       },
       "semver": {
         "ok": true,
@@ -103,7 +103,7 @@
         "documented": 13,
         "items": 13,
         "pct": 100.0,
-        "examples": 0
+        "examples": 1
       },
       "semver": {
         "ok": true,
@@ -119,13 +119,13 @@
       "packaged": true,
       "built": true,
       "tested": true,
-      "tests": 4,
+      "tests": 6,
       "lift_note": "",
       "docs": {
         "documented": 4,
         "items": 4,
         "pct": 100.0,
-        "examples": 0
+        "examples": 1
       },
       "semver": {
         "ok": true,
@@ -141,13 +141,13 @@
       "packaged": true,
       "built": true,
       "tested": true,
-      "tests": 7,
+      "tests": 9,
       "lift_note": "",
       "docs": {
         "documented": 17,
         "items": 17,
         "pct": 100.0,
-        "examples": 0
+        "examples": 1
       },
       "semver": {
         "ok": true,
@@ -185,13 +185,13 @@
       "packaged": true,
       "built": true,
       "tested": true,
-      "tests": 11,
+      "tests": 12,
       "lift_note": "",
       "docs": {
         "documented": 20,
         "items": 20,
         "pct": 100.0,
-        "examples": 0
+        "examples": 1
       },
       "semver": {
         "ok": true,
@@ -207,13 +207,13 @@
       "packaged": true,
       "built": true,
       "tested": true,
-      "tests": 5,
+      "tests": 7,
       "lift_note": "",
       "docs": {
         "documented": 12,
         "items": 12,
         "pct": 100.0,
-        "examples": 0
+        "examples": 1
       },
       "semver": {
         "ok": true,
@@ -273,13 +273,13 @@
       "packaged": true,
       "built": true,
       "tested": true,
-      "tests": 98,
+      "tests": 101,
       "lift_note": "",
       "docs": {
         "documented": 76,
         "items": 76,
         "pct": 100.0,
-        "examples": 0
+        "examples": 1
       },
       "semver": {
         "ok": true,
@@ -295,13 +295,13 @@
       "packaged": true,
       "built": true,
       "tested": true,
-      "tests": 10,
+      "tests": 12,
       "lift_note": "",
       "docs": {
         "documented": 17,
         "items": 17,
         "pct": 100.0,
-        "examples": 0
+        "examples": 1
       },
       "semver": {
         "ok": true,
@@ -317,13 +317,13 @@
       "packaged": true,
       "built": true,
       "tested": true,
-      "tests": 20,
+      "tests": 22,
       "lift_note": "",
       "docs": {
         "documented": 12,
         "items": 12,
         "pct": 100.0,
-        "examples": 0
+        "examples": 1
       },
       "semver": {
         "ok": true,
@@ -361,13 +361,13 @@
       "packaged": true,
       "built": true,
       "tested": true,
-      "tests": 3,
+      "tests": 4,
       "lift_note": "",
       "docs": {
         "documented": 5,
         "items": 5,
         "pct": 100.0,
-        "examples": 0
+        "examples": 1
       },
       "semver": {
         "ok": true,

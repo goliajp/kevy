@@ -61,6 +61,20 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 }
 
 /// Decode epoch seconds to a civil timestamp.
+/// # Examples
+///
+/// ```
+/// let c = kevy_time::civil_from_epoch(0);
+/// assert_eq!((c.y, c.m, c.d, c.h, c.min, c.s), (1970, 1, 1, 0, 0, 0));
+/// ```
+///
+/// Negative seconds run backwards through the epoch rather than clamping
+/// at it.
+///
+/// ```
+/// let c = kevy_time::civil_from_epoch(-1);
+/// assert_eq!((c.y, c.m, c.d, c.h, c.min, c.s), (1969, 12, 31, 23, 59, 59));
+/// ```
 pub fn civil_from_epoch(secs: i64) -> Civil {
     let days = secs.div_euclid(SECS_PER_DAY);
     let rem = secs.rem_euclid(SECS_PER_DAY) as u32;

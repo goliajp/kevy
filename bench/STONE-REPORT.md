@@ -9,7 +9,7 @@ stone look good.
 **14/18 lift** — unpack the published form outside the
 repository and its tests pass there.
 
-**12/18 carry no executable example.** Documentation
+**1/18 carry no executable example.** Documentation
 that is not compiled is a promise nobody checked.
 
 **kevy-uring lift with zero tests** — which is why a
@@ -26,20 +26,20 @@ rather than dead in it.
 | stone | lifts | tests | docs | examples | dead regions | semver |
 |---|---|---:|---:|---:|---:|---|
 | kevy-scalar | yes | 26 | 39/39 (100%) | 1 | 1712/4383 | clean |
-| kevy-seg | yes | 11 | 20/20 (100%) | 0 | 122/1206 | clean |
+| kevy-seg | yes | 12 | 20/20 (100%) | 1 | 122/1206 | clean |
 | kevy-sys | yes | 9 | 24/24 (100%) | 1 | 122/634 | clean |
 | kevy-alloc | yes | 37 | 88/88 (100%) | 1 | 119/1694 | clean |
-| kevy-text | yes | 98 | 76/76 (100%) | 0 | 119/3987 | clean |
-| kevy-compress | yes | 12 | 12/12 (100%) | 0 | 43/1374 | clean |
-| kevy-vector | yes | 10 | 17/17 (100%) | 0 | 27/864 | clean |
-| kevy-time | yes | 5 | 12/12 (100%) | 0 | 24/289 | clean |
-| kevy-ranktree | yes | 7 | 17/17 (100%) | 0 | 12/826 | clean |
-| kevy-madvise | yes | 4 | 4/4 (100%) | 0 | 10/55 | clean |
-| kevy-geo | yes | 20 | 12/12 (100%) | 0 | 4/334 | clean |
-| kevy-tmpdir | yes | 3 | 5/5 (100%) | 0 | 3/85 | clean |
+| kevy-text | yes | 101 | 76/76 (100%) | 1 | 119/3987 | clean |
+| kevy-compress | yes | 14 | 12/12 (100%) | 1 | 43/1374 | clean |
+| kevy-vector | yes | 12 | 17/17 (100%) | 1 | 27/864 | clean |
+| kevy-time | yes | 7 | 12/12 (100%) | 1 | 24/289 | clean |
+| kevy-ranktree | yes | 9 | 17/17 (100%) | 1 | 12/826 | clean |
+| kevy-madvise | yes | 6 | 4/4 (100%) | 1 | 10/55 | clean |
+| kevy-geo | yes | 22 | 12/12 (100%) | 1 | 4/334 | clean |
+| kevy-tmpdir | yes | 4 | 5/5 (100%) | 1 | 3/85 | clean |
 | kevy-bench | yes | 4 | 13/13 (100%) | 1 | 2/130 | unpublished |
 | kevy-uring | yes | 0 | 1/1 (100%) | 0 | **not measured** | clean |
 | kevy-hash —   required by package `kevy-hash v5.4.1 (/Users/doracawl/workspace/goliajp/kevy/crates/kevy-hash)` | no | 0 | 10/10 (100%) | 1 | 31/535 | clean |
-| kevy-map —   required by package `kevy-map v5.4.1 (/Users/doracawl/workspace/goliajp/kevy/crates/kevy-map)` | no | 0 | 13/13 (100%) | 0 | 24/1221 | clean |
-| kevy-bytes —   required by package `kevy-bytes v5.4.1 (/Users/doracawl/workspace/goliajp/kevy/crates/kevy-bytes)` | no | 0 | 12/12 (100%) | 0 | 5/448 | clean |
+| kevy-map —   required by package `kevy-map v5.4.1 (/Users/doracawl/workspace/goliajp/kevy/crates/kevy-map)` | no | 0 | 13/13 (100%) | 1 | 24/1221 | clean |
+| kevy-bytes —   required by package `kevy-bytes v5.4.1 (/Users/doracawl/workspace/goliajp/kevy/crates/kevy-bytes)` | no | 0 | 12/12 (100%) | 1 | 5/448 | clean |
 | kevy-ring —   required by package `kevy-ring v5.4.1 (/Users/doracawl/workspace/goliajp/kevy/crates/kevy-ring)` | no | 0 | 11/11 (100%) | 1 | 0/360 | clean |
