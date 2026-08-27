@@ -33,6 +33,7 @@
 //! assert!(s.median_ns < 1_000); // trivial add is nanoseconds
 //! ```
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 use std::time::{Duration, Instant};
 

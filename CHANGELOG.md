@@ -73,9 +73,10 @@ milestone's name, not a claim that an API moved.
 ### Changed
 
 - **Every public item is documented** — 2,661 of 2,661, from 93.9%. All 34
-  stone and steel crates are at 100%, four of them holding it with
+  stone and steel crates are at 100%, and all 34 now hold it with
   `#![warn(missing_docs)]`, so the next gap is a compile error naming a line
-  rather than a number that drifts.
+  rather than a number that drifts. Five of them were at 100% with nothing
+  holding it, which is a state that lasts exactly until the next public item.
 
 - **The stone bar is measured on the platform that enforces it.** Code
   switched off by `cfg` is absent from a coverage run rather than dead in
