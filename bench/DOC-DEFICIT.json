@@ -8,12 +8,11 @@
   "total_regions": 2661,
   "min_total": 1330,
   "public_items": 2661,
-  "documented": 2577,
+  "documented": 2592,
   "with_example": 29,
   "symbols": {
     "gen-docs/undocumented": 6,
     "gen-docs/without-example": 8,
-    "kevy/undocumented": 9,
     "kevy/without-example": 21,
     "kevy-alloc/without-example": 87,
     "kevy-bench/without-example": 12,
@@ -64,7 +63,6 @@
     "kevy-vector/without-example": 16,
     "kevy-vlog/without-example": 32,
     "kevy-wasm/without-example": 41,
-    "kevy-window/undocumented": 6,
     "kevy-window/without-example": 34
   }
 }

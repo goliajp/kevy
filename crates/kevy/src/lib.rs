@@ -92,7 +92,11 @@ pub use state::{KevyCommands, RuntimeState};
 
 /// What to do with a connection after draining its buffered commands.
 pub enum AfterDrain {
+    /// Keep serving this connection — the ordinary outcome.
     KeepOpen,
+    /// Close it: the client sent QUIT, or the connection is being shut
+    /// down for a reason the drain already replied about. The reply is
+    /// written before the close, so this is not an abort.
     Close,
 }
 
