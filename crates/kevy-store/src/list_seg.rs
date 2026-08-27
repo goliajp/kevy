@@ -38,11 +38,14 @@ pub struct SegListData {
 
 impl SegListData {
     #[inline]
+    /// Elements across every segment, held as a running count rather than
+    /// summed over the deque.
     pub fn len(&self) -> usize {
         self.len
     }
 
     #[inline]
+    /// Whether the list holds nothing.
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -66,6 +69,10 @@ impl SegListData {
         out
     }
 
+    /// Prepend. Touches the first segment only, so under a snapshot the
+    /// copy-on-write clone is one segment plus the pointer deque — not the
+    /// list. A full front segment is not split; a new one is pushed ahead
+    /// of it.
     pub fn push_front(&mut self, v: Vec<u8>) {
         match self.segs.front_mut() {
             Some(s) if s.len() < SEG_CAP => Arc::make_mut(s).push_front(v),
@@ -78,6 +85,7 @@ impl SegListData {
         self.len += 1;
     }
 
+    /// Append, on the same one-segment terms as `push_front`.
     pub fn push_back(&mut self, v: Vec<u8>) {
         match self.segs.back_mut() {
             Some(s) if s.len() < SEG_CAP => Arc::make_mut(s).push_back(v),
@@ -90,6 +98,8 @@ impl SegListData {
         self.len += 1;
     }
 
+    /// Take from the front. An emptied segment is dropped rather than
+    /// kept, so a list that is drained does not keep its segment array.
     pub fn pop_front(&mut self) -> Option<Vec<u8>> {
         let seg = self.segs.front_mut()?;
         let v = Arc::make_mut(seg).pop_front()?;
@@ -100,6 +110,7 @@ impl SegListData {
         Some(v)
     }
 
+    /// Take from the back, on the same terms as `pop_front`.
     pub fn pop_back(&mut self) -> Option<Vec<u8>> {
         let seg = self.segs.back_mut()?;
         let v = Arc::make_mut(seg).pop_back()?;
@@ -123,6 +134,10 @@ impl SegListData {
         unreachable!("locate past end");
     }
 
+    /// Index into the list. Walks the segment deque to find the one that
+    /// contains `idx`, so this is O(segments) rather than O(1) — cheap at
+    /// the sizes segmentation is for, since a segment holds `SEG_CAP`
+    /// elements.
     pub fn get(&self, idx: usize) -> Option<&Vec<u8>> {
         if idx >= self.len {
             return None;
@@ -168,6 +183,7 @@ impl SegListData {
         None
     }
 
+    /// Every element front to back, flattening the segments.
     pub fn iter(&self) -> impl Iterator<Item = &Vec<u8>> {
         self.segs.iter().flat_map(|s| s.iter())
     }

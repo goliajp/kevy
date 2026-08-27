@@ -96,11 +96,15 @@ impl<V: Clone> Default for SegMap<V> {
 
 impl<V: Clone> SegMap<V> {
     #[inline]
+    /// Elements across every bucket. Kept as a running count rather than
+    /// summed on call, so this is O(1) at any directory size.
     pub fn len(&self) -> usize {
         self.len
     }
 
     #[inline]
+    /// Whether the map holds nothing. Note this is about elements, not
+    /// buckets — an emptied map keeps its directory.
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -116,10 +120,15 @@ impl<V: Clone> SegMap<V> {
         self.dirs[self.route(key.kevy_hash())] as usize
     }
 
+    /// Look one key up: hash to a directory slot, then probe that bucket.
+    /// Two indirections regardless of how large the map has grown, and no
+    /// clone — reads never trigger the copy-on-write path.
     pub fn get(&self, key: &[u8]) -> Option<&V> {
         self.buckets[self.bucket_of(key)].map.get(key)
     }
 
+    /// Membership, on the same one-bucket path as `get` and without
+    /// materialising the value.
     pub fn contains_key(&self, key: &[u8]) -> bool {
         self.buckets[self.bucket_of(key)].map.contains_key(key)
     }
@@ -139,6 +148,10 @@ impl<V: Clone> SegMap<V> {
         old
     }
 
+    /// Remove one key, returning what it held. This is a write: while a
+    /// snapshot pins the structure it clones the outer shell plus the one
+    /// bucket it routes to, never the whole map — the bound the module
+    /// exists for.
     pub fn remove(&mut self, key: &[u8]) -> Option<V> {
         let bi = self.bucket_of(key);
         let old = Arc::make_mut(&mut self.buckets[bi]).map.remove(key);
@@ -209,14 +222,18 @@ impl<V: Clone> SegMap<V> {
         )
     }
 
+    /// Every entry, bucket by bucket. Order follows the directory rather
+    /// than insertion, and is not stable across a split.
     pub fn iter(&self) -> impl Iterator<Item = (&SmallBytes, &V)> {
         self.buckets.iter().flat_map(|b| b.map.iter())
     }
 
+    /// Keys only, in `iter`'s order.
     pub fn keys(&self) -> impl Iterator<Item = &SmallBytes> {
         self.iter().map(|(k, _)| k)
     }
 
+    /// Values only, in `iter`'s order.
     pub fn values(&self) -> impl Iterator<Item = &V> {
         self.iter().map(|(_, v)| v)
     }

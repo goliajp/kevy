@@ -41,6 +41,11 @@
 //! ever exists. Incompressible payloads store raw inside the frame
 //! (never expanded past the 6-byte frame header).
 
+//! Every public item here is documented, and the lint keeps it that
+//! way: kevy-vlog is the value log, and `[workspace.lints.rust] warnings = "deny"`
+//! turns a new gap into a compile error rather than a number that
+//! drifts. Closed from 65 sites (store) and 7 (vlog) in v6.
+#![warn(missing_docs)]
 mod crc32c;
 use crc32c::crc32c;
 

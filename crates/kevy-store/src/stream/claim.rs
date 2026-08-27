@@ -13,8 +13,15 @@ use crate::StoreError;
 /// call, IDs successfully transferred, and IDs skipped because the
 /// stream has since deleted them.
 pub struct AutoclaimResult {
+    /// Where the next `XAUTOCLAIM` should resume. `0-0` when the scan
+    /// reached the end of the pending list.
     pub next_cursor: StreamId,
+    /// Entries transferred to the claiming consumer, in stream order.
     pub claimed_ids: Vec<StreamId>,
+    /// Entries that were pending but no longer exist — deleted from the
+    /// stream while a consumer still held them. XAUTOCLAIM drops them from
+    /// the pending list and reports them here rather than claiming a
+    /// message with no body.
     pub deleted_ids: Vec<StreamId>,
 }
 

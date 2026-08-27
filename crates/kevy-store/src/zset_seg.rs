@@ -45,19 +45,25 @@ pub struct SegZSetData {
 
 impl SegZSetData {
     #[inline]
+    /// Members across every segment, as a running count.
     pub fn len(&self) -> usize {
         self.by_member.len()
     }
 
     #[inline]
+    /// Whether the sorted set holds no members.
     pub fn is_empty(&self) -> bool {
         self.by_member.is_empty()
     }
 
+    /// One member's score, or `None` if it is not present. A lookup
+    /// through the member index, not a walk of the score order.
     pub fn score_of(&self, member: &[u8]) -> Option<f64> {
         self.by_member.get(member).copied()
     }
 
+    /// Membership, on the same index path as `score_of` and without
+    /// reading the score.
     pub fn contains_member(&self, member: &[u8]) -> bool {
         self.by_member.contains_key(member)
     }

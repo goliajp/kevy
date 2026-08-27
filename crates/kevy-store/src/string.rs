@@ -196,6 +196,9 @@ impl Store {
         }
     }
 
+    /// Byte length of a string value. A missing key is 0, matching
+    /// STRLEN; an integer-encoded value reports the length it would
+    /// format to, not 8.
     pub fn strlen(&mut self, key: &[u8]) -> Result<usize, StoreError> {
         Ok(self.get(key)?.map_or(0, |c| c.len()))
     }
