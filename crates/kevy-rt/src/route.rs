@@ -53,7 +53,13 @@ pub enum Route {
     /// The search runs on `src`'s shard ([`crate::Commands::geo_search`]),
     /// the write lands on `dst`'s (`Op::ZStoreResult`) — see
     /// [`crate::exec_geostore`].
-    GeoStore { src: Vec<u8>, dst: Vec<u8> },
+    GeoStore {
+        /// Key the search reads — its shard runs the query.
+        src: Vec<u8>,
+        /// Key the result is written to — its shard takes the write, which
+        /// is why both keys have to be extracted before routing.
+        dst: Vec<u8>,
+    },
     /// `FEED.READ <shard> <gen> <offset> …` — shard-index routed.
     FeedRead,
     /// `FEED.TAIL <shard>`.
@@ -78,7 +84,14 @@ pub enum Route {
     /// `master_repl_offset` at arm time; the origin replies the MIN.
     /// `timeout_ms == 0` = the Redis "wait forever" form (the runtime
     /// hard-caps it — see `exec_replwait::WAIT_HARD_CAP_MS`).
-    ReplWait { numreplicas: u32, timeout_ms: u64 },
+    ReplWait {
+        /// How many replicas the caller wants acked. Reported per shard;
+        /// the origin answers the minimum across them.
+        numreplicas: u32,
+        /// Deadline in milliseconds. `0` is Redis's wait-forever form and
+        /// is hard-capped by the runtime rather than honoured literally.
+        timeout_ms: u64,
+    },
     /// `REPL.TOKEN` on a primary — gather every shard's
     /// `(feed generation, next_offset)` pair into one flat array.
     ReplToken,
@@ -90,8 +103,13 @@ pub enum Route {
     /// `miss` because the upstream address is its knowledge, not the
     /// runtime's.
     ReplBarrier {
+        /// One target apply-position per shard, indexed by shard number.
         offsets: Vec<u64>,
+        /// Deadline in milliseconds for every shard to reach its target.
         timeout_ms: u64,
+        /// The reply to send if any shard misses its deadline, pre-built by
+        /// the command layer because it names the upstream primary — the
+        /// runtime does not know that address.
         miss: Vec<u8>,
     },
     /// `KEYS pattern` — every shard returns its matching keys.
@@ -107,6 +125,8 @@ pub enum Route {
     RandomKey,
     /// `SUBSCRIBE` / `UNSUBSCRIBE` — connection-level (modifies this conn).
     Subscribe,
+    /// The other half of the pair above: drops this conn's channel
+    /// subscriptions, all of them when no channel is named.
     Unsubscribe,
     /// `PSUBSCRIBE pattern [pattern ...]` / `PUNSUBSCRIBE [pattern ...]` —
     /// like Subscribe/Unsubscribe but the conn registers Redis-glob
@@ -114,6 +134,9 @@ pub enum Route {
     /// frame. Connection-level (modifies this conn + shared pattern
     /// registry).
     Psubscribe,
+    /// The other half of the pattern pair: drops this conn's pattern
+    /// subscriptions, all of them when no pattern is named, and removes
+    /// them from the shared registry.
     Punsubscribe,
     /// `PUBLISH channel message` — delivered to subscribers on every core.
     Publish,
@@ -179,8 +202,14 @@ pub enum Route {
     /// forms; blocking reads park on the origin shard instead (see the
     /// cross-shard BLOCK arbiter).
     XReadGather {
+        /// `(stream key, start id)` per stream, already paired — the wire
+        /// form lists all keys and then all ids, which is not routable.
         streams: Vec<(Vec<u8>, Vec<u8>)>,
+        /// `COUNT`, applied per stream rather than across the gather.
         count: Option<usize>,
+        /// `Some` turns each per-shard sub-query into an XREADGROUP, which
+        /// makes it a write: the PEL update happens on the stream's own
+        /// shard and is logged there.
         group: Option<XGroupCtx>,
     },
 }

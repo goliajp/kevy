@@ -8,7 +8,7 @@
   "total_regions": 2661,
   "min_total": 1330,
   "public_items": 2661,
-  "documented": 2542,
+  "documented": 2577,
   "with_example": 29,
   "symbols": {
     "gen-docs/undocumented": 6,
@@ -48,7 +48,6 @@
     "kevy-resp/without-example": 107,
     "kevy-resp-client/without-example": 33,
     "kevy-ring/without-example": 10,
-    "kevy-rt/undocumented": 35,
     "kevy-rt/without-example": 210,
     "kevy-scalar/without-example": 38,
     "kevy-scope/without-example": 20,
