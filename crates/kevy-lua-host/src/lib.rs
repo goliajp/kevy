@@ -34,6 +34,7 @@
 //! every commit touching this file.
 
 #![doc(html_no_source)]
+#![warn(missing_docs)]
 
 use kevy_lua::{Bridge, FlushMode, Reply, ScriptSha1};
 use std::cell::Cell;

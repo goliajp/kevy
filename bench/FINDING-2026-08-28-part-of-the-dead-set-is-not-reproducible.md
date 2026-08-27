@@ -149,3 +149,41 @@ ratchet cannot see, and the per-symbol comparison catches it.
 
 `envelope_runs` is recorded in the baseline, because an envelope over one
 run is a sample and should not be able to pass itself off as more.
+
+---
+
+## Continuation, 2026-08-28: the tail is mostly not noise
+
+The envelope over three runs held for a day, then two more symbols joined
+the set on separate runs — one per run, each time while the *total* fell:
+
+| run | symbol joined | regions | total |
+|---|---|---:|---:|
+| 33113251307 | `kevy::commands::commands_tick::sweep_hash_field_ttls` | 5 | 27,873 → 27,727 |
+| 33118984761 | `kevy_elect::transport_loops::message_sender` | 3 | 27,873 → 27,721 |
+
+The cheap reading is that the envelope needs more runs. The measured
+reading is different, and better: **neither symbol is irreducibly
+nondeterministic.** Both were reachable only *incidentally*, through
+whatever a concurrent test happened to do inside its window, and both took
+a direct test to pin:
+
+- `sweep_hash_field_ttls` runs when a hash field's deadline falls due
+  between two ticks. Every hash operation purges lazily on access, so a
+  test that reads the expired field proves nothing — the read removes it
+  either way. The deadline goes in through the snapshot loader hook, which
+  skips the command path's immediate-delete branch, and the accounting is
+  read with `hash_ttl_each`, which iterates without purging.
+- `message_sender` is a pure four-arm match over the message variants. Its
+  arms were covered only by whichever messages a real election exchanged
+  inside the test window. Which variants those are is a matter of timing;
+  which variants *exist* is not.
+
+So the working rule is: **a symbol that joins the set gets read before it
+gets declared.** Two of two so far turned out to be coverable, and a
+ratchet that absorbs every symbol that ever varies converges on absorbing
+everything. The four `unstable` prefixes already declared are all thread
+loops — `Shard::`, `replica_runner::`, `wire_snapshot::`, `aof_writer::` —
+and that remains the shape that earns a declaration: work that only exists
+because another thread is running, not work that a test could ask for
+directly.

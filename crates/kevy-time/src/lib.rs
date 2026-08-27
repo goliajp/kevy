@@ -14,6 +14,7 @@
 //! exact over the whole i64 day range the epoch can reach.
 
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 const SECS_PER_DAY: i64 = 86_400;
 
