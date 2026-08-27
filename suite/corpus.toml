@@ -1,0 +1,42 @@
+# The execution corpus — what "executed" means.
+#
+# "This region never executes" is meaningless without naming what did the
+# executing. A dead-path set computed under one corpus and compared against
+# a baseline recorded under another is not a comparison at all: it reports
+# the difference between two corpora as if it were a change in the code.
+#
+# So the corpus is declared here, once, and the dead-set baseline records
+# this file's identity alongside the set. Changing the corpus invalidates
+# the baseline by construction — tools/coverage_atlas.py refuses to compare
+# across a corpus change rather than quietly reporting the corpus as a
+# regression.
+#
+# Read by tools/coverage_atlas.py. Kept deliberately aligned with
+# bench/covgate.sh, so the scalar coverage figure and the dead set are two
+# views of one run rather than two different runs that disagree.
+
+[corpus]
+id = "c1"
+
+# Identical to what covgate.sh measures. Both instruments read one run.
+cmd = "cargo llvm-cov --workspace --lib --tests --json --output-path {out}"
+
+# The enforcing platform. COV-BASELINE.json records 79.64% here against
+# 82.08% on macOS: cfg(linux) reactor code is in the denominator on one and
+# absent on the other. A dead set carries the same asymmetry, more sharply
+# — every cfg(linux) region is dead on macOS by construction — so the
+# baseline is only ever recorded on Linux.
+platform = "linux"
+
+# Scope: regions in files under these prefixes. A region outside them
+# belongs to a dependency and is not ours to delete.
+include_prefixes = ["crates/"]
+
+# Known exclusion, stated rather than discovered later. Doctests need
+# nightly (`--doctests`) and are not in this corpus, so a public item whose
+# only exercise is its own doc example counts as dead here. Measured
+# 2026-08-27: 18 items across the workspace carry an executable example,
+# 0.7% of 2,661 public items — so the distortion is real but small, and it
+# shrinks as G5 (doctestgate) raises that floor. Revisit when it does; that
+# is a corpus change and takes a new id.
+excludes_doctests = true
