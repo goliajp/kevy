@@ -21,12 +21,28 @@
 /// kevy_resp::ops_table::OP_TABLE — this table is the DOC face).
 #[derive(Debug, Clone, Copy)]
 pub struct VerbMeta {
+    /// Canonical uppercase name, as `COMMAND DOCS` reports it and as the
+    /// dispatch tables spell it.
     pub name: &'static str,
+    /// Which family the reference groups it under — `string`, `index`,
+    /// `server` and so on.
     pub group: &'static str,
+    /// Redis's arity convention: positive is an exact argument count
+    /// INCLUDING the verb, negative is a minimum. `-4` means "at least
+    /// four". This is the field the dispatch chain consults before
+    /// reporting a verb unknown.
     pub arity: i8,
+    /// `COMMAND` flags — `readonly`, `write`, `admin`, `blocking`,
+    /// `extension`. Documentation only; the write classification the AOF
+    /// and replication paths actually gate on lives in
+    /// `kevy_resp::ops_table`.
     pub flags: &'static [&'static str],
+    /// One sentence, present tense, for the reference and `COMMAND DOCS`.
     pub summary: &'static str,
+    /// The kevy version this verb first shipped in — not the Redis one.
     pub since: &'static str,
+    /// The full call form, `VERB arg [optional …]`, as the reference
+    /// prints it and as an arity error points a caller at.
     pub syntax: &'static str,
     /// Time complexity of THIS engine's implementation, derived by reading it.
     /// Never copied from Redis's docs: several of ours genuinely differ in
