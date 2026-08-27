@@ -279,6 +279,62 @@ def layer6_vendored_bytes(v: str, bad: list) -> int:
     return checked
 
 
+def layer7_go_module_major(v: str, bad: list) -> int:
+    """Go's major lives in the import path, and nothing checked it.
+
+    `import "github.com/goliajp/kevy-go/v5"` is not a version *string* that
+    happens to appear in a document — for major >= 2 the path IS the major,
+    the way a vendored `.so` IS one. Get it wrong and the module resolves to
+    the wrong major forever.
+
+    `scripts/mirror-go-module.sh` refuses a mismatch, but it runs AFTER the
+    tag: crates.io has published by then, and that cannot be undone. So the
+    check belongs here, in precommit, where a major bump that forgot the
+    path fails before anything irreversible happens.
+
+    Two rules, because the same string means two things. A bare
+    `github.com/goliajp/kevy-go` is the *repository*, which has no major and
+    must not be flagged; with a `/vN` it is the *module path*. So: every
+    `/vN` that appears must match, and the two places that declare the
+    module — the mirror script and `bindings/go/go.mod` — must carry one.
+    """
+    major = int(v.split(".")[0])
+    if major < 2:
+        return 0
+    want = f"/v{major}"
+    used = re.compile(r"github\.com/goliajp/kevy-go/v(\d+)")
+    checked = 0
+    for pth in sorted(ROOT.glob("**/*")):
+        if pth.is_dir() or skip(pth) or pth.suffix not in (
+                ".go", ".mod", ".sh", ".md", ".yml", ".yaml"):
+            continue
+        try:
+            txt = pth.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for m in used.finditer(txt):
+            checked += 1
+            if m.group(0).endswith(want):
+                continue
+            bad.append(
+                f"{pth.relative_to(ROOT)}: Go module path says '{m.group(0)}' "
+                f"but the workspace is {v} — Go puts the major in the path, "
+                f"so this resolves to the wrong major forever"
+            )
+    for rel in ("scripts/mirror-go-module.sh", "bindings/go/go.mod"):
+        pth = ROOT / rel
+        if not pth.exists():
+            bad.append(f"{rel}: missing — the Go module's major is declared here")
+            continue
+        if want not in pth.read_text(encoding="utf-8"):
+            bad.append(
+                f"{rel}: declares the Go module without '{want}'. This is where "
+                f"the major is set; the mirror script refuses a mismatch, but "
+                f"only after the tag has already published to crates.io"
+            )
+    return checked
+
+
 def main() -> int:
     v = workspace_version()
     bad: list[str] = []
@@ -288,6 +344,7 @@ def main() -> int:
         "live constants": layer4_live_constants(v, bad),
         "prose claims": layer5_prose(v, bad),
         "vendored bytes": layer6_vendored_bytes(v, bad),
+        "go module major": layer7_go_module_major(v, bad),
     }
     # A layer that finds nothing has not verified anything. Without this
     # the gate would go green on a checkout where the vendored artifacts
@@ -295,7 +352,11 @@ def main() -> int:
     # predicate failure this project writes rules about. Floors are the
     # minimum a bare checkout must contain, not a target.
     floors = {"cargo": 40, "manifests+pins": 10, "live constants": 3,
-              "prose claims": 3, "vendored bytes": 2}
+              "prose claims": 3, "vendored bytes": 2,
+              # Nine files carry the Go import path; a run that finds none
+              # has stopped looking, which is how this layer went unchecked
+              # in the first place.
+              "go module major": 5}
     for layer, floor in floors.items():
         if counts[layer] < floor:
             bad.append(
