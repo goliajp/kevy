@@ -34,6 +34,14 @@ jobs:
           rustup component add llvm-tools-preview
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
+      # The atlas demangles through rustfilt and REFUSES without it, because
+      # a baseline whose symbol identities depend on whether a tool happened
+      # to be installed is not a baseline. It refused here on the first run,
+      # which is the behaviour, not a surprise.
+      - name: Install rustfilt
+        uses: taiki-e/install-action@v2
+        with:
+          tool: rustfilt
       - name: Cache cargo registry + build artifacts
         uses: actions/cache@v6
         with:

@@ -48,6 +48,14 @@ def refuse(msg):
     sys.exit(2)
 
 
+def shown(p):
+    """Repo-relative when it is under the repo, absolute otherwise."""
+    try:
+        return p.relative_to(ROOT)
+    except ValueError:
+        return p
+
+
 def host():
     return {"Linux": "linux", "Darwin": "macos", "Windows": "windows"}.get(
         _platform.system(), _platform.system().lower())
@@ -103,13 +111,17 @@ def main():
         "with_example": examples,
         "symbols": symbols,
     }
-    out = pathlib.Path(sys.argv[sys.argv.index("--out") + 1]) if "--out" in sys.argv else OUT
+    # resolve(): a relative --out crashed the final print on CI *after* the
+    # file was already written — the measurement succeeded and the report of
+    # it did not. relative_to() below only accepts a path under ROOT.
+    out = (pathlib.Path(sys.argv[sys.argv.index("--out") + 1]).resolve()
+           if "--out" in sys.argv else OUT)
     out.write_text(json.dumps(doc, indent=2) + "\n")
     print(f"docdeficit: {items} public items in {len(tables)} crates — "
           f"{documented} documented ({100 * documented / items:.1f}%), "
           f"{examples} with an executable example ({100 * examples / items:.1f}%)")
     print(f"  owed: {items - documented} docs, {items - examples} examples "
-          f"across {len(symbols)} keys -> {out.relative_to(ROOT)}")
+          f"across {len(symbols)} keys -> {shown(out)}")
     return 0
 
 
