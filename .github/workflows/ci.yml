@@ -90,6 +90,70 @@ jobs:
             bench/DEAD-ATLAS.md
           if-no-files-found: error
 
+  # ───────────── the stone bar, on the enforcing platform ─────────────
+  # Taken on Linux, and only on Linux. Code switched off by cfg is ABSENT
+  # from a coverage run rather than dead in it, so a report from any other
+  # host cannot see kevy-uring at all — the crate does not compile there —
+  # and the bar would then judge a stone the producer never looked at. Two
+  # of the waivers in suite/stone-waivers.toml exist only because a macOS
+  # reading was believed: it said the crate has zero tests, and on Linux it
+  # has twelve. stonegate now refuses a report from anywhere else, which is
+  # what makes this job the only place the verdict can come from.
+  stonereport:
+    name: stonegate (the stone bar, on Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: coverage
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust (stable + nightly)
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+          rustup toolchain install nightly --no-self-update
+      # The semver reading is no longer optional: an absent reading used to
+      # satisfy `semver_clean`, because the gate asked whether a reading was
+      # bad rather than whether one existed. Skipping a check is not a way
+      # to pass it.
+      - name: Install cargo-semver-checks
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: stone-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      # From the instrumented run that already happened in the coverage
+      # job, on this same platform. Re-running the suite here to recover a
+      # file that exists would double a 25-minute job.
+      - name: Fetch the dead set from the coverage job
+        uses: actions/download-artifact@v8
+        with:
+          name: dead-set-linux
+          path: bench/
+      - name: rustdoc coverage tables
+        run: |
+          RUSTDOCFLAGS='-Z unstable-options --show-coverage' \
+            cargo +nightly doc --workspace --no-deps
+      - name: stone report (four readings per stone)
+        run: python3 tools/stone_report.py
+      - name: stonegate (every stone meets the bar or carries a waiver)
+        run: python3 tools/check_stones.py
+      # Especially on failure. A stale waiver and a missed bar are both
+      # verdicts about the contents of this file, and a step skipped on
+      # failure puts the evidence behind the verdict.
+      - name: upload stone report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: stone-report-linux
+          path: |
+            bench/STONE-REPORT.json
+            bench/STONE-REPORT.md
+          if-no-files-found: error
+
   # ───────────── doc deficit: what the documentation owes ─────────────
   docdeficit:
     name: doctestgate (documentation deficit)

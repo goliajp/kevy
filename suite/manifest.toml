@@ -169,7 +169,7 @@ tier = "full"
 cmd = "python3 tools/stone_report.py"
 expected = 420
 timeout = 3600
-requires = ["nightly rustdoc coverage tables in target/doc", "cargo-semver-checks"]
+requires = ["linux", "nightly rustdoc coverage tables in target/doc", "cargo-semver-checks"]
 proves = "each stone measured four ways: lifts outside the workspace, semver-clean, documented, and its dead-region count"
 
 [[check]]
@@ -179,7 +179,7 @@ tier = "full"
 cmd = "python3 tools/check_stones.py"
 expected = 1
 timeout = 60
-requires = ["bench/STONE-REPORT.json from stone-report"]
+requires = ["linux", "bench/STONE-REPORT.json from stone-report"]
 proves = "every stone meets the bar or carries a waiver with a reason; no waiver outlives the problem"
 
 [[check]]
