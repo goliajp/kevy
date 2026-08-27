@@ -1,15 +1,15 @@
 {
   "version": "5.4.1",
-  "dead_platform": "macos",
+  "dead_platform": "linux",
   "stones": [
     {
       "crate": "kevy-alloc",
-      "dead_regions": 119,
+      "dead_regions": 117,
       "measured_regions": 1694,
       "packaged": true,
       "built": true,
       "tested": true,
-      "tests": 37,
+      "tests": 39,
       "lift_note": "",
       "docs": {
         "documented": 88,
@@ -26,13 +26,13 @@
     },
     {
       "crate": "kevy-bytes",
-      "dead_regions": 5,
-      "measured_regions": 448,
+      "dead_regions": 9,
+      "measured_regions": 463,
       "packaged": false,
       "built": false,
       "tested": false,
       "tests": 0,
-      "lift_note": "  required by package `kevy-bytes v5.4.1 (/Users/doracawl/workspace/goliajp/kevy/crates/kevy-bytes)`",
+      "lift_note": "  required by package `kevy-bytes v5.4.1 (/home/runner/work/kevy/kevy/crates/kevy-bytes)`",
       "docs": {
         "documented": 12,
         "items": 12,
@@ -54,7 +54,7 @@
       "built": false,
       "tested": false,
       "tests": 0,
-      "lift_note": "  required by package `kevy-hash v5.4.1 (/Users/doracawl/workspace/goliajp/kevy/crates/kevy-hash)`",
+      "lift_note": "  required by package `kevy-hash v5.4.1 (/home/runner/work/kevy/kevy/crates/kevy-hash)`",
       "docs": {
         "documented": 10,
         "items": 10,
@@ -92,13 +92,13 @@
     },
     {
       "crate": "kevy-map",
-      "dead_regions": 24,
-      "measured_regions": 1221,
+      "dead_regions": 18,
+      "measured_regions": 1211,
       "packaged": false,
       "built": false,
       "tested": false,
       "tests": 0,
-      "lift_note": "  required by package `kevy-map v5.4.1 (/Users/doracawl/workspace/goliajp/kevy/crates/kevy-map)`",
+      "lift_note": "  required by package `kevy-map v5.4.1 (/home/runner/work/kevy/kevy/crates/kevy-map)`",
       "docs": {
         "documented": 13,
         "items": 13,
@@ -114,8 +114,8 @@
     },
     {
       "crate": "kevy-madvise",
-      "dead_regions": 10,
-      "measured_regions": 55,
+      "dead_regions": 11,
+      "measured_regions": 121,
       "packaged": true,
       "built": true,
       "tested": true,
@@ -164,7 +164,7 @@
       "built": false,
       "tested": false,
       "tests": 0,
-      "lift_note": "  required by package `kevy-ring v5.4.1 (/Users/doracawl/workspace/goliajp/kevy/crates/kevy-ring)`",
+      "lift_note": "  required by package `kevy-ring v5.4.1 (/home/runner/work/kevy/kevy/crates/kevy-ring)`",
       "docs": {
         "documented": 11,
         "items": 11,
@@ -224,12 +224,12 @@
     },
     {
       "crate": "kevy-sys",
-      "dead_regions": 122,
-      "measured_regions": 634,
+      "dead_regions": 121,
+      "measured_regions": 730,
       "packaged": true,
       "built": true,
       "tested": true,
-      "tests": 9,
+      "tests": 14,
       "lift_note": "",
       "docs": {
         "documented": 24,
@@ -246,18 +246,18 @@
     },
     {
       "crate": "kevy-uring",
-      "dead_regions": 0,
-      "measured_regions": 0,
+      "dead_regions": 238,
+      "measured_regions": 853,
       "packaged": true,
       "built": true,
       "tested": true,
-      "tests": 0,
+      "tests": 15,
       "lift_note": "",
       "docs": {
-        "documented": 1,
-        "items": 1,
+        "documented": 17,
+        "items": 17,
         "pct": 100.0,
-        "examples": 0
+        "examples": 1
       },
       "semver": {
         "ok": true,
@@ -290,8 +290,8 @@
     },
     {
       "crate": "kevy-vector",
-      "dead_regions": 27,
-      "measured_regions": 864,
+      "dead_regions": 36,
+      "measured_regions": 900,
       "packaged": true,
       "built": true,
       "tested": true,
@@ -312,8 +312,8 @@
     },
     {
       "crate": "kevy-geo",
-      "dead_regions": 4,
-      "measured_regions": 334,
+      "dead_regions": 5,
+      "measured_regions": 378,
       "packaged": true,
       "built": true,
       "tested": true,
@@ -334,12 +334,12 @@
     },
     {
       "crate": "kevy-scalar",
-      "dead_regions": 1712,
+      "dead_regions": 1087,
       "measured_regions": 4383,
       "packaged": true,
       "built": true,
       "tested": true,
-      "tests": 26,
+      "tests": 48,
       "lift_note": "",
       "docs": {
         "documented": 39,

@@ -142,6 +142,30 @@ const HUGE_PAGE: usize = 2 * 1024 * 1024;
 ///
 /// The returned pointer must be released via [`munmap_2mb`]; passing it
 /// to `dealloc()` is UB.
+/// # Examples
+///
+/// Both outcomes are the contract, and a caller must handle each: on Linux
+/// a 2 MiB-aligned mapping it owns, and anywhere else `None`, meaning fall
+/// back to the global allocator rather than fail.
+///
+/// ```
+/// const MIB2: usize = 2 * 1024 * 1024;
+/// let len = 4 * MIB2;
+/// match kevy_madvise::mmap_anon_aligned_2mb(len) {
+///     Some(p) => {
+///         assert_eq!(p.as_ptr() as usize % MIB2, 0, "alignment is the point");
+///         // SAFETY: `p` came from this call and has not been released.
+///         unsafe { kevy_madvise::munmap_2mb(p, len) };
+///     }
+///     None => {} // not Linux, or the mapping failed: the fallback path
+/// }
+/// ```
+///
+/// A zero-length request is `None` rather than an empty mapping.
+///
+/// ```
+/// assert!(kevy_madvise::mmap_anon_aligned_2mb(0).is_none());
+/// ```
 pub fn mmap_anon_aligned_2mb(len: usize) -> Option<core::ptr::NonNull<u8>> {
     if cfg!(miri) || len == 0 {
         return None;
@@ -236,6 +260,19 @@ fn trim_to_aligned(raw: *mut core::ffi::c_void, total: usize, rounded: usize) ->
 /// # Safety
 /// `ptr` must come from a successful [`mmap_anon_aligned_2mb`] call and
 /// not yet have been munmap'd. `len` must match the original `len` arg.
+/// # Examples
+///
+/// The pointer must be one [`mmap_anon_aligned_2mb`] returned, with the
+/// same `len` — the mapping is released whole, and the rounding to a
+/// 2 MiB multiple is redone here from `len` rather than remembered.
+///
+/// ```
+/// let len = 4 * 1024 * 1024;
+/// if let Some(p) = kevy_madvise::mmap_anon_aligned_2mb(len) {
+///     // SAFETY: `p` is this call's own mapping, released exactly once.
+///     unsafe { kevy_madvise::munmap_2mb(p, len) };
+/// }
+/// ```
 pub unsafe fn munmap_2mb(ptr: core::ptr::NonNull<u8>, len: usize) {
     if cfg!(miri) {
         let _ = (ptr, len);
