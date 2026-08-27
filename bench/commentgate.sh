@@ -87,8 +87,16 @@ for f in files:
                 per_term[d.pattern] += 1
 
 # ---- report ----------------------------------------------------------
+# Same tree locgate scans, same floor, same reason: zero hits across zero
+# files reads exactly like zero hits across three hundred.
+MIN_FILES = 100
+if len(files) < MIN_FILES:
+    print(f"commentgate: REFUSED — scanned {len(files)} source file(s), "
+          f"expected at least {MIN_FILES}. Zero hits over an empty set is "
+          f"not a clean bill of health.")
+    sys.exit(2)
 if not hits:
-    print("commentgate: PASS (0 internal-vocabulary hits in comments)")
+    print(f"commentgate: PASS (0 internal-vocabulary hits across {len(files)} files)")
     sys.exit(0)
 
 print(f"commentgate: FAIL — {len(hits)} hit(s)\n")
