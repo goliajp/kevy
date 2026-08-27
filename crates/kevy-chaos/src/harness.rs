@@ -110,6 +110,9 @@ fn default_kevy_bin() -> PathBuf {
 
 /// Active kevy child + ready port.
 pub struct Harness {
+    /// The settings this child was started from. Kept rather than consumed
+    /// so a test can read back the port and paths it was given — including
+    /// the ones the config chose for itself.
     pub config: HarnessConfig,
     child: Option<Child>,
 }

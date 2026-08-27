@@ -60,6 +60,11 @@ impl Value {
         out
     }
 
+    /// Appends this value's JSON text to `out`.
+    ///
+    /// Recursive, matching the parser: MCP frames nest a handful of levels,
+    /// and a document deep enough to overflow the stack here would have
+    /// failed to parse on the way in.
     fn write_json(&self, out: &mut String) {
         match self {
             Value::Null => out.push_str("null"),
@@ -108,6 +113,12 @@ pub fn obj(pairs: Vec<(&str, Value)>) -> Value {
     Value::Object(pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
 }
 
+/// Writes `text` as a quoted JSON string, escaping what JSON requires.
+///
+/// Every code point below 0x20 is escaped, the six with short forms by
+/// name and the rest as `\uXXXX`. Non-ASCII is emitted literally: the
+/// transport is UTF-8, and escaping it would only make frames larger and
+/// harder to read in a log.
 fn write_escaped(text: &str, out: &mut String) {
     out.push('"');
     for c in text.chars() {
@@ -140,32 +151,42 @@ pub fn parse(input: &str) -> Result<Value, String> {
     Ok(v)
 }
 
+/// A cursor over one document's text.
 struct Parser<'a> {
+    /// The whole input; borrowed, so string slices can come straight out
+    /// of it when no escape needs decoding.
     s: &'a str,
+    /// Byte offset of the next character to read. Every error message
+    /// carries it, which is what makes a malformed frame diagnosable.
     pos: usize,
 }
 
 impl<'a> Parser<'a> {
+    /// An error message with the byte offset where parsing stopped.
     fn err(&self, msg: &str) -> String {
         format!("{msg} at byte {}", self.pos)
     }
 
+    /// The next byte without consuming it; `None` at end of input.
     fn peek(&self) -> Option<u8> {
         self.s.as_bytes().get(self.pos).copied()
     }
 
+    /// Consumes and returns the next byte.
     fn bump(&mut self) -> Option<u8> {
         let c = self.peek()?;
         self.pos += 1;
         Some(c)
     }
 
+    /// Advances past JSON's four whitespace bytes.
     fn skip_ws(&mut self) {
         while matches!(self.peek(), Some(b' ' | b'\t' | b'\n' | b'\r')) {
             self.pos += 1;
         }
     }
 
+    /// Consumes `want`, or reports which byte was expected and where.
     fn expect(&mut self, want: u8) -> Result<(), String> {
         if self.peek() == Some(want) {
             self.pos += 1;
@@ -184,6 +205,10 @@ impl<'a> Parser<'a> {
             .ok_or_else(|| self.err("invalid utf-8 boundary"))
     }
 
+    /// One value of any kind, dispatched on its first byte.
+    ///
+    /// JSON is prefix-distinguishable, so a single byte of lookahead
+    /// decides the production — no backtracking anywhere in this parser.
     fn value(&mut self) -> Result<Value, String> {
         match self.peek() {
             Some(b'{') => self.object(),
@@ -198,6 +223,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// One of the three bare words, or an error.
     fn literal(&mut self, word: &str, v: Value) -> Result<Value, String> {
         if self.s[self.pos..].starts_with(word) {
             self.pos += word.len();
@@ -207,6 +233,10 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// `{ … }`, keeping pairs in the order they appeared.
+    ///
+    /// Duplicate keys are kept rather than merged: [`Value::get`] returns
+    /// the first, which is what a reader of the raw text would take.
     fn object(&mut self) -> Result<Value, String> {
         self.expect(b'{')?;
         let mut pairs = Vec::new();
@@ -232,6 +262,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// `[ … ]`.
     fn array(&mut self) -> Result<Value, String> {
         self.expect(b'[')?;
         let mut items = Vec::new();
@@ -252,6 +283,12 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// A quoted string with its escapes decoded.
+    ///
+    /// Copies in runs between escapes rather than character by character,
+    /// so a string with no escapes — nearly all of them — is one
+    /// `push_str` of a borrowed slice. A raw control character is
+    /// rejected, as JSON requires.
     fn string(&mut self) -> Result<String, String> {
         self.expect(b'"')?;
         let mut out = String::new();
@@ -278,6 +315,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// One escape sequence, after the backslash has been consumed.
     fn escape(&mut self, out: &mut String) -> Result<(), String> {
         match self.bump() {
             Some(b'"') => out.push('"'),
@@ -315,6 +353,10 @@ impl<'a> Parser<'a> {
         char::from_u32(code).ok_or_else(|| self.err("invalid unicode scalar"))
     }
 
+    /// Exactly four hex digits, as read by `\u`.
+    ///
+    /// A truncated or non-hex run is an error rather than a short read:
+    /// accepting `\u12"` would silently change the string's contents.
     fn hex4(&mut self) -> Result<u16, String> {
         let mut v: u16 = 0;
         for _ in 0..4 {
@@ -327,6 +369,11 @@ impl<'a> Parser<'a> {
         Ok(v)
     }
 
+    /// A number, as [`Value::Int`] when it fits and [`Value::Float`] otherwise.
+    ///
+    /// The integral form is tried first so an id round-trips exactly — a
+    /// JSON-RPC id echoed back as `3.0` instead of `3` is a different id
+    /// to the host that sent it.
     fn number(&mut self) -> Result<Value, String> {
         let start = self.pos;
         while matches!(

@@ -42,7 +42,10 @@ pub enum Class {
 
 /// The bootstrapped whitelist: every server verb, split by [`Class`].
 pub struct Catalog {
+    /// Verbs with no `write` flag. Reachable through `kevy_read`.
     read: HashSet<String>,
+    /// Verbs the server flagged `write`. Reachable only through
+    /// `kevy_write`, which exists only under `--allow-writes`.
     write: HashSet<String>,
 }
 
@@ -143,6 +146,11 @@ pub fn docs_json(reply: &Reply) -> Result<Value, String> {
     ))
 }
 
+/// One verb's field map into a [`VerbDoc`].
+///
+/// Unknown keys are skipped rather than rejected: the field map is
+/// extensible by contract, so a newer server adding a field must not stop
+/// an older client from reading the four it does know.
 fn parse_fields(name: String, fields: &Reply) -> Result<VerbDoc, String> {
     let Reply::Array(kv) = fields else {
         return Err(format!("COMMAND DOCS '{name}': fields are not an array"));
@@ -171,10 +179,20 @@ fn parse_fields(name: String, fields: &Reply) -> Result<VerbDoc, String> {
     Ok(doc)
 }
 
+/// One string-valued field, or an error naming both verb and field.
+///
+/// The verb and key are in the message because this runs over the whole
+/// catalog at startup: "field 'since' is not a string" without the verb
+/// leaves the operator grepping several hundred rows.
 fn field_text(verb: &str, key: &str, v: &Reply) -> Result<String, String> {
     text(v).ok_or_else(|| format!("COMMAND DOCS '{verb}': field '{key}' is not a string"))
 }
 
+/// The `flags` array as strings.
+///
+/// A malformed flag list is an error rather than an empty vector, because
+/// an empty flag list reads as "no `write` flag" — which would quietly
+/// move a write verb onto the read whitelist.
 fn flag_list(verb: &str, v: &Reply) -> Result<Vec<String>, String> {
     let Reply::Array(items) = v else {
         return Err(format!("COMMAND DOCS '{verb}': flags are not an array"));
@@ -187,6 +205,11 @@ fn flag_list(verb: &str, v: &Reply) -> Result<Vec<String>, String> {
         .collect()
 }
 
+/// A bulk or simple string as text; `None` for every other reply kind.
+///
+/// Lossy UTF-8: verb names, groups and syntax lines are ASCII by
+/// construction, and a replacement character in a summary is a better
+/// outcome than refusing to build the catalog at all.
 fn text(r: &Reply) -> Option<String> {
     match r {
         Reply::Bulk(b) | Reply::Simple(b) => Some(String::from_utf8_lossy(b).into_owned()),

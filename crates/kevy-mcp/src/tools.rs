@@ -27,21 +27,26 @@ pub struct ToolCx<'a> {
     pub allow_writes: bool,
 }
 
+/// What `kevy_discover` tells the agent it is for.
 const DISCOVER_DESC: &str = "Discover kevy's command surface. Returns the server's live verb \
      documentation table (summary, since, group, syntax, flags) as a JSON object keyed by verb \
      name, straight from COMMAND DOCS. Pass 'verb' to fetch a single verb. Call this first when \
      unsure which command exists or what its exact syntax is.";
+/// What `kevy_read` tells the agent it is for.
 const READ_DESC: &str = "Execute a read-only kevy command. 'command' is the argv array, e.g. \
      [\"GET\", \"user:1\"] or [\"IDX.QUERY\", \"myidx\", \"MATCH\", \"hello\"]. Only verbs the \
      server flags as read-only are allowed; write verbs are rejected (use kevy_write). The RESP \
      reply is returned as JSON.";
+/// What `kevy_write` tells the agent it is for.
 const WRITE_DESC: &str = "Execute a write kevy command (SET, DEL, LPUSH, IDX.CREATE, …). \
      'command' is the argv array, e.g. [\"SET\", \"user:1\", \"alice\"]. Only verbs the server \
      flags as writes are allowed; read-only verbs belong in kevy_read. The RESP reply is \
      returned as JSON.";
+/// What `kevy_explain` tells the agent it is for.
 const EXPLAIN_DESC: &str = "Explain how kevy would execute an index query: passes through to \
      IDX.EXPLAIN <index> [args…] and returns the structured plan (index selection, estimated \
      rows, combination tree) as JSON.";
+/// What `kevy_info` tells the agent it is for.
 const INFO_DESC: &str = "Fetch kevy server statistics via INFO [section]. Returns the raw INFO \
      text (sections like server, clients, memory, stats, replication, keyspace).";
 
@@ -66,10 +71,12 @@ fn schema(props: Vec<(&str, Value)>, required: &[&str]) -> Value {
     obj(fields)
 }
 
+/// A schema property of type `string`.
 fn string_prop(desc: &str) -> Value {
     obj(vec![("type", s("string")), ("description", s(desc))])
 }
 
+/// A schema property of type `array` whose items are strings.
 fn string_array_prop(desc: &str) -> Value {
     obj(vec![
         ("type", s("array")),
@@ -90,22 +97,28 @@ pub fn tools_list(allow_writes: bool) -> Value {
     obj(vec![("tools", Value::Array(tools))])
 }
 
+/// The `kevy_discover` descriptor. `verb` is optional — omitting it
+/// returns the whole table.
 fn discover_tool() -> Value {
     let verb =
         string_prop("Optional verb name to fetch docs for (e.g. \"SET\"); omit for the full table.");
     tool("kevy_discover", DISCOVER_DESC, schema(vec![("verb", verb)], &[]))
 }
 
+/// The `kevy_read` descriptor.
 fn read_tool() -> Value {
     let command = string_array_prop("The command as an argv array of strings, verb first.");
     tool("kevy_read", READ_DESC, schema(vec![("command", command)], &["command"]))
 }
 
+/// The `kevy_write` descriptor. Built only when writes are allowed, so an
+/// agent that must not write never sees that the tool exists.
 fn write_tool() -> Value {
     let command = string_array_prop("The command as an argv array of strings, verb first.");
     tool("kevy_write", WRITE_DESC, schema(vec![("command", command)], &["command"]))
 }
 
+/// The `kevy_explain` descriptor.
 fn explain_tool() -> Value {
     let index = string_prop("Name of the index to explain against.");
     let args =
@@ -117,6 +130,7 @@ fn explain_tool() -> Value {
     )
 }
 
+/// The `kevy_info` descriptor.
 fn info_tool() -> Value {
     let section = string_prop(
         "Optional INFO section (server, clients, memory, stats, replication, keyspace).",
@@ -146,6 +160,11 @@ pub fn call_tool(cx: &mut ToolCx, name: &str, args: &Value) -> Result<Value, Rpc
     }
 }
 
+/// Runs `COMMAND DOCS`, optionally for one verb, as a JSON table.
+///
+/// A server-side error comes back as a tool result with `isError`, not as
+/// a JSON-RPC error: the call itself succeeded, and the agent should read
+/// what the server said rather than see the transport fail.
 fn discover(cx: &mut ToolCx, args: &Value) -> Result<Value, RpcError> {
     let mut argv: Vec<Vec<u8>> = vec![b"COMMAND".to_vec(), b"DOCS".to_vec()];
     if let Some(verb) = args.get("verb").and_then(Value::as_str) {
@@ -159,6 +178,14 @@ fn discover(cx: &mut ToolCx, args: &Value) -> Result<Value, RpcError> {
     Ok(text_result(table.serialize(), false))
 }
 
+/// The shared body of `kevy_read` and `kevy_write`.
+///
+/// `want` is the class the calling tool is permitted to run, and the
+/// mismatch cases are separate messages on purpose: an agent told
+/// "'SET' is a write verb — use kevy_write" can correct itself, where a
+/// bare refusal leaves it guessing. A verb the catalog never saw is
+/// rejected before it reaches the server, so the whitelist is decided
+/// here rather than by whatever the server happens to accept.
 fn run_command(cx: &mut ToolCx, args: &Value, want: Class) -> Result<Value, RpcError> {
     let cmd = args
         .get("command")
@@ -191,6 +218,7 @@ fn run_command(cx: &mut ToolCx, args: &Value, want: Class) -> Result<Value, RpcE
     }
 }
 
+/// Passes through to `IDX.EXPLAIN <index> [args…]`.
 fn explain(cx: &mut ToolCx, args: &Value) -> Result<Value, RpcError> {
     let index = args
         .get("index")
@@ -205,6 +233,7 @@ fn explain(cx: &mut ToolCx, args: &Value) -> Result<Value, RpcError> {
     Ok(tool_result(&request(cx, &argv)?))
 }
 
+/// Runs `INFO [section]`.
 fn info(cx: &mut ToolCx, args: &Value) -> Result<Value, RpcError> {
     let mut argv = vec![b"INFO".to_vec()];
     if let Some(section) = args.get("section").and_then(Value::as_str) {
@@ -213,12 +242,20 @@ fn info(cx: &mut ToolCx, args: &Value) -> Result<Value, RpcError> {
     Ok(tool_result(&request(cx, &argv)?))
 }
 
+/// One round trip, with a transport failure mapped to `-32603`.
+///
+/// A lost connection is an internal error rather than a tool result: the
+/// answer is not "the server said no", it is that there was no answer.
 fn request(cx: &mut ToolCx, argv: &[Vec<u8>]) -> Result<Reply, RpcError> {
     cx.client
         .request(argv)
         .map_err(|e| (INTERNAL, format!("kevy request failed: {e}")))
 }
 
+/// An argument that must be an array of strings, or the error saying so.
+///
+/// `what` names the field, so the message points at `command` or `args`
+/// rather than at "an array".
 fn strings(v: &Value, what: &str) -> Result<Vec<String>, RpcError> {
     let arr = v
         .as_array()
@@ -244,6 +281,7 @@ pub fn tool_result(reply: &Reply) -> Value {
     }
 }
 
+/// An MCP tool result carrying one block of text.
 fn text_result(text: String, is_error: bool) -> Value {
     obj(vec![
         (
@@ -282,6 +320,7 @@ pub fn reply_to_json(reply: &Reply) -> Value {
     }
 }
 
+/// Bytes as a JSON string, replacing anything that is not UTF-8.
 fn lossy(b: &[u8]) -> Value {
     Value::Str(String::from_utf8_lossy(b).into_owned())
 }
