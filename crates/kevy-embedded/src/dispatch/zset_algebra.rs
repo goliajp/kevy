@@ -7,11 +7,11 @@ use crate::KevyResult;
 
 use kevy_store::ZAggregate;
 
-use super::util::{arg_u64, emit_int, err, ERR_SYNTAX};
+use super::util::{arg_u64, emit_int, err, ERR_SYNTAX, wrong_args, verb_name};
 
 const ERR_NUMKEYS: &str = "ERR numkeys should be greater than 0";
 const ERR_KEYS_GT_ARGS: &str = "ERR Number of keys can't be greater than number of args";
-const ERR_ARITY: &str = "ERR wrong number of arguments";
+
 
 /// One zset-algebra request; `false` = verb not in this group.
 pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
@@ -34,7 +34,7 @@ type ZStoreOp =
 /// (`diff_form` = ZDIFFSTORE: no WEIGHTS/AGGREGATE allowed).
 fn cmd_zstore(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>, diff_form: bool, op: ZStoreOp) {
     if argv.len() < 4 {
-        return err(out, ERR_ARITY);
+        return wrong_args(out, &verb_name(argv));
     }
     let Some(numkeys) = arg_u64(&argv[2]).map(|n| n as usize).filter(|&n| n > 0) else {
         return err(out, ERR_NUMKEYS);
@@ -97,7 +97,7 @@ fn parse_tail(
 /// `ZINTERCARD numkeys key… [LIMIT n]` — `limit = 0` means unlimited.
 fn cmd_zintercard(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     if argv.len() < 3 {
-        return err(out, ERR_ARITY);
+        return wrong_args(out, &verb_name(argv));
     }
     let Some(numkeys) = arg_u64(&argv[1]).map(|n| n as usize).filter(|&n| n > 0) else {
         return err(out, ERR_NUMKEYS);

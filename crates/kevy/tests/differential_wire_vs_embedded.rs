@@ -334,3 +334,96 @@ fn a_known_verb_with_wrong_arity_is_not_reported_as_unknown() {
         wrong.len()
     );
 }
+
+/// Arity is declared in one place and read in two — and one of them cannot
+/// reach it.
+///
+/// `verb_meta` carries every verb's arity and lives in `kevy`, which is
+/// cement. `kevy-embedded` is steel and may not depend on it, so the facade
+/// restates the numbers it needs as literals in its own entry checks. That
+/// is exactly how the two surfaces came to answer the same wrong-arity call
+/// in two different sentences, and restating a constant is a drift waiting
+/// to happen a second time.
+///
+/// Unifying the two registries is a real change — `kevy-resp`'s `OpSpec`
+/// (166 verbs, classification and surfaces) and `verb_meta` (191 verbs,
+/// documentation and arity) overlap on 152 and are complementary on the
+/// rest, and the first is guarded by exhaustive parity tests. Not made
+/// here.
+///
+/// What is made here is the check that makes the drift impossible to ship
+/// unnoticed: for every verb `ops_table` says exists on BOTH surfaces, call
+/// it with too few arguments on each and require the same answer. A
+/// behavioural check rather than a comparison of constants, so it catches a
+/// divergence in the number and in the sentence alike.
+#[test]
+fn both_surfaces_refuse_a_short_call_the_same_way() {
+    use kevy_resp::ops_table::{spec, surface};
+
+    let server = Server::start_single_shard();
+    let mut wire = server.wire();
+    let dir = kevy_tmpdir::TmpDir::new("diff-arity");
+    // The change feed is off by default in the facade and on in the server.
+    // Left unequal, FEED.TAIL answers "feed: Disabled" here and an arity
+    // error there — a difference in how the harness was set up, reported as
+    // if it were a difference in the code.
+    let cfg = kevy_embedded::Config::default()
+        .with_persist(dir.path().to_str().unwrap())
+        .with_feed(64 * 1024 * 1024);
+    let embedded = kevy_embedded::Store::open(cfg).expect("open embedded");
+
+    let both: Vec<&'static str> = kevy_resp::ops_table::ops_with(surface::SERVER)
+        .into_iter()
+        .filter(|n| spec(n).is_some_and(|s| s.surfaces & surface::ESTORE != 0))
+        .collect();
+    assert!(
+        both.len() > 50,
+        "only {} verbs on both surfaces — the selector is broken, not the engine bare",
+        both.len()
+    );
+
+    let mut differ = Vec::new();
+    for name in &both {
+        // One argument: the verb alone. Every verb here takes at least one
+        // operand, so this is a short call for all of them and touches no
+        // state on either side.
+        let a = vec![name.as_bytes().to_vec()];
+        let w = String::from_utf8_lossy(&wire.call(&a)).trim().to_string();
+        let mut e = Vec::new();
+        embedded.dispatch_argv(&a, &mut e);
+        let e = String::from_utf8_lossy(&e).trim().to_string();
+        if w != e {
+            differ.push((*name, w, e));
+        }
+    }
+
+    // Different signatures, not drift: the server is sharded and takes the
+    // shard as an argument (`FEED.TAIL shard`, arity 2), while the
+    // single-process facade has no shard to name and takes none. The
+    // difference is in verb_meta's own `syntax` field for both verbs.
+    const DIFFERENT_SIGNATURE: &[&str] = &["FEED.TAIL", "FEED.READ"];
+
+    println!(
+        "arity parity: {} of {} verbs on both surfaces refuse a short call identically",
+        both.len() - differ.len(),
+        both.len()
+    );
+    for (n, w, e) in differ.iter().take(20) {
+        println!("  {n}\n      wire:     {w}\n      embedded: {e}");
+    }
+    if differ.len() > 20 {
+        println!("  … and {} more", differ.len() - 20);
+    }
+
+    let unexplained: Vec<&str> = differ
+        .iter()
+        .map(|(n, _, _)| *n)
+        .filter(|n| !DIFFERENT_SIGNATURE.contains(n))
+        .collect();
+    assert!(
+        unexplained.is_empty(),
+        "{} verb(s) refuse a short call differently on the two surfaces \
+         without a stated reason: {unexplained:?}",
+        unexplained.len()
+    );
+}

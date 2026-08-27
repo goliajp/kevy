@@ -9,7 +9,7 @@ use crate::store::Store;
 use kevy_index::{IndexValue, Leaf, Tree, ViewMode};
 
 use super::idx::{decode_cursor, encode_cursor, spec_of, value_repr};
-use super::util::{arr, bulk, err, int, kevy_err};
+use super::util::{arr, bulk, err, int, kevy_err, wrong_args, verb_name};
 
 /// One VIEW request; `false` = verb not in this group.
 pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
@@ -191,7 +191,10 @@ fn cmd_view_list(s: &Store, out: &mut Vec<u8>) {
 /// declare, so it answers the server's exact requires-VIA error.
 fn cmd_view_query(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let Some(name) = argv.get(1) else {
-        return err(out, "ERR bad VIEW arguments");
+        // Too few arguments, not wrong ones: the server names the verb here
+        // and so does this. `BAD` below stays for arguments that are
+        // present and will not parse.
+        return wrong_args(out, &verb_name(argv));
     };
     let (limit, after) = match parse_query_opts(argv) {
         Ok(t) => t,
