@@ -308,7 +308,15 @@ def gated_modules(root):
     return out
 
 
-def classify(path, lineno, cache, gated=None):
+def crate_of(path):
+    parts = str(path).split("/crates/")
+    return parts[1].split("/")[0] if len(parts) > 1 else None
+
+
+def classify(path, lineno, cache, gated=None, by_crate=None):
+    reg = (by_crate or {}).get(crate_of(path))
+    if reg:
+        return "gated-elsewhere", f"covered by {reg['gate']}"
     text = source_line(path, lineno, cache)
     g = (gated or {}).get(str(pathlib.Path(path).resolve()))
     if g and ("target_os" in g or "unix" in g or "windows" in g or "linux" in g):
@@ -322,10 +330,30 @@ def classify(path, lineno, cache, gated=None):
 
 
 def register():
+    """-> ({symbol: entry}, {crate: entry}).
+
+    A crate-level entry explains every dead region in that crate at once —
+    a language door whose only caller is a JVM, say. It does not remove
+    them: they stay in the denominator and in this atlas, classified by the
+    gate that does cover them, because moving them out would raise the
+    coverage percentage with nothing covered.
+    """
     if not REGISTER.exists():
-        return {}
+        return {}, {}
     doc = tomllib.loads(REGISTER.read_text())
-    return {e["symbol"]: e for e in doc.get("dead", [])}
+    by_symbol = {e["symbol"]: e for e in doc.get("dead", [])}
+    by_crate = {e["crate"]: e for e in doc.get("dead_crate", [])}
+    for e in doc.get("dead_crate", []):
+        if not e.get("gate", "").strip() or not e.get("reason", "").strip():
+            refuse(f"dead_crate entry for {e.get('crate')} needs both a gate and a reason")
+        # An entry that says "another gate covers this" is only worth
+        # anything while that gate exists. A named file that has been
+        # deleted turns the register into a place where dead code goes to
+        # be forgiven.
+        if not (ROOT / e["gate"]).exists():
+            refuse(f"dead_crate entry for {e['crate']} names {e['gate']}, "
+                   f"which does not exist")
+    return by_symbol, by_crate
 
 
 def build(path):
@@ -357,11 +385,12 @@ def build(path):
     names = {n for k in dead for n in owners[k]}
     dm = demangle(names)
     gated = gated_modules(ROOT / "crates")
+    _, by_crate = register()
     cache, rows = {}, []
     for key in sorted(dead):
         src, l1, c1, l2, c2 = key
         syms = {symbol_of(dm[n]) for n in owners[key]}
-        kind, evidence = classify(src, l1, cache, gated)
+        kind, evidence = classify(src, l1, cache, gated, by_crate)
         rows.append({
             "symbol": sorted(syms)[0] if syms else "?",
             "file": str(pathlib.Path(src).relative_to(ROOT)) if str(src).startswith(str(ROOT)) else src,
@@ -391,7 +420,7 @@ def per_crate(counts):
 
 
 def write_outputs(cfg, counts, rows, llvm_dead):
-    reg = register()
+    reg, _ = register()
     by_symbol = collections.Counter(r["symbol"] for r in rows)
     OUT_SET.write_text(json.dumps({
         "corpus": cfg["id"],
@@ -423,6 +452,7 @@ def write_outputs(cfg, counts, rows, llvm_dead):
            f"| `untested` | {by_kind['untested']} | reachable as far as this can tell — a test is owed |",
            f"| `panic` | {by_kind['panic']} | a panic/abort edge |",
            f"| `platform` | {by_kind['platform']} | under a cfg not satisfied on {cfg['platform']} |",
+           f"| `gated-elsewhere` | {by_kind['gated-elsewhere']} | reached by a gate `cargo test` cannot run — see `suite/dead-paths.toml` |",
            "", f"Registered with a human reason in `suite/dead-paths.toml`: "
            f"{sum(1 for r in rows if r['symbol'] in reg)}.", "",
            "## By crate", "", "| crate | dead regions |", "|---|---:|"]

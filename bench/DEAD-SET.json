@@ -2,7 +2,7 @@
   "corpus": "c1",
   "platform": "macos",
   "total_regions": 160062,
-  "dead_regions": 27819,
+  "dead_regions": 27817,
   "llvm_per_instantiation_dead": 28927,
   "crates": {
     "kevy": {
@@ -275,7 +275,6 @@
     "::clause_score_scoped": 2,
     "::claused_spec": 7,
     "::clear_hash_field_ttls": 1,
-    "::clone_heap": 2,
     "::clone_with_ttl": 6,
     "::cmd": 2,
     "::cmp_expr": 26,

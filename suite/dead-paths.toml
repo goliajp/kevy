@@ -16,6 +16,14 @@
 #
 # An entry is keyed by symbol, the same identity the set-ratchet uses, so
 # a rename moves it and is noticed.
+#
+# A `[[dead_crate]]` entry says the same thing about a whole crate, for the
+# case where every dead region has one explanation. It does NOT remove the
+# regions from the corpus: they stay in covgate's denominator and in the
+# atlas, classified `gated-elsewhere` and carrying the name of the gate that
+# does cover them. Excluding them instead would raise the coverage
+# percentage without anything being covered, and would stop anyone ever
+# asking whether that other gate still runs.
 
 [[dead]]
 symbol = "kevy_geo::estimate_step"
@@ -46,4 +54,26 @@ The other three regions the atlas found in this crate were `untested`, not
 unreachable, and are now covered by
 `a_radius_larger_than_the_world_returns_the_whole_range` and
 `cells_past_the_latitude_limit_are_skipped_not_wrapped`.
+"""
+
+
+[[dead_crate]]
+crate = "kevy-jni"
+gate = "bench/jnigate.sh"
+reason = """
+Every one of this crate's regions is `extern "system"` JNI glue, reachable
+only from a JVM. `cargo test` cannot call it, so the execution corpus — 27
+symbols, 466 regions — reads 100% dead, the only door in the workspace with
+no in-corpus coverage at all (kevy-ffi is at 16.2%, kevy-wasm 17.4%,
+kevy-mcp 29.9%, because those have Rust-side unit tests).
+
+It IS tested: jnigate builds libkevy_jni, compiles the raw JNI surface with
+javac and runs Smoke.java on any JDK host. It runs in CI as "Android —
+jnigate (raw JNI door on the JVM)" and passed on the run this entry was
+written against.
+
+covgate already excludes kevy-napi for exactly this property. kevy-jni is
+registered rather than excluded, because excluding it would move 526 regions
+out of the denominator and read as an improvement in a number nothing
+improved.
 """
