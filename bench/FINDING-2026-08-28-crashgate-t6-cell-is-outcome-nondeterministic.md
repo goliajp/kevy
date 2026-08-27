@@ -66,3 +66,46 @@ This is not fixed here. It is someone else's gate, the fix changes what the
 cell tests, and choosing that is a decision about the durability arc rather
 than a repair — but the three numbers above are what any such decision
 should start from.
+
+---
+
+## Continuation, same day: eight more runs, and one hypothesis refuted
+
+Eight consecutive crashgate runs on 6.0.0 (lx64, release binary), reading
+only the T6 cell:
+
+```
+228500 >= 228500    225500 >= 225500
+231000 >= 231000    225000 >= 225000
+227500 >= 227500    226000 >= 226000
+216000 >= 216000    206803 >= 206500
+```
+
+All eight pass. Seven land on exact equality; one recovers **more** than was
+acknowledged, which is resync picking up writes that were in flight when the
+writer died — allowed, and a useful reminder that `recr >= synced` is a
+lower bound rather than an identity.
+
+So the failure rate on this box is around one in eleven observed, not one in
+three. That does not weaken the finding: 50.07% is still the difference
+between resync engaging and not engaging, and a cell that answers that
+question on roughly ten runs in eleven is not answering it deliberately.
+
+**A hypothesis worth recording because it was wrong.** Before running these,
+the guess was that `size / 2` usually lands in data the writer had NOT yet
+synced, so the destroyed bytes would usually cost nothing and the cell would
+mostly not be testing its own question. Measured directly — writer run,
+killed, then the synced record count converted to a byte offset through the
+file's own bytes-per-record:
+
+| run | synced records | file bytes | splice point | synced prefix ends ≈ | splice inside synced |
+|---|---:|---:|---:|---:|---|
+| 1 | 67,500 | 22,661,425 | 11,330,712 | 22,612,500 | yes |
+| 2 | 71,000 | 24,004,985 | 12,002,492 | 23,785,000 | yes |
+| 3 | 78,000 | 26,188,323 | 13,094,161 | 26,130,000 | yes |
+
+The synced prefix covers essentially the whole file, so the splice is always
+inside acknowledged data. The cell **is** asking its question; what varies is
+only what the original finding said varies — which byte inside a frame the
+cut lands on. The fix it proposes is unchanged, and now it is the only
+explanation left standing.
