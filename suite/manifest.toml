@@ -152,6 +152,16 @@ timeout = 60
 requires = []
 proves = "every crate classified; shipping deps point down the stone/steel/cement layers"
 
+[[check]]
+id = "dependencies"
+area = "arch"
+tier = "precommit"
+cmd = "python3 tools/check_dependencies.py"
+expected = 1
+timeout = 60
+requires = []
+proves = "every non-kevy dependency declared with a reason; no shipping third-party crate inside a stone"
+
 # ── docs ─────────────────────────────────────────────────────────────
 
 [[check]]

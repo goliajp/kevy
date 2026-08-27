@@ -2,7 +2,7 @@
 
 Status: **Phase A — design only.** No device is built by this document.
 
-v6's charter (owner, 2026-08-23): a clean architecture; the stones made
+v6's charter (owner, 2026-08-27): a clean architecture; the stones made
 solid; code quality, documentation and performance pushed to their current
 limit; **no dead code and no dead paths**; **no complex implementation where
 a simpler one delivers the same capability**.
@@ -49,7 +49,7 @@ relation observable in the first place.
 
 ---
 
-## 2. The measurements that size this work (taken 2026-08-23)
+## 2. The measurements that size this work (taken 2026-08-27)
 
 Nothing below is estimated. Each figure is the reason a device exists; a
 device with no figure under it is not in this RFC.
