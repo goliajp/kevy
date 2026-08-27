@@ -232,6 +232,16 @@ timeout = 60
 requires = []
 proves = "no published crate ships a source file importing a dependency its published manifest drops"
 
+[[check]]
+id = "lockgate"
+area = "release-pins"
+tier = "precommit"
+cmd = "python3 tools/check_lockfiles.py"
+expected = 13
+timeout = 120
+requires = []
+proves = "every committed lock file matches its manifest, and none is left uncommitted — what `cargo build --locked` reads"
+
 # ── docs ─────────────────────────────────────────────────────────────
 
 [[check]]
