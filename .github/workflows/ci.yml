@@ -170,6 +170,12 @@ jobs:
         env:
           KEVY_TEST_PATIENCE: "3"
         run: cargo test --workspace --lib --tests --target ${{ matrix.target }}
+      # `--lib --tests` is exactly the pair that EXCLUDES doctests, so until
+      # this step existed every example in the documentation was compiled by
+      # nobody — including the ones a gate counts as verification.
+      - name: doctestrun (every documented example compiles and runs)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: bash bench/doctestrun.sh
       # After the tests, not before: the point is that running them leaves
       # the repo root clean. See bench/rootgate.sh for why `git status`
       # cannot be the check.
