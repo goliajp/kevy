@@ -73,6 +73,63 @@ fn unknown_verb_reports_original_spelling() {
     assert_eq!(run(&s, &[b"NoSuchVerbX"]), b"-ERR unknown command 'NoSuchVerbX'\r\n".to_vec());
 }
 
+/// The extension verbs' arity guards, which the wire differential added
+/// and the dead-path atlas then reported as four new never-executed
+/// regions apiece: a branch written and not exercised is worse than the
+/// drift it was written to close.
+///
+/// The server's arity for both is -4 (a minimum of four), and it refuses a
+/// shorter call in Redis's words before it looks at the catalog. These
+/// assert the same sentence here, and that the boundary is where the
+/// server puts it rather than one argument off.
+#[test]
+fn idx_query_and_count_refuse_a_short_call_the_way_the_server_does() {
+    let s = mem_store();
+    for verb in [&b"IDX.QUERY"[..], &b"IDX.COUNT"[..]] {
+        let name = String::from_utf8_lossy(verb).to_lowercase();
+        let want = format!("-ERR wrong number of arguments for '{name}' command\r\n");
+        for argv in [
+            vec![verb],
+            vec![verb, &b"t"[..]],
+            vec![verb, &b"t"[..], &b"WHERE"[..]],
+        ] {
+            assert_eq!(
+                String::from_utf8_lossy(&run(&s, &argv)),
+                want,
+                "{name} with {} argument(s)",
+                argv.len()
+            );
+        }
+    }
+
+    // Four arguments clears the arity bar, so the answer must be about the
+    // request rather than about its length — the guard must not swallow a
+    // call it was never meant to reject.
+    let four = run(&s, &[b"IDX.QUERY", b"t", b"WHERE", b"x"]);
+    assert!(
+        !String::from_utf8_lossy(&four).contains("wrong number of arguments"),
+        "a four-argument IDX.QUERY is past the arity guard: {}",
+        String::from_utf8_lossy(&four)
+    );
+}
+
+/// COMPOSE and HYBRID are longer forms that clear the bar by their own
+/// shape; the guard exempts them by name, and that exemption is a branch
+/// too.
+#[test]
+fn idx_query_compose_and_hybrid_are_not_caught_by_the_arity_guard() {
+    let s = mem_store();
+    for form in [&b"COMPOSE"[..], &b"HYBRID"[..]] {
+        let out = run(&s, &[b"IDX.QUERY", form]);
+        assert!(
+            !String::from_utf8_lossy(&out).contains("wrong number of arguments"),
+            "{} is exempt from the arity guard: {}",
+            String::from_utf8_lossy(form),
+            String::from_utf8_lossy(&out)
+        );
+    }
+}
+
 #[test]
 fn arity_and_type_errors_use_server_wording() {
     let s = mem_store();
