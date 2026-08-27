@@ -24,6 +24,18 @@ mod parse_class;
 // the wrapper module (`super::regexp`) reach the entry points.
 #[allow(unused_imports)]
 pub(crate) use caps::*;
+
+#[cfg(test)]
+#[path = "redos_tests.rs"]
+mod redos_tests;
+
+#[cfg(test)]
+#[path = "flags_tests.rs"]
+mod flags_tests;
+
+#[cfg(test)]
+#[path = "caps_tests.rs"]
+mod caps_tests;
 #[allow(unused_imports)]
 pub(crate) use classes::*;
 #[allow(unused_imports)]
