@@ -64,18 +64,19 @@ jobs:
           KEVY_COV_JSON: ${{ github.workspace }}/target/cov-c1.json
         run: bash bench/covgate.sh
 
-      # The dead set, from the run that just happened. This job RECORDS and
-      # does not gate: bench/DEAD-BASELINE.json does not exist yet, and a
-      # baseline can only be recorded on the enforcing platform — code
-      # switched off by cfg is absent from a coverage run rather than dead
-      # in it, so a macOS reading makes whole symbols leave the set, which a
-      # ratchet reads as improvement. Once the artifact below is committed
-      # as the baseline, this becomes `bash bench/deadgate.sh`.
-      - name: dead-path atlas (record, does not gate yet)
-        run: |
-          test -s "${{ github.workspace }}/target/cov-c1.json" || {
-            echo "no coverage export — covgate did not keep one" >&2; exit 1; }
-          python3 tools/coverage_atlas.py "${{ github.workspace }}/target/cov-c1.json"
+      # The dead set, from the run that just happened — covgate kept the
+      # region export rather than the summary, so this costs seconds rather
+      # than a second instrumented suite.
+      #
+      # The baseline was recorded HERE, on the enforcing platform, and can
+      # only be. Code switched off by cfg is absent from a coverage run
+      # rather than dead in it, so a reading from anywhere else makes whole
+      # symbols leave the set — which a ratchet reads as improvement.
+      # setratchet's identity check refuses that comparison outright.
+      - name: deadgate (the never-executed set may only shrink)
+        env:
+          KEVY_COV_JSON: ${{ github.workspace }}/target/cov-c1.json
+        run: bash bench/deadgate.sh
       - name: upload dead set
         uses: actions/upload-artifact@v7
         with:
@@ -87,7 +88,7 @@ jobs:
 
   # ───────────── doc deficit: what the documentation owes ─────────────
   docdeficit:
-    name: doc deficit (record)
+    name: doctestgate (documentation deficit)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -105,14 +106,12 @@ jobs:
             ~/.cargo/registry
             target
           key: doc-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-      - name: rustdoc coverage
-        run: |
-          RUSTDOCFLAGS='-Z unstable-options --show-coverage' \
-            cargo +nightly doc --workspace --no-deps
-      # Records; does not gate. Same reason as the dead set above: no
-      # baseline exists yet and it can only be recorded here.
-      - name: doc deficit (record, does not gate yet)
-        run: python3 tools/doc_deficit.py --out bench/DOC-DEFICIT.json
+      # doctestgate runs the rustdoc coverage pass itself, so it measures
+      # what it just built rather than whatever was left in target/doc.
+      # 2,677 public items, 94.1% carrying prose and 0.7% carrying an
+      # executable example: this gates the deficit, not the coverage.
+      - name: doctestgate (what the documentation owes may only shrink)
+        run: bash bench/doctestgate.sh
       - name: upload doc deficit
         uses: actions/upload-artifact@v7
         with:
