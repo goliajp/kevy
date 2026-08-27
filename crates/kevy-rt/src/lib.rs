@@ -67,6 +67,12 @@
 // kevy-sys.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+//! Every public item here is documented, and the lint keeps it that
+//! way: kevy-rt is the reactor, and `warnings = "deny"` turns a new
+//! gap into a compile error rather than a number that drifts. Closed
+//! from 35 sites in v6 — all of them fields inside well-documented
+//! variants, which is where prose review does not look.
+#![warn(missing_docs)]
 mod bio;
 mod block_xshard;
 mod block_xshard_confirm;

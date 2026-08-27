@@ -65,7 +65,11 @@ pub(crate) fn encode_block_timeout(out: &mut Vec<u8>, kind: BlockKind, proto: Re
 /// shape and wake-retry dispatch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BlockKind {
+    /// `BLPOP key [key ...] timeout` — block until one of the keys has an
+    /// element, then pop from the left. On timeout the reply is a nil
+    /// ARRAY, not a nil bulk; the shape is part of what this drives.
     Blpop,
+    /// `BRPOP` — the same, popping from the right.
     Brpop,
     /// `BZPOPMIN key [key ...] timeout` — block until a sorted set has a
     /// member, then pop the lowest-scored one. Same arm-and-serve flow as
@@ -78,7 +82,13 @@ pub enum BlockKind {
     /// favour of BLMOVE, but Bee Queue (and many older clients)
     /// still emit it.
     Brpoplpush,
+    /// `XREAD BLOCK` — park until an entry past the given id arrives on
+    /// one of the streams. Read-only: no PEL, so a wake serves without
+    /// touching group state.
     XReadBlock,
+    /// `XREADGROUP BLOCK` — the same wait, but a wake is a WRITE: the
+    /// delivery updates the group's pending list and last-delivered id on
+    /// the stream's own shard, and is logged there.
     XReadGroupBlock,
 }
 
@@ -100,9 +110,17 @@ pub enum BlockKind {
 #[derive(Clone, Debug, Default)]
 pub enum BlockHint {
     #[default]
+    /// The command does not block — every verb but the handful above.
     None,
+    /// The command parks until one of `keys` is served or the deadline
+    /// passes.
     Block {
+        /// Which blocking verb, which decides both the timeout reply shape
+        /// and how a wake is retried.
         kind: BlockKind,
+        /// The keys to arm on, in the order the caller gave them — a wake
+        /// serves the earliest-listed key that has data, not the first to
+        /// receive it.
         keys: Vec<Vec<u8>>,
         /// `0` = block forever (Redis convention). Anything else is the
         /// wall-clock millis the dispatcher will add to `unix_now_ms()` to

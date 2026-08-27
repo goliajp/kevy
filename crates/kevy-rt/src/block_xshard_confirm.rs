@@ -22,8 +22,13 @@ use crate::shard::Shard;
 #[cfg(debug_assertions)]
 pub mod counters {
     use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+    /// Counts cross-shard serves since process start. Debug builds only
+    /// — the test that needs it retries until this proves the cross-shard
+    /// path actually ran, rather than assuming a pass meant it did.
     pub static CROSS_SHARD_SERVES: AtomicU64 = AtomicU64::new(0);
     #[inline]
+    /// Record one cross-shard serve. Relaxed and non-I/O, so arming the
+    /// counter cannot change the timing it is there to observe.
     pub fn note_cross_shard_serve() {
         CROSS_SHARD_SERVES.fetch_add(1, Relaxed);
     }
