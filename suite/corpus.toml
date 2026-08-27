@@ -18,8 +18,16 @@
 [corpus]
 id = "c1"
 
-# Identical to what covgate.sh measures. Both instruments read one run.
-cmd = "cargo llvm-cov --workspace --lib --tests --json --output-path {out}"
+# Identical to what covgate.sh measures — verified against the script, not
+# assumed from it. The first version of this line was written from memory
+# and was wrong twice: it omitted `--exclude kevy-napi` (whose only
+# executable surface is N-API glue that cannot link outside a live Node
+# runtime, so instrumenting it only dilutes the ratio) and it omitted
+# nothing about --summary-only, which covgate passes and which throws away
+# the per-function region records the dead set is built from. covgate now
+# drops --summary-only when KEVY_COV_JSON names a path, so the percentage
+# and the dead set are two readings of one run.
+cmd = "cargo llvm-cov --workspace --exclude kevy-napi --lib --tests --json --output-path {out}"
 
 # The enforcing platform. COV-BASELINE.json records 79.64% here against
 # 82.08% on macOS: cfg(linux) reactor code is in the denominator on one and
