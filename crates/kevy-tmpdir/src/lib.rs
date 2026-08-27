@@ -60,6 +60,9 @@ impl TmpDir {
         Self(unique_dir(label))
     }
 
+    /// The directory itself. Borrowed, not cloned, so the path cannot
+    /// outlive the guard that deletes it — a `PathBuf` handed out here
+    /// would still name the directory after `Drop` removed it.
     pub fn path(&self) -> &Path {
         &self.0
     }

@@ -27,10 +27,14 @@ pub struct ManifestEntry {
     pub file: String,
     /// Caller-opaque metadata (table id, bucket, …).
     pub meta: Vec<u8>,
-    /// Key range and count, mirrored from the seg footer so a
+    /// Smallest key in the segment, mirrored from its footer so a
     /// directory can be served without opening the file.
     pub min_key: Vec<u8>,
+    /// Largest key in the segment. With `min_key` this is the range a
+    /// reader tests before deciding the segment is worth opening.
     pub max_key: Vec<u8>,
+    /// Record count, mirrored from the footer. Includes tombstones, so
+    /// it bounds a scan rather than predicting what it yields.
     pub records: u64,
 }
 

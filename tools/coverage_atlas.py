@@ -205,6 +205,70 @@ def enclosing_cfg(path, lineno, cache):
     return None
 
 
+# Tokens that must not be counted as braces: a `{` inside a string literal
+# or a comment closes nothing. The assertion message that exposed this bug
+# was literally `"polar {} vs middle {}"`.
+SKIP = re.compile(r"""
+      (?P<line_comment>//[^\n]*)
+    | (?P<block_comment>/\*.*?\*/)
+    | (?P<string>"(?:\\.|[^"\\])*")
+    | (?P<rawstring>r\#*"(?:.|\n)*?"\#*)
+    | (?P<char>'(?:\\.|[^'\\])')
+""", re.VERBOSE | re.DOTALL)
+
+CFGTEST = re.compile(r"#\[cfg\(test\)\]")
+
+
+def cfg_test_ranges(path, cache):
+    """Line ranges under `#[cfg(test)]`, which are not product code.
+
+    Test code sits in the same file and therefore in the same coverage
+    export, and its never-executed regions are the arguments to assertion
+    messages that only evaluate when an assertion fails. Leaving them in
+    means **writing a test grows the dead set** — the gate fires on the
+    improvement it exists to encourage. Found by writing two tests for
+    kevy-geo: the two regions they covered left the set, and four new ones
+    arrived from their own assert! messages.
+
+    Integration tests under `crates/*/tests/` never had this problem —
+    llvm-cov does not report them as files at all (0 of 599).
+
+    Braces inside strings and comments are blanked first. The assertion
+    message that exposed this bug was literally `"polar {} vs middle {}"`,
+    and a naive counter would have closed the block on it.
+    """
+    if path in cache:
+        return cache[path]
+    try:
+        text = pathlib.Path(path).read_text(errors="replace")
+    except OSError:
+        cache[path] = []
+        return cache[path]
+
+    blanked = SKIP.sub(lambda m: re.sub(r"[^\n]", " ", m.group()), text)
+    lines = blanked.splitlines()
+    ranges, i = [], 0
+    while i < len(lines):
+        if not CFGTEST.search(lines[i]):
+            i += 1
+            continue
+        depth, j, opened = 0, i, False
+        while j < len(lines):
+            for ch in lines[j]:
+                if ch == "{":
+                    depth += 1
+                    opened = True
+                elif ch == "}":
+                    depth -= 1
+            if opened and depth <= 0:
+                break
+            j += 1
+        ranges.append((i + 1, min(j + 1, len(lines))))
+        i = j + 1
+    cache[path] = ranges
+    return ranges
+
+
 MODCFG = re.compile(r"^\s*#\[cfg\(([^\]]*)\)\]\s*$")
 MODDECL = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;")
 
@@ -276,7 +340,20 @@ def build(path):
     counts, owners = merge_regions(data, scope)
     llvm_dead = reconcile(data, counts)
 
-    dead = {k: v for k, v in counts.items() if v == 0}
+    # Reconciliation ran on the FULL set above — llvm counts test code
+    # too, so filtering before it would break the one exact witness this
+    # instrument has. Filter after.
+    cfgcache = {}
+    dead = {}
+    excluded = 0
+    for k, v in counts.items():
+        if v != 0:
+            continue
+        src, l1 = k[0], k[1]
+        if any(lo <= l1 <= hi for lo, hi in cfg_test_ranges(src, cfgcache)):
+            excluded += 1
+            continue
+        dead[k] = v
     names = {n for k in dead for n in owners[k]}
     dm = demangle(names)
     gated = gated_modules(ROOT / "crates")
@@ -290,7 +367,7 @@ def build(path):
             "file": str(pathlib.Path(src).relative_to(ROOT)) if str(src).startswith(str(ROOT)) else src,
             "line": l1, "kind": kind, "evidence": evidence,
         })
-    return cfg, counts, rows, llvm_dead
+    return cfg, counts, rows, llvm_dead, excluded
 
 
 def per_crate(counts):
@@ -361,8 +438,10 @@ def write_outputs(cfg, counts, rows, llvm_dead):
 def main():
     if len(sys.argv) != 2:
         refuse("usage: coverage_atlas.py <llvm-cov.json>")
-    cfg, counts, rows, llvm_dead = build(sys.argv[1])
+    cfg, counts, rows, llvm_dead, excluded = build(sys.argv[1])
     write_outputs(cfg, counts, rows, llvm_dead)
+    print(f"  {excluded} never-executed regions under #[cfg(test)] excluded "
+          f"— assertion-message arguments, not product code")
     print(f"atlas: {len(rows)} dead regions of {len(counts)} "
           f"({100 * len(rows) / len(counts):.1f}%) — corpus {cfg['id']}/{cfg['platform']}")
     print(f"  {OUT_MD.relative_to(ROOT)}  {OUT_SET.relative_to(ROOT)}")

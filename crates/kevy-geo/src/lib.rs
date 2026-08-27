@@ -298,6 +298,50 @@ mod tests {
     const PALERMO: (f64, f64) = (13.361_389, 38.115_556);
     const CATANIA: (f64, f64) = (15.087_269, 37.502_669);
 
+    // `neighbor_score_ranges` had no test at all. The dead-path atlas
+    // (bench/DEAD-ATLAS.md) found every one of this crate's four
+    // never-executed regions inside it, which is what a public function
+    // with zero direct coverage looks like from the outside: exercised
+    // through the GEO commands, never at its own edges.
+
+    /// A radius past the Mercator span collapses the step to 1, and the
+    /// function answers with the whole keyspace rather than nine cells.
+    /// Reaching that branch needs `radius_m >= MERCATOR_MAX`, which no
+    /// caller had ever passed.
+    #[test]
+    fn a_radius_larger_than_the_world_returns_the_whole_range() {
+        let whole = (0.0, (1u64 << 52) as f64 - 1.0);
+        let r = neighbor_score_ranges(PALERMO.0, PALERMO.1, 3.0e7);
+        assert_eq!(r, vec![whole], "a radius past MERCATOR_MAX must not be tiled");
+
+        // Just under it still tiles, so the boundary is the reason for the
+        // answer and not an artefact of the size.
+        let tiled = neighbor_score_ranges(PALERMO.0, PALERMO.1, 1.0e6);
+        assert_ne!(tiled, vec![whole], "a radius inside the world must tile");
+        assert!(!tiled.is_empty());
+    }
+
+    /// Near the latitude limit the 3x3 neighbourhood runs off the top of
+    /// the grid, and those cells are skipped rather than wrapped —
+    /// longitude wraps, latitude does not. Nothing had exercised the skip.
+    #[test]
+    fn cells_past_the_latitude_limit_are_skipped_not_wrapped() {
+        let polar = neighbor_score_ranges(0.0, GEO_LAT_MAX - 0.000_01, 100.0);
+        let middle = neighbor_score_ranges(0.0, 0.0, 100.0);
+        assert!(!polar.is_empty(), "the pole still yields its own cells");
+        assert!(
+            polar.len() <= middle.len(),
+            "a neighbourhood clipped by the pole cannot exceed a full one: \
+             polar {} vs middle {}",
+            polar.len(),
+            middle.len()
+        );
+        for (lo, hi) in &polar {
+            assert!(lo <= hi, "each range is ordered");
+            assert!(*lo >= 0.0, "no range escapes the keyspace");
+        }
+    }
+
     #[test]
     fn geohash_string_matches_redis() {
         // 11th char must be '0' (zero-padded), not the spilled low bits.
