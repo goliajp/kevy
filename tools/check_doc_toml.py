@@ -67,9 +67,16 @@ def loads(body):
 
 def main():
     if not KEVY.exists():
-        print(f"SKIP: {KEVY.relative_to(ROOT)} not built "
-              "(cargo build -p kevy --bin kevy)")
-        return 0
+        # Refuse, do not skip. The suite already declines to run this row
+        # when `server-debug` is absent, so reaching here means the binary
+        # was expected and is not there — and a skip that exits 0 is
+        # indistinguishable from "48 TOML blocks all load" to everything
+        # downstream, including the tier's verdict line.
+        print(f"check_doc_toml: REFUSED — {KEVY.relative_to(ROOT)} is not built, "
+              f"so no configuration was loaded. Build it "
+              f"(cargo build -p kevy --bin kevy); an unrun check is not a "
+              f"passing one.", file=sys.stderr)
+        return 2
 
     bad = []
     n = 0
