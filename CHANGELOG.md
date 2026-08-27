@@ -53,11 +53,12 @@ milestone's name, not a claim that an API moved.
 - **The examples in the documentation are compiled and run.** Every test
   invocation in this repository spelled `cargo test --workspace --lib
   --tests`, and that pair is exactly the combination that excludes doctests;
-  `--doc` occurred nowhere in the tree. Ninety-nine examples now run in CI,
-  up from eighteen when the arc began — and they are written from
-  measurements, so kevy-geo's pin the geohash Redis publishes for the same
-  fixture and kevy-time's pin that adding a month to January 31 is not
-  reversible.
+  `--doc` occurred nowhere in the tree. Ninety-nine doctests now run in CI,
+  on 65 public items — from 45 doctests on 18 items when the arc began. They
+  are written from measurements rather than from what the code looks like it
+  does, so kevy-geo's pin the geohash Redis publishes for the same fixture
+  and kevy-time's pin that adding a month to January 31 is not reversible.
+  Two were wrong when first written, and running them is what said so.
 
 - **Twelve instruments and gauges**, and a mechanism underneath them. The
   wall was 102 gate scripts and four baselines, every one of them a scalar
