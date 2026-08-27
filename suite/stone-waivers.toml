@@ -95,25 +95,10 @@ until the v6.0.0 chain publishes it first.
 closes_when = "the v6.0.0 release publishes kevy-bench; the chain in .github/workflows/release.yml already places it first"
 
 # ---------------------------------------------------------------------------
-# measured / tests
-
-[[waiver]]
-crate = "kevy-uring"
-rules = ["min_tests", "must_be_measured"]
-reason = """
-Linux-only io_uring bindings. Zero regions in the corpus and zero tests —
-and the two are one fact, not two: the corpus runs on the enforcing platform
-in CI, and this local report was taken on macOS where the crate does not
-compile at all. What the report cannot say is whether it has tests ON Linux.
-"""
-closes_when = "the corpus is recorded on Linux and this row is re-read; if it is still zero there, the crate genuinely has no tests and owes them"
-
-# ---------------------------------------------------------------------------
-# docs
-
-[[waiver]]
-crate = "kevy-uring"
-rules = ["min_examples"]
-reason = "0 items with an executable example."
-closes_when = "at least one public entry point carries a doctest"
-
+# Nothing else. kevy-uring's two waivers were removed on 2026-08-28 by the
+# first stone report taken on Linux: lift=True, 15 tests, 100% documented,
+# one executable example, 238 dead regions out of 853 measured. Every rule
+# it was waived from, it meets — and always did. What was wrong was the
+# instrument: the report had only ever been taken on macOS, where the crate
+# is `#![cfg(target_os = "linux")]` and therefore an empty module, and a
+# stone the producer cannot see reads as a stone that scores zero.
