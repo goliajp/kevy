@@ -34,6 +34,7 @@ Exit: 0 all lifted, 1 one or more failed, 2 refused.
 
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -82,6 +83,33 @@ def package(crate, outdir):
     return hits[-1], log
 
 
+# `cargo package` strips path dependencies and resolves what is left against
+# crates.io. Between a version bump and the publish that follows it, EVERY
+# crate with a version-gated sibling is unliftable for that reason alone —
+# the version it names does not exist yet, because this is the release that
+# creates it. That is a fact about when the measurement was taken, not about
+# the crate, and it reads identically to a real failure unless it is named.
+UNRESOLVED = re.compile(
+    r'failed to select a version for the requirement `([\w-]+) = "\^?([\d.]+)"`')
+
+
+def package_note(log):
+    """The line that says what could not be resolved, not just the last line."""
+    for line in log.splitlines():
+        if "failed to select a version for the requirement" in line:
+            return line.strip()[:200]
+    for line in log.splitlines():
+        if line.startswith("error"):
+            return line.strip()[:200]
+    return log.strip().splitlines()[-1][:200] if log.strip() else "package failed"
+
+
+def unresolved_dep(log):
+    """-> {"dep": name, "req": version} when a dependency could not be selected."""
+    m = UNRESOLVED.search(log)
+    return {"dep": m.group(1), "req": m.group(2)} if m else None
+
+
 def patch_manifest(cratedir, deps):
     """Point kevy-* dependencies at local sources; keep everything else honest."""
     man = cratedir / "Cargo.toml"
@@ -107,7 +135,8 @@ def lift(crate, workdir):
     tgt = workdir / f"{crate}-pkg"
     archive, log = package(crate, tgt)
     if archive is None:
-        res["note"] = log.strip().splitlines()[-1][:200] if log.strip() else "package failed"
+        res["note"] = package_note(log)
+        res["unresolved"] = unresolved_dep(log)
         return res
     res["packaged"] = True
 

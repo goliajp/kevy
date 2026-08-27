@@ -40,6 +40,28 @@ def refuse(msg):
     sys.exit(2)
 
 
+def pending_publish(row, version, members):
+    """Why `lifts` cannot be measured yet, or None.
+
+    `cargo package` strips path dependencies and resolves what is left
+    against crates.io. Between a version bump and the publish that follows
+    it, every crate with a version-gated sibling is unliftable for that
+    reason alone: the version it names is the one this release creates.
+
+    That is a fact about when the measurement was taken, not about the
+    crate, and it reads exactly like a real lift failure. It is named here
+    instead — loudly, by crate — and it is self-limiting, because after the
+    publish the version exists and a crate that still cannot lift fails for
+    real on the next run.
+    """
+    u = row.get("unresolved")
+    if not u or row.get("tested"):
+        return None
+    if u.get("dep") in members and u.get("req") == version:
+        return f"{u['dep']} {u['req']} is not on crates.io — this release publishes it"
+    return None
+
+
 def check_one(row, bar):
     """-> {rule: why it failed}, for the rules this stone misses."""
     bad = {}
@@ -83,17 +105,29 @@ def main():
             refuse(f"waiver for {e.get('crate')} needs both a reason and closes_when")
         waived.setdefault(e["crate"], set()).update(e["rules"])
 
-    fail, stale = [], []
+    version = doc.get("version", "")
+    members = set(declared) | {c for c in rows}
+    fail, stale, pending = [], [], []
     for crate in declared:
         row = rows.get(crate)
         if row is None:
             refuse(f"{crate} is declared a stone but absent from the report")
         bad = check_one(row, bar)
         allowed = waived.get(crate, set())
+        blocked = pending_publish(row, version, members)
+        if blocked:
+            # `lifts` and everything downstream of it — the crate is never
+            # unpacked, so its test count is not a reading either.
+            for rule in ("lifts", "min_tests"):
+                if rule in bad:
+                    pending.append(f"{crate}: {rule} — {blocked}")
+                    del bad[rule]
         for rule, why in sorted(bad.items()):
             if rule not in allowed:
                 fail.append(f"{crate}: {rule} — {why}")
         for rule in sorted(allowed - set(bad)):
+            if blocked and rule in ("lifts", "min_tests"):
+                continue  # not stale: it was not measured, so it did not pass
             stale.append(f"{crate}: {rule} — now meets the bar; remove the waiver")
 
     # A note is not enough. Code switched off by cfg is ABSENT from a
@@ -119,8 +153,18 @@ def main():
             print(f"  ⌫ {s}")
         return 1
     n_w = sum(len(v) for v in waived.values())
+    if pending:
+        print(f"stonegate: {len(pending)} reading(s) NOT TAKEN — the tree is "
+              f"between a version bump and the publish that creates it:")
+        for p_ in pending:
+            print(f"    ⧗ {p_}")
+        print("    These are not passes. After the publish they resolve, and a "
+              "crate that still cannot lift fails here for real.")
+    tail = f", {n_w} waived across {len(waived)} crates" if n_w else ", none waived"
+    if pending:
+        tail += f", {len(pending)} reading(s) not taken"
     print(f"stonegate: PASS — {len(declared)} stones against a "
-          f"{len(bar)}-rule bar, {n_w} waived across {len(waived)} crates")
+          f"{len(bar)}-rule bar{tail}")
     for c in sorted(waived):
         print(f"    {c}: {', '.join(sorted(waived[c]))}")
     return 0

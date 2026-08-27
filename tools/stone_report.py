@@ -154,6 +154,10 @@ def main():
                "measured_regions": cov.get("regions", 0)}
         row.update({k: lift.get(c, {}).get(k) for k in ("packaged", "built", "tested", "tests")})
         row["lift_note"] = lift.get(c, {}).get("note", "")
+        # Carried so the gate can tell "this crate does not lift" from "the
+        # version its sibling is pinned to does not exist yet, because this
+        # is the release that publishes it".
+        row["unresolved"] = lift.get(c, {}).get("unresolved")
         row["docs"] = dc.get(c, {})
         row["semver"] = {} if "--skip-semver" in args else semver(c, version)
         rows.append(row)
