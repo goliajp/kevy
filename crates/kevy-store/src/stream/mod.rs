@@ -178,6 +178,9 @@ impl StreamData {
         self.entries_added
     }
 
+    /// The highest id XDEL has removed. XINFO reports it, and a consumer
+    /// group uses it to tell "never existed" from "existed and was
+    /// deleted" when a pending entry cannot be found.
     pub fn max_deleted_id(&self) -> StreamId {
         self.max_deleted_id
     }
@@ -426,6 +429,11 @@ pub fn now_unix_ms() -> u64 {
         .map_or(0, |d| d.as_millis() as u64)
 }
 
+/// Wall-clock milliseconds since the epoch, for stream ids.
+///
+/// The twin of the `SystemTime` version above, for builds that have no
+/// `SystemTime`: an external-clock build or wasm. Both must agree on the
+/// unit — a stream id is a millisecond and nothing downstream re-scales.
 #[cfg(any(feature = "external-clock", all(target_arch = "wasm32", target_os = "unknown")))]
 pub fn now_unix_ms() -> u64 {
     crate::clock::wall_now_unix_ms()

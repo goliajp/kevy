@@ -91,10 +91,13 @@ impl SmallHashData {
         Some(s)
     }
 
+    /// Field count. Held rather than derived, since the listpack has to
+    /// be walked to count entries.
     pub fn len(&self) -> usize {
         self.count as usize
     }
 
+    /// Whether the hash holds no fields.
     pub fn is_empty(&self) -> bool {
         self.count == 0
     }
@@ -114,6 +117,8 @@ impl SmallHashData {
         self.get(field).is_some()
     }
 
+    /// Walk the listpack as `(field, value)` pairs, in insertion order —
+    /// which the flat encoding preserves and a promoted map would not.
     pub fn iter(&self) -> SmallHashIter<'_> {
         SmallHashIter { buf: &self.buf[..self.used as usize], cursor: 0 }
     }

@@ -111,6 +111,8 @@ impl Store {
         Ok(added)
     }
 
+    /// One member's score. `Ok(None)` for a missing key or a missing
+    /// member — ZSCORE does not distinguish them.
     pub fn zscore(&mut self, key: &[u8], member: &[u8]) -> Result<Option<f64>, StoreError> {
         match self.live_entry(key) {
             None => Ok(None),
@@ -123,6 +125,7 @@ impl Store {
         }
     }
 
+    /// Member count. A missing key is 0, matching ZCARD.
     pub fn zcard(&mut self, key: &[u8]) -> Result<usize, StoreError> {
         match self.live_entry(key) {
             None => Ok(0),

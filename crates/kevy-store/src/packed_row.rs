@@ -43,6 +43,9 @@ use crate::nostd_prelude::*;
 #[cfg(not(feature = "std"))]
 use alloc::vec;
 
+/// The column names a table's packed rows share, held once behind an
+/// `Arc` rather than per row — the whole point of the packed form is that
+/// a million rows of one table carry one copy of the names between them.
 pub type ColumnNames = alloc::sync::Arc<[Vec<u8>]>;
 
 /// A declared row's values, in declared column order, plus a shared pointer

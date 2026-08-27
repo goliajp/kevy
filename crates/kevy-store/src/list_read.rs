@@ -8,6 +8,8 @@ use crate::value::Value;
 use crate::{Store, StoreError};
 
 impl Store {
+    /// Element count. A missing key is 0, matching LLEN; a wrong-typed
+    /// key is an error.
     pub fn llen(&mut self, key: &[u8]) -> Result<usize, StoreError> {
         match self.live_entry(key) {
             None => Ok(0),
@@ -20,6 +22,8 @@ impl Store {
         }
     }
 
+    /// One element by index. Negative indices count from the back, as in
+    /// LINDEX; out of range is `Ok(None)` rather than an error.
     pub fn lindex(&mut self, key: &[u8], idx: i64) -> Result<Option<Vec<u8>>, StoreError> {
         match self.live_entry(key) {
             None => Ok(None),
@@ -38,6 +42,9 @@ impl Store {
         }
     }
 
+    /// A half-open-looking but INCLUSIVE range, as LRANGE defines it:
+    /// negative bounds count from the back, a start past the end is empty,
+    /// and an end past the last element is clamped rather than refused.
     pub fn lrange(
         &mut self,
         key: &[u8],
