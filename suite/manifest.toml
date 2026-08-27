@@ -223,6 +223,16 @@ requires = ["linux", "nightly rustdoc"]
 proves = "what the documentation owes — items with no doc, items with no executable example — may only shrink"
 
 [[check]]
+id = "doctest-run"
+area = "doc"
+tier = "prerelease"
+cmd = "bash bench/doctestrun.sh"
+expected = 420
+timeout = 2400
+requires = []
+proves = "every example in the documentation compiles and runs — the claim doctestgate's count rests on, and which nothing in this repository checked"
+
+[[check]]
 id = "packagegate"
 area = "release-pins"
 tier = "precommit"
