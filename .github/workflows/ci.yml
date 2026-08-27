@@ -77,7 +77,11 @@ jobs:
         env:
           KEVY_COV_JSON: ${{ github.workspace }}/target/cov-c1.json
         run: bash bench/deadgate.sh
+      # Even when the gate refuses — especially then. The set it refused
+      # over is the evidence for deciding whether the refusal was right,
+      # and a step skipped on failure puts the evidence behind the verdict.
       - name: upload dead set
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: dead-set-linux

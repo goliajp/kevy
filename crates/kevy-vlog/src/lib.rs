@@ -66,6 +66,9 @@ const MAX_BODY: u32 = 1 << 30;
 /// The address of one spilled record — what a cold stub holds.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct VlogRef {
+    /// Which file in the shard's log holds it. Files are append-only and
+    /// never renumbered, so this stays valid until compaction rewrites the
+    /// ref — see `epoch`.
     pub file_id: u32,
     /// Byte offset of the record HEADER within the file.
     pub offset: u64,
@@ -125,6 +128,7 @@ pub struct VlogFile {
 }
 
 impl VlogFile {
+    /// This file's id, as a `VlogRef` records it.
     pub fn id(&self) -> u32 {
         self.id
     }
@@ -215,9 +219,16 @@ struct FileState {
 /// Aggregate gauges for INFO (`vlog_size` / `vlog_dead_bytes` feeders).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VlogStats {
+    /// Files in the log, including the one currently being appended to.
     pub files: usize,
+    /// Bytes on disk across all files — what `vlog_size` reports.
     pub bytes: u64,
+    /// Bytes still referenced by a live stub. `bytes - live_bytes` is the
+    /// dead fraction compaction exists to reclaim, and is what
+    /// `vlog_dead_bytes` reports.
     pub live_bytes: u64,
+    /// Compaction generation. A `VlogRef` taken before this changed may
+    /// have been moved; see `epoch()`.
     pub epoch: u64,
 }
 
@@ -416,6 +427,9 @@ impl Vlog {
         self.epoch
     }
 
+    /// A snapshot of the gauges INFO reads. Cheap: the byte totals are
+    /// summed over the file list, which is one entry per file rather than
+    /// per record.
     pub fn stats(&self) -> VlogStats {
         VlogStats {
             files: self.files.len(),

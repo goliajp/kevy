@@ -343,6 +343,10 @@ def register():
     doc = tomllib.loads(REGISTER.read_text())
     by_symbol = {e["symbol"]: e for e in doc.get("dead", [])}
     by_crate = {e["crate"]: e for e in doc.get("dead_crate", [])}
+    for e in doc.get("unstable", []):
+        if not e.get("observed") or not e.get("why", "").strip():
+            refuse(f"unstable entry for {e.get('symbol')} needs the differing "
+                   f"values as `observed` and a `why`")
     for e in doc.get("dead_crate", []):
         if not e.get("gate", "").strip() or not e.get("reason", "").strip():
             refuse(f"dead_crate entry for {e.get('crate')} needs both a gate and a reason")
@@ -429,6 +433,12 @@ def write_outputs(cfg, counts, rows, llvm_dead):
         "dead_regions": len(rows),
         "llvm_per_instantiation_dead": llvm_dead,
         "crates": per_crate(counts),
+        # Carried into the baseline so the ratchet reads its tolerance from
+        # what was recorded, not from whatever the register says today.
+        "unstable": sorted(
+            e["symbol"]
+            for e in tomllib.loads(REGISTER.read_text()).get("unstable", [])
+        ) if REGISTER.exists() else [],
         "symbols": dict(sorted(by_symbol.items())),
     }, indent=2) + "\n")
 
