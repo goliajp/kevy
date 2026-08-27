@@ -293,6 +293,26 @@ def build(path):
     return cfg, counts, rows, llvm_dead
 
 
+def per_crate(counts):
+    """Regions and dead regions per crate.
+
+    Without the denominator, a crate absent from the corpus and a crate
+    perfectly covered both read as zero dead — and the absent one looks
+    better. kevy-uring on macOS is exactly that case: zero regions, zero
+    dead, and nothing measured at all.
+    """
+    out = collections.defaultdict(lambda: {"regions": 0, "dead": 0})
+    for (src, *_), n in counts.items():
+        parts = str(src).split("/crates/")
+        if len(parts) < 2:
+            continue
+        c = parts[1].split("/")[0]
+        out[c]["regions"] += 1
+        if n == 0:
+            out[c]["dead"] += 1
+    return dict(sorted(out.items()))
+
+
 def write_outputs(cfg, counts, rows, llvm_dead):
     reg = register()
     by_symbol = collections.Counter(r["symbol"] for r in rows)
@@ -302,6 +322,7 @@ def write_outputs(cfg, counts, rows, llvm_dead):
         "total_regions": len(counts),
         "dead_regions": len(rows),
         "llvm_per_instantiation_dead": llvm_dead,
+        "crates": per_crate(counts),
         "symbols": dict(sorted(by_symbol.items())),
     }, indent=2) + "\n")
 

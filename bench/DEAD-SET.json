@@ -4,6 +4,192 @@
   "total_regions": 160062,
   "dead_regions": 28105,
   "llvm_per_instantiation_dead": 28927,
+  "crates": {
+    "kevy": {
+      "regions": 28635,
+      "dead": 5693
+    },
+    "kevy-alloc": {
+      "regions": 1694,
+      "dead": 119
+    },
+    "kevy-bench": {
+      "regions": 130,
+      "dead": 2
+    },
+    "kevy-bytes": {
+      "regions": 448,
+      "dead": 5
+    },
+    "kevy-chaos": {
+      "regions": 1081,
+      "dead": 425
+    },
+    "kevy-cli": {
+      "regions": 4395,
+      "dead": 1865
+    },
+    "kevy-client": {
+      "regions": 4878,
+      "dead": 1391
+    },
+    "kevy-client-async": {
+      "regions": 2350,
+      "dead": 1657
+    },
+    "kevy-cluster-rw": {
+      "regions": 378,
+      "dead": 87
+    },
+    "kevy-compress": {
+      "regions": 1374,
+      "dead": 43
+    },
+    "kevy-config": {
+      "regions": 3631,
+      "dead": 396
+    },
+    "kevy-elect": {
+      "regions": 1826,
+      "dead": 109
+    },
+    "kevy-embedded": {
+      "regions": 27501,
+      "dead": 4315
+    },
+    "kevy-ffi": {
+      "regions": 842,
+      "dead": 136
+    },
+    "kevy-geo": {
+      "regions": 334,
+      "dead": 4
+    },
+    "kevy-hash": {
+      "regions": 535,
+      "dead": 31
+    },
+    "kevy-index": {
+      "regions": 5863,
+      "dead": 439
+    },
+    "kevy-jni": {
+      "regions": 526,
+      "dead": 526
+    },
+    "kevy-lua": {
+      "regions": 2774,
+      "dead": 615
+    },
+    "kevy-lua-host": {
+      "regions": 360,
+      "dead": 45
+    },
+    "kevy-madvise": {
+      "regions": 55,
+      "dead": 10
+    },
+    "kevy-map": {
+      "regions": 1221,
+      "dead": 24
+    },
+    "kevy-mcp": {
+      "regions": 1737,
+      "dead": 520
+    },
+    "kevy-napi": {
+      "regions": 873,
+      "dead": 873
+    },
+    "kevy-persist": {
+      "regions": 7602,
+      "dead": 706
+    },
+    "kevy-pubsub-bench": {
+      "regions": 283,
+      "dead": 283
+    },
+    "kevy-ranktree": {
+      "regions": 826,
+      "dead": 12
+    },
+    "kevy-replicate": {
+      "regions": 2672,
+      "dead": 168
+    },
+    "kevy-resp": {
+      "regions": 3319,
+      "dead": 92
+    },
+    "kevy-resp-client": {
+      "regions": 742,
+      "dead": 126
+    },
+    "kevy-ring": {
+      "regions": 360,
+      "dead": 0
+    },
+    "kevy-rt": {
+      "regions": 13178,
+      "dead": 2583
+    },
+    "kevy-scalar": {
+      "regions": 4383,
+      "dead": 1712
+    },
+    "kevy-scope": {
+      "regions": 629,
+      "dead": 56
+    },
+    "kevy-seg": {
+      "regions": 1206,
+      "dead": 122
+    },
+    "kevy-sql": {
+      "regions": 4341,
+      "dead": 692
+    },
+    "kevy-store": {
+      "regions": 18642,
+      "dead": 1538
+    },
+    "kevy-sys": {
+      "regions": 634,
+      "dead": 122
+    },
+    "kevy-testnet": {
+      "regions": 93,
+      "dead": 8
+    },
+    "kevy-text": {
+      "regions": 3987,
+      "dead": 119
+    },
+    "kevy-time": {
+      "regions": 289,
+      "dead": 24
+    },
+    "kevy-tmpdir": {
+      "regions": 85,
+      "dead": 3
+    },
+    "kevy-vector": {
+      "regions": 864,
+      "dead": 27
+    },
+    "kevy-vlog": {
+      "regions": 611,
+      "dead": 47
+    },
+    "kevy-wasm": {
+      "regions": 816,
+      "dead": 142
+    },
+    "kevy-window": {
+      "regions": 1059,
+      "dead": 193
+    }
+  },
   "symbols": {
     "::abort_swap_hold": 3,
     "::account_delta": 1,
