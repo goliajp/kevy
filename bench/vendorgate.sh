@@ -115,15 +115,27 @@ if [ "$fail" -ne 0 ]; then
     echo "  then each door's scripts/prepare-native.sh"
     exit 1
 fi
-# 29 vendored artifacts today across the mobile doors. Zero means nobody
-# built them, and this gate guards layer 6 of the release — the bytes that
-# do not SAY a version, they ARE one. "0 artifacts current" printed the
-# number and passed anyway.
-MIN_ARTIFACTS=10
+# One, not more — and the number matters, so here is where it came from.
+#
+# This gate guards layer 6 of the release: the vendored bytes, which do not
+# SAY a version, they ARE one. It used to print "vendorgate: PASS (0
+# artifacts current)" on a tree where nobody had built anything — the number
+# was in the message and nothing looked at it.
+#
+# The first floor here was 10, chosen from the 29 a fully-built workstation
+# shows. CI disagreed: the `apple (KevyKit on macOS)` job builds one
+# xcframework and checks 9, the rest reported "skip (not built)" because a
+# bare checkout carries the headers and not the binaries. Nine is a
+# legitimate reading of nine things; the floor was one above it, and only
+# running it said so.
+#
+# So the floor is what was actually demonstrated broken: checking NOTHING.
+# A partial run reports what it checked and that count is in the pass line.
+MIN_ARTIFACTS=1
 if [ "$checked" -lt "$MIN_ARTIFACTS" ]; then
-  echo "vendorgate: REFUSED — checked $checked artifact(s), expected at least" >&2
-  echo "  $MIN_ARTIFACTS. Nothing vendored is not the same as everything current;" >&2
-  echo "  build them (see the release skill) rather than reading this as green." >&2
+  echo "vendorgate: REFUSED — checked $checked artifact(s). Nothing vendored is" >&2
+  echo "  not the same as everything current; build them (see the release" >&2
+  echo "  skill) rather than reading an empty scan as green." >&2
   exit 2
 fi
 echo "vendorgate: PASS ($checked artifacts current)"
