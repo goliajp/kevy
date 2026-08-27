@@ -8,7 +8,7 @@
 
 ## 工具链 ✅ 十一件全部建成并接上真基线
 
-suite 从 75 项到 83 项(precommit 23 ⊆ prerelease 39 ⊆ full 83)。
+suite 从 75 项到 **84** 项(precommit 23 ⊆ prerelease 40 ⊆ full 84)。
 
 | 类 | 件 |
 |---|---|
@@ -16,6 +16,7 @@ suite 从 75 项到 83 项(precommit 23 ⊆ prerelease 39 ⊆ full 83)。
 | 仪器 | 死路径图谱、克隆图谱、stone 报告、doc 赤字 |
 | 夹具 | 语料声明、抬出沙箱、差分台架(进程内 + 线路) |
 | 机制 | set-ratchet(存身份不存数字;基线是**三轮包络**) |
+| 量具(补) | doctestrun —— 文档里的示例**被编译并运行** |
 
 - [x] **死集合的噪声尾部已被证明并申报**(三轮 CI 各给一套不同的增长符号)。
       基线改为**逐元素三轮最大值**:增长 = 比**最坏那轮还差**。
@@ -33,9 +34,26 @@ suite 从 75 项到 83 项(precommit 23 ⊆ prerelease 39 ⊆ full 83)。
 - [x] **一个未使用 import 同时打红四个 CI job**(wasm32 ×2、musl/no_std、site)。
 - [x] **陈旧 Cargo.lock**:每个普通 cargo 命令都静默重生成它,只有 `--locked`
       会反对 —— 而它在 full 档。lockgate 把这个问题挪到 precommit。
+- [x] **45 个示例从来没被任何东西跑过**。仓库里每一处测试都写作
+      `--lib --tests` —— 这个组合**恰好排除 doctest**,而 `--doc` 在整棵树里
+      一次都没出现。doctestgate 数着它们,并在自己的头注里论证「doctest 是被
+      编译并运行的」。头一次手工跑:45 过 0 挂。它们没坏,只是没人知道。
+      `bench/FINDING-2026-08-28-forty-five-examples-that-nothing-ran.md`
+- [x] **判定 stone 的仪器,跑在其中一块 stone 不存在的平台上**。cfg 关掉的
+      代码在覆盖率里是**缺席**不是**死**,kevy-uring 在 macOS 上整个是空模块 ——
+      而 `check_stones` 只打一条 NOTE 就照判不误。它的两条豁免都源于相信那份
+      读数:说它零测试,Linux 上有 12 个且全过。NOTE 改成拒绝,CI 加
+      `stonereport` job 让判决在唯一能出的地方出。
+- [x] **跳过一项检查曾经等于通过它**:`semver_clean` 问的是「有没有一份说不干净
+      的读数」,而不是「有没有读数」;`--skip-semver` 写出的空对象直接落在条件外。
 
 ## 已量到的进展
 
+- [x] **文档 93.9% → 100.0%**(2,661 项全部有文档,一项不欠)。最后 69 项里
+      64 项在 **bin-only** crate —— 二进制没有对外公开项,`missing_docs` 对它们
+      一言不发,而 rustdoc 每一项都数。**能兜住 bin crate 的只有 set-ratchet**。
+      其中 kevy-testnet 的 `free_port` 不是没写文档:七行文档存在,只是被粘在了
+      插进它和函数之间的私有 static 上 —— 数 `///` 的做法会把它算作已文档。
 - [x] **文档 93.9% → 97.4%**;**stone + steel 34/34 全部 100%**;
       kevy-store / kevy-rt / kevy-vlog / kevy-window 带 `#![warn(missing_docs)]`,
       新缺口是**指名行号的编译错误**。kevy-rt 那 35 处**全是写得很详尽的变体
@@ -53,8 +71,12 @@ suite 从 75 项到 83 项(precommit 23 ⊆ prerelease 39 ⊆ full 83)。
 - [ ] **4 条 stone 豁免等 v6.0.0 发布 kevy-bench**(链已排好,它在首位)。
       这是唯一能关掉它们的动作。
 - [ ] **kevy-uring 的 3 条豁免**:它只能在 Linux 上被测量。
-- [ ] **69 处未文档**,全在 cement / support:kevy-mcp 53、gen-docs 6、
-      kevy-pubsub-bench 5、kevy-chaos 4、kevy-testnet 1。
+- [ ] **格式化从未跑过,也没有任何门在管**(属主拍板项)。仓库没有
+      `rustfmt.toml`,CI 里没有 fmt 步骤,`cargo fmt --all --check` 报
+      **4,379 处、749 个文件**。正统 Rust 就是 rustfmt,但这是把 749 个手写
+      文件改成机器口味的决定,**判断权在属主**。我量了、没有动。
+      注:llvm 的 region 由 AST 决定,重排版**不会**动死集合/覆盖率基线;
+      克隆图谱是按行的,会动。
 - [ ] **2,632 项没有可执行示例**(1.1%)。stone 已过 min_examples=1 的地板,
       但那是**起点不是终点**。
 - [ ] **kevy-embedded ↔ kevy 的 9,400 行**:两个台架对**能到达的一切**逐字节
