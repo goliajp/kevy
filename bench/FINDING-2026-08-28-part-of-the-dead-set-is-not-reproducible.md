@@ -94,3 +94,58 @@ after a failed one does not run. The set the gate refused over is exactly
 the evidence needed to judge the refusal, so it now uploads with
 `if: always()`. Putting the evidence behind the verdict is a small mistake
 that costs a whole cycle each time.
+
+
+---
+
+## Continued — the tail did not converge, so the baseline became an envelope
+
+The prefix registrations took the growth from seventeen items to two. But
+the next two runs each named a *different* pair, with no overlap:
+
+| baseline | run's growth |
+|---|---|
+| v1 (one sample) | `::match_migrating`, `::resolve_xadd_id` |
+| v2 (one sample) | `kevy::replica_runner::maybe_ack`, `kevy::dispatch::dispatch_with_proto`, `kevy_alloc::os::trim` |
+
+That is the condition the v1 acceptance reason named in advance: *"if
+different symbols appear each run instead, that pattern is itself the
+evidence that the tail of this measurement is noisy."*
+
+Adding a prefix per subsystem would not converge either, because the next
+run names something in a subsystem not yet listed. The tail is not confined
+to one place; it is a few symbols per run, anywhere the corpus's timing
+reaches.
+
+### The discriminator is persistence, not size
+
+A real regression — a deleted test, a new untested branch — persists across
+runs and usually lands many regions in one symbol. Noise moves. A threshold
+on the tail's *size* would be a number invented to make a gate quiet; the
+property that actually separates the two is whether it repeats.
+
+A single CI run cannot see two runs. What it can do is compare against a
+baseline that already knows what the noise has been observed to do. So the
+baseline is now an **element-wise maximum over three runs**:
+`setratchet.py envelope <baseline> <run1> <run2> <run3>` records, per
+symbol, the worst count any of them showed.
+
+Growth then means **worse than the worst of N runs**, which is a claim about
+the code rather than about which run it was.
+
+  three runs: 27,858 / 27,738 / 27,788 dead regions
+  envelope:   27,873 over 2,615 symbols
+
+The envelope sits above every individual run because each symbol takes its
+own maximum, not because any run was that bad.
+
+### Verified both ways
+
+All three runs pass against the envelope. An injected regression — one
+symbol +50, one new symbol +30 — still fails, and it fails while the TOTAL
+region count is *lower* than the baseline's (27,868 against 27,873). A real
+regression hidden behind an overall improvement is precisely what a scalar
+ratchet cannot see, and the per-symbol comparison catches it.
+
+`envelope_runs` is recorded in the baseline, because an envelope over one
+run is a sample and should not be able to pass itself off as more.
