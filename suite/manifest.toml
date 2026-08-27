@@ -192,6 +192,16 @@ timeout = 600
 requires = []
 proves = "the duplication reading is reproducible; it reports, it does not gate"
 
+[[check]]
+id = "differential-embedded"
+area = "arch"
+tier = "prerelease"
+cmd = "cargo test -p kevy --test differential_server_vs_embedded"
+expected = 20
+timeout = 600
+requires = []
+proves = "the embedded facade and the server produce identical RESP bytes, or the difference is named with a reason"
+
 # ── docs ─────────────────────────────────────────────────────────────
 
 [[check]]
