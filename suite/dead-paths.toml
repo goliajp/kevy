@@ -77,3 +77,49 @@ registered rather than excluded, because excluding it would move 526 regions
 out of the denominator and read as an improvement in a number nothing
 improved.
 """
+
+
+# ---------------------------------------------------------------------------
+# Symbols whose never-executed count is NOT reproducible.
+#
+# Proven, not assumed: each entry below appeared in one CI run's growth list
+# and matched the baseline in another run of the same tree-shape, which is
+# only possible if the count moved on its own. The branches are all
+# scheduling-dependent — a reactor tick, a replication state machine, an AOF
+# worker — where whether an arm runs depends on where the loop happened to
+# be when the test ended.
+#
+# The ratchet reports these and does not fail on them. That is a real
+# loosening and it is bounded three ways: an entry needs the differing
+# values as evidence, it names one symbol rather than a crate, and a symbol
+# that stops varying should be removed — nothing checks that automatically,
+# which is why the evidence is written down where the next reader can retest
+# it.
+#
+# Two runs of the workspace corpus on Linux CI, 2026-08-27:
+#   run A = 6306ad31, run B = 8b9f6134.
+
+[[unstable]]
+symbol = "<kevy_rt::shard::Shard>::deliver_pmessages"
+observed = ["A: 3", "B: 2 (matched baseline)"]
+why = "Pattern delivery walks the live pattern registry; whether a subscriber is still registered when a publish lands depends on connection teardown order."
+
+[[unstable]]
+symbol = "<kevy_rt::shard::Shard>::try_inline_local"
+observed = ["A: 13", "B: 11 (matched baseline)"]
+why = "The inline fast path is taken only when the target shard is this one AND the inbox is empty; both turn on where the reactor loop is."
+
+[[unstable]]
+symbol = "<kevy_rt::shard::Shard>::do_publish"
+observed = ["A: 1 (matched baseline)", "B: 4"]
+why = "Same registry race as deliver_pmessages, from the publishing side."
+
+[[unstable]]
+symbol = "::get_into_output"
+observed = ["A: 17", "B: 16 (matched baseline)"]
+why = "Unqualified in the demangled name — a monomorphised generic in the reactor's read path, reached only on a buffer shape that depends on how a read split."
+
+[[unstable]]
+symbol = "::top_groups"
+observed = ["A: 23", "B: 12 (matched baseline)"]
+why = "The widest swing measured, 12 to 23. An aggregation path whose branch coverage depends on how many groups a tick happened to see."

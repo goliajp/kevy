@@ -80,8 +80,17 @@ def identity(doc):
 
 
 def compare(base, obs):
-    """-> (grew, joined, shrank, left)."""
-    b, o = base["symbols"], obs["symbols"]
+    """-> (grew, joined, shrank, left), with declared-unstable symbols held out.
+
+    A symbol whose count is not reproducible cannot be ratcheted: it would
+    fail on its own noise and teach everyone to re-run until green, which
+    is worse than no gate. The exemption comes from the BASELINE rather
+    than from the observed set, so the tolerance is part of what was
+    recorded and cannot be widened by the run being judged.
+    """
+    unstable = set(base.get("unstable", []))
+    b = {k: v for k, v in base["symbols"].items() if k not in unstable}
+    o = {k: v for k, v in obs["symbols"].items() if k not in unstable}
     grew = {k: (b[k], o[k]) for k in b.keys() & o.keys() if o[k] > b[k]}
     joined = {k: o[k] for k in o.keys() - b.keys()}
     shrank = {k: (b[k], o[k]) for k in b.keys() & o.keys() if o[k] < b[k]}
@@ -124,8 +133,10 @@ def gate(base_path, obs_path):
         print("  To accept deliberately: setratchet.py update ... "
               "--accept-growth \"why this is correct\"")
         return 1
-    print(f"setratchet: PASS — {len(base['symbols'])} symbols held, "
-          f"{len(shrank)} shrank, {len(left)} left ({total} regions)")
+    n_unstable = len(base.get("unstable", []))
+    tail = f", {n_unstable} declared unstable and not held" if n_unstable else ""
+    print(f"setratchet: PASS — {len(base['symbols']) - n_unstable} symbols held, "
+          f"{len(shrank)} shrank, {len(left)} left ({total} regions){tail}")
     return 0
 
 
