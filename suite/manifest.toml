@@ -182,6 +182,16 @@ timeout = 60
 requires = ["bench/STONE-REPORT.json from stone-report"]
 proves = "every stone meets the bar or carries a waiver with a reason; no waiver outlives the problem"
 
+[[check]]
+id = "clone-atlas"
+area = "arch"
+tier = "full"
+cmd = "python3 tools/clone_atlas.py"
+expected = 30
+timeout = 600
+requires = []
+proves = "the duplication reading is reproducible; it reports, it does not gate"
+
 # ── docs ─────────────────────────────────────────────────────────────
 
 [[check]]
