@@ -29,7 +29,9 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 # Reuse the gate's own exclusions and independent-track list rather than
 # restating them: a door the gate ignores must not be bumped either.
-from check_version_alignment import INDEPENDENT, skip  # noqa: E402
+from check_version_alignment import (  # noqa: E402
+    INDEPENDENT, INDEPENDENT_VERSION, skip,
+)
 
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
@@ -58,6 +60,30 @@ def record(f: pathlib.Path, txt: str, changes: list) -> None:
     changes.append((f, txt))
 
 
+# Records of what happened, which layer 7 must not rewrite.
+#
+# A finding, a changelog entry and a completed roadmap line describe a past
+# state. Moving `/v5` to `/v6` in them does not update anything — it makes
+# the record false, the way relabelling a benchmark table with the current
+# release turns an honest measurement into a claim about a build nobody
+# ran. One of them ended up reading `go get .../kevy-go/v6@v5.1.0`, a
+# command that never existed and could not have worked.
+#
+# Layer 7 governs what DETERMINES or INSTRUCTS the import path: code,
+# manifests, scripts, and the documents that tell a reader what to import.
+HISTORICAL = (
+    "CHANGELOG.md",
+    ".claude/ROADMAP.md",
+    "bench/FINDING-",
+    "bench/PERF-",
+)
+
+
+def historical(p) -> bool:
+    rel = str(p.relative_to(ROOT))
+    return any(rel == h or rel.startswith(h) for h in HISTORICAL)
+
+
 def cargo_files():
     return ([ROOT / "Cargo.toml"]
             + sorted(ROOT.glob("crates/*/Cargo.toml"))
@@ -66,7 +92,25 @@ def cargo_files():
 
 def bump_cargo(new: str, changes: list) -> None:
     own = re.compile(r'^(\s*version\s*=\s*")(\d+\.\d+\.\d+)(")')
-    pin = re.compile(r'(path\s*=\s*"[^"]*kevy-[\w-]+"\s*,\s*version\s*=\s*"=?)(\d+\.\d+\.\d+)(")')
+    # Two corrections, both found by a 6.0.0 bump that would have shipped.
+    #
+    # The pattern demanded a suffix after `kevy-`, so pins on the crate the
+    # project is NAMED after were never rewritten: kevy-client and
+    # kevy-cluster-rw kept `kevy = "5.4.1"`, and `cargo publish` resolves a
+    # version-gated dependency against crates.io — the new crate would have
+    # resolved to the old sibling.
+    #
+    # And the value came from `new` regardless of what the pin points AT, so
+    # a pin on an independent-line crate was rewritten to the workspace
+    # version — naming a version of kevy-client that does not exist. The
+    # target decides, exactly as the gate reads it.
+    pin = re.compile(
+        r'(path\s*=\s*"[^"]*?(kevy(?:-[\w-]+)?)"\s*,\s*version\s*=\s*"=?)(\d+\.\d+\.\d+)(")')
+
+    def pin_sub(m: re.Match) -> str:
+        target = f"crates/{m.group(2)}/Cargo.toml"
+        want = INDEPENDENT_VERSION.get(target, new)
+        return m.group(1) + want + m.group(4)
     for p in cargo_files():
         if skip(p):
             continue
@@ -81,7 +125,7 @@ def bump_cargo(new: str, changes: list) -> None:
                 if line2 != line:
                     hit = True
                 line = line2
-            line2 = pin.sub(lambda m: m.group(1) + new + m.group(3), line)
+            line2 = pin.sub(pin_sub, line)
             if line2 != line:
                 hit = True
             out.append(line2)
@@ -192,7 +236,7 @@ def bump_go_module_major(new: str, changes: list) -> None:
     used = re.compile(r"(github\.com/goliajp/kevy-go)/v\d+")
     want = rf"\1/v{major}"
     for f in sorted(ROOT.glob("**/*")):
-        if f.is_dir() or skip(f) or f.suffix not in (
+        if f.is_dir() or skip(f) or historical(f) or f.suffix not in (
                 ".go", ".mod", ".sh", ".md", ".yml", ".yaml"):
             continue
         try:

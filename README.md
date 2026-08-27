@@ -113,11 +113,11 @@ Four are on their language registries:
 
 ```sh
 npm i @goliapkg/kevy-ts                          # Node / TypeScript
-go get github.com/goliajp/kevy-go/v5             # Go
+go get github.com/goliajp/kevy-go/v6             # Go
 ```
 ```xml
 <dependency>                                     <!-- Java -->
-  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>5.4.1</version>
+  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>6.0.0</version>
 </dependency>
 ```
 

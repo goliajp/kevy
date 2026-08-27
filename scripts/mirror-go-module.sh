@@ -8,7 +8,7 @@
 # WHY A MIRROR AT ALL
 #
 # Go has no package registry. An import path IS a repository URL, so
-# `import "github.com/goliajp/kevy-go/v5"` requires a repository at
+# `import "github.com/goliajp/kevy-go/v6"` requires a repository at
 # exactly that address with go.mod at its root — bindings/go inside the
 # kevy tree cannot be imported by anyone. Every other binding publishes
 # by uploading a built artifact; this one publishes by having a second
@@ -38,7 +38,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/bindings/go"
-MODULE="github.com/goliajp/kevy-go/v5"
+MODULE="github.com/goliajp/kevy-go/v6"
 REPO="git@github.com:goliajp/kevy-go.git"
 
 PUSH_VERSION=""
