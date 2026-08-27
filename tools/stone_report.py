@@ -84,12 +84,25 @@ def lifts(skip):
 
 
 def semver(crate, version):
+    """Compatibility against the last published version — or the absence of one.
+
+    A crate with nothing on the registry has no baseline, and "no baseline"
+    is not a failure: there is no promise yet to break. Reporting it as one
+    would make every newly published crate look broken on the day it lands,
+    which is the day the check matters least. kevy-bench is the first crate
+    to hit this, in v6.
+    """
     p = subprocess.run(["cargo", "semver-checks", "check-release",
                         "-p", crate, "--baseline-version", version],
                        cwd=ROOT, capture_output=True, text=True, timeout=900)
     log = p.stdout + p.stderr
+    if re.search(r"no crate named|not found in registry|failed to select a version for the requirement `"
+                 + re.escape(crate), log) or "no published version" in log:
+        return {"ok": True, "checks": 0, "unpublished": True,
+                "note": "not on crates.io yet — no baseline to break"}
     m = re.search(r"(\d+) checks: (\d+) pass", log)
     return {"ok": p.returncode == 0, "checks": int(m.group(1)) if m else 0,
+            "unpublished": False,
             "note": "" if p.returncode == 0 else
                     next((l.strip() for l in log.splitlines() if "--- failure" in l), "failed")[:120]}
 
@@ -190,7 +203,8 @@ def write_md(rows, version, dead_platform):
     for r in sorted(rows, key=lambda r: (r["tested"] is not True, -r["dead_regions"])):
         d, s = r["docs"], r["semver"]
         lift = "yes" if r["tested"] else ("builds" if r["built"] else "no")
-        sv = "—" if not s else ("clean" if s["ok"] else f"**{s['note']}**")
+        sv = ("—" if not s else "unpublished" if s.get("unpublished")
+              else "clean" if s["ok"] else f"**{s['note']}**")
         note = f" — {r['lift_note']}" if r["lift_note"] else ""
         dr = (f"{r['dead_regions']}/{r['measured_regions']}"
               if r["measured_regions"] else "**not measured**")

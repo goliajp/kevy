@@ -11,6 +11,15 @@ readme = "README.md"
 keywords = ["redis", "kv", "key-value", "database", "valkey"]
 categories = ["database-implementations", "caching", "network-programming"]
 
+
+# v6 — not packaged: these reference a dependency the published manifest
+# cannot declare, and `cargo package` would ship source that does not
+# compile. Seventy-eight of ninety-six shipped test files need kevy-testnet,
+# kevy-chaos or the CLI. At that ratio listing them is unreadable and the
+# eighteen that would survive are not a suite anyone would run. A server
+# crate does not promise "take it and run its integration tests" — that
+# promise belongs to stones, and stones keep theirs.
+exclude = ["tests/**", "examples/**"]
 [lints]
 workspace = true
 

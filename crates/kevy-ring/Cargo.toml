@@ -19,7 +19,7 @@ workspace = true
 [dependencies]
 
 [dev-dependencies]
-kevy-bench = { path = "../kevy-bench" }
+kevy-bench = { path = "../kevy-bench", version = "5.4.1" }
 
 # Loom is a CHARTER-EXEMPTED dev-only crates.io dep (same status as
 # cargo-fuzz / cargo-llvm-cov): it intercepts atomics + thread scheduling

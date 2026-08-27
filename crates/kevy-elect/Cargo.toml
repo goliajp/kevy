@@ -13,6 +13,11 @@ readme = "README.md"
 keywords = ["election", "quorum", "failover", "kevy", "replication"]
 categories = ["database", "network-programming"]
 
+
+# v6 — not packaged: these reference a dependency the published manifest
+# cannot declare, and `cargo package` would ship source that does not
+# compile. Needs kevy-testnet, which is never published.
+exclude = ["tests/transport_e2e.rs"]
 [lints]
 workspace = true
 

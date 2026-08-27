@@ -18,6 +18,12 @@ readme = "README.md"
 keywords = ["kevy", "redis", "kv", "embedded", "cache"]
 categories = ["database-implementations", "caching", "embedded"]
 
+
+# v6 — not packaged: these reference a dependency the published manifest
+# cannot declare, and `cargo package` would ship source that does not
+# compile. Two of thirty-nine. The other thirty-seven ship and compile — excluding
+# the whole suite to silence two files would throw away working tests.
+exclude = ["examples/embed_vs_server.rs", "tests/server_replica_e2e.rs"]
 [lints]
 workspace = true
 

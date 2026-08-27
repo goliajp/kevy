@@ -47,30 +47,52 @@ semver_clean = true
 crate = "kevy-bytes"
 rules = ["lifts", "min_tests"]
 reason = """
-Ships tests/perf_gate.rs and examples/bench_sso.rs, both of which use
-kevy_bench, while the published manifest declares no such dependency: cargo
-package drops a path-only dev-dependency and packages the sources anyway.
-Verified against the artifact on crates.io, not a local cargo package.
+tests/perf_gate.rs and examples/bench_sso.rs import kevy_bench, and the published manifest now
+DECLARES it — the source defect is fixed. What remains is that
+kevy-bench is not on crates.io yet, so `cargo package` cannot
+resolve the requirement and the crate will not package at all
+until the v6.0.0 chain publishes it first. That is a worse
+symptom than before and a better state: the manifest no longer
+lies, and the release chain publishes kevy-bench ahead of every
+crate that needs it.
 """
-closes_when = "kevy-bench is published and the four dev-dependencies carry a version — see bench/FINDING-2026-08-27-four-published-stones-ship-code-that-cannot-compile.md"
+closes_when = "the v6.0.0 release publishes kevy-bench; the chain in .github/workflows/release.yml already places it first"
 
 [[waiver]]
 crate = "kevy-hash"
 rules = ["lifts", "min_tests"]
-reason = "Same defect: tests/perf_gate.rs and examples/bench_hash.rs use kevy_bench, undeclared in the published manifest."
-closes_when = "kevy-bench is published — same finding"
+reason = """
+tests/perf_gate.rs and examples/bench_hash.rs import kevy_bench, and the published manifest now
+DECLARES it — the source defect is fixed. What remains is that
+kevy-bench is not on crates.io yet, so `cargo package` cannot
+resolve the requirement and the crate will not package at all
+until the v6.0.0 chain publishes it first.
+"""
+closes_when = "the v6.0.0 release publishes kevy-bench; the chain in .github/workflows/release.yml already places it first"
 
 [[waiver]]
 crate = "kevy-map"
 rules = ["lifts", "min_tests"]
-reason = "Same defect: tests/perf_gate.rs and examples/bench_vs_std.rs use kevy_bench, undeclared in the published manifest."
-closes_when = "kevy-bench is published — same finding"
+reason = """
+tests/perf_gate.rs and examples/bench_vs_std.rs import kevy_bench, and the published manifest now
+DECLARES it — the source defect is fixed. What remains is that
+kevy-bench is not on crates.io yet, so `cargo package` cannot
+resolve the requirement and the crate will not package at all
+until the v6.0.0 chain publishes it first.
+"""
+closes_when = "the v6.0.0 release publishes kevy-bench; the chain in .github/workflows/release.yml already places it first"
 
 [[waiver]]
 crate = "kevy-ring"
 rules = ["lifts", "min_tests"]
-reason = "Same defect: tests/perf_gate.rs and examples/bench_ring.rs use kevy_bench, undeclared in the published manifest."
-closes_when = "kevy-bench is published — same finding"
+reason = """
+tests/perf_gate.rs and examples/bench_ring.rs import kevy_bench, and the published manifest now
+DECLARES it — the source defect is fixed. What remains is that
+kevy-bench is not on crates.io yet, so `cargo package` cannot
+resolve the requirement and the crate will not package at all
+until the v6.0.0 chain publishes it first.
+"""
+closes_when = "the v6.0.0 release publishes kevy-bench; the chain in .github/workflows/release.yml already places it first"
 
 # ---------------------------------------------------------------------------
 # measured / tests

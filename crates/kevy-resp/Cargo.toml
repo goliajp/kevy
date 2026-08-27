@@ -20,4 +20,4 @@ workspace = true
 kevy-bytes = { path = "../kevy-bytes", version = "5.4.1" }
 
 [dev-dependencies]
-kevy-bench = { path = "../kevy-bench" }
+kevy-bench = { path = "../kevy-bench", version = "5.4.1" }

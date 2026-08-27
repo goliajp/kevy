@@ -32,6 +32,7 @@ stone = [
   "kevy-geo",      # geohash math
   "kevy-scalar",   # scalar function engine (regex/md5/interval)
   "kevy-tmpdir",   # unique temp dirs — published, used by cli embed/backup
+  "kevy-bench",    # zero-dep micro-bench harness (median/p95 + A/B ratio)
 ]
 
 # Domain-aware, serving many flows: the engine's skeleton.
@@ -70,7 +71,6 @@ cement = [
 
 # Dev-only scaffolding. Exempt from the direction rule; publish = false.
 support = [
-  "kevy-bench",
   "kevy-chaos",
   "kevy-pubsub-bench",
   "kevy-testnet",

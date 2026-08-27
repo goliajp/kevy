@@ -29,6 +29,11 @@ readme = "README.md"
 keywords = ["kevy", "redis", "kv", "client", "embedded"]
 categories = ["database", "caching", "api-bindings"]
 
+
+# v6 — not packaged: these reference a dependency the published manifest
+# cannot declare, and `cargo package` would ship source that does not
+# compile. Drives a live server through kevy-testnet, which is never published.
+exclude = ["tests/wrap_parity.rs"]
 [lints]
 workspace = true
 
