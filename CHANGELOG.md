@@ -26,8 +26,13 @@ milestone's name, not a claim that an API moved.
 - **Fifteen published crates shipped code that cannot compile.** Their
   `tests/` and `examples/` imported dev-dependencies declared only by path,
   and `cargo package` drops a path-only dev-dependency while packaging the
-  sources that need it. Anyone who downloaded kevy-bytes 5.4.1 and ran
-  `cargo test` inside it got a compile error, across 122 files. The stones
+  sources that need it. 122 source files across those fifteen crates import
+  something their published manifest never declares; download kevy-bytes
+  5.4.1, run `cargo test` inside it, and its two get
+  `error[E0432]: unresolved import`. A dependent's build is unaffected —
+  dev-dependencies and examples are not compiled for a crate you depend on —
+  so this breaks precisely the person who *takes* the crate, which is the
+  claim `architecture.toml` makes about a stone. The stones
   now declare those dependencies with versions; the crates that are not
   meant to be built standalone exclude the sources instead. `packagegate`
   holds it, computing the packaged set from git rather than from
@@ -82,8 +87,18 @@ milestone's name, not a claim that an API moved.
   switched off by `cfg` is absent from a coverage run rather than dead in
   it, so a report taken on macOS could not see kevy-uring at all — the crate
   is `#![cfg(target_os = "linux")]`. Two of its waivers said it had no tests;
-  on Linux it has fifteen and they pass. Waivers: eleven to eight, and all
-  eight close when this release puts kevy-bench on crates.io.
+  on Linux it has fifteen and they pass.
+
+- **The stone bar carries no waivers at all**, from eleven. Two went with
+  that Linux reading. The other nine were a hand-written declaration of
+  something the gate can compute: `cargo package` strips path dependencies
+  and resolves what is left against crates.io, so between a version bump and
+  the publish that follows it, any crate with a version-gated sibling is
+  unliftable for that reason alone. stonegate now names those readings as
+  NOT TAKEN — by crate and by the dependency that could not be selected —
+  and says in its output that they are not passes. Unlike a waiver it cannot
+  outlive its cause: after the publish the version exists, and a crate that
+  still cannot lift fails there for real.
 
 - **Dead regions**, cut by measured ablation rather than by counting tests:
   kevy-scalar 42.0% → 27.8%, the async client 70.5% → 39.3%, kevy-cli 42.4%
