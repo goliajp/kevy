@@ -166,7 +166,7 @@ def main():
                   + (f"  {r['note']}" if r["note"] else ""))
 
     if "--json" in args:
-        out = pathlib.Path(args[args.index("--json") + 1])
+        out = pathlib.Path(args[args.index("--json") + 1]).resolve()
         out.write_text(json.dumps(results, indent=2) + "\n")
         print(f"  wrote {out}")
 
