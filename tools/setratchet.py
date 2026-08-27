@@ -88,9 +88,17 @@ def compare(base, obs):
     than from the observed set, so the tolerance is part of what was
     recorded and cannot be widened by the run being judged.
     """
-    unstable = set(base.get("unstable", []))
-    b = {k: v for k, v in base["symbols"].items() if k not in unstable}
-    o = {k: v for k, v in obs["symbols"].items() if k not in unstable}
+    spec = base.get("unstable") or {}
+    if isinstance(spec, list):        # the first baseline shape: names only
+        spec = {"symbols": spec, "prefixes": []}
+    names = set(spec.get("symbols", []))
+    prefixes = tuple(spec.get("prefixes", []))
+
+    def held(k):
+        return k not in names and not (prefixes and k.startswith(prefixes))
+
+    b = {k: v for k, v in base["symbols"].items() if held(k)}
+    o = {k: v for k, v in obs["symbols"].items() if held(k)}
     grew = {k: (b[k], o[k]) for k in b.keys() & o.keys() if o[k] > b[k]}
     joined = {k: o[k] for k in o.keys() - b.keys()}
     shrank = {k: (b[k], o[k]) for k in b.keys() & o.keys() if o[k] < b[k]}
@@ -133,9 +141,18 @@ def gate(base_path, obs_path):
         print("  To accept deliberately: setratchet.py update ... "
               "--accept-growth \"why this is correct\"")
         return 1
-    n_unstable = len(base.get("unstable", []))
-    tail = f", {n_unstable} declared unstable and not held" if n_unstable else ""
-    print(f"setratchet: PASS — {len(base['symbols']) - n_unstable} symbols held, "
+    spec = base.get("unstable") or {}
+    if isinstance(spec, list):
+        spec = {"symbols": spec, "prefixes": []}
+    names = set(spec.get("symbols", []))
+    prefixes = tuple(spec.get("prefixes", []))
+    exempt = sum(
+        1 for k in base["symbols"]
+        if k in names or (prefixes and k.startswith(prefixes))
+    )
+    tail = (f", {exempt} exempt under {len(names)} symbol / "
+            f"{len(prefixes)} prefix declarations" if exempt else "")
+    print(f"setratchet: PASS — {len(base['symbols']) - exempt} symbols held, "
           f"{len(shrank)} shrank, {len(left)} left ({total} regions){tail}")
     return 0
 
