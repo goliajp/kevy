@@ -193,7 +193,18 @@ tail -c "+$((mid + 8))" "$aof" >> "$aof.spliced"
 mv "$aof.spliced" "$aof"
 # Resync probe FIRST: the strict open below repairs (quarantines +
 # truncates) the tail, destroying exactly what resync exists to recover.
-recr=$("$CHECK" "$dir" --resync 2>/dev/null | awk '/^RECOVERED/{print $2}')
+#
+# Its stderr is KEPT. The replay prints a summary there and the corrupt WARN
+# branch is unconditional, so `2>/dev/null` was discarding the one line that
+# distinguishes the two outcomes this cell has: a stop the replay called
+# CORRUPT — which is what makes resync engage — from one it called a
+# truncated tail, where resync never runs and everything behind the damage
+# is lost. This cell fails about one run in eleven and the verdict line
+# could not say which had happened; 28 runs and 65 splice points on the
+# bench box never reproduced it, so the next occurrence has to carry its own
+# diagnosis rather than wait to be caught.
+resync_err="$WORK/midfile-resync.err"
+recr=$("$CHECK" "$dir" --resync 2>"$resync_err" | awk '/^RECOVERED/{print $2}')
 out1=$("$CHECK" "$dir" --mark 2>/dev/null); rc=$?
 rec1=$(echo "$out1" | awk '/^RECOVERED/{print $2}'); marked=$(echo "$out1" | awk '/^MARKED/{print $2}')
 q1=$(echo "$out1" | awk '/^QUARANTINE/{print $2}')
@@ -203,8 +214,14 @@ rec2=$("$CHECK" "$dir" 2>/dev/null | awk '/^RECOVERED/{print $2}')
     || verdict 1 "midfile-corrupt/no-blackhole" "restart#2 sees ${rec2:-0} < marked ${marked:-?}"
 [ "${q1:-0}" -ge 1 ] && pending 0 T2 "midfile-corrupt/quarantine" "$q1 quarantine file(s)" \
     || pending 1 T2 "midfile-corrupt/quarantine" "231MB-class good tail destroyed, not set aside"
-[ "${recr:-0}" -ge "${synced:-1}" ] && pending 0 T6 "midfile-corrupt/recovery-rate" "resync recovered the good tail ($recr >= $synced)" \
-    || pending 1 T6 "midfile-corrupt/recovery-rate" "resync recovered ${recr:-0} < synced $synced"
+if [ "${recr:-0}" -ge "${synced:-1}" ]; then
+    pending 0 T6 "midfile-corrupt/recovery-rate" "resync recovered the good tail ($recr >= $synced)"
+else
+    pending 1 T6 "midfile-corrupt/recovery-rate" "resync recovered ${recr:-0} < synced $synced"
+    # What the replay said it stopped on, at the moment it mattered.
+    echo "crashgate: T6 replay said (splice at $mid of $size bytes):" >&2
+    sed -n '1,12p' "$resync_err" | sed 's/^/    /' >&2
+fi
 
 # I — payload byte-flip: framing stays intact, a VALUE is silently corrupted.
 # Discovered by this gate's first run: a flip inside a bulk payload replays
