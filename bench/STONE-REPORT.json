@@ -1,0 +1,363 @@
+{
+  "version": "5.4.1",
+  "dead_platform": "macos",
+  "stones": [
+    {
+      "crate": "kevy-alloc",
+      "dead_regions": 119,
+      "measured_regions": 1694,
+      "packaged": true,
+      "built": true,
+      "tested": true,
+      "tests": 37,
+      "lift_note": "",
+      "docs": {
+        "documented": 88,
+        "items": 88,
+        "pct": 100.0,
+        "examples": 1
+      },
+      "semver": {
+        "ok": true,
+        "checks": 223,
+        "note": ""
+      }
+    },
+    {
+      "crate": "kevy-bytes",
+      "dead_regions": 5,
+      "measured_regions": 448,
+      "packaged": true,
+      "built": true,
+      "tested": false,
+      "tests": 0,
+      "lift_note": "error[E0432]: unresolved import `kevy_bench`",
+      "docs": {
+        "documented": 12,
+        "items": 12,
+        "pct": 100.0,
+        "examples": 0
+      },
+      "semver": {
+        "ok": true,
+        "checks": 223,
+        "note": ""
+      }
+    },
+    {
+      "crate": "kevy-hash",
+      "dead_regions": 31,
+      "measured_regions": 535,
+      "packaged": true,
+      "built": true,
+      "tested": false,
+      "tests": 0,
+      "lift_note": "error[E0432]: unresolved import `kevy_bench`",
+      "docs": {
+        "documented": 10,
+        "items": 10,
+        "pct": 100.0,
+        "examples": 1
+      },
+      "semver": {
+        "ok": true,
+        "checks": 223,
+        "note": ""
+      }
+    },
+    {
+      "crate": "kevy-compress",
+      "dead_regions": 43,
+      "measured_regions": 1374,
+      "packaged": true,
+      "built": true,
+      "tested": true,
+      "tests": 12,
+      "lift_note": "",
+      "docs": {
+        "documented": 12,
+        "items": 12,
+        "pct": 100.0,
+        "examples": 0
+      },
+      "semver": {
+        "ok": true,
+        "checks": 223,
+        "note": ""
+      }
+    },
+    {
+      "crate": "kevy-map",
+      "dead_regions": 24,
+      "measured_regions": 1221,
+      "packaged": true,
+      "built": true,
+      "tested": false,
+      "tests": 0,
+      "lift_note": "error[E0432]: unresolved import `kevy_bench`",
+      "docs": {
+        "documented": 13,
+        "items": 13,
+        "pct": 100.0,
+        "examples": 0
+      },
+      "semver": {
+        "ok": true,
+        "checks": 223,
+        "note": ""
+      }
+    },
+    {
+      "crate": "kevy-madvise",
+      "dead_regions": 10,
+      "measured_regions": 55,
+      "packaged": true,
+      "built": true,
+      "tested": true,
+      "tests": 4,
+      "lift_note": "",
+      "docs": {
+        "documented": 4,
+        "items": 4,
+        "pct": 100.0,
+        "examples": 0
+      },
+      "semver": {
+        "ok": true,
+        "checks": 223,
+        "note": ""
+      }
+    },
+    {
+      "crate": "kevy-ranktree",
+      "dead_regions": 12,
+      "measured_regions": 826,
+      "packaged": true,
+      "built": true,
+      "tested": true,
+      "tests": 7,
+      "lift_note": "",
+      "docs": {
+        "documented": 17,
+        "items": 17,
+        "pct": 100.0,
+        "examples": 0
+      },
+      "semver": {
+        "ok": true,
+        "checks": 223,
+        "note": ""
+      }
+    },
+    {
+      "crate": "kevy-ring",
+      "dead_regions": 0,
+      "measured_regions": 360,
+      "packaged": true,
+      "built": true,
+      "tested": false,
+      "tests": 0,
+      "lift_note": "error[E0432]: unresolved import `kevy_bench`",
+      "docs": {
+        "documented": 11,
+        "items": 11,
+        "pct": 100.0,
+        "examples": 1
+      },
+      "semver": {
+        "ok": true,
+        "checks": 223,
+        "note": ""
+      }
+    },
+    {
+      "crate": "kevy-seg",
+      "dead_regions": 122,
+      "measured_regions": 1206,
+      "packaged": true,
+      "built": true,
+      "tested": true,
+      "tests": 11,
+      "lift_note": "",
+      "docs": {
+        "documented": 18,
+        "items": 20,
+        "pct": 90.0,
+        "examples": 0
+      },
+      "semver": {
+        "ok": true,
+        "checks": 223,
+        "note": ""
+      }
+    },
+    {
+      "crate": "kevy-time",
+      "dead_regions": 24,
+      "measured_regions": 289,
+      "packaged": true,
+      "built": true,
+      "tested": true,
+      "tests": 5,
+      "lift_note": "",
+      "docs": {
+        "documented": 12,
+        "items": 12,
+        "pct": 100.0,
+        "examples": 0
+      },
+      "semver": {
+        "ok": true,
+        "checks": 223,
+        "note": ""
+      }
+    },
+    {
+      "crate": "kevy-sys",
+      "dead_regions": 122,
+      "measured_regions": 634,
+      "packaged": true,
+      "built": true,
+      "tested": true,
+      "tests": 9,
+      "lift_note": "",
+      "docs": {
+        "documented": 24,
+        "items": 24,
+        "pct": 100.0,
+        "examples": 1
+      },
+      "semver": {
+        "ok": true,
+        "checks": 223,
+        "note": ""
+      }
+    },
+    {
+      "crate": "kevy-uring",
+      "dead_regions": 0,
+      "measured_regions": 0,
+      "packaged": true,
+      "built": true,
+      "tested": true,
+      "tests": 0,
+      "lift_note": "",
+      "docs": {
+        "documented": 1,
+        "items": 1,
+        "pct": 100.0,
+        "examples": 0
+      },
+      "semver": {
+        "ok": true,
+        "checks": 223,
+        "note": ""
+      }
+    },
+    {
+      "crate": "kevy-text",
+      "dead_regions": 119,
+      "measured_regions": 3987,
+      "packaged": true,
+      "built": true,
+      "tested": true,
+      "tests": 98,
+      "lift_note": "",
+      "docs": {
+        "documented": 76,
+        "items": 76,
+        "pct": 100.0,
+        "examples": 0
+      },
+      "semver": {
+        "ok": true,
+        "checks": 223,
+        "note": ""
+      }
+    },
+    {
+      "crate": "kevy-vector",
+      "dead_regions": 27,
+      "measured_regions": 864,
+      "packaged": true,
+      "built": true,
+      "tested": true,
+      "tests": 10,
+      "lift_note": "",
+      "docs": {
+        "documented": 17,
+        "items": 17,
+        "pct": 100.0,
+        "examples": 0
+      },
+      "semver": {
+        "ok": true,
+        "checks": 223,
+        "note": ""
+      }
+    },
+    {
+      "crate": "kevy-geo",
+      "dead_regions": 4,
+      "measured_regions": 334,
+      "packaged": true,
+      "built": true,
+      "tested": true,
+      "tests": 18,
+      "lift_note": "",
+      "docs": {
+        "documented": 12,
+        "items": 12,
+        "pct": 100.0,
+        "examples": 0
+      },
+      "semver": {
+        "ok": true,
+        "checks": 223,
+        "note": ""
+      }
+    },
+    {
+      "crate": "kevy-scalar",
+      "dead_regions": 1712,
+      "measured_regions": 4383,
+      "packaged": true,
+      "built": true,
+      "tested": true,
+      "tests": 26,
+      "lift_note": "",
+      "docs": {
+        "documented": 39,
+        "items": 39,
+        "pct": 100.0,
+        "examples": 1
+      },
+      "semver": {
+        "ok": true,
+        "checks": 223,
+        "note": ""
+      }
+    },
+    {
+      "crate": "kevy-tmpdir",
+      "dead_regions": 3,
+      "measured_regions": 85,
+      "packaged": true,
+      "built": true,
+      "tested": true,
+      "tests": 3,
+      "lift_note": "",
+      "docs": {
+        "documented": 4,
+        "items": 5,
+        "pct": 80.0,
+        "examples": 0
+      },
+      "semver": {
+        "ok": true,
+        "checks": 223,
+        "note": ""
+      }
+    }
+  ]
+}

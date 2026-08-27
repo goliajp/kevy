@@ -1,0 +1,178 @@
+# Where the stones fall short of the bar today, each with a reason and what
+# would close it.
+#
+# The bar in `[bar]` is what a stone is supposed to be. It is not aspiration:
+# every figure in it was chosen from the first stone report (2026-08-27)
+# rather than from taste, and every stone that misses it is named below with
+# the measurement that says so.
+#
+# Checked by tools/check_stones.py against bench/STONE-REPORT.json. Two rules
+# make this a ratchet rather than a wish list:
+#
+#   - a waiver for a stone that now meets the bar FAILS. The list must not
+#     rot; passing is how a waiver is removed, not by being forgotten.
+#   - the list may only shrink. Adding one is a deliberate act with a reason
+#     attached, the same way `--accept-growth` works for a set-ratchet.
+
+[bar]
+# Unpack the published form outside the repository and its tests pass there.
+# This is the operational form of "any project could take these".
+lifts = true
+
+# A boolean `tested` proves nothing: kevy-uring lifts, builds and passes
+# with zero tests. The bar needs a count, and the count is not zero.
+min_tests = 1
+
+# 15 of 17 stones are already at 100%, so this costs almost nothing to
+# require and stops the two that are not from being joined.
+doc_pct = 100.0
+
+# Prose is unverified; a doctest is compiled and run. 12 of 17 stones carry
+# no executable example at all, so 1 is a floor to start a ratchet from, not
+# the destination — the destination is every public item.
+min_examples = 1
+
+# A crate absent from the execution corpus reports zero dead regions and
+# outranks every crate that was measured. That is no score, not a good one.
+must_be_measured = true
+
+# Clean against the last published version. All 17 are clean today across
+# 3,791 checks; recording that now is what makes the first v6 break visible.
+semver_clean = true
+
+# ---------------------------------------------------------------------------
+# lifts — the published form ships code it cannot compile
+
+[[waiver]]
+crate = "kevy-bytes"
+rules = ["lifts", "min_tests"]
+reason = """
+Ships tests/perf_gate.rs and examples/bench_sso.rs, both of which use
+kevy_bench, while the published manifest declares no such dependency: cargo
+package drops a path-only dev-dependency and packages the sources anyway.
+Verified against the artifact on crates.io, not a local cargo package.
+"""
+closes_when = "kevy-bench is published and the four dev-dependencies carry a version — see bench/FINDING-2026-08-27-four-published-stones-ship-code-that-cannot-compile.md"
+
+[[waiver]]
+crate = "kevy-hash"
+rules = ["lifts", "min_tests"]
+reason = "Same defect: tests/perf_gate.rs and examples/bench_hash.rs use kevy_bench, undeclared in the published manifest."
+closes_when = "kevy-bench is published — same finding"
+
+[[waiver]]
+crate = "kevy-map"
+rules = ["lifts", "min_tests"]
+reason = "Same defect: tests/perf_gate.rs and examples/bench_vs_std.rs use kevy_bench, undeclared in the published manifest."
+closes_when = "kevy-bench is published — same finding"
+
+[[waiver]]
+crate = "kevy-ring"
+rules = ["lifts", "min_tests"]
+reason = "Same defect: tests/perf_gate.rs and examples/bench_ring.rs use kevy_bench, undeclared in the published manifest."
+closes_when = "kevy-bench is published — same finding"
+
+# ---------------------------------------------------------------------------
+# measured / tests
+
+[[waiver]]
+crate = "kevy-uring"
+rules = ["min_tests", "must_be_measured"]
+reason = """
+Linux-only io_uring bindings. Zero regions in the corpus and zero tests —
+and the two are one fact, not two: the corpus runs on the enforcing platform
+in CI, and this local report was taken on macOS where the crate does not
+compile at all. What the report cannot say is whether it has tests ON Linux.
+"""
+closes_when = "the corpus is recorded on Linux and this row is re-read; if it is still zero there, the crate genuinely has no tests and owes them"
+
+# ---------------------------------------------------------------------------
+# docs
+
+[[waiver]]
+crate = "kevy-seg"
+rules = ["doc_pct"]
+reason = "90% — 5 of 7 items in manifest.rs are documented; the rest of the crate is at 100%."
+closes_when = "manifest.rs's two undocumented items are documented"
+
+[[waiver]]
+crate = "kevy-tmpdir"
+rules = ["doc_pct"]
+reason = "80% — 4 of 5 public items."
+closes_when = "the fifth item is documented"
+
+# ---------------------------------------------------------------------------
+# examples — 12 of 17 stones carry none. This is the widest gap the first
+# stone report found, and the one G5 (doctestgate) exists to close.
+
+[[waiver]]
+crate = "kevy-compress"
+rules = ["min_examples"]
+reason = "100% documented in prose, 0 items with an executable example."
+closes_when = "at least one public entry point carries a doctest"
+
+[[waiver]]
+crate = "kevy-madvise"
+rules = ["min_examples"]
+reason = "100% documented in prose, 0 items with an executable example."
+closes_when = "at least one public entry point carries a doctest"
+
+[[waiver]]
+crate = "kevy-ranktree"
+rules = ["min_examples"]
+reason = "100% documented in prose, 0 items with an executable example."
+closes_when = "at least one public entry point carries a doctest"
+
+[[waiver]]
+crate = "kevy-seg"
+rules = ["min_examples"]
+reason = "0 items with an executable example."
+closes_when = "at least one public entry point carries a doctest"
+
+[[waiver]]
+crate = "kevy-time"
+rules = ["min_examples"]
+reason = "100% documented in prose, 0 items with an executable example."
+closes_when = "at least one public entry point carries a doctest"
+
+[[waiver]]
+crate = "kevy-uring"
+rules = ["min_examples"]
+reason = "0 items with an executable example."
+closes_when = "at least one public entry point carries a doctest"
+
+[[waiver]]
+crate = "kevy-text"
+rules = ["min_examples"]
+reason = "98 tests and 0 executable examples — the crate is exercised but its documentation is not."
+closes_when = "at least one public entry point carries a doctest"
+
+[[waiver]]
+crate = "kevy-vector"
+rules = ["min_examples"]
+reason = "100% documented in prose, 0 items with an executable example."
+closes_when = "at least one public entry point carries a doctest"
+
+[[waiver]]
+crate = "kevy-geo"
+rules = ["min_examples"]
+reason = "100% documented in prose, 0 items with an executable example."
+closes_when = "at least one public entry point carries a doctest"
+
+[[waiver]]
+crate = "kevy-tmpdir"
+rules = ["min_examples"]
+reason = "0 items with an executable example."
+closes_when = "at least one public entry point carries a doctest"
+
+[[waiver]]
+crate = "kevy-bytes"
+rules = ["min_examples"]
+reason = "0 items with an executable example."
+closes_when = "at least one public entry point carries a doctest"
+
+[[waiver]]
+crate = "kevy-map"
+rules = ["min_examples"]
+reason = "0 items with an executable example."
+closes_when = "at least one public entry point carries a doctest"
