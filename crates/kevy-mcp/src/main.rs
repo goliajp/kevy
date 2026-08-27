@@ -15,9 +15,13 @@
 //! tool is not advertised and calls to it are rejected. Exits cleanly
 //! on stdin EOF.
 
+/// The verb surface, read from the live server rather than baked in here.
 mod catalog;
+/// A JSON reader and writer, because the workspace takes no dependencies.
 mod json;
+/// JSON-RPC 2.0 framing: requests in, one line of response out.
 mod proto;
+/// The five MCP tools and what each one is permitted to do.
 mod tools;
 
 use std::io::{self, BufRead, Write};
@@ -30,13 +34,25 @@ use json::{Value, obj, s};
 use proto::FrameError;
 use tools::ToolCx;
 
+/// The one-line usage text, printed for `--help` and beside any argument error.
 const USAGE: &str = "usage: kevy-mcp [--url redis://127.0.0.1:6004] [--allow-writes]";
 
+/// Everything the command line decides.
 struct Cli {
+    /// Where the kevy server is. The catalog is bootstrapped from it, so
+    /// this also decides which verbs exist.
     url: String,
+    /// Whether the `kevy_write` tool is advertised at all. Off by default:
+    /// an agent that cannot see the tool cannot be talked into calling it.
     allow_writes: bool,
 }
 
+/// Reads the arguments, or names the first one it could not.
+///
+/// An unknown argument is an error rather than something skipped — this
+/// binary is launched by an agent host from a config file, where a silently
+/// ignored flag would mean the operator believes a setting is in force
+/// when it is not. `--allow-writes` is exactly such a setting in reverse.
 fn parse_cli(args: &[String]) -> Result<Cli, String> {
     let mut url = "redis://127.0.0.1:6004".to_string();
     let mut allow_writes = false;
@@ -51,6 +67,11 @@ fn parse_cli(args: &[String]) -> Result<Cli, String> {
     Ok(Cli { url, allow_writes })
 }
 
+/// Parses the command line and runs the server until stdin reaches EOF.
+///
+/// Exit 2 for a bad argument, 1 for a failure while serving, 0 for a clean
+/// EOF — the host distinguishes "you launched me wrong" from "I lost the
+/// server", and neither looks like a normal shutdown.
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
@@ -73,6 +94,11 @@ fn main() -> ExitCode {
     }
 }
 
+/// Connects, bootstraps the catalog from `COMMAND DOCS`, then serves.
+///
+/// The catalog is read before the first frame is answered, so `tools/list`
+/// describes the verbs this particular server has rather than the ones
+/// this binary was compiled against.
 fn run(cli: &Cli) -> io::Result<()> {
     let mut client = RespClient::connect_url(&cli.url)?;
     let docs = client.request(&[b"COMMAND".to_vec(), b"DOCS".to_vec()])?;
@@ -122,6 +148,11 @@ fn handle_line(line: &str, cx: &mut ToolCx) -> Option<String> {
     })
 }
 
+/// Routes one parsed request to the method that answers it.
+///
+/// An unknown method is JSON-RPC's -32601 rather than a crash: a host may
+/// probe for capabilities this revision does not implement, and the reply
+/// that says so is part of the protocol.
 fn dispatch(req: &proto::Request, cx: &mut ToolCx) -> Result<Value, (i64, String)> {
     match req.method.as_str() {
         "initialize" => Ok(initialize_result()),
@@ -142,6 +173,10 @@ fn dispatch(req: &proto::Request, cx: &mut ToolCx) -> Result<Value, (i64, String
     }
 }
 
+/// The `initialize` reply: protocol revision, capabilities, and identity.
+///
+/// The version is `CARGO_PKG_VERSION`, so the handshake cannot report a
+/// release this binary is not — one of the six layers a version lives in.
 fn initialize_result() -> Value {
     obj(vec![
         ("protocolVersion", s("2024-11-05")),

@@ -18,8 +18,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
+/// The single channel every subscriber joins and the publisher floods.
+///
+/// One channel is the point: the number being measured is fan-out, so the
+/// server must copy each PUBLISH to all K subscribers rather than route it
+/// to one.
 const CHANNEL: &str = "bench";
 
+/// The value following `name` on the command line, or `default`.
+///
+/// A missing flag and a flag given as the last argument with nothing after
+/// it both fall to `default`, so a truncated invocation runs the default
+/// benchmark rather than failing — the shape a load generator wants.
 fn arg(name: &str, default: &str) -> String {
     let args: Vec<String> = std::env::args().collect();
     args.iter()
@@ -69,12 +79,20 @@ fn read_reply(s: &mut impl Read) -> std::io::Result<()> {
     Ok(())
 }
 
+/// One byte, or the error that ended the stream.
+///
+/// Unbuffered on purpose: it is only used by the reply reader on the
+/// control path, never in the drain loop that carries the measured bytes.
 fn read_byte(s: &mut impl Read) -> std::io::Result<u8> {
     let mut b = [0u8; 1];
     s.read_exact(&mut b)?;
     Ok(b[0])
 }
 
+/// Bytes up to the next CRLF, with the terminator consumed and dropped.
+///
+/// Lossy UTF-8: every line this reads is a RESP header (a length, a count,
+/// a status), so a non-UTF-8 byte here means the stream is already lost.
 fn read_line(s: &mut impl Read) -> std::io::Result<String> {
     let mut out = Vec::new();
     loop {
@@ -136,6 +154,12 @@ fn spawn_subscribers(
 fn publish_all(p: &mut TcpStream, pub_frame: &[u8], msgs: usize) {
     // BATCH: pipeline depth per publish-and-drain round; tuned to fit a
     // few socket buffers without filling them.
+    /// Pipeline depth per publish-and-drain round.
+    ///
+    /// Sized to fit a few socket buffers without filling them: too small
+    /// and the publisher stalls on round trips, too large and it blocks in
+    /// `write_all` while the replies it must drain are still queued behind
+    /// its own unsent bytes.
     const BATCH: usize = 1024;
     let mut sent = 0usize;
     while sent < msgs {
@@ -152,6 +176,12 @@ fn publish_all(p: &mut TcpStream, pub_frame: &[u8], msgs: usize) {
     }
 }
 
+/// Runs one fan-out measurement and prints the two rates it produced.
+///
+/// Start K subscribers, wait for every one to have SUBSCRIBEd, then time a
+/// flood of M publishes until all K have read their M messages. Timing
+/// starts only after the last subscriber is ready, so connection setup is
+/// outside the measurement.
 fn main() {
     let host = arg("--host", "127.0.0.1");
     let port: u16 = arg("--port", "6379").parse().unwrap();
