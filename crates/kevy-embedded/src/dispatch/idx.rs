@@ -148,6 +148,20 @@ pub(super) fn no_such_index(out: &mut Vec<u8>, name: &[u8]) {
     err(out, &format!("ERR no such index '{n}' (IDX.LIST enumerates them)"));
 }
 
+/// The server's wording for a call with too few arguments, verbatim:
+/// `ERR wrong number of arguments for 'idx.query' command`.
+///
+/// `badargs` below is for arguments that are PRESENT and wrong — a shape
+/// that will not parse, a range that will not read. The two were one
+/// message until the wire differential harness put the server and this
+/// facade side by side on the same argv and found them answering the same
+/// mistake in two different sentences. `dispatch_argv` is what
+/// every language binding is built on, so a binding user and a server user
+/// were being told different things about the same typo.
+pub(super) fn arity_err(out: &mut Vec<u8>, verb: &str) {
+    err(out, &format!("ERR wrong number of arguments for '{}' command", verb.to_lowercase()));
+}
+
 pub(super) fn badargs(out: &mut Vec<u8>, verb: &str, name: &[u8]) {
     let n = String::from_utf8_lossy(name);
     err(out, &format!("ERR {verb} '{n}': bad arguments — run COMMAND DOCS {verb} for the syntax"));
