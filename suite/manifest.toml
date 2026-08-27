@@ -202,6 +202,26 @@ timeout = 600
 requires = []
 proves = "the embedded facade and the server produce identical RESP bytes, or the difference is named with a reason"
 
+[[check]]
+id = "deadgate"
+area = "cov"
+tier = "full"
+cmd = "bash bench/deadgate.sh"
+expected = 3600
+timeout = 14400
+requires = ["linux"]
+proves = "the set of never-executed symbols may only shrink — what covgate's percentage cannot hold"
+
+[[check]]
+id = "doctestgate"
+area = "doc"
+tier = "full"
+cmd = "bash bench/doctestgate.sh"
+expected = 300
+timeout = 1800
+requires = ["linux", "nightly rustdoc"]
+proves = "what the documentation owes — items with no doc, items with no executable example — may only shrink"
+
 # ── docs ─────────────────────────────────────────────────────────────
 
 [[check]]
