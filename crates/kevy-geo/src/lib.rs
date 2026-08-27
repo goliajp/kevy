@@ -38,6 +38,27 @@ pub const GEO_STEP: u32 = 26;
 ///
 /// Bit layout matches Redis: latitude bits at even positions
 /// (0, 2, … 50), longitude bits at odd positions (1, 3, … 51).
+///
+/// # Examples
+///
+/// Palermo, the fixture Redis's own `GEOADD` documentation uses:
+///
+/// ```
+/// let score = kevy_geo::encode_score(13.361_389_29, 38.115_556_49).unwrap();
+/// assert_eq!(score, 3_479_099_956_230_698.0);
+/// assert_eq!(score, score as u64 as f64, "exact in f64, so a ZSet can hold it");
+/// ```
+///
+/// Out of range is `None`, not a clamp — a caller that clamped would store
+/// a point somewhere the user never named:
+///
+/// ```
+/// use kevy_geo::encode_score;
+/// assert!(encode_score(0.0, 86.0).is_none(), "beyond the WGS84 latitude");
+/// assert!(encode_score(181.0, 0.0).is_none());
+/// assert!(encode_score(f64::NAN, 0.0).is_none());
+/// assert!(encode_score(0.0, f64::INFINITY).is_none());
+/// ```
 pub fn encode_score(lon: f64, lat: f64) -> Option<f64> {
     if !(lon.is_finite() && lat.is_finite()) {
         return None;
@@ -55,6 +76,27 @@ pub fn encode_score(lon: f64, lat: f64) -> Option<f64> {
 /// Inverse of [`encode_score`]: decode a ZSet score back to the
 /// `(longitude, latitude)` *centre* of its geohash cell. Out-of-range
 /// scores saturate to the WGS84 bounds rather than producing garbage.
+///
+/// # Examples
+///
+/// The round trip lands on the cell centre, not the original point — a
+/// step-26 cell is metres across, and that is the resolution the format
+/// has:
+///
+/// ```
+/// use kevy_geo::{encode_score, decode_score};
+/// let (lon, lat) = (13.361_389_29, 38.115_556_49);
+/// let (dlon, dlat) = decode_score(encode_score(lon, lat).unwrap());
+/// assert!((dlon - lon).abs() < 1e-5 && (dlat - lat).abs() < 1e-5);
+/// ```
+///
+/// A score outside the 52-bit space saturates to the WGS84 corner rather
+/// than decoding garbage:
+///
+/// ```
+/// let (lon, lat) = kevy_geo::decode_score(-1.0);
+/// assert!(lon < -179.99 && lat < -85.05);
+/// ```
 pub fn decode_score(score: f64) -> (f64, f64) {
     let bits = score_to_bits(score);
     let (ilat, ilon) = deinterleave52(bits);
@@ -95,6 +137,26 @@ pub fn haversine_meters(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
 /// (NOT the WGS84 ±85.05 range used for the score). The high 55 bits
 /// of a step-26 standard-range encoding are emitted in 5-bit groups;
 /// the low 3 bits of the 11th char are always zero (52 ÷ 5 = 10 r 2).
+///
+/// # Examples
+///
+/// Byte-equal with what Redis returns for the same point:
+///
+/// ```
+/// let h = kevy_geo::encode_base32_geohash(13.361_389_29, 38.115_556_49);
+/// assert_eq!(&h, b"sqc8b49rny0");
+/// ```
+///
+/// The eleventh character is always a zero-padded group — 52 bits do not
+/// divide into eleven groups of five — so every hash this returns ends in
+/// a character from the low half of the alphabet:
+///
+/// ```
+/// for (lon, lat) in [(0.0, 0.0), (-180.0, -90.0), (179.9, 89.9)] {
+///     let h = kevy_geo::encode_base32_geohash(lon, lat);
+///     assert_eq!(h[10], b'0', "the pad is not real precision");
+/// }
+/// ```
 pub fn encode_base32_geohash(lon: f64, lat: f64) -> [u8; 11] {
     const ALPHABET: &[u8; 32] = b"0123456789bcdefghjkmnpqrstuvwxyz";
     let bits = encode_bits_full_range(lon, lat);
@@ -229,6 +291,32 @@ fn score_to_bits(score: f64) -> u64 {
 /// large enough to span the globe or the centre is invalid.
 // similar_names (ilat/ilon, dlat/dlon): the lat/lon pairing is the geo
 // domain's standard vocabulary; renaming would hurt, not help.
+///
+/// # Examples
+///
+/// The ranges over-approximate the circle, so a caller must still filter
+/// by real distance — this narrows the ZSet scan, it does not answer the
+/// query:
+///
+/// ```
+/// let ranges = kevy_geo::neighbor_score_ranges(13.361_389_29, 38.115_556_49, 200_000.0);
+/// assert!(!ranges.is_empty());
+/// for (lo, hi) in &ranges {
+///     assert!(lo <= hi, "each range is ordered");
+/// }
+/// ```
+///
+/// An impossible request degenerates to the whole keyspace rather than to
+/// nothing — scanning everything is a slow answer, and returning nothing
+/// would be a wrong one:
+///
+/// ```
+/// let all = (0.0, (1u64 << 52) as f64 - 1.0);
+/// use kevy_geo::neighbor_score_ranges as r;
+/// assert_eq!(r(0.0, 0.0, 0.0), vec![all], "a zero radius");
+/// assert_eq!(r(f64::NAN, 0.0, 100.0), vec![all], "an unusable centre");
+/// assert_eq!(r(0.0, 0.0, 40_000_000.0), vec![all], "wider than the planet");
+/// ```
 #[allow(clippy::similar_names)]
 pub fn neighbor_score_ranges(lon: f64, lat: f64, radius_m: f64) -> Vec<(f64, f64)> {
     if !lon.is_finite() || !lat.is_finite() || radius_m <= 0.0 {

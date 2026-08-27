@@ -34,6 +34,7 @@ extern crate alloc;
 compile_error!("kevy-bytes requires little-endian: heap-tag byte overlaps inline length byte");
 
 mod find_crlf;
+mod eq;
 mod traits;
 
 mod heap;
@@ -79,8 +80,10 @@ use core::slice;
 /// assert!(SmallBytes::from_slice(b"").is_empty());
 /// ```
 pub union SmallBytes {
-    inline: Inline,
-    heap: Heap,
+    // pub(crate) so `eq.rs` can branch on the variant directly; the union
+    // itself stays private to this crate's own modules.
+    pub(crate) inline: Inline,
+    pub(crate) heap: Heap,
 }
 
 const _: () = {
@@ -93,6 +96,18 @@ unsafe impl Sync for SmallBytes {}
 
 impl SmallBytes {
     /// Empty inline `SmallBytes` (zero allocation).
+    ///
+    /// # Examples
+    ///
+    /// `const`, so it can seed a static or an array without a run-time
+    /// initialiser:
+    ///
+    /// ```
+    /// use kevy_bytes::SmallBytes;
+    /// static EMPTY: SmallBytes = SmallBytes::new();
+    /// assert!(EMPTY.is_empty());
+    /// assert_eq!(EMPTY.heap_bytes(), 0);
+    /// ```
     pub const fn new() -> Self {
         Self {
             inline: Inline {
@@ -103,6 +118,16 @@ impl SmallBytes {
     }
 
     /// Construct from a byte slice — inline if `bytes.len() <= 22`, else heap.
+    ///
+    /// # Examples
+    ///
+    /// Twenty-two is the boundary, and it is exact:
+    ///
+    /// ```
+    /// use kevy_bytes::SmallBytes;
+    /// assert_eq!(SmallBytes::from_slice(&[b'x'; 22]).heap_bytes(), 0);
+    /// assert_eq!(SmallBytes::from_slice(&[b'x'; 23]).heap_bytes(), 23);
+    /// ```
     pub fn from_slice(bytes: &[u8]) -> Self {
         if bytes.len() <= INLINE_LEN_MAX as usize {
             let mut data = [0u8; INLINE_CAP];
@@ -123,6 +148,26 @@ impl SmallBytes {
 
     /// Take ownership of a `Vec<u8>` — inline if `vec.len() <= 22`, else **reuse
     /// the vec's allocation** (no copy on the heap path).
+    ///
+    /// # Examples
+    ///
+    /// The heap path keeps the vec's own buffer, so a value that arrived as
+    /// a `Vec` is stored without a second copy:
+    ///
+    /// ```
+    /// use kevy_bytes::SmallBytes;
+    /// let v = vec![b'z'; 64];
+    /// let addr = v.as_ptr();
+    /// let b = SmallBytes::from_vec(v);
+    /// assert_eq!(b.as_slice().as_ptr(), addr, "same allocation, not a copy");
+    /// ```
+    ///
+    /// A short vec goes inline instead, and its allocation is released:
+    ///
+    /// ```
+    /// use kevy_bytes::SmallBytes;
+    /// assert_eq!(SmallBytes::from_vec(vec![b'a'; 4]).heap_bytes(), 0);
+    /// ```
     pub fn from_vec(vec: Vec<u8>) -> Self {
         if vec.len() <= INLINE_LEN_MAX as usize {
             Self::from_slice(&vec)
@@ -174,6 +219,17 @@ impl SmallBytes {
     }
 
     /// Number of bytes stored.
+    ///
+    /// # Examples
+    ///
+    /// The same answer either side of the inline boundary — which is the
+    /// point of the type: where the bytes live is not the caller's problem.
+    ///
+    /// ```
+    /// use kevy_bytes::SmallBytes;
+    /// assert_eq!(SmallBytes::from_slice(&[0u8; 22]).len(), 22);
+    /// assert_eq!(SmallBytes::from_slice(&[0u8; 23]).len(), 23);
+    /// ```
     #[inline]
     pub fn len(&self) -> usize {
         if self.is_inline() {
@@ -186,6 +242,14 @@ impl SmallBytes {
     }
 
     /// Whether `len() == 0`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_bytes::SmallBytes;
+    /// assert!(SmallBytes::from_slice(b"").is_empty());
+    /// assert!(!SmallBytes::from_slice(b"\0").is_empty(), "a NUL byte is a byte");
+    /// ```
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
@@ -194,12 +258,32 @@ impl SmallBytes {
     /// Bytes this value holds on the heap (0 when inline). Lets memory-accounting
     /// callers (e.g. `maxmemory` enforcement) charge only the off-stack footprint
     /// without re-deriving the inline-length threshold.
+    ///
+    /// # Examples
+    ///
+    /// This is what `maxmemory` charges, so an inline value must cost zero
+    /// — it is already inside the entry the keyspace has counted:
+    ///
+    /// ```
+    /// use kevy_bytes::SmallBytes;
+    /// assert_eq!(SmallBytes::from_slice(b"user:1").heap_bytes(), 0);
+    /// assert_eq!(SmallBytes::from_slice(&[b'x'; 1000]).heap_bytes(), 1000);
+    /// ```
     #[inline]
     pub fn heap_bytes(&self) -> usize {
         if self.is_inline() { 0 } else { self.len() }
     }
 
     /// Borrow the bytes (no allocation; same for inline and heap variants).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_bytes::SmallBytes;
+    /// let b = SmallBytes::from_slice(b"GET");
+    /// assert_eq!(b.as_slice(), b"GET");
+    /// assert_eq!(SmallBytes::new().as_slice(), b"");
+    /// ```
     #[inline]
     pub fn as_slice(&self) -> &[u8] {
         if self.is_inline() {
@@ -214,12 +298,38 @@ impl SmallBytes {
     }
 
     /// Copy into a fresh `Vec<u8>` (clone semantics).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_bytes::SmallBytes;
+    /// let b = SmallBytes::from_slice(b"copy me");
+    /// assert_eq!(b.to_vec(), b"copy me");
+    /// assert_eq!(b.as_slice(), b"copy me", "the original still holds them");
+    /// ```
     pub fn to_vec(&self) -> Vec<u8> {
         self.as_slice().to_vec()
     }
 
     /// Consume self and return an owned `Vec<u8>`. The heap path reuses the
     /// existing allocation; the inline path copies into a new vec.
+    ///
+    /// # Examples
+    ///
+    /// A heap value hands its buffer straight back, so a round trip through
+    /// `SmallBytes` costs no allocation at either end:
+    ///
+    /// ```
+    /// use kevy_bytes::SmallBytes;
+    /// let v = vec![b'q'; 128];
+    /// let addr = v.as_ptr();
+    /// assert_eq!(SmallBytes::from_vec(v).into_vec().as_ptr(), addr);
+    /// ```
+    ///
+    /// ```
+    /// use kevy_bytes::SmallBytes;
+    /// assert_eq!(SmallBytes::from_slice(b"short").into_vec(), b"short");
+    /// ```
     pub fn into_vec(self) -> Vec<u8> {
         if self.is_inline() {
             self.as_slice().to_vec()
@@ -315,81 +425,6 @@ impl SmallBytes {
     }
 }
 
-// `Debug`, `PartialOrd`, `Ord`, `Hash`, `AsRef<[u8]>`, `Borrow<[u8]>`,
-// `KevyHash`, `From<&[u8]>`, `From<Vec<u8>>` live in `crate::traits` —
-// they only need the public `as_slice()` view. `PartialEq` / `Eq` stay
-// here because the same-variant fast paths reach into `self.inline` /
-// `self.heap` directly.
-
-impl SmallBytes {
-    /// Both sides inline: compare tag-lengths, then the inline bytes.
-    /// Single call site in [`PartialEq::eq`]; `inline(always)` keeps the
-    /// split codegen-identical to the pre-split fused body.
-    #[allow(clippy::inline_always)] // see doc above: codegen parity with the pre-split body
-    #[inline(always)]
-    fn eq_inline_inline(&self, other: &Self, self_tag: u8, other_tag: u8) -> bool {
-        let len = self_tag as usize;
-        if len != other_tag as usize {
-            return false;
-        }
-        // SAFETY: both in inline variant; first `len` bytes valid.
-        let a = unsafe { slice::from_raw_parts(self.inline.data.as_ptr(), len) };
-        let b = unsafe { slice::from_raw_parts(other.inline.data.as_ptr(), len) };
-        a == b
-    }
-
-    /// Both sides heap: compare stored lengths, then the heap bytes.
-    /// Single call site in [`PartialEq::eq`]; `inline(always)` as above.
-    #[allow(clippy::inline_always)] // see doc above: codegen parity with the pre-split body
-    #[inline(always)]
-    fn eq_heap_heap(&self, other: &Self) -> bool {
-        // SAFETY: both in heap variant.
-        let (a_len, b_len) = unsafe { (self.heap.length(), other.heap.length()) };
-        if a_len != b_len {
-            return false;
-        }
-        // SAFETY: heap pointers + len are valid.
-        let a = unsafe { slice::from_raw_parts(self.heap.ptr.as_ptr(), a_len) };
-        let b = unsafe { slice::from_raw_parts(other.heap.ptr.as_ptr(), b_len) };
-        a == b
-    }
-}
-
-impl PartialEq for SmallBytes {
-    /// Specialised over the slice form (`as_slice == as_slice`) by branching
-    /// on variant **once** and reading the relevant length / pointer pair
-    /// directly. Same-variant cases (inline/inline + heap/heap, which are the
-    /// only ones produced by a single allocator) skip a redundant `as_slice`
-    /// dispatch on each side; the mixed case falls back to the slice form.
-    #[inline]
-    fn eq(&self, other: &Self) -> bool {
-        // SAFETY: byte 23 (`inline.tag`) is always a valid load in either
-        // variant — it's either the inline-length 0..=22 or 0xFF as the
-        // heap-discriminator overlap (see crate doc).
-        let self_tag = unsafe { self.inline.tag };
-        let other_tag = unsafe { other.inline.tag };
-        let self_inline = self_tag <= INLINE_LEN_MAX;
-        let other_inline = other_tag <= INLINE_LEN_MAX;
-        match (self_inline, other_inline) {
-            (true, true) => self.eq_inline_inline(other, self_tag, other_tag),
-            (false, false) => self.eq_heap_heap(other),
-            // Mixed inline/heap: this IS reachable in normal operation.
-            // It happens whenever HashMap (or any `==` consumer) compares
-            // an inline-length value (len ≤ 22) against a heap-length
-            // value (len > 22). Two SmallBytes of different lengths can
-            // *collide* on hashbrown's hash + quadratic probe, and the
-            // probe checks equality even though the lengths differ. The
-            // pre-fix `unreachable!()` here was a logic bug — it assumed
-            // the same-arm short-circuits cover all cases, but they only
-            // fire when both sides land in the same arm. Different-length
-            // collisions correctly fall through here. The right answer
-            // is just slice-form equality (which short-circuits on `len`
-            // internally), giving `false` whenever the lengths differ.
-            _ => self.as_slice() == other.as_slice(),
-        }
-    }
-}
-impl Eq for SmallBytes {}
 
 
 #[cfg(test)]
