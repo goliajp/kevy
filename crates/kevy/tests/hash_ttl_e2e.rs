@@ -121,3 +121,51 @@ fn hexpire_survives_replay_without_reanchor() {
     h2.join().unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The tick's sweep reaps a due field, and nothing had to read it.
+///
+/// `sweep_hash_field_ttls` is the only path that calls `Store::tick_hash_ttl`,
+/// and it exists so a field expiring reaches the write hook — a covering
+/// `VALUES` copy must not outlive the field it copies. Every hash operation
+/// purges lazily on access, so a test that reads the field proves nothing
+/// about the sweep: the read would have removed it either way.
+///
+/// So the deadline is installed through the snapshot loader hook, which does
+/// not take the command path's immediate-delete branch, and the accounting is
+/// read with `hash_ttl_each`, which iterates without purging. If the tick did
+/// not sweep, the entry is still there.
+///
+/// It is also the reason this is not written with a sleep. The sweep only has
+/// work when a deadline falls due between ticks, which under a loaded runner
+/// may or may not happen inside any particular window — and a symbol that is
+/// covered on some runs and not others is a ratchet that fires on the weather.
+#[test]
+fn the_tick_sweeps_a_due_hash_field_without_anyone_reading_it() {
+    use kevy_rt::Commands as _;
+
+    let kevy = kevy::KevyCommands::new();
+    let mut store = kevy::KeyspaceStore::new();
+
+    let argv = |parts: &[&[u8]]| {
+        kevy::Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>())
+    };
+    let r = kevy.dispatch(&mut store, &argv(&[b"HSET", b"h", b"f", b"v"]));
+    assert_eq!(r, b":1\r\n");
+
+    // Past deadline, installed the way a snapshot restores one — the command
+    // path would delete the field itself and never reach the sweep.
+    store.load_hash_field_ttl(b"h", b"f", 1);
+    let mut before = 0usize;
+    store.hash_ttl_each(|_, _, _| before += 1);
+    assert_eq!(before, 1, "the deadline is installed");
+
+    kevy.on_shard_tick(&mut store);
+
+    let mut after = 0usize;
+    store.hash_ttl_each(|_, _, _| after += 1);
+    assert_eq!(after, 0, "the sweep reaped it; no read was involved");
+    assert_eq!(
+        kevy.dispatch(&mut store, &argv(&[b"HEXISTS", b"h", b"f"])),
+        b":0\r\n"
+    );
+}
