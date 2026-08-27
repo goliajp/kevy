@@ -601,7 +601,6 @@ dependencies = [
 name = "kevy-lua"
 version = "5.4.1"
 dependencies = [
- "kevy-bench",
  "luna-core",
 ]
 
