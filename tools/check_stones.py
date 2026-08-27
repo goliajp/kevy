@@ -55,8 +55,12 @@ def check_one(row, bar):
         bad["min_examples"] = f"{d.get('examples', 0)} executable examples"
     if bar.get("must_be_measured") and not row.get("measured_regions"):
         bad["must_be_measured"] = "absent from the execution corpus"
-    if bar.get("semver_clean") and sv and not sv.get("ok"):
-        bad["semver_clean"] = sv.get("note", "semver break")
+    if bar.get("semver_clean") and not sv.get("ok"):
+        # An ABSENT reading lands here too, and deliberately. `--skip-semver`
+        # writes `{}`, and the previous spelling — `and sv and not ok` —
+        # made an empty reading satisfy the rule: skipping the check passed
+        # it. A producer that did not look is not a stone that is clean.
+        bad["semver_clean"] = sv.get("note") or "no semver reading in the report"
     return bad
 
 
@@ -92,9 +96,20 @@ def main():
         for rule in sorted(allowed - set(bad)):
             stale.append(f"{crate}: {rule} — now meets the bar; remove the waiver")
 
-    if doc.get("dead_platform") and doc["dead_platform"] != "linux":
-        print(f"stonegate: NOTE — the report's coverage readings come from "
-              f"{doc['dead_platform']}, not the enforcing platform")
+    # A note is not enough. Code switched off by cfg is ABSENT from a
+    # coverage run rather than dead in it, so a report taken anywhere but
+    # the enforcing platform cannot see kevy-uring at all — the crate does
+    # not compile there — and `must_be_measured` then judges a stone the
+    # producer never looked at. Two of this file's waivers exist only
+    # because a macOS reading was believed. The refusal is what makes the
+    # reading's platform part of the verdict instead of a footnote.
+    platform = doc.get("dead_platform")
+    if platform != "linux":
+        refuse(f"the report's coverage readings come from {platform or 'nowhere'}, "
+               f"not the enforcing platform. On any other host the Linux-only "
+               f"stones are absent rather than dead, and 'absent' is not a "
+               f"score. Take the report on Linux (CI does, in the stonereport "
+               f"job) and re-read it here.")
 
     if fail or stale:
         print("stonegate: FAIL")
