@@ -36,6 +36,39 @@ manifest_floor = 43
 precommit = 300
 prerelease = 5400
 
+
+# ── where each requirement is met ────────────────────────────────────
+#
+# The manifest names requirements; until now it never said where any of
+# them is satisfied. Two consequences, both real. A NOT-RUN row told the
+# reader what was missing and never where the row does run, so the release
+# report's accounting — "these five run in CI's site job" — was derived by
+# hand every time. And a requirement that NOTHING can satisfy looks exactly
+# like one satisfied on a machine nobody happens to be at: `device` is set
+# in one place in this repository, `tools/suite.py`, by nothing.
+#
+# Audited: every requirement a check names must appear here, and every
+# entry here must be named by some check. A `met` of "" is a declaration
+# that the row runs nowhere — allowed, because saying so is the point, and
+# loud in the audit's summary rather than silent in a NOT-RUN line.
+[suite.requirements]
+"linux" = "CI's Linux jobs, and the lx64 box"
+"box" = "the lx64 box, as kevybench with TMPDIR=$HOME/captmp"
+"server-release" = "anywhere after cargo build --release -p kevy --bin kevy"
+"server-debug" = "anywhere after cargo build -p kevy --bin kevy"
+"docker" = "CI's Linux jobs, and the lx64 box"
+"node" = "CI's site job (actions/setup-node), and any workstation with node"
+"web-deps" = "CI's site job, after npm ci in web/"
+"chromium" = "CI's site job, via npx playwright install chromium"
+"wasm-artifact" = "CI's site job, after npm run engine in web/"
+"nightly rustdoc" = "CI's docdeficit job"
+"nightly rustdoc coverage tables in target/doc" = "CI's stonereport job"
+"cargo-semver-checks" = "CI's stonereport job"
+"bench/STONE-REPORT.json from stone-report" = "CI's stonereport job, uploaded as stone-report-linux"
+"pgcmp-infra" = "the lx64 box, where the kevy-pgcmp container is resident"
+"ci" = "CI"
+"device" = ""
+
 # ── hygiene ──────────────────────────────────────────────────────────
 
 [[check]]
