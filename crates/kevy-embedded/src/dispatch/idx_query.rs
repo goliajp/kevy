@@ -93,6 +93,15 @@ mod where_head;
 use where_head::{cmd_idx_count, driving_bounds, parse_scalar_head};
 
 fn cmd_idx_query(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
+    // The server's arity for IDX.QUERY is -4 (a minimum of four), and it
+    // refuses a shorter call with Redis's wording before it looks at the
+    // catalog. Matched here so the two surfaces answer the same typo the
+    // same way; COMPOSE and HYBRID are longer forms and clear this bar.
+    if argv.len() < 4 && !argv.get(1).is_some_and(|n| {
+        n.eq_ignore_ascii_case(b"COMPOSE") || n.eq_ignore_ascii_case(b"HYBRID")
+    }) {
+        return super::idx::arity_err(out, "IDX.QUERY");
+    }
     let Some(name) = argv.get(1) else {
         return badargs(out, "IDX.QUERY", b"");
     };

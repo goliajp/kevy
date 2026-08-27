@@ -155,8 +155,7 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
         || dispatch_generic(cmd, store, args, out)
         || crate::dispatch_replay::dispatch_multikey_stub(cmd, store, args, out);
     if !handled {
-        let shown = String::from_utf8_lossy(name);
-        encode_error(out, &format!("ERR unknown command '{shown}'"));
+        crate::cmd::unhandled_verb(out, name, args.len());
         return;
     }
     // Post-write: trim back under `maxmemory` per the active policy. Gated on
