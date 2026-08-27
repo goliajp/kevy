@@ -11,6 +11,12 @@ readme = "README.md"
 keywords = ["redis", "cli", "repl", "resp", "kevy"]
 categories = ["command-line-utilities", "database"]
 
+
+# v6 — not packaged: these reference a dependency the published manifest
+# cannot declare, and `cargo package` would ship source that does not
+# compile. These four drive a live server through kevy-testnet, which is dev-only
+# scaffolding and never published.
+exclude = ["tests/backfill_keys_union.rs", "tests/lint_shapes.rs", "tests/migrate_roundtrip.rs", "tests/sql_compile_apply.rs"]
 [lints]
 workspace = true
 

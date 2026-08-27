@@ -29,4 +29,4 @@ kevy-hash     = { path = "../kevy-hash",     version = "5.4.1", default-features
 kevy-madvise  = { path = "../kevy-madvise",  version = "5.4.1", default-features = false }
 
 [dev-dependencies]
-kevy-bench = { path = "../kevy-bench" }
+kevy-bench = { path = "../kevy-bench", version = "5.4.1" }

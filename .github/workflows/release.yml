@@ -81,7 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           chain=$(printf '%s\n' \
-            kevy-alloc kevy-compress kevy-config kevy-geo kevy-hash kevy-bytes \
+            kevy-bench kevy-alloc kevy-compress kevy-config kevy-geo kevy-hash kevy-bytes \
             kevy-lua kevy-lua-host kevy-madvise kevy-map kevy-ranktree kevy-resp \
             kevy-elect kevy-replicate kevy-resp-client kevy-mcp kevy-ring \
             kevy-scope kevy-sys kevy-text kevy-time kevy-index kevy-scalar \
@@ -177,7 +177,7 @@ jobs:
           # suite needs a test network, a chaos harness and the CLI. Stones
           # do make that promise, so theirs are versioned.
           for c in \
-            kevy-alloc kevy-compress kevy-config kevy-geo kevy-hash kevy-bytes \
+            kevy-bench kevy-alloc kevy-compress kevy-config kevy-geo kevy-hash kevy-bytes \
             kevy-lua kevy-lua-host kevy-madvise kevy-map kevy-ranktree kevy-resp \
             kevy-elect kevy-replicate kevy-resp-client kevy-mcp kevy-ring \
             kevy-scope kevy-sys kevy-text kevy-time kevy-index kevy-scalar \

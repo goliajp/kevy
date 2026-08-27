@@ -43,5 +43,5 @@ kevy-vlog = { path = "../kevy-vlog", version = "5.4.1", optional = true }
 kevy-seg = { path = "../kevy-seg", version = "5.4.1", optional = true }
 
 [dev-dependencies]
-kevy-bench = { path = "../kevy-bench" }
+kevy-bench = { path = "../kevy-bench", version = "5.4.1" }
 kevy-tmpdir = { path = "../kevy-tmpdir", version = "5.4.1" }

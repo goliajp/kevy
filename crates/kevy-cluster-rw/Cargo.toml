@@ -13,6 +13,12 @@ readme = "README.md"
 keywords = ["kevy", "redis", "cluster", "client", "replication"]
 categories = ["database", "api-bindings"]
 
+
+# v6 — not packaged: these reference a dependency the published manifest
+# cannot declare, and `cargo package` would ship source that does not
+# compile. Needs kevy-testnet and the kevy server; neither is resolvable from a
+# published kevy-cluster-rw.
+exclude = ["tests/rw_split.rs"]
 [lints]
 workspace = true
 

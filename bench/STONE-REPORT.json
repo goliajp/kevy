@@ -20,6 +20,7 @@
       "semver": {
         "ok": true,
         "checks": 223,
+        "unpublished": false,
         "note": ""
       }
     },
@@ -27,11 +28,11 @@
       "crate": "kevy-bytes",
       "dead_regions": 5,
       "measured_regions": 448,
-      "packaged": true,
-      "built": true,
+      "packaged": false,
+      "built": false,
       "tested": false,
       "tests": 0,
-      "lift_note": "error[E0432]: unresolved import `kevy_bench`",
+      "lift_note": "  required by package `kevy-bytes v5.4.1 (/Users/doracawl/workspace/goliajp/kevy/crates/kevy-bytes)`",
       "docs": {
         "documented": 12,
         "items": 12,
@@ -41,6 +42,7 @@
       "semver": {
         "ok": true,
         "checks": 223,
+        "unpublished": false,
         "note": ""
       }
     },
@@ -48,11 +50,11 @@
       "crate": "kevy-hash",
       "dead_regions": 31,
       "measured_regions": 535,
-      "packaged": true,
-      "built": true,
+      "packaged": false,
+      "built": false,
       "tested": false,
       "tests": 0,
-      "lift_note": "error[E0432]: unresolved import `kevy_bench`",
+      "lift_note": "  required by package `kevy-hash v5.4.1 (/Users/doracawl/workspace/goliajp/kevy/crates/kevy-hash)`",
       "docs": {
         "documented": 10,
         "items": 10,
@@ -62,6 +64,7 @@
       "semver": {
         "ok": true,
         "checks": 223,
+        "unpublished": false,
         "note": ""
       }
     },
@@ -83,6 +86,7 @@
       "semver": {
         "ok": true,
         "checks": 223,
+        "unpublished": false,
         "note": ""
       }
     },
@@ -90,11 +94,11 @@
       "crate": "kevy-map",
       "dead_regions": 24,
       "measured_regions": 1221,
-      "packaged": true,
-      "built": true,
+      "packaged": false,
+      "built": false,
       "tested": false,
       "tests": 0,
-      "lift_note": "error[E0432]: unresolved import `kevy_bench`",
+      "lift_note": "  required by package `kevy-map v5.4.1 (/Users/doracawl/workspace/goliajp/kevy/crates/kevy-map)`",
       "docs": {
         "documented": 13,
         "items": 13,
@@ -104,6 +108,7 @@
       "semver": {
         "ok": true,
         "checks": 223,
+        "unpublished": false,
         "note": ""
       }
     },
@@ -125,6 +130,7 @@
       "semver": {
         "ok": true,
         "checks": 223,
+        "unpublished": false,
         "note": ""
       }
     },
@@ -146,6 +152,7 @@
       "semver": {
         "ok": true,
         "checks": 223,
+        "unpublished": false,
         "note": ""
       }
     },
@@ -153,11 +160,11 @@
       "crate": "kevy-ring",
       "dead_regions": 0,
       "measured_regions": 360,
-      "packaged": true,
-      "built": true,
+      "packaged": false,
+      "built": false,
       "tested": false,
       "tests": 0,
-      "lift_note": "error[E0432]: unresolved import `kevy_bench`",
+      "lift_note": "  required by package `kevy-ring v5.4.1 (/Users/doracawl/workspace/goliajp/kevy/crates/kevy-ring)`",
       "docs": {
         "documented": 11,
         "items": 11,
@@ -167,6 +174,7 @@
       "semver": {
         "ok": true,
         "checks": 223,
+        "unpublished": false,
         "note": ""
       }
     },
@@ -188,6 +196,7 @@
       "semver": {
         "ok": true,
         "checks": 223,
+        "unpublished": false,
         "note": ""
       }
     },
@@ -209,6 +218,7 @@
       "semver": {
         "ok": true,
         "checks": 223,
+        "unpublished": false,
         "note": ""
       }
     },
@@ -230,6 +240,7 @@
       "semver": {
         "ok": true,
         "checks": 223,
+        "unpublished": false,
         "note": ""
       }
     },
@@ -251,6 +262,7 @@
       "semver": {
         "ok": true,
         "checks": 223,
+        "unpublished": false,
         "note": ""
       }
     },
@@ -272,6 +284,7 @@
       "semver": {
         "ok": true,
         "checks": 223,
+        "unpublished": false,
         "note": ""
       }
     },
@@ -293,6 +306,7 @@
       "semver": {
         "ok": true,
         "checks": 223,
+        "unpublished": false,
         "note": ""
       }
     },
@@ -314,6 +328,7 @@
       "semver": {
         "ok": true,
         "checks": 223,
+        "unpublished": false,
         "note": ""
       }
     },
@@ -335,6 +350,7 @@
       "semver": {
         "ok": true,
         "checks": 223,
+        "unpublished": false,
         "note": ""
       }
     },
@@ -356,7 +372,30 @@
       "semver": {
         "ok": true,
         "checks": 223,
+        "unpublished": false,
         "note": ""
+      }
+    },
+    {
+      "crate": "kevy-bench",
+      "dead_regions": 2,
+      "measured_regions": 130,
+      "packaged": true,
+      "built": true,
+      "tested": true,
+      "tests": 4,
+      "lift_note": "",
+      "docs": {
+        "documented": 13,
+        "items": 13,
+        "pct": 100.0,
+        "examples": 1
+      },
+      "semver": {
+        "ok": true,
+        "checks": 0,
+        "unpublished": true,
+        "note": "not on crates.io yet \u2014 no baseline to break"
       }
     }
   ]
