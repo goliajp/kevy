@@ -1,3 +1,72 @@
+# v6 — clean arch(属主 charter 2026-08-27:干净架构、stone 做扎实、
+# 质量/文档/性能到当前极限、不允许死代码死路径、不允许同能力的复杂实现)
+
+设计:`.claude/rfcs/2026-08-27-v6-toolchain.md`(Phase A,仪器/量具/夹具)。
+论点:此前四条基线**全是标量加容差带**,而 v6 的判据不是数量 ——
+「无死路径」说的是**集合**,「无冗余实现」说的是**关系**,「stone 扎实」
+说的是**能不能在本 workspace 之外站起来**。
+
+## 工具链 ✅ 十一件全部建成并接上真基线
+
+suite 从 75 项到 83 项(precommit 23 ⊆ prerelease 39 ⊆ full 83)。
+
+| 类 | 件 |
+|---|---|
+| 量具 | depgate、packagegate、lockgate、stonegate、deadgate、doctestgate |
+| 仪器 | 死路径图谱、克隆图谱、stone 报告、doc 赤字 |
+| 夹具 | 语料声明、抬出沙箱、差分台架(进程内 + 线路) |
+| 机制 | set-ratchet(存身份不存数字;基线是**三轮包络**) |
+
+- [x] **死集合的噪声尾部已被证明并申报**(三轮 CI 各给一套不同的增长符号)。
+      基线改为**逐元素三轮最大值**:增长 = 比**最坏那轮还差**。
+      注入回归(一符号 +50、一新符号 +30)在**总数低于基线**时仍判红。
+      `bench/FINDING-2026-08-28-part-of-the-dead-set-is-not-reproducible.md`
+
+## 已闭合的缺陷(全部由这些仪器挖出并验证)
+
+- [x] **12/14 个带 arity 守卫的动词把存在的命令报成 unknown**。`verb_meta`
+      一直带着 arity,主派发点从没问过它。`cmd::unhandled_verb` 现在问。
+- [x] **15 个已发布 crate 出货了编译不了的代码**(122 个文件引用发布清单
+      丢弃的 dev-dep)。对着 crates.io 真包核实过。packagegate 封死这一类。
+- [x] **两个面对同一拼写错误说两句不同的话**(arity 措辞漂移)。111 个双面
+      动词里 109 个现在逐字一致,剩 2 个是**签名不同**(服务端分片、facade 不分片)。
+- [x] **一个未使用 import 同时打红四个 CI job**(wasm32 ×2、musl/no_std、site)。
+- [x] **陈旧 Cargo.lock**:每个普通 cargo 命令都静默重生成它,只有 `--locked`
+      会反对 —— 而它在 full 档。lockgate 把这个问题挪到 precommit。
+
+## 已量到的进展
+
+- [x] **文档 93.9% → 97.4%**;**stone + steel 34/34 全部 100%**;
+      kevy-store / kevy-rt / kevy-vlog / kevy-window 带 `#![warn(missing_docs)]`,
+      新缺口是**指名行号的编译错误**。kevy-rt 那 35 处**全是写得很详尽的变体
+      里面的字段** —— 人工审读看不到的形状。
+- [x] **doctest 从 18 项到 29 项带示例,45 个 doctest 全过**;17/18 个 stone
+      有可执行示例(第 18 个 kevy-uring 在 macOS 上整个 crate 为空)。
+- [x] **死区**:kevy-scalar 42.0%→27.8%(移植 spg 的 ReDoS 测试 + 引擎级标志/
+      类/捕获组测试,620 个)、kevy-client-async 70.5%→39.3%(733 个)、
+      kevy-cli 42.4%→37.5%。全部用**消融**量,不数测试条数。
+- [x] **stone 豁免 24 条/14 crate → 11 条/5 crate**。kevy-bench 从 support
+      升格为 stone 并进入发布链首位。
+
+## 开着的
+
+- [ ] **4 条 stone 豁免等 v6.0.0 发布 kevy-bench**(链已排好,它在首位)。
+      这是唯一能关掉它们的动作。
+- [ ] **kevy-uring 的 3 条豁免**:它只能在 Linux 上被测量。
+- [ ] **69 处未文档**,全在 cement / support:kevy-mcp 53、gen-docs 6、
+      kevy-pubsub-bench 5、kevy-chaos 4、kevy-testnet 1。
+- [ ] **2,632 项没有可执行示例**(1.1%)。stone 已过 min_examples=1 的地板,
+      但那是**起点不是终点**。
+- [ ] **kevy-embedded ↔ kevy 的 9,400 行**:两个台架对**能到达的一切**逐字节
+      一致(进程内 66/70、线路 23/26,每条例外具名),但只覆盖约四分之一
+      动词面,而三个具名缺口正落在克隆图谱匹配最密处。
+      `bench/FINDING-2026-08-28-two-surfaces-that-drifted.md`
+- [ ] **crashgate T6 cell 结果不确定**(切点在字节偏移而非帧边界;三轮
+      100%/100%/50.07%)。**不是本 arc 造成的,也不该由本 arc 拍板** ——
+      修法会改变这个 cell 测的东西。`bench/FINDING-2026-08-28-crashgate-*.md`
+- [ ] **性能轴一次未碰**。arena 面上对 Redis 8 全线领先(1.08×–2.76×),
+      最窄的是 LPUSH/ZADD;攻 1.08× 的领先需要 decomposition 与独占盒时间。
+
 # kevy roadmap
 
 唯一的开放工作清单。**线性化的执行顺序** — 上面的先做，下面的后做。
