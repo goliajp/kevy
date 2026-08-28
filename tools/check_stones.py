@@ -99,8 +99,21 @@ def main():
 
     w = tomllib.loads(WAIVERS.read_text())
     bar = w["bar"]
+    entries = w.get("waiver", [])
+    # The file says the list "may only shrink". Nothing held that: a new
+    # waiver with a reason and a closes_when was accepted like any other,
+    # and a ratchet nobody counts is a wish. `max_waivers` is the count,
+    # and raising it is the deliberate act the rule was asking for.
+    cap = bar.get("max_waivers")
+    if cap is None:
+        refuse("suite/stone-waivers.toml has no [bar].max_waivers — the "
+               "shrink-only rule needs a number to ratchet against")
+    if len(entries) > cap:
+        refuse(f"{len(entries)} waiver(s) against a cap of {cap} — the list may only "
+               f"shrink. Raise [bar].max_waivers in the same commit, with the reason, "
+               f"or do not add the waiver")
     waived = {}
-    for e in w.get("waiver", []):
+    for e in entries:
         if not e.get("reason", "").strip() or not e.get("closes_when", "").strip():
             refuse(f"waiver for {e.get('crate')} needs both a reason and closes_when")
         waived.setdefault(e["crate"], set()).update(e["rules"])
@@ -134,9 +147,10 @@ def main():
     # coverage run rather than dead in it, so a report taken anywhere but
     # the enforcing platform cannot see kevy-uring at all — the crate does
     # not compile there — and `must_be_measured` then judges a stone the
-    # producer never looked at. Two of this file's waivers exist only
-    # because a macOS reading was believed. The refusal is what makes the
-    # reading's platform part of the verdict instead of a footnote.
+    # producer never looked at. Waivers have been written on the strength
+    # of a macOS reading before — it said kevy-uring has zero tests, and on
+    # Linux it has twelve. The refusal is what makes the reading's platform
+    # part of the verdict instead of a footnote.
     # A report about another release is a different question, exactly as a
     # report from another platform is. The checked-in copy said 5.4.1 while
     # the workspace was 6.0.0, and nothing here noticed.
