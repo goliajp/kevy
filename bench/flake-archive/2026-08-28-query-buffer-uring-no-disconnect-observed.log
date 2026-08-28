@@ -23,3 +23,39 @@
 # crates/kevy, kevy-rt or uring — lock files, gate scripts, kevy-compress,
 # kevy-seg, kevy-scalar only. This test was reshaped once before for an
 # io_uring blind spot (ca7696e2).
+2026-08-28T07:06:55.4586373Z kevy: reactor = io_uring (io_uring available)
+2026-08-28T07:06:55.4587295Z kevy: shard 0 closing conn 2: query buffer exceeded 4096 bytes
+2026-08-28T07:06:55.4587779Z thread 'a_streaming_giant_frame_is_disconnected_at_the_cap' (23936) panicked at crates/kevy/tests/query_buffer_limit.rs:86:5:
+
+# Second occurrence (CI run 33149911511, job 98779260996, commit 7dba784f)
+#
+# Identical shape: reactor = io_uring, "shard 0 closing conn 2: query buffer
+# exceeded 4096 bytes" present, client's 64-iteration loop (~4 s) saw neither
+# EOF nor a write error. The first entry above said "not reproduced"; it has
+# now reproduced, and that sentence is superseded rather than edited, because
+# what it recorded was true when written.
+#
+# Rate: 2 failures against 7 successes across the completed runs of
+# `test (x86_64-unknown-linux-gnu)` on this branch (9 more were cancelled by
+# pushes). Roughly one run in five.
+#
+# What the second look established, and what it did not:
+#
+#   uring_reactor.rs:316   reap_counter = reap_counter.wrapping_add(1);
+#                          if reap_counter & 0xF == 0 { uring_reap_closed(..) }
+#
+# The fd is not dropped by `uring_mark_closing` — that sets a flag, queues the
+# conn for the arm loop and pushes it to a ready-set. `uring_reap_closed` does
+# the drop, and it runs on every SIXTEENTH reactor iteration. So a closing
+# conn's teardown is gated behind a counter, not behind its own readiness.
+#
+# That is worth knowing and does NOT explain four seconds. `uring_park` blocks
+# in submit_and_wait(1) with a bounding timeout of 50 ms (tick cadence), so
+# iterations continue even on an idle shard: sixteen of them is 800 ms worst
+# case, and the test's window is about 4 s. The client also writes every ~62 ms,
+# and each write that is still being received produces a CQE.
+#
+# So: the gate is real, the arithmetic does not close, and the remaining gap is
+# unexplained. Not reproducible here — macOS has no io_uring — and every commit
+# in flight when both failures happened touched docs, gate scripts and
+# allocation bounds, nothing in crates/kevy, kevy-rt or uring.
