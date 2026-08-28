@@ -103,9 +103,16 @@ one_run() { # $1 = name, $2 = reactor (auto|epoll), $3... = load args
     redis-benchmark -p $PORT "$@" -q >/dev/null 2>&1 &
     BENCH=$!
     sleep 2 # let the load reach steady state before probing
-    local idle="?"
-    [ -r /proc/stat ] && idle=$(box_idle)
-    printf '  [%s] box idle %s%% while probing\n' "$name" "$idle"
+    # FOREIGN cpu, not idle%. The first version of this printed idle% during
+    # the probe and read 51% — which was this gate's own load generator, so
+    # the figure could not tell "I am busy" from "someone else is", the one
+    # thing it exists to answer. Sum %CPU over everything that is not this
+    # gate's server, its benchmark, or the kernel's own workers.
+    local foreign
+    foreign=$(ps -eo pcpu,pid,comm --no-headers 2>/dev/null \
+        | awk -v s="${SRV:-0}" -v b="${BENCH:-0}" \
+              '$2!=s && $2!=b && $3!~/^(kworker|ksoftirqd|migration|rcu_)/ {t+=$1} END {printf "%.0f", t+0}')
+    printf '  [%s] foreign cpu %s%% while probing\n' "$name" "${foreign:-?}"
     target/release/examples/tail_probe $PORT 60
     kill -9 "$BENCH" 2>/dev/null; wait "$BENCH" 2>/dev/null; BENCH=""
     kill -9 "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null; SRV=""
