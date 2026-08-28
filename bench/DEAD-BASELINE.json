@@ -1,9 +1,9 @@
 {
   "corpus": "c1",
   "platform": "linux",
-  "total_regions": 162948,
-  "dead_regions": 27800,
-  "llvm_per_instantiation_dead": 28670,
+  "total_regions": 163130,
+  "dead_regions": 27642,
+  "llvm_per_instantiation_dead": 28628,
   "crates": {
     "kevy": {
       "regions": 28813,
@@ -42,7 +42,7 @@
       "dead": 87
     },
     "kevy-compress": {
-      "regions": 1374,
+      "regions": 1403,
       "dead": 43
     },
     "kevy-config": {
@@ -70,16 +70,16 @@
       "dead": 31
     },
     "kevy-index": {
-      "regions": 5863,
-      "dead": 449
+      "regions": 5866,
+      "dead": 438
     },
     "kevy-jni": {
       "regions": 526,
       "dead": 526
     },
     "kevy-lua": {
-      "regions": 2774,
-      "dead": 615
+      "regions": 2789,
+      "dead": 603
     },
     "kevy-lua-host": {
       "regions": 360,
@@ -98,8 +98,8 @@
       "dead": 520
     },
     "kevy-persist": {
-      "regions": 7765,
-      "dead": 699
+      "regions": 7818,
+      "dead": 698
     },
     "kevy-pubsub-bench": {
       "regions": 283,
@@ -127,10 +127,10 @@
     },
     "kevy-rt": {
       "regions": 15689,
-      "dead": 4772
+      "dead": 4756
     },
     "kevy-scalar": {
-      "regions": 4383,
+      "regions": 4391,
       "dead": 1087
     },
     "kevy-scope": {
@@ -138,16 +138,16 @@
       "dead": 56
     },
     "kevy-seg": {
-      "regions": 1206,
-      "dead": 122
+      "regions": 1212,
+      "dead": 120
     },
     "kevy-sql": {
       "regions": 4341,
       "dead": 692
     },
     "kevy-store": {
-      "regions": 18642,
-      "dead": 1525
+      "regions": 18676,
+      "dead": 1506
     },
     "kevy-sys": {
       "regions": 730,
@@ -158,8 +158,8 @@
       "dead": 10
     },
     "kevy-text": {
-      "regions": 3987,
-      "dead": 119
+      "regions": 4021,
+      "dead": 118
     },
     "kevy-time": {
       "regions": 289,
@@ -413,7 +413,7 @@
     "::geo_search": 3,
     "::get": 52,
     "::get_for_reply": 22,
-    "::get_into_output": 17,
+    "::get_into_output": 1,
     "::get_shared_owned": 34,
     "::getbit": 2,
     "::getdel": 5,
@@ -526,7 +526,6 @@
     "::mark": 10,
     "::mask": 2,
     "::match_migrated": 15,
-    "::match_migrating": 1,
     "::matches_query_faceted": 1,
     "::materialize": 3,
     "::materialize_cold": 18,
@@ -721,7 +720,7 @@
     "::resolve::": 17,
     "::resolve_block_argv::": 4,
     "::resolve_clauses": 3,
-    "::resolve_xadd_id": 3,
+    "::resolve_xadd_id": 2,
     "::restart": 11,
     "::revive_node": 7,
     "::revrange": 5,
@@ -847,7 +846,7 @@
     "::tier_stats": 1,
     "::to_sidecar": 6,
     "::tokens": 4,
-    "::top_groups": 23,
+    "::top_groups": 12,
     "::touch_policy": 1,
     "::trim_maxlen": 2,
     "::trim_minid": 1,
@@ -1030,8 +1029,8 @@
     "<kevy_rt::shard::Shard>::build_xread_targets": 2,
     "<kevy_rt::shard::Shard>::build_zalgebra_store::": 4,
     "<kevy_rt::shard::Shard>::build_zintercard::": 4,
-    "<kevy_rt::shard::Shard>::cancel_xshard_on_close": 2,
-    "<kevy_rt::shard::Shard>::check_repl_ack_waiters": 53,
+    "<kevy_rt::shard::Shard>::cancel_xshard_on_close": 8,
+    "<kevy_rt::shard::Shard>::check_repl_ack_waiters": 48,
     "<kevy_rt::shard::Shard>::check_repl_apply_waiters": 2,
     "<kevy_rt::shard::Shard>::check_tee_overrun": 27,
     "<kevy_rt::shard::Shard>::client_getname::": 37,
@@ -1050,7 +1049,7 @@
     "<kevy_rt::shard::Shard>::dispatch_batch": 2,
     "<kevy_rt::shard::Shard>::do_hello::": 2,
     "<kevy_rt::shard::Shard>::do_psubscribe::": 1,
-    "<kevy_rt::shard::Shard>::do_publish::": 4,
+    "<kevy_rt::shard::Shard>::do_publish::": 1,
     "<kevy_rt::shard::Shard>::do_punsubscribe::": 1,
     "<kevy_rt::shard::Shard>::do_subscribe::": 9,
     "<kevy_rt::shard::Shard>::do_unwatch": 1,
@@ -1138,7 +1137,7 @@
     "<kevy_rt::shard::Shard>::park_blocked_xshard": 1,
     "<kevy_rt::shard::Shard>::park_dispatch::": 2,
     "<kevy_rt::shard::Shard>::park_if_held": 6,
-    "<kevy_rt::shard::Shard>::parse_replica_acks": 48,
+    "<kevy_rt::shard::Shard>::parse_replica_acks": 11,
     "<kevy_rt::shard::Shard>::post_write_housekeeping::": 3,
     "<kevy_rt::shard::Shard>::preallocate_exec_slots": 1,
     "<kevy_rt::shard::Shard>::prepare_uring_shard": 92,
@@ -1157,7 +1156,7 @@
     "<kevy_rt::shard::Shard>::repl_waiter_reply": 5,
     "<kevy_rt::shard::Shard>::replica_conn_is_live": 11,
     "<kevy_rt::shard::Shard>::replica_io_failed": 1,
-    "<kevy_rt::shard::Shard>::replica_readable": 24,
+    "<kevy_rt::shard::Shard>::replica_readable": 13,
     "<kevy_rt::shard::Shard>::replica_writable": 13,
     "<kevy_rt::shard::Shard>::replicas_brief": 29,
     "<kevy_rt::shard::Shard>::reply_feed_error": 13,
@@ -1204,7 +1203,7 @@
     "<kevy_rt::shard::Shard>::trace_handshake": 20,
     "<kevy_rt::shard::Shard>::transition_to_reading": 46,
     "<kevy_rt::shard::Shard>::try_apply_fsync_policy": 14,
-    "<kevy_rt::shard::Shard>::try_inline_local::": 13,
+    "<kevy_rt::shard::Shard>::try_inline_local::": 11,
     "<kevy_rt::shard::Shard>::try_intercept_client::": 21,
     "<kevy_rt::shard::Shard>::try_promote_bigbulk": 85,
     "<kevy_rt::shard::Shard>::unregister_psubs": 5,
@@ -2272,21 +2271,20 @@
     "kevy_lua::cjson::err": 8,
     "kevy_lua::cmsgpack::cmsgpack_pack": 3,
     "kevy_lua::cmsgpack::cmsgpack_unpack": 7,
-    "kevy_lua::cmsgpack::decode_array": 1,
     "kevy_lua::cmsgpack::decode_map": 2,
     "kevy_lua::cmsgpack::decode_str": 1,
-    "kevy_lua::cmsgpack::decode_value": 157,
-    "kevy_lua::cmsgpack::encode_float": 6,
-    "kevy_lua::cmsgpack::encode_int": 24,
-    "kevy_lua::cmsgpack::encode_str": 16,
-    "kevy_lua::cmsgpack::encode_table": 28,
-    "kevy_lua::cmsgpack::encode_value": 9,
+    "kevy_lua::cmsgpack::decode_value": 146,
+    "kevy_lua::cmsgpack::encode::encode_float": 6,
+    "kevy_lua::cmsgpack::encode::encode_int": 24,
+    "kevy_lua::cmsgpack::encode::encode_str": 16,
+    "kevy_lua::cmsgpack::encode::encode_table": 28,
+    "kevy_lua::cmsgpack::encode::encode_value": 9,
+    "kevy_lua::cmsgpack::encode::table_shape": 4,
     "kevy_lua::cmsgpack::pack_error": 8,
     "kevy_lua::cmsgpack::read_u16": 1,
     "kevy_lua::cmsgpack::read_u32": 1,
     "kevy_lua::cmsgpack::read_u64": 14,
     "kevy_lua::cmsgpack::read_u8": 1,
-    "kevy_lua::cmsgpack::table_shape": 4,
     "kevy_lua::cmsgpack::unpack_error": 8,
     "kevy_lua::dialect_slot": 1,
     "kevy_lua::dispatch::error_payload": 2,
@@ -2366,7 +2364,7 @@
     "kevy_persist::replay::valid_prefix_len": 16,
     "kevy_persist::replay::valid_prefix_len_of_file": 9,
     "kevy_persist::replay_resync::resync_fallback": 3,
-    "kevy_persist::replay_resync::resync_slice": 5,
+    "kevy_persist::replay_resync::resync_slice": 4,
     "kevy_persist::replay_txn::txn_marker": 1,
     "kevy_persist::replay_walk::apply_record": 4,
     "kevy_persist::replay_walk::read_fully::<std::io::buffered::bufreader::BufReader>": 6,
@@ -2449,7 +2447,7 @@
     "kevy_replicate::wire::parse_decimal": 2,
     "kevy_replicate::wire::parse_envelope_header": 2,
     "kevy_replicate::wire::parse_signed_decimal": 5,
-    "kevy_replicate::wire_snapshot::decode_replconf_ack": 27,
+    "kevy_replicate::wire_snapshot::decode_replconf_ack": 7,
     "kevy_replicate::wire_snapshot::decode_snapshot_chunk": 1,
     "kevy_replicate::wire_snapshot::decode_snapshot_marker": 1,
     "kevy_resp::fuzz::run_n": 5,
@@ -2477,7 +2475,7 @@
     "kevy_resp_client::pubsub_event::take_bulk": 4,
     "kevy_resp_client::pubsub_event::take_bulk_or_nil": 7,
     "kevy_resp_client::pubsub_event::take_int": 4,
-    "kevy_rt::aof_writer::run_worker": 6,
+    "kevy_rt::aof_writer::run_worker": 5,
     "kevy_rt::blocked::encode_block_timeout": 3,
     "kevy_rt::client_ops::client_row": 2,
     "kevy_rt::exec_build::gather_error": 9,
@@ -2524,7 +2522,7 @@
     "kevy_rt::reshard::reshard::": 38,
     "kevy_rt::runtime_run::reactor_choice": 14,
     "kevy_rt::runtime_run::run_shard_thread::": 14,
-    "kevy_rt::shard_flush::splice_output_arcs": 39,
+    "kevy_rt::shard_flush::splice_output_arcs": 2,
     "kevy_rt::slow_iter::threshold_ms": 3,
     "kevy_rt::uring_bigbulk_probe::parse_decimal_at": 1,
     "kevy_rt::uring_bigbulk_probe::probe_generic_bigbulk": 2,
@@ -2622,7 +2620,7 @@
     "kevy_scalar::strings_slice::split_part": 3,
     "kevy_scalar::strings_slice::strpos": 2,
     "kevy_scalar::strings_slice::substr": 17,
-    "kevy_seg::layout::decode_footer": 21,
+    "kevy_seg::layout::decode_footer": 19,
     "kevy_seg::layout::read_cell": 10,
     "kevy_seg::manifest::apply": 3,
     "kevy_seg::manifest::decode_entry": 7,
@@ -2739,10 +2737,10 @@
     "kevy_store::tests_tier_peek::peek_fields_hot_cold_missing_wrongtype": 1,
     "kevy_store::tests_zset_seg::cow_write_under_pinned_view_clones_one_segment": 2,
     "kevy_store::tier_codec::decode": 1,
-    "kevy_store::tier_codec::decode_hash": 4,
+    "kevy_store::tier_codec::decode_hash": 3,
     "kevy_store::tier_codec::encode": 1,
-    "kevy_store::tier_codec::read_chunk": 3,
-    "kevy_store::tier_codec::read_u32": 2,
+    "kevy_store::tier_codec::read_chunk": 2,
+    "kevy_store::tier_codec::read_u32": 1,
     "kevy_store::tier_demote::stub_matches": 9,
     "kevy_store::tier_serve::decoded_hash_fields": 1,
     "kevy_store::tier_serve::enabled::hot_hash_fields": 9,
@@ -2780,7 +2778,7 @@
     "kevy_testnet::free_port_block": 3,
     "kevy_text::clauses::parse_clauses": 2,
     "kevy_text::cold::decode_fwd": 8,
-    "kevy_text::cold::decode_posting": 5,
+    "kevy_text::cold::decode_posting": 4,
     "kevy_text::cold::highlight_fields": 1,
     "kevy_text::cold::score_cold": 1,
     "kevy_text::cold::score_cold_phrase": 3,
@@ -2819,7 +2817,6 @@
     "kevy_window::text::clean_stale": 17,
     "kevy_window::text::write_seg_file": 11
   },
-  "envelope_runs": 3,
   "history": [
     {
       "accepted": [
@@ -2863,6 +2860,18 @@
       "symbols": 2614,
       "regions": 27800,
       "reason": "three symbols moved from replay to replay_walk when that file was split at the 500-line ceiling: apply_record, read_fully and walk_v2, same code under a new module path. A symbol-keyed ratchet reads a rename as a deletion plus an addition and is right to fire; the five old paths left the set in the same runs."
+    },
+    {
+      "accepted": [
+        "kevy_lua::cmsgpack::encode::encode_float",
+        "kevy_lua::cmsgpack::encode::encode_int",
+        "kevy_lua::cmsgpack::encode::encode_str",
+        "kevy_lua::cmsgpack::encode::encode_table",
+        "kevy_lua::cmsgpack::encode::encode_value",
+        "kevy_lua::cmsgpack::encode::table_shape"
+      ],
+      "reason": "Six symbols joined and eight left: cmsgpack's encode half moved to its own file at the 500-line rule, so kevy_lua::cmsgpack::encode_int became kevy_lua::cmsgpack::encode::encode_int and so on for encode_value, encode_float, encode_str, encode_table and table_shape. Identity is the symbol name, so a module split reads as six joins and eight departures; not one region changed reachability. Same shape as the replay_walk split accepted earlier in this release. Observed on linux from CI run 33142915352 \u2014 the enforcing platform, not this workstation's macOS reading.",
+      "delta": 87
     }
   ]
 }
