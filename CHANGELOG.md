@@ -133,7 +133,7 @@ moved.
   and kevy-time's pin that adding a month to January 31 is not reversible.
   Two were wrong when first written, and running them is what said so.
 
-- **Twelve instruments and gauges**, and a mechanism underneath them. The
+- **Thirteen instruments and gauges**, and a mechanism underneath them. The
   wall was 102 gate scripts and four baselines, every one of them a scalar
   with a tolerance band, while v6's claims are about sets ("no dead paths"),
   relations ("no redundant implementation") and independence ("a solid
@@ -142,6 +142,15 @@ moved.
   substituted and the ratchet still fires. Its baselines are envelopes over
   three runs: growth means worse than the worst of three, not different from
   one sample.
+
+  The thirteenth is `fuzzgate`, and it exists because the fuzz-smoke matrix
+  is hand-written and the tree had grown past it: twenty-three fuzz targets
+  under `crates/*/fuzz/`, fourteen in the matrix. Among the nine that never
+  ran were `kevy-compress/decode_arbitrary` and `kevy-seg/seg_open`, whose
+  whole job is to be fed arbitrary bytes. The first run of `decode_arbitrary`
+  found two defects in two minutes and CI found a third. A target that exists
+  and never runs is worse than one nobody wrote: the repository displays
+  coverage that is not there.
 
 ### Changed
 
