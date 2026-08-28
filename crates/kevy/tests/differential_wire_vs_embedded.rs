@@ -149,11 +149,15 @@ const CORPUS: &[&str] = &[
     "HEXISTS h2 nope",
     "HSCAN h2 0",
     "HDEL h2 f3",
+    // Per-field TTL: same rule as the key-level one below. HPERSIST's own
+    // answer proves the deadline was there (1 = removed one), and the
+    // reads that follow are -1 (no TTL) and -2 (no field) — answers about
+    // existence, not about the clock.
     "HEXPIRE h2 100 FIELDS 1 f1",
-    "HTTL h2 FIELDS 1 f1",
-    "HPTTL h2 FIELDS 1 f1",
     "HPERSIST h2 FIELDS 1 f1",
     "HTTL h2 FIELDS 1 f1",
+    "HPTTL h2 FIELDS 1 f1",
+    "HPTTL h2 FIELDS 1 nosuchfield",
     // lists
     "RPUSH L a b c d e",
     "LSET L 0 A",
@@ -161,13 +165,27 @@ const CORPUS: &[&str] = &[
     "LTRIM L 0 2",
     "LRANGE L 0 -1",
     // expiry
+    //
+    // The verbs are driven; the values COMPARED are only ones that cannot
+    // move. `Store::pttl` reads a live nanosecond clock on every call
+    // (`let now = now_ns()`), so a remaining-time answer is a function of
+    // WHEN it was asked — and this harness asks the wire first and the
+    // facade second. Two calls a few hundred microseconds apart land in
+    // the same millisecond on an idle machine and need not on a loaded
+    // one. Comparing them byte-for-byte asserts they happened at the same
+    // instant, which is the same mistake RANDOMKEY and TIME are excluded
+    // for, made in the corpus that excludes them.
+    //
+    // So: set deadlines, then compare -1 (no expiry) and -2 (no key),
+    // which are answers about existence rather than about the clock.
     "EXPIREAT s1 99999999999",
     "PEXPIREAT s2 99999999999000",
-    "TTL s1",
-    "PTTL s1",
     "PEXPIRE s1 100000",
     "PERSIST s1",
     "TTL s1",
+    "PTTL s1",
+    "TTL nosuchkey",
+    "PTTL nosuchkey",
     // keyspace + admin
     "KEYS s*",
     "ECHO hello",
@@ -214,6 +232,7 @@ const CORPUS: &[&str] = &[
     "VIEW.QUERY nosuch",
     "HPEXPIRE h2 100000 FIELDS 1 f2",
     "HPEXPIREAT h2 99999999999000 FIELDS 1 f2",
+    "HPERSIST h2 FIELDS 1 f2",
     // ── F3: implemented in the facade, absent from the RESP dispatch ──
     // Registered in `kevy_resp::ops_table::KNOWN_GAPS`, and the check
     // below reads that ledger rather than restating it. Own keys, last,
