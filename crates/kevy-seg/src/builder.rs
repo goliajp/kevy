@@ -60,6 +60,19 @@ impl SegBuilder {
     /// Start a segment at `path` (truncating any leftover — a partial
     /// build is garbage by contract; the manifest above this crate is
     /// what makes a segment real).
+    /// # Examples
+    ///
+    /// ```
+/// use kevy_seg::{SegBuilder, Seg};
+/// # let dir = std::env::temp_dir().join(format!("kevy-seg-doc-{}", std::process::id()));
+/// # std::fs::create_dir_all(&dir).unwrap();
+/// let path = dir.join("create.seg");
+    /// let mut b = SegBuilder::create(&path).unwrap();
+    /// b.push(b"a", b"1").unwrap();
+    /// let meta = b.finish().unwrap();
+    /// assert_eq!(meta.records, 1);
+    /// # std::fs::remove_dir_all(&dir).ok();
+    /// ```
     pub fn create(path: &Path) -> Result<Self, SegError> {
         let f = File::create(path)?;
         Ok(Self {
@@ -78,6 +91,22 @@ impl SegBuilder {
     /// Append one record. Keys strictly ascend; equal keys are refused
     /// (a segment is a map, not a multimap — the caller disambiguates
     /// with its own key suffix when it needs duplicates).
+    /// # Examples
+    ///
+    /// ```
+/// use kevy_seg::{SegBuilder, Seg};
+/// # let dir = std::env::temp_dir().join(format!("kevy-seg-doc-{}", std::process::id()));
+/// # std::fs::create_dir_all(&dir).unwrap();
+/// let path = dir.join("push.seg");
+    /// let mut b = SegBuilder::create(&path).unwrap();
+    /// // Keys must arrive in ascending order — the segment is built for
+    /// // a binary search, so an out-of-order key is refused rather than
+    /// // silently producing a file that cannot be searched.
+    /// b.push(b"a", b"1").unwrap();
+    /// b.push(b"b", b"2").unwrap();
+    /// assert!(b.push(b"a", b"3").is_err(), "out of order");
+    /// # std::fs::remove_dir_all(&dir).ok();
+    /// ```
     pub fn push(&mut self, key: &[u8], payload: &[u8]) -> Result<(), SegError> {
         if self.records > 0 && key <= self.last_key.as_slice() {
             return Err(SegError::Unsorted);
@@ -101,6 +130,21 @@ impl SegBuilder {
     }
 
     /// Seal: flush the open page, write the footer and trailer, fsync.
+    /// # Examples
+    ///
+    /// ```
+/// use kevy_seg::{SegBuilder, Seg};
+/// # let dir = std::env::temp_dir().join(format!("kevy-seg-doc-{}", std::process::id()));
+/// # std::fs::create_dir_all(&dir).unwrap();
+/// let path = dir.join("finish.seg");
+    /// let mut b = SegBuilder::create(&path).unwrap();
+    /// for k in [b"a", b"b", b"c"] { b.push(k, b"v").unwrap(); }
+    /// let meta = b.finish().unwrap();
+    /// assert_eq!(meta.records, 3);
+    /// // Only after `finish` is the file a readable segment.
+    /// assert_eq!(Seg::open(&path).unwrap().meta().records, 3);
+    /// # std::fs::remove_dir_all(&dir).ok();
+    /// ```
     pub fn finish(mut self) -> Result<SegMeta, SegError> {
         if self.slots.is_empty() && self.records == 0 {
             return Err(SegError::Corrupt("empty segment refused"));

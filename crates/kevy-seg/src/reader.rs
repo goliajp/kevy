@@ -23,6 +23,25 @@ pub struct Seg {
 impl Seg {
     /// Open and verify the trailer + footer. Data pages verify lazily
     /// on first touch (a cold segment can be huge; open stays O(footer)).
+    /// # Examples
+    ///
+    /// ```
+/// use kevy_seg::{SegBuilder, Seg};
+/// # let dir = std::env::temp_dir().join(format!("kevy-seg-doc-{}", std::process::id()));
+/// # std::fs::create_dir_all(&dir).unwrap();
+/// let path = dir.join("open.seg");
+    /// let mut b = SegBuilder::create(&path).unwrap();
+    /// b.push(b"k", b"v").unwrap();
+    /// b.finish().unwrap();
+    ///
+    /// let seg = Seg::open(&path).unwrap();
+    /// assert_eq!(seg.get(b"k").unwrap(), Some(b"v".to_vec()));
+    /// // A file that is not a segment is refused, not misread.
+    /// let bad = dir.join("not.seg");
+    /// std::fs::write(&bad, b"nonsense").unwrap();
+    /// assert!(Seg::open(&bad).is_err());
+    /// # std::fs::remove_dir_all(&dir).ok();
+    /// ```
     pub fn open(path: &Path) -> Result<Self, SegError> {
         let f = File::open(path)?;
         let len = f.metadata()?.len();
@@ -57,11 +76,42 @@ impl Seg {
     }
 
     /// Sealed-segment summary.
+    /// # Examples
+    ///
+    /// ```
+/// use kevy_seg::{SegBuilder, Seg};
+/// # let dir = std::env::temp_dir().join(format!("kevy-seg-doc-{}", std::process::id()));
+/// # std::fs::create_dir_all(&dir).unwrap();
+/// let path = dir.join("meta.seg");
+    /// let mut b = SegBuilder::create(&path).unwrap();
+    /// b.push(b"a", b"1").unwrap();
+    /// b.push(b"z", b"2").unwrap();
+    /// b.finish().unwrap();
+    /// let seg = Seg::open(&path).unwrap();
+    /// assert_eq!(seg.meta().records, 2);
+    /// # std::fs::remove_dir_all(&dir).ok();
+    /// ```
     pub fn meta(&self) -> &SegMeta {
         &self.meta
     }
 
     /// The record at `key`, if present.
+    /// # Examples
+    ///
+    /// ```
+/// use kevy_seg::{SegBuilder, Seg};
+/// # let dir = std::env::temp_dir().join(format!("kevy-seg-doc-{}", std::process::id()));
+/// # std::fs::create_dir_all(&dir).unwrap();
+/// let path = dir.join("get.seg");
+    /// let mut b = SegBuilder::create(&path).unwrap();
+    /// b.push(b"a", b"1").unwrap();
+    /// b.finish().unwrap();
+    /// let seg = Seg::open(&path).unwrap();
+    /// assert_eq!(seg.get(b"a").unwrap(), Some(b"1".to_vec()));
+    /// // Absent is Ok(None) — the error channel is for a broken file.
+    /// assert_eq!(seg.get(b"zz").unwrap(), None);
+    /// # std::fs::remove_dir_all(&dir).ok();
+    /// ```
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, SegError> {
         if key < self.meta.min_key.as_slice() || key > self.meta.max_key.as_slice() {
             return Ok(None);
@@ -83,6 +133,21 @@ impl Seg {
     }
 
     /// Records with `lo <= key <= hi`, ascending.
+    /// # Examples
+    ///
+    /// ```
+/// use kevy_seg::{SegBuilder, Seg};
+/// # let dir = std::env::temp_dir().join(format!("kevy-seg-doc-{}", std::process::id()));
+/// # std::fs::create_dir_all(&dir).unwrap();
+/// let path = dir.join("range.seg");
+    /// let mut b = SegBuilder::create(&path).unwrap();
+    /// for k in [b"a", b"b", b"c", b"d"] { b.push(k, b"v").unwrap(); }
+    /// b.finish().unwrap();
+    /// let seg = Seg::open(&path).unwrap();
+    /// let keys: Vec<Vec<u8>> = seg.range(b"b", b"c").map(|e| e.unwrap().0).collect();
+    /// assert_eq!(keys, vec![b"b".to_vec(), b"c".to_vec()], "inclusive both ends");
+    /// # std::fs::remove_dir_all(&dir).ok();
+    /// ```
     pub fn range(&self, lo: &[u8], hi: &[u8]) -> RangeIter<'_> {
         RangeIter {
             seg: self,
@@ -98,6 +163,22 @@ impl Seg {
     /// How many records fall in `lo..=hi` — two fence descents plus at
     /// most two page walks; the pages between are counted whole. The
     /// cross-window COUNT primitive.
+    /// # Examples
+    ///
+    /// ```
+/// use kevy_seg::{SegBuilder, Seg};
+/// # let dir = std::env::temp_dir().join(format!("kevy-seg-doc-{}", std::process::id()));
+/// # std::fs::create_dir_all(&dir).unwrap();
+/// let path = dir.join("count.seg");
+    /// let mut b = SegBuilder::create(&path).unwrap();
+    /// for k in [b"a", b"b", b"c", b"d"] { b.push(k, b"v").unwrap(); }
+    /// b.finish().unwrap();
+    /// let seg = Seg::open(&path).unwrap();
+    /// // Counted from the index rather than by walking the range.
+    /// assert_eq!(seg.count_range(b"b", b"c").unwrap(), 2);
+    /// assert_eq!(seg.count_range(b"x", b"z").unwrap(), 0);
+    /// # std::fs::remove_dir_all(&dir).ok();
+    /// ```
     pub fn count_range(&self, lo: &[u8], hi: &[u8]) -> Result<u64, SegError> {
         if lo > hi || self.fences.is_empty() {
             return Ok(0);
