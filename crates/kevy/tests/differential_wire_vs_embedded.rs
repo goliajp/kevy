@@ -176,6 +176,44 @@ const CORPUS: &[&str] = &[
     "PREFIX.STATS s",
     "IDX.ADVISE",
     "FEED.SHARDS",
+    // sets
+    "SADD A a b c",
+    "SADD B b c d",
+    "SDIFF A B",
+    "SINTER A B",
+    "SUNION A B",
+    "SDIFFSTORE Sd A B",
+    "SINTERSTORE Si A B",
+    "SUNIONSTORE Su A B",
+    "SCARD Su",
+    "SPOP A 0",
+    "SETNX newkey v",
+    "SETNX newkey again",
+    // sorted sets
+    "ZADD Z 1 one 2 two 3 three",
+    "ZADD Y 2 two 3 three 4 four",
+    "ZREVRANGE Z 0 -1",
+    "ZREVRANGEBYSCORE Z 3 1",
+    "ZINTERCARD 2 Z Y",
+    "ZINTERSTORE Zi 2 Z Y",
+    "ZUNIONSTORE Zu 2 Z Y",
+    "ZDIFFSTORE Zd 2 Z Y",
+    "ZSCAN Z 0",
+    "ZPOPMIN Z",
+    "ZPOPMIN.BELOW Z 3",
+    "ZREMRANGEBYRANK Y 0 0",
+    "ZREMRANGEBYSCORE Y 4 4",
+    "ZRANGE Y 0 -1 WITHSCORES",
+    // lists + keyspace
+    "RPOP L",
+    "TOUCH s1 nope",
+    "UNLINK f3copy",
+    "RENAMENX s2 s2renamed",
+    "SCAN 0 COUNT 100",
+    "TABLE.LIST",
+    "VIEW.QUERY nosuch",
+    "HPEXPIRE h2 100000 FIELDS 1 f2",
+    "HPEXPIREAT h2 99999999999000 FIELDS 1 f2",
     // ── F3: implemented in the facade, absent from the RESP dispatch ──
     // Registered in `kevy_resp::ops_table::KNOWN_GAPS`, and the check
     // below reads that ledger rather than restating it. Own keys, last,
@@ -196,6 +234,16 @@ const CORPUS: &[&str] = &[
     "IDX.QUERY",
     "IDX.DROP nosuch",
     "TOTALLY.NOT.A.COMMAND",
+    // LAST, and only here: it empties the keyspace both surfaces have
+    // been answering from, so anything after it would be comparing two
+    // empty stores and proving nothing.
+    "FLUSHALL",
+    "DBSIZE",
+    // Two verbs are deliberately never driven, and naming them is the
+    // point: RANDOMKEY answers with a key of its own choosing and TIME
+    // with the clock, so a byte comparison between two implementations
+    // asserts something neither promises. They are not a coverage hole —
+    // they are a pair a differential harness cannot speak about.
 ];
 
 /// Divergences that are correct, each with the reason. Written after the
@@ -223,6 +271,52 @@ const EXPECTED: &[(&str, &str)] = &[
         "Same gap: server-only (cmd_resolve.rs:186), absent from the          facade's dispatch table.",
     ),
 ];
+
+/// Verbs whose reply Redis defines no ORDER for: a set, or a cursor
+/// walk. Both implementations iterate their own tables, so the order
+/// differs — and differs run to run, which is how this was found:
+/// `SINTER` agreed on one run of this cell and diverged on the next.
+///
+/// Comparing bytes there asserts an order neither side promises, so
+/// these compare as multisets of their top-level elements. The ELEMENTS
+/// must still match exactly, which is the part that means something.
+///
+/// `KEYS`, `HSCAN` and `ZSCAN` are the same class and are deliberately
+/// NOT here: they agree byte for byte today, and if that stops being
+/// true the cell should say so rather than have been excused in advance.
+const UNORDERED: &[&str] = &["SINTER", "SUNION", "SDIFF", "SCAN"];
+
+/// A canonical form for a reply whose order is not defined: every array
+/// in it, at every depth, has its elements sorted.
+///
+/// `SCAN` needs the depth — its reply is `[cursor, [keys…]]`, and the
+/// keys are the part that reorders. Sorting the outer pair as well is
+/// harmless (both sides get the same treatment) and costs only the
+/// ability to notice a reply that swapped its cursor for its keys, which
+/// is not a thing either implementation could do.
+fn canonical_unordered(reply: &[u8]) -> Option<Vec<u8>> {
+    if reply.first()? != &b'*' {
+        return Some(reply.to_vec());
+    }
+    let head = reply.windows(2).position(|w| w == b"\r\n")? + 2;
+    let n: i64 = std::str::from_utf8(&reply[1..head - 2]).ok()?.parse().ok()?;
+    if n < 0 {
+        return Some(reply.to_vec());
+    }
+    let mut at = head;
+    let mut parts = Vec::new();
+    for _ in 0..n {
+        let len = common::reply_len(&reply[at..])?;
+        parts.push(canonical_unordered(&reply[at..at + len])?);
+        at += len;
+    }
+    parts.sort();
+    let mut out = format!("*{n}\r\n").into_bytes();
+    for p in parts {
+        out.extend_from_slice(&p);
+    }
+    Some(out)
+}
 
 fn render(b: &[u8]) -> String {
     String::from_utf8_lossy(b).replace("\r\n", "\\r\\n").chars().take(200).collect()
@@ -261,7 +355,18 @@ fn embedded_answers_what_the_wire_answers() {
         let w = wire.call(&a);
         let mut e = Vec::new();
         embedded.dispatch_argv(&a, &mut e);
-        if w == e {
+        let verb = cmd.split(' ').next().unwrap_or("");
+        let same = if w == e {
+            true
+        } else if UNORDERED.contains(&verb) {
+            match (canonical_unordered(&w), canonical_unordered(&e)) {
+                (Some(a), Some(b)) => a == b,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if same {
             agreed += 1;
         } else {
             diverged.push((*cmd, w, e));
