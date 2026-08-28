@@ -146,7 +146,7 @@ pub(super) const ROWS: &[VerbMeta] = &[
     v("SPOP",        "set", -2, W, "Remove and return one or more random members of a set.", "1.0.0", "SPOP key [count]",
       "O(count) expected — each member is drawn by probing a random slot and taking the first occupied one",
       "full"),
-    v("SRANDMEMBER", "set", -3, R, "Return one or more random members of a set without removing them. A negative count allows repeats.", "1.0.0", "SRANDMEMBER key [count]",
+    v("SRANDMEMBER", "set", -2, R, "Return one or more random members of a set without removing them. A negative count allows repeats.", "1.0.0", "SRANDMEMBER key [count]",
       "O(count) expected when count is a small fraction of the set (random-slot probing); O(N) once count exceeds a quarter of it, where copying and shuffling beats rejection sampling",
       "full"),
     v("SREM",        "set", -3, W, "Remove one or more members from a set.", "1.0.0", "SREM key member [member ...]",
