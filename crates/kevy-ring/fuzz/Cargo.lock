@@ -79,7 +79,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-ring"
-version = "3.17.4"
+version = "6.0.0"
 dependencies = [
  "loom",
 ]
