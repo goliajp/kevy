@@ -76,6 +76,8 @@ kevy 有意不在协议层做认证与授权；下面这些 Redis 兼容前缀�
 - **`-QUIESCED migrating to <host:port>`**——槽或 scope 正在迁移、在本节点冻结期间触发。客户端应视同 `MOVED`，去 `<host:port>` 重试。迁移完成后，那个节点会给出权威应答。
 - 完整路由模型见 [docs/](https://github.com/goliajp/kevy/tree/develop/docs) 下的协议说明。
 
+完整的路由模型见 [docs/](https://github.com/goliajp/kevy/tree/develop/docs) 里的协议说明。
+
 ## FAQ
 
 **我的客户端把 `-MOVED` 当致命错误——怎么办？**
