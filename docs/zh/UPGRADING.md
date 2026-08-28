@@ -105,7 +105,7 @@ fn warm(conn: &mut Connection) -> KevyResult<()> {
 
 **迁移实际由什么构成——来自大规模做过这件事的消费者**：破坏点只有错误类型——`Store::open`、`Config` 和各方法形态都没变。机械配方：你拥有的可失败签名改成 `KevyResult`（通常只改注解，如上例）；你不拥有的地方，让新的 `From` 把 `?` 带进 `io::Result`。别一页一页追编译错误，把编译器当查询跑——`cargo check --message-format=json` 配 jq 得到的去重清单就是你的工单，它的长度就是你的估算。还有一条那位消费者绕了弯才学到的：错误数**不单调**——二进制 crate 要等它依赖的库编译过了才暴露自己的转换错误，所以循环要跑到不动点（一轮不再有变化），不是跑到某个计数。
 
-有一个例外留在明处：CDC feed 的 embedded 接口面（`changes_tail` / `changes_since`）保留它自己的 `FeedError`——`Resync` 与 `Future` 是这条流独有的控制信号，不是通用错误。
+有一个例外留在明处：CDC feed 的 embedded 接口面（`changes_tail` / `changes_since`）保留它自己的 `FeedError`——`Resync` 与 `Future` 是这条流独有的控制信号，不是通用错误；把它们折进通用错误枚举，会诱使调用方用 `?` 跳过他们唯一必须处理的那件事。见 [CDC feed](cdc.md)。
 
 （`kevy-resp-client` 有意保留 `io::Result` 接口面——它是一块纯传输的石头，`io::Error` 就是它诚实的货币。）
 
