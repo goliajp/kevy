@@ -276,6 +276,16 @@ requires = []
 proves = "no published crate ships a source file importing a dependency its published manifest drops"
 
 [[check]]
+id = "fuzzgate"
+area = "hygiene"
+tier = "precommit"
+cmd = "python3 tools/check_fuzz_matrix.py"
+expected = 1
+timeout = 60
+requires = []
+proves = "every fuzz target in the tree runs in CI's fuzz-smoke matrix, and every matrix entry names a target that exists — nine of twenty-three were in the tree unrun, and the first run of one of them found two defects"
+
+[[check]]
 id = "lockgate"
 area = "release-pins"
 tier = "precommit"
