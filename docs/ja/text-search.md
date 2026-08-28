@@ -129,7 +129,7 @@ top-Kの評価にはMaxScoreによる枝刈りを使います（稀な語から�
 計測された包絡線です（領収書はbenchツリーにあります）。
 
 - [`bench/textgate.sh`](../../bench/textgate.sh)は、実サーバーに対して、100万件の混在スクリプト文書（各およそ100バイト）で`MATCH` p95 < 20msをゲートし、あわせてメモリの式を実RSSの増分に対してゲートします。CIに隣接するリリースチェックの中で走ります——これらの数値は願望ではなく、clampです。
-- [`bench/PERF-LEDGER.md`](../../bench/PERF-LEDGER.md)が比較対決を記録しています。同一コーパス上のRediSearchの`FT.SEARCH`に対して、BM25 top-10でqps +21%、p95は互角です。
+- [`bench/PERF-LEDGER.md`](../../bench/PERF-LEDGER.md)が比較対決を記録しています。同一コーパス上の、redis-stack 7.4.7のRediSearchの`FT.SEARCH`に対して、BM25 top-10でqps +21%、p95は互角です。
 
 書き込み側は標準的なインデックス税です。マッチするインデックス1つにつき、書き込みごとにハッシュフィールド読み出し1回とセグメント更新1回。空のカタログのコストは、書き込みごとに1回の分岐しない分岐です。
 

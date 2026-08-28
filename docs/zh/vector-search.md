@@ -105,7 +105,7 @@ IDX.QUERY HYBRID posts MATCH "rust storage" embs KNN <f32-le-blob>
 实测信封（凭据在 bench 目录）：
 
 - [`bench/vectorgate.sh`](https://github.com/goliajp/kevy/blob/develop/bench/vectorgate.sh) 对着一台真服务器，在 100 万 × 128 维上钳住 KNN LIMIT 10 的 p95 < 30ms，同时召回率在 EF 400 处 ≥ 0.90（两道钳制同时成立——一个又快又错的答案是过不了的），外加内存公式与真实 RSS 增长的对钳（0.5-1.5×）。
-- [`bench/PERF-LEDGER.md`](https://github.com/goliajp/kevy/blob/develop/bench/PERF-LEDGER.md) 记录了对打结果：在同一语料上召回率对齐于 1.000 时，KNN 用 0.48 ms 应答，RediSearch 的 HNSW 用 0.79 ms——**领先 1.64 倍**。
+- [`bench/PERF-LEDGER.md`](https://github.com/goliajp/kevy/blob/develop/bench/PERF-LEDGER.md) 记录了对打结果：在同一语料上召回率对齐于 1.000 时，KNN 用 0.48 ms 应答，redis-stack 7.4.7 里的 RediSearch HNSW 用 0.79 ms——**领先 1.64 倍**。
 
 写入侧的成本是标准的索引税（每次写入、每命中一个索引，付一次字段解析加一次图插入）；构建成本随 `EF`（构建期 beam）增长，这正是它作为声明期参数存在的原因。
 
