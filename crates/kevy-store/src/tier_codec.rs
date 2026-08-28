@@ -89,11 +89,26 @@ pub(crate) fn decode(tag: u8, payload: Vec<u8>) -> Result<Value, &'static str> {
     }
 }
 
+/// Upper bound on the initial reservation for a field count read out of a
+/// cold payload — not a limit on the decode, which fails on the first chunk
+/// the payload cannot supply.
+///
+/// Each field costs two length-prefixed chunks, so at least eight bytes, and
+/// a payload of `len` bytes cannot honour a claim past `len / 8`. Without
+/// this a `u32::MAX` field count reserves about 206 GB before the first
+/// chunk is read. `kevy-resp` bounds its array header the same way and says
+/// why ("each item costs >= 1 byte"); kevy-compress and kevy-seg were
+/// brought into line this release, and this was the site those two searches
+/// were looking for and had not reached.
+pub(crate) fn pairs_fit(n: usize, payload_len: usize) -> usize {
+    n.min(payload_len / 8 + 1)
+}
+
 fn decode_hash(p: &[u8]) -> Result<Value, &'static str> {
     let mut cur = 0usize;
     let raw = read_u32(p, &mut cur)?;
     let n = (raw & !PACKED_FLAG) as usize;
-    let mut pairs = Vec::with_capacity(n);
+    let mut pairs = Vec::with_capacity(pairs_fit(n, p.len()));
     for _ in 0..n {
         let f = read_chunk(p, &mut cur)?;
         let v = read_chunk(p, &mut cur)?;
