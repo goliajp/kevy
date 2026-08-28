@@ -1,5 +1,20 @@
 //! `SmallBytes` — a 24-byte small-byte-string with inline-SSO optimization.
 //!
+//! ```
+//! use kevy_bytes::SmallBytes;
+//!
+//! // Up to 22 bytes live in the value itself — no allocation, and the
+//! // whole string fits in one 24-byte slot.
+//! let short = SmallBytes::from_slice(b"user:1");
+//! assert_eq!(short.as_slice(), b"user:1");
+//! assert_eq!(short.heap_bytes(), 0);
+//!
+//! // Past the inline capacity it spills to the heap, and says so.
+//! let long = SmallBytes::from_slice(&[b'x'; 64]);
+//! assert_eq!(long.len(), 64);
+//! assert!(long.heap_bytes() >= 64);
+//! ```
+//!
 //! Layout (**little-endian only**): a union of two 24-byte variants, distinguished
 //! by the byte at offset 23:
 //!
