@@ -11,10 +11,18 @@
 #
 #   - a waiver for a stone that now meets the bar FAILS. The list must not
 #     rot; passing is how a waiver is removed, not by being forgotten.
-#   - the list may only shrink. Adding one is a deliberate act with a reason
-#     attached, the same way `--accept-growth` works for a set-ratchet.
+#   - the list may only shrink, and `[bar].max_waivers` is what says so.
+#     Adding a waiver means raising that number in the same commit, with the
+#     reason — the deliberate act, the same way `--accept-growth` works for a
+#     set-ratchet. Until 2026-08-29 this rule was prose only: a new waiver
+#     carrying a reason and a closes_when was accepted like any other, and a
+#     ratchet nobody counts is a wish.
 
 [bar]
+# How many waivers may stand. Zero: the four that were here are gone and
+# nothing has replaced them. Raising this is the deliberate act.
+max_waivers = 0
+
 # Unpack the published form outside the repository and its tests pass there.
 # This is the operational form of "any project could take these".
 lifts = true
