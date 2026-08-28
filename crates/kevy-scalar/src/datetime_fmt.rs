@@ -11,6 +11,16 @@ use crate::{Scalar, ScalarError};
 /// too) into epoch microseconds. `None` on anything malformed — the
 /// sql face refuses by name, this module never guesses.
 #[must_use]
+/// # Examples
+///
+/// ```
+/// use kevy_scalar::{parse_timestamp, render_timestamp};
+/// // Microseconds since the epoch, and a round trip through the render.
+/// let us = parse_timestamp("2024-02-29 12:00:00").unwrap();
+/// assert_eq!(render_timestamp(us), "2024-02-29 12:00:00");
+/// // Not a timestamp is None, never a guess.
+/// assert_eq!(parse_timestamp("yesterday"), None);
+/// ```
 pub fn parse_timestamp(s: &str) -> Option<i64> {
     let s = s.trim();
     let (date, time) = match s.split_once([' ', 'T']) {
@@ -45,6 +55,17 @@ pub fn parse_timestamp(s: &str) -> Option<i64> {
 
 /// Parse `YYYY-MM-DD` into days since the epoch.
 #[must_use]
+/// # Examples
+///
+/// ```
+/// use kevy_scalar::{parse_date, render_date};
+/// // DAYS since the epoch — a different unit from parse_timestamp's
+/// // microseconds, which is the mistake this pair exists to prevent.
+/// assert_eq!(parse_date("1970-01-01"), Some(0));
+/// let d = parse_date("2024-02-29").unwrap();
+/// assert_eq!(render_date(d), "2024-02-29");
+/// assert_eq!(parse_date("2024-02-30"), None, "not a real day");
+/// ```
 pub fn parse_date(s: &str) -> Option<i64> {
     let mut it = s.trim().split('-');
     let y: i64 = it.next()?.parse().ok()?;
@@ -81,6 +102,16 @@ pub fn parse_date(s: &str) -> Option<i64> {
 /// pairs (`1 year 2 months`, `-3 days`, `90 minutes`) into the
 /// three-component `(months, days, micros)`.
 #[must_use]
+/// # Examples
+///
+/// ```
+/// use kevy_scalar::parse_interval;
+/// // (months, days, micros) kept SEPARATE, as PG keeps them: a month is
+/// // not a fixed number of days and collapsing them would lie.
+/// assert_eq!(parse_interval("1 month"), Some((1, 0, 0)));
+/// assert_eq!(parse_interval("2 days"), Some((0, 2, 0)));
+/// assert_eq!(parse_interval("not an interval"), None);
+/// ```
 pub fn parse_interval(s: &str) -> Option<(i64, i64, i64)> {
     let (mut months, mut days, mut micros) = (0i64, 0i64, 0i64);
     let mut it = s.split_whitespace();
@@ -105,6 +136,12 @@ pub fn parse_interval(s: &str) -> Option<(i64, i64, i64)> {
 
 /// `YYYY-MM-DD HH:MM:SS[.ffffff]` — fraction only when non-zero.
 #[must_use]
+/// # Examples
+///
+/// ```
+/// use kevy_scalar::render_timestamp;
+/// assert_eq!(render_timestamp(0), "1970-01-01 00:00:00");
+/// ```
 pub fn render_timestamp(us: i64) -> String {
     let secs = us.div_euclid(MICROS_PER_SEC);
     let frac = us.rem_euclid(MICROS_PER_SEC);
@@ -121,6 +158,12 @@ pub fn render_timestamp(us: i64) -> String {
 
 /// `YYYY-MM-DD`.
 #[must_use]
+/// # Examples
+///
+/// ```
+/// use kevy_scalar::render_date;
+/// assert_eq!(render_date(0), "1970-01-01");
+/// ```
 pub fn render_date(days: i64) -> String {
     let c = kevy_time::civil_from_epoch(days * 86_400);
     format!("{:04}-{:02}-{:02}", c.y, c.m, c.d)
@@ -131,6 +174,13 @@ pub fn render_date(days: i64) -> String {
 /// components render independently — `1 day -12:00:00` stays exactly
 /// that (probe 10).
 #[must_use]
+/// # Examples
+///
+/// ```
+/// use kevy_scalar::{parse_interval, render_interval};
+/// let (m, d, us) = parse_interval("1 month 2 days").unwrap();
+/// assert_eq!(render_interval(m, d, us), "1 mon 2 days");
+/// ```
 pub fn render_interval(months: i64, days: i64, micros: i64) -> String {
     let mut parts: Vec<String> = Vec::new();
     let (y, mon) = (months / 12, months % 12);
