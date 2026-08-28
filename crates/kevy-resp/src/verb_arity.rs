@@ -21,6 +21,18 @@
 //! Only arity is duplicated, not the registry. The rest of a row is
 //! documentation prose: 48 KB of it, which every wasm build linking this
 //! crate would carry for nothing.
+//!
+//! ```
+//! use kevy_resp::verb_arity::arity_ok;
+//!
+//! // What a dispatch entry does with it, instead of writing `< 4` beside
+//! // a comment explaining that -4 means four.
+//! fn refuses(argc: usize) -> bool {
+//!     arity_ok("IDX.QUERY", argc) == Some(false)
+//! }
+//! assert!(refuses(3));
+//! assert!(!refuses(4));
+//! ```
 
 /// Redis's arity convention: positive is an exact argument count
 /// INCLUDING the verb itself, negative is a minimum. `-4` means "at
