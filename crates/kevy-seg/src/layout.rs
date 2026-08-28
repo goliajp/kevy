@@ -136,6 +136,20 @@ pub fn write_overflow_cell(
     overflow_cell_len(key.len())
 }
 
+/// Initial reservation for a count read out of a file — clamped so a
+/// forged one cannot drive an unbounded `with_capacity`. The vec still
+/// grows to the true count as elements are pushed, and every push here is
+/// preceded by a bounded read that fails cleanly once the body is
+/// exhausted, so a lie is caught within one step. `kevy-persist` clamps
+/// its snapshot counts the same way and for the same reason; kevy-seg
+/// keeps its own copy rather than take a dependency for one `min`.
+pub(crate) const RESERVE_CAP: usize = 64 * 1024;
+
+/// [`RESERVE_CAP`], applied.
+pub(crate) fn capped_capacity(n: usize) -> usize {
+    n.min(RESERVE_CAP)
+}
+
 /// Footer body: counts, min/max, fence table. CRC'd as a whole; the
 /// trailer locates it.
 pub fn encode_footer(
@@ -188,7 +202,7 @@ pub fn decode_footer(b: &[u8]) -> Option<(u64, u32, Vec<u8>, Vec<u8>, Vec<(u32, 
     let xklen = u32::from_le_bytes(take(&mut o, 4)?.try_into().ok()?) as usize;
     let max_key = take(&mut o, xklen)?.to_vec();
     let nf = u32::from_le_bytes(take(&mut o, 4)?.try_into().ok()?) as usize;
-    let mut fences = Vec::with_capacity(nf);
+    let mut fences = Vec::with_capacity(capped_capacity(nf));
     for _ in 0..nf {
         let page = u32::from_le_bytes(take(&mut o, 4)?.try_into().ok()?);
         let klen = u32::from_le_bytes(take(&mut o, 4)?.try_into().ok()?) as usize;
