@@ -150,7 +150,8 @@ impl Seg {
         match cell {
             Cell::Inline { payload, .. } => Ok(payload.to_vec()),
             Cell::Overflow { total_len, first_page, n_pages, .. } => {
-                let mut out = Vec::with_capacity(total_len as usize);
+                let mut out =
+                    Vec::with_capacity(layout::capped_capacity(total_len as usize));
                 for p in 0..n_pages {
                     let mut buf = vec![0u8; PAGE];
                     self.f

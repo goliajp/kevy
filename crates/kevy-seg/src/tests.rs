@@ -245,3 +245,49 @@ mod manifest {
         assert!(m.live().any(|e| e.file == "post.seg"));
     }
 }
+
+
+/// A count read out of a file is a claim, not a size.
+///
+/// The footer's fence count and an overflow cell's `total_len` both reach
+/// `Vec::with_capacity` straight from the bytes. Measured before the clamp:
+/// a 28-byte footer body claiming `u32::MAX` fences reserved 131,071 MB —
+/// on this platform the request was served out of virtual address space and
+/// the decode still returned `None`, so nothing failed visibly; a platform
+/// that refuses the request aborts the process instead. `kevy-persist`
+/// clamps its snapshot counts for exactly this reason and says so.
+#[test]
+fn a_count_from_a_file_cannot_size_an_allocation() {
+    use crate::layout::{RESERVE_CAP, capped_capacity};
+    assert_eq!(capped_capacity(3), 3, "an honest small count is used as-is");
+    assert_eq!(capped_capacity(RESERVE_CAP), RESERVE_CAP, "the bar itself passes");
+    assert_eq!(
+        capped_capacity(u32::MAX as usize),
+        RESERVE_CAP,
+        "a forged count reserves the cap, not the claim"
+    );
+}
+
+/// The clamp must not change what a lying footer is answered with.
+#[test]
+fn a_lying_fence_count_is_still_refused() {
+    let nf: u32 = u32::MAX;
+    let mut b = Vec::new();
+    b.extend_from_slice(&1u64.to_le_bytes()); // records
+    b.extend_from_slice(&1u32.to_le_bytes()); // data_pages
+    b.extend_from_slice(&0u32.to_le_bytes()); // min_key len
+    b.extend_from_slice(&0u32.to_le_bytes()); // max_key len
+    b.extend_from_slice(&nf.to_le_bytes());
+    let crc = kevy_sys::checksum::crc32c(&b);
+    b.extend_from_slice(&crc.to_le_bytes());
+    assert!(
+        crate::layout::decode_footer(&b).is_none(),
+        "the CRC is over the lie, so only the body-exhausted check catches it"
+    );
+
+    // And an honest footer still round-trips, so the refusal is not blanket.
+    let fences = vec![(0u32, b"aa".to_vec()), (7u32, b"zz".to_vec())];
+    let enc = crate::layout::encode_footer(42, 3, b"aa", b"zz", &fences);
+    let got = crate::layout::decode_footer(&enc).expect("honest footer decodes");
+    assert_eq!(got, (42u64, 3u32, b"aa".to_vec(), b"zz".to_vec(), fences));
+}
