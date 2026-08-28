@@ -129,7 +129,7 @@ Top-K 求值用 MaxScore 剪枝（最罕见的词优先；常见词的列表一�
 实测信封（凭据在 bench 目录）：
 
 - [`bench/textgate.sh`](https://github.com/goliajp/kevy/blob/develop/bench/textgate.sh) 对着一台真服务器，钳住 100 万篇混合书写系统文档（每篇约 100 字节）上的 `MATCH` p95 < 20ms，外加内存公式与真实 RSS 增长的对钳。它跑在与 CI 相邻的 release 检查里——这些数字是钳制，不是愿望。
-- [`bench/PERF-LEDGER.md`](https://github.com/goliajp/kevy/blob/develop/bench/PERF-LEDGER.md) 记录了对打结果：在同一语料上，BM25 top-10 的 qps 比 RediSearch 的 `FT.SEARCH` 高 21%，p95 打平。
+- [`bench/PERF-LEDGER.md`](https://github.com/goliajp/kevy/blob/develop/bench/PERF-LEDGER.md) 记录了对打结果：在同一语料上，BM25 top-10 的 qps 比 redis-stack 7.4.7 里 RediSearch 的 `FT.SEARCH` 高 21%，p95 打平。
 
 写入侧就是标准的索引税：每次写入、每命中一个索引，付一次 hash 字段读加一次段更新；空目录的代价是每次写入一个不被走到的分支。
 

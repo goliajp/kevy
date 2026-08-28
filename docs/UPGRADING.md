@@ -514,9 +514,10 @@ path is the correct downgrade, not AOF replay.
 
 - **3.0.0** — the serving-engine declaration (indexes, views, FTS,
   ANN, CDC, on-ramp; eleven gated trains).
-- **3.8.0** — the perf arc (measured vs valkey 9.1 and RediSearch;
-  bare face 1.6–3.3×, ANN 1.64× ahead at recall 1.000, FTS single
-  common term 93×; embedded-as-primary replication). No releases
+- **3.8.0** — the perf arc (measured vs valkey 9.1 and the
+  RediSearch in redis-stack 7.4.7; bare face 1.6–3.3×, ANN 1.64×
+  ahead at recall 1.000, FTS single common term 93×;
+  embedded-as-primary replication). No releases
   were cut between 3.0.0 and 3.8.0; 3.8.0 contains trains v3.1–v3.8.
 - **3.17.0** — the availability release: the AI-native serving faces
   (machine-readable verb contract, generated docs, `kevy-mcp`, hybrid
