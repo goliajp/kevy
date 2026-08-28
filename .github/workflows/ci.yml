@@ -197,8 +197,17 @@ jobs:
       # 2,677 public items, 94.1% carrying prose and 0.7% carrying an
       # executable example: this gates the deficit, not the coverage.
       - name: doctestgate (what the documentation owes may only shrink)
+        id: doctestgate
         run: bash bench/doctestgate.sh
+      # The third of these, and now they all say the same thing: publish the
+      # reading when the gate RAN, whatever it said. Without a condition this
+      # step is skipped on failure, so the deficit the gate refused over —
+      # the evidence for judging whether the refusal was right — went missing
+      # exactly when it was wanted. With a bare `always()` it would publish
+      # the checked-in copy on a cancelled run, which is the trap the other
+      # two had.
       - name: upload doc deficit
+        if: always() && (steps.doctestgate.outcome == 'success' || steps.doctestgate.outcome == 'failure')
         uses: actions/upload-artifact@v7
         with:
           name: doc-deficit-linux
