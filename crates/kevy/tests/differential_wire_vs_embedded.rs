@@ -403,6 +403,22 @@ const CORPUS: &[&str] = &[
     "COPY xnosuch xdst",
     "COPY xs",
     "GET xcopy",
+    // The error arm each of these has and none of the lines above
+    // reaches: the store refusing because the key holds another type.
+    // `deadgate` counted them one by one.
+    "GETRANGE xl 0 1",
+    "SETRANGE xl 0 x",
+    "GETEX xl EX 100",
+    "SETBIT xl 0 1",
+    "GETBIT xl 0",
+    "BITCOUNT xl",
+    "BITCOUNT xl 0 1",
+    "BITPOS xl 1",
+    "BITPOS xl 1 0 1",
+    "LINSERT xs BEFORE a b",
+    "HINCRBYFLOAT xl f 1",
+    "ZREVRANGE xl 0 -1",
+    "ZREVRANGE xl 0 -1 WITHSCORES",
     // ── F3: implemented in the facade, absent from the RESP dispatch ──
     // Registered in `kevy_resp::ops_table::KNOWN_GAPS`, and the check
     // below reads that ledger rather than restating it. Own keys, last,
@@ -959,4 +975,37 @@ fn every_shared_verb_is_driven_or_named() {
          {stale:?}",
         stale.len()
     );
+}
+
+/// TIME is named in `CANNOT_COMPARE`, so the corpus never drives it and
+/// nothing else on the wire would either — which is how it reached CI
+/// with fourteen never-executed regions after being wired.
+///
+/// A byte comparison against the facade is the thing that cannot be
+/// made; asserting the SHAPE can. Two bulk strings of decimal digits,
+/// the first a plausible unix second and the second inside one.
+#[test]
+fn time_answers_the_clock_in_redis_shape() {
+    let server = Server::start_single_shard();
+    let mut wire = server.wire();
+    let reply = wire.call(&argv("TIME"));
+    let text = String::from_utf8_lossy(&reply).to_string();
+    let parts: Vec<&str> = text.split("\r\n").collect();
+    assert_eq!(parts.first(), Some(&"*2"), "TIME did not answer a 2-element array: {text:?}");
+
+    let secs: u64 = parts[2].parse().unwrap_or_else(|_| panic!("seconds not decimal: {text:?}"));
+    let micros: u32 = parts[4].parse().unwrap_or_else(|_| panic!("micros not decimal: {text:?}"));
+    assert!(micros < 1_000_000, "microseconds outside a second: {micros}");
+
+    // A window wide enough that no clock skew or slow CI box trips it,
+    // and narrow enough that a zero, a millisecond count or a
+    // nanosecond count would not fit through: 2020-01-01 to 2100-01-01.
+    assert!(
+        (1_577_836_800..4_102_444_800).contains(&secs),
+        "TIME's seconds are not a plausible unix second: {secs}"
+    );
+    // The declared lengths must match the digits, or a client reading
+    // by length gets a truncated number.
+    assert_eq!(parts[1], format!("${}", parts[2].len()));
+    assert_eq!(parts[3], format!("${}", parts[4].len()));
 }

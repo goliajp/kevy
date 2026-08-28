@@ -24,6 +24,21 @@ use crate::shard::Shard;
 use crate::Commands;
 use kevy_resp::ArgvView;
 
+/// What a cross-shard copy needs to know, in one place.
+///
+/// The alternative was eight parameters and the
+/// `clippy::too_many_arguments` suppression its RENAME twin carries. A
+/// parameter list that long is a struct that has not been written down
+/// yet, and the two shard indices in the middle of it are exactly the
+/// pair a caller can transpose without the compiler noticing.
+struct CopyPlan {
+    src: Vec<u8>,
+    dst: Vec<u8>,
+    src_shard: usize,
+    dst_shard: usize,
+    replace: bool,
+}
+
 impl<C: Commands> Shard<C> {
     /// Entry point for [`crate::Route::Copy`]. `args[1]` is the source,
     /// `args[2]` the destination, and an optional `args[3]` must be the
@@ -64,31 +79,23 @@ impl<C: Commands> Shard<C> {
             self.send_or_run(conn_id, seq, src_shard, Op::Copy { src, dst, replace });
             return;
         }
-        self.start_copy_xshard(conn_id, seq, replace, src, dst, src_shard, dst_shard);
+        let plan = CopyPlan { src, dst, src_shard, dst_shard, replace };
+        self.start_copy_xshard(conn_id, seq, plan);
     }
 
     /// Cross-shard arm: one pending slot carrying the orchestrator, and
     /// step 1 out to the source's shard.
-    fn start_copy_xshard(
-        &mut self,
-        conn_id: u64,
-        seq: u64,
-        replace: bool,
-        src: Vec<u8>,
-        dst: Vec<u8>,
-        src_shard: usize,
-        dst_shard: usize,
-    ) {
+    fn start_copy_xshard(&mut self, conn_id: u64, seq: u64, plan: CopyPlan) {
         let agg = Agg::CopyOrchestrator {
             step: CopyStep::Read,
-            replace,
-            dst,
-            dst_shard,
+            replace: plan.replace,
+            dst: plan.dst,
+            dst_shard: plan.dst_shard,
             read: None,
             stored: None,
         };
         self.push_pending_slot(conn_id, 1, agg, false);
-        self.send_or_run(conn_id, seq, src_shard, Op::CopyRead(src));
+        self.send_or_run(conn_id, seq, plan.src_shard, Op::CopyRead(plan.src));
     }
 
     /// Resume the cross-shard COPY once a sub-reply lands. Called from
