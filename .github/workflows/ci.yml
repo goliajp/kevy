@@ -106,10 +106,10 @@ jobs:
   # Taken on Linux, and only on Linux. Code switched off by cfg is ABSENT
   # from a coverage run rather than dead in it, so a report from any other
   # host cannot see kevy-uring at all — the crate does not compile there —
-  # and the bar would then judge a stone the producer never looked at. Two
-  # of the waivers in suite/stone-waivers.toml exist only because a macOS
-  # reading was believed: it said the crate has zero tests, and on Linux it
-  # has twelve. stonegate now refuses a report from anywhere else, which is
+  # and the bar would then judge a stone the producer never looked at.
+  # Waivers have been written in suite/stone-waivers.toml on the strength
+  # of a macOS reading before: it said the crate has zero tests, and on
+  # Linux it has twelve. stonegate now refuses a report from anywhere else, which is
   # what makes this job the only place the verdict can come from.
   stonereport:
     name: stonegate (the stone bar, on Linux)
