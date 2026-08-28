@@ -38,7 +38,13 @@ BENCH=""
 fail=0
 nomeasure=0
 cleanup() {
-    [ -n "$BENCH" ] && kill -9 "$BENCH" 2>/dev/null
+    # The server below is waited for; the load generator was not, and it is
+    # the same shape — a process still reaping when this gate returns is
+    # residue billed to whatever runs next.
+    if [ -n "$BENCH" ]; then
+        kill -9 "$BENCH" 2>/dev/null
+        wait "$BENCH" 2>/dev/null
+    fi
     if [ -n "$SRV" ]; then
         kill -9 "$SRV" 2>/dev/null
         wait "$SRV" 2>/dev/null
