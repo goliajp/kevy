@@ -3,6 +3,16 @@
 /// Distance metric. Scores are "smaller = closer" for every variant
 /// (cosine → `1 - cos`, ip → `-dot`), so one ascending merge works.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// # Examples
+///
+/// ```
+/// use kevy_vector::Distance;
+/// // The wire spellings a declaration may use, and the tag reported back.
+/// assert_eq!(Distance::parse(b"cosine"), Some(Distance::Cosine));
+/// assert_eq!(Distance::parse(b"L2"), Some(Distance::L2), "case-insensitive");
+/// assert_eq!(Distance::Ip.tag(), "ip");
+/// assert_eq!(Distance::parse(b"manhattan"), None, "refused, not defaulted");
+/// ```
 pub enum Distance {
     /// Cosine distance (vectors pre-normalized at insert).
     #[default]
@@ -15,6 +25,15 @@ pub enum Distance {
 
 impl Distance {
     /// Tag for sidecar round-trip.
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_vector::Distance;
+    /// // Round-trips through `parse`, which is what IDX.LIST relies on.
+    /// for d in [Distance::Cosine, Distance::L2, Distance::Ip] {
+    ///     assert_eq!(Distance::parse(d.tag().as_bytes()), Some(d));
+    /// }
+    /// ```
     pub fn tag(self) -> &'static str {
         match self {
             Distance::Cosine => "cosine",
@@ -24,6 +43,16 @@ impl Distance {
     }
 
     /// Parse a tag (ASCII case-insensitive).
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_vector::Distance;
+    /// assert_eq!(Distance::parse(b"COSINE"), Some(Distance::Cosine));
+    /// // An unknown metric is None. A declaration that names one is
+    /// // refused rather than quietly served with a different distance.
+    /// assert_eq!(Distance::parse(b""), None);
+    /// assert_eq!(Distance::parse(b"euclidean"), None);
+    /// ```
     pub fn parse(raw: &[u8]) -> Option<Distance> {
         if raw.eq_ignore_ascii_case(b"cosine") {
             Some(Distance::Cosine)
@@ -164,6 +193,22 @@ fn l2_lanes(a: &[f32], b: &[f32]) -> f32 {
 
 /// Decode a wire vector: raw f32 LE bytes (`len == dim*4`), or the
 /// debug form `csv:1.0,2.5,…`. `None` on any mismatch.
+/// # Examples
+///
+/// ```
+/// use kevy_vector::parse_vector;
+/// // The wire form is little-endian f32, `dim` of them exactly.
+/// let mut raw = Vec::new();
+/// for v in [1.0f32, 2.0, 3.0] { raw.extend_from_slice(&v.to_le_bytes()); }
+/// assert_eq!(parse_vector(&raw, 3), Some(vec![1.0, 2.0, 3.0]));
+///
+/// // A wrong length is None — never a truncated or padded vector.
+/// assert_eq!(parse_vector(&raw, 2), None);
+/// assert_eq!(parse_vector(&raw, 4), None);
+///
+/// // The debug form is accepted too.
+/// assert_eq!(parse_vector(b"csv:1.0,2.0,3.0", 3), Some(vec![1.0, 2.0, 3.0]));
+/// ```
 pub fn parse_vector(raw: &[u8], dim: usize) -> Option<Vec<f32>> {
     if let Some(csv) = raw.strip_prefix(b"csv:") {
         let vals: Option<Vec<f32>> = std::str::from_utf8(csv)
