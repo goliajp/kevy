@@ -392,6 +392,14 @@ jobs:
       # the command performs is a label nobody can act on.
       - name: Clippy (workspace, all targets, default features)
         run: cargo clippy --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
+      # A workspace build unifies features, so every crate is linted with the
+      # union of what anything in the tree asks for. kevy-wasm takes
+      # kevy-embedded WITHOUT `tier`, and that configuration — the one the
+      # wasm package actually ships — is never linted above. It had a real
+      # clippy error in it, invisible to the step before this one.
+      - name: Clippy (kevy-wasm's own feature set, which the workspace hides)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo clippy -p kevy-wasm --all-targets -- -D warnings
 
   # ───────────── contract gates: availability / AI / replication ─────────────
   # The executable behavior contracts: availgate's clamps (replication
