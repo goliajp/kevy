@@ -177,7 +177,10 @@ pub fn decode_seg_values(payload: &[u8]) -> Option<Vec<Option<Vec<u8>>>> {
     }
     let n = u32::from_le_bytes(payload.get(..4)?.try_into().ok()?) as usize;
     let mut at = 4usize;
-    let mut out = Vec::with_capacity(n);
+    // A count out of the payload is a claim: every entry costs at least
+    // its one-byte tag, so `len` bytes cannot honour more than `len` of
+    // them. Unbounded, a u32 count reserves up to 4.29e9 elements here.
+    let mut out = Vec::with_capacity(n.min(payload.len()));
     for _ in 0..n {
         match payload.get(at)? {
             0 => {
