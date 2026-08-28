@@ -1,0 +1,21 @@
+d2_fully_cold_table_index_only_queries_pay_zero_cold_reads --- FAILED
+---- d2_fully_cold_table_index_only_queries_pay_zero_cold_reads stdout ----
+thread 'd2_fully_cold_table_index_only_queries_pay_zero_cold_reads' (18442929) panicked at crates/kevy/tests/table_e2e.rs:629:5:
+assertion `left == right` failed: fully-cold: exactly one read per returned row
+  left: 0
+ right: 10
+    d2_fully_cold_table_index_only_queries_pay_zero_cold_reads
+
+# Context (2026-08-28)
+# Local full-workspace run at d724428c, macOS. 'fully-cold: exactly one read
+# per returned row' — left 0, right 10. Passes 3/3 in isolation and 13/13 in
+# its own binary; fails only under full-workspace parallelism. Second test this
+# session to behave that way (see the query-buffer archive).
+#
+# Not attributable to the changes in flight: every edit on the cold path
+# (kevy-index/segcold.rs, kevy-text/cold.rs, kevy-store/tier_codec.rs) is a
+# Vec::with_capacity argument and nothing else — verified by reading the whole
+# diff. The one semantic change nearby is kevy-compress's Kraft guard, which
+# rejects code lengths past MAX_LEN; the encoder length-limits to MAX_LEN, so
+# an honest frame never carries one, and 19M fuzz runs plus the crate's own
+# round-trip tests agree.
