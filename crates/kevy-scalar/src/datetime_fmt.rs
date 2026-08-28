@@ -53,6 +53,14 @@ pub fn parse_date(s: &str) -> Option<i64> {
     if it.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
         return None;
     }
+    // `epoch_from_civil` multiplies the day count by 86,400, so a year of
+    // twelve digits overflows inside the call — before any check below
+    // could see it. This pre-bound is generous (year one million) and
+    // exists only to make the arithmetic that follows safe to perform;
+    // the real limit is the one derived below.
+    if !(-1_000_000..=1_000_000).contains(&y) {
+        return None;
+    }
     let c = kevy_time::Civil { y, m, d, h: 0, min: 0, s: 0 };
     let secs = kevy_time::epoch_from_civil(c);
     // Round-trip check rejects Feb 30 and friends.
@@ -60,7 +68,13 @@ pub fn parse_date(s: &str) -> Option<i64> {
     if (back.y, back.m, back.d) != (y, m, d) {
         return None;
     }
-    Some(secs / 86_400)
+    let days = secs / 86_400;
+    // A date whose microseconds do not fit is not representable, whatever
+    // the calendar says: `parse_timestamp` and four comparison and
+    // formatting sites all multiply a `Date` by MICROS_PER_DAY. Deriving
+    // the bound from that multiplication beats declaring a year, and puts
+    // the ceiling where PG's timestamp range puts it (about 292,277 AD).
+    days.checked_mul(MICROS_PER_DAY).map(|_| days)
 }
 
 /// Parse a PG interval literal: whitespace-separated `<n> <unit>`
