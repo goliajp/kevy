@@ -1,13 +1,13 @@
 {
   "corpus": "c1",
   "platform": "linux",
-  "total_regions": 163130,
-  "dead_regions": 27642,
-  "llvm_per_instantiation_dead": 28628,
+  "total_regions": 163182,
+  "dead_regions": 27707,
+  "llvm_per_instantiation_dead": 28696,
   "crates": {
     "kevy": {
       "regions": 28813,
-      "dead": 5577
+      "dead": 5573
     },
     "kevy-alloc": {
       "regions": 1694,
@@ -55,7 +55,7 @@
     },
     "kevy-embedded": {
       "regions": 27533,
-      "dead": 4275
+      "dead": 4263
     },
     "kevy-ffi": {
       "regions": 842,
@@ -127,7 +127,7 @@
     },
     "kevy-rt": {
       "regions": 15689,
-      "dead": 4756
+      "dead": 4816
     },
     "kevy-scalar": {
       "regions": 4391,
@@ -135,7 +135,7 @@
     },
     "kevy-scope": {
       "regions": 629,
-      "dead": 56
+      "dead": 57
     },
     "kevy-seg": {
       "regions": 1212,
@@ -147,7 +147,7 @@
     },
     "kevy-store": {
       "regions": 18676,
-      "dead": 1506
+      "dead": 1520
     },
     "kevy-sys": {
       "regions": 730,
@@ -182,8 +182,8 @@
       "dead": 47
     },
     "kevy-wasm": {
-      "regions": 816,
-      "dead": 142
+      "regions": 868,
+      "dead": 148
     },
     "kevy-window": {
       "regions": 1059,
@@ -194,6 +194,7 @@
     "symbols": [
       "::get_into_output",
       "::mark",
+      "::match_migrating",
       "::top_groups"
     ],
     "prefixes": [
@@ -413,7 +414,7 @@
     "::geo_search": 3,
     "::get": 52,
     "::get_for_reply": 22,
-    "::get_into_output": 1,
+    "::get_into_output": 17,
     "::get_shared_owned": 34,
     "::getbit": 2,
     "::getdel": 5,
@@ -526,6 +527,7 @@
     "::mark": 10,
     "::mask": 2,
     "::match_migrated": 15,
+    "::match_migrating": 1,
     "::matches_query_faceted": 1,
     "::materialize": 3,
     "::materialize_cold": 18,
@@ -1029,9 +1031,9 @@
     "<kevy_rt::shard::Shard>::build_xread_targets": 2,
     "<kevy_rt::shard::Shard>::build_zalgebra_store::": 4,
     "<kevy_rt::shard::Shard>::build_zintercard::": 4,
-    "<kevy_rt::shard::Shard>::cancel_xshard_on_close": 8,
+    "<kevy_rt::shard::Shard>::cancel_xshard_on_close": 2,
     "<kevy_rt::shard::Shard>::check_repl_ack_waiters": 48,
-    "<kevy_rt::shard::Shard>::check_repl_apply_waiters": 2,
+    "<kevy_rt::shard::Shard>::check_repl_apply_waiters": 28,
     "<kevy_rt::shard::Shard>::check_tee_overrun": 27,
     "<kevy_rt::shard::Shard>::client_getname::": 37,
     "<kevy_rt::shard::Shard>::client_info": 5,
@@ -1203,7 +1205,7 @@
     "<kevy_rt::shard::Shard>::trace_handshake": 20,
     "<kevy_rt::shard::Shard>::transition_to_reading": 46,
     "<kevy_rt::shard::Shard>::try_apply_fsync_policy": 14,
-    "<kevy_rt::shard::Shard>::try_inline_local::": 11,
+    "<kevy_rt::shard::Shard>::try_inline_local::": 13,
     "<kevy_rt::shard::Shard>::try_intercept_client::": 21,
     "<kevy_rt::shard::Shard>::try_promote_bigbulk": 85,
     "<kevy_rt::shard::Shard>::unregister_psubs": 5,
@@ -1242,7 +1244,7 @@
     "<kevy_rt::uring_bigbulk_b2alt::ThreeSliceView as core::ops::index::Index>::index": 7,
     "<kevy_store::error::KevyError as core::convert::From>::from": 3,
     "<kevy_store::seg_map::SegMap>::all_unique": 6,
-    "<kevy_store::seg_map::SegMap>::rand_entry": 4,
+    "<kevy_store::seg_map::SegMap>::rand_entry": 2,
     "<kevy_store::seg_map::SegMap>::values": 5,
     "<kevy_tmpdir::TmpDir as core::convert::AsRef>::as_ref": 3,
     "Java_jp_golia_kevy_KevyNative_close": 3,
@@ -1490,7 +1492,7 @@
     "kevy::dispatch::dispatch_conn::": 4,
     "kevy::dispatch::dispatch_generic::": 1,
     "kevy::dispatch::dispatch_string::": 32,
-    "kevy::dispatch::dispatch_with_proto::": 14,
+    "kevy::dispatch::dispatch_with_proto::": 10,
     "kevy::dispatch_collections::cmd_brpoplpush::": 8,
     "kevy::dispatch_collections::cmd_lmove::": 7,
     "kevy::dispatch_collections::dispatch_hash::": 4,
@@ -2110,9 +2112,8 @@
     "kevy_embedded::replay::parse_zadd_flags": 2,
     "kevy_embedded::replica_runner::drain_session": 4,
     "kevy_embedded::replica_runner::finish_snapshot": 1,
-    "kevy_embedded::replica_runner::run_loop": 6,
     "kevy_embedded::replica_runner::run_session": 1,
-    "kevy_embedded::replica_runner::sleep_interruptible": 15,
+    "kevy_embedded::replica_runner::sleep_interruptible": 9,
     "kevy_embedded::replica_runner::snapshot_event": 4,
     "kevy_embedded::replica_source::handshake_and_prepare": 3,
     "kevy_embedded::replica_source::next_frame_bytes": 3,
@@ -2475,7 +2476,7 @@
     "kevy_resp_client::pubsub_event::take_bulk": 4,
     "kevy_resp_client::pubsub_event::take_bulk_or_nil": 7,
     "kevy_resp_client::pubsub_event::take_int": 4,
-    "kevy_rt::aof_writer::run_worker": 5,
+    "kevy_rt::aof_writer::run_worker": 6,
     "kevy_rt::blocked::encode_block_timeout": 3,
     "kevy_rt::client_ops::client_row": 2,
     "kevy_rt::exec_build::gather_error": 9,
@@ -2522,7 +2523,7 @@
     "kevy_rt::reshard::reshard::": 38,
     "kevy_rt::runtime_run::reactor_choice": 14,
     "kevy_rt::runtime_run::run_shard_thread::": 14,
-    "kevy_rt::shard_flush::splice_output_arcs": 2,
+    "kevy_rt::shard_flush::splice_output_arcs": 39,
     "kevy_rt::slow_iter::threshold_ms": 3,
     "kevy_rt::uring_bigbulk_probe::parse_decimal_at": 1,
     "kevy_rt::uring_bigbulk_probe::probe_generic_bigbulk": 2,
@@ -2808,7 +2809,7 @@
     "kevy_wasm::abi_kv::kevy_expire": 21,
     "kevy_wasm::abi_kv::kevy_flushall": 4,
     "kevy_wasm::abi_kv::kevy_keys": 1,
-    "kevy_wasm::abi_kv::kevy_mget": 42,
+    "kevy_wasm::abi_kv::kevy_mget": 48,
     "kevy_wasm::abi_kv::kevy_persist": 5,
     "kevy_wasm::abi_kv::kevy_set": 4,
     "kevy_wasm::abi_kv::kevy_set_ttl": 4,
@@ -2846,7 +2847,7 @@
         "::match_migrating",
         "::resolve_xadd_id"
       ],
-      "reason": "Two regions, against a set that shrank by 120 (27,858 -> 27,738). ::match_migrating (kevy-scope slot migration) and ::resolve_xadd_id (stream XADD id resolution) are both unqualified monomorphised generics, the same shape as the three already registered unstable, but ONE run is not evidence that they vary \u2014 it is evidence that they differ from a baseline that is itself one sample. Accepted here rather than registered. The rule for next time: if these same two recur in the next run's growth, they earn an unstable entry with the differing values; if different symbols appear each run instead, that pattern is itself the evidence that the tail of this measurement is noisy and the registration should be by prefix.",
+      "reason": "Two regions, against a set that shrank by 120 (27,858 -> 27,738). ::match_migrating (kevy-scope slot migration) and ::resolve_xadd_id (stream XADD id resolution) are both unqualified monomorphised generics, the same shape as the three already registered unstable, but ONE run is not evidence that they vary — it is evidence that they differ from a baseline that is itself one sample. Accepted here rather than registered. The rule for next time: if these same two recur in the next run's growth, they earn an unstable entry with the differing values; if different symbols appear each run instead, that pattern is itself the evidence that the tail of this measurement is noisy and the registration should be by prefix.",
       "delta": 2
     },
     {
@@ -2870,8 +2871,17 @@
         "kevy_lua::cmsgpack::encode::encode_value",
         "kevy_lua::cmsgpack::encode::table_shape"
       ],
-      "reason": "Six symbols joined and eight left: cmsgpack's encode half moved to its own file at the 500-line rule, so kevy_lua::cmsgpack::encode_int became kevy_lua::cmsgpack::encode::encode_int and so on for encode_value, encode_float, encode_str, encode_table and table_shape. Identity is the symbol name, so a module split reads as six joins and eight departures; not one region changed reachability. Same shape as the replay_walk split accepted earlier in this release. Observed on linux from CI run 33142915352 \u2014 the enforcing platform, not this workstation's macOS reading.",
+      "reason": "Six symbols joined and eight left: cmsgpack's encode half moved to its own file at the 500-line rule, so kevy_lua::cmsgpack::encode_int became kevy_lua::cmsgpack::encode::encode_int and so on for encode_value, encode_float, encode_str, encode_table and table_shape. Identity is the symbol name, so a module split reads as six joins and eight departures; not one region changed reachability. Same shape as the replay_walk split accepted earlier in this release. Observed on linux from CI run 33142915352 — the enforcing platform, not this workstation's macOS reading.",
       "delta": 87
+    },
+    {
+      "accepted": [
+        "::match_migrating",
+        "kevy_rt::shard_flush::splice_output_arcs",
+        "kevy_wasm::abi_kv::kevy_mget"
+      ],
+      "reason": "Three movements, three different reasons. (1) kevy_wasm::abi_kv::kevy_mget 42 -> 48: mine. The checked_add at the wasm ABI boundary adds a None arm that cannot be taken on a 64-bit host, so six regions are genuinely and permanently unreachable where this is measured — the price of making an overflow fail by construction instead of by a wrap that happened to land right. (2) kevy_rt::shard_flush::splice_output_arcs 2 -> 39: not mine, and one sample. Same position ::match_migrating was in at v1, so the same answer: accepted here, not registered. The rule for next time is the one that finding wrote — if it recurs it earns an unstable entry, and if a different shard_flush symbol appears instead, the registration should be by the kevy_rt::shard_flush:: prefix. (3) ::match_migrating joined again, which is the recurrence that rule was waiting for; registered in suite/dead-paths.toml this commit. Observed on linux from CI run 33144113383.",
+      "delta": 44
     }
   ]
 }

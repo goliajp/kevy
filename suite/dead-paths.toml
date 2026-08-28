@@ -143,6 +143,18 @@ why = "A background writer whose drain path depends on whether a batch was pendi
 # by symbol because there is no prefix to name.
 
 [[unstable]]
+symbol = "::match_migrating"
+observed = ["v1: joined at 1, accepted rather than registered — one run is not evidence", "v2 (run 33144113383): joined at 1 again"]
+why = """
+kevy-scope's slot migration matcher, demangled without a path. The v1
+finding accepted it and wrote the rule for this moment: if the same symbol
+recurs in the next run's growth it earns an entry with the differing values.
+It recurred, at the same value, so what varies is not the count but whether
+the region runs at all — a migration match that happens only when a test
+leaves a slot mid-move.
+"""
+
+[[unstable]]
 symbol = "::mark"
 observed = ["A: 10", "B: 10", "C: 10 — joined in all three, absent from the baseline"]
 why = "Present in every run's growth list and in no baseline: the baseline sampled a run where it was covered, and no run since has repeated that."
