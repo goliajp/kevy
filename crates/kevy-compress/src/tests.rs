@@ -316,3 +316,27 @@ mod what_the_fuzzer_found {
         assert!(crate::huff::validate_lens(&lens, 1).is_ok(), "MAX_LEN itself is expressible");
     }
 }
+
+/// The third site, found by CI running what had never run.
+///
+/// `decode.rs` had two allocations sized by a frame-declared length and both
+/// were bounded. `huff::read_bits` had a third, reached through the literal
+/// block's `lit_total`, and CI's first run of `decode_arbitrary` asked for
+/// 10.9 GB there. Bounding where the fuzzer points is not the same as
+/// bounding every place a length out of the frame reaches an allocation —
+/// so this asserts the rule, not one input.
+#[test]
+fn a_symbol_count_from_a_frame_cannot_size_an_allocation() {
+    use crate::huff::symbols_fit;
+    assert_eq!(symbols_fit(3, 1024), 3, "an honest count is used as-is");
+    assert_eq!(
+        symbols_fit(10_903_093_247, 40),
+        40 * 8 + 64,
+        "a claim of ten billion symbols over forty bytes reserves the ceiling"
+    );
+    // One bit per symbol is the floor of a Huffman code, so a stream can
+    // always honour 8 * len — the bound never short-reserves an honest frame.
+    for len in [0usize, 1, 7, 64, 4096] {
+        assert_eq!(symbols_fit(len * 8, len), len * 8, "8*{len} still fits exactly");
+    }
+}
