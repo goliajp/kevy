@@ -17,6 +17,14 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
     /// Insert `(key, value)`. Returns the old value if `key` was already
     /// present. Following `std::HashMap` semantics, the existing K is kept on
     /// overwrite — only V is replaced.
+    /// # Examples
+    ///
+    /// ```
+    /// let mut m = kevy_map::KevyMap::new();
+    /// assert_eq!(m.insert(b"k".to_vec(), 1u32), None, "no previous value");
+    /// assert_eq!(m.insert(b"k".to_vec(), 2), Some(1), "the OLD value comes back");
+    /// assert_eq!(m.get(b"k".as_slice()), Some(&2));
+    /// ```
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         self.maybe_grow();
         let hash = key.kevy_hash();
@@ -195,6 +203,15 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
 
 impl<K, V> KevyMap<K, V> {
     /// Borrow the value for `key`, or `None` if absent.
+    /// # Examples
+    ///
+    /// ```
+    /// let mut m = kevy_map::KevyMap::new();
+    /// m.insert(b"k".to_vec(), 1u32);
+    /// // Borrowed lookup: a `&[u8]` finds a `Vec<u8>` key without allocating.
+    /// assert_eq!(m.get(b"k".as_slice()), Some(&1));
+    /// assert_eq!(m.get(b"nope".as_slice()), None);
+    /// ```
     pub fn get<Q>(&self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
@@ -207,6 +224,14 @@ impl<K, V> KevyMap<K, V> {
     }
 
     /// Mutably borrow the value for `key`, or `None` if absent.
+    /// # Examples
+    ///
+    /// ```
+    /// let mut m = kevy_map::KevyMap::new();
+    /// m.insert(b"k".to_vec(), 1u32);
+    /// if let Some(v) = m.get_mut(b"k".as_slice()) { *v += 41; }
+    /// assert_eq!(m.get(b"k".as_slice()), Some(&42));
+    /// ```
     pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
@@ -219,6 +244,14 @@ impl<K, V> KevyMap<K, V> {
     }
 
     /// Whether `key` is present in the map.
+    /// # Examples
+    ///
+    /// ```
+    /// let mut m = kevy_map::KevyMap::new();
+    /// m.insert(b"k".to_vec(), ());
+    /// assert!(m.contains_key(b"k".as_slice()));
+    /// assert!(!m.contains_key(b"j".as_slice()));
+    /// ```
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
         K: Borrow<Q>,
@@ -228,6 +261,15 @@ impl<K, V> KevyMap<K, V> {
     }
 
     /// Remove `key`'s entry; returns the previous value if present.
+    /// # Examples
+    ///
+    /// ```
+    /// let mut m = kevy_map::KevyMap::new();
+    /// m.insert(b"k".to_vec(), 7u32);
+    /// assert_eq!(m.remove(b"k".as_slice()), Some(7), "the value comes back");
+    /// assert_eq!(m.remove(b"k".as_slice()), None, "absent — None, not a panic");
+    /// assert!(m.is_empty());
+    /// ```
     pub fn remove<Q>(&mut self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
