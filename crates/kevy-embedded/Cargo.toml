@@ -47,7 +47,7 @@ text = ["index", "dep:kevy-text"]
 vector = ["index", "dep:kevy-vector"]
 # Replication (embed-as-replica + embed-as-writer) and the CDC feed.
 # Needs `persist`: replicated frames replay through the AOF verb table.
-replicate = ["persist", "dep:kevy-replicate", "dep:kevy-resp"]
+replicate = ["persist", "dep:kevy-replicate"]
 # Read-only RESP listener (ops tooling against a live embedded store).
 listener = []
 # Transparent tiering (capacity arc): `with_tier_budget` + the cold
@@ -72,9 +72,11 @@ kevy-hash = { path = "../kevy-hash", version = "6.0.0" }
 # keeps the dep lean even though kevy-replicate has no optional features
 # today — explicit intent for when it grows them.
 kevy-replicate = { path = "../kevy-replicate", version = "6.0.0", default-features = false, optional = true }
-# kevy-resp: needed for `parse_command` (handshake decoding) inside
+# kevy-resp: `verb_arity` (the arity column both surfaces read, so the
+# entry checks below do not restate the server's numbers as literals)
+# and `parse_command` (handshake decoding) inside
 # the Phase 3 / v1.21 embed-as-writer replica source listener.
-kevy-resp = { path = "../kevy-resp", version = "6.0.0", optional = true }
+kevy-resp = { path = "../kevy-resp", version = "6.0.0" }
 
 # The tier feature's OS probe: declared only off-wasm so `dep:kevy-sys`
 # is a no-op on wasm32 and kevy-sys never enters the wasm graph.

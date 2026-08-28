@@ -97,9 +97,11 @@ fn cmd_idx_query(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     // refuses a shorter call with Redis's wording before it looks at the
     // catalog. Matched here so the two surfaces answer the same typo the
     // same way; COMPOSE and HYBRID are longer forms and clear this bar.
-    if argv.len() < 4 && !argv.get(1).is_some_and(|n| {
-        n.eq_ignore_ascii_case(b"COMPOSE") || n.eq_ignore_ascii_case(b"HYBRID")
-    }) {
+    if kevy_resp::verb_arity::arity_ok("IDX.QUERY", argv.len()) == Some(false)
+        && !argv.get(1).is_some_and(|n| {
+            n.eq_ignore_ascii_case(b"COMPOSE") || n.eq_ignore_ascii_case(b"HYBRID")
+        })
+    {
         return super::idx::arity_err(out, "IDX.QUERY");
     }
     let Some(name) = argv.get(1) else {

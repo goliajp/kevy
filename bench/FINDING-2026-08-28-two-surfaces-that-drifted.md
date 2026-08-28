@@ -3,6 +3,16 @@
 **Status**: the defect is fixed, the drift is closed, the gap is named.
 `crates/kevy/tests/differential_wire_vs_embedded.rs`.
 
+**Update, same day**: the architectural observation at the end of this
+file — that the facade had to restate the server's arity as literals
+because steel may not depend on cement — is now closed too. The arity
+column lives in `kevy_resp::verb_arity`, which both surfaces can read;
+the facade's two `argv.len() < 4` guards call `arity_ok`; and
+`tests_verb_meta.rs` holds the two tables in exact bijection, both
+directions. Only arity moved: the rest of a VERB_META row is 48 KB of
+documentation prose that every wasm build linking kevy-resp would
+otherwise carry for nothing.
+
 ## Why a second harness
 
 The in-process differential

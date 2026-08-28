@@ -187,3 +187,51 @@ fn the_write_flag_diverges_only_where_registered() {
          WRITE_FLAG_DIVERGES so the ledger stays exact"
     );
 }
+
+/// `kevy_resp::verb_arity::VERB_ARITY` is the same column, in the crate a
+/// surface outside `kevy` can read. Held in exact bijection here: same
+/// names, same numbers, both directions. A verb added to one table and
+/// not the other fails by name, and so does an arity edited on one side.
+///
+/// Without this the copy is what the facade's `argv.len() < 4` literals
+/// were — a number beside a comment naming its source, which is a drift
+/// one step before it happens.
+#[test]
+fn verb_arity_is_the_same_column_as_verb_meta() {
+    use kevy_resp::verb_arity::VERB_ARITY;
+
+    assert!(
+        VERB_META.len() > 150 && VERB_ARITY.len() > 150,
+        "VERB_META {} rows / VERB_ARITY {} rows — a table did not load, and an \
+         empty comparison passes every assertion below",
+        VERB_META.len(),
+        VERB_ARITY.len()
+    );
+
+    let meta: HashSet<&str> = VERB_META.iter().map(|m| m.name).collect();
+    let shared: HashSet<&str> = VERB_ARITY.iter().map(|(n, _)| *n).collect();
+
+    let missing: Vec<&str> = meta.difference(&shared).copied().collect();
+    assert!(
+        missing.is_empty(),
+        "{missing:?} are documented in VERB_META with no row in \
+         kevy_resp::verb_arity::VERB_ARITY — add them there, or a surface \
+         outside kevy has to restate the number"
+    );
+
+    let extra: Vec<&str> = shared.difference(&meta).copied().collect();
+    assert!(
+        extra.is_empty(),
+        "{extra:?} carry an arity in kevy-resp with no VERB_META row — the \
+         shared table may not describe a verb this engine does not document"
+    );
+
+    let mismatched: Vec<String> = VERB_META
+        .iter()
+        .filter_map(|m| {
+            let shared = kevy_resp::verb_arity::arity_of(m.name)?;
+            (shared != m.arity).then(|| format!("{}: VERB_META {} / shared {}", m.name, m.arity, shared))
+        })
+        .collect();
+    assert!(mismatched.is_empty(), "the two arity columns disagree: {mismatched:?}");
+}
