@@ -128,9 +128,18 @@ fn cmd_setrange<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec
     if args.len() != 4 {
         return wrong_args(out, "setrange");
     }
-    let Some(off) = arg_i64(&args[2]).filter(|&n| n >= 0) else {
-        return encode_error(out, "ERR offset is out of range");
+    // Two refusals, not one. Redis parses the offset first — a
+    // non-integer is "value is not an integer or out of range" — and
+    // only then rejects a negative one as "offset is out of range".
+    // Folding them into a single `filter(|n| n >= 0)` answered the
+    // second sentence to the first question; the differential against
+    // the facade said so on the run that first drove `SETRANGE k abc x`.
+    let Some(off) = arg_i64(&args[2]) else {
+        return encode_error(out, ERR_NOT_INT);
     };
+    if off < 0 {
+        return encode_error(out, "ERR offset is out of range");
+    }
     emit_int_result(store.setrange(&args[1], off as u64, &args[3]).map(|n| n as i64), out);
 }
 

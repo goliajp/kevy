@@ -21,6 +21,7 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
             | b"GETSET"
             | b"GETDEL"
             | b"INCRBYFLOAT"
+            | b"COPY"
             | b"DEL"
             | b"UNLINK"
             | b"INCR"
@@ -134,6 +135,11 @@ pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyClass> {
         // Generic — class `g`. (DEL single-key falls here; multi-key DEL
         // is routed through Op::Del + maybe_notify_del directly.)
         b"DEL" | b"UNLINK" | b"EXPIRE" | b"PEXPIRE" | b"PERSIST" => NotifyClass::Generic,
+        // COPY has no arm here for the same reason as GETEX below:
+        // Redis fires `copy_to` on the destination, and this table
+        // publishes the lowercased verb, so an arm would emit `copy` —
+        // a name Redis does not have.
+        //
         // GETEX is a write (it can move a deadline) but has no arm
         // here on purpose: Redis fires `expire` for the EX/PX form and
         // nothing for the bare one, and this table keys the event name
@@ -168,6 +174,7 @@ pub(crate) fn is_growing_write_verb(cmd: &[u8]) -> bool {
             | b"APPEND"
             | b"SETBIT"
             | b"SETRANGE"
+            | b"COPY"
             | b"HSET"
             | b"HSETNX"
             | b"HMSET"

@@ -312,6 +312,11 @@ impl<C: Commands> Shard<C> {
             Op::ListMoveRestore { key, value, from_left } => {
                 self.op_list_move_restore(&key, &value, from_left)
             }
+            Op::Copy { src, dst, replace } => self.op_copy(&src, dst, replace),
+            Op::CopyRead(src) => Part::CopyRead(self.store.clone_with_ttl(&src)),
+            Op::CopyPut { dst, value, ttl_ms, replace } => {
+                self.op_copy_put(dst, value, ttl_ms, replace)
+            }
             Op::RenameTake(src) => {
                 // Step 1 of cross-shard RENAME: atomically take the
                 // entry out of this shard. The orchestrator on the
@@ -466,3 +471,4 @@ impl<C: Commands> Shard<C> {
     // `Shard::run_dispatch` above — the old `bump_watch_for_dispatch`
     // re-ran the full `Commands::route` verb walk per write and is gone.
 }
+

@@ -136,6 +136,11 @@ impl<C: Commands> Shard<C> {
                         *taken = refused;
                     }
                 }
+                // Cross-shard COPY: step 1's clone, then step 2's verdict.
+                (Agg::CopyOrchestrator { read, .. }, Part::CopyRead(r)) => *read = Some(r),
+                (Agg::CopyOrchestrator { stored, .. }, Part::CopyPutDone { stored: st }) => {
+                    *stored = Some(st);
+                }
                 // Cross-shard list move: buffer each step's result in the agg
                 // so finalize can decide the next hop.
                 (
@@ -160,6 +165,7 @@ impl<C: Commands> Shard<C> {
                         | Agg::ExecPrep { .. }
                         | Agg::RenameOrchestrator { .. }
                         | Agg::ListMoveOrchestrator { .. }
+                        | Agg::CopyOrchestrator { .. }
                         | Agg::ZStoreGather { .. }
                         | Agg::GeoStore { .. }
                         | Agg::ExtensionGather { .. }
@@ -182,6 +188,7 @@ impl<C: Commands> Shard<C> {
                 }
                 Agg::RenameOrchestrator { .. } => self.finalize_rename_agg(conn_id, seq, agg),
                 Agg::ListMoveOrchestrator { .. } => self.finalize_list_move_agg(conn_id, seq, agg),
+                Agg::CopyOrchestrator { .. } => self.finalize_copy_agg(conn_id, seq, agg),
                 Agg::ZStoreGather { .. } => self.finalize_zstore_agg(conn_id, seq, agg),
                 Agg::GeoStore { .. } => self.finalize_geostore_agg(conn_id, seq, agg),
                 Agg::ScanPage { .. } => self.finalize_scan_agg(conn_id, seq, agg),

@@ -60,6 +60,7 @@ pub const VERB_ARITY: &[(&str, i8)] = &[
     ("CLUSTER",           -2),
     ("COMMAND",           -1),
     ("CONFIG",            -2),
+    ("COPY",              -3),
     ("DBSIZE",            1),
     ("DEBUG",             -2),
     ("DECR",              2),

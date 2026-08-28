@@ -38,6 +38,13 @@ pub enum Route {
     /// zset/set algebra `*STORE` family: gather sources, combine
     /// per [`crate::message::ZCombine`], materialize at `args[1]`.
     ZAlgebraStore(crate::ZCombine),
+    /// `COPY src dst [REPLACE]` — two keys, so the same hazard the
+    /// rename and list-move routes exist for: left to the catch-all
+    /// `Single(1)` the copy lands in the SOURCE's shard, where no later
+    /// read of the destination will ever look. Same-shard pairs take
+    /// one atomic op; cross-shard pairs run Read → Put, and need no
+    /// rollback because the read does not remove anything.
+    Copy,
     /// Geo `*STORE` family — `GEOSEARCHSTORE dst src …` and
     /// `GEORADIUS[BYMEMBER] src … STORE|STOREDIST dst`.
     ///

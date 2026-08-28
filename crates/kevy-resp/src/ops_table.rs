@@ -240,7 +240,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("GEOSEARCH",    RD, NG,   None,            None,    SERVER),
     op("GEOSEARCHSTORE", WR, GROW, None,          None,    SERVER),
     // ---- keyspace -------------------------------------------------------
-    op("COPY",         WR, GROW, None,            None,    ESTORE),
+    op("COPY",         WR, GROW, None,            None,    SERVER | ESTORE),
     op("DBSIZE",       RD, NG,   None,            None,    SERVER | ESTORE),
     // CDC surface: FEED.* / PREFIX.STATS are namespaced commands;
     // embedded parity = changes_since / changes_tail / feed_shards /
@@ -320,7 +320,6 @@ pub const OP_TABLE: &[OpSpec] = &[
 pub const KNOWN_GAPS: &[(&str, u16, &str)] = &[
     // F3 — exists in kevy-store + embedded but not on the server wire.
     ("BITOP",    surface::SERVER, "F3"),
-    ("COPY",     surface::SERVER, "F3"),
     ("SSCAN",    surface::ESTORE, "manifest sweep 2026-07-03: scan/hscan/zscan facades exist, sscan missing"),
     // F2 — server-propagatable writes an embed-as-replica cannot
     // apply (replay verbs missing). Until closed, embed-as-replica is

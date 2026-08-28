@@ -1,6 +1,6 @@
 # FINDING 2026-08-29 — fourteen verbs the engine had and the wire did not
 
-**Status**: twelve wired, two named with what each actually needs. The
+**Status**: thirteen wired, one named with what it needs. The
 ledger that recorded them was accurate; nothing here is a correction of
 it. What is new is that the ledger had no expiry, and no one had asked
 what it would cost to close.
@@ -63,21 +63,52 @@ Grouping three things by a surface property — "they name more than one
 key" — and then assigning the group one cost is how an estimate gets
 made without looking at any of the three.
 
-The two that remain are real work, and now say what kind:
+**COPY** was the one that needed the orchestration, and it is written:
+`kevy-rt/src/exec_copy.rs`. It is half the length of `exec_rename.rs`,
+and the reason is one word in the first step. RENAME *takes* the source,
+so an NX-refused put has to give it back — hence a third step, a
+`RenameStep::Restore`, and a documented data-loss race. COPY *clones*: a
+refused put leaves both keys exactly as they were, and the worst a crash
+between the two steps can do is not write the destination. There is no
+rollback to arrange because nothing was removed.
 
-* **COPY** needs the cross-shard Take/Put orchestration RENAME already
-  has (`exec_rename.rs`, 315 lines): a pending slot, an op to read the
-  source with its TTL, an op to place it at the destination, and an
-  answer for what a failure between them means. RENAME has answered
-  that question; COPY should give the same answer rather than a new one,
-  which is precisely why it is not a table row.
-* **BITOP** gathers N source strings across shards, combines them
-  byte-wise under AND/OR/XOR/NOT, and materialises at a destination that
-  sits at `args[2]` rather than `args[1]`. `Route::ZAlgebraStore` is the
-  right shape and the wrong payload — it combines set and zset members,
-  not raw bytes.
+Same-shard pairs take one atomic op, as Redis's COPY does — but through
+the same orchestrator slot at its final step, which is the correction to
+the first draft: giving that path an `Agg::First` meant the fold had no
+arm for `Part::CopyPutDone`, so it was dropped and the client got the
+materialize fallback, `-ERR internal error`. The differential caught it
+on the first run.
 
-The ledger is two rows now, not fourteen.
+**BITOP** remains. It gathers N source strings across shards, combines
+them byte-wise under AND/OR/XOR/NOT, and materialises at a destination
+that sits at `args[2]` rather than `args[1]`. `Route::ZAlgebraStore` is
+the right shape with the wrong payload — it combines set and zset
+members, not raw bytes.
+
+The ledger is one row now, not fourteen.
+
+## What the COPY tests had to be
+
+`crates/kevy/tests/copy_cross_shard.rs`, eight shards, and the rule
+`list_move_cross_shard.rs` wrote after RPOPLPUSH lost 11 of 12 elements:
+**assert what the destination holds, never just the reply.** A test that
+read the reply would pass against a COPY routed by `args[1]`, which
+writes the copy into the source's shard where no later read of the
+destination looks.
+
+Two of the tests are about the instrument rather than the engine:
+
+* One asks `kevy_rt::shard_of_key` — the function the server routes with
+  — how many of the twelve pairs actually split. Ten do. "Eight shards,
+  so surely they do" is an assumption; this is a measurement, and
+  without it the file could be testing the same-shard path under a
+  cross-shard name.
+* The durability test was verified red before it was trusted green.
+  `op_copy_put` logs through the same `log_value_placed` that RENAME's
+  cross-shard put uses — but "the same call" is a claim about the code,
+  not about the file. Removing that one line makes the test report
+  "10 of 10 cross-shard copies were remembered but never written down",
+  by name.
 
 ## What the registries said while this was done
 
@@ -120,21 +151,17 @@ the skip list is derived rather than remembered, and it prints.
 
 ```
 before   157 of 174 agree byte-for-byte;  17 diverge (17 named)
-after    168 of 174 agree byte-for-byte;   6 diverge  (6 named)
-shared surface 112 → 124 verbs; register 120 driven + 4 named
+after    169 of 174 agree byte-for-byte;   5 diverge  (5 named)
+shared surface 112 → 125 verbs; register 121 driven + 4 named
 ```
 
-The six that remain: three IDX.* the facade does not carry
-(EXPLAIN / VERIFY / REBUILD), TABLE.VERIFY's tick timing, and the two
-F3 verbs still ledgered — BITOP and COPY.
+The five that remain: three IDX.* the facade does not carry
+(EXPLAIN / VERIFY / REBUILD), TABLE.VERIFY's tick timing, and BITOP.
 
 The whole test suite for the three crates this touches: 1,119 passing,
 none failing, across 122 targets.
 
 ## What was not done
 
-BITOP and COPY, each described above by what it needs rather than by
-the group it was first sorted into. Both are cross-shard orchestration
-in `kevy-rt`, not a row in a table, and inventing an orchestration to
-close a ledger row is how a routing table acquires a shape nobody
-chose.
+BITOP, described above by what it needs rather than by the group it was
+first sorted into.

@@ -124,6 +124,7 @@ impl<C: Commands> Shard<C> {
             Route::Watch => self.do_watch(conn_id, seq, args),
             Route::Unwatch => self.do_unwatch(conn_id, seq),
             Route::Hello => self.do_hello(conn_id, seq, args),
+            Route::Copy => self.start_copy(conn_id, seq, args),
             Route::Rename { nx } => self.start_rename(conn_id, seq, args, nx),
             Route::ListMove { from_left, to_left } => {
                 self.start_list_move(conn_id, seq, args, from_left, to_left);
