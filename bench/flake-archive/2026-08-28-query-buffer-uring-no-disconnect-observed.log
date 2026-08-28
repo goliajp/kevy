@@ -1,0 +1,25 @@
+2026-08-28T04:12:37.6294570Z [1m[92m     Running[0m tests/query_buffer_limit.rs (target/x86_64-unknown-linux-gnu/debug/deps/query_buffer_limit-9d8bd116c7da2182)
+2026-08-28T04:12:41.5939979Z test a_streaming_giant_frame_is_disconnected_at_the_cap ... FAILED
+2026-08-28T04:12:41.5940912Z ---- a_streaming_giant_frame_is_disconnected_at_the_cap stdout ----
+2026-08-28T04:12:41.5942664Z kevy: shard 0 closing conn 2: query buffer exceeded 4096 bytes
+2026-08-28T04:12:41.5943149Z thread 'a_streaming_giant_frame_is_disconnected_at_the_cap' (23948) panicked at crates/kevy/tests/query_buffer_limit.rs:86:5:
+2026-08-28T04:12:41.5946219Z    2: query_buffer_limit::a_streaming_giant_frame_is_disconnected_at_the_cap
+2026-08-28T04:12:41.5946543Z              at ./tests/query_buffer_limit.rs:86:5
+2026-08-28T04:12:41.5946925Z    3: query_buffer_limit::a_streaming_giant_frame_is_disconnected_at_the_cap::{closure#0}
+2026-08-28T04:12:41.5947279Z              at ./tests/query_buffer_limit.rs:21:56
+2026-08-28T04:12:41.5947781Z    4: <query_buffer_limit::a_streaming_giant_frame_is_disconnected_at_the_cap::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+2026-08-28T04:12:41.5950678Z     a_streaming_giant_frame_is_disconnected_at_the_cap
+2026-08-28T04:12:41.5951059Z test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.96s
+2026-08-28T04:12:41.5974104Z [1m[91merror[0m: test failed, to rerun pass `-p kevy --test query_buffer_limit`
+
+# Context (written at archive time, 2026-08-28)
+# CI run 33140908753, job 98751339596, commit 815b5e7d, x86_64-unknown-linux-gnu.
+# The server did the right thing — 'closing conn 2: query buffer exceeded 4096
+# bytes' is in this log. The client's 64-iteration loop (~4s total) saw neither
+# EOF nor a write error. uring_mark_closing only sets a flag; the fd drops in
+# uring_reap_closed once writes are quiet and output drained, both of which
+# hold here (no reply was ever produced). Not reproduced: macOS has no io_uring.
+# The commits since the last fully green run (71bf47c9, 49/49) touch nothing in
+# crates/kevy, kevy-rt or uring — lock files, gate scripts, kevy-compress,
+# kevy-seg, kevy-scalar only. This test was reshaped once before for an
+# io_uring blind spot (ca7696e2).
