@@ -2,16 +2,16 @@
   "corpus": "c1",
   "platform": "linux",
   "total_regions": 163376,
-  "dead_regions": 27866,
-  "llvm_per_instantiation_dead": 28601,
+  "dead_regions": 27867,
+  "llvm_per_instantiation_dead": 28524,
   "crates": {
     "kevy": {
       "regions": 28939,
-      "dead": 5450
+      "dead": 5446
     },
     "kevy-alloc": {
       "regions": 1694,
-      "dead": 117
+      "dead": 119
     },
     "kevy-bench": {
       "regions": 130,
@@ -111,7 +111,7 @@
     },
     "kevy-replicate": {
       "regions": 2672,
-      "dead": 192
+      "dead": 172
     },
     "kevy-resp": {
       "regions": 3378,
@@ -127,7 +127,7 @@
     },
     "kevy-rt": {
       "regions": 15689,
-      "dead": 4811
+      "dead": 4767
     },
     "kevy-scalar": {
       "regions": 4391,
@@ -135,7 +135,7 @@
     },
     "kevy-scope": {
       "regions": 629,
-      "dead": 57
+      "dead": 56
     },
     "kevy-seg": {
       "regions": 1212,
@@ -2186,6 +2186,7 @@
     "kevy_ffi::sub_raw::kevy_sub_wait_raw": 5,
     "kevy_ffi::unpack_argv": 35,
     "kevy_geo::estimate_step": 1,
+    "kevy_geo::search::estimate_step": 1,
     "kevy_get": 2,
     "kevy_get_shared": 2,
     "kevy_hash::crc16::make_table": 19,
@@ -2825,7 +2826,7 @@
     "kevy_window::text::clean_stale": 17,
     "kevy_window::text::write_seg_file": 11
   },
-  "envelope_runs": 8,
+  "envelope_runs": 9,
   "history": [
     {
       "accepted": [
@@ -2914,6 +2915,12 @@
       "symbols": 2620,
       "regions": 27866,
       "reason": "An envelope over eight linux CI runs \u2014 the seven of the previous envelope plus 33182917965. Seven symbols join and one grows, from three separate causes, none of them new dead code. (1) FIVE joins are one module split: cmd_xread and its four parsers moved to dispatch_stream/read.rs when an added arity guard pushed mod.rs to 503 lines, so kevy::dispatch_stream::cmd_xread became kevy::dispatch_stream::read::cmd_xread. Identity is the symbol name, so a rename reads as a join plus a departure; not one region changed reachability. Same shape as the cmsgpack::encode split accepted earlier in this release. The pre-split names stay in the envelope as symbols that have left the set, which the gate treats as improvement. (2) TWO joins are the assertion-message arms of two new parity tests, the_write_flag_diverges_only_where_registered and verb_arity_is_the_same_column_as_verb_meta, which are unreachable precisely while those tests pass; fifty test symbols already sit in the set for that reason. (3) ONE growth, kevy_rt::shard::replica_readable 24 -> 27, is the timing-dependent replication tail this file's history already names \u2014 kevy-rt has zero changed files across the entire range. The newest run alone observed 27597 regions against a 27833 baseline, so the set is smaller than the bound it is being measured against."
+    },
+    {
+      "envelope_over": 9,
+      "symbols": 2621,
+      "regions": 27867,
+      "reason": "An envelope over nine linux CI runs, adding 33187345155. One symbol joins and nothing grows: kevy_geo::estimate_step became kevy_geo::search::estimate_step when lib.rs crossed 500 lines and the radius search moved to its own file. Identity is the symbol name, so the move reads as one join and one departure \u2014 the third module split this release has produced exactly that shape, after cmsgpack::encode and dispatch_stream::read. The run observed 27529 regions against a 27866 bound and 2611 symbols against 2620, so the set is smaller in both dimensions than the envelope it is measured against; the joins are renames, not new dead code."
     }
   ]
 }

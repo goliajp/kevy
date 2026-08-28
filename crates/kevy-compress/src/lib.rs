@@ -130,7 +130,6 @@ fn parse_dict(dict: &[u8]) -> (Option<[u8; 256]>, &[u8]) {
 /// Decode failure: the frame does not decode to exactly what its
 /// header promises. Corrupt and truncated frames land here — they are
 /// rejected, never mis-decoded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// # Examples
 ///
 /// ```
@@ -139,6 +138,7 @@ fn parse_dict(dict: &[u8]) -> (Option<[u8; 256]>, &[u8]) {
 /// // A frame the decoder cannot trust is refused, not half-decoded.
 /// assert!(decode(b"", b"\x01truncated").is_err());
 /// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Corrupt;
 
 impl core::fmt::Display for Corrupt {
@@ -151,7 +151,6 @@ impl core::fmt::Display for Corrupt {
 /// pays. The result is **never longer than `input` plus the frame
 /// header**: when LZ cannot save a byte — incompressible input,
 /// adversarial input, anything — the frame stores the bytes raw.
-#[must_use]
 /// # Examples
 ///
 /// Encode and decode are inverses under the same dictionary. An empty
@@ -171,6 +170,7 @@ impl core::fmt::Display for Corrupt {
 /// assert_eq!(kevy_compress::decode(b"shared prefix", &frame).unwrap(),
 ///            b"shared prefix and more");
 /// ```
+#[must_use]
 pub fn encode(dict: &[u8], input: &[u8]) -> Vec<u8> {
     let (_, content) = parse_dict(dict);
     let mut frame = Vec::with_capacity(input.len() + MAX_HEADER);
@@ -195,7 +195,6 @@ pub fn encode(dict: &[u8], input: &[u8]) -> Vec<u8> {
 /// never-expanding holds here exactly as for [`encode`]. Costs roughly a
 /// second serialization pass at encode time — which is the point: a
 /// value re-encoded by compaction has proven cold (RFC §3).
-#[must_use]
 /// # Examples
 ///
 /// ```
@@ -206,6 +205,7 @@ pub fn encode(dict: &[u8], input: &[u8]) -> Vec<u8> {
 /// assert!(encode_high(b"", v).len() <= encode(b"", v).len());
 /// assert_eq!(decode(b"", &encode_high(b"", v)).unwrap(), v);
 /// ```
+#[must_use]
 pub fn encode_high(dict: &[u8], input: &[u8]) -> Vec<u8> {
     let (lens, content) = parse_dict(dict);
     let mut frame = Vec::with_capacity(input.len() + MAX_HEADER);
@@ -288,7 +288,6 @@ pub fn decode(dict: &[u8], frame: &[u8]) -> Result<Vec<u8>, Corrupt> {
 /// capture is won, so expect this policy to be replaced behind the
 /// same signature; its output is bytes, and bytes carry no versioning
 /// burden (the dictionary dies with its vlog file).
-#[must_use]
 /// # Examples
 ///
 /// ```
@@ -307,6 +306,7 @@ pub fn decode(dict: &[u8], frame: &[u8]) -> Result<Vec<u8>, Corrupt> {
 /// let one = b"GET /api/v1/users/9 HTTP/1.1";
 /// assert_eq!(decode(&dict, &encode(&dict, one)).unwrap(), one);
 /// ```
+#[must_use]
 pub fn train(samples: &[&[u8]], budget: usize) -> Vec<u8> {
     let mut dict = Vec::with_capacity(budget.min(MAX_OFFSET + 256));
     if samples.is_empty() || budget == 0 {
