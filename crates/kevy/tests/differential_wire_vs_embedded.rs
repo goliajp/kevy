@@ -233,6 +233,77 @@ const CORPUS: &[&str] = &[
     "HPEXPIRE h2 100000 FIELDS 1 f2",
     "HPEXPIREAT h2 99999999999000 FIELDS 1 f2",
     "HPERSIST h2 FIELDS 1 f2",
+    // ── the rest of the shared surface ──
+    // Every verb `ops_table` says both surfaces carry, driven with real
+    // arguments so the ANSWER is compared and not merely the refusal.
+    // The register below refuses to let this block shrink again.
+    //
+    // Own keys, and placed after every read that walks the keyspace
+    // (KEYS, SCAN, PREFIX.*), so what these add cannot move an earlier
+    // answer. The prefix is `w`, not `s`, for the same reason.
+    "SET wnum 10",
+    "TYPE wnum",
+    "TYPE nosuchkey",
+    "INCR wnum",
+    "INCRBY wnum 5",
+    "DECR wnum",
+    "GET wnum",
+    "HSET wh f1 v1 f2 2",
+    "HGETALL wh",
+    "HLEN wh",
+    "HMGET wh f1 f2 nope",
+    "HINCRBY wh f2 3",
+    "HSETNX wh f2 ignored",
+    "HSETNX wh f3 kept",
+    "HGETALL wh",
+    "RPUSH wl a b c",
+    "LLEN wl",
+    "LINDEX wl 0",
+    "LINDEX wl 99",
+    "LPUSH wl z",
+    "LPOP wl",
+    "SADD wset a b c",
+    "SISMEMBER wset a",
+    "SISMEMBER wset nope",
+    "SMEMBERS wset",
+    // SRANDMEMBER draws from each surface's own generator, so what it
+    // returns is defined as a SET and only once the count reaches the
+    // cardinality — `set_read.rs` shuffles even then. Compared as a
+    // multiset, via UNORDERED below.
+    "SRANDMEMBER wset 3",
+    "SREM wset a",
+    "SCARD wset",
+    "ZADD wz 1 one 2 two 3 three",
+    "ZCARD wz",
+    "ZCOUNT wz 1 2",
+    "ZSCORE wz two",
+    "ZSCORE wz nope",
+    "ZRANK wz two",
+    "ZRANK wz nope",
+    "ZINCRBY wz 5 two",
+    "ZRANGEBYSCORE wz 2 7",
+    "ZREM wz one",
+    "ZCARD wz",
+    // the declarative surface
+    "TABLE.DECLARE wt PREFIX wrow: PK id COLUMN id i64 COLUMN city str INDEX city range",
+    "TABLE.LIST",
+    "TABLE.VERIFY wt",
+    "TABLE.ENSURE wt PREFIX wrow: PK id COLUMN id i64 COLUMN city str INDEX city range",
+    "TABLE.REPLACE wt PREFIX wrow: PK id COLUMN id i64 COLUMN city str COLUMN age i64 INDEX city range",
+    "VIEW.CREATE wv QUERY wt.city EQ tokyo ORDER BY wt.city",
+    "VIEW.LIST",
+    "VIEW.INFO wv",
+    "VIEW.DROP wv",
+    "TABLE.DROP wt",
+    // keyspace
+    "SET wren v",
+    "RENAME wren wren2",
+    "GET wren2",
+    "EXPIRE wren2 100000",
+    "PERSIST wren2",
+    "TTL wren2",
+    "DEL wren2 nosuchkey",
+    "EXISTS wren2",
     // ── F3: implemented in the facade, absent from the RESP dispatch ──
     // Registered in `kevy_resp::ops_table::KNOWN_GAPS`, and the check
     // below reads that ledger rather than restating it. Own keys, last,
@@ -258,11 +329,18 @@ const CORPUS: &[&str] = &[
     // empty stores and proving nothing.
     "FLUSHALL",
     "DBSIZE",
-    // Two verbs are deliberately never driven, and naming them is the
-    // point: RANDOMKEY answers with a key of its own choosing and TIME
-    // with the clock, so a byte comparison between two implementations
-    // asserts something neither promises. They are not a coverage hole —
-    // they are a pair a differential harness cannot speak about.
+    // RANDOMKEY is deliberately never driven: it answers with a key of
+    // its own choosing, so a byte comparison between two implementations
+    // asserts something neither promises. That is not a coverage hole,
+    // and `CANNOT_COMPARE` below now holds the reason where a test can
+    // check it rather than only where a reader can find it.
+    //
+    // This comment used to name TIME beside it, as "a pair a differential
+    // harness cannot speak about". They were never a pair: TIME is not on
+    // the server wire at all — `ops_table::KNOWN_GAPS` registers it as F3,
+    // implemented in the store and the facade and unwired on RESP — so
+    // this harness would not have compared it whatever the clock did. The
+    // register found that by refusing the entry.
 ];
 
 /// Divergences that are correct, each with the reason. Written after the
@@ -289,6 +367,20 @@ const EXPECTED: &[(&str, &str)] = &[
         "IDX.REBUILD t",
         "Same gap: server-only (cmd_resolve.rs:186), absent from the          facade's dispatch table.",
     ),
+    (
+        "TABLE.VERIFY wt",
+        "A difference of WHEN, not of what. The server backfills an index \
+         as a background job advanced one batch per runtime tick \
+         (`index_runtime/row_apply.rs:202 advance_backfill`), and until it \
+         finishes every read of that index answers -INDEXBUILDING — a \
+         contract the error states in words, telling the caller to poll \
+         IDX.LIST. The corpus asks on the line after TABLE.DECLARE, before \
+         any tick has run. The single-process facade has no tick loop, so \
+         its index is ready when it is declared and TABLE.VERIFY answers \
+         with the stats. Both answers are correct for the surface that \
+         gave them; the corpus cannot wait, so this is named rather than \
+         driven differently.",
+    ),
 ];
 
 /// Verbs whose reply Redis defines no ORDER for: a set, or a cursor
@@ -303,7 +395,8 @@ const EXPECTED: &[(&str, &str)] = &[
 /// `KEYS`, `HSCAN` and `ZSCAN` are the same class and are deliberately
 /// NOT here: they agree byte for byte today, and if that stops being
 /// true the cell should say so rather than have been excused in advance.
-const UNORDERED: &[&str] = &["SINTER", "SUNION", "SDIFF", "SCAN"];
+const UNORDERED: &[&str] =
+    &["SINTER", "SUNION", "SDIFF", "SCAN", "SMEMBERS", "SRANDMEMBER"];
 
 /// A canonical form for a reply whose order is not defined: every array
 /// in it, at every depth, has its elements sorted.
@@ -648,5 +741,102 @@ fn both_surfaces_refuse_a_short_call_the_same_way() {
         "{} verb(s) refuse a short call differently on the two surfaces \
          without a stated reason: {unexplained:?}",
         unexplained.len()
+    );
+}
+
+/// Verbs both surfaces carry that this corpus deliberately does not drive,
+/// each with the reason a byte comparison cannot speak about it.
+///
+/// A differential has to compare something both sides promise. These
+/// promise the opposite: an answer of their own choosing, or an answer to
+/// a question the two surfaces are not asked in the same words.
+const CANNOT_COMPARE: &[(&str, &str)] = &[
+    (
+        "RANDOMKEY",
+        "answers with a key of its own choosing, so comparing bytes would \
+         assert the two implementations chose alike",
+    ),
+    (
+        "FEED.TAIL",
+        "different signatures, not drift: the server is sharded and takes \
+         the shard as an argument, the single-process facade has none — so \
+         one corpus line cannot address both. Named for the same reason in \
+         `both_surfaces_refuse_a_short_call_the_same_way`",
+    ),
+    ("FEED.READ", "same pair, same reason"),
+];
+
+/// The register: every verb on BOTH surfaces is either driven above with
+/// real arguments, or named as one a byte comparison cannot settle.
+///
+/// `both_surfaces_refuse_a_short_call_the_same_way` already reaches every
+/// shared verb — but only through its refusal. It proves the two surfaces
+/// say no in the same sentence, and says nothing about what they answer
+/// when they say yes. Nothing held that second face, and what the corpus
+/// actually reached lived as a sentence in a roadmap, where it went stale:
+/// it read "about a quarter" while the corpus had grown past half.
+///
+/// Held in BOTH directions, which is the point:
+///
+/// * a shared verb that is neither driven nor named fails — the register
+///   cannot grow silently;
+/// * a name here that the corpus has since started driving fails too — a
+///   reason cannot outlive the thing it excused;
+/// * a name here for a verb that is not on both surfaces fails — an entry
+///   cannot be about a verb this harness was never going to compare.
+///
+/// And a floor, because a selector that returned nothing would satisfy
+/// every one of those.
+#[test]
+fn every_shared_verb_is_driven_or_named() {
+    use kevy_resp::ops_table::{spec, surface};
+    use std::collections::BTreeSet;
+
+    let shared: BTreeSet<&'static str> = kevy_resp::ops_table::ops_with(surface::SERVER)
+        .into_iter()
+        .filter(|n| spec(n).is_some_and(|s| s.surfaces & surface::ESTORE != 0))
+        .collect();
+    assert!(
+        shared.len() > 50,
+        "only {} verbs on both surfaces — the selector is broken, not the \
+         engine bare",
+        shared.len()
+    );
+
+    let driven: BTreeSet<&str> = CORPUS.iter().filter_map(|c| c.split(' ').next()).collect();
+    let named: BTreeSet<&str> = CANNOT_COMPARE.iter().map(|(n, _)| *n).collect();
+
+    let silent: Vec<&str> =
+        shared.iter().copied().filter(|n| !driven.contains(n) && !named.contains(n)).collect();
+    let healed: Vec<&str> = named.iter().copied().filter(|n| driven.contains(n)).collect();
+    let stale: Vec<&str> = named.iter().copied().filter(|n| !shared.contains(n)).collect();
+
+    println!(
+        "differential register: {} of {} shared verbs driven, {} named as \
+         beyond a byte comparison",
+        shared.len() - silent.len() - named.len(),
+        shared.len(),
+        named.len()
+    );
+
+    assert!(
+        silent.is_empty(),
+        "{} verb(s) on both surfaces are neither driven by the corpus nor \
+         named as beyond comparison — the differential is silent about \
+         them: {silent:?}",
+        silent.len()
+    );
+    assert!(
+        healed.is_empty(),
+        "{} verb(s) are named as beyond a byte comparison AND driven by \
+         the corpus — one of the two is wrong: {healed:?}",
+        healed.len()
+    );
+    assert!(
+        stale.is_empty(),
+        "{} verb(s) are named as beyond a byte comparison but are not on \
+         both surfaces, so this harness would never have compared them: \
+         {stale:?}",
+        stale.len()
     );
 }
