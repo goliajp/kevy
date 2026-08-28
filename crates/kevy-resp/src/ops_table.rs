@@ -253,6 +253,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("IDX.COUNT",    RD, NG,   None,            None,    SERVER | ESTORE),
     // IDX.VERIFY: server-only (embedded exposes idx_stats instead).
     op("IDX.VERIFY",   RD, NG,   None,            None,    SERVER),
+    op("IDX.EXPLAIN",  RD, NG,   None,            None,    SERVER),
     // Views (VIEW.* namespace; catalog ops are sidecar-persisted,
     // not data writes — same reasoning as IDX.*). VERIFY/REBUILD/
     // EXPLAIN are server-only (embedded rebuilds inline and exposes

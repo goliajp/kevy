@@ -8,6 +8,8 @@
 //! the exact (op, property) named.
 
 use kevy_resp::ops_table::{KNOWN_GAPS, NotifyKind, OP_TABLE, surface};
+
+use crate::verb_meta::VERB_META;
 use kevy_rt::NotifyClass;
 
 use crate::cmd::{is_growing_write_verb, is_write_verb, notify_class_for_verb};
@@ -131,3 +133,82 @@ fn server_surface_has_dispatch_literals() {
     }
 }
 
+
+/// VERB_META families whose verbs carry no keyspace semantics at all,
+/// and so have no OP_TABLE row.
+///
+/// OP_TABLE records write classification, notification class, wake index
+/// and surfaces — every one of them a property of a keyspace EFFECT. A
+/// connection, transaction, pub/sub, script or replication verb has none
+/// of those, and consistently has no row.
+const NON_KEYSPACE_GROUPS: &[&str] = &["connection", "tx", "pubsub", "script", "replication"];
+
+/// The `server` family is the one that does not split by group: DBSIZE,
+/// FLUSHALL and FLUSHDB read or empty the keyspace and DO have rows,
+/// while the rest administer the process. So this family is exempted by
+/// NAME rather than wholesale — an exemption that would otherwise have
+/// covered FLUSHALL, which is exactly the kind of verb a registry must
+/// not lose.
+const ADMIN_VERBS: &[&str] = &[
+    "BGREWRITEAOF",
+    "BGSAVE",
+    "CLIENT",
+    "CLUSTER",
+    "COMMAND",
+    "CONFIG",
+    "DEBUG",
+    "INFO",
+    "MEMORY",
+    "SAVE",
+    "SHUTDOWN",
+    "SLOWLOG",
+];
+
+/// Every documented verb in a KEYSPACE family has an OP_TABLE row.
+///
+/// The direction nothing held. `op_table_server_verbs_all_documented`
+/// asks whether every registry row has a doc row; this asks the reverse,
+/// and the reverse is where two verbs were hiding: `HPTTL`, beside four
+/// hash-TTL siblings that all had rows, and `IDX.EXPLAIN`, the third of
+/// a server-only trio whose other two were registered. Neither could
+/// fail any check that iterates OP_TABLE, because neither was in it.
+///
+/// Both ledgers are EXACT: a family or a verb that acquires a row fails
+/// here rather than sitting on an exemption it no longer needs.
+#[test]
+fn every_keyspace_verb_has_a_registry_row() {
+    use std::collections::BTreeSet;
+
+    let rows: BTreeSet<&str> = OP_TABLE.iter().map(|o| o.name).collect();
+    let groups: BTreeSet<&str> = NON_KEYSPACE_GROUPS.iter().copied().collect();
+    let admin: BTreeSet<&str> = ADMIN_VERBS.iter().copied().collect();
+    assert!(VERB_META.len() > 150, "VERB_META did not load");
+
+    let missing: Vec<&str> = VERB_META
+        .iter()
+        .filter(|m| !groups.contains(m.group) && !admin.contains(m.name) && !rows.contains(m.name))
+        .map(|m| m.name)
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "{missing:?} are documented keyspace verbs with no OP_TABLE row — add the row, or \
+         name the verb in ADMIN_VERBS with its reason"
+    );
+
+    let healed_groups: Vec<&str> = NON_KEYSPACE_GROUPS
+        .iter()
+        .filter(|g| VERB_META.iter().any(|m| m.group == **g && rows.contains(m.name)))
+        .copied()
+        .collect();
+    assert!(
+        healed_groups.is_empty(),
+        "{healed_groups:?} are named as carrying no keyspace semantics but have rows now"
+    );
+
+    let healed_verbs: Vec<&str> = ADMIN_VERBS.iter().filter(|v| rows.contains(*v)).copied().collect();
+    assert!(
+        healed_verbs.is_empty(),
+        "{healed_verbs:?} are named as administrative but have rows now — drop them from \
+         ADMIN_VERBS so the ledger stays exact"
+    );
+}
