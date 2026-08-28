@@ -1,17 +1,17 @@
 {
   "corpus": "c1",
   "platform": "linux",
-  "total_regions": 163085,
-  "dead_regions": 27873,
-  "llvm_per_instantiation_dead": 28776,
+  "total_regions": 162948,
+  "dead_regions": 27800,
+  "llvm_per_instantiation_dead": 28670,
   "crates": {
     "kevy": {
-      "regions": 28714,
-      "dead": 5610
+      "regions": 28813,
+      "dead": 5577
     },
     "kevy-alloc": {
       "regions": 1694,
-      "dead": 119
+      "dead": 117
     },
     "kevy-bench": {
       "regions": 130,
@@ -50,7 +50,7 @@
       "dead": 396
     },
     "kevy-elect": {
-      "regions": 1826,
+      "regions": 1851,
       "dead": 111
     },
     "kevy-embedded": {
@@ -66,7 +66,7 @@
       "dead": 5
     },
     "kevy-hash": {
-      "regions": 535,
+      "regions": 317,
       "dead": 31
     },
     "kevy-index": {
@@ -98,8 +98,8 @@
       "dead": 520
     },
     "kevy-persist": {
-      "regions": 7602,
-      "dead": 706
+      "regions": 7765,
+      "dead": 699
     },
     "kevy-pubsub-bench": {
       "regions": 283,
@@ -122,12 +122,12 @@
       "dead": 126
     },
     "kevy-ring": {
-      "regions": 360,
+      "regions": 154,
       "dead": 0
     },
     "kevy-rt": {
       "regions": 15689,
-      "dead": 4803
+      "dead": 4772
     },
     "kevy-scalar": {
       "regions": 4383,
@@ -135,7 +135,7 @@
     },
     "kevy-scope": {
       "regions": 629,
-      "dead": 57
+      "dead": 56
     },
     "kevy-seg": {
       "regions": 1206,
@@ -147,7 +147,7 @@
     },
     "kevy-store": {
       "regions": 18642,
-      "dead": 1536
+      "dead": 1525
     },
     "kevy-sys": {
       "regions": 730,
@@ -322,7 +322,7 @@
     "::dec_count": 1,
     "::decode_range": 9,
     "::decompress": 2,
-    "::default": 21,
+    "::default": 18,
     "::del": 55,
     "::del_ids": 1,
     "::delete": 1,
@@ -922,7 +922,7 @@
     "::xread": 1,
     "::xread_dollar_last_id": 1,
     "::xreadgroup": 2,
-    "::xreadgroup_has_new": 14,
+    "::xreadgroup_has_new": 1,
     "::xrevrange": 1,
     "::xsetid": 1,
     "::xtrim_maxlen": 3,
@@ -1030,7 +1030,7 @@
     "<kevy_rt::shard::Shard>::build_xread_targets": 2,
     "<kevy_rt::shard::Shard>::build_zalgebra_store::": 4,
     "<kevy_rt::shard::Shard>::build_zintercard::": 4,
-    "<kevy_rt::shard::Shard>::cancel_xshard_on_close": 8,
+    "<kevy_rt::shard::Shard>::cancel_xshard_on_close": 2,
     "<kevy_rt::shard::Shard>::check_repl_ack_waiters": 53,
     "<kevy_rt::shard::Shard>::check_repl_apply_waiters": 2,
     "<kevy_rt::shard::Shard>::check_tee_overrun": 27,
@@ -1050,7 +1050,7 @@
     "<kevy_rt::shard::Shard>::dispatch_batch": 2,
     "<kevy_rt::shard::Shard>::do_hello::": 2,
     "<kevy_rt::shard::Shard>::do_psubscribe::": 1,
-    "<kevy_rt::shard::Shard>::do_publish::": 1,
+    "<kevy_rt::shard::Shard>::do_publish::": 4,
     "<kevy_rt::shard::Shard>::do_punsubscribe::": 1,
     "<kevy_rt::shard::Shard>::do_subscribe::": 9,
     "<kevy_rt::shard::Shard>::do_unwatch": 1,
@@ -1156,8 +1156,8 @@
     "<kevy_rt::shard::Shard>::repl_ack_count": 4,
     "<kevy_rt::shard::Shard>::repl_waiter_reply": 5,
     "<kevy_rt::shard::Shard>::replica_conn_is_live": 11,
-    "<kevy_rt::shard::Shard>::replica_io_failed": 8,
-    "<kevy_rt::shard::Shard>::replica_readable": 27,
+    "<kevy_rt::shard::Shard>::replica_io_failed": 1,
+    "<kevy_rt::shard::Shard>::replica_readable": 24,
     "<kevy_rt::shard::Shard>::replica_writable": 13,
     "<kevy_rt::shard::Shard>::replicas_brief": 29,
     "<kevy_rt::shard::Shard>::reply_feed_error": 13,
@@ -1167,7 +1167,7 @@
     "<kevy_rt::shard::Shard>::restore_serve_on_teardown": 9,
     "<kevy_rt::shard::Shard>::rewrite_aof_after_resync": 11,
     "<kevy_rt::shard::Shard>::rewrite_predicted_diverging": 3,
-    "<kevy_rt::shard::Shard>::run": 79,
+    "<kevy_rt::shard::Shard>::run": 74,
     "<kevy_rt::shard::Shard>::run_uring": 334,
     "<kevy_rt::shard::Shard>::run_uring::cold_path_hint": 2,
     "<kevy_rt::shard::Shard>::send_or_hold_response": 8,
@@ -1290,7 +1290,6 @@
     "kevy::cmd_block::xread_streams_route::": 2,
     "kevy::cmd_block::xreadgroup_block_hint::": 6,
     "kevy::cmd_block::xreadgroup_route::": 4,
-    "kevy::cmd_block_serve::block_ready::": 3,
     "kevy::cmd_block_serve::block_restore_argv": 1,
     "kevy::cmd_block_serve::block_serve_argv::": 4,
     "kevy::cmd_block_serve::brpoplpush_serve::": 2,
@@ -1299,7 +1298,7 @@
     "kevy::cmd_block_serve::push_stream_tail": 9,
     "kevy::cmd_block_serve::scan_stream_opts::": 11,
     "kevy::cmd_block_serve::xread_serve::": 2,
-    "kevy::cmd_block_serve::xreadgroup_ready::": 29,
+    "kevy::cmd_block_serve::xreadgroup_ready::": 2,
     "kevy::cmd_block_serve::xreadgroup_serve::": 3,
     "kevy::cmd_command::cmd_command::": 38,
     "kevy::cmd_command::cmd_command_docs::": 50,
@@ -1725,7 +1724,7 @@
     "kevy_alloc::large::with_pool::": 1,
     "kevy_alloc::os::discard": 1,
     "kevy_alloc::os::map_aligned": 4,
-    "kevy_alloc::os::trim": 3,
+    "kevy_alloc::os::trim": 1,
     "kevy_alloc::os::unmap": 1,
     "kevy_alloc::segment::splice_foreign": 2,
     "kevy_bench::bench::": 1,
@@ -2354,11 +2353,9 @@
     "kevy_persist::feed_meta::write_feed_gen": 4,
     "kevy_persist::feed_meta::write_feed_meta": 4,
     "kevy_persist::layout::infer_files_n": 2,
-    "kevy_persist::record::resync_scan": 3,
+    "kevy_persist::record::resync_scan": 2,
     "kevy_persist::record::write_record::": 2,
     "kevy_persist::record::write_record_multibulk::": 1,
-    "kevy_persist::replay::apply_record": 4,
-    "kevy_persist::replay::read_fully::<std::io::buffered::bufreader::BufReader>": 6,
     "kevy_persist::replay::replay_aof::": 4,
     "kevy_persist::replay::replay_aof_quiet::": 22,
     "kevy_persist::replay::replay_aof_resync::": 6,
@@ -2368,10 +2365,12 @@
     "kevy_persist::replay::v1_walk::": 1,
     "kevy_persist::replay::valid_prefix_len": 16,
     "kevy_persist::replay::valid_prefix_len_of_file": 9,
-    "kevy_persist::replay::walk_v2::<std::io::buffered::bufreader::BufReader>": 11,
-    "kevy_persist::replay_resync::resync_fallback": 5,
-    "kevy_persist::replay_resync::resync_slice": 6,
+    "kevy_persist::replay_resync::resync_fallback": 3,
+    "kevy_persist::replay_resync::resync_slice": 5,
     "kevy_persist::replay_txn::txn_marker": 1,
+    "kevy_persist::replay_walk::apply_record": 4,
+    "kevy_persist::replay_walk::read_fully::<std::io::buffered::bufreader::BufReader>": 6,
+    "kevy_persist::replay_walk::walk_v2::<std::io::buffered::bufreader::BufReader>": 8,
     "kevy_persist::reshard::commit_reshard::": 3,
     "kevy_persist::reshard::finish_reshard::": 4,
     "kevy_persist::reshard::merge_sources::": 2,
@@ -2858,6 +2857,12 @@
       "symbols": 2615,
       "regions": 27873,
       "reason": "element-wise maximum; growth now means worse than the worst observed run"
+    },
+    {
+      "envelope_over": 3,
+      "symbols": 2614,
+      "regions": 27800,
+      "reason": "three symbols moved from replay to replay_walk when that file was split at the 500-line ceiling: apply_record, read_fully and walk_v2, same code under a new module path. A symbol-keyed ratchet reads a rename as a deletion plus an addition and is right to fire; the five old paths left the set in the same runs."
     }
   ]
 }
