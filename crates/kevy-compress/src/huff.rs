@@ -181,6 +181,18 @@ pub(crate) fn decode(buf: &[u8], n: usize) -> Result<(Vec<u8>, usize), Corrupt> 
 /// Kraft validation: an over-full code space lets two codes alias;
 /// reject instead of guessing.
 pub(crate) fn validate_lens(lens: &[u8; 256], n: usize) -> Result<(), Corrupt> {
+    // A length past MAX_LEN is not a code this format can express — the
+    // encoder length-limits to it — and it must be rejected BEFORE the
+    // Kraft sum, which subtracts the length from MAX_LEN. A header nibble
+    // carries 0..=15 and MAX_LEN is 12, so a corrupt or crafted header
+    // reaches that subtraction with 13, 14 or 15: a panic in a checked
+    // build, and in release a masked shift that feeds the sum an arbitrary
+    // number — defeating the over-full test this function exists to be.
+    // (`decode_arbitrary` crash-80b8440d, second run of a target that had
+    // been in the tree unrun.)
+    if lens.iter().any(|&l| u32::from(l) > MAX_LEN) {
+        return Err(Corrupt);
+    }
     let kraft: u64 = lens
         .iter()
         .filter(|&&l| l > 0)
