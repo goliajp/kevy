@@ -215,10 +215,13 @@ pub(crate) fn sniff_format(path: &Path) -> io::Result<crate::AofFormat> {
     }
 }
 
-/// Stream a v2 AOF record-by-record: 8-byte header, payload into a
-/// reusable buffer, CRC check, exactly-one-command parse, apply. Peak
-/// memory is O(largest record). `apply = None` is the valid-prefix walk —
-/// same stops, no side effects, and no summary line.
+/// Resync runs on any non-clean stop, not only a corrupt frame.
+///
+/// A length field that lies — legal but larger than the bytes that remain —
+/// makes the walk call the stop a torn tail while the cause is corruption,
+/// and everything behind it is lost with `corrupt` left false. The two cases
+/// are pinned in `tests_aof.rs`: `resync_recovers_the_good_tail_behind_a_
+/// lying_length` and `resync_on_a_genuine_torn_tail_adds_nothing`.
 fn stream_v2(
     path: &Path,
     mut apply: Option<&mut dyn FnMut(Argv)>,
@@ -239,22 +242,8 @@ fn stream_v2(
     let mut w = walk_v2(&mut r, magic.len() as u64, &mut apply)?;
     let corrupt = matches!(w.stop, ReplayStop::CorruptFrame(_));
     let mut ranges: Vec<(u64, u64)> = Vec::new();
-    // Any stop that is not clean, not only the ones the walk calls corrupt.
-    //
-    // A record whose length field LIES — legal (<= MAX_RECORD) but larger
-    // than the bytes that remain — makes `read_fully` come up short, which
-    // the walk reads as a torn tail. It is literally true that EOF was hit,
-    // and the cause is corruption, not a torn write: constructed
-    // deterministically, one such record loses every good record behind it
-    // and `corrupt` stays false, so nothing even warns. The sibling case
-    // where the CRC lies is flagged corrupt and fully recovered.
-    //
-    // Asking resync on a genuine torn tail costs a scan of the few bytes
-    // after the stop and finds nothing to apply — a torn tail has no
-    // complete record behind it, and `resync_scan` requires a length that
-    // fits, a matching CRC32C, and a payload that parses as exactly one
-    // command. So the condition is what it should always have been: is
-    // there anything valid after where we stopped?
+    // Any non-clean stop, not only the ones the walk calls corrupt — see
+    // `resync_on_a_non_clean_stop` above for why a torn tail is asked too.
     if resync && !matches!(w.stop, ReplayStop::Clean) {
         crate::replay_resync::resync_fallback(path, &mut w, &mut apply, &mut ranges)?;
     }
