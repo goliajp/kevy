@@ -53,6 +53,33 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# The isolation guard perfgate has had all along, and this gate did not —
+# which is backwards, because tail latency is the measurement contention
+# ruins first. This box also hosts two GitHub Actions runners and other
+# people's services; a firehose cell read 48ms, 359ms and 392ms across three
+# runs of the same binary and there was no record of what else was running,
+# so the blown cell could not be told from a busy box.
+#
+# Instantaneous idle%, not loadavg, for the reason perfgate states: loadavg
+# measures the past, so a back-to-back run would refuse on its own wake.
+box_idle() {
+    local u1 n1 s1 i1 u2 n2 s2 i2 _x
+    read -r _x u1 n1 s1 i1 _ < /proc/stat; sleep 1
+    read -r _x u2 n2 s2 i2 _ < /proc/stat
+    echo $(( (i2 - i1) * 100 / ( (u2-u1) + (n2-n1) + (s2-s1) + (i2-i1) ) ))
+}
+if [ -r /proc/stat ]; then
+    LEFTOVER=$(pgrep -af "release/kevy|redis-benchmark" \
+        | grep -Ev "bash |zsh |pgrep|sed |grep |tailgate|suite.py|claude" || true)
+    [ -n "$LEFTOVER" ] && { echo "tailgate: REFUSED — leftover bench processes:" >&2
+                            echo "$LEFTOVER" >&2; exit 2; }
+    IDLE0=$(box_idle)
+    [ "$IDLE0" -ge 80 ] || { echo "tailgate: REFUSED — box busy (idle ${IDLE0}% < 80%)." >&2
+                             echo "  A tail-latency reading taken while something else runs is not one." >&2
+                             exit 2; }
+    echo "tailgate: box idle ${IDLE0}% at start"
+fi
+
 # Median-of-N (default 3, TAILGATE_RUNS=n overrides): the mixed cell's
 # single-run reactor-gap spread measured 581-1657 ms across four runs
 # (FINDING-2026-08-10-third-seat) — single runs cannot rank an A/B on
@@ -76,6 +103,9 @@ one_run() { # $1 = name, $2 = reactor (auto|epoll), $3... = load args
     redis-benchmark -p $PORT "$@" -q >/dev/null 2>&1 &
     BENCH=$!
     sleep 2 # let the load reach steady state before probing
+    local idle="?"
+    [ -r /proc/stat ] && idle=$(box_idle)
+    printf '  [%s] box idle %s%% while probing\n' "$name" "$idle"
     target/release/examples/tail_probe $PORT 60
     kill -9 "$BENCH" 2>/dev/null; wait "$BENCH" 2>/dev/null; BENCH=""
     kill -9 "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null; SRV=""
