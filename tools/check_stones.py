@@ -137,6 +137,16 @@ def main():
     # producer never looked at. Two of this file's waivers exist only
     # because a macOS reading was believed. The refusal is what makes the
     # reading's platform part of the verdict instead of a footnote.
+    # A report about another release is a different question, exactly as a
+    # report from another platform is. The checked-in copy said 5.4.1 while
+    # the workspace was 6.0.0, and nothing here noticed.
+    want_version = tomllib.loads((ROOT / "Cargo.toml").read_text())[
+        "workspace"]["package"]["version"]
+    if doc.get("version") != want_version:
+        refuse(f"the report is for {doc.get('version') or 'no version'}, and this "
+               f"tree is {want_version}. A reading of a different release cannot "
+               f"judge this one — take the report on this commit.")
+
     platform = doc.get("dead_platform")
     if platform != "linux":
         refuse(f"the report's coverage readings come from {platform or 'nowhere'}, "

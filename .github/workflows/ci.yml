@@ -150,14 +150,20 @@ jobs:
           RUSTDOCFLAGS='-Z unstable-options --show-coverage' \
             cargo +nightly doc --workspace --no-deps
       - name: stone report (four readings per stone)
+        id: stonereport
         run: python3 tools/stone_report.py
       - name: stonegate (every stone meets the bar or carries a waiver)
         run: python3 tools/check_stones.py
       # Especially on failure. A stale waiver and a missed bar are both
       # verdicts about the contents of this file, and a step skipped on
       # failure puts the evidence behind the verdict.
+      # Same condition as the dead set upload, for the same reason found the
+      # same day: `bench/STONE-REPORT.json` is checked in, so bare
+      # `always()` let a cancelled run publish the repository's copy as this
+      # run's reading. That file currently says `version: 5.4.1` — a report
+      # about a different release, under an artifact named for this one.
       - name: upload stone report
-        if: always()
+        if: always() && (steps.stonereport.outcome == 'success' || steps.stonereport.outcome == 'failure')
         uses: actions/upload-artifact@v7
         with:
           name: stone-report-linux
