@@ -16,10 +16,12 @@ build the landing page uses; when the Python renderer is finally deleted,
 this gate goes with it, and not before.
 
 Run: python3 tools/check_md_port.py
+Exit: 0 pass, 1 the two renderers disagree, 2 refused (nothing was compared).
 """
 
 import json
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -69,9 +71,18 @@ def main():
         sys.exit("check_md_port: found no markdown at all — the glob is wrong")
 
     web = ROOT / "web"
+    # Missing equipment is a refusal, not a verdict. Without this, an absent
+    # `node` came out as a FileNotFoundError traceback and exit 1 — which
+    # reads as "the port disagrees" when what happened is that nothing was
+    # compared. 2 is this repository's exit code for "could not check".
+    if shutil.which("node") is None:
+        print("check_md_port: REFUSED — no `node` on PATH, so the TypeScript "
+              "renderer cannot run and nothing was compared")
+        sys.exit(2)
     if not (web / "node_modules").exists():
-        print("check_md_port: web/node_modules absent — run npm install in web/")
-        sys.exit(1)
+        print("check_md_port: REFUSED — web/node_modules absent, so nothing "
+              "was compared; run npm install in web/")
+        sys.exit(2)
 
     with tempfile.TemporaryDirectory() as tmp:
         tmpd = pathlib.Path(tmp)
