@@ -92,10 +92,16 @@ fn wake_set_matches_table() {
 /// data is not a dispatch site, and counting it would let the check pass
 /// on a verb nothing implements.
 fn server_sources() -> (String, usize) {
+    // Every read here panics rather than skipping. A walk that steps
+    // over an unreadable file answers a smaller question than the one
+    // it was asked, and reports the answer in the same shape — the
+    // check would say "nothing implements APPEND" when what happened
+    // is that a file could not be opened.
     fn walk(dir: &std::path::Path, out: &mut String, files: &mut usize) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
-        for e in entries.flatten() {
-            let path = e.path();
+        let entries = std::fs::read_dir(dir)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()));
+        for e in entries {
+            let path = e.expect("a directory entry").path();
             if path.is_dir() {
                 walk(&path, out, files);
             } else if path.extension().is_some_and(|x| x == "rs") {
@@ -103,10 +109,10 @@ fn server_sources() -> (String, usize) {
                 if name.starts_with("tests") || name.contains("_tests") {
                     continue;
                 }
-                if let Ok(text) = std::fs::read_to_string(&path) {
-                    out.push_str(&text);
-                    *files += 1;
-                }
+                let text = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+                out.push_str(&text);
+                *files += 1;
             }
         }
     }
