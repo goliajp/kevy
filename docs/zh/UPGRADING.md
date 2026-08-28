@@ -193,6 +193,7 @@ store.del(&[b"k1".as_slice(), b"k2".as_slice()]);
 | `vector` | HNSW ANN 段 | `index`、`kevy-vector` |
 | `replicate` | 复制 + CDC feed | `persist`、`kevy-replicate` |
 | `listener` | 只读 RESP listener | （无） |
+| `tier` | 透明分层（RAM 预算 + 冷值日志） | `persist`、`kevy-sys` |
 
 `core` 档可以交叉编译到 musl 目标，并扛着一份强制预算（二进制 ≤ 700 KB，空 store RSS ≤ 2 MB）；另有五个基础 crate 能构建 `no_std`。见 [iot.md](iot.md)。在体积谱的另一端，同一个 embedded 内核现在能以 `@goliapkg/kevy` 的身份跑在浏览器里——见 [wasm.md](wasm.md)。
 

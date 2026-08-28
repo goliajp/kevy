@@ -11,10 +11,11 @@ all. Every one of those was written in English and never carried over,
 and no gate could see it: link checking, punctuation and site
 generation all pass on a chapter that is half there.
 
-So this asks the only question that is mechanical: **does each
-translation have the same number of level-2 sections as its English
-original?** It cannot tell you a section was translated *well*. It can
-tell you one is missing, which is the failure that actually happened.
+So this asks the only questions that are mechanical: **does each
+translation carry the same number of level-2 sections, fenced examples and
+table rows as its English original?** It cannot tell you a section was
+translated *well*. It can tell you one is missing, which is the failure that
+actually happened — twice, at two different granularities.
 
     python3 tools/check_doc_i18n.py
 
@@ -60,6 +61,23 @@ def fences(path):
     return len(FENCE_LINE.findall(path.read_text(encoding="utf-8")))
 
 
+def table_rows(path):
+    """Markdown table rows outside fenced blocks.
+
+    NOT a ratchet the day it is written — it was a discovery. Seven
+    chapters disagreed, and two of the gaps were not omissions but stale
+    claims: `text-search.md` still told a ja/zh reader that phrase queries
+    and highlighting were "deliberately out of scope" while the English
+    page said the boundary had been reversed and listed the clauses that
+    now execute; `rds-workloads.md` still listed `OFFSET` as refused where
+    the English had replaced that row with a measurement of what it costs.
+    Both were invisible to the section count, because a table can go
+    missing without its section going with it.
+    """
+    text = FENCE.sub("", path.read_text(encoding="utf-8"))
+    return [l for l in text.splitlines() if l.lstrip().startswith("|")]
+
+
 def sections(path):
     """Level-2 headings outside fenced blocks (a `## ` inside a shell
     transcript is output, not a section)."""
@@ -90,6 +108,11 @@ def main():
                 problems.append(
                     f"{lang}/{name}: {fences(other)} code blocks, English has {fences(en)}"
                 )
+            elif len(table_rows(other)) != len(table_rows(en)):
+                problems.append(
+                    f"{lang}/{name}: {len(table_rows(other))} table rows, "
+                    f"English has {len(table_rows(en))}"
+                )
     if problems:
         print(f"REFUSED: {len(problems)} translation(s) out of step with the English chapter.")
         for p in problems:
@@ -107,7 +130,8 @@ def main():
               f"expected at least {MIN_CHAPTERS}. Nothing to be behind is not "
               f"the same as nothing behind.")
         return 2
-    print(f"ok: {checked} translated chapters, each with its English chapter's sections and examples")
+    print(f"ok: {checked} translated chapters, each with its English chapter's "
+          f"sections, examples and table rows")
     return 0
 
 
