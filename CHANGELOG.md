@@ -7,10 +7,24 @@ and performance at their limit, no dead code, no complex implementation of
 something a simple one already does. This release is the equipment for it,
 and the defects that building the equipment found.
 
-Nothing here is a compatibility break. `cargo semver-checks` reports all
-eighteen stones clean against 5.4.1, and the wire protocol, the on-disk
-formats and the replication stream are untouched. The major is the
-milestone's name, not a claim that an API moved.
+Nothing here is a compatibility break, and the evidence for that is not
+the one this section first cited. `cargo semver-checks` exits clean against
+5.4.1, but for a major bump it skips every lint it has — 254 per crate,
+because a major is allowed to break anything — so its verdict proves
+nothing about this release. `stonegate` now says so in as many words rather
+than folding it into PASS, and `stone_report.py` no longer passes the
+workspace version as the baseline, which asked the registry for a release
+that does not exist yet and returned "unpublished, 0 checks, ok" for all
+eighteen.
+
+What can be said is what the surface did: across the eighteen stones and
+every other crate, 1,871 public `fn`/`struct`/`enum`/`trait`/`const`/`type`
+names at 5.4.1 and the same 1,871 at 6.0.0 — none removed, none added.
+That reading is names, not signatures, and the extractor was checked by
+injecting two symbols into a copy of the 5.4.1 tree and confirming both
+appeared. The wire protocol, the on-disk formats and the replication stream
+are untouched. The major is the milestone's name, not a claim that an API
+moved.
 
 ### Fixed
 
