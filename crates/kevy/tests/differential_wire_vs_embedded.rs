@@ -698,11 +698,21 @@ fn both_surfaces_refuse_a_short_call_the_same_way() {
         both.len()
     );
 
+    // Verbs the probe cannot speak about, collected rather than assumed:
+    // see the arity gate in the loop.
+    let mut complete_bare_call: Vec<&str> = Vec::new();
     let mut differ = Vec::new();
     for name in &both {
-        // One argument: the verb alone. Every verb here takes at least one
-        // operand, so this is a short call for all of them and touches no
-        // state on either side.
+        // One argument: the verb alone. The premise is that this is a
+        // SHORT call — and the arity column both surfaces now read says
+        // for which verbs that holds. TIME is the first shared verb for
+        // which it does not: its bare form is a complete call, so the
+        // probe would be comparing two clock reads and calling the
+        // difference a drift in how the two refuse.
+        if kevy_resp::verb_arity::arity_ok(name, 1) == Some(true) {
+            complete_bare_call.push(*name);
+            continue;
+        }
         let a = vec![name.as_bytes().to_vec()];
         let w = String::from_utf8_lossy(&wire.call(&a)).trim().to_string();
         let mut e = Vec::new();
@@ -720,9 +730,12 @@ fn both_surfaces_refuse_a_short_call_the_same_way() {
     const DIFFERENT_SIGNATURE: &[&str] = &["FEED.TAIL", "FEED.READ"];
 
     println!(
-        "arity parity: {} of {} verbs on both surfaces refuse a short call identically",
-        both.len() - differ.len(),
-        both.len()
+        "arity parity: {} of {} verbs on both surfaces refuse a short call \
+         identically ({} skipped — a bare call is a complete one: {:?})",
+        both.len() - differ.len() - complete_bare_call.len(),
+        both.len(),
+        complete_bare_call.len(),
+        complete_bare_call
     );
     for (n, w, e) in differ.iter().take(20) {
         println!("  {n}\n      wire:     {w}\n      embedded: {e}");
@@ -764,6 +777,14 @@ const CANNOT_COMPARE: &[(&str, &str)] = &[
          `both_surfaces_refuse_a_short_call_the_same_way`",
     ),
     ("FEED.READ", "same pair, same reason"),
+    (
+        "TIME",
+        "answers with the clock, read once per surface a few hundred \
+         microseconds apart. It was rejected from this list on the day \
+         the register was written, correctly — the server did not carry \
+         the verb then, so this harness would never have compared it. \
+         Wiring it made the entry true",
+    ),
 ];
 
 /// The register: every verb on BOTH surfaces is either driven above with

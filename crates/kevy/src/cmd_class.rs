@@ -28,6 +28,9 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
             | b"INCRBY"
             | b"DECRBY"
             | b"APPEND"
+            | b"SETBIT"
+            | b"SETRANGE"
+            | b"GETEX"
             | b"EXPIRE"
             | b"PEXPIRE"
             | b"EXPIREAT"
@@ -44,6 +47,8 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
             | b"HMSET"
             | b"HDEL"
             | b"HINCRBY"
+            | b"HINCRBYFLOAT"
+            | b"LINSERT"
             | b"LPUSH"
             | b"RPUSH"
             | b"LPOP"
@@ -104,14 +109,15 @@ pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyClass> {
     Some(match cmd {
         // String — Redis class `$`.
         b"SET" | b"SETNX" | b"SETEX" | b"PSETEX" | b"GETSET" | b"GETDEL"
-        | b"APPEND" | b"INCR" | b"DECR" | b"INCRBY" | b"DECRBY" | b"INCRBYFLOAT" => {
+        | b"APPEND" | b"INCR" | b"DECR" | b"INCRBY" | b"DECRBY" | b"INCRBYFLOAT"
+        | b"SETBIT" | b"SETRANGE" => {
             NotifyClass::String
         }
         // Hash — class `h`.
-        b"HSET" | b"HSETNX" | b"HMSET" | b"HDEL" | b"HINCRBY" | b"HEXPIRE"
+        b"HSET" | b"HSETNX" | b"HMSET" | b"HDEL" | b"HINCRBY" | b"HINCRBYFLOAT" | b"HEXPIRE"
         | b"HPEXPIRE" | b"HPEXPIREAT" | b"HPERSIST" => NotifyClass::Hash,
         // List — class `l`.
-        b"LPUSH" | b"RPUSH" | b"LPOP" | b"RPOP" | b"LSET" | b"LREM" | b"LTRIM"
+        b"LPUSH" | b"RPUSH" | b"LPOP" | b"RPOP" | b"LSET" | b"LREM" | b"LTRIM" | b"LINSERT"
         | b"RPOPLPUSH" | b"LMOVE" => NotifyClass::List,
         // Set — class `s` (SINTERSTORE/SUNIONSTORE/SDIFFSTORE not yet impl'd).
         b"SADD" | b"SREM" | b"SPOP" | b"SINTERSTORE" | b"SUNIONSTORE"
@@ -128,6 +134,12 @@ pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyClass> {
         // Generic — class `g`. (DEL single-key falls here; multi-key DEL
         // is routed through Op::Del + maybe_notify_del directly.)
         b"DEL" | b"UNLINK" | b"EXPIRE" | b"PEXPIRE" | b"PERSIST" => NotifyClass::Generic,
+        // GETEX is a write (it can move a deadline) but has no arm
+        // here on purpose: Redis fires `expire` for the EX/PX form and
+        // nothing for the bare one, and this table keys the event name
+        // off the verb. A `getex` event is not a name Redis ever emits,
+        // so the honest choice is to emit none rather than invent one.
+        //
         // Reads, admin, pub/sub etc. — no notification.
         _ => return None,
     })
@@ -154,10 +166,14 @@ pub(crate) fn is_growing_write_verb(cmd: &[u8]) -> bool {
             | b"INCRBY"
             | b"DECRBY"
             | b"APPEND"
+            | b"SETBIT"
+            | b"SETRANGE"
             | b"HSET"
             | b"HSETNX"
             | b"HMSET"
             | b"HINCRBY"
+            | b"HINCRBYFLOAT"
+            | b"LINSERT"
             | b"LPUSH"
             | b"RPUSH"
             | b"RPOPLPUSH"

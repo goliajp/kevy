@@ -35,7 +35,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - [WASM / browser](docs/wasm.md) · [Electron apps](docs/electron.md) · [Tauri apps](docs/tauri.md) · [IoT / embedded tiers](docs/iot.md)
 - [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)
 
-## Verbs (191 total)
+## Verbs (203 total)
 
 ### scan
 
@@ -87,6 +87,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `TYPE key` [readonly] — Return the type of the value stored at key.
   - complexity: O(1)
   - compat: full
+- `TOUCH key [key ...]` [readonly] — Count how many of the given keys exist.
+  - complexity: O(N) keys — one existence probe per key on its owning shard
+  - compat: differs: kevy has no idle-time clock to reset, so TOUCH is EXISTS with the eviction bookkeeping the probe already does
 - `UNLINK key [key ...]` [write] — Delete one or more keys (alias of DEL in kevy's shard model).
   - complexity: O(N) keys, plus O(M) per collection-typed key — identical to DEL
   - compat: differs: UNLINK is an alias of DEL — the value is freed inline on the owning shard's reactor thread, not by a background thread, so it gives no latency benefit
@@ -95,6 +98,27 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 
 - `APPEND key value` [write] — Append bytes to a string value; returns the new length.
   - complexity: O(1) amortised while the value is <= 64 B; O(N) per call once it exceeds that (the Arc payload is copied out and re-boxed on every append), so building a large string by repeated APPEND is O(N^2)
+  - compat: full
+- `BITCOUNT key [start end]` [readonly] — Count set bits in a string, optionally over a byte range.
+  - complexity: O(N) over the counted bytes
+  - compat: differs: the BYTE / BIT unit argument of Redis 7.0 is not accepted — ranges are byte offsets
+- `BITPOS key bit [start [end]]` [readonly] — Return the position of the first bit set to 0 or 1.
+  - complexity: O(N) over the scanned bytes
+  - compat: differs: the BYTE / BIT unit argument of Redis 7.0 is not accepted — ranges are byte offsets
+- `GETBIT key offset` [readonly] — Return the bit at the given offset of a string.
+  - complexity: O(1)
+  - compat: full
+- `GETEX key [EX seconds | PX milliseconds]` [write] — Read a key and set its expiry in the same call.
+  - complexity: O(1)
+  - compat: differs: EXAT / PXAT / PERSIST are not accepted, and an expiry of zero or less is refused rather than applied
+- `GETRANGE key start end` [readonly] — Return a byte range of a string value.
+  - complexity: O(M) over the returned bytes
+  - compat: full
+- `SETBIT key offset value` [write] — Set the bit at the given offset, returning its old value.
+  - complexity: O(1) amortised; O(N) on the call that grows the value out to the offset
+  - compat: full
+- `SETRANGE key offset value` [write] — Overwrite a string from the given offset, returning the new length.
+  - complexity: O(M) over the written bytes; O(N) on the call that grows the value out to the offset
   - compat: full
 - `DECR key` [write] — Decrement the integer value of a key by one.
   - complexity: O(1)
@@ -160,6 +184,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
   - complexity: O(N) fields, with a full copy of every name and value
   - compat: full
 - `HINCRBY key field increment` [write] — Increment the integer value of a hash field.
+  - complexity: O(1)
+  - compat: full
+- `HINCRBYFLOAT key field increment` [write] — Increment the float value of a hash field.
   - complexity: O(1)
   - compat: full
 - `HKEYS key` [readonly] — Return all field names of a hash.
@@ -236,6 +263,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
   - compat: full
 - `LREM key count element` [write] — Remove elements equal to the given value from a list.
   - complexity: O(N*R) worst case — the scan is O(N) but each removal shifts up to half the deque (Redis is O(N+R))
+  - compat: full
+- `LINSERT key BEFORE|AFTER pivot element` [write] — Insert an element before or after a pivot element.
+  - complexity: O(N) — the pivot is found by a scan from the head
   - compat: full
 - `LSET key index element` [write] — Set the list element at the given index.
   - complexity: O(1) — a direct index write (Redis is O(N) for a mid-list index)
@@ -351,6 +381,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `ZREVRANGEBYSCORE key max min [WITHSCORES] [LIMIT offset count]` [readonly] — Return members with scores within the given bounds, highest first.
   - complexity: O(log N + M) — a seeked forward walk of the M matches, then the result is reversed
   - compat: full
+- `ZREVRANGE key start stop [WITHSCORES]` [readonly] — Return members by rank range, highest score first.
+  - complexity: O(N + M) — the set is read in rank order and reversed, then the M requested members are taken
+  - compat: full
 - `ZSCAN key cursor [MATCH pattern] [COUNT count]` [readonly] — Iterate a sorted set's members and scores (single-batch cursor).
   - complexity: O(N) — the whole set is materialised
   - compat: differs: not a cursor iterator — every call returns the whole set with cursor 0, and COUNT is parsed then ignored
@@ -462,6 +495,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `BGSAVE` [write,admin] — Start a snapshot save in the background.
   - complexity: O(S) fan-out; O(N/S) copy-on-write freeze per shard on the reactor, then serialise off-thread
   - compat: differs: replies +OK rather than Redis's status line, and writes one dump per shard
+- `TIME` [readonly] — Return the server clock as unix seconds and microseconds.
+  - complexity: O(1)
+  - compat: full
 - `COMMAND [COUNT | LIST | INFO command [command ...] | DOCS [command [command ...]]]` [readonly] — Introspect the command table (COUNT, LIST, INFO, DOCS subcommands).
   - complexity: bare / LIST / DOCS: O(V) verbs. COUNT: O(1). INFO / DOCS with k names: O(k*V) — the lookup is a linear scan
   - compat: differs: COUNT / LIST / INFO / DOCS only — GETKEYS and GETKEYSANDFLAGS are absent, and the info rows hard-code first/last/step and leave ACL categories, tips and key-specs empty
