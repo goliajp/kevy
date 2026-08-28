@@ -102,7 +102,12 @@ def semver(crate):
     # eighteen stones reported clean on the strength of checking nothing.
     p = subprocess.run(["cargo", "semver-checks", "check-release", "-p", crate],
                        cwd=ROOT, capture_output=True, text=True, timeout=900)
-    log = p.stdout + p.stderr
+    # Strip ANSI: cargo-semver-checks colours its progress lines when the
+    # runner looks like a terminal, and the `Checking … v5.4.1 -> v6.0.0`
+    # match then fails on \S+ and the baseline field falls back to empty.
+    # A field that goes quiet instead of wrong is still a field that stopped
+    # answering, which is the thing this release keeps finding.
+    log = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", p.stdout + p.stderr)
     if re.search(r"no crate named|not found in registry|failed to select a version for the requirement `"
                  + re.escape(crate), log) or "no published version" in log:
         return {"ok": True, "checks": 0, "skipped": 0, "unpublished": True,
