@@ -247,6 +247,8 @@ fn stream_v2(
     if resync && !matches!(w.stop, ReplayStop::Clean) {
         crate::replay_resync::resync_fallback(path, &mut w, &mut apply, &mut ranges)?;
     }
+    // A skipped range IS corruption — it is the only thing resync skips.
+    let corrupt = corrupt || !ranges.is_empty();
     let elapsed_ms = start.elapsed().as_millis();
     // quiet_info silences only the informational outcomes; the corrupt
     // WARN always prints.

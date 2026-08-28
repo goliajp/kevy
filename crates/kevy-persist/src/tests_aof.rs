@@ -759,6 +759,8 @@ fn resync_recovers_the_good_tail_behind_a_lying_length() {
     let r = crate::replay_aof_resync(&path, |a| res.push(a)).unwrap();
     assert_eq!(res.len(), 20, "every good record, not just the prefix");
     assert_eq!(r.resynced_ranges.len(), 1, "one skipped region, reported");
+    assert!(r.corrupt,
+            "a skipped region is corruption; the report must not call the file              healthy (docs/persistence.md promises the flag stays raised)");
     assert!(res.iter().any(|a| a.get(1) == Some(b"post9".as_slice())),
             "the last record behind the damage came back");
     let _ = std::fs::remove_file(&path);
