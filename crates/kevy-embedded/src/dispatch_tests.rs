@@ -169,3 +169,59 @@ fn dispatch_argv_facade_reaches_the_full_surface() {
     assert_eq!(out, b"+OK\r\n");
     assert_eq!(s.get(b"facade").unwrap(), Some(b"1".to_vec()));
 }
+
+/// Verbs this facade dispatches that `OP_TABLE` does not describe.
+///
+/// OP_TABLE is the KEYSPACE registry: write classification, notification
+/// class, wake index, surfaces. Connection and pub/sub verbs have no
+/// keyspace semantics to record and consistently have no row — PING,
+/// ECHO, SELECT, QUIT, HELLO, SUBSCRIBE, CLIENT, COMMAND and INFO are
+/// all absent from it, so the boundary is a design and not an oversight.
+///
+/// The ledger is EXACT in both directions below.
+const NOT_KEYSPACE: &[&str] = &["ECHO", "PING", "PUBLISH"];
+
+/// Every verb this facade dispatches has an OP_TABLE row, or is named
+/// above as having no keyspace semantics to record.
+///
+/// Nothing held this direction. Every check around the registry starts
+/// FROM it — each SERVER row must have a dispatch literal, each ledgered
+/// gap must still be a hole — so a verb BOTH surfaces implement and the
+/// registry never heard of was invisible to all of them at once.
+///
+/// `HPTTL` was exactly that: documented in VERB_META, dispatched by the
+/// server's `dispatch_collections.rs` and by this crate's `hash.rs`,
+/// sibling to four hash-TTL verbs that all have rows — and absent from
+/// OP_TABLE, therefore outside the notify-class check, the replay check
+/// and the surface-versus-dispatch check together. Found by asking the
+/// question from the facade's side instead of the registry's.
+#[test]
+fn every_dispatched_verb_is_in_the_registry_or_named_as_outside_it() {
+    use kevy_resp::ops_table::OP_TABLE;
+
+    let facade: BTreeSet<&str> = DISPATCH_VERBS.iter().copied().collect();
+    assert!(
+        facade.len() > 100,
+        "only {} dispatched verbs — the table did not load",
+        facade.len()
+    );
+
+    let rows: BTreeSet<&str> = OP_TABLE.iter().map(|o| o.name).collect();
+    let named: BTreeSet<&str> = NOT_KEYSPACE.iter().copied().collect();
+
+    let missing: Vec<&str> =
+        facade.difference(&rows).filter(|v| !named.contains(*v)).copied().collect();
+    assert!(
+        missing.is_empty(),
+        "{missing:?} are dispatched here with no OP_TABLE row and no NOT_KEYSPACE entry — \
+         either the registry is missing them, or they carry no keyspace semantics and \
+         belong in the ledger with that reason"
+    );
+
+    let healed: Vec<&str> = named.iter().filter(|v| rows.contains(*v)).copied().collect();
+    assert!(
+        healed.is_empty(),
+        "{healed:?} are named as outside the registry but have a row now — drop them from \
+         NOT_KEYSPACE so the ledger stays exact"
+    );
+}
