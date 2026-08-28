@@ -120,6 +120,77 @@ const CORPUS: &[&str] = &[
     "IDX.INFO t",
     "VIEW.LIST",
     "VIEW.INFO nope",
+    // ── the rest of the facade's dispatch table ──
+    // 60 of its 130 verbs were driven before this; the two surfaces had
+    // never been compared byte-for-byte on the other 70.
+    //
+    // ORDER MATTERS. A verb only ONE side implements must not mutate
+    // shared state, or every later read diverges for a reason that is not
+    // about that read. The first pass of this block put COPY, LINSERT and
+    // HINCRBYFLOAT in the middle, and six later commands — EXISTS, KEYS,
+    // LREM, HSCAN, PREFIX.DIGEST, PREFIX.STATS — reported a divergence
+    // that was really the corpus's own doing. The F3 verbs now come last
+    // and on their own keys.
+    "MSET s1 a s2 b s3 c",
+    "MGET s1 s2 nope",
+    "GETSET s1 z",
+    "GETDEL s3",
+    "INCRBYFLOAT f 1.5",
+    "DECRBY n 3",
+    "INCRBYFLOAT f -0.5",
+    "APPEND s1 tail",
+    "STRLEN s1",
+    "EXISTS s1 s2 nope",
+    // hashes
+    "HSET h2 f1 v1 f2 v2 f3 v3",
+    "HKEYS h2",
+    "HVALS h2",
+    "HEXISTS h2 f1",
+    "HEXISTS h2 nope",
+    "HSCAN h2 0",
+    "HDEL h2 f3",
+    "HEXPIRE h2 100 FIELDS 1 f1",
+    "HTTL h2 FIELDS 1 f1",
+    "HPTTL h2 FIELDS 1 f1",
+    "HPERSIST h2 FIELDS 1 f1",
+    "HTTL h2 FIELDS 1 f1",
+    // lists
+    "RPUSH L a b c d e",
+    "LSET L 0 A",
+    "LREM L 1 A",
+    "LTRIM L 0 2",
+    "LRANGE L 0 -1",
+    // expiry
+    "EXPIREAT s1 99999999999",
+    "PEXPIREAT s2 99999999999000",
+    "TTL s1",
+    "PTTL s1",
+    "PEXPIRE s1 100000",
+    "PERSIST s1",
+    "TTL s1",
+    // keyspace + admin
+    "KEYS s*",
+    "ECHO hello",
+    "PUBLISH ch nobody-listening",
+    "PREFIX.DIGEST s",
+    "PREFIX.STATS s",
+    "IDX.ADVISE",
+    "FEED.SHARDS",
+    // ── F3: implemented in the facade, absent from the RESP dispatch ──
+    // Registered in `kevy_resp::ops_table::KNOWN_GAPS`, and the check
+    // below reads that ledger rather than restating it. Own keys, last,
+    // so their divergence cannot become anyone else's.
+    "GETRANGE s1 0 0",
+    "SETRANGE f3k 1 X",
+    "GETEX s1",
+    "COPY s1 f3copy",
+    "SETBIT f3bits 7 1",
+    "GETBIT f3bits 7",
+    "BITCOUNT f3bits",
+    "BITPOS f3bits 1",
+    "BITOP AND f3dest f3bits f3bits",
+    "HINCRBYFLOAT f3h num 1.25",
+    "LINSERT L BEFORE b X",
     // errors, where a second implementation is most likely to differ
     "IDX.CREATE",
     "IDX.QUERY",
@@ -166,8 +237,23 @@ fn embedded_answers_what_the_wire_answers() {
     let cfg = kevy_embedded::Config::default().with_persist(dir.path().to_str().unwrap());
     let embedded = kevy_embedded::Store::open(cfg).expect("open embedded");
 
-    let expected: std::collections::BTreeSet<&str> =
+    // Two registers, one of them already maintained elsewhere: the named
+    // list above for capability gaps between the two surfaces, and
+    // `ops_table::KNOWN_GAPS` for verbs the RESP dispatch does not carry
+    // at all. Reading the second rather than copying it means a gap that
+    // closes there stops being excused here, by construction.
+    let mut expected: std::collections::BTreeSet<&str> =
         EXPECTED.iter().map(|(c, _)| *c).collect();
+    let f3: std::collections::BTreeSet<&str> = kevy_resp::ops_table::KNOWN_GAPS
+        .iter()
+        .filter(|(_, surface, _)| surface & kevy_resp::ops_table::surface::SERVER != 0)
+        .map(|(verb, _, _)| *verb)
+        .collect();
+    for cmd in CORPUS {
+        if f3.contains(cmd.split(' ').next().unwrap_or("")) {
+            expected.insert(cmd);
+        }
+    }
     let (mut agreed, mut diverged) = (0usize, Vec::new());
 
     for cmd in CORPUS {
