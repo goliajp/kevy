@@ -154,6 +154,27 @@ milestone's name, not a claim that an API moved.
   outlive its cause: after the publish the version exists, and a crate that
   still cannot lift fails there for real.
 
+- **The instruments were run against nothing, and six of them passed.** A
+  release named for its equipment has to point the equipment at itself. Each
+  gate was executed in a directory containing only its own script:
+  `locgate` and `commentgate` returned 0 over zero source files, `vendorgate`
+  printed *"PASS (0 artifacts current)"* while guarding the release layer
+  whose whole point is that the bytes ARE the version, `propgate` passed
+  *"0 durable-write call sites"*, `doc-i18n` reported *"ok: 0 translated
+  chapters, each with its English chapter"*, and `doc-toml` skipped and
+  returned 0 — which to a tier's verdict line is indistinguishable from
+  passing. All six have floors sized from what the tree holds, and their
+  pass lines carry the count, because "0 hits" and "0 hits across 709 files"
+  are different sentences.
+
+  Three more of the same shape were found and closed while the release was
+  being verified: `covgate` compared a macOS coverage figure to a Linux
+  baseline because the platform lived in the file's prose and not in its
+  data; a cancelled CI run published the repository's checked-in dead set as
+  though it were that run's measurement; and `setratchet`'s envelope path
+  would absorb any growth at all, in a file whose own docstring says a
+  ratchet that can be quietly reset is a ratchet in name only.
+
 - **Dead regions**, cut by measured ablation rather than by counting tests:
   kevy-scalar 42.0% → 27.8%, the async client 70.5% → 39.3%, kevy-cli 42.4%
   → 37.5%.
