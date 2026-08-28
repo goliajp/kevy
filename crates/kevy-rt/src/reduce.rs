@@ -117,6 +117,7 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> SmallReply {
         | Agg::ExecPrep { .. }
         | Agg::RenameOrchestrator { .. }
         | Agg::ListMoveOrchestrator { .. }
+        | Agg::CopyOrchestrator { .. }
         | Agg::ZStoreGather { .. }
         | Agg::GeoStore { .. }
         | Agg::ExtensionGather { .. }

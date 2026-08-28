@@ -47,6 +47,7 @@ impl<C: Commands> Shard<C> {
             | Route::Unwatch
             | Route::Hello
             | Route::Rename { .. }
+            | Route::Copy
             | Route::ListMove { .. }
             | Route::Slowlog(_) => {
                 eprintln!(

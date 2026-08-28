@@ -35,7 +35,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - [WASM / browser](docs/wasm.md) · [Electron apps](docs/electron.md) · [Tauri apps](docs/tauri.md) · [IoT / embedded tiers](docs/iot.md)
 - [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)
 
-## Verbs (203 total)
+## Verbs (204 total)
 
 ### scan
 
@@ -87,6 +87,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `TYPE key` [readonly] — Return the type of the value stored at key.
   - complexity: O(1)
   - compat: full
+- `COPY source destination [REPLACE]` [write] — Copy a key's value, and its remaining TTL, to another key.
+  - complexity: O(1) same-shard; O(V) across shards, where V is the value copied over the ring
+  - compat: differs: the DB argument is not accepted — kevy is single-database. A cross-shard copy is not atomic with anything else, but a failure between its two steps leaves both keys untouched
 - `TOUCH key [key ...]` [readonly] — Count how many of the given keys exist.
   - complexity: O(N) keys — one existence probe per key on its owning shard
   - compat: differs: kevy has no idle-time clock to reset, so TOUCH is EXISTS with the eviction bookkeeping the probe already does
