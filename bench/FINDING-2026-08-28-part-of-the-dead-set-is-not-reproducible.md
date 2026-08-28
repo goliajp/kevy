@@ -187,3 +187,25 @@ loops — `Shard::`, `replica_runner::`, `wire_snapshot::`, `aof_writer::` —
 and that remains the shape that earns a declaration: work that only exists
 because another thread is running, not work that a test could ask for
 directly.
+
+### A third, and the rule holds
+
+| run | symbol joined or grew | regions | total |
+|---|---|---:|---:|
+| 33125281621 | `kevy::cmd_block_serve::block_ready::` | 3 → 11 | 27,873 → 27,753 |
+
+Read before declared, like the other two, and coverable like the other two —
+a five-arm match over `BlockKind` whose arms the wider suite reaches only
+when a blocked client of that kind is served inside a test's window.
+
+Unlike the other two, asking it directly found something. Its XREAD arm's
+condition was `!tmp.is_empty()` over a dispatched replay, and `XREAD` writes
+`*-1\r\n` for "nothing new" — so the arm was always ready, while its comment
+said "non-empty output ⇒ data is available". The test failed on the first
+assertion, which is what a test for a symbol nobody executes is for.
+
+Three of three now. The tail is not noise; it is work that only happens
+because another thread happened to do something, and each time the direct
+question has been askable. The four `unstable` prefixes remain the shape
+that earns a declaration — thread loops, where the work exists only because
+another thread is running.

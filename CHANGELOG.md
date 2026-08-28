@@ -44,6 +44,16 @@ milestone's name, not a claim that an API moved.
   byte on a wrong-arity call. The two that differ do so because their
   signatures differ — the server shards, the facade does not.
 
+- **A readiness peek that always said ready.** The cross-shard arming path
+  asks `block_ready` whether a parked waiter could be served now. Its XREAD
+  arm dispatched the frozen replay and treated any output as data — but
+  `XREAD` writes `*-1\r\n` when there is nothing new, so the condition was
+  true for every armed waiter, and the comment above it claimed the opposite.
+  Nothing user-visible followed (a waiter woken with nothing to serve
+  re-arms, and `XREAD BLOCK` still blocks its full timeout), but every armed
+  XREAD paid a cross-shard signal and a re-arm for a question that was never
+  asked. Same-shard blocking never went through this path.
+
 - **A backreference to an unset group** in the vendored regex engine, and a
   stale committed `Cargo.lock` that only `--locked` could object to — and
   `--locked` ran nowhere before the release image.
