@@ -44,6 +44,34 @@ milestone's name, not a claim that an API moved.
   byte on a wrong-arity call. The two that differ do so because their
   signatures differ — the server shards, the facade does not.
 
+- **`replay_resync` kept its promise for one shape of corruption and
+  silently not for the other.** The option exists to recover the good tail
+  behind a mid-file corrupt region instead of stopping at it. A record
+  header is `len: u32` + `crc: u32`; when the CRC lies, the walk calls the
+  stop corrupt and resync hops the bad region and recovers everything behind
+  it. When the **length** lies — legal (`<= MAX_RECORD`) but larger than the
+  bytes that remain — the read comes up short, the walk calls that a torn
+  tail, and resync never ran at all. Everything behind the damage was lost,
+  `corrupt` stayed false so nothing warned, and the replay summary reported
+  the loss as *"trailing 27485178 bytes were a partial frame (crash
+  mid-append, recoverable)"* — twenty-seven megabytes described as a partial
+  frame.
+
+  Not a default-path loss: `replay_resync` is `false` (strict) unless turned
+  on, and strict replay stopping there is its contract. For anyone who did
+  turn it on, the recovery they opted into did nothing in one of the two
+  cases and said the file was fine.
+
+  Resync now runs on any stop that is not clean, which is what the question
+  always was: is there anything valid after where we stopped. On a genuine
+  torn tail that costs a scan of the few bytes after the stop and applies
+  nothing. Both cases are pinned by name in `tests_aof.rs`, the second as
+  deliberately as the first.
+
+  Found because `crashgate`'s T6 cell had been failing about one CI run in
+  five while passing 28 runs and 65 splice positions on the bench box; the
+  splice produced a lying length sometimes and an out-of-range one otherwise.
+
 - **A readiness peek that always said ready.** The cross-shard arming path
   asks `block_ready` whether a parked waiter could be served now. Its XREAD
   arm dispatched the frozen replay and treated any output as data — but
