@@ -276,8 +276,11 @@ fn route_for_verb<A: ArgvView + ?Sized>(
                 Route::DelKeys
             }
         }
-        b"EXISTS" => {
+        b"EXISTS" | b"TOUCH" => {
             // Same as DEL/UNLINK above: no key named, so not a fan-out.
+            // TOUCH rides with EXISTS because in this engine it is
+            // EXISTS — `Route::ExistsKeys` emits `Op::Exists` and sums,
+            // which is TOUCH's whole contract here.
             if args.len() < 2 {
                 Route::Local
             } else if args.len() == 2 {

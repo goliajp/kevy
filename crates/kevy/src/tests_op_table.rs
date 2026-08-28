@@ -87,26 +87,58 @@ fn wake_set_matches_table() {
     }
 }
 
+/// Every non-test Rust source under `src/`, concatenated, with the file
+/// count beside it. Test files are excluded: a verb named only in test
+/// data is not a dispatch site, and counting it would let the check pass
+/// on a verb nothing implements.
+fn server_sources() -> (String, usize) {
+    fn walk(dir: &std::path::Path, out: &mut String, files: &mut usize) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for e in entries.flatten() {
+            let path = e.path();
+            if path.is_dir() {
+                walk(&path, out, files);
+            } else if path.extension().is_some_and(|x| x == "rs") {
+                let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                if name.starts_with("tests") || name.contains("_tests") {
+                    continue;
+                }
+                if let Ok(text) = std::fs::read_to_string(&path) {
+                    out.push_str(&text);
+                    *files += 1;
+                }
+            }
+        }
+    }
+    let (mut out, mut files) = (String::new(), 0);
+    walk(std::path::Path::new("src"), &mut out, &mut files);
+    (out, files)
+}
+
 /// Every table row flagged SERVER must have a dispatch site somewhere
 /// in the server source (string-literal presence check — coarse but
 /// catches "table says SERVER, nothing implements it"). KNOWN_GAPS'
 /// F3 rows are the documented holes going the other way.
+///
+/// The source set used to be eleven `include_str!` lines written out by
+/// hand. Splitting `dispatch_string` into its own module was enough to
+/// blind it: APPEND's arm moved to a file nobody had added to the list,
+/// and the check reported that nothing on the server implemented
+/// APPEND. A hand-copied file list answers a question about the files
+/// someone remembered, so this walks the tree instead.
+
 #[test]
 fn server_surface_has_dispatch_literals() {
-    let sources = [
-        include_str!("dispatch.rs"),
-        include_str!("dispatch_collections.rs"),
-        include_str!("dispatch_collections_v127.rs"),
-        include_str!("dispatch_resp3.rs"),
-        include_str!("dispatch_geo/mod.rs"),
-        include_str!("dispatch_stream/mod.rs"),
-        include_str!("cmd_resolve.rs"),
-        include_str!("commands.rs"),
-        include_str!("cmd_block.rs"),
-        include_str!("ops/mod.rs"),
-        include_str!("cmd_lua.rs"),
-    ]
-    .concat();
+    let (sources, files) = server_sources();
+    // A floor. An empty read would fail the first assertion loudly and
+    // pass the inverse guard silently — which is the direction that
+    // matters, since the inverse guard is what says a gap is still open.
+    assert!(
+        files > 20 && sources.len() > 200_000,
+        "the source walk found {files} files / {} bytes — it is broken, \
+         not the server empty",
+        sources.len()
+    );
     for o in OP_TABLE {
         if o.surfaces & surface::SERVER == 0 {
             continue;
