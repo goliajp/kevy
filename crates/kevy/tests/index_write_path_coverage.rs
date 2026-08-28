@@ -27,6 +27,8 @@ use std::io::{Read, Write};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
+mod common;
+
 static START_GATE: Mutex<()> = Mutex::new(());
 
 fn req(parts: &[&[u8]]) -> Vec<u8> {
@@ -39,12 +41,35 @@ fn req(parts: &[&[u8]]) -> Vec<u8> {
     v
 }
 
+/// Send one command and read back exactly one COMPLETE reply.
+///
+/// This was "sleep 30 ms, then `read()` once", which holds while every
+/// reply arrives in one segment and desynchronises the connection the
+/// first time one does not: the tail stays in the socket and every later
+/// reply is read a frame late. `table_e2e`'s copy failed exactly that way
+/// under load — `EXEC` answers `*1\r\n:0\r\n`, an assertion checked only
+/// the `*1\r\n` prefix, and `:0\r\n` came back on the front of the next
+/// reply. The frame now says when it is complete, and anything left over
+/// is a failure rather than a shift.
 fn cmd(s: &mut std::net::TcpStream, parts: &[&[u8]]) -> Vec<u8> {
     s.write_all(&req(parts)).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(40));
-    let mut buf = [0u8; 65536];
-    let n = s.read(&mut buf).unwrap();
-    buf[..n].to_vec()
+    let mut buf = Vec::new();
+    loop {
+        if let Some(n) = common::reply_len(&buf) {
+            assert_eq!(
+                n,
+                buf.len(),
+                "{} extra byte(s) after the reply — the connection is a frame ahead: {:?}",
+                buf.len() - n,
+                String::from_utf8_lossy(&buf[n..]).chars().take(60).collect::<String>()
+            );
+            return buf;
+        }
+        let mut chunk = [0u8; 65536];
+        let got = s.read(&mut chunk).unwrap();
+        assert!(got > 0, "server closed mid-reply (have {} bytes)", buf.len());
+        buf.extend_from_slice(&chunk[..got]);
+    }
 }
 
 struct Server {

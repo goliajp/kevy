@@ -22,9 +22,10 @@
 //! read would manufacture a divergence out of nothing, so the reply is
 //! parsed and read until complete.
 
-use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+
+mod common;
 
 static START_GATE: Mutex<()> = Mutex::new(());
 
@@ -32,82 +33,11 @@ fn argv(cmd: &str) -> Vec<Vec<u8>> {
     cmd.split(' ').map(|s| s.as_bytes().to_vec()).collect()
 }
 
-fn encode(parts: &[Vec<u8>]) -> Vec<u8> {
-    let mut v = format!("*{}\r\n", parts.len()).into_bytes();
-    for p in parts {
-        v.extend_from_slice(format!("${}\r\n", p.len()).as_bytes());
-        v.extend_from_slice(p);
-        v.extend_from_slice(b"\r\n");
-    }
-    v
-}
 
 /// How many bytes of `buf` one complete RESP reply occupies, or `None` if
 /// more is needed. Covers what this server emits: simple string, error,
 /// integer, bulk string (and its null form), array (nested, and its null
 /// form), plus RESP3's `_`, `#` and `,`.
-fn reply_len(buf: &[u8]) -> Option<usize> {
-    fn line_end(buf: &[u8], from: usize) -> Option<usize> {
-        buf.get(from..)?
-            .windows(2)
-            .position(|w| w == b"\r\n")
-            .map(|p| from + p + 2)
-    }
-    let tag = *buf.first()?;
-    let head = line_end(buf, 1)?;
-    match tag {
-        b'+' | b'-' | b':' | b'_' | b'#' | b',' => Some(head),
-        b'$' => {
-            let n: i64 = std::str::from_utf8(&buf[1..head - 2]).ok()?.parse().ok()?;
-            if n < 0 {
-                return Some(head);
-            }
-            let end = head + n as usize + 2;
-            (buf.len() >= end).then_some(end)
-        }
-        b'*' | b'~' | b'>' => {
-            let n: i64 = std::str::from_utf8(&buf[1..head - 2]).ok()?.parse().ok()?;
-            if n < 0 {
-                return Some(head);
-            }
-            let mut at = head;
-            for _ in 0..n {
-                at += reply_len(buf.get(at..)?)?;
-            }
-            Some(at)
-        }
-        b'%' => {
-            let n: i64 = std::str::from_utf8(&buf[1..head - 2]).ok()?.parse().ok()?;
-            let mut at = head;
-            for _ in 0..(n.max(0) * 2) {
-                at += reply_len(buf.get(at..)?)?;
-            }
-            Some(at)
-        }
-        _ => None,
-    }
-}
-
-struct Wire {
-    sock: std::net::TcpStream,
-    buf: Vec<u8>,
-}
-
-impl Wire {
-    fn call(&mut self, parts: &[Vec<u8>]) -> Vec<u8> {
-        self.sock.write_all(&encode(parts)).expect("write");
-        loop {
-            if let Some(n) = reply_len(&self.buf) {
-                return self.buf.drain(..n).collect();
-            }
-            let mut chunk = [0u8; 65536];
-            let n = self.sock.read(&mut chunk).expect("read");
-            assert!(n > 0, "server closed mid-reply");
-            self.buf.extend_from_slice(&chunk[..n]);
-        }
-    }
-}
-
 struct Server {
     port: u16,
     dir: std::path::PathBuf,
@@ -146,10 +76,10 @@ impl Server {
         Self { port, dir, stop, handle: Some(handle) }
     }
 
-    fn wire(&self) -> Wire {
+    fn wire(&self) -> common::Wire {
         let sock = std::net::TcpStream::connect(("127.0.0.1", self.port)).unwrap();
         sock.set_read_timeout(Some(std::time::Duration::from_secs(8))).unwrap();
-        Wire { sock, buf: Vec::new() }
+        common::Wire::new(sock)
     }
 }
 
