@@ -263,14 +263,24 @@ fn route_for_verb<A: ArgvView + ?Sized>(
         }
         b"SLOWLOG" => Route::Slowlog(parse_slowlog_sub(args)),
         b"DEL" | b"UNLINK" => {
-            if args.len() == 2 {
+            // A one-argument call names no key at all. Routing it to the
+            // multi-key path made it an EMPTY delete answering `:0`, where
+            // Redis — and this engine's own dispatch arm — say wrong number
+            // of arguments. Local is where that guard already lives, and is
+            // what the default arm below does with a short call.
+            if args.len() < 2 {
+                Route::Local
+            } else if args.len() == 2 {
                 Route::Single(1)
             } else {
                 Route::DelKeys
             }
         }
         b"EXISTS" => {
-            if args.len() == 2 {
+            // Same as DEL/UNLINK above: no key named, so not a fan-out.
+            if args.len() < 2 {
+                Route::Local
+            } else if args.len() == 2 {
                 Route::Single(1)
             } else {
                 Route::ExistsKeys

@@ -279,48 +279,96 @@ fn embedded_answers_what_the_wire_answers() {
     );
 }
 
-/// Every verb `cmd_resolve.rs` guards by arity, called with the WRONG
-/// arity. The guard does not match, the arm falls through, and the
-/// default arm does not know these verbs — so the server reports a
-/// command that exists as one that does not.
-const ARITY_PROBE: &[&str] = &[
-    "IDX.QUERY t",
-    "IDX.EXPLAIN",
-    "IDX.REBUILD",
-    "IDX.COUNT t",
-    "IDX.VERIFY",
-    "IDX.LIST extra",
-    "VIEW.QUERY",
-    "VIEW.LIST extra",
-    "VIEW.VERIFY",
-    "VIEW.REBUILD",
-    "VIEW.EXPLAIN",
-    "TABLE.LIST extra",
+/// Verbs whose short call answers with their own usage line rather than
+/// Redis's arity sentence. Every one is kevy-only — there is no Redis
+/// counterpart to be compatible with — and for a declaration verb taking
+/// eleven arguments a usage line is the more useful answer. The ledger is
+/// EXACT: a verb that starts, or stops, doing this fails below by name.
+const OWN_USAGE_LINE: &[&str] = &[
+    "FAILOVER",
+    "IDX.CREATE",
+    "IDX.DROP",
+    "REPL.WAIT",
+    "TABLE.DECLARE",
+    "TABLE.DROP",
+    "TABLE.ENSURE",
+    "TABLE.REPLACE",
     "TABLE.VERIFY",
-    "PREFIX.DIGEST",
+    "VIEW.CREATE",
+    "VIEW.DROP",
 ];
 
+/// Every documented verb, called with one argument fewer than it declares,
+/// must answer in Redis's words — and must never report itself unknown.
+///
+/// This was a hand-written list of fourteen guarded verbs, which is how the
+/// defect it was written for got found: twelve of those fourteen reported a
+/// command that exists as one that does not. But a hand list finds what
+/// someone thought to write down. Once `kevy_resp::verb_arity` put the
+/// arity column where a test outside `kevy` could read it, the list became
+/// a sweep over all of them — and the sweep found four things in its first
+/// run that the fourteen never had:
+///
+///   * `XPENDING k` PANICKED the shard thread. The extended parse reads
+///     `args[3]` unchecked and nothing rejected a two-argument call, so any
+///     client could crash a shard.
+///   * `DEL` / `EXISTS` / `UNLINK` with no key routed to the multi-key
+///     fan-out and answered `:0` — an empty delete — where redis 8.10.1
+///     answers with the arity sentence. The embedded facade mirrored that
+///     `:0` on purpose, with a comment saying to, so the differential
+///     harness saw two surfaces agreeing. Agreement on a wrong answer is
+///     still agreement; it took the Redis oracle to say which was right.
+///   * `SRANDMEMBER` declared -3 where redis declares -2, so the valid
+///     `SRANDMEMBER key` was accepted on the wire and REFUSED inside MULTI.
+///     See the cell below.
+///   * `XREAD a b` answered "syntax error" where redis answers with the
+///     arity sentence, keeping "syntax error" for a call long enough to
+///     parse but shaped wrong.
+///
+/// Only the too-FEW direction is swept, deliberately: a call below the
+/// minimum cannot reach a handler, so this can never execute anything.
 #[test]
-fn a_known_verb_with_wrong_arity_is_not_reported_as_unknown() {
+fn every_documented_verb_refuses_a_short_call_in_redis_words() {
+    use kevy_resp::verb_arity::{VERB_ARITY, arity_of};
     let server = Server::start_single_shard();
     let mut wire = server.wire();
-    let mut wrong = Vec::new();
-    for cmd in ARITY_PROBE {
-        let r = String::from_utf8_lossy(&wire.call(&argv(cmd))).to_string();
+    let registered: std::collections::HashSet<&str> = OWN_USAGE_LINE.iter().copied().collect();
+
+    let short_call = |name: &str| {
+        let min = arity_of(name).map_or(0, |a| a.unsigned_abs() as usize);
+        let mut parts = vec![name.as_bytes().to_vec()];
+        for _ in 0..min.saturating_sub(2) {
+            parts.push(b"x".to_vec());
+        }
+        parts
+    };
+
+    let (mut probed, mut skipped) = (0usize, 0usize);
+    let (mut unknown, mut other) = (Vec::new(), Vec::new());
+    for (name, arity) in VERB_ARITY {
+        if arity.unsigned_abs() < 2 {
+            skipped += 1; // a call cannot carry fewer parts than the verb
+            continue;
+        }
+        probed += 1;
+        let r = String::from_utf8_lossy(&wire.call(&short_call(name))).to_string();
         if r.contains("unknown command") {
-            wrong.push((*cmd, r.trim().to_string()));
+            unknown.push(format!("{name} -> {}", r.trim()));
+        } else if !r.contains("wrong number of arguments") && !registered.contains(name) {
+            other.push(format!("{name} -> {}", r.trim().chars().take(90).collect::<String>()));
         }
     }
-    println!("arity probe: {} of {} report a real verb as unknown",
-             wrong.len(), ARITY_PROBE.len());
-    for (c, r) in &wrong {
-        println!("  {c}  ->  {r}");
-    }
-    // The control: a verb that genuinely does not exist must still be
-    // reported as unknown, and a known verb at the RIGHT arity must not be
-    // turned into an arity error by this change.
-    let unknown = String::from_utf8_lossy(&wire.call(&argv("TOTALLY.NOT.A.COMMAND"))).to_string();
-    assert!(unknown.contains("unknown command"), "a real unknown stays unknown: {unknown}");
+
+    // A floor: a sweep that probed nothing passes every assertion below.
+    assert!(
+        probed >= 150,
+        "only {probed} verbs probed ({skipped} skipped) — VERB_ARITY did not load"
+    );
+
+    // Controls, so a green here cannot come from the server answering
+    // everything the same way.
+    let nonexistent = String::from_utf8_lossy(&wire.call(&argv("TOTALLY.NOT.A.COMMAND"))).to_string();
+    assert!(nonexistent.contains("unknown command"), "a real unknown stays unknown: {nonexistent}");
     let good = String::from_utf8_lossy(&wire.call(&argv("IDX.LIST"))).to_string();
     assert!(
         !good.contains("wrong number of arguments") && !good.contains("unknown command"),
@@ -328,11 +376,46 @@ fn a_known_verb_with_wrong_arity_is_not_reported_as_unknown() {
     );
 
     assert!(
-        wrong.is_empty(),
-        "{} guarded verb(s) answer a wrong-arity call with \"unknown command\" \
-         instead of \"wrong number of arguments\"",
-        wrong.len()
+        unknown.is_empty(),
+        "{} documented verb(s) answer a short call with \"unknown command\" rather \
+         than the arity sentence: {unknown:?}",
+        unknown.len()
     );
+    assert!(
+        other.is_empty(),
+        "{} verb(s) answer a short call with neither the arity sentence nor a \
+         registered usage line: {other:?}",
+        other.len()
+    );
+
+    let healed: Vec<&str> = OWN_USAGE_LINE
+        .iter()
+        .copied()
+        .filter(|n| String::from_utf8_lossy(&wire.call(&short_call(n))).contains("wrong number of arguments"))
+        .collect();
+    assert!(
+        healed.is_empty(),
+        "{healed:?} now answer in Redis's words — drop them from OWN_USAGE_LINE so \
+         the ledger stays exact"
+    );
+}
+
+/// `SRANDMEMBER key` is a valid call. It was accepted on the wire and
+/// REFUSED inside MULTI, because the transaction queue checks the declared
+/// arity and VERB_META declared -3 where redis 8.10.1 declares -2. One
+/// wrong number, and the same command meant two different things depending
+/// on whether a transaction was open.
+#[test]
+fn a_valid_call_is_not_refused_by_the_transaction_queue() {
+    let server = Server::start_single_shard();
+    let mut w = server.wire();
+    let direct = String::from_utf8_lossy(&w.call(&argv("SRANDMEMBER k"))).to_string();
+    assert!(!direct.contains("wrong number of arguments"), "direct call refused: {direct}");
+    let multi = String::from_utf8_lossy(&w.call(&argv("MULTI"))).to_string();
+    assert!(multi.starts_with("+OK"), "MULTI: {multi}");
+    let queued = String::from_utf8_lossy(&w.call(&argv("SRANDMEMBER k"))).to_string();
+    assert!(queued.starts_with("+QUEUED"), "the queue refused a call the wire accepts: {queued}");
+    let _ = w.call(&argv("DISCARD"));
 }
 
 /// Arity is declared in one place and read in two — and one of them cannot

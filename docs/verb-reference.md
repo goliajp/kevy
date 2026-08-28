@@ -123,7 +123,7 @@ cannot have.
 | `SISMEMBER key member` | 3 | readonly | O(1) | full | Check whether a value is a member of a set. |
 | `SMEMBERS key` | 2 | readonly | O(N) members | full | Return all members of a set. |
 | `SPOP key [count]` | -2 | write | O(count) expected — each member is drawn by probing a random slot and taking the first occupied one | full | Remove and return one or more random members of a set. |
-| `SRANDMEMBER key [count]` | -3 | readonly | O(count) expected when count is a small fraction of the set (random-slot probing); O(N) once count exceeds a quarter of it, where copying and shuffling beats rejection sampling | full | Return one or more random members of a set without removing them. A negative count allows repeats. |
+| `SRANDMEMBER key [count]` | -2 | readonly | O(count) expected when count is a small fraction of the set (random-slot probing); O(N) once count exceeds a quarter of it, where copying and shuffling beats rejection sampling | full | Return one or more random members of a set without removing them. A negative count allows repeats. |
 | `SREM key member [member ...]` | -3 | write | O(M) members | full | Remove one or more members from a set. |
 | `SSCAN key cursor [MATCH pattern] [COUNT count]` | -3 | readonly | O(N) — the whole set is copied and returned in one batch | differs: not a cursor iterator — the cursor is always 0 and the entire set comes back in one reply; COUNT is validated then ignored | Iterate a set's members (single-batch cursor). |
 | `SUNION key [key ...]` | -2 | readonly | O(sum of the source cardinalities) | full | Return the union of the given sets (cross-shard gather). |

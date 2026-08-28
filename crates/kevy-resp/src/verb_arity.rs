@@ -25,6 +25,15 @@
 /// Redis's arity convention: positive is an exact argument count
 /// INCLUDING the verb itself, negative is a minimum. `-4` means "at
 /// least four". Sorted by name, which [`arity_of`] relies on.
+///
+/// ```
+/// use kevy_resp::verb_arity::VERB_ARITY;
+///
+/// // Sorted, so a lookup can binary-search it.
+/// assert!(VERB_ARITY.windows(2).all(|w| w[0].0 < w[1].0));
+/// // GET takes the verb and one key, exactly.
+/// assert!(VERB_ARITY.contains(&("GET", 2)));
+/// ```
 pub const VERB_ARITY: &[(&str, i8)] = &[
     ("APPEND",              3),
     ("BGREWRITEAOF",        1),
@@ -156,7 +165,7 @@ pub const VERB_ARITY: &[(&str, i8)] = &[
     ("SLOWLOG",            -2),
     ("SMEMBERS",            2),
     ("SPOP",               -2),
-    ("SRANDMEMBER",        -3),
+    ("SRANDMEMBER",        -2),
     ("SREM",               -3),
     ("SSCAN",              -3),
     ("STRLEN",              2),
@@ -221,6 +230,14 @@ pub const VERB_ARITY: &[(&str, i8)] = &[
 
 /// The declared arity of `name` (upper-case, as the tables spell it), or
 /// `None` when the verb has no row.
+///
+/// ```
+/// use kevy_resp::verb_arity::arity_of;
+///
+/// assert_eq!(arity_of("GET"), Some(2));        // exactly two parts
+/// assert_eq!(arity_of("IDX.QUERY"), Some(-4)); // at least four
+/// assert_eq!(arity_of("get"), None);           // upper-case, as spelled
+/// ```
 #[must_use]
 pub fn arity_of(name: &str) -> Option<i8> {
     VERB_ARITY.binary_search_by(|(n, _)| (*n).cmp(name)).ok().map(|i| VERB_ARITY[i].1)
@@ -233,6 +250,16 @@ pub fn arity_of(name: &str) -> Option<i8> {
 /// This is what a dispatch entry wants. It keeps the sign convention in
 /// one place instead of at every guard, which is how `< 4` came to be
 /// written out beside a comment explaining that -4 means four.
+///
+/// ```
+/// use kevy_resp::verb_arity::arity_ok;
+///
+/// assert_eq!(arity_ok("GET", 2), Some(true));        // GET k
+/// assert_eq!(arity_ok("GET", 3), Some(false));       // GET k extra
+/// assert_eq!(arity_ok("IDX.QUERY", 3), Some(false)); // one short
+/// assert_eq!(arity_ok("IDX.QUERY", 9), Some(true));  // a minimum, so more is fine
+/// assert_eq!(arity_ok("NO.SUCH.VERB", 2), None);     // not "the count is fine"
+/// ```
 #[must_use]
 pub fn arity_ok(name: &str, argc: usize) -> Option<bool> {
     let a = i64::from(arity_of(name)?);
