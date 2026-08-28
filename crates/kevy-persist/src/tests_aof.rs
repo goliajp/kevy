@@ -723,31 +723,7 @@ fn requeue_front_preserves_order_and_offsets() {
 // one.
 #[test]
 fn resync_recovers_the_good_tail_behind_a_lying_length() {
-    let path = temp_aof("lenlies");
-    {
-        let mut aof = Aof::open(&path, Fsync::No).unwrap();
-        for i in 0..10 {
-            aof.append(&cmd(&[b"SET", format!("pre{i}").as_bytes(), b"v"])).unwrap();
-        }
-    }
-    {
-        use std::io::Write;
-        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
-        f.write_all(&1_000_000u32.to_le_bytes()).unwrap();
-        f.write_all(&0xDEAD_BEEFu32.to_le_bytes()).unwrap();
-        f.write_all(b"short").unwrap();
-    }
-    {
-        use std::io::Write as _;
-        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
-        let mut scratch = Vec::new();
-        for i in 0..10 {
-            crate::record::write_record_multibulk(
-                &mut f, &cmd(&[b"SET", format!("post{i}").as_bytes(), b"v"]), &mut scratch,
-            ).unwrap();
-        }
-        let _ = f.flush();
-    }
+    let path = lying_length_aof("lenlies");
 
     // Strict replay still stops there — that is its contract.
     let mut strict: Vec<Argv> = Vec::new();
@@ -792,4 +768,68 @@ fn resync_on_a_genuine_torn_tail_adds_nothing() {
     assert_eq!(res.len(), 10, "resync must not conjure a record from a torn tail");
     assert!(r.resynced_ranges.is_empty(), "nothing was skipped, so nothing is reported");
     let _ = std::fs::remove_file(&path);
+}
+
+/// The file shape that cost the tail: ten good records, a length field
+/// claiming a megabyte the file does not have, then ten more good records
+/// written behind the lie.
+fn lying_length_aof(tag: &str) -> std::path::PathBuf {
+    let path = temp_aof(tag);
+    {
+        let mut aof = Aof::open(&path, Fsync::No).unwrap();
+        for i in 0..10 {
+            aof.append(&cmd(&[b"SET", format!("pre{i}").as_bytes(), b"v"])).unwrap();
+        }
+    }
+    let mut f = OpenOptions::new().append(true).open(&path).unwrap();
+    f.write_all(&1_000_000u32.to_le_bytes()).unwrap();
+    f.write_all(&0xDEAD_BEEFu32.to_le_bytes()).unwrap();
+    f.write_all(b"short").unwrap();
+    let mut scratch = Vec::new();
+    for i in 0..10 {
+        crate::record::write_record_multibulk(
+            &mut f,
+            &cmd(&[b"SET", format!("post{i}").as_bytes(), b"v"]),
+            &mut scratch,
+        )
+        .unwrap();
+    }
+    f.flush().unwrap();
+    path
+}
+
+#[test]
+fn open_with_repair_under_resync_keeps_the_tail_it_documents_keeping() {
+    // `open_with_repair`'s own doc promises a mid-file corruption "no longer
+    // costs the good tail behind it". For a length that outran the file that
+    // sentence was false: resync never engaged, so the repair truncated at
+    // the lie. This is the path that WRITES the truncation to disk, and it
+    // had no test at all.
+    let strict_path = lying_length_aof("openstrict");
+    let resync_path = lying_length_aof("openresync");
+    let full = std::fs::metadata(&resync_path).unwrap().len();
+
+    let strict = Aof::open_with_repair(&strict_path, Fsync::No, false).unwrap();
+    assert!(strict.open_quarantine().is_some(), "strict repair drops the tail");
+    assert!(
+        std::fs::metadata(&strict_path).unwrap().len() < full,
+        "strict repair truncates the file at the lie — that is its contract"
+    );
+
+    let kept = Aof::open_with_repair(&resync_path, Fsync::No, true).unwrap();
+    assert!(
+        kept.open_quarantine().is_none(),
+        "under resync nothing after the last recoverable record is left to drop"
+    );
+    assert_eq!(
+        std::fs::metadata(&resync_path).unwrap().len(),
+        full,
+        "not one byte truncated"
+    );
+
+    let mut res: Vec<Argv> = Vec::new();
+    crate::replay_aof_resync(&resync_path, |a| res.push(a)).unwrap();
+    assert_eq!(res.len(), 20, "the records survived the open, not only the replay");
+    let _ = std::fs::remove_file(&strict_path);
+    let _ = std::fs::remove_file(&resync_path);
 }
