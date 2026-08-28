@@ -44,7 +44,13 @@ RPORT=7391
 DIR=$(mktemp -d /tmp/kevy-availgate-XXXXXX)
 PPID_=""
 RPID_=""
-trap 'kill $PPID_ $RPID_ 2>/dev/null; rm -rf "$DIR"' EXIT
+# `kill` signals; it does not wait. Without the wait this trap returned
+# while the two servers were still shutting down, and a gate started
+# immediately afterwards saw them as leftovers — perfgate did exactly that
+# and REFUSED, naming ports 7381 and 7391, which were gone seconds later.
+# A gate that returns before its processes have is leaving residue for the
+# next one, however briefly.
+trap 'kill $PPID_ $RPID_ 2>/dev/null; wait $PPID_ $RPID_ 2>/dev/null; rm -rf "$DIR"' EXIT
 
 fail() {
     echo "availgate: FAIL — $1"

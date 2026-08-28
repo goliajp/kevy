@@ -709,3 +709,85 @@ fn requeue_front_preserves_order_and_offsets() {
     assert_eq!(got[1].get(1), Some(b"b" as &[u8]));
     let _ = std::fs::remove_file(&path);
 }
+
+// The sibling of `resync_recovers_the_good_tail_behind_a_corrupt_record`,
+// and the one that was missing: there, the CRC lies and the walk calls the
+// stop CORRUPT. Here the LENGTH lies — legal (<= MAX_RECORD) but larger
+// than the bytes that remain — so `read_fully` comes up short and the walk
+// calls it a torn tail. EOF really was hit; the cause is corruption.
+//
+// Before resync learned to run on any non-clean stop, this lost every good
+// record behind the bad one AND reported `corrupt == false`, so nothing
+// warned. crashgate's T6 cell hit it about one CI run in five, depending on
+// whether its splice happened to produce a lying length or an out-of-range
+// one.
+#[test]
+fn resync_recovers_the_good_tail_behind_a_lying_length() {
+    let path = temp_aof("lenlies");
+    {
+        let mut aof = Aof::open(&path, Fsync::No).unwrap();
+        for i in 0..10 {
+            aof.append(&cmd(&[b"SET", format!("pre{i}").as_bytes(), b"v"])).unwrap();
+        }
+    }
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        f.write_all(&1_000_000u32.to_le_bytes()).unwrap();
+        f.write_all(&0xDEAD_BEEFu32.to_le_bytes()).unwrap();
+        f.write_all(b"short").unwrap();
+    }
+    {
+        use std::io::Write as _;
+        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        let mut scratch = Vec::new();
+        for i in 0..10 {
+            crate::record::write_record_multibulk(
+                &mut f, &cmd(&[b"SET", format!("post{i}").as_bytes(), b"v"]), &mut scratch,
+            ).unwrap();
+        }
+        let _ = f.flush();
+    }
+
+    // Strict replay still stops there — that is its contract.
+    let mut strict: Vec<Argv> = Vec::new();
+    replay_aof(&path, |a| strict.push(a)).unwrap();
+    assert_eq!(strict.len(), 10, "strict replay stops at the lying length");
+
+    // Resync hops it and brings the tail back.
+    let mut res: Vec<Argv> = Vec::new();
+    let r = crate::replay_aof_resync(&path, |a| res.push(a)).unwrap();
+    assert_eq!(res.len(), 20, "every good record, not just the prefix");
+    assert_eq!(r.resynced_ranges.len(), 1, "one skipped region, reported");
+    assert!(res.iter().any(|a| a.get(1) == Some(b"post9".as_slice())),
+            "the last record behind the damage came back");
+    let _ = std::fs::remove_file(&path);
+}
+
+// A torn tail is not corruption, and resync must not invent anything from
+// it. Asking resync here is new — it used to run only on a corrupt stop —
+// so this pins that the answer is unchanged.
+#[test]
+fn resync_on_a_genuine_torn_tail_adds_nothing() {
+    let path = temp_aof("torntail");
+    {
+        let mut aof = Aof::open(&path, Fsync::No).unwrap();
+        for i in 0..10 {
+            aof.append(&cmd(&[b"SET", format!("t{i}").as_bytes(), b"v"])).unwrap();
+        }
+    }
+    {
+        use std::io::Write;
+        // Half a header: the shape a kill -9 mid-append leaves.
+        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        f.write_all(&[0x2A, 0x00, 0x00]).unwrap();
+    }
+    let mut strict: Vec<Argv> = Vec::new();
+    replay_aof(&path, |a| strict.push(a)).unwrap();
+    let mut res: Vec<Argv> = Vec::new();
+    let r = crate::replay_aof_resync(&path, |a| res.push(a)).unwrap();
+    assert_eq!(strict.len(), 10);
+    assert_eq!(res.len(), 10, "resync must not conjure a record from a torn tail");
+    assert!(r.resynced_ranges.is_empty(), "nothing was skipped, so nothing is reported");
+    let _ = std::fs::remove_file(&path);
+}

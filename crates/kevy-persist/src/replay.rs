@@ -239,7 +239,23 @@ fn stream_v2(
     let mut w = walk_v2(&mut r, magic.len() as u64, &mut apply)?;
     let corrupt = matches!(w.stop, ReplayStop::CorruptFrame(_));
     let mut ranges: Vec<(u64, u64)> = Vec::new();
-    if resync && corrupt {
+    // Any stop that is not clean, not only the ones the walk calls corrupt.
+    //
+    // A record whose length field LIES — legal (<= MAX_RECORD) but larger
+    // than the bytes that remain — makes `read_fully` come up short, which
+    // the walk reads as a torn tail. It is literally true that EOF was hit,
+    // and the cause is corruption, not a torn write: constructed
+    // deterministically, one such record loses every good record behind it
+    // and `corrupt` stays false, so nothing even warns. The sibling case
+    // where the CRC lies is flagged corrupt and fully recovered.
+    //
+    // Asking resync on a genuine torn tail costs a scan of the few bytes
+    // after the stop and finds nothing to apply — a torn tail has no
+    // complete record behind it, and `resync_scan` requires a length that
+    // fits, a matching CRC32C, and a payload that parses as exactly one
+    // command. So the condition is what it should always have been: is
+    // there anything valid after where we stopped?
+    if resync && !matches!(w.stop, ReplayStop::Clean) {
         crate::replay_resync::resync_fallback(path, &mut w, &mut apply, &mut ranges)?;
     }
     let elapsed_ms = start.elapsed().as_millis();
