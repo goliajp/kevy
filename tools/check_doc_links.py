@@ -121,6 +121,15 @@ def main():
         print()
         print(f"REFUSED: {len(bad)} dead doc links across {len(files)} files.")
         return 1
+    # Floor. Six gates in this release reported a clean verdict over an
+    # empty tree; this was the seventh, printing "0 markdown links across 0
+    # files, none dead" and exiting 0. A repository with no documentation is
+    # a broken selector, not a repository with no dead links.
+    if not files or not n_links:
+        print(f"REFUSED: {len(files)} file(s) and {n_links} link(s) — the "
+              f"selector found nothing, which is not the same as finding "
+              f"nothing wrong")
+        return 2
     print(f"ok: {n_links} markdown links across {len(files)} files, none dead")
     return 0
 
