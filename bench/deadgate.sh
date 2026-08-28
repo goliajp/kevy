@@ -44,6 +44,35 @@ fi
 
 python3 "$ROOT/tools/coverage_atlas.py" "$COV" || exit $?
 
+# The register and the exemptions are two files, and nothing reconciled them.
+# `suite/dead-paths.toml` is what a person reads; `unstable` inside the
+# baseline is what setratchet actually honours — deliberately, so a run
+# cannot exempt itself. Deliberate does not mean self-consistent: an entry
+# added to the register alone silently does nothing, which is how this check
+# came to exist (::match_migrating was registered and stayed unexempt).
+python3 - "$ROOT" <<'RECONCILE' || exit $?
+import json, pathlib, sys, tomllib
+root = pathlib.Path(sys.argv[1])
+reg = tomllib.loads((root / "suite/dead-paths.toml").read_text()).get("unstable", [])
+base = json.loads((root / "bench/DEAD-BASELINE.json").read_text()).get("unstable", {})
+if not reg:
+    print("deadgate: REFUSED — suite/dead-paths.toml declares no unstable "
+          "entries; an empty register is a broken read, not agreement",
+          file=sys.stderr)
+    sys.exit(2)
+want = {e["symbol"] for e in reg if "symbol" in e} | {e["prefix"] for e in reg if "prefix" in e}
+have = set(base.get("symbols", [])) | set(base.get("prefixes", []))
+only_reg, only_base = sorted(want - have), sorted(have - want)
+if only_reg or only_base:
+    print("deadgate: FAIL — the unstable register and the baseline's exemptions disagree")
+    for x in only_reg:
+        print(f"  registered in suite/dead-paths.toml, exempts nothing: {x}")
+    for x in only_base:
+        print(f"  exempt in the baseline, explained nowhere: {x}")
+    sys.exit(1)
+print(f"deadgate: {len(want)} unstable declaration(s), register and baseline agree")
+RECONCILE
+
 if [ "$MODE" = "--update-baseline" ]; then
   shift
   exec python3 "$ROOT/tools/setratchet.py" update "$BASELINE" "$OBSERVED" "$@"
