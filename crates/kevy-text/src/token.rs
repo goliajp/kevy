@@ -8,12 +8,28 @@
 //! - Tokens never cross a script boundary.
 
 /// Pluggable tokenizer ([`tokenize`] is the only shipped impl).
+/// # Examples
+///
+/// ```
+/// use kevy_text::{KevyTokenizer, Tokenizer};
+/// // The engine takes a Tokenizer, so a caller can swap the analysis
+/// // without touching the index.
+/// fn count<T: Tokenizer>(t: &T, s: &[u8]) -> usize { t.tokens(s).len() }
+/// assert_eq!(count(&KevyTokenizer, b"one two three"), 3);
+/// ```
 pub trait Tokenizer {
     /// Produce tokens for `text` (UTF-8; invalid bytes are skipped).
     fn tokens(&self, text: &[u8]) -> Vec<Vec<u8>>;
 }
 
 /// The default dictionary-free tokenizer.
+/// # Examples
+///
+/// ```
+/// use kevy_text::{KevyTokenizer, Tokenizer, tokenize};
+/// // The default analysis, and the same one the free function runs.
+/// assert_eq!(KevyTokenizer.tokens(b"Hello World"), tokenize(b"Hello World"));
+/// ```
 #[derive(Debug, Clone, Copy, Default)]
 pub struct KevyTokenizer;
 
@@ -34,6 +50,24 @@ fn is_cjk(c: char) -> bool {
 }
 
 /// Tokenize per the default rules (see module doc).
+/// # Examples
+///
+/// ```
+/// use kevy_text::tokenize;
+/// // ASCII: folded to lower case, split on non-alphanumerics.
+/// assert_eq!(tokenize(b"Rust Storage-Engine"),
+///            vec![b"rust".to_vec(), b"storage".to_vec(), b"engine".to_vec()]);
+///
+/// // CJK without a dictionary: Han runs become overlapping bigrams, so a
+/// // two-character query matches the same way a word would — no word
+/// // list to ship, and nothing to be missing from it.
+/// let t = tokenize("全文検索".as_bytes());
+/// let got: Vec<String> = t.iter().map(|x| String::from_utf8_lossy(x).into_owned()).collect();
+/// assert_eq!(got, vec!["全文", "文検", "検索"]);
+///
+/// // A single Han character still indexes, so it is findable alone.
+/// assert_eq!(tokenize("犬".as_bytes()).len(), 1);
+/// ```
 pub fn tokenize(text: &[u8]) -> Vec<Vec<u8>> {
     let s = String::from_utf8_lossy(text);
     let mut out = Vec::new();
@@ -93,6 +127,17 @@ pub fn tokenize(text: &[u8]) -> Vec<Vec<u8>> {
 /// Requires valid UTF-8 — invalid input yields no spans rather than
 /// offsets that would be wrong once `from_utf8_lossy` shifted them. The
 /// tokens themselves match [`tokenize`] on valid input (a test pins it).
+/// # Examples
+///
+/// ```
+/// use kevy_text::tokenize_spans;
+/// // The same tokens, each with the BYTE range it came from — what
+/// // HIGHLIGHT needs to point back at the original text.
+/// let spans = tokenize_spans(b"rust storage");
+/// assert_eq!(spans[0].0, b"rust".to_vec());
+/// assert_eq!((spans[0].1, spans[0].2), (0, 4));
+/// assert_eq!((spans[1].1, spans[1].2), (5, 12));
+/// ```
 pub fn tokenize_spans(text: &[u8]) -> Vec<(Vec<u8>, usize, usize)> {
     let Ok(s) = core::str::from_utf8(text) else {
         return Vec::new();
