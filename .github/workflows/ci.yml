@@ -293,9 +293,15 @@ jobs:
       # A bump that moves the Cargo manifests and forgets the language
       # doors ships a version that is true in one layer and false in
       # five. 5.1.0 did exactly that until this gate existed.
-      - name: version alignment (six layers agree with the workspace)
+      - name: version alignment (seven layers agree with the workspace)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_version_alignment.py
+      # Nine of twenty-three fuzz targets existed and never ran. A target
+      # in the tree and not in the matrix shows coverage that is not there,
+      # which is worse than never having written it.
+      - name: fuzzgate (every fuzz target is in the fuzz-smoke matrix)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python3 tools/check_fuzz_matrix.py
       # The READMEs quote benchmark numbers. They were hand-written from a
       # v4-era run and still showing it under a 5.1.0 release, because
       # nothing tied them to a measurement. They come from the ledger now.
@@ -709,20 +715,29 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { crate: kevy-bytes,   target: cross_arm }
-          - { crate: kevy-config,  target: config_toml }
-          - { crate: kevy-hash,    target: key_hash_slot }
-          - { crate: kevy-map,     target: map_ops }
-          - { crate: kevy-persist, target: replay_aof }
-          - { crate: kevy-persist, target: shards_meta }
-          - { crate: kevy-persist, target: snapshot_load }
+          - { crate: kevy-alloc,     target: heap_churn }
+          - { crate: kevy-bytes,     target: cross_arm }
+          - { crate: kevy-compress,  target: decode_arbitrary }
+          - { crate: kevy-compress,  target: roundtrip }
+          - { crate: kevy-config,    target: config_toml }
+          - { crate: kevy-hash,      target: key_hash_slot }
+          - { crate: kevy-index,     target: table_spec }
+          - { crate: kevy-map,       target: map_ops }
+          - { crate: kevy-persist,   target: replay_aof }
+          - { crate: kevy-persist,   target: shards_meta }
+          - { crate: kevy-persist,   target: snapshot_load }
           - { crate: kevy-replicate, target: replica_wire }
-          - { crate: kevy-resp,    target: parse_command }
-          - { crate: kevy-resp,    target: parse_reply }
-          - { crate: kevy-ring,    target: ring_spsc }
-          - { crate: kevy-store,   target: store_zset }
-          - { crate: kevy-text,    target: text_index }
-          - { crate: kevy-vector,  target: hnsw_ops }
+          - { crate: kevy-resp,      target: parse_command }
+          - { crate: kevy-resp,      target: parse_reply }
+          - { crate: kevy-ring,      target: ring_spsc }
+          - { crate: kevy-seg,       target: manifest_open }
+          - { crate: kevy-seg,       target: seg_open }
+          - { crate: kevy-seg,       target: seg_roundtrip }
+          - { crate: kevy-sql,       target: sql_compile }
+          - { crate: kevy-store,     target: store_zset }
+          - { crate: kevy-text,      target: text_index }
+          - { crate: kevy-vector,    target: hnsw_ops }
+          - { crate: kevy-vlog,      target: vlog_churn }
     steps:
       - uses: actions/checkout@v7
       - name: Install Rust (nightly — cargo-fuzz needs -Z flags)
