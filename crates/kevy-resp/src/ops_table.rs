@@ -143,6 +143,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("HPEXPIRE",     WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE),
     op("HPEXPIREAT",   WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE | REPLAY | REWRITE),
     op("HTTL",         RD, NG,   None,            None,    SERVER | ESTORE),
+    op("HPTTL",        RD, NG,   None,            None,    SERVER | ESTORE),
     op("HPERSIST",     WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE | REPLAY),
     op("HSETNX",       WR, GROW, Some(N::Hash),   None,    SERVER | ESTORE | REPLAY),
     op("HVALS",        RD, NG,   None,            None,    SERVER | ESTORE),
