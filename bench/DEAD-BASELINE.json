@@ -1,17 +1,17 @@
 {
   "corpus": "c1",
   "platform": "linux",
-  "total_regions": 163182,
-  "dead_regions": 27833,
-  "llvm_per_instantiation_dead": 28764,
+  "total_regions": 163376,
+  "dead_regions": 27866,
+  "llvm_per_instantiation_dead": 28601,
   "crates": {
     "kevy": {
-      "regions": 28813,
-      "dead": 5573
+      "regions": 28939,
+      "dead": 5450
     },
     "kevy-alloc": {
       "regions": 1694,
-      "dead": 119
+      "dead": 117
     },
     "kevy-bench": {
       "regions": 130,
@@ -54,7 +54,7 @@
       "dead": 111
     },
     "kevy-embedded": {
-      "regions": 27533,
+      "regions": 27542,
       "dead": 4275
     },
     "kevy-ffi": {
@@ -71,7 +71,7 @@
     },
     "kevy-index": {
       "regions": 5866,
-      "dead": 449
+      "dead": 438
     },
     "kevy-jni": {
       "regions": 526,
@@ -114,8 +114,8 @@
       "dead": 192
     },
     "kevy-resp": {
-      "regions": 3319,
-      "dead": 92
+      "regions": 3378,
+      "dead": 96
     },
     "kevy-resp-client": {
       "regions": 742,
@@ -127,7 +127,7 @@
     },
     "kevy-rt": {
       "regions": 15689,
-      "dead": 4840
+      "dead": 4811
     },
     "kevy-scalar": {
       "regions": 4391,
@@ -135,7 +135,7 @@
     },
     "kevy-scope": {
       "regions": 629,
-      "dead": 56
+      "dead": 57
     },
     "kevy-seg": {
       "regions": 1212,
@@ -147,7 +147,7 @@
     },
     "kevy-store": {
       "regions": 18676,
-      "dead": 1523
+      "dead": 1506
     },
     "kevy-sys": {
       "regions": 730,
@@ -1157,7 +1157,7 @@
     "<kevy_rt::shard::Shard>::repl_waiter_reply": 5,
     "<kevy_rt::shard::Shard>::replica_conn_is_live": 11,
     "<kevy_rt::shard::Shard>::replica_io_failed": 8,
-    "<kevy_rt::shard::Shard>::replica_readable": 24,
+    "<kevy_rt::shard::Shard>::replica_readable": 27,
     "<kevy_rt::shard::Shard>::replica_writable": 13,
     "<kevy_rt::shard::Shard>::replicas_brief": 29,
     "<kevy_rt::shard::Shard>::reply_feed_error": 13,
@@ -1583,6 +1583,11 @@
     "kevy::dispatch_stream::parse_trim_arg::": 4,
     "kevy::dispatch_stream::parse_xadd_argv::": 15,
     "kevy::dispatch_stream::parse_xread_argv::": 5,
+    "kevy::dispatch_stream::read::cmd_xread::": 15,
+    "kevy::dispatch_stream::read::parse_xread_argv::": 5,
+    "kevy::dispatch_stream::read::xread_parse_kv_u64::": 1,
+    "kevy::dispatch_stream::read::xread_parse_kv_usize::": 1,
+    "kevy::dispatch_stream::read::xread_parse_streams::": 1,
     "kevy::dispatch_stream::setid::cmd_xsetid::": 22,
     "kevy::dispatch_stream::xread_parse_kv_u64::": 1,
     "kevy::dispatch_stream::xread_parse_kv_usize::": 1,
@@ -1704,6 +1709,8 @@
     "kevy::table_runtime::on_tick": 1,
     "kevy::table_runtime::on_write": 1,
     "kevy::tests_op_table::notify_class_matches_table": 1,
+    "kevy::tests_verb_meta::the_write_flag_diverges_only_where_registered": 1,
+    "kevy::tests_verb_meta::verb_arity_is_the_same_column_as_verb_meta": 6,
     "kevy::tier_read::uring::uring_off": 3,
     "kevy::tier_read::uring::with_reader::<alloc::vec::Vec<core::result::Result<core::option::Option<alloc::vec::Vec<core::option::Option<alloc::vec::Vec>>>, kevy_store::types::StoreError>>, kevy::cmd_index_query::wire::peek_hydration>": 8,
     "kevy::validate_accept_shards": 10,
@@ -2818,7 +2825,7 @@
     "kevy_window::text::clean_stale": 17,
     "kevy_window::text::write_seg_file": 11
   },
-  "envelope_runs": 7,
+  "envelope_runs": 8,
   "history": [
     {
       "accepted": [
@@ -2895,6 +2902,18 @@
       "symbols": 2613,
       "regions": 27833,
       "reason": "An envelope over seven linux CI runs (33142915352, 33144113383, 33146039785, 33163286035, 33164204545, 33167502127, 33170058623) \u2014 the three that built the previous envelope plus the four since. Nine symbols rise above the three-run bound; nothing joins and nothing leaves, so the symbol count is unchanged at 2613. Six are in kevy_rt::shard (parse_replica_acks 11->48, replica_readable, replica_io_failed, check_repl_ack_waiters, run, do_publish), one is kevy_replicate::wire_snapshot::decode_replconf_ack 7->27, one is the unqualified ::top_groups, and one is kevy_alloc::os::trim 1->3 \u2014 the symbol that failed run 33170058623. None of that code changed: the 22 commits between 9a5ba1e4 and here touch crates/kevy only, and kevy-rt, kevy-replicate and kevy-alloc have zero changed files across that range. Replication ack parsing, the reactor body and the allocator's OS trim are the timing-dependent surfaces this file's history already names as the tail; three runs was too narrow a bound for them, which is a fact about the measurement rather than a report of new dead code. 27732 -> 27833 regions."
+    },
+    {
+      "envelope_over": 7,
+      "symbols": 2613,
+      "regions": 27833,
+      "reason": "An envelope over eight linux CI runs \u2014 the seven of the previous envelope plus 33182917965. Seven symbols join and one grows; total regions FALL, 27833 -> 27862 at the element-wise max while the newest run alone observed 27597. Three separate causes, none of them new dead code: (1) five joins are one module split. cmd_xread and its four parsers moved to dispatch_stream/read.rs when an added arity guard pushed mod.rs to 503 lines, so kevy::dispatch_stream::cmd_xread became kevy::dispatch_stream::read::cmd_xread. Identity is the symbol name, so a rename reads as a join and a departure; not one region changed reachability. Same shape as the cmsgpack::encode split accepted earlier in this release. The pre-split names stay in the envelope as symbols that have left the set, which is an improvement the gate allows. (2) two joins are the assertion-message arms of two new parity tests \u2014 the_write_flag_diverges_only_where_registered and verb_arity_is_the_same_column_as_verb_meta \u2014 which are unreachable precisely while those tests pass; fifty test symbols already sit in the set for the same reason. (3) one growth, replica_readable 24 -> 27, is the timing-dependent replication tail this file's history already names; kevy-rt has zero changed files across the whole range."
+    },
+    {
+      "envelope_over": 8,
+      "symbols": 2620,
+      "regions": 27866,
+      "reason": "An envelope over eight linux CI runs \u2014 the seven of the previous envelope plus 33182917965. Seven symbols join and one grows, from three separate causes, none of them new dead code. (1) FIVE joins are one module split: cmd_xread and its four parsers moved to dispatch_stream/read.rs when an added arity guard pushed mod.rs to 503 lines, so kevy::dispatch_stream::cmd_xread became kevy::dispatch_stream::read::cmd_xread. Identity is the symbol name, so a rename reads as a join plus a departure; not one region changed reachability. Same shape as the cmsgpack::encode split accepted earlier in this release. The pre-split names stay in the envelope as symbols that have left the set, which the gate treats as improvement. (2) TWO joins are the assertion-message arms of two new parity tests, the_write_flag_diverges_only_where_registered and verb_arity_is_the_same_column_as_verb_meta, which are unreachable precisely while those tests pass; fifty test symbols already sit in the set for that reason. (3) ONE growth, kevy_rt::shard::replica_readable 24 -> 27, is the timing-dependent replication tail this file's history already names \u2014 kevy-rt has zero changed files across the entire range. The newest run alone observed 27597 regions against a 27833 baseline, so the set is smaller than the bound it is being measured against."
     }
   ]
 }
