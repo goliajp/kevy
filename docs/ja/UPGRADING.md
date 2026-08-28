@@ -191,6 +191,7 @@ store.del(&[b"k1".as_slice(), b"k2".as_slice()]);
 | `vector` | HNSWのANNセグメント | `index`、`kevy-vector` |
 | `replicate` | レプリケーション + CDCフィード | `persist`、`kevy-replicate` |
 | `listener` | 読み取り専用のRESPリスナー | （なし） |
+| `tier` | 透過的ティアリング（RAM予算 + コールド値ログ） | `persist`、`kevy-sys` |
 
 `core`階層はmuslターゲット向けにクロスコンパイルでき、強制された予算を持ちます（バイナリ700 KB以下、空ストアのRSS 2 MB以下）。加えて、5つの基盤crateは`no_std`でもビルドされます。[docs/iot.md](iot.md)を参照してください。サイズのスペクトルの反対側では、その同じ組み込みコアが`@goliapkg/kevy`としてブラウザ上でも走ります——[docs/wasm.md](wasm.md)を参照してください。
 
