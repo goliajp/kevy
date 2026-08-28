@@ -377,7 +377,14 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: bash bench/vendorgate.sh
 
-      - name: Clippy (workspace, all targets, all features)
+      # Named for what it runs. It used to say "all features", which this
+      # workspace cannot do: kevy-client-async's runtime features (tokio /
+      # smol / async-std) are mutually exclusive by contract, with a
+      # compile_error! gate in its lib.rs enforcing exactly one, so
+      # `--all-features` defines DefaultTransport three times and fails
+      # before any lint runs. A step name that claims a stricter check than
+      # the command performs is a label nobody can act on.
+      - name: Clippy (workspace, all targets, default features)
         run: cargo clippy --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
 
   # ───────────── contract gates: availability / AI / replication ─────────────
