@@ -114,7 +114,9 @@ milestone's name, not a claim that an API moved.
   kevy-scalar 42.0% → 27.8%, the async client 70.5% → 39.3%, kevy-cli 42.4%
   → 37.5%.
 
-- The suite is 84 checks across three tiers, from 75.
+- The suite is 84 checks across three tiers, from 74 — ten new rows, built
+  from thirteen new files: nine instruments and gauges, three gate scripts,
+  and `tools/setratchet.py`, which is the mechanism the last four rest on.
 
 ## 5.4.1 — the packed row, on
 
