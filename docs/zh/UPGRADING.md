@@ -34,6 +34,8 @@
 
 如果想在灰度窗口里保留一条 3.18 退路：窗口期间关掉自动重写——服务端 `auto_aof_rewrite_percentage = 0`，嵌入式 `Config::with_auto_aof_rewrite_disabled()`（4.1，一次调用清掉全部三个触发旋钮）——并先做一份快照备份；灰度站稳后再开回来。CRC 保护要等文件升到 v2 才生效，所以别让这个状态超出灰度所需的时长。从 4.1 起这扇窗**可观测**而非靠推断：嵌入式 `Store::downgradeable_to_v3()`，服务端 `INFO persistence` 的 `aof_format:`。
 
+**关于 AOF 的一个注意：遗留的 `SPOP` 帧。** 4.0 让 SPOP 真正随机，因此它记录（并复制）的是*效果*——`SREM key <popped…>`，实际被移除的那些成员——而不是那个动词。一份从未重写过的 3.x 时代 AOF 可能仍带着原始的 `SPOP` 帧；在 4.0 下重放它会抽出一次新的随机选择，所以第一次重放之后剩下的集合，可能与升级前那个进程的不同。如果你的集合上有 SPOP 流量，请在升级前后择一时机跑一次 `BGREWRITEAOF`，把当前状态实体化；从那以后日志只携带确定性的帧。
+
 **配置。** 每一个 3.x 配置键都被接受，含义不变。有两个键的语义变得**更严或更真**——见下面的“行为变更”（`notify_keyspace_events` 拒绝未知 flag、`min_replicas_max_lag_ms` 真正生效）。
 
 **移除了一个旋钮。** 自定义快照 / AOF **文件名**没有了（`kevy-embedded` 的 `Config::with_snapshot_filename` / `with_aof_filename` 两个 builder）。磁盘布局现在固定为每 shard 一组 `dump-{i}.rdb` / `aof-{i}.aof`。用默认名字写出来的目录——包括每一个遗留的单文件目录——照样原样加载；只有用**自定义**名字写过的目录，需要在第一次用 4.0 打开之前，做一次性的 `mv` 改成固定名字。
