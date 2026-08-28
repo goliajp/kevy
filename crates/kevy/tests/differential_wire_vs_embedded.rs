@@ -419,6 +419,10 @@ const CORPUS: &[&str] = &[
     "HINCRBYFLOAT xl f 1",
     "ZREVRANGE xl 0 -1",
     "ZREVRANGE xl 0 -1 WITHSCORES",
+    "GETEX",
+    "GETEX xl",
+    "GETEX xnosuch EX 100",
+    "GETEX xnosuch PX 100000",
     // ── F3: implemented in the facade, absent from the RESP dispatch ──
     // Registered in `kevy_resp::ops_table::KNOWN_GAPS`, and the check
     // below reads that ledger rather than restating it. Own keys, last,
