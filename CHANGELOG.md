@@ -62,15 +62,31 @@ milestone's name, not a claim that an API moved.
   turn it on, the recovery they opted into did nothing in one of the two
   cases and said the file was fine.
 
-  Resync now runs on any stop that is not clean, which is what the question
-  always was: is there anything valid after where we stopped. On a genuine
-  torn tail that costs a scan of the few bytes after the stop and applies
-  nothing. Both cases are pinned by name in `tests_aof.rs`, the second as
-  deliberately as the first.
+  Three fixes, and the third one reaches everybody:
+
+  1. Resync runs on any stop that is not clean — which is what the question
+     always was: is there anything valid after where we stopped. On a genuine
+     torn tail that costs a scan of the few bytes after the stop and applies
+     nothing. Both cases are pinned by name in `tests_aof.rs`, the second as
+     deliberately as the first.
+  2. `corrupt` is raised by a skipped range, not only by the stop reason. It
+     had recovered a tail and still reported the file healthy, against what
+     `docs/persistence.md` states: *"the `corrupt` flag stays raised: resync
+     recovers data, it does not declare the file healthy."*
+  3. **On the default path**, where `replay_resync` is off and the drop is
+     strict replay's contract, the operator was told the wrong reason for it.
+     A short read on the record HEADER is a torn append; a short read on the
+     PAYLOAD is a length the file could not honour. Both produced the same
+     verdict and the same sentence. They are separate now, and the new one
+     names the numbers — claimed X bytes with only Y left — and says which
+     option recovers what is behind it. No data moves; what moves is the
+     difference between *"your process died mid-write"* and *"something
+     corrupted this file"*.
 
   Found because `crashgate`'s T6 cell had been failing about one CI run in
   five while passing 28 runs and 65 splice positions on the bench box; the
   splice produced a lying length sometimes and an out-of-range one otherwise.
+  The cell was right the whole time.
 
 - **A readiness peek that always said ready.** The cross-shard arming path
   asks `block_ready` whether a parked waiter could be served now. Its XREAD
