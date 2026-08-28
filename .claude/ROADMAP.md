@@ -148,9 +148,24 @@ suite 从 75 项到 **84** 项(precommit 23 ⊆ prerelease 40 ⊆ full 84)。
       文件改成机器口味的决定,**判断权在属主**。我量了、没有动。
       注:llvm 的 region 由 AST 决定,重排版**不会**动死集合/覆盖率基线;
       克隆图谱是按行的,会动。
-- [ ] **2,596 项没有可执行示例**(97.6%)。99 个 doctest 覆盖 65 个公有项
-      (起点 45 / 18),七块最小的 stone 已做满;剩下的是 kevy-alloc 87、
-      kevy-text 75、kevy-scalar 38、kevy-sys 23 这些大面。
+- [~] **「2,596 项没有可执行示例」这个数不能用来规划** —— 本轮把它量清楚了。
+      九块石头做过之后(bytes/time/geo/compress/ring/madvise/bench/ranktree/
+      vector/scalar/seg/map/alloc,新增 ~110 个 doctest),真实情况是:
+      **分母**含着结构体字段与常量 —— 给 `Civil.y` 或 `GEO_LAT_MIN` 各配一个示例,
+      是把数字清零而什么也没教给读者(仓里立过「有效覆盖不灌水」)。18 块石头里
+      约 370 项值得配、约 299 项配了就是灌水。
+      **分子**漏三类:① 私有模块 `impl` 上的示例**跑了、过了、不登记**
+      (kevy-vector 加 12 登记 4;kevy-seg 加 15 登记 2;kevy-map 加 13 登记 0);
+      ② 没有公开路径的项**根本写不出示例**(`md5_hex`、kevy-seg 的 layout 13 项);
+      ③ feature 门控的模块默认不编译,`global` 的示例要 `--features global` 才跑。
+      工具头注自己承认分子那一头,称之为「对 ratchet 安全的方向」——**确实安全,
+      但不是能用来规划的数**。
+      **真正的产出是它抓到的东西**:`Civil` 字段名、`iter_rev_from` 文档说反了
+      (「largest」实为 smallest)、`SegMeta.entries` 实为 `records`、
+      `ManifestEntry` 漏了 `records`、`KevyHash` 只收字节串与整数。
+      **五个 crate,写可运行示例都纠正了从散文里读来并读错的东西。**
+      剩下的大面(kevy-alloc 84、kevy-text、kevy-sys)是 unsafe 内部,
+      示例要么是对安全性的谎、要么是一页比散文教得更少的铺垫 —— 那里的数字该高。
 - [ ] **kevy-embedded ↔ kevy 的 9,400 行**:两个台架对**能到达的一切**逐字节
       一致(进程内 66/70、线路 23/26,每条例外具名),但只覆盖约四分之一
       动词面,而三个具名缺口正落在克隆图谱匹配最密处。
