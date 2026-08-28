@@ -262,19 +262,33 @@ def layer5_prose(v: str, bad: list) -> int:
     claim = re.compile(
         r"tracks kevy \*\*(\d+\.\d+\.\d+)\*\*"
         r"|`jp\.golia:kevy:(\d+\.\d+\.\d+)`"
-        r"|<artifactId>kevy</artifactId><version>(\d+\.\d+\.\d+)</version>")
+        r"|<artifactId>kevy</artifactId><version>(\d+\.\d+\.\d+)</version>"
+        # The install table's Version column. Three Maven lines came into
+        # scope above and the seven rows above them did not — the table is
+        # the part a reader reads first, and it was the part that was stale.
+        r"|^\|[^|]*\|[^|]*\|\s*(\d+\.\d+\.\d+)\s*\|$")
     # The root README is in scope and was not: it is the most-read file
     # here, and its install block states versions. docs/ stays out on
     # purpose — the upgrade guides name old versions correctly, and a
     # gate that dragged those forward would be rewriting history.
-    files = sorted(ROOT.glob("bindings/**/*.md")) + [ROOT / "README.md"]
+    #
+    # `docs/bindings.md` is the exception to that exception, and its three
+    # translations with it. It is not history: it is an install table under
+    # the sentence "every line here was installed from its registry and run
+    # before it was written down", and it carried 5.1.0 in all seven rows
+    # and in the same Maven XML the README states at 6.0.0. A reader pastes
+    # this one. The blanket docs/ exclusion is right for what it was written
+    # for and was covering this too.
+    files = (sorted(ROOT.glob("bindings/**/*.md"))
+             + [ROOT / "README.md", ROOT / "docs/bindings.md",
+                ROOT / "docs/ja/bindings.md", ROOT / "docs/zh/bindings.md"])
     for f in files:
         if skip(f):
             continue
         for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
             m = claim.search(line)
             if m:
-                found = m.group(1) or m.group(2) or m.group(3)
+                found = m.group(1) or m.group(2) or m.group(3) or m.group(4)
                 checked += 1
                 if found != v:
                     bad.append(f"{f.relative_to(ROOT)}:{i}: claims {found} != {v}")
