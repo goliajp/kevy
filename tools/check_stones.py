@@ -170,6 +170,25 @@ def main():
             print(f"    ⧗ {p_}")
         print("    These are not passes. After the publish they resolve, and a "
               "crate that still cannot lift fails here for real.")
+    # A major bump lets `cargo semver-checks` skip every lint, because a
+    # major is allowed to break anything. `ok` is then true on the strength
+    # of nothing having been checked. That is correct of the tool and empty
+    # as evidence, so it is named here rather than folded into PASS.
+    vacuous = sorted(
+        c for c, r in rows.items()
+        if (sv := r.get("semver", {})) and sv.get("ok")
+        and not sv.get("checks") and sv.get("skipped")
+    )
+    if vacuous:
+        one = rows[vacuous[0]]["semver"]
+        print(f"stonegate: {len(vacuous)} semver reading(s) PROVE NOTHING — "
+              f"{one.get('skipped')} lints skipped per crate, "
+              f"{one.get('baseline') or 'the last release'} → this tree is a "
+              f"major bump, and a major may break anything:")
+        print(f"    ⊘ {', '.join(vacuous)}")
+        print("    Not a compatibility verdict. What a major release can say "
+              "instead is what its public surface actually did.")
+
     tail = f", {n_w} waived across {len(waived)} crates" if n_w else ", none waived"
     if pending:
         tail += f", {len(pending)} reading(s) not taken"
