@@ -74,14 +74,26 @@ jobs:
       # symbols leave the set — which a ratchet reads as improvement.
       # setratchet's identity check refuses that comparison outright.
       - name: deadgate (the never-executed set may only shrink)
+        id: deadgate
         env:
           KEVY_COV_JSON: ${{ github.workspace }}/target/cov-c1.json
         run: bash bench/deadgate.sh
       # Even when the gate refuses — especially then. The set it refused
       # over is the evidence for deciding whether the refusal was right,
       # and a step skipped on failure puts the evidence behind the verdict.
+      #
+      # But `always()` alone published a lie. `bench/DEAD-SET.json` is
+      # checked in, so a run CANCELLED before deadgate ran still uploaded a
+      # file — the repository's copy, recorded on macOS — under the name
+      # `dead-set-linux`. Three cancelled runs did exactly that today, and
+      # all three artifacts are byte-identical to the committed file. One of
+      # them was nearly used as a third of a baseline envelope; the only
+      # thing that caught it was the platform field disagreeing.
+      #
+      # So: upload when deadgate actually produced something, which means it
+      # ran and either passed or failed. Not when it never started.
       - name: upload dead set
-        if: always()
+        if: always() && (steps.deadgate.outcome == 'success' || steps.deadgate.outcome == 'failure')
         uses: actions/upload-artifact@v7
         with:
           name: dead-set-linux
