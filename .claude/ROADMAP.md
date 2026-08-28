@@ -46,6 +46,36 @@ suite 从 75 项到 **84** 项(precommit 23 ⊆ prerelease 40 ⊆ full 84)。
       `stonereport` job 让判决在唯一能出的地方出。
 - [x] **跳过一项检查曾经等于通过它**:`semver_clean` 问的是「有没有一份说不干净
       的读数」,而不是「有没有读数」;`--skip-semver` 写出的空对象直接落在条件外。
+- [x] **`XPENDING k` 能把分片线程打崩**(远程可达,五个键位,无需任何状态)。
+      `parse_xpending_extended` 开头 `args[3]` 无检查,而 `cmd_xpending` 把
+      「不恰好三个参数」的调用全送进去。同文件的 XGROUP/XACK/XCLAIM 都有守卫,
+      唯独它没有,也没有任何东西驱动过它。
+      `bench/FINDING-2026-08-28-a-hand-list-of-fourteen.md`
+- [x] **`DEL`/`EXISTS`/`UNLINK` 无 key 时返回 `:0`**(路由把它送进多键分散路径,
+      求和零个目标),redis 8.10.1 答 arity 错误。`dispatch.rs` 一直有正确守卫,
+      路由从不让它到达。**门面是故意镜像这个 `:0` 的**,注释写着 mirror that ——
+      两个面**一致地错**,差分台架看不见;是拉起真 redis 当权威源才判出谁对。
+- [x] **`SRANDMEMBER` 声明 -3、redis 是 -2**,于是合法的 `SRANDMEMBER key`
+      线路上接受、**MULTI 里被拒** —— 同一条命令在事务内外是两个意思,根因只是
+      文档表里一个数字。
+- [x] **`XREAD a b` 答 "syntax error"** 而 redis 答 arity 那句(它把 syntax error
+      留给长度够但形状错的调用)。
+- [x] **两张动词表在 14 个动词上不一致,而头注声称它们逐字镜像**。`VERB_META.flags`
+      是客户端面(COMMAND DOCS,决定什么不能发给只读副本),`OP_TABLE.write` 是
+      AOF/复制门 —— 两个不同的问题。照旧头注去「修」表,等于告诉客户端
+      `IDX.CREATE` 和 `BLPOP` 是只读的。分歧集合现在是双向精确账本。
+- [x] **门面把服务器的 arity 重抄成字面量**(finding 明写「not made here」的那条)。
+      arity 列进 `kevy_resp::verb_arity`,两个面读同一列,bijection 双向钉死。
+      **只搬 arity**:一行 VERB_META 剩下的是 48 KB 文档散文,站点 wasm 1.4 MB,
+      整张搬过去是让每个浏览器为没人读的对照句付 3.4%。
+- [x] **一格测试拿到了决定性答案然后扔掉**。`query_buffer_limit` 在失败路径上
+      多等 5 秒看 EOF 来不来,但 `assert!` 读的是更早那个循环设的标志 —— EOF 在
+      那 5 秒里到达,它照样判失败。契约是「越过上限就关连接」,不是「在客户端
+      3.84 s 墙钟内关」。
+- [x] **死集合包络从三轮扩到七轮**。第四轮就有符号越界(`kevy_alloc::os::trim`),
+      而从旧包络最后一轮到现在的 22 个 commit **只动过 `crates/kevy`** ——
+      抬高的九个符号全在一个字节没变的 crate 里。扩宽后仍红:既有符号 +50、
+      新符号 +30,在总数低于基线 300+ 区域时照样判红。
 
 ## 已量到的进展
 

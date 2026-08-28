@@ -22,6 +22,8 @@ use std::io::{Read, Write};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
+mod common;
+
 static START_GATE: Mutex<()> = Mutex::new(());
 
 fn req(parts: &[&[u8]]) -> Vec<u8> {
@@ -94,28 +96,46 @@ impl Drop for Server {
 
 /// Pull one integer gauge out of an INFO reply.
 fn info_gauge(s: &mut std::net::TcpStream, name: &str) -> u64 {
+    info_gauges(s, &[name])[0]
+}
+
+/// Every named gauge out of ONE `INFO` reply.
+///
+/// Gauges compared to each other must come from one aggregation pass:
+/// `INFO` refreshes the answering shard and then sums every shard's
+/// published slot, so two round trips are two different moments, and an
+/// equality asserted across them is asserting something the engine never
+/// promised.
+fn info_gauges(s: &mut std::net::TcpStream, names: &[&str]) -> Vec<u64> {
     let reply = String::from_utf8_lossy(&cmd(s, &[b"INFO"])).into_owned();
-    reply
-        .lines()
-        .find_map(|l| l.strip_prefix(&format!("{name}:")))
-        .and_then(|v| v.trim().parse().ok())
-        .unwrap_or_else(|| panic!("INFO has no {name} gauge:\n{reply}"))
+    names
+        .iter()
+        .map(|name| {
+            reply
+                .lines()
+                .find_map(|l| l.strip_prefix(&format!("{name}:")))
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or_else(|| panic!("INFO has no {name} gauge:\n{reply}"))
+        })
+        .collect()
 }
 
 /// Poll `cold_keys` until it is nonzero AND stable across two
 /// consecutive reads — the deterministic "demotion has drained"
 /// fixpoint (never a bare sleep on eviction timing).
 fn wait_cold_stable(s: &mut std::net::TcpStream) -> u64 {
-    let mut last = 0u64;
-    for _ in 0..100 {
-        std::thread::sleep(std::time::Duration::from_millis(150));
-        let now = info_gauge(s, "cold_keys");
-        if now > 0 && now == last {
-            return now;
-        }
-        last = now;
-    }
-    panic!("cold_keys never stabilized (last = {last})");
+    // Two equal reads 150 ms apart is not settled: seven of eight shards
+    // publish `cold_keys` only on their own tick, so a value can hold
+    // still across two reads and then rise when a late shard reports.
+    // That is how this returned 50 where 52 rows were cold, and the
+    // "rows stay cold" assertion later compared a fresh read against it.
+    // Nonzero FIRST — zero is perfectly stable before demotion starts, so
+    // resting alone would settle on it. Then rest, because two equal reads
+    // 150 ms apart is not settled: seven of eight shards publish
+    // `cold_keys` only on their own tick, and a value can hold still
+    // across two reads and rise when a late shard reports.
+    common::until("cold_keys to become nonzero", || info_gauge(s, "cold_keys") > 0);
+    common::at_rest("cold_keys", || info_gauge(s, "cold_keys"))
 }
 
 fn write_rows(s: &mut std::net::TcpStream) {
@@ -172,11 +192,16 @@ fn cold_table_digest_backfill_and_hydration_match_the_hot_twin() {
     let dh = cmd(&mut hc, &[b"PREFIX.DIGEST", b"row:"]);
     let dc = cmd(&mut cc, &[b"PREFIX.DIGEST", b"row:"]);
     assert_eq!(dc, dh, "digest over cold rows must equal the hot twin");
-    std::thread::sleep(std::time::Duration::from_millis(300)); // let gauges tick
-    assert_eq!(info_gauge(&mut cc, "promotions_total"), 0, "digest must not promote");
+    // One rested snapshot for all three: an equality between two gauges
+    // read by two round trips is an equality across two moments, and each
+    // read refreshes the answering shard before summing the others.
+    let g = common::snapshot_at_rest("tier gauges", || {
+        info_gauges(&mut cc, &["promotions_total", "peek_preads_total", "cold_keys"])
+    });
+    assert_eq!(g[0], 0, "digest must not promote");
     assert_eq!(
-        info_gauge(&mut cc, "peek_preads_total"),
-        cold_keys,
+        g[1],
+        g[2],
         "digest: one read per cold row"
     );
 
@@ -190,9 +215,8 @@ fn cold_table_digest_backfill_and_hydration_match_the_hot_twin() {
     assert_eq!(cmd(&mut cc, create), b"+OK\r\n");
     let qh = wait_index_ready(&mut hc);
     let _ = wait_index_ready(&mut cc); // backfill done; hydrations counted below
-    std::thread::sleep(std::time::Duration::from_millis(300));
     assert_eq!(
-        info_gauge(&mut cc, "promotions_total"),
+        common::at_rest("promotions_total", || info_gauge(&mut cc, "promotions_total")),
         0,
         "neither backfill nor hydration may promote"
     );
@@ -202,14 +226,22 @@ fn cold_table_digest_backfill_and_hydration_match_the_hot_twin() {
     // byte-identical to the hot twin; one read per cold ROW (the page
     // hydrates every row once; 2 fields ≠ 2 reads), coalesced into at
     // most one batch per shard.
-    let pre_preads = info_gauge(&mut cc, "peek_preads_total");
-    let pre_subs = info_gauge(&mut cc, "batch_submissions_total");
+    // BOTH ends of a delta have to be at rest. Resting only the second
+    // read swaps one error for another: a stale `pre` is too LOW, so the
+    // difference comes out too HIGH — 54 against 52 where the unrested
+    // version had read 26.
+    // BOTH ends of a delta have to be at rest, and both gauges have to
+    // come from the same snapshot: resting only the second read swaps one
+    // error for another — a stale `pre` is too LOW, so the difference came
+    // out too HIGH (54 against 52, where the unrested version read 26).
+    const GAUGES: &[&str] = &["peek_preads_total", "batch_submissions_total", "cold_keys"];
+    let pre = common::snapshot_at_rest("tier gauges", || info_gauges(&mut cc, GAUGES));
     let qc = cmd(&mut cc, QUERY);
     assert_eq!(qc, qh, "IDX.QUERY FIELDS over cold rows must be byte-identical to the hot twin");
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    let preads = info_gauge(&mut cc, "peek_preads_total") - pre_preads;
-    let subs = info_gauge(&mut cc, "batch_submissions_total") - pre_subs;
-    assert_eq!(preads, cold_keys, "hydration: preads == cold rows, not rows × fields");
+    let post = common::snapshot_at_rest("tier gauges", || info_gauges(&mut cc, GAUGES));
+    let preads = post[0] - pre[0];
+    let subs = post[1] - pre[1];
+    assert_eq!(preads, post[2], "hydration: preads == cold rows, not rows × fields");
     assert!((1..=8).contains(&subs), "one batch per shard page, got {subs}");
     assert!(subs < preads, "batching must coalesce rows: {subs} submissions for {preads} reads");
 
@@ -218,6 +250,8 @@ fn cold_table_digest_backfill_and_hydration_match_the_hot_twin() {
     let vh = cmd(&mut hc, &[b"IDX.VERIFY", b"byn"]);
     let vc = cmd(&mut cc, &[b"IDX.VERIFY", b"byn"]);
     assert_eq!(vc, vh, "IDX.VERIFY over cold rows must match the hot twin");
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    assert_eq!(info_gauge(&mut cc, "promotions_total"), 0);
+    assert_eq!(
+        common::at_rest("promotions_total", || info_gauge(&mut cc, "promotions_total")),
+        0
+    );
 }
