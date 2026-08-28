@@ -732,3 +732,37 @@ fn the_packed_payload_carries_its_form_without_a_second_tag() {
     assert_eq!(tag, COLD_TAG_HASH, "a packed row is tagged as the hash it is");
     assert!(matches!(tier_codec::decode(tag, payload).unwrap(), Value::PackedRow(_)));
 }
+
+/// A field count out of a cold payload cannot size an allocation.
+///
+/// Third site of the same shape this release: `kevy-compress` had two in
+/// `decode.rs` and a third in `huff.rs` that CI found after the first two
+/// were fixed, and `kevy-seg` had two. The lesson each time was that fixing
+/// where the fuzzer pointed is not the same as bounding every place a length
+/// out of the bytes reaches an allocation — so this one came from listing
+/// them rather than from a crash.
+#[test]
+fn a_field_count_from_a_payload_cannot_size_an_allocation() {
+    use crate::tier_codec::pairs_fit;
+    assert_eq!(pairs_fit(3, 1024), 3, "an honest count is used as-is");
+    assert_eq!(
+        pairs_fit(u32::MAX as usize, 40),
+        40 / 8 + 1,
+        "u32::MAX fields over forty bytes reserves the ceiling, not 206 GB"
+    );
+    // Two length-prefixed chunks per field is the floor, so a payload can
+    // always honour len/8 — an honest payload is never short-reserved.
+    for len in [0usize, 8, 64, 4096] {
+        assert_eq!(pairs_fit(len / 8, len), len / 8, "len/8 at {len} still fits exactly");
+    }
+
+    // And the decode still refuses the lie, as it did before the bound.
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&u32::MAX.to_le_bytes());
+    payload.extend_from_slice(&[0u8; 8]);
+    assert!(
+        crate::tier_codec::decode(COLD_TAG_HASH, payload).is_err(),
+        "a field count the payload cannot supply is an error either way — \
+         which is why the assertion that sees this defect is the one above"
+    );
+}
