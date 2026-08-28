@@ -11,6 +11,8 @@ use std::io::{Read, Write};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
+mod common;
+
 static START_GATE: Mutex<()> = Mutex::new(());
 
 fn req(parts: &[&[u8]]) -> Vec<u8> {
@@ -128,25 +130,44 @@ fn keys_eq(reply: &[u8], want: &[&str]) {
 
 /// Pull one integer gauge out of an INFO reply.
 fn info_gauge(s: &mut std::net::TcpStream, name: &str) -> u64 {
-    let reply = String::from_utf8_lossy(&cmd(s, &[b"INFO"])).into_owned();
-    reply
-        .lines()
-        .find_map(|l| l.strip_prefix(&format!("{name}:")))
-        .and_then(|v| v.trim().parse().ok())
-        .unwrap_or_else(|| panic!("INFO has no {name} gauge:\n{reply}"))
+    info_gauges(s, &[name])[0]
 }
 
+/// Every named gauge out of ONE `INFO` reply. Gauges compared to each
+/// other must come from one aggregation pass: `INFO` refreshes the
+/// answering shard and then sums every shard's published slot, so two
+/// round trips are two different moments and the difference between them
+/// is not the thing the assertion means to measure.
+fn info_gauges(s: &mut std::net::TcpStream, names: &[&str]) -> Vec<u64> {
+    let reply = String::from_utf8_lossy(&cmd(s, &[b"INFO"])).into_owned();
+    names
+        .iter()
+        .map(|name| {
+            reply
+                .lines()
+                .find_map(|l| l.strip_prefix(&format!("{name}:")))
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or_else(|| panic!("INFO has no {name} gauge:\n{reply}"))
+        })
+        .collect()
+}
+
+/// The two gauges every cold-path assertion in this file compares.
+const TIER_GAUGES: &[&str] = &["peek_preads_total", "promotions_total"];
+
 fn wait_cold_stable(s: &mut std::net::TcpStream) -> u64 {
-    let mut last = 0u64;
-    for _ in 0..100 {
-        std::thread::sleep(std::time::Duration::from_millis(150));
-        let now = info_gauge(s, "cold_keys");
-        if now > 0 && now == last {
-            return now;
-        }
-        last = now;
-    }
-    panic!("cold_keys never stabilized (last = {last})");
+    // Two equal reads 150 ms apart is not settled: seven of eight shards
+    // publish `cold_keys` only on their own tick, so a value can hold
+    // still across two reads and then rise when a late shard reports.
+    // That is how this returned 50 where 52 rows were cold, and the
+    // "rows stay cold" assertion later compared a fresh read against it.
+    // Nonzero FIRST — zero is perfectly stable before demotion starts, so
+    // resting alone would settle on it. Then rest, because two equal reads
+    // 150 ms apart is not settled: seven of eight shards publish
+    // `cold_keys` only on their own tick, and a value can hold still
+    // across two reads and rise when a late shard reports.
+    common::until("cold_keys to become nonzero", || info_gauge(s, "cold_keys") > 0);
+    common::at_rest("cold_keys", || info_gauge(s, "cold_keys"))
 }
 
 // ---- the shared "user" table -------------------------------------------
@@ -517,11 +538,14 @@ fn c6_index_only_queries_touch_zero_cold_rows() {
         b"+OK\r\n"
     );
     wait_ready(&mut c, &[b"IDX.QUERY", b"bench.n", b"RANGE", b"0", b"0"]);
-    std::thread::sleep(std::time::Duration::from_millis(300)); // gauges tick
-    assert_eq!(info_gauge(&mut c, "promotions_total"), 0, "backfill must not promote");
+    assert_eq!(
+        common::at_rest("promotions_total", || info_gauge(&mut c, "promotions_total")),
+        0,
+        "backfill must not promote"
+    );
 
     // Index-only: FILTER / SORT / COUNT without FIELDS = zero preads.
-    let pre = info_gauge(&mut c, "peek_preads_total");
+    let pre = common::snapshot_at_rest("tier gauges", || info_gauges(&mut c, TIER_GAUGES));
     let filtered = page_keys(&cmd(&mut c, &[
         b"IDX.QUERY", b"bench.n", b"RANGE", b"0", b"100", b"FILTER", b"c", b"EQ", b"even",
         b"LIMIT", b"100",
@@ -532,28 +556,24 @@ fn c6_index_only_queries_touch_zero_cold_rows() {
     ]));
     assert_eq!(sorted.len(), 10);
     assert_eq!(cmd(&mut c, &[b"IDX.COUNT", b"bench.n", b"RANGE", b"0", b"100"]), b":60\r\n");
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    assert_eq!(
-        info_gauge(&mut c, "peek_preads_total") - pre,
-        0,
-        "index-only queries must touch ZERO rows (the D2 shape)"
-    );
-    assert_eq!(info_gauge(&mut c, "promotions_total"), 0);
+    let post = common::snapshot_at_rest("tier gauges", || info_gauges(&mut c, TIER_GAUGES));
+    assert_eq!(post[0] - pre[0], 0, "index-only queries must touch ZERO rows (the D2 shape)");
+    assert_eq!(post[1], 0);
 
     // With FIELDS: exactly one read per RETURNED row, still no promotion.
-    let pre = info_gauge(&mut c, "peek_preads_total");
+    let pre = common::snapshot_at_rest("tier gauges", || info_gauges(&mut c, TIER_GAUGES));
     let page = cmd(&mut c, &[
         b"IDX.QUERY", b"bench.n", b"RANGE", b"0", b"9", b"LIMIT", b"10", b"FIELDS", b"c", b"n",
     ]);
     let returned = bulks(&page).iter().filter(|b| b.starts_with(b"row:")).count() as u64;
     assert_eq!(returned, 10);
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    let preads = info_gauge(&mut c, "peek_preads_total") - pre;
+    let post = common::snapshot_at_rest("tier gauges", || info_gauges(&mut c, TIER_GAUGES));
+    let preads = post[0] - pre[0];
     // Cold rows pay one read each; rows still hot (under the watermark)
     // pay none — so preads ≤ returned, and 2 FIELDS ≠ 2 reads.
     assert!(preads <= returned, "one read per ROW at most: {preads} for {returned} rows");
     assert!(preads > 0, "a mostly-cold page must have paid some reads");
-    assert_eq!(info_gauge(&mut c, "promotions_total"), 0, "hydration is not an access signal");
+    assert_eq!(post[1], 0, "hydration is not an access signal");
 }
 
 /// D2 proper (tablegate L7): a FULLY-cold table — budget crushed to 1 byte
@@ -598,8 +618,7 @@ fn d2_fully_cold_table_index_only_queries_pay_zero_cold_reads() {
     }
     assert!(cold >= 60, "every row must be cold, got {cold}");
 
-    let pre_preads = info_gauge(&mut c, "peek_preads_total");
-    let pre_promo = info_gauge(&mut c, "promotions_total");
+    let pre = common::snapshot_at_rest("tier gauges", || info_gauges(&mut c, TIER_GAUGES));
     let filtered = page_keys(&cmd(&mut c, &[
         b"IDX.QUERY", b"bench.n", b"RANGE", b"0", b"100", b"FILTER", b"c", b"EQ", b"even",
         b"LIMIT", b"100",
@@ -610,28 +629,28 @@ fn d2_fully_cold_table_index_only_queries_pay_zero_cold_reads() {
     ]));
     assert_eq!(sorted.len(), 10);
     assert_eq!(cmd(&mut c, &[b"IDX.COUNT", b"bench.n", b"RANGE", b"0", b"100"]), b":60\r\n");
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    let mid = common::snapshot_at_rest("tier gauges", || info_gauges(&mut c, TIER_GAUGES));
     assert_eq!(
-        info_gauge(&mut c, "peek_preads_total") - pre_preads,
+        mid[0] - pre[0],
         0,
         "index-only queries on a FULLY-cold table must touch zero rows"
     );
-    assert_eq!(info_gauge(&mut c, "promotions_total") - pre_promo, 0);
+    assert_eq!(mid[1] - pre[1], 0);
 
     // And with FIELDS on the fully-cold table: EXACTLY one read per row.
-    let pre = info_gauge(&mut c, "peek_preads_total");
+    let before_fields = common::snapshot_at_rest("tier gauges", || info_gauges(&mut c, TIER_GAUGES));
     let page = cmd(&mut c, &[
         b"IDX.QUERY", b"bench.n", b"RANGE", b"0", b"9", b"LIMIT", b"10", b"FIELDS", b"c", b"n",
     ]);
     let returned = bulks(&page).iter().filter(|b| b.starts_with(b"row:")).count() as u64;
     assert_eq!(returned, 10);
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    let post = common::snapshot_at_rest("tier gauges", || info_gauges(&mut c, TIER_GAUGES));
     assert_eq!(
-        info_gauge(&mut c, "peek_preads_total") - pre,
+        post[0] - before_fields[0],
         returned,
         "fully-cold: exactly one read per returned row"
     );
-    assert_eq!(info_gauge(&mut c, "promotions_total") - pre_promo, 0);
+    assert_eq!(post[1] - pre[1], 0);
 }
 
 /// R12+ — the boot verbs (v4.1-V3, dogfood F8.2): ENSURE answers
