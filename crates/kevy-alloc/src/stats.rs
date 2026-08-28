@@ -72,6 +72,17 @@ pub struct Stats {
 impl Stats {
     /// The sum the identity asserts. Kept separate from [`Self::mapped`]
     /// so a test can compare the two rather than trusting one.
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_alloc::Stats;
+    /// // The identity this exists to check: every mapped byte is in
+    /// // exactly one bucket, so the sum is comparable to `mapped`
+    /// // rather than derived from it.
+    /// let s = Stats::default();
+    /// assert_eq!(s.accounted(), 0);
+    /// assert_eq!(s.mapped, 0);
+    /// ```
     #[must_use]
     pub fn accounted(&self) -> u64 {
         self.live
