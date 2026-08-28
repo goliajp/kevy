@@ -111,3 +111,137 @@ pub fn until<F: FnMut() -> bool>(what: &str, mut ok: F) {
     }
     panic!("{what} never happened: {polls} polls over {:?}", started.elapsed());
 }
+
+/// The length of the first complete RESP reply in `buf`, or `None` if it
+/// is not all here yet.
+///
+/// Most cells in this tree read a reply with "sleep 30 ms, then `read()`
+/// once". That is fine while every reply arrives in one segment, and it
+/// desynchronises the connection the first time one does not: the tail is
+/// left in the socket and every later reply is read one frame late.
+/// `r10_optimistic_lock_via_watch_multi_exec` failed exactly this way —
+/// `EXEC` answers `*1\r\n:0\r\n`, its assertion only checked the `*1\r\n`
+/// prefix, and the `:0\r\n` came back on the front of the next `WATCH`.
+///
+/// So: read until the frame is complete, and let the frame say when.
+pub fn reply_len(buf: &[u8]) -> Option<usize> {
+    fn line_end(buf: &[u8], from: usize) -> Option<usize> {
+        buf.get(from..)?.windows(2).position(|w| w == b"\r\n").map(|p| from + p + 2)
+    }
+    let tag = *buf.first()?;
+    let head = line_end(buf, 1)?;
+    match tag {
+        b'+' | b'-' | b':' | b'_' | b'#' | b',' => Some(head),
+        b'$' | b'=' => {
+            let n: i64 = std::str::from_utf8(&buf[1..head - 2]).ok()?.parse().ok()?;
+            if n < 0 {
+                return Some(head);
+            }
+            let end = head + n as usize + 2;
+            (buf.len() >= end).then_some(end)
+        }
+        b'*' | b'~' | b'>' => {
+            let n: i64 = std::str::from_utf8(&buf[1..head - 2]).ok()?.parse().ok()?;
+            if n < 0 {
+                return Some(head);
+            }
+            let mut at = head;
+            for _ in 0..n {
+                at += reply_len(buf.get(at..)?)?;
+            }
+            Some(at)
+        }
+        b'%' => {
+            let n: i64 = std::str::from_utf8(&buf[1..head - 2]).ok()?.parse().ok()?;
+            let mut at = head;
+            for _ in 0..(n.max(0) * 2) {
+                at += reply_len(buf.get(at..)?)?;
+            }
+            Some(at)
+        }
+        _ => None,
+    }
+}
+
+/// A connection that keeps its own read buffer, so a reply split across
+/// segments is assembled rather than truncated, and a reply that arrives
+/// early is not thrown away.
+pub struct Wire {
+    sock: std::net::TcpStream,
+    buf: Vec<u8>,
+}
+
+impl Wire {
+    pub fn new(sock: std::net::TcpStream) -> Self {
+        Self { sock, buf: Vec::new() }
+    }
+
+    /// Send one command as a RESP array and return exactly one reply.
+    ///
+    /// Generic over the part type so the corpus harnesses (which hold
+    /// `Vec<u8>`) and the hand-written cells (which hold `&[u8]`) share
+    /// one implementation rather than one each.
+    pub fn call<B: AsRef<[u8]>>(&mut self, parts: &[B]) -> Vec<u8> {
+        use std::io::{Read, Write};
+        let mut out = format!("*{}\r\n", parts.len()).into_bytes();
+        for p in parts {
+            let p = p.as_ref();
+            out.extend_from_slice(format!("${}\r\n", p.len()).as_bytes());
+            out.extend_from_slice(p);
+            out.extend_from_slice(b"\r\n");
+        }
+        self.sock.write_all(&out).unwrap();
+        loop {
+            if let Some(n) = reply_len(&self.buf) {
+                let reply = self.buf[..n].to_vec();
+                self.buf.drain(..n);
+                return reply;
+            }
+            let mut chunk = [0u8; 65536];
+            let n = self.sock.read(&mut chunk).unwrap();
+            assert!(n > 0, "server closed mid-reply (have {} bytes)", self.buf.len());
+            self.buf.extend_from_slice(&chunk[..n]);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reply_len;
+
+    #[test]
+    fn a_frame_says_when_it_is_complete() {
+        // Simple, integer, error: the first line and nothing more.
+        assert_eq!(reply_len(b"+OK\r\n"), Some(5));
+        assert_eq!(reply_len(b":0\r\n"), Some(4));
+        assert_eq!(reply_len(b"-ERR nope\r\n"), Some(11));
+        // A bulk is its declared length, even when the payload contains
+        // the terminator that a line-scanner would stop at.
+        assert_eq!(reply_len(b"$4\r\na\r\nb\r\n"), Some(10));
+        assert_eq!(reply_len(b"$-1\r\n"), Some(5));
+        // Arrays recurse, and nest.
+        assert_eq!(reply_len(b"*1\r\n:0\r\n"), Some(8));
+        assert_eq!(reply_len(b"*2\r\n$1\r\na\r\n*1\r\n:7\r\n"), Some(19));
+        assert_eq!(reply_len(b"*-1\r\n"), Some(5));
+        // Trailing bytes are NOT consumed: the length is the first frame,
+        // which is what lets a caller notice it is a frame ahead.
+        assert_eq!(reply_len(b"*1\r\n:0\r\n+OK\r\n"), Some(8));
+    }
+
+    #[test]
+    fn an_incomplete_frame_is_not_a_frame() {
+        // Each of these is a prefix of `*1\r\n$3\r\nabc\r\n`, and none may
+        // be reported as complete — that is the whole defect this exists
+        // to prevent.
+        let whole = b"*1\r\n$3\r\nabc\r\n";
+        for cut in 1..whole.len() {
+            assert_eq!(
+                reply_len(&whole[..cut]),
+                None,
+                "a {cut}-byte prefix of a 13-byte frame was read as complete"
+            );
+        }
+        assert_eq!(reply_len(whole), Some(whole.len()));
+        assert_eq!(reply_len(b""), None);
+    }
+}
