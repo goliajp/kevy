@@ -61,6 +61,24 @@ def fences(path):
     return len(FENCE_LINE.findall(path.read_text(encoding="utf-8")))
 
 
+def paragraphs(path):
+    """Blank-line-separated blocks outside fenced code.
+
+    Asymmetric on purpose: a translation may hold MORE paragraphs than its
+    English original — splitting one long paragraph in two is a style
+    choice a translator gets to make, and two `persistence.md`
+    translations do exactly that. Holding FEWER is a loss, and it was 53
+    of them across ten chapters when this was first measured: how a
+    transaction replays, what `appendfsync` does not govern, that the AOF
+    alone stops being the whole truth once row segments exist, the claim
+    key that is the actual answer to uniqueness, why two migration steps
+    have no tool. None of it moved a section count, a fenced-example
+    count or a table-row count.
+    """
+    text = FENCE.sub("\n\n<FENCE>\n\n", path.read_text(encoding="utf-8"))
+    return [b for b in re.split(r"\n\s*\n", text) if b.strip()]
+
+
 def table_rows(path):
     """Markdown table rows outside fenced blocks.
 
@@ -113,6 +131,12 @@ def main():
                     f"{lang}/{name}: {len(table_rows(other))} table rows, "
                     f"English has {len(table_rows(en))}"
                 )
+            elif len(paragraphs(other)) < len(paragraphs(en)):
+                problems.append(
+                    f"{lang}/{name}: {len(paragraphs(other))} paragraphs, "
+                    f"English has {len(paragraphs(en))} — a translation may "
+                    f"split one in two, not drop one"
+                )
     if problems:
         print(f"REFUSED: {len(problems)} translation(s) out of step with the English chapter.")
         for p in problems:
@@ -131,7 +155,7 @@ def main():
               f"the same as nothing behind.")
         return 2
     print(f"ok: {checked} translated chapters, each with its English chapter's "
-          f"sections, examples and table rows")
+          f"sections, examples, table rows and at least its paragraphs")
     return 0
 
 
