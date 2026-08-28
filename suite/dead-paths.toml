@@ -26,6 +26,28 @@
 # asking whether that other gate still runs.
 
 [[dead]]
+symbol = "kevy_wasm::abi_kv::kevy_mget"
+regions = 6
+kind = "unreachable"
+delete = false
+reason = """
+The `None` arms of two `off.checked_add(..)` calls at
+crates/kevy-wasm/src/abi_kv.rs, and the same shape in `unpack_argv`.
+
+`off` is bounded by the buffer and the added length is a u32, so on a 64-bit
+host the sum cannot overflow and the arm cannot be taken. On wasm32 — where
+`usize` is 32 bits and this code actually ships — it can, which is the whole
+reason the addition is checked: without it the sum wraps low, `get` sees a
+backwards range, and the right answer comes out by accident.
+
+So a test is NOT owed, on this platform. The atlas classifies these
+`untested`, which reads as a debt; the debt cannot be paid where the
+measurement runs. `platform` would be the closer class but the cfg is not
+what gates them — the arithmetic is — so they are registered here by hand
+instead of being reclassified.
+"""
+
+[[dead]]
 symbol = "kevy_geo::estimate_step"
 regions = 1
 kind = "unreachable"
