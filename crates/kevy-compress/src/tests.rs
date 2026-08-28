@@ -243,3 +243,76 @@ fn legacy_mistagged_shared_table_frame_still_decodes() {
     frame[0] = TAG_LZH; // what the 5.0.0 encoder emitted
     assert_eq!(decode(&dict, &frame).as_deref(), Ok(payload.as_slice()));
 }
+
+/// The two defects the first run of `decode_arbitrary` found.
+///
+/// That target had been in the tree, unrun, because the fuzz-smoke matrix
+/// is hand-written and never grew to include it. Its own doc says it
+/// "exists to let the fuzzer hunt for the arithmetic case the checks
+/// missed"; it found two inside two minutes. Both inputs are reproduced
+/// here byte for byte from `fuzz/artifacts/decode_arbitrary/`.
+mod what_the_fuzzer_found {
+    /// The fuzz target's own split: first byte picks the dict/frame cut.
+    fn feed(data: &[u8]) -> Result<Vec<u8>, crate::Corrupt> {
+        let (&split, rest) = data.split_first().expect("non-empty");
+        let cut = (split as usize * rest.len()) / 255;
+        let (dict, frame) = rest.split_at(cut);
+        crate::decode(dict, frame)
+    }
+
+    /// `oom-d16de1c6…`: twelve bytes, `malloc(2864709630)`.
+    ///
+    /// The frame's declared original length went straight to
+    /// `Vec::with_capacity`. The decode loop was bounds-checked at every
+    /// step — the allocation happened before the loop.
+    #[test]
+    fn a_declared_length_is_a_claim_not_a_size() {
+        let input = [0x01, 0x01, 0xfe, 0xff, 0xff, 0xd5, 0x0a, 0x00, 0x38, 0x00, 0x0a, 0x00];
+        assert!(feed(&input).is_err(), "twelve bytes cannot decode to 2.8 GB");
+
+        // That assertion alone does NOT see this defect, and it is worth
+        // saying why: the decode returned Err before the fix too — every
+        // step of the loop was already bounds-checked. What was wrong was
+        // how much got reserved on the way there, and on a platform that
+        // overcommits, reserving 2.8 GB of address space fails nothing.
+        // Verified: with the clamp removed, the line above still passes.
+        // So the bound itself is what gets asserted.
+        assert_eq!(
+            crate::decode::reserve_for(2_864_709_630, 11),
+            11 * 256 + 1024,
+            "a claim far past what the frame could produce reserves the ceiling"
+        );
+        assert_eq!(
+            crate::decode::reserve_for(300_000, 200_000),
+            300_000,
+            "an honest frame reserves exactly what it declares"
+        );
+
+        // And the format's expansion ceiling is not a guess: `read_len`
+        // adds at most 255 per continuation byte, so 256 is an
+        // over-estimate and no real frame is ever short-reserved.
+        let big = vec![7u8; 300_000];
+        let framed = crate::encode(&[], &big);
+        assert_eq!(crate::decode(&[], &framed).unwrap(), big, "honest frames unchanged");
+    }
+
+    /// `crash-80b8440d…`: `attempt to subtract with overflow`, huff.rs.
+    ///
+    /// A header nibble carries 0..=15 and MAX_LEN is 12, so 13, 14 and 15
+    /// reached `MAX_LEN - l` inside the Kraft sum — the check whose whole
+    /// job is to reject an over-full code space.
+    #[test]
+    fn a_code_length_past_max_len_is_refused_before_the_kraft_sum() {
+        let mut input = vec![0x00, 0x03, 0x19, 0xff, 0xf8, 0x01, 0x01, 0x0a];
+        input.extend(std::iter::repeat_n(0xff, 131));
+        input.extend([0x23, 0x02, 0x31, 0x02]);
+        assert_eq!(input.len(), 143, "the artifact is 143 bytes");
+        assert!(feed(&input).is_err(), "an unexpressible code length is corrupt, not a panic");
+
+        let mut lens = [0u8; 256];
+        lens[0] = 15;
+        assert!(crate::huff::validate_lens(&lens, 1).is_err(), "15 > MAX_LEN");
+        lens[0] = 12;
+        assert!(crate::huff::validate_lens(&lens, 1).is_ok(), "MAX_LEN itself is expressible");
+    }
+}
