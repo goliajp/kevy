@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Every version-bearing file in this repository agrees with the workspace.
 
-A kevy release moves the version in SIX distinct layers, and a bump that
+A kevy release moves the version in SEVEN distinct layers, and a bump that
 moves one and forgets another is a release that ships a lie. The 5.1.0
 bump moved layer 1 and stopped: fourteen language bindings still
 declared 5.0.0, two of them in vendored engine BYTES — and 5.0.0 has a
@@ -24,6 +24,10 @@ The layers, and why each one bites on its own:
 6. Vendored engine bytes — jniLibs, xcframework. These do not merely
    SAY a version, they ARE one; the engine's C ABI self-reports it, so
    `strings` settles the question.
+7. The Go module's major — Go puts the major version in the IMPORT
+   PATH (`/v6`), so a module that forgets it does not merely say the
+   wrong number, it resolves to the wrong major forever. Added in
+   6.0.0, which is why everything else here still said six.
 
 Run: python3 tools/check_version_alignment.py
 """
@@ -400,7 +404,7 @@ def main() -> int:
         for b in bad:
             print(f"  {b}")
         print("\nA bump that moves one layer and forgets another ships a lie.")
-        print("See .claude/skills/release/SKILL.md for the six layers and the fix.")
+        print("See .claude/skills/release/SKILL.md for the seven layers and the fix.")
         return 1
     total = sum(counts.values())
     detail = ", ".join(f"{k} {n}" for k, n in counts.items())
