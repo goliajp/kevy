@@ -98,8 +98,11 @@ fn server_sources() -> (String, usize) {
     // check would say "nothing implements APPEND" when what happened
     // is that a file could not be opened.
     fn walk(dir: &std::path::Path, out: &mut String, files: &mut usize) {
-        let entries = std::fs::read_dir(dir)
-            .unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()));
+        // `.expect` rather than `unwrap_or_else(|e| panic!(..))`: the
+        // closure body of the second never runs, so it is itself a
+        // never-executed region — a guard against a silent skip that
+        // adds to the set the guard exists to keep small.
+        let entries = std::fs::read_dir(dir).expect("the crate's src/ is readable");
         for e in entries {
             let path = e.expect("a directory entry").path();
             if path.is_dir() {
@@ -109,8 +112,7 @@ fn server_sources() -> (String, usize) {
                 if name.starts_with("tests") || name.contains("_tests") {
                     continue;
                 }
-                let text = std::fs::read_to_string(&path)
-                    .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+                let text = std::fs::read_to_string(&path).expect("a source file is readable");
                 out.push_str(&text);
                 *files += 1;
             }
@@ -139,12 +141,8 @@ fn server_surface_has_dispatch_literals() {
     // A floor. An empty read would fail the first assertion loudly and
     // pass the inverse guard silently — which is the direction that
     // matters, since the inverse guard is what says a gap is still open.
-    assert!(
-        files > 20 && sources.len() > 200_000,
-        "the source walk found {files} files / {} bytes — it is broken, \
-         not the server empty",
-        sources.len()
-    );
+    assert!(files > 20, "the source walk found {files} files — it is broken, not the server empty");
+    assert!(sources.len() > 200_000, "the source walk read {} bytes — it is broken", sources.len());
     for o in OP_TABLE {
         if o.surfaces & surface::SERVER == 0 {
             continue;
