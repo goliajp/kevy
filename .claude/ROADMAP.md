@@ -92,7 +92,17 @@ suite 从 75 项到 **84** 项(precommit 23 ⊆ prerelease 40 ⊆ full 84)。
       一致(进程内 66/70、线路 23/26,每条例外具名),但只覆盖约四分之一
       动词面,而三个具名缺口正落在克隆图谱匹配最密处。
       `bench/FINDING-2026-08-28-two-surfaces-that-drifted.md`
-- [ ] **crashgate T6 cell 结果不确定**(切点在字节偏移而非帧边界;三轮
+- [x] **crashgate T6 查清了 —— cell 是对的,引擎是错的**。仪器(保住被丢弃的
+      stderr)在下一次 CI 失败里印出 `trailing 27485178 bytes were a partial
+      frame`,且**没有 corrupt WARN**:resync 从未启动。帧头是 `len` + `crc`,
+      拼接后读到的长度若**合法但超过剩余字节**,遍历判成撕裂尾巴,resync 只在
+      CorruptFrame 上跑 —— 那就是那枚硬币。按机制**构造**复现(不等运气),三
+      部分全修:resync 对任何非 Clean 停止都跑;被跳过的区间置起 `corrupt`
+      (此前救回尾巴却宣布文件健康,违反文档明写的契约);默认路径的消息不再把
+      27.5 MB 叫作「部分帧」。修复后两轮 CI 绿,但基准本就 78%,**`REDpending(T6)`
+      的声明留着**,等更多轮 —— 凭两轮就宣布闭合,和当初标了 pending 却从不复核
+      是同一个错误的反面。finding 已写全。
+- [ ] ~~crashgate T6 cell 结果不确定~~(切点在字节偏移而非帧边界;三轮
       100%/100%/50.07%)。**不是本 arc 造成的,也不该由本 arc 拍板** ——
       修法会改变这个 cell 测的东西。`bench/FINDING-2026-08-28-crashgate-*.md`
 - [ ] **性能轴一次未碰**。6.0.0 arena:对 Redis 8 GET 1.26× / SET 2.58× /
