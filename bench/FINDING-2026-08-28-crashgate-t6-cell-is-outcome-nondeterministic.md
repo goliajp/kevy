@@ -109,3 +109,64 @@ inside acknowledged data. The cell **is** asking its question; what varies is
 only what the original finding said varies — which byte inside a frame the
 cut lands on. The fix it proposes is unchanged, and now it is the only
 explanation left standing.
+
+---
+
+## Resolution, same day: the cell was right, the engine was wrong
+
+The instrument added earlier — keeping the `--resync` stderr this gate had
+been sending to `/dev/null` — spoke on the next CI failure:
+
+```
+crashgate: T6 replay said (splice at 27485183 of 54970366 bytes):
+    kevy: AOF …/midfile/aof-0.aof replayed 163722 commands from 54970359
+    bytes in 1598 ms; trailing 27485178 bytes were a partial frame
+    (crash mid-append, recoverable)
+```
+
+No corrupt WARN: **resync never ran**. And 27,485,178 bytes called a partial
+frame from a crash mid-append.
+
+An AOF record header is `len: u32 LE` + `crc: u32 LE`. After the splice the
+next header is read from what used to be payload, and there are three ways
+out — two of which recover:
+
+| the bytes read as | walk's verdict | resync | outcome |
+|---|---|---|---|
+| `len == 0` or `> MAX_RECORD` | CorruptFrame | ran | tail recovered |
+| `len` legal, larger than what remains | **TruncatedTail** | **never ran** | **tail lost** |
+| `len` fits, CRC disagrees | CorruptFrame | ran | tail recovered |
+
+That is the coin, and it explains everything this finding recorded: 50.07%
+and 50.22% are the splice offset, one in five on CI, none in 28 bench-box
+runs or 65 splice positions because those files never produced the middle
+reading.
+
+**The cell was doing its job.** It is not the input that needed fixing.
+
+Reproduced deterministically rather than waited for — ten good records, one
+record whose length claims a megabyte with five bytes behind it, ten more —
+and `replay_aof_resync` returned 10 of 20 with zero ranges reported. Its
+sibling, where the CRC lies instead, has always returned all 20. Same damage,
+same position, opposite outcome, decided by which lie the bytes told.
+
+Three parts, all fixed and each with its own test or branch:
+
+1. resync now runs on any stop that is not clean — the question was always
+   "is there anything valid after where we stopped".
+2. `corrupt` is raised by a skipped range, not only by the stop reason. It
+   had recovered the tail and still reported the file healthy, against
+   `docs/persistence.md`'s stated contract.
+3. The default-path message no longer calls a multi-megabyte drop a partial
+   frame; the walk already knew a short HEADER read from a short PAYLOAD read
+   and gave both the same verdict.
+
+## What is not yet settled
+
+Two CI runs since the fix are green. The base rate was already four in five,
+so two greens are consistent with the fix and also consistent with luck. The
+mechanism that produced every observed failure is closed and proven closed by
+construction; whether T6 can still fail some other way is an open question a
+handful more runs will answer. The `REDpending(T6)` declaration stays until
+they do — promoting it on two runs would repeat, in the other direction, the
+error of marking something pending and never re-reading it.
