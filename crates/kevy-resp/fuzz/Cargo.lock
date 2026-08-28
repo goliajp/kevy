@@ -56,18 +56,18 @@ dependencies = [
 
 [[package]]
 name = "kevy-bytes"
-version = "3.18.0"
+version = "6.0.0"
 dependencies = [
  "kevy-hash",
 ]
 
 [[package]]
 name = "kevy-hash"
-version = "3.18.0"
+version = "6.0.0"
 
 [[package]]
 name = "kevy-resp"
-version = "3.18.0"
+version = "6.0.0"
 dependencies = [
  "kevy-bytes",
 ]
