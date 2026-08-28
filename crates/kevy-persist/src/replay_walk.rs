@@ -63,15 +63,14 @@ pub(crate) fn preview_of(bytes: &[u8], out: &mut [u8; 16]) -> usize {
     n
 }
 
-/// The sequential record walk: read `[len][crc][payload]` envelopes from
-/// `r`, verify, apply. Peak memory is O(largest record) — the streaming
-/// property the whole v2 replay exists for.
-
 /// A length field the file could not honour.
 fn outran(claimed: u32, available: usize) -> ReplayStop {
     ReplayStop::LengthOutranFile { claimed: u64::from(claimed), available: available as u64 }
 }
 
+/// The sequential record walk: read `[len][crc][payload]` envelopes from
+/// `r`, verify, apply. Peak memory is O(largest record) — the streaming
+/// property the whole v2 replay exists for.
 pub(crate) fn walk_v2(
     r: &mut impl Read,
     start_pos: u64,
