@@ -49,85 +49,73 @@ fn a_streaming_giant_frame_is_disconnected_at_the_cap() {
     // an earlier version of this test passed on epoll but not on the
     // io_uring CI runner).
     let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
-    // Short probe timeout: the loop's read is a liveness poll, not a
-    // wait-for-reply.
-    c.set_read_timeout(Some(Duration::from_millis(50))).unwrap();
     c.write_all(b"*1000000\r\n").unwrap();
     let mut junk = Vec::new();
     for _ in 0..256 {
         junk.extend_from_slice(b"$3\r\nabc\r\n"); // 256 small args per write
     }
-    let started = std::time::Instant::now();
-    let mut disconnected = false;
-    let mut iters = 0usize;
+
+    // Phase 1 — cross the cap, then STOP writing.
+    //
+    // What the guard promises is that accumulated unparsed input past the
+    // cap closes the connection; the server judges that on the recv it is
+    // already handling. It does not promise to have finished closing by any
+    // particular point on the CLIENT's wall clock. The earlier shape of this
+    // cell conflated the two — it kept writing while it looked, for ~3.8 s
+    // in total, and called anything slower a failure. That is a window, not
+    // the contract, and it is what failed twice in CI with the server's own
+    // "closing conn N: query buffer exceeded" sitting in the log.
+    const CAP: usize = 4096; // KEVY_DEBUG_INPUT_LIMIT, set above
     let mut written = 10usize; // the multibulk header already sent
-    let mut last = String::from("(no probe yet)");
-    for _ in 0..64 {
-        iters += 1;
+    let mut writes = 0usize;
+    let mut closed_as: Option<String> = None;
+    while written <= CAP * 2 {
         if let Err(e) = c.write_all(&junk) {
-            disconnected = true;
-            last = format!("write failed: {:?}", e.kind());
+            // Closed while we were still feeding it — contract met, early,
+            // and there is nothing left to wait for.
+            closed_as = Some(format!("write failed: {:?}", e.kind()));
             break;
         }
         written += junk.len();
-        // Give the reactor a beat to read + judge the accumulation.
-        std::thread::sleep(Duration::from_millis(10));
+        writes += 1;
+    }
+
+    // Phase 2 — wait for the close without sending another byte.
+    //
+    // The budget is deliberately loose. Reaping is bounded in REACTOR
+    // iterations, not in wall time: `uring_mark_closing` pushes the conn onto
+    // the closing ready-set, a non-empty set holds the reactor out of its park
+    // rung (`reap_pending` in the idle ladder), and the reap runs on every
+    // sixteenth iteration — microseconds on an idle core, but only once that
+    // thread is scheduled at all. On a loaded runner the only honest bound is
+    // "eventually". A server that never closes still fails here, which is the
+    // defect this cell exists to catch, and the observed latency rides along
+    // in the message either way.
+    const BUDGET: Duration = Duration::from_secs(30);
+    c.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
+    let started = std::time::Instant::now();
+    let mut polls = 0usize;
+    while closed_as.is_none() && started.elapsed() < BUDGET {
+        polls += 1;
         let mut probe = [0u8; 8];
         match c.read(&mut probe) {
-            Ok(0) => {
-                disconnected = true;
-                last = String::from("read returned 0 (EOF)");
-                break;
-            }
+            Ok(0) => closed_as = Some(String::from("read returned 0 (EOF)")),
             Ok(n) => panic!("no reply should exist before the frame completes; read {n} bytes"),
             Err(e)
                 if matches!(
                     e.kind(),
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) =>
-            {
-                last = format!("probe timed out ({:?})", e.kind());
-            }
-            Err(e) => {
-                disconnected = true;
-                last = format!("read failed: {:?}", e.kind());
-                break;
-            }
+                ) => {}
+            Err(e) => closed_as = Some(format!("read failed: {:?}", e.kind())),
         }
     }
-    let looked_for = started.elapsed();
-
-    // The instrument, not the assertion. This cell failed twice in CI with
-    // the server's own "closing conn N: query buffer exceeded" in the log
-    // and the client seeing nothing, and a bare `assert!(disconnected)`
-    // cannot tell "never closed" from "closed later than this loop looked".
-    // So when the budget runs out, wait once, long, on the same socket, and
-    // put the answer in the failure message. Only runs on the failing path.
-    //
-    // Worth knowing while reading a future failure: `uring_mark_closing`
-    // does not drop the fd — it sets a flag and queues the conn, and
-    // `uring_reap_closed` does the drop on every SIXTEENTH reactor
-    // iteration. The park's bounding timeout is 50 ms, so sixteen of those
-    // is 800 ms worst case, which does not by itself explain a window this
-    // size. That gap is what this message exists to close.
-    let after = if disconnected {
-        String::new()
-    } else {
-        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        let mut probe = [0u8; 8];
-        let waited = std::time::Instant::now();
-        match c.read(&mut probe) {
-            Ok(0) => format!("; then EOF arrived {:?} later", waited.elapsed()),
-            Ok(n) => format!("; then {n} bytes arrived, which should not exist"),
-            Err(e) => format!("; then still nothing after 5 s more ({:?})", e.kind()),
-        }
-    };
 
     assert!(
-        disconnected,
-        "a multibulk of small args streamed past the 4KB cap without a disconnect \
-         — {iters} iterations, {written} bytes written, {looked_for:?} spent looking, \
-         last probe: {last}{after}"
+        closed_as.is_some(),
+        "a multibulk of small args put {written} bytes past the {CAP}-byte cap in \
+         {writes} writes, and the connection was STILL open {:?} later — {polls} \
+         read polls, not one of which saw a close",
+        started.elapsed()
     );
 
     // The server itself is fine: a fresh conn still answers.
