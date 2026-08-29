@@ -280,6 +280,13 @@ jobs:
       # a real valkey and a real redis rather than against kevy's own
       # second implementation. It said 98 in four documents while the
       # corpus drove 81; nothing had held it since a docs rewrite wrote it.
+      # flutter_kevy's changelog stopped at 5.3.0 while its pubspec was
+      # bumped twice. `dart pub publish` warns about it in a dry run
+      # nobody was reading, and pub.dev shows that file to whoever is
+      # deciding whether to depend on the package.
+      - name: door changelogs (each names the version its manifest ships)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python3 tools/check_door_changelogs.py
       - name: compat claim (the READMEs' command count is the corpus's)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_compat_claim.py
