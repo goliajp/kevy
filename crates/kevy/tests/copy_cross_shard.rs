@@ -20,6 +20,20 @@ mod common;
 
 static START_GATE: Mutex<()> = Mutex::new(());
 
+/// One server for every test that only reads and writes its own keys.
+///
+/// The first draft started one per test — eight servers of eight shards
+/// each, which is eight ports, and the workspace suite already saturates
+/// `free_port`'s window between handing a port out and the server
+/// binding it (`kevy-testnet` names that race in its own panic text).
+/// The tests below use disjoint key prefixes, so they have no reason to
+/// want a keyspace of their own. The restart test keeps its own server
+/// because it stops one.
+fn shared() -> &'static Server {
+    static S: std::sync::OnceLock<Server> = std::sync::OnceLock::new();
+    S.get_or_init(Server::start)
+}
+
 /// Eight shards: enough that the key pairs below are almost never
 /// co-located, which is the condition the cross-shard path needs.
 const SHARDS: usize = 8;
@@ -156,7 +170,7 @@ fn the_pairs_this_file_uses_are_really_on_different_shards() {
 
 #[test]
 fn every_copy_lands_where_the_destination_is_read_from() {
-    let server = Server::start();
+    let server = shared();
     let mut w = server.wire();
 
     for (src, dst) in PAIRS {
@@ -185,7 +199,7 @@ fn every_copy_lands_where_the_destination_is_read_from() {
 
 #[test]
 fn the_ttl_travels_with_the_value() {
-    let server = Server::start();
+    let server = shared();
     let mut w = server.wire();
     for (src, dst) in PAIRS.iter().take(6) {
         let (src, dst) = (format!("ttl-{src}"), format!("ttl-{dst}"));
@@ -206,7 +220,7 @@ fn the_ttl_travels_with_the_value() {
 
 #[test]
 fn an_existing_destination_is_refused_until_replace_says_otherwise() {
-    let server = Server::start();
+    let server = shared();
     let mut w = server.wire();
     for (src, dst) in PAIRS.iter().take(6) {
         let (src, dst) = (format!("rep-{src}"), format!("rep-{dst}"));
@@ -228,7 +242,7 @@ fn an_existing_destination_is_refused_until_replace_says_otherwise() {
 
 #[test]
 fn a_missing_source_copies_nothing_and_says_so() {
-    let server = Server::start();
+    let server = shared();
     let mut w = server.wire();
     for (src, dst) in PAIRS.iter().take(6) {
         let (src, dst) = (format!("gone-{src}"), format!("gone-{dst}"));
@@ -239,7 +253,7 @@ fn a_missing_source_copies_nothing_and_says_so() {
 
 #[test]
 fn the_refusals_are_redis_words() {
-    let server = Server::start();
+    let server = shared();
     let mut w = server.wire();
     assert_eq!(
         s(&w.call(&["COPY", "same", "same"])),
@@ -254,7 +268,7 @@ fn the_refusals_are_redis_words() {
 
 #[test]
 fn a_copied_collection_arrives_whole() {
-    let server = Server::start();
+    let server = shared();
     let mut w = server.wire();
     for (src, dst) in PAIRS.iter().take(6) {
         let (src, dst) = (format!("list-{src}"), format!("list-{dst}"));
@@ -273,6 +287,7 @@ fn a_copied_collection_arrives_whole() {
 
 #[test]
 fn a_cross_shard_copy_survives_a_restart() {
+    // Its own server: this one stops the process it is testing.
     let server = Server::start();
     let mut w = server.wire();
     let pairs: Vec<(String, String)> = PAIRS
