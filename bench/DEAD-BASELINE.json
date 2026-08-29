@@ -2,12 +2,12 @@
   "corpus": "c1",
   "platform": "linux",
   "total_regions": 164459,
-  "dead_regions": 26901,
-  "llvm_per_instantiation_dead": 27895,
+  "dead_regions": 26988,
+  "llvm_per_instantiation_dead": 27874,
   "crates": {
     "kevy": {
       "regions": 29461,
-      "dead": 5318
+      "dead": 5313
     },
     "kevy-alloc": {
       "regions": 1694,
@@ -55,7 +55,7 @@
     },
     "kevy-embedded": {
       "regions": 27508,
-      "dead": 3768
+      "dead": 3780
     },
     "kevy-ffi": {
       "regions": 842,
@@ -127,7 +127,7 @@
     },
     "kevy-rt": {
       "regions": 16242,
-      "dead": 4781
+      "dead": 4749
     },
     "kevy-scalar": {
       "regions": 4391,
@@ -147,7 +147,7 @@
     },
     "kevy-store": {
       "regions": 18718,
-      "dead": 1491
+      "dead": 1493
     },
     "kevy-sys": {
       "regions": 730,
@@ -1028,7 +1028,7 @@
     "<kevy_rt::shard::Shard>::build_zalgebra_store::": 4,
     "<kevy_rt::shard::Shard>::build_zintercard::": 4,
     "<kevy_rt::shard::Shard>::cancel_xshard_on_close": 2,
-    "<kevy_rt::shard::Shard>::check_repl_ack_waiters": 48,
+    "<kevy_rt::shard::Shard>::check_repl_ack_waiters": 53,
     "<kevy_rt::shard::Shard>::check_repl_apply_waiters": 2,
     "<kevy_rt::shard::Shard>::check_tee_overrun": 27,
     "<kevy_rt::shard::Shard>::client_getname::": 37,
@@ -1140,7 +1140,7 @@
     "<kevy_rt::shard::Shard>::park_blocked_xshard": 1,
     "<kevy_rt::shard::Shard>::park_dispatch::": 2,
     "<kevy_rt::shard::Shard>::park_if_held": 6,
-    "<kevy_rt::shard::Shard>::parse_replica_acks": 11,
+    "<kevy_rt::shard::Shard>::parse_replica_acks": 48,
     "<kevy_rt::shard::Shard>::post_write_housekeeping::": 3,
     "<kevy_rt::shard::Shard>::preallocate_exec_slots": 1,
     "<kevy_rt::shard::Shard>::prepare_uring_shard": 92,
@@ -1161,7 +1161,7 @@
     "<kevy_rt::shard::Shard>::repl_waiter_reply": 5,
     "<kevy_rt::shard::Shard>::replica_conn_is_live": 11,
     "<kevy_rt::shard::Shard>::replica_io_failed": 8,
-    "<kevy_rt::shard::Shard>::replica_readable": 16,
+    "<kevy_rt::shard::Shard>::replica_readable": 27,
     "<kevy_rt::shard::Shard>::replica_writable": 13,
     "<kevy_rt::shard::Shard>::replicas_brief": 29,
     "<kevy_rt::shard::Shard>::reply_feed_error": 13,
@@ -1247,7 +1247,7 @@
     "<kevy_rt::uring_bigbulk_b2alt::ThreeSliceView as core::ops::index::Index>::index": 7,
     "<kevy_store::error::KevyError as core::convert::From>::from": 3,
     "<kevy_store::seg_map::SegMap>::all_unique": 6,
-    "<kevy_store::seg_map::SegMap>::rand_entry": 2,
+    "<kevy_store::seg_map::SegMap>::rand_entry": 4,
     "<kevy_store::seg_map::SegMap>::values": 5,
     "<kevy_tmpdir::TmpDir as core::convert::AsRef>::as_ref": 3,
     "Java_jp_golia_kevy_KevyNative_close": 3,
@@ -2107,8 +2107,9 @@
     "kevy_embedded::replay::parse_zadd_flags": 2,
     "kevy_embedded::replica_runner::drain_session": 4,
     "kevy_embedded::replica_runner::finish_snapshot": 1,
+    "kevy_embedded::replica_runner::run_loop": 6,
     "kevy_embedded::replica_runner::run_session": 1,
-    "kevy_embedded::replica_runner::sleep_interruptible": 9,
+    "kevy_embedded::replica_runner::sleep_interruptible": 15,
     "kevy_embedded::replica_runner::snapshot_event": 4,
     "kevy_embedded::replica_source::handshake_and_prepare": 3,
     "kevy_embedded::replica_source::next_frame_bytes": 3,
@@ -2443,7 +2444,7 @@
     "kevy_replicate::wire::parse_decimal": 2,
     "kevy_replicate::wire::parse_envelope_header": 2,
     "kevy_replicate::wire::parse_signed_decimal": 5,
-    "kevy_replicate::wire_snapshot::decode_replconf_ack": 7,
+    "kevy_replicate::wire_snapshot::decode_replconf_ack": 27,
     "kevy_replicate::wire_snapshot::decode_snapshot_chunk": 1,
     "kevy_replicate::wire_snapshot::decode_snapshot_marker": 1,
     "kevy_resp::fuzz::run_n": 5,
@@ -2814,6 +2815,7 @@
     "kevy_window::text::clean_stale": 17,
     "kevy_window::text::write_seg_file": 11
   },
+  "envelope_runs": 3,
   "history": [
     {
       "accepted": [
@@ -2924,6 +2926,12 @@
       ],
       "reason": "Wiring the fourteen F3 verbs: the set fell 27,867 -> 26,901 regions and 2,621 -> 2,610 symbols, and these 17 entries are what grew. Three kinds, none of them dead product code. (1) The cross-shard COPY and BITOP orchestrators' slot helpers \u2014 fill_/rearm_/fold_ and the two finalize_ pattern guards \u2014 are by-argument-unreachable in the manner exec_rename's already are: a connection that vanished mid-command, a slot index the fold cannot produce. (2) Six registry-parity tests gained assertion-failure regions because the registries gained verbs; they are never-taken failure paths in #[cfg(test)] code that the assertion-argument exclusion does not reach. (3) Two fallbacks that must stay: Store::mget's non-WrongType arm, because Store::get propagates the tiering path's errors and a cold-tier read that failed must not answer as 'this key holds nothing', and bitop_combine's guards. The one growth that WAS product code \u2014 four BitOp::Not => unreachable!() arms \u2014 was removed rather than accepted.",
       "delta": 17
+    },
+    {
+      "envelope_over": 3,
+      "symbols": 2610,
+      "regions": 26988,
+      "reason": "An envelope over three runs of THIS code, because one sample cannot hold this measurement. The previous commit recorded a single run and the very next run failed on SegMap::rand_entry alone (2 -> 4) \u2014 a randomised sampler whose branches differ per run. Comparing the three: ten symbols move between runs, several by a lot (decode_replconf_ack 7/27, parse_replica_acks 11/48), all of them in replication-timing paths where which branch runs depends on when an ack lands. The element-wise maximum is therefore what the baseline holds, exactly as this file's own docstring prescribes and as the 2026-08-28 envelope did. The three observations are distinct files (md5 31eeffe8d1a2 / 389f0d1a37df / 2c3658b641f0) \u2014 a rerun of the same run was refused by GitHub and returned run 2's artifact again, which would have let one sample pass itself off as two. Against the pre-branch baseline the envelope is still far smaller: 2,621 symbols / 27,867 regions -> 2,610 / 26,988."
     }
   ]
 }
