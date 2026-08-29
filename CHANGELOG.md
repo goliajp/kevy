@@ -161,6 +161,17 @@ moved.
 
 ### Added
 
+- **`CONFIG GET dir` answers with the directory the server writes to.**
+  A `Commands` implementation carries its own configuration, and
+  `Runtime::builder().with_data_dir()` set the runtime's — two things,
+  and nothing connected them. `kevy::serve` builds both from one
+  `Config` so the shipped binary never saw the gap; a server built
+  programmatically answered `.` while writing to a temp directory. One
+  face reporting what the other face was not doing. An `on_data_dir`
+  hook closes it, in the same additive shape as the trait's other
+  runtime-to-commands notifications, and it is a no-op wherever the two
+  already agreed.
+
 - **`INFO stats` reports `client_query_buffer_limit_disconnections`.**
   Redis's counter, and it exists here because a test could not do its
   job without it. The query-buffer guard closes a connection whose

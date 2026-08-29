@@ -81,6 +81,22 @@ pub trait Commands: Clone + Send + 'static {
     /// Default: no-op.
     fn on_shard_start(&self, _shard: usize) {}
 
+    /// The directory this runtime snapshots to and loads from — the one
+    /// `Runtime::builder().with_data_dir()` set.
+    ///
+    /// A `Commands` implementation carries its own configuration, and
+    /// nothing told it about this. A server built programmatically
+    /// therefore answered `CONFIG GET dir` from that configuration
+    /// while writing somewhere else entirely: one face reporting what
+    /// the other face is not doing. `kevy::serve` builds both from one
+    /// `Config` and never saw the gap, which is why it went unnoticed
+    /// until a test used `CONFIG GET dir` to identify its own server
+    /// and was handed `.`.
+    ///
+    /// Called once per shard, on the shard's thread, beside
+    /// [`Self::on_shard_start`]. Default: no-op.
+    fn on_data_dir(&self, _dir: &std::path::Path) {}
+
     /// Per-tick persistence-stats publication: whether this shard has a
     /// background save/rewrite in flight and how many AOF rewrites have
     /// completed since open. Command layers that serve `INFO persistence`
