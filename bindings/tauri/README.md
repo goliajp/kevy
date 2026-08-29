@@ -37,7 +37,7 @@ JS without a per-verb command — mirroring the
 ```toml
 [dependencies]
 tauri-plugin-kevy = { path = "../../bindings/tauri/tauri-plugin-kevy" }
-# or, once published: tauri-plugin-kevy = "4"
+# or, once published: tauri-plugin-kevy = "6"
 ```
 
 **2. Register it** in `src-tauri/src/lib.rs`:
