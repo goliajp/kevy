@@ -50,6 +50,17 @@ pub enum Route {
     /// so a malformed BITOP would have been answered "unknown command".
     /// The route says only that this is a BITOP; every refusal is
     /// worded once, in `exec_bitop`.
+    ///
+    /// Why it cannot ride `Single(1)`, in one assertion:
+    ///
+    /// ```
+    /// use kevy_rt::{Route, shard_of_key};
+    /// // `Single(1)` hashes args[1]. For BITOP that is the OPERATOR.
+    /// let operator = b"AND".as_slice();
+    /// let destination = b"dst".as_slice();
+    /// assert_ne!(shard_of_key(operator, 8, false), shard_of_key(destination, 8, false));
+    /// assert!(matches!(Route::BitOpStore, Route::BitOpStore));
+    /// ```
     BitOpStore,
     /// `COPY src dst [REPLACE]` — two keys, so the same hazard the
     /// rename and list-move routes exist for: left to the catch-all
