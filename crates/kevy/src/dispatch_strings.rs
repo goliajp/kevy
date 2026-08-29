@@ -11,8 +11,8 @@
 //! different file layouts in their head.
 
 use crate::cmd::{
-    ERR_NOT_INT, arg_f64, arg_i64, cmd_incr, cmd_incr_by, cmd_set, cmd_setex,
-    emit_int_result, store_err, wrong_args,
+    ERR_NOT_INT, arg_f64, arg_i64, cmd_incr, cmd_incr_by, cmd_setex, emit_int_result,
+    store_err, wrong_args,
 };
 use kevy_resp::{
     ArgvView, encode_bulk, encode_error, encode_integer, encode_null_bulk,
@@ -28,18 +28,14 @@ pub(crate) fn dispatch_string<A: ArgvView + ?Sized>(
     out: &mut Vec<u8>,
 ) -> bool {
     match cmd {
-        b"SET" => cmd_set(store, args, out),
-        b"GET" => {
-            if args.len() == 2 {
-                match store.get(&args[1]) {
-                    Ok(Some(v)) => encode_bulk(out, &v),
-                    Ok(None) => encode_null_bulk(out),
-                    Err(e) => store_err(out, e),
-                }
-            } else {
-                wrong_args(out, "get");
-            }
-        }
+        // No GET or SET arm, on purpose. `dispatch_with_proto` answers
+        // both in its tier-1 fast path and RETURNS before the handler
+        // chain is walked, so arms here could never run — and the GET
+        // one was a verbatim second copy of the fast path's, which is
+        // the kind of duplicate that drifts silently because neither
+        // half can be observed disagreeing with the other. `deadgate`
+        // is what found it: thirteen never-executed regions in a
+        // function every request walks.
         b"APPEND" => {
             if args.len() == 3 {
                 emit_int_result(store.append(&args[1], &args[2]).map(|n| n as i64), out);

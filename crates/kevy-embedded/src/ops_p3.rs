@@ -33,17 +33,22 @@ impl Store {
 
     /// `MGET key [key ...]` — return `Some(value)` per requested key
     /// that's present, `None` per absent / wrong-type.
+    ///
+    /// The wrong-type half of that sentence was prose only: the read
+    /// propagated the store's `WrongType` with `?`, so one list among
+    /// the keys turned the whole call into an error. Redis returns nil
+    /// for a key that does not hold a string and never errors here —
+    /// which is what the server's gather already did, and how the two
+    /// surfaces came to disagree in `differential_wire_vs_embedded`.
     pub fn mget(&self, keys: &[&[u8]]) -> KevyResult<Vec<Option<Vec<u8>>>> {
         let mut out = Vec::with_capacity(keys.len());
         for k in keys {
-            out.push(
-                self.wshard(k)
-                    .store
-                    .get(k)
-                    .map_err(store_err)?
-                    .as_deref()
-                    .map(<[u8]>::to_vec),
-            );
+            let got = match self.wshard(k).store.get(k) {
+                Ok(v) => v.as_deref().map(<[u8]>::to_vec),
+                Err(kevy_store::StoreError::WrongType) => None,
+                Err(e) => return Err(store_err(e)),
+            };
+            out.push(got);
         }
         Ok(out)
     }

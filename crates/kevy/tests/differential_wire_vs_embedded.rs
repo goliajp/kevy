@@ -423,6 +423,22 @@ const CORPUS: &[&str] = &[
     "GETEX xl",
     "GETEX xnosuch EX 100",
     "GETEX xnosuch PX 100000",
+    "APPEND xl tail",
+    "STRLEN xl",
+    "INCR xl",
+    "DECR xl",
+    "INCRBY xl 2",
+    "DECRBY xl 2",
+    "INCRBYFLOAT xl 1.5",
+    "GETSET xl v",
+    "GETDEL xl",
+    // SETEX and PSETEX are NOT driven here, and the reason is the rule
+    // this corpus already states: a verb only one side implements must
+    // not mutate shared state. Both are server-only (OP_TABLE gives
+    // them SERVER without ESTORE), and driving them turned the wire's
+    // `xl` into a string while the facade's stayed a list — after which
+    // MGET diverged for a reason that was not about MGET.
+    "MGET xl xs",
     // ── F3: implemented in the facade, absent from the RESP dispatch ──
     // Registered in `kevy_resp::ops_table::KNOWN_GAPS`, and the check
     // below reads that ledger rather than restating it. Own keys, last,
