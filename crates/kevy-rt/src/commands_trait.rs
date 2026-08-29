@@ -94,7 +94,30 @@ pub trait Commands: Clone + Send + 'static {
     /// and was handed `.`.
     ///
     /// Called once per shard, on the shard's thread, beside
-    /// [`Self::on_shard_start`]. Default: no-op.
+    /// [`Self::on_shard_start`]. Default: no-op, so an implementor that
+    /// has no configuration to correct is unaffected:
+    ///
+    /// ```
+    /// use kevy_rt::{ArgvView, Commands, Route, Store, TxnKind};
+    /// use std::path::Path;
+    ///
+    /// #[derive(Clone)]
+    /// struct Minimal;
+    /// impl Commands for Minimal {
+    ///     fn route<A: ArgvView + ?Sized>(&self, _a: &A) -> Route { Route::Local }
+    ///     fn dispatch<A: ArgvView + ?Sized>(&self, _s: &mut Store, _a: &A) -> Vec<u8> {
+    ///         b"+OK\r\n".to_vec()
+    ///     }
+    ///     fn is_quit<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn is_write<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn txn_kind<A: ArgvView + ?Sized>(&self, _a: &A) -> TxnKind { TxnKind::Other }
+    /// }
+    ///
+    /// Minimal.on_data_dir(Path::new("/var/lib/kevy"));
+    /// ```
+    ///
+    /// An implementor that answers `CONFIG GET dir` overrides it and
+    /// points that answer here; kevy's own does exactly that.
     fn on_data_dir(&self, _dir: &std::path::Path) {}
 
     /// Per-tick persistence-stats publication: whether this shard has a
@@ -432,50 +455,5 @@ pub trait Commands: Clone + Send + 'static {
             block_hint: self.block_hint(args),
             wake_idx: None,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::Commands;
-    use crate::{ArgvView, Route, Store, TxnKind};
-
-    /// The smallest thing that can be a `Commands`: the five required
-    /// methods and nothing else.
-    #[derive(Clone)]
-    struct Minimal;
-
-    impl Commands for Minimal {
-        fn route<A: ArgvView + ?Sized>(&self, _a: &A) -> Route {
-            Route::Local
-        }
-        fn dispatch<A: ArgvView + ?Sized>(&self, _s: &mut Store, _a: &A) -> Vec<u8> {
-            b"+OK\r\n".to_vec()
-        }
-        fn is_quit<A: ArgvView + ?Sized>(&self, _a: &A) -> bool {
-            false
-        }
-        fn is_write<A: ArgvView + ?Sized>(&self, _a: &A) -> bool {
-            false
-        }
-        fn txn_kind<A: ArgvView + ?Sized>(&self, _a: &A) -> TxnKind {
-            TxnKind::Other
-        }
-    }
-
-    /// The optional hooks have default bodies so an existing
-    /// implementor gains them without changing — and a default body
-    /// nothing calls is a never-executed region, which is how this test
-    /// came to exist: `deadgate` named `on_query_buffer_exceeded` the
-    /// day it was added. Calling them from the smallest possible
-    /// implementor is both the coverage and the claim: this trait can
-    /// be implemented with five methods.
-    #[test]
-    fn the_optional_hooks_default_to_doing_nothing() {
-        let c = Minimal;
-        c.on_query_buffer_exceeded();
-        c.on_tick_gap(0);
-        c.on_persist_stats(false, 0);
-        c.on_aof_format(0);
     }
 }

@@ -216,3 +216,5 @@ pub use types::{
 
 pub use crate::commands_trait::Commands;
 mod commands_trait;
+#[cfg(test)]
+mod commands_trait_tests;
