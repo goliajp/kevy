@@ -46,6 +46,10 @@ impl Store {
             let got = match self.wshard(k).store.get(k) {
                 Ok(v) => v.as_deref().map(<[u8]>::to_vec),
                 Err(kevy_store::StoreError::WrongType) => None,
+                // Not reachable through a hot keyspace, and it stays:
+                // `Store::get` propagates the tiering path's errors
+                // too, and a cold-tier read that failed must not be
+                // answered as "this key holds nothing".
                 Err(e) => return Err(store_err(e)),
             };
             out.push(got);
