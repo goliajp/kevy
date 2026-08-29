@@ -106,6 +106,36 @@ pub trait Commands: Clone + Send + 'static {
     /// `client_query_buffer_limit_disconnections`.
     ///
     /// Called on the closing decision, not on the close completing.
+    /// That is the whole point of the distinction: a decision that has
+    /// not reached the client yet is a different thing from a cap that
+    /// was never noticed, and only a counter taken here can tell them
+    /// apart.
+    ///
+    /// The default does nothing, so an existing implementor gains the
+    /// hook without changing:
+    ///
+    /// ```
+    /// use kevy_rt::{ArgvView, Commands, Route, Store, TxnKind};
+    ///
+    /// #[derive(Clone)]
+    /// struct Minimal;
+    /// impl Commands for Minimal {
+    ///     fn route<A: ArgvView + ?Sized>(&self, _a: &A) -> Route { Route::Local }
+    ///     fn dispatch<A: ArgvView + ?Sized>(&self, _s: &mut Store, _a: &A) -> Vec<u8> {
+    ///         b"+OK\r\n".to_vec()
+    ///     }
+    ///     fn is_quit<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn is_write<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn txn_kind<A: ArgvView + ?Sized>(&self, _a: &A) -> TxnKind { TxnKind::Other }
+    /// }
+    ///
+    /// // The hook is optional; the default is a no-op.
+    /// Minimal.on_query_buffer_exceeded();
+    /// ```
+    ///
+    /// An implementor that wants the number overrides it and counts;
+    /// kevy's own does exactly that, and `INFO stats` reports the total
+    /// as `client_query_buffer_limit_disconnections`.
     fn on_query_buffer_exceeded(&self) {}
 
     /// Per-tick AOF on-disk format gauge (the embedder ask's 
@@ -386,5 +416,50 @@ pub trait Commands: Clone + Send + 'static {
             block_hint: self.block_hint(args),
             wake_idx: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Commands;
+    use crate::{ArgvView, Route, Store, TxnKind};
+
+    /// The smallest thing that can be a `Commands`: the five required
+    /// methods and nothing else.
+    #[derive(Clone)]
+    struct Minimal;
+
+    impl Commands for Minimal {
+        fn route<A: ArgvView + ?Sized>(&self, _a: &A) -> Route {
+            Route::Local
+        }
+        fn dispatch<A: ArgvView + ?Sized>(&self, _s: &mut Store, _a: &A) -> Vec<u8> {
+            b"+OK\r\n".to_vec()
+        }
+        fn is_quit<A: ArgvView + ?Sized>(&self, _a: &A) -> bool {
+            false
+        }
+        fn is_write<A: ArgvView + ?Sized>(&self, _a: &A) -> bool {
+            false
+        }
+        fn txn_kind<A: ArgvView + ?Sized>(&self, _a: &A) -> TxnKind {
+            TxnKind::Other
+        }
+    }
+
+    /// The optional hooks have default bodies so an existing
+    /// implementor gains them without changing — and a default body
+    /// nothing calls is a never-executed region, which is how this test
+    /// came to exist: `deadgate` named `on_query_buffer_exceeded` the
+    /// day it was added. Calling them from the smallest possible
+    /// implementor is both the coverage and the claim: this trait can
+    /// be implemented with five methods.
+    #[test]
+    fn the_optional_hooks_default_to_doing_nothing() {
+        let c = Minimal;
+        c.on_query_buffer_exceeded();
+        c.on_tick_gap(0);
+        c.on_persist_stats(false, 0);
+        c.on_aof_format(0);
     }
 }
