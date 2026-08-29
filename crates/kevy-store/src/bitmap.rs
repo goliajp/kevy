@@ -278,12 +278,12 @@ pub fn bitop_combine(op: BitOp, srcs_bytes: &[Vec<u8>], max_len: usize) -> Vec<u
                 *byte = 0xff;
             }
         }
+        // AND, OR, XOR. NOT returned above, so the catch-alls below are
+        // XOR — written as `_` rather than `Not => unreachable!()`,
+        // which was four arms that can never run and four regions that
+        // can never be covered.
         _ => {
-            let init = match op {
-                BitOp::And => 0xff,
-                BitOp::Or | BitOp::Xor => 0x00,
-                BitOp::Not => unreachable!(),
-            };
+            let init = if op == BitOp::And { 0xff } else { 0x00 };
             for byte in out.iter_mut() {
                 *byte = init;
             }
@@ -293,8 +293,7 @@ pub fn bitop_combine(op: BitOp, srcs_bytes: &[Vec<u8>], max_len: usize) -> Vec<u
                     *b = match op {
                         BitOp::And => *b & sb,
                         BitOp::Or => *b | sb,
-                        BitOp::Xor => *b ^ sb,
-                        BitOp::Not => unreachable!(),
+                        _ => *b ^ sb,
                     };
                 }
             }
