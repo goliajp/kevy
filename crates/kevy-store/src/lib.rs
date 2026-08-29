@@ -87,7 +87,7 @@ impl Store {
         drop(old);
     }
 }
-pub mod bitmap;
+mod bitmap;
 mod clock;
 mod entry;
 mod error;

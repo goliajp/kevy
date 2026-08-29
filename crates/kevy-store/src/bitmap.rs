@@ -10,6 +10,7 @@
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
 use alloc::borrow::Cow;
+use alloc::vec;
 use core::num::NonZeroU64;
 use alloc::sync::Arc;
 
@@ -244,6 +245,25 @@ impl Store {
 
 /// Combine the source strings under `op` into the `max_len`-byte
 /// destination value (shorter sources zero-padded).
+///
+/// Two rules are easy to get wrong and both are here. A source shorter
+/// than the result reads as zero past its end — so an AND with a short
+/// source clears the tail, and an OR leaves it alone. And NOT does not
+/// stop at its source: Redis inverts the implicit zeros too, so every
+/// byte past the source is `0xff`.
+///
+/// ```
+/// use kevy_store::{BitOp, bitop_combine};
+///
+/// let long = b"\xff\xff".to_vec();
+/// let short = b"\x0f".to_vec();
+/// // AND: the second byte meets an implicit zero.
+/// assert_eq!(bitop_combine(BitOp::And, &[long.clone(), short.clone()], 2), vec![0x0f, 0x00]);
+/// // OR: the implicit zero changes nothing.
+/// assert_eq!(bitop_combine(BitOp::Or, &[long.clone(), short], 2), vec![0xff, 0xff]);
+/// // NOT over a two-byte result from a one-byte source: the tail is 0xff.
+/// assert_eq!(bitop_combine(BitOp::Not, &[vec![0x00]], 2), vec![0xff, 0xff]);
+/// ```
 pub fn bitop_combine(op: BitOp, srcs_bytes: &[Vec<u8>], max_len: usize) -> Vec<u8> {
     let mut out = vec![0u8; max_len];
     match op {
@@ -284,6 +304,13 @@ pub fn bitop_combine(op: BitOp, srcs_bytes: &[Vec<u8>], max_len: usize) -> Vec<u
 }
 
 /// Operator for the BITOP family.
+///
+/// ```
+/// use kevy_store::{BitOp, bitop_combine};
+/// // NOT takes exactly one source; the callers enforce that, and this
+/// // is what it computes.
+/// assert_eq!(bitop_combine(BitOp::Not, &[vec![0b1010_1010]], 1), vec![0b0101_0101]);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BitOp {
     /// Bitwise AND across source keys.

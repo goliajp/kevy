@@ -108,39 +108,32 @@ fn s(b: &[u8]) -> String {
     String::from_utf8_lossy(b).replace("\r\n", "\\r\\n")
 }
 
-/// Three source keys on three different shards — CHOSEN by asking the
-/// function the server routes with, not picked and hoped for. The first
-/// draft hard-coded `bop-a`/`bop-b`/`bop-c` and the floor below caught
-/// two of them sharing shard 7 on the first run.
-fn sources() -> &'static [String; 3] {
-    static K: std::sync::OnceLock<[String; 3]> = std::sync::OnceLock::new();
-    K.get_or_init(|| {
-        let of = |k: &str| kevy_rt::shard_of_key(k.as_bytes(), SHARDS, false);
-        let mut picked: Vec<String> = Vec::new();
-        for i in 0..2000 {
-            let k = format!("bop-src-{i}");
-            if picked.iter().all(|p| of(p) != of(&k)) {
-                picked.push(k);
-            }
-            if picked.len() == 3 {
-                break;
-            }
+/// Three source keys on three different shards, in a namespace of the
+/// caller's own.
+///
+/// Two things this had to learn. The keys are CHOSEN by asking the
+/// function the server routes with, not picked and hoped for — the
+/// first draft hard-coded three names and the floor caught two of them
+/// sharing shard 7 on the first run. And the namespace is per-test,
+/// because these tests share one server and cargo runs them in
+/// parallel: a common set of seeded keys passed locally and raced in
+/// CI, where three of them failed on a DEL that answered :1 because
+/// another test had just written the key.
+fn sources(tag: &str) -> [String; 3] {
+    let of = |k: &str| kevy_rt::shard_of_key(k.as_bytes(), SHARDS, false);
+    let mut picked: Vec<String> = Vec::new();
+    for i in 0..4000 {
+        let k = format!("bop-{tag}-{i}");
+        if picked.iter().all(|p| of(p) != of(&k)) {
+            picked.push(k);
         }
-        assert_eq!(picked.len(), 3, "no three key names landed on three different shards");
-        println!(
-            "sources: {} (shards {} {} {})",
-            picked.join(" "),
-            of(&picked[0]),
-            of(&picked[1]),
-            of(&picked[2])
-        );
-        [picked[0].clone(), picked[1].clone(), picked[2].clone()]
-    })
+        if picked.len() == 3 {
+            break;
+        }
+    }
+    assert_eq!(picked.len(), 3, "no three `bop-{tag}-*` names landed on three shards");
+    [picked[0].clone(), picked[1].clone(), picked[2].clone()]
 }
-
-fn a() -> &'static str { &sources()[0] }
-fn b() -> &'static str { &sources()[1] }
-fn c() -> &'static str { &sources()[2] }
 
 /// A bulk-string reply carrying exactly these bytes. Built as BYTES:
 /// the first draft wrote `format!("$1\r\n{}\r\n", byte as char)`, and
@@ -153,18 +146,10 @@ fn bulk(bytes: &[u8]) -> Vec<u8> {
     v
 }
 
-#[test]
-fn the_keys_this_file_uses_are_really_on_different_shards() {
-    let of = |k: &str| kevy_rt::shard_of_key(k.as_bytes(), SHARDS, false);
-    let (x, y, z) = (of(a()), of(b()), of(c()));
-    assert!(x != y && y != z && x != z, "the three sources share a shard ({x}/{y}/{z})");
-}
-
 /// `SETBIT k 0 1` sets the most significant bit of byte 0 — 0x80.
-/// `SETBIT k 7 1` sets the least — 0x01. Both together, 0x81.
-fn seed(w: &mut common::Wire) {
-    for (k, bits) in [(a(), [0u8, 7]), (b(), [0, 3]), (c(), [7, 7])] {
-        assert_eq!(s(&w.call(&["DEL", k])), ":0\\r\\n");
+/// `SETBIT k 7 1` sets the least — 0x01. Seeds A=0x81, B=0x90, C=0x01.
+fn seed(w: &mut common::Wire, keys: &[String; 3]) {
+    for (k, bits) in keys.iter().zip([[0u8, 7], [0, 3], [7, 7]]) {
         for bit in bits {
             let _ = w.call(&["SETBIT", k, &bit.to_string(), "1"]);
         }
@@ -172,29 +157,43 @@ fn seed(w: &mut common::Wire) {
 }
 
 #[test]
+fn the_keys_this_file_uses_are_really_on_different_shards() {
+    let of = |k: &str| kevy_rt::shard_of_key(k.as_bytes(), SHARDS, false);
+    for tag in ["and", "not", "wrong", "dur"] {
+        let k = sources(tag);
+        let (x, y, z) = (of(&k[0]), of(&k[1]), of(&k[2]));
+        println!("{tag}: {} {} {} → shards {x} {y} {z}", k[0], k[1], k[2]);
+        assert!(x != y && y != z && x != z, "the `{tag}` sources share a shard");
+    }
+}
+
+#[test]
 fn and_or_xor_land_at_the_destination_with_the_bytes_worked_out_by_hand() {
     let mut w = shared().wire();
-    seed(&mut w);
+    let k = sources("and");
+    seed(&mut w, &k);
+    let (a, b, c) = (k[0].as_str(), k[1].as_str(), k[2].as_str());
     // A = 0x81 (bits 0 and 7), B = 0x90 (bits 0 and 3), C = 0x01 (bit 7).
     for (op, dst, want) in [
         ("AND", "bop-and", 0x81u8 & 0x90),
         ("OR", "bop-or", 0x81 | 0x90),
         ("XOR", "bop-xor", 0x81 ^ 0x90),
     ] {
-        assert_eq!(s(&w.call(&["BITOP", op, dst, a(), b()])), ":1\\r\\n", "{op} length");
+        assert_eq!(s(&w.call(&["BITOP", op, dst, a, b])), ":1\\r\\n", "{op} length");
         let got = w.call(&["GET", dst]);
         assert_eq!(got, bulk(&[want]), "{op} wrote {:?} at {dst}, wanted {want:#04x}", s(&got));
     }
     // Three sources, all on different shards.
-    assert_eq!(s(&w.call(&["BITOP", "OR", "bop-or3", a(), b(), c()])), ":1\\r\\n");
+    assert_eq!(s(&w.call(&["BITOP", "OR", "bop-or3", a, b, c])), ":1\\r\\n");
     assert_eq!(w.call(&["GET", "bop-or3"]), bulk(&[0x81 | 0x90 | 0x01]));
 }
 
 #[test]
 fn not_inverts_a_source_that_lives_elsewhere() {
     let mut w = shared().wire();
-    seed(&mut w);
-    assert_eq!(s(&w.call(&["BITOP", "NOT", "bop-not", a()])), ":1\\r\\n");
+    let k = sources("not");
+    seed(&mut w, &k);
+    assert_eq!(s(&w.call(&["BITOP", "NOT", "bop-not", &k[0]])), ":1\\r\\n");
     assert_eq!(w.call(&["GET", "bop-not"]), bulk(&[!0x81u8]));
 }
 
@@ -214,11 +213,11 @@ fn an_empty_result_deletes_the_destination_rather_than_storing_nothing() {
 #[test]
 fn a_wrong_typed_source_refuses_the_whole_command_and_writes_nothing() {
     let mut w = shared().wire();
-    seed(&mut w);
-    assert_eq!(s(&w.call(&["DEL", "bop-list"])), ":0\\r\\n");
-    assert_eq!(s(&w.call(&["RPUSH", "bop-list", "x"])), ":1\\r\\n");
+    let k = sources("wrong");
+    seed(&mut w, &k);
+    assert_eq!(s(&w.call(&["RPUSH", "bop-wrong-list", "x"])), ":1\\r\\n");
     assert_eq!(
-        s(&w.call(&["BITOP", "AND", "bop-refused", a(), "bop-list"])),
+        s(&w.call(&["BITOP", "AND", "bop-refused", &k[0], "bop-wrong-list"])),
         "-WRONGTYPE Operation against a key holding the wrong kind of value\\r\\n"
     );
     assert_eq!(
@@ -269,11 +268,11 @@ fn the_longest_source_sets_the_length_and_the_short_ones_pad_with_zero() {
 fn what_a_cross_shard_bitop_did_survives_a_restart_including_the_delete() {
     let server = Server::start();
     let mut w = server.wire();
-    let (x, y) = (a(), b());
-    for (k, bit) in [(x, "0"), (y, "3")] {
-        assert_eq!(w.call(&["SETBIT", k, bit, "1"]), b":0\r\n");
+    let k = sources("dur");
+    for (key, bit) in [(&k[0], "0"), (&k[1], "3")] {
+        assert_eq!(w.call(&["SETBIT", key, bit, "1"]), b":0\r\n");
     }
-    assert_eq!(w.call(&["BITOP", "OR", "dur-or", x, y]), b":1\r\n");
+    assert_eq!(w.call(&["BITOP", "OR", "dur-or", &k[0], &k[1]]), b":1\r\n");
     // A destination that exists, then is emptied by a BITOP whose
     // sources are both absent.
     assert_eq!(w.call(&["SET", "dur-gone", "here-for-now"]), b"+OK\r\n");
