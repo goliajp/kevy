@@ -166,12 +166,45 @@ fn a_streaming_giant_frame_is_disconnected_at_the_cap() {
         }
     }
 
+    // Whichever way this went, ask the server whether it DECIDED. The
+    // counter is bumped where the cap is enforced, before the close is
+    // marked — so a zero here and an open connection means the cap was
+    // never noticed, while a one and an open connection means the
+    // decision was made and had not reached the client. Those are
+    // different defects, and this cell could not tell them apart until
+    // the counter existed.
+    let decided = {
+        let mut q = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        q.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        q.write_all(b"*2\r\n$4\r\nINFO\r\n$5\r\nstats\r\n").unwrap();
+        let mut buf = vec![0u8; 4096];
+        let n = q.read(&mut buf).unwrap_or(0);
+        String::from_utf8_lossy(&buf[..n])
+            .lines()
+            .find_map(|l| l.strip_prefix("client_query_buffer_limit_disconnections:"))
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(u64::MAX)
+    };
+
     assert!(
         closed_as.is_some(),
         "a multibulk of small args put {written} bytes past the {CAP}-byte cap in \
          {writes} writes, and the connection was STILL open {:?} later — {polls} \
-         read polls, not one of which saw a close",
+         read polls, not one of which saw a close. The server's own \
+         client_query_buffer_limit_disconnections says {decided}: 0 means it \
+         never noticed the cap, and anything else means it decided and the \
+         close had not landed. Those are different defects.",
         started.elapsed()
+    );
+
+    // And the decision itself is part of the contract, not only the
+    // close: a server that dropped the connection for some other reason
+    // would satisfy the assertion above while the guard did nothing.
+    assert!(
+        decided >= 1,
+        "the connection closed ({closed_as:?}) but the query-buffer guard never \
+         counted a decision — something else closed it, and this cell would have \
+         passed without the guard working at all"
     );
 
     // The server itself is fine: a fresh conn still answers.

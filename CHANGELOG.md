@@ -161,6 +161,16 @@ moved.
 
 ### Added
 
+- **`INFO stats` reports `client_query_buffer_limit_disconnections`.**
+  Redis's counter, and it exists here because a test could not do its
+  job without it. The query-buffer guard closes a connection whose
+  accumulated unparsed input crosses the cap; the enforcement path
+  printed a line and marked the connection closing, and nothing could
+  be asked about it afterwards. So an intermittent "the server did not
+  close" could not be told from "the server decided and the close had
+  not landed" — two different defects wearing one sentence. The count
+  is of DECISIONS, taken where the cap is enforced.
+
 - **Fourteen Redis commands the engine already had, on the wire at last.**
   `SETBIT` `GETBIT` `BITCOUNT` `BITPOS` `BITOP` `GETRANGE` `SETRANGE`
   `LINSERT` `COPY` `TOUCH` `TIME` `GETEX` `ZREVRANGE` `HINCRBYFLOAT`.
