@@ -9,6 +9,18 @@ impl Hnsw {
     /// Live (non-tombstoned) vectors — already tracked, so `O(1)`.
     /// [`Self::stats`] walks every node and every link to estimate bytes;
     /// a caller that only wants the count should not trigger that walk.
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_vector::{Hnsw, HnswParams};
+    /// let mut h = Hnsw::new(2, HnswParams::default());
+    /// h.apply(b"a", Some(vec![1.0, 0.0]));
+    /// h.apply(b"b", Some(vec![0.0, 1.0]));
+    /// h.apply(b"a", None);
+    /// // Live only: the tombstone left behind does not count.
+    /// assert_eq!(h.vectors(), 1);
+    /// assert_eq!(h.stats().tombstones, 1);
+    /// ```
     pub fn vectors(&self) -> u64 {
         self.live
     }
@@ -18,6 +30,20 @@ impl Hnsw {
     /// tombstoning) instead of walking every node per call (this ran
     /// on every tiering tick). [`Self::recompute_stats`] is the
     /// walking reference the tests hold them to.
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_vector::{Hnsw, HnswParams};
+    /// let mut h = Hnsw::new(4, HnswParams::default());
+    /// for i in 0..3u8 {
+    ///     h.apply(&[i], Some(vec![f32::from(i), 1.0, 0.0, 0.0]));
+    /// }
+    /// let s = h.stats();
+    /// assert_eq!(s.vectors, 3);
+    /// // The sizing formula IDX.LIST reports: payload, links and node
+    /// // overhead, not a measured heap.
+    /// assert!(s.approx_bytes >= 3 * (4 * 4 + 40));
+    /// ```
     pub fn stats(&self) -> VectorStats {
         self.stats_from(self.links_total, self.tombstones)
     }

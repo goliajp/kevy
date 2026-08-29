@@ -36,6 +36,11 @@ jobs:
         run: cargo build --workspace --release
       - name: Test --release
         run: cargo test --workspace --release --lib --tests
+      # `--lib --tests` is the pair that EXCLUDES doctests, so the examples
+      # this release ships would otherwise be verified by nothing at the one
+      # point where it matters: the last gate before an irreversible publish.
+      - name: doctestrun (every documented example compiles and runs)
+        run: bash bench/doctestrun.sh
 
   # ───────────── cargo publish to crates.io (idempotent per crate) ─────────────
   # Triggered automatically on tag push. Walks every publishable crate in

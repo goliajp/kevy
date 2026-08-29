@@ -13,6 +13,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use kevy_testnet::free_port;
 
+mod common;
+
 fn req(parts: &[&[u8]]) -> Vec<u8> {
     let mut v = format!("*{}\r\n", parts.len()).into_bytes();
     for p in parts {
@@ -105,10 +107,16 @@ fn hot_reload_takes_effect_within_one_tick() {
     cfg2.slowlog.slower_than_micros = 0;
     cfg2.slowlog.max_len = 128;
     state.config_replace(Arc::new(cfg2));
-    // Wait long enough for `apply_live_runtime_config` to pick up the
-    // new threshold (≥ one tick interval = 100 ms; 500 ms is the same
-    // safety margin keyspace_notify.rs uses).
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    // `apply_live_runtime_config` picks the new threshold up on a shard
+    // TICK, not at the call. The wait used to be 500 ms — "the same safety
+    // margin keyspace_notify.rs uses" — and a margin copied from another
+    // file is not a condition. Under load the swap missed it, 2 runs in 6.
+    // So drive the effect instead: write until one lands in the ring.
+    common::until("the hot-swapped slowlog threshold to take effect", || {
+        c.write_all(&req(&[b"SET", b"probe", b"v"])).unwrap();
+        read_exact_bytes(&mut c, b"+OK\r\n");
+        slowlog_len(&mut c) > 0
+    });
 
     for i in 0..5u32 {
         c.write_all(&req(&[b"SET", format!("p2-{i}").as_bytes(), b"v"]))

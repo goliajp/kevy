@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Every version-bearing file in this repository agrees with the workspace.
 
-A kevy release moves the version in SIX distinct layers, and a bump that
+A kevy release moves the version in SEVEN distinct layers, and a bump that
 moves one and forgets another is a release that ships a lie. The 5.1.0
 bump moved layer 1 and stopped: fourteen language bindings still
 declared 5.0.0, two of them in vendored engine BYTES — and 5.0.0 has a
@@ -24,6 +24,10 @@ The layers, and why each one bites on its own:
 6. Vendored engine bytes — jniLibs, xcframework. These do not merely
    SAY a version, they ARE one; the engine's C ABI self-reports it, so
    `strings` settles the question.
+7. The Go module's major — Go puts the major version in the IMPORT
+   PATH (`/v6`), so a module that forgets it does not merely say the
+   wrong number, it resolves to the wrong major forever. Added in
+   6.0.0, which is why everything else here still said six.
 
 Run: python3 tools/check_version_alignment.py
 """
@@ -91,6 +95,30 @@ def skip(path: pathlib.Path) -> bool:
     return any(t in s for t in THIRD_PARTY) or any(e in s for e in EXAMPLE_APPS)
 
 
+# Records of what happened, which layer 7 must not rewrite.
+#
+# A finding, a changelog entry and a completed roadmap line describe a past
+# state. Moving `/v5` to `/v6` in them does not update anything — it makes
+# the record false, the way relabelling a benchmark table with the current
+# release turns an honest measurement into a claim about a build nobody
+# ran. One of them ended up reading `go get .../kevy-go/v6@v5.1.0`, a
+# command that never existed and could not have worked.
+#
+# Layer 7 governs what DETERMINES or INSTRUCTS the import path: code,
+# manifests, scripts, and the documents that tell a reader what to import.
+HISTORICAL = (
+    "CHANGELOG.md",
+    ".claude/ROADMAP.md",
+    "bench/FINDING-",
+    "bench/PERF-",
+)
+
+
+def historical(p) -> bool:
+    rel = str(p.relative_to(ROOT))
+    return any(rel == h or rel.startswith(h) for h in HISTORICAL)
+
+
 def layer1_cargo(v: str, bad: list) -> int:
     """Workspace version + every version-gated path dependency."""
     checked = 0
@@ -124,8 +152,14 @@ def layer1_cargo(v: str, bad: list) -> int:
             # `cargo package`, which is how four published stones came to ship
             # tests importing a crate their manifest never declared. Giving
             # them versions is what made this case reachable.
+            # `kevy-[\w-]+` required a suffix, so every pin on the crate the
+            # project is NAMED after — `path = "../kevy"` — was invisible to
+            # this gate. Two carried it: kevy-client and kevy-cluster-rw. A
+            # stale pin there is the exact hazard layer 1 is about, because
+            # `cargo publish` resolves a version-gated dependency against
+            # crates.io: the new crate would have resolved to the old sibling.
             m = re.search(
-                r'path\s*=\s*"[^"]*?(kevy-[\w-]+)"\s*,\s*version\s*=\s*"=?(\d+\.\d+\.\d+)"',
+                r'path\s*=\s*"[^"]*?(kevy(?:-[\w-]+)?)"\s*,\s*version\s*=\s*"=?(\d+\.\d+\.\d+)"',
                 line,
             )
             if m:
@@ -228,19 +262,33 @@ def layer5_prose(v: str, bad: list) -> int:
     claim = re.compile(
         r"tracks kevy \*\*(\d+\.\d+\.\d+)\*\*"
         r"|`jp\.golia:kevy:(\d+\.\d+\.\d+)`"
-        r"|<artifactId>kevy</artifactId><version>(\d+\.\d+\.\d+)</version>")
+        r"|<artifactId>kevy</artifactId><version>(\d+\.\d+\.\d+)</version>"
+        # The install table's Version column. Three Maven lines came into
+        # scope above and the seven rows above them did not — the table is
+        # the part a reader reads first, and it was the part that was stale.
+        r"|^\|[^|]*\|[^|]*\|\s*(\d+\.\d+\.\d+)\s*\|$")
     # The root README is in scope and was not: it is the most-read file
     # here, and its install block states versions. docs/ stays out on
     # purpose — the upgrade guides name old versions correctly, and a
     # gate that dragged those forward would be rewriting history.
-    files = sorted(ROOT.glob("bindings/**/*.md")) + [ROOT / "README.md"]
+    #
+    # `docs/bindings.md` is the exception to that exception, and its three
+    # translations with it. It is not history: it is an install table under
+    # the sentence "every line here was installed from its registry and run
+    # before it was written down", and it carried 5.1.0 in all seven rows
+    # and in the same Maven XML the README states at 6.0.0. A reader pastes
+    # this one. The blanket docs/ exclusion is right for what it was written
+    # for and was covering this too.
+    files = (sorted(ROOT.glob("bindings/**/*.md"))
+             + [ROOT / "README.md", ROOT / "docs/bindings.md",
+                ROOT / "docs/ja/bindings.md", ROOT / "docs/zh/bindings.md"])
     for f in files:
         if skip(f):
             continue
         for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
             m = claim.search(line)
             if m:
-                found = m.group(1) or m.group(2) or m.group(3)
+                found = m.group(1) or m.group(2) or m.group(3) or m.group(4)
                 checked += 1
                 if found != v:
                     bad.append(f"{f.relative_to(ROOT)}:{i}: claims {found} != {v}")
@@ -305,7 +353,7 @@ def layer7_go_module_major(v: str, bad: list) -> int:
     used = re.compile(r"github\.com/goliajp/kevy-go/v(\d+)")
     checked = 0
     for pth in sorted(ROOT.glob("**/*")):
-        if pth.is_dir() or skip(pth) or pth.suffix not in (
+        if pth.is_dir() or skip(pth) or historical(pth) or pth.suffix not in (
                 ".go", ".mod", ".sh", ".md", ".yml", ".yaml"):
             continue
         try:
@@ -370,7 +418,7 @@ def main() -> int:
         for b in bad:
             print(f"  {b}")
         print("\nA bump that moves one layer and forgets another ships a lie.")
-        print("See .claude/skills/release/SKILL.md for the six layers and the fix.")
+        print("See .claude/skills/release/SKILL.md for the seven layers and the fix.")
         return 1
     total = sum(counts.values())
     detail = ", ".join(f"{k} {n}" for k, n in counts.items())

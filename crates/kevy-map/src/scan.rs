@@ -38,6 +38,24 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
     ///
     /// Bounded work: one call touches one 16-bucket home group plus its
     /// probe-run overhang (short at the 7/8 load factor).
+    /// # Examples
+    ///
+    /// ```
+    /// let mut m = kevy_map::KevyMap::new();
+    /// for i in 0..64u32 { m.insert(i, i); }
+    ///
+    /// // A SCAN-style cursor: bounded work per call, 0 both starts and
+    /// // ends the walk, and every key is seen at least once across it.
+    /// let mut seen = Vec::new();
+    /// let mut cur = 0u64;
+    /// loop {
+    ///     cur = m.scan_step(cur, |k, _| seen.push(*k));
+    ///     if cur == 0 { break; }
+    /// }
+    /// seen.sort_unstable();
+    /// seen.dedup();
+    /// assert_eq!(seen.len(), 64);
+    /// ```
     pub fn scan_step(&self, cursor: u64, mut f: impl FnMut(&K, &V)) -> u64 {
         if self.cap == 0 {
             return 0;

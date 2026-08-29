@@ -23,13 +23,13 @@ exclude = ["tests/rw_split.rs"]
 workspace = true
 
 [dependencies]
-kevy-resp = { path = "../kevy-resp", version = "5.4.1" }
-kevy-resp-client = { path = "../kevy-resp-client", version = "5.4.1" }
+kevy-resp = { path = "../kevy-resp", version = "6.0.0" }
+kevy-resp-client = { path = "../kevy-resp-client", version = "6.0.0" }
 
 [dev-dependencies]
 kevy-testnet = { path = "../kevy-testnet" }
 # Integration tests spin up real kevy primary + replica Runtimes to
 # verify routing end-to-end.
-kevy = { path = "../kevy", version = "5.4.1" }
-kevy-rt = { path = "../kevy-rt", version = "5.4.1" }
-kevy-replicate = { path = "../kevy-replicate", version = "5.4.1" }
+kevy = { path = "../kevy", version = "6.0.0" }
+kevy-rt = { path = "../kevy-rt", version = "6.0.0" }
+kevy-replicate = { path = "../kevy-replicate", version = "6.0.0" }

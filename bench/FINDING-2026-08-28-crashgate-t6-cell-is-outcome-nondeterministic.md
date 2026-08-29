@@ -66,3 +66,107 @@ This is not fixed here. It is someone else's gate, the fix changes what the
 cell tests, and choosing that is a decision about the durability arc rather
 than a repair — but the three numbers above are what any such decision
 should start from.
+
+---
+
+## Continuation, same day: eight more runs, and one hypothesis refuted
+
+Eight consecutive crashgate runs on 6.0.0 (lx64, release binary), reading
+only the T6 cell:
+
+```
+228500 >= 228500    225500 >= 225500
+231000 >= 231000    225000 >= 225000
+227500 >= 227500    226000 >= 226000
+216000 >= 216000    206803 >= 206500
+```
+
+All eight pass. Seven land on exact equality; one recovers **more** than was
+acknowledged, which is resync picking up writes that were in flight when the
+writer died — allowed, and a useful reminder that `recr >= synced` is a
+lower bound rather than an identity.
+
+So the failure rate on this box is around one in eleven observed, not one in
+three. That does not weaken the finding: 50.07% is still the difference
+between resync engaging and not engaging, and a cell that answers that
+question on roughly ten runs in eleven is not answering it deliberately.
+
+**A hypothesis worth recording because it was wrong.** Before running these,
+the guess was that `size / 2` usually lands in data the writer had NOT yet
+synced, so the destroyed bytes would usually cost nothing and the cell would
+mostly not be testing its own question. Measured directly — writer run,
+killed, then the synced record count converted to a byte offset through the
+file's own bytes-per-record:
+
+| run | synced records | file bytes | splice point | synced prefix ends ≈ | splice inside synced |
+|---|---:|---:|---:|---:|---|
+| 1 | 67,500 | 22,661,425 | 11,330,712 | 22,612,500 | yes |
+| 2 | 71,000 | 24,004,985 | 12,002,492 | 23,785,000 | yes |
+| 3 | 78,000 | 26,188,323 | 13,094,161 | 26,130,000 | yes |
+
+The synced prefix covers essentially the whole file, so the splice is always
+inside acknowledged data. The cell **is** asking its question; what varies is
+only what the original finding said varies — which byte inside a frame the
+cut lands on. The fix it proposes is unchanged, and now it is the only
+explanation left standing.
+
+---
+
+## Resolution, same day: the cell was right, the engine was wrong
+
+The instrument added earlier — keeping the `--resync` stderr this gate had
+been sending to `/dev/null` — spoke on the next CI failure:
+
+```
+crashgate: T6 replay said (splice at 27485183 of 54970366 bytes):
+    kevy: AOF …/midfile/aof-0.aof replayed 163722 commands from 54970359
+    bytes in 1598 ms; trailing 27485178 bytes were a partial frame
+    (crash mid-append, recoverable)
+```
+
+No corrupt WARN: **resync never ran**. And 27,485,178 bytes called a partial
+frame from a crash mid-append.
+
+An AOF record header is `len: u32 LE` + `crc: u32 LE`. After the splice the
+next header is read from what used to be payload, and there are three ways
+out — two of which recover:
+
+| the bytes read as | walk's verdict | resync | outcome |
+|---|---|---|---|
+| `len == 0` or `> MAX_RECORD` | CorruptFrame | ran | tail recovered |
+| `len` legal, larger than what remains | **TruncatedTail** | **never ran** | **tail lost** |
+| `len` fits, CRC disagrees | CorruptFrame | ran | tail recovered |
+
+That is the coin, and it explains everything this finding recorded: 50.07%
+and 50.22% are the splice offset, one in five on CI, none in 28 bench-box
+runs or 65 splice positions because those files never produced the middle
+reading.
+
+**The cell was doing its job.** It is not the input that needed fixing.
+
+Reproduced deterministically rather than waited for — ten good records, one
+record whose length claims a megabyte with five bytes behind it, ten more —
+and `replay_aof_resync` returned 10 of 20 with zero ranges reported. Its
+sibling, where the CRC lies instead, has always returned all 20. Same damage,
+same position, opposite outcome, decided by which lie the bytes told.
+
+Three parts, all fixed and each with its own test or branch:
+
+1. resync now runs on any stop that is not clean — the question was always
+   "is there anything valid after where we stopped".
+2. `corrupt` is raised by a skipped range, not only by the stop reason. It
+   had recovered the tail and still reported the file healthy, against
+   `docs/persistence.md`'s stated contract.
+3. The default-path message no longer calls a multi-megabyte drop a partial
+   frame; the walk already knew a short HEADER read from a short PAYLOAD read
+   and gave both the same verdict.
+
+## What is not yet settled
+
+Two CI runs since the fix are green. The base rate was already four in five,
+so two greens are consistent with the fix and also consistent with luck. The
+mechanism that produced every observed failure is closed and proven closed by
+construction; whether T6 can still fail some other way is an open question a
+handful more runs will answer. The `REDpending(T6)` declaration stays until
+they do — promoting it on two runs would repeat, in the other direction, the
+error of marking something pending and never re-reading it.

@@ -156,6 +156,35 @@ pub(crate) fn cmd_zrange<A: ArgvView + ?Sized>(
     emit_zrange(store.zrange(&args[1], s, e), withscores, proto, out);
 }
 
+/// `ZREVRANGE key start stop [WITHSCORES]` — the by-rank range read
+/// from the high end.
+///
+/// `Store::zrevrange` does the work — one implementation, shared with
+/// the embedded facade. Each surface had written its own before, and
+/// both had written the same bug: a positive start clamped up to the
+/// last rank, so `ZREVRANGE z 5 10` on a three-member set answered a
+/// member where Redis answers none. They agreed with each other, which
+/// is why the wire-vs-facade differential passed it and the three-way
+/// against a real valkey did not.
+pub(crate) fn cmd_zrevrange<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+    proto: RespVersion,
+) {
+    if args.len() < 4 || args.len() > 5 {
+        return wrong_args(out, "zrevrange");
+    }
+    let withscores = args.len() == 5;
+    if withscores && !args[4].eq_ignore_ascii_case(b"WITHSCORES") {
+        return encode_error(out, "ERR syntax error");
+    }
+    let (Some(start), Some(stop)) = (arg_i64(&args[2]), arg_i64(&args[3])) else {
+        return encode_error(out, ERR_NOT_INT);
+    };
+    emit_zrange(store.zrevrange(&args[1], start, stop), withscores, proto, out);
+}
+
 /// `ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]`.
 ///
 /// BullMQ uses `LIMIT 0 1` inside its `moveToActive` /

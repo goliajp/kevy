@@ -44,6 +44,37 @@ fi
 
 python3 "$ROOT/tools/coverage_atlas.py" "$COV" || exit $?
 
+# The register and the exemptions are two files, and nothing reconciled them.
+# `suite/dead-paths.toml` is what a person reads; `unstable` inside the
+# `unstable` block setratchet honours is carried through the atlas into
+# DEAD-SET.json and from there into the baseline. So the invariant to check
+# is the one the atlas just produced: comparing against the BASELINE fails
+# on every registration until the next run, because the baseline's copy is
+# always one atlas behind. Checked against the baseline first, and it
+# reported exactly that lag as a disagreement.
+python3 - "$ROOT" <<'RECONCILE' || exit $?
+import json, pathlib, sys, tomllib
+root = pathlib.Path(sys.argv[1])
+reg = tomllib.loads((root / "suite/dead-paths.toml").read_text()).get("unstable", [])
+base = json.loads((root / "bench/DEAD-SET.json").read_text()).get("unstable", {})
+if not reg:
+    print("deadgate: REFUSED — suite/dead-paths.toml declares no unstable "
+          "entries; an empty register is a broken read, not agreement",
+          file=sys.stderr)
+    sys.exit(2)
+want = {e["symbol"] for e in reg if "symbol" in e} | {e["prefix"] for e in reg if "prefix" in e}
+have = set(base.get("symbols", [])) | set(base.get("prefixes", []))
+only_reg, only_base = sorted(want - have), sorted(have - want)
+if only_reg or only_base:
+    print("deadgate: FAIL — the unstable register and this run's exemptions disagree")
+    for x in only_reg:
+        print(f"  registered in suite/dead-paths.toml, exempts nothing: {x}")
+    for x in only_base:
+        print(f"  exempt in this run, explained nowhere: {x}")
+    sys.exit(1)
+print(f"deadgate: {len(want)} unstable declaration(s), register and this run agree")
+RECONCILE
+
 if [ "$MODE" = "--update-baseline" ]; then
   shift
   exec python3 "$ROOT/tools/setratchet.py" update "$BASELINE" "$OBSERVED" "$@"

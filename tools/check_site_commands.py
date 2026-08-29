@@ -101,8 +101,13 @@ def split_argv(line):
 
 def main():
     if not KEVY.exists():
-        print(f"SKIP: {KEVY.relative_to(ROOT)} not built")
-        return 0
+        # Not a skip. `check_doc_toml` had this exact shape — print SKIP,
+        # return 0 — and it was the reason a gate could pass without ever
+        # running a command. If the binary is absent nothing was checked,
+        # and 2 is what the rest of tools/ means by that.
+        print(f"REFUSED: {KEVY.relative_to(ROOT)} is not built, so not one "
+              f"of the site's commands was run")
+        return 2
 
     # The built site, which is what a visitor gets. Reading the sources
     # would test what the content says rather than what the page serves,

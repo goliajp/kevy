@@ -188,7 +188,7 @@ def update(base_path, obs_path, reason):
     return 0
 
 
-def envelope(base_path, obs_paths):
+def envelope(base_path, obs_paths, reason=""):
     """Record the element-wise MAXIMUM across several observed sets.
 
     A ratchet over a measurement with a noisy tail cannot hold one sample:
@@ -214,18 +214,36 @@ def envelope(base_path, obs_paths):
         for k, v in d["symbols"].items():
             merged[k] = max(merged.get(k, 0), v)
 
+    # The same rule `update` has, for the same reason. This function wrote
+    # the element-wise maximum with no reference to the prior baseline, so
+    # it would absorb genuine new dead code as readily as a re-recording —
+    # which makes it the quiet reset this file's own docstring says a
+    # ratchet must not have. Growth against the prior baseline needs a
+    # reason here too; a fall does not.
+    prior_path = pathlib.Path(base_path)
+    if prior_path.exists():
+        prior = load(base_path, "baseline")
+        if identity(prior) == identity(docs[-1]):
+            synthetic = dict(docs[-1])
+            synthetic["symbols"] = merged
+            grew, joined, _, _ = compare(prior, synthetic)
+            if (grew or joined) and not reason:
+                print("setratchet: FAIL — the envelope is worse than the baseline "
+                      "and no reason was given")
+                report(grew, joined, {}, {}, prior, synthetic)
+                return 1
+
     out = dict(docs[-1])
     out["symbols"] = dict(sorted(merged.items()))
     out["envelope_runs"] = len(docs)
     out["dead_regions"] = sum(merged.values())
-    prior = pathlib.Path(base_path)
-    out["history"] = (load(base_path, "baseline").get("history", []) if prior.exists() else []) + [
+    out["history"] = (load(base_path, "baseline").get("history", []) if prior_path.exists() else []) + [
         {"envelope_over": len(docs),
          "symbols": len(merged),
          "regions": out["dead_regions"],
-         "reason": "element-wise maximum; growth now means worse than the worst observed run"},
+         "reason": reason or "element-wise maximum; growth now means worse than the worst observed run"},
     ]
-    prior.write_text(json.dumps(out, indent=2) + "\n")
+    prior_path.write_text(json.dumps(out, indent=2) + "\n")
     per = [d["dead_regions"] for d in docs]
     print(f"setratchet: envelope over {len(docs)} runs -> {len(merged)} symbols / "
           f"{out['dead_regions']} regions (individual runs: {per})")
@@ -238,15 +256,16 @@ def main():
         refuse("usage: setratchet.py gate|update <baseline.json> <observed.json> "
                "[--accept-growth \"reason\"]\n"
                "       setratchet.py envelope <baseline.json> <observed.json>...")
-    if args[0] == "envelope":
-        return envelope(args[1], args[2:])
-    mode, base_path, obs_path = args[0], args[1], args[2]
     reason = ""
     if "--accept-growth" in args:
         i = args.index("--accept-growth")
         if i + 1 >= len(args):
             refuse("--accept-growth needs a reason")
         reason = args[i + 1]
+        args = args[:i] + args[i + 2:]
+    if args[0] == "envelope":
+        return envelope(args[1], args[2:], reason)
+    mode, base_path, obs_path = args[0], args[1], args[2]
     return gate(base_path, obs_path) if mode == "gate" else update(base_path, obs_path, reason)
 
 

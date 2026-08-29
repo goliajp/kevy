@@ -139,6 +139,34 @@ pub(crate) enum Agg {
     /// On step transitions, `finalize_watch_agg`'s sibling
     /// `finalize_rename_agg` re-arms `slot.remaining = 1` and ships
     /// the next Op.
+    /// `BITOP op dst src [src …]` — gather every source string on its
+    /// own shard, combine the bytes on the origin, then write the
+    /// result to the destination's shard. `keys` keeps the argv order,
+    /// which `got` cannot: a gather answers per shard, and BITOP NOT
+    /// and the zero-padding rules both depend on which source is which.
+    BitOpGather {
+        op: kevy_store::BitOp,
+        dst: Vec<u8>,
+        keys: Vec<Vec<u8>>,
+        got: HashMap<Vec<u8>, Gathered>,
+    },
+    /// Cross-shard `COPY src dst [REPLACE]`. Step 1 clones the source
+    /// on its shard; step 2 places the clone on the destination's. The
+    /// two are not atomic together — a crash between them leaves the
+    /// destination unwritten, which is the safe direction for a copy
+    /// and the reason this family needs no Restore step, unlike
+    /// [`Self::RenameOrchestrator`].
+    CopyOrchestrator {
+        step: CopyStep,
+        replace: bool,
+        dst: Vec<u8>,
+        dst_shard: usize,
+        /// Step 1's clone, populated by fold when `Part::CopyRead`
+        /// lands. `Some(None)` = the source was absent.
+        read: Option<Option<(kevy_store::Value, Option<u64>)>>,
+        /// Step 2's result, populated when `Part::CopyPutDone` lands.
+        stored: Option<bool>,
+    },
     RenameOrchestrator {
         /// Which step we're in (Take then Put). The taken value lives
         /// in `taken` once step 1 lands.
@@ -196,6 +224,15 @@ pub(crate) enum Agg {
         /// Step 2's verdict, `Some(false)` when the destination refused.
         pushed: Option<bool>,
     },
+}
+
+/// Phase of the cross-shard COPY orchestrator. Two steps and no third:
+/// the source is cloned rather than taken, so a refused put has nothing
+/// to put back. See [`Agg::CopyOrchestrator`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CopyStep {
+    Read,
+    Put,
 }
 
 /// Phase of the cross-shard list-move orchestrator. See

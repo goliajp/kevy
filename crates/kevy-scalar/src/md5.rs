@@ -27,6 +27,9 @@ const K: [u32; 64] = [
 
 /// The 32-hex-character lowercase MD5 digest of `input`.
 #[must_use]
+/// Not re-exported, so it has no path an external example could name;
+/// the RFC 1321 vectors are asserted through `eval("md5", …)`, which is
+/// how a caller reaches this.
 pub fn md5_hex(input: &[u8]) -> String {
     let [a, b, c, d] = digest(input);
     let mut out = String::with_capacity(32);

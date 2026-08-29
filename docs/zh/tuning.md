@@ -79,6 +79,8 @@ AOF 策略由 `appendfsync` 控制（配置文件或 `CONFIG SET`）。三个取
 
 **容器要按 `process_rss_bytes` 定容，不是 `used_memory`。**`INFO memory` 两个都报：`used_memory` 是 store 的键空间记账——`maxmemory` 和分层预算作用的对象；`process_rss_bytes` 才是操作系统真正为进程保留的常驻内存，它额外承载着索引与视图、连接与复制缓冲区、分配器开销与碎片。按 `used_memory` 设容器内存上限会把一个健康的进程 OOM 杀掉；请按观察到的 RSS 加余量来设限。
 
+**可选启用的分配器。** 用 `--features kevy-alloc` 构建，会把 glibc malloc 换成 kevy 自己的 span 分配器：churn 之下的稳态 RSS 小约 10 %，而吞吐上的代价只出现在写饱和的集合分片上。当内存容量是那条约束时，这个构建是值得的；实测的取舍见 [docs/alloc.md](https://github.com/goliajp/kevy/blob/develop/docs/alloc.md)。
+
 ### 网络
 
 默认传输是 TCP。客户端和服务端在同一台主机上时，可以换成 Unix-domain socket，完全绕开 loopback 的 TCP 栈：

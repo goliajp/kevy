@@ -14,19 +14,24 @@ use super::util::{
 // LOC-WAIVER: data-driven verb dispatch table — one arm per keyspace verb.
 pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
     match up {
-        // Bare DEL / UNLINK / EXISTS answer `:0` on the wire (the
-        // runtime's multi-key fan-out sums zero targets) — mirror that,
-        // not the dispatch-layer arity error the route never reaches.
+        // These three used to answer `:0` here, because that is what the
+        // server answered: its router sent a keyless call to the multi-key
+        // fan-out, which summed zero targets. The comment that stood here
+        // said to mirror it. It was mirroring a defect — redis 8.10.1
+        // answers all three with the arity sentence, and the two surfaces
+        // agreeing on a wrong answer is still agreement, which is why the
+        // differential harness could not tell. The server routes a keyless
+        // call locally now, and both say what Redis says.
         b"DEL" | b"UNLINK" => {
             if argv.len() < 2 {
-                int(out, 0);
+                wrong_args(out, if up == b"DEL" { "del" } else { "unlink" });
             } else {
                 emit_int(out, s.del(&rest(argv, 1)).map(|n| n as i64));
             }
         }
         b"EXISTS" => {
             if argv.len() < 2 {
-                int(out, 0);
+                wrong_args(out, "exists");
             } else {
                 emit_int(out, s.exists(&rest(argv, 1)).map(|n| n as i64));
             }
@@ -225,6 +230,15 @@ fn cmd_copy(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         4 => return err(out, ERR_SYNTAX),
         _ => return wrong_args(out, "copy"),
     };
+    // Redis refuses a key copied onto itself, and says which two
+    // objects it means. Without this the facade answered `:0` — the
+    // same reply a refused overwrite gives, so a caller could not tell
+    // "you asked for something impossible" from "the destination was
+    // already there". The `Store::copy` API method is unchanged: this
+    // is the protocol face matching the protocol.
+    if argv[1] == argv[2] {
+        return err(out, "ERR source and destination objects are the same");
+    }
     match s.copy(&argv[1], &argv[2], replace) {
         Ok(copied) => int(out, i64::from(copied)),
         Err(e) => kevy_err(out, &e),

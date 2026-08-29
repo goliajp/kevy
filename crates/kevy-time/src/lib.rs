@@ -12,8 +12,26 @@
 //! The civil conversion is the standard integer-arithmetic algorithm
 //! (era/year-of-era/day-of-year decomposition over 400-year cycles),
 //! exact over the whole i64 day range the epoch can reach.
+//!
+//! ```
+//! use kevy_time::{Civil, civil_from_epoch, epoch_from_civil, add_months};
+//!
+//! // Epoch seconds in, calendar out, and back again.
+//! let c = civil_from_epoch(1_700_000_000);
+//! assert_eq!((c.y, c.m, c.d), (2023, 11, 14));
+//! assert_eq!((c.h, c.min, c.s), (22, 13, 20));
+//! assert_eq!(epoch_from_civil(c), 1_700_000_000);
+//!
+//! // Month arithmetic clamps rather than spilling into the next month:
+//! // 31 January plus one month is the last day of February, and 2024 is
+//! // a leap year.
+//! let jan31 = epoch_from_civil(Civil { y: 2024, m: 1, d: 31, h: 0, min: 0, s: 0 });
+//! let feb = civil_from_epoch(add_months(jan31, 1));
+//! assert_eq!((feb.m, feb.d), (2, 29));
+//! ```
 
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 const SECS_PER_DAY: i64 = 86_400;
 

@@ -36,6 +36,11 @@ range|unique [MAXMEM <bytes>]`
 
 **那个计数器是按 shard 的，读取不是。** `duplicates` 维护在每个 shard 各自的段里，所以它只在两行**落到同一个 shard** 时才看得见它们共享一个值——而键本来就哈希散布到各 shard，所以寻常情况恰恰是它们没落在一起。实测：同一对行，在单 shard 服务器上报 `duplicates 1`，在双 shard 上报 `duplicates 0`。做一个全局计数器需要在写路径上跨 shard 统计取值，而那正是这个 kind 存在所要避开的串行化——所以**永远有效的检测是 `EQ` 读的多命中**；`duplicates` 是提示，那里读到零**不等于**这个值是唯一的。如果你需要的是硬唯一性，就在集群模式下用 `{hashtag}` 前缀把这个域钉到单个 shard 上，或者在 `MULTI` / `WATCH` 下做先查后写。
 
+**在嵌入式 API 里，`atomic()` 内部根本读不了索引**，所以 `KIND unique` 连乐观地参与这次检查都做不到。改用**认领键**：`u:<constraint>:<value>` 持有所有者的 id，在事务内部用 `get` 读、用 `set` 写。事务让「检查并认领」成为原子的——而那正是 `unique` 索引有意不提供的那个保证。
+
+有一位用户就这样实现了 22 条唯一性约束，其中一条也没用 `KIND unique`；这个模式是成立的，但他们是靠自己发现这处缺口走到那里的，不是靠读到这里。
+
+
 ## Embedded
 
 同一台引擎，类型化 API：`idx_create` / `idx_drop` / `idx_query` / `idx_count` / `idx_stats` / `idx_list`（值是 `IndexValue`，游标是 `IndexCursor`）。没有 `FIELDS` 补水——你人在进程内，字段直接用 `hget` 读。`idx_create` 同步构建，返回即代表索引可服务。
@@ -67,6 +72,10 @@ IDX.CREATE ord_amt ON PREFIX ord: FIELD amount TYPE i64 KIND agg GROUPBY status
 IDX.QUERY ord_amt GROUP paid                      → [count, sum, min, max, avg]
 IDX.QUERY ord_amt GROUPS BY sum LIMIT 100         → ranked [group, count, sum, min, max]
 ```
+
+**`GROUPBY` 只取一个字段，而现实中 `GROUP BY` 的形状通常需要不止一个。** 按方向拆分的 `SUM(amount) GROUP BY month`，或者任何 `SUM(CASE WHEN …)`，都靠把条件**搬进分组键**来表达：在写入时实体化一个复合字段（`ym_dir = "2026-07:in"`），按它分组，再在应用侧把键拆开。条件聚合也是同一个做法——条件成为「你按什么分组」的一部分，而不是聚合本身的一部分。
+
+这个惯用法事后看是显然的，初次接触时是看不见的：`KIND agg` 看上去像是在回答 `GROUP BY`，然后并不回答人们实际会写的那个形状。
 
 这是引擎对 `SELECT g, COUNT(*), SUM(v) … GROUP BY g` 的回答：聚合值**在写路径上维护**（一条声明过的访问路径——绝不是查询期的全行扫描）。min / max 借助逐组的值多重集，在删除下仍保持精确；sum 用 f64 累加（精度边界见文档）；值强制转换失败、或分组字段缺失的行，被排除并计数（VERIFY 可见）。跨 shard 归并是精确的：count / sum 相加，极值取极。`GROUPS` 按 count / sum / max 降序或 min 升序排名，LIMIT ≤ 1000。
 

@@ -81,6 +81,45 @@ pub trait Commands: Clone + Send + 'static {
     /// Default: no-op.
     fn on_shard_start(&self, _shard: usize) {}
 
+    /// The directory this runtime snapshots to and loads from — the one
+    /// `Runtime::builder().with_data_dir()` set.
+    ///
+    /// A `Commands` implementation carries its own configuration, and
+    /// nothing told it about this. A server built programmatically
+    /// therefore answered `CONFIG GET dir` from that configuration
+    /// while writing somewhere else entirely: one face reporting what
+    /// the other face is not doing. `kevy::serve` builds both from one
+    /// `Config` and never saw the gap, which is why it went unnoticed
+    /// until a test used `CONFIG GET dir` to identify its own server
+    /// and was handed `.`.
+    ///
+    /// Called once per shard, on the shard's thread, beside
+    /// [`Self::on_shard_start`]. Default: no-op, so an implementor that
+    /// has no configuration to correct is unaffected:
+    ///
+    /// ```
+    /// use kevy_rt::{ArgvView, Commands, Route, Store, TxnKind};
+    /// use std::path::Path;
+    ///
+    /// #[derive(Clone)]
+    /// struct Minimal;
+    /// impl Commands for Minimal {
+    ///     fn route<A: ArgvView + ?Sized>(&self, _a: &A) -> Route { Route::Local }
+    ///     fn dispatch<A: ArgvView + ?Sized>(&self, _s: &mut Store, _a: &A) -> Vec<u8> {
+    ///         b"+OK\r\n".to_vec()
+    ///     }
+    ///     fn is_quit<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn is_write<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn txn_kind<A: ArgvView + ?Sized>(&self, _a: &A) -> TxnKind { TxnKind::Other }
+    /// }
+    ///
+    /// Minimal.on_data_dir(Path::new("/var/lib/kevy"));
+    /// ```
+    ///
+    /// An implementor that answers `CONFIG GET dir` overrides it and
+    /// points that answer here; kevy's own does exactly that.
+    fn on_data_dir(&self, _dir: &std::path::Path) {}
+
     /// Per-tick persistence-stats publication: whether this shard has a
     /// background save/rewrite in flight and how many AOF rewrites have
     /// completed since open. Command layers that serve `INFO persistence`
@@ -94,6 +133,49 @@ pub trait Commands: Clone + Send + 'static {
     /// iteration delays the tick by exactly its overrun). Called at
     /// tick cadence (10 Hz), so implementations may do real work.
     fn on_tick_gap(&self, _excess_us: u64) {}
+
+    /// A connection was closed because its accumulated unparsed input
+    /// crossed the query-buffer cap.
+    ///
+    /// The enforcement path printed a line and marked the conn closing,
+    /// and there was nothing a test or an operator could ask about it —
+    /// so an intermittent "the server did not close" could not be told
+    /// from "the server decided and the close had not landed yet".
+    /// Those are different defects. Redis exposes the same count as
+    /// `client_query_buffer_limit_disconnections`.
+    ///
+    /// Called on the closing decision, not on the close completing.
+    /// That is the whole point of the distinction: a decision that has
+    /// not reached the client yet is a different thing from a cap that
+    /// was never noticed, and only a counter taken here can tell them
+    /// apart.
+    ///
+    /// The default does nothing, so an existing implementor gains the
+    /// hook without changing:
+    ///
+    /// ```
+    /// use kevy_rt::{ArgvView, Commands, Route, Store, TxnKind};
+    ///
+    /// #[derive(Clone)]
+    /// struct Minimal;
+    /// impl Commands for Minimal {
+    ///     fn route<A: ArgvView + ?Sized>(&self, _a: &A) -> Route { Route::Local }
+    ///     fn dispatch<A: ArgvView + ?Sized>(&self, _s: &mut Store, _a: &A) -> Vec<u8> {
+    ///         b"+OK\r\n".to_vec()
+    ///     }
+    ///     fn is_quit<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn is_write<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn txn_kind<A: ArgvView + ?Sized>(&self, _a: &A) -> TxnKind { TxnKind::Other }
+    /// }
+    ///
+    /// // The hook is optional; the default is a no-op.
+    /// Minimal.on_query_buffer_exceeded();
+    /// ```
+    ///
+    /// An implementor that wants the number overrides it and counts;
+    /// kevy's own does exactly that, and `INFO stats` reports the total
+    /// as `client_query_buffer_limit_disconnections`.
+    fn on_query_buffer_exceeded(&self) {}
 
     /// Per-tick AOF on-disk format gauge (the embedder ask's 
     /// server twin): 0 = AOF off, 1 = a pre-4.0 v1 file still being

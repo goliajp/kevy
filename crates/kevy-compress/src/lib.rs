@@ -41,6 +41,35 @@
 //! The dictionary is **a parameter, never a dependency**: this crate
 //! knows only bytes. Lifecycle (one dictionary per vlog file, seeded
 //! across rotation, disposable with the file) belongs to the caller.
+//!
+//! ```
+//! use kevy_compress::{encode, encode_high, decode, train};
+//!
+//! // No dictionary: an empty one is the ordinary LZ path.
+//! let value = b"user:1 name=ada user:1 name=ada user:1 name=ada";
+//! let frame = encode(b"", value);
+//! assert_eq!(decode(b"", &frame).unwrap(), value);
+//! assert!(frame.len() < value.len(), "repetition should compress");
+//!
+//! // Corpus-aware: a dictionary trained on samples that share a shape
+//! // lets a SHORT value reference bytes it never carries itself.
+//! let samples: Vec<&[u8]> = vec![
+//!     b"{\"user\":1,\"role\":\"admin\"}",
+//!     b"{\"user\":2,\"role\":\"admin\"}",
+//!     b"{\"user\":3,\"role\":\"guest\"}",
+//! ];
+//! let dict = train(&samples, 4096);
+//! let one = b"{\"user\":9,\"role\":\"admin\"}";
+//! assert_eq!(decode(&dict, &encode(&dict, one)).unwrap(), one);
+//!
+//! // `encode_high` spends more time for a smaller frame; both decode
+//! // with the same dictionary.
+//! assert_eq!(decode(b"", &encode_high(b"", value)).unwrap(), value);
+//!
+//! // A frame decoded against the WRONG dictionary is refused or wrong —
+//! // never a silent half-value. Truncation is refused outright.
+//! assert!(decode(b"", &frame[..frame.len() / 2]).is_err());
+//! ```
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -101,6 +130,14 @@ fn parse_dict(dict: &[u8]) -> (Option<[u8; 256]>, &[u8]) {
 /// Decode failure: the frame does not decode to exactly what its
 /// header promises. Corrupt and truncated frames land here — they are
 /// rejected, never mis-decoded.
+/// # Examples
+///
+/// ```
+/// use kevy_compress::decode;
+///
+/// // A frame the decoder cannot trust is refused, not half-decoded.
+/// assert!(decode(b"", b"\x01truncated").is_err());
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Corrupt;
 
@@ -114,7 +151,6 @@ impl core::fmt::Display for Corrupt {
 /// pays. The result is **never longer than `input` plus the frame
 /// header**: when LZ cannot save a byte — incompressible input,
 /// adversarial input, anything — the frame stores the bytes raw.
-#[must_use]
 /// # Examples
 ///
 /// Encode and decode are inverses under the same dictionary. An empty
@@ -134,6 +170,7 @@ impl core::fmt::Display for Corrupt {
 /// assert_eq!(kevy_compress::decode(b"shared prefix", &frame).unwrap(),
 ///            b"shared prefix and more");
 /// ```
+#[must_use]
 pub fn encode(dict: &[u8], input: &[u8]) -> Vec<u8> {
     let (_, content) = parse_dict(dict);
     let mut frame = Vec::with_capacity(input.len() + MAX_HEADER);
@@ -158,6 +195,16 @@ pub fn encode(dict: &[u8], input: &[u8]) -> Vec<u8> {
 /// never-expanding holds here exactly as for [`encode`]. Costs roughly a
 /// second serialization pass at encode time — which is the point: a
 /// value re-encoded by compaction has proven cold (RFC §3).
+/// # Examples
+///
+/// ```
+/// use kevy_compress::{encode, encode_high, decode};
+///
+/// let v = b"ababababababababababababababababab";
+/// // Same frame format, more search: never larger than `encode`'s.
+/// assert!(encode_high(b"", v).len() <= encode(b"", v).len());
+/// assert_eq!(decode(b"", &encode_high(b"", v)).unwrap(), v);
+/// ```
 #[must_use]
 pub fn encode_high(dict: &[u8], input: &[u8]) -> Vec<u8> {
     let (lens, content) = parse_dict(dict);
@@ -180,6 +227,18 @@ pub fn encode_high(dict: &[u8], input: &[u8]) -> Vec<u8> {
 /// Decode one frame produced by [`encode`]. `dict` must be the same
 /// bytes the encoder was given — the tag records whether the frame
 /// depends on it at all.
+/// # Examples
+///
+/// ```
+/// use kevy_compress::{encode, decode};
+///
+/// let v = b"the same dictionary that encoded it";
+/// assert_eq!(decode(b"", &encode(b"", v)).unwrap(), v);
+///
+/// // Bytes that are not a frame are refused rather than guessed at.
+/// assert!(decode(b"", b"").is_err());
+/// assert!(decode(b"", b"\xff\xff\xff").is_err());
+/// ```
 pub fn decode(dict: &[u8], frame: &[u8]) -> Result<Vec<u8>, Corrupt> {
     let (lens, content) = parse_dict(dict);
     let (&tag, rest) = frame.split_first().ok_or(Corrupt)?;
@@ -229,6 +288,24 @@ pub fn decode(dict: &[u8], frame: &[u8]) -> Result<Vec<u8>, Corrupt> {
 /// capture is won, so expect this policy to be replaced behind the
 /// same signature; its output is bytes, and bytes carry no versioning
 /// burden (the dictionary dies with its vlog file).
+/// # Examples
+///
+/// ```
+/// use kevy_compress::{encode, decode, train};
+///
+/// // Samples that share a shape leave that shape in the dictionary, so
+/// // a value carrying only the varying part still round-trips.
+/// let samples: Vec<&[u8]> = vec![
+///     b"GET /api/v1/users/1 HTTP/1.1",
+///     b"GET /api/v1/users/2 HTTP/1.1",
+///     b"GET /api/v1/users/3 HTTP/1.1",
+/// ];
+/// let dict = train(&samples, 1024);
+/// assert!(dict.len() <= 1024, "the budget is a bound, not a hint");
+///
+/// let one = b"GET /api/v1/users/9 HTTP/1.1";
+/// assert_eq!(decode(&dict, &encode(&dict, one)).unwrap(), one);
+/// ```
 #[must_use]
 pub fn train(samples: &[&[u8]], budget: usize) -> Vec<u8> {
     let mut dict = Vec::with_capacity(budget.min(MAX_OFFSET + 256));

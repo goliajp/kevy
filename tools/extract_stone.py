@@ -34,6 +34,7 @@ Exit: 0 all lifted, 1 one or more failed, 2 refused.
 
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -82,6 +83,57 @@ def package(crate, outdir):
     return hits[-1], log
 
 
+# `cargo package` strips path dependencies and resolves what is left against
+# crates.io. Between a version bump and the publish that follows it, EVERY
+# crate with a version-gated sibling is unliftable for that reason alone —
+# the version it names does not exist yet, because this is the release that
+# creates it. That is a fact about when the measurement was taken, not about
+# the crate, and it reads identically to a real failure unless it is named.
+# Cargo says it two ways, and only one of them names a version. A crate that
+# EXISTS but has no matching version gets "failed to select a version for the
+# requirement"; a crate crates.io has never heard of gets "no matching package
+# named". kevy-bench is the second kind — it has never been published — and
+# the first version of this pattern silently missed both crates that depend
+# on it, leaving them looking like ordinary lift failures.
+UNRESOLVED = re.compile(
+    r'failed to select a version for the requirement `([\w-]+) = "\^?([\d.]+)"`')
+UNKNOWN_PKG = re.compile(r'no matching package named `([\w-]+)` found')
+
+
+def workspace_version():
+    """The version this tree carries — what a sibling pin resolves to."""
+    doc = tomllib.loads((ROOT / "Cargo.toml").read_text())
+    return doc["workspace"]["package"]["version"]
+
+
+def package_note(log):
+    """The line that says what could not be resolved, not just the last line."""
+    for line in log.splitlines():
+        if ("failed to select a version for the requirement" in line
+                or "no matching package named" in line):
+            return line.strip()[:200]
+    for line in log.splitlines():
+        if line.startswith("error"):
+            return line.strip()[:200]
+    return log.strip().splitlines()[-1][:200] if log.strip() else "package failed"
+
+
+def unresolved_dep(log, workspace_version):
+    """-> {"dep": name, "req": version} when a dependency could not be selected.
+
+    The unknown-package form carries no version, so the requirement is read
+    from the manifest's own version — which is exactly the case that matters:
+    a sibling this release is about to publish for the first time.
+    """
+    m = UNRESOLVED.search(log)
+    if m:
+        return {"dep": m.group(1), "req": m.group(2)}
+    m = UNKNOWN_PKG.search(log)
+    if m:
+        return {"dep": m.group(1), "req": workspace_version, "never_published": True}
+    return None
+
+
 def patch_manifest(cratedir, deps):
     """Point kevy-* dependencies at local sources; keep everything else honest."""
     man = cratedir / "Cargo.toml"
@@ -107,7 +159,8 @@ def lift(crate, workdir):
     tgt = workdir / f"{crate}-pkg"
     archive, log = package(crate, tgt)
     if archive is None:
-        res["note"] = log.strip().splitlines()[-1][:200] if log.strip() else "package failed"
+        res["note"] = package_note(log)
+        res["unresolved"] = unresolved_dep(log, workspace_version())
         return res
     res["packaged"] = True
 

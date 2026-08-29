@@ -9,6 +9,19 @@ use crate::dist::Distance;
 
 /// Construction/search parameters (immutable once built).
 #[derive(Debug, Clone, Copy)]
+/// # Examples
+///
+/// ```
+/// use kevy_vector::{HnswParams, Distance};
+/// let d = HnswParams::default();
+/// // The declaration-time knobs, and what a caller gets without naming
+/// // any of them.
+/// assert_eq!((d.m, d.ef_construction), (16, 200));
+/// assert_eq!(d.distance, Distance::Cosine);
+///
+/// let wide = HnswParams { ef_construction: 400, ..HnswParams::default() };
+/// assert_eq!(wide.m, 16, "the rest carries over");
+/// ```
 pub struct HnswParams {
     /// Max bidirectional links per node per layer (layer 0 gets 2M).
     pub m: usize,
@@ -26,6 +39,24 @@ impl Default for HnswParams {
 
 /// Sizing counters.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// # Examples
+///
+/// ```
+/// use kevy_vector::{Hnsw, HnswParams};
+/// let mut h = Hnsw::new(2, HnswParams::default());
+/// h.apply(b"a", Some(vec![1.0, 0.0]));
+/// h.apply(b"b", Some(vec![0.0, 1.0]));
+/// let s = h.stats();
+/// assert_eq!(s.vectors, 2);
+/// assert_eq!(s.tombstones, 0);
+/// assert!(!s.rebuild_recommended);
+///
+/// // A removal leaves a tombstone behind rather than rewriting the graph.
+/// h.apply(b"a", None);
+/// let s = h.stats();
+/// assert_eq!(s.vectors, 1);
+/// assert_eq!(s.tombstones, 1);
+/// ```
 pub struct VectorStats {
     /// Living vectors.
     pub vectors: u64,

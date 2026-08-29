@@ -76,9 +76,15 @@ def main():
     stale = []
     mans = manifests()
     for man in mans:
+        # No `--no-deps`. With it, cargo answers from the manifest alone and
+        # never has to consult the lock, so every stale one passed: 21 of the
+        # 22 locks here failed `--locked` the moment the flag came off, some
+        # pinning kevy crates four majors back. The flag was asking the
+        # release image's question with the part that reads the lock removed.
+        # Full resolution costs 2.2s across all 22, which is still precommit.
         p = subprocess.run(
             ["cargo", "metadata", "--locked", "--format-version", "1",
-             "--no-deps", "--manifest-path", str(man)],
+             "--manifest-path", str(man)],
             cwd=ROOT, capture_output=True, text=True,
         )
         if p.returncode != 0:

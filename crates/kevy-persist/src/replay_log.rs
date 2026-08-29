@@ -9,7 +9,7 @@
 //! so the open paths pass `quiet_info` there. The corrupt-frame WARN is
 //! an incident signal and never silenced — it does not share the switch.
 
-use crate::replay::ReplayStop;
+use crate::replay_walk::ReplayStop;
 use std::path::Path;
 
 /// Emit the one-line replay summary. Goes to stderr because kevy-persist
@@ -41,6 +41,9 @@ pub(crate) fn log_replay_summary(
                  in {elapsed_ms} ms; trailing {dropped} bytes \
                  were a partial frame (crash mid-append, recoverable)"
             );
+        }
+        ReplayStop::LengthOutranFile { claimed, available } => {
+            outran_warn(&display, replayed, elapsed_ms, pos, claimed, available, dropped);
         }
         ReplayStop::CorruptFrame(err) => {
             let preview = preview_bytes(remainder);
@@ -76,4 +79,29 @@ fn preview_bytes(b: &[u8]) -> String {
         });
     }
     format!("hex=[{hex}] ascii=[{ascii}]")
+}
+
+/// The message a length field the file could not honour deserves.
+///
+/// It used to share `TruncatedTail`'s line, which calls the drop "a partial
+/// frame (crash mid-append, recoverable)" — CI printed exactly that for
+/// 27,485,178 bytes. A torn append leaves at most one incomplete record.
+#[allow(clippy::too_many_arguments)]
+fn outran_warn(
+    display: &std::path::Display<'_>,
+    replayed: u64,
+    elapsed_ms: u128,
+    pos: usize,
+    claimed: u64,
+    available: u64,
+    dropped: usize,
+) {
+    eprintln!(
+        "kevy WARN: AOF {display} replayed {replayed} commands in {elapsed_ms} ms \
+         then hit a record at byte {pos} whose length field claimed {claimed} \
+         bytes with only {available} left in the file; the trailing {dropped} \
+         bytes were dropped. This is not a partial frame from a crash \
+         mid-append — a torn append leaves at most one incomplete record. \
+         Turn on `replay_resync` to recover the good records behind it."
+    );
 }

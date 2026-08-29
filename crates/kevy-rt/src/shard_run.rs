@@ -43,6 +43,19 @@ pub(crate) fn replay_dispatch<C: Commands, A: ArgvView + ?Sized>(
 }
 
 impl<C: Commands> Shard<C> {
+    /// Tell the command set the two things about this shard it cannot
+    /// otherwise learn: which shard it is, and where this runtime
+    /// writes.
+    ///
+    /// One method because both reactors need both, and two lines
+    /// repeated in two entry points is how the second one comes to be
+    /// missing the day a third is added.
+    pub(crate) fn announce_to_commands(&self) {
+        self.commands.on_shard_start(self.id);
+        self.commands.on_data_dir(&self.data_dir);
+    }
+
+
     /// Owning shard of `key` under this server's routing scheme.
     #[inline]
     pub(crate) fn shard_of(&self, key: &[u8]) -> usize {
@@ -65,7 +78,7 @@ impl<C: Commands> Shard<C> {
     // stage extraction risks codegen change for zero readability win.
     // LOC-WAIVER: busy-poll reactor main loop (per-iter perf-sensitive).
     pub(crate) fn run(mut self, stop: Arc<AtomicBool>) -> io::Result<()> {
-        self.commands.on_shard_start(self.id);
+        self.announce_to_commands();
         // Restore: snapshot (state as of last SAVE) then replay the AOF (writes
         // since that SAVE). The AOF is truncated at each SAVE, so this never
         // double-applies. Replay goes straight to the store (no re-logging).

@@ -11,10 +11,18 @@
 #
 #   - a waiver for a stone that now meets the bar FAILS. The list must not
 #     rot; passing is how a waiver is removed, not by being forgotten.
-#   - the list may only shrink. Adding one is a deliberate act with a reason
-#     attached, the same way `--accept-growth` works for a set-ratchet.
+#   - the list may only shrink, and `[bar].max_waivers` is what says so.
+#     Adding a waiver means raising that number in the same commit, with the
+#     reason — the deliberate act, the same way `--accept-growth` works for a
+#     set-ratchet. Until 2026-08-29 this rule was prose only: a new waiver
+#     carrying a reason and a closes_when was accepted like any other, and a
+#     ratchet nobody counts is a wish.
 
 [bar]
+# How many waivers may stand. Zero: the four that were here are gone and
+# nothing has replaced them. Raising this is the deliberate act.
+max_waivers = 0
+
 # Unpack the published form outside the repository and its tests pass there.
 # This is the operational form of "any project could take these".
 lifts = true
@@ -41,64 +49,17 @@ must_be_measured = true
 semver_clean = true
 
 # ---------------------------------------------------------------------------
-# lifts — the published form ships code it cannot compile
-
-[[waiver]]
-crate = "kevy-bytes"
-rules = ["lifts", "min_tests"]
-reason = """
-tests/perf_gate.rs and examples/bench_sso.rs import kevy_bench, and the published manifest now
-DECLARES it — the source defect is fixed. What remains is that
-kevy-bench is not on crates.io yet, so `cargo package` cannot
-resolve the requirement and the crate will not package at all
-until the v6.0.0 chain publishes it first. That is a worse
-symptom than before and a better state: the manifest no longer
-lies, and the release chain publishes kevy-bench ahead of every
-crate that needs it.
-"""
-closes_when = "the v6.0.0 release publishes kevy-bench; the chain in .github/workflows/release.yml already places it first"
-
-[[waiver]]
-crate = "kevy-hash"
-rules = ["lifts", "min_tests"]
-reason = """
-tests/perf_gate.rs and examples/bench_hash.rs import kevy_bench, and the published manifest now
-DECLARES it — the source defect is fixed. What remains is that
-kevy-bench is not on crates.io yet, so `cargo package` cannot
-resolve the requirement and the crate will not package at all
-until the v6.0.0 chain publishes it first.
-"""
-closes_when = "the v6.0.0 release publishes kevy-bench; the chain in .github/workflows/release.yml already places it first"
-
-[[waiver]]
-crate = "kevy-map"
-rules = ["lifts", "min_tests"]
-reason = """
-tests/perf_gate.rs and examples/bench_vs_std.rs import kevy_bench, and the published manifest now
-DECLARES it — the source defect is fixed. What remains is that
-kevy-bench is not on crates.io yet, so `cargo package` cannot
-resolve the requirement and the crate will not package at all
-until the v6.0.0 chain publishes it first.
-"""
-closes_when = "the v6.0.0 release publishes kevy-bench; the chain in .github/workflows/release.yml already places it first"
-
-[[waiver]]
-crate = "kevy-ring"
-rules = ["lifts", "min_tests"]
-reason = """
-tests/perf_gate.rs and examples/bench_ring.rs import kevy_bench, and the published manifest now
-DECLARES it — the source defect is fixed. What remains is that
-kevy-bench is not on crates.io yet, so `cargo package` cannot
-resolve the requirement and the crate will not package at all
-until the v6.0.0 chain publishes it first.
-"""
-closes_when = "the v6.0.0 release publishes kevy-bench; the chain in .github/workflows/release.yml already places it first"
-
-# ---------------------------------------------------------------------------
-# Nothing else. kevy-uring's two waivers were removed on 2026-08-28 by the
-# first stone report taken on Linux: lift=True, 15 tests, 100% documented,
-# one executable example, 238 dead regions out of 853 measured. Every rule
-# it was waived from, it meets — and always did. What was wrong was the
-# instrument: the report had only ever been taken on macOS, where the crate
-# is `#![cfg(target_os = "linux")]` and therefore an empty module, and a
-# stone the producer cannot see reads as a stone that scores zero.
+# No waivers.
+#
+# The four that stood here — kevy-bytes, kevy-hash, kevy-map and kevy-ring,
+# each waived from `lifts` and `min_tests` because kevy-bench was not on
+# crates.io — were removed on 2026-08-28. They were a hand-written
+# declaration of something the gate can compute: `cargo package` strips path
+# dependencies and resolves what is left against crates.io, so between a
+# version bump and the publish that follows it, ANY crate with a
+# version-gated sibling is unliftable for that reason alone. stonegate now
+# names those readings as NOT TAKEN, by crate and by the dependency that
+# could not be selected, and says out loud that they are not passes.
+#
+# It is self-limiting in a way a waiver is not: after the publish the version
+# exists, and a crate that still cannot lift fails here for real.

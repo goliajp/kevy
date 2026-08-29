@@ -103,5 +103,14 @@ if problems:
     print("  or add it to NAMED in bench/propgate.sh with why it is durable-only.")
     sys.exit(1)
 
+# Nine call sites today. Zero means the search stopped finding the shape it
+# is about — a rename, a move, a changed spelling — and "every one of zero
+# is paired" is not the claim this gate exists to make.
+MIN_SITES = 5
+if checked < MIN_SITES:
+    print(f"propgate: REFUSED — found {checked} durable-write call site(s), "
+          f"expected at least {MIN_SITES}. The search is no longer finding "
+          f"what it is about.")
+    sys.exit(2)
 print(f"propgate: PASS — {checked} durable-write call site(s), each paired or named")
 PY

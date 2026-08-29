@@ -1,6 +1,6 @@
 {
   "name": "@goliapkg/kevy",
-  "version": "5.4.1",
+  "version": "6.0.0",
   "description": "kevy in the browser \u2014 a Redis-compatible engine compiled to WebAssembly: KV, TTL, pub/sub, and the rest of the data layer (secondary indexes, full-text and vector search, materialised views, tables), with OPFS/IndexedDB persistence and cross-tab pub/sub. Zero dependencies.",
   "type": "module",
   "main": "kevy.js",

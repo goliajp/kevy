@@ -27,9 +27,10 @@
 ## 发布规则(任何 vX.Y.Z 必读)
 
 **[.claude/skills/release/SKILL.md](skills/release/SKILL.md)** — 发布 skill。
-版本号活在**六层**(Cargo / 各语言 manifest / 包间互 pin / 活常量 / README
-声明 / **vendored 引擎字节**),只改一层就是发了一个谎;5.1.0 就是这么把
-14 个绑定留在 5.0.0 的,其中两个是用字节留的。对齐由 `python3
+版本号活在**七层**(Cargo / 各语言 manifest / 包间互 pin / 活常量 / README
+声明 / **vendored 引擎字节** / **Go 模块的主版本**),只改一层就是发了一个谎;
+5.1.0 就是这么把 14 个绑定留在 5.0.0 的,其中两个是用字节留的;第七层是
+6.0.0 加的 —— Go 把主版本放在导入路径里,写错就永远解析到错的主版本。对齐由 `python3
 tools/check_version_alignment.py` **机械判定**(在 CI 里,每层带下限,
 查不到东西也算失败),不靠记忆。tag = publish 触发器,**属主扣扳机**。
 渠道核验**看内容不看状态码**(软 404 会返回 200)。

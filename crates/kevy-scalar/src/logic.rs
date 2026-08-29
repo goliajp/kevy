@@ -6,6 +6,15 @@ use crate::{Scalar, ScalarError};
 
 /// Three-valued `AND`: `false` dominates, otherwise `NULL` if either
 /// side is unknown (PG: `NULL AND false = false`).
+/// # Examples
+///
+/// ```
+/// use kevy_scalar::{Scalar, logic_and};
+/// // Three-valued: FALSE dominates, so it answers without knowing the
+/// // unknown side.
+/// assert_eq!(logic_and(&Scalar::Bool(false), &Scalar::Null).unwrap(), Scalar::Bool(false));
+/// assert_eq!(logic_and(&Scalar::Bool(true), &Scalar::Null).unwrap(), Scalar::Null);
+/// ```
 pub fn logic_and(a: &Scalar, b: &Scalar) -> Result<Scalar, ScalarError> {
     match (as_bool3(a, "and", 0)?, as_bool3(b, "and", 1)?) {
         (Some(false), _) | (_, Some(false)) => Ok(Scalar::Bool(false)),
@@ -15,6 +24,14 @@ pub fn logic_and(a: &Scalar, b: &Scalar) -> Result<Scalar, ScalarError> {
 }
 
 /// Three-valued `OR`: `true` dominates (PG: `NULL OR true = true`).
+/// # Examples
+///
+/// ```
+/// use kevy_scalar::{Scalar, logic_or};
+/// // The mirror: TRUE dominates.
+/// assert_eq!(logic_or(&Scalar::Bool(true), &Scalar::Null).unwrap(), Scalar::Bool(true));
+/// assert_eq!(logic_or(&Scalar::Bool(false), &Scalar::Null).unwrap(), Scalar::Null);
+/// ```
 pub fn logic_or(a: &Scalar, b: &Scalar) -> Result<Scalar, ScalarError> {
     match (as_bool3(a, "or", 0)?, as_bool3(b, "or", 1)?) {
         (Some(true), _) | (_, Some(true)) => Ok(Scalar::Bool(true)),
@@ -24,6 +41,14 @@ pub fn logic_or(a: &Scalar, b: &Scalar) -> Result<Scalar, ScalarError> {
 }
 
 /// Three-valued `NOT`: `NOT NULL` is `NULL`.
+/// # Examples
+///
+/// ```
+/// use kevy_scalar::{Scalar, logic_not};
+/// assert_eq!(logic_not(&Scalar::Bool(true)).unwrap(), Scalar::Bool(false));
+/// // NOT UNKNOWN is UNKNOWN, not TRUE.
+/// assert_eq!(logic_not(&Scalar::Null).unwrap(), Scalar::Null);
+/// ```
 pub fn logic_not(a: &Scalar) -> Result<Scalar, ScalarError> {
     Ok(match as_bool3(a, "not", 0)? {
         Some(v) => Scalar::Bool(!v),
@@ -43,6 +68,15 @@ fn as_bool3(v: &Scalar, func: &'static str, arg: usize) -> Result<Option<bool>, 
 /// NULL propagation. Same-type comparisons only, plus the int↔float
 /// numeric promotion; PG orders `false < true`, text compares bytewise
 /// (C collation — the corpus subset's semantics).
+/// # Examples
+///
+/// ```
+/// use kevy_scalar::{Scalar, cmp_op};
+/// assert_eq!(cmp_op("<", &Scalar::Int(1), &Scalar::Int(2)).unwrap(), Scalar::Bool(true));
+/// // Comparison with NULL is UNKNOWN, not false — the trap SQL exists
+/// // to make explicit.
+/// assert_eq!(cmp_op("=", &Scalar::Null, &Scalar::Null).unwrap(), Scalar::Null);
+/// ```
 pub fn cmp_op(op: &str, a: &Scalar, b: &Scalar) -> Result<Scalar, ScalarError> {
     use core::cmp::Ordering;
     let ord = match (a, b) {
@@ -82,6 +116,17 @@ pub fn cmp_op(op: &str, a: &Scalar, b: &Scalar) -> Result<Scalar, ScalarError> {
 /// PG's boolean input vocabulary (`boolin`): case-insensitive,
 /// whitespace-trimmed `t/f true/false y/n yes/no on/off 1/0`.
 /// Anything else is a cast error (the caller reports it by name).
+/// # Examples
+///
+/// ```
+/// use kevy_scalar::parse_pg_bool;
+/// // PG's accepted spellings, case-folded.
+/// assert_eq!(parse_pg_bool("t"), Some(true));
+/// assert_eq!(parse_pg_bool("TRUE"), Some(true));
+/// assert_eq!(parse_pg_bool("no"), Some(false));
+/// // Anything else is None, so a caller cannot read a typo as false.
+/// assert_eq!(parse_pg_bool("maybe"), None);
+/// ```
 pub fn parse_pg_bool(text: &str) -> Option<bool> {
     match text.trim().to_ascii_lowercase().as_str() {
         "t" | "true" | "y" | "yes" | "on" | "1" => Some(true),

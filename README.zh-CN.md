@@ -21,7 +21,7 @@ redis-cli -p 6379 GET hello
 
 kevy 以三种形态交付，全部构建自同一个引擎：
 
-- **服务器**——兼容 Redis 线协议的守护进程。讲 RESP2，98 条命令的
+- **服务器**——兼容 Redis 线协议的守护进程。讲 RESP2，94 条命令的
   回复逐字节对照 valkey 9.1 校验。
 - **嵌入式库**——`kevy-embedded` 是去掉网络层的同一个引擎。把它放进
   Rust 二进制里，直接调用 `Store`。纯 Rust、零依赖，feature 分档从
@@ -242,8 +242,8 @@ loader API 与 ABI 契约见 [docs/zh/wasm.md](docs/zh/wasm.md)；
 
 | Workload | kevy | valkey 9.1 | 比值 |
 |---|---:|---:|---:|
-| `GET -c 50 -P 16` | 7.39 M/s | 3.29 M/s | **2.25×** |
-| `SET -c 50 -P 16` | 6.83 M/s | 1.74 M/s | **3.93×** |
+| `GET -c 50 -P 16` | 7.34 M/s | 3.16 M/s | **2.33×** |
+| `SET -c 50 -P 16` | 6.70 M/s | 1.70 M/s | **3.93×** |
 | Pub/sub 扇出（50 订阅） | 23.1 M/s | 5.1 M/s | **4.52×** |
 | 嵌入式 `get`（命中） | 9.0 M/s | — | （Redis 无进程内形态） |
 
@@ -253,9 +253,9 @@ loader API 与 ABI 契约见 [docs/zh/wasm.md](docs/zh/wasm.md)；
 
 | 引擎 | kevy 领先 |
 |---|---:|
-| valkey 9.1 | **2.25×** |
-| redis 8 | **1.27×** |
-| dragonfly | **2.60×** |
+| valkey 9.1 | **2.33×** |
+| redis 8 | **1.26×** |
+| dragonfly | **2.63×** |
 
 这些比值**低于 2026-07-19 之前公布的数字**，原因在尺子，不在引擎。
 早先的数字读的是 `redis-benchmark` 自报速率，而它在 `--threads` 下
@@ -286,7 +286,7 @@ recall 对齐（[`bench/PERF-LEDGER.md`](bench/PERF-LEDGER.md)）：
 
 ## 兼容性
 
-98 条命令的回复对照 valkey 9.1 逐字节校验，覆盖全部五种 Redis 数据
+94 条命令的回复对照 valkey 9.1 逐字节校验，覆盖全部五种 Redis 数据
 类型（String、Hash、List、Set、Sorted Set）外加 Streams、Pub/Sub
 （频道 + 模式）、事务（`MULTI` / `EXEC` / `WATCH` / `UNWATCH`）、
 阻塞式 pop，以及标准的运维操作和持久化 verb。完整命令清单见

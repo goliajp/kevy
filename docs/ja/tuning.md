@@ -79,6 +79,8 @@ AOFポリシーは`appendfsync`（configファイルまたは`CONFIG SET`）で�
 
 **コンテナのサイズは`used_memory`ではなく`process_rss_bytes`から決めてください。**`INFO memory`は両方を報告します。`used_memory`はストアのキースペース会計——`maxmemory`とティアリング予算が作用する対象——であり、`process_rss_bytes`はOSが実際にプロセスへ常駐させているメモリで、そこにはインデックスとビュー、接続とレプリケーションのバッファ、アロケータのオーバーヘッドと断片化が上乗せされています。`used_memory`からコンテナのメモリ上限を決めると、健康なプロセスをOOMキルします。観測したRSSに余裕を足して上限を設定してください。
 
+**オプトインのアロケータ。** `--features kevy-alloc`でビルドすると、glibc mallocがkevy自身のspanアロケータに置き換わります：churn下の定常RSSが約10 %小さくなり、スループットのコストは飽和したコレクション書き込みシャードにだけ現れます。メモリ容量が拘束条件になっているなら、そのビルドの価値はあります。実測のトレードは[docs/alloc.md](https://github.com/goliajp/kevy/blob/develop/docs/alloc.md)を参照してください。
+
 ### ネットワーク
 
 デフォルトのトランスポートはTCPです。クライアントが同一ホストにいるなら、Unixドメインソケットに切り替えてループバックTCPスタックを丸ごとスキップできます：

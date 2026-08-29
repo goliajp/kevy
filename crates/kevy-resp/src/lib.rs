@@ -37,6 +37,7 @@
 
 mod argv;
 pub mod ops_table;
+pub mod verb_arity;
 mod argv_borrowed;
 mod argv_pool;
 mod argv_view;
