@@ -17,6 +17,8 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20
 
 > **正在从手工维护的索引迁移？**先读 [table-migration.md](table-migration.md)——八条在生产上付过学费的经验，以及"表为什么存在"的实测漂移数字（89% 从未写入、76% 从未移除）。
 
+> **声明绝不 panic。** `TABLE.DECLARE` / `Store::table_declare` 对每一个非法 spec——未知列、重名、缺 PK，无论什么——都以一个具名错误作答，而被拒绝的声明什么也不安装。这是一条硬保证，由 `compile_table` 自行校验来强制，并被持续 fuzz（`table_spec`）：你启动路径上的一个坏 spec 是一行日志，不是一个重启循环。
+
 ## 声明模型
 
 `TABLE.DECLARE` 把每个子句编译成一个具名索引：
@@ -110,6 +112,8 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name email
 ```
 
 `FILTER` / `SORT` / `DISTINCT` / `FACET` / `OFFSET` 读的是索引**在 `VALUES` 声明时存下的列**——与它们的全文检索原型相同的子句语法、相同的跨 shard 精确语义（[text-search.md](text-search.md)）：`FILTER` 在翻页之前生效，所以一条排得很深的合格行仍能进入 `LIMIT`；`FACET` 统计整个匹配集；缺失值在两个方向都排在最后。点名一个索引没有存储的字段是一个错误，错误里列出它存了哪些。驱动谓词永远是被索引的 range / EQ / WHERE——不存在没有索引的 `WHERE`。
+
+`OFFSET` 是这里唯一一个越大越贵的子句，也是**这台引擎里唯一一个随分片增多而变慢的面**：每个分片都必须取 `limit + offset` 条命中，因为没有哪个分片能知道自己的命中里哪些能活过全局归并，于是原点为了交回 `limit` 条要实体化 `(limit + offset) × 分片数` 条。在范围内 30,000 行上返回 `LIMIT 20` 实测：`OFFSET 1000` 在 1 个分片上 1.53 ms，在 8 个分片上 6.90 ms。请用返回的游标分页——每页恒定，而且位置稳定（[rds-workloads.md](rds-workloads.md#order-by--limit--offset)）。
 
 **index-only 查询零行触达。**一条 FILTER / SORT / COUNT 查询完全从常驻 RAM 的索引作答——行读计数器在门禁套件里被断言 `== 0`（`bench/tablegate.sh`）。这正是这两个特性一起设计时瞄准的分层协同：开着[透明分层存储](tiering.md)时，一张全冷的表以**零磁盘读**服务 index-only 查询，只有最后的 hydration 页（`FIELDS …`）付冷读——每行一次、批量提交。不带 `VALUES` 列的索引在内存与查询路径上，与从未声明过这些列的 store 上的索引逐字节相同（零成本-未声明门禁）。
 

@@ -7,6 +7,14 @@ use crate::node::{MAX_KEYS, Node};
 impl<K: Ord> RankTree<K> {
     /// Insert `key`; returns `false` (and changes nothing) when an equal key
     /// is already present. O(log N).
+    /// # Examples
+    ///
+    /// ```
+    /// let mut t = kevy_ranktree::RankTree::new();
+    /// assert!(t.insert(5u32), "new key");
+    /// assert!(!t.insert(5), "already there — a set, not a multiset");
+    /// assert_eq!(t.len(), 1);
+    /// ```
     pub fn insert(&mut self, key: K) -> bool {
         let (inserted, split) = insert_rec(&mut self.root, key);
         if let Some((median, right)) = split {

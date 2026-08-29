@@ -39,7 +39,11 @@ pub struct ColdPageQuery<'a> {
 
 /// One cold hit: its page-order ingredients, ready to merge.
 pub struct ColdHit {
+    /// The row key this hit points at.
     pub key: Vec<u8>,
+    /// Its BM25 relevance. Comparable across segments because the
+    /// document-frequency corrections are applied before the merge, not
+    /// after — a per-segment score would not be.
     pub score: f64,
     /// The sort key, when the query sorts by a stored value.
     pub okey: Option<Vec<u8>>,

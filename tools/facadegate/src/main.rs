@@ -20,13 +20,27 @@ use kevy_embedded::{
 };
 
 fn main() {
-    kv_and_hash();
-    tables_end_to_end();
-    bad_specs_are_refusals_not_panics();
-    ensure_is_the_boot_verb();
+    // The families as data, so the pass line counts what actually ran
+    // rather than a number someone remembered to update. This release
+    // argued that "0 hits" and "0 hits across 709 files" are different
+    // sentences; a gate of its own that printed only PASS was the same
+    // sentence missing its second half.
+    let families: [(&str, fn()); 4] = [
+        ("kv+hash", kv_and_hash),
+        ("tables", tables_end_to_end),
+        ("bad specs refuse", bad_specs_are_refusals_not_panics),
+        ("ensure boots", ensure_is_the_boot_verb),
+    ];
+    for (_, f) in families {
+        f();
+    }
     io_result_world_uses_question_mark().expect("io interop");
     let _ = client_surface_compiles;
-    println!("facadegate: PASS");
+    println!(
+        "facadegate: PASS — {} families end-to-end plus io interop, and the \
+         network client's public surface, through facade imports only",
+        families.len(),
+    );
 }
 
 /// KV + hash through the facade — the rows tables are declared over.

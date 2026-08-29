@@ -35,6 +35,10 @@ impl Store {
         }
     }
 
+    /// One field's value, borrowed from the store. `Ok(None)` for a
+    /// missing key or a missing field — the two are indistinguishable to
+    /// HGET by design; `Err` only when `key` holds something that is not a
+    /// hash.
     pub fn hget(&mut self, key: &[u8], field: &[u8]) -> Result<Option<&[u8]>, StoreError> {
         self.purge_hash_ttl(key);
         match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
@@ -49,6 +53,8 @@ impl Store {
         }
     }
 
+    /// Whether `field` is present. A missing key is `false`, not an
+    /// error; a wrong-typed key is an error.
     pub fn hexists(&mut self, key: &[u8], field: &[u8]) -> Result<bool, StoreError> {
         self.purge_hash_ttl(key);
         match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
@@ -63,6 +69,7 @@ impl Store {
         }
     }
 
+    /// Field count. A missing key is 0, matching HLEN.
     pub fn hlen(&mut self, key: &[u8]) -> Result<usize, StoreError> {
         self.purge_hash_ttl(key);
         match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
@@ -122,6 +129,8 @@ impl Store {
         }
     }
 
+    /// Every field name, copied out. Unordered: a hash has no field
+    /// order to preserve, so two calls may differ in sequence.
     pub fn hkeys(&mut self, key: &[u8]) -> Result<Vec<Vec<u8>>, StoreError> {
         self.purge_hash_ttl(key);
         match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
@@ -136,6 +145,8 @@ impl Store {
         }
     }
 
+    /// Every value, copied out, in the same unordered sequence `hkeys`
+    /// would return its fields.
     pub fn hvals(&mut self, key: &[u8]) -> Result<Vec<Vec<u8>>, StoreError> {
         self.purge_hash_ttl(key);
         match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {

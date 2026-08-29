@@ -354,6 +354,7 @@ payload damage.
 | Torn final frame (killed mid-append) | truncated tail | every complete frame | the torn frame + un-fsynced window (`always`: the torn frame only) |
 | Zero-filled tail (power loss with un-fsynced pages) | truncated tail | every complete frame | as above |
 | Corrupt record mid-file | stop at the record (strict, default) | prefix before the record; the dropped region is quarantined | the region past the record — **or**, with `replay_resync` on, only the corrupt region itself: the good tail behind it is recovered (see the resync section) |
+| Length header that outran the file, mid-stream | `LengthOutranFile` — a truncation the file is too short to honour, sitting where a record should be | prefix before it; with `replay_resync` on, the good tail behind it as well | the region past it — **or**, with `replay_resync` on, only the skipped region itself |
 | Bit-rot inside a record's payload | CRC mismatch → corrupt record (v2 files) | nothing tainted — the record is refused, never applied | as the row above; v1-era files carry no checksum and replay bit-rot silently until their first rewrite upgrades them |
 
 **The no-black-hole invariant** (the 3.18 incident's fix, held by

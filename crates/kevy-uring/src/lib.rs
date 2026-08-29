@@ -38,6 +38,7 @@ mod pbr;
 mod prep;
 mod register;
 mod ring;
+mod setup;
 
 #[cfg(test)]
 mod ring_tests;

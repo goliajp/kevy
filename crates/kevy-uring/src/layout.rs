@@ -94,6 +94,28 @@ impl IoUringSqe {
 
 /// `struct __kernel_timespec` — the timeout payload an `IORING_OP_TIMEOUT`
 /// SQE points at (always 64-bit fields, independent of the C `time_t` width).
+///
+/// # Examples
+///
+/// The kernel wants seconds and a nanosecond remainder, never
+/// milliseconds, so the split is the whole job.
+///
+/// ```
+/// use kevy_uring::KernelTimespec;
+/// let t = KernelTimespec::from_millis(1_500);
+/// assert_eq!(t.tv_sec, 1);
+/// assert_eq!(t.tv_nsec, 500_000_000);
+/// ```
+///
+/// Sub-second timeouts carry no seconds at all, which is the case the
+/// reactor's park budget actually uses.
+///
+/// ```
+/// use kevy_uring::KernelTimespec;
+/// let t = KernelTimespec::from_millis(50);
+/// assert_eq!((t.tv_sec, t.tv_nsec), (0, 50_000_000));
+/// assert!(t.tv_nsec < 1_000_000_000, "the remainder never carries a second");
+/// ```
 #[repr(C)]
 #[derive(Default)]
 pub struct KernelTimespec {

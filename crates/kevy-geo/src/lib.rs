@@ -12,6 +12,30 @@
 //!   Redis-style GEO API is intentionally narrow; this crate matches that
 //!   narrowness rather than trying to be `proj` or `geo-types`.
 //! - A `no_std` crate — uses `f64::sqrt`/`sin`/`cos`/`atan2` from `std`.
+//!
+//! ```
+//! use kevy_geo::{encode_score, decode_score, haversine_meters, encode_base32_geohash};
+//!
+//! // The score is what kevy stores in the backing ZSet, so a GEO key is
+//! // an ordinary sorted set and every ZSet verb keeps working on it.
+//! let palermo = encode_score(13.361389, 38.115556).unwrap();
+//! let catania = encode_score(15.087269, 37.502669).unwrap();
+//! assert!(palermo != catania);
+//!
+//! // Decoding is lossy by construction — a 52-bit cell, not a point —
+//! // so it round-trips to within the cell, not to the bit.
+//! let (lon, lat) = decode_score(palermo);
+//! assert!((lon - 13.361389).abs() < 0.001);
+//! assert!((lat - 38.115556).abs() < 0.001);
+//!
+//! // Distance is on the sphere, in metres.
+//! let d = haversine_meters(13.361389, 38.115556, 15.087269, 37.502669);
+//! assert!((d - 166_274.0).abs() < 100.0);
+//!
+//! // And the human-facing form Redis reports.
+//! let h = encode_base32_geohash(13.361389, 38.115556);
+//! assert_eq!(&h[..5], b"sqc8b");
+//! ```
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
@@ -31,6 +55,9 @@ pub const EARTH_RADIUS_METERS: f64 = 6_372_797.560_856;
 /// Bits per axis in the 52-bit interleaved score. Matches Redis.
 pub const GEO_STEP: u32 = 26;
 
+mod search;
+pub use search::neighbor_score_ranges;
+
 /// Encode `(longitude, latitude)` as the 52-bit interleaved geohash
 /// stored as a ZSet score. Returns `None` if either coordinate is out
 /// of WGS84 range. The score is a non-negative integer ≤ 2⁵² so its
@@ -38,6 +65,27 @@ pub const GEO_STEP: u32 = 26;
 ///
 /// Bit layout matches Redis: latitude bits at even positions
 /// (0, 2, … 50), longitude bits at odd positions (1, 3, … 51).
+///
+/// # Examples
+///
+/// Palermo, the fixture Redis's own `GEOADD` documentation uses:
+///
+/// ```
+/// let score = kevy_geo::encode_score(13.361_389_29, 38.115_556_49).unwrap();
+/// assert_eq!(score, 3_479_099_956_230_698.0);
+/// assert_eq!(score, score as u64 as f64, "exact in f64, so a ZSet can hold it");
+/// ```
+///
+/// Out of range is `None`, not a clamp — a caller that clamped would store
+/// a point somewhere the user never named:
+///
+/// ```
+/// use kevy_geo::encode_score;
+/// assert!(encode_score(0.0, 86.0).is_none(), "beyond the WGS84 latitude");
+/// assert!(encode_score(181.0, 0.0).is_none());
+/// assert!(encode_score(f64::NAN, 0.0).is_none());
+/// assert!(encode_score(0.0, f64::INFINITY).is_none());
+/// ```
 pub fn encode_score(lon: f64, lat: f64) -> Option<f64> {
     if !(lon.is_finite() && lat.is_finite()) {
         return None;
@@ -55,6 +103,27 @@ pub fn encode_score(lon: f64, lat: f64) -> Option<f64> {
 /// Inverse of [`encode_score`]: decode a ZSet score back to the
 /// `(longitude, latitude)` *centre* of its geohash cell. Out-of-range
 /// scores saturate to the WGS84 bounds rather than producing garbage.
+///
+/// # Examples
+///
+/// The round trip lands on the cell centre, not the original point — a
+/// step-26 cell is metres across, and that is the resolution the format
+/// has:
+///
+/// ```
+/// use kevy_geo::{encode_score, decode_score};
+/// let (lon, lat) = (13.361_389_29, 38.115_556_49);
+/// let (dlon, dlat) = decode_score(encode_score(lon, lat).unwrap());
+/// assert!((dlon - lon).abs() < 1e-5 && (dlat - lat).abs() < 1e-5);
+/// ```
+///
+/// A score outside the 52-bit space saturates to the WGS84 corner rather
+/// than decoding garbage:
+///
+/// ```
+/// let (lon, lat) = kevy_geo::decode_score(-1.0);
+/// assert!(lon < -179.99 && lat < -85.05);
+/// ```
 pub fn decode_score(score: f64) -> (f64, f64) {
     let bits = score_to_bits(score);
     let (ilat, ilon) = deinterleave52(bits);
@@ -64,6 +133,21 @@ pub fn decode_score(score: f64) -> (f64, f64) {
 /// Great-circle distance in metres between two `(longitude, latitude)`
 /// points on the WGS84 sphere (mean radius — matches Redis). Returns
 /// `0.0` if the inputs are equal.
+/// # Examples
+///
+/// The Sicily fixture the cross-engine differential uses — Palermo to
+/// Catania, the same pair `GEODIST` is checked against.
+///
+/// ```
+/// let d = kevy_geo::haversine_meters(13.361_389, 38.115_556, 15.087_269, 37.502_669);
+/// assert!((d - 166_274.0).abs() < 100.0, "got {d}");
+/// ```
+///
+/// A point against itself is zero, not an epsilon.
+///
+/// ```
+/// assert_eq!(kevy_geo::haversine_meters(1.0, 2.0, 1.0, 2.0), 0.0);
+/// ```
 pub fn haversine_meters(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
     let phi1 = lat1.to_radians();
     let phi2 = lat2.to_radians();
@@ -80,6 +164,26 @@ pub fn haversine_meters(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
 /// (NOT the WGS84 ±85.05 range used for the score). The high 55 bits
 /// of a step-26 standard-range encoding are emitted in 5-bit groups;
 /// the low 3 bits of the 11th char are always zero (52 ÷ 5 = 10 r 2).
+///
+/// # Examples
+///
+/// Byte-equal with what Redis returns for the same point:
+///
+/// ```
+/// let h = kevy_geo::encode_base32_geohash(13.361_389_29, 38.115_556_49);
+/// assert_eq!(&h, b"sqc8b49rny0");
+/// ```
+///
+/// The eleventh character is always a zero-padded group — 52 bits do not
+/// divide into eleven groups of five — so every hash this returns ends in
+/// a character from the low half of the alphabet:
+///
+/// ```
+/// for (lon, lat) in [(0.0, 0.0), (-180.0, -90.0), (179.9, 89.9)] {
+///     let h = kevy_geo::encode_base32_geohash(lon, lat);
+///     assert_eq!(h[10], b'0', "the pad is not real precision");
+/// }
+/// ```
 pub fn encode_base32_geohash(lon: f64, lat: f64) -> [u8; 11] {
     const ALPHABET: &[u8; 32] = b"0123456789bcdefghjkmnpqrstuvwxyz";
     let bits = encode_bits_full_range(lon, lat);
@@ -214,79 +318,6 @@ fn score_to_bits(score: f64) -> u64 {
 /// large enough to span the globe or the centre is invalid.
 // similar_names (ilat/ilon, dlat/dlon): the lat/lon pairing is the geo
 // domain's standard vocabulary; renaming would hurt, not help.
-#[allow(clippy::similar_names)]
-pub fn neighbor_score_ranges(lon: f64, lat: f64, radius_m: f64) -> Vec<(f64, f64)> {
-    if !lon.is_finite() || !lat.is_finite() || radius_m <= 0.0 {
-        return vec![(0.0, (1u64 << 52) as f64 - 1.0)];
-    }
-    let step = estimate_step(radius_m);
-    if step <= 1 {
-        return vec![(0.0, (1u64 << 52) as f64 - 1.0)];
-    }
-    let (clat, clon) = encode_uniform_step(lon, lat, step);
-    let mut raw: Vec<(u64, u64)> = Vec::with_capacity(9);
-    let cells = 1i32 << step;
-    let shift = (GEO_STEP - step) * 2;
-    let inner_mask = (1u64 << shift) - 1;
-    for dlat in -1i32..=1 {
-        for dlon in -1i32..=1 {
-            let ilat = clat as i32 + dlat;
-            if !(0..cells).contains(&ilat) {
-                continue;
-            }
-            let ilon = (clon as i32 + dlon).rem_euclid(cells);
-            let prefix = interleave52(ilat as u32, ilon as u32);
-            let min = prefix << shift;
-            let max = min | inner_mask;
-            raw.push((min, max));
-        }
-    }
-    raw.sort_unstable();
-    merge_ranges(raw)
-}
-
-fn estimate_step(radius_m: f64) -> u32 {
-    const MERCATOR_MAX: f64 = 20_037_726.37;
-    if radius_m <= 0.0 {
-        return GEO_STEP;
-    }
-    let mut step = 1u32;
-    let mut r = radius_m;
-    while r < MERCATOR_MAX {
-        r *= 2.0;
-        step += 1;
-    }
-    step.saturating_sub(2).clamp(1, GEO_STEP)
-}
-
-fn encode_uniform_step(lon: f64, lat: f64, step: u32) -> (u32, u32) {
-    let cells = (1u64 << step) as f64;
-    let lat_clamped = lat.clamp(GEO_LAT_MIN, GEO_LAT_MAX);
-    let lon_clamped = lon.clamp(GEO_LON_MIN, GEO_LON_MAX);
-    let lat_off =
-        ((lat_clamped - GEO_LAT_MIN) / (GEO_LAT_MAX - GEO_LAT_MIN) * cells) as u32;
-    let lon_off =
-        ((lon_clamped - GEO_LON_MIN) / (GEO_LON_MAX - GEO_LON_MIN) * cells) as u32;
-    let max = (1u32 << step) - 1;
-    (lat_off.min(max), lon_off.min(max))
-}
-
-/// Sort + coalesce adjacent / overlapping integer ranges, then convert
-/// to the `(f64, f64)` form callers feed into `ZRANGEBYSCORE`. The 52-bit
-/// integer ↔ f64 mapping is exact within the f64 mantissa.
-fn merge_ranges(sorted: Vec<(u64, u64)>) -> Vec<(f64, f64)> {
-    let mut out: Vec<(u64, u64)> = Vec::with_capacity(sorted.len());
-    for (min, max) in sorted {
-        match out.last_mut() {
-            Some(prev) if prev.1.saturating_add(1) >= min => {
-                prev.1 = prev.1.max(max);
-            }
-            _ => out.push((min, max)),
-        }
-    }
-    out.into_iter().map(|(a, b)| (a as f64, b as f64)).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,6 +328,50 @@ mod tests {
     // caught: GEOHASH 11th-char padding and GEOPOS cell-midpoint rounding.
     const PALERMO: (f64, f64) = (13.361_389, 38.115_556);
     const CATANIA: (f64, f64) = (15.087_269, 37.502_669);
+
+    // `neighbor_score_ranges` had no test at all. The dead-path atlas
+    // (bench/DEAD-ATLAS.md) found every one of this crate's four
+    // never-executed regions inside it, which is what a public function
+    // with zero direct coverage looks like from the outside: exercised
+    // through the GEO commands, never at its own edges.
+
+    /// A radius past the Mercator span collapses the step to 1, and the
+    /// function answers with the whole keyspace rather than nine cells.
+    /// Reaching that branch needs `radius_m >= MERCATOR_MAX`, which no
+    /// caller had ever passed.
+    #[test]
+    fn a_radius_larger_than_the_world_returns_the_whole_range() {
+        let whole = (0.0, (1u64 << 52) as f64 - 1.0);
+        let r = neighbor_score_ranges(PALERMO.0, PALERMO.1, 3.0e7);
+        assert_eq!(r, vec![whole], "a radius past MERCATOR_MAX must not be tiled");
+
+        // Just under it still tiles, so the boundary is the reason for the
+        // answer and not an artefact of the size.
+        let tiled = neighbor_score_ranges(PALERMO.0, PALERMO.1, 1.0e6);
+        assert_ne!(tiled, vec![whole], "a radius inside the world must tile");
+        assert!(!tiled.is_empty());
+    }
+
+    /// Near the latitude limit the 3x3 neighbourhood runs off the top of
+    /// the grid, and those cells are skipped rather than wrapped —
+    /// longitude wraps, latitude does not. Nothing had exercised the skip.
+    #[test]
+    fn cells_past_the_latitude_limit_are_skipped_not_wrapped() {
+        let polar = neighbor_score_ranges(0.0, GEO_LAT_MAX - 0.000_01, 100.0);
+        let middle = neighbor_score_ranges(0.0, 0.0, 100.0);
+        assert!(!polar.is_empty(), "the pole still yields its own cells");
+        assert!(
+            polar.len() <= middle.len(),
+            "a neighbourhood clipped by the pole cannot exceed a full one: \
+             polar {} vs middle {}",
+            polar.len(),
+            middle.len()
+        );
+        for (lo, hi) in &polar {
+            assert!(lo <= hi, "each range is ordered");
+            assert!(*lo >= 0.0, "no range escapes the keyspace");
+        }
+    }
 
     #[test]
     fn geohash_string_matches_redis() {

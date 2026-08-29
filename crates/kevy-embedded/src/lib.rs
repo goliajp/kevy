@@ -143,7 +143,10 @@ mod store_glue;
 mod ops_scan;
 pub use ops_atomic::AtomicCtx;
 pub use ops_atomic_all::AtomicAllShards;
-pub use ops_bitmap::BitOp;
+// BITOP's operator now lives with its arithmetic in kevy-store, so
+// the server's wire path can reach the same one. Re-exported here
+// because it has been part of this crate's surface since 1.x.
+pub use kevy_store::BitOp;
 pub use ops_pipeline::Pipeline;
 mod pubsub;
 mod reaper;

@@ -14,6 +14,8 @@ const NSHARDS: usize = 8;
 
 use kevy_testnet::free_port;
 
+mod common;
+
 fn req(parts: &[&[u8]]) -> Vec<u8> {
     let mut v = format!("*{}\r\n", parts.len()).into_bytes();
     for p in parts {
@@ -24,12 +26,35 @@ fn req(parts: &[&[u8]]) -> Vec<u8> {
     v
 }
 
+/// Send one command and read back exactly one COMPLETE reply.
+///
+/// This was "sleep 30 ms, then `read()` once", which holds while every
+/// reply arrives in one segment and desynchronises the connection the
+/// first time one does not: the tail stays in the socket and every later
+/// reply is read a frame late. `table_e2e`'s copy failed exactly that way
+/// under load — `EXEC` answers `*1\r\n:0\r\n`, an assertion checked only
+/// the `*1\r\n` prefix, and `:0\r\n` came back on the front of the next
+/// reply. The frame now says when it is complete, and anything left over
+/// is a failure rather than a shift.
 fn cmd(s: &mut std::net::TcpStream, parts: &[&[u8]]) -> Vec<u8> {
     s.write_all(&req(parts)).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(30));
-    let mut buf = [0u8; 65536];
-    let n = s.read(&mut buf).unwrap();
-    buf[..n].to_vec()
+    let mut buf = Vec::new();
+    loop {
+        if let Some(n) = common::reply_len(&buf) {
+            assert_eq!(
+                n,
+                buf.len(),
+                "{} extra byte(s) after the reply — the connection is a frame ahead: {:?}",
+                buf.len() - n,
+                String::from_utf8_lossy(&buf[n..]).chars().take(60).collect::<String>()
+            );
+            return buf;
+        }
+        let mut chunk = [0u8; 65536];
+        let got = s.read(&mut chunk).unwrap();
+        assert!(got > 0, "server closed mid-reply (have {} bytes)", buf.len());
+        buf.extend_from_slice(&chunk[..got]);
+    }
 }
 
 struct Feed {
@@ -366,4 +391,63 @@ fn cross_shard_rename_reaches_the_feed_on_both_ends() {
     let src = frames(&mut c, src_sh);
     assert!(src.contains("DEL"), "source shard saw no removal of fsrc: {src}");
     assert!(src.contains("fsrc"), "the removal must name the key: {src}");
+}
+
+/// A cross-shard BITOP's result reaches the feed on the DESTINATION's
+/// shard — which is the same question as "did it reach a replica",
+/// because the feed reads the replication backlog.
+///
+/// `propgate` holds this at the source: every durable write in the
+/// runtime must be paired with a push, or named. It caught BITOP
+/// writing its result with `log_write` — the AOF alone — which is the
+/// exact shape of the three data-loss bugs that gate was written after.
+/// A source lint is the right place to catch it; this is the place to
+/// see it.
+#[test]
+fn a_cross_shard_bitop_result_reaches_the_feed_on_the_destination_shard() {
+    let srv = Feed::start();
+    let mut c = srv.connect();
+
+    // Sources and destination on three different shards, asked of the
+    // function the server routes with rather than assumed.
+    let of = |k: &str| kevy_rt::shard_of_key(k.as_bytes(), NSHARDS, false);
+    let mut names: Vec<String> = Vec::new();
+    for i in 0..4000 {
+        let k = format!("bitfeed-{i}");
+        if names.iter().all(|p| of(p) != of(&k)) {
+            names.push(k);
+        }
+        if names.len() == 3 {
+            break;
+        }
+    }
+    assert_eq!(names.len(), 3, "no three names landed on three shards");
+    let (src_a, src_b, dst) = (&names[0], &names[1], &names[2]);
+
+    cmd(&mut c, &[b"SETBIT", src_a.as_bytes(), b"0", b"1"]);
+    cmd(&mut c, &[b"SETBIT", src_b.as_bytes(), b"3", b"1"]);
+    // Where the destination's shard stands before the BITOP.
+    let dst_shard = of(dst);
+    let (generation, before) = parse_tail(&cmd(&mut c, &[b"FEED.TAIL", dst_shard.to_string().as_bytes()]));
+
+    let reply = cmd(&mut c, &[b"BITOP", b"OR", dst.as_bytes(), src_a.as_bytes(), src_b.as_bytes()]);
+    assert_eq!(reply, b":1\r\n".to_vec(), "BITOP did not store one byte");
+
+    let frames = cmd(
+        &mut c,
+        &[
+            b"FEED.READ",
+            dst_shard.to_string().as_bytes(),
+            generation.to_string().as_bytes(),
+            before.to_string().as_bytes(),
+            b"COUNT",
+            b"100",
+        ],
+    );
+    let text = String::from_utf8_lossy(&frames);
+    assert!(
+        text.contains(dst.as_str()),
+        "the destination's shard feed never saw {dst} after a cross-shard \
+         BITOP — the result was durable and unpropagated: {text}"
+    );
 }

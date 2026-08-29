@@ -120,6 +120,9 @@ impl SnapshotView {
     pub fn row_seg_files(&self) -> Vec<(u32, String)> {
         self.seg_files.clone()
     }
+    /// The frozen row segments' `(seq, file)` identities — always empty
+    /// off std, where there are no segment files to name. The std twin
+    /// above is the one that answers.
     #[cfg(not(all(feature = "std", not(target_arch = "wasm32"))))]
     pub fn row_seg_files(&self) -> Vec<(u32, String)> {
         Vec::new()

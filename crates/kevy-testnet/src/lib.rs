@@ -90,6 +90,11 @@ fn block_base() -> u16 {
         .1
 }
 
+/// Next offset within this process's block. Shared by [`free_port`] and
+/// [`free_port_block`] so a run reserved by one is never handed out a
+/// port at a time by the other — they draw from the same block.
+static NEXT: AtomicU16 = AtomicU16::new(1); // 0 is the anchor
+
 /// A port for this process to give to a server it is about to start.
 ///
 /// Comes from a block this process holds exclusively, so no other test
@@ -97,11 +102,6 @@ fn block_base() -> u16 {
 /// server does the binding, and the moment between this returning and
 /// that happening belongs to nobody — so pair it with [`assert_listening`]
 /// and a lost race becomes a clear failure instead of a strange one.
-/// Next offset within this process's block. Shared by [`free_port`] and
-/// [`free_port_block`] so a run reserved by one is never handed out a
-/// port at a time by the other — they draw from the same block.
-static NEXT: AtomicU16 = AtomicU16::new(1); // 0 is the anchor
-
 pub fn free_port() -> u16 {
     let base = block_base();
     for _ in 0..BLOCK * 4 {

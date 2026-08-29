@@ -28,6 +28,32 @@ pub(crate) fn wrong_args(out: &mut Vec<u8>, cmd: &str) {
     );
 }
 
+/// Nothing in the local dispatch chain handled this verb — say which of
+/// the two reasons that is.
+///
+/// A verb the metadata table knows is not an unknown command: it is a known
+/// one called with the wrong count, which the extension routes in
+/// `cmd_resolve` guard (`IDX.QUERY if args.len() >= 4`) and let fall
+/// through to here when the guard misses. Twelve of fourteen guarded verbs
+/// answered a wrong-arity call with "unknown command 'IDX.QUERY'" —
+/// telling the caller a command that exists does not — until this site
+/// started consulting the arity `verb_meta` had all along.
+///
+/// Redis's convention, and this engine's own everywhere else: negative
+/// arity is a minimum, positive is exact.
+pub(crate) fn unhandled_verb(out: &mut Vec<u8>, name: &[u8], nargs: usize) {
+    let mut buf = [0u8; 32];
+    let upper = upper_verb(name, &mut buf);
+    if let Some(meta) = std::str::from_utf8(upper).ok().and_then(crate::verb_meta::verb_meta) {
+        let (n, a) = (nargs as i64, i64::from(meta.arity));
+        if (a < 0 && n < -a) || (a > 0 && n != a) {
+            return wrong_args(out, &meta.name.to_lowercase());
+        }
+    }
+    let shown = String::from_utf8_lossy(name);
+    encode_error(out, &format!("ERR unknown command '{shown}'"));
+}
+
 /// `HELLO` — RESP2 server-info handshake (a flat field/value array). We always
 /// report `proto 2`; switching to a true RESP3 reply encoding is deferred.
 pub(crate) fn cmd_hello(out: &mut Vec<u8>) {
@@ -128,6 +154,35 @@ pub(crate) fn cmd_zrange<A: ArgvView + ?Sized>(
         return encode_error(out, ERR_NOT_INT);
     };
     emit_zrange(store.zrange(&args[1], s, e), withscores, proto, out);
+}
+
+/// `ZREVRANGE key start stop [WITHSCORES]` — the by-rank range read
+/// from the high end.
+///
+/// `Store::zrevrange` does the work — one implementation, shared with
+/// the embedded facade. Each surface had written its own before, and
+/// both had written the same bug: a positive start clamped up to the
+/// last rank, so `ZREVRANGE z 5 10` on a three-member set answered a
+/// member where Redis answers none. They agreed with each other, which
+/// is why the wire-vs-facade differential passed it and the three-way
+/// against a real valkey did not.
+pub(crate) fn cmd_zrevrange<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+    proto: RespVersion,
+) {
+    if args.len() < 4 || args.len() > 5 {
+        return wrong_args(out, "zrevrange");
+    }
+    let withscores = args.len() == 5;
+    if withscores && !args[4].eq_ignore_ascii_case(b"WITHSCORES") {
+        return encode_error(out, "ERR syntax error");
+    }
+    let (Some(start), Some(stop)) = (arg_i64(&args[2]), arg_i64(&args[3])) else {
+        return encode_error(out, ERR_NOT_INT);
+    };
+    emit_zrange(store.zrevrange(&args[1], start, stop), withscores, proto, out);
 }
 
 /// `ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]`.

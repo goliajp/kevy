@@ -8,6 +8,8 @@
 //! leaves the tree untouched (the batch is read before it is cut),
 //! and a restart drops the segment set and re-slides.
 
+//! Every public item here is documented and the lint holds it.
+#![warn(missing_docs)]
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -28,6 +30,9 @@ use kevy_index::{
 
 /// One index's window state on one shard.
 pub struct WindowRt {
+    /// The declared window — width, column and retention — as the catalog
+    /// recorded it. Fixed for the life of the index; everything else here
+    /// is state that moves under it.
     pub spec: WindowSpec,
     /// Which tree shape the boundary lives in — a plain i64 index or
     /// a composite the window column leads (see [`WindowShape`]).
@@ -70,6 +75,10 @@ pub struct WindowRt {
 }
 
 impl WindowRt {
+    /// An empty window state: boundary at `i64::MIN` so the first row
+    /// admitted sets it, no cold segments, and a fresh bloom. Nothing is
+    /// read from disk here — a restart rebuilds by replaying, not by
+    /// trusting a persisted boundary.
     pub fn new(spec: WindowSpec, shape: WindowShape) -> Self {
         Self {
             spec,
@@ -84,6 +93,10 @@ impl WindowRt {
         }
     }
 
+    /// Whether any rows have been frozen out of the live tree. A query
+    /// that answers `false` here can skip the cold merge entirely, which
+    /// is the common case and the reason this is a field check rather
+    /// than a directory scan.
     pub fn has_cold(&self) -> bool {
         !self.cold.is_empty()
     }

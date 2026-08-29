@@ -1,0 +1,127 @@
+# Every dependency outside the kevy-* family, declared with a reason.
+#
+# The constraint has been load-bearing prose since L2 ("pure Rust, zero
+# crates.io dependencies; the only libc is the unavoidable OS boundary,
+# hand-bound in kevy-sys"). Prose cannot stop a dependency from arriving.
+# This file makes it mechanical, the way suite/architecture.toml made the
+# layering model mechanical in 5.3.
+#
+# Checked by tools/check_dependencies.py, which reads `cargo metadata` and
+# requires set EQUALITY in both directions: an undeclared dependency fails,
+# and a declared dependency that no longer exists fails too. The map must
+# not rot.
+#
+# `ships` is computed, not declared: a dependency ships when its kind is
+# normal, its target cfg is unconditional, and it is either non-optional or
+# reachable from the default feature set. dev-dependencies, build
+# dependencies, cfg-gated targets and non-default optional features are all
+# compiled here and absent from what a user installs. The gate recomputes
+# `ships` and fails if a declaration disagrees with it — the field is a
+# claim under review, not a switch.
+#
+# provenance:
+#   third-party      — someone else's crate
+#   first-party      — ours, published separately (a sister project)
+#
+# Floor rule (same as every gate here): finding zero packages, or an empty
+# declaration list, is a failure of the selector, not a pass.
+
+# The hard rule the layering makes checkable. Stone is business-free and
+# liftable into any project; a third-party dependency in a stone is a
+# dependency it hands to everyone who lifts it.
+[rules]
+no_shipping_third_party_in = ["stone"]
+
+# ---------------------------------------------------------------------------
+
+[[dependency]]
+crate      = "kevy-client-async"
+dep        = "tokio"
+kinds      = ["normal", "dev"]
+target     = "-"
+optional   = true
+in_default = true
+ships      = true
+layer      = "cement"
+provenance = "third-party"
+reason = """
+This crate exists to adapt the kevy client to third-party async runtimes.
+The runtime is the subject, not an implementation detail that leaked in:
+removing tokio here does not remove a dependency, it removes the feature.
+It is the default feature, so a plain `cargo add kevy-client-async` does
+pull tokio — the one third-party crate that ships in any default build of
+anything in this workspace.
+"""
+
+[[dependency]]
+crate      = "kevy-client-async"
+dep        = "smol"
+kinds      = ["normal", "dev"]
+target     = "-"
+optional   = true
+in_default = false
+ships      = false
+layer      = "cement"
+provenance = "third-party"
+reason = "Same adapter surface as tokio, behind the non-default `smol` feature."
+
+[[dependency]]
+crate      = "kevy-client-async"
+dep        = "async-std"
+kinds      = ["normal", "dev"]
+target     = "-"
+optional   = true
+in_default = false
+ships      = false
+layer      = "cement"
+provenance = "third-party"
+reason = "Same adapter surface as tokio, behind the non-default `async-std` feature."
+
+[[dependency]]
+crate      = "kevy-lua"
+dep        = "luna-core"
+kinds      = ["normal", "dev"]
+target     = "-"
+optional   = false
+in_default = true
+ships      = true
+layer      = "steel"
+provenance = "first-party"
+reason = """
+luna is our own pure-Rust Lua VM, published separately because it is a stone
+that outgrew this workspace. It ships, unconditionally, and that is the point
+of the EVAL surface. It carries no C: the L2 constraint forbids reaching for
+C to get an algorithm or a data structure, and luna is the opposite of that
+— the algorithm written in Rust rather than linked from elsewhere.
+"""
+
+[[dependency]]
+crate      = "kevy-ring"
+dep        = "loom"
+kinds      = ["normal"]
+target     = "cfg(loom)"
+optional   = false
+in_default = true
+ships      = false
+layer      = "stone"
+provenance = "third-party"
+reason = """
+The concurrency model checker, behind `cfg(loom)`, which no normal or release
+build sets. It replaces the atomics under an exhaustive interleaving search;
+there is no way to run that check without linking it, and no way for it to
+reach a user — the same class as miri and cargo-fuzz, which are external
+tools rather than dependencies. A stone may carry this precisely because it
+does not ship; `[rules] no_shipping_third_party_in` is what holds that line.
+"""
+
+[[dependency]]
+crate      = "kevy-rt"
+dep        = "loom"
+kinds      = ["normal"]
+target     = "cfg(loom)"
+optional   = false
+in_default = true
+ships      = false
+layer      = "steel"
+provenance = "third-party"
+reason = "Same cfg(loom) model checker as kevy-ring, over the reactor's atomics."

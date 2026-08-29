@@ -98,12 +98,29 @@ pub enum ReplicaApply {
     /// `gate`: dropped by the shard after the load lands (see
     /// [`SnapshotGate`]); `None` when the runner has nothing to hang
     /// on the completion.
-    SnapshotEnd { ack_offset: u64, routed: bool, gate: Option<SnapshotGate> },
+    SnapshotEnd {
+        /// Upstream offset the snapshot corresponds to; the shard acks from
+        /// here once the load lands.
+        ack_offset: u64,
+        /// `true` when each shard received only its own hash slice;
+        /// `false` when the whole keyspace was broadcast and each shard
+        /// must filter.
+        routed: bool,
+        /// Dropped by the shard once the load completes, which is how the
+        /// runner learns it finished. `None` when nothing is waiting.
+        gate: Option<SnapshotGate>,
+    },
     /// One live mutation frame to be applied via `kevy::dispatch`
     /// (inside a [`crate::ReplicatedApplyGuard`] scope so the apply
     /// doesn't re-push into this shard's downstream
     /// `ReplicationSource`).
-    Frame { offset: u64, argv: Argv },
+    Frame {
+        /// Upstream offset this frame sits at, used for the apply position
+        /// and the ack.
+        offset: u64,
+        /// The command to apply, already parsed.
+        argv: Argv,
+    },
 }
 
 /// Sender end of a per-shard replica inbox. `Send + Clone + Sync`

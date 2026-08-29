@@ -69,12 +69,14 @@ mod cmd_resolve;
 mod commands;
 mod replication;
 mod dispatch;
+mod dispatch_bitmap;
 mod dispatch_collections;
 mod dispatch_collections_v127;
 mod dispatch_resp3;
 mod dispatch_geo;
 mod dispatch_replay;
 mod dispatch_stream;
+mod dispatch_strings;
 mod elect_persist;
 mod ops;
 mod replica_runner;
@@ -92,7 +94,11 @@ pub use state::{KevyCommands, RuntimeState};
 
 /// What to do with a connection after draining its buffered commands.
 pub enum AfterDrain {
+    /// Keep serving this connection — the ordinary outcome.
     KeepOpen,
+    /// Close it: the client sent QUIT, or the connection is being shut
+    /// down for a reason the drain already replied about. The reply is
+    /// written before the close, so this is not an abort.
     Close,
 }
 

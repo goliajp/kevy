@@ -38,6 +38,50 @@ pub enum Route {
     /// zset/set algebra `*STORE` family: gather sources, combine
     /// per [`crate::message::ZCombine`], materialize at `args[1]`.
     ZAlgebraStore(crate::ZCombine),
+    /// `BITOP op dst src [src …]` — N sources gathered, combined, and
+    /// stored at a destination that sits at `args[2]`, not `args[1]`.
+    /// `ZAlgebraStore` is the same shape with a different payload: it
+    /// combines set and zset members, not raw bytes.
+    ///
+    /// Carries nothing. An earlier draft carried the operator so the
+    /// router could pick it, which meant parsing the operator twice and
+    /// needing a fallback route for the argv the router could not parse
+    /// — and that fallback led to a dispatch table with no BITOP arm,
+    /// so a malformed BITOP would have been answered "unknown command".
+    /// The route says only that this is a BITOP; every refusal is
+    /// worded once, in `exec_bitop`.
+    ///
+    /// Why it cannot ride `Single(1)`, in one assertion:
+    ///
+    /// ```
+    /// use kevy_rt::{Route, shard_of_key};
+    /// // `Single(1)` hashes args[1]. For BITOP that is the OPERATOR.
+    /// let operator = b"AND".as_slice();
+    /// let destination = b"dst".as_slice();
+    /// assert_ne!(shard_of_key(operator, 8, false), shard_of_key(destination, 8, false));
+    /// assert!(matches!(Route::BitOpStore, Route::BitOpStore));
+    /// ```
+    BitOpStore,
+    /// `COPY src dst [REPLACE]` — two keys, so the same hazard the
+    /// rename and list-move routes exist for: left to the catch-all
+    /// `Single(1)` the copy lands in the SOURCE's shard, where no later
+    /// read of the destination will ever look. Same-shard pairs take
+    /// one atomic op; cross-shard pairs run Read → Put, and need no
+    /// rollback because the read does not remove anything.
+    ///
+    /// Why it cannot ride `Single(1)`, in one assertion:
+    ///
+    /// ```
+    /// use kevy_rt::{Route, shard_of_key};
+    /// // A pair of ordinary key names on an eight-shard server.
+    /// let (src, dst) = (b"ca".as_slice(), b"cb".as_slice());
+    /// assert_ne!(shard_of_key(src, 8, false), shard_of_key(dst, 8, false));
+    /// // `Single(1)` hashes args[1] — the SOURCE — and runs the whole
+    /// // command there, so the copy would land in a shard no later read
+    /// // of `dst` ever looks at, while the reply said it worked.
+    /// assert!(matches!(Route::Copy, Route::Copy));
+    /// ```
+    Copy,
     /// Geo `*STORE` family — `GEOSEARCHSTORE dst src …` and
     /// `GEORADIUS[BYMEMBER] src … STORE|STOREDIST dst`.
     ///
@@ -53,7 +97,13 @@ pub enum Route {
     /// The search runs on `src`'s shard ([`crate::Commands::geo_search`]),
     /// the write lands on `dst`'s (`Op::ZStoreResult`) — see
     /// [`crate::exec_geostore`].
-    GeoStore { src: Vec<u8>, dst: Vec<u8> },
+    GeoStore {
+        /// Key the search reads — its shard runs the query.
+        src: Vec<u8>,
+        /// Key the result is written to — its shard takes the write, which
+        /// is why both keys have to be extracted before routing.
+        dst: Vec<u8>,
+    },
     /// `FEED.READ <shard> <gen> <offset> …` — shard-index routed.
     FeedRead,
     /// `FEED.TAIL <shard>`.
@@ -78,7 +128,14 @@ pub enum Route {
     /// `master_repl_offset` at arm time; the origin replies the MIN.
     /// `timeout_ms == 0` = the Redis "wait forever" form (the runtime
     /// hard-caps it — see `exec_replwait::WAIT_HARD_CAP_MS`).
-    ReplWait { numreplicas: u32, timeout_ms: u64 },
+    ReplWait {
+        /// How many replicas the caller wants acked. Reported per shard;
+        /// the origin answers the minimum across them.
+        numreplicas: u32,
+        /// Deadline in milliseconds. `0` is Redis's wait-forever form and
+        /// is hard-capped by the runtime rather than honoured literally.
+        timeout_ms: u64,
+    },
     /// `REPL.TOKEN` on a primary — gather every shard's
     /// `(feed generation, next_offset)` pair into one flat array.
     ReplToken,
@@ -90,8 +147,13 @@ pub enum Route {
     /// `miss` because the upstream address is its knowledge, not the
     /// runtime's.
     ReplBarrier {
+        /// One target apply-position per shard, indexed by shard number.
         offsets: Vec<u64>,
+        /// Deadline in milliseconds for every shard to reach its target.
         timeout_ms: u64,
+        /// The reply to send if any shard misses its deadline, pre-built by
+        /// the command layer because it names the upstream primary — the
+        /// runtime does not know that address.
         miss: Vec<u8>,
     },
     /// `KEYS pattern` — every shard returns its matching keys.
@@ -107,6 +169,8 @@ pub enum Route {
     RandomKey,
     /// `SUBSCRIBE` / `UNSUBSCRIBE` — connection-level (modifies this conn).
     Subscribe,
+    /// The other half of the pair above: drops this conn's channel
+    /// subscriptions, all of them when no channel is named.
     Unsubscribe,
     /// `PSUBSCRIBE pattern [pattern ...]` / `PUNSUBSCRIBE [pattern ...]` —
     /// like Subscribe/Unsubscribe but the conn registers Redis-glob
@@ -114,6 +178,9 @@ pub enum Route {
     /// frame. Connection-level (modifies this conn + shared pattern
     /// registry).
     Psubscribe,
+    /// The other half of the pattern pair: drops this conn's pattern
+    /// subscriptions, all of them when no pattern is named, and removes
+    /// them from the shared registry.
     Punsubscribe,
     /// `PUBLISH channel message` — delivered to subscribers on every core.
     Publish,
@@ -179,8 +246,14 @@ pub enum Route {
     /// forms; blocking reads park on the origin shard instead (see the
     /// cross-shard BLOCK arbiter).
     XReadGather {
+        /// `(stream key, start id)` per stream, already paired — the wire
+        /// form lists all keys and then all ids, which is not routable.
         streams: Vec<(Vec<u8>, Vec<u8>)>,
+        /// `COUNT`, applied per stream rather than across the gather.
         count: Option<usize>,
+        /// `Some` turns each per-shard sub-query into an XREADGROUP, which
+        /// makes it a write: the PEL update happens on the stream's own
+        /// shard and is logged there.
         group: Option<XGroupCtx>,
     },
 }

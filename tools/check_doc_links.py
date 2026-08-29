@@ -54,6 +54,26 @@ def slug(text):
     return re.sub(r"\s", "-", text)
 
 
+def renderer_agrees(titles):
+    """The renderer's slug must be this one.
+
+    This file computes GitHub's slug because that is the anchor a reader's
+    click uses; `tools/md.py` computes the ids the built site actually
+    carries, and its TypeScript port carries them to the browser. Nothing
+    compared the two, and they disagreed on 160 headings — `A — B` was
+    `a--b` here and `a-b` there, `MAX_INDEXES` kept its underscore here and
+    lost it there, `--accept-shards` kept its leading dashes here and had
+    them stripped there. 21 links pointed at those headings: green on
+    github.com, 404 on the site, and no gate could see it because each
+    checked only its own half.
+    """
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("kevy_md", ROOT / "tools/md.py")
+    md = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(md)
+    return [(t, slug(t), md.slug(t)) for t in titles if slug(t) != md.slug(t)]
+
+
 def anchors_of(text):
     """Every anchor a page offers: its headings, plus explicit ids."""
     body = FENCE.sub("", text)
@@ -81,6 +101,19 @@ def main():
         ROOT / p for p in sorted(tracked) if not any(p.startswith(s) for s in SKIP_DIRS)
     ]
     anchors = {f: anchors_of(f.read_text(encoding="utf-8")) for f in files}
+
+    titles = []
+    for f in files:
+        body = FENCE.sub("", f.read_text(encoding="utf-8"))
+        titles += [t for _, t in HEADING.findall(body)]
+    drift = renderer_agrees(titles)
+    if drift:
+        print(f"REFUSED: {len(drift)} heading(s) slug differently in tools/md.py "
+              f"than in the scheme these links are validated against.")
+        for t, here, there in drift[:10]:
+            print(f"  «{t[:52]}»  links: #{here}  site: #{there}")
+        print("  Every link to one of these is green here and 404 on the built site.")
+        return 2
 
     bad, n_links = [], 0
     for f in files:
@@ -121,6 +154,15 @@ def main():
         print()
         print(f"REFUSED: {len(bad)} dead doc links across {len(files)} files.")
         return 1
+    # Floor. Six gates in this release reported a clean verdict over an
+    # empty tree; this was the seventh, printing "0 markdown links across 0
+    # files, none dead" and exiting 0. A repository with no documentation is
+    # a broken selector, not a repository with no dead links.
+    if not files or not n_links:
+        print(f"REFUSED: {len(files)} file(s) and {n_links} link(s) — the "
+              f"selector found nothing, which is not the same as finding "
+              f"nothing wrong")
+        return 2
     print(f"ok: {n_links} markdown links across {len(files)} files, none dead")
     return 0
 

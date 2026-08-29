@@ -12,6 +12,9 @@ use crate::value::{SmallBytes, Value};
 use crate::{Entry, Store, StoreError};
 
 impl Store {
+    /// Append to a string, creating it if absent, and return the new
+    /// length. An integer-encoded value is formatted back to bytes first —
+    /// APPEND leaves nothing integer-encoded.
     pub fn append(&mut self, key: &[u8], data: &[u8]) -> Result<usize, StoreError> {
         self.tier_resolve(key, crate::value::COLD_TAG_STRING)?; // cold string pages in
         let outcome = match self.live_entry_mut(key) {

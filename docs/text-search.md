@@ -220,7 +220,8 @@ Measured envelope (receipts in the bench tree):
   not aspirations.
 - [`bench/PERF-LEDGER.md`](../bench/PERF-LEDGER.md) records the
   comparative shootout: BM25 top-10 at +21% qps with a p95 tie
-  against RediSearch's `FT.SEARCH` on the same corpus.
+  against the `FT.SEARCH` of RediSearch in redis-stack 7.4.7, on
+  the same corpus.
 
 The write side is the standard index tax: one hash-field read plus
 one segment update per matching index per write; an empty catalog

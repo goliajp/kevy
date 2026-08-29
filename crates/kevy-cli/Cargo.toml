@@ -11,6 +11,12 @@ readme = "README.md"
 keywords = ["redis", "cli", "repl", "resp", "kevy"]
 categories = ["command-line-utilities", "database"]
 
+
+# v6 — not packaged: these reference a dependency the published manifest
+# cannot declare, and `cargo package` would ship source that does not
+# compile. These four drive a live server through kevy-testnet, which is dev-only
+# scaffolding and never published.
+exclude = ["tests/backfill_keys_union.rs", "tests/lint_shapes.rs", "tests/migrate_roundtrip.rs", "tests/sql_compile_apply.rs"]
 [lints]
 workspace = true
 
@@ -23,13 +29,13 @@ name = "kevy-cli"
 path = "src/main.rs"
 
 [dependencies]
-kevy-tmpdir = { path = "../kevy-tmpdir", version = "5.4.1" }
-kevy-embedded = { path = "../kevy-embedded", version = "5.4.1" }
-kevy-persist = { path = "../kevy-persist", version = "5.4.1" }
-kevy-resp = { path = "../kevy-resp", version = "5.4.1" }
-kevy-resp-client = { path = "../kevy-resp-client", version = "5.4.1" }
-kevy-scalar = { path = "../kevy-scalar", version = "5.4.1" }
-kevy-sql = { path = "../kevy-sql", version = "5.4.1" }
+kevy-tmpdir = { path = "../kevy-tmpdir", version = "6.0.0" }
+kevy-embedded = { path = "../kevy-embedded", version = "6.0.0" }
+kevy-persist = { path = "../kevy-persist", version = "6.0.0" }
+kevy-resp = { path = "../kevy-resp", version = "6.0.0" }
+kevy-resp-client = { path = "../kevy-resp-client", version = "6.0.0" }
+kevy-scalar = { path = "../kevy-scalar", version = "6.0.0" }
+kevy-sql = { path = "../kevy-sql", version = "6.0.0" }
 
 [dev-dependencies]
 kevy-testnet = { path = "../kevy-testnet" }

@@ -36,6 +36,9 @@ impl Store {
         keys.iter().filter(|k| self.live_entry(k).is_some()).count()
     }
 
+    /// Set `key`'s deadline `ttl` from now. `false` if the key is not
+    /// live — a key already past its own deadline is reaped first, so
+    /// EXPIRE on it answers as if it were absent rather than reviving it.
     pub fn expire(&mut self, key: &[u8], ttl: Duration) -> bool {
         let now = now_ns();
         if !self.reap(key, now) {
@@ -207,6 +210,8 @@ impl Store {
         RenameOutcome::Renamed
     }
 
+    /// Drop `key`'s deadline, making it immortal. `false` if the key is
+    /// not live, or was live with no deadline to drop.
     pub fn persist(&mut self, key: &[u8]) -> bool {
         let now = now_ns();
         if !self.reap(key, now) {
@@ -237,6 +242,9 @@ impl Store {
         }
     }
 
+    /// Redis's TYPE name for what `key` holds — `"none"` when it is
+    /// absent or expired. `&mut` because an expired key is reaped on the
+    /// way past rather than reported as its old type.
     pub fn type_of(&mut self, key: &[u8]) -> &'static str {
         let now = now_ns();
         if !self.reap(key, now) {
@@ -245,6 +253,10 @@ impl Store {
         self.map.get(key).map_or("none", |e| e.value.type_name())
     }
 
+    /// Live keys in this shard. Counts entries, not bytes, and does not
+    /// reap: a key past its deadline that nothing has touched yet is still
+    /// in the map and still counted here, exactly as Redis's DBSIZE
+    /// behaves against lazily-expired keys.
     pub fn dbsize(&self) -> usize {
         self.map.len()
     }
@@ -326,6 +338,11 @@ impl Store {
         self.insert_entry(SmallBytes::from_vec(key), Entry::new(value, expire_at));
     }
 
+    /// Install a string from a snapshot or AOF replay, re-deriving the
+    /// value variant through SET's own encoding rules so a loaded key
+    /// lands where a live SET of the same bytes would. See the comment
+    /// inside: getting this wrong made every loaded string permanently
+    /// unspillable.
     pub fn load_str(&mut self, key: Vec<u8>, value: Vec<u8>, ttl_ms: Option<u64>) {
         // Re-materialize through the SET encoding rules so a loaded
         // value lands on the exact variant a live SET of these bytes
@@ -339,6 +356,10 @@ impl Store {
         self.insert_loaded(key, value, ttl_ms);
     }
 
+    /// Install a hash from a snapshot or AOF replay as `(field, value)`
+    /// pairs. Both sides become `SmallBytes`, so short values live in the
+    /// slot rather than in their own allocation; see the comment inside for
+    /// where a giant hash goes instead.
     pub fn load_hash(
         &mut self,
         key: Vec<u8>,
@@ -364,6 +385,7 @@ impl Store {
         self.insert_loaded(key, Value::Hash(Arc::new(hash_data)), ttl_ms);
     }
 
+    /// Install a list from a snapshot or AOF replay, in the given order.
     pub fn load_list(&mut self, key: Vec<u8>, items: Vec<Vec<u8>>, ttl_ms: Option<u64>) {
         // Same encoding switch a live push applies: a list past the
         // promotion threshold loads straight into segments, so a
@@ -378,6 +400,8 @@ impl Store {
         self.insert_loaded(key, value, ttl_ms);
     }
 
+    /// Install a set from a snapshot or AOF replay. Duplicate members in
+    /// the input collapse, as they would on SADD.
     pub fn load_set(&mut self, key: Vec<u8>, members: Vec<Vec<u8>>, ttl_ms: Option<u64>) {
         // Same encoding switch a live SADD applies: a giant set loads
         // straight into buckets, COW-ready.
@@ -433,6 +457,9 @@ impl Store {
         out
     }
 
+    /// Install a sorted set from a snapshot or AOF replay as
+    /// `(member, score)` pairs. Order in the input does not matter — the
+    /// set orders itself, as it would on ZADD.
     pub fn load_zset(&mut self, key: Vec<u8>, pairs: Vec<(Vec<u8>, f64)>, ttl_ms: Option<u64>) {
         let mut z = ZSetData::default();
         for (m, score) in pairs {

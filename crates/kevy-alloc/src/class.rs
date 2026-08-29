@@ -137,6 +137,25 @@ const fn build_lookup() -> [u8; LOOKUP_LEN] {
 /// alignment of its class size. Serving a 16-byte alignment therefore
 /// means choosing a class that is a multiple of 16 — which, in the
 /// 8-stepped region below 128, is always the very next one.
+/// # Examples
+///
+/// ```
+/// use kevy_alloc::class::{index_of, size_of};
+///
+/// // Every served size rounds UP to its class, never down.
+/// let i = index_of(1, 1).unwrap();
+/// assert!(size_of(i) >= 1);
+/// let i = index_of(100, 1).unwrap();
+/// assert!(size_of(i) >= 100);
+///
+/// // A strict alignment picks a class that is a multiple of it.
+/// let i = index_of(24, 16).unwrap();
+/// assert_eq!(size_of(i) % 16, 0);
+///
+/// // Too large, or too strictly aligned, is None — the direct-mapping
+/// // path, not a wrong class.
+/// assert_eq!(index_of(1 << 30, 1), None);
+/// ```
 #[inline]
 #[must_use]
 pub fn index_of(size: usize, align: usize) -> Option<usize> {
@@ -155,6 +174,15 @@ pub fn index_of(size: usize, align: usize) -> Option<usize> {
 }
 
 /// Slot size for a class index.
+/// # Examples
+///
+/// ```
+/// use kevy_alloc::class::{index_of, size_of};
+/// // Classes ascend, so a bigger request never lands in a smaller slot.
+/// let small = size_of(index_of(8, 1).unwrap());
+/// let big = size_of(index_of(200, 1).unwrap());
+/// assert!(small <= big);
+/// ```
 #[inline]
 #[must_use]
 pub fn size_of(index: usize) -> usize {

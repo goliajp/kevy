@@ -69,9 +69,28 @@ def inline(s, link_map=None):
 
 
 def slug(text):
-    s = re.sub(r"<[^>]+>", "", text).lower()
-    s = re.sub(r"[^\w一-鿿぀-ヿ\- ]", "", s)
-    return re.sub(r"[\s_]+", "-", s).strip("-") or "section"
+    """GitHub's heading slug — the anchor the markdown's own links use.
+
+    This renderer produces the ids; `check_doc_links.py` validates the
+    links against GitHub's scheme, because that is what a reader clicking
+    on github.com lands on. The two disagreed on 160 headings and 21 links
+    pointed at them: `A — B` slugs to `a--b` on GitHub (two spaces, two
+    hyphens) and `a-b` here, `MAX_INDEXES` keeps its underscore there and
+    lost it here, and a leading `--accept-shards` kept its dashes there and
+    had them stripped here. Those 21 resolved on GitHub and 404'd on the
+    built site. Aligning the renderer to the links, rather than the links
+    to the renderer, is the direction that leaves the markdown readable
+    where it is authored.
+    """
+    text = re.sub(r"`([^`]*)`", r"\1", text)
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"[*_]{1,3}([^*_]+)[*_]{1,3}", r"\1", text)
+    # No HTML-tag strip: `Vec<u8>` in a heading is a code span, and removing
+    # `<u8>` as if it were a tag is what made this renderer disagree with the
+    # links for eleven headings after the rest was aligned.
+    text = text.strip().lower()
+    text = re.sub(r"[^\w\s-]", "", text, flags=re.UNICODE)
+    return re.sub(r"\s", "-", text) or "section"
 
 
 # ── block ───────────────────────────────────────────────────────────────────

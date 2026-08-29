@@ -96,5 +96,13 @@ if FAIL:
     print(f"locgate: {len(FAIL)} violation(s). Split, or waive a pure")
     print("data-driven dispatch/match table with a '// LOC-WAIVER:' line.")
     sys.exit(1)
-print("locgate: PASS (files ≤500, fns ≤50 or waivered)")
+# 300+ source files today. A run that scanned a handful is looking at the
+# wrong tree, and "no violations" over nothing is not a reading.
+MIN_FILES = 100
+if len(files) < MIN_FILES:
+    print(f"locgate: REFUSED — scanned {len(files)} source file(s), expected at "
+          f"least {MIN_FILES}. Nothing to violate is not the same as nothing "
+          f"violated; the glob is looking at the wrong tree.")
+    sys.exit(2)
+print(f"locgate: PASS ({len(files)} files ≤500, fns ≤50 or waivered)")
 PY

@@ -56,22 +56,26 @@ dependencies = [
 
 [[package]]
 name = "kevy-bytes"
-version = "3.18.0"
+version = "6.0.0"
 dependencies = [
  "kevy-hash",
 ]
 
 [[package]]
+name = "kevy-compress"
+version = "6.0.0"
+
+[[package]]
 name = "kevy-hash"
-version = "3.18.0"
+version = "6.0.0"
 
 [[package]]
 name = "kevy-madvise"
-version = "3.18.0"
+version = "6.0.0"
 
 [[package]]
 name = "kevy-map"
-version = "3.18.0"
+version = "6.0.0"
 dependencies = [
  "kevy-hash",
  "kevy-madvise",
@@ -79,10 +83,11 @@ dependencies = [
 
 [[package]]
 name = "kevy-persist"
-version = "3.18.0"
+version = "6.0.0"
 dependencies = [
  "kevy-resp",
  "kevy-store",
+ "kevy-sys",
 ]
 
 [[package]]
@@ -95,19 +100,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "kevy-ranktree"
+version = "6.0.0"
+
+[[package]]
 name = "kevy-resp"
-version = "3.18.0"
+version = "6.0.0"
 dependencies = [
  "kevy-bytes",
 ]
 
 [[package]]
+name = "kevy-seg"
+version = "6.0.0"
+dependencies = [
+ "kevy-sys",
+]
+
+[[package]]
 name = "kevy-store"
-version = "3.18.0"
+version = "6.0.0"
 dependencies = [
  "kevy-bytes",
  "kevy-hash",
  "kevy-map",
+ "kevy-ranktree",
+ "kevy-seg",
+ "kevy-vlog",
+]
+
+[[package]]
+name = "kevy-sys"
+version = "6.0.0"
+
+[[package]]
+name = "kevy-vlog"
+version = "6.0.0"
+dependencies = [
+ "kevy-compress",
+ "kevy-sys",
 ]
 
 [[package]]

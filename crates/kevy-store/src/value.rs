@@ -38,7 +38,12 @@ impl PartialOrd for Score {
 /// A score-range endpoint for `ZRANGEBYSCORE`/`ZCOUNT` (inclusive or exclusive).
 /// Use `value = ±INFINITY` for `-inf`/`+inf`.
 pub struct ScoreBound {
+    /// The score itself. `f64::INFINITY` / `NEG_INFINITY` carry `+inf` and
+    /// `-inf`, which is why this is not an `Option`.
     pub value: f64,
+    /// `true` for Redis's `(` prefix — the endpoint is excluded from the
+    /// range. An exclusive infinity is accepted and means the same as an
+    /// inclusive one, since nothing equals infinity.
     pub exclusive: bool,
 }
 impl ScoreBound {
@@ -148,6 +153,8 @@ pub use crate::value_cold::{COLD_TAG_HASH, COLD_TAG_STRING, ColdRef};
 /// refcount. See [`crate::Store::collect_snapshot`].
 #[derive(Clone)]
 pub enum Value {
+    /// A byte string, inline up to 22 bytes — see the type doc above for
+    /// why that boundary is where it is.
     Str(SmallBytes),
     /// Following valkey's OBJ_ENCODING_INT: when a SET
     /// stores a clean canonical i64 ASCII string (parses round-trip), we
@@ -183,25 +190,37 @@ pub enum Value {
     /// Small values stay on `Str(SmallBytes)` because the inline
     /// cache-line storage beats an Arc indirection for the common case.
     ArcBulk(Arc<Box<[u8]>>),
+    /// A hash below [`HS_PROMOTE`] elements: one map behind one `Arc`, so
+    /// a snapshot pins it whole and the first write during that window
+    /// deep-clones it. Past that size it becomes `SegHash`.
     Hash(Arc<HashData>),
     /// A hash past `seg_map::HS_PROMOTE` fields: an extendible-hash
     /// directory of `Arc`-shared buckets — a COW write under a live
     /// snapshot view clones one bucket, not the whole value.
     SegHash(Arc<crate::seg_map::SegMap<SmallBytes>>),
+    /// A list below [`SEG_PROMOTE`] elements: one deque behind one `Arc`,
+    /// with the same whole-value copy-on-write. Past that size it becomes
+    /// `SegList`.
     List(Arc<ListData>),
     /// A list past [`crate::list_seg::SEG_PROMOTE`] elements: a deque of
     /// `Arc`-shared segments so a COW write under a live snapshot view
     /// clones one segment, not the whole (possibly multi-GB) value. See
     /// `list_seg.rs` for the promotion contract.
     SegList(Arc<crate::list_seg::SegListData>),
+    /// A set below [`HS_PROMOTE`] elements, on the same terms as `Hash`.
     Set(Arc<SetData>),
     /// A set past `seg_map::HS_PROMOTE` members — the set door of the
     /// same bucket-sharded COW as [`Value::SegHash`].
     SegSet(Arc<crate::seg_map::SegMap<()>>),
+    /// A sorted set: members with scores, plus the order-statistic tree
+    /// that makes rank queries a lookup rather than a scan.
     ZSet(Arc<ZSetData>),
     /// A zset past `zset_seg::Z_PROMOTE` members — sharded member map
     /// + ordered segments; COW writes clone one bucket + one segment.
     SegZSet(Arc<crate::zset_seg::SegZSetData>),
+    /// A stream: entries, consumer groups and their pending lists. Never
+    /// segmented — a stream trims from the front instead of growing
+    /// without bound.
     Stream(Arc<crate::stream::StreamData>),
     /// Valkey-orthodox encoding switch: tiny sets (1-N
     /// short members) live inline in 24 bytes instead of behind

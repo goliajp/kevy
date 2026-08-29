@@ -15,6 +15,19 @@
 //! and one wrapper call site. The wrapper rounds the request to page
 //! boundaries, never reads or writes Rust memory, and silently no-ops when
 //! the kernel returns `EINVAL` — making it safe to expose as a plain `fn`.
+//!
+//! ```
+//! // Every entry point is best-effort and reports nothing, so the same
+//! // call compiles and runs on a platform that cannot honour it.
+//! let buf = vec![0u8; 1 << 20];
+//! kevy_madvise::advise_hugepage(buf.as_ptr(), buf.len());
+//!
+//! // The mapping helper says no rather than panicking, and its unmap
+//! // takes the same length back.
+//! if let Some(p) = kevy_madvise::mmap_anon_aligned_2mb(2 << 20) {
+//!     unsafe { kevy_madvise::munmap_2mb(p, 2 << 20) };
+//! }
+//! ```
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
@@ -51,6 +64,36 @@ mod ffi {
 /// expects page-aligned `addr` and a page-multiple `length`; we round addr
 /// UP and len DOWN to 4 KiB. If nothing remains, we don't call. Regions
 /// smaller than ~ a few pages are not worth a syscall.
+/// # Examples
+///
+/// A hint, never a contract: it takes any region and reports nothing, so
+/// the caller keeps the same code on every platform and every kernel.
+/// Off Linux it compiles to nothing at all.
+///
+/// ```
+/// let buf = vec![0u8; 4 * 1024 * 1024];
+/// kevy_madvise::advise_hugepage(buf.as_ptr(), buf.len());
+/// assert_eq!(buf.len(), 4 * 1024 * 1024, "the region is untouched by the hint");
+/// ```
+///
+/// A region too small to be worth a syscall is dropped without one, and a
+/// zero-length region is not passed to the kernel either. Neither is an
+/// error to the caller.
+///
+/// ```
+/// let tiny = [0u8; 8];
+/// kevy_madvise::advise_hugepage(tiny.as_ptr(), tiny.len());
+/// kevy_madvise::advise_hugepage(tiny.as_ptr(), 0);
+/// ```
+/// # Examples
+///
+/// ```
+/// // Best-effort: a hint the kernel is free to ignore, and a no-op off
+/// // Linux. It reports nothing, so a caller cannot branch on it and be
+/// // wrong on another platform.
+/// let buf = vec![0u8; 4096];
+/// kevy_madvise::advise_hugepage(buf.as_ptr(), buf.len());
+/// ```
 pub fn advise_hugepage(ptr: *const u8, len: usize) {
     // Miri cannot execute foreign syscalls; madvise is purely advisory, so
     // a no-op under miri preserves correctness and lets miri exercise the
@@ -121,6 +164,40 @@ const HUGE_PAGE: usize = 2 * 1024 * 1024;
 ///
 /// The returned pointer must be released via [`munmap_2mb`]; passing it
 /// to `dealloc()` is UB.
+/// # Examples
+///
+/// Both outcomes are the contract, and a caller must handle each: on Linux
+/// a 2 MiB-aligned mapping it owns, and anywhere else `None`, meaning fall
+/// back to the global allocator rather than fail.
+///
+/// ```
+/// const MIB2: usize = 2 * 1024 * 1024;
+/// let len = 4 * MIB2;
+/// match kevy_madvise::mmap_anon_aligned_2mb(len) {
+///     Some(p) => {
+///         assert_eq!(p.as_ptr() as usize % MIB2, 0, "alignment is the point");
+///         // SAFETY: `p` came from this call and has not been released.
+///         unsafe { kevy_madvise::munmap_2mb(p, len) };
+///     }
+///     None => {} // not Linux, or the mapping failed: the fallback path
+/// }
+/// ```
+///
+/// A zero-length request is `None` rather than an empty mapping.
+///
+/// ```
+/// assert!(kevy_madvise::mmap_anon_aligned_2mb(0).is_none());
+/// ```
+/// # Examples
+///
+/// ```
+/// // `None` rather than a panic when the platform cannot serve it, so
+/// // the caller keeps its own fallback rather than inheriting one.
+/// if let Some(p) = kevy_madvise::mmap_anon_aligned_2mb(2 << 20) {
+///     assert_eq!(p.as_ptr() as usize % (2 << 20), 0, "2 MiB aligned");
+///     unsafe { kevy_madvise::munmap_2mb(p, 2 << 20) };
+/// }
+/// ```
 pub fn mmap_anon_aligned_2mb(len: usize) -> Option<core::ptr::NonNull<u8>> {
     if cfg!(miri) || len == 0 {
         return None;
@@ -215,6 +292,28 @@ fn trim_to_aligned(raw: *mut core::ffi::c_void, total: usize, rounded: usize) ->
 /// # Safety
 /// `ptr` must come from a successful [`mmap_anon_aligned_2mb`] call and
 /// not yet have been munmap'd. `len` must match the original `len` arg.
+/// # Examples
+///
+/// The pointer must be one [`mmap_anon_aligned_2mb`] returned, with the
+/// same `len` — the mapping is released whole, and the rounding to a
+/// 2 MiB multiple is redone here from `len` rather than remembered.
+///
+/// ```
+/// let len = 4 * 1024 * 1024;
+/// if let Some(p) = kevy_madvise::mmap_anon_aligned_2mb(len) {
+///     // SAFETY: `p` is this call's own mapping, released exactly once.
+///     unsafe { kevy_madvise::munmap_2mb(p, len) };
+/// }
+/// ```
+/// # Examples
+///
+/// ```
+/// // Pairs with `mmap_anon_aligned_2mb`, and only with it: `len` must be
+/// // the length that mapping was made with.
+/// if let Some(p) = kevy_madvise::mmap_anon_aligned_2mb(2 << 20) {
+///     unsafe { kevy_madvise::munmap_2mb(p, 2 << 20) };
+/// }
+/// ```
 pub unsafe fn munmap_2mb(ptr: core::ptr::NonNull<u8>, len: usize) {
     if cfg!(miri) {
         let _ = (ptr, len);

@@ -468,7 +468,7 @@ mod segment_stats;
 
 #[path = "segment_phrase.rs"]
 mod segment_phrase;
-pub use segment_phrase::{Clauses, parse_clauses};
+pub use crate::clauses::{Clauses, parse_clauses};
 pub(crate) use segment_phrase::{distinct_tokens, field_spans};
 
 #[path = "segment_scope.rs"]

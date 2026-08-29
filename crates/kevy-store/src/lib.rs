@@ -40,6 +40,11 @@
 //! assert_eq!(s.get(b"user:1"), Err(kevy_store::StoreError::WrongType));
 //! ```
 #![forbid(unsafe_code)]
+//! Every public item here is documented, and the lint keeps it that
+//! way: kevy-store is the keyspace, and `[workspace.lints.rust] warnings = "deny"`
+//! turns a new gap into a compile error rather than a number that
+//! drifts. Closed from 65 sites (store) and 7 (vlog) in v6.
+#![warn(missing_docs)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
 #[cfg(all(not(feature = "std"), not(feature = "external-clock")))]
@@ -86,6 +91,7 @@ mod bitmap;
 mod clock;
 mod entry;
 mod error;
+pub use bitmap::{BitOp, bitop_combine};
 pub use error::{KevyError, KevyResult};
 pub mod evict;
 pub mod expire;
@@ -374,6 +380,9 @@ mod tests_seg_map;
 mod tests_zset_seg;
 #[cfg(test)]
 mod tests_snapshot;
+#[cfg(test)]
+#[cfg(test)]
+mod tests_range_past_the_end;
 #[cfg(test)]
 mod tests_string_encoding;
 #[cfg(all(test, feature = "std", not(target_arch = "wasm32")))]

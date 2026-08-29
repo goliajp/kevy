@@ -29,6 +29,11 @@ pub(crate) struct ShardStats {
     /// interval) — the single-iteration stall upper bound (V3 tail
     /// train). fetch_max'd from the tick, never reset.
     pub tick_gap_max_us: AtomicU64,
+    /// Connections closed for crossing the query-buffer cap. Redis
+    /// calls this `client_query_buffer_limit_disconnections`; it exists
+    /// here because an intermittent "the server did not close" could
+    /// not be told from "it decided and the close had not landed".
+    pub query_buffer_disconnections: AtomicU64,
     /// Reactor tick bodies run on this shard since boot. The gap gauge
     /// above is a high-water mark and cannot answer "how OFTEN does
     /// housekeeping run" — a single 400 ms outlier and a chronically
@@ -78,6 +83,8 @@ pub(crate) struct Totals {
     /// MAX across shards (a stall on one shard is the instance's
     /// answer — summing stalls would say something false).
     pub tick_gap_max_us: u64,
+    /// SUM across shards — each shard closes its own connections.
+    pub query_buffer_disconnections: u64,
     /// SUM across shards — every shard ticks on its own clock, so the
     /// instance's housekeeping rate is the total (divide by shard count
     /// for the per-shard cadence).
@@ -192,6 +199,7 @@ impl ObsState {
             t.clients_connected += s.clients_connected.load(Relaxed);
             t.tick_gap_max_us = t.tick_gap_max_us.max(s.tick_gap_max_us.load(Relaxed));
             t.ticks_total += s.ticks_total.load(Relaxed);
+            t.query_buffer_disconnections += s.query_buffer_disconnections.load(Relaxed);
             t.tier_enabled |= s.tier.enabled.load(Relaxed) != 0;
             t.tier.budget += s.tier.budget.load(Relaxed);
             t.tier.effective_target += s.tier.effective_target.load(Relaxed);

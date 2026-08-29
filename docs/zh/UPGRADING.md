@@ -34,6 +34,8 @@
 
 如果想在灰度窗口里保留一条 3.18 退路：窗口期间关掉自动重写——服务端 `auto_aof_rewrite_percentage = 0`，嵌入式 `Config::with_auto_aof_rewrite_disabled()`（4.1，一次调用清掉全部三个触发旋钮）——并先做一份快照备份；灰度站稳后再开回来。CRC 保护要等文件升到 v2 才生效，所以别让这个状态超出灰度所需的时长。从 4.1 起这扇窗**可观测**而非靠推断：嵌入式 `Store::downgradeable_to_v3()`，服务端 `INFO persistence` 的 `aof_format:`。
 
+**关于 AOF 的一个注意：遗留的 `SPOP` 帧。** 4.0 让 SPOP 真正随机，因此它记录（并复制）的是*效果*——`SREM key <popped…>`，实际被移除的那些成员——而不是那个动词。一份从未重写过的 3.x 时代 AOF 可能仍带着原始的 `SPOP` 帧；在 4.0 下重放它会抽出一次新的随机选择，所以第一次重放之后剩下的集合，可能与升级前那个进程的不同。如果你的集合上有 SPOP 流量，请在升级前后择一时机跑一次 `BGREWRITEAOF`，把当前状态实体化；从那以后日志只携带确定性的帧。
+
 **配置。** 每一个 3.x 配置键都被接受，含义不变。有两个键的语义变得**更严或更真**——见下面的“行为变更”（`notify_keyspace_events` 拒绝未知 flag、`min_replicas_max_lag_ms` 真正生效）。
 
 **移除了一个旋钮。** 自定义快照 / AOF **文件名**没有了（`kevy-embedded` 的 `Config::with_snapshot_filename` / `with_aof_filename` 两个 builder）。磁盘布局现在固定为每 shard 一组 `dump-{i}.rdb` / `aof-{i}.aof`。用默认名字写出来的目录——包括每一个遗留的单文件目录——照样原样加载；只有用**自定义**名字写过的目录，需要在第一次用 4.0 打开之前，做一次性的 `mv` 改成固定名字。
@@ -105,7 +107,7 @@ fn warm(conn: &mut Connection) -> KevyResult<()> {
 
 **迁移实际由什么构成——来自大规模做过这件事的消费者**：破坏点只有错误类型——`Store::open`、`Config` 和各方法形态都没变。机械配方：你拥有的可失败签名改成 `KevyResult`（通常只改注解，如上例）；你不拥有的地方，让新的 `From` 把 `?` 带进 `io::Result`。别一页一页追编译错误，把编译器当查询跑——`cargo check --message-format=json` 配 jq 得到的去重清单就是你的工单，它的长度就是你的估算。还有一条那位消费者绕了弯才学到的：错误数**不单调**——二进制 crate 要等它依赖的库编译过了才暴露自己的转换错误，所以循环要跑到不动点（一轮不再有变化），不是跑到某个计数。
 
-有一个例外留在明处：CDC feed 的 embedded 接口面（`changes_tail` / `changes_since`）保留它自己的 `FeedError`——`Resync` 与 `Future` 是这条流独有的控制信号，不是通用错误。
+有一个例外留在明处：CDC feed 的 embedded 接口面（`changes_tail` / `changes_since`）保留它自己的 `FeedError`——`Resync` 与 `Future` 是这条流独有的控制信号，不是通用错误；把它们折进通用错误枚举，会诱使调用方用 `?` 跳过他们唯一必须处理的那件事。见 [CDC feed](cdc.md)。
 
 （`kevy-resp-client` 有意保留 `io::Result` 接口面——它是一块纯传输的石头，`io::Error` 就是它诚实的货币。）
 
@@ -193,6 +195,7 @@ store.del(&[b"k1".as_slice(), b"k2".as_slice()]);
 | `vector` | HNSW ANN 段 | `index`、`kevy-vector` |
 | `replicate` | 复制 + CDC feed | `persist`、`kevy-replicate` |
 | `listener` | 只读 RESP listener | （无） |
+| `tier` | 透明分层（RAM 预算 + 冷值日志） | `persist`、`kevy-sys` |
 
 `core` 档可以交叉编译到 musl 目标，并扛着一份强制预算（二进制 ≤ 700 KB，空 store RSS ≤ 2 MB）；另有五个基础 crate 能构建 `no_std`。见 [iot.md](iot.md)。在体积谱的另一端，同一个 embedded 内核现在能以 `@goliapkg/kevy` 的身份跑在浏览器里——见 [wasm.md](wasm.md)。
 
@@ -278,7 +281,7 @@ kevy 3.x 是 2.x 的超集：每一个 2.x 负载原样可跑，服务器侧的�
 ## 版本历史，每个一句话
 
 - **3.0.0**——服务引擎的宣告（索引、视图、全文、ANN、CDC、上车坡道；十一列受 gate 的火车）。
-- **3.8.0**——性能弧（对着 valkey 9.1 和 RediSearch 实测；裸接口面 1.6–3.3×，ANN 在召回 1.000 时领先 1.64×，FTS 单个常见词 93×；embedded 作为主节点的复制）。3.0.0 到 3.8.0 之间没有切过版本；3.8.0 包含 v3.1–v3.8 这几列火车。
+- **3.8.0**——性能弧（对着 valkey 9.1 和 redis-stack 7.4.7 里的 RediSearch 实测；裸接口面 1.6–3.3×，ANN 在召回 1.000 时领先 1.64×，FTS 单个常见词 93×；embedded 作为主节点的复制）。3.0.0 到 3.8.0 之间没有切过版本；3.8.0 包含 v3.1–v3.8 这几列火车。
 - **3.17.0**——可用性版本：AI 原生的服务接口面（机器可读的 verb 契约、生成式文档、`kevy-mcp`、混合检索）与可用性弧（复制心跳 / ACK 真值、`FAILOVER` + 多数派崩溃选举、一致性阶梯、CI 里的契约 gate）。包含 v3.9–v3.17 这几列火车；中间没有切过版本。
 - **3.17.1–3.17.4**——维护：`luna-core` Lua 运行时升级、文档 / 迁移那一波、首批采用者的反馈（`kevy-cli --embed`），以及文档 / i18n 的打磨波。
 - **3.18.0**——结构版本：LOC 债务清零且上限在 CI 里强制执行、又有六块石头做了 fuzz（首日收获：修掉四个真 bug）、miri / pedantic / missing-docs 扫荡、Rust 1.97.0。

@@ -29,9 +29,59 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 # Reuse the gate's own exclusions and independent-track list rather than
 # restating them: a door the gate ignores must not be bumped either.
-from check_version_alignment import INDEPENDENT, skip  # noqa: E402
+from check_version_alignment import (  # noqa: E402
+    INDEPENDENT, INDEPENDENT_VERSION, skip,
+)
 
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+
+
+def source(f: pathlib.Path, changes: list) -> str:
+    """The file's text as the *next* editor should see it.
+
+    Every bump function used to read from disk, so two of them touching one
+    file each produced a full copy of the original with only their own edit
+    applied — and writing both in order silently dropped the first. That is
+    not hypothetical: `bindings/go/README.md` carries both a prose version
+    claim and the Go module path, and it was the file that showed it.
+    """
+    for path, txt in reversed(changes):
+        if path == f:
+            return txt
+    return f.read_text(encoding="utf-8")
+
+
+def record(f: pathlib.Path, txt: str, changes: list) -> None:
+    """Replace this file's pending text, or add it."""
+    for i, (path, _) in enumerate(changes):
+        if path == f:
+            changes[i] = (f, txt)
+            return
+    changes.append((f, txt))
+
+
+# Records of what happened, which layer 7 must not rewrite.
+#
+# A finding, a changelog entry and a completed roadmap line describe a past
+# state. Moving `/v5` to `/v6` in them does not update anything — it makes
+# the record false, the way relabelling a benchmark table with the current
+# release turns an honest measurement into a claim about a build nobody
+# ran. One of them ended up reading `go get .../kevy-go/v6@v5.1.0`, a
+# command that never existed and could not have worked.
+#
+# Layer 7 governs what DETERMINES or INSTRUCTS the import path: code,
+# manifests, scripts, and the documents that tell a reader what to import.
+HISTORICAL = (
+    "CHANGELOG.md",
+    ".claude/ROADMAP.md",
+    "bench/FINDING-",
+    "bench/PERF-",
+)
+
+
+def historical(p) -> bool:
+    rel = str(p.relative_to(ROOT))
+    return any(rel == h or rel.startswith(h) for h in HISTORICAL)
 
 
 def cargo_files():
@@ -42,7 +92,25 @@ def cargo_files():
 
 def bump_cargo(new: str, changes: list) -> None:
     own = re.compile(r'^(\s*version\s*=\s*")(\d+\.\d+\.\d+)(")')
-    pin = re.compile(r'(path\s*=\s*"[^"]*kevy-[\w-]+"\s*,\s*version\s*=\s*"=?)(\d+\.\d+\.\d+)(")')
+    # Two corrections, both found by a 6.0.0 bump that would have shipped.
+    #
+    # The pattern demanded a suffix after `kevy-`, so pins on the crate the
+    # project is NAMED after were never rewritten: kevy-client and
+    # kevy-cluster-rw kept `kevy = "5.4.1"`, and `cargo publish` resolves a
+    # version-gated dependency against crates.io — the new crate would have
+    # resolved to the old sibling.
+    #
+    # And the value came from `new` regardless of what the pin points AT, so
+    # a pin on an independent-line crate was rewritten to the workspace
+    # version — naming a version of kevy-client that does not exist. The
+    # target decides, exactly as the gate reads it.
+    pin = re.compile(
+        r'(path\s*=\s*"[^"]*?(kevy(?:-[\w-]+)?)"\s*,\s*version\s*=\s*"=?)(\d+\.\d+\.\d+)(")')
+
+    def pin_sub(m: re.Match) -> str:
+        target = f"crates/{m.group(2)}/Cargo.toml"
+        want = INDEPENDENT_VERSION.get(target, new)
+        return m.group(1) + want + m.group(4)
     for p in cargo_files():
         if skip(p):
             continue
@@ -57,7 +125,7 @@ def bump_cargo(new: str, changes: list) -> None:
                 if line2 != line:
                     hit = True
                 line = line2
-            line2 = pin.sub(lambda m: m.group(1) + new + m.group(3), line)
+            line2 = pin.sub(pin_sub, line)
             if line2 != line:
                 hit = True
             out.append(line2)
@@ -143,10 +211,41 @@ def bump_prose(new: str, changes: list) -> None:
     for f in sorted(ROOT.glob("bindings/**/*.md")) + [ROOT / "README.md"]:
         if skip(f) or not f.exists():
             continue
-        txt = f.read_text(encoding="utf-8")
+        txt = source(f, changes)
         edited = claim.sub(sub, txt)
         if edited != txt:
-            changes.append((f, edited))
+            record(f, edited, changes)
+
+
+def bump_go_module_major(new: str, changes: list) -> None:
+    """Move `kevy-go/vN` when the major moves.
+
+    Go puts the major in the import path for major >= 2, so a major bump
+    that leaves `/v5` behind produces a module that resolves to the wrong
+    major forever. `scripts/mirror-go-module.sh` refuses the mismatch, but
+    it runs after the tag — and after crates.io has published.
+
+    A bare `github.com/goliajp/kevy-go` with no suffix is the repository,
+    not the module, and is left alone. Below major 2 Go uses no suffix at
+    all, which is a migration this cannot do mechanically, so it says so
+    rather than guessing.
+    """
+    major = int(new.split(".")[0])
+    if major < 2:
+        return
+    used = re.compile(r"(github\.com/goliajp/kevy-go)/v\d+")
+    want = rf"\1/v{major}"
+    for f in sorted(ROOT.glob("**/*")):
+        if f.is_dir() or skip(f) or historical(f) or f.suffix not in (
+                ".go", ".mod", ".sh", ".md", ".yml", ".yaml"):
+            continue
+        try:
+            txt = source(f, changes)
+        except (OSError, UnicodeDecodeError):
+            continue
+        edited = used.sub(want, txt)
+        if edited != txt:
+            record(f, edited, changes)
 
 
 def main() -> int:
@@ -162,6 +261,7 @@ def main() -> int:
     bump_json(new, changes)
     bump_patterned(new, changes)
     bump_prose(new, changes)
+    bump_go_module_major(new, changes)
 
     if not changes:
         print(f"bump: nothing to change — every layer already reads {new}")
@@ -173,6 +273,7 @@ def main() -> int:
     verb = "would edit" if dry else "edited"
     print(f"\nbump: {verb} {len(changes)} files to {new}.")
     print("Layer 6 (vendored engine bytes) is NOT bumped here — rebuild it.")
+    print("Layer 7 (the Go module's major, which lives in the import path) IS.")
     print("Then run: python3 tools/check_version_alignment.py")
     return 0
 

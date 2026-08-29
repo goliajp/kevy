@@ -42,6 +42,9 @@ pub(super) struct ColdSeg {
 mod query;
 pub use query::{ColdHit, ColdPage, ColdPageQuery};
 
+/// The frozen text segments for one windowed full-text index on one
+/// shard, plus the bloom and tombstones that let a query skip or correct
+/// them without opening a file.
 pub struct TextColdDir {
     pub(super) segs: Vec<ColdSeg>,
     seq: u32,
@@ -61,6 +64,7 @@ impl Default for TextColdDir {
 }
 
 impl TextColdDir {
+    /// An empty directory: no segments, a fresh bloom, no tombstones.
     pub fn new() -> Self {
         Self {
             segs: Vec::new(),
@@ -72,6 +76,8 @@ impl TextColdDir {
         }
     }
 
+    /// Whether any segment has been sealed. `false` lets a query stay
+    /// entirely in the live index.
     pub fn has_cold(&self) -> bool {
         !self.segs.is_empty()
     }

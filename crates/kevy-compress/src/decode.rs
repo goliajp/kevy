@@ -16,9 +16,25 @@ use alloc::vec::Vec;
 
 use crate::Corrupt;
 
+/// How much a frame could possibly expand to, as an upper bound on the
+/// initial reservation — not a limit on the decode, which enforces
+/// `orig_len` itself at every step.
+///
+/// `orig_len` is a number read out of the frame, and until the decode has
+/// walked the frame it is a claim. Reserving on the claim let twelve bytes
+/// ask for 2.86 GB (`decode_arbitrary` OOM, first run of a target that had
+/// been in the tree unrun). The real ceiling comes from the format: a match
+/// costs at least a token and two offset bytes, and each further length
+/// byte adds at most 255 (`read_len`), so output per payload byte tends to
+/// 255 from below. 256 with a slack for the 4 + 15 base is a safe
+/// over-estimate — every honest frame still reserves exactly `orig_len`.
+pub(crate) fn reserve_for(orig_len: usize, payload_len: usize) -> usize {
+    orig_len.min(payload_len.saturating_mul(256).saturating_add(1024))
+}
+
 /// Decode an LZ payload whose history is `dict ++ output`.
 pub(crate) fn lz(dict: &[u8], payload: &[u8], orig_len: usize) -> Result<Vec<u8>, Corrupt> {
-    let mut out = Vec::with_capacity(orig_len);
+    let mut out = Vec::with_capacity(reserve_for(orig_len, payload.len()));
     let mut p = 0;
     loop {
         let token = *payload.get(p).ok_or(Corrupt)?;
@@ -142,7 +158,7 @@ pub(crate) fn lz_high(
     let (&flag, rest) = rest.split_first().ok_or(Corrupt)?;
     let (lits, seq_start) = read_literal_block(flag, rest, lit_total, lens)?;
     let seqs = rest.get(seq_start..).ok_or(Corrupt)?;
-    let mut out = Vec::with_capacity(orig_len);
+    let mut out = Vec::with_capacity(reserve_for(orig_len, payload.len()));
     let (mut p, mut lp) = (0usize, 0usize);
     loop {
         let token = *seqs.get(p).ok_or(Corrupt)?;

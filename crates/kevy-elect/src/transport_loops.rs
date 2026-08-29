@@ -269,3 +269,47 @@ fn enqueue_outs(shared: &Arc<Shared>, outs: Vec<Outbound>) {
         }
     }
 }
+
+#[cfg(test)]
+mod sender_key_tests {
+    use super::message_sender;
+    use crate::message::{Message, Role};
+
+    /// Every variant answers with the id of the node that sent it.
+    ///
+    /// The orchestrator routes `on_message` by this key, so a variant that
+    /// returned the wrong field would deliver a peer's message under
+    /// another peer's name — and every arm reads a *differently named*
+    /// field, which is precisely the shape a copy-paste gets wrong.
+    ///
+    /// It is a pure four-arm match, but three of its arms were reaching the
+    /// dead set on some runs and not others: the election tests exercise it
+    /// only through whichever messages a real election happened to exchange
+    /// inside the test window. Which variants those are is a matter of
+    /// timing; which variants exist is not.
+    #[test]
+    fn every_variant_reports_its_own_sender() {
+        let hb = Message::Hb {
+            epoch: 7,
+            node_id: "n-hb".into(),
+            role: Role::Primary,
+            repl_offset: 1,
+        };
+        let offer = Message::Offer {
+            new_epoch: 8,
+            candidate_id: "n-offer".into(),
+            repl_offset: 2,
+        };
+        let accept = Message::Accept { epoch: 8, accepter_id: "n-accept".into() };
+        let announce = Message::Announce {
+            epoch: 8,
+            new_primary_id: "n-announce".into(),
+            new_primary_addr: "127.0.0.1:6379".into(),
+        };
+
+        assert_eq!(message_sender(&hb), "n-hb");
+        assert_eq!(message_sender(&offer), "n-offer");
+        assert_eq!(message_sender(&accept), "n-accept");
+        assert_eq!(message_sender(&announce), "n-announce");
+    }
+}

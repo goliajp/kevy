@@ -16,6 +16,41 @@
 
 /// Find `\r\n` at or after `start`, returning the index of `\r`. Returns
 /// `None` if absent or if fewer than two bytes remain.
+///
+/// # Examples
+///
+/// The index is of the `\r`, so a RESP line is `buf[start..i]` and the
+/// next line begins at `i + 2`:
+///
+/// ```
+/// use kevy_bytes::find_crlf;
+/// let buf = b"$3\r\nGET\r\n";
+/// let i = find_crlf(buf, 0).unwrap();
+/// assert_eq!(i, 2);
+/// assert_eq!(&buf[..i], b"$3");
+/// assert_eq!(find_crlf(buf, i + 2), Some(7));
+/// ```
+///
+/// A lone `\r` or a lone `\n` is not a terminator, and neither is a `\r`
+/// with nothing after it — a half-arrived frame must read as incomplete,
+/// not as a short one:
+///
+/// ```
+/// use kevy_bytes::find_crlf;
+/// assert_eq!(find_crlf(b"abc", 0), None);
+/// assert_eq!(find_crlf(b"a\rb\nc", 0), None);
+/// assert_eq!(find_crlf(b"abc\r", 0), None, "the \\n has not arrived yet");
+/// assert_eq!(find_crlf(b"", 0), None);
+/// ```
+///
+/// A `start` at or past the end is `None` rather than a panic, so a
+/// drained buffer can be probed without a length check first:
+///
+/// ```
+/// use kevy_bytes::find_crlf;
+/// assert_eq!(find_crlf(b"ab\r\n", 4), None);
+/// assert_eq!(find_crlf(b"ab\r\n", 99), None);
+/// ```
 #[inline]
 pub fn find_crlf(buf: &[u8], start: usize) -> Option<usize> {
     // Runtime AVX2 detection is a std facility; a (hypothetical) no_std

@@ -11,10 +11,20 @@ homepage.workspace = true
 documentation = "https://docs.rs/kevy-bench"
 keywords = ["benchmark", "bench", "perf", "median", "kevy"]
 categories = ["development-tools::testing", "no-std"]
-# In-house micro-bench harness — depended on only via [dev-dependencies] for
-# kevy's own crates. Not published while we decide whether it's reusable
-# enough as a standalone bench library.
-publish = false
+# v6: published. The question this comment used to leave open — "reusable
+# enough as a standalone bench library?" — was answered by measurement
+# rather than taste: four published stones ship tests/perf_gate.rs and an
+# examples/bench_*.rs that import this crate, while `cargo package` drops a
+# path-only dev-dependency, so those crates arrive on crates.io carrying
+# source they cannot compile. A stone promises "any project could take
+# these"; that promise needs this harness on the registry.
+#
+# examples/ is excluded because it drives the very crates that depend on
+# this one (kevy-store, kevy-map, kevy-ring, …). Versioning those
+# dev-dependencies would make the publish chain cyclic and unorderable.
+# Excluded, this crate is a true leaf: zero dependencies of any kind, first
+# in the chain.
+exclude = ["examples/**"]
 
 [lints]
 workspace = true

@@ -46,6 +46,19 @@ dir_shapes='tier segs-*'
 # 1. No artifact may be TRACKED, wherever it sits. This is the one that
 #    survives a fresh clone, so it is the one that keeps the accident from
 #    being re-committed by someone else's `git add -A`.
+# Floor. This half asks git which artifacts are tracked, and "none" is
+# indistinguishable from "git returned nothing" — wrong directory, not a
+# repository, a broken checkout. Run against an empty tree the whole gate
+# printed PASS. `check_package.py` states the same rule for the same
+# reason: git ls-files returning 0 paths is a producer that failed, not a
+# repository that is clean.
+n_tracked=$(git ls-files | wc -l | tr -d ' ')
+if [ "$n_tracked" -lt 100 ]; then
+    echo "rootgate: REFUSED — git ls-files returned $n_tracked path(s); this" >&2
+    echo "  is not a kevy checkout, and 'no artifacts tracked' would be an" >&2
+    echo "  answer about nothing." >&2
+    exit 2
+fi
 tracked=$(git ls-files | grep -E '(^|/)(aof-[0-9]+\.aof|dump-[0-9]+\.rdb|shards\.meta|feed-[0-9]+\.(gen|meta)|index-catalog\.meta|tier/[0-9]+/|segs-[0-9]+/)' || true)
 if [ -n "$tracked" ]; then
     echo "rootgate: FAIL — runtime artifacts are tracked in git:"

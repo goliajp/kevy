@@ -171,6 +171,24 @@ impl RuntimeState {
         self.config_explicit.store(true, Ordering::Release);
     }
 
+    /// Point the live config's `dir` at where the runtime actually
+    /// writes.
+    ///
+    /// Deliberately NOT `config_replace`: that flips `config_explicit`,
+    /// which answers "has an operator installed a configuration", and
+    /// the runtime telling us its own directory is not that. The only
+    /// field this touches is the one that was reporting a directory
+    /// nothing was writing to.
+    pub(crate) fn set_data_dir(&self, dir: std::path::PathBuf) {
+        let mut w = self.config.write().expect("config poisoned");
+        if w.server.data_dir == dir {
+            return; // `kevy::serve` built both from one Config
+        }
+        let mut next = (**w).clone();
+        next.server.data_dir = dir;
+        *w = Arc::new(next);
+    }
+
     /// Has an explicit config ever been installed? See the field doc.
     pub(crate) fn config_is_explicit(&self) -> bool {
         self.config_explicit.load(Ordering::Acquire)

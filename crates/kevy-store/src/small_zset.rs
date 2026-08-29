@@ -71,10 +71,12 @@ impl SmallZSetData {
         Some(s)
     }
 
+    /// Member count, held rather than derived from the flat encoding.
     pub fn len(&self) -> usize {
         self.count as usize
     }
 
+    /// Whether the sorted set holds no members.
     pub fn is_empty(&self) -> bool {
         self.count == 0
     }

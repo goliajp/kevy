@@ -12,13 +12,38 @@
 //! The civil conversion is the standard integer-arithmetic algorithm
 //! (era/year-of-era/day-of-year decomposition over 400-year cycles),
 //! exact over the whole i64 day range the epoch can reach.
+//!
+//! ```
+//! use kevy_time::{Civil, civil_from_epoch, epoch_from_civil, add_months};
+//!
+//! // Epoch seconds in, calendar out, and back again.
+//! let c = civil_from_epoch(1_700_000_000);
+//! assert_eq!((c.y, c.m, c.d), (2023, 11, 14));
+//! assert_eq!((c.h, c.min, c.s), (22, 13, 20));
+//! assert_eq!(epoch_from_civil(c), 1_700_000_000);
+//!
+//! // Month arithmetic clamps rather than spilling into the next month:
+//! // 31 January plus one month is the last day of February, and 2024 is
+//! // a leap year.
+//! let jan31 = epoch_from_civil(Civil { y: 2024, m: 1, d: 31, h: 0, min: 0, s: 0 });
+//! let feb = civil_from_epoch(add_months(jan31, 1));
+//! assert_eq!((feb.m, feb.d), (2, 29));
+//! ```
 
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 const SECS_PER_DAY: i64 = 86_400;
 
 /// One civil timestamp: year, month (1-12), day (1-31), hour,
 /// minute, second — UTC, proleptic Gregorian.
+/// # Examples
+///
+/// ```
+/// let c = kevy_time::civil_from_epoch(0);
+/// assert_eq!((c.y, c.m, c.d), (1970, 1, 1));
+/// assert_eq!((c.h, c.min, c.s), (0, 0, 0));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Civil {
     /// Year (proleptic Gregorian; negative epochs decode correctly).
@@ -61,6 +86,20 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 }
 
 /// Decode epoch seconds to a civil timestamp.
+/// # Examples
+///
+/// ```
+/// let c = kevy_time::civil_from_epoch(0);
+/// assert_eq!((c.y, c.m, c.d, c.h, c.min, c.s), (1970, 1, 1, 0, 0, 0));
+/// ```
+///
+/// Negative seconds run backwards through the epoch rather than clamping
+/// at it.
+///
+/// ```
+/// let c = kevy_time::civil_from_epoch(-1);
+/// assert_eq!((c.y, c.m, c.d, c.h, c.min, c.s), (1969, 12, 31, 23, 59, 59));
+/// ```
 pub fn civil_from_epoch(secs: i64) -> Civil {
     let days = secs.div_euclid(SECS_PER_DAY);
     let rem = secs.rem_euclid(SECS_PER_DAY) as u32;
@@ -71,6 +110,18 @@ pub fn civil_from_epoch(secs: i64) -> Civil {
 /// Encode a civil timestamp to epoch seconds. The caller supplies
 /// in-range fields; out-of-range months/days would decode to a
 /// different date, which is why the parser validates before calling.
+///
+/// # Examples
+///
+/// It is the exact inverse of [`civil_from_epoch`] for every in-range
+/// timestamp, which is the property the parser depends on:
+///
+/// ```
+/// use kevy_time::{civil_from_epoch, epoch_from_civil};
+/// for t in [0i64, 1, -1, 951_782_400, 1_700_000_000, -2_208_988_800] {
+///     assert_eq!(epoch_from_civil(civil_from_epoch(t)), t, "round trip at {t}");
+/// }
+/// ```
 pub fn epoch_from_civil(c: Civil) -> i64 {
     days_from_civil(c.y, c.m, c.d) * SECS_PER_DAY
         + i64::from(c.h) * 3600
@@ -96,6 +147,42 @@ fn last_day(y: i64, m: u32) -> u32 {
 /// Add `n` calendar months (negative subtracts), clamping the day to
 /// the target month's end — Jan 31 + 1mo = Feb 28 (29 in a leap
 /// year), the convention every calendar API converges on.
+///
+/// # Examples
+///
+/// The clamp is the whole point — January 31 has no counterpart in
+/// February, and every calendar API converges on the month's end rather
+/// than spilling into March:
+///
+/// ```
+/// use kevy_time::{add_months, civil_from_epoch, epoch_from_civil, Civil};
+/// let jan31 = epoch_from_civil(Civil { y: 2023, m: 1, d: 31, h: 0, min: 0, s: 0 });
+/// let feb = civil_from_epoch(add_months(jan31, 1));
+/// assert_eq!((feb.y, feb.m, feb.d), (2023, 2, 28));
+///
+/// let leap = epoch_from_civil(Civil { y: 2024, m: 1, d: 31, h: 0, min: 0, s: 0 });
+/// let feb = civil_from_epoch(add_months(leap, 1));
+/// assert_eq!((feb.y, feb.m, feb.d), (2024, 2, 29));
+/// ```
+///
+/// Because of that clamp, adding a month is **not** reversible by
+/// subtracting one:
+///
+/// ```
+/// use kevy_time::{add_months, civil_from_epoch, epoch_from_civil, Civil};
+/// let jan31 = epoch_from_civil(Civil { y: 2023, m: 1, d: 31, h: 0, min: 0, s: 0 });
+/// let back = civil_from_epoch(add_months(add_months(jan31, 1), -1));
+/// assert_eq!((back.m, back.d), (1, 28), "the day did not come back");
+/// ```
+///
+/// Negative `n` walks backwards across a year boundary:
+///
+/// ```
+/// use kevy_time::{add_months, civil_from_epoch, epoch_from_civil, Civil};
+/// let mar = epoch_from_civil(Civil { y: 2024, m: 3, d: 15, h: 0, min: 0, s: 0 });
+/// let c = civil_from_epoch(add_months(mar, -4));
+/// assert_eq!((c.y, c.m, c.d), (2023, 11, 15));
+/// ```
 pub fn add_months(secs: i64, n: i64) -> i64 {
     let c = civil_from_epoch(secs);
     let months = c.y * 12 + i64::from(c.m) - 1 + n;
@@ -111,6 +198,38 @@ pub fn add_months(secs: i64, n: i64) -> i64 {
 /// Grammar: `@now`, `@now±<n><unit>` with unit s|m|h|d|w (plain
 /// second arithmetic) or mo|y (calendar months via [`add_months`]),
 /// `@YYYY-MM-DD` (midnight) and `@YYYY-MM-DDThh:mm:ss`.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_time::eval;
+/// let now = 1_700_000_000;
+/// assert_eq!(eval(b"@now", now), Some(now));
+/// assert_eq!(eval(b"@now-1h", now), Some(now - 3600));
+/// assert_eq!(eval(b"@now+7d", now), Some(now + 7 * 86_400));
+/// assert_eq!(eval(b"@1970-01-01", now), Some(0));
+/// assert_eq!(eval(b"@1970-01-01T00:00:01", now), Some(1));
+/// ```
+///
+/// `mo` and `y` go through [`add_months`], so they carry its clamp rather
+/// than a fixed number of seconds:
+///
+/// ```
+/// use kevy_time::{eval, epoch_from_civil, civil_from_epoch, Civil};
+/// let jan31 = epoch_from_civil(Civil { y: 2023, m: 1, d: 31, h: 0, min: 0, s: 0 });
+/// let c = civil_from_epoch(eval(b"@now+1mo", jan31).unwrap());
+/// assert_eq!((c.m, c.d), (2, 28));
+/// ```
+///
+/// Anything malformed is `None`. The stone never guesses — a caller that
+/// wants a default has to say so itself:
+///
+/// ```
+/// use kevy_time::eval;
+/// for bad in [&b"now"[..], b"@", b"@now+", b"@now+5", b"@now+5x", b"@1970-1-1", b"@tomorrow"] {
+///     assert_eq!(eval(bad, 0), None, "{:?} should not parse", core::str::from_utf8(bad));
+/// }
+/// ```
 pub fn eval(expr: &[u8], now: i64) -> Option<i64> {
     let body = expr.strip_prefix(b"@")?;
     if let Some(rest) = body.strip_prefix(b"now") {
