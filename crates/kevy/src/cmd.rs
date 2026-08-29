@@ -159,12 +159,13 @@ pub(crate) fn cmd_zrange<A: ArgvView + ?Sized>(
 /// `ZREVRANGE key start stop [WITHSCORES]` — the by-rank range read
 /// from the high end.
 ///
-/// The engine indexes by ascending rank only, so this reads the whole
-/// set, reverses it, and clamps the requested rank window against the
-/// reversed order — the same three steps, in the same order, as the
-/// embedded facade's `zrevrange`. Two implementations of one verb are
-/// compared byte for byte in `differential_wire_vs_embedded.rs`, and
-/// clamping differently is exactly how they would drift.
+/// `Store::zrevrange` does the work — one implementation, shared with
+/// the embedded facade. Each surface had written its own before, and
+/// both had written the same bug: a positive start clamped up to the
+/// last rank, so `ZREVRANGE z 5 10` on a three-member set answered a
+/// member where Redis answers none. They agreed with each other, which
+/// is why the wire-vs-facade differential passed it and the three-way
+/// against a real valkey did not.
 pub(crate) fn cmd_zrevrange<A: ArgvView + ?Sized>(
     store: &mut Store,
     args: &A,
@@ -181,31 +182,7 @@ pub(crate) fn cmd_zrevrange<A: ArgvView + ?Sized>(
     let (Some(start), Some(stop)) = (arg_i64(&args[2]), arg_i64(&args[3])) else {
         return encode_error(out, ERR_NOT_INT);
     };
-    let mut all = match store.zrange(&args[1], 0, -1) {
-        Ok(v) => v,
-        Err(e) => return store_err(out, e),
-    };
-    all.reverse();
-    emit_zrange(Ok(clamp_rank_window(all, start, stop)), withscores, proto, out);
-}
-
-/// Redis's rank-window clamp: a negative index counts from the end, a
-/// positive one saturates at the last element, and a start past the
-/// stop is an empty answer rather than an error.
-fn clamp_rank_window<T>(items: Vec<T>, start: i64, stop: i64) -> Vec<T> {
-    let n = items.len() as i64;
-    if n == 0 {
-        return Vec::new();
-    }
-    let clamp = |x: i64| -> usize {
-        let v = if x < 0 { (n + x).max(0) } else { x.min(n - 1) };
-        v as usize
-    };
-    let (s, e) = (clamp(start), clamp(stop));
-    if s > e {
-        return Vec::new();
-    }
-    items.into_iter().skip(s).take(e - s + 1).collect()
+    emit_zrange(store.zrevrange(&args[1], start, stop), withscores, proto, out);
 }
 
 /// `ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]`.
