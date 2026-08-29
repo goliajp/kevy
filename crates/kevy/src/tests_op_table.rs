@@ -141,8 +141,13 @@ fn server_surface_has_dispatch_literals() {
     // A floor. An empty read would fail the first assertion loudly and
     // pass the inverse guard silently — which is the direction that
     // matters, since the inverse guard is what says a gap is still open.
+    // The byte count is bound before the assert rather than passed as a
+    // format argument: an argument expression is evaluated only when the
+    // assert fails, which makes it a region that never runs — a floor
+    // that adds to the set the floor exists to keep honest.
+    let bytes = sources.len();
     assert!(files > 20, "the source walk found {files} files — it is broken, not the server empty");
-    assert!(sources.len() > 200_000, "the source walk read {} bytes — it is broken", sources.len());
+    assert!(bytes > 200_000, "the source walk read {bytes} bytes — it is broken");
     for o in OP_TABLE {
         if o.surfaces & surface::SERVER == 0 {
             continue;
