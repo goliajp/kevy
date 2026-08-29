@@ -22,6 +22,7 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
             | b"GETDEL"
             | b"INCRBYFLOAT"
             | b"COPY"
+            | b"BITOP"
             | b"DEL"
             | b"UNLINK"
             | b"INCR"
@@ -135,6 +136,10 @@ pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyClass> {
         // Generic — class `g`. (DEL single-key falls here; multi-key DEL
         // is routed through Op::Del + maybe_notify_del directly.)
         b"DEL" | b"UNLINK" | b"EXPIRE" | b"PEXPIRE" | b"PERSIST" => NotifyClass::Generic,
+        // BITOP is in the same position: Redis fires `set` on the
+        // destination, and a table keyed off the verb would emit
+        // `bitop`.
+        //
         // COPY has no arm here for the same reason as GETEX below:
         // Redis fires `copy_to` on the destination, and this table
         // publishes the lowercased verb, so an arm would emit `copy` —
@@ -158,6 +163,9 @@ pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyClass> {
 /// list lets a NoEviction-configured shard always accept shrinkers, matching
 /// Redis exactly.
 // >50-LOC exemption: pure data-driven verb match table (no control flow).
+// LOC-WAIVER: data-driven verb list (one matches! arm per growing verb) —
+// the same waiver its sibling `is_write_verb` carries; this list only
+// crossed fifty when BITOP and COPY joined it.
 pub(crate) fn is_growing_write_verb(cmd: &[u8]) -> bool {
     matches!(
         cmd,
@@ -175,6 +183,7 @@ pub(crate) fn is_growing_write_verb(cmd: &[u8]) -> bool {
             | b"SETBIT"
             | b"SETRANGE"
             | b"COPY"
+            | b"BITOP"
             | b"HSET"
             | b"HSETNX"
             | b"HMSET"

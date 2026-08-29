@@ -1,6 +1,7 @@
 # FINDING 2026-08-29 — fourteen verbs the engine had and the wire did not
 
-**Status**: thirteen wired, one named with what it needs. The
+**Status**: all fourteen wired; the SERVER side of the F3 ledger is
+empty. The
 ledger that recorded them was accurate; nothing here is a correction of
 it. What is new is that the ledger had no expiry, and no one had asked
 what it would cost to close.
@@ -79,13 +80,23 @@ arm for `Part::CopyPutDone`, so it was dropped and the client got the
 materialize fallback, `-ERR internal error`. The differential caught it
 on the first run.
 
-**BITOP** remains. It gathers N source strings across shards, combines
-them byte-wise under AND/OR/XOR/NOT, and materialises at a destination
-that sits at `args[2]` rather than `args[1]`. `Route::ZAlgebraStore` is
-the right shape with the wrong payload — it combines set and zset
-members, not raw bytes.
+**BITOP** is written too — `kevy-rt/src/exec_bitop.rs`. Three
+shard-crossings in one command: the sources are read where they live,
+the bytes are combined on the shard that took the command, and the
+result is written where the destination lives. `args[1]` is the
+OPERATOR, so the catch-all would have hashed the word "AND".
 
-The ledger is one row now, not fourteen.
+Wiring it moved something that had no business where it was. The byte
+arithmetic — the padding rules, the 0xff tail of NOT — lived in
+`kevy-embedded`, which `kevy-rt` cannot reach: siblings. Copying it
+would have made two implementations of one operator, which is the
+condition this whole file is about. So `BitOp` and `bitop_combine` now
+live in `kevy-store` beside the bits they operate on, neither of them
+knowing what a key is, and both surfaces call the same one.
+`kevy-embedded` re-exports `BitOp` because it has been part of that
+crate's surface since 1.x.
+
+The ledger is empty.
 
 ## What the COPY tests had to be
 
@@ -155,16 +166,17 @@ after    169 of 174 agree byte-for-byte;   5 diverge  (5 named)
 shared surface 112 → 125 verbs; register 121 driven + 4 named
 ```
 
-The five that remain: three IDX.* the facade does not carry
-(EXPLAIN / VERIFY / REBUILD), TABLE.VERIFY's tick timing, and BITOP.
+The four that remain are all in the other direction — things the
+FACADE lacks or times differently: three IDX.* it does not carry
+(EXPLAIN / VERIFY / REBUILD), and TABLE.VERIFY's tick timing.
 
 The whole test suite for the three crates this touches: 1,119 passing,
 none failing, across 122 targets.
 
 ## What was not done
 
-BITOP, described above by what it needs rather than by the group it was
-first sorted into.
+Nothing from this ledger. What remains open is the other direction —
+the facade's own three IDX.* gaps, which `EXPECTED` names.
 
 ---
 

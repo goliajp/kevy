@@ -51,6 +51,7 @@ pub const VERB_ARITY: &[(&str, i8)] = &[
     ("BGREWRITEAOF",      1),
     ("BGSAVE",            1),
     ("BITCOUNT",          -2),
+    ("BITOP",             -4),
     ("BITPOS",            -3),
     ("BLPOP",             -3),
     ("BRPOP",             -3),

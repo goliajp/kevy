@@ -312,6 +312,7 @@ impl<C: Commands> Shard<C> {
             | Route::Watch
             | Route::Hello
             | Route::Copy
+            | Route::BitOpStore
             | Route::Rename { .. } => self.fill_placeholder(
                 conn_id,
                 seq,

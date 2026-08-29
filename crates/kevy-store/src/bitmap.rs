@@ -232,3 +232,66 @@ impl Store {
         Ok(new_len)
     }
 }
+
+// ── BITOP: the operator, and the byte arithmetic ───────────────────
+//
+// Both live here rather than in a facade because neither knows what a
+// key is. `kevy-embedded` computed them for its own BITOP and
+// `kevy-rt` could not reach that code at all — sibling crates — so
+// wiring BITOP to the server wire would have meant a second copy of
+// the padding rules, the 0xff tail of NOT among them. Two
+// implementations of one operator are how two surfaces drift.
+
+/// Combine the source strings under `op` into the `max_len`-byte
+/// destination value (shorter sources zero-padded).
+pub fn bitop_combine(op: BitOp, srcs_bytes: &[Vec<u8>], max_len: usize) -> Vec<u8> {
+    let mut out = vec![0u8; max_len];
+    match op {
+        BitOp::Not => {
+            let s = &srcs_bytes[0];
+            for (i, b) in s.iter().enumerate() {
+                out[i] = !b;
+            }
+            // bytes past s.len() stay 0 — Redis sets them to 0xff
+            // (NOT of implicit zero). Match Redis:
+            for byte in out.iter_mut().skip(s.len()) {
+                *byte = 0xff;
+            }
+        }
+        _ => {
+            let init = match op {
+                BitOp::And => 0xff,
+                BitOp::Or | BitOp::Xor => 0x00,
+                BitOp::Not => unreachable!(),
+            };
+            for byte in out.iter_mut() {
+                *byte = init;
+            }
+            for s in srcs_bytes {
+                for (i, b) in out.iter_mut().enumerate() {
+                    let sb = s.get(i).copied().unwrap_or(0);
+                    *b = match op {
+                        BitOp::And => *b & sb,
+                        BitOp::Or => *b | sb,
+                        BitOp::Xor => *b ^ sb,
+                        BitOp::Not => unreachable!(),
+                    };
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Operator for the BITOP family.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BitOp {
+    /// Bitwise AND across source keys.
+    And,
+    /// Bitwise OR across source keys.
+    Or,
+    /// Bitwise XOR across source keys.
+    Xor,
+    /// Bitwise NOT — exactly one source key.
+    Not,
+}

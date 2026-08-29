@@ -439,6 +439,27 @@ const CORPUS: &[&str] = &[
     // `xl` into a string while the facade's stayed a list — after which
     // MGET diverged for a reason that was not about MGET.
     "MGET xl xs",
+    "SETBIT xbit1 0 1",
+    "SETBIT xbit1 7 1",
+    "SETBIT xbit2 0 1",
+    "SETBIT xbit2 3 1",
+    "BITOP AND xand xbit1 xbit2",
+    "GET xand",
+    "BITOP OR xor xbit1 xbit2",
+    "GET xor",
+    "BITOP XOR xxor xbit1 xbit2",
+    "GET xxor",
+    "BITOP NOT xnot xbit1",
+    "GET xnot",
+    "BITOP and xand2 xbit1 xbit2",
+    "BITOP AND xempty xnosuch1 xnosuch2",
+    "EXISTS xempty",
+    "BITOP NOT xnot2 xbit1 xbit2",
+    "BITOP SIDEWAYS xd xbit1",
+    "BITOP AND xd",
+    "BITOP",
+    "BITOP AND xwrong xl",
+    "BITCOUNT xand",
     // ── F3: implemented in the facade, absent from the RESP dispatch ──
     // Registered in `kevy_resp::ops_table::KNOWN_GAPS`, and the check
     // below reads that ledger rather than restating it. Own keys, last,

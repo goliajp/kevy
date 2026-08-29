@@ -218,6 +218,11 @@ fn route_for_verb<A: ArgvView + ?Sized>(
             let to_left = args[4].eq_ignore_ascii_case(b"LEFT");
             Route::ListMove { from_left, to_left }
         }
+        // BITOP's args[1] is the OPERATOR, not a key: the catch-all
+        // would hash the word "AND" and run the command on whatever
+        // shard that lands on. args[2] is the destination and args[3..]
+        // the sources, and all of them can be elsewhere.
+        b"BITOP" => Route::BitOpStore,
         // COPY names two keys, so it cannot ride the catch-all: see
         // `kevy_rt::exec_copy` for what routing it by args[1] would do
         // to the destination.

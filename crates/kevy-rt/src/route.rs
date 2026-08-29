@@ -38,6 +38,19 @@ pub enum Route {
     /// zset/set algebra `*STORE` family: gather sources, combine
     /// per [`crate::message::ZCombine`], materialize at `args[1]`.
     ZAlgebraStore(crate::ZCombine),
+    /// `BITOP op dst src [src …]` — N sources gathered, combined, and
+    /// stored at a destination that sits at `args[2]`, not `args[1]`.
+    /// `ZAlgebraStore` is the same shape with a different payload: it
+    /// combines set and zset members, not raw bytes.
+    ///
+    /// Carries nothing. An earlier draft carried the operator so the
+    /// router could pick it, which meant parsing the operator twice and
+    /// needing a fallback route for the argv the router could not parse
+    /// — and that fallback led to a dispatch table with no BITOP arm,
+    /// so a malformed BITOP would have been answered "unknown command".
+    /// The route says only that this is a BITOP; every refusal is
+    /// worded once, in `exec_bitop`.
+    BitOpStore,
     /// `COPY src dst [REPLACE]` — two keys, so the same hazard the
     /// rename and list-move routes exist for: left to the catch-all
     /// `Single(1)` the copy lands in the SOURCE's shard, where no later
