@@ -91,6 +91,11 @@ Two things it had to learn the hard way, both caught by running it:
   Asking them for 6.0.0 finds nothing, which reads like a finding and is
   not one. Each door is now asked about the version it declares.
 
+It also refuses on a `bindings/` directory it cannot read — a door added
+in a manifest format nobody taught it would otherwise be skipped in
+silence, which is this same finding one level up. Verified by putting a
+`bindings/ruby/kevy.gemspec` in the tree: exit 2, naming the directory.
+
 Red-green: green on 6.0.0 (54/54), red on 5.4.1 (12 doors, exit 1), and
 three of those twelve were confirmed by hand against the registries before
 being believed.

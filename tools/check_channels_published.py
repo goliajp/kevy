@@ -330,6 +330,31 @@ def main() -> int:
               f"smaller gate that passes is worse than no gate")
         return 2
 
+    # Every directory under bindings/ must produce a door or say why it
+    # does not. Without this, the gate quietly skips a manifest format it
+    # was never taught — which is the hole it was written to close, one
+    # level up: a door added in a format nobody added support for would be
+    # unchecked, and the gate would keep reporting all-green.
+    covered = set()
+    for _, _, _, src, _ in ds:
+        for parent in [src] + list(src.parents):
+            if parent.parent == ROOT / "bindings":
+                covered.add(parent.name)
+                break
+    excused = {k.split("/")[1] for k in NOT_PUBLISHED if k.startswith("bindings/")}
+    unknown_doors = sorted(
+        d.name for d in (ROOT / "bindings").iterdir()
+        if d.is_dir() and d.name not in covered and d.name not in excused
+    )
+    if unknown_doors:
+        print("bindings/ directories this gate cannot see:")
+        for d in unknown_doors:
+            print(f"  bindings/{d} — no manifest format it recognises, and not "
+                  f"listed in NOT_PUBLISHED")
+        print("\nTeach it the format, or record why the door ships nothing. "
+              "A gate that silently skips a door is the gate that was missing.")
+        return 2
+
     behind, unknown, ok, own_line = [], [], 0, []
     for kind, name, ask, src, declared in ds:
         # A door on its own version line is asked about that line. Anything
