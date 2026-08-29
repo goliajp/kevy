@@ -9,6 +9,7 @@
 
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
+use crate::util::range_bounds;
 use alloc::borrow::Cow;
 use alloc::vec;
 use core::num::NonZeroU64;
@@ -184,16 +185,19 @@ impl Store {
         if bytes.is_empty() {
             return Ok(Vec::new());
         }
-        let len = bytes.len() as i64;
-        let norm = |x: i64| -> i64 {
-            if x < 0 { (len + x).max(0) } else { x.min(len - 1) }
-        };
-        let s = norm(start) as usize;
-        let e = norm(end) as usize;
-        if s > e {
-            return Ok(Vec::new());
-        }
-        Ok(bytes[s..=e].to_vec())
+        // `range_bounds`, not a clamp of its own. This function had
+        // one, and it capped START at len-1 as well as END — so
+        // `GETRANGE k 99 200` on a 24-byte value answered the last byte
+        // where Redis answers nothing. Redis floors a negative start at
+        // zero and caps only the end; a start past the last index makes
+        // the range empty. The three-way differential against a real
+        // valkey is what found it, after the wire-vs-facade one had
+        // agreed — both surfaces shared the mistake, so comparing them
+        // proved nothing about Redis.
+        Ok(match range_bounds(start, end, bytes.len()) {
+            None => Vec::new(),
+            Some((s, e)) => bytes[s..=e].to_vec(),
+        })
     }
 
     /// `SETRANGE key offset value` — overwrite bytes at `offset`

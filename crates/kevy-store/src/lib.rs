@@ -381,6 +381,9 @@ mod tests_zset_seg;
 #[cfg(test)]
 mod tests_snapshot;
 #[cfg(test)]
+#[cfg(test)]
+mod tests_range_past_the_end;
+#[cfg(test)]
 mod tests_string_encoding;
 #[cfg(all(test, feature = "std", not(target_arch = "wasm32")))]
 mod tests_tier;

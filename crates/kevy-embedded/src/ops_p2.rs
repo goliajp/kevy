@@ -84,26 +84,7 @@ impl Store {
         start: i64,
         stop: i64,
     ) -> KevyResult<Vec<(Vec<u8>, f64)>> {
-        let mut all = self
-            .wshard(key)
-            .store
-            .zrange(key, 0, -1)
-            .map_err(store_err)?;
-        all.reverse();
-        let n = all.len() as i64;
-        if n == 0 {
-            return Ok(Vec::new());
-        }
-        let clamp = |x: i64| -> usize {
-            let v = if x < 0 { (n + x).max(0) } else { x.min(n - 1) };
-            v as usize
-        };
-        let s = clamp(start);
-        let e = clamp(stop);
-        if s > e {
-            return Ok(Vec::new());
-        }
-        Ok(all.into_iter().skip(s).take(e - s + 1).collect())
+        self.wshard(key).store.zrevrange(key, start, stop).map_err(store_err)
     }
 
     /// `ZRANGEBYSCORE` — score-range read. `min` / `max` are
