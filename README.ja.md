@@ -22,7 +22,7 @@ redis-cli -p 6379 GET hello
 
 kevyは同一のエンジンから三つの形態で提供されます。
 
-- **サーバー** — Redisワイヤ互換のデーモンです。RESP2を話し、98個の
+- **サーバー** — Redisワイヤ互換のデーモンです。RESP2を話し、94個の
   コマンドについてvalkey 9.1と返答をバイト単位で照合しています。
 - **組み込みライブラリ** — `kevy-embedded`はネットワークのない同じ
   エンジンです。Rustバイナリに組み込んで`Store`を直接呼び出せます。
@@ -319,7 +319,7 @@ Pub/subと組み込みの2行はそれぞれ別のハーネスによるもので
 
 ## 互換性
 
-98個のコマンドがvalkey 9.1と返答をバイト単位で照合されており、Redisの
+94個のコマンドがvalkey 9.1と返答をバイト単位で照合されており、Redisの
 5つのデータ型（String、Hash、List、Set、Sorted Set）すべてに加えて
 Streams、Pub/Sub（channel + pattern）、トランザクション（`MULTI` /
 `EXEC` / `WATCH` / `UNWATCH`）、ブロッキングpop、および標準的な

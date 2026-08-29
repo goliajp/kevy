@@ -21,7 +21,7 @@ redis-cli -p 6379 GET hello
 
 kevy 以三种形态交付，全部构建自同一个引擎：
 
-- **服务器**——兼容 Redis 线协议的守护进程。讲 RESP2，98 条命令的
+- **服务器**——兼容 Redis 线协议的守护进程。讲 RESP2，94 条命令的
   回复逐字节对照 valkey 9.1 校验。
 - **嵌入式库**——`kevy-embedded` 是去掉网络层的同一个引擎。把它放进
   Rust 二进制里，直接调用 `Store`。纯 Rust、零依赖，feature 分档从
@@ -286,7 +286,7 @@ recall 对齐（[`bench/PERF-LEDGER.md`](bench/PERF-LEDGER.md)）：
 
 ## 兼容性
 
-98 条命令的回复对照 valkey 9.1 逐字节校验，覆盖全部五种 Redis 数据
+94 条命令的回复对照 valkey 9.1 逐字节校验，覆盖全部五种 Redis 数据
 类型（String、Hash、List、Set、Sorted Set）外加 Streams、Pub/Sub
 （频道 + 模式）、事务（`MULTI` / `EXEC` / `WATCH` / `UNWATCH`）、
 阻塞式 pop，以及标准的运维操作和持久化 verb。完整命令清单见
