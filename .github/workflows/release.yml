@@ -238,6 +238,55 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Publish every binding package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          # The list is FOUND, not written down. Until 2026-08-30 this job
+          # published one package — the wasm one above — and five binding
+          # packages that nothing else published sat at 5.1.0 through four
+          # releases, while their manifests, their vendored engine bytes and
+          # every gate in the repository said 6.0.0. Nobody had forgotten a
+          # step; there was no step. A written list would have the same hole
+          # the day a seventh door is added, so this finds them instead.
+          set -euo pipefail
+          V="${GITHUB_REF_NAME#v}"
+          mapfile -t pkgs < <(find bindings -name package.json \
+                              -not -path '*/node_modules/*' \
+                              -not -path '*/target/*' | sort)
+          # A find that comes back nearly empty is a broken find, and a
+          # broken find publishes nothing while reporting success.
+          if [ "${#pkgs[@]}" -lt 6 ]; then
+            echo "only ${#pkgs[@]} package.json under bindings/ — the search is wrong"
+            exit 1
+          fi
+          published=0
+          for pkg in "${pkgs[@]}"; do
+            dir=$(dirname "$pkg")
+            name=$(node -p "require('$PWD/$pkg').name || ''")
+            priv=$(node -p "require('$PWD/$pkg').private ? 1 : 0")
+            if [ -z "$name" ] || [ "$priv" = "1" ]; then
+              echo "skip $dir (private or unnamed)"
+              continue
+            fi
+            if npm view "$name@$V" version >/dev/null 2>&1; then
+              echo "$name@$V already published"
+              continue
+            fi
+            (
+              cd "$dir"
+              if [ "$(node -p "require('./package.json').scripts?.build ? 1 : 0")" = "1" ]; then
+                npm install --no-audit --no-fund
+                npm run build
+              fi
+              npm version "$V" --no-git-tag-version --allow-same-version
+              npm publish --access public
+            )
+            published=$((published + 1))
+            echo "published $name@$V"
+          done
+          echo "binding packages published this run: $published"
+
   # ───────────── build the kevy server binary for every supported target ─────────────
   # All targets build NATIVELY on their respective GitHub-hosted runner — each
   # runner type matches a target triple 1:1, no cross compilation. Linux gnu

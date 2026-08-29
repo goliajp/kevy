@@ -1,0 +1,52 @@
+# Does the newest release actually exist on every door?
+#
+# Every other gate in this repository reads the tree: the manifests agree
+# with each other, the vendored engine bytes report the right version, the
+# compat claim matches the verb list. All of them passed on 2026-08-30
+# while six published doors served code from five releases earlier, because
+# no gate had ever asked a registry a question. The tree was telling the
+# truth about itself; nobody was asking the world.
+#
+# It asks about the newest v* tag, not the working tree — between releases
+# the tree is supposed to be ahead, and a permanently red gate is a gate
+# nobody reads. So a red here means one thing only: a release was announced
+# that a user cannot install.
+#
+# Daily rather than per-push because the answer changes when a registry
+# changes, not when the code does, and because 50-odd requests to nine
+# public registries on every pull request would make CI flaky in a way that
+# teaches people to ignore it.
+name: channel parity — does the world have what we shipped
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to ask about (blank = newest v* tag)'
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    name: every door serves the release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # the gate reads git tags to find the release
+      - run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+      - name: ask every registry
+        # Through the environment, not interpolated into the command line:
+        # a dispatch input pasted into a shell is an injection, and the
+        # value here comes from whoever pressed the button.
+        env:
+          ASK_VERSION: ${{ inputs.version }}
+        run: python3 tools/check_channels_published.py $ASK_VERSION
