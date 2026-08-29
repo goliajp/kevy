@@ -1,3 +1,213 @@
+# v6 — clean arch(属主 charter 2026-08-27:干净架构、stone 做扎实、
+# 质量/文档/性能到当前极限、不允许死代码死路径、不允许同能力的复杂实现)
+
+设计:`.claude/rfcs/2026-08-27-v6-toolchain.md`(Phase A,仪器/量具/夹具)。
+论点:此前四条基线**全是标量加容差带**,而 v6 的判据不是数量 ——
+「无死路径」说的是**集合**,「无冗余实现」说的是**关系**,「stone 扎实」
+说的是**能不能在本 workspace 之外站起来**。
+
+## 工具链 ✅ 十一件全部建成并接上真基线
+
+suite 从 75 项到 **84** 项(precommit 23 ⊆ prerelease 40 ⊆ full 84)。
+
+| 类 | 件 |
+|---|---|
+| 量具 | depgate、packagegate、lockgate、stonegate、deadgate、doctestgate |
+| 仪器 | 死路径图谱、克隆图谱、stone 报告、doc 赤字 |
+| 夹具 | 语料声明、抬出沙箱、差分台架(进程内 + 线路) |
+| 机制 | set-ratchet(存身份不存数字;基线是**三轮包络**) |
+| 量具(补) | doctestrun —— 文档里的示例**被编译并运行** |
+
+- [x] **死集合的噪声尾部已被证明并申报**(三轮 CI 各给一套不同的增长符号)。
+      基线改为**逐元素三轮最大值**:增长 = 比**最坏那轮还差**。
+      注入回归(一符号 +50、一新符号 +30)在**总数低于基线**时仍判红。
+      `bench/FINDING-2026-08-28-part-of-the-dead-set-is-not-reproducible.md`
+
+## 已闭合的缺陷(全部由这些仪器挖出并验证)
+
+- [x] **12/14 个带 arity 守卫的动词把存在的命令报成 unknown**。`verb_meta`
+      一直带着 arity,主派发点从没问过它。`cmd::unhandled_verb` 现在问。
+- [x] **15 个已发布 crate 出货了编译不了的代码**(122 个文件引用发布清单
+      丢弃的 dev-dep)。对着 crates.io 真包核实过。packagegate 封死这一类。
+- [x] **两个面对同一拼写错误说两句不同的话**(arity 措辞漂移)。111 个双面
+      动词里 109 个现在逐字一致,剩 2 个是**签名不同**(服务端分片、facade 不分片)。
+- [x] **一个未使用 import 同时打红四个 CI job**(wasm32 ×2、musl/no_std、site)。
+- [x] **陈旧 Cargo.lock**:每个普通 cargo 命令都静默重生成它,只有 `--locked`
+      会反对 —— 而它在 full 档。lockgate 把这个问题挪到 precommit。
+- [x] **45 个示例从来没被任何东西跑过**。仓库里每一处测试都写作
+      `--lib --tests` —— 这个组合**恰好排除 doctest**,而 `--doc` 在整棵树里
+      一次都没出现。doctestgate 数着它们,并在自己的头注里论证「doctest 是被
+      编译并运行的」。头一次手工跑:45 过 0 挂。它们没坏,只是没人知道。
+      `bench/FINDING-2026-08-28-forty-five-examples-that-nothing-ran.md`
+- [x] **判定 stone 的仪器,跑在其中一块 stone 不存在的平台上**。cfg 关掉的
+      代码在覆盖率里是**缺席**不是**死**,kevy-uring 在 macOS 上整个是空模块 ——
+      而 `check_stones` 只打一条 NOTE 就照判不误。它的两条豁免都源于相信那份
+      读数:说它零测试,Linux 上有 12 个且全过。NOTE 改成拒绝,CI 加
+      `stonereport` job 让判决在唯一能出的地方出。
+- [x] **跳过一项检查曾经等于通过它**:`semver_clean` 问的是「有没有一份说不干净
+      的读数」,而不是「有没有读数」;`--skip-semver` 写出的空对象直接落在条件外。
+- [x] **`XPENDING k` 能把分片线程打崩**(远程可达,五个键位,无需任何状态)。
+      `parse_xpending_extended` 开头 `args[3]` 无检查,而 `cmd_xpending` 把
+      「不恰好三个参数」的调用全送进去。同文件的 XGROUP/XACK/XCLAIM 都有守卫,
+      唯独它没有,也没有任何东西驱动过它。
+      `bench/FINDING-2026-08-28-a-hand-list-of-fourteen.md`
+- [x] **`DEL`/`EXISTS`/`UNLINK` 无 key 时返回 `:0`**(路由把它送进多键分散路径,
+      求和零个目标),redis 8.10.1 答 arity 错误。`dispatch.rs` 一直有正确守卫,
+      路由从不让它到达。**门面是故意镜像这个 `:0` 的**,注释写着 mirror that ——
+      两个面**一致地错**,差分台架看不见;是拉起真 redis 当权威源才判出谁对。
+- [x] **`SRANDMEMBER` 声明 -3、redis 是 -2**,于是合法的 `SRANDMEMBER key`
+      线路上接受、**MULTI 里被拒** —— 同一条命令在事务内外是两个意思,根因只是
+      文档表里一个数字。
+- [x] **`XREAD a b` 答 "syntax error"** 而 redis 答 arity 那句(它把 syntax error
+      留给长度够但形状错的调用)。
+- [x] **两张动词表在 14 个动词上不一致,而头注声称它们逐字镜像**。`VERB_META.flags`
+      是客户端面(COMMAND DOCS,决定什么不能发给只读副本),`OP_TABLE.write` 是
+      AOF/复制门 —— 两个不同的问题。照旧头注去「修」表,等于告诉客户端
+      `IDX.CREATE` 和 `BLPOP` 是只读的。分歧集合现在是双向精确账本。
+- [x] **门面把服务器的 arity 重抄成字面量**(finding 明写「not made here」的那条)。
+      arity 列进 `kevy_resp::verb_arity`,两个面读同一列,bijection 双向钉死。
+      **只搬 arity**:一行 VERB_META 剩下的是 48 KB 文档散文,站点 wasm 1.4 MB,
+      整张搬过去是让每个浏览器为没人读的对照句付 3.4%。
+- [x] **一格测试拿到了决定性答案然后扔掉**。`query_buffer_limit` 在失败路径上
+      多等 5 秒看 EOF 来不来,但 `assert!` 读的是更早那个循环设的标志 —— EOF 在
+      那 5 秒里到达,它照样判失败。契约是「越过上限就关连接」,不是「在客户端
+      3.84 s 墙钟内关」。
+- [x] **死集合包络从三轮扩到七轮**。第四轮就有符号越界(`kevy_alloc::os::trim`),
+      而从旧包络最后一轮到现在的 22 个 commit **只动过 `crates/kevy`** ——
+      抬高的九个符号全在一个字节没变的 crate 里。扩宽后仍红:既有符号 +50、
+      新符号 +30,在总数低于基线 300+ 区域时照样判红。
+
+## 已量到的进展
+
+- [x] **文档 93.9% → 100.0%**(2,661 项全部有文档,一项不欠)。最后 69 项里
+      64 项在 **bin-only** crate —— 二进制没有对外公开项,`missing_docs` 对它们
+      一言不发,而 rustdoc 每一项都数。**能兜住 bin crate 的只有 set-ratchet**。
+      其中 kevy-testnet 的 `free_port` 不是没写文档:七行文档存在,只是被粘在了
+      插进它和函数之间的私有 static 上 —— 数 `///` 的做法会把它算作已文档。
+- [x] **文档 93.9% → 97.4%**;**stone + steel 34/34 全部 100%**;
+      kevy-store / kevy-rt / kevy-vlog / kevy-window 带 `#![warn(missing_docs)]`,
+      新缺口是**指名行号的编译错误**。kevy-rt 那 35 处**全是写得很详尽的变体
+      里面的字段** —— 人工审读看不到的形状。
+- [x] **doctest 从 18 项到 29 项带示例,45 个 doctest 全过**;17/18 个 stone
+      有可执行示例(第 18 个 kevy-uring 在 macOS 上整个 crate 为空)。
+- [x] **死区**:kevy-scalar 42.0%→27.8%(移植 spg 的 ReDoS 测试 + 引擎级标志/
+      类/捕获组测试,620 个)、kevy-client-async 70.5%→39.3%(733 个)、
+      kevy-cli 42.4%→37.5%。全部用**消融**量,不数测试条数。
+- [x] **stone 豁免 24 条/14 crate → 11 条/5 crate**。kevy-bench 从 support
+      升格为 stone 并进入发布链首位。
+
+## 开着的
+
+- [x] **十三件仪器,不是十二件**。`fuzzgate` 是第十三件,它存在的理由是它当场
+      找到的东西:`crates/*/fuzz/` 下 23 个 fuzz target,手抄的 fuzz-smoke 矩阵
+      里 14 个。**9 个从不运行**,其中就有 `kevy-compress/decode_arbitrary` 与
+      `kevy-seg/seg_open` —— 整个职责就是被喂任意字节的那两个。本地第一次跑
+      `decode_arbitrary`,两分钟找到两个缺陷;修完之后 **CI 又找到第三个**
+      (`malloc(10903093247)`)。一个存在却从不运行的 target 比没写更糟:
+      仓库展示了并不存在的覆盖。`tools/check_fuzz_matrix.py` 两向对账并带下限。
+- [x] **九处「用字节里读出的数去定分配大小」**,前四处由 fuzzer 指出,后五处靠
+      **列清单**找到 —— 每一处的界都从格式推出(每 Huffman 符号 1 bit / 每
+      msgpack 值 1 字节 / 每 tier 字段 8 字节),且都有 `f(len,len)==len` 的
+      测试保证诚实输入不被少留。唯一网络可达的那处在 `kevy-lua`:
+      `EVAL "return cmsgpack.unpack(ARGV[1])" 0 <五字节>`,而分配被系统拒绝会
+      `handle_alloc_error` **中止整个进程**。
+- [x] **两套 slug,一套在校验一套在渲染,160 个标题上不一致**。
+      `check_doc_links` 算 GitHub 方案并据此校验链接;`md.py` / `md.ts` 算站点
+      实际带的 id。**21 条链接在门里绿、在站点上 404**,而两道门各自都自洽。
+      渲染器已对齐到链接(markdown 在 GitHub 上撰写与阅读),2,229 个标题穷举
+      零不一致,`check_doc_links` 现在会在两者漂移时拒绝。
+- [x] **译文补齐 53 段 + 7 章表格行**,其中三处译文**说了与代码相反的话**
+      (打分是否分片局部、短语查询/高亮是否「刻意不在范围内」、`OFFSET` 是否
+      被拒绝)。i18n 门现在比四个粒度:章节、代码块、表格行、段落(段落是
+      **下界**不是等号 —— 译者可以拆段,不能丢段)。四个都看不见一个句子,
+      这一条也写进了门里。
+
+- [x] **stone 豁免 11 → 0**,而且不是被发布关掉的。`cargo package` 剥掉 path
+      依赖后按版本去 crates.io 解析,所以「已 bump、未发布」这段窗口里任何带
+      兄弟 pin 的 crate 都必然抬不起来 —— 那是**测量时机**的事实,不是 crate 的。
+      stonegate 现在把这类读数算作**未取**并逐条具名,输出里直说「这些不是通过」;
+      发布之后版本就存在,还抬不起来的会真正变红,不需要编辑任何文件。
+      (kevy-uring 的两条更早已由 Linux 上的首份 stone 报告移除。)
+- [~] **死集合基线已重建为包络:27,873 → 27,732**(-141),用的正是这条写下的
+      办法(`setratchet.py envelope`,三轮 Linux CI:27,642 / 27,707 / 27,665,
+      三份观测各自都过)。**但那三轮不在同一份代码上** —— 中间落了
+      kevy-wasm 的 `checked_add`(新增 6 个按构造在 64 位上不可达的 region)与
+      kevy-lua 的 cmsgpack 模块拆分(6 个符号改名)。包络取逐元素最大值,所以
+      它把真实的代码改动和噪声一起吸收了:比 27,873 紧得多,比同码三轮该有的
+      样子松一点。**这条写下的自然时机仍然成立** —— 发布合入后 develop 上的头
+      三次 covgate 运行,那时是同一份代码,值得再取一次。
+      顺带在这轮里结掉的:`::match_migrating` 与 `::resolve_xadd_id` 曾按
+      「复发就注册」逐个加进 unstable,而 `setratchet.py` 的 envelope 文档
+      **点名这两个**并写着「一个个注册不会收敛」。两条注册已撤,包络代之 ——
+      一条 unstable 把符号整个豁免出棘轮,一个包络只说「不比三轮里最差的更差」。
+      按前缀注册整类也量过并否掉:756/2,612 个符号是无路径的单态化泛型,带着
+      6,771/27,707 个 region,按形状豁免等于豁免 29% 的符号、24% 的区域。
+- [ ] **格式化从未跑过,也没有任何门在管**(属主拍板项)。仓库没有
+      `rustfmt.toml`,CI 里没有 fmt 步骤,`cargo fmt --all --check` 报
+      **4,379 处、749 个文件**。正统 Rust 就是 rustfmt,但这是把 749 个手写
+      文件改成机器口味的决定,**判断权在属主**。我量了、没有动。
+      注:llvm 的 region 由 AST 决定,重排版**不会**动死集合/覆盖率基线;
+      克隆图谱是按行的,会动。
+- [~] **「2,596 项没有可执行示例」这个数不能用来规划** —— 本轮把它量清楚了。
+      九块石头做过之后(bytes/time/geo/compress/ring/madvise/bench/ranktree/
+      vector/scalar/seg/map/alloc,新增 ~110 个 doctest),真实情况是:
+      **分母**含着结构体字段与常量 —— 给 `Civil.y` 或 `GEO_LAT_MIN` 各配一个示例,
+      是把数字清零而什么也没教给读者(仓里立过「有效覆盖不灌水」)。18 块石头里
+      约 370 项值得配、约 299 项配了就是灌水。
+      **分子**漏三类:① 私有模块 `impl` 上的示例**跑了、过了、不登记**
+      (kevy-vector 加 12 登记 4;kevy-seg 加 15 登记 2;kevy-map 加 13 登记 0);
+      ② 没有公开路径的项**根本写不出示例**(`md5_hex`、kevy-seg 的 layout 13 项);
+      ③ feature 门控的模块默认不编译,`global` 的示例要 `--features global` 才跑。
+      工具头注自己承认分子那一头,称之为「对 ratchet 安全的方向」——**确实安全,
+      但不是能用来规划的数**。
+      **真正的产出是它抓到的东西**:`Civil` 字段名、`iter_rev_from` 文档说反了
+      (「largest」实为 smallest)、`SegMeta.entries` 实为 `records`、
+      `ManifestEntry` 漏了 `records`、`KevyHash` 只收字节串与整数。
+      **五个 crate,写可运行示例都纠正了从散文里读来并读错的东西。**
+      剩下的大面(kevy-alloc 84、kevy-text、kevy-sys)是 unsafe 内部,
+      示例要么是对安全性的谎、要么是一页比散文教得更少的铺垫 —— 那里的数字该高。
+- [~] **kevy-embedded ↔ kevy 的 9,400 行**。这条原先写着「只覆盖约四分之一
+      动词面」—— 那是个**手写在规划文件里的数**,而语料早已长过一半,没有
+      任何东西会告诉我们。现在它是**登记簿**:两面都实现的动词,要么被语料
+      用真参数驱动、要么被具名为「逐字节比较说不了的话」,三个方向都卡
+      (漏一个 / 理由过期 / 条目根本不在两面上),并带下限。
+      读数:**共享面 123 个动词,119 驱动 + 4 具名**;线路差分 **167/174
+      逐字节一致**,7 条背离全部具名。
+      顺带查下去一层挖到的:`KNOWN_GAPS` 的 F3 一族是 **14 个引擎已实现、
+      门面能答、而 RESP 线路上根本不存在的 Redis 动词**。**14 个全部接线,
+      SERVER 面的 F3 台账清零**。其中 11 个不需要任何路由改动(默认臂本来
+      就对);`TOUCH` 是 `EXISTS` 的别名(门面的 `touch` 就是
+      `self.exists(keys)`);`COPY` 与 `BITOP` 各写了跨分片编排
+      (`exec_copy.rs` / `exec_bitop.rs`)。BITOP 顺带把 `BitOp` 与
+      `bitop_combine` 从 `kevy-embedded` 下沉到 `kevy-store` —— 兄弟 crate
+      够不着,不下沉就得写第二份填充规则。
+      `bench/FINDING-2026-08-28-two-surfaces-that-drifted.md`
+      `bench/FINDING-2026-08-29-fourteen-verbs-the-engine-had-and-the-wire-did-not.md`
+- [x] **crashgate T6 查清了 —— cell 是对的,引擎是错的**。仪器(保住被丢弃的
+      stderr)在下一次 CI 失败里印出 `trailing 27485178 bytes were a partial
+      frame`,且**没有 corrupt WARN**:resync 从未启动。帧头是 `len` + `crc`,
+      拼接后读到的长度若**合法但超过剩余字节**,遍历判成撕裂尾巴,resync 只在
+      CorruptFrame 上跑 —— 那就是那枚硬币。按机制**构造**复现(不等运气),三
+      部分全修:resync 对任何非 Clean 停止都跑;被跳过的区间置起 `corrupt`
+      (此前救回尾巴却宣布文件健康,违反文档明写的契约);默认路径的消息不再把
+      27.5 MB 叫作「部分帧」。修复后两轮 CI 绿,基准本就 78%,所以当时
+      **`REDpending(T6)` 的声明留着**等更多轮 —— 凭两轮就宣布闭合,和当初标了
+      pending 却从不复核是同一个错误的反面。
+      **现在数够了:9 轮 CI、9 个不同提交、9 次 PASS、0 次 REDpending。**
+      但九连绿本身不是论据(78% 的基准下它约十分之一概率会自己发生),论据是
+      机制被找到并**按构造复现**过。九连绿买到的是「停止声明、开始强制」的底气:
+      T6 已从 `pending` 升为 `verdict` —— pending 会把下一次回归静默吸收,
+      verdict 让它在出现的那一轮就可见。finding 已写全。
+- [ ] ~~crashgate T6 cell 结果不确定~~(切点在字节偏移而非帧边界;三轮
+      100%/100%/50.07%)。**不是本 arc 造成的,也不该由本 arc 拍板** ——
+      修法会改变这个 cell 测的东西。`bench/FINDING-2026-08-28-crashgate-*.md`
+- [ ] **性能轴一次未碰**。6.0.0 arena:对 Redis 8 GET 1.26× / SET 2.58× /
+      INCR 1.98× / SADD 1.52× / HSET 1.40× / LPUSH 1.07×,而 **ZADD 落在噪声带
+      里**(差 80,594,容差 82,849)—— 本 ledger 头一格进带子的 cell。攻最窄的
+      两格需要 decomposition 与独占盒时间。
+      顺带量到:同一份二进制在这台盒子上**天与天之间差到 5-10%**(perfgate 自己
+      重跑参照提交也报同样量级),所以跨天比较必须配同场 A/B,不能只看数字。
+
 # kevy roadmap
 
 唯一的开放工作清单。**线性化的执行顺序** — 上面的先做，下面的后做。
@@ -836,8 +1046,41 @@ t6 剩余渠道(brew tap / apt on t01 / npm 平台分包 / NuGet push / kevy-go 
       标量索引 256 B 里:键(2 份 `Vec<u8>`)68、`ENTRY_OVERHEAD` 48、
       **未命名 140(55%)**。见
       `bench/FINDING-2026-08-23-A2-attacks-under-one-percent-of-what-an-index-costs.md`。
-- [ ] **N5 — 发布 5.4.1**。六层版本对齐 + 盒上 prerelease 五项 + CI 真绿 + 全渠道
-      按内容核验(含真装一次 npm 包)。
+- [x] **N5 — 5.4.1 已发布 ✅**(2026-08-23)。tag `v5.4.1` @ `25f02fcb`,
+      CI 30/30、发布 workflow 7/7(**含 5.4.0 时失败的 npm publish** —— L1 被
+      真实发布验证)。全渠道**按内容**核验:crates.io 四个 crate 全 5.4.1、
+      npm **真装下来**、GitHub release 6 资产、master 快进后下游拉到的
+      CHANGELOG 首条是 `## 5.4.1`、Go 代理解析到 v5.4.1、站点首页 5.4.1
+      且三语 packed-rows 页 200。
+
+- [x] **dogfood 升级已验证 ✅**,但**尚未落到任何 mainline**(2026-08-23):
+      | 项目 | 从 | 验证 | 落点 |
+      |---|---|---|---|
+      | smix | 5.3 | 构建 + `smix-store` 全绿 | 分支 `feature/kevy-5.4.1` |
+      | devops | **路径依赖** | 构建 + 9 套件 | 分支 `feature/kevy-5.4.1` |
+      | buwanren | **1.4.20** | 构建 + 166 用例 / 19 套件 | 分支 `kevy-541` |
+      | labs/lab35-rfid | **3.17** | 构建 + 75 用例 / 13 套件 | 分支 `deps/kevy-5.4.1`(**该仓库无远程**) |
+      | kevy-loadtest/embed-bench | **1.1.20** | 构建 + **真跑出数** | **已生效**(不在版本控制里,无分支可停) |
+      四个有 git 的消费方**都停在未合的分支上**,所以严格讲此刻没有一个
+      mainline 在 5.4.1 上 —— 唯一实际生效的是那个没有版本控制的。
+      合入是属主动作,五个仓库不是我该替他们拍板的。原先这条写的是
+      「主力版本已切换」,那是夸大:验证过 ≠ 落地。
+      buwanren 与 embed-bench 各跨四个大版本、lab35-rfid 跨两个,
+      **都不需要改一行代码**(只用 `Store::open` / `Config::default` / `Store`)。
+      embed-bench 是 bench 工具不是库,所以验收线不是构建而是出数:
+      `RAMP=8,32` 两级跑完,0 错误、5,934,046 条通知投递、AOF 从 36 B 涨到
+      112 MB。它**不在版本控制里**(`kevy-loadtest` 不是 git 仓库),升级前
+      手工备份了 `Cargo.toml` + `Cargo.lock`。
+      **devops 此前从未 dogfood 过任何一次发布** —— 它依赖
+      `path = "../../../kevy/..."`,跟的是另一个 checkout 的磁盘状态;证据是
+      它仓库里一个未提交的 `Cargo.lock`,被 kevy 工作区的编辑改成 5.4.0,
+      且在 5.4.1 发布后仍写着 5.4.0。已改为 crates.io 版本依赖。
+      **覆盖面的真实边界**:五个消费方**都不声明表**,所以验证了「依赖能升、
+      构建能过、行为没退」,**没有验证打包行本身**。真正会踩到新默认的是
+      声明了表的用户,目前没有这样的 dogfood 消费方。
+      从三个扩到五个**没有把这条边界推动一毫米** —— 新登记的两个也不声明表。
+      多一个消费方只是多一次「升级不咬人」的确认,补不上「新默认没人踩过」
+      这个缺口;要补只能让某个消费方**真声明一张表**,或写一个声明表的消费方。
 
 ### 5.4.0 遗留的三笔账（在 N1 之前先清，它们很小但会咬人）
 

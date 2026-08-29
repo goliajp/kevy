@@ -52,6 +52,7 @@ mod record;
 mod replay;
 mod replay_log;
 mod replay_resync;
+mod replay_walk;
 mod replay_txn;
 pub mod reshard;
 mod rewrite_chunk;

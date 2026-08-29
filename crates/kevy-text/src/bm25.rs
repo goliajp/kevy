@@ -2,6 +2,14 @@
 //! statistics.
 
 /// Term-frequency saturation.
+/// # Examples
+///
+/// ```
+/// // Lucene's defaults, so a score computed here is comparable to one
+/// // computed there rather than to this engine alone.
+/// assert_eq!(kevy_text::BM25_K1, 1.2);
+/// assert_eq!(kevy_text::BM25_B, 0.75);
+/// ```
 pub const BM25_K1: f64 = 1.2;
 /// Length normalization strength.
 pub const BM25_B: f64 = 0.75;

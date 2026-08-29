@@ -138,6 +138,87 @@ check RPUSH lt a b c d e
 check LTRIM lt 1 3
 check LRANGE lt 0 -1
 
+# --- the fourteen verbs wired to the RESP surface in 6.0.0 ---
+# Every one of them was already implemented in the engine and answered by
+# the embedded facade; none reached a client. Their compatibility claim
+# is only worth what a real valkey and a real redis say about it, so they
+# are driven here rather than only against kevy's own facade.
+#
+# TIME is deliberately absent: it answers with the clock, and three
+# servers asked a few milliseconds apart do not agree by design.
+check SETBIT bits 7 1
+check SETBIT bits 0 1
+check SETBIT bits 7 0
+check GETBIT bits 0
+check GETBIT bits 7
+check GETBIT bits 999
+check BITCOUNT bits
+check BITCOUNT bits 0 -1
+check BITCOUNT bits 0 0
+check SETBIT bits2 3 1
+check BITOP AND bdst bits bits2
+check GET bdst
+check BITOP OR bdst bits bits2
+check GET bdst
+check BITOP XOR bdst bits bits2
+check BITOP NOT bnot bits
+check BITPOS bits 1
+check BITPOS bits 0
+check BITPOS bits 1 0
+check BITPOS bits 1 0 -1
+check SET rng hello-world
+check GETRANGE rng 0 4
+check GETRANGE rng -5 -1
+check GETRANGE rng 99 200
+check SETRANGE rng 5 _____
+check GET rng
+check SETRANGE rng 20 tail
+check STRLEN rng
+check RPUSH li a b c
+check LINSERT li BEFORE b X
+check LINSERT li AFTER b Y
+check LINSERT li BEFORE nosuch Q
+check LRANGE li 0 -1
+check SET csrc copy-me
+check COPY csrc cdst
+check GET cdst
+check COPY csrc cdst
+check COPY csrc cdst REPLACE
+check COPY nosuchsrc cdst2
+check TOUCH csrc cdst nosuchkey
+check TOUCH nosuchkey
+check SET gx gv
+check GETEX gx
+check GETEX gx EX 1000
+check TTL gx
+check GETEX nosuchkey
+check ZADD zr 1 one 2 two 3 three
+check ZREVRANGE zr 0 -1
+check ZREVRANGE zr 0 -1 WITHSCORES
+check ZREVRANGE zr 0 0
+check ZREVRANGE zr -2 -1
+check ZREVRANGE zr 5 10
+check HSET hf f 1
+check HINCRBYFLOAT hf f 1.5
+check HINCRBYFLOAT hf f -0.25
+check HINCRBYFLOAT hf newfield 2.5
+check HGET hf f
+# ...and the refusals, where clones diverge most
+check SETBIT bits abc 1
+check SETBIT bits 7 2
+check GETBIT bits abc
+check BITCOUNT bits a b
+check BITPOS bits 2
+check BITOP SIDEWAYS d bits
+check BITOP NOT d bits bits2
+check GETRANGE rng a 4
+check SETRANGE rng abc x
+check LINSERT li SIDEWAYS b Q
+check GETEX gx XX 100
+check GETEX gx EX 0
+check ZREVRANGE zr 0 -1 SCORES
+check HINCRBYFLOAT hf f abc
+
 # --- error / type / arity reply compatibility (where clones diverge) ---
 check SET str1 v
 check LPUSH str1 x          # WRONGTYPE: string vs list op

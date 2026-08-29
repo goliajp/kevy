@@ -10,6 +10,7 @@
 //! positions (`WITH POSITIONS` was not set) nothing is verifiable, so a
 //! phrase query returns empty rather than silently degrading to OR.
 
+use crate::clauses::parse_clauses;
 use std::collections::{HashMap, HashSet};
 
 use super::segment_scope::Scope;
@@ -439,62 +440,4 @@ fn phrase_starts(pos: &Positions, toks: &[Vec<u8>], id: u32) -> HashSet<u32> {
         }
     }
     starts
-}
-
-/// Parsed query clauses: bare terms, phrases (each a token sequence) and
-/// prefix stems.
-pub type Clauses = (Vec<Vec<u8>>, Vec<Vec<Vec<u8>>>, Vec<Vec<u8>>);
-
-/// Split a query into bare terms, quoted phrases, and `word*` prefixes.
-/// A `"…"` group of two or more tokens is a phrase (a shorter group joins
-/// the bare terms — a one-word "phrase" is just that word); an unquoted
-/// word ending in `*` is a prefix. An unterminated quote is lenient: the
-/// remainder is read as plain text rather than rejected.
-pub fn parse_clauses(text: &[u8]) -> Clauses {
-    let mut bare: Vec<Vec<u8>> = Vec::new();
-    let mut phrases: Vec<Vec<Vec<u8>>> = Vec::new();
-    let mut prefixes: Vec<Vec<u8>> = Vec::new();
-    let mut plain: Vec<u8> = Vec::new();
-    let mut i = 0;
-    while i < text.len() {
-        if text[i] != b'"' {
-            plain.push(text[i]);
-            i += 1;
-            continue;
-        }
-        extend_plain(&plain, &mut bare, &mut prefixes);
-        plain.clear();
-        let start = i + 1;
-        match text[start..].iter().position(|&b| b == b'"') {
-            Some(off) => {
-                let toks = tokenize(&text[start..start + off]);
-                if toks.len() >= 2 {
-                    phrases.push(toks);
-                } else {
-                    bare.extend(toks);
-                }
-                i = start + off + 1;
-            }
-            None => {
-                extend_plain(&text[start..], &mut bare, &mut prefixes);
-                i = text.len();
-            }
-        }
-    }
-    extend_plain(&plain, &mut bare, &mut prefixes);
-    (bare, phrases, prefixes)
-}
-
-/// Split plain (unquoted) query text: a whitespace word ending in `*`
-/// becomes a prefix clause (its stem, ASCII-lowercased to match the
-/// stored token form), every other word tokenizes into bare terms.
-fn extend_plain(plain: &[u8], bare: &mut Vec<Vec<u8>>, prefixes: &mut Vec<Vec<u8>>) {
-    for word in plain.split(u8::is_ascii_whitespace) {
-        match word.strip_suffix(b"*") {
-            Some(stem) if !stem.is_empty() => {
-                prefixes.push(stem.iter().map(u8::to_ascii_lowercase).collect());
-            }
-            _ => bare.extend(tokenize(word)),
-        }
-    }
 }

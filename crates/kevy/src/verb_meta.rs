@@ -3,15 +3,28 @@
 //! Parity tests in tests_verb_meta.rs hold this table and
 //! the dispatch surface bidirectionally equal.
 //!
-//! Flag discipline: `write` / `readonly` mirror
-//! `kevy_resp::ops_table::OP_TABLE`'s `write` column **literally** for
-//! every verb that has a row there (including its documented quirks:
-//! RENAME/RENAMENX classify as reads because the server routes them at
-//! the runtime Op level, BLPOP/BRPOP classify as reads because the
-//! blocked-serve path logs the LPOP/RPOP effect, and IDX./VIEW. catalog
-//! mutations are sidecar-persisted — not data writes). Verbs without an
-//! OP_TABLE row (connection/admin/tx/pubsub/script/_RO twins) are
-//! classified here directly.
+//! Flag discipline: `write` / `readonly` are the CLIENT-facing answer —
+//! what `COMMAND DOCS` reports, and what a client routes on when it
+//! decides what must never reach a read-only replica. That is a different
+//! question from `kevy_resp::ops_table::OP_TABLE`'s `write` column, which
+//! is the AOF/propagation gate: does the verb ITSELF produce the
+//! replayable effect. They agree on 138 of the 152 verbs carrying both
+//! rows, and deliberately differ on fourteen — RENAME/RENAMENX (routed at
+//! the runtime Op level), BLPOP/BRPOP (the blocked-serve path logs the
+//! LPOP/RPOP), and the IDX./VIEW./TABLE. catalog mutations
+//! (sidecar-persisted, not data writes). Each of those is a write to a
+//! client and not a write to the AOF, and `tests_verb_meta.rs` holds that
+//! set exactly, in both directions.
+//!
+//! An earlier version of this note said the doc face mirrors OP_TABLE's
+//! column **literally**, and named those same quirks as classifying here
+//! as reads. They never have. Nothing checked it either: the sibling
+//! parity test asks whether every OP_TABLE verb HAS a doc row, never
+//! whether the two rows agree. Following the old note would have told
+//! every client that IDX.CREATE and BLPOP are readonly.
+//!
+//! Verbs without an OP_TABLE row (connection/admin/tx/pubsub/script/_RO
+//! twins) are classified here directly.
 //!
 //! Arity is Redis semantics: positive = exact argc including the verb
 //! itself; negative = at least |n|. Values are derived from each
@@ -21,12 +34,28 @@
 /// kevy_resp::ops_table::OP_TABLE — this table is the DOC face).
 #[derive(Debug, Clone, Copy)]
 pub struct VerbMeta {
+    /// Canonical uppercase name, as `COMMAND DOCS` reports it and as the
+    /// dispatch tables spell it.
     pub name: &'static str,
+    /// Which family the reference groups it under — `string`, `index`,
+    /// `server` and so on.
     pub group: &'static str,
+    /// Redis's arity convention: positive is an exact argument count
+    /// INCLUDING the verb, negative is a minimum. `-4` means "at least
+    /// four". This is the field the dispatch chain consults before
+    /// reporting a verb unknown.
     pub arity: i8,
+    /// `COMMAND` flags — `readonly`, `write`, `admin`, `blocking`,
+    /// `extension`. Documentation only; the write classification the AOF
+    /// and replication paths actually gate on lives in
+    /// `kevy_resp::ops_table`.
     pub flags: &'static [&'static str],
+    /// One sentence, present tense, for the reference and `COMMAND DOCS`.
     pub summary: &'static str,
+    /// The kevy version this verb first shipped in — not the Redis one.
     pub since: &'static str,
+    /// The full call form, `VERB arg [optional …]`, as the reference
+    /// prints it and as an arity error points a caller at.
     pub syntax: &'static str,
     /// Time complexity of THIS engine's implementation, derived by reading it.
     /// Never copied from Redis's docs: several of ours genuinely differ in

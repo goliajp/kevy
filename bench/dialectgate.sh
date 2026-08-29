@@ -30,7 +30,7 @@ trap 'kill $SRV 2>/dev/null; wait $SRV 2>/dev/null; rm -rf "$DIR"' EXIT
 SRV=$!
 
 python3 - "$PORT" <<'PY'
-import socket, sys, time
+import os, socket, sys, time
 
 port = int(sys.argv[1])
 
@@ -40,7 +40,16 @@ port = int(sys.argv[1])
 # went from 2 s to 10: a wait budget tuned on an idle machine is a flake
 # scheduled for the first busy one. The server was fine; hand-started it
 # listens, answers PING, and prints its banner.
-deadline = time.time() + 60
+#
+# Sixty is still not always enough. This gate failed on a workstation that
+# was compiling an unrelated project — thirty rustc processes, none of them
+# this one's — and the answer to that is not a larger constant, it is the
+# knob the rest of the suite already turns: KEVY_TEST_PATIENCE, which
+# covgate and deadgate set to 6 and the replication tests read for the same
+# reason. A budget tuned on an idle machine is a flake scheduled for the
+# first busy one, and the second busy one after that.
+budget = 60 * float(os.environ.get("KEVY_TEST_PATIENCE", "1"))
+deadline = time.time() + budget
 while time.time() < deadline:
     try:
         s = socket.create_connection(("127.0.0.1", port), timeout=1)
@@ -49,8 +58,9 @@ while time.time() < deadline:
         time.sleep(0.2)
 else:
     sys.exit(f"dialectgate: server never accepted on 127.0.0.1:{port} "
-             f"within 60s — it is slow or absent, and this cannot tell "
-             f"which; check the server log in the work dir")
+             f"within {budget:.0f}s — it is slow or absent, and this cannot "
+             f"tell which; check the server log in the work dir. On a loaded "
+             f"machine widen it with KEVY_TEST_PATIENCE=3.")
 s.settimeout(10)
 
 def ev(script):

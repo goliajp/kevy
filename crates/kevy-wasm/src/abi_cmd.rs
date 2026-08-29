@@ -77,12 +77,52 @@ fn unpack_argv(packed: &[u8]) -> Option<Vec<Vec<u8>>> {
     let mut args = Vec::new();
     let mut pos = 0usize;
     while pos < packed.len() {
-        let head = packed.get(pos..pos + 4)?;
+        let head = packed.get(pos..pos.checked_add(4)?)?;
         let len = u32::from_le_bytes(head.try_into().ok()?) as usize;
         pos += 4;
-        let body = packed.get(pos..pos + len)?;
+        // `checked_add`, not `pos + len`: on wasm32 `usize` is 32 bits and
+        // `len` is a u32 out of the buffer, so the sum can overflow. In a
+        // release build with no overflow-checks it wraps to a low value,
+        // `get` sees a backwards range and returns None, and this happens
+        // to be the right answer — by accident. The contract above says a
+        // truncated buffer must fail loudly; this makes it fail by
+        // construction on both profiles.
+        let body = packed.get(pos..pos.checked_add(len)?)?;
         args.push(body.to_vec());
         pos += len;
     }
     if args.is_empty() { None } else { Some(args) }
+}
+
+#[cfg(test)]
+mod unpack_tests {
+    use super::unpack_argv;
+
+    /// The contract the `checked_add` change preserves — not proof of it.
+    ///
+    /// On this host `usize` is 64 bits and a u32 length cannot overflow the
+    /// sum, so no test compiled for x86_64 or aarch64 can tell the two
+    /// spellings apart. The change is verified by `cargo check --target
+    /// wasm32-unknown-unknown` and by reading; what this pins is that a
+    /// truncated or over-declared buffer still refuses, which is what the
+    /// function promises and what a refactor could break.
+    #[test]
+    fn an_over_declared_length_refuses() {
+        let mut b = Vec::new();
+        b.extend_from_slice(&3u32.to_le_bytes());
+        b.extend_from_slice(b"abc");
+        assert_eq!(unpack_argv(&b), Some(vec![b"abc".to_vec()]), "an honest buffer unpacks");
+
+        let mut lying = Vec::new();
+        lying.extend_from_slice(&u32::MAX.to_le_bytes());
+        lying.extend_from_slice(b"abc");
+        assert_eq!(unpack_argv(&lying), None, "a length the buffer cannot supply refuses");
+
+        let mut truncated = Vec::new();
+        truncated.extend_from_slice(&3u32.to_le_bytes());
+        truncated.extend_from_slice(b"ab");
+        assert_eq!(unpack_argv(&truncated), None, "a short body refuses");
+
+        assert_eq!(unpack_argv(&[0u8; 2]), None, "a header that does not fit refuses");
+    }
 }

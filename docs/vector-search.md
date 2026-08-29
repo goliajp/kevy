@@ -177,8 +177,8 @@ Measured envelope (receipts in the bench tree):
   RSS growth (0.5-1.5×).
 - [`bench/PERF-LEDGER.md`](../bench/PERF-LEDGER.md) records the
   comparative shootout: recall-aligned at 1.000, KNN answers in
-  0.48 ms vs 0.79 ms — **1.64× ahead** of the RediSearch HNSW on
-  the same corpus.
+  0.48 ms vs 0.79 ms — **1.64× ahead** of the RediSearch HNSW in
+  redis-stack 7.4.7, on the same corpus.
 
 Write-side cost is the standard index tax (one field parse + one
 graph insert per matching index per write); construction cost scales

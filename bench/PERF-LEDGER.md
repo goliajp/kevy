@@ -567,6 +567,70 @@ textgate 正在断言的内存公式。范围决定权不在我。
 
 ---
 
+## arena bare face — 2026-08-27 — kevy 6.0.0
+
+Re-measured for the 6.0.0 release rather than relabelled, per the rule that
+a table headed with a version states which build was measured.
+
+`bash bench/arena.sh target/release/kevy` on lx64, same protocol as every
+entry: cores 0-7 server / 8-15 client, one engine at a time, `-c 50 -P 16`,
+median-of-5 with sample stdev, throughput from each server's own command
+counter over a timed window.
+
+| verb | kevy 6.0.0 | Redis 8 | valkey 9.1.1 | Dragonfly | vs Redis 8 |
+|---|---:|---:|---:|---:|---:|
+| GET | 7,342,979 | 5,835,267 | 3,156,107 | 2,790,970 | 1.26x |
+| SET | 6,695,610 | 2,595,547 | 1,702,671 | 1,870,312 | 2.58x |
+| INCR | 6,564,195 | 3,315,916 | 2,241,966 | 2,078,163 | 1.98x |
+| SADD | 5,565,412 | 3,658,737 | 2,209,086 | 1,852,751 | 1.52x |
+| HSET | 4,388,836 | 3,136,470 | 1,837,743 | 1,759,833 | 1.40x |
+| LPUSH | 2,996,776 | 2,804,854 | 1,876,716 | 1,432,854 | 1.07x |
+| ZADD | 2,939,276 | 2,858,682 | 1,760,394 | 1,745,073 | NOISE |
+
+Gap rule: `|kevy - other| <= max(stdev_kevy, stdev_other)` reads as NOISE.
+**ZADD vs Redis 8 hits it** — 80,594 against a tolerance of 82,849 — so that
+cell is a tie on this run, not a 1.03x lead. It is the first cell in this
+ledger to land inside the band, and it is reported rather than rounded.
+
+### The movement against 5.4.0 is the box, and here is the measurement
+
+Read against the 5.4.0 entry, ZADD is down 10.9% and LPUSH 9.4% — six and
+five sample stdevs of this run, far outside anything a within-run band
+explains. Between-day variation is the obvious answer and was not accepted
+as one: the previous entry had already waved a 16% HSET move through as
+"day-to-day machine variation", which is an assertion, not a reading.
+
+So 5.4.1 was rebuilt from its tag in a worktree on the same box and measured
+in the same session, minutes apart, same protocol:
+
+| verb | kevy 6.0.0 | kevy 5.4.1 (same session) | Δ | gap vs tolerance |
+|---|---:|---:|---:|---|
+| GET | 7,342,979 | 7,386,471 | −0.6% | NOISE (43,492 vs 119,702) |
+| SET | 6,695,610 | 6,754,108 | −0.9% | NOISE (58,498 vs 306,144) |
+| INCR | 6,564,195 | 6,251,772 | +5.0% | NOISE (312,423 vs 494,654) |
+| SADD | 5,565,412 | 4,217,435 | +32.0% | outside (1,347,977 vs 806,665) |
+| HSET | 4,388,836 | 4,012,573 | +9.4% | NOISE (376,263 vs 472,068) |
+| LPUSH | 2,996,776 | 3,034,547 | −1.2% | NOISE (37,771 vs 117,168) |
+| ZADD | 2,939,276 | 2,988,816 | −1.7% | NOISE (49,540 vs 55,871) |
+
+**5.4.1 measures 2,988,816 ZADD and 3,034,547 LPUSH on this box today** —
+the same place 6.0.0 lands, and the same ~10% below where 5.4.0 read on
+2026-08-23. The movement is the machine between two days, not the release.
+Six of seven cells are noise against the previous release; SADD reads 32%
+faster and is **not** claimed, because 5.4.1's SADD cell carried a 19%
+sample stdev (806,665 on a median of 4,217,435) and a cell that noisy
+cannot support a win.
+
+What this does not say is which day is right. Both readings are of the same
+binary line on the same hardware, so at least one of them is being shaped by
+something outside the protocol — a neighbouring container, a thermal state,
+a kernel setting that moved. The A/B answers the release question (does
+6.0.0 regress? no) and leaves that one open.
+
+Dragonfly's stdev remains 20-45% of its median on several verbs (ZADD:
+779,864 on a median of 1,745,073); its column stays the least trustworthy on
+the page.
+
 ## arena bare face — 2026-08-23 — kevy 5.4.0
 
 Re-measured for the 5.4.0 release rather than relabelled, per the rule that

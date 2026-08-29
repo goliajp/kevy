@@ -1,0 +1,69 @@
+{
+  "identity": {
+    "kind": "doc-deficit",
+    "platform": "linux"
+  },
+  "kind": "doc-deficit",
+  "platform": "linux",
+  "total_regions": 2684,
+  "min_total": 1342,
+  "public_items": 2684,
+  "documented": 2684,
+  "with_example": 135,
+  "symbols": {
+    "gen-docs/without-example": 8,
+    "kevy/without-example": 21,
+    "kevy-alloc/without-example": 84,
+    "kevy-bench/without-example": 7,
+    "kevy-chaos/without-example": 33,
+    "kevy-cli/without-example": 101,
+    "kevy-client/without-example": 53,
+    "kevy-client-async/without-example": 135,
+    "kevy-cluster-rw/without-example": 8,
+    "kevy-compress/without-example": 6,
+    "kevy-config/without-example": 157,
+    "kevy-elect/without-example": 83,
+    "kevy-embedded/without-example": 165,
+    "kevy-ffi/without-example": 46,
+    "kevy-geo/without-example": 6,
+    "kevy-hash/without-example": 4,
+    "kevy-index/without-example": 232,
+    "kevy-jni/without-example": 15,
+    "kevy-lua/without-example": 22,
+    "kevy-lua-host/without-example": 14,
+    "kevy-map/without-example": 12,
+    "kevy-mcp/without-example": 118,
+    "kevy-napi/without-example": 2,
+    "kevy-persist/without-example": 94,
+    "kevy-pubsub-bench/without-example": 11,
+    "kevy-ranktree/without-example": 1,
+    "kevy-replicate/without-example": 128,
+    "kevy-resp/without-example": 107,
+    "kevy-resp-client/without-example": 33,
+    "kevy-rt/without-example": 210,
+    "kevy-scalar/without-example": 21,
+    "kevy-scope/without-example": 20,
+    "kevy-seg/without-example": 18,
+    "kevy-sql/without-example": 44,
+    "kevy-store/without-example": 289,
+    "kevy-sys/without-example": 23,
+    "kevy-testnet/without-example": 6,
+    "kevy-text/without-example": 70,
+    "kevy-time/without-example": 6,
+    "kevy-tmpdir/without-example": 1,
+    "kevy-uring/without-example": 16,
+    "kevy-vector/without-example": 12,
+    "kevy-vlog/without-example": 32,
+    "kevy-wasm/without-example": 41,
+    "kevy-window/without-example": 34
+  },
+  "history": [
+    {
+      "accepted": [
+        "kevy-store/without-example"
+      ],
+      "reason": "BitOp and its four variants moved from kevy-embedded to kevy-store, where the byte arithmetic they name now lives so both surfaces can call one implementation. kevy-embedded/without-example fell 170 -> 165 by exactly those items; kevy-store/without-example rose 285 -> 289, four rather than five because the enum itself gained an executable example. The deficit is one item smaller overall; the ratchet is keyed per crate, so a move between crates shows as growth in the receiving key. bitop_combine and Route::BitOpStore both carry examples that teach \u2014 the padding rules and the 0xff tail of NOT, and why BITOP cannot ride Route::Single(1).",
+      "delta": 4
+    }
+  ]
+}

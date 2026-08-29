@@ -21,8 +21,32 @@ JUNIT_JAR="$HERE/lib/junit-platform-console-standalone-1.10.2.jar"
 if [ ! -f "$JUNIT_JAR" ]; then
   echo "run-tests: fetching JUnit 5 console standalone…"
   mkdir -p "$HERE/lib"
-  curl -sSL -o "$JUNIT_JAR" \
-    https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console-standalone/1.10.2/junit-platform-console-standalone-1.10.2.jar
+  # --fail, and a temp file that only becomes the jar once it IS one.
+  #
+  # Without --fail, curl treats an HTTP error response as a success and
+  # writes the error page where the jar should be: exit 0, wrong artifact.
+  # CI failed that way on 2026-08-28 — the fetch and the next line are 41
+  # ms apart in the log, which is not long enough to move two megabytes,
+  # and the failure surfaced two steps later as
+  # `error reading …console-standalone-1.10.2.jar; zip END header not
+  # found`. A download that half-happened is worse than one that did not,
+  # because it looks like a cache hit on the next run.
+  TMP="$JUNIT_JAR.part"
+  if ! curl -sSL --fail --retry 3 --retry-delay 2 -o "$TMP" \
+      https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console-standalone/1.10.2/junit-platform-console-standalone-1.10.2.jar
+  then
+    rm -f "$TMP"
+    echo "run-tests: REFUSED — could not fetch the JUnit console jar" >&2
+    exit 2
+  fi
+  # A jar is a zip; anything else is an error page with a 200 on it.
+  if ! head -c 2 "$TMP" | grep -q 'PK'; then
+    SIZE=$(wc -c < "$TMP")
+    rm -f "$TMP"
+    echo "run-tests: REFUSED — the fetched jar is not a zip ($SIZE bytes)" >&2
+    exit 2
+  fi
+  mv "$TMP" "$JUNIT_JAR"
 fi
 
 echo "run-tests: building libkevy_jni + kevy server…"

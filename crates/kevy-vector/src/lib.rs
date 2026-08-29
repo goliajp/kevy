@@ -6,6 +6,8 @@
 
 mod dist;
 mod hnsw;
+mod params;
 
 pub use dist::{Distance, parse_vector};
-pub use hnsw::{Hnsw, HnswParams, VectorStats};
+pub use hnsw::Hnsw;
+pub use params::{HnswParams, VectorStats};

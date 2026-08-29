@@ -6,7 +6,12 @@
 
 use crate::store::Store;
 
-use super::util::{arr, bulk, err, int, simple, wrong_args};
+use super::util::{arr, bulk, int, simple, wrong_args};
+// Every remaining `err` call in this file sits inside the same cfg. Left
+// unconditional the import is dead on wasm32, and `warnings = "deny"` makes
+// that a build failure on a target nothing else here compiles for.
+#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+use super::util::err;
 
 /// One conn/digest/feed request; `false` = verb not in this group.
 // LOC-WAIVER: data-driven verb dispatch table — one reply-emitter arm per verb.
@@ -38,7 +43,7 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
                 int(out, count as i64);
                 bulk(out, format!("{xor:016x}").as_bytes());
             } else {
-                err(out, "ERR bad PREFIX.DIGEST arguments");
+                wrong_args(out, "prefix.digest");
             }
         }
         #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
@@ -53,7 +58,7 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
                     .as_bytes(),
                 );
             } else {
-                err(out, "ERR bad PREFIX.STATS arguments");
+                wrong_args(out, "prefix.stats");
             }
         }
         #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]

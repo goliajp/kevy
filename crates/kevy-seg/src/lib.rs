@@ -33,6 +33,8 @@
 //! Its WAL, freelist, cursors and varint cell headers are deliberately
 //! absent: an immutable segment needs none of them.
 
+#![warn(missing_docs)]
+
 mod builder;
 mod layout;
 mod manifest;

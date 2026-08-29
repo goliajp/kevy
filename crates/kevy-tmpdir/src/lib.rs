@@ -24,6 +24,8 @@
 //! separates threads within a process and the pid separates processes. That is
 //! the whole trick, and it is why this is one crate instead of nine copies.
 
+#![warn(missing_docs)]
+
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -38,6 +40,23 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 /// never cleared, so a recycled pid inherited the PREVIOUS run's data files —
 /// `create_dir_all` on an existing directory succeeds silently, and the loader
 /// then read a mix of stale and fresh dumps as though they were one dataset.
+/// # Examples
+///
+/// Two calls never collide, and the second call for a label does not
+/// inherit what the first one left:
+///
+/// ```
+/// let a = kevy_tmpdir::unique_dir("doc");
+/// let b = kevy_tmpdir::unique_dir("doc");
+/// assert_ne!(a, b);
+/// assert!(a.is_dir() && b.is_dir());
+///
+/// std::fs::write(a.join("stale"), b"old").unwrap();
+/// let again = kevy_tmpdir::unique_dir("doc");
+/// assert!(!again.join("stale").exists());
+///
+/// for d in [a, b, again] { std::fs::remove_dir_all(d).unwrap(); }
+/// ```
 pub fn unique_dir(label: &str) -> PathBuf {
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
     let p = std::env::temp_dir().join(format!("kevy-{label}-{}-{n}", std::process::id()));
@@ -51,15 +70,44 @@ pub fn unique_dir(label: &str) -> PathBuf {
 /// Dropped on unwind too, so a failing test does not leave litter behind for the
 /// next one to trip over.
 #[derive(Debug)]
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+/// let dir = kevy_tmpdir::TmpDir::new("doctest");
+/// let kept: std::path::PathBuf = dir.path().to_path_buf();
+/// assert!(kept.is_dir());
+/// drop(dir);
+/// assert!(!kept.exists(), "the guard deletes the directory it made");
+/// ```
 pub struct TmpDir(PathBuf);
 
 impl TmpDir {
     /// `label` shows up in the path, so a directory that somehow survives says
     /// which test left it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let dir = kevy_tmpdir::TmpDir::new("who-left-this");
+    /// let name = dir.path().file_name().unwrap().to_string_lossy().into_owned();
+    /// assert!(name.contains("who-left-this"), "{name} does not name its owner");
+    /// ```
     pub fn new(label: &str) -> Self {
         Self(unique_dir(label))
     }
 
+    /// The directory itself. Borrowed, not cloned, so the path cannot
+    /// outlive the guard that deletes it — a `PathBuf` handed out here
+    /// would still name the directory after `Drop` removed it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let dir = kevy_tmpdir::TmpDir::new("write-something");
+    /// std::fs::write(dir.path().join("a.txt"), b"hello").unwrap();
+    /// assert_eq!(std::fs::read(dir.path().join("a.txt")).unwrap(), b"hello");
+    /// ```
     pub fn path(&self) -> &Path {
         &self.0
     }

@@ -170,6 +170,18 @@ impl<T> Drop for Ring<T> {
 }
 
 /// The sending half. `Send` (move to the producer thread); only this half pushes.
+///
+/// # Examples
+///
+/// ```
+/// let (mut tx, mut rx) = kevy_ring::ring::<u32>(2);
+/// assert!(tx.push(1).is_ok());
+/// assert!(tx.push(2).is_ok());
+/// // Full: the value comes BACK rather than being dropped or blocking.
+/// assert_eq!(tx.push(3), Err(3));
+/// assert_eq!(rx.pop(), Some(1));
+/// assert!(tx.push(3).is_ok());
+/// ```
 pub struct Producer<T> {
     inner: Arc<Ring<T>>,
     /// Cached snapshot of the consumer's `head`. Stale-OK: a value the
@@ -183,6 +195,20 @@ pub struct Producer<T> {
 }
 
 /// The receiving half. `Send` (move to the consumer thread); only this half pops.
+///
+/// # Examples
+///
+/// ```
+/// let (mut tx, mut rx) = kevy_ring::ring::<&str>(4);
+/// assert_eq!(rx.pop(), None, "empty pops None, it does not block");
+/// tx.push("a").unwrap();
+/// tx.push("b").unwrap();
+/// assert_eq!(rx.len(), 2);
+/// // FIFO, and `len` falls as it drains.
+/// assert_eq!(rx.pop(), Some("a"));
+/// assert_eq!(rx.pop(), Some("b"));
+/// assert!(rx.is_empty());
+/// ```
 pub struct Consumer<T> {
     inner: Arc<Ring<T>>,
     /// Cached snapshot of the producer's `tail`. Stale-OK in the same way as
@@ -195,6 +221,33 @@ pub struct Consumer<T> {
 
 /// Create a ring holding at least `capacity` items (rounded up to a power of
 /// two, minimum 2), returning its producer and consumer halves.
+///
+/// # Examples
+///
+/// The two halves are separate values, which is what lets one go to each
+/// thread — the type system, not a convention, keeps the single-producer
+/// single-consumer promise:
+///
+/// ```
+/// let (mut tx, mut rx) = kevy_ring::ring::<u32>(4);
+/// let t = std::thread::spawn(move || {
+///     for i in 0..4 { while tx.push(i).is_err() {} }
+/// });
+/// let mut got = Vec::new();
+/// while got.len() < 4 {
+///     if let Some(v) = rx.pop() { got.push(v) }
+/// }
+/// t.join().unwrap();
+/// assert_eq!(got, [0, 1, 2, 3], "order is preserved end to end");
+/// ```
+///
+/// Capacity rounds **up** to a power of two, with two as the floor:
+///
+/// ```
+/// assert_eq!(kevy_ring::ring::<u8>(5).0.capacity(), 8);
+/// assert_eq!(kevy_ring::ring::<u8>(8).0.capacity(), 8);
+/// assert_eq!(kevy_ring::ring::<u8>(0).0.capacity(), 2);
+/// ```
 pub fn ring<T>(capacity: usize) -> (Producer<T>, Consumer<T>) {
     let r = Arc::new(Ring::with_capacity(capacity));
     (
@@ -212,6 +265,21 @@ pub fn ring<T>(capacity: usize) -> (Producer<T>, Consumer<T>) {
 impl<T> Producer<T> {
     /// Push `val`. Returns `Err(val)` (handing the value back) if the ring is
     /// full, so the caller can retry after the consumer drains.
+    ///
+    /// # Examples
+    ///
+    /// A full ring hands the value back rather than dropping it, so nothing
+    /// is lost while the caller waits:
+    ///
+    /// ```
+    /// let (mut tx, mut rx) = kevy_ring::ring::<&str>(2);
+    /// assert!(tx.push("a").is_ok());
+    /// assert!(tx.push("b").is_ok());
+    /// assert_eq!(tx.push("c"), Err("c"), "the value comes back untouched");
+    ///
+    /// assert_eq!(rx.pop(), Some("a"));
+    /// assert!(tx.push("c").is_ok());
+    /// ```
     pub fn push(&mut self, val: T) -> Result<(), T> {
         let r = &*self.inner;
         // `tail` is ours: a plain Relaxed load suffices.
@@ -239,6 +307,16 @@ impl<T> Producer<T> {
 
     /// Whether the next [`push`](Self::push) would fail (ring full). Advisory:
     /// the consumer may free a slot immediately after this returns.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let (mut tx, _rx) = kevy_ring::ring::<u8>(2);
+    /// assert!(!tx.is_full());
+    /// tx.push(1).unwrap();
+    /// tx.push(2).unwrap();
+    /// assert!(tx.is_full());
+    /// ```
     pub fn is_full(&self) -> bool {
         let r = &*self.inner;
         let tail = r.tail.0.load(Ordering::Relaxed);
@@ -247,6 +325,14 @@ impl<T> Producer<T> {
     }
 
     /// Total slot count (a power of two ≥ 2).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let (tx, rx) = kevy_ring::ring::<u8>(100);
+    /// assert_eq!(tx.capacity(), 128);
+    /// assert_eq!(tx.capacity(), rx.capacity(), "both halves see one ring");
+    /// ```
     pub fn capacity(&self) -> usize {
         self.inner.mask + 1
     }
@@ -254,6 +340,18 @@ impl<T> Producer<T> {
 
 impl<T> Consumer<T> {
     /// Pop the oldest item, or `None` if the ring is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let (mut tx, mut rx) = kevy_ring::ring::<u8>(4);
+    /// assert_eq!(rx.pop(), None);
+    /// tx.push(7).unwrap();
+    /// tx.push(8).unwrap();
+    /// assert_eq!(rx.pop(), Some(7), "oldest first");
+    /// assert_eq!(rx.pop(), Some(8));
+    /// assert_eq!(rx.pop(), None);
+    /// ```
     pub fn pop(&mut self) -> Option<T> {
         let r = &*self.inner;
         // `head` is ours: Relaxed.
@@ -279,6 +377,17 @@ impl<T> Consumer<T> {
 
     /// Whether the next [`pop`](Self::pop) would return `None` (ring empty).
     /// Advisory: the producer may push immediately after this returns.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let (mut tx, mut rx) = kevy_ring::ring::<u8>(2);
+    /// assert!(rx.is_empty());
+    /// tx.push(1).unwrap();
+    /// assert!(!rx.is_empty());
+    /// rx.pop().unwrap();
+    /// assert!(rx.is_empty());
+    /// ```
     pub fn is_empty(&self) -> bool {
         let r = &*self.inner;
         let head = r.head.0.load(Ordering::Relaxed);
@@ -287,6 +396,17 @@ impl<T> Consumer<T> {
     }
 
     /// Number of items currently queued. Advisory under concurrent producing.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let (mut tx, mut rx) = kevy_ring::ring::<u8>(4);
+    /// assert_eq!(rx.len(), 0);
+    /// for i in 0..3 { tx.push(i).unwrap() }
+    /// assert_eq!(rx.len(), 3);
+    /// rx.pop().unwrap();
+    /// assert_eq!(rx.len(), 2);
+    /// ```
     pub fn len(&self) -> usize {
         let r = &*self.inner;
         let tail = r.tail.0.load(Ordering::Acquire);
@@ -294,163 +414,22 @@ impl<T> Consumer<T> {
         tail.wrapping_sub(head)
     }
 
-    /// Total slot count (a power of two ≥ 2).
+    /// Total slot count (a power of two ≥ 2). Never changes: the ring does
+    /// not grow, which is what makes `push` a bounded, allocation-free
+    /// operation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let (mut tx, rx) = kevy_ring::ring::<u8>(4);
+    /// let before = rx.capacity();
+    /// for i in 0..4 { tx.push(i).unwrap() }
+    /// assert_eq!(rx.capacity(), before);
+    /// ```
     pub fn capacity(&self) -> usize {
         self.inner.mask + 1
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    #[test]
-    fn capacity_rounds_up_to_power_of_two() {
-        let (tx, rx) = ring::<u8>(3);
-        assert_eq!(tx.capacity(), 4);
-        // Consumer-side capacity must report the same slot count as the
-        // producer (both inspect the shared mask).
-        assert_eq!(rx.capacity(), tx.capacity());
-        let (tx, _rx) = ring::<u8>(1);
-        assert_eq!(tx.capacity(), 2); // minimum
-        let (tx, _rx) = ring::<u8>(1024);
-        assert_eq!(tx.capacity(), 1024);
-    }
-
-    #[test]
-    fn fifo_order_and_full_empty() {
-        let (mut tx, mut rx) = ring::<u32>(4); // 4 slots
-        assert!(rx.is_empty());
-        for i in 0..4 {
-            assert!(tx.push(i).is_ok());
-        }
-        assert!(tx.is_full());
-        assert_eq!(tx.push(99), Err(99)); // full → handed back
-        for i in 0..4 {
-            assert_eq!(rx.pop(), Some(i)); // FIFO
-        }
-        assert_eq!(rx.pop(), None);
-        assert!(rx.is_empty());
-    }
-
-    #[test]
-    fn wraps_around_many_times() {
-        // Push/pop far more than capacity to exercise index wrap.
-        let (mut tx, mut rx) = ring::<usize>(2);
-        for i in 0..10_000 {
-            assert!(tx.push(i).is_ok());
-            assert_eq!(rx.pop(), Some(i));
-        }
-        assert_eq!(rx.pop(), None);
-    }
-
-    #[test]
-    fn len_tracks_occupancy() {
-        let (mut tx, mut rx) = ring::<u8>(8);
-        assert_eq!(rx.len(), 0);
-        tx.push(1).unwrap();
-        tx.push(2).unwrap();
-        assert_eq!(rx.len(), 2);
-        rx.pop().unwrap();
-        assert_eq!(rx.len(), 1);
-    }
-
-    use std::sync::Arc as StdArc;
-
-    // Drop-counting payload used by `drops_queued_elements_exactly_once`.
-    struct Bomb(StdArc<AtomicUsize>);
-    impl Drop for Bomb {
-        fn drop(&mut self) {
-            self.0.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-
-    #[test]
-    fn drops_queued_elements_exactly_once() {
-        // A payload that bumps a shared counter on drop; verify the ring's Drop
-        // releases exactly the still-queued items (no leak, no double free).
-        let dropped = StdArc::new(AtomicUsize::new(0));
-        {
-            let (mut tx, mut rx) = ring::<Bomb>(8);
-            for _ in 0..5 {
-                assert!(tx.push(Bomb(dropped.clone())).is_ok());
-            }
-            // Consume 2 (those drop now), leave 3 queued for the ring's Drop.
-            drop(rx.pop());
-            drop(rx.pop());
-            assert_eq!(dropped.load(Ordering::SeqCst), 2);
-            drop(tx);
-            drop(rx); // last handle → Ring dropped → remaining 3 dropped
-        }
-        assert_eq!(dropped.load(Ordering::SeqCst), 5);
-    }
-
-    #[test]
-    fn spsc_stress_across_threads() {
-        // Producer and consumer on separate threads; a small ring forces many
-        // full/empty transitions. Every item must arrive exactly once, in order.
-        // Miri interprets ~1000x slower than native; 2k iterations still cross
-        // the full/empty boundary dozens of times, which is what the race
-        // detector needs — large N only adds wall-clock, not coverage.
-        const N: u64 = if cfg!(miri) { 2_000 } else { 1_000_000 };
-        let (mut tx, mut rx) = ring::<u64>(64);
-        let producer = std::thread::spawn(move || {
-            for i in 0..N {
-                while tx.push(i).is_err() {
-                    std::hint::spin_loop();
-                }
-            }
-        });
-        let mut next = 0u64;
-        while next < N {
-            match rx.pop() {
-                Some(v) => {
-                    assert_eq!(v, next, "out-of-order or lost value");
-                    next += 1;
-                }
-                None => std::hint::spin_loop(),
-            }
-        }
-        producer.join().unwrap();
-        assert_eq!(next, N);
-    }
-
-    #[test]
-    fn stress_with_intermittent_consumer() {
-        // Consumer occasionally stalls so the ring fills and the producer must
-        // back off — exercises the full path under real contention.
-        // Small N under miri for the same reason as `spsc_stress_across_threads`.
-        const N: u64 = if cfg!(miri) { 2_000 } else { 200_000 };
-        let (mut tx, mut rx) = ring::<u64>(16);
-        let done = Arc::new(AtomicBool::new(false));
-        let done_p = done.clone();
-        let producer = std::thread::spawn(move || {
-            for i in 0..N {
-                while tx.push(i).is_err() {
-                    std::thread::yield_now();
-                }
-            }
-            done_p.store(true, Ordering::Release);
-        });
-        let mut next = 0u64;
-        let mut spins = 0u64;
-        loop {
-            if let Some(v) = rx.pop() {
-                assert_eq!(v, next);
-                next += 1;
-                spins += 1;
-                if spins.is_multiple_of(1000) {
-                    std::thread::yield_now(); // let the ring fill up
-                }
-            } else {
-                if done.load(Ordering::Acquire) && rx.is_empty() {
-                    break;
-                }
-                std::thread::yield_now();
-            }
-        }
-        producer.join().unwrap();
-        assert_eq!(next, N);
-    }
-}
+mod tests;

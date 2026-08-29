@@ -105,19 +105,33 @@ pub fn encode_fwd(dl: u32, terms: &[&[u8]], values: &[Option<&[u8]>]) -> Vec<u8>
     out
 }
 
+/// Upper bound on the initial reservation for a count read out of a cold
+/// payload — not a limit on the decode, which returns `None` the moment the
+/// payload cannot supply an entry.
+///
+/// Every entry here costs at least one byte (a varint length, or a varint
+/// tag), so a payload of `len` bytes cannot honour a claim past `len`.
+/// `read_varint` returns u32, so an unbounded claim reserves up to 4.29e9
+/// elements — about 103 GB for a `Vec<Vec<u8>>`. Fifth and sixth of the same
+/// shape this release; the earlier ones came from fuzzers, these from
+/// listing every allocation whose size comes out of the bytes.
+pub(crate) fn entries_fit(n: usize, payload_len: usize) -> usize {
+    n.min(payload_len)
+}
+
 /// Decode a forward record. `None` on any malformed frame.
 pub fn decode_fwd(payload: &[u8]) -> Option<FwdRecord> {
     let mut at = 0usize;
     let dl = read_varint(payload, &mut at)?;
     let n = read_varint(payload, &mut at)? as usize;
-    let mut terms = Vec::with_capacity(n);
+    let mut terms = Vec::with_capacity(entries_fit(n, payload.len()));
     for _ in 0..n {
         let klen = read_varint(payload, &mut at)? as usize;
         terms.push(payload.get(at..at + klen)?.to_vec());
         at += klen;
     }
     let nv = read_varint(payload, &mut at)? as usize;
-    let mut values = Vec::with_capacity(nv);
+    let mut values = Vec::with_capacity(entries_fit(nv, payload.len()));
     for _ in 0..nv {
         values.push(match read_varint(payload, &mut at)? {
             0 => None,
@@ -138,7 +152,7 @@ pub fn decode_fwd(payload: &[u8]) -> Option<FwdRecord> {
 pub fn decode_posting(payload: &[u8]) -> Option<Vec<ColdEntry>> {
     let mut at = 0usize;
     let n = read_varint(payload, &mut at)? as usize;
-    let mut out = Vec::with_capacity(n);
+    let mut out = Vec::with_capacity(entries_fit(n, payload.len()));
     for _ in 0..n {
         let klen = read_varint(payload, &mut at)? as usize;
         let key = payload.get(at..at + klen)?.to_vec();
@@ -326,3 +340,34 @@ impl TextSegment {
 #[cfg(test)]
 #[path = "cold_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod bound_tests {
+    /// A count out of a cold payload cannot size an allocation.
+    ///
+    /// Sixth site of this shape in one release. The first three were found
+    /// by fuzzers pointing at them, which is why the last three were found
+    /// by listing every allocation whose size comes out of the bytes instead
+    /// of waiting for the next crash.
+    #[test]
+    fn a_count_from_a_payload_cannot_size_an_allocation() {
+        use super::entries_fit;
+        assert_eq!(entries_fit(3, 1024), 3, "an honest count is used as-is");
+        assert_eq!(
+            entries_fit(u32::MAX as usize, 40),
+            40,
+            "4.29e9 entries over forty bytes reserves the ceiling, not 103 GB"
+        );
+        // One byte per entry is the floor, so a payload can always honour
+        // `len` of them — an honest payload is never short-reserved.
+        for len in [0usize, 1, 64, 4096] {
+            assert_eq!(entries_fit(len, len), len, "len at {len} still fits exactly");
+        }
+
+        // The decode refuses the lie either way, which is why the assertion
+        // that sees this defect is the one above and not this one.
+        let mut payload = vec![0xffu8, 0xff, 0xff, 0xff, 0x0f]; // varint u32::MAX
+        payload.push(0x00);
+        assert!(super::decode_posting(&payload).is_none());
+    }
+}

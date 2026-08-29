@@ -11,10 +11,11 @@ all. Every one of those was written in English and never carried over,
 and no gate could see it: link checking, punctuation and site
 generation all pass on a chapter that is half there.
 
-So this asks the only question that is mechanical: **does each
-translation have the same number of level-2 sections as its English
-original?** It cannot tell you a section was translated *well*. It can
-tell you one is missing, which is the failure that actually happened.
+So this asks the only questions that are mechanical: **does each
+translation carry the same number of level-2 sections, fenced examples and
+table rows as its English original?** It cannot tell you a section was
+translated *well*. It can tell you one is missing, which is the failure that
+actually happened — twice, at two different granularities.
 
     python3 tools/check_doc_i18n.py
 
@@ -60,6 +61,41 @@ def fences(path):
     return len(FENCE_LINE.findall(path.read_text(encoding="utf-8")))
 
 
+def paragraphs(path):
+    """Blank-line-separated blocks outside fenced code.
+
+    Asymmetric on purpose: a translation may hold MORE paragraphs than its
+    English original — splitting one long paragraph in two is a style
+    choice a translator gets to make, and two `persistence.md`
+    translations do exactly that. Holding FEWER is a loss, and it was 53
+    of them across ten chapters when this was first measured: how a
+    transaction replays, what `appendfsync` does not govern, that the AOF
+    alone stops being the whole truth once row segments exist, the claim
+    key that is the actual answer to uniqueness, why two migration steps
+    have no tool. None of it moved a section count, a fenced-example
+    count or a table-row count.
+    """
+    text = FENCE.sub("\n\n<FENCE>\n\n", path.read_text(encoding="utf-8"))
+    return [b for b in re.split(r"\n\s*\n", text) if b.strip()]
+
+
+def table_rows(path):
+    """Markdown table rows outside fenced blocks.
+
+    NOT a ratchet the day it is written — it was a discovery. Seven
+    chapters disagreed, and two of the gaps were not omissions but stale
+    claims: `text-search.md` still told a ja/zh reader that phrase queries
+    and highlighting were "deliberately out of scope" while the English
+    page said the boundary had been reversed and listed the clauses that
+    now execute; `rds-workloads.md` still listed `OFFSET` as refused where
+    the English had replaced that row with a measurement of what it costs.
+    Both were invisible to the section count, because a table can go
+    missing without its section going with it.
+    """
+    text = FENCE.sub("", path.read_text(encoding="utf-8"))
+    return [l for l in text.splitlines() if l.lstrip().startswith("|")]
+
+
 def sections(path):
     """Level-2 headings outside fenced blocks (a `## ` inside a shell
     transcript is output, not a section)."""
@@ -90,6 +126,17 @@ def main():
                 problems.append(
                     f"{lang}/{name}: {fences(other)} code blocks, English has {fences(en)}"
                 )
+            elif len(table_rows(other)) != len(table_rows(en)):
+                problems.append(
+                    f"{lang}/{name}: {len(table_rows(other))} table rows, "
+                    f"English has {len(table_rows(en))}"
+                )
+            elif len(paragraphs(other)) < len(paragraphs(en)):
+                problems.append(
+                    f"{lang}/{name}: {len(paragraphs(other))} paragraphs, "
+                    f"English has {len(paragraphs(en))} — a translation may "
+                    f"split one in two, not drop one"
+                )
     if problems:
         print(f"REFUSED: {len(problems)} translation(s) out of step with the English chapter.")
         for p in problems:
@@ -97,7 +144,18 @@ def main():
         print("  Carry the missing section or example across, or add the file")
         print("  to ENGLISH_ONLY in tools/check_doc_i18n.py with the reason.")
         return 1
-    print(f"ok: {checked} translated chapters, each with its English chapter's sections and examples")
+    # 74 translated chapters today, across two languages. Zero of them
+    # satisfying the rule is not the rule being satisfied — run this from
+    # the wrong directory and it used to print "ok: 0 translated chapters"
+    # and exit 0, which is the shape of a pass over an empty set.
+    MIN_CHAPTERS = 20
+    if checked < MIN_CHAPTERS:
+        print(f"check_doc_i18n: REFUSED — found {checked} translated chapter(s), "
+              f"expected at least {MIN_CHAPTERS}. Nothing to be behind is not "
+              f"the same as nothing behind.")
+        return 2
+    print(f"ok: {checked} translated chapters, each with its English chapter's "
+          f"sections, examples, table rows and at least its paragraphs")
     return 0
 
 

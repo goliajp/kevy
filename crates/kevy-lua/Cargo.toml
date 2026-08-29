@@ -43,7 +43,6 @@ luna-core = "=3.0.0"  # pinned exact: luna v3.0. Bridge surface
                        # kevy-lua test suite are the audit pass.
 
 [dev-dependencies]
-kevy-bench = { path = "../kevy-bench" }
 # luna-core in dev-deps so integration tests can use `LuaVersion` to
 # call `Bridge::set_allowed_dialects`. The crate is already in the
 # regular `[dependencies]` of kevy-lua — this is just a re-declaration

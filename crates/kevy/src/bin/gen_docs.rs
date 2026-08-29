@@ -12,6 +12,12 @@ use std::process::ExitCode;
 
 use kevy::verb_meta::{VERB_META, VerbMeta};
 
+/// Writes the three generated faces, or reports that they are stale.
+///
+/// `--check` is the CI clamp: it compares rather than writes and exits
+/// non-zero on the first difference, so a table change that was not
+/// regenerated fails the build instead of shipping three documents that
+/// disagree with the engine.
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let root = args.next().unwrap_or_else(|| ".".into());
@@ -44,6 +50,11 @@ fn main() -> ExitCode {
     if stale { ExitCode::FAILURE } else { ExitCode::SUCCESS }
 }
 
+/// The verb table bucketed by group, in first-appearance order.
+///
+/// Insertion order rather than sorted, so the rendered documents follow
+/// the order of the table itself — the one place a human decides how the
+/// surface reads.
 fn groups() -> Vec<(&'static str, Vec<&'static VerbMeta>)> {
     let mut out: Vec<(&'static str, Vec<&'static VerbMeta>)> = Vec::new();
     for m in VERB_META {
@@ -55,10 +66,12 @@ fn groups() -> Vec<(&'static str, Vec<&'static VerbMeta>)> {
     out
 }
 
+/// A verb's flags as one comma-separated field.
 fn flags_of(m: &VerbMeta) -> String {
     m.flags.join(",")
 }
 
+/// Renders `llms.txt` — the whole surface as one machine-readable page.
 fn llms_txt() -> String {
     let mut s = String::new();
     let _ = write!(
@@ -108,6 +121,11 @@ fn llms_txt() -> String {
     s
 }
 
+/// Renders `docs/verb-reference.md` — the same table for human readers.
+///
+/// The complexity column is this engine's own cost, read out of this
+/// engine's code rather than copied from Redis's reference; several
+/// genuinely differ and the document says so where they do.
 fn verb_reference() -> String {
     let mut s = String::new();
     let _ = write!(
@@ -187,6 +205,12 @@ fn commands_json() -> String {
     s
 }
 
+/// Escapes a string for a JSON string literal.
+///
+/// Quote, backslash and newline only — the fields it is given are verb
+/// names, flags and prose from the table, none of which carry control
+/// characters, and inventing a general escaper would be a second JSON
+/// encoder for a document with one writer.
 fn esc(v: &str) -> String {
     let mut out = String::with_capacity(v.len() + 8);
     for c in v.chars() {

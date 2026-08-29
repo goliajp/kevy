@@ -5,6 +5,9 @@
 use crate::{ENTRY_OVERHEAD, EvictionPolicy, Store, StoreError, evict, now_ns};
 
 impl Store {
+    /// An empty store with default settings: no maxmemory bound, no
+    /// tiering budget, and no persistence attached — the caller wires
+    /// those on afterwards.
     pub fn new() -> Self {
         Store::default()
     }

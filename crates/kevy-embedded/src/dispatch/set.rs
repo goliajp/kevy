@@ -4,8 +4,7 @@ use crate::store::Store;
 use crate::KevyResult;
 
 use super::util::{
-    arg_i64, bulk, emit_bulk_array, emit_int, err, kevy_err, nil, rest, wrong_args, ERR_NOT_INT,
-};
+    arg_i64, bulk, emit_bulk_array, emit_int, err, kevy_err, nil, rest, wrong_args, ERR_NOT_INT, verb_name};
 
 /// One set-family request; `false` = verb not in this group.
 // LOC-WAIVER: data-driven verb dispatch table — one arm per set verb.
@@ -135,8 +134,14 @@ fn cmd_algebra_read(
 }
 
 /// `S*STORE dst key [key …]` — replies with the stored cardinality.
-/// Arity error mirrors the server's `parse_setstore_args` (a bare
-/// "ERR wrong number of arguments", no verb interpolation).
+///
+/// The arity error used to mirror `kevy-rt`'s `parse_setstore_args`, a bare
+/// "ERR wrong number of arguments" with no verb interpolation. That mirror
+/// was aimed at the wrong reflection: a short S*STORE never reaches that
+/// parser, because `cmd_resolve` guards the route with
+/// `if args.len() >= 3` and a shorter call falls through to the dispatch
+/// chain, which names the verb the way Redis does. The wire differential
+/// found twelve verbs split this way.
 fn cmd_algebra_store(
     s: &Store,
     argv: &[Vec<u8>],
@@ -144,7 +149,7 @@ fn cmd_algebra_store(
     op: AlgebraStoreOp,
 ) {
     if argv.len() < 3 {
-        return err(out, "ERR wrong number of arguments");
+        return wrong_args(out, &verb_name(argv));
     }
     emit_int(out, op(s, &argv[1], &rest(argv, 2)).map(|n| n as i64));
 }

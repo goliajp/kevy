@@ -1,0 +1,207 @@
+# Never-executed regions that a human has classified, with the reason.
+#
+# `tools/coverage_atlas.py` labels a region `panic` or `platform` only on
+# evidence it can point at, and calls everything else `untested`. It never
+# says `unreachable`, because no static reading of coverage data can
+# establish that. This file is where that judgement goes, and it must be
+# written down rather than remembered.
+#
+# The distinction that matters, and the reason this file is not just a
+# suppression list:
+#
+#   untested      — a test is owed. Write it; the region leaves the set.
+#   unreachable   — no caller can reach it. Then ask the harder question:
+#                   is it safe to DELETE? Sometimes it is not, and that is
+#                   the only interesting case here.
+#
+# An entry is keyed by symbol, the same identity the set-ratchet uses, so
+# a rename moves it and is noticed.
+#
+# A `[[dead_crate]]` entry says the same thing about a whole crate, for the
+# case where every dead region has one explanation. It does NOT remove the
+# regions from the corpus: they stay in covgate's denominator and in the
+# atlas, classified `gated-elsewhere` and carrying the name of the gate that
+# does cover them. Excluding them instead would raise the coverage
+# percentage without anything being covered, and would stop anyone ever
+# asking whether that other gate still runs.
+
+[[dead]]
+symbol = "kevy_wasm::abi_kv::kevy_mget"
+regions = 6
+kind = "unreachable"
+delete = false
+reason = """
+The `None` arms of two `off.checked_add(..)` calls at
+crates/kevy-wasm/src/abi_kv.rs, and the same shape in `unpack_argv`.
+
+`off` is bounded by the buffer and the added length is a u32, so on a 64-bit
+host the sum cannot overflow and the arm cannot be taken. On wasm32 — where
+`usize` is 32 bits and this code actually ships — it can, which is the whole
+reason the addition is checked: without it the sum wraps low, `get` sees a
+backwards range, and the right answer comes out by accident.
+
+So a test is NOT owed, on this platform. The atlas classifies these
+`untested`, which reads as a debt; the debt cannot be paid where the
+measurement runs. `platform` would be the closer class but the cfg is not
+what gates them — the arithmetic is — so they are registered here by hand
+instead of being reclassified.
+"""
+
+[[dead]]
+symbol = "kevy_geo::estimate_step"
+regions = 1
+kind = "unreachable"
+delete = false
+reason = """
+`if radius_m <= 0.0 { return GEO_STEP; }` at crates/kevy-geo/src/lib.rs:250.
+
+Unreachable today: `estimate_step` is private, has exactly one call site
+(line 222), and that site sits after line 219's early return on
+`radius_m <= 0.0`. Verified by grep — two occurrences in the whole
+workspace, the definition and the one call.
+
+**It must not be deleted.** Without it a non-positive radius enters
+`while r < MERCATOR_MAX { r *= 2.0; step += 1; }` with `r <= 0.0`, which
+never reaches the bound: an infinite loop in release, a step overflow in
+debug. The guard is not redundant defence against a condition that cannot
+happen — it is the thing that makes the loop terminate, and it is dead only
+because one caller happens to check first today.
+
+The atlas found this as one of four never-executed regions in kevy-geo and
+my first reading of it was that it was a redundant guard to remove. Reading
+the loop underneath is what changed the answer. That is the whole reason
+this file distinguishes `unreachable` from `delete = true`.
+
+The other three regions the atlas found in this crate were `untested`, not
+unreachable, and are now covered by
+`a_radius_larger_than_the_world_returns_the_whole_range` and
+`cells_past_the_latitude_limit_are_skipped_not_wrapped`.
+"""
+
+
+[[dead_crate]]
+crate = "kevy-jni"
+gate = "bench/jnigate.sh"
+reason = """
+Every one of this crate's regions is `extern "system"` JNI glue, reachable
+only from a JVM. `cargo test` cannot call it, so the execution corpus — 27
+symbols, 466 regions — reads 100% dead, the only door in the workspace with
+no in-corpus coverage at all (kevy-ffi is at 16.2%, kevy-wasm 17.4%,
+kevy-mcp 29.9%, because those have Rust-side unit tests).
+
+It IS tested: jnigate builds libkevy_jni, compiles the raw JNI surface with
+javac and runs Smoke.java on any JDK host. It runs in CI as "Android —
+jnigate (raw JNI door on the JVM)" and passed on the run this entry was
+written against.
+
+covgate already excludes kevy-napi for exactly this property. kevy-jni is
+registered rather than excluded, because excluding it would move 526 regions
+out of the denominator and read as an improvement in a number nothing
+improved.
+"""
+
+
+# ---------------------------------------------------------------------------
+# Where the never-executed count is NOT reproducible.
+#
+# Three runs of the workspace corpus on Linux CI gave three different growth
+# lists against one baseline (A = 6306ad31, B = 8b9f6134, C = 3507540f).
+# Five symbols appeared in all three; nine in two of three; seven in one.
+# `parse_replica_acks` read 11 in one run and 48 in another;
+# `decode_replconf_ack` 7 and 27; `top_groups` 12 and 23.
+#
+# Registering them one at a time is a treadmill: the varying set is not a
+# fixed handful, it is whichever branches of the replication and reactor
+# paths a given run happened to reach before its tests ended. So the
+# registration is by PREFIX, at the granularity the nondeterminism actually
+# has — a subsystem, not a symbol.
+#
+# What this concedes, plainly: **the dead set of a concurrent,
+# timing-driven subsystem is not a ratchetable quantity.** A gate that
+# fires on its own noise teaches everyone to re-run until green, which is
+# worse than no gate on that surface. The ratchet keeps its grip on the
+# other ~2,600 symbols, where a change means a change.
+#
+# Bounds on this loosening:
+#   - a prefix entry needs the runs and the differing values as evidence;
+#   - it names a subsystem whose nondeterminism is demonstrated, never a
+#     crate that is merely undertested;
+#   - the exemption is read from the BASELINE, so a run cannot exempt
+#     itself;
+#   - a prefix that stops varying should be removed, and the evidence here
+#     is what the next person retests to find out.
+
+[[unstable]]
+prefix = "<kevy_rt::shard::Shard>::"
+observed = [
+  "A: deliver_pmessages 3, try_inline_local 13, close_conn 5, tick_replication_view 13, tick_replication_watermark 5, unregister_subs 2",
+  "B: do_publish 4, close_conn 5, tick_replication_view 13, tick_replication_watermark 5, unregister_subs 2",
+  "C: cancel_xshard_on_close 8, check_repl_ack_waiters 53, parse_replica_acks 48, replica_readable 27, close_conn 5, try_inline_local 13, unregister_subs 2",
+]
+why = """
+The shard IS the reactor loop. Which arm of a tick runs — a pattern
+delivery, an inline dispatch, a replica ack, a connection teardown —
+depends on where the loop was when the last test released it. Eight
+distinct methods here varied across three runs, and no two runs agreed on
+which eight.
+"""
+
+[[unstable]]
+prefix = "kevy_embedded::replica_runner::"
+observed = ["A: run_loop 6, sleep_interruptible 15", "B: same", "C: same"]
+why = "A replication loop with an interruptible sleep: whether the interrupt arm or the timeout arm runs is a race with the test that stops it."
+
+[[unstable]]
+prefix = "kevy_replicate::wire_snapshot::"
+observed = ["C: decode_replconf_ack 27", "A, B: 7 (matched baseline)"]
+why = "Ack decoding runs only for acks that actually arrive; how many arrive before a test ends is timing."
+
+[[unstable]]
+prefix = "kevy_rt::aof_writer::"
+observed = ["A: run_worker 6", "B: 6", "C: 5 (matched baseline)"]
+why = "A background writer whose drain path depends on whether a batch was pending when the test finished."
+
+# Monomorphised generics whose demangled name carries no path — registered
+# by symbol because there is no prefix to name.
+
+[[unstable]]
+symbol = "::mark"
+observed = ["A: 10", "B: 10", "C: 10 — joined in all three, absent from the baseline"]
+why = "Present in every run's growth list and in no baseline: the baseline sampled a run where it was covered, and no run since has repeated that."
+
+[[unstable]]
+symbol = "::get_into_output"
+observed = ["A: 17", "C: 17", "B: 16 (matched baseline)"]
+why = "A reader path in the reactor, reached only on a buffer shape that depends on how a read split."
+
+[[unstable]]
+symbol = "::top_groups"
+observed = ["A: 23", "C: 23", "B: 12 (matched baseline)"]
+why = "The widest swing measured, 12 to 23 across runs of one corpus."
+
+[[unstable]]
+symbol = "kevy::dispatch::dispatch_with_proto::"
+observed = ["A: 10", "B: 10", "C: 10", "D: 14"]
+why = """
+The dispatch hot body, bimodal across four runs of one commit: 10 in
+three of them and 14 in the fourth. Which of its arms go untaken depends
+on what the last test through the process happened to send — the tier-1
+GET/SET short-circuit, the scope-routing redirect, the OOM precheck and
+the RESP3 override are all branches whose miss is recorded, and a run
+that ends without a maxmemory test or without a HELLO 3 leaves a
+different four of them dark.
+
+This symbol is one of the three setratchet's own docstring names as the
+noisy tail (`maybe_ack and dispatch_with_proto and os::trim in the
+next`). Registering it is the mechanism that file prescribes.
+"""
+
+[[unstable]]
+symbol = "kevy_alloc::os::trim"
+observed = ["A: 1", "B: 1", "C: 1", "D: 3"]
+why = """
+The allocator's return-to-OS path. Whether it runs at all depends on
+whether a span emptied while the process was still alive, which is a
+function of when the last test dropped its store. Named beside
+dispatch_with_proto in setratchet's docstring for the same reason.
+"""

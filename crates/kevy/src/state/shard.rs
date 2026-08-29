@@ -219,6 +219,17 @@ impl ShardCtx {
         self.persist_stats.set((in_flight, aof_rewrites_total));
     }
 
+    /// One connection closed for crossing the query-buffer cap.
+    ///
+    /// Counted at the DECISION, not at the close completing — which is
+    /// the distinction the counter exists to make visible.
+    pub(crate) fn note_query_buffer_exceeded(&self) {
+        self.with_stats_slot(|st| {
+            st.query_buffer_disconnections
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        });
+    }
+
     /// Fold this tick's lateness into the shard's stall gauge
     /// (`fetch_max` — the gauge is a high-water mark, not a sum).
     pub(crate) fn note_tick_gap(&self, excess_us: u64) {

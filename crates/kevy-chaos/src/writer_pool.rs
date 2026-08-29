@@ -9,7 +9,10 @@ use std::time::Duration;
 /// One entry: a write that was ACK'd by kevy (+OK reply).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AckEntry {
+    /// The key kevy acknowledged, exactly as it went out on the wire.
     pub key: Vec<u8>,
+    /// The value kevy acknowledged. A reader that survives the crash must
+    /// come back holding this one; anything else is a lost or torn write.
     pub value: Vec<u8>,
     /// Per-writer monotonic sequence number, starting at 0.
     pub seq: u64,
@@ -22,6 +25,9 @@ pub type AckLog = Arc<Mutex<Vec<AckEntry>>>;
 /// repeatedly. Each successful `+OK` reply appends to the shared `AckLog`.
 pub struct WriterPool {
     handles: Vec<thread::JoinHandle<()>>,
+    /// Every write kevy said `+OK` to, across all writers. This is the
+    /// claim the recovery check is run against: the pool promises nothing
+    /// about writes still in flight, only about the ones already answered.
     pub log: AckLog,
 }
 

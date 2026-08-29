@@ -38,7 +38,13 @@ BENCH=""
 fail=0
 nomeasure=0
 cleanup() {
-    [ -n "$BENCH" ] && kill -9 "$BENCH" 2>/dev/null
+    # The server below is waited for; the load generator was not, and it is
+    # the same shape — a process still reaping when this gate returns is
+    # residue billed to whatever runs next.
+    if [ -n "$BENCH" ]; then
+        kill -9 "$BENCH" 2>/dev/null
+        wait "$BENCH" 2>/dev/null
+    fi
     if [ -n "$SRV" ]; then
         kill -9 "$SRV" 2>/dev/null
         wait "$SRV" 2>/dev/null
@@ -46,6 +52,47 @@ cleanup() {
     rm -rf "$WORK"
 }
 trap cleanup EXIT
+
+# The isolation guard perfgate has had all along, and this gate did not —
+# which is backwards, because tail latency is the measurement contention
+# ruins first. This box also hosts two GitHub Actions runners and other
+# people's services; a firehose cell read 48ms, 359ms and 392ms across three
+# runs of the same binary and there was no record of what else was running,
+# so the blown cell could not be told from a busy box.
+#
+# The start check refuses a box that is busy BEFORE the run. Foreign load
+# that arrives DURING one is the same contamination and was, until now,
+# measured and then ignored: the gate printed "foreign cpu 58% while
+# probing" and reported the number that probe produced as a verdict.
+#
+# Four observations of cell B on this shared box, and the correlation is
+# monotone: foreign 8-33% -> 45ms, 58% -> 110ms, 107% -> 169ms, against a
+# 100ms bar. A reactor tick gap is exactly what a preempted thread
+# produces, so those runs measured the neighbour, not the engine.
+#
+# 25% because the start gate already requires idle >= 80%.
+FOREIGN_MAX=${TAILGATE_FOREIGN_MAX:-25}
+MAX_ATTEMPTS=${TAILGATE_MAX_ATTEMPTS:-9}
+
+# Instantaneous idle%, not loadavg, for the reason perfgate states: loadavg
+# measures the past, so a back-to-back run would refuse on its own wake.
+box_idle() {
+    local u1 n1 s1 i1 u2 n2 s2 i2 _x
+    read -r _x u1 n1 s1 i1 _ < /proc/stat; sleep 1
+    read -r _x u2 n2 s2 i2 _ < /proc/stat
+    echo $(( (i2 - i1) * 100 / ( (u2-u1) + (n2-n1) + (s2-s1) + (i2-i1) ) ))
+}
+if [ -r /proc/stat ]; then
+    LEFTOVER=$(pgrep -af "release/kevy|redis-benchmark" \
+        | grep -Ev "bash |zsh |pgrep|sed |grep |tailgate|suite.py|claude" || true)
+    [ -n "$LEFTOVER" ] && { echo "tailgate: REFUSED — leftover bench processes:" >&2
+                            echo "$LEFTOVER" >&2; exit 2; }
+    IDLE0=$(box_idle)
+    [ "$IDLE0" -ge 80 ] || { echo "tailgate: REFUSED — box busy (idle ${IDLE0}% < 80%)." >&2
+                             echo "  A tail-latency reading taken while something else runs is not one." >&2
+                             exit 2; }
+    echo "tailgate: box idle ${IDLE0}% at start"
+fi
 
 # Median-of-N (default 3, TAILGATE_RUNS=n overrides): the mixed cell's
 # single-run reactor-gap spread measured 581-1657 ms across four runs
@@ -70,17 +117,67 @@ one_run() { # $1 = name, $2 = reactor (auto|epoll), $3... = load args
     redis-benchmark -p $PORT "$@" -q >/dev/null 2>&1 &
     BENCH=$!
     sleep 2 # let the load reach steady state before probing
+    # FOREIGN cpu, not idle%. The first version of this printed idle% during
+    # the probe and read 51% — which was this gate's own load generator, so
+    # the figure could not tell "I am busy" from "someone else is", the one
+    # thing it exists to answer. Sum %CPU over everything that is not this
+    # gate's server, its benchmark, or the kernel's own workers.
+    local foreign
+    foreign=$(ps -eo pcpu,pid,comm --no-headers 2>/dev/null \
+        | awk -v s="${SRV:-0}" -v b="${BENCH:-0}" \
+              '$2!=s && $2!=b && $3!~/^(kworker|ksoftirqd|migration|rcu_)/ {t+=$1} END {printf "%.0f", t+0}')
+    printf '  [%s] foreign cpu %s%% while probing\n' "$name" "${foreign:-?}"
+    LAST_FOREIGN=${foreign:-999}
     target/release/examples/tail_probe $PORT 60
     kill -9 "$BENCH" 2>/dev/null; wait "$BENCH" 2>/dev/null; BENCH=""
     kill -9 "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null; SRV=""
 }
 
+# A cell that trips is RETAKEN before it is called a failure, and the
+# reason is in this gate's own note twenty lines below: "the firehose
+# cell's MEDIAN moves by nearly 2x between rounds, so a single reading
+# near the bar means little and a trip means something: read a failure
+# as a real signal before assuming flake."
+#
+# The gate knew that and then failed on one reading. An A/B on this box
+# — the same commit's binary and its predecessor's, alternating, four
+# rounds — measured the swing at 3.2x on IDENTICAL code:
+#
+#     firehose-epoll, pre-merge binary:   41.9 ms  and  135.9 ms
+#     firehose-epoll, post-merge binary:  78.1 ms  and   78.1 ms
+#
+# The pre-merge binary is the one that blew the bar. A cell whose own
+# round-to-round variation exceeds its distance to the bar cannot be
+# judged by one round, and "re-run it and see" was being left to
+# whoever happened to be watching. It is behaviour now: a trip takes a
+# second full sample, and only a trip that repeats is a verdict.
 cell() { # $1 = name, $2 = reactor (auto|epoll), $3... = load args
     local name=$1 reactor=$2; shift 2
     local p999s=() gaps=() out p g
-    for i in $(seq "$RUNS"); do
+    local taken=0 attempts=0 dirty=0
+    while [ "$taken" -lt "$RUNS" ]; do
+        attempts=$((attempts + 1))
+        if [ "$attempts" -gt "$MAX_ATTEMPTS" ]; then
+            # REFUSED, not FAILED. A probe taken while something else had
+            # the cores did not measure this engine, and reporting its
+            # number as a verdict would be the gate answering a question
+            # nobody asked. The start check already refuses a busy box;
+            # this is the same rule applied to the load that arrives
+            # DURING a run, which is what a shared box actually does.
+            echo "tailgate: REFUSED — $name could not get $RUNS clean probes in" >&2
+            echo "  $MAX_ATTEMPTS attempts; $dirty were taken while foreign CPU was" >&2
+            echo "  above ${FOREIGN_MAX}%. The box is shared and something else is" >&2
+            echo "  running. This is not a verdict about the engine." >&2
+            exit 2
+        fi
         out=$(one_run "$name" "$reactor" "$@")
+        i=$((taken + 1))
         echo "$name[$i/$RUNS]: $out"
+        if [ "${LAST_FOREIGN:-0}" -gt "$FOREIGN_MAX" ]; then
+            dirty=$((dirty + 1))
+            echo "  ~ $name: discarding this probe — foreign cpu ${LAST_FOREIGN}% > ${FOREIGN_MAX}%"
+            continue
+        fi
         p=$(echo "$out" | grep -oE 'p999us=[0-9]+' | cut -d= -f2)
         g=$(echo "$out" | grep -oE 'reactor_gap_us=[0-9]+' | cut -d= -f2)
         # An absent number is not a large one. This used to fall through
@@ -96,20 +193,26 @@ cell() { # $1 = name, $2 = reactor (auto|epoll), $3... = load args
         fi
         p999s+=("$p")
         gaps+=("$g")
+        taken=$((taken + 1))
     done
+    [ "$dirty" -gt 0 ] && echo "  ~ $name: $dirty probe(s) discarded as contaminated, $RUNS clean kept"
     local p999 gap
     p999=$(median_of "${p999s[@]}")
     gap=$(median_of "${gaps[@]}")
     echo "$name: median p999us=$p999 reactor_gap_us=$gap" \
          "(p999 $(printf '%s\n' "${p999s[@]}" | sort -n | head -1)..$(printf '%s\n' "${p999s[@]}" | sort -n | tail -1)," \
          "gap $(printf '%s\n' "${gaps[@]}" | sort -n | head -1)..$(printf '%s\n' "${gaps[@]}" | sort -n | tail -1))"
-    if [ "$p999" -gt 100000 ]; then
-        echo "  ✗ $name: median PING p99.9 ${p999}us over the 100ms bar"
-        fail=1
-    fi
-    if [ "$gap" -gt 100000 ]; then
-        echo "  ✗ $name: median reactor tick gap ${gap}us over the 100ms bar"
-        fail=1
+    if [ "$p999" -gt 100000 ] || [ "$gap" -gt 100000 ]; then
+        [ "$p999" -gt 100000 ] && echo "  ! $name: median PING p99.9 ${p999}us over the 100ms bar"
+        [ "$gap" -gt 100000 ] && echo "  ! $name: median reactor tick gap ${gap}us over the 100ms bar"
+        if [ "${CONFIRMING:-0}" = 1 ]; then
+            # Second sample, and it tripped too. Now it is a verdict.
+            [ "$p999" -gt 100000 ] && { echo "  ✗ $name: confirmed — p99.9 over the bar twice"; fail=1; }
+            [ "$gap" -gt 100000 ] && { echo "  ✗ $name: confirmed — reactor gap over the bar twice"; fail=1; }
+        else
+            echo "  ~ $name: retaking the cell — one sample cannot judge this bar"
+            CONFIRMING=1 cell "$name" "$reactor" "$@"
+        fi
     fi
 }
 

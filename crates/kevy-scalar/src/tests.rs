@@ -414,3 +414,36 @@ fn to_char_extended_patterns() {
     let noon_ish = S::Timestamp((19_875 * 86_400 + 13 * 3600 + 45 * 60) * 1_000_000);
     assert_eq!(tc(&noon_ish, "HH12:MI PM"), S::Text("01:45 PM".into()));
 }
+
+/// A year the arithmetic behind the type cannot hold is not a date.
+///
+/// Measured before the bound: `parse_date("99999999-01-01")` returned
+/// 36,523,530,107 days, and the five sites that multiply a `Date` by
+/// MICROS_PER_DAY produced 3.15e21 against an i64 ceiling of 9.22e18 —
+/// wrapping in a release build, which sets no `overflow-checks`, and
+/// panicking in this one. Twelve digits of year panicked earlier still,
+/// inside `epoch_from_civil`, before any check could see it.
+#[test]
+fn a_date_that_cannot_be_micros_is_not_a_date() {
+    use crate::datetime::MICROS_PER_DAY;
+
+    assert!(crate::parse_date("2020-01-01").is_some(), "ordinary dates are untouched");
+    assert!(crate::parse_date("1969-12-31").is_some(), "so is before the epoch");
+    assert_eq!(crate::parse_date("99999999-01-01"), None, "accepted, and its micros overflowed");
+    assert_eq!(crate::parse_date("999999999999-01-01"), None, "panicked inside epoch_from_civil");
+
+    // Whatever the largest accepted year turns out to be, its microseconds
+    // must fit — that is the contract, not the constant.
+    let mut last = None;
+    for y in [200_000i64, 292_000, 292_277, 292_278, 300_000, 999_999] {
+        if let Some(days) = crate::parse_date(&format!("{y}-12-31")) {
+            assert!(
+                days.checked_mul(MICROS_PER_DAY).is_some(),
+                "year {y} was accepted but its microseconds overflow"
+            );
+            last = Some(y);
+        }
+    }
+    assert!(last.is_some(), "the bound rejected every year, including plausible ones");
+    assert!(last.unwrap() >= 200_000, "the bound is far tighter than the arithmetic requires");
+}

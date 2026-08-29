@@ -277,6 +277,7 @@ impl<C: Commands> Shard<C> {
                 "kevy: shard {} closing conn {cid}: query buffer exceeded {} bytes",
                 self.id, self.input_hard_limit,
             );
+            self.commands.on_query_buffer_exceeded();
             self.uring_mark_closing(cid, io);
         } else if outcome.protocol_error {
             self.protocol_error(cid);

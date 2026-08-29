@@ -64,10 +64,13 @@ impl SmallListData {
         Some(s)
     }
 
+    /// Element count, held rather than derived — the flat encoding would
+    /// have to be walked to count.
     pub fn len(&self) -> usize {
         self.count as usize
     }
 
+    /// Whether the list holds no elements.
     pub fn is_empty(&self) -> bool {
         self.count == 0
     }

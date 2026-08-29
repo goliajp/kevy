@@ -7,6 +7,8 @@ use crate::value::Value;
 use crate::{Store, StoreError};
 
 impl Store {
+    /// Membership. A missing key is `false`, not an error; a
+    /// wrong-typed key is an error.
     pub fn sismember(&mut self, key: &[u8], member: &[u8]) -> Result<bool, StoreError> {
         match self.live_entry(key) {
             None => Ok(false),
@@ -19,6 +21,7 @@ impl Store {
         }
     }
 
+    /// Member count. A missing key is 0, matching SCARD.
     pub fn scard(&mut self, key: &[u8]) -> Result<usize, StoreError> {
         match self.live_entry(key) {
             None => Ok(0),
@@ -31,6 +34,8 @@ impl Store {
         }
     }
 
+    /// Every member, copied out. Unordered — a set has no order to
+    /// preserve, and callers that need one must sort.
     pub fn smembers(&mut self, key: &[u8]) -> Result<Vec<Vec<u8>>, StoreError> {
         match self.live_entry(key) {
             None => Ok(Vec::new()),

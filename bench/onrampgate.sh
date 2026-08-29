@@ -24,7 +24,7 @@ SA=$!
 env KEVY_BIND=127.0.0.1 $KEVY --threads 8 --port $PB --dir "$DIR/b" --no-aof >/dev/null 2>&1 &
 SB=$!
 sleep 1.2
-trap 'kill $SA $SB 2>/dev/null; rm -rf "$DIR"' EXIT
+trap 'kill $SA $SB 2>/dev/null; wait $SA $SB 2>/dev/null; rm -rf "$DIR"' EXIT
 
 # ---- seed 1M rows on A (python loader, 5 types + TTL) ----
 python3 - "$PA" <<'PYEOF'
@@ -165,7 +165,10 @@ env KEVY_BIND=127.0.0.1 $KEVY --threads 1 --port $PC --dir "$DIR/c" --no-aof --c
 SC=$!
 env KEVY_BIND=127.0.0.1 $KEVY --threads 1 --port $PD --dir "$DIR/d" --no-aof >/dev/null 2>&1 &
 SD=$!
-trap 'kill $SA $SB $SC $SD 2>/dev/null; rm -rf "$DIR"' EXIT
+# Supersedes the trap above — deliberately, since this one covers all four.
+# Both wait: `kill` signals and does not wait, and a gate that returns while
+# its servers are still reaping leaves them for whatever runs next.
+trap 'kill $SA $SB $SC $SD 2>/dev/null; wait $SA $SB $SC $SD 2>/dev/null; rm -rf "$DIR"' EXIT
 sleep 1.2
 python3 - "$PC" "$PD" <<'PYEOF' || { echo "onrampgate: FAIL — MOVE-SCOPE stream clamp"; exit 1; }
 import socket, sys, time

@@ -105,7 +105,7 @@ IDX.QUERY HYBRID posts MATCH "rust storage" embs KNN <f32-le-blob>
 計測された包絡線です（領収書はbenchツリーにあります）。
 
 - [`bench/vectorgate.sh`](../../bench/vectorgate.sh)は、実サーバーに対して1M × 128次元でKNN LIMIT 10のp95 < 30msをゲートし、同時にEF 400で再現率0.90以上が成立していることもゲートします（2つのclampを同時に——速いが間違った答えは通りません）。あわせて、メモリの式を実RSSの増分に対して（0.5〜1.5倍で）ゲートします。
-- [`bench/PERF-LEDGER.md`](../../bench/PERF-LEDGER.md)が比較対決を記録しています。再現率を1.000に揃えたうえで、KNNは0.48 msで答えます（RediSearchのHNSWは同一コーパス上で0.79 ms）——**1.64倍の優位**です。
+- [`bench/PERF-LEDGER.md`](../../bench/PERF-LEDGER.md)が比較対決を記録しています。再現率を1.000に揃えたうえで、KNNは0.48 msで答えます（redis-stack 7.4.7のRediSearchのHNSWは同一コーパス上で0.79 ms）——**1.64倍の優位**です。
 
 書き込み側のコストは標準的なインデックス税です（マッチするインデックス1つにつき、書き込みごとにフィールドのパース1回とグラフ挿入1回）。構築コストは`EF`（構築時のビーム）に比例して増えます。だからこそ、これは宣言時のパラメータなのです。
 

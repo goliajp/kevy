@@ -104,3 +104,72 @@ pub fn format_reply(reply: &Reply, indent: usize) -> String {
         Reply::BigNumber(s) => format!("(bignum) {}", String::from_utf8_lossy(s)),
     }
 }
+
+#[cfg(test)]
+mod format_reply_tests {
+    use super::format_reply;
+    use kevy_resp::Reply;
+
+    fn f(r: &Reply) -> String {
+        format_reply(r, 0)
+    }
+
+    /// One case per `Reply` variant. `format_reply` carried 79 never-executed
+    /// regions — the largest single symbol in this crate — while being a pure
+    /// function from a reply to a string, which is as cheap to test as code
+    /// gets. The expectations are redis-cli's rendering, which is what the
+    /// function's own comment says it follows.
+    #[test]
+    fn every_reply_variant_renders() {
+        assert_eq!(f(&Reply::Simple(b"OK".to_vec())), "OK");
+        assert_eq!(f(&Reply::Error(b"ERR nope".to_vec())), "(error) ERR nope");
+        assert_eq!(f(&Reply::Int(-7)), "(integer) -7");
+        assert_eq!(f(&Reply::Bulk(b"hi".to_vec())), "\"hi\"");
+        assert_eq!(f(&Reply::Nil), "(nil)");
+        assert_eq!(f(&Reply::Array(vec![])), "(empty array)");
+        assert_eq!(f(&Reply::Double(1.5)), "(double) 1.5");
+        assert_eq!(f(&Reply::Boolean(true)), "(boolean) t");
+        assert_eq!(f(&Reply::Boolean(false)), "(boolean) f");
+        assert_eq!(f(&Reply::BigNumber(b"123456789012345678901".to_vec())),
+                   "(bignum) 123456789012345678901");
+
+        // RESP3's second null and second error spelling render as their
+        // RESP2 counterparts — a client must not be able to tell which
+        // wire form it got from the printed line.
+        assert_eq!(f(&Reply::Null), "(nil)");
+        assert_eq!(f(&Reply::BlobError(b"ERR nope".to_vec())), "(error) ERR nope");
+
+        assert_eq!(
+            f(&Reply::Verbatim { fmt: *b"txt", data: b"hello".to_vec() }),
+            "(verbatim/txt) \"hello\""
+        );
+
+        // Set and Push share the array arm; a set of one is still numbered.
+        assert_eq!(f(&Reply::Set(vec![Reply::Int(4)])), "1) (integer) 4");
+        assert_eq!(
+            f(&Reply::Push(vec![Reply::Bulk(b"message".to_vec())])),
+            "1) \"message\""
+        );
+    }
+
+    /// Arrays number from one and nest by indent — the recursive arm, which
+    /// a single flat array would leave unexercised.
+    #[test]
+    fn arrays_number_from_one_and_nest() {
+        let flat = Reply::Array(vec![Reply::Int(1), Reply::Bulk(b"x".to_vec())]);
+        assert_eq!(f(&flat), "1) (integer) 1\n2) \"x\"");
+
+        let nested = Reply::Array(vec![Reply::Array(vec![Reply::Int(9)])]);
+        // The inner element is padded by one level; the outer is not.
+        assert_eq!(f(&nested), "1)    1) (integer) 9");
+    }
+
+    /// An empty map is not an empty array, and a populated one renders
+    /// `key => value` rather than as two flat elements.
+    #[test]
+    fn maps_render_as_pairs() {
+        assert_eq!(f(&Reply::Map(vec![])), "(empty map)");
+        let m = Reply::Map(vec![(Reply::Bulk(b"k".to_vec()), Reply::Int(1))]);
+        assert_eq!(f(&m), "1) \"k\" => (integer) 1");
+    }
+}

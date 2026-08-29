@@ -53,6 +53,11 @@ pub(super) fn err(out: &mut Vec<u8>, msg: &str) {
     out.extend_from_slice(format!("-{msg}\r\n").as_bytes());
 }
 
+/// The verb as Redis names it in an error: argv[0], lowercased.
+pub(super) fn verb_name(argv: &[Vec<u8>]) -> String {
+    String::from_utf8_lossy(argv.first().map(Vec::as_slice).unwrap_or(b"")).to_lowercase()
+}
+
 pub(super) fn wrong_args(out: &mut Vec<u8>, cmd: &str) {
     err(out, &format!("ERR wrong number of arguments for '{cmd}' command"));
 }

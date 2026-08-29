@@ -5,7 +5,7 @@
 use kevy_index::{IndexValue, WhereClause};
 
 use super::super::util::{err, int};
-use super::super::idx::{badargs, no_such_index, spec_of};
+use super::super::idx::{badargs, no_such_index, spec_of, arity_err};
 use super::{idx_err, parse_bounds};
 use crate::store::Store;
 
@@ -83,6 +83,11 @@ pub(super) fn driving_bounds(
 /// would NOT apply (SORT/DISTINCT/FACET/OFFSET/FIELDS/CURSOR) is
 /// refused up front, the server's exact order: arity before catalog.
 pub(super) fn cmd_idx_count(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
+    // The arity is the server's, read from the shared column rather than
+    // restated here. See `idx::arity_err` for the wording.
+    if kevy_resp::verb_arity::arity_ok("IDX.COUNT", argv.len()) == Some(false) {
+        return arity_err(out, "IDX.COUNT");
+    }
     let Some(name) = argv.get(1) else {
         return badargs(out, "IDX.COUNT", b"");
     };

@@ -64,6 +64,15 @@ const fn next_table(prev: &[u16; 256]) -> [u16; 256] {
 /// the byte-wise loop's 4 dependent shift/lookup chains. Routing hashes
 /// every key in cluster mode; the byte-wise walk profiled at 3.7 % of
 /// server CPU under a pinned 8-shard benchmark load.
+/// # Examples
+///
+/// The CRC16-CCITT values Redis's own cluster spec publishes:
+///
+/// ```
+/// use kevy_hash::crc16;
+/// assert_eq!(crc16(b""), 0x0000);
+/// assert_eq!(crc16(b"123456789"), 0x31C3);
+/// ```
 #[inline]
 pub fn crc16(bytes: &[u8]) -> u16 {
     let mut crc: u16 = 0;
@@ -97,6 +106,28 @@ fn crc16_bytewise(bytes: &[u8]) -> u16 {
 /// the **first** `{` and the **first** `}` after it are hashed — so
 /// `{user1000}.following` and `{user1000}.followers` land on one slot.
 /// An empty `{}` (or no braces) hashes the whole key.
+/// # Examples
+///
+/// A hashtag is what lets related keys share a slot, and therefore a node:
+///
+/// ```
+/// use kevy_hash::key_hash_slot;
+/// assert_eq!(
+///     key_hash_slot(b"{user1000}.following"),
+///     key_hash_slot(b"{user1000}.followers"),
+/// );
+/// assert_eq!(key_hash_slot(b"{user1000}.following"), key_hash_slot(b"user1000"));
+/// ```
+///
+/// An empty `{}` is not a hashtag, so the whole key hashes — including the
+/// braces:
+///
+/// ```
+/// use kevy_hash::key_hash_slot;
+/// assert_eq!(key_hash_slot(b"{}foo"), key_hash_slot(b"{}foo"));
+/// assert_ne!(key_hash_slot(b"{}foo"), key_hash_slot(b"foo"));
+/// assert!(key_hash_slot(b"anything") < 16384);
+/// ```
 #[inline]
 pub fn key_hash_slot(key: &[u8]) -> u16 {
     crc16(hashtag(key)) & 0x3FFF

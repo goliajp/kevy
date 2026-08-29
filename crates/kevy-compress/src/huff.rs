@@ -181,6 +181,18 @@ pub(crate) fn decode(buf: &[u8], n: usize) -> Result<(Vec<u8>, usize), Corrupt> 
 /// Kraft validation: an over-full code space lets two codes alias;
 /// reject instead of guessing.
 pub(crate) fn validate_lens(lens: &[u8; 256], n: usize) -> Result<(), Corrupt> {
+    // A length past MAX_LEN is not a code this format can express — the
+    // encoder length-limits to it — and it must be rejected BEFORE the
+    // Kraft sum, which subtracts the length from MAX_LEN. A header nibble
+    // carries 0..=15 and MAX_LEN is 12, so a corrupt or crafted header
+    // reaches that subtraction with 13, 14 or 15: a panic in a checked
+    // build, and in release a masked shift that feeds the sum an arbitrary
+    // number — defeating the over-full test this function exists to be.
+    // (`decode_arbitrary` crash-80b8440d, second run of a target that had
+    // been in the tree unrun.)
+    if lens.iter().any(|&l| u32::from(l) > MAX_LEN) {
+        return Err(Corrupt);
+    }
     let kraft: u64 = lens
         .iter()
         .filter(|&&l| l > 0)
@@ -190,6 +202,21 @@ pub(crate) fn validate_lens(lens: &[u8; 256], n: usize) -> Result<(), Corrupt> {
         return Err(Corrupt);
     }
     Ok(())
+}
+
+/// Upper bound on the initial reservation for a symbol count read out of
+/// the frame — not a limit on the decode, which runs out of bits and
+/// returns `Corrupt` on its own.
+///
+/// A Huffman code is at least one bit, so n symbols need at least n bits
+/// and a stream of `len` bytes cannot honour a claim past `8 * len`.
+/// Reserving on the claim instead let CI's first run of `decode_arbitrary`
+/// ask for `malloc(10903093247)` — 10.9 GB — after the two sites in
+/// `decode.rs` had already been bounded. That is the first pass's lesson
+/// repeated: the fix had gone where the fuzzer pointed rather than
+/// everywhere a length out of the frame reaches an allocation.
+pub(crate) fn symbols_fit(n: usize, stream_len: usize) -> usize {
+    n.min(stream_len.saturating_mul(8).saturating_add(64))
 }
 
 /// Decode `n` symbols from an LSB-first bitstream under `lens`;
@@ -211,7 +238,14 @@ pub(crate) fn read_bits(stream: &[u8], lens: &[u8; 256], n: usize) -> Result<(Ve
             ix += step;
         }
     }
-    let mut out = Vec::with_capacity(n);
+    // `n` is a count read out of the frame. A Huffman code is at least one
+    // bit, so n symbols need at least n bits and the stream cannot honour a
+    // claim past `8 * stream.len()`. Reserving on the claim let CI's first
+    // run of this target ask for malloc(10903093247) — 10.9 GB — after the
+    // two sites in decode.rs had already been bounded. That is the lesson
+    // of the first pass repeated: the fix went where the fuzzer pointed,
+    // not everywhere a length from the frame reaches an allocation.
+    let mut out = Vec::with_capacity(symbols_fit(n, stream.len()));
     let (mut acc, mut nbits, mut pos) = (0u64, 0u32, 0usize);
     let mut used_bits: u64 = 0;
     for _ in 0..n {

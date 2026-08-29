@@ -17,9 +17,16 @@ use kevy_persist::Fsync;
 ///
 /// [`Commands::resolve`]: crate::Commands::resolve
 pub struct ResolvedCmd {
+    /// MULTI/EXEC/DISCARD/WATCH classification, so the transaction layer
+    /// does not re-parse the verb.
     pub txn_kind: TxnKind,
+    /// Where this command goes: one shard, all of them, or a local answer.
     pub route: Route,
+    /// `QUIT`, which the reactor answers and then closes on rather than
+    /// dispatching.
     pub is_quit: bool,
+    /// Whether the command mutates — the AOF and replication gate. Set
+    /// from the verb table, not inferred from the route.
     pub is_write: bool,
     /// Blocking-command classification (see [`Commands::block_hint`]).
     /// `BlockHint::None` for every non-blocking verb.
@@ -89,8 +96,11 @@ pub enum ExtensionReduced {
 
 /// Transaction-control classification for a command.
 pub enum TxnKind {
+    /// `MULTI` — opens a queue on this connection.
     Multi,
+    /// `EXEC` — runs the queue, or replies nil if a WATCH was broken.
     Exec,
+    /// `DISCARD` — drops the queue and any WATCH set.
     Discard,
     /// `WATCH` — outside MULTI runs the fan-out; inside MULTI is rejected
     /// with an error (Redis semantics: `WATCH inside MULTI is not allowed`).
@@ -98,6 +108,7 @@ pub enum TxnKind {
     /// [`Route::Unwatch`] (clear + OK); inside MULTI it queues as a no-op
     /// that dispatch resolves to +OK at EXEC time.
     Watch,
+    /// Everything else: queued inside MULTI, dispatched outside it.
     Other,
 }
 

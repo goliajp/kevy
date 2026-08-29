@@ -67,6 +67,12 @@
 // kevy-sys.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+//! Every public item here is documented, and the lint keeps it that
+//! way: kevy-rt is the reactor, and `warnings = "deny"` turns a new
+//! gap into a compile error rather than a number that drifts. Closed
+//! from 35 sites in v6 — all of them fields inside well-documented
+//! variants, which is where prose review does not look.
+#![warn(missing_docs)]
 mod bio;
 mod block_xshard;
 mod block_xshard_confirm;
@@ -85,6 +91,8 @@ mod exec_client_intercept;
 mod exec_crossslot;
 mod exec_dispatch;
 mod exec_feed;
+mod exec_bitop;
+mod exec_copy;
 mod exec_fold;
 mod exec_geostore;
 mod exec_listmove;
@@ -104,6 +112,7 @@ mod inbox;
 mod lua_wake_bridge;
 mod message;
 mod message_agg;
+mod message_part;
 mod message_kinds;
 mod persist_jobs;
 mod persist_rewrite;
@@ -207,3 +216,5 @@ pub use types::{
 
 pub use crate::commands_trait::Commands;
 mod commands_trait;
+#[cfg(test)]
+mod commands_trait_tests;

@@ -129,7 +129,18 @@ fn reaper_loop(
     #[cfg(feature = "persist")] policy: kevy_persist::RewritePolicy,
     #[cfg(feature = "persist")] sink: Option<MetricSink>,
 ) {
+    // Without the tier feature `TierSpecOpt` is `()`, so silencing the
+    // unused parameter means binding a unit — which clippy::let_unit_value
+    // rejects, while its own suggested replacement (`tier;`) is rejected by
+    // path_statements. The two lints have no spelling they both accept, so
+    // the allow is the answer and carries its reason.
+    //
+    // None of this is visible to `cargo clippy --workspace`: a workspace
+    // build unifies features, `tier` is on, and the line is cfg'd out. It
+    // compiles only for a dependent that takes kevy-embedded WITHOUT tier —
+    // which is kevy-wasm, and is what the wasm package ships.
     #[cfg(not(all(feature = "tier", not(target_arch = "wasm32"))))]
+    #[allow(clippy::let_unit_value)]
     let _ = tier;
     while !stop.load(Ordering::Relaxed) {
         std::thread::sleep(interval);

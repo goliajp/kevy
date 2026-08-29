@@ -44,7 +44,22 @@ RPORT=7391
 DIR=$(mktemp -d /tmp/kevy-availgate-XXXXXX)
 PPID_=""
 RPID_=""
-trap 'kill $PPID_ $RPID_ 2>/dev/null; rm -rf "$DIR"' EXIT
+PIDS=()
+# One cleanup, installed once, because there used to be two traps and the
+# second silently replaced the first. `kill` signals and does not wait, so a
+# trap that returns before its servers have exited leaves them for whatever
+# runs next — perfgate REFUSED on exactly that twice, naming ports 7381 and
+# 7391 both times, which were gone seconds later. The first fix added the
+# wait to the trap on this line; phase 4 runs after the SECOND trap was
+# installed, so the fix was in a guard that no longer existed by then. A
+# shadowed guard is dead code, and this is what that looks like when nobody
+# checks which one is live.
+cleanup() {
+    kill $PPID_ $RPID_ ${PIDS[@]:-} 2>/dev/null
+    wait $PPID_ $RPID_ ${PIDS[@]:-} 2>/dev/null
+    rm -rf "$DIR"
+}
+trap cleanup EXIT
 
 fail() {
     echo "availgate: FAIL — $1"
@@ -243,8 +258,8 @@ kill $RPID_ $PPID_ 2>/dev/null; wait 2>/dev/null
 # a lag-injected 3-node ranking e2e joins the v3.16 matrix.)
 N1=7440; N2=7460; N3=7480
 E1=7540; E2=7560; E3=7580
-PIDS=()
-trap 'kill $PPID_ $RPID_ ${PIDS[@]:-} 2>/dev/null; rm -rf "$DIR"' EXIT
+# `PIDS` is declared with the cleanup at the top; the second trap that used
+# to live here is gone, and with it the shadowing.
 
 node_cfg() { # id client_port elect_base role upstream_or_empty
     printf '[replication]\nrole = "%s"\n' "$4"

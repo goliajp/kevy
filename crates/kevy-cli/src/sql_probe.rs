@@ -196,3 +196,65 @@ fn push_line(sql: &mut String, l: &str) {
     }
     sql.push_str(l);
 }
+
+#[cfg(test)]
+mod parse_records_tests {
+    use super::{parse_records, Expect};
+
+    /// `parse_records` carried 68 never-executed regions while being a pure
+    /// function from a corpus file's text to its records. The grammar is the
+    /// sqllogictest subset the corpus uses, and every branch of it is one
+    /// shape of input.
+    #[test]
+    fn a_query_record_takes_its_rows_to_the_blank_line() {
+        let src = "query I\nSELECT 1\n----\n1\n\nquery T\nSELECT 'a'\n----\na\n";
+        let got = parse_records(src);
+        assert_eq!(got.len(), 2, "two records, split on the blank line");
+        assert_eq!(got[0].0, "SELECT 1");
+        assert!(matches!(&got[0].1, Expect::Rows(r) if r == &vec!["1".to_string()]));
+        assert_eq!(got[1].0, "SELECT 'a'");
+        assert!(matches!(&got[1].1, Expect::Rows(r) if r == &vec!["a".to_string()]));
+    }
+
+    /// Multi-line SQL joins with newlines rather than being flattened, and a
+    /// query with no rows is an empty expectation rather than a missing one.
+    #[test]
+    fn sql_spanning_lines_keeps_its_shape() {
+        let src = "query I\nSELECT 1,\n       2\n----\n1 2\n";
+        let got = parse_records(src);
+        assert_eq!(got[0].0, "SELECT 1,\n       2");
+
+        let empty = parse_records("query I\nSELECT 1\n----\n\n");
+        assert_eq!(empty.len(), 1);
+        assert!(matches!(&empty[0].1, Expect::Rows(r) if r.is_empty()));
+    }
+
+    /// `statement ok` and `statement error` are the other arm, and the word
+    /// that distinguishes them is matched anywhere in the header line.
+    #[test]
+    fn statement_records_carry_their_expectation() {
+        let got = parse_records("statement ok\nCREATE TABLE t(a INT)\n\nstatement error\nSELECT nope\n");
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].0, "CREATE TABLE t(a INT)");
+        assert!(matches!(got[0].1, Expect::StatementOk));
+        assert_eq!(got[1].0, "SELECT nope");
+        assert!(matches!(got[1].1, Expect::StatementError));
+    }
+
+    /// Comments, blank lines and unrecognised leading text between records
+    /// are skipped rather than becoming SQL — a corpus file's header must
+    /// not arrive as a statement.
+    #[test]
+    fn text_outside_a_record_is_not_sql() {
+        let src = "# a comment\n\nhalt\n\nstatement ok\nSELECT 1\n";
+        let got = parse_records(src);
+        assert_eq!(got.len(), 1, "only the statement is a record; got SQL {:?}", got.iter().map(|r| &r.0).collect::<Vec<_>>());
+        assert_eq!(got[0].0, "SELECT 1");
+    }
+
+    #[test]
+    fn an_empty_file_has_no_records() {
+        assert!(parse_records("").is_empty());
+        assert!(parse_records("\n\n\n").is_empty());
+    }
+}

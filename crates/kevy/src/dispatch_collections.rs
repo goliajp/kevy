@@ -9,7 +9,7 @@
 //! direct `store::*` call, and returns whether the verb was handled.
 
 use crate::cmd_zadd::cmd_zadd;
-use crate::cmd::{cmd_hset, wrong_args, emit_int_result, store_err, rest_borrowed, arg_i64, ERR_NOT_INT, emit_bulk_array, cmd_pop, cmd_blpop, fmt_score, arg_f64, cmd_zrange, cmd_zrangebyscore, parse_score_bound};
+use crate::cmd::{cmd_hset, wrong_args, emit_int_result, store_err, rest_borrowed, arg_i64, ERR_NOT_INT, emit_bulk_array, cmd_pop, cmd_blpop, fmt_score, arg_f64, cmd_zrange, cmd_zrevrange, cmd_zrangebyscore, parse_score_bound};
 use crate::dispatch_collections_v127::{
     cmd_bzpopmin, cmd_hscan, cmd_lpos, cmd_sscan, cmd_zpopmin, cmd_zpopmin_below,
     cmd_zrevrangebyscore, cmd_zscan,
@@ -110,6 +110,18 @@ pub(crate) fn dispatch_hash<A: ArgvView + ?Sized>(
                 emit_int_result(store.hincrby(&args[1], &args[2], d), out);
             } else {
                 encode_error(out, ERR_NOT_INT);
+            }
+        }
+        b"HINCRBYFLOAT" => {
+            if args.len() != 4 {
+                wrong_args(out, "hincrbyfloat");
+            } else if let Some(d) = arg_f64(&args[3]) {
+                match store.hincrbyfloat(&args[1], &args[2], d) {
+                    Ok(v) => encode_bulk(out, &fmt_score(v)),
+                    Err(e) => store_err(out, e),
+                }
+            } else {
+                encode_error(out, "ERR value is not a valid float");
             }
         }
         b"HKEYS" => {
@@ -233,6 +245,18 @@ pub(crate) fn dispatch_list<A: ArgvView + ?Sized>(
                 }
             } else {
                 encode_error(out, ERR_NOT_INT);
+            }
+        }
+        b"LINSERT" => {
+            if args.len() != 5 {
+                wrong_args(out, "linsert");
+            } else {
+                let before = args[2].eq_ignore_ascii_case(b"BEFORE");
+                if !before && !args[2].eq_ignore_ascii_case(b"AFTER") {
+                    encode_error(out, "ERR syntax error");
+                } else {
+                    emit_int_result(store.linsert(&args[1], before, &args[3], &args[4]), out);
+                }
             }
         }
         b"LREM" => {
@@ -398,6 +422,7 @@ pub(crate) fn dispatch_zset<A: ArgvView + ?Sized>(
             }
         }
         b"ZRANGE" => cmd_zrange(store, args, out, kevy_resp::RespVersion::V2),
+        b"ZREVRANGE" => cmd_zrevrange(store, args, out, kevy_resp::RespVersion::V2),
         b"ZRANGEBYSCORE" => cmd_zrangebyscore(store, args, out, kevy_resp::RespVersion::V2),
         b"ZCOUNT" => {
             if args.len() != 4 {
