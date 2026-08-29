@@ -91,6 +91,11 @@ Two things it had to learn the hard way, both caught by running it:
   Asking them for 6.0.0 finds nothing, which reads like a finding and is
   not one. Each door is now asked about the version it declares.
 
+The GitHub release is a door too, and it is checked by content: not
+draft, and carrying at least one asset. `release.yml` builds the server
+binaries in a job separate from the publishing ones, so a tag can end up
+with every registry agreeing and a Releases page with nothing on it.
+
 It also refuses on a `bindings/` directory it cannot read — a door added
 in a manifest format nobody taught it would otherwise be skipped in
 silence, which is this same finding one level up. Verified by putting a

@@ -205,6 +205,23 @@ def on_ghcr(image, v):
         return None
 
 
+def on_github_release(repo, v):
+    """A tag with no release behind it is a download page that 404s.
+
+    `release.yml` builds the server binaries and writes the release notes in
+    jobs separate from the publishing ones; either can fail while crates.io
+    and npm succeed, leaving a tag that every other door agrees with and a
+    Releases page with nothing on it.
+    """
+    st, d = jget(f"https://api.github.com/repos/{repo}/releases/tags/v{v}")
+    if st == 404:
+        return False
+    if d is None:
+        return None
+    # By content: published, and carrying something to download.
+    return not d.get("draft", True) and len(d.get("assets") or []) > 0
+
+
 def on_dockerhub(repo, v):
     st, d = jget(f"https://hub.docker.com/v2/repositories/{repo}/tags/{v}")
     if st == 404:
@@ -305,6 +322,14 @@ def doors():
             continue
         add("crates.io", pk["name"], on_crates,
             pathlib.Path(pk["manifest_path"]), pk.get("version"))
+
+    # The GitHub release, with the repository read off the remote rather
+    # than written here.
+    remote = subprocess.run(["git", "remote", "get-url", "origin"],
+                            cwd=ROOT, capture_output=True, text=True).stdout.strip()
+    m = re.search(r"github\.com[:/]([\w.-]+/[\w.-]+?)(?:\.git)?$", remote)
+    if m:
+        add("github", m.group(1), on_github_release, ROOT / ".github/workflows/release.yml", None)
 
     # The container images, read out of the workflow that pushes them so the
     # names cannot drift apart from what actually gets tagged.
