@@ -95,6 +95,19 @@ pub trait Commands: Clone + Send + 'static {
     /// tick cadence (10 Hz), so implementations may do real work.
     fn on_tick_gap(&self, _excess_us: u64) {}
 
+    /// A connection was closed because its accumulated unparsed input
+    /// crossed the query-buffer cap.
+    ///
+    /// The enforcement path printed a line and marked the conn closing,
+    /// and there was nothing a test or an operator could ask about it —
+    /// so an intermittent "the server did not close" could not be told
+    /// from "the server decided and the close had not landed yet".
+    /// Those are different defects. Redis exposes the same count as
+    /// `client_query_buffer_limit_disconnections`.
+    ///
+    /// Called on the closing decision, not on the close completing.
+    fn on_query_buffer_exceeded(&self) {}
+
     /// Per-tick AOF on-disk format gauge (the embedder ask's 
     /// server twin): 0 = AOF off, 1 = a pre-4.0 v1 file still being
     /// appended (a 3.x binary swap-back still works), 2 = v2. Follows

@@ -83,6 +83,10 @@ impl Commands for KevyCommands {
         self.shard_ctx().note_tick_gap(excess_us);
     }
 
+    fn on_query_buffer_exceeded(&self) {
+        self.shard_ctx().note_query_buffer_exceeded();
+    }
+
     fn on_aof_format(&self, format: u8) {
         self.shard_ctx().set_aof_format(format);
     }

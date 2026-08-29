@@ -128,6 +128,7 @@ impl<C: Commands> Shard<C> {
                             "kevy: shard {} closing conn {conn_id}: query buffer exceeded {} bytes",
                             self.id, self.input_hard_limit,
                         );
+                        self.commands.on_query_buffer_exceeded();
                         conn.closing = true;
                         break;
                     }
