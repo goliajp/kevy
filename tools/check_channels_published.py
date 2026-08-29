@@ -237,6 +237,118 @@ def workspace_version() -> str:
     return m.group(1)
 
 
+# ── one reader per manifest format: the file → (package name, the version
+# it declares), or None when the file describes something that ships
+# nowhere. Symmetric with the probes above, one per registry.
+
+def read_npm(t):
+    d = json.loads(t)
+    if d.get("private") or not d.get("name"):
+        return None
+    return d["name"], d.get("version")
+
+
+def read_pyproject(t):
+    m = re.search(r'^name\s*=\s*"([^"]+)"', t, re.M)
+    v = re.search(r'^version\s*=\s*"(\d+\.\d+\.\d+)"', t, re.M)
+    return (m.group(1), v.group(1) if v else None) if m else None
+
+
+def read_pom(t):
+    g = re.search(r"<groupId>([\w.]+)</groupId>", t)
+    a = re.search(r"<artifactId>([\w.-]+)</artifactId>", t)
+    v = re.search(r"<version>(\d+\.\d+\.\d+)</version>", t)
+    return (f"{g.group(1)}:{a.group(1)}", v.group(1) if v else None) if g and a else None
+
+
+def read_csproj(t):
+    if re.search(r"<IsPackable>\s*false", t, re.I):
+        return None
+    v = re.search(r"<Version>(\d+\.\d+\.\d+)</Version>", t)
+    if not v:
+        return None
+    pid = re.search(r"<PackageId>([\w.-]+)</PackageId>", t)
+    return (pid.group(1) if pid else None), v.group(1)
+
+
+def read_pubspec(t):
+    m = re.search(r"^name:\s*(\S+)", t, re.M)
+    v = re.search(r"^version:\s*(\d+\.\d+\.\d+)", t, re.M)
+    return (m.group(1), v.group(1) if v else None) if m else None
+
+
+def read_gomod(t):
+    # A Go module carries no version of its own; the tag is the version.
+    m = re.search(r"^module\s+(\S+)", t, re.M)
+    return (m.group(1), None) if m else None
+
+
+# (registry label, glob under bindings/, reader, probe)
+FORMATS = [
+    ("npm", "**/package.json", read_npm, on_npm),
+    ("pypi", "**/pyproject.toml", read_pyproject, on_pypi),
+    ("maven", "**/pom.xml", read_pom, on_maven),
+    ("nuget", "**/*.csproj", read_csproj, on_nuget),
+    ("pub.dev", "**/pubspec.yaml", read_pubspec, on_pub),
+    ("go", "**/go.mod", read_gomod, on_goproxy),
+]
+
+
+def binding_doors(excused):
+    """Doors found under bindings/, one glob per manifest format."""
+    out = []
+    for kind, pattern, read, probe in FORMATS:
+        for f in sorted((ROOT / "bindings").glob(pattern)):
+            if demo(f) or any(x in f.parents or x == f.parent for x in excused):
+                continue
+            got = read(f.read_text(encoding="utf-8"))
+            if not got:
+                continue
+            name, declared = got
+            out.append((kind, name or f.stem, probe, f, declared))
+    return out
+
+
+def crate_doors():
+    """Everything cargo would publish, at the version each crate declares."""
+    meta = json.loads(subprocess.run(
+        ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+        cwd=ROOT, capture_output=True, text=True).stdout or "{}")
+    return [
+        ("crates.io", pk["name"], on_crates,
+         pathlib.Path(pk["manifest_path"]), pk.get("version"))
+        for pk in sorted(meta.get("packages", []), key=lambda x: x["name"])
+        if pk.get("publish") != []
+    ]
+
+
+def service_doors():
+    """The release page and the container images.
+
+    Both are read out of what produces them — the git remote and the
+    workflow that pushes the tags — so neither name can drift apart from
+    the thing it is supposed to describe.
+    """
+    out = []
+    remote = subprocess.run(["git", "remote", "get-url", "origin"],
+                            cwd=ROOT, capture_output=True, text=True).stdout.strip()
+    rel = ROOT / ".github/workflows/release.yml"
+    m = re.search(r"github\.com[:/]([\w.-]+/[\w.-]+?)(?:\.git)?$", remote)
+    if m:
+        out.append(("github", m.group(1), on_github_release, rel, None))
+
+    dw = ROOT / ".github/workflows/docker.yml"
+    if dw.exists():
+        t = dw.read_text(encoding="utf-8")
+        for host, probe in (("ghcr", on_ghcr), ("dockerhub", on_dockerhub)):
+            pat = r"ghcr\.io/([\w.-]+/[\w.-]+)" if host == "ghcr" \
+                  else r"docker\.io/([\w.-]+/[\w.-]+)"
+            g = re.search(pat, t)
+            if g:
+                out.append((host, g.group(1), probe, dw, None))
+    return out
+
+
 def doors():
     """Every door the tree has, read off the tree, with the version it declares.
 
@@ -249,100 +361,29 @@ def doors():
     the release version finds nothing and says so, which reads like a
     finding and is not one. Each door is asked about the version it claims.
     """
-    out = []
-    exempt = {ROOT / k for k in NOT_PUBLISHED}
+    excused = {ROOT / k for k in NOT_PUBLISHED}
+    return binding_doors(excused) + crate_doors() + service_doors()
 
-    def excused(p):
-        return any(x in p.parents or x == p for x in exempt)
 
-    def add(kind, name, ask, src, declared):
-        out.append((kind, name, ask, src, declared))
+def unseen(ds):
+    """bindings/ directories that produced no door and gave no reason.
 
-    for p in sorted(ROOT.glob("bindings/**/package.json")):
-        if demo(p) or excused(p.parent):
-            continue
-        d = json.loads(p.read_text(encoding="utf-8"))
-        if d.get("private") or not d.get("name"):
-            continue
-        add("npm", d["name"], on_npm, p, d.get("version"))
-
-    for p in sorted(ROOT.glob("bindings/**/pyproject.toml")):
-        if demo(p) or excused(p.parent):
-            continue
-        t = p.read_text(encoding="utf-8")
-        m = re.search(r'^name\s*=\s*"([^"]+)"', t, re.M)
-        vm = re.search(r'^version\s*=\s*"(\d+\.\d+\.\d+)"', t, re.M)
-        if m:
-            add("pypi", m.group(1), on_pypi, p, vm.group(1) if vm else None)
-
-    for p in sorted(ROOT.glob("bindings/**/pom.xml")):
-        if demo(p) or excused(p.parent):
-            continue
-        t = p.read_text(encoding="utf-8")
-        g = re.search(r"<groupId>([\w.]+)</groupId>", t)
-        a = re.search(r"<artifactId>([\w.-]+)</artifactId>", t)
-        vm = re.search(r"<version>(\d+\.\d+\.\d+)</version>", t)
-        if g and a:
-            add("maven", f"{g.group(1)}:{a.group(1)}", on_maven, p,
-                vm.group(1) if vm else None)
-
-    for p in sorted(ROOT.glob("bindings/**/*.csproj")):
-        if demo(p) or excused(p.parent):
-            continue
-        t = p.read_text(encoding="utf-8")
-        if re.search(r"<IsPackable>\s*false", t, re.I):
-            continue
-        pid = re.search(r"<PackageId>([\w.-]+)</PackageId>", t)
-        vm = re.search(r"<Version>(\d+\.\d+\.\d+)</Version>", t)
-        if vm:
-            add("nuget", pid.group(1) if pid else p.stem, on_nuget, p, vm.group(1))
-
-    for p in sorted(ROOT.glob("bindings/**/pubspec.yaml")):
-        if demo(p) or excused(p.parent):
-            continue
-        t = p.read_text(encoding="utf-8")
-        m = re.search(r"^name:\s*(\S+)", t, re.M)
-        vm = re.search(r"^version:\s*(\d+\.\d+\.\d+)", t, re.M)
-        if m:
-            add("pub.dev", m.group(1), on_pub, p, vm.group(1) if vm else None)
-
-    for p in sorted(ROOT.glob("bindings/**/go.mod")):
-        if demo(p) or excused(p.parent):
-            continue
-        m = re.search(r"^module\s+(\S+)", p.read_text(encoding="utf-8"), re.M)
-        if m:
-            # A Go module carries no version of its own; the tag is the version.
-            add("go", m.group(1), on_goproxy, p, None)
-
-    meta = json.loads(subprocess.run(
-        ["cargo", "metadata", "--no-deps", "--format-version", "1"],
-        cwd=ROOT, capture_output=True, text=True).stdout or "{}")
-    for pk in sorted(meta.get("packages", []), key=lambda x: x["name"]):
-        if pk.get("publish") == []:
-            continue
-        add("crates.io", pk["name"], on_crates,
-            pathlib.Path(pk["manifest_path"]), pk.get("version"))
-
-    # The GitHub release, with the repository read off the remote rather
-    # than written here.
-    remote = subprocess.run(["git", "remote", "get-url", "origin"],
-                            cwd=ROOT, capture_output=True, text=True).stdout.strip()
-    m = re.search(r"github\.com[:/]([\w.-]+/[\w.-]+?)(?:\.git)?$", remote)
-    if m:
-        add("github", m.group(1), on_github_release, ROOT / ".github/workflows/release.yml", None)
-
-    # The container images, read out of the workflow that pushes them so the
-    # names cannot drift apart from what actually gets tagged.
-    dw = ROOT / ".github/workflows/docker.yml"
-    if dw.exists():
-        t = dw.read_text(encoding="utf-8")
-        g = re.search(r"ghcr\.io/([\w.-]+/[\w.-]+)", t)
-        h = re.search(r"docker\.io/([\w.-]+/[\w.-]+)", t)
-        if g:
-            add("ghcr", g.group(1), on_ghcr, dw, None)
-        if h:
-            add("dockerhub", h.group(1), on_dockerhub, dw, None)
-    return out
+    Without this, the gate quietly skips a manifest format it was never
+    taught — which is the hole it was written to close, one level up: a
+    door added in a format nobody added support for would be unchecked,
+    and the gate would keep reporting all-green.
+    """
+    covered = set()
+    for _, _, _, src, _ in ds:
+        for parent in [src] + list(src.parents):
+            if parent.parent == ROOT / "bindings":
+                covered.add(parent.name)
+                break
+    excused = {k.split("/")[1] for k in NOT_PUBLISHED if k.startswith("bindings/")}
+    return sorted(
+        d.name for d in (ROOT / "bindings").iterdir()
+        if d.is_dir() and d.name not in covered and d.name not in excused
+    )
 
 
 def main() -> int:
@@ -355,25 +396,10 @@ def main() -> int:
               f"smaller gate that passes is worse than no gate")
         return 2
 
-    # Every directory under bindings/ must produce a door or say why it
-    # does not. Without this, the gate quietly skips a manifest format it
-    # was never taught — which is the hole it was written to close, one
-    # level up: a door added in a format nobody added support for would be
-    # unchecked, and the gate would keep reporting all-green.
-    covered = set()
-    for _, _, _, src, _ in ds:
-        for parent in [src] + list(src.parents):
-            if parent.parent == ROOT / "bindings":
-                covered.add(parent.name)
-                break
-    excused = {k.split("/")[1] for k in NOT_PUBLISHED if k.startswith("bindings/")}
-    unknown_doors = sorted(
-        d.name for d in (ROOT / "bindings").iterdir()
-        if d.is_dir() and d.name not in covered and d.name not in excused
-    )
-    if unknown_doors:
+    blind = unseen(ds)
+    if blind:
         print("bindings/ directories this gate cannot see:")
-        for d in unknown_doors:
+        for d in blind:
             print(f"  bindings/{d} — no manifest format it recognises, and not "
                   f"listed in NOT_PUBLISHED")
         print("\nTeach it the format, or record why the door ships nothing. "
