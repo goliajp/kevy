@@ -109,6 +109,23 @@ being believed.
 rather than listed, with a floor that fails if the search returns fewer
 than six — a broken search publishes nothing while reporting success.
 
+Running that step outside a release — by lifting the shell out of the
+YAML and stubbing the two mutating commands — was worth more than writing
+it carefully. It showed the already-published skip working (6 publishable,
+0 published, at v6.0.0) and the publish path working (6 at a version that
+does not exist). It also showed two things wrong with what had been
+written:
+
+- the floor counted *files the find turned up*, not packages the step took
+  responsibility for, so a tree where every manifest had gone private
+  would have passed while publishing nothing;
+- with the `-not -path '*/node_modules/*'` removed, the loop walks into
+  `node_modules` and offers to publish third-party packages under our
+  version. It reached for `undici-types`, which is on a 6.x line of its
+  own and so passed every check. The find flag is now backed by an
+  independent `case */node_modules/*` in the loop body, because one filter
+  is a single point of failure for something that publishes.
+
 **`ci.yml`** now builds and typechecks `bindings/tauri/guest-js`, which
 was neither built nor tested here. Its `main` points at `dist/index.js`,
 so the step asserts that file exists rather than trusting `tsc`'s exit

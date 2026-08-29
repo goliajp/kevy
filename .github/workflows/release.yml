@@ -251,17 +251,27 @@ jobs:
           # the day a seventh door is added, so this finds them instead.
           set -euo pipefail
           V="${GITHUB_REF_NAME#v}"
-          mapfile -t pkgs < <(find bindings -name package.json \
-                              -not -path '*/node_modules/*' \
-                              -not -path '*/target/*' | sort)
-          # A find that comes back nearly empty is a broken find, and a
-          # broken find publishes nothing while reporting success.
-          if [ "${#pkgs[@]}" -lt 6 ]; then
-            echo "only ${#pkgs[@]} package.json under bindings/ — the search is wrong"
+          # Into a file, then read from the file: a `while read` on the
+          # right of a pipe runs in a subshell, where set -e is not the
+          # loop's and a counter incremented inside is lost on exit. The
+          # file also makes this step runnable outside a release, which is
+          # the only way it gets tested before the day it matters.
+          find bindings -name package.json \
+               -not -path '*/node_modules/*' \
+               -not -path '*/target/*' | sort > /tmp/binding-pkgs.txt
+          if [ ! -s /tmp/binding-pkgs.txt ]; then
+            echo "no package.json under bindings/ — the search is wrong"
             exit 1
           fi
           published=0
-          for pkg in "${pkgs[@]}"; do
+          considered=0
+          while IFS= read -r pkg; do
+            # Independently of what the find above excluded: never publish
+            # out of a node_modules. Dropping that -not -path turns this
+            # loop into one that npm-publishes third-party packages under
+            # our version — tried it, and it reached for undici-types,
+            # which happens to be on a 6.x line of its own.
+            case "$pkg" in */node_modules/*) continue ;; esac
             dir=$(dirname "$pkg")
             name=$(node -p "require('$PWD/$pkg').name || ''")
             priv=$(node -p "require('$PWD/$pkg').private ? 1 : 0")
@@ -269,6 +279,7 @@ jobs:
               echo "skip $dir (private or unnamed)"
               continue
             fi
+            considered=$((considered + 1))
             if npm view "$name@$V" version >/dev/null 2>&1; then
               echo "$name@$V already published"
               continue
@@ -284,8 +295,17 @@ jobs:
             )
             published=$((published + 1))
             echo "published $name@$V"
-          done
-          echo "binding packages published this run: $published"
+          done < /tmp/binding-pkgs.txt
+          echo "binding packages: $considered publishable, $published published here"
+          # The floor belongs on the number of packages this step actually
+          # took responsibility for, not on how many files the find turned
+          # up. Counting files, a tree where every manifest had gone
+          # private would pass while publishing nothing.
+          if [ "$considered" -lt 6 ]; then
+            echo "only $considered publishable package(s) — that is fewer than this"
+            echo "repository has doors, so something is being skipped that should not be"
+            exit 1
+          fi
 
   # ───────────── build the kevy server binary for every supported target ─────────────
   # All targets build NATIVELY on their respective GitHub-hosted runner — each
