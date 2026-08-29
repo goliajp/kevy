@@ -232,6 +232,21 @@ moved.
 
 ### Changed
 
+- **`crashgate`'s T6 cell is a verdict, not a pending red.** A corrupt
+  frame mid-file must lose only the bad frame and not the good tail
+  behind it; the cell was marked `REDpending(T6)` while the resync path
+  was missing, and stayed marked after the fix landed because two green
+  runs prove little against a cell that passed 78% of the time on its
+  own. Nine consecutive CI runs on nine distinct commits are green now
+  — which is still not the argument, since nine could be luck about one
+  time in ten at that rate. The argument is the mechanism: resync ran
+  only on `CorruptFrame`, and a splice producing a length that was
+  valid but longer than the bytes remaining read as a torn tail, so
+  resync never started. That was reproduced by construction and fixed.
+  What the nine bought is the confidence to stop declaring and start
+  enforcing — a pending red absorbs the next regression silently, a
+  verdict shows it on the run that has it.
+
 - **Every public item is documented** — 2,661 of 2,661, from 93.9%. All 34
   stone and steel crates are at 100%, and all 34 now hold it with
   `#![warn(missing_docs)]`, so the next gap is a compile error naming a line
