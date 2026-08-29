@@ -60,6 +60,20 @@ trap cleanup EXIT
 # runs of the same binary and there was no record of what else was running,
 # so the blown cell could not be told from a busy box.
 #
+# The start check refuses a box that is busy BEFORE the run. Foreign load
+# that arrives DURING one is the same contamination and was, until now,
+# measured and then ignored: the gate printed "foreign cpu 58% while
+# probing" and reported the number that probe produced as a verdict.
+#
+# Four observations of cell B on this shared box, and the correlation is
+# monotone: foreign 8-33% -> 45ms, 58% -> 110ms, 107% -> 169ms, against a
+# 100ms bar. A reactor tick gap is exactly what a preempted thread
+# produces, so those runs measured the neighbour, not the engine.
+#
+# 25% because the start gate already requires idle >= 80%.
+FOREIGN_MAX=${TAILGATE_FOREIGN_MAX:-25}
+MAX_ATTEMPTS=${TAILGATE_MAX_ATTEMPTS:-9}
+
 # Instantaneous idle%, not loadavg, for the reason perfgate states: loadavg
 # measures the past, so a back-to-back run would refuse on its own wake.
 box_idle() {
@@ -113,6 +127,7 @@ one_run() { # $1 = name, $2 = reactor (auto|epoll), $3... = load args
         | awk -v s="${SRV:-0}" -v b="${BENCH:-0}" \
               '$2!=s && $2!=b && $3!~/^(kworker|ksoftirqd|migration|rcu_)/ {t+=$1} END {printf "%.0f", t+0}')
     printf '  [%s] foreign cpu %s%% while probing\n' "$name" "${foreign:-?}"
+    LAST_FOREIGN=${foreign:-999}
     target/release/examples/tail_probe $PORT 60
     kill -9 "$BENCH" 2>/dev/null; wait "$BENCH" 2>/dev/null; BENCH=""
     kill -9 "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null; SRV=""
@@ -121,9 +136,30 @@ one_run() { # $1 = name, $2 = reactor (auto|epoll), $3... = load args
 cell() { # $1 = name, $2 = reactor (auto|epoll), $3... = load args
     local name=$1 reactor=$2; shift 2
     local p999s=() gaps=() out p g
-    for i in $(seq "$RUNS"); do
+    local taken=0 attempts=0 dirty=0
+    while [ "$taken" -lt "$RUNS" ]; do
+        attempts=$((attempts + 1))
+        if [ "$attempts" -gt "$MAX_ATTEMPTS" ]; then
+            # REFUSED, not FAILED. A probe taken while something else had
+            # the cores did not measure this engine, and reporting its
+            # number as a verdict would be the gate answering a question
+            # nobody asked. The start check already refuses a busy box;
+            # this is the same rule applied to the load that arrives
+            # DURING a run, which is what a shared box actually does.
+            echo "tailgate: REFUSED — $name could not get $RUNS clean probes in" >&2
+            echo "  $MAX_ATTEMPTS attempts; $dirty were taken while foreign CPU was" >&2
+            echo "  above ${FOREIGN_MAX}%. The box is shared and something else is" >&2
+            echo "  running. This is not a verdict about the engine." >&2
+            exit 2
+        fi
         out=$(one_run "$name" "$reactor" "$@")
+        i=$((taken + 1))
         echo "$name[$i/$RUNS]: $out"
+        if [ "${LAST_FOREIGN:-0}" -gt "$FOREIGN_MAX" ]; then
+            dirty=$((dirty + 1))
+            echo "  ~ $name: discarding this probe — foreign cpu ${LAST_FOREIGN}% > ${FOREIGN_MAX}%"
+            continue
+        fi
         p=$(echo "$out" | grep -oE 'p999us=[0-9]+' | cut -d= -f2)
         g=$(echo "$out" | grep -oE 'reactor_gap_us=[0-9]+' | cut -d= -f2)
         # An absent number is not a large one. This used to fall through
@@ -139,7 +175,9 @@ cell() { # $1 = name, $2 = reactor (auto|epoll), $3... = load args
         fi
         p999s+=("$p")
         gaps+=("$g")
+        taken=$((taken + 1))
     done
+    [ "$dirty" -gt 0 ] && echo "  ~ $name: $dirty probe(s) discarded as contaminated, $RUNS clean kept"
     local p999 gap
     p999=$(median_of "${p999s[@]}")
     gap=$(median_of "${gaps[@]}")
