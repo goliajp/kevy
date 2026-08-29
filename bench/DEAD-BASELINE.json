@@ -2,16 +2,16 @@
   "corpus": "c1",
   "platform": "linux",
   "total_regions": 164459,
-  "dead_regions": 26988,
-  "llvm_per_instantiation_dead": 27874,
+  "dead_regions": 26994,
+  "llvm_per_instantiation_dead": 27932,
   "crates": {
     "kevy": {
       "regions": 29461,
-      "dead": 5313
+      "dead": 5322
     },
     "kevy-alloc": {
       "regions": 1694,
-      "dead": 117
+      "dead": 119
     },
     "kevy-bench": {
       "regions": 130,
@@ -71,7 +71,7 @@
     },
     "kevy-index": {
       "regions": 5866,
-      "dead": 449
+      "dead": 438
     },
     "kevy-jni": {
       "regions": 526,
@@ -111,7 +111,7 @@
     },
     "kevy-replicate": {
       "regions": 2672,
-      "dead": 172
+      "dead": 192
     },
     "kevy-resp": {
       "regions": 3378,
@@ -127,7 +127,7 @@
     },
     "kevy-rt": {
       "regions": 16242,
-      "dead": 4749
+      "dead": 4803
     },
     "kevy-scalar": {
       "regions": 4391,
@@ -135,7 +135,7 @@
     },
     "kevy-scope": {
       "regions": 629,
-      "dead": 57
+      "dead": 56
     },
     "kevy-seg": {
       "regions": 1212,
@@ -147,7 +147,7 @@
     },
     "kevy-store": {
       "regions": 18718,
-      "dead": 1493
+      "dead": 1492
     },
     "kevy-sys": {
       "regions": 730,
@@ -1492,7 +1492,7 @@
     "kevy::die::": 3,
     "kevy::dispatch::cmd_select::": 4,
     "kevy::dispatch::dispatch_conn::": 3,
-    "kevy::dispatch::dispatch_with_proto::": 10,
+    "kevy::dispatch::dispatch_with_proto::": 14,
     "kevy::dispatch_collections::cmd_brpoplpush::": 6,
     "kevy::dispatch_collections::cmd_lmove::": 5,
     "kevy::dispatch_collections::dispatch_hash::": 4,
@@ -1730,7 +1730,7 @@
     "kevy_alloc::large::with_pool::": 1,
     "kevy_alloc::os::discard": 1,
     "kevy_alloc::os::map_aligned": 4,
-    "kevy_alloc::os::trim": 1,
+    "kevy_alloc::os::trim": 3,
     "kevy_alloc::os::unmap": 1,
     "kevy_alloc::segment::splice_foreign": 2,
     "kevy_bench::bench::": 1,
@@ -2815,7 +2815,7 @@
     "kevy_window::text::clean_stale": 17,
     "kevy_window::text::write_seg_file": 11
   },
-  "envelope_runs": 3,
+  "envelope_runs": 4,
   "history": [
     {
       "accepted": [
@@ -2932,6 +2932,12 @@
       "symbols": 2610,
       "regions": 26988,
       "reason": "An envelope over three runs of THIS code, because one sample cannot hold this measurement. The previous commit recorded a single run and the very next run failed on SegMap::rand_entry alone (2 -> 4) \u2014 a randomised sampler whose branches differ per run. Comparing the three: ten symbols move between runs, several by a lot (decode_replconf_ack 7/27, parse_replica_acks 11/48), all of them in replication-timing paths where which branch runs depends on when an ack lands. The element-wise maximum is therefore what the baseline holds, exactly as this file's own docstring prescribes and as the 2026-08-28 envelope did. The three observations are distinct files (md5 31eeffe8d1a2 / 389f0d1a37df / 2c3658b641f0) \u2014 a rerun of the same run was refused by GitHub and returned run 2's artifact again, which would have let one sample pass itself off as two. Against the pre-branch baseline the envelope is still far smaller: 2,621 symbols / 27,867 regions -> 2,610 / 26,988."
+    },
+    {
+      "envelope_over": 4,
+      "symbols": 2610,
+      "regions": 26994,
+      "reason": "A fourth run of the same commit, folded in. Three had not been enough: dispatch_with_proto sat at 10 in all three and came back 14 in the fourth, os::trim at 1 then 3 \u2014 both bimodal, and both named in setratchet's own docstring as the noisy tail it was written for. They are registered in suite/dead-paths.toml with their observed values, which is the mechanism this repo prescribes for a symbol that will not settle; the envelope holds the maximum so the register and the bound say the same thing. Four distinct observations, md5 31eeffe8d1a2 / 389f0d1a37df / 2c3658b641f0 / 7ae4e4f8398b. Against the baseline this branch started from the set is still far smaller: 2,621 symbols / 27,867 regions -> 2,610 / 27,002."
     }
   ]
 }
