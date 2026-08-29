@@ -1248,6 +1248,38 @@ jobs:
         working-directory: bindings/tauri/tauri-plugin-kevy
         run: cargo test
 
+      # The typed JS client the Tauri README tells readers to install. It was
+      # neither built nor typechecked here until 2026-08-30, which is the same
+      # shape as it never being published: a door the repository ships and does
+      # not exercise. `tsc` is both build and test — dist/ is what the
+      # package's `main` points at, so a build that produces nothing is a
+      # package that resolves to nothing.
+      - name: Tauri — typed JS client builds and typechecks
+        if: matrix.lang == 'tauri'
+        working-directory: bindings/tauri/guest-js
+        run: |
+          npm install --no-audit --no-fund
+          npm run typecheck
+          rm -rf dist
+          npm run build
+          test -f dist/index.js   || { echo "tsc produced no dist/index.js"; exit 1; }
+          test -f dist/index.d.ts || { echo "tsc produced no types"; exit 1; }
+          # And it has to actually import. The package declares "type":
+          # "module" but compiles under moduleResolution "Bundler", which
+          # permits extensionless relative imports — valid inside a bundler,
+          # rejected by Node's ESM resolver. 6.0.0 went to npm that way and
+          # `import { kevy } from 'tauri-plugin-kevy-api'`, the line its
+          # README teaches, threw ERR_MODULE_NOT_FOUND outside a bundler.
+          # tsc is happy either way, so tsc cannot be the check.
+          node -e "
+            import('./dist/index.js').then(m => {
+              for (const name of ['kevy', 'replyInt', 'KevyClient']) {
+                if (!(name in m)) { console.error('missing export: ' + name); process.exit(1); }
+              }
+              console.log('imports under plain Node ESM, exports intact');
+            }).catch(e => { console.error(e.code || e.message); process.exit(1); })
+          "
+
   # The Apple door needs a macOS runner, which is why it sat uncovered
   # while every other host-runnable door joined the matrix above: this is
   # a cost decision, not a wiring one. KevyKit links the vendored

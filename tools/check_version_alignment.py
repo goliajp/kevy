@@ -231,6 +231,21 @@ def layer23_manifests(v: str, bad: list) -> int:
             checked += 1
             if m.group(1) != v:
                 bad.append(f"{f.relative_to(ROOT)}: <Version> {m.group(1)} != {v}")
+
+    # CMake's project() version — the format this gate had not been taught
+    # next. Nothing consumes it, which is exactly why it drifted quietly to
+    # three releases behind while every format above stayed current: a
+    # declaration nobody reads is still a declaration, and a reader who opens
+    # the file to learn which kevy this door speaks is told 5.0.0.
+    for f in sorted(ROOT.glob("bindings/**/CMakeLists.txt")):
+        if skip(f):
+            continue
+        m = re.search(r"^project\([^)]*?VERSION\s+(\d+\.\d+\.\d+)",
+                      f.read_text(encoding="utf-8"), re.M | re.S)
+        if m:
+            checked += 1
+            if m.group(1) != v:
+                bad.append(f"{f.relative_to(ROOT)}: project() VERSION {m.group(1)} != {v}")
     return checked
 
 
