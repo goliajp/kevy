@@ -98,7 +98,13 @@ impl<C: Commands> Shard<C> {
             argv.push(value);
         }
         self.note_key_mutated(&key);
-        self.log_write(&argv);
+        // `log_effect`, not `log_write`: the first writes the AOF, the
+        // second also pushes the mutation to replicas and therefore to
+        // the change feed that reads their backlog. `propgate` caught
+        // this one — a BITOP result that was durable and unreplicated,
+        // which is the exact shape of the three data-loss bugs that
+        // gate was written after.
+        self.log_effect(&argv);
         Part::Int(len)
     }
 
