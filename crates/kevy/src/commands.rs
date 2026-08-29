@@ -73,6 +73,14 @@ impl Commands for KevyCommands {
         self.shard_ctx().set_stats_slot(self.state().obs.slot(shard));
     }
 
+    fn on_data_dir(&self, dir: &std::path::Path) {
+        // So `CONFIG GET dir` answers with the directory this server
+        // writes to, rather than with whatever its configuration was
+        // built with. For `kevy::serve` the two are the same value and
+        // this is a no-op; for a programmatic build they were not.
+        self.state().set_data_dir(dir.to_path_buf());
+    }
+
     fn on_persist_stats(&self, in_flight: bool, aof_rewrites_total: u64) {
         // `INFO persistence` answers with the answering shard's view
         // (the COUNTKEYSINSLOT precedent), refreshed by the reactor tick.

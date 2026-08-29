@@ -66,6 +66,27 @@ fn a_streaming_giant_frame_is_disconnected_at_the_cap() {
     // A decision that never reached the client is a different defect
     // from a cap that was never noticed, and this test cannot tell them
     // apart from where it stands.
+    // `CONFIG GET dir` now answers with the directory this runtime
+    // writes to. It did not when this witness was first written — the
+    // builder set the runtime's directory and the Commands
+    // implementation answered from its own configuration, so the reply
+    // was `.` while the data went to a temp dir. That gap is closed by
+    // an `on_data_dir` hook, and this is the assertion that keeps it
+    // closed: one question, one answer.
+    {
+        let mut cfg = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        cfg.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        cfg.write_all(b"*3\r\n$6\r\nCONFIG\r\n$3\r\nGET\r\n$3\r\ndir\r\n").unwrap();
+        let mut buf = vec![0u8; 1024];
+        let n = cfg.read(&mut buf).unwrap_or(0);
+        let said = String::from_utf8_lossy(&buf[..n]).to_string();
+        let ours = dir.display().to_string();
+        assert!(
+            said.contains(&ours),
+            "CONFIG GET dir says {said:?}; this server writes to {ours:?}"
+        );
+    }
+
     {
         let marker = format!("qbuf-marker-{port}");
         let mut w = TcpStream::connect(("127.0.0.1", port)).unwrap();
