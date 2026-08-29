@@ -118,6 +118,34 @@ why: *"the gate could only see the formats it had been taught."*
 tag rather than the tree, so it is green between releases and red only when
 a release was announced that a user cannot install.
 
+## The one defect publishing found
+
+Installing the seven packages from the registry — rather than trusting the
+publish receipts — turned up a real one. `tauri-plugin-kevy-api@6.0.0`
+declares `"type": "module"` and compiles under `moduleResolution:
+"Bundler"`, which permits extensionless relative imports. `tsc` is happy;
+so is Vite, which is what a Tauri app uses. Node's ESM resolver is not:
+
+```
+import { kevy, replyInt } from 'tauri-plugin-kevy-api'
+→ ERR_MODULE_NOT_FOUND  .../dist/reply
+```
+
+That is the exact line the README teaches. No user is broken today — the
+package's only documented environment is a Tauri app behind a bundler —
+but the package claims to be ESM and is not, outside one.
+
+Fixed in the tree (`./reply` → `./reply.js` in five specifiers, which both
+resolutions accept) and asserted in CI, which now imports the built module
+under plain Node and checks three exports are present. Verified red-green
+by reverting the specifiers: `ERR_MODULE_NOT_FOUND`, then green again.
+
+**npm 6.0.0 keeps the defect.** A version cannot be republished, and
+unpublishing the only version of a package blocks the name for 24 hours.
+The fix therefore rides the next release. Cutting a 6.0.1 for one door
+would put the tree at two versions at once, which is the invariant the
+rest of this finding is about — that call belongs to the owner.
+
 ## What is still deliberately unpublished
 
 `bindings/tauri/tauri-plugin-kevy` — its README installs it by path and

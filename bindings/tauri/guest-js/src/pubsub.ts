@@ -6,7 +6,7 @@
 // arrive as JSON number arrays (binary-safe).
 
 import { invoke } from '@tauri-apps/api/core'
-import type { ByteArray } from './reply'
+import type { ByteArray } from './reply.js'
 
 /** A pub/sub frame delivered to the webview, tagged by `kind`. */
 export type PubsubMsg =

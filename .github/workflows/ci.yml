@@ -1264,6 +1264,21 @@ jobs:
           npm run build
           test -f dist/index.js   || { echo "tsc produced no dist/index.js"; exit 1; }
           test -f dist/index.d.ts || { echo "tsc produced no types"; exit 1; }
+          # And it has to actually import. The package declares "type":
+          # "module" but compiles under moduleResolution "Bundler", which
+          # permits extensionless relative imports — valid inside a bundler,
+          # rejected by Node's ESM resolver. 6.0.0 went to npm that way and
+          # `import { kevy } from 'tauri-plugin-kevy-api'`, the line its
+          # README teaches, threw ERR_MODULE_NOT_FOUND outside a bundler.
+          # tsc is happy either way, so tsc cannot be the check.
+          node -e "
+            import('./dist/index.js').then(m => {
+              for (const name of ['kevy', 'replyInt', 'KevyClient']) {
+                if (!(name in m)) { console.error('missing export: ' + name); process.exit(1); }
+              }
+              console.log('imports under plain Node ESM, exports intact');
+            }).catch(e => { console.error(e.code || e.message); process.exit(1); })
+          "
 
   # The Apple door needs a macOS runner, which is why it sat uncovered
   # while every other host-runnable door joined the matrix above: this is
