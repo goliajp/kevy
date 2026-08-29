@@ -14,7 +14,8 @@
 #   quarantine     a corrupt tail is copied aside before truncation
 #                  [REDpending(T2) until the quarantine train lands]
 #   recovery-rate  a corrupt frame MID-file loses only the bad frame, not
-#                  the good tail behind it [REDpending(T6) until resync]
+#                  the good tail behind it [was REDpending(T6); the resync
+#                  fix landed and this is a hard verdict now]
 #
 # Gate-first discipline (durability-trust RFC T1): the pending cells are
 # EXPECTED red today and are printed as `REDpending(<train>)`; the arc
@@ -214,10 +215,23 @@ rec2=$("$CHECK" "$dir" 2>/dev/null | awk '/^RECOVERED/{print $2}')
     || verdict 1 "midfile-corrupt/no-blackhole" "restart#2 sees ${rec2:-0} < marked ${marked:-?}"
 [ "${q1:-0}" -ge 1 ] && pending 0 T2 "midfile-corrupt/quarantine" "$q1 quarantine file(s)" \
     || pending 1 T2 "midfile-corrupt/quarantine" "231MB-class good tail destroyed, not set aside"
+# T6 is a hard verdict now, not a pending red. The mechanism was found
+# and fixed (resync ran only on CorruptFrame, and a splice producing a
+# length that was VALID but longer than the bytes left read as a torn
+# tail, so resync never started); the fix makes resync run on any
+# non-Clean stop and marks the skipped interval corrupt. Nine
+# consecutive CI runs on nine distinct commits have been green since.
+#
+# Nine greens is not by itself the argument — the cell passed 78% of
+# the time before the fix, so nine could be luck about one time in ten.
+# The argument is the mechanism, reproduced by construction rather than
+# waited for. What nine greens buy is the confidence to stop DECLARING
+# and start ENFORCING: a pending red absorbs a regression silently,
+# where a verdict makes the next one visible on the run that has it.
 if [ "${recr:-0}" -ge "${synced:-1}" ]; then
-    pending 0 T6 "midfile-corrupt/recovery-rate" "resync recovered the good tail ($recr >= $synced)"
+    verdict 0 "midfile-corrupt/recovery-rate" "resync recovered the good tail ($recr >= $synced)"
 else
-    pending 1 T6 "midfile-corrupt/recovery-rate" "resync recovered ${recr:-0} < synced $synced"
+    verdict 1 "midfile-corrupt/recovery-rate" "resync recovered ${recr:-0} < synced $synced"
     # What the replay said it stopped on, at the moment it mattered.
     echo "crashgate: T6 replay said (splice at $mid of $size bytes):" >&2
     sed -n '1,12p' "$resync_err" | sed 's/^/    /' >&2
