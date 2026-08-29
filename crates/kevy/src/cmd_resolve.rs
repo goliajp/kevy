@@ -218,6 +218,15 @@ fn route_for_verb<A: ArgvView + ?Sized>(
             let to_left = args[4].eq_ignore_ascii_case(b"LEFT");
             Route::ListMove { from_left, to_left }
         }
+        // BITOP's args[1] is the OPERATOR, not a key: the catch-all
+        // would hash the word "AND" and run the command on whatever
+        // shard that lands on. args[2] is the destination and args[3..]
+        // the sources, and all of them can be elsewhere.
+        b"BITOP" => Route::BitOpStore,
+        // COPY names two keys, so it cannot ride the catch-all: see
+        // `kevy_rt::exec_copy` for what routing it by args[1] would do
+        // to the destination.
+        b"COPY" => Route::Copy,
         b"RENAME" => Route::Rename { nx: false },
         b"RENAMENX" => Route::Rename { nx: true },
         // (BLPOP / BRPOP fold into the Local-routed verb list above —
@@ -276,8 +285,11 @@ fn route_for_verb<A: ArgvView + ?Sized>(
                 Route::DelKeys
             }
         }
-        b"EXISTS" => {
+        b"EXISTS" | b"TOUCH" => {
             // Same as DEL/UNLINK above: no key named, so not a fan-out.
+            // TOUCH rides with EXISTS because in this engine it is
+            // EXISTS — `Route::ExistsKeys` emits `Op::Exists` and sums,
+            // which is TOUCH's whole contract here.
             if args.len() < 2 {
                 Route::Local
             } else if args.len() == 2 {

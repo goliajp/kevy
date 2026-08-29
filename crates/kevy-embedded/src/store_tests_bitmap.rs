@@ -2,7 +2,7 @@
 //! (kevy-embedded 1.8.0).
 
 use crate::Config;
-use crate::ops_bitmap::BitOp;
+use kevy_store::BitOp;
 use crate::store::Store;
 
 fn s() -> Store {
