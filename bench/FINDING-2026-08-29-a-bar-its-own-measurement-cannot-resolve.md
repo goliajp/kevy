@@ -86,7 +86,7 @@ about that train, not about this run.
 
 ---
 
-# 附:同一天的第二个装置失效 —— query_buffer_limit
+# 附:同一天的第二个装置失效 —— query_buffer_limit,以及我对它的一次误判
 
 `a_streaming_giant_frame_is_disconnected_at_the_cap` 在 release-profile
 CI 上红了。归因先说清楚:那一轮唯一的改动是 `bench/tailgate.sh` 和一份
@@ -95,26 +95,43 @@ markdown,**两者都不进服务器的编译产物**,而前三轮该 job 全绿�
 它有前科 —— 测试自己的注释写着这是它在 CI 里失败过两次的原因,并因此被
 重写成 30 秒预算。这是第三次。
 
-## 预算从来不是问题
+## 我先写下的解释,是错的
 
-`free_port()` 探完端口就把 listener 关掉再返回,而 kevy 用 `SO_REUSEPORT`
-绑。所以另一台服务器可以占同一个端口,内核把新连接分给其中一台。这时:
+我当时的解释是:`free_port()` 探完端口就关 listener 再返回,而 kevy 用
+`SO_REUSEPORT` 绑,所以别的测试的服务器能占同一个端口、内核分流连接,
+客户端就连到了一台没有 `KEVY_DEBUG_INPUT_LIMIT=4096` 的服务器上。
 
-- `assert_listening` **成功** —— 确实有东西在监听
-- 客户端的字节流到了一台**没有** `KEVY_DEBUG_INPUT_LIMIT=4096` 的服务器
-- 那台不会关连接,因为没人要求它关
-- 测试打印「the connection was STILL open 30s later」
+**这个解释站不住,而我把它当成结论写进了代码注释。**
 
-**这句话和一个真回归会打印的完全一样。** 装置的失效长得跟它自己的数据一样,
-所以放宽预算只是让同一个误判来得更晚。
+读 `kevy-testnet` 才发现:`free_port()` 发的端口来自**本进程独占的块** ——
+`block_base()` 在块的基址端口上持有一个 anchor listener,占住整块直到进程
+结束,所以两个测试二进制的块不可能重合;块内每个端口在发出前还要 bind
+测试通过;而一台泄漏的 kevy 服务器用 SO_REUSEPORT 占着某端口时,普通
+`TcpListener::bind` 会 EADDRINUSE,于是那个端口被跳过。
 
-## 现在它先自证
+**别的测试的服务器拿到同一个端口,不是会发生的事。**
 
-写一个只有本测试写过的 marker,再用六条**新**连接去读。端口若被共用,内核
-至少会把一条落到另一台上,断言当场点名「the port is shared with another
-server」而不是把它说成引擎的问题。
+## 所以真正的原因是:不知道
+
+三次失败的原因**没有确定**。测试自己的注释早就允许了另一种可能:回收是按
+reactor 迭代计数而不是按墙钟计的,"在被调度到之前,唯一诚实的界是『最终』"。
+一台被超额订阅的 release-profile runner 上,30 秒够不够,我答不了。
+
+会让它可答的是:**知道服务器有没有「决定」关闭**。执行路径会打印
+`closing conn N: query buffer exceeded` 并调 `uring_mark_closing`,但没有
+计数器可问。"决定了而没送达客户端"和"根本没注意到超限"是两个不同的缺陷,
+这个测试站在它现在的位置分不出来。
+
+## witness 留着,但它只排除一件事
+
+marker 往返(六条新连接都要找到只有本测试写过的键)成本是一毫秒,它把
+"我连的是别人的服务器"这个读法永久排除掉,**这样第四次失败就只能是它字面
+说的那个意思**。它不是那三次失败的解释。
+
+一个整洁的故事最大的害处,是它让人不再往下看。
 
 ## 副产物:`CONFIG GET dir` 会报一个没在用的目录
+
 
 第一版 witness 用的是 `CONFIG GET dir`,因为测试知道自己给的数据目录。它
 报回 `.`。

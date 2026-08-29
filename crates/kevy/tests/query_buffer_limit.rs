@@ -43,23 +43,29 @@ fn a_streaming_giant_frame_is_disconnected_at_the_cap() {
     // Before anything is measured: prove every connection to this port
     // reaches the server this test started, and only it.
     //
-    // `free_port()` hands out a port after closing the listener it
-    // probed with, and kevy binds with SO_REUSEPORT — so another test's
-    // server can take the same port and the kernel will hand each new
-    // connection to one of them. `assert_listening` still succeeds;
-    // something IS listening. Every byte below would then go to a
-    // server that was never given `KEVY_DEBUG_INPUT_LIMIT=4096`, which
-    // will not close the connection because it was never asked to, and
-    // this test would report "the connection was STILL open 30s later"
-    // — the exact sentence a real regression produces.
+    // This rules ONE hypothesis out, and it is worth saying which,
+    // because the first version of this comment asserted it as the
+    // cause and was wrong. `kevy-testnet::free_port` hands out ports
+    // from a block this process holds exclusively — an anchor listener
+    // sits on the block's base for the process's lifetime, so no other
+    // test binary can draw from it, and each port is confirmed bindable
+    // at the moment it is returned. Another test's server taking this
+    // port is not a thing that can happen, and claiming it was is the
+    // kind of tidy story that stops anyone looking further.
     //
-    // A measurement device failing in the shape of its own data. It is
-    // why loosening the budget to 30s did not fix the two CI failures
-    // this cell had before: the budget was never the problem.
+    // What IS true is that this cell has failed three times in CI with
+    // "the connection was STILL open 30s later", and that sentence is
+    // also what a server talking to the wrong client would produce. The
+    // check below costs a millisecond and removes that reading for
+    // good, so a fourth failure means what it says.
     //
-    // The witness is a marker only this test wrote. Six fresh
-    // connections must all find it; with the port shared, the kernel
-    // would land at least one on the other server.
+    // The cause of the three is NOT established. What would establish
+    // it is knowing whether the server DECIDED to close — the
+    // enforcement path prints "closing conn N: query buffer exceeded"
+    // and calls `uring_mark_closing`, and there is no counter to ask.
+    // A decision that never reached the client is a different defect
+    // from a cap that was never noticed, and this test cannot tell them
+    // apart from where it stands.
     {
         let marker = format!("qbuf-marker-{port}");
         let mut w = TcpStream::connect(("127.0.0.1", port)).unwrap();
