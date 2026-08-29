@@ -422,7 +422,7 @@ unification, not an API rewrite**: the 1.16 surface is contained in
 ## What is compatible automatically
 
 **Wire protocol.** RESP is unchanged. 3.x remains reply-checked
-byte-for-byte against valkey 9.1 in CI (98 commands). Existing Redis
+byte-for-byte against valkey 9.1 in CI (94 commands). Existing Redis
 clients, scripts, and `redis-cli` sessions work as before.
 
 **Snapshots.** The 3.x loader reads every 2.x snapshot format

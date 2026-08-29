@@ -275,6 +275,14 @@ jobs:
       - name: generated docs parity (llms.txt / verb-reference == VERB_META)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo run -p kevy --bin gen_docs -- . --check
+      # The headline compatibility claim is the one number in the READMEs
+      # that a reader will act on, and it is the only one measured against
+      # a real valkey and a real redis rather than against kevy's own
+      # second implementation. It said 98 in four documents while the
+      # corpus drove 81; nothing had held it since a docs rewrite wrote it.
+      - name: compat claim (the READMEs' command count is the corpus's)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python3 tools/check_compat_claim.py
       - name: CJK punctuation (no half-width commas in Chinese/Japanese prose)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_cjk_punct.py

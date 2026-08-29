@@ -28,6 +28,49 @@ moved.
 
 ### Fixed
 
+- **A durable BITOP result that never reached a replica.** The
+  cross-shard destination was written to the AOF and not pushed to the
+  replication backlog, which the change feed also reads — one omission,
+  two faces. `propgate` caught it on the line: that gate exists because
+  three bugs of exactly this shape landed on one branch. The paired call
+  is `log_effect`; the test that shows it asserts the destination's
+  shard feed carries the key after a cross-shard `BITOP`, and was
+  verified failing before it was trusted.
+
+- **`MGET` errored where its own documentation said it answers nil.** The
+  embedded facade's doc comment reads "`None` per absent / wrong-type",
+  and the body propagated the store's `WrongType` with `?` — so a single
+  list among the keys turned the whole call into an error. Redis returns
+  nil for a key that does not hold a string and never errors there, which
+  is what the server's gather already did. The prose was right and the
+  code was not.
+
+- **Two error sentences the two surfaces did not agree on.** `SETRANGE`
+  with a non-integer offset answered "offset is out of range" on the
+  wire and "value is not an integer or out of range" in the facade;
+  Redis parses the offset first and rejects a negative one second, so
+  they are two refusals to two different questions and the wire had
+  folded them into one. `COPY` of a key onto itself was refused on the
+  wire and answered `:0` by the facade — the same reply a refused
+  overwrite gives, so a caller could not tell "you asked for something
+  impossible" from "the destination was already there".
+
+- **Thirteen never-executed regions in the hottest dispatch table.**
+  `dispatch_string`'s `GET` and `SET` arms cannot run: the tier-1 fast
+  path answers both and returns before the handler chain is walked, and
+  that function has one caller. The `GET` arm was a verbatim second copy
+  of the fast path's — the kind of duplicate that drifts in silence,
+  because neither half can ever be observed disagreeing with the other.
+
+- **Two `OP_TABLE` notification columns that had never been asked.**
+  `SETRANGE` was recorded as notifying nothing and `GETEX` as notifying
+  the string class; both columns were inert while the verbs were
+  embedded-only, and the parity test against `notify_class_for_verb`
+  caught them the moment they reached the server. `SETRANGE` notifies.
+  `GETEX` does not, and the row now says why: Redis fires `expire` for
+  its EX/PX form and nothing for the bare one, never `getex`, and this
+  engine keys the event name off the verb.
+
 - **Twelve of fourteen arity-guarded verbs told callers a command that
   exists does not.** `IDX.QUERY` with too few arguments answered
   `ERR unknown command 'IDX.QUERY'`. The routes guard on argument count
@@ -117,6 +160,41 @@ moved.
   `--locked` ran nowhere before the release image.
 
 ### Added
+
+- **Fourteen Redis commands the engine already had, on the wire at last.**
+  `SETBIT` `GETBIT` `BITCOUNT` `BITPOS` `BITOP` `GETRANGE` `SETRANGE`
+  `LINSERT` `COPY` `TOUCH` `TIME` `GETEX` `ZREVRANGE` `HINCRBYFLOAT`.
+
+  Every one of them was implemented in `kevy-store` and answered by the
+  embedded facade; none of them reached a RESP client, which answered
+  `unknown command`. `ops_table::KNOWN_GAPS` had them registered as the
+  F3 family and nothing had come back to close it — a gap that had been
+  written down and then left, which reads from outside exactly like a
+  decision nobody made. The SERVER side of that ledger is now empty.
+
+  Eleven needed no routing change: `route_for_verb`'s default arm
+  already sends a verb with two or more arguments to its key's shard.
+  `TOUCH` is `EXISTS` in this engine — the facade's `touch` is
+  `self.exists(keys)`, because there is no idle clock to reset — so it
+  shares that arm rather than being a second implementation of it.
+
+  `COPY` and `BITOP` name more than one key and got orchestrators of
+  their own. **Cross-shard `COPY`** (`kevy-rt/src/exec_copy.rs`) is half
+  the length of the `RENAME` it is modelled on, because it clones rather
+  than takes: a refused put leaves both keys as they were, so there is no
+  rollback step and no data-loss window — the worst a crash between its
+  two steps can do is not write the destination. **Cross-shard `BITOP`**
+  (`exec_bitop.rs`) reads each source on its own shard, combines the
+  bytes on the shard that took the command, and writes the result on the
+  destination's; `args[1]` is the operator rather than a key, so the
+  catch-all route would have hashed the word `AND`.
+
+  `BitOp` and the byte arithmetic moved from `kevy-embedded` to
+  `kevy-store` on the way, because `kevy-rt` cannot reach a sibling
+  crate and copying the padding rules — the `0xff` tail `NOT` writes
+  past its source among them — would have made two implementations of
+  one operator. Both surfaces call one function now. `kevy-embedded`
+  re-exports `BitOp`, which has been part of its surface since 1.x.
 
 - **`kevy-bench` is published.** It was already a stone by every reading —
   business-free, no dependencies, a measuring harness any project could
