@@ -230,6 +230,15 @@ fn cmd_copy(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         4 => return err(out, ERR_SYNTAX),
         _ => return wrong_args(out, "copy"),
     };
+    // Redis refuses a key copied onto itself, and says which two
+    // objects it means. Without this the facade answered `:0` — the
+    // same reply a refused overwrite gives, so a caller could not tell
+    // "you asked for something impossible" from "the destination was
+    // already there". The `Store::copy` API method is unchanged: this
+    // is the protocol face matching the protocol.
+    if argv[1] == argv[2] {
+        return err(out, "ERR source and destination objects are the same");
+    }
     match s.copy(&argv[1], &argv[2], replace) {
         Ok(copied) => int(out, i64::from(copied)),
         Err(e) => kevy_err(out, &e),

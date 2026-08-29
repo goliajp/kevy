@@ -21,6 +21,8 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
             | b"GETSET"
             | b"GETDEL"
             | b"INCRBYFLOAT"
+            | b"COPY"
+            | b"BITOP"
             | b"DEL"
             | b"UNLINK"
             | b"INCR"
@@ -28,6 +30,9 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
             | b"INCRBY"
             | b"DECRBY"
             | b"APPEND"
+            | b"SETBIT"
+            | b"SETRANGE"
+            | b"GETEX"
             | b"EXPIRE"
             | b"PEXPIRE"
             | b"EXPIREAT"
@@ -44,6 +49,8 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
             | b"HMSET"
             | b"HDEL"
             | b"HINCRBY"
+            | b"HINCRBYFLOAT"
+            | b"LINSERT"
             | b"LPUSH"
             | b"RPUSH"
             | b"LPOP"
@@ -104,14 +111,15 @@ pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyClass> {
     Some(match cmd {
         // String — Redis class `$`.
         b"SET" | b"SETNX" | b"SETEX" | b"PSETEX" | b"GETSET" | b"GETDEL"
-        | b"APPEND" | b"INCR" | b"DECR" | b"INCRBY" | b"DECRBY" | b"INCRBYFLOAT" => {
+        | b"APPEND" | b"INCR" | b"DECR" | b"INCRBY" | b"DECRBY" | b"INCRBYFLOAT"
+        | b"SETBIT" | b"SETRANGE" => {
             NotifyClass::String
         }
         // Hash — class `h`.
-        b"HSET" | b"HSETNX" | b"HMSET" | b"HDEL" | b"HINCRBY" | b"HEXPIRE"
+        b"HSET" | b"HSETNX" | b"HMSET" | b"HDEL" | b"HINCRBY" | b"HINCRBYFLOAT" | b"HEXPIRE"
         | b"HPEXPIRE" | b"HPEXPIREAT" | b"HPERSIST" => NotifyClass::Hash,
         // List — class `l`.
-        b"LPUSH" | b"RPUSH" | b"LPOP" | b"RPOP" | b"LSET" | b"LREM" | b"LTRIM"
+        b"LPUSH" | b"RPUSH" | b"LPOP" | b"RPOP" | b"LSET" | b"LREM" | b"LTRIM" | b"LINSERT"
         | b"RPOPLPUSH" | b"LMOVE" => NotifyClass::List,
         // Set — class `s` (SINTERSTORE/SUNIONSTORE/SDIFFSTORE not yet impl'd).
         b"SADD" | b"SREM" | b"SPOP" | b"SINTERSTORE" | b"SUNIONSTORE"
@@ -128,6 +136,21 @@ pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyClass> {
         // Generic — class `g`. (DEL single-key falls here; multi-key DEL
         // is routed through Op::Del + maybe_notify_del directly.)
         b"DEL" | b"UNLINK" | b"EXPIRE" | b"PEXPIRE" | b"PERSIST" => NotifyClass::Generic,
+        // BITOP is in the same position: Redis fires `set` on the
+        // destination, and a table keyed off the verb would emit
+        // `bitop`.
+        //
+        // COPY has no arm here for the same reason as GETEX below:
+        // Redis fires `copy_to` on the destination, and this table
+        // publishes the lowercased verb, so an arm would emit `copy` —
+        // a name Redis does not have.
+        //
+        // GETEX is a write (it can move a deadline) but has no arm
+        // here on purpose: Redis fires `expire` for the EX/PX form and
+        // nothing for the bare one, and this table keys the event name
+        // off the verb. A `getex` event is not a name Redis ever emits,
+        // so the honest choice is to emit none rather than invent one.
+        //
         // Reads, admin, pub/sub etc. — no notification.
         _ => return None,
     })
@@ -140,6 +163,9 @@ pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyClass> {
 /// list lets a NoEviction-configured shard always accept shrinkers, matching
 /// Redis exactly.
 // >50-LOC exemption: pure data-driven verb match table (no control flow).
+// LOC-WAIVER: data-driven verb list (one matches! arm per growing verb) —
+// the same waiver its sibling `is_write_verb` carries; this list only
+// crossed fifty when BITOP and COPY joined it.
 pub(crate) fn is_growing_write_verb(cmd: &[u8]) -> bool {
     matches!(
         cmd,
@@ -154,10 +180,16 @@ pub(crate) fn is_growing_write_verb(cmd: &[u8]) -> bool {
             | b"INCRBY"
             | b"DECRBY"
             | b"APPEND"
+            | b"SETBIT"
+            | b"SETRANGE"
+            | b"COPY"
+            | b"BITOP"
             | b"HSET"
             | b"HSETNX"
             | b"HMSET"
             | b"HINCRBY"
+            | b"HINCRBYFLOAT"
+            | b"LINSERT"
             | b"LPUSH"
             | b"RPUSH"
             | b"RPOPLPUSH"

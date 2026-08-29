@@ -6,7 +6,7 @@
 //! function carries the whole command set. Command bodies delegate to the
 //! helpers in [`crate::cmd`].
 
-use crate::cmd::{upper_verb, wrong_args, store_err, OOM_ERR, cmd_set, is_growing_write_verb, cmd_hello, emit_int_result, cmd_incr, cmd_incr_by, cmd_setex, arg_f64, rest_borrowed, emit_bulk_array, cmd_spop_rand, cmd_expire, cmd_expireat, cmd_ttl};
+use crate::cmd::{upper_verb, wrong_args, store_err, OOM_ERR, cmd_set, is_growing_write_verb, cmd_hello, emit_int_result, rest_borrowed, emit_bulk_array, cmd_spop_rand, cmd_expire, cmd_expireat, cmd_ttl};
 use crate::state::Ctx;
 use kevy_resp::{
     ArgvView, encode_bulk, encode_error, encode_integer, encode_null_bulk, encode_simple_string,
@@ -143,7 +143,8 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
         && crate::dispatch_resp3::try_resp3_overrides(ctx, cmd, store, args, out))
         || dispatch_conn(ctx, cmd, store, args, out)
         || crate::ops::dispatch_ops(ctx, cmd, store, args, out)
-        || dispatch_string(cmd, store, args, out)
+        || crate::dispatch_strings::dispatch_string(cmd, store, args, out)
+        || crate::dispatch_bitmap::dispatch_bitmap(cmd, store, args, out)
         || crate::dispatch_collections::dispatch_hash(cmd, store, args, out)
         || crate::dispatch_collections::dispatch_list(cmd, store, args, out)
         || dispatch_set(cmd, store, args, out)
@@ -176,6 +177,19 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
 // 500-LOC house rule. Same dispatch fan-out, same call shape; the
 // V3 arm in `dispatch_with_proto` calls into the sibling module.
 
+/// `TIME` — the clock, and nothing else: no key, no shard, which is why
+/// it sits with the introspection verbs rather than the keyspace ones.
+/// Redis answers a two-element array of decimal strings: unix seconds,
+/// then the microseconds within that second.
+fn cmd_time(out: &mut Vec<u8>) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    kevy_resp::encode_array_len(out, 2);
+    encode_bulk(out, now.as_secs().to_string().as_bytes());
+    encode_bulk(out, now.subsec_micros().to_string().as_bytes());
+}
+
 /// Connection / introspection commands (no keyspace access — except
 /// IDX.CREATE's tiering-floor precheck, which reads the answering
 /// shard's tier gauges). Takes `ctx` for the catalog-mutation verbs
@@ -194,6 +208,7 @@ fn dispatch_conn<A: ArgvView + ?Sized>(
             2 => encode_bulk(out, &args[1]),
             _ => wrong_args(out, "ping"),
         },
+        b"TIME" => cmd_time(out),
         b"IDX.CREATE" => crate::cmd_index::cmd_idx_create(ctx, store, args, out),
         b"VIEW.CREATE" => crate::cmd_view::cmd_view_create(ctx, args, out),
         b"VIEW.DROP" => crate::cmd_view::cmd_view_drop(ctx, args, out),
@@ -263,93 +278,6 @@ fn cmd_select<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     }
 }
 
-/// String commands.
-// LOC-WAIVER: data-driven verb dispatch table — one arm per string verb.
-fn dispatch_string<A: ArgvView + ?Sized>(
-    cmd: &[u8],
-    store: &mut Store,
-    args: &A,
-    out: &mut Vec<u8>,
-) -> bool {
-    match cmd {
-        b"SET" => cmd_set(store, args, out),
-        b"GET" => {
-            if args.len() == 2 {
-                match store.get(&args[1]) {
-                    Ok(Some(v)) => encode_bulk(out, &v),
-                    Ok(None) => encode_null_bulk(out),
-                    Err(e) => store_err(out, e),
-                }
-            } else {
-                wrong_args(out, "get");
-            }
-        }
-        b"APPEND" => {
-            if args.len() == 3 {
-                emit_int_result(store.append(&args[1], &args[2]).map(|n| n as i64), out);
-            } else {
-                wrong_args(out, "append");
-            }
-        }
-        b"STRLEN" => {
-            if args.len() == 2 {
-                emit_int_result(store.strlen(&args[1]).map(|n| n as i64), out);
-            } else {
-                wrong_args(out, "strlen");
-            }
-        }
-        b"INCR" => cmd_incr(store, args, 1, "incr", out),
-        b"DECR" => cmd_incr(store, args, -1, "decr", out),
-        b"INCRBY" => cmd_incr_by(store, args, false, "incrby", out),
-        b"DECRBY" => cmd_incr_by(store, args, true, "decrby", out),
-        b"SETNX" => {
-            if args.len() == 3 {
-                let set = store.set_slice(&args[1], &args[2], None, true, false);
-                encode_integer(out, i64::from(set));
-            } else {
-                wrong_args(out, "setnx");
-            }
-        }
-        b"SETEX" => cmd_setex(store, args, 1000, "setex", out),
-        b"PSETEX" => cmd_setex(store, args, 1, "psetex", out),
-        b"GETSET" => {
-            if args.len() == 3 {
-                match store.getset(&args[1], args[2].to_vec()) {
-                    Ok(Some(v)) => encode_bulk(out, &v),
-                    Ok(None) => encode_null_bulk(out),
-                    Err(e) => store_err(out, e),
-                }
-            } else {
-                wrong_args(out, "getset");
-            }
-        }
-        b"GETDEL" => {
-            if args.len() == 2 {
-                match store.getdel(&args[1]) {
-                    Ok(Some(v)) => encode_bulk(out, &v),
-                    Ok(None) => encode_null_bulk(out),
-                    Err(e) => store_err(out, e),
-                }
-            } else {
-                wrong_args(out, "getdel");
-            }
-        }
-        b"INCRBYFLOAT" => {
-            if args.len() != 3 {
-                wrong_args(out, "incrbyfloat");
-            } else if let Some(d) = arg_f64(&args[2]) {
-                match store.incr_by_float(&args[1], d) {
-                    Ok(v) => encode_bulk(out, &v),
-                    Err(e) => store_err(out, e),
-                }
-            } else {
-                encode_error(out, "ERR value is not a valid float");
-            }
-        }
-        _ => return false,
-    }
-    true
-}
 
 /// Set commands (single-key; multi-key SINTER/SUNION/SDIFF are runtime gathers).
 // LOC-WAIVER: data-driven verb dispatch table — one arm per set verb.
@@ -434,9 +362,16 @@ fn dispatch_generic<A: ArgvView + ?Sized>(
                 encode_integer(out, store.del(&rest_borrowed(args, 1)) as i64);
             }
         }
-        b"EXISTS" => {
+        // TOUCH counts the keys that exist, and the existence check is
+        // what refreshes the eviction bookkeeping on each owning shard
+        // — so in this engine it IS `exists`, which is what the embedded
+        // facade's `touch` says in one line (`ops_keyspace.rs`, it calls
+        // `self.exists`). Two arms answering identically would be two
+        // places to keep identical.
+        b"EXISTS" | b"TOUCH" => {
+            let verb = if cmd == b"EXISTS" { "exists" } else { "touch" };
             if args.len() < 2 {
-                wrong_args(out, "exists");
+                wrong_args(out, verb);
             } else {
                 encode_integer(out, store.exists(&rest_borrowed(args, 1)) as i64);
             }

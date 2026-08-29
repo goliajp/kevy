@@ -12,6 +12,10 @@
 pub(crate) enum GatherKind {
     /// String value (for MGET).
     Str,
+    /// String value, with a wrong-type key reported AS wrong-type
+    /// rather than as absent (for BITOP, which Redis errors on where
+    /// MGET answers nil).
+    StrStrict,
     /// Set members (for SINTER/SUNION/SDIFF).
     Set,
     /// Scored members: zsets as-is, plain sets at score 1.0 (for the

@@ -178,3 +178,30 @@ why = "A reader path in the reactor, reached only on a buffer shape that depends
 symbol = "::top_groups"
 observed = ["A: 23", "C: 23", "B: 12 (matched baseline)"]
 why = "The widest swing measured, 12 to 23 across runs of one corpus."
+
+[[unstable]]
+symbol = "kevy::dispatch::dispatch_with_proto::"
+observed = ["A: 10", "B: 10", "C: 10", "D: 14"]
+why = """
+The dispatch hot body, bimodal across four runs of one commit: 10 in
+three of them and 14 in the fourth. Which of its arms go untaken depends
+on what the last test through the process happened to send — the tier-1
+GET/SET short-circuit, the scope-routing redirect, the OOM precheck and
+the RESP3 override are all branches whose miss is recorded, and a run
+that ends without a maxmemory test or without a HELLO 3 leaves a
+different four of them dark.
+
+This symbol is one of the three setratchet's own docstring names as the
+noisy tail (`maybe_ack and dispatch_with_proto and os::trim in the
+next`). Registering it is the mechanism that file prescribes.
+"""
+
+[[unstable]]
+symbol = "kevy_alloc::os::trim"
+observed = ["A: 1", "B: 1", "C: 1", "D: 3"]
+why = """
+The allocator's return-to-OS path. Whether it runs at all depends on
+whether a span emptied while the process was still alive, which is a
+function of when the last test dropped its store. Named beside
+dispatch_with_proto in setratchet's docstring for the same reason.
+"""

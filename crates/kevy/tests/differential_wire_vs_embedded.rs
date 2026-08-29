@@ -304,6 +304,162 @@ const CORPUS: &[&str] = &[
     "TTL wren2",
     "DEL wren2 nosuchkey",
     "EXISTS wren2",
+    // ── the branches, not just the happy path ──
+    // The verbs above were driven once each, which reaches a handler and
+    // nothing inside it. `deadgate` said so on the first CI run after
+    // they were wired: eleven symbols joined the never-executed set,
+    // `cmd_getex` with 52 regions and `cmd_bitpos` with 26 — the option
+    // forms and the refusals, none of them touched.
+    //
+    // Driving them HERE rather than asserting bytes in a test of their
+    // own is the stronger check: two independent implementations answer
+    // each line and must agree, so there is no expected reply for me to
+    // write down wrong.
+    "SET xs hello-world",
+    "GETRANGE xs 0 4",
+    "GETRANGE xs -5 -1",
+    "GETRANGE xs 99 200",
+    "GETRANGE xs a 4",
+    "GETRANGE xs 0",
+    "GETRANGE",
+    "SETRANGE xs 5 _____",
+    "SETRANGE xs 20 tail",
+    "SETRANGE xs -1 x",
+    "SETRANGE xs abc x",
+    "SETRANGE xs 0",
+    "GET xs",
+    "GETEX xs",
+    "GETEX xs EX 1000",
+    "GETEX xs PX 1000000",
+    "GETEX xs ex 1000",
+    "GETEX xs XX 1000",
+    "GETEX xs EX 0",
+    "GETEX xs EX -5",
+    "GETEX xs EX abc",
+    "GETEX xs EX 1000 EXTRA",
+    "GETEX xs",
+    "GETEX xnosuch",
+    "PERSIST xs",
+    "SETBIT xb 7 1",
+    "SETBIT xb 7 0",
+    "SETBIT xb 100 1",
+    "SETBIT xb -1 1",
+    "SETBIT xb abc 1",
+    "SETBIT xb 7 2",
+    "SETBIT xb 7",
+    "GETBIT xb 100",
+    "GETBIT xb 99999",
+    "GETBIT xb -1",
+    "GETBIT xb",
+    "BITCOUNT xb",
+    "BITCOUNT xb 0 -1",
+    "BITCOUNT xb 0 0",
+    "BITCOUNT xb a b",
+    "BITCOUNT xb 0 1 2",
+    "BITCOUNT",
+    "BITPOS xb 1",
+    "BITPOS xb 0",
+    "BITPOS xb 1 0",
+    "BITPOS xb 1 0 -1",
+    "BITPOS xb 1 5 6",
+    "BITPOS xb 2",
+    "BITPOS xb 1 a",
+    "BITPOS xb 1 0 a",
+    "BITPOS xb",
+    "BITPOS xb 1 0 1 2",
+    "RPUSH xl a b c",
+    "LINSERT xl BEFORE b X",
+    "LINSERT xl AFTER b Y",
+    "LINSERT xl before a Z",
+    "LINSERT xl BEFORE nosuchpivot Q",
+    "LINSERT xl SIDEWAYS b Q",
+    "LINSERT xl BEFORE b",
+    "LINSERT xnosuchlist BEFORE b X",
+    "LRANGE xl 0 -1",
+    "HSET xh f 1",
+    "HINCRBYFLOAT xh f 1.5",
+    "HINCRBYFLOAT xh f -0.25",
+    "HINCRBYFLOAT xh f abc",
+    "HINCRBYFLOAT xh f",
+    "HINCRBYFLOAT xh newfield 2.5",
+    "ZADD xz 1 one 2 two 3 three",
+    "ZREVRANGE xz 0 -1",
+    "ZREVRANGE xz 0 -1 WITHSCORES",
+    "ZREVRANGE xz 0 0",
+    "ZREVRANGE xz -2 -1",
+    "ZREVRANGE xz 5 10",
+    "ZREVRANGE xz 2 1",
+    "ZREVRANGE xz 0 -1 SCORES",
+    "ZREVRANGE xz a b",
+    "ZREVRANGE xz 0",
+    "ZREVRANGE xnosuchzset 0 -1",
+    "TOUCH xs xl nosuchkey",
+    "TOUCH",
+    "COPY xs xcopy",
+    "COPY xs xcopy",
+    "COPY xs xcopy REPLACE",
+    "COPY xs xcopy REPLACED",
+    "COPY xs xs",
+    "COPY xnosuch xdst",
+    "COPY xs",
+    "GET xcopy",
+    // The error arm each of these has and none of the lines above
+    // reaches: the store refusing because the key holds another type.
+    // `deadgate` counted them one by one.
+    "GETRANGE xl 0 1",
+    "SETRANGE xl 0 x",
+    "GETEX xl EX 100",
+    "SETBIT xl 0 1",
+    "GETBIT xl 0",
+    "BITCOUNT xl",
+    "BITCOUNT xl 0 1",
+    "BITPOS xl 1",
+    "BITPOS xl 1 0 1",
+    "LINSERT xs BEFORE a b",
+    "HINCRBYFLOAT xl f 1",
+    "ZREVRANGE xl 0 -1",
+    "ZREVRANGE xl 0 -1 WITHSCORES",
+    "GETEX",
+    "GETEX xl",
+    "GETEX xnosuch EX 100",
+    "GETEX xnosuch PX 100000",
+    "APPEND xl tail",
+    "STRLEN xl",
+    "INCR xl",
+    "DECR xl",
+    "INCRBY xl 2",
+    "DECRBY xl 2",
+    "INCRBYFLOAT xl 1.5",
+    "GETSET xl v",
+    "GETDEL xl",
+    // SETEX and PSETEX are NOT driven here, and the reason is the rule
+    // this corpus already states: a verb only one side implements must
+    // not mutate shared state. Both are server-only (OP_TABLE gives
+    // them SERVER without ESTORE), and driving them turned the wire's
+    // `xl` into a string while the facade's stayed a list — after which
+    // MGET diverged for a reason that was not about MGET.
+    "MGET xl xs",
+    "SETBIT xbit1 0 1",
+    "SETBIT xbit1 7 1",
+    "SETBIT xbit2 0 1",
+    "SETBIT xbit2 3 1",
+    "BITOP AND xand xbit1 xbit2",
+    "GET xand",
+    "BITOP OR xor xbit1 xbit2",
+    "GET xor",
+    "BITOP XOR xxor xbit1 xbit2",
+    "GET xxor",
+    "BITOP NOT xnot xbit1",
+    "GET xnot",
+    "BITOP and xand2 xbit1 xbit2",
+    "BITOP AND xempty xnosuch1 xnosuch2",
+    "EXISTS xempty",
+    "BITOP NOT xnot2 xbit1 xbit2",
+    "BITOP SIDEWAYS xd xbit1",
+    "BITOP AND xd",
+    "BITOP",
+    "BITOP AND xwrong xl",
+    "BITCOUNT xand",
     // ── F3: implemented in the facade, absent from the RESP dispatch ──
     // Registered in `kevy_resp::ops_table::KNOWN_GAPS`, and the check
     // below reads that ledger rather than restating it. Own keys, last,
@@ -698,11 +854,21 @@ fn both_surfaces_refuse_a_short_call_the_same_way() {
         both.len()
     );
 
+    // Verbs the probe cannot speak about, collected rather than assumed:
+    // see the arity gate in the loop.
+    let mut complete_bare_call: Vec<&str> = Vec::new();
     let mut differ = Vec::new();
     for name in &both {
-        // One argument: the verb alone. Every verb here takes at least one
-        // operand, so this is a short call for all of them and touches no
-        // state on either side.
+        // One argument: the verb alone. The premise is that this is a
+        // SHORT call — and the arity column both surfaces now read says
+        // for which verbs that holds. TIME is the first shared verb for
+        // which it does not: its bare form is a complete call, so the
+        // probe would be comparing two clock reads and calling the
+        // difference a drift in how the two refuse.
+        if kevy_resp::verb_arity::arity_ok(name, 1) == Some(true) {
+            complete_bare_call.push(*name);
+            continue;
+        }
         let a = vec![name.as_bytes().to_vec()];
         let w = String::from_utf8_lossy(&wire.call(&a)).trim().to_string();
         let mut e = Vec::new();
@@ -720,9 +886,12 @@ fn both_surfaces_refuse_a_short_call_the_same_way() {
     const DIFFERENT_SIGNATURE: &[&str] = &["FEED.TAIL", "FEED.READ"];
 
     println!(
-        "arity parity: {} of {} verbs on both surfaces refuse a short call identically",
-        both.len() - differ.len(),
-        both.len()
+        "arity parity: {} of {} verbs on both surfaces refuse a short call \
+         identically ({} skipped — a bare call is a complete one: {:?})",
+        both.len() - differ.len() - complete_bare_call.len(),
+        both.len(),
+        complete_bare_call.len(),
+        complete_bare_call
     );
     for (n, w, e) in differ.iter().take(20) {
         println!("  {n}\n      wire:     {w}\n      embedded: {e}");
@@ -764,6 +933,14 @@ const CANNOT_COMPARE: &[(&str, &str)] = &[
          `both_surfaces_refuse_a_short_call_the_same_way`",
     ),
     ("FEED.READ", "same pair, same reason"),
+    (
+        "TIME",
+        "answers with the clock, read once per surface a few hundred \
+         microseconds apart. It was rejected from this list on the day \
+         the register was written, correctly — the server did not carry \
+         the verb then, so this harness would never have compared it. \
+         Wiring it made the entry true",
+    ),
 ];
 
 /// The register: every verb on BOTH surfaces is either driven above with
@@ -839,4 +1016,37 @@ fn every_shared_verb_is_driven_or_named() {
          {stale:?}",
         stale.len()
     );
+}
+
+/// TIME is named in `CANNOT_COMPARE`, so the corpus never drives it and
+/// nothing else on the wire would either — which is how it reached CI
+/// with fourteen never-executed regions after being wired.
+///
+/// A byte comparison against the facade is the thing that cannot be
+/// made; asserting the SHAPE can. Two bulk strings of decimal digits,
+/// the first a plausible unix second and the second inside one.
+#[test]
+fn time_answers_the_clock_in_redis_shape() {
+    let server = Server::start_single_shard();
+    let mut wire = server.wire();
+    let reply = wire.call(&argv("TIME"));
+    let text = String::from_utf8_lossy(&reply).to_string();
+    let parts: Vec<&str> = text.split("\r\n").collect();
+    assert_eq!(parts.first(), Some(&"*2"), "TIME did not answer a 2-element array: {text:?}");
+
+    let secs: u64 = parts[2].parse().unwrap_or_else(|_| panic!("seconds not decimal: {text:?}"));
+    let micros: u32 = parts[4].parse().unwrap_or_else(|_| panic!("micros not decimal: {text:?}"));
+    assert!(micros < 1_000_000, "microseconds outside a second: {micros}");
+
+    // A window wide enough that no clock skew or slow CI box trips it,
+    // and narrow enough that a zero, a millisecond count or a
+    // nanosecond count would not fit through: 2020-01-01 to 2100-01-01.
+    assert!(
+        (1_577_836_800..4_102_444_800).contains(&secs),
+        "TIME's seconds are not a plausible unix second: {secs}"
+    );
+    // The declared lengths must match the digits, or a client reading
+    // by length gets a truncated number.
+    assert_eq!(parts[1], format!("${}", parts[2].len()));
+    assert_eq!(parts[3], format!("${}", parts[4].len()));
 }
