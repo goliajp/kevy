@@ -40,6 +40,56 @@ fn a_streaming_giant_frame_is_disconnected_at_the_cap() {
     });
     kevy_testnet::assert_listening(port, "the server under test");
 
+    // Before anything is measured: prove every connection to this port
+    // reaches the server this test started, and only it.
+    //
+    // `free_port()` hands out a port after closing the listener it
+    // probed with, and kevy binds with SO_REUSEPORT — so another test's
+    // server can take the same port and the kernel will hand each new
+    // connection to one of them. `assert_listening` still succeeds;
+    // something IS listening. Every byte below would then go to a
+    // server that was never given `KEVY_DEBUG_INPUT_LIMIT=4096`, which
+    // will not close the connection because it was never asked to, and
+    // this test would report "the connection was STILL open 30s later"
+    // — the exact sentence a real regression produces.
+    //
+    // A measurement device failing in the shape of its own data. It is
+    // why loosening the budget to 30s did not fix the two CI failures
+    // this cell had before: the budget was never the problem.
+    //
+    // The witness is a marker only this test wrote. Six fresh
+    // connections must all find it; with the port shared, the kernel
+    // would land at least one on the other server.
+    {
+        let marker = format!("qbuf-marker-{port}");
+        let mut w = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        w.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let set = format!(
+            "*3\r\n$3\r\nSET\r\n${}\r\n{marker}\r\n$2\r\nok\r\n",
+            marker.len()
+        );
+        w.write_all(set.as_bytes()).unwrap();
+        let mut buf = [0u8; 64];
+        let n = w.read(&mut buf).unwrap_or(0);
+        assert_eq!(&buf[..n], b"+OK\r\n", "the marker write was refused");
+
+        let get = format!("*2\r\n$3\r\nGET\r\n${}\r\n{marker}\r\n", marker.len());
+        for attempt in 1..=6 {
+            let mut r = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            r.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            r.write_all(get.as_bytes()).unwrap();
+            let mut b = [0u8; 64];
+            let n = r.read(&mut b).unwrap_or(0);
+            assert_eq!(
+                &b[..n],
+                b"$2\r\nok\r\n",
+                "connection {attempt} to port {port} did not find this test's own \
+                 marker — the port is shared with another server, so nothing \
+                 measured below would have been about the server this test started"
+            );
+        }
+    }
+
     // A syntactically valid frame that never completes, streamed as
     // MANY small args (not one big bulk): a multibulk declaring a huge
     // arg count, then `$3\r\nabc\r\n` bulks forever. Small bulks
