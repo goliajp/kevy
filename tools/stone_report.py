@@ -63,10 +63,13 @@ def stones():
 
 
 def workspace_version():
+    """The release this report is OF — stamped so a reading cannot be used
+    to judge a different tree. It is not the semver baseline; that is the
+    last published version, which `cargo semver-checks` finds itself."""
     doc = tomllib.loads((ROOT / "Cargo.toml").read_text())
     v = doc.get("workspace", {}).get("package", {}).get("version")
     if not v:
-        refuse("no workspace package version to compare semver against")
+        refuse("no workspace package version to stamp this report with")
     return v
 
 
@@ -83,7 +86,7 @@ def lifts(skip):
     return {r["crate"]: r for r in json.loads(out.read_text())}
 
 
-def semver(crate, version):
+def semver(crate):
     """Compatibility against the last published version — or the absence of one.
 
     A crate with nothing on the registry has no baseline, and "no baseline"
@@ -92,19 +95,39 @@ def semver(crate, version):
     which is the day the check matters least. kevy-bench is the first crate
     to hit this, in v6.
     """
-    p = subprocess.run(["cargo", "semver-checks", "check-release",
-                        "-p", crate, "--baseline-version", version],
+    # No `--baseline-version`: the tool picks the last PUBLISHED version,
+    # which is the only baseline that means anything. Passing the workspace
+    # version instead asks the registry for a release that does not exist
+    # yet, and every crate then came back "unpublished, 0 checks, ok" —
+    # eighteen stones reported clean on the strength of checking nothing.
+    p = subprocess.run(["cargo", "semver-checks", "check-release", "-p", crate],
                        cwd=ROOT, capture_output=True, text=True, timeout=900)
-    log = p.stdout + p.stderr
+    # Strip ANSI: cargo-semver-checks colours its progress lines when the
+    # runner looks like a terminal, and the `Checking … v5.4.1 -> v6.0.0`
+    # match then fails on \S+ and the baseline field falls back to empty.
+    # A field that goes quiet instead of wrong is still a field that stopped
+    # answering, which is the thing this release keeps finding.
+    log = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", p.stdout + p.stderr)
     if re.search(r"no crate named|not found in registry|failed to select a version for the requirement `"
                  + re.escape(crate), log) or "no published version" in log:
-        return {"ok": True, "checks": 0, "unpublished": True,
-                "note": "not on crates.io yet — no baseline to break"}
-    m = re.search(r"(\d+) checks: (\d+) pass", log)
-    return {"ok": p.returncode == 0, "checks": int(m.group(1)) if m else 0,
-            "unpublished": False,
-            "note": "" if p.returncode == 0 else
-                    next((l.strip() for l in log.splitlines() if "--- failure" in l), "failed")[:120]}
+        return {"ok": True, "checks": 0, "skipped": 0, "unpublished": True,
+                "baseline": "", "note": "not on crates.io yet — no baseline to break"}
+    m = re.search(r"(\d+) checks: (\d+) pass(?:, (\d+) skip)?", log)
+    b = re.search(r"Checking \S+ v(\S+) -> v\S+ \((\w+) change\)", log)
+    checks = int(m.group(1)) if m else 0
+    skipped = int(m.group(3)) if m and m.group(3) else 0
+    row = {"ok": p.returncode == 0, "checks": checks, "skipped": skipped,
+           "unpublished": False, "baseline": b.group(1) if b else "",
+           "note": "" if p.returncode == 0 else
+                   next((l.strip() for l in log.splitlines() if "--- failure" in l), "failed")[:120]}
+    # A major bump lets the tool skip every lint, because a major is allowed
+    # to break anything. That is correct of the tool and vacuous as evidence:
+    # say so in the row rather than let `ok` carry a meaning it does not have.
+    if p.returncode == 0 and checks == 0 and skipped:
+        row["note"] = (f"{skipped} lints skipped — {b.group(2) if b else 'major'} bump "
+                       f"from {row['baseline'] or 'the last release'}; a major may break "
+                       "anything, so this reading proves nothing")
+    return row
 
 
 def docs():
@@ -154,8 +177,12 @@ def main():
                "measured_regions": cov.get("regions", 0)}
         row.update({k: lift.get(c, {}).get(k) for k in ("packaged", "built", "tested", "tests")})
         row["lift_note"] = lift.get(c, {}).get("note", "")
+        # Carried so the gate can tell "this crate does not lift" from "the
+        # version its sibling is pinned to does not exist yet, because this
+        # is the release that publishes it".
+        row["unresolved"] = lift.get(c, {}).get("unresolved")
         row["docs"] = dc.get(c, {})
-        row["semver"] = {} if "--skip-semver" in args else semver(c, version)
+        row["semver"] = {} if "--skip-semver" in args else semver(c)
         rows.append(row)
         d = row["docs"]
         print(f"  {c:<16} lift={row['tested']} tests={row['tests']} "

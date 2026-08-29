@@ -180,6 +180,15 @@ pub(crate) enum ProbeOutcome {
 
 impl<K, V> KevyMap<K, V> {
     /// Construct an empty map without allocating.
+    /// # Examples
+    ///
+    /// ```
+    /// // The key must implement `KevyHash`, which is deliberately a small
+/// // set: byte strings and integers, the things a KV engine keys on.
+/// let m: kevy_map::KevyMap<Vec<u8>, u32> = kevy_map::KevyMap::new();
+    /// assert!(m.is_empty());
+    /// assert_eq!(m.len(), 0);
+    /// ```
     pub fn new() -> Self {
         Self {
             slots_ptr: NonNull::dangling(),
@@ -195,6 +204,14 @@ impl<K, V> KevyMap<K, V> {
 
     /// Construct a map sized to hold `cap_hint` entries without growing
     /// (accounting for the 7/8 load factor).
+    /// # Examples
+    ///
+    /// ```
+    /// // A hint, not a promise: capacity is rounded to the table's own
+    /// // shape, and `len` still starts at zero.
+    /// let m: kevy_map::KevyMap<u32, u32> = kevy_map::KevyMap::with_capacity(100);
+    /// assert_eq!(m.len(), 0);
+    /// ```
     pub fn with_capacity(cap_hint: usize) -> Self {
         if cap_hint == 0 {
             return Self::new();
@@ -232,6 +249,14 @@ impl<K, V> KevyMap<K, V> {
 
     /// Live entry count.
     #[inline]
+    /// # Examples
+    ///
+    /// ```
+    /// let mut m = kevy_map::KevyMap::new();
+    /// m.insert(1u32, "a");
+    /// m.insert(1u32, "b");
+    /// assert_eq!(m.len(), 1, "the second insert REPLACED the first");
+    /// ```
     pub fn len(&self) -> usize {
         self.occupied
     }
@@ -249,6 +274,15 @@ impl<K, V> KevyMap<K, V> {
     }
 
     /// Drop every live entry and reset the metadata. Keeps the allocation.
+    /// # Examples
+    ///
+    /// ```
+    /// let mut m = kevy_map::KevyMap::new();
+    /// for i in 0..8u32 { m.insert(i, i); }
+    /// m.clear();
+    /// assert!(m.is_empty());
+    /// assert_eq!(m.get(&0), None);
+    /// ```
     pub fn clear(&mut self) {
         if self.cap == 0 {
             return;
@@ -275,6 +309,16 @@ impl<K, V> KevyMap<K, V> {
     }
 
     /// `(&K, &V)` over all live entries; order is unspecified.
+    /// # Examples
+    ///
+    /// ```
+    /// let mut m = kevy_map::KevyMap::new();
+    /// for i in 0..4u32 { m.insert(i, i * 10); }
+    /// // Unordered, like any hash table: sort before comparing.
+    /// let mut got: Vec<_> = m.iter().map(|(k, v)| (*k, *v)).collect();
+    /// got.sort_unstable();
+    /// assert_eq!(got, vec![(0, 0), (1, 10), (2, 20), (3, 30)]);
+    /// ```
     pub fn iter(&self) -> Iter<'_, K, V> {
         let (metadata, slots) = self.as_slices();
         Iter::new(metadata, slots)
@@ -297,6 +341,16 @@ impl<K, V> KevyMap<K, V> {
     }
 
     /// `&K` over all live entries.
+    /// # Examples
+    ///
+    /// ```
+    /// let mut m = kevy_map::KevyMap::new();
+    /// m.insert(b"a".to_vec(), 1u32);
+    /// m.insert(b"b".to_vec(), 2);
+    /// let mut ks: Vec<_> = m.keys().cloned().collect();
+    /// ks.sort_unstable();
+    /// assert_eq!(ks, vec![b"a".to_vec(), b"b".to_vec()]);
+    /// ```
     pub fn keys(&self) -> Keys<'_, K, V> {
         Keys::new(self.iter())
     }

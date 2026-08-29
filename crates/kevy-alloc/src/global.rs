@@ -189,6 +189,17 @@ unsafe fn dealloc_over_aligned(ptr: NonNull<u8>, layout: Layout) {
 ///
 /// Shards report separately; a process figure is [`crate::Stats::merge`]
 /// over them.
+/// # Examples
+///
+/// ```
+/// // `None` past thread teardown — a caller cannot read that as
+/// // "this thread allocated nothing".
+/// if let Some(s) = kevy_alloc::thread_stats() {
+///     // Every mapped byte lands in exactly one bucket, so the sum is
+///     // comparable to `mapped` rather than derived from it.
+///     assert!(s.accounted() <= s.mapped);
+/// }
+/// ```
 #[must_use]
 pub fn thread_stats() -> Option<crate::Stats> {
     with_heap(|h| h.snapshot())
@@ -199,6 +210,14 @@ pub fn thread_stats() -> Option<crate::Stats> {
 /// Exposed rather than run automatically because how often to sweep is a
 /// policy question the engine answers, not the allocator: kevy already
 /// has a shard tick to hang it on.
+/// # Examples
+///
+/// ```
+/// // Idempotent and always safe to call: with nothing to return it
+/// // does nothing, which is why the engine can hang it on a tick.
+/// kevy_alloc::thread_reclaim();
+/// kevy_alloc::thread_reclaim();
+/// ```
 pub fn thread_reclaim() {
     with_heap(Heap::reclaim);
 }

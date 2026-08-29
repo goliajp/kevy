@@ -8,6 +8,15 @@ use crate::datetime::{MICROS_PER_DAY, MICROS_PER_SEC};
 use crate::{Scalar, ScalarError};
 
 /// Apply `a <op> b` where `op` is one of `+ - * /`.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_scalar::{Scalar, binop};
+/// assert_eq!(binop('+', &Scalar::Int(2), &Scalar::Int(3)).unwrap(), Scalar::Int(5));
+/// // Strict in NULL, like the function library.
+/// assert_eq!(binop('*', &Scalar::Int(2), &Scalar::Null).unwrap(), Scalar::Null);
+/// ```
 // LOC-WAIVER: a pure type-dispatch match table — one arm per
 // (operator, operand-type) pair, no control flow beyond the match.
 pub fn binop(op: char, a: &Scalar, b: &Scalar) -> Result<Scalar, ScalarError> {

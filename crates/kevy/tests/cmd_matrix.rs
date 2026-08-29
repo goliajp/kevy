@@ -80,14 +80,35 @@ fn conn_and_introspection() {
     );
     assert_starts(&run(&mut s, &[b"ECHO"]), b"-ERR", "ECHO/0");
 
-    // COMMAND
-    // COMMAND answers from the verb metadata table (185+ rows)
+    // COMMAND answers from the verb metadata table. This used to assert
+    // the reply started with `*1`, which reads as "it is an array" and
+    // actually pins the FIRST DIGIT of the element count: it held only
+    // while the table had between 100 and 199 rows, and went red on the
+    // row that made it 202. What the test means is that the array
+    // declares as many verbs as COMMAND COUNT reports, so it asks both
+    // and compares them.
     let cmd_reply = run(&mut s, &[b"COMMAND"]);
-    assert!(
-        cmd_reply.starts_with(b"*1") && cmd_reply.len() > 1000,
-        "COMMAND: expected the full metadata array, got {:?}…",
-        std::str::from_utf8(&cmd_reply[..40.min(cmd_reply.len())]).unwrap_or("<binary>")
+    let declared = {
+        assert!(cmd_reply.starts_with(b"*"), "COMMAND: not an array reply");
+        let end = cmd_reply.windows(2).position(|w| w == b"\r\n").expect("COMMAND: no header");
+        std::str::from_utf8(&cmd_reply[1..end])
+            .expect("COMMAND: non-utf8 length")
+            .parse::<usize>()
+            .expect("COMMAND: unparsable length")
+    };
+    let counted = {
+        let r = run(&mut s, &[b"COMMAND", b"COUNT"]);
+        assert!(r.starts_with(b":"), "COMMAND COUNT: not an integer reply");
+        let end = r.windows(2).position(|w| w == b"\r\n").expect("COMMAND COUNT: no end");
+        std::str::from_utf8(&r[1..end]).unwrap().parse::<usize>().unwrap()
+    };
+    assert_eq!(
+        declared, counted,
+        "COMMAND declares {declared} verbs and COMMAND COUNT reports {counted}"
     );
+    // A floor: two registries agreeing on zero would satisfy the line above.
+    assert!(declared > 150, "COMMAND declares only {declared} verbs");
+    assert!(cmd_reply.len() > 1000, "COMMAND: array too short to be the table");
     // QUIT
     assert_eq_reply(&run(&mut s, &[b"QUIT"]), b"+OK\r\n", "QUIT");
     // HELLO (multi-line map reply — just check it's nonempty)

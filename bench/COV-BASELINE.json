@@ -1,5 +1,6 @@
 {
   "workspace_line_coverage_pct": 79.64,
+  "platform": "linux",
   "recorded": "2026-07-03",
   "recorded_on": "ubuntu-latest CI (the enforcing platform), KEVY_IO_URING=0, cargo-llvm-cov --workspace --lib --tests",
   "reference_macos": 82.08,

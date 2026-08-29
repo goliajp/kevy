@@ -170,6 +170,18 @@ impl<T> Drop for Ring<T> {
 }
 
 /// The sending half. `Send` (move to the producer thread); only this half pushes.
+///
+/// # Examples
+///
+/// ```
+/// let (mut tx, mut rx) = kevy_ring::ring::<u32>(2);
+/// assert!(tx.push(1).is_ok());
+/// assert!(tx.push(2).is_ok());
+/// // Full: the value comes BACK rather than being dropped or blocking.
+/// assert_eq!(tx.push(3), Err(3));
+/// assert_eq!(rx.pop(), Some(1));
+/// assert!(tx.push(3).is_ok());
+/// ```
 pub struct Producer<T> {
     inner: Arc<Ring<T>>,
     /// Cached snapshot of the consumer's `head`. Stale-OK: a value the
@@ -183,6 +195,20 @@ pub struct Producer<T> {
 }
 
 /// The receiving half. `Send` (move to the consumer thread); only this half pops.
+///
+/// # Examples
+///
+/// ```
+/// let (mut tx, mut rx) = kevy_ring::ring::<&str>(4);
+/// assert_eq!(rx.pop(), None, "empty pops None, it does not block");
+/// tx.push("a").unwrap();
+/// tx.push("b").unwrap();
+/// assert_eq!(rx.len(), 2);
+/// // FIFO, and `len` falls as it drains.
+/// assert_eq!(rx.pop(), Some("a"));
+/// assert_eq!(rx.pop(), Some("b"));
+/// assert!(rx.is_empty());
+/// ```
 pub struct Consumer<T> {
     inner: Arc<Ring<T>>,
     /// Cached snapshot of the producer's `tail`. Stale-OK in the same way as

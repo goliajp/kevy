@@ -347,6 +347,14 @@ pub(super) fn cmd_xack<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &
 // ───────────── XPENDING ─────────────
 
 pub(super) fn cmd_xpending<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
+    // Below three arguments there is neither a summary call nor an extended
+    // one, and the extended parse starts by reading args[3] unchecked — so
+    // `XPENDING k` panicked the shard thread. Every sibling here (XGROUP,
+    // XACK, XCLAIM) already refuses short calls in Redis's words; this one
+    // did not, and nothing drove it until the arity sweep did.
+    if args.len() < 3 {
+        return wrong_args(out, "xpending");
+    }
     if args.len() == 3 {
         match store.xpending_summary(&args[1], &args[2]) {
             Ok(Some(s)) => emit_pending_summary(out, &s),

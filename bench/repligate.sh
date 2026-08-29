@@ -37,7 +37,10 @@ RPID=""
 # -9, not TERM: the script parks the writer with SIGSTOP, and TERM
 # stays pending on a stopped process forever — every early exit while
 # parked orphaned the writer on port 7101 (twice in the field).
-trap 'kill -9 $WPID $RPID 2>/dev/null; rm -rf "$DIR"' EXIT
+# kill -9 is immediate to the kernel and not to the shell: the processes
+# are still reaping when this returns. availgate had the same shape and a
+# gate started right after it saw its two servers as leftovers and REFUSED.
+trap 'kill -9 $WPID $RPID 2>/dev/null; wait $WPID $RPID 2>/dev/null; rm -rf "$DIR"' EXIT
 for _ in $(seq 100); do
     grep -q READY "$DIR/writer.log" 2>/dev/null && break
     sleep 0.2

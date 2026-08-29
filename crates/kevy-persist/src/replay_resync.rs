@@ -8,7 +8,7 @@ use std::path::Path;
 
 use kevy_resp::Argv;
 
-use crate::replay::{ReplayStop, V2Walk};
+use crate::replay_walk::{ReplayStop, V2Walk};
 
 /// The resync arm of [`stream_v2`]: corruption is the rare path and the
 /// rescan needs random access, so slice-load the remainder (O(damaged

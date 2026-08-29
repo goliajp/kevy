@@ -33,6 +33,7 @@
 //! assert!(s.median_ns < 1_000); // trivial add is nanoseconds
 //! ```
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 use std::time::{Duration, Instant};
 
@@ -40,6 +41,14 @@ use std::time::{Duration, Instant};
 pub use std::hint::black_box;
 
 /// Per-operation timing summary, in nanoseconds. See [`bench()`].
+/// # Examples
+///
+/// ```
+/// let s = kevy_bench::bench(5, 100, || { std::hint::black_box(1u64 + 1); });
+/// assert_eq!((s.samples, s.inner), (5, 100));
+/// // The order the summary always holds, whatever the machine did.
+/// assert!(s.min_ns <= s.median_ns && s.median_ns <= s.p95_ns);
+/// ```
 #[derive(Clone, Copy, Debug)]
 pub struct Stats {
     /// Number of samples collected.
@@ -66,6 +75,15 @@ pub struct Stats {
 /// One untimed warm-up sample primes caches/branch predictors first. Pick
 /// `inner` large enough that one sample is comfortably above `Instant`
 /// resolution (≥ a few µs); for ns-scale ops use `inner` in the thousands.
+/// # Examples
+///
+/// ```
+/// // `inner` is the divisor: each sample times `inner` iterations and the
+/// // reported figure is per-iteration, so a cheap op is still measurable.
+/// let s = kevy_bench::bench(3, 1_000, || { std::hint::black_box(0u8); });
+/// assert_eq!(s.samples, 3);
+/// assert_eq!(s.inner, 1_000);
+/// ```
 pub fn bench<F: FnMut()>(samples: usize, inner: usize, mut op: F) -> Stats {
     assert!(samples > 0 && inner > 0, "samples and inner must be non-zero");
 
@@ -118,6 +136,15 @@ pub fn bench<F: FnMut()>(samples: usize, inner: usize, mut op: F) -> Stats {
 /// dev (unoptimised) is typically 5–25× slower than release, and a loaded host
 /// adds more — so size the budget off the *release* number times a safety factor
 /// and document the observed dev figure alongside it.
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+/// // The median of `iters` whole-op timings — for one expensive thing,
+/// // where `bench`'s inner loop would be the wrong shape.
+/// let d = kevy_bench::time_median(3, || std::thread::sleep(Duration::from_millis(1)));
+/// assert!(d >= Duration::from_millis(1));
+/// ```
 pub fn time_median<F: FnMut()>(iters: usize, mut op: F) -> Duration {
     assert!(iters > 0, "iters must be non-zero");
     let mut samples: Vec<Duration> = Vec::with_capacity(iters);
@@ -131,6 +158,13 @@ pub fn time_median<F: FnMut()>(iters: usize, mut op: F) -> Duration {
 }
 
 /// Print one labelled timing line.
+///
+/// # Examples
+///
+/// ```
+/// let s = kevy_bench::bench(3, 100, || { std::hint::black_box(1u32); });
+/// kevy_bench::report("noop", s); // median / p95 / min, one line
+/// ```
 pub fn report(label: &str, s: Stats) {
     println!(
         "  {label:<30} median {:>8} ns   p95 {:>8} ns   min {:>8} ns",
@@ -142,6 +176,16 @@ pub fn report(label: &str, s: Stats) {
 ///
 /// `ratio = baseline.median / candidate.median`; > 1 means the candidate is
 /// faster. This is the number the self-host decision is gated on.
+/// # Examples
+///
+/// ```
+/// let a = kevy_bench::bench(3, 100, || { std::hint::black_box(1u32); });
+/// let b = kevy_bench::bench(3, 100, || { std::hint::black_box(1u32); });
+/// let ratio = kevy_bench::compare("base", a, "cand", b);
+/// // > 1 means the candidate is faster; two runs of the same work sit
+/// // near 1, and how near is the noise band that any claim must clear.
+/// assert!(ratio > 0.0 && ratio.is_finite());
+/// ```
 pub fn compare(base_label: &str, base: Stats, cand_label: &str, cand: Stats) -> f64 {
     report(base_label, base);
     report(cand_label, cand);

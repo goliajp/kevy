@@ -20,7 +20,7 @@ impl<C: Commands> Shard<C> {
     /// replica_inbox.rs's wake contract), and the snapshot + AOF
     /// restore, same as the readiness path.
     pub(crate) fn prepare_uring_shard(&mut self) -> io::Result<()> {
-        self.commands.on_shard_start(self.id);
+        self.announce_to_commands();
         if let Some(rx) = &self.replica_inbox {
             rx.attach_waker(Arc::clone(&self.waker));
         }

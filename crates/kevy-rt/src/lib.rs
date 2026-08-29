@@ -91,6 +91,8 @@ mod exec_client_intercept;
 mod exec_crossslot;
 mod exec_dispatch;
 mod exec_feed;
+mod exec_bitop;
+mod exec_copy;
 mod exec_fold;
 mod exec_geostore;
 mod exec_listmove;
@@ -110,6 +112,7 @@ mod inbox;
 mod lua_wake_bridge;
 mod message;
 mod message_agg;
+mod message_part;
 mod message_kinds;
 mod persist_jobs;
 mod persist_rewrite;
@@ -213,3 +216,5 @@ pub use types::{
 
 pub use crate::commands_trait::Commands;
 mod commands_trait;
+#[cfg(test)]
+mod commands_trait_tests;

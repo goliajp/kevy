@@ -15,18 +15,18 @@
 
 | 语言 | 安装 | 版本 |
 |---|---|---|
-| Rust | `cargo add kevy-embedded` | 5.1.0 |
-| Python | `pip install kevy` | 5.1.0 |
-| Go | `go get github.com/goliajp/kevy-go/v5` | 5.1.0 |
-| Java | Maven Central 上的 `jp.golia:kevy` | 5.1.0 |
-| Node / TypeScript | `npm i @goliapkg/kevy-ts` | 5.1.0 |
-| 浏览器（wasm） | `npm i @goliapkg/kevy` | 5.1.0 |
-| Flutter | `flutter pub add flutter_kevy` | 5.1.0 |
+| Rust | `cargo add kevy-embedded` | 6.0.0 |
+| Python | `pip install kevy` | 6.0.0 |
+| Go | `go get github.com/goliajp/kevy-go/v6` | 6.0.0 |
+| Java | Maven Central 上的 `jp.golia:kevy` | 6.0.0 |
+| Node / TypeScript | `npm i @goliapkg/kevy-ts` | 6.0.0 |
+| 浏览器（wasm） | `npm i @goliapkg/kevy` | 6.0.0 |
+| Flutter | `flutter pub add flutter_kevy` | 6.0.0 |
 
 ```xml
 <!-- Java，写在 pom.xml 里 -->
 <dependency>
-  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>5.1.0</version>
+  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>6.0.0</version>
 </dependency>
 ```
 
@@ -72,8 +72,8 @@ db.get(b"user:1")                            # b"alice"
 ```
 
 ```go
-// Go —— go get github.com/goliajp/kevy-go/v5
-import kevy "github.com/goliajp/kevy-go/v5"
+// Go —— go get github.com/goliajp/kevy-go/v6
+import kevy "github.com/goliajp/kevy-go/v6"
 
 c, _ := kevy.Connect("kevy://127.0.0.1:6379")
 c.Set(ctx, []byte("user:1"), []byte("alice"))

@@ -8,6 +8,15 @@ use crate::node::{MIN_KEYS, Node};
 impl<K: Ord> RankTree<K> {
     /// Remove `key`; returns `false` (and changes nothing) when it is not
     /// present. O(log N).
+    /// # Examples
+    ///
+    /// ```
+    /// let mut t = kevy_ranktree::RankTree::new();
+    /// t.insert(5u32);
+    /// assert!(t.remove(&5));
+    /// assert!(!t.remove(&5), "absent — false, not a panic");
+    /// assert!(t.is_empty());
+    /// ```
     pub fn remove(&mut self, key: &K) -> bool {
         let removed = remove_rec(&mut self.root, key);
         if self.root.keys.is_empty() && !self.root.is_leaf() {

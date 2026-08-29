@@ -15,6 +15,19 @@
 //! and one wrapper call site. The wrapper rounds the request to page
 //! boundaries, never reads or writes Rust memory, and silently no-ops when
 //! the kernel returns `EINVAL` — making it safe to expose as a plain `fn`.
+//!
+//! ```
+//! // Every entry point is best-effort and reports nothing, so the same
+//! // call compiles and runs on a platform that cannot honour it.
+//! let buf = vec![0u8; 1 << 20];
+//! kevy_madvise::advise_hugepage(buf.as_ptr(), buf.len());
+//!
+//! // The mapping helper says no rather than panicking, and its unmap
+//! // takes the same length back.
+//! if let Some(p) = kevy_madvise::mmap_anon_aligned_2mb(2 << 20) {
+//!     unsafe { kevy_madvise::munmap_2mb(p, 2 << 20) };
+//! }
+//! ```
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
@@ -71,6 +84,15 @@ mod ffi {
 /// let tiny = [0u8; 8];
 /// kevy_madvise::advise_hugepage(tiny.as_ptr(), tiny.len());
 /// kevy_madvise::advise_hugepage(tiny.as_ptr(), 0);
+/// ```
+/// # Examples
+///
+/// ```
+/// // Best-effort: a hint the kernel is free to ignore, and a no-op off
+/// // Linux. It reports nothing, so a caller cannot branch on it and be
+/// // wrong on another platform.
+/// let buf = vec![0u8; 4096];
+/// kevy_madvise::advise_hugepage(buf.as_ptr(), buf.len());
 /// ```
 pub fn advise_hugepage(ptr: *const u8, len: usize) {
     // Miri cannot execute foreign syscalls; madvise is purely advisory, so
@@ -165,6 +187,16 @@ const HUGE_PAGE: usize = 2 * 1024 * 1024;
 ///
 /// ```
 /// assert!(kevy_madvise::mmap_anon_aligned_2mb(0).is_none());
+/// ```
+/// # Examples
+///
+/// ```
+/// // `None` rather than a panic when the platform cannot serve it, so
+/// // the caller keeps its own fallback rather than inheriting one.
+/// if let Some(p) = kevy_madvise::mmap_anon_aligned_2mb(2 << 20) {
+///     assert_eq!(p.as_ptr() as usize % (2 << 20), 0, "2 MiB aligned");
+///     unsafe { kevy_madvise::munmap_2mb(p, 2 << 20) };
+/// }
 /// ```
 pub fn mmap_anon_aligned_2mb(len: usize) -> Option<core::ptr::NonNull<u8>> {
     if cfg!(miri) || len == 0 {
@@ -271,6 +303,15 @@ fn trim_to_aligned(raw: *mut core::ffi::c_void, total: usize, rounded: usize) ->
 /// if let Some(p) = kevy_madvise::mmap_anon_aligned_2mb(len) {
 ///     // SAFETY: `p` is this call's own mapping, released exactly once.
 ///     unsafe { kevy_madvise::munmap_2mb(p, len) };
+/// }
+/// ```
+/// # Examples
+///
+/// ```
+/// // Pairs with `mmap_anon_aligned_2mb`, and only with it: `len` must be
+/// // the length that mapping was made with.
+/// if let Some(p) = kevy_madvise::mmap_anon_aligned_2mb(2 << 20) {
+///     unsafe { kevy_madvise::munmap_2mb(p, 2 << 20) };
 /// }
 /// ```
 pub unsafe fn munmap_2mb(ptr: core::ptr::NonNull<u8>, len: usize) {

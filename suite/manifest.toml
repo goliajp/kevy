@@ -36,6 +36,39 @@ manifest_floor = 43
 precommit = 300
 prerelease = 5400
 
+
+# ── where each requirement is met ────────────────────────────────────
+#
+# The manifest names requirements; until now it never said where any of
+# them is satisfied. Two consequences, both real. A NOT-RUN row told the
+# reader what was missing and never where the row does run, so the release
+# report's accounting — "these five run in CI's site job" — was derived by
+# hand every time. And a requirement that NOTHING can satisfy looks exactly
+# like one satisfied on a machine nobody happens to be at: `device` is set
+# in one place in this repository, `tools/suite.py`, by nothing.
+#
+# Audited: every requirement a check names must appear here, and every
+# entry here must be named by some check. A `met` of "" is a declaration
+# that the row runs nowhere — allowed, because saying so is the point, and
+# loud in the audit's summary rather than silent in a NOT-RUN line.
+[suite.requirements]
+"linux" = "CI's Linux jobs, and the lx64 box"
+"box" = "the lx64 box, as kevybench with TMPDIR=$HOME/captmp"
+"server-release" = "anywhere after cargo build --release -p kevy --bin kevy"
+"server-debug" = "anywhere after cargo build -p kevy --bin kevy"
+"docker" = "CI's Linux jobs, and the lx64 box"
+"node" = "CI's site job (actions/setup-node), and any workstation with node"
+"web-deps" = "CI's site job, after npm ci in web/"
+"chromium" = "CI's site job, via npx playwright install chromium"
+"wasm-artifact" = "CI's site job, after npm run engine in web/"
+"nightly rustdoc" = "CI's docdeficit job"
+"nightly rustdoc coverage tables in target/doc" = "CI's stonereport job"
+"cargo-semver-checks" = "CI's stonereport job"
+"bench/STONE-REPORT.json from stone-report" = "CI's stonereport job, uploaded as stone-report-linux"
+"pgcmp-infra" = "the lx64 box, where the kevy-pgcmp container is resident"
+"ci" = "CI"
+"device" = ""
+
 # ── hygiene ──────────────────────────────────────────────────────────
 
 [[check]]
@@ -243,6 +276,16 @@ requires = []
 proves = "no published crate ships a source file importing a dependency its published manifest drops"
 
 [[check]]
+id = "fuzzgate"
+area = "hygiene"
+tier = "precommit"
+cmd = "python3 tools/check_fuzz_matrix.py"
+expected = 1
+timeout = 60
+requires = []
+proves = "every fuzz target in the tree runs in CI's fuzz-smoke matrix, and every matrix entry names a target that exists — nine of twenty-three were in the tree unrun, and the first run of one of them found two defects"
+
+[[check]]
 id = "lockgate"
 area = "release-pins"
 tier = "precommit"
@@ -413,6 +456,9 @@ expected = 10
 timeout = 300
 requires = []
 advisory = true
+advisory_reason = """
+Between releases the tree is SUPPOSED to be ahead of npm; a gate here would be red from the first engine change after every release, and a permanently red gate is one nobody reads. What to do about a difference is a release decision — publish a new package version, or deploy knowing the page answers verbs the package cannot.
+"""
 proves = "whether the built wasm is the published one — divergence is a release decision, said out loud"
 
 # ── prerelease: the owner-claim gates (box) ──────────────────────────
@@ -565,6 +611,9 @@ tier = "full"
 # trains. The kevy-alloc feature ships OFF; this ledger tracks the
 # experiment, red by design until its decision lands.
 advisory = true
+advisory_reason = """
+Red-first, by design: the acceptance lines exist before the crate does, so the crate is built against them. Lines it does not yet own read PENDING(<train>). It stops being advisory when every line it owns is a real assertion.
+"""
 cmd = "bash -c 'eval \"$(bash bench/allocgate-prep.sh)\" && bash bench/allocgate.sh'"
 expected = 600
 timeout = 3600
@@ -577,6 +626,9 @@ area = "mem"
 tier = "full"
 # The other half of the same experiment ledger.
 advisory = true
+advisory_reason = """
+The memory half of the same red-first experiment; same reason, same closing condition.
+"""
 cmd = "bash -c 'eval \"$(bash bench/allocgate-prep.sh)\" && bash bench/allocgate-mem.sh'"
 expected = 600
 timeout = 3600
@@ -772,6 +824,9 @@ tier = "full"
 # red that trains readers to ignore the color — the PASS/PENDING table
 # still prints in the run log.
 advisory = true
+advisory_reason = """
+Red-first, by design (crashgate precedent): the acceptance lines exist before the feature, so the feature is built against them. It stops being advisory when every line it owns is implemented and green.
+"""
 cmd = "bash bench/tiergate.sh"
 expected = 900
 timeout = 5400

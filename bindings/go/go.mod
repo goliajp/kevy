@@ -9,6 +9,6 @@
 // or above 2, so a module declared without it cannot be tagged v5.1.0
 // at all: `go get` rejects the mismatch rather than resolving it. The
 // path and the release tag move together from here on.
-module github.com/goliajp/kevy-go/v5
+module github.com/goliajp/kevy-go/v6
 
 go 1.22

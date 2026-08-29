@@ -167,6 +167,13 @@ pub(super) fn info_stats(ctx: &Ctx<'_>, totals: &crate::state::Totals, b: &mut S
     // `# Memory`. Emitted in both so tools reading the Redis location
     // see it (additive — the Memory line stays where it was).
     b.push_str(&format!("evicted_keys:{}\r\n", totals.evicted_keys));
+    // Redis's name for it. The count is of DECISIONS to close, which is
+    // what makes "the server never noticed the cap" tellable from "it
+    // noticed and the close had not reached the client yet".
+    b.push_str(&format!(
+        "client_query_buffer_limit_disconnections:{}\r\n",
+        totals.query_buffer_disconnections
+    ));
     // kevy extension: the reactor's single-iteration stall upper
     // bound, as the tick's worst observed lateness (µs). The tailgate
     // reads this for its "reactor single-loop <= 100ms" line.

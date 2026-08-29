@@ -321,3 +321,38 @@ impl Store {
         Ok(v)
     }
 }
+
+impl Store {
+    /// `ZREVRANGE key start stop` — the rank window counted from the
+    /// high end.
+    ///
+    /// One implementation, called by both the server's dispatch and the
+    /// embedded facade. Each had written its own before this existed,
+    /// and both had written the same bug: a positive start was clamped
+    /// up to the last rank, so `ZREVRANGE z 5 10` on a three-member set
+    /// answered one member where Redis answers none. They agreed with
+    /// each other, which is why the wire-vs-facade differential passed
+    /// it and the three-way against a real valkey did not.
+    ///
+    /// `range_bounds` has the rule right — floor a negative start at
+    /// zero, cap only the end, and call the window empty when the start
+    /// is past the last index — so the reversed window is computed from
+    /// it rather than beside it.
+    pub fn zrevrange(
+        &mut self,
+        key: &[u8],
+        start: i64,
+        stop: i64,
+    ) -> Result<Vec<(Vec<u8>, f64)>, StoreError> {
+        let n = self.zcard(key)?;
+        let Some((s, e)) = range_bounds(start, stop, n) else {
+            return Ok(Vec::new());
+        };
+        // Rank r from the top is rank n-1-r from the bottom, so the
+        // reversed window [s, e] is the ascending window [n-1-e, n-1-s].
+        let (asc_lo, asc_hi) = (n - 1 - e, n - 1 - s);
+        let mut out = self.zrange(key, asc_lo as i64, asc_hi as i64)?;
+        out.reverse();
+        Ok(out)
+    }
+}

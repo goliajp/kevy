@@ -54,8 +54,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kevy-scalar"
+version = "6.0.0"
+dependencies = [
+ "kevy-time",
+]
+
+[[package]]
 name = "kevy-sql"
-version = "4.0.0"
+version = "6.0.0"
+dependencies = [
+ "kevy-scalar",
+]
 
 [[package]]
 name = "kevy-sql-fuzz"
@@ -64,6 +74,10 @@ dependencies = [
  "kevy-sql",
  "libfuzzer-sys",
 ]
+
+[[package]]
+name = "kevy-time"
+version = "6.0.0"
 
 [[package]]
 name = "libc"

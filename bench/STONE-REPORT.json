@@ -1,5 +1,5 @@
 {
-  "version": "5.4.1",
+  "version": "6.0.0",
   "dead_platform": "linux",
   "stones": [
     {
@@ -11,6 +11,7 @@
       "tested": true,
       "tests": 39,
       "lift_note": "",
+      "unresolved": null,
       "docs": {
         "documented": 88,
         "items": 88,
@@ -19,9 +20,11 @@
       },
       "semver": {
         "ok": true,
-        "checks": 223,
+        "checks": 0,
+        "skipped": 254,
         "unpublished": false,
-        "note": ""
+        "baseline": "5.4.1",
+        "note": "254 lints skipped \u2014 major bump from 5.4.1; a major may break anything, so this reading proves nothing"
       }
     },
     {
@@ -32,51 +35,65 @@
       "built": false,
       "tested": false,
       "tests": 0,
-      "lift_note": "  required by package `kevy-bytes v5.4.1 (/home/runner/work/kevy/kevy/crates/kevy-bytes)`",
+      "lift_note": "failed to select a version for the requirement `kevy-hash = \"^6.0.0\"`",
+      "unresolved": {
+        "dep": "kevy-hash",
+        "req": "6.0.0"
+      },
       "docs": {
         "documented": 12,
         "items": 12,
         "pct": 100.0,
-        "examples": 1
+        "examples": 11
       },
       "semver": {
         "ok": true,
-        "checks": 223,
+        "checks": 0,
+        "skipped": 254,
         "unpublished": false,
-        "note": ""
+        "baseline": "5.4.1",
+        "note": "254 lints skipped \u2014 major bump from 5.4.1; a major may break anything, so this reading proves nothing"
       }
     },
     {
       "crate": "kevy-hash",
       "dead_regions": 31,
-      "measured_regions": 535,
+      "measured_regions": 317,
       "packaged": false,
       "built": false,
       "tested": false,
       "tests": 0,
-      "lift_note": "  required by package `kevy-hash v5.4.1 (/home/runner/work/kevy/kevy/crates/kevy-hash)`",
+      "lift_note": "no matching package named `kevy-bench` found",
+      "unresolved": {
+        "dep": "kevy-bench",
+        "req": "6.0.0",
+        "never_published": true
+      },
       "docs": {
         "documented": 10,
         "items": 10,
         "pct": 100.0,
-        "examples": 1
+        "examples": 6
       },
       "semver": {
         "ok": true,
-        "checks": 223,
+        "checks": 0,
+        "skipped": 254,
         "unpublished": false,
-        "note": ""
+        "baseline": "5.4.1",
+        "note": "254 lints skipped \u2014 major bump from 5.4.1; a major may break anything, so this reading proves nothing"
       }
     },
     {
       "crate": "kevy-compress",
       "dead_regions": 43,
-      "measured_regions": 1374,
+      "measured_regions": 1403,
       "packaged": true,
       "built": true,
       "tested": true,
-      "tests": 14,
+      "tests": 17,
       "lift_note": "",
+      "unresolved": null,
       "docs": {
         "documented": 12,
         "items": 12,
@@ -85,9 +102,11 @@
       },
       "semver": {
         "ok": true,
-        "checks": 223,
+        "checks": 0,
+        "skipped": 254,
         "unpublished": false,
-        "note": ""
+        "baseline": "5.4.1",
+        "note": "254 lints skipped \u2014 major bump from 5.4.1; a major may break anything, so this reading proves nothing"
       }
     },
     {
@@ -98,7 +117,11 @@
       "built": false,
       "tested": false,
       "tests": 0,
-      "lift_note": "  required by package `kevy-map v5.4.1 (/home/runner/work/kevy/kevy/crates/kevy-map)`",
+      "lift_note": "failed to select a version for the requirement `kevy-hash = \"^6.0.0\"`",
+      "unresolved": {
+        "dep": "kevy-hash",
+        "req": "6.0.0"
+      },
       "docs": {
         "documented": 13,
         "items": 13,
@@ -107,9 +130,11 @@
       },
       "semver": {
         "ok": true,
-        "checks": 223,
+        "checks": 0,
+        "skipped": 254,
         "unpublished": false,
-        "note": ""
+        "baseline": "5.4.1",
+        "note": "254 lints skipped \u2014 major bump from 5.4.1; a major may break anything, so this reading proves nothing"
       }
     },
     {
@@ -119,19 +144,22 @@
       "packaged": true,
       "built": true,
       "tested": true,
-      "tests": 6,
+      "tests": 9,
       "lift_note": "",
+      "unresolved": null,
       "docs": {
         "documented": 4,
         "items": 4,
         "pct": 100.0,
-        "examples": 1
+        "examples": 3
       },
       "semver": {
         "ok": true,
-        "checks": 223,
+        "checks": 0,
+        "skipped": 254,
         "unpublished": false,
-        "note": ""
+        "baseline": "5.4.1",
+        "note": "254 lints skipped \u2014 major bump from 5.4.1; a major may break anything, so this reading proves nothing"
       }
     },
     {
@@ -143,6 +171,7 @@
       "tested": true,
       "tests": 9,
       "lift_note": "",
+      "unresolved": null,
       "docs": {
         "documented": 17,
         "items": 17,
@@ -151,42 +180,55 @@
       },
       "semver": {
         "ok": true,
-        "checks": 223,
+        "checks": 0,
+        "skipped": 254,
         "unpublished": false,
-        "note": ""
+        "baseline": "5.4.1",
+        "note": "254 lints skipped \u2014 major bump from 5.4.1; a major may break anything, so this reading proves nothing"
       }
     },
     {
       "crate": "kevy-ring",
       "dead_regions": 0,
-      "measured_regions": 360,
+      "measured_regions": 154,
       "packaged": false,
       "built": false,
       "tested": false,
       "tests": 0,
-      "lift_note": "  required by package `kevy-ring v5.4.1 (/home/runner/work/kevy/kevy/crates/kevy-ring)`",
+      "lift_note": "no matching package named `kevy-bench` found",
+      "unresolved": {
+        "dep": "kevy-bench",
+        "req": "6.0.0",
+        "never_published": true
+      },
       "docs": {
         "documented": 11,
         "items": 11,
         "pct": 100.0,
-        "examples": 1
+        "examples": 9
       },
       "semver": {
         "ok": true,
-        "checks": 223,
+        "checks": 0,
+        "skipped": 254,
         "unpublished": false,
-        "note": ""
+        "baseline": "5.4.1",
+        "note": "254 lints skipped \u2014 major bump from 5.4.1; a major may break anything, so this reading proves nothing"
       }
     },
     {
       "crate": "kevy-seg",
-      "dead_regions": 122,
-      "measured_regions": 1206,
-      "packaged": true,
-      "built": true,
-      "tested": true,
-      "tests": 12,
-      "lift_note": "",
+      "dead_regions": 120,
+      "measured_regions": 1212,
+      "packaged": false,
+      "built": false,
+      "tested": false,
+      "tests": 0,
+      "lift_note": "failed to select a version for the requirement `kevy-sys = \"^6.0.0\"`",
+      "unresolved": {
+        "dep": "kevy-sys",
+        "req": "6.0.0"
+      },
       "docs": {
         "documented": 20,
         "items": 20,
@@ -195,9 +237,11 @@
       },
       "semver": {
         "ok": true,
-        "checks": 223,
+        "checks": 0,
+        "skipped": 254,
         "unpublished": false,
-        "note": ""
+        "baseline": "5.4.1",
+        "note": "254 lints skipped \u2014 major bump from 5.4.1; a major may break anything, so this reading proves nothing"
       }
     },
     {
@@ -207,19 +251,22 @@
       "packaged": true,
       "built": true,
       "tested": true,
-      "tests": 7,
+      "tests": 15,
       "lift_note": "",
+      "unresolved": null,
       "docs": {
         "documented": 12,
         "items": 12,
         "pct": 100.0,
-        "examples": 1
+        "examples": 5
       },
       "semver": {
         "ok": true,
-        "checks": 223,
+        "checks": 0,
+        "skipped": 254,
         "unpublished": false,
-        "note": ""
+        "baseline": "5.4.1",
+        "note": "254 lints skipped \u2014 major bump from 5.4.1; a major may break anything, so this reading proves nothing"
       }
     },
     {
@@ -231,6 +278,7 @@
       "tested": true,
       "tests": 14,
       "lift_note": "",
+      "unresolved": null,
       "docs": {
         "documented": 24,
         "items": 24,
@@ -239,20 +287,26 @@
       },
       "semver": {
         "ok": true,
-        "checks": 223,
+        "checks": 0,
+        "skipped": 254,
         "unpublished": false,
-        "note": ""
+        "baseline": "5.4.1",
+        "note": "254 lints skipped \u2014 major bump from 5.4.1; a major may break anything, so this reading proves nothing"
       }
     },
     {
       "crate": "kevy-uring",
       "dead_regions": 238,
       "measured_regions": 853,
-      "packaged": true,
-      "built": true,
-      "tested": true,
-      "tests": 15,
-      "lift_note": "",
+      "packaged": false,
+      "built": false,
+      "tested": false,
+      "tests": 0,
+      "lift_note": "failed to select a version for the requirement `kevy-tmpdir = \"^6.0.0\"`",
+      "unresolved": {
+        "dep": "kevy-tmpdir",
+        "req": "6.0.0"
+      },
       "docs": {
         "documented": 17,
         "items": 17,
@@ -261,20 +315,23 @@
       },
       "semver": {
         "ok": true,
-        "checks": 223,
+        "checks": 0,
+        "skipped": 254,
         "unpublished": false,
-        "note": ""
+        "baseline": "5.4.1",
+        "note": "254 lints skipped \u2014 major bump from 5.4.1; a major may break anything, so this reading proves nothing"
       }
     },
     {
       "crate": "kevy-text",
-      "dead_regions": 119,
-      "measured_regions": 3987,
+      "dead_regions": 118,
+      "measured_regions": 4021,
       "packaged": true,
       "built": true,
       "tested": true,
-      "tests": 101,
+      "tests": 102,
       "lift_note": "",
+      "unresolved": null,
       "docs": {
         "documented": 76,
         "items": 76,
@@ -283,9 +340,11 @@
       },
       "semver": {
         "ok": true,
-        "checks": 223,
+        "checks": 0,
+        "skipped": 254,
         "unpublished": false,
-        "note": ""
+        "baseline": "5.4.1",
+        "note": "254 lints skipped \u2014 major bump from 5.4.1; a major may break anything, so this reading proves nothing"
       }
     },
     {
@@ -297,6 +356,7 @@
       "tested": true,
       "tests": 12,
       "lift_note": "",
+      "unresolved": null,
       "docs": {
         "documented": 17,
         "items": 17,
@@ -305,9 +365,11 @@
       },
       "semver": {
         "ok": true,
-        "checks": 223,
+        "checks": 0,
+        "skipped": 254,
         "unpublished": false,
-        "note": ""
+        "baseline": "5.4.1",
+        "note": "254 lints skipped \u2014 major bump from 5.4.1; a major may break anything, so this reading proves nothing"
       }
     },
     {
@@ -317,30 +379,37 @@
       "packaged": true,
       "built": true,
       "tested": true,
-      "tests": 22,
+      "tests": 30,
       "lift_note": "",
+      "unresolved": null,
       "docs": {
         "documented": 12,
         "items": 12,
         "pct": 100.0,
-        "examples": 1
+        "examples": 5
       },
       "semver": {
         "ok": true,
-        "checks": 223,
+        "checks": 0,
+        "skipped": 254,
         "unpublished": false,
-        "note": ""
+        "baseline": "5.4.1",
+        "note": "254 lints skipped \u2014 major bump from 5.4.1; a major may break anything, so this reading proves nothing"
       }
     },
     {
       "crate": "kevy-scalar",
       "dead_regions": 1087,
-      "measured_regions": 4383,
-      "packaged": true,
-      "built": true,
-      "tested": true,
-      "tests": 48,
-      "lift_note": "",
+      "measured_regions": 4391,
+      "packaged": false,
+      "built": false,
+      "tested": false,
+      "tests": 0,
+      "lift_note": "failed to select a version for the requirement `kevy-time = \"^6.0.0\"`",
+      "unresolved": {
+        "dep": "kevy-time",
+        "req": "6.0.0"
+      },
       "docs": {
         "documented": 39,
         "items": 39,
@@ -349,9 +418,11 @@
       },
       "semver": {
         "ok": true,
-        "checks": 223,
+        "checks": 0,
+        "skipped": 254,
         "unpublished": false,
-        "note": ""
+        "baseline": "5.4.1",
+        "note": "254 lints skipped \u2014 major bump from 5.4.1; a major may break anything, so this reading proves nothing"
       }
     },
     {
@@ -361,19 +432,22 @@
       "packaged": true,
       "built": true,
       "tested": true,
-      "tests": 4,
+      "tests": 7,
       "lift_note": "",
+      "unresolved": null,
       "docs": {
         "documented": 5,
         "items": 5,
         "pct": 100.0,
-        "examples": 1
+        "examples": 4
       },
       "semver": {
         "ok": true,
-        "checks": 223,
+        "checks": 0,
+        "skipped": 254,
         "unpublished": false,
-        "note": ""
+        "baseline": "5.4.1",
+        "note": "254 lints skipped \u2014 major bump from 5.4.1; a major may break anything, so this reading proves nothing"
       }
     },
     {
@@ -385,6 +459,7 @@
       "tested": true,
       "tests": 4,
       "lift_note": "",
+      "unresolved": null,
       "docs": {
         "documented": 13,
         "items": 13,
@@ -394,7 +469,9 @@
       "semver": {
         "ok": true,
         "checks": 0,
+        "skipped": 0,
         "unpublished": true,
+        "baseline": "",
         "note": "not on crates.io yet \u2014 no baseline to break"
       }
     }

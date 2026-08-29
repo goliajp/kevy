@@ -103,8 +103,14 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("DECRBY",       WR, GROW, Some(N::String), None,    SERVER | ESTORE | REPLAY),
     op("GET",          RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
     op("GETDEL",       WR, NG,   Some(N::String), None,    SERVER | ESTORE | REPLAY),
-    op("GETEX",        WR, NG,   Some(N::String), None,    ESTORE),
-    op("GETRANGE",     RD, NG,   None,            None,    ESTORE),
+    // GETEX's notify column is None on purpose. Redis fires `expire`
+    // (class Generic) for the EX/PX form and nothing for the bare one;
+    // it never emits a `getex` event. This engine keys the event NAME
+    // off the verb, so any class here would publish a name Redis does
+    // not have. The column stayed Some(String) while the verb was
+    // ESTORE-only and nothing on the server could act on it.
+    op("GETEX",        WR, NG,   None,            None,    SERVER | ESTORE),
+    op("GETRANGE",     RD, NG,   None,            None,    SERVER | ESTORE),
     op("GETSET",       WR, GROW, Some(N::String), None,    SERVER | ESTORE | REPLAY),
     op("INCR",         WR, GROW, Some(N::String), None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
     op("INCRBY",       WR, GROW, Some(N::String), None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
@@ -115,21 +121,21 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("SET",          WR, GROW, Some(N::String), None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY | REWRITE),
     op("SETEX",        WR, GROW, Some(N::String), None,    SERVER),
     op("SETNX",        WR, GROW, Some(N::String), None,    SERVER | ESTORE),
-    op("SETRANGE",     WR, GROW, None,            None,    ESTORE | REPLAY),
+    op("SETRANGE",     WR, GROW, Some(N::String),            None,    SERVER | ESTORE | REPLAY),
     op("STRLEN",       RD, NG,   None,            None,    SERVER | ESTORE),
     // ---- bitmap (string-backed) ---------------------------------------
-    op("BITCOUNT",     RD, NG,   None,            None,    ESTORE),
-    op("BITOP",        WR, GROW, None,            None,    ESTORE),
-    op("BITPOS",       RD, NG,   None,            None,    ESTORE),
-    op("GETBIT",       RD, NG,   None,            None,    ESTORE),
-    op("SETBIT",       WR, GROW, None,            None,    ESTORE | REPLAY),
+    op("BITCOUNT",     RD, NG,   None,            None,    SERVER | ESTORE),
+    op("BITOP",        WR, GROW, None,            None,    SERVER | ESTORE),
+    op("BITPOS",       RD, NG,   None,            None,    SERVER | ESTORE),
+    op("GETBIT",       RD, NG,   None,            None,    SERVER | ESTORE),
+    op("SETBIT",       WR, GROW, Some(N::String),            None,    SERVER | ESTORE | REPLAY),
     // ---- hashes -------------------------------------------------------
     op("HDEL",         WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
     op("HEXISTS",      RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
     op("HGET",         RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
     op("HGETALL",      RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
     op("HINCRBY",      WR, GROW, Some(N::Hash),   None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
-    op("HINCRBYFLOAT", WR, GROW, None,            None,    ESTORE | REPLAY),
+    op("HINCRBYFLOAT", WR, GROW, Some(N::Hash),            None,    SERVER | ESTORE | REPLAY),
     op("HKEYS",        RD, NG,   None,            None,    SERVER | ESTORE),
     op("HLEN",         RD, NG,   None,            None,    SERVER | ESTORE),
     op("HMGET",        RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
@@ -143,6 +149,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("HPEXPIRE",     WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE),
     op("HPEXPIREAT",   WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE | REPLAY | REWRITE),
     op("HTTL",         RD, NG,   None,            None,    SERVER | ESTORE),
+    op("HPTTL",        RD, NG,   None,            None,    SERVER | ESTORE),
     op("HPERSIST",     WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE | REPLAY),
     op("HSETNX",       WR, GROW, Some(N::Hash),   None,    SERVER | ESTORE | REPLAY),
     op("HVALS",        RD, NG,   None,            None,    SERVER | ESTORE),
@@ -154,7 +161,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     // Blocking form notifies via its executed effect, not the verb.
     op("BRPOPLPUSH",   WR, GROW, None,            None,    SERVER),
     op("LINDEX",       RD, NG,   None,            None,    SERVER | ESTORE),
-    op("LINSERT",      WR, GROW, None,            None,    ESTORE | REPLAY),
+    op("LINSERT",      WR, GROW, Some(N::List),            None,    SERVER | ESTORE | REPLAY),
     op("LLEN",         RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
     op("LMOVE",        WR, GROW, Some(N::List),   None,    SERVER),
     op("LPOP",         WR, NG,   Some(N::List),   None,    SERVER | ESTORE | REPLAY),
@@ -203,7 +210,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("ZREM",         WR, NG,   Some(N::Zset),   None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
     op("ZREMRANGEBYRANK",  WR, NG, Some(N::Zset), None,    SERVER | ESTORE | REPLAY),
     op("ZREMRANGEBYSCORE", WR, NG, Some(N::Zset), None,    SERVER | ESTORE | REPLAY),
-    op("ZREVRANGE",    RD, NG,   None,            None,    ESTORE),
+    op("ZREVRANGE",    RD, NG,   None,            None,    SERVER | ESTORE),
     op("ZREVRANGEBYSCORE", RD, NG, None,          None,    SERVER | ESTORE),
     op("ZSCAN",        RD, NG,   None,            None,    SERVER | ESTORE),
     op("ZSCORE",       RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
@@ -233,7 +240,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("GEOSEARCH",    RD, NG,   None,            None,    SERVER),
     op("GEOSEARCHSTORE", WR, GROW, None,          None,    SERVER),
     // ---- keyspace -------------------------------------------------------
-    op("COPY",         WR, GROW, None,            None,    ESTORE),
+    op("COPY",         WR, GROW, None,            None,    SERVER | ESTORE),
     op("DBSIZE",       RD, NG,   None,            None,    SERVER | ESTORE),
     // CDC surface: FEED.* / PREFIX.STATS are namespaced commands;
     // embedded parity = changes_since / changes_tail / feed_shards /
@@ -252,6 +259,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("IDX.COUNT",    RD, NG,   None,            None,    SERVER | ESTORE),
     // IDX.VERIFY: server-only (embedded exposes idx_stats instead).
     op("IDX.VERIFY",   RD, NG,   None,            None,    SERVER),
+    op("IDX.EXPLAIN",  RD, NG,   None,            None,    SERVER),
     // Views (VIEW.* namespace; catalog ops are sidecar-persisted,
     // not data writes — same reasoning as IDX.*). VERIFY/REBUILD/
     // EXPLAIN are server-only (embedded rebuilds inline and exposes
@@ -297,8 +305,8 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("RENAME",       RD, NG,   None,            None,    SERVER | ESTORE | REPLAY),
     op("RENAMENX",     RD, NG,   None,            None,    SERVER | ESTORE | REPLAY),
     op("SCAN",         RD, NG,   None,            None,    SERVER | ESTORE),
-    op("TIME",         RD, NG,   None,            None,    ESTORE),
-    op("TOUCH",        RD, NG,   None,            None,    ESTORE),
+    op("TIME",         RD, NG,   None,            None,    SERVER | ESTORE),
+    op("TOUCH",        RD, NG,   None,            None,    SERVER | ESTORE),
     op("TTL",          RD, NG,   None,            None,    SERVER | ESTORE),
     op("TYPE",         RD, NG,   None,            None,    SERVER | ESTORE),
     op("UNLINK",       WR, NG,   Some(N::Generic), None,   SERVER | ESTORE),
@@ -311,21 +319,7 @@ pub const OP_TABLE: &[OpSpec] = &[
 /// missing), F3 = RESP-dispatch holes (facade exists, wire doesn't).
 pub const KNOWN_GAPS: &[(&str, u16, &str)] = &[
     // F3 — exists in kevy-store + embedded but not on the server wire.
-    ("SETBIT",   surface::SERVER, "F3: bitmap family unwired on RESP dispatch"),
-    ("GETBIT",   surface::SERVER, "F3"),
-    ("BITCOUNT", surface::SERVER, "F3"),
-    ("BITPOS",   surface::SERVER, "F3"),
-    ("BITOP",    surface::SERVER, "F3"),
-    ("GETRANGE", surface::SERVER, "F3"),
-    ("SETRANGE", surface::SERVER, "F3"),
-    ("LINSERT",  surface::SERVER, "F3"),
-    ("COPY",     surface::SERVER, "F3"),
-    ("TOUCH",    surface::SERVER, "F3"),
-    ("TIME",     surface::SERVER, "F3"),
-    ("GETEX",    surface::SERVER, "F3"),
-    ("ZREVRANGE", surface::SERVER, "F3: by-rank reverse range unwired (BYSCORE form exists)"),
     ("SSCAN",    surface::ESTORE, "manifest sweep 2026-07-03: scan/hscan/zscan facades exist, sscan missing"),
-    ("HINCRBYFLOAT", surface::SERVER, "F3"),
     // F2 — server-propagatable writes an embed-as-replica cannot
     // apply (replay verbs missing). Until closed, embed-as-replica is
     // only safe for the basic-type verb set.

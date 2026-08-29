@@ -53,6 +53,18 @@ pub use datetime_fmt::{
 /// → `Text`, boolean → `Bool`, and SQL `NULL` → `Null`. Types the
 /// engine refuses (money, inet, enum, …) never reach this crate.
 #[derive(Debug, Clone, PartialEq)]
+/// # Examples
+///
+/// ```
+/// use kevy_scalar::{Scalar, eval};
+/// // NULL is a value here, not an absence, and it PROPAGATES: a strict
+/// // function with a NULL argument answers NULL rather than erroring.
+/// assert_eq!(eval("upper", &[Scalar::Null]).unwrap(), Scalar::Null);
+/// assert_eq!(
+///     eval("upper", &[Scalar::Text("ada".into())]).unwrap(),
+///     Scalar::Text("ADA".into())
+/// );
+/// ```
 pub enum Scalar {
     /// SQL NULL. Propagates: any strict function with a NULL argument
     /// answers NULL (the null-family module documents its exceptions).
@@ -90,6 +102,14 @@ pub enum Scalar {
 impl Scalar {
     /// Whether this is SQL NULL.
     #[must_use]
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_scalar::Scalar;
+    /// assert!(Scalar::Null.is_null());
+    /// assert!(!Scalar::Int(0).is_null(), "zero is a value, not a NULL");
+    /// assert!(!Scalar::Text(String::new()).is_null(), "so is the empty string");
+    /// ```
     pub fn is_null(&self) -> bool {
         matches!(self, Scalar::Null)
     }
@@ -98,6 +118,14 @@ impl Scalar {
     /// empty string here — a caller that needs a `NULL` marker (the
     /// sqllogictest runner does) checks [`Scalar::is_null`] first.
     #[must_use]
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_scalar::Scalar;
+    /// assert_eq!(Scalar::Int(42).render(), "42");
+    /// assert_eq!(Scalar::Text("ada".into()).render(), "ada");
+    /// assert_eq!(Scalar::Bool(true).render(), "t", "PG's boolean output");
+    /// ```
     pub fn render(&self) -> String {
         strings::to_text(self)
     }
@@ -110,6 +138,19 @@ impl Scalar {
 /// failure is itself a gate failure), so the message must carry the
 /// function name verbatim.
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// # Examples
+///
+/// ```
+/// use kevy_scalar::{Scalar, ScalarError, eval};
+/// // A name this engine does not implement is refused BY NAME rather
+/// // than silently answering NULL.
+/// assert!(matches!(
+///     eval("no_such_fn", &[]),
+///     Err(ScalarError::UnknownFunction(_))
+/// ));
+/// // So is the wrong number of arguments.
+/// assert!(matches!(eval("md5", &[]), Err(ScalarError::Arity { .. })));
+/// ```
 pub enum ScalarError {
     /// No function with this name in the library. Field = the name.
     UnknownFunction(String),
@@ -164,6 +205,31 @@ impl std::error::Error for ScalarError {}
 /// identifiers). Strict NULL propagation is handled per-function in
 /// the modules: most functions answer `Null` when any argument is
 /// `Null`; `coalesce`/`greatest`/`least` and friends look through.
+/// # Examples
+///
+/// ```
+/// use kevy_scalar::{Scalar, eval};
+/// // Names fold case, as PG folds unquoted identifiers.
+/// assert_eq!(eval("UPPER", &[Scalar::Text("x".into())]).unwrap(), Scalar::Text("X".into()));
+///
+/// // Most functions are strict in NULL...
+/// assert_eq!(eval("length", &[Scalar::Null]).unwrap(), Scalar::Null);
+/// // ...and the null family looks through it, which is the point of it.
+/// assert_eq!(
+///     eval("coalesce", &[Scalar::Null, Scalar::Int(7)]).unwrap(),
+///     Scalar::Int(7)
+/// );
+///
+/// // The RFC 1321 vectors, lower-case hex as PG's md5() emits.
+/// assert_eq!(
+///     eval("md5", &[Scalar::Text(String::new())]).unwrap(),
+///     Scalar::Text("d41d8cd98f00b204e9800998ecf8427e".into())
+/// );
+/// assert_eq!(
+///     eval("md5", &[Scalar::Text("abc".into())]).unwrap(),
+///     Scalar::Text("900150983cd24fb0d6963f7d28e17f72".into())
+/// );
+/// ```
 pub fn eval(func: &str, args: &[Scalar]) -> Result<Scalar, ScalarError> {
     let name = func.to_ascii_lowercase();
     match name.as_str() {

@@ -241,10 +241,47 @@ def audit(suite, checks):
             bad.append(f"{tier}: declared durations sum to {total}s, over the "
                        f"{budgets[tier]}s budget — the tier stopped being what it claims")
 
+    # Every requirement must say where it is met, and every declaration must
+    # be for a requirement something asks for. Without this the manifest can
+    # name a requirement nothing satisfies and it is indistinguishable from
+    # one satisfied on a machine nobody is at — the NOT-RUN line says what is
+    # missing, never where the row does run.
+    # `advisory` means the row can never redden its tier, while its `proves`
+    # line goes on claiming something. This project already requires a reason
+    # attached to a waiver and to an accepted set-growth; the same rule, for
+    # the same reason: the exemption must not outlive whoever understood it.
+    for c in checks:
+        if c.get("advisory") and not c.get("advisory_reason", "").strip():
+            bad.append(f"{c['id']}: advisory = true with no advisory_reason — "
+                       f"a row that cannot fail must say why, and what would "
+                       f"end that")
+        if c.get("advisory_reason", "").strip() and not c.get("advisory"):
+            bad.append(f"{c['id']}: has an advisory_reason but is not advisory "
+                       f"— the reason outlived the exemption")
+
+    declared = suite.get("requirements", {})
+    used = {r for c in checks for r in c.get("requires", [])}
+    for r in sorted(used - set(declared)):
+        bad.append(f"requirement {r!r} is named by a check but not declared in "
+                   f"[suite.requirements] — nothing says where it is met")
+    for r in sorted(set(declared) - used):
+        bad.append(f"requirement {r!r} is declared but no check asks for it — "
+                   f"the list rotted")
+
     # No dark areas in full.
     covered = {c["area"] for c in checks}
     for area in sorted(AREAS - covered):
         bad.append(f"area {area!r} has no check at all — a dark corner")
+
+    nowhere = sorted(r for r, where in suite.get("requirements", {}).items()
+                     if not where.strip())
+    if nowhere:
+        by_req = {r: [c["id"] for c in checks if r in c.get("requires", [])]
+                  for r in nowhere}
+        print("suite audit: NOTE — requirement(s) declared as met nowhere:")
+        for r, who in by_req.items():
+            print(f"    ⊘ {r!r} — {', '.join(who)} runs in no environment this "
+                  f"project has")
 
     if bad:
         print(f"suite audit: FAIL — {len(bad)} problem(s)")
@@ -381,10 +418,19 @@ def run_tier(suite, checks, tier, only=None, area=None):
     if notrun:
         print("  not run here (loudly, not silently):")
         for c, _, _, why in notrun:
-            print(f"    ⊘ {c['id']}: {why}")
+            reqs = suite.get("requirements", {})
+            where = [reqs.get(r, "") for r in c.get("requires", [])]
+            where = [w for w in where if w]
+            tail = f"  — runs in: {'; '.join(sorted(set(where)))}" if where else \
+                   "  — runs in NO environment this project has"
+            print(f"    ⊘ {c['id']}: {why}{tail}")
     if advis:
         for c, _, _, why in advis:
             print(f"  △ advisory {c['id']}: {why.splitlines()[-1][:120] if why else ''}")
+            # Why it cannot redden the tier, at the moment it did not.
+            reason = " ".join(c.get("advisory_reason", "").split())
+            if reason:
+                print(f"      advisory because: {reason[:180]}")
     if fails:
         print("  failed:")
         for c, _, _, _ in fails:

@@ -235,11 +235,21 @@ pub(crate) fn block_ready<A: ArgvView + ?Sized>(
             .get(1)
             .is_some_and(|k| store.zcard(k).is_ok_and(|n| n > 0)),
         BlockKind::XReadBlock => {
-            // XREAD is read-only, so dispatching the replay is itself a
-            // safe peek: non-empty output ⇒ data is available.
+            // XREAD is read-only, so dispatching the replay is itself a safe
+            // peek. What it is NOT is empty when there is nothing: measured,
+            // `XREAD COUNT 1 STREAMS st 0` against a stream with no new
+            // entries writes `*-1\r\n`, the RESP nil array, five bytes. So
+            // `!tmp.is_empty()` was true for every armed XREAD — the peek
+            // always said ready.
+            //
+            // Nothing user-visible came of it: an end-to-end `XREAD BLOCK
+            // 1000` still blocks its full second, because a waiter woken with
+            // nothing to serve re-arms. The cost was a cross-shard signal and
+            // a re-arm per armed waiter, every time, for a question that was
+            // never actually being asked.
             let mut tmp = Vec::new();
             crate::dispatch::dispatch_into(ctx, store, serve_argv, &mut tmp);
-            !tmp.is_empty()
+            !tmp.is_empty() && tmp != b"*-1\r\n" && tmp != b"*0\r\n"
         }
         BlockKind::XReadGroupBlock => xreadgroup_ready(store, serve_argv),
     }
@@ -335,5 +345,60 @@ mod restore_tests {
         for kind in [BlockKind::XReadBlock, BlockKind::XReadGroupBlock, BlockKind::Brpoplpush] {
             assert!(block_restore_argv(&mut s, kind, b"q").is_none(), "{kind:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod ready_tests {
+    use super::*;
+
+    /// Every `BlockKind` arm of [`block_ready`], asked both ways.
+    ///
+    /// The arms are reachable in the wider suite only when a blocked client
+    /// of that particular kind happens to be served inside a test's window,
+    /// so how many of them execute is a matter of timing — this symbol grew
+    /// from 3 dead regions to 11 on a CI run that touched nothing near it.
+    /// Which kinds exist is not a matter of timing, and asking each one
+    /// directly costs nothing.
+    fn argv(parts: &[&[u8]]) -> Argv {
+        Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn every_block_kind_answers_both_ways() {
+        let kevy = crate::KevyCommands::default();
+        let ctx = kevy.ctx();
+        let mut s = Store::default();
+
+        // List kinds: ready exactly when the key has elements.
+        for kind in [BlockKind::Blpop, BlockKind::Brpop, BlockKind::Brpoplpush] {
+            assert!(!block_ready(&ctx, &mut s, &argv(&[b"BLPOP", b"missing"]), kind));
+        }
+        s.rpush(b"q", &[b"one" as &[u8]]).unwrap();
+        for kind in [BlockKind::Blpop, BlockKind::Brpop, BlockKind::Brpoplpush] {
+            assert!(block_ready(&ctx, &mut s, &argv(&[b"BLPOP", b"q"]), kind));
+        }
+
+        // Sorted-set kind: ready exactly when the zset has members.
+        assert!(!block_ready(&ctx, &mut s, &argv(&[b"BZPOPMIN", b"z"]), BlockKind::Bzpopmin));
+        s.zadd(b"z", &[(1.0, b"m" as &[u8])]).unwrap();
+        assert!(block_ready(&ctx, &mut s, &argv(&[b"BZPOPMIN", b"z"]), BlockKind::Bzpopmin));
+
+        // XREAD peeks by dispatching the read-only replay: empty output is
+        // "nothing yet", which is the only thing that makes the peek safe.
+        let xread = argv(&[b"XREAD", b"COUNT", b"1", b"STREAMS", b"st", b"0"]);
+        assert!(!block_ready(&ctx, &mut s, &xread, BlockKind::XReadBlock));
+        kevy.dispatch(&mut s, &argv(&[b"XADD", b"st", b"1-1", b"f", b"v"]));
+        assert!(block_ready(&ctx, &mut s, &xread, BlockKind::XReadBlock));
+
+        // XREADGROUP: a call too short to name a group is not ready, and
+        // cannot be — that guard is the first thing the arm does.
+        assert!(!block_ready(&ctx, &mut s, &argv(&[b"XREADGROUP"]), BlockKind::XReadGroupBlock));
+        let grouped = argv(&[
+            b"XREADGROUP", b"GROUP", b"g", b"c", b"COUNT", b"1", b"STREAMS", b"st", b">",
+        ]);
+        assert!(!block_ready(&ctx, &mut s, &grouped, BlockKind::XReadGroupBlock));
+        kevy.dispatch(&mut s, &argv(&[b"XGROUP", b"CREATE", b"st", b"g", b"0"]));
+        assert!(block_ready(&ctx, &mut s, &grouped, BlockKind::XReadGroupBlock));
     }
 }

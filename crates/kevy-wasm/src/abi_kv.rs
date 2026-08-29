@@ -270,10 +270,16 @@ pub unsafe extern "C" fn kevy_mget(h: u32, kp: *const u8, kl: u32, count: u32) -
         for _ in 0..count {
             // Each entry: a u32 length header, then that many key bytes.
             // A truncated buffer is a caller bug, not a miss — fail loudly.
-            let Some(hdr) = buf.get(off..off + 4) else { return ERR };
+            let Some(hdr) = off.checked_add(4).and_then(|e| buf.get(off..e)) else {
+                return ERR;
+            };
             let len = u32::from_le_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]) as usize;
             off += 4;
-            let Some(key) = buf.get(off..off + len) else { return ERR };
+            // See `unpack_argv`: on wasm32 this sum can overflow, and the
+            // wrap only lands on the right answer by accident.
+            let Some(key) = off.checked_add(len).and_then(|e| buf.get(off..e)) else {
+                return ERR;
+            };
             off += len;
             match inst.store.get(key) {
                 Ok(Some(v)) => {

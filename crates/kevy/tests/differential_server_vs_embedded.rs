@@ -115,10 +115,17 @@ const CORPUS: &[&str] = &[
     "ZADD z notanumber x",
     // keyspace
     "DBSIZE",
+    // A remaining-time read is a function of when it was asked, and this
+    // harness asks the two surfaces one after the other. PERSIST's own
+    // answer proves the deadline was set (1 = one removed); the TTL that
+    // follows is -1, which is about existence rather than the clock.
+    // `kevy-embedded/tests/dispatch_oracle.rs` solves the same problem the
+    // other way, with an IntSlack(1) tolerance — either is fine, comparing
+    // the live value byte-for-byte is not.
     "EXPIRE n 100",
-    "TTL n",
     "PERSIST n",
     "TTL n",
+    "TTL nosuchkey",
     "RENAME n n2",
     "GET n2",
     // index — dispatch/idx_create.rs against cmd_index.rs

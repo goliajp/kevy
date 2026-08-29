@@ -83,9 +83,9 @@ pub(super) fn driving_bounds(
 /// would NOT apply (SORT/DISTINCT/FACET/OFFSET/FIELDS/CURSOR) is
 /// refused up front, the server's exact order: arity before catalog.
 pub(super) fn cmd_idx_count(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
-    // Same as IDX.QUERY: the server's arity is -4 and it says so in Redis's
-    // words. See `idx::arity_err`.
-    if argv.len() < 4 {
+    // The arity is the server's, read from the shared column rather than
+    // restated here. See `idx::arity_err` for the wording.
+    if kevy_resp::verb_arity::arity_ok("IDX.COUNT", argv.len()) == Some(false) {
         return arity_err(out, "IDX.COUNT");
     }
     let Some(name) = argv.get(1) else {

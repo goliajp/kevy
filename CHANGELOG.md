@@ -1,5 +1,325 @@
 # Changelog
 
+## 6.0.0 — the instruments
+
+v6's charter is a clean architecture: solid stones, quality and documentation
+and performance at their limit, no dead code, no complex implementation of
+something a simple one already does. This release is the equipment for it,
+and the defects that building the equipment found.
+
+Nothing here is a compatibility break, and the evidence for that is not
+the one this section first cited. `cargo semver-checks` exits clean against
+5.4.1, but for a major bump it skips every lint it has — 254 per crate,
+because a major is allowed to break anything — so its verdict proves
+nothing about this release. `stonegate` now says so in as many words rather
+than folding it into PASS, and `stone_report.py` no longer passes the
+workspace version as the baseline, which asked the registry for a release
+that does not exist yet and returned "unpublished, 0 checks, ok" for all
+eighteen.
+
+What can be said is what the surface did: across the eighteen stones and
+every other crate, 1,871 public `fn`/`struct`/`enum`/`trait`/`const`/`type`
+names at 5.4.1 and the same 1,871 at 6.0.0 — none removed, none added.
+That reading is names, not signatures, and the extractor was checked by
+injecting two symbols into a copy of the 5.4.1 tree and confirming both
+appeared. The wire protocol, the on-disk formats and the replication stream
+are untouched. The major is the milestone's name, not a claim that an API
+moved.
+
+### Fixed
+
+- **A durable BITOP result that never reached a replica.** The
+  cross-shard destination was written to the AOF and not pushed to the
+  replication backlog, which the change feed also reads — one omission,
+  two faces. `propgate` caught it on the line: that gate exists because
+  three bugs of exactly this shape landed on one branch. The paired call
+  is `log_effect`; the test that shows it asserts the destination's
+  shard feed carries the key after a cross-shard `BITOP`, and was
+  verified failing before it was trusted.
+
+- **`MGET` errored where its own documentation said it answers nil.** The
+  embedded facade's doc comment reads "`None` per absent / wrong-type",
+  and the body propagated the store's `WrongType` with `?` — so a single
+  list among the keys turned the whole call into an error. Redis returns
+  nil for a key that does not hold a string and never errors there, which
+  is what the server's gather already did. The prose was right and the
+  code was not.
+
+- **Two error sentences the two surfaces did not agree on.** `SETRANGE`
+  with a non-integer offset answered "offset is out of range" on the
+  wire and "value is not an integer or out of range" in the facade;
+  Redis parses the offset first and rejects a negative one second, so
+  they are two refusals to two different questions and the wire had
+  folded them into one. `COPY` of a key onto itself was refused on the
+  wire and answered `:0` by the facade — the same reply a refused
+  overwrite gives, so a caller could not tell "you asked for something
+  impossible" from "the destination was already there".
+
+- **Thirteen never-executed regions in the hottest dispatch table.**
+  `dispatch_string`'s `GET` and `SET` arms cannot run: the tier-1 fast
+  path answers both and returns before the handler chain is walked, and
+  that function has one caller. The `GET` arm was a verbatim second copy
+  of the fast path's — the kind of duplicate that drifts in silence,
+  because neither half can ever be observed disagreeing with the other.
+
+- **Two `OP_TABLE` notification columns that had never been asked.**
+  `SETRANGE` was recorded as notifying nothing and `GETEX` as notifying
+  the string class; both columns were inert while the verbs were
+  embedded-only, and the parity test against `notify_class_for_verb`
+  caught them the moment they reached the server. `SETRANGE` notifies.
+  `GETEX` does not, and the row now says why: Redis fires `expire` for
+  its EX/PX form and nothing for the bare one, never `getex`, and this
+  engine keys the event name off the verb.
+
+- **Twelve of fourteen arity-guarded verbs told callers a command that
+  exists does not.** `IDX.QUERY` with too few arguments answered
+  `ERR unknown command 'IDX.QUERY'`. The routes guard on argument count
+  (`IDX.QUERY if args.len() >= 4`) and, when the guard misses, fall through
+  to the unhandled-verb path, which only asked whether the name was known
+  to the dispatch chain. It now consults the arity that `verb_meta` carried
+  all along, and answers `ERR wrong number of arguments` — Redis's
+  convention and this engine's own everywhere else.
+
+- **Fifteen published crates shipped code that cannot compile.** Their
+  `tests/` and `examples/` imported dev-dependencies declared only by path,
+  and `cargo package` drops a path-only dev-dependency while packaging the
+  sources that need it. 122 source files across those fifteen crates import
+  something their published manifest never declares; download kevy-bytes
+  5.4.1, run `cargo test` inside it, and its two get
+  `error[E0432]: unresolved import`. A dependent's build is unaffected —
+  dev-dependencies and examples are not compiled for a crate you depend on —
+  so this breaks precisely the person who *takes* the crate, which is the
+  claim `architecture.toml` makes about a stone. The stones
+  now declare those dependencies with versions; the crates that are not
+  meant to be built standalone exclude the sources instead. `packagegate`
+  holds it, computing the packaged set from git rather than from
+  `cargo package --list`, which needs every dependency resolvable and so
+  cannot run on the crate that is broken.
+
+- **Two surfaces answered the same typo differently.** Of 111 verbs reachable
+  through both the server and the embedded facade, 109 now reply byte for
+  byte on a wrong-arity call. The two that differ do so because their
+  signatures differ — the server shards, the facade does not.
+
+- **`replay_resync` kept its promise for one shape of corruption and
+  silently not for the other.** The option exists to recover the good tail
+  behind a mid-file corrupt region instead of stopping at it. A record
+  header is `len: u32` + `crc: u32`; when the CRC lies, the walk calls the
+  stop corrupt and resync hops the bad region and recovers everything behind
+  it. When the **length** lies — legal (`<= MAX_RECORD`) but larger than the
+  bytes that remain — the read comes up short, the walk calls that a torn
+  tail, and resync never ran at all. Everything behind the damage was lost,
+  `corrupt` stayed false so nothing warned, and the replay summary reported
+  the loss as *"trailing 27485178 bytes were a partial frame (crash
+  mid-append, recoverable)"* — twenty-seven megabytes described as a partial
+  frame.
+
+  Not a default-path loss: `replay_resync` is `false` (strict) unless turned
+  on, and strict replay stopping there is its contract. For anyone who did
+  turn it on, the recovery they opted into did nothing in one of the two
+  cases and said the file was fine.
+
+  Three fixes, and the third one reaches everybody:
+
+  1. Resync runs on any stop that is not clean — which is what the question
+     always was: is there anything valid after where we stopped. On a genuine
+     torn tail that costs a scan of the few bytes after the stop and applies
+     nothing. Both cases are pinned by name in `tests_aof.rs`, the second as
+     deliberately as the first.
+  2. `corrupt` is raised by a skipped range, not only by the stop reason. It
+     had recovered a tail and still reported the file healthy, against what
+     `docs/persistence.md` states: *"the `corrupt` flag stays raised: resync
+     recovers data, it does not declare the file healthy."*
+  3. **On the default path**, where `replay_resync` is off and the drop is
+     strict replay's contract, the operator was told the wrong reason for it.
+     A short read on the record HEADER is a torn append; a short read on the
+     PAYLOAD is a length the file could not honour. Both produced the same
+     verdict and the same sentence. They are separate now, and the new one
+     names the numbers — claimed X bytes with only Y left — and says which
+     option recovers what is behind it. No data moves; what moves is the
+     difference between *"your process died mid-write"* and *"something
+     corrupted this file"*.
+
+  Found because `crashgate`'s T6 cell had been failing about one CI run in
+  five while passing 28 runs and 65 splice positions on the bench box; the
+  splice produced a lying length sometimes and an out-of-range one otherwise.
+  The cell was right the whole time.
+
+- **A readiness peek that always said ready.** The cross-shard arming path
+  asks `block_ready` whether a parked waiter could be served now. Its XREAD
+  arm dispatched the frozen replay and treated any output as data — but
+  `XREAD` writes `*-1\r\n` when there is nothing new, so the condition was
+  true for every armed waiter, and the comment above it claimed the opposite.
+  Nothing user-visible followed (a waiter woken with nothing to serve
+  re-arms, and `XREAD BLOCK` still blocks its full timeout), but every armed
+  XREAD paid a cross-shard signal and a re-arm for a question that was never
+  asked. Same-shard blocking never went through this path.
+
+- **A backreference to an unset group** in the vendored regex engine, and a
+  stale committed `Cargo.lock` that only `--locked` could object to — and
+  `--locked` ran nowhere before the release image.
+
+### Added
+
+- **`CONFIG GET dir` answers with the directory the server writes to.**
+  A `Commands` implementation carries its own configuration, and
+  `Runtime::builder().with_data_dir()` set the runtime's — two things,
+  and nothing connected them. `kevy::serve` builds both from one
+  `Config` so the shipped binary never saw the gap; a server built
+  programmatically answered `.` while writing to a temp directory. One
+  face reporting what the other face was not doing. An `on_data_dir`
+  hook closes it, in the same additive shape as the trait's other
+  runtime-to-commands notifications, and it is a no-op wherever the two
+  already agreed.
+
+- **`INFO stats` reports `client_query_buffer_limit_disconnections`.**
+  Redis's counter, and it exists here because a test could not do its
+  job without it. The query-buffer guard closes a connection whose
+  accumulated unparsed input crosses the cap; the enforcement path
+  printed a line and marked the connection closing, and nothing could
+  be asked about it afterwards. So an intermittent "the server did not
+  close" could not be told from "the server decided and the close had
+  not landed" — two different defects wearing one sentence. The count
+  is of DECISIONS, taken where the cap is enforced.
+
+- **Fourteen Redis commands the engine already had, on the wire at last.**
+  `SETBIT` `GETBIT` `BITCOUNT` `BITPOS` `BITOP` `GETRANGE` `SETRANGE`
+  `LINSERT` `COPY` `TOUCH` `TIME` `GETEX` `ZREVRANGE` `HINCRBYFLOAT`.
+
+  Every one of them was implemented in `kevy-store` and answered by the
+  embedded facade; none of them reached a RESP client, which answered
+  `unknown command`. `ops_table::KNOWN_GAPS` had them registered as the
+  F3 family and nothing had come back to close it — a gap that had been
+  written down and then left, which reads from outside exactly like a
+  decision nobody made. The SERVER side of that ledger is now empty.
+
+  Eleven needed no routing change: `route_for_verb`'s default arm
+  already sends a verb with two or more arguments to its key's shard.
+  `TOUCH` is `EXISTS` in this engine — the facade's `touch` is
+  `self.exists(keys)`, because there is no idle clock to reset — so it
+  shares that arm rather than being a second implementation of it.
+
+  `COPY` and `BITOP` name more than one key and got orchestrators of
+  their own. **Cross-shard `COPY`** (`kevy-rt/src/exec_copy.rs`) is half
+  the length of the `RENAME` it is modelled on, because it clones rather
+  than takes: a refused put leaves both keys as they were, so there is no
+  rollback step and no data-loss window — the worst a crash between its
+  two steps can do is not write the destination. **Cross-shard `BITOP`**
+  (`exec_bitop.rs`) reads each source on its own shard, combines the
+  bytes on the shard that took the command, and writes the result on the
+  destination's; `args[1]` is the operator rather than a key, so the
+  catch-all route would have hashed the word `AND`.
+
+  `BitOp` and the byte arithmetic moved from `kevy-embedded` to
+  `kevy-store` on the way, because `kevy-rt` cannot reach a sibling
+  crate and copying the padding rules — the `0xff` tail `NOT` writes
+  past its source among them — would have made two implementations of
+  one operator. Both surfaces call one function now. `kevy-embedded`
+  re-exports `BitOp`, which has been part of its surface since 1.x.
+
+- **`kevy-bench` is published.** It was already a stone by every reading —
+  business-free, no dependencies, a measuring harness any project could
+  take — and four other stones dev-depend on it, which is why they could not
+  package until it existed on crates.io.
+
+- **The examples in the documentation are compiled and run.** Every test
+  invocation in this repository spelled `cargo test --workspace --lib
+  --tests`, and that pair is exactly the combination that excludes doctests;
+  `--doc` occurred nowhere in the tree. Ninety-nine doctests now run in CI,
+  on 65 public items — from 45 doctests on 18 items when the arc began. They
+  are written from measurements rather than from what the code looks like it
+  does, so kevy-geo's pin the geohash Redis publishes for the same fixture
+  and kevy-time's pin that adding a month to January 31 is not reversible.
+  Two were wrong when first written, and running them is what said so.
+
+- **Thirteen instruments and gauges**, and a mechanism underneath them. The
+  wall was 102 gate scripts and four baselines, every one of them a scalar
+  with a tolerance band, while v6's claims are about sets ("no dead paths"),
+  relations ("no redundant implementation") and independence ("a solid
+  stone"). A *set-ratchet* records identities rather than counts, so coverage
+  can hold at 79.64% while the identity of the uncovered fifth is completely
+  substituted and the ratchet still fires. Its baselines are envelopes over
+  three runs: growth means worse than the worst of three, not different from
+  one sample.
+
+  The thirteenth is `fuzzgate`, and it exists because the fuzz-smoke matrix
+  is hand-written and the tree had grown past it: twenty-three fuzz targets
+  under `crates/*/fuzz/`, fourteen in the matrix. Among the nine that never
+  ran were `kevy-compress/decode_arbitrary` and `kevy-seg/seg_open`, whose
+  whole job is to be fed arbitrary bytes. The first run of `decode_arbitrary`
+  found two defects in two minutes and CI found a third. A target that exists
+  and never runs is worse than one nobody wrote: the repository displays
+  coverage that is not there.
+
+### Changed
+
+- **`crashgate`'s T6 cell is a verdict, not a pending red.** A corrupt
+  frame mid-file must lose only the bad frame and not the good tail
+  behind it; the cell was marked `REDpending(T6)` while the resync path
+  was missing, and stayed marked after the fix landed because two green
+  runs prove little against a cell that passed 78% of the time on its
+  own. Nine consecutive CI runs on nine distinct commits are green now
+  — which is still not the argument, since nine could be luck about one
+  time in ten at that rate. The argument is the mechanism: resync ran
+  only on `CorruptFrame`, and a splice producing a length that was
+  valid but longer than the bytes remaining read as a torn tail, so
+  resync never started. That was reproduced by construction and fixed.
+  What the nine bought is the confidence to stop declaring and start
+  enforcing — a pending red absorbs the next regression silently, a
+  verdict shows it on the run that has it.
+
+- **Every public item is documented** — 2,661 of 2,661, from 93.9%. All 34
+  stone and steel crates are at 100%, and all 34 now hold it with
+  `#![warn(missing_docs)]`, so the next gap is a compile error naming a line
+  rather than a number that drifts. Five of them were at 100% with nothing
+  holding it, which is a state that lasts exactly until the next public item.
+
+- **The stone bar is measured on the platform that enforces it.** Code
+  switched off by `cfg` is absent from a coverage run rather than dead in
+  it, so a report taken on macOS could not see kevy-uring at all — the crate
+  is `#![cfg(target_os = "linux")]`. Two of its waivers said it had no tests;
+  on Linux it has fifteen and they pass.
+
+- **The stone bar carries no waivers at all**, from eleven. Two went with
+  that Linux reading. The other nine were a hand-written declaration of
+  something the gate can compute: `cargo package` strips path dependencies
+  and resolves what is left against crates.io, so between a version bump and
+  the publish that follows it, any crate with a version-gated sibling is
+  unliftable for that reason alone. stonegate now names those readings as
+  NOT TAKEN — by crate and by the dependency that could not be selected —
+  and says in its output that they are not passes. Unlike a waiver it cannot
+  outlive its cause: after the publish the version exists, and a crate that
+  still cannot lift fails there for real.
+
+- **The instruments were run against nothing, and six of them passed.** A
+  release named for its equipment has to point the equipment at itself. Each
+  gate was executed in a directory containing only its own script:
+  `locgate` and `commentgate` returned 0 over zero source files, `vendorgate`
+  printed *"PASS (0 artifacts current)"* while guarding the release layer
+  whose whole point is that the bytes ARE the version, `propgate` passed
+  *"0 durable-write call sites"*, `doc-i18n` reported *"ok: 0 translated
+  chapters, each with its English chapter"*, and `doc-toml` skipped and
+  returned 0 — which to a tier's verdict line is indistinguishable from
+  passing. All six have floors sized from what the tree holds, and their
+  pass lines carry the count, because "0 hits" and "0 hits across 709 files"
+  are different sentences.
+
+  Three more of the same shape were found and closed while the release was
+  being verified: `covgate` compared a macOS coverage figure to a Linux
+  baseline because the platform lived in the file's prose and not in its
+  data; a cancelled CI run published the repository's checked-in dead set as
+  though it were that run's measurement; and `setratchet`'s envelope path
+  would absorb any growth at all, in a file whose own docstring says a
+  ratchet that can be quietly reset is a ratchet in name only.
+
+- **Dead regions**, cut by measured ablation rather than by counting tests:
+  kevy-scalar 42.0% → 27.8%, the async client 70.5% → 39.3%, kevy-cli 42.4%
+  → 37.5%.
+
+- The suite is 84 checks across three tiers, from 74 — ten new rows, built
+  from thirteen new files: nine instruments and gauges, three gate scripts,
+  and `tools/setratchet.py`, which is the mechanism the last four rest on.
+
 ## 5.4.1 — the packed row, on
 
 5.4.0 shipped the packed row switched off, for three reasons. Each was then
