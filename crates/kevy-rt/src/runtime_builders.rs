@@ -132,6 +132,17 @@ impl<C: Commands> Runtime<C> {
     }
 
     /// Set the directory where shards snapshot to / load from. Default: `.`.
+    ///
+    /// This sets the RUNTIME's directory. It does not reach a
+    /// [`Commands`](crate::Commands) implementation's own configuration,
+    /// which is a separate object — so a server built this way answers
+    /// `CONFIG GET dir` from that config rather than from here, and the
+    /// two disagree unless the embedder sets both.
+    ///
+    /// `kevy::serve` builds both from one `Config`, so the shipped
+    /// binary never sees the gap; a programmatic build can, and a test
+    /// that used `CONFIG GET dir` to identify its own server found `.`
+    /// where it had passed a temp directory.
     #[must_use]
     pub fn with_data_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.data_dir = dir.into();
