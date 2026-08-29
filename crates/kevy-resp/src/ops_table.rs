@@ -125,7 +125,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("STRLEN",       RD, NG,   None,            None,    SERVER | ESTORE),
     // ---- bitmap (string-backed) ---------------------------------------
     op("BITCOUNT",     RD, NG,   None,            None,    SERVER | ESTORE),
-    op("BITOP",        WR, GROW, None,            None,    ESTORE),
+    op("BITOP",        WR, GROW, None,            None,    SERVER | ESTORE),
     op("BITPOS",       RD, NG,   None,            None,    SERVER | ESTORE),
     op("GETBIT",       RD, NG,   None,            None,    SERVER | ESTORE),
     op("SETBIT",       WR, GROW, Some(N::String),            None,    SERVER | ESTORE | REPLAY),
@@ -319,7 +319,6 @@ pub const OP_TABLE: &[OpSpec] = &[
 /// missing), F3 = RESP-dispatch holes (facade exists, wire doesn't).
 pub const KNOWN_GAPS: &[(&str, u16, &str)] = &[
     // F3 — exists in kevy-store + embedded but not on the server wire.
-    ("BITOP",    surface::SERVER, "F3"),
     ("SSCAN",    surface::ESTORE, "manifest sweep 2026-07-03: scan/hscan/zscan facades exist, sscan missing"),
     // F2 — server-propagatable writes an embed-as-replica cannot
     // apply (replay verbs missing). Until closed, embed-as-replica is

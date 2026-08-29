@@ -156,6 +156,10 @@ pub(crate) enum Op {
         ttl_ms: Option<u64>,
         nx: bool,
     },
+    /// Cross-shard BITOP step 2: store the combined bytes at `key`, or
+    /// delete `key` when they are empty. Reply [`Part::Int`] with the
+    /// stored length.
+    BitOpResult { key: Vec<u8>, value: Vec<u8> },
     /// Same-shard COPY: both keys hash here, so one atomic
     /// clone-then-put. Reply [`Part::CopyPutDone`].
     Copy { src: Vec<u8>, dst: Vec<u8>, replace: bool },

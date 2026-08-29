@@ -35,7 +35,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - [WASM / browser](docs/wasm.md) · [Electron apps](docs/electron.md) · [Tauri apps](docs/tauri.md) · [IoT / embedded tiers](docs/iot.md)
 - [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)
 
-## Verbs (204 total)
+## Verbs (205 total)
 
 ### scan
 
@@ -102,6 +102,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `APPEND key value` [write] — Append bytes to a string value; returns the new length.
   - complexity: O(1) amortised while the value is <= 64 B; O(N) per call once it exceeds that (the Arc payload is copied out and re-boxed on every append), so building a large string by repeated APPEND is O(N^2)
   - compat: full
+- `BITOP AND|OR|XOR|NOT destkey key [key ...]` [write] — Combine strings bitwise into a destination key.
+  - complexity: O(N) over the longest source; on a multi-shard server each source is read on its own shard and the result written on the destination's
+  - compat: differs: the DIFF / DIFF1 / ANDOR / ONE operators of Redis 8.2 are a syntax error
 - `BITCOUNT key [start end]` [readonly] — Count set bits in a string, optionally over a byte range.
   - complexity: O(N) over the counted bytes
   - compat: differs: the BYTE / BIT unit argument of Redis 7.0 is not accepted — ranges are byte offsets

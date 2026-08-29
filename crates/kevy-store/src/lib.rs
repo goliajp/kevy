@@ -87,10 +87,11 @@ impl Store {
         drop(old);
     }
 }
-mod bitmap;
+pub mod bitmap;
 mod clock;
 mod entry;
 mod error;
+pub use bitmap::{BitOp, bitop_combine};
 pub use error::{KevyError, KevyResult};
 pub mod evict;
 pub mod expire;

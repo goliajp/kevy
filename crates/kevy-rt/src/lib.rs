@@ -91,6 +91,7 @@ mod exec_client_intercept;
 mod exec_crossslot;
 mod exec_dispatch;
 mod exec_feed;
+mod exec_bitop;
 mod exec_copy;
 mod exec_fold;
 mod exec_geostore;

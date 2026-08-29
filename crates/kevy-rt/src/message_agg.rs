@@ -139,6 +139,17 @@ pub(crate) enum Agg {
     /// On step transitions, `finalize_watch_agg`'s sibling
     /// `finalize_rename_agg` re-arms `slot.remaining = 1` and ships
     /// the next Op.
+    /// `BITOP op dst src [src …]` — gather every source string on its
+    /// own shard, combine the bytes on the origin, then write the
+    /// result to the destination's shard. `keys` keeps the argv order,
+    /// which `got` cannot: a gather answers per shard, and BITOP NOT
+    /// and the zero-padding rules both depend on which source is which.
+    BitOpGather {
+        op: kevy_store::BitOp,
+        dst: Vec<u8>,
+        keys: Vec<Vec<u8>>,
+        got: HashMap<Vec<u8>, Gathered>,
+    },
     /// Cross-shard `COPY src dst [REPLACE]`. Step 1 clones the source
     /// on its shard; step 2 places the clone on the destination's. The
     /// two are not atomic together — a crash between them leaves the

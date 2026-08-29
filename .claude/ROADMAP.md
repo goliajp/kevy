@@ -174,11 +174,13 @@ suite 从 75 项到 **84** 项(precommit 23 ⊆ prerelease 40 ⊆ full 84)。
       读数:**共享面 123 个动词,119 驱动 + 4 具名**;线路差分 **167/174
       逐字节一致**,7 条背离全部具名。
       顺带查下去一层挖到的:`KNOWN_GAPS` 的 F3 一族是 **14 个引擎已实现、
-      门面能答、而 RESP 线路上根本不存在的 Redis 动词**。11 个已接线
-      (SETBIT/GETBIT/BITCOUNT/BITPOS/GETRANGE/SETRANGE/LINSERT/GETEX/
-      TIME/ZREVRANGE/HINCRBYFLOAT),剩 **BITOP / COPY / TOUCH** —— 它们各自
-      要一个跨分片路由决定,为了销一条登记而现编路由,是路由表长出没人选过
-      的形状的方式。
+      门面能答、而 RESP 线路上根本不存在的 Redis 动词**。**14 个全部接线,
+      SERVER 面的 F3 台账清零**。其中 11 个不需要任何路由改动(默认臂本来
+      就对);`TOUCH` 是 `EXISTS` 的别名(门面的 `touch` 就是
+      `self.exists(keys)`);`COPY` 与 `BITOP` 各写了跨分片编排
+      (`exec_copy.rs` / `exec_bitop.rs`)。BITOP 顺带把 `BitOp` 与
+      `bitop_combine` 从 `kevy-embedded` 下沉到 `kevy-store` —— 兄弟 crate
+      够不着,不下沉就得写第二份填充规则。
       `bench/FINDING-2026-08-28-two-surfaces-that-drifted.md`
       `bench/FINDING-2026-08-29-fourteen-verbs-the-engine-had-and-the-wire-did-not.md`
 - [x] **crashgate T6 查清了 —— cell 是对的,引擎是错的**。仪器(保住被丢弃的
