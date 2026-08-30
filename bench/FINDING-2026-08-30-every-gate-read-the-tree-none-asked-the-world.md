@@ -168,6 +168,41 @@ The fix therefore rides the next release. Cutting a 6.0.1 for one door
 would put the tree at two versions at once, which is the invariant the
 rest of this finding is about — that call belongs to the owner.
 
+## The eighth door, found by the gate itself
+
+With the seven registries green, `kevy.golia.jp` was still serving
+`{"version":"5.4.1","rev":"25f02fcb"}`. The site is a release door — it
+ships an engine and announces a version, and the release skill has said
+"rebuild and re-verify the site, then deploy it" all along. It was skipped
+the same way Maven was.
+
+Adding it to the gate turned the gate red on a door nobody had named:
+55 of 56. That is the first time it found something rather than confirming
+something already known.
+
+Nothing about that host can be checked by status code. Every path answers
+200 with the SPA index — a filename invented on the spot came back 200
+with the same 2396 bytes as the home page. The check is that
+`/build.json` parses as JSON and names the version, which the index
+cannot do.
+
+Rebuilding to deploy turned up a second thing. The locally built wasm
+carried **25 copies of `/Users/<name>/.rustup/...`**; the published one
+carries the `/rustc/<hash>/` form. Same command, no remap configured
+anywhere — the difference is that this machine has the `rust-src`
+component, so rustc resolves std's panic locations to the local toolchain
+source. CI has no rust-src and so never showed it, and the two artifacts
+differed by 4 KB for a reason nobody had looked at. Deploying it would
+have put the builder's home directory on a public website.
+`web/engine.mjs` now passes `--remap-path-prefix=$HOME=~`; the rebuilt
+artifact has zero occurrences of the name.
+
+Deployed and verified against the live host rather than the local build:
+`check.mjs` 768 pages, 17580 links, all at 6.0.0, byte-identical across
+two builds; `verify.mjs https://kevy.golia.jp` 28/28 in real Chromium;
+`/changelog/` a real page whose `<title>` is "Release notes · kevy" and
+which contains 6.0.0. The gate: **all 56 doors serve 6.0.0**.
+
 ## What is still deliberately unpublished
 
 `bindings/tauri/tauri-plugin-kevy` — its README installs it by path and
