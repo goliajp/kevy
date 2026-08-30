@@ -7,7 +7,16 @@
 //! as it was. These tests hold the line on both halves of that: that the
 //! skip is invisible, and that `-0.0 -> 0.0` is not a skip.
 //!
-//! See bench/PERF-DECOMP-2026-08-30-zadd-arena-cell.md.
+//! Each test here catches a different way the guard can be wrong, checked
+//! by writing each wrong version and watching the right tests go red:
+//!
+//! - compared with `==` instead of `total_cmp`: the two `-0.0` tests fail;
+//! - returning `true` instead of `false`: the two "invisible" tests fail;
+//! - guard removed entirely: **all pass**, correctly — the unconditional
+//!   remove-and-insert it replaces is semantically a no-op, only slow, so
+//!   no behavioural test can tell them apart. That is what makes it safe.
+//!
+//! See the ZADD decomposition under bench/.
 
 use crate::value::Value;
 use crate::zset_seg::Z_PROMOTE;
@@ -92,14 +101,19 @@ fn same_score_readd_is_invisible_seg() {
     // The fixture above scores member i at `i % 977`; for i = 7 that is 7.
     let score = 7.0;
     let rank_before = st.zrank(b"k", probe.as_bytes()).unwrap();
-    let len_before = st.zrange(b"k", 0, -1).unwrap().len();
+    // The whole order, not just its length. The skipped path would have
+    // removed the key from its segment and put it back, and a segment left
+    // holding one entry is destroyed and recreated on the way — so the
+    // question is whether the reading comes back identical, not whether it
+    // is the same size.
+    let order_before = st.zrange(b"k", 0, -1).unwrap();
 
     let added = st.zadd(b"k", &[(score, probe.as_bytes())]).unwrap();
     assert_eq!(added, 0);
 
     assert_eq!(st.zscore(b"k", probe.as_bytes()).unwrap(), Some(score));
     assert_eq!(st.zrank(b"k", probe.as_bytes()).unwrap(), rank_before);
-    assert_eq!(st.zrange(b"k", 0, -1).unwrap().len(), len_before);
+    assert!(st.zrange(b"k", 0, -1).unwrap() == order_before, "the order moved");
 }
 
 /// `-0.0` and `0.0` are equal under `f64`'s `==` and distinct under the
