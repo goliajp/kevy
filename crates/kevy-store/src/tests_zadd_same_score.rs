@@ -13,20 +13,46 @@ use crate::value::Value;
 use crate::zset_seg::Z_PROMOTE;
 use crate::Store;
 
-fn is_seg(st: &Store, key: &[u8]) -> bool {
-    matches!(st.map.get(key).map(|e| &e.value), Some(Value::SegZSet(_)))
+/// Which of the three sorted-set encodings a key is on, or `"absent"`.
+///
+/// One function with every arm rather than two `matches!` predicates,
+/// because deadgate names any symbol owning a never-executed region and a
+/// two-arm `matches!` that is only ever called where it is true owns one.
+/// The test below walks all four arms, which is both what keeps this out of
+/// the dead set and a statement of the encoding ladder these tests rely on.
+fn encoding(st: &Store, key: &[u8]) -> &'static str {
+    match st.map.get(key).map(|e| &e.value) {
+        None => "absent",
+        Some(Value::SmallZSetInline(_)) => "inline",
+        Some(Value::ZSet(_)) => "flat",
+        Some(Value::SegZSet(_)) => "seg",
+        Some(_) => "not-a-zset",
+    }
 }
 
-/// The heap-backed `ZSetData` — the one with `by_member` and `by_score` —
-/// as opposed to `SmallZSetInline`, which holds up to two short members
-/// packed in 22 bytes and has no ordered index to corrupt.
-///
-/// Every test here asserts its encoding. The first version of the -0.0 test
-/// below used two two-byte members, which fit inline, so it exercised
-/// `SmallZSetData::try_set` and passed against a deliberately broken guard
-/// in `ZSetData::insert`. A test that names a path has to prove it is on it.
-fn is_flat(st: &Store, key: &[u8]) -> bool {
-    matches!(st.map.get(key).map(|e| &e.value), Some(Value::ZSet(_)))
+/// The ladder itself: absent, then inline for two short members, then the
+/// heap-backed flat encoding, then segmented past `Z_PROMOTE`.
+#[test]
+fn the_encoding_ladder() {
+    let mut st = Store::new();
+    assert_eq!(encoding(&st, b"k"), "absent");
+
+    st.zadd(b"k", &[(1.0, b"a")]).unwrap();
+    assert_eq!(encoding(&st, b"k"), "inline", "one short member fits 22 bytes");
+
+    for m in [b"bb".as_ref(), b"cc", b"dd"] {
+        st.zadd(b"k", &[(1.0, m)]).unwrap();
+    }
+    assert_eq!(encoding(&st, b"k"), "flat", "past SMALL_ZSET_COUNT_MAX");
+
+    for i in 0..Z_PROMOTE {
+        let m = alloc::format!("member-{i:08}");
+        st.zadd(b"k", &[((i % 977) as f64, m.as_bytes())]).unwrap();
+    }
+    assert_eq!(encoding(&st, b"k"), "seg", "past Z_PROMOTE");
+
+    st.set(b"s", alloc::vec![b'x'; 4], None, false, false);
+    assert_eq!(encoding(&st, b"s"), "not-a-zset");
 }
 
 /// Re-adding at the same score changes nothing observable, on the Flat
@@ -38,13 +64,13 @@ fn same_score_readd_is_invisible_flat() {
     for (i, m) in [b"a".as_ref(), b"b", b"c", b"d", b"e"].iter().enumerate() {
         st.zadd(b"k", &[(i as f64, m)]).unwrap();
     }
-    assert!(is_flat(&st, b"k"), "fixture must be past the inline encoding");
+    assert_eq!(encoding(&st, b"k"), "flat", "fixture must be past the inline encoding");
     let before = st.zrange(b"k", 0, -1).unwrap();
 
     let added = st.zadd(b"k", &[(1.0, b"b")]).unwrap();
     assert_eq!(added, 0, "an existing member is not a new one");
 
-    assert!(is_flat(&st, b"k"));
+    assert_eq!(encoding(&st, b"k"), "flat");
     assert_eq!(st.zscore(b"k", b"b").unwrap(), Some(1.0));
     assert_eq!(st.zrank(b"k", b"b").unwrap(), Some(1));
     assert_eq!(st.zrange(b"k", 0, -1).unwrap(), before, "order moved");
@@ -60,10 +86,11 @@ fn same_score_readd_is_invisible_seg() {
         let m = alloc::format!("member-{i:08}");
         st.zadd(b"k", &[((i % 977) as f64, m.as_bytes())]).unwrap();
     }
-    assert!(is_seg(&st, b"k"), "the fixture must reach the Seg encoding");
+    assert_eq!(encoding(&st, b"k"), "seg", "the fixture must reach the Seg encoding");
 
     let probe = alloc::format!("member-{:08}", 7);
-    let score = (7 % 977) as f64;
+    // The fixture above scores member i at `i % 977`; for i = 7 that is 7.
+    let score = 7.0;
     let rank_before = st.zrank(b"k", probe.as_bytes()).unwrap();
     let len_before = st.zrange(b"k", 0, -1).unwrap().len();
 
@@ -91,7 +118,7 @@ fn negative_zero_to_positive_zero_is_a_real_update() {
     }
     // `lo` sits at -0.0 and `hi` at 0.0, so the pair orders lo, hi.
     st.zadd(b"k", &[(-0.0, b"lo"), (0.0, b"hi")]).unwrap();
-    assert!(is_flat(&st, b"k"), "fixture must be on the heap-backed encoding");
+    assert_eq!(encoding(&st, b"k"), "flat", "fixture must be on the heap-backed encoding");
     assert_eq!(
         st.zrange(b"k", 0, 1).unwrap().iter().map(|(m, _)| m.clone()).collect::<Vec<_>>(),
         alloc::vec![b"lo".to_vec(), b"hi".to_vec()],
@@ -117,7 +144,7 @@ fn negative_zero_to_positive_zero_is_a_real_update_seg() {
         let m = alloc::format!("member-{i:08}");
         st.zadd(b"k", &[((i % 977) as f64 + 1.0, m.as_bytes())]).unwrap();
     }
-    assert!(is_seg(&st, b"k"));
+    assert_eq!(encoding(&st, b"k"), "seg");
     // Two members at the bottom of the order, one at -0.0 and one at 0.0.
     st.zadd(b"k", &[(-0.0, b"zlo"), (0.0, b"zhi")]).unwrap();
     let first_two: Vec<Vec<u8>> =

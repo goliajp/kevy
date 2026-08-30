@@ -483,6 +483,9 @@ mod score_order_tests {
         assert!(Score(-0.0) != Score(0.0), "-0.0 must not equal 0.0");
         assert!(Score(-0.0).cmp(&Score(0.0)) == Ordering::Less);
         assert!(Score(-0.0) == Score(-0.0));
-        assert!(-0.0_f64 == 0.0_f64, "the f64 == this type must not use");
+        // The point of the assertion above: plain `-0.0 == 0.0` is true, so a
+        // derived PartialEq would have called these two the same score.
+        // Not written as an assertion, because clippy is right that
+        // asserting a constant tests nothing.
     }
 }
