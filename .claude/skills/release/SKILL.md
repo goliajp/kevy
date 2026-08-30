@@ -231,6 +231,44 @@ A soft 404 serves the home page with HTTP 200. A registry that has
 never heard of your package answers 404 while the *engine* is fine. Ask
 each channel what version it has, and read the answer.
 
+**Start here — it asks every door at once:**
+
+```sh
+python3 tools/check_channels_published.py          # newest v* tag
+```
+
+It derives the door list from the tree, so a binding added tomorrow is
+checked tomorrow with no edit. Exit 1 names the doors that do not serve
+the release; exit 2 means a registry gave no answer, which is a refusal
+and not a pass. `.github/workflows/channel-parity.yml` runs it daily.
+
+This exists because v6.0.0 was reported published and verified across
+"every channel" while six doors still served 5.1.0 and one — a package
+the Tauri README tells readers to install — had never been published at
+all. Every gate passed: they all read the tree, and the tree was
+internally consistent. What follows is how to check a single channel by
+hand when the tool names one.
+
+**Three doors need a machine, not a runner.** `expo-kevy`,
+`react-native-kevy-nitro` and `flutter_kevy` ship ~105 MB of prebuilt
+engine — xcframework slices and jniLibs — that are gitignored build
+outputs. On a clean runner `npm pack` produces a package declaring `ios`
+and `android` and containing neither, and npm accepts it; the publish step
+now refuses when what it would upload is less than half of what the
+registry already serves. Build them with `packaging/apple/build-xcframework.sh`
+and `packaging/android/build-*jnilibs.sh`, copy them into place, and run
+`python3 tools/check_version_alignment.py` **on that machine** — its layer 6
+sees all 17 artifacts only there, and it refuses one that names its builder.
+That check exists because every published mobile package up to 6.0.0 carries
+`/Users/<name>/.rustup/...`, up to 422 times in a slice.
+
+**Two doors do not open by themselves.** Maven Central is
+`workflow_dispatch` only and deliberately so — Central cannot be
+withdrawn — and pub.dev's first publish per package is manual. Dispatch
+`maven-central.yml` from the *tag* (the script enforces that; a branch is
+validate-only). Missing this step is how the Java door was left three
+releases behind, twice.
+
 ```sh
 # crates.io — every crate in the chain, not a sample
 python3 - <<'EOF'

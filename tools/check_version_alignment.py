@@ -33,6 +33,7 @@ Run: python3 tools/check_version_alignment.py
 """
 
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -231,6 +232,21 @@ def layer23_manifests(v: str, bad: list) -> int:
             checked += 1
             if m.group(1) != v:
                 bad.append(f"{f.relative_to(ROOT)}: <Version> {m.group(1)} != {v}")
+
+    # CMake's project() version — the format this gate had not been taught
+    # next. Nothing consumes it, which is exactly why it drifted quietly to
+    # three releases behind while every format above stayed current: a
+    # declaration nobody reads is still a declaration, and a reader who opens
+    # the file to learn which kevy this door speaks is told 5.0.0.
+    for f in sorted(ROOT.glob("bindings/**/CMakeLists.txt")):
+        if skip(f):
+            continue
+        m = re.search(r"^project\([^)]*?VERSION\s+(\d+\.\d+\.\d+)",
+                      f.read_text(encoding="utf-8"), re.M | re.S)
+        if m:
+            checked += 1
+            if m.group(1) != v:
+                bad.append(f"{f.relative_to(ROOT)}: project() VERSION {m.group(1)} != {v}")
     return checked
 
 
@@ -323,6 +339,26 @@ def layer6_vendored_bytes(v: str, bad: list) -> int:
             bad.append(
                 f"{p.relative_to(ROOT)}: engine bytes self-report {found or ['nothing']}, "
                 f"not {v} — rebuild and re-vendor (see the release skill)"
+            )
+        # And they must not say who built them. These files are shipped
+        # inside public npm and pub.dev packages; on a machine with the
+        # `rust-src` component rustc resolves std's panic locations to the
+        # local toolchain source, and the macOS xcframework slices carried
+        # 422 copies of /Users/<name>/.rustup/... into every release. The
+        # build scripts under packaging/ pass --remap-path-prefix now; this
+        # is what keeps it true.
+        #
+        # THIS machine's home, not any /Users/. The aarch64-apple-darwin
+        # compiler-builtins ships 343 paths under /Users/runner/work/rust —
+        # Rust's own build machine, present in every artifact for that
+        # target and not ours to remap. A check that flagged those would be
+        # red on a correct file, which is how a gate stops being read.
+        here = os.path.expanduser("~").encode()
+        if here != b"~" and here in out:
+            n = out.count(here)
+            bad.append(
+                f"{p.relative_to(ROOT)}: names its builder — {n} path(s) under "
+                f"this machine's home; rebuild with packaging/, which remaps $HOME"
             )
     return checked
 

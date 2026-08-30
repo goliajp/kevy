@@ -8,6 +8,14 @@
 # Needs an NDK (ANDROID_NDK_HOME, or the newest one under the default
 # macOS SDK path) and the rustup targets aarch64/x86_64-linux-android.
 set -euo pipefail
+
+# Keep the builder's home out of the artifact. These libraries are shipped
+# inside public npm and pub.dev packages, and on a machine with the
+# `rust-src` component rustc resolves std's panic locations to the local
+# toolchain source instead of the `/rustc/<hash>/` form official builds
+# carry — putting hundreds of copies of /Users/<name>/.rustup/... in a file
+# that goes to a registry. Who built it is not something it should say.
+REMAP="--remap-path-prefix=$HOME=~"
 cd "$(dirname "$0")/../.."
 
 NDK="${ANDROID_NDK_HOME:-$(ls -d "$HOME"/Library/Android/sdk/ndk/* 2>/dev/null | sort -V | tail -1)}"
@@ -20,7 +28,8 @@ API=24
 for triple in aarch64-linux-android x86_64-linux-android; do
   upper="$(echo "$triple" | tr '[:lower:]-' '[:upper:]_')"
   export "CARGO_TARGET_${upper}_LINKER=$BIN/${triple}${API}-clang"
-  cargo build -p kevy-jni --release --target "$triple"
+  RUSTFLAGS="${RUSTFLAGS:-} $REMAP" \
+    cargo build -p kevy-jni --release --target "$triple"
 done
 
 echo "jniLibs ready:"

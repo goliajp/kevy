@@ -10,6 +10,7 @@
 //
 // So web/package.json depends on `file:../crates/kevy-wasm/pkg`, and this
 // runs first to make sure the one file that is not checked in is there.
+import { homedir } from 'node:os'
 import { existsSync, statSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -33,7 +34,25 @@ if (!existsSync(wasm) || (existsSync(built) && statSync(built).mtimeMs > statSyn
   execFileSync(
     'cargo',
     ['build', '-p', 'kevy-wasm', '--target', 'wasm32-unknown-unknown', '--release'],
-    { cwd: join(here, '..'), stdio: 'inherit' },
+    {
+      cwd: join(here, '..'),
+      stdio: 'inherit',
+      // Remap the builder's home out of the artifact. This wasm is served
+      // from a public website, and on a machine with the `rust-src`
+      // component installed rustc resolves std's panic locations to the
+      // local toolchain source rather than the `/rustc/<hash>/` form the
+      // official builds carry — putting 25 copies of
+      // `/Users/<name>/.rustup/...` inside the file. CI has no rust-src, so
+      // it never showed there and the two artifacts differed by 4 KB for a
+      // reason nobody had looked at. Who built a public file is not
+      // something the file should say.
+      env: {
+        ...process.env,
+        RUSTFLAGS: [process.env.RUSTFLAGS ?? '', `--remap-path-prefix=${homedir()}=~`]
+          .join(' ')
+          .trim(),
+      },
+    },
   )
   execFileSync('cp', [built, wasm])
 }

@@ -14,11 +14,11 @@ import {
   replyString,
   replyInt,
   replyBytesList,
-} from './reply'
-import { PubsubMsg, Subscription } from './pubsub'
+} from './reply.js'
+import { PubsubMsg, Subscription } from './pubsub.js'
 
-export * from './reply'
-export * from './pubsub'
+export * from './reply.js'
+export * from './pubsub.js'
 
 const P = 'plugin:kevy|'
 

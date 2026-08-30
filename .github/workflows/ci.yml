@@ -6,10 +6,23 @@ on:
   pull_request:
     branches: [master, develop]
 
-# Cancel any in-flight runs for the same branch on a new push — saves
-# minutes on PRs that get force-pushed twice in a minute.
+# One run per branch. Keyed on the branch NAME, not on github.ref: a push
+# to feature/x is `refs/heads/feature/x` and the pull request for the same
+# commit is `refs/pull/N/merge`, so keying on the ref put them in different
+# groups and every PR ran the whole 58-job matrix twice, against the same
+# tree, competing for the same runners. Cancelling one by hand — twice in
+# one afternoon — is what turned this up; halving the queue took the second
+# run from 6 jobs in flight to 20.
+#
+# The cost, seen three times the afternoon this changed: the pull request
+# run sits in `pending` until the run it supersedes actually stops, and a
+# job that only notices cancellation at a checkpoint — fuzz-smoke,
+# crashgate, a client-conformance suite — can hold that for minutes. It
+# clears on its own; `gh run cancel <the superseded run>` clears it sooner.
+# Neither is a fault. It is what cancel-in-progress costs when the thing
+# being cancelled is not listening every second.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 env:
@@ -280,6 +293,13 @@ jobs:
       # a real valkey and a real redis rather than against kevy's own
       # second implementation. It said 98 in four documents while the
       # corpus drove 81; nothing had held it since a docs rewrite wrote it.
+      # flutter_kevy's changelog stopped at 5.3.0 while its pubspec was
+      # bumped twice. `dart pub publish` warns about it in a dry run
+      # nobody was reading, and pub.dev shows that file to whoever is
+      # deciding whether to depend on the package.
+      - name: door changelogs (each names the version its manifest ships)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python3 tools/check_door_changelogs.py
       - name: compat claim (the READMEs' command count is the corpus's)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_compat_claim.py
@@ -1240,6 +1260,38 @@ jobs:
         if: matrix.lang == 'tauri'
         working-directory: bindings/tauri/tauri-plugin-kevy
         run: cargo test
+
+      # The typed JS client the Tauri README tells readers to install. It was
+      # neither built nor typechecked here until 2026-08-30, which is the same
+      # shape as it never being published: a door the repository ships and does
+      # not exercise. `tsc` is both build and test — dist/ is what the
+      # package's `main` points at, so a build that produces nothing is a
+      # package that resolves to nothing.
+      - name: Tauri — typed JS client builds and typechecks
+        if: matrix.lang == 'tauri'
+        working-directory: bindings/tauri/guest-js
+        run: |
+          npm install --no-audit --no-fund
+          npm run typecheck
+          rm -rf dist
+          npm run build
+          test -f dist/index.js   || { echo "tsc produced no dist/index.js"; exit 1; }
+          test -f dist/index.d.ts || { echo "tsc produced no types"; exit 1; }
+          # And it has to actually import. The package declares "type":
+          # "module" but compiles under moduleResolution "Bundler", which
+          # permits extensionless relative imports — valid inside a bundler,
+          # rejected by Node's ESM resolver. 6.0.0 went to npm that way and
+          # `import { kevy } from 'tauri-plugin-kevy-api'`, the line its
+          # README teaches, threw ERR_MODULE_NOT_FOUND outside a bundler.
+          # tsc is happy either way, so tsc cannot be the check.
+          node -e "
+            import('./dist/index.js').then(m => {
+              for (const name of ['kevy', 'replyInt', 'KevyClient']) {
+                if (!(name in m)) { console.error('missing export: ' + name); process.exit(1); }
+              }
+              console.log('imports under plain Node ESM, exports intact');
+            }).catch(e => { console.error(e.code || e.message); process.exit(1); })
+          "
 
   # The Apple door needs a macOS runner, which is why it sat uncovered
   # while every other host-runnable door joined the matrix above: this is
