@@ -18,18 +18,18 @@ Redis クライアントがそのまま接続できます——こちら側に�
 
 | 言語 | インストール | バージョン |
 |---|---|---|
-| Rust | `cargo add kevy-embedded` | 6.0.0 |
-| Python | `pip install kevy` | 6.0.0 |
-| Go | `go get github.com/goliajp/kevy-go/v6` | 6.0.0 |
-| Java | Maven Central の `jp.golia:kevy` | 6.0.0 |
-| Node / TypeScript | `npm i @goliapkg/kevy-ts` | 6.0.0 |
-| ブラウザ（wasm） | `npm i @goliapkg/kevy` | 6.0.0 |
-| Flutter | `flutter pub add flutter_kevy` | 6.0.0 |
+| Rust | `cargo add kevy-embedded` | 6.1.0 |
+| Python | `pip install kevy` | 6.1.0 |
+| Go | `go get github.com/goliajp/kevy-go/v6` | 6.1.0 |
+| Java | Maven Central の `jp.golia:kevy` | 6.1.0 |
+| Node / TypeScript | `npm i @goliapkg/kevy-ts` | 6.1.0 |
+| ブラウザ（wasm） | `npm i @goliapkg/kevy` | 6.1.0 |
+| Flutter | `flutter pub add flutter_kevy` | 6.1.0 |
 
 ```xml
 <!-- Java、pom.xml に -->
 <dependency>
-  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>6.0.0</version>
+  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>6.1.0</version>
 </dependency>
 ```
 
