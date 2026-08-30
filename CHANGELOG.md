@@ -1,5 +1,55 @@
 # Changelog
 
+## 6.1.0 — what the release was actually checked by
+
+v6.0.0 shipped, and then the question was asked: which of the eighty-five
+checks in `suite/manifest.toml` had run against the tree it shipped from?
+**Thirty had no evidence either way.** The `full` tier last ran thirteen
+days earlier, when it held seventy-one. CI runs `suite.py --audit`, which
+verifies the manifest agrees with itself — the tree reading the tree.
+
+Twenty-three of the thirty could be run, and were. Sixteen gates that had
+never seen this tree came back green. **No engine defect.** Everything
+below is an instrument, a record, or a duplicate implementation.
+
+- **`drill_mailrs` was manufacturing the data loss it reported.** It said
+  crash-resume lost twelve thousand keys with zero errors. `wait $DPID`
+  cannot wait for a process started inside a `$( )` subshell, so the drill
+  wiped a data directory out from under a server still serving and bound a
+  new one on the same port beside it; kevy binds per shard with
+  SO_REUSEPORT, so the kernel split the importer's connections between the
+  two. Writes routed to the dying server were acknowledged and left with
+  it. Three mismatches in six runs before, nine clean runs after. The
+  engine was cleared separately: 1,000 pipelined SETs, 1,000 acks, DBSIZE
+  1000 on a fresh connection.
+- **`onrampgate` reported `import rate 0/s` for a server it never waited
+  for** — a fixed `sleep 1.2` against a start-up that took 14.8 seconds
+  here, with the server's own output sent to `/dev/null`. It waits for
+  accept now and keeps the log. This is the failure the 2026-08-17 full
+  run recorded and nobody revisited.
+- **`upgrade-prep` computed `6.-1.0`** — `major.(minor-1).0` is right from
+  5.3 to 5.2 and impossible for the first release of a major line, so the
+  gate that proves mixed-version interop could not run at exactly the
+  release that wants it most. It asks crates.io now.
+- **`kevy-vlog` carried a second CRC32C.** `kevy_sys::checksum` says in its
+  own docstring that it exists so no consumer re-owns the fallback, and
+  names this crate as one. Verified byte-identical over 3,075 inputs, then
+  removed. `kevy-persist` keeps its copy, which has a reason: it depends on
+  kevy-sys only off-wasm.
+- **Two unstable dead-set declarations were decorative.** `setratchet`
+  reads its exemptions from the baseline, deliberately, and they had only
+  ever reached the observed set — so a symbol proven to vary run to run was
+  still failing the gate. Two lines into the baseline, no recorded count
+  touched.
+- **`bump_version.py` knew fewer layers than the gate that checks it.** It
+  missed the three bindings tables and CMake's `project()` version; the
+  6.1.0 bump left twenty-five declarations behind and the alignment gate
+  caught them. Both tools read the same set of places now, which was the
+  stated reason the bump tool exists.
+
+The audit, including the instrument errors made while finding these, is in
+`bench/AUDIT-2026-08-30-what-v6-was-checked-by.md`.
+
 ## 6.0.0 — the instruments
 
 v6's charter is a clean architecture: solid stones, quality and documentation

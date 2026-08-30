@@ -6,12 +6,12 @@
 apply plugin: 'expo-module-gradle-plugin'
 
 group = 'jp.golia.kevy'
-version = '6.0.0'
+version = '6.1.0'
 
 android {
   namespace 'jp.golia.kevy.expo'
   defaultConfig {
     versionCode 1
-    versionName '6.0.0'
+    versionName '6.1.0'
   }
 }

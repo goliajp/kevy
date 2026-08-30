@@ -1,3 +1,43 @@
+## 6.1.0
+
+Tracks the kevy 6.1.0 engine. No API change in this door.
+
+* **The engine this door ships no longer names who built it.** Every
+  prebuilt `libkevy_ffi.so` carried the build machine's home directory —
+  27 paths per Android library — because a toolchain with the `rust-src`
+  component resolves std's panic locations to the local source tree.
+  `packaging/android/build-*jnilibs.sh` remaps it away now, and the
+  alignment gate refuses an artifact that names its builder.
+
+## 6.0.0
+
+Tracks the kevy 6.0.0 engine. No API change in this door.
+
+* **Fourteen commands reach the server wire.** `SETBIT`, `GETBIT`,
+  `BITCOUNT`, `BITPOS`, `BITOP`, `GETRANGE`, `SETRANGE`, `LINSERT`,
+  `COPY`, `TOUCH`, `TIME`, `GETEX`, `ZREVRANGE`, `HINCRBYFLOAT`. The
+  engine had always implemented them and this door's embedded half had
+  always answered them; a RESP client got `unknown command`. That is
+  closed, so the two halves of this door now answer the same set.
+
+* **A range past the end is empty.** `GETRANGE k 99 200` on a shorter
+  value, and `ZREVRANGE z 5 10` on a smaller set, answered the last
+  element where Redis answers nothing. Both halves of this door shared
+  the mistake, which is why comparing them did not find it — a
+  three-way differential against a real valkey did.
+
+* **`MGET` answers nil for a wrong-typed key** rather than failing the
+  whole call, which is what its own documentation always said.
+
+The vendored engine is rebuilt and self-reports 6.0.0.
+
+## 5.4.1, 5.4.0
+
+No entries were written for these. The door shipped with the version
+bumped and its changelog left at 5.3.0, which is what
+`tools/check_door_changelogs.py` now refuses: `dart pub publish` warns
+about it, and a warning nobody reads is how two releases went by.
+
 ## 5.3.0
 
 Tracks the kevy 5.3.0 engine. No API change in this door — 5.3's core
