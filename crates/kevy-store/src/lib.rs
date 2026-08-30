@@ -377,6 +377,8 @@ mod tests_memory;
 #[cfg(test)]
 mod tests_seg_map;
 #[cfg(test)]
+mod tests_zadd_same_score;
+#[cfg(test)]
 mod tests_zset_seg;
 #[cfg(test)]
 mod tests_snapshot;
