@@ -81,10 +81,6 @@ impl AtomicAllShards<'_> {
                 f(seg);
             }
         }
-        if found {
-            Ok(())
-        } else {
-            Err(crate::KevyError::NotFound("no such index".into()))
-        }
+        if found { Ok(()) } else { Err(crate::KevyError::NotFound("no such index".into())) }
     }
 }

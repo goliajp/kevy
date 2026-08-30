@@ -107,33 +107,26 @@ impl Server {
         let port = free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-xblock-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(NSHARDS)).bind([127, 0, 0, 1], port).shards(NSHARDS)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(NSHARDS))
+                .bind([127, 0, 0, 1], port)
+                .shards(NSHARDS)
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });
         kevy_testnet::assert_listening(port, "the server under test");
-        Self {
-            port,
-            dir,
-            stop,
-            handle: Some(handle),
-        }
+        Self { port, dir, stop, handle: Some(handle) }
     }
 
     fn connect(&self) -> std::net::TcpStream {
         let s = std::net::TcpStream::connect(("127.0.0.1", self.port)).unwrap();
-        s.set_read_timeout(Some(std::time::Duration::from_secs(8)))
-            .unwrap();
+        s.set_read_timeout(Some(std::time::Duration::from_secs(8))).unwrap();
         s
     }
 }
@@ -149,7 +142,6 @@ impl Drop for Server {
 }
 
 // ───────────── single-key, remote shard (the hang-bug fix) ─────────────
-
 
 #[test]
 fn a_disconnect_during_the_serve_does_not_lose_the_element() {
@@ -234,4 +226,3 @@ fn a_disconnect_during_the_serve_does_not_lose_the_element() {
     }
     panic!("no cross-shard placement in 25 attempts");
 }
-

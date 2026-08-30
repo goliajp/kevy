@@ -38,12 +38,7 @@ impl<C: Commands> Shard<C> {
     /// A write completed: advance progress; resubmit the remainder next loop.
     // LOC-WAIVER: hot write-completion state machine (chunked-writev
     // prefix drop / short-write linearize) — per-op critical path.
-    pub(crate) fn uring_on_write(
-        &mut self,
-        cid: u64,
-        res: i32,
-        io: &mut KevyMap<u64, UringConn>,
-    ) {
+    pub(crate) fn uring_on_write(&mut self, cid: u64, res: i32, io: &mut KevyMap<u64, UringConn>) {
         let Some(uc) = io.get_mut(&cid) else {
             return;
         };
@@ -70,8 +65,8 @@ impl<C: Commands> Shard<C> {
                 // Full chunk completed. Drop the processed-prefix arcs;
                 // advance write_off through the included header bytes.
                 let consumed = uc.arcs_in_flight;
-                let everything_done = consumed == uc.write_arcs.len()
-                    && uc.write_byte_cap == uc.write_buf.len();
+                let everything_done =
+                    consumed == uc.write_arcs.len() && uc.write_byte_cap == uc.write_buf.len();
                 if everything_done {
                     uc.write_buf.clear();
                     uc.write_arcs.clear();

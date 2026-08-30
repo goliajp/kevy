@@ -87,7 +87,6 @@ impl ClusterClient {
     pub fn shard_count(&self) -> usize {
         self.shards.len()
     }
-
 }
 
 // ───────────── command surface (routed) ─────────────
@@ -264,7 +263,9 @@ fn build_topology(ranges: &[SlotRange]) -> KevyResult<Topology> {
     let mut nodes: Vec<(String, u16)> = Vec::new();
     let mut slot_to_shard = vec![0u16; NUM_SLOTS];
     for r in ranges {
-        let idx = if let Some(i) = nodes.iter().position(|(h, p)| h == &r.host && *p == r.port) { i } else {
+        let idx = if let Some(i) = nodes.iter().position(|(h, p)| h == &r.host && *p == r.port) {
+            i
+        } else {
             nodes.push((r.host.clone(), r.port));
             nodes.len() - 1
         } as u16;
@@ -305,12 +306,7 @@ fn parse_cluster_slots(reply: Reply) -> KevyResult<Vec<SlotRange>> {
         {
             return Err(bad());
         }
-        out.push(SlotRange {
-            start: start as u16,
-            end: end as u16,
-            host,
-            port: port as u16,
-        });
+        out.push(SlotRange { start: start as u16, end: end as u16, host, port: port as u16 });
     }
     Ok(out)
 }
@@ -391,6 +387,8 @@ mod tests {
     fn rejects_empty_and_malformed() {
         assert!(parse_cluster_slots(Reply::Int(1)).is_err());
         assert!(build_topology(&[]).is_err());
-        assert!(parse_cluster_slots(Reply::Array(vec![Reply::Array(vec![Reply::Int(0)])])).is_err());
+        assert!(
+            parse_cluster_slots(Reply::Array(vec![Reply::Array(vec![Reply::Int(0)])])).is_err()
+        );
     }
 }

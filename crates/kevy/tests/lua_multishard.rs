@@ -20,8 +20,8 @@
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 /// All tests in this file share the process-global SCRIPT cache
@@ -31,9 +31,7 @@ use std::time::Duration;
 /// Serialize via this gate.
 fn gate() -> std::sync::MutexGuard<'static, ()> {
     static G: OnceLock<Mutex<()>> = OnceLock::new();
-    G.get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+    G.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(|p| p.into_inner())
 }
 
 use kevy_testnet::free_port;
@@ -50,10 +48,7 @@ impl Server {
         let port = free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-lua-multishard-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let mut cfg = kevy_config::Config::default();
@@ -68,18 +63,15 @@ impl Server {
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::with_state(state)).bind([127, 0, 0, 1], port).shards(nshards)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::with_state(state))
+                .bind([127, 0, 0, 1], port)
+                .shards(nshards)
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });
         for _ in 0..400 {
             if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-                return Server {
-                    port,
-                    dir,
-                    stop,
-                    handle: Some(handle),
-                };
+                return Server { port, dir, stop, handle: Some(handle) };
             }
             std::thread::sleep(Duration::from_millis(5));
         }
@@ -185,10 +177,7 @@ fn redlock_canonical_works_across_shards() {
         // canonical Redlock pattern. With conn-shard routing, the
         // unlock EVAL would land on the wrong shard and return 0
         // ("not my lock"), leaving the lock leaked.
-        assert_eq!(
-            s.req(&[b"SET", key.as_bytes(), token.as_bytes()]),
-            b"+OK\r\n"
-        );
+        assert_eq!(s.req(&[b"SET", key.as_bytes(), token.as_bytes()]), b"+OK\r\n");
         let r = s.req(&[b"EVAL", unlock_script, b"1", key.as_bytes(), token.as_bytes()]);
         assert_eq!(r, b":1\r\n", "redlock unlock returned wrong reply for {key}");
         assert_eq!(s.req(&[b"GET", key.as_bytes()]), b"$-1\r\n", "lock leaked");
@@ -249,7 +238,10 @@ fn route_eval_to_key1_shard() {
     a.push(b"mykey");
     let r = kevy::KevyCommands::new().route(&a);
     let s = format!("{r:?}");
-    assert!(s.contains("Single(3)"), "EVAL with numkeys=1 must Route::Single(3) (KEYS[1] at args[3]), got: {s}");
+    assert!(
+        s.contains("Single(3)"),
+        "EVAL with numkeys=1 must Route::Single(3) (KEYS[1] at args[3]), got: {s}"
+    );
 }
 
 #[test]

@@ -27,10 +27,7 @@ pub struct ReplyReadBuf {
 impl ReplyReadBuf {
     /// New buffer preallocated to `cap` bytes.
     pub fn with_capacity(cap: usize) -> Self {
-        Self {
-            buf: Vec::with_capacity(cap),
-            pos: 0,
-        }
+        Self { buf: Vec::with_capacity(cap), pos: 0 }
     }
 
     /// Parse one reply out of the unconsumed region.

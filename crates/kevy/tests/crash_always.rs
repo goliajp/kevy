@@ -15,7 +15,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use kevy_chaos::{Harness, HarnessConfig, KillSignal, WriterPool, pick_free_port, verify_all_present};
+use kevy_chaos::{
+    Harness, HarnessConfig, KillSignal, WriterPool, pick_free_port, verify_all_present,
+};
 
 #[test]
 #[ignore = "chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first"]

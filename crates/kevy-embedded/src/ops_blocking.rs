@@ -39,11 +39,7 @@ pub(crate) struct Blocker {
 
 impl Blocker {
     pub(crate) fn new() -> Self {
-        Self {
-            waiters: AtomicUsize::new(0),
-            generation: Mutex::new(0),
-            cv: Condvar::new(),
-        }
+        Self { waiters: AtomicUsize::new(0), generation: Mutex::new(0), cv: Condvar::new() }
     }
 
     /// Writer side — called from `commit_write`. One Relaxed load when
@@ -74,10 +70,7 @@ impl Blocker {
             }
             match deadline {
                 None => {
-                    g = self
-                        .cv
-                        .wait(g)
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    g = self.cv.wait(g).unwrap_or_else(std::sync::PoisonError::into_inner);
                 }
                 Some(d) => {
                     let now = Instant::now();
@@ -134,11 +127,7 @@ impl Store {
         timeout: Option<Duration>,
     ) -> KevyResult<Option<ZPopHit>> {
         self.block_on(keys, timeout, |s, k| {
-            Ok(s
-                .zpopmin(k, 1)?
-                .into_iter()
-                .next()
-                .map(|(m, sc)| (k.to_vec(), m, sc)))
+            Ok(s.zpopmin(k, 1)?.into_iter().next().map(|(m, sc)| (k.to_vec(), m, sc)))
         })
     }
 

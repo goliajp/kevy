@@ -110,7 +110,11 @@ pub unsafe extern "C" fn kevy_sub_next(sub: *mut KevySub, out: *mut KevyBuf) -> 
 /// # Safety
 /// `sub` must be live; `out` must point to writable [`KevyBuf`] storage.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn kevy_sub_wait(sub: *mut KevySub, timeout_ms: u64, out: *mut KevyBuf) -> i32 {
+pub unsafe extern "C" fn kevy_sub_wait(
+    sub: *mut KevySub,
+    timeout_ms: u64,
+    out: *mut KevyBuf,
+) -> i32 {
     if out.is_null() {
         return -1;
     }

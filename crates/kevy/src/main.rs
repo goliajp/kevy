@@ -72,9 +72,7 @@ fn die<E: std::fmt::Display, T>(e: E) -> T {
 fn validate_accept_shards(cfg: &Config, threads: usize) {
     let Some(n) = cfg.server.accept_shards else { return };
     if n == 0 || n > threads {
-        eprintln!(
-            "kevy: --accept-shards must be in 1..={threads}, got {n} (threads = {threads})"
-        );
+        eprintln!("kevy: --accept-shards must be in 1..={threads}, got {n} (threads = {threads})");
         std::process::exit(2);
     }
 }
@@ -152,22 +150,12 @@ Docs: https://github.com/goliajp/kevy"
 /// `--no-aof` all still work and override env + file values.
 fn parse_cli() -> (Option<PathBuf>, CliOverrides) {
     let config_path = arg_value("--config").map(PathBuf::from);
-    let aof = if std::env::args().any(|a| a == "--no-aof") {
-        Some(false)
-    } else {
-        None
-    };
-    let cluster = if std::env::args().any(|a| a == "--cluster") {
-        Some(true)
-    } else {
-        None
-    };
+    let aof = if std::env::args().any(|a| a == "--no-aof") { Some(false) } else { None };
+    let cluster = if std::env::args().any(|a| a == "--cluster") { Some(true) } else { None };
     let overrides = CliOverrides {
         bind: arg_value("--bind").and_then(|s| parse_ipv4(&s)),
         port: arg_value("--port").and_then(|s| s.parse().ok()),
-        threads: arg_value("--threads")
-            .and_then(|s| s.parse::<usize>().ok())
-            .filter(|&n| n > 0),
+        threads: arg_value("--threads").and_then(|s| s.parse::<usize>().ok()).filter(|&n| n > 0),
         accept_shards: arg_value("--accept-shards")
             .and_then(|s| s.parse::<usize>().ok())
             .filter(|&n| n > 0),

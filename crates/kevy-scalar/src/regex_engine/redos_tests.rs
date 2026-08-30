@@ -61,10 +61,7 @@ mod redos_tests {
             })
             .expect("spawn");
         let res = handle.join().expect("match thread must not overflow/panic");
-        assert!(
-            res.is_err(),
-            "over-deep match must abort with a clean error"
-        );
+        assert!(res.is_err(), "over-deep match must abort with a clean error");
     }
 
     // (b) An `{m,n}` bound with n > REPEAT_MAX (65535) is rejected as
@@ -86,14 +83,8 @@ mod redos_tests {
     fn redos_normal_bounds_match_correctly() {
         let node = re_compile("^a{1,5}$").expect("compiles");
         // 3 and 5 a's match; 0 and 6 do not.
-        assert_eq!(
-            re_find(&node, &chars("aaa"), 0).unwrap(),
-            Some((0, 3))
-        );
-        assert_eq!(
-            re_find(&node, &chars("aaaaa"), 0).unwrap(),
-            Some((0, 5))
-        );
+        assert_eq!(re_find(&node, &chars("aaa"), 0).unwrap(), Some((0, 3)));
+        assert_eq!(re_find(&node, &chars("aaaaa"), 0).unwrap(), Some((0, 5)));
         assert_eq!(re_find(&node, &chars(""), 0).unwrap(), None);
         assert_eq!(re_find(&node, &chars("aaaaaa"), 0).unwrap(), None);
 
@@ -112,10 +103,7 @@ mod redos_tests {
     #[test]
     fn redos_stray_brace_is_literal() {
         let node = re_compile("a{foo").expect("stray brace compiles as literal");
-        assert_eq!(
-            re_find(&node, &chars("a{foo"), 0).unwrap(),
-            Some((0, 5))
-        );
+        assert_eq!(re_find(&node, &chars("a{foo"), 0).unwrap(), Some((0, 5)));
     }
 
     // A legitimately (but not pathologically) nested pattern still
@@ -161,11 +149,7 @@ mod redos_tests {
         // how large the combinatorial space is, so this is well under a
         // second; a generous ceiling guards against a wiring regression
         // (an unbounded matcher would run for many minutes / never).
-        assert!(
-            elapsed.as_secs() < 10,
-            "budget-exceeded abort must be fast, took {:?}",
-            elapsed
-        );
+        assert!(elapsed.as_secs() < 10, "budget-exceeded abort must be fast, took {:?}", elapsed);
     }
 
     // (b) A long but non-pathological input matches correctly — a linear

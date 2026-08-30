@@ -106,11 +106,7 @@ fn embed_row(n: usize) -> Row {
             let _ = s.get(k);
         }
     });
-    Row {
-        label: "kevy embed",
-        set_rps: rate(n, dt_set),
-        get_rps: rate(n, dt_get),
-    }
+    Row { label: "kevy embed", set_rps: rate(n, dt_set), get_rps: rate(n, dt_get) }
 }
 
 fn server_row(label: &'static str, url: &str, n: usize) -> Row {
@@ -118,11 +114,7 @@ fn server_row(label: &'static str, url: &str, n: usize) -> Row {
         Ok(c) => c,
         Err(e) => {
             eprintln!("  [{label}] open {url} failed: {e}");
-            return Row {
-                label,
-                set_rps: 0.0,
-                get_rps: 0.0,
-            };
+            return Row { label, set_rps: 0.0, get_rps: 0.0 };
         }
     };
     let keys = make_keys(&format!("k:{label}:"), n);
@@ -139,28 +131,18 @@ fn server_row(label: &'static str, url: &str, n: usize) -> Row {
             let _ = conn.get(k);
         }
     });
-    Row {
-        label,
-        set_rps: rate(n, dt_set),
-        get_rps: rate(n, dt_get),
-    }
+    Row { label, set_rps: rate(n, dt_set), get_rps: rate(n, dt_get) }
 }
 
 fn print_table(rows: &[Row]) {
     println!();
-    println!(
-        "| {:<22} | {:>14} | {:>14} |",
-        "backend", "SET ops/s", "GET ops/s"
-    );
+    println!("| {:<22} | {:>14} | {:>14} |", "backend", "SET ops/s", "GET ops/s");
     println!("|{:-<24}|{:->16}|{:->16}|", "", "", "");
     for r in rows {
         if r.set_rps == 0.0 && r.get_rps == 0.0 {
             println!("| {:<22} | {:>14} | {:>14} |", r.label, "(skipped)", "(skipped)");
         } else {
-            println!(
-                "| {:<22} | {:>14.0} | {:>14.0} |",
-                r.label, r.set_rps, r.get_rps
-            );
+            println!("| {:<22} | {:>14.0} | {:>14.0} |", r.label, r.set_rps, r.get_rps);
         }
     }
 }
@@ -173,25 +155,13 @@ fn main() {
         rows.push(embed_row(a.n));
     }
     if let Some(p) = a.kevy_port {
-        rows.push(server_row(
-            "kevy server (Rust)",
-            &format!("kevy://127.0.0.1:{p}"),
-            a.n,
-        ));
+        rows.push(server_row("kevy server (Rust)", &format!("kevy://127.0.0.1:{p}"), a.n));
     }
     if let Some(p) = a.valkey_port {
-        rows.push(server_row(
-            "valkey 9.1 (Rust)",
-            &format!("redis://127.0.0.1:{p}"),
-            a.n,
-        ));
+        rows.push(server_row("valkey 9.1 (Rust)", &format!("redis://127.0.0.1:{p}"), a.n));
     }
     if let Some(p) = a.redis_port {
-        rows.push(server_row(
-            "redis 7.4 (Rust)",
-            &format!("redis://127.0.0.1:{p}"),
-            a.n,
-        ));
+        rows.push(server_row("redis 7.4 (Rust)", &format!("redis://127.0.0.1:{p}"), a.n));
     }
     print_table(&rows);
 }

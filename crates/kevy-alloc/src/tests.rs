@@ -8,9 +8,9 @@
 //! that says it did not run.
 
 use crate::class;
+use crate::class::SPAN_BYTES;
 use crate::heap::Heap;
 use crate::os;
-use crate::class::SPAN_BYTES;
 
 /// Skip the body on targets without anonymous mapping.
 macro_rules! require_mapping {
@@ -218,9 +218,8 @@ fn reclaimed_spans_are_reusable_and_start_clean() {
     let mut heap = Heap::new(0);
     let size = 64;
     let per_span = class::slots_per_span(class::index_of(size, 8).unwrap());
-    let mut given: Vec<_> = (0..per_span * 12)
-        .map(|_| heap.alloc(size, 8).expect("filling spans"))
-        .collect();
+    let mut given: Vec<_> =
+        (0..per_span * 12).map(|_| heap.alloc(size, 8).expect("filling spans")).collect();
     // Poison every byte so a reclaimed-and-reused span that failed to
     // reset its cursors would hand back recognisable garbage.
     for p in &given {
@@ -314,9 +313,8 @@ fn spans_with_room_are_reused_before_new_ones_are_claimed() {
     // Fill one span exactly, then free every slot in it. The freed slots
     // land on *that* span's list — not on the current span's, because
     // the next allocation will have moved on.
-    let first: Vec<_> = (0..per_span)
-        .map(|_| heap.alloc(size, 8).expect("filling the first span"))
-        .collect();
+    let first: Vec<_> =
+        (0..per_span).map(|_| heap.alloc(size, 8).expect("filling the first span")).collect();
     // One more allocation forces a second span to be claimed.
     let straggler = heap.alloc(size, 8).expect("second span");
     for p in first {
@@ -327,9 +325,8 @@ fn spans_with_room_are_reused_before_new_ones_are_claimed() {
 
     // Now allocate a whole span's worth again. Every one of these can be
     // served from the emptied first span.
-    let again: Vec<_> = (0..per_span)
-        .map(|_| heap.alloc(size, 8).expect("reusing the emptied span"))
-        .collect();
+    let again: Vec<_> =
+        (0..per_span).map(|_| heap.alloc(size, 8).expect("reusing the emptied span")).collect();
     let after = heap.snapshot();
 
     assert_eq!(
@@ -364,9 +361,8 @@ fn a_foreign_free_leaves_the_owner_balanced_before_and_after_draining() {
     let mut other = Heap::new(2);
 
     let size = 400;
-    let held: Vec<_> = (0..1_000)
-        .map(|_| owner.alloc(size, 8).expect("owner serves these"))
-        .collect();
+    let held: Vec<_> =
+        (0..1_000).map(|_| owner.alloc(size, 8).expect("owner serves these")).collect();
     let full = owner.snapshot();
     assert_eq!(full.live, 1_000 * size as u64);
     assert!(full.balanced(), "{full:?}");
@@ -400,7 +396,11 @@ fn a_foreign_free_leaves_the_owner_balanced_before_and_after_draining() {
         1_000,
         "every slot is either parked (shipped) or still covered as live (pending): {mid:?}"
     );
-    assert_eq!(mid.rounding, pending * (slot - size as u64), "pending rounding rides with pending live");
+    assert_eq!(
+        mid.rounding,
+        pending * (slot - size as u64),
+        "pending rounding rides with pending live"
+    );
 
     // The freeing side's tick flushes the ring; now everything is
     // parked on the owner.
@@ -430,9 +430,8 @@ fn v2_pages_return_while_the_span_still_lives() {
     let size = 400;
     let slot = class::size_of(class::index_of(size, 8).unwrap());
     let per_span = class::slots_per_span(class::index_of(size, 8).unwrap());
-    let given: Vec<_> = (0..per_span)
-        .map(|_| heap.alloc(size, 8).expect("filling one span"))
-        .collect();
+    let given: Vec<_> =
+        (0..per_span).map(|_| heap.alloc(size, 8).expect("filling one span")).collect();
     // Keep everything whose slot touches the last page; free the rest.
     let last_page_start = (crate::pagemap::PAGES_PER_SPAN - 1) * os::PAGE;
     let mut survivors = Vec::new();
@@ -489,9 +488,7 @@ fn v2_densification_migrates_free_space_into_whole_pages() {
     let size = 400;
     let c = class::index_of(size, 8).unwrap();
     let per_span = class::slots_per_span(c);
-    let mut live: Vec<_> = (0..per_span * 4)
-        .map(|_| heap.alloc(size, 8).expect("fill"))
-        .collect();
+    let mut live: Vec<_> = (0..per_span * 4).map(|_| heap.alloc(size, 8).expect("fill")).collect();
     // Rounds of "half die, a quarter arrive": net shrinkage under a
     // death order that decorrelates from slot position as reallocated
     // (low) slots mix into the vec.
@@ -586,9 +583,8 @@ fn spliced_chains_from_two_freeing_heaps_arrive_complete() {
     let mut c = Heap::new(3);
     let size = 400;
     let n = 600; // several batches' worth from each side
-    let held: Vec<_> = (0..n * 2)
-        .map(|_| owner.alloc(size, 8).expect("owner serves these"))
-        .collect();
+    let held: Vec<_> =
+        (0..n * 2).map(|_| owner.alloc(size, 8).expect("owner serves these")).collect();
     for (i, p) in held.into_iter().enumerate() {
         // SAFETY: ours, this size and alignment; alternating freers.
         unsafe {
@@ -613,14 +609,9 @@ fn spliced_chains_from_two_freeing_heaps_arrive_complete() {
     assert!(settled.balanced(), "{settled:?}");
     // And the memory is genuinely reusable: refill without new segments.
     let before_spans = settled.spans_assigned;
-    let again: Vec<_> = (0..n * 2)
-        .map(|_| owner.alloc(size, 8).expect("drained slots serve again"))
-        .collect();
-    assert_eq!(
-        owner.snapshot().spans_assigned,
-        before_spans,
-        "drained slots were not reused"
-    );
+    let again: Vec<_> =
+        (0..n * 2).map(|_| owner.alloc(size, 8).expect("drained slots serve again")).collect();
+    assert_eq!(owner.snapshot().spans_assigned, before_spans, "drained slots were not reused");
     for p in again {
         // SAFETY: ours.
         unsafe { owner.dealloc(p, size, 8) };

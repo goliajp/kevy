@@ -106,16 +106,12 @@ impl CatalogState {
     /// Record one refused declaration family; returns its count
     /// after this observation (the auto loop's threshold input).
     pub(crate) fn advise_observe(&self, name: &[u8], shape: AdviseShape, argv: &[Vec<u8>]) -> u64 {
-        self.advise
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .observe(name, shape, argv)
+        self.advise.lock().unwrap_or_else(PoisonError::into_inner).observe(name, shape, argv)
     }
 
     /// Is `name` a path the auto loop declared (any table's ledger)?
     pub(crate) fn is_auto_path(&self, name: &[u8]) -> bool {
-        self.table()
-            .is_some_and(|c| c.iter().any(|s| s.auto_added.iter().any(|e| e == name)))
+        self.table().is_some_and(|c| c.iter().any(|s| s.auto_added.iter().any(|e| e == name)))
     }
 
     /// Snapshot the observed refusal families, most-refused first.
@@ -136,10 +132,7 @@ impl CatalogState {
 
     /// Snapshot the current index catalog (None = empty).
     pub(crate) fn index(&self) -> Option<Arc<Catalog>> {
-        self.index
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.index.read().unwrap_or_else(PoisonError::into_inner).clone()
     }
 
     /// Is at least one index declared? Cold-path input to the
@@ -172,10 +165,7 @@ impl CatalogState {
 
     /// Snapshot the current view catalog (None = empty).
     pub(crate) fn view(&self) -> Option<Arc<ViewCatalog>> {
-        self.view
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.view.read().unwrap_or_else(PoisonError::into_inner).clone()
     }
 
     /// Is at least one view declared? Cold-path input to the
@@ -200,10 +190,7 @@ impl CatalogState {
 
     /// Snapshot the current table catalog (None = empty).
     pub(crate) fn table(&self) -> Option<Arc<TableCatalog>> {
-        self.table
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.table.read().unwrap_or_else(PoisonError::into_inner).clone()
     }
 }
 
@@ -215,11 +202,7 @@ impl RuntimeState {
     /// next command).
     pub(crate) fn install_index_catalog(&self, c: Catalog) {
         let names: Vec<Vec<u8>> = c.iter().map(|(s, _)| s.name.clone()).collect();
-        *self
-            .catalogs
-            .index
-            .write()
-            .unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(c));
+        *self.catalogs.index.write().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(c));
         self.catalogs.index_gen.fetch_add(1, Ordering::Release);
         self.bump_control_epoch();
         self.catalogs.advise_clear();
@@ -229,11 +212,7 @@ impl RuntimeState {
     /// Swap in a new view catalog — same protocol as
     /// [`Self::install_index_catalog`].
     pub(crate) fn install_view_catalog(&self, c: ViewCatalog) {
-        *self
-            .catalogs
-            .view
-            .write()
-            .unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(c));
+        *self.catalogs.view.write().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(c));
         self.catalogs.view_gen.fetch_add(1, Ordering::Release);
         self.bump_control_epoch();
     }
@@ -241,11 +220,7 @@ impl RuntimeState {
     /// Swap in a new table catalog, and tell the shards a declaration
     /// changed so the packing backfill picks up the rows that preceded it.
     pub(crate) fn install_table_catalog(&self, c: TableCatalog) {
-        *self
-            .catalogs
-            .table
-            .write()
-            .unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(c));
+        *self.catalogs.table.write().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(c));
         self.catalogs.table_gen.fetch_add(1, Ordering::Release);
         self.catalogs.advise_clear();
     }

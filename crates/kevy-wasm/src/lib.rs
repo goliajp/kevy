@@ -160,8 +160,7 @@ impl Instance {
         if !self.capture_aof {
             return;
         }
-        let argv =
-            kevy_persist::Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>());
+        let argv = kevy_persist::Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>());
         // Vec is an infallible Write.
         match self.aof_format {
             kevy_persist::AofFormat::V1 => {
@@ -191,7 +190,9 @@ impl Instance {
 /// this door surfaces exactly the wording a native kevy would.
 fn store_err_canonical(e: &StoreError) -> &'static str {
     match e {
-        StoreError::WrongType => "WRONGTYPE Operation against a key holding the wrong kind of value",
+        StoreError::WrongType => {
+            "WRONGTYPE Operation against a key holding the wrong kind of value"
+        }
         StoreError::NotInteger => "ERR value is not an integer or out of range",
         StoreError::Overflow => "ERR increment or decrement would overflow",
         StoreError::OutOfRange => "ERR index out of range",

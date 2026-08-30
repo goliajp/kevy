@@ -18,18 +18,18 @@ impl Store {
         match self.tier_serve(key, crate::value::COLD_TAG_HASH)? {
             None => Ok(None),
             Some(e) => match &e.value {
-                Value::Hash(h) => Ok(Some(
-                    h.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect(),
-                )),
-                Value::SegHash(h) => Ok(Some(
-                    h.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect(),
-                )),
-                Value::SmallHashInline(h) => Ok(Some(
-                    h.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect(),
-                )),
-                Value::PackedRow(r) => Ok(Some(
-                    r.fields().map(|(f, v)| (f.to_vec(), v.to_vec())).collect(),
-                )),
+                Value::Hash(h) => {
+                    Ok(Some(h.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect()))
+                }
+                Value::SegHash(h) => {
+                    Ok(Some(h.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect()))
+                }
+                Value::SmallHashInline(h) => {
+                    Ok(Some(h.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect()))
+                }
+                Value::PackedRow(r) => {
+                    Ok(Some(r.fields().map(|(f, v)| (f.to_vec(), v.to_vec())).collect()))
+                }
                 _ => Err(StoreError::WrongType),
             },
         }
@@ -100,14 +100,12 @@ impl Store {
                 Value::SegHash(h) => {
                     Ok(fields.iter().map(|f| h.get(f).map(SmallBytes::to_vec)).collect())
                 }
-                Value::SmallHashInline(h) => Ok(fields
-                    .iter()
-                    .map(|f| h.get(f).map(<[u8]>::to_vec))
-                    .collect()),
-                Value::PackedRow(r) => Ok(fields
-                    .iter()
-                    .map(|f| r.get_named(f).map(<[u8]>::to_vec))
-                    .collect()),
+                Value::SmallHashInline(h) => {
+                    Ok(fields.iter().map(|f| h.get(f).map(<[u8]>::to_vec)).collect())
+                }
+                Value::PackedRow(r) => {
+                    Ok(fields.iter().map(|f| r.get_named(f).map(<[u8]>::to_vec)).collect())
+                }
                 _ => Err(StoreError::WrongType),
             },
         }

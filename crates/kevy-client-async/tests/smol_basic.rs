@@ -28,19 +28,15 @@ async fn spawn_replier_seq(steps: Vec<(Vec<u8>, Vec<u8>)>) -> io::Result<u16> {
     Ok(port)
 }
 
-async fn spawn_replier(
-    incoming_expected: Vec<u8>,
-    outgoing: Vec<u8>,
-) -> io::Result<u16> {
+async fn spawn_replier(incoming_expected: Vec<u8>, outgoing: Vec<u8>) -> io::Result<u16> {
     spawn_replier_seq(vec![(incoming_expected, outgoing)]).await
 }
 
 #[test]
 fn ping_round_trip() {
     smol::block_on(async {
-        let port = spawn_replier(b"*1\r\n$4\r\nPING\r\n".to_vec(), b"+PONG\r\n".to_vec())
-            .await
-            .unwrap();
+        let port =
+            spawn_replier(b"*1\r\n$4\r\nPING\r\n".to_vec(), b"+PONG\r\n".to_vec()).await.unwrap();
         let url = format!("tcp://127.0.0.1:{port}");
         let mut conn = AsyncConnection::connect(&url).await.unwrap();
         conn.ping().await.unwrap();
@@ -51,14 +47,8 @@ fn ping_round_trip() {
 fn set_then_get() {
     smol::block_on(async {
         let port = spawn_replier_seq(vec![
-            (
-                b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n".to_vec(),
-                b"+OK\r\n".to_vec(),
-            ),
-            (
-                b"*2\r\n$3\r\nGET\r\n$1\r\nk\r\n".to_vec(),
-                b"$1\r\nv\r\n".to_vec(),
-            ),
+            (b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n".to_vec(), b"+OK\r\n".to_vec()),
+            (b"*2\r\n$3\r\nGET\r\n$1\r\nk\r\n".to_vec(), b"$1\r\nv\r\n".to_vec()),
         ])
         .await
         .unwrap();
@@ -84,14 +74,8 @@ fn pipeline_one_round_trip() {
         .unwrap();
         let url = format!("tcp://127.0.0.1:{port}");
         let mut conn = AsyncConnection::connect(&url).await.unwrap();
-        let replies = conn
-            .pipeline()
-            .set(b"k", b"v")
-            .get(b"k")
-            .incr(b"cnt")
-            .run(&mut conn)
-            .await
-            .unwrap();
+        let replies =
+            conn.pipeline().set(b"k", b"v").get(b"k").incr(b"cnt").run(&mut conn).await.unwrap();
         assert_eq!(replies.len(), 3);
         assert!(matches!(replies[0], Reply::Simple(ref s) if s == b"OK"));
         assert!(matches!(replies[1], Reply::Bulk(ref v) if v == b"v"));

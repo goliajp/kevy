@@ -10,12 +10,40 @@ fn declare(parts: &[&str]) -> Result<TableSpec, String> {
 }
 
 const USER: &[&str] = &[
-    "TABLE.DECLARE", "user", "PREFIX", "user:", "PK", "id",
-    "COLUMN", "id", "str", "COLUMN", "name", "str", "COLUMN", "age", "i64",
-    "COLUMN", "dept", "str",
-    "INDEX", "age", "RANGE", "VALUES", "dept", "name",
-    "INDEX", "dept", "UNIQUE",
-    "ORDERPATH", "recent_by_dept", "ON", "dept", "THEN", "age", "DESC",
+    "TABLE.DECLARE",
+    "user",
+    "PREFIX",
+    "user:",
+    "PK",
+    "id",
+    "COLUMN",
+    "id",
+    "str",
+    "COLUMN",
+    "name",
+    "str",
+    "COLUMN",
+    "age",
+    "i64",
+    "COLUMN",
+    "dept",
+    "str",
+    "INDEX",
+    "age",
+    "RANGE",
+    "VALUES",
+    "dept",
+    "name",
+    "INDEX",
+    "dept",
+    "UNIQUE",
+    "ORDERPATH",
+    "recent_by_dept",
+    "ON",
+    "dept",
+    "THEN",
+    "age",
+    "DESC",
 ];
 
 #[test]
@@ -39,8 +67,14 @@ fn full_declare_parses_and_compiles() {
     assert_eq!(op.kind, IndexKind::Range);
     let cols = op.composite.as_ref().expect("composite");
     assert_eq!(cols.len(), 2);
-    assert_eq!((cols[0].name.as_slice(), cols[0].ty, cols[0].desc), (b"dept".as_slice(), ValType::Str, false));
-    assert_eq!((cols[1].name.as_slice(), cols[1].ty, cols[1].desc), (b"age".as_slice(), ValType::I64, true));
+    assert_eq!(
+        (cols[0].name.as_slice(), cols[0].ty, cols[0].desc),
+        (b"dept".as_slice(), ValType::Str, false)
+    );
+    assert_eq!(
+        (cols[1].name.as_slice(), cols[1].ty, cols[1].desc),
+        (b"age".as_slice(), ValType::I64, true)
+    );
     // Every compiled spec is admissible as-is.
     let mut cat = crate::Catalog::new();
     for s in compiled {
@@ -57,8 +91,20 @@ fn every_grammar_refusal_is_named() {
         "ERR COLUMN type must be i64|f64|str"
     );
     assert_eq!(
-        e(&["TABLE.DECLARE", "t", "PREFIX", "p:", "PK", "id",
-            "COLUMN", "id", "str", "COLUMN", "id", "i64"]),
+        e(&[
+            "TABLE.DECLARE",
+            "t",
+            "PREFIX",
+            "p:",
+            "PK",
+            "id",
+            "COLUMN",
+            "id",
+            "str",
+            "COLUMN",
+            "id",
+            "i64"
+        ]),
         "ERR duplicate COLUMN 'id'"
     );
     assert_eq!(
@@ -66,43 +112,155 @@ fn every_grammar_refusal_is_named() {
         "ERR PK column 'nope' is not declared (add COLUMN nope ...)"
     );
     assert_eq!(
-        e(&["TABLE.DECLARE", "t", "PREFIX", "p:", "PK", "id", "COLUMN", "id", "str",
-            "INDEX", "ghost", "RANGE"]),
+        e(&[
+            "TABLE.DECLARE",
+            "t",
+            "PREFIX",
+            "p:",
+            "PK",
+            "id",
+            "COLUMN",
+            "id",
+            "str",
+            "INDEX",
+            "ghost",
+            "RANGE"
+        ]),
         "ERR INDEX names unknown column 'ghost'"
     );
     assert_eq!(
-        e(&["TABLE.DECLARE", "t", "PREFIX", "p:", "PK", "id", "COLUMN", "id", "str",
-            "INDEX", "id", "agg"]),
+        e(&[
+            "TABLE.DECLARE",
+            "t",
+            "PREFIX",
+            "p:",
+            "PK",
+            "id",
+            "COLUMN",
+            "id",
+            "str",
+            "INDEX",
+            "id",
+            "agg"
+        ]),
         "ERR INDEX kind must be range|unique"
     );
     assert_eq!(
-        e(&["TABLE.DECLARE", "t", "PREFIX", "p:", "PK", "id", "COLUMN", "id", "str",
-            "INDEX", "id", "RANGE", "INDEX", "id", "UNIQUE"]),
+        e(&[
+            "TABLE.DECLARE",
+            "t",
+            "PREFIX",
+            "p:",
+            "PK",
+            "id",
+            "COLUMN",
+            "id",
+            "str",
+            "INDEX",
+            "id",
+            "RANGE",
+            "INDEX",
+            "id",
+            "UNIQUE"
+        ]),
         "ERR duplicate INDEX on column 'id'"
     );
     assert_eq!(
-        e(&["TABLE.DECLARE", "t", "PREFIX", "p:", "PK", "id", "COLUMN", "id", "str",
-            "INDEX", "id", "RANGE", "VALUES", "ghost"]),
+        e(&[
+            "TABLE.DECLARE",
+            "t",
+            "PREFIX",
+            "p:",
+            "PK",
+            "id",
+            "COLUMN",
+            "id",
+            "str",
+            "INDEX",
+            "id",
+            "RANGE",
+            "VALUES",
+            "ghost"
+        ]),
         "ERR VALUES names unknown column 'ghost'"
     );
     assert_eq!(
-        e(&["TABLE.DECLARE", "t", "PREFIX", "p:", "PK", "id", "COLUMN", "id", "str",
-            "INDEX", "id", "RANGE", "VALUES", "INDEX", "id", "UNIQUE"]),
+        e(&[
+            "TABLE.DECLARE",
+            "t",
+            "PREFIX",
+            "p:",
+            "PK",
+            "id",
+            "COLUMN",
+            "id",
+            "str",
+            "INDEX",
+            "id",
+            "RANGE",
+            "VALUES",
+            "INDEX",
+            "id",
+            "UNIQUE"
+        ]),
         "ERR VALUES needs at least one column"
     );
     assert_eq!(
-        e(&["TABLE.DECLARE", "t", "PREFIX", "p:", "PK", "id", "COLUMN", "id", "str",
-            "ORDERPATH", "op", "ON", "ghost"]),
+        e(&[
+            "TABLE.DECLARE",
+            "t",
+            "PREFIX",
+            "p:",
+            "PK",
+            "id",
+            "COLUMN",
+            "id",
+            "str",
+            "ORDERPATH",
+            "op",
+            "ON",
+            "ghost"
+        ]),
         "ERR ORDERPATH 'op' names unknown column 'ghost'"
     );
     assert_eq!(
-        e(&["TABLE.DECLARE", "t", "PREFIX", "p:", "PK", "id", "COLUMN", "id", "str",
-            "ORDERPATH", "op", "ON", "id", "ORDERPATH", "op", "ON", "id"]),
+        e(&[
+            "TABLE.DECLARE",
+            "t",
+            "PREFIX",
+            "p:",
+            "PK",
+            "id",
+            "COLUMN",
+            "id",
+            "str",
+            "ORDERPATH",
+            "op",
+            "ON",
+            "id",
+            "ORDERPATH",
+            "op",
+            "ON",
+            "id"
+        ]),
         "ERR duplicate ORDERPATH 'op'"
     );
     assert_eq!(
-        e(&["TABLE.DECLARE", "t", "PREFIX", "p:", "PK", "id", "COLUMN", "id", "str",
-            "ORDERPATH", "op", "BY", "id"]),
+        e(&[
+            "TABLE.DECLARE",
+            "t",
+            "PREFIX",
+            "p:",
+            "PK",
+            "id",
+            "COLUMN",
+            "id",
+            "str",
+            "ORDERPATH",
+            "op",
+            "BY",
+            "id"
+        ]),
         "ERR ORDERPATH needs ON <col>"
     );
     assert_eq!(
@@ -110,8 +268,24 @@ fn every_grammar_refusal_is_named() {
         "ERR PREFIX must be non-empty"
     );
     assert_eq!(
-        e(&["TABLE.DECLARE", "t", "PREFIX", "p:", "PK", "id", "COLUMN", "id", "str",
-            "INDEX", "id", "RANGE", "ORDERPATH", "id", "ON", "id"]),
+        e(&[
+            "TABLE.DECLARE",
+            "t",
+            "PREFIX",
+            "p:",
+            "PK",
+            "id",
+            "COLUMN",
+            "id",
+            "str",
+            "INDEX",
+            "id",
+            "RANGE",
+            "ORDERPATH",
+            "id",
+            "ON",
+            "id"
+        ]),
         "ERR ORDERPATH 'id' collides with INDEX 'id'"
     );
 }
@@ -188,10 +362,7 @@ mod window {
             ("INDEX at range WINDOW at SPAN 9 BUCKET -1", "must be positive"),
             ("INDEX at range WINDOW at SPAN 9 BUCKET 10", "must not exceed SPAN"),
             ("INDEX at range WINDOW at SPAN x BUCKET 1", "must be an integer"),
-            (
-                "ORDERPATH recent ON at DESC WINDOW at SPAN 9 BUCKET 1",
-                "needs an access path",
-            ),
+            ("ORDERPATH recent ON at DESC WINDOW at SPAN 9 BUCKET 1", "needs an access path"),
             (
                 "INDEX at range WINDOW at SPAN 9 BUCKET 1 WINDOW at SPAN 9 BUCKET 1",
                 "duplicate WINDOW",
@@ -206,8 +377,15 @@ mod window {
     fn sidecar_round_trips_the_window_and_stays_bytewise_stable_without_one() {
         let mut cat = TableCatalog::new();
         cat.create(declare("INDEX at range WINDOW at SPAN 90 BUCKET 1").unwrap()).unwrap();
-        cat.create(declare("INDEX at range").map(|mut s| { s.name = b"plain".to_vec(); s }).unwrap())
-            .unwrap();
+        cat.create(
+            declare("INDEX at range")
+                .map(|mut s| {
+                    s.name = b"plain".to_vec();
+                    s
+                })
+                .unwrap(),
+        )
+        .unwrap();
         let text = cat.to_sidecar();
         let back = TableCatalog::from_sidecar(&text).expect("parses");
         assert_eq!(back.get(b"ev").unwrap().window, cat.get(b"ev").unwrap().window);

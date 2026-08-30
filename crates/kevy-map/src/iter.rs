@@ -22,11 +22,7 @@ impl<'a, K, V> Iter<'a, K, V> {
     pub(crate) fn new(metadata: &'a [u8], slots: &'a [MaybeUninit<(K, V)>]) -> Self {
         let real_len = slots.len();
         let metadata = &metadata[..real_len];
-        Self {
-            metadata,
-            slots,
-            pos: 0,
-        }
+        Self { metadata, slots, pos: 0 }
     }
 
     /// Construct an iterator that starts at bucket `start` (clamped to
@@ -40,11 +36,7 @@ impl<'a, K, V> Iter<'a, K, V> {
     ) -> Self {
         let real_len = slots.len();
         let metadata = &metadata[..real_len];
-        Self {
-            metadata,
-            slots,
-            pos: start.min(real_len),
-        }
+        Self { metadata, slots, pos: start.min(real_len) }
     }
 }
 
@@ -86,11 +78,7 @@ impl<'a, K, V> IterMut<'a, K, V> {
     /// [`Iter::new`]).
     pub(crate) fn new(metadata: &'a [u8], slots: &'a mut [MaybeUninit<(K, V)>]) -> Self {
         let metadata = &metadata[..slots.len()];
-        Self {
-            metadata,
-            slots,
-            pos: 0,
-        }
+        Self { metadata, slots, pos: 0 }
     }
 }
 

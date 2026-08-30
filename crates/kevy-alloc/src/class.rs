@@ -38,7 +38,6 @@
 //! (`virgin`): only the first is RSS. A large uniform span whose tail is
 //! never reached is close to free in the metric that matters.
 
-
 /// The largest allocation served by a size class. Above this, requests
 /// are mapped directly and returned with `unmap`.
 ///
@@ -80,22 +79,14 @@ pub const SPAN_BYTES: usize = 64 * 1024;
 /// them.
 pub const CLASSES: [u32; 79] = [
     // 16..=128 step 8 — finer than the octave rule, and free.
-    16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128,
-    // 128..=256 step 16
-    144, 160, 176, 192, 208, 224, 240, 256,
-    // 256..=512 step 32
-    288, 320, 352, 384, 416, 448, 480, 512,
-    // 512..=1024 step 64
-    576, 640, 704, 768, 832, 896, 960, 1024,
-    // 1024..=2048 step 128
-    1152, 1280, 1408, 1536, 1664, 1792, 1920, 2048,
-    // 2048..=4096 step 256
-    2304, 2560, 2816, 3072, 3328, 3584, 3840, 4096,
-    // 4096..=8192 step 512
-    4608, 5120, 5632, 6144, 6656, 7168, 7680, 8192,
-    // 8192..=16384 step 1024
-    9216, 10240, 11264, 12288, 13312, 14336, 15360, 16384,
-    // 16384..=32768 step 2048
+    16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, // 128..=256 step 16
+    144, 160, 176, 192, 208, 224, 240, 256, // 256..=512 step 32
+    288, 320, 352, 384, 416, 448, 480, 512, // 512..=1024 step 64
+    576, 640, 704, 768, 832, 896, 960, 1024, // 1024..=2048 step 128
+    1152, 1280, 1408, 1536, 1664, 1792, 1920, 2048, // 2048..=4096 step 256
+    2304, 2560, 2816, 3072, 3328, 3584, 3840, 4096, // 4096..=8192 step 512
+    4608, 5120, 5632, 6144, 6656, 7168, 7680, 8192, // 8192..=16384 step 1024
+    9216, 10240, 11264, 12288, 13312, 14336, 15360, 16384, // 16384..=32768 step 2048
     18432, 20480, 22528, 24576, 26624, 28672, 30720, 32768,
 ];
 
@@ -297,11 +288,7 @@ mod tests {
             // The 16-32 KiB classes get 2-4 slots per span — few, but a
             // span with two slots still reclaims page-granularly, and
             // the alternative was an mmap/munmap pair per buffer.
-            assert!(
-                slots >= 2,
-                "class {} gets only {slots} slots per span",
-                size_of(i)
-            );
+            assert!(slots >= 2, "class {} gets only {slots} slots per span", size_of(i));
         }
         assert_eq!(SPAN_BYTES % crate::os::PAGE, 0, "a span must be a whole number of pages");
         assert!(SPAN_BYTES.is_power_of_two(), "masking needs a power-of-two span");

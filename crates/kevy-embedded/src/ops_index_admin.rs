@@ -24,13 +24,7 @@ impl Store {
 
     /// Declared indexes (name, prefix, kind), declaration order.
     pub fn idx_list(&self) -> Vec<(Vec<u8>, Vec<u8>, IndexKind)> {
-        let g = self
-            .indexes
-            .catalog
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        g.1.iter()
-            .map(|(s, _)| (s.name.clone(), s.prefix.clone(), s.kind))
-            .collect()
+        let g = self.indexes.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        g.1.iter().map(|(s, _)| (s.name.clone(), s.prefix.clone(), s.kind)).collect()
     }
 }

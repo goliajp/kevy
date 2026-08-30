@@ -69,18 +69,12 @@ pub fn classify_pubsub(reply: Reply) -> io::Result<PubsubEvent> {
         Reply::Array(v) | Reply::Push(v) => v,
         Reply::Error(e) => return Err(io::Error::other(String::from_utf8_lossy(&e).into_owned())),
         other => {
-            return Err(invalid(format!(
-                "pubsub: expected array/push, got {}",
-                shape(&other)
-            )));
+            return Err(invalid(format!("pubsub: expected array/push, got {}", shape(&other))));
         }
     };
 
     let mut it = items.into_iter();
-    let kind = take_bulk(
-        it.next().ok_or_else(|| invalid("pubsub: empty frame"))?,
-        "kind",
-    )?;
+    let kind = take_bulk(it.next().ok_or_else(|| invalid("pubsub: empty frame"))?, "kind")?;
 
     match kind.as_slice() {
         b"subscribe" => {
@@ -88,10 +82,8 @@ pub fn classify_pubsub(reply: Reply) -> io::Result<PubsubEvent> {
                 it.next().ok_or_else(|| invalid("subscribe: missing channel"))?,
                 "channel",
             )?;
-            let count = take_int(
-                it.next().ok_or_else(|| invalid("subscribe: missing count"))?,
-                "count",
-            )?;
+            let count =
+                take_int(it.next().ok_or_else(|| invalid("subscribe: missing count"))?, "count")?;
             Ok(PubsubEvent::Subscribe { channel, count })
         }
         b"psubscribe" => {
@@ -99,10 +91,8 @@ pub fn classify_pubsub(reply: Reply) -> io::Result<PubsubEvent> {
                 it.next().ok_or_else(|| invalid("psubscribe: missing pattern"))?,
                 "pattern",
             )?;
-            let count = take_int(
-                it.next().ok_or_else(|| invalid("psubscribe: missing count"))?,
-                "count",
-            )?;
+            let count =
+                take_int(it.next().ok_or_else(|| invalid("psubscribe: missing count"))?, "count")?;
             Ok(PubsubEvent::Psubscribe { pattern, count })
         }
         b"unsubscribe" => {
@@ -110,21 +100,17 @@ pub fn classify_pubsub(reply: Reply) -> io::Result<PubsubEvent> {
                 it.next().ok_or_else(|| invalid("unsubscribe: missing channel"))?,
                 "channel",
             )?;
-            let count = take_int(
-                it.next().ok_or_else(|| invalid("unsubscribe: missing count"))?,
-                "count",
-            )?;
+            let count =
+                take_int(it.next().ok_or_else(|| invalid("unsubscribe: missing count"))?, "count")?;
             Ok(PubsubEvent::Unsubscribe { channel, count })
         }
         b"punsubscribe" => {
             let pattern = take_bulk_or_nil(
-                it.next()
-                    .ok_or_else(|| invalid("punsubscribe: missing pattern"))?,
+                it.next().ok_or_else(|| invalid("punsubscribe: missing pattern"))?,
                 "pattern",
             )?;
             let count = take_int(
-                it.next()
-                    .ok_or_else(|| invalid("punsubscribe: missing count"))?,
+                it.next().ok_or_else(|| invalid("punsubscribe: missing count"))?,
                 "count",
             )?;
             Ok(PubsubEvent::Punsubscribe { pattern, count })
@@ -153,26 +139,18 @@ pub fn classify_pubsub(reply: Reply) -> io::Result<PubsubEvent> {
                 it.next().ok_or_else(|| invalid("pmessage: missing payload"))?,
                 "payload",
             )?;
-            Ok(PubsubEvent::Pmessage {
-                pattern,
-                channel,
-                payload,
-            })
+            Ok(PubsubEvent::Pmessage { pattern, channel, payload })
         }
-        other => Err(invalid(format!(
-            "unknown pubsub kind: {}",
-            String::from_utf8_lossy(other)
-        ))),
+        other => Err(invalid(format!("unknown pubsub kind: {}", String::from_utf8_lossy(other)))),
     }
 }
 
 fn take_bulk(r: Reply, field: &str) -> io::Result<Vec<u8>> {
     match r {
         Reply::Bulk(v) | Reply::Simple(v) => Ok(v),
-        other => Err(invalid(format!(
-            "pubsub field {field}: expected bulk, got {}",
-            shape(&other)
-        ))),
+        other => {
+            Err(invalid(format!("pubsub field {field}: expected bulk, got {}", shape(&other))))
+        }
     }
 }
 
@@ -180,20 +158,16 @@ fn take_bulk_or_nil(r: Reply, field: &str) -> io::Result<Option<Vec<u8>>> {
     match r {
         Reply::Bulk(v) | Reply::Simple(v) => Ok(Some(v)),
         Reply::Nil | Reply::Null => Ok(None),
-        other => Err(invalid(format!(
-            "pubsub field {field}: expected bulk/nil, got {}",
-            shape(&other)
-        ))),
+        other => {
+            Err(invalid(format!("pubsub field {field}: expected bulk/nil, got {}", shape(&other))))
+        }
     }
 }
 
 fn take_int(r: Reply, field: &str) -> io::Result<i64> {
     match r {
         Reply::Int(n) => Ok(n),
-        other => Err(invalid(format!(
-            "pubsub field {field}: expected int, got {}",
-            shape(&other)
-        ))),
+        other => Err(invalid(format!("pubsub field {field}: expected int, got {}", shape(&other)))),
     }
 }
 
@@ -233,10 +207,7 @@ mod tests {
         ]);
         assert_eq!(
             classify_pubsub(r).unwrap(),
-            PubsubEvent::Subscribe {
-                channel: b"chan".to_vec(),
-                count: 1,
-            }
+            PubsubEvent::Subscribe { channel: b"chan".to_vec(), count: 1 }
         );
     }
 
@@ -249,10 +220,7 @@ mod tests {
         ]);
         assert_eq!(
             classify_pubsub(r).unwrap(),
-            PubsubEvent::Message {
-                channel: b"news".to_vec(),
-                payload: b"hello".to_vec(),
-            }
+            PubsubEvent::Message { channel: b"news".to_vec(), payload: b"hello".to_vec() }
         );
     }
 
@@ -276,17 +244,10 @@ mod tests {
 
     #[test]
     fn classify_unsubscribe_with_nil_channel() {
-        let r = Reply::Array(vec![
-            Reply::Bulk(b"unsubscribe".to_vec()),
-            Reply::Nil,
-            Reply::Int(0),
-        ]);
+        let r = Reply::Array(vec![Reply::Bulk(b"unsubscribe".to_vec()), Reply::Nil, Reply::Int(0)]);
         assert_eq!(
             classify_pubsub(r).unwrap(),
-            PubsubEvent::Unsubscribe {
-                channel: None,
-                count: 0,
-            }
+            PubsubEvent::Unsubscribe { channel: None, count: 0 }
         );
     }
 
@@ -300,10 +261,7 @@ mod tests {
         ]);
         assert_eq!(
             classify_pubsub(r).unwrap(),
-            PubsubEvent::Message {
-                channel: b"c".to_vec(),
-                payload: b"p".to_vec(),
-            }
+            PubsubEvent::Message { channel: b"c".to_vec(), payload: b"p".to_vec() }
         );
     }
 
@@ -318,10 +276,7 @@ mod tests {
         ]);
         assert_eq!(
             classify_pubsub(r).unwrap(),
-            PubsubEvent::Subscribe {
-                channel: b"chan".to_vec(),
-                count: 2,
-            }
+            PubsubEvent::Subscribe { channel: b"chan".to_vec(), count: 2 }
         );
     }
 
@@ -337,10 +292,7 @@ mod tests {
 
     #[test]
     fn classify_rejects_wrong_arity() {
-        let r = Reply::Array(vec![
-            Reply::Bulk(b"subscribe".to_vec()),
-            Reply::Bulk(b"x".to_vec()),
-        ]);
+        let r = Reply::Array(vec![Reply::Bulk(b"subscribe".to_vec()), Reply::Bulk(b"x".to_vec())]);
         assert!(classify_pubsub(r).is_err());
     }
 }

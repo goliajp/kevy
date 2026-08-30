@@ -63,16 +63,11 @@ struct Server {
 
 impl Server {
     fn start() -> Server {
-        let _gate = START_GATE
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-ryow-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
@@ -94,18 +89,12 @@ impl Server {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(ready, "runtime did not come up");
-        Server {
-            port,
-            dir,
-            stop,
-            handle: Some(handle),
-        }
+        Server { port, dir, stop, handle: Some(handle) }
     }
 
     fn connect(&self) -> std::net::TcpStream {
         let s = std::net::TcpStream::connect(("127.0.0.1", self.port)).unwrap();
-        s.set_read_timeout(Some(std::time::Duration::from_secs(10)))
-            .unwrap();
+        s.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
         s
     }
 }
@@ -125,10 +114,7 @@ impl Drop for Server {
 fn expect(s: &mut std::net::TcpStream, expected: &[u8]) {
     let mut buf = vec![0u8; expected.len()];
     s.read_exact(&mut buf).unwrap_or_else(|e| {
-        panic!(
-            "read_exact failed ({e}); wanted {:?}",
-            String::from_utf8_lossy(expected)
-        )
+        panic!("read_exact failed ({e}); wanted {:?}", String::from_utf8_lossy(expected))
     });
     assert_eq!(
         buf,
@@ -155,8 +141,7 @@ fn mget_in_multi_sees_earlier_writes_cross_shard() {
     c.write_all(&req(&[b"MULTI"])).unwrap();
     expect(&mut c, b"+OK\r\n");
     for i in 0..n {
-        c.write_all(&req(&[b"SET", keys[i].as_bytes(), vals[i].as_bytes()]))
-            .unwrap();
+        c.write_all(&req(&[b"SET", keys[i].as_bytes(), vals[i].as_bytes()])).unwrap();
         expect(&mut c, b"+QUEUED\r\n");
     }
     let mut mget = vec![b"MGET".as_slice()];
@@ -261,8 +246,7 @@ fn get_in_multi_still_sees_earlier_write_cross_shard() {
     expect(&mut c, b"+OK\r\n");
     for (i, k) in keys.iter().enumerate() {
         let v = format!("gv{i}");
-        c.write_all(&req(&[b"SET", k.as_bytes(), v.as_bytes()]))
-            .unwrap();
+        c.write_all(&req(&[b"SET", k.as_bytes(), v.as_bytes()])).unwrap();
         expect(&mut c, b"+QUEUED\r\n");
         c.write_all(&req(&[b"GET", k.as_bytes()])).unwrap();
         expect(&mut c, b"+QUEUED\r\n");
@@ -289,8 +273,7 @@ fn nontxn_mget_fans_out_cross_shard() {
     let vals: Vec<String> = (0..n).map(|i| format!("f{i:03}")).collect();
 
     for i in 0..n {
-        c.write_all(&req(&[b"SET", keys[i].as_bytes(), vals[i].as_bytes()]))
-            .unwrap();
+        c.write_all(&req(&[b"SET", keys[i].as_bytes(), vals[i].as_bytes()])).unwrap();
         expect(&mut c, b"+OK\r\n");
     }
     let mut mget = vec![b"MGET".as_slice()];

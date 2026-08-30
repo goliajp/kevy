@@ -30,9 +30,9 @@ impl Vlog {
             return true;
         }
         let sealed = self.files.len().saturating_sub(1);
-        self.files[..sealed]
-            .iter()
-            .any(|s| s.bytes > 0 && s.live.saturating_mul(100) < s.bytes.saturating_mul(u64::from(live_pct)))
+        self.files[..sealed].iter().any(|s| {
+            s.bytes > 0 && s.live.saturating_mul(100) < s.bytes.saturating_mul(u64::from(live_pct))
+        })
     }
 
     /// Compact SEALED files whose live ratio fell below `live_pct`
@@ -133,7 +133,11 @@ impl Vlog {
 
     /// Drain compaction fully at `live_pct` (test / single-threaded bulk
     /// paths). Returns retired-file count.
-    pub fn compact_below(&mut self, live_pct: u32, owner: &mut dyn CompactOwner) -> io::Result<usize> {
+    pub fn compact_below(
+        &mut self,
+        live_pct: u32,
+        owner: &mut dyn CompactOwner,
+    ) -> io::Result<usize> {
         let epoch0 = self.epoch;
         // Ceiling = every file that exists NOW; survivor appends create
         // higher-id files this pass must not re-select (else it never

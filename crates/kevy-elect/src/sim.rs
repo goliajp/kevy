@@ -58,10 +58,7 @@ impl Sim {
                 (id.to_string(), SimNode { elector, alive: true })
             })
             .collect();
-        Self {
-            nodes: map,
-            partitions: Vec::new(),
-        }
+        Self { nodes: map, partitions: Vec::new() }
     }
 
     /// Kill a node — stops its ticks + drops every message routed
@@ -159,11 +156,7 @@ impl Sim {
         while let Some((from, out)) = queue.pop() {
             // Expand broadcast.
             let targets: Vec<String> = if out.to == Outbound::BROADCAST {
-                self.nodes
-                    .keys()
-                    .filter(|k| *k != &from)
-                    .cloned()
-                    .collect()
+                self.nodes.keys().filter(|k| *k != &from).cloned().collect()
             } else {
                 vec![out.to.clone()]
             };
@@ -192,11 +185,7 @@ impl Sim {
 }
 
 fn canonical_pair(a: &str, b: &str) -> (String, String) {
-    if a <= b {
-        (a.to_string(), b.to_string())
-    } else {
-        (b.to_string(), a.to_string())
-    }
+    if a <= b { (a.to_string(), b.to_string()) } else { (b.to_string(), a.to_string()) }
 }
 
 fn first_byte_addr(id: &str) -> u32 {
@@ -327,10 +316,8 @@ mod tests {
             sim.tick_all(t);
         }
         // Exactly one of b/c becomes primary on the majority side.
-        let promoted_majority = ["b", "c"]
-            .iter()
-            .filter(|id| sim.role(id) == Some(Role::Primary))
-            .count();
+        let promoted_majority =
+            ["b", "c"].iter().filter(|id| sim.role(id) == Some(Role::Primary)).count();
         assert_eq!(promoted_majority, 1, "majority must promote exactly one");
         // a (minority of one) cannot reach quorum — its role
         // doesn't matter for split-brain protection because no
@@ -402,10 +389,7 @@ mod tests {
             t += Duration::from_millis(10);
             sim.tick_all(t);
         }
-        let new_primary = ["b", "c"]
-            .iter()
-            .find(|id| sim.role(id) == Some(Role::Primary))
-            .unwrap();
+        let new_primary = ["b", "c"].iter().find(|id| sim.role(id) == Some(Role::Primary)).unwrap();
         let new_primary = new_primary.to_string();
         // Heal partition. a's HBs reach majority + vice versa.
         sim.heal_partition("a", "b");
@@ -425,11 +409,7 @@ mod tests {
     /// the dead peer) → stays Replica indefinitely.
     #[test]
     fn n2_degenerate_primary_kill_locks_survivor() {
-        let mut sim = Sim::new(
-            vec![("a", Role::Primary), ("b", Role::Replica)],
-            cfg(),
-            jitter(),
-        );
+        let mut sim = Sim::new(vec![("a", Role::Primary), ("b", Role::Replica)], cfg(), jitter());
         let t0 = Instant::now();
         sim.tick_all(t0);
         sim.nodes.get_mut("b").unwrap().elector.force_known_primary("a");

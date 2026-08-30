@@ -38,11 +38,7 @@ fn table(name: &[u8], windowed: bool) -> TableSpec {
             values: vec![],
         }],
         orderpaths: vec![],
-        window: windowed.then_some(WindowSpec {
-            column: b"at".to_vec(),
-            span: 100,
-            bucket: 10,
-        }),
+        window: windowed.then_some(WindowSpec { column: b"at".to_vec(), span: 100, bucket: 10 }),
         autodeclare: 0,
         auto_added: vec![],
     }
@@ -52,9 +48,7 @@ fn table(name: &[u8], windowed: bool) -> TableSpec {
 fn embedded_text_window_freezes_and_stays_semantically_equivalent() {
     let d = kevy_tmpdir::TmpDir::new("emb-wintext");
     let s = Store::open(
-        Config::default()
-            .with_persist(d.path())
-            .with_reaper_interval(Duration::from_millis(25)),
+        Config::default().with_persist(d.path()).with_reaper_interval(Duration::from_millis(25)),
     )
     .expect("open");
 
@@ -71,16 +65,31 @@ fn embedded_text_window_freezes_and_stays_semantically_equivalent() {
         .expect("create text index");
     }
 
-    let vocab = ["rust engine warm", "storage engine warm", "python glue warm",
-                 "rust storage cold path", "engine of record warm"];
+    let vocab = [
+        "rust engine warm",
+        "storage engine warm",
+        "python glue warm",
+        "rust storage cold path",
+        "engine of record warm",
+    ];
     let tags = ["alpha", "beta", "gamma"];
     for i in 0..30i64 {
         let key = format!("ev:{i}");
         let at = (i * 10).to_string();
         let prio = ((i % 4) * 10).to_string();
         let note = vocab[(i % 5) as usize];
-        let mut argv: Vec<&[u8]> = vec![b"HSET", key.as_bytes(), b"id", key.as_bytes(),
-            b"at", at.as_bytes(), b"note", note.as_bytes(), b"prio", prio.as_bytes()];
+        let mut argv: Vec<&[u8]> = vec![
+            b"HSET",
+            key.as_bytes(),
+            b"id",
+            key.as_bytes(),
+            b"at",
+            at.as_bytes(),
+            b"note",
+            note.as_bytes(),
+            b"prio",
+            prio.as_bytes(),
+        ];
         let tag = tags[(i % 3) as usize];
         if i % 7 != 0 {
             argv.extend_from_slice(&[b"tag", tag.as_bytes()]);
@@ -121,7 +130,11 @@ fn embedded_text_window_freezes_and_stays_semantically_equivalent() {
             ("sort", b"engine", MatchOpts { sort: Some((b"prio", true)), ..Default::default() }),
             ("distinct", b"engine", MatchOpts { distinct: Some(b"tag"), ..Default::default() }),
             ("facet", b"rust", MatchOpts { facets: &facet_tag, ..Default::default() }),
-            ("highlight", b"\"rust engine\"", MatchOpts { highlight: Some(&hl_all), ..Default::default() }),
+            (
+                "highlight",
+                b"\"rust engine\"",
+                MatchOpts { highlight: Some(&hl_all), ..Default::default() },
+            ),
             (
                 "combo",
                 b"rust",
@@ -144,8 +157,23 @@ fn embedded_text_window_freezes_and_stays_semantically_equivalent() {
 
     // Churn: rewrite a cold row's note AND values (revives hot +
     // withdraws the frozen statistics exactly), delete another.
-    run(&s, &[b"HSET", b"ev:3", b"id", b"ev:3", b"at", b"30",
-        b"note", b"rust replaced text", b"prio", b"5", b"tag", b"beta"]);
+    run(
+        &s,
+        &[
+            b"HSET",
+            b"ev:3",
+            b"id",
+            b"ev:3",
+            b"at",
+            b"30",
+            b"note",
+            b"rust replaced text",
+            b"prio",
+            b"5",
+            b"tag",
+            b"beta",
+        ],
+    );
     run(&s, &[b"DEL", b"ev:7"]);
     std::thread::sleep(Duration::from_millis(200));
     compare("after churn");
@@ -162,7 +190,12 @@ fn embedded_text_window_freezes_and_stays_semantically_equivalent() {
     assert!(format!("{err}").contains("not built yet"), "{err}");
     let scope = [b"note".to_vec()];
     let err = s
-        .idx_match_faceted(b"ev.note", b"rust", 5, MatchOpts { scope: &scope, ..Default::default() })
+        .idx_match_faceted(
+            b"ev.note",
+            b"rust",
+            5,
+            MatchOpts { scope: &scope, ..Default::default() },
+        )
         .expect_err("IN must refuse on cold");
     assert!(format!("{err}").contains("not built yet"), "{err}");
     for (query, opts) in [

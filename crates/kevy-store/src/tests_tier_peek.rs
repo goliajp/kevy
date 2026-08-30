@@ -101,9 +101,8 @@ fn page_peek_mixed_rows_in_order_one_batch() {
     }
     assert!(s.debug_force_demote(b"strval"));
 
-    let keys: Vec<&[u8]> = vec![
-        b"row:0", b"row:1", b"row:2", b"row:3", b"missing", b"strval", b"row:4", b"row:5",
-    ];
+    let keys: Vec<&[u8]> =
+        vec![b"row:0", b"row:1", b"row:2", b"row:3", b"missing", b"strval", b"row:4", b"row:5"];
     let fields: &[&[u8]] = &[b"a", b"c", b"nope"];
     let before = s.tier_stats();
     let rows = s.peek_hash_rows(&keys, fields, &mut SyncColdRead);

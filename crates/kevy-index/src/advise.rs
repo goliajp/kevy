@@ -158,9 +158,7 @@ impl AdviseLog {
     /// least-refused family for a NEW one (an existing family always
     /// just counts).
     pub fn observe(&mut self, name: &[u8], shape: AdviseShape, argv: &[Vec<u8>]) -> u64 {
-        if let Some(e) =
-            self.entries.iter_mut().find(|e| e.name == name && e.shape == shape)
-        {
+        if let Some(e) = self.entries.iter_mut().find(|e| e.name == name && e.shape == shape) {
             e.count += 1;
             return e.count;
         }
@@ -314,14 +312,8 @@ pub fn advice_of(e: &AdviseEntry, cat: &TableCatalog) -> Option<String> {
             for c in cols {
                 t.column_type(c)?;
             }
-            let list =
-                cols.iter().map(|c| show(c)).collect::<Vec<_>>().join(" THEN ");
-            Some(format!(
-                "TABLE.DECLARE {} … ORDERPATH {} ON {}",
-                show(table),
-                show(suffix),
-                list
-            ))
+            let list = cols.iter().map(|c| show(c)).collect::<Vec<_>>().join(" THEN ");
+            Some(format!("TABLE.DECLARE {} … ORDERPATH {} ON {}", show(table), show(suffix), list))
         }
         AdviseShape::Match => {
             let ty = t.column_type(suffix)?;

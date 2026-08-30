@@ -28,8 +28,7 @@ fn seeded() -> Store {
 }
 
 fn report(s: &Store) -> crate::ReconcileReport {
-    s.snapshot()
-        .reconcile(b"user:", &[b"email:"], |k, _v| claim_for(k))
+    s.snapshot().reconcile(b"user:", &[b"email:"], |k, _v| claim_for(k))
 }
 
 #[test]

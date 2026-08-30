@@ -239,7 +239,23 @@ fn every_write_path_that_touches_a_row_keeps_the_index_honest() {
     let srv = Server::start();
     let mut c = srv.connect();
 
-    ok(&mut c, &[b"IDX.CREATE", b"u_age", b"ON", b"PREFIX", b"u:", b"FIELD", b"age", b"TYPE", b"i64", b"KIND", b"range"], "IDX.CREATE");
+    ok(
+        &mut c,
+        &[
+            b"IDX.CREATE",
+            b"u_age",
+            b"ON",
+            b"PREFIX",
+            b"u:",
+            b"FIELD",
+            b"age",
+            b"TYPE",
+            b"i64",
+            b"KIND",
+            b"range",
+        ],
+        "IDX.CREATE",
+    );
     // A second kind over the same rows. `KIND agg` needs its own case
     // because VERIFY cannot be its safety net: `drift` and `missing`
     // ask "does this entry's row still derive this value", and an agg
@@ -248,14 +264,36 @@ fn every_write_path_that_touches_a_row_keeps_the_index_honest() {
     // in a unit test — so a write path that forgets to maintain an
     // aggregate leaves VERIFY reporting zero. Here the assertion is
     // the count itself.
-    ok(&mut c, &[b"IDX.CREATE", b"u_grp", b"ON", b"PREFIX", b"u:", b"FIELD", b"age", b"TYPE", b"i64", b"KIND", b"agg", b"GROUPBY", b"team"], "IDX.CREATE agg");
+    ok(
+        &mut c,
+        &[
+            b"IDX.CREATE",
+            b"u_grp",
+            b"ON",
+            b"PREFIX",
+            b"u:",
+            b"FIELD",
+            b"age",
+            b"TYPE",
+            b"i64",
+            b"KIND",
+            b"agg",
+            b"GROUPBY",
+            b"team",
+        ],
+        "IDX.CREATE agg",
+    );
 
     // Seed enough rows to span shards; the index is global, the rows
     // are not.
     for i in 1..=12 {
         let key = format!("u:{i}");
         let age = format!("{}", 20 + i);
-        ok(&mut c, &[b"HSET", key.as_bytes(), b"age", age.as_bytes(), b"team", b"red"], "HSET seed");
+        ok(
+            &mut c,
+            &[b"HSET", key.as_bytes(), b"age", age.as_bytes(), b"team", b"red"],
+            "HSET seed",
+        );
     }
     assert_clean(&mut c, "the seed writes");
     assert_agg_matches(&mut c, "the seed writes");

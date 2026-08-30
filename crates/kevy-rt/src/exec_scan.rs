@@ -112,7 +112,11 @@ impl<C: Commands> Shard<C> {
             return self.fill_scan_slot(conn_id, seq, scan_reply(0, &keys));
         }
         if budget == 0 {
-            return self.fill_scan_slot(conn_id, seq, scan_reply(wire_cursor(next_shard, 0), &keys));
+            return self.fill_scan_slot(
+                conn_id,
+                seq,
+                scan_reply(wire_cursor(next_shard, 0), &keys),
+            );
         }
         // Budget left and shards remain: chain the sweep into the next
         // shard within this same client call.

@@ -43,12 +43,7 @@ impl Entry {
     /// `None` for a key that never expires.
     #[inline]
     pub(crate) fn new(value: Value, deadline_ns: Option<u64>) -> Self {
-        Self {
-            value,
-            expire_at_ns: deadline_ns.and_then(pack_deadline),
-            weight: 0,
-            lru_clock: 0,
-        }
+        Self { value, expire_at_ns: deadline_ns.and_then(pack_deadline), weight: 0, lru_clock: 0 }
     }
 
     /// Cached entry weight as a `u64` for arithmetic uniformity with the

@@ -60,9 +60,6 @@ fn replay_manifest_verbs_have_source_arms() {
     let src = include_str!("replay.rs");
     for v in REPLAY_VERBS {
         let lit = format!("b\"{v}\"");
-        assert!(
-            src.contains(&lit),
-            "REPLAY_VERBS lists {v} but replay.rs has no {lit} arm"
-        );
+        assert!(src.contains(&lit), "REPLAY_VERBS lists {v} but replay.rs has no {lit} arm");
     }
 }

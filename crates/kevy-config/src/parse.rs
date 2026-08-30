@@ -43,13 +43,7 @@ pub(crate) struct Item {
 /// Parse a complete TOML source string into a flat list of items.
 pub(crate) fn parse(src: &str) -> Result<Vec<Item>, ConfigError> {
     let (tokens, eof_pos) = tokenize(src)?;
-    let mut p = Parser {
-        tokens,
-        pos: 0,
-        current_section: None,
-        items: Vec::new(),
-        eof_pos,
-    };
+    let mut p = Parser { tokens, pos: 0, current_section: None, items: Vec::new(), eof_pos };
     p.parse_all()?;
     Ok(p.items)
 }
@@ -86,19 +80,13 @@ impl Parser {
         // Already at `[`.
         self.pos += 1;
         let name = match self.tokens.get(self.pos) {
-            Some(Spanned {
-                tok: Token::Ident(n),
-                ..
-            }) => n.clone(),
+            Some(Spanned { tok: Token::Ident(n), .. }) => n.clone(),
             Some(s) => return Err(unexpected(s, "expected section name".into())),
             None => return Err(self.eof("expected section name")),
         };
         self.pos += 1;
         match self.tokens.get(self.pos) {
-            Some(Spanned {
-                tok: Token::RBracket,
-                ..
-            }) => self.pos += 1,
+            Some(Spanned { tok: Token::RBracket, .. }) => self.pos += 1,
             Some(s) => return Err(unexpected(s, "expected ']'".into())),
             None => return Err(self.eof("expected ']'")),
         }
@@ -120,22 +108,14 @@ impl Parser {
         let line = key_span.line;
         self.pos += 1;
         match self.tokens.get(self.pos) {
-            Some(Spanned {
-                tok: Token::Equals,
-                ..
-            }) => self.pos += 1,
+            Some(Spanned { tok: Token::Equals, .. }) => self.pos += 1,
             Some(s) => return Err(unexpected(s, "expected '='".into())),
             None => return Err(self.eof("expected '='")),
         }
         let value = self.parse_value()?;
         self.pos += 1;
         self.expect_eol("after value")?;
-        self.items.push(Item {
-            section: self.current_section.clone(),
-            key,
-            value,
-            line,
-        });
+        self.items.push(Item { section: self.current_section.clone(), key, value, line });
         Ok(())
     }
 
@@ -146,11 +126,8 @@ impl Parser {
     /// last token (the scalar itself, or the array's `]`); the caller does the
     /// shared `self.pos += 1`.
     fn parse_value(&mut self) -> Result<Value, ConfigError> {
-        let value_span = self
-            .tokens
-            .get(self.pos)
-            .cloned()
-            .ok_or_else(|| self.eof("expected value"))?;
+        let value_span =
+            self.tokens.get(self.pos).cloned().ok_or_else(|| self.eof("expected value"))?;
         match value_span.tok {
             Token::Str(s) => Ok(Value::Str(s)),
             Token::Int(n) => Ok(Value::Int(n)),
@@ -159,10 +136,7 @@ impl Parser {
                 self.pos += 1;
                 self.parse_array().map(Value::Arr)
             }
-            ref other => Err(unexpected(
-                &value_span,
-                format!("expected value, got {other:?}"),
-            )),
+            ref other => Err(unexpected(&value_span, format!("expected value, got {other:?}"))),
         }
     }
 
@@ -207,10 +181,7 @@ impl Parser {
     fn expect_eol(&mut self, ctx: &str) -> Result<(), ConfigError> {
         match self.tokens.get(self.pos) {
             None => Ok(()),
-            Some(Spanned {
-                tok: Token::Newline,
-                ..
-            }) => {
+            Some(Spanned { tok: Token::Newline, .. }) => {
                 self.pos += 1;
                 Ok(())
             }
@@ -230,11 +201,7 @@ impl Parser {
 }
 
 fn unexpected(s: &Spanned, msg: String) -> ConfigError {
-    ConfigError::Parse {
-        line: s.line,
-        col: s.col,
-        msg,
-    }
+    ConfigError::Parse { line: s.line, col: s.col, msg }
 }
 
 #[cfg(test)]

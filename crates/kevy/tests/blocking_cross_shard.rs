@@ -90,33 +90,26 @@ impl Server {
         let port = free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-xblock-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(NSHARDS)).bind([127, 0, 0, 1], port).shards(NSHARDS)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(NSHARDS))
+                .bind([127, 0, 0, 1], port)
+                .shards(NSHARDS)
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });
         kevy_testnet::assert_listening(port, "the server under test");
-        Self {
-            port,
-            dir,
-            stop,
-            handle: Some(handle),
-        }
+        Self { port, dir, stop, handle: Some(handle) }
     }
 
     fn connect(&self) -> std::net::TcpStream {
         let s = std::net::TcpStream::connect(("127.0.0.1", self.port)).unwrap();
-        s.set_read_timeout(Some(std::time::Duration::from_secs(8)))
-            .unwrap();
+        s.set_read_timeout(Some(std::time::Duration::from_secs(8))).unwrap();
         s
     }
 }
@@ -189,9 +182,7 @@ fn blpop_multi_key_woken_on_either_key() {
     // both very likely remote to the consumer's shard.
     let mut consumer = srv.connect();
     let mut producer = srv.connect();
-    consumer
-        .write_all(&req(&[b"BLPOP", b"m1", b"m2", b"5"]))
-        .unwrap();
+    consumer.write_all(&req(&[b"BLPOP", b"m1", b"m2", b"5"])).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(40));
     producer.write_all(&req(&[b"RPUSH", b"m2", b"got"])).unwrap();
     let _ = read_reply(&mut producer);
@@ -203,8 +194,7 @@ fn blpop_multi_key_woken_on_either_key() {
 fn blpop_multi_key_all_empty_times_out() {
     let srv = Server::start();
     let mut c = srv.connect();
-    c.write_all(&req(&[b"BLPOP", b"z1", b"z2", b"z3", b"0.2"]))
-        .unwrap();
+    c.write_all(&req(&[b"BLPOP", b"z1", b"z2", b"z3", b"0.2"])).unwrap();
     let t0 = std::time::Instant::now();
     let reply = read_reply(&mut c);
     assert_eq!(reply, b"*-1\r\n");
@@ -218,17 +208,11 @@ fn xread_block_remote_stream_woken_by_xadd() {
     let srv = Server::start();
     let mut consumer = srv.connect();
     let mut producer = srv.connect();
-    producer
-        .write_all(&req(&[b"XADD", b"xs", b"1-0", b"f", b"v"]))
-        .unwrap();
+    producer.write_all(&req(&[b"XADD", b"xs", b"1-0", b"f", b"v"])).unwrap();
     let _ = read_reply(&mut producer);
-    consumer
-        .write_all(&req(&[b"XREAD", b"BLOCK", b"5000", b"STREAMS", b"xs", b"$"]))
-        .unwrap();
+    consumer.write_all(&req(&[b"XREAD", b"BLOCK", b"5000", b"STREAMS", b"xs", b"$"])).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(40));
-    producer
-        .write_all(&req(&[b"XADD", b"xs", b"2-0", b"f", b"v2"]))
-        .unwrap();
+    producer.write_all(&req(&[b"XADD", b"xs", b"2-0", b"f", b"v2"])).unwrap();
     let _ = read_reply(&mut producer);
     let reply = read_reply(&mut consumer);
     assert!(reply.starts_with(b"*1\r\n"), "got {reply:?}");
@@ -243,8 +227,7 @@ fn xread_block_remote_stream_times_out() {
     p.write_all(&req(&[b"XADD", b"xt", b"1-0", b"f", b"v"])).unwrap();
     let _ = read_reply(&mut p);
     let mut c = srv.connect();
-    c.write_all(&req(&[b"XREAD", b"BLOCK", b"150", b"STREAMS", b"xt", b"$"]))
-        .unwrap();
+    c.write_all(&req(&[b"XREAD", b"BLOCK", b"150", b"STREAMS", b"xt", b"$"])).unwrap();
     let t0 = std::time::Instant::now();
     let reply = read_reply(&mut c);
     assert_eq!(reply, b"$-1\r\n");
@@ -298,12 +281,5 @@ fn blpop_remote_disconnect_then_push_is_clean() {
 
 /// `*2\r\n$<klen>\r\n<key>\r\n$<vlen>\r\n<val>\r\n` — BLPOP's wake reply.
 fn req_pop_reply(key: &str, val: &str) -> Vec<u8> {
-    format!(
-        "*2\r\n${}\r\n{}\r\n${}\r\n{}\r\n",
-        key.len(),
-        key,
-        val.len(),
-        val
-    )
-    .into_bytes()
+    format!("*2\r\n${}\r\n{}\r\n${}\r\n{}\r\n", key.len(), key, val.len(), val).into_bytes()
 }

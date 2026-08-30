@@ -93,21 +93,14 @@ unsafe extern "C" {
         value: f64,
         result: *mut NapiValue,
     ) -> NapiStatus;
-    pub(crate) fn napi_get_boolean(
-        env: NapiEnv,
-        value: bool,
-        result: *mut NapiValue,
-    ) -> NapiStatus;
+    pub(crate) fn napi_get_boolean(env: NapiEnv, value: bool, result: *mut NapiValue)
+    -> NapiStatus;
     pub(crate) fn napi_get_value_int64(
         env: NapiEnv,
         value: NapiValue,
         result: *mut i64,
     ) -> NapiStatus;
-    pub(crate) fn napi_typeof(
-        env: NapiEnv,
-        value: NapiValue,
-        result: *mut i32,
-    ) -> NapiStatus;
+    pub(crate) fn napi_typeof(env: NapiEnv, value: NapiValue, result: *mut i32) -> NapiStatus;
     pub(crate) fn napi_get_named_property(
         env: NapiEnv,
         object: NapiValue,

@@ -2,8 +2,8 @@
 //! eviction rule, and advice rendering grounded in a catalog.
 
 use super::*;
-use crate::table::{TableIndex, TableSpec};
 use crate::IndexKind;
+use crate::table::{TableIndex, TableSpec};
 
 fn cat() -> TableCatalog {
     let mut c = TableCatalog::new();
@@ -102,8 +102,7 @@ fn apply_auto_declares_each_shape_within_budget() {
 fn narrow_advice_needs_a_window_an_observation_and_a_bucket_of_margin() {
     let mut spec = cat().get(b"ev").expect("declared").clone();
     assert_eq!(narrow_advice(&spec, 100), None, "windowless table never advises");
-    spec.window =
-        Some(crate::WindowSpec { column: b"at".to_vec(), span: 100, bucket: 10 });
+    spec.window = Some(crate::WindowSpec { column: b"at".to_vec(), span: 100, bucket: 10 });
     assert_eq!(narrow_advice(&spec, i64::MAX), None, "unobserved path stays quiet");
     assert_eq!(narrow_advice(&spec, 0), None, "a query touched the boundary");
     assert_eq!(narrow_advice(&spec, -5), None, "a query probed the cold side");
@@ -124,26 +123,15 @@ fn advice_renders_each_shape_and_refuses_ungrounded_names() {
     let argv: Vec<Vec<u8>> = vec![b"q".to_vec()];
     let mut log = AdviseLog::new();
     log.observe(b"ev.at", AdviseShape::Range, &argv);
-    log.observe(
-        b"ev.recent",
-        AdviseShape::Where(vec![b"at".to_vec(), b"note".to_vec()]),
-        &argv,
-    );
+    log.observe(b"ev.recent", AdviseShape::Where(vec![b"at".to_vec(), b"note".to_vec()]), &argv);
     log.observe(b"ev.note", AdviseShape::Match, &argv);
     log.observe(b"ev.at", AdviseShape::Filter(b"note".to_vec()), &argv);
     log.observe(b"ghost.col", AdviseShape::Range, &argv);
     log.observe(b"ev.nosuch", AdviseShape::Range, &argv);
-    let texts: Vec<String> = log
-        .entries()
-        .iter()
-        .filter_map(|e| advice_of(e, &cat))
-        .collect();
+    let texts: Vec<String> = log.entries().iter().filter_map(|e| advice_of(e, &cat)).collect();
     assert_eq!(texts.len(), 4, "ungrounded names render nothing: {texts:?}");
     assert!(texts.iter().any(|t| t.contains("INDEX at range")), "{texts:?}");
-    assert!(
-        texts.iter().any(|t| t.contains("ORDERPATH recent ON at THEN note")),
-        "{texts:?}"
-    );
+    assert!(texts.iter().any(|t| t.contains("ORDERPATH recent ON at THEN note")), "{texts:?}");
     assert!(texts.iter().any(|t| t.contains("KIND text")), "{texts:?}");
     assert!(texts.iter().any(|t| t.contains("VALUES note")), "{texts:?}");
 }

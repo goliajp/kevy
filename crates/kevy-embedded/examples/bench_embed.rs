@@ -43,15 +43,16 @@ fn bench(label: &str, store: &Store, n: usize, keys: &[Vec<u8>]) {
 }
 
 fn main() {
-    let n: usize = std::env::var("KEVY_BENCH_N")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(2_000_000);
+    let n: usize =
+        std::env::var("KEVY_BENCH_N").ok().and_then(|s| s.parse().ok()).unwrap_or(2_000_000);
     // Keys precomputed outside the timed loop so `format!`/alloc cost isn't
     // attributed to kevy.
     let keys: Vec<Vec<u8>> = (0..KEYS).map(|i| format!("k{i}").into_bytes()).collect();
 
-    println!("kevy-embedded in-process throughput — single thread, n={n}, {KEYS} keys, {}B val", VAL.len());
+    println!(
+        "kevy-embedded in-process throughput — single thread, n={n}, {KEYS} keys, {}B val",
+        VAL.len()
+    );
 
     let s1 = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
     bench("in-memory", &s1, n, &keys);

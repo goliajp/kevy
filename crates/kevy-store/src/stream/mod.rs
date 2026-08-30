@@ -12,13 +12,16 @@
 use crate::nostd_prelude::*;
 use alloc::collections::BTreeMap;
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-#[cfg(not(any(feature = "external-clock", all(target_arch = "wasm32", target_os = "unknown"))))]
+#[cfg(not(any(
+    feature = "external-clock",
+    all(target_arch = "wasm32", target_os = "unknown")
+)))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use kevy_map::KevyMap;
 
-use crate::value::{SmallBytes, BTREE_SLOT_BYTES};
 use crate::StoreError;
+use crate::value::{BTREE_SLOT_BYTES, SmallBytes};
 
 // ───────────── StreamId ─────────────
 
@@ -187,9 +190,7 @@ impl StreamData {
 
     /// Iterate every entry in ID-ascending order. Snapshot serializers
     /// walk this to dump the stream.
-    pub fn iter_entries(
-        &self,
-    ) -> impl Iterator<Item = (StreamId, &[(SmallBytes, SmallBytes)])> {
+    pub fn iter_entries(&self) -> impl Iterator<Item = (StreamId, &[(SmallBytes, SmallBytes)])> {
         self.entries.iter().map(|(id, fv)| (*id, fv.as_slice()))
     }
 
@@ -250,11 +251,7 @@ impl StreamData {
     /// Translate XADD's `XAddIdSpec` into a concrete `StreamId`,
     /// rejecting any spec that would not be strictly greater than
     /// `self.last_id`. `now_ms` is injected so tests can pin wall-clock.
-    pub fn resolve_xadd_id(
-        &self,
-        spec: XAddIdSpec,
-        now_ms: u64,
-    ) -> Result<StreamId, StoreError> {
+    pub fn resolve_xadd_id(&self, spec: XAddIdSpec, now_ms: u64) -> Result<StreamId, StoreError> {
         let candidate = match spec {
             XAddIdSpec::AutoAll => {
                 let ms = now_ms.max(self.last_id.ms);
@@ -380,11 +377,7 @@ impl StreamData {
 
     /// XTRIM MINID — drop every entry with ID < `floor`.
     pub(crate) fn trim_minid(&mut self, floor: StreamId) -> usize {
-        let drop_ids: Vec<StreamId> = self
-            .entries
-            .range(..floor)
-            .map(|(id, _)| *id)
-            .collect();
+        let drop_ids: Vec<StreamId> = self.entries.range(..floor).map(|(id, _)| *id).collect();
         let removed = drop_ids.len();
         for id in drop_ids {
             self.entries.remove(&id);
@@ -402,12 +395,12 @@ mod load;
 mod store;
 #[allow(unused_imports)]
 pub use claim::AutoclaimResult;
-pub use load::{LoadedGroup, LoadedPelEntry};
 #[allow(unused_imports)]
 pub use group::{
-    ConsumerGroup, ConsumerState, GroupCreateMode, PelEntry, PendingExtended,
-    PendingExtendedRow, PendingSummary, ReadGroupId, XClaimOpts,
+    ConsumerGroup, ConsumerState, GroupCreateMode, PelEntry, PendingExtended, PendingExtendedRow,
+    PendingSummary, ReadGroupId, XClaimOpts,
 };
+pub use load::{LoadedGroup, LoadedPelEntry};
 pub use store::EntryBatch;
 
 /// Snapshot-loader payload: one stream entry decoded into primitive
@@ -424,9 +417,7 @@ pub type LoadedStreamEntry = (u64, u64, Vec<(Vec<u8>, Vec<u8>)>);
 /// host-fed wall clock (see `crate::set_wall_clock_ms`, wasm-only).
 #[cfg(not(any(feature = "external-clock", all(target_arch = "wasm32", target_os = "unknown"))))]
 pub fn now_unix_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
 /// Wall-clock milliseconds since the epoch, for stream ids.
@@ -449,9 +440,7 @@ pub(super) fn stream_entry_weight(fields: &[(SmallBytes, SmallBytes)]) -> u64 {
             .sum::<u64>()
 }
 
-pub(super) fn clone_entries(
-    src: Vec<(StreamId, &[(SmallBytes, SmallBytes)])>,
-) -> EntryBatch {
+pub(super) fn clone_entries(src: Vec<(StreamId, &[(SmallBytes, SmallBytes)])>) -> EntryBatch {
     src.into_iter()
         .map(|(id, fv)| (id, fv.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect()))
         .collect()

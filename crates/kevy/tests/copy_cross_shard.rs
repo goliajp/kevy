@@ -51,10 +51,7 @@ impl Server {
         let port = kevy_testnet::free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-copyxshard-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
@@ -193,8 +190,13 @@ fn every_copy_lands_where_the_destination_is_read_from() {
             "COPY removed its source {src}"
         );
     }
-    assert!(lost.is_empty(), "{} of {} copies never reached the destination:\n  {}",
-        lost.len(), PAIRS.len(), lost.join("\n  "));
+    assert!(
+        lost.is_empty(),
+        "{} of {} copies never reached the destination:\n  {}",
+        lost.len(),
+        PAIRS.len(),
+        lost.join("\n  ")
+    );
 }
 
 #[test]
@@ -259,7 +261,10 @@ fn the_refusals_are_redis_words() {
         s(&w.call(&["COPY", "same", "same"])),
         "-ERR source and destination objects are the same\\r\\n"
     );
-    assert_eq!(s(&w.call(&["COPY", "only-one"])), "-ERR wrong number of arguments for 'copy' command\\r\\n");
+    assert_eq!(
+        s(&w.call(&["COPY", "only-one"])),
+        "-ERR wrong number of arguments for 'copy' command\\r\\n"
+    );
     assert_eq!(s(&w.call(&["COPY", "a", "b", "REPLACED"])), "-ERR syntax error\\r\\n");
     // And the connection is still usable after each — a reply that
     // never filled its slot would stall every command behind it.
@@ -313,7 +318,11 @@ fn a_cross_shard_copy_survives_a_restart() {
         if w.call(&["GET", dst]) != b"$12\r\nwritten-down\r\n" {
             missing.push(dst.clone());
         }
-        assert_eq!(s(&w.call(&["GET", src])), "$12\\r\\nwritten-down\\r\\n", "{src} did not survive");
+        assert_eq!(
+            s(&w.call(&["GET", src])),
+            "$12\\r\\nwritten-down\\r\\n",
+            "{src} did not survive"
+        );
     }
     assert!(
         missing.is_empty(),

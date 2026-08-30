@@ -35,9 +35,7 @@ use std::time::{Duration, Instant};
 use kevy_embedded::Store;
 
 fn main() {
-    let upstream = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "127.0.0.1:16004".to_string());
+    let upstream = std::env::args().nth(1).unwrap_or_else(|| "127.0.0.1:16004".to_string());
 
     println!("kevy-embedded replica → upstream {upstream}");
 

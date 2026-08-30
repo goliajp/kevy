@@ -128,10 +128,7 @@ pub struct KernelTimespec {
 impl KernelTimespec {
     /// A relative timeout of `ms` milliseconds.
     pub fn from_millis(ms: u64) -> KernelTimespec {
-        KernelTimespec {
-            tv_sec: (ms / 1000) as i64,
-            tv_nsec: ((ms % 1000) * 1_000_000) as i64,
-        }
+        KernelTimespec { tv_sec: (ms / 1000) as i64, tv_nsec: ((ms % 1000) * 1_000_000) as i64 }
     }
 
     /// A relative timeout of `us` microseconds — for sub-ms nap timers

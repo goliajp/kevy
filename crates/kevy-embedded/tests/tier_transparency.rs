@@ -91,7 +91,7 @@ fn cases() -> Vec<Case> {
         c(&[b"APPEND", b"s:bulk", b"tail"], Exact, &[b"s:bulk"]),
         // NX/XX on an existing (cold) key
         c(&[b"SET", b"s:bulk", b"nope", b"NX"], Exact, &[b"s:bulk"]), // B9: NX must fail on cold
-        c(&[b"SET", b"s:bulk", b"xxv", b"XX"], Exact, NONE), // B9: XX overwrites the stub
+        c(&[b"SET", b"s:bulk", b"xxv", b"XX"], Exact, NONE),          // B9: XX overwrites the stub
         // re-bigged so the WRONGTYPE specials run against a cold key
         c(&[b"SET", b"s:bulk", &[b'b'; 2500]], Exact, NONE),
         // WRONGTYPE against a cold string — refuse without resurrecting
@@ -101,7 +101,7 @@ fn cases() -> Vec<Case> {
         c(&[b"HSET", b"h:row", b"name", b"ada", b"dept", b"eng", b"age", b"36"], Exact, NONE),
         c(&[b"HGET", b"h:row", b"name"], Exact, &[b"h:row"]), // B9: cold-row field read
         c(&[b"HSET", b"h:row", b"age", b"37"], Exact, NONE), // B9: cold-row write pages in, no shadow
-        c(&[b"HGETALL", b"h:row"], Shape, NONE), // field order is map order
+        c(&[b"HGETALL", b"h:row"], Shape, NONE),             // field order is map order
         // B9: HGETALL straight off a cold row (gate serve)
         c(&[b"HGETALL", b"h:row"], Shape, &[b"h:row"]),
         c(&[b"HDEL", b"h:row", b"dept"], Exact, NONE), // pages back in
@@ -120,10 +120,10 @@ fn cases() -> Vec<Case> {
         c(&[b"EXISTS", b"s:bulk", b"h:row", b"absent"], Exact, NONE),
         c(&[b"RENAME", b"t:k", b"t:k2"], Exact, NONE), // B9: RENAME moves the stub, no read
         c(&[b"COPY", b"t:k2", b"t:k3"], Exact, NONE),  // materializes the copy, src stays cold
-        c(&[b"DEL", b"t:k3"], Exact, &[b"t:k3"]), // B9: DEL counts the cold key
-        c(&[b"DBSIZE"], Exact, NONE),       // B9: cold keys counted
-        c(&[b"KEYS", b"*"], Shape, NONE),   // B9: cold keys visible (order = map order)
-        c(&[b"SCAN", b"0"], Shape, NONE),   // B9: cold keys swept
+        c(&[b"DEL", b"t:k3"], Exact, &[b"t:k3"]),      // B9: DEL counts the cold key
+        c(&[b"DBSIZE"], Exact, NONE),                  // B9: cold keys counted
+        c(&[b"KEYS", b"*"], Shape, NONE),              // B9: cold keys visible (order = map order)
+        c(&[b"SCAN", b"0"], Shape, NONE),              // B9: cold keys swept
         c(&[b"RANDOMKEY"], Shape, NONE),
         // memory-reporting: legitimately differs under tiering
         c(&[b"MEMORY", b"USAGE", b"s:bulk"], Shape, NONE),
@@ -143,12 +143,8 @@ fn cases() -> Vec<Case> {
 fn run_pair(a: &Store, b: &Store, demote: bool) -> usize {
     let mut checked = 0;
     for case in cases() {
-        let what = case
-            .argv
-            .iter()
-            .map(|x| String::from_utf8_lossy(x))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let what =
+            case.argv.iter().map(|x| String::from_utf8_lossy(x)).collect::<Vec<_>>().join(" ");
         if demote {
             for key in case.demote {
                 assert!(

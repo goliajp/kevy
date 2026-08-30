@@ -77,7 +77,9 @@ fn run_handover(repl: &ReplicationState, host: String, port: u16, timeout_ms: u6
             return;
         }
         if std::time::Instant::now() > deadline {
-            eprintln!("kevy: FAILOVER to {target} timed out waiting for drain; resuming primary duty");
+            eprintln!(
+                "kevy: FAILOVER to {target} timed out waiting for drain; resuming primary duty"
+            );
             repl.set_quiesce(None);
             return;
         }

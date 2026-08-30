@@ -8,7 +8,11 @@ fn main() {
     text.truncate(4096);
     let dict = kevy_compress::train(&[&text], 65535);
     let frame = kevy_compress::encode(&dict, &text);
-    println!("4KiB -> {} frame bytes (ratio {:.2}x)", frame.len(), text.len() as f64 / frame.len() as f64);
+    println!(
+        "4KiB -> {} frame bytes (ratio {:.2}x)",
+        frame.len(),
+        text.len() as f64 / frame.len() as f64
+    );
     let n = 200_000;
     let t0 = std::time::Instant::now();
     let mut sink = 0usize;
@@ -17,5 +21,10 @@ fn main() {
         sink = sink.wrapping_add(out.len() + out[0] as usize);
     }
     let el = t0.elapsed().as_secs_f64();
-    println!("decode: {:.2} GB/s ({} iters, sink {})", (n as f64 * text.len() as f64) / el / 1e9, n, sink);
+    println!(
+        "decode: {:.2} GB/s ({} iters, sink {})",
+        (n as f64 * text.len() as f64) / el / 1e9,
+        n,
+        sink
+    );
 }

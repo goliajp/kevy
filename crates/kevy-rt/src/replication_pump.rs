@@ -79,17 +79,14 @@ impl<C: Commands> Shard<C> {
     /// data).
     fn maybe_append_heartbeat(&mut self, idx: usize, generation: u64, primary_next: u64) {
         let conn = &mut self.replicas[idx];
-        let due = conn
-            .last_ping
-            .is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(1));
+        let due = conn.last_ping.is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(1));
         if !due {
             return;
         }
         conn.output.extend_from_slice(&encode_ping(generation, primary_next));
         conn.last_ping = Some(std::time::Instant::now());
         if crate::repl_trace()
-            && let ReplicaState::Streaming { sent_offset, generation: cursor_gen, .. } =
-                conn.state
+            && let ReplicaState::Streaming { sent_offset, generation: cursor_gen, .. } = conn.state
         {
             crate::repl_trace_line(format_args!(
                 "shard {} fd {} streaming: cursor gen {cursor_gen} \
@@ -133,9 +130,8 @@ impl<C: Commands> Shard<C> {
         let Some(offset) = latest else { return };
         if let ReplicaState::Streaming { replica_id, .. } = &self.replicas[idx].state {
             let id = replica_id.clone();
-            let now_ns = std::time::Instant::now()
-                .duration_since(self.replication_epoch)
-                .as_nanos() as u64;
+            let now_ns =
+                std::time::Instant::now().duration_since(self.replication_epoch).as_nanos() as u64;
             self.slots.insert_or_touch(&id, offset, now_ns);
             // An advanced slot is the WAIT wake point — a
             // parked WAIT whose need is now met answers here, on the
@@ -415,11 +411,8 @@ impl<C: Commands> Shard<C> {
         // running. Three outcomes: bytes arrived → populate
         // snapshot_buf; channel empty → wait; channel closed without
         // bytes → fatal, close the conn.
-        if let ReplicaState::SnapshotShipping {
-            ref mut serializing,
-            ref mut snapshot_buf,
-            ..
-        } = self.replicas[idx].state
+        if let ReplicaState::SnapshotShipping { ref mut serializing, ref mut snapshot_buf, .. } =
+            self.replicas[idx].state
             && let Some(rx) = serializing.take()
         {
             match rx.try_recv() {
@@ -465,10 +458,7 @@ impl<C: Commands> Shard<C> {
         let conn = &mut self.replicas[idx];
         if !chunk_bytes.is_empty() {
             conn.output.extend_from_slice(&encode_snapshot_chunk(&chunk_bytes));
-            if let ReplicaState::SnapshotShipping {
-                ref mut snapshot_off, ..
-            } = conn.state
-            {
+            if let ReplicaState::SnapshotShipping { ref mut snapshot_off, .. } = conn.state {
                 *snapshot_off += chunk_bytes.len();
             }
         }

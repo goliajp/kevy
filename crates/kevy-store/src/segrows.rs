@@ -123,7 +123,10 @@ impl Store {
                 let seg = kevy_seg::Seg::open(&dir.join(&e.file))
                     .map_err(|err| format!("open {}: {err}", e.file))?;
                 seq = seq.max(q + 1);
-                segs.push((q, SegSlot { seg: Arc::new(seg), file: e.file.clone(), live: 0, dead: 0 }));
+                segs.push((
+                    q,
+                    SegSlot { seg: Arc::new(seg), file: e.file.clone(), live: 0, dead: 0 },
+                ));
             }
         }
         // The gate opens only when cold values can actually exist:
@@ -192,13 +195,7 @@ impl Store {
         }
         rows.sort_by(|a, b| a.0.cmp(b.0));
         let seq = self.build_row_segment(table, &rows)?;
-        let file = self
-            .segrows
-            .as_ref()
-            .expect("enabled above")
-            .slot(seq)
-            .file
-            .clone();
+        let file = self.segrows.as_ref().expect("enabled above").slot(seq).file.clone();
         // Only the keys actually sealed may phase-change — a filtered
         // row (TTL-bearing, revived mid-batch, non-hash) stubbed at a
         // segment that does not hold it would be a ghost.
@@ -242,7 +239,11 @@ impl Store {
 
     /// Seal `rows` (key-ascending) into a manifest-registered segment
     /// file and open it into the directory. The map is untouched.
-    fn build_row_segment(&mut self, table: &[u8], rows: &[(&[u8], Vec<u8>)]) -> Result<u32, String> {
+    fn build_row_segment(
+        &mut self,
+        table: &[u8],
+        rows: &[(&[u8], Vec<u8>)],
+    ) -> Result<u32, String> {
         let sr = self.segrows.as_mut().expect("checked by caller");
         std::fs::create_dir_all(&sr.dir).map_err(|e| e.to_string())?;
         let seq = sr.seq;
@@ -280,10 +281,7 @@ impl Store {
     /// the eviction filter), fires no events, clears no field TTLs.
     pub(crate) fn demote_row_to_seg(&mut self, key: &[u8], seg_ix: u32) -> bool {
         let Some(e) = self.map.get_mut(key) else { return false };
-        if !matches!(
-            e.value,
-            Value::Hash(_) | Value::SmallHashInline(_) | Value::PackedRow(_)
-        ) {
+        if !matches!(e.value, Value::Hash(_) | Value::SmallHashInline(_) | Value::PackedRow(_)) {
             return false;
         }
         let key_heap = key_heap_bytes_for(key);
@@ -349,10 +347,7 @@ impl Store {
     /// vlog's: a stub pointing at a missing/corrupt record is a
     /// process bug, surfaced loudly.
     pub(crate) fn segrow_read(&self, cref: ColdRef, key: &[u8]) -> Value {
-        self.segrows
-            .as_ref()
-            .expect("seg-backed stub ⇒ segrows enabled")
-            .read(cref, key)
+        self.segrows.as_ref().expect("seg-backed stub ⇒ segrows enabled").read(cref, key)
     }
 
     /// A seg-backed stub died (DEL / expiry / promote / FLUSH): the
@@ -389,11 +384,8 @@ impl Store {
     pub(crate) fn segrows_flush(&mut self) {
         let Some(sr) = &mut self.segrows else { return };
         if let Ok(mut m) = kevy_seg::Manifest::open(&sr.dir) {
-            let stale: Vec<String> = m
-                .live()
-                .filter(|e| e.meta.starts_with(ROW_TAG))
-                .map(|e| e.file.clone())
-                .collect();
+            let stale: Vec<String> =
+                m.live().filter(|e| e.meta.starts_with(ROW_TAG)).map(|e| e.file.clone()).collect();
             for f in stale {
                 let _ = m.drop_seg(&f);
                 let _ = std::fs::remove_file(sr.dir.join(&f));

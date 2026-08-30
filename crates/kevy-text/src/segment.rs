@@ -272,10 +272,7 @@ impl TextSegment {
     /// One indexed document's `(id, dl, weighted term→tf)` — the
     /// freeze's read half, taken BEFORE withdraw consumes the stored
     /// fields it is derived from.
-    pub(crate) fn doc_terms(
-        &self,
-        key: &[u8],
-    ) -> Option<(u32, u32, HashMap<Vec<u8>, u32>)> {
+    pub(crate) fn doc_terms(&self, key: &[u8]) -> Option<(u32, u32, HashMap<Vec<u8>, u32>)> {
         let (id, dl, fields) = self.docs.get(key)?;
         Some((*id, *dl, weighted_tf(fields).0))
     }

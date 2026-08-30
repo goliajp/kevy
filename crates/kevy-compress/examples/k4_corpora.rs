@@ -67,9 +67,7 @@ fn corpus_templated(rng: &mut Rng) -> Vec<Vec<u8>> {
 }
 
 fn corpus_random(rng: &mut Rng) -> Vec<Vec<u8>> {
-    (0..N)
-        .map(|_| (0..TARGET).map(|_| rng.next() as u8).collect())
-        .collect()
+    (0..N).map(|_| (0..TARGET).map(|_| rng.next() as u8).collect()).collect()
 }
 
 fn corpus_textual(rng: &mut Rng) -> Vec<Vec<u8>> {

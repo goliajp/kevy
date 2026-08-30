@@ -93,10 +93,7 @@ impl FieldStats {
         let mut out = Vec::new();
         for (id, blob) in db.each() {
             let per_field = get_varints(blob);
-            let tf: u32 = want
-                .iter()
-                .map(|&f| per_field.get(f).copied().unwrap_or(0))
-                .sum();
+            let tf: u32 = want.iter().map(|&f| per_field.get(f).copied().unwrap_or(0)).sum();
             if tf > 0 {
                 out.push((id, tf));
             }
@@ -108,26 +105,20 @@ impl FieldStats {
     /// field-scoped BM25 normalises by.
     pub(crate) fn doc_len_in(&self, id: u32, want: &[usize]) -> u32 {
         let base = id as usize * self.n;
-        want.iter()
-            .map(|&f| self.doc_len.get(base + f).copied().unwrap_or(0))
-            .sum()
+        want.iter().map(|&f| self.doc_len.get(base + f).copied().unwrap_or(0)).sum()
     }
 
     /// Corpus token total over the `want` fields, for their average
     /// document length.
     pub(crate) fn total_len_in(&self, want: &[usize]) -> u64 {
-        want.iter()
-            .map(|&f| self.total_len.get(f).copied().unwrap_or(0))
-            .sum()
+        want.iter().map(|&f| self.total_len.get(f).copied().unwrap_or(0)).sum()
     }
 
     /// `id`'s per-field lengths, for turning a concatenated token offset
     /// into "which field is this in" (field-scoped phrase queries).
     pub(crate) fn doc_lens(&self, id: u32) -> Vec<u32> {
         let base = id as usize * self.n;
-        (0..self.n)
-            .map(|f| self.doc_len.get(base + f).copied().unwrap_or(0))
-            .collect()
+        (0..self.n).map(|f| self.doc_len.get(base + f).copied().unwrap_or(0)).collect()
     }
 
     /// How many fields the segment indexes.

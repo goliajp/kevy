@@ -45,8 +45,7 @@ fn main() {
     let mut n = 1u64;
     while n <= synced {
         let key = format!("r:{n}");
-        let owned: Vec<Vec<u8>> =
-            vec![b"HGET".to_vec(), key.clone().into_bytes(), b"at".to_vec()];
+        let owned: Vec<Vec<u8>> = vec![b"HGET".to_vec(), key.clone().into_bytes(), b"at".to_vec()];
         let mut reply = Vec::new();
         store.dispatch_argv(&owned, &mut reply);
         let want = format!("${}\r\n{}\r\n", n.to_string().len(), n);
@@ -65,9 +64,8 @@ fn main() {
     // census of readable rows (which may exceed the barrier — rows
     // written after the last fsync are allowed to survive, never to
     // tear).
-    let count = store
-        .idx_count(b"ev.at", &IndexValue::I64(0), &IndexValue::I64(i64::MAX))
-        .expect("count");
+    let count =
+        store.idx_count(b"ev.at", &IndexValue::I64(0), &IndexValue::I64(i64::MAX)).expect("count");
     assert!(count >= synced, "index count {count} below the loss bound {synced}");
     let mut census = 0u64;
     for n in 1..=count + 2_000 {

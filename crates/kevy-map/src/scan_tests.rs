@@ -67,9 +67,7 @@ fn coverage_survives_tombstones() {
     for i in (0..600u64).step_by(3) {
         m.insert(i, i + 1);
     }
-    let want: Vec<u64> = (0..4_000u64)
-        .filter(|i| i % 3 != 0 || *i < 600)
-        .collect();
+    let want: Vec<u64> = (0..4_000u64).filter(|i| i % 3 != 0 || *i < 600).collect();
     let seen = full_sweep(&m);
     assert_eq!(seen.len(), want.len());
     for k in &want {
@@ -114,10 +112,7 @@ fn grow_mid_sweep_never_skips_an_original_key() {
     }
 
     for i in 0..2_000u64 {
-        assert!(
-            seen.contains_key(&i),
-            "original key {i} skipped across the grow"
-        );
+        assert!(seen.contains_key(&i), "original key {i} skipped across the grow");
     }
 }
 

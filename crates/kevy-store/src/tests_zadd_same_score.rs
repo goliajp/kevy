@@ -17,9 +17,9 @@
 //!
 //! See the ZADD decomposition under bench/.
 
+use crate::Store;
 use crate::value::Value;
 use crate::zset_seg::Z_PROMOTE;
-use crate::Store;
 
 /// Which of the three sorted-set encodings a key is on, or `"absent"`.
 ///

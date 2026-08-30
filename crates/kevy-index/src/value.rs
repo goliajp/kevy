@@ -54,12 +54,9 @@ impl IndexValue {
         match ty {
             // ANN kinds never coerce through IndexValue.
             crate::ValType::Vector => None,
-            crate::ValType::I64 => std::str::from_utf8(raw)
-                .ok()?
-                .trim()
-                .parse::<i64>()
-                .ok()
-                .map(IndexValue::I64),
+            crate::ValType::I64 => {
+                std::str::from_utf8(raw).ok()?.trim().parse::<i64>().ok().map(IndexValue::I64)
+            }
             crate::ValType::F64 => {
                 let f = std::str::from_utf8(raw).ok()?.trim().parse::<f64>().ok()?;
                 if f.is_nan() {
@@ -222,7 +219,10 @@ mod order_key_tests {
 
     #[test]
     fn byte_order_matches_value_order() {
-        agrees(ValType::I64, &["-9223372036854775808", "-5", "-1", "0", "1", "5", "9223372036854775807"]);
+        agrees(
+            ValType::I64,
+            &["-9223372036854775808", "-5", "-1", "0", "1", "5", "9223372036854775807"],
+        );
         agrees(ValType::F64, &["-1e308", "-1.5", "-0.5", "0", "0.5", "1.5", "1e308"]);
         agrees(ValType::Str, &["", "a", "ab", "b", "z"]);
     }

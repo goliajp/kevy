@@ -42,8 +42,7 @@ fn every_estore_op_has_a_dispatch_arm() {
 #[test]
 fn estore_ops_is_subset_of_dispatch_verbs() {
     let table: BTreeSet<&str> = DISPATCH_VERBS.iter().copied().collect();
-    let missing: Vec<&&str> =
-        ESTORE_OPS.iter().filter(|v| !table.contains(*v as &str)).collect();
+    let missing: Vec<&&str> = ESTORE_OPS.iter().filter(|v| !table.contains(*v as &str)).collect();
     assert!(missing.is_empty(), "ESTORE_OPS verbs missing from DISPATCH_VERBS: {missing:?}");
 }
 
@@ -88,11 +87,7 @@ fn idx_query_and_count_refuse_a_short_call_the_way_the_server_does() {
     for verb in [&b"IDX.QUERY"[..], &b"IDX.COUNT"[..]] {
         let name = String::from_utf8_lossy(verb).to_lowercase();
         let want = format!("-ERR wrong number of arguments for '{name}' command\r\n");
-        for argv in [
-            vec![verb],
-            vec![verb, &b"t"[..]],
-            vec![verb, &b"t"[..], &b"WHERE"[..]],
-        ] {
+        for argv in [vec![verb], vec![verb, &b"t"[..]], vec![verb, &b"t"[..], &b"WHERE"[..]]] {
             assert_eq!(
                 String::from_utf8_lossy(&run(&s, &argv)),
                 want,
@@ -200,11 +195,7 @@ fn every_dispatched_verb_is_in_the_registry_or_named_as_outside_it() {
     use kevy_resp::ops_table::OP_TABLE;
 
     let facade: BTreeSet<&str> = DISPATCH_VERBS.iter().copied().collect();
-    assert!(
-        facade.len() > 100,
-        "only {} dispatched verbs — the table did not load",
-        facade.len()
-    );
+    assert!(facade.len() > 100, "only {} dispatched verbs — the table did not load", facade.len());
 
     let rows: BTreeSet<&str> = OP_TABLE.iter().map(|o| o.name).collect();
     let named: BTreeSet<&str> = NOT_KEYSPACE.iter().copied().collect();

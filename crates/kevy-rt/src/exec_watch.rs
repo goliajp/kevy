@@ -27,24 +27,14 @@ impl<C: Commands> Shard<C> {
     /// `WATCH key [key ...]` — group by owning shard, fan
     /// [`Op::CollectWatchVersions`] out, fold each shard's
     /// `(key, version)` reply into the conn's `watched` set + emit `+OK`.
-    pub(crate) fn do_watch<A: ArgvView + ?Sized>(
-        &mut self,
-        conn_id: u64,
-        seq: u64,
-        args: &A,
-    ) {
+    pub(crate) fn do_watch<A: ArgvView + ?Sized>(&mut self, conn_id: u64, seq: u64, args: &A) {
         let mut by_shard: HashMap<usize, Vec<Vec<u8>>> = HashMap::new();
         for i in 1..args.len() {
             let key = &args[i];
-            by_shard
-                .entry(self.shard_of(key))
-                .or_default()
-                .push(key.to_vec());
+            by_shard.entry(self.shard_of(key)).or_default().push(key.to_vec());
         }
-        let targets: Vec<(usize, Op)> = by_shard
-            .into_iter()
-            .map(|(s, ks)| (s, Op::CollectWatchVersions(ks)))
-            .collect();
+        let targets: Vec<(usize, Op)> =
+            by_shard.into_iter().map(|(s, ks)| (s, Op::CollectWatchVersions(ks))).collect();
         let remaining = targets.len().max(1) as u32;
         if let Some(c) = self.conns.get_mut(&conn_id) {
             let proto = c.proto;
@@ -65,15 +55,7 @@ impl<C: Commands> Shard<C> {
                 let part = self.exec_op(op);
                 self.fold(conn_id, seq, part);
             } else {
-                self.send_to(
-                    shard,
-                    Inbound::Request {
-                        origin: self.id,
-                        conn: conn_id,
-                        seq,
-                        op,
-                    },
-                );
+                self.send_to(shard, Inbound::Request { origin: self.id, conn: conn_id, seq, op });
             }
         }
     }
@@ -131,11 +113,7 @@ impl<C: Commands> Shard<C> {
     /// Push the header slot + `queued.len()` placeholder slots into the
     /// conn's ring, advancing `next_seq` by `1 + queued.len()`. Returns
     /// `(header_seq, base_idx)` or `None` if the conn vanished.
-    fn preallocate_exec_slots(
-        &mut self,
-        conn_id: u64,
-        queued: Vec<Argv>,
-    ) -> Option<(u64, usize)> {
+    fn preallocate_exec_slots(&mut self, conn_id: u64, queued: Vec<Argv>) -> Option<(u64, usize)> {
         let n = queued.len();
         let c = self.conns.get_mut(&conn_id)?;
         let header_seq = c.next_seq;
@@ -166,10 +144,7 @@ impl<C: Commands> Shard<C> {
     ) -> HashMap<usize, Vec<(Vec<u8>, u64)>> {
         let mut by_shard: HashMap<usize, Vec<(Vec<u8>, u64)>> = HashMap::new();
         for (k, v) in watched {
-            by_shard
-                .entry(self.shard_of(&k))
-                .or_default()
-                .push((k, v));
+            by_shard.entry(self.shard_of(&k)).or_default().push((k, v));
         }
         by_shard
     }
@@ -187,15 +162,7 @@ impl<C: Commands> Shard<C> {
             let part = self.exec_op(op);
             self.fold(conn_id, seq, part);
         } else {
-            self.send_to(
-                shard,
-                Inbound::Request {
-                    origin: self.id,
-                    conn: conn_id,
-                    seq,
-                    op,
-                },
-            );
+            self.send_to(shard, Inbound::Request { origin: self.id, conn: conn_id, seq, op });
         }
     }
 
@@ -206,11 +173,9 @@ impl<C: Commands> Shard<C> {
     pub(crate) fn finalize_watch_agg(&mut self, conn_id: u64, seq: u64, agg: Agg) {
         match agg {
             Agg::WatchCollect { pairs } => self.finalize_watch_collect(conn_id, seq, pairs),
-            Agg::ExecPrep {
-                dirty,
-                queued,
-                header_seq,
-            } => self.finalize_exec_prep(conn_id, header_seq, dirty, queued),
+            Agg::ExecPrep { dirty, queued, header_seq } => {
+                self.finalize_exec_prep(conn_id, header_seq, dirty, queued)
+            }
             // Unreachable — `fold` only sends WatchCollect/ExecPrep here.
             _ => {}
         }
@@ -218,12 +183,7 @@ impl<C: Commands> Shard<C> {
 
     /// `WATCH` completion: move the collated pairs into `conn.watched`,
     /// fill the slot's `done` with `+OK`, drain.
-    fn finalize_watch_collect(
-        &mut self,
-        conn_id: u64,
-        seq: u64,
-        pairs: Vec<(Vec<u8>, u64)>,
-    ) {
+    fn finalize_watch_collect(&mut self, conn_id: u64, seq: u64, pairs: Vec<(Vec<u8>, u64)>) {
         let Some(c) = self.conns.get_mut(&conn_id) else { return };
         c.watched.extend(pairs);
         let idx = (seq - c.next_emit) as usize;
@@ -361,9 +321,7 @@ impl<C: Commands> Shard<C> {
         // queued cmds also emit RESP3 shapes. AOF logging + WATCH bump
         // happen inside `exec_op`, driven by `meta`.
         let proto = self.conns.get(&conn_id).map_or(RespVersion::V2, |c| c.proto);
-        if is_quit
-            && let Some(c) = self.conns.get_mut(&conn_id)
-        {
+        if is_quit && let Some(c) = self.conns.get_mut(&conn_id) {
             c.closing = true;
         }
         if shard == self.id {

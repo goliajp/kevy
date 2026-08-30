@@ -29,8 +29,7 @@ impl Server {
         let mut cfg = kevy_config::Config::default();
         cfg.server.port = port;
         cfg.server.threads = 1;
-        let state =
-            Arc::new(kevy::RuntimeState::new(Arc::new(cfg), dir.clone(), 1).unwrap());
+        let state = Arc::new(kevy::RuntimeState::new(Arc::new(cfg), dir.clone(), 1).unwrap());
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
@@ -86,7 +85,6 @@ fn send(s: &mut TcpStream, args: &[&[u8]]) -> String {
     String::from_utf8_lossy(&buf[..n]).into_owned()
 }
 
-
 #[test]
 fn windowed_orderpath_answers_byte_identically_to_the_control() {
     let srv = Server::start();
@@ -98,18 +96,65 @@ fn windowed_orderpath_answers_byte_identically_to_the_control() {
     // tree must slide its own prefix and keep answering WHERE queries
     // byte-identically through the cold segments.
     let declare_ev: &[&[u8]] = &[
-        b"TABLE.DECLARE", b"ev", b"PREFIX", b"ev:", b"PK", b"id",
-        b"COLUMN", b"id", b"str", b"COLUMN", b"at", b"i64", b"COLUMN", b"prio", b"i64",
-        b"INDEX", b"at", b"range",
-        b"ORDERPATH", b"recent", b"ON", b"at", b"THEN", b"prio", b"DESC",
-        b"WINDOW", b"at", b"SPAN", b"100", b"BUCKET", b"10",
+        b"TABLE.DECLARE",
+        b"ev",
+        b"PREFIX",
+        b"ev:",
+        b"PK",
+        b"id",
+        b"COLUMN",
+        b"id",
+        b"str",
+        b"COLUMN",
+        b"at",
+        b"i64",
+        b"COLUMN",
+        b"prio",
+        b"i64",
+        b"INDEX",
+        b"at",
+        b"range",
+        b"ORDERPATH",
+        b"recent",
+        b"ON",
+        b"at",
+        b"THEN",
+        b"prio",
+        b"DESC",
+        b"WINDOW",
+        b"at",
+        b"SPAN",
+        b"100",
+        b"BUCKET",
+        b"10",
     ];
     assert!(send(&mut c, declare_ev).starts_with("+OK"), "declare ev");
     let declare_ctl: &[&[u8]] = &[
-        b"TABLE.DECLARE", b"ctl", b"PREFIX", b"ev:", b"PK", b"id",
-        b"COLUMN", b"id", b"str", b"COLUMN", b"at", b"i64", b"COLUMN", b"prio", b"i64",
-        b"INDEX", b"at", b"range",
-        b"ORDERPATH", b"recent", b"ON", b"at", b"THEN", b"prio", b"DESC",
+        b"TABLE.DECLARE",
+        b"ctl",
+        b"PREFIX",
+        b"ev:",
+        b"PK",
+        b"id",
+        b"COLUMN",
+        b"id",
+        b"str",
+        b"COLUMN",
+        b"at",
+        b"i64",
+        b"COLUMN",
+        b"prio",
+        b"i64",
+        b"INDEX",
+        b"at",
+        b"range",
+        b"ORDERPATH",
+        b"recent",
+        b"ON",
+        b"at",
+        b"THEN",
+        b"prio",
+        b"DESC",
     ];
     assert!(send(&mut c, declare_ctl).starts_with("+OK"), "declare ctl");
 
@@ -121,8 +166,19 @@ fn windowed_orderpath_answers_byte_identically_to_the_control() {
             let key = format!("ev:{i}{suffix}");
             let at = (i * 10).to_string();
             let prio = ((i + base) % 5).to_string();
-            let r = send(&mut c, &[b"HSET", key.as_bytes(), b"id", key.as_bytes(),
-                b"at", at.as_bytes(), b"prio", prio.as_bytes()]);
+            let r = send(
+                &mut c,
+                &[
+                    b"HSET",
+                    key.as_bytes(),
+                    b"id",
+                    key.as_bytes(),
+                    b"at",
+                    at.as_bytes(),
+                    b"prio",
+                    prio.as_bytes(),
+                ],
+            );
             assert!(r.starts_with(":"), "HSET {key}: {r}");
         }
     }
@@ -180,10 +236,28 @@ fn windowed_orderpath_answers_byte_identically_to_the_control() {
         // range on both faces; every page (cursor included) byte-equal.
         let mut cursor = String::new();
         for page in 0..20 {
-            let mut ev: Vec<&[u8]> = vec![b"IDX.QUERY", b"ev.recent",
-                b"WHERE", b"RANGE", b"at", b"0", b"280", b"LIMIT", b"7"];
-            let mut ctl: Vec<&[u8]> = vec![b"IDX.QUERY", b"ctl.recent",
-                b"WHERE", b"RANGE", b"at", b"0", b"280", b"LIMIT", b"7"];
+            let mut ev: Vec<&[u8]> = vec![
+                b"IDX.QUERY",
+                b"ev.recent",
+                b"WHERE",
+                b"RANGE",
+                b"at",
+                b"0",
+                b"280",
+                b"LIMIT",
+                b"7",
+            ];
+            let mut ctl: Vec<&[u8]> = vec![
+                b"IDX.QUERY",
+                b"ctl.recent",
+                b"WHERE",
+                b"RANGE",
+                b"at",
+                b"0",
+                b"280",
+                b"LIMIT",
+                b"7",
+            ];
             if !cursor.is_empty() {
                 ev.extend_from_slice(&[b"CURSOR", cursor.as_bytes()]);
                 ctl.extend_from_slice(&[b"CURSOR", cursor.as_bytes()]);
@@ -207,11 +281,15 @@ fn windowed_orderpath_answers_byte_identically_to_the_control() {
 
     // Cold-row churn: rewrite (new prio — the frozen composite entry
     // must stop serving), delete, revive in-window.
-    assert!(send(&mut c, &[b"HSET", b"ev:5a", b"id", b"ev:5a", b"at", b"50",
-        b"prio", b"4"]).starts_with(":"));
+    assert!(
+        send(&mut c, &[b"HSET", b"ev:5a", b"id", b"ev:5a", b"at", b"50", b"prio", b"4"])
+            .starts_with(":")
+    );
     assert_eq!(send(&mut c, &[b"DEL", b"ev:7b"]), ":1\r\n");
-    assert!(send(&mut c, &[b"HSET", b"ev:3a", b"id", b"ev:3a", b"at", b"260",
-        b"prio", b"0"]).starts_with(":"));
+    assert!(
+        send(&mut c, &[b"HSET", b"ev:3a", b"id", b"ev:3a", b"at", b"260", b"prio", b"0"])
+            .starts_with(":")
+    );
     compare(&mut c, "after cold-row churn");
     assert_eq!(
         send(&mut c, &[b"IDX.COUNT", b"ev.recent", b"WHERE", b"RANGE", b"at", b"-1000", b"1000"]),
@@ -228,23 +306,54 @@ fn orderpath_only_window_slides_rows_and_serves() {
     // the table's only windowed access path, so IT drives row
     // eviction — the declaration validation promised this shape works.
     let declare_ev: &[&[u8]] = &[
-        b"TABLE.DECLARE", b"op", b"PREFIX", b"op:", b"PK", b"id",
-        b"COLUMN", b"id", b"str", b"COLUMN", b"at", b"i64",
-        b"ORDERPATH", b"recent", b"ON", b"at",
-        b"WINDOW", b"at", b"SPAN", b"100", b"BUCKET", b"10",
+        b"TABLE.DECLARE",
+        b"op",
+        b"PREFIX",
+        b"op:",
+        b"PK",
+        b"id",
+        b"COLUMN",
+        b"id",
+        b"str",
+        b"COLUMN",
+        b"at",
+        b"i64",
+        b"ORDERPATH",
+        b"recent",
+        b"ON",
+        b"at",
+        b"WINDOW",
+        b"at",
+        b"SPAN",
+        b"100",
+        b"BUCKET",
+        b"10",
     ];
     assert!(send(&mut c, declare_ev).starts_with("+OK"), "declare op");
     let declare_ctl: &[&[u8]] = &[
-        b"TABLE.DECLARE", b"opc", b"PREFIX", b"op:", b"PK", b"id",
-        b"COLUMN", b"id", b"str", b"COLUMN", b"at", b"i64",
-        b"ORDERPATH", b"recent", b"ON", b"at",
+        b"TABLE.DECLARE",
+        b"opc",
+        b"PREFIX",
+        b"op:",
+        b"PK",
+        b"id",
+        b"COLUMN",
+        b"id",
+        b"str",
+        b"COLUMN",
+        b"at",
+        b"i64",
+        b"ORDERPATH",
+        b"recent",
+        b"ON",
+        b"at",
     ];
     assert!(send(&mut c, declare_ctl).starts_with("+OK"), "declare opc");
     for i in 0..30i64 {
         let key = format!("op:{i}");
         let at = (i * 10).to_string();
-        let r = send(&mut c, &[b"HSET", key.as_bytes(), b"id", key.as_bytes(),
-            b"at", at.as_bytes()]);
+        let r =
+            send(&mut c, &[b"HSET", key.as_bytes(), b"id", key.as_bytes(), b"at", at.as_bytes()]);
         assert!(r.starts_with(":"), "HSET {key}: {r}");
     }
 

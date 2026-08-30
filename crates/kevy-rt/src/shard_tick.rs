@@ -23,11 +23,7 @@ impl<C: Commands> Shard<C> {
         let live = self.commands.live_runtime_config();
         self.apply_live_persist_knobs(&live);
         if let Some(ms) = live.tick_interval_ms {
-            *tick_interval = if ms == 0 {
-                None
-            } else {
-                Some(Duration::from_millis(ms))
-            };
+            *tick_interval = if ms == 0 { None } else { Some(Duration::from_millis(ms)) };
         }
         if let Some(flags) = live.notify_flags {
             self.notify_flags = flags;
@@ -304,7 +300,9 @@ impl<C: Commands> Shard<C> {
             let off = match &c.state {
                 crate::replication::ReplicaState::AckSent { from_offset, .. } => *from_offset,
                 crate::replication::ReplicaState::Streaming { sent_offset, .. } => *sent_offset,
-                crate::replication::ReplicaState::SnapshotShipping { ack_offset, .. } => *ack_offset,
+                crate::replication::ReplicaState::SnapshotShipping { ack_offset, .. } => {
+                    *ack_offset
+                }
                 _ => continue,
             };
             watermark = Some(watermark.map_or(off, |w| w.min(off)));
@@ -326,9 +324,8 @@ impl<C: Commands> Shard<C> {
         // from the state machine. For `SnapshotShipping`, report
         // `ack_offset` (the snapshot's frozen-at offset) since
         // streaming hasn't started yet.
-        let now_ns = std::time::Instant::now()
-            .duration_since(self.replication_epoch)
-            .as_nanos() as u64;
+        let now_ns =
+            std::time::Instant::now().duration_since(self.replication_epoch).as_nanos() as u64;
         let mut replicas = Vec::with_capacity(self.replicas.len());
         for c in &self.replicas {
             let (sent, id) = match &c.state {

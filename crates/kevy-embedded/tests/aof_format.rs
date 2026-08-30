@@ -46,10 +46,8 @@ fn a_v1_directory_is_downgradeable_until_the_first_rewrite() {
     };
     std::fs::write(dir.path().join("aof-0.aof"), &v1).expect("plant the 3.x file");
 
-    let store = Store::open(
-        Config::default().with_persist(dir.path()).with_shards(1),
-    )
-    .expect("a 3.x directory opens on 4.x — the UPGRADING promise");
+    let store = Store::open(Config::default().with_persist(dir.path()).with_shards(1))
+        .expect("a 3.x directory opens on 4.x — the UPGRADING promise");
     assert_eq!(store.get(b"k").expect("get").as_deref(), Some(&b"v"[..]), "replayed");
     assert_eq!(
         store.downgradeable_to_v3(),

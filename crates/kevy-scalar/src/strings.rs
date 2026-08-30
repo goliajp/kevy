@@ -38,7 +38,10 @@ pub(crate) fn eval(name: &str, args: &[Scalar]) -> Result<Scalar, ScalarError> {
 /// caller matching — here we return the borrowed text or signal NULL
 /// via the sentinel `Err`-free path. Shaped as `Option` so callers
 /// write `let [s] = strict1(…)? else { return Null }`.
-fn strict1<'a>(func: &'static str, args: &'a [Scalar]) -> Result<Option<[&'a str; 1]>, ScalarError> {
+fn strict1<'a>(
+    func: &'static str,
+    args: &'a [Scalar],
+) -> Result<Option<[&'a str; 1]>, ScalarError> {
     match args {
         [Scalar::Null] => Ok(None),
         [Scalar::Text(s)] => Ok(Some([s.as_str()])),
@@ -227,10 +230,9 @@ fn format_fn(args: &[Scalar]) -> Result<Scalar, ScalarError> {
             next += 1;
             i
         });
-        let v = data.get(idx).ok_or(ScalarError::Domain {
-            func: FUNC,
-            what: "too few arguments for format()",
-        })?;
+        let v = data
+            .get(idx)
+            .ok_or(ScalarError::Domain { func: FUNC, what: "too few arguments for format()" })?;
         format_spec(spec, v, &mut out)?;
     }
     Ok(Scalar::Text(out))
@@ -250,12 +252,14 @@ fn parse_spec(
     if positional {
         it.next();
     } else if !digits.is_empty() {
-        return Err(ScalarError::Domain { func: FUNC, what: "unrecognized format() type specifier" });
+        return Err(ScalarError::Domain {
+            func: FUNC,
+            what: "unrecognized format() type specifier",
+        });
     }
-    let spec = it.next().ok_or(ScalarError::Domain {
-        func: FUNC,
-        what: "unterminated format() type specifier",
-    })?;
+    let spec = it
+        .next()
+        .ok_or(ScalarError::Domain { func: FUNC, what: "unterminated format() type specifier" })?;
     let pos = positional.then(|| digits.parse::<usize>().unwrap_or(0).wrapping_sub(1));
     Ok((pos, spec))
 }

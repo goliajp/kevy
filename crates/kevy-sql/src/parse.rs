@@ -67,11 +67,7 @@ impl<'a> P<'a> {
     }
 
     pub(crate) fn expect_sym(&mut self, ch: char, ctx: &str) -> Result<(), SqlError> {
-        if self.eat_sym(ch) {
-            Ok(())
-        } else {
-            Err(self.err_here(format!("expected '{ch}' {ctx}")))
-        }
+        if self.eat_sym(ch) { Ok(()) } else { Err(self.err_here(format!("expected '{ch}' {ctx}"))) }
     }
 
     /// An identifier (unquoted → already lower-cased, or `"quoted"`),
@@ -131,9 +127,7 @@ fn refused_verb(p: &P<'_>, verb: &str) -> Option<SqlError> {
         "alter" => "declarations compile once \u{2014} TABLE.DROP, edit the schema, re-apply",
         "drop" => "issue TABLE.DROP / IDX.DROP / VIEW.DROP directly against the server",
         "truncate" => "delete the rows through the live commands (kevy-cli delete-prefix <p>)",
-        "with" => {
-            "CTEs are query-time composition (Law 3); declare each step as its own view"
-        }
+        "with" => "CTEs are query-time composition (Law 3); declare each step as its own view",
         "grant" | "revoke" => "kevy has no SQL privilege layer (AUTH/TLS are permanently out)",
         "begin" | "commit" | "rollback" => {
             "transactions are runtime commands (WATCH/MULTI/EXEC, cookbook \u{a7}4), not declarations"
@@ -339,7 +333,9 @@ fn parse_column_def(p: &mut P<'_>, t: &mut CreateTable) -> Result<(), SqlError> 
                 "declare it table-level \u{2014} UNIQUE (<col>) \u{2014} or as CREATE UNIQUE INDEX ON <t> (<col>)",
             ));
         } else if p.is_kw("check") {
-            return Err(p.refuse("CHECK", "constraints are the atomic-block recipe (cookbook \u{a7}5)"));
+            return Err(
+                p.refuse("CHECK", "constraints are the atomic-block recipe (cookbook \u{a7}5)")
+            );
         } else {
             break;
         }

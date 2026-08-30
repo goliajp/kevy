@@ -2,10 +2,10 @@
 //! free-fn helpers. Same `impl<C: Commands> Shard<C>` as [`crate::exec`];
 //! split out so that file stays under the 500-LOC house rule.
 
+use crate::Commands;
 use crate::message::{Agg, Part, PendingSlot, SmallReply};
 use crate::reduce::{drain_front, materialize};
 use crate::shard::Shard;
-use crate::Commands;
 use kevy_resp::ArgvView;
 
 impl<C: Commands> Shard<C> {
@@ -41,10 +41,7 @@ impl<C: Commands> Shard<C> {
                 // REPL.WAIT: every shard must report 1 (met).
                 (Agg::ReplBarrier { ok, .. }, Part::Int(n)) => *ok &= n > 0,
                 // REPL.TOKEN: pairs drop in by shard id.
-                (
-                    Agg::ReplTokens { slots },
-                    Part::ReplToken { shard, generation, next_offset },
-                ) => {
+                (Agg::ReplTokens { slots }, Part::ReplToken { shard, generation, next_offset }) => {
                     if let Some(s) = slots.get_mut(shard as usize) {
                         *s = Some((generation, next_offset));
                     }
@@ -76,10 +73,7 @@ impl<C: Commands> Shard<C> {
                 // It gets its own arm because the mismatch fallthrough below
                 // treats an unpaired (agg, part) as a routing bug.
                 (Agg::RandomKey { .. }, Part::RandomKey { key: None, .. }) => {}
-                (
-                    Agg::RandomKey { key, seen },
-                    Part::RandomKey { key: Some(k), live, draw },
-                ) => {
+                (Agg::RandomKey { key, seen }, Part::RandomKey { key: Some(k), live, draw }) => {
                     *seen += live.max(1);
                     if key.is_none() || kevy_rng_below(draw, *seen) < live.max(1) {
                         *key = Some(k);
@@ -97,10 +91,7 @@ impl<C: Commands> Shard<C> {
                     *next = n;
                     *budget = budget.saturating_sub(visited);
                 }
-                (
-                    Agg::PrefixStats { keys, expires },
-                    Part::PrefixStats { keys: k, expires: e },
-                ) => {
+                (Agg::PrefixStats { keys, expires }, Part::PrefixStats { keys: k, expires: e }) => {
                     *keys += k;
                     *expires += e;
                 }
@@ -120,10 +111,9 @@ impl<C: Commands> Shard<C> {
                 (Agg::ExecPrep { dirty, .. }, Part::Int(n)) => *dirty |= n != 0,
                 // Cross-shard RENAME orchestrator: buffer the step-1
                 // result in the agg so finalize can ship step 2.
-                (
-                    Agg::RenameOrchestrator { taken, .. },
-                    Part::RenameTaken { value, ttl_ms },
-                ) => *taken = Some((value, ttl_ms)),
+                (Agg::RenameOrchestrator { taken, .. }, Part::RenameTaken { value, ttl_ms }) => {
+                    *taken = Some((value, ttl_ms))
+                }
                 // Step 2's put result: `refused = None` → stored; `Some`
                 // → NX-blocked, and the handed-back value lands in `taken`
                 // so finalize can restore src before the `:0` reply.
@@ -146,14 +136,12 @@ impl<C: Commands> Shard<C> {
                 }
                 // Cross-shard list move: buffer each step's result in the agg
                 // so finalize can decide the next hop.
-                (
-                    Agg::ListMoveOrchestrator { taken, .. },
-                    Part::ListMoveTaken(r),
-                ) => *taken = Some(r),
-                (
-                    Agg::ListMoveOrchestrator { pushed, .. },
-                    Part::ListMovePushed { refused },
-                ) => *pushed = Some(refused.is_none()),
+                (Agg::ListMoveOrchestrator { taken, .. }, Part::ListMoveTaken(r)) => {
+                    *taken = Some(r)
+                }
+                (Agg::ListMoveOrchestrator { pushed, .. }, Part::ListMovePushed { refused }) => {
+                    *pushed = Some(refused.is_none())
+                }
                 // The terminal step-1 miss (RenameNoSuchSrc) leaves
                 // `taken == None`; finalize reads that as "missing src".
                 _ => {}
@@ -198,10 +186,8 @@ impl<C: Commands> Shard<C> {
                 Agg::GeoStore { .. } => self.finalize_geostore_agg(conn_id, seq, agg),
                 Agg::ScanPage { .. } => self.finalize_scan_agg(conn_id, seq, agg),
                 Agg::ExtensionGather { argv, chunks } => {
-                    let proto = self
-                        .conns
-                        .get(&conn_id)
-                        .map_or(kevy_resp::RespVersion::V2, |c| c.proto);
+                    let proto =
+                        self.conns.get(&conn_id).map_or(kevy_resp::RespVersion::V2, |c| c.proto);
                     match self.commands.extension_reduce(&argv, chunks, proto) {
                         crate::ExtensionReduced::Reply(reply) => {
                             self.fill_extension_slot(conn_id, seq, reply);
@@ -240,11 +226,7 @@ impl<C: Commands> Shard<C> {
             }
             None => return,
         };
-        self.fold(
-            conn_id,
-            seq,
-            Part::Reply(SmallReply::from_slice(b"-ERR Protocol error\r\n")),
-        );
+        self.fold(conn_id, seq, Part::Reply(SmallReply::from_slice(b"-ERR Protocol error\r\n")));
     }
 }
 

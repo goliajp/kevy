@@ -35,10 +35,7 @@ impl<C: Commands> Shard<C> {
     #[cold]
     pub(crate) fn commit_rewrite_done(&mut self, done: PersistDone) {
         match done {
-            PersistDone::Rewrite {
-                result: Ok(keys),
-                tmp,
-            } => {
+            PersistDone::Rewrite { result: Ok(keys), tmp } => {
                 // Stale completion: the tick's overrun check deferred
                 // this rewrite while the image was still dumping. The
                 // diff is gone with the tee — swapping would lose it.
@@ -46,12 +43,8 @@ impl<C: Commands> Shard<C> {
                     self.abort_rewrite_cleanup(&tmp);
                     return;
                 }
-                self.rewrite_handoff = Some(RewriteHandoff {
-                    tmp,
-                    keys,
-                    iters: 0,
-                    prev_len: usize::MAX,
-                });
+                self.rewrite_handoff =
+                    Some(RewriteHandoff { tmp, keys, iters: 0, prev_len: usize::MAX });
                 self.advance_rewrite_handoff();
             }
             PersistDone::TeeAppend { result, tmp, buf } => {
@@ -59,10 +52,7 @@ impl<C: Commands> Shard<C> {
             }
             PersistDone::Cleanup { failed } => self.note_cleanup_failures(failed),
             PersistDone::SwapImage { result, trash } => self.on_swap_done(result, trash),
-            PersistDone::Rewrite {
-                result: Err(e),
-                tmp,
-            } => {
+            PersistDone::Rewrite { result: Err(e), tmp } => {
                 eprintln!("kevy: shard {} aof rewrite failed: {e}", self.id);
                 self.abort_rewrite_cleanup(&tmp);
             }
@@ -136,7 +126,6 @@ impl<C: Commands> Shard<C> {
         self.hand_off_generation(h, tee);
     }
 
-
     /// Terminal step: the residual tee (possibly empty) is small enough
     /// to ride the swap. Queued mode hands it to the worker as the
     /// image's tail — append, fsync, hardlink, rename, all off-thread;
@@ -158,7 +147,12 @@ impl<C: Commands> Shard<C> {
     /// A tee generation landed (or failed) on the worker: recycle its
     /// cleared buffer into the pool either way, then advance the
     /// handoff — or tear the rewrite down on an append error.
-    fn on_tee_appended(&mut self, result: std::io::Result<()>, tmp: &std::path::Path, buf: Vec<u8>) {
+    fn on_tee_appended(
+        &mut self,
+        result: std::io::Result<()>,
+        tmp: &std::path::Path,
+        buf: Vec<u8>,
+    ) {
         if let Some(aof) = &mut self.aof {
             // The spare slot's loser can still carry GB capacity —
             // ship it to the worker like every other big free (tiny
@@ -225,12 +219,7 @@ impl<C: Commands> Shard<C> {
         let live = aof.live_path();
         let trash = aof.swap_trash_name();
         aof.begin_swap_hold();
-        let job = PersistJob::SwapImage {
-            tmp: h.tmp.clone(),
-            live,
-            trash,
-            tail,
-        };
+        let job = PersistJob::SwapImage { tmp: h.tmp.clone(), live, trash, tail };
         match self.persist.submit_reclaim_tail(self.id, job) {
             Ok(()) => self.rewrite_handoff = Some(h), // keys carried to finalize
             Err(tail) => {
@@ -294,11 +283,7 @@ impl<C: Commands> Shard<C> {
     /// truncating open of the same deterministic path).
     fn note_cleanup_failures(&self, failed: Vec<(std::path::PathBuf, std::io::Error)>) {
         for (path, e) in failed {
-            eprintln!(
-                "kevy: shard {} teardown file {} not deleted: {e}",
-                self.id,
-                path.display()
-            );
+            eprintln!("kevy: shard {} teardown file {} not deleted: {e}", self.id, path.display());
         }
     }
 
@@ -307,16 +292,9 @@ impl<C: Commands> Shard<C> {
     /// image is incomplete — and the live file carried every write.
     fn hand_off_generation(&mut self, h: RewriteHandoff, tee: Vec<u8>) {
         let prev_len = tee.len();
-        let job = PersistJob::TeeAppend {
-            tmp: h.tmp.clone(),
-            bytes: tee,
-        };
+        let job = PersistJob::TeeAppend { tmp: h.tmp.clone(), bytes: tee };
         if self.persist.submit(self.id, job) {
-            self.rewrite_handoff = Some(RewriteHandoff {
-                iters: h.iters + 1,
-                prev_len,
-                ..h
-            });
+            self.rewrite_handoff = Some(RewriteHandoff { iters: h.iters + 1, prev_len, ..h });
         } else {
             eprintln!(
                 "kevy: shard {} persist worker unavailable for tee handoff — rewrite aborted",
@@ -342,16 +320,14 @@ impl<C: Commands> Shard<C> {
         // buffers, and any GB-scale warm spare to the worker — all
         // these frees contend the journal/LRU.
         let (paths, mut bufs) = match &mut self.aof {
-            Some(aof) => (
-                aof.take_swap_trash().into_iter().collect::<Vec<_>>(),
-                aof.take_tee_teardown(),
-            ),
+            Some(aof) => {
+                (aof.take_swap_trash().into_iter().collect::<Vec<_>>(), aof.take_tee_teardown())
+            }
             None => (Vec::new(), Vec::new()),
         };
         bufs.extend(spent);
         self.ship_cleanup(paths, bufs);
     }
-
 
     /// Common abort tail: retained tee buffers and the half-built
     /// image go to the worker in ONE Cleanup job (the worker is
@@ -377,10 +353,7 @@ impl<C: Commands> Shard<C> {
         if paths.is_empty() && bufs.is_empty() {
             return;
         }
-        let job = PersistJob::Cleanup {
-            paths: paths.clone(),
-            bufs,
-        };
+        let job = PersistJob::Cleanup { paths: paths.clone(), bufs };
         if !self.persist.submit(self.id, job) {
             for p in paths {
                 let _ = std::fs::remove_file(&p);

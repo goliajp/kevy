@@ -12,10 +12,7 @@ fn err(sql: &str) -> SqlError {
 #[track_caller]
 fn refuses(sql: &str, name: &str, line: u32) {
     let e = err(sql);
-    assert!(
-        e.message.contains(name),
-        "expected '{name}' in refusal, got: {e}"
-    );
+    assert!(e.message.contains(name), "expected '{name}' in refusal, got: {e}");
     assert_eq!(e.line, line, "wrong line for {name}: {e}");
     assert!(e.col >= 1);
 }
@@ -24,9 +21,7 @@ const T: &str = "CREATE TABLE t (id bigint PRIMARY KEY, a bigint, b text);\n";
 
 #[test]
 fn join_refused_teaches_via() {
-    let e = err(&format!(
-        "{T}CREATE VIEW v AS SELECT * FROM t JOIN u ON t.a = u.a;"
-    ));
+    let e = err(&format!("{T}CREATE VIEW v AS SELECT * FROM t JOIN u ON t.a = u.a;"));
     assert_eq!(e.line, 2);
     assert!(e.message.contains("JOIN is not compilable"), "{e}");
     assert!(e.message.contains("Law 3"), "{e}");
@@ -55,39 +50,103 @@ fn select_teaches_the_declared_path() {
 
 #[test]
 fn view_shapes_refused() {
-    refuses(&format!("{T}CREATE VIEW v AS SELECT * FROM t WHERE a = 1 OR b = 'x';"), "OR is not compilable", 2);
-    refuses(&format!("{T}CREATE VIEW v AS SELECT * FROM t GROUP BY a;"), "GROUP BY is not compilable", 2);
-    refuses(&format!("{T}CREATE VIEW v AS SELECT * FROM t HAVING a = 1;"), "HAVING is not compilable", 2);
-    refuses(&format!("{T}CREATE VIEW v AS SELECT * FROM t WHERE a IN (1, 2);"), "IN is not compilable", 2);
-    refuses(&format!("{T}CREATE VIEW v AS SELECT * FROM t WHERE b LIKE 'x%';"), "LIKE is not compilable", 2);
-    refuses(&format!("{T}CREATE VIEW v AS SELECT * FROM t WHERE b IS NULL;"), "IS is not compilable", 2);
-    refuses(&format!("{T}CREATE VIEW v AS SELECT * FROM t WHERE a != 1;"), "'!=' / '<>' is not compilable", 2);
-    refuses(&format!("{T}CREATE VIEW v AS SELECT * FROM t WHERE a <> 1;"), "'!=' / '<>' is not compilable", 2);
-    refuses(&format!("{T}CREATE VIEW v AS SELECT * FROM t WHERE NOT a = 1;"), "NOT is not compilable", 2);
+    refuses(
+        &format!("{T}CREATE VIEW v AS SELECT * FROM t WHERE a = 1 OR b = 'x';"),
+        "OR is not compilable",
+        2,
+    );
+    refuses(
+        &format!("{T}CREATE VIEW v AS SELECT * FROM t GROUP BY a;"),
+        "GROUP BY is not compilable",
+        2,
+    );
+    refuses(
+        &format!("{T}CREATE VIEW v AS SELECT * FROM t HAVING a = 1;"),
+        "HAVING is not compilable",
+        2,
+    );
+    refuses(
+        &format!("{T}CREATE VIEW v AS SELECT * FROM t WHERE a IN (1, 2);"),
+        "IN is not compilable",
+        2,
+    );
+    refuses(
+        &format!("{T}CREATE VIEW v AS SELECT * FROM t WHERE b LIKE 'x%';"),
+        "LIKE is not compilable",
+        2,
+    );
+    refuses(
+        &format!("{T}CREATE VIEW v AS SELECT * FROM t WHERE b IS NULL;"),
+        "IS is not compilable",
+        2,
+    );
+    refuses(
+        &format!("{T}CREATE VIEW v AS SELECT * FROM t WHERE a != 1;"),
+        "'!=' / '<>' is not compilable",
+        2,
+    );
+    refuses(
+        &format!("{T}CREATE VIEW v AS SELECT * FROM t WHERE a <> 1;"),
+        "'!=' / '<>' is not compilable",
+        2,
+    );
+    refuses(
+        &format!("{T}CREATE VIEW v AS SELECT * FROM t WHERE NOT a = 1;"),
+        "NOT is not compilable",
+        2,
+    );
     refuses(&format!("{T}CREATE VIEW v AS SELECT * FROM t, u;"), "implicit join", 2);
     refuses(&format!("{T}CREATE VIEW v AS SELECT * FROM t WHERE a = (SELECT 1);"), "subquery", 2);
     refuses(&format!("{T}CREATE VIEW v AS SELECT count(a) FROM t;"), "function call", 2);
-    refuses(&format!("{T}CREATE VIEW v AS SELECT * FROM t WHERE a = 1 + 1;"), "arithmetic expression", 2);
+    refuses(
+        &format!("{T}CREATE VIEW v AS SELECT * FROM t WHERE a = 1 + 1;"),
+        "arithmetic expression",
+        2,
+    );
     refuses(&format!("{T}CREATE VIEW v AS SELECT DISTINCT a FROM t;"), "SELECT DISTINCT", 2);
     refuses(&format!("{T}CREATE VIEW v AS SELECT a AS x FROM t;"), "column alias", 2);
-    refuses(&format!("{T}CREATE VIEW v AS SELECT * FROM t WHERE a = 1 ORDER BY a, b;"), "multi-column ORDER BY", 2);
+    refuses(
+        &format!("{T}CREATE VIEW v AS SELECT * FROM t WHERE a = 1 ORDER BY a, b;"),
+        "multi-column ORDER BY",
+        2,
+    );
     refuses(&format!("{T}CREATE VIEW v AS SELECT * FROM t WHERE a = b;"), "column reference", 2);
-    refuses(&format!("{T}CREATE VIEW v AS SELECT * FROM t WHERE a = 1 LIMIT $1;"), "parameterized LIMIT", 2);
+    refuses(
+        &format!("{T}CREATE VIEW v AS SELECT * FROM t WHERE a = 1 LIMIT $1;"),
+        "parameterized LIMIT",
+        2,
+    );
     refuses(&format!("{T}CREATE VIEW v AS SELECT * FROM t UNION SELECT * FROM t;"), "UNION", 2);
 }
 
 #[test]
 fn table_constraints_refused() {
-    refuses("CREATE TABLE t (id bigint PRIMARY KEY, a bigint REFERENCES u(id));", "REFERENCES is not compilable", 1);
-    refuses("CREATE TABLE t (id bigint PRIMARY KEY, a text UNIQUE);", "an inline UNIQUE is not compilable", 1);
-    refuses("CREATE TABLE t (id bigint PRIMARY KEY, CHECK (id > 0));", "CHECK is not compilable", 1);
+    refuses(
+        "CREATE TABLE t (id bigint PRIMARY KEY, a bigint REFERENCES u(id));",
+        "REFERENCES is not compilable",
+        1,
+    );
+    refuses(
+        "CREATE TABLE t (id bigint PRIMARY KEY, a text UNIQUE);",
+        "an inline UNIQUE is not compilable",
+        1,
+    );
+    refuses(
+        "CREATE TABLE t (id bigint PRIMARY KEY, CHECK (id > 0));",
+        "CHECK is not compilable",
+        1,
+    );
     refuses(
         "CREATE TABLE t (id bigint PRIMARY KEY,\n  FOREIGN KEY (a) REFERENCES u(id));",
         "FOREIGN KEY is not compilable",
         2,
     );
     refuses("CREATE TABLE t (a bigint, b bigint, PRIMARY KEY (a, b));", "composite PRIMARY KEY", 1);
-    refuses("CREATE TABLE t (id bigint PRIMARY KEY, a text, b text, UNIQUE (a, b));", "multi-column UNIQUE constraint", 1);
+    refuses(
+        "CREATE TABLE t (id bigint PRIMARY KEY, a text, b text, UNIQUE (a, b));",
+        "multi-column UNIQUE constraint",
+        1,
+    );
 }
 
 #[test]
@@ -109,7 +168,11 @@ fn create_variants_refused() {
 
 #[test]
 fn type_refusals() {
-    refuses("CREATE TABLE t (id bigint PRIMARY KEY, a bytea);", "type 'bytea' is not in the compilable subset", 1);
+    refuses(
+        "CREATE TABLE t (id bigint PRIMARY KEY, a bytea);",
+        "type 'bytea' is not in the compilable subset",
+        1,
+    );
     refuses("CREATE TABLE t (id bigint PRIMARY KEY, a text(5));", "takes no arguments", 1);
 }
 
@@ -117,7 +180,11 @@ fn type_refusals() {
 fn lexer_refusals() {
     refuses("CREATE TABLE `t` (id bigint PRIMARY KEY);", "backtick", 1);
     refuses("CREATE TABLE t (id bigint PRIMARY KEY); /* open", "unterminated /* block comment", 1);
-    refuses("CREATE VIEW v AS SELECT * FROM t WHERE a = 'open;", "unterminated '\u{2026}' string literal", 1);
+    refuses(
+        "CREATE VIEW v AS SELECT * FROM t WHERE a = 'open;",
+        "unterminated '\u{2026}' string literal",
+        1,
+    );
     refuses("CREATE TABLE t (id bigint PRIMARY KEY, a text); $x", "'$' must be followed", 1);
 }
 

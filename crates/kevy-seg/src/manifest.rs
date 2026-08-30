@@ -30,12 +30,12 @@ use crate::SegError;
 /// # std::fs::create_dir_all(&dir).unwrap();
 /// let mut m = Manifest::open(&dir).unwrap();
 /// let e = ManifestEntry {
-    ///     file: "s1.seg".into(),
-    ///     meta: Vec::new(),
-    ///     min_key: b"a".to_vec(),
-    ///     max_key: b"z".to_vec(),
-    ///     records: 1,
-    /// };
+///     file: "s1.seg".into(),
+///     meta: Vec::new(),
+///     min_key: b"a".to_vec(),
+///     max_key: b"z".to_vec(),
+///     records: 1,
+/// };
 /// m.add(e).unwrap();
 /// // min/max are mirrored from the footer so a reader can skip a
 /// // segment without opening it.
@@ -81,10 +81,10 @@ impl Manifest {
     /// # Examples
     ///
     /// ```
-/// use kevy_seg::{Manifest, ManifestEntry};
-/// # let dir = std::env::temp_dir().join(format!("kevy-man-doc-{}-{}", std::process::id(), line!()));
-/// # std::fs::create_dir_all(&dir).unwrap();
-/// // A directory with no manifest opens empty rather than failing.
+    /// use kevy_seg::{Manifest, ManifestEntry};
+    /// # let dir = std::env::temp_dir().join(format!("kevy-man-doc-{}-{}", std::process::id(), line!()));
+    /// # std::fs::create_dir_all(&dir).unwrap();
+    /// // A directory with no manifest opens empty rather than failing.
     /// let m = Manifest::open(&dir).unwrap();
     /// assert_eq!(m.live().count(), 0);
     /// # std::fs::remove_dir_all(&dir).ok();
@@ -123,18 +123,18 @@ impl Manifest {
     /// # Examples
     ///
     /// ```
-/// use kevy_seg::{Manifest, ManifestEntry};
-/// # let dir = std::env::temp_dir().join(format!("kevy-man-doc-{}-{}", std::process::id(), line!()));
-/// # std::fs::create_dir_all(&dir).unwrap();
-/// let mut m = Manifest::open(&dir).unwrap();
-/// let e = ManifestEntry {
+    /// use kevy_seg::{Manifest, ManifestEntry};
+    /// # let dir = std::env::temp_dir().join(format!("kevy-man-doc-{}-{}", std::process::id(), line!()));
+    /// # std::fs::create_dir_all(&dir).unwrap();
+    /// let mut m = Manifest::open(&dir).unwrap();
+    /// let e = ManifestEntry {
     ///     file: "s1.seg".into(),
     ///     meta: Vec::new(),
     ///     min_key: b"a".to_vec(),
     ///     max_key: b"z".to_vec(),
     ///     records: 1,
     /// };
-/// m.add(e).unwrap();
+    /// m.add(e).unwrap();
     /// // Durable at once: a fresh open sees it.
     /// assert_eq!(Manifest::open(&dir).unwrap().live().count(), 1);
     /// # std::fs::remove_dir_all(&dir).ok();
@@ -154,18 +154,18 @@ impl Manifest {
     /// # Examples
     ///
     /// ```
-/// use kevy_seg::{Manifest, ManifestEntry};
-/// # let dir = std::env::temp_dir().join(format!("kevy-man-doc-{}-{}", std::process::id(), line!()));
-/// # std::fs::create_dir_all(&dir).unwrap();
-/// let mut m = Manifest::open(&dir).unwrap();
-/// let e = ManifestEntry {
+    /// use kevy_seg::{Manifest, ManifestEntry};
+    /// # let dir = std::env::temp_dir().join(format!("kevy-man-doc-{}-{}", std::process::id(), line!()));
+    /// # std::fs::create_dir_all(&dir).unwrap();
+    /// let mut m = Manifest::open(&dir).unwrap();
+    /// let e = ManifestEntry {
     ///     file: "s1.seg".into(),
     ///     meta: Vec::new(),
     ///     min_key: b"a".to_vec(),
     ///     max_key: b"z".to_vec(),
     ///     records: 1,
     /// };
-/// m.add(e).unwrap();
+    /// m.add(e).unwrap();
     /// m.drop_seg("s1.seg").unwrap();
     /// // Gone from the live set — the FILE is removed later, by `sweep`.
     /// assert_eq!(m.live().count(), 0);
@@ -184,18 +184,18 @@ impl Manifest {
     /// # Examples
     ///
     /// ```
-/// use kevy_seg::{Manifest, ManifestEntry};
-/// # let dir = std::env::temp_dir().join(format!("kevy-man-doc-{}-{}", std::process::id(), line!()));
-/// # std::fs::create_dir_all(&dir).unwrap();
-/// let mut m = Manifest::open(&dir).unwrap();
-/// let e = ManifestEntry {
+    /// use kevy_seg::{Manifest, ManifestEntry};
+    /// # let dir = std::env::temp_dir().join(format!("kevy-man-doc-{}-{}", std::process::id(), line!()));
+    /// # std::fs::create_dir_all(&dir).unwrap();
+    /// let mut m = Manifest::open(&dir).unwrap();
+    /// let e = ManifestEntry {
     ///     file: "s1.seg".into(),
     ///     meta: Vec::new(),
     ///     min_key: b"a".to_vec(),
     ///     max_key: b"z".to_vec(),
     ///     records: 1,
     /// };
-/// m.add(e).unwrap();
+    /// m.add(e).unwrap();
     /// assert_eq!(m.live().map(|e| e.file.as_str()).collect::<Vec<_>>(), vec!["s1.seg"]);
     /// # std::fs::remove_dir_all(&dir).ok();
     /// ```
@@ -223,18 +223,18 @@ impl Manifest {
     /// # Examples
     ///
     /// ```
-/// use kevy_seg::{Manifest, ManifestEntry};
-/// # let dir = std::env::temp_dir().join(format!("kevy-man-doc-{}-{}", std::process::id(), line!()));
-/// # std::fs::create_dir_all(&dir).unwrap();
-/// let mut m = Manifest::open(&dir).unwrap();
-/// let e = ManifestEntry {
+    /// use kevy_seg::{Manifest, ManifestEntry};
+    /// # let dir = std::env::temp_dir().join(format!("kevy-man-doc-{}-{}", std::process::id(), line!()));
+    /// # std::fs::create_dir_all(&dir).unwrap();
+    /// let mut m = Manifest::open(&dir).unwrap();
+    /// let e = ManifestEntry {
     ///     file: "s1.seg".into(),
     ///     meta: Vec::new(),
     ///     min_key: b"a".to_vec(),
     ///     max_key: b"z".to_vec(),
     ///     records: 1,
     /// };
-/// m.add(e).unwrap();
+    /// m.add(e).unwrap();
     /// std::fs::write(dir.join("s1.seg"), b"x").unwrap();
     /// std::fs::write(dir.join("orphan.seg"), b"x").unwrap();
     ///
@@ -304,9 +304,7 @@ fn apply(live: &mut BTreeMap<String, ManifestEntry>, rec: &[u8]) -> Result<(), S
         }
         Some(&OP_DROP) => {
             let name = String::from_utf8_lossy(&rec[1..]).into_owned();
-            live.remove(&name)
-                .map(|_| ())
-                .ok_or(SegError::Corrupt("DROP of an unknown segment"))
+            live.remove(&name).map(|_| ()).ok_or(SegError::Corrupt("DROP of an unknown segment"))
         }
         _ => Err(SegError::Corrupt("unknown manifest op")),
     }

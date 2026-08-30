@@ -55,9 +55,7 @@ pub struct Transaction<'a> {
 
 impl std::fmt::Debug for Transaction<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Transaction")
-            .field("live", &self.live)
-            .finish_non_exhaustive()
+        f.debug_struct("Transaction").field("live", &self.live).finish_non_exhaustive()
     }
 }
 
@@ -66,13 +64,13 @@ impl Connection {
     /// [`io::ErrorKind::Unsupported`].
     pub fn multi(&mut self) -> KevyResult<Transaction<'_>> {
         match self {
-            Self::Embedded(_) => Err(KevyError::Unsupported("MULTI/EXEC is not implemented for the embedded backend; \
-                 call Connection methods directly (each is atomic on its own lock)".into())),
+            Self::Embedded(_) => Err(KevyError::Unsupported(
+                "MULTI/EXEC is not implemented for the embedded backend; \
+                 call Connection methods directly (each is atomic on its own lock)"
+                    .into(),
+            )),
             Self::Remote(client) => match client.request(&[b"MULTI".to_vec()])? {
-                Reply::Simple(s) if s == b"OK" => Ok(Transaction {
-                    client,
-                    live: true,
-                }),
+                Reply::Simple(s) if s == b"OK" => Ok(Transaction { client, live: true }),
                 Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
@@ -92,7 +90,9 @@ impl Connection {
             return Err(KevyError::InvalidInput("WATCH needs at least one key".into()));
         }
         match self {
-            Self::Embedded(_) => Err(KevyError::Unsupported("WATCH is a transaction primitive; embedded backend has no MULTI".into())),
+            Self::Embedded(_) => Err(KevyError::Unsupported(
+                "WATCH is a transaction primitive; embedded backend has no MULTI".into(),
+            )),
             Self::Remote(c) => {
                 let mut args = Vec::with_capacity(keys.len() + 1);
                 args.push(b"WATCH".to_vec());
@@ -110,7 +110,9 @@ impl Connection {
     /// running a transaction. Remote-only.
     pub fn unwatch(&mut self) -> KevyResult<()> {
         match self {
-            Self::Embedded(_) => Err(KevyError::Unsupported("UNWATCH is a transaction primitive; embedded backend has no MULTI".into())),
+            Self::Embedded(_) => Err(KevyError::Unsupported(
+                "UNWATCH is a transaction primitive; embedded backend has no MULTI".into(),
+            )),
             Self::Remote(c) => match c.request(&[b"UNWATCH".to_vec()])? {
                 Reply::Simple(s) if s == b"OK" => Ok(()),
                 Reply::Error(e) => Err(KevyError::Protocol(string(e))),
@@ -244,7 +246,9 @@ impl Transaction<'_> {
     /// Queue `EXISTS key [key ...]`.
     pub fn exists(&mut self, keys: &[&[u8]]) -> KevyResult<&mut Self> {
         if keys.is_empty() {
-            return Err(KevyError::InvalidInput("Transaction::exists needs at least one key".into()));
+            return Err(KevyError::InvalidInput(
+                "Transaction::exists needs at least one key".into(),
+            ));
         }
         let mut args = Vec::with_capacity(keys.len() + 1);
         args.push(b"EXISTS".to_vec());
@@ -261,11 +265,7 @@ impl Transaction<'_> {
 
     /// Queue `INCRBY key delta`.
     pub fn incr_by(&mut self, key: &[u8], delta: i64) -> KevyResult<&mut Self> {
-        let args = vec![
-            b"INCRBY".to_vec(),
-            key.to_vec(),
-            delta.to_string().into_bytes(),
-        ];
+        let args = vec![b"INCRBY".to_vec(), key.to_vec(), delta.to_string().into_bytes()];
         self.queue_argv(args)?;
         Ok(self)
     }
@@ -285,7 +285,9 @@ impl Transaction<'_> {
     /// Queue `MSET key value [key value ...]`.
     pub fn mset(&mut self, pairs: &[(&[u8], &[u8])]) -> KevyResult<&mut Self> {
         if pairs.is_empty() {
-            return Err(KevyError::InvalidInput("Transaction::mset needs at least one (key, value) pair".into()));
+            return Err(KevyError::InvalidInput(
+                "Transaction::mset needs at least one (key, value) pair".into(),
+            ));
         }
         let mut args = Vec::with_capacity(pairs.len() * 2 + 1);
         args.push(b"MSET".to_vec());
@@ -365,16 +367,16 @@ impl TransactionReplies {
         if left == 0 {
             Ok(())
         } else {
-            Err(KevyError::Protocol(format!("transaction reply cursor has {left} un-consumed replies")))
+            Err(KevyError::Protocol(format!(
+                "transaction reply cursor has {left} un-consumed replies"
+            )))
         }
     }
 
     /// Pop the next reply as a raw [`Reply`]. Escape hatch for verbs
     /// the typed extractors don't cover.
     pub fn raw(&mut self) -> KevyResult<Reply> {
-        self.iter
-            .next()
-            .ok_or_else(|| KevyError::Protocol("exhausted".into()))
+        self.iter.next().ok_or_else(|| KevyError::Protocol("exhausted".into()))
     }
 
     /// Expect `Reply::Simple(b"OK")` — `SET` / `MSET` ack.

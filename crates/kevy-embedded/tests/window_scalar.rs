@@ -39,11 +39,7 @@ fn table(name: &[u8], windowed: bool) -> TableSpec {
             values: vec![b"at".to_vec(), b"prio".to_vec(), b"tag".to_vec()],
         }],
         orderpaths: vec![],
-        window: windowed.then_some(WindowSpec {
-            column: b"at".to_vec(),
-            span: 100,
-            bucket: 10,
-        }),
+        window: windowed.then_some(WindowSpec { column: b"at".to_vec(), span: 100, bucket: 10 }),
         autodeclare: 0,
         auto_added: vec![],
     }
@@ -57,9 +53,7 @@ fn v(i: i64) -> IndexValue {
 fn embedded_window_slides_and_stays_semantically_equivalent() {
     let d = kevy_tmpdir::TmpDir::new("emb-winscalar");
     let s = Store::open(
-        Config::default()
-            .with_persist(d.path())
-            .with_reaper_interval(Duration::from_millis(25)),
+        Config::default().with_persist(d.path()).with_reaper_interval(Duration::from_millis(25)),
     )
     .expect("open");
 
@@ -70,8 +64,16 @@ fn embedded_window_slides_and_stays_semantically_equivalent() {
         let key = format!("ev:{i}");
         let at = (i * 10).to_string();
         let prio = ((i % 4) * 10).to_string();
-        let mut argv: Vec<&[u8]> = vec![b"HSET", key.as_bytes(), b"id", key.as_bytes(),
-            b"at", at.as_bytes(), b"prio", prio.as_bytes()];
+        let mut argv: Vec<&[u8]> = vec![
+            b"HSET",
+            key.as_bytes(),
+            b"id",
+            key.as_bytes(),
+            b"at",
+            at.as_bytes(),
+            b"prio",
+            prio.as_bytes(),
+        ];
         let tag = tags[(i % 3) as usize];
         if i % 7 != 0 {
             argv.extend_from_slice(&[b"tag", tag.as_bytes()]);
@@ -144,9 +146,8 @@ fn embedded_window_slides_and_stays_semantically_equivalent() {
             assert_eq!(p_ev.rows, p_ctl.rows, "{tag}: {label} rows");
             assert_eq!(p_ev.facets, p_ctl.facets, "{tag}: {label} facets");
         }
-        let cc_ev = s
-            .idx_count_claused(b"ev.at", &v(0), &v(280), &filter_prio)
-            .expect("claused count ev");
+        let cc_ev =
+            s.idx_count_claused(b"ev.at", &v(0), &v(280), &filter_prio).expect("claused count ev");
         let cc_ctl = s
             .idx_count_claused(b"ctl.at", &v(0), &v(280), &filter_prio)
             .expect("claused count ctl");

@@ -3,8 +3,8 @@
 use crate::store::Store;
 
 use super::util::{
-    arg_i64, bulk, emit_bulk_array, emit_int, err, kevy_err, nil, nil_array, opt_bulk, rest,
-    simple, wrong_args, ERR_NOT_INT, ERR_SYNTAX,
+    ERR_NOT_INT, ERR_SYNTAX, arg_i64, bulk, emit_bulk_array, emit_int, err, kevy_err, nil,
+    nil_array, opt_bulk, rest, simple, wrong_args,
 };
 
 /// One list-family request; `false` = verb not in this group.

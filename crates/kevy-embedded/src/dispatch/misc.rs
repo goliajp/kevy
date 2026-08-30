@@ -102,8 +102,7 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
 #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
 fn cmd_feed_read(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     use super::util::arg_i64;
-    let (Some(g), Some(o), Some(limit)) =
-        (arg_i64(&argv[1]), arg_i64(&argv[2]), arg_i64(&argv[3]))
+    let (Some(g), Some(o), Some(limit)) = (arg_i64(&argv[1]), arg_i64(&argv[2]), arg_i64(&argv[3]))
     else {
         return err(out, "ERR FEED.READ gen offset limit [PREFIX p…]");
     };

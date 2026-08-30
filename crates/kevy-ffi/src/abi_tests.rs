@@ -93,7 +93,9 @@ fn misuse_is_reported_not_undefined() {
     // Null db / zero argc / null out are misuse, not crashes.
     let p: *const u8 = b"X".as_ptr();
     let l = 1usize;
-    assert!(unsafe { kevy_cmd(std::ptr::null_mut(), 1, &raw const p, &raw const l, &raw mut out) } < 0);
+    assert!(
+        unsafe { kevy_cmd(std::ptr::null_mut(), 1, &raw const p, &raw const l, &raw mut out) } < 0
+    );
     let db = kevy_open_mem();
     assert!(unsafe { kevy_cmd(db, 0, &raw const p, &raw const l, &raw mut out) } < 0);
     assert!(unsafe { kevy_cmd(db, 1, &raw const p, &raw const l, std::ptr::null_mut()) } < 0);
@@ -147,10 +149,7 @@ fn pubsub_ack_message_and_pattern_frames() {
     assert_eq!(take(out), b"*3\r\n$7\r\nmessage\r\n$2\r\nc1\r\n$2\r\nhi\r\n");
     let mut out = KevyBuf::empty();
     assert_eq!(unsafe { kevy_sub_next(psub, &raw mut out) }, 1);
-    assert_eq!(
-        take(out),
-        b"*4\r\n$8\r\npmessage\r\n$2\r\nc*\r\n$2\r\nc1\r\n$2\r\nhi\r\n"
-    );
+    assert_eq!(take(out), b"*4\r\n$8\r\npmessage\r\n$2\r\nc*\r\n$2\r\nc1\r\n$2\r\nhi\r\n");
 
     // Drained: 0 with an empty (non-freeable) buffer.
     let mut out = KevyBuf::empty();
@@ -183,8 +182,11 @@ fn open_with_options_and_shutdown_lifecycle() {
     assert_eq!(unsafe { kevy_shutdown(db) }, 0);
     assert_eq!(unsafe { kevy_shutdown(db) }, 0);
     let reply = cmd(db, &[b"SET", b"k", b"w"]);
-    assert!(reply.starts_with(b"-"), "post-shutdown write must error, got {:?}",
-        String::from_utf8_lossy(&reply));
+    assert!(
+        reply.starts_with(b"-"),
+        "post-shutdown write must error, got {:?}",
+        String::from_utf8_lossy(&reply)
+    );
     assert_eq!(cmd(db, &[b"GET", b"k"]), b"$1\r\nv\r\n");
     assert_eq!(unsafe { kevy_shutdown(std::ptr::null_mut()) }, -1);
     unsafe { kevy_close(db) };
@@ -208,10 +210,7 @@ fn open_report_is_zeroed_for_a_clean_memory_open() {
     assert_eq!(rep.dropped_bytes, 0);
     assert_eq!(rep.corrupt, 0);
     assert_eq!(rep.quarantine_count, 0);
-    assert_eq!(
-        unsafe { kevy_open_report(std::ptr::null_mut(), &raw mut rep) },
-        -1
-    );
+    assert_eq!(unsafe { kevy_open_report(std::ptr::null_mut(), &raw mut rep) }, -1);
     unsafe { kevy_close(db) };
 }
 
@@ -243,10 +242,7 @@ fn publish_scalar_counts_and_delivers_same_frames_as_framed() {
     assert_eq!(take(out), b"*3\r\n$7\r\nmessage\r\n$2\r\nc1\r\n$2\r\nhi\r\n");
     let mut out = KevyBuf::empty();
     assert_eq!(unsafe { kevy_sub_next(psub, &raw mut out) }, 1);
-    assert_eq!(
-        take(out),
-        b"*4\r\n$8\r\npmessage\r\n$2\r\nc*\r\n$2\r\nc1\r\n$2\r\nhi\r\n"
-    );
+    assert_eq!(take(out), b"*4\r\n$8\r\npmessage\r\n$2\r\nc*\r\n$2\r\nc1\r\n$2\r\nhi\r\n");
 
     // Empty payload is legal (null ptr allowed only with len 0).
     assert_eq!(unsafe { kevy_publish(db, b"c1".as_ptr(), 2, std::ptr::null(), 0) }, 2);
@@ -439,7 +435,14 @@ fn set_many_batches_writes_and_each_key_reads_back() {
     };
     assert_eq!(no_op, 0);
     let rc_null = unsafe {
-        kevy_set_many(std::ptr::null_mut(), 3, kptrs.as_ptr(), klens.as_ptr(), vptrs.as_ptr(), vlens.as_ptr())
+        kevy_set_many(
+            std::ptr::null_mut(),
+            3,
+            kptrs.as_ptr(),
+            klens.as_ptr(),
+            vptrs.as_ptr(),
+            vlens.as_ptr(),
+        )
     };
     assert_eq!(rc_null, -1);
     unsafe { kevy_close(db) };

@@ -36,13 +36,7 @@ fn eval_cross_slot_rejected_under_cluster() {
     // share a `{hashtag}`, so they'll collide and trigger CROSSSLOT.
     let reply = kevy.dispatch(
         &mut store,
-        &argv(&[
-            b"EVAL",
-            b"return KEYS[1] .. KEYS[2]",
-            b"2",
-            b"foo",
-            b"bar",
-        ]),
+        &argv(&[b"EVAL", b"return KEYS[1] .. KEYS[2]", b"2", b"foo", b"bar"]),
     );
     assert!(
         reply.starts_with(b"-CROSSSLOT "),
@@ -73,15 +67,10 @@ fn eval_same_slot_via_hashtag_accepted_under_cluster() {
 fn evalsha_cross_slot_rejected_under_cluster() {
     let kevy = cluster_enabled_kevy();
     let mut store = Store::new();
-    let load_reply = kevy.dispatch(
-        &mut store,
-        &argv(&[b"SCRIPT", b"LOAD", b"return KEYS[1] .. KEYS[2]"]),
-    );
+    let load_reply =
+        kevy.dispatch(&mut store, &argv(&[b"SCRIPT", b"LOAD", b"return KEYS[1] .. KEYS[2]"]));
     let sha_hex = load_reply[5..45].to_vec();
-    let reply = kevy.dispatch(
-        &mut store,
-        &argv(&[b"EVALSHA", &sha_hex, b"2", b"foo", b"bar"]),
-    );
+    let reply = kevy.dispatch(&mut store, &argv(&[b"EVALSHA", &sha_hex, b"2", b"foo", b"bar"]));
     assert!(reply.starts_with(b"-CROSSSLOT "));
 }
 
@@ -89,10 +78,7 @@ fn evalsha_cross_slot_rejected_under_cluster() {
 fn eval_single_key_accepted_under_cluster() {
     let kevy = cluster_enabled_kevy();
     let mut store = Store::new();
-    let reply = kevy.dispatch(
-        &mut store,
-        &argv(&[b"EVAL", b"return KEYS[1]", b"1", b"foo"]),
-    );
+    let reply = kevy.dispatch(&mut store, &argv(&[b"EVAL", b"return KEYS[1]", b"1", b"foo"]));
     assert_eq!(reply, b"$3\r\nfoo\r\n");
 }
 

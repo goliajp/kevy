@@ -60,10 +60,7 @@ fn append_frame(data_dir: &Path, args: &[&[u8]]) {
         payload.extend_from_slice(a);
         payload.extend_from_slice(b"\r\n");
     }
-    let mut f = std::fs::OpenOptions::new()
-        .append(true)
-        .open(data_dir.join("aof-0.aof"))
-        .unwrap();
+    let mut f = std::fs::OpenOptions::new().append(true).open(data_dir.join("aof-0.aof")).unwrap();
     f.write_all(&(payload.len() as u32).to_le_bytes()).unwrap();
     f.write_all(&kevy_sys::checksum::crc32c(&payload).to_le_bytes()).unwrap();
     f.write_all(&payload).unwrap();
@@ -123,7 +120,8 @@ fn write_after_stitch_revives_and_a_log_gap_inserts_stubs() {
     append_frame(d.path(), &[b"HSET", b"row:1", b"note", b"revived"]);
     // row:9 was never written in the log — the rewritten-log shape:
     // the stitch must insert its stub straight from the segment.
-    let file2 = seal_row_segment(d.path(), 1, &[(b"row:9", &[(b"id", b"row:9"), (b"note", b"gap")])]);
+    let file2 =
+        seal_row_segment(d.path(), 1, &[(b"row:9", &[(b"id", b"row:9"), (b"note", b"gap")])]);
     append_frame(d.path(), &[kevy_persist::SEGMENTED, file2.as_bytes()]);
 
     let s = open(d.path());

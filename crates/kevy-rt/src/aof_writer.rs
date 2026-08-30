@@ -25,7 +25,9 @@ use kevy_sys::Waker;
 
 enum Job {
     Append(Vec<u8>),
-    Fsync { covers: u64 },
+    Fsync {
+        covers: u64,
+    },
     /// Swap the lane onto a fresh handle (post-rewrite reopen). The
     /// old clone points at the renamed-away inode; dropping it here
     /// keeps that close off the reactor.
@@ -93,7 +95,9 @@ impl AofWriterLane {
             self.chans = Some((job_tx, done_rx));
             self.enabled = true;
         } else {
-            eprintln!("kevy: shard {shard_id} aof writer thread failed to spawn; keeping the synchronous path");
+            eprintln!(
+                "kevy: shard {shard_id} aof writer thread failed to spawn; keeping the synchronous path"
+            );
         }
     }
 
@@ -150,17 +154,18 @@ impl<C: Commands> Shard<C> {
     /// `flush_conn` instead of fsync-blocking the reactor.
     pub(crate) fn epoll_aof_setup(&mut self) {
         let Some(aof) = &mut self.aof else { return };
-        if matches!(
-            std::env::var("KEVY_AOF_OFFLOAD").as_deref(),
-            Ok("0" | "off" | "no" | "false")
-        ) {
+        if matches!(std::env::var("KEVY_AOF_OFFLOAD").as_deref(), Ok("0" | "off" | "no" | "false"))
+        {
             return;
         }
         aof.enable_queued_appends();
         let file = match aof.queued_file_clone() {
             Some(Ok(f)) => f,
             Some(Err(e)) => {
-                eprintln!("kevy: shard {} aof handle clone failed: {e}; keeping the synchronous path", self.id);
+                eprintln!(
+                    "kevy: shard {} aof handle clone failed: {e}; keeping the synchronous path",
+                    self.id
+                );
                 return;
             }
             None => return,

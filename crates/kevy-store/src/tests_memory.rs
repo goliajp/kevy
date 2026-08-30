@@ -80,11 +80,7 @@ fn allkeys_lru_evicts_least_recent() {
         st.set(k.as_bytes(), s("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"), None, false, false);
         st.try_evict_after_write();
     }
-    assert!(
-        st.used_memory() <= 2_000,
-        "eviction should bring us under: got {}",
-        st.used_memory()
-    );
+    assert!(st.used_memory() <= 2_000, "eviction should bring us under: got {}", st.used_memory());
     // Earlier keys should be gone; later keys present.
     assert_eq!(st.get(b"k00"), Ok(None));
     assert_eq!(st.get(b"k49").map(|v| v.is_some()), Ok(true));

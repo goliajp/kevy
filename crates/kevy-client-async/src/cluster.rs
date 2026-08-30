@@ -46,9 +46,7 @@ impl AsyncClusterClient {
     /// per shard.
     pub async fn connect(host: &str, port: u16) -> io::Result<Self> {
         let mut seed_codec = AsyncRespCodec::new(connect_default(host, port).await?);
-        let reply = seed_codec
-            .request(&[b"CLUSTER".to_vec(), b"SLOTS".to_vec()])
-            .await?;
+        let reply = seed_codec.request(&[b"CLUSTER".to_vec(), b"SLOTS".to_vec()]).await?;
         let ranges = parse_cluster_slots(reply)?;
         let (nodes, slot_to_shard) = build_topology(&ranges)?;
 
@@ -57,10 +55,7 @@ impl AsyncClusterClient {
             let transport = connect_default(h, *p).await?;
             shards.push(AsyncRespCodec::new(transport));
         }
-        Ok(Self {
-            shards,
-            slot_to_shard,
-        })
+        Ok(Self { shards, slot_to_shard })
     }
 
     /// Number of distinct shard nodes.
@@ -69,11 +64,7 @@ impl AsyncClusterClient {
     }
 
     /// Route a single-key command to its owner shard.
-    pub async fn request_keyed(
-        &mut self,
-        key: &[u8],
-        args: &[Vec<u8>],
-    ) -> io::Result<Reply> {
+    pub async fn request_keyed(&mut self, key: &[u8], args: &[Vec<u8>]) -> io::Result<Reply> {
         let i = self.shard_for(key);
         self.shards[i].request(args).await
     }
@@ -98,10 +89,7 @@ impl AsyncClusterClient {
 
     /// `PUBLISH channel message`. Returns subscriber count.
     pub async fn publish(&mut self, channel: &[u8], message: &[u8]) -> io::Result<usize> {
-        match self
-            .request_unkeyed(&vec3(b"PUBLISH", channel, message))
-            .await?
-        {
+        match self.request_unkeyed(&vec3(b"PUBLISH", channel, message)).await? {
             Reply::Int(n) if n >= 0 => Ok(n as usize),
             Reply::Error(e) => Err(io::Error::other(string(e))),
             other => Err(unexpected(other)),
@@ -160,11 +148,7 @@ impl AsyncClusterClient {
 
     /// `INCRBY key delta`.
     pub async fn incr_by(&mut self, key: &[u8], delta: i64) -> io::Result<i64> {
-        let args = vec![
-            b"INCRBY".to_vec(),
-            key.to_vec(),
-            delta.to_string().into_bytes(),
-        ];
+        let args = vec![b"INCRBY".to_vec(), key.to_vec(), delta.to_string().into_bytes()];
         match self.request_keyed(key, &args).await? {
             Reply::Int(n) => Ok(n),
             Reply::Error(e) => Err(io::Error::other(string(e))),
@@ -175,11 +159,7 @@ impl AsyncClusterClient {
     /// `PEXPIRE key ttl_ms`.
     pub async fn expire(&mut self, key: &[u8], ttl: Duration) -> io::Result<bool> {
         let ms = ttl.as_millis().min(i64::MAX as u128) as i64;
-        let args = vec![
-            b"PEXPIRE".to_vec(),
-            key.to_vec(),
-            ms.to_string().into_bytes(),
-        ];
+        let args = vec![b"PEXPIRE".to_vec(), key.to_vec(), ms.to_string().into_bytes()];
         match self.request_keyed(key, &args).await? {
             Reply::Int(1) => Ok(true),
             Reply::Int(0) => Ok(false),

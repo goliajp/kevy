@@ -98,12 +98,7 @@ impl TextSegment {
     /// whole-document scores: frequency, length and document frequency
     /// all come from the wanted fields alone, so a match in a short title
     /// is not diluted by a long body that never mentioned the term.
-    pub fn matches_query_with(
-        &self,
-        text: &[u8],
-        limit: usize,
-        opts: QueryOpts,
-    ) -> Vec<TextMatch> {
+    pub fn matches_query_with(&self, text: &[u8], limit: usize, opts: QueryOpts) -> Vec<TextMatch> {
         self.matches_query_faceted(text, limit, opts, &[]).hits
     }
 
@@ -121,7 +116,8 @@ impl TextSegment {
         opts: QueryOpts,
         facets: &[crate::Facet],
     ) -> crate::FacetedMatches {
-        let empty = || crate::FacetedMatches { hits: Vec::new(), facets: vec![Vec::new(); facets.len()] };
+        let empty =
+            || crate::FacetedMatches { hits: Vec::new(), facets: vec![Vec::new(); facets.len()] };
         if limit == 0 {
             return empty();
         }
@@ -413,9 +409,10 @@ fn phrase_occurs(pos: &Positions, toks: &[Vec<u8>], id: u32) -> bool {
         return false;
     };
     walk(first).any(|start| {
-        toks.iter().enumerate().skip(1).all(|(i, t)| {
-            pos.blob(t, id).is_some_and(|b| walk(b).any(|p| p == start + i as u32))
-        })
+        toks.iter()
+            .enumerate()
+            .skip(1)
+            .all(|(i, t)| pos.blob(t, id).is_some_and(|b| walk(b).any(|p| p == start + i as u32)))
     })
 }
 
@@ -432,8 +429,7 @@ fn phrase_starts(pos: &Positions, toks: &[Vec<u8>], id: u32) -> HashSet<u32> {
         let Some(offs) = pos.get(t, id) else {
             return HashSet::new();
         };
-        let shifted: HashSet<u32> =
-            offs.iter().filter_map(|&p| p.checked_sub(i as u32)).collect();
+        let shifted: HashSet<u32> = offs.iter().filter_map(|&p| p.checked_sub(i as u32)).collect();
         starts.retain(|s| shifted.contains(s));
         if starts.is_empty() {
             return starts;

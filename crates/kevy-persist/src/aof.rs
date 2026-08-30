@@ -278,10 +278,8 @@ impl Aof {
     fn write_scratch_to_file(&mut self) -> io::Result<()> {
         match self.format {
             crate::AofFormat::V2 => {
-                self.file
-                    .write_all(&(self.scratch.len() as u32).to_le_bytes())?;
-                self.file
-                    .write_all(&crate::crc32c::crc32c(&self.scratch).to_le_bytes())?;
+                self.file.write_all(&(self.scratch.len() as u32).to_le_bytes())?;
+                self.file.write_all(&crate::crc32c::crc32c(&self.scratch).to_le_bytes())?;
                 self.file.write_all(&self.scratch)
             }
             crate::AofFormat::V1 => self.file.write_all(&self.scratch),
@@ -318,10 +316,8 @@ impl Aof {
             crate::AofFormat::V2 => crate::record::RECORD_HEADER as u64,
             crate::AofFormat::V1 => 0,
         };
-        self.size_bytes = self
-            .size_bytes
-            .saturating_add(estimate_multibulk_bytes(args))
-            .saturating_add(overhead);
+        self.size_bytes =
+            self.size_bytes.saturating_add(estimate_multibulk_bytes(args)).saturating_add(overhead);
         match self.fsync {
             // Inside a group-commit window, defer the fsync to `end_group`
             // (one per batch, still before the batch's replies). Outside

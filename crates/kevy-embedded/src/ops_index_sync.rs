@@ -90,15 +90,8 @@ pub(crate) fn new_graph(spec: &IndexSpec) -> kevy_vector::Hnsw {
 /// Reconcile one shard's segment list with the catalog; new indexes
 /// backfill from this shard's live keys (we hold the shard's write
 /// lock — no concurrent writes can race the scan).
-pub(crate) fn sync_segs(
-    reg: &IndexReg,
-    shard_segs: &mut ShardSegs,
-    store: &mut kevy_store::Store,
-) {
-    let g = reg
-        .catalog
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+pub(crate) fn sync_segs(reg: &IndexReg, shard_segs: &mut ShardSegs, store: &mut kevy_store::Store) {
+    let g = reg.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
     let (ver, cat) = &*g;
     if shard_segs.version == *ver {
         return;
@@ -123,22 +116,43 @@ fn rebuild_seg_lists(
     for (spec, _) in cat.iter() {
         let (segs, st) = (&mut *shard_segs, &mut *store);
         match spec.kind {
-            IndexKind::Agg => next_agg
-                .push(take_or_backfill(&mut segs.agg, spec, st, kevy_index::AggSegment::new, apply_agg_key)),
+            IndexKind::Agg => next_agg.push(take_or_backfill(
+                &mut segs.agg,
+                spec,
+                st,
+                kevy_index::AggSegment::new,
+                apply_agg_key,
+            )),
             #[cfg(feature = "vector")]
-            IndexKind::Ann => next_ann
-                .push(take_or_backfill(&mut segs.ann, spec, st, || new_graph(spec), apply_ann_key)),
+            IndexKind::Ann => next_ann.push(take_or_backfill(
+                &mut segs.ann,
+                spec,
+                st,
+                || new_graph(spec),
+                apply_ann_key,
+            )),
             // Engine compiled out (idx_create rejects the kind; a
             // sidecar-loaded spec gets no segment, so queries answer
             // NotFound instead of silently mis-indexing).
             #[cfg(not(feature = "vector"))]
             IndexKind::Ann => {}
             #[cfg(feature = "text")]
-            IndexKind::Text => next_text
-                .push(take_or_backfill(&mut segs.text, spec, st, || new_text(spec), apply_text_key)),
+            IndexKind::Text => next_text.push(take_or_backfill(
+                &mut segs.text,
+                spec,
+                st,
+                || new_text(spec),
+                apply_text_key,
+            )),
             #[cfg(not(feature = "text"))]
             IndexKind::Text => {}
-            _ => next.push(take_or_backfill(&mut segs.segs, spec, st, || new_scalar(spec), apply_key)),
+            _ => next.push(take_or_backfill(
+                &mut segs.segs,
+                spec,
+                st,
+                || new_scalar(spec),
+                apply_key,
+            )),
         }
     }
     shard_segs.segs = next;
@@ -190,8 +204,7 @@ fn apply_agg_key(
     match store.peek_hash_fields(key, &[group_field, spec.field()]) {
         Ok(Some(mut vals)) => {
             let group = vals[0].take();
-            let val =
-                vals[1].take().and_then(|raw| kevy_index::IndexValue::coerce(spec.ty, &raw));
+            let val = vals[1].take().and_then(|raw| kevy_index::IndexValue::coerce(spec.ty, &raw));
             match (group, val) {
                 (Some(g), Some(v)) => a.apply(key, Some((g, v)), false),
                 _ => a.apply(key, None, true),
@@ -263,10 +276,7 @@ pub(crate) fn on_commit(
 ) {
     {
         // Cheap gate: empty catalog = one read-lock + is_empty.
-        let g = reg
-            .catalog
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let g = reg.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         if g.1.is_empty() {
             return;
         }
@@ -292,11 +302,7 @@ pub(crate) fn on_commit(
 /// stales (rewrite / delete / revival; the statistics withdraw
 /// exactly — server twin: `apply_row`'s text arm).
 #[cfg(feature = "text")]
-fn apply_text_arm(
-    shard_segs: &mut ShardSegs,
-    store: &mut kevy_store::Store,
-    key: &[u8],
-) -> bool {
+fn apply_text_arm(shard_segs: &mut ShardSegs, store: &mut kevy_store::Store, key: &[u8]) -> bool {
     let mut touched = false;
     for (spec, ts) in &mut shard_segs.text {
         if key.starts_with(&spec.prefix) {
@@ -411,11 +417,7 @@ fn each_written_key(verb: &[u8], parts: &[&[u8]], mut f: impl FnMut(&[u8])) {
 /// side-channel iff it declared `VALUES` (undeclared = the plain
 /// `Segment::new()`, byte-identical to before; A5).
 fn new_scalar(spec: &IndexSpec) -> Segment {
-    if spec.values.is_empty() {
-        Segment::new()
-    } else {
-        Segment::with_values(spec.values.len())
-    }
+    if spec.values.is_empty() { Segment::new() } else { Segment::with_values(spec.values.len()) }
 }
 
 /// The primary field AND every declared VALUES column read with
@@ -440,8 +442,7 @@ fn apply_key(store: &mut kevy_store::Store, spec: &IndexSpec, seg: &mut Segment,
                 None => seg.apply_with_values(key, None, &[]),
                 Some(v) if spec.values.is_empty() => seg.apply(key, Some(v)),
                 Some(v) => {
-                    let refs: Vec<Option<&[u8]>> =
-                        vals[w..].iter().map(|o| o.as_deref()).collect();
+                    let refs: Vec<Option<&[u8]>> = vals[w..].iter().map(|o| o.as_deref()).collect();
                     seg.apply_with_values(key, Some(v), &refs);
                 }
             }

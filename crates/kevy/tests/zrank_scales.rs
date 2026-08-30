@@ -149,8 +149,7 @@ fn zrank_cost_does_not_scale_linearly() {
 #[test]
 fn zpopmin_below_keeps_exact_semantics() {
     let mut store = Store::new();
-    let pairs: &[(f64, &[u8])] =
-        &[(10.0, b"j1"), (20.0, b"j2"), (30.0, b"j3"), (99.0, b"j4")];
+    let pairs: &[(f64, &[u8])] = &[(10.0, b"j1"), (20.0, b"j2"), (30.0, b"j3"), (99.0, b"j4")];
     store.zadd(b"delayed", pairs).expect("zadd");
 
     // Strictly below: the threshold member itself must NOT pop.

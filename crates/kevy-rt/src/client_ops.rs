@@ -36,11 +36,9 @@ impl ClientKillFilter {
                 let kind = args.get(2)?.to_ascii_uppercase();
                 let val = args.get(3)?;
                 match kind.as_slice() {
-                    b"ID" => std::str::from_utf8(val)
-                        .ok()?
-                        .parse()
-                        .ok()
-                        .map(|id| (Self::Id(id), false)),
+                    b"ID" => {
+                        std::str::from_utf8(val).ok()?.parse().ok().map(|id| (Self::Id(id), false))
+                    }
                     b"ADDR" => Some((Self::Addr(val.to_vec()), false)),
                     _ => None,
                 }
@@ -178,9 +176,6 @@ mod tests {
             ClientKillFilter::parse(&argv(&[b"CLIENT", b"KILL", b"LADDR", b"1.2.3.4:5"])),
             None
         );
-        assert_eq!(
-            ClientKillFilter::parse(&argv(&[b"CLIENT", b"KILL", b"ID", b"notanum"])),
-            None
-        );
+        assert_eq!(ClientKillFilter::parse(&argv(&[b"CLIENT", b"KILL", b"ID", b"notanum"])), None);
     }
 }

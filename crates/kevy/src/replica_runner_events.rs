@@ -53,14 +53,10 @@ impl LoadingGuard {
         match event {
             ReplicaEvent::SnapshotBegin if self.token.is_none() => {
                 self.progress.begin_loading();
-                self.token = Some(Arc::new(LoadingToken {
-                    progress: Arc::clone(&self.progress),
-                }));
+                self.token = Some(Arc::new(LoadingToken { progress: Arc::clone(&self.progress) }));
                 None
             }
-            ReplicaEvent::SnapshotEnd { .. } => {
-                self.token.take().map(|t| SnapshotGate::new(t))
-            }
+            ReplicaEvent::SnapshotEnd { .. } => self.token.take().map(|t| SnapshotGate::new(t)),
             _ => None,
         }
     }
@@ -107,7 +103,9 @@ pub(crate) fn drain_client(
                     *data_gen = ack_gen;
                 }
                 crate::replica_trace::trace_session_event(
-                    runner_slot, &event, &mut traced_first_frame,
+                    runner_slot,
+                    &event,
+                    &mut traced_first_frame,
                 );
                 if forward_event(event, &mut from_offset, &mut loading, sender).is_err() {
                     // Receiver dropped — the shard / runtime is gone;
@@ -191,10 +189,7 @@ fn event_to_apply(event: ReplicaEvent, from_offset: &mut u64) -> ReplicaApply {
         }
         ReplicaEvent::Frame(frame) => {
             *from_offset = frame.offset.saturating_add(1);
-            ReplicaApply::Frame {
-                offset: frame.offset,
-                argv: frame.argv,
-            }
+            ReplicaApply::Frame { offset: frame.offset, argv: frame.argv }
         }
     }
 }
@@ -255,10 +250,8 @@ mod tests {
     #[test]
     fn event_to_apply_frame_advances_offset_by_one() {
         let mut off = 3;
-        let frame = kevy_replicate::replica::DecodedFrame {
-            offset: 9,
-            argv: kevy_rt::Argv::default(),
-        };
+        let frame =
+            kevy_replicate::replica::DecodedFrame { offset: 9, argv: kevy_rt::Argv::default() };
         let out = event_to_apply(ReplicaEvent::Frame(frame), &mut off);
         assert!(matches!(out, ReplicaApply::Frame { offset: 9, .. }));
         assert_eq!(off, 10, "Frame must advance to offset + 1");

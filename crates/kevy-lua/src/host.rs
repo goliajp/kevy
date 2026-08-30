@@ -61,7 +61,10 @@ pub(crate) fn install_redis_table(vm: &mut Vm) {
     let _ = vm.set_global("redis", Value::Table(t));
 }
 
-fn build_byte_array(vm: &mut Vm, items: &[&[u8]]) -> luna_core::runtime::heap::Gc<luna_core::runtime::Table> {
+fn build_byte_array(
+    vm: &mut Vm,
+    items: &[&[u8]],
+) -> luna_core::runtime::heap::Gc<luna_core::runtime::Table> {
     // Each item is an &[u8] (RESP bulk content, binary-safe). We
     // intern → Value::Str → set_int into a 1-indexed array.
     let mut entries: Vec<(i64, Value)> = Vec::with_capacity(items.len());
@@ -153,4 +156,3 @@ fn first_arg_as_str_or(vm: &mut Vm, fs: u32, nargs: u32, default_msg: &[u8]) -> 
         _ => default_msg.to_vec(),
     }
 }
-

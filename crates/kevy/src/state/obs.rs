@@ -150,13 +150,9 @@ impl ObsState {
     pub(crate) fn new(audit_log_path: &Path, nshards: usize) -> Self {
         Self {
             audit: open_audit_log(audit_log_path),
-            shard_stats: (0..nshards.max(1))
-                .map(|_| Arc::new(ShardStats::default()))
-                .collect(),
+            shard_stats: (0..nshards.max(1)).map(|_| Arc::new(ShardStats::default())).collect(),
             ops_ring: Mutex::new(Vec::new()),
-            repl_views: (0..nshards.max(1))
-                .map(|_| Mutex::new(ReplShardView::default()))
-                .collect(),
+            repl_views: (0..nshards.max(1)).map(|_| Mutex::new(ReplShardView::default())).collect(),
             start: Instant::now(),
         }
     }
@@ -171,10 +167,7 @@ impl ObsState {
 
     /// Snapshot every shard's replication view for aggregation.
     pub(crate) fn repl_views(&self) -> Vec<ReplShardView> {
-        self.repl_views
-            .iter()
-            .map(|s| s.lock().expect("repl_views poisoned").clone())
-            .collect()
+        self.repl_views.iter().map(|s| s.lock().expect("repl_views poisoned").clone()).collect()
     }
 
     /// Shard `shard`'s stats slot, for the thread-local cache set up by
@@ -258,10 +251,8 @@ impl ObsState {
     pub(crate) fn audit_record(&self, args: &[&[u8]]) {
         let Some(mu) = &self.audit else { return };
         let mut line = String::with_capacity(128);
-        let micros = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_micros())
-            .unwrap_or(0);
+        let micros =
+            SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_micros()).unwrap_or(0);
         line.push_str(&micros.to_string());
         for arg in args {
             line.push('\t');
@@ -315,10 +306,7 @@ mod tests {
 
     #[test]
     fn audit_records_one_sanitised_line() {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let path: PathBuf = std::env::temp_dir().join(format!("kevy-audit-{nanos}"));
         let obs = ObsState::new(&path, 1);
         obs.audit_record(&[b"DEBUG", b"tab\there"]);

@@ -97,4 +97,3 @@ pub struct QueryOpts<'a> {
     /// documents rather than `limit` documents that then collapse.
     pub distinct: Option<Distinct<'a>>,
 }
-

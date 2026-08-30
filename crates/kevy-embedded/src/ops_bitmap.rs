@@ -4,8 +4,8 @@
 //! Strings act as bit arrays addressed MSB-first within each byte,
 //! matching Redis semantics.
 
-use kevy_store::BitOp;
 use crate::{KevyError, KevyResult};
+use kevy_store::BitOp;
 
 use crate::store::ensure_writable;
 use crate::store::{Store, commit_write, store_err};
@@ -46,36 +46,22 @@ impl Store {
         bit: u8,
         range: Option<(i64, i64)>,
     ) -> KevyResult<Option<u64>> {
-        self.wshard(key)
-            .store
-            .bitpos(key, bit, range)
-            .map_err(store_err)
+        self.wshard(key).store.bitpos(key, bit, range).map_err(store_err)
     }
 
     /// `GETRANGE key start end` — substring with Redis negative
     /// indexing; `[start, end]` inclusive.
     pub fn getrange(&self, key: &[u8], start: i64, end: i64) -> KevyResult<Vec<u8>> {
-        self.wshard(key)
-            .store
-            .getrange(key, start, end)
-            .map_err(store_err)
+        self.wshard(key).store.getrange(key, start, end).map_err(store_err)
     }
 
     /// `SETRANGE key offset value` — overwrite bytes at `offset`;
     /// extends with zero padding if past current length. Returns
     /// the new total length.
-    pub fn setrange(
-        &self,
-        key: &[u8],
-        offset: u64,
-        value: &[u8],
-    ) -> KevyResult<usize> {
+    pub fn setrange(&self, key: &[u8], offset: u64, value: &[u8]) -> KevyResult<usize> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
-        let new_len = g
-            .store
-            .setrange(key, offset, value)
-            .map_err(store_err)?;
+        let new_len = g.store.setrange(key, offset, value).map_err(store_err)?;
         let off_str = format!("{offset}");
         commit_write(&mut g, &[b"SETRANGE", key, off_str.as_bytes(), value])?;
         Ok(new_len)
@@ -86,12 +72,7 @@ impl Store {
     /// destination string length (= longest source length, with
     /// shorter sources zero-padded). For `Not`, exactly one source
     /// key (additional ones are rejected).
-    pub fn bitop(
-        &self,
-        op: BitOp,
-        dst: &[u8],
-        srcs: &[&[u8]],
-    ) -> KevyResult<usize> {
+    pub fn bitop(&self, op: BitOp, dst: &[u8], srcs: &[&[u8]]) -> KevyResult<usize> {
         ensure_writable(self)?;
         if srcs.is_empty() {
             return Ok(0);
@@ -120,9 +101,8 @@ impl Store {
     /// `TIME` — `(unix_seconds, microseconds)` tuple. Useful for
     /// time-based embedded logic + tracing.
     pub fn time(&self) -> (u64, u32) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default();
+        let now =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
         (now.as_secs(), now.subsec_micros())
     }
 }

@@ -5,8 +5,8 @@
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
 use crate::small_zset::{self, AddResult as ZAddResult, SmallZSetData};
+use crate::value::{SmallBytes, Value, ZSetData, zset_member_weight};
 use crate::zset_seg::{SegZSetData, Z_PROMOTE};
-use crate::value::{ZSetData, SmallBytes, Value, zset_member_weight};
 use crate::{Entry, Store, StoreError};
 use alloc::sync::Arc;
 
@@ -105,11 +105,7 @@ impl Store {
     /// `ZADD` — returns the count of newly-added members. Borrowed
     /// argv: no per-member allocation; routes through the
     /// encoding-switch path.
-    pub fn zadd(
-        &mut self,
-        key: &[u8],
-        pairs: &[(f64, &[u8])],
-    ) -> Result<usize, StoreError> {
+    pub fn zadd(&mut self, key: &[u8], pairs: &[(f64, &[u8])]) -> Result<usize, StoreError> {
         if pairs.is_empty() {
             return Ok(0);
         }
@@ -158,11 +154,7 @@ impl Store {
     }
 
     /// `ZREM` — returns the count of members removed.
-    pub fn zrem(
-        &mut self,
-        key: &[u8],
-        members: &[&[u8]],
-    ) -> Result<usize, StoreError> {
+    pub fn zrem(&mut self, key: &[u8], members: &[&[u8]]) -> Result<usize, StoreError> {
         let (removed, delta) = {
             let mut r = 0usize;
             let mut d: i64 = 0;
@@ -210,21 +202,15 @@ impl Store {
         match self.live_entry(key) {
             None => Ok(None),
             Some(e) => match &e.value {
-                Value::ZSet(z) => Ok(z
-                    .by_member
-                    .get(member)
-                    .copied()
-                    .and_then(|sc| z.rank_of(member, sc))),
-                Value::SegZSet(z) => {
-                    Ok(z.score_of(member).and_then(|sc| z.rank_of(member, sc)))
+                Value::ZSet(z) => {
+                    Ok(z.by_member.get(member).copied().and_then(|sc| z.rank_of(member, sc)))
                 }
+                Value::SegZSet(z) => Ok(z.score_of(member).and_then(|sc| z.rank_of(member, sc))),
                 Value::SmallZSetInline(z) => {
                     // Inline holds at most 2 entries; sort by score (then
                     // bytes) so ZRANK matches ZRANGE order.
                     let mut entries: Vec<(&[u8], f64)> = z.iter().collect();
-                    entries.sort_by(|a, b| {
-                        a.1.total_cmp(&b.1).then_with(|| a.0.cmp(b.0))
-                    });
+                    entries.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(b.0)));
                     Ok(entries.iter().position(|(m, _)| *m == member))
                 }
                 _ => Err(StoreError::WrongType),
@@ -266,11 +252,7 @@ impl Store {
                 let is_new = promote_flat_zset_and_add(v, m, score);
                 self.reweigh_entry(key);
                 // Reweighed from scratch — swallow the per-member delta.
-                if is_new {
-                    Ok(ZaddOutcome::AddedHeap(0))
-                } else {
-                    Ok(ZaddOutcome::UpdatedHeap)
-                }
+                if is_new { Ok(ZaddOutcome::AddedHeap(0)) } else { Ok(ZaddOutcome::UpdatedHeap) }
             }
             Value::ZSet(z) => {
                 let z = Arc::make_mut(z);
@@ -326,11 +308,7 @@ fn promote_inline_zset_and_add(v: &mut Value, m: &[u8], score: f64) -> ZaddOutco
     let w = zset_member_weight(&smb) as i64;
     promoted.insert(m, score);
     *v = Value::ZSet(Arc::new(promoted));
-    if is_new {
-        ZaddOutcome::AddedHeap(w)
-    } else {
-        ZaddOutcome::UpdatedHeap
-    }
+    if is_new { ZaddOutcome::AddedHeap(w) } else { ZaddOutcome::UpdatedHeap }
 }
 
 /// Flat zset at the threshold: segment, then set. One-time

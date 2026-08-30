@@ -66,10 +66,7 @@ fn two_stores_with_identical_sets_disagree() {
             same += 1;
         }
     }
-    assert!(
-        same < 12,
-        "two stores agreed on {same}/20 pops — they are not drawing randomly"
-    );
+    assert!(same < 12, "two stores agreed on {same}/20 pops — they are not drawing randomly");
 }
 
 // ── the properties that must survive the change ─────────────────────────────
@@ -124,7 +121,6 @@ fn srandmember_across_both_regimes() {
         assert_eq!(uniq.len(), got.len(), "count={count}: repeated a member");
     }
 }
-
 
 #[test]
 fn empty_and_missing_sets_are_empty_not_an_error() {

@@ -138,10 +138,7 @@ fn parse_bulk_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, ProtocolError>
     if buf.len() < data_end + 2 {
         return Ok(None);
     }
-    Ok(Some((
-        Reply::Bulk(buf[data_start..data_end].to_vec()),
-        data_end + 2,
-    )))
+    Ok(Some((Reply::Bulk(buf[data_start..data_end].to_vec()), data_end + 2)))
 }
 
 /// Shared parser for `*` (array, RESP2) and `>` (push, RESP3) — both
@@ -262,8 +259,7 @@ fn parse_verbatim_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, ProtocolEr
     let Some(hdr_end) = find_crlf(buf, 1) else {
         return Ok(None);
     };
-    let len = parse_int(&buf[1..hdr_end])
-        .ok_or(ProtocolError::Malformed("bad verbatim length"))?;
+    let len = parse_int(&buf[1..hdr_end]).ok_or(ProtocolError::Malformed("bad verbatim length"))?;
     if len < 4 {
         return Err(ProtocolError::Malformed("verbatim length < 4 (fmt + ':')"));
     }
@@ -298,8 +294,8 @@ fn parse_blob_error_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, Protocol
     let Some(hdr_end) = find_crlf(buf, 1) else {
         return Ok(None);
     };
-    let len = parse_int(&buf[1..hdr_end])
-        .ok_or(ProtocolError::Malformed("bad blob error length"))?;
+    let len =
+        parse_int(&buf[1..hdr_end]).ok_or(ProtocolError::Malformed("bad blob error length"))?;
     if len < 0 {
         return Err(ProtocolError::Malformed("blob error length cannot be negative"));
     }
@@ -342,10 +338,7 @@ mod tests {
         assert_eq!(r(b"*-1\r\n"), Reply::Nil);
 
         let (arr, used) = parse_reply(b"*2\r\n:1\r\n$2\r\nhi\r\n").unwrap().unwrap();
-        assert_eq!(
-            arr,
-            Reply::Array(vec![Reply::Int(1), Reply::Bulk(b"hi".to_vec())])
-        );
+        assert_eq!(arr, Reply::Array(vec![Reply::Int(1), Reply::Bulk(b"hi".to_vec())]));
         assert_eq!(used, 16);
 
         // Incomplete replies ask for more bytes.
@@ -374,10 +367,7 @@ mod tests {
             r(b"(170141183460469231731687303715884105727\r\n"),
             Reply::BigNumber(b"170141183460469231731687303715884105727".to_vec())
         );
-        assert_eq!(
-            r(b"!11\r\nERR bad cmd\r\n"),
-            Reply::BlobError(b"ERR bad cmd".to_vec())
-        );
+        assert_eq!(r(b"!11\r\nERR bad cmd\r\n"), Reply::BlobError(b"ERR bad cmd".to_vec()));
     }
 
     #[test]

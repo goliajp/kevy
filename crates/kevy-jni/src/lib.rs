@@ -168,11 +168,7 @@ pub unsafe extern "system" fn jni_open_with(
             })
         };
         let opts_ptr = o.as_ref().map_or(std::ptr::null(), |o| o as *const KevyOpenOptions);
-        let (ptr, len) = if dir.is_null() {
-            (std::ptr::null(), 0)
-        } else {
-            (d.as_ptr(), d.len())
-        };
+        let (ptr, len) = if dir.is_null() { (std::ptr::null(), 0) } else { (d.as_ptr(), d.len()) };
         handle(unsafe { kevy_ffi::kevy_open_with(ptr, len, opts_ptr) })
     }))
     .unwrap_or(0)

@@ -25,7 +25,9 @@ fn spawn_server(port: u16, dir: std::path::PathBuf) -> Arc<AtomicBool> {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_t = Arc::clone(&stop);
     std::thread::spawn(move || {
-        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(2)).bind([127, 0, 0, 1], port).shards(2)
+        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(2))
+            .bind([127, 0, 0, 1], port)
+            .shards(2)
             .with_data_dir(dir)
             .with_aof(false);
         let _ = rt.run(stop_t);
@@ -72,7 +74,19 @@ fn two_runtimes_in_one_process_do_not_share_state() {
     // Catalog isolation: an index declared on A does not exist on B.
     let r = cmd(
         &mut a,
-        &[b"IDX.CREATE", b"ia", b"ON", b"PREFIX", b"p:", b"FIELD", b"n", b"TYPE", b"i64", b"KIND", b"range"],
+        &[
+            b"IDX.CREATE",
+            b"ia",
+            b"ON",
+            b"PREFIX",
+            b"p:",
+            b"FIELD",
+            b"n",
+            b"TYPE",
+            b"i64",
+            b"KIND",
+            b"range",
+        ],
     );
     assert_eq!(r, b"+OK\r\n", "IDX.CREATE on A: {}", String::from_utf8_lossy(&r));
     let r = cmd(&mut b, &[b"IDX.LIST"]);

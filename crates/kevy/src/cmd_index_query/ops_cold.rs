@@ -169,10 +169,7 @@ fn merge_hits(
 /// Sum the cold facet counts into the hot ones by value identity —
 /// the hot label wins when both halves saw a value — and restore the
 /// (count desc, label asc) order `count_facet` reports in.
-fn merge_facets(
-    hot: &mut [Vec<kevy_text::Bucket>],
-    cold: Vec<Vec<kevy_text::Bucket>>,
-) {
+fn merge_facets(hot: &mut [Vec<kevy_text::Bucket>], cold: Vec<Vec<kevy_text::Bucket>>) {
     for (h, c) in hot.iter_mut().zip(cold) {
         if c.is_empty() {
             continue;

@@ -6,11 +6,7 @@ use super::*;
 use crate::CorpusStats;
 
 fn stats(n_docs: f64, avgdl: f64, df: &[(&[u8], u32)]) -> CorpusStats {
-    CorpusStats {
-        n_docs,
-        avgdl,
-        df: df.iter().map(|(t, d)| (t.to_vec(), *d)).collect(),
-    }
+    CorpusStats { n_docs, avgdl, df: df.iter().map(|(t, d)| (t.to_vec(), *d)).collect() }
 }
 
 fn seg_with_docs() -> TextSegment {
@@ -31,7 +27,12 @@ fn codec_round_trips_and_refuses_garbage() {
     let entries = vec![
         ColdEntry { key: b"a\x00b".to_vec(), tf: 3, dl: 7, positions: vec![1, 2, 3] },
         ColdEntry { key: Vec::new(), tf: 1, dl: 1, positions: Vec::new() },
-        ColdEntry { key: b"row:very-long-key-9999".to_vec(), tf: 200, dl: 4000, positions: vec![0; 40] },
+        ColdEntry {
+            key: b"row:very-long-key-9999".to_vec(),
+            tf: 200,
+            dl: 4000,
+            positions: vec![0; 40],
+        },
     ];
     let payload = encode_posting(&entries);
     assert_eq!(posting_df(&payload), Some(3));
@@ -55,9 +56,7 @@ fn frozen_scores_equal_hot_scores_under_the_same_stats() {
         .map(|m| (m.key, m.score))
         .collect();
 
-    let bucket = ts
-        .freeze_docs(&[b"ev:1".to_vec(), b"ev:4".to_vec()])
-        .expect("froze");
+    let bucket = ts.freeze_docs(&[b"ev:1".to_vec(), b"ev:4".to_vec()]).expect("froze");
     assert_eq!(bucket.n_docs, 2);
     let mut acc = std::collections::HashMap::new();
     for term in [b"rust".as_slice(), b"engine"] {
@@ -80,12 +79,14 @@ fn frozen_scores_equal_hot_scores_under_the_same_stats() {
 fn freeze_reclaims_and_hot_queries_stop_seeing_frozen_docs() {
     let mut ts = seg_with_docs();
     let before = ts.stats().approx_bytes;
-    let bucket = ts.freeze_docs(&[b"ev:1".to_vec(), b"ev:3".to_vec(), b"ev:9".to_vec()]).expect("froze");
+    let bucket =
+        ts.freeze_docs(&[b"ev:1".to_vec(), b"ev:3".to_vec(), b"ev:9".to_vec()]).expect("froze");
     assert_eq!(bucket.n_docs, 2, "unknown key skipped");
     assert!(ts.stats().approx_bytes < before, "nothing reclaimed");
     assert_eq!(ts.docs(), 2);
     let st = stats(4.0, 3.25, &[(b"rust", 3)]);
-    let hot: Vec<_> = ts.matches_scored(b"rust", 10, Some(&st)).into_iter().map(|m| m.key).collect();
+    let hot: Vec<_> =
+        ts.matches_scored(b"rust", 10, Some(&st)).into_iter().map(|m| m.key).collect();
     assert!(!hot.contains(&b"ev:1".to_vec()), "frozen doc still hot");
     assert!(hot.contains(&b"ev:2".to_vec()));
     // The bucket's terms are ascending — the segment builder's contract.
@@ -97,11 +98,8 @@ fn freeze_reclaims_and_hot_queries_stop_seeing_frozen_docs() {
 
 #[test]
 fn fwd_codec_round_trips_and_freeze_carries_exact_withdrawals() {
-    let payload = encode_fwd(
-        7,
-        &[b"alpha".as_slice(), b"beta"],
-        &[Some(b"42".as_slice()), None, Some(b"")],
-    );
+    let payload =
+        encode_fwd(7, &[b"alpha".as_slice(), b"beta"], &[Some(b"42".as_slice()), None, Some(b"")]);
     let r = decode_fwd(&payload).expect("decodes");
     assert_eq!(r.dl, 7);
     assert_eq!(r.terms, vec![b"alpha".to_vec(), b"beta".to_vec()]);
@@ -149,9 +147,8 @@ fn frozen_phrase_scores_equal_hot_phrase_scores_under_the_same_stats() {
     assert!(hot.contains_key(b"ev:1".as_slice()) && hot.contains_key(b"ev:3".as_slice()));
     assert!(!hot.contains_key(b"ev:4".as_slice()));
 
-    let bucket = ts
-        .freeze_docs(&[b"ev:1".to_vec(), b"ev:3".to_vec(), b"ev:4".to_vec()])
-        .expect("froze");
+    let bucket =
+        ts.freeze_docs(&[b"ev:1".to_vec(), b"ev:3".to_vec(), b"ev:4".to_vec()]).expect("froze");
     let toks = vec![b"rust".to_vec(), b"engine".to_vec()];
     let payloads: Vec<Vec<u8>> =
         toks.iter().map(|t| bucket.terms.get(t).expect("term").clone()).collect();
@@ -198,11 +195,8 @@ fn cold_highlight_matches_the_hot_spans_for_the_same_text() {
 
 #[test]
 fn freeze_carries_stored_values_absent_and_present() {
-    let mut ts = TextSegment::with_shape(crate::SegmentShape {
-        fields: 0,
-        positions: false,
-        values: 2,
-    });
+    let mut ts =
+        TextSegment::with_shape(crate::SegmentShape { fields: 0, positions: false, values: 2 });
     ts.apply_doc(b"ev:1", Some(&[(b"rust engine".to_vec(), 1.0)]), &[Some(b"9"), None]);
     ts.apply_doc(b"ev:2", Some(&[(b"rust glue".to_vec(), 1.0)]), &[Some(b"2"), Some(b"x")]);
     let bucket = ts.freeze_docs(&[b"ev:1".to_vec(), b"ev:2".to_vec()]).expect("froze");

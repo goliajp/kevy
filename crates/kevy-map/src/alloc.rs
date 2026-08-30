@@ -4,11 +4,11 @@
 //! between the global allocator and a 2 MiB-aligned `mmap` path (E13)
 //! based on the per-instance `mmap_backed` flag.
 
+use alloc_crate::alloc::{Layout, alloc, dealloc, handle_alloc_error};
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::ptr;
 use core::ptr::NonNull;
-use alloc_crate::alloc::{Layout, alloc, dealloc, handle_alloc_error};
 
 use crate::map::{EMPTY, GROUP_WIDTH, KevyMap, MIN_CAP, table_layout};
 

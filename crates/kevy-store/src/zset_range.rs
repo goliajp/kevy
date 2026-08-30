@@ -41,9 +41,7 @@ impl Store {
                 Value::SmallZSetInline(z) => {
                     let mut entries: Vec<(Vec<u8>, f64)> =
                         z.iter().map(|(m, sc)| (m.to_vec(), sc)).collect();
-                    entries.sort_by(|a, b| {
-                        a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0))
-                    });
+                    entries.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
                     Ok(match range_bounds(start, stop, entries.len()) {
                         None => Vec::new(),
                         Some((s, end)) => entries.into_iter().skip(s).take(end - s + 1).collect(),
@@ -88,9 +86,7 @@ impl Store {
                         .filter(|(_, sc)| min.ge_ok(*sc) && max.le_ok(*sc))
                         .map(|(m, sc)| (m.to_vec(), sc))
                         .collect();
-                    entries.sort_by(|a, b| {
-                        a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0))
-                    });
+                    entries.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
                     Ok(entries)
                 }
                 _ => Err(StoreError::WrongType),
@@ -109,16 +105,15 @@ impl Store {
             None => Ok(0),
             Some(e) => match &e.value {
                 // Two rank descents — O(log N), no iteration at all.
-                Value::ZSet(z) => Ok(z
-                    .score_end_rank(&max)
-                    .saturating_sub(z.score_start_rank(&min))),
-                Value::SegZSet(z) => Ok(z
-                    .score_end_rank(&max)
-                    .saturating_sub(z.score_start_rank(&min))),
-                Value::SmallZSetInline(z) => Ok(z
-                    .iter()
-                    .filter(|(_, sc)| min.ge_ok(*sc) && max.le_ok(*sc))
-                    .count()),
+                Value::ZSet(z) => {
+                    Ok(z.score_end_rank(&max).saturating_sub(z.score_start_rank(&min)))
+                }
+                Value::SegZSet(z) => {
+                    Ok(z.score_end_rank(&max).saturating_sub(z.score_start_rank(&min)))
+                }
+                Value::SmallZSetInline(z) => {
+                    Ok(z.iter().filter(|(_, sc)| min.ge_ok(*sc) && max.le_ok(*sc)).count())
+                }
                 _ => Err(StoreError::WrongType),
             },
         }
@@ -127,11 +122,7 @@ impl Store {
     /// `ZPOPMIN key [count]` — pop and return the `count` lowest-scored
     /// members (ascending by `(score, member)`). Returns `(member,
     /// score)` pairs in pop order; empty when the key is absent / empty.
-    pub fn zpopmin(
-        &mut self,
-        key: &[u8],
-        count: usize,
-    ) -> Result<Vec<(Vec<u8>, f64)>, StoreError> {
+    pub fn zpopmin(&mut self, key: &[u8], count: usize) -> Result<Vec<(Vec<u8>, f64)>, StoreError> {
         if count == 0 {
             // Validate type up-front so ZPOPMIN k 0 against a wrong-type
             // key still reports WRONGTYPE (Redis behaviour).
@@ -149,16 +140,10 @@ impl Store {
         let to_pop: Vec<(Vec<u8>, f64)> = match self.live_entry(key) {
             None => return Ok(Vec::new()),
             Some(e) => match &e.value {
-                Value::ZSet(z) => z
-                    .ordered()
-                    .take(count)
-                    .map(|(m, sc)| (m.to_vec(), sc))
-                    .collect(),
-                Value::SegZSet(z) => z
-                    .ordered()
-                    .take(count)
-                    .map(|(m, sc)| (m.to_vec(), sc))
-                    .collect(),
+                Value::ZSet(z) => z.ordered().take(count).map(|(m, sc)| (m.to_vec(), sc)).collect(),
+                Value::SegZSet(z) => {
+                    z.ordered().take(count).map(|(m, sc)| (m.to_vec(), sc)).collect()
+                }
                 Value::SmallZSetInline(z) => {
                     let mut entries: Vec<(Vec<u8>, f64)> =
                         z.iter().map(|(m, sc)| (m.to_vec(), sc)).collect();
@@ -214,11 +199,7 @@ impl Store {
                     let mut entries: Vec<(Vec<u8>, f64)> =
                         z.iter().map(|(m, sc)| (m.to_vec(), sc)).collect();
                     entries.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-                    entries
-                        .into_iter()
-                        .take_while(|(_, sc)| *sc < below)
-                        .take(count)
-                        .collect()
+                    entries.into_iter().take_while(|(_, sc)| *sc < below).take(count).collect()
                 }
                 _ => return Err(StoreError::WrongType),
             },
@@ -246,19 +227,15 @@ impl Store {
                 Value::ZSet(z) => match crate::util::range_bounds(start, stop, z.len()) {
                     None => return Ok(0),
                     // Seek to the start rank (O(log N)), collect the M hits.
-                    Some((s, end)) => z
-                        .ordered_from(s)
-                        .take(end - s + 1)
-                        .map(|(m, _)| m.to_vec())
-                        .collect(),
+                    Some((s, end)) => {
+                        z.ordered_from(s).take(end - s + 1).map(|(m, _)| m.to_vec()).collect()
+                    }
                 },
                 Value::SegZSet(z) => match crate::util::range_bounds(start, stop, z.len()) {
                     None => return Ok(0),
-                    Some((s, end)) => z
-                        .ordered_from(s)
-                        .take(end - s + 1)
-                        .map(|(m, _)| m.to_vec())
-                        .collect(),
+                    Some((s, end)) => {
+                        z.ordered_from(s).take(end - s + 1).map(|(m, _)| m.to_vec()).collect()
+                    }
                 },
                 Value::SmallZSetInline(z) => {
                     let mut entries: Vec<(Vec<u8>, f64)> =
@@ -266,12 +243,9 @@ impl Store {
                     entries.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
                     match crate::util::range_bounds(start, stop, entries.len()) {
                         None => return Ok(0),
-                        Some((s, end)) => entries
-                            .into_iter()
-                            .skip(s)
-                            .take(end - s + 1)
-                            .map(|(m, _)| m)
-                            .collect(),
+                        Some((s, end)) => {
+                            entries.into_iter().skip(s).take(end - s + 1).map(|(m, _)| m).collect()
+                        }
                     }
                 }
                 _ => return Err(StoreError::WrongType),

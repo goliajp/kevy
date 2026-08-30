@@ -138,20 +138,69 @@ fn wait_ready(s: &mut std::net::TcpStream, probe: &[&[u8]]) -> Vec<u8> {
 /// Columns only, plus one index WITHOUT stored values — every refusal
 /// shape below is one missing declaration away from serving.
 const DECLARE_LEAN: &[&[u8]] = &[
-    b"TABLE.DECLARE", b"user", b"PREFIX", b"u:", b"PK", b"id",
-    b"COLUMN", b"id", b"str", b"COLUMN", b"name", b"str", b"COLUMN", b"age", b"i64",
-    b"COLUMN", b"city", b"str", b"COLUMN", b"bio", b"str",
-    b"INDEX", b"age", b"RANGE",
+    b"TABLE.DECLARE",
+    b"user",
+    b"PREFIX",
+    b"u:",
+    b"PK",
+    b"id",
+    b"COLUMN",
+    b"id",
+    b"str",
+    b"COLUMN",
+    b"name",
+    b"str",
+    b"COLUMN",
+    b"age",
+    b"i64",
+    b"COLUMN",
+    b"city",
+    b"str",
+    b"COLUMN",
+    b"bio",
+    b"str",
+    b"INDEX",
+    b"age",
+    b"RANGE",
 ];
 
 /// The lean declaration plus everything IDX.ADVISE asked for.
 const REPLACE_FULL: &[&[u8]] = &[
-    b"TABLE.REPLACE", b"user", b"PREFIX", b"u:", b"PK", b"id",
-    b"COLUMN", b"id", b"str", b"COLUMN", b"name", b"str", b"COLUMN", b"age", b"i64",
-    b"COLUMN", b"city", b"str", b"COLUMN", b"bio", b"str",
-    b"INDEX", b"age", b"RANGE", b"VALUES", b"name",
-    b"INDEX", b"city", b"RANGE",
-    b"ORDERPATH", b"by_city", b"ON", b"city", b"THEN", b"age",
+    b"TABLE.REPLACE",
+    b"user",
+    b"PREFIX",
+    b"u:",
+    b"PK",
+    b"id",
+    b"COLUMN",
+    b"id",
+    b"str",
+    b"COLUMN",
+    b"name",
+    b"str",
+    b"COLUMN",
+    b"age",
+    b"i64",
+    b"COLUMN",
+    b"city",
+    b"str",
+    b"COLUMN",
+    b"bio",
+    b"str",
+    b"INDEX",
+    b"age",
+    b"RANGE",
+    b"VALUES",
+    b"name",
+    b"INDEX",
+    b"city",
+    b"RANGE",
+    b"ORDERPATH",
+    b"by_city",
+    b"ON",
+    b"city",
+    b"THEN",
+    b"age",
 ];
 
 fn write_rows(s: &mut std::net::TcpStream) {
@@ -159,10 +208,23 @@ fn write_rows(s: &mut std::net::TcpStream) {
         ("u:1", "alice", "30", "tokyo", "hello world"),
         ("u:2", "bob", "45", "osaka", "goodbye world"),
     ] {
-        let reply = cmd(s, &[
-            b"HSET", key.as_bytes(), b"id", &key.as_bytes()[2..], b"name", name.as_bytes(),
-            b"age", age.as_bytes(), b"city", city.as_bytes(), b"bio", bio.as_bytes(),
-        ]);
+        let reply = cmd(
+            s,
+            &[
+                b"HSET",
+                key.as_bytes(),
+                b"id",
+                &key.as_bytes()[2..],
+                b"name",
+                name.as_bytes(),
+                b"age",
+                age.as_bytes(),
+                b"city",
+                city.as_bytes(),
+                b"bio",
+                bio.as_bytes(),
+            ],
+        );
         assert!(reply.starts_with(b":"), "HSET {key}: {}", String::from_utf8_lossy(&reply));
     }
 }
@@ -176,19 +238,45 @@ fn autodeclare_serves_a_zero_declaration_workload() {
     let srv = Server::start();
     let mut c = srv.connect();
     assert_eq!(
-        cmd(&mut c, &[
-            b"TABLE.DECLARE", b"auto", b"PREFIX", b"a:", b"PK", b"id",
-            b"COLUMN", b"id", b"str", b"COLUMN", b"age", b"i64", b"COLUMN", b"city", b"str",
-            b"AUTODECLARE", b"2",
-        ]),
+        cmd(
+            &mut c,
+            &[
+                b"TABLE.DECLARE",
+                b"auto",
+                b"PREFIX",
+                b"a:",
+                b"PK",
+                b"id",
+                b"COLUMN",
+                b"id",
+                b"str",
+                b"COLUMN",
+                b"age",
+                b"i64",
+                b"COLUMN",
+                b"city",
+                b"str",
+                b"AUTODECLARE",
+                b"2",
+            ]
+        ),
         b"+OK\r\n",
         "opt-in declare"
     );
     for (key, age, city) in [("a:1", "30", "tokyo"), ("a:2", "45", "osaka")] {
-        let r = cmd(&mut c, &[
-            b"HSET", key.as_bytes(), b"id", &key.as_bytes()[2..],
-            b"age", age.as_bytes(), b"city", city.as_bytes(),
-        ]);
+        let r = cmd(
+            &mut c,
+            &[
+                b"HSET",
+                key.as_bytes(),
+                b"id",
+                &key.as_bytes()[2..],
+                b"age",
+                age.as_bytes(),
+                b"city",
+                city.as_bytes(),
+            ],
+        );
         assert!(r.starts_with(b":"), "{}", String::from_utf8_lossy(&r));
     }
 
@@ -214,8 +302,18 @@ fn autodeclare_serves_a_zero_declaration_workload() {
 
     // A third family finds the budget spent: refused forever, and
     // IDX.ADVISE keeps advising it to a human.
-    let third: &[&[u8]] =
-        &[b"IDX.QUERY", b"auto.by_city", b"WHERE", b"city", b"EQ", b"x", b"RANGE", b"age", b"0", b"9"];
+    let third: &[&[u8]] = &[
+        b"IDX.QUERY",
+        b"auto.by_city",
+        b"WHERE",
+        b"city",
+        b"EQ",
+        b"x",
+        b"RANGE",
+        b"age",
+        b"0",
+        b"9",
+    ];
     for _ in 0..17 {
         let r = cmd(&mut c, third);
         assert!(r.starts_with(b"-ERR"), "{}", String::from_utf8_lossy(&r));
@@ -244,7 +342,18 @@ fn refusals_become_declarations_that_serve() {
     let refused: &[&[&[u8]]] = &[
         &[b"IDX.QUERY", b"user.city", b"RANGE", b"a", b"z"],
         &[b"IDX.QUERY", b"user.city", b"EQ", b"tokyo"],
-        &[b"IDX.QUERY", b"user.by_city", b"WHERE", b"city", b"EQ", b"tokyo", b"RANGE", b"age", b"20", b"40"],
+        &[
+            b"IDX.QUERY",
+            b"user.by_city",
+            b"WHERE",
+            b"city",
+            b"EQ",
+            b"tokyo",
+            b"RANGE",
+            b"age",
+            b"20",
+            b"40",
+        ],
         &[b"IDX.QUERY", b"user.bio", b"MATCH", b"hello"],
         &[b"IDX.QUERY", b"user.age", b"RANGE", b"0", b"100", b"FILTER", b"name", b"EQ", b"alice"],
     ];
@@ -262,10 +371,8 @@ fn refusals_become_declarations_that_serve() {
         ("user.by_city", "TABLE.DECLARE user … ORDERPATH by_city ON city THEN age"),
     ];
     let adv = bulks(&cmd(&mut c, &[b"IDX.ADVISE"]));
-    let want: Vec<Vec<u8>> = expect
-        .iter()
-        .flat_map(|(n, a)| [n.as_bytes().to_vec(), a.as_bytes().to_vec()])
-        .collect();
+    let want: Vec<Vec<u8>> =
+        expect.iter().flat_map(|(n, a)| [n.as_bytes().to_vec(), a.as_bytes().to_vec()]).collect();
     assert_eq!(adv, want, "IDX.ADVISE families");
 
     // A family the catalog cannot ground (unknown column) is refused
@@ -278,10 +385,22 @@ fn refusals_become_declarations_that_serve() {
     // Apply exactly what the advice asked for.
     assert_eq!(cmd(&mut c, REPLACE_FULL), b"+OK\r\n", "TABLE.REPLACE");
     assert_eq!(
-        cmd(&mut c, &[
-            b"IDX.CREATE", b"user.bio", b"ON", b"PREFIX", b"u:", b"FIELD", b"bio",
-            b"TYPE", b"str", b"KIND", b"text",
-        ]),
+        cmd(
+            &mut c,
+            &[
+                b"IDX.CREATE",
+                b"user.bio",
+                b"ON",
+                b"PREFIX",
+                b"u:",
+                b"FIELD",
+                b"bio",
+                b"TYPE",
+                b"str",
+                b"KIND",
+                b"text",
+            ]
+        ),
         b"+OK\r\n",
         "IDX.CREATE user.bio"
     );
@@ -296,10 +415,7 @@ fn refusals_become_declarations_that_serve() {
         vec![&b"user.age"[..], b"user.bio", b"user.by_city", b"user.city"],
         "{after:?}"
     );
-    assert!(
-        after.iter().skip(1).step_by(2).all(|a| a.starts_with(b"IDX.DROP ")),
-        "{after:?}"
-    );
+    assert!(after.iter().skip(1).step_by(2).all(|a| a.starts_with(b"IDX.DROP ")), "{after:?}");
 
     // Every refused query now serves — which retires every drop
     // suggestion too.

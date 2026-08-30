@@ -2,33 +2,31 @@
 //! error wording mirror the server's `parse_zsetstore_args` /
 //! `parse_zintercard_args` in `kevy-rt::exec_build`.
 
-use crate::store::Store;
 use crate::KevyResult;
+use crate::store::Store;
 
 use kevy_store::ZAggregate;
 
-use super::util::{arg_u64, emit_int, err, ERR_SYNTAX, wrong_args, verb_name};
+use super::util::{ERR_SYNTAX, arg_u64, emit_int, err, verb_name, wrong_args};
 
 const ERR_NUMKEYS: &str = "ERR numkeys should be greater than 0";
 const ERR_KEYS_GT_ARGS: &str = "ERR Number of keys can't be greater than number of args";
-
 
 /// One zset-algebra request; `false` = verb not in this group.
 pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
     match up {
         b"ZINTERSTORE" => cmd_zstore(s, argv, out, false, Store::zinterstore),
         b"ZUNIONSTORE" => cmd_zstore(s, argv, out, false, Store::zunionstore),
-        b"ZDIFFSTORE" => cmd_zstore(s, argv, out, true, |s, dst, keys, _w, _a| {
-            s.zdiffstore(dst, keys)
-        }),
+        b"ZDIFFSTORE" => {
+            cmd_zstore(s, argv, out, true, |s, dst, keys, _w, _a| s.zdiffstore(dst, keys))
+        }
         b"ZINTERCARD" => cmd_zintercard(s, argv, out),
         _ => return false,
     }
     true
 }
 
-type ZStoreOp =
-    fn(&Store, &[u8], &[&[u8]], Option<&[f64]>, ZAggregate) -> KevyResult<usize>;
+type ZStoreOp = fn(&Store, &[u8], &[&[u8]], Option<&[f64]>, ZAggregate) -> KevyResult<usize>;
 
 /// `VERB dst numkeys key… [WEIGHTS w…] [AGGREGATE SUM|MIN|MAX]`
 /// (`diff_form` = ZDIFFSTORE: no WEIGHTS/AGGREGATE allowed).

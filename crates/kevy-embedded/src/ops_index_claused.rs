@@ -49,10 +49,7 @@ impl ValueFilter<'_> {
 
 /// One `FILTER` predicate resolved against the spec: the stored-value
 /// position it reads, and the test built with that field's DECLARED type.
-pub(crate) fn value_test(
-    spec: &IndexSpec,
-    f: &ValueFilter<'_>,
-) -> KevyResult<(usize, ValueTest)> {
+pub(crate) fn value_test(spec: &IndexSpec, f: &ValueFilter<'_>) -> KevyResult<(usize, ValueTest)> {
     let stored: Vec<&[u8]> = spec.values.iter().map(|v| v.name.as_slice()).collect();
     let pos = spec
         .values
@@ -141,10 +138,7 @@ impl ScalarQueryOpts<'_> {
     /// Whether any clause reshapes the selection (the cursor-refusing
     /// set — `FILTER` alone pages fine).
     pub(crate) fn selects(&self) -> bool {
-        self.sort.is_some()
-            || self.distinct.is_some()
-            || !self.facets.is_empty()
-            || self.offset > 0
+        self.sort.is_some() || self.distinct.is_some() || !self.facets.is_empty() || self.offset > 0
     }
 }
 
@@ -176,11 +170,7 @@ struct Resolved {
 }
 
 /// A clause's named stored-value field position + declared type.
-fn value_field(
-    spec: &IndexSpec,
-    clause: &str,
-    field: &[u8],
-) -> KevyResult<(usize, ValType)> {
+fn value_field(spec: &IndexSpec, clause: &str, field: &[u8]) -> KevyResult<(usize, ValType)> {
     let stored: Vec<&[u8]> = spec.values.iter().map(|v| v.name.as_slice()).collect();
     let pos = spec
         .values
@@ -278,7 +268,9 @@ impl Store {
         let all = merge_claused(all, sort_desc, r.distinct.is_some(), offset, limit);
         sort_facets(&mut facets);
         let next = (!opts.selects() && all.len() == limit)
-            .then(|| all.last().map(|(h, ())| Cursor { value: h.value.clone(), key: h.key.clone() }))
+            .then(|| {
+                all.last().map(|(h, ())| Cursor { value: h.value.clone(), key: h.key.clone() })
+            })
             .flatten();
         self.observe_hit(name);
         Ok(ScalarPage {

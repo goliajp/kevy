@@ -40,7 +40,10 @@ fn main() -> ExitCode {
             continue;
         }
         if check {
-            eprintln!("gen-docs: STALE {} (regenerate with `cargo run -p kevy --bin gen_docs .`)", path.display());
+            eprintln!(
+                "gen-docs: STALE {} (regenerate with `cargo run -p kevy --bin gen_docs .`)",
+                path.display()
+            );
             stale = true;
         } else {
             std::fs::write(&path, &want).expect("write generated doc");

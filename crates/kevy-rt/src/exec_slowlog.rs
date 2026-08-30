@@ -83,11 +83,7 @@ impl<C: Commands> Shard<C> {
     /// pair; this function repeats the check defensively but does not
     /// remove the clock read from the caller.
     #[inline]
-    pub(crate) fn slowlog_record<A: ArgvView + ?Sized>(
-        &mut self,
-        args: &A,
-        elapsed_micros: u64,
-    ) {
+    pub(crate) fn slowlog_record<A: ArgvView + ?Sized>(&mut self, args: &A, elapsed_micros: u64) {
         let threshold = self.slowlog.slower_than_micros;
         if threshold < 0 {
             return;
@@ -105,9 +101,8 @@ impl<C: Commands> Shard<C> {
         // Pack `(shard_id, local_seq)` so cross-shard ids stay unique.
         // 16 bits for shard_id is plenty (kevy targets ≤ 256 cores).
         let id = ((self.id as u64) << 48) | (local_seq & 0x0000_FFFF_FFFF_FFFF);
-        let timestamp_secs = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs() as i64);
+        let timestamp_secs =
+            SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
         let mut argv: Vec<Vec<u8>> = Vec::with_capacity(args.len().min(MAX_ARGV_RECORDED));
         for i in 0..args.len().min(MAX_ARGV_RECORDED) {
             let a = &args[i];
@@ -158,13 +153,7 @@ impl<C: Commands> Shard<C> {
         self.fold(conn_id, seq, Part::Reply(crate::message::SmallReply::from_vec(bytes)));
     }
 
-    fn slowlog_fanout(
-        &mut self,
-        conn_id: u64,
-        seq: u64,
-        agg: Agg,
-        mk_op: impl Fn() -> Op,
-    ) {
+    fn slowlog_fanout(&mut self, conn_id: u64, seq: u64, agg: Agg, mk_op: impl Fn() -> Op) {
         let targets: Vec<(usize, Op)> = (0..self.nshards).map(|s| (s, mk_op())).collect();
         self.push_pending_slot(conn_id, targets.len() as u32, agg, false);
         self.dispatch_targets(conn_id, seq, targets);
@@ -196,11 +185,7 @@ pub enum SlowlogSub {
 /// Sorting is timestamp-DESC then id-DESC for ties; truncation to
 /// `count` (or default 10) happens last.
 pub(crate) fn encode_slowlog_get(count: Option<i64>, mut entries: Vec<SlowlogEntry>) -> Vec<u8> {
-    entries.sort_by(|a, b| {
-        b.timestamp_secs
-            .cmp(&a.timestamp_secs)
-            .then_with(|| b.id.cmp(&a.id))
-    });
+    entries.sort_by(|a, b| b.timestamp_secs.cmp(&a.timestamp_secs).then_with(|| b.id.cmp(&a.id)));
     let limit = match count {
         None => 10,
         Some(n) if n < 0 => entries.len(),
@@ -273,9 +258,7 @@ fn parse_slowlog_get<A: ArgvView + ?Sized>(args: &A) -> SlowlogSub {
         return SlowlogSub::Get(None);
     }
     if args.len() != 3 {
-        return SlowlogSub::Err(slowlog_err_bytes(
-            "wrong number of arguments for 'slowlog|get'",
-        ));
+        return SlowlogSub::Err(slowlog_err_bytes("wrong number of arguments for 'slowlog|get'"));
     }
     match std::str::from_utf8(&args[2]).ok().and_then(|s| s.parse::<i64>().ok()) {
         Some(n) => SlowlogSub::Get(Some(n)),

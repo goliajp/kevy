@@ -104,10 +104,7 @@ pub fn parse_docs(reply: &Reply) -> Result<Vec<VerbDoc>, String> {
     let items = match reply {
         Reply::Array(items) => items,
         Reply::Error(e) => {
-            return Err(format!(
-                "server rejected COMMAND DOCS: {}",
-                String::from_utf8_lossy(e)
-            ));
+            return Err(format!("server rejected COMMAND DOCS: {}", String::from_utf8_lossy(e)));
         }
         other => return Err(format!("COMMAND DOCS: expected array reply, got {other:?}")),
     };
@@ -119,8 +116,8 @@ pub fn parse_docs(reply: &Reply) -> Result<Vec<VerbDoc>, String> {
     }
     let mut docs = Vec::with_capacity(items.len() / 2);
     for pair in items.as_chunks::<2>().0 {
-        let name = text(&pair[0])
-            .ok_or_else(|| "COMMAND DOCS: verb name is not a string".to_string())?;
+        let name =
+            text(&pair[0]).ok_or_else(|| "COMMAND DOCS: verb name is not a string".to_string())?;
         docs.push(parse_fields(name, &pair[1])?);
     }
     Ok(docs)
@@ -164,9 +161,8 @@ fn parse_fields(name: String, fields: &Reply) -> Result<VerbDoc, String> {
         flags: Vec::new(),
     };
     for f in kv.as_chunks::<2>().0 {
-        let key = text(&f[0]).ok_or_else(|| {
-            format!("COMMAND DOCS '{}': field key is not a string", doc.name)
-        })?;
+        let key = text(&f[0])
+            .ok_or_else(|| format!("COMMAND DOCS '{}': field key is not a string", doc.name))?;
         match key.as_str() {
             "summary" => doc.summary = field_text(&doc.name, &key, &f[1])?,
             "since" => doc.since = field_text(&doc.name, &key, &f[1])?,
@@ -199,9 +195,7 @@ fn flag_list(verb: &str, v: &Reply) -> Result<Vec<String>, String> {
     };
     items
         .iter()
-        .map(|f| {
-            text(f).ok_or_else(|| format!("COMMAND DOCS '{verb}': flag is not a string"))
-        })
+        .map(|f| text(f).ok_or_else(|| format!("COMMAND DOCS '{verb}': flag is not a string")))
         .collect()
 }
 
@@ -223,7 +217,8 @@ mod tests {
 
     /// Recorded from a live kevy server answering
     /// `COMMAND DOCS GET SET IDX.CREATE` — raw wire bytes, unedited.
-    const DOCS_SAMPLE: &[u8] = b"*6\r\n$3\r\nGET\r\n*10\r\n$7\r\nsummary\r\n$33\r\nReturn the string \
+    const DOCS_SAMPLE: &[u8] =
+        b"*6\r\n$3\r\nGET\r\n*10\r\n$7\r\nsummary\r\n$33\r\nReturn the string \
         value of a key.\r\n$5\r\nsince\r\n$5\r\n1.0.0\r\n$5\r\ngroup\r\n$6\r\
         \nstring\r\n$6\r\nsyntax\r\n$7\r\nGET key\r\n$5\r\nflags\r\n*1\r\n$8\
         \r\nreadonly\r\n$3\r\nSET\r\n*10\r\n$7\r\nsummary\r\n$68\r\nSet a ke\

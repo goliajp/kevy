@@ -98,10 +98,7 @@ impl Store {
         if keys.is_empty() {
             return Ok(Vec::new());
         }
-        let first: BTreeSet<Vec<u8>> = self
-            .smembers(keys[0])?
-            .into_iter()
-            .collect();
+        let first: BTreeSet<Vec<u8>> = self.smembers(keys[0])?.into_iter().collect();
         let mut acc = first;
         for k in &keys[1..] {
             if acc.is_empty() {
@@ -130,10 +127,7 @@ impl Store {
         if keys.is_empty() {
             return Ok(Vec::new());
         }
-        let mut acc: BTreeSet<Vec<u8>> = self
-            .smembers(keys[0])?
-            .into_iter()
-            .collect();
+        let mut acc: BTreeSet<Vec<u8>> = self.smembers(keys[0])?.into_iter().collect();
         for k in &keys[1..] {
             let next: BTreeSet<Vec<u8>> = self.smembers(k)?.into_iter().collect();
             acc.retain(|m| !next.contains(m));
@@ -183,18 +177,10 @@ impl Store {
     /// `HINCRBYFLOAT key field delta` — atomic float increment of a
     /// hash field. Returns the post-increment value. Errors on
     /// `NotFloat` when the field is present but not parseable.
-    pub fn hincrbyfloat(
-        &self,
-        key: &[u8],
-        field: &[u8],
-        delta: f64,
-    ) -> KevyResult<f64> {
+    pub fn hincrbyfloat(&self, key: &[u8], field: &[u8], delta: f64) -> KevyResult<f64> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
-        let new_val = g
-            .store
-            .hincrbyfloat(key, field, delta)
-            .map_err(store_err)?;
+        let new_val = g.store.hincrbyfloat(key, field, delta).map_err(store_err)?;
         let delta_str = format!("{delta}");
         commit_write(&mut g, &[b"HINCRBYFLOAT", key, field, delta_str.as_bytes()])?;
         Ok(new_val)
@@ -210,19 +196,10 @@ impl Store {
     ///
     /// `before = true` matches Redis `LINSERT … BEFORE`, `false`
     /// matches `LINSERT … AFTER`.
-    pub fn linsert(
-        &self,
-        key: &[u8],
-        before: bool,
-        pivot: &[u8],
-        value: &[u8],
-    ) -> KevyResult<i64> {
+    pub fn linsert(&self, key: &[u8], before: bool, pivot: &[u8], value: &[u8]) -> KevyResult<i64> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
-        let new_len = g
-            .store
-            .linsert(key, before, pivot, value)
-            .map_err(store_err)?;
+        let new_len = g.store.linsert(key, before, pivot, value).map_err(store_err)?;
         if new_len > 0 {
             let dir = if before { b"BEFORE".as_slice() } else { b"AFTER".as_slice() };
             commit_write(&mut g, &[b"LINSERT", key, dir, pivot, value])?;

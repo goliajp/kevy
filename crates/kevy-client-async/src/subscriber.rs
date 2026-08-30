@@ -88,10 +88,7 @@ impl AsyncSubscriber {
     /// to get at the ack would trade a race for a lost message.
     pub async fn subscribe(&mut self, channels: &[&[u8]]) -> io::Result<()> {
         if channels.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "SUBSCRIBE needs ≥ 1 channel",
-            ));
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "SUBSCRIBE needs ≥ 1 channel"));
         }
         self.send_with_args(b"SUBSCRIBE", channels).await?;
         self.await_acks(channels.len(), false).await
@@ -155,9 +152,7 @@ impl AsyncSubscriber {
         loop {
             match self.recv().await? {
                 PubsubEvent::Message { channel, payload }
-                | PubsubEvent::Pmessage {
-                    channel, payload, ..
-                } => return Ok((channel, payload)),
+                | PubsubEvent::Pmessage { channel, payload, .. } => return Ok((channel, payload)),
                 _ => continue,
             }
         }
@@ -169,18 +164,12 @@ impl AsyncSubscriber {
     /// the blocking client) so callers can pattern-match a uniform
     /// type.
     pub async fn hello3(&mut self) -> io::Result<PubsubEvent> {
-        let reply = self
-            .codec
-            .request(&[b"HELLO".to_vec(), b"3".to_vec()])
-            .await?;
+        let reply = self.codec.request(&[b"HELLO".to_vec(), b"3".to_vec()]).await?;
         match reply {
-            Reply::Map(_) | Reply::Array(_) => Ok(PubsubEvent::Subscribe {
-                channel: b"HELLO".to_vec(),
-                count: 3,
-            }),
-            Reply::Error(e) => Err(io::Error::other(
-                String::from_utf8_lossy(&e).into_owned(),
-            )),
+            Reply::Map(_) | Reply::Array(_) => {
+                Ok(PubsubEvent::Subscribe { channel: b"HELLO".to_vec(), count: 3 })
+            }
+            Reply::Error(e) => Err(io::Error::other(String::from_utf8_lossy(&e).into_owned())),
             other => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("unexpected HELLO 3 reply shape: {other:?}"),

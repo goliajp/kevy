@@ -103,20 +103,18 @@ pub(crate) fn dispatch(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
             Ok(n) => int(out, n as i64),
             Err(e) => err(out, &format!("WRONGTYPE {e}")),
         },
-        b"LRANGE" if argv.len() == 4 => {
-            match (parse_i64(&argv[2]), parse_i64(&argv[3])) {
-                (Some(a), Some(b)) => match s.lrange(&argv[1], a, b) {
-                    Ok(items) => {
-                        arr(out, items.len());
-                        for i in items {
-                            bulk(out, &i);
-                        }
+        b"LRANGE" if argv.len() == 4 => match (parse_i64(&argv[2]), parse_i64(&argv[3])) {
+            (Some(a), Some(b)) => match s.lrange(&argv[1], a, b) {
+                Ok(items) => {
+                    arr(out, items.len());
+                    for i in items {
+                        bulk(out, &i);
                     }
-                    Err(e) => err(out, &format!("WRONGTYPE {e}")),
-                },
-                _ => err(out, "ERR value is not an integer"),
-            }
-        }
+                }
+                Err(e) => err(out, &format!("WRONGTYPE {e}")),
+            },
+            _ => err(out, "ERR value is not an integer"),
+        },
         b"LLEN" if argv.len() == 2 => match s.llen(&argv[1]) {
             Ok(n) => int(out, n as i64),
             Err(e) => err(out, &format!("WRONGTYPE {e}")),
@@ -251,11 +249,9 @@ fn cmd_zrange(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
 
 #[cfg(feature = "replicate")]
 fn cmd_feed_read(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
-    let (Some(g), Some(o), Some(limit)) = (
-        parse_i64(&argv[1]),
-        parse_i64(&argv[2]),
-        parse_i64(&argv[3]),
-    ) else {
+    let (Some(g), Some(o), Some(limit)) =
+        (parse_i64(&argv[1]), parse_i64(&argv[2]), parse_i64(&argv[3]))
+    else {
         return err(out, "ERR FEED.READ gen offset limit [PREFIX p…]");
     };
     let mut prefixes: Vec<&[u8]> = Vec::new();

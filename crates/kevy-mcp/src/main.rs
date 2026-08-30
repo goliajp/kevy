@@ -183,10 +183,7 @@ fn initialize_result() -> Value {
         ("capabilities", obj(vec![("tools", obj(Vec::new()))])),
         (
             "serverInfo",
-            obj(vec![
-                ("name", s("kevy-mcp")),
-                ("version", s(env!("CARGO_PKG_VERSION"))),
-            ]),
+            obj(vec![("name", s("kevy-mcp")), ("version", s(env!("CARGO_PKG_VERSION")))]),
         ),
     ])
 }

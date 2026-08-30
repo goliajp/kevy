@@ -18,7 +18,9 @@
 use std::net::Ipv4Addr;
 
 use kevy_config::ReplicationRole;
-use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer, encode_simple_string};
+use kevy_resp::{
+    ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer, encode_simple_string,
+};
 
 use crate::state::Ctx;
 
@@ -316,9 +318,7 @@ mod tests {
             })
             .collect();
         let c = crate::KevyCommands::new();
-        c.state()
-            .obs
-            .publish_repl_view(0, crate::state::ReplShardView { offset, replicas });
+        c.state().obs.publish_repl_view(0, crate::state::ReplShardView { offset, replicas });
         let mut a = Argv::default();
         a.push(b"ROLE");
         let mut out = Vec::new();

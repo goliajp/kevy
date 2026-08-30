@@ -8,9 +8,7 @@ use kevy_embedded::{Config, EvictionPolicy, Store};
 
 fn main() -> kevy_embedded::KevyResult<()> {
     let s = Store::open(
-        Config::default()
-            .with_max_memory(200 * 1024)
-            .with_eviction(EvictionPolicy::AllKeysLru),
+        Config::default().with_max_memory(200 * 1024).with_eviction(EvictionPolicy::AllKeysLru),
     )?;
 
     for i in 0..10_000 {

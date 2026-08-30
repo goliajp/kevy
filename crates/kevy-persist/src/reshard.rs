@@ -18,7 +18,9 @@
 //! the `.premigration.<stamp>` backups.
 
 use crate::layout;
-use crate::{Argv, Routing, ShardsMeta, load_snapshot, replay_aof, save_snapshot, write_shards_meta};
+use crate::{
+    Argv, Routing, ShardsMeta, load_snapshot, replay_aof, save_snapshot, write_shards_meta,
+};
 use kevy_store::Store;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -146,8 +148,7 @@ fn finish_reshard<L: ShardLayout>(
         let snap = lay.snapshot_path(dir, i, prev_n);
         // A plain dump file is an old source unless the new layout already
         // finalized this index (its `.reshard` temp is gone and i < n).
-        let is_source = i >= target.n
-            || reshard_tmp(&lay.snapshot_path(dir, i, target.n)).exists();
+        let is_source = i >= target.n || reshard_tmp(&lay.snapshot_path(dir, i, target.n)).exists();
         if is_source && snap.exists() {
             rename_to_backup(&snap, stamp)?;
         }
@@ -261,7 +262,8 @@ mod tests {
     #[test]
     fn recover_completes_after_commit_point_crash() {
         let dir = temp_dir("mid-c");
-        for f in ["dump-0.rdb", "dump-1.rdb", "dump-2.rdb", "dump-3.rdb", "aof-0.aof", "aof-3.aof"] {
+        for f in ["dump-0.rdb", "dump-1.rdb", "dump-2.rdb", "dump-3.rdb", "aof-0.aof", "aof-3.aof"]
+        {
             touch(&dir, f);
         }
         touch(&dir, "dump-0.rdb.reshard");
@@ -270,7 +272,8 @@ mod tests {
 
         recover_journal(&dir, &StdLayout).unwrap();
 
-        for f in ["dump-0.rdb", "dump-1.rdb", "dump-2.rdb", "dump-3.rdb", "aof-0.aof", "aof-3.aof"] {
+        for f in ["dump-0.rdb", "dump-1.rdb", "dump-2.rdb", "dump-3.rdb", "aof-0.aof", "aof-3.aof"]
+        {
             assert!(dir.join(format!("{f}.premigration.7")).exists(), "{f} not backed up");
         }
         assert!(dir.join("dump-0.rdb").exists() && dir.join("dump-1.rdb").exists());

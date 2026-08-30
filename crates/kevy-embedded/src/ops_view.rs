@@ -101,14 +101,10 @@ impl Store {
             via: None,
         };
         {
-            let mut g = self
-                .views
-                .catalog
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut g =
+                self.views.catalog.write().unwrap_or_else(std::sync::PoisonError::into_inner);
             let (ver, cat) = &mut *g;
-            cat.create(spec)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+            cat.create(spec).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
             *ver += 1;
         }
         self.persist_view_sidecar();
@@ -126,11 +122,7 @@ impl Store {
     fn check_view_refs(&self, tree: &Tree, order_by: &[u8]) -> KevyResult<()> {
         let mut names: Vec<Vec<u8>> = vec![order_by.to_vec()];
         tree.each_leaf(&mut |l| names.push(l.index.clone()));
-        let g = self
-            .indexes
-            .catalog
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let g = self.indexes.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         for n in &names {
             if g.1.get(n).is_none() {
                 return Err(KevyError::InvalidInput("view references unknown index".into()));
@@ -142,11 +134,8 @@ impl Store {
     /// Drop a view; `false` if absent.
     pub fn view_drop(&self, name: &[u8]) -> bool {
         let hit = {
-            let mut g = self
-                .views
-                .catalog
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut g =
+                self.views.catalog.write().unwrap_or_else(std::sync::PoisonError::into_inner);
             let (ver, cat) = &mut *g;
             let hit = cat.drop_view(name);
             if hit {
@@ -177,8 +166,7 @@ impl Store {
             let inner = &mut *g;
             crate::ops_index::sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
             sync_views(&self.views, &mut inner.view_segs, &inner.idx_segs);
-            let Some(i) = inner.view_segs.views.iter().position(|v| v.spec.name == name)
-            else {
+            let Some(i) = inner.view_segs.views.iter().position(|v| v.spec.name == name) else {
                 continue;
             };
             found = true;
@@ -207,14 +195,8 @@ impl Store {
 
     /// Declared views (name, mode, leaves).
     pub fn view_list(&self) -> Vec<(Vec<u8>, ViewMode, usize)> {
-        let g = self
-            .views
-            .catalog
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        g.1.iter()
-            .map(|s| (s.name.clone(), s.mode, s.tree.leaves()))
-            .collect()
+        let g = self.views.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        g.1.iter().map(|s| (s.name.clone(), s.mode, s.tree.leaves())).collect()
     }
 
     /// Summed member count across shards.
@@ -225,11 +207,7 @@ impl Store {
     #[cfg(feature = "persist")]
     fn persist_view_sidecar(&self) {
         let Some(dir) = &self.config.data_dir else { return };
-        let g = self
-            .views
-            .catalog
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let g = self.views.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = dir.join("view-catalog.meta.tmp");
         if std::fs::write(&tmp, g.1.to_sidecar()).is_ok() {
             let _ = std::fs::rename(&tmp, dir.join(SIDECAR));
@@ -252,11 +230,8 @@ impl Store {
             && let Some(cat) = ViewCatalog::from_sidecar(&text)
             && !cat.is_empty()
         {
-            let mut g = self
-                .views
-                .catalog
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut g =
+                self.views.catalog.write().unwrap_or_else(std::sync::PoisonError::into_inner);
             *g = (g.0 + 1, cat);
         }
     }
@@ -326,10 +301,7 @@ fn rebuild(vs: &mut ViewState, segs: &ShardSegs) {
 
 /// Reconcile with the catalog (under the shard lock).
 pub(crate) fn sync_views(reg: &ViewReg, sv: &mut ShardViews, segs: &ShardSegs) {
-    let g = reg
-        .catalog
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let g = reg.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
     let (ver, cat) = &*g;
     if sv.version == *ver {
         return;
@@ -342,7 +314,9 @@ pub(crate) fn sync_views(reg: &ViewReg, sv: &mut ShardViews, segs: &ShardSegs) {
             None => {
                 let mat = match spec.mode {
                     ViewMode::Virtual => None,
-                    ViewMode::Materialized { top_k } => Some(MaterializedSet::new(top_k, spec.desc)),
+                    ViewMode::Materialized { top_k } => {
+                        Some(MaterializedSet::new(top_k, spec.desc))
+                    }
                 };
                 let mut vs = ViewState { spec: spec.clone(), needs_rebuild: mat.is_some(), mat };
                 if vs.needs_rebuild {
@@ -357,17 +331,9 @@ pub(crate) fn sync_views(reg: &ViewReg, sv: &mut ShardViews, segs: &ShardSegs) {
 }
 
 /// Write hook — call AFTER `ops_index::on_commit` (same shard lock).
-pub(crate) fn on_commit(
-    reg: &ViewReg,
-    sv: &mut ShardViews,
-    segs: &ShardSegs,
-    parts: &[&[u8]],
-) {
+pub(crate) fn on_commit(reg: &ViewReg, sv: &mut ShardViews, segs: &ShardSegs, parts: &[&[u8]]) {
     {
-        let g = reg
-            .catalog
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let g = reg.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         if g.1.is_empty() {
             return;
         }

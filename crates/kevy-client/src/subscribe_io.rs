@@ -22,11 +22,7 @@ use crate::subscribe::PubsubEvent;
 /// frame. No buffering — the caller is expected to follow up with
 /// `recv_remote` (server replies with a `subscribe`/`psubscribe`
 /// confirmation frame per channel/pattern).
-pub(crate) fn send_to(
-    stream: &mut TcpStream,
-    verb: &[u8],
-    args: &[&[u8]],
-) -> KevyResult<()> {
+pub(crate) fn send_to(stream: &mut TcpStream, verb: &[u8], args: &[&[u8]]) -> KevyResult<()> {
     let mut argv = Vec::with_capacity(args.len() + 1);
     argv.push(verb.to_vec());
     argv.extend(args.iter().map(|a| a.to_vec()));
@@ -113,32 +109,22 @@ pub(crate) fn recv_remote(
 /// remote `recv` path, so each arm widens with `as i64`.
 pub(crate) fn frame_to_event(frame: PubsubFrame) -> PubsubEvent {
     match frame {
-        PubsubFrame::Subscribe { channel, count } => PubsubEvent::Subscribe {
-            channel,
-            count: count as i64,
-        },
-        PubsubFrame::Psubscribe { pattern, count } => PubsubEvent::Psubscribe {
-            pattern,
-            count: count as i64,
-        },
-        PubsubFrame::Unsubscribe { channel, count } => PubsubEvent::Unsubscribe {
-            channel,
-            count: count as i64,
-        },
-        PubsubFrame::Punsubscribe { pattern, count } => PubsubEvent::Punsubscribe {
-            pattern,
-            count: count as i64,
-        },
+        PubsubFrame::Subscribe { channel, count } => {
+            PubsubEvent::Subscribe { channel, count: count as i64 }
+        }
+        PubsubFrame::Psubscribe { pattern, count } => {
+            PubsubEvent::Psubscribe { pattern, count: count as i64 }
+        }
+        PubsubFrame::Unsubscribe { channel, count } => {
+            PubsubEvent::Unsubscribe { channel, count: count as i64 }
+        }
+        PubsubFrame::Punsubscribe { pattern, count } => {
+            PubsubEvent::Punsubscribe { pattern, count: count as i64 }
+        }
         PubsubFrame::Message { channel, payload } => PubsubEvent::Message { channel, payload },
-        PubsubFrame::Pmessage {
-            pattern,
-            channel,
-            payload,
-        } => PubsubEvent::Pmessage {
-            pattern,
-            channel,
-            payload,
-        },
+        PubsubFrame::Pmessage { pattern, channel, payload } => {
+            PubsubEvent::Pmessage { pattern, channel, payload }
+        }
     }
 }
 

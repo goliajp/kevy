@@ -23,9 +23,7 @@ const N: usize = 1_000_000;
 const VALUE: &[u8] = b"value-payload-16";
 
 fn make_keys(prefix: &str, n: usize) -> Vec<Vec<u8>> {
-    (0..n)
-        .map(|i| format!("{prefix}{i}").into_bytes())
-        .collect()
+    (0..n).map(|i| format!("{prefix}{i}").into_bytes()).collect()
 }
 
 fn time_ns<F: FnMut()>(mut f: F) -> u128 {
@@ -62,10 +60,7 @@ fn main() {
         }
     });
     let rps = ops_per_sec(N, dt);
-    println!(
-        "SET   (overwrite) : {rps:>13.0} ops/s  ({:.0} ns/op)",
-        (dt as f64) / (N as f64)
-    );
+    println!("SET   (overwrite) : {rps:>13.0} ops/s  ({:.0} ns/op)", (dt as f64) / (N as f64));
 
     // GET hit.
     let dt = time_ns(|| {
@@ -74,10 +69,7 @@ fn main() {
         }
     });
     let rps = ops_per_sec(N, dt);
-    println!(
-        "GET   (hit)       : {rps:>13.0} ops/s  ({:.0} ns/op)",
-        (dt as f64) / (N as f64)
-    );
+    println!("GET   (hit)       : {rps:>13.0} ops/s  ({:.0} ns/op)", (dt as f64) / (N as f64));
 
     // GET miss.
     let dt = time_ns(|| {
@@ -86,10 +78,7 @@ fn main() {
         }
     });
     let rps = ops_per_sec(N, dt);
-    println!(
-        "GET   (miss)      : {rps:>13.0} ops/s  ({:.0} ns/op)",
-        (dt as f64) / (N as f64)
-    );
+    println!("GET   (miss)      : {rps:>13.0} ops/s  ({:.0} ns/op)", (dt as f64) / (N as f64));
 
     // INCR — exercises live_entry_mut + integer fast path.
     for k in &keys {
@@ -101,10 +90,7 @@ fn main() {
         }
     });
     let rps = ops_per_sec(N, dt);
-    println!(
-        "INCR              : {rps:>13.0} ops/s  ({:.0} ns/op)",
-        (dt as f64) / (N as f64)
-    );
+    println!("INCR              : {rps:>13.0} ops/s  ({:.0} ns/op)", (dt as f64) / (N as f64));
 
     // DEL.
     let dt = time_ns(|| {
@@ -113,10 +99,7 @@ fn main() {
         }
     });
     let rps = ops_per_sec(N, dt);
-    println!(
-        "DEL               : {rps:>13.0} ops/s  ({:.0} ns/op)",
-        (dt as f64) / (N as f64)
-    );
+    println!("DEL               : {rps:>13.0} ops/s  ({:.0} ns/op)", (dt as f64) / (N as f64));
 
     println!();
     println!("Compare against `redis-benchmark -c1 -P1 -n 300000` running");

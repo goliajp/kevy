@@ -35,9 +35,9 @@ extern crate alloc;
 
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
+use core::hash::{BuildHasherDefault, Hasher};
 #[cfg(feature = "std")]
 use std::collections::{HashMap, HashSet};
-use core::hash::{BuildHasherDefault, Hasher};
 
 mod crc16;
 pub use crc16::{crc16, key_hash_slot};

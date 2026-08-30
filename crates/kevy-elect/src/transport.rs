@@ -19,9 +19,9 @@
 //! Out of scope (Phase 1.5): TLS / auth / connection pooling.
 
 use std::net::TcpListener;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -155,19 +155,14 @@ impl Transport {
         let orch_stop = stop.clone();
         let orch_shared = shared.clone();
         handles.push(
-            std::thread::Builder::new()
-                .name("kevy-elect-orchestrator".to_string())
-                .spawn(move || {
+            std::thread::Builder::new().name("kevy-elect-orchestrator".to_string()).spawn(
+                move || {
                     orchestrator_loop(orch_shared, inbound_rx, hb_interval, orch_stop, on_change);
-                })?,
+                },
+            )?,
         );
 
-        Ok(Self {
-            stop,
-            handles,
-            state_view: shared.clone(),
-            shared,
-        })
+        Ok(Self { stop, handles, state_view: shared.clone(), shared })
     }
 
     /// Read-side snapshot of the elector for `ROLE` / `INFO
@@ -201,11 +196,7 @@ impl Transport {
     // missing_panics_doc: same poisoned-lock rationale as `state_snapshot`.
     #[allow(clippy::missing_panics_doc)]
     pub fn set_repl_offset(&self, offset: u64) {
-        self.shared
-            .elector
-            .lock()
-            .expect("elector lock")
-            .set_repl_offset(offset);
+        self.shared.elector.lock().expect("elector lock").set_repl_offset(offset);
     }
 
     /// Stop the transport. Joins all threads (with best-effort
@@ -255,13 +246,11 @@ fn spawn_listener_thread(
     stop: Arc<AtomicBool>,
     handles: &mut Vec<JoinHandle<()>>,
 ) -> std::io::Result<()> {
-    handles.push(
-        std::thread::Builder::new()
-            .name("kevy-elect-listener".to_string())
-            .spawn(move || {
-                accept_loop(listener, tx, stop);
-            })?,
-    );
+    handles.push(std::thread::Builder::new().name("kevy-elect-listener".to_string()).spawn(
+        move || {
+            accept_loop(listener, tx, stop);
+        },
+    )?);
     Ok(())
 }
 
@@ -277,11 +266,11 @@ fn spawn_outbound_threads(
         let peer_shared = shared.clone();
         let peer_clone = peer.clone();
         handles.push(
-            std::thread::Builder::new()
-                .name(format!("kevy-elect-out-{}", peer.node_id))
-                .spawn(move || {
+            std::thread::Builder::new().name(format!("kevy-elect-out-{}", peer.node_id)).spawn(
+                move || {
                     outbound_loop(peer_clone, peer_shared, peer_stop);
-                })?,
+                },
+            )?,
         );
     }
     Ok(())

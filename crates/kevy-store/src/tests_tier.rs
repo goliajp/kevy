@@ -111,7 +111,11 @@ fn demote_promote_preserves_value_ttl_lru_watch_and_fires_no_events() {
 
     assert!(s.debug_force_demote(b"k"));
     assert!(is_cold(&s, b"k"));
-    assert_eq!(s.map.get(b"k".as_slice()).unwrap().lru_clock(), lru_before, "demote must preserve lru_clock");
+    assert_eq!(
+        s.map.get(b"k".as_slice()).unwrap().lru_clock(),
+        lru_before,
+        "demote must preserve lru_clock"
+    );
     assert_eq!(s.key_version(b"k"), watch_v, "demote must not bump WATCH");
     assert!(!s.has_notify_events(), "demote emits zero events");
     let ttl_cold = s.pttl(b"k");
@@ -160,7 +164,15 @@ fn hash_field_ttls_stay_in_ram_and_purge_on_promote() {
 fn wrongtype_on_cold_never_reads_the_vlog() {
     let (mut s, _d) = tiered("tier-wrongtype", u64::MAX);
     s.set(b"str", vec![b'a'; 1024], None, false, false);
-    s.hset(b"h", &[(b"f".as_slice(), b"v".as_slice()), (b"pad-to-heap-hash".as_slice(), b"v".as_slice()), (b"third".as_slice(), b"v".as_slice())]).unwrap();
+    s.hset(
+        b"h",
+        &[
+            (b"f".as_slice(), b"v".as_slice()),
+            (b"pad-to-heap-hash".as_slice(), b"v".as_slice()),
+            (b"third".as_slice(), b"v".as_slice()),
+        ],
+    )
+    .unwrap();
     assert!(s.debug_force_demote(b"str"));
     assert!(s.debug_force_demote(b"h"));
     let preads0 = s.tier_stats().preads_total;
@@ -230,7 +242,11 @@ fn demote_and_promote_accounting_is_exact() {
     let w_cold = s.map.get(b"k".as_slice()).unwrap().weight();
     assert_eq!(w_cold, 0, "short key + stub owns zero heap");
     assert_eq!(s.used_memory(), used_hot - w_hot, "demote reclaims exactly the value weight");
-    assert_eq!(s.estimate_key_bytes(b"k"), Some(crate::value::ENTRY_OVERHEAD), "MEMORY USAGE is stub-actual");
+    assert_eq!(
+        s.estimate_key_bytes(b"k"),
+        Some(crate::value::ENTRY_OVERHEAD),
+        "MEMORY USAGE is stub-actual"
+    );
     assert_eq!(s.tier_stats().cold_bytes, w_hot);
 
     s.promote_in_place(b"k");
@@ -302,7 +318,11 @@ fn renamed_cold_key_survives_compaction() {
     s.set(b"trigger", vec![b't'; 5000], None, false, false);
     s.debug_force_demote(b"trigger");
     s.tier_force_compact_for_tests();
-    assert_eq!(s.get(b"new").unwrap().unwrap().as_ref(), big.as_slice(), "record must survive rename + compaction");
+    assert_eq!(
+        s.get(b"new").unwrap().unwrap().as_ref(),
+        big.as_slice(),
+        "record must survive rename + compaction"
+    );
 }
 
 #[test]
@@ -657,8 +677,7 @@ fn entry_overhead_stands_for_a_slot_in_a_growing_table() {
 /// Build `key` as a packed row of three columns.
 fn packed(s: &mut Store, key: &[u8]) {
     let pad = noise(4096);
-    let pairs: [(&[u8], &[u8]); 3] =
-        [(b"id", b"7"), (b"name", b"alice"), (b"pad", pad.as_slice())];
+    let pairs: [(&[u8], &[u8]); 3] = [(b"id", b"7"), (b"name", b"alice"), (b"pad", pad.as_slice())];
     s.hset(key, &pairs).unwrap();
     let names: Vec<Vec<u8>> = vec![b"id".to_vec(), b"name".to_vec(), b"pad".to_vec()];
     s.set_packed_rows(true);

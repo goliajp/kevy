@@ -26,14 +26,9 @@ fn comment_preserved_and_value_substituted() {
                ";
     let mut cfg = Config::default();
     cfg.server.port = 7000;
-    let out = cfg
-        .to_toml_string_preserving(src)
-        .expect("preserving rewrite");
+    let out = cfg.to_toml_string_preserving(src).expect("preserving rewrite");
     assert!(out.contains("# top comment\n"), "lost top comment: {out:?}");
-    assert!(
-        out.contains("# before port\n"),
-        "lost above-line comment: {out:?}"
-    );
+    assert!(out.contains("# before port\n"), "lost above-line comment: {out:?}");
     assert!(
         out.contains("port = 7000 # inline\n"),
         "value substitution / inline comment broken: {out:?}",
@@ -45,10 +40,7 @@ fn blank_lines_preserved() {
     let src = "\n\n[server]\n\nport = 6004\n\n";
     let out = rewrite(src);
     // Two leading blank lines + one between section and key.
-    assert!(
-        out.starts_with("\n\n[server]\n\n"),
-        "leading blanks lost: {out:?}"
-    );
+    assert!(out.starts_with("\n\n[server]\n\n"), "leading blanks lost: {out:?}");
 }
 
 #[test]
@@ -78,21 +70,14 @@ fn missing_keys_for_known_section_inline_after_last_pair() {
     // orphan section starts after a single blank line.
     let src = "[server]\nport = 6004\n";
     let out = rewrite(src);
-    assert!(
-        out.starts_with("[server]\nport = 6004\n"),
-        "preserved prefix lost: {out:?}",
-    );
+    assert!(out.starts_with("[server]\nport = 6004\n"), "preserved prefix lost: {out:?}",);
     // Threads/data_dir/bind appended INLINE in [server] (no new header).
     assert!(
         out.contains("port = 6004\n") && out.contains("\nthreads = 0\n"),
         "expected inline append in [server]: {out:?}",
     );
     // No spurious second [server] header.
-    assert_eq!(
-        out.matches("[server]").count(),
-        1,
-        "saw duplicate [server] header: {out:?}",
-    );
+    assert_eq!(out.matches("[server]").count(), 1, "saw duplicate [server] header: {out:?}",);
     // First orphan section is separated by exactly one blank line.
     assert!(
         out.contains("\n\n[persistence]\n"),
@@ -112,20 +97,14 @@ fn inline_appended_keys_come_before_following_section_blank() {
         out.contains("port = 6004\nbind = ") && out.contains("\ndata_dir = \".\"\n"),
         "missing inline append in [server]: {out:?}",
     );
-    assert!(
-        out.contains("\n\n[memory]\n"),
-        "lost blank-line separator before [memory]: {out:?}",
-    );
+    assert!(out.contains("\n\n[memory]\n"), "lost blank-line separator before [memory]: {out:?}",);
 }
 
 #[test]
 fn inline_comment_after_section_header_preserved() {
     let src = "[server] # the server block\nport = 6004\n";
     let out = rewrite(src);
-    assert!(
-        out.contains("[server] # the server block\n"),
-        "got: {out:?}"
-    );
+    assert!(out.contains("[server] # the server block\n"), "got: {out:?}");
 }
 
 #[test]
@@ -138,9 +117,7 @@ fn single_quoted_value_replaced_with_double_quote_canonical() {
 #[test]
 fn unterminated_string_is_a_parse_error() {
     let src = "[server]\nbind = \"127.0.0.1\n";
-    let err = Config::default()
-        .to_toml_string_preserving(src)
-        .expect_err("should reject");
+    let err = Config::default().to_toml_string_preserving(src).expect_err("should reject");
     assert!(matches!(err, ConfigError::Parse { .. }));
 }
 
@@ -158,13 +135,8 @@ fn whitespace_alignment_preserved() {
     let src = "[server]\nport     = 6004\nthreads  = 4\n";
     let mut cfg = Config::default();
     cfg.server.threads = 4;
-    let out = cfg
-        .to_toml_string_preserving(src)
-        .expect("preserving rewrite");
-    assert!(
-        out.contains("port     = 6004\n"),
-        "alignment dropped: {out:?}"
-    );
+    let out = cfg.to_toml_string_preserving(src).expect("preserving rewrite");
+    assert!(out.contains("port     = 6004\n"), "alignment dropped: {out:?}");
     assert!(out.contains("threads  = 4\n"), "alignment dropped: {out:?}");
 }
 
@@ -188,14 +160,9 @@ fn value_substitution_updates_only_value_bytes() {
                ";
     let mut cfg = Config::default();
     cfg.memory.maxmemory = 64 * 1024 * 1024;
-    let out = cfg
-        .to_toml_string_preserving(src)
-        .expect("preserving rewrite");
+    let out = cfg.to_toml_string_preserving(src).expect("preserving rewrite");
     assert!(out.contains("# header\n"));
     assert!(out.contains("port     = 6004\n"), "got: {out:?}");
     assert!(out.contains("threads  = 0\n"), "got: {out:?}");
-    assert!(
-        out.contains(&format!("maxmemory = {}\n", 64 * 1024 * 1024)),
-        "got: {out:?}",
-    );
+    assert!(out.contains(&format!("maxmemory = {}\n", 64 * 1024 * 1024)), "got: {out:?}",);
 }

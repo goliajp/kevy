@@ -165,10 +165,7 @@ impl ReadWriteClient {
             let conn = RespClient::connect(host, port)?;
             self.scope_writers.insert(addr.to_string(), conn);
         }
-        let conn = self
-            .scope_writers
-            .get_mut(addr)
-            .expect("just inserted above");
+        let conn = self.scope_writers.get_mut(addr).expect("just inserted above");
         conn.request(args)
     }
 
@@ -202,11 +199,7 @@ impl ReadWriteClient {
         let Some(verb) = args.first() else {
             return self.primary.request(args);
         };
-        if is_write_verb(verb) {
-            self.request_write(args)
-        } else {
-            self.request_read(args, false)
-        }
+        if is_write_verb(verb) { self.request_write(args) } else { self.request_read(args, false) }
     }
 }
 
@@ -318,14 +311,18 @@ mod tests {
 
     #[test]
     fn writes_classified_correctly() {
-        for verb in [&b"SET"[..], b"DEL", b"LPUSH", b"HSET", b"ZADD", b"XADD", b"FLUSHDB", b"REPLICAOF"] {
+        for verb in
+            [&b"SET"[..], b"DEL", b"LPUSH", b"HSET", b"ZADD", b"XADD", b"FLUSHDB", b"REPLICAOF"]
+        {
             assert!(is_write_verb(verb), "{:?} should be write", std::str::from_utf8(verb));
         }
     }
 
     #[test]
     fn reads_classified_correctly() {
-        for verb in [&b"GET"[..], b"HGET", b"LRANGE", b"SMEMBERS", b"ZSCORE", b"XRANGE", b"PING", b"INFO"] {
+        for verb in
+            [&b"GET"[..], b"HGET", b"LRANGE", b"SMEMBERS", b"ZSCORE", b"XRANGE", b"PING", b"INFO"]
+        {
             assert!(!is_write_verb(verb), "{:?} should be read", std::str::from_utf8(verb));
         }
     }

@@ -8,8 +8,13 @@ use super::super::wire::{decode_cursor, unhex};
 use super::filter::{FilterArg, parse_filter, parse_sort_dir};
 
 pub(crate) enum Shape {
-    Range { min: Vec<u8>, max: Vec<u8> },
-    Eq { value: Vec<u8> },
+    Range {
+        min: Vec<u8>,
+        max: Vec<u8>,
+    },
+    Eq {
+        value: Vec<u8>,
+    },
     /// `WHERE col EQ v [col EQ v…] [RANGE col min max]` — composite
     /// indexes only. The bounds compute against the spec's declared
     /// columns (pure encoding, not planning: the caller still names
@@ -72,10 +77,7 @@ impl Query {
         let name = argv.get(1)?.clone();
         let mode = argv.get(2)?;
         let (shape, i) = if mode.eq_ignore_ascii_case(b"RANGE") {
-            (
-                Shape::Range { min: argv.get(3)?.clone(), max: argv.get(4)?.clone() },
-                5,
-            )
+            (Shape::Range { min: argv.get(3)?.clone(), max: argv.get(4)?.clone() }, 5)
         } else if mode.eq_ignore_ascii_case(b"EQ") {
             (Shape::Eq { value: argv.get(3)?.clone() }, 4)
         } else if mode.eq_ignore_ascii_case(b"WHERE") {
@@ -125,8 +127,7 @@ impl Query {
                 self.filters.push(f);
                 i = next;
             } else if a.eq_ignore_ascii_case(b"SORT") {
-                self.sort =
-                    Some((argv.get(i + 1)?.clone(), parse_sort_dir(argv.get(i + 2)?)?));
+                self.sort = Some((argv.get(i + 1)?.clone(), parse_sort_dir(argv.get(i + 2)?)?));
                 i += 3;
             } else if a.eq_ignore_ascii_case(b"DISTINCT") {
                 self.distinct = Some(argv.get(i + 1)?.clone());
@@ -157,10 +158,7 @@ impl Query {
     /// Whether any clause reshapes the selection — the set that refuses
     /// a cursor (`FILTER` alone thins the driving order and pages fine).
     pub(crate) fn selects(&self) -> bool {
-        self.sort.is_some()
-            || self.distinct.is_some()
-            || !self.facets.is_empty()
-            || self.offset > 0
+        self.sort.is_some() || self.distinct.is_some() || !self.facets.is_empty() || self.offset > 0
     }
 
     /// Whether any clause is present at all (IDX.COUNT takes none).
@@ -280,7 +278,10 @@ fn parse_sub(argv: &[Vec<u8>], i: usize) -> Option<(SubQuery, usize)> {
         Some((
             SubQuery {
                 name,
-                shape: Shape::Range { min: argv.get(i + 2)?.clone(), max: argv.get(i + 3)?.clone() },
+                shape: Shape::Range {
+                    min: argv.get(i + 2)?.clone(),
+                    max: argv.get(i + 3)?.clone(),
+                },
             },
             i + 4,
         ))

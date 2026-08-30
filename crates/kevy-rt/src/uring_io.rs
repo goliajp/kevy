@@ -122,15 +122,10 @@ impl<C: Commands> Shard<C> {
         if let Some(uc) = io.get_mut(&cid)
             && let Some(state) = uc.pending_big_arg.as_ref()
         {
-            cancelling = matches!(
-                state.as_ref(),
-                crate::uring_conn::BigArgState::BareSetCancelling { .. }
-            );
+            cancelling =
+                matches!(state.as_ref(), crate::uring_conn::BigArgState::BareSetCancelling { .. });
             if cancelling
-                || matches!(
-                    state.as_ref(),
-                    crate::uring_conn::BigArgState::BareSetReading { .. }
-                )
+                || matches!(state.as_ref(), crate::uring_conn::BigArgState::BareSetReading { .. })
             {
                 suppress_rearm = true;
             }
@@ -175,10 +170,11 @@ impl<C: Commands> Shard<C> {
         // into the crlf-skip probe's get_mut — res > 0 here). The probe
         // slices any pending kernel-direct big-arg trailing CRLF off the
         // slab head before dispatch sees it.
-        let n = if let Some(uc) = io.get_mut(&cid) && {
-            uc.recv_zero_streak = 0;
-            uc.pending_crlf_skip > 0
-        } {
+        let n = if let Some(uc) = io.get_mut(&cid)
+            && {
+                uc.recv_zero_streak = 0;
+                uc.pending_crlf_skip > 0
+            } {
             let skip = (uc.pending_crlf_skip as usize).min(n);
             uc.pending_crlf_skip -= skip as u8;
             let slab_bytes = pbuf.bytes(bid, n);

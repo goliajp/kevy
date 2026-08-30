@@ -50,17 +50,16 @@ impl Server {
         let port = free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-rename-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards)).bind([127, 0, 0, 1], port).shards(nshards)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards))
+                .bind([127, 0, 0, 1], port)
+                .shards(nshards)
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });
@@ -70,8 +69,7 @@ impl Server {
 
     fn connect(&self) -> std::net::TcpStream {
         let s = std::net::TcpStream::connect(("127.0.0.1", self.port)).unwrap();
-        s.set_read_timeout(Some(std::time::Duration::from_secs(5)))
-            .unwrap();
+        s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
         s
     }
 }
@@ -177,10 +175,7 @@ fn rename_preserves_ttl() {
     let n = c.read(&mut buf).unwrap();
     let s = String::from_utf8_lossy(&buf[..n]);
     let v: i64 = s.trim_start_matches(':').trim_end_matches("\r\n").parse().unwrap();
-    assert!(
-        (3590..=3600).contains(&v),
-        "expected TTL ~3600s, got {v}"
-    );
+    assert!((3590..=3600).contains(&v), "expected TTL ~3600s, got {v}");
 }
 
 #[test]
@@ -224,8 +219,7 @@ fn cross_shard_rename_succeeds_v2_3b() {
         let dst = format!("kd{src_idx}");
         c.write_all(&req(&[b"SET", src.as_bytes(), b"v"])).unwrap();
         read_reply(&mut c, b"+OK\r\n");
-        c.write_all(&req(&[b"RENAME", src.as_bytes(), dst.as_bytes()]))
-            .unwrap();
+        c.write_all(&req(&[b"RENAME", src.as_bytes(), dst.as_bytes()])).unwrap();
         let mut buf = [0u8; 8];
         c.read_exact(&mut buf[..5]).unwrap();
         if &buf[..5] == b"+OK\r\n" {
@@ -282,10 +276,7 @@ fn cross_shard_rename_preserves_ttl_v2_3b() {
     let n = c.read(&mut buf).unwrap();
     let s = String::from_utf8_lossy(&buf[..n]);
     let v: i64 = s.trim_start_matches(':').trim_end_matches("\r\n").parse().unwrap();
-    assert!(
-        (7190..=7200).contains(&v),
-        "expected TTL ~7200s preserved across rename, got {v}"
-    );
+    assert!((7190..=7200).contains(&v), "expected TTL ~7200s preserved across rename, got {v}");
 }
 
 #[test]
@@ -304,8 +295,7 @@ fn cross_shard_renamenx_returns_zero_when_dst_exists() {
     read_reply(&mut c, b"+OK\r\n");
     c.write_all(&req(&[b"SET", b"nx-dst", b"existing"])).unwrap();
     read_reply(&mut c, b"+OK\r\n");
-    c.write_all(&req(&[b"RENAMENX", b"nx-src", b"nx-dst"]))
-        .unwrap();
+    c.write_all(&req(&[b"RENAMENX", b"nx-src", b"nx-dst"])).unwrap();
     read_reply(&mut c, b":0\r\n");
     // dst still has its original value.
     c.write_all(&req(&[b"GET", b"nx-dst"])).unwrap();

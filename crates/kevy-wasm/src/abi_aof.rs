@@ -79,7 +79,9 @@ fn feed(inst: &mut Instance, chunk: &[u8]) -> i32 {
         let v1 = kevy_persist::AOF_MAGIC;
         let v2 = kevy_persist::AOF2_MAGIC;
         let head = &inst.aof_in_carry;
-        if head.len() < v2.len() && (v1.starts_with(head.as_slice()) || v2.starts_with(head.as_slice())) {
+        if head.len() < v2.len()
+            && (v1.starts_with(head.as_slice()) || v2.starts_with(head.as_slice()))
+        {
             // Could still be a magic prefix — wait for more bytes.
             return 0;
         }
@@ -120,9 +122,8 @@ fn feed_v1(inst: &mut Instance) -> i32 {
             Ok(None) => break, // incomplete tail — keep for the next chunk
             Err(e) => {
                 inst.aof_in_carry.clear();
-                return inst.fail(format!(
-                    "corrupt AOF frame after {applied} applied frame(s): {e:?}"
-                ));
+                return inst
+                    .fail(format!("corrupt AOF frame after {applied} applied frame(s): {e:?}"));
             }
         }
     }
@@ -159,9 +160,7 @@ fn feed_v2(inst: &mut Instance) -> i32 {
             kevy_persist::RecordStep::Truncated => break,
             kevy_persist::RecordStep::Corrupt => {
                 inst.aof_in_carry.clear();
-                return inst.fail(format!(
-                    "corrupt AOF record after {applied} applied frame(s)"
-                ));
+                return inst.fail(format!("corrupt AOF record after {applied} applied frame(s)"));
             }
         }
     }

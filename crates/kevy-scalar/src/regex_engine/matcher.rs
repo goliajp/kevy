@@ -29,11 +29,9 @@ pub(crate) fn re_match_at(
     }
     let d = depth + 1;
     match node {
-        ReNode::Literal(c) => Ok(if s.get(pos).copied() == Some(*c) {
-            Some(pos + 1)
-        } else {
-            None
-        }),
+        ReNode::Literal(c) => {
+            Ok(if s.get(pos).copied() == Some(*c) { Some(pos + 1) } else { None })
+        }
         // PG's ARE is non-newline-sensitive by default,
         // so `.` matches ANY character including `\n` (unlike Perl, where a
         // separate `s`/DOTALL flag is needed). SPG previously excluded `\n`,
@@ -73,12 +71,7 @@ pub(crate) fn re_match_at(
             }
             Ok(None)
         }
-        ReNode::Quant {
-            inner,
-            min,
-            max,
-            greedy,
-        } => {
+        ReNode::Quant { inner, min, max, greedy } => {
             // Standalone quantifier (no tail). Greedy → the LONGEST
             // match (match as many reps as fit). Lazy → the FEWEST
             // (match exactly `min` reps, then stop). Tail interaction is
@@ -155,12 +148,7 @@ pub(crate) fn re_match_seq(
         return Ok(Some(pos));
     };
     match first {
-        ReNode::Quant {
-            inner,
-            min,
-            max,
-            greedy,
-        } => {
+        ReNode::Quant { inner, min, max, greedy } => {
             // Enumerate every reachable end position (0, 1, 2, ...
             // repetitions). The reachable set is identical for greedy
             // and lazy; only the ORDER in which we try the tail against
@@ -224,8 +212,7 @@ pub(crate) fn re_match_seq(
         ReNode::Concat(nested) => {
             // Flatten: nested ++ rest, preserving backtracking
             // across the boundary.
-            let mut combined: Vec<ReNode> =
-                Vec::with_capacity(nested.len() + rest.len());
+            let mut combined: Vec<ReNode> = Vec::with_capacity(nested.len() + rest.len());
             combined.extend(nested.iter().cloned());
             combined.extend(rest.iter().cloned());
             re_match_seq(&combined, s, pos, d, steps)
@@ -253,7 +240,11 @@ pub(crate) fn has_backref(node: &ReNode) -> bool {
 
 /// Find the first match of `node` in `s`, starting at or after
 /// `from`. Returns the (start, end) char positions of the match.
-pub(crate) fn re_find(node: &ReNode, s: &[char], from: usize) -> Result<Option<(usize, usize)>, ReErr> {
+pub(crate) fn re_find(
+    node: &ReNode,
+    s: &[char],
+    from: usize,
+) -> Result<Option<(usize, usize)>, ReErr> {
     // A backref pattern has no meaning on the capture-free path — route it to
     // the caps matcher and discard the captures.
     if has_backref(node) {

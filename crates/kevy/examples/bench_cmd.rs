@@ -36,23 +36,38 @@ fn main() {
     println!("kevy local command CPU — parse + dispatch(+encode) (indicative under load)\n");
 
     println!("== parse only (single-alloc Argv) ==");
-    report("parse GET", bench(SAMPLES, INNER, || {
-        black_box(argv_of(black_box(&get)));
-    }));
-    report("parse SET", bench(SAMPLES, INNER, || {
-        black_box(argv_of(black_box(&set)));
-    }));
+    report(
+        "parse GET",
+        bench(SAMPLES, INNER, || {
+            black_box(argv_of(black_box(&get)));
+        }),
+    );
+    report(
+        "parse SET",
+        bench(SAMPLES, INNER, || {
+            black_box(argv_of(black_box(&set)));
+        }),
+    );
 
     println!("\n== dispatch only (pre-parsed argv; allocates the reply Vec) ==");
-    report("dispatch GET (hit)", bench(SAMPLES, INNER, || {
-        black_box(kevy.dispatch(black_box(&mut store), black_box(&ga)));
-    }));
-    report("dispatch SET", bench(SAMPLES, INNER, || {
-        black_box(kevy.dispatch(black_box(&mut store), black_box(&sa)));
-    }));
-    report("dispatch INCR", bench(SAMPLES, INNER, || {
-        black_box(kevy.dispatch(black_box(&mut store), black_box(&ia)));
-    }));
+    report(
+        "dispatch GET (hit)",
+        bench(SAMPLES, INNER, || {
+            black_box(kevy.dispatch(black_box(&mut store), black_box(&ga)));
+        }),
+    );
+    report(
+        "dispatch SET",
+        bench(SAMPLES, INNER, || {
+            black_box(kevy.dispatch(black_box(&mut store), black_box(&sa)));
+        }),
+    );
+    report(
+        "dispatch INCR",
+        bench(SAMPLES, INNER, || {
+            black_box(kevy.dispatch(black_box(&mut store), black_box(&ia)));
+        }),
+    );
 
     println!("\n== combined parse + dispatch (full per-command CPU) ==");
     report(

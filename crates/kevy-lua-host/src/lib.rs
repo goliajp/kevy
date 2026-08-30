@@ -159,40 +159,23 @@ impl<T: 'static> LuaHost<T> {
         F: Fn(&mut T, &[&[u8]], bool) -> Vec<u8> + 'static,
     {
         let bridge = Bridge::new(move |argv, ro| {
-            with_current::<T, _>(|t| dispatch_fn(t, argv, ro))
-                .unwrap_or_else(|| {
-                    b"-ERR kevy-lua-host: dispatch called outside an active eval scope\r\n"
-                        .to_vec()
-                })
+            with_current::<T, _>(|t| dispatch_fn(t, argv, ro)).unwrap_or_else(|| {
+                b"-ERR kevy-lua-host: dispatch called outside an active eval scope\r\n".to_vec()
+            })
         });
-        LuaHost {
-            bridge,
-            _marker: PhantomData,
-        }
+        LuaHost { bridge, _marker: PhantomData }
     }
 
     /// Run a script. Scoped-installs `ctx` so the dispatch closure
     /// can find it via [`with_current`], then delegates to
     /// `Bridge::eval`.
-    pub fn eval(
-        &mut self,
-        ctx: &mut T,
-        script: &[u8],
-        keys: &[&[u8]],
-        args: &[&[u8]],
-    ) -> Reply {
+    pub fn eval(&mut self, ctx: &mut T, script: &[u8], keys: &[&[u8]], args: &[&[u8]]) -> Reply {
         let _guard = set_current(ctx);
         self.bridge.eval(script, keys, args)
     }
 
     /// Read-only counterpart of [`Self::eval`].
-    pub fn eval_ro(
-        &mut self,
-        ctx: &mut T,
-        script: &[u8],
-        keys: &[&[u8]],
-        args: &[&[u8]],
-    ) -> Reply {
+    pub fn eval_ro(&mut self, ctx: &mut T, script: &[u8], keys: &[&[u8]], args: &[&[u8]]) -> Reply {
         let _guard = set_current(ctx);
         self.bridge.eval_ro(script, keys, args)
     }
@@ -322,12 +305,8 @@ mod tests {
     fn eval_ro_blocks_writes() {
         let mut host = make_host();
         let mut store = ToyStore::default();
-        let reply = host.eval_ro(
-            &mut store,
-            b"return redis.call('SET', KEYS[1], 'v')",
-            &[b"k"],
-            &[],
-        );
+        let reply =
+            host.eval_ro(&mut store, b"return redis.call('SET', KEYS[1], 'v')", &[b"k"], &[]);
         assert!(reply.starts_with(b"-READONLY "));
         assert!(!store.kv.contains_key(b"k".as_slice()));
     }

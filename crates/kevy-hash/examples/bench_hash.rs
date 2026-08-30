@@ -63,7 +63,9 @@ fn main() {
     });
     println!(
         "  u64  KevyHash={} ns  FxHasher={} ns  SipHash={} ns  Sip/Kevy={:.2}×",
-        kh.median_ns, fxh.median_ns, sip.median_ns,
+        kh.median_ns,
+        fxh.median_ns,
+        sip.median_ns,
         sip.median_ns as f64 / kh.median_ns as f64,
     );
 }

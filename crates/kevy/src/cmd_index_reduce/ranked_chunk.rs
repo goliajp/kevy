@@ -56,12 +56,7 @@ pub(super) fn collect_hits(
 /// differently (`1` and `1.0` in a field declared `f64`) and those are
 /// one bucket. The label reported is the first spelling seen, which is
 /// therefore always one that occurs in the corpus.
-pub(super) fn collect_facets(
-    c: &[u8],
-    mut pos: usize,
-    n_fields: usize,
-    out: &mut [Vec<Bucket>],
-) {
+pub(super) fn collect_facets(c: &[u8], mut pos: usize, n_fields: usize, out: &mut [Vec<Bucket>]) {
     for field in out.iter_mut().take(n_fields) {
         let Some(n) = read_u32(c, &mut pos) else { return };
         for _ in 0..n {

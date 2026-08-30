@@ -43,7 +43,10 @@ pub(crate) fn extension_reduce(
     if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"AGG.FETCH")) {
         return ExtensionReduced::Reply(agg::reduce_agg_fetch(argv, &chunks));
     }
-    if argv.get(2).is_some_and(|a| a.eq_ignore_ascii_case(b"GROUP") || a.eq_ignore_ascii_case(b"GROUPS")) {
+    if argv
+        .get(2)
+        .is_some_and(|a| a.eq_ignore_ascii_case(b"GROUP") || a.eq_ignore_ascii_case(b"GROUPS"))
+    {
         return agg::reduce_agg(argv, &chunks);
     }
     // KNN: merge distance-ranked chunks ascending.
@@ -77,11 +80,7 @@ pub(crate) fn extension_reduce(
 
 /// The admin verbs (EXPLAIN / COUNT / LIST / VERIFY); `None` = a
 /// query-shaped verb, handled by the caller's shape dispatch.
-fn reduce_admin(
-    catalogs: &CatalogState,
-    argv: &[Vec<u8>],
-    chunks: &[Vec<u8>],
-) -> Option<Vec<u8>> {
+fn reduce_admin(catalogs: &CatalogState, argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Option<Vec<u8>> {
     let verb = argv.first().map(Vec::as_slice).unwrap_or(b"");
     // IDX.EXPLAIN — pair-array plan summary.
     if verb.eq_ignore_ascii_case(b"IDX.EXPLAIN") {
@@ -133,10 +132,9 @@ fn status_error(c: &[u8], verb_s: &str, name_s: &str) -> Option<String> {
                 "ERR {verb_s} '{name_s}': the {clause} clause is accepted by the parser but not implemented yet — it is part of the text-search arc, and silently ignoring it would give you wrong results rather than an error"
             ))
         }
-        Some(ST_CLAUSE) => Some(format!(
-            "ERR {verb_s} '{name_s}': {}",
-            String::from_utf8_lossy(&c[1..])
-        )),
+        Some(ST_CLAUSE) => {
+            Some(format!("ERR {verb_s} '{name_s}': {}", String::from_utf8_lossy(&c[1..])))
+        }
         Some(ST_NOFIELD) => {
             let flen = c.get(1).copied().unwrap_or(0) as usize;
             let msg = c.get(2 + flen..).unwrap_or(b"");

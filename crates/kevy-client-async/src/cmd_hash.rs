@@ -10,11 +10,7 @@ use crate::reply::{array_to_bulks, string, unexpected};
 impl AsyncConnection {
     /// `HSET key field value [field value ...]`. Returns count of
     /// fields newly created (overwrites don't count).
-    pub async fn hset(
-        &mut self,
-        key: &[u8],
-        pairs: &[(&[u8], &[u8])],
-    ) -> io::Result<usize> {
+    pub async fn hset(&mut self, key: &[u8], pairs: &[(&[u8], &[u8])]) -> io::Result<usize> {
         let mut args: Vec<&[u8]> = Vec::with_capacity(2 + pairs.len() * 2);
         args.push(b"HSET");
         args.push(key);

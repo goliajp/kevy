@@ -83,7 +83,6 @@ const fn v(
     VerbMeta { name, group, arity, flags, summary, since, syntax, complexity, compat }
 }
 
-
 /// The registry, assembled from the per-family tables in `verb_meta/`.
 ///
 /// Split by family because one file with 183 rows would blow the 500-LOC house
@@ -112,13 +111,8 @@ pub(crate) mod flags {
     pub(crate) const WX: &[&str] = &["write", "extension"];
 }
 
-const FAMILIES: [&[VerbMeta]; 5] = [
-    keyspace::ROWS,
-    collections::ROWS,
-    streams_geo::ROWS,
-    admin::ROWS,
-    extensions::ROWS,
-];
+const FAMILIES: [&[VerbMeta]; 5] =
+    [keyspace::ROWS, collections::ROWS, streams_geo::ROWS, admin::ROWS, extensions::ROWS];
 
 const TOTAL: usize = keyspace::ROWS.len()
     + collections::ROWS.len()

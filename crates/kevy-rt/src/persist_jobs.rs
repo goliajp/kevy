@@ -18,13 +18,10 @@ pub(crate) fn run_swap(
     tail: Vec<u8>,
 ) -> PersistDone {
     if !tail.is_empty() {
-        let appended = std::fs::OpenOptions::new()
-            .append(true)
-            .open(&tmp)
-            .and_then(|mut f| {
-                std::io::Write::write_all(&mut f, &tail)?;
-                f.sync_all()
-            });
+        let appended = std::fs::OpenOptions::new().append(true).open(&tmp).and_then(|mut f| {
+            std::io::Write::write_all(&mut f, &tail)?;
+            f.sync_all()
+        });
         if let Err(e) = appended {
             // Image incomplete without the tail — abort the swap; the
             // live log carried every write through the normal path.
@@ -50,10 +47,7 @@ pub(crate) fn run_swap(
     {
         eprintln!("kevy: aof swap directory sync failed: {e}");
     }
-    PersistDone::SwapImage {
-        result,
-        trash: trash.filter(|_| linked),
-    }
+    PersistDone::SwapImage { result, trash: trash.filter(|_| linked) }
 }
 
 /// Unlink abandoned files and free retained buffers, all off-thread.
@@ -83,22 +77,15 @@ pub(crate) fn run_tee_append(tmp: PathBuf, mut bytes: Vec<u8>) -> PersistDone {
         f.sync_all()
     })();
     bytes.clear();
-    PersistDone::TeeAppend {
-        result,
-        tmp,
-        buf: bytes,
-    }
+    PersistDone::TeeAppend { result, tmp, buf: bytes }
 }
 
 pub(crate) fn run_job(job: PersistJob) -> PersistDone {
     match job {
-        PersistJob::Save {
-            view,
-            snap_path,
-            aof_reset,
-            cursor,
-        } => PersistDone::Save {
-            result: crate::persist_worker::write_snapshot_tmp_with_cursor(&view, &snap_path, cursor),
+        PersistJob::Save { view, snap_path, aof_reset, cursor } => PersistDone::Save {
+            result: crate::persist_worker::write_snapshot_tmp_with_cursor(
+                &view, &snap_path, cursor,
+            ),
             snap_path,
             aof_reset,
         },
@@ -107,9 +94,7 @@ pub(crate) fn run_job(job: PersistJob) -> PersistDone {
             result: kevy_persist::dump_aof(&tmp, &view).map(|(keys, _bytes)| keys),
             tmp,
         },
-        PersistJob::SwapImage { tmp, live, trash, tail } => {
-            run_swap(tmp, live, trash, tail)
-        }
+        PersistJob::SwapImage { tmp, live, trash, tail } => run_swap(tmp, live, trash, tail),
         PersistJob::Cleanup { paths, bufs } => run_cleanup(paths, bufs),
         PersistJob::TeeAppend { tmp, bytes } => run_tee_append(tmp, bytes),
     }

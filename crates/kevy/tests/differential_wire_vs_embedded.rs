@@ -33,7 +33,6 @@ fn argv(cmd: &str) -> Vec<Vec<u8>> {
     cmd.split(' ').map(|s| s.as_bytes().to_vec()).collect()
 }
 
-
 /// How many bytes of `buf` one complete RESP reply occupies, or `None` if
 /// more is needed. Covers what this server emits: simple string, error,
 /// integer, bulk string (and its null form), array (nested, and its null
@@ -49,17 +48,10 @@ impl Server {
     /// One shard, on purpose — see the module docs.
     fn start_single_shard() -> Self {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let port = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-diffwire-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
@@ -555,8 +547,7 @@ const EXPECTED: &[(&str, &str)] = &[
 /// `KEYS`, `HSCAN` and `ZSCAN` are the same class and are deliberately
 /// NOT here: they agree byte for byte today, and if that stops being
 /// true the cell should say so rather than have been excused in advance.
-const UNORDERED: &[&str] =
-    &["SINTER", "SUNION", "SDIFF", "SCAN", "SMEMBERS", "SRANDMEMBER"];
+const UNORDERED: &[&str] = &["SINTER", "SUNION", "SDIFF", "SCAN", "SMEMBERS", "SRANDMEMBER"];
 
 /// A canonical form for a reply whose order is not defined: every array
 /// in it, at every depth, has its elements sorted.
@@ -608,8 +599,7 @@ fn embedded_answers_what_the_wire_answers() {
     // `ops_table::KNOWN_GAPS` for verbs the RESP dispatch does not carry
     // at all. Reading the second rather than copying it means a gap that
     // closes there stops being excused here, by construction.
-    let mut expected: std::collections::BTreeSet<&str> =
-        EXPECTED.iter().map(|(c, _)| *c).collect();
+    let mut expected: std::collections::BTreeSet<&str> = EXPECTED.iter().map(|(c, _)| *c).collect();
     let f3: std::collections::BTreeSet<&str> = kevy_resp::ops_table::KNOWN_GAPS
         .iter()
         .filter(|(_, surface, _)| surface & kevy_resp::ops_table::surface::SERVER != 0)
@@ -645,8 +635,7 @@ fn embedded_answers_what_the_wire_answers() {
         }
     }
 
-    let unnamed: Vec<_> =
-        diverged.iter().filter(|(c, _, _)| !expected.contains(c)).collect();
+    let unnamed: Vec<_> = diverged.iter().filter(|(c, _, _)| !expected.contains(c)).collect();
 
     println!(
         "differential(wire): {} of {} agree byte-for-byte; {} diverge \
@@ -665,11 +654,7 @@ fn embedded_answers_what_the_wire_answers() {
     }
 
     assert_eq!(agreed + diverged.len(), CORPUS.len(), "the corpus did not run");
-    assert!(
-        unnamed.is_empty(),
-        "{} command(s) diverge without a stated reason",
-        unnamed.len()
-    );
+    assert!(unnamed.is_empty(), "{} command(s) diverge without a stated reason", unnamed.len());
 }
 
 /// Verbs whose short call answers with their own usage line rather than
@@ -760,7 +745,8 @@ fn every_documented_verb_refuses_a_short_call_in_redis_words() {
 
     // Controls, so a green here cannot come from the server answering
     // everything the same way.
-    let nonexistent = String::from_utf8_lossy(&wire.call(&argv("TOTALLY.NOT.A.COMMAND"))).to_string();
+    let nonexistent =
+        String::from_utf8_lossy(&wire.call(&argv("TOTALLY.NOT.A.COMMAND"))).to_string();
     assert!(nonexistent.contains("unknown command"), "a real unknown stays unknown: {nonexistent}");
     let good = String::from_utf8_lossy(&wire.call(&argv("IDX.LIST"))).to_string();
     assert!(
@@ -784,7 +770,10 @@ fn every_documented_verb_refuses_a_short_call_in_redis_words() {
     let healed: Vec<&str> = OWN_USAGE_LINE
         .iter()
         .copied()
-        .filter(|n| String::from_utf8_lossy(&wire.call(&short_call(n))).contains("wrong number of arguments"))
+        .filter(|n| {
+            String::from_utf8_lossy(&wire.call(&short_call(n)))
+                .contains("wrong number of arguments")
+        })
         .collect();
     assert!(
         healed.is_empty(),
@@ -904,11 +893,8 @@ fn both_surfaces_refuse_a_short_call_the_same_way() {
         println!("  … and {} more", differ.len() - 20);
     }
 
-    let unexplained: Vec<&str> = differ
-        .iter()
-        .map(|(n, _, _)| *n)
-        .filter(|n| !DIFFERENT_SIGNATURE.contains(n))
-        .collect();
+    let unexplained: Vec<&str> =
+        differ.iter().map(|(n, _, _)| *n).filter(|n| !DIFFERENT_SIGNATURE.contains(n)).collect();
     assert!(
         unexplained.is_empty(),
         "{} verb(s) refuse a short call differently on the two surfaces \

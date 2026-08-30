@@ -170,13 +170,16 @@ impl Connection {
     /// count from the tail (`-1` = last element).
     pub fn lrange(&mut self, key: &[u8], start: i64, stop: i64) -> KevyResult<Vec<Vec<u8>>> {
         match self {
-            Self::Embedded(s) => s
-                .with(|inner| inner.lrange(key, start, stop))
-                .map_err(store_err),
+            Self::Embedded(s) => s.with(|inner| inner.lrange(key, start, stop)).map_err(store_err),
             Self::Remote(c) => {
                 let start_s = start.to_string();
                 let stop_s = stop.to_string();
-                match c.request_borrowed(&[b"LRANGE", key, start_s.as_bytes(), stop_s.as_bytes()])? {
+                match c.request_borrowed(&[
+                    b"LRANGE",
+                    key,
+                    start_s.as_bytes(),
+                    stop_s.as_bytes(),
+                ])? {
                     Reply::Array(items) => array_to_bulks(items),
                     Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),
@@ -230,9 +233,7 @@ impl Connection {
     /// `SISMEMBER key member`. `false` when key or member absent.
     pub fn sismember(&mut self, key: &[u8], member: &[u8]) -> KevyResult<bool> {
         match self {
-            Self::Embedded(s) => s
-                .with(|inner| inner.sismember(key, member))
-                .map_err(store_err),
+            Self::Embedded(s) => s.with(|inner| inner.sismember(key, member)).map_err(store_err),
             Self::Remote(c) => match c.request_borrowed(&[b"SISMEMBER", key, member])? {
                 Reply::Int(1) => Ok(true),
                 Reply::Int(0) => Ok(false),
@@ -343,7 +344,12 @@ impl Connection {
             Self::Remote(c) => {
                 let start_s = start.to_string();
                 let stop_s = stop.to_string();
-                match c.request_borrowed(&[b"ZRANGE", key, start_s.as_bytes(), stop_s.as_bytes()])? {
+                match c.request_borrowed(&[
+                    b"ZRANGE",
+                    key,
+                    start_s.as_bytes(),
+                    stop_s.as_bytes(),
+                ])? {
                     Reply::Array(items) => array_to_bulks(items),
                     Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),
@@ -427,10 +433,8 @@ fn embed_set_combine(
     if keys.is_empty() {
         return Ok(Vec::new());
     }
-    let snapshots: Vec<Vec<Vec<u8>>> = keys
-        .iter()
-        .map(|k| s.smembers(k))
-        .collect::<KevyResult<_>>()?;
+    let snapshots: Vec<Vec<Vec<u8>>> =
+        keys.iter().map(|k| s.smembers(k)).collect::<KevyResult<_>>()?;
     let mut iter = snapshots.into_iter();
     let mut acc: HashSet<Vec<u8>> = iter.next().unwrap_or_default().into_iter().collect();
     for rest in iter {

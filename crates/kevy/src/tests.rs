@@ -60,10 +60,7 @@ fn incr_paths_and_errors() {
     assert_eq!(d(&mut s, &[b"INCR", b"n"]), b":1\r\n");
     assert_eq!(d(&mut s, &[b"INCRBY", b"n", b"9"]), b":10\r\n");
     d(&mut s, &[b"SET", b"x", b"abc"]);
-    assert_eq!(
-        d(&mut s, &[b"INCR", b"x"]),
-        b"-ERR value is not an integer or out of range\r\n"
-    );
+    assert_eq!(d(&mut s, &[b"INCR", b"x"]), b"-ERR value is not an integer or out of range\r\n");
     assert!(d(&mut s, &[b"INCRBY", b"n", b"notnum"]).starts_with(b"-ERR"));
 }
 
@@ -179,13 +176,10 @@ fn argv(parts: &[&[u8]]) -> Argv {
 fn route_local_verbs() {
     let c = KevyCommands::new();
     for v in [
-        "PING", "ECHO", "QUIT", "COMMAND", "CONFIG", "INFO", "CLUSTER",
-        "DEBUG", "WAIT", "SHUTDOWN", "CLIENT",
+        "PING", "ECHO", "QUIT", "COMMAND", "CONFIG", "INFO", "CLUSTER", "DEBUG", "WAIT",
+        "SHUTDOWN", "CLIENT",
     ] {
-        assert!(
-            matches!(c.route(&argv(&[v.as_bytes()])), Route::Local),
-            "{v}"
-        );
+        assert!(matches!(c.route(&argv(&[v.as_bytes()])), Route::Local), "{v}");
     }
     // HELLO is Route::Hello (its own conn-level handler:
     // HELLO 3 + per-conn RespVersion negotiation).
@@ -204,53 +198,23 @@ fn route_keyspace_verbs() {
     assert!(matches!(c.route(&argv(&[b"SAVE"])), Route::Save));
     assert!(matches!(c.route(&argv(&[b"BGSAVE"])), Route::BgSave));
     assert!(matches!(c.route(&argv(&[b"BGREWRITEAOF"])), Route::RewriteAof));
-    assert!(matches!(
-        c.route(&argv(&[b"RANDOMKEY"])),
-        Route::RandomKey
-    ));
+    assert!(matches!(c.route(&argv(&[b"RANDOMKEY"])), Route::RandomKey));
 }
 
 #[test]
 fn route_multikey_and_pubsub_verbs() {
     let c = KevyCommands::new();
     // MSET takes pairs: total argv length must be odd (verb + 2N).
-    assert!(matches!(
-        c.route(&argv(&[b"MSET", b"k1", b"v1", b"k2", b"v2"])),
-        Route::MSet
-    ));
-    assert!(matches!(
-        c.route(&argv(&[b"MGET", b"k1", b"k2"])),
-        Route::Gather(MultiOp::Mget)
-    ));
-    assert!(matches!(
-        c.route(&argv(&[b"SINTER", b"s1", b"s2"])),
-        Route::Gather(MultiOp::SInter)
-    ));
-    assert!(matches!(
-        c.route(&argv(&[b"SUNION", b"s1", b"s2"])),
-        Route::Gather(MultiOp::SUnion)
-    ));
-    assert!(matches!(
-        c.route(&argv(&[b"SDIFF", b"s1", b"s2"])),
-        Route::Gather(MultiOp::SDiff)
-    ));
-    assert!(matches!(
-        c.route(&argv(&[b"KEYS", b"*"])),
-        Route::Keys(Some(_))
-    ));
-    assert!(matches!(
-        c.route(&argv(&[b"SCAN", b"0"])),
-        Route::Scan(_)
-    ));
-    assert!(matches!(
-        c.route(&argv(&[b"SUBSCRIBE", b"chan"])),
-        Route::Subscribe
-    ));
+    assert!(matches!(c.route(&argv(&[b"MSET", b"k1", b"v1", b"k2", b"v2"])), Route::MSet));
+    assert!(matches!(c.route(&argv(&[b"MGET", b"k1", b"k2"])), Route::Gather(MultiOp::Mget)));
+    assert!(matches!(c.route(&argv(&[b"SINTER", b"s1", b"s2"])), Route::Gather(MultiOp::SInter)));
+    assert!(matches!(c.route(&argv(&[b"SUNION", b"s1", b"s2"])), Route::Gather(MultiOp::SUnion)));
+    assert!(matches!(c.route(&argv(&[b"SDIFF", b"s1", b"s2"])), Route::Gather(MultiOp::SDiff)));
+    assert!(matches!(c.route(&argv(&[b"KEYS", b"*"])), Route::Keys(Some(_))));
+    assert!(matches!(c.route(&argv(&[b"SCAN", b"0"])), Route::Scan(_)));
+    assert!(matches!(c.route(&argv(&[b"SUBSCRIBE", b"chan"])), Route::Subscribe));
     assert!(matches!(c.route(&argv(&[b"UNSUBSCRIBE"])), Route::Unsubscribe));
-    assert!(matches!(
-        c.route(&argv(&[b"PUBLISH", b"chan", b"msg"])),
-        Route::Publish
-    ));
+    assert!(matches!(c.route(&argv(&[b"PUBLISH", b"chan", b"msg"])), Route::Publish));
 }
 
 #[test]
@@ -260,14 +224,8 @@ fn route_del_exists_arity_branches() {
     assert!(matches!(c.route(&argv(&[b"DEL", b"k"])), Route::Single(1)));
     assert!(matches!(c.route(&argv(&[b"EXISTS", b"k"])), Route::Single(1)));
     // Multi-key DEL / EXISTS switch to dedicated fanout routes.
-    assert!(matches!(
-        c.route(&argv(&[b"DEL", b"k1", b"k2"])),
-        Route::DelKeys
-    ));
-    assert!(matches!(
-        c.route(&argv(&[b"EXISTS", b"k1", b"k2"])),
-        Route::ExistsKeys
-    ));
+    assert!(matches!(c.route(&argv(&[b"DEL", b"k1", b"k2"])), Route::DelKeys));
+    assert!(matches!(c.route(&argv(&[b"EXISTS", b"k1", b"k2"])), Route::ExistsKeys));
     // Generic single-key default path.
     assert!(matches!(c.route(&argv(&[b"GET", b"k"])), Route::Single(1)));
     // Unknown verb with no key → Local (so dispatch can return the error).
@@ -425,16 +383,9 @@ fn config_enum_mapping_round_trips() {
         assert_eq!(map_eviction_policy(src), dst);
     }
 
-    let fsync_cases = [
-        (CA::Always, P::Always),
-        (CA::EverySec, P::EverySec),
-        (CA::No, P::No),
-    ];
+    let fsync_cases = [(CA::Always, P::Always), (CA::EverySec, P::EverySec), (CA::No, P::No)];
     for (src, dst) in fsync_cases {
-        assert_eq!(
-            std::mem::discriminant(&map_appendfsync(src)),
-            std::mem::discriminant(&dst)
-        );
+        assert_eq!(std::mem::discriminant(&map_appendfsync(src)), std::mem::discriminant(&dst));
     }
 }
 

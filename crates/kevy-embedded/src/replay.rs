@@ -175,10 +175,7 @@ pub(crate) fn apply(store: &mut Store, args: &Argv) {
         }),
         b"SPOP" => {
             if let Some(k) = args.get(1) {
-                let count = args
-                    .get(2)
-                    .and_then(parse_i64)
-                    .map_or(1usize, |c| c.max(0) as usize);
+                let count = args.get(2).and_then(parse_i64).map_or(1usize, |c| c.max(0) as usize);
                 let _ = store.spop(k, count);
             }
         }
@@ -197,10 +194,7 @@ pub(crate) fn apply(store: &mut Store, args: &Argv) {
         // well-defined, so re-popping `count` reproduces the live pop.
         b"ZPOPMIN" => {
             if let Some(k) = args.get(1) {
-                let count = args
-                    .get(2)
-                    .and_then(parse_i64)
-                    .map_or(1usize, |c| c.max(0) as usize);
+                let count = args.get(2).and_then(parse_i64).map_or(1usize, |c| c.max(0) as usize);
                 let _ = store.zpopmin(k, count);
             }
         }
@@ -267,7 +261,6 @@ fn apply_expireat(store: &mut Store, args: &Argv, unit_ms: u64) {
     }
 }
 
-
 /// `HPEXPIREAT key unix-ms FIELDS n f…` (the canonical field-TTL frame).
 fn apply_hpexpireat(store: &mut kevy_store::Store, args: &Argv) {
     if args.len() < 6 {
@@ -304,15 +297,8 @@ fn apply_hset(store: &mut Store, args: &Argv) {
 
 fn apply_pop(store: &mut Store, args: &Argv, from_tail: bool) {
     if let Some(k) = args.get(1) {
-        let count = args
-            .get(2)
-            .and_then(parse_i64)
-            .map_or(1usize, |c| c.max(0) as usize);
-        let _ = if from_tail {
-            store.rpop(k, count)
-        } else {
-            store.lpop(k, count)
-        };
+        let count = args.get(2).and_then(parse_i64).map_or(1usize, |c| c.max(0) as usize);
+        let _ = if from_tail { store.rpop(k, count) } else { store.lpop(k, count) };
     }
 }
 
@@ -412,12 +398,49 @@ mod tests;
 /// embedded facade logs MUST appear here.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const REPLAY_VERBS: &[&str] = &[
-    "SET", "DEL", "INCR", "DECR", "INCRBY", "DECRBY", "INCRBYFLOAT",
-    "APPEND", "SETBIT", "SETRANGE", "GETSET", "GETDEL", "EXPIRE",
-    "PEXPIRE", "EXPIREAT", "PEXPIREAT", "PERSIST", "FLUSHDB",
-    "FLUSHALL", "HSET", "HDEL", "HINCRBY", "HINCRBYFLOAT", "HSETNX",
-    "HPEXPIREAT", "HPERSIST",
-    "RPUSH", "LPUSH", "LPOP", "RPOP", "LSET", "LREM", "LTRIM",
-    "LINSERT", "RENAME", "RENAMENX", "SADD", "SREM", "SPOP", "ZADD",
-    "ZREM", "ZINCRBY", "ZPOPMIN", "ZREMRANGEBYRANK", "ZREMRANGEBYSCORE",
+    "SET",
+    "DEL",
+    "INCR",
+    "DECR",
+    "INCRBY",
+    "DECRBY",
+    "INCRBYFLOAT",
+    "APPEND",
+    "SETBIT",
+    "SETRANGE",
+    "GETSET",
+    "GETDEL",
+    "EXPIRE",
+    "PEXPIRE",
+    "EXPIREAT",
+    "PEXPIREAT",
+    "PERSIST",
+    "FLUSHDB",
+    "FLUSHALL",
+    "HSET",
+    "HDEL",
+    "HINCRBY",
+    "HINCRBYFLOAT",
+    "HSETNX",
+    "HPEXPIREAT",
+    "HPERSIST",
+    "RPUSH",
+    "LPUSH",
+    "LPOP",
+    "RPOP",
+    "LSET",
+    "LREM",
+    "LTRIM",
+    "LINSERT",
+    "RENAME",
+    "RENAMENX",
+    "SADD",
+    "SREM",
+    "SPOP",
+    "ZADD",
+    "ZREM",
+    "ZINCRBY",
+    "ZPOPMIN",
+    "ZREMRANGEBYRANK",
+    "ZREMRANGEBYSCORE",
 ];

@@ -50,15 +50,15 @@ impl Hnsw {
 
     fn stats_from(&self, links: u64, tombstones: u64) -> VectorStats {
         let bytes_vec = (self.dim * 4) as u64;
-        let approx_bytes: u64 = self.nodes.len() as u64 * (bytes_vec + 40)
-            + links * 8
-            + self.live * 32;
+        let approx_bytes: u64 =
+            self.nodes.len() as u64 * (bytes_vec + 40) + links * 8 + self.live * 32;
         VectorStats {
             vectors: self.live,
             tombstones,
             links,
             approx_bytes,
-            rebuild_recommended: !self.nodes.is_empty() && tombstones * 10 > self.nodes.len() as u64 * 3,
+            rebuild_recommended: !self.nodes.is_empty()
+                && tombstones * 10 > self.nodes.len() as u64 * 3,
         }
     }
 
@@ -66,9 +66,9 @@ impl Hnsw {
     /// graph. Test-only: production reads the running counters.
     #[cfg(test)]
     pub fn recompute_stats(&self) -> VectorStats {
-        let links: u64 = self.nodes.iter().map(|n| n.links.iter().map(Vec::len).sum::<usize>() as u64).sum();
+        let links: u64 =
+            self.nodes.iter().map(|n| n.links.iter().map(Vec::len).sum::<usize>() as u64).sum();
         let tombstones = self.nodes.iter().filter(|n| n.dead).count() as u64;
         self.stats_from(links, tombstones)
     }
-
 }

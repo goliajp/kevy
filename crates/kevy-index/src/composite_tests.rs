@@ -26,8 +26,7 @@ impl Rng {
 fn raw_value(rng: &mut Rng, ty: ValType) -> Vec<u8> {
     match ty {
         ValType::I64 => {
-            let pool: [i64; 9] =
-                [i64::MIN, -1_000_000, -7, -1, 0, 1, 7, 1_000_000, i64::MAX];
+            let pool: [i64; 9] = [i64::MIN, -1_000_000, -7, -1, 0, 1, 7, 1_000_000, i64::MAX];
             pool[(rng.next() % 9) as usize].to_string().into_bytes()
         }
         ValType::F64 => {
@@ -37,16 +36,8 @@ fn raw_value(rng: &mut Rng, ty: ValType) -> Vec<u8> {
         ValType::Str => {
             // Deliberately adversarial: empty, embedded NULs, 0xFF
             // runs, shared prefixes.
-            let pool: [&[u8]; 8] = [
-                b"",
-                b"\x00",
-                b"\x00\x00a",
-                b"\xFF\xFF",
-                b"a",
-                b"ab",
-                b"a\x00b",
-                b"b",
-            ];
+            let pool: [&[u8]; 8] =
+                [b"", b"\x00", b"\x00\x00a", b"\xFF\xFF", b"a", b"ab", b"a\x00b", b"b"];
             pool[(rng.next() % 8) as usize].to_vec()
         }
         ValType::Vector => unreachable!(),
@@ -57,10 +48,8 @@ fn raw_value(rng: &mut Rng, ty: ValType) -> Vec<u8> {
 /// them (the reference model the byte encoding is checked against).
 fn model_cmp(cols: &[CompositeCol], a: &[Vec<u8>], b: &[Vec<u8>]) -> std::cmp::Ordering {
     for (i, c) in cols.iter().enumerate() {
-        let (va, vb) = (
-            IndexValue::coerce(c.ty, &a[i]).unwrap(),
-            IndexValue::coerce(c.ty, &b[i]).unwrap(),
-        );
+        let (va, vb) =
+            (IndexValue::coerce(c.ty, &a[i]).unwrap(), IndexValue::coerce(c.ty, &b[i]).unwrap());
         let ord = if c.desc { vb.cmp(&va) } else { va.cmp(&vb) };
         if ord != std::cmp::Ordering::Equal {
             return ord;
@@ -81,9 +70,8 @@ fn schema() -> Vec<CompositeCol> {
 fn random_tuples(n: usize) -> (Vec<CompositeCol>, Vec<Vec<Vec<u8>>>) {
     let cols = schema();
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
-    let tuples: Vec<Vec<Vec<u8>>> = (0..n)
-        .map(|_| cols.iter().map(|c| raw_value(&mut rng, c.ty)).collect())
-        .collect();
+    let tuples: Vec<Vec<Vec<u8>>> =
+        (0..n).map(|_| cols.iter().map(|c| raw_value(&mut rng, c.ty)).collect()).collect();
     (cols, tuples)
 }
 
@@ -170,8 +158,7 @@ fn missing_or_overlong_component_excludes_the_row() {
     let missing: Vec<Option<&[u8]>> = vec![Some(b"x"), None, Some(b"1.0"), Some(b"y")];
     assert!(composite_encode(&cols, &missing).is_none());
     let long = vec![b'z'; MAX_STR_COMPONENT + 1];
-    let over: Vec<Option<&[u8]>> =
-        vec![Some(&long), Some(b"1"), Some(b"1.0"), Some(b"y")];
+    let over: Vec<Option<&[u8]>> = vec![Some(&long), Some(b"1"), Some(b"1.0"), Some(b"y")];
     assert!(composite_encode(&cols, &over).is_none());
     let coerce_fail: Vec<Option<&[u8]>> =
         vec![Some(b"x"), Some(b"not-a-number"), Some(b"1.0"), Some(b"y")];
@@ -187,8 +174,18 @@ fn where_grammar_parses_and_refuses() {
     let stop = |t: &[u8]| t.eq_ignore_ascii_case(b"LIMIT");
     // eq + eq + range, then a tail keyword.
     let argv = vec![
-        a("x"), a("EQ"), a("1"), a("y"), a("EQ"), a("2"),
-        a("RANGE"), a("z"), a("0"), a("9"), a("LIMIT"), a("5"),
+        a("x"),
+        a("EQ"),
+        a("1"),
+        a("y"),
+        a("EQ"),
+        a("2"),
+        a("RANGE"),
+        a("z"),
+        a("0"),
+        a("9"),
+        a("LIMIT"),
+        a("5"),
     ];
     let (w, next) = parse_where(&argv, 0, stop).expect("parses");
     assert_eq!(w.eqs.len(), 2);
@@ -248,14 +245,10 @@ fn create_guards_refuse_bad_composite_combos_by_name() {
 
     let mut with_values = composite_spec("v");
     with_values.values = vec![crate::ValueSpec::new(b"c".to_vec())];
-    assert_eq!(
-        Catalog::new().create(with_values),
-        Err("ERR COMPOSITE cannot combine with VALUES")
-    );
+    assert_eq!(Catalog::new().create(with_values), Err("ERR COMPOSITE cannot combine with VALUES"));
 
     let mut multi_fields = composite_spec("f");
-    multi_fields.fields =
-        vec![FieldSpec::new(b"a".to_vec()), FieldSpec::new(b"b".to_vec())];
+    multi_fields.fields = vec![FieldSpec::new(b"a".to_vec()), FieldSpec::new(b"b".to_vec())];
     // The generic non-text multi-field fence fires first — still a
     // named refusal, never accept-and-ignore.
     assert!(Catalog::new().create(multi_fields).is_err());
@@ -265,8 +258,7 @@ fn create_guards_refuse_bad_composite_combos_by_name() {
     assert_eq!(Catalog::new().create(empty), Err("ERR COMPOSITE needs at least one column"));
 
     let mut too_many = composite_spec("m");
-    too_many.composite =
-        Some((0..9).map(|i| col(&format!("c{i}"), ValType::I64, false)).collect());
+    too_many.composite = Some((0..9).map(|i| col(&format!("c{i}"), ValType::I64, false)).collect());
     assert_eq!(Catalog::new().create(too_many), Err("ERR COMPOSITE supports at most 8 columns"));
 
     let mut vec_col = composite_spec("vv");
@@ -281,18 +273,19 @@ fn spec_derivation_reads_composite_columns() {
     let spec = composite_spec("op");
     assert_eq!(spec.scalar_read_names(), vec![b"a".as_slice(), b"b".as_slice()]);
     assert_eq!(spec.primary_width(), 2);
-    let v = spec
-        .derive_scalar(&[Some(b"x".to_vec()), Some(b"5".to_vec())])
-        .expect("derives");
+    let v = spec.derive_scalar(&[Some(b"x".to_vec()), Some(b"5".to_vec())]).expect("derives");
     let cols = spec.composite.as_ref().unwrap();
-    let expect =
-        composite_encode(cols, &[Some(b"x"), Some(b"5")]).expect("encodes");
+    let expect = composite_encode(cols, &[Some(b"x"), Some(b"5")]).expect("encodes");
     assert_eq!(v, IndexValue::Str(expect));
     assert!(spec.derive_scalar(&[Some(b"x".to_vec()), None]).is_none(), "missing col excludes");
 
     // The plain single-field face is unchanged.
     let plain = IndexSpec::single_field(
-        b"p".to_vec(), b"t:".to_vec(), b"n".to_vec(), ValType::I64, IndexKind::Range,
+        b"p".to_vec(),
+        b"t:".to_vec(),
+        b"n".to_vec(),
+        ValType::I64,
+        IndexKind::Range,
     );
     assert_eq!(plain.scalar_read_names(), vec![b"n".as_slice()]);
     assert_eq!(plain.primary_width(), 1);

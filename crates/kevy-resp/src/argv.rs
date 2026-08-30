@@ -21,10 +21,7 @@ pub struct Argv {
 impl Argv {
     /// An empty argv, pre-sizing for `argc` args totalling `bytes` bytes.
     pub fn with_capacity(argc: usize, bytes: usize) -> Self {
-        Argv {
-            buf: Vec::with_capacity(bytes),
-            ends: Vec::with_capacity(argc),
-        }
+        Argv { buf: Vec::with_capacity(bytes), ends: Vec::with_capacity(argc) }
     }
 
     /// Drop all args while keeping the buf + ends capacity. Used by the

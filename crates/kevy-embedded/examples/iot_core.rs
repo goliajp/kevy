@@ -33,12 +33,7 @@ fn print_rss() {
         let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
         for line in status.lines() {
             if let Some(rest) = line.strip_prefix("VmRSS:") {
-                let kb: u64 = rest
-                    .trim()
-                    .trim_end_matches("kB")
-                    .trim()
-                    .parse()
-                    .unwrap_or(0);
+                let kb: u64 = rest.trim().trim_end_matches("kB").trim().parse().unwrap_or(0);
                 println!("rss_kb={kb}");
             }
         }

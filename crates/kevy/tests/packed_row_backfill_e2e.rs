@@ -9,8 +9,8 @@
 //! not one row had been converted.
 
 use std::io::{Read, Write};
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 fn req(parts: &[&[u8]]) -> Vec<u8> {
     let mut v = format!("*{}\r\n", parts.len()).into_bytes();
@@ -126,10 +126,30 @@ fn declare(c: &mut std::net::TcpStream) -> Vec<u8> {
     cmd(
         c,
         &[
-            b"TABLE.DECLARE", b"t", b"PREFIX", b"row:", b"PK", b"id",
-            b"COLUMN", b"id", b"i64", b"COLUMN", b"name", b"str",
-            b"COLUMN", b"dept", b"str", b"COLUMN", b"age", b"i64",
-            b"COLUMN", b"ts", b"i64", b"COLUMN", b"sku", b"i64",
+            b"TABLE.DECLARE",
+            b"t",
+            b"PREFIX",
+            b"row:",
+            b"PK",
+            b"id",
+            b"COLUMN",
+            b"id",
+            b"i64",
+            b"COLUMN",
+            b"name",
+            b"str",
+            b"COLUMN",
+            b"dept",
+            b"str",
+            b"COLUMN",
+            b"age",
+            b"i64",
+            b"COLUMN",
+            b"ts",
+            b"i64",
+            b"COLUMN",
+            b"sku",
+            b"i64",
         ],
     )
 }
@@ -238,10 +258,7 @@ fn read_packed_rows(c: &mut std::net::TcpStream) -> String {
 /// it.
 #[test]
 fn a_snapshot_restore_comes_back_packed() {
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-packbf-snap-{}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("kevy-packbf-snap-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
 

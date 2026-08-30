@@ -15,15 +15,15 @@
 //! are not. Filtering never moves the cursor differently: `next` is
 //! the offset after the last *scanned* frame, matched or not.
 
-use kevy_resp::CmdError;
 use kevy_replicate::feed::FeedRead;
 use kevy_resp::ArgvView;
+use kevy_resp::CmdError;
 
 use kevy_resp::Argv;
 
+use crate::Commands;
 use crate::message::{Agg, Op, Part, SmallReply};
 use crate::shard::Shard;
-use crate::Commands;
 
 /// Cap on frames one FEED.READ scans (COUNT is clamped to this).
 const FEED_READ_MAX: usize = 4096;
@@ -75,13 +75,7 @@ pub(crate) fn parse_feed_read<A: ArgvView + ?Sized>(args: &A) -> Result<FeedRead
             return Err(CmdError::Wire("ERR syntax error"));
         }
     }
-    Ok(FeedReadArgs {
-        shard,
-        cursor_gen,
-        offset,
-        count: count.clamp(1, FEED_READ_MAX),
-        prefixes,
-    })
+    Ok(FeedReadArgs { shard, cursor_gen, offset, count: count.clamp(1, FEED_READ_MAX), prefixes })
 }
 
 impl<C: Commands> Shard<C> {
@@ -128,7 +122,14 @@ impl<C: Commands> Shard<C> {
 
     /// Ship a feed op to its target shard (or exec locally), replying
     /// through a plain `Agg::First` slot.
-    pub(crate) fn start_feed_op(&mut self, conn_id: u64, seq: u64, shard: usize, op: Op, is_quit: bool) {
+    pub(crate) fn start_feed_op(
+        &mut self,
+        conn_id: u64,
+        seq: u64,
+        shard: usize,
+        op: Op,
+        is_quit: bool,
+    ) {
         self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
         if shard >= self.nshards {
             self.fold(

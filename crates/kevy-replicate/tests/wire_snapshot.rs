@@ -58,10 +58,7 @@ fn snapshot_marker_returns_none_for_non_plus_byte() {
 fn snapshot_marker_truncated_when_no_crlf_yet() {
     assert_eq!(decode_snapshot_marker(b""), Err(WireError::Truncated));
     assert_eq!(decode_snapshot_marker(b"+SNAP"), Err(WireError::Truncated));
-    assert_eq!(
-        decode_snapshot_marker(b"+SNAPSHOT_END 42"),
-        Err(WireError::Truncated)
-    );
+    assert_eq!(decode_snapshot_marker(b"+SNAPSHOT_END 42"), Err(WireError::Truncated));
 }
 
 #[test]
@@ -86,14 +83,8 @@ fn snapshot_marker_line_cap_rejects_oversize() {
 fn snapshot_chunk_truncated_paths() {
     assert_eq!(decode_snapshot_chunk(b""), Err(WireError::Truncated));
     assert_eq!(decode_snapshot_chunk(b"$10"), Err(WireError::Truncated));
-    assert_eq!(
-        decode_snapshot_chunk(b"$5\r\nhel"),
-        Err(WireError::Truncated)
-    );
-    assert_eq!(
-        decode_snapshot_chunk(b"$5\r\nhello"),
-        Err(WireError::Truncated)
-    );
+    assert_eq!(decode_snapshot_chunk(b"$5\r\nhel"), Err(WireError::Truncated));
+    assert_eq!(decode_snapshot_chunk(b"$5\r\nhello"), Err(WireError::Truncated));
 }
 
 #[test]

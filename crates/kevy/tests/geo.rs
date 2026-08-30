@@ -86,17 +86,16 @@ impl Server {
         let port = free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-geo-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards)).bind([127, 0, 0, 1], port).shards(nshards)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards))
+                .bind([127, 0, 0, 1], port)
+                .shards(nshards)
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });
@@ -106,8 +105,7 @@ impl Server {
 
     fn connect(&self) -> std::net::TcpStream {
         let s = std::net::TcpStream::connect(("127.0.0.1", self.port)).unwrap();
-        s.set_read_timeout(Some(std::time::Duration::from_secs(5)))
-            .unwrap();
+        s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
         s
     }
 }
@@ -143,14 +141,7 @@ fn geoadd_returns_count_of_new_members() {
     let mut c = srv.connect();
     add_sicily(&mut c);
     // Re-adding the same members → 0 new.
-    c.write_all(&req(&[
-        b"GEOADD",
-        b"Sicily",
-        b"13.361389",
-        b"38.115556",
-        b"Palermo",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"GEOADD", b"Sicily", b"13.361389", b"38.115556", b"Palermo"])).unwrap();
     assert_eq!(read_reply(&mut c), b":0\r\n");
 }
 
@@ -173,15 +164,7 @@ fn geoadd_nx_only_inserts_when_missing() {
     let mut c = srv.connect();
     add_sicily(&mut c);
     // NX: Palermo exists, so this should be a no-op.
-    c.write_all(&req(&[
-        b"GEOADD",
-        b"Sicily",
-        b"NX",
-        b"99.0",
-        b"0.0",
-        b"Palermo",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"GEOADD", b"Sicily", b"NX", b"99.0", b"0.0", b"Palermo"])).unwrap();
     assert_eq!(read_reply(&mut c), b":0\r\n");
     // Confirm Palermo's coords are unchanged.
     c.write_all(&req(&[b"GEOPOS", b"Sicily", b"Palermo"])).unwrap();
@@ -195,15 +178,7 @@ fn geoadd_xx_only_updates_when_present() {
     let srv = Server::start(1);
     let mut c = srv.connect();
     add_sicily(&mut c);
-    c.write_all(&req(&[
-        b"GEOADD",
-        b"Sicily",
-        b"XX",
-        b"0.0",
-        b"0.0",
-        b"Newcomer",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"GEOADD", b"Sicily", b"XX", b"0.0", b"0.0", b"Newcomer"])).unwrap();
     assert_eq!(read_reply(&mut c), b":0\r\n");
     c.write_all(&req(&[b"GEOPOS", b"Sicily", b"Newcomer"])).unwrap();
     assert_eq!(read_reply(&mut c), b"*1\r\n*-1\r\n");
@@ -214,8 +189,7 @@ fn geopos_returns_coordinates_for_known_members() {
     let srv = Server::start(1);
     let mut c = srv.connect();
     add_sicily(&mut c);
-    c.write_all(&req(&[b"GEOPOS", b"Sicily", b"Palermo", b"Nope"]))
-        .unwrap();
+    c.write_all(&req(&[b"GEOPOS", b"Sicily", b"Palermo", b"Nope"])).unwrap();
     let r = read_reply(&mut c);
     let s = String::from_utf8_lossy(&r);
     assert!(s.contains("*2\r\n"), "expected 2-element array, got: {s}");
@@ -229,8 +203,7 @@ fn geodist_palermo_catania_kilometres() {
     let srv = Server::start(1);
     let mut c = srv.connect();
     add_sicily(&mut c);
-    c.write_all(&req(&[b"GEODIST", b"Sicily", b"Palermo", b"Catania", b"km"]))
-        .unwrap();
+    c.write_all(&req(&[b"GEODIST", b"Sicily", b"Palermo", b"Catania", b"km"])).unwrap();
     let r = read_reply(&mut c);
     // Distance ≈ 166.27 km. Reply is a bulk string with 4 decimals.
     let s = String::from_utf8_lossy(&r);
@@ -242,8 +215,7 @@ fn geodist_missing_member_returns_nil() {
     let srv = Server::start(1);
     let mut c = srv.connect();
     add_sicily(&mut c);
-    c.write_all(&req(&[b"GEODIST", b"Sicily", b"Palermo", b"Nope"]))
-        .unwrap();
+    c.write_all(&req(&[b"GEODIST", b"Sicily", b"Palermo", b"Nope"])).unwrap();
     assert_eq!(read_reply(&mut c), b"$-1\r\n");
 }
 
@@ -252,8 +224,7 @@ fn geohash_emits_11_char_base32() {
     let srv = Server::start(1);
     let mut c = srv.connect();
     add_sicily(&mut c);
-    c.write_all(&req(&[b"GEOHASH", b"Sicily", b"Palermo", b"Catania"]))
-        .unwrap();
+    c.write_all(&req(&[b"GEOHASH", b"Sicily", b"Palermo", b"Catania"])).unwrap();
     let r = read_reply(&mut c);
     let s = String::from_utf8_lossy(&r);
     // First 10 chars must match Redis exactly; the 11th carries 2 bits
@@ -379,10 +350,7 @@ fn geosearch_asc_orders_by_distance() {
     let a = s.find("Agrigento").unwrap();
     let c_i = s.find("Catania").unwrap();
     let r_i = s.find("Roma").unwrap();
-    assert!(
-        p < a && a < c_i && c_i < r_i,
-        "ASC order broken: {s}",
-    );
+    assert!(p < a && a < c_i && c_i < r_i, "ASC order broken: {s}",);
 }
 
 #[test]
@@ -561,14 +529,7 @@ fn georadiusbymember_legacy_form_returns_members() {
     let srv = Server::start(1);
     let mut c = srv.connect();
     add_sicily(&mut c);
-    c.write_all(&req(&[
-        b"GEORADIUSBYMEMBER",
-        b"Sicily",
-        b"Palermo",
-        b"200",
-        b"km",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"GEORADIUSBYMEMBER", b"Sicily", b"Palermo", b"200", b"km"])).unwrap();
     let r = read_reply(&mut c);
     let s = String::from_utf8_lossy(&r);
     assert!(s.contains("Palermo"));
@@ -708,7 +669,13 @@ fn geoadd_sicily(c: &mut std::net::TcpStream, key: &[u8]) {
     let r = cmd(
         c,
         &[
-            b"GEOADD", key, b"13.361389", b"38.115556", b"Palermo", b"15.087269", b"37.502669",
+            b"GEOADD",
+            key,
+            b"13.361389",
+            b"38.115556",
+            b"Palermo",
+            b"15.087269",
+            b"37.502669",
             b"Catania",
         ],
     );
@@ -719,9 +686,7 @@ fn geoadd_sicily(c: &mut std::net::TcpStream, key: &[u8]) {
 fn bulk_f64(r: &[u8]) -> f64 {
     let s = text(r);
     let (_, body) = s.split_once("\r\n").unwrap_or_else(|| panic!("not a bulk reply: {s}"));
-    body.trim_end_matches("\r\n")
-        .parse()
-        .unwrap_or_else(|_| panic!("not a float: {s}"))
+    body.trim_end_matches("\r\n").parse().unwrap_or_else(|_| panic!("not a float: {s}"))
 }
 
 #[test]
@@ -794,16 +759,7 @@ fn georadius_store_writes_destination_on_its_own_shard() {
         geoadd_sicily(&mut c, src.as_bytes());
         let r = cmd(
             &mut c,
-            &[
-                b"GEORADIUS",
-                src.as_bytes(),
-                b"15",
-                b"37",
-                b"200",
-                b"km",
-                b"STORE",
-                dst.as_bytes(),
-            ],
+            &[b"GEORADIUS", src.as_bytes(), b"15", b"37", b"200", b"km", b"STORE", dst.as_bytes()],
         );
         assert_eq!(r, b":2\r\n", "{src} → {dst}: stored count");
         let z = text(&cmd(&mut c, &[b"ZRANGE", dst.as_bytes(), b"0", b"-1"]));
@@ -894,10 +850,7 @@ fn geo_storedist_scores_are_in_the_queried_unit() {
         );
         assert_eq!(r, b":2\r\n", "{}", text(&r));
         let d = bulk_f64(&cmd(&mut c, &[b"ZSCORE", dst.as_bytes(), b"Catania"]));
-        assert!(
-            (d - 166.27).abs() < 0.1,
-            "STOREDIST km score should be ~166.27 km, got {d}",
-        );
+        assert!((d - 166.27).abs() < 0.1, "STOREDIST km score should be ~166.27 km, got {d}",);
         let zero = bulk_f64(&cmd(&mut c, &[b"ZSCORE", dst.as_bytes(), b"Palermo"]));
         assert!(zero.abs() < 0.001, "anchor distance should be 0, got {zero}");
     }
@@ -909,19 +862,14 @@ fn georadius_storedist_scores_are_in_the_queried_unit() {
     let mut c = srv.connect();
     let (src, dst) = (b"gdr-src".as_slice(), b"gdr-dst".as_slice());
     geoadd_sicily(&mut c, src);
-    let r = cmd(
-        &mut c,
-        &[b"GEORADIUSBYMEMBER", src, b"Palermo", b"200", b"km", b"STOREDIST", dst],
-    );
+    let r = cmd(&mut c, &[b"GEORADIUSBYMEMBER", src, b"Palermo", b"200", b"km", b"STOREDIST", dst]);
     assert_eq!(r, b":2\r\n");
     let d = bulk_f64(&cmd(&mut c, &[b"ZSCORE", dst, b"Catania"]));
     assert!((d - 166.27).abs() < 0.1, "expected ~166.27 km, got {d}");
     // …and in metres when the query is in metres.
     let mdst = b"gdr-dst-m".as_slice();
-    let r = cmd(
-        &mut c,
-        &[b"GEORADIUSBYMEMBER", src, b"Palermo", b"200000", b"m", b"STOREDIST", mdst],
-    );
+    let r =
+        cmd(&mut c, &[b"GEORADIUSBYMEMBER", src, b"Palermo", b"200000", b"m", b"STOREDIST", mdst]);
     assert_eq!(r, b":2\r\n");
     let d = bulk_f64(&cmd(&mut c, &[b"ZSCORE", mdst, b"Catania"]));
     assert!((d - 166_274.0).abs() < 100.0, "expected ~166274 m, got {d}");
@@ -938,8 +886,17 @@ fn geosearch_desc_with_count_returns_the_farthest() {
     let r = text(&cmd(
         &mut c,
         &[
-            b"GEOSEARCH", b"gsort", b"FROMLONLAT", b"15", b"37", b"BYRADIUS", b"200", b"km",
-            b"DESC", b"COUNT", b"1",
+            b"GEOSEARCH",
+            b"gsort",
+            b"FROMLONLAT",
+            b"15",
+            b"37",
+            b"BYRADIUS",
+            b"200",
+            b"km",
+            b"DESC",
+            b"COUNT",
+            b"1",
         ],
     ));
     assert!(r.contains("Palermo") && !r.contains("Catania"), "DESC COUNT 1: {r}");
@@ -947,8 +904,17 @@ fn geosearch_desc_with_count_returns_the_farthest() {
     let r = text(&cmd(
         &mut c,
         &[
-            b"GEOSEARCH", b"gsort", b"FROMLONLAT", b"15", b"37", b"BYRADIUS", b"200", b"km",
-            b"ASC", b"COUNT", b"1",
+            b"GEOSEARCH",
+            b"gsort",
+            b"FROMLONLAT",
+            b"15",
+            b"37",
+            b"BYRADIUS",
+            b"200",
+            b"km",
+            b"ASC",
+            b"COUNT",
+            b"1",
         ],
     ));
     assert!(r.contains("Catania") && !r.contains("Palermo"), "ASC COUNT 1: {r}");
@@ -956,8 +922,16 @@ fn geosearch_desc_with_count_returns_the_farthest() {
     let r = text(&cmd(
         &mut c,
         &[
-            b"GEOSEARCH", b"gsort", b"FROMLONLAT", b"15", b"37", b"BYRADIUS", b"200", b"km",
-            b"COUNT", b"1",
+            b"GEOSEARCH",
+            b"gsort",
+            b"FROMLONLAT",
+            b"15",
+            b"37",
+            b"BYRADIUS",
+            b"200",
+            b"km",
+            b"COUNT",
+            b"1",
         ],
     ));
     assert!(r.contains("Catania") && !r.contains("Palermo"), "COUNT 1 (no sort): {r}");

@@ -56,7 +56,9 @@ mod common;
 
 fn boot(port: u16, dir: std::path::PathBuf, stop: Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
-        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(4)).bind([127, 0, 0, 1], port).shards(4)
+        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(4))
+            .bind([127, 0, 0, 1], port)
+            .shards(4)
             .with_data_dir(dir)
             .with_aof(true);
         rt.run(stop).unwrap();
@@ -125,7 +127,8 @@ fn hexpire_survives_replay_without_reanchor() {
         // - 1000` trivially true and quietly retire the assertion.
         let r = cmd(&mut c, &[b"HPTTL", b"eh", b"FIELDS", b"2", b"f", b"plain"]);
         let s = String::from_utf8_lossy(&r);
-        let mut nums = s.lines().filter(|l| l.starts_with(':')).map(|l| l[1..].parse::<i64>().unwrap());
+        let mut nums =
+            s.lines().filter(|l| l.starts_with(':')).map(|l| l[1..].parse::<i64>().unwrap());
         let f_ttl = nums.next().unwrap();
         let plain = nums.next().unwrap();
         // wall clock advanced ≥1.2s across restart: a correctly
@@ -171,9 +174,8 @@ fn the_tick_sweeps_a_due_hash_field_without_anyone_reading_it() {
     let kevy = kevy::KevyCommands::new();
     let mut store = kevy::KeyspaceStore::new();
 
-    let argv = |parts: &[&[u8]]| {
-        kevy::Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>())
-    };
+    let argv =
+        |parts: &[&[u8]]| kevy::Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>());
     let r = kevy.dispatch(&mut store, &argv(&[b"HSET", b"h", b"f", b"v"]));
     assert_eq!(r, b":1\r\n");
 
@@ -189,8 +191,5 @@ fn the_tick_sweeps_a_due_hash_field_without_anyone_reading_it() {
     let mut after = 0usize;
     store.hash_ttl_each(|_, _, _| after += 1);
     assert_eq!(after, 0, "the sweep reaped it; no read was involved");
-    assert_eq!(
-        kevy.dispatch(&mut store, &argv(&[b"HEXISTS", b"h", b"f"])),
-        b":0\r\n"
-    );
+    assert_eq!(kevy.dispatch(&mut store, &argv(&[b"HEXISTS", b"h", b"f"])), b":0\r\n");
 }

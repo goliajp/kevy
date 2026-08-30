@@ -16,8 +16,8 @@
 //! win: the backfill only fills keys the segment doesn't hold yet, so
 //! a newer hook-applied value is never clobbered by a stale scan.
 
-use kevy_resp::CmdError;
 use kevy_index::{IndexSpec, Segment};
+use kevy_resp::CmdError;
 use kevy_store::Store;
 
 use crate::state::{CatalogState, Ctx};
@@ -82,7 +82,6 @@ pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
         }
     }
 }
-
 
 /// Tick hook: advance backfills a bounded batch per tick, then slide
 /// any windowed index whose boundary moved. Gated like [`on_write`].
@@ -178,15 +177,15 @@ pub(crate) fn with_ready_segment<R>(
 ) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st, store);
-    let si = st
-        .idx
-        .iter()
-        .find(|si| si.spec.name == name)
-        .ok_or("ERR no such index")?;
+    let si = st.idx.iter().find(|si| si.spec.name == name).ok_or("ERR no such index")?;
     match si.build {
         BuildState::Ready => Ok(f(&si.spec, &si.seg, si.window.as_ref())),
-        BuildState::Backfilling { .. } => Err(CmdError::Wire("INDEXBUILDING index is still building")),
-        BuildState::FailedOverBudget => Err(CmdError::Wire("INDEXOVERBUDGET index build exceeded MAXMEM")),
+        BuildState::Backfilling { .. } => {
+            Err(CmdError::Wire("INDEXBUILDING index is still building"))
+        }
+        BuildState::FailedOverBudget => {
+            Err(CmdError::Wire("INDEXOVERBUDGET index build exceeded MAXMEM"))
+        }
     }
 }
 
@@ -199,15 +198,15 @@ pub(crate) fn with_ready_agg<R>(
 ) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st, store);
-    let si = st
-        .idx
-        .iter()
-        .find(|si| si.spec.name == name)
-        .ok_or("ERR no such index")?;
+    let si = st.idx.iter().find(|si| si.spec.name == name).ok_or("ERR no such index")?;
     match (&si.build, &si.agg) {
         (BuildState::Ready, Some(a)) => Ok(f(a)),
-        (BuildState::Backfilling { .. }, _) => Err(CmdError::Wire("INDEXBUILDING index is still building")),
-        (BuildState::FailedOverBudget, _) => Err(CmdError::Wire("INDEXOVERBUDGET index build exceeded MAXMEM")),
+        (BuildState::Backfilling { .. }, _) => {
+            Err(CmdError::Wire("INDEXBUILDING index is still building"))
+        }
+        (BuildState::FailedOverBudget, _) => {
+            Err(CmdError::Wire("INDEXOVERBUDGET index build exceeded MAXMEM"))
+        }
         (_, None) => Err(CmdError::Wire("ERR not an aggregate index")),
     }
 }
@@ -221,15 +220,15 @@ pub(crate) fn with_ready_ann<R>(
 ) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st, store);
-    let si = st
-        .idx
-        .iter_mut()
-        .find(|si| si.spec.name == name)
-        .ok_or("ERR no such index")?;
+    let si = st.idx.iter_mut().find(|si| si.spec.name == name).ok_or("ERR no such index")?;
     match (&si.build, &mut si.ann) {
         (BuildState::Ready, Some(g)) => Ok(f(g)),
-        (BuildState::Backfilling { .. }, _) => Err(CmdError::Wire("INDEXBUILDING index is still building")),
-        (BuildState::FailedOverBudget, _) => Err(CmdError::Wire("INDEXOVERBUDGET index build exceeded MAXMEM")),
+        (BuildState::Backfilling { .. }, _) => {
+            Err(CmdError::Wire("INDEXBUILDING index is still building"))
+        }
+        (BuildState::FailedOverBudget, _) => {
+            Err(CmdError::Wire("INDEXOVERBUDGET index build exceeded MAXMEM"))
+        }
         (_, None) => Err(CmdError::Wire("ERR not a vector index")),
     }
 }
@@ -248,15 +247,15 @@ pub(crate) fn with_ready_text_segment<R>(
 ) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st, store);
-    let si = st
-        .idx
-        .iter()
-        .find(|si| si.spec.name == name)
-        .ok_or("ERR no such index")?;
+    let si = st.idx.iter().find(|si| si.spec.name == name).ok_or("ERR no such index")?;
     match (&si.build, &si.text) {
         (BuildState::Ready, Some(ts)) => Ok(f(store, ts, &si.spec, si.cold_text.as_ref())),
-        (BuildState::Backfilling { .. }, _) => Err(CmdError::Wire("INDEXBUILDING index is still building")),
-        (BuildState::FailedOverBudget, _) => Err(CmdError::Wire("INDEXOVERBUDGET index build exceeded MAXMEM")),
+        (BuildState::Backfilling { .. }, _) => {
+            Err(CmdError::Wire("INDEXBUILDING index is still building"))
+        }
+        (BuildState::FailedOverBudget, _) => {
+            Err(CmdError::Wire("INDEXOVERBUDGET index build exceeded MAXMEM"))
+        }
         (_, None) => Err(CmdError::Wire("ERR not a text index")),
     }
 }
@@ -324,7 +323,6 @@ fn new_scalar_seg(spec: &IndexSpec) -> Segment {
         Segment::new()
     }
 }
-
 
 /// A fresh text segment for `spec` when it is a text index — with the
 /// positional side-channel iff it was created WITH POSITIONS.
@@ -425,8 +423,8 @@ use window_slide::{
     window_for,
 };
 mod row_apply;
-use row_apply::{advance_backfill, apply_row};
 pub(crate) use row_apply::{RowValue, row_value};
+use row_apply::{advance_backfill, apply_row};
 
 #[cfg(test)]
 mod tests;

@@ -216,10 +216,7 @@ impl<V: Clone> SegMap<V> {
                 hi.insert(k.clone(), v.clone());
             }
         }
-        (
-            Bucket { local_bits: lb + 1, map: lo },
-            Bucket { local_bits: lb + 1, map: hi },
-        )
+        (Bucket { local_bits: lb + 1, map: lo }, Bucket { local_bits: lb + 1, map: hi })
     }
 
     /// Every entry, bucket by bucket. Order follows the directory rather
@@ -299,10 +296,7 @@ impl<V: Clone> SegMap<V> {
     /// — COW tests assert which buckets a write actually cloned.
     #[cfg(test)]
     pub(crate) fn bucket_stats(&self) -> Vec<(usize, usize)> {
-        self.buckets
-            .iter()
-            .map(|b| (Arc::strong_count(b), b.map.len()))
-            .collect()
+        self.buckets.iter().map(|b| (Arc::strong_count(b), b.map.len())).collect()
     }
 }
 
@@ -311,10 +305,7 @@ impl SegMap<SmallBytes> {
     /// arm's model (slot bytes + per-pair heap bytes) plus the shell.
     pub(crate) fn weight_as_hash(&self) -> u64 {
         self.shell_weight(crate::value::HASH_SLOT_BYTES)
-            + self
-                .iter()
-                .map(|(f, v)| f.heap_bytes() as u64 + v.heap_bytes() as u64)
-                .sum::<u64>()
+            + self.iter().map(|(f, v)| f.heap_bytes() as u64 + v.heap_bytes() as u64).sum::<u64>()
     }
 }
 

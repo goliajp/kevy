@@ -6,14 +6,30 @@ use kevy_bench::{bench, black_box};
 use kevy_text::{TextSegment, tokenize};
 
 const ASCII_WORDS: &[&str] = &[
-    "kevy", "cache", "shard", "vector", "index", "query", "latency", "throughput", "reactor",
-    "socket", "bench", "median", "stone", "steel", "cement", "tokyo", "osaka", "release",
+    "kevy",
+    "cache",
+    "shard",
+    "vector",
+    "index",
+    "query",
+    "latency",
+    "throughput",
+    "reactor",
+    "socket",
+    "bench",
+    "median",
+    "stone",
+    "steel",
+    "cement",
+    "tokyo",
+    "osaka",
+    "release",
 ];
 
 // Real CJK characters so bigram segmentation sees production-shaped input.
 const CJK_POOL: &[char] = &[
-    '分', '布', '式', '缓', '存', '系', '统', '高', '性', '能', '数', '据', '库', '索', '引',
-    '查', '询', '延', '迟', '吞', '吐', '量', '内', '存', '网', '络', '并', '发', '压', '缩',
+    '分', '布', '式', '缓', '存', '系', '统', '高', '性', '能', '数', '据', '库', '索', '引', '查',
+    '询', '延', '迟', '吞', '吐', '量', '内', '存', '网', '络', '并', '发', '压', '缩',
 ];
 
 /// One mixed doc: a handful of ASCII words interleaved with CJK runs; every
@@ -38,9 +54,8 @@ pub fn run() {
     println!("== kevy-text ==");
 
     let mut rng = Rng::new(0x7e57_7e57);
-    let docs: Vec<(Vec<u8>, Vec<u8>)> = (0..10_000)
-        .map(|i| (format!("doc:{i:05}").into_bytes(), gen_doc(&mut rng, i)))
-        .collect();
+    let docs: Vec<(Vec<u8>, Vec<u8>)> =
+        (0..10_000).map(|i| (format!("doc:{i:05}").into_bytes(), gen_doc(&mut rng, i))).collect();
 
     // ~1 KB mixed tokenize input, fixed seed.
     let mut sample_text = Vec::new();

@@ -155,13 +155,8 @@ impl Socket {
     pub fn local_port(&self) -> io::Result<u16> {
         let mut addr = SockaddrIn::zeroed();
         let mut len = size_of::<SockaddrIn>() as u32;
-        let r = unsafe {
-            ffi::getsockname(
-                self.fd,
-                (&raw mut addr).cast::<c_void>(),
-                &raw mut len,
-            )
-        };
+        let r =
+            unsafe { ffi::getsockname(self.fd, (&raw mut addr).cast::<c_void>(), &raw mut len) };
         if r < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -175,13 +170,8 @@ impl Socket {
     pub fn peer_addr(&self) -> io::Result<(std::net::Ipv4Addr, u16)> {
         let mut addr = SockaddrIn::zeroed();
         let mut len = size_of::<SockaddrIn>() as u32;
-        let r = unsafe {
-            ffi::getpeername(
-                self.fd,
-                (&raw mut addr).cast::<c_void>(),
-                &raw mut len,
-            )
-        };
+        let r =
+            unsafe { ffi::getpeername(self.fd, (&raw mut addr).cast::<c_void>(), &raw mut len) };
         if r < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -246,11 +236,7 @@ fn listen_inner(ip: [u8; 4], port: u16, backlog: i32, reuseport: bool) -> io::Re
 
     let addr = SockaddrIn::new(ip, port);
     let r = unsafe {
-        ffi::bind(
-            fd,
-            (&raw const addr).cast::<c_void>(),
-            size_of::<SockaddrIn>() as u32,
-        )
+        ffi::bind(fd, (&raw const addr).cast::<c_void>(), size_of::<SockaddrIn>() as u32)
     };
     if r < 0 {
         return Err(io::Error::last_os_error());
@@ -293,13 +279,7 @@ pub fn unix_listen(path: &[u8], backlog: i32) -> io::Result<Socket> {
     let sock = Socket { fd };
 
     let (addr, len) = SockaddrUn::new(path)?;
-    let r = unsafe {
-        ffi::bind(
-            fd,
-            (&raw const addr).cast::<c_void>(),
-            len,
-        )
-    };
+    let r = unsafe { ffi::bind(fd, (&raw const addr).cast::<c_void>(), len) };
     if r < 0 {
         return Err(io::Error::last_os_error());
     }

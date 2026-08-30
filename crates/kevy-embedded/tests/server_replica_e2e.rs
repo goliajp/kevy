@@ -58,9 +58,7 @@ struct Server {
 
 impl Server {
     fn start() -> Server {
-        let _gate = START_GATE
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         // SAFETY: integration test owns its own process state; setting
         // an env var here is safe since no other thread reads
         // KEVY_IO_URING in parallel. The replication listener only
@@ -76,7 +74,9 @@ impl Server {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_t = stop.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1)).bind([127, 0, 0, 1], port).shards(1)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1))
+                .bind([127, 0, 0, 1], port)
+                .shards(1)
                 .with_data_dir(dir_path)
                 .with_aof(false)
                 .with_replication(true, 1024 * 1024)
@@ -98,13 +98,7 @@ impl Server {
             }
             assert!(ready, "server did not come up on port {p}");
         }
-        Server {
-            port,
-            replication_base,
-            stop,
-            handle: Some(handle),
-            _dir: dir,
-        }
+        Server { port, replication_base, stop, handle: Some(handle), _dir: dir }
     }
 
     fn shutdown(mut self) {
@@ -166,10 +160,7 @@ fn server_primary_streams_to_embed_replica() {
         replica.get(b"key-a").unwrap().as_deref() == Some(b"hello".as_slice())
             && replica.get(b"key-b").unwrap().as_deref() == Some(b"world".as_slice())
     });
-    assert!(
-        saw_both,
-        "embed replica never observed both SET writes within timeout"
-    );
+    assert!(saw_both, "embed replica never observed both SET writes within timeout");
 
     drop(replica);
     server.shutdown();
@@ -188,10 +179,7 @@ fn embed_replica_rejects_local_writes_with_readonly() {
 
     let err = replica.set(b"k", b"v").expect_err("write should be refused");
     let msg = err.to_string();
-    assert!(
-        msg.contains("READONLY"),
-        "expected READONLY error, got: {msg}"
-    );
+    assert!(msg.contains("READONLY"), "expected READONLY error, got: {msg}");
 
     // Reads still work.
     assert_eq!(replica.get(b"k").unwrap(), None);
@@ -304,9 +292,7 @@ fn embed_retargets_to_new_primary_via_set_replica_upstream() {
     // Application-level retarget: tells embed "primary B is the new
     // upstream". The runner drops the A connection + reconnects to B
     // within `replica_reconnect_min`.
-    replica
-        .set_replica_upstream(&upstream_b)
-        .expect("retarget should succeed on a replica store");
+    replica.set_replica_upstream(&upstream_b).expect("retarget should succeed on a replica store");
 
     assert!(
         wait_for(Duration::from_secs(5), || {
@@ -324,9 +310,7 @@ fn embed_retargets_to_new_primary_via_set_replica_upstream() {
 fn set_replica_upstream_on_non_replica_returns_error() {
     let s = Store::open(Config::default()).unwrap();
     assert!(!s.is_replica());
-    let err = s
-        .set_replica_upstream("127.0.0.1:1")
-        .expect_err("should error on a non-replica");
+    let err = s.set_replica_upstream("127.0.0.1:1").expect_err("should error on a non-replica");
     assert!(matches!(err, kevy_embedded::KevyError::InvalidInput(_)));
 }
 

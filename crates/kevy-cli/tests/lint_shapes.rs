@@ -22,10 +22,8 @@ struct Srv {
 impl Srv {
     fn start() -> Srv {
         let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        let bin = std::path::Path::new(env!("CARGO_BIN_EXE_kevy-cli"))
-            .parent()
-            .unwrap()
-            .join("kevy");
+        let bin =
+            std::path::Path::new(env!("CARGO_BIN_EXE_kevy-cli")).parent().unwrap().join("kevy");
         if !bin.exists() {
             let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
             let status = Command::new(cargo)

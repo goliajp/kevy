@@ -129,21 +129,17 @@ fn merge_cold_claused(
     kevy_index::sort_facets(&mut page.facets);
     page.cursor = match c.selects() || page.hits.len() < c.fetch {
         true => None,
-        false => page.hits.last().map(|h| kevy_index::Cursor {
-            value: h.value.clone(),
-            key: h.key.clone(),
-        }),
+        false => page
+            .hits
+            .last()
+            .map(|h| kevy_index::Cursor { value: h.value.clone(), key: h.key.clone() }),
     };
 }
 
 /// Hit block (+ per-hit clause keys when the query carried the clause),
 /// then the facet block. Hydration happens outside the segment borrow —
 /// the hits' rows live on this shard, plain hash reads.
-fn encode_claused_chunk(
-    store: &mut Store,
-    q: &Query,
-    page: &kevy_index::ClausedPage,
-) -> Vec<u8> {
+fn encode_claused_chunk(store: &mut Store, q: &Query, page: &kevy_index::ClausedPage) -> Vec<u8> {
     let mut chunk = vec![ST_OK];
     chunk.extend_from_slice(&(page.hits.len() as u32).to_le_bytes());
     // Hydration rows prefetched as ONE batched page (cold rows

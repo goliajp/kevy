@@ -229,10 +229,7 @@ mod tests {
             mean_ns: 10,
             stdev_ns: 0,
         };
-        let slow = Stats {
-            median_ns: 40,
-            ..fast
-        };
+        let slow = Stats { median_ns: 40, ..fast };
         // candidate `fast` vs baseline `slow` → 4× faster.
         let r = compare("slow", slow, "fast", fast);
         assert!((r - 4.0).abs() < 0.01);

@@ -29,9 +29,7 @@ impl Store {
             None => Ok(None),
             Some(e) => match &e.value {
                 Value::List(l) => Ok(norm_index(idx, l.len()).and_then(|i| l.get(i).cloned())),
-                Value::SegList(l) => {
-                    Ok(norm_index(idx, l.len()).and_then(|i| l.get(i).cloned()))
-                }
+                Value::SegList(l) => Ok(norm_index(idx, l.len()).and_then(|i| l.get(i).cloned())),
                 Value::SmallListInline(l) => {
                     let n = l.len();
                     let Some(i) = norm_index(idx, n) else { return Ok(None) };
@@ -67,12 +65,9 @@ impl Store {
                 }),
                 Value::SmallListInline(l) => Ok(match range_bounds(start, stop, l.len()) {
                     None => Vec::new(),
-                    Some((s, end)) => l
-                        .iter()
-                        .skip(s)
-                        .take(end - s + 1)
-                        .map(<[u8]>::to_vec)
-                        .collect(),
+                    Some((s, end)) => {
+                        l.iter().skip(s).take(end - s + 1).map(<[u8]>::to_vec).collect()
+                    }
                 }),
                 _ => Err(StoreError::WrongType),
             },

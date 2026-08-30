@@ -32,8 +32,7 @@ fn cross_thread_publish_recv() {
     let publisher = thread::spawn(move || {
         let mut conn = Connection::connect(URL).unwrap();
         pub_barrier.wait();
-        conn.publish(b"mail.event", b"recipient=foo@bar.example")
-            .unwrap()
+        conn.publish(b"mail.event", b"recipient=foo@bar.example").unwrap()
     });
     barrier.wait();
     let n = publisher.join().unwrap();
@@ -104,10 +103,7 @@ fn fan_out_to_multiple_subscribers() {
         let ev = sub.recv().unwrap();
         assert_eq!(
             ev,
-            PubsubEvent::Message {
-                channel: b"chan".to_vec(),
-                payload: b"hello".to_vec(),
-            }
+            PubsubEvent::Message { channel: b"chan".to_vec(), payload: b"hello".to_vec() }
         );
     }
 }

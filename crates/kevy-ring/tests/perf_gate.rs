@@ -19,11 +19,7 @@ fn push_pop_same_thread_under_budget() {
         tx.push(black_box(7u64)).unwrap();
         black_box(rx.pop());
     });
-    assert!(
-        s.median_ns < 80,
-        "push+pop same-thread median = {} ns, budget 80",
-        s.median_ns
-    );
+    assert!(s.median_ns < 80, "push+pop same-thread median = {} ns, budget 80", s.median_ns);
 }
 
 /// Sized capacity assertion — the ring rounds capacity UP to a power of

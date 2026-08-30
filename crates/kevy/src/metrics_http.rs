@@ -70,11 +70,8 @@ fn handle_scrape_conn(mut conn: TcpStream, state: &RuntimeState, start: Instant)
     let raw = &buf[..n];
     // We only care about the verb + path; any GET /metrics passes.
     let is_metrics = raw.starts_with(b"GET /metrics");
-    let body = if is_metrics {
-        render_metrics(state, start.elapsed().as_secs())
-    } else {
-        String::new()
-    };
+    let body =
+        if is_metrics { render_metrics(state, start.elapsed().as_secs()) } else { String::new() };
     let resp = if is_metrics {
         format!(
             "HTTP/1.1 200 OK\r\n\
@@ -145,10 +142,7 @@ fn render_metrics(state: &RuntimeState, uptime_seconds: u64) -> String {
     // Build info — useful for ops to see which kevy is running.
     push_help(&mut out, "kevy_build_info", "kevy version (always 1)");
     push_type(&mut out, "kevy_build_info", "gauge");
-    out.push_str(&format!(
-        "kevy_build_info{{version=\"{}\"}} 1\n",
-        env!("CARGO_PKG_VERSION")
-    ));
+    out.push_str(&format!("kevy_build_info{{version=\"{}\"}} 1\n", env!("CARGO_PKG_VERSION")));
 
     out
 }

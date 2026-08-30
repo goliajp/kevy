@@ -95,13 +95,19 @@ fn check_counts(v: &CreateView) -> Result<(), SqlError> {
             return Err(err_v(v, "LIMIT 0 selects nothing"));
         }
         if n > 10_000 {
-            return Err(err_v(v, "the engine caps LIMIT at 10000 \u{2014} page with CURSOR (docs/indexes.md)"));
+            return Err(err_v(
+                v,
+                "the engine caps LIMIT at 10000 \u{2014} page with CURSOR (docs/indexes.md)",
+            ));
         }
     }
     if let Some(m) = v.offset
         && m > 10_000
     {
-        return Err(err_v(v, "the engine caps OFFSET at 10000 \u{2014} page with CURSOR instead (docs/indexes.md)"));
+        return Err(err_v(
+            v,
+            "the engine caps OFFSET at 10000 \u{2014} page with CURSOR instead (docs/indexes.md)",
+        ));
     }
     Ok(())
 }
@@ -132,8 +138,7 @@ struct CardB {
 
 impl CardB {
     fn new(verb: &str, path: String) -> CardB {
-        CardB { argv: vec!["IDX.QUERY".into(), path], params: Vec::new() }
-            .tap_verb(verb)
+        CardB { argv: vec!["IDX.QUERY".into(), path], params: Vec::new() }.tap_verb(verb)
     }
 
     fn tap_verb(mut self, verb: &str) -> CardB {
@@ -272,9 +277,9 @@ fn card_orderpath(
     if ranges.len() > 1 {
         return Ok(None);
     }
-    let Some(op) = t.orderpaths.iter().find(|op| {
-        orderpath_matches(op, &eqs, ranges.first().copied(), order)
-    }) else {
+    let Some(op) =
+        t.orderpaths.iter().find(|op| orderpath_matches(op, &eqs, ranges.first().copied(), order))
+    else {
         return Ok(None);
     };
     let mut b = CardB::new("WHERE", format!("{}.{}", t.name, op.name));
@@ -340,8 +345,7 @@ fn card_residual(
     fail: &mut Option<String>,
 ) -> Result<Option<QueryCard>, SqlError> {
     let Some(di) = preds.iter().position(|p| {
-        t.index_on(&p.col)
-            .is_some_and(|ix| !(matches!(p.shape, Shape::Range(..)) && ix.unique))
+        t.index_on(&p.col).is_some_and(|ix| !(matches!(p.shape, Shape::Range(..)) && ix.unique))
     }) else {
         return Ok(None);
     };
@@ -415,10 +419,8 @@ fn no_path_error(
     {
         last.1 = true;
     }
-    let sugg: Vec<String> = cols
-        .iter()
-        .map(|(c, d)| if *d { format!("{c} DESC") } else { c.clone() })
-        .collect();
+    let sugg: Vec<String> =
+        cols.iter().map(|(c, d)| if *d { format!("{c} DESC") } else { c.clone() }).collect();
     err_v(
         v,
         format!(

@@ -10,9 +10,7 @@ fn main() {
     let port: u16 = args.next().expect("port").parse().expect("port");
     let n_keys: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(50_000);
     let backlog: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(64 << 20);
-    let mut cfg = Config::default()
-        .with_shards(4)
-        .with_embed_writer(format!("127.0.0.1:{port}"));
+    let mut cfg = Config::default().with_shards(4).with_embed_writer(format!("127.0.0.1:{port}"));
     cfg.embed_writer_backlog_bytes = backlog;
     let store = Store::open(cfg).expect("open");
     for i in 0..n_keys {

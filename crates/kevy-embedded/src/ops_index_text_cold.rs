@@ -6,9 +6,9 @@
 
 #![cfg(feature = "text")]
 
+use crate::store::Store;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::store::lock_write;
-use crate::store::Store;
 use crate::{KevyError, KevyResult};
 
 /// A cold hit's frozen stored values, keyed by row key — what the

@@ -31,7 +31,8 @@ impl RateLimiter {
         }
         loop {
             let now = Instant::now();
-            self.tokens = (self.tokens + now.duration_since(self.last).as_secs_f64() * self.rate as f64)
+            self.tokens = (self.tokens
+                + now.duration_since(self.last).as_secs_f64() * self.rate as f64)
                 .min(self.rate as f64);
             self.last = now;
             if self.tokens >= 1.0 {
@@ -43,7 +44,11 @@ impl RateLimiter {
     }
 }
 
-fn scan_page(client: &mut RespClient, cursor: &[u8], pattern: &[u8]) -> io::Result<(Vec<u8>, Vec<Vec<u8>>)> {
+fn scan_page(
+    client: &mut RespClient,
+    cursor: &[u8],
+    pattern: &[u8],
+) -> io::Result<(Vec<u8>, Vec<Vec<u8>>)> {
     let reply = client.request_borrowed(&[b"SCAN", cursor, b"MATCH", pattern, b"COUNT", b"512"])?;
     let Reply::Array(items) = reply else {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "SCAN reply shape"));

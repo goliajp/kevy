@@ -80,10 +80,7 @@ fn lmove_left_to_right_moves_head_to_tail() {
     let mut store = Store::new();
     rpush(&mut store, b"src", &[b"a", b"b", b"c"]);
     rpush(&mut store, b"dst", &[b"x"]);
-    let r = dispatch(
-        &mut store,
-        &argv(&[b"LMOVE", b"src", b"dst", b"LEFT", b"RIGHT"]),
-    );
+    let r = dispatch(&mut store, &argv(&[b"LMOVE", b"src", b"dst", b"LEFT", b"RIGHT"]));
     assert_eq!(r, b"$1\r\na\r\n");
     // src = [b, c], dst = [x, a]
     let g = dispatch(&mut store, &argv(&[b"LRANGE", b"dst", b"0", b"-1"]));
@@ -94,10 +91,7 @@ fn lmove_left_to_right_moves_head_to_tail() {
 fn lmove_right_to_left_matches_rpoplpush() {
     let mut store = Store::new();
     rpush(&mut store, b"src", &[b"a", b"b", b"c"]);
-    let r = dispatch(
-        &mut store,
-        &argv(&[b"LMOVE", b"src", b"dst", b"RIGHT", b"LEFT"]),
-    );
+    let r = dispatch(&mut store, &argv(&[b"LMOVE", b"src", b"dst", b"RIGHT", b"LEFT"]));
     assert_eq!(r, b"$1\r\nc\r\n");
     let g = dispatch(&mut store, &argv(&[b"LRANGE", b"dst", b"0", b"-1"]));
     assert_eq!(g, b"*1\r\n$1\r\nc\r\n");
@@ -107,20 +101,14 @@ fn lmove_right_to_left_matches_rpoplpush() {
 fn lmove_bad_direction_errors() {
     let mut store = Store::new();
     rpush(&mut store, b"src", &[b"a"]);
-    let r = dispatch(
-        &mut store,
-        &argv(&[b"LMOVE", b"src", b"dst", b"UP", b"LEFT"]),
-    );
+    let r = dispatch(&mut store, &argv(&[b"LMOVE", b"src", b"dst", b"UP", b"LEFT"]));
     assert!(r.starts_with(b"-ERR syntax error"));
 }
 
 #[test]
 fn lmove_empty_src_returns_nil() {
     let mut store = Store::new();
-    let r = dispatch(
-        &mut store,
-        &argv(&[b"LMOVE", b"absent", b"dst", b"LEFT", b"LEFT"]),
-    );
+    let r = dispatch(&mut store, &argv(&[b"LMOVE", b"absent", b"dst", b"LEFT", b"LEFT"]));
     assert_eq!(r, b"$-1\r\n");
 }
 
@@ -165,9 +153,5 @@ fn lpos_rank_zero_errors() {
     let mut store = Store::new();
     rpush(&mut store, b"l", &[b"a"]);
     let r = dispatch(&mut store, &argv(&[b"LPOS", b"l", b"a", b"RANK", b"0"]));
-    assert!(
-        r.starts_with(b"-ERR RANK can't be zero"),
-        "got {:?}",
-        String::from_utf8_lossy(&r)
-    );
+    assert!(r.starts_with(b"-ERR RANK can't be zero"), "got {:?}", String::from_utf8_lossy(&r));
 }

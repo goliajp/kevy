@@ -42,9 +42,7 @@ fn apply(opts: &KevyOpenOptions, mut cfg: Config) -> Config {
     }
     cfg = cfg.with_auto_aof_rewrite(opts.rewrite_pct, opts.rewrite_min_size);
     cfg = cfg.with_auto_rewrite_bytes(opts.rewrite_bytes);
-    cfg.with_auto_rewrite_interval(std::time::Duration::from_secs(
-        opts.rewrite_interval_secs,
-    ))
+    cfg.with_auto_rewrite_interval(std::time::Duration::from_secs(opts.rewrite_interval_secs))
 }
 
 /// [`kevy_open`] with explicit options: durable at `dir` when `dir` is
@@ -73,11 +71,7 @@ pub unsafe extern "C" fn kevy_open_with(
         };
         Config::default().with_persist(path.to_owned())
     };
-    let cfg = if opts.is_null() {
-        base
-    } else {
-        apply(unsafe { &*opts }, base)
-    };
+    let cfg = if opts.is_null() { base } else { apply(unsafe { &*opts }, base) };
     open_with(move || cfg)
 }
 

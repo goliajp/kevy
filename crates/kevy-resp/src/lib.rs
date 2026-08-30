@@ -36,19 +36,19 @@
 #![warn(missing_docs)]
 
 mod argv;
-pub mod ops_table;
-pub mod verb_arity;
 mod argv_borrowed;
 mod argv_pool;
 mod argv_view;
 mod error;
+pub mod fuzz;
 mod inline_ranges;
+pub mod ops_table;
 mod reply_encode;
 mod reply_encode_resp3;
 mod reply_parse;
 mod request;
 mod request_borrowed;
-pub mod fuzz;
+pub mod verb_arity;
 
 pub use argv::{Argv, Command};
 pub use argv_borrowed::ArgvBorrowed;

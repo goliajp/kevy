@@ -121,10 +121,7 @@ impl RespClient {
                 Ok(Some(reply)) => return Ok(reply),
                 Ok(None) => {}
                 Err(_) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "malformed reply",
-                    ));
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "malformed reply"));
                 }
             }
             let n = self.stream.read(&mut self.chunk)?;

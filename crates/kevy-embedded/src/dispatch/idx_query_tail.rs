@@ -197,12 +197,7 @@ pub(super) fn parse_tail(
 /// stored-value clauses are shared. A scalar `FIELDS` consumes the rest
 /// of the argv (the server's terminal contract); a MATCH one collects
 /// up to the next keyword.
-fn apply_tail_clause(
-    argv: &[Vec<u8>],
-    i: usize,
-    t: &mut Tail,
-    mode: TailMode,
-) -> Option<usize> {
+fn apply_tail_clause(argv: &[Vec<u8>], i: usize, t: &mut Tail, mode: TailMode) -> Option<usize> {
     let a = &argv[i];
     if a.eq_ignore_ascii_case(b"LIMIT") {
         t.limit = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
@@ -238,4 +233,3 @@ fn apply_tail_clause(
         None
     }
 }
-

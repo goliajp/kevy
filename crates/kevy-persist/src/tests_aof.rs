@@ -49,11 +49,10 @@ fn aof_group_commit_defers_then_flushes() {
     aof.end_group().unwrap();
     let mut after: Vec<Argv> = Vec::new();
     replay_aof(&path, |a| after.push(a)).unwrap();
-    assert_eq!(after, vec![
-        cmd(&[b"SET", b"a", b"1"]),
-        cmd(&[b"SET", b"b", b"2"]),
-        cmd(&[b"SET", b"c", b"3"]),
-    ]);
+    assert_eq!(
+        after,
+        vec![cmd(&[b"SET", b"a", b"1"]), cmd(&[b"SET", b"b", b"2"]), cmd(&[b"SET", b"c", b"3"]),]
+    );
     let _ = std::fs::remove_file(&path);
 }
 
@@ -113,7 +112,8 @@ fn replay_aof_with_ssh_stderr_head_does_not_panic() {
     let mut f = std::fs::File::create(&path).unwrap();
     f.write_all(
         b"Warning: Permanently added 't02.golia.jp' (ED25519) to the list of known hosts.\r\n",
-    ).unwrap();
+    )
+    .unwrap();
     f.write_all(b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n").unwrap();
     drop(f);
     let mut n = 0;
@@ -138,8 +138,7 @@ fn fresh_aof_has_magic_header_and_replays_cleanly() {
     let path = temp_aof("magic-fresh");
     {
         let mut aof = Aof::open(&path, Fsync::No).unwrap();
-        aof.append(&Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]))
-            .unwrap();
+        aof.append(&Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()])).unwrap();
     }
     // Inspect bytes on disk: first 9 must be the (v2) magic.
     let mut f = std::fs::File::open(&path).unwrap();
@@ -180,8 +179,7 @@ fn truncate_preserves_magic_header() {
     use std::io::Read;
     let path = temp_aof("magic-truncate");
     let mut aof = Aof::open(&path, Fsync::No).unwrap();
-    aof.append(&Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]))
-        .unwrap();
+    aof.append(&Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()])).unwrap();
     aof.truncate().unwrap();
     assert_eq!(aof.size_bytes(), 9);
     drop(aof);
@@ -221,12 +219,7 @@ fn aof_open_truncates_crash_zero_tail_so_reopen_appends_survive() {
     // Simulate the post-crash file: magic + one good frame + a zero region
     // (the crash-lost EverySec tail, size journaled but data un-flushed).
     {
-        let mut f = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&path)
-            .unwrap();
+        let mut f = OpenOptions::new().create(true).write(true).truncate(true).open(&path).unwrap();
         f.write_all(AOF_MAGIC).unwrap();
         write_multibulk(&mut f, &cmd(&[b"SET", b"k", b"v"])).unwrap();
         f.write_all(&[0u8; 128]).unwrap(); // torn/zeroed tail
@@ -250,10 +243,8 @@ fn aof_open_truncates_crash_zero_tail_so_reopen_appends_survive() {
 
 pub(crate) fn temp_aof(name: &str) -> std::path::PathBuf {
     let mut p = std::env::temp_dir();
-    let uniq = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let uniq =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     p.push(format!("kevy-{name}-{uniq}.aof"));
     p
 }
@@ -296,12 +287,7 @@ fn aof_open_quarantines_the_dropped_tail_bytes_exactly() {
     let path = temp_file("aof-quarantine");
     let torn = b"*3\r\n$3\r\nSET\r\n$1\r\nq\r\n$5\r\nhal"; // frame cut mid-bulk
     {
-        let mut f = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&path)
-            .unwrap();
+        let mut f = OpenOptions::new().create(true).write(true).truncate(true).open(&path).unwrap();
         f.write_all(AOF_MAGIC).unwrap();
         write_multibulk(&mut f, &cmd(&[b"SET", b"k", b"v"])).unwrap();
         f.write_all(torn).unwrap();
@@ -367,7 +353,6 @@ fn rewrite_due_three_triggers() {
     let _ = std::fs::remove_file(&path);
 }
 
-
 // The v2 upgrade contract: a v1 (3.x) file keeps appending v1 so the file
 // stays single-format, replays fine, and its FIRST rewrite flips it to the
 // checksummed v2 envelope — after which a payload bit-flip is DETECTED
@@ -424,10 +409,7 @@ fn v1_file_upgrades_on_rewrite_and_v2_detects_bit_rot() {
     let mut got3: Vec<Argv> = Vec::new();
     let report = replay_aof(&path, |a| got3.push(a)).unwrap();
     assert!(report.corrupt, "a flipped payload byte must be DETECTED");
-    assert!(
-        !got3.iter().any(|a| a.get(1) == Some(b"k3")),
-        "the tainted record must not replay"
-    );
+    assert!(!got3.iter().any(|a| a.get(1) == Some(b"k3")), "the tainted record must not replay");
     let _ = std::fs::remove_file(&path);
 }
 
@@ -735,10 +717,14 @@ fn resync_recovers_the_good_tail_behind_a_lying_length() {
     let r = crate::replay_aof_resync(&path, |a| res.push(a)).unwrap();
     assert_eq!(res.len(), 20, "every good record, not just the prefix");
     assert_eq!(r.resynced_ranges.len(), 1, "one skipped region, reported");
-    assert!(r.corrupt,
-            "a skipped region is corruption; the report must not call the file              healthy (docs/persistence.md promises the flag stays raised)");
-    assert!(res.iter().any(|a| a.get(1) == Some(b"post9".as_slice())),
-            "the last record behind the damage came back");
+    assert!(
+        r.corrupt,
+        "a skipped region is corruption; the report must not call the file              healthy (docs/persistence.md promises the flag stays raised)"
+    );
+    assert!(
+        res.iter().any(|a| a.get(1) == Some(b"post9".as_slice())),
+        "the last record behind the damage came back"
+    );
     let _ = std::fs::remove_file(&path);
 }
 
@@ -821,11 +807,7 @@ fn open_with_repair_under_resync_keeps_the_tail_it_documents_keeping() {
         kept.open_quarantine().is_none(),
         "under resync nothing after the last recoverable record is left to drop"
     );
-    assert_eq!(
-        std::fs::metadata(&resync_path).unwrap().len(),
-        full,
-        "not one byte truncated"
-    );
+    assert_eq!(std::fs::metadata(&resync_path).unwrap().len(), full, "not one byte truncated");
 
     let mut res: Vec<Argv> = Vec::new();
     crate::replay_aof_resync(&resync_path, |a| res.push(a)).unwrap();

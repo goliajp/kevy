@@ -41,8 +41,7 @@ fn split_part(args: &[Scalar]) -> Result<Scalar, ScalarError> {
             what: "field position must not be zero",
         });
     }
-    let fields: Vec<&str> =
-        if delim.is_empty() { vec![s] } else { s.split(delim).collect() };
+    let fields: Vec<&str> = if delim.is_empty() { vec![s] } else { s.split(delim).collect() };
     let idx = if n > 0 {
         (n - 1) as usize
     } else {
@@ -111,11 +110,7 @@ fn left_right(args: &[Scalar], from_left: bool) -> Result<Scalar, ScalarError> {
         _ => return Err(ScalarError::Arity { func, got: args.len() }),
     };
     let total = s.chars().count();
-    let keep = if n >= 0 {
-        (n as usize).min(total)
-    } else {
-        total.saturating_sub((-n) as usize)
-    };
+    let keep = if n >= 0 { (n as usize).min(total) } else { total.saturating_sub((-n) as usize) };
     let out: String = if from_left {
         s.chars().take(keep).collect()
     } else {
@@ -151,11 +146,7 @@ fn substr(args: &[Scalar]) -> Result<Scalar, ScalarError> {
     let from = start.max(1);
     let out: String = match end {
         Some(e) if e <= from => String::new(),
-        Some(e) => s
-            .chars()
-            .skip((from - 1) as usize)
-            .take((e - from) as usize)
-            .collect(),
+        Some(e) => s.chars().skip((from - 1) as usize).take((e - from) as usize).collect(),
         None => s.chars().skip((from - 1) as usize).collect(),
     };
     Ok(Scalar::Text(out))

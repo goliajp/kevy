@@ -63,7 +63,12 @@ impl XShardWaiters {
     }
 
     /// The frozen replay command for `(origin, conn)` on `key`, if armed.
-    pub(crate) fn serve_argv(&self, key: &[u8], origin: usize, conn: u64) -> Option<(Argv, RespVersion)> {
+    pub(crate) fn serve_argv(
+        &self,
+        key: &[u8],
+        origin: usize,
+        conn: u64,
+    ) -> Option<(Argv, RespVersion)> {
         self.by_key.get(key).and_then(|q| {
             q.iter()
                 .find(|w| w.origin == origin && w.conn == conn)
@@ -84,11 +89,9 @@ impl XShardWaiters {
     /// The block kind of `(origin, conn)`'s waiter on `key` — needed to
     /// build the undo before serving.
     pub(crate) fn kind_of(&self, key: &[u8], origin: usize, conn: u64) -> Option<BlockKind> {
-        self.by_key.get(key).and_then(|q| {
-            q.iter()
-                .find(|w| w.origin == origin && w.conn == conn)
-                .map(|w| w.kind)
-        })
+        self.by_key
+            .get(key)
+            .and_then(|q| q.iter().find(|w| w.origin == origin && w.conn == conn).map(|w| w.kind))
     }
 
     /// Drop every waiter for `(origin, conn)` across all its keys.

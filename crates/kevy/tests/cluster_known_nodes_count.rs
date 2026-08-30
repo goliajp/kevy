@@ -37,9 +37,7 @@ fn cluster_info_known_nodes_reports_peer_count() {
     let mut cfg = HarnessConfig::new(tmp_a.clone(), port_a).with_fsync("everysec");
     cfg.kevy_bin = bin_path.clone();
     cfg.threads = 2;
-    cfg.extra_toml = format!(
-        "\n[cluster]\nenabled = true\nport_base = {cluster_a}\n"
-    );
+    cfg.extra_toml = format!("\n[cluster]\nenabled = true\nport_base = {cluster_a}\n");
     let h_a = Harness::spawn(cfg).expect("spawn nodeA");
     std::thread::sleep(Duration::from_millis(200));
 
@@ -95,11 +93,9 @@ fn cluster_info_known_nodes_reports_peer_count() {
 }
 
 fn query_cluster_info(port: u16) -> String {
-    let mut s = TcpStream::connect(format!("127.0.0.1:{port}"))
-        .expect("conn for CLUSTER INFO");
+    let mut s = TcpStream::connect(format!("127.0.0.1:{port}")).expect("conn for CLUSTER INFO");
     let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
-    s.write_all(b"*2\r\n$7\r\nCLUSTER\r\n$4\r\nINFO\r\n")
-        .expect("write CLUSTER INFO");
+    s.write_all(b"*2\r\n$7\r\nCLUSTER\r\n$4\r\nINFO\r\n").expect("write CLUSTER INFO");
     let mut buf = vec![0u8; 4 * 1024];
     let n = s.read(&mut buf).expect("read CLUSTER INFO");
     String::from_utf8_lossy(&buf[..n]).into_owned()

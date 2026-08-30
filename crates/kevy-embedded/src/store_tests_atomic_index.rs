@@ -26,8 +26,7 @@ fn with_email_index() -> Store {
         )
         .unwrap();
     }
-    s.idx_create(b"email_idx", b"user:", b"email", IndexValType::Str, IndexKind::Range)
-        .unwrap();
+    s.idx_create(b"email_idx", b"user:", b"email", IndexValType::Str, IndexKind::Range).unwrap();
     s
 }
 
@@ -45,7 +44,11 @@ fn atomic_all_shards_sees_committed_rows_on_every_shard() {
     s.atomic_all_shards(|c| {
         for i in 0..64 {
             let taken = c
-                .idx_count(b"email_idx", &eq(&format!("u{i}@example.com")), &eq(&format!("u{i}@example.com")))
+                .idx_count(
+                    b"email_idx",
+                    &eq(&format!("u{i}@example.com")),
+                    &eq(&format!("u{i}@example.com")),
+                )
                 .unwrap();
             assert_eq!(taken, 1, "u{i}@example.com should be visible in-transaction");
         }

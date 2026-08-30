@@ -26,23 +26,14 @@ fn events_iter_yields_every_frame_then_stops_on_eof() {
             break;
         }
     }
-    assert!(matches!(
-        frames[0],
-        PubsubEvent::Subscribe { count: 1, .. }
-    ));
+    assert!(matches!(frames[0], PubsubEvent::Subscribe { count: 1, .. }));
     assert_eq!(
         frames[1],
-        PubsubEvent::Message {
-            channel: b"chan".to_vec(),
-            payload: b"a".to_vec(),
-        }
+        PubsubEvent::Message { channel: b"chan".to_vec(), payload: b"a".to_vec() }
     );
     assert_eq!(
         frames[2],
-        PubsubEvent::Message {
-            channel: b"chan".to_vec(),
-            payload: b"b".to_vec(),
-        }
+        PubsubEvent::Message { channel: b"chan".to_vec(), payload: b"b".to_vec() }
     );
 }
 
@@ -57,11 +48,8 @@ fn messages_iter_skips_acks() {
     let _ = conn.publish(b"chan", b"y").unwrap();
     sub.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
 
-    let collected: Vec<(Vec<u8>, Vec<u8>)> = sub
-        .messages()
-        .take(2)
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
+    let collected: Vec<(Vec<u8>, Vec<u8>)> =
+        sub.messages().take(2).collect::<Result<Vec<_>, _>>().unwrap();
     assert_eq!(collected.len(), 2);
     assert_eq!(collected[0], (b"chan".to_vec(), b"x".to_vec()));
     assert_eq!(collected[1], (b"chan".to_vec(), b"y".to_vec()));
@@ -75,8 +63,7 @@ fn events_iter_propagates_non_eof_errors() {
     let mut sub = Subscriber::connect_channels(URL, &[b"chan"]).unwrap();
     // Drain the ack synchronously before the timeout test.
     let _ = sub.events().next().unwrap().unwrap();
-    sub.set_read_timeout(Some(Duration::from_millis(80)))
-        .unwrap();
+    sub.set_read_timeout(Some(Duration::from_millis(80))).unwrap();
 
     let mut it = sub.events();
     let first = it.next().expect("iter should not have terminated");

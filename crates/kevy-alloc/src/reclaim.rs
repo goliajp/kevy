@@ -96,12 +96,10 @@ impl Heap {
         let mut run: Option<usize> = None;
         for p in 0..PAGES_PER_SPAN {
             let meta = &mut s.spans[ix];
-            let fresh = meta.discarded & (1u16 << p) == 0
-                && p * os::PAGE < hw_bytes
-                && {
-                    let (a, b) = slots_of_page(p, slot, cap);
-                    !meta.range_has_live(a, b)
-                };
+            let fresh = meta.discarded & (1u16 << p) == 0 && p * os::PAGE < hw_bytes && {
+                let (a, b) = slots_of_page(p, slot, cap);
+                !meta.range_has_live(a, b)
+            };
             if fresh {
                 meta.discarded |= 1u16 << p;
                 run.get_or_insert(p);

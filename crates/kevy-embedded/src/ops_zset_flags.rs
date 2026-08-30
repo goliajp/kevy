@@ -20,7 +20,9 @@ fn reject_invalid(flags: ZaddFlags) -> KevyResult<()> {
     if flags.valid() {
         Ok(())
     } else {
-        Err(KevyError::InvalidInput("GT, LT, and/or NX options at the same time are not compatible".into()))
+        Err(KevyError::InvalidInput(
+            "GT, LT, and/or NX options at the same time are not compatible".into(),
+        ))
     }
 }
 
@@ -38,16 +40,10 @@ impl Store {
         reject_invalid(flags)?;
         ensure_writable(self)?;
         let mut g = self.wshard(key);
-        let rep = g
-            .store
-            .zadd_flags(key, pairs, flags)
-            .map_err(store_err)?;
+        let rep = g.store.zadd_flags(key, pairs, flags).map_err(store_err)?;
         if !rep.applied.is_empty() {
-            let score_strs: Vec<Vec<u8>> = rep
-                .applied
-                .iter()
-                .map(|(s, _)| format!("{s}").into_bytes())
-                .collect();
+            let score_strs: Vec<Vec<u8>> =
+                rep.applied.iter().map(|(s, _)| format!("{s}").into_bytes()).collect();
             let mut parts: Vec<&[u8]> = Vec::with_capacity(2 + rep.applied.len() * 2);
             parts.push(b"ZADD");
             parts.push(key);
@@ -72,10 +68,7 @@ impl Store {
         reject_invalid(flags)?;
         ensure_writable(self)?;
         let mut g = self.wshard(key);
-        let next = g
-            .store
-            .zadd_incr(key, delta, member, flags)
-            .map_err(store_err)?;
+        let next = g.store.zadd_incr(key, delta, member, flags).map_err(store_err)?;
         if let Some(n) = next {
             let s = format!("{n}");
             commit_write(&mut g, &[b"ZADD", key, s.as_bytes(), member])?;

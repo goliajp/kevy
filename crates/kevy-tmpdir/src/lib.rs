@@ -141,9 +141,8 @@ mod tests {
     #[test]
     fn threads_racing_for_a_name_all_get_their_own() {
         let dirs: Vec<_> = std::thread::scope(|s| {
-            let handles: Vec<_> = (0..32)
-                .map(|_| s.spawn(|| TmpDir::new("race").path().to_path_buf()))
-                .collect();
+            let handles: Vec<_> =
+                (0..32).map(|_| s.spawn(|| TmpDir::new("race").path().to_path_buf())).collect();
             handles.into_iter().map(|h| h.join().expect("thread")).collect()
         });
         let uniq: HashSet<_> = dirs.iter().collect();

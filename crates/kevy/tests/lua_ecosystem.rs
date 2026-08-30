@@ -61,45 +61,22 @@ return redis.call('INCRBY', KEYS[1], ARGV[2])\n";
 #[test]
 fn redlock_unlock_success_path() {
     let mut store = Store::new();
-    let _ = dispatch(
-        &mut store,
-        &argv(&[b"SET", b"lock:order:42", b"client-A-token"]),
-    );
+    let _ = dispatch(&mut store, &argv(&[b"SET", b"lock:order:42", b"client-A-token"]));
     let reply = dispatch(
         &mut store,
-        &argv(&[
-            b"EVAL",
-            REDLOCK_UNLOCK,
-            b"1",
-            b"lock:order:42",
-            b"client-A-token",
-        ]),
+        &argv(&[b"EVAL", REDLOCK_UNLOCK, b"1", b"lock:order:42", b"client-A-token"]),
     );
     assert_eq!(reply, b":1\r\n");
     // Lock released.
-    assert_eq!(
-        dispatch(&mut store, &argv(&[b"GET", b"lock:order:42"])),
-        b"$-1\r\n",
-    );
+    assert_eq!(dispatch(&mut store, &argv(&[b"GET", b"lock:order:42"])), b"$-1\r\n",);
 }
 
 #[test]
 fn redlock_unlock_wrong_token_returns_zero_and_preserves_lock() {
     let mut store = Store::new();
-    let _ = dispatch(
-        &mut store,
-        &argv(&[b"SET", b"lock:foo", b"someone-elses-token"]),
-    );
-    let reply = dispatch(
-        &mut store,
-        &argv(&[
-            b"EVAL",
-            REDLOCK_UNLOCK,
-            b"1",
-            b"lock:foo",
-            b"my-token",
-        ]),
-    );
+    let _ = dispatch(&mut store, &argv(&[b"SET", b"lock:foo", b"someone-elses-token"]));
+    let reply =
+        dispatch(&mut store, &argv(&[b"EVAL", REDLOCK_UNLOCK, b"1", b"lock:foo", b"my-token"]));
     assert_eq!(reply, b":0\r\n");
     // Lock untouched.
     assert_eq!(
@@ -113,13 +90,7 @@ fn redlock_unlock_missing_key_returns_zero() {
     let mut store = Store::new();
     let reply = dispatch(
         &mut store,
-        &argv(&[
-            b"EVAL",
-            REDLOCK_UNLOCK,
-            b"1",
-            b"lock:never-acquired",
-            b"any-token",
-        ]),
+        &argv(&[b"EVAL", REDLOCK_UNLOCK, b"1", b"lock:never-acquired", b"any-token"]),
     );
     assert_eq!(reply, b":0\r\n");
 }
@@ -130,14 +101,7 @@ fn redlock_extend_success_path() {
     let _ = dispatch(&mut store, &argv(&[b"SET", b"lock:x", b"token-1"]));
     let reply = dispatch(
         &mut store,
-        &argv(&[
-            b"EVAL",
-            REDLOCK_EXTEND,
-            b"1",
-            b"lock:x",
-            b"token-1",
-            b"30000",
-        ]),
+        &argv(&[b"EVAL", REDLOCK_EXTEND, b"1", b"lock:x", b"token-1", b"30000"]),
     );
     // PEXPIRE returns :1 on success.
     assert_eq!(reply, b":1\r\n");
@@ -147,17 +111,8 @@ fn redlock_extend_success_path() {
 fn redlock_extend_wrong_token_returns_zero() {
     let mut store = Store::new();
     let _ = dispatch(&mut store, &argv(&[b"SET", b"lock:y", b"other"]));
-    let reply = dispatch(
-        &mut store,
-        &argv(&[
-            b"EVAL",
-            REDLOCK_EXTEND,
-            b"1",
-            b"lock:y",
-            b"mine",
-            b"30000",
-        ]),
-    );
+    let reply =
+        dispatch(&mut store, &argv(&[b"EVAL", REDLOCK_EXTEND, b"1", b"lock:y", b"mine", b"30000"]));
     assert_eq!(reply, b":0\r\n");
 }
 
@@ -167,33 +122,16 @@ fn atomic_incr_or_init_fresh_key() {
     // KEY missing → SET KEY 100 → no TTL (ARGV[3] = 0) → INCRBY 1 → :101
     let reply = dispatch(
         &mut store,
-        &argv(&[
-            b"EVAL",
-            ATOMIC_INCR_OR_INIT,
-            b"1",
-            b"counter:visits",
-            b"100",
-            b"1",
-            b"0",
-        ]),
+        &argv(&[b"EVAL", ATOMIC_INCR_OR_INIT, b"1", b"counter:visits", b"100", b"1", b"0"]),
     );
     assert_eq!(reply, b":101\r\n");
-    assert_eq!(
-        dispatch(
-            &mut store,
-            &argv(&[b"GET", b"counter:visits"])
-        ),
-        b"$3\r\n101\r\n",
-    );
+    assert_eq!(dispatch(&mut store, &argv(&[b"GET", b"counter:visits"])), b"$3\r\n101\r\n",);
 }
 
 #[test]
 fn atomic_incr_or_init_existing_key_skips_init() {
     let mut store = Store::new();
-    let _ = dispatch(
-        &mut store,
-        &argv(&[b"SET", b"counter:hits", b"5"]),
-    );
+    let _ = dispatch(&mut store, &argv(&[b"SET", b"counter:hits", b"5"]));
     // KEY exists → skip init → INCRBY 10 → :15
     let reply = dispatch(
         &mut store,
@@ -215,15 +153,7 @@ fn atomic_incr_or_init_with_ttl_sets_expire() {
     let mut store = Store::new();
     let _ = dispatch(
         &mut store,
-        &argv(&[
-            b"EVAL",
-            ATOMIC_INCR_OR_INIT,
-            b"1",
-            b"counter:ttl",
-            b"0",
-            b"7",
-            b"60",
-        ]),
+        &argv(&[b"EVAL", ATOMIC_INCR_OR_INIT, b"1", b"counter:ttl", b"0", b"7", b"60"]),
     );
     // Now check TTL was set (value > 0).
     let ttl_reply = dispatch(&mut store, &argv(&[b"TTL", b"counter:ttl"]));
@@ -289,14 +219,7 @@ return 0\n";
     // Pre-fill the zset to limit=2.
     let _ = dispatch(
         &mut store,
-        &argv(&[
-            b"ZADD",
-            b"rl:k",
-            b"1700000000001",
-            b"a",
-            b"1700000000002",
-            b"b",
-        ]),
+        &argv(&[b"ZADD", b"rl:k", b"1700000000001", b"a", b"1700000000002", b"b"]),
     );
     let reply = dispatch(
         &mut store,

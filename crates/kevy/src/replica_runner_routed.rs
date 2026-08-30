@@ -41,11 +41,7 @@ pub(crate) fn route_event(
             *from_offset = ack_offset;
             // Every shard gets a CLONE of the gate: the loading
             // lowering fires when the last shard's load lands.
-            send_all(&|| ReplicaApply::SnapshotEnd {
-                ack_offset,
-                routed: true,
-                gate: gate.clone(),
-            })
+            send_all(&|| ReplicaApply::SnapshotEnd { ack_offset, routed: true, gate: gate.clone() })
         }
         ReplicaEvent::Frame(frame) => {
             *from_offset = frame.offset.saturating_add(1);
@@ -100,14 +96,20 @@ pub(crate) fn drain_client_routed(
                     *data_gen = ack_gen;
                 }
                 crate::replica_trace::trace_session_event(
-                    runner_slot, &event, &mut traced_first_frame,
+                    runner_slot,
+                    &event,
+                    &mut traced_first_frame,
                 );
                 let gate = loading.observe(&event);
                 if route_event(event, &mut from_offset, senders, gate).is_err() {
                     return from_offset;
                 }
                 crate::replica_runner_events::maybe_ack(
-                    client, progress, runner_slot, from_offset, &mut last_ack,
+                    client,
+                    progress,
+                    runner_slot,
+                    from_offset,
+                    &mut last_ack,
                 );
             }
             Some(Err(e)) => {
@@ -119,4 +121,3 @@ pub(crate) fn drain_client_routed(
     }
     from_offset
 }
-

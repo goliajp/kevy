@@ -40,7 +40,9 @@ fn parse_cond_fields<A: ArgvView + ?Sized>(
         }
     }
     if i >= args.len() || !args[i].eq_ignore_ascii_case(b"FIELDS") {
-        return Err(CmdError::Wire("ERR Mandatory keyword FIELDS is missing or not at the right position"));
+        return Err(CmdError::Wire(
+            "ERR Mandatory keyword FIELDS is missing or not at the right position",
+        ));
     }
     i += 1;
     let n: usize = args
@@ -99,9 +101,7 @@ pub(crate) fn cmd_hexpire<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out
 
 /// `HPEXPIRE key ms [cond] FIELDS n f…`.
 pub(crate) fn cmd_hpexpire<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
-    hexpire_generic(store, args, out, "hpexpire", |ms| {
-        now_unix_ms().saturating_add_signed(ms)
-    });
+    hexpire_generic(store, args, out, "hpexpire", |ms| now_unix_ms().saturating_add_signed(ms));
 }
 
 /// `HPEXPIREAT key unix-ms [cond] FIELDS n f…` — the canonical

@@ -15,9 +15,9 @@
 
 use std::path::Path;
 
+use crate::state::{Ctx, RuntimeState};
 use kevy_index::{Catalog, IndexKind, IndexSpec, ValType};
 use kevy_resp::{ArgvView, encode_error, encode_integer};
-use crate::state::{Ctx, RuntimeState};
 
 const SIDECAR: &str = "index-catalog.meta";
 
@@ -374,7 +374,12 @@ fn parse_create_opts<A: ArgvView + ?Sized>(
 
 /// Apply one `KEY value` option pair to the accumulating [`CreateOpts`].
 /// `Err(())` = an error reply was already encoded.
-fn apply_create_opt(opt: &[u8], val: &[u8], o: &mut CreateOpts, out: &mut Vec<u8>) -> Result<(), ()> {
+fn apply_create_opt(
+    opt: &[u8],
+    val: &[u8],
+    o: &mut CreateOpts,
+    out: &mut Vec<u8>,
+) -> Result<(), ()> {
     let parsed: Option<u64> = std::str::from_utf8(val).ok().and_then(|s| s.parse().ok());
     if opt.eq_ignore_ascii_case(b"WITH") {
         // A bare flag written as a key/value pair so it fits the
@@ -434,33 +439,38 @@ fn validate_kind_combo(
             ef: opts.ef,
         }),
         (IndexKind::Ann, _) => {
-            { encode_error(out, "ERR KIND ann requires TYPE vector and DIM"); return Err(()) };
+            {
+                encode_error(out, "ERR KIND ann requires TYPE vector and DIM");
+                return Err(());
+            };
         }
         (_, ValType::Vector) => {
-            { encode_error(out, "ERR TYPE vector requires KIND ann"); return Err(()) };
+            {
+                encode_error(out, "ERR TYPE vector requires KIND ann");
+                return Err(());
+            };
         }
         _ => None,
     };
     match (kind, &opts.group_by, ty) {
         (IndexKind::Agg, None, _) => {
-            { encode_error(out, "ERR KIND agg requires GROUPBY <field>"); Err(()) }
+            encode_error(out, "ERR KIND agg requires GROUPBY <field>");
+            Err(())
         }
         (IndexKind::Agg, Some(_), ValType::Str | ValType::Vector) => {
-            { encode_error(out, "ERR KIND agg requires TYPE i64|f64"); Err(()) }
+            encode_error(out, "ERR KIND agg requires TYPE i64|f64");
+            Err(())
         }
         (k, Some(_), _) if k != IndexKind::Agg => {
-            { encode_error(out, "ERR GROUPBY requires KIND agg"); Err(()) }
+            encode_error(out, "ERR GROUPBY requires KIND agg");
+            Err(())
         }
         _ => Ok(ann),
     }
 }
 
 /// `IDX.DROP <name>`.
-pub(crate) fn cmd_idx_drop<A: ArgvView + ?Sized>(
-    ctx: &Ctx<'_>,
-    args: &A,
-    out: &mut Vec<u8>,
-) {
+pub(crate) fn cmd_idx_drop<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) {
     if args.len() != 2 {
         return encode_error(out, "ERR usage: IDX.DROP name");
     }

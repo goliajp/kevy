@@ -18,13 +18,7 @@
 
 /// Compute the SHA-1 of `data`. Returns the 20-byte digest.
 pub fn sha1(data: &[u8]) -> [u8; 20] {
-    let mut h: [u32; 5] = [
-        0x6745_2301,
-        0xEFCD_AB89,
-        0x98BA_DCFE,
-        0x1032_5476,
-        0xC3D2_E1F0,
-    ];
+    let mut h: [u32; 5] = [0x6745_2301, 0xEFCD_AB89, 0x98BA_DCFE, 0x1032_5476, 0xC3D2_E1F0];
 
     // Pre-processing: append `1` bit, then `0` bits until length ≡ 448 (mod 512),
     // then 64-bit big-endian original-length-in-bits.
@@ -70,12 +64,7 @@ fn compress(h: &mut [u32; 5], chunk: &[u8]) {
             40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1B_BCDC),
             _ => (b ^ c ^ d, 0xCA62_C1D6),
         };
-        let t = a
-            .rotate_left(5)
-            .wrapping_add(f)
-            .wrapping_add(e)
-            .wrapping_add(k)
-            .wrapping_add(wi);
+        let t = a.rotate_left(5).wrapping_add(f).wrapping_add(e).wrapping_add(k).wrapping_add(wi);
         e = d;
         d = c;
         c = b.rotate_left(30);
@@ -133,20 +122,14 @@ mod tests {
     fn empty_string() {
         // SHA1("") = da39a3ee5e6b4b0d3255bfef95601890afd80709
         let d = sha1(b"");
-        assert_eq!(
-            hex(&d),
-            *b"da39a3ee5e6b4b0d3255bfef95601890afd80709"
-        );
+        assert_eq!(hex(&d), *b"da39a3ee5e6b4b0d3255bfef95601890afd80709");
     }
 
     #[test]
     fn abc() {
         // SHA1("abc") = a9993e364706816aba3e25717850c26c9cd0d89d
         let d = sha1(b"abc");
-        assert_eq!(
-            hex(&d),
-            *b"a9993e364706816aba3e25717850c26c9cd0d89d"
-        );
+        assert_eq!(hex(&d), *b"a9993e364706816aba3e25717850c26c9cd0d89d");
     }
 
     #[test]
@@ -154,10 +137,7 @@ mod tests {
         // SHA1("The quick brown fox jumps over the lazy dog")
         //   = 2fd4e1c67a2d28fced849ee1bb76e7391b93eb12
         let d = sha1(b"The quick brown fox jumps over the lazy dog");
-        assert_eq!(
-            hex(&d),
-            *b"2fd4e1c67a2d28fced849ee1bb76e7391b93eb12"
-        );
+        assert_eq!(hex(&d), *b"2fd4e1c67a2d28fced849ee1bb76e7391b93eb12");
     }
 
     #[test]
@@ -165,10 +145,7 @@ mod tests {
         // SHA1("The quick brown fox jumps over the lazy cog")
         //   = de9f2c7fd25e1b3afad3e85a0bd17d9b100db4b3
         let d = sha1(b"The quick brown fox jumps over the lazy cog");
-        assert_eq!(
-            hex(&d),
-            *b"de9f2c7fd25e1b3afad3e85a0bd17d9b100db4b3"
-        );
+        assert_eq!(hex(&d), *b"de9f2c7fd25e1b3afad3e85a0bd17d9b100db4b3");
     }
 
     #[test]
@@ -176,30 +153,21 @@ mod tests {
         // SHA1("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")
         //   = 84983e441c3bd26ebaae4aa1f95129e5e54670f1
         let d = sha1(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq");
-        assert_eq!(
-            hex(&d),
-            *b"84983e441c3bd26ebaae4aa1f95129e5e54670f1"
-        );
+        assert_eq!(hex(&d), *b"84983e441c3bd26ebaae4aa1f95129e5e54670f1");
     }
 
     #[test]
     fn eight_byte_return_1() {
         // openssl says SHA1("return 1") = e0e1f9fabfc9d4800c877a703b823ac0578ff8db
         let d = sha1(b"return 1");
-        assert_eq!(
-            hex(&d),
-            *b"e0e1f9fabfc9d4800c877a703b823ac0578ff8db"
-        );
+        assert_eq!(hex(&d), *b"e0e1f9fabfc9d4800c877a703b823ac0578ff8db");
     }
 
     #[test]
     fn four_byte_input() {
         // openssl: SHA1("1234") = 7110eda4d09e062aa5e4a390b0a572ac0d2c0220
         let d = sha1(b"1234");
-        assert_eq!(
-            hex(&d),
-            *b"7110eda4d09e062aa5e4a390b0a572ac0d2c0220"
-        );
+        assert_eq!(hex(&d), *b"7110eda4d09e062aa5e4a390b0a572ac0d2c0220");
     }
 
     #[test]
@@ -207,10 +175,7 @@ mod tests {
         // SHA1("a" × 1_000_000) = 34aa973cd4c4daa4f61eeb2bdbad27316534016f
         let data = vec![b'a'; 1_000_000];
         let d = sha1(&data);
-        assert_eq!(
-            hex(&d),
-            *b"34aa973cd4c4daa4f61eeb2bdbad27316534016f"
-        );
+        assert_eq!(hex(&d), *b"34aa973cd4c4daa4f61eeb2bdbad27316534016f");
     }
 
     #[test]
@@ -236,10 +201,7 @@ mod tests {
     fn parse_hex_accepts_uppercase() {
         let d1 = sha1(b"abc");
         let lower = hex(&d1);
-        let upper: Vec<u8> = lower
-            .iter()
-            .map(|&b| b.to_ascii_uppercase())
-            .collect();
+        let upper: Vec<u8> = lower.iter().map(|&b| b.to_ascii_uppercase()).collect();
         let d2 = parse_hex(&upper).expect("upper-hex valid");
         assert_eq!(d1, d2);
     }

@@ -48,9 +48,7 @@
 
 use crate::Commands;
 use crate::shard::Shard;
-use crate::uring_bigbulk_probe::{
-    BigArgGenericProbe, MAX_BULK_LEN, probe_generic_bigbulk,
-};
+use crate::uring_bigbulk_probe::{BigArgGenericProbe, MAX_BULK_LEN, probe_generic_bigbulk};
 use crate::uring_conn::{BigArgState, UringConn};
 use kevy_map::KevyMap;
 
@@ -103,15 +101,13 @@ impl<C: Commands> Shard<C> {
                 // zero-copy only when `len == capacity`; trailing CRLF
                 // is sunk into `crlf_seen`, never into this Vec.
                 let mut body = Vec::with_capacity(body_len);
-                let body_in_slab =
-                    bytes_present.saturating_sub(body_start_in_tail).min(body_len);
+                let body_in_slab = bytes_present.saturating_sub(body_start_in_tail).min(body_len);
                 body.extend_from_slice(
                     &tail[body_start_in_tail..body_start_in_tail + body_in_slab],
                 );
                 // CRLF bytes potentially present after body in this slab.
-                let crlf_in_slab = bytes_present
-                    .saturating_sub(body_start_in_tail + body_in_slab)
-                    .min(2);
+                let crlf_in_slab =
+                    bytes_present.saturating_sub(body_start_in_tail + body_in_slab).min(2);
                 if body.len() == body_len && crlf_in_slab == 2 {
                     // Whole frame in slab — dispatch immediately, no
                     // cancel/single-shot dance needed.
@@ -189,18 +185,13 @@ impl<C: Commands> Shard<C> {
                 }
                 if frame.len() == *total
                     && let Some(boxed) = uc.pending_big_arg.take()
-                        && let BigArgState::Frame { frame, .. } = *boxed
-                    {
-                        self.uring_apply_frame_stitch(cid, frame, io);
-                    }
+                    && let BigArgState::Frame { frame, .. } = *boxed
+                {
+                    self.uring_apply_frame_stitch(cid, frame, io);
+                }
                 t
             }
-            BigArgState::BareSetCancelling {
-                body,
-                body_len,
-                crlf_seen,
-                ..
-            } => {
+            BigArgState::BareSetCancelling { body, body_len, crlf_seen, .. } => {
                 // Phase 1 — fill body up to body_len (preserves the
                 // `cap == body_len` invariant the zero-copy
                 // adoption requires).

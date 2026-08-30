@@ -105,9 +105,7 @@ fn finish_dump<S: crate::SnapshotSource>(
     write_hash_ttl_frames(&mut w, src, crate::AofFormat::V2, scratch)?;
     crate::segmented::write_segmented_frames(&mut w, src, cold_seqs, scratch)?;
     w.flush()?;
-    let inner = w
-        .into_inner()
-        .map_err(|e| io::Error::other(e.to_string()))?;
+    let inner = w.into_inner().map_err(|e| io::Error::other(e.to_string()))?;
     let bytes = inner.metadata().map_or(0, |m| m.len());
     inner.sync_all()?;
     Ok((keys, bytes))
@@ -201,10 +199,14 @@ pub(crate) fn write_value_as_commands<W: Write>(
         Value::Str(s) => write_verb_items(w, b"SET", key, 1, [s.to_vec()], fmt, scratch)?,
         // L2: persist Int as the canonical ASCII bytes; replay's SET
         // auto-detects it back to Int via parse_canonical_i64.
-        Value::Int(n) => write_verb_items(w, b"SET", key, 1, [n.to_string().into_bytes()], fmt, scratch)?,
+        Value::Int(n) => {
+            write_verb_items(w, b"SET", key, 1, [n.to_string().into_bytes()], fmt, scratch)?
+        }
         // L1: Arc-bulk serialises via the same SET argv path; replay picks
         // ArcBulk again for > BULK_THRESHOLD bytes.
-        Value::ArcBulk(a) => write_verb_items(w, b"SET", key, 1, [a.as_ref().to_vec()], fmt, scratch)?,
+        Value::ArcBulk(a) => {
+            write_verb_items(w, b"SET", key, 1, [a.as_ref().to_vec()], fmt, scratch)?
+        }
         Value::Hash(h) => {
             let fv = h.iter().flat_map(|(f, v)| [f.to_vec(), v.to_vec()]);
             write_verb_items(w, b"HSET", key, 2, fv, fmt, scratch)?;
@@ -221,7 +223,9 @@ pub(crate) fn write_value_as_commands<W: Write>(
         // running the declaration again. Nothing about the encoding reaches
         // the file, which is why the packed row needs no format version.
         Value::PackedRow(r) => {
-            let fv = r.fields().map(|(f, v)| (f.to_vec(), v.to_vec()))
+            let fv = r
+                .fields()
+                .map(|(f, v)| (f.to_vec(), v.to_vec()))
                 .collect::<Vec<_>>()
                 .into_iter()
                 .flat_map(|(f, v)| [f, v]);
@@ -242,10 +246,26 @@ pub(crate) fn write_value_as_commands<W: Write>(
         // as the heap-backed `Value::Set`; replaying through the live SADD
         // handler re-runs the encoding switch (small → inline, big → KevySet).
         Value::Set(s) => {
-            write_verb_items(w, b"SADD", key, 1, s.iter().map(kevy_store::SmallBytes::to_vec), fmt, scratch)?;
+            write_verb_items(
+                w,
+                b"SADD",
+                key,
+                1,
+                s.iter().map(kevy_store::SmallBytes::to_vec),
+                fmt,
+                scratch,
+            )?;
         }
         Value::SegSet(s) => {
-            write_verb_items(w, b"SADD", key, 1, s.keys().map(kevy_store::SmallBytes::to_vec), fmt, scratch)?;
+            write_verb_items(
+                w,
+                b"SADD",
+                key,
+                1,
+                s.keys().map(kevy_store::SmallBytes::to_vec),
+                fmt,
+                scratch,
+            )?;
         }
         Value::SmallSetInline(s) => {
             write_verb_items(w, b"SADD", key, 1, s.iter().map(<[u8]>::to_vec), fmt, scratch)?;
@@ -262,7 +282,9 @@ pub(crate) fn write_value_as_commands<W: Write>(
             let ms = z.iter().flat_map(|(m, sc)| [fmt_zset_score(sc), m.to_vec()]);
             write_verb_items(w, b"ZADD", key, 2, ms, fmt, scratch)?;
         }
-        Value::Stream(s) => _ = crate::rewrite_stream_fmt::stream_as_commands(w, key, s, fmt, scratch)?,
+        Value::Stream(s) => {
+            _ = crate::rewrite_stream_fmt::stream_as_commands(w, key, s, fmt, scratch)?
+        }
     }
     write_pexpireat(w, key, ttl_ms, fmt, scratch)
 }
@@ -330,10 +352,7 @@ fn decimal_digits(mut x: u64) -> u32 {
 /// [`replay_aof`](crate::replay_aof) parses back. Public so external AOF
 /// producers (host-mediated persistence pumps) emit frames byte-compatible
 /// with kevy-written logs.
-pub fn write_multibulk<W: Write, A: ArgvView + ?Sized>(
-    w: &mut W,
-    args: &A,
-) -> io::Result<()> {
+pub fn write_multibulk<W: Write, A: ArgvView + ?Sized>(w: &mut W, args: &A) -> io::Result<()> {
     write!(w, "*{}\r\n", args.len())?;
     for i in 0..args.len() {
         let a = &args[i];
@@ -348,8 +367,17 @@ pub fn write_multibulk<W: Write, A: ArgvView + ?Sized>(
 /// Cross-checked against `kevy_resp::ops_table` below.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const REWRITE_EMIT_VERBS: &[&str] = &[
-    "SET", "HSET", "RPUSH", "SADD", "ZADD", "PEXPIREAT", "HPEXPIREAT",
-    "XADD", "XSETID", "XGROUP", "XCLAIM",
+    "SET",
+    "HSET",
+    "RPUSH",
+    "SADD",
+    "ZADD",
+    "PEXPIREAT",
+    "HPEXPIREAT",
+    "XADD",
+    "XSETID",
+    "XGROUP",
+    "XCLAIM",
 ];
 
 #[cfg(test)]

@@ -105,9 +105,7 @@ impl TextColdDir {
             } else {
                 None
             };
-            let okey = q.sort.and_then(|s| {
-                vals.as_ref()?.get(s.field)?.as_deref().and_then(s.key)
-            });
+            let okey = q.sort.and_then(|s| vals.as_ref()?.get(s.field)?.as_deref().and_then(s.key));
             if let Some(v) = vals {
                 values.insert(key.clone(), v);
             }
@@ -237,7 +235,7 @@ fn collapse(
 /// The hot `passes` mirror over frozen values: every predicate must
 /// pass, and an absent value never does.
 fn passes(values: &[Option<Vec<u8>>], filter: &[kevy_text::Filter]) -> bool {
-    filter.iter().all(|f| {
-        values.get(f.field).and_then(Option::as_deref).is_some_and(|v| (f.test)(v))
-    })
+    filter
+        .iter()
+        .all(|f| values.get(f.field).and_then(Option::as_deref).is_some_and(|v| (f.test)(v)))
 }

@@ -6,7 +6,9 @@
 //! clients actually parse, since we don't carry RDB/COW/replication state.
 
 use kevy_config::Config;
-use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk};
+use kevy_resp::{
+    ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
+};
 use kevy_store::{ENTRY_OVERHEAD, Store};
 
 use super::{eviction_str, wrong_args};
@@ -43,10 +45,13 @@ pub(crate) fn cmd_memory<A: ArgvView + ?Sized>(
         }
         _ => {
             let shown = String::from_utf8_lossy(sub);
-            encode_error(out, &format!(
-                "ERR Unknown MEMORY subcommand or wrong number of arguments for '{}'",
-                shown.to_lowercase()
-            ));
+            encode_error(
+                out,
+                &format!(
+                    "ERR Unknown MEMORY subcommand or wrong number of arguments for '{}'",
+                    shown.to_lowercase()
+                ),
+            );
         }
     }
 }
@@ -102,16 +107,11 @@ enum StatValue<'a> {
     Bulk(&'a [u8]),
 }
 
-
 /// Pretty-print a byte count using IEC suffixes (matches Redis output, e.g.
 /// `used_memory_human:1.50M`). Single decimal place; rounds half-to-even.
 pub(crate) fn format_bytes_human(bytes: u64) -> String {
-    const UNITS: [(&str, u64); 4] = [
-        ("G", 1024 * 1024 * 1024),
-        ("M", 1024 * 1024),
-        ("K", 1024),
-        ("B", 1),
-    ];
+    const UNITS: [(&str, u64); 4] =
+        [("G", 1024 * 1024 * 1024), ("M", 1024 * 1024), ("K", 1024), ("B", 1)];
     for (suffix, scale) in UNITS {
         if bytes >= scale {
             if suffix == "B" {
@@ -185,18 +185,36 @@ mod tests {
         let store = Store::new();
         // DOCTOR — canonical no-issues body
         let mut out = Vec::new();
-        cmd_memory(&cfg, &crate::state::Totals::default(), &store, &argv(&[b"MEMORY", b"DOCTOR"]), &mut out);
+        cmd_memory(
+            &cfg,
+            &crate::state::Totals::default(),
+            &store,
+            &argv(&[b"MEMORY", b"DOCTOR"]),
+            &mut out,
+        );
         assert!(
             out.starts_with(b"$") && out.windows(5).any(|w| w == b"issue"),
             "DOCTOR should return a bulk diagnostic; got {out:?}"
         );
         // PURGE — +OK
         out.clear();
-        cmd_memory(&cfg, &crate::state::Totals::default(), &store, &argv(&[b"MEMORY", b"PURGE"]), &mut out);
+        cmd_memory(
+            &cfg,
+            &crate::state::Totals::default(),
+            &store,
+            &argv(&[b"MEMORY", b"PURGE"]),
+            &mut out,
+        );
         assert_eq!(out, b"+OK\r\n");
         // MALLOC-STATS — bulk note
         out.clear();
-        cmd_memory(&cfg, &crate::state::Totals::default(), &store, &argv(&[b"MEMORY", b"MALLOC-STATS"]), &mut out);
+        cmd_memory(
+            &cfg,
+            &crate::state::Totals::default(),
+            &store,
+            &argv(&[b"MEMORY", b"MALLOC-STATS"]),
+            &mut out,
+        );
         assert!(out.starts_with(b"$"));
         // missing subcommand
         out.clear();
@@ -204,7 +222,13 @@ mod tests {
         assert!(out.starts_with(b"-ERR wrong number of arguments"));
         // unknown subcommand
         out.clear();
-        cmd_memory(&cfg, &crate::state::Totals::default(), &store, &argv(&[b"MEMORY", b"NOPE"]), &mut out);
+        cmd_memory(
+            &cfg,
+            &crate::state::Totals::default(),
+            &store,
+            &argv(&[b"MEMORY", b"NOPE"]),
+            &mut out,
+        );
         assert!(out.starts_with(b"-ERR Unknown MEMORY subcommand"));
     }
 
@@ -241,6 +265,4 @@ mod tests {
             );
         }
     }
-
-
 }

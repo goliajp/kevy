@@ -49,10 +49,7 @@ pub(crate) fn cmd_idx_advise<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out:
 /// whose every observed probe left more than a bucket of margin
 /// advises a smaller SPAN; a declared path no query has ever hit
 /// advises its own drop, with its age. Both stay human acts.
-fn reclaim_rows(
-    ctx: &Ctx<'_>,
-    table: Option<&kevy_index::TableCatalog>,
-) -> Vec<(Vec<u8>, String)> {
+fn reclaim_rows(ctx: &Ctx<'_>, table: Option<&kevy_index::TableCatalog>) -> Vec<(Vec<u8>, String)> {
     let now_s = (kevy_store::now_unix_ms() / 1000) as i64;
     let usage = ctx.state.catalogs.usage_snapshot();
     let mut narrow: Vec<(Vec<u8>, String)> = usage

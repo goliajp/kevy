@@ -20,12 +20,7 @@ fn req(parts: &[&[u8]]) -> Vec<u8> {
 fn read_reply(s: &mut std::net::TcpStream, expected: &[u8]) {
     let mut buf = vec![0u8; expected.len()];
     s.read_exact(&mut buf).unwrap();
-    assert_eq!(
-        &buf,
-        expected,
-        "expected {:?}",
-        String::from_utf8_lossy(expected)
-    );
+    assert_eq!(&buf, expected, "expected {:?}", String::from_utf8_lossy(expected));
 }
 
 /// Poll `cond` up to ~10 s (BGREWRITEAOF/BGSAVE are background since the
@@ -65,7 +60,9 @@ fn with_runtime_configured<F>(
     let stop_t = stop.clone();
     let dir = dir.to_path_buf();
     let handle = std::thread::spawn(move || {
-        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards)).bind([127, 0, 0, 1], port).shards(nshards)
+        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards))
+            .bind([127, 0, 0, 1], port)
+            .shards(nshards)
             .with_data_dir(dir);
         let rt = configure(rt);
         rt.run(stop_t).unwrap();
@@ -88,10 +85,7 @@ fn with_runtime_configured<F>(
 fn data_survives_restart_via_save() {
     let dir = std::env::temp_dir().join(format!(
         "kevy-persist-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let nshards = 4;
@@ -101,12 +95,8 @@ fn data_survives_restart_via_save() {
     with_runtime(port, &dir, nshards, |p| {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
         for i in 0..100u32 {
-            c.write_all(&req(&[
-                b"SET",
-                format!("k{i}").as_bytes(),
-                format!("v{i}").as_bytes(),
-            ]))
-            .unwrap();
+            c.write_all(&req(&[b"SET", format!("k{i}").as_bytes(), format!("v{i}").as_bytes()]))
+                .unwrap();
             read_reply(&mut c, b"+OK\r\n");
         }
         c.write_all(&req(&[b"SAVE"])).unwrap();
@@ -114,9 +104,7 @@ fn data_survives_restart_via_save() {
     });
 
     // Per-shard snapshot files should now exist.
-    let dumps = (0..nshards)
-        .filter(|i| dir.join(format!("dump-{i}.rdb")).exists())
-        .count();
+    let dumps = (0..nshards).filter(|i| dir.join(format!("dump-{i}.rdb")).exists()).count();
     assert!(dumps > 0, "no snapshot files were written");
 
     // Second run: a fresh runtime over the same dir must see the data.
@@ -124,13 +112,9 @@ fn data_survives_restart_via_save() {
     with_runtime(port2, &dir, nshards, |p| {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
         for i in 0..100u32 {
-            c.write_all(&req(&[b"GET", format!("k{i}").as_bytes()]))
-                .unwrap();
+            c.write_all(&req(&[b"GET", format!("k{i}").as_bytes()])).unwrap();
             let want = format!("v{i}");
-            read_reply(
-                &mut c,
-                format!("${}\r\n{}\r\n", want.len(), want).as_bytes(),
-            );
+            read_reply(&mut c, format!("${}\r\n{}\r\n", want.len(), want).as_bytes());
         }
     });
 
@@ -141,10 +125,7 @@ fn data_survives_restart_via_save() {
 fn bgrewriteaof_shrinks_log_and_preserves_data() {
     let dir = std::env::temp_dir().join(format!(
         "kevy-bgrewrite-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let nshards = 4;
@@ -176,10 +157,7 @@ fn bgrewriteaof_shrinks_log_and_preserves_data() {
         // Background rewrite: the compacted file swaps in on a later tick.
         let sum_aof = || -> u64 {
             (0..nshards)
-                .map(|s| {
-                    std::fs::metadata(dir.join(format!("aof-{s}.aof")))
-                        .map_or(0, |m| m.len())
-                })
+                .map(|s| std::fs::metadata(dir.join(format!("aof-{s}.aof"))).map_or(0, |m| m.len()))
                 .sum()
         };
         // 40 keys × 1 SET per key, summed across shards, fits well under
@@ -195,13 +173,9 @@ fn bgrewriteaof_shrinks_log_and_preserves_data() {
     with_runtime(port2, &dir, nshards, |p| {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
         for i in 0..40u32 {
-            c.write_all(&req(&[b"GET", format!("k{i}").as_bytes()]))
-                .unwrap();
+            c.write_all(&req(&[b"GET", format!("k{i}").as_bytes()])).unwrap();
             let want = format!("v{i}-r49");
-            read_reply(
-                &mut c,
-                format!("${}\r\n{}\r\n", want.len(), want).as_bytes(),
-            );
+            read_reply(&mut c, format!("${}\r\n{}\r\n", want.len(), want).as_bytes());
         }
     });
 
@@ -218,10 +192,7 @@ fn aof_truncated_tail_is_tolerated_on_restart() {
     // assume holds.
     let dir = std::env::temp_dir().join(format!(
         "kevy-truncated-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let nshards = 1; // single-shard so we know exactly which AOF to corrupt
@@ -263,8 +234,7 @@ fn aof_truncated_tail_is_tolerated_on_restart() {
     with_runtime(port2, &dir, nshards, |p| {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
         for i in 0..20u32 {
-            c.write_all(&req(&[b"GET", format!("survivor{i}").as_bytes()]))
-                .unwrap();
+            c.write_all(&req(&[b"GET", format!("survivor{i}").as_bytes()])).unwrap();
             read_reply(&mut c, b"$1\r\nv\r\n");
         }
         // The mangled `foo` from the truncated frame must NOT have landed.
@@ -280,10 +250,7 @@ fn data_survives_restart_via_aof_without_save() {
     // No SAVE at all — durability comes purely from the AOF replay on startup.
     let dir = std::env::temp_dir().join(format!(
         "kevy-aof-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let nshards = 4;
@@ -292,12 +259,8 @@ fn data_survives_restart_via_aof_without_save() {
     with_runtime(port, &dir, nshards, |p| {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
         for i in 0..100u32 {
-            c.write_all(&req(&[
-                b"SET",
-                format!("a{i}").as_bytes(),
-                format!("b{i}").as_bytes(),
-            ]))
-            .unwrap();
+            c.write_all(&req(&[b"SET", format!("a{i}").as_bytes(), format!("b{i}").as_bytes()]))
+                .unwrap();
             read_reply(&mut c, b"+OK\r\n");
         }
         // INCR a few — verifies non-idempotent ops replay exactly once.
@@ -318,13 +281,9 @@ fn data_survives_restart_via_aof_without_save() {
     with_runtime(port2, &dir, nshards, |p| {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
         for i in 0..100u32 {
-            c.write_all(&req(&[b"GET", format!("a{i}").as_bytes()]))
-                .unwrap();
+            c.write_all(&req(&[b"GET", format!("a{i}").as_bytes()])).unwrap();
             let want = format!("b{i}");
-            read_reply(
-                &mut c,
-                format!("${}\r\n{}\r\n", want.len(), want).as_bytes(),
-            );
+            read_reply(&mut c, format!("${}\r\n{}\r\n", want.len(), want).as_bytes());
         }
         // counter must be exactly 5 (replayed once each, not doubled).
         c.write_all(&req(&[b"GET", b"counter"])).unwrap();
@@ -342,10 +301,7 @@ fn restart_tolerates_corrupt_snapshot() {
     // writes go through normally.
     let dir = std::env::temp_dir().join(format!(
         "kevy-corrupt-snap-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
 
@@ -379,10 +335,7 @@ fn auto_aof_rewrite_fires_when_threshold_crossed() {
     // raw size, and every key still readable across a restart.
     let dir = std::env::temp_dir().join(format!(
         "kevy-auto-rewrite-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let nshards = 1; // single-shard so size_bytes() is a single file
@@ -444,10 +397,7 @@ fn auto_aof_rewrite_fires_when_threshold_crossed() {
     with_runtime(port2, &dir, nshards, |p| {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
         c.write_all(&req(&[b"GET", b"counter"])).unwrap();
-        read_reply(
-            &mut c,
-            b"$32\r\nrevision-number-padding-00000799\r\n",
-        );
+        read_reply(&mut c, b"$32\r\nrevision-number-padding-00000799\r\n");
     });
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -460,10 +410,7 @@ fn auto_aof_rewrite_respects_pct_zero_disable() {
     // accumulating until a client calls BGREWRITEAOF explicitly.
     let dir = std::env::temp_dir().join(format!(
         "kevy-auto-rewrite-off-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let nshards = 1;
@@ -509,10 +456,7 @@ fn auto_aof_rewrite_respects_pct_zero_disable() {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
             let post = std::fs::metadata(&aof_path).map_or(0, |m| m.len());
-            assert!(
-                post >= pre,
-                "auto-rewrite fired despite pct=0: {post} vs {pre} pre"
-            );
+            assert!(post >= pre, "auto-rewrite fired despite pct=0: {post} vs {pre} pre");
         },
     );
 
@@ -589,10 +533,7 @@ fn read_integer(s: &mut std::net::TcpStream) -> i64 {
 fn relative_ttl_survives_restart_at_original_deadline() {
     let dir = std::env::temp_dir().join(format!(
         "kevy-ttl-restart-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let nshards = 2;
@@ -644,19 +585,23 @@ fn build_grouped_stream(c: &mut std::net::TcpStream) {
     c.write_all(&req(&[b"XGROUP", b"CREATE", b"st", b"g", b"0"])).unwrap();
     read_reply(c, b"+OK\r\n");
     c.write_all(&req(&[
-        b"XREADGROUP", b"GROUP", b"g", b"c1", b"COUNT", b"2", b"STREAMS", b"st", b">",
+        b"XREADGROUP",
+        b"GROUP",
+        b"g",
+        b"c1",
+        b"COUNT",
+        b"2",
+        b"STREAMS",
+        b"st",
+        b">",
     ]))
     .unwrap();
     read_reply(
         c,
         format!("*1\r\n*2\r\n$2\r\nst\r\n*2\r\n{}{}", entry("1-1"), entry("2-1")).as_bytes(),
     );
-    c.write_all(&req(&[b"XREADGROUP", b"GROUP", b"g", b"c2", b"STREAMS", b"st", b">"]))
-        .unwrap();
-    read_reply(
-        c,
-        format!("*1\r\n*2\r\n$2\r\nst\r\n*1\r\n{}", entry("3-1")).as_bytes(),
-    );
+    c.write_all(&req(&[b"XREADGROUP", b"GROUP", b"g", b"c2", b"STREAMS", b"st", b">"])).unwrap();
+    read_reply(c, format!("*1\r\n*2\r\n$2\r\nst\r\n*1\r\n{}", entry("3-1")).as_bytes());
     c.write_all(&req(&[b"XDEL", b"st", b"2-1"])).unwrap();
     read_reply(c, b":1\r\n");
     // st2: deleted-only stream whose last_id must survive, plus a group.
@@ -684,12 +629,8 @@ fn assert_grouped_stream_restored(c: &mut std::net::TcpStream, tombstone_kept: b
     );
     // PEL replay: c1 re-reads its own pending entries from 0 — only the
     // still-existing 1-1 comes back (2-1 is deleted in both paths).
-    c.write_all(&req(&[b"XREADGROUP", b"GROUP", b"g", b"c1", b"STREAMS", b"st", b"0"]))
-        .unwrap();
-    read_reply(
-        c,
-        b"*1\r\n*2\r\n$2\r\nst\r\n*1\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n",
-    );
+    c.write_all(&req(&[b"XREADGROUP", b"GROUP", b"g", b"c1", b"STREAMS", b"st", b"0"])).unwrap();
+    read_reply(c, b"*1\r\n*2\r\n$2\r\nst\r\n*1\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n");
     // st2: the ID clock survived the restart even though the stream is empty.
     c.write_all(&req(&[b"XADD", b"st2", b"5-1", b"f", b"v"])).unwrap();
     read_reply(
@@ -842,8 +783,7 @@ fn info_persistence_reports_rewrite_completion() {
                     break;
                 }
             }
-            let len: usize =
-                String::from_utf8_lossy(&hdr[1..hdr.len() - 2]).parse().unwrap();
+            let len: usize = String::from_utf8_lossy(&hdr[1..hdr.len() - 2]).parse().unwrap();
             let mut body = vec![0u8; len + 2];
             c.read_exact(&mut body).unwrap();
             String::from_utf8_lossy(&body).into_owned()
@@ -873,10 +813,7 @@ fn info_persistence_reports_rewrite_completion() {
 fn save_does_not_block_reactor_for_disk_write() {
     let dir = std::env::temp_dir().join(format!(
         "kevy-save-async-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let nshards = 4;
@@ -960,10 +897,7 @@ fn save_does_not_block_reactor_for_disk_write() {
 fn save_at_shutdown_drains_to_disk() {
     let dir = std::env::temp_dir().join(format!(
         "kevy-save-shutdown-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let nshards = 4;
@@ -975,8 +909,7 @@ fn save_at_shutdown_drains_to_disk() {
         // has to actually block on the worker.
         let big = vec![b'y'; 1024];
         for i in 0..5_000u32 {
-            c.write_all(&req(&[b"SET", format!("k{i}").as_bytes(), &big]))
-                .unwrap();
+            c.write_all(&req(&[b"SET", format!("k{i}").as_bytes(), &big])).unwrap();
             read_reply(&mut c, b"+OK\r\n");
         }
         c.write_all(&req(&[b"SAVE"])).unwrap();
@@ -987,9 +920,7 @@ fn save_at_shutdown_drains_to_disk() {
     });
     // Every shard's snapshot must exist post-shutdown — the drain
     // forced the bg-save rename to complete before runtime exit.
-    let dumps_after = (0..nshards)
-        .filter(|i| dir.join(format!("dump-{i}.rdb")).exists())
-        .count();
+    let dumps_after = (0..nshards).filter(|i| dir.join(format!("dump-{i}.rdb")).exists()).count();
     assert_eq!(
         dumps_after, nshards,
         "shutdown drain did not flush all shards' snapshots: \
@@ -1053,10 +984,7 @@ fn relative_ttl_frames_do_not_reanchor_on_replay() {
 fn mset_and_rename_survive_a_restart() {
     let dir = std::env::temp_dir().join(format!(
         "kevy-persist-replayverbs-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
     // One shard, so RENAME takes the same-shard atomic op (the
@@ -1106,10 +1034,7 @@ fn mset_and_rename_survive_a_restart() {
 fn cross_shard_rename_survives_a_restart() {
     let dir = std::env::temp_dir().join(format!(
         "kevy-persist-xrename-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let nshards = 4;
@@ -1185,37 +1110,40 @@ fn cross_shard_rename_survives_a_restart() {
 fn every_value_type_round_trips_through_a_snapshot() {
     let dir = std::env::temp_dir().join(format!(
         "kevy-persist-snaptypes-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let nshards = 2;
 
-    with_runtime_configured(free_port(), &dir, nshards, |rt| rt.with_aof(false), |p| {
-        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
-        c.write_all(&req(&[b"SET", b"str", b"v"])).unwrap();
-        read_reply(&mut c, b"+OK\r\n");
-        c.write_all(&req(&[b"EXPIRE", b"str", b"500"])).unwrap();
-        read_reply(&mut c, b":1\r\n");
-        c.write_all(&req(&[b"HSET", b"h", b"f1", b"1", b"f2", b"2"])).unwrap();
-        read_reply(&mut c, b":2\r\n");
-        c.write_all(&req(&[b"RPUSH", b"l", b"a", b"b", b"c"])).unwrap();
-        read_reply(&mut c, b":3\r\n");
-        c.write_all(&req(&[b"SADD", b"s", b"m1", b"m2"])).unwrap();
-        read_reply(&mut c, b":2\r\n");
-        c.write_all(&req(&[b"ZADD", b"z", b"2.5", b"zn"])).unwrap();
-        read_reply(&mut c, b":1\r\n");
-        c.write_all(&req(&[b"HSET", b"hx", b"g", b"1"])).unwrap();
-        read_reply(&mut c, b":1\r\n");
-        c.write_all(&req(&[b"HEXPIRE", b"hx", b"400", b"FIELDS", b"1", b"g"])).unwrap();
-        read_reply(&mut c, b"*1\r\n:1\r\n");
-        c.write_all(&req(&[b"XADD", b"strm", b"1-1", b"f", b"v"])).unwrap();
-        read_reply(&mut c, b"$3\r\n1-1\r\n");
-        c.write_all(&req(&[b"SAVE"])).unwrap();
-        read_reply(&mut c, b"+OK\r\n");
-    });
+    with_runtime_configured(
+        free_port(),
+        &dir,
+        nshards,
+        |rt| rt.with_aof(false),
+        |p| {
+            let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+            c.write_all(&req(&[b"SET", b"str", b"v"])).unwrap();
+            read_reply(&mut c, b"+OK\r\n");
+            c.write_all(&req(&[b"EXPIRE", b"str", b"500"])).unwrap();
+            read_reply(&mut c, b":1\r\n");
+            c.write_all(&req(&[b"HSET", b"h", b"f1", b"1", b"f2", b"2"])).unwrap();
+            read_reply(&mut c, b":2\r\n");
+            c.write_all(&req(&[b"RPUSH", b"l", b"a", b"b", b"c"])).unwrap();
+            read_reply(&mut c, b":3\r\n");
+            c.write_all(&req(&[b"SADD", b"s", b"m1", b"m2"])).unwrap();
+            read_reply(&mut c, b":2\r\n");
+            c.write_all(&req(&[b"ZADD", b"z", b"2.5", b"zn"])).unwrap();
+            read_reply(&mut c, b":1\r\n");
+            c.write_all(&req(&[b"HSET", b"hx", b"g", b"1"])).unwrap();
+            read_reply(&mut c, b":1\r\n");
+            c.write_all(&req(&[b"HEXPIRE", b"hx", b"400", b"FIELDS", b"1", b"g"])).unwrap();
+            read_reply(&mut c, b"*1\r\n:1\r\n");
+            c.write_all(&req(&[b"XADD", b"strm", b"1-1", b"f", b"v"])).unwrap();
+            read_reply(&mut c, b"$3\r\n1-1\r\n");
+            c.write_all(&req(&[b"SAVE"])).unwrap();
+            read_reply(&mut c, b"+OK\r\n");
+        },
+    );
 
     // Prove the snapshot is what carries this: a dump per shard, and no
     // AOF anywhere. Without this the test could pass vacuously on an AOF
@@ -1229,38 +1157,44 @@ fn every_value_type_round_trips_through_a_snapshot() {
         .count();
     assert_eq!(aofs, 0, "an AOF exists, so the snapshot is not what is under test");
 
-    with_runtime_configured(free_port(), &dir, nshards, |rt| rt.with_aof(false), |p| {
-        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
-        c.write_all(&req(&[b"GET", b"str"])).unwrap();
-        read_reply(&mut c, b"$1\r\nv\r\n");
-        c.write_all(&req(&[b"HGET", b"h", b"f2"])).unwrap();
-        read_reply(&mut c, b"$1\r\n2\r\n");
-        c.write_all(&req(&[b"LRANGE", b"l", b"0", b"-1"])).unwrap();
-        read_reply(&mut c, b"*3\r\n$1\r\na\r\n$1\r\nb\r\n$1\r\nc\r\n");
-        c.write_all(&req(&[b"SISMEMBER", b"s", b"m2"])).unwrap();
-        read_reply(&mut c, b":1\r\n");
-        c.write_all(&req(&[b"ZSCORE", b"z", b"zn"])).unwrap();
-        read_reply(&mut c, b"$3\r\n2.5\r\n");
-        c.write_all(&req(&[b"XRANGE", b"strm", b"-", b"+"])).unwrap();
-        read_reply(&mut c, b"*1\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n");
-        // The two TTL flavours: key-level and hash-field-level. Both are
-        // absolute deadlines, so they come back a little smaller.
-        for (probe, floor) in [
-            (req(&[b"TTL", b"str"]), 400i64),
-            (req(&[b"HTTL", b"hx", b"FIELDS", b"1", b"g"]), 300i64),
-        ] {
-            c.write_all(&probe).unwrap();
-            let mut buf = [0u8; 64];
-            let n = c.read(&mut buf).unwrap();
-            let text = String::from_utf8_lossy(&buf[..n]).into_owned();
-            let secs: i64 = text
-                .rsplit(':')
-                .next()
-                .and_then(|t| t.trim_end_matches("\r\n").parse().ok())
-                .unwrap_or(-1);
-            assert!(secs > floor, "TTL must survive the snapshot, got {text:?}");
-        }
-    });
+    with_runtime_configured(
+        free_port(),
+        &dir,
+        nshards,
+        |rt| rt.with_aof(false),
+        |p| {
+            let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+            c.write_all(&req(&[b"GET", b"str"])).unwrap();
+            read_reply(&mut c, b"$1\r\nv\r\n");
+            c.write_all(&req(&[b"HGET", b"h", b"f2"])).unwrap();
+            read_reply(&mut c, b"$1\r\n2\r\n");
+            c.write_all(&req(&[b"LRANGE", b"l", b"0", b"-1"])).unwrap();
+            read_reply(&mut c, b"*3\r\n$1\r\na\r\n$1\r\nb\r\n$1\r\nc\r\n");
+            c.write_all(&req(&[b"SISMEMBER", b"s", b"m2"])).unwrap();
+            read_reply(&mut c, b":1\r\n");
+            c.write_all(&req(&[b"ZSCORE", b"z", b"zn"])).unwrap();
+            read_reply(&mut c, b"$3\r\n2.5\r\n");
+            c.write_all(&req(&[b"XRANGE", b"strm", b"-", b"+"])).unwrap();
+            read_reply(&mut c, b"*1\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n");
+            // The two TTL flavours: key-level and hash-field-level. Both are
+            // absolute deadlines, so they come back a little smaller.
+            for (probe, floor) in [
+                (req(&[b"TTL", b"str"]), 400i64),
+                (req(&[b"HTTL", b"hx", b"FIELDS", b"1", b"g"]), 300i64),
+            ] {
+                c.write_all(&probe).unwrap();
+                let mut buf = [0u8; 64];
+                let n = c.read(&mut buf).unwrap();
+                let text = String::from_utf8_lossy(&buf[..n]).into_owned();
+                let secs: i64 = text
+                    .rsplit(':')
+                    .next()
+                    .and_then(|t| t.trim_end_matches("\r\n").parse().ok())
+                    .unwrap_or(-1);
+                assert!(secs > floor, "TTL must survive the snapshot, got {text:?}");
+            }
+        },
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

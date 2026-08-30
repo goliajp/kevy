@@ -5,16 +5,16 @@
 use crate::abi_aof::{kevy_aof_dump, kevy_aof_frame_in, kevy_aof_frames_out};
 use crate::abi_cmd::kevy_cmd;
 use crate::abi_core::{
-    OPEN_CAPTURE_AOF, kevy_abi_version, kevy_alloc, kevy_close, kevy_free, kevy_open,
-    kevy_out_len, kevy_out_ptr, kevy_tick,
+    OPEN_CAPTURE_AOF, kevy_abi_version, kevy_alloc, kevy_close, kevy_free, kevy_open, kevy_out_len,
+    kevy_out_ptr, kevy_tick,
 };
 use crate::abi_kv::{
     kevy_dbsize, kevy_del, kevy_exists, kevy_flushall, kevy_get, kevy_incrby, kevy_keys,
     kevy_persist, kevy_pttl, kevy_set, kevy_set_ttl,
 };
 use crate::abi_pubsub::{
-    EVENT_MESSAGE, EVENT_PMESSAGE, kevy_poll_events, kevy_psubscribe, kevy_publish,
-    kevy_subscribe, kevy_unsubscribe,
+    EVENT_MESSAGE, EVENT_PMESSAGE, kevy_poll_events, kevy_psubscribe, kevy_publish, kevy_subscribe,
+    kevy_unsubscribe,
 };
 use crate::{BAD_HANDLE, ERR, OK};
 
@@ -80,10 +80,7 @@ fn ttl_surface() {
     assert!(ttl > 0.0 && ttl <= 60_000.0, "pttl = {ttl}");
     assert_eq!(unsafe { kevy_persist(h, k.as_ptr(), k.len() as u32) }, 1);
     assert_eq!(unsafe { kevy_pttl(h, k.as_ptr(), k.len() as u32) }, -1.0);
-    assert_eq!(
-        unsafe { kevy_pttl(h, b"missing".as_ptr(), 7) },
-        -2.0
-    );
+    assert_eq!(unsafe { kevy_pttl(h, b"missing".as_ptr(), 7) }, -2.0);
     assert_eq!(kevy_tick(h), 0);
     kevy_close(h);
 }
@@ -158,8 +155,7 @@ fn pubsub_poll_drain() {
     let s1 = unsafe { kevy_subscribe(h, b"news".as_ptr(), 4) };
     let s2 = unsafe { kevy_psubscribe(h, b"n*".as_ptr(), 2) };
     assert!(s1 > 0 && s2 > 0 && s1 != s2);
-    let reached =
-        unsafe { kevy_publish(h, b"news".as_ptr(), 4, b"hello".as_ptr(), 5) };
+    let reached = unsafe { kevy_publish(h, b"news".as_ptr(), 4, b"hello".as_ptr(), 5) };
     assert_eq!(reached, 2);
     let n = kevy_poll_events(h);
     assert_eq!(n, 2);
@@ -176,10 +172,7 @@ fn pubsub_poll_drain() {
     assert_eq!(kevy_poll_events(h), 0);
     assert_eq!(kevy_unsubscribe(h, s1), OK);
     assert_eq!(kevy_unsubscribe(h, s1), BAD_HANDLE);
-    assert_eq!(
-        unsafe { kevy_publish(h, b"news".as_ptr(), 4, b"x".as_ptr(), 1) },
-        1
-    );
+    assert_eq!(unsafe { kevy_publish(h, b"news".as_ptr(), 4, b"x".as_ptr(), 1) }, 1);
     kevy_close(h);
 }
 
@@ -341,10 +334,7 @@ fn cmd_universal_path_reaches_the_compiled_surface() {
     // A verb-level error is a *successful* call with a RESP error frame.
     let (s, reply) = cmd(h, &[b"GET", b"l"]);
     assert!(s >= 0, "verb error is not an ABI-misuse status");
-    assert_eq!(
-        reply,
-        b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
-    );
+    assert_eq!(reply, b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n");
 
     // Index/replication verbs are not compiled into the wasm32 closure — but
     // THIS test builds natively, and under `cargo test --workspace` cargo
@@ -356,8 +346,7 @@ fn cmd_universal_path_reaches_the_compiled_surface() {
     let (s, reply) = cmd(h, &[b"IDX.CREATE", b"i"]);
     assert!(s >= 0);
     assert!(
-        reply.starts_with(b"-ERR unknown command")
-            || reply.starts_with(b"-ERR usage: IDX.CREATE"),
+        reply.starts_with(b"-ERR unknown command") || reply.starts_with(b"-ERR usage: IDX.CREATE"),
         "IDX.CREATE must be uncompiled (minimal build) or the real verb's \
          arity error (feature-unified build), got {:?}",
         String::from_utf8_lossy(&reply)
@@ -376,10 +365,7 @@ fn cmd_rejects_malformed_and_bad_handle() {
     kevy_close(h);
     // Bad handle after close.
     let packed = pack_argv(&[b"PING"]);
-    assert_eq!(
-        unsafe { kevy_cmd(h, packed.as_ptr(), packed.len() as u32) },
-        BAD_HANDLE
-    );
+    assert_eq!(unsafe { kevy_cmd(h, packed.as_ptr(), packed.len() as u32) }, BAD_HANDLE);
 }
 
 #[test]
@@ -392,10 +378,7 @@ fn wrong_type_get_surfaces_canonical_message() {
     let (status, msg) = get(h, b"l");
     assert_eq!(status, ERR);
     let text = String::from_utf8(msg).unwrap();
-    assert_eq!(
-        text,
-        "WRONGTYPE Operation against a key holding the wrong kind of value"
-    );
+    assert_eq!(text, "WRONGTYPE Operation against a key holding the wrong kind of value");
     assert!(!text.contains("store error"), "internal Debug spelling leaked: {text}");
     kevy_close(h);
 }

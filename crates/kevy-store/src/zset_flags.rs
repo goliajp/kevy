@@ -60,10 +60,7 @@ impl Store {
         for (score, m) in pairs {
             match self.zscore(key, m)? {
                 Some(old) => {
-                    if flags.nx
-                        || (flags.gt && *score <= old)
-                        || (flags.lt && *score >= old)
-                    {
+                    if flags.nx || (flags.gt && *score <= old) || (flags.lt && *score >= old) {
                         continue;
                     }
                     if *score != old {
@@ -207,10 +204,7 @@ mod tests {
             )
             .unwrap();
         // a updated, b vetoed, c added.
-        assert_eq!(
-            r.applied,
-            vec![(9.0, b"a".to_vec()), (5.0, b"c".to_vec())]
-        );
+        assert_eq!(r.applied, vec![(9.0, b"a".to_vec()), (5.0, b"c".to_vec())]);
     }
 
     #[test]

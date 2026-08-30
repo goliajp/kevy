@@ -15,11 +15,11 @@
 
 use std::collections::HashMap;
 
+use crate::Commands;
 use crate::message::{Agg, Gathered, Inbound, Op, Part, SmallReply};
 use crate::message_kinds::GatherKind;
 use crate::reduce::drain_front;
 use crate::shard::Shard;
-use crate::Commands;
 use kevy_resp::ArgvView;
 use kevy_store::BitOp;
 
@@ -119,7 +119,8 @@ impl<C: Commands> Shard<C> {
                 // something other than a string — where MGET, gathering
                 // the same way, answers nil for it.
                 Some(Gathered::WrongType) => {
-                    let e = b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n";
+                    let e =
+                        b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n";
                     return self.fill_bitop_slot(conn_id, seq, e.to_vec());
                 }
                 Some(Gathered::Str(v)) => srcs.push(v.unwrap_or_default()),

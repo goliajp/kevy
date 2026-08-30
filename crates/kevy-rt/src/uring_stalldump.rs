@@ -28,12 +28,9 @@ fn describe_big_arg(uc: &UringConn) -> String {
              cancel_acked={cancel_acked} target_canceled={target_canceled})",
             body.len()
         ),
-        Some(BigArgState::BareSetReading {
-            body,
-            body_len,
-            crlf_seen,
-            ..
-        }) => format!("Reading(body {}/{body_len} crlf={crlf_seen})", body.len()),
+        Some(BigArgState::BareSetReading { body, body_len, crlf_seen, .. }) => {
+            format!("Reading(body {}/{body_len} crlf={crlf_seen})", body.len())
+        }
     }
 }
 

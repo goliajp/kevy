@@ -33,11 +33,11 @@
 //! remote keys is one uniform code path.
 
 use crate::Commands;
+pub(crate) use crate::block_xshard_registry::XShardWaiters;
 use crate::blocked::{BlockKind, encode_block_timeout, unix_now_ms};
 use crate::message::Inbound;
 use crate::shard::Shard;
 use kevy_resp::{Argv, ArgvView, RespVersion};
-pub(crate) use crate::block_xshard_registry::XShardWaiters;
 
 /// Origin-side record for one cross-shard-blocked conn. Lives on the conn's
 /// own shard, the sole arbiter of which ready key serves it.
@@ -77,7 +77,6 @@ pub(crate) struct XWaiter {
     pub(crate) proto: RespVersion,
 }
 
-
 impl<C: Commands> Shard<C> {
     // ───────────────────────── origin side ─────────────────────────
 
@@ -96,19 +95,13 @@ impl<C: Commands> Shard<C> {
     ) {
         let keys: Vec<OriginKey> = entries
             .into_iter()
-            .map(|(key, serve_argv)| OriginKey {
-                shard: self.shard_of(&key),
-                key,
-                serve_argv,
-            })
+            .map(|(key, serve_argv)| OriginKey { shard: self.shard_of(&key), key, serve_argv })
             .collect();
         if let Some(conn) = self.conns.get_mut(&conn_id) {
             conn.blocked = true;
         }
-        let arms: Vec<(usize, Vec<u8>, Argv)> = keys
-            .iter()
-            .map(|k| (k.shard, k.key.clone(), k.serve_argv.clone()))
-            .collect();
+        let arms: Vec<(usize, Vec<u8>, Argv)> =
+            keys.iter().map(|k| (k.shard, k.key.clone(), k.serve_argv.clone())).collect();
         self.origin_blocks.insert(
             conn_id,
             OriginBlock { kind, deadline_ms, proto, serving: false, abandoned: false, keys },
@@ -172,11 +165,7 @@ impl<C: Commands> Shard<C> {
         } else {
             self.send_to(
                 shard,
-                Inbound::BlockServeReq {
-                    origin: self.id,
-                    conn,
-                    key: key.to_vec(),
-                },
+                Inbound::BlockServeReq { origin: self.id, conn, key: key.to_vec() },
             );
         }
     }
@@ -310,11 +299,8 @@ impl<C: Commands> Shard<C> {
         };
         let proto = ob.proto;
         let kind = ob.kind;
-        let arms: Vec<(usize, Vec<u8>, Argv)> = ob
-            .keys
-            .iter()
-            .map(|k| (k.shard, k.key.clone(), k.serve_argv.clone()))
-            .collect();
+        let arms: Vec<(usize, Vec<u8>, Argv)> =
+            ob.keys.iter().map(|k| (k.shard, k.key.clone(), k.serve_argv.clone())).collect();
         self.arm_and_maybe_serve(conn, kind, proto, arms);
     }
 
@@ -395,10 +381,7 @@ impl<C: Commands> Shard<C> {
         use std::sync::OnceLock;
         static ON: OnceLock<bool> = OnceLock::new();
         let on = *ON.get_or_init(|| std::env::var_os("KEVY_TEST_XSHARD_HOLD_CLOSE").is_some());
-        on && self
-            .origin_blocks
-            .get(&conn)
-            .is_some_and(|ob| ob.serving && !ob.abandoned)
+        on && self.origin_blocks.get(&conn).is_some_and(|ob| ob.serving && !ob.abandoned)
     }
 
     #[cfg(not(debug_assertions))]
@@ -416,7 +399,5 @@ pub(crate) fn build_serve_entries<C: Commands, A: ArgvView + ?Sized>(
     kind: BlockKind,
     keys: &[Vec<u8>],
 ) -> Vec<(Vec<u8>, Argv)> {
-    keys.iter()
-        .map(|k| (k.clone(), commands.block_serve_argv(args, kind, k)))
-        .collect()
+    keys.iter().map(|k| (k.clone(), commands.block_serve_argv(args, kind, k))).collect()
 }
