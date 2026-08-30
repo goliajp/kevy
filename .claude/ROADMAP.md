@@ -6,13 +6,42 @@
 「无死路径」说的是**集合**,「无冗余实现」说的是**关系**,「stone 扎实」
 说的是**能不能在本 workspace 之外站起来**。
 
-**当前状态**(2026-08-30):已发布 **v6.1.0**,`check_channels_published.py`
+**当前状态**(2026-08-31):已发布 **v6.2.0**,`check_channels_published.py`
 按内容核验 **56/56 扇门**(11 类 registry + GitHub release + ghcr + Docker Hub
 + 官网)。四扇仍需人手扣扳机 —— pypi / nuget / maven 是属主有意做成
 `workflow_dispatch`(发到那三处的版本撤不回来,不该由 tag push 自己开),
 pub.dev 差属主在 admin 里开「publish from GitHub Actions」这一个开关。
 忘记的风险已由 `channel-parity.yml` 兜住:它在**发布工作流结束时**跑,
 问 registry 不问树,四扇里任一停在旧版就红。
+
+## v6.2.0 ✅ 已发布(2026-08-31)
+
+头条是一处真的 Redis 兼容分歧:**`-0` 与 `0` 在 Redis 里是同一个分数,在这里
+是两个**,所以同分的 `ZADD` 会重写一条它并没有改动的索引项。修法是在
+`zadd_one` 顶上把零的符号折平,并在两条 `insert` 路径上加同分守卫。发布的
+二进制上现场验过:`ZADD z 0 m` → `:1`,`ZADD z -0 m` → `:0`,`ZSCORE` 回 `0`。
+
+渠道:56/56 按内容核验。两扇移动端 npm 门(`expo-kevy`、
+`react-native-kevy-nitro`)照例由本机补发 —— runner 造不出那 105 MB 引擎,
+而尺寸棘轮把它拦下了。**上一轮修的「拒绝不再传染」在这轮兑现**:两扇被拒之后,
+排在它们后面的三扇(`kevy-node` / `tauri-plugin-kevy-api` / `kevy-ts`)照常发出,
+老的 `exit 1` 会把这三扇一起带走。
+
+收尾时两个门禁被抓到在问记账而不是问权威,当轮修掉并红-绿验证:
+
+- [x] **Maven 那扇门被报成关着的,而 repo1 正在服务它**。脚本等 Portal 的
+      `deploymentState` 二十分钟就 `exit 1`,却没走到紧挨着的下一段 —— 那段
+      早就写着「Portal 说 PUBLISHED,跟陌生人能不能依赖它是两件事」。超时不再
+      是判决,落到 repo1 那道检查上;`FAILED` 仍然立即退出,因为那是个回答。
+- [x] **一个在这台机器上每次发布都会说同一句话的门**。`check_wasm_published`
+      比字节:CI 在 Linux 编、部署从 macOS 发,同源码编不出同字节,于是它会在
+      每一次 happy path 上要一个没人需要做的决定 —— 而每次都响的警报,人会学会
+      点过去。改成先问 `git diff --stat vX.Y.Z`:树相同就说明白并放行;树不同
+      才是真的「marker 之下的改动」,点出差几个文件。**它存在的理由那条
+      ——「站点有、包答不出的动词」—— 即使源码完全相同也照样红**,这条是用桩
+      证过的,不是假定的(第一个桩因为两份 wasm 都是 145x KB 而静默产出空集合,
+      被独立旁证抓到)。
+      `bench/FINDING-2026-08-31-gates-that-ask-the-bookkeeping.md`
 
 ## 工具链 ✅ 十一件全部建成并接上真基线
 
