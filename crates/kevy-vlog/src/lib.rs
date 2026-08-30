@@ -46,8 +46,17 @@
 //! turns a new gap into a compile error rather than a number that
 //! drifts. Closed from 65 sites (store) and 7 (vlog) in v6.
 #![warn(missing_docs)]
-mod crc32c;
-use crc32c::crc32c;
+// The checksum comes from the one public front, not a private copy of it.
+// `kevy_sys::checksum`'s own docstring names this crate as a consumer and
+// says why: "one public front so every consumer (AOF envelope, vlog
+// records, immutable segments) speaks the same checksum without re-owning
+// the fallback." kevy-seg already did that; this crate carried 73 lines
+// saying it could not, because it could not depend on kevy-persist — true,
+// and beside the point, since kevy-sys was already an unconditional
+// dependency here and this crate never builds for wasm32 (kevy-store gates
+// the tier backend off it). Verified byte-identical over 3,075 inputs
+// before the copy was removed: it is an on-disk format.
+use kevy_sys::checksum::crc32c;
 
 #[cfg(test)]
 mod tests;
