@@ -227,3 +227,32 @@ regions against 26923, four symbols gone — which is what an element-wise
 maximum is for: it will not trade one symbol's regression for another's
 gain, and it should not.
 """
+
+[[unstable]]
+symbol = "::resolve_xadd_id"
+observed = [
+  "baseline: 2",
+  "run 33287288186: 3 — setratchet FAIL, the only symbol that grew",
+]
+why = """
+`XADD key *` builds its id from the clock and a sequence counter. Whether
+the millisecond collided with the last entry — and so whether the sequence
+arm runs at all — depends on when in the millisecond the test happened to
+call it. Nothing here pins that.
+
+Found the way ::srandmember was, and the reason it is worth saying twice:
+the branch that failed on it changed **one markdown file**. A documentation
+commit cannot alter which Rust regions execute, so the variation is the
+run. That is now two symbols in two runs, each on a branch that touched no
+Rust, each time-or-sampling dependent, and each time the set was BETTER
+overall than the baseline — 2604 symbols against 2609 here, with one shrunk
+and four gone — while one symbol's single extra region failed the whole
+gate.
+
+That is the element-wise maximum doing its job, not a fault in it: it
+refuses to let one symbol's regression be paid for with another's gain.
+The tail setratchet's own docstring predicted is real, and it is being
+found one symbol per CI run. If a third arrives from a branch that changes
+no Rust, the thing to consider is not loosening the rule but whether these
+share a prefix worth registering as a class.
+"""
