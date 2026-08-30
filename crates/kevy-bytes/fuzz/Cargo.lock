@@ -55,7 +55,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-bytes"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-hash",
 ]
@@ -71,7 +71,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-hash"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "libc"
