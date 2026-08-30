@@ -1,8 +1,12 @@
 # LPUSH — Phase A decomposition (arena cell), v6 perf axis
 
-Status: **Phase A.** The gate passes, the cost model closes to 0.8%, and the
-first candidate is priced and refuted before a line was written. Nothing
-implemented. The profile that would name what remains is not taken.
+Status: **Phase A complete. No Phase B.** The Pre-Phase-A gate passes — the
+gap is real, unlike ZADD's — the cost model closes to 0.8%, the first
+candidate is priced and refuted before a line was written, and the
+Pre-Phase-B gate then refuses the round: the only userspace thing above the
+bar is the PAUSE instruction of seven shards waiting for the one that owns
+the key, which is the topology of a one-key benchmark rather than work.
+Nothing implemented, deliberately.
 
 Companion to `PERF-DECOMP-2026-08-30-zadd-arena-cell.md`. The ROADMAP names
 two narrow cells; that one covers ZADD.
@@ -138,13 +142,92 @@ list work — while its list-specific work is **14.0 ns dearer**. Widening the
 
 ---
 
+## S05 — the Pre-Phase-B gate, and what it says
+
+The gate is that a target shows double-digit percent of self-time before it
+is attacked. Taken on the `profiling` build — release codegen with symbols,
+because `[profile.release]` strips and a perf record of it resolves nothing
+but libc and the kernel — at 3,139,718 ops/s, which is the release binary's
+own range, on a list that reached 35 million elements during the window.
+
+By symbol, one thing clears 10pp and it is the LTO aggregate:
+
+| | self |
+|---|---:|
+| `run_uring` (everything inlined into the busy-poll body) | 19.7% |
+| `syscall` | 2.7% |
+| `KevyMap` lookup | 2.1% |
+| `dispatch_batch` | 1.4% |
+| `malloc` / `cfree` | 1.3% / 0.7% |
+
+`debug = 1` on that profile makes the aggregate splittable by source line,
+which the earlier decompositions could not do:
+
+**19.68% of all samples is `sse2.rs:25`.**
+
+Which is not what it looks like. `sse2.rs` is `core::core_arch::x86`, and
+the first guess — a vectorised memory copy, on a workload that appends
+20-byte values — was wrong. Expanding the inlined frames
+(`perf report --inline`) attributes it to **`uring_reactor.rs:442`**:
+
+```rust
+if self.xshard_inflight > 0 {
+    std::hint::spin_loop();
+    continue;
+}
+```
+
+`std::hint::spin_loop()` on x86 is `_mm_pause()`, and `_mm_pause` lives in
+`sse2.rs`. **The 19.68% is the PAUSE instruction.**
+
+And by call graph, with dwarf unwinding:
+
+```
+run_uring  62.72% inclusive
+ └─ IoUring::submit_and_wait (inlined)  43.71%
+     └─ syscall  43.57%
+         └─ do_syscall_64  35.28%
+             └─ syscall_exit_to_user_mode  16.97%
+                 ├─ __audit_syscall_exit  5.81%
+                 └─ audit_reset_context   5.76%
+```
+
+Three readings fall out, and the gate's verdict follows from them.
+
+**A fifth of the machine is seven shards waiting for one.** The arena's
+LPUSH cell writes to a single key, so one shard owns `mylist` and the other
+seven forward to it and spin on that line until the reply comes back. The
+spin is deliberate and the comment above it says why — staying in the spin
+rung beats a kernel sleep and wake per reply batch — and those seven cores
+have nothing else to do, so the cycles are idle rather than stolen. **It is
+not an attack target. It is the topology of a one-key benchmark, visible.**
+
+**The syscall path is 44% of the reactor**, and inside it this box's audit
+subsystem is over 13% of all samples. That is a property of the measuring
+machine, not of kevy — it taxes every engine in the arena identically, so no
+ratio in the ledger is distorted by it, but absolute ops/s from lx64 carry
+it and a profile of any command on this host will show it.
+
+**Nothing in userspace that is actually work clears the bar.** After the
+PAUSE and the syscall path, the largest is a `KevyMap` lookup at 2.1%, then
+`dispatch_batch` at 1.4%, then `malloc` and `cfree` at 1.3% and 0.7%. The
+84 ns per element and the 86 ns per command are spread across inlined code
+in single-digit fractions, not concentrated anywhere.
+
+**So the gate says no, and this pass ends without a Phase B.** That is the
+gate working: the methodology's own record has a round that attacked
+userspace memcpy in this reactor and measured throughput-neutral, and
+another that attacked the spin limit and measured the same. Attacking a
+fifth of the samples that turns out to be idling would have been the third.
+
 ## Open
 
-1. **The profile.** Neither bold row is named yet, and the Pre-Phase-B gate
-   says a target must show double-digit percent of self-time before it is
-   attacked. The `profiling` profile exists for this — release codegen with
-   symbols, because `[profile.release]` sets `strip = true` and a perf
-   record of it resolves nothing but libc and the kernel.
+1. **What the 84 and 86 ns rows are made of** is still unnamed. The profile
+   says they are spread through inlined code in single-digit fractions
+   rather than sitting in a symbol, and the one line that stands out is not
+   work. Naming them would need instruction-level work inside the reactor,
+   or a differently-shaped measurement — a multi-key LPUSH cell would put
+   all eight shards to work and change what the profile is a profile of.
 2. **The unbounded growth is part of the measurement.** Whatever the profile
    says is an average over a list that spans a hundredfold during the
    window; a reading at a fixed length would say something different and is
