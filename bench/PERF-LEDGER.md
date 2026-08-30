@@ -567,6 +567,52 @@ textgate 正在断言的内存公式。范围决定权不在我。
 
 ---
 
+## arena bare face — 2026-08-30 — kevy 6.2.0
+
+Re-measured for the 6.2.0 release rather than relabelled. `bash
+bench/arena.sh target/release/kevy` on lx64, same protocol as every entry:
+cores 0-7 server / 8-15 client, one engine at a time, `-c 50 -P 16`,
+median-of-5 with sample stdev, throughput from each server's own command
+counter over a timed window.
+
+| verb | kevy 6.2.0 | Redis 8 | valkey 9.1.1 | Dragonfly | vs Redis 8 |
+|---|---:|---:|---:|---:|---:|
+| GET | 6,990,156 | 5,653,255 | 3,282,765 | 2,800,320 | 1.24x |
+| SET | 6,847,720 | 2,463,354 | 1,689,824 | 1,895,074 | 2.78x |
+| INCR | 6,724,179 | 3,309,109 | 2,268,391 | 1,986,973 | 2.03x |
+| SADD | 5,778,726 | 3,712,338 | 2,214,684 | 1,751,237 | 1.56x |
+| HSET | 4,419,255 | 3,019,669 | 1,868,938 | 1,751,321 | 1.46x |
+| LPUSH | 3,090,840 | 2,837,496 | 1,867,068 | 1,435,069 | 1.09x |
+| ZADD | 3,355,835 | 2,814,574 | 1,805,751 | 1,712,136 | 1.19x |
+
+Gap rule: `|kevy - other| <= max(stdev_kevy, stdev_other)` reads as NOISE.
+
+**Every cell clears its band.** The narrowest is LPUSH at 2.3x its
+tolerance; the next is HSET at 2.2x.
+
+### ZADD left the noise band
+
+The 6.0.0 entry recorded ZADD as the first cell this ledger ever put
+*inside* the band — 80,594 against a tolerance of 82,849, a tie. Here it
+reads 1.19x, 541,261 against 164,260, which is 3.3x its tolerance.
+
+The change is the same-score guard: `ZSetData::insert` and
+`SegZSetData::insert` no longer remove a member from the rank tree and
+insert it back when its score has not moved. The arena's cell writes one
+member at one score forever, so it exercises exactly that path. Measured
+separately against itself before the release, on sets the arena does not
+reach, the same guard reads +52.8% at eight thousand members and +55.3% at
+two hundred thousand — see the A/B entry below and
+`bench/PERF-DECOMP-2026-08-30-zadd-arena-cell.md`.
+
+### What did not move, and one that did the other way
+
+GET, SET, INCR, SADD and LPUSH are within a few percent of the 6.0.0
+entry, which is what a release carrying one zset change and a formatter
+should look like. HSET reads 4,419,255 against 4,388,836 — inside its own
+629,604 stdev, so not a claim either way; that cell's spread is wide on
+this box and always has been.
+
 ## arena A/B — 2026-08-30 — the same-score ZADD guard
 
 **Not a `bare face` entry, and deliberately not named like one.** Those are

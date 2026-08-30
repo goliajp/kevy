@@ -46,10 +46,10 @@ db.set(b"user:1", b"alice", None)?;
 // cells where kevy is barely ahead. A table that only showed the wins
 // would not be a measurement.
 const PERF: { op: string; kevy: string; valkey: string; ratio: string }[] = [
-  { op: 'GET', kevy: '7.34 M', valkey: '3.16 M', ratio: '2.33×' },
-  { op: 'SET', kevy: '6.70 M', valkey: '1.70 M', ratio: '3.93×' },
-  { op: 'INCR', kevy: '6.56 M', valkey: '2.24 M', ratio: '2.93×' },
-  { op: 'HSET', kevy: '4.39 M', valkey: '1.84 M', ratio: '2.39×' },
+  { op: 'GET', kevy: '6.99 M', valkey: '3.28 M', ratio: '2.13×' },
+  { op: 'SET', kevy: '6.85 M', valkey: '1.69 M', ratio: '4.05×' },
+  { op: 'INCR', kevy: '6.72 M', valkey: '2.27 M', ratio: '2.96×' },
+  { op: 'HSET', kevy: '4.42 M', valkey: '1.87 M', ratio: '2.36×' },
 ]
 
 const BEYOND = ['vector', 'fts', 'idx', 'view', 'feed', 'embed'] as const
@@ -121,7 +121,7 @@ export function App() {
 
           <div className="figures">
             <div className="figure">
-              <div className="v">3.93×</div>
+              <div className="v">4.05×</div>
               <div className="k">
                 <T k="front.fig.speed" />
               </div>
