@@ -319,7 +319,7 @@ suite 从 75 项到 **84** 项(precommit 23 ⊆ prerelease 40 ⊆ full 84)。
 - [ ] ~~crashgate T6 cell 结果不确定~~(切点在字节偏移而非帧边界;三轮
       100%/100%/50.07%)。**不是本 arc 造成的,也不该由本 arc 拍板** ——
       修法会改变这个 cell 测的东西。`bench/FINDING-2026-08-28-crashgate-*.md`
-- [~] **性能轴:ZADD 那格已闭合,LPUSH 还开着**(2026-08-30)。
+- [x] **性能轴:两格都已闭合 —— ZADD 攻下,LPUSH 被门禁挡住**(2026-08-30)。
       6.0.0 arena 对 Redis 8:GET 1.26× / SET 2.58× / INCR 1.98× / SADD 1.52× /
       HSET 1.40× / LPUSH 1.07×,而 **ZADD 落在噪声带里**(差 80,594,容差
       82,849)—— 本 ledger 头一格进带子的 cell。
