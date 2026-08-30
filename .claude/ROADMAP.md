@@ -292,12 +292,33 @@ suite 从 75 项到 **84** 项(precommit 23 ⊆ prerelease 40 ⊆ full 84)。
 - [ ] ~~crashgate T6 cell 结果不确定~~(切点在字节偏移而非帧边界;三轮
       100%/100%/50.07%)。**不是本 arc 造成的,也不该由本 arc 拍板** ——
       修法会改变这个 cell 测的东西。`bench/FINDING-2026-08-28-crashgate-*.md`
-- [ ] **性能轴一次未碰**。6.0.0 arena:对 Redis 8 GET 1.26× / SET 2.58× /
-      INCR 1.98× / SADD 1.52× / HSET 1.40× / LPUSH 1.07×,而 **ZADD 落在噪声带
-      里**(差 80,594,容差 82,849)—— 本 ledger 头一格进带子的 cell。攻最窄的
-      两格需要 decomposition 与独占盒时间。
+- [~] **性能轴:ZADD 那格已闭合,LPUSH 还开着**(2026-08-30)。
+      6.0.0 arena 对 Redis 8:GET 1.26× / SET 2.58× / INCR 1.98× / SADD 1.52× /
+      HSET 1.40× / LPUSH 1.07×,而 **ZADD 落在噪声带里**(差 80,594,容差
+      82,849)—— 本 ledger 头一格进带子的 cell。
+      **ZADD 走完两步 dance**:Pre-Phase-A gate 先判定「对 Redis 的那个 gap 不
+      成立」(它自己就在带里,攻它就是攻噪声),靶子改从同一张表**竖着读** ——
+      kevy 从 GET 掉到 ZADD 是 2.50 倍,Redis 8 只掉 2.04 倍。
+      Phase A 用 `ZSCORE` 作对照(哈希查找在五个数量级上恒定 150-159 ns/op),
+      把 ZADD 随规模增长的那部分**唯一地**归到有序索引上,并对账到实测的 0.9%
+      以内。根因:`ZSetData::insert` / `SegZSetData::insert` **无条件**先从
+      rank tree 删再插回 —— 分数没变时两步互相抵消,树最终原样,却付了一次下降、
+      一次删除、一次插入和两个多余的 SmallBytes。
+      守卫必须用 `total_cmp` 而非 `==`:`Score` 的 `PartialEq` 是 derive 的、与
+      它自己的 `Ord` 在 `-0.0` 上矛盾(已单独修掉并加测试)。
+      **实测(同场交错、md5 核过两个二进制)**:8,000 成员 **+52.8%**、
+      200,000 成员 **+55.3%**、arena 那一格 +9%〜+21%。arena 的 ZADD 格写的是
+      **只有一个成员**的 zset(不带 `-r` 时 redis-benchmark 发的是字面量),
+      所以它不是这个成本真正住的地方。
+      **对 Redis 8:无守卫复现 NOISE(平局),带守卫 1.15×(2.2 倍容差)** ——
+      本 ledger 第一格进带子的 cell 现在出来了。
+      `bench/PERF-DECOMP-2026-08-30-zadd-arena-cell.md` + ledger 2026-08-30 条。
+      **仍开着**:LPUSH(1.07×)。它那一格是**无界增长**的 —— 3 秒窗口按 3M/s
+      append 约 900 万个元素 —— 与 ZADD 是完全不同的形状,要自己的一轮。
       顺带量到:同一份二进制在这台盒子上**天与天之间差到 5-10%**(perfgate 自己
       重跑参照提交也报同样量级),所以跨天比较必须配同场 A/B,不能只看数字。
+      本轮还实证一次:在自己那次 arena 还没跑完时开量,读到 45-48% 的 stdev 和
+      一半的吞吐 —— 在自己的干扰下量到的速率不是速率,那组数据作废重来。
 
 # kevy roadmap
 
