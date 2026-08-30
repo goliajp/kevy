@@ -21,8 +21,28 @@ pub type SetData = KevySet<SmallBytes>;
 
 /// A total-ordered f64 score (Redis scores are never NaN). `total_cmp` gives a
 /// total order so scores can key an ordered container.
-#[derive(Clone, Copy, PartialEq)]
+///
+/// `PartialEq` is written rather than derived, and it must stay that way.
+/// Derived, it is `f64`'s `==`, which disagrees with the `total_cmp` below
+/// on `-0.0`: `==` calls it equal to `0.0`, `total_cmp` orders it before.
+/// Rust requires of an `Ord` key that `a == b` exactly when `a.cmp(b)` is
+/// `Equal`, and a `Score` that breaks that is a key whose container and
+/// whose callers disagree about which entries are the same one.
+///
+/// It was latent while nothing compared two `Score`s — `ZSetData::insert`
+/// reached the tree only through `Ord`, and its unconditional
+/// remove-then-insert never had to ask. `ZADD z -0 m` is accepted and
+/// `ZADD z2 -0 a; ZADD z2 0 b` really does order `a` first, so the first
+/// caller to write `old == score` would have skipped a live update and left
+/// `by_member` and `by_score` holding different scores for one member.
+/// NaN cannot arrive: the parser refuses it.
+#[derive(Clone, Copy)]
 pub struct Score(pub f64);
+impl PartialEq for Score {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.total_cmp(&other.0) == Ordering::Equal
+    }
+}
 impl Eq for Score {}
 impl Ord for Score {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -409,4 +429,44 @@ pub fn list_item_weight(value_cap: usize) -> u64 {
 #[inline]
 pub fn zset_member_weight(member: &SmallBytes) -> u64 {
     2 * member.heap_bytes() as u64 + HASH_SLOT_BYTES + RANKTREE_SLOT_BYTES
+}
+
+#[cfg(test)]
+mod score_order_tests {
+    use super::Score;
+    use core::cmp::Ordering;
+
+    /// `Eq` and `Ord` must agree, which is what Rust requires of a key in an
+    /// ordered container and what a derived `PartialEq` does not give here.
+    /// `-0.0` is the case that matters: `ZADD z -0 m` is accepted, and a
+    /// sorted set really does order `-0.0` before `0.0`.
+    ///
+    /// `assert!` rather than `assert_eq!` because `Score` carries no `Debug`
+    /// and a hot key type should not grow one to please a test.
+    #[test]
+    fn eq_agrees_with_ord() {
+        let interesting = [
+            0.0_f64, -0.0, 1.0, -1.0, f64::MIN, f64::MAX,
+            f64::INFINITY, f64::NEG_INFINITY, 1e-308, -1e-308,
+        ];
+        for &a in &interesting {
+            for &b in &interesting {
+                let (sa, sb) = (Score(a), Score(b));
+                assert!(
+                    (sa == sb) == (sa.cmp(&sb) == Ordering::Equal),
+                    "Eq and Ord disagree on {a} vs {b}",
+                );
+            }
+        }
+    }
+
+    /// The specific pair that made this worth writing down: equal under
+    /// `f64`'s `==`, distinct under the order the rank tree keys on.
+    #[test]
+    fn negative_zero_is_not_positive_zero() {
+        assert!(Score(-0.0) != Score(0.0), "-0.0 must not equal 0.0");
+        assert!(Score(-0.0).cmp(&Score(0.0)) == Ordering::Less);
+        assert!(Score(-0.0) == Score(-0.0));
+        assert!(-0.0_f64 == 0.0_f64, "the f64 == this type must not use");
+    }
 }
