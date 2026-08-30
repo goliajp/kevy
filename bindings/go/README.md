@@ -11,7 +11,7 @@ engine. One import ships both faces of the [client contract](../../docs/client-c
   `kevy_embedded` build tag (see below). Same business code either way:
   switch backends by changing only the URL.
 
-This client tracks kevy **6.1.0**.
+This client tracks kevy **6.2.0**.
 
 ```bash
 go get github.com/goliajp/kevy-go/v6
