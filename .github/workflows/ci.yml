@@ -6,10 +6,15 @@ on:
   pull_request:
     branches: [master, develop]
 
-# Cancel any in-flight runs for the same branch on a new push — saves
-# minutes on PRs that get force-pushed twice in a minute.
+# One run per branch. Keyed on the branch NAME, not on github.ref: a push
+# to feature/x is `refs/heads/feature/x` and the pull request for the same
+# commit is `refs/pull/N/merge`, so keying on the ref put them in different
+# groups and every PR ran the whole 58-job matrix twice, against the same
+# tree, competing for the same runners. Cancelling one by hand — twice in
+# one afternoon — is what turned this up; halving the queue took the second
+# run from 6 jobs in flight to 20.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 env:
