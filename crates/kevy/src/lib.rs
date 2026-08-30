@@ -80,6 +80,7 @@ mod dispatch_strings;
 mod elect_persist;
 mod ops;
 mod replica_runner;
+mod replica_runner_events;
 mod replica_runner_routed;
 mod replica_trace;
 mod state;
