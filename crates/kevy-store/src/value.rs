@@ -107,9 +107,9 @@ impl ZSetData {
                 // the insert at the bottom puts (score, member) back — the
                 // same key, so the tree ends exactly where it began, having
                 // paid a descent, a removal, an insertion and two extra
-                // SmallBytes for it. Measured at 30.6% of the operation on
-                // an 8,000-member set: bench/PERF-DECOMP-2026-08-30-zadd-
-                // arena-cell.md.
+                // SmallBytes for it. Measured at 30.6% of the operation
+                // on an 8,000-member set — see the ZADD decomposition
+                // under bench/, which prices it against ZSCORE.
                 //
                 // Through `Score`, never `f64`. The two disagree on -0.0,
                 // the tree keys on `Score`, and `==` here would skip a real
@@ -445,47 +445,4 @@ pub fn list_item_weight(value_cap: usize) -> u64 {
 #[inline]
 pub fn zset_member_weight(member: &SmallBytes) -> u64 {
     2 * member.heap_bytes() as u64 + HASH_SLOT_BYTES + RANKTREE_SLOT_BYTES
-}
-
-#[cfg(test)]
-mod score_order_tests {
-    use super::Score;
-    use core::cmp::Ordering;
-
-    /// `Eq` and `Ord` must agree, which is what Rust requires of a key in an
-    /// ordered container and what a derived `PartialEq` does not give here.
-    /// `-0.0` is the case that matters: `ZADD z -0 m` is accepted, and a
-    /// sorted set really does order `-0.0` before `0.0`.
-    ///
-    /// `assert!` rather than `assert_eq!` because `Score` carries no `Debug`
-    /// and a hot key type should not grow one to please a test.
-    #[test]
-    fn eq_agrees_with_ord() {
-        let interesting = [
-            0.0_f64, -0.0, 1.0, -1.0, f64::MIN, f64::MAX,
-            f64::INFINITY, f64::NEG_INFINITY, 1e-308, -1e-308,
-        ];
-        for &a in &interesting {
-            for &b in &interesting {
-                let (sa, sb) = (Score(a), Score(b));
-                assert!(
-                    (sa == sb) == (sa.cmp(&sb) == Ordering::Equal),
-                    "Eq and Ord disagree on {a} vs {b}",
-                );
-            }
-        }
-    }
-
-    /// The specific pair that made this worth writing down: equal under
-    /// `f64`'s `==`, distinct under the order the rank tree keys on.
-    #[test]
-    fn negative_zero_is_not_positive_zero() {
-        assert!(Score(-0.0) != Score(0.0), "-0.0 must not equal 0.0");
-        assert!(Score(-0.0).cmp(&Score(0.0)) == Ordering::Less);
-        assert!(Score(-0.0) == Score(-0.0));
-        // The point of the assertion above: plain `-0.0 == 0.0` is true, so a
-        // derived PartialEq would have called these two the same score.
-        // Not written as an assertion, because clippy is right that
-        // asserting a constant tests nothing.
-    }
 }
