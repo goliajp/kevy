@@ -102,6 +102,22 @@ impl ZSetData {
     pub(crate) fn insert(&mut self, member: &[u8], score: f64) -> bool {
         let is_new = match self.by_member.insert(SmallBytes::from_slice(member), score) {
             Some(old) => {
+                // An unchanged score has nothing to reorder. Without this,
+                // the remove below takes (old, member) out of the index and
+                // the insert at the bottom puts (score, member) back — the
+                // same key, so the tree ends exactly where it began, having
+                // paid a descent, a removal, an insertion and two extra
+                // SmallBytes for it. Measured at 30.6% of the operation on
+                // an 8,000-member set: bench/PERF-DECOMP-2026-08-30-zadd-
+                // arena-cell.md.
+                //
+                // Through `Score`, never `f64`. The two disagree on -0.0,
+                // the tree keys on `Score`, and `==` here would skip a real
+                // reordering and leave this map and that tree holding
+                // different scores for one member.
+                if Score(old) == Score(score) {
+                    return false;
+                }
                 self.by_score.remove(&(Score(old), SmallBytes::from_slice(member)));
                 false
             }

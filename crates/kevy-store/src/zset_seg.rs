@@ -81,6 +81,13 @@ impl SegZSetData {
         let smb = SmallBytes::from_slice(member);
         let old = self.by_member.insert(smb.clone(), score);
         if let Some(old_sc) = old {
+            // See ZSetData::insert. Same reasoning, and one cost more: the
+            // path below reaches its segment through Arc::make_mut, so under
+            // a live snapshot an unchanged score deep-clones a segment of up
+            // to ZSEG_CAP entries in order to put back what was in it.
+            if Score(old_sc) == Score(score) {
+                return false;
+            }
             self.remove_ordered(&(Score(old_sc), smb.clone()));
         }
         let key = (Score(score), smb);
