@@ -27,10 +27,37 @@ stage() { # $1 = version
     echo "$root/bin/kevy"
 }
 
-# The previous minor: workspace 5.3.x compares against 5.2.0, and so on.
+# The previous release, asked of crates.io rather than computed. The
+# arithmetic that used to live here — major.(minor-1).0 — is right for
+# 5.3.x against 5.2.0 and wrong for the first release of any major line:
+# at workspace 6.0.0 it produced `6.-1.0`, cargo refused the version, and
+# upgrade-interop failed with "a-pri never came up" — a message about a
+# server, for a version string that never existed. A major bump is exactly
+# when mixed-version interop most wants checking, and it was exactly when
+# this could not run.
 WS=$(grep -m1 '^version' Cargo.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
-MINOR=$(echo "$WS" | cut -d. -f2)
-PREV="$(echo "$WS" | cut -d. -f1).$((MINOR - 1)).0"
+PREV=$(python3 - "$WS" <<'PREVPY'
+import json, sys, urllib.request
+ws = tuple(int(x) for x in sys.argv[1].split("."))
+req = urllib.request.Request("https://crates.io/api/v1/crates/kevy",
+                             headers={"User-Agent": "kevy-upgrade-prep"})
+with urllib.request.urlopen(req, timeout=30) as r:
+    vs = json.load(r)["versions"]
+cand = []
+for v in vs:
+    if v.get("yanked"):
+        continue
+    try:
+        t = tuple(int(x) for x in v["num"].split("."))
+    except ValueError:
+        continue
+    if len(t) == 3 and t < ws:
+        cand.append(t)
+if not cand:
+    sys.exit("upgrade-prep: crates.io has no released version below " + sys.argv[1])
+print("%d.%d.%d" % max(cand))
+PREVPY
+) || exit 1
 
 echo "export UPGRADE_OLD_BIN=$(stage 4.1.1)"
 echo "export UPGRADE_PREV_BIN=$(stage "$PREV")"

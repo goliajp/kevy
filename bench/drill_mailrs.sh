@@ -26,7 +26,39 @@ SPID=""
 DPID=""
 trap 'kill $SPID $DPID 2>/dev/null; rm -rf "$DIR"' EXIT
 
+# Wait until a port has no listener at all. kevy binds one socket per shard
+# with SO_REUSEPORT, so a new server can bind ALONGSIDE a dying one and the
+# kernel will hand connections to both. availgate has carried this guard for
+# the same reason; this drill did not.
+wait_port_free() {
+    local port=$1 t0=$SECONDS
+    while ss -ltn 2>/dev/null | grep -q ":$port "; do
+        [ $((SECONDS - t0)) -ge 30 ] && { echo "drill: port $port never freed" >&2; exit 1; }
+        sleep 0.1
+    done
+}
+
+# Stop a server and WAIT for it to be gone. `wait $pid` cannot do this: the
+# server is started inside a $( ) subshell, so it is not a child of this
+# shell and `wait` returns immediately having waited for nothing. That was
+# the whole of what this drill reported as engine data loss in three runs of
+# six — kill returned, `rm -rf` pulled the data directory out from under a
+# server still serving, a new server bound the same port beside it, and the
+# writes the kernel routed to the dying one were acknowledged and then went
+# with it. The importer recorded their offset as durable, `--resume` skipped
+# them, and the digest came up ~12,000 keys short with zero errors anywhere.
+stop_server() { # pid port
+    kill "$1" 2>/dev/null
+    local t0=$SECONDS
+    while kill -0 "$1" 2>/dev/null; do
+        [ $((SECONDS - t0)) -ge 30 ] && { kill -9 "$1" 2>/dev/null; break; }
+        sleep 0.1
+    done
+    wait_port_free "$2"
+}
+
 start_server() { # port dir → pid
+    wait_port_free "$1"
     env KEVY_BIND=127.0.0.1 $KEVY --threads 4 --port "$1" --dir "$2" --no-aof >/dev/null 2>&1 &
     local pid=$!
     for _ in $(seq 100); do
@@ -132,7 +164,7 @@ done
 [ $DIFF_OK = 1 ] || { echo "drill: DIGEST MISMATCH"; exit 1; }
 
 echo "== step 5: kill -9 mid-import → --resume =="
-kill $DPID 2>/dev/null; wait $DPID 2>/dev/null
+stop_server $DPID $DST
 rm -rf "$DIR/dst"; mkdir -p "$DIR/dst"
 DPID=$(start_server $DST "$DIR/dst")
 rm -f "$DIR/dump.kevy.progress"
@@ -147,7 +179,29 @@ $CLI import -p $DST --resume --strict "$DIR/dump.kevy" || { echo "drill: RESUME 
 echo "  resume took $(( $(date +%s) - T0 ))s"
 A=$($CLI digest -p $SRC msg:)
 B=$($CLI digest -p $DST msg:)
-[ "$A" = "$B" ] && echo "  post-resume msg: digest OK" || { echo "drill: POST-RESUME MISMATCH"; exit 1; }
+if [ "$A" = "$B" ]; then
+    echo "  post-resume msg: digest OK"
+else
+    # Say what did not match. "MISMATCH" alone cannot distinguish one key
+    # from a whole prefix, and the next reader would have to reproduce the
+    # kill to learn anything — which is the expensive half.
+    echo "drill: POST-RESUME MISMATCH"
+    echo "  src digest: $A"
+    echo "  dst digest: $B"
+    echo "  src msg: keys: $($CLI -p $SRC PREFIX.COUNT msg: 2>&1 | tail -1)"
+    echo "  dst msg: keys: $($CLI -p $DST PREFIX.COUNT msg: 2>&1 | tail -1)"
+    echo "  src dbsize: $($CLI -p $SRC DBSIZE 2>&1 | tail -1)   dst dbsize: $($CLI -p $DST DBSIZE 2>&1 | tail -1)"
+    # Raw key lists, both sides, untouched. The analysis happens outside
+    # this script: three attempts to summarise it here got the row format
+    # wrong three different ways, and a broken summary of a real defect is
+    # worse than the rows.
+    $CLI -p $SRC KEYS 'msg:*' > /tmp/drill-src-raw.txt 2>&1
+    $CLI -p $DST KEYS 'msg:*' > /tmp/drill-dst-raw.txt 2>&1
+    echo "  raw key lists left at /tmp/drill-{src,dst}-raw.txt"
+    cp "$DIR/dump.kevy.progress" /tmp/drill-progress.txt 2>/dev/null
+    echo "  progress 文件内容: $(cat /tmp/drill-progress.txt 2>/dev/null)"
+    exit 1
+fi
 
 echo "== step 6: post-load index build (range + TEXT over big bodies) =="
 $CLI -p $DST IDX.CREATE m_ts ON PREFIX msg: FIELD ts TYPE i64 KIND range

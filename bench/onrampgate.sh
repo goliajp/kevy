@@ -19,11 +19,33 @@ PA=7071
 PB=7072
 DIR=$(mktemp -d /tmp/kevy-onramp-XXXXXX)
 
-env KEVY_BIND=127.0.0.1 $KEVY --threads 8 --port $PA --dir "$DIR/a" --no-aof >/dev/null 2>&1 &
+env KEVY_BIND=127.0.0.1 $KEVY --threads 8 --port $PA --dir "$DIR/a" --no-aof > "$DIR/a.out" 2>&1 &
 SA=$!
-env KEVY_BIND=127.0.0.1 $KEVY --threads 8 --port $PB --dir "$DIR/b" --no-aof >/dev/null 2>&1 &
+env KEVY_BIND=127.0.0.1 $KEVY --threads 8 --port $PB --dir "$DIR/b" --no-aof > "$DIR/b.out" 2>&1 &
 SB=$!
-sleep 1.2
+# Wait for the servers to ACCEPT, not for a number of seconds. A fixed
+# 1.2s was the whole failure on a laptop: two eight-shard servers started
+# back to back took 14.8 seconds to bind here, the seed connected into
+# nothing, and the gate reported `import rate 0/s < 200k/s` — a headline
+# that reads as a slow engine and was a startup race. availgate already
+# waits on the port and keeps the server's output; this does both now,
+# because a server that fails to start has something to say and the old
+# `>/dev/null` threw it away.
+wait_accept() {
+    local port=$1 t0=$SECONDS
+    while ! python3 -c "import socket,sys
+try: socket.create_connection(('127.0.0.1',$port),timeout=0.3).close()
+except OSError: sys.exit(1)" 2>/dev/null; do
+        if [ $((SECONDS - t0)) -ge 60 ]; then
+            echo "onrampgate: port $port never accepted in 60s" >&2
+            sed -n '1,20p' "$DIR/a.out" "$DIR/b.out" 2>/dev/null >&2
+            exit 1
+        fi
+        sleep 0.2
+    done
+}
+wait_accept $PA
+wait_accept $PB
 trap 'kill $SA $SB 2>/dev/null; wait $SA $SB 2>/dev/null; rm -rf "$DIR"' EXIT
 
 # ---- seed 1M rows on A (python loader, 5 types + TTL) ----
