@@ -1,3 +1,14 @@
+## 6.1.0
+
+Tracks the kevy 6.1.0 engine. No API change in this door.
+
+* **The engine this door ships no longer names who built it.** Every
+  prebuilt `libkevy_ffi.so` carried the build machine's home directory —
+  27 paths per Android library — because a toolchain with the `rust-src`
+  component resolves std's panic locations to the local source tree.
+  `packaging/android/build-*jnilibs.sh` remaps it away now, and the
+  alignment gate refuses an artifact that names its builder.
+
 ## 6.0.0
 
 Tracks the kevy 6.0.0 engine. No API change in this door.

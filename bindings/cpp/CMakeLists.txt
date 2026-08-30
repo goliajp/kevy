@@ -10,7 +10,7 @@
 #   src/*.cpp        the client implementation
 #   test/*           a dependency-free test harness + conformance suite (§6)
 cmake_minimum_required(VERSION 3.16)
-project(kevy_client VERSION 6.0.0 LANGUAGES CXX)
+project(kevy_client VERSION 6.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
